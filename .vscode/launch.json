@@ -1,0 +1,58 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"type": "node",
+			"request": "launch",
+			"name": "🚀 run dungeon",
+			"program": "${workspaceFolder}/scripts/run-dungeon.mjs",
+			"args": ["${file}"],
+			"console": "integratedTerminal",
+			"internalConsoleOptions": "neverOpen",
+			"skipFiles": ["<node_internals>/**"],
+			"preLaunchTask": "npm: prune"
+		},
+		{
+			"type": "node",
+			"request": "launch",
+			"name": "📄 current file",
+			"program": "${file}",
+			"console": "integratedTerminal",
+			"internalConsoleOptions": "neverOpen",
+			"env": { "NODE_ENV": "dev" },
+			"skipFiles": ["<node_internals>/**"]
+		},
+		{
+			"command": "npm test",
+			"name": "🧪 test",
+			"request": "launch",
+			"type": "node-terminal"
+		},
+		{
+			"type": "node",
+			"request": "launch",
+			"name": "📦 dungeon → json",
+			"program": "${workspaceFolder}/scripts/dungeon-to-json.mjs",
+			"args": ["${file}"],
+			"console": "integratedTerminal",
+			"internalConsoleOptions": "neverOpen",
+			"skipFiles": ["<node_internals>/**"]
+		},
+		{
+			"type": "node",
+			"request": "launch",
+			"name": "📥 json → dungeon",
+			"program": "${workspaceFolder}/scripts/json-to-dungeon.mjs",
+			"args": ["${file}"],
+			"console": "integratedTerminal",
+			"internalConsoleOptions": "neverOpen",
+			"skipFiles": ["<node_internals>/**"]
+		},
+		{
+			"command": "npm run typecheck",
+			"name": "🔍 typecheck",
+			"request": "launch",
+			"type": "node-terminal"
+		}
+	]
+}

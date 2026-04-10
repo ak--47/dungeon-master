@@ -1,0 +1,77 @@
+{
+	"cSpell.words": [
+		"adspend",
+		"AVCHD",
+		"chartjs",
+		"chupacabra",
+		"Colour",
+		"crumn",
+		"darr",
+		"datagenerator",
+		"dislikers",
+		"Dont",
+		"durtle",
+		"fonk",
+		"gameplay",
+		"garply",
+		"hyparquet",
+		"jackalope",
+		"linny",
+		"mbembe",
+		"megalodon",
+		"Miley",
+		"mokele",
+		"mothman",
+		"nanodegree",
+		"nessie",
+		"nesty",
+		"planthopper",
+		"PROOMPTY",
+		"psyllid",
+		"Qlik",
+		"tatzelwurm",
+		"timesoup",
+		"udacity",
+		"unparse",
+		"upvotes",
+		"Vlogs",
+		"weindgo",
+		"whomacity"
+	],
+	// Vitest settings
+	"vitest.enable": true,
+	"vitest.commandLine": "npx vitest run",
+	"vitest.include": [
+		"tests/**/*.test.js"
+	],
+	"vitest.exclude": [
+		"**/node_modules/**",
+		"**/coverage/**",
+		"**/data/**",
+		"**/tmp/**"
+	],
+	// Test Explorer settings
+	"testing.automaticallyOpenPeekView": "never",
+	"testing.openTesting": "neverOpen",
+	"js/ts.implicitProjectConfig.checkJs": true,
+	// ESM and import settings
+	"typescript.preferences.includePackageJsonAutoImports": "auto",
+	"typescript.suggest.autoImports": true,
+	"javascript.suggest.autoImports": true,
+	// File associations
+	"files.associations": {
+		"*.js": "javascript",
+		"*.mjs": "javascript",
+		"*.cjs": "javascript"
+	},
+	// Search settings
+	"search.exclude": {
+		"**/node_modules": true,
+		"**/coverage": true,
+		"**/data": true,
+		"**/tmp": true
+	},
+	"testing.automaticallyOpenTestResults": "neverOpen",
+	"batsTestExplorer.enabled": false,
+	"batsTestExplorer.testAdapter": false
+}
