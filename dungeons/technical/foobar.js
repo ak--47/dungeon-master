@@ -157,7 +157,7 @@ const eventPerUser = 1_000;
 const numUsers = Math.floor(numEvents / eventPerUser);
 const seed = Math.random().toString()
 
-/** @type {import('../types').Dungeon} */
+/** @type {import('../../types').Dungeon} */
 const config = {
 	token: "",
 	seed: seed,

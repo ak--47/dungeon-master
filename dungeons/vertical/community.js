@@ -1,7 +1,7 @@
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
-import * as u from "../lib/utils/utils.js";
+import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
 const SEED = "dm4-community";
@@ -12,7 +12,7 @@ const days = 100;
 const NOW = dayjs();
 const DATASET_START = NOW.subtract(days, "days");
 
-/** @typedef  {import("../types").Dungeon} Config */
+/** @typedef  {import("../../types").Dungeon} Config */
 
 // Generate consistent wiki/article IDs at module level
 const wikiIds = v.range(1, 500).map(() => `WIKI_${v.uid(6)}`);
@@ -33,7 +33,7 @@ const communityIds = v.range(1, 30).map(() => `COMM_${v.uid(4)}`);
  * - Core loop: sign up -> search -> read articles -> contribute -> discuss
  * - Revenue: free / supporter ($4.99, ad-free) / pro ($12.99, analytics+badges)
  *
- * Phase 2 Features:
+ * Advanced Features:
  * - Personas: 5 archetypes (power_creator, moderator, active_contributor, reader, lurker)
  * - Engagement Decay: linear decline with floor
  * - Subscription: 3-tier with supporter and pro plans

@@ -3,7 +3,7 @@ const chance = new Chance();
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 dayjs.extend(utc);
-import { weighNumRange, integer } from "../lib/utils/utils.js";
+import { weighNumRange, integer } from "../../lib/utils/utils.js";
 
 /**
  * ═══════════════════════════════════════════════════════════════

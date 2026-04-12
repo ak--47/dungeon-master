@@ -15,18 +15,31 @@ import { validateDungeonConfig } from '../lib/core/config-validator.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dungeonDir = path.join(__dirname, '..', 'dungeons');
-const dungeonFiles = fs.readdirSync(dungeonDir)
-	.filter(f => f.endsWith('.js'))
-	.sort();
+
+// Recursively discover all .js dungeon files in subdirectories
+function findDungeonFiles(dir) {
+	const entries = fs.readdirSync(dir, { withFileTypes: true });
+	let files = [];
+	for (const entry of entries) {
+		const fullPath = path.join(dir, entry.name);
+		if (entry.isDirectory()) {
+			files = files.concat(findDungeonFiles(fullPath));
+		} else if (entry.name.endsWith('.js')) {
+			files.push(fullPath);
+		}
+	}
+	return files;
+}
+
+const dungeonFiles = findDungeonFiles(dungeonDir).sort();
 
 describe('Dungeon Validation', () => {
 	it('has dungeons to test', () => {
 		expect(dungeonFiles.length).toBeGreaterThan(0);
 	});
 
-	for (const file of dungeonFiles) {
-		const name = file.replace('.js', '');
-		const filePath = path.join(dungeonDir, file);
+	for (const filePath of dungeonFiles) {
+		const name = path.relative(dungeonDir, filePath).replace('.js', '');
 
 		describe(name, () => {
 			let config;
@@ -61,7 +74,8 @@ describe('Dungeon Validation', () => {
 			});
 
 			it('has lowercase-hyphen filename', () => {
-				expect(name).toMatch(/^[a-z0-9-]+$/);
+				const baseName = path.basename(name);
+				expect(baseName).toMatch(/^[a-z0-9-]+$/);
 			});
 
 			it('isFirstEvent is valid if present', () => {

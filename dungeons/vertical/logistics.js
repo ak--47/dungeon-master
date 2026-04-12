@@ -1,7 +1,7 @@
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
-import * as u from "../lib/utils/utils.js";
+import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
 const SEED = "dm4-logistics";
@@ -12,7 +12,7 @@ const days = 100;
 const NOW = dayjs();
 const DATASET_START = NOW.subtract(days, "days");
 
-/** @typedef  {import("../types").Dungeon} Config */
+/** @typedef  {import("../../types").Dungeon} Config */
 
 // Generate consistent warehouse/supplier IDs at module level
 const warehouseIds = v.range(1, 80).map(() => `WH_${v.uid(6)}`);
@@ -32,7 +32,7 @@ const supplierIds = v.range(1, 150).map(() => `SUP_${v.uid(6)}`);
  * - Core loop: sign up -> check inventory -> create PO -> receive order -> track shipment
  * - Revenue: free_trial / starter ($49) / professional ($199) / enterprise ($599)
  *
- * Phase 2 Features:
+ * Advanced Features:
  * - Personas: 4 archetypes (enterprise_ops, mid_market, small_business, trial_explorer)
  * - World Events: supply_chain_disruption (day 35), holiday_surge (day 70)
  * - Subscription: 4-tier revenue lifecycle with 30-day trial

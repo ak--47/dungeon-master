@@ -5,7 +5,7 @@
  */
 
 import main from "../../index.js";
-import simple from '../../dungeons/simple.js';
+import simple from '../../dungeons/technical/simple.js';
 import { timer } from 'ak-tools';
 import os from 'os';
 

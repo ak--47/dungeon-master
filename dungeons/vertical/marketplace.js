@@ -1,7 +1,7 @@
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
-import * as u from "../lib/utils/utils.js";
+import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
 const SEED = "dm4-marketplace";
@@ -12,7 +12,7 @@ const days = 100;
 const NOW = dayjs();
 const DATASET_START = NOW.subtract(days, "days");
 
-/** @typedef  {import("../types").Dungeon} Config */
+/** @typedef  {import("../../types").Dungeon} Config */
 
 // Generate consistent seller store and listing IDs at module level
 const storeIds = v.range(1, 150).map(() => `STORE_${v.uid(6)}`);
@@ -32,7 +32,7 @@ const listingIds = v.range(1, 500).map(() => `LST_${v.uid(8)}`);
  * - Seller loop: create listing → receive offers → accept → ship
  * - Revenue: marketplace fees on transactions, seller listing fees
  *
- * Phase 2 Features:
+ * Advanced Features:
  * - Personas: 5 archetypes spanning both buyer and seller roles
  * - World Events: marketplace fee change (day 45, permanent), viral TikTok moment (day 55, 3 days)
  * - Engagement Decay: exponential with 75-day half-life, 0.1 floor
@@ -510,7 +510,7 @@ const config = {
 		store_name: ["none"],
 	},
 
-	// ── Phase 2: Personas ──────────────────────────────────
+	// ── Personas ──────────────────────────────────
 	personas: [
 		{
 			name: "power_seller",
@@ -570,7 +570,7 @@ const config = {
 		},
 	],
 
-	// ── Phase 2: World Events ──────────────────────────────
+	// ── World Events ──────────────────────────────
 	worldEvents: [
 		{
 			name: "marketplace_fee_change",
@@ -590,14 +590,14 @@ const config = {
 		},
 	],
 
-	// ── Phase 2: Engagement Decay ──────────────────────────
+	// ── Engagement Decay ──────────────────────────
 	engagementDecay: {
 		model: "exponential",
 		halfLife: 75,
 		floor: 0.1,
 	},
 
-	// ── Phase 2: Attribution ──────────────────────────────
+	// ── Attribution ──────────────────────────────
 	attribution: {
 		model: "last_touch",
 		window: 7,
@@ -633,7 +633,7 @@ const config = {
 		organicRate: 0.30,
 	},
 
-	// ── Phase 2: Geo ──────────────────────────────────────
+	// ── Geo ──────────────────────────────────────
 	geo: {
 		sticky: true,
 		regions: [
@@ -668,7 +668,7 @@ const config = {
 		],
 	},
 
-	// ── Phase 2: Anomalies ──────────────────────────────────
+	// ── Anomalies ──────────────────────────────────
 	anomalies: [
 		{
 			type: "extreme_value",

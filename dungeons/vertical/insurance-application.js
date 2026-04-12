@@ -1,7 +1,7 @@
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
-import * as u from "../lib/utils/utils.js";
+import * as u from "../../lib/utils/utils.js";
 
 const SEED = "dm4-insurance";
 dayjs.extend(utc);
@@ -9,7 +9,7 @@ const chance = u.initChance(SEED);
 const num_users = 5_000;
 const days = 100;
 
-/** @typedef {import("../types").Dungeon} Config */
+/** @typedef {import("../../types").Dungeon} Config */
 
 /*
  * ===================================================================

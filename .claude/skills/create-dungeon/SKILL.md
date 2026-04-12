@@ -12,7 +12,7 @@ Design and build a complete dungeon-master dungeon for: **$ARGUMENTS**
 
 ## Your Task
 
-Create a single `.js` file in `dungeons/` that defines a complete, realistic data schema for the described app/vertical. The dungeon must include deliberately architected analytics "hooks" — hidden trends and patterns that simulate real-world product insights buried in large datasets.
+Create a single `.js` file in `dungeons/vertical/` that defines a complete, realistic data schema for the described app/vertical. The dungeon must include deliberately architected analytics "hooks" — hidden trends and patterns that simulate real-world product insights buried in large datasets.
 
 Before writing any code, read these reference files to understand patterns and conventions:
 - `types.d.ts` — **the complete API reference** for all config options, event flags, hook types, SCD props, funnel options, and type definitions. Every feature is documented with JSDoc comments.
@@ -144,9 +144,9 @@ mirrorProps: {},
 lookupTables: [],  // NEVER add lookup tables — they require manual import and are not automated ... only if the user BEGS you.
 ```
 
-## Phase 2 Features (Optional — use when they add realism)
+## Advanced Features (Optional — use when they add realism)
 
-Phase 2 features are **additive and optional**. Include them when they make the dungeon's story richer. Hooks always override Phase 2 features — hooks are the final authority on every data point.
+These features are **additive and optional**. Include them when they make the dungeon's story richer. Hooks always override these features — hooks are the final authority on every data point.
 
 ### Personas (`personas`)
 
@@ -847,7 +847,7 @@ The bad example doesn't tell the user what report type to create, what metric to
 
 ## JSON Schema Output (Required)
 
-After writing the `.js` dungeon file, also generate a companion `<name>-schema.json` file in `./dungeons/` containing a stripped-down, plain JSON version of the schema — no function calls, no JS imports, just portable data.
+After writing the `.js` dungeon file, also generate a companion `<name>-schema.json` file in `./dungeons/vertical/` containing a stripped-down, plain JSON version of the schema — no function calls, no JS imports, just portable data.
 
 ### JSON Format Rules
 
@@ -895,21 +895,21 @@ Include `isFirstEvent`, `isFirstFunnel`, `name`, `weight`, `order`, and other no
 
 ## After Writing the Files
 
-1. Validate the JS dungeon with: `node -e "import { validateDungeonConfig } from './lib/core/config-validator.js'; import c from './dungeons/FILENAME.js'; validateDungeonConfig(c); console.log('valid');"`
+1. Validate the JS dungeon with: `node -e "import { validateDungeonConfig } from './lib/core/config-validator.js'; import c from './dungeons/vertical/FILENAME.js'; validateDungeonConfig(c); console.log('valid');"`
 2. If validation fails, fix the issue (usually funnel event names or pickAWinner crashes)
 3. Verify the hook function loads without errors
-4. Verify the JSON schema file is valid JSON: `node -e "import fs from 'fs'; JSON.parse(fs.readFileSync('./dungeons/FILENAME-schema.json', 'utf8')); console.log('valid json');"`
-5. **Run `/verify-hooks dungeons/FILENAME.js`** to verify all hooks produce their intended patterns. Fix any FAIL or WEAK hooks before considering the dungeon complete.
+4. Verify the JSON schema file is valid JSON: `node -e "import fs from 'fs'; JSON.parse(fs.readFileSync('./dungeons/vertical/FILENAME-schema.json', 'utf8')); console.log('valid json');"`
+5. **Run `/verify-hooks dungeons/vertical/FILENAME.js`** to verify all hooks produce their intended patterns. Fix any FAIL or WEAK hooks before considering the dungeon complete.
 
 ## Verifying Hooks
 
-A verify runner already exists at `scripts/verify-runner.mjs` — do NOT create a new one. After creating the dungeon, **always run the verify-hooks skill** (`/verify-hooks dungeons/FILENAME.js`) to confirm hooks produce their intended data patterns. If hooks fail verification, iterate on the hook code until they pass.
+A verify runner already exists at `scripts/verify-runner.mjs` — do NOT create a new one. After creating the dungeon, **always run the verify-hooks skill** (`/verify-hooks dungeons/vertical/FILENAME.js`) to confirm hooks produce their intended data patterns. If hooks fail verification, iterate on the hook code until they pass.
 
 Manual verification is also available:
 
 ```bash
 # Generate test data (1K users, 100K events)
-node scripts/verify-runner.mjs dungeons/FILENAME.js verify-FILENAME
+node scripts/verify-runner.mjs dungeons/vertical/FILENAME.js verify-FILENAME
 
 # Query the output with DuckDB to verify hook patterns
 duckdb -c "SELECT ... FROM 'verify-FILENAME__events.json'"

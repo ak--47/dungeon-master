@@ -44,16 +44,16 @@ the main export accepts multiple input formats. use whatever fits your workflow:
 
 ```javascript
 // load a dungeon file from disk
-const result = await DUNGEON_MASTER('./dungeons/simple.js');
+const result = await DUNGEON_MASTER('./dungeons/technical/simple.js');
 
 // load a JSON dungeon (exported from the UI)
-const result = await DUNGEON_MASTER('./dungeons/simple-schema.json');
+const result = await DUNGEON_MASTER('./dungeons/technical/simple-schema.json');
 
 // run multiple dungeons
 const results = await DUNGEON_MASTER([
-  './dungeons/gaming.js',
-  './dungeons/media.js',
-  './dungeons/food-delivery.js'
+  './dungeons/vertical/gaming.js',
+  './dungeons/vertical/media.js',
+  './dungeons/vertical/food-delivery.js'
 ]);
 
 // pass raw javascript as a string
@@ -70,7 +70,7 @@ const result = await DUNGEON_MASTER(`
 `);
 
 // override any config when loading from files
-const result = await DUNGEON_MASTER('./dungeons/complex.js', {
+const result = await DUNGEON_MASTER('./dungeons/vertical/fintech.js', {
   numUsers: 100,       // shrink for testing
   writeToDisk: true,
   verbose: true
@@ -95,7 +95,7 @@ console.log(result.importResults);
 
 a dungeon is a javascript file that exports a configuration object. it defines your entire data model: events, funnels, user properties, group analytics, SCDs, and a hook function that engineers discoverable patterns into the data.
 
-see `dungeons/` for examples ranging from simple (5 events, no hooks) to complex (18 events, 8 funnels, 8 hooks with temporal windowing, closure state, and cross-table correlation).
+see `dungeons/vertical/` for customer-facing story dungeons (18 events, 8 hooks) and `dungeons/technical/` for feature-testing dungeons (mirrors, groups, scale, anonymous users).
 
 ```javascript
 // dungeons/my-app.js

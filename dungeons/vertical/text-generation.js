@@ -1,8 +1,8 @@
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
-import { weighNumRange, range, date, initChance, exhaust, choose, integer } from "../lib/utils/utils.js";
-import { createTextGenerator, generateBatch } from "../lib/generators/text.js";
+import { weighNumRange, range, date, initChance, exhaust, choose, integer } from "../../lib/utils/utils.js";
+import { createTextGenerator, generateBatch } from "../../lib/generators/text.js";
 
 const SEED = "SUPER DUPER DANGEROUS BROOO";
 dayjs.extend(utc);

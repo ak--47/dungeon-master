@@ -109,7 +109,7 @@ export interface Dungeon {
     /** Hook function called on every data point. The primary mechanism for engineering deliberate trends and patterns. */
     hook?: Hook<any>;
 
-    // ── Phase 2: Advanced Features ──
+    // ── Advanced Features ──
     /** User persona/archetype definitions. Each persona defines a behavioral segment with distinct event volumes, conversion rates, and properties. */
     personas?: Persona[];
     /** World events that affect all users simultaneously (outages, campaigns, product launches). */
@@ -540,7 +540,7 @@ export type Result = {
     avgEPS?: number;
 };
 
-// ============= Phase 2 Feature Types =============
+// ============= Advanced Feature Types =============
 
 /**
  * User persona/archetype definition.

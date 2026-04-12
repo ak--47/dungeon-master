@@ -1,7 +1,7 @@
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
-import * as u from "../lib/utils/utils.js";
+import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
 const SEED = "dm4-food-delivery";

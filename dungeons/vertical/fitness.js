@@ -1,7 +1,7 @@
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
-import * as u from "../lib/utils/utils.js";
+import * as u from "../../lib/utils/utils.js";
 
 const SEED = "dm4-fitness";
 dayjs.extend(utc);
@@ -11,7 +11,7 @@ const days = 100;
 const NOW = dayjs();
 const DATASET_START = NOW.subtract(days, "days");
 
-/** @typedef  {import("../types").Dungeon} Config */
+/** @typedef  {import("../../types").Dungeon} Config */
 
 /**
  * ═══════════════════════════════════════════════════════════════
@@ -27,7 +27,7 @@ const DATASET_START = NOW.subtract(days, "days");
  * - Core loop: sign up → plan workout → complete workout → track progress
  * - Revenue: free, monthly ($12.99, 7-day trial), annual ($99.99), family ($149.99)
  *
- * Phase 2 Features:
+ * Advanced Features:
  * - Personas: 5 archetypes with distinct engagement and churn profiles
  * - Subscription: 4-tier revenue lifecycle with trial conversion
  * - Attribution: 5 campaign sources with persona biases
@@ -508,7 +508,7 @@ const config = {
 		goal: ["weight_loss", "muscle_gain", "endurance", "flexibility", "general_health"],
 	},
 
-	// ── Phase 2: Personas ──────────────────────────────────
+	// ── Personas ──────────────────────────────────
 	personas: [
 		{
 			name: "athlete",
@@ -568,7 +568,7 @@ const config = {
 		},
 	],
 
-	// ── Phase 2: Subscription ──────────────────────────────
+	// ── Subscription ──────────────────────────────
 	subscription: {
 		plans: [
 			{ name: "free", price: 0, default: true },
@@ -587,7 +587,7 @@ const config = {
 		},
 	},
 
-	// ── Phase 2: Attribution ──────────────────────────────
+	// ── Attribution ──────────────────────────────
 	attribution: {
 		model: "last_touch",
 		window: 7,
@@ -631,7 +631,7 @@ const config = {
 		organicRate: 0.30,
 	},
 
-	// ── Phase 2: Engagement Decay ──────────────────────────
+	// ── Engagement Decay ──────────────────────────
 	engagementDecay: {
 		model: "step",
 		halfLife: 30,
@@ -639,7 +639,7 @@ const config = {
 		reactivationChance: 0.02,
 	},
 
-	// ── Phase 2: Features ──────────────────────────────────
+	// ── Features ──────────────────────────────────
 	features: [
 		{
 			name: "ai_coach",

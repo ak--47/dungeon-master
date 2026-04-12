@@ -392,9 +392,9 @@ When verifying `everything` hooks, you often MUST join events with user profiles
 - `verify-hooks-*-GROUPS.json` — group profiles (if groups configured)
 - `verify-hooks-*-SCD.json` — SCD data (if SCDs configured)
 
-**Phase 2 Feature Verification** (if the dungeon uses Phase 2 features):
+**Advanced Feature Verification** (if the dungeon uses advanced features):
 
-Phase 2 features (personas, worldEvents, engagementDecay, dataQuality, subscription, attribution, geo, features, anomalies) produce data patterns alongside hooks. When verifying, also check:
+Advanced features (personas, worldEvents, engagementDecay, dataQuality, subscription, attribution, geo, features, anomalies) produce data patterns alongside hooks. When verifying, also check:
 
 ```sql
 -- Personas: check distribution matches configured weights
@@ -424,7 +424,7 @@ SELECT theme, count(*) FROM read_json_auto('./data/verify-hooks-EVENTS.json') WH
 SELECT _anomaly, count(*) FROM read_json_auto('./data/verify-hooks-EVENTS.json') WHERE _anomaly IS NOT NULL GROUP BY 1;
 ```
 
-Include Phase 2 verification results in the report when the dungeon uses these features. Phase 2 patterns should ALWAYS be present (they're deterministic from config), unlike hooks which may have statistical variance.
+Include advanced feature verification results in the report when the dungeon uses these features. Advanced feature patterns should ALWAYS be present (they're deterministic from config), unlike hooks which may have statistical variance.
 
 ### Query Execution
 

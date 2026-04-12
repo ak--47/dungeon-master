@@ -61,15 +61,15 @@ global.FIXED_BEGIN = FIXED_BEGIN;
  *
  * @example
  * // file path
- * const result = await DUNGEON_MASTER('./dungeons/simple.js');
+ * const result = await DUNGEON_MASTER('./dungeons/technical/simple.js');
  *
  * @example
  * // JSON dungeon (from UI export)
- * const result = await DUNGEON_MASTER('./dungeons/simple-schema.json');
+ * const result = await DUNGEON_MASTER('./dungeons/technical/simple-schema.json');
  *
  * @example
  * // multiple dungeons
- * const results = await DUNGEON_MASTER(['./dungeons/gaming.js', './dungeons/media.js']);
+ * const results = await DUNGEON_MASTER(['./dungeons/vertical/gaming.js', './dungeons/vertical/media.js']);
  *
  * @example
  * // raw JS text
@@ -83,7 +83,7 @@ global.FIXED_BEGIN = FIXED_BEGIN;
  *
  * @example
  * // with overrides
- * const result = await DUNGEON_MASTER('./dungeons/simple.js', { writeToDisk: true, verbose: true });
+ * const result = await DUNGEON_MASTER('./dungeons/technical/simple.js', { writeToDisk: true, verbose: true });
  */
 async function DUNGEON_MASTER(input, overrides = {}) {
 	const { type, value } = detectInputType(input);

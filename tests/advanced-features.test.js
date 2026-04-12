@@ -1,7 +1,7 @@
 //@ts-nocheck
 /**
- * Phase 2 Feature Tests
- * Tests all 9 new features: personas, world events, engagement decay,
+ * Advanced Feature Tests
+ * Tests all 9 features: personas, world events, engagement decay,
  * data quality, subscription, attribution, geo, features, anomalies
  */
 
@@ -729,13 +729,13 @@ describe('Audit Fixes', () => {
 		expect(uniqueUsers.size).toBe(viralEvents.length);
 	}, 30000);
 
-	test('features without Phase 2 config produce identical behavior', async () => {
-		// Ensure backward compatibility: no Phase 2 keys = old behavior
+	test('features without advanced feature config produce identical behavior', async () => {
+		// Ensure backward compatibility: no advanced feature keys = old behavior
 		const result = await DUNGEON_MASTER({
 			numUsers: 30,
 			numEvents: 500,
 			numDays: 30,
-			seed: 'no-phase2',
+			seed: 'no-features',
 			events: [{ event: 'action' }]
 		});
 		const users = Array.from(result.userProfilesData);
@@ -753,16 +753,16 @@ describe('Audit Fixes', () => {
 });
 
 // ── Integration: Multiple features together ──
-describe('Phase 2 Integration', () => {
+describe('Advanced Features Integration', () => {
 	test('all features compose without errors', async () => {
-		initChance('phase2-all');
+		initChance('features-all');
 		global.FIXED_NOW = FIXED_NOW;
 		global.FIXED_BEGIN = FIXED_NOW - 90 * 86400;
 		const result = await DUNGEON_MASTER({
 			numUsers: 100,
 			numEvents: 5000,
 			numDays: 90,
-			seed: 'phase2-all',
+			seed: 'features-all',
 			events: [
 				{ event: 'page_view', weight: 5 },
 				{ event: 'checkout', weight: 2, properties: { amount: [10, 20, 50] } },
@@ -834,7 +834,7 @@ describe('Phase 2 Integration', () => {
 		expect(themed.length).toBeGreaterThan(0);
 	}, 60000);
 
-	test('hooks override Phase 2 features', async () => {
+	test('hooks override advanced features', async () => {
 		const result = await DUNGEON_MASTER({
 			numUsers: 30,
 			numEvents: 500,

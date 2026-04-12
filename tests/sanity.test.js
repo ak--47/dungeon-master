@@ -19,10 +19,10 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-import simple from '../dungeons/simple.js';
+import simple from '../dungeons/technical/simple.js';
 
-import foobar from '../dungeons/foobar.js';
-import scd from '../dungeons/scd.js';
+import foobar from '../dungeons/technical/foobar.js';
+import scd from '../dungeons/technical/scd.js';
 
 const timeout = 600000;
 
@@ -295,7 +295,7 @@ describe('DUNGEON_MASTER input types', () => {
 	}, timeout);
 
 	test('accepts a .js file path', async () => {
-		const dungeonPath = path.resolve(__dirname, '../dungeons/simple.js');
+		const dungeonPath = path.resolve(__dirname, '../dungeons/technical/simple.js');
 		const result = await DUNGEON_MASTER(dungeonPath, {
 			numUsers: 10,
 			numEvents: 100,
@@ -311,7 +311,7 @@ describe('DUNGEON_MASTER input types', () => {
 	}, timeout);
 
 	test('accepts a relative .js file path', async () => {
-		const result = await DUNGEON_MASTER('./dungeons/foobar.js', {
+		const result = await DUNGEON_MASTER('./dungeons/technical/foobar.js', {
 			numUsers: 5,
 			numEvents: 50,
 			seed: 'input-relative',
@@ -323,7 +323,7 @@ describe('DUNGEON_MASTER input types', () => {
 	}, timeout);
 
 	test('accepts a .json file path', async () => {
-		const jsonPath = path.resolve(__dirname, '../dungeons/simplest-schema.json');
+		const jsonPath = path.resolve(__dirname, '../dungeons/technical/simplest-schema.json');
 		const result = await DUNGEON_MASTER(jsonPath, {
 			numUsers: 10,
 			numEvents: 100,
@@ -337,8 +337,8 @@ describe('DUNGEON_MASTER input types', () => {
 
 	test('accepts an array of file paths', async () => {
 		const results = await DUNGEON_MASTER([
-			'./dungeons/simple.js',
-			'./dungeons/foobar.js'
+			'./dungeons/technical/simple.js',
+			'./dungeons/technical/foobar.js'
 		], {
 			numUsers: 5,
 			numEvents: 50,
@@ -409,7 +409,7 @@ describe('DUNGEON_MASTER input types', () => {
 	}, timeout);
 
 	test('overrides merge into config from file', async () => {
-		const result = await DUNGEON_MASTER('./dungeons/simple.js', {
+		const result = await DUNGEON_MASTER('./dungeons/technical/simple.js', {
 			numUsers: 3,
 			numEvents: 30,
 			seed: 'override-test',
@@ -460,12 +460,12 @@ describe('detectInputType', () => {
 	});
 
 	test('detects file path (.js)', () => {
-		const { type } = detectInputType('./dungeons/simple.js');
+		const { type } = detectInputType('./dungeons/technical/simple.js');
 		expect(type).toBe('file');
 	});
 
 	test('detects file path (.json)', () => {
-		const { type } = detectInputType('./dungeons/simplest-schema.json');
+		const { type } = detectInputType('./dungeons/technical/simplest-schema.json');
 		expect(type).toBe('file');
 	});
 

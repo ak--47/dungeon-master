@@ -1,7 +1,7 @@
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
-import * as u from "../lib/utils/utils.js";
+import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
 const SEED = "dm4-devtools";
@@ -12,7 +12,7 @@ const days = 100;
 const NOW = dayjs();
 const DATASET_START = NOW.subtract(days, "days");
 
-/** @typedef  {import("../types").Dungeon} Config */
+/** @typedef  {import("../../types").Dungeon} Config */
 
 // Generate consistent pipeline/repo IDs at module level
 const pipelineIds = v.range(1, 80).map(() => `PIPE_${v.uid(6)}`);
@@ -33,7 +33,7 @@ const repoIds = v.range(1, 150).map(() => `REPO_${v.uid(6)}`);
  * - Core loop: connect repo -> configure pipeline -> build -> deploy -> monitor
  * - Revenue: free / team ($25, 14-day trial) / business ($75) / enterprise ($200)
  *
- * Phase 2 Features:
+ * Advanced Features:
  * - Personas: 5 archetypes with distinct activity, conversion, and churn profiles
  * - World Events: major outage (day 42), conference launch (day 60)
  * - Data Quality: late arrivals, duplicates, bot pollution

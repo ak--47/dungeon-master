@@ -9,10 +9,10 @@ import { execSync } from "child_process";
 import * as u from 'ak-tools';
 import Papa from 'papaparse';
 
-import simple from '../dungeons/simple.js';
+import simple from '../dungeons/technical/simple.js';
 
-import foobar from '../dungeons/foobar.js';
-import scd from '../dungeons/scd.js';
+import foobar from '../dungeons/technical/foobar.js';
+import scd from '../dungeons/technical/scd.js';
 
 // 1 minute timeout
 const timeout = 60000;
@@ -74,7 +74,7 @@ describe.sequential('module', () => {
 	// // ! this test takes 35s because SCDs don't have a public API
 	// test('works as module (scd)', async () => {
 	// 	console.log('MODULE TEST: scd');
-	// 	// const scdSchema = (await import('../dungeons/scd.js')).default;
+	// 	// const scdSchema = (await import('../dungeons/technical/scd.js')).default;
 	// 	const config = {
 	// 		...scd,
 	// 		token: testToken,

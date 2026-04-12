@@ -1,7 +1,7 @@
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
-import * as u from "../lib/utils/utils.js";
+import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
 const SEED = "dm4-travel";
@@ -12,7 +12,7 @@ const days = 100;
 const NOW = dayjs();
 const DATASET_START = NOW.subtract(days, "days");
 
-/** @typedef  {import("../types").Dungeon} Config */
+/** @typedef  {import("../../types").Dungeon} Config */
 
 const hotelIds = v.range(1, 200).map(() => `HTL_${v.uid(6)}`);
 const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", "Dubai", "Sydney", "Rome", "Bangkok", "Cancun", "Bali", "Amsterdam", "Miami", "Singapore", "Lisbon"];
@@ -30,7 +30,7 @@ const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", 
  * - Core loop: search → view hotel → compare → book → stay → review
  * - Revenue: commission per booking + premium loyalty membership
  *
- * Phase 2 Features:
+ * Advanced Features:
  * - Personas: 4 traveler archetypes with different booking behaviors
  * - World Events: summer sale (day 40), hurricane disruption (day 65), loyalty launch (day 50)
  * - Engagement Decay: exponential with 90-day half-life (travel is infrequent)
@@ -452,7 +452,7 @@ const config = {
 		avg_budget_per_night: u.weighNumRange(50, 400, 0.4, 150),
 	},
 
-	// ── Phase 2: Personas ──────────────────────────────────
+	// ── Personas ──────────────────────────────────
 	personas: [
 		{
 			name: "business_traveler",
@@ -488,7 +488,7 @@ const config = {
 		},
 	],
 
-	// ── Phase 2: World Events ──────────────────────────────
+	// ── World Events ──────────────────────────────
 	worldEvents: [
 		{
 			name: "summer_sale",
@@ -519,7 +519,7 @@ const config = {
 		},
 	],
 
-	// ── Phase 2: Engagement Decay ──────────────────────────
+	// ── Engagement Decay ──────────────────────────
 	engagementDecay: {
 		model: "exponential",
 		halfLife: 90,
@@ -527,7 +527,7 @@ const config = {
 		reactivationChance: 0.02,
 	},
 
-	// ── Phase 2: Attribution ──────────────────────────────
+	// ── Attribution ──────────────────────────────
 	attribution: {
 		model: "last_touch",
 		window: 7,
@@ -563,7 +563,7 @@ const config = {
 		organicRate: 0.35,
 	},
 
-	// ── Phase 2: Geo ──────────────────────────────────────
+	// ── Geo ──────────────────────────────────────
 	geo: {
 		sticky: true,
 		regions: [
@@ -591,7 +591,7 @@ const config = {
 		],
 	},
 
-	// ── Phase 2: Anomalies ──────────────────────────────────
+	// ── Anomalies ──────────────────────────────────
 	anomalies: [
 		{
 			type: "extreme_value",

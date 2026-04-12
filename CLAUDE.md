@@ -30,7 +30,9 @@ lib/
 ├── utils/          # utils, logger (Pino), mixpanel tracking, chart, project
 └── templates/      # Default data, phrase banks, AI instruction templates, hook examples
 scripts/            # dungeon management (run, convert to/from JSON, verify hooks)
-dungeons/           # Pre-built dungeon configurations (simple, complex, sanity, etc.)
+dungeons/
+├── vertical/       # Customer-facing story dungeons (healthcare, fintech, gaming, etc.)
+└── technical/      # Feature/limit testing dungeons (SCDs, mirrors, groups, scale, etc.)
 tests/              # Vitest test suite
 ```
 
@@ -78,7 +80,7 @@ Uses **Vitest** (ESM-native). Test files:
 - `tests/unit.test.js` — Individual function tests (text generator, utils, weights)
 - `tests/int.test.js` — Integration tests (context, storage, orchestrators)
 - `tests/e2e.test.js` — End-to-end generation + Mixpanel import
-- `tests/phase2.test.js` — Phase 2 features (personas, world events, decay, data quality, subscription, attribution, geo, features, anomalies)
+- `tests/advanced-features.test.js` — Advanced features (personas, world events, decay, data quality, subscription, attribution, geo, features, anomalies)
 - `tests/sanity.test.js` — Module integration (all dungeon types, formats, batch mode)
 - `tests/performance.test.js` — Context caching, device pools, time shift
 - `tests/hooks.test.js` — Hook system: all hook types, double-fire prevention, patterns (temporal, two-pass, closure state)
@@ -312,9 +314,9 @@ Three skills are available via slash commands:
 
 The verify runner script lives at `scripts/verify-runner.mjs` — skills use it, do not create a new one.
 
-## Phase 2: Advanced Features
+## Advanced Features
 
-All Phase 2 features are **optional and additive**. If a config key is absent, behavior is identical to the original. Hooks always override Phase 2 features — hooks are the final authority.
+All advanced features are **optional and additive**. If a config key is absent, behavior is identical to the original. Hooks always override these features — hooks are the final authority.
 
 ### Feature Summary
 
@@ -354,7 +356,7 @@ All Phase 2 features are **optional and additive**. If a config key is absent, b
 
 ### Showcase Dungeon
 
-`dungeons/phase2-showcase.js` exercises all 9 features in a realistic e-commerce scenario.
+`research/feature-showcase.js` exercises all 9 features in a realistic e-commerce scenario.
 
 ## Important Notes
 

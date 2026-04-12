@@ -1,7 +1,7 @@
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
-import * as u from "../lib/utils/utils.js";
+import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
 const SEED = "dm4-healthcare";
@@ -12,7 +12,7 @@ const days = 100;
 const NOW = dayjs();
 const DATASET_START = NOW.subtract(days, "days");
 
-/** @typedef  {import("../types").Dungeon} Config */
+/** @typedef  {import("../../types").Dungeon} Config */
 
 // Generate consistent doctor/clinic IDs at module level
 const doctorIds = v.range(1, 120).map(() => `DR_${v.uid(6)}`);
@@ -32,7 +32,7 @@ const clinicIds = v.range(1, 25).map(() => `CLINIC_${v.uid(4)}`);
  * - Core loop: sign up → book appointment → consultation → prescription → follow-up
  * - Revenue: free (2 visits/month), basic ($9.99, 14-day trial), premium ($29.99 unlimited)
  *
- * Phase 2 Features:
+ * Advanced Features:
  * - Personas: 5 archetypes (doctor, nurse, patient_active, patient_occasional, patient_churner)
  * - Subscription: 3-tier revenue lifecycle with trial conversion
  * - Geo: US/EU/LATAM with timezone-aware scheduling and regional compliance
@@ -492,7 +492,7 @@ const config = {
 		age_range: ["18-25", "26-35", "26-35", "36-45", "36-45", "46-55", "56-65", "65+"],
 	},
 
-	// ── Phase 2: Personas ──────────────────────────────────
+	// ── Personas ──────────────────────────────────
 	personas: [
 		{
 			name: "doctor",
@@ -552,7 +552,7 @@ const config = {
 		},
 	],
 
-	// ── Phase 2: Subscription ──────────────────────────────
+	// ── Subscription ──────────────────────────────
 	subscription: {
 		plans: [
 			{ name: "free", price: 0, default: true },
@@ -570,7 +570,7 @@ const config = {
 		},
 	},
 
-	// ── Phase 2: Geo ──────────────────────────────────────
+	// ── Geo ──────────────────────────────────────
 	geo: {
 		sticky: true,
 		regions: [
@@ -598,7 +598,7 @@ const config = {
 		],
 	},
 
-	// ── Phase 2: Features ──────────────────────────────────
+	// ── Features ──────────────────────────────────
 	features: [
 		{
 			name: "video_consultation",

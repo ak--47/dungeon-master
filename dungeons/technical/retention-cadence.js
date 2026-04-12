@@ -2,7 +2,7 @@ const SEED = "kurby-retention";
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 dayjs.extend(utc);
-import * as u from "../lib/utils/utils.js";
+import * as u from "../../lib/utils/utils.js";
 import * as v from 'ak-tools';
 const chance = u.initChance(SEED);
 
