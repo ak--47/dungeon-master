@@ -249,6 +249,7 @@ const config = {
 			properties: {
 				"signup_method": ["email", "google", "apple", "facebook"],
 				"referral_code": u.pickAWinner([true, false], 0.3),
+				"trial_retained": [false],
 			}
 		},
 		{
@@ -267,6 +268,7 @@ const config = {
 				],
 				"sort_by": ["recommended", "distance", "rating", "price"],
 				"filter_applied": u.pickAWinner([true, false], 0.4),
+				"trial_retained": [false],
 			}
 		},
 		{
@@ -287,6 +289,8 @@ const config = {
 				"avg_rating": u.weighNumRange(1, 5, 0.8, 30),
 				"delivery_time_est_mins": u.weighNumRange(15, 90, 1.2, 40),
 				"price_tier": ["$", "$$", "$$$", "$$$$"],
+				"late_night_order": [false],
+				"trial_retained": [false],
 			}
 		},
 		{
@@ -297,6 +301,8 @@ const config = {
 				"item_category": ["entree", "appetizer", "drink", "dessert", "side"],
 				"item_price": u.weighNumRange(3, 65, 1.0, 40),
 				"customization_count": u.weighNumRange(0, 5, 1.5, 20),
+				"late_night_order": [false],
+				"trial_retained": [false],
 			}
 		},
 		{
@@ -305,6 +311,7 @@ const config = {
 			properties: {
 				"item_id": u.pickAWinner(itemIds),
 				"removal_reason": ["changed_mind", "too_expensive", "substitution"],
+				"trial_retained": [false],
 			}
 		},
 		{
@@ -314,6 +321,8 @@ const config = {
 				"coupon_code": u.pickAWinner(couponCodes),
 				"discount_type": ["percent", "flat", "free_delivery"],
 				"discount_value": u.weighNumRange(5, 50, 1.2, 20),
+				"coupon_injected": [false],
+				"trial_retained": [false],
 			}
 		},
 		{
@@ -323,6 +332,7 @@ const config = {
 				"cart_total": u.weighNumRange(8, 150, 0.8, 40),
 				"items_count": u.weighNumRange(1, 8, 1.2, 20),
 				"delivery_address_saved": u.pickAWinner([true, false], 0.7),
+				"trial_retained": [false],
 			}
 		},
 		{
@@ -334,6 +344,9 @@ const config = {
 				"order_total": u.weighNumRange(10, 200, 0.8, 40),
 				"tip_amount": u.weighNumRange(0, 30, 1.5, 20),
 				"delivery_fee": u.weighNumRange(0, 12, 1.0, 20),
+				"surge_pricing": [false],
+				"rainy_week": [false],
+				"trial_retained": [false],
 			}
 		},
 		{
@@ -343,6 +356,7 @@ const config = {
 				"order_id": u.pickAWinner(orderIds),
 				"order_status": ["confirmed", "preparing", "picked_up", "en_route", "delivered"],
 				"eta_mins": u.weighNumRange(5, 60, 1.0, 30),
+				"trial_retained": [false],
 			}
 		},
 		{
@@ -352,6 +366,7 @@ const config = {
 				"order_id": u.pickAWinner(orderIds),
 				"actual_delivery_mins": u.weighNumRange(12, 90, 1.0, 40),
 				"on_time": u.pickAWinner([true, false], 0.7),
+				"trial_retained": [false],
 			}
 		},
 		{
@@ -362,6 +377,8 @@ const config = {
 				"food_rating": u.weighNumRange(1, 5, 0.8, 30),
 				"delivery_rating": u.weighNumRange(1, 5, 0.8, 30),
 				"would_reorder": u.pickAWinner([true, false], 0.65),
+				"referral_user": [false],
+				"trial_retained": [false],
 			}
 		},
 		{
@@ -375,6 +392,7 @@ const config = {
 				]),
 				"results_count": u.weighNumRange(0, 50, 0.8, 30),
 				"search_type": ["restaurant", "cuisine", "dish"],
+				"trial_retained": [false],
 			}
 		},
 		{
@@ -384,6 +402,7 @@ const config = {
 				"promo_id": () => `promo_${v.uid(5)}`,
 				"promo_type": ["banner", "push", "in_feed"],
 				"promo_value": ["10%", "15%", "20%", "25%", "30%", "40%", "50%"],
+				"trial_retained": [false],
 			}
 		},
 		{
@@ -393,6 +412,7 @@ const config = {
 				"plan": u.pickAWinner(["quickbite_plus_monthly", "quickbite_plus_monthly", "quickbite_plus_annual"]),
 				"price": u.pickAWinner([9.99, 9.99, 79.99]),
 				"trial": u.pickAWinner([true, false], 0.5),
+				"trial_retained": [false],
 			}
 		},
 		{
@@ -401,6 +421,7 @@ const config = {
 			properties: {
 				"reason": ["too_expensive", "not_ordering_enough", "found_alternative", "bad_experience"],
 				"months_subscribed": u.weighNumRange(1, 24, 1.5, 15),
+				"trial_retained": [false],
 			}
 		},
 		{
@@ -409,6 +430,7 @@ const config = {
 			properties: {
 				"issue_type": ["missing_item", "wrong_order", "late_delivery", "quality_issue", "refund_request"],
 				"order_id": u.pickAWinner(orderIds),
+				"trial_retained": [false],
 			}
 		},
 		{
@@ -417,6 +439,8 @@ const config = {
 			properties: {
 				"order_id": u.pickAWinner(orderIds),
 				"original_order_age_days": u.weighNumRange(1, 60, 1.5, 30),
+				"referral_user": [false],
+				"trial_retained": [false],
 			}
 		},
 	],
@@ -441,6 +465,8 @@ const config = {
 		"avg_order_value": u.weighNumRange(15, 80, 0.8, 40),
 		"orders_per_month": u.weighNumRange(1, 20, 1.5, 10),
 		"favorite_restaurant_count": u.weighNumRange(1, 10),
+		"is_high_risk": [false],
+		"churn_risk_score": [0],
 	},
 
 	groupKeys: [
@@ -559,7 +585,9 @@ const config = {
 						'milliseconds'
 					).toISOString();
 
+					const couponTemplate = record.find(e => e.event === "coupon applied");
 					const couponEvent = {
+						...(couponTemplate || firstEvent),
 						event: "coupon applied",
 						time: midTime,
 						user_id: firstEvent.user_id,
@@ -670,7 +698,7 @@ const config = {
 				if (isReferralUser && event.event === "reorder initiated" && chance.bool({ likelihood: 50 })) {
 					const eventTime = dayjs(event.time);
 					const extraReorder = {
-						event: "reorder initiated",
+						...event,
 						time: eventTime.add(chance.integer({ min: 1, max: 7 }), 'days').toISOString(),
 						user_id: event.user_id,
 						order_id: chance.pickone(orderIds),

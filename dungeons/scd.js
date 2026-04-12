@@ -78,7 +78,7 @@ const config = {
 				currency: ["USD", "CAD", "EUR", "BTC", "ETH", "JPY"],
 				coupon: weighChoices(["none", "none", "none", "none", "10%OFF", "20%OFF", "10%OFF", "20%OFF", "30%OFF", "40%OFF", "50%OFF"]),
 				numItems: weighNumRange(1, 10),
-
+				discount_applied: [false],
 			}
 		},
 		{
@@ -110,8 +110,8 @@ const config = {
 				watchTimeSec: weighNumRange(10, 600, .25),
 				quality: ["2160p", "1440p", "1080p", "720p", "480p", "360p", "240p"],
 				format: ["mp4", "avi", "mov", "mpg"],
-				uploader_id: chance.guid.bind(chance)
-
+				uploader_id: chance.guid.bind(chance),
+				is_weekend: [false],
 			}
 		},
 		{
@@ -143,6 +143,14 @@ const config = {
 				experiment_ids: ["1234", "5678", "9012", "3456", "7890"],
 				multiVariate: [true, false]
 			}
+		},
+		{
+			event: "cart_abandoned",
+			weight: 0,
+			isStrictEvent: true,
+			properties: {
+				amount: weighNumRange(5, 500, .25),
+			}
 		}
 	],
 	superProps: {
@@ -156,7 +164,8 @@ const config = {
 	userProps: {
 		title: chance.profession.bind(chance),
 		luckyNumber: weighNumRange(42, 420, .3),
-		spiritAnimal: pickAWinner(["duck", "dog", "otter", "penguin", "cat", "elephant", "lion", "cheetah", "giraffe", "zebra", "rhino", "hippo", "whale", "dolphin", "shark", "octopus", "squid", "jellyfish", "starfish", "seahorse", "crab", "lobster", "shrimp", "clam", "snail", "slug", "butterfly", "moth", "bee", "wasp", "ant", "beetle", "ladybug", "caterpillar", "centipede", "millipede", "scorpion", "spider", "tarantula", "tick", "mite", "mosquito", "fly", "dragonfly", "damselfly", "grasshopper", "cricket", "locust", "mantis", "cockroach", "termite", "praying mantis", "walking stick", "stick bug", "leaf insect", "lacewing", "aphid", "cicada", "thrips", "psyllid", "scale insect", "whitefly", "mealybug", "planthopper", "leafhopper", "treehopper", "flea", "louse", "bedbug", "flea beetle", "weevil", "longhorn beetle", "leaf beetle", "tiger beetle", "ground beetle", "lady beetle", "firefly", "click beetle", "rove beetle", "scarab beetle", "dung beetle", "stag beetle", "rhinoceros beetle", "hercules beetle", "goliath beetle", "jewel beetle", "tortoise beetle"])
+		spiritAnimal: pickAWinner(["duck", "dog", "otter", "penguin", "cat", "elephant", "lion", "cheetah", "giraffe", "zebra", "rhino", "hippo", "whale", "dolphin", "shark", "octopus", "squid", "jellyfish", "starfish", "seahorse", "crab", "lobster", "shrimp", "clam", "snail", "slug", "butterfly", "moth", "bee", "wasp", "ant", "beetle", "ladybug", "caterpillar", "centipede", "millipede", "scorpion", "spider", "tarantula", "tick", "mite", "mosquito", "fly", "dragonfly", "damselfly", "grasshopper", "cricket", "locust", "mantis", "cockroach", "termite", "praying mantis", "walking stick", "stick bug", "leaf insect", "lacewing", "aphid", "cicada", "thrips", "psyllid", "scale insect", "whitefly", "mealybug", "planthopper", "leafhopper", "treehopper", "flea", "louse", "bedbug", "flea beetle", "weevil", "longhorn beetle", "leaf beetle", "tiger beetle", "ground beetle", "lady beetle", "firefly", "click beetle", "rove beetle", "scarab beetle", "dung beetle", "stag beetle", "rhinoceros beetle", "hercules beetle", "goliath beetle", "jewel beetle", "tortoise beetle"]),
+		spendTier: ["budget"],
 	},
 	scdProps: {
 		role: {
@@ -257,11 +266,11 @@ const config = {
 				const lastAdd = record.filter(e => e.event === "add to cart").pop();
 				if (lastAdd) {
 					record.push({
+						...lastAdd,
 						event: "cart_abandoned",
 						time: dayjs(lastAdd.time).add(30, "minute").toISOString(),
 						user_id: lastAdd.user_id,
-						platform: lastAdd.platform,
-						amount: lastAdd.amount
+						amount: lastAdd.amount,
 					});
 				}
 			}

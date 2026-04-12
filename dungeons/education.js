@@ -297,6 +297,8 @@ const config = {
 				"watch_time_mins": u.weighNumRange(3, 60, 0.8, 20),
 				"playback_speed": u.pickAWinner([0.75, 1.0, 1.0, 1.0, 1.25, 1.5, 2.0]),
 				"notes_taken": u.pickAWinner([true, false], 0.35),
+				"speed_learner": [false],
+				"thorough_learner": [false],
 			}
 		},
 		{
@@ -307,6 +309,7 @@ const config = {
 				"quiz_id": u.pickAWinner(quizIds),
 				"quiz_type": ["practice", "graded", "final_exam"],
 				"question_count": u.weighNumRange(5, 50, 0.7, 15),
+				"semester_end_rush": [false],
 			}
 		},
 		{
@@ -318,6 +321,9 @@ const config = {
 				"score_percent": u.weighNumRange(0, 100, 1.2, 50),
 				"time_spent_mins": u.weighNumRange(3, 120, 0.6, 25),
 				"attempts": u.weighNumRange(1, 5, 0.5, 3),
+				"diligent_student": [false],
+				"speed_learner_effect": [false],
+				"semester_end_rush": [false],
 			}
 		},
 		{
@@ -329,6 +335,8 @@ const config = {
 				"submission_type": ["text", "code", "file", "project"],
 				"word_count": u.weighNumRange(100, 5000, 0.6, 500),
 				"is_late": u.pickAWinner([true, false], 0.2),
+				"is_deadline_rush": [false],
+				"semester_end_rush": [false],
 			}
 		},
 		{
@@ -349,6 +357,7 @@ const config = {
 				"course_id": u.pickAWinner(courseIds),
 				"post_type": ["question", "answer", "comment"],
 				"word_count": u.weighNumRange(10, 500, 0.6, 80),
+				"study_group_member": [false],
 			}
 		},
 		{
@@ -358,6 +367,7 @@ const config = {
 				"course_id": u.pickAWinner(courseIds),
 				"completion_time_days": u.weighNumRange(7, 180, 0.5, 45),
 				"final_grade": u.weighNumRange(60, 100, 1.2, 30),
+				"diligent_student": [false],
 			}
 		},
 		{
@@ -421,6 +431,7 @@ const config = {
 				"difficulty": ["easy", "medium", "hard"],
 				"time_to_solve_sec": u.weighNumRange(10, 3600, 0.5, 300),
 				"hint_used": u.pickAWinner([true, false], 0.35),
+				"independent_solver": [false],
 			}
 		},
 	],
@@ -437,6 +448,11 @@ const config = {
 		"learning_style": ["visual", "reading", "hands_on", "auditory"],
 		"education_level": ["high_school", "bachelors", "masters", "phd", "self_taught"],
 		"timezone": ["US_Eastern", "US_Pacific", "US_Central", "Europe", "Asia"],
+		"courses_created": [0],
+		"teaching_experience_years": [0],
+		"instructor_rating": [0],
+		"learning_goal": ["none"],
+		"study_hours_per_week": [0],
 	},
 
 	groupKeys: [
@@ -640,9 +656,10 @@ const config = {
 				// 40% chance to splice in an extra certificate_earned event
 				if (chance.bool({ likelihood: 40 })) {
 					const lastEvent = userEvents[userEvents.length - 1];
-					if (lastEvent) {
+					const certTemplate = userEvents.find(e => e.event === "certificate earned");
+					if (lastEvent && certTemplate) {
 						const certEvent = {
-							event: "certificate earned",
+							...certTemplate,
 							time: dayjs(lastEvent.time).add(chance.integer({ min: 1, max: 5 }), 'days').toISOString(),
 							user_id: lastEvent.user_id,
 							course_id: chance.pickone(courseIds),
@@ -713,9 +730,10 @@ const config = {
 			} else if (joinedStudyGroupEarly) {
 				// Study group joiners keep all events and get bonus discussion_posted events
 				const lastEvent = userEvents[userEvents.length - 1];
-				if (lastEvent && chance.bool({ likelihood: 60 })) {
+				const discussionTemplate = userEvents.find(e => e.event === "discussion posted");
+				if (lastEvent && discussionTemplate && chance.bool({ likelihood: 60 })) {
 					const bonusDiscussion = {
-						event: "discussion posted",
+						...discussionTemplate,
 						time: dayjs(lastEvent.time).add(chance.integer({ min: 1, max: 3 }), 'days').toISOString(),
 						user_id: lastEvent.user_id,
 						course_id: chance.pickone(courseIds),

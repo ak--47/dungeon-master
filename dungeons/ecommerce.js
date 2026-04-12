@@ -165,13 +165,31 @@ const config = {
 			weight: 4,
 			properties: {
 				item: makeProducts(1),
+				amount: weighNumRange(1, 100, 0.3),
+				quantity: weighNumRange(1, 5, 0.3),
+				total_value: weighNumRange(1, 500, 0.3),
+				featured: [true, false, false],
+				category: ["electronics", "books", "clothing", "home", "garden", "toys", "sports", "automotive", "beauty", "health", "grocery", "jewelry", "shoes", "tools", "office supplies"],
+				descriptor: ["brand new", "open box", "refurbished", "used", "like new", "vintage", "antique", "collectible"],
+				slug: ["item"],
+				assetPreview: ["https://example.com/assets/item.png"],
+				assetType: [".png", ".jpg", ".jpeg", ".heic", ".mp4", ".mov", ".avi"],
 			}
 		},
 		{
 			event: "view item",
 			weight: 8,
 			properties: {
-				item: makeProducts(1)
+				item: makeProducts(1),
+				amount: weighNumRange(1, 100, 0.3),
+				quantity: weighNumRange(1, 5, 0.3),
+				total_value: weighNumRange(1, 500, 0.3),
+				featured: [true, false, false],
+				category: ["electronics", "books", "clothing", "home", "garden", "toys", "sports", "automotive", "beauty", "health", "grocery", "jewelry", "shoes", "tools", "office supplies"],
+				descriptor: ["brand new", "open box", "refurbished", "used", "like new", "vintage", "antique", "collectible"],
+				slug: ["item"],
+				assetPreview: ["https://example.com/assets/item.png"],
+				assetType: [".png", ".jpg", ".jpeg", ".heic", ".mp4", ".mov", ".avi"],
 			}
 		},
 		{
@@ -179,6 +197,15 @@ const config = {
 			weight: 5,
 			properties: {
 				item: makeProducts(1),
+				amount: weighNumRange(1, 100, 0.3),
+				quantity: weighNumRange(1, 5, 0.3),
+				total_value: weighNumRange(1, 500, 0.3),
+				featured: [true, false, false],
+				category: ["electronics", "books", "clothing", "home", "garden", "toys", "sports", "automotive", "beauty", "health", "grocery", "jewelry", "shoes", "tools", "office supplies"],
+				descriptor: ["brand new", "open box", "refurbished", "used", "like new", "vintage", "antique", "collectible"],
+				slug: ["item"],
+				assetPreview: ["https://example.com/assets/item.png"],
+				assetType: [".png", ".jpg", ".jpeg", ".heic", ".mp4", ".mov", ".avi"],
 			}
 		},
 		{
@@ -193,6 +220,9 @@ const config = {
 			weight: 8,
 			properties: {
 				watchTimeSec: weighNumRange(10, 600, .25),
+				quality: ["2160p", "1440p", "1080p", "720p", "480p", "360p", "240p"],
+				format: ["mp4", "avi", "mov", "mpg"],
+				uploader_id: chance.guid.bind(chance),
 			}
 		},
 		{
@@ -216,6 +246,7 @@ const config = {
 			properties: {
 				signupMethod: ["email", "google", "facebook", "twitter", "linkedin", "github"],
 				referral: weighChoices(["none", "none", "none", "friend", "ad", "ad", "ad", "friend", "friend", "friend", "friend"]),
+				signup_flow: ["v1"],
 			}
 		},
 

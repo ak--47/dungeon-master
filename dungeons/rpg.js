@@ -307,6 +307,8 @@ const config = {
 				"quest_id": u.pickAWinner(questIds),
 				"reward_gold": u.weighNumRange(10, 500, 0.5, 100),
 				"reward_xp": u.weighNumRange(50, 2000, 0.5, 500),
+				"compass_user": [false],
+				"subscriber_advantage": ["Free"],
 			}
 		},
 		{
@@ -325,6 +327,9 @@ const config = {
 				"dungeon_id": u.pickAWinner(dungeonIds),
 				"time_spent_mins": u.weighNumRange(5, 120, 0.6, 30),
 				"completion_status": ["completed", "abandoned", "died"],
+				"strategic_explorer": [false],
+				"legendary_weapon_equipped": [false],
+				"subscriber_advantage": ["Free"],
 			}
 		},
 		{
@@ -340,6 +345,10 @@ const config = {
 					"Rare Artifact"
 				],
 				"treasure_value": u.weighNumRange(5, 1000, 1.2, 50),
+				"legendary_drop": [false],
+				"strategic_explorer": [false],
+				"subscriber_advantage": ["Free"],
+				"elite_bonus": [false],
 			}
 		},
 		{
@@ -355,6 +364,9 @@ const config = {
 				],
 				"player_level": u.weighNumRange(1, 50),
 				"resurrection_used": u.pickAWinner([true, false], 0.25),
+				"cursed_week": [false],
+				"near_death_survival": [false],
+				"subscriber_advantage": ["Free"],
 			}
 		},
 		{
@@ -411,6 +423,7 @@ const config = {
 				],
 				"price_usd": u.pickAWinner([4.99, 9.99, 19.99, 49.99, 99.99]),
 				"payment_method": ["Credit Card", "PayPal", "Apple Pay", "Google Pay"],
+				"lucky_charm_effect": [false],
 			}
 		},
 		{
@@ -498,6 +511,10 @@ const config = {
 			properties: {
 				"outcome": ["Victory", "Defeat", "Fled"],
 				"loot_gained": u.pickAWinner([true, false], 0.7),
+				"legendary_weapon_equipped": [false],
+				"subscriber_advantage": ["Free"],
+				"near_death_survival": [false],
+				"guild_member_retained": [false],
 			}
 		}
 	],
@@ -585,18 +602,16 @@ const config = {
 			if (EVENT_TIME.isAfter(CURSED_WEEK_START) && EVENT_TIME.isBefore(CURSED_WEEK_END)) {
 				// 50% chance to inject a death event
 				if (chance.bool({ likelihood: 30 })) {
-					const deathEvent = {
-						event: "player death",
-						time: record.time,
-						user_id: record.user_id,
-						cause_of_death: "Curse",
-						player_level: chance.integer({ min: 1, max: 50 }),
-						resurrection_used: chance.bool({ likelihood: 80 }), // More res usage during curse
-						cursed_week: true,
-					};
-					// Return death event instead sometimes
+					// Return death event instead sometimes (clone from current record for schema)
 					if (chance.bool({ likelihood: 50 })) {
-						return deathEvent;
+						return {
+							...record,
+							event: "player death",
+							cause_of_death: "Curse",
+							player_level: chance.integer({ min: 1, max: 50 }),
+							resurrection_used: chance.bool({ likelihood: 80 }), // More res usage during curse
+							cursed_week: true,
+						};
 					}
 				}
 			}
@@ -715,9 +730,8 @@ const config = {
 					// Add extra quest completions for compass users
 					if (chance.bool({ likelihood: 40 })) {
 						const extraQuest = {
-							event: "quest turned in",
+							...event,
 							time: eventTime.add(chance.integer({ min: 10, max: 120 }), 'minutes').toISOString(),
-							user_id: event.user_id,
 							quest_id: chance.pickone(questIds),
 							reward_gold: chance.integer({ min: 100, max: 500 }),
 							reward_xp: chance.integer({ min: 500, max: 2000 }),
@@ -742,20 +756,23 @@ const config = {
 
 					// Add additional purchase events (higher LTV)
 					if (event.event === "item purchased" && chance.bool({ likelihood: 35 })) {
-						const extraPurchase = {
-							event: "real money purchase",
-							time: eventTime.add(chance.integer({ min: 1, max: 3 }), 'days').toISOString(),
-							user_id: event.user_id,
-							product: chance.pickone([
-								"Premium Currency (5000)",
-								"Legendary Weapon Chest",
-								"Season Pass"
-							]),
-							price_usd: chance.pickone([19.99, 49.99, 99.99]),
-							payment_method: chance.pickone(["Credit Card", "PayPal"]),
-							lucky_charm_effect: true,
-						};
-						userEvents.splice(idx + 1, 0, extraPurchase);
+						const purchaseTemplate = userEvents.find(e => e.event === "real money purchase");
+						if (purchaseTemplate) {
+							const extraPurchase = {
+								...purchaseTemplate,
+								time: eventTime.add(chance.integer({ min: 1, max: 3 }), 'days').toISOString(),
+								user_id: event.user_id,
+								product: chance.pickone([
+									"Premium Currency (5000)",
+									"Legendary Weapon Chest",
+									"Season Pass"
+								]),
+								price_usd: chance.pickone([19.99, 49.99, 99.99]),
+								payment_method: chance.pickone(["Credit Card", "PayPal"]),
+								lucky_charm_effect: true,
+							};
+							userEvents.splice(idx + 1, 0, extraPurchase);
+						}
 					}
 				}
 
@@ -863,17 +880,20 @@ const config = {
 					// Elite users get bonus engagement events
 					if (isElite && Math.random() * 100 < 15) {
 						if (event.event === "quest turned in" || event.event === "exit dungeon") {
-							const treasureTypes = ["Rare Artifact", "Gold", "Weapon", "Armor"];
-							const bonusEvent = {
-								event: "find treasure",
-								time: eventTime.add(Math.floor(Math.random() * 26) + 5, 'minutes').toISOString(),
-								user_id: event.user_id,
-								treasure_type: treasureTypes[Math.floor(Math.random() * treasureTypes.length)],
-								treasure_value: Math.floor(Math.random() * 601) + 200,
-								subscriber_advantage: "Elite",
-								elite_bonus: true,
-							};
-							userEvents.splice(idx + 1, 0, bonusEvent);
+							const treasureTemplate = userEvents.find(e => e.event === "find treasure");
+							if (treasureTemplate) {
+								const treasureTypes = ["Rare Artifact", "Gold", "Weapon", "Armor"];
+								const bonusEvent = {
+									...treasureTemplate,
+									time: eventTime.add(Math.floor(Math.random() * 26) + 5, 'minutes').toISOString(),
+									user_id: event.user_id,
+									treasure_type: treasureTypes[Math.floor(Math.random() * treasureTypes.length)],
+									treasure_value: Math.floor(Math.random() * 601) + 200,
+									subscriber_advantage: "Elite",
+									elite_bonus: true,
+								};
+								userEvents.splice(idx + 1, 0, bonusEvent);
+							}
 						}
 					}
 				}
@@ -898,9 +918,10 @@ const config = {
 			} else if (joinedGuildEarly) {
 				// Add extra engagement events for retained users
 				const lastEvent = userEvents[userEvents.length - 1];
-				if (lastEvent && chance.bool({ likelihood: 60 })) {
+				const combatTemplate = userEvents.find(e => e.event === "combat completed");
+				if (lastEvent && combatTemplate && chance.bool({ likelihood: 60 })) {
 					const retentionEvent = {
-						event: "combat completed",
+						...combatTemplate,
 						time: dayjs(lastEvent.time).add(chance.integer({ min: 1, max: 5 }), 'days').toISOString(),
 						user_id: lastEvent.user_id,
 						outcome: "Victory",

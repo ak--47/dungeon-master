@@ -295,6 +295,9 @@ const config = {
 				order_total: u.weighNumRange(12, 150, 0.8, 35),
 				tip_amount: u.weighNumRange(0, 25, 1.5, 15),
 				delivery_fee: u.weighNumRange(0, 10, 1.0, 15),
+				magic_number_customer: [false],
+				session_amplified: [false],
+				bonus_order: [false],
 			}
 		},
 		{
@@ -477,10 +480,13 @@ const config = {
 			} else if (currentFav < targetFav) {
 				// Add favorites near existing view events
 				const viewEvents = userEvents.filter(e => e.event === "view menu item");
+				const existingFav = userEvents.find(e => e.event === "favorite item");
 				const toAdd = targetFav - currentFav;
 				for (let j = 0; j < toAdd && j < viewEvents.length; j++) {
 					const sourceView = viewEvents[j];
+					const template = existingFav || sourceView;
 					userEvents.push({
+						...template,
 						event: "favorite item",
 						time: dayjs(sourceView.time).add(chance.integer({ min: 10, max: 120 }), 'seconds').toISOString(),
 						user_id: sourceView.user_id,
@@ -533,7 +539,7 @@ const config = {
 
 						if (chance.bool({ likelihood: dupeChance })) {
 							const extraOrder = {
-								event: "order placed",
+								...event,
 								time: dayjs(event.time).add(chance.integer({ min: 1, max: 5 }), 'days').toISOString(),
 								user_id: event.user_id,
 								order_id: chance.pickone(orderIds),
@@ -543,8 +549,8 @@ const config = {
 								delivery_fee: chance.integer({ min: 0, max: 8 }),
 								magic_number_customer: true,
 								bonus_order: true,
+								session_amplified: amplified ? true : false,
 							};
-							if (amplified) extraOrder.session_amplified = true;
 							userEvents.splice(i + 1, 0, extraOrder);
 						}
 					}

@@ -68,7 +68,10 @@ const config = {
 			properties: {
 				currency: ["USD", "CAD", "EUR", "BTC", "ETH", "JPY"],
 				coupon: weighChoices(["none", "none", "none", "none", "10%OFF", "20%OFF", "10%OFF", "20%OFF", "30%OFF", "40%OFF", "50%OFF"]),
-				cart: makeProducts()
+				cart: makeProducts(),
+				discount_applied: [false],
+				discount_percent: [0],
+				user_segment: ["regular"],
 			}
 		},
 		{
@@ -76,13 +79,15 @@ const config = {
 			weight: 4,
 			properties: {
 				item: makeProducts(1),
+				user_segment: ["regular"],
 			}
 		},
 		{
 			event: "view item",
 			weight: 8,
 			properties: {
-				item: makeProducts(1)
+				item: makeProducts(1),
+				user_segment: ["regular"],
 			}
 		},
 		{
@@ -90,6 +95,8 @@ const config = {
 			weight: 5,
 			properties: {
 				item: makeProducts(1),
+				save_context: ["weekday_intent"],
+				user_segment: ["regular"],
 			}
 		}		
 	],

@@ -238,7 +238,7 @@ const config = {
 		number: integer,
 		boolean: [true, false],
 		date: dates,
-
+		temperature: ["warm"],
 	},
 	userProps: {
 		luckyNumber: integer,

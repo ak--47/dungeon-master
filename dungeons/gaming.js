@@ -309,6 +309,7 @@ const config = {
 					"Currency",
 				],
 				"purchase amount": u.weighNumRange(1, 50, 1, 20),
+				is_whale: [false],
 			}
 		},
 		{
@@ -451,7 +452,8 @@ const config = {
 			"Soldier",
 			"Urchin",
 		],
-		"subscription MRR": u.weighNumRange(0, 250, 1, 200)
+		"subscription MRR": u.weighNumRange(0, 250, 1, 200),
+		archetype: ["neutral"],
 	},
 	// HOOK: 3 patterns — gold scaling by level, whale purchases, alignment archetype
 	hook: function (record, type, meta) {

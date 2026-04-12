@@ -435,7 +435,8 @@ const dungeon = {
 				has_screenshot: [true, true, false, false], // 50% have screenshots
 				channel: ["email", "phone", "chat", "portal"],
 				is_resolved: [true, true, true, false], // 75% resolved
-				resolution_time_minutes: weighNumRange(15, 2880, 0.6) // 15min to 2 days
+				resolution_time_minutes: weighNumRange(15, 2880, 0.6), // 15min to 2 days
+				auto_escalated: [false],
 			}
 		},
 		{
@@ -576,7 +577,9 @@ const dungeon = {
 				is_reproducible: [true, true, true, false], // 75% reproducible
 				affects_workflow: [true, true, false], // 67% affect workflow
 				has_screenshot: [true, true, false], // 67% include screenshots
-				reporter_role: ["admin", "user", "developer", "qa_tester"]
+				reporter_role: ["admin", "user", "developer", "qa_tester"],
+				requires_immediate_review: [false],
+				estimated_fix_hours: weighNumRange(1, 8, 0.4),
 			}
 		},
 		{
@@ -726,9 +729,18 @@ const dungeon = {
 				affects_production: [true, false, false], // 33% affect production
 				resolution_status: ["open", "investigating", "resolved", "closed"]
 			}
+		},
+		{
+			event: "satisfaction_survey_triggered",
+			weight: 0,
+			isStrictEvent: true,
+			properties: {
+				survey_type: ["quarterly_nps"],
+				score: weighNumRange(1, 10, 0.3),
+			}
 		}
 	],
-	
+
 	funnels: [
 		
 	],
@@ -746,7 +758,7 @@ const dungeon = {
 	
 	userProps: {
 		account_age_days: weighNumRange(0, 1095, 0.4),
-		user_tier: ["free", "free", "basic", "pro", "enterprise"],	
+		user_tier: ["free", "free", "basic", "pro", "enterprise"],
 		signup_method: ["email", "google", "microsoft", "sso", "invite"],
 		notification_enabled: [true, true, false],
 		has_purchased: [true, false, false],
@@ -756,7 +768,9 @@ const dungeon = {
 		technical_expertise: ["beginner", "intermediate", "advanced", "expert"],
 		engagement_score: weighNumRange(0, 100, 0.3), // Most users low engagement
 		last_active_days_ago: weighNumRange(0, 30, 0.6),
-		preferred_communication: ["email", "chat", "phone", "self_service"]
+		preferred_communication: ["email", "chat", "phone", "self_service"],
+		is_power_user: [false],
+		risk_level: ["healthy"],
 	},
 	
 	// ============= Slowly Changing Dimensions =============
@@ -794,12 +808,12 @@ const dungeon = {
 			if (meta.profile.user_tier === "enterprise" && record.length > 5) {
 				const lastEvent = record[record.length - 1];
 				record.push({
+					...lastEvent,
 					event: "satisfaction_survey_triggered",
 					time: lastEvent.time,
 					user_id: lastEvent.user_id,
-					product_tier: "enterprise",
 					survey_type: "quarterly_nps",
-					score: chance.integer({ min: 1, max: 10 })
+					score: chance.integer({ min: 1, max: 10 }),
 				});
 			}
 			return record;

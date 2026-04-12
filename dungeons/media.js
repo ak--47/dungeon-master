@@ -318,6 +318,10 @@ const config = {
 			properties: {
 				"signup_source": ["organic", "referral", "trial_offer", "ad"],
 				"plan_selected": ["free", "standard", "premium"],
+				"weekend_viewing": [false],
+				"prime_time": [false],
+				"kids_profile": [false],
+				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -326,6 +330,10 @@ const config = {
 			properties: {
 				"browse_section": ["home", "trending", "new_releases", "genre", "continue_watching"],
 				"genre": ["action", "comedy", "drama", "documentary", "horror", "sci_fi", "animation", "thriller", "romance"],
+				"weekend_viewing": [false],
+				"prime_time": [false],
+				"kids_profile": [false],
+				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -335,6 +343,11 @@ const config = {
 				"content_type": ["movie", "series", "documentary", "special"],
 				"genre": ["action", "comedy", "drama", "documentary", "horror", "sci_fi", "animation", "thriller", "romance"],
 				"content_id": u.pickAWinner(contentIds),
+				"blockbuster_release": [false],
+				"kids_profile": [false],
+				"weekend_viewing": [false],
+				"prime_time": [false],
+				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -346,6 +359,12 @@ const config = {
 				"playback_quality": ["480p", "720p", "1080p", "4k"],
 				"subtitle_language": ["none", "english", "spanish", "french", "japanese", "korean"],
 				"playback_speed": u.pickAWinner(["0.5x", "1x", "1x", "1x", "1.25x", "1.5x", "2x"]),
+				"blockbuster_release": [false],
+				"kids_profile": [false],
+				"binge_session": [false],
+				"weekend_viewing": [false],
+				"prime_time": [false],
+				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -356,6 +375,12 @@ const config = {
 				"content_type": ["movie", "series", "documentary", "special"],
 				"watch_duration_min": u.weighNumRange(5, 180, 0.5, 45),
 				"completion_percent": u.weighNumRange(10, 100, 1.5, 85),
+				"binge_session": [false],
+				"subtitle_user": [false],
+				"weekend_viewing": [false],
+				"prime_time": [false],
+				"kids_profile": [false],
+				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -364,6 +389,10 @@ const config = {
 			properties: {
 				"content_id": u.pickAWinner(contentIds),
 				"pause_reason": ["manual", "ad_break", "buffering", "notification"],
+				"weekend_viewing": [false],
+				"prime_time": [false],
+				"kids_profile": [false],
+				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -373,6 +402,11 @@ const config = {
 				"content_id": u.pickAWinner(contentIds),
 				"rating": u.weighNumRange(1, 5, 2, 4),
 				"review_text_length": u.weighNumRange(0, 500, 0.2, 0),
+				"blockbuster_release": [false],
+				"weekend_viewing": [false],
+				"prime_time": [false],
+				"kids_profile": [false],
+				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -382,6 +416,10 @@ const config = {
 				"content_id": u.pickAWinner(contentIds),
 				"content_type": ["movie", "series", "documentary", "special"],
 				"genre": ["action", "comedy", "drama", "documentary", "horror", "sci_fi", "animation", "thriller", "romance"],
+				"weekend_viewing": [false],
+				"prime_time": [false],
+				"kids_profile": [false],
+				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -390,6 +428,10 @@ const config = {
 			properties: {
 				"content_id": u.pickAWinner(contentIds),
 				"reason": ["watched", "not_interested", "expired"],
+				"weekend_viewing": [false],
+				"prime_time": [false],
+				"kids_profile": [false],
+				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -399,6 +441,10 @@ const config = {
 				"search_term": () => chance.word(),
 				"results_count": u.weighNumRange(0, 50, 0.5, 15),
 				"search_type": ["title", "actor", "director", "genre"],
+				"weekend_viewing": [false],
+				"prime_time": [false],
+				"kids_profile": [false],
+				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -407,6 +453,10 @@ const config = {
 			properties: {
 				"algorithm": ["collaborative_filtering", "content_based", "trending", "editorial"],
 				"position": u.weighNumRange(1, 20),
+				"weekend_viewing": [false],
+				"prime_time": [false],
+				"kids_profile": [false],
+				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -414,6 +464,10 @@ const config = {
 			weight: 4,
 			properties: {
 				"profile_type": ["main", "kids", "partner", "guest"],
+				"weekend_viewing": [false],
+				"prime_time": [false],
+				"kids_profile": [false],
+				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -423,6 +477,11 @@ const config = {
 				"ad_type": ["pre_roll", "mid_roll", "banner", "interstitial"],
 				"ad_duration_sec": u.weighNumRange(5, 30),
 				"skipped": u.pickAWinner([true, false], 0.4),
+				"ad_blocked": [false],
+				"kids_profile": [false],
+				"weekend_viewing": [false],
+				"prime_time": [false],
+				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -432,6 +491,10 @@ const config = {
 				"old_plan": ["free", "standard", "premium"],
 				"new_plan": ["free", "standard", "premium"],
 				"change_reason": ["upgrade", "downgrade", "cancel", "resubscribe"],
+				"weekend_viewing": [false],
+				"prime_time": [false],
+				"kids_profile": [false],
+				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -441,6 +504,10 @@ const config = {
 				"content_id": u.pickAWinner(contentIds),
 				"content_type": ["movie", "series", "documentary", "special"],
 				"download_quality": ["720p", "1080p", "4k"],
+				"weekend_viewing": [false],
+				"prime_time": [false],
+				"kids_profile": [false],
+				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -449,6 +516,10 @@ const config = {
 			properties: {
 				"share_method": ["link", "social", "dm", "email"],
 				"content_type": ["movie", "series", "documentary", "special"],
+				"weekend_viewing": [false],
+				"prime_time": [false],
+				"kids_profile": [false],
+				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -457,6 +528,10 @@ const config = {
 			properties: {
 				"subtitle_language": ["none", "english", "spanish", "french", "japanese", "korean"],
 				"action": ["enabled", "disabled", "changed"],
+				"weekend_viewing": [false],
+				"prime_time": [false],
+				"kids_profile": [false],
+				"ad_fatigue": [false],
 			}
 		},
 	],
@@ -701,7 +776,9 @@ const config = {
 					// Add extra viewing events after completions
 					if (event.event === "playback completed" && chance.bool({ likelihood: 40 })) {
 						const nextContentId = chance.pickone(contentIds);
+						const startTemplate = userEvents.find(e => e.event === "playback started");
 						const extraStart = {
+							...(startTemplate || event),
 							event: "playback started",
 							time: eventTime.add(chance.integer({ min: 1, max: 5 }), 'minutes').toISOString(),
 							user_id: event.user_id,
@@ -711,7 +788,7 @@ const config = {
 							binge_session: true,
 						};
 						const extraComplete = {
-							event: "playback completed",
+							...event,
 							time: eventTime.add(chance.integer({ min: 25, max: 60 }), 'minutes').toISOString(),
 							user_id: event.user_id,
 							content_id: nextContentId,
@@ -767,7 +844,7 @@ const config = {
 					const templateEvent = chance.pickone(completionEvents);
 					const templateTime = dayjs(templateEvent.time);
 					const extraCompletion = {
-						event: "playback completed",
+						...templateEvent,
 						time: templateTime.add(chance.integer({ min: 30, max: 180 }), 'minutes').toISOString(),
 						user_id: templateEvent.user_id,
 						content_id: chance.pickone(contentIds),

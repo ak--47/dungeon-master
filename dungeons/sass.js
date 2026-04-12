@@ -349,6 +349,7 @@ const config = {
 				service_type: ["web_app", "api", "database", "cache", "queue", "ml_model"],
 				environment: ["production", "staging", "dev"],
 				cloud_provider: ["aws", "gcp", "azure"],
+				docs_informed: [false],
 			}
 		},
 		{
@@ -370,12 +371,26 @@ const config = {
 			}
 		},
 		{
+			event: "incident created",
+			weight: 1,
+			properties: {
+				escalation_level: ["P1", "P2"],
+				teams_paged: u.weighNumRange(1, 5),
+				incident_id: () => `inc_${v.uid(8)}`,
+				original_severity: ["critical", "emergency"],
+				original_alert_type: ["cpu", "memory", "latency", "error_rate", "disk", "network"],
+				service_id: u.pickAWinner(serviceIds),
+				auto_escalated: [true],
+			}
+		},
+		{
 			event: "alert acknowledged",
 			weight: 8,
 			properties: {
 				alert_id: u.pickAWinner(alertIds),
 				response_time_mins: u.weighNumRange(1, 120),
 				acknowledged_by_role: ["engineer", "sre", "manager", "oncall"],
+				integrated_team: [false],
 			}
 		},
 		{
@@ -385,6 +400,7 @@ const config = {
 				alert_id: u.pickAWinner(alertIds),
 				resolution_time_mins: u.weighNumRange(5, 1440),
 				root_cause: ["config_change", "capacity", "bug", "dependency", "network"],
+				integrated_team: [false],
 			}
 		},
 		{
@@ -395,6 +411,7 @@ const config = {
 				status: ["success", "failed", "cancelled"],
 				duration_sec: u.weighNumRange(30, 1800),
 				commit_count: u.weighNumRange(1, 20),
+				recovery_deployment: [false],
 			}
 		},
 		{
@@ -406,6 +423,7 @@ const config = {
 				previous_capacity: u.weighNumRange(1, 100),
 				new_capacity: u.weighNumRange(1, 100),
 				auto_scaled: u.pickAWinner([true, false], 0.15),
+				cost_reaction: [false],
 			}
 		},
 		{
@@ -415,6 +433,8 @@ const config = {
 				report_period: ["daily", "weekly", "monthly"],
 				total_cost: u.weighNumRange(100, 50000),
 				cost_change_percent: u.weighNumRange(-30, 50),
+				cost_alert: [false],
+				budget_exceeded: [false],
 			}
 		},
 		{
@@ -423,6 +443,8 @@ const config = {
 			properties: {
 				role: ["admin", "editor", "viewer", "billing"],
 				invitation_method: ["email", "sso", "slack"],
+				quarter_end_push: [false],
+				duplicate_invite: [false],
 			}
 		},
 		{
@@ -457,6 +479,7 @@ const config = {
 			properties: {
 				event_type: ["invoice_generated", "payment_received", "payment_failed", "plan_upgraded", "plan_downgraded"],
 				amount: u.weighNumRange(99, 25000),
+				quarter_end_push: [false],
 			}
 		},
 		{
@@ -506,6 +529,11 @@ const config = {
 		company_size: u.pickAWinner(["startup", "startup", "smb", "mid_market", "enterprise"]),
 		primary_role: ["engineer", "sre", "devops", "manager", "executive"],
 		team_name: ["Platform", "Backend", "Frontend", "Data", "Security", "Infrastructure"],
+		churned_account: [false],
+		seat_count: [1],
+		annual_contract_value: [0],
+		customer_success_manager: [false],
+		customer_health_score: u.weighNumRange(1, 100),
 	},
 
 	groupKeys: [
@@ -564,9 +592,8 @@ const config = {
 					// 50% of the time duplicate the invite event (hiring push)
 					if (chance.bool({ likelihood: 50 })) {
 						return {
-							event: "team member invited",
+							...record,
 							time: EVENT_TIME.add(chance.integer({ min: 1, max: 60 }), "minutes").toISOString(),
-							user_id: record.user_id,
 							role: chance.pickone(["editor", "viewer"]),
 							invitation_method: chance.pickone(["email", "sso", "slack"]),
 							quarter_end_push: true,
@@ -589,15 +616,13 @@ const config = {
 				if ((severity === "critical" || severity === "emergency") && chance.bool({ likelihood: 30 })) {
 					// REPLACE the event entirely with an "incident created" event
 					return {
+						...record,
 						event: "incident created",
-						time: record.time,
-						user_id: record.user_id,
 						escalation_level: chance.pickone(["P1", "P2"]),
 						teams_paged: chance.integer({ min: 1, max: 5 }),
 						incident_id: `inc_${v.uid(8)}`,
 						original_severity: severity,
 						original_alert_type: record.alert_type,
-						service_id: record.service_id,
 						auto_escalated: true,
 					};
 				}
@@ -738,10 +763,11 @@ const config = {
 			if (bestPracticesCount >= 3) {
 				const extraDeploys = chance.integer({ min: 2, max: 3 });
 				const lastEvent = userEvents[userEvents.length - 1];
-				if (lastEvent) {
+				const deployTemplate = userEvents.find(e => e.event === "service deployed");
+				if (lastEvent && deployTemplate) {
 					for (let i = 0; i < extraDeploys; i++) {
 						const deployEvent = {
-							event: "service deployed",
+							...deployTemplate,
 							time: dayjs(lastEvent.time).add(chance.integer({ min: 1, max: 48 }), "hours").toISOString(),
 							user_id: lastEvent.user_id,
 							service_id: chance.pickone(serviceIds),

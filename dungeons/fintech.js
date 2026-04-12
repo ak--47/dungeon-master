@@ -231,6 +231,7 @@ const config = {
 			properties: {
 				"session_duration_sec": u.weighNumRange(10, 600, 0.3, 60),
 				"pages_viewed": u.weighNumRange(1, 15, 0.5, 3),
+				"month_end_anxiety": [false],
 			}
 		},
 		{
@@ -239,6 +240,7 @@ const config = {
 			properties: {
 				"account_balance": u.weighNumRange(0, 50000, 0.8, 2500),
 				"account_type": ["checking", "savings", "investment"],
+				"month_end_check": [false],
 			}
 		},
 		{
@@ -249,6 +251,8 @@ const config = {
 				"amount": u.weighNumRange(1, 5000, 0.3, 50),
 				"merchant_category": ["grocery", "restaurant", "gas", "retail", "online", "subscription", "utilities"],
 				"payment_method": ["debit", "credit", "contactless", "online"],
+				"payday": [false],
+				"fraud_sequence": [false],
 			}
 		},
 		{
@@ -258,6 +262,7 @@ const config = {
 				"transfer_type": ["internal", "external", "p2p", "wire"],
 				"amount": u.weighNumRange(10, 10000, 0.3, 200),
 				"recipient_type": ["friend", "family", "business", "self"],
+				"post_payday_spending": [false],
 			}
 		},
 		{
@@ -267,6 +272,8 @@ const config = {
 				"bill_type": ["rent", "utilities", "phone", "insurance", "subscription", "loan_payment"],
 				"amount": u.weighNumRange(20, 3000, 0.5, 150),
 				"auto_pay": u.pickAWinner([true, false], 0.4),
+				"missed_payment": [false],
+				"manual_payment": [false],
 			}
 		},
 		{
@@ -292,6 +299,7 @@ const config = {
 				"goal_type": ["emergency", "vacation", "car", "home", "education", "retirement"],
 				"target_amount": u.weighNumRange(500, 50000, 0.3, 5000),
 				"monthly_contribution": u.weighNumRange(25, 2000, 0.5, 200),
+				"budget_discipline": [false],
 			}
 		},
 		{
@@ -301,6 +309,8 @@ const config = {
 				"investment_type": ["stocks", "etf", "crypto", "bonds", "mutual_fund"],
 				"amount": u.weighNumRange(10, 10000, 0.3, 250),
 				"action": u.pickAWinner(["buy", "sell", "buy"]),
+				"premium_returns": [false],
+				"budget_discipline": [false],
 			}
 		},
 		{
@@ -308,6 +318,7 @@ const config = {
 			weight: 1,
 			properties: {
 				"reason": ["lost", "stolen", "suspicious_activity", "travel"],
+				"fraud_sequence": [false],
 			}
 		},
 		{
@@ -316,6 +327,7 @@ const config = {
 			properties: {
 				"dispute_amount": u.weighNumRange(10, 2000, 0.5, 100),
 				"reason": ["unauthorized", "duplicate", "not_received", "damaged", "wrong_amount"],
+				"fraud_sequence": [false],
 			}
 		},
 		{
@@ -351,6 +363,7 @@ const config = {
 				"channel": ["chat", "phone", "email", "in_app"],
 				"issue_type": ["transaction", "account", "card", "transfer", "technical"],
 				"resolved": u.pickAWinner([true, false], 0.8),
+				"fraud_sequence": [false],
 			}
 		},
 		{
@@ -367,6 +380,7 @@ const config = {
 			properties: {
 				"reward_type": ["cashback", "points", "discount", "partner_offer"],
 				"value": u.weighNumRange(1, 100, 0.5, 10),
+				"premium_reward": [false],
 			}
 		}
 	],
@@ -374,6 +388,7 @@ const config = {
 	superProps: {
 		account_tier: u.pickAWinner(["basic", "basic", "basic", "plus", "plus", "premium"]),
 		platform: ["ios", "android", "web"],
+		low_balance_churn: [false],
 	},
 
 	userProps: {
@@ -382,6 +397,12 @@ const config = {
 		"account_age_months": u.weighNumRange(1, 60, 0.5, 12),
 		"total_balance": u.weighNumRange(0, 100000, 0.3, 5000),
 		"has_direct_deposit": u.pickAWinner([true, false], 0.6),
+		"account_segment": ["personal"],
+		"employee_count": [0],
+		"annual_revenue": [0],
+		"industry": [""],
+		"age_range": [""],
+		"life_stage": [""],
 	},
 
 	groupKeys: [
@@ -568,48 +589,62 @@ const config = {
 					const burstCount = chance.integer({ min: 3, max: 5 });
 					const fraudEvents = [];
 
+					// Find template events for cloning
+					const txnTemplate = userEvents.find(e => e.event === "transaction completed");
+					const cardTemplate = userEvents.find(e => e.event === "card locked");
+					const disputeTemplate = userEvents.find(e => e.event === "dispute filed");
+					const supportTemplate = userEvents.find(e => e.event === "support contacted");
+
 					for (let i = 0; i < burstCount; i++) {
+						if (txnTemplate) {
+							fraudEvents.push({
+								...txnTemplate,
+								time: midTime.add(i * 10, "minutes").toISOString(),
+								user_id: distinctId,
+								transaction_type: "purchase",
+								amount: chance.integer({ min: 500, max: 3000 }),
+								merchant_category: chance.pickone(["online", "retail"]),
+								payment_method: "credit",
+								fraud_sequence: true,
+							});
+						}
+					}
+
+					// Card locked after the burst
+					if (cardTemplate) {
 						fraudEvents.push({
-							event: "transaction completed",
-							time: midTime.add(i * 10, "minutes").toISOString(),
+							...cardTemplate,
+							time: midTime.add(burstCount * 10 + 5, "minutes").toISOString(),
 							user_id: distinctId,
-							transaction_type: "purchase",
-							amount: chance.integer({ min: 500, max: 3000 }),
-							merchant_category: chance.pickone(["online", "retail"]),
-							payment_method: "credit",
+							reason: "suspicious_activity",
 							fraud_sequence: true,
 						});
 					}
 
-					// Card locked after the burst
-					fraudEvents.push({
-						event: "card locked",
-						time: midTime.add(burstCount * 10 + 5, "minutes").toISOString(),
-						user_id: distinctId,
-						reason: "suspicious_activity",
-						fraud_sequence: true,
-					});
-
 					// Dispute filed shortly after
-					fraudEvents.push({
-						event: "dispute filed",
-						time: midTime.add(burstCount * 10 + 30, "minutes").toISOString(),
-						user_id: distinctId,
-						dispute_amount: chance.integer({ min: 500, max: 3000 }),
-						reason: "unauthorized",
-						fraud_sequence: true,
-					});
+					if (disputeTemplate) {
+						fraudEvents.push({
+							...disputeTemplate,
+							time: midTime.add(burstCount * 10 + 30, "minutes").toISOString(),
+							user_id: distinctId,
+							dispute_amount: chance.integer({ min: 500, max: 3000 }),
+							reason: "unauthorized",
+							fraud_sequence: true,
+						});
+					}
 
 					// Support contacted
-					fraudEvents.push({
-						event: "support contacted",
-						time: midTime.add(burstCount * 10 + 45, "minutes").toISOString(),
-						user_id: distinctId,
-						channel: "phone",
-						issue_type: "card",
-						resolved: true,
-						fraud_sequence: true,
-					});
+					if (supportTemplate) {
+						fraudEvents.push({
+							...supportTemplate,
+							time: midTime.add(burstCount * 10 + 45, "minutes").toISOString(),
+							user_id: distinctId,
+							channel: "phone",
+							issue_type: "card",
+							resolved: true,
+							fraud_sequence: true,
+						});
+					}
 
 					// Splice all fraud events into the user's timeline
 					userEvents.splice(midIdx + 1, 0, ...fraudEvents);
@@ -674,16 +709,19 @@ const config = {
 
 					// Splice extra savings goal events (budget-conscious users set more goals)
 					if (event.event === "budget created" && chance.bool({ likelihood: 50 })) {
-						const extraGoal = {
-							event: "savings goal set",
-							time: eventTime.add(chance.integer({ min: 1, max: 7 }), "days").toISOString(),
-							user_id: event.user_id,
-							goal_type: chance.pickone(["emergency", "vacation", "car", "home"]),
-							target_amount: chance.integer({ min: 1000, max: 20000 }),
-							monthly_contribution: chance.integer({ min: 100, max: 800 }),
-							budget_discipline: true,
-						};
-						userEvents.splice(idx + 1, 0, extraGoal);
+						const savingsTemplate = userEvents.find(e => e.event === "savings goal set");
+						if (savingsTemplate) {
+							const extraGoal = {
+								...savingsTemplate,
+								time: eventTime.add(chance.integer({ min: 1, max: 7 }), "days").toISOString(),
+								user_id: event.user_id,
+								goal_type: chance.pickone(["emergency", "vacation", "car", "home"]),
+								target_amount: chance.integer({ min: 1000, max: 20000 }),
+								monthly_contribution: chance.integer({ min: 100, max: 800 }),
+								budget_discipline: true,
+							};
+							userEvents.splice(idx + 1, 0, extraGoal);
+						}
 					}
 				});
 			}

@@ -49,9 +49,11 @@ const days = 100;
  * ===================================================================
  *
  * -------------------------------------------------------------------
- * 1. VERSION STAMPING (event hook)
+ * 1. VERSION STAMPING (everything hook)
  * -------------------------------------------------------------------
- * Every event gets a deterministic app_version based on its timestamp.
+ * Every event gets a deterministic app_version based on its final
+ * timestamp. Uses the everything hook (not event hook) because funnel
+ * events adjust their time AFTER the event hook runs.
  * All users shift simultaneously on release dates:
  *   - Days 0-30:    v2.10
  *   - Days 30-60:   v2.11
@@ -317,6 +319,7 @@ const config = {
 				],
 				priority: ["low", "medium", "medium", "high"],
 				channel: ["chat", "phone", "email", "web_form"],
+				pre_release_bug: [false],
 			},
 		},
 		{
@@ -424,6 +427,7 @@ const config = {
 	superProps: {
 		platform: ["web", "ios", "android"],
 		insurance_type: ["auto", "home", "life", "health", "renters"],
+		app_version: ["2.10"],
 	},
 
 	// ── User Props (set once per user) ──
@@ -441,9 +445,11 @@ const config = {
 	 *
 	 * This hook function creates 3 deliberate patterns in the data:
 	 *
-	 * 1. VERSION STAMPING (event): Every event gets a deterministic app_version
-	 *    based on its timestamp. v2.10 → v2.11 → v2.12 → v2.13.
-	 *    All users shift simultaneously on release dates.
+	 * 1. VERSION STAMPING (everything): Every event gets a deterministic app_version
+	 *    based on its final timestamp. v2.10 → v2.11 → v2.12 → v2.13.
+	 *    All users shift simultaneously on release dates. Uses the everything
+	 *    hook (not event hook) because funnel events adjust time after the
+	 *    event hook runs.
 	 *
 	 * 2. SUPPORT TICKET VOLUME (everything): Pre-v2.13 period has inflated
 	 *    support ticket volume (2-3 extra tickets per user with bug-related
@@ -457,31 +463,29 @@ const config = {
 	 */
 	hook: function (record, type, meta) {
 		// =============================================================
-		// Hook #1: VERSION STAMPING (event)
-		// Deterministic app_version on every event based on timestamp.
-		// v2.10 (days 0-30) → v2.11 (30-60) → v2.12 (60-90) → v2.13 (last 10 days)
-		// =============================================================
-		if (type === "event") {
-			const eventTime = dayjs(record.time);
-
-			if (eventTime.isBefore(V211_DATE)) {
-				record.app_version = "2.10";
-			} else if (eventTime.isBefore(V212_DATE)) {
-				record.app_version = "2.11";
-			} else if (eventTime.isBefore(V213_DATE)) {
-				record.app_version = "2.12";
-			} else {
-				record.app_version = "2.13";
-			}
-		}
-
-		// =============================================================
-		// Hook #2 & #3: SUPPORT TICKET VOLUME + APPLICATION CONVERSION
-		// (everything)
+		// Hooks #1-#3 all run in the "everything" hook so that version
+		// stamping sees final timestamps (funnel events adjust time
+		// AFTER the event hook runs).
 		// =============================================================
 		if (type === "everything") {
 			const userEvents = record;
 			if (userEvents.length === 0) return record;
+
+			// ─── Hook #1: VERSION STAMPING ───
+			// Deterministic app_version on every event based on its final timestamp.
+			// v2.10 (days 0-30) → v2.11 (30-60) → v2.12 (60-90) → v2.13 (last 10 days)
+			for (const evt of userEvents) {
+				const eventTime = dayjs(evt.time);
+				if (eventTime.isBefore(V211_DATE)) {
+					evt.app_version = "2.10";
+				} else if (eventTime.isBefore(V212_DATE)) {
+					evt.app_version = "2.11";
+				} else if (eventTime.isBefore(V213_DATE)) {
+					evt.app_version = "2.12";
+				} else {
+					evt.app_version = "2.13";
+				}
+			}
 
 			// Find a user_id from any existing event
 			const userId =
@@ -531,7 +535,7 @@ const config = {
 					}
 
 					userEvents.push({
-						event: "support ticket created",
+						...sourceTicket,
 						time: newTime.toISOString(),
 						user_id: userId,
 						app_version: injectedVersion,

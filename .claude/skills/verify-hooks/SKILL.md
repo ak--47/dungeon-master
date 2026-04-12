@@ -1,7 +1,7 @@
 ---
 name: verify-hooks
 description: Run a dungeon with constrained parameters and use DuckDB to verify that hook-created data patterns actually appear in the output. Produces a hook-results.md diagnostic report.
-argument-hint: [dungeon path(s), e.g. dungeons/harness/harness-gaming.js or "dungeons/harness/harness-*.js"]
+argument-hint: [dungeon path(s), e.g. dungeons/gaming.js or dungeons/fintech.js]
 model: claude-opus-4-6
 effort: max
 ---
@@ -15,9 +15,9 @@ Verify that the hooks in one or more dungeon configs actually produce their inte
 ## Batch Mode
 
 `$ARGUMENTS` can be:
-- A single dungeon path: `dungeons/harness/harness-fintech.js`
-- Multiple space-separated paths: `dungeons/harness/harness-fintech.js dungeons/harness/harness-gaming.js`
-- A glob pattern: `dungeons/harness/harness-*.js`
+- A single dungeon path: `dungeons/my-dungeon.js`
+- Multiple space-separated paths: `dungeons/fintech.js dungeons/gaming.js`
+- A glob pattern: `dungeons/*.js`
 
 When multiple dungeons are provided, process each one sequentially through Steps 1-3 (read, run, verify), then write a single consolidated report in Step 4. Use a unique `name` prefix per dungeon when running (e.g., `verify-hooks-fintech`, `verify-hooks-gaming`) so output files don't collide. Clean up each dungeon's output files after querying them, before running the next dungeon.
 
@@ -51,7 +51,7 @@ Event properties are usually flat, but some dungeons may use arrays of objects o
 
 ## Step 1: Read & Catalog the Hooks
 
-Read the dungeon file at `$ARGUMENTS`. If it's a bare filename (no `/`), check `dungeons/` and `dungeons/harness/` directories.
+Read the dungeon file at `$ARGUMENTS`. If it's a bare filename (no `/`), check `dungeons/` and `dungeons/` directories.
 
 Find and analyze:
 
@@ -109,7 +109,7 @@ console.log(JSON.stringify({
 Run it with a unique name per dungeon to avoid file collisions in batch mode:
 ```bash
 node verify-runner.mjs <absolute-path-to-dungeon> <run-name>
-# e.g.: node verify-runner.mjs dungeons/harness/harness-fintech.js verify-fintech
+# e.g.: node verify-runner.mjs dungeons/my-dungeon.js verify-my-dungeon
 ```
 
 **Expected output files** (in `./data/`, using `<run-name>` as prefix):
@@ -126,7 +126,7 @@ For each cataloged hook, write and execute a DuckDB SQL query that tests whether
 
 **DuckDB command pattern:**
 ```bash
-/opt/homebrew/bin/duckdb -c "SQL_QUERY_HERE"
+duckdb -c "SQL_QUERY_HERE"
 ```
 
 **Reading data files:**
@@ -147,6 +147,18 @@ SELECT * FROM read_json_auto('./data/verify-hooks-USERS.json')
 - Use `TRY_CAST()` instead of `CAST()` for columns that might have mixed types
 - For large queries, use `LIMIT` to keep output manageable
 - Escape single quotes in bash: use `$'...'` syntax or double-quote the SQL and escape internal quotes
+
+### How Hooks Work (Critical for Query Design)
+
+Hooks do NOT add new properties to the schema. They modify existing property values, filter/remove events, and inject events cloned from existing ones. This means you often CANNOT verify a hook by checking for a boolean flag's existence. Instead, verify by:
+
+1. **Comparing value magnitudes** across segments — e.g., power users should have ~3x higher avg purchase amount
+2. **Comparing value distributions in time windows** — e.g., avg amount on 1st/15th of month vs other days
+3. **Deriving behavioral segments from the data itself** — e.g., sessionize the event stream, count sessions, compare users with >20 sessions vs fewer
+4. **Checking event density patterns** — e.g., cloned/injected events create unusually dense clusters within short time windows
+5. **Cross-table joins** — e.g., join user profiles with events to see if user-level properties correlate with event-level value differences
+
+Some hooks DO define boolean properties in the config with defaults (e.g., `payday: [false]`) that the hook sets to `true`. For those, you CAN query `WHERE payday = true`. But always check the dungeon's event config to see what properties are defined — don't assume a hook-created flag exists just because the documentation mentions a pattern.
 
 ### Query Design Approach
 
@@ -287,9 +299,69 @@ WHERE event = 'find treasure' AND treasure_type = 'Shadowmourne Legendary'
 GROUP BY period;
 ```
 
+**Value Magnitude by Behavioral Segment** (e.g., "power users make 3x higher purchases" where power user is derived from behavior, not a flag):
+```sql
+-- Sessionize: derive power users from event density (30-min gap)
+WITH ordered AS (
+  SELECT *, time::TIMESTAMP as ts,
+    LAG(time::TIMESTAMP) OVER (PARTITION BY user_id ORDER BY time) as prev_ts
+  FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+),
+sessions AS (
+  SELECT user_id,
+    SUM(CASE WHEN prev_ts IS NULL OR ts - prev_ts > INTERVAL '30 minutes' THEN 1 ELSE 0 END) as session_count
+  FROM ordered
+  GROUP BY user_id
+),
+segments AS (
+  SELECT user_id,
+    CASE WHEN session_count > 20 THEN 'power_user' ELSE 'regular' END as segment
+  FROM sessions
+)
+SELECT
+  seg.segment,
+  COUNT(*) as purchase_count,
+  ROUND(AVG(TRY_CAST(e.amount AS DOUBLE)), 2) as avg_amount,
+  COUNT(DISTINCT seg.user_id) as users
+FROM segments seg
+JOIN read_json_auto('./data/verify-hooks-EVENTS.json') e ON seg.user_id = e.user_id
+WHERE e.event = 'purchase'
+GROUP BY seg.segment;
+```
+
+**Temporal Value Scaling** (e.g., "amounts are 3x higher on 1st/15th of month"):
+```sql
+SELECT
+  CASE WHEN EXTRACT(DAY FROM time::TIMESTAMP) IN (1, 15) THEN 'payday' ELSE 'normal_day' END as period,
+  COUNT(*) as event_count,
+  ROUND(AVG(TRY_CAST(amount AS DOUBLE)), 2) as avg_amount,
+  ROUND(MEDIAN(TRY_CAST(amount AS DOUBLE)), 2) as median_amount
+FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+WHERE event = 'transaction completed'
+GROUP BY period;
+```
+
+**Injected Event Detection** (e.g., "cloned purchase events appear in sessions that had browse-but-no-buy"):
+```sql
+-- Look for event density anomalies: multiple events of same type within short windows
+WITH events AS (
+  SELECT *, time::TIMESTAMP as ts,
+    LAG(time::TIMESTAMP) OVER (PARTITION BY user_id, event ORDER BY time) as prev_same_event
+  FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+  WHERE event = 'purchase'
+)
+SELECT
+  CASE WHEN prev_same_event IS NOT NULL AND ts - prev_same_event < INTERVAL '10 minutes'
+    THEN 'rapid_cluster' ELSE 'normal_spacing' END as pattern,
+  COUNT(*) as count,
+  ROUND(AVG(TRY_CAST(amount AS DOUBLE)), 2) as avg_amount
+FROM events
+GROUP BY pattern;
+```
+
 **Cross-Table Correlation** (e.g., "user profile tier drives event behavior via `everything` hook"):
 
-The `everything` hook can read `meta.profile` and stamp user properties onto every event. To verify, JOIN events with user profiles:
+The `everything` hook can read `meta.profile` and modify event values based on user properties. To verify, JOIN events with user profiles:
 ```sql
 WITH users AS (
   SELECT * FROM read_json_auto('./data/verify-hooks-USERS.json')
@@ -309,9 +381,9 @@ GROUP BY u.tier
 ORDER BY u.tier;
 ```
 
-When verifying `everything` hooks, check BOTH the events file AND the users file — the hook may stamp properties from profiles onto events, creating correlations that span both tables. Common patterns:
-- User tier/segment → event count, conversion, revenue differences
-- User profile enrichment (via `user` hook) → event behavior (via `everything` hook)
+When verifying `everything` hooks, you often MUST join events with user profiles. The `everything` hook reads `meta.profile` and modifies event values based on user properties — but those user properties live in the USERS file, not the EVENTS file. The join key is **`events.user_id = users.distinct_id`** (events use `user_id`, profiles use `distinct_id`). Common cross-table patterns to verify:
+- User tier/segment → higher/lower event values (amounts, durations, scores)
+- User profile properties → different event counts or conversion rates
 - Churn simulation: users with certain profiles have fewer events in later time periods
 
 **Output files by data type:**
@@ -357,7 +429,7 @@ Include Phase 2 verification results in the report when the dungeon uses these f
 ### Query Execution
 
 Run each query separately. For each query:
-1. Execute via `/opt/homebrew/bin/duckdb -c "..."`
+1. Execute via `duckdb -c "..."`
 2. Capture the output
 3. If a query fails (column not found, type error), adjust and retry — the schema depends on what the hook actually writes
 4. Record both the query and the raw results

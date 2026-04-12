@@ -253,6 +253,7 @@ const config = {
 			properties: {
 				"signup_method": ["email", "google", "apple", "sso"],
 				"referred_by": ["organic", "friend", "ad", "influencer"],
+				"toxic_user": [false],
 			}
 		},
 		{
@@ -263,6 +264,11 @@ const config = {
 				"character_count": u.weighNumRange(1, 280),
 				"has_media": u.pickAWinner([true, false], 0.4),
 				"hashtag_count": u.weighNumRange(0, 10, 0.5),
+				"weekend_surge": [false],
+				"weekend_duplicate": [false],
+				"monetized_creator": [false],
+				"follow_back_effect": [false],
+				"toxic_user": [false],
 			}
 		},
 		{
@@ -272,6 +278,11 @@ const config = {
 				"post_type": ["text", "image", "video", "poll", "link"],
 				"view_duration_sec": u.weighNumRange(1, 120, 0.3, 5),
 				"source": ["feed", "explore", "search", "profile", "notification"],
+				"engagement_bait": [false],
+				"trending_reengagement": [false],
+				"viral_cascade": [false],
+				"monetized_creator": [false],
+				"toxic_user": [false],
 			}
 		},
 		{
@@ -279,6 +290,8 @@ const config = {
 			weight: 18,
 			properties: {
 				"post_type": ["text", "image", "video", "poll", "link"],
+				"viral_cascade": [false],
+				"toxic_user": [false],
 			}
 		},
 		{
@@ -286,6 +299,8 @@ const config = {
 			weight: 6,
 			properties: {
 				"share_destination": ["repost", "dm", "external", "copy_link"],
+				"viral_cascade": [false],
+				"toxic_user": [false],
 			}
 		},
 		{
@@ -294,6 +309,8 @@ const config = {
 			properties: {
 				"comment_length": u.weighNumRange(1, 500, 0.3, 20),
 				"has_mention": u.pickAWinner([true, false, false]),
+				"follow_back_effect": [false],
+				"toxic_user": [false],
 			}
 		},
 		{
@@ -301,6 +318,7 @@ const config = {
 			weight: 8,
 			properties: {
 				"discovery_source": ["suggested", "search", "post", "profile", "mutual"],
+				"toxic_user": [false],
 			}
 		},
 		{
@@ -308,6 +326,7 @@ const config = {
 			weight: 2,
 			properties: {
 				"reason": ["content_quality", "too_frequent", "lost_interest", "offensive"],
+				"toxic_user": [false],
 			}
 		},
 		{
@@ -317,6 +336,7 @@ const config = {
 				"story_type": ["photo", "video", "text"],
 				"view_duration_sec": u.weighNumRange(1, 30, 0.5, 5),
 				"completed": u.pickAWinner([true, false], 0.6),
+				"toxic_user": [false],
 			}
 		},
 		{
@@ -326,6 +346,10 @@ const config = {
 				"story_type": ["photo", "video", "text"],
 				"has_filter": u.pickAWinner([true, false], 0.5),
 				"has_sticker": u.pickAWinner([true, false], 0.3),
+				"weekend_surge": [false],
+				"weekend_duplicate": [false],
+				"monetized_creator": [false],
+				"toxic_user": [false],
 			}
 		},
 		{
@@ -334,6 +358,7 @@ const config = {
 			properties: {
 				"search_type": ["users", "hashtags", "posts"],
 				"results_count": u.weighNumRange(0, 50, 0.5, 10),
+				"toxic_user": [false],
 			}
 		},
 		{
@@ -342,6 +367,7 @@ const config = {
 			properties: {
 				"notification_type": ["like", "follow", "comment", "mention", "trending"],
 				"clicked": u.pickAWinner([true, false], 0.4),
+				"toxic_user": [false],
 			}
 		},
 		{
@@ -350,6 +376,7 @@ const config = {
 			properties: {
 				"message_type": ["text", "image", "voice", "link"],
 				"conversation_length": u.weighNumRange(1, 100),
+				"toxic_user": [false],
 			}
 		},
 		{
@@ -359,6 +386,7 @@ const config = {
 				"ad_format": ["feed_native", "story", "banner", "video"],
 				"ad_category": ["retail", "tech", "food", "finance", "entertainment"],
 				"view_duration_sec": u.weighNumRange(1, 30, 0.3),
+				"toxic_user": [false],
 			}
 		},
 		{
@@ -367,6 +395,7 @@ const config = {
 			properties: {
 				"ad_format": ["feed_native", "story", "banner", "video"],
 				"ad_category": ["retail", "tech", "food", "finance", "entertainment"],
+				"toxic_user": [false],
 			}
 		},
 		{
@@ -375,6 +404,7 @@ const config = {
 			properties: {
 				"report_type": ["spam", "harassment", "misinformation", "hate_speech", "other"],
 				"content_type": ["post", "comment", "user", "dm"],
+				"toxic_user": [false],
 			}
 		},
 		{
@@ -382,6 +412,7 @@ const config = {
 			weight: 3,
 			properties: {
 				"field_updated": ["bio", "avatar", "display_name", "privacy_settings", "interests"],
+				"toxic_user": [false],
 			}
 		},
 		{
@@ -390,6 +421,7 @@ const config = {
 			properties: {
 				"tier": ["basic", "premium", "vip"],
 				"price_usd": u.pickAWinner([4.99, 9.99, 19.99]),
+				"toxic_user": [false],
 			}
 		},
 	],
@@ -536,8 +568,13 @@ const config = {
 					const viralShares = chance.integer({ min: 10, max: 20 });
 					const injected = [];
 
+					const viewTemplate = userEvents.find(e => e.event === "post viewed");
+					const likeTemplate = userEvents.find(e => e.event === "post liked");
+					const shareTemplate = userEvents.find(e => e.event === "post shared");
+
 					for (let i = 0; i < viralViews; i++) {
 						injected.push({
+							...(viewTemplate || event),
 							event: "post viewed",
 							time: eventTime.add(chance.integer({ min: 1, max: 180 }), 'minutes').toISOString(),
 							user_id: event.user_id,
@@ -545,10 +582,13 @@ const config = {
 							source: chance.pickone(["feed", "explore", "search"]),
 							view_duration_sec: chance.integer({ min: 5, max: 90 }),
 							viral_cascade: true,
+							engagement_bait: false,
+							trending_reengagement: false,
 						});
 					}
 					for (let i = 0; i < viralLikes; i++) {
 						injected.push({
+							...(likeTemplate || event),
 							event: "post liked",
 							time: eventTime.add(chance.integer({ min: 2, max: 240 }), 'minutes').toISOString(),
 							user_id: event.user_id,
@@ -558,6 +598,7 @@ const config = {
 					}
 					for (let i = 0; i < viralShares; i++) {
 						injected.push({
+							...(shareTemplate || event),
 							event: "post shared",
 							time: eventTime.add(chance.integer({ min: 5, max: 300 }), 'minutes').toISOString(),
 							user_id: event.user_id,
@@ -574,8 +615,9 @@ const config = {
 				// Users with 5+ follows become prolific creators
 				if (followReceivedCount >= 5 && event.event === "post created") {
 					if (chance.bool({ likelihood: 50 })) {
+						const commentTemplate = userEvents.find(e => e.event === "comment posted");
 						const duplicatePost = {
-							event: "post created",
+							...event,
 							time: eventTime.add(chance.integer({ min: 30, max: 240 }), 'minutes').toISOString(),
 							user_id: event.user_id,
 							post_type: chance.pickone(["text", "image", "video"]),
@@ -585,6 +627,7 @@ const config = {
 							follow_back_effect: true,
 						};
 						const extraComment = {
+							...(commentTemplate || event),
 							event: "comment posted",
 							time: eventTime.add(chance.integer({ min: 10, max: 120 }), 'minutes').toISOString(),
 							user_id: event.user_id,
@@ -602,7 +645,7 @@ const config = {
 					// Triple frequency: add 2 extra posts for each existing one
 					for (let i = 0; i < 2; i++) {
 						const extraPost = {
-							event: "post created",
+							...event,
 							time: eventTime.add(chance.integer({ min: 1, max: 12 }), 'hours').toISOString(),
 							user_id: event.user_id,
 							post_type: chance.pickone(["text", "image", "video", "link"]),
@@ -618,7 +661,7 @@ const config = {
 					// Also triple story creation
 					for (let i = 0; i < 2; i++) {
 						const extraStory = {
-							event: "story created",
+							...event,
 							time: eventTime.add(chance.integer({ min: 1, max: 8 }), 'hours').toISOString(),
 							user_id: event.user_id,
 							story_type: chance.pickone(["photo", "video", "text"]),
@@ -633,13 +676,16 @@ const config = {
 				if (hasCreatorSubscription && event.event === "post viewed") {
 					if (chance.bool({ likelihood: 25 })) {
 						const analyticsView = {
-							event: "post viewed",
+							...event,
 							time: eventTime.add(chance.integer({ min: 1, max: 30 }), 'minutes').toISOString(),
 							user_id: event.user_id,
 							post_type: event.post_type || "text",
 							source: "profile",
 							view_duration_sec: chance.integer({ min: 10, max: 60 }),
 							monetized_creator: true,
+							engagement_bait: false,
+							trending_reengagement: false,
+							viral_cascade: false,
 						};
 						userEvents.splice(idx + 1, 0, analyticsView);
 					}

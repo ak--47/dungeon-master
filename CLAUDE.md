@@ -197,38 +197,53 @@ Storage-only hooks (no upstream execution):
 
 **Important**: `event`, `user`, and `scd` hooks fire only once — in the generator/orchestrator. The storage layer skips re-running hooks for these types to prevent double-fire mutations (e.g., `price *= 2` would otherwise apply twice).
 
-### Hook Patterns Catalog
+### Schema-First Hook Design
 
-These are the proven techniques used across harness dungeons:
+**The config defines the schema. Hooks shape the data within that schema.** This is the most important principle:
+
+- Every property that appears in the final output MUST be defined in the dungeon config (`events` properties, `userProps`, or `superProps`) with a default value
+- Hooks CANNOT invent new properties. They modify existing values, filter events, and inject events cloned from existing ones
+- If a hook needs a boolean flag (like `payday`), define it in the event's `properties` as `[false]`. The hook sets it to `true` when the condition is met
+- When injecting events, always clone from an existing event using spread: `{...existingEvent, time: newTime, user_id: uid}`
+- This ensures the JSON schema output is complete and the dataset presents a consistent schema to downstream tools (Mixpanel, DuckDB, BigQuery)
+
+### Hook Patterns Catalog
 
 | Pattern | Hook Type | Description | Example |
 |---------|-----------|-------------|---------|
-| **Property modification** | `event` | Set/modify properties on specific events | `record.amount = 999` |
-| **Event renaming** | `event` | Change event name to create hook-only event types | `record.event = "incident created"` |
-| **Temporal windowing** | `event` | Modify events within a date range (cursed week, product launch) | Check `dayjs(record.time).isAfter(start)` |
+| **Value modification** | `event` | Modify existing property values on specific events | `record.amount *= 3` |
+| **Boolean flag activation** | `event` | Set config-defined boolean defaults to `true` | `record.payday = true` (defined as `[false]` in config) |
+| **Temporal windowing** | `event` | Modify values within a date range | Check `dayjs(record.time).isAfter(start)` |
 | **Relative date windows** | `event` | Use `DATASET_START.add(N, 'days')` for portable time ranges | Launch day 45, outage days 20-27 |
-| **User profile enrichment** | `user` | Add computed properties to profiles | `record.segment = "power_user"` |
+| **User profile modification** | `user` | Modify existing `userProps` values based on conditions | `record.seat_count = 200` (already in userProps) |
 | **Funnel conversion manipulation** | `funnel-pre` | Change `record.conversionRate` based on user properties | Premium users get 1.3x conversion |
-| **Funnel event injection** | `funnel-post` | Splice extra events between funnel steps | Push coupon event into array |
-| **Two-pass processing** | `everything` | First pass: scan patterns. Second pass: modify events | Identify buyers, then tag all their events |
-| **Cross-table correlation** | `everything` | Use `meta.profile` to drive event modifications | User tier determines event behavior |
+| **Funnel event injection** | `funnel-post` | Splice cloned events between funnel steps | Clone from existing event with spread |
+| **Sessionization** | `everything` | Cluster events by time gaps, derive behavioral segments | 30-min gap → session count → power user |
+| **Two-pass processing** | `everything` | First pass: scan patterns. Second pass: modify values | Identify buyers, then scale their amounts |
+| **Cross-table correlation** | `everything` | Use `meta.profile` to drive event value modifications | User tier determines purchase amounts |
 | **Event filtering/removal** | `everything` | Return filtered array to simulate churn | `return record.filter(e => ...)` |
-| **Event injection** | `everything` | Append synthetic events to user's event stream | Push "milestone" events |
-| **Event duplication** | `everything` | Clone events with time offsets (weekend surge, viral) | Spread copies + add 1-3 hour offset |
+| **Event injection by cloning** | `everything` | Clone existing events into browse-but-didn't-buy sessions | `events.push({...template, time: t})` |
+| **Event duplication** | `everything` | Clone events with time offsets (viral, weekend surge) | Spread copies + add 1-3 hour offset |
 | **Closure-based state (Maps)** | `event` | Module-level Maps track state across users | Cost overrun → forced scale-down next event |
 | **Hash-based cohorts** | `everything` | Deterministic user segmentation without randomness | `userId.charCodeAt(0) % 10 === 0` |
 | **Compound conditions** | `everything` | Require multiple behaviors for an effect | Slack AND PagerDuty → faster resolution |
 
 ### Critical Hook Rules
 
-1. **Properties are FLAT on event records** — use `record.amount`, NOT `record.properties.amount`
-2. **Spliced events need `user_id`** — copy from source event: `user_id: event.user_id` (not `distinct_id`)
-3. **Spliced events need `time`** — must be a valid ISO string
-4. **Use `dayjs` for time operations** inside hooks
-5. **Use the seeded `chance` instance** from module scope for randomness
-6. **`everything` is the most powerful hook** — it sees all events for one user, can correlate across event types, and access `meta.profile` to drive behavior based on user properties
-7. **Return `record`** from `event` hooks (single object only — do NOT return arrays). For `everything`, return the (possibly modified) array
-8. **To drop/filter events (churn, drop-off, seasonal dips)**: you cannot drop events from the `event` hook. Use the `everything` hook: `return record.filter(e => !shouldDrop(e))`. For tag-and-filter: set `record._drop = true` in the `event` hook, then `return record.filter(e => !e._drop)` in `everything`. Do NOT use `return {}` — it creates broken events with no event name
+1. **Hooks do NOT add new properties.** All properties must be defined in the config with defaults. Hooks modify values within that schema.
+2. **Properties are FLAT on event records** — use `record.amount`, NOT `record.properties.amount`
+3. **Injected events must be cloned** from existing events using spread (`{...existingEvent}`), then override `time`, `user_id`, and values. Never construct events from scratch.
+4. **Spliced events need `user_id`** — copy from source event: `user_id: event.user_id` (not `distinct_id`)
+5. **Spliced events need `time`** — must be a valid ISO string
+6. **Use `dayjs` for time operations** inside hooks
+7. **Use the seeded `chance` instance** from module scope for randomness
+8. **`everything` is the most powerful hook** — it sees all events for one user, can correlate across event types, and access `meta.profile` to drive behavior based on user properties
+9. **Return `record`** from `event` hooks (single object only). For `everything`, return the (possibly modified) array
+10. **To drop/filter events (churn, drop-off, seasonal dips)**: use the `everything` hook: `return record.filter(e => !shouldDrop(e))`. The `everything` hook is the ONLY place where events can be removed.
+
+### Verifying Hooks with DuckDB
+
+After creating or modifying a dungeon, always verify that hooks actually produce their intended patterns by running `/verify-hooks`. This generates data at small scale (1K users, 100K events), queries the output with DuckDB, and produces a diagnostic report at `research/hook-results.md` with PASS/WEAK/FAIL verdicts for each hook. Verify BEFORE pushing data to Mixpanel.
 
 ## TimeSoup — Time Distribution System
 
