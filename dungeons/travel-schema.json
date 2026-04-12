@@ -1,0 +1,38 @@
+{
+  "events": [
+    {"event": "account created", "weight": 1, "isFirstEvent": true, "properties": {"signup_source": ["organic", "google", "instagram", "tripadvisor", "referral", "email_campaign"]}},
+    {"event": "destination searched", "weight": 8, "properties": {"destination": ["New York", "London", "Paris", "Tokyo", "Barcelona", "Dubai", "Sydney", "Rome", "Bangkok", "Cancun", "Bali", "Amsterdam", "Miami", "Singapore", "Lisbon"], "check_in_days_out": {"$range": [1, 90]}, "nights": {"$range": [1, 14]}, "guests": {"$range": [1, 6]}, "search_filters": ["price", "price", "rating", "location", "amenities", "pool", "breakfast"]}},
+    {"event": "hotel viewed", "weight": 7, "properties": {"destination": ["New York", "London", "Paris", "Tokyo", "Barcelona", "Dubai", "Sydney"], "star_rating": [3, 3, 4, 4, 4, 5], "nightly_rate": {"$range": [50, 500]}, "has_pool": [true, true, false], "has_breakfast": [true, false], "photos_viewed": {"$range": [0, 20]}}},
+    {"event": "price compared", "weight": 4, "properties": {"hotels_compared": {"$range": [2, 5]}, "price_difference_pct": {"$range": [0, 40]}, "chose_cheapest": [true, true, true, false, false]}},
+    {"event": "booking completed", "weight": 3, "properties": {"destination": ["New York", "London", "Paris", "Tokyo", "Barcelona"], "nightly_rate": {"$range": [50, 500]}, "total_cost": {"$range": [100, 5000]}, "nights": {"$range": [1, 14]}, "guests": {"$range": [1, 6]}, "booking_window": ["advance", "advance", "standard", "standard", "last_minute"], "payment_method": ["credit_card", "credit_card", "debit", "paypal", "apple_pay"], "loyalty_points": {"$range": [0, 500]}}},
+    {"event": "room upgrade selected", "weight": 2, "properties": {"upgrade_type": ["suite", "ocean_view", "executive_floor", "club_lounge", "premium_king"], "upgrade_cost": {"$range": [25, 200]}}},
+    {"event": "booking cancelled", "weight": 2, "properties": {"cancellation_reason": ["change_of_plans", "found_cheaper", "travel_restriction", "schedule_conflict", "weather"], "refund_amount": {"$range": [0, 2000]}, "days_before_checkin": {"$range": [0, 60]}, "booking_window": ["advance", "advance", "standard", "standard", "last_minute"]}},
+    {"event": "check in completed", "weight": 2, "properties": {"check_in_method": ["app", "app", "front_desk", "kiosk"], "early_checkin": [false, false, false, true]}},
+    {"event": "amenity used", "weight": 4, "properties": {"amenity_type": ["pool", "gym", "spa", "restaurant", "bar", "room_service", "business_center", "concierge"], "spend_amount": {"$range": [0, 200]}}},
+    {"event": "review submitted", "weight": 2, "properties": {"stay_rating": {"$range": [1, 5]}, "review_length": {"$range": [20, 300]}, "would_return": [true, true, true, false]}},
+    {"event": "loyalty points redeemed", "weight": 1, "properties": {"points_used": {"$range": [100, 5000]}, "redemption_type": ["room_discount", "free_night", "upgrade", "amenity_credit"]}},
+    {"event": "notification received", "weight": 5, "properties": {"notification_type": ["deal_alert", "deal_alert", "booking_confirmation", "checkin_reminder", "review_prompt", "loyalty_update"], "channel": ["push", "push", "email", "sms"], "opened": [true, true, true, false]}},
+    {"event": "wishlist updated", "weight": 3, "properties": {"action": ["added", "added", "added", "removed"]}},
+    {"event": "support contacted", "weight": 1, "properties": {"issue_type": ["booking_change", "refund", "complaint", "question", "loyalty_inquiry"], "channel": ["chat", "chat", "phone", "email"], "resolution_time_hours": {"$range": [0, 48]}}},
+    {"event": "app session", "weight": 7, "properties": {"session_duration_sec": {"$range": [15, 1200]}, "pages_viewed": {"$range": [1, 20]}}},
+    {"event": "price alert set", "weight": 2, "properties": {"target_price": {"$range": [50, 300]}, "alert_status": ["active", "active", "triggered", "expired"]}},
+    {"event": "account deactivated", "weight": 1, "isChurnEvent": true, "isStrictEvent": true, "properties": {"reason": ["found_alternative", "too_expensive", "poor_experience", "infrequent_travel", "privacy"]}}
+  ],
+  "superProps": {
+    "platform": ["ios", "android", "web", "web"],
+    "membership_tier": ["standard", "standard", "standard", "gold", "platinum"]
+  },
+  "userProps": {
+    "customer_segment": ["leisure_family"],
+    "travel_frequency": ["occasional", "occasional", "monthly", "weekly"],
+    "company_name": ["none"],
+    "avg_budget_per_night": {"$range": [50, 400]}
+  },
+  "funnels": [
+    {"name": "Onboarding to First Booking", "sequence": ["account created", "destination searched", "hotel viewed", "booking completed"], "conversionRate": 35, "order": "sequential", "isFirstFunnel": true, "timeToConvert": 72, "weight": 3},
+    {"name": "Search to Book", "sequence": ["destination searched", "hotel viewed", "price compared", "booking completed"], "conversionRate": 25, "order": "sequential", "timeToConvert": 48, "weight": 5},
+    {"name": "Full Stay Journey", "sequence": ["booking completed", "check in completed", "amenity used", "review submitted"], "conversionRate": 30, "order": "sequential", "timeToConvert": 336, "weight": 3},
+    {"name": "Loyalty Engagement", "sequence": ["booking completed", "loyalty points redeemed", "review submitted"], "conversionRate": 15, "order": "sequential", "timeToConvert": 720, "weight": 2},
+    {"name": "Upsell Path", "sequence": ["hotel viewed", "booking completed", "room upgrade selected"], "conversionRate": 20, "order": "sequential", "timeToConvert": 24, "weight": 2}
+  ]
+}

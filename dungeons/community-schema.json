@@ -1,0 +1,222 @@
+{
+  "events": [
+    {
+      "event": "account created",
+      "weight": 1,
+      "isFirstEvent": true,
+      "properties": {
+        "referral_source": ["organic", "google_search", "reddit_referral", "youtube_link", "friend_invite"]
+      }
+    },
+    {
+      "event": "article viewed",
+      "weight": 9,
+      "properties": {
+        "content_hub": ["gaming", "anime", "movies", "tv", "comics", "music"],
+        "view_count": {"$range": [1, 100]},
+        "time_on_page_sec": {"$range": [5, 600]},
+        "is_weekend": [false]
+      }
+    },
+    {
+      "event": "article published",
+      "weight": 3,
+      "properties": {
+        "content_hub": ["gaming", "anime", "movies", "tv", "comics", "music"],
+        "word_count": {"$range": [200, 5000]},
+        "has_images": [true, true, true, false],
+        "category": ["lore", "character", "episode_guide", "review", "tutorial", "news"],
+        "is_weekend": [false],
+        "poll_enabled": [false]
+      }
+    },
+    {
+      "event": "article edited",
+      "weight": 4,
+      "properties": {
+        "content_hub": ["gaming", "anime", "movies", "tv", "comics", "music"],
+        "edit_type": ["content", "formatting", "grammar", "citation", "revert"],
+        "edit_quality": {"$range": [1, 5]},
+        "chars_changed": {"$range": [5, 2000]}
+      }
+    },
+    {
+      "event": "discussion posted",
+      "weight": 5,
+      "properties": {
+        "content_hub": ["gaming", "anime", "movies", "tv", "comics", "music"],
+        "topic_type": ["theory", "question", "news", "review", "recommendation", "debate"],
+        "reply_count": {"$range": [0, 50]},
+        "discussion_mode": ["classic"]
+      }
+    },
+    {
+      "event": "comment posted",
+      "weight": 6,
+      "properties": {
+        "content_hub": ["gaming", "anime", "movies", "tv", "comics", "music"],
+        "comment_length": {"$range": [10, 500]},
+        "is_reply": [true, true, false],
+        "discussion_mode": ["classic"]
+      }
+    },
+    {
+      "event": "upvote given",
+      "weight": 7,
+      "properties": {
+        "content_type": ["article", "article", "discussion", "comment"],
+        "content_hub": ["gaming", "anime", "movies", "tv", "comics", "music"],
+        "upvote_count": {"$range": [1, 10]}
+      }
+    },
+    {
+      "event": "search performed",
+      "weight": 6,
+      "properties": {
+        "search_term": ["walkthrough", "character list", "ending explained", "tier list", "release date", "easter eggs", "best builds", "lore timeline", "voice actors", "soundtrack"],
+        "results_count": {"$range": [0, 50]},
+        "content_hub": ["gaming", "anime", "movies", "tv", "comics", "music"]
+      }
+    },
+    {
+      "event": "wiki page created",
+      "weight": 2,
+      "properties": {
+        "content_hub": ["gaming", "anime", "movies", "tv", "comics", "music"],
+        "page_type": ["character", "location", "item", "episode", "concept", "organization"],
+        "word_count": {"$range": [100, 3000]}
+      }
+    },
+    {
+      "event": "media uploaded",
+      "weight": 2,
+      "properties": {
+        "media_type": ["image", "image", "image", "gif", "video_clip", "screenshot"],
+        "file_size_kb": {"$range": [50, 5000]},
+        "content_hub": ["gaming", "anime", "movies", "tv", "comics", "music"]
+      }
+    },
+    {
+      "event": "moderation action",
+      "weight": 2,
+      "properties": {
+        "action_type": ["warn", "edit_revert", "content_removal", "user_mute", "spam_flag", "lock_thread"],
+        "severity": ["low", "low", "medium", "medium", "high"],
+        "content_hub": ["gaming", "anime", "movies", "tv", "comics", "music"],
+        "resolution_time_hours": {"$range": [0, 48]}
+      }
+    },
+    {
+      "event": "user followed",
+      "weight": 3,
+      "properties": {
+        "follow_source": ["profile", "article", "discussion", "recommendation"]
+      }
+    },
+    {
+      "event": "notification received",
+      "weight": 6,
+      "properties": {
+        "notification_type": ["reply", "reply", "mention", "upvote", "follow", "article_update", "moderation"],
+        "channel": ["push", "push", "email", "in_app"],
+        "opened": [true, true, true, false]
+      }
+    },
+    {
+      "event": "support ticket created",
+      "weight": 1,
+      "properties": {
+        "category": ["bug_report", "content_dispute", "account_issue", "feature_request", "abuse_report", "other"],
+        "priority": ["low", "low", "medium", "medium", "high"],
+        "resolution_hours": {"$range": [1, 96]}
+      }
+    },
+    {
+      "event": "profile updated",
+      "weight": 2,
+      "properties": {
+        "field_updated": ["avatar", "bio", "display_name", "preferred_hub", "notification_settings", "badges"]
+      }
+    },
+    {
+      "event": "app session",
+      "weight": 8,
+      "properties": {
+        "session_duration_sec": {"$range": [10, 3600]},
+        "pages_viewed": {"$range": [1, 30]}
+      }
+    },
+    {
+      "event": "report submitted",
+      "weight": 1,
+      "properties": {
+        "report_type": ["spam", "harassment", "misinformation", "vandalism", "copyright", "other"],
+        "content_type": ["article", "comment", "discussion", "media"]
+      }
+    },
+    {
+      "event": "account deactivated",
+      "weight": 1,
+      "isChurnEvent": true,
+      "isStrictEvent": true,
+      "properties": {
+        "reason": ["lost_interest", "toxicity", "no_time", "switched_platform", "privacy_concern"]
+      }
+    }
+  ],
+  "superProps": {
+    "subscription_tier": ["free", "free", "free", "free", "supporter", "pro"],
+    "platform": ["ios", "android", "web"],
+    "content_hub": ["gaming", "anime", "movies", "tv", "comics", "music"]
+  },
+  "userProps": {
+    "role": ["reader", "reader", "reader", "reader", "reader", "reader", "contributor", "contributor", "moderator", "creator"],
+    "contributor_level": ["newcomer"],
+    "articles_created": [0],
+    "reputation_score": {"$range": [0, 100]},
+    "preferred_hub": ["gaming", "anime", "movies", "tv", "comics", "music"]
+  },
+  "funnels": [
+    {
+      "name": "Onboarding Flow",
+      "sequence": ["account created", "search performed", "article viewed", "discussion posted"],
+      "conversionRate": 40,
+      "order": "sequential",
+      "isFirstFunnel": true,
+      "timeToConvert": 72,
+      "weight": 3
+    },
+    {
+      "name": "Content Creation",
+      "sequence": ["article viewed", "article published", "comment posted"],
+      "conversionRate": 35,
+      "order": "sequential",
+      "timeToConvert": 48,
+      "weight": 5
+    },
+    {
+      "name": "Engagement Loop",
+      "sequence": ["article viewed", "upvote given", "comment posted", "discussion posted"],
+      "conversionRate": 30,
+      "order": "sequential",
+      "timeToConvert": 96,
+      "weight": 4
+    },
+    {
+      "name": "Creator to Supporter",
+      "sequence": ["article published", "profile updated", "notification received"],
+      "conversionRate": 45,
+      "order": "sequential",
+      "timeToConvert": 168,
+      "weight": 2
+    },
+    {
+      "name": "Moderation Pipeline",
+      "sequence": ["report submitted", "moderation action"],
+      "conversionRate": 60,
+      "order": "sequential",
+      "timeToConvert": 48,
+      "weight": 2
+    }
+  ]
+}
