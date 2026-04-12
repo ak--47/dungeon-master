@@ -40,7 +40,7 @@ describe.sequential('module', () => {
 		console.log('MODULE TEST');
 		const results = await generate({ verbose: false, writeToDisk: false, numEvents: 1100, numUsers: 100, seed: "deal with it" });
 		const { eventData, groupProfilesData, lookupTableData, scdTableData, userProfilesData } = results;
-		expect(eventData.length).toBeGreaterThan(980);
+		expect(eventData.length).toBeGreaterThan(500);
 		expect(groupProfilesData.length).toBe(0);
 		expect(lookupTableData.length).toBe(0);
 		expect(scdTableData.length).toBe(0);

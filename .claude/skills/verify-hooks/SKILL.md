@@ -320,6 +320,40 @@ When verifying `everything` hooks, check BOTH the events file AND the users file
 - `verify-hooks-*-GROUPS.json` — group profiles (if groups configured)
 - `verify-hooks-*-SCD.json` — SCD data (if SCDs configured)
 
+**Phase 2 Feature Verification** (if the dungeon uses Phase 2 features):
+
+Phase 2 features (personas, worldEvents, engagementDecay, dataQuality, subscription, attribution, geo, features, anomalies) produce data patterns alongside hooks. When verifying, also check:
+
+```sql
+-- Personas: check distribution matches configured weights
+SELECT _persona, count(*) as users FROM read_json_auto('./data/verify-hooks-USERS.json') WHERE _persona IS NOT NULL GROUP BY 1;
+
+-- World Events: check injected properties exist during event windows
+SELECT promo, count(*) FROM read_json_auto('./data/verify-hooks-EVENTS.json') WHERE promo IS NOT NULL GROUP BY 1;
+
+-- Data Quality: verify bots, nulls, empty events
+SELECT 'bots' as metric, count(*) FROM read_json_auto('./data/verify-hooks-USERS.json') WHERE is_bot = true
+UNION ALL SELECT 'null_props', count(*) FROM read_json_auto('./data/verify-hooks-EVENTS.json') WHERE category IS NULL;
+
+-- Subscription: lifecycle events generated
+SELECT event, count(*) FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+WHERE event IN ('trial started','subscription started','plan upgraded','subscription cancelled') GROUP BY 1;
+
+-- Attribution: campaign sources on profiles
+SELECT utm_source, count(*) FROM read_json_auto('./data/verify-hooks-USERS.json') WHERE utm_source IS NOT NULL GROUP BY 1;
+
+-- Geo: region distribution
+SELECT _region, count(*) FROM read_json_auto('./data/verify-hooks-USERS.json') WHERE _region IS NOT NULL GROUP BY 1;
+
+-- Features: progressive adoption properties
+SELECT theme, count(*) FROM read_json_auto('./data/verify-hooks-EVENTS.json') WHERE theme IS NOT NULL GROUP BY 1;
+
+-- Anomalies: burst/extreme events
+SELECT _anomaly, count(*) FROM read_json_auto('./data/verify-hooks-EVENTS.json') WHERE _anomaly IS NOT NULL GROUP BY 1;
+```
+
+Include Phase 2 verification results in the report when the dungeon uses these features. Phase 2 patterns should ALWAYS be present (they're deterministic from config), unlike hooks which may have statistical variance.
+
 ### Query Execution
 
 Run each query separately. For each query:

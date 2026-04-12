@@ -78,6 +78,7 @@ Uses **Vitest** (ESM-native). Test files:
 - `tests/unit.test.js` — Individual function tests (text generator, utils, weights)
 - `tests/int.test.js` — Integration tests (context, storage, orchestrators)
 - `tests/e2e.test.js` — End-to-end generation + Mixpanel import
+- `tests/phase2.test.js` — Phase 2 features (personas, world events, decay, data quality, subscription, attribution, geo, features, anomalies)
 - `tests/sanity.test.js` — Module integration (all dungeon types, formats, batch mode)
 - `tests/performance.test.js` — Context caching, device pools, time shift
 - `tests/hooks.test.js` — Hook system: all hook types, double-fire prevention, patterns (temporal, two-pass, closure state)
@@ -295,6 +296,50 @@ Three skills are available via slash commands:
 - `/analyze-soup <dungeon-path>` — Run a dungeon and analyze its time distribution at week/day/hour granularities
 
 The verify runner script lives at `scripts/verify-runner.mjs` — skills use it, do not create a new one.
+
+## Phase 2: Advanced Features
+
+All Phase 2 features are **optional and additive**. If a config key is absent, behavior is identical to the original. Hooks always override Phase 2 features — hooks are the final authority.
+
+### Feature Summary
+
+| Feature | Config Key | What It Does |
+|---------|-----------|--------------|
+| **Personas** | `personas` | Structured user archetypes with distinct event volumes, conversion rates, and properties |
+| **World Events** | `worldEvents` | Shared temporal events (outages, campaigns, launches) affecting all users |
+| **Engagement Decay** | `engagementDecay` | Gradual user engagement decline (exponential/linear/step) replacing binary churn |
+| **Data Quality** | `dataQuality` | Controlled imperfections: nulls, duplicates, bots, late-arriving events, timezone confusion |
+| **Subscription** | `subscription` | Revenue lifecycle: trial → paid → upgrade → downgrade → cancel → win-back |
+| **Attribution** | `attribution` | Connected campaign attribution linking ad spend to user acquisition |
+| **Geo** | `geo` | Sticky locations, timezone-aware activity, regional properties |
+| **Features** | `features` | Progressive feature adoption with S-curve rollout mid-dataset |
+| **Anomalies** | `anomalies` | Extreme values, error bursts, coordinated signup spikes |
+
+### Key Integration Points
+
+- **Personas** flow through all hook `meta.persona` — hooks can read persona assignments
+- **World Events** inject properties and modulate volume via accept/reject sampling in `events.js`
+- **Engagement Decay** filters events in `user-loop.js` between `_drop` filter and `everything` hook
+- **Data Quality** applies nulls/timezone in `events.js`, duplicates/late-arriving in `user-loop.js`, bots after user loop
+- **Subscription** events injected between `_drop` filter and `everything` hook in `user-loop.js`
+- **Attribution** assigns campaigns at user creation in `user-loop.js`
+- **Geo** assigns sticky location at user creation, region properties merged into profile
+- **Features** apply per-event in `events.js` using logistic adoption function
+- **Anomalies** extreme values per-event in `events.js`, bursts/coordinated after user loop in `user-loop.js`
+
+### Execution Order (per user)
+
+1. Assign persona → assign region/location → assign campaign attribution
+2. Create profile → merge persona properties → merge region properties → merge attribution
+3. **User hook fires** (can override everything above)
+4. Generate events → apply world event props → apply feature adoption → apply anomaly extreme values → apply data quality nulls
+5. **Event hook fires** (can override everything above)
+6. Filter `_drop` events → inject subscription events → apply engagement decay → apply duplicate/late-arriving
+7. **Everything hook fires** (final authority)
+
+### Showcase Dungeon
+
+`dungeons/phase2-showcase.js` exercises all 9 features in a realistic e-commerce scenario.
 
 ## Important Notes
 

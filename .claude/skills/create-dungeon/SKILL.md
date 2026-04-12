@@ -144,6 +144,130 @@ mirrorProps: {},
 lookupTables: [],  // NEVER add lookup tables — they require manual import and are not automated ... only if the user BEGS you.
 ```
 
+## Phase 2 Features (Optional — use when they add realism)
+
+Phase 2 features are **additive and optional**. Include them when they make the dungeon's story richer. Hooks always override Phase 2 features — hooks are the final authority on every data point.
+
+### Personas (`personas`)
+
+Define behavioral user archetypes. Replaces the random power-user dice rolls with structured segments. Each persona gets `eventMultiplier` (event volume), `conversionModifier` (funnel conversion), `properties` (merged into profile), and optional `churnRate` / `activeWindow`.
+
+```javascript
+personas: [
+  { name: "power_user", weight: 15, eventMultiplier: 4.0, conversionModifier: 1.5, churnRate: 0.02,
+    properties: { segment: "power", loyalty_tier: "gold" } },
+  { name: "casual", weight: 50, eventMultiplier: 0.6, conversionModifier: 0.7, churnRate: 0.1,
+    properties: { segment: "casual", loyalty_tier: "none" } },
+  { name: "churner", weight: 20, eventMultiplier: 0.4, conversionModifier: 0.3, churnRate: 0.6,
+    properties: { segment: "churner" }, activeWindow: { maxDays: 14 } },
+  { name: "champion", weight: 15, eventMultiplier: 2.5, conversionModifier: 1.5,
+    properties: { segment: "champion", loyalty_tier: "platinum" } }
+]
+```
+
+Personas flow through hook `meta.persona` — hooks can read and override persona assignments.
+
+### World Events (`worldEvents`)
+
+Shared events that affect all users simultaneously. Create correlated cross-user temporal patterns.
+
+```javascript
+worldEvents: [
+  { name: "black_friday", type: "campaign", startDay: 60, duration: 3,
+    volumeMultiplier: 2.5, conversionModifier: 1.8,
+    injectProps: { promo: "black_friday" }, affectsEvents: ["checkout"] },
+  { name: "outage", type: "outage", startDay: 40, duration: 0.125,
+    volumeMultiplier: 0.05, affectsEvents: "*",
+    aftermath: { duration: 1, volumeMultiplier: 1.3 } },
+  { name: "v2_launch", type: "product_launch", startDay: 50,
+    duration: null, injectProps: { app_version: "2.0" } }
+]
+```
+
+### Engagement Decay (`engagementDecay`)
+
+Gradual engagement decline instead of binary churn. Users' event frequency decreases over their lifetime.
+
+```javascript
+engagementDecay: { model: "exponential", halfLife: 45, floor: 0.1, reactivationChance: 0.03 }
+```
+
+### Data Quality (`dataQuality`) — ONLY IF EXPLICITLY REQUESTED
+
+**Do NOT include `dataQuality` unless the user explicitly asks for dirty/messy data.** 99% of the time, dungeons should produce clean, perfect test data. Data quality gremlins (nulls, duplicates, bots) are for testing data pipelines and anomaly detection, not for standard demo datasets.
+
+```javascript
+// Only add if user specifically asks for messy/dirty/realistic data quality issues
+dataQuality: { nullRate: 0.02, nullProps: ["category"], duplicateRate: 0.005,
+  botUsers: 3, botEventsPerUser: 500, timezoneConfusion: 0.01 }
+```
+
+### Subscription (`subscription`)
+
+Full revenue lifecycle: trial → paid → upgrade → downgrade → cancel → win-back.
+
+```javascript
+subscription: {
+  plans: [
+    { name: "free", price: 0, default: true },
+    { name: "pro", price: 19.99, trialDays: 14 },
+    { name: "enterprise", price: 99.99 }
+  ],
+  lifecycle: { trialToPayRate: 0.3, upgradeRate: 0.1, churnRate: 0.05, winBackRate: 0.1 }
+}
+```
+
+### Attribution (`attribution`)
+
+Connected campaign attribution — links ad spend to user acquisition.
+
+```javascript
+attribution: {
+  campaigns: [
+    { name: "google_ads", source: "google", medium: "cpc", activeDays: [0, 90],
+      dailyBudget: [200, 800], acquisitionRate: 0.03 }
+  ],
+  organicRate: 0.4
+}
+```
+
+### Geo (`geo`)
+
+Sticky locations, timezone-aware activity, regional properties.
+
+```javascript
+geo: {
+  sticky: true,
+  regions: [
+    { name: "us", countries: ["US"], weight: 50, timezoneOffset: -5, properties: { currency: "USD" } },
+    { name: "eu", countries: ["GB", "DE"], weight: 30, timezoneOffset: 1, properties: { currency: "EUR" } }
+  ]
+}
+```
+
+### Features (`features`)
+
+Progressive feature adoption with S-curve rollout.
+
+```javascript
+features: [
+  { name: "dark_mode", launchDay: 30, adoptionCurve: "fast", property: "theme",
+    values: ["light", "dark"], defaultBefore: "light", affectsEvents: "*" }
+]
+```
+
+### Anomalies (`anomalies`)
+
+Extreme values, error bursts, coordinated spikes.
+
+```javascript
+anomalies: [
+  { type: "extreme_value", event: "checkout", property: "amount", frequency: 0.005, multiplier: 50, tag: "whale" },
+  { type: "burst", event: "error", day: 45, duration: 0.08, count: 500, tag: "error_storm" },
+  { type: "coordinated", event: "sign up", day: 70, window: 0.01, count: 150, tag: "viral" }
+]
+```
+
 ## TimeSoup — Time Distribution (usually omit this)
 
 **DEFAULT BEHAVIOR: Do NOT include `soup` in the config unless the user's prompt explicitly asks for a specific time distribution pattern** (e.g., "make it spiky", "seasonal pattern", "global users"). The default "growth" preset applies automatically and is correct for the vast majority of dungeons. Do not infer a preset from the vertical — a gaming dungeon does NOT automatically need "spiky", an e-commerce dungeon does NOT automatically need "seasonal". Only set `soup` when the user says so.
@@ -829,10 +953,13 @@ Include `isFirstEvent`, `isFirstFunnel`, `name`, `weight`, `order`, and other no
 2. If validation fails, fix the issue (usually funnel event names or pickAWinner crashes)
 3. Verify the hook function loads without errors
 4. Verify the JSON schema file is valid JSON: `node -e "import fs from 'fs'; JSON.parse(fs.readFileSync('./dungeons/FILENAME-schema.json', 'utf8')); console.log('valid json');"`
+5. **Run `/verify-hooks dungeons/FILENAME.js`** to verify all hooks produce their intended patterns. Fix any FAIL or WEAK hooks before considering the dungeon complete.
 
 ## Verifying Hooks
 
-A verify runner already exists at `scripts/verify-runner.mjs` — do NOT create a new one. Use it to generate a small dataset and verify hooks with DuckDB:
+A verify runner already exists at `scripts/verify-runner.mjs` — do NOT create a new one. After creating the dungeon, **always run the verify-hooks skill** (`/verify-hooks dungeons/FILENAME.js`) to confirm hooks produce their intended data patterns. If hooks fail verification, iterate on the hook code until they pass.
+
+Manual verification is also available:
 
 ```bash
 # Generate test data (1K users, 100K events)
