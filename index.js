@@ -124,14 +124,15 @@ async function runDungeon(config) {
 	if (config.verbose) logger.info({ seed: config.seed }, 'Configuring dungeon');
 	let validatedConfig;
 	try {
+		// Initialize seeded RNG BEFORE validation — config-validator captures a
+		// chance reference for default userProps (spiritAnimal). If we init after,
+		// run 1 binds an unseeded instance while run 2 binds a stale one → non-deterministic.
+		if (config.seed) {
+			initChance(config.seed);
+		}
+
 		// Step 1: Validate and enrich configuration
 		validatedConfig = validateDungeonConfig(config);
-
-		// Ensure seeded RNG is initialized (dungeons do this at module scope,
-		// but npm-module consumers pass seed via config object)
-		if (validatedConfig.seed) {
-			initChance(validatedConfig.seed);
-		}
 
 		// Compute FIXED_BEGIN from validated numDays
 		const configNumDays = validatedConfig.numDays || 30;

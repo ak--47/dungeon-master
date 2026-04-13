@@ -2,216 +2,524 @@
   "events": [
     {
       "event": "account created",
-      "weight": 1,
       "isFirstEvent": true,
       "properties": {
-        "referral_source": ["organic", "doctor_referral", "insurance_partner", "social_media", "search"]
+        "referral_source": [
+          "organic",
+          "doctor_referral",
+          "insurance_partner",
+          "social_media",
+          "search"
+        ]
       }
     },
     {
       "event": "symptom search",
       "weight": 7,
       "properties": {
-        "search_term": ["headache", "fever", "cough", "back pain", "fatigue", "anxiety", "rash", "nausea", "chest pain", "joint pain"],
-        "results_count": {"$range": [0, 25]}
+        "search_term": [
+          "headache",
+          "fever",
+          "cough",
+          "back pain",
+          "fatigue",
+          "anxiety",
+          "rash",
+          "nausea",
+          "chest pain",
+          "joint pain"
+        ],
+        "results_count": {
+          "$range": [
+            4,
+            20
+          ]
+        }
       }
     },
     {
       "event": "appointment booked",
       "weight": 6,
       "properties": {
-        "condition_type": ["general", "general", "general", "respiratory", "dermatology", "mental_health", "chronic", "pediatric"],
-        "wait_time_hours": {"$range": [1, 72]},
-        "appointment_type": ["new_patient", "follow_up", "follow_up", "urgent", "routine", "routine"],
-        "after_hours": [false]
+        "doctor_id": {
+          "$type": "string"
+        },
+        "clinic_id": {
+          "$type": "string"
+        },
+        "condition_type": [
+          "general",
+          "respiratory",
+          "dermatology",
+          "mental_health",
+          "chronic",
+          "pediatric"
+        ],
+        "wait_time_hours": {
+          "$range": [
+            10,
+            59
+          ]
+        },
+        "appointment_type": [
+          "new_patient",
+          "follow_up",
+          "urgent",
+          "routine"
+        ],
+        "after_hours": [
+          false
+        ]
       }
     },
     {
       "event": "consultation completed",
       "weight": 5,
       "properties": {
-        "consultation_mode": ["phone"],
-        "duration_minutes": {"$range": [5, 60]},
-        "consultation_fee": {"$range": [25, 200]},
-        "satisfaction_score": {"$range": [1, 5]},
-        "condition_type": ["general", "general", "respiratory", "dermatology", "mental_health", "chronic", "pediatric"],
-        "after_hours": [false]
+        "doctor_id": {
+          "$type": "string"
+        },
+        "consultation_mode": [
+          "phone"
+        ],
+        "duration_minutes": {
+          "$range": [
+            12,
+            46
+          ]
+        },
+        "consultation_fee": {
+          "$range": [
+            46,
+            167
+          ]
+        },
+        "satisfaction_score": [
+          2
+        ],
+        "condition_type": [
+          "general",
+          "respiratory",
+          "dermatology",
+          "mental_health",
+          "chronic",
+          "pediatric"
+        ],
+        "after_hours": [
+          false
+        ]
       }
     },
     {
       "event": "prescription issued",
       "weight": 4,
       "properties": {
-        "medication_type": ["antibiotic", "antiviral", "painkiller", "anti_inflammatory", "antidepressant", "inhaler", "topical", "chronic_maintenance"],
-        "quantity": {"$range": [1, 90]},
-        "condition_type": ["general", "respiratory", "dermatology", "mental_health", "chronic", "chronic", "pediatric"],
-        "refill_count": {"$range": [0, 3]}
+        "medication_type": [
+          "antibiotic",
+          "antiviral",
+          "painkiller",
+          "anti_inflammatory",
+          "antidepressant",
+          "inhaler",
+          "topical",
+          "chronic_maintenance"
+        ],
+        "quantity": {
+          "$range": [
+            20,
+            71
+          ]
+        },
+        "condition_type": [
+          "general",
+          "respiratory",
+          "dermatology",
+          "mental_health",
+          "chronic",
+          "pediatric"
+        ],
+        "refill_count": {
+          "$range": [
+            0,
+            3
+          ]
+        }
       }
     },
     {
       "event": "prescription refill",
       "weight": 3,
       "properties": {
-        "medication_type": ["antibiotic", "antiviral", "painkiller", "anti_inflammatory", "antidepressant", "inhaler", "topical", "chronic_maintenance"],
-        "quantity": {"$range": [1, 90]},
-        "condition_type": ["general", "respiratory", "dermatology", "mental_health", "chronic", "chronic", "pediatric"],
-        "refill_count": {"$range": [1, 6]}
+        "medication_type": [
+          "antibiotic",
+          "antiviral",
+          "painkiller",
+          "anti_inflammatory",
+          "antidepressant",
+          "inhaler",
+          "topical",
+          "chronic_maintenance"
+        ],
+        "quantity": {
+          "$range": [
+            19,
+            70
+          ]
+        },
+        "condition_type": [
+          "general",
+          "respiratory",
+          "dermatology",
+          "mental_health",
+          "chronic",
+          "pediatric"
+        ],
+        "refill_count": {
+          "$range": [
+            1,
+            5
+          ]
+        }
       }
     },
     {
       "event": "follow up scheduled",
       "weight": 3,
       "properties": {
-        "days_until_followup": {"$range": [3, 30]},
-        "condition_type": ["general", "respiratory", "dermatology", "mental_health", "chronic", "pediatric"],
-        "consultation_mode": ["phone"]
+        "doctor_id": {
+          "$type": "string"
+        },
+        "days_until_followup": [
+          21,
+          12,
+          23,
+          11,
+          17,
+          10
+        ],
+        "condition_type": [
+          "general",
+          "respiratory",
+          "dermatology",
+          "mental_health",
+          "chronic",
+          "pediatric"
+        ],
+        "consultation_mode": [
+          "phone"
+        ]
       }
     },
     {
       "event": "message sent",
       "weight": 5,
       "properties": {
-        "message_type": ["question", "question", "update", "result_inquiry", "prescription_question", "scheduling"],
-        "recipient_role": ["doctor", "doctor", "nurse", "support"],
-        "response_time_hours": {"$range": [0, 48]}
+        "message_type": [
+          "question",
+          "update",
+          "result_inquiry",
+          "prescription_question",
+          "scheduling"
+        ],
+        "recipient_role": [
+          "doctor",
+          "nurse",
+          "support"
+        ],
+        "response_time_hours": [
+          11,
+          13,
+          18
+        ]
       }
     },
     {
       "event": "lab results viewed",
       "weight": 3,
       "properties": {
-        "test_type": ["blood_panel", "urinalysis", "imaging", "allergy_test", "metabolic_panel", "thyroid"],
-        "result_status": ["normal", "normal", "normal", "abnormal", "pending"]
+        "test_type": [
+          "blood_panel",
+          "urinalysis",
+          "imaging",
+          "allergy_test",
+          "metabolic_panel",
+          "thyroid"
+        ],
+        "result_status": [
+          "normal",
+          "abnormal",
+          "pending"
+        ]
       }
     },
     {
       "event": "health record accessed",
       "weight": 4,
       "properties": {
-        "record_type": ["visit_summary", "lab_results", "prescriptions", "immunizations", "billing"],
-        "access_method": ["app", "app", "web_portal"]
+        "record_type": [
+          "visit_summary",
+          "lab_results",
+          "prescriptions",
+          "immunizations",
+          "billing"
+        ],
+        "access_method": [
+          "app",
+          "web_portal"
+        ]
       }
     },
     {
       "event": "insurance verified",
       "weight": 2,
       "properties": {
-        "insurance_type": ["private", "private", "employer", "medicare", "medicaid", "self_pay"],
-        "verification_status": ["approved", "approved", "approved", "pending", "denied"],
-        "copay_amount": {"$range": [0, 75]}
+        "insurance_type": [
+          "private",
+          "employer",
+          "medicare",
+          "medicaid",
+          "self_pay"
+        ],
+        "verification_status": [
+          "approved",
+          "pending",
+          "denied"
+        ],
+        "copay_amount": {
+          "$range": [
+            12,
+            61
+          ]
+        }
       }
     },
     {
       "event": "payment processed",
       "weight": 3,
       "properties": {
-        "amount": {"$range": [10, 500]},
-        "payment_method": ["credit_card", "credit_card", "insurance_claim", "hsa_fsa", "debit"],
-        "payment_status": ["success", "success", "success", "success", "failed"]
+        "amount": {
+          "$range": [
+            105,
+            431
+          ]
+        },
+        "payment_method": [
+          "credit_card",
+          "insurance_claim",
+          "hsa_fsa",
+          "debit"
+        ],
+        "payment_status": [
+          "success",
+          "failed"
+        ]
       }
     },
     {
       "event": "notification received",
       "weight": 6,
       "properties": {
-        "notification_type": ["appointment_reminder", "appointment_reminder", "lab_ready", "prescription_ready", "message_received", "billing"],
-        "channel": ["push", "push", "email", "sms"],
-        "opened": [true, true, true, false]
+        "notification_type": [
+          "appointment_reminder",
+          "lab_ready",
+          "prescription_ready",
+          "message_received",
+          "billing"
+        ],
+        "channel": [
+          "push",
+          "email",
+          "sms"
+        ],
+        "opened": [
+          true,
+          false
+        ]
       }
     },
     {
       "event": "provider rated",
       "weight": 2,
       "properties": {
-        "rating": {"$range": [1, 5]},
-        "would_recommend": [true, true, true, true, false]
+        "doctor_id": {
+          "$type": "string"
+        },
+        "rating": [
+          4,
+          2
+        ],
+        "would_recommend": [
+          true,
+          false
+        ]
       }
     },
     {
       "event": "support ticket created",
-      "weight": 1,
       "properties": {
-        "category": ["billing", "technical", "scheduling", "prescription", "insurance", "other"],
-        "priority": ["low", "low", "medium", "medium", "high"],
-        "resolution_hours": {"$range": [1, 96]}
+        "category": [
+          "billing",
+          "technical",
+          "scheduling",
+          "prescription",
+          "insurance",
+          "other"
+        ],
+        "priority": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "resolution_hours": {
+          "$range": [
+            20,
+            75
+          ]
+        }
       }
     },
     {
       "event": "profile updated",
       "weight": 2,
       "properties": {
-        "field_updated": ["insurance", "address", "phone", "emergency_contact", "allergies", "medications"]
+        "field_updated": [
+          "insurance",
+          "address",
+          "phone",
+          "emergency_contact",
+          "allergies",
+          "medications"
+        ]
       }
     },
     {
       "event": "app session",
       "weight": 8,
       "properties": {
-        "session_duration_sec": {"$range": [10, 1800]},
-        "pages_viewed": {"$range": [1, 15]}
+        "session_duration_sec": {
+          "$range": [
+            264,
+            1480
+          ]
+        },
+        "pages_viewed": [
+          11,
+          7,
+          9
+        ]
       }
     },
     {
       "event": "account deactivated",
-      "weight": 1,
-      "isChurnEvent": true,
-      "isStrictEvent": true,
       "properties": {
-        "reason": ["switched_provider", "cost", "no_longer_needed", "poor_experience", "insurance_change"]
+        "reason": [
+          "switched_provider",
+          "cost",
+          "no_longer_needed",
+          "poor_experience",
+          "insurance_change"
+        ]
       }
     }
   ],
   "superProps": {
-    "subscription_tier": ["free", "free", "free", "basic", "basic", "premium"],
-    "platform": ["ios", "android", "web"]
+    "subscription_tier": [
+      "free",
+      "basic",
+      "premium"
+    ],
+    "platform": [
+      "ios",
+      "android",
+      "web"
+    ]
   },
   "userProps": {
-    "role": ["patient", "patient", "patient", "patient", "patient", "patient", "patient", "patient", "nurse", "doctor"],
-    "specialty": ["none"],
-    "years_experience": {"$range": [0, 5]},
-    "preferred_language": ["en", "en", "en", "en", "es", "pt", "de", "fr"],
-    "has_chronic_condition": [false, false, false, true],
-    "age_range": ["18-25", "26-35", "26-35", "36-45", "36-45", "46-55", "56-65", "65+"]
+    "role": [
+      "patient",
+      "nurse",
+      "doctor"
+    ],
+    "specialty": [
+      "none"
+    ],
+    "years_experience": {
+      "$range": [
+        0,
+        5
+      ]
+    },
+    "preferred_language": [
+      "en",
+      "es",
+      "pt",
+      "de",
+      "fr"
+    ],
+    "has_chronic_condition": [
+      false,
+      true
+    ],
+    "age_range": [
+      "18-25",
+      "26-35",
+      "36-45",
+      "46-55",
+      "56-65",
+      "65+"
+    ]
   },
   "funnels": [
     {
-      "name": "Onboarding Flow",
-      "sequence": ["account created", "insurance verified", "symptom search", "appointment booked"],
-      "conversionRate": 45,
-      "order": "sequential",
+      "sequence": [
+        "account created",
+        "insurance verified",
+        "symptom search",
+        "appointment booked"
+      ],
       "isFirstFunnel": true,
+      "conversionRate": 45,
       "timeToConvert": 72,
       "weight": 3
     },
     {
-      "name": "Booking to Consultation",
-      "sequence": ["symptom search", "appointment booked", "consultation completed"],
+      "sequence": [
+        "symptom search",
+        "appointment booked",
+        "consultation completed"
+      ],
       "conversionRate": 40,
-      "order": "sequential",
       "timeToConvert": 48,
       "weight": 5
     },
     {
-      "name": "Full Care Journey",
-      "sequence": ["appointment booked", "consultation completed", "prescription issued", "follow up scheduled"],
+      "sequence": [
+        "appointment booked",
+        "consultation completed",
+        "prescription issued",
+        "follow up scheduled"
+      ],
       "conversionRate": 30,
-      "order": "sequential",
       "timeToConvert": 168,
       "weight": 3
     },
     {
-      "name": "Prescription Lifecycle",
-      "sequence": ["prescription issued", "prescription refill", "payment processed"],
+      "sequence": [
+        "prescription issued",
+        "prescription refill",
+        "payment processed"
+      ],
       "conversionRate": 55,
-      "order": "sequential",
       "timeToConvert": 720,
       "weight": 2
     },
     {
-      "name": "Patient Satisfaction",
-      "sequence": ["consultation completed", "provider rated", "follow up scheduled"],
+      "sequence": [
+        "consultation completed",
+        "provider rated",
+        "follow up scheduled"
+      ],
       "conversionRate": 25,
-      "order": "sequential",
       "timeToConvert": 72,
       "weight": 2
     }

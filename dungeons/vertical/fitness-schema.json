@@ -2,216 +2,505 @@
   "events": [
     {
       "event": "account created",
-      "weight": 1,
       "isFirstEvent": true,
       "properties": {
-        "referral_source": ["organic", "friend_invite", "app_store", "social_media", "search"]
+        "referral_source": [
+          "organic",
+          "friend_invite",
+          "app_store",
+          "social_media",
+          "search"
+        ]
       }
     },
     {
       "event": "workout completed",
       "weight": 8,
       "properties": {
-        "duration_minutes": {"$range": [10, 90]},
-        "calories_burned": {"$range": [50, 800]},
-        "heart_rate_avg": {"$range": [80, 185]},
-        "is_morning_workout": [false],
-        "satisfaction_score": {"$range": [1, 5]},
-        "coaching_mode": ["self_guided"],
-        "challenge_mode": ["solo"]
+        "duration_minutes": {
+          "$range": [
+            17,
+            73
+          ]
+        },
+        "calories_burned": {
+          "$range": [
+            143,
+            675
+          ]
+        },
+        "heart_rate_avg": {
+          "$range": [
+            96,
+            179
+          ]
+        },
+        "is_morning_workout": [
+          false
+        ],
+        "satisfaction_score": [
+          2,
+          3
+        ],
+        "coaching_mode": [
+          "self_guided"
+        ],
+        "challenge_mode": [
+          "solo"
+        ]
       }
     },
     {
       "event": "workout planned",
       "weight": 6,
       "properties": {
-        "planned_duration_minutes": {"$range": [15, 90]},
-        "day_of_week": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
-        "coaching_mode": ["self_guided"]
+        "planned_duration_minutes": {
+          "$range": [
+            22,
+            79
+          ]
+        },
+        "day_of_week": [
+          "monday",
+          "tuesday",
+          "wednesday",
+          "thursday",
+          "friday",
+          "saturday",
+          "sunday"
+        ],
+        "coaching_mode": [
+          "self_guided"
+        ]
       }
     },
     {
       "event": "meal logged",
       "weight": 7,
       "properties": {
-        "meal_type": ["breakfast", "lunch", "dinner", "snack"],
-        "calories": {"$range": [50, 1200]},
-        "protein_g": {"$range": [0, 60]},
-        "meal_quality": ["healthy", "healthy", "balanced", "balanced", "indulgent"]
+        "meal_type": [
+          "breakfast",
+          "lunch",
+          "dinner",
+          "snack"
+        ],
+        "calories": {
+          "$range": [
+            99,
+            1068
+          ]
+        },
+        "protein_g": {
+          "$range": [
+            13,
+            47
+          ]
+        },
+        "meal_quality": [
+          "healthy",
+          "balanced",
+          "indulgent"
+        ]
       }
     },
     {
       "event": "challenge joined",
       "weight": 3,
       "properties": {
-        "challenge_type": ["steps", "calories", "streak", "strength", "team_relay"],
-        "duration_days": [7, 14, 21, 30],
-        "participants": {"$range": [2, 50]},
-        "challenge_mode": ["solo"]
+        "challenge_type": [
+          "steps",
+          "calories",
+          "streak",
+          "strength",
+          "team_relay"
+        ],
+        "duration_days": [
+          7,
+          14,
+          21,
+          30
+        ],
+        "participants": [
+          13,
+          34,
+          15,
+          14,
+          20,
+          26
+        ],
+        "challenge_mode": [
+          "solo"
+        ]
       }
     },
     {
       "event": "challenge completed",
       "weight": 2,
       "properties": {
-        "challenge_type": ["steps", "calories", "streak", "strength", "team_relay"],
-        "final_rank": {"$range": [1, 50]},
-        "completion_pct": {"$range": [50, 100]},
-        "challenge_mode": ["solo"]
+        "challenge_type": [
+          "steps",
+          "calories",
+          "streak",
+          "strength",
+          "team_relay"
+        ],
+        "final_rank": [
+          40,
+          15,
+          14,
+          24,
+          19,
+          38,
+          11,
+          34
+        ],
+        "completion_pct": {
+          "$range": [
+            57,
+            92
+          ]
+        },
+        "challenge_mode": [
+          "solo"
+        ]
       }
     },
     {
       "event": "achievement unlocked",
       "weight": 2,
       "properties": {
-        "achievement_type": ["streak_milestone", "weight_goal", "distance_record", "calories_target", "social_champion", "first_workout"],
-        "streak_days_at_unlock": {"$range": [1, 100]}
+        "achievement_type": [
+          "streak_milestone",
+          "weight_goal",
+          "distance_record",
+          "calories_target",
+          "social_champion",
+          "first_workout"
+        ],
+        "streak_days_at_unlock": [
+          25,
+          69,
+          24,
+          29,
+          35,
+          33,
+          26,
+          70,
+          37
+        ]
       }
     },
     {
       "event": "friend added",
       "weight": 2,
       "properties": {
-        "source": ["search", "contacts", "challenge", "suggestion", "qr_code"]
+        "source": [
+          "search",
+          "contacts",
+          "challenge",
+          "suggestion",
+          "qr_code"
+        ]
       }
     },
     {
       "event": "leaderboard viewed",
       "weight": 4,
       "properties": {
-        "leaderboard_type": ["friends", "global", "challenge", "local"],
-        "user_rank": {"$range": [1, 500]}
+        "leaderboard_type": [
+          "friends",
+          "global",
+          "challenge",
+          "local"
+        ],
+        "user_rank": {
+          "$range": [
+            97,
+            379
+          ]
+        }
       }
     },
     {
       "event": "progress checked",
       "weight": 5,
       "properties": {
-        "metric_viewed": ["weight", "body_fat", "steps", "calories_burned", "workout_count", "streaks"],
-        "trend_direction": ["improving", "improving", "stable", "declining"],
-        "time_range": ["week", "month", "3_months", "year"]
+        "metric_viewed": [
+          "weight",
+          "body_fat",
+          "steps",
+          "calories_burned",
+          "workout_count",
+          "streaks"
+        ],
+        "trend_direction": [
+          "improving",
+          "stable",
+          "declining"
+        ],
+        "time_range": [
+          "week",
+          "month",
+          "3_months",
+          "year"
+        ]
       }
     },
     {
       "event": "coach session",
       "weight": 3,
       "properties": {
-        "session_type": ["live_video", "chat", "plan_review", "form_check"],
-        "duration_minutes": {"$range": [10, 60]},
-        "satisfaction_score": {"$range": [1, 5]},
-        "coach_speciality": ["strength", "cardio", "nutrition", "yoga", "general"]
+        "session_type": [
+          "live_video",
+          "chat",
+          "plan_review",
+          "form_check"
+        ],
+        "duration_minutes": {
+          "$range": [
+            19,
+            49
+          ]
+        },
+        "satisfaction_score": [
+          3,
+          2
+        ],
+        "coach_speciality": [
+          "strength",
+          "cardio",
+          "nutrition",
+          "yoga",
+          "general"
+        ]
       }
     },
     {
       "event": "nutrition plan viewed",
       "weight": 4,
       "properties": {
-        "plan_type": ["weight_loss", "muscle_gain", "maintenance", "custom"],
-        "adherence_pct": {"$range": [0, 100]}
+        "plan_type": [
+          "weight_loss",
+          "muscle_gain",
+          "maintenance",
+          "custom"
+        ],
+        "adherence_pct": {
+          "$range": [
+            17,
+            81
+          ]
+        }
       }
     },
     {
       "event": "heart rate recorded",
       "weight": 3,
       "properties": {
-        "bpm": {"$range": [50, 200]},
-        "activity_state": ["resting", "warmup", "active", "peak", "cooldown"],
-        "device": ["watch", "chest_strap", "phone_sensor"]
+        "bpm": {
+          "$range": [
+            74,
+            180
+          ]
+        },
+        "activity_state": [
+          "resting",
+          "warmup",
+          "active",
+          "peak",
+          "cooldown"
+        ],
+        "device": [
+          "watch",
+          "chest_strap",
+          "phone_sensor"
+        ]
       }
     },
     {
       "event": "app session",
       "weight": 8,
       "properties": {
-        "session_duration_sec": {"$range": [10, 1800]},
-        "pages_viewed": {"$range": [1, 15]}
+        "session_duration_sec": {
+          "$range": [
+            262,
+            1415
+          ]
+        },
+        "pages_viewed": [
+          3,
+          9,
+          5
+        ]
       }
     },
     {
       "event": "notification received",
       "weight": 5,
       "properties": {
-        "notification_type": ["workout_reminder", "workout_reminder", "challenge_update", "friend_activity", "streak_warning", "coaching_tip"],
-        "channel": ["push", "push", "email", "sms"],
-        "opened": [true, true, true, false]
+        "notification_type": [
+          "workout_reminder",
+          "challenge_update",
+          "friend_activity",
+          "streak_warning",
+          "coaching_tip"
+        ],
+        "channel": [
+          "push",
+          "email",
+          "sms"
+        ],
+        "opened": [
+          true,
+          false
+        ]
       }
     },
     {
       "event": "subscription managed",
       "weight": 2,
       "properties": {
-        "action": ["viewed_plans", "started_trial", "upgraded", "downgraded", "cancelled", "renewed"],
-        "plan_viewed": ["free", "monthly", "annual", "family"]
+        "action": [
+          "viewed_plans",
+          "started_trial",
+          "upgraded",
+          "downgraded",
+          "cancelled",
+          "renewed"
+        ],
+        "plan_viewed": [
+          "free",
+          "monthly",
+          "annual",
+          "family"
+        ]
       }
     },
     {
       "event": "profile updated",
       "weight": 2,
       "properties": {
-        "field_updated": ["weight", "height", "goal", "avatar", "workout_preferences", "notification_settings"]
+        "field_updated": [
+          "weight",
+          "height",
+          "goal",
+          "avatar",
+          "workout_preferences",
+          "notification_settings"
+        ]
       }
     },
     {
       "event": "account deactivated",
-      "weight": 1,
-      "isChurnEvent": true,
-      "isStrictEvent": true,
       "properties": {
-        "reason": ["lost_motivation", "cost", "switched_app", "injury", "achieved_goal"]
+        "reason": [
+          "lost_motivation",
+          "cost",
+          "switched_app",
+          "injury",
+          "achieved_goal"
+        ]
       }
     }
   ],
   "superProps": {
-    "platform": ["ios", "ios", "android"],
-    "workout_type": ["strength", "cardio", "yoga", "hiit", "running", "cycling"]
+    "platform": [
+      "ios",
+      "android"
+    ],
+    "workout_type": [
+      "strength",
+      "cardio",
+      "yoga",
+      "hiit",
+      "running",
+      "cycling"
+    ]
   },
   "userProps": {
-    "fitness_level": ["beginner"],
-    "segment": ["casual"],
-    "streak_days": [0],
-    "total_workouts": {"$range": [0, 0]},
-    "preferred_workout": ["strength", "cardio", "yoga", "hiit", "running", "cycling"],
-    "goal": ["weight_loss", "muscle_gain", "endurance", "flexibility", "general_health"]
+    "fitness_level": [
+      "beginner"
+    ],
+    "segment": [
+      "casual"
+    ],
+    "streak_days": [
+      0
+    ],
+    "total_workouts": {
+      "$range": [
+        0,
+        0
+      ]
+    },
+    "preferred_workout": [
+      "strength",
+      "cardio",
+      "yoga",
+      "hiit",
+      "running",
+      "cycling"
+    ],
+    "goal": [
+      "weight_loss",
+      "muscle_gain",
+      "endurance",
+      "flexibility",
+      "general_health"
+    ]
   },
   "funnels": [
     {
-      "name": "Onboarding",
-      "sequence": ["account created", "profile updated", "workout planned", "workout completed"],
-      "conversionRate": 45,
-      "order": "sequential",
+      "sequence": [
+        "account created",
+        "profile updated",
+        "workout planned",
+        "workout completed"
+      ],
       "isFirstFunnel": true,
+      "conversionRate": 45,
       "timeToConvert": 72,
       "weight": 3
     },
     {
-      "name": "Workout Loop",
-      "sequence": ["workout planned", "workout completed", "progress checked"],
+      "sequence": [
+        "workout planned",
+        "workout completed",
+        "progress checked"
+      ],
       "conversionRate": 45,
-      "order": "sequential",
       "timeToConvert": 48,
       "weight": 5
     },
     {
-      "name": "Social Engagement",
-      "sequence": ["friend added", "leaderboard viewed", "challenge joined"],
+      "sequence": [
+        "friend added",
+        "leaderboard viewed",
+        "challenge joined"
+      ],
       "conversionRate": 35,
-      "order": "sequential",
       "timeToConvert": 96,
       "weight": 3
     },
     {
-      "name": "Challenge Completion",
-      "sequence": ["challenge joined", "workout completed", "challenge completed", "achievement unlocked"],
+      "sequence": [
+        "challenge joined",
+        "workout completed",
+        "challenge completed",
+        "achievement unlocked"
+      ],
       "conversionRate": 30,
-      "order": "sequential",
       "timeToConvert": 336,
       "weight": 2
     },
     {
-      "name": "Coaching Path",
-      "sequence": ["coach session", "workout planned", "workout completed", "progress checked"],
+      "sequence": [
+        "coach session",
+        "workout planned",
+        "workout completed",
+        "progress checked"
+      ],
       "conversionRate": 50,
-      "order": "sequential",
       "timeToConvert": 72,
       "weight": 2
     }

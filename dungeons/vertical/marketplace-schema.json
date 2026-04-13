@@ -1,41 +1,511 @@
 {
   "events": [
-    {"event": "account created", "weight": 1, "isFirstEvent": true, "properties": {"signup_source": ["organic", "google_shopping", "tiktok", "seller_referral", "email_campaign", "word_of_mouth"]}},
-    {"event": "item searched", "weight": 8, "properties": {"search_query": ["laptop", "vintage jacket", "sneakers", "headphones", "phone case", "gaming console", "watch", "sunglasses", "backpack", "camera"], "results_count": {"$range": [0, 50]}, "sort_by": ["relevance", "relevance", "price_low", "price_high", "newest", "best_selling"]}},
-    {"event": "item viewed", "weight": 7, "properties": {"item_price": {"$range": [5, 500]}, "condition": ["new", "new", "like_new", "good", "fair"], "seller_rating": {"$range": [1, 5]}, "photos_count": {"$range": [1, 10]}}},
-    {"event": "add to cart", "weight": 5, "properties": {"item_price": {"$range": [5, 500]}, "quantity": {"$range": [1, 5]}}},
-    {"event": "purchase completed", "weight": 3, "properties": {"total_amount": {"$range": [10, 500]}, "item_count": {"$range": [1, 5]}, "payment_method": ["credit_card", "credit_card", "paypal", "apple_pay", "debit"], "shipping_method": ["standard", "standard", "express", "pickup"], "is_whale_purchase": [false]}},
-    {"event": "listing created", "weight": 4, "properties": {"asking_price": {"$range": [5, 500]}, "condition": ["new", "new", "like_new", "good", "fair"], "listing_fee": {"$range": [5, 30]}, "fee_change": ["none"]}},
-    {"event": "listing updated", "weight": 3, "properties": {"field_updated": ["price", "price", "description", "photos", "condition", "shipping"], "price_change_pct": {"$range": [-30, 30]}}},
-    {"event": "offer received", "weight": 3, "properties": {"offer_amount": {"$range": [5, 400]}, "offer_pct_of_asking": {"$range": [50, 100]}}},
-    {"event": "offer accepted", "weight": 2, "properties": {"final_price": {"$range": [10, 500]}, "negotiation_rounds": {"$range": [1, 5]}, "response_time_hours": {"$range": [0, 48]}}},
-    {"event": "review submitted", "weight": 2, "properties": {"rating": {"$range": [1, 5]}, "review_length": {"$range": [10, 300]}, "is_verified_purchase": [true, true, true, false]}},
-    {"event": "seller rated", "weight": 2, "properties": {"seller_rating": {"$range": [1, 5]}, "would_buy_again": [true, true, true, true, false]}},
-    {"event": "message sent", "weight": 5, "properties": {"message_type": ["inquiry", "inquiry", "negotiation", "shipping_question", "complaint", "thank_you"], "recipient_type": ["seller", "seller", "buyer", "support"], "response_time_hours": {"$range": [0, 48]}}},
-    {"event": "shipping updated", "weight": 3, "properties": {"status": ["label_created", "in_transit", "in_transit", "out_for_delivery", "delivered", "delivered"], "carrier": ["usps", "ups", "fedex", "dhl"], "tracking_viewed": [true, true, false]}},
-    {"event": "refund requested", "weight": 1, "properties": {"reason": ["not_as_described", "damaged", "wrong_item", "changed_mind", "late_delivery"], "refund_amount": {"$range": [5, 300]}, "resolution_status": ["pending", "approved", "approved", "denied"]}},
-    {"event": "notification received", "weight": 6, "properties": {"notification_type": ["price_drop", "price_drop", "new_offer", "shipping_update", "message_received", "sale_reminder"], "channel": ["push", "push", "email", "sms"], "opened": [true, true, true, false]}},
-    {"event": "profile updated", "weight": 2, "properties": {"field_updated": ["address", "payment_method", "profile_photo", "bio", "phone", "store_description"]}},
-    {"event": "app session", "weight": 8, "properties": {"session_duration_sec": {"$range": [10, 1800]}, "pages_viewed": {"$range": [1, 20]}}},
-    {"event": "account deactivated", "weight": 1, "isChurnEvent": true, "isStrictEvent": true, "properties": {"reason": ["low_sales", "high_fees", "found_alternative", "bad_experience", "no_longer_needed"]}}
+    {
+      "event": "account created",
+      "isFirstEvent": true,
+      "properties": {
+        "signup_source": [
+          "organic",
+          "google_shopping",
+          "tiktok",
+          "seller_referral",
+          "email_campaign",
+          "word_of_mouth"
+        ]
+      }
+    },
+    {
+      "event": "item searched",
+      "weight": 8,
+      "properties": {
+        "search_query": [
+          "laptop",
+          "vintage jacket",
+          "sneakers",
+          "headphones",
+          "phone case",
+          "gaming console",
+          "watch",
+          "sunglasses",
+          "backpack",
+          "camera"
+        ],
+        "results_count": {
+          "$range": [
+            7,
+            41
+          ]
+        },
+        "sort_by": [
+          "relevance",
+          "price_low",
+          "price_high",
+          "newest",
+          "best_selling"
+        ]
+      }
+    },
+    {
+      "event": "item viewed",
+      "weight": 7,
+      "properties": {
+        "listing_id": {
+          "$type": "string"
+        },
+        "item_price": {
+          "$range": [
+            98,
+            393
+          ]
+        },
+        "condition": [
+          "new",
+          "like_new",
+          "good",
+          "fair"
+        ],
+        "seller_rating": [
+          2
+        ],
+        "photos_count": [
+          7,
+          6,
+          3
+        ]
+      }
+    },
+    {
+      "event": "add to cart",
+      "weight": 5,
+      "properties": {
+        "listing_id": {
+          "$type": "string"
+        },
+        "item_price": {
+          "$range": [
+            102,
+            399
+          ]
+        },
+        "quantity": {
+          "$range": [
+            2,
+            4
+          ]
+        }
+      }
+    },
+    {
+      "event": "purchase completed",
+      "weight": 3,
+      "properties": {
+        "listing_id": {
+          "$type": "string"
+        },
+        "total_amount": {
+          "$range": [
+            102,
+            406
+          ]
+        },
+        "item_count": {
+          "$range": [
+            2,
+            4
+          ]
+        },
+        "payment_method": [
+          "credit_card",
+          "paypal",
+          "apple_pay",
+          "debit"
+        ],
+        "shipping_method": [
+          "standard",
+          "express",
+          "pickup"
+        ],
+        "is_whale_purchase": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "listing created",
+      "weight": 4,
+      "properties": {
+        "listing_id": {
+          "$type": "string"
+        },
+        "store_id": {
+          "$type": "string"
+        },
+        "asking_price": {
+          "$range": [
+            104,
+            394
+          ]
+        },
+        "condition": [
+          "new",
+          "like_new",
+          "good",
+          "fair"
+        ],
+        "listing_fee": {
+          "$range": [
+            10,
+            23
+          ]
+        },
+        "fee_change": [
+          "none"
+        ]
+      }
+    },
+    {
+      "event": "listing updated",
+      "weight": 3,
+      "properties": {
+        "listing_id": {
+          "$type": "string"
+        },
+        "field_updated": [
+          "price",
+          "description",
+          "photos",
+          "condition",
+          "shipping"
+        ],
+        "price_change_pct": {
+          "$range": [
+            -20,
+            24
+          ]
+        }
+      }
+    },
+    {
+      "event": "offer received",
+      "weight": 3,
+      "properties": {
+        "listing_id": {
+          "$type": "string"
+        },
+        "offer_amount": {
+          "$range": [
+            81,
+            325
+          ]
+        },
+        "offer_pct_of_asking": {
+          "$range": [
+            59,
+            92
+          ]
+        }
+      }
+    },
+    {
+      "event": "offer accepted",
+      "weight": 2,
+      "properties": {
+        "listing_id": {
+          "$type": "string"
+        },
+        "final_price": {
+          "$range": [
+            100,
+            395
+          ]
+        },
+        "negotiation_rounds": {
+          "$range": [
+            2,
+            4
+          ]
+        },
+        "response_time_hours": [
+          35,
+          13,
+          10,
+          36
+        ]
+      }
+    },
+    {
+      "event": "review submitted",
+      "weight": 2,
+      "properties": {
+        "listing_id": {
+          "$type": "string"
+        },
+        "rating": [
+          4,
+          3,
+          2
+        ],
+        "review_length": {
+          "$range": [
+            55,
+            246
+          ]
+        },
+        "is_verified_purchase": [
+          true,
+          false
+        ]
+      }
+    },
+    {
+      "event": "seller rated",
+      "weight": 2,
+      "properties": {
+        "store_id": {
+          "$type": "string"
+        },
+        "seller_rating": [
+          2,
+          4
+        ],
+        "would_buy_again": [
+          true,
+          false
+        ]
+      }
+    },
+    {
+      "event": "message sent",
+      "weight": 5,
+      "properties": {
+        "message_type": [
+          "inquiry",
+          "negotiation",
+          "shipping_question",
+          "complaint",
+          "thank_you"
+        ],
+        "recipient_type": [
+          "seller",
+          "buyer",
+          "support"
+        ],
+        "response_time_hours": [
+          12,
+          11,
+          10,
+          34,
+          35
+        ]
+      }
+    },
+    {
+      "event": "shipping updated",
+      "weight": 3,
+      "properties": {
+        "status": [
+          "label_created",
+          "in_transit",
+          "out_for_delivery",
+          "delivered"
+        ],
+        "carrier": [
+          "usps",
+          "ups",
+          "fedex",
+          "dhl"
+        ],
+        "tracking_viewed": [
+          true,
+          false
+        ]
+      }
+    },
+    {
+      "event": "refund requested",
+      "properties": {
+        "reason": [
+          "not_as_described",
+          "damaged",
+          "wrong_item",
+          "changed_mind",
+          "late_delivery"
+        ],
+        "refund_amount": {
+          "$range": [
+            61,
+            242
+          ]
+        },
+        "resolution_status": [
+          "pending",
+          "approved",
+          "denied"
+        ]
+      }
+    },
+    {
+      "event": "notification received",
+      "weight": 6,
+      "properties": {
+        "notification_type": [
+          "price_drop",
+          "new_offer",
+          "shipping_update",
+          "message_received",
+          "sale_reminder"
+        ],
+        "channel": [
+          "push",
+          "email",
+          "sms"
+        ],
+        "opened": [
+          true,
+          false
+        ]
+      }
+    },
+    {
+      "event": "profile updated",
+      "weight": 2,
+      "properties": {
+        "field_updated": [
+          "address",
+          "payment_method",
+          "profile_photo",
+          "bio",
+          "phone",
+          "store_description"
+        ]
+      }
+    },
+    {
+      "event": "app session",
+      "weight": 8,
+      "properties": {
+        "session_duration_sec": {
+          "$range": [
+            310,
+            1498
+          ]
+        },
+        "pages_viewed": [
+          4,
+          13,
+          5
+        ]
+      }
+    },
+    {
+      "event": "account deactivated",
+      "properties": {
+        "reason": [
+          "low_sales",
+          "high_fees",
+          "found_alternative",
+          "bad_experience",
+          "no_longer_needed"
+        ]
+      }
+    }
   ],
   "superProps": {
-    "platform": ["ios", "android", "web"],
-    "category": ["electronics", "clothing", "home_garden", "collectibles", "sports", "toys", "automotive"]
+    "platform": [
+      "ios",
+      "android",
+      "web"
+    ],
+    "category": [
+      "electronics",
+      "clothing",
+      "home_garden",
+      "collectibles",
+      "sports",
+      "toys",
+      "automotive"
+    ]
   },
   "userProps": {
-    "user_type": ["buyer"],
-    "segment": ["window_shopper"],
-    "seller_rating": {"$range": [0, 5]},
-    "total_transactions": [0],
-    "response_time_hours": {"$range": [0, 48]},
-    "store_name": ["none"]
+    "user_type": [
+      "buyer"
+    ],
+    "segment": [
+      "window_shopper"
+    ],
+    "seller_rating": {
+      "$range": [
+        1,
+        4
+      ]
+    },
+    "total_transactions": [
+      0
+    ],
+    "response_time_hours": {
+      "$range": [
+        7,
+        38
+      ]
+    },
+    "store_name": [
+      "none"
+    ]
   },
   "funnels": [
-    {"name": "Buyer Onboarding", "sequence": ["account created", "item searched", "item viewed", "add to cart"], "conversionRate": 40, "order": "sequential", "isFirstFunnel": true, "timeToConvert": 72, "weight": 3},
-    {"name": "Browse to Purchase", "sequence": ["item searched", "item viewed", "add to cart", "purchase completed"], "conversionRate": 30, "order": "sequential", "timeToConvert": 48, "weight": 5},
-    {"name": "Seller Listing Flow", "sequence": ["listing created", "listing updated", "offer received", "offer accepted"], "conversionRate": 25, "order": "sequential", "timeToConvert": 168, "weight": 3},
-    {"name": "Offer Negotiation", "sequence": ["offer received", "message sent", "offer accepted"], "conversionRate": 35, "order": "sequential", "timeToConvert": 72, "weight": 2},
-    {"name": "Review After Purchase", "sequence": ["purchase completed", "shipping updated", "review submitted"], "conversionRate": 20, "order": "sequential", "timeToConvert": 336, "weight": 2}
+    {
+      "sequence": [
+        "account created",
+        "item searched",
+        "item viewed",
+        "add to cart"
+      ],
+      "isFirstFunnel": true,
+      "conversionRate": 40,
+      "timeToConvert": 72,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "item searched",
+        "item viewed",
+        "add to cart",
+        "purchase completed"
+      ],
+      "conversionRate": 30,
+      "timeToConvert": 48,
+      "weight": 5
+    },
+    {
+      "sequence": [
+        "listing created",
+        "listing updated",
+        "offer received",
+        "offer accepted"
+      ],
+      "conversionRate": 25,
+      "timeToConvert": 168,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "offer received",
+        "message sent",
+        "offer accepted"
+      ],
+      "conversionRate": 35,
+      "timeToConvert": 72,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "purchase completed",
+        "shipping updated",
+        "review submitted"
+      ],
+      "conversionRate": 20,
+      "timeToConvert": 336,
+      "weight": 2
+    }
   ]
 }

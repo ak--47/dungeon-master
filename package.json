@@ -35,7 +35,8 @@
 		"deps": "./scripts/update-deps.sh",
 		"dungeon:run": "node ./scripts/run-dungeon.mjs",
 		"dungeon:to-json": "node ./scripts/dungeon-to-json.mjs",
-		"dungeon:from-json": "node ./scripts/json-to-dungeon.mjs"
+		"dungeon:from-json": "node ./scripts/json-to-dungeon.mjs",
+		"dungeon:schema": "node ./scripts/extract-dungeon-schema.mjs"
 	},
 	"repository": {
 		"type": "git",

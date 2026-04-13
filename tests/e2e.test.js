@@ -582,8 +582,8 @@ describe.sequential('options + tweaks', () => {
 			seed: 'validation-success-test'
 		});
 
-		expect(results.eventData.length).toBeGreaterThan(0);
-		expect(results.userProfilesData.length).toBe(10);
+		expect(results.eventCount).toBeGreaterThan(0);
+		expect(results.userCount).toBe(10);
 
 	}, timeout);
 

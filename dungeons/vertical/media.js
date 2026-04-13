@@ -572,7 +572,8 @@ const config = {
 		const DATASET_START = NOW.subtract(days, 'days');
 		// FIXED_START is the pre-shift time range start; needed because
 		// meta.firstEventTime in funnel-pre is in the FIXED (pre-shift) timeframe
-		const FIXED_START = dayjs.unix(global.FIXED_NOW).subtract(days, 'days');
+		const FIXED_NOW_UNIX = dayjs('2024-02-02').unix();
+		const FIXED_START = dayjs.unix(FIXED_NOW_UNIX).subtract(days, 'days');
 
 		// ─────────────────────────────────────────────────────────────
 		// Hook #1: GENRE FUNNEL CONVERSION (funnel-pre)
