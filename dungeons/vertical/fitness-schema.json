@@ -392,6 +392,9 @@
     },
     {
       "event": "account deactivated",
+      "isChurnEvent": true,
+      "returnLikelihood": 0.15,
+      "isStrictEvent": true,
       "properties": {
         "reason": [
           "lost_motivation",
@@ -401,6 +404,67 @@
           "achieved_goal"
         ]
       }
+    }
+  ],
+  "funnels": [
+    {
+      "sequence": [
+        "account created",
+        "profile updated",
+        "workout planned",
+        "workout completed"
+      ],
+      "name": "Onboarding",
+      "isFirstFunnel": true,
+      "conversionRate": 45,
+      "timeToConvert": 72,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "workout planned",
+        "workout completed",
+        "progress checked"
+      ],
+      "name": "Workout Loop",
+      "conversionRate": 45,
+      "timeToConvert": 48,
+      "weight": 5
+    },
+    {
+      "sequence": [
+        "friend added",
+        "leaderboard viewed",
+        "challenge joined"
+      ],
+      "name": "Social Engagement",
+      "conversionRate": 35,
+      "timeToConvert": 96,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "challenge joined",
+        "workout completed",
+        "challenge completed",
+        "achievement unlocked"
+      ],
+      "name": "Challenge Completion",
+      "conversionRate": 30,
+      "timeToConvert": 336,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "coach session",
+        "workout planned",
+        "workout completed",
+        "progress checked"
+      ],
+      "name": "Coaching Path",
+      "conversionRate": 50,
+      "timeToConvert": 72,
+      "weight": 2
     }
   ],
   "superProps": {
@@ -449,60 +513,18 @@
       "general_health"
     ]
   },
-  "funnels": [
-    {
-      "sequence": [
-        "account created",
-        "profile updated",
-        "workout planned",
-        "workout completed"
-      ],
-      "isFirstFunnel": true,
-      "conversionRate": 45,
-      "timeToConvert": 72,
-      "weight": 3
-    },
-    {
-      "sequence": [
-        "workout planned",
-        "workout completed",
-        "progress checked"
-      ],
-      "conversionRate": 45,
-      "timeToConvert": 48,
-      "weight": 5
-    },
-    {
-      "sequence": [
-        "friend added",
-        "leaderboard viewed",
-        "challenge joined"
-      ],
-      "conversionRate": 35,
-      "timeToConvert": 96,
-      "weight": 3
-    },
-    {
-      "sequence": [
-        "challenge joined",
-        "workout completed",
-        "challenge completed",
-        "achievement unlocked"
-      ],
-      "conversionRate": 30,
-      "timeToConvert": 336,
-      "weight": 2
-    },
-    {
-      "sequence": [
-        "coach session",
-        "workout planned",
-        "workout completed",
-        "progress checked"
-      ],
-      "conversionRate": 50,
-      "timeToConvert": 72,
-      "weight": 2
+  "scdProps": {
+    "fitness_level": {
+      "type": "user",
+      "frequency": "month",
+      "timing": "fuzzy",
+      "max": 8,
+      "values": [
+        "beginner",
+        "intermediate",
+        "advanced",
+        "elite"
+      ]
     }
-  ]
+  }
 }

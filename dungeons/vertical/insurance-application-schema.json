@@ -364,6 +364,64 @@
       }
     }
   ],
+  "funnels": [
+    {
+      "sequence": [
+        "account created",
+        "page viewed",
+        "quote requested"
+      ],
+      "name": "Onboarding",
+      "isFirstFunnel": true,
+      "conversionRate": 85,
+      "timeToConvert": 0.5
+    },
+    {
+      "sequence": [
+        "application started",
+        "application step completed",
+        "document uploaded",
+        "application submitted"
+      ],
+      "name": "Application Completion",
+      "conversionRate": 60,
+      "timeToConvert": 48,
+      "weight": 4
+    },
+    {
+      "sequence": [
+        "application submitted",
+        "application approved",
+        "policy activated"
+      ],
+      "name": "Application Approval",
+      "conversionRate": 70,
+      "timeToConvert": 72,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "claim filed",
+        "claim status checked",
+        "support ticket created"
+      ],
+      "name": "Claims Process",
+      "conversionRate": 50,
+      "timeToConvert": 24,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "coverage reviewed",
+        "payment made",
+        "renewal completed"
+      ],
+      "name": "Policy Renewal",
+      "conversionRate": 65,
+      "timeToConvert": 72,
+      "weight": 3
+    }
+  ],
   "superProps": {
     "platform": [
       "web",
@@ -410,57 +468,18 @@
       "app_notification"
     ]
   },
-  "funnels": [
-    {
-      "sequence": [
-        "account created",
-        "page viewed",
-        "quote requested"
-      ],
-      "isFirstFunnel": true,
-      "conversionRate": 85,
-      "timeToConvert": 0.5
-    },
-    {
-      "sequence": [
-        "application started",
-        "application step completed",
-        "document uploaded",
-        "application submitted"
-      ],
-      "conversionRate": 60,
-      "timeToConvert": 48,
-      "weight": 4
-    },
-    {
-      "sequence": [
-        "application submitted",
-        "application approved",
-        "policy activated"
-      ],
-      "conversionRate": 70,
-      "timeToConvert": 72,
-      "weight": 3
-    },
-    {
-      "sequence": [
-        "claim filed",
-        "claim status checked",
-        "support ticket created"
-      ],
-      "conversionRate": 50,
-      "timeToConvert": 24,
-      "weight": 2
-    },
-    {
-      "sequence": [
-        "coverage reviewed",
-        "payment made",
-        "renewal completed"
-      ],
-      "conversionRate": 65,
-      "timeToConvert": 72,
-      "weight": 3
+  "scdProps": {
+    "policy_status": {
+      "type": "user",
+      "frequency": "month",
+      "timing": "fuzzy",
+      "max": 8,
+      "values": [
+        "pending",
+        "active",
+        "lapsed",
+        "renewed"
+      ]
     }
-  ]
+  }
 }

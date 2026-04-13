@@ -365,6 +365,121 @@
       }
     }
   ],
+  "funnels": [
+    {
+      "sequence": [
+        "page view",
+        "view item",
+        "save item",
+        "page view",
+        "sign up"
+      ],
+      "name": "Signup Flow",
+      "isFirstFunnel": true,
+      "conversionRate": 50,
+      "timeToConvert": 2,
+      "order": "first-and-last-fixed"
+    },
+    {
+      "sequence": [
+        "watch video",
+        "like video",
+        "watch video",
+        "like video"
+      ],
+      "name": "Video Likes",
+      "conversionRate": 60,
+      "props": {
+        "videoCategory": [
+          "funny",
+          "educational",
+          "inspirational",
+          "music",
+          "news",
+          "sports",
+          "cooking",
+          "DIY",
+          "travel",
+          "gaming"
+        ],
+        "quality": [
+          "2160p",
+          "1440p",
+          "1080p",
+          "720p",
+          "480p",
+          "360p",
+          "240p"
+        ],
+        "format": [
+          "mp4",
+          "avi",
+          "mov",
+          "mpg"
+        ],
+        "uploader_id": {
+          "$type": "string"
+        }
+      }
+    },
+    {
+      "sequence": [
+        "watch video",
+        "dislike video",
+        "watch video",
+        "dislike video"
+      ],
+      "name": "Video Dislikes",
+      "conversionRate": 20,
+      "props": {
+        "videoCategory": [
+          "funny",
+          "educational",
+          "inspirational",
+          "music",
+          "news",
+          "sports",
+          "cooking",
+          "DIY",
+          "travel",
+          "gaming"
+        ],
+        "quality": [
+          "2160p",
+          "1440p",
+          "1080p",
+          "720p",
+          "480p",
+          "360p",
+          "240p"
+        ],
+        "format": [
+          "mp4",
+          "avi",
+          "mov",
+          "mpg"
+        ],
+        "uploader_id": {
+          "$type": "string"
+        }
+      }
+    },
+    {
+      "sequence": [
+        "view item",
+        "view item",
+        "add to cart",
+        "view item",
+        "add to cart",
+        "checkout"
+      ],
+      "name": "eCommerce Purchase",
+      "conversionRate": 15,
+      "order": "last-fixed",
+      "weight": 10,
+      "requireRepeats": true
+    }
+  ],
   "superProps": {
     "theme": [
       "light",
@@ -472,115 +587,18 @@
       "tortoise beetle"
     ]
   },
-  "funnels": [
-    {
-      "sequence": [
-        "page view",
-        "view item",
-        "save item",
-        "page view",
-        "sign up"
-      ],
-      "isFirstFunnel": true,
-      "conversionRate": 50,
-      "timeToConvert": 2,
-      "order": "first-and-last-fixed"
-    },
-    {
-      "sequence": [
-        "watch video",
-        "like video",
-        "watch video",
-        "like video"
-      ],
-      "conversionRate": 60,
-      "props": {
-        "videoCategory": [
-          "funny",
-          "educational",
-          "inspirational",
-          "music",
-          "news",
-          "sports",
-          "cooking",
-          "DIY",
-          "travel",
-          "gaming"
-        ],
-        "quality": [
-          "2160p",
-          "1440p",
-          "1080p",
-          "720p",
-          "480p",
-          "360p",
-          "240p"
-        ],
-        "format": [
-          "mp4",
-          "avi",
-          "mov",
-          "mpg"
-        ],
-        "uploader_id": {
-          "$type": "string"
-        }
-      }
-    },
-    {
-      "sequence": [
-        "watch video",
-        "dislike video",
-        "watch video",
-        "dislike video"
-      ],
-      "conversionRate": 20,
-      "props": {
-        "videoCategory": [
-          "funny",
-          "educational",
-          "inspirational",
-          "music",
-          "news",
-          "sports",
-          "cooking",
-          "DIY",
-          "travel",
-          "gaming"
-        ],
-        "quality": [
-          "2160p",
-          "1440p",
-          "1080p",
-          "720p",
-          "480p",
-          "360p",
-          "240p"
-        ],
-        "format": [
-          "mp4",
-          "avi",
-          "mov",
-          "mpg"
-        ],
-        "uploader_id": {
-          "$type": "string"
-        }
-      }
-    },
-    {
-      "sequence": [
-        "view item",
-        "view item",
-        "add to cart",
-        "view item",
-        "add to cart",
-        "checkout"
-      ],
-      "conversionRate": 15,
-      "order": "last-fixed",
-      "weight": 10,
-      "requireRepeats": true
+  "scdProps": {
+    "loyalty_tier": {
+      "type": "user",
+      "frequency": "month",
+      "timing": "fuzzy",
+      "max": 8,
+      "values": [
+        "bronze",
+        "silver",
+        "gold",
+        "platinum"
+      ]
     }
-  ]
+  }
 }

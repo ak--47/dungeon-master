@@ -5,15 +5,18 @@
       "weight": 10,
       "properties": {
         "page": [
-          "/blog",
           "/",
+          "/help",
+          "/account",
+          "/pricing",
+          "/product",
           "/about",
-          "/help"
+          "/blog"
         ],
         "utm_source": [
-          "facebook",
-          "google",
           "$organic",
+          "google",
+          "facebook",
           "twitter",
           "linkedin"
         ]
@@ -54,8 +57,8 @@
       "properties": {
         "query_length": {
           "$range": [
-            8,
-            41
+            7,
+            45
           ]
         },
         "resultsReturned": {
@@ -65,14 +68,13 @@
           ]
         },
         "category": [
-          "Garden",
-          "Automotive",
-          "Home",
-          "Outdoors",
-          "Pet",
-          "Books",
           "Handmade",
-          "Toys"
+          "Sports",
+          "Garden",
+          "Baby",
+          "Pet",
+          "Music",
+          "Beauty"
         ]
       }
     },
@@ -85,14 +87,15 @@
           false
         ],
         "itemCategory": [
-          "Toys",
-          "Electronics",
-          "Computers",
-          "Beauty",
-          "Outdoors",
-          "Appliances",
           "Music",
-          "Garden"
+          "Kids",
+          "Beauty",
+          "Home",
+          "Appliances",
+          "Games",
+          "Office",
+          "Books",
+          "Entertainment"
         ],
         "price": {
           "$range": [
@@ -119,11 +122,11 @@
           ]
         },
         "itemCategory": [
-          "Baby",
           "Wedding",
-          "Outdoors",
           "Software",
-          "Books"
+          "Home",
+          "Outdoors",
+          "Handmade"
         ],
         "numItems": {
           "$range": [
@@ -168,12 +171,12 @@
       "weight": 6,
       "properties": {
         "videoCategory": [
-          "music",
           "news",
-          "funny",
-          "travel",
+          "educational",
           "inspirational",
-          "educational"
+          "cooking",
+          "travel",
+          "music"
         ],
         "watchTimeSec": {
           "$range": [
@@ -218,15 +221,12 @@
           ]
         },
         "itemCategory": [
-          "Food",
-          "Wedding",
-          "Office",
-          "Outdoors",
-          "Home",
+          "Baby",
           "Appliances",
-          "Entertainment",
-          "Health",
-          "Software"
+          "Outdoors",
+          "Office",
+          "Software",
+          "Books"
         ],
         "hasReviewText": [
           true,
@@ -258,12 +258,12 @@
       "properties": {
         "itemCategory": [
           "Books",
-          "Games",
-          "Beauty",
           "Toys",
+          "Entertainment",
+          "Appliances",
+          "Food",
           "Software",
-          "Movies",
-          "Office"
+          "Computers"
         ],
         "price": {
           "$range": [
@@ -381,14 +381,15 @@
       "weight": 8,
       "properties": {
         "category": [
+          "Games",
           "Smart Home",
-          "Electronics",
-          "Pet",
-          "Software",
-          "Books",
-          "Movies",
           "Computers",
-          "Music"
+          "Outdoors",
+          "Home",
+          "Electronics",
+          "Entertainment",
+          "Health",
+          "Baby"
         ],
         "sortBy": [
           "popular",
@@ -420,14 +421,13 @@
           ]
         },
         "itemCategory": [
-          "Wedding",
-          "Art",
+          "Books",
+          "Games",
+          "Beauty",
+          "Toys",
           "Software",
           "Movies",
-          "Electronics",
-          "Toys",
-          "Baby",
-          "Appliances"
+          "Office"
         ]
       }
     },
@@ -486,6 +486,134 @@
       }
     }
   ],
+  "funnels": [
+    {
+      "sequence": [
+        "page view",
+        "sign up"
+      ],
+      "name": "Signup Funnel",
+      "isFirstFunnel": true,
+      "conversionRate": 55,
+      "timeToConvert": 1,
+      "weight": 5
+    },
+    {
+      "sequence": [
+        "search",
+        "view item",
+        "add to cart",
+        "checkout"
+      ],
+      "name": "Purchase Funnel",
+      "conversionRate": 35,
+      "timeToConvert": 3,
+      "weight": 8
+    },
+    {
+      "sequence": [
+        "page view",
+        "watch video",
+        "share content"
+      ],
+      "name": "Content Engagement",
+      "conversionRate": 40,
+      "timeToConvert": 2,
+      "weight": 6
+    },
+    {
+      "sequence": [
+        "view item",
+        "rate item"
+      ],
+      "name": "Review Funnel",
+      "conversionRate": 25,
+      "timeToConvert": 5,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "view category",
+        "view item",
+        "compare items",
+        "add to cart"
+      ],
+      "name": "Browse to Cart",
+      "conversionRate": 30,
+      "timeToConvert": 3,
+      "weight": 7
+    },
+    {
+      "sequence": [
+        "notification received",
+        "notification clicked",
+        "view item"
+      ],
+      "name": "Notification Engagement",
+      "conversionRate": 45,
+      "timeToConvert": 1,
+      "weight": 4
+    },
+    {
+      "sequence": [
+        "view item",
+        "add to wishlist",
+        "apply coupon",
+        "add to cart",
+        "checkout"
+      ],
+      "name": "Wishlist to Purchase",
+      "conversionRate": 20,
+      "timeToConvert": 7,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "checkout",
+        "leave review",
+        "invite friend"
+      ],
+      "name": "Post-Purchase Advocacy",
+      "conversionRate": 15,
+      "timeToConvert": 14
+    },
+    {
+      "sequence": [
+        "login",
+        "view item",
+        "add to cart",
+        "apply coupon",
+        "checkout"
+      ],
+      "name": "Coupon Purchase Flow",
+      "conversionRate": 30,
+      "timeToConvert": 2,
+      "weight": 9
+    },
+    {
+      "sequence": [
+        "subscribe newsletter",
+        "notification received",
+        "notification clicked",
+        "checkout"
+      ],
+      "name": "Newsletter to Purchase",
+      "conversionRate": 10,
+      "timeToConvert": 14,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "support ticket",
+        "update profile",
+        "checkout"
+      ],
+      "name": "Support Recovery",
+      "conversionRate": 20,
+      "timeToConvert": 7,
+      "weight": 10
+    }
+  ],
   "superProps": {
     "theme": [
       "light",
@@ -499,137 +627,98 @@
     },
     "luckyNumber": {
       "$range": [
-        123,
+        117,
         346
       ]
     },
     "spiritAnimal": [
-      "penguin",
+      "duck",
+      "dog",
       "otter",
+      "penguin",
+      "cat",
       "elephant",
-      "mite",
+      "lion",
+      "cheetah",
+      "giraffe",
+      "zebra",
+      "rhino",
+      "hippo",
+      "whale",
+      "dolphin",
+      "shark",
+      "octopus",
+      "squid",
+      "jellyfish",
+      "starfish",
+      "seahorse",
+      "crab",
+      "lobster",
+      "shrimp",
+      "clam",
+      "snail",
+      "slug",
+      "butterfly",
+      "moth",
+      "bee",
+      "wasp",
+      "ant",
+      "beetle",
+      "ladybug",
+      "caterpillar",
+      "centipede",
+      "millipede",
+      "scorpion",
+      "spider",
+      "tarantula",
       "tick",
-      "goliath beetle",
+      "mite",
       "mosquito",
+      "fly",
+      "dragonfly",
       "damselfly",
-      "hercules beetle"
+      "grasshopper",
+      "cricket",
+      "locust",
+      "mantis",
+      "cockroach",
+      "termite",
+      "praying mantis",
+      "walking stick",
+      "stick bug",
+      "leaf insect",
+      "lacewing",
+      "aphid",
+      "cicada",
+      "thrips",
+      "psyllid",
+      "scale insect",
+      "whitefly",
+      "mealybug",
+      "planthopper",
+      "leafhopper",
+      "treehopper",
+      "flea",
+      "louse",
+      "bedbug",
+      "flea beetle",
+      "weevil",
+      "longhorn beetle",
+      "leaf beetle",
+      "tiger beetle",
+      "ground beetle",
+      "lady beetle",
+      "firefly",
+      "click beetle",
+      "rove beetle",
+      "scarab beetle",
+      "dung beetle",
+      "stag beetle",
+      "rhinoceros beetle",
+      "hercules beetle",
+      "goliath beetle",
+      "jewel beetle",
+      "tortoise beetle"
     ]
-  },
-  "funnels": [
-    {
-      "sequence": [
-        "page view",
-        "sign up"
-      ],
-      "isFirstFunnel": true,
-      "conversionRate": 55,
-      "timeToConvert": 1,
-      "weight": 5
-    },
-    {
-      "sequence": [
-        "search",
-        "view item",
-        "add to cart",
-        "checkout"
-      ],
-      "conversionRate": 35,
-      "timeToConvert": 3,
-      "weight": 8
-    },
-    {
-      "sequence": [
-        "page view",
-        "watch video",
-        "share content"
-      ],
-      "conversionRate": 40,
-      "timeToConvert": 2,
-      "weight": 6
-    },
-    {
-      "sequence": [
-        "view item",
-        "rate item"
-      ],
-      "conversionRate": 25,
-      "timeToConvert": 5,
-      "weight": 3
-    },
-    {
-      "sequence": [
-        "view category",
-        "view item",
-        "compare items",
-        "add to cart"
-      ],
-      "conversionRate": 30,
-      "timeToConvert": 3,
-      "weight": 7
-    },
-    {
-      "sequence": [
-        "notification received",
-        "notification clicked",
-        "view item"
-      ],
-      "conversionRate": 45,
-      "timeToConvert": 1,
-      "weight": 4
-    },
-    {
-      "sequence": [
-        "view item",
-        "add to wishlist",
-        "apply coupon",
-        "add to cart",
-        "checkout"
-      ],
-      "conversionRate": 20,
-      "timeToConvert": 7,
-      "weight": 2
-    },
-    {
-      "sequence": [
-        "checkout",
-        "leave review",
-        "invite friend"
-      ],
-      "conversionRate": 15,
-      "timeToConvert": 14
-    },
-    {
-      "sequence": [
-        "login",
-        "view item",
-        "add to cart",
-        "apply coupon",
-        "checkout"
-      ],
-      "conversionRate": 30,
-      "timeToConvert": 2,
-      "weight": 9
-    },
-    {
-      "sequence": [
-        "subscribe newsletter",
-        "notification received",
-        "notification clicked",
-        "checkout"
-      ],
-      "conversionRate": 10,
-      "timeToConvert": 14,
-      "weight": 3
-    },
-    {
-      "sequence": [
-        "support ticket",
-        "update profile",
-        "checkout"
-      ],
-      "conversionRate": 20,
-      "timeToConvert": 7,
-      "weight": 10
-    }
-  ]
+  }
 }

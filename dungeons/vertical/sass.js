@@ -10,7 +10,7 @@ const chance = u.initChance(SEED);
 const num_users = 5_000;
 const days = 100;
 
-/** @typedef  {import("../types.js").Dungeon} Config */
+/** @typedef  {import("../../types").Dungeon} Config */
 
 /*
  * ═══════════════════════════════════════════════════════════════════════════════
@@ -268,10 +268,23 @@ const config = {
 	hasAdSpend: false,
 	percentUsersBornInDataset: 50,
 	hasAvatar: true,
-	batchSize: 2_500_000,
 	concurrency: 1,
 	writeToDisk: false,
-	scdProps: {},
+	scdProps: {
+		primary_role: {
+			values: ["viewer", "editor", "admin", "owner"],
+			frequency: "month",
+			timing: "fuzzy",
+			max: 6
+		},
+		plan_tier: {
+			values: ["starter", "growth", "enterprise", "scale"],
+			frequency: "month",
+			timing: "fixed",
+			max: 6,
+			type: "company_id"
+		}
+	},
 
 	funnels: [
 		{

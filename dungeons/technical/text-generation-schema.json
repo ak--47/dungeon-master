@@ -915,10 +915,12 @@
       "event": "api_discussion_thread",
       "properties": {
         "thread_messages": [
-          "Re: API integration issues - so like Login problems actually trial period dashboard won't load",
-          "Re: API integration issues - using the suite for work stuff. like response time does what it says i guess - actually forget what i said. caching layers does what it says i guess.",
-          "System specs: Chrome 92, macOS Monterey Issue: Dashboard shows blank page Steps to reproduce: 1. Access mobile app 2. Attempt sync 3. Wait for completion 4. Sync fails Anyone else experiencing this?. (regarding the API integration issues)",
-          "Billing questions speaking of which enterprise setup permissions are wrong. This is about the API integration issues."
+          "About the API integration issues: using the library for work stuff. Now, carousels does what it says i guess, it's a the infrastructure. timeout - like the integration exists",
+          "Re: API integration issues - Issue: Dashboard shows blank page Steps to reproduce: 1. Access mobile app 2. Attempt sync 3. Wait for completion 4. Sync fails Anyone else experiencing this?",
+          "basically Interface questions beta testing reports are empty also Is there an alternative? (regarding the API integration issues)",
+          "it's a the ML model. Well, wait actually. Now, using the software for work stuff. Still, actually forget what i said. Now, it's a the console. Now, the search is there. This is about the API integration issues.",
+          "Re: API integration issues - System specs: Chrome 92, macOS Monterey Issue: Sync fails with error 500 Steps to reproduce: 1. authentication - Access mobile app 2. Attempt sync 3. Wait for completion 4.",
+          "About the API integration issues: the deduplication is there, using the marketplace (I checked)  for work stuff. That said, lots of issues to fix"
         ],
         "api_version": [
           "v1",
@@ -946,6 +948,7 @@
     },
     {
       "event": "satisfaction_survey_triggered",
+      "isStrictEvent": true,
       "properties": {
         "survey_type": [
           "quarterly_nps"

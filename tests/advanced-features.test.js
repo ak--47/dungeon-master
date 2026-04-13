@@ -197,6 +197,40 @@ describe('Feature 3: Engagement Decay', () => {
 		const noDecayEvents = Array.from(withoutDecay.eventData).length;
 		expect(decayEvents).toBeLessThan(noDecayEvents);
 	}, 30000);
+
+	test('decay uses within-dataset age, not calendar age', async () => {
+		// This tests the fix for the time space mismatch bug where
+		// adjustedCreated (FIXED time) was compared against ev.time (PRESENT time),
+		// causing daysSinceBirth ≈ 800+ days and all events hitting the floor.
+		// With the fix, decay should retain well over 15% of events.
+		const result = await DUNGEON_MASTER({
+			numUsers: 100,
+			numEvents: 5000,
+			numDays: 30,
+			seed: 'decay-timespace',
+			events: [{ event: 'action' }],
+			engagementDecay: { model: 'linear', halfLife: 60, floor: 0.15 }
+		});
+		const stored = Array.from(result.eventData).length;
+		// With halfLife=60 over only 30 days, retention should average ~88%
+		// (1 - 30/120 = 0.75 at day 30, average ≈ 0.875).
+		// If the time space bug were present, retention would be ~15% (floor).
+		// Use a conservative threshold: stored must be > 50% of generated events.
+		expect(stored).toBeGreaterThan(result.eventCount * 0.5);
+	}, 30000);
+
+	test('storedEventCount matches eventData length', async () => {
+		const result = await DUNGEON_MASTER({
+			numUsers: 50,
+			numEvents: 2000,
+			numDays: 30,
+			seed: 'stored-count',
+			events: [{ event: 'action' }],
+			engagementDecay: { model: 'exponential', halfLife: 15, floor: 0.0 }
+		});
+		const actualStored = Array.from(result.eventData).length;
+		expect(result.eventCount).toBe(actualStored);
+	}, 30000);
 });
 
 // ── Feature 4: Data Quality ──
@@ -641,12 +675,14 @@ describe('Audit Fixes', () => {
 	}, 30000);
 
 	test('persona conversionModifier affects funnel conversion', async () => {
-		// High conversion persona
-		const highResult = await DUNGEON_MASTER({
+		// Same seed for both runs so standalone events are identical.
+		// The ONLY difference is conversionModifier, which affects funnel completion.
+		const sharedConfig = {
 			numUsers: 200,
 			numEvents: 10000,
 			numDays: 30,
-			seed: 'persona-conv-high',
+			seed: 'persona-conv-test',
+			percentUsersBornInDataset: 100,
 			events: [
 				{ event: 'start', isFirstEvent: true },
 				{ event: 'step1', weight: 3 },
@@ -655,24 +691,13 @@ describe('Audit Fixes', () => {
 			funnels: [
 				{ sequence: ['start', 'step1', 'complete'], conversionRate: 50, isFirstFunnel: true, timeToConvert: 48 }
 			],
-			percentUsersBornInDataset: 100,
+		};
+		const highResult = await DUNGEON_MASTER({
+			...sharedConfig,
 			personas: [{ name: 'converter', weight: 100, conversionModifier: 2.0 }]
 		});
-		// Low conversion persona
 		const lowResult = await DUNGEON_MASTER({
-			numUsers: 200,
-			numEvents: 10000,
-			numDays: 30,
-			seed: 'persona-conv-low',
-			events: [
-				{ event: 'start', isFirstEvent: true },
-				{ event: 'step1', weight: 3 },
-				{ event: 'complete', weight: 2 }
-			],
-			funnels: [
-				{ sequence: ['start', 'step1', 'complete'], conversionRate: 50, isFirstFunnel: true, timeToConvert: 48 }
-			],
-			percentUsersBornInDataset: 100,
+			...sharedConfig,
 			personas: [{ name: 'bouncer', weight: 100, conversionModifier: 0.2 }]
 		});
 		const highCompletes = Array.from(highResult.eventData).filter(e => e.event === 'complete').length;

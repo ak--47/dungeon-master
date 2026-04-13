@@ -216,7 +216,7 @@ async function runDungeon(config) {
 			files: await extractFileInfo(storage, validatedConfig),
 			time: { start, end, delta, human },
 			operations: context.getOperations(),
-			eventCount: context.getEventCount(),
+			eventCount: context.getStoredEventCount(),
 			userCount: context.getUserCount()
 		};
 

@@ -5,8 +5,9 @@
       "weight": 10,
       "properties": {
         "page": [
-          "/pricing",
+          "/",
           "/features",
+          "/pricing",
           "/docs",
           "/about"
         ]
@@ -72,8 +73,8 @@
       "properties": {
         "amount": {
           "$range": [
-            129,
-            400
+            123,
+            389
           ]
         },
         "plan": [
@@ -120,21 +121,6 @@
       }
     }
   ],
-  "superProps": {
-    "platform": [
-      "ios",
-      "web",
-      "android"
-    ]
-  },
-  "userProps": {
-    "plan": [
-      "free",
-      "starter",
-      "growth",
-      "enterprise"
-    ]
-  },
   "funnels": [
     {
       "sequence": [
@@ -143,6 +129,7 @@
         "feature viewed",
         "action taken"
       ],
+      "name": "Onboarding Flow",
       "isFirstFunnel": true,
       "conversionRate": 45,
       "timeToConvert": 3,
@@ -156,6 +143,7 @@
         "button click",
         "checkout"
       ],
+      "name": "Purchase Funnel",
       "conversionRate": 30,
       "timeToConvert": 5,
       "order": "first-and-last-fixed",
@@ -169,12 +157,14 @@
         "help viewed",
         "action taken"
       ],
+      "name": "Feature Adoption",
       "conversionRate": 50,
       "timeToConvert": 2,
       "order": "random",
       "weight": 4,
       "requireRepeats": true,
       "experiment": true,
+      "bindPropsIndex": 2,
       "props": {
         "experiment_cohort": [
           "new_ui",
@@ -188,10 +178,26 @@
         "button click",
         "signup"
       ],
+      "name": "Quick Signup",
       "isFirstFunnel": true,
       "conversionRate": 40,
       "timeToConvert": 1,
       "weight": 6
     }
-  ]
+  ],
+  "superProps": {
+    "platform": [
+      "web",
+      "ios",
+      "android"
+    ]
+  },
+  "userProps": {
+    "plan": [
+      "free",
+      "starter",
+      "growth",
+      "enterprise"
+    ]
+  }
 }

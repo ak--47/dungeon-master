@@ -463,6 +463,9 @@
     },
     {
       "event": "account deactivated",
+      "isChurnEvent": true,
+      "returnLikelihood": 0.15,
+      "isStrictEvent": true,
       "properties": {
         "reason": [
           "switched_provider",
@@ -473,6 +476,66 @@
           "acquired"
         ]
       }
+    }
+  ],
+  "funnels": [
+    {
+      "sequence": [
+        "account created",
+        "repository connected",
+        "pipeline configured",
+        "build completed"
+      ],
+      "name": "Onboarding",
+      "isFirstFunnel": true,
+      "conversionRate": 45,
+      "timeToConvert": 72,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "build completed",
+        "deployment completed",
+        "monitoring dashboard viewed"
+      ],
+      "name": "Build-Deploy Pipeline",
+      "conversionRate": 40,
+      "timeToConvert": 48,
+      "weight": 5
+    },
+    {
+      "sequence": [
+        "pull request created",
+        "code review completed",
+        "build completed",
+        "deployment completed"
+      ],
+      "name": "PR Review Flow",
+      "conversionRate": 35,
+      "timeToConvert": 72,
+      "weight": 4
+    },
+    {
+      "sequence": [
+        "alert triggered",
+        "incident created",
+        "incident resolved"
+      ],
+      "name": "Incident Response",
+      "conversionRate": 50,
+      "timeToConvert": 24,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "app session",
+        "billing updated",
+        "collaboration invited"
+      ],
+      "name": "Upgrade Path",
+      "conversionRate": 20,
+      "timeToConvert": 168,
+      "weight": 2
     }
   ],
   "superProps": {
@@ -522,59 +585,17 @@
       "senior"
     ]
   },
-  "funnels": [
-    {
-      "sequence": [
-        "account created",
-        "repository connected",
-        "pipeline configured",
-        "build completed"
-      ],
-      "isFirstFunnel": true,
-      "conversionRate": 45,
-      "timeToConvert": 72,
-      "weight": 3
-    },
-    {
-      "sequence": [
-        "build completed",
-        "deployment completed",
-        "monitoring dashboard viewed"
-      ],
-      "conversionRate": 40,
-      "timeToConvert": 48,
-      "weight": 5
-    },
-    {
-      "sequence": [
-        "pull request created",
-        "code review completed",
-        "build completed",
-        "deployment completed"
-      ],
-      "conversionRate": 35,
-      "timeToConvert": 72,
-      "weight": 4
-    },
-    {
-      "sequence": [
-        "alert triggered",
-        "incident created",
-        "incident resolved"
-      ],
-      "conversionRate": 50,
-      "timeToConvert": 24,
-      "weight": 3
-    },
-    {
-      "sequence": [
-        "app session",
-        "billing updated",
-        "collaboration invited"
-      ],
-      "conversionRate": 20,
-      "timeToConvert": 168,
-      "weight": 2
+  "scdProps": {
+    "subscription_tier": {
+      "type": "user",
+      "frequency": "month",
+      "timing": "fuzzy",
+      "max": 6,
+      "values": [
+        "free",
+        "pro",
+        "enterprise"
+      ]
     }
-  ]
+  }
 }

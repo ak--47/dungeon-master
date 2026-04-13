@@ -5,9 +5,10 @@
       "weight": 10,
       "properties": {
         "page": [
+          "/",
           "/features",
-          "/docs",
           "/pricing",
+          "/docs",
           "/blog"
         ],
         "referrer": [
@@ -50,8 +51,8 @@
       "properties": {
         "amount": {
           "$range": [
-            108,
-            392
+            114,
+            397
           ]
         },
         "plan": [

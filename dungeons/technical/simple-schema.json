@@ -95,15 +95,12 @@
           false
         ],
         "itemCategory": [
-          "Health",
-          "Wedding",
-          "Handmade",
+          "Beauty",
           "Outdoors",
-          "Computers",
-          "Software",
+          "Toys",
+          "Pet",
           "Books",
-          "Home",
-          "Appliances"
+          "Health"
         ],
         "dateItemListed": {
           "$type": "string"
@@ -115,16 +112,19 @@
       "weight": 10,
       "properties": {
         "page": [
-          "/peace",
-          "/product",
+          "/",
           "/help",
+          "/account",
           "/watch",
+          "/listen",
+          "/product",
           "/people",
-          "/listen"
+          "/peace"
         ],
         "utm_source": [
           "$organic",
           "google",
+          "facebook",
           "twitter",
           "linkedin"
         ]
@@ -135,12 +135,11 @@
       "weight": 8,
       "properties": {
         "videoCategory": [
-          "cooking",
+          "news",
           "gaming",
-          "educational",
-          "travel",
-          "funny",
-          "inspirational"
+          "inspirational",
+          "DIY",
+          "sports"
         ],
         "isFeaturedItem": [
           true,
@@ -148,8 +147,8 @@
         ],
         "watchTimeSec": {
           "$range": [
-            130,
-            469
+            131,
+            467
           ]
         },
         "quality": [
@@ -181,10 +180,13 @@
           false
         ],
         "itemCategory": [
-          "Games",
-          "Music",
-          "Books",
-          "Garden"
+          "Automotive",
+          "Appliances",
+          "Baby",
+          "Kids",
+          "Sports",
+          "Beauty",
+          "Music"
         ],
         "dateItemListed": {
           "$type": "string"
@@ -200,11 +202,13 @@
           false
         ],
         "itemCategory": [
-          "Food",
-          "Art",
-          "Wedding",
-          "Toys",
-          "Office"
+          "Computers",
+          "Books",
+          "Electronics",
+          "Sports",
+          "Beauty",
+          "Games",
+          "Food"
         ],
         "dateItemListed": {
           "$type": "string"
@@ -231,11 +235,28 @@
       }
     }
   ],
+  "funnels": [
+    {
+      "sequence": [
+        "page view",
+        "view item",
+        "save item",
+        "page view",
+        "sign up"
+      ],
+      "name": "Signup Flow",
+      "isFirstFunnel": true,
+      "conversionRate": 50,
+      "timeToConvert": 2,
+      "order": "first-and-last-fixed",
+      "experiment": true
+    }
+  ],
   "superProps": {
     "theme": [
-      "custom",
+      "light",
       "dark",
-      "light"
+      "custom"
     ]
   },
   "userProps": {
@@ -249,30 +270,93 @@
       ]
     },
     "spiritAnimal": [
-      "millipede",
+      "duck",
+      "dog",
+      "otter",
+      "penguin",
+      "cat",
+      "elephant",
+      "lion",
+      "cheetah",
       "giraffe",
+      "zebra",
+      "rhino",
+      "hippo",
+      "whale",
+      "dolphin",
+      "shark",
+      "octopus",
+      "squid",
+      "jellyfish",
+      "starfish",
+      "seahorse",
+      "crab",
+      "lobster",
+      "shrimp",
+      "clam",
+      "snail",
+      "slug",
+      "butterfly",
+      "moth",
+      "bee",
+      "wasp",
+      "ant",
+      "beetle",
+      "ladybug",
+      "caterpillar",
+      "centipede",
+      "millipede",
+      "scorpion",
+      "spider",
       "tarantula",
-      "bedbug",
+      "tick",
+      "mite",
+      "mosquito",
+      "fly",
+      "dragonfly",
+      "damselfly",
+      "grasshopper",
+      "cricket",
+      "locust",
+      "mantis",
+      "cockroach",
+      "termite",
+      "praying mantis",
+      "walking stick",
+      "stick bug",
+      "leaf insect",
+      "lacewing",
+      "aphid",
+      "cicada",
+      "thrips",
+      "psyllid",
+      "scale insect",
+      "whitefly",
+      "mealybug",
+      "planthopper",
+      "leafhopper",
+      "treehopper",
+      "flea",
       "louse",
+      "bedbug",
       "flea beetle",
+      "weevil",
+      "longhorn beetle",
       "leaf beetle",
-      "cricket"
+      "tiger beetle",
+      "ground beetle",
+      "lady beetle",
+      "firefly",
+      "click beetle",
+      "rove beetle",
+      "scarab beetle",
+      "dung beetle",
+      "stag beetle",
+      "rhinoceros beetle",
+      "hercules beetle",
+      "goliath beetle",
+      "jewel beetle",
+      "tortoise beetle"
     ]
-  },
-  "funnels": [
-    {
-      "sequence": [
-        "page view",
-        "view item",
-        "save item",
-        "page view",
-        "sign up"
-      ],
-      "isFirstFunnel": true,
-      "conversionRate": 50,
-      "timeToConvert": 2,
-      "order": "first-and-last-fixed",
-      "experiment": true
-    }
-  ]
+  }
 }

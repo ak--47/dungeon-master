@@ -441,6 +441,9 @@
     },
     {
       "event": "account deactivated",
+      "isChurnEvent": true,
+      "returnLikelihood": 0.15,
+      "isStrictEvent": true,
       "properties": {
         "reason": [
           "lost_interest",
@@ -450,6 +453,65 @@
           "privacy_concern"
         ]
       }
+    }
+  ],
+  "funnels": [
+    {
+      "sequence": [
+        "account created",
+        "search performed",
+        "article viewed",
+        "discussion posted"
+      ],
+      "name": "Onboarding Flow",
+      "isFirstFunnel": true,
+      "conversionRate": 40,
+      "timeToConvert": 72,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "article viewed",
+        "article published",
+        "comment posted"
+      ],
+      "name": "Content Creation",
+      "conversionRate": 35,
+      "timeToConvert": 48,
+      "weight": 5
+    },
+    {
+      "sequence": [
+        "article viewed",
+        "upvote given",
+        "comment posted",
+        "discussion posted"
+      ],
+      "name": "Engagement Loop",
+      "conversionRate": 30,
+      "timeToConvert": 96,
+      "weight": 4
+    },
+    {
+      "sequence": [
+        "article published",
+        "profile updated",
+        "notification received"
+      ],
+      "name": "Creator to Supporter",
+      "conversionRate": 45,
+      "timeToConvert": 168,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "report submitted",
+        "moderation action"
+      ],
+      "name": "Moderation Pipeline",
+      "conversionRate": 60,
+      "timeToConvert": 48,
+      "weight": 2
     }
   ],
   "superProps": {
@@ -500,58 +562,18 @@
       "music"
     ]
   },
-  "funnels": [
-    {
-      "sequence": [
-        "account created",
-        "search performed",
-        "article viewed",
-        "discussion posted"
-      ],
-      "isFirstFunnel": true,
-      "conversionRate": 40,
-      "timeToConvert": 72,
-      "weight": 3
-    },
-    {
-      "sequence": [
-        "article viewed",
-        "article published",
-        "comment posted"
-      ],
-      "conversionRate": 35,
-      "timeToConvert": 48,
-      "weight": 5
-    },
-    {
-      "sequence": [
-        "article viewed",
-        "upvote given",
-        "comment posted",
-        "discussion posted"
-      ],
-      "conversionRate": 30,
-      "timeToConvert": 96,
-      "weight": 4
-    },
-    {
-      "sequence": [
-        "article published",
-        "profile updated",
-        "notification received"
-      ],
-      "conversionRate": 45,
-      "timeToConvert": 168,
-      "weight": 2
-    },
-    {
-      "sequence": [
-        "report submitted",
-        "moderation action"
-      ],
-      "conversionRate": 60,
-      "timeToConvert": 48,
-      "weight": 2
+  "scdProps": {
+    "contributor_level": {
+      "type": "user",
+      "frequency": "month",
+      "timing": "fuzzy",
+      "max": 8,
+      "values": [
+        "newcomer",
+        "regular",
+        "trusted",
+        "admin"
+      ]
     }
-  ]
+  }
 }

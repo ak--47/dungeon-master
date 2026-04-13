@@ -10,7 +10,7 @@ const chance = u.initChance(SEED);
 const num_users = 5_000;
 const days = 100;
 
-/** @typedef  {import("../types.d.ts").Dungeon} Config */
+/** @typedef  {import("../../types").Dungeon} Config */
 
 /*
  * ═══════════════════════════════════════════════════════════════════════════════
@@ -186,7 +186,6 @@ const config = {
 
 	hasAvatar: true,
 
-	batchSize: 2_500_000,
 	concurrency: 1,
 	writeToDisk: false,
 
@@ -536,7 +535,14 @@ const config = {
 		subscription_tier: ["Free", "Free", "Free", "Premium", "Elite"],
 	},
 
-	scdProps: {},
+	scdProps: {
+		player_rank: {
+			values: ["recruit", "veteran", "elite", "legend"],
+			frequency: "week",
+			timing: "fuzzy",
+			max: 20
+		}
+	},
 
 	userProps: {
 		"preferred_playstyle": [

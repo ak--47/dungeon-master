@@ -10,7 +10,7 @@ const chance = initChance(SEED);
 const num_users = 8_000;
 const days = 92;
 
-/** @typedef  {import("../types.js").Dungeon} Dungeon */
+/** @typedef  {import("../../types").Dungeon} Dungeon */
 
 /*
  * ============================================================================
@@ -416,7 +416,6 @@ const dungeon = {
 	hasAdSpend: false,	
 	hasAvatar: false,
 
-	batchSize: 2_500_000,
 	concurrency: 1,
 	writeToDisk: false,
 

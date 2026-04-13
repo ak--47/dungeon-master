@@ -6,6 +6,7 @@ dayjs.extend(utc);
 import { uid, comma } from 'ak-tools';
 import { pickAWinner, weighNumRange, date, integer, weighChoices } from "../../lib/utils/utils.js";
 
+/** @typedef {import("../../types").Dungeon} Config */
 const itemCategories = ["Books", "Movies", "Music", "Games", "Electronics", "Computers", "Smart Home", "Home", "Garden", "Pet", "Beauty", "Health", "Toys", "Kids", "Baby", "Handmade", "Sports", "Outdoors", "Automotive", "Industrial", "Entertainment", "Art", "Food", "Appliances", "Office", "Wedding", "Software"];
 
 const videoCategories = ["funny", "educational", "inspirational", "music", "news", "sports", "cooking", "DIY", "travel", "gaming"];
@@ -52,7 +53,6 @@ const config = {
 	isAnonymous: false,
 	alsoInferFunnels: false,
 	concurrency: 1,
-	batchSize: 2_500_000,
 	writeToDisk: false,
 
 	events: [

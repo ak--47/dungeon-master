@@ -14,6 +14,7 @@ import Chance from 'chance';
 let chance = new Chance();
 import { weighNumRange, weighChoices } from "../../lib/utils/utils.js";
 
+/** @typedef {import("../../types").Dungeon} Config */
 /** @type {import('../../types').Dungeon} */
 const config = {
 	token: "",
@@ -35,7 +36,6 @@ const config = {
 	hasCampaigns: false,
 	alsoInferFunnels: false,
 	concurrency: 1,
-	batchSize: 2_500_000,
 	writeToDisk: false,
 
 	events: [

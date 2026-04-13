@@ -92,8 +92,8 @@
   ],
   "superProps": {
     "theme": [
-      "dark",
       "light",
+      "dark",
       "custom"
     ]
   },

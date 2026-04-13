@@ -46,6 +46,7 @@ function integer(min = 1, max = 100) {
 	return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+/** @typedef {import("../../types").Dungeon} Config */
 
 const dates = [
 	"2024-09-18T21:48:28.173Z",
@@ -168,7 +169,6 @@ const config = {
 	region: "US",
 	hasAnonIds: false, //if true, anonymousIds are created for each user
 	hasSessionIds: false, //if true, hasSessionIds are created for each user
-	batchSize: 2_500_000,
 	hasAdSpend: false,
 	hasAvatar: false,
 	hasBrowser: false,

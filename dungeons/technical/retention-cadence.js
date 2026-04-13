@@ -9,7 +9,7 @@ const chance = u.initChance(SEED);
 const num_users = 100;
 const days = 360;
 
-/** @typedef {import("../types.js").Dungeon} Config */
+/** @typedef {import("../../types").Dungeon} Config */
 
 /**
  * ═══════════════════════════════════════════════════════════════
@@ -119,7 +119,6 @@ const config = {
 	isAnonymous: false,
 	hasAdSpend: false,
 	hasAvatar: false,
-	batchSize: 5_500_000,
 	concurrency: 1,
 	writeToDisk: false,
 	percentUsersBornInDataset: 100,

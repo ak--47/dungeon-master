@@ -38,9 +38,10 @@
             241
           ]
         },
-        "has_media": {
-          "$type": "array"
-        },
+        "has_media": [
+          false,
+          true
+        ],
         "hashtag_count": {
           "$range": [
             1,
@@ -206,14 +207,15 @@
           "text"
         ],
         "view_duration_sec": [
-          11,
-          20,
-          23,
-          13
+          14,
+          9,
+          25,
+          20
         ],
-        "completed": {
-          "$type": "array"
-        },
+        "completed": [
+          false,
+          true
+        ],
         "toxic_user": [
           false
         ]
@@ -228,12 +230,14 @@
           "video",
           "text"
         ],
-        "has_filter": {
-          "$type": "array"
-        },
-        "has_sticker": {
-          "$type": "array"
-        },
+        "has_filter": [
+          true,
+          false
+        ],
+        "has_sticker": [
+          false,
+          true
+        ],
         "weekend_surge": [
           false
         ],
@@ -258,16 +262,15 @@
           "posts"
         ],
         "results_count": [
-          33,
-          40,
-          35,
-          28,
-          17,
-          36,
           37,
-          16,
+          14,
+          11,
+          23,
+          9,
+          8,
           15,
-          34
+          36,
+          17
         ],
         "toxic_user": [
           false
@@ -285,9 +288,10 @@
           "mention",
           "trending"
         ],
-        "clicked": {
-          "$type": "array"
-        },
+        "clicked": [
+          false,
+          true
+        ],
         "toxic_user": [
           false
         ]
@@ -305,8 +309,8 @@
         ],
         "conversation_length": {
           "$range": [
-            3,
-            98
+            4,
+            93
           ]
         },
         "toxic_user": [
@@ -411,8 +415,8 @@
           "vip"
         ],
         "price_usd": [
-          9.99,
           4.99,
+          9.99,
           19.99
         ],
         "toxic_user": [
@@ -421,53 +425,6 @@
       }
     }
   ],
-  "superProps": {
-    "app_version": [
-      "4.0",
-      "4.1",
-      "4.2",
-      "4.3",
-      "5.0"
-    ],
-    "account_type": [
-      "personal",
-      "creator",
-      "business"
-    ]
-  },
-  "userProps": {
-    "follower_count": {
-      "$range": [
-        2283,
-        7639
-      ]
-    },
-    "following_count": {
-      "$range": [
-        869,
-        3942
-      ]
-    },
-    "bio_length": {
-      "$range": [
-        2,
-        132
-      ]
-    },
-    "verified": {
-      "$type": "array"
-    },
-    "content_niche": [
-      "lifestyle",
-      "tech",
-      "food",
-      "fitness",
-      "travel",
-      "comedy",
-      "news",
-      "art"
-    ]
-  },
   "funnels": [
     {
       "sequence": [
@@ -548,5 +505,116 @@
       "conversionRate": 20,
       "timeToConvert": 2
     }
-  ]
+  ],
+  "superProps": {
+    "app_version": [
+      "4.0",
+      "4.1",
+      "4.2",
+      "4.3",
+      "5.0"
+    ],
+    "account_type": [
+      "personal",
+      "creator",
+      "business"
+    ]
+  },
+  "userProps": {
+    "follower_count": {
+      "$range": [
+        2075,
+        7782
+      ]
+    },
+    "following_count": {
+      "$range": [
+        967,
+        4229
+      ]
+    },
+    "bio_length": {
+      "$range": [
+        10,
+        149
+      ]
+    },
+    "verified": [
+      false,
+      true
+    ],
+    "content_niche": [
+      "lifestyle",
+      "tech",
+      "food",
+      "fitness",
+      "travel",
+      "comedy",
+      "news",
+      "art"
+    ]
+  },
+  "groupKeys": [
+    {
+      "key": "community_id",
+      "count": 100,
+      "affectsEvents": [
+        "post created",
+        "comment posted",
+        "post liked",
+        "post shared"
+      ]
+    }
+  ],
+  "groupProps": {
+    "community_id": {
+      "name": {
+        "$type": "string"
+      },
+      "member_count": {
+        "$range": [
+          850,
+          4126
+        ]
+      },
+      "category": [
+        "technology",
+        "entertainment",
+        "sports",
+        "politics",
+        "art",
+        "science"
+      ],
+      "is_moderated": [
+        false,
+        true
+      ]
+    }
+  },
+  "scdProps": {
+    "account_type": {
+      "type": "user",
+      "frequency": "month",
+      "timing": "fuzzy",
+      "max": 6,
+      "values": [
+        "personal",
+        "creator",
+        "business",
+        "verified"
+      ]
+    },
+    "community_status": {
+      "type": "community_id",
+      "frequency": "month",
+      "timing": "fixed",
+      "max": 6,
+      "values": [
+        "new",
+        "growing",
+        "established",
+        "featured"
+      ]
+    }
+  }
 }

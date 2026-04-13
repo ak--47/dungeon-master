@@ -265,10 +265,16 @@ const config = {
 	hasAdSpend: false,
 	percentUsersBornInDataset: 35,
 	hasAvatar: true,
-	batchSize: 2_500_000,
 	concurrency: 1,
 	writeToDisk: false,
-	scdProps: {},
+	scdProps: {
+		subscription_tier: {
+			values: ["free", "pro", "enterprise"],
+			frequency: "month",
+			timing: "fuzzy",
+			max: 6
+		}
+	},
 	mirrorProps: {},
 	lookupTables: [],
 

@@ -64,8 +64,8 @@
           false
         ],
         "itemCategory": [
-          "Art",
           "Pet",
+          "Art",
           "Handmade",
           "Garden",
           "Beauty",
@@ -82,17 +82,21 @@
       "weight": 10,
       "properties": {
         "page": [
-          "/watch",
-          "/product",
           "/",
           "/help",
-          "/listen"
+          "/account",
+          "/watch",
+          "/listen",
+          "/product",
+          "/people",
+          "/peace"
         ],
         "utm_source": [
-          "linkedin",
           "$organic",
+          "google",
           "facebook",
-          "google"
+          "twitter",
+          "linkedin"
         ]
       }
     },
@@ -101,12 +105,12 @@
       "weight": 8,
       "properties": {
         "videoCategory": [
-          "travel",
-          "DIY",
-          "gaming",
-          "funny",
-          "news",
-          "educational"
+          "cooking",
+          "inspirational",
+          "music",
+          "sports",
+          "educational",
+          "DIY"
         ],
         "isFeaturedItem": [
           true,
@@ -114,8 +118,8 @@
         ],
         "watchTimeSec": {
           "$range": [
-            130,
-            469
+            131,
+            467
           ]
         },
         "quality": [
@@ -150,12 +154,12 @@
           false
         ],
         "itemCategory": [
-          "Games",
           "Handmade",
+          "Baby",
+          "Wedding",
           "Electronics",
-          "Music",
-          "Books",
-          "Movies"
+          "Industrial",
+          "Pet"
         ],
         "dateItemListed": {
           "$type": "string"
@@ -171,13 +175,13 @@
           false
         ],
         "itemCategory": [
-          "Food",
-          "Movies",
-          "Handmade",
-          "Art",
+          "Games",
           "Electronics",
-          "Kids",
-          "Baby"
+          "Books",
+          "Entertainment",
+          "Outdoors",
+          "Pet",
+          "Computers"
         ],
         "dateItemListed": {
           "$type": "string"
@@ -219,10 +223,11 @@
     },
     {
       "event": "cart_abandoned",
+      "isStrictEvent": true,
       "properties": {
         "amount": {
           "$range": [
-            110,
+            114,
             397
           ]
         }
@@ -248,23 +253,215 @@
     },
     "luckyNumber": {
       "$range": [
-        117,
-        344
+        115,
+        326
       ]
     },
     "spiritAnimal": [
-      "bee",
+      "duck",
+      "dog",
+      "otter",
+      "penguin",
+      "cat",
+      "elephant",
+      "lion",
+      "cheetah",
+      "giraffe",
+      "zebra",
+      "rhino",
+      "hippo",
+      "whale",
+      "dolphin",
+      "shark",
       "octopus",
-      "moth",
-      "butterfly",
-      "aphid",
-      "dragonfly",
-      "ant",
+      "squid",
+      "jellyfish",
+      "starfish",
+      "seahorse",
+      "crab",
       "lobster",
-      "slug"
+      "shrimp",
+      "clam",
+      "snail",
+      "slug",
+      "butterfly",
+      "moth",
+      "bee",
+      "wasp",
+      "ant",
+      "beetle",
+      "ladybug",
+      "caterpillar",
+      "centipede",
+      "millipede",
+      "scorpion",
+      "spider",
+      "tarantula",
+      "tick",
+      "mite",
+      "mosquito",
+      "fly",
+      "dragonfly",
+      "damselfly",
+      "grasshopper",
+      "cricket",
+      "locust",
+      "mantis",
+      "cockroach",
+      "termite",
+      "praying mantis",
+      "walking stick",
+      "stick bug",
+      "leaf insect",
+      "lacewing",
+      "aphid",
+      "cicada",
+      "thrips",
+      "psyllid",
+      "scale insect",
+      "whitefly",
+      "mealybug",
+      "planthopper",
+      "leafhopper",
+      "treehopper",
+      "flea",
+      "louse",
+      "bedbug",
+      "flea beetle",
+      "weevil",
+      "longhorn beetle",
+      "leaf beetle",
+      "tiger beetle",
+      "ground beetle",
+      "lady beetle",
+      "firefly",
+      "click beetle",
+      "rove beetle",
+      "scarab beetle",
+      "dung beetle",
+      "stag beetle",
+      "rhinoceros beetle",
+      "hercules beetle",
+      "goliath beetle",
+      "jewel beetle",
+      "tortoise beetle"
     ],
     "spendTier": [
       "budget"
     ]
+  },
+  "groupKeys": [
+    {
+      "key": "company_id",
+      "count": 1000
+    }
+  ],
+  "groupProps": {
+    "company_id": {
+      "name": {
+        "$type": "string"
+      },
+      "email": [
+        "CSM: AK",
+        "CSM: Deepak",
+        "CSM: Hans",
+        "CSM: Justin",
+        "CSM: Kaan",
+        "CSM: Katie",
+        "CSM: Neha",
+        "CSM: Rajiv",
+        "CSM: Somya",
+        "CSM: Tony"
+      ],
+      "industry": [
+        "technology",
+        "education",
+        "finance",
+        "healthcare",
+        "retail",
+        "manufacturing",
+        "transportation",
+        "entertainment",
+        "media",
+        "real estate",
+        "construction",
+        "hospitality",
+        "energy",
+        "utilities",
+        "agriculture",
+        "other"
+      ],
+      "segment": [
+        "SMB",
+        "Mid Market",
+        "Enterprise"
+      ],
+      "# active users": [
+        17
+      ]
+    }
+  },
+  "scdProps": {
+    "role": {
+      "type": "user",
+      "frequency": "week",
+      "timing": "fuzzy",
+      "max": 10,
+      "values": [
+        "admin",
+        "collaborator",
+        "user",
+        "view only",
+        "no access"
+      ]
+    },
+    "NPS": {
+      "type": "user",
+      "frequency": "day",
+      "timing": "fuzzy",
+      "max": 10,
+      "values": {
+        "$range": [
+          1,
+          10
+        ]
+      }
+    },
+    "MRR": {
+      "type": "company_id",
+      "frequency": "month",
+      "timing": "fixed",
+      "max": 10,
+      "values": {
+        "$range": [
+          2240,
+          7836
+        ]
+      }
+    },
+    "AccountHealthScore": {
+      "type": "company_id",
+      "frequency": "week",
+      "timing": "fixed",
+      "max": 40,
+      "values": {
+        "$range": [
+          3,
+          8
+        ]
+      }
+    },
+    "plan": {
+      "type": "company_id",
+      "frequency": "month",
+      "timing": "fixed",
+      "max": 10,
+      "values": [
+        "free",
+        "basic",
+        "premium",
+        "enterprise"
+      ]
+    }
   }
 }

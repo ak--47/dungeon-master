@@ -9,7 +9,7 @@ const chance = u.initChance(SEED);
 const num_users = 5_000;
 const days = 100;
 
-/** @typedef  {import("../types.d.ts").Dungeon} Config */
+/** @typedef  {import("../../types").Dungeon} Config */
 
 /**
  * ===================================================================
@@ -151,11 +151,24 @@ const config = {
 
 	hasAvatar: true,
 
-	batchSize: 2_500_000,
 	concurrency: 1,
 	writeToDisk: false,
 
-	scdProps: {},
+	scdProps: {
+		account_tier: {
+			values: ["basic", "plus", "premium"],
+			frequency: "month",
+			timing: "fuzzy",
+			max: 6
+		},
+		risk_category: {
+			values: ["low", "medium", "high", "critical"],
+			frequency: "month",
+			timing: "fixed",
+			max: 8,
+			type: "household_id"
+		}
+	},
 
 	funnels: [
 		{

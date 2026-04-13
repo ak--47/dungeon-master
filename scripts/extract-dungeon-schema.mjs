@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 
 /**
- * Extracts an abbreviated schema from a JavaScript dungeon file.
+ * Extracts a complete schema from a JavaScript dungeon file.
  *
- * Output contains only the event/property relationships, superProps, userProps,
- * and funnels — no hooks, no config flags, no functions.
+ * Output contains everything about the dungeon EXCEPT:
+ *   - hook function (runtime logic, not schema)
+ *   - credentials (token, serviceAccount, serviceSecret, projectId)
+ *   - execution params (seed, format, gzip, verbose, concurrency, batchSize, writeToDisk, region)
  *
  * Property values are simplified:
  *   - Plain arrays → deduplicated
  *   - weighNumRange(min,max) arrays → { "$range": [min, max] }
  *   - Functions (pickAWinner, weighChoices, etc.) → sampled and deduplicated
- *   - High-cardinality / complex values → omitted
+ *   - High-cardinality / complex values → type hint
  *
  * Usage:
  *   node scripts/extract-dungeon-schema.mjs <input.js> [output.json]
@@ -61,12 +63,16 @@ async function processOne(inputFile, outputFile) {
 
 	const schema = {};
 
-	// Events
+	// ── Events ──────────────────────────────────────────────────────
 	if (config.events?.length) {
 		schema.events = config.events.map(evt => {
 			const entry = { event: evt.event };
 			if (evt.weight && evt.weight !== 1) entry.weight = evt.weight;
 			if (evt.isFirstEvent) entry.isFirstEvent = true;
+			if (evt.isChurnEvent) entry.isChurnEvent = true;
+			if (evt.returnLikelihood !== undefined) entry.returnLikelihood = evt.returnLikelihood;
+			if (evt.isStrictEvent) entry.isStrictEvent = true;
+			if (evt.isSessionStartEvent) entry.isSessionStartEvent = true;
 			if (evt.properties && Object.keys(evt.properties).length) {
 				const props = extractProps(evt.properties);
 				if (Object.keys(props).length) entry.properties = props;
@@ -75,22 +81,11 @@ async function processOne(inputFile, outputFile) {
 		});
 	}
 
-	// Super props
-	if (config.superProps && Object.keys(config.superProps).length) {
-		const sp = extractProps(config.superProps);
-		if (Object.keys(sp).length) schema.superProps = sp;
-	}
-
-	// User props
-	if (config.userProps && Object.keys(config.userProps).length) {
-		const up = extractProps(config.userProps);
-		if (Object.keys(up).length) schema.userProps = up;
-	}
-
-	// Funnels
+	// ── Funnels ─────────────────────────────────────────────────────
 	if (config.funnels?.length) {
 		schema.funnels = config.funnels.map(f => {
 			const entry = { sequence: f.sequence };
+			if (f.name) entry.name = f.name;
 			if (f.isFirstFunnel) entry.isFirstFunnel = true;
 			if (f.conversionRate !== undefined) entry.conversionRate = f.conversionRate;
 			if (f.timeToConvert !== undefined) entry.timeToConvert = f.timeToConvert;
@@ -98,12 +93,63 @@ async function processOne(inputFile, outputFile) {
 			if (f.weight && f.weight !== 1) entry.weight = f.weight;
 			if (f.requireRepeats) entry.requireRepeats = true;
 			if (f.experiment) entry.experiment = true;
+			if (f.bindPropsIndex !== undefined) entry.bindPropsIndex = f.bindPropsIndex;
+			if (f.conditions) entry.conditions = f.conditions;
 			if (f.props && Object.keys(f.props).length) {
 				const fp = extractProps(f.props);
 				if (Object.keys(fp).length) entry.props = fp;
 			}
 			return entry;
 		});
+	}
+
+	// ── Super props ─────────────────────────────────────────────────
+	if (config.superProps && Object.keys(config.superProps).length) {
+		const sp = extractProps(config.superProps);
+		if (Object.keys(sp).length) schema.superProps = sp;
+	}
+
+	// ── User props ──────────────────────────────────────────────────
+	if (config.userProps && Object.keys(config.userProps).length) {
+		const up = extractProps(config.userProps);
+		if (Object.keys(up).length) schema.userProps = up;
+	}
+
+	// ── Group keys ──────────────────────────────────────────────────
+	if (config.groupKeys?.length) {
+		schema.groupKeys = config.groupKeys.map(gk => {
+			if (Array.isArray(gk)) {
+				const entry = { key: gk[0], count: gk[1] };
+				if (gk[2]) entry.affectsEvents = gk[2];
+				return entry;
+			}
+			return gk;
+		});
+	}
+
+	// ── Group props ─────────────────────────────────────────────────
+	if (config.groupProps && Object.keys(config.groupProps).length) {
+		schema.groupProps = {};
+		for (const [groupKey, props] of Object.entries(config.groupProps)) {
+			schema.groupProps[groupKey] = extractProps(props);
+		}
+	}
+
+	// ── SCD props ───────────────────────────────────────────────────
+	if (config.scdProps && Object.keys(config.scdProps).length) {
+		schema.scdProps = {};
+		for (const [key, scd] of Object.entries(config.scdProps)) {
+			const entry = {};
+			entry.type = scd.type || "user";
+			if (scd.frequency) entry.frequency = scd.frequency;
+			if (scd.timing) entry.timing = scd.timing;
+			if (scd.max !== undefined) entry.max = scd.max;
+			if (scd.values) {
+				const simplified = simplifyValue(scd.values);
+				if (simplified) entry.values = simplified;
+			}
+			schema.scdProps[key] = entry;
+		}
 	}
 
 	writeFileSync(outputPath, JSON.stringify(schema, null, 2) + '\n', 'utf-8');

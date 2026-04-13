@@ -41,6 +41,27 @@
       "event": "yak"
     }
   ],
+  "funnels": [
+    {
+      "sequence": [
+        "qux",
+        "garply",
+        "durtle",
+        "linny",
+        "fonk",
+        "crumn",
+        "yak"
+      ]
+    },
+    {
+      "sequence": [
+        "foo",
+        "bar",
+        "baz"
+      ],
+      "isFirstFunnel": true
+    }
+  ],
   "superProps": {
     "color": [
       "red",
@@ -160,26 +181,5 @@
       "jewel beetle",
       "tortoise beetle"
     ]
-  },
-  "funnels": [
-    {
-      "sequence": [
-        "qux",
-        "garply",
-        "durtle",
-        "linny",
-        "fonk",
-        "crumn",
-        "yak"
-      ]
-    },
-    {
-      "sequence": [
-        "foo",
-        "bar",
-        "baz"
-      ],
-      "isFirstFunnel": true
-    }
-  ]
+  }
 }

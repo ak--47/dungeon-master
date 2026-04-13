@@ -10,7 +10,7 @@ const chance = u.initChance(SEED);
 const num_users = 5_000;
 const days = 100;
 
-/** @typedef  {import("../types.d.ts").Dungeon} Config */
+/** @typedef  {import("../../types").Dungeon} Config */
 
 /*
  * ═══════════════════════════════════════════════════════════════════════════════
@@ -176,10 +176,23 @@ const config = {
 	hasAdSpend: false,
 	percentUsersBornInDataset: 50,
 	hasAvatar: true,
-	batchSize: 2_500_000,
 	concurrency: 1,
 	writeToDisk: false,
-	scdProps: {},
+	scdProps: {
+		subscription_tier: {
+			values: ["free", "trial", "monthly", "annual"],
+			frequency: "month",
+			timing: "fuzzy",
+			max: 6
+		},
+		restaurant_tier: {
+			values: ["new", "verified", "featured", "premium"],
+			frequency: "month",
+			timing: "fixed",
+			max: 6,
+			type: "restaurant_id"
+		}
+	},
 
 	funnels: [
 		{

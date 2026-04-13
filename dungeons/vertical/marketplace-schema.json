@@ -399,6 +399,9 @@
     },
     {
       "event": "account deactivated",
+      "isChurnEvent": true,
+      "returnLikelihood": 0.15,
+      "isStrictEvent": true,
       "properties": {
         "reason": [
           "low_sales",
@@ -408,6 +411,67 @@
           "no_longer_needed"
         ]
       }
+    }
+  ],
+  "funnels": [
+    {
+      "sequence": [
+        "account created",
+        "item searched",
+        "item viewed",
+        "add to cart"
+      ],
+      "name": "Buyer Onboarding",
+      "isFirstFunnel": true,
+      "conversionRate": 40,
+      "timeToConvert": 72,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "item searched",
+        "item viewed",
+        "add to cart",
+        "purchase completed"
+      ],
+      "name": "Browse to Purchase",
+      "conversionRate": 30,
+      "timeToConvert": 48,
+      "weight": 5
+    },
+    {
+      "sequence": [
+        "listing created",
+        "listing updated",
+        "offer received",
+        "offer accepted"
+      ],
+      "name": "Seller Listing Flow",
+      "conversionRate": 25,
+      "timeToConvert": 168,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "offer received",
+        "message sent",
+        "offer accepted"
+      ],
+      "name": "Offer Negotiation",
+      "conversionRate": 35,
+      "timeToConvert": 72,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "purchase completed",
+        "shipping updated",
+        "review submitted"
+      ],
+      "name": "Review After Purchase",
+      "conversionRate": 20,
+      "timeToConvert": 336,
+      "weight": 2
     }
   ],
   "superProps": {
@@ -452,60 +516,18 @@
       "none"
     ]
   },
-  "funnels": [
-    {
-      "sequence": [
-        "account created",
-        "item searched",
-        "item viewed",
-        "add to cart"
-      ],
-      "isFirstFunnel": true,
-      "conversionRate": 40,
-      "timeToConvert": 72,
-      "weight": 3
-    },
-    {
-      "sequence": [
-        "item searched",
-        "item viewed",
-        "add to cart",
-        "purchase completed"
-      ],
-      "conversionRate": 30,
-      "timeToConvert": 48,
-      "weight": 5
-    },
-    {
-      "sequence": [
-        "listing created",
-        "listing updated",
-        "offer received",
-        "offer accepted"
-      ],
-      "conversionRate": 25,
-      "timeToConvert": 168,
-      "weight": 3
-    },
-    {
-      "sequence": [
-        "offer received",
-        "message sent",
-        "offer accepted"
-      ],
-      "conversionRate": 35,
-      "timeToConvert": 72,
-      "weight": 2
-    },
-    {
-      "sequence": [
-        "purchase completed",
-        "shipping updated",
-        "review submitted"
-      ],
-      "conversionRate": 20,
-      "timeToConvert": 336,
-      "weight": 2
+  "scdProps": {
+    "seller_tier": {
+      "type": "user",
+      "frequency": "month",
+      "timing": "fuzzy",
+      "max": 8,
+      "values": [
+        "new",
+        "verified",
+        "power",
+        "featured"
+      ]
     }
-  ]
+  }
 }

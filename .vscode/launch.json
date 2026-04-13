@@ -23,10 +23,15 @@
 			"skipFiles": ["<node_internals>/**"]
 		},
 		{
-			"command": "npm test",
-			"name": "🧪 test",
+			"type": "node",
 			"request": "launch",
-			"type": "node-terminal"
+			"name": "🧪 test",
+			"program": "${workspaceFolder}/node_modules/vitest/vitest.mjs",
+			"args": ["run"],
+			"env": { "NODE_ENV": "test" },
+			"console": "integratedTerminal",
+			"internalConsoleOptions": "neverOpen",
+			"skipFiles": ["<node_internals>/**"]
 		},
 		{
 			"type": "node",
@@ -49,10 +54,14 @@
 			"skipFiles": ["<node_internals>/**"]
 		},
 		{
-			"command": "npm run typecheck",
-			"name": "🔍 typecheck",
+			"type": "node",
 			"request": "launch",
-			"type": "node-terminal"
+			"name": "🔍 typecheck",
+			"program": "${workspaceFolder}/node_modules/typescript/bin/tsc",
+			"args": ["--noEmit"],
+			"console": "integratedTerminal",
+			"internalConsoleOptions": "neverOpen",
+			"skipFiles": ["<node_internals>/**"]
 		}
 	]
 }

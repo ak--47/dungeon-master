@@ -6,6 +6,7 @@ dayjs.extend(utc);
 import { uid, comma } from 'ak-tools';
 import { weighNumRange, date, integer, weighChoices } from "../../lib/utils/utils.js";
 
+/** @typedef {import("../../types").Dungeon} Config */
 /**
  * ═══════════════════════════════════════════════════════════════
  * TECHNICAL TEST: Scale & Performance
@@ -30,7 +31,6 @@ const config = {
 	numUsers: 10_000,
 	format: 'json',
 	gzip: true,
-	batchSize: 500_000,
 	concurrency: 1,
 	region: "US",
 	hasAnonIds: false,

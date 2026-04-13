@@ -454,6 +454,9 @@
     },
     {
       "event": "account deactivated",
+      "isChurnEvent": true,
+      "returnLikelihood": 0.2,
+      "isStrictEvent": true,
       "properties": {
         "reason": [
           "found_alternative",
@@ -463,6 +466,67 @@
           "privacy"
         ]
       }
+    }
+  ],
+  "funnels": [
+    {
+      "sequence": [
+        "account created",
+        "destination searched",
+        "hotel viewed",
+        "booking completed"
+      ],
+      "name": "Onboarding to First Booking",
+      "isFirstFunnel": true,
+      "conversionRate": 35,
+      "timeToConvert": 72,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "destination searched",
+        "hotel viewed",
+        "price compared",
+        "booking completed"
+      ],
+      "name": "Search to Book",
+      "conversionRate": 25,
+      "timeToConvert": 48,
+      "weight": 5
+    },
+    {
+      "sequence": [
+        "booking completed",
+        "check in completed",
+        "amenity used",
+        "review submitted"
+      ],
+      "name": "Full Stay Journey",
+      "conversionRate": 30,
+      "timeToConvert": 336,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "booking completed",
+        "loyalty points redeemed",
+        "review submitted"
+      ],
+      "name": "Loyalty Engagement",
+      "conversionRate": 15,
+      "timeToConvert": 720,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "hotel viewed",
+        "booking completed",
+        "room upgrade selected"
+      ],
+      "name": "Upsell Path",
+      "conversionRate": 20,
+      "timeToConvert": 24,
+      "weight": 2
     }
   ],
   "superProps": {
@@ -499,60 +563,18 @@
       ]
     }
   },
-  "funnels": [
-    {
-      "sequence": [
-        "account created",
-        "destination searched",
-        "hotel viewed",
-        "booking completed"
-      ],
-      "isFirstFunnel": true,
-      "conversionRate": 35,
-      "timeToConvert": 72,
-      "weight": 3
-    },
-    {
-      "sequence": [
-        "destination searched",
-        "hotel viewed",
-        "price compared",
-        "booking completed"
-      ],
-      "conversionRate": 25,
-      "timeToConvert": 48,
-      "weight": 5
-    },
-    {
-      "sequence": [
-        "booking completed",
-        "check in completed",
-        "amenity used",
-        "review submitted"
-      ],
-      "conversionRate": 30,
-      "timeToConvert": 336,
-      "weight": 3
-    },
-    {
-      "sequence": [
-        "booking completed",
-        "loyalty points redeemed",
-        "review submitted"
-      ],
-      "conversionRate": 15,
-      "timeToConvert": 720,
-      "weight": 2
-    },
-    {
-      "sequence": [
-        "hotel viewed",
-        "booking completed",
-        "room upgrade selected"
-      ],
-      "conversionRate": 20,
-      "timeToConvert": 24,
-      "weight": 2
+  "scdProps": {
+    "membership_tier": {
+      "type": "user",
+      "frequency": "month",
+      "timing": "fuzzy",
+      "max": 8,
+      "values": [
+        "member",
+        "silver",
+        "gold",
+        "platinum"
+      ]
     }
-  ]
+  }
 }

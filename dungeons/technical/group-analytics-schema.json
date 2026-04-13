@@ -145,5 +145,97 @@
       "manager",
       "exec"
     ]
+  },
+  "groupKeys": [
+    {
+      "key": "company_id",
+      "count": 50,
+      "affectsEvents": [
+        "feature used",
+        "subscription change",
+        "support ticket"
+      ]
+    },
+    {
+      "key": "team_id",
+      "count": 200,
+      "affectsEvents": [
+        "feature used",
+        "task completed",
+        "meeting scheduled"
+      ]
+    },
+    {
+      "key": "project_id",
+      "count": 500,
+      "affectsEvents": [
+        "task completed",
+        "code committed",
+        "deployment run"
+      ]
+    }
+  ],
+  "groupProps": {
+    "company_id": {
+      "name": {
+        "$type": "string"
+      },
+      "industry": [
+        "technology",
+        "finance",
+        "healthcare",
+        "retail",
+        "education",
+        "manufacturing"
+      ],
+      "plan": [
+        "free",
+        "starter",
+        "business",
+        "enterprise"
+      ],
+      "employee_count": {
+        "$range": [
+          964,
+          3784
+        ]
+      }
+    },
+    "team_id": {
+      "name": {
+        "$type": "string"
+      },
+      "department": [
+        "engineering",
+        "design",
+        "product",
+        "marketing",
+        "sales",
+        "support"
+      ],
+      "size": {
+        "$range": [
+          3,
+          20
+        ]
+      }
+    },
+    "project_id": {
+      "name": {
+        "$type": "string"
+      },
+      "status": [
+        "active",
+        "paused",
+        "completed",
+        "archived"
+      ],
+      "priority": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ]
+    }
   }
 }

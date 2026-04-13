@@ -6,6 +6,7 @@ dayjs.extend(utc);
 import { uid, comma } from 'ak-tools';
 import { weighNumRange, date, integer, weighChoices } from "../../lib/utils/utils.js";
 
+/** @typedef {import("../../types").Dungeon} Config */
 /**
  * ═══════════════════════════════════════════════════════════════
  * TECHNICAL TEST: Nested Objects & High Cardinality
@@ -48,7 +49,6 @@ const config = {
 	isAnonymous: false,
 	alsoInferFunnels: false,
 	concurrency: 1,
-	batchSize: 500_000,
 	writeToDisk: false,
 
 	events: [

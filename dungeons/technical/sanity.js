@@ -5,6 +5,7 @@ import utc from 'dayjs/plugin/utc.js';
 dayjs.extend(utc);
 import { weighNumRange, integer } from "../../lib/utils/utils.js";
 
+/** @typedef {import("../../types").Dungeon} Config */
 /**
  * ═══════════════════════════════════════════════════════════════
  * DATASET OVERVIEW

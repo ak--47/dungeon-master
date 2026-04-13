@@ -266,6 +266,7 @@ export interface Storage {
 export interface RuntimeState {
     operations: number;
     eventCount: number;
+    storedEventCount: number;
     userCount: number;
     isBatchMode: boolean;
     verbose: boolean;
@@ -305,11 +306,13 @@ export interface Context {
     incrementOperations(): void;
     incrementEvents(): void;
     incrementUsers(): void;
+    incrementStoredEvents(count?: number): void;
     setStorage(storage: Storage): void;
 
     // State getter methods
     getOperations(): number;
     getEventCount(): number;
+    getStoredEventCount(): number;
     getUserCount(): number;
     incrementUserCount(): void;
     incrementEventCount(): void;

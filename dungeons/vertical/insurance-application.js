@@ -153,11 +153,17 @@ const config = {
 	hasAdSpend: false,
 	percentUsersBornInDataset: 35,
 	hasAvatar: true,
-	batchSize: 2_500_000,
 	concurrency: 1,
 	writeToDisk: false,
 
-	scdProps: {},
+	scdProps: {
+		policy_status: {
+			values: ["pending", "active", "lapsed", "renewed"],
+			frequency: "month",
+			timing: "fuzzy",
+			max: 8
+		}
+	},
 	mirrorProps: {},
 	lookupTables: [],
 

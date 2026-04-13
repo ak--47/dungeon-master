@@ -11,7 +11,7 @@ const chance = u.initChance(SEED);
 const num_users = 12_000;
 const days = 180;
 
-/** @typedef  {import("../types.d.ts").Dungeon} Config */
+/** @typedef  {import("../../types").Dungeon} Config */
 
 /*
  * ═══════════════════════════════════════════════════════════════════════════════
@@ -175,7 +175,6 @@ const config = {
 
 	hasAvatar: true,
 
-	batchSize: 2_500_000,
 	concurrency: 1,
 	writeToDisk: false,
 	funnels: [
@@ -384,13 +383,25 @@ const config = {
 
 	},
 	scdProps: {
-		// "subscription MRR" : {
-		// 	"frequency": "week",
-		// 	"type": "number",
-		// 	values: u.weighNumRange(0, 250, 1, 200),
-		// 	timing: "fixed",
-		// 	max: 250,
-		// }
+		"subscription MRR" : {
+			frequency: "week",
+			values: u.weighNumRange(0, 250, 1, 200),
+			timing: "fixed",
+			max: 250,
+		},
+		player_rank: {
+			values: ["bronze", "silver", "gold", "diamond", "legendary"],
+			frequency: "week",
+			timing: "fuzzy",
+			max: 250
+		},
+		guild_rank: {
+			values: ["bronze", "silver", "gold", "legendary"],
+			frequency: "month",
+			timing: "fixed",
+			max: 6,
+			type: "guild_id"
+		}
 	},
 	userProps: {
 		experiment: [

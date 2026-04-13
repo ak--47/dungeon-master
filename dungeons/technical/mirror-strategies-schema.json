@@ -5,11 +5,11 @@
       "weight": 10,
       "properties": {
         "page": [
-          "/account",
           "/",
           "/help",
-          "/product",
-          "/pricing"
+          "/account",
+          "/pricing",
+          "/product"
         ]
       }
     },
@@ -20,7 +20,7 @@
         "amount": {
           "$range": [
             44,
-            154
+            157
           ]
         },
         "currency": [

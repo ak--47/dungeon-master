@@ -10,7 +10,7 @@ const chance = u.initChance(SEED);
 const num_users = 5_000;
 const days = 100;
 
-/** @typedef  {import("../types.js").Dungeon} Config */
+/** @typedef  {import("../../types").Dungeon} Config */
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
@@ -238,7 +238,6 @@ const config = {
 	hasAdSpend: false,
 	percentUsersBornInDataset: 50,
 	hasAvatar: true,
-	batchSize: 2_500_000,
 	concurrency: 1,
 	writeToDisk: false,
 
@@ -541,7 +540,14 @@ const config = {
 		device_type: ["smart_tv", "mobile", "tablet", "laptop", "desktop"],
 	},
 
-	scdProps: {},
+	scdProps: {
+		subscription_plan: {
+			values: ["free", "basic", "standard", "premium"],
+			frequency: "month",
+			timing: "fuzzy",
+			max: 6
+		}
+	},
 
 	userProps: {
 		"preferred_genre": ["action", "comedy", "drama", "documentary", "horror", "sci_fi", "animation"],

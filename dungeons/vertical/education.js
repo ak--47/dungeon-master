@@ -10,7 +10,7 @@ const chance = u.initChance(SEED);
 const num_users = 5_000;
 const days = 100;
 
-/** @typedef  {import("../types.d.ts").Dungeon} Config */
+/** @typedef  {import("../../types").Dungeon} Config */
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
@@ -203,7 +203,6 @@ const config = {
 	hasAdSpend: false,
 	percentUsersBornInDataset: 50,
 	hasAvatar: true,
-	batchSize: 2_500_000,
 	concurrency: 1,
 	writeToDisk: false,
 
@@ -440,7 +439,21 @@ const config = {
 		platform: ["Web", "iOS", "Android", "iPad"],
 	},
 
-	scdProps: {},
+	scdProps: {
+		enrollment_status: {
+			values: ["enrolled", "active", "completed", "dropped"],
+			frequency: "month",
+			timing: "fuzzy",
+			max: 6
+		},
+		course_status: {
+			values: ["draft", "published", "archived", "deprecated"],
+			frequency: "month",
+			timing: "fixed",
+			max: 6,
+			type: "course_id"
+		}
+	},
 
 	userProps: {
 		"account_type": ["student", "student", "student", "student", "student", "student", "student", "student", "instructor"],

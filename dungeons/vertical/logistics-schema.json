@@ -446,6 +446,9 @@
     },
     {
       "event": "account deactivated",
+      "isChurnEvent": true,
+      "returnLikelihood": 0.1,
+      "isStrictEvent": true,
       "properties": {
         "reason": [
           "too_expensive",
@@ -455,6 +458,66 @@
           "poor_support"
         ]
       }
+    }
+  ],
+  "funnels": [
+    {
+      "sequence": [
+        "account created",
+        "inventory checked",
+        "integration connected",
+        "report generated"
+      ],
+      "name": "Onboarding",
+      "isFirstFunnel": true,
+      "conversionRate": 40,
+      "timeToConvert": 72,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "inventory checked",
+        "purchase order created",
+        "order received",
+        "shipment tracked"
+      ],
+      "name": "Order Fulfillment",
+      "conversionRate": 35,
+      "timeToConvert": 168,
+      "weight": 5
+    },
+    {
+      "sequence": [
+        "supplier contacted",
+        "purchase order created",
+        "invoice processed"
+      ],
+      "name": "Supplier Management",
+      "conversionRate": 45,
+      "timeToConvert": 336,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "integration connected",
+        "report generated",
+        "alert configured"
+      ],
+      "name": "Integration Setup",
+      "conversionRate": 30,
+      "timeToConvert": 48,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "stockout alert",
+        "purchase order created",
+        "order received"
+      ],
+      "name": "Alert Response",
+      "conversionRate": 50,
+      "timeToConvert": 120,
+      "weight": 3
     }
   ],
   "superProps": {
@@ -494,59 +557,18 @@
       0
     ]
   },
-  "funnels": [
-    {
-      "sequence": [
-        "account created",
-        "inventory checked",
-        "integration connected",
-        "report generated"
-      ],
-      "isFirstFunnel": true,
-      "conversionRate": 40,
-      "timeToConvert": 72,
-      "weight": 3
-    },
-    {
-      "sequence": [
-        "inventory checked",
-        "purchase order created",
-        "order received",
-        "shipment tracked"
-      ],
-      "conversionRate": 35,
-      "timeToConvert": 168,
-      "weight": 5
-    },
-    {
-      "sequence": [
-        "supplier contacted",
-        "purchase order created",
-        "invoice processed"
-      ],
-      "conversionRate": 45,
-      "timeToConvert": 336,
-      "weight": 3
-    },
-    {
-      "sequence": [
-        "integration connected",
-        "report generated",
-        "alert configured"
-      ],
-      "conversionRate": 30,
-      "timeToConvert": 48,
-      "weight": 2
-    },
-    {
-      "sequence": [
-        "stockout alert",
-        "purchase order created",
-        "order received"
-      ],
-      "conversionRate": 50,
-      "timeToConvert": 120,
-      "weight": 3
+  "scdProps": {
+    "company_tier": {
+      "type": "user",
+      "frequency": "month",
+      "timing": "fuzzy",
+      "max": 6,
+      "values": [
+        "trial",
+        "starter",
+        "professional",
+        "enterprise"
+      ]
     }
-  ]
+  }
 }

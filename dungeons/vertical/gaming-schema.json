@@ -69,12 +69,14 @@
             5
           ]
         },
-        "used hint": {
-          "$type": "array"
-        },
-        "used boost": {
-          "$type": "array"
-        },
+        "used hint": [
+          "no",
+          "yes"
+        ],
+        "used boost": [
+          "no",
+          "yes"
+        ],
         "level at start": {
           "$range": [
             2,
@@ -99,15 +101,18 @@
             451
           ]
         },
-        "quest success": {
-          "$type": "array"
-        },
-        "used hint": {
-          "$type": "array"
-        },
-        "used boost": {
-          "$type": "array"
-        },
+        "quest success": [
+          "yes",
+          "no"
+        ],
+        "used hint": [
+          "no",
+          "yes"
+        ],
+        "used boost": [
+          "no",
+          "yes"
+        ],
         "number of deaths": [
           1,
           3
@@ -247,6 +252,49 @@
       }
     }
   ],
+  "funnels": [
+    {
+      "sequence": [
+        "app install",
+        "character creation",
+        "join party"
+      ],
+      "isFirstFunnel": true,
+      "conversionRate": 0.8,
+      "timeToConvert": 0.25
+    },
+    {
+      "sequence": [
+        "start quest",
+        "gameplay summary",
+        "complete quest"
+      ],
+      "conversionRate": 0.99,
+      "timeToConvert": 1,
+      "props": {
+        "quest type": [
+          "Rescue",
+          "Retrieve",
+          "Explore",
+          "Destroy",
+          "Investigate"
+        ],
+        "quest difficulty": [
+          "Easy",
+          "Medium",
+          "Hard",
+          "Legendary"
+        ],
+        "quest location": [
+          "Forest",
+          "Dungeon",
+          "Mountain",
+          "City",
+          "Desert"
+        ]
+      }
+    }
+  ],
   "superProps": {
     "platform": [
       "Mobile",
@@ -319,8 +367,8 @@
     ],
     "level": {
       "$range": [
-        2,
-        17
+        3,
+        15
       ]
     },
     "background": [
@@ -340,55 +388,51 @@
     ],
     "subscription MRR": {
       "$range": [
-        1,
-        221
+        0,
+        244
       ]
     },
     "archetype": [
       "neutral"
     ]
   },
-  "funnels": [
-    {
-      "sequence": [
-        "app install",
-        "character creation",
-        "join party"
-      ],
-      "isFirstFunnel": true,
-      "conversionRate": 0.8,
-      "timeToConvert": 0.25
-    },
-    {
-      "sequence": [
-        "start quest",
-        "gameplay summary",
-        "complete quest"
-      ],
-      "conversionRate": 0.99,
-      "timeToConvert": 1,
-      "props": {
-        "quest type": [
-          "Rescue",
-          "Retrieve",
-          "Explore",
-          "Destroy",
-          "Investigate"
-        ],
-        "quest difficulty": [
-          "Easy",
-          "Medium",
-          "Hard",
-          "Legendary"
-        ],
-        "quest location": [
-          "Forest",
-          "Dungeon",
-          "Mountain",
-          "City",
-          "Desert"
+  "scdProps": {
+    "subscription MRR": {
+      "type": "user",
+      "frequency": "week",
+      "timing": "fixed",
+      "max": 250,
+      "values": {
+        "$range": [
+          1,
+          221
         ]
       }
+    },
+    "player_rank": {
+      "type": "user",
+      "frequency": "week",
+      "timing": "fuzzy",
+      "max": 250,
+      "values": [
+        "bronze",
+        "silver",
+        "gold",
+        "diamond",
+        "legendary"
+      ]
+    },
+    "guild_rank": {
+      "type": "guild_id",
+      "frequency": "month",
+      "timing": "fixed",
+      "max": 6,
+      "values": [
+        "bronze",
+        "silver",
+        "gold",
+        "legendary"
+      ]
     }
-  ]
+  }
 }

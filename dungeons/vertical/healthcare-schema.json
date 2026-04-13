@@ -411,6 +411,9 @@
     },
     {
       "event": "account deactivated",
+      "isChurnEvent": true,
+      "returnLikelihood": 0.15,
+      "isStrictEvent": true,
       "properties": {
         "reason": [
           "switched_provider",
@@ -420,6 +423,66 @@
           "insurance_change"
         ]
       }
+    }
+  ],
+  "funnels": [
+    {
+      "sequence": [
+        "account created",
+        "insurance verified",
+        "symptom search",
+        "appointment booked"
+      ],
+      "name": "Onboarding Flow",
+      "isFirstFunnel": true,
+      "conversionRate": 45,
+      "timeToConvert": 72,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "symptom search",
+        "appointment booked",
+        "consultation completed"
+      ],
+      "name": "Booking to Consultation",
+      "conversionRate": 40,
+      "timeToConvert": 48,
+      "weight": 5
+    },
+    {
+      "sequence": [
+        "appointment booked",
+        "consultation completed",
+        "prescription issued",
+        "follow up scheduled"
+      ],
+      "name": "Full Care Journey",
+      "conversionRate": 30,
+      "timeToConvert": 168,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "prescription issued",
+        "prescription refill",
+        "payment processed"
+      ],
+      "name": "Prescription Lifecycle",
+      "conversionRate": 55,
+      "timeToConvert": 720,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "consultation completed",
+        "provider rated",
+        "follow up scheduled"
+      ],
+      "name": "Patient Satisfaction",
+      "conversionRate": 25,
+      "timeToConvert": 72,
+      "weight": 2
     }
   ],
   "superProps": {
@@ -469,59 +532,18 @@
       "65+"
     ]
   },
-  "funnels": [
-    {
-      "sequence": [
-        "account created",
-        "insurance verified",
-        "symptom search",
-        "appointment booked"
-      ],
-      "isFirstFunnel": true,
-      "conversionRate": 45,
-      "timeToConvert": 72,
-      "weight": 3
-    },
-    {
-      "sequence": [
-        "symptom search",
-        "appointment booked",
-        "consultation completed"
-      ],
-      "conversionRate": 40,
-      "timeToConvert": 48,
-      "weight": 5
-    },
-    {
-      "sequence": [
-        "appointment booked",
-        "consultation completed",
-        "prescription issued",
-        "follow up scheduled"
-      ],
-      "conversionRate": 30,
-      "timeToConvert": 168,
-      "weight": 3
-    },
-    {
-      "sequence": [
-        "prescription issued",
-        "prescription refill",
-        "payment processed"
-      ],
-      "conversionRate": 55,
-      "timeToConvert": 720,
-      "weight": 2
-    },
-    {
-      "sequence": [
-        "consultation completed",
-        "provider rated",
-        "follow up scheduled"
-      ],
-      "conversionRate": 25,
-      "timeToConvert": 72,
-      "weight": 2
+  "scdProps": {
+    "care_plan": {
+      "type": "user",
+      "frequency": "month",
+      "timing": "fuzzy",
+      "max": 8,
+      "values": [
+        "preventive",
+        "routine",
+        "chronic",
+        "acute"
+      ]
     }
-  ]
+  }
 }

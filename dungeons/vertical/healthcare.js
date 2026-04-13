@@ -254,10 +254,16 @@ const config = {
 	hasAdSpend: false,
 	percentUsersBornInDataset: 35,
 	hasAvatar: true,
-	batchSize: 2_500_000,
 	concurrency: 1,
 	writeToDisk: false,
-	scdProps: {},
+	scdProps: {
+		care_plan: {
+			values: ["preventive", "routine", "chronic", "acute"],
+			frequency: "month",
+			timing: "fuzzy",
+			max: 8
+		}
+	},
 	mirrorProps: {},
 	lookupTables: [],
 

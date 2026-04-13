@@ -5,8 +5,8 @@
       "isFirstEvent": true,
       "properties": {
         "account_type": [
-          "business",
-          "personal"
+          "personal",
+          "business"
         ],
         "signup_channel": [
           "app",
@@ -22,14 +22,14 @@
       "properties": {
         "session_duration_sec": {
           "$range": [
-            131,
-            471
+            115,
+            487
           ]
         },
         "pages_viewed": [
           5,
-          4,
-          6
+          10,
+          4
         ],
         "month_end_anxiety": [
           false
@@ -140,9 +140,10 @@
             2710
           ]
         },
-        "auto_pay": {
-          "$type": "array"
-        },
+        "auto_pay": [
+          false,
+          true
+        ],
         "missed_payment": [
           false
         ],
@@ -235,7 +236,8 @@
           ]
         },
         "action": [
-          "buy"
+          "buy",
+          "sell"
         ],
         "premium_returns": [
           false
@@ -316,13 +318,12 @@
           ]
         },
         "interest_rate": [
-          4,
-          14,
-          7,
           17,
           10,
           18,
-          8
+          8,
+          9,
+          6
         ]
       }
     },
@@ -336,13 +337,13 @@
           "premium"
         ],
         "new_tier": [
-          "premium",
-          "plus"
+          "plus",
+          "premium"
         ],
         "monthly_fee": [
-          14.99,
           4.99,
-          9.99
+          9.99,
+          14.99
         ]
       }
     },
@@ -363,9 +364,10 @@
           "transfer",
           "technical"
         ],
-        "resolved": {
-          "$type": "array"
-        },
+        "resolved": [
+          false,
+          true
+        ],
         "fraud_sequence": [
           false
         ]
@@ -383,9 +385,10 @@
           "security",
           "promo"
         ],
-        "action_taken": {
-          "$type": "array"
-        }
+        "action_taken": [
+          false,
+          true
+        ]
       }
     },
     {
@@ -399,15 +402,15 @@
           "partner_offer"
         ],
         "value": [
+          74,
+          39,
           23,
-          22,
-          58,
-          67,
-          26,
-          28,
-          29,
-          47,
-          20
+          30,
+          60,
+          73,
+          46,
+          25,
+          27
         ],
         "premium_reward": [
           false
@@ -415,71 +418,6 @@
       }
     }
   ],
-  "superProps": {
-    "account_tier": [
-      "plus",
-      "basic",
-      "premium"
-    ],
-    "platform": [
-      "ios",
-      "android",
-      "web"
-    ],
-    "low_balance_churn": [
-      false
-    ]
-  },
-  "userProps": {
-    "credit_score_range": [
-      "300-579",
-      "580-669",
-      "670-739",
-      "740-799",
-      "800-850"
-    ],
-    "income_bracket": [
-      "under_30k",
-      "30k_50k",
-      "50k_75k",
-      "75k_100k",
-      "100k_150k",
-      "over_150k"
-    ],
-    "account_age_months": {
-      "$range": [
-        17,
-        46
-      ]
-    },
-    "total_balance": {
-      "$range": [
-        16006,
-        83008
-      ]
-    },
-    "has_direct_deposit": {
-      "$type": "array"
-    },
-    "account_segment": [
-      "personal"
-    ],
-    "employee_count": [
-      0
-    ],
-    "annual_revenue": [
-      0
-    ],
-    "industry": [
-      ""
-    ],
-    "age_range": [
-      ""
-    ],
-    "life_stage": [
-      ""
-    ]
-  },
   "funnels": [
     {
       "sequence": [
@@ -559,5 +497,134 @@
       "conversionRate": 25,
       "timeToConvert": 10
     }
-  ]
+  ],
+  "superProps": {
+    "account_tier": [
+      "basic",
+      "plus",
+      "premium"
+    ],
+    "platform": [
+      "ios",
+      "android",
+      "web"
+    ],
+    "low_balance_churn": [
+      false
+    ]
+  },
+  "userProps": {
+    "credit_score_range": [
+      "300-579",
+      "580-669",
+      "670-739",
+      "740-799",
+      "800-850"
+    ],
+    "income_bracket": [
+      "under_30k",
+      "30k_50k",
+      "50k_75k",
+      "75k_100k",
+      "100k_150k",
+      "over_150k"
+    ],
+    "account_age_months": {
+      "$range": [
+        15,
+        44
+      ]
+    },
+    "total_balance": {
+      "$range": [
+        16006,
+        83008
+      ]
+    },
+    "has_direct_deposit": [
+      false,
+      true
+    ],
+    "account_segment": [
+      "personal"
+    ],
+    "employee_count": [
+      0
+    ],
+    "annual_revenue": [
+      0
+    ],
+    "industry": [
+      ""
+    ],
+    "age_range": [
+      ""
+    ],
+    "life_stage": [
+      ""
+    ]
+  },
+  "groupKeys": [
+    {
+      "key": "household_id",
+      "count": 500,
+      "affectsEvents": [
+        "transaction completed",
+        "transfer sent",
+        "bill paid",
+        "savings goal set"
+      ]
+    }
+  ],
+  "groupProps": {
+    "household_id": {
+      "household_size": {
+        "$range": [
+          1,
+          6
+        ]
+      },
+      "combined_income": {
+        "$range": [
+          61633,
+          263131
+        ]
+      },
+      "financial_health_score": {
+        "$range": [
+          12,
+          81
+        ]
+      },
+      "primary_bank": [
+        "NexBank_only",
+        "multi_bank"
+      ]
+    }
+  },
+  "scdProps": {
+    "account_tier": {
+      "type": "user",
+      "frequency": "month",
+      "timing": "fuzzy",
+      "max": 6,
+      "values": [
+        "basic",
+        "plus",
+        "premium"
+      ]
+    },
+    "risk_category": {
+      "type": "household_id",
+      "frequency": "month",
+      "timing": "fixed",
+      "max": 8,
+      "values": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ]
+    }
+  }
 }
