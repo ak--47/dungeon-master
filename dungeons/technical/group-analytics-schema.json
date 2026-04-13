@@ -1,0 +1,149 @@
+{
+  "events": [
+    {
+      "event": "feature used",
+      "weight": 8,
+      "properties": {
+        "feature": [
+          "dashboard",
+          "reports",
+          "settings",
+          "api",
+          "integrations"
+        ]
+      }
+    },
+    {
+      "event": "subscription change",
+      "weight": 2,
+      "properties": {
+        "plan": [
+          "free",
+          "starter",
+          "business",
+          "enterprise"
+        ],
+        "action": [
+          "upgrade",
+          "downgrade",
+          "renew"
+        ]
+      }
+    },
+    {
+      "event": "support ticket",
+      "weight": 3,
+      "properties": {
+        "priority": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "category": [
+          "billing",
+          "technical",
+          "onboarding",
+          "feature request"
+        ]
+      }
+    },
+    {
+      "event": "task completed",
+      "weight": 7,
+      "properties": {
+        "type": [
+          "bug",
+          "feature",
+          "chore",
+          "docs"
+        ],
+        "points": {
+          "$range": [
+            1,
+            12
+          ]
+        }
+      }
+    },
+    {
+      "event": "meeting scheduled",
+      "weight": 4,
+      "properties": {
+        "duration": [
+          15,
+          30,
+          45,
+          60
+        ],
+        "type": [
+          "standup",
+          "planning",
+          "retro",
+          "1:1",
+          "all-hands"
+        ]
+      }
+    },
+    {
+      "event": "code committed",
+      "weight": 6,
+      "properties": {
+        "language": [
+          "javascript",
+          "python",
+          "go",
+          "rust",
+          "java"
+        ],
+        "linesChanged": {
+          "$range": [
+            97,
+            393
+          ]
+        }
+      }
+    },
+    {
+      "event": "deployment run",
+      "weight": 3,
+      "properties": {
+        "environment": [
+          "dev",
+          "staging",
+          "production"
+        ],
+        "status": [
+          "success",
+          "failure"
+        ],
+        "durationSec": {
+          "$range": [
+            65,
+            243
+          ]
+        }
+      }
+    },
+    {
+      "event": "login",
+      "weight": 5,
+      "isFirstEvent": true,
+      "properties": {
+        "method": [
+          "password",
+          "sso",
+          "oauth"
+        ]
+      }
+    }
+  ],
+  "userProps": {
+    "role": [
+      "engineer",
+      "designer",
+      "pm",
+      "manager",
+      "exec"
+    ]
+  }
+}

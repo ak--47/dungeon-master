@@ -1,0 +1,654 @@
+{
+  "events": [
+    {
+      "event": "character created",
+      "isFirstEvent": true,
+      "properties": {
+        "character_class": [
+          "Warrior",
+          "Mage",
+          "Rogue",
+          "Cleric",
+          "Ranger",
+          "Paladin"
+        ],
+        "starting_race": [
+          "Human",
+          "Elf",
+          "Dwarf",
+          "Halfling",
+          "Orc"
+        ]
+      }
+    },
+    {
+      "event": "tutorial completed",
+      "weight": 2,
+      "properties": {
+        "completion_time_mins": [
+          7,
+          13,
+          9,
+          20,
+          19,
+          14
+        ],
+        "skipped": {
+          "$type": "array"
+        }
+      }
+    },
+    {
+      "event": "quest accepted",
+      "weight": 15,
+      "properties": {
+        "quest_id": [
+          "quest_v6t6e9z1",
+          "quest_RNhqNGLN",
+          "quest_6ivE21rn",
+          "quest_4yz09AS7",
+          "quest_h2tXFm7U",
+          "quest_735bt6av",
+          "quest_Z08isTm3"
+        ],
+        "quest_type": [
+          "Main Story",
+          "Side Quest",
+          "Bounty",
+          "Exploration",
+          "Escort"
+        ],
+        "recommended_level": {
+          "$range": [
+            2,
+            44
+          ]
+        }
+      }
+    },
+    {
+      "event": "quest objective completed",
+      "weight": 12,
+      "properties": {
+        "quest_id": [
+          "quest_adceUMbA",
+          "quest_lrxjyCK4",
+          "quest_PnUo2HKN",
+          "quest_7CsY9rii",
+          "quest_xFNke2Be",
+          "quest_kmPBT9vS",
+          "quest_NKbiZbNY",
+          "quest_ltuyqOB9"
+        ],
+        "objective_number": {
+          "$range": [
+            1,
+            5
+          ]
+        }
+      }
+    },
+    {
+      "event": "quest turned in",
+      "weight": 10,
+      "properties": {
+        "quest_id": [
+          "quest_2wOpZNVS",
+          "quest_efJSyP7z",
+          "quest_lZR0pmyR",
+          "quest_vyRcQevj",
+          "quest_Ahb1p9B8",
+          "quest_fOZ6b6Ig",
+          "quest_h5HwXbFU",
+          "quest_GjtUBoBr"
+        ],
+        "reward_gold": {
+          "$range": [
+            53,
+            421
+          ]
+        },
+        "reward_xp": {
+          "$range": [
+            254,
+            1711
+          ]
+        },
+        "compass_user": [
+          false
+        ],
+        "subscriber_advantage": [
+          "Free"
+        ]
+      }
+    },
+    {
+      "event": "enter dungeon",
+      "weight": 18,
+      "properties": {
+        "dungeon_id": [
+          "dungeon_kQNoxB",
+          "dungeon_WRkolB",
+          "dungeon_jBuJ69",
+          "dungeon_Co0ULM",
+          "dungeon_Bkz51G",
+          "dungeon_hzMy5y",
+          "dungeon_vWAFhG",
+          "dungeon_fKj6E0"
+        ],
+        "difficulty": [
+          "Easy",
+          "Medium",
+          "Hard",
+          "Deadly"
+        ],
+        "party_size": {
+          "$range": [
+            1,
+            4
+          ]
+        }
+      }
+    },
+    {
+      "event": "exit dungeon",
+      "weight": 14,
+      "properties": {
+        "dungeon_id": [
+          "dungeon_xF3rB7",
+          "dungeon_kxNdzp",
+          "dungeon_4NnsVR",
+          "dungeon_NJ1OFb",
+          "dungeon_aDW6hP",
+          "dungeon_LBdWOh",
+          "dungeon_7kM29N",
+          "dungeon_7hV1y3",
+          "dungeon_UvwVQ6",
+          "dungeon_QGV8Gn"
+        ],
+        "time_spent_mins": {
+          "$range": [
+            26,
+            99
+          ]
+        },
+        "completion_status": [
+          "completed",
+          "abandoned",
+          "died"
+        ],
+        "strategic_explorer": [
+          false
+        ],
+        "legendary_weapon_equipped": [
+          false
+        ],
+        "subscriber_advantage": [
+          "Free"
+        ]
+      }
+    },
+    {
+      "event": "find treasure",
+      "weight": 16,
+      "properties": {
+        "treasure_type": [
+          "Gold",
+          "Weapon",
+          "Armor",
+          "Potion",
+          "Scroll",
+          "Rare Artifact"
+        ],
+        "treasure_value": {
+          "$range": [
+            87,
+            942
+          ]
+        },
+        "legendary_drop": [
+          false
+        ],
+        "strategic_explorer": [
+          false
+        ],
+        "subscriber_advantage": [
+          "Free"
+        ],
+        "elite_bonus": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "player death",
+      "weight": 8,
+      "properties": {
+        "cause_of_death": [
+          "Monster",
+          "Trap",
+          "Fall Damage",
+          "Poison",
+          "Friendly Fire"
+        ],
+        "player_level": {
+          "$range": [
+            3,
+            49
+          ]
+        },
+        "resurrection_used": {
+          "$type": "array"
+        },
+        "cursed_week": [
+          false
+        ],
+        "near_death_survival": [
+          false
+        ],
+        "subscriber_advantage": [
+          "Free"
+        ]
+      }
+    },
+    {
+      "event": "level up",
+      "weight": 5,
+      "properties": {
+        "new_level": {
+          "$range": [
+            4,
+            47
+          ]
+        },
+        "stat_points_gained": {
+          "$range": [
+            1,
+            5
+          ]
+        }
+      }
+    },
+    {
+      "event": "item purchased",
+      "weight": 11,
+      "properties": {
+        "item_id": [
+          "item_TZCScHf",
+          "item_dSBeAVR",
+          "item_sQnciyo",
+          "item_pbc0cWE",
+          "item_oNfWFVl",
+          "item_NCcoxqr",
+          "item_ay31tYh",
+          "item_O3zSaPr",
+          "item_leeA81K"
+        ],
+        "item_type": [
+          "Weapon",
+          "Armor",
+          "Potion",
+          "Scroll",
+          "Mount",
+          "Cosmetic"
+        ],
+        "price_gold": {
+          "$range": [
+            88,
+            442
+          ]
+        },
+        "vendor_type": [
+          "Town",
+          "Dungeon",
+          "Special Event"
+        ]
+      }
+    },
+    {
+      "event": "item sold",
+      "weight": 7,
+      "properties": {
+        "item_id": [
+          "item_43Nwgf8",
+          "item_Pa0KwVT",
+          "item_SicHTtQ",
+          "item_JMBpV0p",
+          "item_l8h3LR9",
+          "item_Dz6LFAT"
+        ],
+        "item_type": [
+          "Weapon",
+          "Armor",
+          "Potion",
+          "Scroll",
+          "Junk"
+        ],
+        "sell_price": {
+          "$range": [
+            49,
+            206
+          ]
+        }
+      }
+    },
+    {
+      "event": "real money purchase",
+      "weight": 3,
+      "properties": {
+        "product": [
+          "Premium Currency (1000)",
+          "Premium Currency (5000)",
+          "Lucky Charm Pack",
+          "Legendary Weapon Chest",
+          "Cosmetic Bundle",
+          "Season Pass"
+        ],
+        "price_usd": [
+          9.99,
+          99.99,
+          4.99,
+          49.99,
+          19.99
+        ],
+        "payment_method": [
+          "Credit Card",
+          "PayPal",
+          "Apple Pay",
+          "Google Pay"
+        ],
+        "lucky_charm_effect": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "guild joined",
+      "weight": 4,
+      "properties": {
+        "guild_size": {
+          "$range": [
+            19,
+            92
+          ]
+        },
+        "guild_level": {
+          "$range": [
+            1,
+            18
+          ]
+        }
+      }
+    },
+    {
+      "event": "guild left",
+      "properties": {
+        "reason": [
+          "Inactive",
+          "Found Better Guild",
+          "Conflict",
+          "Disbanded"
+        ]
+      }
+    },
+    {
+      "event": "inspect",
+      "weight": 9,
+      "properties": {
+        "inspect_target": [
+          "NPC",
+          "Monster",
+          "Treasure Chest",
+          "Door",
+          "Statue",
+          "Bookshelf"
+        ]
+      }
+    },
+    {
+      "event": "search for clues",
+      "weight": 8,
+      "properties": {
+        "location_type": [
+          "Dungeon Entrance",
+          "Hidden Room",
+          "Quest Location",
+          "Town Square"
+        ],
+        "clue_found": {
+          "$type": "array"
+        }
+      }
+    },
+    {
+      "event": "use item",
+      "weight": 14,
+      "properties": {
+        "item_id": [
+          "item_t6XgcKS",
+          "item_Na3V3zk",
+          "item_Y9vFtiI",
+          "item_OQk8H5s",
+          "item_oGyEl9U",
+          "item_Je2wZaS",
+          "item_5yr92Uu",
+          "item_5lqG1ni",
+          "item_0EmRdUR"
+        ],
+        "item_type": [
+          "Health Potion",
+          "Mana Potion",
+          "Buff Scroll",
+          "Ancient Compass",
+          "Lucky Charm",
+          "Resurrection Stone"
+        ],
+        "context": [
+          "Combat",
+          "Exploration",
+          "Boss Fight",
+          "Casual"
+        ]
+      }
+    },
+    {
+      "event": "combat initiated",
+      "weight": 20,
+      "properties": {
+        "enemy_type": [
+          "Goblin",
+          "Skeleton",
+          "Dragon",
+          "Demon",
+          "Undead",
+          "Beast"
+        ],
+        "enemy_level": {
+          "$range": [
+            1,
+            40
+          ]
+        },
+        "combat_duration_sec": {
+          "$range": [
+            35,
+            269
+          ]
+        }
+      }
+    },
+    {
+      "event": "combat completed",
+      "weight": 18,
+      "properties": {
+        "outcome": [
+          "Victory",
+          "Defeat",
+          "Fled"
+        ],
+        "loot_gained": {
+          "$type": "array"
+        },
+        "legendary_weapon_equipped": [
+          false
+        ],
+        "subscriber_advantage": [
+          "Free"
+        ],
+        "near_death_survival": [
+          false
+        ],
+        "guild_member_retained": [
+          false
+        ]
+      }
+    }
+  ],
+  "superProps": {
+    "platform": [
+      "PC",
+      "Mac",
+      "PlayStation",
+      "Xbox",
+      "Switch"
+    ],
+    "graphics_quality": [
+      "Low",
+      "Medium",
+      "High",
+      "Ultra"
+    ],
+    "subscription_tier": [
+      "Elite",
+      "Free",
+      "Premium"
+    ]
+  },
+  "userProps": {
+    "preferred_playstyle": [
+      "Solo Explorer",
+      "Group Raider",
+      "PvP Fighter",
+      "Quest Completionist",
+      "Treasure Hunter"
+    ],
+    "total_playtime_hours": {
+      "$range": [
+        16,
+        473
+      ]
+    },
+    "achievement_points": {
+      "$range": [
+        252,
+        4648
+      ]
+    },
+    "favorite_class": [
+      "Warrior",
+      "Mage",
+      "Rogue",
+      "Cleric",
+      "Ranger",
+      "Paladin"
+    ]
+  },
+  "funnels": [
+    {
+      "sequence": [
+        "character created",
+        "tutorial completed",
+        "quest accepted"
+      ],
+      "isFirstFunnel": true,
+      "conversionRate": 75,
+      "timeToConvert": 0.5
+    },
+    {
+      "sequence": [
+        "combat initiated",
+        "combat completed",
+        "use item"
+      ],
+      "conversionRate": 75,
+      "timeToConvert": 0.5,
+      "weight": 5
+    },
+    {
+      "sequence": [
+        "enter dungeon",
+        "find treasure",
+        "exit dungeon"
+      ],
+      "conversionRate": 60,
+      "timeToConvert": 2,
+      "weight": 4,
+      "props": {
+        "dungeon_id": [
+          "dungeon_hzMy5y",
+          "dungeon_k3x4Vi",
+          "dungeon_pUjypt",
+          "dungeon_8BMTL6",
+          "dungeon_kQNoxB",
+          "dungeon_exR0A6"
+        ],
+        "difficulty": [
+          "Easy",
+          "Medium",
+          "Hard",
+          "Deadly"
+        ]
+      }
+    },
+    {
+      "sequence": [
+        "quest accepted",
+        "quest objective completed",
+        "quest turned in"
+      ],
+      "conversionRate": 55,
+      "timeToConvert": 3,
+      "weight": 3,
+      "props": {
+        "quest_id": [
+          "quest_ESjLW1oT",
+          "quest_6Gg4dRKm",
+          "quest_Hu6lR8Cy",
+          "quest_NKbiZbNY",
+          "quest_ZhYgMb9w",
+          "quest_W650RdCt",
+          "quest_iSu5Vc6J"
+        ]
+      }
+    },
+    {
+      "sequence": [
+        "inspect",
+        "search for clues",
+        "enter dungeon"
+      ],
+      "conversionRate": 50,
+      "timeToConvert": 1,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "item purchased",
+        "use item",
+        "item sold"
+      ],
+      "conversionRate": 45,
+      "timeToConvert": 6,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "guild joined",
+        "level up",
+        "real money purchase"
+      ],
+      "conversionRate": 25,
+      "timeToConvert": 24
+    }
+  ]
+}

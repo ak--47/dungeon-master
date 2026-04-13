@@ -1,0 +1,580 @@
+{
+  "events": [
+    {
+      "event": "account created",
+      "isFirstEvent": true,
+      "properties": {
+        "referral_source": [
+          "organic",
+          "github",
+          "conference",
+          "blog_post",
+          "colleague",
+          "search"
+        ]
+      }
+    },
+    {
+      "event": "build completed",
+      "weight": 8,
+      "properties": {
+        "pipeline_id": {
+          "$type": "string"
+        },
+        "repo_id": {
+          "$type": "string"
+        },
+        "build_status": [
+          "success",
+          "failed",
+          "cancelled"
+        ],
+        "build_duration_sec": {
+          "$range": [
+            57,
+            515
+          ]
+        },
+        "branch": [
+          "main",
+          "develop",
+          "feature",
+          "hotfix"
+        ],
+        "test_count": {
+          "$range": [
+            85,
+            429
+          ]
+        },
+        "test_pass_rate": {
+          "$range": [
+            71,
+            99
+          ]
+        }
+      }
+    },
+    {
+      "event": "deployment completed",
+      "weight": 5,
+      "properties": {
+        "pipeline_id": {
+          "$type": "string"
+        },
+        "repo_id": {
+          "$type": "string"
+        },
+        "deploy_status": [
+          "success",
+          "failed",
+          "rolled_back"
+        ],
+        "environment": [
+          "production",
+          "staging",
+          "dev",
+          "preview"
+        ],
+        "deploy_duration_sec": {
+          "$range": [
+            53,
+            246
+          ]
+        },
+        "is_night_deploy": [
+          false
+        ],
+        "preview_enabled": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "pull request created",
+      "weight": 6,
+      "properties": {
+        "repo_id": {
+          "$type": "string"
+        },
+        "pr_size": [
+          "small",
+          "medium",
+          "large",
+          "xlarge"
+        ],
+        "files_changed": [
+          16,
+          34,
+          14,
+          36,
+          37,
+          15,
+          13
+        ],
+        "lines_added": {
+          "$range": [
+            301,
+            1600
+          ]
+        },
+        "lines_removed": {
+          "$range": [
+            99,
+            386
+          ]
+        },
+        "ai_assist": [
+          "manual"
+        ]
+      }
+    },
+    {
+      "event": "code review completed",
+      "weight": 5,
+      "properties": {
+        "repo_id": {
+          "$type": "string"
+        },
+        "review_result": [
+          "approved",
+          "changes_requested",
+          "commented"
+        ],
+        "review_duration_hours": [
+          48,
+          55,
+          51,
+          54,
+          16,
+          18,
+          25
+        ],
+        "comments_count": [
+          15,
+          7,
+          6
+        ],
+        "ai_assist": [
+          "manual"
+        ]
+      }
+    },
+    {
+      "event": "alert triggered",
+      "weight": 4,
+      "properties": {
+        "alert_type": [
+          "error_rate",
+          "latency",
+          "cpu",
+          "memory",
+          "disk",
+          "custom_metric"
+        ],
+        "severity": [
+          "info",
+          "warning",
+          "critical"
+        ],
+        "service": [
+          "api",
+          "web",
+          "worker",
+          "database",
+          "cdn",
+          "auth"
+        ],
+        "acknowledged": [
+          true,
+          false
+        ]
+      }
+    },
+    {
+      "event": "incident created",
+      "weight": 2,
+      "properties": {
+        "severity": [
+          "sev1",
+          "sev2",
+          "sev3"
+        ],
+        "service": [
+          "api",
+          "web",
+          "worker",
+          "database",
+          "cdn",
+          "auth"
+        ],
+        "response_time_minutes": {
+          "$range": [
+            21,
+            93
+          ]
+        },
+        "root_cause": [
+          "deploy",
+          "config_change",
+          "dependency",
+          "traffic_spike",
+          "hardware",
+          "unknown"
+        ]
+      }
+    },
+    {
+      "event": "incident resolved",
+      "weight": 2,
+      "properties": {
+        "severity": [
+          "sev1",
+          "sev2",
+          "sev3"
+        ],
+        "resolution_time_minutes": {
+          "$range": [
+            100,
+            377
+          ]
+        },
+        "response_time_minutes": {
+          "$range": [
+            23,
+            93
+          ]
+        },
+        "resolution_type": [
+          "hotfix",
+          "rollback",
+          "config_change",
+          "scaling",
+          "restart",
+          "manual"
+        ]
+      }
+    },
+    {
+      "event": "repository connected",
+      "weight": 2,
+      "properties": {
+        "provider": [
+          "github",
+          "gitlab",
+          "bitbucket"
+        ],
+        "repo_visibility": [
+          "private",
+          "public"
+        ],
+        "language": [
+          "javascript",
+          "python",
+          "go",
+          "rust",
+          "java",
+          "typescript"
+        ]
+      }
+    },
+    {
+      "event": "pipeline configured",
+      "weight": 2,
+      "properties": {
+        "pipeline_id": {
+          "$type": "string"
+        },
+        "pipeline_type": [
+          "build_test",
+          "build_test_deploy",
+          "deploy_only",
+          "lint_test"
+        ],
+        "trigger": [
+          "push",
+          "pull_request",
+          "schedule",
+          "manual"
+        ],
+        "runtime": [
+          "docker",
+          "node",
+          "python",
+          "go"
+        ]
+      }
+    },
+    {
+      "event": "collaboration invited",
+      "weight": 2,
+      "properties": {
+        "invite_role": [
+          "developer",
+          "admin",
+          "viewer"
+        ],
+        "invite_method": [
+          "email",
+          "link",
+          "github_team"
+        ]
+      }
+    },
+    {
+      "event": "monitoring dashboard viewed",
+      "weight": 5,
+      "properties": {
+        "dashboard_type": [
+          "overview",
+          "performance",
+          "errors",
+          "deploys",
+          "custom"
+        ],
+        "time_range": [
+          "1h",
+          "6h",
+          "24h",
+          "7d",
+          "30d"
+        ],
+        "widgets_count": [
+          4,
+          6,
+          10
+        ]
+      }
+    },
+    {
+      "event": "log searched",
+      "weight": 4,
+      "properties": {
+        "query_type": [
+          "full_text",
+          "structured",
+          "regex"
+        ],
+        "time_range": [
+          "15m",
+          "1h",
+          "6h",
+          "24h",
+          "7d"
+        ],
+        "results_count": {
+          "$range": [
+            94,
+            404
+          ]
+        },
+        "service": [
+          "api",
+          "web",
+          "worker",
+          "database",
+          "auth"
+        ]
+      }
+    },
+    {
+      "event": "notification received",
+      "weight": 6,
+      "properties": {
+        "notification_type": [
+          "build_failed",
+          "deploy_completed",
+          "pr_review_requested",
+          "alert_fired",
+          "mention",
+          "billing"
+        ],
+        "channel": [
+          "in_app",
+          "email",
+          "slack",
+          "webhook"
+        ],
+        "opened": [
+          true,
+          false
+        ]
+      }
+    },
+    {
+      "event": "billing updated",
+      "properties": {
+        "change_type": [
+          "plan_upgrade",
+          "plan_downgrade",
+          "payment_method",
+          "add_seats",
+          "remove_seats"
+        ],
+        "payment_method": [
+          "credit_card",
+          "invoice",
+          "paypal"
+        ]
+      }
+    },
+    {
+      "event": "app session",
+      "weight": 8,
+      "properties": {
+        "session_duration_sec": {
+          "$range": [
+            586,
+            2989
+          ]
+        },
+        "pages_viewed": [
+          6,
+          14,
+          8,
+          16
+        ]
+      }
+    },
+    {
+      "event": "environment created",
+      "weight": 2,
+      "properties": {
+        "env_type": [
+          "production",
+          "staging",
+          "dev",
+          "preview",
+          "test"
+        ],
+        "cloud_provider": [
+          "aws",
+          "gcp",
+          "azure",
+          "self_hosted"
+        ],
+        "region": [
+          "us-east-1",
+          "us-west-2",
+          "eu-west-1",
+          "ap-south-1"
+        ]
+      }
+    },
+    {
+      "event": "account deactivated",
+      "properties": {
+        "reason": [
+          "switched_provider",
+          "cost",
+          "no_longer_needed",
+          "poor_experience",
+          "team_dissolved",
+          "acquired"
+        ]
+      }
+    }
+  ],
+  "superProps": {
+    "subscription_tier": [
+      "free",
+      "team",
+      "business",
+      "enterprise"
+    ],
+    "platform": [
+      "web",
+      "desktop_app",
+      "cli"
+    ],
+    "language": [
+      "javascript",
+      "python",
+      "go",
+      "rust",
+      "java",
+      "typescript"
+    ]
+  },
+  "userProps": {
+    "dev_role": [
+      "full_stack"
+    ],
+    "segment": [
+      "full_stack"
+    ],
+    "team_size": [
+      41,
+      35,
+      9,
+      13,
+      21
+    ],
+    "repos_connected": [
+      0
+    ],
+    "org_name": [
+      "personal"
+    ],
+    "experience_level": [
+      "junior",
+      "mid",
+      "senior"
+    ]
+  },
+  "funnels": [
+    {
+      "sequence": [
+        "account created",
+        "repository connected",
+        "pipeline configured",
+        "build completed"
+      ],
+      "isFirstFunnel": true,
+      "conversionRate": 45,
+      "timeToConvert": 72,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "build completed",
+        "deployment completed",
+        "monitoring dashboard viewed"
+      ],
+      "conversionRate": 40,
+      "timeToConvert": 48,
+      "weight": 5
+    },
+    {
+      "sequence": [
+        "pull request created",
+        "code review completed",
+        "build completed",
+        "deployment completed"
+      ],
+      "conversionRate": 35,
+      "timeToConvert": 72,
+      "weight": 4
+    },
+    {
+      "sequence": [
+        "alert triggered",
+        "incident created",
+        "incident resolved"
+      ],
+      "conversionRate": 50,
+      "timeToConvert": 24,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "app session",
+        "billing updated",
+        "collaboration invited"
+      ],
+      "conversionRate": 20,
+      "timeToConvert": 168,
+      "weight": 2
+    }
+  ]
+}

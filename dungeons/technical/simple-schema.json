@@ -1,0 +1,278 @@
+{
+  "events": [
+    {
+      "event": "ad impression",
+      "weight": 15,
+      "properties": {
+        "partner": [
+          "google",
+          "facebook",
+          "twitter",
+          "linkedin",
+          "bing",
+          "taboola",
+          "outbrain",
+          "quora",
+          "pinterest"
+        ]
+      }
+    },
+    {
+      "event": "ad click",
+      "weight": 10,
+      "properties": {
+        "partner": [
+          "google",
+          "facebook",
+          "twitter",
+          "linkedin",
+          "bing",
+          "taboola",
+          "outbrain",
+          "quora",
+          "pinterest"
+        ]
+      }
+    },
+    {
+      "event": "checkout",
+      "weight": 2,
+      "properties": {
+        "amount": {
+          "$range": [
+            104,
+            391
+          ]
+        },
+        "currency": [
+          "USD",
+          "CAD",
+          "EUR",
+          "BTC",
+          "ETH",
+          "JPY"
+        ],
+        "coupon": [
+          "none",
+          "10%OFF",
+          "20%OFF",
+          "30%OFF",
+          "40%OFF",
+          "50%OFF"
+        ],
+        "numItems": {
+          "$range": [
+            2,
+            9
+          ]
+        }
+      }
+    },
+    {
+      "event": "add to cart",
+      "weight": 4,
+      "properties": {
+        "amount": {
+          "$range": [
+            110,
+            395
+          ]
+        },
+        "rating": {
+          "$range": [
+            1,
+            5
+          ]
+        },
+        "reviews": {
+          "$range": [
+            1,
+            35
+          ]
+        },
+        "isFeaturedItem": [
+          true,
+          false
+        ],
+        "itemCategory": [
+          "Health",
+          "Wedding",
+          "Handmade",
+          "Outdoors",
+          "Computers",
+          "Software",
+          "Books",
+          "Home",
+          "Appliances"
+        ],
+        "dateItemListed": {
+          "$type": "string"
+        }
+      }
+    },
+    {
+      "event": "page view",
+      "weight": 10,
+      "properties": {
+        "page": [
+          "/peace",
+          "/product",
+          "/help",
+          "/watch",
+          "/people",
+          "/listen"
+        ],
+        "utm_source": [
+          "$organic",
+          "google",
+          "twitter",
+          "linkedin"
+        ]
+      }
+    },
+    {
+      "event": "watch video",
+      "weight": 8,
+      "properties": {
+        "videoCategory": [
+          "cooking",
+          "gaming",
+          "educational",
+          "travel",
+          "funny",
+          "inspirational"
+        ],
+        "isFeaturedItem": [
+          true,
+          false
+        ],
+        "watchTimeSec": {
+          "$range": [
+            130,
+            469
+          ]
+        },
+        "quality": [
+          "2160p",
+          "1440p",
+          "1080p",
+          "720p",
+          "480p",
+          "360p",
+          "240p"
+        ],
+        "format": [
+          "mp4",
+          "avi",
+          "mov",
+          "mpg"
+        ],
+        "uploader_id": {
+          "$type": "string"
+        }
+      }
+    },
+    {
+      "event": "view item",
+      "weight": 8,
+      "properties": {
+        "isFeaturedItem": [
+          true,
+          false
+        ],
+        "itemCategory": [
+          "Games",
+          "Music",
+          "Books",
+          "Garden"
+        ],
+        "dateItemListed": {
+          "$type": "string"
+        }
+      }
+    },
+    {
+      "event": "save item",
+      "weight": 5,
+      "properties": {
+        "isFeaturedItem": [
+          true,
+          false
+        ],
+        "itemCategory": [
+          "Food",
+          "Art",
+          "Wedding",
+          "Toys",
+          "Office"
+        ],
+        "dateItemListed": {
+          "$type": "string"
+        }
+      }
+    },
+    {
+      "event": "sign up",
+      "isFirstEvent": true,
+      "properties": {
+        "signupMethod": [
+          "email",
+          "google",
+          "facebook",
+          "twitter",
+          "linkedin",
+          "github"
+        ],
+        "referral": [
+          "none",
+          "friend",
+          "ad"
+        ]
+      }
+    }
+  ],
+  "superProps": {
+    "theme": [
+      "custom",
+      "dark",
+      "light"
+    ]
+  },
+  "userProps": {
+    "title": {
+      "$type": "string"
+    },
+    "luckyNumber": {
+      "$range": [
+        114,
+        333
+      ]
+    },
+    "spiritAnimal": [
+      "millipede",
+      "giraffe",
+      "tarantula",
+      "bedbug",
+      "louse",
+      "flea beetle",
+      "leaf beetle",
+      "cricket"
+    ]
+  },
+  "funnels": [
+    {
+      "sequence": [
+        "page view",
+        "view item",
+        "save item",
+        "page view",
+        "sign up"
+      ],
+      "isFirstFunnel": true,
+      "conversionRate": 50,
+      "timeToConvert": 2,
+      "order": "first-and-last-fixed",
+      "experiment": true
+    }
+  ]
+}

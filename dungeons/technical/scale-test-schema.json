@@ -1,0 +1,70 @@
+{
+  "events": [
+    {
+      "event": "page view",
+      "weight": 10,
+      "properties": {
+        "page": [
+          "/",
+          "/home",
+          "/about",
+          "/pricing",
+          "/docs"
+        ]
+      }
+    },
+    {
+      "event": "click",
+      "weight": 8,
+      "properties": {
+        "element": [
+          "button",
+          "link",
+          "card",
+          "nav",
+          "tab"
+        ],
+        "label": [
+          "submit",
+          "cancel",
+          "next",
+          "back",
+          "learn more"
+        ]
+      }
+    },
+    {
+      "event": "api call",
+      "weight": 6,
+      "properties": {
+        "endpoint": [
+          "/api/users",
+          "/api/data",
+          "/api/auth",
+          "/api/events"
+        ],
+        "status": [
+          200,
+          201,
+          301,
+          400,
+          404,
+          500
+        ],
+        "latency_ms": {
+          "$range": [
+            408,
+            1563
+          ]
+        }
+      }
+    }
+  ],
+  "userProps": {
+    "plan": [
+      "free",
+      "pro",
+      "enterprise"
+    ]
+  }
+}

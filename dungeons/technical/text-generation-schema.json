@@ -1,0 +1,1059 @@
+{
+  "events": [
+    {
+      "event": "enterprise_support_ticket",
+      "properties": {
+        "ticket_text": {
+          "$type": "string"
+        },
+        "priority": [
+          "critical",
+          "high",
+          "medium",
+          "low"
+        ],
+        "category": [
+          "authentication",
+          "performance",
+          "integration",
+          "billing",
+          "bug_report"
+        ],
+        "account_tier": [
+          "enterprise",
+          "business",
+          "pro"
+        ],
+        "escalation_level": [
+          1,
+          2,
+          3
+        ],
+        "estimated_resolution_hours": {
+          "$range": [
+            13,
+            55
+          ]
+        },
+        "has_screenshot": [
+          true,
+          false
+        ],
+        "channel": [
+          "email",
+          "phone",
+          "chat",
+          "portal"
+        ],
+        "is_resolved": [
+          true,
+          false
+        ],
+        "resolution_time_minutes": {
+          "$range": [
+            320,
+            2333
+          ]
+        },
+        "auto_escalated": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "casual_product_review",
+      "properties": {
+        "review_text": {
+          "$type": "string"
+        },
+        "rating": {
+          "$range": [
+            2,
+            4
+          ]
+        },
+        "product_category": [
+          "mobile_app",
+          "web_platform",
+          "desktop_app",
+          "api"
+        ],
+        "is_verified_purchase": [
+          true,
+          false
+        ],
+        "helpful_votes": {
+          "$range": [
+            1,
+            39
+          ]
+        },
+        "would_recommend": [
+          true,
+          false
+        ],
+        "usage_duration_days": {
+          "$range": [
+            50,
+            328
+          ]
+        }
+      }
+    },
+    {
+      "event": "technical_forum_post",
+      "properties": {
+        "post_text": {
+          "$type": "string"
+        },
+        "topic_category": [
+          "api_help",
+          "integration",
+          "troubleshooting",
+          "feature_request"
+        ],
+        "upvotes": {
+          "$range": [
+            3,
+            23
+          ]
+        },
+        "has_code_snippet": [
+          true,
+          false
+        ],
+        "is_solved": [
+          true,
+          false
+        ],
+        "response_count": {
+          "$range": [
+            1,
+            12
+          ]
+        },
+        "user_experience_level": [
+          "beginner",
+          "intermediate",
+          "advanced",
+          "expert"
+        ]
+      }
+    },
+    {
+      "event": "search_query",
+      "properties": {
+        "query_text": {
+          "$type": "string"
+        },
+        "search_category": [
+          "help",
+          "documentation",
+          "features",
+          "pricing",
+          "support"
+        ],
+        "results_found": {
+          "$range": [
+            20,
+            77
+          ]
+        },
+        "clicked_result": [
+          true,
+          false
+        ],
+        "result_position_clicked": {
+          "$range": [
+            2,
+            10
+          ]
+        },
+        "search_duration_seconds": {
+          "$range": [
+            41,
+            270
+          ]
+        },
+        "refined_search": [
+          true,
+          false
+        ]
+      }
+    },
+    {
+      "event": "business_feedback",
+      "properties": {
+        "feedback_text": {
+          "$type": "string"
+        },
+        "satisfaction_score": {
+          "$range": [
+            3,
+            8
+          ]
+        },
+        "feedback_category": [
+          "feature_request",
+          "improvement",
+          "compliment",
+          "concern"
+        ],
+        "department": [
+          "engineering",
+          "sales",
+          "marketing",
+          "support",
+          "executive"
+        ],
+        "follow_up_requested": [
+          true,
+          false
+        ],
+        "urgency": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "implementation_priority": {
+          "$range": [
+            1,
+            4
+          ]
+        }
+      }
+    },
+    {
+      "event": "chat_message",
+      "weight": 10,
+      "properties": {
+        "message_text": {
+          "$type": "string"
+        },
+        "chat_type": [
+          "support",
+          "sales",
+          "general",
+          "technical"
+        ],
+        "message_length": {
+          "$range": [
+            25,
+            160
+          ]
+        },
+        "contains_emoji": [
+          true,
+          false
+        ],
+        "response_time_seconds": {
+          "$range": [
+            376,
+            3293
+          ]
+        },
+        "is_agent_response": [
+          true,
+          false
+        ],
+        "satisfaction_rating": {
+          "$type": "array"
+        },
+        "requires_escalation": [
+          true,
+          false
+        ]
+      }
+    },
+    {
+      "event": "email_correspondence",
+      "properties": {
+        "email_text": {
+          "$type": "string"
+        },
+        "email_type": [
+          "support",
+          "billing",
+          "account",
+          "marketing_opt_out"
+        ],
+        "thread_length": {
+          "$range": [
+            2,
+            8
+          ]
+        },
+        "priority": [
+          "normal",
+          "high",
+          "urgent"
+        ],
+        "has_attachment": [
+          true,
+          false
+        ],
+        "auto_response": [
+          true,
+          false
+        ],
+        "response_time_hours": {
+          "$range": [
+            7,
+            40
+          ]
+        },
+        "customer_type": [
+          "new",
+          "existing",
+          "enterprise",
+          "trial"
+        ]
+      }
+    },
+    {
+      "event": "twitter_post",
+      "properties": {
+        "post_text": {
+          "$type": "string"
+        },
+        "character_count": {
+          "$range": [
+            63,
+            232
+          ]
+        },
+        "has_hashtags": [
+          true,
+          false
+        ],
+        "has_mentions": [
+          true,
+          false
+        ],
+        "engagement_type": [
+          "like",
+          "retweet",
+          "reply",
+          "quote_tweet"
+        ],
+        "follower_count": {
+          "$range": [
+            2124,
+            42540
+          ]
+        },
+        "is_thread": [
+          true,
+          false
+        ],
+        "posted_via": [
+          "web",
+          "mobile",
+          "api",
+          "third_party"
+        ]
+      }
+    },
+    {
+      "event": "linkedin_post",
+      "properties": {
+        "post_text": {
+          "$type": "string"
+        },
+        "post_type": [
+          "update",
+          "article",
+          "job_posting",
+          "company_news"
+        ],
+        "industry_tag": [
+          "technology",
+          "business",
+          "marketing",
+          "sales",
+          "hr"
+        ],
+        "connection_level": [
+          "1st",
+          "2nd",
+          "3rd",
+          "not_connected"
+        ],
+        "engagement_score": {
+          "$range": [
+            169,
+            850
+          ]
+        },
+        "is_sponsored": [
+          true,
+          false
+        ],
+        "company_size": [
+          "startup",
+          "small",
+          "medium",
+          "large",
+          "enterprise"
+        ]
+      }
+    },
+    {
+      "event": "reddit_comment",
+      "properties": {
+        "comment_text": {
+          "$type": "string"
+        },
+        "subreddit": [
+          "r/SaaS",
+          "r/webdev",
+          "r/startups",
+          "r/technology",
+          "r/programming"
+        ],
+        "comment_depth": {
+          "$range": [
+            2,
+            9
+          ]
+        },
+        "upvotes": {
+          "$range": [
+            106,
+            436
+          ]
+        },
+        "is_edited": [
+          true,
+          false
+        ],
+        "account_age_days": {
+          "$range": [
+            736,
+            2973
+          ]
+        },
+        "is_op": [
+          true,
+          false
+        ],
+        "parent_comment_id": {
+          "$type": "string"
+        }
+      }
+    },
+    {
+      "event": "bug_report_submitted",
+      "properties": {
+        "report_text": {
+          "$type": "string"
+        },
+        "severity": [
+          "critical",
+          "high",
+          "medium",
+          "low"
+        ],
+        "bug_category": [
+          "ui",
+          "api",
+          "performance",
+          "data",
+          "security"
+        ],
+        "steps_to_reproduce": {
+          "$range": [
+            3,
+            8
+          ]
+        },
+        "browser_info": [
+          "Chrome 118",
+          "Firefox 119",
+          "Safari 17",
+          "Edge 118"
+        ],
+        "os_info": [
+          "Windows 11",
+          "macOS Ventura",
+          "Ubuntu 22.04",
+          "iOS 17"
+        ],
+        "is_reproducible": [
+          true,
+          false
+        ],
+        "affects_workflow": [
+          true,
+          false
+        ],
+        "has_screenshot": [
+          true,
+          false
+        ],
+        "reporter_role": [
+          "admin",
+          "user",
+          "developer",
+          "qa_tester"
+        ],
+        "requires_immediate_review": [
+          false
+        ],
+        "estimated_fix_hours": {
+          "$range": [
+            2,
+            7
+          ]
+        }
+      }
+    },
+    {
+      "event": "feature_request_submitted",
+      "properties": {
+        "request_text": {
+          "$type": "string"
+        },
+        "request_category": [
+          "ui_improvement",
+          "new_feature",
+          "integration",
+          "performance"
+        ],
+        "priority_level": [
+          "nice_to_have",
+          "important",
+          "critical",
+          "blocker"
+        ],
+        "estimated_users_affected": {
+          "$range": [
+            1154,
+            8427
+          ]
+        },
+        "business_impact": [
+          "low",
+          "medium",
+          "high",
+          "critical"
+        ],
+        "similar_requests": {
+          "$range": [
+            8,
+            44
+          ]
+        },
+        "requester_plan": [
+          "free",
+          "basic",
+          "pro",
+          "enterprise"
+        ],
+        "implementation_complexity": [
+          "simple",
+          "moderate",
+          "complex",
+          "very_complex"
+        ],
+        "votes": {
+          "$range": [
+            31,
+            153
+          ]
+        }
+      }
+    },
+    {
+      "event": "onboarding_feedback",
+      "properties": {
+        "feedback_text": {
+          "$type": "string"
+        },
+        "onboarding_step": [
+          "signup",
+          "email_verification",
+          "profile_setup",
+          "first_use",
+          "tutorial"
+        ],
+        "completion_rate": {
+          "$range": [
+            20,
+            75
+          ]
+        },
+        "time_spent_minutes": {
+          "$range": [
+            20,
+            108
+          ]
+        },
+        "dropped_at_step": [
+          "signup",
+          "tutorial",
+          "first_action",
+          "payment",
+          "completed"
+        ],
+        "help_docs_accessed": [
+          true,
+          false
+        ],
+        "support_contacted": [
+          true,
+          false
+        ],
+        "device_type": [
+          "desktop",
+          "mobile",
+          "tablet"
+        ],
+        "signup_source": [
+          "organic",
+          "paid_ad",
+          "referral",
+          "social_media"
+        ]
+      }
+    },
+    {
+      "event": "tutorial_comment_posted",
+      "properties": {
+        "comment_text": {
+          "$type": "string"
+        },
+        "tutorial_section": [
+          "getting_started",
+          "advanced_features",
+          "api_guide",
+          "troubleshooting"
+        ],
+        "helpfulness_rating": {
+          "$range": [
+            2,
+            4
+          ]
+        },
+        "comment_type": [
+          "question",
+          "clarification",
+          "praise",
+          "suggestion",
+          "correction"
+        ],
+        "user_experience_level": [
+          "beginner",
+          "intermediate",
+          "advanced",
+          "expert"
+        ],
+        "tutorial_completion": {
+          "$range": [
+            13,
+            81
+          ]
+        },
+        "follow_up_questions": {
+          "$range": [
+            0,
+            4
+          ]
+        },
+        "marked_as_helpful": [
+          true,
+          false
+        ],
+        "time_on_tutorial_minutes": {
+          "$range": [
+            7,
+            50
+          ]
+        }
+      }
+    },
+    {
+      "event": "webinar_chat_message",
+      "properties": {
+        "message_text": {
+          "$type": "string"
+        },
+        "webinar_topic": [
+          "product_demo",
+          "feature_update",
+          "best_practices",
+          "q_and_a"
+        ],
+        "message_timestamp_minutes": {
+          "$range": [
+            16,
+            78
+          ]
+        },
+        "attendee_count": {
+          "$range": [
+            177,
+            798
+          ]
+        },
+        "is_question": [
+          true,
+          false
+        ],
+        "is_answered": [
+          true,
+          false
+        ],
+        "reaction_emoji": {
+          "$type": "array"
+        },
+        "is_moderator": [
+          true,
+          false
+        ],
+        "attendee_type": [
+          "customer",
+          "prospect",
+          "partner",
+          "employee"
+        ]
+      }
+    },
+    {
+      "event": "charity_comment_posted",
+      "weight": 8,
+      "properties": {
+        "comment_text": {
+          "$type": "string"
+        },
+        "comment_type": [
+          "donation_thanks",
+          "support_message",
+          "congratulations",
+          "encouragement"
+        ],
+        "cause_category": [
+          "medical",
+          "education",
+          "disaster_relief",
+          "animal_welfare",
+          "community"
+        ],
+        "donation_amount": {
+          "$range": [
+            53,
+            402
+          ]
+        },
+        "is_anonymous": [
+          true,
+          false
+        ],
+        "includes_prayer": [
+          true,
+          false
+        ],
+        "emotional_tone": [
+          "supportive",
+          "inspiring",
+          "grateful",
+          "hopeful"
+        ],
+        "relationship_to_cause": [
+          "friend",
+          "family",
+          "stranger",
+          "community_member"
+        ]
+      }
+    },
+    {
+      "event": "wedding_comment_posted",
+      "weight": 6,
+      "properties": {
+        "comment_text": {
+          "$type": "string"
+        },
+        "comment_type": [
+          "congratulations",
+          "well_wishes",
+          "memory_share",
+          "blessing"
+        ],
+        "wedding_phase": [
+          "engagement",
+          "ceremony",
+          "reception",
+          "honeymoon"
+        ],
+        "includes_emoji": [
+          true,
+          false
+        ],
+        "relationship_to_couple": [
+          "family",
+          "friend",
+          "coworker",
+          "acquaintance"
+        ],
+        "comment_length": {
+          "$range": [
+            26,
+            136
+          ]
+        },
+        "is_public": [
+          true,
+          false
+        ]
+      }
+    },
+    {
+      "event": "social_media_tweet",
+      "weight": 15,
+      "properties": {
+        "tweet_text": {
+          "$type": "string"
+        },
+        "tweet_type": [
+          "announcement",
+          "update",
+          "opinion",
+          "question",
+          "share"
+        ],
+        "character_count": {
+          "$range": [
+            58,
+            223
+          ]
+        },
+        "has_hashtags": [
+          true,
+          false
+        ],
+        "has_mentions": [
+          true,
+          false
+        ],
+        "has_media": [
+          true,
+          false
+        ],
+        "engagement_score": {
+          "$range": [
+            83,
+            917
+          ]
+        },
+        "is_retweet": [
+          true,
+          false
+        ],
+        "time_of_day": [
+          "morning",
+          "afternoon",
+          "evening",
+          "night"
+        ],
+        "device_type": [
+          "mobile",
+          "desktop",
+          "tablet"
+        ]
+      }
+    },
+    {
+      "event": "company_announcement_tweet",
+      "weight": 3,
+      "properties": {
+        "tweet_text": {
+          "$type": "string"
+        },
+        "announcement_type": [
+          "product_launch",
+          "milestone",
+          "hiring",
+          "partnership",
+          "event"
+        ],
+        "urgency": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "target_audience": [
+          "customers",
+          "investors",
+          "employees",
+          "general_public"
+        ],
+        "includes_link": [
+          true,
+          false
+        ],
+        "is_scheduled": [
+          true,
+          false
+        ],
+        "campaign_tag": [
+          "product",
+          "brand",
+          "recruitment",
+          "pr",
+          "organic"
+        ],
+        "expected_reach": {
+          "$range": [
+            1697,
+            44769
+          ]
+        }
+      }
+    },
+    {
+      "event": "api_discussion_thread",
+      "properties": {
+        "thread_messages": [
+          "Re: API integration issues - so like Login problems actually trial period dashboard won't load",
+          "Re: API integration issues - using the suite for work stuff. like response time does what it says i guess - actually forget what i said. caching layers does what it says i guess.",
+          "System specs: Chrome 92, macOS Monterey Issue: Dashboard shows blank page Steps to reproduce: 1. Access mobile app 2. Attempt sync 3. Wait for completion 4. Sync fails Anyone else experiencing this?. (regarding the API integration issues)",
+          "Billing questions speaking of which enterprise setup permissions are wrong. This is about the API integration issues."
+        ],
+        "api_version": [
+          "v1",
+          "v2",
+          "v3",
+          "beta"
+        ],
+        "severity": [
+          "low",
+          "medium",
+          "high",
+          "critical"
+        ],
+        "affects_production": [
+          true,
+          false
+        ],
+        "resolution_status": [
+          "open",
+          "investigating",
+          "resolved",
+          "closed"
+        ]
+      }
+    },
+    {
+      "event": "satisfaction_survey_triggered",
+      "properties": {
+        "survey_type": [
+          "quarterly_nps"
+        ],
+        "score": {
+          "$range": [
+            3,
+            8
+          ]
+        }
+      }
+    }
+  ],
+  "superProps": {
+    "product_tier": [
+      "free",
+      "basic",
+      "pro",
+      "enterprise"
+    ],
+    "data_center": [
+      "us-east",
+      "us-west",
+      "eu-central",
+      "asia-pacific"
+    ],
+    "feature_flags": {
+      "$type": "array"
+    }
+  },
+  "userProps": {
+    "account_age_days": {
+      "$range": [
+        195,
+        905
+      ]
+    },
+    "user_tier": [
+      "free",
+      "basic",
+      "pro",
+      "enterprise"
+    ],
+    "signup_method": [
+      "email",
+      "google",
+      "microsoft",
+      "sso",
+      "invite"
+    ],
+    "notification_enabled": [
+      true,
+      false
+    ],
+    "has_purchased": [
+      true,
+      false
+    ],
+    "primary_use_case": [
+      "analytics",
+      "reporting",
+      "integration",
+      "automation"
+    ],
+    "company_size": [
+      "1-10",
+      "11-50",
+      "51-200",
+      "201-1000",
+      "1000+"
+    ],
+    "industry": [
+      "technology",
+      "finance",
+      "healthcare",
+      "retail",
+      "education",
+      "other"
+    ],
+    "technical_expertise": [
+      "beginner",
+      "intermediate",
+      "advanced",
+      "expert"
+    ],
+    "engagement_score": {
+      "$range": [
+        21,
+        87
+      ]
+    },
+    "last_active_days_ago": {
+      "$range": [
+        4,
+        25
+      ]
+    },
+    "preferred_communication": [
+      "email",
+      "chat",
+      "phone",
+      "self_service"
+    ],
+    "is_power_user": [
+      false
+    ],
+    "risk_level": [
+      "healthy"
+    ]
+  }
+}

@@ -1,0 +1,697 @@
+{
+  "events": [
+    {
+      "event": "account registered",
+      "isFirstEvent": true,
+      "properties": {
+        "account_type": {
+          "$type": "array"
+        },
+        "signup_source": [
+          "organic",
+          "referral",
+          "school_partnership",
+          "social_ad"
+        ]
+      }
+    },
+    {
+      "event": "course enrolled",
+      "weight": 8,
+      "properties": {
+        "course_id": [
+          "course_M6Kjdb",
+          "course_oWYJCL",
+          "course_CpP0ln",
+          "course_lGcaid",
+          "course_tAcohr",
+          "course_lNjW6j",
+          "course_FbXrg1",
+          "course_QBnlKk",
+          "course_Y9DJGO",
+          "course_Og8kRt"
+        ],
+        "course_category": [
+          "CS",
+          "Math",
+          "Science",
+          "Business",
+          "Arts",
+          "Languages"
+        ],
+        "difficulty": [
+          "beginner",
+          "intermediate",
+          "advanced"
+        ],
+        "is_free": {
+          "$type": "array"
+        }
+      }
+    },
+    {
+      "event": "lecture started",
+      "weight": 18,
+      "properties": {
+        "course_id": [
+          "course_Q5Zhev",
+          "course_tAcohr",
+          "course_wMbhzj",
+          "course_cu97Hc",
+          "course_xCAffE",
+          "course_H2eZOq",
+          "course_e0psAz",
+          "course_J3OZTc",
+          "course_5Hw9ZP"
+        ],
+        "lecture_id": [
+          "lecture_8anW8B",
+          "lecture_IGD2Wn",
+          "lecture_fImInp",
+          "lecture_ovYDGW",
+          "lecture_h9Vnj7",
+          "lecture_1V3jRX",
+          "lecture_zrvAb5",
+          "lecture_qFPC29"
+        ],
+        "lecture_duration_mins": {
+          "$range": [
+            11,
+            43
+          ]
+        },
+        "module_number": {
+          "$range": [
+            1,
+            12
+          ]
+        }
+      }
+    },
+    {
+      "event": "lecture completed",
+      "weight": 14,
+      "properties": {
+        "course_id": [
+          "course_H1z0Vg",
+          "course_fTKmDU",
+          "course_pRXsRY",
+          "course_v0h8TG",
+          "course_1F8EZu",
+          "course_WtpCUk",
+          "course_NOCK3P",
+          "course_vd9AbL",
+          "course_anLXcC",
+          "course_lPdRG2"
+        ],
+        "lecture_id": [
+          "lecture_ltNCpU",
+          "lecture_d2s8Gr",
+          "lecture_bqw0ya",
+          "lecture_4jt5OR",
+          "lecture_aQaMyi",
+          "lecture_Lz3Xri",
+          "lecture_WomNOq",
+          "lecture_mEOQcq",
+          "lecture_HBij18"
+        ],
+        "watch_time_mins": {
+          "$range": [
+            10,
+            52
+          ]
+        },
+        "playback_speed": [
+          1,
+          1.25,
+          1.5,
+          2
+        ],
+        "notes_taken": {
+          "$type": "array"
+        },
+        "speed_learner": [
+          false
+        ],
+        "thorough_learner": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "quiz started",
+      "weight": 10,
+      "properties": {
+        "course_id": [
+          "course_xCAffE",
+          "course_PWvJNQ",
+          "course_5af8VR",
+          "course_H5xNkq",
+          "course_AD6eI9",
+          "course_gdmHqX",
+          "course_mqfJzr"
+        ],
+        "quiz_id": [
+          "quiz_Ojk3ap",
+          "quiz_Zdr0cG",
+          "quiz_wS4EOI",
+          "quiz_bBX43h",
+          "quiz_Wqok75"
+        ],
+        "quiz_type": [
+          "practice",
+          "graded",
+          "final_exam"
+        ],
+        "question_count": {
+          "$range": [
+            8,
+            45
+          ]
+        },
+        "semester_end_rush": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "quiz completed",
+      "weight": 8,
+      "properties": {
+        "course_id": [
+          "course_lAVbbp",
+          "course_335We8",
+          "course_tAf78h",
+          "course_hA0TFC",
+          "course_VuBUmm",
+          "course_9SCmQ9",
+          "course_fFYxUH",
+          "course_en0t6m"
+        ],
+        "quiz_id": [
+          "quiz_uz5It4",
+          "quiz_kmuUZn",
+          "quiz_m2yuyB",
+          "quiz_E921GU",
+          "quiz_IghwvL",
+          "quiz_PVDp2z",
+          "quiz_iWNBPl",
+          "quiz_4XzFxt",
+          "quiz_j3qkg9"
+        ],
+        "score_percent": {
+          "$range": [
+            1,
+            81
+          ]
+        },
+        "time_spent_mins": {
+          "$range": [
+            11,
+            106
+          ]
+        },
+        "attempts": [
+          4,
+          2
+        ],
+        "diligent_student": [
+          false
+        ],
+        "speed_learner_effect": [
+          false
+        ],
+        "semester_end_rush": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "assignment submitted",
+      "weight": 6,
+      "properties": {
+        "course_id": [
+          "course_r4wbt4",
+          "course_9suPLh",
+          "course_bShUcC",
+          "course_iIrPle",
+          "course_lB6GbC",
+          "course_vOhPZI",
+          "course_287boq",
+          "course_yUQUFU"
+        ],
+        "assignment_id": [
+          "assignment_QAF7mN",
+          "assignment_fzhONe",
+          "assignment_jZgY4h",
+          "assignment_hTL7G6",
+          "assignment_wv7zNq",
+          "assignment_FcWvAz",
+          "assignment_rsjASK"
+        ],
+        "submission_type": [
+          "text",
+          "code",
+          "file",
+          "project"
+        ],
+        "word_count": {
+          "$range": [
+            556,
+            4444
+          ]
+        },
+        "is_late": {
+          "$type": "array"
+        },
+        "is_deadline_rush": [
+          false
+        ],
+        "semester_end_rush": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "assignment graded",
+      "weight": 5,
+      "properties": {
+        "course_id": [
+          "course_H1z0Vg",
+          "course_oWYJCL",
+          "course_9SCmQ9",
+          "course_lzvjq6",
+          "course_5Hw9ZP",
+          "course_4ER1WM",
+          "course_otodxA",
+          "course_bU5L1v",
+          "course_yin4qv"
+        ],
+        "assignment_id": [
+          "assignment_j1Lpt5",
+          "assignment_E3BmPs",
+          "assignment_Tv5myP",
+          "assignment_DkbmDR",
+          "assignment_DHQoa4",
+          "assignment_rmfiXo",
+          "assignment_t7sjbj",
+          "assignment_r8Ndj3",
+          "assignment_zgaAnY",
+          "assignment_5uiKO2"
+        ],
+        "grade": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "F"
+        ],
+        "feedback_length": {
+          "$range": [
+            42,
+            422
+          ]
+        },
+        "grader": [
+          "instructor",
+          "peer",
+          "auto"
+        ]
+      }
+    },
+    {
+      "event": "discussion posted",
+      "weight": 7,
+      "properties": {
+        "course_id": [
+          "course_5Guc0l",
+          "course_7IXzCm",
+          "course_9suPLh",
+          "course_iIrPle",
+          "course_fsTZgh",
+          "course_yin4qv",
+          "course_Dn50zP",
+          "course_Rn7gYM"
+        ],
+        "post_type": [
+          "question",
+          "answer",
+          "comment"
+        ],
+        "word_count": {
+          "$range": [
+            69,
+            443
+          ]
+        },
+        "study_group_member": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "certificate earned",
+      "weight": 2,
+      "properties": {
+        "course_id": [
+          "course_fFYxUH",
+          "course_BoXinm",
+          "course_hA0TFC",
+          "course_Id5BIK",
+          "course_J3OZTc",
+          "course_anLXcC",
+          "course_FbXrg1",
+          "course_v6UMYl"
+        ],
+        "completion_time_days": {
+          "$range": [
+            35,
+            152
+          ]
+        },
+        "final_grade": {
+          "$range": [
+            61,
+            95
+          ]
+        },
+        "diligent_student": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "study group joined",
+      "weight": 4,
+      "properties": {
+        "group_id": [
+          "group_t5jwo6",
+          "group_Y5NVf5",
+          "group_3zIO0c",
+          "group_qcC3C2",
+          "group_NGcMWU",
+          "group_TI9UNh",
+          "group_Vi52iQ",
+          "group_hrsBk6"
+        ],
+        "group_size": [
+          8,
+          7,
+          13,
+          14,
+          11,
+          9
+        ],
+        "group_type": [
+          "study_circle",
+          "project_team",
+          "tutoring"
+        ]
+      }
+    },
+    {
+      "event": "resource downloaded",
+      "weight": 9,
+      "properties": {
+        "resource_type": [
+          "pdf",
+          "slides",
+          "code_sample",
+          "dataset",
+          "cheat_sheet"
+        ],
+        "course_id": [
+          "course_6cGvFs",
+          "course_rcoK15",
+          "course_yin4qv",
+          "course_anLXcC",
+          "course_7IXzCm",
+          "course_5af8VR",
+          "course_YqDklr",
+          "course_pRXsRY"
+        ]
+      }
+    },
+    {
+      "event": "instructor feedback given",
+      "weight": 3,
+      "properties": {
+        "course_id": [
+          "course_r4wbt4",
+          "course_v6UMYl",
+          "course_yG4fIG",
+          "course_eKweph",
+          "course_zqGhgW",
+          "course_kJSw7R",
+          "course_fPW7H9",
+          "course_Ir7WJn",
+          "course_aqR1gr",
+          "course_IZ4YeQ"
+        ],
+        "feedback_type": [
+          "written",
+          "video",
+          "rubric"
+        ],
+        "response_time_hours": {
+          "$range": [
+            15,
+            66
+          ]
+        }
+      }
+    },
+    {
+      "event": "course reviewed",
+      "weight": 3,
+      "properties": {
+        "course_id": [
+          "course_v6UMYl",
+          "course_Q5Zhev",
+          "course_cu97Hc",
+          "course_Dn50zP",
+          "course_7FNmjh",
+          "course_2HhVoS",
+          "course_VuBUmm",
+          "course_P3VX10"
+        ],
+        "rating": [
+          3,
+          5
+        ],
+        "review_length": {
+          "$range": [
+            170,
+            820
+          ]
+        },
+        "would_recommend": {
+          "$type": "array"
+        }
+      }
+    },
+    {
+      "event": "subscription purchased",
+      "weight": 2,
+      "properties": {
+        "plan": [
+          "monthly",
+          "annual",
+          "lifetime"
+        ],
+        "price": [
+          149.99,
+          19.99,
+          499.99
+        ]
+      }
+    },
+    {
+      "event": "help requested",
+      "weight": 4,
+      "properties": {
+        "topic": [
+          "technical",
+          "content",
+          "billing",
+          "accessibility"
+        ],
+        "channel": [
+          "chat",
+          "email",
+          "forum"
+        ]
+      }
+    },
+    {
+      "event": "practice problem solved",
+      "weight": 12,
+      "properties": {
+        "course_id": [
+          "course_9sF553",
+          "course_IZ4YeQ",
+          "course_VuBUmm",
+          "course_bShUcC",
+          "course_LdBe8h",
+          "course_fn2UmN",
+          "course_kJSw7R",
+          "course_xTb0DO"
+        ],
+        "problem_id": [
+          "problem_zbSwoJ",
+          "problem_54dFYb",
+          "problem_Kuv8ss",
+          "problem_gHgox8",
+          "problem_we6baT",
+          "problem_JmiJsW",
+          "problem_WtjJ9f",
+          "problem_XUdiKf",
+          "problem_V4Whgz",
+          "problem_j5N6zX"
+        ],
+        "difficulty": [
+          "easy",
+          "medium",
+          "hard"
+        ],
+        "time_to_solve_sec": {
+          "$range": [
+            319,
+            3125
+          ]
+        },
+        "hint_used": {
+          "$type": "array"
+        },
+        "independent_solver": [
+          false
+        ]
+      }
+    }
+  ],
+  "superProps": {
+    "platform": [
+      "Web",
+      "iOS",
+      "Android",
+      "iPad"
+    ]
+  },
+  "userProps": {
+    "account_type": [
+      "student"
+    ],
+    "subscription_status": [
+      "free",
+      "monthly",
+      "annual"
+    ],
+    "learning_style": [
+      "visual",
+      "reading",
+      "hands_on",
+      "auditory"
+    ],
+    "education_level": [
+      "high_school",
+      "bachelors",
+      "masters",
+      "phd",
+      "self_taught"
+    ],
+    "timezone": [
+      "US_Eastern",
+      "US_Pacific",
+      "US_Central",
+      "Europe",
+      "Asia"
+    ],
+    "courses_created": [
+      0
+    ],
+    "teaching_experience_years": [
+      0
+    ],
+    "instructor_rating": [
+      0
+    ],
+    "learning_goal": [
+      "none"
+    ],
+    "study_hours_per_week": [
+      0
+    ]
+  },
+  "funnels": [
+    {
+      "sequence": [
+        "account registered",
+        "course enrolled",
+        "lecture started"
+      ],
+      "isFirstFunnel": true,
+      "conversionRate": 75,
+      "timeToConvert": 1
+    },
+    {
+      "sequence": [
+        "lecture started",
+        "lecture completed",
+        "practice problem solved"
+      ],
+      "conversionRate": 70,
+      "timeToConvert": 4,
+      "weight": 5
+    },
+    {
+      "sequence": [
+        "quiz started",
+        "quiz completed",
+        "assignment submitted"
+      ],
+      "conversionRate": 55,
+      "timeToConvert": 8,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "course enrolled",
+        "lecture completed",
+        "quiz completed",
+        "certificate earned"
+      ],
+      "conversionRate": 30,
+      "timeToConvert": 48,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "discussion posted",
+        "study group joined",
+        "resource downloaded"
+      ],
+      "conversionRate": 50,
+      "timeToConvert": 12,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "assignment submitted",
+        "assignment graded",
+        "instructor feedback given"
+      ],
+      "conversionRate": 45,
+      "timeToConvert": 24,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "help requested",
+        "subscription purchased",
+        "course reviewed"
+      ],
+      "conversionRate": 35,
+      "timeToConvert": 24
+    }
+  ]
+}

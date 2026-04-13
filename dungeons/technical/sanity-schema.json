@@ -1,0 +1,185 @@
+{
+  "events": [
+    {
+      "event": "foo",
+      "weight": 10
+    },
+    {
+      "event": "bar",
+      "weight": 9,
+      "isFirstEvent": true
+    },
+    {
+      "event": "baz",
+      "weight": 8
+    },
+    {
+      "event": "qux",
+      "weight": 7
+    },
+    {
+      "event": "garply",
+      "weight": 6
+    },
+    {
+      "event": "durtle",
+      "weight": 5
+    },
+    {
+      "event": "linny",
+      "weight": 4
+    },
+    {
+      "event": "fonk",
+      "weight": 3
+    },
+    {
+      "event": "crumn",
+      "weight": 2
+    },
+    {
+      "event": "yak"
+    }
+  ],
+  "superProps": {
+    "color": [
+      "red",
+      "orange",
+      "yellow",
+      "green",
+      "blue",
+      "indigo",
+      "violet"
+    ],
+    "number": {
+      "$type": "number"
+    },
+    "engagement_score": [
+      0
+    ]
+  },
+  "userProps": {
+    "title": {
+      "$type": "string"
+    },
+    "luckyNumber": {
+      "$range": [
+        90,
+        380
+      ]
+    },
+    "userTier": [
+      "regular"
+    ],
+    "spiritAnimal": [
+      "duck",
+      "dog",
+      "otter",
+      "penguin",
+      "cat",
+      "elephant",
+      "lion",
+      "cheetah",
+      "giraffe",
+      "zebra",
+      "rhino",
+      "hippo",
+      "whale",
+      "dolphin",
+      "shark",
+      "octopus",
+      "squid",
+      "jellyfish",
+      "starfish",
+      "seahorse",
+      "crab",
+      "lobster",
+      "shrimp",
+      "clam",
+      "snail",
+      "slug",
+      "butterfly",
+      "moth",
+      "bee",
+      "wasp",
+      "ant",
+      "beetle",
+      "ladybug",
+      "caterpillar",
+      "centipede",
+      "millipede",
+      "scorpion",
+      "spider",
+      "tarantula",
+      "tick",
+      "mite",
+      "mosquito",
+      "fly",
+      "dragonfly",
+      "damselfly",
+      "grasshopper",
+      "cricket",
+      "locust",
+      "mantis",
+      "cockroach",
+      "termite",
+      "praying mantis",
+      "walking stick",
+      "stick bug",
+      "leaf insect",
+      "lacewing",
+      "aphid",
+      "cicada",
+      "thrips",
+      "psyllid",
+      "scale insect",
+      "whitefly",
+      "mealybug",
+      "planthopper",
+      "leafhopper",
+      "treehopper",
+      "flea",
+      "louse",
+      "bedbug",
+      "flea beetle",
+      "weevil",
+      "longhorn beetle",
+      "leaf beetle",
+      "tiger beetle",
+      "ground beetle",
+      "lady beetle",
+      "firefly",
+      "click beetle",
+      "rove beetle",
+      "scarab beetle",
+      "dung beetle",
+      "stag beetle",
+      "rhinoceros beetle",
+      "hercules beetle",
+      "goliath beetle",
+      "jewel beetle",
+      "tortoise beetle"
+    ]
+  },
+  "funnels": [
+    {
+      "sequence": [
+        "qux",
+        "garply",
+        "durtle",
+        "linny",
+        "fonk",
+        "crumn",
+        "yak"
+      ]
+    },
+    {
+      "sequence": [
+        "foo",
+        "bar",
+        "baz"
+      ],
+      "isFirstFunnel": true
+    }
+  ]
+}

@@ -1,0 +1,635 @@
+{
+  "events": [
+    {
+      "event": "page view",
+      "weight": 10,
+      "properties": {
+        "page": [
+          "/blog",
+          "/",
+          "/about",
+          "/help"
+        ],
+        "utm_source": [
+          "facebook",
+          "google",
+          "$organic",
+          "twitter",
+          "linkedin"
+        ]
+      }
+    },
+    {
+      "event": "sign up",
+      "isFirstEvent": true,
+      "properties": {
+        "signupMethod": [
+          "email",
+          "google",
+          "facebook",
+          "github"
+        ],
+        "referral": [
+          "none",
+          "friend",
+          "ad"
+        ]
+      }
+    },
+    {
+      "event": "login",
+      "weight": 8,
+      "properties": {
+        "method": [
+          "password",
+          "google",
+          "facebook",
+          "github"
+        ]
+      }
+    },
+    {
+      "event": "search",
+      "weight": 7,
+      "properties": {
+        "query_length": {
+          "$range": [
+            8,
+            41
+          ]
+        },
+        "resultsReturned": {
+          "$range": [
+            19,
+            79
+          ]
+        },
+        "category": [
+          "Garden",
+          "Automotive",
+          "Home",
+          "Outdoors",
+          "Pet",
+          "Books",
+          "Handmade",
+          "Toys"
+        ]
+      }
+    },
+    {
+      "event": "view item",
+      "weight": 9,
+      "properties": {
+        "isFeaturedItem": [
+          true,
+          false
+        ],
+        "itemCategory": [
+          "Toys",
+          "Electronics",
+          "Computers",
+          "Beauty",
+          "Outdoors",
+          "Appliances",
+          "Music",
+          "Garden"
+        ],
+        "price": {
+          "$range": [
+            99,
+            402
+          ]
+        },
+        "rating": {
+          "$range": [
+            1,
+            4
+          ]
+        }
+      }
+    },
+    {
+      "event": "add to cart",
+      "weight": 5,
+      "properties": {
+        "amount": {
+          "$range": [
+            108,
+            400
+          ]
+        },
+        "itemCategory": [
+          "Baby",
+          "Wedding",
+          "Outdoors",
+          "Software",
+          "Books"
+        ],
+        "numItems": {
+          "$range": [
+            1,
+            5
+          ]
+        }
+      }
+    },
+    {
+      "event": "checkout",
+      "weight": 3,
+      "properties": {
+        "amount": {
+          "$range": [
+            109,
+            381
+          ]
+        },
+        "currency": [
+          "USD",
+          "CAD",
+          "EUR",
+          "JPY"
+        ],
+        "coupon": [
+          "none",
+          "10%OFF",
+          "20%OFF",
+          "30%OFF"
+        ],
+        "numItems": {
+          "$range": [
+            1,
+            10
+          ]
+        }
+      }
+    },
+    {
+      "event": "watch video",
+      "weight": 6,
+      "properties": {
+        "videoCategory": [
+          "music",
+          "news",
+          "funny",
+          "travel",
+          "inspirational",
+          "educational"
+        ],
+        "watchTimeSec": {
+          "$range": [
+            126,
+            493
+          ]
+        },
+        "quality": [
+          "1080p",
+          "720p",
+          "480p",
+          "360p"
+        ]
+      }
+    },
+    {
+      "event": "share content",
+      "weight": 2,
+      "properties": {
+        "platform": [
+          "twitter",
+          "facebook",
+          "linkedin",
+          "email",
+          "link"
+        ],
+        "contentType": [
+          "video",
+          "product",
+          "article"
+        ]
+      }
+    },
+    {
+      "event": "rate item",
+      "weight": 4,
+      "properties": {
+        "rating": {
+          "$range": [
+            1,
+            5
+          ]
+        },
+        "itemCategory": [
+          "Food",
+          "Wedding",
+          "Office",
+          "Outdoors",
+          "Home",
+          "Appliances",
+          "Entertainment",
+          "Health",
+          "Software"
+        ],
+        "hasReviewText": [
+          true,
+          false
+        ]
+      }
+    },
+    {
+      "event": "support ticket",
+      "weight": 2,
+      "properties": {
+        "priority": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "category": [
+          "billing",
+          "technical",
+          "account",
+          "shipping",
+          "returns"
+        ]
+      }
+    },
+    {
+      "event": "add to wishlist",
+      "weight": 4,
+      "properties": {
+        "itemCategory": [
+          "Books",
+          "Games",
+          "Beauty",
+          "Toys",
+          "Software",
+          "Movies",
+          "Office"
+        ],
+        "price": {
+          "$range": [
+            100,
+            413
+          ]
+        }
+      }
+    },
+    {
+      "event": "remove from cart",
+      "weight": 3,
+      "properties": {
+        "reason": [
+          "changed mind",
+          "too expensive",
+          "found better",
+          "duplicate"
+        ]
+      }
+    },
+    {
+      "event": "apply coupon",
+      "weight": 2,
+      "properties": {
+        "couponCode": [
+          "SAVE10",
+          "SAVE20",
+          "WELCOME",
+          "FREESHIP",
+          "VIP30"
+        ],
+        "discountPercent": {
+          "$range": [
+            5,
+            47
+          ]
+        }
+      }
+    },
+    {
+      "event": "notification received",
+      "weight": 7,
+      "properties": {
+        "channel": [
+          "push",
+          "email",
+          "in-app",
+          "sms"
+        ],
+        "type": [
+          "promo",
+          "order update",
+          "recommendation",
+          "reminder"
+        ]
+      }
+    },
+    {
+      "event": "notification clicked",
+      "weight": 5,
+      "properties": {
+        "channel": [
+          "push",
+          "email",
+          "in-app",
+          "sms"
+        ],
+        "type": [
+          "promo",
+          "order update",
+          "recommendation",
+          "reminder"
+        ]
+      }
+    },
+    {
+      "event": "add payment method",
+      "properties": {
+        "type": [
+          "credit card",
+          "debit card",
+          "paypal",
+          "apple pay",
+          "google pay"
+        ]
+      }
+    },
+    {
+      "event": "update profile",
+      "weight": 3,
+      "properties": {
+        "field": [
+          "avatar",
+          "name",
+          "email",
+          "address",
+          "phone",
+          "preferences"
+        ]
+      }
+    },
+    {
+      "event": "invite friend",
+      "properties": {
+        "method": [
+          "email",
+          "link",
+          "sms"
+        ]
+      }
+    },
+    {
+      "event": "view category",
+      "weight": 8,
+      "properties": {
+        "category": [
+          "Smart Home",
+          "Electronics",
+          "Pet",
+          "Software",
+          "Books",
+          "Movies",
+          "Computers",
+          "Music"
+        ],
+        "sortBy": [
+          "popular",
+          "newest",
+          "price low",
+          "price high",
+          "rating"
+        ]
+      }
+    },
+    {
+      "event": "save address",
+      "properties": {
+        "type": [
+          "home",
+          "work",
+          "other"
+        ]
+      }
+    },
+    {
+      "event": "compare items",
+      "weight": 3,
+      "properties": {
+        "numItems": {
+          "$range": [
+            2,
+            5
+          ]
+        },
+        "itemCategory": [
+          "Wedding",
+          "Art",
+          "Software",
+          "Movies",
+          "Electronics",
+          "Toys",
+          "Baby",
+          "Appliances"
+        ]
+      }
+    },
+    {
+      "event": "subscribe newsletter",
+      "properties": {
+        "frequency": [
+          "daily",
+          "weekly",
+          "monthly"
+        ],
+        "topics": [
+          "deals",
+          "new arrivals",
+          "recommendations"
+        ]
+      }
+    },
+    {
+      "event": "leave review",
+      "weight": 2,
+      "properties": {
+        "rating": {
+          "$range": [
+            1,
+            4
+          ]
+        },
+        "wordCount": {
+          "$range": [
+            51,
+            157
+          ]
+        },
+        "hasPhotos": [
+          true,
+          false
+        ]
+      }
+    },
+    {
+      "event": "redeem reward",
+      "properties": {
+        "rewardType": [
+          "discount",
+          "free shipping",
+          "free item",
+          "points bonus"
+        ],
+        "pointsUsed": {
+          "$range": [
+            1169,
+            3988
+          ]
+        }
+      }
+    }
+  ],
+  "superProps": {
+    "theme": [
+      "light",
+      "dark",
+      "custom"
+    ]
+  },
+  "userProps": {
+    "title": {
+      "$type": "string"
+    },
+    "luckyNumber": {
+      "$range": [
+        123,
+        346
+      ]
+    },
+    "spiritAnimal": [
+      "penguin",
+      "otter",
+      "elephant",
+      "mite",
+      "tick",
+      "goliath beetle",
+      "mosquito",
+      "damselfly",
+      "hercules beetle"
+    ]
+  },
+  "funnels": [
+    {
+      "sequence": [
+        "page view",
+        "sign up"
+      ],
+      "isFirstFunnel": true,
+      "conversionRate": 55,
+      "timeToConvert": 1,
+      "weight": 5
+    },
+    {
+      "sequence": [
+        "search",
+        "view item",
+        "add to cart",
+        "checkout"
+      ],
+      "conversionRate": 35,
+      "timeToConvert": 3,
+      "weight": 8
+    },
+    {
+      "sequence": [
+        "page view",
+        "watch video",
+        "share content"
+      ],
+      "conversionRate": 40,
+      "timeToConvert": 2,
+      "weight": 6
+    },
+    {
+      "sequence": [
+        "view item",
+        "rate item"
+      ],
+      "conversionRate": 25,
+      "timeToConvert": 5,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "view category",
+        "view item",
+        "compare items",
+        "add to cart"
+      ],
+      "conversionRate": 30,
+      "timeToConvert": 3,
+      "weight": 7
+    },
+    {
+      "sequence": [
+        "notification received",
+        "notification clicked",
+        "view item"
+      ],
+      "conversionRate": 45,
+      "timeToConvert": 1,
+      "weight": 4
+    },
+    {
+      "sequence": [
+        "view item",
+        "add to wishlist",
+        "apply coupon",
+        "add to cart",
+        "checkout"
+      ],
+      "conversionRate": 20,
+      "timeToConvert": 7,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "checkout",
+        "leave review",
+        "invite friend"
+      ],
+      "conversionRate": 15,
+      "timeToConvert": 14
+    },
+    {
+      "sequence": [
+        "login",
+        "view item",
+        "add to cart",
+        "apply coupon",
+        "checkout"
+      ],
+      "conversionRate": 30,
+      "timeToConvert": 2,
+      "weight": 9
+    },
+    {
+      "sequence": [
+        "subscribe newsletter",
+        "notification received",
+        "notification clicked",
+        "checkout"
+      ],
+      "conversionRate": 10,
+      "timeToConvert": 14,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "support ticket",
+        "update profile",
+        "checkout"
+      ],
+      "conversionRate": 20,
+      "timeToConvert": 7,
+      "weight": 10
+    }
+  ]
+}

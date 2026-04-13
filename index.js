@@ -61,15 +61,15 @@ global.FIXED_BEGIN = FIXED_BEGIN;
  *
  * @example
  * // file path
- * const result = await DUNGEON_MASTER('./dungeons/simple.js');
+ * const result = await DUNGEON_MASTER('./dungeons/technical/simple.js');
  *
  * @example
  * // JSON dungeon (from UI export)
- * const result = await DUNGEON_MASTER('./dungeons/simple-schema.json');
+ * const result = await DUNGEON_MASTER('./dungeons/technical/simple-schema.json');
  *
  * @example
  * // multiple dungeons
- * const results = await DUNGEON_MASTER(['./dungeons/gaming.js', './dungeons/media.js']);
+ * const results = await DUNGEON_MASTER(['./dungeons/vertical/gaming.js', './dungeons/vertical/media.js']);
  *
  * @example
  * // raw JS text
@@ -83,7 +83,7 @@ global.FIXED_BEGIN = FIXED_BEGIN;
  *
  * @example
  * // with overrides
- * const result = await DUNGEON_MASTER('./dungeons/simple.js', { writeToDisk: true, verbose: true });
+ * const result = await DUNGEON_MASTER('./dungeons/technical/simple.js', { writeToDisk: true, verbose: true });
  */
 async function DUNGEON_MASTER(input, overrides = {}) {
 	const { type, value } = detectInputType(input);
@@ -124,21 +124,25 @@ async function runDungeon(config) {
 	if (config.verbose) logger.info({ seed: config.seed }, 'Configuring dungeon');
 	let validatedConfig;
 	try {
+		// Initialize seeded RNG BEFORE validation — config-validator captures a
+		// chance reference for default userProps (spiritAnimal). If we init after,
+		// run 1 binds an unseeded instance while run 2 binds a stale one → non-deterministic.
+		if (config.seed) {
+			initChance(config.seed);
+		}
+
 		// Step 1: Validate and enrich configuration
 		validatedConfig = validateDungeonConfig(config);
 
-		// Ensure seeded RNG is initialized (dungeons do this at module scope,
-		// but npm-module consumers pass seed via config object)
-		if (validatedConfig.seed) {
-			initChance(validatedConfig.seed);
-		}
-
-		// Update FIXED_BEGIN based on configured numDays
+		// Compute FIXED_BEGIN from validated numDays
 		const configNumDays = validatedConfig.numDays || 30;
-		global.FIXED_BEGIN = dayjs.unix(FIXED_NOW).subtract(configNumDays, 'd').unix();
+		const fixedBegin = dayjs.unix(FIXED_NOW).subtract(configNumDays, 'd').unix();
 
-		// Step 2: Create context with validated config
-		const context = createContext(validatedConfig);
+		// Keep globals for backwards compatibility with tests/dungeons that read them
+		global.FIXED_BEGIN = fixedBegin;
+
+		// Step 2: Create context with validated config (pass time constants explicitly)
+		const context = createContext(validatedConfig, null, { fixedNow: FIXED_NOW, fixedBegin });
 
 		// Step 3: Initialize storage containers
 		const storageManager = new StorageManager(context);
@@ -232,7 +236,7 @@ async function generateAdSpendData(context) {
 
 	const timeShift = context.TIME_SHIFT_SECONDS;
 	for (let day = 0; day < numDays; day++) {
-		const fixedDay = dayjs.unix(global.FIXED_BEGIN).add(day, 'day').unix();
+		const fixedDay = dayjs.unix(context.FIXED_BEGIN).add(day, 'day').unix();
 		const shiftedDay = Math.min(fixedDay + timeShift, context.MAX_TIME);
 		const targetDay = dayjs.unix(shiftedDay).toISOString();
 		const adSpendEvents = await makeAdSpend(context, targetDay);

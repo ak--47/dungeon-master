@@ -1,0 +1,128 @@
+{
+  "events": [
+    {
+      "event": "sign up",
+      "isFirstEvent": true,
+      "properties": {
+        "method": [
+          "email",
+          "google",
+          "facebook",
+          "github"
+        ]
+      }
+    },
+    {
+      "event": "page view",
+      "weight": 10,
+      "properties": {
+        "page": [
+          "/",
+          "/pricing",
+          "/features",
+          "/docs",
+          "/blog",
+          "/signup"
+        ]
+      }
+    },
+    {
+      "event": "purchase",
+      "weight": 2,
+      "properties": {
+        "amount": {
+          "$range": [
+            108,
+            392
+          ]
+        },
+        "currency": [
+          "USD",
+          "EUR",
+          "GBP"
+        ],
+        "item_count": {
+          "$range": [
+            2,
+            7
+          ]
+        }
+      }
+    },
+    {
+      "event": "ad click",
+      "weight": 6,
+      "properties": {
+        "partner": [
+          "google",
+          "facebook",
+          "linkedin",
+          "twitter",
+          "bing",
+          "tiktok"
+        ],
+        "ad_format": [
+          "banner",
+          "video",
+          "carousel",
+          "native",
+          "search"
+        ],
+        "placement": [
+          "feed",
+          "sidebar",
+          "header",
+          "interstitial"
+        ]
+      }
+    },
+    {
+      "event": "search",
+      "weight": 5,
+      "properties": {
+        "query_length": {
+          "$range": [
+            3,
+            28
+          ]
+        },
+        "results_count": {
+          "$range": [
+            21,
+            79
+          ]
+        }
+      }
+    },
+    {
+      "event": "share",
+      "weight": 3,
+      "properties": {
+        "platform": [
+          "twitter",
+          "facebook",
+          "linkedin",
+          "email"
+        ],
+        "content_type": [
+          "product",
+          "page",
+          "deal"
+        ]
+      }
+    }
+  ],
+  "userProps": {
+    "plan": [
+      "free",
+      "starter",
+      "pro",
+      "enterprise"
+    ],
+    "signup_source": [
+      "referral",
+      "paid",
+      "organic"
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "events": [
+    {
+      "event": "first behavior",
+      "isFirstEvent": true
+    },
+    {
+      "event": "hourly behavior",
+      "weight": 40
+    },
+    {
+      "event": "daily behavior",
+      "weight": 30
+    },
+    {
+      "event": "weekly behavior",
+      "weight": 15
+    },
+    {
+      "event": "monthly behavior",
+      "weight": 10
+    },
+    {
+      "event": "placeholder",
+      "weight": 50
+    }
+  ],
+  "userProps": {
+    "favorite color": [
+      "red",
+      "blue",
+      "green",
+      "yellow",
+      "purple"
+    ]
+  }
+}

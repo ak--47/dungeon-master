@@ -4,7 +4,7 @@
  */
 
 import main from "../../index.js";
-import simple from '../../dungeons/simple.js';
+import simple from '../../dungeons/technical/simple.js';
 import os from 'os';
 
 /** @typedef {import('../../types').Dungeon} Config */

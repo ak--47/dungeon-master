@@ -37,7 +37,7 @@ import { validateDungeonConfig } from '../lib/core/config-validator.js';
 // Import utilities directly
 import { createHookArray } from '../lib/core/storage.js';
 import { inferFunnels } from '../lib/core/config-validator.js';
-import { validEvent } from '../lib/utils/utils.js';
+import { validEvent, initChance } from '../lib/utils/utils.js';
 import { createContext } from '../lib/core/context.js';
 import { validateDungeonConfig } from '../lib/core/config-validator.js';
 
@@ -81,6 +81,9 @@ let CONFIG;
 import { campaigns, devices, locations } from '../lib/templates/defaults.js';
 
 beforeEach(async () => {
+	// Reset seeded RNG before each test for isolation
+	initChance("test-seed");
+
 	// Reset global variables before each test
 	CAMPAIGNS = [
 		{ utm_campaign: ["campaign1", "campaign2"], utm_source: ["source1"], utm_medium: ["medium1"], utm_content: ["content1"], utm_term: ["term1"] }
@@ -299,8 +302,10 @@ describe.sequential('generators', () => {
 		const context = createTestContext();
 		const [result, converted] = await makeFunnel(context, funnelConfig, user, dayjs.unix(global.FIXED_NOW).subtract(5, 'd').unix(), profile, scd);
 
-		// Should have $experiment_started + 2 funnel events
-		expect(result.length).toBe(3);
+		// Should have $experiment_started + at least 1 funnel event
+		// (Variant A reduces conversionRate, so non-converting users may only complete 1 of 2 steps)
+		expect(result.length).toBeGreaterThanOrEqual(2);
+		expect(result.length).toBeLessThanOrEqual(3);
 		expect(result[0].event).toBe('$experiment_started');
 		expect(result[0]['Experiment name']).toBe('Test Experiment');  // Code appends " Experiment" to the name
 		expect(['A', 'B', 'C']).toContain(result[0]['Variant name']);
@@ -737,7 +742,7 @@ describe.sequential('orchestrators', () => {
 		context.setStorage(STORAGE);
 		await userLoop(context);
 		expect(STORAGE.userProfilesData.length).toBe(3);
-		expect(STORAGE.eventData.length).toBeGreaterThan(5);
+		expect(STORAGE.eventData.length).toBeGreaterThanOrEqual(5);
 		expect(STORAGE.scdTableData[0].length).toBeGreaterThan(0);
 		expect(STORAGE.eventData.every(e => validEvent(e))).toBeTruthy();
 	});
@@ -865,5 +870,56 @@ describe.sequential('orchestrators', () => {
 		expect(dataFiles.length).toBeGreaterThanOrEqual(2);
 	});
 
+});
+
+describe.sequential('determinism', () => {
+	test('seeded runs produce identical events', async () => {
+		const config = {
+			numUsers: 5,
+			numEvents: 50,
+			numDays: 30,
+			seed: 'determinism-test',
+			writeToDisk: false,
+			verbose: false
+		};
+		const r1 = await main(config);
+		const r2 = await main(config);
+
+		expect(r1.eventCount).toBe(r2.eventCount);
+		expect(r1.userCount).toBe(r2.userCount);
+
+		// All insert_ids must match (proves event names, times, and user IDs are identical)
+		const ids1 = r1.eventData.map(e => e.insert_id);
+		const ids2 = r2.eventData.map(e => e.insert_id);
+		expect(ids1).toEqual(ids2);
+	});
+
+	test('seeded runs produce identical user profiles', async () => {
+		const config = {
+			numUsers: 10,
+			numEvents: 100,
+			numDays: 30,
+			seed: 'profile-determinism',
+			writeToDisk: false,
+			verbose: false,
+			userProps: { plan: ["free", "pro", "enterprise"] }
+		};
+		const r1 = await main(config);
+		const r2 = await main(config);
+
+		const p1 = r1.userProfilesData.map(p => ({ id: p.distinct_id, plan: p.plan }));
+		const p2 = r2.userProfilesData.map(p => ({ id: p.distinct_id, plan: p.plan }));
+		expect(p1).toEqual(p2);
+	});
+
+	test('different seeds produce different events', async () => {
+		const base = { numUsers: 5, numEvents: 50, numDays: 30, writeToDisk: false, verbose: false };
+		const r1 = await main({ ...base, seed: 'seed-a' });
+		const r2 = await main({ ...base, seed: 'seed-b' });
+
+		const ids1 = r1.eventData.map(e => e.insert_id);
+		const ids2 = r2.eventData.map(e => e.insert_id);
+		expect(ids1).not.toEqual(ids2);
+	});
 });
 

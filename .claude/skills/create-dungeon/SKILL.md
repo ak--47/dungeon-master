@@ -12,7 +12,7 @@ Design and build a complete dungeon-master dungeon for: **$ARGUMENTS**
 
 ## Your Task
 
-Create a single `.js` file in `dungeons/` that defines a complete, realistic data schema for the described app/vertical. The dungeon must include deliberately architected analytics "hooks" — hidden trends and patterns that simulate real-world product insights buried in large datasets.
+Create a single `.js` file in `dungeons/vertical/` that defines a complete, realistic data schema for the described app/vertical. The dungeon must include deliberately architected analytics "hooks" — hidden trends and patterns that simulate real-world product insights buried in large datasets.
 
 Before writing any code, read these reference files to understand patterns and conventions:
 - `types.d.ts` — **the complete API reference** for all config options, event flags, hook types, SCD props, funnel options, and type definitions. Every feature is documented with JSDoc comments.
@@ -144,6 +144,130 @@ mirrorProps: {},
 lookupTables: [],  // NEVER add lookup tables — they require manual import and are not automated ... only if the user BEGS you.
 ```
 
+## Advanced Features (Optional — use when they add realism)
+
+These features are **additive and optional**. Include them when they make the dungeon's story richer. Hooks always override these features — hooks are the final authority on every data point.
+
+### Personas (`personas`)
+
+Define behavioral user archetypes. Replaces the random power-user dice rolls with structured segments. Each persona gets `eventMultiplier` (event volume), `conversionModifier` (funnel conversion), `properties` (merged into profile), and optional `churnRate` / `activeWindow`.
+
+```javascript
+personas: [
+  { name: "power_user", weight: 15, eventMultiplier: 4.0, conversionModifier: 1.5, churnRate: 0.02,
+    properties: { segment: "power", loyalty_tier: "gold" } },
+  { name: "casual", weight: 50, eventMultiplier: 0.6, conversionModifier: 0.7, churnRate: 0.1,
+    properties: { segment: "casual", loyalty_tier: "none" } },
+  { name: "churner", weight: 20, eventMultiplier: 0.4, conversionModifier: 0.3, churnRate: 0.6,
+    properties: { segment: "churner" }, activeWindow: { maxDays: 14 } },
+  { name: "champion", weight: 15, eventMultiplier: 2.5, conversionModifier: 1.5,
+    properties: { segment: "champion", loyalty_tier: "platinum" } }
+]
+```
+
+Personas flow through hook `meta.persona` — hooks can read and override persona assignments.
+
+### World Events (`worldEvents`)
+
+Shared events that affect all users simultaneously. Create correlated cross-user temporal patterns.
+
+```javascript
+worldEvents: [
+  { name: "black_friday", type: "campaign", startDay: 60, duration: 3,
+    volumeMultiplier: 2.5, conversionModifier: 1.8,
+    injectProps: { promo: "black_friday" }, affectsEvents: ["checkout"] },
+  { name: "outage", type: "outage", startDay: 40, duration: 0.125,
+    volumeMultiplier: 0.05, affectsEvents: "*",
+    aftermath: { duration: 1, volumeMultiplier: 1.3 } },
+  { name: "v2_launch", type: "product_launch", startDay: 50,
+    duration: null, injectProps: { app_version: "2.0" } }
+]
+```
+
+### Engagement Decay (`engagementDecay`)
+
+Gradual engagement decline instead of binary churn. Users' event frequency decreases over their lifetime.
+
+```javascript
+engagementDecay: { model: "exponential", halfLife: 45, floor: 0.1, reactivationChance: 0.03 }
+```
+
+### Data Quality (`dataQuality`) — ONLY IF EXPLICITLY REQUESTED
+
+**Do NOT include `dataQuality` unless the user explicitly asks for dirty/messy data.** 99% of the time, dungeons should produce clean, perfect test data. Data quality gremlins (nulls, duplicates, bots) are for testing data pipelines and anomaly detection, not for standard demo datasets.
+
+```javascript
+// Only add if user specifically asks for messy/dirty/realistic data quality issues
+dataQuality: { nullRate: 0.02, nullProps: ["category"], duplicateRate: 0.005,
+  botUsers: 3, botEventsPerUser: 500, timezoneConfusion: 0.01 }
+```
+
+### Subscription (`subscription`)
+
+Full revenue lifecycle: trial → paid → upgrade → downgrade → cancel → win-back.
+
+```javascript
+subscription: {
+  plans: [
+    { name: "free", price: 0, default: true },
+    { name: "pro", price: 19.99, trialDays: 14 },
+    { name: "enterprise", price: 99.99 }
+  ],
+  lifecycle: { trialToPayRate: 0.3, upgradeRate: 0.1, churnRate: 0.05, winBackRate: 0.1 }
+}
+```
+
+### Attribution (`attribution`)
+
+Connected campaign attribution — links ad spend to user acquisition.
+
+```javascript
+attribution: {
+  campaigns: [
+    { name: "google_ads", source: "google", medium: "cpc", activeDays: [0, 90],
+      dailyBudget: [200, 800], acquisitionRate: 0.03 }
+  ],
+  organicRate: 0.4
+}
+```
+
+### Geo (`geo`)
+
+Sticky locations, timezone-aware activity, regional properties.
+
+```javascript
+geo: {
+  sticky: true,
+  regions: [
+    { name: "us", countries: ["US"], weight: 50, timezoneOffset: -5, properties: { currency: "USD" } },
+    { name: "eu", countries: ["GB", "DE"], weight: 30, timezoneOffset: 1, properties: { currency: "EUR" } }
+  ]
+}
+```
+
+### Features (`features`)
+
+Progressive feature adoption with S-curve rollout.
+
+```javascript
+features: [
+  { name: "dark_mode", launchDay: 30, adoptionCurve: "fast", property: "theme",
+    values: ["light", "dark"], defaultBefore: "light", affectsEvents: "*" }
+]
+```
+
+### Anomalies (`anomalies`)
+
+Extreme values, error bursts, coordinated spikes.
+
+```javascript
+anomalies: [
+  { type: "extreme_value", event: "checkout", property: "amount", frequency: 0.005, multiplier: 50, tag: "whale" },
+  { type: "burst", event: "error", day: 45, duration: 0.08, count: 500, tag: "error_storm" },
+  { type: "coordinated", event: "sign up", day: 70, window: 0.01, count: 150, tag: "viral" }
+]
+```
+
 ## TimeSoup — Time Distribution (usually omit this)
 
 **DEFAULT BEHAVIOR: Do NOT include `soup` in the config unless the user's prompt explicitly asks for a specific time distribution pattern** (e.g., "make it spiky", "seasonal pattern", "global users"). The default "growth" preset applies automatically and is correct for the vast majority of dungeons. Do not infer a preset from the vertical — a gaming dungeon does NOT automatically need "spiky", an e-commerce dungeon does NOT automatically need "seasonal". Only set `soup` when the user says so.
@@ -181,7 +305,8 @@ soup: {
 ### 1. Events (15-20)
 - Include `isFirstEvent: true` on the signup/account creation event
 - **Plain string arrays are automatically power-law weighted** — `["a", "b", "c", "d"]` (3+ unique strings) gets `pickAWinner` applied under the hood by `choose()`. Do NOT wrap these in `pickAWinner()` explicitly.
-- Use `u.pickAWinner(array)` ONLY when you need to pass a second argument for explicit index control, or for arrays with < 3 items
+- Use `u.pickAWinner(array, integerIndex)` ONLY when you need to designate a specific array index as the "winner" (most frequent). This is the only valid use case for `pickAWinner`.
+- For boolean or 2-item probability weighting, use **duplicate arrays**: `[false, false, true]` for ~33% true, `[false, false, false, true, true]` for ~40% true. Never pass decimals as the second argument to `pickAWinner` — it treats them as array indices, producing undefined values.
 - Use `u.weighNumRange(min, max, skew?, center?)` for numeric ranges (Box-Muller)
 - Use arrays with **duplicates** for explicit frequency weighting: `["common", "common", "common", "rare"]`
 - Each event needs `event` (name), `weight` (relative frequency 1-10), `properties` (object)
@@ -227,15 +352,43 @@ soup: {
 
 ### Critical Hook Rules
 
-1. **Properties are FLAT on event records in hooks** — use `record.amount`, NOT `record.properties.amount`
-2. When splicing events in `everything`, new events need: `event`, `time` (ISO string), `user_id` (copied from source event's `event.user_id`), plus flat properties. The pipeline uses `user_id` NOT `distinct_id`.
-3. Use `dayjs` for all time operations inside hooks
-4. Use the seeded `chance` instance (from module scope) for randomness in hooks
-5. **Always return `record`** at the very end of the hook function. Every code path must reach `return record`. If you want to suppress an event from the `event` hook, assign it to an empty object (`record = {}`) and let it fall through to `return record` — do NOT use `return {}` as an early return or `return null`.
-6. **To drop/filter events** (for churn, drop-off, or trend patterns): you CANNOT truly drop events from the `event` hook — assigning `record = {}` creates a broken empty record. Instead, use ONE of these patterns in the `everything` hook:
-   - **Tag-and-filter**: In the `event` hook, tag events to drop with a property (e.g., `record._drop = true`). Then in the `everything` hook, filter them out: `return record.filter(e => !e._drop)`
-   - **Direct filter in `everything`**: Skip the tagging and just filter directly in the `everything` hook based on conditions: `return record.filter(e => !shouldDrop(e))`
-   - **Splice removal**: In the `everything` hook, iterate backwards and `splice(i, 1)` to remove events
+1. **The schema is defined in the config. Hooks shape the data within that schema.** Every property that appears in the final output MUST be defined in the dungeon config (events `properties`, `userProps`, or `superProps`). Hooks do NOT invent new properties out of thin air. They modify values of properties that already exist.
+
+2. **To make hooks work, define the properties they need in the config with defaults.** This is the key pattern. If your hook needs a `payday` flag on transactions, add `payday: [false]` to the event's `properties`. If your hook needs a `surge_pricing` boolean, add `surge_pricing: [false]`. The hook then sets these to `true` when conditions are met. This ensures:
+   - The property exists on ALL events of that type (consistent schema)
+   - The JSON schema output is complete (no surprise columns)
+   - The dataset presents a clean, predictable schema to downstream tools
+   
+   ```javascript
+   // In events config: define the property with a default
+   { event: "transaction completed", weight: 5, properties: {
+       amount: { $range: [10, 500] },
+       transaction_type: ["direct_deposit", "transfer", "payment"],
+       payday: [false],  // ← hook will set true on 1st/15th
+   }}
+   
+   // In hook: modify the existing property
+   if (record.event === "transaction completed" && record.transaction_type === "direct_deposit") {
+     if (dayOfMonth === 1 || dayOfMonth === 15) {
+       record.amount = Math.floor(record.amount * 3);
+       record.payday = true;  // modifying existing property, not adding new one
+     }
+   }
+   ```
+
+3. **Properties are FLAT on event records in hooks** — use `record.amount`, NOT `record.properties.amount`
+
+4. **When injecting events, always clone from an existing event** of the same type using spread (`{...templateEvent}`), then override `time` and `user_id` and tweak values. This ensures injected events have the same properties as organically generated ones. Never construct events from scratch with hand-picked properties.
+
+5. Use `dayjs` for all time operations inside hooks
+
+6. Use the seeded `chance` instance (from module scope) for randomness in hooks
+
+7. **Always return `record`** at the very end of the hook function. Every code path must reach `return record`.
+
+8. **To drop/filter events** (for churn, drop-off, or trend patterns): use the `everything` hook:
+   - **Direct filter**: `return record.filter(e => !shouldDrop(e))`
+   - **Splice removal**: iterate backwards and `splice(i, 1)` to remove events
    
    This is critical for architecting churn, drop-off, seasonal dips, and other "absence of data" patterns. The `everything` hook is the ONLY place where events can be removed.
 
@@ -245,40 +398,37 @@ Use a MIX of these techniques across your 8 hooks — don't put everything in `"
 
 #### Event-Level Techniques (`type === "event"`)
 
-- **Property modification**: Set/change properties based on conditions. `record.amount *= 1.5`
-- **Event renaming/replacement**: Change `record.event` to create hook-only event types (e.g., critical alert → "incident created")
-- **Temporal windowing**: Modify events within a date range using relative dates:
+- **Value modification**: Multiply, scale, or shift existing property values based on conditions. `record.amount *= 1.5`
+- **Temporal windowing**: Modify existing values within a date range using relative dates:
   ```javascript
   const DATASET_START = NOW.subtract(days, 'days');
-  const LAUNCH_DATE = DATASET_START.add(45, 'days');  // product launch on day 45
-  const OUTAGE_START = DATASET_START.add(20, 'days');  // outage starts day 20
-  const OUTAGE_END = DATASET_START.add(27, 'days');    // outage ends day 27
-  if (dayjs(record.time).isAfter(LAUNCH_DATE)) { /* post-launch behavior */ }
+  const LAUNCH_DATE = DATASET_START.add(45, 'days');
+  if (dayjs(record.time).isAfter(LAUNCH_DATE)) { record.amount *= 2; }
   ```
-- **Day-of-week patterns**: Weekend surges, weekday prime-time tagging
-- **Closure-based state (Maps)**: Module-level Maps track state across calls. E.g., user who exceeded budget → next scale event forced to "down"
+- **Day-of-week/month patterns**: Scale values based on calendar (payday spending spikes, weekend surges)
+- **Closure-based state (Maps)**: Module-level Maps track state across calls. E.g., user who exceeded budget → next scale event forced to existing value "down"
 
 #### User-Level Techniques (`type === "user"`)
 
-- **Profile enrichment**: Add computed segments: `record.segment = "champion"` based on random bucketing
-- **Tier-based properties**: Enterprise vs startup, premium vs free — determines seat count, ACV, etc.
+- **Value modification**: Change existing userProps values based on conditions. If `company_size` is already a userProp, the hook can change its value for specific segments.
+- Note: any property modified in the `user` hook must already be defined in `userProps` in the config
 
 #### Funnel Techniques (`type === "funnel-pre"` / `"funnel-post"`)
 
 - **Conversion rate manipulation** (funnel-pre): `record.conversionRate *= 1.3` for premium users, `*= 0.6` for free
-- **Event injection** (funnel-post): Splice coupon/intermediate events between funnel steps
+- **Event injection** (funnel-post): Splice events between funnel steps by cloning from existing events of the same type
 - **Time-to-convert manipulation** (funnel-pre): `record.timeToConvert *= 0.5` for power users
 
 #### Everything Techniques (`type === "everything"`) — Most Powerful
 
 The `"everything"` hook is the most powerful because it sees ALL events for one user AND has access to `meta.profile`. This enables **cross-table correlation** — driving event behavior based on user profile properties:
 
-- **Two-pass processing**: First pass scans for conditions (has purchase? joined guild early?), second pass modifies ALL events based on findings
-- **Cross-table correlation**: Use `meta.profile.tier` to set properties on every event → creates discoverable segment differences across both user and event tables
-- **Event filtering/dropping (churn, drop-off, seasonal dips)**: `return record.filter(e => ...)` — the ONLY way to remove events. Remove 60-70% of events after a date to simulate disengagement, filter by tag to create volume dips, or remove events matching conditions to architect absence-of-data patterns. This is essential for modeling churn, seasonal drop-off, and degraded experience periods.
-- **Event injection**: Append synthetic milestone/churn-risk events to the stream
-- **Event duplication**: Clone events with 1-3 hour time offsets (viral cascades, weekend surges)
-- **Compound conditions**: Require multiple behaviors before applying effect (Slack AND PagerDuty → faster resolution)
+- **Two-pass processing**: First pass scans for behavioral signals (session count, purchase history, feature usage), second pass modifies existing values based on findings
+- **Sessionization**: Cluster the event stream by inactivity gaps (e.g., 30 min) to derive session count, then use session count to drive modifications
+- **Value scaling by segment**: Use `meta.profile` properties to scale existing event values differently for different segments (power users get 3x purchase amounts with jitter)
+- **Event filtering/dropping (churn, drop-off, seasonal dips)**: `return record.filter(e => ...)` — the ONLY way to remove events
+- **Event injection by cloning**: Find sessions/windows where a behavior almost happened, inject a cloned event (spread from an existing event of the same type) with tweaked values
+- **Event duplication**: Clone existing events with time offsets (viral cascades, weekend surges)
 
 #### Relative Date Patterns (Important!)
 
@@ -308,105 +458,52 @@ const OUTAGE_END = NOW.subtract(3, 'days');
 
 ### Hook Reference Examples
 
-These are proven, production-tested implementations. Use them as templates.
+These are proven, production-tested implementations. Use them as templates. Notice: none of these examples add new properties. They modify existing values and inject events by cloning from existing ones.
 
-#### Example 1: Two-Pass Everything Hook (scan then modify)
+#### Example 1: Sessionization + Power User Scaling (everything hook)
 
-The most important pattern. First pass identifies behavioral signals across all events, second pass modifies events based on those signals. Always set schema defaults before conditional modification.
+The most important pattern. Sessionize the event stream, derive behavioral signals, then modify existing values. No new properties are added.
 
 ```javascript
 if (type === "everything") {
-  const userEvents = record;
-  const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
+  const events = record;
 
-  // ── FIRST PASS: Scan for user behavioral patterns ──
-  let usedPowerFeature = false;
-  let earlyAdopter = false;
-  let earlyFailures = 0;
-
-  userEvents.forEach((event) => {
-    const eventTime = dayjs(event.time);
-    const daysSinceStart = firstEventTime ? eventTime.diff(firstEventTime, 'days', true) : 0;
-
-    if (event.event === "use item" && event.item_type === "Ancient Compass") {
-      usedPowerFeature = true;
+  // Sessionize: cluster events by 30-min inactivity gaps
+  let sessions = [[]];
+  for (let i = 0; i < events.length; i++) {
+    sessions[sessions.length - 1].push(events[i]);
+    if (i < events.length - 1) {
+      const gap = dayjs(events[i + 1].time).diff(dayjs(events[i].time), "minutes");
+      if (gap > 30) sessions.push([]);
     }
-    if (event.event === "guild joined" && daysSinceStart < 3) {
-      earlyAdopter = true;
-    }
-    if (event.event === "player death" && daysSinceStart < 7) {
-      earlyFailures++;
-    }
-  });
+  }
 
-  // ── SECOND PASS: Modify events based on patterns ──
-  userEvents.forEach((event, idx) => {
-    const eventTime = dayjs(event.time);
+  const isPowerUser = sessions.length > 20;
 
-    // Set schema defaults FIRST (ensures property exists on all events of this type)
-    if (event.event === "quest turned in") {
-      event.compass_user = false;
-    }
-
-    // Then conditionally override
-    if (usedPowerFeature && event.event === "quest turned in") {
-      event.reward_gold = Math.floor((event.reward_gold || 100) * 1.5);
-      event.compass_user = true;
-
-      // Inject extra events via splice
-      if (chance.bool({ likelihood: 40 })) {
-        userEvents.splice(idx + 1, 0, {
-          event: "quest turned in",
-          time: eventTime.add(chance.integer({ min: 10, max: 120 }), 'minutes').toISOString(),
-          user_id: event.user_id,  // MUST use user_id, not distinct_id
-          reward_gold: chance.integer({ min: 100, max: 500 }),
-          compass_user: true,
-        });
+  if (isPowerUser) {
+    // Scale existing purchase amounts (with jitter so it looks organic)
+    events.forEach(e => {
+      if (e.event === "purchase") {
+        e.amount = Math.floor(e.amount * (2.5 + Math.random() * 1.0));
       }
-    }
-  });
+    });
 
-  return record;  // Return the (possibly modified) array
-}
-```
-
-#### Example 2: Churn Simulation via Reverse Splice
-
-To drop events (simulate churn, disengagement, seasonal dips), iterate backwards and splice. Forward iteration corrupts indices when removing elements.
-
-```javascript
-if (type === "everything") {
-  const userEvents = record;
-  const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
-
-  // Identify churn candidates (e.g., non-joiners with poor scores)
-  let joinedEarly = false;
-  let hasLowScore = false;
-  userEvents.forEach((event) => {
-    const days = firstEventTime ? dayjs(event.time).diff(firstEventTime, 'days', true) : 0;
-    if (event.event === "study group joined" && days <= 10) joinedEarly = true;
-    if (event.event === "quiz completed" && event.score_percent < 60) hasLowScore = true;
-  });
-
-  if (!joinedEarly && hasLowScore) {
-    // Remove 70% of events after day 14 (churn simulation)
-    const churnCutoff = firstEventTime ? firstEventTime.add(14, 'days') : null;
-    for (let i = userEvents.length - 1; i >= 0; i--) {  // BACKWARDS iteration
-      if (churnCutoff && dayjs(userEvents[i].time).isAfter(churnCutoff)) {
-        if (chance.bool({ likelihood: 70 })) {
-          userEvents.splice(i, 1);
+    // Find sessions where they browsed but didn't buy, inject a purchase
+    // by cloning an existing purchase event (preserves schema)
+    const templatePurchase = events.find(e => e.event === "purchase");
+    if (templatePurchase) {
+      sessions.forEach(session => {
+        const hasBrowse = session.some(e => e.event === "view item");
+        const hasPurchase = session.some(e => e.event === "purchase");
+        if (hasBrowse && !hasPurchase && chance.bool({ likelihood: 40 })) {
+          const lastEvent = session[session.length - 1];
+          events.push({
+            ...templatePurchase,  // clone all existing properties
+            time: dayjs(lastEvent.time).add(chance.integer({ min: 1, max: 5 }), "minutes").toISOString(),
+            user_id: lastEvent.user_id,
+            amount: Math.floor(templatePurchase.amount * (0.8 + Math.random() * 0.4)),
+          });
         }
-      }
-    }
-  } else if (joinedEarly) {
-    // Retained users get bonus engagement events
-    const lastEvent = userEvents[userEvents.length - 1];
-    if (lastEvent && chance.bool({ likelihood: 60 })) {
-      userEvents.push({
-        event: "discussion posted",
-        time: dayjs(lastEvent.time).add(chance.integer({ min: 1, max: 3 }), 'days').toISOString(),
-        user_id: lastEvent.user_id,
-        study_group_member: true,
       });
     }
   }
@@ -415,9 +512,43 @@ if (type === "everything") {
 }
 ```
 
-#### Example 3: Closure-Based State with Maps
+#### Example 2: Churn Simulation via Reverse Splice (everything hook)
 
-Module-level Maps enable cross-event causality: one event sets state, a later event reads and reacts to it. Define Maps outside the hook function.
+Drop events to simulate disengagement. Iterate backwards to avoid index corruption. No new properties.
+
+```javascript
+if (type === "everything") {
+  const events = record;
+  const firstTime = events.length > 0 ? dayjs(events[0].time) : null;
+
+  // Identify churn candidates by scanning existing behavior
+  let joinedEarly = false;
+  let hasLowScore = false;
+  events.forEach(e => {
+    const days = firstTime ? dayjs(e.time).diff(firstTime, 'days', true) : 0;
+    if (e.event === "group joined" && days <= 10) joinedEarly = true;
+    if (e.event === "quiz completed" && e.score < 60) hasLowScore = true;
+  });
+
+  if (!joinedEarly && hasLowScore) {
+    // Remove 70% of events after day 14 (churn)
+    const cutoff = firstTime ? firstTime.add(14, 'days') : null;
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (cutoff && dayjs(events[i].time).isAfter(cutoff)) {
+        if (chance.bool({ likelihood: 70 })) {
+          events.splice(i, 1);
+        }
+      }
+    }
+  }
+
+  return record;
+}
+```
+
+#### Example 3: Closure-Based State with Maps (event hook)
+
+Module-level Maps enable cross-event causality: one event sets state, a later event reads and reacts by modifying existing values. No new properties.
 
 ```javascript
 // ── Module scope (outside config object) ──
@@ -427,100 +558,86 @@ const failedDeployUsers = new Map();
 // ── Inside hook function ──
 if (type === "event") {
   // Cost overrun → forced scale-down on next infrastructure event
+  // scale_direction and cost_change_percent are already in the event schema
   if (record.event === "cost report generated" && record.cost_change_percent > 25) {
-    record.budget_exceeded = true;
-    costOverrunUsers.set(record.user_id, true);       // SET state
+    costOverrunUsers.set(record.user_id, true);
   }
   if (record.event === "infrastructure scaled" && costOverrunUsers.has(record.user_id)) {
-    record.scale_direction = "down";                   // REACT to state
-    record.cost_reaction = true;
-    costOverrunUsers.delete(record.user_id);            // CLEAR state
+    record.scale_direction = "down";  // set to existing enum value
+    costOverrunUsers.delete(record.user_id);
   }
 
   // Failed deploy → recovery deploy takes 1.5x longer
+  // duration_sec and status are already in the event schema
   if (record.event === "deployment pipeline run") {
     if (record.status === "failed") {
       failedDeployUsers.set(record.user_id, true);
     } else if (record.status === "success" && failedDeployUsers.has(record.user_id)) {
-      record.duration_sec = Math.floor((record.duration_sec || 300) * 1.5);
-      record.recovery_deployment = true;
+      record.duration_sec = Math.floor(record.duration_sec * 1.5);
       failedDeployUsers.delete(record.user_id);
     }
   }
 }
 ```
 
-#### Example 4: Funnel-Post Event Injection
+#### Example 4: Funnel-Post Event Injection by Cloning (funnel-post hook)
 
-Splice events between funnel steps (coupons, intermediate actions). Calculate midpoint time between adjacent events.
+Inject events between funnel steps by cloning from an existing event in the funnel. Preserves schema.
 
 ```javascript
 if (type === "funnel-post") {
   if (Array.isArray(record) && record.length >= 2) {
     const firstEvent = record[0];
-    const isFreeUser = firstEvent && firstEvent.subscription_tier === "Free";
 
-    if (isFreeUser && chance.bool({ likelihood: 30 })) {
+    // Free users sometimes get an extra step cloned into the funnel
+    if (firstEvent.subscription_tier === "Free" && chance.bool({ likelihood: 30 })) {
       const insertIdx = chance.integer({ min: 1, max: record.length - 1 });
       const prevEvent = record[insertIdx - 1];
       const nextEvent = record[insertIdx];
-      // Calculate midpoint time between adjacent funnel steps
       const midTime = dayjs(prevEvent.time).add(
         dayjs(nextEvent.time).diff(dayjs(prevEvent.time)) / 2, 'milliseconds'
       ).toISOString();
 
+      // Clone from the previous funnel step, just change the time
       record.splice(insertIdx, 0, {
-        event: "coupon applied",
+        ...prevEvent,
         time: midTime,
-        user_id: firstEvent.user_id,
-        coupon_code: chance.pickone(["SAVE10", "WELCOME", "FLASH20"]),
-        discount_percent: chance.integer({ min: 10, max: 30 }),
-        coupon_injected: true,
       });
     }
   }
 }
 ```
 
-#### Example 5: User Profile Enrichment (Conditional Properties)
+#### Example 5: User Profile Value Modification (user hook)
 
-Add computed properties to user profiles based on existing attributes. Different user segments get different property sets.
+Modify existing userProp values based on conditions. All properties here must already be defined in the `userProps` config.
 
 ```javascript
 if (type === "user") {
-  const companySize = record.company_size;
-
-  if (companySize === "enterprise") {
+  // company_size, seat_count, and annual_contract_value are all in userProps
+  if (record.company_size === "enterprise") {
     record.seat_count = chance.integer({ min: 50, max: 500 });
     record.annual_contract_value = chance.integer({ min: 50000, max: 500000 });
-    record.customer_success_manager = true;
-  } else if (companySize === "startup") {
+  } else if (record.company_size === "startup") {
     record.seat_count = chance.integer({ min: 1, max: 5 });
     record.annual_contract_value = chance.integer({ min: 0, max: 3600 });
-    record.customer_success_manager = false;
   }
-
-  // Universal properties (all users get these)
-  record.customer_health_score = chance.integer({ min: 1, max: 100 });
 }
 ```
 
-#### Example 6: Event Property Modification + Day-of-Month Patterns
+#### Example 6: Day-of-Month Value Scaling (event hook)
 
-Modify properties based on calendar patterns. Always set boolean tags for both true AND false cases so the property appears consistently in the schema.
+Modify existing property values based on calendar patterns. No new properties added.
 
 ```javascript
 if (type === "event") {
-  const EVENT_TIME = dayjs(record.time);
-  const dayOfMonth = EVENT_TIME.date();
+  const dayOfMonth = dayjs(record.time).date();
 
-  // Payday cycle: 1st and 15th see bigger deposits
+  // Payday cycle: 1st and 15th see 3x bigger deposits
+  // amount and transaction_type are already in the event schema
   if (record.event === "transaction completed" && record.transaction_type === "direct_deposit") {
     if (dayOfMonth === 1 || dayOfMonth === 15) {
-      record.amount = Math.floor((record.amount || 50) * 3);
-      record.payday = true;
-    } else {
-      record.payday = false;   // ALWAYS set both cases
+      record.amount = Math.floor(record.amount * 3);
     }
   }
 
@@ -528,150 +645,102 @@ if (type === "event") {
   if (record.event === "transfer sent") {
     const isPaydayWindow = (dayOfMonth >= 1 && dayOfMonth <= 3) || (dayOfMonth >= 15 && dayOfMonth <= 17);
     if (isPaydayWindow && chance.bool({ likelihood: 60 })) {
-      record.amount = Math.floor((record.amount || 200) * 2.0);
-      record.post_payday_spending = true;
-    } else {
-      record.post_payday_spending = false;
+      record.amount = Math.floor(record.amount * 2.0);
     }
   }
 }
 ```
 
-#### Example 7: Mass Event Injection in Everything Hook
+#### Example 7: Viral Cascade via Event Cloning (everything hook)
 
-For viral cascades, engagement bursts, or seasonal spikes — accumulate events in an array, then splice all at once.
+For viral bursts, clone existing events with time offsets. Every injected event uses spread from a real event so the schema stays clean.
 
 ```javascript
 if (type === "everything") {
-  const userEvents = record;
+  const events = record;
 
   // Identify viral creators (5% of users with 10+ posts)
   let postCount = 0;
-  userEvents.forEach(e => { if (e.event === "post created") postCount++; });
+  events.forEach(e => { if (e.event === "post created") postCount++; });
   const isViralCreator = postCount >= 10 && chance.bool({ likelihood: 5 });
 
   if (isViralCreator) {
-    userEvents.forEach((event, idx) => {
-      if (event.event === "post created") {
-        const eventTime = dayjs(event.time);
-        const injected = [];
-
-        // Generate 10-20 engagement events per viral post
-        const viewCount = chance.integer({ min: 10, max: 20 });
-        for (let i = 0; i < viewCount; i++) {
-          injected.push({
-            event: "post viewed",
-            time: eventTime.add(chance.integer({ min: 1, max: 180 }), 'minutes').toISOString(),
-            user_id: event.user_id,
-            source: chance.pickone(["feed", "explore", "search"]),
-            viral_cascade: true,
-          });
+    // Find a template "post viewed" event to clone from
+    const templateView = events.find(e => e.event === "post viewed");
+    if (templateView) {
+      events.forEach(event => {
+        if (event.event === "post created") {
+          const eventTime = dayjs(event.time);
+          // Clone 10-20 views per viral post
+          const viewCount = chance.integer({ min: 10, max: 20 });
+          for (let i = 0; i < viewCount; i++) {
+            events.push({
+              ...templateView,  // clone all existing properties
+              time: eventTime.add(chance.integer({ min: 1, max: 180 }), 'minutes').toISOString(),
+              user_id: event.user_id,
+            });
+          }
         }
-
-        // Single splice with spread for all injected events
-        userEvents.splice(idx + 1, 0, ...injected);
-      }
-    });
+      });
+    }
   }
 
   return record;
 }
 ```
 
-#### Example 8: Cross-Table Correlation via Everything + meta.profile
+#### Example 8: Cross-Table Correlation via meta.profile (everything hook)
 
-The `everything` hook receives `meta.profile` — the user's full profile object. This lets you drive event behavior based on user properties, creating discoverable correlations across both tables.
+Use `meta.profile` to drive existing event value modifications based on user properties. This creates discoverable correlations across both tables without adding new columns.
 
 ```javascript
 if (type === "everything") {
-  const userEvents = record;
+  const events = record;
   const profile = meta.profile;
-
-  // Use profile properties to segment and modify all events
   const tier = profile.subscription_tier || "free";
-  const isEnterprise = profile.company_size === "enterprise";
 
-  userEvents.forEach((event) => {
-    // Stamp tier onto every event (creates cross-table join signal)
-    event.user_tier = tier;
-
-    // Enterprise users get faster response times
-    if (isEnterprise && event.event === "support ticket resolved") {
-      event.resolution_hours = Math.floor((event.resolution_hours || 24) * 0.4);
-      event.priority_support = true;
+  events.forEach(event => {
+    // Enterprise users get faster resolution times
+    // resolution_hours is already in the event schema
+    if (tier === "enterprise" && event.event === "support ticket resolved") {
+      event.resolution_hours = Math.floor(event.resolution_hours * 0.4);
     }
 
-    // Premium users get higher reward multipliers
+    // Premium users get higher reward values
+    // value is already in the event schema
     if (tier === "premium" && event.event === "reward redeemed") {
-      event.value = Math.floor((event.value || 10) * 3);
-      event.premium_reward = true;
+      event.value = Math.floor(event.value * 3);
     }
   });
 
-  // Enterprise users also get a synthetic "account review" event monthly
-  if (isEnterprise && userEvents.length > 0) {
-    const lastEvent = userEvents[userEvents.length - 1];
-    userEvents.push({
-      event: "account review",
-      time: dayjs(lastEvent.time).add(1, 'day').toISOString(),
-      user_id: lastEvent.user_id,
-      user_tier: tier,
-      review_type: "quarterly_business_review",
-    });
-  }
-
   return record;
 }
 ```
 
-#### Example 9: Fraud/Anomaly Injection in Everything Hook
+#### Example 9: Anomaly Burst via Event Cloning (everything hook)
 
-Inject a realistic burst of anomalous events at the midpoint of a user's timeline. Perfect for fraud detection, outage simulation, or bot behavior patterns.
+Inject a burst of rapid events by cloning an existing event of the same type. Perfect for fraud detection or bot behavior patterns.
 
 ```javascript
 if (type === "everything") {
-  const userEvents = record;
+  const events = record;
 
-  // 3% of users experience a fraud event sequence
-  if (chance.bool({ likelihood: 3 }) && userEvents.length >= 2) {
-    const midIdx = Math.floor(userEvents.length / 2);
-    const midEvent = userEvents[midIdx];
-    const midTime = dayjs(midEvent.time);
-    const userId = midEvent.user_id;
+  // 3% of users experience a fraud-like burst
+  const templateTransaction = events.find(e => e.event === "transaction completed");
+  if (chance.bool({ likelihood: 3 }) && templateTransaction && events.length >= 2) {
+    const midIdx = Math.floor(events.length / 2);
+    const midTime = dayjs(events[midIdx].time);
 
-    // Inject burst of 3-5 rapid high-value transactions within 1 hour
+    // Clone 3-5 rapid high-value transactions from the template
     const burstCount = chance.integer({ min: 3, max: 5 });
-    const fraudEvents = [];
-
     for (let i = 0; i < burstCount; i++) {
-      fraudEvents.push({
-        event: "transaction completed",
+      events.splice(midIdx + 1 + i, 0, {
+        ...templateTransaction,  // clone all existing properties
         time: midTime.add(i * 10, "minutes").toISOString(),
-        user_id: userId,
+        user_id: templateTransaction.user_id,
         amount: chance.integer({ min: 500, max: 3000 }),
-        payment_method: "credit",
-        fraud_sequence: true,
       });
     }
-
-    // Follow-up: card locked + dispute filed
-    fraudEvents.push({
-      event: "card locked",
-      time: midTime.add(burstCount * 10 + 5, "minutes").toISOString(),
-      user_id: userId,
-      reason: "suspicious_activity",
-      fraud_sequence: true,
-    });
-    fraudEvents.push({
-      event: "dispute filed",
-      time: midTime.add(burstCount * 10 + 30, "minutes").toISOString(),
-      user_id: userId,
-      dispute_amount: chance.integer({ min: 500, max: 3000 }),
-      fraud_sequence: true,
-    });
-
-    // Single splice to inject entire sequence
-    userEvents.splice(midIdx + 1, 0, ...fraudEvents);
   }
 
   return record;
@@ -767,23 +836,25 @@ The bad example doesn't tell the user what report type to create, what metric to
 
 ## Common Pitfalls to Avoid
 
-1. **Don't wrap plain string arrays in `pickAWinner()`**: Arrays of 3+ unique strings like `["email", "google", "facebook"]` are automatically power-law weighted by the engine. Just use the plain array. Only use `pickAWinner()` explicitly when you need the second argument or have < 3 items. Note: `u.pickAWinner(["a","b"], 0)` with 2 elements and integer index CRASHES — use a float index or add a 3rd element.
-2. **Funnel event name mismatch**: If your funnel has `"first quest accepted"` but events array has `"quest accepted"`, validation fails. Names must match exactly.
-3. **Using `record.properties.X` in hooks**: Properties are flat. Use `record.X` directly.
-4. **Using `distinct_id` on spliced events**: The pipeline uses `user_id`, NOT `distinct_id`. Always copy `user_id: event.user_id` from the source event when creating new events in hooks.
-5. **Using `scdProps`**: SCDs generate locally without credentials. Only Mixpanel *import* needs service credentials. You can use `scdProps` freely for local generation with `writeToDisk: true`.
-6. **NEVER use `lookupTables`**: Always set to `[]`. Lookup tables require a separate manual import step that is not automated. Events should carry all their attributes directly as flat properties.
-7. **Churn events in funnels**: Always mark `isChurnEvent` events with `isStrictEvent: true` so they aren't included in auto-generated funnels (otherwise the churn event can fire mid-funnel, which is wrong).
+1. **Inventing properties in hooks that aren't in the config**: If a hook needs `payday`, `surge_pricing`, or any other flag, it MUST be defined in the event's `properties` with a default (e.g., `payday: [false]`). The hook modifies the value. The config defines the schema. This keeps the dataset schema consistent and the JSON schema output complete.
+2. **Constructing injected events from scratch**: Never hand-build event objects with hand-picked properties. Always clone from an existing event of the same type using spread, then override `time`, `user_id`, and the values you want to change. This ensures the injected event has the same schema as organically generated ones.
+3. **Don't wrap plain string arrays in `pickAWinner()`**: Arrays of 3+ unique strings like `["email", "google", "facebook"]` are automatically power-law weighted by the engine. Just use the plain array. `pickAWinner(array, integerIndex)` is ONLY for designating a specific winner index. For boolean/2-item weighting, use duplicates: `[false, false, true]` (~33% true). Never pass decimals as the second argument.
+4. **Funnel event name mismatch**: If your funnel has `"first quest accepted"` but events array has `"quest accepted"`, validation fails. Names must match exactly.
+5. **Using `record.properties.X` in hooks**: Properties are flat. Use `record.X` directly.
+6. **Using `distinct_id` on spliced events**: The pipeline uses `user_id`, NOT `distinct_id`. Always copy `user_id` from the source event.
+7. **Using `scdProps`**: SCDs generate locally without credentials. Only Mixpanel *import* needs service credentials. You can use `scdProps` freely for local generation with `writeToDisk: true`.
+8. **NEVER use `lookupTables`**: Always set to `[]`. Lookup tables require a separate manual import step that is not automated.
+9. **Churn events in funnels**: Always mark `isChurnEvent` events with `isStrictEvent: true` so they aren't included in auto-generated funnels.
 
 ## JSON Schema Output (Required)
 
-After writing the `.js` dungeon file, also generate a companion `<name>-schema.json` file in `./dungeons/` containing a stripped-down, plain JSON version of the schema — no function calls, no JS imports, just portable data.
+After writing the `.js` dungeon file, also generate a companion `<name>-schema.json` file in `./dungeons/vertical/` containing a stripped-down, plain JSON version of the schema — no function calls, no JS imports, just portable data.
 
 ### JSON Format Rules
 
 - **Arrays** → keep as-is (random selection from values)
 - **`weighNumRange(min, max, ...)`** → `{"$range": [min, max]}` (integer range)
-- **`pickAWinner(array)`** → plain array (drop the weighting, just list the values)
+- **`pickAWinner(array, index)`** → plain array (drop the weighting, just list the values)
 - **`chance.xxx.bind(chance)`** → omit the property or use a static placeholder
 - **Arrow functions / closures** → omit or use a static placeholder
 - **`decimal(min, max, places)`** → `{"$float": [min, max], "decimals": places}`
@@ -825,18 +896,21 @@ Include `isFirstEvent`, `isFirstFunnel`, `name`, `weight`, `order`, and other no
 
 ## After Writing the Files
 
-1. Validate the JS dungeon with: `node -e "import { validateDungeonConfig } from './lib/core/config-validator.js'; import c from './dungeons/FILENAME.js'; validateDungeonConfig(c); console.log('valid');"`
+1. Validate the JS dungeon with: `node -e "import { validateDungeonConfig } from './lib/core/config-validator.js'; import c from './dungeons/vertical/FILENAME.js'; validateDungeonConfig(c); console.log('valid');"`
 2. If validation fails, fix the issue (usually funnel event names or pickAWinner crashes)
 3. Verify the hook function loads without errors
-4. Verify the JSON schema file is valid JSON: `node -e "import fs from 'fs'; JSON.parse(fs.readFileSync('./dungeons/FILENAME-schema.json', 'utf8')); console.log('valid json');"`
+4. Verify the JSON schema file is valid JSON: `node -e "import fs from 'fs'; JSON.parse(fs.readFileSync('./dungeons/vertical/FILENAME-schema.json', 'utf8')); console.log('valid json');"`
+5. **Run `/verify-hooks dungeons/vertical/FILENAME.js`** to verify all hooks produce their intended patterns. Fix any FAIL or WEAK hooks before considering the dungeon complete.
 
 ## Verifying Hooks
 
-A verify runner already exists at `scripts/verify-runner.mjs` — do NOT create a new one. Use it to generate a small dataset and verify hooks with DuckDB:
+A verify runner already exists at `scripts/verify-runner.mjs` — do NOT create a new one. After creating the dungeon, **always run the verify-hooks skill** (`/verify-hooks dungeons/vertical/FILENAME.js`) to confirm hooks produce their intended data patterns. If hooks fail verification, iterate on the hook code until they pass.
+
+Manual verification is also available:
 
 ```bash
 # Generate test data (1K users, 100K events)
-node scripts/verify-runner.mjs dungeons/FILENAME.js verify-FILENAME
+node scripts/verify-runner.mjs dungeons/vertical/FILENAME.js verify-FILENAME
 
 # Query the output with DuckDB to verify hook patterns
 duckdb -c "SELECT ... FROM 'verify-FILENAME__events.json'"
@@ -851,10 +925,11 @@ The runner overrides: `numUsers=1000, numEvents=100_000, format=json, writeToDis
 - [ ] 5 funnels with one marked `isFirstFunnel`
 - [ ] All funnel event names exist in events array
 - [ ] 8 hooks using varied techniques (not all `everything`)
+- [ ] **No hooks add new properties** — hooks only modify existing values, filter events, and inject events cloned from existing ones
 - [ ] Each hook has a clear "how to find it" with **specific Mixpanel report instructions** (report type, event, measure, breakdown, filter, expected result)
 - [ ] Each hook has a real-world analogue explained
 - [ ] Documentation block includes metrics summary table
-- [ ] No `pickAWinner` calls with exactly 2 items and integer index
+- [ ] No `pickAWinner` calls without an explicit integer index arg. No decimal second args. Boolean/2-item weighting uses duplicate arrays.
 - [ ] `lookupTables: []` (no lookup tables — events carry all attributes)
 - [ ] Passes `validateDungeonConfig`
 - [ ] Companion `<name>-schema.json` file generated with portable JSON schema

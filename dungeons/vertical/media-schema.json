@@ -1,0 +1,787 @@
+{
+  "events": [
+    {
+      "event": "account created",
+      "isFirstEvent": true,
+      "properties": {
+        "signup_source": [
+          "organic",
+          "referral",
+          "trial_offer",
+          "ad"
+        ],
+        "plan_selected": [
+          "free",
+          "standard",
+          "premium"
+        ],
+        "weekend_viewing": [
+          false
+        ],
+        "prime_time": [
+          false
+        ],
+        "kids_profile": [
+          false
+        ],
+        "ad_fatigue": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "content browsed",
+      "weight": 20,
+      "properties": {
+        "browse_section": [
+          "home",
+          "trending",
+          "new_releases",
+          "genre",
+          "continue_watching"
+        ],
+        "genre": [
+          "action",
+          "comedy",
+          "drama",
+          "documentary",
+          "horror",
+          "sci_fi",
+          "animation",
+          "thriller",
+          "romance"
+        ],
+        "weekend_viewing": [
+          false
+        ],
+        "prime_time": [
+          false
+        ],
+        "kids_profile": [
+          false
+        ],
+        "ad_fatigue": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "content selected",
+      "weight": 15,
+      "properties": {
+        "content_type": [
+          "movie",
+          "series",
+          "documentary",
+          "special"
+        ],
+        "genre": [
+          "action",
+          "comedy",
+          "drama",
+          "documentary",
+          "horror",
+          "sci_fi",
+          "animation",
+          "thriller",
+          "romance"
+        ],
+        "content_id": [
+          "content_u4LWBjRw",
+          "content_nqqTr0IL",
+          "content_qBAlX3UO",
+          "content_1gXL5CRR",
+          "content_bVyNdjXv",
+          "content_HG1Kj3OD",
+          "content_QvPfjVQU",
+          "content_Hb4iNXJa",
+          "content_zcGddjdu"
+        ],
+        "blockbuster_release": [
+          false
+        ],
+        "kids_profile": [
+          false
+        ],
+        "weekend_viewing": [
+          false
+        ],
+        "prime_time": [
+          false
+        ],
+        "ad_fatigue": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "playback started",
+      "weight": 18,
+      "properties": {
+        "content_id": [
+          "content_f9RESmXz",
+          "content_ZqmBDouy",
+          "content_oICKnP3z",
+          "content_A7CdKSxi",
+          "content_BOsZRKxM",
+          "content_XLCdIuKq",
+          "content_wrywOfRE",
+          "content_cfURRkzu",
+          "content_Av2dV4Mx"
+        ],
+        "content_type": [
+          "movie",
+          "series",
+          "documentary",
+          "special"
+        ],
+        "playback_quality": [
+          "480p",
+          "720p",
+          "1080p",
+          "4k"
+        ],
+        "subtitle_language": [
+          "none",
+          "english",
+          "spanish",
+          "french",
+          "japanese",
+          "korean"
+        ],
+        "playback_speed": [
+          "1x",
+          "1.25x",
+          "0.5x"
+        ],
+        "blockbuster_release": [
+          false
+        ],
+        "kids_profile": [
+          false
+        ],
+        "binge_session": [
+          false
+        ],
+        "weekend_viewing": [
+          false
+        ],
+        "prime_time": [
+          false
+        ],
+        "ad_fatigue": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "playback completed",
+      "weight": 12,
+      "properties": {
+        "content_id": [
+          "content_jTwpKLjS",
+          "content_8YdHCYSS",
+          "content_Yp26E7go",
+          "content_deH2ocx7",
+          "content_ct09GghK",
+          "content_5nqTGKFc",
+          "content_1SQacm0W",
+          "content_1gXL5CRR"
+        ],
+        "content_type": [
+          "movie",
+          "series",
+          "documentary",
+          "special"
+        ],
+        "watch_duration_min": {
+          "$range": [
+            32,
+            157
+          ]
+        },
+        "completion_percent": {
+          "$range": [
+            16,
+            99
+          ]
+        },
+        "binge_session": [
+          false
+        ],
+        "subtitle_user": [
+          false
+        ],
+        "weekend_viewing": [
+          false
+        ],
+        "prime_time": [
+          false
+        ],
+        "kids_profile": [
+          false
+        ],
+        "ad_fatigue": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "playback paused",
+      "weight": 10,
+      "properties": {
+        "content_id": [
+          "content_2r4XQKH1",
+          "content_tljRIIM5",
+          "content_7tT1vAkC",
+          "content_p3ahPLmK",
+          "content_Bsfkx3NU"
+        ],
+        "pause_reason": [
+          "manual",
+          "ad_break",
+          "buffering",
+          "notification"
+        ],
+        "weekend_viewing": [
+          false
+        ],
+        "prime_time": [
+          false
+        ],
+        "kids_profile": [
+          false
+        ],
+        "ad_fatigue": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "content rated",
+      "weight": 6,
+      "properties": {
+        "content_id": [
+          "content_JyVfDvSy",
+          "content_LcCBZeuJ",
+          "content_iyltdOOP",
+          "content_yuOYnU03",
+          "content_izrVbERo",
+          "content_Kq78lQs6",
+          "content_F68hfbMC",
+          "content_T6mhelkF"
+        ],
+        "rating": [
+          3,
+          4
+        ],
+        "review_text_length": {
+          "$type": "array"
+        },
+        "blockbuster_release": [
+          false
+        ],
+        "weekend_viewing": [
+          false
+        ],
+        "prime_time": [
+          false
+        ],
+        "kids_profile": [
+          false
+        ],
+        "ad_fatigue": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "watchlist added",
+      "weight": 8,
+      "properties": {
+        "content_id": [
+          "content_aBfYjiy3",
+          "content_bg1xNZ0W",
+          "content_sa6iOTTx",
+          "content_WIEpfqZf",
+          "content_gxzI7W37",
+          "content_Mekj7Iyx",
+          "content_Lbv3tQ4j",
+          "content_FRU2Bejm"
+        ],
+        "content_type": [
+          "movie",
+          "series",
+          "documentary",
+          "special"
+        ],
+        "genre": [
+          "action",
+          "comedy",
+          "drama",
+          "documentary",
+          "horror",
+          "sci_fi",
+          "animation",
+          "thriller",
+          "romance"
+        ],
+        "weekend_viewing": [
+          false
+        ],
+        "prime_time": [
+          false
+        ],
+        "kids_profile": [
+          false
+        ],
+        "ad_fatigue": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "watchlist removed",
+      "weight": 3,
+      "properties": {
+        "content_id": [
+          "content_ZLH6yQXY",
+          "content_aahfqsLr",
+          "content_uSI6sSMs",
+          "content_6Cp57XOd",
+          "content_5Ir5LNEI",
+          "content_1rn5I64A",
+          "content_mQyuIhMi"
+        ],
+        "reason": [
+          "watched",
+          "not_interested",
+          "expired"
+        ],
+        "weekend_viewing": [
+          false
+        ],
+        "prime_time": [
+          false
+        ],
+        "kids_profile": [
+          false
+        ],
+        "ad_fatigue": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "search performed",
+      "weight": 7,
+      "properties": {
+        "search_term": {
+          "$type": "string"
+        },
+        "results_count": {
+          "$range": [
+            9,
+            38
+          ]
+        },
+        "search_type": [
+          "title",
+          "actor",
+          "director",
+          "genre"
+        ],
+        "weekend_viewing": [
+          false
+        ],
+        "prime_time": [
+          false
+        ],
+        "kids_profile": [
+          false
+        ],
+        "ad_fatigue": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "recommendation clicked",
+      "weight": 9,
+      "properties": {
+        "algorithm": [
+          "collaborative_filtering",
+          "content_based",
+          "trending",
+          "editorial"
+        ],
+        "position": {
+          "$range": [
+            3,
+            18
+          ]
+        },
+        "weekend_viewing": [
+          false
+        ],
+        "prime_time": [
+          false
+        ],
+        "kids_profile": [
+          false
+        ],
+        "ad_fatigue": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "profile switched",
+      "weight": 4,
+      "properties": {
+        "profile_type": [
+          "main",
+          "kids",
+          "partner",
+          "guest"
+        ],
+        "weekend_viewing": [
+          false
+        ],
+        "prime_time": [
+          false
+        ],
+        "kids_profile": [
+          false
+        ],
+        "ad_fatigue": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "ad impression",
+      "weight": 8,
+      "properties": {
+        "ad_type": [
+          "pre_roll",
+          "mid_roll",
+          "banner",
+          "interstitial"
+        ],
+        "ad_duration_sec": {
+          "$range": [
+            5,
+            26
+          ]
+        },
+        "skipped": {
+          "$type": "array"
+        },
+        "ad_blocked": [
+          false
+        ],
+        "kids_profile": [
+          false
+        ],
+        "weekend_viewing": [
+          false
+        ],
+        "prime_time": [
+          false
+        ],
+        "ad_fatigue": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "subscription changed",
+      "weight": 2,
+      "properties": {
+        "old_plan": [
+          "free",
+          "standard",
+          "premium"
+        ],
+        "new_plan": [
+          "free",
+          "standard",
+          "premium"
+        ],
+        "change_reason": [
+          "upgrade",
+          "downgrade",
+          "cancel",
+          "resubscribe"
+        ],
+        "weekend_viewing": [
+          false
+        ],
+        "prime_time": [
+          false
+        ],
+        "kids_profile": [
+          false
+        ],
+        "ad_fatigue": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "download started",
+      "weight": 5,
+      "properties": {
+        "content_id": [
+          "content_7tT1vAkC",
+          "content_KxFfztRx",
+          "content_snbvwVEc",
+          "content_1hIvMziS",
+          "content_yuOYnU03",
+          "content_NucBvoMs",
+          "content_P8K8YUUq",
+          "content_aBfYjiy3",
+          "content_NIKXTqIO",
+          "content_Mekj7Iyx"
+        ],
+        "content_type": [
+          "movie",
+          "series",
+          "documentary",
+          "special"
+        ],
+        "download_quality": [
+          "720p",
+          "1080p",
+          "4k"
+        ],
+        "weekend_viewing": [
+          false
+        ],
+        "prime_time": [
+          false
+        ],
+        "kids_profile": [
+          false
+        ],
+        "ad_fatigue": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "share content",
+      "weight": 3,
+      "properties": {
+        "share_method": [
+          "link",
+          "social",
+          "dm",
+          "email"
+        ],
+        "content_type": [
+          "movie",
+          "series",
+          "documentary",
+          "special"
+        ],
+        "weekend_viewing": [
+          false
+        ],
+        "prime_time": [
+          false
+        ],
+        "kids_profile": [
+          false
+        ],
+        "ad_fatigue": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "subtitle toggled",
+      "weight": 4,
+      "properties": {
+        "subtitle_language": [
+          "none",
+          "english",
+          "spanish",
+          "french",
+          "japanese",
+          "korean"
+        ],
+        "action": [
+          "enabled",
+          "disabled",
+          "changed"
+        ],
+        "weekend_viewing": [
+          false
+        ],
+        "prime_time": [
+          false
+        ],
+        "kids_profile": [
+          false
+        ],
+        "ad_fatigue": [
+          false
+        ]
+      }
+    }
+  ],
+  "superProps": {
+    "subscription_plan": [
+      "premium",
+      "standard",
+      "free"
+    ],
+    "device_type": [
+      "smart_tv",
+      "mobile",
+      "tablet",
+      "laptop",
+      "desktop"
+    ]
+  },
+  "userProps": {
+    "preferred_genre": [
+      "action",
+      "comedy",
+      "drama",
+      "documentary",
+      "horror",
+      "sci_fi",
+      "animation"
+    ],
+    "avg_session_duration_min": {
+      "$range": [
+        39,
+        150
+      ]
+    },
+    "total_watch_hours": {
+      "$range": [
+        67,
+        434
+      ]
+    },
+    "profiles_count": {
+      "$range": [
+        1,
+        4
+      ]
+    },
+    "downloads_enabled": {
+      "$type": "array"
+    }
+  },
+  "funnels": [
+    {
+      "sequence": [
+        "account created",
+        "content browsed",
+        "playback started"
+      ],
+      "isFirstFunnel": true,
+      "conversionRate": 80,
+      "timeToConvert": 0.25
+    },
+    {
+      "sequence": [
+        "content browsed",
+        "content selected",
+        "playback started",
+        "playback completed"
+      ],
+      "conversionRate": 55,
+      "timeToConvert": 2,
+      "weight": 5,
+      "props": {
+        "genre": [
+          "action",
+          "comedy",
+          "drama",
+          "documentary",
+          "horror",
+          "sci_fi",
+          "animation",
+          "thriller",
+          "romance"
+        ]
+      }
+    },
+    {
+      "sequence": [
+        "recommendation clicked",
+        "playback started",
+        "playback completed",
+        "content rated"
+      ],
+      "conversionRate": 35,
+      "timeToConvert": 1,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "search performed",
+        "content selected",
+        "playback started"
+      ],
+      "conversionRate": 50,
+      "timeToConvert": 0.5,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "content browsed",
+        "watchlist added",
+        "content selected",
+        "playback started"
+      ],
+      "conversionRate": 40,
+      "timeToConvert": 12,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "profile switched",
+        "subtitle toggled",
+        "playback started",
+        "playback completed"
+      ],
+      "conversionRate": 45,
+      "timeToConvert": 1,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "ad impression",
+        "playback started",
+        "playback paused"
+      ],
+      "conversionRate": 60,
+      "timeToConvert": 0.5,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "playback completed",
+        "share content",
+        "download started"
+      ],
+      "conversionRate": 25,
+      "timeToConvert": 1
+    },
+    {
+      "sequence": [
+        "content browsed",
+        "subscription changed"
+      ],
+      "conversionRate": 15,
+      "timeToConvert": 24
+    }
+  ]
+}

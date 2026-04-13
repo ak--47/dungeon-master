@@ -1,0 +1,653 @@
+{
+  "events": [
+    {
+      "event": "workspace created",
+      "isFirstEvent": true,
+      "properties": {
+        "company_size": [
+          "startup",
+          "smb",
+          "mid_market",
+          "enterprise"
+        ],
+        "industry": [
+          "tech",
+          "finance",
+          "healthcare",
+          "retail",
+          "media"
+        ]
+      }
+    },
+    {
+      "event": "service deployed",
+      "weight": 10,
+      "properties": {
+        "service_id": [
+          "svc_7LJEoSAp",
+          "svc_k8mXwECk",
+          "svc_iecUGApG",
+          "svc_ZI11Ekfn",
+          "svc_PmfP4rbD"
+        ],
+        "service_type": [
+          "web_app",
+          "api",
+          "database",
+          "cache",
+          "queue",
+          "ml_model"
+        ],
+        "environment": [
+          "production",
+          "staging",
+          "dev"
+        ],
+        "cloud_provider": [
+          "aws",
+          "gcp",
+          "azure"
+        ],
+        "docs_informed": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "dashboard viewed",
+      "weight": 20,
+      "properties": {
+        "dashboard_type": [
+          "overview",
+          "cost",
+          "performance",
+          "security",
+          "custom"
+        ],
+        "time_range": [
+          "1h",
+          "6h",
+          "24h",
+          "7d",
+          "30d"
+        ]
+      }
+    },
+    {
+      "event": "alert triggered",
+      "weight": 12,
+      "properties": {
+        "alert_id": [
+          "alert_Roc3cr",
+          "alert_zoFbqS",
+          "alert_oVw4g1",
+          "alert_MWHmBF",
+          "alert_gwfKlT",
+          "alert_3qcbPk",
+          "alert_tWkZ8D",
+          "alert_dDsNm9"
+        ],
+        "severity": [
+          "info",
+          "warning",
+          "critical",
+          "emergency"
+        ],
+        "alert_type": [
+          "cpu",
+          "memory",
+          "latency",
+          "error_rate",
+          "disk",
+          "network"
+        ],
+        "service_id": [
+          "svc_NXNitYJu",
+          "svc_UTrpwdA7",
+          "svc_1d39YMnD",
+          "svc_TsEzV41d",
+          "svc_XPkuHFcR",
+          "svc_BLyXPZiy",
+          "svc_7bfYjrcQ"
+        ]
+      }
+    },
+    {
+      "event": "incident created",
+      "properties": {
+        "escalation_level": [
+          "P1",
+          "P2"
+        ],
+        "teams_paged": {
+          "$range": [
+            1,
+            5
+          ]
+        },
+        "incident_id": {
+          "$type": "string"
+        },
+        "original_severity": [
+          "critical",
+          "emergency"
+        ],
+        "original_alert_type": [
+          "cpu",
+          "memory",
+          "latency",
+          "error_rate",
+          "disk",
+          "network"
+        ],
+        "service_id": [
+          "svc_h1NEsoCf",
+          "svc_ejMJmy6D",
+          "svc_G8oymC7p",
+          "svc_UTrpwdA7",
+          "svc_H0Uvv7F7",
+          "svc_EF8xTnCV",
+          "svc_llamzYsW",
+          "svc_sxIaS9Gi"
+        ],
+        "auto_escalated": [
+          true
+        ]
+      }
+    },
+    {
+      "event": "alert acknowledged",
+      "weight": 8,
+      "properties": {
+        "alert_id": [
+          "alert_S5Gv7s",
+          "alert_JCKQjk",
+          "alert_iX7VO5",
+          "alert_N5S3za",
+          "alert_eeKJWU",
+          "alert_GBj6yR",
+          "alert_jAaXI3",
+          "alert_BhCTAw",
+          "alert_EgYqbz"
+        ],
+        "response_time_mins": {
+          "$range": [
+            10,
+            98
+          ]
+        },
+        "acknowledged_by_role": [
+          "engineer",
+          "sre",
+          "manager",
+          "oncall"
+        ],
+        "integrated_team": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "alert resolved",
+      "weight": 7,
+      "properties": {
+        "alert_id": [
+          "alert_A4xOom",
+          "alert_yAtvI9",
+          "alert_MswQeQ",
+          "alert_Ph8BNN",
+          "alert_hVnpaC",
+          "alert_5rQUW3"
+        ],
+        "resolution_time_mins": {
+          "$range": [
+            210,
+            1271
+          ]
+        },
+        "root_cause": [
+          "config_change",
+          "capacity",
+          "bug",
+          "dependency",
+          "network"
+        ],
+        "integrated_team": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "deployment pipeline run",
+      "weight": 9,
+      "properties": {
+        "pipeline_id": [
+          "pipe_MfsuBW",
+          "pipe_IaAZsX",
+          "pipe_Je0B2S",
+          "pipe_Tm4qDe",
+          "pipe_77F4a2"
+        ],
+        "status": [
+          "success",
+          "failed",
+          "cancelled"
+        ],
+        "duration_sec": {
+          "$range": [
+            233,
+            1477
+          ]
+        },
+        "commit_count": {
+          "$range": [
+            2,
+            18
+          ]
+        },
+        "recovery_deployment": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "infrastructure scaled",
+      "weight": 5,
+      "properties": {
+        "service_id": [
+          "svc_7bfYjrcQ",
+          "svc_2GbSgkcO",
+          "svc_14bZWXQB",
+          "svc_UIY5anev",
+          "svc_xk0SuqPn",
+          "svc_O21Q0FVD"
+        ],
+        "scale_direction": {
+          "$type": "array"
+        },
+        "previous_capacity": {
+          "$range": [
+            5,
+            88
+          ]
+        },
+        "new_capacity": {
+          "$range": [
+            12,
+            97
+          ]
+        },
+        "auto_scaled": {
+          "$type": "array"
+        },
+        "cost_reaction": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "cost report generated",
+      "weight": 4,
+      "properties": {
+        "report_period": [
+          "daily",
+          "weekly",
+          "monthly"
+        ],
+        "total_cost": {
+          "$range": [
+            3360,
+            44413
+          ]
+        },
+        "cost_change_percent": {
+          "$range": [
+            -28,
+            39
+          ]
+        },
+        "cost_alert": [
+          false
+        ],
+        "budget_exceeded": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "team member invited",
+      "weight": 3,
+      "properties": {
+        "role": [
+          "admin",
+          "editor",
+          "viewer",
+          "billing"
+        ],
+        "invitation_method": [
+          "email",
+          "sso",
+          "slack"
+        ],
+        "quarter_end_push": [
+          false
+        ],
+        "duplicate_invite": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "integration configured",
+      "weight": 4,
+      "properties": {
+        "integration_type": [
+          "slack",
+          "pagerduty",
+          "jira",
+          "github",
+          "datadog",
+          "terraform"
+        ],
+        "status": [
+          "active",
+          "paused",
+          "error"
+        ]
+      }
+    },
+    {
+      "event": "query executed",
+      "weight": 15,
+      "properties": {
+        "query_type": [
+          "metrics",
+          "logs",
+          "traces"
+        ],
+        "time_range_hours": {
+          "$range": [
+            102,
+            688
+          ]
+        },
+        "result_count": {
+          "$range": [
+            438,
+            9358
+          ]
+        }
+      }
+    },
+    {
+      "event": "runbook executed",
+      "weight": 3,
+      "properties": {
+        "runbook_id": [
+          "rb_xQX7P0",
+          "rb_GJrgbS",
+          "rb_y7xusa",
+          "rb_i1lLAd",
+          "rb_K0z6Tt",
+          "rb_X1KAeE"
+        ],
+        "trigger": [
+          "manual",
+          "automated",
+          "alert_triggered"
+        ],
+        "success": {
+          "$type": "array"
+        }
+      }
+    },
+    {
+      "event": "billing event",
+      "weight": 3,
+      "properties": {
+        "event_type": [
+          "invoice_generated",
+          "payment_received",
+          "payment_failed",
+          "plan_upgraded",
+          "plan_downgraded"
+        ],
+        "amount": {
+          "$range": [
+            441,
+            22002
+          ]
+        },
+        "quarter_end_push": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "security scan",
+      "weight": 6,
+      "properties": {
+        "scan_type": [
+          "vulnerability",
+          "compliance",
+          "access_audit"
+        ],
+        "findings_count": {
+          "$range": [
+            4,
+            48
+          ]
+        },
+        "critical_findings": {
+          "$range": [
+            0,
+            10
+          ]
+        }
+      }
+    },
+    {
+      "event": "api call",
+      "weight": 16,
+      "properties": {
+        "endpoint": [
+          "/deploy",
+          "/status",
+          "/metrics",
+          "/alerts",
+          "/config",
+          "/billing"
+        ],
+        "method": [
+          "GET",
+          "POST",
+          "PUT",
+          "DELETE"
+        ],
+        "response_time_ms": {
+          "$range": [
+            611,
+            4444
+          ]
+        },
+        "status_code": [
+          200,
+          500,
+          400,
+          403
+        ]
+      }
+    },
+    {
+      "event": "documentation viewed",
+      "weight": 7,
+      "properties": {
+        "doc_section": [
+          "getting_started",
+          "api_reference",
+          "best_practices",
+          "troubleshooting",
+          "changelog"
+        ],
+        "time_on_page_sec": {
+          "$range": [
+            81,
+            517
+          ]
+        }
+      }
+    },
+    {
+      "event": "feature flag toggled",
+      "weight": 4,
+      "properties": {
+        "flag_name": {
+          "$type": "string"
+        },
+        "new_state": {
+          "$type": "array"
+        },
+        "environment": [
+          "production",
+          "staging",
+          "dev"
+        ]
+      }
+    }
+  ],
+  "superProps": {
+    "plan_tier": [
+      "free",
+      "enterprise",
+      "team",
+      "business"
+    ],
+    "cloud_provider": [
+      "aws",
+      "gcp",
+      "azure",
+      "multi_cloud"
+    ]
+  },
+  "userProps": {
+    "company_size": [
+      "enterprise",
+      "mid_market",
+      "startup",
+      "smb"
+    ],
+    "primary_role": [
+      "engineer",
+      "sre",
+      "devops",
+      "manager",
+      "executive"
+    ],
+    "team_name": [
+      "Platform",
+      "Backend",
+      "Frontend",
+      "Data",
+      "Security",
+      "Infrastructure"
+    ],
+    "churned_account": [
+      false
+    ],
+    "seat_count": [
+      1
+    ],
+    "annual_contract_value": [
+      0
+    ],
+    "customer_success_manager": [
+      false
+    ],
+    "customer_health_score": {
+      "$range": [
+        9,
+        92
+      ]
+    }
+  },
+  "funnels": [
+    {
+      "sequence": [
+        "workspace created",
+        "service deployed",
+        "dashboard viewed"
+      ],
+      "isFirstFunnel": true,
+      "conversionRate": 70,
+      "timeToConvert": 2
+    },
+    {
+      "sequence": [
+        "dashboard viewed",
+        "query executed",
+        "api call"
+      ],
+      "conversionRate": 80,
+      "timeToConvert": 0.5,
+      "weight": 5
+    },
+    {
+      "sequence": [
+        "alert triggered",
+        "alert acknowledged",
+        "alert resolved"
+      ],
+      "conversionRate": 55,
+      "timeToConvert": 6,
+      "weight": 4
+    },
+    {
+      "sequence": [
+        "deployment pipeline run",
+        "service deployed",
+        "dashboard viewed"
+      ],
+      "conversionRate": 65,
+      "timeToConvert": 1,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "cost report generated",
+        "infrastructure scaled",
+        "security scan"
+      ],
+      "conversionRate": 50,
+      "timeToConvert": 4,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "team member invited",
+        "integration configured",
+        "feature flag toggled"
+      ],
+      "conversionRate": 40,
+      "timeToConvert": 8,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "documentation viewed",
+        "runbook executed",
+        "service deployed"
+      ],
+      "conversionRate": 45,
+      "timeToConvert": 2,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "billing event",
+        "dashboard viewed"
+      ],
+      "conversionRate": 60,
+      "timeToConvert": 1
+    }
+  ]
+}

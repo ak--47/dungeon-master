@@ -931,12 +931,16 @@ describe('determinism', () => {
 	});
 
 	test('seed explicitly passed', () => {
-		const seed = 'initial-seed';
-		initChance(seed);
-		const chance1 = getChance();
-		initChance('new-seed');
-		const chance2 = getChance();
-		expect(chance1).toBe(chance2);
+		// Re-seeding should produce a fresh RNG with deterministic output
+		initChance('determinism-alpha');
+		const seq1 = Array.from({ length: 5 }, () => getChance().integer({ min: 0, max: 10000 }));
+		initChance('determinism-alpha');
+		const seq2 = Array.from({ length: 5 }, () => getChance().integer({ min: 0, max: 10000 }));
+		expect(seq1).toEqual(seq2); // same seed → same sequence
+
+		initChance('determinism-beta');
+		const seq3 = Array.from({ length: 5 }, () => getChance().integer({ min: 0, max: 10000 }));
+		expect(seq3).not.toEqual(seq1); // different seed → different sequence
 	});
 
 });

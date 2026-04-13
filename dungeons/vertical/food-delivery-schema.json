@@ -1,0 +1,678 @@
+{
+  "events": [
+    {
+      "event": "account created",
+      "isFirstEvent": true,
+      "properties": {
+        "signup_method": [
+          "email",
+          "google",
+          "apple",
+          "facebook"
+        ],
+        "referral_code": {
+          "$type": "array"
+        },
+        "trial_retained": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "restaurant browsed",
+      "weight": 18,
+      "properties": {
+        "cuisine_type": [
+          "American",
+          "Italian",
+          "Chinese",
+          "Japanese",
+          "Mexican",
+          "Indian",
+          "Thai",
+          "Mediterranean"
+        ],
+        "sort_by": [
+          "recommended",
+          "distance",
+          "rating",
+          "price"
+        ],
+        "filter_applied": {
+          "$type": "array"
+        },
+        "trial_retained": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "restaurant viewed",
+      "weight": 15,
+      "properties": {
+        "restaurant_id": [
+          "rest_gbJlv0",
+          "rest_2Xa0Ap",
+          "rest_0ZSBy9",
+          "rest_8J9m9H",
+          "rest_Mte89r",
+          "rest_5pOjnb",
+          "rest_TD26RG",
+          "rest_MbXdc5"
+        ],
+        "cuisine_type": [
+          "American",
+          "Italian",
+          "Chinese",
+          "Japanese",
+          "Mexican",
+          "Indian",
+          "Thai",
+          "Mediterranean"
+        ],
+        "avg_rating": {
+          "$range": [
+            1,
+            5
+          ]
+        },
+        "delivery_time_est_mins": {
+          "$range": [
+            22,
+            80
+          ]
+        },
+        "price_tier": [
+          "$",
+          "$$",
+          "$$$",
+          "$$$$"
+        ],
+        "late_night_order": [
+          false
+        ],
+        "trial_retained": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "item added to cart",
+      "weight": 14,
+      "properties": {
+        "item_id": [
+          "item_VbAATbs",
+          "item_zMMlBW4",
+          "item_Cu2v6V7",
+          "item_azTXuGt",
+          "item_91QD1zo",
+          "item_17eR9Fd",
+          "item_ndzFLTV",
+          "item_DPC2Ud1"
+        ],
+        "item_category": [
+          "entree",
+          "appetizer",
+          "drink",
+          "dessert",
+          "side"
+        ],
+        "item_price": {
+          "$range": [
+            4,
+            60
+          ]
+        },
+        "customization_count": {
+          "$range": [
+            0,
+            5
+          ]
+        },
+        "late_night_order": [
+          false
+        ],
+        "trial_retained": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "item removed from cart",
+      "weight": 5,
+      "properties": {
+        "item_id": [
+          "item_LUJSJhb",
+          "item_qtTnYOL",
+          "item_Sae9eOV",
+          "item_BnxYRiK",
+          "item_pz9JDYi",
+          "item_nB7F7Xm",
+          "item_QqPeX6i"
+        ],
+        "removal_reason": [
+          "changed_mind",
+          "too_expensive",
+          "substitution"
+        ],
+        "trial_retained": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "coupon applied",
+      "weight": 4,
+      "properties": {
+        "coupon_code": [
+          "QUICKV1DVZ",
+          "QUICKRR0P3",
+          "QUICKCFINR",
+          "QUICKWDQHK",
+          "QUICKDHV2Q",
+          "QUICKMF8BU",
+          "QUICKX1XTM"
+        ],
+        "discount_type": [
+          "percent",
+          "flat",
+          "free_delivery"
+        ],
+        "discount_value": {
+          "$range": [
+            11,
+            48
+          ]
+        },
+        "coupon_injected": [
+          false
+        ],
+        "trial_retained": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "checkout started",
+      "weight": 12,
+      "properties": {
+        "cart_total": {
+          "$range": [
+            25,
+            121
+          ]
+        },
+        "items_count": {
+          "$range": [
+            1,
+            6
+          ]
+        },
+        "delivery_address_saved": {
+          "$type": "array"
+        },
+        "trial_retained": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "order placed",
+      "weight": 10,
+      "properties": {
+        "order_id": [
+          "order_FneAa2K3",
+          "order_scxNtDqw",
+          "order_du5cYeVX",
+          "order_QY783HfB",
+          "order_inIir0jd",
+          "order_H3cYBQNz",
+          "order_6RxElyBR",
+          "order_K2fcPrsR"
+        ],
+        "payment_method": [
+          "credit_card",
+          "apple_pay",
+          "google_pay",
+          "paypal",
+          "cash"
+        ],
+        "order_total": {
+          "$range": [
+            29,
+            173
+          ]
+        },
+        "tip_amount": {
+          "$range": [
+            1,
+            28
+          ]
+        },
+        "delivery_fee": {
+          "$range": [
+            1,
+            11
+          ]
+        },
+        "surge_pricing": [
+          false
+        ],
+        "rainy_week": [
+          false
+        ],
+        "trial_retained": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "order tracked",
+      "weight": 13,
+      "properties": {
+        "order_id": [
+          "order_ZxGPrjaJ",
+          "order_f7LV2Rtx",
+          "order_vi20OTFt",
+          "order_Ja5lGMS1",
+          "order_fQcmzmco",
+          "order_3yXyCZhb",
+          "order_c81HkoY9",
+          "order_QBdRhgbS"
+        ],
+        "order_status": [
+          "confirmed",
+          "preparing",
+          "picked_up",
+          "en_route",
+          "delivered"
+        ],
+        "eta_mins": {
+          "$range": [
+            6,
+            53
+          ]
+        },
+        "trial_retained": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "order delivered",
+      "weight": 9,
+      "properties": {
+        "order_id": [
+          "order_aYy0CZYg",
+          "order_gBqVVkVj",
+          "order_u4MkBEWT",
+          "order_ZaEOIoaA",
+          "order_nEn3lTLl",
+          "order_iDiCQxIp",
+          "order_bZqYi6IJ"
+        ],
+        "actual_delivery_mins": {
+          "$range": [
+            21,
+            85
+          ]
+        },
+        "on_time": {
+          "$type": "array"
+        },
+        "trial_retained": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "order rated",
+      "weight": 7,
+      "properties": {
+        "order_id": [
+          "order_guWUKb0p",
+          "order_rjp0vQoi",
+          "order_JM4fDdMq",
+          "order_HaEHZBXY",
+          "order_LsVIFdZg",
+          "order_ko2v5aX5"
+        ],
+        "food_rating": {
+          "$range": [
+            2,
+            4
+          ]
+        },
+        "delivery_rating": {
+          "$range": [
+            1,
+            4
+          ]
+        },
+        "would_reorder": {
+          "$type": "array"
+        },
+        "referral_user": [
+          false
+        ],
+        "trial_retained": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "search performed",
+      "weight": 11,
+      "properties": {
+        "search_query": [
+          "burger",
+          "burritos",
+          "chicken",
+          "curry",
+          "pad thai",
+          "pasta",
+          "pho",
+          "pizza",
+          "ramen",
+          "salad",
+          "sandwich",
+          "steak",
+          "tacos"
+        ],
+        "results_count": {
+          "$range": [
+            5,
+            43
+          ]
+        },
+        "search_type": [
+          "restaurant",
+          "cuisine",
+          "dish"
+        ],
+        "trial_retained": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "promotion viewed",
+      "weight": 8,
+      "properties": {
+        "promo_id": {
+          "$type": "string"
+        },
+        "promo_type": [
+          "banner",
+          "push",
+          "in_feed"
+        ],
+        "promo_value": [
+          "10%",
+          "15%",
+          "20%",
+          "25%",
+          "30%",
+          "40%",
+          "50%"
+        ],
+        "trial_retained": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "subscription started",
+      "weight": 2,
+      "properties": {
+        "plan": [
+          "quickbite_plus_monthly"
+        ],
+        "price": [
+          79.99,
+          9.99
+        ],
+        "trial": {
+          "$type": "array"
+        },
+        "trial_retained": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "subscription cancelled",
+      "properties": {
+        "reason": [
+          "too_expensive",
+          "not_ordering_enough",
+          "found_alternative",
+          "bad_experience"
+        ],
+        "months_subscribed": {
+          "$range": [
+            4,
+            22
+          ]
+        },
+        "trial_retained": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "support ticket",
+      "weight": 3,
+      "properties": {
+        "issue_type": [
+          "missing_item",
+          "wrong_order",
+          "late_delivery",
+          "quality_issue",
+          "refund_request"
+        ],
+        "order_id": [
+          "order_kYISOBPX",
+          "order_Kye619CH",
+          "order_3oj03w8T",
+          "order_ZZw5xCXf",
+          "order_J71hciid",
+          "order_v7uCqRQ6",
+          "order_4424dIZB"
+        ],
+        "trial_retained": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "reorder initiated",
+      "weight": 6,
+      "properties": {
+        "order_id": [
+          "order_2vZHSPoY",
+          "order_gwci2DVO",
+          "order_ZYwN60Cr",
+          "order_tQIyaVQJ",
+          "order_4RYFfVtN",
+          "order_7URrDbxS",
+          "order_ePcPIrfA",
+          "order_tUOSfczg",
+          "order_LB1EMjVO"
+        ],
+        "original_order_age_days": {
+          "$range": [
+            10,
+            55
+          ]
+        },
+        "referral_user": [
+          false
+        ],
+        "trial_retained": [
+          false
+        ]
+      }
+    }
+  ],
+  "superProps": {
+    "platform": [
+      "iOS",
+      "Android",
+      "Web"
+    ],
+    "subscription_tier": [
+      "Free",
+      "QuickBite+"
+    ],
+    "city": [
+      "New York",
+      "Los Angeles",
+      "Chicago",
+      "Houston",
+      "Phoenix",
+      "San Francisco"
+    ]
+  },
+  "userProps": {
+    "preferred_cuisine": [
+      "American",
+      "Italian",
+      "Chinese",
+      "Japanese",
+      "Mexican",
+      "Indian",
+      "Thai",
+      "Mediterranean"
+    ],
+    "avg_order_value": {
+      "$range": [
+        24,
+        72
+      ]
+    },
+    "orders_per_month": [
+      10,
+      3,
+      19,
+      15,
+      11
+    ],
+    "favorite_restaurant_count": {
+      "$range": [
+        2,
+        9
+      ]
+    },
+    "is_high_risk": [
+      false
+    ],
+    "churn_risk_score": [
+      0
+    ]
+  },
+  "funnels": [
+    {
+      "sequence": [
+        "account created",
+        "restaurant browsed",
+        "restaurant viewed"
+      ],
+      "isFirstFunnel": true,
+      "conversionRate": 80,
+      "timeToConvert": 0.5
+    },
+    {
+      "sequence": [
+        "restaurant browsed",
+        "restaurant viewed",
+        "item added to cart"
+      ],
+      "conversionRate": 55,
+      "timeToConvert": 1,
+      "weight": 5,
+      "props": {
+        "restaurant_id": [
+          "rest_8kOjq8",
+          "rest_k5j0Rv",
+          "rest_gbJlv0",
+          "rest_tXcwjm",
+          "rest_3AytRQ",
+          "rest_E0imd1",
+          "rest_VrHmUz",
+          "rest_94v0Ec"
+        ]
+      }
+    },
+    {
+      "sequence": [
+        "search performed",
+        "restaurant viewed",
+        "item added to cart",
+        "checkout started"
+      ],
+      "conversionRate": 45,
+      "timeToConvert": 2,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "checkout started",
+        "order placed",
+        "order tracked",
+        "order delivered"
+      ],
+      "conversionRate": 65,
+      "timeToConvert": 2,
+      "weight": 4,
+      "props": {
+        "order_id": [
+          "order_COwkLmm4",
+          "order_XA1rr1NF",
+          "order_KiTbR88G",
+          "order_LIAqWPNK",
+          "order_wzcx2zvL",
+          "order_ECeLrRSD",
+          "order_mn8uyxcJ"
+        ]
+      }
+    },
+    {
+      "sequence": [
+        "order delivered",
+        "order rated",
+        "reorder initiated"
+      ],
+      "conversionRate": 40,
+      "timeToConvert": 24,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "promotion viewed",
+        "coupon applied",
+        "checkout started"
+      ],
+      "conversionRate": 50,
+      "timeToConvert": 1,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "support ticket",
+        "order rated"
+      ],
+      "conversionRate": 45,
+      "timeToConvert": 6
+    },
+    {
+      "sequence": [
+        "subscription started",
+        "order placed",
+        "subscription cancelled"
+      ],
+      "conversionRate": 20,
+      "timeToConvert": 48
+    }
+  ]
+}

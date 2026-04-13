@@ -1,6 +1,6 @@
 {
 	"name": "@ak--47/dungeon-master",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"description": "generate fancy datasets",
 	"type": "module",
 	"main": "index.js",
@@ -19,6 +19,7 @@
 		"lib/",
 		"dungeons/",
 		"!dungeons/customers/",
+		"scripts/",
 		"package.json",
 		"README.md"
 	],
@@ -32,10 +33,10 @@
 		"typecheck": "tsc --noEmit",
 		"dev": "nodemon scratch.mjs --ignore ./data/*",
 		"prune": "rm -f ./data/* && rm -f ./tmp/* && rm -f vscode-profile-*",
-		"deps": "./scripts/update-deps.sh",
 		"dungeon:run": "node ./scripts/run-dungeon.mjs",
 		"dungeon:to-json": "node ./scripts/dungeon-to-json.mjs",
-		"dungeon:from-json": "node ./scripts/json-to-dungeon.mjs"
+		"dungeon:from-json": "node ./scripts/json-to-dungeon.mjs",
+		"dungeon:schema": "node ./scripts/extract-dungeon-schema.mjs"
 	},
 	"repository": {
 		"type": "git",

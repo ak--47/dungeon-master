@@ -109,6 +109,26 @@ export interface Dungeon {
     /** Hook function called on every data point. The primary mechanism for engineering deliberate trends and patterns. */
     hook?: Hook<any>;
 
+    // ── Advanced Features ──
+    /** User persona/archetype definitions. Each persona defines a behavioral segment with distinct event volumes, conversion rates, and properties. */
+    personas?: Persona[];
+    /** World events that affect all users simultaneously (outages, campaigns, product launches). */
+    worldEvents?: WorldEvent[] | ResolvedWorldEvent[];
+    /** Engagement decay configuration. Controls how user activity decreases over their lifetime. */
+    engagementDecay?: EngagementDecay;
+    /** Data quality imperfections to inject (nulls, duplicates, bots, late-arriving events). */
+    dataQuality?: DataQuality;
+    /** Subscription/revenue lifecycle configuration. */
+    subscription?: Subscription;
+    /** Connected attribution configuration linking campaigns to user acquisition. */
+    attribution?: Attribution;
+    /** Geographic intelligence: sticky locations, timezone-aware activity, regional launches. */
+    geo?: GeoConfig;
+    /** Progressive feature adoption: features that launch mid-dataset with S-curve adoption. */
+    features?: FeatureConfig[];
+    /** Anomaly/outlier injection: extreme values, bursts, coordinated spikes. */
+    anomalies?: AnomalyConfig[];
+
     /** Allow arbitrary additional properties on the config. */
     [key: string]: any;
 
@@ -263,7 +283,7 @@ export interface Defaults {
     browsers: () => any[];
     campaigns: () => any[];
     devicePools: { android: any[]; ios: any[]; desktop: any[] };
-    allDevices:any[];
+    allDevices: any[];
 }
 
 /**
@@ -519,6 +539,298 @@ export type Result = {
     groupCount?: number;
     avgEPS?: number;
 };
+
+// ============= Advanced Feature Types =============
+
+/**
+ * User persona/archetype definition.
+ * Personas define behavioral segments with distinct event volumes, conversion rates, and properties.
+ */
+export interface Persona {
+    /** Unique name for this persona (e.g., "power_user", "casual", "churner"). */
+    name: string;
+    /** Relative weight for persona assignment (higher = more users get this persona). */
+    weight: number;
+    /** Multiplier for number of events this persona generates (1.0 = normal). */
+    eventMultiplier?: number;
+    /** Multiplier for funnel conversion rates (1.0 = normal, 1.3 = 30% better). */
+    conversionModifier?: number;
+    /** Base churn rate for this persona (0-1). */
+    churnRate?: number;
+    /** Properties merged into user profiles for this persona. */
+    properties?: Record<string, ValueValid>;
+    /** Limit how long this persona is active (e.g., trial users active for 14 days). */
+    activeWindow?: { maxDays: number };
+    /** Per-persona engagement decay override. */
+    engagementDecay?: EngagementDecay;
+    /** Per-persona soup/timing override. */
+    soupOverride?: SoupConfig;
+}
+
+/**
+ * World event that affects all users simultaneously.
+ */
+export interface WorldEvent {
+    /** Name of the world event (e.g., "black_friday", "platform_outage"). */
+    name: string;
+    /** Type category for the event. */
+    type?: "campaign" | "outage" | "product_launch" | "holiday" | "incident" | string;
+    /** Start day relative to dataset start (e.g., 60 = day 60). */
+    startDay: number;
+    /** Duration in days (0.25 = 6 hours, null = permanent from startDay onward). */
+    duration?: number | null;
+    /** Volume multiplier during this event (3.0 = 3x events, 0.1 = 90% drop). */
+    volumeMultiplier?: number;
+    /** Conversion rate modifier during this event. */
+    conversionModifier?: number;
+    /** Properties injected into affected events. */
+    injectProps?: Record<string, any>;
+    /** Which events are affected ("*" for all, or array of event names). */
+    affectsEvents?: string[] | "*";
+    /** Aftermath period after the event ends. */
+    aftermath?: { duration: number; volumeMultiplier: number };
+}
+
+/**
+ * Resolved world event with absolute timestamps (internal use).
+ */
+export interface ResolvedWorldEvent extends WorldEvent {
+    /** Absolute start time (unix seconds). */
+    startUnix: number;
+    /** Absolute end time (unix seconds), or Infinity for permanent events. */
+    endUnix: number;
+    /** Aftermath end time (unix seconds), if applicable. */
+    aftermathEndUnix?: number;
+}
+
+/**
+ * Engagement decay configuration.
+ */
+export interface EngagementDecay {
+    /** Decay model type. "none" preserves flat engagement (default). */
+    model: "exponential" | "linear" | "step" | "none";
+    /** Days until engagement halves (for exponential model). */
+    halfLife?: number;
+    /** Minimum engagement ratio (0 = can fully churn, 0.1 = never below 10%). */
+    floor?: number;
+    /** Per-day chance of re-engagement spike after decay. */
+    reactivationChance?: number;
+    /** Multiplier for engagement during reactivation. */
+    reactivationMultiplier?: number;
+}
+
+/**
+ * Data quality imperfection configuration.
+ */
+export interface DataQuality {
+    /** Fraction of property values that become null (0-1). */
+    nullRate?: number;
+    /** Which properties to null ("*" for any, or array of property names). */
+    nullProps?: string[] | "*";
+    /** Fraction of events that get duplicated (0-1). */
+    duplicateRate?: number;
+    /** Fraction of events that arrive late (shifted 1-7 days backward) (0-1). */
+    lateArrivingRate?: number;
+    /** Number of synthetic bot users to inject. */
+    botUsers?: number;
+    /** Events per bot user (bots generate repetitive, machine-like patterns). */
+    botEventsPerUser?: number;
+    /** Fraction of events with timezone offset errors (0-1). */
+    timezoneConfusion?: number;
+    /** Fraction of events missing their event name (0-1). */
+    emptyEvents?: number;
+}
+
+/**
+ * Subscription plan definition.
+ */
+export interface SubscriptionPlan {
+    /** Plan name (e.g., "free", "starter", "pro"). */
+    name: string;
+    /** Monthly price. 0 for free tier. */
+    price: number;
+    /** If true, users start on this plan. */
+    default?: boolean;
+    /** Trial period in days before requiring payment. */
+    trialDays?: number;
+}
+
+/**
+ * Subscription lifecycle rates.
+ */
+export interface SubscriptionLifecycle {
+    /** Rate of trial-to-paid conversion (0-1). */
+    trialToPayRate?: number;
+    /** Monthly upgrade rate (0-1). */
+    upgradeRate?: number;
+    /** Monthly downgrade rate (0-1). */
+    downgradeRate?: number;
+    /** Monthly churn/cancellation rate (0-1). */
+    churnRate?: number;
+    /** Rate of churned users who come back (0-1). */
+    winBackRate?: number;
+    /** Days before win-back attempt. */
+    winBackDelay?: number;
+    /** Rate of payment failures (0-1). */
+    paymentFailureRate?: number;
+}
+
+/**
+ * Subscription configuration.
+ */
+export interface Subscription {
+    /** Available plans, ordered from lowest to highest tier. */
+    plans: SubscriptionPlan[];
+    /** Lifecycle transition rates. */
+    lifecycle?: SubscriptionLifecycle;
+    /** Event names for subscription lifecycle events. */
+    events?: {
+        trialStarted?: string;
+        subscribed?: string;
+        upgraded?: string;
+        downgraded?: string;
+        renewed?: string;
+        cancelled?: string;
+        paymentFailed?: string;
+        wonBack?: string;
+    };
+}
+
+/**
+ * Attribution campaign definition.
+ */
+export interface AttributionCampaign {
+    /** Campaign name. */
+    name: string;
+    /** UTM source (e.g., "google", "facebook"). */
+    source: string;
+    /** UTM medium (e.g., "search_ad", "social"). */
+    medium?: string;
+    /** UTM content (e.g., "variant_a", "hero_image"). */
+    utm_content?: string;
+    /** UTM term (e.g., "running+shoes", "best+deals"). */
+    utm_term?: string;
+    /** Active days range [startDay, endDay] relative to dataset start. */
+    activeDays: [number, number];
+    /** Daily budget range [min, max]. */
+    dailyBudget?: [number, number];
+    /** Fraction of impressions that become users (0-1). */
+    acquisitionRate?: number;
+    /** Persona weight biases for users acquired by this campaign. */
+    userPersonaBias?: Record<string, number>;
+}
+
+/**
+ * Connected attribution configuration.
+ */
+export interface Attribution {
+    /** Attribution model type. */
+    model?: "last_touch" | "first_touch" | "linear" | "time_decay";
+    /** Attribution window in days. */
+    window?: number;
+    /** Campaign definitions. */
+    campaigns: AttributionCampaign[];
+    /** Fraction of users who arrive organically (no campaign) (0-1). */
+    organicRate?: number;
+}
+
+/**
+ * Geographic region definition.
+ */
+export interface GeoRegion {
+    /** Region name (e.g., "north_america"). */
+    name: string;
+    /** Country codes in this region. */
+    countries: string[];
+    /** Weight for user assignment (higher = more users). */
+    weight: number;
+    /** UTC timezone offset for this region (e.g., -5 for EST). */
+    timezoneOffset: number;
+    /** Properties injected for users in this region. */
+    properties?: Record<string, any>;
+}
+
+/**
+ * Regional feature launch definition.
+ */
+export interface RegionalLaunch {
+    /** Region name to match. */
+    region: string;
+    /** Feature name. */
+    featureName: string;
+    /** Day the feature launches in this region. */
+    startDay: number;
+}
+
+/**
+ * Geographic intelligence configuration.
+ */
+export interface GeoConfig {
+    /** If true, users keep their location across all events (default: false for backwards compat). */
+    sticky?: boolean;
+    /** Region definitions with timezone offsets and properties. */
+    regions?: GeoRegion[];
+    /** Regional feature launches. */
+    regionalLaunches?: RegionalLaunch[];
+}
+
+/**
+ * Progressive feature adoption configuration.
+ */
+export interface FeatureConfig {
+    /** Feature name (e.g., "dark_mode", "ai_recommendations"). */
+    name: string;
+    /** Day the feature launches (relative to dataset start). */
+    launchDay: number;
+    /** Adoption curve speed or custom logistic params. */
+    adoptionCurve?: "fast" | "slow" | "instant" | { k: number; midpoint: number };
+    /** Property name to inject on events. */
+    property: string;
+    /** Possible values for the property. First value is the "before" default if defaultBefore not set. */
+    values: any[];
+    /** Default value before the feature launches. If not set, property doesn't exist before launch. */
+    defaultBefore?: any;
+    /** Which events are affected ("*" for all, or array of event names). */
+    affectsEvents?: string[] | "*";
+    /** Conversion rate lift for users who adopted the feature. */
+    conversionLift?: number;
+    /** Resolved logistic curve params (set by config-validator). */
+    _resolvedCurve?: { k: number; midpoint: number };
+    /** Pre-computed adopted values (set by config-validator). */
+    _adoptedValues?: any[];
+}
+
+/**
+ * Anomaly/outlier configuration.
+ */
+export interface AnomalyConfig {
+    /** Type of anomaly. */
+    type: "extreme_value" | "burst" | "coordinated";
+    /** Event name this anomaly applies to. */
+    event: string;
+    /** For extreme_value: property to modify. */
+    property?: string;
+    /** For extreme_value: fraction of events affected (0-1). */
+    frequency?: number;
+    /** For extreme_value: multiplier applied to the property value. */
+    multiplier?: number;
+    /** Tag property added to anomalous events. */
+    tag?: string;
+    /** For burst/coordinated: day when the anomaly occurs. */
+    day?: number;
+    /** For burst: duration in days (0.083 = ~2 hours). */
+    duration?: number;
+    /** For burst/coordinated: time window in days (0.01 = ~15 minutes). */
+    window?: number;
+    /** For burst/coordinated: number of events to inject. */
+    count?: number;
+    /** Properties injected on anomalous events. */
+    properties?: Record<string, any>;
+    /** Resolved absolute start time in unix seconds (set by config-validator). */
+    _startUnix?: number;
+    /** Resolved absolute end time in unix seconds (set by config-validator). */
+    _endUnix?: number;
+}
 
 /**
  * dungeon-master: generate realistic Mixpanel data at scale

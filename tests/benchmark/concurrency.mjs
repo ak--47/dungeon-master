@@ -13,7 +13,7 @@ TO DOs
 // FINDINGS: concurrency is not dramatically changing performance
 
 import main from "../../index.js";
-import simple from '../../dungeons/simple.js';
+import simple from '../../dungeons/technical/simple.js';
 
 /** @typedef {import('../../types').Dungeon} Config */
 

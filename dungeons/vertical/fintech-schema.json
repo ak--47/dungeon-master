@@ -1,0 +1,563 @@
+{
+  "events": [
+    {
+      "event": "account opened",
+      "isFirstEvent": true,
+      "properties": {
+        "account_type": [
+          "business",
+          "personal"
+        ],
+        "signup_channel": [
+          "app",
+          "web",
+          "referral",
+          "branch"
+        ]
+      }
+    },
+    {
+      "event": "app session",
+      "weight": 20,
+      "properties": {
+        "session_duration_sec": {
+          "$range": [
+            131,
+            471
+          ]
+        },
+        "pages_viewed": [
+          5,
+          4,
+          6
+        ],
+        "month_end_anxiety": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "balance checked",
+      "weight": 15,
+      "properties": {
+        "account_balance": {
+          "$range": [
+            4,
+            49589
+          ]
+        },
+        "account_type": [
+          "checking",
+          "savings",
+          "investment"
+        ],
+        "month_end_check": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "transaction completed",
+      "weight": 18,
+      "properties": {
+        "transaction_type": [
+          "purchase",
+          "atm",
+          "direct_deposit",
+          "refund"
+        ],
+        "amount": {
+          "$range": [
+            996,
+            3927
+          ]
+        },
+        "merchant_category": [
+          "grocery",
+          "restaurant",
+          "gas",
+          "retail",
+          "online",
+          "subscription",
+          "utilities"
+        ],
+        "payment_method": [
+          "debit",
+          "credit",
+          "contactless",
+          "online"
+        ],
+        "payday": [
+          false
+        ],
+        "fraud_sequence": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "transfer sent",
+      "weight": 8,
+      "properties": {
+        "transfer_type": [
+          "internal",
+          "external",
+          "p2p",
+          "wire"
+        ],
+        "amount": {
+          "$range": [
+            1690,
+            8053
+          ]
+        },
+        "recipient_type": [
+          "friend",
+          "family",
+          "business",
+          "self"
+        ],
+        "post_payday_spending": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "bill paid",
+      "weight": 6,
+      "properties": {
+        "bill_type": [
+          "rent",
+          "utilities",
+          "phone",
+          "insurance",
+          "subscription",
+          "loan_payment"
+        ],
+        "amount": {
+          "$range": [
+            376,
+            2710
+          ]
+        },
+        "auto_pay": {
+          "$type": "array"
+        },
+        "missed_payment": [
+          false
+        ],
+        "manual_payment": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "budget created",
+      "weight": 3,
+      "properties": {
+        "category": [
+          "food",
+          "transport",
+          "entertainment",
+          "shopping",
+          "bills",
+          "savings"
+        ],
+        "monthly_limit": {
+          "$range": [
+            233,
+            1774
+          ]
+        }
+      }
+    },
+    {
+      "event": "budget alert",
+      "weight": 4,
+      "properties": {
+        "alert_type": [
+          "approaching_limit",
+          "exceeded",
+          "on_track"
+        ],
+        "percent_used": {
+          "$range": [
+            52,
+            145
+          ]
+        }
+      }
+    },
+    {
+      "event": "savings goal set",
+      "weight": 3,
+      "properties": {
+        "goal_type": [
+          "emergency",
+          "vacation",
+          "car",
+          "home",
+          "education",
+          "retirement"
+        ],
+        "target_amount": {
+          "$range": [
+            7730,
+            41915
+          ]
+        },
+        "monthly_contribution": {
+          "$range": [
+            289,
+            1749
+          ]
+        },
+        "budget_discipline": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "investment made",
+      "weight": 4,
+      "properties": {
+        "investment_type": [
+          "stocks",
+          "etf",
+          "crypto",
+          "bonds",
+          "mutual_fund"
+        ],
+        "amount": {
+          "$range": [
+            1880,
+            8014
+          ]
+        },
+        "action": [
+          "buy"
+        ],
+        "premium_returns": [
+          false
+        ],
+        "budget_discipline": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "card locked",
+      "properties": {
+        "reason": [
+          "lost",
+          "stolen",
+          "suspicious_activity",
+          "travel"
+        ],
+        "fraud_sequence": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "dispute filed",
+      "properties": {
+        "dispute_amount": {
+          "$range": [
+            216,
+            1663
+          ]
+        },
+        "reason": [
+          "unauthorized",
+          "duplicate",
+          "not_received",
+          "damaged",
+          "wrong_amount"
+        ],
+        "fraud_sequence": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "loan applied",
+      "weight": 2,
+      "properties": {
+        "loan_type": [
+          "personal",
+          "auto",
+          "home",
+          "student",
+          "business"
+        ],
+        "requested_amount": {
+          "$range": [
+            15174,
+            84022
+          ]
+        }
+      }
+    },
+    {
+      "event": "loan approved",
+      "properties": {
+        "loan_type": [
+          "personal",
+          "auto",
+          "home",
+          "student",
+          "business"
+        ],
+        "approved_amount": {
+          "$range": [
+            15610,
+            85097
+          ]
+        },
+        "interest_rate": [
+          4,
+          14,
+          7,
+          17,
+          10,
+          18,
+          8
+        ]
+      }
+    },
+    {
+      "event": "premium upgraded",
+      "weight": 2,
+      "properties": {
+        "old_tier": [
+          "basic",
+          "plus",
+          "premium"
+        ],
+        "new_tier": [
+          "premium",
+          "plus"
+        ],
+        "monthly_fee": [
+          14.99,
+          4.99,
+          9.99
+        ]
+      }
+    },
+    {
+      "event": "support contacted",
+      "weight": 3,
+      "properties": {
+        "channel": [
+          "chat",
+          "phone",
+          "email",
+          "in_app"
+        ],
+        "issue_type": [
+          "transaction",
+          "account",
+          "card",
+          "transfer",
+          "technical"
+        ],
+        "resolved": {
+          "$type": "array"
+        },
+        "fraud_sequence": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "notification opened",
+      "weight": 10,
+      "properties": {
+        "notification_type": [
+          "transaction",
+          "low_balance",
+          "bill_due",
+          "reward",
+          "security",
+          "promo"
+        ],
+        "action_taken": {
+          "$type": "array"
+        }
+      }
+    },
+    {
+      "event": "reward redeemed",
+      "weight": 4,
+      "properties": {
+        "reward_type": [
+          "cashback",
+          "points",
+          "discount",
+          "partner_offer"
+        ],
+        "value": [
+          23,
+          22,
+          58,
+          67,
+          26,
+          28,
+          29,
+          47,
+          20
+        ],
+        "premium_reward": [
+          false
+        ]
+      }
+    }
+  ],
+  "superProps": {
+    "account_tier": [
+      "plus",
+      "basic",
+      "premium"
+    ],
+    "platform": [
+      "ios",
+      "android",
+      "web"
+    ],
+    "low_balance_churn": [
+      false
+    ]
+  },
+  "userProps": {
+    "credit_score_range": [
+      "300-579",
+      "580-669",
+      "670-739",
+      "740-799",
+      "800-850"
+    ],
+    "income_bracket": [
+      "under_30k",
+      "30k_50k",
+      "50k_75k",
+      "75k_100k",
+      "100k_150k",
+      "over_150k"
+    ],
+    "account_age_months": {
+      "$range": [
+        17,
+        46
+      ]
+    },
+    "total_balance": {
+      "$range": [
+        16006,
+        83008
+      ]
+    },
+    "has_direct_deposit": {
+      "$type": "array"
+    },
+    "account_segment": [
+      "personal"
+    ],
+    "employee_count": [
+      0
+    ],
+    "annual_revenue": [
+      0
+    ],
+    "industry": [
+      ""
+    ],
+    "age_range": [
+      ""
+    ],
+    "life_stage": [
+      ""
+    ]
+  },
+  "funnels": [
+    {
+      "sequence": [
+        "account opened",
+        "app session",
+        "balance checked"
+      ],
+      "isFirstFunnel": true,
+      "conversionRate": 85,
+      "timeToConvert": 0.25
+    },
+    {
+      "sequence": [
+        "app session",
+        "balance checked",
+        "transaction completed"
+      ],
+      "conversionRate": 80,
+      "timeToConvert": 0.5,
+      "weight": 5
+    },
+    {
+      "sequence": [
+        "app session",
+        "transfer sent",
+        "notification opened"
+      ],
+      "conversionRate": 50,
+      "timeToConvert": 1,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "app session",
+        "bill paid",
+        "notification opened"
+      ],
+      "conversionRate": 60,
+      "timeToConvert": 1,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "budget created",
+        "budget alert",
+        "savings goal set"
+      ],
+      "conversionRate": 40,
+      "timeToConvert": 12,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "balance checked",
+        "investment made",
+        "reward redeemed"
+      ],
+      "conversionRate": 30,
+      "timeToConvert": 5,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "support contacted",
+        "card locked",
+        "dispute filed"
+      ],
+      "conversionRate": 35,
+      "timeToConvert": 2
+    },
+    {
+      "sequence": [
+        "loan applied",
+        "loan approved",
+        "premium upgraded"
+      ],
+      "conversionRate": 25,
+      "timeToConvert": 10
+    }
+  ]
+}

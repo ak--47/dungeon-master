@@ -1,0 +1,552 @@
+{
+  "events": [
+    {
+      "event": "account created",
+      "isFirstEvent": true,
+      "properties": {
+        "signup_method": [
+          "email",
+          "google",
+          "apple",
+          "sso"
+        ],
+        "referred_by": [
+          "organic",
+          "friend",
+          "ad",
+          "influencer"
+        ],
+        "toxic_user": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "post created",
+      "weight": 12,
+      "properties": {
+        "post_type": [
+          "text",
+          "image",
+          "video",
+          "poll",
+          "link"
+        ],
+        "character_count": {
+          "$range": [
+            23,
+            241
+          ]
+        },
+        "has_media": {
+          "$type": "array"
+        },
+        "hashtag_count": {
+          "$range": [
+            1,
+            8
+          ]
+        },
+        "weekend_surge": [
+          false
+        ],
+        "weekend_duplicate": [
+          false
+        ],
+        "monetized_creator": [
+          false
+        ],
+        "follow_back_effect": [
+          false
+        ],
+        "toxic_user": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "post viewed",
+      "weight": 30,
+      "properties": {
+        "post_type": [
+          "text",
+          "image",
+          "video",
+          "poll",
+          "link"
+        ],
+        "view_duration_sec": [
+          90,
+          80,
+          31,
+          75,
+          76
+        ],
+        "source": [
+          "feed",
+          "explore",
+          "search",
+          "profile",
+          "notification"
+        ],
+        "engagement_bait": [
+          false
+        ],
+        "trending_reengagement": [
+          false
+        ],
+        "viral_cascade": [
+          false
+        ],
+        "monetized_creator": [
+          false
+        ],
+        "toxic_user": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "post liked",
+      "weight": 18,
+      "properties": {
+        "post_type": [
+          "text",
+          "image",
+          "video",
+          "poll",
+          "link"
+        ],
+        "viral_cascade": [
+          false
+        ],
+        "toxic_user": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "post shared",
+      "weight": 6,
+      "properties": {
+        "share_destination": [
+          "repost",
+          "dm",
+          "external",
+          "copy_link"
+        ],
+        "viral_cascade": [
+          false
+        ],
+        "toxic_user": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "comment posted",
+      "weight": 10,
+      "properties": {
+        "comment_length": {
+          "$range": [
+            98,
+            398
+          ]
+        },
+        "has_mention": [
+          true,
+          false
+        ],
+        "follow_back_effect": [
+          false
+        ],
+        "toxic_user": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "user followed",
+      "weight": 8,
+      "properties": {
+        "discovery_source": [
+          "suggested",
+          "search",
+          "post",
+          "profile",
+          "mutual"
+        ],
+        "toxic_user": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "user unfollowed",
+      "weight": 2,
+      "properties": {
+        "reason": [
+          "content_quality",
+          "too_frequent",
+          "lost_interest",
+          "offensive"
+        ],
+        "toxic_user": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "story viewed",
+      "weight": 15,
+      "properties": {
+        "story_type": [
+          "photo",
+          "video",
+          "text"
+        ],
+        "view_duration_sec": [
+          11,
+          20,
+          23,
+          13
+        ],
+        "completed": {
+          "$type": "array"
+        },
+        "toxic_user": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "story created",
+      "weight": 5,
+      "properties": {
+        "story_type": [
+          "photo",
+          "video",
+          "text"
+        ],
+        "has_filter": {
+          "$type": "array"
+        },
+        "has_sticker": {
+          "$type": "array"
+        },
+        "weekend_surge": [
+          false
+        ],
+        "weekend_duplicate": [
+          false
+        ],
+        "monetized_creator": [
+          false
+        ],
+        "toxic_user": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "search performed",
+      "weight": 7,
+      "properties": {
+        "search_type": [
+          "users",
+          "hashtags",
+          "posts"
+        ],
+        "results_count": [
+          33,
+          40,
+          35,
+          28,
+          17,
+          36,
+          37,
+          16,
+          15,
+          34
+        ],
+        "toxic_user": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "notification received",
+      "weight": 12,
+      "properties": {
+        "notification_type": [
+          "like",
+          "follow",
+          "comment",
+          "mention",
+          "trending"
+        ],
+        "clicked": {
+          "$type": "array"
+        },
+        "toxic_user": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "dm sent",
+      "weight": 8,
+      "properties": {
+        "message_type": [
+          "text",
+          "image",
+          "voice",
+          "link"
+        ],
+        "conversation_length": {
+          "$range": [
+            3,
+            98
+          ]
+        },
+        "toxic_user": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "ad viewed",
+      "weight": 10,
+      "properties": {
+        "ad_format": [
+          "feed_native",
+          "story",
+          "banner",
+          "video"
+        ],
+        "ad_category": [
+          "retail",
+          "tech",
+          "food",
+          "finance",
+          "entertainment"
+        ],
+        "view_duration_sec": {
+          "$range": [
+            7,
+            24
+          ]
+        },
+        "toxic_user": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "ad clicked",
+      "weight": 2,
+      "properties": {
+        "ad_format": [
+          "feed_native",
+          "story",
+          "banner",
+          "video"
+        ],
+        "ad_category": [
+          "retail",
+          "tech",
+          "food",
+          "finance",
+          "entertainment"
+        ],
+        "toxic_user": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "report submitted",
+      "properties": {
+        "report_type": [
+          "spam",
+          "harassment",
+          "misinformation",
+          "hate_speech",
+          "other"
+        ],
+        "content_type": [
+          "post",
+          "comment",
+          "user",
+          "dm"
+        ],
+        "toxic_user": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "profile updated",
+      "weight": 3,
+      "properties": {
+        "field_updated": [
+          "bio",
+          "avatar",
+          "display_name",
+          "privacy_settings",
+          "interests"
+        ],
+        "toxic_user": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "creator subscription started",
+      "weight": 2,
+      "properties": {
+        "tier": [
+          "basic",
+          "premium",
+          "vip"
+        ],
+        "price_usd": [
+          9.99,
+          4.99,
+          19.99
+        ],
+        "toxic_user": [
+          false
+        ]
+      }
+    }
+  ],
+  "superProps": {
+    "app_version": [
+      "4.0",
+      "4.1",
+      "4.2",
+      "4.3",
+      "5.0"
+    ],
+    "account_type": [
+      "personal",
+      "creator",
+      "business"
+    ]
+  },
+  "userProps": {
+    "follower_count": {
+      "$range": [
+        2283,
+        7639
+      ]
+    },
+    "following_count": {
+      "$range": [
+        869,
+        3942
+      ]
+    },
+    "bio_length": {
+      "$range": [
+        2,
+        132
+      ]
+    },
+    "verified": {
+      "$type": "array"
+    },
+    "content_niche": [
+      "lifestyle",
+      "tech",
+      "food",
+      "fitness",
+      "travel",
+      "comedy",
+      "news",
+      "art"
+    ]
+  },
+  "funnels": [
+    {
+      "sequence": [
+        "account created",
+        "profile updated",
+        "post created"
+      ],
+      "isFirstFunnel": true,
+      "conversionRate": 70,
+      "timeToConvert": 0.5
+    },
+    {
+      "sequence": [
+        "post viewed",
+        "post liked",
+        "comment posted"
+      ],
+      "conversionRate": 45,
+      "timeToConvert": 0.5,
+      "weight": 6
+    },
+    {
+      "sequence": [
+        "post created",
+        "post viewed",
+        "post liked",
+        "post shared"
+      ],
+      "conversionRate": 30,
+      "timeToConvert": 3,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "story created",
+        "story viewed",
+        "dm sent"
+      ],
+      "conversionRate": 40,
+      "timeToConvert": 1,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "search performed",
+        "post viewed",
+        "user followed"
+      ],
+      "conversionRate": 35,
+      "timeToConvert": 1,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "notification received",
+        "post viewed",
+        "post liked"
+      ],
+      "conversionRate": 50,
+      "timeToConvert": 0.5,
+      "weight": 2
+    },
+    {
+      "sequence": [
+        "profile updated",
+        "creator subscription started",
+        "post created"
+      ],
+      "conversionRate": 15,
+      "timeToConvert": 24
+    },
+    {
+      "sequence": [
+        "ad viewed",
+        "ad clicked",
+        "report submitted"
+      ],
+      "conversionRate": 20,
+      "timeToConvert": 2
+    }
+  ]
+}
