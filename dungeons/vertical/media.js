@@ -342,7 +342,7 @@ const config = {
 			properties: {
 				"content_type": ["movie", "series", "documentary", "special"],
 				"genre": ["action", "comedy", "drama", "documentary", "horror", "sci_fi", "animation", "thriller", "romance"],
-				"content_id": u.pickAWinner(contentIds),
+				"content_id": contentIds,
 				"blockbuster_release": [false],
 				"kids_profile": [false],
 				"weekend_viewing": [false],
@@ -354,11 +354,11 @@ const config = {
 			event: "playback started",
 			weight: 18,
 			properties: {
-				"content_id": u.pickAWinner(contentIds),
+				"content_id": contentIds,
 				"content_type": ["movie", "series", "documentary", "special"],
 				"playback_quality": ["480p", "720p", "1080p", "4k"],
 				"subtitle_language": ["none", "english", "spanish", "french", "japanese", "korean"],
-				"playback_speed": u.pickAWinner(["0.5x", "1x", "1x", "1x", "1.25x", "1.5x", "2x"]),
+				"playback_speed": ["0.5x", "1x", "1x", "1x", "1.25x", "1.5x", "2x"],
 				"blockbuster_release": [false],
 				"kids_profile": [false],
 				"binge_session": [false],
@@ -371,7 +371,7 @@ const config = {
 			event: "playback completed",
 			weight: 12,
 			properties: {
-				"content_id": u.pickAWinner(contentIds),
+				"content_id": contentIds,
 				"content_type": ["movie", "series", "documentary", "special"],
 				"watch_duration_min": u.weighNumRange(5, 180, 0.5, 45),
 				"completion_percent": u.weighNumRange(10, 100, 1.5, 85),
@@ -387,7 +387,7 @@ const config = {
 			event: "playback paused",
 			weight: 10,
 			properties: {
-				"content_id": u.pickAWinner(contentIds),
+				"content_id": contentIds,
 				"pause_reason": ["manual", "ad_break", "buffering", "notification"],
 				"weekend_viewing": [false],
 				"prime_time": [false],
@@ -399,7 +399,7 @@ const config = {
 			event: "content rated",
 			weight: 6,
 			properties: {
-				"content_id": u.pickAWinner(contentIds),
+				"content_id": contentIds,
 				"rating": u.weighNumRange(1, 5, 2, 4),
 				"review_text_length": u.weighNumRange(0, 500, 0.2, 0),
 				"blockbuster_release": [false],
@@ -413,7 +413,7 @@ const config = {
 			event: "watchlist added",
 			weight: 8,
 			properties: {
-				"content_id": u.pickAWinner(contentIds),
+				"content_id": contentIds,
 				"content_type": ["movie", "series", "documentary", "special"],
 				"genre": ["action", "comedy", "drama", "documentary", "horror", "sci_fi", "animation", "thriller", "romance"],
 				"weekend_viewing": [false],
@@ -426,7 +426,7 @@ const config = {
 			event: "watchlist removed",
 			weight: 3,
 			properties: {
-				"content_id": u.pickAWinner(contentIds),
+				"content_id": contentIds,
 				"reason": ["watched", "not_interested", "expired"],
 				"weekend_viewing": [false],
 				"prime_time": [false],
@@ -476,7 +476,7 @@ const config = {
 			properties: {
 				"ad_type": ["pre_roll", "mid_roll", "banner", "interstitial"],
 				"ad_duration_sec": u.weighNumRange(5, 30),
-				"skipped": u.pickAWinner([true, false], 0.4),
+				"skipped": [false, false, false, true, true],
 				"ad_blocked": [false],
 				"kids_profile": [false],
 				"weekend_viewing": [false],
@@ -501,7 +501,7 @@ const config = {
 			event: "download started",
 			weight: 5,
 			properties: {
-				"content_id": u.pickAWinner(contentIds),
+				"content_id": contentIds,
 				"content_type": ["movie", "series", "documentary", "special"],
 				"download_quality": ["720p", "1080p", "4k"],
 				"weekend_viewing": [false],
@@ -537,7 +537,7 @@ const config = {
 	],
 
 	superProps: {
-		subscription_plan: u.pickAWinner(["free", "free", "standard", "standard", "standard", "premium"]),
+		subscription_plan: ["free", "free", "standard", "standard", "standard", "premium"],
 		device_type: ["smart_tv", "mobile", "tablet", "laptop", "desktop"],
 	},
 
@@ -548,7 +548,7 @@ const config = {
 		"avg_session_duration_min": u.weighNumRange(10, 180, 0.5, 45),
 		"total_watch_hours": u.weighNumRange(0, 500, 0.8, 50),
 		"profiles_count": u.weighNumRange(1, 5),
-		"downloads_enabled": u.pickAWinner([true, false], 0.4),
+		"downloads_enabled": [false, false, false, true, true],
 	},
 
 	lookupTables: [],

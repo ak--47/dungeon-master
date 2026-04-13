@@ -264,7 +264,7 @@ const config = {
 			weight: 1,
 			isFirstEvent: true,
 			properties: {
-				"account_type": u.pickAWinner(["student", "instructor"], 0.15),
+				"account_type": ["instructor", "instructor", "instructor", "instructor", "instructor", "instructor", "student"],
 				"signup_source": ["organic", "referral", "school_partnership", "social_ad"],
 			}
 		},
@@ -272,18 +272,18 @@ const config = {
 			event: "course enrolled",
 			weight: 8,
 			properties: {
-				"course_id": u.pickAWinner(courseIds),
+				"course_id": courseIds,
 				"course_category": ["CS", "Math", "Science", "Business", "Arts", "Languages"],
 				"difficulty": ["beginner", "intermediate", "advanced"],
-				"is_free": u.pickAWinner([true, false], 0.4),
+				"is_free": [false, false, false, true, true],
 			}
 		},
 		{
 			event: "lecture started",
 			weight: 18,
 			properties: {
-				"course_id": u.pickAWinner(courseIds),
-				"lecture_id": u.pickAWinner(lectureIds),
+				"course_id": courseIds,
+				"lecture_id": lectureIds,
 				"lecture_duration_mins": u.weighNumRange(5, 60, 0.8, 20),
 				"module_number": u.weighNumRange(1, 12),
 			}
@@ -292,11 +292,11 @@ const config = {
 			event: "lecture completed",
 			weight: 14,
 			properties: {
-				"course_id": u.pickAWinner(courseIds),
-				"lecture_id": u.pickAWinner(lectureIds),
+				"course_id": courseIds,
+				"lecture_id": lectureIds,
 				"watch_time_mins": u.weighNumRange(3, 60, 0.8, 20),
-				"playback_speed": u.pickAWinner([0.75, 1.0, 1.0, 1.0, 1.25, 1.5, 2.0]),
-				"notes_taken": u.pickAWinner([true, false], 0.35),
+				"playback_speed": [0.75, 1.0, 1.0, 1.0, 1.25, 1.5, 2.0],
+				"notes_taken": [false, false, true],
 				"speed_learner": [false],
 				"thorough_learner": [false],
 			}
@@ -305,8 +305,8 @@ const config = {
 			event: "quiz started",
 			weight: 10,
 			properties: {
-				"course_id": u.pickAWinner(courseIds),
-				"quiz_id": u.pickAWinner(quizIds),
+				"course_id": courseIds,
+				"quiz_id": quizIds,
 				"quiz_type": ["practice", "graded", "final_exam"],
 				"question_count": u.weighNumRange(5, 50, 0.7, 15),
 				"semester_end_rush": [false],
@@ -316,8 +316,8 @@ const config = {
 			event: "quiz completed",
 			weight: 8,
 			properties: {
-				"course_id": u.pickAWinner(courseIds),
-				"quiz_id": u.pickAWinner(quizIds),
+				"course_id": courseIds,
+				"quiz_id": quizIds,
 				"score_percent": u.weighNumRange(0, 100, 1.2, 50),
 				"time_spent_mins": u.weighNumRange(3, 120, 0.6, 25),
 				"attempts": u.weighNumRange(1, 5, 0.5, 3),
@@ -330,11 +330,11 @@ const config = {
 			event: "assignment submitted",
 			weight: 6,
 			properties: {
-				"course_id": u.pickAWinner(courseIds),
-				"assignment_id": u.pickAWinner(assignmentIds),
+				"course_id": courseIds,
+				"assignment_id": assignmentIds,
 				"submission_type": ["text", "code", "file", "project"],
 				"word_count": u.weighNumRange(100, 5000, 0.6, 500),
-				"is_late": u.pickAWinner([true, false], 0.2),
+				"is_late": [false, false, false, false, true],
 				"is_deadline_rush": [false],
 				"semester_end_rush": [false],
 			}
@@ -343,8 +343,8 @@ const config = {
 			event: "assignment graded",
 			weight: 5,
 			properties: {
-				"course_id": u.pickAWinner(courseIds),
-				"assignment_id": u.pickAWinner(assignmentIds),
+				"course_id": courseIds,
+				"assignment_id": assignmentIds,
 				"grade": ["A", "B", "C", "D", "F"],
 				"feedback_length": u.weighNumRange(0, 500, 0.5, 100),
 				"grader": ["instructor", "peer", "auto"],
@@ -354,7 +354,7 @@ const config = {
 			event: "discussion posted",
 			weight: 7,
 			properties: {
-				"course_id": u.pickAWinner(courseIds),
+				"course_id": courseIds,
 				"post_type": ["question", "answer", "comment"],
 				"word_count": u.weighNumRange(10, 500, 0.6, 80),
 				"study_group_member": [false],
@@ -364,7 +364,7 @@ const config = {
 			event: "certificate earned",
 			weight: 2,
 			properties: {
-				"course_id": u.pickAWinner(courseIds),
+				"course_id": courseIds,
 				"completion_time_days": u.weighNumRange(7, 180, 0.5, 45),
 				"final_grade": u.weighNumRange(60, 100, 1.2, 30),
 				"diligent_student": [false],
@@ -374,7 +374,7 @@ const config = {
 			event: "study group joined",
 			weight: 4,
 			properties: {
-				"group_id": u.pickAWinner(groupIds),
+				"group_id": groupIds,
 				"group_size": u.weighNumRange(3, 20, 0.7, 8),
 				"group_type": ["study_circle", "project_team", "tutoring"],
 			}
@@ -384,14 +384,14 @@ const config = {
 			weight: 9,
 			properties: {
 				"resource_type": ["pdf", "slides", "code_sample", "dataset", "cheat_sheet"],
-				"course_id": u.pickAWinner(courseIds),
+				"course_id": courseIds,
 			}
 		},
 		{
 			event: "instructor feedback given",
 			weight: 3,
 			properties: {
-				"course_id": u.pickAWinner(courseIds),
+				"course_id": courseIds,
 				"feedback_type": ["written", "video", "rubric"],
 				"response_time_hours": u.weighNumRange(1, 72, 0.5, 15),
 			}
@@ -400,10 +400,10 @@ const config = {
 			event: "course reviewed",
 			weight: 3,
 			properties: {
-				"course_id": u.pickAWinner(courseIds),
+				"course_id": courseIds,
 				"rating": u.weighNumRange(1, 5, 1.5, 3),
 				"review_length": u.weighNumRange(10, 1000, 0.5, 100),
-				"would_recommend": u.pickAWinner([true, false], 0.7),
+				"would_recommend": [false, false, false, true, true, true, true, true, true, true],
 			}
 		},
 		{
@@ -411,7 +411,7 @@ const config = {
 			weight: 2,
 			properties: {
 				"plan": ["monthly", "annual", "lifetime"],
-				"price": u.pickAWinner([19.99, 149.99, 499.99]),
+				"price": [19.99, 149.99, 499.99],
 			}
 		},
 		{
@@ -426,11 +426,11 @@ const config = {
 			event: "practice problem solved",
 			weight: 12,
 			properties: {
-				"course_id": u.pickAWinner(courseIds),
-				"problem_id": u.pickAWinner(problemIds),
+				"course_id": courseIds,
+				"problem_id": problemIds,
 				"difficulty": ["easy", "medium", "hard"],
 				"time_to_solve_sec": u.weighNumRange(10, 3600, 0.5, 300),
-				"hint_used": u.pickAWinner([true, false], 0.35),
+				"hint_used": [false, false, true],
 				"independent_solver": [false],
 			}
 		},
@@ -443,8 +443,8 @@ const config = {
 	scdProps: {},
 
 	userProps: {
-		"account_type": u.pickAWinner(["student", "student", "student", "student", "student", "student", "student", "student", "instructor"]),
-		"subscription_status": u.pickAWinner(["free", "free", "free", "monthly", "annual"]),
+		"account_type": ["student", "student", "student", "student", "student", "student", "student", "student", "instructor"],
+		"subscription_status": ["free", "free", "free", "monthly", "annual"],
 		"learning_style": ["visual", "reading", "hands_on", "auditory"],
 		"education_level": ["high_school", "bachelors", "masters", "phd", "self_taught"],
 		"timezone": ["US_Eastern", "US_Pacific", "US_Central", "Europe", "Asia"],

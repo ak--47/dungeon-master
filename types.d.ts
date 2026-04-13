@@ -283,7 +283,7 @@ export interface Defaults {
     browsers: () => any[];
     campaigns: () => any[];
     devicePools: { android: any[]; ios: any[]; desktop: any[] };
-    allDevices:any[];
+    allDevices: any[];
 }
 
 /**

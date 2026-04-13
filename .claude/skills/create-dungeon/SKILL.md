@@ -305,7 +305,8 @@ soup: {
 ### 1. Events (15-20)
 - Include `isFirstEvent: true` on the signup/account creation event
 - **Plain string arrays are automatically power-law weighted** — `["a", "b", "c", "d"]` (3+ unique strings) gets `pickAWinner` applied under the hood by `choose()`. Do NOT wrap these in `pickAWinner()` explicitly.
-- Use `u.pickAWinner(array)` ONLY when you need to pass a second argument for explicit index control, or for arrays with < 3 items
+- Use `u.pickAWinner(array, integerIndex)` ONLY when you need to designate a specific array index as the "winner" (most frequent). This is the only valid use case for `pickAWinner`.
+- For boolean or 2-item probability weighting, use **duplicate arrays**: `[false, false, true]` for ~33% true, `[false, false, false, true, true]` for ~40% true. Never pass decimals as the second argument to `pickAWinner` — it treats them as array indices, producing undefined values.
 - Use `u.weighNumRange(min, max, skew?, center?)` for numeric ranges (Box-Muller)
 - Use arrays with **duplicates** for explicit frequency weighting: `["common", "common", "common", "rare"]`
 - Each event needs `event` (name), `weight` (relative frequency 1-10), `properties` (object)
@@ -837,7 +838,7 @@ The bad example doesn't tell the user what report type to create, what metric to
 
 1. **Inventing properties in hooks that aren't in the config**: If a hook needs `payday`, `surge_pricing`, or any other flag, it MUST be defined in the event's `properties` with a default (e.g., `payday: [false]`). The hook modifies the value. The config defines the schema. This keeps the dataset schema consistent and the JSON schema output complete.
 2. **Constructing injected events from scratch**: Never hand-build event objects with hand-picked properties. Always clone from an existing event of the same type using spread, then override `time`, `user_id`, and the values you want to change. This ensures the injected event has the same schema as organically generated ones.
-3. **Don't wrap plain string arrays in `pickAWinner()`**: Arrays of 3+ unique strings like `["email", "google", "facebook"]` are automatically power-law weighted by the engine. Just use the plain array. Only use `pickAWinner()` explicitly when you need the second argument or have < 3 items. Note: `u.pickAWinner(["a","b"], 0)` with 2 elements and integer index CRASHES — use a float index or add a 3rd element.
+3. **Don't wrap plain string arrays in `pickAWinner()`**: Arrays of 3+ unique strings like `["email", "google", "facebook"]` are automatically power-law weighted by the engine. Just use the plain array. `pickAWinner(array, integerIndex)` is ONLY for designating a specific winner index. For boolean/2-item weighting, use duplicates: `[false, false, true]` (~33% true). Never pass decimals as the second argument.
 4. **Funnel event name mismatch**: If your funnel has `"first quest accepted"` but events array has `"quest accepted"`, validation fails. Names must match exactly.
 5. **Using `record.properties.X` in hooks**: Properties are flat. Use `record.X` directly.
 6. **Using `distinct_id` on spliced events**: The pipeline uses `user_id`, NOT `distinct_id`. Always copy `user_id` from the source event.
@@ -853,7 +854,7 @@ After writing the `.js` dungeon file, also generate a companion `<name>-schema.j
 
 - **Arrays** → keep as-is (random selection from values)
 - **`weighNumRange(min, max, ...)`** → `{"$range": [min, max]}` (integer range)
-- **`pickAWinner(array)`** → plain array (drop the weighting, just list the values)
+- **`pickAWinner(array, index)`** → plain array (drop the weighting, just list the values)
 - **`chance.xxx.bind(chance)`** → omit the property or use a static placeholder
 - **Arrow functions / closures** → omit or use a static placeholder
 - **`decimal(min, max, places)`** → `{"$float": [min, max], "decimals": places}`
@@ -928,7 +929,7 @@ The runner overrides: `numUsers=1000, numEvents=100_000, format=json, writeToDis
 - [ ] Each hook has a clear "how to find it" with **specific Mixpanel report instructions** (report type, event, measure, breakdown, filter, expected result)
 - [ ] Each hook has a real-world analogue explained
 - [ ] Documentation block includes metrics summary table
-- [ ] No `pickAWinner` calls with exactly 2 items and integer index
+- [ ] No `pickAWinner` calls without an explicit integer index arg. No decimal second args. Boolean/2-item weighting uses duplicate arrays.
 - [ ] `lookupTables: []` (no lookup tables — events carry all attributes)
 - [ ] Passes `validateDungeonConfig`
 - [ ] Companion `<name>-schema.json` file generated with portable JSON schema

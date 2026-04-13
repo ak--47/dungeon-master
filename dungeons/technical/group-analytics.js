@@ -12,7 +12,7 @@
 
 import Chance from 'chance';
 let chance = new Chance();
-import { pickAWinner, weighNumRange, weighChoices } from "../../lib/utils/utils.js";
+import { weighNumRange, weighChoices } from "../../lib/utils/utils.js";
 
 /** @type {import('../../types').Dungeon} */
 const config = {

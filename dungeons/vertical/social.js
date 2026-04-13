@@ -262,7 +262,7 @@ const config = {
 			properties: {
 				"post_type": ["text", "image", "video", "poll", "link"],
 				"character_count": u.weighNumRange(1, 280),
-				"has_media": u.pickAWinner([true, false], 0.4),
+				"has_media": [false, false, false, true, true],
 				"hashtag_count": u.weighNumRange(0, 10, 0.5),
 				"weekend_surge": [false],
 				"weekend_duplicate": [false],
@@ -308,7 +308,7 @@ const config = {
 			weight: 10,
 			properties: {
 				"comment_length": u.weighNumRange(1, 500, 0.3, 20),
-				"has_mention": u.pickAWinner([true, false, false]),
+				"has_mention": [true, false, false],
 				"follow_back_effect": [false],
 				"toxic_user": [false],
 			}
@@ -335,7 +335,7 @@ const config = {
 			properties: {
 				"story_type": ["photo", "video", "text"],
 				"view_duration_sec": u.weighNumRange(1, 30, 0.5, 5),
-				"completed": u.pickAWinner([true, false], 0.6),
+				"completed": [false, false, true, true, true],
 				"toxic_user": [false],
 			}
 		},
@@ -344,8 +344,8 @@ const config = {
 			weight: 5,
 			properties: {
 				"story_type": ["photo", "video", "text"],
-				"has_filter": u.pickAWinner([true, false], 0.5),
-				"has_sticker": u.pickAWinner([true, false], 0.3),
+				"has_filter": [true, false],
+				"has_sticker": [false, false, true],
 				"weekend_surge": [false],
 				"weekend_duplicate": [false],
 				"monetized_creator": [false],
@@ -366,7 +366,7 @@ const config = {
 			weight: 12,
 			properties: {
 				"notification_type": ["like", "follow", "comment", "mention", "trending"],
-				"clicked": u.pickAWinner([true, false], 0.4),
+				"clicked": [false, false, false, true, true],
 				"toxic_user": [false],
 			}
 		},
@@ -420,7 +420,7 @@ const config = {
 			weight: 2,
 			properties: {
 				"tier": ["basic", "premium", "vip"],
-				"price_usd": u.pickAWinner([4.99, 9.99, 19.99]),
+				"price_usd": [4.99, 9.99, 19.99],
 				"toxic_user": [false],
 			}
 		},
@@ -435,7 +435,7 @@ const config = {
 		"follower_count": u.weighNumRange(0, 10000, 0.2, 50),
 		"following_count": u.weighNumRange(0, 5000, 0.3, 100),
 		"bio_length": u.weighNumRange(0, 160),
-		"verified": u.pickAWinner([true, false], 0.05),
+		"verified": [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true],
 		"content_niche": ["lifestyle", "tech", "food", "fitness", "travel", "comedy", "news", "art"],
 	},
 
@@ -448,7 +448,7 @@ const config = {
 			"name": () => `${chance.word()} ${chance.pickone(["Hub", "Circle", "Squad", "Zone", "Space"])}`,
 			"member_count": u.weighNumRange(50, 5000, 0.3, 200),
 			"category": ["technology", "entertainment", "sports", "politics", "art", "science"],
-			"is_moderated": u.pickAWinner([true, false], 0.7),
+			"is_moderated": [false, false, false, true, true, true, true, true, true, true],
 		}
 	},
 

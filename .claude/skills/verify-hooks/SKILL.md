@@ -433,6 +433,7 @@ Run each query separately. For each query:
 2. Capture the output
 3. If a query fails (column not found, type error), adjust and retry — the schema depends on what the hook actually writes
 4. Record both the query and the raw results
+5. Accumulate a structured log of every query execution (see Step 3b)
 
 ### Statistical Caveats
 
@@ -440,6 +441,49 @@ With ~1000 users and ~100K events:
 - Most hooks with >= 10% affected population will show clear signal
 - Hooks affecting < 2% of users (e.g., "2% find legendary weapon") may show WEAK results due to small sample size — this is expected
 - Note sample size in the report when it's a factor
+
+## Step 3b: Stash Query Results to Disk
+
+If `./research/` exists locally, write a plain-text log of every DuckDB query execution to `./research/hook-query-log.txt`. If `./research/` does not exist, skip this step entirely — do not create the directory.
+
+Check with: `ls -d ./research/ 2>/dev/null`
+
+Use a consistent delimited format — one block per query, separated by a ruler line. DuckDB table output is preserved verbatim (no escaping):
+
+```
+================================================================================
+DUNGEON: gaming.js
+HOOK: #1 — Power users have 3x purchase amount
+TYPE: everything
+VERDICT: PASS
+EXPECTED: ~3x ratio between power and regular users
+OBSERVED: 3.05x ratio
+
+SQL:
+SELECT segment, AVG(amount) as avg_amt, COUNT(*) as n
+FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+WHERE event = 'purchase'
+GROUP BY segment;
+
+OUTPUT:
+┌────────────┬─────────┬───────┐
+│  segment   │ avg_amt │   n   │
+│  varchar   │ double  │ int64 │
+├────────────┼─────────┼───────┤
+│ power_user │   45.20 │  3841 │
+│ regular    │   14.80 │ 12037 │
+└────────────┴─────────┴───────┘
+
+ANALYSIS: Power users avg $45.20 vs regular $14.80 = 3.05x ratio
+================================================================================
+```
+
+In batch mode (multiple dungeons), all queries across all dungeons go into the same file sequentially. The format is grep-friendly:
+```bash
+grep "^VERDICT:" research/hook-query-log.txt           # all verdicts
+grep -B4 "^VERDICT: FAIL" research/hook-query-log.txt  # failing hooks with context
+grep "^DUNGEON:" research/hook-query-log.txt            # list of dungeons queried
+```
 
 ## Step 4: Write hook-results.md
 
@@ -590,7 +634,15 @@ Remove ALL files matching the `verify-*` pattern in `./data/` (covers all per-du
 
 After cleanup, tell the user:
 1. Where the report is: `./research/hook-results.md`
-2. How many hooks passed, were weak, or failed (per dungeon if batch mode)
-3. A one-line summary of the most interesting finding
+2. Whether the query log was written: `./research/hook-query-log.txt` (only if `./research/` existed)
+3. How many hooks passed, were weak, or failed (per dungeon if batch mode)
+4. A one-line summary of the most interesting finding
 
 If hooks failed, note that `hook-results.md` can be used as context for fixing the hooks (e.g., "read hook-results.md and fix the failing hooks in <dungeon-file>").
+
+The query log can be studied later with grep:
+```bash
+grep "^VERDICT:" research/hook-query-log.txt           # all verdicts
+grep -B4 "^VERDICT: FAIL" research/hook-query-log.txt  # failing hooks with context
+grep "^DUNGEON:" research/hook-query-log.txt            # list of dungeons queried
+```

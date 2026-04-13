@@ -4,7 +4,7 @@ import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 import { uid, comma } from 'ak-tools';
-import { pickAWinner, weighNumRange, date, integer, weighChoices } from "../../lib/utils/utils.js";
+import { weighNumRange, date, integer, weighChoices } from "../../lib/utils/utils.js";
 
 /**
  * ═══════════════════════════════════════════════════════════════
@@ -101,7 +101,7 @@ const config = {
 	superProps: {},
 	userProps: {
 		plan: ["free", "starter", "pro", "enterprise"],
-		signup_source: pickAWinner(["organic", "organic", "organic", "paid", "paid", "referral"]),
+		signup_source: ["organic", "organic", "organic", "paid", "paid", "referral"],
 	},
 	scdProps: {},
 	mirrorProps: {},

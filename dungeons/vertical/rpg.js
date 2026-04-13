@@ -211,7 +211,7 @@ const config = {
 			timeToConvert: 2,
 			weight: 4,
 			props: {
-				"dungeon_id": u.pickAWinner(dungeonIds),
+				"dungeon_id": dungeonIds,
 				"difficulty": ["Easy", "Medium", "Hard", "Deadly"],
 			}
 		},
@@ -221,7 +221,7 @@ const config = {
 			conversionRate: 55,
 			timeToConvert: 3,
 			weight: 3,
-			props: { "quest_id": u.pickAWinner(questIds) },
+			props: { "quest_id": questIds },
 		},
 		{
 			// Preparation before dungeon: inspect + search for strategic explorer hook
@@ -274,14 +274,14 @@ const config = {
 			weight: 2,
 			properties: {
 				"completion_time_mins": u.weighNumRange(3, 25, 0.8, 10),
-				"skipped": u.pickAWinner([true, false], 0.15),
+				"skipped": [false, false, false, false, false, false, true],
 			}
 		},
 		{
 			event: "quest accepted",
 			weight: 15,
 			properties: {
-				"quest_id": u.pickAWinner(questIds),
+				"quest_id": questIds,
 				"quest_type": [
 					"Main Story",
 					"Side Quest",
@@ -296,7 +296,7 @@ const config = {
 			event: "quest objective completed",
 			weight: 12,
 			properties: {
-				"quest_id": u.pickAWinner(questIds),
+				"quest_id": questIds,
 				"objective_number": u.weighNumRange(1, 5),
 			}
 		},
@@ -304,7 +304,7 @@ const config = {
 			event: "quest turned in",
 			weight: 10,
 			properties: {
-				"quest_id": u.pickAWinner(questIds),
+				"quest_id": questIds,
 				"reward_gold": u.weighNumRange(10, 500, 0.5, 100),
 				"reward_xp": u.weighNumRange(50, 2000, 0.5, 500),
 				"compass_user": [false],
@@ -315,7 +315,7 @@ const config = {
 			event: "enter dungeon",
 			weight: 18,
 			properties: {
-				"dungeon_id": u.pickAWinner(dungeonIds),
+				"dungeon_id": dungeonIds,
 				"difficulty": ["Easy", "Medium", "Hard", "Deadly"],
 				"party_size": u.weighNumRange(1, 5),
 			}
@@ -324,7 +324,7 @@ const config = {
 			event: "exit dungeon",
 			weight: 14,
 			properties: {
-				"dungeon_id": u.pickAWinner(dungeonIds),
+				"dungeon_id": dungeonIds,
 				"time_spent_mins": u.weighNumRange(5, 120, 0.6, 30),
 				"completion_status": ["completed", "abandoned", "died"],
 				"strategic_explorer": [false],
@@ -363,7 +363,7 @@ const config = {
 					"Friendly Fire"
 				],
 				"player_level": u.weighNumRange(1, 50),
-				"resurrection_used": u.pickAWinner([true, false], 0.25),
+				"resurrection_used": [false, false, false, true],
 				"cursed_week": [false],
 				"near_death_survival": [false],
 				"subscriber_advantage": ["Free"],
@@ -381,7 +381,7 @@ const config = {
 			event: "item purchased",
 			weight: 11,
 			properties: {
-				"item_id": u.pickAWinner(itemIds),
+				"item_id": itemIds,
 				"item_type": [
 					"Weapon",
 					"Armor",
@@ -398,7 +398,7 @@ const config = {
 			event: "item sold",
 			weight: 7,
 			properties: {
-				"item_id": u.pickAWinner(itemIds),
+				"item_id": itemIds,
 				"item_type": [
 					"Weapon",
 					"Armor",
@@ -421,7 +421,7 @@ const config = {
 					"Cosmetic Bundle",
 					"Season Pass"
 				],
-				"price_usd": u.pickAWinner([4.99, 9.99, 19.99, 49.99, 99.99]),
+				"price_usd": [4.99, 9.99, 19.99, 49.99, 99.99],
 				"payment_method": ["Credit Card", "PayPal", "Apple Pay", "Google Pay"],
 				"lucky_charm_effect": [false],
 			}
@@ -470,14 +470,14 @@ const config = {
 					"Quest Location",
 					"Town Square"
 				],
-				"clue_found": u.pickAWinner([true, false], 0.6),
+				"clue_found": [false, false, true, true, true],
 			}
 		},
 		{
 			event: "use item",
 			weight: 14,
 			properties: {
-				"item_id": u.pickAWinner(itemIds),
+				"item_id": itemIds,
 				"item_type": [
 					"Health Potion",
 					"Mana Potion",
@@ -510,7 +510,7 @@ const config = {
 			weight: 18,
 			properties: {
 				"outcome": ["Victory", "Defeat", "Fled"],
-				"loot_gained": u.pickAWinner([true, false], 0.7),
+				"loot_gained": [false, false, false, true, true, true, true, true, true, true],
 				"legendary_weapon_equipped": [false],
 				"subscriber_advantage": ["Free"],
 				"near_death_survival": [false],
@@ -533,7 +533,7 @@ const config = {
 			"High",
 			"Ultra"
 		],
-		subscription_tier: u.pickAWinner(["Free", "Free", "Free", "Premium", "Elite"]),
+		subscription_tier: ["Free", "Free", "Free", "Premium", "Elite"],
 	},
 
 	scdProps: {},

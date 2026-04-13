@@ -194,7 +194,7 @@ const config = {
 			conversionRate: 55,
 			timeToConvert: 1,
 			weight: 5,
-			props: { "restaurant_id": u.pickAWinner(restaurantIds) },
+			props: { "restaurant_id": restaurantIds },
 		},
 		{
 			// Search-driven ordering
@@ -209,7 +209,7 @@ const config = {
 			conversionRate: 65,
 			timeToConvert: 2,
 			weight: 4,
-			props: { "order_id": u.pickAWinner(orderIds) },
+			props: { "order_id": orderIds },
 		},
 		{
 			// Post-order: rate and reorder
@@ -248,7 +248,7 @@ const config = {
 			isFirstEvent: true,
 			properties: {
 				"signup_method": ["email", "google", "apple", "facebook"],
-				"referral_code": u.pickAWinner([true, false], 0.3),
+				"referral_code": [false, false, true],
 				"trial_retained": [false],
 			}
 		},
@@ -267,7 +267,7 @@ const config = {
 					"Mediterranean"
 				],
 				"sort_by": ["recommended", "distance", "rating", "price"],
-				"filter_applied": u.pickAWinner([true, false], 0.4),
+				"filter_applied": [false, false, false, true, true],
 				"trial_retained": [false],
 			}
 		},
@@ -275,7 +275,7 @@ const config = {
 			event: "restaurant viewed",
 			weight: 15,
 			properties: {
-				"restaurant_id": u.pickAWinner(restaurantIds),
+				"restaurant_id": restaurantIds,
 				"cuisine_type": [
 					"American",
 					"Italian",
@@ -297,7 +297,7 @@ const config = {
 			event: "item added to cart",
 			weight: 14,
 			properties: {
-				"item_id": u.pickAWinner(itemIds),
+				"item_id": itemIds,
 				"item_category": ["entree", "appetizer", "drink", "dessert", "side"],
 				"item_price": u.weighNumRange(3, 65, 1.0, 40),
 				"customization_count": u.weighNumRange(0, 5, 1.5, 20),
@@ -309,7 +309,7 @@ const config = {
 			event: "item removed from cart",
 			weight: 5,
 			properties: {
-				"item_id": u.pickAWinner(itemIds),
+				"item_id": itemIds,
 				"removal_reason": ["changed_mind", "too_expensive", "substitution"],
 				"trial_retained": [false],
 			}
@@ -318,7 +318,7 @@ const config = {
 			event: "coupon applied",
 			weight: 4,
 			properties: {
-				"coupon_code": u.pickAWinner(couponCodes),
+				"coupon_code": couponCodes,
 				"discount_type": ["percent", "flat", "free_delivery"],
 				"discount_value": u.weighNumRange(5, 50, 1.2, 20),
 				"coupon_injected": [false],
@@ -331,7 +331,7 @@ const config = {
 			properties: {
 				"cart_total": u.weighNumRange(8, 150, 0.8, 40),
 				"items_count": u.weighNumRange(1, 8, 1.2, 20),
-				"delivery_address_saved": u.pickAWinner([true, false], 0.7),
+				"delivery_address_saved": [false, false, false, true, true, true, true, true, true, true],
 				"trial_retained": [false],
 			}
 		},
@@ -339,7 +339,7 @@ const config = {
 			event: "order placed",
 			weight: 10,
 			properties: {
-				"order_id": u.pickAWinner(orderIds),
+				"order_id": orderIds,
 				"payment_method": ["credit_card", "apple_pay", "google_pay", "paypal", "cash"],
 				"order_total": u.weighNumRange(10, 200, 0.8, 40),
 				"tip_amount": u.weighNumRange(0, 30, 1.5, 20),
@@ -353,7 +353,7 @@ const config = {
 			event: "order tracked",
 			weight: 13,
 			properties: {
-				"order_id": u.pickAWinner(orderIds),
+				"order_id": orderIds,
 				"order_status": ["confirmed", "preparing", "picked_up", "en_route", "delivered"],
 				"eta_mins": u.weighNumRange(5, 60, 1.0, 30),
 				"trial_retained": [false],
@@ -363,9 +363,9 @@ const config = {
 			event: "order delivered",
 			weight: 9,
 			properties: {
-				"order_id": u.pickAWinner(orderIds),
+				"order_id": orderIds,
 				"actual_delivery_mins": u.weighNumRange(12, 90, 1.0, 40),
-				"on_time": u.pickAWinner([true, false], 0.7),
+				"on_time": [false, false, false, true, true, true, true, true, true, true],
 				"trial_retained": [false],
 			}
 		},
@@ -373,10 +373,10 @@ const config = {
 			event: "order rated",
 			weight: 7,
 			properties: {
-				"order_id": u.pickAWinner(orderIds),
+				"order_id": orderIds,
 				"food_rating": u.weighNumRange(1, 5, 0.8, 30),
 				"delivery_rating": u.weighNumRange(1, 5, 0.8, 30),
-				"would_reorder": u.pickAWinner([true, false], 0.65),
+				"would_reorder": [false, true, true],
 				"referral_user": [false],
 				"trial_retained": [false],
 			}
@@ -409,9 +409,9 @@ const config = {
 			event: "subscription started",
 			weight: 2,
 			properties: {
-				"plan": u.pickAWinner(["quickbite_plus_monthly", "quickbite_plus_monthly", "quickbite_plus_annual"]),
-				"price": u.pickAWinner([9.99, 9.99, 79.99]),
-				"trial": u.pickAWinner([true, false], 0.5),
+				"plan": ["quickbite_plus_monthly", "quickbite_plus_monthly", "quickbite_plus_annual"],
+				"price": [9.99, 9.99, 79.99],
+				"trial": [true, false],
 				"trial_retained": [false],
 			}
 		},
@@ -429,7 +429,7 @@ const config = {
 			weight: 3,
 			properties: {
 				"issue_type": ["missing_item", "wrong_order", "late_delivery", "quality_issue", "refund_request"],
-				"order_id": u.pickAWinner(orderIds),
+				"order_id": orderIds,
 				"trial_retained": [false],
 			}
 		},
@@ -437,7 +437,7 @@ const config = {
 			event: "reorder initiated",
 			weight: 6,
 			properties: {
-				"order_id": u.pickAWinner(orderIds),
+				"order_id": orderIds,
 				"original_order_age_days": u.weighNumRange(1, 60, 1.5, 30),
 				"referral_user": [false],
 				"trial_retained": [false],
@@ -447,7 +447,7 @@ const config = {
 
 	superProps: {
 		platform: ["iOS", "Android", "Web"],
-		subscription_tier: u.pickAWinner(["Free", "Free", "Free", "Free", "QuickBite+"]),
+		subscription_tier: ["Free", "Free", "Free", "Free", "QuickBite+"],
 		city: ["New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "San Francisco"],
 	},
 

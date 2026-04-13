@@ -71,6 +71,20 @@ npm run prune                 # Clean generated data files
 npm run dungeon:run           # Run a dungeon file
 npm run dungeon:to-json       # Convert JS dungeon → JSON (for UI)
 npm run dungeon:from-json     # Convert JSON → JS dungeon
+npm run dungeon:schema        # Extract simplified schema from dungeon
+```
+
+### Utility Scripts
+
+The `scripts/` directory is shipped with the npm package and can be used directly:
+
+```bash
+node scripts/run-dungeon.mjs <path>              # Run a single dungeon
+node scripts/dungeon-to-json.mjs <path>           # Convert JS dungeon → JSON
+node scripts/json-to-dungeon.mjs <path>           # Convert JSON → JS dungeon
+node scripts/extract-dungeon-schema.mjs <path>    # Extract dungeon schema
+node scripts/run-many.mjs <dir> [--parallel N]    # Run multiple dungeons concurrently
+node scripts/verify-runner.mjs <path> [prefix]    # Run dungeon at test scale (1K users, 100K events)
 ```
 
 ## Tests

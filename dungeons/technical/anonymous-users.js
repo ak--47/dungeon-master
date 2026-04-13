@@ -12,7 +12,7 @@
 
 import Chance from 'chance';
 let chance = new Chance();
-import { pickAWinner, weighNumRange, weighChoices } from "../../lib/utils/utils.js";
+import { weighNumRange, weighChoices } from "../../lib/utils/utils.js";
 
 /** @type {import('../../types').Dungeon} */
 const config = {
@@ -43,7 +43,7 @@ const config = {
 			event: "page view",
 			weight: 10,
 			properties: {
-				page: pickAWinner(["/", "/", "/features", "/pricing", "/docs", "/blog"]),
+				page: ["/", "/", "/features", "/pricing", "/docs", "/blog"],
 				referrer: weighChoices(["direct", "direct", "direct", "google", "google", "twitter", "linkedin"]),
 			}
 		},

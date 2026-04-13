@@ -221,7 +221,7 @@ const config = {
 			weight: 1,
 			isFirstEvent: true,
 			properties: {
-				"account_type": u.pickAWinner(["personal", "business", "personal"]),
+				"account_type": ["personal", "business", "personal"],
 				"signup_channel": ["app", "web", "referral", "branch"],
 			}
 		},
@@ -271,7 +271,7 @@ const config = {
 			properties: {
 				"bill_type": ["rent", "utilities", "phone", "insurance", "subscription", "loan_payment"],
 				"amount": u.weighNumRange(20, 3000, 0.5, 150),
-				"auto_pay": u.pickAWinner([true, false], 0.4),
+				"auto_pay": [false, false, false, true, true],
 				"missed_payment": [false],
 				"manual_payment": [false],
 			}
@@ -308,7 +308,7 @@ const config = {
 			properties: {
 				"investment_type": ["stocks", "etf", "crypto", "bonds", "mutual_fund"],
 				"amount": u.weighNumRange(10, 10000, 0.3, 250),
-				"action": u.pickAWinner(["buy", "sell", "buy"]),
+				"action": ["buy", "sell", "buy"],
 				"premium_returns": [false],
 				"budget_discipline": [false],
 			}
@@ -352,8 +352,8 @@ const config = {
 			weight: 2,
 			properties: {
 				"old_tier": ["basic", "plus", "premium"],
-				"new_tier": u.pickAWinner(["plus", "premium", "premium"]),
-				"monthly_fee": u.pickAWinner([4.99, 9.99, 14.99]),
+				"new_tier": ["plus", "premium", "premium"],
+				"monthly_fee": [4.99, 9.99, 14.99],
 			}
 		},
 		{
@@ -362,7 +362,7 @@ const config = {
 			properties: {
 				"channel": ["chat", "phone", "email", "in_app"],
 				"issue_type": ["transaction", "account", "card", "transfer", "technical"],
-				"resolved": u.pickAWinner([true, false], 0.8),
+				"resolved": [false, true, true, true, true],
 				"fraud_sequence": [false],
 			}
 		},
@@ -371,7 +371,7 @@ const config = {
 			weight: 10,
 			properties: {
 				"notification_type": ["transaction", "low_balance", "bill_due", "reward", "security", "promo"],
-				"action_taken": u.pickAWinner([true, false], 0.6),
+				"action_taken": [false, false, true, true, true],
 			}
 		},
 		{
@@ -386,7 +386,7 @@ const config = {
 	],
 
 	superProps: {
-		account_tier: u.pickAWinner(["basic", "basic", "basic", "plus", "plus", "premium"]),
+		account_tier: ["basic", "basic", "basic", "plus", "plus", "premium"],
 		platform: ["ios", "android", "web"],
 		low_balance_churn: [false],
 	},
@@ -396,7 +396,7 @@ const config = {
 		"income_bracket": ["under_30k", "30k_50k", "50k_75k", "75k_100k", "100k_150k", "over_150k"],
 		"account_age_months": u.weighNumRange(1, 60, 0.5, 12),
 		"total_balance": u.weighNumRange(0, 100000, 0.3, 5000),
-		"has_direct_deposit": u.pickAWinner([true, false], 0.6),
+		"has_direct_deposit": [false, false, true, true, true],
 		"account_segment": ["personal"],
 		"employee_count": [0],
 		"annual_revenue": [0],
@@ -414,7 +414,7 @@ const config = {
 			"household_size": u.weighNumRange(1, 6),
 			"combined_income": u.weighNumRange(20000, 300000, 0.3, 75000),
 			"financial_health_score": u.weighNumRange(1, 100, 1, 65),
-			"primary_bank": u.pickAWinner(["NexBank_only", "multi_bank", "NexBank_only"]),
+			"primary_bank": ["NexBank_only", "multi_bank", "NexBank_only"],
 		}
 	},
 

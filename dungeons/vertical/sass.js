@@ -345,7 +345,7 @@ const config = {
 			event: "service deployed",
 			weight: 10,
 			properties: {
-				service_id: u.pickAWinner(serviceIds),
+				service_id: serviceIds,
 				service_type: ["web_app", "api", "database", "cache", "queue", "ml_model"],
 				environment: ["production", "staging", "dev"],
 				cloud_provider: ["aws", "gcp", "azure"],
@@ -364,10 +364,10 @@ const config = {
 			event: "alert triggered",
 			weight: 12,
 			properties: {
-				alert_id: u.pickAWinner(alertIds),
+				alert_id: alertIds,
 				severity: ["info", "warning", "critical", "emergency"],
 				alert_type: ["cpu", "memory", "latency", "error_rate", "disk", "network"],
-				service_id: u.pickAWinner(serviceIds),
+				service_id: serviceIds,
 			}
 		},
 		{
@@ -379,7 +379,7 @@ const config = {
 				incident_id: () => `inc_${v.uid(8)}`,
 				original_severity: ["critical", "emergency"],
 				original_alert_type: ["cpu", "memory", "latency", "error_rate", "disk", "network"],
-				service_id: u.pickAWinner(serviceIds),
+				service_id: serviceIds,
 				auto_escalated: [true],
 			}
 		},
@@ -387,7 +387,7 @@ const config = {
 			event: "alert acknowledged",
 			weight: 8,
 			properties: {
-				alert_id: u.pickAWinner(alertIds),
+				alert_id: alertIds,
 				response_time_mins: u.weighNumRange(1, 120),
 				acknowledged_by_role: ["engineer", "sre", "manager", "oncall"],
 				integrated_team: [false],
@@ -397,7 +397,7 @@ const config = {
 			event: "alert resolved",
 			weight: 7,
 			properties: {
-				alert_id: u.pickAWinner(alertIds),
+				alert_id: alertIds,
 				resolution_time_mins: u.weighNumRange(5, 1440),
 				root_cause: ["config_change", "capacity", "bug", "dependency", "network"],
 				integrated_team: [false],
@@ -407,7 +407,7 @@ const config = {
 			event: "deployment pipeline run",
 			weight: 9,
 			properties: {
-				pipeline_id: u.pickAWinner(pipelineIds),
+				pipeline_id: pipelineIds,
 				status: ["success", "failed", "cancelled"],
 				duration_sec: u.weighNumRange(30, 1800),
 				commit_count: u.weighNumRange(1, 20),
@@ -418,11 +418,11 @@ const config = {
 			event: "infrastructure scaled",
 			weight: 5,
 			properties: {
-				service_id: u.pickAWinner(serviceIds),
-				scale_direction: u.pickAWinner(["up", "down"], 0.15),
+				service_id: serviceIds,
+				scale_direction: ["down", "down", "down", "down", "down", "down", "up"],
 				previous_capacity: u.weighNumRange(1, 100),
 				new_capacity: u.weighNumRange(1, 100),
-				auto_scaled: u.pickAWinner([true, false], 0.15),
+				auto_scaled: [false, false, false, false, false, false, true],
 				cost_reaction: [false],
 			}
 		},
@@ -468,9 +468,9 @@ const config = {
 			event: "runbook executed",
 			weight: 3,
 			properties: {
-				runbook_id: u.pickAWinner(runbookIds),
+				runbook_id: runbookIds,
 				trigger: ["manual", "automated", "alert_triggered"],
-				success: u.pickAWinner([true, false], 0.15),
+				success: [false, false, false, false, false, false, true],
 			}
 		},
 		{
@@ -498,7 +498,7 @@ const config = {
 				endpoint: ["/deploy", "/status", "/metrics", "/alerts", "/config", "/billing"],
 				method: ["GET", "POST", "PUT", "DELETE"],
 				response_time_ms: u.weighNumRange(10, 5000),
-				status_code: u.pickAWinner([200, 201, 400, 401, 403, 500, 503]),
+				status_code: [200, 201, 400, 401, 403, 500, 503],
 			}
 		},
 		{
@@ -514,19 +514,19 @@ const config = {
 			weight: 4,
 			properties: {
 				flag_name: () => `flag_${chance.word()}`,
-				new_state: u.pickAWinner(["enabled", "disabled"], 0.15),
+				new_state: ["disabled", "disabled", "disabled", "disabled", "disabled", "disabled", "enabled"],
 				environment: ["production", "staging", "dev"],
 			}
 		},
 	],
 
 	superProps: {
-		plan_tier: u.pickAWinner(["free", "free", "team", "team", "business", "enterprise"]),
+		plan_tier: ["free", "free", "team", "team", "business", "enterprise"],
 		cloud_provider: ["aws", "gcp", "azure", "multi_cloud"],
 	},
 
 	userProps: {
-		company_size: u.pickAWinner(["startup", "startup", "smb", "mid_market", "enterprise"]),
+		company_size: ["startup", "startup", "smb", "mid_market", "enterprise"],
 		primary_role: ["engineer", "sre", "devops", "manager", "executive"],
 		team_name: ["Platform", "Backend", "Frontend", "Data", "Security", "Infrastructure"],
 		churned_account: [false],

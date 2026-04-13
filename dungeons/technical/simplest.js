@@ -60,8 +60,8 @@ const config = {
 			event: "page view",
 			weight: 10,
 			properties: {
-				page: pickAWinner(["/", "/", "/help", "/account", "/pricing", "/product", "/about", "/blog"]),
-				utm_source: pickAWinner(["$organic", "$organic", "$organic", "$organic", "google", "google", "google", "facebook", "facebook", "twitter", "linkedin"]),
+				page: ["/", "/", "/help", "/account", "/pricing", "/product", "/about", "/blog"],
+				utm_source: ["$organic", "$organic", "$organic", "$organic", "google", "google", "google", "facebook", "facebook", "twitter", "linkedin"],
 			}
 		},
 		{
@@ -243,7 +243,7 @@ const config = {
 			weight: 1,
 			properties: {
 				frequency: ["daily", "weekly", "monthly"],
-				topics: pickAWinner(["deals", "new arrivals", "recommendations", "deals", "deals"]),
+				topics: ["deals", "new arrivals", "recommendations", "deals", "deals"],
 			}
 		},
 		{
@@ -358,7 +358,7 @@ const config = {
 
 	],
 	superProps: {
-		theme: pickAWinner(["light", "dark", "custom", "light", "dark"]),
+		theme: ["light", "dark", "custom", "light", "dark"],
 	},
 	/*
 	user properties work the same as event properties
@@ -367,7 +367,7 @@ const config = {
 	userProps: {
 		title: chance.profession.bind(chance),
 		luckyNumber: weighNumRange(42, 420, .3),
-		spiritAnimal: pickAWinner(["duck", "dog", "otter", "penguin", "cat", "elephant", "lion", "cheetah", "giraffe", "zebra", "rhino", "hippo", "whale", "dolphin", "shark", "octopus", "squid", "jellyfish", "starfish", "seahorse", "crab", "lobster", "shrimp", "clam", "snail", "slug", "butterfly", "moth", "bee", "wasp", "ant", "beetle", "ladybug", "caterpillar", "centipede", "millipede", "scorpion", "spider", "tarantula", "tick", "mite", "mosquito", "fly", "dragonfly", "damselfly", "grasshopper", "cricket", "locust", "mantis", "cockroach", "termite", "praying mantis", "walking stick", "stick bug", "leaf insect", "lacewing", "aphid", "cicada", "thrips", "psyllid", "scale insect", "whitefly", "mealybug", "planthopper", "leafhopper", "treehopper", "flea", "louse", "bedbug", "flea beetle", "weevil", "longhorn beetle", "leaf beetle", "tiger beetle", "ground beetle", "lady beetle", "firefly", "click beetle", "rove beetle", "scarab beetle", "dung beetle", "stag beetle", "rhinoceros beetle", "hercules beetle", "goliath beetle", "jewel beetle", "tortoise beetle"])
+		spiritAnimal: ["duck", "dog", "otter", "penguin", "cat", "elephant", "lion", "cheetah", "giraffe", "zebra", "rhino", "hippo", "whale", "dolphin", "shark", "octopus", "squid", "jellyfish", "starfish", "seahorse", "crab", "lobster", "shrimp", "clam", "snail", "slug", "butterfly", "moth", "bee", "wasp", "ant", "beetle", "ladybug", "caterpillar", "centipede", "millipede", "scorpion", "spider", "tarantula", "tick", "mite", "mosquito", "fly", "dragonfly", "damselfly", "grasshopper", "cricket", "locust", "mantis", "cockroach", "termite", "praying mantis", "walking stick", "stick bug", "leaf insect", "lacewing", "aphid", "cicada", "thrips", "psyllid", "scale insect", "whitefly", "mealybug", "planthopper", "leafhopper", "treehopper", "flea", "louse", "bedbug", "flea beetle", "weevil", "longhorn beetle", "leaf beetle", "tiger beetle", "ground beetle", "lady beetle", "firefly", "click beetle", "rove beetle", "scarab beetle", "dung beetle", "stag beetle", "rhinoceros beetle", "hercules beetle", "goliath beetle", "jewel beetle", "tortoise beetle"]
 	},
 	scdProps: {},
 	mirrorProps: {},
