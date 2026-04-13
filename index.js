@@ -133,12 +133,15 @@ async function runDungeon(config) {
 			initChance(validatedConfig.seed);
 		}
 
-		// Update FIXED_BEGIN based on configured numDays
+		// Compute FIXED_BEGIN from validated numDays
 		const configNumDays = validatedConfig.numDays || 30;
-		global.FIXED_BEGIN = dayjs.unix(FIXED_NOW).subtract(configNumDays, 'd').unix();
+		const fixedBegin = dayjs.unix(FIXED_NOW).subtract(configNumDays, 'd').unix();
 
-		// Step 2: Create context with validated config
-		const context = createContext(validatedConfig);
+		// Keep globals for backwards compatibility with tests/dungeons that read them
+		global.FIXED_BEGIN = fixedBegin;
+
+		// Step 2: Create context with validated config (pass time constants explicitly)
+		const context = createContext(validatedConfig, null, { fixedNow: FIXED_NOW, fixedBegin });
 
 		// Step 3: Initialize storage containers
 		const storageManager = new StorageManager(context);
@@ -232,7 +235,7 @@ async function generateAdSpendData(context) {
 
 	const timeShift = context.TIME_SHIFT_SECONDS;
 	for (let day = 0; day < numDays; day++) {
-		const fixedDay = dayjs.unix(global.FIXED_BEGIN).add(day, 'day').unix();
+		const fixedDay = dayjs.unix(context.FIXED_BEGIN).add(day, 'day').unix();
 		const shiftedDay = Math.min(fixedDay + timeShift, context.MAX_TIME);
 		const targetDay = dayjs.unix(shiftedDay).toISOString();
 		const adSpendEvents = await makeAdSpend(context, targetDay);

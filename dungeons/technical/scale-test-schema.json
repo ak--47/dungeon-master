@@ -1,0 +1,153 @@
+{
+  "schema": {
+    "seed": "scale test",
+    "name": "scale-test",
+    "numDays": 365,
+    "numEvents": 500000,
+    "numUsers": 10000,
+    "format": "json",
+    "gzip": true,
+    "batchSize": 500000,
+    "concurrency": 1,
+    "region": "US",
+    "hasAnonIds": false,
+    "hasSessionIds": false,
+    "hasAdSpend": false,
+    "hasLocation": false,
+    "hasAndroidDevices": false,
+    "hasIOSDevices": false,
+    "hasDesktopDevices": false,
+    "hasBrowser": false,
+    "hasCampaigns": false,
+    "isAnonymous": false,
+    "alsoInferFunnels": false,
+    "writeToDisk": false,
+    "events": [
+      {
+        "event": "page view",
+        "weight": 10,
+        "properties": {
+          "page": [
+            "/",
+            "/home",
+            "/about",
+            "/pricing",
+            "/docs"
+          ]
+        }
+      },
+      {
+        "event": "click",
+        "weight": 8,
+        "properties": {
+          "element": [
+            "button",
+            "link",
+            "card",
+            "nav",
+            "tab"
+          ],
+          "label": [
+            "submit",
+            "cancel",
+            "next",
+            "back",
+            "learn more"
+          ]
+        }
+      },
+      {
+        "event": "api call",
+        "weight": 6,
+        "properties": {
+          "endpoint": [
+            "/api/users",
+            "/api/data",
+            "/api/auth",
+            "/api/events"
+          ],
+          "status": [
+            200,
+            200,
+            200,
+            200,
+            201,
+            301,
+            400,
+            404,
+            500
+          ],
+          "latency_ms": [
+            432,
+            604,
+            829,
+            1590,
+            470,
+            515,
+            634,
+            713,
+            1571,
+            1445,
+            440,
+            1187,
+            1395,
+            538,
+            1476,
+            518,
+            562,
+            502,
+            597,
+            1539,
+            1355,
+            1446,
+            437,
+            586,
+            1341,
+            626,
+            746,
+            631,
+            468,
+            1358,
+            1475,
+            502,
+            493,
+            1514,
+            658,
+            509,
+            1557,
+            495,
+            611,
+            489,
+            1377,
+            780,
+            630,
+            517,
+            1005,
+            588,
+            612,
+            635,
+            588,
+            1327
+          ]
+        }
+      }
+    ],
+    "funnels": [],
+    "superProps": {},
+    "userProps": {
+      "plan": [
+        "free",
+        "pro",
+        "enterprise"
+      ]
+    },
+    "scdProps": {},
+    "mirrorProps": {},
+    "groupKeys": [],
+    "groupProps": {},
+    "lookupTables": []
+  },
+  "hooks": "function (record, type, meta) {\n\t\treturn record;\n\t}",
+  "timestamp": "2026-04-13T02:27:00.563Z",
+  "version": "4.0"
+}

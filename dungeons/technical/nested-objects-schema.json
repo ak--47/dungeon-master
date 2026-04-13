@@ -1,0 +1,267 @@
+{
+  "schema": {
+    "seed": "nested objects test",
+    "name": "nested-objects",
+    "numDays": 30,
+    "numEvents": 30000,
+    "numUsers": 500,
+    "format": "json",
+    "region": "US",
+    "hasAnonIds": false,
+    "hasSessionIds": false,
+    "hasAdSpend": false,
+    "hasLocation": false,
+    "hasAndroidDevices": false,
+    "hasIOSDevices": false,
+    "hasDesktopDevices": true,
+    "hasBrowser": false,
+    "hasCampaigns": false,
+    "isAnonymous": false,
+    "alsoInferFunnels": false,
+    "concurrency": 1,
+    "batchSize": 500000,
+    "writeToDisk": false,
+    "events": [
+      {
+        "event": "checkout",
+        "weight": 3,
+        "properties": {
+          "cart": {
+            "functionName": "arrow",
+            "body": "function () {\n\t\tconst items = [];\n\t\tconst count = integer(1, 5);\n\t\tfor (let i = 0; i < count; i++) {\n\t\t\titems.push({\n\t\t\t\tproduct_id: `prod_${integer(1, 10000)}`,\n\t\t\t\tname: `${chance.pickone([\"Premium\", \"Basic\", \"Ultra\", \"Eco\", \"Pro\"])} ${chance.pickone([\"Widget\", \"Gadget\", \"Device\", \"Tool\", \"Kit\"])}`,\n\t\t\t\tprice: integer(5, 500),\n\t\t\t\tquantity: integer(1, 4),\n\t\t\t\tcategory: chance.pickone(productCategories),\n\t\t\t});\n\t\t}\n\t\treturn () => [items];\n\t}"
+          },
+          "total_amount": [
+            432,
+            604,
+            829,
+            1590,
+            470,
+            515,
+            634,
+            713,
+            1571,
+            1445,
+            440,
+            1187,
+            1395,
+            538,
+            1476,
+            518,
+            562,
+            502,
+            597,
+            1539,
+            1355,
+            1446,
+            437,
+            586,
+            1341,
+            626,
+            746,
+            631,
+            468,
+            1358,
+            1475,
+            502,
+            493,
+            1514,
+            658,
+            509,
+            1557,
+            495,
+            611,
+            489,
+            1377,
+            780,
+            630,
+            517,
+            1005,
+            588,
+            612,
+            635,
+            588,
+            1327
+          ],
+          "currency": [
+            "USD",
+            "EUR",
+            "GBP",
+            "JPY",
+            "CAD"
+          ],
+          "session_id": {
+            "functionName": "arrow",
+            "body": "() => chance.guid()"
+          },
+          "metadata": {
+            "functionName": "arrow",
+            "body": "function () {\n\t\treturn {\n\t\t\tbrowser: {\n\t\t\t\tname: chance.pickone(browsers),\n\t\t\t\tversion: chance.pickone(browserVersions),\n\t\t\t},\n\t\t\tdevice: {\n\t\t\t\ttype: chance.pickone(deviceTypes),\n\t\t\t\tos: chance.pickone(osList),\n\t\t\t},\n\t\t\tlocation: {\n\t\t\t\tcity: chance.pickone(cities),\n\t\t\t\tcountry: chance.pickone(countries),\n\t\t\t},\n\t\t};\n\t}"
+          }
+        }
+      },
+      {
+        "event": "search performed",
+        "weight": 5,
+        "properties": {
+          "query": [
+            "laptop",
+            "shoes",
+            "headphones",
+            "jacket",
+            "phone case",
+            "coffee maker",
+            "backpack",
+            "monitor",
+            "keyboard",
+            "mouse"
+          ],
+          "results": {
+            "functionName": "arrow",
+            "body": "function () {\n\t\tconst results = [];\n\t\tconst count = integer(1, 5);\n\t\tfor (let i = 0; i < count; i++) {\n\t\t\tresults.push({\n\t\t\t\tresult_id: `res_${integer(1, 50000)}`,\n\t\t\t\ttitle: `${chance.pickone([\"Best\", \"Top\", \"New\", \"Sale\"])} ${chance.pickone(productCategories)} item`,\n\t\t\t\tscore: parseFloat((Math.random() * 100).toFixed(2)),\n\t\t\t\tsponsored: chance.pickone([true, false, false, false]),\n\t\t\t});\n\t\t}\n\t\treturn () => [results];\n\t}"
+          },
+          "result_count": [
+            13,
+            25,
+            22,
+            21,
+            16,
+            12,
+            20,
+            20,
+            29,
+            10,
+            20,
+            15,
+            43,
+            10,
+            39,
+            38,
+            33,
+            13,
+            37,
+            16,
+            28,
+            44,
+            33,
+            22,
+            37,
+            18,
+            19,
+            23,
+            22,
+            13,
+            24,
+            20,
+            16,
+            16,
+            12,
+            28,
+            3,
+            23,
+            21,
+            25,
+            21,
+            29,
+            33,
+            17,
+            14,
+            4,
+            12,
+            5,
+            24,
+            41
+          ],
+          "top_result_id": {
+            "functionName": "arrow",
+            "body": "() => `prod_${integer(1, 10000)}`"
+          },
+          "session_id": {
+            "functionName": "arrow",
+            "body": "() => chance.guid()"
+          },
+          "metadata": {
+            "functionName": "arrow",
+            "body": "function () {\n\t\treturn {\n\t\t\tbrowser: {\n\t\t\t\tname: chance.pickone(browsers),\n\t\t\t\tversion: chance.pickone(browserVersions),\n\t\t\t},\n\t\t\tdevice: {\n\t\t\t\ttype: chance.pickone(deviceTypes),\n\t\t\t\tos: chance.pickone(osList),\n\t\t\t},\n\t\t\tlocation: {\n\t\t\t\tcity: chance.pickone(cities),\n\t\t\t\tcountry: chance.pickone(countries),\n\t\t\t},\n\t\t};\n\t}"
+          }
+        }
+      },
+      {
+        "event": "form submitted",
+        "weight": 4,
+        "properties": {
+          "form_name": [
+            "checkout",
+            "signup",
+            "contact",
+            "feedback",
+            "settings",
+            "profile"
+          ],
+          "fields": {
+            "functionName": "arrow",
+            "body": "function () {\n\t\tconst fieldNames = [\"email\", \"name\", \"phone\", \"address\", \"city\", \"zip\", \"country\", \"card_number\", \"expiry\", \"cvv\"];\n\t\tconst fields = [];\n\t\tconst count = integer(2, 6);\n\t\tconst picked = chance.pickset(fieldNames, count);\n\t\tfor (const name of picked) {\n\t\t\tfields.push({\n\t\t\t\tfield_name: name,\n\t\t\t\tvalue: name === \"email\" ? chance.email() : chance.word(),\n\t\t\t\tvalid: chance.pickone([true, true, true, false]),\n\t\t\t});\n\t\t}\n\t\treturn () => [fields];\n\t}"
+          },
+          "submission_valid": [
+            true,
+            true,
+            true,
+            false
+          ],
+          "session_id": {
+            "functionName": "arrow",
+            "body": "() => chance.guid()"
+          },
+          "metadata": {
+            "functionName": "arrow",
+            "body": "function () {\n\t\treturn {\n\t\t\tbrowser: {\n\t\t\t\tname: chance.pickone(browsers),\n\t\t\t\tversion: chance.pickone(browserVersions),\n\t\t\t},\n\t\t\tdevice: {\n\t\t\t\ttype: chance.pickone(deviceTypes),\n\t\t\t\tos: chance.pickone(osList),\n\t\t\t},\n\t\t\tlocation: {\n\t\t\t\tcity: chance.pickone(cities),\n\t\t\t\tcountry: chance.pickone(countries),\n\t\t\t},\n\t\t};\n\t}"
+          }
+        }
+      },
+      {
+        "event": "page view",
+        "weight": 8,
+        "properties": {
+          "page": [
+            "/",
+            "/products",
+            "/cart",
+            "/search",
+            "/account",
+            "/help",
+            "/about"
+          ],
+          "product_id": {
+            "functionName": "arrow",
+            "body": "() => `prod_${integer(1, 10000)}`"
+          },
+          "session_id": {
+            "functionName": "arrow",
+            "body": "() => chance.guid()"
+          },
+          "metadata": {
+            "functionName": "arrow",
+            "body": "function () {\n\t\treturn {\n\t\t\tbrowser: {\n\t\t\t\tname: chance.pickone(browsers),\n\t\t\t\tversion: chance.pickone(browserVersions),\n\t\t\t},\n\t\t\tdevice: {\n\t\t\t\ttype: chance.pickone(deviceTypes),\n\t\t\t\tos: chance.pickone(osList),\n\t\t\t},\n\t\t\tlocation: {\n\t\t\t\tcity: chance.pickone(cities),\n\t\t\t\tcountry: chance.pickone(countries),\n\t\t\t},\n\t\t};\n\t}"
+          }
+        }
+      }
+    ],
+    "funnels": [],
+    "superProps": {},
+    "userProps": {
+      "plan": [
+        "free",
+        "basic",
+        "pro",
+        "enterprise"
+      ]
+    },
+    "scdProps": {},
+    "mirrorProps": {},
+    "groupKeys": [],
+    "groupProps": {},
+    "lookupTables": []
+  },
+  "hooks": "function (record, type, meta) {\n\t\treturn record;\n\t}",
+  "timestamp": "2026-04-13T02:27:00.453Z",
+  "version": "4.0"
+}

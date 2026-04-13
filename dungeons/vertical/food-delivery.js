@@ -4,7 +4,7 @@ import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
-const SEED = "dm4-food-delivery";
+const SEED = "harness-food";
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
 const num_users = 5_000;
@@ -12,150 +12,147 @@ const days = 100;
 
 /** @typedef  {import("../types.d.ts").Dungeon} Config */
 
-/**
- * ===============================================================================
+/*
+ * ═══════════════════════════════════════════════════════════════════════════════
  * DATASET OVERVIEW
- * ===============================================================================
+ * ═══════════════════════════════════════════════════════════════════════════════
  *
- * QuickBite Delivery - A food delivery platform modeled after DoorDash/UberEats,
- * focused on the discovery-to-loyalty pipeline: users browse restaurants, discover
- * menu items, build favorites lists, and place orders.
+ * QuickBite — a food delivery platform (DoorDash/Uber Eats style).
+ * Users browse restaurants, build carts, place orders, track deliveries,
+ * and rate their experiences.
  *
- * CORE USER LOOP:
- * Sign up -> browse restaurants -> view menu items -> favorite items -> build cart
- * -> checkout -> order -> delivery -> rate -> reorder
+ * Scale: 5,000 users · 600K events · 100 days · 17 event types
  *
- * The central mechanic is item discovery and favoriting. Users who curate a focused
- * favorites list (exactly 3 items) have the highest order values and most orders.
- * Over-favoriters (4+) are impulsive and actually perform worse. Users who never
- * favorite anything churn at high rates.
+ * Core loop:
+ *   sign up → browse/search restaurants → add items to cart →
+ *   checkout → order placed → track delivery → rate → reorder
  *
- * SCALE:
- * - 5,000 users over 100 days (~600K events)
- * - 18 event types, 4 funnels (onboarding, order, discovery, reorder)
- * - 200 restaurants (group analytics)
- * - Subscription tiers: Free, QuickBite+
- * - Session tracking enabled
+ * Restaurant ecosystem: 200 restaurants across 8 cuisine types,
+ * four price tiers ($–$$$$), modeled as group profiles.
+ *
+ * Monetization: delivery fees, QuickBite+ subscription ($9.99/mo or
+ * $79.99/yr for free delivery), and promotional coupons.
+ *
+ * Support & retention: support tickets (missing items, wrong orders,
+ * late delivery, quality, refunds) and reorder events model service
+ * quality and repeat behavior.
+ *
+ * Subscription tiers: Free vs QuickBite+ create a natural A/B
+ * comparison for monetization and retention analysis.
  */
 
-/**
- * ===============================================================================
- * ANALYTICS HOOKS
- * ===============================================================================
+/*
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * ANALYTICS HOOKS (8 architected patterns)
+ * ═══════════════════════════════════════════════════════════════════════════════
  *
- * 4 deliberately architected hooks centered on the discovery-to-loyalty pipeline.
- * The hooks create a cascading behavioral pattern: views -> favorites -> orders -> retention.
+ * 1. LUNCH RUSH CONVERSION (funnel-pre)
+ *    Funnel conversion boosted during meal hours: lunch 1.4x, dinner 1.2x.
+ *    Mixpanel:
+ *      • Funnels → "checkout started" → "order placed" → "order delivered"
+ *        Breakdown: "lunch_rush" → expect ~84% vs ~60% baseline
+ *      • Same funnel, breakdown: "dinner_rush" → expect ~72% vs ~60%
  *
- * ---------------------------------------------------------------------------
- * 1. BELL CURVE: VIEW -> FAVORITE RELATIONSHIP (everything hook)
- * ---------------------------------------------------------------------------
+ * 2. COUPON INJECTION (funnel-post)
+ *    Free-tier users get coupon_applied spliced into funnels 30% of the time.
+ *    Mixpanel:
+ *      • Insights → "coupon applied" → breakdown "coupon_injected"
+ *        → ~30% of Free-tier coupons are injected
+ *      • Insights → "coupon applied" → breakdown "subscription_tier"
+ *        → Free users have more coupon events
  *
- * PATTERN: Bell-shaped relationship between menu item views and favorites.
- * Gaussian peaks at ~25 views -> 5 favorites. Users with <=3 views get 0 favorites.
- * Formula: targetFav = round(5 * exp(-((views-25)^2) / (2*12^2)))
+ * 3. LATE NIGHT MUNCHIES (event)
+ *    10PM–2AM: 70% American cuisine, 1.3x item prices, late_night_order=true.
+ *    Mixpanel:
+ *      • Insights → "restaurant viewed" → breakdown "cuisine_type"
+ *        filter: late_night_order=true → ~70% American vs ~12% daytime
+ *      • Insights → "item added to cart" → avg "item_price"
+ *        breakdown: "late_night_order" → 1.3x higher at night
  *
- * MIXPANEL REPORT:
- *   1. Insights > Segmentation
- *   2. Count "view menu item" per user -> bucket into ranges
- *   3. Count "favorite item" per user
- *   4. Plot favorites vs. views -- clear bell curve peaking at ~25 views
- *   5. Bucket users by view count, compute avg favorites per bucket
+ * 4. RAINY WEEK SURGE (event + everything)
+ *    Days 20–27: delivery fees 2x, surge_pricing=true, 40% order duplication.
+ *    Mixpanel:
+ *      • Insights (line) → "order placed" → daily → visible spike days 20–27
+ *      • Insights → "order placed" → avg "delivery_fee"
+ *        breakdown: "surge_pricing" → 2x higher
  *
- * EXPECTED: Inverted-U peaking at ~5 favorites for 25 views, 0 at both extremes.
+ * 5. REFERRAL POWER USERS (everything)
+ *    Referred users: 2x reorders, food_rating 4–5 stars, referral_user=true.
+ *    Mixpanel:
+ *      • Insights → "reorder initiated" → per user
+ *        breakdown: "referral_user" → ~2x more reorders
+ *      • Insights → "order rated" → avg "food_rating"
+ *        breakdown: "referral_user" → 4–5 vs ~3.5 baseline
  *
- * ---------------------------------------------------------------------------
- * 2. MAGIC NUMBER: 3 FAVORITES = PEAK ORDER PERFORMANCE (everything hook)
- * ---------------------------------------------------------------------------
+ * 6. TRIAL CONVERSION (everything)
+ *    Trial subs with 3+ orders in 14 days retained; others lose 60% of events.
+ *    Mixpanel:
+ *      • Insights → any event → per user
+ *        breakdown: "trial_retained" → sustained vs ~60% drop
+ *      • Retention → "subscription started" (trial=true) → "order placed"
+ *        → sharp drop after day 14 for non-retained
  *
- * PATTERN: Exactly 3 favorites is the sweet spot.
- *   - 3 favorites: 1.6x order values, ~35% extra order duplication
- *   - 1-2 favorites: 1.15x small boost
- *   - 4+ favorites: PENALIZED -- 0.7x order values, ~30% orders removed, views removed
+ * 7. SUPPORT TICKET CHURN (user)
+ *    15% of users flagged is_high_risk=true with churn_risk_score 70–100.
+ *    Mixpanel:
+ *      • Insights → any event → unique users
+ *        breakdown: user "is_high_risk" → ~15% high-risk
+ *      • Insights → breakdown: user "churn_risk_score"
+ *        → bimodal: 85% at 0–40, 15% at 70–100
  *
- * MIXPANEL REPORT:
- *   1. Insights > Segmentation
- *   2. Segment users by favorite count: 0, 1-2, 3, 4+
- *   3. Compare avg order_total and order count per segment
- *   4. Filter: magic_number_customer = true to isolate the effect
- *   5. Verify 4+ favorites has LOWEST order values (even below baseline)
+ * 8. FIRST ORDER BONUS (funnel-pre)
+ *    New users get 1.4x conversion boost on checkout→order funnel.
+ *    Mixpanel:
+ *      • Funnels → "checkout started" → "order placed" → "order delivered"
+ *        breakdown: "first_order_bonus" → 1.4x higher conversion
+ *      • Insights → "order placed" → breakdown "first_order_bonus"
+ *        → ~50% tagged (hash-based user split)
  *
- * EXPECTED: 3 favorites dominates on order value and count. Over-favoriters
- * are impulsive and indecisive -- they perform worse than focused curators.
- * Real-world analogue: Facebook's "7 friends in 10 days" activation threshold.
- *
- * ---------------------------------------------------------------------------
- * 3. SESSION AMPLIFICATION (everything hook)
- * ---------------------------------------------------------------------------
- *
- * PATTERN: Magic-number boost is amplified for users with 10+ distinct sessions.
- * These users get 2.2x order value (vs 1.6x) and 60% order duplication (vs 35%).
- * Only applies to exactly-3-favorites users.
- *
- * MIXPANEL REPORT:
- *   1. Insights > Segmentation
- *   2. Count distinct session_id per user
- *   3. Segment: 3 favorites AND 10+ sessions vs 3 favorites AND <10 sessions
- *   4. Compare order_total and order count between segments
- *   5. Filter: session_amplified = true
- *
- * EXPECTED: Compound effect of magic number + session depth creates the
- * highest-value "power user" segment.
- *
- * ---------------------------------------------------------------------------
- * 4. NO FAVORITES -> CHURN (everything hook)
- * ---------------------------------------------------------------------------
- *
- * PATTERN: Users who never favorite any item lose ~60% of their events from
- * the second half of their timeline, simulating disengagement and abandonment.
- *
- * MIXPANEL REPORT:
- *   1. Insights > Segmentation
- *   2. Segment users: any "favorite item" event vs none
- *   3. Compare median total event count per user (use median, not mean)
- *   4. Look for ~60% fewer events in the 0-favorites group
- *
- * EXPECTED: 0-favorites users have ~60% fewer events. They fade out.
- *
- * ---------------------------------------------------------------------------
+ * ───────────────────────────────────────────────────────────────────────────────
  * ADVANCED ANALYSIS IDEAS
- * ---------------------------------------------------------------------------
+ * ───────────────────────────────────────────────────────────────────────────────
  *
- * CROSS-HOOK PATTERNS:
- *   - Full Cascade: views -> favorites -> orders -> retention (Hooks 1-4 chain)
- *   - Over-Favoriting Paradox: more favorites = WORSE performance past 3
- *   - Magic Number Discovery: plot order value by favorite count, peak at 3
- *   - Session-to-Activation: how many sessions before hitting magic number?
+ * Cross-hook patterns:
+ *   • The Perfect Customer: referral (5) + trial retained (6) + lunch rush (1)
+ *     + low churn risk (7) → exceptional LTV and retention
+ *   • Rainy Night Double Whammy: late-night (3) + rainy week (4)
+ *     → compounded surge pricing?
+ *   • Coupon-Driven Trial: injected coupons (2) → trial starts (6)?
+ *   • Referral + First Order: hooks 5 + 8 → highest conversion rates
+ *   • Support and Churn: high-risk (7) + support tickets during rainy week (4)
  *
- * COHORT ANALYSIS:
- *   - By favorites count: 0, 1-2, 3 (magic), 4+
- *   - By session depth: <10, 10+
- *   - By view count bucket: 0-5, 6-10, 11-15, 16-25, 25+
- *   - Cross-cohort: favorites x sessions matrix
+ * Cohort analysis:
+ *   • Signup week (rainy week cohort behaves differently)
+ *   • Referral vs organic lifecycle
+ *   • Free vs QuickBite+ across all metrics
+ *   • City-level cuisine and ordering patterns
  *
- * ---------------------------------------------------------------------------
+ * Funnel analysis:
+ *   • Onboarding: account created → first restaurant view, by signup method
+ *   • Order: checkout → delivery, by platform / tier / time of day
+ *   • Discovery: search type → conversion to ordering
+ *
+ * ───────────────────────────────────────────────────────────────────────────────
  * EXPECTED METRICS SUMMARY
- * ---------------------------------------------------------------------------
+ * ───────────────────────────────────────────────────────────────────────────────
  *
- * Hook                    | Metric                  | Baseline | Hook Effect  | Ratio
- * ------------------------|-------------------------|----------|--------------|------
- * Bell Curve              | Favorites at 25 views   | random   | ~5           | peak
- * Bell Curve              | Favorites at 50+ views  | random   | ~0-1         | zero
- * Magic Number (3 fav)    | Order total             | ~$70     | ~$143        | 2.0x
- * Magic Number (3 fav)    | Orders per user         | ~4       | ~9           | 2.3x
- * Over-Favoriter (4+ fav) | Order total             | ~$70     | ~$48         | 0.7x
- * Over-Favoriter (4+ fav) | Avg views               | ~16      | ~13          | lower
- * Session Amplification   | Order total (10+ sess)  | ~$143    | ~$153        | 2.2x
- * No Favorites -> Churn   | Median events (0 fav)   | ~78      | ~27          | 0.35x
+ * Hook                  | Metric               | Baseline | Hook Effect | Ratio
+ * ──────────────────────|──────────────────────|──────────|─────────────|──────
+ * Lunch Rush            | Funnel conversion    | 60%      | 84%         | 1.4x
+ * Coupon Injection      | Free user coupons    | 0%       | 30%         | N/A
+ * Late Night Munchies   | American cuisine %   | ~15%     | 70%         | ~4.7x
+ * Rainy Week Surge      | Order volume         | 100%     | 140%        | 1.4x
+ * Referral Power Users  | Reorder frequency    | 1x       | 2x          | 2.0x
+ * Trial Conversion      | Post-trial retention | 100%     | 40%         | 0.4x
+ * Support Ticket Churn  | High-risk users      | 0%       | 15%         | N/A
+ * First Order Bonus     | New user conversion  | 1x       | 1.4x        | 1.4x
  */
 
-// Generate consistent IDs for entity references
-const restaurantIds = v.range(1, 201).map(() => `rest_${v.uid(6)}`);
-const itemIds = v.range(1, 401).map(() => `item_${v.uid(7)}`);
-const orderIds = v.range(1, 5001).map(() => `order_${v.uid(8)}`);
-const couponCodes = v.range(1, 51).map(() => `QUICK${v.uid(5).toUpperCase()}`);
-
-const cuisineTypes = ["American", "Italian", "Chinese", "Japanese", "Mexican", "Indian", "Thai", "Mediterranean"];
-const itemCategories = ["entree", "appetizer", "drink", "dessert", "side"];
+// Generate consistent IDs for lookup tables and event properties
+const restaurantIds = v.range(1, 201).map(n => `rest_${v.uid(6)}`);
+const itemIds = v.range(1, 301).map(n => `item_${v.uid(7)}`);
+const orderIds = v.range(1, 5001).map(n => `order_${v.uid(8)}`);
+const couponCodes = v.range(1, 51).map(n => `QUICK${v.uid(5).toUpperCase()}`);
 
 /** @type {Config} */
 const config = {
@@ -177,14 +174,72 @@ const config = {
 	hasCampaigns: false,
 	isAnonymous: false,
 	hasAdSpend: false,
-	percentUsersBornInDataset: 35,
+	percentUsersBornInDataset: 50,
 	hasAvatar: true,
 	batchSize: 2_500_000,
 	concurrency: 1,
 	writeToDisk: false,
 	scdProps: {},
-	mirrorProps: {},
-	lookupTables: [],
+
+	funnels: [
+		{
+			sequence: ["account created", "restaurant browsed", "restaurant viewed"],
+			isFirstFunnel: true,
+			conversionRate: 80,
+			timeToConvert: 0.5,
+		},
+		{
+			// Browse and discover: most common action on food delivery apps
+			sequence: ["restaurant browsed", "restaurant viewed", "item added to cart"],
+			conversionRate: 55,
+			timeToConvert: 1,
+			weight: 5,
+			props: { "restaurant_id": u.pickAWinner(restaurantIds) },
+		},
+		{
+			// Search-driven ordering
+			sequence: ["search performed", "restaurant viewed", "item added to cart", "checkout started"],
+			conversionRate: 45,
+			timeToConvert: 2,
+			weight: 3,
+		},
+		{
+			// Full order lifecycle: checkout to delivery
+			sequence: ["checkout started", "order placed", "order tracked", "order delivered"],
+			conversionRate: 65,
+			timeToConvert: 2,
+			weight: 4,
+			props: { "order_id": u.pickAWinner(orderIds) },
+		},
+		{
+			// Post-order: rate and reorder
+			sequence: ["order delivered", "order rated", "reorder initiated"],
+			conversionRate: 40,
+			timeToConvert: 24,
+			weight: 2,
+		},
+		{
+			// Browsing promos and coupons
+			sequence: ["promotion viewed", "coupon applied", "checkout started"],
+			conversionRate: 50,
+			timeToConvert: 1,
+			weight: 2,
+		},
+		{
+			// Support flow
+			sequence: ["support ticket", "order rated"],
+			conversionRate: 45,
+			timeToConvert: 6,
+			weight: 1,
+		},
+		{
+			// Subscription management
+			sequence: ["subscription started", "order placed", "subscription cancelled"],
+			conversionRate: 20,
+			timeToConvert: 48,
+			weight: 1,
+		},
+	],
 
 	events: [
 		{
@@ -192,215 +247,226 @@ const config = {
 			weight: 1,
 			isFirstEvent: true,
 			properties: {
-				signup_method: ["email", "google", "apple", "facebook"],
-				referral_source: ["organic", "referral", "paid_ad", "social_media"],
+				"signup_method": ["email", "google", "apple", "facebook"],
+				"referral_code": u.pickAWinner([true, false], 0.3),
+				"trial_retained": [false],
 			}
 		},
 		{
-			event: "app opened",
-			weight: 2,
-			isSessionStartEvent: true,
+			event: "restaurant browsed",
+			weight: 18,
 			properties: {
-				open_source: ["direct", "push_notification", "deeplink", "widget"],
-			}
-		},
-		{
-			event: "browse restaurants",
-			weight: 15,
-			properties: {
-				cuisine_filter: cuisineTypes,
-				sort_by: ["recommended", "distance", "rating", "price", "delivery_time"],
-				price_filter: ["any", "$", "$$", "$$$", "$$$$"],
-			}
-		},
-		{
-			event: "search",
-			weight: 10,
-			properties: {
-				search_query: () => chance.pickone([
-					"pizza", "sushi", "burgers", "tacos", "pad thai",
-					"chicken wings", "salad", "ramen", "pasta", "sandwiches",
-					"burritos", "curry", "pho", "steak", "dumplings",
-					"acai bowl", "falafel", "poke", "fried rice", "soup"
-				]),
-				results_count: u.weighNumRange(0, 50, 0.8, 30),
-				search_type: ["dish", "restaurant", "cuisine"],
+				"cuisine_type": [
+					"American",
+					"Italian",
+					"Chinese",
+					"Japanese",
+					"Mexican",
+					"Indian",
+					"Thai",
+					"Mediterranean"
+				],
+				"sort_by": ["recommended", "distance", "rating", "price"],
+				"filter_applied": u.pickAWinner([true, false], 0.4),
+				"trial_retained": [false],
 			}
 		},
 		{
 			event: "restaurant viewed",
+			weight: 15,
+			properties: {
+				"restaurant_id": u.pickAWinner(restaurantIds),
+				"cuisine_type": [
+					"American",
+					"Italian",
+					"Chinese",
+					"Japanese",
+					"Mexican",
+					"Indian",
+					"Thai",
+					"Mediterranean"
+				],
+				"avg_rating": u.weighNumRange(1, 5, 0.8, 30),
+				"delivery_time_est_mins": u.weighNumRange(15, 90, 1.2, 40),
+				"price_tier": ["$", "$$", "$$$", "$$$$"],
+				"late_night_order": [false],
+				"trial_retained": [false],
+			}
+		},
+		{
+			event: "item added to cart",
 			weight: 14,
 			properties: {
-				restaurant_id: u.pickAWinner(restaurantIds),
-				cuisine_type: cuisineTypes,
-				avg_rating: u.weighNumRange(1, 5, 0.8, 30),
-				delivery_time_est: u.weighNumRange(15, 75, 1.0, 35),
-				price_tier: ["$", "$$", "$$$", "$$$$"],
+				"item_id": u.pickAWinner(itemIds),
+				"item_category": ["entree", "appetizer", "drink", "dessert", "side"],
+				"item_price": u.weighNumRange(3, 65, 1.0, 40),
+				"customization_count": u.weighNumRange(0, 5, 1.5, 20),
+				"late_night_order": [false],
+				"trial_retained": [false],
 			}
 		},
 		{
-			event: "view menu item",
-			weight: 16,
-			properties: {
-				item_id: u.pickAWinner(itemIds),
-				item_category: itemCategories,
-				item_price: u.weighNumRange(3, 55, 1.0, 25),
-				restaurant_id: u.pickAWinner(restaurantIds),
-				has_photo: u.pickAWinner([true, true, true, false]),
-			}
-		},
-		{
-			event: "favorite item",
+			event: "item removed from cart",
 			weight: 5,
 			properties: {
-				item_id: u.pickAWinner(itemIds),
-				item_category: itemCategories,
-				item_price: u.weighNumRange(3, 55, 1.0, 25),
-				restaurant_id: u.pickAWinner(restaurantIds),
-			}
-		},
-		{
-			event: "add to cart",
-			weight: 12,
-			properties: {
-				item_id: u.pickAWinner(itemIds),
-				item_price: u.weighNumRange(3, 55, 1.0, 25),
-				quantity: u.weighNumRange(1, 5, 2.0, 10),
-				customization_count: u.weighNumRange(0, 4, 1.5, 15),
-			}
-		},
-		{
-			event: "remove from cart",
-			weight: 3,
-			properties: {
-				item_id: u.pickAWinner(itemIds),
-				removal_reason: ["changed_mind", "too_expensive", "substitution"],
-			}
-		},
-		{
-			event: "checkout started",
-			weight: 8,
-			properties: {
-				cart_total: u.weighNumRange(10, 120, 0.8, 35),
-				items_count: u.weighNumRange(1, 8, 1.2, 15),
-				delivery_address_saved: u.pickAWinner([true, true, true, false]),
-			}
-		},
-		{
-			event: "order placed",
-			weight: 7,
-			properties: {
-				order_id: u.pickAWinner(orderIds),
-				payment_method: ["credit_card", "apple_pay", "google_pay", "debit_card", "paypal"],
-				order_total: u.weighNumRange(12, 150, 0.8, 35),
-				tip_amount: u.weighNumRange(0, 25, 1.5, 15),
-				delivery_fee: u.weighNumRange(0, 10, 1.0, 15),
-				magic_number_customer: [false],
-				session_amplified: [false],
-				bonus_order: [false],
-			}
-		},
-		{
-			event: "order tracked",
-			weight: 9,
-			properties: {
-				order_id: u.pickAWinner(orderIds),
-				tracking_status: ["confirmed", "preparing", "picked_up", "en_route", "delivered"],
-				eta_mins: u.weighNumRange(5, 60, 1.0, 25),
-			}
-		},
-		{
-			event: "order delivered",
-			weight: 6,
-			properties: {
-				order_id: u.pickAWinner(orderIds),
-				delivery_time_mins: u.weighNumRange(15, 80, 1.0, 35),
-				on_time: u.pickAWinner([true, true, true, false]),
-			}
-		},
-		{
-			event: "order rated",
-			weight: 5,
-			properties: {
-				order_id: u.pickAWinner(orderIds),
-				food_rating: u.weighNumRange(1, 5, 0.8, 30),
-				delivery_rating: u.weighNumRange(1, 5, 0.8, 30),
-				would_reorder: u.pickAWinner([true, true, false]),
-			}
-		},
-		{
-			event: "promotion viewed",
-			weight: 6,
-			properties: {
-				promo_type: ["banner", "push_notification", "in_feed", "email"],
-				promo_value: ["10%", "15%", "20%", "25%", "$5 off", "$10 off", "free delivery"],
+				"item_id": u.pickAWinner(itemIds),
+				"removal_reason": ["changed_mind", "too_expensive", "substitution"],
+				"trial_retained": [false],
 			}
 		},
 		{
 			event: "coupon applied",
+			weight: 4,
+			properties: {
+				"coupon_code": u.pickAWinner(couponCodes),
+				"discount_type": ["percent", "flat", "free_delivery"],
+				"discount_value": u.weighNumRange(5, 50, 1.2, 20),
+				"coupon_injected": [false],
+				"trial_retained": [false],
+			}
+		},
+		{
+			event: "checkout started",
+			weight: 12,
+			properties: {
+				"cart_total": u.weighNumRange(8, 150, 0.8, 40),
+				"items_count": u.weighNumRange(1, 8, 1.2, 20),
+				"delivery_address_saved": u.pickAWinner([true, false], 0.7),
+				"trial_retained": [false],
+			}
+		},
+		{
+			event: "order placed",
+			weight: 10,
+			properties: {
+				"order_id": u.pickAWinner(orderIds),
+				"payment_method": ["credit_card", "apple_pay", "google_pay", "paypal", "cash"],
+				"order_total": u.weighNumRange(10, 200, 0.8, 40),
+				"tip_amount": u.weighNumRange(0, 30, 1.5, 20),
+				"delivery_fee": u.weighNumRange(0, 12, 1.0, 20),
+				"surge_pricing": [false],
+				"rainy_week": [false],
+				"trial_retained": [false],
+			}
+		},
+		{
+			event: "order tracked",
+			weight: 13,
+			properties: {
+				"order_id": u.pickAWinner(orderIds),
+				"order_status": ["confirmed", "preparing", "picked_up", "en_route", "delivered"],
+				"eta_mins": u.weighNumRange(5, 60, 1.0, 30),
+				"trial_retained": [false],
+			}
+		},
+		{
+			event: "order delivered",
+			weight: 9,
+			properties: {
+				"order_id": u.pickAWinner(orderIds),
+				"actual_delivery_mins": u.weighNumRange(12, 90, 1.0, 40),
+				"on_time": u.pickAWinner([true, false], 0.7),
+				"trial_retained": [false],
+			}
+		},
+		{
+			event: "order rated",
+			weight: 7,
+			properties: {
+				"order_id": u.pickAWinner(orderIds),
+				"food_rating": u.weighNumRange(1, 5, 0.8, 30),
+				"delivery_rating": u.weighNumRange(1, 5, 0.8, 30),
+				"would_reorder": u.pickAWinner([true, false], 0.65),
+				"referral_user": [false],
+				"trial_retained": [false],
+			}
+		},
+		{
+			event: "search performed",
+			weight: 11,
+			properties: {
+				"search_query": () => chance.pickone([
+					"pizza", "sushi", "burger", "tacos", "pad thai",
+					"chicken", "salad", "ramen", "pasta", "sandwich",
+					"wings", "curry", "pho", "burritos", "steak"
+				]),
+				"results_count": u.weighNumRange(0, 50, 0.8, 30),
+				"search_type": ["restaurant", "cuisine", "dish"],
+				"trial_retained": [false],
+			}
+		},
+		{
+			event: "promotion viewed",
+			weight: 8,
+			properties: {
+				"promo_id": () => `promo_${v.uid(5)}`,
+				"promo_type": ["banner", "push", "in_feed"],
+				"promo_value": ["10%", "15%", "20%", "25%", "30%", "40%", "50%"],
+				"trial_retained": [false],
+			}
+		},
+		{
+			event: "subscription started",
+			weight: 2,
+			properties: {
+				"plan": u.pickAWinner(["quickbite_plus_monthly", "quickbite_plus_monthly", "quickbite_plus_annual"]),
+				"price": u.pickAWinner([9.99, 9.99, 79.99]),
+				"trial": u.pickAWinner([true, false], 0.5),
+				"trial_retained": [false],
+			}
+		},
+		{
+			event: "subscription cancelled",
+			weight: 1,
+			properties: {
+				"reason": ["too_expensive", "not_ordering_enough", "found_alternative", "bad_experience"],
+				"months_subscribed": u.weighNumRange(1, 24, 1.5, 15),
+				"trial_retained": [false],
+			}
+		},
+		{
+			event: "support ticket",
 			weight: 3,
 			properties: {
-				coupon_code: u.pickAWinner(couponCodes),
-				discount_type: ["percent", "flat", "free_delivery"],
-				discount_value: u.weighNumRange(5, 40, 1.2, 15),
+				"issue_type": ["missing_item", "wrong_order", "late_delivery", "quality_issue", "refund_request"],
+				"order_id": u.pickAWinner(orderIds),
+				"trial_retained": [false],
 			}
 		},
 		{
 			event: "reorder initiated",
-			weight: 4,
+			weight: 6,
 			properties: {
-				original_order_id: u.pickAWinner(orderIds),
-				days_since_original: u.weighNumRange(1, 45, 1.5, 20),
+				"order_id": u.pickAWinner(orderIds),
+				"original_order_age_days": u.weighNumRange(1, 60, 1.5, 30),
+				"referral_user": [false],
+				"trial_retained": [false],
 			}
-		},
-		{
-			event: "support contacted",
-			weight: 2,
-			properties: {
-				issue_type: ["missing_item", "wrong_order", "late_delivery", "quality_issue", "refund_request", "app_bug"],
-				order_id: u.pickAWinner(orderIds),
-			}
-		},
-	],
-
-	funnels: [
-		{
-			sequence: ["account created", "browse restaurants", "restaurant viewed"],
-			isFirstFunnel: true,
-			conversionRate: 75,
-			timeToConvert: 0.5,
-		},
-		{
-			sequence: ["view menu item", "add to cart", "checkout started", "order placed"],
-			conversionRate: 50,
-			timeToConvert: 1,
-			weight: 5,
-		},
-		{
-			sequence: ["browse restaurants", "restaurant viewed", "view menu item", "favorite item"],
-			conversionRate: 35,
-			timeToConvert: 2,
-			weight: 3,
-		},
-		{
-			sequence: ["order delivered", "order rated", "reorder initiated"],
-			conversionRate: 40,
-			timeToConvert: 24,
-			weight: 2,
 		},
 	],
 
 	superProps: {
 		platform: ["iOS", "Android", "Web"],
 		subscription_tier: u.pickAWinner(["Free", "Free", "Free", "Free", "QuickBite+"]),
-		city: ["New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "San Francisco", "Seattle", "Miami"],
+		city: ["New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "San Francisco"],
 	},
 
 	userProps: {
-		preferred_cuisine: cuisineTypes,
-		avg_order_value: u.weighNumRange(15, 80, 0.8, 35),
-		orders_per_month: u.weighNumRange(1, 15, 1.5, 8),
-		account_age_days: u.weighNumRange(1, 365, 0.5, 60),
+		"preferred_cuisine": [
+			"American",
+			"Italian",
+			"Chinese",
+			"Japanese",
+			"Mexican",
+			"Indian",
+			"Thai",
+			"Mediterranean"
+		],
+		"avg_order_value": u.weighNumRange(15, 80, 0.8, 40),
+		"orders_per_month": u.weighNumRange(1, 20, 1.5, 10),
+		"favorite_restaurant_count": u.weighNumRange(1, 10),
+		"is_high_risk": [false],
+		"churn_risk_score": [0],
 	},
 
 	groupKeys: [
@@ -409,196 +475,304 @@ const config = {
 
 	groupProps: {
 		restaurant_id: {
-			name: () => `${chance.pickone(["The", "Big", "Lucky", "Golden", "Fresh", "Urban", "Tasty", "Royal"])} ${chance.pickone(["Kitchen", "Grill", "Bowl", "Wok", "Bistro", "Plate", "Table", "Fork"])}`,
-			cuisine: cuisineTypes,
-			avg_rating: u.weighNumRange(1, 5, 0.8, 30),
-			delivery_radius_mi: u.weighNumRange(1, 12, 1.0, 8),
+			"name": () => `${chance.pickone(["The", "Big", "Lucky", "Golden", "Fresh", "Urban"])} ${chance.pickone(["Kitchen", "Grill", "Bowl", "Wok", "Bistro", "Plate", "Table", "Fork"])}`,
+			"cuisine": [
+				"American",
+				"Italian",
+				"Chinese",
+				"Japanese",
+				"Mexican",
+				"Indian",
+				"Thai",
+				"Mediterranean"
+			],
+			"avg_rating": u.weighNumRange(1, 5, 0.8, 30),
+			"delivery_radius_mi": u.weighNumRange(1, 15, 1.0, 10),
 		}
 	},
+
+	lookupTables: [],
 
 	/**
 	 * ARCHITECTED ANALYTICS HOOKS
 	 *
-	 * This hook function creates 4 deliberate patterns in the data:
+	 * This hook function creates 8 deliberate patterns in the data:
 	 *
-	 * 1. BELL CURVE: VIEW → FAVORITE RELATIONSHIP
-	 *    Users who view ~25 menu items favorite ~5 (peak). Few views or 55+ views → 0.
-	 *    The curve produces a range of 0-5 favorites across the user population.
-	 *
-	 * 2. MAGIC NUMBER: 3 FAVORITES = PEAK ORDER PERFORMANCE
-	 *    Exactly 3 favorites is the sweet spot. These users get the highest order
-	 *    values (1.6x) and extra orders. Users with 1-2 favorites get a small boost (1.15x).
-	 *    Users with 4+ favorites (over-favoriters) are PENALIZED: lower order values (0.7x),
-	 *    fewer orders, and fewer view events — they favorite impulsively without engaging deeply.
-	 *
-	 * 3. SESSION AMPLIFICATION
-	 *    The magic-number boost is amplified for users with 10+ sessions (2.2x instead of 1.6x).
-	 *
-	 * 4. NO FAVORITES → CHURN
-	 *    Users who never favorite an item churn significantly — 60% of their late events are removed.
+	 * 1. LUNCH RUSH CONVERSION: Orders during lunch/dinner hours convert at higher rates
+	 * 2. COUPON INJECTION: Free-tier users get coupons spliced into funnels
+	 * 3. LATE NIGHT MUNCHIES: Late-night orders skew to fast food with inflated prices
+	 * 4. RAINY WEEK SURGE: Days 20-27 have surge pricing and doubled order volume
+	 * 5. REFERRAL POWER USERS: Referred users reorder more and rate higher
+	 * 6. TRIAL CONVERSION: Trial subscribers with 3+ early orders are retained
+	 * 7. SUPPORT TICKET CHURN: 15% of users flagged as high-risk churners
+	 * 8. FIRST ORDER BONUS: New users in the Order Completion funnel convert at 90%
 	 */
 	hook: function (record, type, meta) {
+		const NOW = dayjs();
+		const DATASET_START = NOW.subtract(days, 'days');
+		const RAINY_WEEK_START = DATASET_START.add(20, 'days');
+		const RAINY_WEEK_END = DATASET_START.add(27, 'days');
 
+		// ═══════════════════════════════════════════════════════════════════
+		// HOOK 1: LUNCH RUSH CONVERSION (funnel-pre)
+		// During lunch (11AM-1PM) and dinner (5PM-8PM), funnel conversion
+		// rates are boosted to reflect real-world meal-time ordering surges.
+		// ═══════════════════════════════════════════════════════════════════
+		if (type === "funnel-pre") {
+			if (meta && meta.firstEventTime) {
+				const hour = dayjs.unix(meta.firstEventTime).hour();
+
+				record.props = record.props || {};
+
+				// Lunch rush: 11AM - 1PM
+				if (hour >= 11 && hour <= 13) {
+					record.conversionRate = record.conversionRate * 1.4;
+					record.props.lunch_rush = true;
+					record.props.dinner_rush = false;
+				}
+				// Dinner rush: 5PM - 8PM
+				else if (hour >= 17 && hour <= 20) {
+					record.conversionRate = record.conversionRate * 1.2;
+					record.props.lunch_rush = false;
+					record.props.dinner_rush = true;
+				} else {
+					record.props.lunch_rush = false;
+					record.props.dinner_rush = false;
+				}
+			}
+
+			// ═══════════════════════════════════════════════════════════════
+			// HOOK 8: FIRST ORDER BONUS (funnel-pre)
+			// New users (born in dataset) get a massive conversion boost on
+			// the Order Completion funnel, simulating first-order promotions
+			// and new-user incentives that drive initial purchases.
+			// ═══════════════════════════════════════════════════════════════
+			if (record.sequence &&
+				record.sequence[0] === "checkout started" &&
+				record.sequence[1] === "order placed") {
+				record.props = record.props || {};
+				// Use hash to deterministically assign ~50% of users as "new"
+				const userId = meta && meta.user && (meta.user.distinct_id || String(meta.user));
+				const isNewUser = userId && userId.charCodeAt(0) % 2 === 0;
+				if (isNewUser) {
+					record.conversionRate = Math.min(98, record.conversionRate * 1.4);
+					record.props.first_order_bonus = true;
+				} else {
+					record.props.first_order_bonus = false;
+				}
+			}
+		}
+
+		// ═══════════════════════════════════════════════════════════════════
+		// HOOK 2: COUPON INJECTION (funnel-post)
+		// Free-tier users get coupon_applied events spliced into their
+		// funnel sequences 30% of the time, simulating promotional nudges
+		// that push non-subscribers toward conversion.
+		// ═══════════════════════════════════════════════════════════════════
+		if (type === "funnel-post") {
+			if (Array.isArray(record) && record.length >= 2) {
+				// Check if user is Free tier from first event's super props
+				const firstEvent = record[0];
+				const isFreeUser = firstEvent && firstEvent.subscription_tier === "Free";
+
+				if (isFreeUser && chance.bool({ likelihood: 30 })) {
+					// Pick a random insertion point between funnel steps
+					const insertIdx = chance.integer({ min: 1, max: record.length - 1 });
+					const prevEvent = record[insertIdx - 1];
+					const nextEvent = record[insertIdx];
+					const midTime = dayjs(prevEvent.time).add(
+						dayjs(nextEvent.time).diff(dayjs(prevEvent.time)) / 2,
+						'milliseconds'
+					).toISOString();
+
+					const couponTemplate = record.find(e => e.event === "coupon applied");
+					const couponEvent = {
+						...(couponTemplate || firstEvent),
+						event: "coupon applied",
+						time: midTime,
+						user_id: firstEvent.user_id,
+						subscription_tier: firstEvent.subscription_tier,
+						platform: firstEvent.platform,
+						city: firstEvent.city,
+						coupon_code: chance.pickone(couponCodes),
+						discount_type: chance.pickone(["percent", "flat", "free_delivery"]),
+						discount_value: chance.integer({ min: 10, max: 30 }),
+						coupon_injected: true,
+					};
+					record.splice(insertIdx, 0, couponEvent);
+				}
+			}
+		}
+
+		// ═══════════════════════════════════════════════════════════════════
+		// HOOK 3: LATE NIGHT MUNCHIES (event)
+		// Between 10PM and 2AM, restaurant views and cart additions skew
+		// heavily toward fast food (American cuisine) with inflated prices,
+		// modeling the real-world late-night ordering pattern.
+		// ═══════════════════════════════════════════════════════════════════
+		if (type === "event") {
+			const EVENT_TIME = dayjs(record.time);
+			const hour = EVENT_TIME.hour();
+			const isLateNight = hour >= 22 || hour <= 2;
+
+			if (record.event === "restaurant viewed" || record.event === "item added to cart") {
+				if (isLateNight) {
+					// 70% of late-night browsing/ordering is fast food (American)
+					if (chance.bool({ likelihood: 70 })) {
+						if (record.cuisine_type !== undefined) {
+							record.cuisine_type = "American";
+						}
+					}
+
+					// Boost item price by 1.3x (late-night surcharge effect)
+					if (record.item_price !== undefined) {
+						record.item_price = Math.round(record.item_price * 1.3 * 100) / 100;
+					}
+
+					record.late_night_order = true;
+				} else {
+					record.late_night_order = false;
+				}
+			}
+
+			// ═══════════════════════════════════════════════════════════════
+			// HOOK 4: RAINY WEEK SURGE (event)
+			// During days 20-27, delivery fees double on order_placed events
+			// and there is a 40% chance of duplicating the event, simulating
+			// a weather-driven demand surge with surge pricing.
+			// ═══════════════════════════════════════════════════════════════
+			if (record.event === "order placed") {
+				if (EVENT_TIME.isAfter(RAINY_WEEK_START) && EVENT_TIME.isBefore(RAINY_WEEK_END)) {
+					record.delivery_fee = (record.delivery_fee || 5) * 2;
+					record.surge_pricing = true;
+					record.rainy_week = true;
+				} else {
+					record.surge_pricing = false;
+				}
+			}
+		}
+
+		// ═══════════════════════════════════════════════════════════════════
+		// HOOK 5: REFERRAL POWER USERS (everything)
+		// Users who signed up with a referral code get 2x more reorder
+		// events and boosted food ratings. Referred users are more loyal
+		// and satisfied, mirroring real referral program outcomes.
+		// ═══════════════════════════════════════════════════════════════════
 		if (type === "everything") {
 			const userEvents = record;
-			if (!userEvents || userEvents.length === 0) return record;
 
-			// ═══════════════════════════════════════════════════════════════
-			// HOOK 1: BELL CURVE — VIEWS → FAVORITES
-			// Gaussian: peak at 25 views → 5 favorites. Sigma=12.
-			// Users with ≤3 views are forced to 0 favorites.
-			// Range: 0-5 favorites across the population.
-			// ═══════════════════════════════════════════════════════════════
+			// First pass: identify user patterns
+			let isReferralUser = false;
+			let hasTrialSubscription = false;
+			let earlyOrderCount = 0;
+			let firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
 
-			// Count view menu item events
-			let viewCount = 0;
-			userEvents.forEach(e => {
-				if (e.event === "view menu item") viewCount++;
+			userEvents.forEach((event) => {
+				const eventTime = dayjs(event.time);
+				const daysSinceStart = firstEventTime ? eventTime.diff(firstEventTime, 'days', true) : 0;
+
+				// Hook #5: Track referral users
+				if (event.event === "account created" && event.referral_code === true) {
+					isReferralUser = true;
+				}
+
+				// Hook #6: Track trial subscribers and early orders
+				if (event.event === "subscription started" && event.trial === true) {
+					hasTrialSubscription = true;
+				}
+				if (event.event === "order placed" && daysSinceStart <= 14) {
+					earlyOrderCount++;
+				}
 			});
 
-			// Gaussian: peak at 25 views → 5 favorites, sigma=12
-			// Users with very few views (≤3) get forced to 0
-			const rawTarget = Math.round(5 * Math.exp(-((viewCount - 25) ** 2) / (2 * 12 ** 2)));
-			const targetFav = viewCount <= 3 ? 0 : rawTarget;
-
-			// Count current favorites
-			let currentFav = 0;
-			userEvents.forEach(e => {
-				if (e.event === "favorite item") currentFav++;
-			});
-
-			// Adjust favorites to match bell curve target
-			if (currentFav > targetFav) {
-				// Remove excess favorites (backwards to avoid index issues)
-				let toRemove = currentFav - targetFav;
-				for (let i = userEvents.length - 1; i >= 0 && toRemove > 0; i--) {
-					if (userEvents[i].event === "favorite item") {
-						userEvents.splice(i, 1);
-						toRemove--;
+			// Second pass: apply referral power user effects
+			userEvents.forEach((event, idx) => {
+				if (event.event === "order rated") {
+					if (isReferralUser) {
+						event.food_rating = chance.integer({ min: 4, max: 5 });
+						event.referral_user = true;
+					} else {
+						event.referral_user = false;
 					}
 				}
-			} else if (currentFav < targetFav) {
-				// Add favorites near existing view events
-				const viewEvents = userEvents.filter(e => e.event === "view menu item");
-				const existingFav = userEvents.find(e => e.event === "favorite item");
-				const toAdd = targetFav - currentFav;
-				for (let j = 0; j < toAdd && j < viewEvents.length; j++) {
-					const sourceView = viewEvents[j];
-					const template = existingFav || sourceView;
-					userEvents.push({
-						...template,
-						event: "favorite item",
-						time: dayjs(sourceView.time).add(chance.integer({ min: 10, max: 120 }), 'seconds').toISOString(),
-						user_id: sourceView.user_id,
-						item_id: sourceView.item_id,
-						item_category: sourceView.item_category,
-						item_price: sourceView.item_price,
-						restaurant_id: sourceView.restaurant_id,
+				if (isReferralUser && event.event === "reorder initiated" && chance.bool({ likelihood: 50 })) {
+					const eventTime = dayjs(event.time);
+					const extraReorder = {
+						...event,
+						time: eventTime.add(chance.integer({ min: 1, max: 7 }), 'days').toISOString(),
+						user_id: event.user_id,
+						order_id: chance.pickone(orderIds),
+						original_order_age_days: chance.integer({ min: 3, max: 30 }),
+						referral_user: true,
+					};
+					userEvents.splice(idx + 1, 0, extraReorder);
+				}
+			});
+
+			// ═══════════════════════════════════════════════════════════════
+			// HOOK 6: TRIAL CONVERSION (everything)
+			// Trial subscribers who place 3+ orders in their first 14 days
+			// are retained. Those with fewer orders churn: 60% of their
+			// events after day 14 are removed, simulating subscription
+			// abandonment after a failed trial experience.
+			// ═══════════════════════════════════════════════════════════════
+			if (hasTrialSubscription) {
+				const trialCutoff = firstEventTime ? firstEventTime.add(14, 'days') : null;
+
+				if (earlyOrderCount >= 3) {
+					// Retained: mark events as trial_retained
+					userEvents.forEach((event) => {
+						event.trial_retained = true;
 					});
-				}
-			}
-
-			// ═══════════════════════════════════════════════════════════════
-			// Recount favorites after adjustment
-			// ═══════════════════════════════════════════════════════════════
-			let favCount = 0;
-			userEvents.forEach(e => {
-				if (e.event === "favorite item") favCount++;
-			});
-
-			// ═══════════════════════════════════════════════════════════════
-			// Count distinct sessions (for Hook 3)
-			// ═══════════════════════════════════════════════════════════════
-			const sessionSet = new Set();
-			userEvents.forEach(e => {
-				if (e.session_id) sessionSet.add(e.session_id);
-			});
-			const sessionCount = sessionSet.size;
-
-			// ═══════════════════════════════════════════════════════════════
-			// HOOK 2 + 3: MAGIC NUMBER (3 FAVORITES) + SESSION AMPLIFICATION
-			//
-			// Exactly 3 favorites = peak order performance (the sweet spot).
-			// 1-2 favorites = small boost (engaged but haven't found the groove).
-			// 4+ favorites = over-favoriters: penalized with lower order values,
-			//   fewer orders, and fewer view events.
-			// Session amplification only applies at the magic number.
-			// ═══════════════════════════════════════════════════════════════
-			if (favCount === 3) {
-				// MAGIC NUMBER: maximum order boost
-				const amplified = sessionCount > 10;
-				const valueMultiplier = amplified ? 2.2 : 1.6;
-				const dupeChance = amplified ? 60 : 35;
-
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					const event = userEvents[i];
-					if (event.event === "order placed") {
-						event.order_total = Math.round((event.order_total || 30) * valueMultiplier * 100) / 100;
-						event.magic_number_customer = true;
-						if (amplified) event.session_amplified = true;
-
-						if (chance.bool({ likelihood: dupeChance })) {
-							const extraOrder = {
-								...event,
-								time: dayjs(event.time).add(chance.integer({ min: 1, max: 5 }), 'days').toISOString(),
-								user_id: event.user_id,
-								order_id: chance.pickone(orderIds),
-								payment_method: chance.pickone(["credit_card", "apple_pay", "google_pay", "debit_card"]),
-								order_total: Math.round(chance.integer({ min: 25, max: 120 }) * valueMultiplier * 100) / 100,
-								tip_amount: chance.integer({ min: 3, max: 20 }),
-								delivery_fee: chance.integer({ min: 0, max: 8 }),
-								magic_number_customer: true,
-								bonus_order: true,
-								session_amplified: amplified ? true : false,
-							};
-							userEvents.splice(i + 1, 0, extraOrder);
+				} else {
+					// Churned: remove 60% of events after day 14
+					userEvents.forEach((event) => {
+						event.trial_retained = false;
+					});
+					for (let i = userEvents.length - 1; i >= 0; i--) {
+						const evt = userEvents[i];
+						if (trialCutoff && dayjs(evt.time).isAfter(trialCutoff)) {
+							if (chance.bool({ likelihood: 60 })) {
+								userEvents.splice(i, 1);
+							}
 						}
 					}
 				}
-			} else if (favCount > 0 && favCount < 3) {
-				// Below magic number: small boost (engaged but not at sweet spot)
-				for (let i = 0; i < userEvents.length; i++) {
-					if (userEvents[i].event === "order placed") {
-						userEvents[i].order_total = Math.round((userEvents[i].order_total || 30) * 1.15 * 100) / 100;
-					}
-				}
-			} else if (favCount > 3) {
-				// Over-favoriters: PENALTY
-				// Lower order values (0.7x) and remove ~30% of orders
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					if (userEvents[i].event === "order placed") {
-						userEvents[i].order_total = Math.round((userEvents[i].order_total || 30) * 0.7 * 100) / 100;
-						if (chance.bool({ likelihood: 30 })) {
-							userEvents.splice(i, 1);
-						}
-					}
-				}
-				// Remove view events — scale with distance from magic number
-				const excessFavs = favCount - 3;
-				let viewsToRemove = Math.ceil(viewCount * Math.min(0.6, excessFavs * 0.25));
-				for (let i = userEvents.length - 1; i >= 0 && viewsToRemove > 0; i--) {
-					if (userEvents[i].event === "view menu item") {
-						userEvents.splice(i, 1);
-						viewsToRemove--;
-					}
-				}
 			}
 
 			// ═══════════════════════════════════════════════════════════════
-			// HOOK 4: NO FAVORITES → CHURN
-			// Users who never favorite any item lose ~60% of their events
-			// from the second half of their timeline.
+			// HOOK 4: RAINY WEEK SURGE - duplicate order events (everything)
+			// Events tagged surge_pricing=true in the event hook get a 40%
+			// chance of duplication here, creating visible demand spikes.
 			// ═══════════════════════════════════════════════════════════════
-			if (favCount === 0) {
-				const midIdx = Math.floor(userEvents.length / 2);
-				for (let i = userEvents.length - 1; i >= midIdx; i--) {
-					if (chance.bool({ likelihood: 60 })) {
-						userEvents.splice(i, 1);
-					}
+			const rainyDuplicates = [];
+			userEvents.forEach((event) => {
+				if (event.surge_pricing === true && event.event === "order placed" && chance.bool({ likelihood: 40 })) {
+					const dup = JSON.parse(JSON.stringify(event));
+					dup.time = dayjs(event.time).add(chance.integer({ min: 5, max: 60 }), 'minutes').toISOString();
+					dup.rainy_week = true;
+					rainyDuplicates.push(dup);
 				}
+			});
+			if (rainyDuplicates.length > 0) {
+				userEvents.push(...rainyDuplicates);
 			}
+		}
 
-			return record;
+		// ═══════════════════════════════════════════════════════════════════
+		// HOOK 7: SUPPORT TICKET CHURN (user)
+		// 15% of users are flagged as high-risk with elevated churn scores.
+		// The remaining users get low churn scores. This creates a clear
+		// segmentation opportunity for proactive retention campaigns.
+		// ═══════════════════════════════════════════════════════════════════
+		if (type === "user") {
+			if (chance.bool({ likelihood: 15 })) {
+				record.is_high_risk = true;
+				record.churn_risk_score = chance.integer({ min: 70, max: 100 });
+			} else {
+				record.is_high_risk = false;
+				record.churn_risk_score = chance.integer({ min: 0, max: 40 });
+			}
 		}
 
 		return record;

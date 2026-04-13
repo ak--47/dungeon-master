@@ -1,0 +1,502 @@
+{
+  "schema": {
+    "token": "",
+    "seed": "group-analytics",
+    "numDays": 60,
+    "numEvents": 30000,
+    "numUsers": 500,
+    "format": "json",
+    "region": "US",
+    "hasAnonIds": false,
+    "hasSessionIds": false,
+    "hasAdSpend": false,
+    "hasLocation": false,
+    "hasAndroidDevices": false,
+    "hasIOSDevices": false,
+    "hasDesktopDevices": true,
+    "hasBrowser": true,
+    "hasCampaigns": false,
+    "isAnonymous": false,
+    "alsoInferFunnels": false,
+    "concurrency": 1,
+    "batchSize": 2500000,
+    "writeToDisk": false,
+    "events": [
+      {
+        "event": "feature used",
+        "weight": 8,
+        "properties": {
+          "feature": [
+            "dashboard",
+            "reports",
+            "settings",
+            "api",
+            "integrations"
+          ]
+        }
+      },
+      {
+        "event": "subscription change",
+        "weight": 2,
+        "properties": {
+          "plan": [
+            "free",
+            "starter",
+            "business",
+            "enterprise"
+          ],
+          "action": [
+            "upgrade",
+            "downgrade",
+            "renew"
+          ]
+        }
+      },
+      {
+        "event": "support ticket",
+        "weight": 3,
+        "properties": {
+          "priority": {
+            "functionName": "arrow",
+            "body": "function generateWeightedArray() {\n\t\tconst weightedArray = [];\n\n\t\t// Add each value to the array the number of times specified by its weight\n\t\tweightedItems.forEach(({ value, weight }) => {\n\t\t\tif (!weight) weight = 1;\n\t\t\tfor (let i = 0; i < weight; i++) {\n\t\t\t\tweightedArray.push(value);\n\t\t\t}\n\t\t});\n\n\t\treturn weightedArray;\n\t}"
+          },
+          "category": [
+            "billing",
+            "technical",
+            "onboarding",
+            "feature request"
+          ]
+        }
+      },
+      {
+        "event": "task completed",
+        "weight": 7,
+        "properties": {
+          "type": [
+            "bug",
+            "feature",
+            "chore",
+            "docs"
+          ],
+          "points": [
+            6,
+            7,
+            13,
+            3,
+            4,
+            6,
+            7,
+            12,
+            9,
+            2,
+            7,
+            8,
+            5,
+            9,
+            4,
+            5,
+            4,
+            6,
+            11,
+            8,
+            9,
+            2,
+            5,
+            8,
+            6,
+            7,
+            6,
+            3,
+            8,
+            9,
+            4,
+            4,
+            10,
+            6,
+            4,
+            12,
+            4,
+            6,
+            4,
+            8,
+            7,
+            6,
+            4,
+            7,
+            6,
+            6,
+            6,
+            6,
+            8,
+            4
+          ]
+        }
+      },
+      {
+        "event": "meeting scheduled",
+        "weight": 4,
+        "properties": {
+          "duration": [
+            15,
+            30,
+            45,
+            60
+          ],
+          "type": [
+            "standup",
+            "planning",
+            "retro",
+            "1:1",
+            "all-hands"
+          ]
+        }
+      },
+      {
+        "event": "code committed",
+        "weight": 6,
+        "properties": {
+          "language": [
+            "javascript",
+            "python",
+            "go",
+            "rust",
+            "java"
+          ],
+          "linesChanged": [
+            210,
+            161,
+            160,
+            134,
+            125,
+            152,
+            149,
+            347,
+            119,
+            152,
+            134,
+            388,
+            119,
+            378,
+            378,
+            364,
+            128,
+            373,
+            136,
+            339,
+            389,
+            361,
+            164,
+            373,
+            144,
+            146,
+            170,
+            161,
+            126,
+            191,
+            152,
+            137,
+            135,
+            124,
+            341,
+            100,
+            106,
+            171,
+            159,
+            303,
+            154,
+            346,
+            362,
+            137,
+            131,
+            109,
+            126,
+            111,
+            178,
+            384
+          ]
+        }
+      },
+      {
+        "event": "deployment run",
+        "weight": 3,
+        "properties": {
+          "environment": [
+            "dev",
+            "staging",
+            "production"
+          ],
+          "status": {
+            "functionName": "arrow",
+            "body": "function generateWeightedArray() {\n\t\tconst weightedArray = [];\n\n\t\t// Add each value to the array the number of times specified by its weight\n\t\tweightedItems.forEach(({ value, weight }) => {\n\t\t\tif (!weight) weight = 1;\n\t\t\tfor (let i = 0; i < weight; i++) {\n\t\t\t\tweightedArray.push(value);\n\t\t\t}\n\t\t});\n\n\t\treturn weightedArray;\n\t}"
+          },
+          "durationSec": [
+            84,
+            73,
+            88,
+            92,
+            101,
+            224,
+            92,
+            103,
+            233,
+            101,
+            82,
+            90,
+            87,
+            75,
+            89,
+            232,
+            116,
+            125,
+            211,
+            87,
+            80,
+            87,
+            219,
+            83,
+            96,
+            83,
+            94,
+            100,
+            227,
+            232,
+            88,
+            76,
+            198,
+            205,
+            119,
+            81,
+            81,
+            105,
+            83,
+            155,
+            225,
+            106,
+            79,
+            237,
+            107,
+            79,
+            210,
+            219,
+            138,
+            218
+          ]
+        }
+      },
+      {
+        "event": "login",
+        "weight": 5,
+        "isFirstEvent": true,
+        "properties": {
+          "method": [
+            "password",
+            "sso",
+            "oauth"
+          ]
+        }
+      }
+    ],
+    "funnels": [],
+    "superProps": {},
+    "userProps": {
+      "role": [
+        "engineer",
+        "designer",
+        "pm",
+        "manager",
+        "exec"
+      ]
+    },
+    "scdProps": {},
+    "mirrorProps": {},
+    "groupKeys": [
+      [
+        "company_id",
+        50,
+        [
+          "feature used",
+          "subscription change",
+          "support ticket"
+        ]
+      ],
+      [
+        "team_id",
+        200,
+        [
+          "feature used",
+          "task completed",
+          "meeting scheduled"
+        ]
+      ],
+      [
+        "project_id",
+        500,
+        [
+          "task completed",
+          "code committed",
+          "deployment run"
+        ]
+      ]
+    ],
+    "groupProps": {
+      "company_id": {
+        "name": {
+          "functionName": "arrow",
+          "body": "() => chance.company()"
+        },
+        "industry": [
+          "technology",
+          "finance",
+          "healthcare",
+          "retail",
+          "education",
+          "manufacturing"
+        ],
+        "plan": [
+          "free",
+          "starter",
+          "business",
+          "enterprise"
+        ],
+        "employee_count": [
+          1318,
+          1354,
+          1245,
+          1574,
+          1966,
+          2505,
+          1131,
+          1110,
+          1212,
+          3966,
+          1221,
+          1301,
+          1266,
+          1264,
+          1230,
+          1158,
+          3079,
+          1346,
+          3842,
+          3442,
+          1415,
+          1411,
+          1594,
+          1573,
+          1253,
+          3600,
+          3514,
+          3678,
+          1181,
+          1206,
+          1533,
+          3919,
+          3886,
+          1348,
+          1149,
+          1231,
+          1284,
+          3557,
+          1365,
+          1304,
+          3511,
+          3563,
+          3321,
+          970,
+          1324,
+          3394,
+          1646,
+          1280,
+          3886,
+          3781
+        ]
+      },
+      "team_id": {
+        "name": {
+          "functionName": "arrow",
+          "body": "() => `${chance.pickone([\"Alpha\", \"Beta\", \"Gamma\", \"Delta\", \"Epsilon\", \"Zeta\", \"Theta\", \"Omega\"])} ${chance.pickone([\"Squad\", \"Team\", \"Pod\", \"Crew\"])}`"
+        },
+        "department": [
+          "engineering",
+          "design",
+          "product",
+          "marketing",
+          "sales",
+          "support"
+        ],
+        "size": [
+          7,
+          16,
+          13,
+          11,
+          11,
+          5,
+          14,
+          7,
+          11,
+          14,
+          10,
+          7,
+          9,
+          9,
+          7,
+          10,
+          12,
+          8,
+          10,
+          11,
+          8,
+          7,
+          6,
+          8,
+          10,
+          12,
+          17,
+          10,
+          6,
+          13,
+          14,
+          16,
+          7,
+          13,
+          4,
+          10,
+          16,
+          9,
+          12,
+          10,
+          8,
+          12,
+          13,
+          17,
+          7,
+          7,
+          9,
+          7,
+          7,
+          12
+        ]
+      },
+      "project_id": {
+        "name": {
+          "functionName": "arrow",
+          "body": "() => `${chance.pickone([\"project\", \"initiative\", \"sprint\"])} ${chance.word()}`"
+        },
+        "status": [
+          "active",
+          "paused",
+          "completed",
+          "archived"
+        ],
+        "priority": {
+          "functionName": "arrow",
+          "body": "function generateWeightedArray() {\n\t\tconst weightedArray = [];\n\n\t\t// Add each value to the array the number of times specified by its weight\n\t\tweightedItems.forEach(({ value, weight }) => {\n\t\t\tif (!weight) weight = 1;\n\t\t\tfor (let i = 0; i < weight; i++) {\n\t\t\t\tweightedArray.push(value);\n\t\t\t}\n\t\t});\n\n\t\treturn weightedArray;\n\t}"
+        }
+      }
+    },
+    "lookupTables": []
+  },
+  "hooks": "function (record, type, meta) {\n\t\treturn record;\n\t}",
+  "timestamp": "2026-04-13T02:27:00.678Z",
+  "version": "4.0"
+}

@@ -113,7 +113,7 @@ export interface Dungeon {
     /** User persona/archetype definitions. Each persona defines a behavioral segment with distinct event volumes, conversion rates, and properties. */
     personas?: Persona[];
     /** World events that affect all users simultaneously (outages, campaigns, product launches). */
-    worldEvents?: WorldEvent[];
+    worldEvents?: WorldEvent[] | ResolvedWorldEvent[];
     /** Engagement decay configuration. Controls how user activity decreases over their lifetime. */
     engagementDecay?: EngagementDecay;
     /** Data quality imperfections to inject (nulls, duplicates, bots, late-arriving events). */
@@ -794,6 +794,10 @@ export interface FeatureConfig {
     affectsEvents?: string[] | "*";
     /** Conversion rate lift for users who adopted the feature. */
     conversionLift?: number;
+    /** Resolved logistic curve params (set by config-validator). */
+    _resolvedCurve?: { k: number; midpoint: number };
+    /** Pre-computed adopted values (set by config-validator). */
+    _adoptedValues?: any[];
 }
 
 /**
@@ -822,6 +826,10 @@ export interface AnomalyConfig {
     count?: number;
     /** Properties injected on anomalous events. */
     properties?: Record<string, any>;
+    /** Resolved absolute start time in unix seconds (set by config-validator). */
+    _startUnix?: number;
+    /** Resolved absolute end time in unix seconds (set by config-validator). */
+    _endUnix?: number;
 }
 
 /**
