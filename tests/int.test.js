@@ -196,7 +196,8 @@ describe.sequential('generators', () => {
 		expect(result).toHaveProperty('event', 'test_event');
 		expect(result).toHaveProperty('device_id', 'anon_id');
 		// expect(result).toHaveProperty('user_id', 'known_id'); // Known ID not always on the event
-		expect(result).toHaveProperty('session_id', 'session_id');
+		// Session IDs are now assigned post-hoc in user-loop.js, not in makeEvent
+		expect(result).not.toHaveProperty('session_id');
 		// expect(result).toHaveProperty('source', 'dm4');
 		expect(result).toHaveProperty('insert_id');
 		expect(result).toHaveProperty('time');

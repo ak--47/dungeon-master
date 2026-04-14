@@ -56,7 +56,9 @@ import {
 	interruptArray,
 	optimizedBoxMuller,
 	datesBetween,
-	weighChoices
+	weighChoices,
+	generateSessionId,
+	assignSessionIds
 } from '../lib/utils/utils.js';
 
 import {
@@ -2166,5 +2168,73 @@ describe('garbage collection analysis', () => {
 		}
 
 		expect(results.length).toBe(iterations);
+	});
+});
+
+
+describe('session ID utilities', () => {
+	test('generateSessionId produces correct format', () => {
+		const id = generateSessionId();
+		expect(typeof id).toBe('string');
+		const parts = id.split('-');
+		expect(parts.length).toBe(4);
+		parts.forEach(part => expect(part.length).toBe(5));
+	});
+
+	test('assignSessionIds groups events within timeout', () => {
+		const events = [
+			{ time: '2024-01-01T10:00:00.000Z', event: 'a' },
+			{ time: '2024-01-01T10:05:00.000Z', event: 'b' },  // 5 min gap
+			{ time: '2024-01-01T10:10:00.000Z', event: 'c' },  // 5 min gap
+			{ time: '2024-01-01T11:00:00.000Z', event: 'd' },  // 50 min gap → new session
+			{ time: '2024-01-01T11:15:00.000Z', event: 'e' },  // 15 min gap
+		];
+
+		assignSessionIds(events, 30);
+
+		expect(events[0].session_id).toBeDefined();
+		expect(events[0].session_id).toBe(events[1].session_id);
+		expect(events[1].session_id).toBe(events[2].session_id);
+		expect(events[2].session_id).not.toBe(events[3].session_id);
+		expect(events[3].session_id).toBe(events[4].session_id);
+	});
+
+	test('assignSessionIds respects custom timeout', () => {
+		const events = [
+			{ time: '2024-01-01T10:00:00.000Z', event: 'a' },
+			{ time: '2024-01-01T10:03:00.000Z', event: 'b' },  // 3 min gap
+			{ time: '2024-01-01T10:08:00.000Z', event: 'c' },  // 5 min gap → new session with 4min timeout
+		];
+
+		assignSessionIds(events, 4);
+
+		expect(events[0].session_id).toBe(events[1].session_id);
+		expect(events[1].session_id).not.toBe(events[2].session_id);
+	});
+
+	test('assignSessionIds enforces 24h max session', () => {
+		const events = [
+			{ time: '2024-01-01T00:00:00.000Z', event: 'a' },
+			{ time: '2024-01-01T12:00:00.000Z', event: 'b' },  // 12h gap, within 24h timeout
+			{ time: '2024-01-02T01:00:00.000Z', event: 'c' },  // 25h from session start → new session
+		];
+
+		// Use a very large timeout (48h) so only the 24h max triggers a reset
+		assignSessionIds(events, 2880);
+
+		expect(events[0].session_id).toBe(events[1].session_id);
+		expect(events[1].session_id).not.toBe(events[2].session_id);
+	});
+
+	test('assignSessionIds handles empty array', () => {
+		const events = [];
+		const result = assignSessionIds(events, 30);
+		expect(result).toEqual([]);
+	});
+
+	test('assignSessionIds handles single event', () => {
+		const events = [{ time: '2024-01-01T10:00:00.000Z', event: 'a' }];
+		assignSessionIds(events, 30);
+		expect(events[0].session_id).toBeDefined();
 	});
 });

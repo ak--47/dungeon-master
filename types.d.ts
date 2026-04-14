@@ -72,8 +72,10 @@ export interface Dungeon {
     verbose?: boolean;
     /** If true, users get anonymous device IDs in addition to distinct_id. */
     hasAnonIds?: boolean;
-    /** If true, users get session IDs attached to events. */
+    /** If true, users get session IDs attached to events based on temporal clustering. */
     hasSessionIds?: boolean;
+    /** Session timeout in minutes. Events with gaps exceeding this start a new session. Default: 30. Only used when hasSessionIds is true. */
+    sessionTimeout?: number;
     /** If true, auto-generates funnels from the events array in addition to any explicit funnels. */
     alsoInferFunnels?: boolean;
     /** Restrict all location data to a single country (e.g., "US", "GB"). */
