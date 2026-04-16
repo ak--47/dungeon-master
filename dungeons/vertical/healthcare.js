@@ -1,16 +1,23 @@
+// ── TWEAK THESE ──
+const SEED = "dm4-healthcare";
+const num_days = 100;
+const num_users = 5_000;
+const avg_events_per_user = 120;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
-const SEED = "dm4-healthcare";
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
-const num_users = 5_000;
-const days = 100;
 const NOW = dayjs();
-const DATASET_START = NOW.subtract(days, "days");
+const DATASET_START = NOW.subtract(num_days, "days");
 
 /** @typedef  {import("../../types").Dungeon} Config */
 
@@ -199,22 +206,25 @@ const clinicIds = v.range(1, 25).map(() => `CLINIC_${v.uid(4)}`);
  * and experience levels that affect patient matching.
  *
  * ───────────────────────────────────────────────────────────────
- * 8. PREMIUM BOOKING FUNNEL LIFT (funnel-pre hook)
+ * 8. FREE-TIER CONVERSION DROP (everything hook)
  * ───────────────────────────────────────────────────────────────
  *
- * PATTERN: Users with subscription_tier "premium" get 1.4x conversion
- * rate on the booking funnel. Premium patients have priority scheduling.
+ * PATTERN: Free-tier users lose ~30% of "consultation completed"
+ * events (last step of the Booking to Consultation funnel).
+ * This is implemented via event filtering in the everything hook
+ * rather than conversionRate modification in funnel-pre, so the
+ * effect is not diluted by organic (non-funnel) events.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
  *   Report 1: Booking Conversion by Tier
  *   • Report type: Funnels
  *   • Steps: "symptom search" → "appointment booked" → "consultation completed"
- *   • Breakdown: "subscription_tier" (superProp)
- *   • Expected: premium ≈ 56% vs free ≈ 40% conversion
+ *   • Breakdown: "subscription_tier"
+ *   • Expected: free ≈ 28% vs basic/premium ≈ 40% conversion
  *
- * REAL-WORLD ANALOGUE: Premium telehealth subscribers get priority
- * scheduling and shorter wait times, improving conversion.
+ * REAL-WORLD ANALOGUE: Free-tier patients face longer wait times
+ * and limited scheduling, reducing completed consultations.
  *
  * ═══════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY
@@ -229,15 +239,15 @@ const clinicIds = v.range(1, 25).map(() => `CLINIC_${v.uid(4)}`);
  * Chronic Refill Chain        | refills (chronic)   | 1        | 3-4     | 3-4x
  * Occasional No-Shows         | booking→consult     | 95%      | 75%     | 0.79x
  * Doctor Specialization       | years_experience    | 5        | 22      | 4.4x
- * Premium Booking Lift        | funnel conversion   | 40%      | 56%     | 1.4x
+ * Free-Tier Conversion Drop   | funnel conversion   | 40%      | 28%     | 0.7x
  */
 
 /** @type {Config} */
 const config = {
-	token: "",
+	token,
 	seed: SEED,
-	numDays: days,
-	numEvents: num_users * 120,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -496,6 +506,8 @@ const config = {
 		preferred_language: ["en", "en", "en", "en", "es", "pt", "de", "fr"],
 		has_chronic_condition: [false, false, false, true],
 		age_range: ["18-25", "26-35", "26-35", "36-45", "36-45", "46-55", "56-65", "65+"],
+		subscription_tier: ["free", "free", "free", "basic", "basic", "premium"],
+		platform: ["ios", "android", "web"],
 	},
 
 	// ── Personas ──────────────────────────────────
@@ -645,16 +657,9 @@ const config = {
 		}
 
 		// ── HOOK 8: PREMIUM BOOKING FUNNEL LIFT (funnel-pre) ─
-		// Premium subscribers convert 1.4x better through booking funnel.
+		// (conversionRate boost removed — filtering applied in everything hook instead)
 		if (type === "funnel-pre") {
-			if (meta && meta.profile) {
-				const tier = meta.profile.subscription_tier;
-				if (tier === "premium") {
-					record.conversionRate = Math.min(record.conversionRate * 1.4, 95);
-				} else if (tier === "basic") {
-					record.conversionRate = Math.min(record.conversionRate * 1.15, 90);
-				}
-			}
+			// no-op: conversion differentiation handled via event filtering below
 		}
 
 		// ── HOOK 1: AFTER-HOURS SURGE PRICING (event) ────────
@@ -687,18 +692,42 @@ const config = {
 
 		// ── EVERYTHING HOOKS ─────────────────────────────────
 		if (type === "everything") {
-			const events = record;
-			if (!events.length) return record;
+			if (!record.length) return record;
+			const profile = meta.profile;
+
+			// ── SUPER-PROP STAMPING ──────────────────────────
+			// Stamp superProps from profile so they are consistent per-user.
+			if (profile) {
+				const tier = profile.subscription_tier;
+				const plat = profile.platform;
+				record.forEach(e => {
+					if (tier) e.subscription_tier = tier;
+					if (plat) e.platform = plat;
+				});
+			}
+
+			// ── HOOK 8: FREE-TIER CONVERSION DROP ────────────
+			// Free-tier users lose ~30% of "consultation completed" events
+			// (last step of Booking to Consultation funnel), simulating
+			// lower conversion for non-paying patients.
+			if (profile && profile.subscription_tier === "free") {
+				record = record.filter(e => {
+					if (e.event === "consultation completed" && chance.bool({ likelihood: 30 })) {
+						return false;
+					}
+					return true;
+				});
+			}
 
 			// ── HOOK 3: EXPERIENCED DOCTOR SATISFACTION ──────
 			// Users with >50 consultation events get boosted satisfaction scores.
 			let consultCount = 0;
-			events.forEach(e => {
+			record.forEach(e => {
 				if (e.event === "consultation completed") consultCount++;
 			});
 
 			if (consultCount > 50) {
-				events.forEach(e => {
+				record.forEach(e => {
 					if (e.event === "consultation completed") {
 						e.satisfaction_score = chance.floating({ min: 4.0, max: 5.0, fixed: 1 });
 					}
@@ -707,18 +736,18 @@ const config = {
 
 			// ── HOOK 4: VIDEO CONSULTATION FOLLOW-UP LIFT ────
 			// Patients with video consultations get 2x follow-up events.
-			const hasVideoConsult = events.some(e =>
+			const hasVideoConsult = record.some(e =>
 				e.event === "consultation completed" && e.consultation_mode === "video"
 			);
 			if (hasVideoConsult) {
-				const templateFollowUp = events.find(e => e.event === "follow up scheduled");
+				const templateFollowUp = record.find(e => e.event === "follow up scheduled");
 				if (templateFollowUp) {
-					const videoConsults = events.filter(e =>
+					const videoConsults = record.filter(e =>
 						e.event === "consultation completed" && e.consultation_mode === "video"
 					);
 					videoConsults.forEach(vc => {
 						if (chance.bool({ likelihood: 60 })) {
-							events.push({
+							record.push({
 								...templateFollowUp,
 								time: dayjs(vc.time).add(chance.integer({ min: 1, max: 7 }), "days").toISOString(),
 								user_id: vc.user_id,
@@ -732,17 +761,17 @@ const config = {
 
 			// ── HOOK 5: CHRONIC CONDITION REFILL CHAIN ───────
 			// Patients with chronic prescriptions get refills every ~30 days.
-			const chronicRxs = events.filter(e =>
+			const chronicRxs = record.filter(e =>
 				e.event === "prescription issued" && e.condition_type === "chronic"
 			);
 			if (chronicRxs.length > 0) {
-				const templateRefill = events.find(e => e.event === "prescription refill");
+				const templateRefill = record.find(e => e.event === "prescription refill");
 				if (templateRefill) {
 					chronicRxs.forEach(rx => {
 						const rxTime = dayjs(rx.time);
 						const refillsToAdd = chance.integer({ min: 2, max: 4 });
 						for (let i = 1; i <= refillsToAdd; i++) {
-							events.push({
+							record.push({
 								...templateRefill,
 								time: rxTime.add(30 * i + chance.integer({ min: -3, max: 3 }), "days").toISOString(),
 								user_id: rx.user_id,
@@ -757,10 +786,10 @@ const config = {
 
 			// ── HOOK 6: OCCASIONAL PATIENT NO-SHOWS ──────────
 			// Low-activity patients (< 15 events) lose 25% of appointments.
-			if (events.length < 15) {
-				for (let i = events.length - 1; i >= 0; i--) {
-					if (events[i].event === "appointment booked" && chance.bool({ likelihood: 25 })) {
-						events.splice(i, 1);
+			if (record.length < 15) {
+				for (let i = record.length - 1; i >= 0; i--) {
+					if (record[i].event === "appointment booked" && chance.bool({ likelihood: 25 })) {
+						record.splice(i, 1);
 					}
 				}
 			}

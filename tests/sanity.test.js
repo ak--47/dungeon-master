@@ -300,7 +300,8 @@ describe('DUNGEON_MASTER input types', () => {
 			numUsers: 10,
 			numEvents: 100,
 			seed: 'input-js-file',
-			writeToDisk: false
+			writeToDisk: false,
+			token: ""
 		});
 
 		expect(result.eventCount).toBeGreaterThan(0);
@@ -315,7 +316,8 @@ describe('DUNGEON_MASTER input types', () => {
 			numUsers: 5,
 			numEvents: 50,
 			seed: 'input-relative',
-			writeToDisk: false
+			writeToDisk: false,
+			token: ""
 		});
 
 		expect(result.eventCount).toBeGreaterThan(0);
@@ -343,7 +345,8 @@ describe('DUNGEON_MASTER input types', () => {
 			numUsers: 5,
 			numEvents: 50,
 			seed: 'input-array',
-			writeToDisk: false
+			writeToDisk: false,
+			token: ""
 		});
 
 		expect(Array.isArray(results)).toBe(true);
@@ -413,7 +416,8 @@ describe('DUNGEON_MASTER input types', () => {
 			numUsers: 3,
 			numEvents: 30,
 			seed: 'override-test',
-			writeToDisk: false
+			writeToDisk: false,
+			token: ""
 		});
 
 		expect(result.userCount).toBe(3);

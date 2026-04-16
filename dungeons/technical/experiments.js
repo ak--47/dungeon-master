@@ -1,3 +1,13 @@
+// ── TWEAK THESE ──
+const SEED = "experiments";
+const num_days = 60;
+const num_users = 2_000;
+const avg_events_per_user = 50;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 /**
  * Experiments — tests funnel experiments with A/B/C variants.
  *
@@ -17,11 +27,11 @@ import { weighNumRange, weighChoices } from "../../lib/utils/utils.js";
 /** @typedef {import("../../types").Dungeon} Config */
 /** @type {import('../../types').Dungeon} */
 const config = {
-	token: "",
-	seed: "experiments",
-	numDays: 60,
-	numEvents: 100_000,
-	numUsers: 2_000,
+	token,
+	seed: SEED,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
+	numUsers: num_users,
 	format: "json",
 	region: "US",
 	hasAnonIds: false,
@@ -152,6 +162,7 @@ const config = {
 
 	userProps: {
 		plan: weighChoices(["free", "free", "free", "starter", "growth", "enterprise"]),
+		platform: ["web", "web", "ios", "android"],
 	},
 
 	scdProps: {},
@@ -161,6 +172,13 @@ const config = {
 	lookupTables: [],
 
 	hook: function (record, type, meta) {
+		if (type === "everything") {
+			const profile = meta.profile;
+			record.forEach(e => {
+				e.platform = profile.platform;
+			});
+			return record;
+		}
 		return record;
 	}
 };

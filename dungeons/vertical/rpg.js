@@ -1,14 +1,21 @@
+// ── TWEAK THESE ──
+const SEED = "harness-gaming";
+const num_days = 100;
+const num_users = 5_000;
+const avg_events_per_user = 120;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
-const SEED = "harness-gaming";
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
-const num_users = 5_000;
-const days = 100;
 
 /** @typedef  {import("../../types").Dungeon} Config */
 
@@ -164,10 +171,10 @@ const itemIds = v.range(1, 301).map(n => `item_${v.uid(7)}`);
 
 /** @type {Config} */
 const config = {
-	token: "",
+	token,
 	seed: SEED,
-	numDays: days,
-	numEvents: num_users * 120,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -562,6 +569,20 @@ const config = {
 			"Ranger",
 			"Paladin"
 		],
+		platform: [
+			"PC",
+			"Mac",
+			"PlayStation",
+			"Xbox",
+			"Switch"
+		],
+		graphics_quality: [
+			"Low",
+			"Medium",
+			"High",
+			"Ultra"
+		],
+		subscription_tier: ["Free", "Free", "Free", "Premium", "Elite"],
 	},
 
 	groupKeys: [
@@ -595,7 +616,7 @@ const config = {
 	 */
 	hook: function (record, type, meta) {
 		const NOW = dayjs();
-		const DATASET_START = NOW.subtract(days, 'days');
+		const DATASET_START = NOW.subtract(num_days, 'days');
 		const CURSED_WEEK_START = DATASET_START.add(40, 'days');
 		const CURSED_WEEK_END = DATASET_START.add(47, 'days');
 		const LEGENDARY_WEAPON_RELEASE = DATASET_START.add(45, 'days');
@@ -642,6 +663,15 @@ const config = {
 		// Hook #3, #4, #5, #6, #1: EVERYTHING - Complex behavioral patterns
 		if (type === "everything") {
 			const userEvents = record;
+			const profile = meta.profile;
+
+			// Stamp superProps from profile for consistency
+			userEvents.forEach(e => {
+				e.platform = profile.platform;
+				e.graphics_quality = profile.graphics_quality;
+				e.subscription_tier = profile.subscription_tier;
+			});
+
 			const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
 
 			// Track user behaviors

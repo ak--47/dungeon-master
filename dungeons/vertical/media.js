@@ -1,14 +1,21 @@
+// ── TWEAK THESE ──
+const SEED = "harness-media";
+const num_days = 100;
+const num_users = 5_000;
+const avg_events_per_user = 120;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
-const SEED = "harness-media";
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
-const num_users = 5_000;
-const days = 100;
 
 /** @typedef  {import("../../types").Dungeon} Config */
 
@@ -218,10 +225,10 @@ const blockbusterId = `blockbuster_${v.uid(8)}`;
 
 /** @type {Config} */
 const config = {
-	token: "",
+	token,
 	seed: SEED,
-	numDays: days,
-	numEvents: num_users * 120,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -555,6 +562,8 @@ const config = {
 		"total_watch_hours": u.weighNumRange(0, 500, 0.8, 50),
 		"profiles_count": u.weighNumRange(1, 5),
 		"downloads_enabled": [false, false, false, true, true],
+		"subscription_plan": ["free", "free", "standard", "standard", "standard", "premium"],
+		"device_type": ["smart_tv", "mobile", "tablet", "laptop", "desktop"],
 	},
 
 	lookupTables: [],
@@ -564,22 +573,22 @@ const config = {
 	 *
 	 * This hook function creates 8 deliberate patterns in the data:
 	 *
-	 * 1. GENRE FUNNEL CONVERSION: Comedy/Animation complete more; Documentary abandons more (funnel-pre)
+	 * 1. GENRE FUNNEL CONVERSION: Comedy/Animation props in funnel-pre; documentary completion drop in everything
 	 * 2. BINGE-WATCHING: Users with 3+ consecutive completions get extra episodes (everything)
 	 * 3. WEEKEND vs WEEKDAY: Weekend sessions 1.5x longer; weekday prime-time tagging (event)
 	 * 4. AD FATIGUE CHURN: Free-tier users with 10+ ads churn after day 45 (everything)
 	 * 5. NEW RELEASE SPIKE: Blockbuster release on day 50 drives content selection (event)
 	 * 6. KIDS PROFILE SAFETY: Kids mode restricts genres and drops ads (event)
-	 * 7. RECOMMENDATION ENGINE IMPROVEMENT: Post-day-60 boost to engagement funnel (funnel-pre)
+	 * 7. RECOMMENDATION ENGINE IMPROVEMENT: Props in funnel-pre; pre-day-60 content rated drop in everything
 	 * 8. SUBTITLE USERS WATCH MORE: Subtitle-enabled users have higher completion rates (everything)
 	 */
 	hook: function (record, type, meta) {
 		const NOW = dayjs();
-		const DATASET_START = NOW.subtract(days, 'days');
+		const DATASET_START = NOW.subtract(num_days, 'days');
 		// FIXED_START is the pre-shift time range start; needed because
 		// meta.firstEventTime in funnel-pre is in the FIXED (pre-shift) timeframe
 		const FIXED_NOW_UNIX = dayjs('2024-02-02').unix();
-		const FIXED_START = dayjs.unix(FIXED_NOW_UNIX).subtract(days, 'days');
+		const FIXED_START = dayjs.unix(FIXED_NOW_UNIX).subtract(num_days, 'days');
 
 		// ─────────────────────────────────────────────────────────────
 		// Hook #1: GENRE FUNNEL CONVERSION (funnel-pre)
@@ -590,21 +599,17 @@ const config = {
 			const genre = record.props.genre;
 
 			if (genre === "comedy" || genre === "animation") {
-				record.conversionRate = record.conversionRate * 1.3;
 				record.props.genre_boost = true;
 				record.props.genre_penalty = false;
 			} else if (genre === "documentary") {
-				record.conversionRate = record.conversionRate * 0.7;
 				record.props.genre_boost = false;
 				record.props.genre_penalty = true;
 			} else if (!genre && chance.bool({ likelihood: 25 })) {
 				// Randomly apply genre effects when genre isn't in funnel props
 				if (chance.bool({ likelihood: 60 })) {
-					record.conversionRate = record.conversionRate * 1.3;
 					record.props.genre_boost = true;
 					record.props.genre_penalty = false;
 				} else {
-					record.conversionRate = record.conversionRate * 0.7;
 					record.props.genre_boost = false;
 					record.props.genre_penalty = true;
 				}
@@ -623,7 +628,6 @@ const config = {
 			const isAfterImprovement = funnelTime && funnelTime.isAfter(FIXED_START.add(60, 'days'));
 
 			if (isEngagementFunnel && isAfterImprovement) {
-				record.conversionRate = record.conversionRate * 1.5;
 				record.props.improved_recs = true;
 			} else {
 				record.props.improved_recs = false;
@@ -710,6 +714,43 @@ const config = {
 		if (type === "everything") {
 			const userEvents = record;
 			if (!userEvents || userEvents.length === 0) return record;
+
+			const profile = meta.profile;
+
+			// ─── Stamp superProps from profile (consistent per user) ───
+			const stampPlan = profile && profile.subscription_plan ? profile.subscription_plan : undefined;
+			const stampDevice = profile && profile.device_type ? profile.device_type : undefined;
+			if (stampPlan || stampDevice) {
+				userEvents.forEach(e => {
+					if (stampPlan) e.subscription_plan = stampPlan;
+					if (stampDevice) e.device_type = stampDevice;
+				});
+			}
+
+			// ─── Bug 2 fix: Genre funnel conversion filtering ───
+			// Drop ~25% of "playback completed" events for documentary genre
+			// to simulate lower documentary funnel completion (was conversionRate * 0.7)
+			for (let i = userEvents.length - 1; i >= 0; i--) {
+				const evt = userEvents[i];
+				if (evt.event === "playback completed" && evt.genre_penalty === true) {
+					if (chance.bool({ likelihood: 25 })) {
+						userEvents.splice(i, 1);
+					}
+				}
+			}
+
+			// ─── Bug 2 fix: Recommendation engine improvement filtering ───
+			// Drop ~30% of "content rated" events that occur BEFORE day 60
+			// to simulate lower pre-improvement rec engine conversion (was conversionRate * 1.5)
+			const IMPROVEMENT_DATE = DATASET_START.add(60, 'days');
+			for (let i = userEvents.length - 1; i >= 0; i--) {
+				const evt = userEvents[i];
+				if (evt.event === "content rated" && dayjs(evt.time).isBefore(IMPROVEMENT_DATE)) {
+					if (chance.bool({ likelihood: 30 })) {
+						userEvents.splice(i, 1);
+					}
+				}
+			}
 
 			const firstEventTime = dayjs(userEvents[0].time);
 

@@ -435,6 +435,53 @@ Run each query separately. For each query:
 4. Record both the query and the raw results
 5. Accumulate a structured log of every query execution (see Step 3b)
 
+### Standard Verification Checks (Run for Every Dungeon)
+
+In addition to per-hook queries, run these standard checks for every dungeon:
+
+**1. SuperProp Consistency** — verify each user has exactly 1 value per superProp. Adapt the column name for each superProp key in the dungeon:
+```sql
+SELECT
+  'PROP_NAME' as prop,
+  COUNT(*) as total_users,
+  COUNT(*) FILTER (WHERE n = 1) as consistent,
+  COUNT(*) FILTER (WHERE n > 1) as inconsistent,
+  ROUND(COUNT(*) FILTER (WHERE n = 1) * 100.0 / COUNT(*), 1) as consistency_pct
+FROM (
+  SELECT user_id, COUNT(DISTINCT PROP_NAME) as n
+  FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+  GROUP BY user_id
+);
+```
+Verdict: **PASS** >= 99% consistent, **WEAK** 90-99%, **FAIL** < 90%.
+
+**2. SuperProp-UserProp Mirror Check** — verify that every superProp key also appears on user profiles. Compare the dungeon's `superProps` keys against the columns in the USERS file. Any superProp not mirrored in `userProps` means the stamping fix is incomplete.
+
+**3. funnel-pre Dilution Check** — for any dungeon with `funnel-pre` conversionRate modifications, verify the actual visible effect:
+- A `conversionRate *= 1.5` in funnel-pre typically shows as ~1.02-1.08x in the data (diluted by organic events)
+- If observed ratio is < 1.1x for a funnel-pre conversionRate hook, verdict is **FAIL** with note: "funnel-pre conversionRate diluted by organic events — migrate to `everything` hook event filtering"
+- When the dungeon uses `everything` hook filtering instead, expect the full intended ratio (1.3-1.5x)
+
+### Population Threshold Validation
+
+When a hook targets a specific segment, verify the affected population is large enough to produce a visible signal:
+
+```sql
+SELECT
+  segment_column,
+  COUNT(DISTINCT user_id) as users,
+  ROUND(COUNT(DISTINCT user_id) * 100.0 / (SELECT COUNT(DISTINCT user_id) FROM read_json_auto('./data/verify-hooks-EVENTS.json')), 1) as pct_of_users
+FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+WHERE event = 'relevant_event'
+GROUP BY segment_column
+ORDER BY users DESC;
+```
+
+**Thresholds (at 1K users):**
+- Segment < 20 users (< 2%): hook signal will be WEAK or invisible — flag as "insufficient population"
+- Segment 20-50 users: may show signal but with high variance — note in report
+- Segment > 50 users: should show clear signal if hook effect >= 1.3x
+
 ### Statistical Caveats
 
 With ~1000 users and ~100K events:

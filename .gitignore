@@ -25,3 +25,5 @@ ignore*
 research/*
 !research/.gitkeep
 dungeons/capstone/*
+dungeons/user/*
+!dungeons/user/.gitkeep

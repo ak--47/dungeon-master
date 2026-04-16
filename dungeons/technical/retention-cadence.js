@@ -1,13 +1,19 @@
+// ── TWEAK THESE ──
 const SEED = "kurby-retention";
+const num_days = 360;
+const num_users = 100;
+const avg_events_per_user = 50;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 dayjs.extend(utc);
 import * as u from "../../lib/utils/utils.js";
 import * as v from 'ak-tools';
 const chance = u.initChance(SEED);
-
-const num_users = 100;
-const days = 360;
 
 /** @typedef {import("../../types").Dungeon} Config */
 
@@ -101,10 +107,10 @@ function generateCadencedEvents(behaviorName, cadence, startTime, endTime, churn
 
 /** @type {Config} */
 const config = {
-	token: "",
-	seed: "lets go",
-	numDays: days,
-	numEvents: num_users * 50,
+	token,
+	seed: SEED,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: false,

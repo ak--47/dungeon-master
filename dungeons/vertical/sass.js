@@ -1,14 +1,21 @@
+// ── TWEAK THESE ──
+const SEED = "harness-sass";
+const num_days = 100;
+const num_users = 5_000;
+const avg_events_per_user = 120;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
-const SEED = "harness-sass";
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
-const num_users = 5_000;
-const days = 100;
 
 /** @typedef  {import("../../types").Dungeon} Config */
 
@@ -248,10 +255,10 @@ const failedDeployUsers = new Map();
 
 /** @type {Config} */
 const config = {
-	token: "",
+	token,
 	seed: SEED,
-	numDays: days,
-	numEvents: num_users * 120,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -547,6 +554,8 @@ const config = {
 		annual_contract_value: [0],
 		customer_success_manager: [false],
 		customer_health_score: u.weighNumRange(1, 100),
+		plan_tier: ["free", "free", "team", "team", "business", "enterprise"],
+		cloud_provider: ["aws", "gcp", "azure", "multi_cloud"],
 	},
 
 	groupKeys: [
@@ -580,7 +589,7 @@ const config = {
 	 */
 	hook: function (record, type, meta) {
 		const NOW = dayjs();
-		const DATASET_START = NOW.subtract(days, "days");
+		const DATASET_START = NOW.subtract(num_days, "days");
 
 		// ─────────────────────────────────────────────────────────────
 		// Hook #1: END-OF-QUARTER SPIKE (event)
@@ -698,6 +707,14 @@ const config = {
 		// ─────────────────────────────────────────────────────────────
 		if (type === "everything") {
 			const userEvents = record;
+			const profile = meta.profile;
+
+			// Stamp superProps from profile for consistency
+			userEvents.forEach(e => {
+				e.plan_tier = profile.plan_tier;
+				e.cloud_provider = profile.cloud_provider;
+			});
+
 			if (userEvents && userEvents.length > 0) {
 				const firstEvent = userEvents[0];
 				const idHash = String(firstEvent.user_id || firstEvent.device_id).split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);

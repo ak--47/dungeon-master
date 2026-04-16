@@ -1,16 +1,23 @@
+// ── TWEAK THESE ──
+const SEED = "dm4-travel";
+const num_days = 100;
+const num_users = 5_000;
+const avg_events_per_user = 120;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
-const SEED = "dm4-travel";
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
-const num_users = 5_000;
-const days = 100;
 const NOW = dayjs();
-const DATASET_START = NOW.subtract(days, "days");
+const DATASET_START = NOW.subtract(num_days, "days");
 
 /** @typedef  {import("../../types").Dungeon} Config */
 
@@ -164,10 +171,10 @@ const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", 
  * with consistent, high-frequency booking patterns.
  *
  * ───────────────────────────────────────────────────────────────
- * 8. REPEAT DESTINATION CLUSTERING (funnel-pre hook)
+ * 8. REPEAT DESTINATION CLUSTERING (everything hook — event filtering)
  * ───────────────────────────────────────────────────────────────
- * PATTERN: Business travelers convert 1.3x better through the
- * search-to-book funnel (repeat bookings are habitual).
+ * PATTERN: Non-business/luxury users have ~25% of "booking completed"
+ * events dropped, simulating lower funnel conversion for casual segments.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *   Report 1: Conversion by Segment
@@ -197,10 +204,10 @@ const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", 
 
 /** @type {Config} */
 const config = {
-	token: "",
+	token,
 	seed: SEED,
-	numDays: days,
-	numEvents: num_users * 120,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -456,6 +463,8 @@ const config = {
 		company_name: ["none"],
 		preferred_destination: chance.pickone.bind(chance, destinationCities),
 		avg_budget_per_night: u.weighNumRange(50, 400, 0.4, 150),
+		platform: ["ios", "android", "web", "web"],
+		membership_tier: ["standard", "standard", "standard", "gold", "platinum"],
 	},
 
 	// ── Personas ──────────────────────────────────
@@ -632,14 +641,10 @@ const config = {
 		}
 
 		// ── HOOK 8: REPEAT DESTINATION CLUSTERING (funnel-pre) ─
+		// conversionRate modifications moved to everything hook (event filtering)
+		// to avoid dilution by organic events
 		if (type === "funnel-pre") {
-			if (meta && meta.profile) {
-				if (meta.profile.customer_segment === "business_traveler") {
-					record.conversionRate = Math.min(record.conversionRate * 1.3, 90);
-				} else if (meta.profile.customer_segment === "luxury_seeker") {
-					record.conversionRate = Math.min(record.conversionRate * 1.15, 85);
-				}
-			}
+			// prop-setting only; no conversionRate changes
 		}
 
 		// ── HOOK 1: WEEKEND LEISURE SURGE (event) ────────────
@@ -672,6 +677,33 @@ const config = {
 			const events = record;
 			if (!events.length) return record;
 
+			const profile = meta.profile;
+
+			// ─── Stamp superProps from profile (consistent per user) ───
+			const stampPlatform = profile && profile.platform ? profile.platform : undefined;
+			const stampTier = profile && profile.membership_tier ? profile.membership_tier : undefined;
+			if (stampPlatform || stampTier) {
+				events.forEach(e => {
+					if (stampPlatform) e.platform = stampPlatform;
+					if (stampTier) e.membership_tier = stampTier;
+				});
+			}
+
+			// ─── Bug 2 fix: Repeat destination clustering conversion filtering ───
+			// Drop ~25% of "booking completed" events for users who are NOT
+			// business_traveler or luxury_seeker to simulate their lower funnel
+			// conversion (was conversionRate * 1.3 / 1.15 in funnel-pre)
+			const segment = profile && profile.customer_segment;
+			if (segment !== "business_traveler" && segment !== "luxury_seeker") {
+				for (let i = events.length - 1; i >= 0; i--) {
+					if (events[i].event === "booking completed") {
+						if (chance.bool({ likelihood: 25 })) {
+							events.splice(i, 1);
+						}
+					}
+				}
+			}
+
 			// ── HOOK 3: LOYALTY TIER UPGRADE PATH ────────────
 			let bookingCount = 0;
 			events.forEach(e => { if (e.event === "booking completed") bookingCount++; });
@@ -694,7 +726,6 @@ const config = {
 			}
 
 			// ── HOOK 5: UPSELL SUCCESS BY SEGMENT ────────────
-			const profile = meta.profile;
 			if (profile && profile.customer_segment === "luxury_seeker") {
 				const templateUpgrade = events.find(e => e.event === "room upgrade selected");
 				if (templateUpgrade) {

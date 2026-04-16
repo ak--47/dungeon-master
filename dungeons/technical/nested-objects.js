@@ -1,3 +1,13 @@
+// ── TWEAK THESE ──
+const SEED = "dm4-nested-objects";
+const num_days = 30;
+const num_users = 500;
+const avg_events_per_user = 60;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import Chance from 'chance';
 let chance = new Chance();
 import dayjs from "dayjs";
@@ -30,11 +40,12 @@ const countries = ["US", "UK", "JP", "DE", "AU", "CA", "FR", "IN", "KR", "MX", "
 
 /** @type {import('../../types').Dungeon} */
 const config = {
-	seed: "nested objects test",
+	token,
+	seed: SEED,
 	name: "nested-objects",
-	numDays: 30,
-	numEvents: 30_000,
-	numUsers: 500,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
+	numUsers: num_users,
 	format: 'json',
 	region: "US",
 	hasAnonIds: false,

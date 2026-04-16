@@ -1,3 +1,13 @@
+// ── TWEAK THESE ──
+const SEED = "foo bar";
+const num_days = 90;
+const num_users = 500;
+const avg_events_per_user = 100;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import Chance from 'chance';
 const chance = new Chance();
 import dayjs from 'dayjs';
@@ -30,11 +40,11 @@ import { weighNumRange, integer } from "../../lib/utils/utils.js";
 
 /** @type {import('../types.js').Dungeon} */
 const config = {
-	token: "",
-	seed: "foo bar",
-	numDays: 90, //how many days worth of data
-	numEvents: 50_000, //how many events
-	numUsers: 500, //how many users	
+	token,
+	seed: SEED,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
+	numUsers: num_users,
 	format: 'json', //csv or json
 	region: "US",
 	hasAnonIds: false, //if true, anonymousIds are created for each user
@@ -113,7 +123,10 @@ const config = {
 		title: chance.profession.bind(chance),
 		luckyNumber: weighNumRange(42, 420),
 		userTier: ["regular"],
-		spiritAnimal: ["duck", "dog", "otter", "penguin", "cat", "elephant", "lion", "cheetah", "giraffe", "zebra", "rhino", "hippo", "whale", "dolphin", "shark", "octopus", "squid", "jellyfish", "starfish", "seahorse", "crab", "lobster", "shrimp", "clam", "snail", "slug", "butterfly", "moth", "bee", "wasp", "ant", "beetle", "ladybug", "caterpillar", "centipede", "millipede", "scorpion", "spider", "tarantula", "tick", "mite", "mosquito", "fly", "dragonfly", "damselfly", "grasshopper", "cricket", "locust", "mantis", "cockroach", "termite", "praying mantis", "walking stick", "stick bug", "leaf insect", "lacewing", "aphid", "cicada", "thrips", "psyllid", "scale insect", "whitefly", "mealybug", "planthopper", "leafhopper", "treehopper", "flea", "louse", "bedbug", "flea beetle", "weevil", "longhorn beetle", "leaf beetle", "tiger beetle", "ground beetle", "lady beetle", "firefly", "click beetle", "rove beetle", "scarab beetle", "dung beetle", "stag beetle", "rhinoceros beetle", "hercules beetle", "goliath beetle", "jewel beetle", "tortoise beetle"]
+		spiritAnimal: ["duck", "dog", "otter", "penguin", "cat", "elephant", "lion", "cheetah", "giraffe", "zebra", "rhino", "hippo", "whale", "dolphin", "shark", "octopus", "squid", "jellyfish", "starfish", "seahorse", "crab", "lobster", "shrimp", "clam", "snail", "slug", "butterfly", "moth", "bee", "wasp", "ant", "beetle", "ladybug", "caterpillar", "centipede", "millipede", "scorpion", "spider", "tarantula", "tick", "mite", "mosquito", "fly", "dragonfly", "damselfly", "grasshopper", "cricket", "locust", "mantis", "cockroach", "termite", "praying mantis", "walking stick", "stick bug", "leaf insect", "lacewing", "aphid", "cicada", "thrips", "psyllid", "scale insect", "whitefly", "mealybug", "planthopper", "leafhopper", "treehopper", "flea", "louse", "bedbug", "flea beetle", "weevil", "longhorn beetle", "leaf beetle", "tiger beetle", "ground beetle", "lady beetle", "firefly", "click beetle", "rove beetle", "scarab beetle", "dung beetle", "stag beetle", "rhinoceros beetle", "hercules beetle", "goliath beetle", "jewel beetle", "tortoise beetle"],
+		color: ["red", "orange", "yellow", "green", "blue", "indigo", "violet"],
+		number: integer,
+		engagement_score: [0],
 	},
 	hook: function (record, type, meta) {
 		// --- user hook: tag power users based on luckyNumber ---
@@ -138,6 +151,12 @@ const config = {
 
 		// --- everything hook: low-activity users lose their last few events (churn simulation) ---
 		if (type === "everything") {
+			const profile = meta.profile;
+			record.forEach(e => {
+				e.color = profile.color;
+				e.number = profile.number;
+				// engagement_score intentionally varies per event (set by event hook)
+			});
 			if (record.length > 3 && record.length < 8) {
 				// users with few events lose the tail end — simulates churn
 				return record.slice(0, Math.ceil(record.length * 0.6));

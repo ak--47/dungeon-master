@@ -1,15 +1,22 @@
+// ── TWEAK THESE ──
+const SEED = "dm4-fitness";
+const num_days = 100;
+const num_users = 5_000;
+const avg_events_per_user = 120;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 
-const SEED = "dm4-fitness";
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
-const num_users = 5_000;
-const days = 100;
 const NOW = dayjs();
-const DATASET_START = NOW.subtract(days, "days");
+const DATASET_START = NOW.subtract(num_days, "days");
 
 /** @typedef  {import("../../types").Dungeon} Config */
 
@@ -219,12 +226,12 @@ const DATASET_START = NOW.subtract(days, "days");
  * consistency to build credibility with their clients.
  *
  * ───────────────────────────────────────────────────────────────
- * 8. ANNUAL SUBSCRIBER WORKOUT FUNNEL LIFT (funnel-pre hook)
+ * 8. ANNUAL SUBSCRIBER WORKOUT FUNNEL LIFT (everything hook)
  * ───────────────────────────────────────────────────────────────
  *
- * PATTERN: Users with subscription_tier "annual" or "family"
- * get 1.4x conversion rate through the Workout Loop funnel.
- * Annual commitment correlates with follow-through.
+ * PATTERN: Free/monthly-tier users lose ~30% of "progress checked"
+ * events (last step of the Workout Loop funnel), simulating lower
+ * follow-through. Annual/family subscribers retain all events.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -255,10 +262,10 @@ const DATASET_START = NOW.subtract(days, "days");
 
 /** @type {Config} */
 const config = {
-	token: "",
+	token,
 	seed: SEED,
-	numDays: days,
-	numEvents: num_users * 120,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -512,6 +519,8 @@ const config = {
 		total_workouts: u.weighNumRange(0, 0, 0.5),
 		preferred_workout: ["strength", "cardio", "yoga", "hiit", "running", "cycling"],
 		goal: ["weight_loss", "muscle_gain", "endurance", "flexibility", "general_health"],
+		platform: ["ios", "ios", "android"],
+		workout_type: ["strength", "cardio", "yoga", "hiit", "running", "cycling"],
 	},
 
 	// ── Personas ──────────────────────────────────
@@ -679,16 +688,9 @@ const config = {
 		}
 
 		// ── HOOK 8: ANNUAL SUBSCRIBER WORKOUT FUNNEL LIFT (funnel-pre) ─
-		// Annual and family subscribers convert 1.4x through workout loop.
+		// (conversionRate filtering moved to everything hook)
 		if (type === "funnel-pre") {
-			if (meta && meta.profile) {
-				const tier = meta.profile.subscription_tier;
-				if (tier === "annual" || tier === "family") {
-					record.conversionRate = Math.min(record.conversionRate * 1.4, 95);
-				} else if (tier === "monthly") {
-					record.conversionRate = Math.min(record.conversionRate * 1.15, 90);
-				}
-			}
+			// no-op: conversion filtering handled via event dropping in everything hook
 		}
 
 		// ── HOOK 1: MORNING WORKOUT BOOST (event) ────────────
@@ -722,8 +724,32 @@ const config = {
 
 		// ── EVERYTHING HOOKS ─────────────────────────────────
 		if (type === "everything") {
-			const events = record;
+			let events = record;
 			if (!events.length) return record;
+
+			// ── SUPERPROP STAMPING ──────────────────────────
+			// Stamp superProps from profile so they are consistent per user.
+			if (meta && meta.profile) {
+				const p = meta.profile;
+				events.forEach(e => {
+					if (p.platform) e.platform = p.platform;
+					if (p.workout_type) e.workout_type = p.workout_type;
+				});
+			}
+
+			// ── HOOK 8: ANNUAL SUBSCRIBER CONVERSION FILTER ─
+			// Free/monthly-tier users drop ~30% of "progress checked"
+			// (last step of Workout Loop funnel) to simulate lower conversion.
+			if (meta && meta.profile) {
+				const tier = meta.profile.subscription_tier;
+				if (tier !== "annual" && tier !== "family") {
+					record = record.filter(e => {
+						if (e.event === "progress checked" && chance.bool({ likelihood: 30 })) return false;
+						return true;
+					});
+					events = record;
+				}
+			}
 
 			// ── HOOK 3: STREAK RETENTION ─────────────────────
 			// Users with >10 workouts get streak_days updated and

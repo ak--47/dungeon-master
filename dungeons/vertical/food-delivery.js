@@ -1,14 +1,21 @@
+// ── TWEAK THESE ──
+const SEED = "harness-food";
+const num_days = 100;
+const num_users = 5_000;
+const avg_events_per_user = 120;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
-const SEED = "harness-food";
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
-const num_users = 5_000;
-const days = 100;
 
 /** @typedef  {import("../../types").Dungeon} Config */
 
@@ -156,10 +163,10 @@ const couponCodes = v.range(1, 51).map(n => `QUICK${v.uid(5).toUpperCase()}`);
 
 /** @type {Config} */
 const config = {
-	token: "",
+	token,
 	seed: SEED,
-	numDays: days,
-	numEvents: num_users * 120,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -379,6 +386,9 @@ const config = {
 				"order_id": orderIds,
 				"actual_delivery_mins": u.weighNumRange(12, 90, 1.0, 40),
 				"on_time": [false, false, false, true, true, true, true, true, true, true],
+				"lunch_rush": [false],
+				"dinner_rush": [false],
+				"first_order_bonus": [false],
 				"trial_retained": [false],
 			}
 		},
@@ -480,6 +490,9 @@ const config = {
 		"favorite_restaurant_count": u.weighNumRange(1, 10),
 		"is_high_risk": [false],
 		"churn_risk_score": [0],
+		"platform": ["iOS", "Android", "Web"],
+		"subscription_tier": ["Free", "Free", "Free", "Free", "QuickBite+"],
+		"city": ["New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "San Francisco"],
 	},
 
 	groupKeys: [
@@ -522,7 +535,7 @@ const config = {
 	 */
 	hook: function (record, type, meta) {
 		const NOW = dayjs();
-		const DATASET_START = NOW.subtract(days, 'days');
+		const DATASET_START = NOW.subtract(num_days, 'days');
 		const RAINY_WEEK_START = DATASET_START.add(20, 'days');
 		const RAINY_WEEK_END = DATASET_START.add(27, 'days');
 
@@ -539,13 +552,11 @@ const config = {
 
 				// Lunch rush: 11AM - 1PM
 				if (hour >= 11 && hour <= 13) {
-					record.conversionRate = record.conversionRate * 1.4;
 					record.props.lunch_rush = true;
 					record.props.dinner_rush = false;
 				}
 				// Dinner rush: 5PM - 8PM
 				else if (hour >= 17 && hour <= 20) {
-					record.conversionRate = record.conversionRate * 1.2;
 					record.props.lunch_rush = false;
 					record.props.dinner_rush = true;
 				} else {
@@ -568,7 +579,6 @@ const config = {
 				const userId = meta && meta.user && (meta.user.distinct_id || String(meta.user));
 				const isNewUser = userId && userId.charCodeAt(0) % 2 === 0;
 				if (isNewUser) {
-					record.conversionRate = Math.min(98, record.conversionRate * 1.4);
 					record.props.first_order_bonus = true;
 				} else {
 					record.props.first_order_bonus = false;
@@ -673,6 +683,35 @@ const config = {
 		// ═══════════════════════════════════════════════════════════════════
 		if (type === "everything") {
 			const userEvents = record;
+			const profile = meta.profile;
+
+			// ── Stamp superProps from profile so they stay consistent per user ──
+			if (profile) {
+				userEvents.forEach((event) => {
+					if (profile.platform !== undefined) event.platform = profile.platform;
+					if (profile.subscription_tier !== undefined) event.subscription_tier = profile.subscription_tier;
+					if (profile.city !== undefined) event.city = profile.city;
+				});
+			}
+
+			// ── Bug 2 fix: Conversion filtering for lunch rush + first order ──
+			// Hook 1: Non-lunch/dinner-hour events → drop ~30% of final funnel step
+			// Hook 8: Returning users (no first_order_bonus) → drop ~30% of final funnel step
+			for (let i = userEvents.length - 1; i >= 0; i--) {
+				const event = userEvents[i];
+				if (event.event === "order delivered") {
+					// Hook 1: if not during lunch or dinner rush, drop 30%
+					if (!event.lunch_rush && !event.dinner_rush && chance.bool({ likelihood: 30 })) {
+						userEvents.splice(i, 1);
+						continue;
+					}
+					// Hook 8: returning users (no first_order_bonus) drop 30%
+					if (event.first_order_bonus === false && chance.bool({ likelihood: 30 })) {
+						userEvents.splice(i, 1);
+						continue;
+					}
+				}
+			}
 
 			// First pass: identify user patterns
 			let isReferralUser = false;

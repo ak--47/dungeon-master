@@ -64,7 +64,7 @@ describe.sequential('module', () => {
 
 	test('works as module (foobar)', async () => {
 		console.log('MODULE TEST: FOOBAR');
-		const results = await generate({ ...foobar, verbose: false, writeToDisk: false, numEvents: 1100, numUsers: 100, seed: "deal with it" });
+		const results = await generate({ ...foobar, verbose: false, writeToDisk: false, numEvents: 1100, numUsers: 100, seed: "deal with it", token: "" });
 		const { eventData, userProfilesData } = results;
 		expect(eventData.length).toBeGreaterThan(980);
 		expect(userProfilesData.length).toBe(100);
@@ -439,7 +439,7 @@ describe.sequential('options + tweaks', () => {
 
 	test('every date is valid', async () => {
 		console.log('DATE TEST');
-		const results = await generate({ ...simple, writeToDisk: false, verbose: false, numEvents: 1000, numUsers: 100 });
+		const results = await generate({ ...simple, writeToDisk: false, verbose: false, numEvents: 1000, numUsers: 100, token: "" });
 		const { eventData } = results;
 		const invalidDates = eventData.filter(e => !validTime(e.time));
 		expect(eventData.every(e => validTime(e.time))).toBe(true);
@@ -448,7 +448,7 @@ describe.sequential('options + tweaks', () => {
 
 	test('no avatars (default)', async () => {
 		console.log('AVATAR TEST');
-		const results = await generate({ ...simple, writeToDisk: false, verbose: false, numEvents: 1000, numUsers: 100 });
+		const results = await generate({ ...simple, writeToDisk: false, verbose: false, numEvents: 1000, numUsers: 100, token: "" });
 		const { userProfilesData } = results;
 		expect(userProfilesData.every(u => !u.avatar)).toBe(true);
 
@@ -456,7 +456,7 @@ describe.sequential('options + tweaks', () => {
 
 	test('yes avatars', async () => {
 		console.log('AVATAR TEST');
-		const results = await generate({ ...simple, writeToDisk: false, verbose: false, numEvents: 1000, numUsers: 100, hasAvatar: true });
+		const results = await generate({ ...simple, writeToDisk: false, verbose: false, numEvents: 1000, numUsers: 100, hasAvatar: true, token: "" });
 		const { userProfilesData } = results;
 		expect(userProfilesData.every(u => u.avatar)).toBe(true);
 

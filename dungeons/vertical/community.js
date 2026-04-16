@@ -1,16 +1,23 @@
+// ── TWEAK THESE ──
+const SEED = "dm4-community";
+const num_days = 100;
+const num_users = 5_000;
+const avg_events_per_user = 120;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
-const SEED = "dm4-community";
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
-const num_users = 5_000;
-const days = 100;
 const NOW = dayjs();
-const DATASET_START = NOW.subtract(days, "days");
+const DATASET_START = NOW.subtract(num_days, "days");
 
 /** @typedef  {import("../../types").Dungeon} Config */
 
@@ -213,12 +220,12 @@ const communityIds = v.range(1, 30).map(() => `COMM_${v.uid(4)}`);
  * articles and high community reputation scores.
  *
  * -------------------------------------------------------------------
- * 8. PRO SUBSCRIBER CONTENT CREATION LIFT (funnel-pre hook)
+ * 8. PRO SUBSCRIBER CONTENT CREATION LIFT (everything hook)
  * -------------------------------------------------------------------
  *
- * PATTERN: Users with subscription_tier "pro" get 1.5x conversion
- * rate on the Content Creation funnel. Pro users have analytics and
- * tools that help them publish more effectively.
+ * PATTERN: Free-tier users drop 35% of final funnel step events
+ * ("comment posted"), creating a visible conversion gap between
+ * paid and free users. Pro/supporter users keep all their events.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -244,15 +251,15 @@ const communityIds = v.range(1, 30).map(() => `COMM_${v.uid(4)}`);
  * Edit War Detection            | edit_quality        | 3.0      | 1.5     | 0.5x
  * Lurker Churn                  | events after day 10 | 100%     | 40%     | 0.4x
  * Creator Profiles              | reputation_score    | 25       | 90      | 3.6x
- * Pro Content Creation Lift     | funnel conversion   | 35%      | 52%     | 1.5x
+ * Pro Content Creation Lift     | funnel conversion   | 35%      | 52%     | ~1.5x
  */
 
 /** @type {Config} */
 const config = {
-	token: "",
+	token,
 	seed: SEED,
-	numDays: days,
-	numEvents: num_users * 120,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -515,6 +522,9 @@ const config = {
 		articles_created: [0],
 		reputation_score: u.weighNumRange(0, 100, 0.3, 25),
 		preferred_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
+		subscription_tier: ["free", "free", "free", "free", "supporter", "pro"],
+		platform: ["ios", "android", "web"],
+		content_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
 	},
 
 	// -- Phase 2: Personas --------------------------------------------
@@ -685,18 +695,9 @@ const config = {
 			}
 		}
 
-		// -- HOOK 8: PRO SUBSCRIBER CONTENT CREATION LIFT (funnel-pre)
-		// Pro subscribers convert 1.5x better through content creation.
-		if (type === "funnel-pre") {
-			if (meta && meta.profile) {
-				const tier = meta.profile.subscription_tier;
-				if (tier === "pro") {
-					record.conversionRate = Math.min(record.conversionRate * 1.5, 95);
-				} else if (tier === "supporter") {
-					record.conversionRate = Math.min(record.conversionRate * 1.2, 90);
-				}
-			}
-		}
+		// -- HOOK 8: PRO SUBSCRIBER CONTENT CREATION LIFT
+		// Conversion differences handled in everything hook via event filtering.
+		// (funnel-pre conversionRate modifications are diluted by organic events)
 
 		// -- HOOK 1: WEEKEND CONTENT SURGE (event) --------------------
 		// Articles published on weekends get 1.5x word_count.
@@ -725,8 +726,28 @@ const config = {
 
 		// -- EVERYTHING HOOKS -----------------------------------------
 		if (type === "everything") {
-			const events = record;
+			let events = record;
 			if (!events.length) return record;
+			const profile = meta && meta.profile ? meta.profile : {};
+
+			// -- SUPERPROP STAMPING -----------------------------------
+			// Stamp superProp values from profile onto every event so
+			// they stay consistent per-user instead of randomizing per-event.
+			events.forEach(e => {
+				if (profile.subscription_tier) e.subscription_tier = profile.subscription_tier;
+				if (profile.platform) e.platform = profile.platform;
+				if (profile.content_hub) e.content_hub = profile.content_hub;
+			});
+
+			// -- HOOK 8: PRO SUBSCRIBER CONTENT CREATION LIFT ---------
+			// Free-tier users drop 35% of final funnel step events to
+			// create visible conversion gap vs paid subscribers.
+			if (profile.subscription_tier !== "pro" && profile.subscription_tier !== "supporter") {
+				events = events.filter(e => {
+					if (e.event === "comment posted" && chance.bool({ likelihood: 35 })) return false;
+					return true;
+				});
+			}
 
 			// -- HOOK 3: POWER CREATOR ENGAGEMENT LIFT ----------------
 			// Users with >20 article_published events get 3x upvote_count.
@@ -745,7 +766,7 @@ const config = {
 
 			// -- HOOK 4: DISCUSSION DEPTH BY CONTRIBUTOR TYPE ---------
 			// Active contributors get cloned comment_posted events.
-			if (meta && meta.profile && meta.profile.segment === "active_contributor") {
+			if (profile.segment === "active_contributor") {
 				const templateComment = events.find(e => e.event === "comment posted");
 				if (templateComment) {
 					const existingComments = events.filter(e => e.event === "comment posted");
@@ -784,7 +805,7 @@ const config = {
 				}
 			}
 
-			return record;
+			return events;
 		}
 
 		return record;

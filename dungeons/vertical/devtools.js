@@ -1,16 +1,23 @@
+// ── TWEAK THESE ──
+const SEED = "dm4-devtools";
+const num_days = 100;
+const num_users = 5_000;
+const avg_events_per_user = 120;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
-const SEED = "dm4-devtools";
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
-const num_users = 5_000;
-const days = 100;
 const NOW = dayjs();
-const DATASET_START = NOW.subtract(days, "days");
+const DATASET_START = NOW.subtract(num_days, "days");
 
 /** @typedef  {import("../../types").Dungeon} Config */
 
@@ -208,12 +215,13 @@ const repoIds = v.range(1, 150).map(() => `REPO_${v.uid(6)}`);
  * manage organization-wide CI/CD infrastructure.
  *
  * ---------------------------------------------------------------
- * 8. ENTERPRISE BUILD-DEPLOY FUNNEL LIFT (funnel-pre hook)
+ * 8. ENTERPRISE BUILD-DEPLOY FUNNEL LIFT (everything hook)
  * ---------------------------------------------------------------
  *
- * PATTERN: Users with subscription_tier "enterprise" get 1.5x
- * conversion rate on the build-deploy pipeline funnel. Enterprise
- * customers have dedicated support and optimized pipelines.
+ * PATTERN: Free-tier users drop 35% of final funnel step events
+ * ("monitoring dashboard viewed"), creating a visible conversion
+ * gap between paid and free users. Enterprise/business users keep
+ * all their events.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -240,15 +248,15 @@ const repoIds = v.range(1, 150).map(() => `REPO_${v.uid(6)}`);
  * OSS -> Paid Conversion      | team tier events    | 0%       | 30%     | -
  * Post-Outage Recovery        | deploys/day         | 50       | 100+    | 2x+
  * DevOps Lead Profiles        | team_size           | 10       | 30      | 3x
- * Enterprise Funnel Lift      | funnel conversion   | 40%      | 60%     | 1.5x
+ * Enterprise Funnel Lift      | funnel conversion   | 40%      | 60%     | ~1.5x
  */
 
 /** @type {Config} */
 const config = {
-	token: "",
+	token,
 	seed: SEED,
-	numDays: days,
-	numEvents: num_users * 120,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -519,6 +527,9 @@ const config = {
 		repos_connected: [0],
 		org_name: ["personal"],
 		experience_level: ["junior", "junior", "mid", "mid", "mid", "senior", "senior"],
+		subscription_tier: ["free", "free", "free", "team", "team", "business", "enterprise"],
+		platform: ["web", "web", "desktop_app", "cli"],
+		language: ["javascript", "python", "go", "rust", "java", "typescript"],
 	},
 
 	// -- Phase 2: Personas ------------------------------------
@@ -726,19 +737,9 @@ const config = {
 			}
 		}
 
-		// -- HOOK 8: ENTERPRISE BUILD-DEPLOY FUNNEL LIFT (funnel-pre)
-		// Enterprise subscribers convert 1.5x through build-deploy pipeline.
-		// Business subscribers get a smaller lift.
-		if (type === "funnel-pre") {
-			if (meta && meta.profile) {
-				const tier = meta.profile.subscription_tier;
-				if (tier === "enterprise") {
-					record.conversionRate = Math.min(record.conversionRate * 1.5, 95);
-				} else if (tier === "business") {
-					record.conversionRate = Math.min(record.conversionRate * 1.2, 90);
-				}
-			}
-		}
+		// -- HOOK 8: ENTERPRISE BUILD-DEPLOY FUNNEL LIFT
+		// Conversion differences handled in everything hook via event filtering.
+		// (funnel-pre conversionRate modifications are diluted by organic events)
 
 		// -- HOOK 1: BUILD FAILURE CASCADE (event) ----------------
 		// Failed builds get 2x duration (retries take longer).
@@ -762,8 +763,28 @@ const config = {
 
 		// -- EVERYTHING HOOKS -------------------------------------
 		if (type === "everything") {
-			const events = record;
+			let events = record;
 			if (!events.length) return record;
+			const profile = meta && meta.profile ? meta.profile : {};
+
+			// -- SUPERPROP STAMPING -------------------------------
+			// Stamp superProp values from profile onto every event so
+			// they stay consistent per-user instead of randomizing per-event.
+			events.forEach(e => {
+				if (profile.subscription_tier) e.subscription_tier = profile.subscription_tier;
+				if (profile.platform) e.platform = profile.platform;
+				if (profile.language) e.language = profile.language;
+			});
+
+			// -- HOOK 8: ENTERPRISE BUILD-DEPLOY FUNNEL LIFT ------
+			// Free-tier users drop 35% of final funnel step events to
+			// create visible conversion gap vs paid subscribers.
+			if (profile.subscription_tier !== "enterprise" && profile.subscription_tier !== "business") {
+				events = events.filter(e => {
+					if (e.event === "monitoring dashboard viewed" && chance.bool({ likelihood: 35 })) return false;
+					return true;
+				});
+			}
 
 			// -- HOOK 3: COPILOT PR VELOCITY ----------------------
 			// Users with ai_assist="copilot" on any PR get 1.5x more PRs.
@@ -805,7 +826,7 @@ const config = {
 
 			// -- HOOK 5: OPEN SOURCE -> PAID CONVERSION -----------
 			// OSS users with >15 events get 30% of events converted to "team" tier.
-			if (meta && meta.profile && meta.profile.segment === "oss_user" && events.length > 15) {
+			if (profile.segment === "oss_user" && events.length > 15) {
 				const conversionPoint = Math.floor(events.length * 0.7);
 				for (let i = conversionPoint; i < events.length; i++) {
 					events[i].subscription_tier = "team";
@@ -833,7 +854,7 @@ const config = {
 				}
 			});
 
-			return record;
+			return events;
 		}
 
 		return record;

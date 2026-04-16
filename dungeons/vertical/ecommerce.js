@@ -1,3 +1,13 @@
+// ── TWEAK THESE ──
+const SEED = "simple is best";
+const num_days = 108;
+const num_users = 50_000;
+const avg_events_per_user = 40;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import Chance from 'chance';
 let chance = new Chance();
 import dayjs from "dayjs";
@@ -130,11 +140,11 @@ function makeProducts(maxItems = 5) {
 
 /** @type {import('../types.d.ts').Dungeon} */
 const config = {
-	token: "",
-	seed: "simple is best",
-	numDays: 108, //how many days worth1 of data
-	numEvents: 2_000_000, //how many events
-	numUsers: 50_000, //how many users
+	token,
+	seed: SEED,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
+	numUsers: num_users,
 	format: 'json', //csv or json
 	region: "US",
 	hasAnonIds: false, //if true, anonymousIds are created for each user
@@ -305,7 +315,8 @@ const config = {
 	userProps: {
 		title: chance.profession.bind(chance),
 		luckyNumber: weighNumRange(42, 420, .3),
-		spiritAnimal: spiritAnimals
+		spiritAnimal: spiritAnimals,
+		theme: ["light", "dark", "custom", "light", "dark"],
 	},
 	scdProps: {
 		loyalty_tier: {
@@ -418,6 +429,12 @@ const config = {
 
 
 		if (type === "everything") {
+			// Stamp superProps from profile for consistency
+			const profile = meta.profile;
+			record.forEach(e => {
+				e.theme = profile.theme;
+			});
+
 			// big themes!
 
 			// users who view items in the home and garden category churn more frequently

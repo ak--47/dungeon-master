@@ -831,6 +831,41 @@ describe.sequential('orchestrators', () => {
 		expect(config.batchSize).toBe(2_500_000);
 	});
 
+	test('throws when token is placeholder and writeToDisk is false', () => {
+		expect(() => validateDungeonConfig({
+			token: "your-mixpanel-token",
+			writeToDisk: false
+		})).toThrowError(/No Mixpanel token set/);
+	});
+
+	test('does not throw when token is placeholder but writeToDisk is true', () => {
+		expect(() => validateDungeonConfig({
+			token: "your-mixpanel-token",
+			writeToDisk: true
+		})).not.toThrow();
+	});
+
+	test('does not throw when token is a real value and writeToDisk is false', () => {
+		expect(() => validateDungeonConfig({
+			token: "abc123realtoken",
+			writeToDisk: false
+		})).not.toThrow();
+	});
+
+	test('does not throw when token is empty string and writeToDisk is false (programmatic use)', () => {
+		expect(() => validateDungeonConfig({
+			token: "",
+			writeToDisk: false
+		})).not.toThrow();
+	});
+
+	test('does not throw when token is null and writeToDisk is false (default)', () => {
+		expect(() => validateDungeonConfig({
+			token: null,
+			writeToDisk: false
+		})).not.toThrow();
+	});
+
 	test('batch mode: writeToDisk=false with low batchSize warns but succeeds', async () => {
 		const warnSpy = vi.spyOn(console, 'warn');
 		const results = await main({

@@ -1,14 +1,21 @@
+// ── TWEAK THESE ──
+const SEED = "harness-social";
+const num_days = 100;
+const num_users = 5_000;
+const avg_events_per_user = 120;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
-const SEED = "harness-social";
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
-const num_users = 5_000;
-const days = 100;
 
 /** @typedef  {import("../../types").Dungeon} Config */
 
@@ -162,10 +169,10 @@ const postIds = v.range(1, 1001).map(n => `post_${v.uid(8)}`);
 
 /** @type {Config} */
 const config = {
-	token: "",
+	token,
 	seed: SEED,
-	numDays: days,
-	numEvents: num_users * 120,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -445,6 +452,8 @@ const config = {
 	},
 
 	userProps: {
+		app_version: ["4.0", "4.1", "4.2", "4.3", "5.0"],
+		account_type: ["personal", "creator", "business"],
 		"follower_count": u.weighNumRange(0, 10000, 0.2, 50),
 		"following_count": u.weighNumRange(0, 5000, 0.3, 100),
 		"bio_length": u.weighNumRange(0, 160),
@@ -469,7 +478,7 @@ const config = {
 
 	hook: function (record, type, meta) {
 		const NOW = dayjs();
-		const DATASET_START = NOW.subtract(days, 'days');
+		const DATASET_START = NOW.subtract(num_days, 'days');
 		const ALGORITHM_CHANGE_DAY = DATASET_START.add(45, 'days');
 		const REENGAGEMENT_START = DATASET_START.add(30, 'days');
 
@@ -528,6 +537,13 @@ const config = {
 		if (type === "everything") {
 			const userEvents = record;
 			if (!userEvents || userEvents.length === 0) return record;
+
+			// Stamp superProps from profile for consistency
+			const profile = meta.profile;
+			userEvents.forEach(e => {
+				e.app_version = profile.app_version;
+				e.account_type = profile.account_type;
+			});
 
 			// Tracking variables for user patterns
 			let postCreatedCount = 0;

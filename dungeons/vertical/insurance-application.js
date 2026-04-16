@@ -1,13 +1,20 @@
+// ── TWEAK THESE ──
+const SEED = "dm4-insurance";
+const num_days = 100;
+const num_users = 5_000;
+const avg_events_per_user = 120;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 
-const SEED = "dm4-insurance";
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
-const num_users = 5_000;
-const days = 100;
 
 /** @typedef {import("../../types").Dungeon} Config */
 
@@ -126,17 +133,17 @@ const days = 100;
 
 // ── Time constants for hook calculations ──
 const NOW = dayjs();
-const DATASET_START = NOW.subtract(days, "days");
+const DATASET_START = NOW.subtract(num_days, "days");
 const V211_DATE = DATASET_START.add(30, "days");
 const V212_DATE = DATASET_START.add(60, "days");
 const V213_DATE = NOW.subtract(10, "days");
 
 /** @type {Config} */
 const config = {
-	token: "",
+	token,
 	seed: SEED,
-	numDays: days,
-	numEvents: num_users * 120,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -438,6 +445,9 @@ const config = {
 
 	// ── User Props (set once per user) ──
 	userProps: {
+		platform: ["web", "ios", "android"],
+		insurance_type: ["auto", "home", "life", "health", "renters"],
+		app_version: ["2.10"],
 		age_range: ["18-25", "26-35", "36-45", "46-55", "56-65", "65+"],
 		risk_profile: ["low", "medium", "high"],
 		policy_count: u.weighNumRange(0, 5, 0.5, 1),
@@ -476,6 +486,14 @@ const config = {
 		if (type === "everything") {
 			const userEvents = record;
 			if (userEvents.length === 0) return record;
+
+			// Stamp superProps from profile for consistency
+			const profile = meta.profile;
+			userEvents.forEach(e => {
+				e.platform = profile.platform;
+				e.insurance_type = profile.insurance_type;
+				e.app_version = profile.app_version;
+			});
 
 			// ─── Hook #1: VERSION STAMPING ───
 			// Deterministic app_version on every event based on its final timestamp.

@@ -1,3 +1,12 @@
+// ── TWEAK THESE ──
+const SEED = "my-seed";
+const num_days = 180;
+const num_users = 12_000;
+const avg_events_per_user = 90;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
 
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
@@ -5,11 +14,8 @@ import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
-const SEED = "my-seed";
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
-const num_users = 12_000;
-const days = 180;
 
 /** @typedef  {import("../../types").Dungeon} Config */
 
@@ -154,10 +160,10 @@ const days = 180;
 
 /** @type {Config} */
 const config = {
-	token: "",
+	token,
 	seed: "i am gamer face",
-	numDays: days,
-	numEvents: num_users * 90,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: false,
@@ -404,6 +410,26 @@ const config = {
 		}
 	},
 	userProps: {
+		platform: [
+			"Mobile",
+			"Xbox",
+			"Playstation",
+			"Switch",
+			"Web"
+		],
+		"game mode": u.pickAWinner([
+			"Single Player",
+			"Multiplayer",
+		], 1),
+		language: [
+			"English",
+			"Spanish",
+			"French",
+			"German",
+			"Japanese",
+			"Korean",
+			"Chinese",
+		],
 		experiment: [
 			"fast leveling",
 			"tension economy",
@@ -511,7 +537,15 @@ const config = {
 		}
 
 		if (type === "everything") {
+			// Stamp superProps from profile for consistency
+			const profile = meta.profile;
+			record.forEach(e => {
+				e.platform = profile.platform;
+				e["game mode"] = profile["game mode"];
+				e.language = profile.language;
+			});
 
+			return record;
 		}
 
 		return record;

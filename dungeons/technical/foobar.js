@@ -1,3 +1,13 @@
+// ── TWEAK THESE ──
+const SEED = "dm4-foobar";
+const num_days = 30;
+const num_users = 4_000_000;
+const avg_events_per_user = 500;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 /**
  * ═══════════════════════════════════════════════════════════════
  * DATASET OVERVIEW
@@ -151,20 +161,13 @@ const dates = [
 	"2024-06-03T06:52:21.652Z"
 ];
 
-const billionsOfEvents = 2
-
-const numEvents = billionsOfEvents * 1_000_000_000;
-const eventPerUser = 1_000;
-const numUsers = Math.floor(numEvents / eventPerUser);
-const seed = Math.random().toString()
-
 /** @type {import('../../types').Dungeon} */
 const config = {
-	token: "",
-	seed: seed,
-	numDays: 30, //how many days worth of data
-	numEvents: numEvents, //how many events
-	numUsers: numUsers, //how many users	
+	token,
+	seed: SEED,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
+	numUsers: num_users,
 	format: 'json', //csv or json
 	region: "US",
 	hasAnonIds: false, //if true, anonymousIds are created for each user
@@ -244,6 +247,11 @@ const config = {
 		luckyNumber: integer,
 		spiritAnimal: ["duck", "dog", "otter", "penguin", "cat", "elephant", "lion", "cheetah", "giraffe", "zebra", "rhino", "hippo", "whale", "dolphin", "shark", "octopus", "squid", "jellyfish", "starfish", "seahorse", "crab", "lobster", "shrimp", "clam", "snail", "slug", "butterfly", "moth", "bee", "wasp", "ant", "beetle", "ladybug", "caterpillar", "centipede", "millipede", "scorpion", "spider", "tarantula", "tick", "mite", "mosquito", "fly", "dragonfly", "damselfly", "grasshopper", "cricket", "locust", "mantis", "cockroach", "termite", "praying mantis", "walking stick", "stick bug", "leaf insect", "lacewing", "aphid", "cicada", "thrips", "psyllid", "scale insect", "whitefly", "mealybug", "planthopper", "leafhopper", "treehopper", "flea", "louse", "bedbug", "flea beetle", "weevil", "longhorn beetle", "leaf beetle", "tiger beetle", "ground beetle", "lady beetle", "firefly", "click beetle", "rove beetle", "scarab beetle", "dung beetle", "stag beetle", "rhinoceros beetle", "hercules beetle", "goliath beetle", "jewel beetle", "tortoise beetle"],
 		created: dates,
+		string: ["red", "orange", "yellow", "green", "blue", "indigo", "violet"],
+		number: integer,
+		boolean: [true, false],
+		date: dates,
+		temperature: ["warm"],
 	},
 
 	scdProps: {},
@@ -270,6 +278,14 @@ const config = {
 
 		// everything hook: hash-based cohort — 10% of users (by distinct_id) get doubled events
 		if (type === "everything") {
+			const profile = meta.profile;
+			record.forEach(e => {
+				e.string = profile.string;
+				e.number = profile.number;
+				e.boolean = profile.boolean;
+				e.date = profile.date;
+				e.temperature = profile.temperature;
+			});
 			if (record.length > 0) {
 				const userId = record[0].user_id || record[0].distinct_id || "";
 				if (userId && userId.charCodeAt(0) % 10 === 0) {

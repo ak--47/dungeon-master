@@ -1,3 +1,13 @@
+// ── TWEAK THESE ──
+const SEED = "mirror-strategies";
+const num_days = 30;
+const num_users = 500;
+const avg_events_per_user = 60;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 /**
  * Mirror Strategies — tests all 4 mirror data strategies.
  *
@@ -16,11 +26,11 @@ import { weighNumRange, weighChoices } from "../../lib/utils/utils.js";
 /** @typedef {import("../../types").Dungeon} Config */
 /** @type {import('../../types').Dungeon} */
 const config = {
-	token: "",
-	seed: "mirror-strategies",
-	numDays: 30,
-	numEvents: 30_000,
-	numUsers: 500,
+	token,
+	seed: SEED,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
+	numUsers: num_users,
 	format: "json",
 	region: "US",
 	hasAnonIds: false,

@@ -12,7 +12,7 @@ Design and build a complete dungeon-master dungeon for: **$ARGUMENTS**
 
 ## Your Task
 
-Create a single `.js` file in `dungeons/vertical/` that defines a complete, realistic data schema for the described app/vertical. The dungeon must include deliberately architected analytics "hooks" — hidden trends and patterns that simulate real-world product insights buried in large datasets.
+Create a single `.js` file in `dungeons/user/` that defines a complete, realistic data schema for the described app/vertical. The dungeon must include deliberately architected analytics "hooks" — hidden trends and patterns that simulate real-world product insights buried in large datasets.
 
 Before writing any code, read these reference files to understand patterns and conventions:
 - `types.d.ts` — **the complete API reference** for all config options, event flags, hook types, SCD props, funnel options, and type definitions. Every feature is documented with JSDoc comments.
@@ -34,19 +34,26 @@ The file is organized so humans (and AI) can understand the intent before readin
 4. **Code** — the config object, with inline comments in the hook function explaining each mutation
 
 ```javascript
+// ── TWEAK THESE ──
+const SEED = "dm4-VERTICAL";
+const num_days = 100;
+const num_users = 5_000;
+const avg_events_per_user = 120;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
-import * as u from "../lib/utils/utils.js";
+import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
-const SEED = "dm4-VERTICAL";
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
-const num_users = 5_000;
-const days = 100;
 
-/** @typedef  {import("../types").Dungeon} Config */
+/** @typedef  {import("../../types").Dungeon} Config */
 
 // Generate consistent IDs at module level
 const entityIds = v.range(1, N).map(n => `prefix_${v.uid(8)}`);
@@ -116,10 +123,10 @@ export default config;
 ## Base Config (use these exact values)
 
 ```javascript
-token: "",
+token,
 seed: SEED,
-numDays: days,
-numEvents: num_users * 120,
+numDays: num_days,
+numEvents: num_users * avg_events_per_user,
 numUsers: num_users,
 hasAnonIds: false,
 hasSessionIds: true,
@@ -326,6 +333,33 @@ soup: {
 - Properties that appear on EVERY event (platform, subscription tier, etc.)
 - These are accessible in hooks via `record.propName` on every event
 
+#### CRITICAL: SuperProp Consistency Rule
+
+SuperProps are resolved independently per event by the engine (`choose()` is called per event in `events.js`). This means a single user will appear as "iOS" on one event and "Android" on the next — breaking any Mixpanel report that segments by a superProp.
+
+**To make superProps consistent per user, you MUST do both:**
+
+1. **Mirror every superProp in `userProps`** with the same value distribution. This ensures the user profile gets a single resolved value.
+2. **Stamp from `meta.profile` in the `everything` hook** as the FIRST operation. Overwrite each superProp on every event:
+
+```javascript
+if (type === "everything") {
+  // ALWAYS stamp superProps first, before any other everything-hook logic
+  const profile = meta.profile;
+  record.forEach(e => {
+    e.platform = profile.platform;
+    e.subscription_tier = profile.subscription_tier;
+    // ... every superProp key
+  });
+
+  // ... other everything hooks below ...
+
+  return record;
+}
+```
+
+This is MANDATORY for any superProp that should be consistent per user (platform, tier, plan, language, etc.). The only exception is superProps that genuinely should vary per event (e.g., a per-session property).
+
 ### 4. UserProps (4-6)
 - User profile properties set once per user
 
@@ -415,9 +449,23 @@ Use a MIX of these techniques across your 8 hooks — don't put everything in `"
 
 #### Funnel Techniques (`type === "funnel-pre"` / `"funnel-post"`)
 
-- **Conversion rate manipulation** (funnel-pre): `record.conversionRate *= 1.3` for premium users, `*= 0.6` for free
-- **Event injection** (funnel-post): Splice events between funnel steps by cloning from existing events of the same type
-- **Time-to-convert manipulation** (funnel-pre): `record.timeToConvert *= 0.5` for power users
+**WARNING: `funnel-pre` conversionRate modifications are DILUTED by organic events.** Funnel-generated events are a small fraction of total events. When you modify `conversionRate` in `funnel-pre`, the effect is diluted to ~5% visibility because organic events of the same type overwhelm the signal. A 1.5x multiplier in `funnel-pre` shows as ~1.05x in Mixpanel — effectively invisible.
+
+**Use these approaches instead:**
+
+- **For conversion differences by segment** — use the `everything` hook to filter/remove final-step events from the lower-converting segment:
+  ```javascript
+  if (type === "everything") {
+    const profile = meta.profile;
+    if (profile.plan === "free" && chance.bool({likelihood: 30})) {
+      return record.filter(e => e.event !== "checkout completed");
+    }
+    return record;
+  }
+  ```
+- **For timing manipulation** — use `funnel-post` to adjust event timestamps (time-to-convert differences between segments). `funnel-post` is safe because it only touches funnel-generated events.
+- **Event injection** (funnel-post): Splice events between funnel steps by cloning from existing events of the same type.
+- **Acceptable funnel-pre uses** — setting funnel `props` (boolean tags), adjusting `timeToConvert`. Do NOT use funnel-pre to modify `conversionRate`.
 
 #### Everything Techniques (`type === "everything"`) — Most Powerful
 
@@ -452,8 +500,10 @@ const OUTAGE_END = NOW.subtract(3, 'days');
 
 ### Aim for this distribution across your 8 hooks:
 - 2-3 `event` hooks (property modification, temporal windows, day-of-week)
-- 3-4 `everything` hooks — this is the most powerful hook type; it sees the user's full event history AND `meta.profile`, enabling cross-table correlation, two-pass analysis, churn simulation, event injection, and behavioral segmentation. Lean heavily on this.
-- 1-2 of: `user`, `funnel-pre`, or `funnel-post`
+- 3-4 `everything` hooks — this is the most powerful hook type; it sees the user's full event history AND `meta.profile`, enabling cross-table correlation, two-pass analysis, churn simulation, event injection, and behavioral segmentation. Lean heavily on this. Include superProp stamping as the first operation.
+- 1-2 of: `user`, `funnel-post`
+- 0 `funnel-pre` conversionRate mods — use `everything` hook event filtering for conversion differences instead
+- `funnel-pre` is acceptable ONLY for: setting props, adjusting `timeToConvert`
 - 0-1 using module-level closure state (Maps)
 
 ### Hook Reference Examples
@@ -848,7 +898,7 @@ The bad example doesn't tell the user what report type to create, what metric to
 
 ## JSON Schema Output (Required)
 
-After writing the `.js` dungeon file, also generate a companion `<name>-schema.json` file in `./dungeons/vertical/` containing a stripped-down, plain JSON version of the schema — no function calls, no JS imports, just portable data.
+After writing the `.js` dungeon file, also generate a companion `<name>-schema.json` file in `./dungeons/user/` containing a stripped-down, plain JSON version of the schema — no function calls, no JS imports, just portable data.
 
 ### JSON Format Rules
 
@@ -896,21 +946,21 @@ Include `isFirstEvent`, `isFirstFunnel`, `name`, `weight`, `order`, and other no
 
 ## After Writing the Files
 
-1. Validate the JS dungeon with: `node -e "import { validateDungeonConfig } from './lib/core/config-validator.js'; import c from './dungeons/vertical/FILENAME.js'; validateDungeonConfig(c); console.log('valid');"`
+1. Validate the JS dungeon with: `node -e "import { validateDungeonConfig } from './lib/core/config-validator.js'; import c from './dungeons/user/FILENAME.js'; validateDungeonConfig(c); console.log('valid');"`
 2. If validation fails, fix the issue (usually funnel event names or pickAWinner crashes)
 3. Verify the hook function loads without errors
-4. Verify the JSON schema file is valid JSON: `node -e "import fs from 'fs'; JSON.parse(fs.readFileSync('./dungeons/vertical/FILENAME-schema.json', 'utf8')); console.log('valid json');"`
-5. **Run `/verify-hooks dungeons/vertical/FILENAME.js`** to verify all hooks produce their intended patterns. Fix any FAIL or WEAK hooks before considering the dungeon complete.
+4. Verify the JSON schema file is valid JSON: `node -e "import fs from 'fs'; JSON.parse(fs.readFileSync('./dungeons/user/FILENAME-schema.json', 'utf8')); console.log('valid json');"`
+5. **Run `/verify-hooks dungeons/user/FILENAME.js`** to verify all hooks produce their intended patterns. Fix any FAIL or WEAK hooks before considering the dungeon complete.
 
 ## Verifying Hooks
 
-A verify runner already exists at `scripts/verify-runner.mjs` — do NOT create a new one. After creating the dungeon, **always run the verify-hooks skill** (`/verify-hooks dungeons/vertical/FILENAME.js`) to confirm hooks produce their intended data patterns. If hooks fail verification, iterate on the hook code until they pass.
+A verify runner already exists at `scripts/verify-runner.mjs` — do NOT create a new one. After creating the dungeon, **always run the verify-hooks skill** (`/verify-hooks dungeons/user/FILENAME.js`) to confirm hooks produce their intended data patterns. If hooks fail verification, iterate on the hook code until they pass.
 
 Manual verification is also available:
 
 ```bash
 # Generate test data (1K users, 100K events)
-node scripts/verify-runner.mjs dungeons/vertical/FILENAME.js verify-FILENAME
+node scripts/verify-runner.mjs dungeons/user/FILENAME.js verify-FILENAME
 
 # Query the output with DuckDB to verify hook patterns
 duckdb -c "SELECT ... FROM 'verify-FILENAME__events.json'"
@@ -931,6 +981,9 @@ The runner overrides: `numUsers=1000, numEvents=100_000, format=json, writeToDis
 - [ ] Documentation block includes metrics summary table
 - [ ] No `pickAWinner` calls without an explicit integer index arg. No decimal second args. Boolean/2-item weighting uses duplicate arrays.
 - [ ] `lookupTables: []` (no lookup tables — events carry all attributes)
+- [ ] Every superProp key is mirrored in `userProps` with the same value distribution
+- [ ] The `everything` hook stamps ALL superProps from `meta.profile` onto every event (first operation)
+- [ ] No `funnel-pre` hooks modify `conversionRate` — conversion differences use `everything` hook filtering
 - [ ] Passes `validateDungeonConfig`
 - [ ] Companion `<name>-schema.json` file generated with portable JSON schema
 - [ ] JSON schema is valid JSON and matches the JS dungeon's events/funnels/props

@@ -1,13 +1,20 @@
+// ── TWEAK THESE ──
+const SEED = "harness-fintech";
+const num_days = 100;
+const num_users = 5_000;
+const avg_events_per_user = 120;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 
-const SEED = "harness-fintech";
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
-const num_users = 5_000;
-const days = 100;
 
 /** @typedef  {import("../../types").Dungeon} Config */
 
@@ -129,10 +136,10 @@ const days = 100;
 
 /** @type {Config} */
 const config = {
-	token: "",
+	token,
 	seed: SEED,
-	numDays: days,
-	numEvents: num_users * 120,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -405,6 +412,9 @@ const config = {
 	},
 
 	userProps: {
+		account_tier: ["basic", "basic", "basic", "plus", "plus", "premium"],
+		platform: ["ios", "android", "web"],
+		low_balance_churn: [false],
 		"credit_score_range": ["300-579", "580-669", "670-739", "740-799", "800-850"],
 		"income_bracket": ["under_30k", "30k_50k", "50k_75k", "75k_100k", "100k_150k", "over_150k"],
 		"account_age_months": u.weighNumRange(1, 60, 0.5, 12),
@@ -449,7 +459,7 @@ const config = {
 	 */
 	hook: function (record, type, meta) {
 		const NOW = dayjs();
-		const DATASET_START = NOW.subtract(days, "days");
+		const DATASET_START = NOW.subtract(num_days, "days");
 
 		// ===============================================================
 		// Hook #1: PERSONAL VS BUSINESS ACCOUNTS (user)
@@ -581,6 +591,15 @@ const config = {
 		// ===============================================================
 		if (type === "everything") {
 			const userEvents = record;
+
+			// Stamp superProps from profile for consistency
+			const profile = meta.profile;
+			userEvents.forEach(e => {
+				e.account_tier = profile.account_tier;
+				e.platform = profile.platform;
+				e.low_balance_churn = profile.low_balance_churn;
+			});
+
 			const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
 
 			// -----------------------------------------------------------

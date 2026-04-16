@@ -1,3 +1,13 @@
+// ── TWEAK THESE ──
+const SEED = "anonymous-users";
+const num_days = 180;
+const num_users = 1_000;
+const avg_events_per_user = 50;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 /**
  * Anonymous Users — tests anonymous user mode, anonIds, and identity merge.
  *
@@ -17,11 +27,11 @@ import { weighNumRange, weighChoices } from "../../lib/utils/utils.js";
 /** @typedef {import("../../types").Dungeon} Config */
 /** @type {import('../../types').Dungeon} */
 const config = {
-	token: "",
-	seed: "anonymous-users",
-	numDays: 180,
-	numEvents: 50_000,
-	numUsers: 1_000,
+	token,
+	seed: SEED,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
+	numUsers: num_users,
 	format: "json",
 	region: "US",
 	isAnonymous: true,

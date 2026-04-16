@@ -60,10 +60,11 @@ describe('Dungeon Validation', () => {
 				expect(config.events.length).toBeGreaterThan(0);
 			});
 
-			it('has no hardcoded token', () => {
+			it('has no real token', () => {
 				if (!config) return;
 				const token = config.token || '';
-				expect(token).toBe('');
+				// Token should be empty, the placeholder, or unset — never a real Mixpanel token
+				expect(token === '' || token === 'your-mixpanel-token').toBe(true);
 			});
 
 			it('has writeToDisk: false', () => {
@@ -100,7 +101,8 @@ describe('Dungeon Validation', () => {
 
 			it('passes validateDungeonConfig', () => {
 				if (!config) return;
-				expect(() => validateDungeonConfig({ ...config })).not.toThrow();
+				// Override placeholder token to avoid the no-op guard during testing
+				expect(() => validateDungeonConfig({ ...config, token: "" })).not.toThrow();
 			});
 		});
 	}

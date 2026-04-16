@@ -1,14 +1,21 @@
+// ── TWEAK THESE ──
+const SEED = "SUPER DUPER DANGEROUS BROOO";
+const num_days = 92;
+const num_users = 8_000;
+const avg_events_per_user = 120;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
 import { weighNumRange, range, date, initChance, exhaust, choose, integer } from "../../lib/utils/utils.js";
 import { createTextGenerator, generateBatch } from "../../lib/generators/text.js";
 
-const SEED = "SUPER DUPER DANGEROUS BROOO";
 dayjs.extend(utc);
 const chance = initChance(SEED);
-const num_users = 8_000;
-const days = 92;
 
 /** @typedef  {import("../../types").Dungeon} Dungeon */
 
@@ -398,9 +405,9 @@ const webinarChatGen = createTextGenerator({
 /** @type {Dungeon} */
 const dungeon = {
 	seed: SEED,
-	token: "",
-	numDays: days,
-	numEvents: num_users * 120, // Increased for more variety
+	token,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true, // Enable for chat flow tracking
@@ -770,6 +777,8 @@ const dungeon = {
 		preferred_communication: ["email", "chat", "phone", "self_service"],
 		is_power_user: [false],
 		risk_level: ["healthy"],
+		product_tier: ["free", "basic", "pro", "enterprise"],
+		data_center: ["us-east", "us-west", "eu-central", "asia-pacific"],
 	},
 	
 	// ============= Slowly Changing Dimensions =============
@@ -804,6 +813,13 @@ const dungeon = {
 
 		// --- everything hook: enterprise users get a satisfaction survey event ---
 		if (type === "everything" && meta && meta.profile) {
+			// stamp superProps from profile for consistency (skip feature_flags — intentionally per-event)
+			const profile = meta.profile;
+			record.forEach(e => {
+				e.product_tier = profile.product_tier;
+				e.data_center = profile.data_center;
+			});
+
 			if (meta.profile.user_tier === "enterprise" && record.length > 5) {
 				const lastEvent = record[record.length - 1];
 				record.push({

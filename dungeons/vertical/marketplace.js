@@ -1,16 +1,23 @@
+// ── TWEAK THESE ──
+const SEED = "dm4-marketplace";
+const num_days = 100;
+const num_users = 5_000;
+const avg_events_per_user = 120;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
-const SEED = "dm4-marketplace";
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
-const num_users = 5_000;
-const days = 100;
 const NOW = dayjs();
-const DATASET_START = NOW.subtract(days, "days");
+const DATASET_START = NOW.subtract(num_days, "days");
 
 /** @typedef  {import("../../types").Dungeon} Config */
 
@@ -213,12 +220,12 @@ const listingIds = v.range(1, 500).map(() => `LST_${v.uid(8)}`);
  * high transaction volumes, and near-perfect ratings.
  *
  * ───────────────────────────────────────────────────────────────
- * 8. FREQUENT BUYER FUNNEL LIFT (funnel-pre hook)
+ * 8. FREQUENT BUYER FUNNEL LIFT (everything hook)
  * ───────────────────────────────────────────────────────────────
  *
- * PATTERN: Users with segment "frequent_buyer" get 1.3x conversion
- * rate on the browse-to-purchase funnel. Repeat buyers know what
- * they want and convert faster.
+ * PATTERN: Non-frequent-buyer users lose ~25% of "purchase completed"
+ * events (last step of Browse to Purchase funnel), simulating lower
+ * conversion. Frequent buyers retain all purchase events.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -249,10 +256,10 @@ const listingIds = v.range(1, 500).map(() => `LST_${v.uid(8)}`);
 
 /** @type {Config} */
 const config = {
-	token: "",
+	token,
 	seed: SEED,
-	numDays: days,
-	numEvents: num_users * 120,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -514,6 +521,8 @@ const config = {
 		total_transactions: [0],
 		response_time_hours: u.weighNumRange(0, 48, 0.3),
 		store_name: ["none"],
+		platform: ["ios", "android", "web"],
+		category: ["electronics", "clothing", "home_garden", "collectibles", "sports", "toys", "automotive"],
 	},
 
 	// ── Personas ──────────────────────────────────
@@ -721,13 +730,9 @@ const config = {
 		}
 
 		// ── HOOK 8: FREQUENT BUYER FUNNEL LIFT (funnel-pre) ──
-		// Frequent buyers convert 1.3x better through browse-to-purchase.
+		// (conversionRate filtering moved to everything hook)
 		if (type === "funnel-pre") {
-			if (meta && meta.profile) {
-				if (meta.profile.segment === "frequent_buyer") {
-					record.conversionRate = Math.min(record.conversionRate * 1.3, 90);
-				}
-			}
+			// no-op: conversion filtering handled via event dropping in everything hook
 		}
 
 		// ── HOOK 1: FEE CHANGE IMPACT (event) ────────────────
@@ -755,10 +760,30 @@ const config = {
 
 		// ── EVERYTHING HOOKS ─────────────────────────────────
 		if (type === "everything") {
-			const events = record;
+			let events = record;
 			if (!events.length) return record;
 
 			const profile = meta.profile;
+
+			// ── SUPERPROP STAMPING ──────────────────────────
+			// Stamp superProps from profile so they are consistent per user.
+			if (profile) {
+				events.forEach(e => {
+					if (profile.platform) e.platform = profile.platform;
+					if (profile.category) e.category = profile.category;
+				});
+			}
+
+			// ── HOOK 8: FREQUENT BUYER CONVERSION FILTER ────
+			// Non-frequent-buyer users drop ~25% of "purchase completed"
+			// (last step of Browse to Purchase funnel) to simulate lower conversion.
+			if (profile && profile.segment !== "frequent_buyer") {
+				record = record.filter(e => {
+					if (e.event === "purchase completed" && chance.bool({ likelihood: 25 })) return false;
+					return true;
+				});
+				events = record;
+			}
 
 			// ── HOOK 3: SELLER SUCCESS → BUYER TRUST ─────────
 			// Power sellers get 2x purchase events (cloned from existing).

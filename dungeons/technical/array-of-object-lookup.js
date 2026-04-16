@@ -1,3 +1,13 @@
+// ── TWEAK THESE ──
+const SEED = "dm4-array-of-object-lookup";
+const num_days = 60;
+const num_users = 1_000;
+const avg_events_per_user = 100;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import Chance from 'chance';
 let chance = new Chance();
 import dayjs from "dayjs";
@@ -40,12 +50,12 @@ const spiritAnimals = ["duck", "dog", "otter", "penguin", "cat", "elephant", "li
 
 /** @type {import('../types.js').Dungeon} */
 const config = {
-	// token: "",
-	seed: "test array of objects lookup",
+	token,
+	seed: SEED,
 	name: "array-of-object-lookup",
-	numDays: 60, //how many days worth1 of data
-	numEvents: 100_000, //how many events
-	numUsers: 1_000, //how many users
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
+	numUsers: num_users,
 	format: 'json', //csv or json
 	region: "US",
 	hasAnonIds: true, //if true, anonymousIds are created for each user
@@ -109,6 +119,7 @@ const config = {
 	each key should be an array or function reference
 	*/
 	userProps: {
+		theme: ["light", "dark", "custom", "light", "dark"],
 		// title: chance.profession.bind(chance),
 		// luckyNumber: weighNumRange(1, 500, .3),
 		spiritAnimal: spiritAnimals
@@ -160,6 +171,11 @@ const config = {
 		}
 
 		if (type === "everything") {
+			const profile = meta.profile;
+			record.forEach(e => {
+				e.theme = profile.theme;
+			});
+
 			// Pattern 3: Users who view 5+ items but never checkout are tagged as window shoppers
 			const views = record.filter(e => e.event === "view item").length;
 			const checkouts = record.filter(e => e.event === "checkout").length;

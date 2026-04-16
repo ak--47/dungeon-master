@@ -1,16 +1,23 @@
+// ── TWEAK THESE ──
+const SEED = "dm4-logistics";
+const num_days = 100;
+const num_users = 5_000;
+const avg_events_per_user = 120;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
-const SEED = "dm4-logistics";
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
-const num_users = 5_000;
-const days = 100;
 const NOW = dayjs();
-const DATASET_START = NOW.subtract(days, "days");
+const DATASET_START = NOW.subtract(num_days, "days");
 
 /** @typedef  {import("../../types").Dungeon} Config */
 
@@ -216,12 +223,14 @@ const supplierIds = v.range(1, 150).map(() => `SUP_${v.uid(6)}`);
  * networks with large logistics teams, driving higher ACV.
  *
  * -------------------------------------------------------------------
- * 8. ENTERPRISE INTEGRATION FUNNEL LIFT (funnel-pre hook)
+ * 8. SMALL-BUSINESS CONVERSION DROP (everything hook)
  * -------------------------------------------------------------------
  *
- * PATTERN: Users with company_tier "enterprise" convert 1.5x better
- * through the Integration Setup funnel. Enterprises have dedicated
- * IT teams and structured onboarding processes.
+ * PATTERN: Small-business users lose ~35% of "alert configured"
+ * events (last step of the Integration Setup funnel). This is
+ * implemented via event filtering in the everything hook rather
+ * than conversionRate modification in funnel-pre, so the effect
+ * is not diluted by organic (non-funnel) events.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -229,10 +238,10 @@ const supplierIds = v.range(1, 150).map(() => `SUP_${v.uid(6)}`);
  *   - Report type: Funnels
  *   - Steps: "integration connected" -> "report generated" -> "alert configured"
  *   - Breakdown: user property "company_tier"
- *   - Expected: enterprise ~60% vs small_business ~30% conversion
+ *   - Expected: small_business ~20% vs enterprise/mid_market ~30% conversion
  *
- * REAL-WORLD ANALOGUE: Enterprise IT teams have dedicated resources
- * for integrations, leading to faster and more complete setup.
+ * REAL-WORLD ANALOGUE: Small businesses lack dedicated IT teams,
+ * leading to incomplete integration setup and lower alert adoption.
  *
  * ===================================================================
  * EXPECTED METRICS SUMMARY
@@ -247,15 +256,15 @@ const supplierIds = v.range(1, 150).map(() => `SUP_${v.uid(6)}`);
  * Alert Fatigue               | response_time_hours | 4h       | 8-12h   | 2-3x
  * Trial Churn                 | events after wk 1   | 5        | 2.5     | 0.5x
  * Enterprise Profiles         | warehouse_count     | 3        | 10      | 3.3x
- * Enterprise Integration Lift | funnel conversion   | 30%      | 45%     | 1.5x
+ * Small-Biz Conversion Drop  | funnel conversion   | 30%      | 20%     | 0.65x
  */
 
 /** @type {Config} */
 const config = {
-	token: "",
+	token,
 	seed: SEED,
-	numDays: days,
-	numEvents: num_users * 120,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -516,6 +525,8 @@ const config = {
 		employee_count: u.weighNumRange(1, 500, 0.3, 25),
 		industry: ["retail", "manufacturing", "food_beverage", "pharma", "electronics"],
 		integration_count: [0],
+		platform: ["web", "web", "desktop_app"],
+		subscription_plan: ["free_trial", "free_trial", "starter", "starter", "professional", "enterprise"],
 	},
 
 	// -- Phase 2: Personas --------------------------------------------
@@ -697,16 +708,9 @@ const config = {
 		}
 
 		// -- HOOK 8: ENTERPRISE INTEGRATION FUNNEL LIFT (funnel-pre) --
-		// Enterprise subscribers convert 1.5x through integration funnel.
+		// (conversionRate boost removed — filtering applied in everything hook instead)
 		if (type === "funnel-pre") {
-			if (meta && meta.profile) {
-				const tier = meta.profile.company_tier;
-				if (tier === "enterprise") {
-					record.conversionRate = Math.min(record.conversionRate * 1.5, 95);
-				} else if (tier === "mid_market") {
-					record.conversionRate = Math.min(record.conversionRate * 1.2, 85);
-				}
-			}
+			// no-op: conversion differentiation handled via event filtering below
 		}
 
 		// -- HOOK 1: MONTH-END REPORTING SURGE (event) ----------------
@@ -728,29 +732,53 @@ const config = {
 
 		// -- EVERYTHING HOOKS -----------------------------------------
 		if (type === "everything") {
-			const events = record;
-			if (!events.length) return record;
+			if (!record.length) return record;
+			const profile = meta.profile;
+
+			// -- SUPER-PROP STAMPING ----------------------------------
+			// Stamp superProps from profile so they are consistent per-user.
+			if (profile) {
+				const plat = profile.platform;
+				const plan = profile.subscription_plan;
+				record.forEach(e => {
+					if (plat) e.platform = plat;
+					if (plan) e.subscription_plan = plan;
+				});
+			}
+
+			// -- HOOK 8: SMALL-BUSINESS CONVERSION DROP ---------------
+			// Small-business users lose ~35% of "alert configured" events
+			// (last step of Integration Setup funnel), simulating lower
+			// conversion for smaller teams without dedicated IT resources.
+			if (profile && profile.company_tier === "small_business") {
+				record = record.filter(e => {
+					if (e.event === "alert configured" && chance.bool({ likelihood: 35 })) {
+						return false;
+					}
+					return true;
+				});
+			}
 
 			// -- HOOK 3: REORDER ACCURACY BY TIER ---------------------
 			// Enterprise users get 10% of stockout alerts removed.
-			if (meta.profile && meta.profile.company_tier === "enterprise") {
-				for (let i = events.length - 1; i >= 0; i--) {
-					if (events[i].event === "stockout alert" && chance.bool({ likelihood: 10 })) {
-						events.splice(i, 1);
+			if (profile && profile.company_tier === "enterprise") {
+				for (let i = record.length - 1; i >= 0; i--) {
+					if (record[i].event === "stockout alert" && chance.bool({ likelihood: 10 })) {
+						record.splice(i, 1);
 					}
 				}
 			}
 
 			// -- HOOK 4: INTEGRATION COMPLETION DRIVES RETENTION ------
 			// Users with 3+ integration events get cloned report events.
-			const integrationCount = events.filter(e => e.event === "integration connected").length;
+			const integrationCount = record.filter(e => e.event === "integration connected").length;
 			if (integrationCount >= 3) {
-				const templateReport = events.find(e => e.event === "report generated");
+				const templateReport = record.find(e => e.event === "report generated");
 				if (templateReport) {
-					const integrationEvents = events.filter(e => e.event === "integration connected");
+					const integrationEvents = record.filter(e => e.event === "integration connected");
 					integrationEvents.forEach(ie => {
 						if (chance.bool({ likelihood: 65 })) {
-							events.push({
+							record.push({
 								...templateReport,
 								time: dayjs(ie.time).add(chance.integer({ min: 1, max: 5 }), "days").toISOString(),
 								user_id: ie.user_id,
@@ -764,7 +792,7 @@ const config = {
 
 			// -- HOOK 5: ALERT FATIGUE --------------------------------
 			// Users with >30 stockout alerts get increasing response times.
-			const alertEvents = events.filter(e => e.event === "stockout alert");
+			const alertEvents = record.filter(e => e.event === "stockout alert");
 			if (alertEvents.length > 30) {
 				alertEvents.forEach((alert, idx) => {
 					if (idx >= 20) {
@@ -776,14 +804,14 @@ const config = {
 
 			// -- HOOK 6: TRIAL CHURN ----------------------------------
 			// Users with <10 events lose 50% after day 7.
-			if (events.length < 10) {
-				const userFirstEvent = events[0];
+			if (record.length < 10) {
+				const userFirstEvent = record[0];
 				if (userFirstEvent) {
 					const firstTime = dayjs(userFirstEvent.time);
 					const cutoff = firstTime.add(7, "days");
-					for (let i = events.length - 1; i >= 0; i--) {
-						if (dayjs(events[i].time).isAfter(cutoff) && chance.bool({ likelihood: 50 })) {
-							events.splice(i, 1);
+					for (let i = record.length - 1; i >= 0; i--) {
+						if (dayjs(record[i].time).isAfter(cutoff) && chance.bool({ likelihood: 50 })) {
+							record.splice(i, 1);
 						}
 					}
 				}

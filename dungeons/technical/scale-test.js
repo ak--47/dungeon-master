@@ -1,3 +1,13 @@
+// ── TWEAK THESE ──
+const SEED = "scale test";
+const num_days = 365;
+const num_users = 10_000;
+const avg_events_per_user = 50;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import Chance from 'chance';
 let chance = new Chance();
 import dayjs from "dayjs";
@@ -24,11 +34,12 @@ import { weighNumRange, date, integer, weighChoices } from "../../lib/utils/util
 
 /** @type {import('../../types').Dungeon} */
 const config = {
-	seed: "scale test",
+	token,
+	seed: SEED,
 	name: "scale-test",
-	numDays: 365,
-	numEvents: 500_000,
-	numUsers: 10_000,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
+	numUsers: num_users,
 	format: 'json',
 	gzip: true,
 	concurrency: 1,

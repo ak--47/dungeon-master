@@ -1,14 +1,21 @@
+// ── TWEAK THESE ──
+const SEED = "harness-education";
+const num_days = 100;
+const num_users = 5_000;
+const avg_events_per_user = 120;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 
-const SEED = "harness-education";
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
-const num_users = 5_000;
-const days = 100;
 
 /** @typedef  {import("../../types").Dungeon} Config */
 
@@ -183,10 +190,10 @@ const problemIds = v.range(1, 601).map(n => `problem_${v.uid(6)}`);
 
 /** @type {Config} */
 const config = {
-	token: "",
+	token,
 	seed: SEED,
-	numDays: days,
-	numEvents: num_users * 120,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -466,6 +473,7 @@ const config = {
 		"instructor_rating": [0],
 		"learning_goal": ["none"],
 		"study_hours_per_week": [0],
+		"platform": ["Web", "iOS", "Android", "iPad"],
 	},
 
 	groupKeys: [
@@ -505,7 +513,7 @@ const config = {
 	 */
 	hook: function (record, type, meta) {
 		const NOW = dayjs();
-		const DATASET_START = NOW.subtract(days, 'days');
+		const DATASET_START = NOW.subtract(num_days, 'days');
 
 		// ═══════════════════════════════════════════════════════════════════
 		// Hook #1: STUDENT VS INSTRUCTOR PROFILES
@@ -621,7 +629,15 @@ const config = {
 		// ═══════════════════════════════════════════════════════════════════
 		if (type === "everything") {
 			const userEvents = record;
+			const profile = meta.profile;
 			const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
+
+			// ── Stamp superProps from profile so they stay consistent per user ──
+			if (profile) {
+				userEvents.forEach((event) => {
+					if (profile.platform !== undefined) event.platform = profile.platform;
+				});
+			}
 
 			// ---------------------------------------------------------------
 			// First pass: identify user patterns
@@ -720,7 +736,7 @@ const config = {
 			}
 
 			// Hook #7: FREE VS PAID - reinforce the subscription effect on certificates
-			const subStatus = meta && meta.profile ? meta.profile.subscription_status : "free";
+			const subStatus = profile ? profile.subscription_status : "free";
 			if (subStatus === "free") {
 				// Free users lose 55% of their certificates (simulating lower completion)
 				for (let i = userEvents.length - 1; i >= 0; i--) {
@@ -778,17 +794,11 @@ const config = {
 		// Hook #7: FREE VS PAID COURSES (funnel-pre)
 		// ═══════════════════════════════════════════════════════════════════
 		if (type === "funnel-pre") {
-			// Target funnels containing course completion events
+			// Hook #7: FREE VS PAID — prop tagging only
+			// conversionRate manipulation removed; the everything hook handles
+			// the completion gap by dropping 55% of free-user certificates
 			if (meta && meta.profile && meta.funnel) {
-				const subscriptionStatus = meta.profile.subscription_status;
-
-				if (subscriptionStatus === "free") {
-					// Free users convert at 0.5x rate
-					record.conversionRate = (record.conversionRate || 0.25) * 0.5;
-				} else if (subscriptionStatus === "monthly" || subscriptionStatus === "annual") {
-					// Paid subscribers convert at 1.5x rate
-					record.conversionRate = (record.conversionRate || 0.25) * 1.5;
-				}
+				// no-op: kept for future prop-setting if needed
 			}
 		}
 

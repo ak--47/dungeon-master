@@ -1,3 +1,13 @@
+// ── TWEAK THESE ──
+const SEED = "simple is best";
+const num_days = 100;
+const num_users = 5_000;
+const avg_events_per_user = 100;
+let token = "your-mixpanel-token";
+
+// ── env overrides ──
+if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+
 import Chance from 'chance';
 let chance = new Chance();
 import dayjs from "dayjs";
@@ -60,11 +70,11 @@ const videoCategories = ["funny", "educational", "inspirational", "music", "news
 
 /** @type {import('../../types').Dungeon} */
 const config = {
-	token: "",
-	seed: "simple is best",
-	numDays: 100, //how many days worth1 of data
-	numEvents: 500_000, //how many events
-	numUsers: 5_000, //how many users
+	token,
+	seed: SEED,
+	numDays: num_days,
+	numEvents: num_users * avg_events_per_user,
+	numUsers: num_users,
 	format: 'json', //csv or json
 	region: "US",
 	hasAnonIds: true, //if true, anonymousIds are created for each user
@@ -191,6 +201,7 @@ const config = {
 	each key should be an array or function reference
 	*/
 	userProps: {
+		theme: ["light", "dark", "custom", "light", "dark"],
 		title: chance.profession.bind(chance),
 		luckyNumber: weighNumRange(42, 420, .3),
 		spiritAnimal: ["duck", "dog", "otter", "penguin", "cat", "elephant", "lion", "cheetah", "giraffe", "zebra", "rhino", "hippo", "whale", "dolphin", "shark", "octopus", "squid", "jellyfish", "starfish", "seahorse", "crab", "lobster", "shrimp", "clam", "snail", "slug", "butterfly", "moth", "bee", "wasp", "ant", "beetle", "ladybug", "caterpillar", "centipede", "millipede", "scorpion", "spider", "tarantula", "tick", "mite", "mosquito", "fly", "dragonfly", "damselfly", "grasshopper", "cricket", "locust", "mantis", "cockroach", "termite", "praying mantis", "walking stick", "stick bug", "leaf insect", "lacewing", "aphid", "cicada", "thrips", "psyllid", "scale insect", "whitefly", "mealybug", "planthopper", "leafhopper", "treehopper", "flea", "louse", "bedbug", "flea beetle", "weevil", "longhorn beetle", "leaf beetle", "tiger beetle", "ground beetle", "lady beetle", "firefly", "click beetle", "rove beetle", "scarab beetle", "dung beetle", "stag beetle", "rhinoceros beetle", "hercules beetle", "goliath beetle", "jewel beetle", "tortoise beetle"]
@@ -234,6 +245,10 @@ const config = {
 		}
 
 		if (type === "everything") {
+			const profile = meta.profile;
+			record.forEach(e => {
+				e.theme = profile.theme;
+			});
 
 			//custom themes purchase more:
 			const numCustomMode = record.filter(a => a.theme === 'custom').length;
