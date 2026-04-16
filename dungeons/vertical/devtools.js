@@ -515,7 +515,7 @@ const config = {
 	// -- SuperProps --------------------------------------------
 	superProps: {
 		subscription_tier: ["free", "free", "free", "team", "team", "business", "enterprise"],
-		platform: ["web", "web", "desktop_app", "cli"],
+		Platform: ["web", "web", "desktop_app", "cli"],
 		language: ["javascript", "python", "go", "rust", "java", "typescript"],
 	},
 
@@ -528,7 +528,7 @@ const config = {
 		org_name: ["personal"],
 		experience_level: ["junior", "junior", "mid", "mid", "mid", "senior", "senior"],
 		subscription_tier: ["free", "free", "free", "team", "team", "business", "enterprise"],
-		platform: ["web", "web", "desktop_app", "cli"],
+		Platform: ["web", "web", "desktop_app", "cli"],
 		language: ["javascript", "python", "go", "rust", "java", "typescript"],
 	},
 
@@ -772,7 +772,7 @@ const config = {
 			// they stay consistent per-user instead of randomizing per-event.
 			events.forEach(e => {
 				if (profile.subscription_tier) e.subscription_tier = profile.subscription_tier;
-				if (profile.platform) e.platform = profile.platform;
+				if (profile.Platform) e.Platform = profile.Platform;
 				if (profile.language) e.language = profile.language;
 			});
 

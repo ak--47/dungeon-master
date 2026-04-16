@@ -109,6 +109,9 @@ async function DUNGEON_MASTER(input, overrides = {}) {
 			const textConfig = await loadFromText(value);
 			return await runDungeon({ ...textConfig, ...overrides });
 		}
+
+		default:
+			throw new Error(`Unexpected input type: ${type}`);
 	}
 }
 

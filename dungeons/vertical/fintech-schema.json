@@ -504,7 +504,7 @@
       "plus",
       "premium"
     ],
-    "platform": [
+    "Platform": [
       "ios",
       "android",
       "web"

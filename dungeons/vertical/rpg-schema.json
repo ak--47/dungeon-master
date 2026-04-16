@@ -2389,7 +2389,7 @@
     }
   ],
   "superProps": {
-    "platform": [
+    "Platform": [
       "PC",
       "Mac",
       "PlayStation",

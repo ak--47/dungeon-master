@@ -469,7 +469,7 @@ const config = {
 	],
 
 	superProps: {
-		platform: ["iOS", "Android", "Web"],
+		Platform: ["iOS", "Android", "Web"],
 		subscription_tier: ["Free", "Free", "Free", "Free", "QuickBite+"],
 		city: ["New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "San Francisco"],
 	},
@@ -490,7 +490,7 @@ const config = {
 		"favorite_restaurant_count": u.weighNumRange(1, 10),
 		"is_high_risk": [false],
 		"churn_risk_score": [0],
-		"platform": ["iOS", "Android", "Web"],
+		"Platform": ["iOS", "Android", "Web"],
 		"subscription_tier": ["Free", "Free", "Free", "Free", "QuickBite+"],
 		"city": ["New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "San Francisco"],
 	},
@@ -615,7 +615,7 @@ const config = {
 						time: midTime,
 						user_id: firstEvent.user_id,
 						subscription_tier: firstEvent.subscription_tier,
-						platform: firstEvent.platform,
+						Platform: firstEvent.Platform,
 						city: firstEvent.city,
 						coupon_code: chance.pickone(couponCodes),
 						discount_type: chance.pickone(["percent", "flat", "free_delivery"]),
@@ -688,7 +688,7 @@ const config = {
 			// ── Stamp superProps from profile so they stay consistent per user ──
 			if (profile) {
 				userEvents.forEach((event) => {
-					if (profile.platform !== undefined) event.platform = profile.platform;
+					if (profile.Platform !== undefined) event.Platform = profile.Platform;
 					if (profile.subscription_tier !== undefined) event.subscription_tier = profile.subscription_tier;
 					if (profile.city !== undefined) event.city = profile.city;
 				});

@@ -233,8 +233,8 @@ export interface hookArrayOptions<T> {
  * an enriched array is an array that has a hookPush method that can be used to transform-then-push items into the array
  */
 export interface HookedArray<T> extends Array<T> {
-    hookPush: (item: T | T[], ...meta: any[]) => any;
-    flush: () => void;
+    hookPush: (item: T | T[], ...meta: any[]) => Promise<any>;
+    flush: () => Promise<void>;
     getWriteDir: () => string;
     getWritePath: () => string;
     [key: string]: any;

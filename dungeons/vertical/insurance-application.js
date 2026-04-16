@@ -438,14 +438,14 @@ const config = {
 
 	// ── Super Props (on every event) ──
 	superProps: {
-		platform: ["web", "ios", "android"],
+		Platform: ["web", "ios", "android"],
 		insurance_type: ["auto", "home", "life", "health", "renters"],
 		app_version: ["2.10"],
 	},
 
 	// ── User Props (set once per user) ──
 	userProps: {
-		platform: ["web", "ios", "android"],
+		Platform: ["web", "ios", "android"],
 		insurance_type: ["auto", "home", "life", "health", "renters"],
 		app_version: ["2.10"],
 		age_range: ["18-25", "26-35", "36-45", "46-55", "56-65", "65+"],
@@ -490,7 +490,7 @@ const config = {
 			// Stamp superProps from profile for consistency
 			const profile = meta.profile;
 			userEvents.forEach(e => {
-				e.platform = profile.platform;
+				e.Platform = profile.Platform;
 				e.insurance_type = profile.insurance_type;
 				e.app_version = profile.app_version;
 			});

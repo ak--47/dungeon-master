@@ -495,7 +495,7 @@ const config = {
 	// ── SuperProps ──────────────────────────────────────────
 	superProps: {
 		subscription_tier: ["free", "free", "free", "basic", "basic", "premium"],
-		platform: ["ios", "android", "web"],
+		Platform: ["ios", "android", "web"],
 	},
 
 	// ── UserProps ──────────────────────────────────────────
@@ -507,7 +507,7 @@ const config = {
 		has_chronic_condition: [false, false, false, true],
 		age_range: ["18-25", "26-35", "26-35", "36-45", "36-45", "46-55", "56-65", "65+"],
 		subscription_tier: ["free", "free", "free", "basic", "basic", "premium"],
-		platform: ["ios", "android", "web"],
+		Platform: ["ios", "android", "web"],
 	},
 
 	// ── Personas ──────────────────────────────────
@@ -699,10 +699,10 @@ const config = {
 			// Stamp superProps from profile so they are consistent per-user.
 			if (profile) {
 				const tier = profile.subscription_tier;
-				const plat = profile.platform;
+				const plat = profile.Platform;
 				record.forEach(e => {
 					if (tier) e.subscription_tier = tier;
-					if (plat) e.platform = plat;
+					if (plat) e.Platform = plat;
 				});
 			}
 

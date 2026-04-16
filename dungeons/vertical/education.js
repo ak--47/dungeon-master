@@ -443,7 +443,7 @@ const config = {
 	],
 
 	superProps: {
-		platform: ["Web", "iOS", "Android", "iPad"],
+		Platform: ["Web", "iOS", "Android", "iPad"],
 	},
 
 	scdProps: {
@@ -473,7 +473,7 @@ const config = {
 		"instructor_rating": [0],
 		"learning_goal": ["none"],
 		"study_hours_per_week": [0],
-		"platform": ["Web", "iOS", "Android", "iPad"],
+		"Platform": ["Web", "iOS", "Android", "iPad"],
 	},
 
 	groupKeys: [
@@ -635,7 +635,7 @@ const config = {
 			// ── Stamp superProps from profile so they stay consistent per user ──
 			if (profile) {
 				userEvents.forEach((event) => {
-					if (profile.platform !== undefined) event.platform = profile.platform;
+					if (profile.Platform !== undefined) event.Platform = profile.Platform;
 				});
 			}
 

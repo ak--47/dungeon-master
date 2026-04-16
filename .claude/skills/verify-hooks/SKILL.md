@@ -457,7 +457,11 @@ Verdict: **PASS** >= 99% consistent, **WEAK** 90-99%, **FAIL** < 90%.
 
 **2. SuperProp-UserProp Mirror Check** — verify that every superProp key also appears on user profiles. Compare the dungeon's `superProps` keys against the columns in the USERS file. Any superProp not mirrored in `userProps` means the stamping fix is incomplete.
 
-**3. funnel-pre Dilution Check** — for any dungeon with `funnel-pre` conversionRate modifications, verify the actual visible effect:
+**3. Mixpanel Default Property Casing Check** — the system generates device properties with Mixpanel's standard casing (`Platform` with capital P, `os`, `model`, etc.) and location properties (`city`, `region`, `country`). If a dungeon defines a superProp with conflicting casing (e.g., lowercase `platform`), both properties will appear on events — confusing in Mixpanel. Check for:
+- `platform` (lowercase) vs system `Platform` — verdict **FAIL** if dungeon uses lowercase
+- `City`, `Region`, `Country` vs system `city`, `region`, `country` — check casing matches
+
+**4. funnel-pre Dilution Check** — for any dungeon with `funnel-pre` conversionRate modifications, verify the actual visible effect:
 - A `conversionRate *= 1.5` in funnel-pre typically shows as ~1.02-1.08x in the data (diluted by organic events)
 - If observed ratio is < 1.1x for a funnel-pre conversionRate hook, verdict is **FAIL** with note: "funnel-pre conversionRate diluted by organic events — migrate to `everything` hook event filtering"
 - When the dungeon uses `everything` hook filtering instead, expect the full intended ratio (1.3-1.5x)

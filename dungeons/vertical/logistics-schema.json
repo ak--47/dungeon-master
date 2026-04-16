@@ -521,7 +521,7 @@
     }
   ],
   "superProps": {
-    "platform": [
+    "Platform": [
       "web",
       "desktop_app"
     ],

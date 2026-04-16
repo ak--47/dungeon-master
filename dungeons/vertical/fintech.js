@@ -407,13 +407,13 @@ const config = {
 
 	superProps: {
 		account_tier: ["basic", "basic", "basic", "plus", "plus", "premium"],
-		platform: ["ios", "android", "web"],
+		Platform: ["ios", "android", "web"],
 		low_balance_churn: [false],
 	},
 
 	userProps: {
 		account_tier: ["basic", "basic", "basic", "plus", "plus", "premium"],
-		platform: ["ios", "android", "web"],
+		Platform: ["ios", "android", "web"],
 		low_balance_churn: [false],
 		"credit_score_range": ["300-579", "580-669", "670-739", "740-799", "800-850"],
 		"income_bracket": ["under_30k", "30k_50k", "50k_75k", "75k_100k", "100k_150k", "over_150k"],
@@ -596,7 +596,7 @@ const config = {
 			const profile = meta.profile;
 			userEvents.forEach(e => {
 				e.account_tier = profile.account_tier;
-				e.platform = profile.platform;
+				e.Platform = profile.Platform;
 				e.low_balance_churn = profile.low_balance_churn;
 			});
 

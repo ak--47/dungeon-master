@@ -509,7 +509,7 @@ const config = {
 
 	// ── SuperProps ──────────────────────────────────────────
 	superProps: {
-		platform: ["ios", "android", "web"],
+		Platform: ["ios", "android", "web"],
 		category: ["electronics", "clothing", "home_garden", "collectibles", "sports", "toys", "automotive"],
 	},
 
@@ -521,7 +521,7 @@ const config = {
 		total_transactions: [0],
 		response_time_hours: u.weighNumRange(0, 48, 0.3),
 		store_name: ["none"],
-		platform: ["ios", "android", "web"],
+		Platform: ["ios", "android", "web"],
 		category: ["electronics", "clothing", "home_garden", "collectibles", "sports", "toys", "automotive"],
 	},
 
@@ -769,7 +769,7 @@ const config = {
 			// Stamp superProps from profile so they are consistent per user.
 			if (profile) {
 				events.forEach(e => {
-					if (profile.platform) e.platform = profile.platform;
+					if (profile.Platform) e.Platform = profile.Platform;
 					if (profile.category) e.category = profile.category;
 				});
 			}

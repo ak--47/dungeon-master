@@ -511,7 +511,7 @@ const config = {
 	// -- SuperProps ----------------------------------------------------
 	superProps: {
 		subscription_tier: ["free", "free", "free", "free", "supporter", "pro"],
-		platform: ["ios", "android", "web"],
+		Platform: ["ios", "android", "web"],
 		content_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
 	},
 
@@ -523,7 +523,7 @@ const config = {
 		reputation_score: u.weighNumRange(0, 100, 0.3, 25),
 		preferred_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
 		subscription_tier: ["free", "free", "free", "free", "supporter", "pro"],
-		platform: ["ios", "android", "web"],
+		Platform: ["ios", "android", "web"],
 		content_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
 	},
 
@@ -735,7 +735,7 @@ const config = {
 			// they stay consistent per-user instead of randomizing per-event.
 			events.forEach(e => {
 				if (profile.subscription_tier) e.subscription_tier = profile.subscription_tier;
-				if (profile.platform) e.platform = profile.platform;
+				if (profile.Platform) e.Platform = profile.Platform;
 				if (profile.content_hub) e.content_hub = profile.content_hub;
 			});
 

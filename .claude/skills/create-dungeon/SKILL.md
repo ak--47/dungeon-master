@@ -330,8 +330,18 @@ soup: {
 - **CRITICAL**: Every event name in `sequence` arrays MUST exist in the `events` array
 
 ### 3. SuperProps (2-3)
-- Properties that appear on EVERY event (platform, subscription tier, etc.)
+- Properties that appear on EVERY event (Platform, subscription tier, etc.)
 - These are accessible in hooks via `record.propName` on every event
+
+#### CRITICAL: Mixpanel Default Property Casing
+
+The dungeon-master engine generates system-level device properties (from `hasAndroidDevices`, `hasIOSDevices`, `hasDesktopDevices`) that use Mixpanel's standard casing: `Platform` (capital P), `os`, `model`, `carrier`, `radio`, `screen_height`, `screen_width`. If `hasLocation` is true, it also generates `city`, `region`, `country`.
+
+**When defining superProps, use Mixpanel's casing to avoid creating duplicate properties:**
+- Use `Platform` (capital P), NOT `platform` — Mixpanel is case-sensitive and will treat these as two different properties
+- The `everything` hook stamping will overwrite the system-generated `Platform` value with your dungeon's value, keeping them consistent
+
+**Do NOT use these names as custom superProp keys** (they conflict with system defaults): `os`, `model`, `carrier`, `radio`, `screen_height`, `screen_width`, `browser`. If your dungeon needs a custom device/platform dimension, use `Platform` to override the system value, or use a different name entirely (e.g., `device_type`, `app_platform`).
 
 #### CRITICAL: SuperProp Consistency Rule
 
@@ -347,7 +357,7 @@ if (type === "everything") {
   // ALWAYS stamp superProps first, before any other everything-hook logic
   const profile = meta.profile;
   record.forEach(e => {
-    e.platform = profile.platform;
+    e.Platform = profile.Platform;
     e.subscription_tier = profile.subscription_tier;
     // ... every superProp key
   });
@@ -358,7 +368,7 @@ if (type === "everything") {
 }
 ```
 
-This is MANDATORY for any superProp that should be consistent per user (platform, tier, plan, language, etc.). The only exception is superProps that genuinely should vary per event (e.g., a per-session property).
+This is MANDATORY for any superProp that should be consistent per user (Platform, tier, plan, language, etc.). The only exception is superProps that genuinely should vary per event (e.g., a per-session property).
 
 ### 4. UserProps (4-6)
 - User profile properties set once per user

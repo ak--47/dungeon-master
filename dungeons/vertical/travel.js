@@ -452,7 +452,7 @@ const config = {
 
 	// ── SuperProps ──────────────────────────────────────────
 	superProps: {
-		platform: ["ios", "android", "web", "web"],
+		Platform: ["ios", "android", "web", "web"],
 		membership_tier: ["standard", "standard", "standard", "gold", "platinum"],
 	},
 
@@ -463,7 +463,7 @@ const config = {
 		company_name: ["none"],
 		preferred_destination: chance.pickone.bind(chance, destinationCities),
 		avg_budget_per_night: u.weighNumRange(50, 400, 0.4, 150),
-		platform: ["ios", "android", "web", "web"],
+		Platform: ["ios", "android", "web", "web"],
 		membership_tier: ["standard", "standard", "standard", "gold", "platinum"],
 	},
 
@@ -680,11 +680,11 @@ const config = {
 			const profile = meta.profile;
 
 			// ─── Stamp superProps from profile (consistent per user) ───
-			const stampPlatform = profile && profile.platform ? profile.platform : undefined;
+			const stampPlatform = profile && profile.Platform ? profile.Platform : undefined;
 			const stampTier = profile && profile.membership_tier ? profile.membership_tier : undefined;
 			if (stampPlatform || stampTier) {
 				events.forEach(e => {
-					if (stampPlatform) e.platform = stampPlatform;
+					if (stampPlatform) e.Platform = stampPlatform;
 					if (stampTier) e.membership_tier = stampTier;
 				});
 			}

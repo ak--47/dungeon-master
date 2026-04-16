@@ -366,7 +366,7 @@ const config = {
 		},
 	],
 	superProps: {
-		platform: [
+		Platform: [
 			"Mobile",
 			"Xbox",
 			"Playstation",
@@ -410,7 +410,7 @@ const config = {
 		}
 	},
 	userProps: {
-		platform: [
+		Platform: [
 			"Mobile",
 			"Xbox",
 			"Playstation",
@@ -540,7 +540,7 @@ const config = {
 			// Stamp superProps from profile for consistency
 			const profile = meta.profile;
 			record.forEach(e => {
-				e.platform = profile.platform;
+				e.Platform = profile.Platform;
 				e["game mode"] = profile["game mode"];
 				e.language = profile.language;
 			});

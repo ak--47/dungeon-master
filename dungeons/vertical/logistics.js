@@ -514,7 +514,7 @@ const config = {
 
 	// -- SuperProps ----------------------------------------------------
 	superProps: {
-		platform: ["web", "web", "desktop_app"],
+		Platform: ["web", "web", "desktop_app"],
 		subscription_plan: ["free_trial", "free_trial", "starter", "starter", "professional", "enterprise"],
 	},
 
@@ -525,7 +525,7 @@ const config = {
 		employee_count: u.weighNumRange(1, 500, 0.3, 25),
 		industry: ["retail", "manufacturing", "food_beverage", "pharma", "electronics"],
 		integration_count: [0],
-		platform: ["web", "web", "desktop_app"],
+		Platform: ["web", "web", "desktop_app"],
 		subscription_plan: ["free_trial", "free_trial", "starter", "starter", "professional", "enterprise"],
 	},
 
@@ -738,10 +738,10 @@ const config = {
 			// -- SUPER-PROP STAMPING ----------------------------------
 			// Stamp superProps from profile so they are consistent per-user.
 			if (profile) {
-				const plat = profile.platform;
+				const plat = profile.Platform;
 				const plan = profile.subscription_plan;
 				record.forEach(e => {
-					if (plat) e.platform = plat;
+					if (plat) e.Platform = plat;
 					if (plan) e.subscription_plan = plan;
 				});
 			}

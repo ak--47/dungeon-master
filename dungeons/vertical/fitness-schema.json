@@ -468,7 +468,7 @@
     }
   ],
   "superProps": {
-    "platform": [
+    "Platform": [
       "ios",
       "android"
     ],

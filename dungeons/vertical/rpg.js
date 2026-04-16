@@ -526,7 +526,7 @@ const config = {
 	],
 
 	superProps: {
-		platform: [
+		Platform: [
 			"PC",
 			"Mac",
 			"PlayStation",
@@ -569,7 +569,7 @@ const config = {
 			"Ranger",
 			"Paladin"
 		],
-		platform: [
+		Platform: [
 			"PC",
 			"Mac",
 			"PlayStation",
@@ -667,7 +667,7 @@ const config = {
 
 			// Stamp superProps from profile for consistency
 			userEvents.forEach(e => {
-				e.platform = profile.platform;
+				e.Platform = profile.Platform;
 				e.graphics_quality = profile.graphics_quality;
 				e.subscription_tier = profile.subscription_tier;
 			});

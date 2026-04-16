@@ -296,7 +296,7 @@
     }
   ],
   "superProps": {
-    "platform": [
+    "Platform": [
       "Mobile",
       "Xbox",
       "Playstation",

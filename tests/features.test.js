@@ -975,3 +975,60 @@ describe('streaming output', () => {
 		fs.unlinkSync(filePath);
 	});
 });
+
+describe('config-validator userProps defaults', () => {
+	test('preserves user-provided userProps', () => {
+		initChance('userprops-preserve');
+		const config = validateDungeonConfig({
+			numUsers: 10,
+			numEvents: 100,
+			seed: 'userprops-preserve',
+			userProps: {
+				platform: ['ios', 'android', 'web'],
+				tier: ['free', 'paid']
+			}
+		});
+		expect(config.userProps.platform).toEqual(['ios', 'android', 'web']);
+		expect(config.userProps.tier).toEqual(['free', 'paid']);
+		expect(config.userProps.spiritAnimal).toBeUndefined();
+	});
+
+	test('applies default userProps when none provided', () => {
+		initChance('userprops-default');
+		const config = validateDungeonConfig({
+			numUsers: 10,
+			numEvents: 100,
+			seed: 'userprops-default'
+		});
+		expect(config.userProps.spiritAnimal).toBeDefined();
+		expect(typeof config.userProps.spiritAnimal).toBe('function');
+	});
+
+	test('applies default userProps when empty object provided', () => {
+		initChance('userprops-empty');
+		const config = validateDungeonConfig({
+			numUsers: 10,
+			numEvents: 100,
+			seed: 'userprops-empty',
+			userProps: {}
+		});
+		expect(config.userProps.spiritAnimal).toBeDefined();
+	});
+});
+
+describe('inferFunnels strict event exclusion', () => {
+	test('excludes isStrictEvent events from usage funnels', () => {
+		const funnels = inferFunnels([
+			{ event: 'signup', isFirstEvent: true },
+			{ event: 'page view', weight: 5 },
+			{ event: 'click', weight: 3 },
+			{ event: 'churn', isStrictEvent: true, weight: 2 }
+		]);
+		// churn (isStrictEvent) should not appear in any usage funnel
+		const usageFunnels = funnels.filter(f => !f.isFirstFunnel);
+		const usageSequenceEvents = usageFunnels.flatMap(f => f.sequence);
+		expect(usageSequenceEvents).not.toContain('churn');
+		// signup appears only in its own first funnel, not in usage funnels
+		expect(usageSequenceEvents).not.toContain('signup');
+	});
+});

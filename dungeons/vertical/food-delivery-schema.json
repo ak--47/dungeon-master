@@ -36600,7 +36600,7 @@
     }
   ],
   "superProps": {
-    "platform": [
+    "Platform": [
       "iOS",
       "Android",
       "Web"

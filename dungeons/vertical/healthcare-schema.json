@@ -491,7 +491,7 @@
       "basic",
       "premium"
     ],
-    "platform": [
+    "Platform": [
       "ios",
       "android",
       "web"

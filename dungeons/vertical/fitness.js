@@ -507,7 +507,7 @@ const config = {
 
 	// ── SuperProps ──────────────────────────────────────────
 	superProps: {
-		platform: ["ios", "ios", "android"],
+		Platform: ["ios", "ios", "android"],
 		workout_type: ["strength", "cardio", "yoga", "hiit", "running", "cycling"],
 	},
 
@@ -519,7 +519,7 @@ const config = {
 		total_workouts: u.weighNumRange(0, 0, 0.5),
 		preferred_workout: ["strength", "cardio", "yoga", "hiit", "running", "cycling"],
 		goal: ["weight_loss", "muscle_gain", "endurance", "flexibility", "general_health"],
-		platform: ["ios", "ios", "android"],
+		Platform: ["ios", "ios", "android"],
 		workout_type: ["strength", "cardio", "yoga", "hiit", "running", "cycling"],
 	},
 
@@ -732,7 +732,7 @@ const config = {
 			if (meta && meta.profile) {
 				const p = meta.profile;
 				events.forEach(e => {
-					if (p.platform) e.platform = p.platform;
+					if (p.Platform) e.Platform = p.Platform;
 					if (p.workout_type) e.workout_type = p.workout_type;
 				});
 			}
