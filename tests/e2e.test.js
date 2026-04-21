@@ -423,6 +423,14 @@ describe.sequential('options + tweaks', () => {
 		expect(groups.length).toBe(0);
 	}, timeout);
 
+	test('sends data to mixpanel when writeToDisk is set on a sub-batchSize dataset', async () => {
+		console.log('NETWORK TEST: writeToDisk + small dataset');
+		const results = await generate({ verbose: false, writeToDisk: true, numEvents: 100, numUsers: 50, seed: "deal with it", token: testToken });
+		const { events, users } = results.importResults;
+		expect(events.success).toBeGreaterThan(0);
+		expect(users.success).toBeGreaterThan(0);
+	}, timeout);
+
 	test('every record is valid', async () => {
 		console.log('VALIDATION TEST');
 		const results = await generate({ verbose: false, writeToDisk: false, numEvents: 1000, numUsers: 100 });
