@@ -2,7 +2,7 @@
 const SEED = "harness-fintech";
 const num_days = 100;
 const num_users = 5_000;
-const avg_events_per_user = 120;
+const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
 
 // ── env overrides ──
@@ -139,7 +139,7 @@ const config = {
 	token,
 	seed: SEED,
 	numDays: num_days,
-	numEvents: num_users * avg_events_per_user,
+	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -154,7 +154,6 @@ const config = {
 	hasCampaigns: false,
 	isAnonymous: false,
 	hasAdSpend: false,
-	percentUsersBornInDataset: 50,
 
 	hasAvatar: true,
 
@@ -535,32 +534,6 @@ const config = {
 			}
 
 			// ===============================================================
-			// Hook #7: PREMIUM TIER VALUE (event)
-			// Premium tier users get 3x reward values and 2x investment sell
-			// returns. Plus tier users get 1.5x rewards.
-			// ===============================================================
-			if (record.event === "reward redeemed") {
-				if (record.account_tier === "premium") {
-					record.value = Math.floor((record.value || 10) * 3);
-					record.premium_reward = true;
-				} else if (record.account_tier === "plus") {
-					record.value = Math.floor((record.value || 10) * 1.5);
-					record.premium_reward = false;
-				} else {
-					record.premium_reward = false;
-				}
-			}
-
-			if (record.event === "investment made" && record.action === "sell") {
-				if (record.account_tier === "premium") {
-					record.amount = Math.floor((record.amount || 250) * 2);
-					record.premium_returns = true;
-				} else {
-					record.premium_returns = false;
-				}
-			}
-
-			// ===============================================================
 			// Hook #8: MONTH-END ANXIETY (event)
 			// Last 3 days of month (day >= 28) see 40% longer app sessions
 			// and 30% lower balances when checked.
@@ -598,6 +571,36 @@ const config = {
 				e.account_tier = profile.account_tier;
 				e.Platform = profile.Platform;
 				e.low_balance_churn = profile.low_balance_churn;
+			});
+
+			// -----------------------------------------------------------
+			// Hook #7: PREMIUM TIER VALUE (moved from event hook)
+			// Uses profile.account_tier which is authoritative here.
+			// Premium: 3x rewards, 2x investment sell returns.
+			// Plus: 1.5x rewards.
+			// -----------------------------------------------------------
+			const tier = profile.account_tier;
+			userEvents.forEach(e => {
+				if (e.event === "reward redeemed") {
+					if (tier === "premium") {
+						e.value = Math.floor((e.value || 10) * 3);
+						e.premium_reward = true;
+					} else if (tier === "plus") {
+						e.value = Math.floor((e.value || 10) * 1.5);
+						e.premium_reward = false;
+					} else {
+						e.premium_reward = false;
+					}
+				}
+
+				if (e.event === "investment made" && e.action === "sell") {
+					if (tier === "premium") {
+						e.amount = Math.floor((e.amount || 250) * 2);
+						e.premium_returns = true;
+					} else {
+						e.premium_returns = false;
+					}
+				}
 			});
 
 			const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;

@@ -38,7 +38,7 @@ The file is organized so humans (and AI) can understand the intent before readin
 const SEED = "dm4-VERTICAL";
 const num_days = 100;
 const num_users = 5_000;
-const avg_events_per_user = 120;
+const avg_events_per_user_per_day = 1.2; // events per user per active day; born-late users get rate × remaining_days
 let token = "your-mixpanel-token";
 
 // ── env overrides ──
@@ -126,7 +126,7 @@ export default config;
 token,
 seed: SEED,
 numDays: num_days,
-numEvents: num_users * avg_events_per_user,
+avgEventsPerUserPerDay: avg_events_per_user_per_day,  // canonical event-volume primitive; born-late users get rate × remaining_days (NOT compressed). Use numEvents only as a legacy fallback target.
 numUsers: num_users,
 hasAnonIds: false,
 hasSessionIds: true,
@@ -141,7 +141,6 @@ hasBrowser: false,
 hasCampaigns: false,
 isAnonymous: false,
 hasAdSpend: false,
-percentUsersBornInDataset: 35,
 hasAvatar: true,
 batchSize: 2_500_000,
 concurrency: 1,
@@ -149,6 +148,11 @@ writeToDisk: false,
 scdProps: {},
 mirrorProps: {},
 lookupTables: [],  // NEVER add lookup tables — they require manual import and are not automated ... only if the user BEGS you.
+
+// Trend shape — leave both at default unless the user's prompt explicitly asks for a non-flat trend or specific intra-week texture.
+// macro defaults to "flat" (no net growth across the window). soup defaults to "growth" (real-world DOW/HOD rhythm).
+// macro: "flat",  // also: "steady" | "growth" | "viral" | "decline" — see the Trend Shape section below
+// soup: "growth", // also: "steady" | "spiky" | "seasonal" | "global" | "churny" | "chaotic"
 ```
 
 ## Advanced Features (Optional — use when they add realism)
@@ -275,19 +279,58 @@ anomalies: [
 ]
 ```
 
-## TimeSoup — Time Distribution (usually omit this)
+## Trend Shape — Macro and Soup (usually omit both)
 
-**DEFAULT BEHAVIOR: Do NOT include `soup` in the config unless the user's prompt explicitly asks for a specific time distribution pattern** (e.g., "make it spiky", "seasonal pattern", "global users"). The default "growth" preset applies automatically and is correct for the vast majority of dungeons. Do not infer a preset from the vertical — a gaming dungeon does NOT automatically need "spiky", an e-commerce dungeon does NOT automatically need "seasonal". Only set `soup` when the user says so.
+There are **two orthogonal axes** for time-shape control. Default both to "off" unless the user explicitly asks otherwise.
 
-If the user does request a specific time pattern, use one of these presets:
+- **`macro`** — big-picture trend across the whole window (births, growth, decline). Default: `"flat"` (no net trend, the chart doesn't blow up at the right edge).
+- **`soup`** — intra-week / intra-day rhythm (DOW + HOD weights, peak count, deviation). Default: `"growth"` (real-world weekly + daily cycle).
+
+### Per-user-per-day rate (always include `avgEventsPerUserPerDay`, NOT `numEvents`)
+
+The canonical event-volume primitive is `avgEventsPerUserPerDay`. This is what controls how many events each user generates: `rate × user_active_days`. A user born late in the window gets `rate × remaining_days` events, NOT a full per-user budget compressed into a tiny window. This is what prevents the right-edge blow-up. **Always set `avgEventsPerUserPerDay` in new dungeons; never set `numEvents` directly.** (`numEvents` still works as a legacy fallback — config-validator derives the rate from it — but new dungeons should use the explicit per-day primitive.)
+
+### Macro presets (almost always omit — default "flat" is right)
+
+**DEFAULT BEHAVIOR: Do NOT include `macro` in the config unless the user explicitly asks for a non-flat trend** (e.g., "show acquisition growth", "this is a viral product", "make it look like a declining product"). Don't infer growth from the vertical — most dungeons should ship flat and let hooks layer the story on top.
+
+If the user does request a specific macro shape:
 
 ```javascript
-soup: "steady"     // flat, mature SaaS (low variation)
-soup: "growth"     // gradual uptrend with realistic weekly cycle (this is the default if omitted)
+macro: "flat"     // DEFAULT — pure weekly oscillation, no net trend
+macro: "steady"   // slight uptrend, mature-SaaS feel
+macro: "growth"   // visible acquisition story (no meteoric spike)
+macro: "viral"    // hockey-stick acquisition; pair with persona/feature hooks
+macro: "decline"  // sunsetting product; pair with churn hooks
+```
+
+Custom macro (only if the user asks for fine-grained control):
+
+```javascript
+// Preset + overrides
+macro: { preset: "growth", percentUsersBornInDataset: 40 }
+
+// Fully custom
+macro: {
+  bornRecentBias: 0.2,                // -1..1; positive = recent births skew, 0 = uniform
+  percentUsersBornInDataset: 25,      // 0..100; share born in window vs pre-existing
+  preExistingSpread: "uniform",       // "uniform" or "pinned" — placement of pre-existing users' first event
+}
+```
+
+### Soup presets (also usually omit)
+
+**DEFAULT BEHAVIOR: Do NOT include `soup` in the config unless the user's prompt explicitly asks for a specific intra-week / intra-day pattern** (e.g., "make it spiky", "seasonal pattern", "global users"). The default `"growth"` preset (real-world DOW/HOD) is correct for the vast majority of dungeons. Do not infer a preset from the vertical — a gaming dungeon does NOT automatically need "spiky", an e-commerce dungeon does NOT automatically need "seasonal".
+
+If the user does request a specific time pattern:
+
+```javascript
+soup: "steady"     // tighter clustering, mature SaaS texture
+soup: "growth"     // standard intra-week rhythm (this is the default if omitted)
 soup: "spiky"      // dramatic peaks and valleys
 soup: "seasonal"   // 3-4 major waves across the dataset
 soup: "global"     // flat DOW + flat HOD (no cyclical patterns)
-soup: "churny"     // flat distribution, no growth (pair with churn hooks for declining pattern)
+soup: "churny"     // standard rhythm; pair with macro: "decline" + churn hooks for declining shape
 soup: "chaotic"    // wild variation, few tight peaks
 ```
 
@@ -449,8 +492,11 @@ Use a MIX of these techniques across your 8 hooks — don't put everything in `"
   const LAUNCH_DATE = DATASET_START.add(45, 'days');
   if (dayjs(record.time).isAfter(LAUNCH_DATE)) { record.amount *= 2; }
   ```
-- **Day-of-week/month patterns**: Scale values based on calendar (payday spending spikes, weekend surges)
 - **Closure-based state (Maps)**: Module-level Maps track state across calls. E.g., user who exceeded budget → next scale event forced to existing value "down"
+
+⚠️ **DO NOT put DOW/day-of-month checks in the event hook.** When `hasSessionIds: true`, `bunchIntoSessions()` reassigns event timestamps AFTER the event hook but BEFORE the everything hook. Any DOW-based tagging done in the event hook becomes decorrelated from the final output timestamps. Put DOW/day-of-month logic in the **everything hook** instead — it sees final timestamps.
+
+⚠️ **DO NOT read superProp values in the event hook** for conditional logic (e.g., `record.account_tier`). At event-hook time, superProps come from the random picker, not the user's profile. The everything hook stamps the correct profile values LATER. If you need to condition on user properties, use the **everything hook** and read from `meta.profile`.
 
 #### User-Level Techniques (`type === "user"`)
 
@@ -685,31 +731,38 @@ if (type === "user") {
 }
 ```
 
-#### Example 6: Day-of-Month Value Scaling (event hook)
+#### Example 6: Day-of-Month Value Scaling (everything hook — NOT event hook)
 
-Modify existing property values based on calendar patterns. No new properties added.
+Modify existing property values based on calendar patterns. **Must be in the everything hook** because `bunchIntoSessions()` reassigns timestamps after the event hook, decorrelating calendar-based tags from output timestamps.
 
 ```javascript
-if (type === "event") {
-  const dayOfMonth = dayjs(record.time).date();
+if (type === "everything") {
+  for (const e of record) {
+    const dayOfMonth = new Date(e.time).getUTCDate();
 
-  // Payday cycle: 1st and 15th see 3x bigger deposits
-  // amount and transaction_type are already in the event schema
-  if (record.event === "transaction completed" && record.transaction_type === "direct_deposit") {
-    if (dayOfMonth === 1 || dayOfMonth === 15) {
-      record.amount = Math.floor(record.amount * 3);
+    // Payday cycle: 1st and 15th see 3x bigger deposits
+    if (e.event === "transaction completed" && e.transaction_type === "direct_deposit") {
+      if (dayOfMonth === 1 || dayOfMonth === 15) {
+        e.amount = Math.floor(e.amount * 3);
+        e.payday = true;
+      }
+    }
+
+    // Post-payday spending window (days 1-3 and 15-17)
+    if (e.event === "transfer sent") {
+      const isPaydayWindow = (dayOfMonth >= 1 && dayOfMonth <= 3) || (dayOfMonth >= 15 && dayOfMonth <= 17);
+      if (isPaydayWindow && chance.bool({ likelihood: 60 })) {
+        e.amount = Math.floor(e.amount * 2.0);
+        e.post_payday_spending = true;
+      }
     }
   }
-
-  // Post-payday spending window (days 1-3 and 15-17)
-  if (record.event === "transfer sent") {
-    const isPaydayWindow = (dayOfMonth >= 1 && dayOfMonth <= 3) || (dayOfMonth >= 15 && dayOfMonth <= 17);
-    if (isPaydayWindow && chance.bool({ likelihood: 60 })) {
-      record.amount = Math.floor(record.amount * 2.0);
-    }
-  }
+  // ... rest of everything hook
+  return record;
 }
 ```
+
+**Key**: Use `new Date(e.time).getUTCDate()` (not `dayjs(e.time).date()`) for UTC-aligned calendar checks. TimeSoup distributes events using UTC DOW/HOD, so hook checks must also use UTC.
 
 #### Example 7: Viral Cascade via Event Cloning (everything hook)
 
@@ -905,6 +958,10 @@ The bad example doesn't tell the user what report type to create, what metric to
 7. **Using `scdProps`**: SCDs generate locally without credentials. Only Mixpanel *import* needs service credentials. You can use `scdProps` freely for local generation with `writeToDisk: true`.
 8. **NEVER use `lookupTables`**: Always set to `[]`. Lookup tables require a separate manual import step that is not automated.
 9. **Churn events in funnels**: Always mark `isChurnEvent` events with `isStrictEvent: true` so they aren't included in auto-generated funnels.
+10. **DOW/day-of-month checks in event hooks are WRONG when `hasSessionIds: true`**: `bunchIntoSessions()` reassigns event timestamps after the event hook but before the everything hook. Any `dayjs(record.time).day()` check in the event hook tags events based on pre-sessionization timestamps; the final output timestamps are different. Move ALL calendar-based logic to the `everything` hook. Use `new Date(e.time).getUTCDay()` (UTC, not local) since TimeSoup uses UTC DOW.
+11. **SuperProp values in event hooks are RANDOM, not per-user**: At event-hook time, superProps like `account_tier` come from the random picker. The everything hook later stamps the correct value from `meta.profile`. If you condition on a user-level property (tier, segment, plan), do it in the `everything` hook using `meta.profile.X`.
+12. **Cloned events bypass event-hook modifications**: When the everything hook clones/injects events (viral cascade, weekend duplication), those clones don't pass through the event hook. If the event hook applied a value multiplier (e.g., 1.2x on weekends), clones get the base value. Apply multipliers in the everything hook AFTER cloning to affect both originals and clones.
+13. **Threshold checks must match the data distribution**: If a hook checks `avg_response_time < 2` hours but the property's distribution is `weighNumRange(0.1, 48, 0.3, 6)` (median ~6h), per-user averages will almost never hit <2h. Always sanity-check thresholds against the property's value range.
 
 ## JSON Schema Output (Required)
 

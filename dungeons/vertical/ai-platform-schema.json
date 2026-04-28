@@ -1,0 +1,617 @@
+{
+  "events": [
+    {
+      "event": "organization created",
+      "isFirstEvent": true,
+      "properties": {
+        "org_size": [
+          "solo",
+          "startup",
+          "growth",
+          "enterprise"
+        ],
+        "referral_source": [
+          "docs",
+          "blog",
+          "github",
+          "word_of_mouth",
+          "search",
+          "conference"
+        ]
+      }
+    },
+    {
+      "event": "api key created",
+      "weight": 2,
+      "properties": {
+        "key_type": [
+          "development",
+          "production",
+          "staging"
+        ],
+        "key_scope": [
+          "full_access",
+          "read_only",
+          "completions_only"
+        ]
+      }
+    },
+    {
+      "event": "api key rotated",
+      "properties": {
+        "rotation_reason": [
+          "scheduled",
+          "compromised",
+          "policy",
+          "manual"
+        ]
+      }
+    },
+    {
+      "event": "api call",
+      "weight": 10,
+      "properties": {
+        "model": [
+          "sonnet-4",
+          "haiku-4",
+          "opus-4-6"
+        ],
+        "input_tokens": {
+          "$range": [
+            973,
+            6840
+          ]
+        },
+        "output_tokens": {
+          "$range": [
+            516,
+            3532
+          ]
+        },
+        "tokens_used": {
+          "$range": [
+            1096,
+            10452
+          ]
+        },
+        "cost_usd": {
+          "$range": [
+            0,
+            0.05
+          ]
+        },
+        "cost_per_token": {
+          "$range": [
+            0,
+            0
+          ]
+        },
+        "latency_ms": {
+          "$range": [
+            2065,
+            12940
+          ]
+        },
+        "cache_enabled": [
+          false
+        ],
+        "is_error": [
+          false
+        ],
+        "error_type": [
+          "none"
+        ],
+        "multi_turn": [
+          false,
+          true
+        ],
+        "context_window": [
+          200000
+        ],
+        "is_agentic_user": [
+          false
+        ],
+        "is_batch_user": [
+          false
+        ],
+        "stream": [
+          true,
+          false
+        ],
+        "stop_reason": [
+          "end_turn",
+          "max_tokens",
+          "tool_use"
+        ]
+      }
+    },
+    {
+      "event": "tool use call",
+      "weight": 4,
+      "properties": {
+        "tool_name": [
+          "web_search",
+          "code_interpreter",
+          "file_reader",
+          "calculator",
+          "database_query",
+          "api_connector"
+        ],
+        "execution_time_ms": {
+          "$range": [
+            1459,
+            8950
+          ]
+        },
+        "success": [
+          true,
+          false
+        ],
+        "tool_input_tokens": {
+          "$range": [
+            290,
+            1704
+          ]
+        },
+        "tool_output_tokens": {
+          "$range": [
+            555,
+            4337
+          ]
+        }
+      }
+    },
+    {
+      "event": "batch job submitted",
+      "weight": 2,
+      "properties": {
+        "batch_size": {
+          "$range": [
+            1738,
+            8397
+          ]
+        },
+        "model": [
+          "sonnet-4",
+          "haiku-4",
+          "opus-4-6"
+        ],
+        "estimated_tokens": {
+          "$range": [
+            748532,
+            4091804
+          ]
+        },
+        "priority": [
+          "standard",
+          "express"
+        ]
+      }
+    },
+    {
+      "event": "batch job completed",
+      "weight": 2,
+      "properties": {
+        "batch_size": {
+          "$range": [
+            1252,
+            8017
+          ]
+        },
+        "processing_time_sec": {
+          "$range": [
+            1091,
+            6287
+          ]
+        },
+        "total_tokens": {
+          "$range": [
+            787782,
+            4190266
+          ]
+        },
+        "success_rate": {
+          "$range": [
+            91,
+            98
+          ]
+        }
+      }
+    },
+    {
+      "event": "eval job",
+      "weight": 3,
+      "properties": {
+        "eval_type": [
+          "accuracy",
+          "relevance",
+          "safety",
+          "latency",
+          "cost",
+          "custom"
+        ],
+        "num_test_cases": {
+          "$range": [
+            216,
+            829
+          ]
+        },
+        "model": [
+          "sonnet-4",
+          "haiku-4",
+          "opus-4-6"
+        ],
+        "dataset_name": [
+          "prod_prompts",
+          "safety_suite",
+          "regression_set",
+          "benchmark_v2",
+          "custom_eval"
+        ]
+      }
+    },
+    {
+      "event": "eval result",
+      "weight": 3,
+      "properties": {
+        "eval_type": [
+          "accuracy",
+          "relevance",
+          "safety",
+          "latency",
+          "cost",
+          "custom"
+        ],
+        "score": {
+          "$range": [
+            6,
+            80
+          ]
+        },
+        "pass_rate": {
+          "$range": [
+            52,
+            93
+          ]
+        },
+        "model": [
+          "sonnet-4",
+          "haiku-4",
+          "opus-4-6"
+        ],
+        "regression_detected": [
+          false,
+          true
+        ]
+      }
+    },
+    {
+      "event": "rate limit error",
+      "weight": 3,
+      "properties": {
+        "error_code": [
+          429
+        ],
+        "retry_after_ms": {
+          "$range": [
+            9376,
+            50147
+          ]
+        },
+        "requests_per_minute": {
+          "$range": [
+            264,
+            1689
+          ]
+        },
+        "tier_limit": [
+          "Free",
+          "Build",
+          "Enterprise"
+        ]
+      }
+    },
+    {
+      "event": "billing payment",
+      "weight": 2,
+      "properties": {
+        "amount_usd": {
+          "$range": [
+            9326,
+            39495
+          ]
+        },
+        "payment_method": [
+          "credit_card",
+          "invoice",
+          "wire_transfer"
+        ],
+        "billing_period": [
+          "monthly",
+          "annual"
+        ],
+        "tokens_consumed": {
+          "$range": [
+            7977898,
+            43456125
+          ]
+        }
+      }
+    },
+    {
+      "event": "model selected",
+      "weight": 3,
+      "properties": {
+        "model": [
+          "sonnet-4",
+          "haiku-4",
+          "opus-4-6"
+        ],
+        "is_default": [
+          true,
+          false
+        ],
+        "selection_context": [
+          "playground",
+          "api_config",
+          "eval_setup",
+          "batch_config"
+        ]
+      }
+    },
+    {
+      "event": "dashboard viewed",
+      "weight": 5,
+      "properties": {
+        "dashboard_section": [
+          "usage",
+          "billing",
+          "api_keys",
+          "models",
+          "evals",
+          "logs"
+        ],
+        "time_range": [
+          "1h",
+          "24h",
+          "7d",
+          "30d"
+        ]
+      }
+    },
+    {
+      "event": "docs searched",
+      "weight": 4,
+      "properties": {
+        "search_query_category": [
+          "api_reference",
+          "quickstart",
+          "pricing",
+          "models",
+          "tool_use",
+          "batch_api",
+          "caching",
+          "errors"
+        ],
+        "results_found": [
+          17,
+          11,
+          37,
+          9,
+          13,
+          16,
+          28
+        ],
+        "clicked_result": [
+          true,
+          false
+        ]
+      }
+    },
+    {
+      "event": "member invited",
+      "weight": 2,
+      "properties": {
+        "invite_role": [
+          "admin",
+          "developer",
+          "billing",
+          "viewer"
+        ],
+        "invite_method": [
+          "email",
+          "sso",
+          "link"
+        ]
+      }
+    },
+    {
+      "event": "webhook configured",
+      "properties": {
+        "webhook_event": [
+          "usage_alert",
+          "rate_limit",
+          "batch_complete",
+          "eval_complete",
+          "billing_threshold"
+        ],
+        "delivery_method": [
+          "https",
+          "slack",
+          "email"
+        ]
+      }
+    },
+    {
+      "event": "playground session",
+      "weight": 4,
+      "properties": {
+        "model": [
+          "sonnet-4",
+          "haiku-4",
+          "opus-4-6"
+        ],
+        "turns": [
+          9,
+          17,
+          21,
+          18
+        ],
+        "shared": [
+          false,
+          true
+        ],
+        "tokens_used": {
+          "$range": [
+            3057,
+            16592
+          ]
+        }
+      }
+    },
+    {
+      "event": "account deactivated",
+      "isChurnEvent": true,
+      "returnLikelihood": 0.1,
+      "isStrictEvent": true,
+      "properties": {
+        "reason": [
+          "cost",
+          "switched_provider",
+          "project_ended",
+          "rate_limits",
+          "no_longer_needed",
+          "performance"
+        ]
+      }
+    }
+  ],
+  "funnels": [
+    {
+      "sequence": [
+        "organization created",
+        "api key created",
+        "api call"
+      ],
+      "name": "Onboarding",
+      "isFirstFunnel": true,
+      "conversionRate": 70,
+      "timeToConvert": 48,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "api call",
+        "tool use call",
+        "eval job"
+      ],
+      "name": "API to Eval Pipeline",
+      "conversionRate": 45,
+      "timeToConvert": 168,
+      "weight": 5
+    },
+    {
+      "sequence": [
+        "api call",
+        "billing payment"
+      ],
+      "name": "Usage to Billing",
+      "conversionRate": 30,
+      "timeToConvert": 336,
+      "weight": 2
+    }
+  ],
+  "superProps": {
+    "api_tier": [
+      "Free",
+      "Build",
+      "Enterprise"
+    ],
+    "primary_use_case": [
+      "chatbot",
+      "code_generation",
+      "data_extraction",
+      "content_creation",
+      "agents"
+    ],
+    "sdk_language": [
+      "python",
+      "typescript",
+      "java",
+      "go",
+      "curl"
+    ]
+  },
+  "userProps": {
+    "api_tier": [
+      "Free",
+      "Build",
+      "Enterprise"
+    ],
+    "primary_use_case": [
+      "chatbot",
+      "code_generation",
+      "data_extraction",
+      "content_creation",
+      "agents"
+    ],
+    "sdk_language": [
+      "python",
+      "typescript",
+      "java",
+      "go",
+      "curl"
+    ],
+    "monthly_spend": {
+      "$range": [
+        10343,
+        40702
+      ]
+    },
+    "total_api_calls": {
+      "$range": [
+        87308,
+        404355
+      ]
+    },
+    "preferred_model": [
+      "sonnet-4",
+      "haiku-4",
+      "opus-4-6"
+    ],
+    "has_eval_pipeline": [
+      false
+    ],
+    "hit_rate_limit_early": [
+      false
+    ],
+    "has_early_eval": [
+      false
+    ]
+  },
+  "scdProps": {
+    "monthly_api_usage": {
+      "type": "user",
+      "frequency": "week",
+      "timing": "fuzzy",
+      "max": 20,
+      "values": {
+        "$range": [
+          213492,
+          839597
+        ]
+      }
+    },
+    "api_tier_history": {
+      "type": "user",
+      "frequency": "month",
+      "timing": "fixed",
+      "max": 6,
+      "values": [
+        "Free",
+        "Build",
+        "Enterprise"
+      ]
+    }
+  }
+}

@@ -677,12 +677,16 @@ describe('Audit Fixes', () => {
 	test('persona conversionModifier affects funnel conversion', async () => {
 		// Same seed for both runs so standalone events are identical.
 		// The ONLY difference is conversionModifier, which affects funnel completion.
+		// bornRecentBias: -1 puts every born-in-dataset user near the start of the window
+		// so the proportional event-allocation gives them a full per-user budget — keeps
+		// the test focused on conversionModifier rather than per-user-day rate compression.
 		const sharedConfig = {
-			numUsers: 200,
-			numEvents: 10000,
+			numUsers: 1000,
+			numEvents: 50000,
 			numDays: 30,
 			seed: 'persona-conv-test',
 			percentUsersBornInDataset: 100,
+			bornRecentBias: -1,
 			events: [
 				{ event: 'start', isFirstEvent: true },
 				{ event: 'step1', weight: 3 },

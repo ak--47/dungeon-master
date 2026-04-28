@@ -2,7 +2,7 @@
 const SEED = "SUPER DUPER DANGEROUS BROOO";
 const num_days = 92;
 const num_users = 8_000;
-const avg_events_per_user = 120;
+const avg_events_per_user_per_day = 1.3;
 let token = "your-mixpanel-token";
 
 // ── env overrides ──
@@ -407,7 +407,7 @@ const dungeon = {
 	seed: SEED,
 	token,
 	numDays: num_days,
-	numEvents: num_users * avg_events_per_user,
+	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true, // Enable for chat flow tracking

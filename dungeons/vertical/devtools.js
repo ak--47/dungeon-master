@@ -2,7 +2,7 @@
 const SEED = "dm4-devtools";
 const num_days = 100;
 const num_users = 5_000;
-const avg_events_per_user = 120;
+const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
 
 // ── env overrides ──
@@ -256,7 +256,7 @@ const config = {
 	token,
 	seed: SEED,
 	numDays: num_days,
-	numEvents: num_users * avg_events_per_user,
+	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -271,7 +271,6 @@ const config = {
 	hasCampaigns: false,
 	isAnonymous: false,
 	hasAdSpend: false,
-	percentUsersBornInDataset: 35,
 	hasAvatar: true,
 	concurrency: 1,
 	writeToDisk: false,
@@ -834,19 +833,24 @@ const config = {
 			}
 
 			// -- HOOK 6: POST-OUTAGE RECOVERY ---------------------
-			// After outage ends (day 42.25), deployment events get cloned.
-			const OUTAGE_END = DATASET_START.add(42.25, "days");
-			const RECOVERY_END = DATASET_START.add(46, "days");
+			// After the outage volume rebound (d44-48), deployment events get
+			// aggressively cloned to produce a visible spike above baseline.
+			// Shifted later than outage end (d42.25) so natural volume has
+			// recovered from the 0.05x suppression before cloning kicks in.
+			const RECOVERY_START = DATASET_START.add(44, "days");
+			const RECOVERY_END = DATASET_START.add(48, "days");
 			const deployEvents = events.filter(e => {
 				if (e.event !== "deployment completed") return false;
 				const t = dayjs(e.time);
-				return t.isAfter(OUTAGE_END) && t.isBefore(RECOVERY_END);
+				return t.isAfter(RECOVERY_START) && t.isBefore(RECOVERY_END);
 			});
 			deployEvents.forEach(dep => {
-				if (chance.bool({ likelihood: 50 })) {
+				// 100% clone rate with 3 copies per event to clearly
+				// exceed baseline deploy volume (d35-41)
+				for (let c = 0; c < 3; c++) {
 					events.push({
 						...dep,
-						time: dayjs(dep.time).add(chance.integer({ min: 1, max: 6 }), "hours").toISOString(),
+						time: dayjs(dep.time).add(chance.integer({ min: 1, max: 8 }), "hours").toISOString(),
 						user_id: dep.user_id,
 						deploy_status: chance.pickone(["success", "success", "rolled_back"]),
 						environment: "production",

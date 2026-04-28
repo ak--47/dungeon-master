@@ -1,10 +1,14 @@
 /**
- * most of the time, the value of a property is a primitive
+ * Primitive scalar types that property values resolve to. Property values may
+ * also be plain object literals (nested records) — `Record<string, any>` is the
+ * narrowest TS can express here without making `Primitives` self-recursive
+ * (which it can't be, because `ValueValid` is built on top of it).
  */
 type Primitives = string | number | boolean | Date | Record<string, any>;
 
 /**
- * a "validValue" can be a primitive, an array of primitives, or a function that returns a primitive
+ * A "validValue" can be a primitive, an array of valid values, or a thunk that
+ * returns one. Configs use this everywhere properties are user-defined.
  */
 export type ValueValid = Primitives | ValueValid[] | (() => ValueValid);
 
@@ -23,10 +27,12 @@ export interface Dungeon {
     epochStart?: number;
     /** Explicit end of dataset window (unix seconds). Defaults to FIXED_NOW. */
     epochEnd?: number;
-    /** Target total number of events to generate across all users. */
+    /** Target total number of events to generate across all users. Fallback when avgEventsPerUserPerDay is not set; otherwise derived from rate × numUsers × numDays. */
     numEvents?: number;
     /** Number of unique users to generate. */
     numUsers?: number;
+    /** Average events per user per active day. The canonical event-volume primitive — born-late users get this rate × their remaining window, so per-day density stays constant. If both this and numEvents are set, this wins. */
+    avgEventsPerUserPerDay?: number;
     /** Output format for files written to disk. */
     format?: "csv" | "json" | "parquet" | string;
     /** Mixpanel data residency region. */
@@ -106,9 +112,11 @@ export interface Dungeon {
     groupEvents?: GroupEventConfig[];
     /** Lookup table definitions for dimension tables. */
     lookupTables?: LookupTableSchema[];
-    /** TimeSoup configuration: controls the temporal distribution of events (peaks, deviation, mean). */
+    /** TimeSoup configuration: shapes intra-week and intra-day rhythm (peaks, deviation, DOW/HOD weights). Pair with `macro` for big-picture trend control. */
     soup?: soup;
-    /** Hook function called on every data point. The primary mechanism for engineering deliberate trends and patterns. */
+    /** Macro trend shape across the full dataset window: birth distribution + per-user event allocation. Default: "flat". Use "growth"/"viral"/"steady"/"decline" or a custom object. */
+    macro?: macro;
+    /** Hook function called on every data point. The primary mechanism for engineering deliberate trends and patterns. The `any` is intentional — `record` and `meta` shapes vary by hook type; narrow inside the function (see `HookMeta*` types). */
     hook?: Hook<any>;
 
     // ── Advanced Features ──
@@ -135,10 +143,14 @@ export interface Dungeon {
     [key: string]: any;
 
     // ── Distribution Controls ──
-    /** Percentage of users whose account creation falls within the dataset window (vs. pre-existing). Default: 15 */
+    // These three knobs are normally set by the `macro` preset (default "flat").
+    // Setting them on the dungeon config directly overrides the preset's value.
+    /** Percentage of users whose account creation falls within the dataset window (vs. pre-existing). Default (from macro: "flat"): 15 */
     percentUsersBornInDataset?: number;
-    /** Bias toward recent birth dates for users born in dataset (0 = uniform, 1 = heavily recent). Default: 0.3 */
+    /** Bias for birth dates of users born in dataset. -1..1; negative = early skew, positive = recent skew, 0 = uniform. Default (from macro: "flat"): 0 */
     bornRecentBias?: number;
+    /** How pre-existing users' first event time is placed. "pinned" stacks them all at FIXED_BEGIN; "uniform" spreads across [FIXED_BEGIN-30d, FIXED_BEGIN]. Default (from macro: "flat"): "uniform" */
+    preExistingSpread?: "pinned" | "uniform";
 }
 
 export type SCDProp = {
@@ -184,6 +196,43 @@ export type SoupConfig = {
 type soup = SoupPreset | SoupConfig;
 
 /**
+ * Macro preset names for big-picture trend shape across the dataset window.
+ * Macro is orthogonal to soup: macro shapes the whole-window trend (births,
+ * growth, decline); soup shapes the intra-week and intra-day rhythm.
+ */
+export type MacroPreset = "flat" | "steady" | "growth" | "viral" | "decline";
+
+/**
+ * Macro configuration object — fine-grained big-picture trend control.
+ */
+export type MacroConfig = {
+    /** Use a named macro preset as the base, then override individual fields. */
+    preset?: MacroPreset;
+    /** Bias for birth dates. -1..1; negative = early skew, positive = recent skew, 0 = uniform. */
+    bornRecentBias?: number;
+    /** Percentage of users born in dataset window (0..100). */
+    percentUsersBornInDataset?: number;
+    /** "pinned" = pre-existing users stack at FIXED_BEGIN; "uniform" = spread across [FIXED_BEGIN-30d, FIXED_BEGIN]. */
+    preExistingSpread?: "pinned" | "uniform";
+};
+
+/** Big-picture trend shape: preset string, config object, or preset+overrides. */
+type macro = MacroPreset | MacroConfig;
+
+/** Public alias for the `soup` config union (preset string or config object). */
+export type Soup = soup;
+
+/** Public alias for the `macro` config union (preset string or config object). */
+export type Macro = macro;
+
+/** Resolved macro values after preset + override resolution. Used internally. */
+export interface ResolvedMacro {
+    bornRecentBias: number;
+    percentUsersBornInDataset: number;
+    preExistingSpread: "pinned" | "uniform";
+}
+
+/**
  * Hook types and when they fire (in order per user):
  * - "user"        — user profile object (mutate in-place, return ignored)
  * - "scd-pre"     — array of SCD entries (mutate in-place OR return new array to replace)
@@ -213,31 +262,129 @@ export type hookTypes =
 
 /**
  * A hook function that receives every piece of data as it flows through the pipeline.
- * @param record - The data being processed (event, profile, array of events, etc.)
- * @param type - Which hook type is firing
- * @param meta - Contextual metadata (varies by type; "everything" includes meta.profile and meta.scd)
+ *
+ * The runtime signature is intentionally permissive (`any`) because `record` and `meta`
+ * vary by `type`. Use the `HookMeta*` interfaces below as convenience types when narrowing
+ * inside your hook (e.g. `if (type === "event") { const m = meta as HookMetaEvent; ... }`).
+ *
+ * Return-value semantics:
+ * - "event": return value REPLACES the event (must be the event object).
+ * - "everything": return an array to REPLACE the user's event list (filter/inject/dedupe).
+ * - "user", "scd-pre", "funnel-pre", "funnel-post": return value is IGNORED — mutate in place.
+ * - storage-only ("ad-spend", "group", "mirror", "lookup"): return value is IGNORED.
+ *
+ * @param record - The data being processed (event, profile, array of events, funnel config, etc.).
+ * @param type - Which hook type is firing — see `hookTypes`.
+ * @param meta - Contextual metadata. Shape depends on `type` — see `HookMeta*` interfaces.
  */
 export type Hook<T> = (record: any, type: hookTypes, meta: any) => T;
 
+/** Meta passed to the "event" hook. */
+export interface HookMetaEvent {
+    /** The user this event belongs to (only `distinct_id` is guaranteed). */
+    user: { distinct_id: string };
+    /** The fully-resolved dungeon config. */
+    config: Dungeon;
+}
+
+/** Meta passed to the "user" hook (fires when a user profile is created). */
+export interface HookMetaUser {
+    /** The user object being constructed (mutate in place). */
+    user: UserProfile;
+    /** The fully-resolved dungeon config. */
+    config: Dungeon;
+    /** True if the user's account creation falls inside the dataset window. */
+    userIsBornInDataset: boolean;
+}
+
+/** Meta passed to the "scd-pre" hook (fires per SCD prop, before insertion). */
+export interface HookMetaScdPre {
+    /** The user profile that owns these SCD entries. */
+    profile: UserProfile;
+    /** The SCD prop key being generated (e.g. "plan", "tier"). */
+    type: string;
+    /** The full SCD entry list for this prop (mutate in place). */
+    scd: SCDSchema[];
+    /** The fully-resolved dungeon config. */
+    config: Dungeon;
+    /** All SCD prop arrays generated so far for this user, keyed by prop name. */
+    allSCDs: Record<string, SCDSchema[]>;
+}
+
+/** Meta passed to the "funnel-pre" hook (mutate funnel before generating events). */
+export interface HookMetaFunnelPre {
+    user: { distinct_id: string };
+    profile: UserProfile;
+    scd: Record<string, SCDSchema[]>;
+    funnel: Funnel;
+    config: Dungeon;
+    /** Unix seconds — earliest possible event time for this funnel's first step. */
+    firstEventTime: number;
+}
+
+/** Meta passed to the "funnel-post" hook (mutate generated funnel events in place). */
+export interface HookMetaFunnelPost {
+    user: { distinct_id: string };
+    profile: UserProfile;
+    scd: Record<string, SCDSchema[]>;
+    funnel: Funnel;
+    config: Dungeon;
+}
+
+/** Meta passed to the "everything" hook — most powerful hook (sees all events for one user). */
+export interface HookMetaEverything {
+    /** The user's profile, including merged persona/region/attribution properties. */
+    profile: UserProfile;
+    /** All SCD entries for this user, keyed by prop name. */
+    scd: Record<string, SCDSchema[]>;
+    /** The fully-resolved dungeon config. */
+    config: Dungeon;
+    /** True if the user's account creation falls inside the dataset window. */
+    userIsBornInDataset: boolean;
+}
+
 export interface hookArrayOptions<T> {
+    /** Transform/validate function applied to every record on push. */
     hook?: Hook<T>;
+    /** What this array stores — controls hook-firing semantics in the storage layer. */
     type?: hookTypes;
+    /** Output filename (no extension; format adds it). Used by storage's batch writer. */
     filename?: string;
+    /** Output filepath used when writing batches to disk. */
+    filepath?: string;
+    /** Output serialization format. */
     format?: "csv" | "json" | "parquet" | string;
+    /** Max parallel disk writes. */
     concurrency?: number;
+    /** Generation context (config, runtime, defaults). */
     context?: Context;
-    [key: string]: any;
 }
 
 /**
- * an enriched array is an array that has a hookPush method that can be used to transform-then-push items into the array
+ * an enriched array is an array that has a hookPush method that can be used to transform-then-push items into the array.
+ *
+ * Storage callers also tag the array with a key identifying what it stores
+ * (e.g. SCD prop name, group key, lookup table key). The fields are optional
+ * because not every HookedArray needs them; mixpanel-sender / user-loop read
+ * them when present to route uploads correctly.
  */
 export interface HookedArray<T> extends Array<T> {
-    hookPush: (item: T | T[], ...meta: any[]) => Promise<any>;
+    /** Transform-then-push. Resolves once the item (and any auto-flushed batch) is persisted. */
+    hookPush: (item: T | T[], ...meta: unknown[]) => Promise<void>;
+    /** Force-flush any pending batch to disk. */
     flush: () => Promise<void>;
+    /** Absolute path of the directory batches will be written to. */
     getWriteDir: () => string;
+    /** Absolute path (with extension) of the next batch file. */
     getWritePath: () => string;
-    [key: string]: any;
+    /** SCD prop name this array carries (only set on SCD HookedArrays). */
+    scdKey?: string;
+    /** Entity type for SCDs ("user" or a group key). */
+    entityType?: string;
+    /** Group key this array carries (only set on group profile HookedArrays). */
+    groupKey?: string;
+    /** Lookup table key this array carries (only set on lookup table HookedArrays). */
+    lookupKey?: string;
 }
 
 export type AllData =
@@ -245,8 +392,7 @@ export type AllData =
     | HookedArray<UserProfile>
     | HookedArray<GroupProfileSchema>
     | HookedArray<LookupTableSchema>
-    | HookedArray<SCDSchema>
-    | any[];
+    | HookedArray<SCDSchema>;
 
 /**
  * the storage object is a key-value store that holds arrays of data
@@ -277,16 +423,33 @@ export interface RuntimeState {
 /**
  * Default data factories for generating realistic test data
  */
+/**
+ * Default data factories — pre-resolved at context creation time so user-loop
+ * doesn't re-evaluate weighted picker arrays on every iteration.
+ */
 export interface Defaults {
-    locationsUsers: () => any[];
-    locationsEvents: () => any[];
-    iOSDevices: () => any[];
-    androidDevices: () => any[];
-    desktopDevices: () => any[];
-    browsers: () => any[];
-    campaigns: () => any[];
-    devicePools: { android: any[]; ios: any[]; desktop: any[] };
-    allDevices: any[];
+    /** Location pools applied to user profiles (city, region, country, lat/lng). */
+    locationsUsers: () => Record<string, ValueValid>[];
+    /** Location pools applied to events. */
+    locationsEvents: () => Record<string, ValueValid>[];
+    /** iOS device pool (model, os version, etc.). */
+    iOSDevices: () => Record<string, ValueValid>[];
+    /** Android device pool. */
+    androidDevices: () => Record<string, ValueValid>[];
+    /** Desktop device pool (browser, screen resolution, etc.). */
+    desktopDevices: () => Record<string, ValueValid>[];
+    /** Browser/UA pool. */
+    browsers: () => Record<string, ValueValid>[];
+    /** UTM campaign pool used when `hasCampaigns: true`. */
+    campaigns: () => Record<string, ValueValid>[];
+    /** Pre-built per-platform device arrays selected once at context creation. */
+    devicePools: {
+        android: Record<string, ValueValid>[];
+        ios: Record<string, ValueValid>[];
+        desktop: Record<string, ValueValid>[];
+    };
+    /** Flat union of every device in `devicePools` — used when no platform filter applies. */
+    allDevices: Record<string, ValueValid>[];
 }
 
 /**
@@ -297,7 +460,8 @@ export interface Context {
     config: Dungeon;
     storage: Storage | null;
     defaults: Defaults;
-    campaigns: any[];
+    /** Pre-built UTM campaign pool (used when `hasCampaigns: true`). */
+    campaigns: Record<string, ValueValid>[];
     runtime: RuntimeState;
     FIXED_NOW: number;
     FIXED_BEGIN?: number;
@@ -494,7 +658,8 @@ export interface LookupTableSchema {
 
 export interface LookupTableData {
     key: string;
-    data: any[];
+    /** Generated rows for this lookup table. Each row is a flat record keyed by attribute name. */
+    data: Record<string, ValueValid>[];
 }
 
 export interface SCDSchema {
@@ -506,7 +671,8 @@ export interface SCDSchema {
 
 export interface GroupProfileSchema {
     key: string;
-    data: any[];
+    /** Generated group profile rows. Each row is a flat record keyed by group property name. */
+    data: Record<string, ValueValid>[];
 }
 
 /**
@@ -523,15 +689,25 @@ type ImportResult = import("mixpanel-import").ImportResults;
  * the end result of the data generation
  */
 export type Result = {
+    /** Generated events. */
     eventData: EventSchema[];
+    /** Mirror datasets (transformed copies of `eventData`). */
     mirrorEventData: EventSchema[];
-    userProfilesData: any[];
-    scdTableData: any[][];
+    /** User profiles. */
+    userProfilesData: UserProfile[];
+    /** SCD entries — one inner array per SCD prop. */
+    scdTableData: SCDSchema[][];
+    /** Ad-spend events (only populated when `hasAdSpend: true`). */
     adSpendData: EventSchema[];
+    /** Group profiles — one inner array per group key. */
     groupProfilesData: GroupProfileSchema[][];
+    /** Lookup tables — one inner array per table. */
     lookupTableData: LookupTableData[][];
+    /** Mixpanel import results (only populated when a token was provided). */
     importResults?: ImportResults;
+    /** Absolute paths of all files written to disk. */
     files?: string[];
+    /** Timing information. */
     time?: {
         start: number;
         end: number;
@@ -589,7 +765,7 @@ export interface WorldEvent {
     /** Conversion rate modifier during this event. */
     conversionModifier?: number;
     /** Properties injected into affected events. */
-    injectProps?: Record<string, any>;
+    injectProps?: Record<string, ValueValid>;
     /** Which events are affected ("*" for all, or array of event names). */
     affectsEvents?: string[] | "*";
     /** Aftermath period after the event ends. */
@@ -752,7 +928,7 @@ export interface GeoRegion {
     /** UTC timezone offset for this region (e.g., -5 for EST). */
     timezoneOffset: number;
     /** Properties injected for users in this region. */
-    properties?: Record<string, any>;
+    properties?: Record<string, ValueValid>;
 }
 
 /**
@@ -792,9 +968,9 @@ export interface FeatureConfig {
     /** Property name to inject on events. */
     property: string;
     /** Possible values for the property. First value is the "before" default if defaultBefore not set. */
-    values: any[];
+    values: ValueValid[];
     /** Default value before the feature launches. If not set, property doesn't exist before launch. */
-    defaultBefore?: any;
+    defaultBefore?: ValueValid;
     /** Which events are affected ("*" for all, or array of event names). */
     affectsEvents?: string[] | "*";
     /** Conversion rate lift for users who adopted the feature. */
@@ -802,7 +978,7 @@ export interface FeatureConfig {
     /** Resolved logistic curve params (set by config-validator). */
     _resolvedCurve?: { k: number; midpoint: number };
     /** Pre-computed adopted values (set by config-validator). */
-    _adoptedValues?: any[];
+    _adoptedValues?: ValueValid[];
 }
 
 /**
@@ -830,7 +1006,7 @@ export interface AnomalyConfig {
     /** For burst/coordinated: number of events to inject. */
     count?: number;
     /** Properties injected on anomalous events. */
-    properties?: Record<string, any>;
+    properties?: Record<string, ValueValid>;
     /** Resolved absolute start time in unix seconds (set by config-validator). */
     _startUnix?: number;
     /** Resolved absolute end time in unix seconds (set by config-validator). */
@@ -869,8 +1045,8 @@ export declare function loadFromFile(filePath: string): Promise<Dungeon>;
 export declare function loadFromText(code: string): Promise<Dungeon>;
 /** Parse a JSON dungeon (UI schema format) into a runnable config */
 export declare function parseJSONDungeon(json: object): Dungeon;
-/** Validate that an object has the minimum shape of a dungeon config */
-export declare function validateDungeonShape(config: any): void;
+/** Validate that an object has the minimum shape of a dungeon config. Throws on shape violations. */
+export declare function validateDungeonShape(config: unknown): void;
 
 // ============= Text Generator Types =============
 
@@ -1049,7 +1225,7 @@ export interface TextMetadata {
     /** Keywords that were injected */
     injectedKeywords?: string[];
     /** User persona information */
-    persona?: Record<string, any>;
+    persona?: Record<string, ValueValid>;
     /** Flesch reading ease score */
     readabilityScore?: number;
     /** Text style used */
@@ -1170,13 +1346,14 @@ export interface TimeSoupOptions {
 }
 
 /**
- * Test context configuration for unit/integration tests
+ * Test context configuration for unit/integration tests. Looser than `Context`
+ * by design — tests routinely attach ad-hoc fixtures, so the index signature stays.
  */
 export interface TestContext {
     config: Dungeon;
     storage: Storage | null;
     defaults: Defaults;
-    campaigns: any[];
+    campaigns: Record<string, ValueValid>[];
     runtime: RuntimeState;
-    [key: string]: any;
+    [key: string]: unknown;
 }

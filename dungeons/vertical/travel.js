@@ -2,7 +2,7 @@
 const SEED = "dm4-travel";
 const num_days = 100;
 const num_users = 5_000;
-const avg_events_per_user = 120;
+const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
 
 // ── env overrides ──
@@ -207,7 +207,7 @@ const config = {
 	token,
 	seed: SEED,
 	numDays: num_days,
-	numEvents: num_users * avg_events_per_user,
+	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -222,7 +222,6 @@ const config = {
 	hasCampaigns: false,
 	isAnonymous: false,
 	hasAdSpend: false,
-	percentUsersBornInDataset: 35,
 	hasAvatar: true,
 	concurrency: 1,
 	writeToDisk: false,
@@ -647,29 +646,13 @@ const config = {
 			// prop-setting only; no conversionRate changes
 		}
 
-		// ── HOOK 1: WEEKEND LEISURE SURGE (event) ────────────
-		if (type === "event") {
-			if (record.event === "booking completed") {
-				const dayOfWeek = dayjs(record.time).day();
-				// Friday=5, Saturday=6, Sunday=0
-				if (dayOfWeek === 0 || dayOfWeek === 5 || dayOfWeek === 6) {
-					record.nightly_rate = Math.floor((record.nightly_rate || 150) * 1.3);
-					record.total_cost = Math.floor((record.total_cost || 450) * 1.3);
-				}
-			}
+		// ── HOOK 1: WEEKEND LEISURE SURGE ────────────
+		// Moved to everything hook (sessionization reassigns times after event hook)
 
-			// ── HOOK 2: ADVANCE BOOKING DISCOUNT (event) ─────
-			if (record.event === "booking completed") {
-				const eventTime = dayjs(record.time);
-				const daysUntilEnd = NOW.diff(eventTime, "days");
-				if (daysUntilEnd > 21) {
-					record.booking_window = "advance";
-					record.nightly_rate = Math.floor((record.nightly_rate || 150) * 0.8);
-				} else if (daysUntilEnd < 3) {
-					record.booking_window = "last_minute";
-					record.nightly_rate = Math.floor((record.nightly_rate || 150) * 1.4);
-				}
-			}
+		// ── HOOK 2: ADVANCE BOOKING DISCOUNT ─────
+		// Moved to everything hook (sessionization reassigns times after event hook)
+		if (type === "event") {
+			// no-op: DOW-dependent hooks moved to everything hook
 		}
 
 		// ── EVERYTHING HOOKS ─────────────────────────────────
@@ -688,6 +671,34 @@ const config = {
 					if (stampTier) e.membership_tier = stampTier;
 				});
 			}
+
+			// ── HOOK 1: WEEKEND LEISURE SURGE ────────────
+			// Apply AFTER sessionization has finalized times
+			events.forEach(e => {
+				if (e.event === "booking completed") {
+					const dayOfWeek = new Date(e.time).getUTCDay();
+					// Friday=5, Saturday=6, Sunday=0
+					if (dayOfWeek === 0 || dayOfWeek === 5 || dayOfWeek === 6) {
+						e.nightly_rate = Math.floor((e.nightly_rate || 150) * 1.3);
+						e.total_cost = Math.floor((e.total_cost || 450) * 1.3);
+					}
+				}
+			});
+
+			// ── HOOK 2: ADVANCE BOOKING DISCOUNT ─────
+			events.forEach(e => {
+				if (e.event === "booking completed") {
+					const eventTime = dayjs(e.time);
+					const daysUntilEnd = NOW.diff(eventTime, "days");
+					if (daysUntilEnd > 21) {
+						e.booking_window = "advance";
+						e.nightly_rate = Math.floor((e.nightly_rate || 150) * 0.8);
+					} else if (daysUntilEnd < 3) {
+						e.booking_window = "last_minute";
+						e.nightly_rate = Math.floor((e.nightly_rate || 150) * 1.4);
+					}
+				}
+			});
 
 			// ─── Bug 2 fix: Repeat destination clustering conversion filtering ───
 			// Drop ~25% of "booking completed" events for users who are NOT
@@ -716,7 +727,29 @@ const config = {
 			}
 
 			// ── HOOK 4: CANCELLATION BY BOOKING WINDOW ───────
-			// Last-minute bookers rarely cancel.
+			// Match each cancellation to its nearest preceding booking
+			// and copy the booking's booking_window. This replaces the
+			// random booking_window that the event config assigns to
+			// cancellation events independently.
+			const bookingsByTime = events
+				.filter(e => e.event === "booking completed")
+				.sort((a, b) => new Date(a.time) - new Date(b.time));
+			events.forEach(e => {
+				if (e.event === "booking cancelled" && bookingsByTime.length > 0) {
+					const cancelTime = new Date(e.time).getTime();
+					// Find the nearest preceding booking (or the first one)
+					let matched = bookingsByTime[0];
+					for (let b = bookingsByTime.length - 1; b >= 0; b--) {
+						if (new Date(bookingsByTime[b].time).getTime() <= cancelTime) {
+							matched = bookingsByTime[b];
+							break;
+						}
+					}
+					e.booking_window = matched.booking_window;
+				}
+			});
+
+			// Last-minute bookers rarely cancel — drop 40%.
 			for (let i = events.length - 1; i >= 0; i--) {
 				if (events[i].event === "booking cancelled" && events[i].booking_window === "last_minute") {
 					if (chance.bool({ likelihood: 40 })) {

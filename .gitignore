@@ -27,3 +27,4 @@ research/*
 dungeons/capstone/*
 dungeons/user/*
 !dungeons/user/.gitkeep
+scripts/experiments/sweeps/

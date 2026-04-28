@@ -272,24 +272,54 @@ hook: function(record, type, meta) {
 4. to drop events, use the `everything` hook and return a filtered array. don't return `{}` from event hooks (creates broken events)
 5. the `everything` hook is the most powerful. it sees all events for one user, has access to `meta.profile`, and can correlate across event types
 
-## timesoup
+## time shape — macro and soup
 
-timesoup controls how events are distributed across time. it uses gaussian cluster sampling layered with day-of-week and hour-of-day weighting derived from... i won't tell you. a prize goes to whoever can guess. the result is realistic temporal patterns: weekday peaks, weekend valleys, morning surges, afternoon dips.
+two orthogonal axes shape how events are distributed in time:
+
+- **`macro`** — big-picture trend across the whole window (births, growth, decline). default: `"flat"`.
+- **`soup`** — intra-week and intra-day rhythm (DOW/HOD weights, peak count, deviation). default: `"growth"`.
+
+mix and match. most dungeons want `macro: "flat"` (the chart doesn't blow up at the right edge) plus a soup that gives the desired weekly/daily texture.
+
+### per-user-per-day rate
+
+`avgEventsPerUserPerDay` is the canonical event-volume primitive. born-late users get `rate × remaining_days`, not a full per-user budget compressed into a small window — that's what prevents the meteoric ramp at the right edge of the chart. `numEvents` still works as a fallback (the rate is derived from `numEvents / numUsers / numDays`), but new dungeons should set the rate directly.
+
+### macro presets
+
+| preset | trend shape | use case |
+|--------|-------------|----------|
+| `"flat"` (default) | pure weekly oscillation, no net trend | mature product; let hooks supply the story |
+| `"steady"` | slight uptrend | lightly-growing saas |
+| `"growth"` | visible acquisition story (no spike) | startup acquisition narrative |
+| `"viral"` | hockey-stick acquisition | pair with persona / feature hooks |
+| `"decline"` | sunsetting product | pair with churn hooks |
+
+```javascript
+macro: 'flat'                                          // default
+macro: 'growth'                                        // preset string
+macro: { preset: 'growth', percentUsersBornInDataset: 40 }  // preset + override
+macro: { bornRecentBias: 0, percentUsersBornInDataset: 15, preExistingSpread: 'uniform' }  // fully custom
+```
+
+## timesoup (intra-week / intra-day rhythm)
+
+timesoup controls the texture of events inside the macro trend. it uses gaussian cluster sampling layered with day-of-week and hour-of-day weighting derived from... i won't tell you. a prize goes to whoever can guess. the result is realistic temporal patterns: weekday peaks, weekend valleys, morning surges, afternoon dips.
 
 ### presets
 
 ```javascript
-soup: 'growth'    // default. gradual uptrend with weekly cycles
+soup: 'growth'    // default. real-world weekly + daily rhythm
 ```
 
 | preset | pattern | use case |
 |--------|---------|----------|
-| `"steady"` | flat, minimal variation | mature saas, utility apps |
-| `"growth"` | gradual uptrend + weekly cycle | general purpose (default) |
+| `"steady"` | tighter clustering | mature saas, utility apps |
+| `"growth"` | standard intra-week rhythm | general purpose (default) |
 | `"spiky"` | dramatic peaks and valleys | gaming, social, viral products |
 | `"seasonal"` | 3-4 major waves | ecommerce, education |
 | `"global"` | flat DOW + flat HOD | global saas, infrastructure |
-| `"churny"` | flat, no growth trend | declining products (pair with churn hooks) |
+| `"churny"` | standard rhythm | pair with `macro: "decline"` for declining shape |
 | `"chaotic"` | wild variation | anomaly detection, incident response |
 
 ### custom configuration
@@ -401,13 +431,18 @@ ordering strategies: `sequential`, `random`, `first-fixed`, `last-fixed`, `first
 
 ## user generation
 
-users are generated with configurable birth distributions. `percentUsersBornInDataset` controls how many users were "created" during the dataset window vs. pre-existing. `bornRecentBias` skews new user creation toward recent dates (0 = uniform, 1 = heavily recent).
+users are generated with configurable birth distributions, normally controlled via the `macro` preset (see "time shape" above). these three knobs can also be set directly on the dungeon config — they override the preset's values.
+
+| knob | range | effect |
+|------|-------|--------|
+| `percentUsersBornInDataset` | 0..100 | share of users created inside the window vs pre-existing |
+| `bornRecentBias` | -1..1 | birth-date skew. negative = early, 0 = uniform, positive = recent |
+| `preExistingSpread` | `"uniform"` \| `"pinned"` | placement of pre-existing users' first event time |
 
 ```javascript
 {
   numUsers: 10_000,
-  percentUsersBornInDataset: 25,  // 25% of users sign up during the time window
-  bornRecentBias: 0.5             // new users skew toward recent dates
+  macro: { preset: 'growth', percentUsersBornInDataset: 40, bornRecentBias: 0.5 }
 }
 ```
 
@@ -482,7 +517,8 @@ see [types.d.ts](types.d.ts) for the complete `Dungeon` interface. here are the 
 | property | type | default | description |
 |----------|------|---------|-------------|
 | `numUsers` | number | 1000 | number of users to generate |
-| `numEvents` | number | 100000 | target event count |
+| `numEvents` | number | 100000 | target event count (legacy fallback; derived from `avgEventsPerUserPerDay` when set) |
+| `avgEventsPerUserPerDay` | number | derived | per-user-per-day rate (canonical event-volume primitive) |
 | `numDays` | number | 30 | days the dataset spans |
 | `seed` | string | random | RNG seed for reproducibility |
 | `format` | string | `'csv'` | output format (csv, json, parquet) |
@@ -494,9 +530,11 @@ see [types.d.ts](types.d.ts) for the complete `Dungeon` interface. here are the 
 | `strictEventCount` | boolean | false | stop at exact numEvents |
 | `batchSize` | number | 2500000 | records before auto-flush |
 | `concurrency` | number | 1 | parallel user generation |
-| `soup` | string/object | `'growth'` | time distribution preset |
-| `bornRecentBias` | number | 0.3 | user birth date skew (0-1) |
-| `percentUsersBornInDataset` | number | 15 | % of users born in time window |
+| `macro` | string/object | `'flat'` | big-picture trend preset (flat/steady/growth/viral/decline) |
+| `soup` | string/object | `'growth'` | intra-week / intra-day rhythm preset |
+| `bornRecentBias` | number | 0 (from macro `flat`) | user birth date skew (-1..1) |
+| `percentUsersBornInDataset` | number | 15 (from macro `flat`) | % of users born in time window |
+| `preExistingSpread` | string | `'uniform'` (from macro `flat`) | placement of pre-existing users' first event |
 | `hook` | function/string | passthrough | data transformation function |
 | `hasLocation` | boolean | false | include geo properties |
 | `hasCampaigns` | boolean | false | include UTM properties |

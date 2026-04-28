@@ -2,7 +2,7 @@
 const SEED = "dm4-marketplace";
 const num_days = 100;
 const num_users = 5_000;
-const avg_events_per_user = 120;
+const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
 
 // ── env overrides ──
@@ -259,7 +259,7 @@ const config = {
 	token,
 	seed: SEED,
 	numDays: num_days,
-	numEvents: num_users * avg_events_per_user,
+	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -274,7 +274,6 @@ const config = {
 	hasCampaigns: false,
 	isAnonymous: false,
 	hasAdSpend: false,
-	percentUsersBornInDataset: 35,
 	hasAvatar: true,
 	concurrency: 1,
 	writeToDisk: false,
@@ -747,15 +746,9 @@ const config = {
 				}
 			}
 
-			// ── HOOK 2: WEEKEND SHOPPING SURGE (event) ───────
-			// Purchases on Sat/Sun get 1.2x total_amount.
-			if (record.event === "purchase completed") {
-				const dayOfWeek = dayjs(record.time).day();
-				// Saturday=6, Sunday=0
-				if (dayOfWeek === 0 || dayOfWeek === 6) {
-					record.total_amount = Math.floor((record.total_amount || 60) * 1.2);
-				}
-			}
+			// ── HOOK 2: WEEKEND SHOPPING SURGE ───────────────
+			// Moved to the everything hook (after purchase cloning)
+			// so the 1.2x boost applies to both original AND cloned purchases.
 		}
 
 		// ── EVERYTHING HOOKS ─────────────────────────────────
@@ -831,11 +824,13 @@ const config = {
 			}
 
 			// ── HOOK 5: RESPONSE TIME → CONVERSION ───────────
-			// Sellers with avg response_time < 2 hours get more offer_accepted.
+			// Sellers with avg response_time < 12 hours get more offer_accepted.
+			// (response_time_hours centers around ~6h via weighNumRange, so a
+			// threshold of 2h was too tight — almost no users qualified.)
 			const messages = events.filter(e => e.event === "message sent" && e.response_time_hours);
 			if (messages.length > 0) {
 				const avgResponseTime = messages.reduce((sum, m) => sum + m.response_time_hours, 0) / messages.length;
-				if (avgResponseTime < 2) {
+				if (avgResponseTime < 12) {
 					const templateOffer = events.find(e => e.event === "offer accepted");
 					if (templateOffer) {
 						const offers = events.filter(e => e.event === "offer received");
@@ -864,6 +859,19 @@ const config = {
 					}
 				}
 			}
+
+			// ── HOOK 2: WEEKEND SHOPPING SURGE (everything) ─────
+			// Applied AFTER all purchase cloning (Hooks 3, 4) so the
+			// 1.2x boost hits both original and injected purchases.
+			events.forEach(e => {
+				if (e.event === "purchase completed") {
+					const dow = new Date(e.time).getUTCDay();
+					// Saturday=6, Sunday=0
+					if (dow === 0 || dow === 6) {
+						e.total_amount = Math.floor((e.total_amount || 60) * 1.2);
+					}
+				}
+			});
 
 			return record;
 		}

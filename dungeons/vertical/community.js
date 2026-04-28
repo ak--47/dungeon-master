@@ -2,7 +2,7 @@
 const SEED = "dm4-community";
 const num_days = 100;
 const num_users = 5_000;
-const avg_events_per_user = 120;
+const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
 
 // ── env overrides ──
@@ -259,7 +259,7 @@ const config = {
 	token,
 	seed: SEED,
 	numDays: num_days,
-	numEvents: num_users * avg_events_per_user,
+	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -274,7 +274,6 @@ const config = {
 	hasCampaigns: false,
 	isAnonymous: false,
 	hasAdSpend: false,
-	percentUsersBornInDataset: 35,
 	hasAvatar: true,
 	concurrency: 1,
 	writeToDisk: false,
@@ -699,30 +698,13 @@ const config = {
 		// Conversion differences handled in everything hook via event filtering.
 		// (funnel-pre conversionRate modifications are diluted by organic events)
 
-		// -- HOOK 1: WEEKEND CONTENT SURGE (event) --------------------
-		// Articles published on weekends get 1.5x word_count.
-		if (type === "event") {
-			if (record.event === "article published" || record.event === "article viewed") {
-				const dow = dayjs(record.time).day();
-				if (dow === 0 || dow === 6) {
-					record.is_weekend = true;
-					if (record.word_count) {
-						record.word_count = Math.floor(record.word_count * 1.5);
-					}
-				}
-			}
+		// -- HOOK 1: WEEKEND CONTENT SURGE ----------------------------
+		// Moved to everything hook (after sessionization) so DOW tags
+		// match final timestamps. See everything hook below.
 
-			// -- HOOK 2: TRENDING TOPIC WINDOW (event) ----------------
-			// Days 35-50: gaming hub articles get 2x view_count.
-			const TREND_START = DATASET_START.add(35, "days");
-			const TREND_END = DATASET_START.add(50, "days");
-			const eventTime = dayjs(record.time);
-			if (record.event === "article viewed" && eventTime.isAfter(TREND_START) && eventTime.isBefore(TREND_END)) {
-				if (record.content_hub === "gaming") {
-					record.view_count = Math.floor((record.view_count || 50) * 2);
-				}
-			}
-		}
+		// -- HOOK 2: TRENDING TOPIC WINDOW ----------------------------
+		// Moved to everything hook (after superProp stamping) so it
+		// uses the profile's consistent content_hub.
 
 		// -- EVERYTHING HOOKS -----------------------------------------
 		if (type === "everything") {
@@ -738,6 +720,38 @@ const config = {
 				if (profile.Platform) e.Platform = profile.Platform;
 				if (profile.content_hub) e.content_hub = profile.content_hub;
 			});
+
+			// -- HOOK 1: WEEKEND CONTENT SURGE -------------------------
+			// Articles published/viewed on weekends get 1.5x word_count.
+			// Runs after sessionization so DOW tags match final timestamps.
+			for (const e of events) {
+				if (e.event === 'article published' || e.event === 'article viewed') {
+					const dow = new Date(e.time).getUTCDay();
+					if (dow === 0 || dow === 6) {
+						e.is_weekend = true;
+						if (e.word_count) {
+							e.word_count = Math.floor(e.word_count * 1.5);
+						}
+					}
+				}
+			}
+
+			// -- HOOK 2: TRENDING TOPIC WINDOW -------------------------
+			// Days 35-50: gaming hub articles get 2x view_count.
+			// Runs after superProp stamping so content_hub is the
+			// profile's consistent value, not the random event-level one.
+			const TREND_START = DATASET_START.add(35, "days");
+			const TREND_END = DATASET_START.add(50, "days");
+			if (profile.content_hub === "gaming") {
+				events.forEach(e => {
+					if (e.event === "article viewed") {
+						const eventTime = dayjs(e.time);
+						if (eventTime.isAfter(TREND_START) && eventTime.isBefore(TREND_END)) {
+							e.view_count = Math.floor((e.view_count || 50) * 2);
+						}
+					}
+				});
+			}
 
 			// -- HOOK 8: PRO SUBSCRIBER CONTENT CREATION LIFT ---------
 			// Free-tier users drop 35% of final funnel step events to

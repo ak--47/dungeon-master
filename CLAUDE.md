@@ -160,11 +160,20 @@ interface Dungeon {
   funnels: Funnel[]             // sequence, conversionRate, order, experiment, bindPropsIndex
   userProps, superProps, groupKeys, groupProps, scdProps, mirrorProps, lookupTables
 
+  // Event volume — pick ONE
+  numEvents: number             // Total target events. Fallback if avgEventsPerUserPerDay not set.
+  avgEventsPerUserPerDay: number  // Per-user-per-active-day rate. Canonical primitive — born-late users get rate × remaining_days.
+
+  // Trend shape — two orthogonal axes
+  macro: MacroPreset | MacroConfig  // Big-picture trend across whole window. Default: "flat" (see Macro/Soup section)
+  soup: SoupPreset | SoupConfig     // Intra-week / intra-day rhythm (see Macro/Soup section)
+
   // Advanced
   strictEventCount: boolean     // Stop at exact numEvents (forces concurrency=1)
-  bornRecentBias: number        // 0=uniform, 1=heavily recent user births (default 0.3)
-  percentUsersBornInDataset     // Default 15
-  soup: SoupPreset | SoupConfig     // Time distribution (see TimeSoup section below)
+  // The next three are normally set by the macro preset; override only when you need a custom shape
+  bornRecentBias: number        // -1..1; positive = recent skew, 0 = uniform, negative = early skew
+  percentUsersBornInDataset     // 0..100; default 15 (from macro: "flat")
+  preExistingSpread             // "uniform" (default) | "pinned"
 
   // I/O
   writeToDisk, gzip, batchSize, concurrency, verbose
@@ -261,25 +270,60 @@ Storage-only hooks (no upstream execution):
 
 After creating or modifying a dungeon, always verify that hooks actually produce their intended patterns by running `/verify-hooks`. This generates data at small scale (1K users, 100K events), queries the output with DuckDB, and produces a diagnostic report at `research/hook-results.md` with PASS/WEAK/FAIL verdicts for each hook. Verify BEFORE pushing data to Mixpanel.
 
-## TimeSoup — Time Distribution System
+## Trend Shape — Macro and Soup
 
-TimeSoup controls how events are distributed across the time range. It uses Gaussian cluster sampling layered with day-of-week and hour-of-day accept/reject weighting derived from real Mixpanel data.
+Two orthogonal axes shape how events are distributed in time:
+
+- **`macro`** — big-picture trend across the whole window (births, growth, decline). Sets `bornRecentBias`, `percentUsersBornInDataset`, `preExistingSpread`. Default: `"flat"`.
+- **`soup`** — intra-week and intra-day rhythm (DOW/HOD weights, peak count, deviation). Default: `"growth"`.
+
+Pair them independently. Most dungeons want `macro: "flat"` (so the chart doesn't blow up at the right edge) plus a soup that gives the desired weekly/daily texture.
+
+### Macro Presets
+
+```javascript
+macro: "flat"     // DEFAULT — pure weekly oscillation, no net trend. Use when hooks supply the story.
+macro: "steady"   // Slight uptrend, mature-SaaS feel
+macro: "growth"   // Visible acquisition story, no spike at the right edge
+macro: "viral"    // Hockey-stick acquisition; pair with persona/feature hooks
+macro: "decline"  // Sunsetting product; pair with churn hooks
+```
+
+Macro preset values are defined in [`lib/templates/macro-presets.js`](lib/templates/macro-presets.js) and resolved in [`lib/core/config-validator.js`](lib/core/config-validator.js). Each preset is a `{ bornRecentBias, percentUsersBornInDataset, preExistingSpread }` triple.
+
+You can override individual fields:
+
+```javascript
+macro: { preset: "growth", bornRecentBias: 0.5 }   // growth defaults but stronger recency
+macro: { bornRecentBias: 0, percentUsersBornInDataset: 25, preExistingSpread: "uniform" }
+```
+
+Or set the underlying fields directly on the dungeon config — they win over the macro preset's values.
+
+### Why this fixes the "blow-up at the right edge"
+
+Three things changed at once:
+1. **`avgEventsPerUserPerDay` is the canonical event-volume primitive.** A user born late in the window now gets `rate × remaining_days` events, not the full `numEvents/numUsers` budget compressed into a tiny window. Density per active day stays constant. (`numEvents` still works as a fallback — config-validator derives the rate.)
+2. **Macro defaults to `"flat"`** so new dungeons don't inherit the legacy growth-bias settings. Existing dungeons that depend on a growth shape can opt into `macro: "growth"`.
+3. **Pre-existing users' first event time spreads uniformly across `[FIXED_BEGIN-30d, FIXED_BEGIN]`** instead of all stacking at `FIXED_BEGIN`.
+
+See `research/end-bunchiness.md` for the full diagnosis and experiment data.
 
 ### Soup Presets
 
 Set `soup` to a preset string for quick configuration:
 
 ```javascript
-soup: "growth"     // default — gradual uptrend with weekly cycle
-soup: "steady"     // flat, mature SaaS pattern
+soup: "growth"     // default — standard intra-week rhythm with real-world DOW/HOD
+soup: "steady"     // tighter clustering, mature SaaS texture
 soup: "spiky"      // dramatic peaks and valleys
 soup: "seasonal"   // 3-4 major waves across the dataset
 soup: "global"     // flat DOW + flat HOD (no cyclical patterns)
-soup: "churny"     // flat distribution, all users pre-exist (pair with churn hooks)
+soup: "churny"     // standard rhythm; pair with macro: "decline" for declining shape
 soup: "chaotic"    // wild variation, few tight peaks
 ```
 
-Presets also suggest `bornRecentBias` and `percentUsersBornInDataset` values (applied only if not explicitly set in the dungeon config).
+Soup presets only set intra-week / intra-day fields. Birth-distribution settings (which used to be bundled into soup) now live exclusively in `macro`.
 
 ### Custom Soup Config
 
@@ -308,7 +352,7 @@ soup: { dayOfWeekWeights: null, hourOfDayWeights: null }
 - HOD uses redistribution (directly sample a new hour from weight distribution)
 - Peaks default to `numDays * 2` to avoid chunk-boundary interference with 7-day week cycle
 - Default weights are derived from real Mixpanel data and produce realistic weekly "matterhorn hump" and daily curves
-- Presets are defined in `lib/templates/soup-presets.js` and resolved in `config-validator.js`
+- Soup presets are defined in `lib/templates/soup-presets.js`; macro presets in `lib/templates/macro-presets.js`. Both resolved in `config-validator.js`.
 
 ## Dependencies
 

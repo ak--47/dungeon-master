@@ -1,0 +1,401 @@
+{
+  "events": [
+    {
+      "event": "profile created",
+      "isFirstEvent": true,
+      "properties": {
+        "age_range": [
+          "18-24",
+          "25-29",
+          "30-34",
+          "35-39",
+          "40+"
+        ],
+        "gender": [
+          "Male",
+          "Female",
+          "Non-binary"
+        ],
+        "looking_for": [
+          "Men",
+          "Women",
+          "Everyone"
+        ],
+        "valentines": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "photo uploaded",
+      "weight": 3,
+      "properties": {
+        "photo_number": [
+          3,
+          4
+        ],
+        "has_face": [
+          true,
+          false
+        ]
+      }
+    },
+    {
+      "event": "bio updated",
+      "weight": 2,
+      "properties": {
+        "bio_length": {
+          "$range": [
+            84,
+            398
+          ]
+        }
+      }
+    },
+    {
+      "event": "prompt answered",
+      "weight": 3,
+      "properties": {
+        "prompt_type": [
+          "icebreaker",
+          "opinion",
+          "hypothetical",
+          "personal",
+          "creative"
+        ],
+        "answer_length": {
+          "$range": [
+            51,
+            256
+          ]
+        }
+      }
+    },
+    {
+      "event": "swipe right",
+      "weight": 10,
+      "properties": {
+        "is_super_like": [
+          false,
+          true
+        ],
+        "weekend_surge": [
+          false
+        ],
+        "swipe_source": [
+          "feed",
+          "discover",
+          "boost",
+          "nearby"
+        ]
+      }
+    },
+    {
+      "event": "swipe left",
+      "weight": 8,
+      "properties": {
+        "swipe_source": [
+          "feed",
+          "discover",
+          "boost",
+          "nearby"
+        ]
+      }
+    },
+    {
+      "event": "match received",
+      "weight": 4,
+      "properties": {
+        "match_score": {
+          "$range": [
+            58,
+            93
+          ]
+        },
+        "complete_profile": [
+          false
+        ],
+        "super_like_match": [
+          false
+        ],
+        "premium_boost": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "message sent",
+      "weight": 6,
+      "properties": {
+        "message_length": {
+          "$range": [
+            111,
+            402
+          ]
+        },
+        "has_emoji": [
+          false,
+          true
+        ],
+        "response_time_mins": {
+          "$range": [
+            271,
+            1138
+          ]
+        }
+      }
+    },
+    {
+      "event": "message received",
+      "weight": 5,
+      "properties": {
+        "message_length": {
+          "$range": [
+            97,
+            402
+          ]
+        }
+      }
+    },
+    {
+      "event": "phone number exchanged",
+      "properties": {
+        "exchange_method": [
+          "in_chat",
+          "voice_call",
+          "video_call"
+        ]
+      }
+    },
+    {
+      "event": "date scheduled",
+      "properties": {
+        "venue_type": [
+          "coffee",
+          "dinner",
+          "drinks",
+          "activity",
+          "virtual"
+        ],
+        "complete_profile_power": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "profile viewed",
+      "weight": 5,
+      "properties": {
+        "viewer_source": [
+          "feed",
+          "discover",
+          "liked_you",
+          "nearby"
+        ],
+        "premium_boost": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "premium upgrade",
+      "properties": {
+        "plan": [
+          "Premium",
+          "Elite"
+        ],
+        "price_usd": [
+          14.99,
+          29.99
+        ],
+        "valentines": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "premium cancelled",
+      "isStrictEvent": true,
+      "properties": {
+        "cancel_reason": [
+          "found_someone",
+          "too_expensive",
+          "not_enough_matches",
+          "bad_experience",
+          "taking_a_break"
+        ],
+        "subscription_duration_days": {
+          "$range": [
+            77,
+            284
+          ]
+        }
+      }
+    },
+    {
+      "event": "boost activated",
+      "weight": 2,
+      "properties": {
+        "boost_type": [
+          "standard",
+          "super"
+        ],
+        "boost_duration_mins": [
+          15,
+          30,
+          60
+        ]
+      }
+    },
+    {
+      "event": "report user",
+      "isStrictEvent": true,
+      "properties": {
+        "report_reason": [
+          "fake_profile",
+          "inappropriate_photos",
+          "harassment",
+          "spam",
+          "underage"
+        ]
+      }
+    },
+    {
+      "event": "app opened",
+      "weight": 8,
+      "properties": {
+        "session_duration_mins": [
+          38,
+          31,
+          34,
+          94,
+          32,
+          84,
+          36
+        ],
+        "ghosted": [
+          false
+        ]
+      }
+    }
+  ],
+  "funnels": [
+    {
+      "sequence": [
+        "profile created",
+        "photo uploaded",
+        "swipe right"
+      ],
+      "name": "Onboarding",
+      "isFirstFunnel": true,
+      "conversionRate": 75,
+      "timeToConvert": 1,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "swipe right",
+        "match received",
+        "message sent"
+      ],
+      "name": "Match Flow",
+      "conversionRate": 50,
+      "timeToConvert": 24,
+      "weight": 6
+    },
+    {
+      "sequence": [
+        "message sent",
+        "phone number exchanged",
+        "date scheduled"
+      ],
+      "name": "Date Funnel",
+      "conversionRate": 25,
+      "timeToConvert": 72,
+      "weight": 3
+    },
+    {
+      "sequence": [
+        "app opened",
+        "boost activated",
+        "premium upgrade"
+      ],
+      "name": "Monetization",
+      "conversionRate": 20,
+      "timeToConvert": 48,
+      "weight": 2
+    }
+  ],
+  "superProps": {
+    "subscription": [
+      "Free",
+      "Premium",
+      "Elite"
+    ],
+    "platform": [
+      "ios",
+      "android"
+    ]
+  },
+  "userProps": {
+    "subscription": [
+      "Free",
+      "Premium",
+      "Elite"
+    ],
+    "age_range": [
+      "18-24",
+      "25-29",
+      "30-34",
+      "35-39",
+      "40+"
+    ],
+    "gender": [
+      "Male",
+      "Female",
+      "Non-binary"
+    ],
+    "looking_for": [
+      "Men",
+      "Women",
+      "Everyone"
+    ],
+    "photo_count": [
+      2
+    ],
+    "total_matches": {
+      "$range": [
+        39,
+        160
+      ]
+    },
+    "total_messages_sent": {
+      "$range": [
+        111,
+        383
+      ]
+    },
+    "profile_completeness": [
+      "incomplete",
+      "basic",
+      "complete"
+    ],
+    "platform": [
+      "ios",
+      "android"
+    ]
+  },
+  "scdProps": {
+    "subscription_tier": {
+      "type": "user",
+      "frequency": "month",
+      "timing": "fuzzy",
+      "max": 6,
+      "values": [
+        "Free",
+        "Premium",
+        "Elite"
+      ]
+    }
+  }
+}

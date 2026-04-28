@@ -1,0 +1,546 @@
+{
+  "events": [
+    {
+      "event": "wallet connected",
+      "isFirstEvent": true,
+      "properties": {
+        "wallet_type": [
+          "MetaMask",
+          "Phantom",
+          "Coinbase Wallet",
+          "Rainbow",
+          "WalletConnect"
+        ],
+        "chain": [
+          "Ethereum",
+          "Solana",
+          "Base",
+          "Arbitrum",
+          "Polygon"
+        ]
+      }
+    },
+    {
+      "event": "kyc started",
+      "weight": 2,
+      "properties": {
+        "document_type": [
+          "passport",
+          "drivers_license",
+          "national_id"
+        ],
+        "verification_method": [
+          "selfie",
+          "video",
+          "document_scan"
+        ]
+      }
+    },
+    {
+      "event": "kyc completed",
+      "properties": {
+        "document_type": [
+          "passport",
+          "drivers_license",
+          "national_id"
+        ],
+        "verification_method": [
+          "selfie",
+          "video",
+          "document_scan"
+        ]
+      }
+    },
+    {
+      "event": "deposit",
+      "weight": 5,
+      "properties": {
+        "token": [
+          "ETH",
+          "USDC",
+          "USDT",
+          "SOL",
+          "BTC"
+        ],
+        "deposit_amount_usd": {
+          "$range": [
+            956,
+            4090
+          ]
+        },
+        "chain": [
+          "Ethereum",
+          "Solana",
+          "Base",
+          "Arbitrum",
+          "Polygon"
+        ],
+        "deposit_method": [
+          "wallet_transfer",
+          "bridge",
+          "on_ramp",
+          "exchange_transfer"
+        ],
+        "kyc_verified": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "withdrawal",
+      "weight": 3,
+      "properties": {
+        "token": [
+          "ETH",
+          "USDC",
+          "USDT",
+          "SOL",
+          "BTC"
+        ],
+        "amount_usd": {
+          "$range": [
+            817,
+            4217
+          ]
+        },
+        "chain": [
+          "Ethereum",
+          "Solana",
+          "Base",
+          "Arbitrum",
+          "Polygon"
+        ],
+        "withdrawal_method": [
+          "wallet_transfer",
+          "bridge",
+          "off_ramp",
+          "exchange_transfer"
+        ]
+      }
+    },
+    {
+      "event": "swap",
+      "weight": 10,
+      "properties": {
+        "token_pair": [
+          "ETH/USDC",
+          "ETH/USDT",
+          "BTC/USDC",
+          "SOL/USDC",
+          "MATIC/ETH",
+          "ARB/ETH",
+          "OP/USDC",
+          "AVAX/USDC",
+          "LINK/ETH",
+          "UNI/USDC",
+          "AAVE/ETH",
+          "CRV/USDC",
+          "DOGE/USDT",
+          "PEPE/ETH",
+          "APE/USDC"
+        ],
+        "trade_amount_usd": {
+          "$range": [
+            1946,
+            8471
+          ]
+        },
+        "gas_fee_usd": [
+          20,
+          8,
+          19,
+          13
+        ],
+        "swap_status": [
+          "completed",
+          "pending",
+          "failed"
+        ],
+        "slippage_pct": [
+          1
+        ],
+        "maker_fee_pct": [
+          0.3
+        ],
+        "is_whale": [
+          false
+        ],
+        "kyc_verified": [
+          false
+        ],
+        "gas_spike": [
+          false
+        ],
+        "pro_advantage": [
+          false
+        ],
+        "rug_pull_victim": [
+          false
+        ],
+        "moon_trade": [
+          false
+        ],
+        "staked_early": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "stake",
+      "weight": 4,
+      "properties": {
+        "token": [
+          "ETH",
+          "SOL",
+          "MATIC",
+          "AVAX",
+          "ATOM",
+          "DOT"
+        ],
+        "amount_usd": {
+          "$range": [
+            1801,
+            8469
+          ]
+        },
+        "apy_pct": [
+          7,
+          6,
+          21,
+          17,
+          10
+        ],
+        "lock_period_days": [
+          7,
+          14,
+          30,
+          60,
+          90,
+          180
+        ]
+      }
+    },
+    {
+      "event": "unstake",
+      "weight": 2,
+      "properties": {
+        "token": [
+          "ETH",
+          "SOL",
+          "MATIC",
+          "AVAX",
+          "ATOM",
+          "DOT"
+        ],
+        "amount_usd": {
+          "$range": [
+            1375,
+            8170
+          ]
+        },
+        "apy_pct": [
+          10,
+          11,
+          12,
+          7,
+          17,
+          8,
+          15,
+          19
+        ],
+        "lock_period_days": [
+          7,
+          14,
+          30,
+          60,
+          90,
+          180
+        ]
+      }
+    },
+    {
+      "event": "claim airdrop",
+      "weight": 2,
+      "properties": {
+        "airdrop_name": [
+          "LayerZero Season 1",
+          "zkSync Drop",
+          "Starknet STRK",
+          "Arbitrum ARB",
+          "Optimism OP",
+          "Blur Season 3",
+          "EigenLayer Points",
+          "Celestia TIA",
+          "Jupiter JUP",
+          "Wormhole W"
+        ],
+        "token_amount": {
+          "$range": [
+            1747,
+            8203
+          ]
+        },
+        "airdrop_value_usd": {
+          "$range": [
+            366,
+            1571
+          ]
+        }
+      }
+    },
+    {
+      "event": "nft mint",
+      "weight": 2,
+      "properties": {
+        "collection": [
+          "Bored Apes",
+          "Azuki",
+          "DeGods",
+          "Pudgy Penguins",
+          "Milady",
+          "Doodles",
+          "CloneX",
+          "Moonbirds",
+          "CryptoPunks",
+          "Art Blocks"
+        ],
+        "mint_price_usd": {
+          "$range": [
+            364,
+            1652
+          ]
+        },
+        "chain": [
+          "Ethereum",
+          "Solana",
+          "Base",
+          "Polygon"
+        ]
+      }
+    },
+    {
+      "event": "portfolio viewed",
+      "weight": 8,
+      "properties": {
+        "total_value_usd": {
+          "$range": [
+            15147,
+            84328
+          ]
+        }
+      }
+    },
+    {
+      "event": "price alert set",
+      "weight": 3,
+      "properties": {
+        "token": [
+          "ETH",
+          "BTC",
+          "SOL",
+          "MATIC",
+          "AVAX",
+          "LINK",
+          "UNI",
+          "AAVE"
+        ],
+        "alert_type": [
+          "above",
+          "below",
+          "percent_change"
+        ]
+      }
+    },
+    {
+      "event": "referral sent",
+      "weight": 2,
+      "properties": {
+        "referral_method": [
+          "link",
+          "email",
+          "twitter",
+          "discord",
+          "telegram"
+        ]
+      }
+    },
+    {
+      "event": "limit order placed",
+      "weight": 3,
+      "properties": {
+        "token_pair": [
+          "ETH/USDC",
+          "ETH/USDT",
+          "BTC/USDC",
+          "SOL/USDC",
+          "MATIC/ETH",
+          "ARB/ETH",
+          "OP/USDC",
+          "AVAX/USDC",
+          "LINK/ETH",
+          "UNI/USDC",
+          "AAVE/ETH",
+          "CRV/USDC",
+          "DOGE/USDT",
+          "PEPE/ETH",
+          "APE/USDC"
+        ],
+        "order_type": [
+          "limit_buy",
+          "limit_sell",
+          "stop_loss",
+          "take_profit"
+        ],
+        "price_usd": {
+          "$range": [
+            6805,
+            41840
+          ]
+        }
+      }
+    },
+    {
+      "event": "transfer",
+      "weight": 3,
+      "properties": {
+        "token": [
+          "ETH",
+          "USDC",
+          "USDT",
+          "SOL",
+          "BTC"
+        ],
+        "amount_usd": {
+          "$range": [
+            892,
+            3988
+          ]
+        },
+        "gas_fee_usd": [
+          7,
+          10,
+          22,
+          11,
+          8
+        ],
+        "destination_type": [
+          "wallet",
+          "exchange",
+          "contract",
+          "ens_name"
+        ],
+        "gas_spike": [
+          false
+        ]
+      }
+    }
+  ],
+  "funnels": [
+    {
+      "sequence": [
+        "wallet connected",
+        "kyc started",
+        "deposit"
+      ],
+      "isFirstFunnel": true,
+      "conversionRate": 60,
+      "timeToConvert": 1
+    },
+    {
+      "sequence": [
+        "deposit",
+        "swap",
+        "withdrawal"
+      ],
+      "conversionRate": 70,
+      "timeToConvert": 2,
+      "weight": 5
+    },
+    {
+      "sequence": [
+        "swap",
+        "stake",
+        "claim airdrop"
+      ],
+      "conversionRate": 35,
+      "timeToConvert": 7,
+      "weight": 3
+    }
+  ],
+  "superProps": {
+    "trading_tier": [
+      "Standard",
+      "Pro"
+    ],
+    "preferred_chain": [
+      "Ethereum",
+      "Solana",
+      "Base",
+      "Arbitrum",
+      "Polygon"
+    ],
+    "wallet_type": [
+      "MetaMask",
+      "Phantom",
+      "Coinbase Wallet",
+      "Rainbow",
+      "WalletConnect"
+    ],
+    "staked_early": [
+      false
+    ]
+  },
+  "userProps": {
+    "trading_tier": [
+      "Standard",
+      "Pro"
+    ],
+    "preferred_chain": [
+      "Ethereum",
+      "Solana",
+      "Base",
+      "Arbitrum",
+      "Polygon"
+    ],
+    "wallet_type": [
+      "MetaMask",
+      "Phantom",
+      "Coinbase Wallet",
+      "Rainbow",
+      "WalletConnect"
+    ],
+    "total_trade_volume": {
+      "$range": [
+        66033,
+        415215
+      ]
+    },
+    "portfolio_value": {
+      "$range": [
+        30644,
+        167675
+      ]
+    },
+    "kyc_status": [
+      "pending"
+    ],
+    "has_staked": [
+      false
+    ],
+    "staked_early": [
+      false
+    ]
+  },
+  "scdProps": {
+    "trading_tier": {
+      "type": "user",
+      "frequency": "month",
+      "timing": "fuzzy",
+      "max": 4,
+      "values": [
+        "Standard",
+        "Pro"
+      ]
+    }
+  }
+}

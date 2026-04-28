@@ -2,7 +2,7 @@
 const SEED = "scale test";
 const num_days = 365;
 const num_users = 10_000;
-const avg_events_per_user = 50;
+const avg_events_per_user_per_day = 0.14;
 let token = "your-mixpanel-token";
 
 // ── env overrides ──
@@ -38,7 +38,7 @@ const config = {
 	seed: SEED,
 	name: "scale-test",
 	numDays: num_days,
-	numEvents: num_users * avg_events_per_user,
+	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	format: 'json',
 	gzip: true,
