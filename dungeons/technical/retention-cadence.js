@@ -2,7 +2,7 @@
 const SEED = "kurby-retention";
 const num_days = 360;
 const num_users = 100;
-const avg_events_per_user = 50;
+const avg_events_per_user_per_day = 0.14;
 let token = "your-mixpanel-token";
 
 // ── env overrides ──
@@ -110,7 +110,7 @@ const config = {
 	token,
 	seed: SEED,
 	numDays: num_days,
-	numEvents: num_users * avg_events_per_user,
+	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: false,
@@ -127,7 +127,6 @@ const config = {
 	hasAvatar: false,
 	concurrency: 1,
 	writeToDisk: false,
-	percentUsersBornInDataset: 100,
 
 	funnels: [],
 

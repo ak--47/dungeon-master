@@ -2,7 +2,7 @@
 const SEED = "ad spend test";
 const num_days = 90;
 const num_users = 1_000;
-const avg_events_per_user = 50;
+const avg_events_per_user_per_day = 0.56;
 let token = "your-mixpanel-token";
 
 // ── env overrides ──
@@ -39,7 +39,7 @@ const config = {
 	seed: SEED,
 	name: "ad-spend",
 	numDays: num_days,
-	numEvents: num_users * avg_events_per_user,
+	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	format: 'json',
 	region: "US",

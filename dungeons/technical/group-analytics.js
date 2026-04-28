@@ -2,7 +2,7 @@
 const SEED = "group-analytics";
 const num_days = 60;
 const num_users = 500;
-const avg_events_per_user = 60;
+const avg_events_per_user_per_day = 1;
 let token = "your-mixpanel-token";
 
 // ── env overrides ──
@@ -30,7 +30,7 @@ const config = {
 	token,
 	seed: SEED,
 	numDays: num_days,
-	numEvents: num_users * avg_events_per_user,
+	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	format: "json",
 	region: "US",

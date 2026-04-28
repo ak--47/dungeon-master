@@ -2,7 +2,7 @@
 const SEED = "harness-social";
 const num_days = 100;
 const num_users = 5_000;
-const avg_events_per_user = 120;
+const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
 
 // ── env overrides ──
@@ -172,7 +172,7 @@ const config = {
 	token,
 	seed: SEED,
 	numDays: num_days,
-	numEvents: num_users * avg_events_per_user,
+	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -187,7 +187,6 @@ const config = {
 	hasCampaigns: false,
 	isAnonymous: false,
 	hasAdSpend: false,
-	percentUsersBornInDataset: 50,
 	hasAvatar: true,
 	concurrency: 1,
 	writeToDisk: false,
@@ -521,15 +520,7 @@ const config = {
 				}
 			}
 
-			// Hook #8: WEEKEND CONTENT SURGE - tag weekend content (duplication handled in everything hook)
-			if (record.event === "post created" || record.event === "story created") {
-				const dayOfWeek = EVENT_TIME.day(); // 0 = Sunday, 6 = Saturday
-				if (dayOfWeek === 0 || dayOfWeek === 6) {
-					record.weekend_surge = true;
-				} else {
-					record.weekend_surge = false;
-				}
-			}
+			// Hook #8: WEEKEND CONTENT SURGE - tagging moved to everything hook (sessionization reassigns times after event hook)
 		}
 
 		// ─── EVERYTHING-LEVEL HOOKS ──────────────────────────────────────
@@ -721,7 +712,18 @@ const config = {
 				}
 			}
 
-			// Hook #8: WEEKEND CONTENT SURGE - inject duplicate events for weekend content
+			// Hook #8: WEEKEND CONTENT SURGE - tag weekend content AFTER sessionization has finalized times
+			userEvents.forEach(event => {
+				if (event.event === "post created" || event.event === "story created") {
+					const dow = new Date(event.time).getUTCDay(); // 0 = Sunday, 6 = Saturday
+					if (dow === 0 || dow === 6) {
+						event.weekend_surge = true;
+					} else {
+						event.weekend_surge = false;
+					}
+				}
+			});
+			// Inject duplicate events for weekend content
 			for (let idx = userEvents.length - 1; idx >= 0; idx--) {
 				const event = userEvents[idx];
 				if (event.weekend_surge && !event.weekend_duplicate) {

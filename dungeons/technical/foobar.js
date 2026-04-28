@@ -2,7 +2,7 @@
 const SEED = "dm4-foobar";
 const num_days = 30;
 const num_users = 4_000_000;
-const avg_events_per_user = 500;
+const avg_events_per_user_per_day = 16.67;
 let token = "your-mixpanel-token";
 
 // ── env overrides ──
@@ -166,7 +166,7 @@ const config = {
 	token,
 	seed: SEED,
 	numDays: num_days,
-	numEvents: num_users * avg_events_per_user,
+	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	format: 'json', //csv or json
 	region: "US",

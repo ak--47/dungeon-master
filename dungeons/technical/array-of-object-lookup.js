@@ -2,7 +2,7 @@
 const SEED = "dm4-array-of-object-lookup";
 const num_days = 60;
 const num_users = 1_000;
-const avg_events_per_user = 100;
+const avg_events_per_user_per_day = 1.67;
 let token = "your-mixpanel-token";
 
 // ── env overrides ──
@@ -54,7 +54,7 @@ const config = {
 	seed: SEED,
 	name: "array-of-object-lookup",
 	numDays: num_days,
-	numEvents: num_users * avg_events_per_user,
+	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	format: 'json', //csv or json
 	region: "US",

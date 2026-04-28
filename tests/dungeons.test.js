@@ -52,7 +52,8 @@ describe('Dungeon Validation', () => {
 
 			it('has required config fields', () => {
 				if (!config) return;
-				expect(config.numEvents).toBeDefined();
+				// Event volume can come from either numEvents (legacy) or avgEventsPerUserPerDay (canonical).
+				expect(config.numEvents !== undefined || config.avgEventsPerUserPerDay !== undefined).toBe(true);
 				expect(config.numUsers).toBeDefined();
 				expect(config.numDays).toBeDefined();
 				expect(config.events).toBeDefined();

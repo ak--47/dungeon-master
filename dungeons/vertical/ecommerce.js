@@ -2,7 +2,7 @@
 const SEED = "simple is best";
 const num_days = 108;
 const num_users = 50_000;
-const avg_events_per_user = 40;
+const avg_events_per_user_per_day = 0.37;
 let token = "your-mixpanel-token";
 
 // ── env overrides ──
@@ -143,7 +143,7 @@ const config = {
 	token,
 	seed: SEED,
 	numDays: num_days,
-	numEvents: num_users * avg_events_per_user,
+	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	format: 'json', //csv or json
 	region: "US",
@@ -159,7 +159,6 @@ const config = {
 	isAnonymous: false,
 	alsoInferFunnels: false,
 	concurrency: 1,
-	percentUsersBornInDataset: 25,
 	events: [
 		{
 			event: "checkout",

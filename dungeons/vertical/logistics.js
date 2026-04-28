@@ -2,7 +2,7 @@
 const SEED = "dm4-logistics";
 const num_days = 100;
 const num_users = 5_000;
-const avg_events_per_user = 120;
+const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
 
 // ── env overrides ──
@@ -264,7 +264,7 @@ const config = {
 	token,
 	seed: SEED,
 	numDays: num_days,
-	numEvents: num_users * avg_events_per_user,
+	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -279,7 +279,6 @@ const config = {
 	hasCampaigns: false,
 	isAnonymous: false,
 	hasAdSpend: false,
-	percentUsersBornInDataset: 35,
 	hasAvatar: true,
 	concurrency: 1,
 	writeToDisk: false,
@@ -713,18 +712,13 @@ const config = {
 			// no-op: conversion differentiation handled via event filtering below
 		}
 
-		// -- HOOK 1: MONTH-END REPORTING SURGE (event) ----------------
-		// Reports on days 28-31 get 2x report_pages.
-		if (type === "event") {
-			if (record.event === "report generated") {
-				const dayOfMonth = dayjs(record.time).date();
-				if (dayOfMonth >= 28) {
-					record.report_pages = Math.floor((record.report_pages || 20) * 2);
-				}
-			}
+		// -- HOOK 1: MONTH-END REPORTING SURGE ------------------------
+		// Moved to everything hook (after sessionization) so day-of-month
+		// tags match final timestamps. See everything hook below.
 
-			// -- HOOK 2: RUSH ORDER PREMIUM (event) -------------------
-			// Urgent purchase orders get 1.5x unit_cost.
+		// -- HOOK 2: RUSH ORDER PREMIUM (event) -------------------
+		// Urgent purchase orders get 1.5x unit_cost.
+		if (type === "event") {
 			if (record.event === "purchase order created" && record.priority === "urgent") {
 				record.unit_cost = Math.floor((record.unit_cost || 50) * 1.5);
 			}
@@ -744,6 +738,18 @@ const config = {
 					if (plat) e.Platform = plat;
 					if (plan) e.subscription_plan = plan;
 				});
+			}
+
+			// -- HOOK 1: MONTH-END REPORTING SURGE --------------------
+			// Reports on days 28-31 get 2x report_pages.
+			// Runs after sessionization so day-of-month matches final timestamps.
+			for (const e of record) {
+				if (e.event === 'report generated') {
+					const dayOfMonth = new Date(e.time).getUTCDate();
+					if (dayOfMonth >= 28) {
+						e.report_pages = Math.floor((e.report_pages || 20) * 2);
+					}
+				}
 			}
 
 			// -- HOOK 8: SMALL-BUSINESS CONVERSION DROP ---------------

@@ -2,7 +2,7 @@
 const SEED = "harness-food";
 const num_days = 100;
 const num_users = 5_000;
-const avg_events_per_user = 120;
+const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
 
 // ── env overrides ──
@@ -166,7 +166,7 @@ const config = {
 	token,
 	seed: SEED,
 	numDays: num_days,
-	numEvents: num_users * avg_events_per_user,
+	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -181,7 +181,6 @@ const config = {
 	hasCampaigns: false,
 	isAnonymous: false,
 	hasAdSpend: false,
-	percentUsersBornInDataset: 50,
 	hasAvatar: true,
 	concurrency: 1,
 	writeToDisk: false,
@@ -586,46 +585,8 @@ const config = {
 			}
 		}
 
-		// ═══════════════════════════════════════════════════════════════════
-		// HOOK 2: COUPON INJECTION (funnel-post)
-		// Free-tier users get coupon_applied events spliced into their
-		// funnel sequences 30% of the time, simulating promotional nudges
-		// that push non-subscribers toward conversion.
-		// ═══════════════════════════════════════════════════════════════════
-		if (type === "funnel-post") {
-			if (Array.isArray(record) && record.length >= 2) {
-				// Check if user is Free tier from first event's super props
-				const firstEvent = record[0];
-				const isFreeUser = firstEvent && firstEvent.subscription_tier === "Free";
-
-				if (isFreeUser && chance.bool({ likelihood: 30 })) {
-					// Pick a random insertion point between funnel steps
-					const insertIdx = chance.integer({ min: 1, max: record.length - 1 });
-					const prevEvent = record[insertIdx - 1];
-					const nextEvent = record[insertIdx];
-					const midTime = dayjs(prevEvent.time).add(
-						dayjs(nextEvent.time).diff(dayjs(prevEvent.time)) / 2,
-						'milliseconds'
-					).toISOString();
-
-					const couponTemplate = record.find(e => e.event === "coupon applied");
-					const couponEvent = {
-						...(couponTemplate || firstEvent),
-						event: "coupon applied",
-						time: midTime,
-						user_id: firstEvent.user_id,
-						subscription_tier: firstEvent.subscription_tier,
-						Platform: firstEvent.Platform,
-						city: firstEvent.city,
-						coupon_code: chance.pickone(couponCodes),
-						discount_type: chance.pickone(["percent", "flat", "free_delivery"]),
-						discount_value: chance.integer({ min: 10, max: 30 }),
-						coupon_injected: true,
-					};
-					record.splice(insertIdx, 0, couponEvent);
-				}
-			}
-		}
+		// (Hook #2 coupon injection moved to everything hook where
+		// meta.profile.subscription_tier is authoritative)
 
 		// ═══════════════════════════════════════════════════════════════════
 		// HOOK 3: LATE NIGHT MUNCHIES (event)
@@ -692,6 +653,39 @@ const config = {
 					if (profile.subscription_tier !== undefined) event.subscription_tier = profile.subscription_tier;
 					if (profile.city !== undefined) event.city = profile.city;
 				});
+			}
+
+			// ── Hook #2: COUPON INJECTION (moved from funnel-post) ──
+			// Free-tier users get coupon_applied events injected 30% of the
+			// time near checkout events. Uses meta.profile.subscription_tier
+			// which is authoritative here.
+			if (profile && profile.subscription_tier === "Free") {
+				for (let i = userEvents.length - 1; i >= 1; i--) {
+					const evt = userEvents[i];
+					if (evt.event === "checkout started" && chance.bool({ likelihood: 30 })) {
+						const prevEvent = userEvents[i - 1];
+						const midTime = dayjs(prevEvent.time).add(
+							dayjs(evt.time).diff(dayjs(prevEvent.time)) / 2,
+							'milliseconds'
+						).toISOString();
+
+						const couponTemplate = userEvents.find(e => e.event === "coupon applied");
+						const couponEvent = {
+							...(couponTemplate || evt),
+							event: "coupon applied",
+							time: midTime,
+							user_id: evt.user_id,
+							subscription_tier: profile.subscription_tier,
+							Platform: profile.Platform,
+							city: profile.city,
+							coupon_code: chance.pickone(couponCodes),
+							discount_type: chance.pickone(["percent", "flat", "free_delivery"]),
+							discount_value: chance.integer({ min: 10, max: 30 }),
+							coupon_injected: true,
+						};
+						userEvents.splice(i, 0, couponEvent);
+					}
+				}
 			}
 
 			// ── Bug 2 fix: Conversion filtering for lunch rush + first order ──

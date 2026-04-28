@@ -2,7 +2,7 @@
 const SEED = "harness-media";
 const num_days = 100;
 const num_users = 5_000;
-const avg_events_per_user = 120;
+const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
 
 // ── env overrides ──
@@ -228,7 +228,7 @@ const config = {
 	token,
 	seed: SEED,
 	numDays: num_days,
-	numEvents: num_users * avg_events_per_user,
+	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	hasAnonIds: false,
 	hasSessionIds: true,
@@ -243,7 +243,6 @@ const config = {
 	hasCampaigns: false,
 	isAnonymous: false,
 	hasAdSpend: false,
-	percentUsersBornInDataset: 50,
 	hasAvatar: true,
 	concurrency: 1,
 	writeToDisk: false,
@@ -637,38 +636,23 @@ const config = {
 		}
 
 		// ─────────────────────────────────────────────────────────────
-		// Hook #3: WEEKEND vs WEEKDAY PATTERNS (event)
-		// Weekend: 1.5x watch duration. Weekday 6PM-11PM: prime_time tag
+		// Hook #3: WEEKEND vs WEEKDAY PATTERNS
+		// Moved to everything hook (after sessionization) so DOW/HOD
+		// tags match final timestamps. See everything hook below.
 		// ─────────────────────────────────────────────────────────────
+
 		if (type === "event") {
-			const EVENT_TIME = dayjs(record.time);
-			const dayOfWeek = EVENT_TIME.day(); // 0 = Sunday, 6 = Saturday
-			const hour = EVENT_TIME.hour();
-			const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-
-			if (isWeekend) {
-				record.weekend_viewing = true;
-				record.prime_time = false;
-				if (record.event === "playback completed" && record.watch_duration_min) {
-					record.watch_duration_min = Math.round(record.watch_duration_min * 1.5);
-				}
-			} else {
-				record.weekend_viewing = false;
-				// Weekday prime-time: 6PM to 11PM
-				if (hour >= 18 && hour <= 23) {
-					record.prime_time = true;
-				} else {
-					record.prime_time = false;
-				}
-			}
-
 			// ─────────────────────────────────────────────────────────────
 			// Hook #5: NEW RELEASE SPIKE (event)
-			// After day 50, blockbuster release drives content selection
+			// Days 50-65: blockbuster release drives content selection.
+			// Bounded window concentrates the spike instead of spreading
+			// it across the entire second half of the dataset.
 			// ─────────────────────────────────────────────────────────────
-			const BLOCKBUSTER_RELEASE = DATASET_START.add(50, 'days');
+			const BLOCKBUSTER_START = DATASET_START.add(50, 'days');
+			const BLOCKBUSTER_END = DATASET_START.add(65, 'days');
+			const EVENT_TIME = dayjs(record.time);
 			if (record.event === "content selected" || record.event === "playback started") {
-				if (EVENT_TIME.isAfter(BLOCKBUSTER_RELEASE) && chance.bool({ likelihood: 20 })) {
+				if (EVENT_TIME.isAfter(BLOCKBUSTER_START) && EVENT_TIME.isBefore(BLOCKBUSTER_END) && chance.bool({ likelihood: 20 })) {
 					record.content_type = "movie";
 					record.content_id = blockbusterId;
 					record.blockbuster_release = true;
@@ -678,7 +662,7 @@ const config = {
 			}
 
 			if (record.event === "content rated") {
-				if (EVENT_TIME.isAfter(BLOCKBUSTER_RELEASE) && chance.bool({ likelihood: 20 })) {
+				if (EVENT_TIME.isAfter(BLOCKBUSTER_START) && EVENT_TIME.isBefore(BLOCKBUSTER_END) && chance.bool({ likelihood: 20 })) {
 					record.rating = chance.integer({ min: 4, max: 5 });
 					record.content_id = blockbusterId;
 					record.blockbuster_release = true;
@@ -725,6 +709,31 @@ const config = {
 					if (stampPlan) e.subscription_plan = stampPlan;
 					if (stampDevice) e.device_type = stampDevice;
 				});
+			}
+
+			// ─── Hook #3: WEEKEND vs WEEKDAY PATTERNS ───
+			// Weekend: 1.5x watch duration. Weekday 6PM-11PM: prime_time tag.
+			// Runs after sessionization so DOW/HOD tags match final timestamps.
+			for (const e of userEvents) {
+				const eventDate = new Date(e.time);
+				const dayOfWeek = eventDate.getUTCDay(); // 0 = Sunday, 6 = Saturday
+				const hour = eventDate.getUTCHours();
+				const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+				if (isWeekend) {
+					e.weekend_viewing = true;
+					e.prime_time = false;
+					if (e.event === "playback completed" && e.watch_duration_min) {
+						e.watch_duration_min = Math.round(e.watch_duration_min * 1.5);
+					}
+				} else {
+					e.weekend_viewing = false;
+					if (hour >= 18 && hour <= 23) {
+						e.prime_time = true;
+					} else {
+						e.prime_time = false;
+					}
+				}
 			}
 
 			// ─── Bug 2 fix: Genre funnel conversion filtering ───

@@ -23,10 +23,12 @@ export interface Dungeon {
     epochStart?: number;
     /** Explicit end of dataset window (unix seconds). Defaults to FIXED_NOW. */
     epochEnd?: number;
-    /** Target total number of events to generate across all users. */
+    /** Target total number of events to generate across all users. Fallback when avgEventsPerUserPerDay is not set; otherwise derived from rate × numUsers × numDays. */
     numEvents?: number;
     /** Number of unique users to generate. */
     numUsers?: number;
+    /** Average events per user per active day. The canonical event-volume primitive — born-late users get this rate × their remaining window, so per-day density stays constant. If both this and numEvents are set, this wins. */
+    avgEventsPerUserPerDay?: number;
     /** Output format for files written to disk. */
     format?: "csv" | "json" | "parquet" | string;
     /** Mixpanel data residency region. */
@@ -106,8 +108,10 @@ export interface Dungeon {
     groupEvents?: GroupEventConfig[];
     /** Lookup table definitions for dimension tables. */
     lookupTables?: LookupTableSchema[];
-    /** TimeSoup configuration: controls the temporal distribution of events (peaks, deviation, mean). */
+    /** TimeSoup configuration: shapes intra-week and intra-day rhythm (peaks, deviation, DOW/HOD weights). Pair with `macro` for big-picture trend control. */
     soup?: soup;
+    /** Macro trend shape across the full dataset window: birth distribution + per-user event allocation. Default: "flat". Use "growth"/"viral"/"steady"/"decline" or a custom object. */
+    macro?: macro;
     /** Hook function called on every data point. The primary mechanism for engineering deliberate trends and patterns. */
     hook?: Hook<any>;
 
@@ -135,10 +139,14 @@ export interface Dungeon {
     [key: string]: any;
 
     // ── Distribution Controls ──
-    /** Percentage of users whose account creation falls within the dataset window (vs. pre-existing). Default: 15 */
+    // These three knobs are normally set by the `macro` preset (default "flat").
+    // Setting them on the dungeon config directly overrides the preset's value.
+    /** Percentage of users whose account creation falls within the dataset window (vs. pre-existing). Default (from macro: "flat"): 15 */
     percentUsersBornInDataset?: number;
-    /** Bias toward recent birth dates for users born in dataset (0 = uniform, 1 = heavily recent). Default: 0.3 */
+    /** Bias for birth dates of users born in dataset. -1..1; negative = early skew, positive = recent skew, 0 = uniform. Default (from macro: "flat"): 0 */
     bornRecentBias?: number;
+    /** How pre-existing users' first event time is placed. "pinned" stacks them all at FIXED_BEGIN; "uniform" spreads across [FIXED_BEGIN-30d, FIXED_BEGIN]. Default (from macro: "flat"): "uniform" */
+    preExistingSpread?: "pinned" | "uniform";
 }
 
 export type SCDProp = {
@@ -182,6 +190,30 @@ export type SoupConfig = {
  * Can be a preset name string, a config object, or a config object with a preset base.
  */
 type soup = SoupPreset | SoupConfig;
+
+/**
+ * Macro preset names for big-picture trend shape across the dataset window.
+ * Macro is orthogonal to soup: macro shapes the whole-window trend (births,
+ * growth, decline); soup shapes the intra-week and intra-day rhythm.
+ */
+export type MacroPreset = "flat" | "steady" | "growth" | "viral" | "decline";
+
+/**
+ * Macro configuration object — fine-grained big-picture trend control.
+ */
+export type MacroConfig = {
+    /** Use a named macro preset as the base, then override individual fields. */
+    preset?: MacroPreset;
+    /** Bias for birth dates. -1..1; negative = early skew, positive = recent skew, 0 = uniform. */
+    bornRecentBias?: number;
+    /** Percentage of users born in dataset window (0..100). */
+    percentUsersBornInDataset?: number;
+    /** "pinned" = pre-existing users stack at FIXED_BEGIN; "uniform" = spread across [FIXED_BEGIN-30d, FIXED_BEGIN]. */
+    preExistingSpread?: "pinned" | "uniform";
+};
+
+/** Big-picture trend shape: preset string, config object, or preset+overrides. */
+type macro = MacroPreset | MacroConfig;
 
 /**
  * Hook types and when they fire (in order per user):
