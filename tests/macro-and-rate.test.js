@@ -170,6 +170,147 @@ describe('macro integration with config-validator', () => {
 	});
 });
 
+describe('config-validator guards and clamping (1.3.0 hardening)', () => {
+	test('throws when numUsers is zero', () => {
+		initChance('zero-users');
+		expect(() => validateDungeonConfig({
+			numUsers: 0,
+			numEvents: 1000,
+			seed: 'zero-users'
+		})).toThrow(/numUsers must be a positive number/);
+	});
+
+	test('throws when numUsers is negative', () => {
+		initChance('neg-users');
+		expect(() => validateDungeonConfig({
+			numUsers: -10,
+			numEvents: 1000,
+			seed: 'neg-users'
+		})).toThrow(/numUsers must be a positive number/);
+	});
+
+	test('throws when numDays is zero', () => {
+		initChance('zero-days');
+		expect(() => validateDungeonConfig({
+			numUsers: 100,
+			numEvents: 1000,
+			numDays: 0,
+			seed: 'zero-days'
+		})).toThrow(/numDays must be a positive number/);
+	});
+
+	test('clamps bornRecentBias above 1', () => {
+		initChance('clamp-high');
+		const config = validateDungeonConfig({
+			numUsers: 100,
+			numEvents: 1000,
+			bornRecentBias: 5,
+			seed: 'clamp-high'
+		});
+		expect(config.bornRecentBias).toBe(1);
+	});
+
+	test('clamps bornRecentBias below -1', () => {
+		initChance('clamp-low');
+		const config = validateDungeonConfig({
+			numUsers: 100,
+			numEvents: 1000,
+			bornRecentBias: -3,
+			seed: 'clamp-low'
+		});
+		expect(config.bornRecentBias).toBe(-1);
+	});
+
+	test('coerces non-finite bornRecentBias to 0', () => {
+		initChance('clamp-nan');
+		const config = validateDungeonConfig({
+			numUsers: 100,
+			numEvents: 1000,
+			bornRecentBias: NaN,
+			seed: 'clamp-nan'
+		});
+		expect(config.bornRecentBias).toBe(0);
+	});
+
+	test('does not add macro-resolved fields back onto the input config object', () => {
+		// Earlier versions of the validator wrote bornRecentBias / percentUsersBornInDataset
+		// / preExistingSpread back onto the caller's config (via `if (config.x === undefined)
+		// config.x = macro.x`). The 1.3.0 hardening keeps these in local vars so the
+		// caller's object is not silently extended with macro-derived values.
+		initChance('no-mutate');
+		const input = {
+			numUsers: 100,
+			numEvents: 1000,
+			seed: 'no-mutate'
+		};
+		validateDungeonConfig(input);
+		expect(input.bornRecentBias).toBeUndefined();
+		expect(input.percentUsersBornInDataset).toBeUndefined();
+		expect(input.preExistingSpread).toBeUndefined();
+		expect(input.macro).toBeUndefined();
+	});
+
+	test('auto-batch triggers when avgEventsPerUserPerDay implies >= 2M events', () => {
+		initChance('auto-batch-rate');
+		// 1000 users × 30 days × 70 rate = 2.1M events
+		const config = validateDungeonConfig({
+			numUsers: 1000,
+			numDays: 30,
+			avgEventsPerUserPerDay: 70,
+			seed: 'auto-batch-rate'
+		});
+		expect(config.numEvents).toBeGreaterThanOrEqual(2_000_000);
+		expect(config.batchSize).toBe(1_000_000);
+	});
+
+	test('auto-batch does NOT trigger when explicit batchSize is provided', () => {
+		initChance('auto-batch-explicit');
+		const config = validateDungeonConfig({
+			numUsers: 1000,
+			numDays: 30,
+			avgEventsPerUserPerDay: 70,
+			batchSize: 500_000,
+			seed: 'auto-batch-explicit'
+		});
+		expect(config.batchSize).toBe(500_000);
+	});
+});
+
+describe('preExistingSpread is exposed on the resolved config', () => {
+	test('default macro "flat" gives uniform spread', () => {
+		initChance('spread-flat');
+		const config = validateDungeonConfig({
+			numUsers: 100,
+			numEvents: 1000,
+			seed: 'spread-flat'
+		});
+		expect(config.preExistingSpread).toBe('uniform');
+	});
+
+	test('macro "growth" gives pinned spread', () => {
+		initChance('spread-growth');
+		const config = validateDungeonConfig({
+			numUsers: 100,
+			numEvents: 1000,
+			macro: 'growth',
+			seed: 'spread-growth'
+		});
+		expect(config.preExistingSpread).toBe('pinned');
+	});
+
+	test('explicit preExistingSpread overrides macro', () => {
+		initChance('spread-override');
+		const config = validateDungeonConfig({
+			numUsers: 100,
+			numEvents: 1000,
+			macro: 'growth',
+			preExistingSpread: 'uniform',
+			seed: 'spread-override'
+		});
+		expect(config.preExistingSpread).toBe('uniform');
+	});
+});
+
 describe('soup presets no longer carry birth-distribution fields', () => {
 	test('resolveSoup output does not include bornRecentBias or percentUsersBornInDataset', async () => {
 		const { resolveSoup } = await import('../lib/templates/soup-presets.js');

@@ -19,10 +19,16 @@
 		"lib/",
 		"dungeons/",
 		"!dungeons/customers/",
+		"!dungeons/user/",
 		"scripts/",
+		"!scripts/experiments/",
 		"package.json",
-		"README.md"
+		"README.md",
+		"CHANGELOG.md"
 	],
+	"engines": {
+		"node": ">=18.0.0"
+	},
 	"publishConfig": {
 		"access": "public"
 	},

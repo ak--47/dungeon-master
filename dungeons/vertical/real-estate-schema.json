@@ -1,1239 +1,527 @@
 {
-  "schema": {
-    "token": "your-mixpanel-token",
-    "seed": "homenest",
-    "numDays": 150,
-    "numEvents": 480000,
-    "numUsers": 6000,
-    "hasAnonIds": false,
-    "hasSessionIds": true,
-    "format": "json",
-    "gzip": true,
-    "alsoInferFunnels": false,
-    "hasLocation": true,
-    "hasAndroidDevices": true,
-    "hasIOSDevices": true,
-    "hasDesktopDevices": true,
-    "hasBrowser": true,
-    "hasCampaigns": false,
-    "isAnonymous": false,
-    "hasAdSpend": false,
-    "percentUsersBornInDataset": 40,
-    "hasAvatar": true,
-    "concurrency": 1,
-    "writeToDisk": false,
-    "soup": "growth",
-    "scdProps": {
-      "agent_tier": {
-        "values": [
-          "Standard",
-          "Standard",
-          "Standard",
-          "Premier"
-        ],
-        "frequency": "month",
-        "timing": "fuzzy",
-        "max": 4
+  "events": [
+    {
+      "event": "account created",
+      "isFirstEvent": true,
+      "properties": {
+        "signup_method": [
+          "email",
+          "google",
+          "apple",
+          "facebook"
+        ]
       }
     },
-    "funnels": [
-      {
-        "sequence": [
-          "account created",
-          "property search",
-          "property viewed"
+    {
+      "event": "property search",
+      "weight": 10,
+      "properties": {
+        "location": [
+          "Manhattan",
+          "Brooklyn",
+          "Austin",
+          "Miami",
+          "San Francisco",
+          "Denver",
+          "Seattle",
+          "Chicago",
+          "Nashville",
+          "Portland"
         ],
-        "isFirstFunnel": true,
-        "conversionRate": 80,
-        "timeToConvert": 0.5,
-        "name": "Buyer Journey"
-      },
-      {
-        "sequence": [
-          "property viewed",
-          "tour scheduled",
-          "offer submitted"
-        ],
-        "conversionRate": 40,
-        "timeToConvert": 24,
-        "weight": 5,
-        "name": "Tour Funnel"
-      },
-      {
-        "sequence": [
-          "property listed",
-          "open house attended",
-          "property sold"
-        ],
-        "conversionRate": 35,
-        "timeToConvert": 48,
-        "weight": 3,
-        "name": "Seller Funnel"
-      }
-    ],
-    "events": [
-      {
-        "event": "account created",
-        "weight": 1,
-        "isFirstEvent": true,
-        "properties": {
-          "signup_method": [
-            "email",
-            "google",
-            "apple",
-            "facebook"
-          ]
-        }
-      },
-      {
-        "event": "property search",
-        "weight": 10,
-        "properties": {
-          "location": [
-            "Manhattan",
-            "Brooklyn",
-            "Austin",
-            "Miami",
-            "San Francisco",
-            "Denver",
-            "Seattle",
-            "Chicago",
-            "Nashville",
-            "Portland"
-          ],
-          "price_range_min": [
-            387725,
-            415644,
-            182192,
-            193788,
-            208390,
-            262988,
-            341959,
-            204118,
-            191034,
-            434774,
-            175600,
-            198243,
-            194929,
-            238997,
-            187969,
-            377588,
+        "price_range_min": {
+          "$range": [
             172706,
-            366464,
-            237156,
-            281639,
-            411624,
-            207842,
-            233487,
-            201127,
-            250295,
-            243308,
-            386504,
-            350406,
-            196652,
-            178716,
-            414637,
-            357032,
-            196888,
-            201903,
-            240410,
-            197342,
-            186108,
-            247460,
-            222756,
-            213642
-          ],
-          "price_range_max": [
-            1344142,
-            943158,
-            928744,
-            1686111,
-            903518,
-            1402973,
-            1435777,
-            805300,
-            740832,
-            624718,
-            771800,
-            1649886,
-            1682032,
-            1419766,
-            1303366,
-            1579827,
-            1642389,
-            1432720,
-            815373,
-            1295546,
-            791505,
-            1671205,
-            1640145,
-            802612,
-            748096,
-            1602126,
-            680080,
+            434774
+          ]
+        },
+        "price_range_max": {
+          "$range": [
             586384,
-            757390,
-            1735904,
-            619202,
-            593275,
-            1481015,
-            772331,
-            777458,
-            813073,
-            650056,
-            833993,
-            743713,
-            775998
-          ],
-          "bedrooms": [
-            1,
-            2,
-            2,
-            3,
-            3,
-            3,
-            4,
-            4,
-            5
-          ],
-          "property_type": [
-            "Single Family",
-            "Condo",
-            "Townhouse",
-            "Multi-Family"
+            1735904
           ]
-        }
-      },
-      {
-        "event": "property viewed",
-        "weight": 12,
-        "properties": {
-          "listing_id": {
-            "functionName": "arrow",
-            "body": "() => `LST-${chance.integer({ min: 10000, max: 99999 })}`"
-          },
-          "listing_price": [
-            576062,
-            481121,
-            391569,
-            1263544,
-            672856,
-            548974,
-            479326,
-            825000,
-            1199523,
-            700938,
-            947036,
-            637914,
-            559644,
-            1194246,
-            491113,
-            467081,
-            387031,
-            1126832,
-            1061876,
-            1236392,
-            546803,
-            441200,
-            437818,
-            435668,
-            535181,
-            1081643,
-            1143851,
-            489010,
-            647370,
-            1024298,
-            1165402,
-            439269,
-            622465,
-            706138,
-            486197,
-            482645,
-            666304,
-            1069873,
-            670516,
-            419474,
-            1170926,
-            565009,
-            1113453,
-            1072755,
-            422190,
-            508618,
-            472859,
-            514182,
+        },
+        "bedrooms": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "property_type": [
+          "Single Family",
+          "Condo",
+          "Townhouse",
+          "Multi-Family"
+        ]
+      }
+    },
+    {
+      "event": "property viewed",
+      "weight": 12,
+      "properties": {
+        "listing_id": {
+          "$type": "string"
+        },
+        "listing_price": {
+          "$range": [
             384906,
-            743039,
-            409788,
-            1048958,
-            1049263,
-            1102307,
-            666418,
-            609076,
-            497990,
-            510299,
-            521967,
-            617548
-          ],
-          "property_type": [
-            "Single Family",
-            "Condo",
-            "Townhouse",
-            "Multi-Family"
-          ],
-          "bedrooms": [
-            1,
-            2,
-            2,
-            3,
-            3,
-            3,
-            4,
-            4,
-            5
-          ],
-          "square_feet": [
-            3529,
-            2217,
-            3350,
-            3360,
-            1907,
+            1263544
+          ]
+        },
+        "property_type": [
+          "Single Family",
+          "Condo",
+          "Townhouse",
+          "Multi-Family"
+        ],
+        "bedrooms": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "square_feet": {
+          "$range": [
             1178,
-            1724,
-            2314,
-            2387,
-            1377,
-            3930,
-            1853,
-            3275,
-            2100,
-            3971,
-            1581,
-            4003,
-            2105,
-            1574,
-            3906,
-            4404,
-            3510,
-            1363,
-            1755,
-            2173,
-            2214,
-            3128,
-            2800,
-            1870,
-            3938,
-            1796,
-            3908,
-            3933,
-            2353,
-            3604,
-            2099,
-            2301,
-            3764,
-            1612,
-            1481,
-            1911,
-            1923,
-            4078,
-            2332,
-            1642,
-            1388,
-            1431,
-            3832,
-            1515,
-            2067
-          ],
-          "spring_season": [
-            false
-          ],
-          "luxury": [
-            false
+            4404
           ]
-        }
-      },
-      {
-        "event": "property saved",
-        "weight": 5,
-        "properties": {
-          "listing_id": {
-            "functionName": "arrow",
-            "body": "() => `LST-${chance.integer({ min: 10000, max: 99999 })}`"
-          },
-          "listing_price": [
-            1196396,
-            526229,
-            1106509,
-            1229500,
-            1042205,
-            472671,
-            627018,
-            1091143,
-            529608,
-            448552,
-            445983,
-            502646,
-            1001036,
-            1193459,
-            598719,
-            1170564,
-            585430,
-            492911,
-            572766,
-            509596,
-            1002429,
-            474590,
-            506264,
-            1074861,
-            1089105,
-            1032247,
-            487490,
-            626765,
-            519880,
-            412655,
+        },
+        "spring_season": [
+          false
+        ],
+        "luxury": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "property saved",
+      "weight": 5,
+      "properties": {
+        "listing_id": {
+          "$type": "string"
+        },
+        "listing_price": {
+          "$range": [
             355946,
-            1014887,
-            472497,
-            1235410,
-            521336,
-            882919,
-            1076656,
-            367998,
-            1169333,
-            553205
+            1235410
           ]
         }
-      },
-      {
-        "event": "saved search created",
-        "weight": 3,
-        "properties": {
-          "location": [
-            "Manhattan",
-            "Brooklyn",
-            "Austin",
-            "Miami",
-            "San Francisco",
-            "Denver",
-            "Seattle",
-            "Chicago",
-            "Nashville",
-            "Portland"
-          ],
-          "criteria_count": [
-            7,
-            3,
-            6,
-            5,
-            4,
-            3,
-            5,
-            5,
-            3,
-            4
-          ]
-        }
-      },
-      {
-        "event": "virtual tour",
-        "weight": 4,
-        "properties": {
-          "listing_id": {
-            "functionName": "arrow",
-            "body": "() => `LST-${chance.integer({ min: 10000, max: 99999 })}`"
-          },
-          "duration_mins": [
-            24,
-            26,
-            19,
-            18,
-            32,
-            15,
-            22,
-            13,
-            18,
-            16,
-            16,
-            15,
-            16,
-            25,
-            16,
-            18,
-            17,
-            16,
-            15,
-            13,
-            22,
-            15,
+      }
+    },
+    {
+      "event": "saved search created",
+      "weight": 3,
+      "properties": {
+        "location": [
+          "Manhattan",
+          "Brooklyn",
+          "Austin",
+          "Miami",
+          "San Francisco",
+          "Denver",
+          "Seattle",
+          "Chicago",
+          "Nashville",
+          "Portland"
+        ],
+        "criteria_count": [
+          7,
+          3,
+          6,
+          5,
+          4
+        ]
+      }
+    },
+    {
+      "event": "virtual tour",
+      "weight": 4,
+      "properties": {
+        "listing_id": {
+          "$type": "string"
+        },
+        "duration_mins": {
+          "$range": [
             12,
-            35,
-            12,
-            18,
-            14,
-            21,
-            18,
             35
           ]
         }
-      },
-      {
-        "event": "in-person tour",
-        "weight": 3,
-        "properties": {
-          "listing_id": {
-            "functionName": "arrow",
-            "body": "() => `LST-${chance.integer({ min: 10000, max: 99999 })}`"
-          },
-          "agent_id": {
-            "functionName": "arrow",
-            "body": "() => `AGT-${chance.integer({ min: 1000, max: 9999 })}`"
-          }
+      }
+    },
+    {
+      "event": "in-person tour",
+      "weight": 3,
+      "properties": {
+        "listing_id": {
+          "$type": "string"
+        },
+        "agent_id": {
+          "$type": "string"
         }
-      },
-      {
-        "event": "tour scheduled",
-        "weight": 4,
-        "properties": {
-          "listing_id": {
-            "functionName": "arrow",
-            "body": "() => `LST-${chance.integer({ min: 10000, max: 99999 })}`"
-          },
-          "agent_id": {
-            "functionName": "arrow",
-            "body": "() => `AGT-${chance.integer({ min: 1000, max: 9999 })}`"
-          },
-          "spring_season": [
-            false
-          ]
-        }
-      },
-      {
-        "event": "mortgage pre-approval",
-        "weight": 2,
-        "properties": {
-          "lender": [
-            "Chase",
-            "Wells Fargo",
-            "Bank of America",
-            "Rocket Mortgage",
-            "United Wholesale",
-            "loanDepot"
-          ],
-          "approved_amount": [
-            534213,
-            569049,
-            556315,
-            574702,
-            850000,
-            525049,
-            1002775,
-            498329,
+      }
+    },
+    {
+      "event": "tour scheduled",
+      "weight": 4,
+      "properties": {
+        "listing_id": {
+          "$type": "string"
+        },
+        "agent_id": {
+          "$type": "string"
+        },
+        "spring_season": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "mortgage pre-approval",
+      "weight": 2,
+      "properties": {
+        "lender": [
+          "Chase",
+          "Wells Fargo",
+          "Bank of America",
+          "Rocket Mortgage",
+          "United Wholesale",
+          "loanDepot"
+        ],
+        "approved_amount": {
+          "$range": [
             457192,
-            520216,
-            483154,
-            578573,
-            1060065,
-            537354,
-            517393,
-            487311,
-            1103987,
-            506456,
-            1221684,
-            1152033,
-            523160,
-            644923,
-            679120,
-            488522,
-            715506,
-            599833,
-            1032048,
-            525591,
-            1233515,
-            471262,
-            1080573,
-            459208,
-            1017029,
-            539187,
-            557295,
-            593323,
-            1171465,
-            1065346,
-            705249,
-            639154
-          ],
-          "mortgage_rate": [
-            7,
+            1233515
+          ]
+        },
+        "mortgage_rate": {
+          "$range": [
             6,
-            7,
-            7,
-            6,
-            6,
-            7,
-            6,
-            7,
-            6,
-            7,
-            6,
-            6,
-            6,
-            6,
-            7,
-            7,
-            6,
-            7,
             7
           ]
         }
-      },
-      {
-        "event": "offer submitted",
-        "weight": 2,
-        "properties": {
-          "listing_id": {
-            "functionName": "arrow",
-            "body": "() => `LST-${chance.integer({ min: 10000, max: 99999 })}`"
-          },
-          "offer_price": [
-            559386,
-            574410,
-            1010786,
-            595920,
-            571006,
+      }
+    },
+    {
+      "event": "offer submitted",
+      "weight": 2,
+      "properties": {
+        "listing_id": {
+          "$type": "string"
+        },
+        "offer_price": {
+          "$range": [
             447569,
-            1154506,
-            1153115,
-            520950,
-            962539,
-            871534,
-            1035628,
-            508666,
-            573548,
-            708096,
-            1143072,
-            1013738,
-            486298,
-            1150608,
-            653144,
-            460059,
-            532395,
-            482752,
-            1130354,
-            1124045,
-            581936,
-            531375,
-            596442,
-            537113,
-            522387,
-            586809,
-            634499,
-            1091708,
-            554099,
-            850000,
-            594188,
-            539096,
-            1047715,
-            476726,
             1195058
-          ],
-          "listing_price": [
-            499225,
-            508206,
-            484739,
-            629281,
-            773339,
-            539492,
-            491762,
-            568030,
-            582217,
-            496588,
-            581932,
-            1135615,
+          ]
+        },
+        "listing_price": {
+          "$range": [
             458307,
-            943496,
-            574681,
-            1161170,
-            902620,
-            506390,
-            509717,
-            546005,
-            1145315,
-            570083,
-            928237,
-            731968,
-            480762,
-            669521,
-            1270588,
-            573872,
-            655494,
-            497524,
-            681906,
-            1217110,
-            530388,
-            1109915,
-            1046862,
-            1129406,
-            624753,
-            579470,
-            1184559,
-            586385
-          ],
-          "pre_approved": [
-            false
-          ],
-          "spring_season": [
-            false
-          ],
-          "dual_tour": [
-            false
+            1270588
           ]
-        }
-      },
-      {
-        "event": "offer accepted",
-        "weight": 1,
-        "properties": {
-          "listing_id": {
-            "functionName": "arrow",
-            "body": "() => `LST-${chance.integer({ min: 10000, max: 99999 })}`"
-          },
-          "final_price": [
-            1260893,
-            582221,
-            478273,
-            411188,
-            664214,
+        },
+        "pre_approved": [
+          false
+        ],
+        "spring_season": [
+          false
+        ],
+        "dual_tour": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "offer accepted",
+      "properties": {
+        "listing_id": {
+          "$type": "string"
+        },
+        "final_price": {
+          "$range": [
             377749,
-            1091202,
-            604847,
-            432455,
-            535779,
-            608212,
-            538129,
-            1048119,
-            1221939,
-            643795,
-            1220723,
-            515000,
-            450058,
-            850000,
-            539974,
-            530961,
-            569629,
-            514149,
-            482418,
-            659237,
-            889126,
-            510273,
-            625937,
-            642964,
-            1010738,
-            1007310,
-            653030,
-            850000,
-            663659,
-            533368,
-            536659,
-            670368,
-            441272,
-            1194426,
-            1208608
-          ]
-        }
-      },
-      {
-        "event": "offer rejected",
-        "weight": 1,
-        "properties": {
-          "listing_id": {
-            "functionName": "arrow",
-            "body": "() => `LST-${chance.integer({ min: 10000, max: 99999 })}`"
-          },
-          "reason": [
-            "price too low",
-            "competing offer",
-            "seller changed mind",
-            "inspection issues",
-            "financing fell through"
-          ]
-        }
-      },
-      {
-        "event": "property listed",
-        "weight": 3,
-        "properties": {
-          "listing_price": [
-            1147515,
-            465550,
-            565787,
-            522550,
-            1148005,
-            472277,
-            608286,
-            1146505,
-            1123949,
-            653201,
-            968594,
-            651929,
-            628014,
-            934488,
-            1104163,
-            727066,
-            440098,
-            1194065,
-            445564,
-            512950,
-            590153,
-            1049424,
-            1061273,
-            993637,
-            570597,
-            938799,
-            1088518,
-            533558,
-            519351,
-            513193,
-            508837,
-            580609,
-            1068707,
-            411345,
-            521693,
-            1198589,
-            1036078,
-            670689,
-            482897,
-            479856,
-            1067871,
-            471640,
-            602486,
-            1156060,
-            628318,
-            540814,
-            685839,
-            559490,
-            1127338,
-            646748
-          ],
-          "property_type": [
-            "Single Family",
-            "Condo",
-            "Townhouse",
-            "Multi-Family"
-          ],
-          "bedrooms": [
-            1,
-            2,
-            2,
-            3,
-            3,
-            3,
-            4,
-            4,
-            5
-          ],
-          "listing_status": [
-            "active",
-            "pending",
-            "coming soon"
-          ],
-          "luxury": [
-            false
-          ],
-          "premier_agent": [
-            false
-          ]
-        }
-      },
-      {
-        "event": "property sold",
-        "weight": 1,
-        "properties": {
-          "sale_price": [
-            1199678,
-            923108,
-            500367,
-            815167,
-            1034405,
-            1159216,
-            850000,
-            447636,
-            550232,
-            1206499,
-            451977,
-            622286,
-            1155428,
-            527461,
-            1253417,
-            565968,
-            582033,
-            1070097,
-            493598,
-            1217615,
-            1088307,
-            1119158,
-            1232365,
-            1024898,
-            1067626,
-            1116296,
-            651576,
-            1217766,
-            520722,
-            472618,
-            768409,
-            473195,
-            657701,
-            404205,
-            482401,
-            808743,
-            598656,
-            551393,
-            1007888,
-            574095
-          ],
-          "days_on_market": [
-            55,
-            75,
-            62,
-            72,
-            47,
-            122,
-            76,
-            54,
-            34,
-            59,
-            78,
-            132,
-            34,
-            107,
-            133,
-            119,
-            36,
-            46,
-            135,
-            129,
-            56,
-            48,
-            70,
-            45,
-            62,
-            47,
-            57,
-            145,
-            73,
-            48
-          ],
-          "premier_agent": [
-            false
-          ]
-        }
-      },
-      {
-        "event": "agent contacted",
-        "weight": 4,
-        "properties": {
-          "contact_method": [
-            "phone",
-            "email",
-            "in-app message",
-            "text"
-          ]
-        }
-      },
-      {
-        "event": "open house attended",
-        "weight": 2,
-        "properties": {
-          "listing_id": {
-            "functionName": "arrow",
-            "body": "() => `LST-${chance.integer({ min: 10000, max: 99999 })}`"
-          },
-          "attendees": [
-            8,
-            21,
-            21,
-            8,
-            8,
-            6,
-            12,
-            8,
-            13,
-            6,
-            8,
-            9,
-            18,
-            20,
-            11
-          ]
-        }
-      },
-      {
-        "event": "review submitted",
-        "weight": 2,
-        "properties": {
-          "rating": [
-            1,
-            2,
-            3,
-            3,
-            4,
-            4,
-            4,
-            5,
-            5,
-            5
-          ],
-          "review_type": [
-            "agent",
-            "property",
-            "platform"
+            1260893
           ]
         }
       }
+    },
+    {
+      "event": "offer rejected",
+      "properties": {
+        "listing_id": {
+          "$type": "string"
+        },
+        "reason": [
+          "price too low",
+          "competing offer",
+          "seller changed mind",
+          "inspection issues",
+          "financing fell through"
+        ]
+      }
+    },
+    {
+      "event": "property listed",
+      "weight": 3,
+      "properties": {
+        "listing_price": {
+          "$range": [
+            411345,
+            1198589
+          ]
+        },
+        "property_type": [
+          "Single Family",
+          "Condo",
+          "Townhouse",
+          "Multi-Family"
+        ],
+        "bedrooms": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "listing_status": [
+          "active",
+          "pending",
+          "coming soon"
+        ],
+        "luxury": [
+          false
+        ],
+        "premier_agent": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "property sold",
+      "properties": {
+        "sale_price": {
+          "$range": [
+            404205,
+            1253417
+          ]
+        },
+        "days_on_market": {
+          "$range": [
+            34,
+            145
+          ]
+        },
+        "premier_agent": [
+          false
+        ]
+      }
+    },
+    {
+      "event": "agent contacted",
+      "weight": 4,
+      "properties": {
+        "contact_method": [
+          "phone",
+          "email",
+          "in-app message",
+          "text"
+        ]
+      }
+    },
+    {
+      "event": "open house attended",
+      "weight": 2,
+      "properties": {
+        "listing_id": {
+          "$type": "string"
+        },
+        "attendees": {
+          "$range": [
+            6,
+            21
+          ]
+        }
+      }
+    },
+    {
+      "event": "review submitted",
+      "weight": 2,
+      "properties": {
+        "rating": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "review_type": [
+          "agent",
+          "property",
+          "platform"
+        ]
+      }
+    }
+  ],
+  "funnels": [
+    {
+      "sequence": [
+        "account created",
+        "property search",
+        "property viewed"
+      ],
+      "name": "Buyer Journey",
+      "isFirstFunnel": true,
+      "conversionRate": 80,
+      "timeToConvert": 0.5
+    },
+    {
+      "sequence": [
+        "property viewed",
+        "tour scheduled",
+        "offer submitted"
+      ],
+      "name": "Tour Funnel",
+      "conversionRate": 40,
+      "timeToConvert": 24,
+      "weight": 5
+    },
+    {
+      "sequence": [
+        "property listed",
+        "open house attended",
+        "property sold"
+      ],
+      "name": "Seller Funnel",
+      "conversionRate": 35,
+      "timeToConvert": 48,
+      "weight": 3
+    }
+  ],
+  "superProps": {
+    "user_type": [
+      "Buyer",
+      "Agent",
+      "Both"
     ],
-    "superProps": {
-      "user_type": [
-        "Buyer",
-        "Buyer",
-        "Buyer",
-        "Agent",
-        "Both"
-      ],
-      "preferred_location": [
-        "Urban",
-        "Suburban",
-        "Rural"
-      ],
-      "property_preference": [
-        "Single Family",
-        "Condo",
-        "Townhouse",
-        "Multi-Family"
-      ],
-      "has_saved_search": [
-        false
-      ],
-      "cold_lead": [
-        false
+    "preferred_location": [
+      "Urban",
+      "Suburban",
+      "Rural"
+    ],
+    "property_preference": [
+      "Single Family",
+      "Condo",
+      "Townhouse",
+      "Multi-Family"
+    ],
+    "has_saved_search": [
+      false
+    ],
+    "cold_lead": [
+      false
+    ]
+  },
+  "userProps": {
+    "user_type": [
+      "Buyer",
+      "Agent",
+      "Both"
+    ],
+    "preferred_location": [
+      "Urban",
+      "Suburban",
+      "Rural"
+    ],
+    "property_preference": [
+      "Single Family",
+      "Condo",
+      "Townhouse",
+      "Multi-Family"
+    ],
+    "budget_max": {
+      "$range": [
+        535381,
+        1709979
       ]
     },
-    "userProps": {
-      "user_type": [
-        "Buyer",
-        "Buyer",
-        "Buyer",
-        "Agent",
-        "Both"
+    "agent_tier": [
+      "Standard",
+      "Premier"
+    ],
+    "total_properties_viewed": {
+      "$range": [
+        18,
+        91
+      ]
+    },
+    "pre_approval_status": [
+      "none"
+    ],
+    "has_saved_search": [
+      false
+    ],
+    "cold_lead": [
+      false
+    ]
+  },
+  "groupKeys": [
+    {
+      "key": "brokerage_id",
+      "count": 200,
+      "affectsEvents": [
+        "property listed",
+        "property sold",
+        "agent contacted",
+        "open house attended"
+      ]
+    }
+  ],
+  "groupProps": {
+    "brokerage_id": {
+      "brokerage_name": [
+        "Compass",
+        "RE/MAX",
+        "Keller Williams",
+        "Coldwell Banker",
+        "Century 21",
+        "Sotheby's",
+        "eXp Realty",
+        "Redfin"
       ],
-      "preferred_location": [
-        "Urban",
-        "Suburban",
-        "Rural"
+      "agent_count": {
+        "$range": [
+          42,
+          153
+        ]
+      },
+      "region": [
+        "Northeast",
+        "Southeast",
+        "Midwest",
+        "Southwest",
+        "West Coast",
+        "Pacific Northwest"
       ],
-      "property_preference": [
-        "Single Family",
-        "Condo",
-        "Townhouse",
-        "Multi-Family"
-      ],
-      "budget_max": [
-        776285,
-        1615945,
-        1703780,
-        708048,
-        763545,
-        852497,
-        1580223,
-        665204,
-        625958,
-        1709979,
-        585636,
-        836265,
-        724149,
-        826135,
-        1670317,
-        928873,
-        1100000,
-        1493774,
-        690581,
-        612907,
-        1315607,
-        721682,
-        1266530,
-        1483464,
-        828406,
-        1000530,
-        1622893,
-        649739,
-        914465,
-        1312919,
-        634195,
-        535381,
-        1419126,
-        1176338,
-        1433102,
-        1324093,
-        606013,
-        1373436,
-        666375,
-        636546,
-        1328101,
-        652419,
-        1534068,
-        734160,
-        847234,
-        766938,
-        1100000,
-        1618458,
-        1409293,
-        814742
-      ],
-      "agent_tier": [
-        "Standard",
-        "Standard",
+      "avg_listing_price": {
+        "$range": [
+          443419,
+          1256504
+        ]
+      }
+    }
+  },
+  "scdProps": {
+    "agent_tier": {
+      "type": "user",
+      "frequency": "month",
+      "timing": "fuzzy",
+      "max": 4,
+      "values": [
         "Standard",
         "Premier"
-      ],
-      "total_properties_viewed": [
-        72,
-        34,
-        38,
-        32,
-        43,
-        29,
-        20,
-        78,
-        73,
-        29,
-        62,
-        18,
-        71,
-        50,
-        42,
-        25,
-        26,
-        72,
-        30,
-        58,
-        21,
-        27,
-        30,
-        28,
-        74,
-        42,
-        91,
-        50,
-        35,
-        51
-      ],
-      "pre_approval_status": [
-        "none"
-      ],
-      "has_saved_search": [
-        false
-      ],
-      "cold_lead": [
-        false
       ]
-    },
-    "groupKeys": [
-      [
-        "brokerage_id",
-        200,
-        [
-          "property listed",
-          "property sold",
-          "agent contacted",
-          "open house attended"
-        ]
-      ]
-    ],
-    "groupProps": {
-      "brokerage_id": {
-        "brokerage_name": [
-          "Compass",
-          "RE/MAX",
-          "Keller Williams",
-          "Coldwell Banker",
-          "Century 21",
-          "Sotheby's",
-          "eXp Realty",
-          "Redfin"
-        ],
-        "agent_count": [
-          136,
-          122,
-          53,
-          50,
-          138,
-          141,
-          54,
-          46,
-          43,
-          48,
-          47,
-          54,
-          82,
-          153,
-          46,
-          78,
-          59,
-          126,
-          70,
-          144,
-          119,
-          63,
-          103,
-          75,
-          42,
-          145,
-          50,
-          143,
-          148,
-          65
-        ],
-        "region": [
-          "Northeast",
-          "Southeast",
-          "Midwest",
-          "Southwest",
-          "West Coast",
-          "Pacific Northwest"
-        ],
-        "avg_listing_price": [
-          769344,
-          1052857,
-          600693,
-          1068546,
-          1033256,
-          522278,
-          1102964,
-          608882,
-          508357,
-          482163,
-          508548,
-          1136589,
-          679994,
-          968542,
-          536293,
-          506800,
-          478750,
-          1256504,
-          567331,
-          684224,
-          463289,
-          469716,
-          1217812,
-          1006829,
-          640895,
-          1216747,
-          1110353,
-          743594,
-          443419,
-          850000
-        ]
-      }
-    },
-    "lookupTables": []
-  },
-  "hooks": "function (record, type, meta) {\n\t\tconst NOW = dayjs();\n\t\tconst DATASET_START = NOW.subtract(num_days, \"days\");\n\n\t\t// ===============================================================\n\t\t// Hook #1: SPRING BUYING SEASON (event)\n\t\t// Days 30-60: spring market heats up. Scheduled tours get\n\t\t// duration_mins 3x (more serious buyers). Offers get offer_price\n\t\t// 2.5x (bidding wars). spring_season=true flag set on both.\n\t\t// ===============================================================\n\t\tif (type === \"event\") {\n\t\t\tconst EVENT_TIME = dayjs(record.time);\n\t\t\tconst dayInDataset = EVENT_TIME.diff(DATASET_START, \"day\");\n\n\t\t\tconst isSpring = dayInDataset >= 30 && dayInDataset <= 60;\n\n\t\t\tif (record.event === \"tour scheduled\") {\n\t\t\t\tif (isSpring) {\n\t\t\t\t\trecord.spring_season = true;\n\t\t\t\t} else {\n\t\t\t\t\trecord.spring_season = false;\n\t\t\t\t}\n\t\t\t}\n\n\t\t\tif (record.event === \"offer submitted\") {\n\t\t\t\tif (isSpring) {\n\t\t\t\t\trecord.offer_price = Math.floor((record.offer_price || 400000) * 2.5);\n\t\t\t\t\trecord.spring_season = true;\n\t\t\t\t} else {\n\t\t\t\t\trecord.spring_season = false;\n\t\t\t\t}\n\t\t\t}\n\n\t\t\tif (record.event === \"property viewed\" && isSpring) {\n\t\t\t\trecord.spring_season = true;\n\t\t\t}\n\n\t\t\t// ===============================================================\n\t\t\t// Hook #2 (event part): MORTGAGE RATE SHOCK\n\t\t\t// Day 75-89: mortgage rates forced to 7.5 on pre-approval events\n\t\t\t// (up from baseline ~6.5).\n\t\t\t// ===============================================================\n\t\t\tif (record.event === \"mortgage pre-approval\") {\n\t\t\t\tif (dayInDataset >= 75 && dayInDataset < 89) {\n\t\t\t\t\trecord.mortgage_rate = 7.5;\n\t\t\t\t}\n\t\t\t}\n\n\t\t\t// ===============================================================\n\t\t\t// Hook #7 (event part): LUXURY LISTING RELEASE\n\t\t\t// After day 50, 3% of property_listed events become luxury\n\t\t\t// ($5M-$15M) with luxury=true. Before day 50, no luxury.\n\t\t\t// ===============================================================\n\t\t\tif (record.event === \"property listed\") {\n\t\t\t\tif (dayInDataset >= 50 && chance.bool({ likelihood: 3 })) {\n\t\t\t\t\trecord.listing_price = chance.integer({ min: 5000000, max: 15000000 });\n\t\t\t\t\trecord.luxury = true;\n\t\t\t\t\trecord.premier_agent = false;\n\t\t\t\t} else {\n\t\t\t\t\trecord.luxury = false;\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\n\t\t// ===============================================================\n\t\t// EVERYTHING HOOK — Complex behavioral patterns\n\t\t// ===============================================================\n\t\tif (type === \"everything\") {\n\t\t\tconst userEvents = record;\n\t\t\tconst profile = meta.profile;\n\n\t\t\t// Stamp superProps from profile for consistency\n\t\t\tuserEvents.forEach(e => {\n\t\t\t\te.user_type = profile.user_type;\n\t\t\t\te.preferred_location = profile.preferred_location;\n\t\t\t\te.property_preference = profile.property_preference;\n\t\t\t\te.has_saved_search = profile.has_saved_search;\n\t\t\t\te.cold_lead = profile.cold_lead;\n\t\t\t});\n\n\t\t\tconst firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;\n\n\t\t\t// -----------------------------------------------------------\n\t\t\t// Hook #2 (everything part): MORTGAGE RATE SHOCK\n\t\t\t// After day 75, 45% of offer_submitted events are removed\n\t\t\t// (buyer pullback due to higher rates).\n\t\t\t// -----------------------------------------------------------\n\t\t\tconst day75 = DATASET_START.add(75, \"days\");\n\t\t\tfor (let i = userEvents.length - 1; i >= 0; i--) {\n\t\t\t\tconst evt = userEvents[i];\n\t\t\t\tif (evt.event === \"offer submitted\" && dayjs(evt.time).isAfter(day75)) {\n\t\t\t\t\tif (chance.bool({ likelihood: 45 })) {\n\t\t\t\t\t\tuserEvents.splice(i, 1);\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\n\t\t\t// -----------------------------------------------------------\n\t\t\t// Hook #3: SAVED-SEARCH RETENTION\n\t\t\t// Users who create a \"saved search created\" within first 7\n\t\t\t// days get extra property_viewed and tour_scheduled events.\n\t\t\t// Non-savers lose 80% of events after day 30.\n\t\t\t// -----------------------------------------------------------\n\t\t\tconst day7 = firstEventTime ? firstEventTime.add(7, \"days\") : null;\n\t\t\tconst day30 = DATASET_START.add(30, \"days\");\n\n\t\t\tlet hasSavedSearch = false;\n\t\t\tif (day7) {\n\t\t\t\thasSavedSearch = userEvents.some(e =>\n\t\t\t\t\te.event === \"saved search created\" &&\n\t\t\t\t\tdayjs(e.time).isBefore(day7)\n\t\t\t\t);\n\t\t\t}\n\n\t\t\tif (hasSavedSearch) {\n\t\t\t\t// Mark the user and inject extra engagement events\n\t\t\t\tprofile.has_saved_search = true;\n\t\t\t\tuserEvents.forEach(e => { e.has_saved_search = true; });\n\n\t\t\t\t// Inject extra property_viewed and tour_scheduled events\n\t\t\t\tconst viewTemplate = userEvents.find(e => e.event === \"property viewed\");\n\t\t\t\tconst tourTemplate = userEvents.find(e => e.event === \"tour scheduled\");\n\n\t\t\t\tif (viewTemplate) {\n\t\t\t\t\tconst extraCount = chance.integer({ min: 3, max: 8 });\n\t\t\t\t\tfor (let i = 0; i < extraCount; i++) {\n\t\t\t\t\t\tconst offset = chance.integer({ min: 10, max: num_days - 10 });\n\t\t\t\t\t\tuserEvents.push({\n\t\t\t\t\t\t\t...viewTemplate,\n\t\t\t\t\t\t\ttime: DATASET_START.add(offset, \"days\").add(chance.integer({ min: 0, max: 23 }), \"hours\").toISOString(),\n\t\t\t\t\t\t\tuser_id: viewTemplate.user_id,\n\t\t\t\t\t\t\tlisting_id: `LST-${chance.integer({ min: 10000, max: 99999 })}`,\n\t\t\t\t\t\t\tlisting_price: chance.integer({ min: 200000, max: 1200000 }),\n\t\t\t\t\t\t\thas_saved_search: true,\n\t\t\t\t\t\t});\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t\tif (tourTemplate) {\n\t\t\t\t\tconst extraTours = chance.integer({ min: 1, max: 3 });\n\t\t\t\t\tfor (let i = 0; i < extraTours; i++) {\n\t\t\t\t\t\tconst offset = chance.integer({ min: 15, max: num_days - 10 });\n\t\t\t\t\t\tuserEvents.push({\n\t\t\t\t\t\t\t...tourTemplate,\n\t\t\t\t\t\t\ttime: DATASET_START.add(offset, \"days\").add(chance.integer({ min: 8, max: 18 }), \"hours\").toISOString(),\n\t\t\t\t\t\t\tuser_id: tourTemplate.user_id,\n\t\t\t\t\t\t\tlisting_id: `LST-${chance.integer({ min: 10000, max: 99999 })}`,\n\t\t\t\t\t\t\thas_saved_search: true,\n\t\t\t\t\t\t});\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t} else {\n\t\t\t\t// Non-savers: remove 80% of events after day 30\n\t\t\t\tfor (let i = userEvents.length - 1; i >= 0; i--) {\n\t\t\t\t\tconst evt = userEvents[i];\n\t\t\t\t\tif (dayjs(evt.time).isAfter(day30)) {\n\t\t\t\t\t\tif (chance.bool({ likelihood: 80 })) {\n\t\t\t\t\t\t\tuserEvents.splice(i, 1);\n\t\t\t\t\t\t}\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\n\t\t\t// -----------------------------------------------------------\n\t\t\t// Hook #4: PRE-APPROVED BUYER CONVERSION\n\t\t\t// Users with a \"mortgage pre-approval\" event get 5x more\n\t\t\t// offer_submitted events injected. pre_approved=true.\n\t\t\t// -----------------------------------------------------------\n\t\t\tconst hasPreApproval = userEvents.some(e => e.event === \"mortgage pre-approval\");\n\n\t\t\tif (hasPreApproval) {\n\t\t\t\tprofile.pre_approval_status = \"approved\";\n\t\t\t\tconst offerTemplate = userEvents.find(e => e.event === \"offer submitted\");\n\t\t\t\tif (offerTemplate) {\n\t\t\t\t\tconst extraOffers = chance.integer({ min: 4, max: 6 });\n\t\t\t\t\tfor (let i = 0; i < extraOffers; i++) {\n\t\t\t\t\t\tconst offset = chance.integer({ min: 20, max: num_days - 5 });\n\t\t\t\t\t\tuserEvents.push({\n\t\t\t\t\t\t\t...offerTemplate,\n\t\t\t\t\t\t\ttime: DATASET_START.add(offset, \"days\").add(chance.integer({ min: 8, max: 20 }), \"hours\").toISOString(),\n\t\t\t\t\t\t\tuser_id: offerTemplate.user_id,\n\t\t\t\t\t\t\tlisting_id: `LST-${chance.integer({ min: 10000, max: 99999 })}`,\n\t\t\t\t\t\t\toffer_price: chance.integer({ min: 250000, max: 1200000 }),\n\t\t\t\t\t\t\tlisting_price: chance.integer({ min: 250000, max: 1200000 }),\n\t\t\t\t\t\t\tpre_approved: true,\n\t\t\t\t\t\t\tspring_season: false,\n\t\t\t\t\t\t\tdual_tour: false,\n\t\t\t\t\t\t});\n\t\t\t\t\t}\n\t\t\t\t}\n\n\t\t\t\t// Also tag existing offers\n\t\t\t\tuserEvents.forEach(e => {\n\t\t\t\t\tif (e.event === \"offer submitted\") {\n\t\t\t\t\t\te.pre_approved = true;\n\t\t\t\t\t}\n\t\t\t\t});\n\t\t\t}\n\n\t\t\t// -----------------------------------------------------------\n\t\t\t// Hook #5: TOP-TIER AGENT ADVANTAGE\n\t\t\t// Premier agents get 3x property_listed and 2x property_sold\n\t\t\t// events. premier_agent=true on all their listing/sale events.\n\t\t\t// -----------------------------------------------------------\n\t\t\tif (profile.agent_tier === \"Premier\") {\n\t\t\t\tconst listTemplate = userEvents.find(e => e.event === \"property listed\");\n\t\t\t\tconst soldTemplate = userEvents.find(e => e.event === \"property sold\");\n\n\t\t\t\t// Tag existing events\n\t\t\t\tuserEvents.forEach(e => {\n\t\t\t\t\tif (e.event === \"property listed\" || e.event === \"property sold\") {\n\t\t\t\t\t\te.premier_agent = true;\n\t\t\t\t\t}\n\t\t\t\t});\n\n\t\t\t\t// Inject extra listings (3x = 2 more copies per existing)\n\t\t\t\tif (listTemplate) {\n\t\t\t\t\tconst existingListings = userEvents.filter(e => e.event === \"property listed\").length;\n\t\t\t\t\tconst extraListings = existingListings * 2;\n\t\t\t\t\tfor (let i = 0; i < extraListings; i++) {\n\t\t\t\t\t\tconst offset = chance.integer({ min: 5, max: num_days - 5 });\n\t\t\t\t\t\tuserEvents.push({\n\t\t\t\t\t\t\t...listTemplate,\n\t\t\t\t\t\t\ttime: DATASET_START.add(offset, \"days\").add(chance.integer({ min: 8, max: 18 }), \"hours\").toISOString(),\n\t\t\t\t\t\t\tuser_id: listTemplate.user_id,\n\t\t\t\t\t\t\tlisting_price: chance.integer({ min: 300000, max: 1500000 }),\n\t\t\t\t\t\t\tlisting_status: chance.pickone([\"active\", \"pending\", \"coming soon\"]),\n\t\t\t\t\t\t\tluxury: false,\n\t\t\t\t\t\t\tpremier_agent: true,\n\t\t\t\t\t\t});\n\t\t\t\t\t}\n\t\t\t\t}\n\n\t\t\t\t// Inject extra sales (2x = 1 more copy per existing)\n\t\t\t\tif (soldTemplate) {\n\t\t\t\t\tconst existingSales = userEvents.filter(e => e.event === \"property sold\").length;\n\t\t\t\t\tfor (let i = 0; i < existingSales; i++) {\n\t\t\t\t\t\tconst offset = chance.integer({ min: 10, max: num_days - 5 });\n\t\t\t\t\t\tuserEvents.push({\n\t\t\t\t\t\t\t...soldTemplate,\n\t\t\t\t\t\t\ttime: DATASET_START.add(offset, \"days\").add(chance.integer({ min: 9, max: 17 }), \"hours\").toISOString(),\n\t\t\t\t\t\t\tuser_id: soldTemplate.user_id,\n\t\t\t\t\t\t\tsale_price: chance.integer({ min: 300000, max: 1500000 }),\n\t\t\t\t\t\t\tdays_on_market: chance.integer({ min: 5, max: 90 }),\n\t\t\t\t\t\t\tpremier_agent: true,\n\t\t\t\t\t\t});\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\n\t\t\t// -----------------------------------------------------------\n\t\t\t// Hook #6: TOUR-TO-OFFER POWER USERS\n\t\t\t// Users who did BOTH \"virtual tour\" AND \"in-person tour\"\n\t\t\t// get 6x offer_submitted events. dual_tour=true on offers.\n\t\t\t// -----------------------------------------------------------\n\t\t\tconst hasVirtualTour = userEvents.some(e => e.event === \"virtual tour\");\n\t\t\tconst hasInPersonTour = userEvents.some(e => e.event === \"in-person tour\");\n\t\t\tconst isDualTourer = hasVirtualTour && hasInPersonTour;\n\n\t\t\tif (isDualTourer) {\n\t\t\t\tconst offerTemplate = userEvents.find(e => e.event === \"offer submitted\");\n\t\t\t\tif (offerTemplate) {\n\t\t\t\t\tconst extraOffers = chance.integer({ min: 5, max: 7 });\n\t\t\t\t\tfor (let i = 0; i < extraOffers; i++) {\n\t\t\t\t\t\tconst offset = chance.integer({ min: 15, max: num_days - 5 });\n\t\t\t\t\t\tuserEvents.push({\n\t\t\t\t\t\t\t...offerTemplate,\n\t\t\t\t\t\t\ttime: DATASET_START.add(offset, \"days\").add(chance.integer({ min: 8, max: 20 }), \"hours\").toISOString(),\n\t\t\t\t\t\t\tuser_id: offerTemplate.user_id,\n\t\t\t\t\t\t\tlisting_id: `LST-${chance.integer({ min: 10000, max: 99999 })}`,\n\t\t\t\t\t\t\toffer_price: chance.integer({ min: 300000, max: 1500000 }),\n\t\t\t\t\t\t\tlisting_price: chance.integer({ min: 300000, max: 1500000 }),\n\t\t\t\t\t\t\tdual_tour: true,\n\t\t\t\t\t\t\tpre_approved: false,\n\t\t\t\t\t\t\tspring_season: false,\n\t\t\t\t\t\t});\n\t\t\t\t\t}\n\t\t\t\t}\n\n\t\t\t\t// Tag existing offers\n\t\t\t\tuserEvents.forEach(e => {\n\t\t\t\t\tif (e.event === \"offer submitted\") {\n\t\t\t\t\t\te.dual_tour = true;\n\t\t\t\t\t}\n\t\t\t\t});\n\t\t\t}\n\n\t\t\t// -----------------------------------------------------------\n\t\t\t// Hook #7 (everything part): LUXURY LISTING RELEASE\n\t\t\t// ~3% of users (by hash) get extra luxury property_viewed\n\t\t\t// events after day 50. Deterministic via character code.\n\t\t\t// -----------------------------------------------------------\n\t\t\tconst day50 = DATASET_START.add(50, \"days\");\n\t\t\tif (userEvents.length > 0) {\n\t\t\t\tconst userId = userEvents[0].user_id || \"\";\n\t\t\t\tconst isLuxuryBrowser = typeof userId === \"string\" && userId.length > 0 && userId.charCodeAt(0) % 33 === 0;\n\n\t\t\t\tif (isLuxuryBrowser) {\n\t\t\t\t\tconst viewTemplate = userEvents.find(e => e.event === \"property viewed\");\n\t\t\t\t\tif (viewTemplate) {\n\t\t\t\t\t\tconst extraViews = chance.integer({ min: 3, max: 6 });\n\t\t\t\t\t\tfor (let i = 0; i < extraViews; i++) {\n\t\t\t\t\t\t\tconst offset = chance.integer({ min: 50, max: num_days - 5 });\n\t\t\t\t\t\t\tuserEvents.push({\n\t\t\t\t\t\t\t\t...viewTemplate,\n\t\t\t\t\t\t\t\ttime: DATASET_START.add(offset, \"days\").add(chance.integer({ min: 9, max: 21 }), \"hours\").toISOString(),\n\t\t\t\t\t\t\t\tuser_id: viewTemplate.user_id,\n\t\t\t\t\t\t\t\tlisting_id: `LST-${chance.integer({ min: 90000, max: 99999 })}`,\n\t\t\t\t\t\t\t\tlisting_price: chance.integer({ min: 5000000, max: 15000000 }),\n\t\t\t\t\t\t\t\tproperty_type: chance.pickone([\"Single Family\", \"Condo\"]),\n\t\t\t\t\t\t\t\tbedrooms: chance.integer({ min: 4, max: 8 }),\n\t\t\t\t\t\t\t\tsquare_feet: chance.integer({ min: 4000, max: 15000 }),\n\t\t\t\t\t\t\t\tluxury: true,\n\t\t\t\t\t\t\t\tspring_season: false,\n\t\t\t\t\t\t\t});\n\t\t\t\t\t\t}\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\n\t\t\t// -----------------------------------------------------------\n\t\t\t// Hook #8: COLD-LEAD CHURN\n\t\t\t// Users who browse (property viewed) but never save (property\n\t\t\t// saved) in the first 14 days lose 90% of events after day 14.\n\t\t\t// -----------------------------------------------------------\n\t\t\tconst day14 = firstEventTime ? firstEventTime.add(14, \"days\") : null;\n\n\t\t\tif (day14) {\n\t\t\t\tconst earlyEvents = userEvents.filter(e => dayjs(e.time).isBefore(day14));\n\t\t\t\tconst hasView = earlyEvents.some(e => e.event === \"property viewed\");\n\t\t\t\tconst hasSave = earlyEvents.some(e => e.event === \"property saved\");\n\n\t\t\t\tif (hasView && !hasSave) {\n\t\t\t\t\t// Cold lead: remove 90% of events after day 14\n\t\t\t\t\tprofile.cold_lead = true;\n\t\t\t\t\tfor (let i = userEvents.length - 1; i >= 0; i--) {\n\t\t\t\t\t\tconst evt = userEvents[i];\n\t\t\t\t\t\tif (dayjs(evt.time).isAfter(day14)) {\n\t\t\t\t\t\t\tif (chance.bool({ likelihood: 90 })) {\n\t\t\t\t\t\t\t\tuserEvents.splice(i, 1);\n\t\t\t\t\t\t\t} else {\n\t\t\t\t\t\t\t\tevt.cold_lead = true;\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t}\n\t\t\t\t\t}\n\t\t\t\t\t// Tag surviving events\n\t\t\t\t\tuserEvents.forEach(e => { e.cold_lead = true; });\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\n\t\treturn record;\n\t}",
-  "timestamp": "2026-04-28T01:14:29.646Z",
-  "version": "4.0"
+    }
+  }
 }

@@ -215,6 +215,19 @@ export type MacroConfig = {
 /** Big-picture trend shape: preset string, config object, or preset+overrides. */
 type macro = MacroPreset | MacroConfig;
 
+/** Public alias for the `soup` config union (preset string or config object). */
+export type Soup = soup;
+
+/** Public alias for the `macro` config union (preset string or config object). */
+export type Macro = macro;
+
+/** Resolved macro values after preset + override resolution. Used internally. */
+export interface ResolvedMacro {
+    bornRecentBias: number;
+    percentUsersBornInDataset: number;
+    preExistingSpread: "pinned" | "uniform";
+}
+
 /**
  * Hook types and when they fire (in order per user):
  * - "user"        — user profile object (mutate in-place, return ignored)
@@ -245,11 +258,86 @@ export type hookTypes =
 
 /**
  * A hook function that receives every piece of data as it flows through the pipeline.
- * @param record - The data being processed (event, profile, array of events, etc.)
- * @param type - Which hook type is firing
- * @param meta - Contextual metadata (varies by type; "everything" includes meta.profile and meta.scd)
+ *
+ * The runtime signature is intentionally permissive (`any`) because `record` and `meta`
+ * vary by `type`. Use the `HookMeta*` interfaces below as convenience types when narrowing
+ * inside your hook (e.g. `if (type === "event") { const m = meta as HookMetaEvent; ... }`).
+ *
+ * Return-value semantics:
+ * - "event": return value REPLACES the event (must be the event object).
+ * - "everything": return an array to REPLACE the user's event list (filter/inject/dedupe).
+ * - "user", "scd-pre", "funnel-pre", "funnel-post": return value is IGNORED — mutate in place.
+ * - storage-only ("ad-spend", "group", "mirror", "lookup"): return value is IGNORED.
+ *
+ * @param record - The data being processed (event, profile, array of events, funnel config, etc.).
+ * @param type - Which hook type is firing — see `hookTypes`.
+ * @param meta - Contextual metadata. Shape depends on `type` — see `HookMeta*` interfaces.
  */
 export type Hook<T> = (record: any, type: hookTypes, meta: any) => T;
+
+/** Meta passed to the "event" hook. */
+export interface HookMetaEvent {
+    /** The user this event belongs to (only `distinct_id` is guaranteed). */
+    user: { distinct_id: string };
+    /** The fully-resolved dungeon config. */
+    config: Dungeon;
+}
+
+/** Meta passed to the "user" hook (fires when a user profile is created). */
+export interface HookMetaUser {
+    /** The user object being constructed (mutate in place). */
+    user: UserProfile;
+    /** The fully-resolved dungeon config. */
+    config: Dungeon;
+    /** True if the user's account creation falls inside the dataset window. */
+    userIsBornInDataset: boolean;
+}
+
+/** Meta passed to the "scd-pre" hook (fires per SCD prop, before insertion). */
+export interface HookMetaScdPre {
+    /** The user profile that owns these SCD entries. */
+    profile: UserProfile;
+    /** The SCD prop key being generated (e.g. "plan", "tier"). */
+    type: string;
+    /** The full SCD entry list for this prop (mutate in place). */
+    scd: SCDSchema[];
+    /** The fully-resolved dungeon config. */
+    config: Dungeon;
+    /** All SCD prop arrays generated so far for this user, keyed by prop name. */
+    allSCDs: Record<string, SCDSchema[]>;
+}
+
+/** Meta passed to the "funnel-pre" hook (mutate funnel before generating events). */
+export interface HookMetaFunnelPre {
+    user: { distinct_id: string };
+    profile: UserProfile;
+    scd: Record<string, SCDSchema[]>;
+    funnel: Funnel;
+    config: Dungeon;
+    /** Unix seconds — earliest possible event time for this funnel's first step. */
+    firstEventTime: number;
+}
+
+/** Meta passed to the "funnel-post" hook (mutate generated funnel events in place). */
+export interface HookMetaFunnelPost {
+    user: { distinct_id: string };
+    profile: UserProfile;
+    scd: Record<string, SCDSchema[]>;
+    funnel: Funnel;
+    config: Dungeon;
+}
+
+/** Meta passed to the "everything" hook — most powerful hook (sees all events for one user). */
+export interface HookMetaEverything {
+    /** The user's profile, including merged persona/region/attribution properties. */
+    profile: UserProfile;
+    /** All SCD entries for this user, keyed by prop name. */
+    scd: Record<string, SCDSchema[]>;
+    /** The fully-resolved dungeon config. */
+    config: Dungeon;
+    /** True if the user's account creation falls inside the dataset window. */
+    userIsBornInDataset: boolean;
+}
 
 export interface hookArrayOptions<T> {
     hook?: Hook<T>;
@@ -309,16 +397,33 @@ export interface RuntimeState {
 /**
  * Default data factories for generating realistic test data
  */
+/**
+ * Default data factories — pre-resolved at context creation time so user-loop
+ * doesn't re-evaluate weighted picker arrays on every iteration.
+ */
 export interface Defaults {
-    locationsUsers: () => any[];
-    locationsEvents: () => any[];
-    iOSDevices: () => any[];
-    androidDevices: () => any[];
-    desktopDevices: () => any[];
-    browsers: () => any[];
-    campaigns: () => any[];
-    devicePools: { android: any[]; ios: any[]; desktop: any[] };
-    allDevices: any[];
+    /** Location pools applied to user profiles (city, region, country, lat/lng). */
+    locationsUsers: () => Record<string, ValueValid>[];
+    /** Location pools applied to events. */
+    locationsEvents: () => Record<string, ValueValid>[];
+    /** iOS device pool (model, os version, etc.). */
+    iOSDevices: () => Record<string, ValueValid>[];
+    /** Android device pool. */
+    androidDevices: () => Record<string, ValueValid>[];
+    /** Desktop device pool (browser, screen resolution, etc.). */
+    desktopDevices: () => Record<string, ValueValid>[];
+    /** Browser/UA pool. */
+    browsers: () => Record<string, ValueValid>[];
+    /** UTM campaign pool used when `hasCampaigns: true`. */
+    campaigns: () => Record<string, ValueValid>[];
+    /** Pre-built per-platform device arrays selected once at context creation. */
+    devicePools: {
+        android: Record<string, ValueValid>[];
+        ios: Record<string, ValueValid>[];
+        desktop: Record<string, ValueValid>[];
+    };
+    /** Flat union of every device in `devicePools` — used when no platform filter applies. */
+    allDevices: Record<string, ValueValid>[];
 }
 
 /**
@@ -555,15 +660,25 @@ type ImportResult = import("mixpanel-import").ImportResults;
  * the end result of the data generation
  */
 export type Result = {
+    /** Generated events. */
     eventData: EventSchema[];
+    /** Mirror datasets (transformed copies of `eventData`). */
     mirrorEventData: EventSchema[];
-    userProfilesData: any[];
-    scdTableData: any[][];
+    /** User profiles. */
+    userProfilesData: UserProfile[];
+    /** SCD entries — one inner array per SCD prop. */
+    scdTableData: SCDSchema[][];
+    /** Ad-spend events (only populated when `hasAdSpend: true`). */
     adSpendData: EventSchema[];
+    /** Group profiles — one inner array per group key. */
     groupProfilesData: GroupProfileSchema[][];
+    /** Lookup tables — one inner array per table. */
     lookupTableData: LookupTableData[][];
+    /** Mixpanel import results (only populated when a token was provided). */
     importResults?: ImportResults;
+    /** Absolute paths of all files written to disk. */
     files?: string[];
+    /** Timing information. */
     time?: {
         start: number;
         end: number;
