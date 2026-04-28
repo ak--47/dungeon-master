@@ -1,10 +1,14 @@
 /**
- * most of the time, the value of a property is a primitive
+ * Primitive scalar types that property values resolve to. Property values may
+ * also be plain object literals (nested records) — `Record<string, any>` is the
+ * narrowest TS can express here without making `Primitives` self-recursive
+ * (which it can't be, because `ValueValid` is built on top of it).
  */
 type Primitives = string | number | boolean | Date | Record<string, any>;
 
 /**
- * a "validValue" can be a primitive, an array of primitives, or a function that returns a primitive
+ * A "validValue" can be a primitive, an array of valid values, or a thunk that
+ * returns one. Configs use this everywhere properties are user-defined.
  */
 export type ValueValid = Primitives | ValueValid[] | (() => ValueValid);
 
@@ -112,7 +116,7 @@ export interface Dungeon {
     soup?: soup;
     /** Macro trend shape across the full dataset window: birth distribution + per-user event allocation. Default: "flat". Use "growth"/"viral"/"steady"/"decline" or a custom object. */
     macro?: macro;
-    /** Hook function called on every data point. The primary mechanism for engineering deliberate trends and patterns. */
+    /** Hook function called on every data point. The primary mechanism for engineering deliberate trends and patterns. The `any` is intentional — `record` and `meta` shapes vary by hook type; narrow inside the function (see `HookMeta*` types). */
     hook?: Hook<any>;
 
     // ── Advanced Features ──
@@ -340,24 +344,47 @@ export interface HookMetaEverything {
 }
 
 export interface hookArrayOptions<T> {
+    /** Transform/validate function applied to every record on push. */
     hook?: Hook<T>;
+    /** What this array stores — controls hook-firing semantics in the storage layer. */
     type?: hookTypes;
+    /** Output filename (no extension; format adds it). Used by storage's batch writer. */
     filename?: string;
+    /** Output filepath used when writing batches to disk. */
+    filepath?: string;
+    /** Output serialization format. */
     format?: "csv" | "json" | "parquet" | string;
+    /** Max parallel disk writes. */
     concurrency?: number;
+    /** Generation context (config, runtime, defaults). */
     context?: Context;
-    [key: string]: any;
 }
 
 /**
- * an enriched array is an array that has a hookPush method that can be used to transform-then-push items into the array
+ * an enriched array is an array that has a hookPush method that can be used to transform-then-push items into the array.
+ *
+ * Storage callers also tag the array with a key identifying what it stores
+ * (e.g. SCD prop name, group key, lookup table key). The fields are optional
+ * because not every HookedArray needs them; mixpanel-sender / user-loop read
+ * them when present to route uploads correctly.
  */
 export interface HookedArray<T> extends Array<T> {
-    hookPush: (item: T | T[], ...meta: any[]) => Promise<any>;
+    /** Transform-then-push. Resolves once the item (and any auto-flushed batch) is persisted. */
+    hookPush: (item: T | T[], ...meta: unknown[]) => Promise<void>;
+    /** Force-flush any pending batch to disk. */
     flush: () => Promise<void>;
+    /** Absolute path of the directory batches will be written to. */
     getWriteDir: () => string;
+    /** Absolute path (with extension) of the next batch file. */
     getWritePath: () => string;
-    [key: string]: any;
+    /** SCD prop name this array carries (only set on SCD HookedArrays). */
+    scdKey?: string;
+    /** Entity type for SCDs ("user" or a group key). */
+    entityType?: string;
+    /** Group key this array carries (only set on group profile HookedArrays). */
+    groupKey?: string;
+    /** Lookup table key this array carries (only set on lookup table HookedArrays). */
+    lookupKey?: string;
 }
 
 export type AllData =
@@ -365,8 +392,7 @@ export type AllData =
     | HookedArray<UserProfile>
     | HookedArray<GroupProfileSchema>
     | HookedArray<LookupTableSchema>
-    | HookedArray<SCDSchema>
-    | any[];
+    | HookedArray<SCDSchema>;
 
 /**
  * the storage object is a key-value store that holds arrays of data
@@ -434,7 +460,8 @@ export interface Context {
     config: Dungeon;
     storage: Storage | null;
     defaults: Defaults;
-    campaigns: any[];
+    /** Pre-built UTM campaign pool (used when `hasCampaigns: true`). */
+    campaigns: Record<string, ValueValid>[];
     runtime: RuntimeState;
     FIXED_NOW: number;
     FIXED_BEGIN?: number;
@@ -631,7 +658,8 @@ export interface LookupTableSchema {
 
 export interface LookupTableData {
     key: string;
-    data: any[];
+    /** Generated rows for this lookup table. Each row is a flat record keyed by attribute name. */
+    data: Record<string, ValueValid>[];
 }
 
 export interface SCDSchema {
@@ -643,7 +671,8 @@ export interface SCDSchema {
 
 export interface GroupProfileSchema {
     key: string;
-    data: any[];
+    /** Generated group profile rows. Each row is a flat record keyed by group property name. */
+    data: Record<string, ValueValid>[];
 }
 
 /**
@@ -736,7 +765,7 @@ export interface WorldEvent {
     /** Conversion rate modifier during this event. */
     conversionModifier?: number;
     /** Properties injected into affected events. */
-    injectProps?: Record<string, any>;
+    injectProps?: Record<string, ValueValid>;
     /** Which events are affected ("*" for all, or array of event names). */
     affectsEvents?: string[] | "*";
     /** Aftermath period after the event ends. */
@@ -899,7 +928,7 @@ export interface GeoRegion {
     /** UTC timezone offset for this region (e.g., -5 for EST). */
     timezoneOffset: number;
     /** Properties injected for users in this region. */
-    properties?: Record<string, any>;
+    properties?: Record<string, ValueValid>;
 }
 
 /**
@@ -939,9 +968,9 @@ export interface FeatureConfig {
     /** Property name to inject on events. */
     property: string;
     /** Possible values for the property. First value is the "before" default if defaultBefore not set. */
-    values: any[];
+    values: ValueValid[];
     /** Default value before the feature launches. If not set, property doesn't exist before launch. */
-    defaultBefore?: any;
+    defaultBefore?: ValueValid;
     /** Which events are affected ("*" for all, or array of event names). */
     affectsEvents?: string[] | "*";
     /** Conversion rate lift for users who adopted the feature. */
@@ -949,7 +978,7 @@ export interface FeatureConfig {
     /** Resolved logistic curve params (set by config-validator). */
     _resolvedCurve?: { k: number; midpoint: number };
     /** Pre-computed adopted values (set by config-validator). */
-    _adoptedValues?: any[];
+    _adoptedValues?: ValueValid[];
 }
 
 /**
@@ -977,7 +1006,7 @@ export interface AnomalyConfig {
     /** For burst/coordinated: number of events to inject. */
     count?: number;
     /** Properties injected on anomalous events. */
-    properties?: Record<string, any>;
+    properties?: Record<string, ValueValid>;
     /** Resolved absolute start time in unix seconds (set by config-validator). */
     _startUnix?: number;
     /** Resolved absolute end time in unix seconds (set by config-validator). */
@@ -1016,8 +1045,8 @@ export declare function loadFromFile(filePath: string): Promise<Dungeon>;
 export declare function loadFromText(code: string): Promise<Dungeon>;
 /** Parse a JSON dungeon (UI schema format) into a runnable config */
 export declare function parseJSONDungeon(json: object): Dungeon;
-/** Validate that an object has the minimum shape of a dungeon config */
-export declare function validateDungeonShape(config: any): void;
+/** Validate that an object has the minimum shape of a dungeon config. Throws on shape violations. */
+export declare function validateDungeonShape(config: unknown): void;
 
 // ============= Text Generator Types =============
 
@@ -1196,7 +1225,7 @@ export interface TextMetadata {
     /** Keywords that were injected */
     injectedKeywords?: string[];
     /** User persona information */
-    persona?: Record<string, any>;
+    persona?: Record<string, ValueValid>;
     /** Flesch reading ease score */
     readabilityScore?: number;
     /** Text style used */
@@ -1317,13 +1346,14 @@ export interface TimeSoupOptions {
 }
 
 /**
- * Test context configuration for unit/integration tests
+ * Test context configuration for unit/integration tests. Looser than `Context`
+ * by design — tests routinely attach ad-hoc fixtures, so the index signature stays.
  */
 export interface TestContext {
     config: Dungeon;
     storage: Storage | null;
     defaults: Defaults;
-    campaigns: any[];
+    campaigns: Record<string, ValueValid>[];
     runtime: RuntimeState;
-    [key: string]: any;
+    [key: string]: unknown;
 }
