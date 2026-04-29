@@ -43,124 +43,229 @@ const chance = u.initChance(SEED);
 
 /*
  * =====================================================================================
- * ANALYTICS HOOKS
+ * ANALYTICS HOOKS (10 hooks)
+ *
+ * Adds 10. ONBOARDING TIME-TO-CONVERT: creator/business 0.71x faster, personal
+ * 1.25x slower (funnel-post). Discover via Onboarding funnel median TTC by account_type.
  * =====================================================================================
  *
- * 8 deliberately architected patterns hidden in the data:
+ * NOTE: All cohort effects are HIDDEN — discoverable only via behavioral cohorts
+ * (count an event per user, then measure downstream). No cohort flag is stamped
+ * on events. Algorithm-change source flips and engagement-bait short durations
+ * are raw mutations of config-defined props.
  *
  * -------------------------------------------------------------------------------------
- * 1. VIRAL CONTENT CASCADE (everything hook)
+ * 1. VIRAL CONTENT CASCADE (everything)
  * -------------------------------------------------------------------------------------
- * 5% of users with 10+ posts become "viral creators." Each of their posts generates
- * 10-20 extra post viewed, post liked, and post shared events (viral_cascade: true).
  *
- * Mixpanel Steps:
- *   - Insights > "post viewed" > Total events > Breakdown: "viral_cascade"
- *   - Insights > "post liked" > Total events per user > Breakdown: "viral_cascade"
+ * PATTERN: 5% of users with 10+ "post created" events become viral creators.
+ * Each of their posts triggers 10-20 cloned post-viewed, post-liked, and
+ * post-shared events with unique offset timestamps.
  *
- * -------------------------------------------------------------------------------------
- * 2. FOLLOW-BACK SNOWBALL (everything hook)
- * -------------------------------------------------------------------------------------
- * Users with 5+ "user followed" events become prolific creators. 50% of their posts
- * get duplicated (follow_back_effect: true), plus extra comments are injected.
+ * HOW TO FIND IT IN MIXPANEL:
  *
- * Mixpanel Steps:
- *   - Insights > "post created" > Total per user > Breakdown: "follow_back_effect"
- *   - Insights > "post created" > Total per user > Cohort: users with 5+ follows
+ *   Report 1: Engagement per Post Created (cohort)
+ *   - Report type: Insights (with cohort)
+ *   - Cohort A: users with >= 10 "post created"
+ *   - Cohort B: users with < 10 "post created"
+ *   - Event: "post viewed"
+ *   - Measure: Total per user
+ *   - Compare A vs B
+ *   - Expected: cohort A ~ 10-20x more views per user than B
  *
- * -------------------------------------------------------------------------------------
- * 3. ALGORITHM CHANGE (event hook)
- * -------------------------------------------------------------------------------------
- * Day 45: content discovery flips from feed to explore. Before day 45, 70% of
- * post viewed source = "feed." After, 70% shift to source = "explore."
+ *   Report 2: Likes per User by Post-Created Bucket
+ *   - Report type: Insights (with cohort)
+ *   - Same cohorts
+ *   - Event: "post liked"
+ *   - Measure: Total per user
+ *   - Expected: A ~ 10-20x more likes per user than B
  *
- * Mixpanel Steps:
- *   - Insights (line) > "post viewed" > Total > Breakdown: "source" > Daily trend
- *   - Compare date ranges before/after day 45: feed vs explore ratio inverts
- *
- * -------------------------------------------------------------------------------------
- * 4. ENGAGEMENT BAIT (event hook)
- * -------------------------------------------------------------------------------------
- * 20% of post viewed events are engagement_bait: true with view durations of 1-5 sec.
- * High impressions but terrible engagement quality.
- *
- * Mixpanel Steps:
- *   - Insights > "post viewed" > Avg "view_duration_sec" > Breakdown: "engagement_bait"
- *   - Expected: bait ~2-3 sec avg vs normal ~15-30 sec avg
+ * REAL-WORLD ANALOGUE: A small share of creators drive a disproportionate
+ * fraction of all platform engagement.
  *
  * -------------------------------------------------------------------------------------
- * 5. NOTIFICATION RE-ENGAGEMENT (event hook)
+ * 2. FOLLOW-BACK SNOWBALL (everything)
  * -------------------------------------------------------------------------------------
- * After day 30, 30% of post viewed events get source overridden to "notification"
- * with trending_reengagement: true.
  *
- * Mixpanel Steps:
- *   - Insights (line) > "post viewed" > Total > Filter: source = "notification" > Daily
- *   - Near-zero before day 30, then ~30% of views from notifications
+ * PATTERN: Users with 5+ "user followed" events have 50% of their posts
+ * duplicated with a 30-240 minute offset, plus an extra comment cloned.
+ * No flag — discover by binning users on user-followed count.
  *
- * -------------------------------------------------------------------------------------
- * 6. CREATOR MONETIZATION (everything hook)
- * -------------------------------------------------------------------------------------
- * Users with any "creator subscription started" event post 3x more. Two extra posts
- * injected per original (monetized_creator: true). Also extra profile-source views.
+ * HOW TO FIND IT IN MIXPANEL:
  *
- * Mixpanel Steps:
- *   - Insights > "post created" > Total per user > Breakdown: "monetized_creator"
- *   - Insights > "post viewed" > Filter: source = "profile" > Breakdown: "monetized_creator"
+ *   Report 1: Posts per User by Follow Activity
+ *   - Report type: Insights (with cohort)
+ *   - Cohort A: users with >= 5 "user followed"
+ *   - Cohort B: users with < 5 "user followed"
+ *   - Event: "post created"
+ *   - Measure: Total per user
+ *   - Expected: A ~ 1.5x posts per user vs B
  *
- * -------------------------------------------------------------------------------------
- * 7. TOXICITY CHURN (everything hook)
- * -------------------------------------------------------------------------------------
- * Users with 3+ reports lose 60% of events after day 30. Remaining events tagged
- * toxic_user: true. Simulates churn from toxic content exposure.
- *
- * Mixpanel Steps:
- *   - Retention > Segment: users with 3+ "report submitted" vs fewer
- *   - Insights (line) > Any event > Total per user > Breakdown: "toxic_user" > Weekly
+ * REAL-WORLD ANALOGUE: Users who actively follow many people tend to
+ * receive follow-backs and post more frequently.
  *
  * -------------------------------------------------------------------------------------
- * 8. WEEKEND CONTENT SURGE (event + everything hook)
+ * 3. ALGORITHM CHANGE (event)
  * -------------------------------------------------------------------------------------
- * Saturday/Sunday post/story events tagged weekend_surge: true. 30% get a duplicate
- * event 1-3 hours later (weekend_duplicate: true).
  *
- * Mixpanel Steps:
- *   - Insights (bar) > "post created" > Total > Breakdown: Day of Week
- *   - Expected: Sat/Sun bars ~30% taller than weekday bars
+ * PATTERN: On day 45, the dominant `source` for "post viewed" flips from
+ * "feed" (70% pre) to "explore" (70% post). Mutates an existing config-
+ * defined prop — no flag.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Source Distribution Over Time
+ *   - Report type: Insights
+ *   - Event: "post viewed"
+ *   - Measure: Total
+ *   - Breakdown: "source"
+ *   - Line chart by day
+ *   - Expected: feed dominates pre-day-45; explore dominates post-day-45
+ *
+ * REAL-WORLD ANALOGUE: Algorithmic feed redesigns shift content discovery
+ * from chronological to interest-based.
+ *
+ * -------------------------------------------------------------------------------------
+ * 4. ENGAGEMENT BAIT (event)
+ * -------------------------------------------------------------------------------------
+ *
+ * PATTERN: 20% of "post viewed" events get view_duration_sec collapsed
+ * to 1-5 seconds. No flag — analyst sees a bimodal duration distribution.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: View Duration Distribution
+ *   - Report type: Insights
+ *   - Event: "post viewed"
+ *   - Measure: Distribution of "view_duration_sec"
+ *   - Expected: ~ 20% of values cluster at 1-5 sec; rest at 5-120 sec
+ *
+ * REAL-WORLD ANALOGUE: Clickbait posts collect impressions but bounce
+ * quality is awful, dragging down avg watch time.
+ *
+ * -------------------------------------------------------------------------------------
+ * 5. NOTIFICATION RE-ENGAGEMENT (event)
+ * -------------------------------------------------------------------------------------
+ *
+ * PATTERN: After day 30, 30% of "post viewed" events have source flipped
+ * to "notification". Mutates the existing config-defined `source` prop.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Notification-Sourced Views Over Time
+ *   - Report type: Insights
+ *   - Event: "post viewed"
+ *   - Measure: Total
+ *   - Filter: source = "notification"
+ *   - Line chart by day
+ *   - Expected: near-zero before day 30, then ~ 30% of views
+ *
+ * REAL-WORLD ANALOGUE: Push notifications about trending content are a
+ * primary lever for waking up dormant users.
+ *
+ * -------------------------------------------------------------------------------------
+ * 6. CREATOR MONETIZATION (everything)
+ * -------------------------------------------------------------------------------------
+ *
+ * PATTERN: Users with any "creator subscription started" event get 2 extra
+ * cloned posts and stories per original (3x rate), plus 25% extra cloned
+ * post-viewed events from `source="profile"`. No flag — discover via
+ * cohort builder.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Posts per User — Subscribers vs Not
+ *   - Report type: Insights (with cohort)
+ *   - Cohort A: users with >= 1 "creator subscription started"
+ *   - Cohort B: users with 0
+ *   - Event: "post created"
+ *   - Measure: Total per user
+ *   - Expected: A ~ 3x posts per user
+ *
+ * REAL-WORLD ANALOGUE: Creators with paying subscribers publish more often.
+ *
+ * -------------------------------------------------------------------------------------
+ * 7. TOXICITY CHURN (everything)
+ * -------------------------------------------------------------------------------------
+ *
+ * PATTERN: Users with 3+ "report submitted" events lose 60% of activity
+ * after day 30. No flag — discover via retention or per-user activity drop.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Retention by Toxicity
+ *   - Report type: Retention
+ *   - Cohort A: users with >= 3 "report submitted"
+ *   - Cohort B: rest
+ *   - Expected: A ~ 40% retention vs B ~ 80%
+ *
+ * REAL-WORLD ANALOGUE: Repeated reporters are signaling dissatisfaction
+ * and often quietly churn.
+ *
+ * -------------------------------------------------------------------------------------
+ * 8. WEEKEND CONTENT SURGE (everything)
+ * -------------------------------------------------------------------------------------
+ *
+ * PATTERN: 30% of Sat/Sun "post created" and "story created" events get a
+ * duplicate cloned 1-3 hours later. No flag — discover via day-of-week chart.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Posts by Day of Week
+ *   - Report type: Insights
+ *   - Event: "post created"
+ *   - Measure: Total
+ *   - Breakdown: Day of week
+ *   - Expected: Sat/Sun ~ 1.3x weekday bars
+ *
+ * REAL-WORLD ANALOGUE: Weekend leisure time produces a natural creation surge.
+ *
+ * -------------------------------------------------------------------------------------
+ * 9. POST-CREATED MAGIC NUMBER (everything)
+ * -------------------------------------------------------------------------------------
+ *
+ * PATTERN: Users in the 3-7 post-created sweet spot get +40% comment_length
+ * on their comment-posted events (richer engagement). Users with 8+ posts
+ * are over-engaged (burnout); ~30% of their post-liked and comment-posted
+ * events are dropped. No flag — discover by binning users on post count.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Comment Length by Post Bucket
+ *   - Report type: Insights (with cohort)
+ *   - Cohort A: users with 3-7 "post created"
+ *   - Cohort B: users with 0-2 "post created"
+ *   - Event: "comment posted"
+ *   - Measure: Average of "comment_length"
+ *   - Expected: A ~ 1.4x B
+ *
+ *   Report 2: Engagement Drop on Heavy Posters
+ *   - Report type: Insights (with cohort)
+ *   - Cohort C: users with >= 8 "post created"
+ *   - Cohort A: users with 3-7 "post created"
+ *   - Event: "post liked" + "comment posted" (combined per user)
+ *   - Measure: Total per user
+ *   - Expected: C ~ 30% fewer engagement events per user vs A
+ *
+ * REAL-WORLD ANALOGUE: Moderate posters write thoughtful comments; the
+ * over-prolific tend to spam and burn through audience patience.
  *
  * =====================================================================================
  * EXPECTED METRICS SUMMARY
  * =====================================================================================
  *
- * Hook                      | Metric                  | Baseline     | Hook Effect    | Ratio
- * --------------------------|-------------------------|--------------|----------------|-------
- * Viral Content Cascade     | Engagement per post     | 1-2x         | 10-20x         | ~15x
- * Follow-Back Snowball      | Posts per user           | ~4           | ~8             | 2x
- * Algorithm Change          | Feed vs. Explore source  | 70/15        | 15/70          | Flip
- * Engagement Bait           | View duration (sec)      | 15-30        | 1-5            | ~0.2x
- * Notification Re-engage    | Notification source %    | ~10%         | ~30%           | 3x
- * Creator Monetization      | Content creation freq    | 1x           | 3x             | 3x
- * Toxicity Churn            | Post-day-30 retention    | ~80%         | ~40%           | 0.5x
- * Weekend Content Surge     | Weekend vs. weekday vol  | 1x           | 1.3x           | 1.3x
- *
- * =====================================================================================
- * ADVANCED ANALYSIS IDEAS
- * =====================================================================================
- *
- * - Viral Creators + Algorithm Change: Do viral creators benefit more from the
- *   explore-based algorithm? Compare viral cascade engagement before/after day 45.
- * - Follow-Back Snowball + Creator Monetization: Users with both effects compound
- *   to ~6x content output (2x from follows * 3x from monetization).
- * - Engagement Bait + Toxicity Churn: Correlation between engagement_bait exposure
- *   and toxic_user tagging / report submission rates.
- * - Weekend Surge + Viral Cascade: Compounding creates extreme engagement spikes
- *   on weekend days.
- * - Notification Re-engagement + Toxicity Churn: Do trending notifications help
- *   retain toxic_user-tagged users, or do they still churn?
- * - Cohort by signup method, content niche, account type, community membership,
- *   or join week (users joining during algorithm change see a different product).
- * - Funnel analysis: onboarding by signup method, engagement by source, creator
- *   journey before/after algorithm change.
+ * Hook                      | Metric                  | Baseline | Hook Effect | Ratio
+ * --------------------------|-------------------------|----------|-------------|------
+ * Viral Content Cascade     | Engagement per user     | 1x       | ~ 15x       | ~ 15x
+ * Follow-Back Snowball      | Posts per user           | 1x       | ~ 1.5x      | 1.5x
+ * Algorithm Change          | feed vs explore (post)   | 70/15    | 15/70       | flip
+ * Engagement Bait           | View duration distrib    | unimodal | bimodal     | n/a
+ * Notification Re-engage    | source=notification %    | ~ 10%    | ~ 30%       | 3x
+ * Creator Monetization      | Content rate (sub vs not)| 1x       | ~ 3x        | 3x
+ * Toxicity Churn            | Post-day-30 activity     | 1x       | ~ 0.4x      | -60%
+ * Weekend Surge             | Weekend vs weekday       | 1x       | ~ 1.3x      | 1.3x
+ * Post-Created Magic Number | sweet comment_length     | 1x       | ~ 1.4x      | 1.4x
+ * Post-Created Magic Number | over engagement/user     | 1x       | ~ 0.7x      | -30%
  * =====================================================================================
  */
 
@@ -272,7 +377,6 @@ const config = {
 			properties: {
 				"signup_method": ["email", "google", "apple", "sso"],
 				"referred_by": ["organic", "friend", "ad", "influencer"],
-				"toxic_user": [false],
 			}
 		},
 		{
@@ -283,11 +387,6 @@ const config = {
 				"character_count": u.weighNumRange(1, 280),
 				"has_media": [false, false, false, true, true],
 				"hashtag_count": u.weighNumRange(0, 10, 0.5),
-				"weekend_surge": [false],
-				"weekend_duplicate": [false],
-				"monetized_creator": [false],
-				"follow_back_effect": [false],
-				"toxic_user": [false],
 			}
 		},
 		{
@@ -297,11 +396,6 @@ const config = {
 				"post_type": ["text", "image", "video", "poll", "link"],
 				"view_duration_sec": u.weighNumRange(1, 120, 0.3, 5),
 				"source": ["feed", "explore", "search", "profile", "notification"],
-				"engagement_bait": [false],
-				"trending_reengagement": [false],
-				"viral_cascade": [false],
-				"monetized_creator": [false],
-				"toxic_user": [false],
 			}
 		},
 		{
@@ -309,8 +403,6 @@ const config = {
 			weight: 18,
 			properties: {
 				"post_type": ["text", "image", "video", "poll", "link"],
-				"viral_cascade": [false],
-				"toxic_user": [false],
 			}
 		},
 		{
@@ -318,8 +410,6 @@ const config = {
 			weight: 6,
 			properties: {
 				"share_destination": ["repost", "dm", "external", "copy_link"],
-				"viral_cascade": [false],
-				"toxic_user": [false],
 			}
 		},
 		{
@@ -328,8 +418,6 @@ const config = {
 			properties: {
 				"comment_length": u.weighNumRange(1, 500, 0.3, 20),
 				"has_mention": [true, false, false],
-				"follow_back_effect": [false],
-				"toxic_user": [false],
 			}
 		},
 		{
@@ -337,7 +425,6 @@ const config = {
 			weight: 8,
 			properties: {
 				"discovery_source": ["suggested", "search", "post", "profile", "mutual"],
-				"toxic_user": [false],
 			}
 		},
 		{
@@ -345,7 +432,6 @@ const config = {
 			weight: 2,
 			properties: {
 				"reason": ["content_quality", "too_frequent", "lost_interest", "offensive"],
-				"toxic_user": [false],
 			}
 		},
 		{
@@ -355,7 +441,6 @@ const config = {
 				"story_type": ["photo", "video", "text"],
 				"view_duration_sec": u.weighNumRange(1, 30, 0.5, 5),
 				"completed": [false, false, true, true, true],
-				"toxic_user": [false],
 			}
 		},
 		{
@@ -365,10 +450,6 @@ const config = {
 				"story_type": ["photo", "video", "text"],
 				"has_filter": [true, false],
 				"has_sticker": [false, false, true],
-				"weekend_surge": [false],
-				"weekend_duplicate": [false],
-				"monetized_creator": [false],
-				"toxic_user": [false],
 			}
 		},
 		{
@@ -377,7 +458,6 @@ const config = {
 			properties: {
 				"search_type": ["users", "hashtags", "posts"],
 				"results_count": u.weighNumRange(0, 50, 0.5, 10),
-				"toxic_user": [false],
 			}
 		},
 		{
@@ -386,7 +466,6 @@ const config = {
 			properties: {
 				"notification_type": ["like", "follow", "comment", "mention", "trending"],
 				"clicked": [false, false, false, true, true],
-				"toxic_user": [false],
 			}
 		},
 		{
@@ -395,7 +474,6 @@ const config = {
 			properties: {
 				"message_type": ["text", "image", "voice", "link"],
 				"conversation_length": u.weighNumRange(1, 100),
-				"toxic_user": [false],
 			}
 		},
 		{
@@ -405,7 +483,6 @@ const config = {
 				"ad_format": ["feed_native", "story", "banner", "video"],
 				"ad_category": ["retail", "tech", "food", "finance", "entertainment"],
 				"view_duration_sec": u.weighNumRange(1, 30, 0.3),
-				"toxic_user": [false],
 			}
 		},
 		{
@@ -414,7 +491,6 @@ const config = {
 			properties: {
 				"ad_format": ["feed_native", "story", "banner", "video"],
 				"ad_category": ["retail", "tech", "food", "finance", "entertainment"],
-				"toxic_user": [false],
 			}
 		},
 		{
@@ -423,7 +499,6 @@ const config = {
 			properties: {
 				"report_type": ["spam", "harassment", "misinformation", "hate_speech", "other"],
 				"content_type": ["post", "comment", "user", "dm"],
-				"toxic_user": [false],
 			}
 		},
 		{
@@ -431,7 +506,6 @@ const config = {
 			weight: 3,
 			properties: {
 				"field_updated": ["bio", "avatar", "display_name", "privacy_settings", "interests"],
-				"toxic_user": [false],
 			}
 		},
 		{
@@ -440,7 +514,6 @@ const config = {
 			properties: {
 				"tier": ["basic", "premium", "vip"],
 				"price_usd": [4.99, 9.99, 19.99],
-				"toxic_user": [false],
 			}
 		},
 	],
@@ -478,54 +551,70 @@ const config = {
 	hook: function (record, type, meta) {
 		const NOW = dayjs();
 		const DATASET_START = NOW.subtract(num_days, 'days');
-		const ALGORITHM_CHANGE_DAY = DATASET_START.add(45, 'days');
-		const REENGAGEMENT_START = DATASET_START.add(30, 'days');
+
+		// Hook #10 (T2C): ONBOARDING TIME-TO-CONVERT (funnel-post)
+		// Creator/business account_type users complete onboarding 1.4x
+		// faster (factor 0.71); personal accounts 1.25x slower (factor 1.25).
+		if (type === "funnel-post") {
+			const segment = meta?.profile?.account_type;
+			if (Array.isArray(record) && record.length > 1) {
+				const factor = (
+					segment === "creator" || segment === "business" ? 0.71 :
+					segment === "personal" ? 1.25 :
+					1.0
+				);
+				if (factor !== 1.0) {
+					for (let i = 1; i < record.length; i++) {
+						const prev = dayjs(record[i - 1].time);
+						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+						record[i].time = prev.add(newGap, "milliseconds").toISOString();
+					}
+				}
+			}
+		}
+
 
 		// ─── EVENT-LEVEL HOOKS ───────────────────────────────────────────
 
 		if (type === "event") {
+			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
+			const ALGORITHM_CHANGE_DAY = datasetStart.add(45, 'days');
+			const REENGAGEMENT_START = datasetStart.add(30, 'days');
 			const EVENT_TIME = dayjs(record.time);
 
-			// Hook #3: ALGORITHM CHANGE - Day 45 flips feed to explore
+			// Hook #3: ALGORITHM CHANGE - Day 45 flips feed -> explore.
+			// Mutates the existing config-defined `source` prop.
 			if (record.event === "post viewed") {
 				if (EVENT_TIME.isAfter(ALGORITHM_CHANGE_DAY)) {
-					// After day 45: 70% explore, 15% feed
 					if (chance.bool({ likelihood: 70 })) {
 						record.source = "explore";
 					}
 				} else {
-					// Before day 45: 70% feed, 15% explore (reinforce default)
 					if (chance.bool({ likelihood: 70 })) {
 						record.source = "feed";
 					}
 				}
 			}
 
-			// Hook #4: ENGAGEMENT BAIT - High hashtag posts get short view durations
+			// Hook #4: ENGAGEMENT BAIT - 20% of post views get crushed view duration.
+			// No flag — analyst sees bimodal duration distribution + low-tail share.
 			if (record.event === "post viewed") {
-				// 20% of post views are engagement-bait content
 				if (chance.bool({ likelihood: 20 })) {
 					record.view_duration_sec = chance.integer({ min: 1, max: 5 });
-					record.engagement_bait = true;
-				} else {
-					record.engagement_bait = false;
 				}
 
-				// Hook #5: NOTIFICATION RE-ENGAGEMENT - Trending drives views after day 30
+				// Hook #5: NOTIFICATION RE-ENGAGEMENT — after day 30, 30% of views
+				// flip source to "notification". Mutates existing source prop.
 				if (EVENT_TIME.isAfter(REENGAGEMENT_START) && chance.bool({ likelihood: 30 })) {
 					record.source = "notification";
-					record.trending_reengagement = true;
-				} else {
-					record.trending_reengagement = false;
 				}
 			}
-
-			// Hook #8: WEEKEND CONTENT SURGE - tagging moved to everything hook (sessionization reassigns times after event hook)
 		}
 
 		// ─── EVERYTHING-LEVEL HOOKS ──────────────────────────────────────
 
 		if (type === "everything") {
+			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
 			const userEvents = record;
 			if (!userEvents || userEvents.length === 0) return record;
 
@@ -536,52 +625,31 @@ const config = {
 				e.account_type = profile.account_type;
 			});
 
-			// Tracking variables for user patterns
+			// First pass: identify behavioral patterns (no flags written)
 			let postCreatedCount = 0;
 			let followReceivedCount = 0;
 			let reportSubmittedCount = 0;
 			let hasCreatorSubscription = false;
 			let isViralCreator = false;
 
-			// First pass: identify user patterns
 			userEvents.forEach((event) => {
-				if (event.event === "post created") {
-					postCreatedCount++;
-				}
-				if (event.event === "user followed") {
-					followReceivedCount++;
-				}
-				if (event.event === "report submitted") {
-					reportSubmittedCount++;
-				}
-				if (event.event === "creator subscription started") {
-					hasCreatorSubscription = true;
-				}
+				if (event.event === "post created") postCreatedCount++;
+				if (event.event === "user followed") followReceivedCount++;
+				if (event.event === "report submitted") reportSubmittedCount++;
+				if (event.event === "creator subscription started") hasCreatorSubscription = true;
 			});
 
-			// Hook #1: VIRAL CONTENT CASCADE
-			// Users with 10+ posts and 5% random chance are viral creators
 			if (postCreatedCount >= 10 && chance.bool({ likelihood: 5 })) {
 				isViralCreator = true;
 			}
 
-			// Second pass: set schema defaults then modify/inject based on patterns
+			// Second pass: inject cloned events (no behavioral cohort flags)
 			for (let idx = userEvents.length - 1; idx >= 0; idx--) {
 				const event = userEvents[idx];
 				const eventTime = dayjs(event.time);
 
-				// Set schema defaults for conditional properties
-				if (event.event === "post created" || event.event === "story created") {
-					if (event.monetized_creator === undefined) event.monetized_creator = false;
-					if (event.follow_back_effect === undefined) event.follow_back_effect = false;
-				}
-				if (event.event === "post viewed") {
-					if (event.viral_cascade === undefined) event.viral_cascade = false;
-				}
-				if (event.toxic_user === undefined) event.toxic_user = false;
-
-				// Hook #1: VIRAL CONTENT CASCADE
-				// Viral creators get 10-20x engagement on their posts
+				// Hook #1: VIRAL CONTENT CASCADE — clone 10-20 view/like/share per post.
+				// Discovery: bin users by post-created count, observe per-user view/like/share volume.
 				if (isViralCreator && event.event === "post created") {
 					const viralViews = chance.integer({ min: 10, max: 20 });
 					const viralLikes = chance.integer({ min: 10, max: 20 });
@@ -601,9 +669,6 @@ const config = {
 							post_type: event.post_type || "text",
 							source: chance.pickone(["feed", "explore", "search"]),
 							view_duration_sec: chance.integer({ min: 5, max: 90 }),
-							viral_cascade: true,
-							engagement_bait: false,
-							trending_reengagement: false,
 						});
 					}
 					for (let i = 0; i < viralLikes; i++) {
@@ -613,7 +678,6 @@ const config = {
 							time: eventTime.add(chance.integer({ min: 2, max: 240 }), 'minutes').toISOString(),
 							user_id: event.user_id,
 							post_type: event.post_type || "text",
-							viral_cascade: true,
 						});
 					}
 					for (let i = 0; i < viralShares; i++) {
@@ -623,16 +687,14 @@ const config = {
 							time: eventTime.add(chance.integer({ min: 5, max: 300 }), 'minutes').toISOString(),
 							user_id: event.user_id,
 							share_destination: chance.pickone(["repost", "dm", "external", "copy_link"]),
-							viral_cascade: true,
 						});
 					}
 
-					// Splice all injected events after the post created event
 					userEvents.splice(idx + 1, 0, ...injected);
 				}
 
-				// Hook #2: FOLLOW-BACK SNOWBALL
-				// Users with 5+ follows become prolific creators
+				// Hook #2: FOLLOW-BACK SNOWBALL — extra post + comment per user-followed cluster.
+				// Discovery: cohort users with >=5 user-followed events, compare posts/user.
 				if (followReceivedCount >= 5 && event.event === "post created") {
 					if (chance.bool({ likelihood: 50 })) {
 						const commentTemplate = userEvents.find(e => e.event === "comment posted");
@@ -644,7 +706,6 @@ const config = {
 							character_count: chance.integer({ min: 10, max: 280 }),
 							has_media: chance.bool({ likelihood: 60 }),
 							hashtag_count: chance.integer({ min: 0, max: 5 }),
-							follow_back_effect: true,
 						};
 						const extraComment = {
 							...(commentTemplate || event),
@@ -653,16 +714,14 @@ const config = {
 							user_id: event.user_id,
 							comment_length: chance.integer({ min: 5, max: 200 }),
 							has_mention: chance.bool({ likelihood: 40 }),
-							follow_back_effect: true,
 						};
 						userEvents.splice(idx + 1, 0, duplicatePost, extraComment);
 					}
 				}
 
-				// Hook #6: CREATOR MONETIZATION
-				// Monetized creators post 3x more frequently
+				// Hook #6: CREATOR MONETIZATION — 3x post/story rate for subscribers.
+				// Discovery: cohort users with creator-subscription-started event, compare posts/user.
 				if (hasCreatorSubscription && event.event === "post created") {
-					// Triple frequency: add 2 extra posts for each existing one
 					for (let i = 0; i < 2; i++) {
 						const extraPost = {
 							...event,
@@ -672,13 +731,11 @@ const config = {
 							character_count: chance.integer({ min: 20, max: 280 }),
 							has_media: chance.bool({ likelihood: 70 }),
 							hashtag_count: chance.integer({ min: 1, max: 8 }),
-							monetized_creator: true,
 						};
 						userEvents.splice(idx + 1, 0, extraPost);
 					}
 				}
 				if (hasCreatorSubscription && event.event === "story created") {
-					// Also triple story creation
 					for (let i = 0; i < 2; i++) {
 						const extraStory = {
 							...event,
@@ -687,12 +744,10 @@ const config = {
 							story_type: chance.pickone(["photo", "video", "text"]),
 							has_filter: chance.bool({ likelihood: 60 }),
 							has_sticker: chance.bool({ likelihood: 40 }),
-							monetized_creator: true,
 						};
 						userEvents.splice(idx + 1, 0, extraStory);
 					}
 				}
-				// Monetized creators also check their analytics more (extra post views)
 				if (hasCreatorSubscription && event.event === "post viewed") {
 					if (chance.bool({ likelihood: 25 })) {
 						const analyticsView = {
@@ -702,55 +757,55 @@ const config = {
 							post_type: event.post_type || "text",
 							source: "profile",
 							view_duration_sec: chance.integer({ min: 10, max: 60 }),
-							monetized_creator: true,
-							engagement_bait: false,
-							trending_reengagement: false,
-							viral_cascade: false,
 						};
 						userEvents.splice(idx + 1, 0, analyticsView);
 					}
 				}
 			}
 
-			// Hook #8: WEEKEND CONTENT SURGE - tag weekend content AFTER sessionization has finalized times
-			userEvents.forEach(event => {
-				if (event.event === "post created" || event.event === "story created") {
-					const dow = new Date(event.time).getUTCDay(); // 0 = Sunday, 6 = Saturday
-					if (dow === 0 || dow === 6) {
-						event.weekend_surge = true;
-					} else {
-						event.weekend_surge = false;
-					}
-				}
-			});
-			// Inject duplicate events for weekend content
+			// Hook #8: WEEKEND CONTENT SURGE — duplicate weekend posts/stories with offset.
+			// Discovery: line chart by day-of-week shows Sat/Sun bump.
 			for (let idx = userEvents.length - 1; idx >= 0; idx--) {
 				const event = userEvents[idx];
-				if (event.weekend_surge && !event.weekend_duplicate) {
-					if (chance.bool({ likelihood: 30 })) {
+				if (event.event === "post created" || event.event === "story created") {
+					const dow = new Date(event.time).getUTCDay();
+					if ((dow === 0 || dow === 6) && chance.bool({ likelihood: 30 })) {
 						const etime = dayjs(event.time);
 						const dup = {
 							...event,
 							time: etime.add(chance.integer({ min: 1, max: 3 }), 'hours').toISOString(),
-							weekend_duplicate: true,
 						};
 						userEvents.splice(idx + 1, 0, dup);
 					}
 				}
 			}
 
-			// Hook #7: TOXICITY CHURN
-			// Users with 3+ reports lose 60% of activity after day 30
+			// Hook #7: TOXICITY CHURN — drop 60% of activity after day 30 for high reporters.
+			// Discovery: cohort users with >=3 report-submitted events, observe retention drop.
 			if (reportSubmittedCount >= 3) {
-				const churnCutoff = DATASET_START.add(30, 'days');
+				const churnCutoff = datasetStart.add(30, 'days');
 				for (let i = userEvents.length - 1; i >= 0; i--) {
 					const evt = userEvents[i];
-					if (dayjs(evt.time).isAfter(churnCutoff)) {
-						if (chance.bool({ likelihood: 60 })) {
-							userEvents.splice(i, 1);
-						} else {
-							evt.toxic_user = true;
-						}
+					if (dayjs(evt.time).isAfter(churnCutoff) && chance.bool({ likelihood: 60 })) {
+						userEvents.splice(i, 1);
+					}
+				}
+			}
+
+			// Hook #9: POST-CREATED MAGIC NUMBER (no flags)
+			// Sweet 3-7 posts → +40% on comment_length on the user's comment events.
+			// Over 8+ → drop 30% of like/comment events (engagement burnout).
+			if (postCreatedCount >= 3 && postCreatedCount <= 7) {
+				userEvents.forEach(e => {
+					if (e.event === 'comment posted' && typeof e.comment_length === 'number') {
+						e.comment_length = Math.round(e.comment_length * 1.4);
+					}
+				});
+			} else if (postCreatedCount >= 8) {
+				for (let i = userEvents.length - 1; i >= 0; i--) {
+					const ev = userEvents[i];
+					if ((ev.event === 'post liked' || ev.event === 'comment posted') && chance.bool({ likelihood: 30 })) {
+						userEvents.splice(i, 1);
 					}
 				}
 			}

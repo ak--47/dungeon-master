@@ -54,7 +54,10 @@ const clinicIds = v.range(1, 25).map(() => `CLINIC_${v.uid(4)}`);
 
 /**
  * ═══════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (8 hooks)
+ * ANALYTICS HOOKS (10 hooks)
+ *
+ * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable
+ * via raw-prop breakdowns (HOD, day, tier) or behavioral cohorts.
  * ═══════════════════════════════════════════════════════════════
  *
  * ───────────────────────────────────────────────────────────────
@@ -226,20 +229,63 @@ const clinicIds = v.range(1, 25).map(() => `CLINIC_${v.uid(4)}`);
  * REAL-WORLD ANALOGUE: Free-tier patients face longer wait times
  * and limited scheduling, reducing completed consultations.
  *
+ * ───────────────────────────────────────────────────────────────
+ * 9. BOOKING FUNNEL TIME-TO-CONVERT (funnel-post)
+ *
+ * PATTERN: Premium tier completes Booking funnel 1.35x faster
+ * (factor 0.74); Free tier 1.33x slower (factor 1.33).
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Booking Funnel Median Time-to-Convert by Tier
+ *   - Funnels > "symptom search" -> "appointment booked" -> "consultation completed"
+ *   - Measure: Median time to convert
+ *   - Breakdown: subscription_tier
+ *   - Expected: premium ~ 0.74x; free ~ 1.33x
+ *
+ * ───────────────────────────────────────────────────────────────
+ * 10. CONSULTATION-COUNT MAGIC NUMBER (everything)
+ *
+ * PATTERN: Sweet 3-6 consultations → +25% on consultation_fee.
+ * Over 7+ → drop 30% of follow-up scheduled events (over-consulted
+ * → follow-up fatigue). No flag.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Avg Consultation Fee by Consult-Count Bucket
+ *   - Cohort A: users with 3-6 "consultation completed"
+ *   - Cohort B: users with 0-2
+ *   - Event: "consultation completed"
+ *   - Measure: Average of "consultation_fee"
+ *   - Expected: A ~ 1.25x B
+ *
+ *   Report 2: Follow-Up Rate on Heavy Consulters
+ *   - Cohort C: users with >= 7 consultations
+ *   - Cohort A: users with 3-6
+ *   - Event: "follow up scheduled"
+ *   - Measure: Total per user
+ *   - Expected: C ~ 30% fewer follow-ups per user
+ *
+ * REAL-WORLD ANALOGUE: Engaged patients pay more; over-engaged
+ * patients hit care-fatigue and skip follow-ups.
+ *
  * ═══════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY
  * ═══════════════════════════════════════════════════════════════
  *
- * Hook                        | Metric              | Baseline | Effect  | Ratio
- * ────────────────────────────|─────────────────────|──────────|─────────|──────
- * After-Hours Pricing         | consultation_fee    | $75      | $112    | 1.5x
- * Flu Season Spike            | respiratory appts   | ~15%     | ~60%    | 4x
- * Experienced Doctor Sat.     | satisfaction_score   | 3.5      | 4.2     | 1.2x
- * Video Follow-Up Lift        | follow-ups/user     | 1.0      | 2.0     | 2x
- * Chronic Refill Chain        | refills (chronic)   | 1        | 3-4     | 3-4x
- * Occasional No-Shows         | booking→consult     | 95%      | 75%     | 0.79x
- * Doctor Specialization       | years_experience    | 5        | 22      | 4.4x
- * Free-Tier Conversion Drop   | funnel conversion   | 40%      | 28%     | 0.7x
+ * Hook                        | Metric              | Baseline | Effect    | Ratio
+ * ----------------------------|---------------------|----------|-----------|------
+ * After-Hours Pricing         | consultation_fee    | 1x       | 1.5x      | 1.5x
+ * Flu Season Spike            | respiratory share   | ~ 15%    | ~ 60%     | 4x
+ * Experienced Doctor Sat.     | satisfaction_score  | 3.5      | 4.2       | 1.2x
+ * Video Follow-Up Lift        | follow-ups/user     | 1x       | 2x        | 2x
+ * Chronic Refill Chain        | refills (chronic)   | 1        | 3-4       | 3-4x
+ * Occasional No-Shows         | booking→consult     | 95%      | 75%       | -20%
+ * Doctor Specialization       | years_experience    | 5        | 22        | 4.4x
+ * Free-Tier Conversion Drop   | funnel conversion   | 40%      | 28%       | -30%
+ * Booking T2C                 | median min by tier  | 1x       | 0.74/1.33x| ~ 1.8x range
+ * Consult-Count Magic Number  | sweet consult fee   | 1x       | 1.25x     | 1.25x
+ * Consult-Count Magic Number  | over follow-ups/user| 1x       | 0.7x      | -30%
  */
 
 /** @type {Config} */
@@ -303,7 +349,6 @@ const config = {
 				condition_type: ["general", "general", "general", "respiratory", "dermatology", "mental_health", "chronic", "pediatric"],
 				wait_time_hours: u.weighNumRange(1, 72, 0.4),
 				appointment_type: ["new_patient", "follow_up", "follow_up", "urgent", "routine", "routine"],
-				after_hours: [false],
 			},
 		},
 		{
@@ -316,7 +361,6 @@ const config = {
 				consultation_fee: u.weighNumRange(25, 200, 0.4, 75),
 				satisfaction_score: u.weighNumRange(1, 5, 0.8, 3),
 				condition_type: ["general", "general", "respiratory", "dermatology", "mental_health", "chronic", "pediatric"],
-				after_hours: [false],
 			},
 		},
 		{
@@ -655,29 +699,35 @@ const config = {
 			}
 		}
 
-		// ── HOOK 8: PREMIUM BOOKING FUNNEL LIFT (funnel-pre) ─
-		// (conversionRate boost removed — filtering applied in everything hook instead)
-		if (type === "funnel-pre") {
-			// no-op: conversion differentiation handled via event filtering below
-		}
-
-		// ── HOOK 1: AFTER-HOURS SURGE PRICING (event) ────────
-		// Consultations between 7PM-7AM get 1.5x fee.
-		if (type === "event") {
-			if (record.event === "consultation completed" || record.event === "appointment booked") {
-				const hour = dayjs(record.time).hour();
-				if (hour >= 19 || hour < 7) {
-					record.after_hours = true;
-					if (record.consultation_fee) {
-						record.consultation_fee = Math.floor(record.consultation_fee * 1.5);
+		// HOOK 9 (T2C): BOOKING FUNNEL TIME-TO-CONVERT (funnel-post)
+		// Premium tier completes Booking funnel 1.35x faster (factor 0.74);
+		// Free tier 1.33x slower (factor 1.33).
+		if (type === "funnel-post") {
+			const segment = meta?.profile?.subscription_tier;
+			if (Array.isArray(record) && record.length > 1) {
+				const factor = (
+					segment === "premium" ? 0.74 :
+					segment === "free" ? 1.33 :
+					1.0
+				);
+				if (factor !== 1.0) {
+					for (let i = 1; i < record.length; i++) {
+						const prev = dayjs(record[i - 1].time);
+						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+						record[i].time = prev.add(newGap, "milliseconds").toISOString();
 					}
 				}
 			}
+		}
 
+		// (HOOK 1: AFTER-HOURS SURGE PRICING moved to everything hook — hour checks
+		// must run after bunchIntoSessions redistributes timestamps)
+		if (type === "event") {
+			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
 			// ── HOOK 2: FLU SEASON SPIKE (event) ─────────────
 			// Days 50-70: respiratory conditions dominate, wait times double.
-			const FLU_START = DATASET_START.add(50, "days");
-			const FLU_END = DATASET_START.add(70, "days");
+			const FLU_START = datasetStart.add(50, "days");
+			const FLU_END = datasetStart.add(70, "days");
 			const eventTime = dayjs(record.time);
 			if (record.event === "appointment booked" && eventTime.isAfter(FLU_START) && eventTime.isBefore(FLU_END)) {
 				if (chance.bool({ likelihood: 60 })) {
@@ -704,6 +754,17 @@ const config = {
 					if (plat) e.Platform = plat;
 				});
 			}
+
+			// HOOK 1: AFTER-HOURS SURGE PRICING — consultations 7PM-7AM
+			// UTC get consultation_fee 1.5x. No flag — discover via HOD chart.
+			record.forEach(e => {
+				if (e.event === "consultation completed" || e.event === "appointment booked") {
+					const hour = new Date(e.time).getUTCHours();
+					if ((hour >= 19 || hour < 7) && e.consultation_fee) {
+						e.consultation_fee = Math.floor(e.consultation_fee * 1.5);
+					}
+				}
+			});
 
 			// ── HOOK 8: FREE-TIER CONVERSION DROP ────────────
 			// Free-tier users lose ~30% of "consultation completed" events
@@ -783,11 +844,30 @@ const config = {
 				}
 			}
 
-			// ── HOOK 6: OCCASIONAL PATIENT NO-SHOWS ──────────
-			// Low-activity patients (< 15 events) lose 25% of appointments.
+			// HOOK 6: OCCASIONAL PATIENT NO-SHOWS — low-activity patients
+			// (< 15 events) lose 25% of appointments. No flag.
 			if (record.length < 15) {
 				for (let i = record.length - 1; i >= 0; i--) {
 					if (record[i].event === "appointment booked" && chance.bool({ likelihood: 25 })) {
+						record.splice(i, 1);
+					}
+				}
+			}
+
+			// HOOK 10: CONSULTATION-COUNT MAGIC NUMBER (no flags)
+			// Sweet 3-6 consultations → +25% on consultation_fee. Over 7+ →
+			// drop 30% of "follow up scheduled" events (over-consulted →
+			// follow-up fatigue).
+			const consultCt = record.filter(e => e.event === "consultation completed").length;
+			if (consultCt >= 3 && consultCt <= 6) {
+				record.forEach(e => {
+					if (e.event === "consultation completed" && typeof e.consultation_fee === "number") {
+						e.consultation_fee = Math.round(e.consultation_fee * 1.25);
+					}
+				});
+			} else if (consultCt >= 7) {
+				for (let i = record.length - 1; i >= 0; i--) {
+					if (record[i].event === "follow up scheduled" && chance.bool({ likelihood: 30 })) {
 						record.splice(i, 1);
 					}
 				}

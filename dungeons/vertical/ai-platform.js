@@ -47,11 +47,15 @@ const DATASET_START = NOW.subtract(num_days, "days");
  * - multi_turn: whether the call is part of a conversation
  *
  * ===============================================================
- * ANALYTICS HOOKS (8 hooks)
+ * ANALYTICS HOOKS (10 hooks)
  * ===============================================================
  *
+ * NOTE: Cohort effects are HIDDEN — no flag stamping. Discoverable
+ * only via behavioral cohorts (count event per user) or raw-prop
+ * breakdowns (api_tier from profile, model, error_type).
+ *
  * ---------------------------------------------------------------
- * 1. PROMPT CACHING ADOPTION (CONVERSION — event + everything)
+ * 1. PROMPT CACHING ADOPTION (CONVERSION — everything)
  * ---------------------------------------------------------------
  *
  * PATTERN: Customers who enable prompt caching see 70% lower
@@ -108,60 +112,44 @@ const DATASET_START = NOW.subtract(num_days, "days");
  * waves among power users who want improved capabilities.
  *
  * ---------------------------------------------------------------
- * 3. AGENTIC LOOP POWER USERS (BEHAVIORS TOGETHER — everything)
+ * 3. AGENTIC LOOP POWER USERS (everything)
  * ---------------------------------------------------------------
  *
- * PATTERN: Users who use both "tool use call" AND have multi_turn=true
- * on any api call are agentic loop users. They get 8x tokens_used on
- * all api calls and 3x extra api call events injected.
+ * PATTERN: Users with both "tool use call" AND any api-call event with
+ * multi_turn=true get 8x tokens_used on api calls plus 2 extra cloned
+ * api-call events per existing (3x rate). Cloned events with unique
+ * offset timestamps. No flag — discover via cohort builder.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Token Usage — Agentic vs Standard
- *   - Report type: Insights
+ *   Report 1: Tokens per User — Agentic Cohort
+ *   - Report type: Insights (with cohort)
+ *   - Cohort A: users with both >= 1 "tool use call" AND >= 1 api-call with multi_turn=true
+ *   - Cohort B: rest
  *   - Event: "api call"
  *   - Measure: Average of "tokens_used"
- *   - Breakdown: "is_agentic_user"
- *   - Expected: is_agentic_user=true ~ 8x tokens (agentic ~ 40K, standard ~ 5K)
+ *   - Expected: A ~ 8x B
  *
- *   Report 2: API Call Volume — Agentic vs Standard
- *   - Report type: Insights
- *   - Event: "api call"
- *   - Measure: Total per user (average)
- *   - Breakdown: "is_agentic_user"
- *   - Expected: agentic users ~ 3x more api calls
- *
- * REAL-WORLD ANALOGUE: Agentic workloads (coding agents, research
- * assistants) consume dramatically more tokens via extended tool-use
- * loops and multi-turn conversations.
+ * REAL-WORLD ANALOGUE: Agentic workloads consume dramatically more
+ * tokens via extended tool-use loops.
  *
  * ---------------------------------------------------------------
- * 4. RATE LIMIT CHURN (CHURN — everything)
+ * 4. RATE LIMIT CHURN (everything)
  * ---------------------------------------------------------------
  *
- * PATTERN: Users hitting "rate limit error" >= 5 times in first
- * 7 days lose 60% of events after week 1. Rate-limited users
- * churn from frustration.
+ * PATTERN: Users with >= 2 "rate limit error" events in first 7 days
+ * lose 60% of events after week 1. No flag — discover via cohort.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Retention by Early Rate Limiting
+ *   Report 1: Retention by Early Rate-Limit Cohort
  *   - Report type: Retention
- *   - Event A: any event
- *   - Event B: any event
- *   - Breakdown: "hit_rate_limit_early" (user property)
- *   - Expected: hit_rate_limit_early=true ~ 40% D30 retention
- *     vs ~80% for others
+ *   - Cohort A: users with >= 2 "rate limit error" in first 7 days
+ *   - Cohort B: rest
+ *   - Expected: A retention ~ 40% vs B ~ 80%
  *
- *   Report 2: Event Volume Post Rate-Limit
- *   - Report type: Insights
- *   - Event: any event
- *   - Measure: Total per user (average)
- *   - Breakdown: "hit_rate_limit_early"
- *   - Expected: rate-limited users ~ 40% of normal volume
- *
- * REAL-WORLD ANALOGUE: Developers who get rate-limited early in
- * their evaluation often switch to a competitor platform.
+ * REAL-WORLD ANALOGUE: Developers who get rate-limited early often
+ * switch to a competitor.
  *
  * ---------------------------------------------------------------
  * 5. TIER-BASED CONTEXT WINDOW (SUBSCRIPTION TIER — everything)
@@ -220,59 +208,91 @@ const DATASET_START = NOW.subtract(num_days, "days");
  * that spike error rates across all customers.
  *
  * ---------------------------------------------------------------
- * 7. BATCH API DISCOUNT (PURCHASE VALUE — everything)
+ * 7. BATCH API DISCOUNT (everything)
  * ---------------------------------------------------------------
  *
- * PATTERN: Users who submit batch jobs get 50% lower cost_per_token
- * on api calls but use 2x tokens_used. Batch processing is cheaper
- * per token but encourages higher volume.
+ * PATTERN: Users with any "batch job submitted" event get 50% lower
+ * cost_per_token on api calls + 2x tokens_used. Mutates raw props.
+ * No flag — discover via cohort builder.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Cost Per Token — Batch vs Interactive
- *   - Report type: Insights
+ *   Report 1: Cost per Token by Batch Cohort
+ *   - Report type: Insights (with cohort)
+ *   - Cohort A: users with >= 1 "batch job submitted"
+ *   - Cohort B: rest
  *   - Event: "api call"
  *   - Measure: Average of "cost_per_token"
- *   - Breakdown: "is_batch_user"
- *   - Expected: is_batch_user=true ~ 50% lower cost per token
+ *   - Expected: A ~ 0.5x B
  *
- *   Report 2: Token Volume — Batch Users
- *   - Report type: Insights
- *   - Event: "api call"
- *   - Measure: Average of "tokens_used"
- *   - Breakdown: "is_batch_user"
- *   - Expected: batch users ~ 2x token volume
- *
- * REAL-WORLD ANALOGUE: Batch API pricing incentivizes high-volume
- * workloads with discounted per-token rates.
+ * REAL-WORLD ANALOGUE: Batch API pricing rewards high-volume workloads.
  *
  * ---------------------------------------------------------------
- * 8. EVAL-DRIVEN RETENTION (RETENTION — everything)
+ * 8. EVAL-DRIVEN RETENTION (everything)
  * ---------------------------------------------------------------
  *
- * PATTERN: Users who run "eval job" in the first 7 days have 75%
- * D30 retention vs 25% for non-eval users. Early eval adoption
- * indicates serious platform investment.
+ * PATTERN: Users with any "eval job" in first 7 days keep all events.
+ * Non-eval users lose 75% of post-day-30 events. No flag — discover
+ * via retention cohort.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Retention by Early Eval Usage
+ *   Report 1: Retention by Early Eval Cohort
  *   - Report type: Retention
- *   - Event A: any event
- *   - Event B: any event
- *   - Breakdown: "has_early_eval" (user property)
- *   - Expected: has_early_eval=true ~ 75% D30 vs 25% for false
+ *   - Cohort A: users with >= 1 "eval job" in first 7 days
+ *   - Cohort B: rest
+ *   - Expected: A ~ 75% D30 vs B ~ 25%
  *
- *   Report 2: Event Volume Over Time
- *   - Report type: Insights
- *   - Event: any event
- *   - Measure: Total per user (average)
- *   - Breakdown: "has_early_eval"
- *   - Line chart by week
- *   - Expected: early eval users sustain volume; non-eval users decay
+ * REAL-WORLD ANALOGUE: Teams that set up eval pipelines stick around.
  *
- * REAL-WORLD ANALOGUE: Teams that set up evaluation pipelines early
- * are deeply invested in prompt quality and stick with the platform.
+ * ---------------------------------------------------------------
+ * 9. API-TO-EVAL TIME-TO-CONVERT (funnel-post)
+ * ---------------------------------------------------------------
+ *
+ * PATTERN: Enterprise users complete the "API to Eval Pipeline" funnel
+ * 1.5x faster than baseline (factor 0.67 on inter-event gaps); Free
+ * users 1.4x slower (factor 1.4). Mutates funnel event timestamps.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: API to Eval — Median Time-to-Convert by Tier
+ *   - Report type: Funnels
+ *   - Steps: "api call" -> "tool use call" -> "eval job"
+ *   - Measure: Median time to convert
+ *   - Breakdown: "api_tier"
+ *   - Expected: Enterprise ~ 0.67x Build; Free ~ 1.4x Build
+ *
+ * REAL-WORLD ANALOGUE: Enterprise teams have dedicated platform engineers
+ * who execute end-to-end pipelines faster.
+ *
+ * ---------------------------------------------------------------
+ * 10. DOCS-SEARCHED MAGIC NUMBER (in-funnel, everything)
+ * ---------------------------------------------------------------
+ *
+ * PATTERN: Count "docs searched" events between organization-created and
+ * first billing-payment. Sweet 5-8 → +35% on amount_usd of billing
+ * payment events. Over 9+ → drop 30% of billing payment events. No flag.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Avg Billing Amount by Docs-Searched Bucket
+ *   - Report type: Insights (with cohort)
+ *   - Cohort A: users with 5-8 "docs searched" between sign-up and first billing
+ *   - Cohort B: users with 0-4
+ *   - Event: "billing payment"
+ *   - Measure: Average of "amount_usd"
+ *   - Expected: A ~ 1.35x B
+ *
+ *   Report 2: Billing Payments per User on Heavy Searchers
+ *   - Report type: Insights (with cohort)
+ *   - Cohort C: users with >= 9 "docs searched" between sign-up and billing
+ *   - Cohort A: users with 5-8
+ *   - Event: "billing payment"
+ *   - Measure: Total per user
+ *   - Expected: C ~ 30% fewer billing payments per user
+ *
+ * REAL-WORLD ANALOGUE: Reading the docs lifts willingness to pay; doc
+ * obsession signals stuck on integration and never paying.
  *
  * ===============================================================
  * EXPECTED METRICS SUMMARY
@@ -281,13 +301,16 @@ const DATASET_START = NOW.subtract(num_days, "days");
  * Hook                        | Metric              | Baseline   | Effect       | Ratio
  * ----------------------------|----------------------|------------|--------------|------
  * Prompt Caching Adoption     | cost_usd             | $0.01      | $0.003       | 0.3x
- * Model Migration Wave        | opus-4-7 share       | 0%         | ~35% (paid)  | new
- * Agentic Loop Power Users    | tokens_used          | 5K         | 40K          | 8x
+ * Model Migration Wave        | opus-4-7 share paid  | 0%         | ~ 35%        | new
+ * Agentic Loop Power Users    | tokens/api-call      | 1x         | 8x           | 8x
  * Rate Limit Churn            | D30 retention        | 80%        | 40%          | 0.5x
  * Tier-Based Context Window   | input_tokens         | 2K (Free)  | 8K (Ent)     | 4x
- * Outage Day                  | error rate           | 5%         | 40%          | 8x
- * Batch API Discount          | cost_per_token       | $0.00001   | $0.000005    | 0.5x
+ * Outage Day                  | error rate days 40-41| 5%         | 40%          | 8x
+ * Batch API Discount          | cost_per_token       | 1x         | 0.5x         | -50%
  * Eval-Driven Retention       | D30 retention        | 25%        | 75%          | 3x
+ * API-to-Eval T2C             | median min by tier   | 1x (Build) | 0.67x / 1.4x | 1.5x range
+ * Docs Magic Number           | sweet billing amount | 1x         | 1.35x        | 1.35x
+ * Docs Magic Number           | over billing/user    | 1x         | 0.7x         | -30%
  */
 
 /** @type {Config} */
@@ -373,8 +396,6 @@ const config = {
 				error_type: ["none"],
 				multi_turn: [false, false, false, true],
 				context_window: [200000],
-				is_agentic_user: [false],
-				is_batch_user: [false],
 				stream: [true, true, true, false],
 				stop_reason: ["end_turn", "end_turn", "end_turn", "max_tokens", "tool_use"],
 			},
@@ -559,9 +580,6 @@ const config = {
 		monthly_spend: u.weighNumRange(0, 50000, 0.2, 200),
 		total_api_calls: u.weighNumRange(0, 500000, 0.2, 10000),
 		preferred_model: ["sonnet-4", "sonnet-4", "haiku-4", "opus-4-6"],
-		has_eval_pipeline: [false],
-		hit_rate_limit_early: [false],
-		has_early_eval: [false],
 	},
 
 	// -- Hook Function ----------------------------------------
@@ -572,9 +590,10 @@ const config = {
 		// service error types
 		// ─────────────────────────────────────────────────────────
 		if (type === "event") {
+			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
 			if (record.event === "api call") {
 				const eventTime = dayjs(record.time);
-				const dayInDataset = eventTime.diff(DATASET_START, "days", true);
+				const dayInDataset = eventTime.diff(datasetStart, "days", true);
 
 				// Hook #6: Outage day errors
 				if (dayInDataset >= 40 && dayInDataset < 42) {
@@ -589,36 +608,44 @@ const config = {
 					}
 				}
 
-				// Hook #2: Model migration wave (event portion)
-				// After day 60, 35% of Build/Enterprise users switch to opus-4-7
-				if (dayInDataset >= 60) {
-					if (
-						(record.api_tier === "Build" || record.api_tier === "Enterprise") &&
-						chance.bool({ likelihood: 35 })
-					) {
-						record.model = "opus-4-7";
-					}
-				}
+				// Hook #2 (model migration wave) MOVED to everything hook —
+				// at event-hook time `record.api_tier` is the random per-event
+				// value, not the user's profile tier. Stamping happens later in
+				// the everything hook.
 			}
 
 			return record;
 		}
 
 		// ─────────────────────────────────────────────────────────
-		// Hook: USER PROFILE ENRICHMENT (user)
-		// Tag user profiles for discoverability
+		// Hook 9 (T2C): API-TO-EVAL TIME-TO-CONVERT (funnel-post)
+		// Enterprise users complete API to Eval Pipeline funnel 1.5x faster
+		// (factor 0.67 on inter-event gaps); Free users 1.4x slower (factor
+		// 1.4). Mutates record[i].time. No flag.
 		// ─────────────────────────────────────────────────────────
-		if (type === "user") {
-			// Defaults for hook-driven user properties
-			record.hit_rate_limit_early = false;
-			record.has_early_eval = false;
-			record.has_eval_pipeline = false;
+		if (type === "funnel-post") {
+			const segment = meta?.profile?.api_tier;
+			if (Array.isArray(record) && record.length > 1) {
+				const factor = (
+					segment === "Enterprise" ? 0.67 :
+					segment === "Free" ? 1.4 :
+					1.0
+				);
+				if (factor !== 1.0) {
+					for (let i = 1; i < record.length; i++) {
+						const prev = dayjs(record[i - 1].time);
+						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+						record[i].time = prev.add(newGap, "milliseconds").toISOString();
+					}
+				}
+			}
 		}
 
 		// ─────────────────────────────────────────────────────────
 		// EVERYTHING HOOKS
 		// ─────────────────────────────────────────────────────────
 		if (type === "everything") {
+			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
 			let events = record;
 			if (!events.length) return record;
 			const profile = meta && meta.profile ? meta.profile : {};
@@ -632,7 +659,7 @@ const config = {
 
 			// Determine first event time for relative day calculations
 			const sortedByTime = [...events].sort((a, b) => dayjs(a.time).valueOf() - dayjs(b.time).valueOf());
-			const firstEventTime = sortedByTime.length > 0 ? dayjs(sortedByTime[0].time) : DATASET_START;
+			const firstEventTime = sortedByTime.length > 0 ? dayjs(sortedByTime[0].time) : datasetStart;
 
 			// ─────────────────────────────────────────────────────
 			// Hook #5: TIER-BASED CONTEXT WINDOW (SUBSCRIPTION TIER)
@@ -677,15 +704,22 @@ const config = {
 			}
 
 			// ─────────────────────────────────────────────────────
-			// Hook #2: MODEL MIGRATION WAVE (everything portion)
-			// opus-4-7 users get 1.5x tokens_used
-			// (model assignment done in event hook above)
+			// Hook #2: MODEL MIGRATION WAVE
+			// After day 60, 35% of Build/Enterprise api_calls switch to
+			// opus-4-7 model and get 1.5x tokens_used. Reads profile.api_tier
+			// (authoritative) and uses post-shift event timestamps.
 			// ─────────────────────────────────────────────────────
-			events.forEach(e => {
-				if (e.event === "api call" && e.model === "opus-4-7") {
-					e.tokens_used = Math.floor((e.tokens_used || 2500) * 1.5);
-				}
-			});
+			const datasetStartDay60 = datasetStart.add(60, "days");
+			if (tier === "Build" || tier === "Enterprise") {
+				events.forEach(e => {
+					if (e.event === "api call" && dayjs(e.time).isAfter(datasetStartDay60)) {
+						if (chance.bool({ likelihood: 35 })) {
+							e.model = "opus-4-7";
+							e.tokens_used = Math.floor((e.tokens_used || 2500) * 1.5);
+						}
+					}
+				});
+			}
 
 			// ─────────────────────────────────────────────────────
 			// Hook #3: AGENTIC LOOP POWER USERS (BEHAVIORS TOGETHER)
@@ -696,17 +730,14 @@ const config = {
 			const isAgenticUser = hasToolUse && hasMultiTurn;
 
 			if (isAgenticUser) {
-				// Mark all api calls as agentic and boost tokens
 				events.forEach(e => {
 					if (e.event === "api call") {
-						e.is_agentic_user = true;
 						e.tokens_used = Math.floor((e.tokens_used || 2500) * 8);
 					}
 				});
 
-				// Inject 3x extra api call events by cloning existing ones
 				const apiCalls = events.filter(e => e.event === "api call");
-				const extraCount = apiCalls.length * 2; // 2 extra per existing = 3x total
+				const extraCount = apiCalls.length * 2;
 				for (let i = 0; i < extraCount; i++) {
 					const template = apiCalls[i % apiCalls.length];
 					if (template) {
@@ -714,7 +745,6 @@ const config = {
 							...template,
 							time: dayjs(template.time).add(chance.integer({ min: 1, max: 120 }), "minutes").toISOString(),
 							user_id: template.user_id,
-							is_agentic_user: true,
 							multi_turn: true,
 						});
 					}
@@ -723,8 +753,10 @@ const config = {
 
 			// ─────────────────────────────────────────────────────
 			// Hook #4: RATE LIMIT CHURN
-			// >=5 rate limit errors in first 7 days -> remove 60% of
-			// events after week 1
+			// >=2 rate limit errors in first 7 days -> remove 60% of
+			// events after week 1. Threshold is intentionally low because
+			// avgEventsPerUserPerDay=0.83 means most users only generate
+			// a handful of events per week.
 			// ─────────────────────────────────────────────────────
 			const firstWeekEnd = firstEventTime.add(7, "days");
 			const earlyRateLimits = events.filter(e =>
@@ -732,14 +764,11 @@ const config = {
 				dayjs(e.time).isBefore(firstWeekEnd)
 			).length;
 
-			if (earlyRateLimits >= 5) {
-				// Tag the user profile
-				if (profile) profile.hit_rate_limit_early = true;
-
+			if (earlyRateLimits >= 2) {
 				// Remove 60% of events after week 1
 				events = events.filter(e => {
 					if (dayjs(e.time).isAfter(firstWeekEnd)) {
-						return chance.bool({ likelihood: 40 }); // keep 40% = remove 60%
+						return chance.bool({ likelihood: 40 });
 					}
 					return true;
 				});
@@ -754,7 +783,6 @@ const config = {
 			if (isBatchUser) {
 				events.forEach(e => {
 					if (e.event === "api call") {
-						e.is_batch_user = true;
 						e.cost_per_token = Math.round((e.cost_per_token || 0.00001) * 0.5 * 10000000) / 10000000;
 						e.tokens_used = Math.floor((e.tokens_used || 2500) * 2);
 					}
@@ -772,21 +800,48 @@ const config = {
 			);
 
 			if (hasEarlyEval) {
-				// Tag user profile
-				if (profile) {
-					profile.has_early_eval = true;
-					profile.has_eval_pipeline = true;
-				}
 				// Early eval users keep all their events (high retention)
 			} else {
 				// Non-eval users: remove 75% of events after day 30
 				const day30 = firstEventTime.add(30, "days");
 				events = events.filter(e => {
 					if (dayjs(e.time).isAfter(day30)) {
-						return chance.bool({ likelihood: 25 }); // keep 25%
+						return chance.bool({ likelihood: 25 });
 					}
 					return true;
 				});
+			}
+
+			// ─────────────────────────────────────────────────────
+			// Hook 10: DOCS-SEARCHED MAGIC NUMBER (in-funnel, no flags)
+			// Count "docs searched" events between first "organization
+			// created" (sign-up) and any "billing payment". Sweet 5-8 → +35%
+			// on amount_usd of billing-payment events. Over 9+ → drop 30%
+			// of billing-payment events.
+			// ─────────────────────────────────────────────────────
+			const orgEvent = events.find(e => e.event === "organization created");
+			const firstBilling = events.find(e => e.event === "billing payment");
+			if (orgEvent && firstBilling) {
+				const aTime = dayjs(orgEvent.time);
+				const bTime = dayjs(firstBilling.time);
+				const docsBetween = events.filter(e =>
+					e.event === "docs searched" &&
+					dayjs(e.time).isAfter(aTime) &&
+					dayjs(e.time).isBefore(bTime)
+				).length;
+				if (docsBetween >= 5 && docsBetween <= 8) {
+					events.forEach(e => {
+						if (e.event === "billing payment" && typeof e.amount_usd === "number") {
+							e.amount_usd = Math.round(e.amount_usd * 1.35);
+						}
+					});
+				} else if (docsBetween >= 9) {
+					for (let i = events.length - 1; i >= 0; i--) {
+						if (events[i].event === "billing payment" && chance.bool({ likelihood: 30 })) {
+							events.splice(i, 1);
+						}
+					}
+				}
 			}
 
 			return events;

@@ -69,47 +69,25 @@ For each hook/pattern, catalog:
 
 ## Step 2: Run the Dungeon
 
-Create a temporary runner script and execute the dungeon with constrained parameters.
+The verify runner already exists at `scripts/verify-runner.mjs`. Use it — do NOT recreate.
 
-Create `verify-runner.mjs` in the project root:
+Two modes:
 
-```javascript
-import generate from './index.js';
-import path from 'path';
+- **Default (full fidelity)** — runs the dungeon with its own `numUsers` / `avgEventsPerUserPerDay` / `numDays` settings as-shipped. This is the only mode whose verdicts you can trust for benchmark/production. Can take minutes for 50K-user dungeons.
+- **`--small`** — overrides to 1K users with `avgEventsPerUserPerDay` scaled so total events ≈ 100K. Use for fast smoke checks only. WEAK/FAIL verdicts from `--small` runs are unreliable due to small-cohort variance — re-verify at full fidelity before reporting.
 
-const dungeonPath = process.argv[2];
-const runName = process.argv[3] || 'verify-hooks';
-const absolutePath = path.isAbsolute(dungeonPath)
-  ? dungeonPath
-  : path.resolve(process.cwd(), dungeonPath);
+```bash
+# Full fidelity (production-grade verification)
+node scripts/verify-runner.mjs <dungeon-path> <run-name>
 
-const { default: config } = await import(absolutePath);
-
-const results = await generate({
-  ...config,
-  token: "",
-  numUsers: 1000,
-  numEvents: 100_000,
-  format: "json",
-  gzip: false,
-  writeToDisk: true,
-  name: runName,
-  concurrency: 1,
-  verbose: false,
-});
-
-console.log(JSON.stringify({
-  eventCount: results.eventCount,
-  userCount: results.userCount,
-  files: results.files,
-  duration: results.time?.human || results.time?.delta + 'ms'
-}));
+# Small smoke test
+node scripts/verify-runner.mjs <dungeon-path> <run-name> --small
 ```
 
-Run it with a unique name per dungeon to avoid file collisions in batch mode:
+Examples:
 ```bash
-node verify-runner.mjs <absolute-path-to-dungeon> <run-name>
-# e.g.: node verify-runner.mjs dungeons/my-dungeon.js verify-my-dungeon
+node scripts/verify-runner.mjs dungeons/vertical/gaming.js verify-gaming
+node scripts/verify-runner.mjs dungeons/vertical/gaming.js verify-gaming --small
 ```
 
 **Expected output files** (in `./data/`, using `<run-name>` as prefix):
@@ -488,10 +466,100 @@ ORDER BY users DESC;
 
 ### Statistical Caveats
 
-With ~1000 users and ~100K events:
+At full fidelity (the default — dungeon's own scale):
+- Cohorts of all sizes should produce clear signal because the absolute population is large
+- WEAK results at full fidelity indicate a real problem — investigate
+
+With `--small` (1K users / 100K events):
 - Most hooks with >= 10% affected population will show clear signal
-- Hooks affecting < 2% of users (e.g., "2% find legendary weapon") may show WEAK results due to small sample size — this is expected
-- Note sample size in the report when it's a factor
+- Hooks affecting < 2% of users (e.g., "2% find legendary weapon") may show WEAK results due to small sample size — DO NOT report these as broken without re-running at full fidelity
+- Always re-verify any FAIL/WEAK at full fidelity before writing the report
+
+### Verifying No-Flag Cohort Patterns (REV 2)
+
+Modern dungeons hide cohort effects behind raw event mutations rather than stamping flags like `is_whale=true`. Verification must DERIVE the cohort behaviorally, then measure the downstream metric.
+
+**Magic-number BEHAVIORAL pattern** — count an event per user, bin into low/sweet/over, compare downstream metric per bucket:
+
+```sql
+WITH x_counts AS (
+    SELECT user_id, COUNT(*) FILTER (WHERE event = '<X_EVENT>') AS x_n
+    FROM read_json_auto('./data/<run>-EVENTS.json')
+    GROUP BY user_id
+),
+buckets AS (
+    SELECT user_id,
+        CASE WHEN x_n < <SWEET_LOW> THEN 'low'
+             WHEN x_n <= <SWEET_HIGH> THEN 'sweet'
+             ELSE 'over' END AS bucket
+    FROM x_counts
+)
+SELECT b.bucket,
+    COUNT(DISTINCT b.user_id) AS users,
+    AVG(TRY_CAST(e.<TARGET_PROP> AS DOUBLE)) AS avg_target_prop,
+    COUNT(*) FILTER (WHERE e.event = '<TARGET_EVENT>') AS total_target_events,
+    ROUND(COUNT(*) FILTER (WHERE e.event = '<TARGET_EVENT>') * 1.0 /
+          COUNT(DISTINCT b.user_id), 2) AS target_per_user
+FROM buckets b
+JOIN read_json_auto('./data/<run>-EVENTS.json') e ON b.user_id = e.user_id
+GROUP BY b.bucket;
+```
+
+**Verdict criteria for inverted-U**:
+- `sweet` bucket avg target ≥ 1.2x `low` bucket → boost present (PASS)
+- `over` bucket target_per_user ≤ 0.7x `sweet` bucket → drop present (PASS)
+- Both visible → inverted-U PASS
+- Either missing → flag as WEAK or FAIL with note about cohort sizes
+
+**Population caveat**: high-volume target events can push most users into the `over` bucket at small scale, masking the sweet effect. Re-run at full fidelity if `over` >> `sweet` cohort sizes.
+
+**Time-to-convert (funnel-post) verification** — compute median A→B time per profile segment:
+
+```sql
+WITH funnel AS (
+    SELECT user_id,
+        MIN(time::TIMESTAMP) FILTER (WHERE event = '<STEP_A>') AS a_time,
+        MIN(time::TIMESTAMP) FILTER (WHERE event = '<STEP_B>') AS b_time
+    FROM read_json_auto('./data/<run>-EVENTS.json')
+    GROUP BY user_id
+)
+SELECT u.<SEGMENT_KEY>,
+    COUNT(*) AS users,
+    ROUND(MEDIAN(EXTRACT(EPOCH FROM (b_time - a_time)) / 60), 2) AS median_min_a_to_b
+FROM funnel f
+JOIN read_json_auto('./data/<run>-USERS.json') u ON f.user_id = u.distinct_id
+WHERE a_time IS NOT NULL AND b_time IS NOT NULL
+GROUP BY u.<SEGMENT_KEY>
+ORDER BY median_min_a_to_b;
+```
+
+**Verdict for T2C**:
+- Fast segment ≤ 0.85x baseline → PASS
+- Slow segment ≥ 1.2x baseline → PASS
+- Both directions visible → PASS
+- One/both missing → check that funnel exists in `funnels:` config and segment property is on `meta.profile`
+
+**No-flag verification rule**: NEVER attempt to verify a hook by querying for a flag like `WHERE sweet_spot = true`. If a dungeon has such flags, treat them as a doc bug — the hook should be reworked to hide the cohort behaviorally. The validator's job is to derive cohorts behaviorally.
+
+### Critical Time-Window Verification Pattern
+
+Many dungeons use relative time windows (e.g., "spike on days 75-85"). The post-shift dataset start is exposed to hooks as `meta.datasetStart` (unix seconds). For DuckDB verification, use the same anchor:
+
+```sql
+-- WRONG: uses MIN(time) which is up to 30 days BEFORE dataset start (pre-existing user spread)
+SELECT *, EXTRACT(EPOCH FROM (time::TIMESTAMP - (SELECT MIN(time::TIMESTAMP) FROM events))) / 86400 as day_in
+FROM events;
+
+-- RIGHT: anchor to MAX(time) - num_days, which is the post-shift dataset start
+WITH bounds AS (
+  SELECT MAX(time::TIMESTAMP) - INTERVAL 'NUM_DAYS' day as datasetStart
+  FROM events
+)
+SELECT *, EXTRACT(EPOCH FROM (e.time::TIMESTAMP - b.datasetStart)) / 86400 as day_in
+FROM events e, bounds b;
+```
+
+Pre-existing users have events for up to 30 days BEFORE the dataset start (`preExistingSpread: 'uniform'` default in macro). MIN(time) reflects those pre-existing events, not the dataset window. Always anchor to MAX(time) - num_days for "day in dataset" calculations.
 
 ## Step 3b: Stash Query Results to Disk
 

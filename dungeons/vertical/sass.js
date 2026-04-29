@@ -52,152 +52,237 @@ const chance = u.initChance(SEED);
 
 /*
  * ═══════════════════════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS
+ * ANALYTICS HOOKS (10 hooks)
  * ═══════════════════════════════════════════════════════════════════════════════
  *
- * 8 deliberately architected patterns hidden in the data, simulating real-world
- * B2B SaaS behavior. Several hooks use event removal (splice), event replacement,
- * and module-level closure state tracking via Map objects.
+ * 10 deliberately architected patterns hidden in the data. NOTE: All cohort
+ * effects are HIDDEN — no flag stamping. Discoverable via behavioral cohorts
+ * or raw-prop breakdowns (company_size, day, doc_section). Adds:
+ *   9. INCIDENT RESPONSE TIME-TO-CONVERT (Enterprise 1.4x faster vs Startup)
+ *   10. DOCS MAGIC NUMBER (sweet 4-7 docs → +40% deploys; over 8+ → drop 25%)
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * 1. END-OF-QUARTER SPIKE (event hook)
+ * 1. END-OF-QUARTER SPIKE (event)
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * Days 80-90: billing events shift toward plan upgrades 40% of the time, and team
- * member invitations are duplicated 50% of the time. Tagged: quarter_end_push: true.
+ * PATTERN: Days 80-90 billing events shift toward plan upgrades 40% of the time
+ * and team member invitations are duplicated 50% of the time. Affected events
+ * are tagged quarter_end_push = true.
  *
- * Mixpanel Report — Plan Upgrades Over Time:
- *   • Insights line chart
- *   • Event: "billing event", filter "event_type" = "plan_upgraded"
- *   • Daily trend
- *   • Expected: Spike in plan upgrades during days 80-90 (4x normal volume)
+ * HOW TO FIND IT IN MIXPANEL:
  *
- * Mixpanel Report — Team Expansion Surge:
- *   • Insights line chart
- *   • Event: "team member invited", filter "quarter_end_push" = true
- *   • Daily trend
- *   • Expected: Clear volume spike in last 10 days with duplicate invites
+ *   Report 1: Plan Upgrades Over Time
+ *   - Report type: Insights
+ *   - Event: "billing event"
+ *   - Measure: Total
+ *   - Filter: event_type = "plan_upgraded"
+ *   - Line chart by day
+ *   - Expected: ~4x normal upgrade volume during days 80-90
  *
- * ─────────────────────────────────────────────────────────────────────────────
- * 2. CHURNED ACCOUNT SILENCING (everything hook)
- * ─────────────────────────────────────────────────────────────────────────────
+ *   Report 2: Team Expansion Surge
+ *   - Report type: Insights
+ *   - Event: "team member invited"
+ *   - Measure: Total
+ *   - Filter: quarter_end_push = true
+ *   - Line chart by day
+ *   - Expected: clear volume spike in the final 10 days from duplicated invites
  *
- * ~10% of users (hash of distinct_id, idHash % 5 === 0) go completely silent
- * after day 30. ALL events after month 1 are removed via splice(). User profiles
- * are tagged churned_account: true for discoverability.
- *
- * Mixpanel Report — Churned Account Retention:
- *   • Retention report
- *   • Event A/B: Any event
- *   • Breakdown: User profile "churned_account"
- *   • Expected: churned_account=true shows 0% retention after day 30
- *
- * Mixpanel Report — Churned Account Activity:
- *   • Insights line chart
- *   • Event: Any event, measure total per user
- *   • Breakdown: User profile "churned_account"
- *   • Weekly trend
- *   • Expected: churned_account=true flatlines after week 4
+ * REAL-WORLD ANALOGUE: B2B SaaS revenue clusters at quarter-close as sales
+ * teams pull deals forward and customers expand seats to lock in pricing.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * 3. ALERT ESCALATION REPLACEMENT (event hook)
+ * 2. CHURNED ACCOUNT SILENCING (everything)
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * 30% of critical/emergency "alert triggered" events are REPLACED with a new
- * event type "incident created" (not in the events array — hook-only). Includes
- * escalation_level (P1/P2), teams_paged, incident_id.
+ * PATTERN: ~10% of users (hash of distinct_id, idHash % 5 === 0) go completely
+ * silent after day 30. All events after month 1 are removed via splice() and
+ * the user profile is tagged churned_account = true.
  *
- * Mixpanel Report — Incident Created Discovery:
- *   • Insights report
- *   • Event: "incident created"
- *   • Breakdown: "escalation_level"
- *   • Expected: P1 and P2 incidents, ~30% of critical/emergency alert volume
+ * HOW TO FIND IT IN MIXPANEL:
  *
- * Mixpanel Report — Alert vs Incident Ratio:
- *   • Insights report
- *   • Events: "alert triggered" AND "incident created"
- *   • Expected: incident created count ~ 30% of critical+emergency alerts
+ *   Report 1: Churned Account Retention
+ *   - Report type: Retention
+ *   - Event A: any event
+ *   - Event B: any event
+ *   - Breakdown: "churned_account" (user property)
+ *   - Expected: churned_account=true shows 0% retention after day 30
  *
- * ─────────────────────────────────────────────────────────────────────────────
- * 4. INTEGRATION USERS SUCCEED (everything hook)
- * ─────────────────────────────────────────────────────────────────────────────
+ *   Report 2: Churned Account Activity Decay
+ *   - Report type: Insights
+ *   - Event: any event
+ *   - Measure: Total per user (average)
+ *   - Breakdown: "churned_account"
+ *   - Line chart by week
+ *   - Expected: churned_account=true flatlines after week 4
  *
- * Users with BOTH Slack AND PagerDuty integrations resolve alerts faster:
- * response_time_mins reduced 60%, resolution_time_mins reduced 50%.
- * Tagged: integrated_team: true.
- *
- * Mixpanel Report — Integration Impact on Response Time:
- *   • Insights report
- *   • Event: "alert acknowledged", measure avg "response_time_mins"
- *   • Breakdown: "integrated_team"
- *   • Expected: integrated_team=true ~ 60% lower response time
- *
- * Mixpanel Report — Integration Impact on Resolution:
- *   • Insights report
- *   • Event: "alert resolved", measure avg "resolution_time_mins"
- *   • Breakdown: "integrated_team"
- *   • Expected: integrated_team=true ~ 50% faster resolution
+ * REAL-WORLD ANALOGUE: Most SaaS churn happens silently — accounts simply
+ * stop logging in long before the formal cancellation lands.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * 5. DOCS READERS DEPLOY MORE (everything hook)
+ * 3. ALERT ESCALATION REPLACEMENT (event)
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * Users with 3+ "best_practices" documentation views get 2-3 extra production
- * deploys spliced into their event stream. Tagged: docs_informed: true.
+ * PATTERN: 30% of critical/emergency "alert triggered" events are REPLACED
+ * with a hook-only "incident created" event (not in the events array). The
+ * new event carries escalation_level (P1/P2), teams_paged, and incident_id.
  *
- * Mixpanel Report — Docs-Informed Deployments:
- *   • Insights report
- *   • Event: "service deployed", filter "environment" = "production"
- *   • Breakdown: "docs_informed"
- *   • Expected: docs_informed=true shows extra production deployments
+ * HOW TO FIND IT IN MIXPANEL:
  *
- * Mixpanel Report — Docs Readers vs Non-Readers:
- *   • Insights report
- *   • Event: "service deployed", measure total per user
- *   • Segment: Users with 3+ "documentation viewed" (doc_section = "best_practices")
- *   • Expected: ~1.8x more production deploys per user for docs readers
+ *   Report 1: Incident Created Discovery
+ *   - Report type: Insights
+ *   - Event: "incident created"
+ *   - Measure: Total
+ *   - Breakdown: "escalation_level"
+ *   - Expected: P1 and P2 incidents, ~30% of critical/emergency alert volume
  *
- * ─────────────────────────────────────────────────────────────────────────────
- * 6. COST OVERRUN PATTERN (event hook — closure state)
- * ─────────────────────────────────────────────────────────────────────────────
+ *   Report 2: Alert vs Incident Ratio
+ *   - Report type: Insights
+ *   - Events: "alert triggered" AND "incident created"
+ *   - Measure: Total
+ *   - Expected: incident count ~ 30% of critical+emergency alert count
  *
- * When cost_change_percent > 25 on a "cost report generated" event, the user
- * is stored in a module-level Map. Their next "infrastructure scaled" event
- * is forced to scale_direction: "down". Tagged: budget_exceeded, cost_reaction.
- *
- * Mixpanel Report — Cost Overrun to Scale Down:
- *   • Insights report
- *   • Event: "infrastructure scaled"
- *   • Breakdown: "cost_reaction"
- *   • Expected: cost_reaction=true events are 100% scale_direction="down"
+ * REAL-WORLD ANALOGUE: Severe alerts get auto-promoted into incident
+ * tickets that page on-call engineers and trigger customer comms.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * 7. FAILED DEPLOYMENT RECOVERY (event hook — closure state)
+ * 4. INTEGRATION USERS SUCCEED (everything)
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * After a failed pipeline run, the user's next successful deploy has
- * duration_sec * 1.5 (recovery deploys are slower). Tagged: recovery_deployment.
- * Uses module-level Map for cross-call state.
+ * PATTERN: Users with BOTH Slack AND PagerDuty integrations resolve alerts
+ * faster: response_time_mins reduced 60%, resolution_time_mins reduced 50%.
+ * Affected events are tagged integrated_team = true.
  *
- * Mixpanel Report — Recovery Deploy Duration:
- *   • Insights report
- *   • Event: "deployment pipeline run", measure avg "duration_sec"
- *   • Breakdown: "recovery_deployment"
- *   • Expected: recovery_deployment=true ~ 1.5x longer duration
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Response Time by Integration
+ *   - Report type: Insights
+ *   - Event: "alert acknowledged"
+ *   - Measure: Average of "response_time_mins"
+ *   - Breakdown: "integrated_team"
+ *   - Expected: integrated_team=true ~ 60% lower response time
+ *
+ *   Report 2: Resolution Time by Integration
+ *   - Report type: Insights
+ *   - Event: "alert resolved"
+ *   - Measure: Average of "resolution_time_mins"
+ *   - Breakdown: "integrated_team"
+ *   - Expected: integrated_team=true ~ 50% faster resolution
+ *
+ * REAL-WORLD ANALOGUE: Teams that wire alerting into their existing comms
+ * stack respond minutes faster — the alert literally finds the human.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * 8. ENTERPRISE VS STARTUP (user hook)
+ * 5. DOCS READERS DEPLOY MORE (everything)
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * Company size determines seat_count, annual_contract_value, and
- * customer_success_manager (enterprise only). All users get customer_health_score.
+ * PATTERN: Users with 3+ best_practices documentation views get 2-3 extra
+ * production deploys spliced into their event stream. Affected events are
+ * tagged docs_informed = true.
  *
- * Mixpanel Report — ACV by Company Size:
- *   • Insights report
- *   • Event: Any, measure unique users
- *   • Breakdown: User profile "company_size"
- *   • Expected: startup ($0-3.6K), smb ($3.6K-12K), mid_market ($12K-50K),
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Docs-Informed Production Deploys
+ *   - Report type: Insights
+ *   - Event: "service deployed"
+ *   - Measure: Total
+ *   - Filter: environment = "production"
+ *   - Breakdown: "docs_informed"
+ *   - Expected: docs_informed=true shows additional production deploys
+ *
+ *   Report 2: Per-User Deploy Volume
+ *   - Report type: Insights
+ *   - Event: "service deployed"
+ *   - Measure: Total per user (average)
+ *   - Breakdown: "docs_informed"
+ *   - Expected: ~1.8x more deploys per user for docs readers
+ *
+ * REAL-WORLD ANALOGUE: Engineers who read the docs ship more confidently
+ * and more often than those who guess at the platform.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * 6. COST OVERRUN PATTERN (event — closure state)
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * PATTERN: When cost_change_percent > 25 on a "cost report generated" event,
+ * the user is stored in a module-level Map. Their next "infrastructure scaled"
+ * event is forced to scale_direction = "down". Affected events are tagged
+ * budget_exceeded and cost_reaction = true.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Cost Overrun to Scale Down
+ *   - Report type: Insights
+ *   - Event: "infrastructure scaled"
+ *   - Measure: Total
+ *   - Breakdown: "cost_reaction"
+ *   - Expected: cost_reaction=true events are 100% scale_direction="down"
+ *
+ *   Report 2: Scale Direction by Reaction
+ *   - Report type: Insights
+ *   - Event: "infrastructure scaled"
+ *   - Measure: Total
+ *   - Breakdown: "scale_direction"
+ *   - Filter: cost_reaction = true
+ *   - Expected: only the "down" bucket has volume
+ *
+ * REAL-WORLD ANALOGUE: A surprise cloud bill triggers an immediate
+ * downscale; no engineer ignores a 25% month-over-month cost jump.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * 7. FAILED DEPLOYMENT RECOVERY (event — closure state)
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * PATTERN: After a failed pipeline run, the user's next successful deploy has
+ * duration_sec * 1.5 (recovery deploys are slower). Uses a module-level Map
+ * for cross-call state. Affected events are tagged recovery_deployment = true.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Recovery Deploy Duration
+ *   - Report type: Insights
+ *   - Event: "deployment pipeline run"
+ *   - Measure: Average of "duration_sec"
+ *   - Breakdown: "recovery_deployment"
+ *   - Expected: recovery_deployment=true ~ 1.5x longer duration
+ *
+ *   Report 2: Recovery Deploy Volume Over Time
+ *   - Report type: Insights
+ *   - Event: "deployment pipeline run"
+ *   - Measure: Total
+ *   - Filter: recovery_deployment = true
+ *   - Line chart by day
+ *   - Expected: scattered recovery events trailing failed pipelines
+ *
+ * REAL-WORLD ANALOGUE: After a bad deploy, teams add manual gates and
+ * extra verification steps that slow the very next release.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * 8. ENTERPRISE VS STARTUP (user)
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * PATTERN: Company size determines seat_count, annual_contract_value, and
+ * customer_success_manager (enterprise only). All users get a
+ * customer_health_score on the profile.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: ACV by Company Size
+ *   - Report type: Insights
+ *   - Event: any event
+ *   - Measure: Unique users
+ *   - Breakdown: "company_size" (user property)
+ *   - Expected: startup ($0-3.6K), smb ($3.6K-12K), mid_market ($12K-50K),
  *     enterprise ($50K-500K)
+ *
+ *   Report 2: Seat Count by Company Size
+ *   - Report type: Insights
+ *   - Event: any event
+ *   - Measure: Average of "seat_count" (user property)
+ *   - Breakdown: "company_size"
+ *   - Expected: monotonic ramp from startup to enterprise
+ *
+ * REAL-WORLD ANALOGUE: B2B SaaS pricing scales orders of magnitude across
+ * customer segments — from a $99/mo startup to a $500K Fortune 500 contract.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * EXPECTED METRICS SUMMARY
@@ -368,7 +453,6 @@ const config = {
 				service_type: ["web_app", "api", "database", "cache", "queue", "ml_model"],
 				environment: ["production", "staging", "dev"],
 				cloud_provider: ["aws", "gcp", "azure"],
-				docs_informed: [false],
 			}
 		},
 		{
@@ -409,7 +493,6 @@ const config = {
 				alert_id: alertIds,
 				response_time_mins: u.weighNumRange(1, 120),
 				acknowledged_by_role: ["engineer", "sre", "manager", "oncall"],
-				integrated_team: [false],
 			}
 		},
 		{
@@ -419,7 +502,6 @@ const config = {
 				alert_id: alertIds,
 				resolution_time_mins: u.weighNumRange(5, 1440),
 				root_cause: ["config_change", "capacity", "bug", "dependency", "network"],
-				integrated_team: [false],
 			}
 		},
 		{
@@ -430,7 +512,6 @@ const config = {
 				status: ["success", "failed", "cancelled"],
 				duration_sec: u.weighNumRange(30, 1800),
 				commit_count: u.weighNumRange(1, 20),
-				recovery_deployment: [false],
 			}
 		},
 		{
@@ -442,7 +523,6 @@ const config = {
 				previous_capacity: u.weighNumRange(1, 100),
 				new_capacity: u.weighNumRange(1, 100),
 				auto_scaled: [false, false, false, false, false, false, true],
-				cost_reaction: [false],
 			}
 		},
 		{
@@ -452,8 +532,6 @@ const config = {
 				report_period: ["daily", "weekly", "monthly"],
 				total_cost: u.weighNumRange(100, 50000),
 				cost_change_percent: u.weighNumRange(-30, 50),
-				cost_alert: [false],
-				budget_exceeded: [false],
 			}
 		},
 		{
@@ -462,8 +540,6 @@ const config = {
 			properties: {
 				role: ["admin", "editor", "viewer", "billing"],
 				invitation_method: ["email", "sso", "slack"],
-				quarter_end_push: [false],
-				duplicate_invite: [false],
 			}
 		},
 		{
@@ -498,7 +574,6 @@ const config = {
 			properties: {
 				event_type: ["invoice_generated", "payment_received", "payment_failed", "plan_upgraded", "plan_downgraded"],
 				amount: u.weighNumRange(99, 25000),
-				quarter_end_push: [false],
 			}
 		},
 		{
@@ -548,7 +623,6 @@ const config = {
 		company_size: ["startup", "startup", "smb", "mid_market", "enterprise"],
 		primary_role: ["engineer", "sre", "devops", "manager", "executive"],
 		team_name: ["Platform", "Backend", "Frontend", "Data", "Security", "Infrastructure"],
-		churned_account: [false],
 		seat_count: [1],
 		annual_contract_value: [0],
 		customer_success_manager: [false],
@@ -590,52 +664,36 @@ const config = {
 		const NOW = dayjs();
 		const DATASET_START = NOW.subtract(num_days, "days");
 
-		// ─────────────────────────────────────────────────────────────
-		// Hook #1: END-OF-QUARTER SPIKE (event)
-		// Days 80-90: billing upgrades and team expansion surge
-		// ─────────────────────────────────────────────────────────────
+		// HOOK 1: END-OF-QUARTER SPIKE — days 80-90, 40% of billing events
+		// flip event_type to plan_upgraded; team-member-invited events get
+		// 50% chance of duplicate clone with unique time. No flag.
 		if (type === "event") {
+			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
 			const EVENT_TIME = dayjs(record.time);
-			const dayInDataset = EVENT_TIME.diff(DATASET_START, "days", true);
+			const dayInDataset = EVENT_TIME.diff(datasetStart, "days", true);
 
 			if (record.event === "billing event") {
 				if (dayInDataset >= 80 && dayInDataset <= 90 && chance.bool({ likelihood: 40 })) {
 					record.event_type = "plan_upgraded";
-					record.quarter_end_push = true;
-				} else {
-					record.quarter_end_push = false;
 				}
 			}
 
-			if (record.event === "team member invited") {
-				if (dayInDataset >= 80 && dayInDataset <= 90) {
-					record.quarter_end_push = true;
-					// 50% of the time duplicate the invite event (hiring push)
-					if (chance.bool({ likelihood: 50 })) {
-						return {
-							...record,
-							time: EVENT_TIME.add(chance.integer({ min: 1, max: 60 }), "minutes").toISOString(),
-							role: chance.pickone(["editor", "viewer"]),
-							invitation_method: chance.pickone(["email", "sso", "slack"]),
-							quarter_end_push: true,
-							duplicate_invite: true,
-						};
-					}
-				} else {
-					record.quarter_end_push = false;
-				}
+			if (record.event === "team member invited" && dayInDataset >= 80 && dayInDataset <= 90 && chance.bool({ likelihood: 50 })) {
+				return {
+					...record,
+					time: EVENT_TIME.add(chance.integer({ min: 1, max: 60 }), "minutes").toISOString(),
+					role: chance.pickone(["editor", "viewer"]),
+					invitation_method: chance.pickone(["email", "sso", "slack"]),
+				};
 			}
 		}
 
-		// ─────────────────────────────────────────────────────────────
-		// Hook #3: ALERT ESCALATION REPLACEMENT (event)
-		// Critical/emergency alerts sometimes become formal incidents
-		// ─────────────────────────────────────────────────────────────
+		// HOOK 3: ALERT ESCALATION REPLACEMENT (event) — critical/emergency
+		// alerts sometimes become incident-created events. Real product flow.
 		if (type === "event") {
 			if (record.event === "alert triggered") {
 				const severity = record.severity;
 				if ((severity === "critical" || severity === "emergency") && chance.bool({ likelihood: 30 })) {
-					// REPLACE the event entirely with an "incident created" event
 					return {
 						...record,
 						event: "incident created",
@@ -650,178 +708,133 @@ const config = {
 			}
 		}
 
-		// ─────────────────────────────────────────────────────────────
-		// Hook #6: COST OVERRUN PATTERN (event)
-		// Budget-exceeded users react by scaling down infrastructure
-		// Uses module-level costOverrunUsers Map for cross-call state
-		// ─────────────────────────────────────────────────────────────
+		// HOOK 6: COST OVERRUN PATTERN (event) — cost reports with cost_change
+		// > 25% record user, then next infrastructure-scaled event from that
+		// user gets scale_direction = "down". No flag.
 		if (type === "event") {
-			if (record.event === "cost report generated") {
-				const costChange = record.cost_change_percent;
-				if (costChange > 25) {
-					record.cost_alert = true;
-					record.budget_exceeded = true;
-					costOverrunUsers.set(record.user_id, true);
-				} else {
-					record.cost_alert = false;
-					record.budget_exceeded = false;
-				}
+			if (record.event === "cost report generated" && record.cost_change_percent > 25) {
+				costOverrunUsers.set(record.user_id, true);
 			}
-
-			if (record.event === "infrastructure scaled") {
-				if (costOverrunUsers.has(record.user_id)) {
-					record.scale_direction = "down";
-					record.cost_reaction = true;
-					costOverrunUsers.delete(record.user_id);
-				} else {
-					record.cost_reaction = false;
-				}
+			if (record.event === "infrastructure scaled" && costOverrunUsers.has(record.user_id)) {
+				record.scale_direction = "down";
+				costOverrunUsers.delete(record.user_id);
 			}
 		}
 
-		// ─────────────────────────────────────────────────────────────
-		// Hook #7: FAILED DEPLOYMENT RECOVERY (event)
-		// Recovery deploys take 1.5x longer after a failure
-		// Uses module-level failedDeployUsers Map for cross-call state
-		// ─────────────────────────────────────────────────────────────
+		// HOOK 7: FAILED DEPLOYMENT RECOVERY (event) — failed deploy records
+		// user, then next successful deploy gets duration_sec * 1.5. No flag.
 		if (type === "event") {
 			if (record.event === "deployment pipeline run") {
-				const status = record.status;
-				if (status === "failed") {
+				if (record.status === "failed") {
 					failedDeployUsers.set(record.user_id, true);
-					record.recovery_deployment = false;
-				} else if (status === "success" && failedDeployUsers.has(record.user_id)) {
+				} else if (record.status === "success" && failedDeployUsers.has(record.user_id)) {
 					record.duration_sec = Math.floor((record.duration_sec || 300) * 1.5);
-					record.recovery_deployment = true;
 					failedDeployUsers.delete(record.user_id);
-				} else {
-					record.recovery_deployment = false;
 				}
 			}
 		}
 
-		// ─────────────────────────────────────────────────────────────
-		// Hook #2: CHURNED ACCOUNT SILENCING (everything)
-		// ~20% targeted (hash % 5), yielding ~10% visible after accounting for invisible churned users
-		// ─────────────────────────────────────────────────────────────
+		// HOOK 9 (T2C): INCIDENT RESPONSE TIME-TO-CONVERT (funnel-post)
+		// Enterprise tier completes Incident Response funnel 1.4x faster
+		// (factor 0.71); Startup 1.25x slower (factor 1.25).
+		if (type === "funnel-post") {
+			const segment = meta?.profile?.company_size;
+			if (Array.isArray(record) && record.length > 1) {
+				const factor = (
+					segment === "enterprise" ? 0.71 :
+					segment === "startup" ? 1.25 :
+					1.0
+				);
+				if (factor !== 1.0) {
+					for (let i = 1; i < record.length; i++) {
+						const prev = dayjs(record[i - 1].time);
+						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+						record[i].time = prev.add(newGap, "milliseconds").toISOString();
+					}
+				}
+			}
+		}
+
 		if (type === "everything") {
+			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
 			const userEvents = record;
 			const profile = meta.profile;
 
-			// Stamp superProps from profile for consistency
 			userEvents.forEach(e => {
 				e.plan_tier = profile.plan_tier;
 				e.cloud_provider = profile.cloud_provider;
 			});
 
+			// HOOK 2: CHURNED ACCOUNT SILENCING — ~20% of users (hash %5)
+			// have post-day-30 events removed. No flag.
 			if (userEvents && userEvents.length > 0) {
 				const firstEvent = userEvents[0];
 				const idHash = String(firstEvent.user_id || firstEvent.device_id).split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
-				const isChurnedAccount = (idHash % 5) === 0;
-
-				if (isChurnedAccount) {
+				if ((idHash % 5) === 0) {
 					for (let i = userEvents.length - 1; i >= 0; i--) {
-						const evt = userEvents[i];
-						const dayInDataset = dayjs(evt.time).diff(DATASET_START, "days", true);
+						const dayInDataset = dayjs(userEvents[i].time).diff(datasetStart, "days", true);
 						if (dayInDataset > 30) {
 							userEvents.splice(i, 1);
 						}
 					}
 				}
 			}
-		}
 
-		// ─────────────────────────────────────────────────────────────
-		// Hook #4: INTEGRATION USERS SUCCEED (everything)
-		// Users with both Slack AND PagerDuty integrations resolve faster
-		// ─────────────────────────────────────────────────────────────
-		if (type === "everything") {
-			const userEvents = record;
-
-			// First pass: check if user has both slack and pagerduty integrations
+			// HOOK 4: INTEGRATION USERS SUCCEED — Slack+PagerDuty users get
+			// alert response_time_mins 0.4x and resolution_time_mins 0.5x.
+			// Mutates raw props. No flag.
 			let hasSlack = false;
 			let hasPagerduty = false;
-
 			userEvents.forEach((event) => {
 				if (event.event === "integration configured") {
-					const integrationType = event.integration_type;
-					if (integrationType === "slack") hasSlack = true;
-					if (integrationType === "pagerduty") hasPagerduty = true;
+					if (event.integration_type === "slack") hasSlack = true;
+					if (event.integration_type === "pagerduty") hasPagerduty = true;
 				}
 			});
-
-			const hasFullIntegration = hasSlack && hasPagerduty;
-
-			// Second pass: set integrated_team on all alert events, then boost for integrated users
-			userEvents.forEach((event) => {
-				if (event.event === "alert acknowledged") {
-					if (hasFullIntegration && event.response_time_mins) {
+			if (hasSlack && hasPagerduty) {
+				userEvents.forEach((event) => {
+					if (event.event === "alert acknowledged" && event.response_time_mins) {
 						event.response_time_mins = Math.floor(event.response_time_mins * 0.4);
-						event.integrated_team = true;
-					} else {
-						event.integrated_team = false;
 					}
-				}
-				if (event.event === "alert resolved") {
-					if (hasFullIntegration && event.resolution_time_mins) {
+					if (event.event === "alert resolved" && event.resolution_time_mins) {
 						event.resolution_time_mins = Math.floor(event.resolution_time_mins * 0.5);
-						event.integrated_team = true;
-					} else {
-						event.integrated_team = false;
 					}
-				}
-			});
-		}
+				});
+			}
 
-		// ─────────────────────────────────────────────────────────────
-		// Hook #5: DOCS READERS DEPLOY MORE (everything)
-		// Users who read best_practices 3+ times get extra production deploys
-		// ─────────────────────────────────────────────────────────────
-		if (type === "everything") {
-			const userEvents = record;
-
-			// First pass: count best_practices documentation views
-			let bestPracticesCount = 0;
-			userEvents.forEach((event) => {
-				if (event.event === "documentation viewed" && event.doc_section === "best_practices") {
-					bestPracticesCount++;
-				}
-			});
-
-			// Second pass: if 3+ best practices views, add extra production deploys
-			if (bestPracticesCount >= 3) {
-				const extraDeploys = chance.integer({ min: 2, max: 3 });
+			// HOOK 5 + HOOK 10: DOCS MAGIC NUMBER (in-funnel, no flags)
+			// Sweet 4-7 documentation-viewed events → +40% extra cloned
+			// service-deployed events. Over 8+ → drop 25% of service-deployed
+			// events (over-reading; no shipping). No flag.
+			const docsCount = userEvents.filter(e => e.event === "documentation viewed").length;
+			const deployTemplate = userEvents.find(e => e.event === "service deployed");
+			if (docsCount >= 4 && docsCount <= 7 && deployTemplate) {
 				const lastEvent = userEvents[userEvents.length - 1];
-				const deployTemplate = userEvents.find(e => e.event === "service deployed");
-				if (lastEvent && deployTemplate) {
-					for (let i = 0; i < extraDeploys; i++) {
-						const deployEvent = {
-							...deployTemplate,
-							time: dayjs(lastEvent.time).add(chance.integer({ min: 1, max: 48 }), "hours").toISOString(),
-							user_id: lastEvent.user_id,
-							service_id: chance.pickone(serviceIds),
-							service_type: chance.pickone(["web_app", "api", "database", "cache", "queue", "ml_model"]),
-							environment: "production",
-							cloud_provider: chance.pickone(["aws", "gcp", "azure"]),
-							docs_informed: true,
-						};
-						userEvents.splice(userEvents.length, 0, deployEvent);
+				const extraDeploys = chance.integer({ min: 2, max: 3 });
+				for (let i = 0; i < extraDeploys; i++) {
+					userEvents.push({
+						...deployTemplate,
+						time: dayjs(lastEvent.time).add(chance.integer({ min: 1, max: 48 }), "hours").toISOString(),
+						user_id: lastEvent.user_id,
+						service_id: chance.pickone(serviceIds),
+						service_type: chance.pickone(["web_app", "api", "database", "cache", "queue", "ml_model"]),
+						environment: "production",
+						cloud_provider: profile.cloud_provider,
+					});
+				}
+			} else if (docsCount >= 8) {
+				for (let i = userEvents.length - 1; i >= 0; i--) {
+					if (userEvents[i].event === "service deployed" && chance.bool({ likelihood: 25 })) {
+						userEvents.splice(i, 1);
 					}
 				}
 			}
 		}
 
-		// ─────────────────────────────────────────────────────────────
-		// Hook #8: ENTERPRISE VS STARTUP (user)
-		// Company size determines seat count, ACV, and health score
-		// ─────────────────────────────────────────────────────────────
+		// HOOK 8: ENTERPRISE VS STARTUP (user) — company size determines
+		// seat count, ACV, and CSM. Real profile attrs.
 		if (type === "user") {
-			// Hook #2 support: tag churned accounts on user profile for discoverability
-			const idHash = String(record.distinct_id || "").split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
-			record.churned_account = (idHash % 5) === 0;
-
 			const companySize = record.company_size;
-
 			if (companySize === "enterprise") {
 				record.seat_count = chance.integer({ min: 50, max: 500 });
 				record.annual_contract_value = chance.integer({ min: 50000, max: 500000 });
@@ -839,7 +852,6 @@ const config = {
 				record.annual_contract_value = chance.integer({ min: 0, max: 3600 });
 				record.customer_success_manager = false;
 			}
-
 			record.customer_health_score = chance.integer({ min: 1, max: 100 });
 		}
 

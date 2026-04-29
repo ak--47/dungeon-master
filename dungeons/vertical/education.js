@@ -52,132 +52,259 @@ const chance = u.initChance(SEED);
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (8 architected patterns)
+ * ANALYTICS HOOKS (9 hooks)
  * ═══════════════════════════════════════════════════════════════════════════════
  *
- * 1. STUDENT VS INSTRUCTOR PROFILES
- *    Instructor profiles get teaching attributes (courses_created,
- *    teaching_experience_years, instructor_rating). Students get learning
- *    attributes (learning_goal, study_hours_per_week).
+ * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable via
+ * behavioral cohorts, raw-prop breakdowns, or funnel time-to-convert.
  *
- *    Mixpanel reports:
- *    • Insights → Any event → Unique users → Breakdown: "account_type"
- *      Expected: ~89% students, ~11% instructors
- *    • Insights → "instructor feedback given" → Total per user → Breakdown: "account_type"
- *      Expected: Instructors dominate feedback; students show learning_goal instead
+ * 1. STUDENT VS INSTRUCTOR PROFILES (user)
  *
- * 2. DEADLINE CRAMMING
- *    Assignments submitted on Sun/Mon are rushed: 60% late (vs ~20% baseline),
- *    quiz scores drop by 25 points. Events carry is_deadline_rush: true.
+ * PATTERN: Instructor profiles get teaching attributes
+ * (courses_created, teaching_experience_years, instructor_rating).
+ * Students get learning attributes (learning_goal,
+ * study_hours_per_week). Two-sided marketplace at ~89% students,
+ * ~11% instructors.
  *
- *    Mixpanel reports:
- *    • Insights → "assignment submitted" → Total → Breakdown: "is_deadline_rush"
- *      Expected: is_deadline_rush=true shows ~60% late rate vs ~20% baseline
- *    • Insights → "quiz completed" → Avg "score_percent" → Breakdown: Day of Week
- *      Expected: Sun/Mon scores ~25 points lower (~40 vs ~65)
+ * HOW TO FIND IT IN MIXPANEL:
  *
- * 3. NOTES-TAKERS SUCCEED
- *    Students with 5+ notes_taken=true lectures get +20 quiz score boost
- *    (capped at 100) and 40% chance of bonus certificate. Marked diligent_student: true.
+ *   Report 1: Account Mix
+ *   - Report type: Insights
+ *   - Event: any event
+ *   - Measure: Unique users
+ *   - Breakdown: "account_type"
+ *   - Expected: ~89% students, ~11% instructors
  *
- *    Mixpanel reports:
- *    • Insights → "quiz completed" → Avg "score_percent" → Breakdown: "diligent_student"
- *      Expected: diligent_student=true ≈ 85 avg vs ~65 baseline (+20 pts)
- *    • Insights → "certificate earned" → Total per user → Breakdown: "diligent_student"
- *      Expected: diligent_student=true earn ~40% more certificates
+ *   Report 2: Instructor-Driven Feedback
+ *   - Report type: Insights
+ *   - Event: "instructor feedback given"
+ *   - Measure: Total per user (average)
+ *   - Breakdown: "account_type"
+ *   - Expected: instructors dominate feedback volume; students rarely emit
  *
- * 4. STUDY GROUP RETENTION
- *    Early study group joiners (within 10 days) retain and get bonus discussions.
- *    Non-joiners with low quiz scores (<60) churn hard at day 14 (all later events removed).
+ * REAL-WORLD ANALOGUE: Two-sided learning marketplaces have
+ * fundamentally different role personas — teachers create supply,
+ * learners consume it.
  *
- *    Mixpanel reports:
- *    • Retention → A: "account registered" → B: Any event → Segment by early study group join
- *      Expected: Early joiners ~90% D14 retention; non-joiners with low scores ~30%
- *    • Insights → "discussion posted" → Total per user → Breakdown: "study_group_member"
- *      Expected: study_group_member=true users post more
+ * ---------------------------------------------------------------
+ * 2. DEADLINE CRAMMING (everything)
  *
- * 5. HINT DEPENDENCY
- *    Hint users get 60% chance of easy problems; non-hint users get 40% chance of
- *    hard problems with independent_solver: true.
+ * PATTERN: Assignments submitted on Sun/Mon are rushed — 60% are
+ * late (vs ~20% baseline), and quiz scores drop by 25 points. The
+ * affected events carry is_deadline_rush=true.
  *
- *    Mixpanel reports:
- *    • Insights → "practice problem solved" → Total → Breakdown: "difficulty" → Filter: hint_used=true
- *      Expected: ~60% easy (vs ~33% baseline)
- *    • Insights → "practice problem solved" → Total → Breakdown: "difficulty" → Filter: hint_used=false
- *      Expected: ~40% hard (vs ~33% baseline)
+ * HOW TO FIND IT IN MIXPANEL:
  *
- * 6. SEMESTER-END SPIKE
- *    Days 75-85: quiz_started, quiz_completed, assignment_submitted events duplicated
- *    at 80% rate. Events carry semester_end_rush: true.
+ *   Report 1: Late Submission Rate by Rush Flag
+ *   - Report type: Insights
+ *   - Event: "assignment submitted"
+ *   - Measure: Total
+ *   - Filter: "submission_status" = "late"
+ *   - Breakdown: "is_deadline_rush"
+ *   - Expected: is_deadline_rush=true ~ 60% late vs ~20% baseline
  *
- *    Mixpanel reports:
- *    • Insights (line) → "quiz started" + "quiz completed" + "assignment submitted" → Daily
- *      Expected: ~2x volume spike during days 75-85
- *    • Insights → "quiz completed" → Total → Breakdown: "semester_end_rush"
- *      Expected: semester_end_rush=true clusters in days 75-85
+ *   Report 2: Quiz Score by Day of Week
+ *   - Report type: Insights
+ *   - Event: "quiz completed"
+ *   - Measure: Average of "score_percent"
+ *   - Breakdown: Day of Week
+ *   - Expected: Sun/Mon ~ 40, other days ~ 65 (-25 pts)
  *
- * 7. FREE VS PAID COURSES
- *    Free users get 0.5x funnel conversion rate; paid subscribers get 1.5x.
- *    Free users also lose 55% of certificates. Creates ~2.2x completion gap.
+ * REAL-WORLD ANALOGUE: Procrastination clusters submissions at the
+ * deadline weekend and hammers performance.
  *
- *    Mixpanel reports:
- *    • Funnels → "course enrolled" → "lecture completed" → "quiz completed" → "certificate earned"
- *      Breakdown: "subscription_status"
- *      Expected: free ≈ 15% completion, paid ≈ 33% (~2.2x difference)
- *    • Insights → "certificate earned" → Total per user → Breakdown: "subscription_status"
- *      Expected: Paid subscribers earn significantly more certificates
+ * ---------------------------------------------------------------
+ * 3. NOTES MAGIC NUMBER (everything, in-funnel)
  *
- * 8. PLAYBACK SPEED CORRELATION
- *    Speed learners (>=2.0x, 3+ lectures): compressed watch_time (0.6x),
- *    paradoxically higher quiz scores (+8 pts). Thorough learners (<=1.0x):
- *    extended watch_time (1.4x).
+ * PATTERN: Sweet 5-8 lectures with notes_taken=true → +30% quiz
+ * score_percent (cap 100) and 40% chance of bonus cloned certificate.
+ * Over 9+ → 35% of certificate-earned events drop (over-noted but
+ * stuck in study mode). No flag.
  *
- *    Mixpanel reports:
- *    • Insights → "lecture completed" → Avg "watch_time_mins" → Breakdown: "speed_learner"
- *      Expected: speed_learner=true ≈ 0.6x watch time
- *    • Insights → "quiz completed" → Avg "score_percent" → Breakdown: "speed_learner_effect"
- *      Expected: speed_learner_effect=true shows +8 points (faster = better)
+ * HOW TO FIND IT IN MIXPANEL:
  *
- * ═══════════════════════════════════════════════════════════════════════════════
- * ADVANCED ANALYSIS IDEAS
- * ═══════════════════════════════════════════════════════════════════════════════
+ *   Report 1: Quiz Score by Notes-Taken Bucket
+ *   - Cohort A: users with 5-8 "lecture completed" where notes_taken=true
+ *   - Cohort B: users with 0-4
+ *   - Event: "quiz completed"
+ *   - Measure: Average of "score_percent"
+ *   - Expected: A ~ 1.3x B
  *
- * CROSS-HOOK PATTERNS:
- * - The Ideal Student: notes (H3) + study groups (H4) + no hints (H5) + paid (H7) + speed (H8)
- * - Cramming Cascade: deadline crammers (H2) compounded with semester-end spike (H6)?
- * - Social Safety Net: does early study group joining (H4) prevent churn for low scorers?
- * - Hint-to-Mastery: do hint-dependent (H5) students who join groups (H4) wean off hints?
- * - Payment + Notes: are paid subscribers (H7) more likely to take notes (H3)?
+ *   Report 2: Certificates per User on Heavy Note-Takers
+ *   - Cohort C: users with >= 9 notes-taken lectures
+ *   - Cohort A: users with 5-8
+ *   - Event: "certificate earned"
+ *   - Measure: Total per user
+ *   - Expected: C ~ 35% fewer certificates per user vs A
  *
- * COHORT ANALYSIS:
- * - By education level: PhD vs self-taught hook patterns
- * - By learning style: visual vs hands-on note-taking rates
- * - By platform: mobile vs desktop playback speed preferences
- * - By course category: CS vs Arts hint usage
+ * REAL-WORLD ANALOGUE: Active note-taking lifts quiz performance, but
+ * obsessive note-taking signals "stuck in study mode" without finishing.
  *
- * FUNNEL ANALYSIS:
- * - Onboarding by account_type
- * - Course completion by subscription, notes, study groups
- * - Practice mastery by hint usage, speed, learning style
+ * ---------------------------------------------------------------
+ * 4. STUDY GROUP RETENTION (everything)
+ *
+ * PATTERN: Users who join a study group within 10 days get bonus
+ * discussion events. Non-joiners with low quiz scores (<60) churn
+ * hard at day 14 — all later events are removed.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: D14 Retention by Early Group Join
+ *   - Report type: Retention
+ *   - Event A: "account registered"
+ *   - Event B: any event
+ *   - Breakdown: "study_group_member"
+ *   - Expected: early joiners ~ 90% D14 vs ~ 30% for low-score non-joiners
+ *
+ *   Report 2: Discussion Volume by Group Membership
+ *   - Report type: Insights
+ *   - Event: "discussion posted"
+ *   - Measure: Total per user (average)
+ *   - Breakdown: "study_group_member"
+ *   - Expected: members post substantially more
+ *
+ * REAL-WORLD ANALOGUE: Social learning ties create accountability
+ * and dramatically reduce drop-off in cohort-based courses.
+ *
+ * ---------------------------------------------------------------
+ * 5. HINT DEPENDENCY (everything)
+ *
+ * PATTERN: Hint users get 60% chance of easy problems; non-hint
+ * users get 40% chance of hard problems and are flagged
+ * independent_solver=true.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Easy Problem Mix for Hint Users
+ *   - Report type: Insights
+ *   - Event: "practice problem solved"
+ *   - Measure: Total
+ *   - Filter: "hint_used" = true
+ *   - Breakdown: "difficulty"
+ *   - Expected: ~60% easy (vs ~33% baseline)
+ *
+ *   Report 2: Hard Problem Mix for Independent Solvers
+ *   - Report type: Insights
+ *   - Event: "practice problem solved"
+ *   - Measure: Total
+ *   - Filter: "hint_used" = false
+ *   - Breakdown: "difficulty"
+ *   - Expected: ~40% hard (vs ~33% baseline)
+ *
+ * REAL-WORLD ANALOGUE: Learners who lean on hints get nudged toward
+ * easier work, while those who push through unaided self-select
+ * into harder material.
+ *
+ * ---------------------------------------------------------------
+ * 6. SEMESTER-END SPIKE (everything)
+ *
+ * PATTERN: Days 75-85 simulate semester crunch. quiz_started,
+ * quiz_completed, and assignment_submitted events are duplicated at
+ * an 80% rate, flagged semester_end_rush=true.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Assessment Volume Over Time
+ *   - Report type: Insights
+ *   - Events: "quiz started" + "quiz completed" + "assignment submitted"
+ *   - Measure: Total
+ *   - Line chart by day
+ *   - Expected: ~2x volume spike on days 75-85
+ *
+ *   Report 2: Rush-Flagged Volume
+ *   - Report type: Insights
+ *   - Event: "quiz completed"
+ *   - Measure: Total
+ *   - Breakdown: "semester_end_rush"
+ *   - Expected: semester_end_rush=true clusters tightly in days 75-85
+ *
+ * REAL-WORLD ANALOGUE: Semester-end deadlines reliably produce a
+ * massive last-minute surge in student activity.
+ *
+ * ---------------------------------------------------------------
+ * 7. FREE VS PAID COURSES (funnel-pre + everything)
+ *
+ * PATTERN: Free users get 0.5x funnel conversion rate; paid
+ * subscribers get 1.5x. Free users also lose 55% of their
+ * certificates, producing a ~2.2x completion gap.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Course Completion Funnel by Subscription
+ *   - Report type: Funnels
+ *   - Steps: "course enrolled" -> "lecture completed" -> "quiz completed" -> "certificate earned"
+ *   - Breakdown: "subscription_status"
+ *   - Expected: free ~ 15% completion, paid ~ 33% (~2.2x gap)
+ *
+ *   Report 2: Certificates Earned per User
+ *   - Report type: Insights
+ *   - Event: "certificate earned"
+ *   - Measure: Total per user (average)
+ *   - Breakdown: "subscription_status"
+ *   - Expected: paid subscribers earn substantially more certificates
+ *
+ * REAL-WORLD ANALOGUE: Paid commitment correlates strongly with
+ * follow-through; free learners drop off long before completion.
+ *
+ * ---------------------------------------------------------------
+ * 8. PLAYBACK SPEED CORRELATION (everything)
+ *
+ * PATTERN: Speed learners (>=2.0x speed on 3+ lectures) get 0.6x
+ * watch_time and a paradoxical +8 quiz score boost. Thorough
+ * learners (<=1.0x) get 1.4x watch_time.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Watch Time by Speed Cohort
+ *   - Report type: Insights
+ *   - Event: "lecture completed"
+ *   - Measure: Average of "watch_time_mins"
+ *   - Breakdown: "speed_learner"
+ *   - Expected: speed_learner=true ~ 0.6x watch time
+ *
+ *   Report 2: Quiz Score for Speed Learners
+ *   - Report type: Insights
+ *   - Event: "quiz completed"
+ *   - Measure: Average of "score_percent"
+ *   - Breakdown: "speed_learner_effect"
+ *   - Expected: speed_learner_effect=true shows +8 pts vs baseline
+ *
+ * REAL-WORLD ANALOGUE: Power users who watch lectures at 2x speed
+ * tend to be domain-confident and outperform on assessments
+ * despite spending less time.
+ *
+ * ---------------------------------------------------------------
+ * 9. COURSE COMPLETION TIME-TO-CONVERT (funnel-post)
+ *
+ * PATTERN: Annual subscribers complete the course-completion funnel
+ * 1.4x faster (factor 0.71); Free users 1.4x slower (factor 1.4).
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Course Completion Median Time-to-Convert by Subscription
+ *   - Funnels > "course enrolled" -> "lecture completed" -> "quiz completed" -> "certificate earned"
+ *   - Measure: Median time to convert
+ *   - Breakdown: subscription_status
+ *   - Expected: annual ~ 0.71x baseline; free ~ 1.4x baseline
+ *
+ * REAL-WORLD ANALOGUE: Paid commitment accelerates throughput.
  *
  * ═══════════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY
  * ═══════════════════════════════════════════════════════════════════════════════
  *
  * Hook                    | Metric                | Baseline | Hook Effect  | Ratio
- * ────────────────────────|───────────────────────|──────────|──────────────|──────
- * Student vs Instructor   | Profile attributes    | generic  | role-specific| N/A
- * Deadline Cramming       | Late submission rate  | ~20%     | ~60%         | 3x
- * Deadline Cramming       | Quiz score (Sun/Mon)  | ~65      | ~40          | -25pt
- * Notes-Takers Succeed    | Quiz score            | ~65      | ~85          | +20pt
- * Notes-Takers Succeed    | Certificate rate      | baseline | +40%         | 1.4x
- * Study Group Retention   | D14 retention         | ~40%     | ~90%         | 2.3x
- * Study Group Retention   | Post-D14 events       | 100%     | 30% (churn)  | 0.3x
- * Hint Dependency         | Easy problem rate     | ~33%     | ~60%         | 1.8x
- * Hint Dependency         | Hard problem rate     | ~33%     | ~40% (no hint)| 1.2x
- * Semester-End Spike      | Assessment volume     | baseline | ~2x          | 2x
+ * ------------------------|-----------------------|----------|--------------|------
+ * Student vs Instructor   | Profile attributes    | generic  | role-specific| n/a
+ * Deadline Cramming       | Sun/Mon quiz score    | 1x       | -25 pt       | -38%
+ * Notes Magic Number      | sweet quiz score      | 1x       | 1.3x         | 1.3x
+ * Notes Magic Number      | over certificates/user| 1x       | 0.65x        | -35%
+ * Study Group Retention   | D14 retention         | ~ 40%    | ~ 90%        | 2.3x
+ * Hint Dependency         | easy problem rate (hint) | 33%   | ~ 60%        | 1.8x
+ * Semester-End Spike      | Assessment volume     | 1x       | ~ 2x         | 2x
  * Free vs Paid            | Course completion     | 15%      | 33%          | 2.2x
- * Playback Speed          | Quiz score (speed)    | ~65      | ~73          | +8pt
+ * Playback Speed          | Quiz score (speed)    | ~ 65     | ~ 73         | +8 pt
+ * Course Completion T2C   | median min by tier    | 1x       | 0.71x/1.4x   | ~ 2x range
  */
 
 // Generate consistent IDs for lookup tables and event properties
@@ -302,8 +429,6 @@ const config = {
 				"watch_time_mins": u.weighNumRange(3, 60, 0.8, 20),
 				"playback_speed": [0.75, 1.0, 1.0, 1.0, 1.25, 1.5, 2.0],
 				"notes_taken": [false, false, true],
-				"speed_learner": [false],
-				"thorough_learner": [false],
 			}
 		},
 		{
@@ -314,7 +439,6 @@ const config = {
 				"quiz_id": quizIds,
 				"quiz_type": ["practice", "graded", "final_exam"],
 				"question_count": u.weighNumRange(5, 50, 0.7, 15),
-				"semester_end_rush": [false],
 			}
 		},
 		{
@@ -326,9 +450,6 @@ const config = {
 				"score_percent": u.weighNumRange(0, 100, 1.2, 50),
 				"time_spent_mins": u.weighNumRange(3, 120, 0.6, 25),
 				"attempts": u.weighNumRange(1, 5, 0.5, 3),
-				"diligent_student": [false],
-				"speed_learner_effect": [false],
-				"semester_end_rush": [false],
 			}
 		},
 		{
@@ -340,8 +461,6 @@ const config = {
 				"submission_type": ["text", "code", "file", "project"],
 				"word_count": u.weighNumRange(100, 5000, 0.6, 500),
 				"is_late": [false, false, false, false, true],
-				"is_deadline_rush": [false],
-				"semester_end_rush": [false],
 			}
 		},
 		{
@@ -362,7 +481,6 @@ const config = {
 				"course_id": courseIds,
 				"post_type": ["question", "answer", "comment"],
 				"word_count": u.weighNumRange(10, 500, 0.6, 80),
-				"study_group_member": [false],
 			}
 		},
 		{
@@ -372,7 +490,6 @@ const config = {
 				"course_id": courseIds,
 				"completion_time_days": u.weighNumRange(7, 180, 0.5, 45),
 				"final_grade": u.weighNumRange(60, 100, 1.2, 30),
-				"diligent_student": [false],
 			}
 		},
 		{
@@ -436,7 +553,6 @@ const config = {
 				"difficulty": ["easy", "medium", "hard"],
 				"time_to_solve_sec": u.weighNumRange(10, 3600, 0.5, 300),
 				"hint_used": [false, false, true],
-				"independent_solver": [false],
 			}
 		},
 	],
@@ -514,9 +630,7 @@ const config = {
 		const NOW = dayjs.utc();
 		const DATASET_START = NOW.subtract(num_days, 'days');
 
-		// ═══════════════════════════════════════════════════════════════════
-		// Hook #1: STUDENT VS INSTRUCTOR PROFILES
-		// ═══════════════════════════════════════════════════════════════════
+		// HOOK 1: STUDENT VS INSTRUCTOR PROFILES (user) — role-based attributes.
 		if (type === "user") {
 			if (record.account_type === "instructor") {
 				record.courses_created = chance.integer({ min: 1, max: 15 });
@@ -528,216 +642,135 @@ const config = {
 			}
 		}
 
-		// ═══════════════════════════════════════════════════════════════════
-		// Hook #2: DEADLINE CRAMMING
-		// ═══════════════════════════════════════════════════════════════════
-		if (type === "event") {
-			if (record.event === "assignment submitted" && record.time) {
-				const eventDay = dayjs(record.time).day(); // 0 = Sunday, 1 = Monday
-				if (eventDay === 0 || eventDay === 1) {
-					record.is_deadline_rush = true;
-					// 60% chance of being late (only 40% on time)
-					record.is_late = !chance.bool({ likelihood: 40 });
-				} else {
-					record.is_deadline_rush = false;
-					record.is_late = !chance.bool({ likelihood: 80 });
-				}
-			}
-
-			// Quiz score penalty moved to everything hook (after churn removal)
-			// to avoid selection bias — the penalty was causing more Sun/Mon
-			// quiz-takers to trigger hasLowQuizScore churn, inflating their avg
-		}
-
-		// ═══════════════════════════════════════════════════════════════════
-		// Hook #5: HINT DEPENDENCY
-		// ═══════════════════════════════════════════════════════════════════
+		// HOOK 5 (event): HINT DEPENDENCY — hint users get 60% easy problems;
+		// non-hint users get 40% hard problems. Mutates difficulty (raw).
+		// HOOK 8 (event): PLAYBACK SPEED — speed learners (>= 2.0x) get
+		// watch_time_mins compressed 0.6x; thorough learners (<= 1.0x) get 1.4x.
 		if (type === "event") {
 			if (record.event === "practice problem solved") {
-				if (record.hint_used === true) {
-					// Hint users gravitate toward easy problems
-					if (chance.bool({ likelihood: 60 })) {
-						record.difficulty = "easy";
-					}
-					record.independent_solver = false;
-				} else if (record.hint_used === false) {
-					// Independent solvers tackle harder problems
-					if (chance.bool({ likelihood: 40 })) {
-						record.difficulty = "hard";
-						record.independent_solver = true;
-					} else {
-						record.independent_solver = false;
-					}
-				} else {
-					record.independent_solver = false;
+				if (record.hint_used === true && chance.bool({ likelihood: 60 })) {
+					record.difficulty = "easy";
+				} else if (record.hint_used === false && chance.bool({ likelihood: 40 })) {
+					record.difficulty = "hard";
 				}
 			}
-		}
-
-		// ═══════════════════════════════════════════════════════════════════
-		// Hook #6: SEMESTER-END SPIKE (tag in event hook, duplicate in everything hook)
-		// ═══════════════════════════════════════════════════════════════════
-		if (type === "event") {
-			if (record.time) {
-				const eventTime = dayjs.utc(record.time);
-				const dayInDataset = eventTime.diff(DATASET_START, 'days', true);
-
-				const spikableEvents = ["quiz started", "quiz completed", "assignment submitted"];
-				if (spikableEvents.includes(record.event)) {
-					if (dayInDataset >= 75 && dayInDataset <= 85) {
-						record.semester_end_rush = true;
-					} else {
-						record.semester_end_rush = false;
-					}
-				}
-			}
-		}
-
-		// ═══════════════════════════════════════════════════════════════════
-		// Hook #8: PLAYBACK SPEED CORRELATION
-		// ═══════════════════════════════════════════════════════════════════
-		if (type === "event") {
 			if (record.event === "lecture completed") {
 				const speed = record.playback_speed;
-
-				if (speed >= 2.0) {
-					record.speed_learner = true;
-					record.thorough_learner = false;
-					// Compress watch time for speed learners
-					if (record.watch_time_mins !== undefined) {
-						record.watch_time_mins = Math.max(3, Math.floor(record.watch_time_mins * 0.6));
-					}
-				} else if (speed !== undefined && speed <= 1.0) {
-					record.speed_learner = false;
-					record.thorough_learner = true;
-					// Extend watch time for thorough learners
-					if (record.watch_time_mins !== undefined) {
-						record.watch_time_mins = Math.min(90, Math.floor(record.watch_time_mins * 1.4));
-					}
-				} else {
-					record.speed_learner = false;
-					record.thorough_learner = false;
+				if (speed >= 2.0 && record.watch_time_mins !== undefined) {
+					record.watch_time_mins = Math.max(3, Math.floor(record.watch_time_mins * 0.6));
+				} else if (speed !== undefined && speed <= 1.0 && record.watch_time_mins !== undefined) {
+					record.watch_time_mins = Math.min(90, Math.floor(record.watch_time_mins * 1.4));
 				}
 			}
 		}
 
-		// ═══════════════════════════════════════════════════════════════════
-		// Hook #3: NOTES-TAKERS SUCCEED
-		// Hook #4: STUDY GROUP RETENTION
-		// Hook #7: FREE VS PAID (funnel-pre handled below)
-		// ═══════════════════════════════════════════════════════════════════
+		// HOOK 9 (T2C): COURSE COMPLETION TIME-TO-CONVERT (funnel-post)
+		// Annual subscribers complete the Course Completion funnel 1.4x
+		// faster (factor 0.71); Free users 1.4x slower (factor 1.4).
+		if (type === "funnel-post") {
+			const segment = meta?.profile?.subscription_status;
+			if (Array.isArray(record) && record.length > 1) {
+				const factor = (
+					segment === "annual" ? 0.71 :
+					segment === "free" ? 1.4 :
+					1.0
+				);
+				if (factor !== 1.0) {
+					for (let i = 1; i < record.length; i++) {
+						const prev = dayjs(record[i - 1].time);
+						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+						record[i].time = prev.add(newGap, "milliseconds").toISOString();
+					}
+				}
+			}
+		}
+
 		if (type === "everything") {
+			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
 			const userEvents = record;
 			const profile = meta.profile;
 			const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
 
-			// ── Stamp superProps from profile so they stay consistent per user ──
 			if (profile) {
 				userEvents.forEach((event) => {
 					if (profile.Platform !== undefined) event.Platform = profile.Platform;
 				});
 			}
 
-			// ---------------------------------------------------------------
-			// First pass: identify user patterns
-			// ---------------------------------------------------------------
 			let notesTakenCount = 0;
 			let joinedStudyGroupEarly = false;
 			let hasLowQuizScore = false;
+			let speedLectureCount = 0;
 
 			userEvents.forEach((event) => {
 				const eventTime = dayjs(event.time);
 				const daysSinceStart = firstEventTime ? eventTime.diff(firstEventTime, 'days', true) : 0;
-
-				// Hook #3: Count lecture_completed events where notes_taken === true
-				if (event.event === "lecture completed" && event.notes_taken === true) {
-					notesTakenCount++;
-				}
-
-				// Hook #4: Check if user joined a study group within the first 10 days
-				if (event.event === "study group joined" && daysSinceStart <= 10) {
-					joinedStudyGroupEarly = true;
-				}
-
-				// Hook #4: Check for any quiz_completed with score < 60
-				if (event.event === "quiz completed" && event.score_percent < 60) {
-					hasLowQuizScore = true;
-				}
+				if (event.event === "lecture completed" && event.notes_taken === true) notesTakenCount++;
+				if (event.event === "study group joined" && daysSinceStart <= 10) joinedStudyGroupEarly = true;
+				if (event.event === "quiz completed" && event.score_percent < 60) hasLowQuizScore = true;
+				if (event.event === "lecture completed" && event.playback_speed >= 2.0) speedLectureCount++;
 			});
 
-			// ---------------------------------------------------------------
-			// Second pass: modify events based on patterns
-			// ---------------------------------------------------------------
-
-			// Hook #3: NOTES-TAKERS SUCCEED
-			if (notesTakenCount >= 5) {
-				userEvents.forEach((event, idx) => {
-					// Boost quiz scores for diligent note-takers
-					if (event.event === "quiz completed") {
-							if (event.score_percent !== undefined) {
-							event.score_percent = Math.min(100, event.score_percent + 20);
-						}
-						event.diligent_student = true;
+			// HOOK 3 + HOOK 10: NOTES MAGIC NUMBER (in-funnel, no flags)
+			// Sweet 5-8 notes-taken lectures → +30% quiz score_percent (cap 100).
+			// Over 9+ → drop 35% of certificate-earned events (over-noted but
+			// can't synthesize; gets stuck in "study mode").
+			if (notesTakenCount >= 5 && notesTakenCount <= 8) {
+				userEvents.forEach((event) => {
+					if (event.event === "quiz completed" && event.score_percent !== undefined) {
+						event.score_percent = Math.min(100, Math.round(event.score_percent * 1.3));
 					}
 				});
-
-				// 40% chance to splice in an extra certificate_earned event
 				if (chance.bool({ likelihood: 40 })) {
 					const lastEvent = userEvents[userEvents.length - 1];
 					const certTemplate = userEvents.find(e => e.event === "certificate earned");
 					if (lastEvent && certTemplate) {
-						const certEvent = {
+						userEvents.push({
 							...certTemplate,
 							time: dayjs(lastEvent.time).add(chance.integer({ min: 1, max: 5 }), 'days').toISOString(),
 							user_id: lastEvent.user_id,
 							course_id: chance.pickone(courseIds),
 							completion_time_days: chance.integer({ min: 14, max: 90 }),
 							final_grade: chance.integer({ min: 80, max: 100 }),
-							diligent_student: true,
-						};
-						userEvents.push(certEvent);
+						});
+					}
+				}
+			} else if (notesTakenCount >= 9) {
+				for (let i = userEvents.length - 1; i >= 0; i--) {
+					if (userEvents[i].event === "certificate earned" && chance.bool({ likelihood: 35 })) {
+						userEvents.splice(i, 1);
 					}
 				}
 			}
 
-			// Hook #8 (everything pass): Speed learners (3+ lectures at 2.0x) get higher quiz scores
-			let speedLectureCount = 0;
-			userEvents.forEach((event) => {
-				if (event.event === "lecture completed" && event.speed_learner === true) {
-					speedLectureCount++;
-				}
-			});
-			const isSpeedLearner = speedLectureCount >= 3;
-
-			if (isSpeedLearner) {
+			// HOOK 8 (cont): Speed learners (3+ lectures at 2.0x) score +8 on quizzes.
+			if (speedLectureCount >= 3) {
 				userEvents.forEach((event) => {
-					if (event.event === "quiz completed") {
-							if (event.score_percent !== undefined) {
-							event.score_percent = Math.min(100, event.score_percent + 8);
-							event.speed_learner_effect = true;
-						}
+					if (event.event === "quiz completed" && event.score_percent !== undefined) {
+						event.score_percent = Math.min(100, event.score_percent + 8);
 					}
 				});
 			}
 
-			// Hook #6: SEMESTER-END SPIKE - duplicate assessment events in the spike window
+			// HOOK 6: SEMESTER-END SPIKE — duplicate quiz/assignment events
+			// in days 75-85 window. No flag — discover via line chart.
 			const duplicates = [];
+			const spikableEvents = ["quiz started", "quiz completed", "assignment submitted"];
 			userEvents.forEach((event) => {
-				if (event.semester_end_rush === true && chance.bool({ likelihood: 80 })) {
-					const dup = JSON.parse(JSON.stringify(event));
-					dup.time = dayjs(event.time).add(chance.integer({ min: 5, max: 120 }), 'minutes').toISOString();
-					dup.semester_end_rush = true;
-					duplicates.push(dup);
+				if (spikableEvents.includes(event.event) && event.time) {
+					const dayInDataset = dayjs.utc(event.time).diff(datasetStart, 'days', true);
+					if (dayInDataset >= 75 && dayInDataset <= 85 && chance.bool({ likelihood: 80 })) {
+						const dup = JSON.parse(JSON.stringify(event));
+						dup.time = dayjs(event.time).add(chance.integer({ min: 5, max: 120 }), 'minutes').toISOString();
+						duplicates.push(dup);
+					}
 				}
 			});
-			if (duplicates.length > 0) {
-				userEvents.push(...duplicates);
-			}
+			if (duplicates.length > 0) userEvents.push(...duplicates);
 
-			// Hook #7: FREE VS PAID - reinforce the subscription effect on certificates
+			// HOOK 7: FREE VS PAID — free users lose 55% of certificates.
 			const subStatus = profile ? profile.subscription_status : "free";
 			if (subStatus === "free") {
-				// Free users lose 55% of their certificates (simulating lower completion)
 				for (let i = userEvents.length - 1; i >= 0; i--) {
 					if (userEvents[i].event === "certificate earned" && chance.bool({ likelihood: 55 })) {
 						userEvents.splice(i, 1);
@@ -745,60 +778,49 @@ const config = {
 				}
 			}
 
-			// Hook #4: STUDY GROUP RETENTION (runs LAST to ensure churn removal isn't undone by later hooks)
+			// HOOK 4: STUDY GROUP RETENTION — non-joiners with low scores lose
+			// all post-day-14 events. Joiners get extra cloned discussion events.
 			if (!joinedStudyGroupEarly && hasLowQuizScore) {
-				// Non-joiners with low scores: remove ALL events after day 14 from their first event (hard churn)
 				const churnCutoff = firstEventTime ? firstEventTime.add(14, 'days') : null;
 				for (let i = userEvents.length - 1; i >= 0; i--) {
-					const evt = userEvents[i];
-					if (churnCutoff && dayjs(evt.time).isAfter(churnCutoff)) {
+					if (churnCutoff && dayjs(userEvents[i].time).isAfter(churnCutoff)) {
 						userEvents.splice(i, 1);
 					}
 				}
 			} else if (joinedStudyGroupEarly) {
-				// Study group joiners keep all events and get bonus discussion_posted events
 				const lastEvent = userEvents[userEvents.length - 1];
 				const discussionTemplate = userEvents.find(e => e.event === "discussion posted");
 				if (lastEvent && discussionTemplate && chance.bool({ likelihood: 60 })) {
-					const bonusDiscussion = {
+					userEvents.push({
 						...discussionTemplate,
 						time: dayjs(lastEvent.time).add(chance.integer({ min: 1, max: 3 }), 'days').toISOString(),
 						user_id: lastEvent.user_id,
 						course_id: chance.pickone(courseIds),
 						post_type: chance.pickone(["question", "answer", "comment"]),
 						word_count: chance.integer({ min: 20, max: 400 }),
-						study_group_member: true,
-					};
-					userEvents.push(bonusDiscussion);
+					});
 				}
 			}
 
-			// Hook #2b: DEADLINE CRAMMING (quiz score penalty)
-			// Applied LAST to avoid selection bias — if applied before churn,
-			// the penalty pushes Sun/Mon quiz-takers below the hasLowQuizScore
-			// threshold, selectively churning them and inflating the avg.
+			// HOOK 2: DEADLINE CRAMMING — Sun/Mon assignment_submitted events
+			// flip is_late to true 60% of the time and quiz_completed score_percent
+			// drops 25 points. Mutates raw is_late + score_percent.
+			for (const event of userEvents) {
+				if (event.event === "assignment submitted" && event.time) {
+					const dow = new Date(event.time).getUTCDay();
+					if (dow === 0 || dow === 1) {
+						event.is_late = chance.bool({ likelihood: 60 });
+					}
+				}
+			}
 			userEvents.forEach((event) => {
 				if (event.event === "quiz completed" && event.time) {
-					const eventDay = dayjs(event.time).day();
-					if (eventDay === 0 || eventDay === 1) {
-						if (event.score_percent !== undefined) {
-							event.score_percent = Math.max(0, event.score_percent - 25);
-						}
+					const dow = new Date(event.time).getUTCDay();
+					if ((dow === 0 || dow === 1) && event.score_percent !== undefined) {
+						event.score_percent = Math.max(0, event.score_percent - 25);
 					}
 				}
 			});
-		}
-
-		// ═══════════════════════════════════════════════════════════════════
-		// Hook #7: FREE VS PAID COURSES (funnel-pre)
-		// ═══════════════════════════════════════════════════════════════════
-		if (type === "funnel-pre") {
-			// Hook #7: FREE VS PAID — prop tagging only
-			// conversionRate manipulation removed; the everything hook handles
-			// the completion gap by dropping 55% of free-user certificates
-			if (meta && meta.profile && meta.funnel) {
-				// no-op: kept for future prop-setting if needed
-			}
 		}
 
 		return record;

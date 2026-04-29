@@ -50,47 +50,197 @@ const spiritAnimals = ["duck", "dog", "otter", "penguin", "cat", "elephant", "li
 
 /*
  * ============================================================================
- * ANALYTICS HOOKS
+ * ANALYTICS HOOKS (7 hooks)
+ *
+ * Adds 7. SIGNUP FLOW TIME-TO-CONVERT: gold/platinum loyalty 0.71x faster,
+ * bronze 1.3x slower (funnel-post). Discover via funnel median time-to-convert
+ * by loyalty_tier breakdown.
  * ============================================================================
  *
- * Hook 1: Signup Flow Improvement
- *   Type: event + everything (tag-and-filter)
- *   What: 7 days ago, signup flow switches from "v1" to "v2". Before that date,
- *     50% of sign ups are tagged _drop and removed in the everything hook,
- *     simulating a broken flow that got fixed.
- *   Mixpanel report:
- *     - Insights > line chart > "sign up" totaled by day, breakdown by signup_flow
- *     - Expect: ~2x volume increase in last 7 days; v1 disappears, v2 takes over
+ * ----------------------------------------------------------------------------
+ * Hook 1: Signup Flow Improvement (event + everything)
+ * ----------------------------------------------------------------------------
  *
- * Hook 2: Watch Time Inflection
- *   Type: event
- *   What: 30 days ago, watch time shifts. Before: watchTimeSec reduced by 25-79%.
- *     After: increased by 25-79%. Creates a clear before/after inflection.
- *   Mixpanel report:
- *     - Insights > line chart > "watch video" with AVG(watchTimeSec) by day
- *     - Expect: clear upward inflection ~30 days ago; watch time roughly doubles
+ * PATTERN: 7 days ago, signup_flow switches from "v1" to "v2". Before
+ * that date, 50% of sign ups are tagged _drop and removed in the
+ * everything hook, simulating a broken flow that got fixed.
  *
- * Hook 3: Toys + Shoes Cart Correlation
- *   Type: event
- *   What: Checkout carts with toys get shoes injected (and vice versa). Carts
- *     with neither toys nor shoes have all item prices discounted to 75-90%.
- *   Mixpanel report:
- *     - Insights > bar chart > "checkout" broken down by cart[].category
- *     - Expect: toys and shoes co-occur at high rate; carts without both have lower values
+ * HOW TO FIND IT IN MIXPANEL:
  *
- * Hook 4: Quality → Watch Time Correlation
- *   Type: event
- *   What: Video quality multiplies watchTimeSec: 2160p=1.5x, 1440p=1.4x,
- *     1080p=1.3x, 720p=1.15x, 480p=1.0x, 360p=0.85x, 240p=0.7x.
- *   Mixpanel report:
- *     - Insights > bar chart > "watch video" with AVG(watchTimeSec), breakdown by quality
- *     - Expect: monotonic increase from 240p to 2160p
+ *   Report 1: Sign Ups by Flow Version
+ *   - Report type: Insights
+ *   - Event: "sign up"
+ *   - Measure: Total
+ *   - Breakdown: "signup_flow"
+ *   - Line chart by day
+ *   - Expected: v1 disappears at day -7; v2 takes over and roughly 2x daily volume
  *
- * Hook 5: Item Flattening
- *   Type: event
- *   What: Events with an item array property get the first item's fields
- *     flattened onto the event record, making category/amount/slug available
- *     as top-level properties for easier breakdown in reports.
+ *   Report 2: Pre vs Post Volume
+ *   - Report type: Insights
+ *   - Event: "sign up"
+ *   - Measure: Total
+ *   - Compare date ranges (last 7 days vs prior 7 days)
+ *   - Expected: ~ 2x signups in the post-fix window
+ *
+ * REAL-WORLD ANALOGUE: A broken signup flow silently halved conversions
+ * until a release shipped a fix; daily signups roughly doubled overnight.
+ *
+ * ----------------------------------------------------------------------------
+ * Hook 2: Watch Time Inflection (event)
+ * ----------------------------------------------------------------------------
+ *
+ * PATTERN: 30 days ago, watch time shifts. Before that date, watchTimeSec
+ * is reduced by 25-79%. After, it is increased by 25-79%. Creates a
+ * clear before/after inflection.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Avg Watch Time Over Time
+ *   - Report type: Insights
+ *   - Event: "watch video"
+ *   - Measure: Average of "watchTimeSec"
+ *   - Line chart by day
+ *   - Expected: clear upward inflection ~ 30 days ago; watch time ~ doubles
+ *
+ *   Report 2: Watch Time Distribution Pre vs Post
+ *   - Report type: Insights
+ *   - Event: "watch video"
+ *   - Measure: Average of "watchTimeSec"
+ *   - Compare date ranges (last 30 days vs prior 30 days)
+ *   - Expected: post-inflection ~ 2x avg watch time
+ *
+ * REAL-WORLD ANALOGUE: An algorithm or UX change (autoplay, recs)
+ * inflects average watch duration sharply on a release date.
+ *
+ * ----------------------------------------------------------------------------
+ * Hook 3: Toys + Shoes Cart Correlation (event)
+ * ----------------------------------------------------------------------------
+ *
+ * PATTERN: Checkout carts with toys get a shoes item injected (and vice
+ * versa). Carts with neither toys nor shoes have all item prices
+ * discounted to 75-90% of normal.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Cart Category Co-occurrence
+ *   - Report type: Insights
+ *   - Event: "checkout"
+ *   - Measure: Total
+ *   - Breakdown: "category" (flattened item category)
+ *   - Expected: toys and shoes appear at high co-occurrence rate
+ *
+ *   Report 2: Cart Value by Category Mix
+ *   - Report type: Insights
+ *   - Event: "checkout"
+ *   - Measure: Average of "amount"
+ *   - Breakdown: "category"
+ *   - Expected: carts lacking both toys and shoes have lower avg amount
+ *
+ * REAL-WORLD ANALOGUE: Family shoppers buying for kids tend to bundle
+ * toys with shoes; a market-basket pattern that retailers exploit.
+ *
+ * ----------------------------------------------------------------------------
+ * Hook 4: Quality to Watch Time Correlation (event)
+ * ----------------------------------------------------------------------------
+ *
+ * PATTERN: Video quality multiplies watchTimeSec: 2160p=1.5x, 1440p=1.4x,
+ * 1080p=1.3x, 720p=1.15x, 480p=1.0x, 360p=0.85x, 240p=0.7x.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Avg Watch Time by Quality
+ *   - Report type: Insights
+ *   - Event: "watch video"
+ *   - Measure: Average of "watchTimeSec"
+ *   - Breakdown: "quality"
+ *   - Expected: monotonic increase from 240p to 2160p
+ *
+ *   Report 2: Quality Distribution
+ *   - Report type: Insights
+ *   - Event: "watch video"
+ *   - Measure: Total
+ *   - Breakdown: "quality"
+ *   - Expected: viewers split across all quality tiers; HD tiers earn more time
+ *
+ * REAL-WORLD ANALOGUE: Higher-resolution streams correlate with longer
+ * sessions because they signal a better connection and more invested viewer.
+ *
+ * ----------------------------------------------------------------------------
+ * Hook 5: Item Flattening (event)
+ * ----------------------------------------------------------------------------
+ *
+ * PATTERN: Events with an item array property get the first item's
+ * fields (category, amount, slug, etc.) flattened onto the event record
+ * as top-level properties — making them available for direct breakdown
+ * in reports.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: View Items by Category
+ *   - Report type: Insights
+ *   - Event: "view item"
+ *   - Measure: Total
+ *   - Breakdown: "category"
+ *   - Expected: clean breakdown across category values without nested-property issues
+ *
+ *   Report 2: Add to Cart Avg Amount by Category
+ *   - Report type: Insights
+ *   - Event: "add to cart"
+ *   - Measure: Average of "amount"
+ *   - Breakdown: "category"
+ *   - Expected: per-category averages render correctly off flat properties
+ *
+ * REAL-WORLD ANALOGUE: Analytics teams routinely flatten nested cart
+ * objects onto events so downstream tools can group/filter without joins.
+ *
+ * ----------------------------------------------------------------------------
+ * Hook 6: View-Item Magic Number (everything)
+ * ----------------------------------------------------------------------------
+ *
+ * PATTERN: Users who view 3-8 items in the dataset window are in the
+ * "considered buyer" sweet spot — every cart item amount and total_value
+ * gets boosted ~25%. Users who view 9 or more items are over-engaged
+ * window-shoppers; ~30% of their checkout events are dropped (decision
+ * paralysis / browse without buy). No flag is stamped — discoverable
+ * only by binning users on view-item COUNT and comparing avg cart total.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Avg Cart Total by View-Item Bucket
+ *   - Report type: Insights (with cohort)
+ *   - Cohort A: users with 3-8 "view item" events
+ *   - Cohort B: users with 0-2 "view item" events
+ *   - Event: "checkout"
+ *   - Measure: Average of "amount" (sum across cart items if exposed)
+ *   - Compare cohort A vs cohort B
+ *   - Expected: cohort A ~ 1.25x higher cart total than B
+ *
+ *   Report 2: Checkouts per User by Browse Intensity
+ *   - Report type: Insights (with cohort)
+ *   - Cohort C: users with >= 9 "view item" events
+ *   - Cohort A: users with 3-8 "view item" events
+ *   - Event: "checkout"
+ *   - Measure: Total events per user
+ *   - Compare cohort C vs cohort A
+ *   - Expected: cohort C has ~ 30% fewer checkouts per user
+ *
+ * REAL-WORLD ANALOGUE: A focused buyer who reviews a handful of items
+ * tends to convert at higher cart value; an excessive browser is a
+ * tire-kicker who abandons more often.
+ *
+ * ============================================================================
+ * EXPECTED METRICS SUMMARY
+ * ============================================================================
+ *
+ * Hook                       | Metric                  | Baseline   | Hook Effect | Ratio
+ * ---------------------------|-------------------------|------------|-------------|------
+ * Signup Flow Improvement    | Daily sign ups          | 1x         | ~ 2x        | 2x
+ * Watch Time Inflection      | Avg watchTimeSec        | 1x         | ~ 2x        | 2x
+ * Toys + Shoes Correlation   | toys/shoes co-occurrence| ~ 7%       | ~ 50%+      | ~ 7x
+ * Quality -> Watch Time      | Avg watchTimeSec (240p->2160p) | 0.7x | 1.5x       | ~ 2.1x
+ * Item Flattening            | category breakdown      | nested     | flat        | n/a
+ * View-Item Magic Number     | sweet (3-8) cart total  | 1x         | ~ 1.25x     | 1.25x
+ * View-Item Magic Number     | over (9+) checkouts/user| 1x         | ~ 0.7x      | -30%
  * ============================================================================
  */
 
@@ -166,7 +316,7 @@ const config = {
 			properties: {
 				currency: ["USD", "CAD", "EUR", "BTC", "ETH", "JPY"],
 				coupon: weighChoices(["none", "none", "none", "none", "10%OFF", "20%OFF", "10%OFF", "20%OFF", "30%OFF", "40%OFF", "50%OFF"]),
-				cart: makeProducts()
+				cart: makeProducts(),
 			}
 		},
 		{
@@ -336,6 +486,27 @@ const config = {
 	lookupTables: [],
 	hook: function (record, type, meta) {
 
+		// Hook 7 (T2C): SIGNUP FLOW TIME-TO-CONVERT (funnel-post)
+		// Gold/platinum loyalty tier users complete the Signup Flow funnel
+		// 1.4x faster (factor 0.71); bronze users 1.3x slower (factor 1.3).
+		if (type === "funnel-post") {
+			const segment = meta?.profile?.loyalty_tier;
+			if (Array.isArray(record) && record.length > 1) {
+				const factor = (
+					segment === "gold" || segment === "platinum" ? 0.71 :
+					segment === "bronze" ? 1.3 :
+					1.0
+				);
+				if (factor !== 1.0) {
+					for (let i = 1; i < record.length; i++) {
+						const prev = dayjs(record[i - 1].time);
+						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+						record[i].time = prev.add(newGap, "milliseconds").toISOString();
+					}
+				}
+			}
+		}
+
 		if (type === "event") {
 			const NOW = dayjs();
 			const DAY_SIGNUPS_IMPROVED = NOW.subtract(7, 'day');
@@ -434,53 +605,27 @@ const config = {
 				e.theme = profile.theme;
 			});
 
-			// big themes!
-
-			// users who view items in the home and garden category churn more frequently
-
-
-			// dark mode leads to faster purchase conversion
-
-
-			// people who pay in bitcoin tend to buy more electronics and gadgets
-
-
-			//custom themes purchase more:
-			// const numCustomMode = record.filter(a => a.theme === 'custom').length;
-			// const numLightMode = record.filter(a => a.theme === 'light').length;
-			// const numDarkMode = record.filter(a => a.theme === 'dark').length;
-			// if (numCustomMode > numLightMode || numCustomMode > numDarkMode) {
-			// 	//triple their checkout events
-			// 	const checkoutEvents = record.filter(a => a.event === 'checkout');
-			// 	const newCheckouts = checkoutEvents.map(a => {
-			// 		const randomInt = integer(-48, 48);
-			// 		const newCheckout = {
-			// 			...a,
-			// 			time: dayjs(a.time).add(randomInt, 'hour').toISOString(),
-			// 			event: "checkout",
-			// 			amount: a.amount * 2,
-			// 			coupon: "50%OFF"
-			// 		};
-			// 		return newCheckout;
-			// 	});
-			// 	record.push(...newCheckouts);
-			// }
-
-			// //users who watch low quality videos churn more:
-			// const loQuality = ["480p", "360p", "240p"];
-			// const lowQualityWatches = record.filter(a => a.event === 'watch video' && loQuality.includes(a.quality));
-			// const highQualityWatches = record.filter(a => a.event === 'watch video' && !loQuality.includes(a.quality));
-			// if (lowQualityWatches.length > highQualityWatches.length) {
-			// 	if (flip()) {
-			// 		// find midpoint of records
-			// 		const midpoint = Math.floor(record.length / 2);
-			// 		record = record.slice(0, midpoint);
-
-			// 	}
-			// }
-
-
-
+			// Hook 6: View-Item Magic Number (behavioral, no flags)
+			// Users in 3-8 view-item sweet spot show ~25% higher cart amounts.
+			// Users >=9 are over-engaged window-shoppers; ~30% of their checkouts drop.
+			const viewItemCount = record.filter(e => e.event === 'view item').length;
+			if (viewItemCount >= 3 && viewItemCount <= 8) {
+				record.forEach(e => {
+					if (e.event === 'checkout' && Array.isArray(e.cart)) {
+						e.cart = e.cart.map(it => ({
+							...it,
+							amount: typeof it.amount === 'number' ? Math.round(it.amount * 1.25) : it.amount,
+							total_value: typeof it.total_value === 'number' ? Math.round(it.total_value * 1.25) : it.total_value
+						}));
+					}
+				});
+			} else if (viewItemCount >= 9) {
+				for (let i = record.length - 1; i >= 0; i--) {
+					if (record[i].event === 'checkout' && chance.bool({ likelihood: 30 })) {
+						record.splice(i, 1);
+					}
+				}
+			}
 
 		}
 

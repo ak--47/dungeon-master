@@ -48,91 +48,202 @@ const chance = u.initChance(SEED);
  *   - Seller funnel: property listed → open house attended → property sold (35%)
  *
  * ===================================================================
- * ANALYTICS HOOKS (8 architected patterns)
+ * ANALYTICS HOOKS (10 hooks)
+ *
+ * Adds 10. TOUR FUNNEL TIME-TO-CONVERT: Premier agents 0.71x faster, Standard
+ * 1.3x slower (funnel-post). Discover via Tour Funnel median TTC by agent_tier.
  * ===================================================================
  *
- * 1. SPRING BUYING SEASON (event hook — TIME-BASED)
- *    Days 30-60: spring_season=true on tours/offers. Tour events get
- *    duration_mins 3x. Offer events get offer_price 2.5x.
- *    → Insights: "tour scheduled" total over time, breakdown spring_season
- *      (expect: 3x volume spike during days 30-60)
- *    → Insights: "offer submitted" avg offer_price, breakdown spring_season
- *      (expect: 2.5x average during spring)
+ * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable
+ * only via behavioral cohorts (count event per user, then measure
+ * downstream) or raw-prop breakdowns (date, agent_tier).
  *
- * 2. MORTGAGE RATE SHOCK (event + everything hook — TIME-BASED)
- *    Day 75: mortgage_rate jumps from 6.5 to 7.5. After day 75 and
- *    before day 89, mortgage_rate forced to 7.5 on pre-approval events.
- *    In everything hook, 45% of offer_submitted events after day 75
- *    are removed (buyer pullback).
- *    → Insights: "mortgage pre-approval" avg mortgage_rate over time
- *      (expect: step change from ~6.5 to 7.5 at day 75)
- *    → Insights: "offer submitted" total over time
- *      (expect: ~45% volume drop after day 75)
+ * -------------------------------------------------------------------
+ * 1. SPRING BUYING SEASON (event)
+ * -------------------------------------------------------------------
  *
- * 3. SAVED-SEARCH RETENTION (everything hook — RETENTION)
- *    Users who create a "saved search created" within first 7 days
- *    get extra property_viewed and tour_scheduled events injected.
- *    Non-savers lose 80% of events after day 30.
- *    → Retention: any → any, segment has_saved_search = true vs false
- *      (expect: dramatically higher retention for saved-search users)
- *    → Insights: "property viewed" total, breakdown has_saved_search
+ * PATTERN: Days 30-60, tour-scheduled duration_mins boosted 3x and
+ * offer-submitted offer_price boosted 2.5x. Mutates raw props. No flag.
  *
- * 4. PRE-APPROVED BUYER CONVERSION (everything hook — CONVERSION)
- *    Users with a "mortgage pre-approval" event complete offer_submitted
- *    5x more often. Extra offer events injected, pre_approved=true.
- *    → Insights: "offer submitted" total, breakdown pre_approved
- *      (expect: 5x volume for pre_approved=true)
- *    → Funnels: property viewed → tour scheduled → offer submitted,
- *      segment pre_approved = true vs false
+ * HOW TO FIND IT IN MIXPANEL:
  *
- * 5. TOP-TIER AGENT ADVANTAGE (everything hook — SUBSCRIPTION TIER)
- *    Users with agent_tier="Premier" from profile get 3x property_listed
- *    events and 2x property_sold events. premier_agent=true.
- *    → Insights: "property listed" total, breakdown premier_agent
- *      (expect: Premier agents ~3x listings)
- *    → Insights: "property sold" total, breakdown premier_agent
- *      (expect: Premier agents ~2x sales)
+ *   Report 1: Avg Offer Price by Day
+ *   - Report type: Insights
+ *   - Event: "offer submitted"
+ *   - Measure: Average of "offer_price"
+ *   - Line chart by day
+ *   - Expected: visible bulge days 30-60 (~ 2.5x baseline)
  *
- * 6. TOUR-TO-OFFER POWER USERS (everything hook — BEHAVIORS TOGETHER)
- *    Users who did BOTH "virtual tour" AND "in-person tour" get 6x
- *    offer_submitted events injected. dual_tour=true on offers.
- *    → Insights: "offer submitted" total, breakdown dual_tour
- *      (expect: dual_tour=true ~6x volume)
- *    → Funnels: virtual tour → in-person tour → offer submitted,
- *      filter dual_tour = true
+ * REAL-WORLD ANALOGUE: Spring buying season elevates prices and tour intent.
  *
- * 7. LUXURY LISTING RELEASE (event + everything hook — TIMED RELEASE)
- *    Day 50: luxury listings appear. After day 50, 3% of property_listed
- *    events get listing_price set to $5M+ and luxury=true. ~3% of users
- *    (by hash) get extra luxury property_viewed events.
- *    → Insights: "property listed" avg listing_price, filter luxury=true
- *      (expect: $5M+ only after day 50)
- *    → Insights: "property viewed" total, breakdown luxury
- *      (expect: luxury=true cluster starting day 50)
+ * -------------------------------------------------------------------
+ * 2. MORTGAGE RATE SHOCK (event + everything)
+ * -------------------------------------------------------------------
  *
- * 8. COLD-LEAD CHURN (everything hook — CHURN)
- *    Users who browse (property viewed) but never save (property saved)
- *    in the first 14 days lose 90% of events after day 14.
- *    → Retention: any → any, segment cold_lead = true vs false
- *      (expect: cold_lead=true drops to near zero after day 14)
- *    → Insights: any event total, filter cold_lead = true
+ * PATTERN: Days 75-89, mortgage_rate forced to 7.5 on pre-approval
+ * events. In everything hook, 45% of post-day-75 offer-submitted events
+ * dropped. No flag.
  *
- * ===================================================================
- * ADVANCED ANALYSIS IDEAS
- * ===================================================================
+ * HOW TO FIND IT IN MIXPANEL:
  *
- * Cross-hook patterns:
- *   - Spring + Rate Shock: Does the spring surge survive the rate hike?
- *   - Saved Search + Cold Lead: Are saved-search users immune to churn?
- *   - Pre-Approved + Dual Tour: Do pre-approved dual-tourers dominate offers?
- *   - Premier Agent + Luxury: Do Premier agents list more luxury properties?
- *   - Rate Shock + Pre-Approved: Do pre-approved buyers still submit after rate jump?
+ *   Report 1: Mortgage Rate Step Change
+ *   - Report type: Insights
+ *   - Event: "mortgage pre-approval"
+ *   - Measure: Average of "mortgage_rate"
+ *   - Line chart by day
+ *   - Expected: clear step change from ~ 6.5 to 7.5 at day 75
  *
- * Cohort analysis:
- *   - By user_type: Buyer vs Agent vs Both engagement
- *   - By agent_tier: Standard vs Premier listing volume and close rate
- *   - By property_preference: Which housing type converts best?
- *   - By preferred_location: Urban vs Suburban vs Rural tour rates
+ *   Report 2: Offer Volume Drop After Rate Hike
+ *   - Report type: Insights
+ *   - Event: "offer submitted"
+ *   - Measure: Total
+ *   - Line chart by day
+ *   - Expected: ~ 45% volume drop after day 75
+ *
+ * REAL-WORLD ANALOGUE: Buyer demand is sensitive to mortgage rates.
+ *
+ * -------------------------------------------------------------------
+ * 3. SAVED-SEARCH RETENTION (everything)
+ * -------------------------------------------------------------------
+ *
+ * PATTERN: Users who create saved-search-created in first 7 days get
+ * extra cloned property-viewed + tour-scheduled events. Non-savers lose
+ * 80% of post-day-30 events. No flag — discover via cohort builder.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Retention by Saved-Search Cohort
+ *   - Report type: Retention
+ *   - Cohort A: users with >= 1 "saved search created" in first 7 days
+ *   - Cohort B: rest
+ *   - Expected: A sustains higher retention through dataset
+ *
+ * REAL-WORLD ANALOGUE: Saved searches indicate buyer intent.
+ *
+ * -------------------------------------------------------------------
+ * 4. PRE-APPROVED BUYER CONVERSION (everything)
+ * -------------------------------------------------------------------
+ *
+ * PATTERN: Users with a mortgage-pre-approval event get 4-6 extra
+ * cloned offer-submitted events. No flag — discover via cohort.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Offers per User by Pre-Approval
+ *   - Report type: Insights (with cohort)
+ *   - Cohort A: users with >= 1 "mortgage pre-approval"
+ *   - Cohort B: rest
+ *   - Event: "offer submitted"
+ *   - Measure: Total per user
+ *   - Expected: A ~ 5x B
+ *
+ * REAL-WORLD ANALOGUE: Pre-approval is the strongest buyer indicator.
+ *
+ * -------------------------------------------------------------------
+ * 5. TOP-TIER AGENT ADVANTAGE (everything)
+ * -------------------------------------------------------------------
+ *
+ * PATTERN: Premier-tier agents get 2 extra cloned listings per existing
+ * (3x rate) and 1 extra cloned sale per existing (2x rate). Mutates
+ * cloned events with raw values; reads agent_tier from profile (existing
+ * SCD prop). Discover via agent_tier breakdown.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Listings per Agent by Tier
+ *   - Report type: Insights
+ *   - Event: "property listed"
+ *   - Measure: Total per user
+ *   - Breakdown: user "agent_tier"
+ *   - Expected: Premier ~ 3x Standard
+ *
+ * REAL-WORLD ANALOGUE: Top producers list and close more.
+ *
+ * -------------------------------------------------------------------
+ * 6. TOUR-TO-OFFER POWER USERS (everything)
+ * -------------------------------------------------------------------
+ *
+ * PATTERN: Users with both virtual-tour AND in-person-tour events get
+ * 5-7 extra cloned offer-submitted events. No flag — discover via
+ * compound cohort builder.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Offers per User by Dual-Tour Cohort
+ *   - Report type: Insights (with cohort)
+ *   - Cohort A: users with both >= 1 "virtual tour" AND >= 1 "in-person tour"
+ *   - Cohort B: rest
+ *   - Event: "offer submitted"
+ *   - Measure: Total per user
+ *   - Expected: A ~ 6x B
+ *
+ * REAL-WORLD ANALOGUE: Dual-tour buyers self-qualify into serious bidders.
+ *
+ * -------------------------------------------------------------------
+ * 7. LUXURY LISTING RELEASE (event + everything)
+ * -------------------------------------------------------------------
+ *
+ * PATTERN: After day 50, 3% of property-listed events get listing_price
+ * set to $5M-$15M (raw mutation). ~3% of users (by id hash) get extra
+ * luxury cloned property-viewed events. No flag — discover via line
+ * chart by day on listing_price.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Listing Price Distribution Over Time
+ *   - Report type: Insights
+ *   - Event: "property listed"
+ *   - Measure: Distribution of "listing_price"
+ *   - Line chart by week
+ *   - Expected: $5M+ outliers appear only after day 50
+ *
+ * REAL-WORLD ANALOGUE: Luxury inventory drop attracts HNW shoppers.
+ *
+ * -------------------------------------------------------------------
+ * 8. COLD-LEAD CHURN (everything)
+ * -------------------------------------------------------------------
+ *
+ * PATTERN: Users who view (property viewed) but never save (property
+ * saved) in the first 14 days lose 90% of events after day 14. No flag.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Cold-Lead Retention
+ *   - Report type: Retention
+ *   - Cohort A: users with >= 1 "property viewed" but 0 "property saved" in first 14 days
+ *   - Cohort B: rest
+ *   - Expected: A retention drops to near-zero after day 14
+ *
+ * REAL-WORLD ANALOGUE: Browsers who never save are window-shoppers.
+ *
+ * -------------------------------------------------------------------
+ * 9. PROPERTY-VIEWED MAGIC NUMBER (everything)
+ * -------------------------------------------------------------------
+ *
+ * PATTERN: Users in the 6-12 property-viewed sweet spot get +30% on
+ * offer_price for offer-submitted events. Users with 13+ views are
+ * tire-kickers; 35% of their offer-submitted events drop. No flag.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Avg Offer Price by View Bucket
+ *   - Report type: Insights (with cohort)
+ *   - Cohort A: users with 6-12 "property viewed"
+ *   - Cohort B: users with 0-5
+ *   - Event: "offer submitted"
+ *   - Measure: Average of "offer_price"
+ *   - Expected: A ~ 1.3x B
+ *
+ *   Report 2: Offers per User on Heavy Viewers
+ *   - Report type: Insights (with cohort)
+ *   - Cohort C: users with >= 13 "property viewed"
+ *   - Cohort A: users with 6-12
+ *   - Event: "offer submitted"
+ *   - Measure: Total per user
+ *   - Expected: C ~ 35% fewer offers per user vs A
+ *
+ * REAL-WORLD ANALOGUE: Focused buyers commit; obsessive browsers
+ * tire-kick and never make the leap.
  *
  * ===================================================================
  * EXPECTED METRICS SUMMARY
@@ -140,14 +251,16 @@ const chance = u.initChance(SEED);
  *
  * Hook                     | Metric                 | Baseline | Effect  | Ratio
  * -------------------------|------------------------|----------|---------|------
- * Spring Buying Season     | Tour volume            | 1x       | 3x      | 3x
- * Mortgage Rate Shock      | Offer volume post D75  | 100%     | 55%     | 0.55x
- * Saved-Search Retention   | D30+ events (non-saver)| 100%     | 20%     | 0.2x
- * Pre-Approved Conversion  | Offer count            | 1x       | 5x      | 5x
- * Premier Agent Advantage  | Listings               | 1x       | 3x      | 3x
- * Dual Tour Power Users    | Offer count            | 1x       | 6x      | 6x
- * Luxury Listing Release   | Luxury listings        | 0%       | 3%      | D50+
- * Cold-Lead Churn          | D14+ events (cold lead)| 100%     | 10%     | 0.1x
+ * Spring Buying Season     | Avg offer_price d30-60 | 1x       | 2.5x    | 2.5x
+ * Mortgage Rate Shock      | Offer vol post-day-75  | 1x       | 0.55x   | -45%
+ * Saved-Search Retention   | non-saver post-day-30  | 1x       | 0.2x    | -80%
+ * Pre-Approved Conversion  | offers/user            | 1x       | ~ 5x    | 5x
+ * Premier Agent Advantage  | listings/user          | 1x       | ~ 3x    | 3x
+ * Dual-Tour Power Users    | offers/user            | 1x       | ~ 6x    | 6x
+ * Luxury Listing Release   | $5M+ listings          | 0%       | ~ 3%    | d50+
+ * Cold-Lead Churn          | non-save post-day-14   | 1x       | 0.1x    | -90%
+ * View-Count Magic Number  | sweet offer_price      | 1x       | 1.3x    | 1.3x
+ * View-Count Magic Number  | over offers/user       | 1x       | 0.65x   | -35%
  */
 
 /** @type {Config} */
@@ -240,8 +353,6 @@ const config = {
 				property_type: ["Single Family", "Condo", "Townhouse", "Multi-Family"],
 				bedrooms: [1, 2, 2, 3, 3, 3, 4, 4, 5],
 				square_feet: u.weighNumRange(600, 5000, 0.5, 50),
-				spring_season: [false],
-				luxury: [false],
 			}
 		},
 		{
@@ -282,7 +393,7 @@ const config = {
 			properties: {
 				listing_id: () => `LST-${chance.integer({ min: 10000, max: 99999 })}`,
 				agent_id: () => `AGT-${chance.integer({ min: 1000, max: 9999 })}`,
-				spring_season: [false],
+				duration_mins: u.weighNumRange(5, 90, 0.5, 30),
 			}
 		},
 		{
@@ -301,9 +412,6 @@ const config = {
 				listing_id: () => `LST-${chance.integer({ min: 10000, max: 99999 })}`,
 				offer_price: u.weighNumRange(200000, 1500000, 0.4, 40),
 				listing_price: u.weighNumRange(200000, 1500000, 0.4, 40),
-				pre_approved: [false],
-				spring_season: [false],
-				dual_tour: [false],
 			}
 		},
 		{
@@ -330,8 +438,6 @@ const config = {
 				property_type: ["Single Family", "Condo", "Townhouse", "Multi-Family"],
 				bedrooms: [1, 2, 2, 3, 3, 3, 4, 4, 5],
 				listing_status: ["active", "pending", "coming soon"],
-				luxury: [false],
-				premier_agent: [false],
 			}
 		},
 		{
@@ -340,7 +446,6 @@ const config = {
 			properties: {
 				sale_price: u.weighNumRange(200000, 1500000, 0.4, 40),
 				days_on_market: u.weighNumRange(5, 180, 0.4, 30),
-				premier_agent: [false],
 			}
 		},
 		{
@@ -372,8 +477,6 @@ const config = {
 		user_type: ["Buyer", "Buyer", "Buyer", "Agent", "Both"],
 		preferred_location: ["Urban", "Suburban", "Rural"],
 		property_preference: ["Single Family", "Condo", "Townhouse", "Multi-Family"],
-		has_saved_search: [false],
-		cold_lead: [false],
 	},
 
 	userProps: {
@@ -384,8 +487,6 @@ const config = {
 		agent_tier: ["Standard", "Standard", "Standard", "Premier"],
 		total_properties_viewed: u.weighNumRange(0, 100, 0.5, 30),
 		pre_approval_status: ["none"],
-		has_saved_search: [false],
-		cold_lead: [false],
 	},
 
 	groupKeys: [
@@ -403,88 +504,65 @@ const config = {
 
 	lookupTables: [],
 
-	/**
-	 * ARCHITECTED ANALYTICS HOOKS
-	 *
-	 * This hook function creates 8 deliberate patterns in the data:
-	 *
-	 * 1. SPRING BUYING SEASON: Days 30-60, tours get 3x duration_mins, offers get 2.5x offer_price, spring_season=true
-	 * 2. MORTGAGE RATE SHOCK: Day 75, rate jumps to 7.5; 45% of post-day-75 offers removed
-	 * 3. SAVED-SEARCH RETENTION: First-7-day savers get extra engagement; non-savers lose 80% after day 30
-	 * 4. PRE-APPROVED BUYER CONVERSION: Users with pre-approval get 5x offer events, pre_approved=true
-	 * 5. TOP-TIER AGENT ADVANTAGE: Premier agents get 3x listings, 2x sales, premier_agent=true
-	 * 6. TOUR-TO-OFFER POWER USERS: Users with both virtual + in-person tours get 6x offers, dual_tour=true
-	 * 7. LUXURY LISTING RELEASE: Day 50+, 3% of listings become $5M+ luxury; ~3% of users browse luxury
-	 * 8. COLD-LEAD CHURN: Browsers who never save in first 14 days lose 90% of events after day 14
-	 */
 	hook: function (record, type, meta) {
+		// HOOK 10 (T2C): TOUR FUNNEL TIME-TO-CONVERT (funnel-post)
+		// Premier agents move users through Tour funnel 1.4x faster
+		// (factor 0.71); Standard agents 1.3x slower (factor 1.3).
+		if (type === "funnel-post") {
+			const segment = meta?.profile?.agent_tier;
+			if (Array.isArray(record) && record.length > 1) {
+				const factor = (
+					segment === "Premier" ? 0.71 :
+					segment === "Standard" ? 1.3 :
+					1.0
+				);
+				if (factor !== 1.0) {
+					for (let i = 1; i < record.length; i++) {
+						const prev = dayjs(record[i - 1].time);
+						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+						record[i].time = prev.add(newGap, "milliseconds").toISOString();
+					}
+				}
+			}
+		}
+
 		const NOW = dayjs.utc();
 		const DATASET_START = NOW.subtract(num_days, "days");
 
-		// ===============================================================
-		// Hook #1: SPRING BUYING SEASON (event)
-		// Days 30-60: spring market heats up. Scheduled tours get
-		// duration_mins 3x (more serious buyers). Offers get offer_price
-		// 2.5x (bidding wars). spring_season=true flag set on both.
-		// ===============================================================
+		// HOOK 1: SPRING BUYING SEASON (event) — days 30-60, tour
+		// duration_mins boosted 3x, offer_price 2.5x. Mutates raw props.
+		// HOOK 2 (event): MORTGAGE RATE SHOCK — days 75-89, mortgage_rate
+		// pinned to 7.5. Raw mutation.
+		// HOOK 7 (event): LUXURY LISTING RELEASE — after day 50, 3% of
+		// property_listed events get listing_price set to $5M-$15M.
 		if (type === "event") {
+			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
 			const EVENT_TIME = dayjs.utc(record.time);
-			const dayInDataset = EVENT_TIME.diff(DATASET_START, "day");
-
+			const dayInDataset = EVENT_TIME.diff(datasetStart, "day");
 			const isSpring = dayInDataset >= 30 && dayInDataset <= 60;
 
-			if (record.event === "tour scheduled") {
-				if (isSpring) {
-					record.spring_season = true;
-				} else {
-					record.spring_season = false;
-				}
+			if (isSpring && record.event === "tour scheduled" && typeof record.duration_mins === "number") {
+				record.duration_mins = Math.round(record.duration_mins * 3);
+			}
+			if (isSpring && record.event === "offer submitted") {
+				record.offer_price = Math.floor((record.offer_price || 400000) * 2.5);
 			}
 
-			if (record.event === "offer submitted") {
-				if (isSpring) {
-					record.offer_price = Math.floor((record.offer_price || 400000) * 2.5);
-					record.spring_season = true;
-				} else {
-					record.spring_season = false;
-				}
-			}
-
-			if (record.event === "property viewed" && isSpring) {
-				record.spring_season = true;
-			}
-
-			// ===============================================================
-			// Hook #2 (event part): MORTGAGE RATE SHOCK
-			// Day 75-89: mortgage rates forced to 7.5 on pre-approval events
-			// (up from baseline ~6.5).
-			// ===============================================================
 			if (record.event === "mortgage pre-approval") {
 				if (dayInDataset >= 75 && dayInDataset < 89) {
 					record.mortgage_rate = 7.5;
 				}
 			}
 
-			// ===============================================================
-			// Hook #7 (event part): LUXURY LISTING RELEASE
-			// After day 50, 3% of property_listed events become luxury
-			// ($5M-$15M) with luxury=true. Before day 50, no luxury.
-			// ===============================================================
 			if (record.event === "property listed") {
 				if (dayInDataset >= 50 && chance.bool({ likelihood: 3 })) {
 					record.listing_price = chance.integer({ min: 5000000, max: 15000000 });
-					record.luxury = true;
-					record.premier_agent = false;
-				} else {
-					record.luxury = false;
 				}
 			}
 		}
 
-		// ===============================================================
-		// EVERYTHING HOOK — Complex behavioral patterns
-		// ===============================================================
 		if (type === "everything") {
+			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
 			const userEvents = record;
 			const profile = meta.profile;
 
@@ -493,276 +571,205 @@ const config = {
 				e.user_type = profile.user_type;
 				e.preferred_location = profile.preferred_location;
 				e.property_preference = profile.property_preference;
-				e.has_saved_search = profile.has_saved_search;
-				e.cold_lead = profile.cold_lead;
 			});
 
 			const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
 
-			// -----------------------------------------------------------
-			// Hook #2 (everything part): MORTGAGE RATE SHOCK
-			// After day 75, 45% of offer_submitted events are removed
-			// (buyer pullback due to higher rates).
-			// -----------------------------------------------------------
-			const day75 = DATASET_START.add(75, "days");
+			// HOOK 2 (cont): MORTGAGE RATE SHOCK — drop 45% of post-day-75
+			// offer-submitted events. No flag.
+			const day75 = datasetStart.add(75, "days");
 			for (let i = userEvents.length - 1; i >= 0; i--) {
 				const evt = userEvents[i];
-				if (evt.event === "offer submitted" && dayjs(evt.time).isAfter(day75)) {
-					if (chance.bool({ likelihood: 45 })) {
+				if (evt.event === "offer submitted" && dayjs(evt.time).isAfter(day75) && chance.bool({ likelihood: 45 })) {
+					userEvents.splice(i, 1);
+				}
+			}
+
+			// HOOK 3: SAVED-SEARCH RETENTION — early savers (saved-search-created
+			// in first 7 days) get extra cloned view + tour events. Non-savers
+			// lose 80% of events after day 30. No flag.
+			const day7 = firstEventTime ? firstEventTime.add(7, "days") : null;
+			const day30 = datasetStart.add(30, "days");
+			const hasSavedSearch = day7 ? userEvents.some(e =>
+				e.event === "saved search created" && dayjs(e.time).isBefore(day7)
+			) : false;
+
+			if (hasSavedSearch) {
+				const viewTemplate = userEvents.find(e => e.event === "property viewed");
+				const tourTemplate = userEvents.find(e => e.event === "tour scheduled");
+				if (viewTemplate) {
+					const extras = chance.integer({ min: 3, max: 8 });
+					for (let i = 0; i < extras; i++) {
+						const offset = chance.integer({ min: 10, max: num_days - 10 });
+						userEvents.push({
+							...viewTemplate,
+							time: datasetStart.add(offset, "days").add(chance.integer({ min: 0, max: 23 }), "hours").toISOString(),
+							user_id: viewTemplate.user_id,
+							listing_id: `LST-${chance.integer({ min: 10000, max: 99999 })}`,
+							listing_price: chance.integer({ min: 200000, max: 1200000 }),
+						});
+					}
+				}
+				if (tourTemplate) {
+					const extras = chance.integer({ min: 1, max: 3 });
+					for (let i = 0; i < extras; i++) {
+						const offset = chance.integer({ min: 15, max: num_days - 10 });
+						userEvents.push({
+							...tourTemplate,
+							time: datasetStart.add(offset, "days").add(chance.integer({ min: 8, max: 18 }), "hours").toISOString(),
+							user_id: tourTemplate.user_id,
+							listing_id: `LST-${chance.integer({ min: 10000, max: 99999 })}`,
+						});
+					}
+				}
+			} else {
+				for (let i = userEvents.length - 1; i >= 0; i--) {
+					const evt = userEvents[i];
+					if (dayjs(evt.time).isAfter(day30) && chance.bool({ likelihood: 80 })) {
 						userEvents.splice(i, 1);
 					}
 				}
 			}
 
-			// -----------------------------------------------------------
-			// Hook #3: SAVED-SEARCH RETENTION
-			// Users who create a "saved search created" within first 7
-			// days get extra property_viewed and tour_scheduled events.
-			// Non-savers lose 80% of events after day 30.
-			// -----------------------------------------------------------
-			const day7 = firstEventTime ? firstEventTime.add(7, "days") : null;
-			const day30 = DATASET_START.add(30, "days");
-
-			let hasSavedSearch = false;
-			if (day7) {
-				hasSavedSearch = userEvents.some(e =>
-					e.event === "saved search created" &&
-					dayjs(e.time).isBefore(day7)
-				);
-			}
-
-			if (hasSavedSearch) {
-				// Mark the user and inject extra engagement events
-				profile.has_saved_search = true;
-				userEvents.forEach(e => { e.has_saved_search = true; });
-
-				// Inject extra property_viewed and tour_scheduled events
-				const viewTemplate = userEvents.find(e => e.event === "property viewed");
-				const tourTemplate = userEvents.find(e => e.event === "tour scheduled");
-
-				if (viewTemplate) {
-					const extraCount = chance.integer({ min: 3, max: 8 });
-					for (let i = 0; i < extraCount; i++) {
-						const offset = chance.integer({ min: 10, max: num_days - 10 });
-						userEvents.push({
-							...viewTemplate,
-							time: DATASET_START.add(offset, "days").add(chance.integer({ min: 0, max: 23 }), "hours").toISOString(),
-							user_id: viewTemplate.user_id,
-							listing_id: `LST-${chance.integer({ min: 10000, max: 99999 })}`,
-							listing_price: chance.integer({ min: 200000, max: 1200000 }),
-							has_saved_search: true,
-						});
-					}
-				}
-				if (tourTemplate) {
-					const extraTours = chance.integer({ min: 1, max: 3 });
-					for (let i = 0; i < extraTours; i++) {
-						const offset = chance.integer({ min: 15, max: num_days - 10 });
-						userEvents.push({
-							...tourTemplate,
-							time: DATASET_START.add(offset, "days").add(chance.integer({ min: 8, max: 18 }), "hours").toISOString(),
-							user_id: tourTemplate.user_id,
-							listing_id: `LST-${chance.integer({ min: 10000, max: 99999 })}`,
-							has_saved_search: true,
-						});
-					}
-				}
-			} else {
-				// Non-savers: remove 80% of events after day 30
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					const evt = userEvents[i];
-					if (dayjs(evt.time).isAfter(day30)) {
-						if (chance.bool({ likelihood: 80 })) {
-							userEvents.splice(i, 1);
-						}
-					}
-				}
-			}
-
-			// -----------------------------------------------------------
-			// Hook #4: PRE-APPROVED BUYER CONVERSION
-			// Users with a "mortgage pre-approval" event get 5x more
-			// offer_submitted events injected. pre_approved=true.
-			// -----------------------------------------------------------
+			// HOOK 4: PRE-APPROVED BUYER CONVERSION — clone 4-6 extra
+			// offer-submitted events for users with a mortgage pre-approval
+			// event. No flag.
 			const hasPreApproval = userEvents.some(e => e.event === "mortgage pre-approval");
-
 			if (hasPreApproval) {
 				profile.pre_approval_status = "approved";
 				const offerTemplate = userEvents.find(e => e.event === "offer submitted");
 				if (offerTemplate) {
-					const extraOffers = chance.integer({ min: 4, max: 6 });
-					for (let i = 0; i < extraOffers; i++) {
+					const extras = chance.integer({ min: 4, max: 6 });
+					for (let i = 0; i < extras; i++) {
 						const offset = chance.integer({ min: 20, max: num_days - 5 });
 						userEvents.push({
 							...offerTemplate,
-							time: DATASET_START.add(offset, "days").add(chance.integer({ min: 8, max: 20 }), "hours").toISOString(),
+							time: datasetStart.add(offset, "days").add(chance.integer({ min: 8, max: 20 }), "hours").toISOString(),
 							user_id: offerTemplate.user_id,
 							listing_id: `LST-${chance.integer({ min: 10000, max: 99999 })}`,
 							offer_price: chance.integer({ min: 250000, max: 1200000 }),
 							listing_price: chance.integer({ min: 250000, max: 1200000 }),
-							pre_approved: true,
-							spring_season: false,
-							dual_tour: false,
 						});
 					}
 				}
-
-				// Also tag existing offers
-				userEvents.forEach(e => {
-					if (e.event === "offer submitted") {
-						e.pre_approved = true;
-					}
-				});
 			}
 
-			// -----------------------------------------------------------
-			// Hook #5: TOP-TIER AGENT ADVANTAGE
-			// Premier agents get 3x property_listed and 2x property_sold
-			// events. premier_agent=true on all their listing/sale events.
-			// -----------------------------------------------------------
+			// HOOK 5: TOP-TIER AGENT ADVANTAGE — Premier agents get 2 extra
+			// cloned listings per existing (3x rate) and 1 extra clone per
+			// sale (2x rate). Reads agent_tier from profile. No flag.
 			if (profile.agent_tier === "Premier") {
 				const listTemplate = userEvents.find(e => e.event === "property listed");
 				const soldTemplate = userEvents.find(e => e.event === "property sold");
 
-				// Tag existing events
-				userEvents.forEach(e => {
-					if (e.event === "property listed" || e.event === "property sold") {
-						e.premier_agent = true;
-					}
-				});
-
-				// Inject extra listings (3x = 2 more copies per existing)
 				if (listTemplate) {
 					const existingListings = userEvents.filter(e => e.event === "property listed").length;
-					const extraListings = existingListings * 2;
-					for (let i = 0; i < extraListings; i++) {
+					const extras = existingListings * 2;
+					for (let i = 0; i < extras; i++) {
 						const offset = chance.integer({ min: 5, max: num_days - 5 });
 						userEvents.push({
 							...listTemplate,
-							time: DATASET_START.add(offset, "days").add(chance.integer({ min: 8, max: 18 }), "hours").toISOString(),
+							time: datasetStart.add(offset, "days").add(chance.integer({ min: 8, max: 18 }), "hours").toISOString(),
 							user_id: listTemplate.user_id,
 							listing_price: chance.integer({ min: 300000, max: 1500000 }),
 							listing_status: chance.pickone(["active", "pending", "coming soon"]),
-							luxury: false,
-							premier_agent: true,
 						});
 					}
 				}
-
-				// Inject extra sales (2x = 1 more copy per existing)
 				if (soldTemplate) {
 					const existingSales = userEvents.filter(e => e.event === "property sold").length;
 					for (let i = 0; i < existingSales; i++) {
 						const offset = chance.integer({ min: 10, max: num_days - 5 });
 						userEvents.push({
 							...soldTemplate,
-							time: DATASET_START.add(offset, "days").add(chance.integer({ min: 9, max: 17 }), "hours").toISOString(),
+							time: datasetStart.add(offset, "days").add(chance.integer({ min: 9, max: 17 }), "hours").toISOString(),
 							user_id: soldTemplate.user_id,
 							sale_price: chance.integer({ min: 300000, max: 1500000 }),
 							days_on_market: chance.integer({ min: 5, max: 90 }),
-							premier_agent: true,
 						});
 					}
 				}
 			}
 
-			// -----------------------------------------------------------
-			// Hook #6: TOUR-TO-OFFER POWER USERS
-			// Users who did BOTH "virtual tour" AND "in-person tour"
-			// get 6x offer_submitted events. dual_tour=true on offers.
-			// -----------------------------------------------------------
+			// HOOK 6: TOUR-TO-OFFER POWER USERS — users with both virtual
+			// tour AND in-person tour get 5-7 extra cloned offers. No flag.
 			const hasVirtualTour = userEvents.some(e => e.event === "virtual tour");
 			const hasInPersonTour = userEvents.some(e => e.event === "in-person tour");
-			const isDualTourer = hasVirtualTour && hasInPersonTour;
-
-			if (isDualTourer) {
+			if (hasVirtualTour && hasInPersonTour) {
 				const offerTemplate = userEvents.find(e => e.event === "offer submitted");
 				if (offerTemplate) {
-					const extraOffers = chance.integer({ min: 5, max: 7 });
-					for (let i = 0; i < extraOffers; i++) {
+					const extras = chance.integer({ min: 5, max: 7 });
+					for (let i = 0; i < extras; i++) {
 						const offset = chance.integer({ min: 15, max: num_days - 5 });
 						userEvents.push({
 							...offerTemplate,
-							time: DATASET_START.add(offset, "days").add(chance.integer({ min: 8, max: 20 }), "hours").toISOString(),
+							time: datasetStart.add(offset, "days").add(chance.integer({ min: 8, max: 20 }), "hours").toISOString(),
 							user_id: offerTemplate.user_id,
 							listing_id: `LST-${chance.integer({ min: 10000, max: 99999 })}`,
 							offer_price: chance.integer({ min: 300000, max: 1500000 }),
 							listing_price: chance.integer({ min: 300000, max: 1500000 }),
-							dual_tour: true,
-							pre_approved: false,
-							spring_season: false,
 						});
 					}
 				}
-
-				// Tag existing offers
-				userEvents.forEach(e => {
-					if (e.event === "offer submitted") {
-						e.dual_tour = true;
-					}
-				});
 			}
 
-			// -----------------------------------------------------------
-			// Hook #7 (everything part): LUXURY LISTING RELEASE
-			// ~3% of users (by hash) get extra luxury property_viewed
-			// events after day 50. Deterministic via character code.
-			// -----------------------------------------------------------
-			const day50 = DATASET_START.add(50, "days");
+			// HOOK 7 (cont): LUXURY LISTING RELEASE — ~3% of users (by hash)
+			// get 3-6 extra luxury property-viewed events after day 50. No flag.
 			if (userEvents.length > 0) {
 				const userId = userEvents[0].user_id || "";
 				const isLuxuryBrowser = typeof userId === "string" && userId.length > 0 && userId.charCodeAt(0) % 33 === 0;
-
 				if (isLuxuryBrowser) {
 					const viewTemplate = userEvents.find(e => e.event === "property viewed");
 					if (viewTemplate) {
-						const extraViews = chance.integer({ min: 3, max: 6 });
-						for (let i = 0; i < extraViews; i++) {
+						const extras = chance.integer({ min: 3, max: 6 });
+						for (let i = 0; i < extras; i++) {
 							const offset = chance.integer({ min: 50, max: num_days - 5 });
 							userEvents.push({
 								...viewTemplate,
-								time: DATASET_START.add(offset, "days").add(chance.integer({ min: 9, max: 21 }), "hours").toISOString(),
+								time: datasetStart.add(offset, "days").add(chance.integer({ min: 9, max: 21 }), "hours").toISOString(),
 								user_id: viewTemplate.user_id,
 								listing_id: `LST-${chance.integer({ min: 90000, max: 99999 })}`,
 								listing_price: chance.integer({ min: 5000000, max: 15000000 }),
 								property_type: chance.pickone(["Single Family", "Condo"]),
 								bedrooms: chance.integer({ min: 4, max: 8 }),
 								square_feet: chance.integer({ min: 4000, max: 15000 }),
-								luxury: true,
-								spring_season: false,
 							});
 						}
 					}
 				}
 			}
 
-			// -----------------------------------------------------------
-			// Hook #8: COLD-LEAD CHURN
-			// Users who browse (property viewed) but never save (property
-			// saved) in the first 14 days lose 90% of events after day 14.
-			// -----------------------------------------------------------
+			// HOOK 8: COLD-LEAD CHURN — users who view but never save in
+			// first 14 days lose 90% of post-day-14 events. No flag.
 			const day14 = firstEventTime ? firstEventTime.add(14, "days") : null;
-
 			if (day14) {
 				const earlyEvents = userEvents.filter(e => dayjs(e.time).isBefore(day14));
 				const hasView = earlyEvents.some(e => e.event === "property viewed");
 				const hasSave = earlyEvents.some(e => e.event === "property saved");
-
 				if (hasView && !hasSave) {
-					// Cold lead: remove 90% of events after day 14
-					profile.cold_lead = true;
 					for (let i = userEvents.length - 1; i >= 0; i--) {
 						const evt = userEvents[i];
-						if (dayjs(evt.time).isAfter(day14)) {
-							if (chance.bool({ likelihood: 90 })) {
-								userEvents.splice(i, 1);
-							} else {
-								evt.cold_lead = true;
-							}
+						if (dayjs(evt.time).isAfter(day14) && chance.bool({ likelihood: 90 })) {
+							userEvents.splice(i, 1);
 						}
 					}
-					// Tag surviving events
-					userEvents.forEach(e => { e.cold_lead = true; });
+				}
+			}
+
+			// HOOK 9: PROPERTY-VIEWED MAGIC NUMBER (no flags)
+			// Sweet 6-12 views → +30% offer_price on offer submitted events.
+			// Over 13+ → drop 35% of offer submitted events (tire-kickers).
+			const viewCount = userEvents.filter(e => e.event === "property viewed").length;
+			if (viewCount >= 6 && viewCount <= 12) {
+				userEvents.forEach(e => {
+					if (e.event === "offer submitted" && typeof e.offer_price === "number") {
+						e.offer_price = Math.round(e.offer_price * 1.3);
+					}
+				});
+			} else if (viewCount >= 13) {
+				for (let i = userEvents.length - 1; i >= 0; i--) {
+					if (userEvents[i].event === "offer submitted" && chance.bool({ likelihood: 35 })) {
+						userEvents.splice(i, 1);
+					}
 				}
 			}
 		}

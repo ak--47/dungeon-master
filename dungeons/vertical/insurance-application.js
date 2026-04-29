@@ -52,91 +52,137 @@ const chance = u.initChance(SEED);
 
 /*
  * ===================================================================
- * ANALYTICS HOOKS
+ * ANALYTICS HOOKS (5 hooks)
+ *
+ * Adds 5. APPLICATION COMPLETION TIME-TO-CONVERT: business 0.74x faster,
+ * family 1.3x slower (funnel-post). Discover via funnel median TTC by account_type.
  * ===================================================================
  *
+ * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable
+ * via raw-prop breakdowns (date, app_version, issue_category) or
+ * behavioral cohorts.
+ *
  * -------------------------------------------------------------------
- * 1. VERSION STAMPING (everything hook)
+ * 1. VERSION STAMPING (everything)
  * -------------------------------------------------------------------
- * Every event gets a deterministic app_version based on its final
- * timestamp. Uses the everything hook (not event hook) because funnel
- * events adjust their time AFTER the event hook runs.
- * All users shift simultaneously on release dates:
+ *
+ * PATTERN: Every event gets a deterministic app_version based on its
+ * final timestamp. All users shift simultaneously on release dates:
  *   - Days 0-30:    v2.10
  *   - Days 30-60:   v2.11
  *   - Days 60-90:   v2.12
  *   - Last 10 days: v2.13
+ * app_version is a real product property already in superProps.
  *
- * MIXPANEL REPORT:
- *   1. Insights > "page viewed" > Breakdown by app_version
- *   2. Chart event volume over time, colored by app_version
- *   3. Confirm: no overlap between versions (deterministic cutover)
+ * HOW TO FIND IT IN MIXPANEL:
  *
- * -------------------------------------------------------------------
- * 2. SUPPORT TICKET VOLUME DROP (everything hook)
- * -------------------------------------------------------------------
- * Before v2.13, support ticket volume is high — each user gets 2-3
- * extra tickets injected with bug-related categories (form_crash,
- * login_error, page_timeout, payment_failure). After v2.13, tickets
- * are progressively removed (30% on day 1 → 85% on day 10).
+ *   Report 1: Event Volume by App Version
+ *   - Report type: Insights
+ *   - Event: "page viewed"
+ *   - Measure: Total
+ *   - Breakdown: "app_version"
+ *   - Line chart by day
+ *   - Expected: clean cutovers between versions, no overlap
  *
- * MIXPANEL REPORT:
- *   1. Insights > "support ticket created" count over time (line chart)
- *   2. Break down by app_version: v2.12 has high volume, v2.13 drops
- *   3. Filter issue_category to bug categories (form_crash, etc.)
- *   4. Filter pre_release_bug = true for injected tickets only
- *   5. Compare weekly ticket volume before vs after v2.13 release
+ * REAL-WORLD ANALOGUE: Forced auto-update SaaS apps cut all users over
+ * on release day, producing crisp version bands.
  *
  * -------------------------------------------------------------------
- * 3. APPLICATION CONVERSION BOOST (everything hook)
+ * 2. SUPPORT TICKET VOLUME DROP (everything)
  * -------------------------------------------------------------------
- * Before v2.13, 40% of "application approved" and "policy activated"
- * events are removed, simulating a broken application flow. After
- * v2.13, all events are preserved — creating a visible conversion jump.
  *
- * MIXPANEL REPORT:
- *   1. Funnels > application submitted → approved → policy activated
- *   2. Break down by app_version (v2.12 vs v2.13)
- *   3. Compare conversion rates: pre-v2.13 ~60% of post-v2.13
- *   4. Insights > "application approved" count over time — step change
+ * PATTERN: Pre-v2.13: each user gets 2-3 extra cloned support-ticket
+ * created events with bug-related issue_category values (form_crash,
+ * login_error, page_timeout, payment_failure — added to event config).
+ * Post-v2.13: tickets progressively removed (30% day 1 → 85% day 10).
+ * No flag — discover via issue_category breakdown over time.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Ticket Volume Over Time
+ *   - Report type: Insights
+ *   - Event: "support ticket created"
+ *   - Measure: Total
+ *   - Breakdown: "app_version"
+ *   - Line chart by day
+ *   - Expected: high volume on v2.12, sharp drop on v2.13
+ *
+ *   Report 2: Bug Category Share Pre vs Post v2.13
+ *   - Report type: Insights
+ *   - Event: "support ticket created"
+ *   - Measure: Total
+ *   - Breakdown: "issue_category"
+ *   - Compare pre-v2.13 vs v2.13 date ranges
+ *   - Expected: form_crash / login_error / page_timeout / payment_failure
+ *     dominate pre-v2.13, vanish post-v2.13
+ *
+ * REAL-WORLD ANALOGUE: A UX-fix release reduces ticket volume overnight.
+ *
+ * -------------------------------------------------------------------
+ * 3. APPLICATION CONVERSION BOOST (everything)
+ * -------------------------------------------------------------------
+ *
+ * PATTERN: Pre-v2.13: ~40% of application approved + policy activated
+ * events dropped. Post-v2.13: kept. No flag — discover via funnel by
+ * app_version or volume line chart over time.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Application Funnel by Version
+ *   - Report type: Funnels
+ *   - Steps: "application submitted" -> "application approved" -> "policy activated"
+ *   - Breakdown: "app_version"
+ *   - Expected: pre-v2.13 ~ 60% of post-v2.13 rate
+ *
+ * REAL-WORLD ANALOGUE: A buggy multi-step form fixed by release.
+ *
+ * -------------------------------------------------------------------
+ * 4. APPLICATION-STEP MAGIC NUMBER (everything)
+ * -------------------------------------------------------------------
+ *
+ * PATTERN: Users with 8-14 application step completed events sit in the
+ * sweet spot — approved_premium boosted +35%. Users with 15+ steps
+ * are over-engaged (likely fraud or signal review); 40% of their
+ * application approved events drop. No flag.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Avg Approved Premium by Step Bucket
+ *   - Report type: Insights (with cohort)
+ *   - Cohort A: users with 8-14 "application step completed"
+ *   - Cohort B: users with 0-7
+ *   - Event: "application approved"
+ *   - Measure: Average of "approved_premium"
+ *   - Expected: A ~ 1.35x B
+ *
+ *   Report 2: Approvals per User on Heavy Step-Completers
+ *   - Report type: Insights (with cohort)
+ *   - Cohort C: users with >= 15 "application step completed"
+ *   - Cohort A: users with 8-14
+ *   - Event: "application approved"
+ *   - Measure: Total per user
+ *   - Expected: C ~ 40% fewer approvals per user vs A
+ *
+ * REAL-WORLD ANALOGUE: Engaged applicants get higher premiums approved;
+ * over-engaged ones look like fraud and get flagged.
  *
  * ===================================================================
  * EXPECTED METRICS SUMMARY
  * ===================================================================
  *
- * Hook                    | Metric                  | Pre-v2.13 | Post-v2.13
- * ------------------------|-------------------------|-----------|----------
- * Version Stamping        | Events per version      | ~30d each | 10 days
- * Support Ticket Volume   | Weekly ticket count     | HIGH      | ~70% lower
- * Application Conversion  | Approval rate           | ~42%      | ~70%
- *
- * ===================================================================
- * ADVANCED ANALYSIS IDEAS
- * ===================================================================
- *
- * 1. Version Impact Dashboard: Chart both support tickets AND
- *    application conversion by app_version to show v2.13's dual impact.
- *
- * 2. Bug Category Analysis: Which pre_release_bug categories were most
- *    common? Do they correlate with the application steps where users
- *    were dropping off?
- *
- * 3. Platform Comparison: Did the v2.13 improvement affect all platforms
- *    equally, or did web/iOS/Android see different magnitudes?
- *
- * 4. Insurance Type Breakdown: Are certain insurance types (auto vs home
- *    vs life) more affected by the conversion improvement?
- *
- * 5. Time-to-Approval: Did v2.13 also change the approval_time_hours
- *    distribution, or just the volume of approvals?
+ * Hook                    | Metric                  | Baseline | Effect  | Ratio
+ * ------------------------|-------------------------|----------|---------|------
+ * Version Stamping        | Events per version      | n/a      | clean   | bands
+ * Support Ticket Volume   | tickets v2.12 -> v2.13  | 1x       | ~ 0.3x  | -70%
+ * Application Conversion  | approval rate pre/post  | 1x       | ~ 1.7x  | step-up
+ * Step-Count Magic Number | sweet approved_premium  | 1x       | 1.35x   | 1.35x
+ * Step-Count Magic Number | over approvals/user     | 1x       | 0.6x    | -40%
  */
 
 // ── Time constants for hook calculations ──
 const NOW = dayjs();
 const DATASET_START = NOW.subtract(num_days, "days");
-const V211_DATE = DATASET_START.add(30, "days");
-const V212_DATE = DATASET_START.add(60, "days");
-const V213_DATE = NOW.subtract(10, "days");
+
 
 /** @type {Config} */
 const config = {
@@ -328,10 +374,13 @@ const config = {
 					"coverage",
 					"technical",
 					"policy_change",
+					"form_crash",
+					"login_error",
+					"page_timeout",
+					"payment_failure",
 				],
 				priority: ["low", "medium", "medium", "high"],
 				channel: ["chat", "phone", "email", "web_form"],
-				pre_release_bug: [false],
 			},
 		},
 		{
@@ -477,12 +526,39 @@ const config = {
 	 *    are left intact, making the conversion visibly jump up.
 	 */
 	hook: function (record, type, meta) {
+		// HOOK 5 (T2C): APPLICATION COMPLETION TIME-TO-CONVERT (funnel-post)
+		// Business accounts complete the Application Completion funnel 1.35x
+		// faster (factor 0.74); family accounts 1.3x slower (factor 1.3).
+		if (type === "funnel-post") {
+			const profile = meta?.profile;
+			const accountType = profile && profile.account_type;
+			if (Array.isArray(record) && record.length > 1) {
+				const factor = (
+					accountType === "business" ? 0.74 :
+					accountType === "family" ? 1.3 :
+					1.0
+				);
+				if (factor !== 1.0) {
+					for (let i = 1; i < record.length; i++) {
+						const prev = dayjs(record[i - 1].time);
+						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+						record[i].time = prev.add(newGap, "milliseconds").toISOString();
+					}
+				}
+			}
+		}
+
 		// =============================================================
 		// Hooks #1-#3 all run in the "everything" hook so that version
 		// stamping sees final timestamps (funnel events adjust time
 		// AFTER the event hook runs).
 		// =============================================================
 		if (type === "everything") {
+			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
+			const datasetEnd = meta?.datasetEnd ? dayjs.unix(meta.datasetEnd) : NOW;
+			const V211_DATE = datasetStart.add(30, "days");
+			const V212_DATE = datasetStart.add(60, "days");
+			const V213_DATE = datasetEnd.subtract(10, "days");
 			const userEvents = record;
 			if (userEvents.length === 0) return record;
 
@@ -570,7 +646,6 @@ const config = {
 							"email",
 							"web_form",
 						]),
-						pre_release_bug: true,
 					});
 				}
 			}
@@ -612,6 +687,25 @@ const config = {
 					dayjs(evt.time).isBefore(V213_DATE)
 				) {
 					if (chance.bool({ likelihood: 40 })) {
+						userEvents.splice(i, 1);
+					}
+				}
+			}
+
+			// Hook 4: APPLICATION-STEP MAGIC NUMBER (no flags)
+			// Sweet 8-14 application step completed → +35% on approved_premium
+			// for application approved events. Over 15+ → drop 40% of
+			// application approved events (fraud filter triggers).
+			const stepCount = userEvents.filter(e => e.event === "application step completed").length;
+			if (stepCount >= 8 && stepCount <= 14) {
+				userEvents.forEach(e => {
+					if (e.event === "application approved" && typeof e.approved_premium === "number") {
+						e.approved_premium = Math.round(e.approved_premium * 1.35);
+					}
+				});
+			} else if (stepCount >= 15) {
+				for (let i = userEvents.length - 1; i >= 0; i--) {
+					if (userEvents[i].event === "application approved" && chance.bool({ likelihood: 40 })) {
 						userEvents.splice(i, 1);
 					}
 				}

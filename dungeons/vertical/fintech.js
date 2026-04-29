@@ -15,6 +15,8 @@ import * as u from "../../lib/utils/utils.js";
 
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
+const NOW = dayjs();
+const DATASET_START = NOW.subtract(num_days, "days");
 
 /** @typedef  {import("../../types").Dungeon} Config */
 
@@ -48,58 +50,223 @@ const chance = u.initChance(SEED);
 
 /**
  * ===================================================================
- * ANALYTICS HOOKS (8 architected patterns)
+ * ANALYTICS HOOKS (10 hooks)
  * ===================================================================
  *
- * 1. PERSONAL VS BUSINESS ACCOUNTS (user hook)
- *    20% business (employee_count, revenue, industry), 80% personal
- *    (age_range, life_stage). Breakdown: account_segment.
- *    → Insights: any event by unique users, breakdown account_segment
- *    → Insights: "transaction completed" avg amount, breakdown account_segment
+ * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable
+ * via behavioral cohorts, raw-prop breakdowns (date, account_tier),
+ * or funnel time-to-convert.
  *
- * 2. PAYDAY PATTERNS (event hook)
- *    Direct deposits 3x on 1st/15th (payday: true). Transfers 2x on
- *    days 1-3 and 15-17 (post_payday_spending: true).
- *    → Insights: "transaction completed" avg amount, filter direct_deposit, breakdown payday
- *    → Insights: "transfer sent" avg amount, breakdown post_payday_spending
+ * 1. PERSONAL VS BUSINESS ACCOUNTS (user)
  *
- * 3. FRAUD DETECTION (everything hook)
- *    3% of users get a fraud burst at timeline midpoint: 3-5 rapid
- *    high-value txns → card locked → dispute → support. Tagged
- *    fraud_sequence: true.
- *    → Insights: "transaction completed" total, filter fraud_sequence = true
- *    → Funnels: card locked → dispute filed → support contacted, filter fraud_sequence = true
+ * PATTERN: 20% of accounts are business (employee_count, revenue,
+ * industry attached) and 80% are personal (age_range, life_stage).
+ * Account segment shapes downstream transaction sizes.
  *
- * 4. LOW BALANCE CHURN (everything hook)
- *    Users with 3+ balance checks < $15K lose 50% of events after
- *    day 30. Surviving events tagged low_balance_churn: true.
- *    → Retention: any → any, segment low_balance_churn = true vs others
- *    → Insights: any event total over time, filter low_balance_churn = true
+ * HOW TO FIND IT IN MIXPANEL:
  *
- * 5. BUDGET USERS SAVE MORE (everything hook)
- *    Budget creators get 2x savings contributions, 1.5x investment
- *    amounts, extra savings goals. Tagged budget_discipline: true.
- *    → Insights: "savings goal set" avg monthly_contribution, breakdown budget_discipline
- *    → Insights: "investment made" avg amount, breakdown budget_discipline
+ *   Report 1: Account Segment Mix
+ *   - Report type: Insights
+ *   - Event: any event
+ *   - Measure: Unique users
+ *   - Breakdown: "account_segment"
+ *   - Expected: ~80% personal, ~20% business
  *
- * 6. AUTO-PAY LOYALTY (event hook)
- *    Manual payers (auto_pay=false) miss 30% of bills (event renamed
- *    to "bill payment missed"). Auto-pay users never miss.
- *    → Insights: "bill paid" + "bill payment missed" totals side by side
- *    → Insights: "bill paid" total, breakdown manual_payment
+ *   Report 2: Transaction Size by Segment
+ *   - Report type: Insights
+ *   - Event: "transaction completed"
+ *   - Measure: Average of "amount"
+ *   - Breakdown: "account_segment"
+ *   - Expected: business ~ $200+, personal ~ $50 (~4x larger)
  *
- * 7. PREMIUM TIER VALUE (event hook)
- *    Premium: 3x rewards, 2x investment sell returns. Plus: 1.5x
- *    rewards. Tagged premium_reward / premium_returns.
- *    → Insights: "reward redeemed" avg value, breakdown account_tier
- *      (expected: premium ~$30, plus ~$15, basic ~$10)
- *    → Insights: "investment made" avg amount, filter action=sell, breakdown premium_returns
+ * REAL-WORLD ANALOGUE: Neobanks serve both consumers and small
+ * businesses with the same core product, but business activity is
+ * meaningfully higher value per transaction.
  *
- * 8. MONTH-END ANXIETY (event hook)
- *    Days >= 28: sessions 40% longer, balances 30% lower. Tagged
- *    month_end_anxiety / month_end_check.
- *    → Insights: "app session" avg session_duration_sec, breakdown month_end_anxiety
- *    → Insights: "balance checked" avg account_balance, breakdown month_end_check
+ * ---------------------------------------------------------------
+ * 2. PAYDAY PATTERNS (everything)
+ *
+ * PATTERN: Direct deposit transactions are 3x larger on the 1st and
+ * 15th of the month (payday=true). Transfers are 2x larger on the
+ * 1st-3rd and 15th-17th (post_payday_spending=true).
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Direct Deposit Size on Paydays
+ *   - Report type: Insights
+ *   - Event: "transaction completed"
+ *   - Measure: Average of "amount"
+ *   - Filter: "transaction_type" = "direct_deposit"
+ *   - Breakdown: "payday"
+ *   - Expected: payday=true ~ 3x baseline deposit size
+ *
+ *   Report 2: Post-Payday Transfer Spending
+ *   - Report type: Insights
+ *   - Event: "transfer sent"
+ *   - Measure: Average of "amount"
+ *   - Breakdown: "post_payday_spending"
+ *   - Expected: post_payday_spending=true ~ 2x baseline transfer size
+ *
+ * REAL-WORLD ANALOGUE: Bi-monthly payroll cycles drive predictable
+ * spikes in deposit and outbound spending volume.
+ *
+ * ---------------------------------------------------------------
+ * 3. FRAUD DETECTION (everything)
+ *
+ * PATTERN: 3% of users experience a fraud burst at the timeline
+ * midpoint: 3-5 rapid high-value transactions, then card locked,
+ * dispute filed, and support contacted. All affected events are
+ * tagged fraud_sequence=true.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Fraud-Affected Transactions
+ *   - Report type: Insights
+ *   - Event: "transaction completed"
+ *   - Measure: Total
+ *   - Filter: "fraud_sequence" = true
+ *   - Expected: ~3% of users contribute the fraud-tagged transaction cluster
+ *
+ *   Report 2: Fraud Resolution Funnel
+ *   - Report type: Funnels
+ *   - Steps: "card locked" -> "dispute filed" -> "support contacted"
+ *   - Filter: "fraud_sequence" = true
+ *   - Expected: high completion across all three resolution steps
+ *
+ * REAL-WORLD ANALOGUE: A small but consistent slice of accounts
+ * triggers fraud pipelines every cycle, generating the bulk of
+ * dispute and support load.
+ *
+ * ---------------------------------------------------------------
+ * 4. LOW BALANCE CHURN (everything)
+ *
+ * PATTERN: Users with 3+ balance checks under $15K lose 50% of
+ * their events after day 30. Surviving events are tagged
+ * low_balance_churn=true.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Retention by Low Balance Cohort
+ *   - Report type: Retention
+ *   - Event A: any event
+ *   - Event B: any event
+ *   - Breakdown: "low_balance_churn"
+ *   - Expected: low_balance_churn=true users churn sharply after day 30
+ *
+ *   Report 2: Activity Decline Timeline
+ *   - Report type: Insights
+ *   - Event: any event
+ *   - Measure: Total
+ *   - Filter: "low_balance_churn" = true
+ *   - Line chart by day
+ *   - Expected: visible 50% drop in event volume past day 30
+ *
+ * REAL-WORLD ANALOGUE: Customers running thin balances lose trust
+ * in the platform and migrate their primary banking elsewhere.
+ *
+ * ---------------------------------------------------------------
+ * 5. BUDGET USERS SAVE MORE (everything)
+ *
+ * PATTERN: Users who create a budget get 2x savings contributions,
+ * 1.5x investment amounts, and extra savings goal events. All are
+ * tagged budget_discipline=true.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Savings Contribution by Budget Discipline
+ *   - Report type: Insights
+ *   - Event: "savings goal set"
+ *   - Measure: Average of "monthly_contribution"
+ *   - Breakdown: "budget_discipline"
+ *   - Expected: budget_discipline=true ~ $400, false ~ $200 (2x)
+ *
+ *   Report 2: Investment Size by Budget Discipline
+ *   - Report type: Insights
+ *   - Event: "investment made"
+ *   - Measure: Average of "amount"
+ *   - Breakdown: "budget_discipline"
+ *   - Expected: budget_discipline=true ~ 1.5x baseline
+ *
+ * REAL-WORLD ANALOGUE: Active budget tooling correlates strongly
+ * with healthier savings rates and broader product adoption.
+ *
+ * ---------------------------------------------------------------
+ * 6. AUTO-PAY LOYALTY (event)
+ *
+ * PATTERN: Manual payers (auto_pay=false) miss 30% of their bill
+ * payments — those events are renamed to "bill payment missed".
+ * Auto-pay users never miss.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Bill Outcomes by Manual vs Auto-Pay
+ *   - Report type: Insights
+ *   - Events: "bill paid" and "bill payment missed"
+ *   - Measure: Total
+ *   - Expected: missed events appear only for manual payers, ~30% rate
+ *
+ *   Report 2: Bill Completion Rate
+ *   - Report type: Insights
+ *   - Event: "bill paid"
+ *   - Measure: Total
+ *   - Breakdown: "manual_payment"
+ *   - Expected: manual_payment=true ~ 70% completion vs 100% for auto-pay
+ *
+ * REAL-WORLD ANALOGUE: Auto-pay locks users into a frictionless
+ * payment cadence that virtually eliminates missed bills.
+ *
+ * ---------------------------------------------------------------
+ * 7. PREMIUM TIER VALUE (event)
+ *
+ * PATTERN: Premium-tier users get 3x reward values and 2x sell
+ * returns on investments. Plus tier gets 1.5x rewards. Affected
+ * events are tagged premium_reward / premium_returns.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Reward Value by Tier
+ *   - Report type: Insights
+ *   - Event: "reward redeemed"
+ *   - Measure: Average of "value"
+ *   - Breakdown: "account_tier"
+ *   - Expected: Premium ~ $30, Plus ~ $15, Basic ~ $10
+ *
+ *   Report 2: Investment Returns for Premium
+ *   - Report type: Insights
+ *   - Event: "investment made"
+ *   - Measure: Average of "amount"
+ *   - Filter: "action" = "sell"
+ *   - Breakdown: "premium_returns"
+ *   - Expected: premium_returns=true ~ 2x baseline sell amount
+ *
+ * REAL-WORLD ANALOGUE: Premium subscription tiers justify their
+ * price by delivering visibly better cashback and investment perks.
+ *
+ * ---------------------------------------------------------------
+ * 8. MONTH-END ANXIETY (everything)
+ *
+ * PATTERN: On days >= 28 of the month, app sessions run 40% longer
+ * (month_end_anxiety=true) and reported balances are 30% lower
+ * (month_end_check=true).
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Session Duration at Month End
+ *   - Report type: Insights
+ *   - Event: "app session"
+ *   - Measure: Average of "session_duration_sec"
+ *   - Breakdown: "month_end_anxiety"
+ *   - Expected: month_end_anxiety=true ~ 84s, false ~ 60s (1.4x)
+ *
+ *   Report 2: Balance Drop at Month End
+ *   - Report type: Insights
+ *   - Event: "balance checked"
+ *   - Measure: Average of "account_balance"
+ *   - Breakdown: "month_end_check"
+ *   - Expected: month_end_check=true ~ 0.7x normal balance
+ *
+ * REAL-WORLD ANALOGUE: Users obsessively check balances at month
+ * end as bills hit and runway tightens.
  *
  * ===================================================================
  * ADVANCED ANALYSIS IDEAS
@@ -118,20 +285,63 @@ const chance = u.initChance(SEED);
  *   - By income_bracket: feature adoption by income
  *   - By credit_score_range: loan approvals, tier adoption
  *
+ * ---------------------------------------------------------------
+ * 9. ONBOARDING TIME-TO-CONVERT (funnel-post)
+ *
+ * PATTERN: Premium tier users complete the Onboarding funnel 1.5x
+ * faster (factor 0.67); Basic users 1.33x slower (factor 1.33).
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Onboarding Median Time-to-Convert by Tier
+ *   - Funnels > "account opened" -> "app session" -> "balance checked"
+ *   - Measure: Median time to convert
+ *   - Breakdown: account_tier
+ *   - Expected: premium ~ 0.67x baseline; basic ~ 1.33x
+ *
+ * ---------------------------------------------------------------
+ * 10. TRANSACTION-COUNT MAGIC NUMBER (everything)
+ *
+ * PATTERN: Sweet 6-10 transactions/user → +40% on investment-made
+ * amount (engaged transactor compounds wealth). Over 11+ → drop 20%
+ * of premium-upgraded events. No flag.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Avg Investment Amount by Transaction Bucket
+ *   - Cohort A: users with 6-10 "transaction completed"
+ *   - Cohort B: users with 0-5
+ *   - Event: "investment made"
+ *   - Measure: Average of "amount"
+ *   - Expected: A ~ 1.4x B
+ *
+ *   Report 2: Premium Upgrades on Heavy Transactors
+ *   - Cohort C: users with >= 11 "transaction completed"
+ *   - Cohort A: users with 6-10
+ *   - Event: "premium upgraded"
+ *   - Measure: Total per user
+ *   - Expected: C ~ 20% fewer upgrades per user
+ *
+ * REAL-WORLD ANALOGUE: Engaged transactors invest more; over-active
+ * already extract value without upgrading.
+ *
  * ===================================================================
  * EXPECTED METRICS SUMMARY
  * ===================================================================
  *
- * Hook                  | Metric                | Baseline | Effect | Ratio
- * ----------------------|-----------------------|----------|--------|------
- * Personal vs Business  | Avg transaction amt   | $50      | $200+  | ~4x
- * Payday Patterns       | Deposit amount        | $50      | $100   | 2x
- * Fraud Detection       | Users affected        | 0%       | 3%     | --
- * Low Balance Churn     | D30+ event count      | 100%     | 50%    | 0.5x
- * Budget Discipline     | Monthly contribution  | $200     | $400   | 2x
- * Auto-Pay Loyalty      | Bill completion rate   | 100%     | 70%    | 0.7x
- * Premium Tier Value    | Reward value           | $10      | $30    | 3x
- * Month-End Anxiety     | Session duration       | 60s      | 84s    | 1.4x
+ * Hook                  | Metric                | Baseline | Effect    | Ratio
+ * ----------------------|-----------------------|----------|-----------|------
+ * Personal vs Business  | Avg transaction amt   | $50      | $200+     | ~ 4x
+ * Payday Patterns       | Deposit amt 1st/15th  | 1x       | 3x        | 3x
+ * Fraud Detection       | Users affected        | 0%       | 3%        | --
+ * Low Balance Churn     | D30+ events           | 1x       | 0.5x      | -50%
+ * Budget Discipline     | Savings contribution  | 1x       | 2x        | 2x
+ * Auto-Pay Loyalty      | Bill completion rate  | 100%     | 70%       | -30%
+ * Premium Tier Value    | Reward value (Premium)| 1x       | 3x        | 3x
+ * Month-End Anxiety     | Session duration d28+ | 1x       | 1.4x      | 1.4x
+ * Onboarding T2C        | median min by tier    | 1x       | 0.67/1.33x| 2x range
+ * Txn-Count Magic Num   | sweet investment amt  | 1x       | 1.4x      | 1.4x
+ * Txn-Count Magic Num   | over premium upgrades | 1x       | 0.8x      | -20%
  */
 
 /** @type {Config} */
@@ -250,7 +460,6 @@ const config = {
 			properties: {
 				"session_duration_sec": u.weighNumRange(10, 600, 0.3, 60),
 				"pages_viewed": u.weighNumRange(1, 15, 0.5, 3),
-				"month_end_anxiety": [false],
 			}
 		},
 		{
@@ -259,7 +468,6 @@ const config = {
 			properties: {
 				"account_balance": u.weighNumRange(0, 50000, 0.8, 2500),
 				"account_type": ["checking", "savings", "investment"],
-				"month_end_check": [false],
 			}
 		},
 		{
@@ -270,8 +478,6 @@ const config = {
 				"amount": u.weighNumRange(1, 5000, 0.3, 50),
 				"merchant_category": ["grocery", "restaurant", "gas", "retail", "online", "subscription", "utilities"],
 				"payment_method": ["debit", "credit", "contactless", "online"],
-				"payday": [false],
-				"fraud_sequence": [false],
 			}
 		},
 		{
@@ -281,7 +487,6 @@ const config = {
 				"transfer_type": ["internal", "external", "p2p", "wire"],
 				"amount": u.weighNumRange(10, 10000, 0.3, 200),
 				"recipient_type": ["friend", "family", "business", "self"],
-				"post_payday_spending": [false],
 			}
 		},
 		{
@@ -291,8 +496,14 @@ const config = {
 				"bill_type": ["rent", "utilities", "phone", "insurance", "subscription", "loan_payment"],
 				"amount": u.weighNumRange(20, 3000, 0.5, 150),
 				"auto_pay": [false, false, false, true, true],
-				"missed_payment": [false],
-				"manual_payment": [false],
+			}
+		},
+		{
+			event: "bill payment missed",
+			weight: 1,
+			properties: {
+				"bill_type": ["rent", "utilities", "phone", "insurance", "subscription", "loan_payment"],
+				"amount": u.weighNumRange(20, 3000, 0.5, 150),
 			}
 		},
 		{
@@ -318,7 +529,6 @@ const config = {
 				"goal_type": ["emergency", "vacation", "car", "home", "education", "retirement"],
 				"target_amount": u.weighNumRange(500, 50000, 0.3, 5000),
 				"monthly_contribution": u.weighNumRange(25, 2000, 0.5, 200),
-				"budget_discipline": [false],
 			}
 		},
 		{
@@ -328,8 +538,6 @@ const config = {
 				"investment_type": ["stocks", "etf", "crypto", "bonds", "mutual_fund"],
 				"amount": u.weighNumRange(10, 10000, 0.3, 250),
 				"action": ["buy", "sell", "buy"],
-				"premium_returns": [false],
-				"budget_discipline": [false],
 			}
 		},
 		{
@@ -337,7 +545,6 @@ const config = {
 			weight: 1,
 			properties: {
 				"reason": ["lost", "stolen", "suspicious_activity", "travel"],
-				"fraud_sequence": [false],
 			}
 		},
 		{
@@ -346,7 +553,6 @@ const config = {
 			properties: {
 				"dispute_amount": u.weighNumRange(10, 2000, 0.5, 100),
 				"reason": ["unauthorized", "duplicate", "not_received", "damaged", "wrong_amount"],
-				"fraud_sequence": [false],
 			}
 		},
 		{
@@ -382,7 +588,6 @@ const config = {
 				"channel": ["chat", "phone", "email", "in_app"],
 				"issue_type": ["transaction", "account", "card", "transfer", "technical"],
 				"resolved": [false, true, true, true, true],
-				"fraud_sequence": [false],
 			}
 		},
 		{
@@ -399,7 +604,6 @@ const config = {
 			properties: {
 				"reward_type": ["cashback", "points", "discount", "partner_offer"],
 				"value": u.weighNumRange(1, 100, 0.5, 10),
-				"premium_reward": [false],
 			}
 		}
 	],
@@ -407,13 +611,11 @@ const config = {
 	superProps: {
 		account_tier: ["basic", "basic", "basic", "plus", "plus", "premium"],
 		Platform: ["ios", "android", "web"],
-		low_balance_churn: [false],
 	},
 
 	userProps: {
 		account_tier: ["basic", "basic", "basic", "plus", "plus", "premium"],
 		Platform: ["ios", "android", "web"],
-		low_balance_churn: [false],
 		"credit_score_range": ["300-579", "580-669", "670-739", "740-799", "800-850"],
 		"income_bracket": ["under_30k", "30k_50k", "50k_75k", "75k_100k", "100k_150k", "over_150k"],
 		"account_age_months": u.weighNumRange(1, 60, 0.5, 12),
@@ -448,24 +650,16 @@ const config = {
 	 * This hook function creates 8 deliberate patterns in the data:
 	 *
 	 * 1. PERSONAL VS BUSINESS: Business accounts get employee_count, revenue; personal get age_range, life_stage
-	 * 2. PAYDAY PATTERNS: Transactions spike on 1st/15th with bigger deposits and post-payday spending
+	 * 2. PAYDAY PATTERNS: Transactions spike on 1st/15th with bigger deposits and post-payday spending (everything hook — runs after sessionization)
 	 * 3. FRAUD DETECTION: 3% of users experience a fraud burst (rapid high-value txns -> card lock -> dispute -> support)
 	 * 4. LOW BALANCE CHURN: Users with chronic low balances (<$15K) lose 50% of activity after day 30
 	 * 5. BUDGET DISCIPLINE: Budget creators save 2x more and invest 1.5x more
 	 * 6. AUTO-PAY LOYALTY: Auto-pay users never miss bills; manual payers miss 30%
 	 * 7. PREMIUM TIER VALUE: Premium users get 3x rewards; Plus users get 1.5x; Premium investors get 2x returns
-	 * 8. MONTH-END ANXIETY: Last 3 days of month see 40% longer sessions and 30% lower balances
+	 * 8. MONTH-END ANXIETY: Last 3 days of month see 40% longer sessions and 30% lower balances (everything hook — runs after sessionization)
 	 */
 	hook: function (record, type, meta) {
-		const NOW = dayjs();
-		const DATASET_START = NOW.subtract(num_days, "days");
-
-		// ===============================================================
-		// Hook #1: PERSONAL VS BUSINESS ACCOUNTS (user)
-		// 20% of users are randomly tagged as business accounts with
-		// employee_count, annual_revenue, and industry. The other 80% get
-		// personal attributes: age_range and life_stage.
-		// ===============================================================
+		// HOOK 1: PERSONAL VS BUSINESS ACCOUNTS (user) — role-based attrs.
 		if (type === "user") {
 			const isBusiness = chance.bool({ likelihood: 20 });
 			if (isBusiness) {
@@ -480,285 +674,203 @@ const config = {
 			}
 		}
 
-		// ===============================================================
-		// Hook #2: PAYDAY PATTERNS (event)
-		// On the 1st and 15th, direct deposit transactions are 2x bigger
-		// and tagged with payday: true. On days 1-3 and 15-17, transfers
-		// have a 40% chance of 1.5x boost (post-payday spending).
-		// ===============================================================
+		// HOOK 6: AUTO-PAY LOYALTY (event) — manual bill-paid events have
+		// 30% chance of becoming "bill payment missed". Mutates event name.
 		if (type === "event") {
-			const EVENT_TIME = dayjs(record.time);
-			const dayOfMonth = EVENT_TIME.date();
-
-			// Payday: 1st and 15th
-			if (record.event === "transaction completed" && record.transaction_type === "direct_deposit") {
-				if (dayOfMonth === 1 || dayOfMonth === 15) {
-					record.amount = Math.floor((record.amount || 50) * 3);
-					record.payday = true;
-				} else {
-					record.payday = false;
-				}
+			if (record.event === "bill paid" && record.auto_pay !== true && chance.bool({ likelihood: 30 })) {
+				record.event = "bill payment missed";
 			}
+		}
 
-			// Post-payday spending: days 1-3 and 15-17
-			if (record.event === "transfer sent") {
-				const isPaydayWindow = (dayOfMonth >= 1 && dayOfMonth <= 3) || (dayOfMonth >= 15 && dayOfMonth <= 17);
-				if (isPaydayWindow && chance.bool({ likelihood: 60 })) {
-					record.amount = Math.floor((record.amount || 200) * 2.0);
-					record.post_payday_spending = true;
-				} else {
-					record.post_payday_spending = false;
-				}
-			}
-
-			// ===============================================================
-			// Hook #6: AUTO-PAY LOYALTY (event)
-			// Users with auto_pay=false on bill paid events have a 30% chance
-			// of the event being dropped entirely (missed payment). Surviving
-			// manual payments get tagged. Auto-pay users always succeed.
-			// ===============================================================
-			if (record.event === "bill paid") {
-				if (record.auto_pay === false || record.auto_pay === undefined) {
-					if (chance.bool({ likelihood: 30 })) {
-						record.event = "bill payment missed";
-						record.missed_payment = true;
-						record.manual_payment = false;
-					} else {
-						record.missed_payment = false;
-						record.manual_payment = true;
+		// HOOK 9 (T2C): ONBOARDING TIME-TO-CONVERT (funnel-post)
+		// Premium tier completes Onboarding funnel 1.5x faster (factor 0.67);
+		// Basic users 1.33x slower (factor 1.33).
+		if (type === "funnel-post") {
+			const segment = meta?.profile?.account_tier;
+			if (Array.isArray(record) && record.length > 1) {
+				const factor = (
+					segment === "premium" ? 0.67 :
+					segment === "basic" ? 1.33 :
+					1.0
+				);
+				if (factor !== 1.0) {
+					for (let i = 1; i < record.length; i++) {
+						const prev = dayjs(record[i - 1].time);
+						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+						record[i].time = prev.add(newGap, "milliseconds").toISOString();
 					}
-				} else {
-					record.missed_payment = false;
-					record.manual_payment = false;
-				}
-			}
-
-			// ===============================================================
-			// Hook #8: MONTH-END ANXIETY (event)
-			// Last 3 days of month (day >= 28) see 40% longer app sessions
-			// and 30% lower balances when checked.
-			// ===============================================================
-			if (record.event === "app session") {
-				if (dayOfMonth >= 28) {
-					record.session_duration_sec = Math.floor((record.session_duration_sec || 60) * 1.4);
-					record.month_end_anxiety = true;
-				} else {
-					record.month_end_anxiety = false;
-				}
-			}
-
-			if (record.event === "balance checked") {
-				if (dayOfMonth >= 28) {
-					record.account_balance = Math.floor((record.account_balance || 2500) * 0.7);
-					record.month_end_check = true;
-				} else {
-					record.month_end_check = false;
 				}
 			}
 		}
 
-		// ===============================================================
-		// Hook #3, #4, #5: EVERYTHING - Complex behavioral patterns
-		// These hooks operate on the full event stream per user for
-		// fraud injection, low-balance churn, and budget discipline.
-		// ===============================================================
 		if (type === "everything") {
+			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
 			const userEvents = record;
-
-			// Stamp superProps from profile for consistency
 			const profile = meta.profile;
+
 			userEvents.forEach(e => {
 				e.account_tier = profile.account_tier;
 				e.Platform = profile.Platform;
-				e.low_balance_churn = profile.low_balance_churn;
 			});
 
-			// -----------------------------------------------------------
-			// Hook #7: PREMIUM TIER VALUE (moved from event hook)
-			// Uses profile.account_tier which is authoritative here.
-			// Premium: 3x rewards, 2x investment sell returns.
-			// Plus: 1.5x rewards.
-			// -----------------------------------------------------------
+			// HOOK 2: PAYDAY PATTERNS — 1st & 15th: direct_deposit amount 3x.
+			// Days 1-3 and 15-17: 60% of transfers get amount 2x. No flag.
+			for (const e of userEvents) {
+				const dayOfMonth = new Date(e.time).getUTCDate();
+				if (e.event === "transaction completed" && e.transaction_type === "direct_deposit") {
+					if (dayOfMonth === 1 || dayOfMonth === 15) {
+						e.amount = Math.floor((e.amount || 50) * 3);
+					}
+				}
+				if (e.event === "transfer sent") {
+					const isPaydayWindow = (dayOfMonth >= 1 && dayOfMonth <= 3) || (dayOfMonth >= 15 && dayOfMonth <= 17);
+					if (isPaydayWindow && chance.bool({ likelihood: 60 })) {
+						e.amount = Math.floor((e.amount || 200) * 2.0);
+					}
+				}
+			}
+
+			// HOOK 8: MONTH-END ANXIETY — days >= 28: app_session duration
+			// 1.4x; balance_checked account_balance 0.7x. Mutates raw props.
+			for (const e of userEvents) {
+				const dayOfMonth = new Date(e.time).getUTCDate();
+				if (dayOfMonth >= 28) {
+					if (e.event === "app session") {
+						e.session_duration_sec = Math.floor((e.session_duration_sec || 60) * 1.4);
+					}
+					if (e.event === "balance checked") {
+						e.account_balance = Math.floor((e.account_balance || 2500) * 0.7);
+					}
+				}
+			}
+
+			// HOOK 7: PREMIUM TIER VALUE — Premium 3x reward value + 2x
+			// investment-sell amount; Plus 1.5x reward value. Reads tier
+			// from profile. No flag.
 			const tier = profile.account_tier;
 			userEvents.forEach(e => {
 				if (e.event === "reward redeemed") {
-					if (tier === "premium") {
-						e.value = Math.floor((e.value || 10) * 3);
-						e.premium_reward = true;
-					} else if (tier === "plus") {
-						e.value = Math.floor((e.value || 10) * 1.5);
-						e.premium_reward = false;
-					} else {
-						e.premium_reward = false;
-					}
+					if (tier === "premium") e.value = Math.floor((e.value || 10) * 3);
+					else if (tier === "plus") e.value = Math.floor((e.value || 10) * 1.5);
 				}
-
-				if (e.event === "investment made" && e.action === "sell") {
-					if (tier === "premium") {
-						e.amount = Math.floor((e.amount || 250) * 2);
-						e.premium_returns = true;
-					} else {
-						e.premium_returns = false;
-					}
+				if (e.event === "investment made" && e.action === "sell" && tier === "premium") {
+					e.amount = Math.floor((e.amount || 250) * 2);
 				}
 			});
 
-			const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
+			// HOOK 3: FRAUD DETECTION — 3% of users get fraud burst
+			// (3-5 rapid high-value transactions + card locked + dispute +
+			// support contacted) at timeline midpoint. No flag — discover
+			// via cohort builder on users with card-locked + dispute-filed.
+			if (chance.bool({ likelihood: 3 }) && userEvents.length >= 2) {
+				const midIdx = Math.floor(userEvents.length / 2);
+				const midEvent = userEvents[midIdx];
+				const midTime = dayjs(midEvent.time);
+				const distinctId = midEvent.user_id;
+				const burstCount = chance.integer({ min: 3, max: 5 });
+				const fraudEvents = [];
+				const txnTemplate = userEvents.find(e => e.event === "transaction completed");
+				const cardTemplate = userEvents.find(e => e.event === "card locked");
+				const disputeTemplate = userEvents.find(e => e.event === "dispute filed");
+				const supportTemplate = userEvents.find(e => e.event === "support contacted");
 
-			// -----------------------------------------------------------
-			// Hook #3: FRAUD DETECTION PATTERN
-			// 3% of users experience a fraud event sequence: a burst of
-			// 3-5 rapid high-value transactions within 1 hour, followed by
-			// card locked, dispute filed, and support contacted events.
-			// All injected events are tagged with fraud_sequence: true.
-			// -----------------------------------------------------------
-			if (chance.bool({ likelihood: 3 })) {
-				// Find the midpoint of the user's timeline
-				if (userEvents.length >= 2) {
-					const midIdx = Math.floor(userEvents.length / 2);
-					const midEvent = userEvents[midIdx];
-					const midTime = dayjs(midEvent.time);
-					const distinctId = midEvent.user_id;
-
-					// Inject 3-5 rapid high-value transactions
-					const burstCount = chance.integer({ min: 3, max: 5 });
-					const fraudEvents = [];
-
-					// Find template events for cloning
-					const txnTemplate = userEvents.find(e => e.event === "transaction completed");
-					const cardTemplate = userEvents.find(e => e.event === "card locked");
-					const disputeTemplate = userEvents.find(e => e.event === "dispute filed");
-					const supportTemplate = userEvents.find(e => e.event === "support contacted");
-
-					for (let i = 0; i < burstCount; i++) {
-						if (txnTemplate) {
-							fraudEvents.push({
-								...txnTemplate,
-								time: midTime.add(i * 10, "minutes").toISOString(),
-								user_id: distinctId,
-								transaction_type: "purchase",
-								amount: chance.integer({ min: 500, max: 3000 }),
-								merchant_category: chance.pickone(["online", "retail"]),
-								payment_method: "credit",
-								fraud_sequence: true,
-							});
-						}
-					}
-
-					// Card locked after the burst
-					if (cardTemplate) {
+				for (let i = 0; i < burstCount; i++) {
+					if (txnTemplate) {
 						fraudEvents.push({
-							...cardTemplate,
-							time: midTime.add(burstCount * 10 + 5, "minutes").toISOString(),
+							...txnTemplate,
+							time: midTime.add(i * 10, "minutes").toISOString(),
 							user_id: distinctId,
-							reason: "suspicious_activity",
-							fraud_sequence: true,
+							transaction_type: "purchase",
+							amount: chance.integer({ min: 500, max: 3000 }),
+							merchant_category: chance.pickone(["online", "retail"]),
+							payment_method: "credit",
 						});
 					}
-
-					// Dispute filed shortly after
-					if (disputeTemplate) {
-						fraudEvents.push({
-							...disputeTemplate,
-							time: midTime.add(burstCount * 10 + 30, "minutes").toISOString(),
-							user_id: distinctId,
-							dispute_amount: chance.integer({ min: 500, max: 3000 }),
-							reason: "unauthorized",
-							fraud_sequence: true,
-						});
-					}
-
-					// Support contacted
-					if (supportTemplate) {
-						fraudEvents.push({
-							...supportTemplate,
-							time: midTime.add(burstCount * 10 + 45, "minutes").toISOString(),
-							user_id: distinctId,
-							channel: "phone",
-							issue_type: "card",
-							resolved: true,
-							fraud_sequence: true,
-						});
-					}
-
-					// Splice all fraud events into the user's timeline
-					userEvents.splice(midIdx + 1, 0, ...fraudEvents);
 				}
+				if (cardTemplate) fraudEvents.push({
+					...cardTemplate,
+					time: midTime.add(burstCount * 10 + 5, "minutes").toISOString(),
+					user_id: distinctId,
+					reason: "suspicious_activity",
+				});
+				if (disputeTemplate) fraudEvents.push({
+					...disputeTemplate,
+					time: midTime.add(burstCount * 10 + 30, "minutes").toISOString(),
+					user_id: distinctId,
+					dispute_amount: chance.integer({ min: 500, max: 3000 }),
+					reason: "unauthorized",
+				});
+				if (supportTemplate) fraudEvents.push({
+					...supportTemplate,
+					time: midTime.add(burstCount * 10 + 45, "minutes").toISOString(),
+					user_id: distinctId,
+					channel: "phone",
+					issue_type: "card",
+					resolved: true,
+				});
+				userEvents.splice(midIdx + 1, 0, ...fraudEvents);
 			}
 
-			// -----------------------------------------------------------
-			// Hook #4: LOW BALANCE CHURN
-			// Users who have 3+ balance checks showing < $15,000 are
-			// "struggling". After day 30, 50% of their events are removed
-			// and remaining events are tagged low_balance_churn: true.
-			// -----------------------------------------------------------
-			let lowBalanceChecks = 0;
-			userEvents.forEach((event) => {
-				if (event.event === "balance checked" && (event.account_balance || 0) < 15000) {
-					lowBalanceChecks++;
-				}
-			});
-
+			// HOOK 4: LOW BALANCE CHURN — users with 3+ balance checks
+			// under $15K lose 50% of post-day-30 events. No flag.
+			const lowBalanceChecks = userEvents.filter(e =>
+				e.event === "balance checked" && (e.account_balance || 0) < 15000
+			).length;
 			if (lowBalanceChecks >= 3) {
-				const day30 = DATASET_START.add(30, "days");
+				const day30 = datasetStart.add(30, "days");
 				for (let i = userEvents.length - 1; i >= 0; i--) {
-					const evt = userEvents[i];
-					if (dayjs(evt.time).isAfter(day30)) {
-						if (chance.bool({ likelihood: 50 })) {
-							userEvents.splice(i, 1);
-						} else {
-							evt.low_balance_churn = true;
-						}
+					if (dayjs(userEvents[i].time).isAfter(day30) && chance.bool({ likelihood: 50 })) {
+						userEvents.splice(i, 1);
 					}
 				}
 			}
 
-			// -----------------------------------------------------------
-			// Hook #5: BUDGET USERS SAVE MORE
-			// Users who created any budget have 2x savings contributions,
-			// 1.5x investment amounts, and extra savings goal events
-			// spliced into their timeline. Tagged budget_discipline: true.
-			// -----------------------------------------------------------
-			let hasBudget = false;
-			userEvents.forEach((event) => {
-				if (event.event === "budget created") {
-					hasBudget = true;
-				}
-			});
-
+			// HOOK 5: BUDGET DISCIPLINE — users with any budget-created event
+			// get savings 2x, investment amounts 1.5x, and extra cloned
+			// savings-goal events. No flag.
+			const hasBudget = userEvents.some(e => e.event === "budget created");
 			if (hasBudget) {
 				userEvents.forEach((event, idx) => {
 					const eventTime = dayjs(event.time);
-
-					// Double savings contributions
 					if (event.event === "savings goal set") {
 						event.monthly_contribution = Math.floor((event.monthly_contribution || 200) * 2);
-						event.budget_discipline = true;
 					}
-
-					// 1.5x investment amounts
 					if (event.event === "investment made") {
 						event.amount = Math.floor((event.amount || 250) * 1.5);
-						event.budget_discipline = true;
 					}
-
-					// Splice extra savings goal events (budget-conscious users set more goals)
 					if (event.event === "budget created" && chance.bool({ likelihood: 50 })) {
 						const savingsTemplate = userEvents.find(e => e.event === "savings goal set");
 						if (savingsTemplate) {
-							const extraGoal = {
+							userEvents.splice(idx + 1, 0, {
 								...savingsTemplate,
 								time: eventTime.add(chance.integer({ min: 1, max: 7 }), "days").toISOString(),
 								user_id: event.user_id,
 								goal_type: chance.pickone(["emergency", "vacation", "car", "home"]),
 								target_amount: chance.integer({ min: 1000, max: 20000 }),
 								monthly_contribution: chance.integer({ min: 100, max: 800 }),
-								budget_discipline: true,
-							};
-							userEvents.splice(idx + 1, 0, extraGoal);
+							});
 						}
 					}
 				});
+			}
+
+			// HOOK 10: TRANSACTION-COUNT MAGIC NUMBER (no flags)
+			// Sweet 6-10 transactions/user → +40% on investment_made amount
+			// (engaged transactor compounds wealth). Over 11+ → drop 20% of
+			// premium-upgraded events (already engaged; less upgrade pressure).
+			const txnCount = userEvents.filter(e => e.event === "transaction completed").length;
+			if (txnCount >= 6 && txnCount <= 10) {
+				userEvents.forEach(e => {
+					if (e.event === "investment made" && typeof e.amount === "number") {
+						e.amount = Math.round(e.amount * 1.4);
+					}
+				});
+			} else if (txnCount >= 11) {
+				for (let i = userEvents.length - 1; i >= 0; i--) {
+					if (userEvents[i].event === "premium upgraded" && chance.bool({ likelihood: 20 })) {
+						userEvents.splice(i, 1);
+					}
+				}
 			}
 		}
 

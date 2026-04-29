@@ -58,8 +58,14 @@ const repoIds = v.range(1, 150).map(() => `REPO_${v.uid(6)}`);
 
 /**
  * ===============================================================
- * ANALYTICS HOOKS (8 hooks)
+ * ANALYTICS HOOKS (10 hooks)
+ *
+ * Adds 10. BUILD-DEPLOY TIME-TO-CONVERT: enterprise/business 0.67x faster, free
+ * 1.33x slower (funnel-post). Discover via Build-Deploy Pipeline median TTC by tier.
  * ===============================================================
+ *
+ * NOTE: All cohort effects are HIDDEN — discoverable only via behavioral
+ * cohorts or raw-prop breakdowns. No cohort flag is stamped on events.
  *
  * ---------------------------------------------------------------
  * 1. BUILD FAILURE CASCADE (event hook)
@@ -76,40 +82,31 @@ const repoIds = v.range(1, 150).map(() => `REPO_${v.uid(6)}`);
  *   - Event: "build completed"
  *   - Measure: Average of "build_duration_sec"
  *   - Breakdown: "build_status"
- *   - Expected: failed ~2x longer than success
- *     (failed ~ 480s, success ~ 240s)
+ *   - Expected: failed ~ 2x longer than success
  *
  * REAL-WORLD ANALOGUE: Failed CI builds run full test suites,
- * timeout waiting for flaky tests, and trigger retry cascades
- * that inflate overall build times.
+ * timeout, and trigger retry cascades that inflate build times.
  *
  * ---------------------------------------------------------------
- * 2. NIGHT DEPLOY RISK (event hook)
+ * 2. NIGHT DEPLOY RISK (everything hook)
  * ---------------------------------------------------------------
  *
- * PATTERN: Deployments between 10PM-6AM get status forced to
- * "failed" 40% of the time. Night deploys are risky because
- * fewer engineers are online to catch issues.
+ * PATTERN: Deployments between 10PM-6AM UTC get deploy_status forced
+ * to "failed" 40% of the time. No flag — analyst breaks down by
+ * hour-of-day on deployment-completed events to discover the risk window.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Deploy Failure Rate by Hour
+ *   Report 1: Deploy Failure Rate by Hour of Day
  *   - Report type: Insights
  *   - Event: "deployment completed"
  *   - Measure: Total
  *   - Filter: deploy_status = "failed"
- *   - Breakdown: "is_night_deploy"
- *   - Expected: is_night_deploy=true shows ~40% failure vs ~15% baseline
+ *   - Breakdown: hour of day
+ *   - Expected: 22:00-05:59 hours show ~ 40% failure vs ~ 15% baseline
  *
- *   Report 2: Night Deploy Volume
- *   - Report type: Insights
- *   - Event: "deployment completed"
- *   - Measure: Total
- *   - Breakdown: "is_night_deploy"
- *   - Expected: ~15-20% of deploys happen at night
- *
- * REAL-WORLD ANALOGUE: Night and weekend deploys have higher
- * failure rates due to skeleton crews and delayed incident response.
+ * REAL-WORLD ANALOGUE: Night deploys fail more due to skeleton crews
+ * and delayed incident response.
  *
  * ---------------------------------------------------------------
  * 3. COPILOT ADOPTION -> PR VELOCITY (everything hook)
@@ -153,26 +150,26 @@ const repoIds = v.range(1, 150).map(() => `REPO_${v.uid(6)}`);
  * in SRE/DevOps. Alert fatigue degrades response quality over time.
  *
  * ---------------------------------------------------------------
- * 5. OPEN SOURCE -> PAID CONVERSION (everything hook)
+ * 5. OPEN SOURCE POWER USAGE (everything hook)
  * ---------------------------------------------------------------
  *
- * PATTERN: OSS users with >15 total events get 30% of their events
- * converted to team-tier behavior (subscription_tier set to "team").
- * Power OSS users eventually hit limits and convert.
+ * PATTERN: OSS-segment users with >15 events get extra cloned build
+ * + deploy events in their later activity (representing power usage).
+ * Cloned events use unique offset timestamps. No flag — discover via
+ * cohort by segment + event count, observing per-user build/deploy volume.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Tier Migration for OSS Users
- *   - Report type: Insights
- *   - Event: any event
- *   - Measure: Total
- *   - Filter: segment = "oss_user"
- *   - Breakdown: "subscription_tier"
- *   - Expected: ~30% of active OSS user events show "team" tier
+ *   Report 1: Builds per User — Active OSS Users
+ *   - Report type: Insights (with cohort)
+ *   - Cohort A: segment = "oss_user" AND events >= 15
+ *   - Cohort B: segment = "oss_user" AND events < 15
+ *   - Event: "build completed"
+ *   - Measure: Total per user
+ *   - Expected: A noticeably higher than B
  *
- * REAL-WORLD ANALOGUE: Open source users who exceed free-tier
- * limits (build minutes, private repos) organically convert to
- * paid plans.
+ * REAL-WORLD ANALOGUE: Power OSS users hit free-tier limits via
+ * heavy build/deploy volume.
  *
  * ---------------------------------------------------------------
  * 6. POST-OUTAGE RECOVERY (everything hook)
@@ -232,8 +229,38 @@ const repoIds = v.range(1, 150).map(() => `REPO_${v.uid(6)}`);
  *   - Expected: enterprise ~ 60% vs free ~ 40% conversion
  *
  * REAL-WORLD ANALOGUE: Enterprise CI/CD customers get priority
- * runners, dedicated support, and SLA-backed uptime guarantees
- * that dramatically improve pipeline reliability.
+ * runners, dedicated support, and SLA-backed uptime guarantees.
+ *
+ * ---------------------------------------------------------------
+ * 9. BUILD-COUNT MAGIC NUMBER (everything hook)
+ * ---------------------------------------------------------------
+ *
+ * PATTERN: Users with 15-30 "build completed" events sit in the
+ * healthy CI sweet spot — 30% extra deploy events are cloned (unique
+ * timestamps). Users with 31+ builds suffer flaky-CI burnout; ~25%
+ * of their deploy events drop. No flag — discover by binning users
+ * on build-count and comparing per-user deploy volume.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Deploys per User by Build Bucket
+ *   - Report type: Insights (with cohort)
+ *   - Cohort A: users with 15-30 "build completed"
+ *   - Cohort B: users with 0-14 "build completed"
+ *   - Event: "deployment completed"
+ *   - Measure: Total per user
+ *   - Expected: A ~ 1.3x B
+ *
+ *   Report 2: Deploys per User on Heavy Builders
+ *   - Report type: Insights (with cohort)
+ *   - Cohort C: users with >= 31 "build completed"
+ *   - Cohort A: users with 15-30
+ *   - Event: "deployment completed"
+ *   - Measure: Total per user
+ *   - Expected: C ~ 25% fewer deploys per user vs A
+ *
+ * REAL-WORLD ANALOGUE: Healthy CI cadence drives reliable deploys;
+ * runaway builds signal a flaky pipeline that scares teams off ships.
  *
  * ===============================================================
  * EXPECTED METRICS SUMMARY
@@ -245,10 +272,12 @@ const repoIds = v.range(1, 150).map(() => `REPO_${v.uid(6)}`);
  * Night Deploy Risk           | deploy failure rate | 15%      | 40%     | 2.7x
  * Copilot PR Velocity         | PRs/user            | 3        | 4.5     | 1.5x
  * On-Call Fatigue             | response_time_min   | 30min    | 90min   | 3x
- * OSS -> Paid Conversion      | team tier events    | 0%       | 30%     | -
+ * OSS Power Usage             | builds/user (active)| 1x       | ~ 1.3x  | 1.3x
  * Post-Outage Recovery        | deploys/day         | 50       | 100+    | 2x+
  * DevOps Lead Profiles        | team_size           | 10       | 30      | 3x
- * Enterprise Funnel Lift      | funnel conversion   | 40%      | 60%     | ~1.5x
+ * Enterprise Funnel Lift      | funnel conversion   | 40%      | 60%     | ~ 1.5x
+ * Build-Count Magic Number    | sweet deploys/user  | 1x       | 1.3x    | 1.3x
+ * Build-Count Magic Number    | over deploys/user   | 1x       | 0.75x   | -25%
  */
 
 /** @type {Config} */
@@ -317,7 +346,6 @@ const config = {
 				deploy_status: ["success", "success", "success", "failed", "rolled_back"],
 				environment: ["production", "production", "staging", "staging", "dev", "preview"],
 				deploy_duration_sec: u.weighNumRange(15, 300, 0.4, 90),
-				is_night_deploy: [false],
 				preview_enabled: [false],
 			},
 		},
@@ -717,6 +745,27 @@ const config = {
 
 	// -- Hook Function ----------------------------------------
 	hook: function (record, type, meta) {
+		// HOOK 10 (T2C): BUILD-DEPLOY TIME-TO-CONVERT (funnel-post)
+		// Enterprise tier completes Build-Deploy Pipeline funnel 1.5x faster
+		// (factor 0.67); free tier 1.33x slower (factor 1.33).
+		if (type === "funnel-post") {
+			const segment = meta?.profile?.subscription_tier;
+			if (Array.isArray(record) && record.length > 1) {
+				const factor = (
+					segment === "enterprise" || segment === "business" ? 0.67 :
+					segment === "free" ? 1.33 :
+					1.0
+				);
+				if (factor !== 1.0) {
+					for (let i = 1; i < record.length; i++) {
+						const prev = dayjs(record[i - 1].time);
+						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+						record[i].time = prev.add(newGap, "milliseconds").toISOString();
+					}
+				}
+			}
+		}
+
 		// -- HOOK 7: DEVOPS LEAD PROFILE ENRICHMENT (user) --------
 		// DevOps leads get team_size 10-50 and repos_connected 5-20.
 		// Platform engineers get moderate boosts. Others stay at defaults.
@@ -747,21 +796,13 @@ const config = {
 				record.build_duration_sec = Math.floor((record.build_duration_sec || 240) * 2);
 			}
 
-			// -- HOOK 2: NIGHT DEPLOY RISK (event) ----------------
-			// Deployments between 10PM-6AM get forced to "failed" 40% of the time.
-			if (record.event === "deployment completed") {
-				const hour = dayjs(record.time).hour();
-				if (hour >= 22 || hour < 6) {
-					record.is_night_deploy = true;
-					if (chance.bool({ likelihood: 40 })) {
-						record.deploy_status = "failed";
-					}
-				}
-			}
+			// (HOOK 2: NIGHT DEPLOY RISK moved to everything hook — hour checks
+			// must run after bunchIntoSessions redistributes timestamps)
 		}
 
 		// -- EVERYTHING HOOKS -------------------------------------
 		if (type === "everything") {
+			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
 			let events = record;
 			if (!events.length) return record;
 			const profile = meta && meta.profile ? meta.profile : {};
@@ -773,6 +814,19 @@ const config = {
 				if (profile.subscription_tier) e.subscription_tier = profile.subscription_tier;
 				if (profile.Platform) e.Platform = profile.Platform;
 				if (profile.language) e.language = profile.language;
+			});
+
+			// -- HOOK 2: NIGHT DEPLOY RISK -------------------------
+			// Deployments between 10PM-6AM get deploy_status forced to
+			// "failed" 40% of the time. No flag — analyst breaks down by
+			// hour-of-day on deployment completed events.
+			events.forEach(e => {
+				if (e.event === "deployment completed") {
+					const hour = new Date(e.time).getUTCHours();
+					if ((hour >= 22 || hour < 6) && chance.bool({ likelihood: 40 })) {
+						e.deploy_status = "failed";
+					}
+				}
 			});
 
 			// -- HOOK 8: ENTERPRISE BUILD-DEPLOY FUNNEL LIFT ------
@@ -823,12 +877,59 @@ const config = {
 				});
 			}
 
-			// -- HOOK 5: OPEN SOURCE -> PAID CONVERSION -----------
-			// OSS users with >15 events get 30% of events converted to "team" tier.
+			// -- HOOK 5: OPEN SOURCE POWER USAGE ------------------
+			// OSS users with >15 events get extra cloned build + deploy events
+			// in their later activity (representing power usage that pushes them
+			// toward limits). No flag — discover via cohort by segment + event count.
 			if (profile.segment === "oss_user" && events.length > 15) {
-				const conversionPoint = Math.floor(events.length * 0.7);
-				for (let i = conversionPoint; i < events.length; i++) {
-					events[i].subscription_tier = "team";
+				const buildTemplate = events.find(e => e.event === "build completed");
+				const deployTemplate = events.find(e => e.event === "deployment completed");
+				if (buildTemplate || deployTemplate) {
+					const conversionPoint = Math.floor(events.length * 0.7);
+					const tail = events.slice(conversionPoint);
+					tail.forEach(e => {
+						const tBase = dayjs(e.time);
+						if (buildTemplate && chance.bool({ likelihood: 30 })) {
+							events.push({
+								...buildTemplate,
+								time: tBase.add(chance.integer({ min: 5, max: 240 }), "minutes").toISOString(),
+								user_id: e.user_id,
+							});
+						}
+						if (deployTemplate && chance.bool({ likelihood: 20 })) {
+							events.push({
+								...deployTemplate,
+								time: tBase.add(chance.integer({ min: 10, max: 240 }), "minutes").toISOString(),
+								user_id: e.user_id,
+							});
+						}
+					});
+				}
+			}
+
+			// -- HOOK 9: BUILD-COUNT MAGIC NUMBER (no flags) ------
+			// Sweet 15-30 builds → +30% deploys (clone with unique offset).
+			// Over 31+ → drop 25% of deploys (flaky CI burnout).
+			const buildCount = events.filter(e => e.event === "build completed").length;
+			if (buildCount >= 15 && buildCount <= 30) {
+				const deployTemplate = events.find(e => e.event === "deployment completed");
+				if (deployTemplate) {
+					const deploys = events.filter(e => e.event === "deployment completed");
+					const extras = Math.floor(deploys.length * 0.3);
+					for (let k = 0; k < extras; k++) {
+						const tpl = deploys[k % deploys.length];
+						events.push({
+							...tpl,
+							time: dayjs(tpl.time).add(chance.integer({ min: 5, max: 360 }), "minutes").toISOString(),
+							user_id: tpl.user_id,
+						});
+					}
+				}
+			} else if (buildCount >= 31) {
+				for (let i = events.length - 1; i >= 0; i--) {
+					if (events[i].event === "deployment completed" && chance.bool({ likelihood: 25 })) {
+						events.splice(i, 1);
+					}
 				}
 			}
 
@@ -837,8 +938,8 @@ const config = {
 			// aggressively cloned to produce a visible spike above baseline.
 			// Shifted later than outage end (d42.25) so natural volume has
 			// recovered from the 0.05x suppression before cloning kicks in.
-			const RECOVERY_START = DATASET_START.add(44, "days");
-			const RECOVERY_END = DATASET_START.add(48, "days");
+			const RECOVERY_START = datasetStart.add(44, "days");
+			const RECOVERY_END = datasetStart.add(48, "days");
 			const deployEvents = events.filter(e => {
 				if (e.event !== "deployment completed") return false;
 				const t = dayjs(e.time);

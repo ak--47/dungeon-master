@@ -56,7 +56,10 @@ const supplierIds = v.range(1, 150).map(() => `SUP_${v.uid(6)}`);
 
 /**
  * ===================================================================
- * ANALYTICS HOOKS (8 hooks)
+ * ANALYTICS HOOKS (10 hooks)
+ *
+ * Adds 10. ONBOARDING TIME-TO-CONVERT: enterprise 0.71x faster, small_business
+ * 1.3x slower (funnel-post). Discover via Onboarding funnel median TTC by company_tier.
  * ===================================================================
  *
  * -------------------------------------------------------------------
@@ -243,6 +246,41 @@ const supplierIds = v.range(1, 150).map(() => `SUP_${v.uid(6)}`);
  * REAL-WORLD ANALOGUE: Small businesses lack dedicated IT teams,
  * leading to incomplete integration setup and lower alert adoption.
  *
+ * -------------------------------------------------------------------
+ * 9. INVENTORY-CHECK MAGIC NUMBER (everything hook)
+ * -------------------------------------------------------------------
+ *
+ * PATTERN: Users with 5-15 "inventory checked" events sit in the
+ * "engaged-but-focused" sweet spot — every "purchase order created"
+ * event gets quantity boosted ~25%. Users with 16 or more inventory
+ * checks are over-engaged (paralysis); ~30% of their "purchase order
+ * created" events are dropped. No flag is stamped — discoverable only
+ * by binning users on inventory-check COUNT and comparing PO totals.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: PO Quantity by Inventory-Check Bucket
+ *   - Report type: Insights (with cohort)
+ *   - Cohort A: users with 5-15 "inventory checked" events
+ *   - Cohort B: users with 0-4 "inventory checked" events
+ *   - Event: "purchase order created"
+ *   - Measure: Average of "quantity"
+ *   - Compare cohort A vs cohort B
+ *   - Expected: cohort A ~ 1.25x higher quantity than B
+ *
+ *   Report 2: POs per User by Browse Intensity
+ *   - Report type: Insights (with cohort)
+ *   - Cohort C: users with >= 16 "inventory checked" events
+ *   - Cohort A: users with 5-15 "inventory checked" events
+ *   - Event: "purchase order created"
+ *   - Measure: Total events per user
+ *   - Compare cohort C vs cohort A
+ *   - Expected: cohort C has ~ 30% fewer POs per user
+ *
+ * REAL-WORLD ANALOGUE: A focused operations team that monitors
+ * stock just enough places larger, more confident orders; an
+ * obsessive checker is paralysed and orders less.
+ *
  * ===================================================================
  * EXPECTED METRICS SUMMARY
  * ===================================================================
@@ -256,7 +294,9 @@ const supplierIds = v.range(1, 150).map(() => `SUP_${v.uid(6)}`);
  * Alert Fatigue               | response_time_hours | 4h       | 8-12h   | 2-3x
  * Trial Churn                 | events after wk 1   | 5        | 2.5     | 0.5x
  * Enterprise Profiles         | warehouse_count     | 3        | 10      | 3.3x
- * Small-Biz Conversion Drop  | funnel conversion   | 30%      | 20%     | 0.65x
+ * Small-Biz Conversion Drop   | funnel conversion   | 30%      | 20%     | 0.65x
+ * Inventory-Check Magic Num   | sweet PO quantity   | 1x       | 1.25x   | 1.25x
+ * Inventory-Check Magic Num   | over POs/user       | 1x       | 0.7x    | -30%
  */
 
 /** @type {Config} */
@@ -691,6 +731,27 @@ const config = {
 
 	// -- Hook Function ------------------------------------------------
 	hook: function (record, type, meta) {
+		// HOOK 10 (T2C): ONBOARDING TIME-TO-CONVERT (funnel-post)
+		// Enterprise tier completes Onboarding funnel 1.4x faster (factor 0.71);
+		// small_business 1.3x slower (factor 1.3).
+		if (type === "funnel-post") {
+			const segment = meta?.profile?.company_tier;
+			if (Array.isArray(record) && record.length > 1) {
+				const factor = (
+					segment === "enterprise" ? 0.71 :
+					segment === "small_business" || segment === "trial" ? 1.3 :
+					1.0
+				);
+				if (factor !== 1.0) {
+					for (let i = 1; i < record.length; i++) {
+						const prev = dayjs(record[i - 1].time);
+						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+						record[i].time = prev.add(newGap, "milliseconds").toISOString();
+					}
+				}
+			}
+		}
+
 		// -- HOOK 7: ENTERPRISE PROFILES (user) -----------------------
 		// Enterprise ops get large warehouse_count and employee_count.
 		if (type === "user") {
@@ -819,6 +880,24 @@ const config = {
 						if (dayjs(record[i].time).isAfter(cutoff) && chance.bool({ likelihood: 50 })) {
 							record.splice(i, 1);
 						}
+					}
+				}
+			}
+
+			// -- HOOK 9: INVENTORY-CHECK MAGIC NUMBER (no flags) ------
+			// Sweet 5-15 inventory checks → +25% PO quantity.
+			// Over 16+ → drop 30% of PO created events.
+			const invCheckCount = record.filter(e => e.event === 'inventory checked').length;
+			if (invCheckCount >= 5 && invCheckCount <= 15) {
+				record.forEach(e => {
+					if (e.event === 'purchase order created' && typeof e.quantity === 'number') {
+						e.quantity = Math.round(e.quantity * 1.25);
+					}
+				});
+			} else if (invCheckCount >= 16) {
+				for (let i = record.length - 1; i >= 0; i--) {
+					if (record[i].event === 'purchase order created' && chance.bool({ likelihood: 30 })) {
+						record.splice(i, 1);
 					}
 				}
 			}

@@ -56,7 +56,13 @@ const listingIds = v.range(1, 500).map(() => `LST_${v.uid(8)}`);
 
 /**
  * ═══════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (8 hooks)
+ * ANALYTICS HOOKS (10 hooks)
+ *
+ * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable via
+ * raw-prop breakdowns (segment, day, category) or behavioral cohorts.
+ *
+ * Adds 9. BROWSE TO PURCHASE TIME-TO-CONVERT and 10. MESSAGE-COUNT MAGIC
+ * NUMBER on top of original 8.
  * ═══════════════════════════════════════════════════════════════
  *
  * ───────────────────────────────────────────────────────────────
@@ -238,20 +244,65 @@ const listingIds = v.range(1, 500).map(() => `LST_${v.uid(8)}`);
  * REAL-WORLD ANALOGUE: Returning buyers have established trust
  * and familiarity with the platform, converting at higher rates.
  *
+ * ───────────────────────────────────────────────────────────────
+ * 9. BROWSE TO PURCHASE TIME-TO-CONVERT (funnel-post)
+ *
+ * PATTERN: Power_seller and frequent_buyer users complete the
+ * Browse to Purchase funnel 1.4x faster (factor 0.71); window_shopper
+ * 1.4x slower (factor 1.4).
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Browse to Purchase Median Time-to-Convert by Segment
+ *   - Funnels > "item searched" -> "item viewed" -> "add to cart" -> "purchase completed"
+ *   - Measure: Median time to convert
+ *   - Breakdown: segment
+ *   - Expected: power/frequent ~ 0.71x; window ~ 1.4x
+ *
+ * ───────────────────────────────────────────────────────────────
+ * 10. MESSAGE-COUNT MAGIC NUMBER (in-funnel, everything)
+ *
+ * PATTERN: Sweet 2-5 message-sent events between item-viewed and
+ * offer-received → +35% on offer_amount of offer-received events.
+ * Over 6+ → drop 25% of purchase-completed events (haggling deadlock).
+ * No flag.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Avg Offer Amount by Message Bucket
+ *   - Cohort A: users with 2-5 messages between item-viewed and offer-received
+ *   - Cohort B: users with 0-1
+ *   - Event: "offer received"
+ *   - Measure: Average of "offer_amount"
+ *   - Expected: A ~ 1.35x B
+ *
+ *   Report 2: Purchase Rate on Heavy Messengers
+ *   - Cohort C: users with >= 6 messages
+ *   - Cohort A: users with 2-5
+ *   - Event: "purchase completed"
+ *   - Measure: Total per user
+ *   - Expected: C ~ 25% fewer purchases per user
+ *
+ * REAL-WORLD ANALOGUE: A few quick clarifying messages close deals;
+ * extended haggling kills conversion.
+ *
  * ═══════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY
  * ═══════════════════════════════════════════════════════════════
  *
- * Hook                        | Metric              | Baseline | Effect  | Ratio
- * ────────────────────────────|─────────────────────|──────────|─────────|──────
- * Fee Change Impact           | listing_fee         | $15      | $20     | 1.3x
- * Weekend Shopping Surge      | total_amount        | $60      | $72     | 1.2x
- * Seller Success → Trust      | purchases/user      | 3        | 6       | 2x
- * Electronics Category Lift   | electronics purch.  | baseline | 1.5x   | 1.5x
- * Response Time → Conversion  | offer_accepted/user | 1        | 2       | 2x
- * New Seller Churn            | events post-day-14  | 100%     | 60%     | 0.6x
- * Power Seller Profiles       | total_transactions  | 0        | 100-500 | --
- * Frequent Buyer Funnel       | funnel conversion   | 30%      | 39%     | 1.3x
+ * Hook                        | Metric              | Baseline | Effect    | Ratio
+ * ----------------------------|---------------------|----------|-----------|------
+ * Fee Change Impact           | listing_fee post-D45| 1x       | 1.3x      | 1.3x
+ * Weekend Shopping Surge      | total_amount Sat/Sun| 1x       | 1.2x      | 1.2x
+ * Seller Success → Trust      | purchases/user      | 1x       | 2x        | 2x
+ * Electronics Category Lift   | electronics purch.  | 1x       | 1.5x      | 1.5x
+ * Response Time → Conversion  | offer_accepted/user | 1x       | 2x        | 2x
+ * New Seller Churn            | events post-D14     | 1x       | 0.6x      | -40%
+ * Power Seller Profiles       | total_transactions  | 0        | 100-500   | --
+ * Frequent Buyer Funnel       | funnel conversion   | 30%      | 39%       | 1.3x
+ * Browse to Purchase T2C      | median min by segment| 1x      | 0.71/1.4x | ~ 2x range
+ * Message Magic Number        | sweet offer_amount  | 1x       | 1.35x     | 1.35x
+ * Message Magic Number        | over purchases/user | 1x       | 0.75x     | -25%
  */
 
 /** @type {Config} */
@@ -336,7 +387,6 @@ const config = {
 				item_count: u.weighNumRange(1, 5, 0.3),
 				payment_method: ["credit_card", "credit_card", "paypal", "apple_pay", "debit"],
 				shipping_method: ["standard", "standard", "express", "pickup"],
-				is_whale_purchase: [false],
 			},
 		},
 		{
@@ -348,7 +398,6 @@ const config = {
 				asking_price: u.weighNumRange(5, 500, 0.3, 50),
 				condition: ["new", "new", "like_new", "good", "fair"],
 				listing_fee: u.weighNumRange(5, 30, 0.5, 15),
-				fee_change: ["none"],
 			},
 		},
 		{
@@ -728,31 +777,43 @@ const config = {
 			}
 		}
 
-		// ── HOOK 8: FREQUENT BUYER FUNNEL LIFT (funnel-pre) ──
-		// (conversionRate filtering moved to everything hook)
-		if (type === "funnel-pre") {
-			// no-op: conversion filtering handled via event dropping in everything hook
+		// HOOK 9 (T2C): BROWSE TO PURCHASE TIME-TO-CONVERT (funnel-post)
+		// Power_seller users complete Browse to Purchase funnel 1.4x faster
+		// (factor 0.71); window_shopper 1.4x slower (factor 1.4).
+		if (type === "funnel-post") {
+			const segment = meta?.profile?.segment;
+			if (Array.isArray(record) && record.length > 1) {
+				const factor = (
+					segment === "power_seller" || segment === "frequent_buyer" ? 0.71 :
+					segment === "window_shopper" ? 1.4 :
+					1.0
+				);
+				if (factor !== 1.0) {
+					for (let i = 1; i < record.length; i++) {
+						const prev = dayjs(record[i - 1].time);
+						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+						record[i].time = prev.add(newGap, "milliseconds").toISOString();
+					}
+				}
+			}
 		}
 
-		// ── HOOK 1: FEE CHANGE IMPACT (event) ────────────────
-		// Listings after day 45 get 1.3x higher listing_fee.
+		// HOOK 1: FEE CHANGE IMPACT (event) — listings after day 45 get
+		// listing_fee 1.3x. No flag — discover via line chart by day.
 		if (type === "event") {
-			const FEE_CHANGE_DAY = DATASET_START.add(45, "days");
+			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
+			const FEE_CHANGE_DAY = datasetStart.add(45, "days");
 			if (record.event === "listing created") {
 				const eventTime = dayjs(record.time);
 				if (eventTime.isAfter(FEE_CHANGE_DAY)) {
 					record.listing_fee = Math.floor((record.listing_fee || 15) * 1.3);
-					record.fee_change = "increased";
 				}
 			}
-
-			// ── HOOK 2: WEEKEND SHOPPING SURGE ───────────────
-			// Moved to the everything hook (after purchase cloning)
-			// so the 1.2x boost applies to both original AND cloned purchases.
 		}
 
 		// ── EVERYTHING HOOKS ─────────────────────────────────
 		if (type === "everything") {
+			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
 			let events = record;
 			if (!events.length) return record;
 
@@ -851,7 +912,7 @@ const config = {
 			// ── HOOK 6: NEW SELLER CHURN ─────────────────────
 			// New sellers with <10 events lose 40% of events after day 14.
 			if (profile && profile.segment === "new_seller" && events.length < 10) {
-				const DAY_14 = DATASET_START.add(14, "days");
+				const DAY_14 = datasetStart.add(14, "days");
 				for (let i = events.length - 1; i >= 0; i--) {
 					const eventTime = dayjs(events[i].time);
 					if (eventTime.isAfter(DAY_14) && chance.bool({ likelihood: 40 })) {
@@ -860,18 +921,46 @@ const config = {
 				}
 			}
 
-			// ── HOOK 2: WEEKEND SHOPPING SURGE (everything) ─────
-			// Applied AFTER all purchase cloning (Hooks 3, 4) so the
-			// 1.2x boost hits both original and injected purchases.
+			// HOOK 2: WEEKEND SHOPPING SURGE — Sat/Sun purchases get
+			// total_amount 1.2x. Mutates raw prop. No flag.
 			events.forEach(e => {
 				if (e.event === "purchase completed") {
 					const dow = new Date(e.time).getUTCDay();
-					// Saturday=6, Sunday=0
 					if (dow === 0 || dow === 6) {
 						e.total_amount = Math.floor((e.total_amount || 60) * 1.2);
 					}
 				}
 			});
+
+			// HOOK 10: MESSAGE-COUNT MAGIC NUMBER (in-funnel, no flags)
+			// Sweet 2-5 message-sent events between item-viewed and
+			// offer-received → +35% on offer-received offer_amount/asking_price.
+			// Over 6+ → drop 25% of purchase-completed events (over-message
+			// signals haggling deadlock).
+			const itemViewed = events.find(e => e.event === "item viewed");
+			const offerReceived = events.find(e => e.event === "offer received");
+			if (itemViewed && offerReceived) {
+				const aTime = dayjs(itemViewed.time);
+				const bTime = dayjs(offerReceived.time);
+				const msgBetween = events.filter(e =>
+					e.event === "message sent" &&
+					dayjs(e.time).isAfter(aTime) &&
+					dayjs(e.time).isBefore(bTime)
+				).length;
+				if (msgBetween >= 2 && msgBetween <= 5) {
+					events.forEach(e => {
+						if (e.event === "offer received" && typeof e.offer_amount === "number") {
+							e.offer_amount = Math.round(e.offer_amount * 1.35);
+						}
+					});
+				} else if (msgBetween >= 6) {
+					for (let i = events.length - 1; i >= 0; i--) {
+						if (events[i].event === "purchase completed" && chance.bool({ likelihood: 25 })) {
+							events.splice(i, 1);
+						}
+					}
+				}
+			}
 
 			return record;
 		}

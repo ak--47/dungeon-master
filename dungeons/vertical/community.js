@@ -56,7 +56,14 @@ const communityIds = v.range(1, 30).map(() => `COMM_${v.uid(4)}`);
 
 /**
  * ===================================================================
- * ANALYTICS HOOKS (8 hooks)
+ * ANALYTICS HOOKS (10 hooks)
+ *
+ * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable via
+ * raw-prop breakdowns (day, content_hub, subscription_tier) or behavioral cohorts.
+ *
+ * Adds 9. CONTENT CREATION TIME-TO-CONVERT (Pro 1.3x faster, Free 1.25x slower)
+ * and 10. ARTICLE-PUBLISHED MAGIC NUMBER (sweet 2-5 → +35% upvote_count;
+ * over 6+ → drop 25% upvote events).
  * ===================================================================
  *
  * -------------------------------------------------------------------
@@ -306,7 +313,6 @@ const config = {
 				content_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
 				view_count: u.weighNumRange(1, 100, 0.4, 50),
 				time_on_page_sec: u.weighNumRange(5, 600, 0.4, 45),
-				is_weekend: [false],
 			},
 		},
 		{
@@ -318,8 +324,6 @@ const config = {
 				word_count: u.weighNumRange(200, 5000, 0.4, 1500),
 				has_images: [true, true, true, false],
 				category: ["lore", "character", "episode_guide", "review", "tutorial", "news"],
-				is_weekend: [false],
-				poll_enabled: [false],
 			},
 		},
 		{
@@ -694,20 +698,30 @@ const config = {
 			}
 		}
 
-		// -- HOOK 8: PRO SUBSCRIBER CONTENT CREATION LIFT
-		// Conversion differences handled in everything hook via event filtering.
-		// (funnel-pre conversionRate modifications are diluted by organic events)
-
-		// -- HOOK 1: WEEKEND CONTENT SURGE ----------------------------
-		// Moved to everything hook (after sessionization) so DOW tags
-		// match final timestamps. See everything hook below.
-
-		// -- HOOK 2: TRENDING TOPIC WINDOW ----------------------------
-		// Moved to everything hook (after superProp stamping) so it
-		// uses the profile's consistent content_hub.
+		// HOOK 9 (T2C): CONTENT CREATION TIME-TO-CONVERT (funnel-post)
+		// Pro/supporter subscribers complete the Content Creation funnel
+		// 1.3x faster (factor 0.77); Free 1.25x slower (factor 1.25).
+		if (type === "funnel-post") {
+			const segment = meta?.profile?.subscription_tier;
+			if (Array.isArray(record) && record.length > 1) {
+				const factor = (
+					segment === "pro" || segment === "supporter" ? 0.77 :
+					segment === "free" ? 1.25 :
+					1.0
+				);
+				if (factor !== 1.0) {
+					for (let i = 1; i < record.length; i++) {
+						const prev = dayjs(record[i - 1].time);
+						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+						record[i].time = prev.add(newGap, "milliseconds").toISOString();
+					}
+				}
+			}
+		}
 
 		// -- EVERYTHING HOOKS -----------------------------------------
 		if (type === "everything") {
+			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
 			let events = record;
 			if (!events.length) return record;
 			const profile = meta && meta.profile ? meta.profile : {};
@@ -721,17 +735,13 @@ const config = {
 				if (profile.content_hub) e.content_hub = profile.content_hub;
 			});
 
-			// -- HOOK 1: WEEKEND CONTENT SURGE -------------------------
-			// Articles published/viewed on weekends get 1.5x word_count.
-			// Runs after sessionization so DOW tags match final timestamps.
+			// HOOK 1: WEEKEND CONTENT SURGE — articles on Sat/Sun get
+			// word_count 1.5x. Mutates raw prop. No flag.
 			for (const e of events) {
 				if (e.event === 'article published' || e.event === 'article viewed') {
 					const dow = new Date(e.time).getUTCDay();
-					if (dow === 0 || dow === 6) {
-						e.is_weekend = true;
-						if (e.word_count) {
-							e.word_count = Math.floor(e.word_count * 1.5);
-						}
+					if ((dow === 0 || dow === 6) && e.word_count) {
+						e.word_count = Math.floor(e.word_count * 1.5);
 					}
 				}
 			}
@@ -740,8 +750,8 @@ const config = {
 			// Days 35-50: gaming hub articles get 2x view_count.
 			// Runs after superProp stamping so content_hub is the
 			// profile's consistent value, not the random event-level one.
-			const TREND_START = DATASET_START.add(35, "days");
-			const TREND_END = DATASET_START.add(50, "days");
+			const TREND_START = datasetStart.add(35, "days");
+			const TREND_END = datasetStart.add(50, "days");
 			if (profile.content_hub === "gaming") {
 				events.forEach(e => {
 					if (e.event === "article viewed") {
@@ -807,13 +817,32 @@ const config = {
 				});
 			}
 
-			// -- HOOK 6: LURKER CHURN ---------------------------------
-			// Users with <5 total events lose 60% after day 10.
+			// HOOK 6: LURKER CHURN — users with <5 events lose 60% after
+			// day 10. No flag.
 			if (events.length < 5 && events.length > 0) {
 				const firstEventTime = dayjs(events[0].time);
 				const cutoff = firstEventTime.add(10, "days");
 				for (let i = events.length - 1; i >= 0; i--) {
 					if (dayjs(events[i].time).isAfter(cutoff) && chance.bool({ likelihood: 60 })) {
+						events.splice(i, 1);
+					}
+				}
+			}
+
+			// HOOK 10: ARTICLE-PUBLISHED MAGIC NUMBER (no flags)
+			// Sweet 2-5 articles published → +35% on upvote_count for
+			// upvote-given events. Over 6+ → drop 25% of upvote-given events
+			// (over-publishing dilutes signal). No flag.
+			const articleCount = events.filter(e => e.event === "article published").length;
+			if (articleCount >= 2 && articleCount <= 5) {
+				events.forEach(e => {
+					if (e.event === "upvote given" && typeof e.upvote_count === "number") {
+						e.upvote_count = Math.round(e.upvote_count * 1.35);
+					}
+				});
+			} else if (articleCount >= 6) {
+				for (let i = events.length - 1; i >= 0; i--) {
+					if (events[i].event === "upvote given" && chance.bool({ likelihood: 25 })) {
 						events.splice(i, 1);
 					}
 				}

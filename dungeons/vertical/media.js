@@ -44,179 +44,223 @@ const chance = u.initChance(SEED);
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (8 architected patterns)
+ * ANALYTICS HOOKS (10 hooks)
+ *
+ * Adds 10. CORE VIEWING LOOP TIME-TO-CONVERT: premium 0.71x faster, free 1.25x
+ * slower (funnel-post). Discover via funnel median TTC by subscription_plan.
  * ═══════════════════════════════════════════════════════════════════════════════
  *
+ * NOTE: All cohort effects are HIDDEN — discoverable only via behavioral cohorts
+ * (count an event per user, then measure downstream). No cohort flag is stamped
+ * on events. Time-window patterns mutate config-defined props or drop events.
+ *
  * ───────────────────────────────────────────────────────────────────────────────
- * 1. GENRE FUNNEL CONVERSION (funnel-pre)
+ * 1. GENRE FUNNEL CONVERSION (everything)
  * ───────────────────────────────────────────────────────────────────────────────
  *
- * PATTERN: Comedy and Animation content has 1.3x higher funnel conversion rates,
- * while Documentary content has 0.7x conversion (users browse but abandon more).
+ * PATTERN: 25% of "playback completed" events on documentary genre are dropped,
+ * depressing the documentary funnel completion rate. No flag — discover via
+ * funnel breakdown by genre.
  *
- * HOW TO FIND IT:
- *   - Funnels: "content browsed" -> "content selected" -> "playback started" -> "playback completed"
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Discovery Funnel by Genre
+ *   - Report type: Funnels
+ *   - Steps: "content browsed" -> "content selected" -> "playback started" -> "playback completed"
  *   - Breakdown: "genre"
- *   - Expected: Comedy/Animation convert at ~65% vs Documentary at ~35%
- *   - Also try: Insights on "content selected", breakdown by "genre_boost"
+ *   - Expected: documentary ~ 0.7x conversion vs other genres
+ *
+ * REAL-WORLD ANALOGUE: Heavier content gets started but abandoned more often
+ * than light comedy or animation.
  *
  * ───────────────────────────────────────────────────────────────────────────────
  * 2. BINGE-WATCHING PATTERN (everything)
  * ───────────────────────────────────────────────────────────────────────────────
  *
- * PATTERN: Users who complete 3+ episodes consecutively become "binge-watchers":
- *   - Extra playback started + playback completed events are spliced in
- *   - Completion percentages are 90-100% (they finish every episode)
- *   - Pause events are reduced by 60% (they don't stop watching)
- *   - Events tagged with binge_session = true
+ * PATTERN: Users with 3+ consecutive playback-completed events get extra
+ * cloned playback-started + playback-completed pairs (with unique offset
+ * timestamps). 60% of their pause events are dropped. No flag — discover by
+ * binning users on completion-streak length and comparing per-user completions.
  *
- * HOW TO FIND IT:
- *   - Insights: "playback completed", total events per user, breakdown by "binge_session"
- *   - Expected: binge_session=true users have 40-60% more completions per user
- *   - Also try: Average of "completion_percent" by "binge_session" (90-100% vs ~70%)
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Completions per User by Streak Cohort
+ *   - Report type: Insights (with cohort)
+ *   - Cohort A: users with >= 3 consecutive "playback completed"
+ *   - Cohort B: rest
+ *   - Event: "playback completed"
+ *   - Measure: Total per user
+ *   - Expected: A ~ 1.5x more completions per user
+ *
+ * REAL-WORLD ANALOGUE: Autoplay and cliffhangers push hooked viewers through
+ * entire seasons in a sitting.
  *
  * ───────────────────────────────────────────────────────────────────────────────
- * 3. WEEKEND vs WEEKDAY PATTERNS (event)
+ * 3. WEEKEND VS WEEKDAY PATTERNS (everything)
  * ───────────────────────────────────────────────────────────────────────────────
  *
- * PATTERN: Weekend viewing sessions are 1.5x longer than weekday sessions.
- * Weekday viewing concentrates in evening prime-time (6PM-11PM).
+ * PATTERN: Saturday/Sunday "playback completed" events get watch_duration_min
+ * boosted 1.5x. Mutates the existing watch_duration_min prop. No flag —
+ * discover via day-of-week breakdown.
  *
- * HOW TO FIND IT:
- *   - Insights: "playback completed", average of "watch_duration_min", breakdown by "weekend_viewing"
- *   - Expected: weekend_viewing=true ~67 min avg vs false ~45 min avg (1.5x)
- *   - Also try: Total "playback completed" events by "prime_time" (60-70% of weekday views)
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Avg Watch Duration by Day of Week
+ *   - Report type: Insights
+ *   - Event: "playback completed"
+ *   - Measure: Average of "watch_duration_min"
+ *   - Breakdown: Day of week
+ *   - Expected: Sat/Sun ~ 1.5x weekday avg
+ *
+ * REAL-WORLD ANALOGUE: Weekend viewing stretches into multi-hour marathons.
  *
  * ───────────────────────────────────────────────────────────────────────────────
  * 4. AD FATIGUE CHURN (everything)
  * ───────────────────────────────────────────────────────────────────────────────
  *
- * PATTERN: Free-tier users who see 10+ ad impressions experience 50% churn
- * after day 45 of their lifecycle.
+ * PATTERN: Free-tier users with 10+ ad impressions lose 50% of events after
+ * day 45 of their lifecycle. No flag — discover via cohort retention.
  *
- * HOW TO FIND IT:
- *   - Retention: any event (filter subscription_plan=free), segment by ad impression count >= 10 vs < 10
- *   - Expected: 10+ ad users show ~50% retention drop after day 45
- *   - Also try: Insights line chart, any event filtered by "ad_fatigue" = true, weekly trend
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Retention by Ad Exposure Cohort
+ *   - Report type: Retention
+ *   - Cohort A: free-tier users with >= 10 "ad impression"
+ *   - Cohort B: free-tier users with < 10 ads
+ *   - Expected: A ~ 50% retention drop after day 45
+ *
+ * REAL-WORLD ANALOGUE: Ad-supported tiers carry a tolerance ceiling.
  *
  * ───────────────────────────────────────────────────────────────────────────────
  * 5. NEW RELEASE SPIKE (event)
  * ───────────────────────────────────────────────────────────────────────────────
  *
- * PATTERN: On day 50, a blockbuster movie releases, creating a content spike:
- *   - 20% of content selected and playback started events redirect to the blockbuster
- *   - Content rated events for the blockbuster skew to 4-5 star ratings
- *   - All affected events tagged with blockbuster_release = true
+ * PATTERN: Days 50-65, 20% of "content selected" / "playback started" events
+ * have content_id swapped to the blockbuster id and content_type to "movie".
+ * 20% of "content rated" in the window get a 4-5 star rating on the blockbuster.
+ * Mutates existing props — no flag.
  *
- * HOW TO FIND IT:
- *   - Insights line chart: "content selected", filter "blockbuster_release" = true, daily trend
- *   - Expected: Zero before day 50, then ~20% of content selections
- *   - Also try: "content rated" average of "rating" by "blockbuster_release" (4-5 vs ~3.5)
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Selections by content_id Over Time
+ *   - Report type: Insights
+ *   - Event: "content selected"
+ *   - Measure: Total
+ *   - Filter: content_id = "<blockbuster id>"
+ *   - Line chart by day
+ *   - Expected: zero before day 50, ~ 20% of selections days 50-65
+ *
+ * REAL-WORLD ANALOGUE: Tentpole releases dominate traffic.
  *
  * ───────────────────────────────────────────────────────────────────────────────
  * 6. KIDS PROFILE SAFETY (event)
  * ───────────────────────────────────────────────────────────────────────────────
  *
- * PATTERN: 15% of the time, events are tagged as kids profile activity:
- *   - Content selection restricted to animation and documentary genres
- *   - Ad impressions are blocked (ad_blocked = true)
- *   - Events tagged with kids_profile = true
+ * PATTERN: 15% of "content selected" / "playback started" events get genre
+ * restricted to "animation" or "documentary". Mutates the existing genre prop.
  *
- * HOW TO FIND IT:
- *   - Insights: "content selected", breakdown by "genre", filter "kids_profile" = true
- *   - Expected: 100% animation and documentary genres only
- *   - Also try: "ad impression" breakdown by "kids_profile" — kids should have ad_blocked=true
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Genre Distribution Over Time
+ *   - Report type: Insights
+ *   - Event: "content selected"
+ *   - Measure: Total
+ *   - Breakdown: "genre"
+ *   - Expected: animation + documentary share is elevated above pure random
+ *
+ * REAL-WORLD ANALOGUE: Kids profiles enforce age-appropriate content.
  *
  * ───────────────────────────────────────────────────────────────────────────────
- * 7. RECOMMENDATION ENGINE IMPROVEMENT (funnel-pre)
+ * 7. RECOMMENDATION ENGINE IMPROVEMENT (everything)
  * ───────────────────────────────────────────────────────────────────────────────
  *
- * PATTERN: After day 60, the engagement loop funnel (recommendation clicked ->
- * playback started -> content rated) gets a 1.5x conversion rate boost,
- * simulating a recommendation engine improvement.
+ * PATTERN: Pre-day-60 "content rated" events get 30% dropped, depressing the
+ * recommendation funnel conversion in the first 60 days. No flag — discover
+ * via funnel/insights line chart by day.
  *
- * HOW TO FIND IT:
- *   - Funnels: "recommendation clicked" -> "playback started" -> "playback completed" -> "content rated"
- *   - Breakdown: "improved_recs"
- *   - Expected: improved_recs=true shows ~1.5x higher conversion rate
- *   - Also try: Insights line chart of "recommendation clicked" filtered by "improved_recs" = true
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Content Rated Volume Over Time
+ *   - Report type: Insights
+ *   - Event: "content rated"
+ *   - Measure: Total
+ *   - Line chart by day
+ *   - Expected: visible step-up at day 60
+ *
+ *   Report 2: Recommendation Funnel Conversion Over Time
+ *   - Report type: Funnels
+ *   - Steps: "recommendation clicked" -> "playback started" -> "content rated"
+ *   - Compare date ranges (days 0-59 vs 60-100)
+ *   - Expected: post-improvement window ~ 1.5x conversion
+ *
+ * REAL-WORLD ANALOGUE: Rec model upgrades produce a step-change in CTR.
  *
  * ───────────────────────────────────────────────────────────────────────────────
  * 8. SUBTITLE USERS WATCH MORE (everything)
  * ───────────────────────────────────────────────────────────────────────────────
  *
- * PATTERN: Users who enable subtitles have measurably higher engagement:
- *   - 25% higher completion_percent on playback completed events (capped at 100)
- *   - 15% longer watch_duration_min
- *   - 20% more playback completed events (extra content consumption)
- *   - Events tagged with subtitle_user = true
+ * PATTERN: Users who toggle subtitles enabled get 1.25x completion_percent
+ * (cap 100), 1.15x watch_duration_min, plus 20% extra cloned playback-completed
+ * events. No flag — discover via cohort builder on subtitle-toggled-enabled.
  *
- * HOW TO FIND IT:
- *   - Insights: "playback completed", average of "completion_percent", breakdown by "subtitle_user"
- *   - Expected: subtitle_user=true ~85% completion vs false ~68% (1.25x)
- *   - Also try: Average of "watch_duration_min" by "subtitle_user" (~15% longer)
- *   - Also try: Total events per user by "subtitle_user" (~20% more completions)
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Completion by Subtitle Cohort
+ *   - Report type: Insights (with cohort)
+ *   - Cohort A: users with >= 1 "subtitle toggled" with action="enabled"
+ *   - Cohort B: rest
+ *   - Event: "playback completed"
+ *   - Measure: Average of "completion_percent"
+ *   - Expected: A ~ 85% vs B ~ 68%
+ *
+ * REAL-WORLD ANALOGUE: Subtitle adoption correlates with attentive viewers.
+ *
+ * ───────────────────────────────────────────────────────────────────────────────
+ * 9. RECOMMENDATION-CLICKED MAGIC NUMBER (everything)
+ * ───────────────────────────────────────────────────────────────────────────────
+ *
+ * PATTERN: Users in the 4-6 recommendation-clicked sweet spot get 1.25x
+ * watch_duration_min on playback-completed events. Users with 7+ rec clicks
+ * are over-engaged (decision fatigue); 30% of their playback-completed events
+ * drop. No flag — discover by binning users on rec-click count.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Avg Watch Duration by Rec-Click Bucket
+ *   - Report type: Insights (with cohort)
+ *   - Cohort A: users with 4-6 "recommendation clicked"
+ *   - Cohort B: users with 0-3 "recommendation clicked"
+ *   - Event: "playback completed"
+ *   - Measure: Average of "watch_duration_min"
+ *   - Expected: A ~ 1.25x B
+ *
+ *   Report 2: Completions per User on Heavy Rec Clickers
+ *   - Report type: Insights (with cohort)
+ *   - Cohort C: users with >= 7 "recommendation clicked"
+ *   - Cohort A: users with 4-6
+ *   - Event: "playback completed"
+ *   - Measure: Total per user
+ *   - Expected: C ~ 30% fewer completions per user vs A
+ *
+ * REAL-WORLD ANALOGUE: A few good recs surface a watchworthy title; too many
+ * clicks signals indecision and drives abandonment.
  *
  * ═══════════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY
  * ═══════════════════════════════════════════════════════════════════════════════
  *
- * Hook                     | Metric                  | Baseline  | Hook Effect | Ratio
- * ─────────────────────────|─────────────────────────|───────────|─────────────|──────
- * Genre Funnel Conversion  | Funnel conversion rate  | 50%       | 65% / 35%   | 1.3x / 0.7x
- * Binge-Watching           | Content consumed/user   | 12        | 18-20       | ~1.5x
- * Weekend vs Weekday       | Watch duration (min)    | 45        | 67 (weekend)| 1.5x
- * Ad Fatigue Churn         | Post-day-45 activity    | 100%      | 50%         | 0.5x
- * New Release Spike        | Content selections/day  | baseline  | +20% spike  | 1.2x
- * Kids Profile Safety      | Ad impressions          | normal    | 0 (dropped) | 0x
- * Rec Engine Improvement   | Engagement funnel conv  | 30%       | 45%         | 1.5x
- * Subtitle Users           | Completion percent      | 68%       | 85%         | 1.25x
- *
- * ═══════════════════════════════════════════════════════════════════════════════
- * ADVANCED ANALYSIS IDEAS
- * ═══════════════════════════════════════════════════════════════════════════════
- *
- * CROSS-HOOK PATTERNS:
- *
- * 1. Binge + Subtitle: Do subtitle-enabled binge-watchers have the highest
- *    total watch hours? (Hooks #2 + #8 combined)
- *
- * 2. Ad Fatigue + Blockbuster: Does the blockbuster release (Hook #5) rescue
- *    free-tier users from ad fatigue churn (Hook #4)?
- *
- * 3. Kids + Weekend: Is kids profile viewing concentrated on weekends (Hook #6
- *    + #3)? Does weekend kids viewing show different genre preferences?
- *
- * 4. Rec Engine + Genre: Does the recommendation engine improvement (Hook #7)
- *    disproportionately help certain genres (Hook #1)?
- *
- * 5. Subtitle + Binge + Weekend: The "super viewer" - subtitle-enabled,
- *    binge-watching on weekends. What is their lifetime watch hours?
- *
- * COHORT ANALYSIS:
- *
- * - Cohort by signup_source: Do referral users binge more than organic?
- * - Cohort by device_type: Do smart TV users watch longer than mobile?
- * - Cohort by subscription_plan: Do premium users binge more, or does
- *   ad-free viewing change consumption patterns?
- * - Cohort by preferred_genre: Does genre preference predict churn?
- *
- * FUNNEL ANALYSIS:
- *
- * - Onboarding Funnel: account created -> content browsed -> playback started.
- *   How does signup_source affect first-session conversion?
- * - Content Discovery Funnel: Does the browse_section (home vs trending vs
- *   genre) affect downstream completion rates?
- * - Engagement Loop: How does recommendation algorithm type (collaborative
- *   filtering vs editorial) affect the full loop conversion?
- *
- * MONETIZATION ANALYSIS:
- *
- * - Free-to-Standard conversion: Which events predict upgrade?
- * - Ad tolerance threshold: At what ad count do free users start churning?
- * - Premium value: Do premium users actually consume more content, or just
- *   consume at higher quality (4K)?
- * - Download behavior: Does offline download usage correlate with retention?
+ * Hook                     | Metric                  | Baseline | Hook Effect | Ratio
+ * ─────────────────────────|─────────────────────────|----------|-------------|------
+ * Genre Funnel Conversion  | documentary funnel conv | 1x       | 0.7x        | -30%
+ * Binge-Watching           | completions per streak  | 1x       | ~ 1.5x      | 1.5x
+ * Weekend vs Weekday       | weekend watch_duration  | 1x       | ~ 1.5x      | 1.5x
+ * Ad Fatigue Churn         | retention free+10+ads   | 1x       | ~ 0.5x      | -50%
+ * New Release Spike        | blockbuster id share    | 0%       | ~ 20%       | n/a
+ * Kids Profile Safety      | animation/doc share     | baseline | + 15%       | n/a
+ * Rec Engine Improvement   | content-rated post day60| 1x       | ~ 1.5x      | 1.5x
+ * Subtitle Users           | completion %            | 68%      | 85%         | 1.25x
+ * Rec-Click Magic Number   | sweet watch duration    | 1x       | 1.25x       | 1.25x
+ * Rec-Click Magic Number   | over completions/user   | 1x       | 0.7x        | -30%
  */
 
 // Generate consistent content IDs for lookup tables and events
@@ -323,10 +367,6 @@ const config = {
 			properties: {
 				"signup_source": ["organic", "referral", "trial_offer", "ad"],
 				"plan_selected": ["free", "standard", "premium"],
-				"weekend_viewing": [false],
-				"prime_time": [false],
-				"kids_profile": [false],
-				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -335,10 +375,6 @@ const config = {
 			properties: {
 				"browse_section": ["home", "trending", "new_releases", "genre", "continue_watching"],
 				"genre": ["action", "comedy", "drama", "documentary", "horror", "sci_fi", "animation", "thriller", "romance"],
-				"weekend_viewing": [false],
-				"prime_time": [false],
-				"kids_profile": [false],
-				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -348,11 +384,6 @@ const config = {
 				"content_type": ["movie", "series", "documentary", "special"],
 				"genre": ["action", "comedy", "drama", "documentary", "horror", "sci_fi", "animation", "thriller", "romance"],
 				"content_id": contentIds,
-				"blockbuster_release": [false],
-				"kids_profile": [false],
-				"weekend_viewing": [false],
-				"prime_time": [false],
-				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -364,12 +395,6 @@ const config = {
 				"playback_quality": ["480p", "720p", "1080p", "4k"],
 				"subtitle_language": ["none", "english", "spanish", "french", "japanese", "korean"],
 				"playback_speed": ["0.5x", "1x", "1x", "1x", "1.25x", "1.5x", "2x"],
-				"blockbuster_release": [false],
-				"kids_profile": [false],
-				"binge_session": [false],
-				"weekend_viewing": [false],
-				"prime_time": [false],
-				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -380,12 +405,6 @@ const config = {
 				"content_type": ["movie", "series", "documentary", "special"],
 				"watch_duration_min": u.weighNumRange(5, 180, 0.5, 45),
 				"completion_percent": u.weighNumRange(10, 100, 1.5, 85),
-				"binge_session": [false],
-				"subtitle_user": [false],
-				"weekend_viewing": [false],
-				"prime_time": [false],
-				"kids_profile": [false],
-				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -394,10 +413,6 @@ const config = {
 			properties: {
 				"content_id": contentIds,
 				"pause_reason": ["manual", "ad_break", "buffering", "notification"],
-				"weekend_viewing": [false],
-				"prime_time": [false],
-				"kids_profile": [false],
-				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -407,11 +422,6 @@ const config = {
 				"content_id": contentIds,
 				"rating": u.weighNumRange(1, 5, 2, 4),
 				"review_text_length": u.weighNumRange(0, 500, 0.2, 0),
-				"blockbuster_release": [false],
-				"weekend_viewing": [false],
-				"prime_time": [false],
-				"kids_profile": [false],
-				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -421,10 +431,6 @@ const config = {
 				"content_id": contentIds,
 				"content_type": ["movie", "series", "documentary", "special"],
 				"genre": ["action", "comedy", "drama", "documentary", "horror", "sci_fi", "animation", "thriller", "romance"],
-				"weekend_viewing": [false],
-				"prime_time": [false],
-				"kids_profile": [false],
-				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -433,10 +439,6 @@ const config = {
 			properties: {
 				"content_id": contentIds,
 				"reason": ["watched", "not_interested", "expired"],
-				"weekend_viewing": [false],
-				"prime_time": [false],
-				"kids_profile": [false],
-				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -446,10 +448,6 @@ const config = {
 				"search_term": () => chance.word(),
 				"results_count": u.weighNumRange(0, 50, 0.5, 15),
 				"search_type": ["title", "actor", "director", "genre"],
-				"weekend_viewing": [false],
-				"prime_time": [false],
-				"kids_profile": [false],
-				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -458,10 +456,6 @@ const config = {
 			properties: {
 				"algorithm": ["collaborative_filtering", "content_based", "trending", "editorial"],
 				"position": u.weighNumRange(1, 20),
-				"weekend_viewing": [false],
-				"prime_time": [false],
-				"kids_profile": [false],
-				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -469,10 +463,6 @@ const config = {
 			weight: 4,
 			properties: {
 				"profile_type": ["main", "kids", "partner", "guest"],
-				"weekend_viewing": [false],
-				"prime_time": [false],
-				"kids_profile": [false],
-				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -482,11 +472,6 @@ const config = {
 				"ad_type": ["pre_roll", "mid_roll", "banner", "interstitial"],
 				"ad_duration_sec": u.weighNumRange(5, 30),
 				"skipped": [false, false, false, true, true],
-				"ad_blocked": [false],
-				"kids_profile": [false],
-				"weekend_viewing": [false],
-				"prime_time": [false],
-				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -496,10 +481,6 @@ const config = {
 				"old_plan": ["free", "standard", "premium"],
 				"new_plan": ["free", "standard", "premium"],
 				"change_reason": ["upgrade", "downgrade", "cancel", "resubscribe"],
-				"weekend_viewing": [false],
-				"prime_time": [false],
-				"kids_profile": [false],
-				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -509,10 +490,6 @@ const config = {
 				"content_id": contentIds,
 				"content_type": ["movie", "series", "documentary", "special"],
 				"download_quality": ["720p", "1080p", "4k"],
-				"weekend_viewing": [false],
-				"prime_time": [false],
-				"kids_profile": [false],
-				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -521,10 +498,6 @@ const config = {
 			properties: {
 				"share_method": ["link", "social", "dm", "email"],
 				"content_type": ["movie", "series", "documentary", "special"],
-				"weekend_viewing": [false],
-				"prime_time": [false],
-				"kids_profile": [false],
-				"ad_fatigue": [false],
 			}
 		},
 		{
@@ -533,10 +506,6 @@ const config = {
 			properties: {
 				"subtitle_language": ["none", "english", "spanish", "french", "japanese", "korean"],
 				"action": ["enabled", "disabled", "changed"],
-				"weekend_viewing": [false],
-				"prime_time": [false],
-				"kids_profile": [false],
-				"ad_fatigue": [false],
 			}
 		},
 	],
@@ -567,141 +536,71 @@ const config = {
 
 	lookupTables: [],
 
-	/**
-	 * ARCHITECTED ANALYTICS HOOKS
-	 *
-	 * This hook function creates 8 deliberate patterns in the data:
-	 *
-	 * 1. GENRE FUNNEL CONVERSION: Comedy/Animation props in funnel-pre; documentary completion drop in everything
-	 * 2. BINGE-WATCHING: Users with 3+ consecutive completions get extra episodes (everything)
-	 * 3. WEEKEND vs WEEKDAY: Weekend sessions 1.5x longer; weekday prime-time tagging (event)
-	 * 4. AD FATIGUE CHURN: Free-tier users with 10+ ads churn after day 45 (everything)
-	 * 5. NEW RELEASE SPIKE: Blockbuster release on day 50 drives content selection (event)
-	 * 6. KIDS PROFILE SAFETY: Kids mode restricts genres and drops ads (event)
-	 * 7. RECOMMENDATION ENGINE IMPROVEMENT: Props in funnel-pre; pre-day-60 content rated drop in everything
-	 * 8. SUBTITLE USERS WATCH MORE: Subtitle-enabled users have higher completion rates (everything)
-	 */
 	hook: function (record, type, meta) {
 		const NOW = dayjs();
 		const DATASET_START = NOW.subtract(num_days, 'days');
-		// FIXED_START is the pre-shift time range start; needed because
-		// meta.firstEventTime in funnel-pre is in the FIXED (pre-shift) timeframe
-		const FIXED_NOW_UNIX = dayjs('2024-02-02').unix();
-		const FIXED_START = dayjs.unix(FIXED_NOW_UNIX).subtract(num_days, 'days');
 
-		// ─────────────────────────────────────────────────────────────
-		// Hook #1: GENRE FUNNEL CONVERSION (funnel-pre)
-		// Comedy/Animation funnels convert 1.3x better; Documentary 0.7x
-		// ─────────────────────────────────────────────────────────────
-		if (type === "funnel-pre") {
-			record.props = record.props || {};
-			const genre = record.props.genre;
-
-			if (genre === "comedy" || genre === "animation") {
-				record.props.genre_boost = true;
-				record.props.genre_penalty = false;
-			} else if (genre === "documentary") {
-				record.props.genre_boost = false;
-				record.props.genre_penalty = true;
-			} else if (!genre && chance.bool({ likelihood: 25 })) {
-				// Randomly apply genre effects when genre isn't in funnel props
-				if (chance.bool({ likelihood: 60 })) {
-					record.props.genre_boost = true;
-					record.props.genre_penalty = false;
-				} else {
-					record.props.genre_boost = false;
-					record.props.genre_penalty = true;
+		// Hook #10 (T2C): CORE VIEWING LOOP TIME-TO-CONVERT (funnel-post)
+		// Premium subscribers complete browse→play funnel 1.4x faster
+		// (factor 0.71); free users 1.25x slower (factor 1.25).
+		if (type === "funnel-post") {
+			const segment = meta?.profile?.subscription_plan;
+			if (Array.isArray(record) && record.length > 1) {
+				const factor = (
+					segment === "premium" ? 0.71 :
+					segment === "free" ? 1.25 :
+					1.0
+				);
+				if (factor !== 1.0) {
+					for (let i = 1; i < record.length; i++) {
+						const prev = dayjs(record[i - 1].time);
+						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+						record[i].time = prev.add(newGap, "milliseconds").toISOString();
+					}
 				}
-			} else {
-				record.props.genre_boost = false;
-				record.props.genre_penalty = false;
 			}
-
-			// ─────────────────────────────────────────────────────────────
-			// Hook #7: RECOMMENDATION ENGINE IMPROVEMENT (funnel-pre)
-			// After day 60, engagement funnel gets 1.5x boost
-			// ─────────────────────────────────────────────────────────────
-			const seq = record.sequence || [];
-			const isEngagementFunnel = seq.includes("recommendation clicked");
-			const funnelTime = meta && meta.firstEventTime ? dayjs.unix(meta.firstEventTime) : null;
-			const isAfterImprovement = funnelTime && funnelTime.isAfter(FIXED_START.add(60, 'days'));
-
-			if (isEngagementFunnel && isAfterImprovement) {
-				record.props.improved_recs = true;
-			} else {
-				record.props.improved_recs = false;
-			}
-
-			return record;
 		}
 
-		// ─────────────────────────────────────────────────────────────
-		// Hook #3: WEEKEND vs WEEKDAY PATTERNS
-		// Moved to everything hook (after sessionization) so DOW/HOD
-		// tags match final timestamps. See everything hook below.
-		// ─────────────────────────────────────────────────────────────
-
 		if (type === "event") {
-			// ─────────────────────────────────────────────────────────────
-			// Hook #5: NEW RELEASE SPIKE (event)
-			// Days 50-65: blockbuster release drives content selection.
-			// Bounded window concentrates the spike instead of spreading
-			// it across the entire second half of the dataset.
-			// ─────────────────────────────────────────────────────────────
-			const BLOCKBUSTER_START = DATASET_START.add(50, 'days');
-			const BLOCKBUSTER_END = DATASET_START.add(65, 'days');
+			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
+			const BLOCKBUSTER_START = datasetStart.add(50, 'days');
+			const BLOCKBUSTER_END = datasetStart.add(65, 'days');
 			const EVENT_TIME = dayjs(record.time);
+
+			// Hook #5: NEW RELEASE SPIKE — days 50-65, 20% of selections/starts
+			// switch to the blockbuster id. Mutates existing content_id/content_type props.
 			if (record.event === "content selected" || record.event === "playback started") {
 				if (EVENT_TIME.isAfter(BLOCKBUSTER_START) && EVENT_TIME.isBefore(BLOCKBUSTER_END) && chance.bool({ likelihood: 20 })) {
 					record.content_type = "movie";
 					record.content_id = blockbusterId;
-					record.blockbuster_release = true;
-				} else {
-					record.blockbuster_release = false;
 				}
 			}
-
 			if (record.event === "content rated") {
 				if (EVENT_TIME.isAfter(BLOCKBUSTER_START) && EVENT_TIME.isBefore(BLOCKBUSTER_END) && chance.bool({ likelihood: 20 })) {
 					record.rating = chance.integer({ min: 4, max: 5 });
 					record.content_id = blockbusterId;
-					record.blockbuster_release = true;
-				} else {
-					record.blockbuster_release = false;
 				}
 			}
 
-			// ─────────────────────────────────────────────────────────────
-			// Hook #6: KIDS PROFILE SAFETY (event)
-			// 15% of the time, apply kids mode: restrict genres, drop ads
-			// ─────────────────────────────────────────────────────────────
+			// Hook #6: KIDS PROFILE SAFETY — 15% of selections/starts get genre
+			// restricted to animation or documentary. Mutates existing genre prop.
 			if (chance.bool({ likelihood: 15 })) {
-				record.kids_profile = true;
 				if (record.event === "content selected" || record.event === "playback started") {
 					record.genre = chance.pickone(["animation", "documentary"]);
-				} else if (record.event === "ad impression") {
-					record.ad_blocked = true;
-				}
-			} else {
-				record.kids_profile = false;
-				if (record.event === "ad impression") {
-					record.ad_blocked = false;
 				}
 			}
 
 			return record;
 		}
 
-		// ─────────────────────────────────────────────────────────────
-		// Hook #2, #4, #8: EVERYTHING PASS - Complex behavioral patterns
-		// ─────────────────────────────────────────────────────────────
 		if (type === "everything") {
+			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
 			const userEvents = record;
 			if (!userEvents || userEvents.length === 0) return record;
 
 			const profile = meta.profile;
 
-			// ─── Stamp superProps from profile (consistent per user) ───
+			// Stamp superProps from profile (consistent per user)
 			const stampPlan = profile && profile.subscription_plan ? profile.subscription_plan : undefined;
 			const stampDevice = profile && profile.device_type ? profile.device_type : undefined;
 			if (stampPlan || stampDevice) {
@@ -711,126 +610,75 @@ const config = {
 				});
 			}
 
-			// ─── Hook #3: WEEKEND vs WEEKDAY PATTERNS ───
-			// Weekend: 1.5x watch duration. Weekday 6PM-11PM: prime_time tag.
-			// Runs after sessionization so DOW/HOD tags match final timestamps.
+			// Hook #3: WEEKEND VS WEEKDAY — 1.5x watch_duration_min on weekends.
+			// No flag — analyst breaks down by day of week.
 			for (const e of userEvents) {
-				const eventDate = new Date(e.time);
-				const dayOfWeek = eventDate.getUTCDay(); // 0 = Sunday, 6 = Saturday
-				const hour = eventDate.getUTCHours();
-				const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-
-				if (isWeekend) {
-					e.weekend_viewing = true;
-					e.prime_time = false;
-					if (e.event === "playback completed" && e.watch_duration_min) {
-						e.watch_duration_min = Math.round(e.watch_duration_min * 1.5);
-					}
-				} else {
-					e.weekend_viewing = false;
-					if (hour >= 18 && hour <= 23) {
-						e.prime_time = true;
-					} else {
-						e.prime_time = false;
-					}
+				const dow = new Date(e.time).getUTCDay();
+				if ((dow === 0 || dow === 6) && e.event === "playback completed" && typeof e.watch_duration_min === "number") {
+					e.watch_duration_min = Math.round(e.watch_duration_min * 1.5);
 				}
 			}
 
-			// ─── Bug 2 fix: Genre funnel conversion filtering ───
-			// Drop ~25% of "playback completed" events for documentary genre
-			// to simulate lower documentary funnel completion (was conversionRate * 0.7)
+			// Hook #1: GENRE FUNNEL CONVERSION — drop 25% of documentary playback
+			// completed events to depress documentary funnel conversion. Raw genre check.
 			for (let i = userEvents.length - 1; i >= 0; i--) {
 				const evt = userEvents[i];
-				if (evt.event === "playback completed" && evt.genre_penalty === true) {
-					if (chance.bool({ likelihood: 25 })) {
-						userEvents.splice(i, 1);
-					}
+				if (evt.event === "playback completed" && evt.genre === "documentary" && chance.bool({ likelihood: 25 })) {
+					userEvents.splice(i, 1);
 				}
 			}
 
-			// ─── Bug 2 fix: Recommendation engine improvement filtering ───
-			// Drop ~30% of "content rated" events that occur BEFORE day 60
-			// to simulate lower pre-improvement rec engine conversion (was conversionRate * 1.5)
-			const IMPROVEMENT_DATE = DATASET_START.add(60, 'days');
+			// Hook #7: RECOMMENDATION ENGINE IMPROVEMENT — drop 30% of pre-day-60
+			// content rated events. Raw time check.
+			const IMPROVEMENT_DATE = datasetStart.add(60, 'days');
 			for (let i = userEvents.length - 1; i >= 0; i--) {
 				const evt = userEvents[i];
-				if (evt.event === "content rated" && dayjs(evt.time).isBefore(IMPROVEMENT_DATE)) {
-					if (chance.bool({ likelihood: 30 })) {
-						userEvents.splice(i, 1);
-					}
+				if (evt.event === "content rated" && dayjs(evt.time).isBefore(IMPROVEMENT_DATE) && chance.bool({ likelihood: 30 })) {
+					userEvents.splice(i, 1);
 				}
 			}
 
 			const firstEventTime = dayjs(userEvents[0].time);
 
-			// ─── First pass: identify user patterns ───
+			// Identify behavioral patterns (no flags written)
 			let consecutiveCompletions = 0;
 			let maxConsecutiveCompletions = 0;
-			let isBingeWatcher = false;
 			let adImpressionCount = 0;
 			let isFreeTier = false;
 			let hasSubtitlesEnabled = false;
+			let recClickCount = 0;
 
 			userEvents.forEach((event, idx) => {
-				// Track subscription tier from superProps
 				if (idx === 0 && event.subscription_plan) {
 					isFreeTier = event.subscription_plan === "free";
 				}
-
-				// Hook #2: Track consecutive playback completions
 				if (event.event === "playback completed") {
 					consecutiveCompletions++;
 					if (consecutiveCompletions > maxConsecutiveCompletions) {
 						maxConsecutiveCompletions = consecutiveCompletions;
 					}
 				} else if (event.event !== "playback started") {
-					// Reset streak on non-playback events (started doesn't break streak)
 					consecutiveCompletions = 0;
 				}
-
-				// Hook #4: Count ad impressions for free-tier users
-				if (event.event === "ad impression") {
-					adImpressionCount++;
-				}
-
-				// Hook #8: Check for subtitle enabled
-				if (event.event === "subtitle toggled" && event.action === "enabled") {
-					hasSubtitlesEnabled = true;
-				}
+				if (event.event === "ad impression") adImpressionCount++;
+				if (event.event === "subtitle toggled" && event.action === "enabled") hasSubtitlesEnabled = true;
+				if (event.event === "recommendation clicked") recClickCount++;
 			});
 
-			isBingeWatcher = maxConsecutiveCompletions >= 3;
+			const isBingeWatcher = maxConsecutiveCompletions >= 3;
 
-			// ─── Second pass: set schema defaults then modify ───
-
-			// Set defaults for conditional properties on all events
-			userEvents.forEach((event) => {
-				if (event.event === "playback completed") {
-					if (event.binge_session === undefined) event.binge_session = false;
-					if (event.subtitle_user === undefined) event.subtitle_user = false;
-				}
-				if (event.event === "playback started") {
-					if (event.binge_session === undefined) event.binge_session = false;
-				}
-				if (event.ad_fatigue === undefined) event.ad_fatigue = false;
-			});
-
-			// Hook #2: BINGE-WATCHING PATTERN
-			// Binge-watchers get extra episodes, high completion, fewer pauses
+			// Hook #2: BINGE-WATCHING — drop pauses, inject extra start+complete pairs.
+			// Cloned events use unique offset timestamps. No flag.
 			if (isBingeWatcher) {
 				for (let i = userEvents.length - 1; i >= 0; i--) {
 					const event = userEvents[i];
 					const eventTime = dayjs(event.time);
 
-					// Remove some pause events (binge-watchers don't stop)
-					if (event.event === "playback paused") {
-						if (chance.bool({ likelihood: 60 })) {
-							userEvents.splice(i, 1);
-							continue;
-						}
+					if (event.event === "playback paused" && chance.bool({ likelihood: 60 })) {
+						userEvents.splice(i, 1);
+						continue;
 					}
 
-					// Add extra viewing events after completions
 					if (event.event === "playback completed" && chance.bool({ likelihood: 40 })) {
 						const nextContentId = chance.pickone(contentIds);
 						const startTemplate = userEvents.find(e => e.event === "playback started");
@@ -842,7 +690,6 @@ const config = {
 							content_id: nextContentId,
 							content_type: "series",
 							playback_quality: event.playback_quality || "1080p",
-							binge_session: true,
 						};
 						const extraComplete = {
 							...event,
@@ -852,51 +699,42 @@ const config = {
 							content_type: "series",
 							watch_duration_min: chance.integer({ min: 20, max: 55 }),
 							completion_percent: chance.integer({ min: 90, max: 100 }),
-							binge_session: true,
 						};
 						userEvents.splice(i + 1, 0, extraStart, extraComplete);
 					}
 				}
 			}
 
-			// Hook #4: AD FATIGUE CHURN
-			// Free-tier users with 10+ ads lose 50% of events after day 45
+			// Hook #4: AD FATIGUE CHURN — free-tier users w/ 10+ ads lose 50% of
+			// events after day 45. No flag — discover via cohort retention.
 			if (isFreeTier && adImpressionCount >= 10) {
 				const churnCutoff = firstEventTime.add(45, 'days');
 				for (let i = userEvents.length - 1; i >= 0; i--) {
 					const evt = userEvents[i];
-					if (dayjs(evt.time).isAfter(churnCutoff)) {
-						if (chance.bool({ likelihood: 50 })) {
-							userEvents.splice(i, 1);
-						} else {
-							evt.ad_fatigue = true;
-						}
+					if (dayjs(evt.time).isAfter(churnCutoff) && chance.bool({ likelihood: 50 })) {
+						userEvents.splice(i, 1);
 					}
 				}
 			}
 
-			// Hook #8: SUBTITLE USERS WATCH MORE
-			// Users who enabled subtitles have 25% higher completion and 15% longer watch time
+			// Hook #8: SUBTITLE USERS WATCH MORE — 1.25x completion_percent (cap 100),
+			// 1.15x watch_duration_min, plus 20% extra cloned playback completions.
+			// No flag — discover via cohort builder on subtitle-toggled-enabled.
 			if (hasSubtitlesEnabled) {
 				for (let i = 0; i < userEvents.length; i++) {
 					const event = userEvents[i];
-
 					if (event.event === "playback completed") {
-						// Boost completion percent (cap at 100)
 						if (event.completion_percent) {
 							event.completion_percent = Math.min(100, Math.round(event.completion_percent * 1.25));
 						}
-						// Boost watch duration
 						if (event.watch_duration_min) {
 							event.watch_duration_min = Math.round(event.watch_duration_min * 1.15);
 						}
-						event.subtitle_user = true;
 					}
 				}
 
-				// Splice extra playback completed events (subtitle users watch more overall)
 				const completionEvents = userEvents.filter(e => e.event === "playback completed");
-				const extraCount = Math.floor(completionEvents.length * 0.2); // 20% more completions
+				const extraCount = Math.floor(completionEvents.length * 0.2);
 				for (let j = 0; j < extraCount; j++) {
 					const templateEvent = chance.pickone(completionEvents);
 					const templateTime = dayjs(templateEvent.time);
@@ -908,9 +746,25 @@ const config = {
 						content_type: chance.pickone(["movie", "series", "documentary"]),
 						watch_duration_min: chance.integer({ min: 25, max: 120 }),
 						completion_percent: chance.integer({ min: 80, max: 100 }),
-						subtitle_user: true,
 					};
 					userEvents.push(extraCompletion);
+				}
+			}
+
+			// Hook #9: RECOMMENDATION-CLICKED MAGIC NUMBER (no flags)
+			// Sweet 4-6 rec clicks → +25% watch_duration_min on playback completed.
+			// Over 7+ → drop 30% of playback completed events (rec fatigue).
+			if (recClickCount >= 4 && recClickCount <= 6) {
+				userEvents.forEach(e => {
+					if (e.event === 'playback completed' && typeof e.watch_duration_min === 'number') {
+						e.watch_duration_min = Math.round(e.watch_duration_min * 1.25);
+					}
+				});
+			} else if (recClickCount >= 7) {
+				for (let i = userEvents.length - 1; i >= 0; i--) {
+					if (userEvents[i].event === 'playback completed' && chance.bool({ likelihood: 30 })) {
+						userEvents.splice(i, 1);
+					}
 				}
 			}
 

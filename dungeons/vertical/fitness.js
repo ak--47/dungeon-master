@@ -50,29 +50,28 @@ const DATASET_START = NOW.subtract(num_days, "days");
 
 /**
  * ═══════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (8 hooks)
+ * ANALYTICS HOOKS (10 hooks)
  * ═══════════════════════════════════════════════════════════════
  *
+ * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable
+ * via raw-prop breakdowns (HOD, day, segment) or behavioral cohorts.
+ *
  * ───────────────────────────────────────────────────────────────
- * 1. MORNING WORKOUT BOOST (event hook)
+ * 1. MORNING WORKOUT BOOST (everything)
  * ───────────────────────────────────────────────────────────────
  *
- * PATTERN: Workouts completed between 5AM-9AM get 1.3x
- * calories_burned. Simulates the metabolic boost from fasted
- * morning exercise.
+ * PATTERN: Workouts in 5-9 UTC get calories_burned 1.3x. Mutates
+ * raw prop. No flag.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Morning vs Non-Morning Calorie Burn
- *   • Report type: Insights
- *   • Event: "workout completed"
- *   • Measure: Average of "calories_burned"
- *   • Breakdown: "is_morning_workout"
- *   • Expected: is_morning_workout=true should show ~1.3x avg
- *     calories vs false (true ≈ 390, false ≈ 300)
+ *   Report 1: Avg Calories Burned by Hour of Day
+ *   - Event: "workout completed"
+ *   - Measure: Average of "calories_burned"
+ *   - Breakdown: hour of day
+ *   - Expected: 5-9 hours show ~ 1.3x baseline
  *
- * REAL-WORLD ANALOGUE: Fitness apps promote morning workouts
- * as more effective for fat loss, driving engagement.
+ * REAL-WORLD ANALOGUE: Morning workouts get a metabolic boost.
  *
  * ───────────────────────────────────────────────────────────────
  * 2. POST-LAUNCH AI COACHING LIFT (event hook)
@@ -244,20 +243,65 @@ const DATASET_START = NOW.subtract(num_days, "days");
  * REAL-WORLD ANALOGUE: Annual gym memberships have higher
  * utilization — sunk cost + commitment drives consistency.
  *
+ * ───────────────────────────────────────────────────────────────
+ * 9. WORKOUT LOOP TIME-TO-CONVERT (funnel-post)
+ * ───────────────────────────────────────────────────────────────
+ *
+ * PATTERN: Annual + family subscribers complete the Workout Loop
+ * funnel 1.3x faster (factor 0.77); Free users 1.25x slower (factor 1.25).
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Workout Loop Median Time-to-Convert by Subscription
+ *   - Funnels > "workout planned" -> "workout completed" -> "progress checked"
+ *   - Measure: Median time to convert
+ *   - Breakdown: subscription_plan
+ *   - Expected: annual ~ 0.77x; free ~ 1.25x
+ *
+ * ───────────────────────────────────────────────────────────────
+ * 10. WORKOUT-COUNT MAGIC NUMBER (everything)
+ * ───────────────────────────────────────────────────────────────
+ *
+ * PATTERN: Sweet 12-20 workouts/user → +35% on workout
+ * duration_minutes (peak progression). Over 21+ → drop 30% of
+ * post-day-30 events (overtraining churn). No flag.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Avg Workout Duration by Workout-Count Bucket
+ *   - Cohort A: users with 12-20 "workout completed"
+ *   - Cohort B: users with 0-11
+ *   - Event: "workout completed"
+ *   - Measure: Average of "duration_minutes"
+ *   - Expected: A ~ 1.35x B
+ *
+ *   Report 2: D30+ Activity on Heavy Workout Cohort
+ *   - Cohort C: users with >= 21 "workout completed"
+ *   - Cohort A: users with 12-20
+ *   - Event: any event
+ *   - Measure: Total per user, post-day-30
+ *   - Expected: C ~ 30% fewer post-day-30 events per user
+ *
+ * REAL-WORLD ANALOGUE: Sweet-spot training drives progression;
+ * over-training causes injury and burnout.
+ *
  * ═══════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY
  * ═══════════════════════════════════════════════════════════════
  *
- * Hook                        | Metric              | Baseline | Effect  | Ratio
- * ────────────────────────────|─────────────────────|──────────|─────────|──────
- * Morning Workout Boost       | calories_burned     | 300      | 390     | 1.3x
- * AI Coaching Lift            | duration_minutes    | 40       | 48      | 1.2x
- * Streak Retention            | achievements/user   | 1        | 2-3     | 2-3x
- * Social Challenge Completion | challenges/user     | 1        | 1.5     | 1.5x
- * Resolver Churn Cliff        | events after day 14 | 100%     | 30%     | 0.3x
- * Coach Session Quality       | satisfaction_score   | 3.0      | 4.3     | 1.4x
- * Coach Profile Enrichment    | total_workouts      | 0        | 350     | N/A
- * Annual Funnel Lift          | funnel conversion   | 45%      | 63%     | 1.4x
+ * Hook                        | Metric              | Baseline | Effect    | Ratio
+ * ----------------------------|---------------------|----------|-----------|------
+ * Morning Workout Boost       | calories_burned 5-9 | 1x       | 1.3x      | 1.3x
+ * AI Coaching Lift            | duration_minutes    | 1x       | 1.2x      | 1.2x
+ * Streak Retention            | achievements/user   | 1x       | 2-3x      | 2-3x
+ * Social Challenge Completion | challenges/user     | 1x       | 1.5x      | 1.5x
+ * Resolver Churn Cliff        | events after day 14 | 1x       | 0.3x      | -70%
+ * Coach Session Quality       | satisfaction_score  | 3.0      | 4.3       | 1.4x
+ * Coach Profile Enrichment    | total_workouts      | 0        | 350       | n/a
+ * Annual Funnel Lift          | funnel conversion   | 45%      | 63%       | 1.4x
+ * Workout Loop T2C            | median min by tier  | 1x       | 0.77/1.25x| ~ 1.6x range
+ * Workout Magic Number        | sweet duration_min  | 1x       | 1.35x     | 1.35x
+ * Workout Magic Number        | over D30+ activity  | 1x       | 0.7x      | -30%
  */
 
 /** @type {Config} */
@@ -311,7 +355,6 @@ const config = {
 				duration_minutes: u.weighNumRange(10, 90, 0.5, 40),
 				calories_burned: u.weighNumRange(50, 800, 0.4, 300),
 				heart_rate_avg: u.weighNumRange(80, 185, 0.5, 130),
-				is_morning_workout: [false],
 				satisfaction_score: u.weighNumRange(1, 5, 0.7, 3),
 				coaching_mode: ["self_guided"],
 				challenge_mode: ["solo"],
@@ -677,8 +720,8 @@ const config = {
 
 	// ── Hook Function ──────────────────────────────────────
 	hook: function (record, type, meta) {
-		// ── HOOK 7: COACH PROFILE ENRICHMENT (user) ──────────
-		// Coach segment gets boosted total_workouts and streak_days.
+		// HOOK 7: COACH PROFILE ENRICHMENT (user) — coach segment users
+		// get high total_workouts + streak_days.
 		if (type === "user") {
 			if (record.segment === "coach") {
 				record.total_workouts = chance.integer({ min: 200, max: 500 });
@@ -686,29 +729,35 @@ const config = {
 			}
 		}
 
-		// ── HOOK 8: ANNUAL SUBSCRIBER WORKOUT FUNNEL LIFT (funnel-pre) ─
-		// (conversionRate filtering moved to everything hook)
-		if (type === "funnel-pre") {
-			// no-op: conversion filtering handled via event dropping in everything hook
-		}
-
-		// ── HOOK 1: MORNING WORKOUT BOOST (event) ────────────
-		// Workouts between 5AM-9AM get 1.3x calories_burned.
-		if (type === "event") {
-			if (record.event === "workout completed") {
-				const hour = dayjs(record.time).hour();
-				if (hour >= 5 && hour < 9) {
-					record.is_morning_workout = true;
-					if (record.calories_burned) {
-						record.calories_burned = Math.floor(record.calories_burned * 1.3);
+		// HOOK 9 (T2C): WORKOUT LOOP TIME-TO-CONVERT (funnel-post)
+		// Annual subscribers complete the Workout Loop funnel 1.3x faster
+		// (factor 0.77); Free users 1.25x slower (factor 1.25).
+		if (type === "funnel-post") {
+			const segment = meta?.profile?.subscription_plan;
+			if (Array.isArray(record) && record.length > 1) {
+				const factor = (
+					segment === "annual" || segment === "family" ? 0.77 :
+					segment === "free" ? 1.25 :
+					1.0
+				);
+				if (factor !== 1.0) {
+					for (let i = 1; i < record.length; i++) {
+						const prev = dayjs(record[i - 1].time);
+						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+						record[i].time = prev.add(newGap, "milliseconds").toISOString();
 					}
 				}
 			}
+		}
 
+		// (HOOK 1: MORNING WORKOUT BOOST moved to everything hook — hour checks
+		// must run after bunchIntoSessions redistributes timestamps)
+		if (type === "event") {
+			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
 			// ── HOOK 2: POST-LAUNCH AI COACHING LIFT (event) ────
 			// After day 35, ai_assisted workouts get 1.2x duration.
 			if (record.event === "workout completed" || record.event === "workout planned") {
-				const AI_LAUNCH = DATASET_START.add(35, "days");
+				const AI_LAUNCH = datasetStart.add(35, "days");
 				const eventTime = dayjs(record.time);
 				if (eventTime.isAfter(AI_LAUNCH) && record.coaching_mode === "ai_assisted") {
 					if (record.duration_minutes) {
@@ -723,6 +772,7 @@ const config = {
 
 		// ── EVERYTHING HOOKS ─────────────────────────────────
 		if (type === "everything") {
+			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
 			let events = record;
 			if (!events.length) return record;
 
@@ -736,12 +786,25 @@ const config = {
 				});
 			}
 
+			// HOOK 1: MORNING WORKOUT BOOST — 5AM-9AM UTC workouts get
+			// calories_burned 1.3x. No flag — analyst breaks down by HOD.
+			events.forEach(e => {
+				if (e.event === "workout completed") {
+					const hour = new Date(e.time).getUTCHours();
+					if (hour >= 5 && hour < 9 && e.calories_burned) {
+						e.calories_burned = Math.floor(e.calories_burned * 1.3);
+					}
+				}
+			});
+
 			// ── HOOK 8: ANNUAL SUBSCRIBER CONVERSION FILTER ─
 			// Free/monthly-tier users drop ~30% of "progress checked"
 			// (last step of Workout Loop funnel) to simulate lower conversion.
+			// NOTE: subscription field is named `subscription_plan` (set by the
+			// subscription feature in user-loop.js), NOT `subscription_tier`.
 			if (meta && meta.profile) {
-				const tier = meta.profile.subscription_tier;
-				if (tier !== "annual" && tier !== "family") {
+				const plan = meta.profile.subscription_plan;
+				if (plan !== "annual" && plan !== "family") {
 					record = record.filter(e => {
 						if (e.event === "progress checked" && chance.bool({ likelihood: 30 })) return false;
 						return true;
@@ -803,7 +866,7 @@ const config = {
 			// ── HOOK 5: RESOLVER CHURN CLIFF ─────────────────
 			// Resolver segment users with <8 events lose 70% after day 14.
 			if (meta && meta.profile && meta.profile.segment === "resolver" && events.length < 8) {
-				const CHURN_CLIFF = DATASET_START.add(14, "days");
+				const CHURN_CLIFF = datasetStart.add(14, "days");
 				for (let i = events.length - 1; i >= 0; i--) {
 					const eventTime = dayjs(events[i].time);
 					if (eventTime.isAfter(CHURN_CLIFF) && chance.bool({ likelihood: 70 })) {
@@ -812,8 +875,7 @@ const config = {
 				}
 			}
 
-			// ── HOOK 6: COACH SESSION QUALITY ────────────────
-			// Users with coach_session events get higher satisfaction.
+			// HOOK 6: COACH SESSION QUALITY — coach-session satisfaction 4-5.
 			const hasCoachSessions = events.some(e => e.event === "coach session");
 			if (hasCoachSessions) {
 				events.forEach(e => {
@@ -821,6 +883,26 @@ const config = {
 						e.satisfaction_score = chance.floating({ min: 4.0, max: 5.0, fixed: 1 });
 					}
 				});
+			}
+
+			// HOOK 10: WORKOUT-COUNT MAGIC NUMBER (no flags)
+			// Sweet 12-20 workouts → +35% on workout duration_minutes (peak
+			// progression). Over 21+ → drop 30% of post-day-30 events
+			// (overtraining → churn).
+			const workoutCount = events.filter(e => e.event === "workout completed").length;
+			if (workoutCount >= 12 && workoutCount <= 20) {
+				events.forEach(e => {
+					if (e.event === "workout completed" && typeof e.duration_minutes === "number") {
+						e.duration_minutes = Math.round(e.duration_minutes * 1.35);
+					}
+				});
+			} else if (workoutCount >= 21) {
+				const day30 = datasetStart.add(30, "days");
+				for (let i = events.length - 1; i >= 0; i--) {
+					if (dayjs(events[i].time).isAfter(day30) && chance.bool({ likelihood: 30 })) {
+						events.splice(i, 1);
+					}
+				}
 			}
 
 			return record;

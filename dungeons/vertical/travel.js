@@ -48,7 +48,14 @@ const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", 
 
 /**
  * ═══════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (8 hooks)
+ * ANALYTICS HOOKS (10 hooks)
+ *
+ * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable via
+ * raw-prop breakdowns (booking_window, day, segment) or behavioral cohorts.
+ *
+ * Adds 9. BOOKING TIME-TO-CONVERT (Business 1.35x faster, Budget 1.25x slower)
+ * and 10. HOTEL-VIEWED MAGIC NUMBER (sweet 5-10 → +30% nightly_rate;
+ * over 11+ → drop 35% of bookings).
  * ═══════════════════════════════════════════════════════════════
  *
  * ───────────────────────────────────────────────────────────────
@@ -639,11 +646,25 @@ const config = {
 			}
 		}
 
-		// ── HOOK 8: REPEAT DESTINATION CLUSTERING (funnel-pre) ─
-		// conversionRate modifications moved to everything hook (event filtering)
-		// to avoid dilution by organic events
-		if (type === "funnel-pre") {
-			// prop-setting only; no conversionRate changes
+		// HOOK 9 (T2C): BOOKING TIME-TO-CONVERT (funnel-post)
+		// Business travelers complete the Search-to-Book funnel 1.35x faster
+		// (factor 0.74); leisure_family/budget customers 1.25x slower (1.25).
+		if (type === "funnel-post") {
+			const segment = meta?.profile?.customer_segment;
+			if (Array.isArray(record) && record.length > 1) {
+				const factor = (
+					segment === "business_traveler" ? 0.74 :
+					segment === "budget_hunter" || segment === "leisure_family" ? 1.25 :
+					1.0
+				);
+				if (factor !== 1.0) {
+					for (let i = 1; i < record.length; i++) {
+						const prev = dayjs(record[i - 1].time);
+						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+						record[i].time = prev.add(newGap, "milliseconds").toISOString();
+					}
+				}
+			}
 		}
 
 		// ── HOOK 1: WEEKEND LEISURE SURGE ────────────
@@ -776,7 +797,8 @@ const config = {
 				}
 			}
 
-			// ── HOOK 6: REVIEW QUALITY BY STAY RATING ────────
+			// HOOK 6: REVIEW QUALITY BY STAY RATING — high avg ratings get
+			// review_length 1.5x; low avg ratings get 0.5x. Mutates raw prop.
 			let totalRating = 0;
 			let ratingCount = 0;
 			events.forEach(e => {
@@ -795,6 +817,26 @@ const config = {
 					}
 				}
 			});
+
+			// HOOK 10: HOTEL-VIEWED MAGIC NUMBER (in-funnel, no flags)
+			// Sweet 5-10 hotel-viewed events → +30% on booking nightly_rate
+			// (decisive comparison shoppers book higher-tier rooms).
+			// Over 11+ → drop 35% of booking-completed events (analysis
+			// paralysis blocks conversion).
+			const hotelViews = events.filter(e => e.event === "hotel viewed").length;
+			if (hotelViews >= 5 && hotelViews <= 10) {
+				events.forEach(e => {
+					if (e.event === "booking completed" && typeof e.nightly_rate === "number") {
+						e.nightly_rate = Math.round(e.nightly_rate * 1.3);
+					}
+				});
+			} else if (hotelViews >= 11) {
+				for (let i = events.length - 1; i >= 0; i--) {
+					if (events[i].event === "booking completed" && chance.bool({ likelihood: 35 })) {
+						events.splice(i, 1);
+					}
+				}
+			}
 
 			return record;
 		}

@@ -494,7 +494,13 @@ Use a MIX of these techniques across your 8 hooks — don't put everything in `"
   ```
 - **Closure-based state (Maps)**: Module-level Maps track state across calls. E.g., user who exceeded budget → next scale event forced to existing value "down"
 
-⚠️ **DO NOT put DOW/day-of-month checks in the event hook.** When `hasSessionIds: true`, `bunchIntoSessions()` reassigns event timestamps AFTER the event hook but BEFORE the everything hook. Any DOW-based tagging done in the event hook becomes decorrelated from the final output timestamps. Put DOW/day-of-month logic in the **everything hook** instead — it sees final timestamps.
+⚠️ **DO NOT put DOW/day-of-month/hour-of-day checks in the event hook.** When `hasSessionIds: true`, `bunchIntoSessions()` reassigns event timestamps AFTER the event hook but BEFORE the everything hook. Any DOW/hour/date tagging done in the event hook becomes decorrelated from the final output timestamps. Put ALL absolute-time checks (`getUTCDay`, `getUTCHours`, `getUTCDate`) in the **everything hook** — it sees final timestamps. Use `new Date(e.time).getUTCXxx()` (not `dayjs(e.time).hour()` etc.) since TimeSoup distributes events using UTC and `dayjs` defaults to local time.
+
+⚠️ **DO NOT compute `DATASET_START` from `dayjs()` inside hooks.** Use `meta.datasetStart` (unix seconds, post-shift) and `meta.datasetEnd` instead. Both are passed to every hook invocation by the core module. The legacy module-level `const DATASET_START = NOW.subtract(num_days, "days")` is unreliable because it can drift from the actual post-shift event timestamps. Pattern:
+```js
+const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;  // first line of hook block
+const SPIKE_START = datasetStart.add(75, 'days');
+```
 
 ⚠️ **DO NOT read superProp values in the event hook** for conditional logic (e.g., `record.account_tier`). At event-hook time, superProps come from the random picker, not the user's profile. The everything hook stamps the correct profile values LATER. If you need to condition on user properties, use the **everything hook** and read from `meta.profile`.
 
@@ -559,6 +565,119 @@ const OUTAGE_END = NOW.subtract(3, 'days');
 - 3-4 `everything` hooks — this is the most powerful hook type; it sees the user's full event history AND `meta.profile`, enabling cross-table correlation, two-pass analysis, churn simulation, event injection, and behavioral segmentation. Lean heavily on this. Include superProp stamping as the first operation.
 - 1-2 of: `user`, `funnel-post`
 - 0 `funnel-pre` conversionRate mods — use `everything` hook event filtering for conversion differences instead
+
+## CRITICAL: NO FLAG-STAMPING (hidden cohort patterns)
+
+**NEVER stamp behavioral cohort flags on events** (e.g., `event.is_power_user = true`, `event.sweet_spot = true`, `event.churn_victim = true`). Hooks must encode their effects via **raw mutations** that an analyst can only discover by computing the cohort behaviorally — not via a one-breakdown reveal.
+
+### Why no flags?
+
+A flag like `is_whale = true` reduces "Find the whale cohort" to a single Mixpanel breakdown. Real Mixpanel users don't have a `is_whale` field — they have to derive it from `COUNT(transaction completed) per user, bucket > $X total spend`. The whole point of dungeons is to give analysts realistic data they have to *work* to segment, not pre-segmented data.
+
+### What you CAN do (raw mutations)
+
+| Technique | How |
+|-----------|-----|
+| **Modify amounts/values on existing event props** | `event.cart_amount = Math.round(event.cart_amount * 1.25)` — boost only for cohort users |
+| **Drop downstream events** | `events.splice(i, 1)` for over-engaged or churned cohort |
+| **Inject cloned events** | `events.push({...template, time: t.add(N, "minutes").toISOString(), user_id: ...})` — **always use unique offset timestamp**; never duplicate exact time |
+| **Shift inter-event timings** (funnel-post) | Scale gaps by profile segment for time-to-convert differences |
+| **Mutate config-defined enum values** | `event.source = "notification"` flips an existing prop value (real product feature change, not a cohort flag) |
+
+### What you CANNOT do (flag-stamping)
+
+| Anti-pattern | Why it's wrong |
+|--------------|----------------|
+| `event.is_whale = true` | Reduces cohort discovery to one breakdown |
+| `event.sweet_spot = true` | Makes magic-number pattern trivial |
+| `event.over_engaged = true` | Same — leaks the inverted-U structure |
+| `event.churn_risk_score = 92` | Pre-computed segmentation |
+| Profile.has_X_behavior = true (set by hook) | Same problem at user level |
+
+### Borderline (acceptable):
+
+- **Release flags** — `event.signup_flow = "v2"` after a release date is a real product property
+- **Framework feature flags** — `event.coaching_mode = "ai_assisted"` set by `features:` config, not by hook flag-stamping
+- **Realistic profile attrs** — `user.employee_count = 200` for "business" segment (a real B2B field, not a cohort label)
+
+### Reading profile/superProp values as INPUT is fine
+
+Hooks may READ `meta.profile.tier` to drive behavior — that's how Enterprise users naturally behave differently. The output is the raw mutation (boost amount, drop events). The profile field already exists from config — analysts naturally segment by tier.
+
+## Required cohort-discovery hook patterns
+
+### 1. Time-to-convert (funnel-post)
+
+Scale inter-event gaps by a profile segment so funnel median time-to-convert differs by tier:
+
+```javascript
+if (type === "funnel-post") {
+    const segment = meta?.profile?.<SEGMENT_KEY>;
+    if (Array.isArray(record) && record.length > 1) {
+        const factor = (
+            segment === "<FAST>" ? 0.71 :
+            segment === "<SLOW>" ? 1.4 :
+            1.0
+        );
+        if (factor !== 1.0) {
+            for (let i = 1; i < record.length; i++) {
+                const prev = dayjs(record[i - 1].time);
+                const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+                record[i].time = prev.add(newGap, "milliseconds").toISOString();
+            }
+        }
+    }
+}
+```
+
+### 2. Magic-number BEHAVIORAL (everything, no flags)
+
+Count an event per user. Sweet range → boost a value. Over range → drop downstream events.
+
+```javascript
+if (type === "everything") {
+    const xCount = events.filter(e => e.event === "<X>").length;
+    if (xCount >= <SWEET_LOW> && xCount <= <SWEET_HIGH>) {
+        events.forEach(e => {
+            if (e.event === "<TARGET>" && typeof e.<PROP> === "number") {
+                e.<PROP> = Math.round(e.<PROP> * <BOOST>);
+            }
+        });
+    } else if (xCount >= <OVER_THRESHOLD>) {
+        for (let i = events.length - 1; i >= 0; i--) {
+            if (events[i].event === "<TARGET>" && chance.bool({ likelihood: <DROP_PCT> })) {
+                events.splice(i, 1);
+            }
+        }
+    }
+}
+```
+
+### 3. Magic-number IN-FUNNEL (everything, no flags)
+
+Count an event between two funnel anchors per user. Sweet → boost step C. Over → drop step C.
+
+```javascript
+const stepA = events.find(e => e.event === "<A>");
+const stepB = events.find(e => e.event === "<B>");
+if (stepA && stepB) {
+    const aTime = dayjs(stepA.time);
+    const bTime = dayjs(stepB.time);
+    const xBetween = events.filter(e =>
+        e.event === "<X>" &&
+        dayjs(e.time).isAfter(aTime) &&
+        dayjs(e.time).isBefore(bTime)
+    ).length;
+    // ... same sweet/over branches ...
+}
+```
+
+### Quality bar additions
+
+Every dungeon SHOULD have:
+- **At least one inverted-U / magic-number** hook (sweet boost + over drop on raw event count or in-funnel count)
+- **At least one funnel-post time-to-convert** for one of its funnels (if a tier/segment exists in profile)
+- **Zero flag-stamping** anywhere in hooks. If you find yourself writing `event.is_X = true` for X = a behavioral cohort label, stop and rework.
 - `funnel-pre` is acceptable ONLY for: setting props, adjusting `timeToConvert`
 - 0-1 using module-level closure state (Maps)
 
@@ -962,6 +1081,11 @@ The bad example doesn't tell the user what report type to create, what metric to
 11. **SuperProp values in event hooks are RANDOM, not per-user**: At event-hook time, superProps like `account_tier` come from the random picker. The everything hook later stamps the correct value from `meta.profile`. If you condition on a user-level property (tier, segment, plan), do it in the `everything` hook using `meta.profile.X`.
 12. **Cloned events bypass event-hook modifications**: When the everything hook clones/injects events (viral cascade, weekend duplication), those clones don't pass through the event hook. If the event hook applied a value multiplier (e.g., 1.2x on weekends), clones get the base value. Apply multipliers in the everything hook AFTER cloning to affect both originals and clones.
 13. **Threshold checks must match the data distribution**: If a hook checks `avg_response_time < 2` hours but the property's distribution is `weighNumRange(0.1, 48, 0.3, 6)` (median ~6h), per-user averages will almost never hit <2h. Always sanity-check thresholds against the property's value range.
+14. **Cohort definition must produce a non-empty cohort**: Hooks like "users who claim airdrops but never swap" can be empty cohorts at scale (every claimer also has organic swap events). Verify the cohort exists with a quick DuckDB query before relying on it. If empty, switch to deterministic hash-based selection: `userId.charCodeAt(N) % K === 0`.
+15. **Hook ordering matters when one hook injects events that another hook removes**: If Hook A (e.g., off-app retention) injects events for milestone-positive users, and Hook B (e.g., ghosting churn) removes events for ghosters, B must run AFTER A or its removals get masked by A's injections. Order hooks: filters/removals AFTER injections, churn LAST.
+16. **Subscription field is `subscription_plan`, not `subscription_tier`**: When the `subscription` feature is configured, the user-loop sets `profile.subscription_plan`. Reading `profile.subscription_tier` returns `undefined` and any tier-conditional code becomes a no-op (or applies uniformly). If the dungeon ALSO has a `subscription_tier` superProp (independent of the subscription feature), be explicit about which one you mean.
+17. **Cloned events that override superProps override THE PROFILE STAMP**: If the everything hook stamps `e.cloud_provider = profile.cloud_provider` on every event, then later clones an event and re-sets `cloud_provider: chance.pickone([...])`, the clone leaks a random value through. When cloning, either omit superProp fields (let the next stamping pass cover them) or copy from `profile.X`.
+18. **`funnel-pre conversionRate` modifications are diluted to invisibility by organic events**: A 1.5x multiplier in `funnel-pre` shows as ~1.05x in Mixpanel. Use `everything` hook event filtering instead — drop final-funnel-step events from the lower-converting segment. Documented again under Funnel Techniques above.
 
 ## JSON Schema Output (Required)
 
