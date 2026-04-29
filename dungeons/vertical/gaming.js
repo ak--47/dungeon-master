@@ -235,10 +235,6 @@ const chance = u.initChance(SEED);
  *     audience segmentation lens for narrative design and content tuning.
  *
  * ───────────────────────────────────────────────────────────────────────────────
- * EXPECTED METRICS SUMMARY
- * ───────────────────────────────────────────────────────────────────────────────
- *
- * ───────────────────────────────────────────────────────────────────────────────
  * 12. COMBAT FUNNEL TIME-TO-CONVERT (funnel-post)
  *
  *     PATTERN: Elite tier completes the Combat funnel 1.4x faster (factor
