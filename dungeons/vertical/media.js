@@ -271,7 +271,9 @@ const blockbusterId = `blockbuster_${v.uid(8)}`;
 const config = {
 	token,
 	seed: SEED,
-	numDays: num_days,
+	datasetStart: "2026-01-01T00:00:00Z",
+	datasetEnd: "2026-04-28T23:59:59Z",
+	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	hasAnonIds: false,
@@ -537,9 +539,6 @@ const config = {
 	lookupTables: [],
 
 	hook: function (record, type, meta) {
-		const NOW = dayjs();
-		const DATASET_START = NOW.subtract(num_days, 'days');
-
 		// Hook #10 (T2C): CORE VIEWING LOOP TIME-TO-CONVERT (funnel-post)
 		// Premium subscribers complete browse→play funnel 1.4x faster
 		// (factor 0.71); free users 1.25x slower (factor 1.25).
@@ -562,7 +561,7 @@ const config = {
 		}
 
 		if (type === "event") {
-			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
+			const datasetStart = dayjs.unix(meta.datasetStart);
 			const BLOCKBUSTER_START = datasetStart.add(50, 'days');
 			const BLOCKBUSTER_END = datasetStart.add(65, 'days');
 			const EVENT_TIME = dayjs(record.time);
@@ -594,7 +593,7 @@ const config = {
 		}
 
 		if (type === "everything") {
-			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
+			const datasetStart = dayjs.unix(meta.datasetStart);
 			const userEvents = record;
 			if (!userEvents || userEvents.length === 0) return record;
 

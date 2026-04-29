@@ -23,6 +23,10 @@ function baseConfig(overrides = {}) {
 		numUsers: 30,
 		numEvents: 300,
 		numDays: 30,
+		// Pinned window keeps hook tests deterministic across runs and ensures
+		// time-offset duplicates (e.g. +1h) don't escape the dataset window.
+		datasetStart: '2024-01-01T00:00:00Z',
+		datasetEnd: '2024-01-31T00:00:00Z',
 		format: 'json',
 		writeToDisk: false,
 		concurrency: 1,

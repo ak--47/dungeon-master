@@ -16,9 +16,6 @@ import * as v from "ak-tools";
 
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
-const NOW = dayjs();
-const DATASET_START = NOW.subtract(num_days, "days");
-
 /** @typedef  {import("../../types").Dungeon} Config */
 
 // Generate consistent seller store and listing IDs at module level
@@ -309,7 +306,9 @@ const listingIds = v.range(1, 500).map(() => `LST_${v.uid(8)}`);
 const config = {
 	token,
 	seed: SEED,
-	numDays: num_days,
+	datasetStart: "2026-01-01T00:00:00Z",
+	datasetEnd: "2026-04-28T23:59:59Z",
+	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	hasAnonIds: false,
@@ -801,7 +800,7 @@ const config = {
 		// HOOK 1: FEE CHANGE IMPACT (event) — listings after day 45 get
 		// listing_fee 1.3x. No flag — discover via line chart by day.
 		if (type === "event") {
-			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
+			const datasetStart = dayjs.unix(meta.datasetStart);
 			const FEE_CHANGE_DAY = datasetStart.add(45, "days");
 			if (record.event === "listing created") {
 				const eventTime = dayjs(record.time);
@@ -813,7 +812,7 @@ const config = {
 
 		// ── EVERYTHING HOOKS ─────────────────────────────────
 		if (type === "everything") {
-			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
+			const datasetStart = dayjs.unix(meta.datasetStart);
 			let events = record;
 			if (!events.length) return record;
 

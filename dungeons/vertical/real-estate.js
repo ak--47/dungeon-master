@@ -267,7 +267,9 @@ const chance = u.initChance(SEED);
 const config = {
 	token,
 	seed: SEED,
-	numDays: num_days,
+	datasetStart: "2026-01-01T00:00:00Z",
+	datasetEnd: "2026-04-28T23:59:59Z",
+	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	hasAnonIds: false,
@@ -526,9 +528,6 @@ const config = {
 			}
 		}
 
-		const NOW = dayjs.utc();
-		const DATASET_START = NOW.subtract(num_days, "days");
-
 		// HOOK 1: SPRING BUYING SEASON (event) — days 30-60, tour
 		// duration_mins boosted 3x, offer_price 2.5x. Mutates raw props.
 		// HOOK 2 (event): MORTGAGE RATE SHOCK — days 75-89, mortgage_rate
@@ -536,7 +535,7 @@ const config = {
 		// HOOK 7 (event): LUXURY LISTING RELEASE — after day 50, 3% of
 		// property_listed events get listing_price set to $5M-$15M.
 		if (type === "event") {
-			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
+			const datasetStart = dayjs.unix(meta.datasetStart);
 			const EVENT_TIME = dayjs.utc(record.time);
 			const dayInDataset = EVENT_TIME.diff(datasetStart, "day");
 			const isSpring = dayInDataset >= 30 && dayInDataset <= 60;
@@ -562,7 +561,7 @@ const config = {
 		}
 
 		if (type === "everything") {
-			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
+			const datasetStart = dayjs.unix(meta.datasetStart);
 			const userEvents = record;
 			const profile = meta.profile;
 

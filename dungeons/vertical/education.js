@@ -319,7 +319,9 @@ const problemIds = v.range(1, 601).map(n => `problem_${v.uid(6)}`);
 const config = {
 	token,
 	seed: SEED,
-	numDays: num_days,
+	datasetStart: "2026-01-01T00:00:00Z",
+	datasetEnd: "2026-04-28T23:59:59Z",
+	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	hasAnonIds: false,
@@ -627,9 +629,6 @@ const config = {
 	 * 8. PLAYBACK SPEED CORRELATION: Speed learners paradoxically score higher; thorough learners get extended time
 	 */
 	hook: function (record, type, meta) {
-		const NOW = dayjs.utc();
-		const DATASET_START = NOW.subtract(num_days, 'days');
-
 		// HOOK 1: STUDENT VS INSTRUCTOR PROFILES (user) — role-based attributes.
 		if (type === "user") {
 			if (record.account_type === "instructor") {
@@ -686,7 +685,7 @@ const config = {
 		}
 
 		if (type === "everything") {
-			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
+			const datasetStart = dayjs.unix(meta.datasetStart);
 			const userEvents = record;
 			const profile = meta.profile;
 			const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;

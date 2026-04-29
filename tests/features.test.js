@@ -16,6 +16,7 @@ import { FUNCTION_REGISTRY, validateFunctionCall, getValidFunctionNames } from '
 import { evaluateValue, evaluateFunctionCall, convertDungeonConfig } from '../lib/utils/json-evaluator.js';
 import { bytesHuman, formatDuration, initChance } from '../lib/utils/utils.js';
 import * as u from '../lib/utils/utils.js';
+import dayjs from 'dayjs';
 
 const FIXED_NOW = 1706832000; // 2024-02-02
 global.FIXED_NOW = FIXED_NOW;
@@ -301,20 +302,21 @@ describe('utility functions', () => {
 	});
 });
 
-describe('context time shift', () => {
-	test('uses 1 day shift (adds 1 day to now, not 2)', () => {
+describe('context dataset window', () => {
+	test('FIXED_BEGIN/FIXED_NOW reflect resolved datasetStart/datasetEnd from config', () => {
 		initChance('time-test');
 		const config = validateDungeonConfig({
 			numUsers: 10,
 			numEvents: 100,
+			datasetStart: '2024-01-01T00:00:00Z',
+			datasetEnd: '2024-04-01T00:00:00Z',
 			seed: 'time-test'
 		});
 		const context = createContext(config);
-		// TIME_SHIFT_SECONDS should be the diff between (now + 1 day) and FIXED_NOW
-		// The getTimeShift() and getDaysShift() methods should use .add(1, "day")
-		const shiftFromMethod = context.getTimeShift();
-		// Both should be approximately the same (within a few seconds of computation time)
-		expect(Math.abs(context.TIME_SHIFT_SECONDS - shiftFromMethod)).toBeLessThan(5);
+		expect(context.FIXED_BEGIN).toBe(dayjs('2024-01-01T00:00:00Z').unix());
+		expect(context.FIXED_NOW).toBe(dayjs('2024-04-01T00:00:00Z').unix());
+		expect(context.DATASET_START_SECONDS).toBe(context.FIXED_BEGIN);
+		expect(context.DATASET_END_SECONDS).toBe(context.FIXED_NOW);
 	});
 
 });

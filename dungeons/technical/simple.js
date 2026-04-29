@@ -218,10 +218,9 @@ const config = {
 	lookupTables: [],
 	hook: function (record, type, meta) {
 
-		const NOW = dayjs();
-		// const DATE_HOMEGROWN_LAUNCH = NOW.subtract(25, 'day');
-		// const DATE_HOMEGROWN_IMPROVEMENT = NOW.subtract(10, 'day');
-		const OVER_THINGS_GET_BETTER = NOW.subtract(15, 'day');
+		// Anchor relative dates to the resolved dataset window — never wall-clock.
+		const datasetEnd = dayjs.unix(meta.datasetEnd);
+		const OVER_THINGS_GET_BETTER = datasetEnd.subtract(15, 'day');
 
 		if (type === "event") {
 			const EVENT_TIME = dayjs(record.time);

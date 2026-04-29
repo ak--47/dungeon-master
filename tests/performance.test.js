@@ -22,57 +22,33 @@ beforeAll(() => {
 
 describe('Performance Optimizations', () => {
 
-    describe('Context TIME_SHIFT_SECONDS Optimization', () => {
-        test('should pre-calculate TIME_SHIFT_SECONDS in context', () => {
+    describe('Context dataset window resolution', () => {
+        test('FIXED_NOW/FIXED_BEGIN reflect resolved datasetStart/datasetEnd', () => {
             const config = {
                 numUsers: 10,
                 numEvents: 50,
+                datasetStart: '2024-01-01T00:00:00Z',
+                datasetEnd: '2024-04-01T00:00:00Z',
                 seed: 'test-seed'
             };
-            
             const validatedConfig = validateDungeonConfig(config);
             const context = createContext(validatedConfig);
-            
-            // Should have pre-calculated TIME_SHIFT_SECONDS
-            expect(context.TIME_SHIFT_SECONDS).toBeDefined();
-            expect(typeof context.TIME_SHIFT_SECONDS).toBe('number');
-            expect(context.TIME_SHIFT_SECONDS).toBeGreaterThan(0);
+            expect(context.FIXED_BEGIN).toBe(dayjs('2024-01-01T00:00:00Z').unix());
+            expect(context.FIXED_NOW).toBe(dayjs('2024-04-01T00:00:00Z').unix());
         });
 
-        test('TIME_SHIFT_SECONDS should be consistent across multiple context creations', () => {
+        test('two contexts built from the same pinned config share identical anchors', () => {
             const config = {
                 numUsers: 10,
                 numEvents: 50,
+                datasetStart: '2024-01-01T00:00:00Z',
+                datasetEnd: '2024-04-01T00:00:00Z',
                 seed: 'test-seed'
             };
-            
-            const validatedConfig = validateDungeonConfig(config);
-            const context1 = createContext(validatedConfig);
-            const context2 = createContext(validatedConfig);
-            
-            // Should be exactly the same since it's based on fixed global values
-            expect(context1.TIME_SHIFT_SECONDS).toBe(context2.TIME_SHIFT_SECONDS);
-        });
-
-        test('TIME_SHIFT_SECONDS should shift from FIXED_NOW to ~1 hour ago', () => {
-            const config = {
-                numUsers: 10,
-                numEvents: 50,
-                seed: 'test-seed'
-            };
-
-            const validatedConfig = validateDungeonConfig(config);
-            const context = createContext(validatedConfig);
-
-            // Shift should be positive and large (FIXED_NOW is far in the past)
-            expect(context.TIME_SHIFT_SECONDS).toBeGreaterThan(0);
-            // Events at FIXED_NOW should land ~1 hour before actual now
-            const shiftedFixedNow = global.FIXED_NOW + context.TIME_SHIFT_SECONDS;
-            const actualNow = Math.floor(Date.now() / 1000);
-            const diffFromNow = actualNow - shiftedFixedNow;
-            // Should be about 1 hour (3600s) before now, with some tolerance
-            expect(diffFromNow).toBeGreaterThan(3000);
-            expect(diffFromNow).toBeLessThan(4200);
+            const c1 = createContext(validateDungeonConfig(config));
+            const c2 = createContext(validateDungeonConfig(config));
+            expect(c1.FIXED_BEGIN).toBe(c2.FIXED_BEGIN);
+            expect(c1.FIXED_NOW).toBe(c2.FIXED_NOW);
         });
     });
 
@@ -190,28 +166,28 @@ describe('Performance Optimizations', () => {
     });
 
     describe('makeEvent Integration with Optimizations', () => {
-        test('makeEvent should use precomputed TIME_SHIFT_SECONDS', async () => {
+        test('makeEvent emits a valid timestamp inside the resolved dataset window', async () => {
             const config = {
                 numUsers: 10,
                 numEvents: 50,
                 hasLocation: true,
+                datasetStart: '2024-01-01T00:00:00Z',
+                datasetEnd: '2024-04-01T00:00:00Z',
                 seed: 'test-seed'
             };
-            
+
             const validatedConfig = validateDungeonConfig(config);
             const context = createContext(validatedConfig);
-            
+
             const chosenEvent = {
                 event: 'test_event',
-                properties: {
-                    test_prop: ['A', 'B', 'C']
-                }
+                properties: { test_prop: ['A', 'B', 'C'] }
             };
-            
+
             const event = await makeEvent(
                 context,
                 'test_user_123',
-                global.FIXED_BEGIN,
+                context.FIXED_BEGIN,
                 chosenEvent,
                 [],
                 [],
@@ -220,15 +196,12 @@ describe('Performance Optimizations', () => {
                 false,
                 false
             );
-            
-            // Event should have proper time format
+
             expect(event.time).toBeDefined();
-            expect(typeof event.time).toBe('string');
             expect(dayjs(event.time).isValid()).toBe(true);
-            
-            // Time should be shifted forward (context should have TIME_SHIFT_SECONDS)
-            expect(context.TIME_SHIFT_SECONDS).toBeDefined();
-            expect(context.TIME_SHIFT_SECONDS).toBeGreaterThan(0);
+            const eventUnix = dayjs(event.time).unix();
+            expect(eventUnix).toBeGreaterThanOrEqual(context.FIXED_BEGIN);
+            expect(eventUnix).toBeLessThanOrEqual(context.FIXED_NOW);
         });
 
         test('makeEvent should use cached location data', async () => {

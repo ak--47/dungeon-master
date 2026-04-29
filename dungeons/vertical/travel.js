@@ -16,9 +16,6 @@ import * as v from "ak-tools";
 
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
-const NOW = dayjs();
-const DATASET_START = NOW.subtract(num_days, "days");
-
 /** @typedef  {import("../../types").Dungeon} Config */
 
 const hotelIds = v.range(1, 200).map(() => `HTL_${v.uid(6)}`);
@@ -213,7 +210,9 @@ const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", 
 const config = {
 	token,
 	seed: SEED,
-	numDays: num_days,
+	datasetStart: "2026-01-01T00:00:00Z",
+	datasetEnd: "2026-04-28T23:59:59Z",
+	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	hasAnonIds: false,
@@ -707,10 +706,11 @@ const config = {
 			});
 
 			// ── HOOK 2: ADVANCE BOOKING DISCOUNT ─────
+			const datasetEndForBooking = dayjs.unix(meta.datasetEnd);
 			events.forEach(e => {
 				if (e.event === "booking completed") {
 					const eventTime = dayjs(e.time);
-					const daysUntilEnd = NOW.diff(eventTime, "days");
+					const daysUntilEnd = datasetEndForBooking.diff(eventTime, "days");
 					if (daysUntilEnd > 21) {
 						e.booking_window = "advance";
 						e.nightly_rate = Math.floor((e.nightly_rate || 150) * 0.8);

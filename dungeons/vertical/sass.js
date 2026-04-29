@@ -342,7 +342,9 @@ const failedDeployUsers = new Map();
 const config = {
 	token,
 	seed: SEED,
-	numDays: num_days,
+	datasetStart: "2026-01-01T00:00:00Z",
+	datasetEnd: "2026-04-28T23:59:59Z",
+	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	hasAnonIds: false,
@@ -661,14 +663,11 @@ const config = {
 	 * 8. ENTERPRISE VS STARTUP: Company size determines seat count, ACV, and health score
 	 */
 	hook: function (record, type, meta) {
-		const NOW = dayjs();
-		const DATASET_START = NOW.subtract(num_days, "days");
-
 		// HOOK 1: END-OF-QUARTER SPIKE — days 80-90, 40% of billing events
 		// flip event_type to plan_upgraded; team-member-invited events get
 		// 50% chance of duplicate clone with unique time. No flag.
 		if (type === "event") {
-			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
+			const datasetStart = dayjs.unix(meta.datasetStart);
 			const EVENT_TIME = dayjs(record.time);
 			const dayInDataset = EVENT_TIME.diff(datasetStart, "days", true);
 
@@ -756,7 +755,7 @@ const config = {
 		}
 
 		if (type === "everything") {
-			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
+			const datasetStart = dayjs.unix(meta.datasetStart);
 			const userEvents = record;
 			const profile = meta.profile;
 

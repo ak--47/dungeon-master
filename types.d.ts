@@ -21,11 +21,22 @@ export interface Dungeon {
     token?: string;
     /** RNG seed for reproducible output. Same seed + concurrency=1 = identical data. */
     seed?: string;
-    /** Number of days the dataset spans (from "now" looking backward). Default: 30 */
+    /** Number of days the dataset spans. Used as fallback when datasetStart/datasetEnd are NOT both set — window becomes (today_start - numDays, today_start). Default: 30. When datasetStart/datasetEnd ARE both set, numDays is recomputed from the window and any user-supplied value is ignored (with a warning). */
     numDays?: number;
-    /** Explicit start of dataset window (unix seconds). Alternative to numDays. */
+    /**
+     * Explicit start of the dataset window. Pin BOTH `datasetStart` and `datasetEnd` for
+     * bit-exact deterministic runs. Accepts ISO string ("2026-01-01T00:00:00Z"), unix
+     * seconds (1735689600), unix milliseconds (1735689600000), or anything `dayjs()`
+     * can parse. Setting only one of datasetStart/datasetEnd throws.
+     */
+    datasetStart?: string | number;
+    /**
+     * Explicit end of the dataset window. See `datasetStart` — both must be set together.
+     */
+    datasetEnd?: string | number;
+    /** @deprecated Legacy alias internally aliased to datasetStart on validated config. Prefer `datasetStart`. */
     epochStart?: number;
-    /** Explicit end of dataset window (unix seconds). Defaults to FIXED_NOW. */
+    /** @deprecated Legacy alias internally aliased to datasetEnd on validated config. Prefer `datasetEnd`. */
     epochEnd?: number;
     /** Target total number of events to generate across all users. Fallback when avgEventsPerUserPerDay is not set; otherwise derived from rate × numUsers × numDays. */
     numEvents?: number;
@@ -279,8 +290,20 @@ export type hookTypes =
  */
 export type Hook<T> = (record: any, type: hookTypes, meta: any) => T;
 
+/**
+ * Time-window anchors present on every hook's `meta`. Use these to derive relative
+ * dates inside hooks (e.g. `dayjs.unix(meta.datasetStart).add(45, 'days')`). NEVER
+ * read wall-clock `dayjs()` inside a hook — it makes hooks non-deterministic.
+ */
+export interface HookMetaTimeAnchors {
+    /** Start of the dataset window (unix seconds). Same value the engine uses to bound event generation. */
+    datasetStart: number;
+    /** End of the dataset window (unix seconds). Same value the engine uses to bound event generation. */
+    datasetEnd: number;
+}
+
 /** Meta passed to the "event" hook. */
-export interface HookMetaEvent {
+export interface HookMetaEvent extends HookMetaTimeAnchors {
     /** The user this event belongs to (only `distinct_id` is guaranteed). */
     user: { distinct_id: string };
     /** The fully-resolved dungeon config. */
@@ -288,7 +311,7 @@ export interface HookMetaEvent {
 }
 
 /** Meta passed to the "user" hook (fires when a user profile is created). */
-export interface HookMetaUser {
+export interface HookMetaUser extends HookMetaTimeAnchors {
     /** The user object being constructed (mutate in place). */
     user: UserProfile;
     /** The fully-resolved dungeon config. */
@@ -298,7 +321,7 @@ export interface HookMetaUser {
 }
 
 /** Meta passed to the "scd-pre" hook (fires per SCD prop, before insertion). */
-export interface HookMetaScdPre {
+export interface HookMetaScdPre extends HookMetaTimeAnchors {
     /** The user profile that owns these SCD entries. */
     profile: UserProfile;
     /** The SCD prop key being generated (e.g. "plan", "tier"). */
@@ -312,7 +335,7 @@ export interface HookMetaScdPre {
 }
 
 /** Meta passed to the "funnel-pre" hook (mutate funnel before generating events). */
-export interface HookMetaFunnelPre {
+export interface HookMetaFunnelPre extends HookMetaTimeAnchors {
     user: { distinct_id: string };
     profile: UserProfile;
     scd: Record<string, SCDSchema[]>;
@@ -323,7 +346,7 @@ export interface HookMetaFunnelPre {
 }
 
 /** Meta passed to the "funnel-post" hook (mutate generated funnel events in place). */
-export interface HookMetaFunnelPost {
+export interface HookMetaFunnelPost extends HookMetaTimeAnchors {
     user: { distinct_id: string };
     profile: UserProfile;
     scd: Record<string, SCDSchema[]>;
@@ -332,7 +355,7 @@ export interface HookMetaFunnelPost {
 }
 
 /** Meta passed to the "everything" hook — most powerful hook (sees all events for one user). */
-export interface HookMetaEverything {
+export interface HookMetaEverything extends HookMetaTimeAnchors {
     /** The user's profile, including merged persona/region/attribution properties. */
     profile: UserProfile;
     /** All SCD entries for this user, keyed by prop name. */
@@ -463,10 +486,14 @@ export interface Context {
     /** Pre-built UTM campaign pool (used when `hasCampaigns: true`). */
     campaigns: Record<string, ValueValid>[];
     runtime: RuntimeState;
+    /** End of the resolved dataset window (unix seconds). Equal to the user-supplied `datasetEnd`, or fallback `today_start`. */
     FIXED_NOW: number;
+    /** Start of the resolved dataset window (unix seconds). Equal to the user-supplied `datasetStart`, or fallback `today_start - numDays`. */
     FIXED_BEGIN?: number;
-    TIME_SHIFT_SECONDS: number;
-    MAX_TIME: number;
+    /** Alias of `FIXED_BEGIN` — surfaced on hook `meta.datasetStart`. */
+    DATASET_START_SECONDS: number;
+    /** Alias of `FIXED_NOW` — surfaced on hook `meta.datasetEnd`. */
+    DATASET_END_SECONDS: number;
 
     // State update methods
     incrementOperations(): void;
@@ -483,10 +510,6 @@ export interface Context {
     incrementUserCount(): void;
     incrementEventCount(): void;
     isBatchMode(): boolean;
-
-    // Time helper methods
-    getTimeShift(): number;
-    getDaysShift(): number;
 }
 
 /**

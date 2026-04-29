@@ -125,7 +125,13 @@ export default config;
 ```javascript
 token,
 seed: SEED,
-numDays: num_days,
+// Pin the dataset window — gives bit-exact determinism across runs and locks DOW/DOM
+// hooks to real calendar dates. If neither is set, the window falls back to
+// (today_start - numDays, today_start) and a warning is logged. Pin both for
+// production / verifier runs. Leave numDays commented out (preserved for reference).
+datasetStart: "2026-01-01T00:00:00Z",
+datasetEnd:   "2026-04-28T23:59:59Z",
+// numDays: num_days,
 avgEventsPerUserPerDay: avg_events_per_user_per_day,  // canonical event-volume primitive; born-late users get rate × remaining_days (NOT compressed). Use numEvents only as a legacy fallback target.
 numUsers: num_users,
 hasAnonIds: false,
@@ -486,20 +492,21 @@ Use a MIX of these techniques across your 8 hooks — don't put everything in `"
 #### Event-Level Techniques (`type === "event"`)
 
 - **Value modification**: Multiply, scale, or shift existing property values based on conditions. `record.amount *= 1.5`
-- **Temporal windowing**: Modify existing values within a date range using relative dates:
+- **Temporal windowing**: Modify existing values within a date range using relative offsets from the resolved dataset window. NEVER read wall-clock `dayjs()` inside a hook — pull anchors from `meta.datasetStart` / `meta.datasetEnd` (unix seconds, present on every hook invocation):
   ```javascript
-  const DATASET_START = NOW.subtract(days, 'days');
-  const LAUNCH_DATE = DATASET_START.add(45, 'days');
+  const datasetStart = dayjs.unix(meta.datasetStart);
+  const LAUNCH_DATE = datasetStart.add(45, 'days');
   if (dayjs(record.time).isAfter(LAUNCH_DATE)) { record.amount *= 2; }
   ```
 - **Closure-based state (Maps)**: Module-level Maps track state across calls. E.g., user who exceeded budget → next scale event forced to existing value "down"
 
 ⚠️ **DO NOT put DOW/day-of-month/hour-of-day checks in the event hook.** When `hasSessionIds: true`, `bunchIntoSessions()` reassigns event timestamps AFTER the event hook but BEFORE the everything hook. Any DOW/hour/date tagging done in the event hook becomes decorrelated from the final output timestamps. Put ALL absolute-time checks (`getUTCDay`, `getUTCHours`, `getUTCDate`) in the **everything hook** — it sees final timestamps. Use `new Date(e.time).getUTCXxx()` (not `dayjs(e.time).hour()` etc.) since TimeSoup distributes events using UTC and `dayjs` defaults to local time.
 
-⚠️ **DO NOT compute `DATASET_START` from `dayjs()` inside hooks.** Use `meta.datasetStart` (unix seconds, post-shift) and `meta.datasetEnd` instead. Both are passed to every hook invocation by the core module. The legacy module-level `const DATASET_START = NOW.subtract(num_days, "days")` is unreliable because it can drift from the actual post-shift event timestamps. Pattern:
+⚠️ **DO NOT compute time anchors from wall-clock `dayjs()` inside hooks.** Use `meta.datasetStart` and `meta.datasetEnd` (unix seconds, always populated by the core module) as the only sources of truth. The legacy `const NOW = dayjs(); const DATASET_START = NOW.subtract(num_days, "days")` pattern is forbidden — it makes hooks non-deterministic across runs and decorrelates from the actual event window. Pattern:
 ```js
-const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;  // first line of hook block
-const SPIKE_START = datasetStart.add(75, 'days');
+const datasetStart = dayjs.unix(meta.datasetStart);
+const datasetEnd   = dayjs.unix(meta.datasetEnd);
+const SPIKE_START  = datasetStart.add(75, 'days');
 ```
 
 ⚠️ **DO NOT read superProp values in the event hook** for conditional logic (e.g., `record.account_tier`). At event-hook time, superProps come from the random picker, not the user's profile. The everything hook stamps the correct profile values LATER. If you need to condition on user properties, use the **everything hook** and read from `meta.profile`.
@@ -542,22 +549,29 @@ The `"everything"` hook is the most powerful because it sees ALL events for one 
 
 #### Relative Date Patterns (Important!)
 
-Always define time windows relative to `DATASET_START`, not absolute dates. This makes hooks work regardless of `numDays`:
+Always define time windows relative to the resolved dataset window from `meta`, never to wall-clock `dayjs()`. This makes hooks deterministic and portable across `numDays` / pinned-window configs:
 
 ```javascript
-const NOW = dayjs();
-const DATASET_START = NOW.subtract(days, 'days');  // 'days' from module scope
+// Inside any hook (event, everything, funnel-pre/post, user, scd-pre):
+const datasetStart = dayjs.unix(meta.datasetStart);
+const datasetEnd   = dayjs.unix(meta.datasetEnd);
 
-// Product launch happened 25 days ago
-const LAUNCH_DATE = NOW.subtract(25, 'days');
+// Product launch happened 25 days before the end of the window
+const LAUNCH_DATE = datasetEnd.subtract(25, 'days');
 
 // Promotional period: started 40 days in, ended 55 days in
-const PROMO_START = DATASET_START.add(40, 'days');
-const PROMO_END = DATASET_START.add(55, 'days');
+const PROMO_START = datasetStart.add(40, 'days');
+const PROMO_END   = datasetStart.add(55, 'days');
 
-// Last week's outage
-const OUTAGE_START = NOW.subtract(7, 'days');
-const OUTAGE_END = NOW.subtract(3, 'days');
+// Last week's outage (relative to dataset end, not wall clock)
+const OUTAGE_START = datasetEnd.subtract(7, 'days');
+const OUTAGE_END   = datasetEnd.subtract(3, 'days');
+```
+
+**Forbidden** (causes non-determinism + drift from event timestamps):
+```javascript
+const NOW = dayjs();                          // ❌ wall-clock
+const DATASET_START = NOW.subtract(days, 'days');  // ❌ derived from wall-clock
 ```
 
 ### Aim for this distribution across your 8 hooks:

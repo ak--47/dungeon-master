@@ -33,12 +33,8 @@ import utc from "dayjs/plugin/utc.js";
 import { timer } from 'ak-tools';
 import { dataLogger as logger } from './lib/utils/logger.js';
 
-// Initialize dayjs and time constants
+// Initialize dayjs (window anchors are now resolved per-config in config-validator)
 dayjs.extend(utc);
-const FIXED_NOW = dayjs('2024-02-02').unix();
-global.FIXED_NOW = FIXED_NOW;
-let FIXED_BEGIN = dayjs.unix(FIXED_NOW).subtract(90, 'd').unix();
-global.FIXED_BEGIN = FIXED_BEGIN;
 
 
 /**
@@ -134,18 +130,20 @@ async function runDungeon(config) {
 			initChance(config.seed);
 		}
 
-		// Step 1: Validate and enrich configuration
+		// Step 1: Validate and enrich configuration (resolves dataset window)
 		validatedConfig = validateDungeonConfig(config);
 
-		// Compute FIXED_BEGIN from validated numDays
-		const configNumDays = validatedConfig.numDays || 30;
-		const fixedBegin = dayjs.unix(FIXED_NOW).subtract(configNumDays, 'd').unix();
+		// validateDungeonConfig always resolves these to unix seconds, but the
+		// public Dungeon type accepts string | number on input. Narrow here.
+		const fixedNow = /** @type {number} */ (validatedConfig.datasetEnd);
+		const fixedBegin = /** @type {number} */ (validatedConfig.datasetStart);
 
 		// Keep globals for backwards compatibility with tests/dungeons that read them
+		global.FIXED_NOW = fixedNow;
 		global.FIXED_BEGIN = fixedBegin;
 
 		// Step 2: Create context with validated config (pass time constants explicitly)
-		const context = createContext(validatedConfig, null, { fixedNow: FIXED_NOW, fixedBegin });
+		const context = createContext(validatedConfig, null, { fixedNow, fixedBegin });
 
 		// Step 3: Initialize storage containers
 		const storageManager = new StorageManager(context);
@@ -237,11 +235,12 @@ async function generateAdSpendData(context) {
 	const { config, storage } = context;
 	const { numDays } = config;
 
-	const timeShift = context.TIME_SHIFT_SECONDS;
 	for (let day = 0; day < numDays; day++) {
-		const fixedDay = dayjs.unix(context.FIXED_BEGIN).add(day, 'day').unix();
-		const shiftedDay = Math.min(fixedDay + timeShift, context.MAX_TIME);
-		const targetDay = dayjs.unix(shiftedDay).toISOString();
+		const dayUnix = Math.min(
+			dayjs.unix(context.FIXED_BEGIN).add(day, 'day').unix(),
+			context.FIXED_NOW
+		);
+		const targetDay = dayjs.unix(dayUnix).toISOString();
 		const adSpendEvents = await makeAdSpend(context, targetDay);
 
 		if (adSpendEvents.length > 0) {

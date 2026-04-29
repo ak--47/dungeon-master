@@ -15,9 +15,6 @@ import * as u from "../../lib/utils/utils.js";
 
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
-const NOW = dayjs();
-const DATASET_START = NOW.subtract(num_days, "days");
-
 /** @typedef  {import("../../types").Dungeon} Config */
 
 /**
@@ -308,7 +305,9 @@ const DATASET_START = NOW.subtract(num_days, "days");
 const config = {
 	token,
 	seed: SEED,
-	numDays: num_days,
+	datasetStart: "2026-01-01T00:00:00Z",
+	datasetEnd: "2026-04-28T23:59:59Z",
+	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	hasAnonIds: false,
@@ -753,7 +752,7 @@ const config = {
 		// (HOOK 1: MORNING WORKOUT BOOST moved to everything hook — hour checks
 		// must run after bunchIntoSessions redistributes timestamps)
 		if (type === "event") {
-			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
+			const datasetStart = dayjs.unix(meta.datasetStart);
 			// ── HOOK 2: POST-LAUNCH AI COACHING LIFT (event) ────
 			// After day 35, ai_assisted workouts get 1.2x duration.
 			if (record.event === "workout completed" || record.event === "workout planned") {
@@ -772,7 +771,7 @@ const config = {
 
 		// ── EVERYTHING HOOKS ─────────────────────────────────
 		if (type === "everything") {
-			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
+			const datasetStart = dayjs.unix(meta.datasetStart);
 			let events = record;
 			if (!events.length) return record;
 

@@ -147,8 +147,6 @@ const config = {
 	}],
 	hook: function (record, type, meta) {
 
-		const NOW = dayjs();
-
 		if (type === "event") {
 			// Pattern 1: Checkouts with coupons get a discount_applied flag and adjusted total
 			if (record.event === "checkout" && record.coupon && record.coupon !== "none") {

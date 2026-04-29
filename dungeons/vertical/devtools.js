@@ -16,9 +16,6 @@ import * as v from "ak-tools";
 
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
-const NOW = dayjs();
-const DATASET_START = NOW.subtract(num_days, "days");
-
 /** @typedef  {import("../../types").Dungeon} Config */
 
 // Generate consistent pipeline/repo IDs at module level
@@ -284,7 +281,9 @@ const repoIds = v.range(1, 150).map(() => `REPO_${v.uid(6)}`);
 const config = {
 	token,
 	seed: SEED,
-	numDays: num_days,
+	datasetStart: "2026-01-01T00:00:00Z",
+	datasetEnd: "2026-04-28T23:59:59Z",
+	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	hasAnonIds: false,
@@ -802,7 +801,7 @@ const config = {
 
 		// -- EVERYTHING HOOKS -------------------------------------
 		if (type === "everything") {
-			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
+			const datasetStart = dayjs.unix(meta.datasetStart);
 			let events = record;
 			if (!events.length) return record;
 			const profile = meta && meta.profile ? meta.profile : {};

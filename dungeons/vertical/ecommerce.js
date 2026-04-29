@@ -292,7 +292,9 @@ function makeProducts(maxItems = 5) {
 const config = {
 	token,
 	seed: SEED,
-	numDays: num_days,
+	datasetStart: "2026-01-01T00:00:00Z",
+	datasetEnd: "2026-04-28T23:59:59Z",
+	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	format: 'json', //csv or json
@@ -508,9 +510,9 @@ const config = {
 		}
 
 		if (type === "event") {
-			const NOW = dayjs();
-			const DAY_SIGNUPS_IMPROVED = NOW.subtract(7, 'day');
-			const DAY_WATCH_TIME_WENT_UP = NOW.subtract(30, 'day');
+			const datasetEnd = dayjs.unix(meta.datasetEnd);
+			const DAY_SIGNUPS_IMPROVED = datasetEnd.subtract(7, 'day');
+			const DAY_WATCH_TIME_WENT_UP = datasetEnd.subtract(30, 'day');
 			const eventTime = dayjs(record.time);
 
 			// unflattering 'items'

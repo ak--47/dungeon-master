@@ -276,7 +276,9 @@ const postIds = v.range(1, 1001).map(n => `post_${v.uid(8)}`);
 const config = {
 	token,
 	seed: SEED,
-	numDays: num_days,
+	datasetStart: "2026-01-01T00:00:00Z",
+	datasetEnd: "2026-04-28T23:59:59Z",
+	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	hasAnonIds: false,
@@ -549,9 +551,6 @@ const config = {
 	lookupTables: [],
 
 	hook: function (record, type, meta) {
-		const NOW = dayjs();
-		const DATASET_START = NOW.subtract(num_days, 'days');
-
 		// Hook #10 (T2C): ONBOARDING TIME-TO-CONVERT (funnel-post)
 		// Creator/business account_type users complete onboarding 1.4x
 		// faster (factor 0.71); personal accounts 1.25x slower (factor 1.25).
@@ -577,7 +576,7 @@ const config = {
 		// ─── EVENT-LEVEL HOOKS ───────────────────────────────────────────
 
 		if (type === "event") {
-			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
+			const datasetStart = dayjs.unix(meta.datasetStart);
 			const ALGORITHM_CHANGE_DAY = datasetStart.add(45, 'days');
 			const REENGAGEMENT_START = datasetStart.add(30, 'days');
 			const EVENT_TIME = dayjs(record.time);
@@ -614,7 +613,7 @@ const config = {
 		// ─── EVERYTHING-LEVEL HOOKS ──────────────────────────────────────
 
 		if (type === "everything") {
-			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
+			const datasetStart = dayjs.unix(meta.datasetStart);
 			const userEvents = record;
 			if (!userEvents || userEvents.length === 0) return record;
 

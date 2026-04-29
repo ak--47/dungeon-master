@@ -179,16 +179,13 @@ const chance = u.initChance(SEED);
  * Step-Count Magic Number | over approvals/user     | 1x       | 0.6x    | -40%
  */
 
-// ── Time constants for hook calculations ──
-const NOW = dayjs();
-const DATASET_START = NOW.subtract(num_days, "days");
-
-
 /** @type {Config} */
 const config = {
 	token,
 	seed: SEED,
-	numDays: num_days,
+	datasetStart: "2026-01-01T00:00:00Z",
+	datasetEnd: "2026-04-28T23:59:59Z",
+	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	hasAnonIds: false,
@@ -554,8 +551,8 @@ const config = {
 		// AFTER the event hook runs).
 		// =============================================================
 		if (type === "everything") {
-			const datasetStart = meta?.datasetStart ? dayjs.unix(meta.datasetStart) : DATASET_START;
-			const datasetEnd = meta?.datasetEnd ? dayjs.unix(meta.datasetEnd) : NOW;
+			const datasetStart = dayjs.unix(meta.datasetStart);
+			const datasetEnd = dayjs.unix(meta.datasetEnd);
 			const V211_DATE = datasetStart.add(30, "days");
 			const V212_DATE = datasetStart.add(60, "days");
 			const V213_DATE = datasetEnd.subtract(10, "days");
