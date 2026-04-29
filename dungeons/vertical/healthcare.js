@@ -70,9 +70,9 @@ const clinicIds = v.range(1, 25).map(() => `CLINIC_${v.uid(4)}`);
  *   • Report type: Insights
  *   • Event: "consultation completed"
  *   • Measure: Average of "consultation_fee"
- *   • Breakdown: "after_hours"
- *   • Expected: after_hours=true should show ~1.5x avg fee vs false
- *     (true ≈ $112, false ≈ $75)
+ *   • Breakdown: hour of day
+ *   • Expected: hours 19-06 UTC ~ 1.5x avg fee vs hours 07-18
+ *     (after-hours ≈ $112, business ≈ $75)
  *
  * REAL-WORLD ANALOGUE: Telehealth platforms charge premiums for
  * after-hours urgent consultations, a key revenue driver.
@@ -721,27 +721,15 @@ const config = {
 
 		// (HOOK 1: AFTER-HOURS SURGE PRICING moved to everything hook — hour checks
 		// must run after bunchIntoSessions redistributes timestamps)
-		if (type === "event") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			// ── HOOK 2: FLU SEASON SPIKE (event) ─────────────
-			// Days 50-70: respiratory conditions dominate, wait times double.
-			const FLU_START = datasetStart.add(50, "days");
-			const FLU_END = datasetStart.add(70, "days");
-			const eventTime = dayjs(record.time);
-			if (record.event === "appointment booked" && eventTime.isAfter(FLU_START) && eventTime.isBefore(FLU_END)) {
-				if (chance.bool({ likelihood: 60 })) {
-					record.condition_type = "respiratory";
-				}
-				if (record.condition_type === "respiratory") {
-					record.wait_time_hours = Math.floor((record.wait_time_hours || 12) * 2);
-				}
-			}
-		}
+		// (HOOK 2: FLU SEASON SPIKE moved to everything hook — same reason)
 
 		// ── EVERYTHING HOOKS ─────────────────────────────────
 		if (type === "everything") {
 			if (!record.length) return record;
 			const profile = meta.profile;
+			const datasetStart = dayjs.unix(meta.datasetStart);
+			const FLU_START = datasetStart.add(50, "days");
+			const FLU_END = datasetStart.add(70, "days");
 
 			// ── SUPER-PROP STAMPING ──────────────────────────
 			// Stamp superProps from profile so they are consistent per-user.
@@ -761,6 +749,19 @@ const config = {
 					const hour = new Date(e.time).getUTCHours();
 					if ((hour >= 19 || hour < 7) && e.consultation_fee) {
 						e.consultation_fee = Math.floor(e.consultation_fee * 1.5);
+					}
+				}
+			});
+
+			// HOOK 2: FLU SEASON SPIKE — d50-70 respiratory dominates, wait_time doubles.
+			// Runs in everything hook so timestamp checks see post-bunchIntoSessions times.
+			record.forEach(e => {
+				if (e.event !== "appointment booked") return;
+				const t = dayjs(e.time);
+				if (t.isAfter(FLU_START) && t.isBefore(FLU_END)) {
+					if (chance.bool({ likelihood: 60 })) e.condition_type = "respiratory";
+					if (e.condition_type === "respiratory") {
+						e.wait_time_hours = Math.floor((e.wait_time_hours || 12) * 2);
 					}
 				}
 			});

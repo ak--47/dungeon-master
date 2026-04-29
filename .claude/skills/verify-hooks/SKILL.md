@@ -126,6 +126,64 @@ SELECT * FROM read_json_auto('./data/verify-hooks-USERS.json')
 - For large queries, use `LIMIT` to keep output manageable
 - Escape single quotes in bash: use `$'...'` syntax or double-quote the SQL and escape internal quotes
 
+### Pitfall: Bot/Anomaly user_id Breaks UUID Type Inference
+
+When a dungeon uses `dataQuality.botUsers > 0` or `anomalies` features, some events have `user_id` like `"bot_db9a7a37"` or `"anomaly_f148a044"` instead of UUIDs. DuckDB's auto-inference reads the first chunk as UUID, then fails on the string IDs:
+
+```
+Conversion Error: Could not convert string 'bot_db9a7a37' to INT128
+```
+
+**Fix:** every query against EVENTS must use `sample_size=-1` to scan all rows for typing AND filter out the synthetic IDs:
+
+```sql
+SELECT ... FROM read_json_auto('./data/verify-X-EVENTS.json', sample_size=-1)
+WHERE user_id NOT LIKE 'bot_%' AND user_id NOT LIKE 'anomaly_%'
+```
+
+For joins on USERS where the join key is UUID, cast both sides to VARCHAR:
+```sql
+JOIN read_json_auto('./data/verify-X-USERS.json') u
+  ON u.distinct_id::VARCHAR = e.user_id::VARCHAR
+```
+
+### Pitfall: Multi-Part EVENTS Files (Batch Mode)
+
+Dungeons that produce >2M total events auto-enable batch mode. Output is split into part files:
+
+```
+data/verify-X-EVENTS-part-1.json
+data/verify-X-EVENTS-part-2.json
+data/verify-X-EVENTS-part-3.json
+```
+
+Use a glob plus `union_by_name=true` (schemas may differ slightly across parts):
+
+```sql
+SELECT ... FROM read_json_auto('./data/verify-X-EVENTS-part-*.json',
+  sample_size=-1, union_by_name=true)
+```
+
+### Pitfall: DuckDB Reserved Words
+
+DuckDB reserves common identifiers including `on`, `at`, `from`, `to`, `order`, `group`. If you name a CTE column `on` (e.g. "order count"), the parser fails:
+
+```
+Parser Error: syntax error at or near "on"
+```
+
+Use suffixed names: `order_n`, `txn_n`, `swap_n`. Same applies to `at` / `to` etc.
+
+### Pitfall: Schema Mismatch Between JSDoc and Actual Data
+
+Stale JSDocs sometimes reference field names that don't exist in the actual data. Sass docs reference `integration_app` but actual prop is `integration_type`. Travel docs reference `segment` but actual user prop is `customer_segment`.
+
+When a query returns 0 rows or NULL where you expected data, run `DESCRIBE SELECT * FROM read_json_auto(...)` to inspect actual columns and adjust the query. If the doc is wrong (not the hook), note this in results.md as a doc nit.
+
+### Pitfall: Nested Properties
+
+Some events store data in struct/array columns (e.g. ecommerce checkout has `cart STRUCT(...)[]`). The flat columns `amount`/`total_value` will be NULL — actual data is inside the array. Use `UNNEST(cart)` or `cart[1].total_value` to access.
+
 ### How Hooks Work (Critical for Query Design)
 
 Hooks do NOT add new properties to the schema. They modify existing property values, filter/remove events, and inject events cloned from existing ones. This means you often CANNOT verify a hook by checking for a boolean flag's existence. Instead, verify by:
@@ -513,6 +571,20 @@ GROUP BY b.bucket;
 
 **Population caveat**: high-volume target events can push most users into the `over` bucket at small scale, masking the sweet effect. Re-run at full fidelity if `over` >> `sweet` cohort sizes.
 
+**Inverted-U cohort confound — use NORMALIZED metric for the drop side:**
+
+The "over" bucket users have higher activity by definition (they crossed the threshold). So per-user metrics for downstream events naturally INCREASE with bucket — masking any drop hook. Example from devtools H9:
+
+| bucket | builds | deploys | deploys_per_user | deploys_per_build (NORMALIZED) |
+|--------|--------|---------|------------------|--------------------------------|
+| low    | 10457  | 6623    | 5.02             | 0.633                          |
+| sweet  | 43351  | 36770   | 18.28 (looks BIG)| 0.848 (boost visible)         |
+| over   | 86765  | 52024   | 31.43 (looks BIGGER)| 0.600 (drop visible)        |
+
+`deploys_per_user` shows over > sweet > low (cohort effect dominates). `deploys_per_build` correctly shows boost (sweet > low) AND drop (over < sweet). Always include the normalized variant in the drop-side query.
+
+When the dungeon doesn't have a natural "per-X" denominator, compute one from the cohort-binning event: `target_events / cohort_event_count`.
+
 **Time-to-convert (funnel-post) verification** — compute median A→B time per profile segment:
 
 ```sql
@@ -539,7 +611,74 @@ ORDER BY median_min_a_to_b;
 - Both directions visible → PASS
 - One/both missing → check that funnel exists in `funnels:` config and segment property is on `meta.profile`
 
+**Two-tier T2C interpretation**: When a dungeon has only 2 tiers (e.g. Free vs Paid) the funnel-post hook factor `1.0` branch (the "other" / baseline) never fires — both tiers fall into either fast or slow. Pick the slower of the two as the implicit baseline, then verify the faster shows ≤ 0.85x of it.
+
 **No-flag verification rule**: NEVER attempt to verify a hook by querying for a flag like `WHERE sweet_spot = true`. If a dungeon has such flags, treat them as a doc bug — the hook should be reworked to hide the cohort behaviorally. The validator's job is to derive cohorts behaviorally.
+
+### Drop-Event Funnel Dilution Diagnosis (REV 7)
+
+Many dungeons have hooks of pattern `record.filter(e => e.event === 'X' && chance.bool({likelihood: 30}))` to drop ~30% of step-3 events for non-paid tier. The doc claims the hook produces a 30% conversion drop in the funnel — but funnel completion rates often barely move (e.g. 95% vs 97%).
+
+**Why:** the hook drops EVENTS not users. A user with 5 step-3 events still appears in the funnel after losing 1-2 events. Funnel completion = `users with ≥1 step-3 event` — only zero-step-3 users disappear from the conversion count, which is rare.
+
+**Correct verification metric:** per-user volume of step-3 events by tier:
+
+```sql
+SELECT u.subscription_tier,
+  COUNT(DISTINCT user_id) AS users,
+  COUNT(*) AS total_step3,
+  ROUND(COUNT(*) * 1.0 / COUNT(DISTINCT user_id), 2) AS per_user
+FROM read_json_auto('./data/<run>-EVENTS.json')
+WHERE event = '<STEP_3_EVENT>'
+GROUP BY u.subscription_tier
+ORDER BY per_user DESC;
+```
+
+Expected: paid tier ~ 1.5x non-paid per_user (matches 30% drop on non-paid → paid keeps 100%, non-paid keeps 70%, ratio 1/0.7 = 1.43x).
+
+If funnel completion gap < 5pt but per_user gap ≥ 30%, the hook IS firing — the doc just points to the wrong metric. Mark PASS, recommend doc redirect to per-user query.
+
+### Subscription Tier Cohort Sizing Check
+
+Before testing any hook gated on `subscription_tier === "annual"` or `"family"`, check cohort sizes:
+
+```sql
+SELECT subscription_plan, COUNT(*) FROM read_json_auto('./data/<run>-USERS.json')
+GROUP BY subscription_plan;
+```
+
+The default subscription lifecycle (`trialToPayRate=0.30`, `upgradeRate=0.06-0.08`) produces ~85% NULL/Free, ~10-15% Monthly, <2% Annual, ~0% Family at 5K users. Cohorts < 50 users will not produce statistically clean signal at any effect size.
+
+**If annual cohort < 50 users:**
+- Don't trust per-tier ratios — note "cohort too small" in results.md
+- Per REV 6 you may bump `numUsers` up to 5x to enlarge cohorts
+- Or recommend dungeon author tighten subscription lifecycle config
+
+### Per-Day Normalization for Time-Window Hooks
+
+Time-window hooks (e.g. "5x deaths in cursed week d40-47") often produce similar per-USER counts across windows because users active in the window are different from users active overall. Compare per-DAY rates instead:
+
+```
+cursed period (7 days): 20711 deaths / 2948 users = 7.03 deaths/user
+other period (~93 days): 34857 deaths / 4984 users = 6.99 deaths/user
+
+Per-day rate:
+  cursed: 7.03 / 7 = 1.00 deaths/user/day
+  other: 6.99 / 93 = 0.075 deaths/user/day
+  ratio: 13x  ← signal lives here
+```
+
+For any spike/burst hook with a tight day window, ALWAYS normalize by window length before comparing.
+
+### Determinism Check (Optional Confidence Test)
+
+The pinned `datasetStart`/`datasetEnd` window plus seeded RNG produces bit-exact identical output across runs. To confirm no non-determinism crept in (e.g. wall-clock leak in a hook):
+
+1. Run a previously-PASSing dungeon a second time.
+2. Compare `eventCount` in the runner's JSON output — must match exactly.
+3. Re-run the hook's headline query and verify ratios match to 4 decimals.
+
+If anything differs, the hook has a non-determinism source (typically `dayjs()`, `Date.now()`, `Math.random()`, or stale module-level state). Fix before continuing.
 
 ### Critical Time-Window Verification Pattern
 

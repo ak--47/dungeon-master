@@ -485,6 +485,16 @@ This is MANDATORY for any superProp that should be consistent per user (Platform
    
    This is critical for architecting churn, drop-off, seasonal dips, and other "absence of data" patterns. The `everything` hook is the ONLY place where events can be removed.
 
+9. **Determinism is sacred.** With a pinned `datasetStart`/`datasetEnd` window, two consecutive runs of the same dungeon must produce bit-exact identical eventCount + identical hook signal values. Common non-determinism sources to AVOID:
+   - `dayjs()` / `Date.now()` / `new Date()` with no argument (wall-clock leak)
+   - `Math.random()` instead of the seeded `chance.bool/integer/pickone/floating`
+   - Module-level mutable state that doesn't reset between runs (Map without TTL is fine; arrays you keep pushing to across runs are not)
+   - Relying on object iteration order from non-deterministic sources
+
+   To verify: run the dungeon twice, confirm `eventCount` matches exactly. If it doesn't, your hook has a non-determinism source.
+
+10. **Cross-reference flag references.** If hook A writes `event.foo = "X"` and hook B (or a JSDoc) reads `event.bar`, the read silently fails. Always grep your final hook code: every property NAME written must match every property NAME read. JSDoc "Breakdown" / "Filter" lines must reference properties the hook actually mutates or that are defined in `events`/`userProps`/`superProps` config.
+
 ### Hook Technique Catalog
 
 Use a MIX of these techniques across your 8 hooks — don't put everything in `"everything"`:
@@ -694,6 +704,89 @@ Every dungeon SHOULD have:
 - **Zero flag-stamping** anywhere in hooks. If you find yourself writing `event.is_X = true` for X = a behavioral cohort label, stop and rework.
 - `funnel-pre` is acceptable ONLY for: setting props, adjusting `timeToConvert`
 - 0-1 using module-level closure state (Maps)
+
+### Common bugs to avoid (learned from production validation)
+
+#### 1. Drop-event hooks don't move funnel completion %
+
+If your hook drops 30% of step-3 events for non-paid users:
+```js
+record = record.filter(e => !(e.event === "step3" && chance.bool({likelihood: 30})));
+```
+Funnel completion % barely changes (95% → 92%). Why: users with 5 step-3 events still appear in the funnel after losing 1-2. Funnel completion = `users with ≥1 step-3 event`.
+
+**The discoverable signal is in per-user volume of step-3 events**, not funnel completion. So:
+- Either document the metric correctly: "Insights → step3 → Total per user → Breakdown: tier" (NOT a funnel report)
+- Or change the hook to drop 30% of USERS' entire step-3 stream:
+  ```js
+  if (profile.tier === "free" && chance.bool({likelihood: 30})) {
+    record = record.filter(e => e.event !== "step3"); // ALL step3 dropped
+  }
+  ```
+
+#### 2. Subscription cohort sizing
+
+The default subscription lifecycle (`trialToPayRate=0.30`, `upgradeRate=0.06-0.08`) produces these cohort sizes at 5K users:
+- ~85% NULL/Free
+- ~10-15% Monthly
+- <2% Annual (often 15-30 users)
+- ~0% Family (often 0)
+
+**Hooks gated on `tier === "annual"` or `"family"` will not produce statistically clean signal.** Options:
+- Use a 2-tier setup (Free vs Paid) where Paid pools all monthly+annual
+- Tighten lifecycle: `trialToPayRate=0.50`, `upgradeRate=0.20`
+- Or design hooks that DON'T require small tier cohorts
+
+Verify cohort sizes BEFORE shipping by running the dungeon and checking `SELECT subscription_plan, COUNT(*) FROM users GROUP BY 1`.
+
+#### 3. Inverted-U cohort confound on the drop side
+
+Magic-number hooks bin users by event count: `low (<5) / sweet (5-10) / over (11+)`. Per-user metrics for downstream events naturally INCREASE with bucket because cohort assignment is itself activity-based:
+
+```
+low (1955 users):  3.13 deploys/user
+sweet (2012):     18.28 deploys/user  ← looks bigger
+over (1655):      31.43 deploys/user  ← drop INVISIBLE
+```
+
+The 25% drop hook IS firing — but masked because heavier users naturally have more events.
+
+**Either design the hook to mutate a NORMALIZABLE property** (e.g. `deploys_per_build` ratio, `upvote_per_publish`), OR design the doc to reference the normalized query:
+
+```sql
+-- Normalized: deploys per build (avoids cohort-size confound)
+SELECT bucket, SUM(deploys) * 1.0 / SUM(builds) AS deploys_per_build FROM ...
+```
+
+#### 4. Two-tier funnel-post — the "other" branch never fires
+
+When the profile only has 2 tiers (Free/Paid), the standard 3-branch factor doesn't make sense:
+```js
+// BAD: with only Free and Paid, the 1.0 branch is dead code
+const factor = (
+  segment === "annual" ? 0.71 :
+  segment === "free" ? 1.4 :
+  1.0  // ← never hit
+);
+```
+Either make the factors complement (`Paid: 0.71`, `Free: 1.4` — both fire, no baseline reference) OR add an explicit middle tier.
+
+#### 5. Closure-state flag checks must use real properties
+
+If your event hook sets `event.treasure_type = "Shadowmourne Legendary"` and your everything hook checks `event.legendary_drop`, the check NEVER fires (dead code). Always cross-reference: the property name written in one hook must match the property name read in the next hook. JSDoc references must match actual code.
+
+#### 6. Stale JSDoc kills downstream verification
+
+JSDocs that reference flags the hook does NOT stamp confuse:
+- The validator (verify-hooks skill) tries to filter by `WHERE flag = true` and gets zero rows
+- The Mixpanel report builder produces unworkable reports
+- Future maintainers wonder if the hook is broken
+
+**Cross-check rule:** for every "Filter X = true", "Breakdown X", "tagged X" in your JSDoc, grep your hook code for `record.X =` or `event.X =` or `e.X =`. If it doesn't appear, rewrite the JSDoc to use a config-defined property or behavioral cohort path.
+
+#### 7. Per-day normalization for tight time windows
+
+A "5x death rate during cursed week" hook spans 7 days; the comparison "other period" spans the rest of the dataset (~93 days). Per-user counts look similar (7.0 vs 6.99). Per-day rates show the real signal (1.0 vs 0.075 = 13x). Document the EXPECTED metric in per-day terms or include the normalization in the recommended Mixpanel report.
 
 ### Hook Reference Examples
 

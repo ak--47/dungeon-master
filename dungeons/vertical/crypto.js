@@ -518,24 +518,9 @@ const config = {
 	lookupTables: [],
 
 	hook: function (record, type, meta) {
-		// HOOK 2 (event): GAS PRICE SPIKE — days 35-37, gas fees 10x.
-		// HOOK 3 (event): TOKEN LAUNCH SURGE — after day 50, 25% of swaps
-		// flip token_pair to MOON. All raw mutations, no flags.
-		if (type === "event") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			const EVENT_TIME = dayjs(record.time);
-			const dayInDataset = EVENT_TIME.diff(datasetStart, "day");
-
-			if (dayInDataset >= 35 && dayInDataset <= 37) {
-				if (record.event === "swap" || record.event === "transfer") {
-					record.gas_fee_usd = Math.round((record.gas_fee_usd || 5) * 10);
-				}
-			}
-
-			if (record.event === "swap" && dayInDataset >= 50 && chance.bool({ likelihood: 25 })) {
-				record.token_pair = chance.pickone(["MOON/USDC", "MOON/ETH", "ETH/MOON"]);
-			}
-		}
+		// HOOKS 2 + 3: GAS PRICE SPIKE and TOKEN LAUNCH SURGE moved to everything
+		// hook below — event hook fires before bunchIntoSessions reshuffles timestamps,
+		// causing day-window tags to leak across the boundary.
 
 		// HOOK 9 (T2C): TRADING FUNNEL TIME-TO-CONVERT (funnel-post)
 		// Pro tier users complete deposit→swap→withdrawal funnel 1.4x faster
@@ -585,16 +570,27 @@ const config = {
 				});
 			}
 
-			// HOOK 2 (cont): GAS PRICE SPIKE — during days 35-37, 40% of
-			// swaps get swap_status flipped to failed. Discover via HOD/day chart.
+			// HOOK 2: GAS PRICE SPIKE — days 35-37 swap+transfer gas_fee_usd 10x,
+			// 40% of swaps get swap_status=failed. Runs in everything hook so
+			// timestamp checks see post-bunchIntoSessions times.
 			const day35 = datasetStart.add(35, "days");
 			const day38 = datasetStart.add(38, "days");
 			userEvents.forEach(e => {
-				if (e.event === "swap") {
-					const t = dayjs(e.time);
-					if (t.isAfter(day35) && t.isBefore(day38) && chance.bool({ likelihood: 40 })) {
+				if (e.event !== "swap" && e.event !== "transfer") return;
+				const t = dayjs(e.time);
+				if (t.isAfter(day35) && t.isBefore(day38)) {
+					e.gas_fee_usd = Math.round((e.gas_fee_usd || 5) * 10);
+					if (e.event === "swap" && chance.bool({ likelihood: 40 })) {
 						e.swap_status = "failed";
 					}
+				}
+			});
+
+			// HOOK 3: TOKEN LAUNCH SURGE — after d50, 25% of swaps flip token_pair to MOON.
+			const day50 = datasetStart.add(50, "days");
+			userEvents.forEach(e => {
+				if (e.event === "swap" && dayjs(e.time).isAfter(day50) && chance.bool({ likelihood: 25 })) {
+					e.token_pair = chance.pickone(["MOON/USDC", "MOON/ETH", "ETH/MOON"]);
 				}
 			});
 
@@ -761,8 +757,8 @@ const config = {
 			// -----------------------------------------------------------
 			// Hook #8: RUG-PULL AFTERMATH
 			// Day 70, "SCAM" token rugs. Users who swapped SCAM token
-			// before day 70 lose 80% of events after day 70.
-			// rug_pull_victim=true on remaining events.
+			// before day 70 lose 80% of events after day 70. No flag —
+			// derive cohort by detecting users with token_pair containing "SCAM".
 			// -----------------------------------------------------------
 			const day70 = datasetStart.add(70, "days");
 

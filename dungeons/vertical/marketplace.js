@@ -63,28 +63,22 @@ const listingIds = v.range(1, 500).map(() => `LST_${v.uid(8)}`);
  * ═══════════════════════════════════════════════════════════════
  *
  * ───────────────────────────────────────────────────────────────
- * 1. FEE CHANGE IMPACT (event hook)
+ * 1. FEE CHANGE IMPACT (everything hook)
  * ───────────────────────────────────────────────────────────────
  *
  * PATTERN: After day 45 (permanent marketplace fee increase), all
  * "listing created" events get listing_fee multiplied by 1.3x.
- * Simulates the revenue impact of a platform fee adjustment.
+ * Simulates the revenue impact of a platform fee adjustment. No flag —
+ * discover via line chart of avg listing_fee over time.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Listing Fee Before vs After Fee Change
+ *   Report 1: Listing Fee Over Time
  *   • Report type: Insights
  *   • Event: "listing created"
  *   • Measure: Average of "listing_fee"
  *   • Line chart by week
  *   • Expected: Clear step-up around day 45 from ~$15 avg to ~$20 avg
- *
- *   Report 2: Fee Change Flag Distribution
- *   • Report type: Insights
- *   • Event: "listing created"
- *   • Measure: Total
- *   • Breakdown: "fee_change"
- *   • Expected: "increased" appears only after day 45
  *
  * REAL-WORLD ANALOGUE: Marketplace platforms periodically adjust
  * commission/listing fees, impacting seller economics and behavior.
@@ -797,22 +791,13 @@ const config = {
 			}
 		}
 
-		// HOOK 1: FEE CHANGE IMPACT (event) — listings after day 45 get
-		// listing_fee 1.3x. No flag — discover via line chart by day.
-		if (type === "event") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			const FEE_CHANGE_DAY = datasetStart.add(45, "days");
-			if (record.event === "listing created") {
-				const eventTime = dayjs(record.time);
-				if (eventTime.isAfter(FEE_CHANGE_DAY)) {
-					record.listing_fee = Math.floor((record.listing_fee || 15) * 1.3);
-				}
-			}
-		}
+		// HOOK 1: FEE CHANGE IMPACT — moved to everything hook below.
+		// (event hook fires before bunchIntoSessions reshuffles timestamps)
 
 		// ── EVERYTHING HOOKS ─────────────────────────────────
 		if (type === "everything") {
 			const datasetStart = dayjs.unix(meta.datasetStart);
+			const FEE_CHANGE_DAY = datasetStart.add(45, "days");
 			let events = record;
 			if (!events.length) return record;
 
@@ -826,6 +811,14 @@ const config = {
 					if (profile.category) e.category = profile.category;
 				});
 			}
+
+			// HOOK 1: FEE CHANGE IMPACT — listings after d45 get listing_fee 1.3x.
+			// In everything hook so timestamp comparison sees post-bunchIntoSessions times.
+			events.forEach(e => {
+				if (e.event === "listing created" && dayjs(e.time).isAfter(FEE_CHANGE_DAY)) {
+					e.listing_fee = Math.floor((e.listing_fee || 15) * 1.3);
+				}
+			});
 
 			// ── HOOK 8: FREQUENT BUYER CONVERSION FILTER ────
 			// Non-frequent-buyer users drop ~25% of "purchase completed"

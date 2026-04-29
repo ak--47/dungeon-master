@@ -89,26 +89,26 @@ const chance = u.initChance(SEED);
  * ---------------------------------------------------------------
  * 2. DEADLINE CRAMMING (everything)
  *
- * PATTERN: Assignments submitted on Sun/Mon are rushed — 60% are
- * late (vs ~20% baseline), and quiz scores drop by 25 points. The
- * affected events carry is_deadline_rush=true.
+ * PATTERN: Assignments submitted on Sun/Mon are rushed — 60% are late
+ * (raw is_late prop set true at 60% likelihood) vs ~20% baseline. Quiz
+ * scores on Sun/Mon drop by 25 points. No flag — discover via Day of Week
+ * breakdown.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Late Submission Rate by Rush Flag
+ *   Report 1: Late Submission Rate by Day of Week
  *   - Report type: Insights
  *   - Event: "assignment submitted"
- *   - Measure: Total
- *   - Filter: "submission_status" = "late"
- *   - Breakdown: "is_deadline_rush"
- *   - Expected: is_deadline_rush=true ~ 60% late vs ~20% baseline
+ *   - Measure: count where is_late=true / total
+ *   - Breakdown: Day of Week
+ *   - Expected: Sun/Mon ~ 60% late vs other days ~ 20%
  *
  *   Report 2: Quiz Score by Day of Week
  *   - Report type: Insights
  *   - Event: "quiz completed"
  *   - Measure: Average of "score_percent"
  *   - Breakdown: Day of Week
- *   - Expected: Sun/Mon ~ 40, other days ~ 65 (-25 pts)
+ *   - Expected: Sun/Mon ~ 25, other days ~ 49 (-25 pts)
  *
  * REAL-WORLD ANALOGUE: Procrastination clusters submissions at the
  * deadline weekend and hammers performance.
@@ -149,29 +149,28 @@ const chance = u.initChance(SEED);
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: D14 Retention by Early Group Join
- *   - Report type: Retention
- *   - Event A: "account registered"
- *   - Event B: any event
- *   - Breakdown: "study_group_member"
- *   - Expected: early joiners ~ 90% D14 vs ~ 30% for low-score non-joiners
+ *   Report 1: D14 Retention by Early Group Join Cohort
+ *   - Cohort A: users who fired "study group joined" within first 10 days
+ *   - Cohort B: users with no early study group joined
+ *   - Compare D14 retention (any event past d14) per cohort
+ *   - Expected: A ~ 90%+ vs B (with low quiz scores) ~ 30%
  *
- *   Report 2: Discussion Volume by Group Membership
- *   - Report type: Insights
+ *   Report 2: Discussion Volume by Group Cohort
+ *   - Cohort A vs B (as above)
  *   - Event: "discussion posted"
- *   - Measure: Total per user (average)
- *   - Breakdown: "study_group_member"
- *   - Expected: members post substantially more
+ *   - Measure: Total per user
+ *   - Expected: A posts substantially more
  *
  * REAL-WORLD ANALOGUE: Social learning ties create accountability
  * and dramatically reduce drop-off in cohort-based courses.
  *
  * ---------------------------------------------------------------
- * 5. HINT DEPENDENCY (everything)
+ * 5. HINT DEPENDENCY (event)
  *
- * PATTERN: Hint users get 60% chance of easy problems; non-hint
- * users get 40% chance of hard problems and are flagged
- * independent_solver=true.
+ * PATTERN: On "practice problem solved", hint_used=true gets difficulty
+ * forced to "easy" 60% of the time. hint_used=false gets difficulty forced
+ * to "hard" 40% of the time. No flag — discover via difficulty breakdown
+ * filtered by hint_used.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -198,9 +197,9 @@ const chance = u.initChance(SEED);
  * ---------------------------------------------------------------
  * 6. SEMESTER-END SPIKE (everything)
  *
- * PATTERN: Days 75-85 simulate semester crunch. quiz_started,
- * quiz_completed, and assignment_submitted events are duplicated at
- * an 80% rate, flagged semester_end_rush=true.
+ * PATTERN: Days 75-85 simulate semester crunch. quiz_started, quiz_completed,
+ * and assignment_submitted events are duplicated at an 80% rate. No flag —
+ * discover via line chart of those event volumes by day.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -210,13 +209,6 @@ const chance = u.initChance(SEED);
  *   - Measure: Total
  *   - Line chart by day
  *   - Expected: ~2x volume spike on days 75-85
- *
- *   Report 2: Rush-Flagged Volume
- *   - Report type: Insights
- *   - Event: "quiz completed"
- *   - Measure: Total
- *   - Breakdown: "semester_end_rush"
- *   - Expected: semester_end_rush=true clusters tightly in days 75-85
  *
  * REAL-WORLD ANALOGUE: Semester-end deadlines reliably produce a
  * massive last-minute surge in student activity.
@@ -255,19 +247,19 @@ const chance = u.initChance(SEED);
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Watch Time by Speed Cohort
+ *   Report 1: Watch Time by Playback Speed
  *   - Report type: Insights
  *   - Event: "lecture completed"
  *   - Measure: Average of "watch_time_mins"
- *   - Breakdown: "speed_learner"
- *   - Expected: speed_learner=true ~ 0.6x watch time
+ *   - Breakdown: "playback_speed"
+ *   - Expected: speed >= 2.0 ~ 0.6x baseline; speed <= 1.0 ~ 1.4x baseline
  *
- *   Report 2: Quiz Score for Speed Learners
- *   - Report type: Insights
+ *   Report 2: Quiz Score by Speed Learner Cohort
+ *   - Cohort A: users with 3+ "lecture completed" events at playback_speed >= 2.0
+ *   - Cohort B: rest
  *   - Event: "quiz completed"
  *   - Measure: Average of "score_percent"
- *   - Breakdown: "speed_learner_effect"
- *   - Expected: speed_learner_effect=true shows +8 pts vs baseline
+ *   - Expected: A ~ +8 pts vs B
  *
  * REAL-WORLD ANALOGUE: Power users who watch lectures at 2x speed
  * tend to be domain-confident and outperform on assessments

@@ -84,25 +84,26 @@ const chance = u.initChance(SEED);
  * 2. PAYDAY PATTERNS (everything)
  *
  * PATTERN: Direct deposit transactions are 3x larger on the 1st and
- * 15th of the month (payday=true). Transfers are 2x larger on the
- * 1st-3rd and 15th-17th (post_payday_spending=true).
+ * 15th of the month. Transfers are ~1.6x larger on the 1st-3rd and
+ * 15th-17th (60% likelihood × 2x boost). No flag — discover via day-of-month
+ * breakdown on raw amount.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Direct Deposit Size on Paydays
+ *   Report 1: Direct Deposit Size by Day of Month
  *   - Report type: Insights
  *   - Event: "transaction completed"
  *   - Measure: Average of "amount"
  *   - Filter: "transaction_type" = "direct_deposit"
- *   - Breakdown: "payday"
- *   - Expected: payday=true ~ 3x baseline deposit size
+ *   - Breakdown: day of month
+ *   - Expected: 1st and 15th avg ~ 3x other days
  *
- *   Report 2: Post-Payday Transfer Spending
+ *   Report 2: Post-Payday Transfer Spending by Day of Month
  *   - Report type: Insights
  *   - Event: "transfer sent"
  *   - Measure: Average of "amount"
- *   - Breakdown: "post_payday_spending"
- *   - Expected: post_payday_spending=true ~ 2x baseline transfer size
+ *   - Breakdown: day of month
+ *   - Expected: 1-3 and 15-17 avg ~ 1.6x other days
  *
  * REAL-WORLD ANALOGUE: Bi-monthly payroll cycles drive predictable
  * spikes in deposit and outbound spending volume.
@@ -110,24 +111,25 @@ const chance = u.initChance(SEED);
  * ---------------------------------------------------------------
  * 3. FRAUD DETECTION (everything)
  *
- * PATTERN: 3% of users experience a fraud burst at the timeline
- * midpoint: 3-5 rapid high-value transactions, then card locked,
- * dispute filed, and support contacted. All affected events are
- * tagged fraud_sequence=true.
+ * PATTERN: ~1-2% of users experience a fraud burst at the timeline
+ * midpoint: 3-5 rapid high-value transactions, then card locked
+ * (reason="suspicious_activity"), dispute filed (reason="unauthorized"),
+ * and support contacted (issue_type="card"). No flag — derive cohort
+ * by joining users who had all three event types within ~1 hour.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Fraud-Affected Transactions
- *   - Report type: Insights
- *   - Event: "transaction completed"
- *   - Measure: Total
- *   - Filter: "fraud_sequence" = true
- *   - Expected: ~3% of users contribute the fraud-tagged transaction cluster
+ *   Report 1: Fraud Cohort
+ *   - Report type: Cohort builder
+ *   - Filter: did "card locked" with reason="suspicious_activity"
+ *     AND "dispute filed" with reason="unauthorized"
+ *     within 1 hour of each other
+ *   - Expected: ~1-2% of total users
  *
  *   Report 2: Fraud Resolution Funnel
  *   - Report type: Funnels
  *   - Steps: "card locked" -> "dispute filed" -> "support contacted"
- *   - Filter: "fraud_sequence" = true
+ *   - Filter: card locked.reason = "suspicious_activity"
  *   - Expected: high completion across all three resolution steps
  *
  * REAL-WORLD ANALOGUE: A small but consistent slice of accounts
@@ -137,26 +139,25 @@ const chance = u.initChance(SEED);
  * ---------------------------------------------------------------
  * 4. LOW BALANCE CHURN (everything)
  *
- * PATTERN: Users with 3+ balance checks under $15K lose 50% of
- * their events after day 30. Surviving events are tagged
- * low_balance_churn=true.
+ * PATTERN: Users with 3+ "balance checked" events where account_balance
+ * < $15K lose 50% of their events after day 30. No flag — derive cohort
+ * by counting low-balance checks per user.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Retention by Low Balance Cohort
- *   - Report type: Retention
- *   - Event A: any event
- *   - Event B: any event
- *   - Breakdown: "low_balance_churn"
- *   - Expected: low_balance_churn=true users churn sharply after day 30
+ *   Report 1: Activity by Low Balance Cohort
+ *   - Cohort A: users with >= 3 "balance checked" where account_balance < 15000
+ *   - Cohort B: users with < 3
+ *   - Event: any event
+ *   - Measure: Total per user, line chart by day
+ *   - Expected: A growth post-d30 ~ 0.5x B's growth (suppressed)
  *
  *   Report 2: Activity Decline Timeline
- *   - Report type: Insights
+ *   - Report type: Insights (with cohort A above)
  *   - Event: any event
  *   - Measure: Total
- *   - Filter: "low_balance_churn" = true
  *   - Line chart by day
- *   - Expected: visible 50% drop in event volume past day 30
+ *   - Expected: pre-d30/post-d30 ratio ~ 1.0x for A vs ~ 2.0x for B
  *
  * REAL-WORLD ANALOGUE: Customers running thin balances lose trust
  * in the platform and migrate their primary banking elsewhere.
@@ -164,25 +165,24 @@ const chance = u.initChance(SEED);
  * ---------------------------------------------------------------
  * 5. BUDGET USERS SAVE MORE (everything)
  *
- * PATTERN: Users who create a budget get 2x savings contributions,
- * 1.5x investment amounts, and extra savings goal events. All are
- * tagged budget_discipline=true.
+ * PATTERN: Users with any "budget created" event get 2x savings
+ * contributions, 1.5x investment amounts, and extra cloned savings
+ * goal events. No flag — derive cohort behaviorally.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Savings Contribution by Budget Discipline
- *   - Report type: Insights
+ *   Report 1: Savings Contribution by Budget Cohort
+ *   - Cohort A: users with >= 1 "budget created" event
+ *   - Cohort B: users with 0
  *   - Event: "savings goal set"
  *   - Measure: Average of "monthly_contribution"
- *   - Breakdown: "budget_discipline"
- *   - Expected: budget_discipline=true ~ $400, false ~ $200 (2x)
+ *   - Expected: A ~ 2x B
  *
- *   Report 2: Investment Size by Budget Discipline
- *   - Report type: Insights
+ *   Report 2: Investment Size by Budget Cohort
+ *   - Cohort A vs B (as above)
  *   - Event: "investment made"
  *   - Measure: Average of "amount"
- *   - Breakdown: "budget_discipline"
- *   - Expected: budget_discipline=true ~ 1.5x baseline
+ *   - Expected: A ~ 1.5x B
  *
  * REAL-WORLD ANALOGUE: Active budget tooling correlates strongly
  * with healthier savings rates and broader product adoption.
@@ -202,12 +202,12 @@ const chance = u.initChance(SEED);
  *   - Measure: Total
  *   - Expected: missed events appear only for manual payers, ~30% rate
  *
- *   Report 2: Bill Completion Rate
+ *   Report 2: Bill Completion Rate by Auto-Pay
  *   - Report type: Insights
  *   - Event: "bill paid"
  *   - Measure: Total
- *   - Breakdown: "manual_payment"
- *   - Expected: manual_payment=true ~ 70% completion vs 100% for auto-pay
+ *   - Breakdown: "auto_pay"
+ *   - Expected: auto_pay=false ~ 70% completion vs auto_pay=true ~ 100%
  *
  * REAL-WORLD ANALOGUE: Auto-pay locks users into a frictionless
  * payment cadence that virtually eliminates missed bills.
@@ -216,8 +216,8 @@ const chance = u.initChance(SEED);
  * 7. PREMIUM TIER VALUE (event)
  *
  * PATTERN: Premium-tier users get 3x reward values and 2x sell
- * returns on investments. Plus tier gets 1.5x rewards. Affected
- * events are tagged premium_reward / premium_returns.
+ * returns on investments. Plus tier gets 1.5x rewards. No flag —
+ * mutates raw "value"/"amount" properties; discover via account_tier breakdown.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -228,13 +228,13 @@ const chance = u.initChance(SEED);
  *   - Breakdown: "account_tier"
  *   - Expected: Premium ~ $30, Plus ~ $15, Basic ~ $10
  *
- *   Report 2: Investment Returns for Premium
+ *   Report 2: Investment Sell Amount by Tier
  *   - Report type: Insights
  *   - Event: "investment made"
  *   - Measure: Average of "amount"
  *   - Filter: "action" = "sell"
- *   - Breakdown: "premium_returns"
- *   - Expected: premium_returns=true ~ 2x baseline sell amount
+ *   - Breakdown: "account_tier"
+ *   - Expected: Premium ~ 2x baseline; Basic/Plus baseline
  *
  * REAL-WORLD ANALOGUE: Premium subscription tiers justify their
  * price by delivering visibly better cashback and investment perks.
@@ -242,25 +242,25 @@ const chance = u.initChance(SEED);
  * ---------------------------------------------------------------
  * 8. MONTH-END ANXIETY (everything)
  *
- * PATTERN: On days >= 28 of the month, app sessions run 40% longer
- * (month_end_anxiety=true) and reported balances are 30% lower
- * (month_end_check=true).
+ * PATTERN: On days >= 28 of the calendar month, app sessions run
+ * 40% longer and reported balances are 30% lower. No flag — discover
+ * via day-of-month breakdown.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Session Duration at Month End
+ *   Report 1: Session Duration by Day of Month
  *   - Report type: Insights
  *   - Event: "app session"
  *   - Measure: Average of "session_duration_sec"
- *   - Breakdown: "month_end_anxiety"
- *   - Expected: month_end_anxiety=true ~ 84s, false ~ 60s (1.4x)
+ *   - Breakdown: day of month
+ *   - Expected: days >= 28 ~ 1.4x other days
  *
- *   Report 2: Balance Drop at Month End
+ *   Report 2: Balance by Day of Month
  *   - Report type: Insights
  *   - Event: "balance checked"
  *   - Measure: Average of "account_balance"
- *   - Breakdown: "month_end_check"
- *   - Expected: month_end_check=true ~ 0.7x normal balance
+ *   - Breakdown: day of month
+ *   - Expected: days >= 28 ~ 0.7x other days
  *
  * REAL-WORLD ANALOGUE: Users obsessively check balances at month
  * end as bills hit and runway tightens.
@@ -711,6 +711,16 @@ const config = {
 				e.account_tier = profile.account_tier;
 				e.Platform = profile.Platform;
 			});
+
+			// HOOK 1B: PERSONAL VS BUSINESS — business segment txns 4x larger
+			// (per Report 2 in JSDoc: business ~ $200, personal ~ $50).
+			if (profile.account_segment === "business") {
+				userEvents.forEach(e => {
+					if (e.event === "transaction completed" && typeof e.amount === "number") {
+						e.amount = Math.floor(e.amount * 4);
+					}
+				});
+			}
 
 			// HOOK 2: PAYDAY PATTERNS — 1st & 15th: direct_deposit amount 3x.
 			// Days 1-3 and 15-17: 60% of transfers get amount 2x. No flag.

@@ -65,9 +65,9 @@ const chance = u.initChance(SEED);
  * 1. END-OF-QUARTER SPIKE (event)
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * PATTERN: Days 80-90 billing events shift toward plan upgrades 40% of the time
- * and team member invitations are duplicated 50% of the time. Affected events
- * are tagged quarter_end_push = true.
+ * PATTERN: Days 80-90 billing events shift event_type toward "plan_upgraded"
+ * 40% of the time and team member invitations are duplicated 50% of the time.
+ * No flag — discover via line chart by day.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -83,7 +83,6 @@ const chance = u.initChance(SEED);
  *   - Report type: Insights
  *   - Event: "team member invited"
  *   - Measure: Total
- *   - Filter: quarter_end_push = true
  *   - Line chart by day
  *   - Expected: clear volume spike in the final 10 days from duplicated invites
  *
@@ -94,26 +93,24 @@ const chance = u.initChance(SEED);
  * 2. CHURNED ACCOUNT SILENCING (everything)
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * PATTERN: ~10% of users (hash of distinct_id, idHash % 5 === 0) go completely
- * silent after day 30. All events after month 1 are removed via splice() and
- * the user profile is tagged churned_account = true.
+ * PATTERN: ~10-20% of users (deterministic via distinct_id char hash) go
+ * completely silent after day 30. All post-d30 events are removed via splice().
+ * No flag — derive cohort via behavioral retention bucket (users with zero
+ * activity past d30 vs the rest).
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Churned Account Retention
- *   - Report type: Retention
- *   - Event A: any event
- *   - Event B: any event
- *   - Breakdown: "churned_account" (user property)
- *   - Expected: churned_account=true shows 0% retention after day 30
+ *   Report 1: Retention Cliff
+ *   - Cohort A: users with at least 1 event AFTER day 30
+ *   - Cohort B: users with events ONLY in days 1-30
+ *   - Compare cohort sizes — B should be ~10-20% of total
  *
- *   Report 2: Churned Account Activity Decay
+ *   Report 2: Activity Volume Pre/Post Day 30
  *   - Report type: Insights
  *   - Event: any event
- *   - Measure: Total per user (average)
- *   - Breakdown: "churned_account"
- *   - Line chart by week
- *   - Expected: churned_account=true flatlines after week 4
+ *   - Measure: Total per user
+ *   - Line chart by day
+ *   - Expected: a visible drop after d30 driven by the silent cohort
  *
  * REAL-WORLD ANALOGUE: Most SaaS churn happens silently — accounts simply
  * stop logging in long before the formal cancellation lands.
@@ -148,25 +145,24 @@ const chance = u.initChance(SEED);
  * 4. INTEGRATION USERS SUCCEED (everything)
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * PATTERN: Users with BOTH Slack AND PagerDuty integrations resolve alerts
- * faster: response_time_mins reduced 60%, resolution_time_mins reduced 50%.
- * Affected events are tagged integrated_team = true.
+ * PATTERN: Users with BOTH "slack" AND "pagerduty" "integration configured"
+ * events resolve alerts faster: response_time_mins reduced 60%, resolution_time_mins
+ * reduced 50%. No flag — derive cohort behaviorally.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Response Time by Integration
- *   - Report type: Insights
+ *   Report 1: Response Time by Integration Cohort
+ *   - Cohort A: users who configured BOTH slack AND pagerduty integrations
+ *   - Cohort B: rest
  *   - Event: "alert acknowledged"
  *   - Measure: Average of "response_time_mins"
- *   - Breakdown: "integrated_team"
- *   - Expected: integrated_team=true ~ 60% lower response time
+ *   - Expected: A ~ 60% lower response time
  *
- *   Report 2: Resolution Time by Integration
- *   - Report type: Insights
+ *   Report 2: Resolution Time by Integration Cohort
+ *   - Cohort A vs B (as above)
  *   - Event: "alert resolved"
  *   - Measure: Average of "resolution_time_mins"
- *   - Breakdown: "integrated_team"
- *   - Expected: integrated_team=true ~ 50% faster resolution
+ *   - Expected: A ~ 50% faster resolution
  *
  * REAL-WORLD ANALOGUE: Teams that wire alerting into their existing comms
  * stack respond minutes faster — the alert literally finds the human.
@@ -175,26 +171,19 @@ const chance = u.initChance(SEED);
  * 5. DOCS READERS DEPLOY MORE (everything)
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * PATTERN: Users with 3+ best_practices documentation views get 2-3 extra
- * production deploys spliced into their event stream. Affected events are
- * tagged docs_informed = true.
+ * PATTERN: Users with 3+ "documentation viewed" events where doc_section
+ * (or equivalent prop) indicates best-practices reading get 2-3 extra
+ * production deploys spliced in. No flag — derive cohort by counting
+ * doc views per user.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Docs-Informed Production Deploys
- *   - Report type: Insights
+ *   Report 1: Per-User Deploy Volume by Docs Cohort
+ *   - Cohort A: users with >= 3 "documentation viewed" events
+ *   - Cohort B: users with < 3
  *   - Event: "service deployed"
- *   - Measure: Total
- *   - Filter: environment = "production"
- *   - Breakdown: "docs_informed"
- *   - Expected: docs_informed=true shows additional production deploys
- *
- *   Report 2: Per-User Deploy Volume
- *   - Report type: Insights
- *   - Event: "service deployed"
- *   - Measure: Total per user (average)
- *   - Breakdown: "docs_informed"
- *   - Expected: ~1.8x more deploys per user for docs readers
+ *   - Measure: Total per user
+ *   - Expected: A ~ 1.8x B
  *
  * REAL-WORLD ANALOGUE: Engineers who read the docs ship more confidently
  * and more often than those who guess at the platform.
@@ -205,25 +194,22 @@ const chance = u.initChance(SEED);
  *
  * PATTERN: When cost_change_percent > 25 on a "cost report generated" event,
  * the user is stored in a module-level Map. Their next "infrastructure scaled"
- * event is forced to scale_direction = "down". Affected events are tagged
- * budget_exceeded and cost_reaction = true.
+ * event is forced to scale_direction = "down". No flag — discover by
+ * sequencing cost-report → infrastructure-scaled per user.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Cost Overrun to Scale Down
- *   - Report type: Insights
- *   - Event: "infrastructure scaled"
- *   - Measure: Total
- *   - Breakdown: "cost_reaction"
- *   - Expected: cost_reaction=true events are 100% scale_direction="down"
- *
- *   Report 2: Scale Direction by Reaction
+ *   Report 1: Scale Direction Distribution
  *   - Report type: Insights
  *   - Event: "infrastructure scaled"
  *   - Measure: Total
  *   - Breakdown: "scale_direction"
- *   - Filter: cost_reaction = true
- *   - Expected: only the "down" bucket has volume
+ *   - Expected: "down" share is elevated above the configured baseline
+ *
+ *   Report 2: Sequencing Check
+ *   - Inspect users with cost_change_percent > 25 on cost report;
+ *     their next "infrastructure scaled" should be scale_direction="down"
+ *   - Expected: ~100% match for the next-scale event after a cost spike
  *
  * REAL-WORLD ANALOGUE: A surprise cloud bill triggers an immediate
  * downscale; no engineer ignores a 25% month-over-month cost jump.
@@ -234,24 +220,15 @@ const chance = u.initChance(SEED);
  *
  * PATTERN: After a failed pipeline run, the user's next successful deploy has
  * duration_sec * 1.5 (recovery deploys are slower). Uses a module-level Map
- * for cross-call state. Affected events are tagged recovery_deployment = true.
+ * for cross-call state. No flag — discover by sequencing failed → next-success
+ * pipeline events per user and comparing duration.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Recovery Deploy Duration
- *   - Report type: Insights
- *   - Event: "deployment pipeline run"
- *   - Measure: Average of "duration_sec"
- *   - Breakdown: "recovery_deployment"
- *   - Expected: recovery_deployment=true ~ 1.5x longer duration
- *
- *   Report 2: Recovery Deploy Volume Over Time
- *   - Report type: Insights
- *   - Event: "deployment pipeline run"
- *   - Measure: Total
- *   - Filter: recovery_deployment = true
- *   - Line chart by day
- *   - Expected: scattered recovery events trailing failed pipelines
+ *   Report 1: Pipeline Duration After Failure (sequencing query)
+ *   - For each user, find runs where prior run was status="failed"
+ *   - Compare avg duration_sec of those "next" runs vs all other successful runs
+ *   - Expected: post-failure runs ~ 1.5x longer duration
  *
  * REAL-WORLD ANALOGUE: After a bad deploy, teams add manual gates and
  * extra verification steps that slow the very next release.

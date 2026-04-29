@@ -77,9 +77,9 @@ const communityIds = v.range(1, 30).map(() => `COMM_${v.uid(4)}`);
  *   - Report type: Insights
  *   - Event: "article published"
  *   - Measure: Average of "word_count"
- *   - Breakdown: "is_weekend"
- *   - Expected: is_weekend=true should show ~1.5x avg word_count vs false
- *     (true ~ 2250, false ~ 1500)
+ *   - Breakdown: Day of Week
+ *   - Expected: Sat/Sun ~ 1.5x avg word_count vs weekdays
+ *     (weekend ~ 3325, weekday ~ 2218)
  *
  * REAL-WORLD ANALOGUE: Community wikis see longer, more thoughtful
  * contributions on weekends when creators have uninterrupted time.

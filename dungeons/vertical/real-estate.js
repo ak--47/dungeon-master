@@ -528,37 +528,9 @@ const config = {
 			}
 		}
 
-		// HOOK 1: SPRING BUYING SEASON (event) — days 30-60, tour
-		// duration_mins boosted 3x, offer_price 2.5x. Mutates raw props.
-		// HOOK 2 (event): MORTGAGE RATE SHOCK — days 75-89, mortgage_rate
-		// pinned to 7.5. Raw mutation.
-		// HOOK 7 (event): LUXURY LISTING RELEASE — after day 50, 3% of
-		// property_listed events get listing_price set to $5M-$15M.
-		if (type === "event") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			const EVENT_TIME = dayjs.utc(record.time);
-			const dayInDataset = EVENT_TIME.diff(datasetStart, "day");
-			const isSpring = dayInDataset >= 30 && dayInDataset <= 60;
-
-			if (isSpring && record.event === "tour scheduled" && typeof record.duration_mins === "number") {
-				record.duration_mins = Math.round(record.duration_mins * 3);
-			}
-			if (isSpring && record.event === "offer submitted") {
-				record.offer_price = Math.floor((record.offer_price || 400000) * 2.5);
-			}
-
-			if (record.event === "mortgage pre-approval") {
-				if (dayInDataset >= 75 && dayInDataset < 89) {
-					record.mortgage_rate = 7.5;
-				}
-			}
-
-			if (record.event === "property listed") {
-				if (dayInDataset >= 50 && chance.bool({ likelihood: 3 })) {
-					record.listing_price = chance.integer({ min: 5000000, max: 15000000 });
-				}
-			}
-		}
+		// HOOKS 1, 2, 7 (time-window event-level effects) moved to everything hook —
+		// event hook fires before bunchIntoSessions reshuffles timestamps, so day-window
+		// tags leak across boundaries.
 
 		if (type === "everything") {
 			const datasetStart = dayjs.unix(meta.datasetStart);
@@ -570,6 +542,33 @@ const config = {
 				e.user_type = profile.user_type;
 				e.preferred_location = profile.preferred_location;
 				e.property_preference = profile.property_preference;
+			});
+
+			// HOOK 1: SPRING BUYING SEASON — d30-60 tour duration 3x, offer_price 2.5x
+			// HOOK 2: MORTGAGE RATE SHOCK — d75-89 mortgage_rate pinned 7.5
+			// HOOK 7: LUXURY LISTING RELEASE — post-d50, 3% of listings priced $5M-$15M
+			const springStart = datasetStart.add(30, "days");
+			const springEnd = datasetStart.add(60, "days");
+			const shockStart = datasetStart.add(75, "days");
+			const shockEnd = datasetStart.add(89, "days");
+			const luxuryStart = datasetStart.add(50, "days");
+			userEvents.forEach(e => {
+				const t = dayjs.utc(e.time);
+				const inSpring = (t.isAfter(springStart) || t.isSame(springStart)) && t.isBefore(springEnd);
+				if (inSpring && e.event === "tour scheduled" && typeof e.duration_mins === "number") {
+					e.duration_mins = Math.round(e.duration_mins * 3);
+				}
+				if (inSpring && e.event === "offer submitted") {
+					e.offer_price = Math.floor((e.offer_price || 400000) * 2.5);
+				}
+				if (e.event === "mortgage pre-approval") {
+					if ((t.isAfter(shockStart) || t.isSame(shockStart)) && t.isBefore(shockEnd)) {
+						e.mortgage_rate = 7.5;
+					}
+				}
+				if (e.event === "property listed" && t.isAfter(luxuryStart) && chance.bool({ likelihood: 3 })) {
+					e.listing_price = chance.integer({ min: 5000000, max: 15000000 });
+				}
 			});
 
 			const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;

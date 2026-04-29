@@ -62,54 +62,57 @@ const chance = u.initChance(SEED);
  * (treasure_type, subscription_tier, day-of-user-life), or funnel time-to-convert.
  *
  * 1. CONVERSION: Ancient Compass Effect
- *    Players who use the "Ancient Compass" item have 3x quest completion rate
- *    and earn 1.5x more rewards.
- *    → Mixpanel: Segment users by "use item" where item_type = "Ancient Compass"
- *    → Compare quest completion rate and average reward_gold / reward_xp
- *    → Look for compass_user = true on quest turned in events
+ *    Players who use the "Ancient Compass" item earn 1.5x quest reward_gold
+ *    and reward_xp on subsequent quest-turned-in events.
+ *    → Mixpanel: Cohort A = users who fired "use item" with item_type="Ancient Compass"
+ *    → Compare avg reward_gold / reward_xp on "quest turned in" between A and rest
+ *    → Expected: A ~ 1.5x rest
  *
- * 2. TIME-BASED: Cursed Week (days 40-47)
- *    Death rates spike 5x, dungeon completion plummets, resurrection usage 4x.
- *    → Mixpanel: Chart "player death" count by day — clear spike days 40-47
- *    → Filter cause_of_death = "Curse" and cursed_week = true
+ * 2. TIME-BASED: Cursed Week (days 40-47 of user life)
+ *    Death rates spike heavily during the user's days 40-47 (relative to their
+ *    first event). Injected deaths carry cause_of_death="Curse".
+ *    → Mixpanel: Chart "player death" count by day-of-user-life
+ *    → Filter cause_of_death = "Curse" — clear cluster in user's days 40-47
  *
  * 3. RETENTION: Early Guild Joiners
- *    Players who join a guild within first 3 days have 80% D30 retention vs 20%.
+ *    Players who fire "guild joined" within first 3 days get extra cloned
+ *    "combat completed" events; non-joiners with 3+ early deaths churn.
  *    → Mixpanel: Cohort users who did "guild joined" within first 3 days
- *    → Compare D30 retention rate; look for guild_member_retained = true
+ *    → Compare D30 retention vs other users — early joiners retain higher
  *
  * 4. CHURN: Death Spiral
- *    Players with 3+ deaths in first week have 70% churn rate (events removed).
- *    → Mixpanel: Segment users by count of "player death" in first 7 days
- *    → Bucket: 0-2, 3-4, 5+ deaths — compare events after day 7
+ *    Players with 3+ "player death" events in first 7 days lose 70% of their
+ *    post-week-1 events.
+ *    → Mixpanel: Bucket users by count of "player death" in first 7 days
+ *    → Compare event volume after day 7 — 3+ deaths bucket has ~30% baseline
  *
  * 5. PURCHASE VALUE: Lucky Charm LTV
- *    Lucky Charm Pack buyers become 5x higher LTV customers.
- *    → Mixpanel: Segment by "real money purchase" where product = "Lucky Charm Pack"
- *    → Compare total revenue, purchase frequency; look for lucky_charm_effect = true
+ *    Users who purchase "Lucky Charm Pack" get 2x price_usd on subsequent
+ *    real-money purchases under $49.99 + 35% chance of bonus cloned purchase.
+ *    → Mixpanel: Cohort A = users with any "real money purchase" where product="Lucky Charm Pack"
+ *    → Compare avg price_usd and total revenue between A and rest
+ *    → Expected: A ~ 1.5x avg purchase price
  *
  * 6. STRATEGIC EXPLORERS (BEHAVIORS TOGETHER — everything)
  *
- *    PATTERN: Players who both "inspect" AND "search for clues" before
- *    entering a dungeon have 85% dungeon completion (vs 45% baseline) and
- *    earn 2x treasure value. Tagged strategic_explorer: true.
+ *    PATTERN: Players who fire BOTH "inspect" AND "search for clues" events
+ *    have 85% dungeon completion (vs 45% baseline) and earn 2x treasure value.
+ *    No flag — derive cohort by joining users who did both event types.
  *
  *    HOW TO FIND IT IN MIXPANEL:
  *
- *      Report 1: Dungeon Completion by Strategic Behavior
- *      - Report type: Insights
+ *      Report 1: Dungeon Completion by Strategic Cohort
+ *      - Cohort A: users who fired BOTH "inspect" AND "search for clues"
+ *      - Cohort B: rest
  *      - Event: "exit dungeon"
- *      - Measure: Total
- *      - Filter: completion_status = "completed"
- *      - Breakdown: "strategic_explorer"
- *      - Expected: strategic_explorer=true ~ 85% completion vs 45%
+ *      - Filter: completion_status = "completed", divide by total exit dungeon
+ *      - Expected: A ~ 85% completion vs B ~ 45%
  *
- *      Report 2: Treasure Value by Strategic Behavior
- *      - Report type: Insights
+ *      Report 2: Treasure Value by Strategic Cohort
+ *      - Cohort A vs B (as above)
  *      - Event: "find treasure"
  *      - Measure: Average of "treasure_value"
- *      - Breakdown: "strategic_explorer"
- *      - Expected: strategic explorers ~ 2x treasure value
+ *      - Expected: A ~ 2x B
  *
  *    REAL-WORLD ANALOGUE: Players who scout and prepare before encounters
  *    consistently outperform those who rush in.
@@ -130,12 +133,12 @@ const chance = u.initChance(SEED);
  *      - Line chart by day
  *      - Expected: zero before day 45, then small steady stream after
  *
- *      Report 2: Combat Win Rate by Legendary Equip
- *      - Report type: Insights
+ *      Report 2: Combat Win Rate by Legendary Cohort
+ *      - Cohort A: users who fired "find treasure" with treasure_type="Shadowmourne Legendary"
+ *      - Cohort B: rest
  *      - Event: "combat completed"
- *      - Measure: Total filtered to wins / Total
- *      - Breakdown: "legendary_weapon_equipped"
- *      - Expected: equipped=true ~ 90% wins vs ~ 60% baseline
+ *      - Measure: count where outcome="Victory" / total combat completed
+ *      - Expected: A ~ 90% wins vs B ~ baseline
  *
  *    REAL-WORLD ANALOGUE: Patch-day legendary drops create a small power-
  *    user cohort that dominates leaderboards and PvP for weeks after.
@@ -144,8 +147,8 @@ const chance = u.initChance(SEED);
  *
  *    PATTERN: Premium subscribers get 50% better combat wins, 1.4x rewards,
  *    45% higher dungeon completion. Elite subscribers get 70% better combat
- *    wins, 1.8x rewards, 65% higher dungeon completion, bonus treasure
- *    events, and reduced death rates. Tagged subscriber_advantage.
+ *    wins, 1.8x rewards, 65% higher dungeon completion, bonus treasure events,
+ *    and reduced death rates. No flag — discover via subscription_tier breakdown.
  *
  *    HOW TO FIND IT IN MIXPANEL:
  *
@@ -153,14 +156,14 @@ const chance = u.initChance(SEED);
  *      - Report type: Insights
  *      - Event: "quest turned in"
  *      - Measure: Average of "reward_gold"
- *      - Breakdown: "subscriber_advantage"
+ *      - Breakdown: "subscription_tier"
  *      - Expected: Premium ~ 1.4x, Elite ~ 1.8x vs Free baseline
  *
  *      Report 2: Dungeon Completion by Tier
  *      - Report type: Insights
  *      - Event: "exit dungeon"
- *      - Measure: Total filtered to completed / Total
- *      - Breakdown: "subscriber_advantage"
+ *      - Measure: completion_status="completed" / total exit dungeon
+ *      - Breakdown: "subscription_tier"
  *      - Expected: Free ~ 45%, Premium ~ 65%, Elite ~ 75%
  *
  *    REAL-WORLD ANALOGUE: Subscription tiers in live-service games confer
@@ -170,7 +173,7 @@ const chance = u.initChance(SEED);
  *
  *    PATTERN: Quest gold reward scales with player level using
  *    reward_gold *= (1 + level * 0.1). Level-10 earns 2x, level-20 earns
- *    3x vs level-1. Tagged level_scaled: true.
+ *    3x vs level-1. No flag — discover via user-property level breakdown.
  *
  *    HOW TO FIND IT IN MIXPANEL:
  *
@@ -178,39 +181,30 @@ const chance = u.initChance(SEED);
  *      - Report type: Insights
  *      - Event: "quest turned in"
  *      - Measure: Average of "reward_gold"
- *      - Breakdown: "player_level" (or recommended_level bucket)
+ *      - Breakdown: user property "level" (bucketed)
  *      - Expected: linear ramp; level-10 ~ 2x, level-20 ~ 3x vs level-1
- *
- *      Report 2: Level-Scaled Reward Share
- *      - Report type: Insights
- *      - Event: "quest turned in"
- *      - Measure: Total
- *      - Breakdown: "level_scaled"
- *      - Expected: most quest rewards are tagged level_scaled=true
  *
  *    REAL-WORLD ANALOGUE: Quest economies scale rewards with player level
  *    so high-level zones remain meaningfully lucrative.
  *
- * 10. WHALE PURCHASES (TOP-SPENDER COHORT — event)
+ * 10. WHALE PURCHASES (TOP-SPENDER COHORT — everything)
  *
- *     PATTERN: ~33% of users (deterministic via user_id hash) are "whales"
- *     who spend 1.8x on real money purchases. Tagged is_whale: true.
+ *     PATTERN: ~33% of users (deterministic via user_id char % 3 hash) are
+ *     "whales" who get 1.8x price_usd on real money purchases. No flag —
+ *     derive cohort by ranking users by total purchase volume.
  *
  *     HOW TO FIND IT IN MIXPANEL:
  *
- *       Report 1: Avg Purchase by Whale Status
- *       - Report type: Insights
+ *       Report 1: Avg Purchase by Spend Decile
+ *       - Cohort A: top 33% of users by SUM(price_usd) on "real money purchase"
+ *       - Cohort B: rest
  *       - Event: "real money purchase"
  *       - Measure: Average of "price_usd"
- *       - Breakdown: "is_whale"
- *       - Expected: is_whale=true ~ 1.8x avg vs is_whale=false
+ *       - Expected: A ~ 1.8x B
  *
- *       Report 2: Total Revenue Contribution
- *       - Report type: Insights
- *       - Event: "real money purchase"
- *       - Measure: Sum of "price_usd"
- *       - Breakdown: "is_whale"
- *       - Expected: whales (~ 33% of users) drive majority of revenue
+ *       Report 2: Revenue Concentration
+ *       - Sum price_usd by user, plot distribution
+ *       - Expected: ~33% of users contribute the majority of revenue
  *
  *     REAL-WORLD ANALOGUE: A small cohort of high-spending players
  *     ("whales") accounts for the majority of mobile-game revenue.
@@ -724,18 +718,8 @@ const config = {
 		// Hook #2 event-level part removed — cursed week now handled in everything hook
 
 		// Hook #7: TIMED RELEASE — Legendary Weapon
-		if (type === "event") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			const LEGENDARY_WEAPON_RELEASE = datasetStart.add(45, 'days');
-			const EVENT_TIME = dayjs(record.time);
-
-			if (record.event === "find treasure") {
-				if (EVENT_TIME.isAfter(LEGENDARY_WEAPON_RELEASE) && chance.bool({ likelihood: 2 })) {
-					record.treasure_type = "Shadowmourne Legendary";
-					record.treasure_value = 50000;
-				}
-			}
-		}
+		// (moved to everything hook — event hook fires before bunchIntoSessions
+		// reshuffles timestamps, causing tagged events to leak across the d45 boundary)
 
 		// HOOK 12 (T2C): COMBAT FUNNEL TIME-TO-CONVERT (funnel-post)
 		// Elite tier completes Combat funnel 1.4x faster (factor 0.71);
@@ -762,12 +746,23 @@ const config = {
 		if (type === "everything") {
 			const userEvents = record;
 			const profile = meta.profile;
+			const datasetStart = dayjs.unix(meta.datasetStart);
+			const LEGENDARY_WEAPON_RELEASE = datasetStart.add(45, 'days');
 
 			// Stamp superProps from profile for consistency
 			userEvents.forEach(e => {
 				e.Platform = profile.Platform;
 				e.graphics_quality = profile.graphics_quality;
 				e.subscription_tier = profile.subscription_tier;
+			});
+
+			// Hook #7: TIMED RELEASE — Shadowmourne Legendary post-d45.
+			// Runs in everything hook so timestamps are post-bunchIntoSessions.
+			userEvents.forEach(e => {
+				if (e.event === "find treasure" && dayjs(e.time).isAfter(LEGENDARY_WEAPON_RELEASE) && chance.bool({ likelihood: 2 })) {
+					e.treasure_type = "Shadowmourne Legendary";
+					e.treasure_value = 50000;
+				}
 			});
 
 			const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
@@ -812,7 +807,7 @@ const config = {
 					earlyDeaths++;
 				}
 
-				if (event.event === "find treasure" && event.legendary_drop) {
+				if (event.event === "find treasure" && event.treasure_type === "Shadowmourne Legendary") {
 					hasLegendaryWeapon = true;
 				}
 
