@@ -259,6 +259,11 @@ const chance = u.initChance(SEED);
  *   - Breakdown: "api_tier"
  *   - Expected: Enterprise ~ 0.67x Build; Free ~ 1.4x Build
  *
+ *   NOTE (funnel-post measurement): visible only via Mixpanel funnel
+ *   median TTC. Cross-event MIN→MIN SQL queries on raw events do NOT
+ *   show this — funnel-post adjusts gaps within funnel instances, not
+ *   across the user's full event history.
+ *
  * REAL-WORLD ANALOGUE: Enterprise teams have dedicated platform engineers
  * who execute end-to-end pipelines faster.
  *

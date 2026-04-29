@@ -252,6 +252,13 @@ const chance = u.initChance(SEED);
  *       - Breakdown: subscription_tier
  *       - Expected: Elite ~ 0.71x; Free ~ 1.25x
  *
+ *       NOTE (funnel-post measurement): visible only via Mixpanel funnel
+ *       median TTC. Cross-event MIN→MIN SQL queries on raw events do NOT
+ *       show this — funnel-post adjusts gaps within funnel instances, not
+ *       across the user's full event history. (This dungeon also has an
+ *       everything-hook companion that compresses the cross-event Elite gap
+ *       between earliest combat_initiated and earliest use_item.)
+ *
  * ───────────────────────────────────────────────────────────────────────────────
  * 13. COMBAT-PREP MAGIC NUMBER (in-funnel, everything)
  *

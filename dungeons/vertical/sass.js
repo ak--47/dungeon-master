@@ -59,6 +59,8 @@ const chance = u.initChance(SEED);
  * effects are HIDDEN — no flag stamping. Discoverable via behavioral cohorts
  * or raw-prop breakdowns (company_size, day, doc_section). Adds:
  *   9. INCIDENT RESPONSE TIME-TO-CONVERT (Enterprise 1.4x faster vs Startup)
+ *      [funnel-post: visible only in Mixpanel funnel median TTC; cross-event
+ *      MIN→MIN SQL queries do NOT show this]
  *   10. DOCS MAGIC NUMBER (sweet 4-7 docs → +40% deploys; over 8+ → drop 25%)
  *
  * ─────────────────────────────────────────────────────────────────────────────

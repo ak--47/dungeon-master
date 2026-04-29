@@ -47,6 +47,8 @@ const chance = u.initChance(SEED);
  *
  * Adds 10. ONBOARDING TIME-TO-CONVERT: creator/business 0.71x faster, personal
  * 1.25x slower (funnel-post). Discover via Onboarding funnel median TTC by account_type.
+ * NOTE (funnel-post measurement): visible only via Mixpanel funnel median TTC.
+ * Cross-event MIN→MIN SQL queries on raw events do NOT show this.
  * =====================================================================================
  *
  * NOTE: All cohort effects are HIDDEN — discoverable only via behavioral cohorts

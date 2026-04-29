@@ -718,6 +718,8 @@ This measures **earliest A → earliest B across the user's entire event history
 
 **How to diagnose:** if the dungeon has a funnel-post T2C hook for tier `X` claiming `0.7x baseline` but your MIN-to-MIN query shows `~1.0x`, check whether the base event distribution naturally produces `B` events earlier than the funnel sequence. If yes, the hook needs an everything-hook companion that adjusts the user's earliest A→B pair directly (see create-dungeon SKILL.md "Common bugs to avoid #8").
 
+**Verdict rule:** if the dungeon's funnel-post JSDoc has the standard caveat (`NOTE (funnel-post measurement): visible only via Mixpanel funnel median TTC. Cross-event MIN→MIN SQL queries on raw events do NOT show this`), mark PASS as "mechanism" without re-running the within-funnel query — the hook code path is verified by code inspection. Only run the within-funnel query when the JSDoc claims the effect SHOULD be visible in cross-event SQL (e.g. dungeons with an explicit everything-hook companion).
+
 **Fast verification workaround:** measure within-funnel T2C only:
 
 ```sql

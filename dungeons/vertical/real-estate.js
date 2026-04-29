@@ -52,6 +52,8 @@ const chance = u.initChance(SEED);
  *
  * Adds 10. TOUR FUNNEL TIME-TO-CONVERT: Premier agents 0.71x faster, Standard
  * 1.3x slower (funnel-post). Discover via Tour Funnel median TTC by agent_tier.
+ * NOTE (funnel-post measurement): visible only via Mixpanel funnel median TTC.
+ * Cross-event MIN→MIN SQL queries on raw events do NOT show this.
  * ===================================================================
  *
  * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable

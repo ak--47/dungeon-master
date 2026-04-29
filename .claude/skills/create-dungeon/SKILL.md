@@ -654,6 +654,17 @@ if (type === "funnel-post") {
 }
 ```
 
+**REQUIRED JSDoc caveat for every funnel-post T2C hook:**
+
+```
+NOTE (funnel-post measurement): visible only via Mixpanel funnel
+median TTC. Cross-event MIN→MIN SQL queries on raw events do NOT
+show this — funnel-post adjusts gaps within funnel instances, not
+across the user's full event history.
+```
+
+This caveat MUST be added to the HOW TO FIND IT section of every funnel-post hook JSDoc. Without it, downstream verifiers and analysts waste cycles running cross-event MIN→MIN queries that always return baseline (no segment effect visible). If the dungeon ALSO needs the effect to show in cross-event SQL, add the everything-hook companion documented in "Common bugs to avoid" #8.
+
 ### 2. Magic-number BEHAVIORAL (everything, no flags)
 
 Count an event per user. Sweet range → boost a value. Over range → drop downstream events.
@@ -827,6 +838,20 @@ SELECT pn, COUNT(*) FROM (SELECT user_id, COUNT(*) FILTER (WHERE event='X') AS p
 ```
 
 If 90% of users have 0-1 events, redesign the magic-number ranges to match (e.g., `sweet=2-5`, `over=6+`) AND update the JSDoc cohort-derivation paths. Don't bump the X event's weight to 10+ just to chase the original ranges; that distorts the dungeon's overall event mix.
+
+#### 11. JSDoc PATTERN drift after fix-loop refactors
+
+When a hook is reworked during verification (e.g., changing over-bucket from event-splice to value-mutation per bug #3), the JSDoc PATTERN paragraph, the HOW TO FIND IT report descriptions, AND the EXPECTED METRICS SUMMARY table row ALL need updating. Phase 8 surfaced this drift in healthcare H10 where:
+- PATTERN said "drop 30% of follow up scheduled events"
+- Code did `e.days_until_followup *= 1.5`
+- Metrics row said "over follow-ups/user 1x 0.7x -30%"
+
+The hook worked correctly but every downstream consumer (validator, report builder, analyst) was misled by stale prose. **After ANY hook code change, walk the JSDoc top-to-bottom and rewrite every claim that mentions the old behavior.** Three places to check:
+1. PATTERN paragraph (the prose description)
+2. Each "Report N" block in HOW TO FIND IT (event names, properties, expected ratios)
+3. The EXPECTED METRICS SUMMARY table row (Effect column + Ratio column)
+
+If you change the magnitude (+25% → +35%), update PATTERN + Reports + Metrics. If you change the mechanism (event drop → property mutation), update PATTERN + Reports + Metrics + REAL-WORLD ANALOGUE if applicable.
 
 ### Hook Reference Examples
 

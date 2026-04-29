@@ -240,12 +240,17 @@ const clinicIds = v.range(1, 25).map(() => `CLINIC_${v.uid(4)}`);
  *   - Breakdown: subscription_tier
  *   - Expected: premium ~ 0.74x; free ~ 1.33x
  *
+ *   NOTE (funnel-post measurement): visible only via Mixpanel funnel
+ *   median TTC. Cross-event MIN→MIN SQL queries on raw events do NOT
+ *   show this — funnel-post adjusts gaps within funnel instances, not
+ *   across the user's full event history.
+ *
  * ───────────────────────────────────────────────────────────────
  * 10. CONSULTATION-COUNT MAGIC NUMBER (everything)
  *
  * PATTERN: Sweet 3-6 consultations → +25% on consultation_fee.
- * Over 7+ → drop 30% of follow-up scheduled events (over-consulted
- * → follow-up fatigue). No flag.
+ * Over 7+ → days_until_followup multiplied by 1.5 (over-consulted
+ * patients wait 50% longer for next visit). No flag.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -256,15 +261,15 @@ const clinicIds = v.range(1, 25).map(() => `CLINIC_${v.uid(4)}`);
  *   - Measure: Average of "consultation_fee"
  *   - Expected: A ~ 1.25x B
  *
- *   Report 2: Follow-Up Rate on Heavy Consulters
+ *   Report 2: Follow-Up Wait Time on Heavy Consulters
  *   - Cohort C: users with >= 7 consultations
  *   - Cohort A: users with 3-6
  *   - Event: "follow up scheduled"
- *   - Measure: Total per user
- *   - Expected: C ~ 30% fewer follow-ups per user
+ *   - Measure: Average of "days_until_followup"
+ *   - Expected: C ~ 1.5x A (longer gap before next visit)
  *
  * REAL-WORLD ANALOGUE: Engaged patients pay more; over-engaged
- * patients hit care-fatigue and skip follow-ups.
+ * patients hit care-fatigue and stretch the gap to next visit.
  *
  * ═══════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY
@@ -282,7 +287,7 @@ const clinicIds = v.range(1, 25).map(() => `CLINIC_${v.uid(4)}`);
  * Free-Tier Conversion Drop   | funnel conversion   | 40%      | 28%       | -30%
  * Booking T2C                 | median min by tier  | 1x       | 0.74/1.33x| ~ 1.8x range
  * Consult-Count Magic Number  | sweet consult fee   | 1x       | 1.25x     | 1.25x
- * Consult-Count Magic Number  | over follow-ups/user| 1x       | 0.7x      | -30%
+ * Consult-Count Magic Number  | over days_until_fu  | 1x       | 1.5x      | +50%
  */
 
 /** @type {Config} */

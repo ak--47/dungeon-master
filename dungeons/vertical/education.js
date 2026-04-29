@@ -279,6 +279,11 @@ const chance = u.initChance(SEED);
  *   - Breakdown: subscription_status
  *   - Expected: annual ~ 0.71x baseline; free ~ 1.4x baseline
  *
+ *   NOTE (funnel-post measurement): visible only via Mixpanel funnel
+ *   median TTC. Cross-event MIN→MIN SQL queries on raw events do NOT
+ *   show this — funnel-post adjusts gaps within funnel instances, not
+ *   across the user's full event history.
+ *
  * REAL-WORLD ANALOGUE: Paid commitment accelerates throughput.
  *
  * ═══════════════════════════════════════════════════════════════════════════════

@@ -51,6 +51,8 @@ const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", 
  * raw-prop breakdowns (booking_window, day, segment) or behavioral cohorts.
  *
  * Adds 9. BOOKING TIME-TO-CONVERT (Business 1.35x faster, Budget 1.25x slower)
+ *      [funnel-post: visible only in Mixpanel funnel median TTC; cross-event
+ *      MIN→MIN SQL queries do NOT show this]
  * and 10. HOTEL-VIEWED MAGIC NUMBER (sweet 5-10 → +30% nightly_rate;
  * over 11+ → drop 35% of bookings).
  * ═══════════════════════════════════════════════════════════════

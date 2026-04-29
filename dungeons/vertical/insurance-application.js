@@ -56,6 +56,8 @@ const chance = u.initChance(SEED);
  *
  * Adds 5. APPLICATION COMPLETION TIME-TO-CONVERT: business 0.74x faster,
  * family 1.3x slower (funnel-post). Discover via funnel median TTC by account_type.
+ * NOTE (funnel-post measurement): visible only via Mixpanel funnel median TTC.
+ * Cross-event MIN→MIN SQL queries on raw events do NOT show this.
  * ===================================================================
  *
  * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable
@@ -175,7 +177,7 @@ const chance = u.initChance(SEED);
  * ------------------------|-------------------------|----------|---------|------
  * Version Stamping        | Events per version      | n/a      | clean   | bands
  * Support Ticket Volume   | tickets v2.12 -> v2.13  | 1x       | ~ 0.3x  | -70%
- * Application Conversion  | approval rate pre/post  | 1x       | ~ 1.7x  | step-up
+ * Application Conversion  | approval rate pre/post  | 1x       | ~ 1.3x  | step-up
  * Step-Count Magic Number | sweet approved_premium  | 1x       | 1.35x   | 1.35x
  * Step-Count Magic Number | over approvals/user     | 1x       | 0.6x    | -40%
  */

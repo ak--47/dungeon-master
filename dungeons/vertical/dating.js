@@ -188,6 +188,11 @@ const chance = u.initChance(SEED);
  *   - Breakdown: subscription
  *   - Expected: Elite ~ 0.71x; Free ~ 1.4x
  *
+ *   NOTE (funnel-post measurement): visible only via Mixpanel funnel
+ *   median TTC. Cross-event MIN→MIN SQL queries on raw events do NOT
+ *   show this — funnel-post adjusts gaps within funnel instances, not
+ *   across the user's full event history.
+ *
  * REAL-WORLD ANALOGUE: Premium notifications + boost surface matches faster.
  *
  * =====================================================================================

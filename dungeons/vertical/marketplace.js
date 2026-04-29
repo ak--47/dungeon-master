@@ -250,6 +250,11 @@ const listingIds = v.range(1, 500).map(() => `LST_${v.uid(8)}`);
  *   - Breakdown: segment
  *   - Expected: power/frequent ~ 0.71x; window ~ 1.4x
  *
+ *   NOTE (funnel-post measurement): visible only via Mixpanel funnel
+ *   median TTC. Cross-event MIN→MIN SQL queries on raw events do NOT
+ *   show this — funnel-post adjusts gaps within funnel instances, not
+ *   across the user's full event history.
+ *
  * ───────────────────────────────────────────────────────────────
  * 10. MESSAGE-COUNT MAGIC NUMBER (in-funnel, everything)
  *

@@ -57,6 +57,8 @@ const supplierIds = v.range(1, 150).map(() => `SUP_${v.uid(6)}`);
  *
  * Adds 10. ONBOARDING TIME-TO-CONVERT: enterprise 0.71x faster, small_business
  * 1.3x slower (funnel-post). Discover via Onboarding funnel median TTC by company_tier.
+ * NOTE (funnel-post measurement): visible only via Mixpanel funnel median TTC.
+ * Cross-event MIN→MIN SQL queries on raw events do NOT show this.
  * ===================================================================
  *
  * -------------------------------------------------------------------

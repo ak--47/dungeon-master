@@ -55,6 +55,8 @@ const spiritAnimals = ["duck", "dog", "otter", "penguin", "cat", "elephant", "li
  * Adds 7. SIGNUP FLOW TIME-TO-CONVERT: gold/platinum loyalty 0.71x faster,
  * bronze 1.3x slower (funnel-post). Discover via funnel median time-to-convert
  * by loyalty_tier breakdown.
+ * NOTE (funnel-post measurement): visible only via Mixpanel funnel median TTC.
+ * Cross-event MIN→MIN SQL queries on raw events do NOT show this.
  * ============================================================================
  *
  * ----------------------------------------------------------------------------

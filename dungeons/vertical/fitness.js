@@ -255,6 +255,11 @@ const chance = u.initChance(SEED);
  *   - Breakdown: subscription_plan
  *   - Expected: annual ~ 0.77x; free ~ 1.25x
  *
+ *   NOTE (funnel-post measurement): visible only via Mixpanel funnel
+ *   median TTC. Cross-event MIN→MIN SQL queries on raw events do NOT
+ *   show this — funnel-post adjusts gaps within funnel instances, not
+ *   across the user's full event history.
+ *
  * ───────────────────────────────────────────────────────────────
  * 10. WORKOUT-COUNT MAGIC NUMBER (everything)
  * ───────────────────────────────────────────────────────────────

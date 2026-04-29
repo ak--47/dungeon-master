@@ -59,6 +59,8 @@ const communityIds = v.range(1, 30).map(() => `COMM_${v.uid(4)}`);
  * raw-prop breakdowns (day, content_hub, subscription_tier) or behavioral cohorts.
  *
  * Adds 9. CONTENT CREATION TIME-TO-CONVERT (Pro 1.3x faster, Free 1.25x slower)
+ *      [funnel-post: visible only in Mixpanel funnel median TTC; cross-event
+ *      MIN→MIN SQL queries do NOT show this]
  * and 10. ARTICLE-PUBLISHED MAGIC NUMBER (sweet 2-5 → +35% upvote_count;
  * over 6+ → drop 25% upvote events).
  * ===================================================================

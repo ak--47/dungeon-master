@@ -229,6 +229,11 @@ const chance = u.initChance(SEED);
  *   - Breakdown: "trading_tier"
  *   - Expected: Pro ~ 0.7x; Standard ~ 1.3x
  *
+ *   NOTE (funnel-post measurement): visible only via Mixpanel funnel
+ *   median TTC. Cross-event MIN→MIN SQL queries on raw events do NOT
+ *   show this — funnel-post adjusts gaps within funnel instances, not
+ *   across the user's full event history.
+ *
  * REAL-WORLD ANALOGUE: Pro traders execute faster end-to-end.
  *
  * ---------------------------------------------------------------

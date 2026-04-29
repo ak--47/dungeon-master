@@ -59,6 +59,8 @@ const repoIds = v.range(1, 150).map(() => `REPO_${v.uid(6)}`);
  *
  * Adds 10. BUILD-DEPLOY TIME-TO-CONVERT: enterprise/business 0.67x faster, free
  * 1.33x slower (funnel-post). Discover via Build-Deploy Pipeline median TTC by tier.
+ * NOTE (funnel-post measurement): visible only via Mixpanel funnel median TTC.
+ * Cross-event MIN→MIN SQL queries on raw events do NOT show this.
  * ===============================================================
  *
  * NOTE: All cohort effects are HIDDEN — discoverable only via behavioral

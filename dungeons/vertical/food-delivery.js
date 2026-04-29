@@ -53,6 +53,8 @@ const chance = u.initChance(SEED);
  *
  * Adds 9. ORDER LIFECYCLE TIME-TO-CONVERT: QuickBite+ 0.74x faster, Free 1.3x
  * slower (funnel-post). Discover via order funnel median TTC by subscription_tier.
+ * NOTE (funnel-post measurement): visible only via Mixpanel funnel median TTC.
+ * Cross-event MIN→MIN SQL queries on raw events do NOT show this.
  * ═══════════════════════════════════════════════════════════════════════════════
  *
  * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable only via
