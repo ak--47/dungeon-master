@@ -25,7 +25,7 @@ import { makeMirror } from './lib/generators/mirror.js';
 import { makeGroupProfile, makeProfile } from './lib/generators/profiles.js';
 
 // Utilities
-import { initChance } from './lib/utils/utils.js';
+import { initChance, setDatasetNow } from './lib/utils/utils.js';
 
 // External dependencies
 import dayjs from "dayjs";
@@ -138,9 +138,10 @@ async function runDungeon(config) {
 		const fixedNow = /** @type {number} */ (validatedConfig.datasetEnd);
 		const fixedBegin = /** @type {number} */ (validatedConfig.datasetStart);
 
-		// Keep globals for backwards compatibility with tests/dungeons that read them
-		global.FIXED_NOW = fixedNow;
-		global.FIXED_BEGIN = fixedBegin;
+		// Anchor the wall-clock-free reference used by date()/day() helpers in
+		// dungeon configs. Without this, those factories produce values relative
+		// to process-start, which leaks wall-clock time into the output.
+		setDatasetNow(fixedNow);
 
 		// Step 2: Create context with validated config (pass time constants explicitly)
 		const context = createContext(validatedConfig, null, { fixedNow, fixedBegin });
