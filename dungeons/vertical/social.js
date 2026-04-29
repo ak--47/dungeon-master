@@ -278,6 +278,7 @@ const config = {
 	seed: SEED,
 	datasetStart: "2026-01-01T00:00:00Z",
 	datasetEnd: "2026-04-28T23:59:59Z",
+	soup: { dayOfWeekWeights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.2, 1.2] },
 	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
@@ -650,9 +651,9 @@ const config = {
 				// Hook #1: VIRAL CONTENT CASCADE — clone 10-20 view/like/share per post.
 				// Discovery: bin users by post-created count, observe per-user view/like/share volume.
 				if (isViralCreator && event.event === "post created") {
-					const viralViews = chance.integer({ min: 10, max: 20 });
-					const viralLikes = chance.integer({ min: 10, max: 20 });
-					const viralShares = chance.integer({ min: 10, max: 20 });
+					const viralViews = chance.integer({ min: 60, max: 120 });
+					const viralLikes = chance.integer({ min: 60, max: 120 });
+					const viralShares = chance.integer({ min: 60, max: 120 });
 					const injected = [];
 
 					const viewTemplate = userEvents.find(e => e.event === "post viewed");
@@ -801,12 +802,11 @@ const config = {
 					}
 				});
 			} else if (postCreatedCount >= 8) {
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					const ev = userEvents[i];
-					if ((ev.event === 'post liked' || ev.event === 'comment posted') && chance.bool({ likelihood: 30 })) {
-						userEvents.splice(i, 1);
+				userEvents.forEach(e => {
+					if (e.event === 'comment posted' && typeof e.comment_length === 'number') {
+						e.comment_length = Math.round(e.comment_length * 0.7);
 					}
-				}
+				});
 			}
 		}
 

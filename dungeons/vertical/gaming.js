@@ -728,8 +728,9 @@ const config = {
 			const segment = meta?.profile?.subscription_tier;
 			if (Array.isArray(record) && record.length > 1) {
 				const factor = (
-					segment === "Elite" ? 0.71 :
-					segment === "Free" ? 1.25 :
+					segment === "Elite" ? 0.30 :
+					segment === "Premium" ? 0.70 :
+					segment === "Free" ? 1.40 :
 					1.0
 				);
 				if (factor !== 1.0) {
@@ -764,6 +765,38 @@ const config = {
 					e.treasure_value = 50000;
 				}
 			});
+
+			// Hook #12 (everything-hook companion): COMBAT T2C — also compress
+			// gap between earliest combat_initiated and earliest use_item across
+			// the user's full event history (the funnel-post hook only adjusts
+			// within-funnel-instance gaps; this catches cross-funnel measurement).
+			const tier = profile.subscription_tier;
+			const t2cFactor = (
+				tier === "Elite" ? 0.30 :
+				tier === "Premium" ? 0.70 :
+				tier === "Free" ? 1.40 :
+				1.0
+			);
+			if (t2cFactor !== 1.0) {
+				let firstCombatTime = null;
+				let firstUseItemIdx = -1;
+				for (let i = 0; i < userEvents.length; i++) {
+					const e = userEvents[i];
+					if (e.event === "combat initiated" && firstCombatTime === null) {
+						firstCombatTime = dayjs(e.time);
+					}
+					if (e.event === "use item" && firstUseItemIdx === -1) {
+						firstUseItemIdx = i;
+					}
+				}
+				if (firstCombatTime !== null && firstUseItemIdx !== -1) {
+					const useItemTime = dayjs(userEvents[firstUseItemIdx].time);
+					if (useItemTime.isAfter(firstCombatTime)) {
+						const newGap = Math.round(useItemTime.diff(firstCombatTime) * t2cFactor);
+						userEvents[firstUseItemIdx].time = firstCombatTime.add(newGap, "milliseconds").toISOString();
+					}
+				}
+			}
 
 			const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
 			const userLevel = profile.level || 1;
@@ -935,7 +968,7 @@ const config = {
 							event.loot_gained = true;
 						}
 					}
-					if (isElite && Math.random() * 100 < 15) {
+					if (isElite && Math.random() * 100 < 5) {
 						if (event.event === "quest turned in" || event.event === "exit dungeon") {
 							const treasureTemplate = userEvents.find(e => e.event === "find treasure");
 							if (treasureTemplate) {

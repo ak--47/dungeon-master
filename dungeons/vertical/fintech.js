@@ -541,14 +541,14 @@ const config = {
 		},
 		{
 			event: "card locked",
-			weight: 1,
+			weight: 2,
 			properties: {
 				"reason": ["lost", "stolen", "suspicious_activity", "travel"],
 			}
 		},
 		{
 			event: "dispute filed",
-			weight: 1,
+			weight: 2,
 			properties: {
 				"dispute_amount": u.weighNumRange(10, 2000, 0.5, 100),
 				"reason": ["unauthorized", "duplicate", "not_received", "damaged", "wrong_amount"],
@@ -771,7 +771,7 @@ const config = {
 			// (3-5 rapid high-value transactions + card locked + dispute +
 			// support contacted) at timeline midpoint. No flag — discover
 			// via cohort builder on users with card-locked + dispute-filed.
-			if (chance.bool({ likelihood: 3 }) && userEvents.length >= 2) {
+			if (chance.bool({ likelihood: 15 }) && userEvents.length >= 2) {
 				const midIdx = Math.floor(userEvents.length / 2);
 				const midEvent = userEvents[midIdx];
 				const midTime = dayjs(midEvent.time);
@@ -875,11 +875,11 @@ const config = {
 					}
 				});
 			} else if (txnCount >= 11) {
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					if (userEvents[i].event === "premium upgraded" && chance.bool({ likelihood: 20 })) {
-						userEvents.splice(i, 1);
+				userEvents.forEach(e => {
+					if (e.event === "premium upgraded" && typeof e.monthly_fee === "number") {
+						e.monthly_fee = Math.round(e.monthly_fee * 0.7 * 100) / 100;
 					}
-				}
+				});
 			}
 		}
 

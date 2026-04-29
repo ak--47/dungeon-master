@@ -755,12 +755,13 @@ const config = {
 
 			// HOOK 6: TRIAL CONVERSION — trial subs with <3 early orders
 			// drop 60% of post-day-14 events. No flag.
-			if (hasTrialSubscription && earlyOrderCount < 3) {
+			if (hasTrialSubscription && earlyOrderCount < 3 && chance.bool({ likelihood: 60 })) {
 				const trialCutoff = firstEventTime ? firstEventTime.add(14, 'days') : null;
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					const evt = userEvents[i];
-					if (trialCutoff && dayjs(evt.time).isAfter(trialCutoff) && chance.bool({ likelihood: 60 })) {
-						userEvents.splice(i, 1);
+				if (trialCutoff) {
+					for (let i = userEvents.length - 1; i >= 0; i--) {
+						if (dayjs(userEvents[i].time).isAfter(trialCutoff)) {
+							userEvents.splice(i, 1);
+						}
 					}
 				}
 			}
@@ -790,11 +791,11 @@ const config = {
 					}
 				});
 			} else if (orderPlacedCount >= 9) {
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					if (userEvents[i].event === "order placed" && chance.bool({ likelihood: 35 })) {
-						userEvents.splice(i, 1);
+				userEvents.forEach(e => {
+					if (e.event === "order placed" && typeof e.order_total === "number") {
+						e.order_total = Math.round(e.order_total * 0.65);
 					}
-				}
+				});
 			}
 		}
 

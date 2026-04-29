@@ -1,8 +1,8 @@
 // ── TWEAK THESE ──
 const SEED = "meetcute";
 const num_days = 120;
-const num_users = 8_000;
-const avg_events_per_user_per_day = 0.75;
+const num_users = 30_000;
+const avg_events_per_user_per_day = 1.5;
 let token = "your-mixpanel-token";
 
 // ── env overrides ──
@@ -57,22 +57,23 @@ const chance = u.initChance(SEED);
  * -------------------------------------------------------------------------------------
  * 1. PHOTO MAGIC NUMBER (everything)
  * -------------------------------------------------------------------------------------
- * PATTERN: Sweet 4-7 photos uploaded → 1-2 extra cloned match-received events
- * per existing match. Over 8+ photos → 30% of match-received events drop
- * (over-curated profile reads as fake). No flag.
+ * PATTERN: Sweet 2-5 photos uploaded → 2-4 extra cloned match-received events
+ * per existing match. Over 6+ photos → match_score drops 35% on match-received
+ * events (over-curated profile reads as fake; quality matches don't trust it).
+ * No flag.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *   Report 1: Matches per User by Photo-Count Bucket
- *   - Cohort A: users with 4-7 "photo uploaded"
- *   - Cohort B: users with 0-3
+ *   - Cohort A: users with 2-5 "photo uploaded"
+ *   - Cohort B: users with 0-1
  *   - Event: "match received" → Total per user
- *   - Expected: A ~ 1.5-2x B
+ *   - Expected: A ~ 2-3x B
  *
- *   Report 2: Matches per User on Heavy Photo Uploaders
- *   - Cohort C: users with >= 8 "photo uploaded"
- *   - Cohort A: users with 4-7
- *   - Event: "match received" → Total per user
- *   - Expected: C ~ 30% fewer matches per user vs A
+ *   Report 2: Avg match_score on Heavy Photo Uploaders
+ *   - Cohort C: users with >= 6 "photo uploaded"
+ *   - Cohort A: users with 2-5
+ *   - Event: "match received" → AVG of match_score
+ *   - Expected: C ~ 0.65x A (35% lower match quality)
  *
  * REAL-WORLD ANALOGUE: A few good photos signal authenticity; too many
  * curated shots read as catfish or staged.
@@ -248,7 +249,7 @@ const config = {
 		},
 		{
 			event: "photo uploaded",
-			weight: 3,
+			weight: 12,
 			properties: {
 				photo_number: u.weighNumRange(1, 6, 0.5, 2),
 				has_face: [true, true, true, true, false],
@@ -410,7 +411,7 @@ const config = {
 	// ── SuperProps ──────────────────────────────────────────
 	superProps: {
 		subscription: ["Free", "Free", "Free", "Premium", "Elite"],
-		platform: ["ios", "ios", "android"],
+		Platform: ["ios", "ios", "android"],
 	},
 
 	// ── UserProps ──────────────────────────────────────────
@@ -423,7 +424,7 @@ const config = {
 		total_matches: u.weighNumRange(0, 200, 0.3, 15),
 		total_messages_sent: u.weighNumRange(0, 500, 0.3, 30),
 		profile_completeness: ["incomplete", "incomplete", "basic", "basic", "complete"],
-		platform: ["ios", "ios", "android"],
+		Platform: ["ios", "ios", "android"],
 	},
 
 	// ── SCD Props ──────────────────────────────────────────
@@ -514,13 +515,13 @@ const config = {
 			}
 
 			// HOOK 1 + HOOK 9: PHOTO MAGIC NUMBER (no flags)
-			// Sweet 4-7 photos → clone 1-2 extra match events per existing.
-			// Over 8+ photos → drop 30% of match received events (over-curated
-			// profile reads as fake/staged).
-			if (photoUploadCount >= 4 && photoUploadCount <= 7 && matchEvents.length > 0) {
+			// Sweet 2-5 photos → clone 2-4 extra match events per existing.
+			// Over 6+ photos → drop match_score by 35% on match received events
+			// (over-curated profile reads as fake/staged).
+			if (photoUploadCount >= 2 && photoUploadCount <= 5 && matchEvents.length > 0) {
 				const matchTemplate = matchEvents[0];
 				matchEvents.forEach(m => {
-					const extras = chance.integer({ min: 1, max: 2 });
+					const extras = chance.integer({ min: 2, max: 4 });
 					for (let i = 0; i < extras; i++) {
 						events.push({
 							...matchTemplate,
@@ -530,12 +531,12 @@ const config = {
 						});
 					}
 				});
-			} else if (photoUploadCount >= 8) {
-				for (let i = events.length - 1; i >= 0; i--) {
-					if (events[i].event === "match received" && chance.bool({ likelihood: 30 })) {
-						events.splice(i, 1);
+			} else if (photoUploadCount >= 6) {
+				events.forEach(e => {
+					if (e.event === "match received" && typeof e.match_score === "number") {
+						e.match_score = Math.max(20, Math.round(e.match_score * 0.65));
 					}
-				}
+				});
 			}
 
 			// HOOK 2: WEEKEND SWIPE SURGE — Sunday 18-23 UTC swipes get cloned

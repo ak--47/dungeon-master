@@ -620,8 +620,8 @@ const config = {
 			{ name: "premium", price: 29.99 },
 		],
 		lifecycle: {
-			trialToPayRate: 0.30,
-			upgradeRate: 0.08,
+			trialToPayRate: 0.55,
+			upgradeRate: 0.20,
 			downgradeRate: 0.03,
 			churnRate: 0.05,
 			winBackRate: 0.10,
@@ -770,13 +770,8 @@ const config = {
 			// Free-tier users lose ~30% of "consultation completed" events
 			// (last step of Booking to Consultation funnel), simulating
 			// lower conversion for non-paying patients.
-			if (profile && profile.subscription_tier === "free") {
-				record = record.filter(e => {
-					if (e.event === "consultation completed" && chance.bool({ likelihood: 30 })) {
-						return false;
-					}
-					return true;
-				});
+			if (profile && profile.subscription_tier === "free" && chance.bool({ likelihood: 30 })) {
+				record = record.filter(e => e.event !== "consultation completed");
 			}
 
 			// ── HOOK 3: EXPERIENCED DOCTOR SATISFACTION ──────
@@ -866,11 +861,11 @@ const config = {
 					}
 				});
 			} else if (consultCt >= 7) {
-				for (let i = record.length - 1; i >= 0; i--) {
-					if (record[i].event === "follow up scheduled" && chance.bool({ likelihood: 30 })) {
-						record.splice(i, 1);
+				record.forEach(e => {
+					if (e.event === "follow up scheduled" && typeof e.days_until_followup === "number") {
+						e.days_until_followup = Math.round(e.days_until_followup * 1.5);
 					}
-				}
+				});
 			}
 
 			return record;

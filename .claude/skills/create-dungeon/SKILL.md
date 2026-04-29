@@ -788,6 +788,46 @@ JSDocs that reference flags the hook does NOT stamp confuse:
 
 A "5x death rate during cursed week" hook spans 7 days; the comparison "other period" spans the rest of the dataset (~93 days). Per-user counts look similar (7.0 vs 6.99). Per-day rates show the real signal (1.0 vs 0.075 = 13x). Document the EXPECTED metric in per-day terms or include the normalization in the recommended Mixpanel report.
 
+#### 8. Funnel-post hooks DON'T influence cross-event MIN-to-MIN T2C
+
+Funnel-post fires per-funnel-instance. It adjusts time gaps WITHIN a single funnel sequence. But typical T2C verification queries measure `MIN(time) FILTER (WHERE event=A)` and `MIN(time) FILTER (WHERE event=B)` across the user's WHOLE event history (not just funnel events). If the user has earlier `B` events from base distribution outside any funnel, the funnel-post factor doesn't affect them — the MIN-to-MIN measurement stays unchanged.
+
+**If your T2C hook needs to be discoverable via the standard MIN-to-MIN query, add an EVERYTHING-HOOK COMPANION** that adjusts the user's earliest-event-pair gap directly:
+
+```js
+if (t2cFactor !== 1.0) {
+  let firstAtime = null;
+  let firstBidx = -1;
+  for (let i = 0; i < record.length; i++) {
+    if (record[i].event === "step_a" && firstAtime === null) firstAtime = dayjs(record[i].time);
+    if (record[i].event === "step_b" && firstBidx === -1) firstBidx = i;
+  }
+  if (firstAtime !== null && firstBidx !== -1) {
+    const bTime = dayjs(record[firstBidx].time);
+    if (bTime.isAfter(firstAtime)) {
+      const newGap = Math.round(bTime.diff(firstAtime) * t2cFactor);
+      record[firstBidx].time = firstAtime.add(newGap, "milliseconds").toISOString();
+    }
+  }
+}
+```
+
+Funnel-post and everything-hook companion are complementary: funnel-post handles per-funnel within-instance gaps; everything-hook handles user-wide earliest-pair measurement.
+
+#### 9. Subscription lifecycle rates feed into chance.bool likelihood (clamp <=1.0)
+
+Internally, `lc.trialToPayRate * personaUpgradeMod * 100` is passed to `chance.bool({likelihood: ...})`. With `personaUpgradeMod` of ~1.5 for some personas, a `trialToPayRate` of 0.85 produces likelihood 127.5 → throws "Likelihood accepts values from 0 to 100". Keep all lifecycle rates ≤ 0.65 to leave room for persona modifiers. To enlarge cohorts beyond what 0.65 provides, scale `numUsers` instead.
+
+#### 10. Magic-number range tuning depends on actual event distribution
+
+If `event X` has weight 1-2 and the dungeon scale is small, MOST users get 0-1 events of X. Setting `sweet=4-7` then `over=8+` produces sweet bucket of <100 users — too small for clean signal. Before fixing the SCALE, verify the actual per-user X distribution:
+
+```sql
+SELECT pn, COUNT(*) FROM (SELECT user_id, COUNT(*) FILTER (WHERE event='X') AS pn FROM events GROUP BY user_id) GROUP BY pn ORDER BY pn LIMIT 20;
+```
+
+If 90% of users have 0-1 events, redesign the magic-number ranges to match (e.g., `sweet=2-5`, `over=6+`) AND update the JSDoc cohort-derivation paths. Don't bump the X event's weight to 10+ just to chase the original ranges; that distorts the dungeon's overall event mix.
+
 ### Hook Reference Examples
 
 These are proven, production-tested implementations. Use them as templates. Notice: none of these examples add new properties. They modify existing values and inject events by cloning from existing ones.

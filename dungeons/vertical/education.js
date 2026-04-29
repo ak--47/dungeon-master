@@ -727,11 +727,11 @@ const config = {
 					}
 				}
 			} else if (notesTakenCount >= 9) {
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					if (userEvents[i].event === "certificate earned" && chance.bool({ likelihood: 35 })) {
-						userEvents.splice(i, 1);
+				userEvents.forEach(e => {
+					if (e.event === "certificate earned" && typeof e.final_grade === "number") {
+						e.final_grade = Math.max(50, Math.round(e.final_grade * 0.5));
 					}
-				}
+				});
 			}
 
 			// HOOK 8 (cont): Speed learners (3+ lectures at 2.0x) score +8 on quizzes.

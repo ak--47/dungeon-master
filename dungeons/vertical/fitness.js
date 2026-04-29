@@ -633,8 +633,8 @@ const config = {
 			{ name: "family", price: 149.99 },
 		],
 		lifecycle: {
-			trialToPayRate: 0.30,
-			upgradeRate: 0.08,
+			trialToPayRate: 0.65,
+			upgradeRate: 0.65,
 			downgradeRate: 0.03,
 			churnRate: 0.05,
 			winBackRate: 0.10,
@@ -803,11 +803,8 @@ const config = {
 			// subscription feature in user-loop.js), NOT `subscription_tier`.
 			if (meta && meta.profile) {
 				const plan = meta.profile.subscription_plan;
-				if (plan !== "annual" && plan !== "family") {
-					record = record.filter(e => {
-						if (e.event === "progress checked" && chance.bool({ likelihood: 30 })) return false;
-						return true;
-					});
+				if (plan !== "annual" && plan !== "family" && chance.bool({ likelihood: 30 })) {
+					record = record.filter(e => e.event !== "progress checked");
 					events = record;
 				}
 			}

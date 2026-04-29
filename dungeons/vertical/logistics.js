@@ -123,6 +123,15 @@ const supplierIds = v.range(1, 150).map(() => `SUP_${v.uid(6)}`);
  *   - Breakdown: user property "company_tier"
  *   - Expected: enterprise ratio ~0.9x vs small_business baseline
  *
+ *   Report 3: Stockout-to-Inventory-Check Ratio (NORMALIZED — recommended)
+ *   - Report type: Insights (formula)
+ *   - A = "stockout alert" total, B = "inventory checked" total
+ *   - Formula: A / B
+ *   - Breakdown: user property "company_tier"
+ *   - Expected: enterprise ratio ~ 0.9x SMB ratio (10% reduction visible)
+ *   - WHY THIS METRIC: per-user counts are dominated by persona event multipliers
+ *     (enterprise has 5x baseline activity); ratio normalizes that out.
+ *
  * REAL-WORLD ANALOGUE: Enterprise operations have dedicated
  * procurement teams and predictive analytics reducing stockouts.
  *

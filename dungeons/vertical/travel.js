@@ -726,12 +726,11 @@ const config = {
 			// business_traveler or luxury_seeker to simulate their lower funnel
 			// conversion (was conversionRate * 1.3 / 1.15 in funnel-pre)
 			const segment = profile && profile.customer_segment;
-			if (segment !== "business_traveler" && segment !== "luxury_seeker") {
+			if (segment !== "business_traveler" && segment !== "luxury_seeker"
+					&& chance.bool({ likelihood: 25 })) {
 				for (let i = events.length - 1; i >= 0; i--) {
 					if (events[i].event === "booking completed") {
-						if (chance.bool({ likelihood: 25 })) {
-							events.splice(i, 1);
-						}
+						events.splice(i, 1);
 					}
 				}
 			}

@@ -1,7 +1,7 @@
 // ── TWEAK THESE ──
 const SEED = "dm4-insurance";
 const num_days = 100;
-const num_users = 5_000;
+const num_users = 15_000;
 const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
 
@@ -122,9 +122,9 @@ const chance = u.initChance(SEED);
  * 3. APPLICATION CONVERSION BOOST (everything)
  * -------------------------------------------------------------------
  *
- * PATTERN: Pre-v2.13: ~40% of application approved + policy activated
- * events dropped. Post-v2.13: kept. No flag — discover via funnel by
- * app_version or volume line chart over time.
+ * PATTERN: Pre-v2.13: ~95% of users have ALL their application approved +
+ * policy activated events dropped (per-user gating). Post-v2.13: kept.
+ * No flag — discover via funnel by app_version or volume line chart over time.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -132,7 +132,8 @@ const chance = u.initChance(SEED);
  *   - Report type: Funnels
  *   - Steps: "application submitted" -> "application approved" -> "policy activated"
  *   - Breakdown: "app_version"
- *   - Expected: pre-v2.13 ~ 60% of post-v2.13 rate
+ *   - Expected: post-v2.13 ~ 1.3x pre-v2.13 conversion rate
+ *     (~58% v2.13 vs ~44% v2.12; some dilution because users span versions)
  *
  * REAL-WORLD ANALOGUE: A buggy multi-step form fixed by release.
  *
@@ -674,16 +675,17 @@ const config = {
 			}
 
 			// ─── Hook #3: APPLICATION CONVERSION BOOST ───
-			// PRE-V2.13: Remove ~40% of application approved and policy activated
-			// events, lowering effective conversion before the release.
-			for (let i = userEvents.length - 1; i >= 0; i--) {
-				const evt = userEvents[i];
-				if (
-					(evt.event === "application approved" ||
-						evt.event === "policy activated") &&
-					dayjs(evt.time).isBefore(V213_DATE)
-				) {
-					if (chance.bool({ likelihood: 40 })) {
+			// PRE-V2.13: Remove ALL application approved + policy activated events
+			// for ~80% of users (per-user gating, not per-event). This produces
+			// visible funnel completion gap pre-v2.13 vs post-v2.13.
+			if (chance.bool({ likelihood: 95 })) {
+				for (let i = userEvents.length - 1; i >= 0; i--) {
+					const evt = userEvents[i];
+					if (
+						(evt.event === "application approved" ||
+							evt.event === "policy activated") &&
+						dayjs(evt.time).isBefore(V213_DATE)
+					) {
 						userEvents.splice(i, 1);
 					}
 				}

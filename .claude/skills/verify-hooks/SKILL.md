@@ -700,6 +700,79 @@ FROM events e, bounds b;
 
 Pre-existing users have events for up to 30 days BEFORE the dataset start (`preExistingSpread: 'uniform'` default in macro). MIN(time) reflects those pre-existing events, not the dataset window. Always anchor to MAX(time) - num_days for "day in dataset" calculations.
 
+### Funnel-Post T2C — Cross-Event MIN-to-MIN Limitation (REV 8)
+
+A common verification query for time-to-convert hooks:
+
+```sql
+WITH f AS (
+  SELECT user_id,
+    MIN(time::TIMESTAMP) FILTER (WHERE event = 'A') AS a,
+    MIN(time::TIMESTAMP) FILTER (WHERE event = 'B') AS b
+  FROM events GROUP BY user_id
+)
+SELECT u.tier, MEDIAN(EXTRACT(EPOCH FROM (b - a)) / 60) median_min FROM f JOIN users u ON ...
+```
+
+This measures **earliest A → earliest B across the user's entire event history**. A funnel-post hook that scales gaps within a single funnel sequence does NOT influence this measurement if the user has earlier `B` events from base distribution outside the funnel. Result: the T2C hook fires correctly inside the funnel but the verification ratio looks flat (or even reversed if other hooks interact).
+
+**How to diagnose:** if the dungeon has a funnel-post T2C hook for tier `X` claiming `0.7x baseline` but your MIN-to-MIN query shows `~1.0x`, check whether the base event distribution naturally produces `B` events earlier than the funnel sequence. If yes, the hook needs an everything-hook companion that adjusts the user's earliest A→B pair directly (see create-dungeon SKILL.md "Common bugs to avoid #8").
+
+**Fast verification workaround:** measure within-funnel T2C only:
+
+```sql
+-- Within-funnel measurement (use when MIN-to-MIN flat but hook code looks correct)
+WITH funnel_pairs AS (
+  SELECT e1.user_id,
+    e1.time::TIMESTAMP AS a_t,
+    (SELECT MIN(e2.time::TIMESTAMP) FROM events e2
+     WHERE e2.user_id = e1.user_id AND e2.event = 'B'
+     AND e2.time::TIMESTAMP > e1.time::TIMESTAMP
+     AND e2.time::TIMESTAMP < e1.time::TIMESTAMP + INTERVAL 7 day) AS b_t
+  FROM events e1 WHERE e1.event = 'A'
+)
+SELECT u.tier, MEDIAN(EXTRACT(EPOCH FROM (b_t - a_t)) / 60) median_min
+FROM funnel_pairs JOIN users u ON ... WHERE b_t IS NOT NULL GROUP BY u.tier;
+```
+
+This restricts the B match to within 7 days of EACH A occurrence — closer to the funnel-post hook's actual operating scope.
+
+### Magic-Number Cohort Sizing — Inspect Distribution First (REV 8)
+
+Before checking inverted-U signal magnitude, confirm the cohort sizes are statistically meaningful (≥200 in sweet bucket). If cohort is too small, signal magnitude is irrelevant:
+
+```sql
+-- Inspect the per-user X-event distribution BEFORE bucketing
+SELECT pn, COUNT(*) FROM (
+  SELECT user_id, COUNT(*) FILTER (WHERE event = '<X_EVENT>') AS pn
+  FROM events GROUP BY user_id
+) GROUP BY pn ORDER BY pn LIMIT 20;
+```
+
+If 90%+ of users have 0-1 events of X, the dungeon's `sweet=4-7 / over=8+` ranges produce <50 users in sweet → no signal possible. Two fixes (per REV 6):
+1. Bump `numUsers` 5x (cohort grows linearly with users; preserves story)
+2. Recommend the dungeon author redefine ranges to match actual distribution (e.g. `sweet=2-5 / over=6+`)
+
+Choice between the two depends on whether the JSDoc's stated ranges are load-bearing for the dungeon's narrative ("you need 8+ photos to seem fake" — preserve range, scale up users) or arbitrary ("sweet 4-7" can shift to "sweet 2-5" without losing the story).
+
+### Re-run Required After Hook Edits (REV 8)
+
+If you edit a hook then query the existing data files, you'll get STALE results. The verifier must re-run the dungeon AND wait for full completion before re-querying. Many "verification didn't catch the fix" sessions trace back to forgetting this step:
+
+```bash
+rm -f ./data/verify-<NAME>-*
+node scripts/verify-runner.mjs dungeons/vertical/<NAME>.js verify-<NAME>
+# Wait for the {"mode":"full","eventCount":...} JSON to print before querying
+```
+
+For batched output (multi-million events), the runner writes `verify-<NAME>-EVENTS-part-*.json` instead of a single `verify-<NAME>-EVENTS.json`. Use glob in queries:
+
+```sql
+read_json_auto('./data/verify-<NAME>-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
+```
+
+Without the glob, queries against `verify-<NAME>-EVENTS.json` fail with "No files found".
+
 ## Step 3b: Stash Query Results to Disk
 
 If `./research/` exists locally, write a plain-text log of every DuckDB query execution to `./research/hook-query-log.txt`. If `./research/` does not exist, skip this step entirely — do not create the directory.
