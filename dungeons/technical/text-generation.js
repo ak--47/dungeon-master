@@ -240,7 +240,7 @@ const socialTweetGen = createTextGenerator({
 	typoRate: 0.03,
 	sentimentDrift: 0.3,
 	min: 10,
-	max: 280, // Twitter character limit
+	max: 254, // capped at Mixpanel string property limit
 	includeMetadata: false
 });
 
