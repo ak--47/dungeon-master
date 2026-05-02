@@ -28,12 +28,17 @@ lib/
 ├── generators/     # Event, funnel, profile, SCD, adspend, mirror, text, product generators
 ├── orchestrators/  # user-loop (main generation), mixpanel-sender (import)
 ├── utils/          # utils, logger (Pino), mixpanel tracking, chart, project
+├── hook-helpers/   # Phase 3 atoms (cohort/mutate/timing/inject/identity)
+├── hook-patterns/  # Phase 4 high-level recipes (one per Mixpanel analysis)
+├── verify/         # Mixpanel breakdown emulator + verifyDungeon CI helper
 └── templates/      # Default data, phrase banks, AI instruction templates, hook examples
 scripts/            # dungeon management (run, convert to/from JSON, verify hooks)
 dungeons/
 ├── vertical/       # Customer-facing story dungeons (healthcare, fintech, gaming, etc.)
-└── technical/      # Feature/limit testing dungeons (SCDs, mirrors, groups, scale, etc.)
-tests/              # Vitest test suite
+└── technical/      # Feature/limit testing dungeons (SCDs, mirrors, groups, scale,
+                    # plus pattern-* fixtures and identity-model-verify.js)
+tests/              # Vitest test suite (incl. tests/hook-helpers, hook-patterns,
+                    # identity-model.test.js, my-buddy-stories.test.js)
 ```
 
 ### Key Patterns
@@ -94,7 +99,11 @@ Uses **Vitest** (ESM-native). Test files:
 - `tests/unit.test.js` — Individual function tests (text generator, utils, weights)
 - `tests/int.test.js` — Integration tests (context, storage, orchestrators)
 - `tests/e2e.test.js` — End-to-end generation + Mixpanel import
-- `tests/advanced-features.test.js` — Advanced features (personas, world events, decay, data quality, subscription, attribution, geo, features, anomalies)
+- `tests/advanced-features.test.js` — Surviving advanced features (personas, world events, engagement decay, data quality). Killed-feature tests for subscription/attribution/geo/features/anomalies are `describe.skip`'d after the 1.4 audit.
+- `tests/identity-model.test.js` — Phase 2 identity model (stitch event, attempts, multi-device pool, pre-existing/born-in invariants).
+- `tests/hook-helpers/*.test.js` — Phase 3 atom unit tests (32 tests across 5 files).
+- `tests/hook-patterns/*.test.js` — Phase 4 pattern integration tests + emulator self-tests (9 tests).
+- `tests/my-buddy-stories.test.js` — Phase 6 acceptance gate: runs the migrated my-buddy dungeon at small scale and asserts each of its 3 documented stories via `emulateBreakdown`.
 - `tests/sanity.test.js` — Module integration (all dungeon types, formats, batch mode)
 - `tests/performance.test.js` — Context caching, device pools, time shift
 - `tests/hooks.test.js` — Hook system: all hook types, double-fire prevention, patterns (temporal, two-pass, closure state)
@@ -153,11 +162,15 @@ interface Dungeon {
   // Features
   hasAdSpend, hasCampaigns, hasLocation, hasAvatar, hasBrowser
   hasAndroidDevices, hasIOSDevices, hasDesktopDevices
-  hasAnonIds, hasSessionIds, isAnonymous
+  hasAnonIds                    // @deprecated 1.4 — alias for avgDevicePerUser:1
+  avgDevicePerUser: number      // 0=no device stamping, 1=single sticky, >1=normal-dist pool, sticky per session
+  hasSessionIds, isAnonymous
 
   // Data model
-  events: EventConfig[]         // event name, weight, properties, isFirstEvent, isStrictEvent
-  funnels: Funnel[]             // sequence, conversionRate, order, experiment, bindPropsIndex
+  events: EventConfig[]         // event, weight, properties, isFirstEvent, isStrictEvent,
+                                //   isAuthEvent (1.4), isAttributionEvent (1.4)
+  funnels: Funnel[]             // sequence, conversionRate, order, experiment, bindPropsIndex,
+                                //   attempts (1.4: { min, max, conversionRate? })
   userProps, superProps, groupKeys, groupProps, scdProps, mirrorProps, lookupTables
 
   // Event volume — pick ONE
@@ -180,6 +193,28 @@ interface Dungeon {
   hook: Hook                    // Transform function (string or function)
 }
 ```
+
+## Identity Model (post-1.4)
+
+Three top-level knobs govern user / device / auth identity. All are additive —
+omitting them leaves the engine in pre-1.4 default behavior.
+
+| Knob | Default | Behavior |
+|------|---------|----------|
+| `avgDevicePerUser` | 0 | 0 = no `device_id` stamping; 1 = single sticky device; >1 = per-user pool sized by normal distribution (mean=value, sd≈value/2, ≥1 integer), with sticky-per-session device assignment after `assignSessionIds` runs |
+| `hasAnonIds` | false | @deprecated alias. `true` is interpreted as `avgDevicePerUser: 1` |
+| `EventConfig.isAuthEvent` | false | Marks the identity stitch step. Inside an `isFirstFunnel` for born-in-dataset users, the engine stamps user_id+device_id ON this event. Pre-auth funnel steps get `device_id` only; post-auth get `user_id` only. |
+| `Funnel.attempts` | none | `{ min, max, conversionRate? }` — failed-prior-attempt count. Total passes = failedPriors + 1. Final attempt uses `attempts.conversionRate ?? funnel.conversionRate`. Failed attempts truncate before the first `isAuthEvent` step. |
+| `EventConfig.isAttributionEvent` | false | When `hasCampaigns: true`, only flagged events get UTMs (~25%). Without flags, ~25% of all events get UTMs (legacy fallback). |
+
+The legacy 42% per-event `user_id` dice is REMOVED. Every event now gets
+`user_id` by default (unless the per-step stamping mode is `device_only` for a
+pre-auth funnel step, or the user is born-in-dataset and never reached the
+`isAuthEvent`).
+
+Hook meta (`funnel-pre`, `funnel-post`, `everything`) carries the full
+attempts + identity context. See `types.d.ts` for the JSDoc on
+`HookMetaFunnelPre` / `HookMetaFunnelPost` / `HookMetaEverything`.
 
 ## Hook System
 
@@ -362,19 +397,73 @@ soup: { dayOfWeekWeights: null, hourOfDayWeights: null }
 
 **Dev**: `vitest`, `nodemon`, `typescript`
 
-## Claude Code Skills
+## Claude Code Skills (post-1.4 pipeline)
 
-Three skills are available via slash commands:
+Four slash commands, with a clear schema → hooks → verify pipeline:
 
-- `/create-dungeon <description>` — Design and create a new dungeon with 8 architected analytics hooks, companion JSON schema, and Mixpanel report instructions
-- `/verify-hooks <dungeon-path>` — Run a dungeon at constrained params (1K users, 100K events) and use DuckDB to verify hook patterns appear in the output
-- `/analyze-soup <dungeon-path>` — Run a dungeon and analyze its time distribution at week/day/hour granularities
+- `/create-dungeon <description>` — SCHEMA ONLY. Designs events, funnels,
+  superProps, userProps, and identity-model knobs (`isAuthEvent`, `attempts`,
+  `avgDevicePerUser`). Does NOT write the `hook` function. Output goes to
+  `dungeons/user/<name>.js`.
+- `/write-hooks <dungeon-path> <story>` — Writes the `hook` function on an
+  existing dungeon, using the Phase 3 atom helpers and Phase 4 patterns. Adds
+  a documentation block above the hook with Mixpanel report instructions per
+  pattern. Iterates with `verify-hooks` until patterns PASS.
+- `/verify-hooks <dungeon-path>` — Verifies engineered patterns. Prefers the
+  Phase 4 emulator (`emulateBreakdown`) when the pattern matches one of the 5
+  supported analyses; falls back to DuckDB for bespoke shapes. Always asserts
+  the Phase 2 identity-model invariants (stitch count, pre-existing user
+  stamping).
+- `/analyze-soup <dungeon-path>` — Run a dungeon and analyze its time
+  distribution at week/day/hour granularities.
 
-The verify runner script lives at `scripts/verify-runner.mjs` — skills use it, do not create a new one.
+The verify runner script lives at `scripts/verify-runner.mjs` — skills use it,
+do not create a new one.
 
-## Advanced Features
+## Public API Surface (post-1.4)
 
-All advanced features are **optional and additive**. If a config key is absent, behavior is identical to the original. Hooks always override these features — hooks are the final authority.
+```js
+import DUNGEON_MASTER from '@ak--47/dungeon-master';
+
+// Utility primitives — used by every dungeon config
+import {
+  weighNumRange, pickAWinner, initChance,
+  TimeSoup, weighArray, generateUser
+} from '@ak--47/dungeon-master/utils';
+
+// Hook helper atoms (Phase 3)
+import {
+  binUsersByEventCount, binUsersByEventInRange, countEventsBetween, userInProfileSegment,
+  cloneEvent, dropEventsWhere, scaleEventCount, scalePropertyValue, shiftEventTime,
+  scaleTimingBetween, scaleFunnelTTC, findFirstSequence,
+  injectAfterEvent, injectBetween, injectBurst,
+  isPreAuthEvent, splitByAuth
+} from '@ak--47/dungeon-master/hook-helpers';
+
+// Hook patterns (Phase 4)
+import {
+  applyFrequencyByFrequency,
+  applyFunnelFrequencyBreakdown,
+  applyAggregateByBin,
+  applyTTCBySegment,
+  applyAttributedBySource
+} from '@ak--47/dungeon-master/hook-patterns';
+
+// Verifier + Mixpanel breakdown emulator (Phase 4)
+import { verifyDungeon, emulateBreakdown } from '@ak--47/dungeon-master/verify';
+
+// Text generation
+import { createTextGenerator, generateBatch } from '@ak--47/dungeon-master/text';
+
+// Types
+import type { Dungeon, EventConfig, Funnel, AttemptsConfig } from '@ak--47/dungeon-master';
+```
+
+## Advanced Features (post-1.4)
+
+Surviving advanced features are **optional and additive**. If a config key is
+absent, behavior is identical to the baseline. Hooks always override — hooks
+are the final authority.
 
 ### Feature Summary
 
@@ -384,11 +473,15 @@ All advanced features are **optional and additive**. If a config key is absent, 
 | **World Events** | `worldEvents` | Shared temporal events (outages, campaigns, launches) affecting all users |
 | **Engagement Decay** | `engagementDecay` | Gradual user engagement decline (exponential/linear/step) replacing binary churn |
 | **Data Quality** | `dataQuality` | Controlled imperfections: nulls, duplicates, bots, late-arriving events, timezone confusion |
-| **Subscription** | `subscription` | Revenue lifecycle: trial → paid → upgrade → downgrade → cancel → win-back |
-| **Attribution** | `attribution` | Connected campaign attribution linking ad spend to user acquisition |
-| **Geo** | `geo` | Sticky locations, timezone-aware activity, regional properties |
-| **Features** | `features` | Progressive feature adoption with S-curve rollout mid-dataset |
-| **Anomalies** | `anomalies` | Extreme values, error bursts, coordinated signup spikes |
+
+### Removed in 1.4 (silently ignored, one warning per dungeon)
+
+`subscription`, `attribution`, `geo`, `features`, `anomalies` were removed
+from the engine in 1.4. The validator strips these config keys with a single
+deprecation warning per dungeon and continues. Recreate any of these patterns
+via hooks (see `lib/hook-patterns/*` and the `write-hooks` skill).
+`hasCampaigns: true` still produces UTM stamping; opt into per-event control
+with `EventConfig.isAttributionEvent: true`.
 
 ### Key Integration Points
 
@@ -396,25 +489,22 @@ All advanced features are **optional and additive**. If a config key is absent, 
 - **World Events** inject properties and modulate volume via accept/reject sampling in `events.js`
 - **Engagement Decay** filters events in `user-loop.js` between `_drop` filter and `everything` hook
 - **Data Quality** applies nulls/timezone in `events.js`, duplicates/late-arriving in `user-loop.js`, bots after user loop
-- **Subscription** events injected between `_drop` filter and `everything` hook in `user-loop.js`
-- **Attribution** assigns campaigns at user creation in `user-loop.js`
-- **Geo** assigns sticky location at user creation, region properties merged into profile
-- **Features** apply per-event in `events.js` using logistic adoption function
-- **Anomalies** extreme values per-event in `events.js`, bursts/coordinated after user loop in `user-loop.js`
 
-### Execution Order (per user)
+### Execution Order (per user, post-1.4)
 
-1. Assign persona → assign region/location → assign campaign attribution
-2. Create profile → merge persona properties → merge region properties → merge attribution
+1. Assign persona → assign location (when `hasLocation`)
+2. Create profile → merge persona properties
 3. **User hook fires** (can override everything above)
-4. Generate events → apply world event props → apply feature adoption → apply anomaly extreme values → apply data quality nulls
-5. **Event hook fires** (can override everything above)
-6. Filter `_drop` events → inject subscription events → apply engagement decay → apply duplicate/late-arriving
-7. **Everything hook fires** (final authority)
-
-### Showcase Dungeon
-
-`research/feature-showcase.js` exercises all 9 features in a realistic e-commerce scenario.
+4. For each first funnel run (with attempts loop, identity stamping per step):
+   funnel-pre → funnel events (with isAuthEvent stitch) → funnel-post
+5. Standalone events (stamping mode based on userAuthed)
+6. Generate events → apply world event props → apply data quality nulls
+7. **Event hook fires** (can override everything above)
+8. Filter `_drop` events → apply engagement decay → apply duplicate/late-arriving
+9. Bunch into sessions → assign session_ids → per-session sticky device pick
+10. **Everything hook fires** (final authority) — meta now exposes
+    `authTime` + `isPreAuth(event)` predicate
+11. Storage push (hooks for ad-spend / group / mirror / lookup fire here)
 
 ## Important Notes
 
