@@ -11,7 +11,8 @@
 			"types": "./types.d.ts"
 		},
 		"./utils": "./lib/utils/utils.js",
-		"./text": "./lib/generators/text.js"
+		"./text": "./lib/generators/text.js",
+		"./hook-helpers": "./lib/hook-helpers/index.js"
 	},
 	"files": [
 		"index.js",
