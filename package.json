@@ -12,7 +12,9 @@
 		},
 		"./utils": "./lib/utils/utils.js",
 		"./text": "./lib/generators/text.js",
-		"./hook-helpers": "./lib/hook-helpers/index.js"
+		"./hook-helpers": "./lib/hook-helpers/index.js",
+		"./hook-patterns": "./lib/hook-patterns/index.js",
+		"./verify": "./lib/verify/index.js"
 	},
 	"files": [
 		"index.js",
