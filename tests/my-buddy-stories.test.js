@@ -44,6 +44,10 @@ describe('Phase 6 — my-buddy stories via emulator', { timeout: 120_000 }, () =
 		// the report end-to-end.
 		const variantNames = variantBreakdown.map(r => r.attribution_value);
 		expect(variantBreakdown.length).toBeGreaterThanOrEqual(3);
+		const variantB = variantBreakdown.find(r => /Variant B/.test(r.attribution_value));
+		const control = variantBreakdown.find(r => /Control/.test(r.attribution_value));
+		// At 1000 users, Variant B should have the highest conversion count
+		expect(variantB.conversions).toBeGreaterThanOrEqual(control.conversions);
 		expect(variantNames.some(n => /Variant B/.test(n))).toBe(true);
 		expect(variantNames.some(n => /Variant A/.test(n))).toBe(true);
 		expect(variantNames.some(n => /Control/.test(n))).toBe(true);
@@ -71,7 +75,8 @@ describe('Phase 6 — my-buddy stories via emulator', { timeout: 120_000 }, () =
 		expect(at3).toBeGreaterThan(at1);
 		expect(at3).toBeGreaterThan(at2);
 		// Right side of the U: 6+ should be lower than the peak.
-		if (byBreakdown.has(6)) expect(at3).toBeGreaterThan(at6);
+		expect(byBreakdown.has(6)).toBe(true);
+		expect(at3).toBeGreaterThan(at6);
 
 		// ── Story 3: Feedback contextual paths ──
 		// New "Post Search" / "Post Action" / "Post Share" sources only appear after

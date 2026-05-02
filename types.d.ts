@@ -405,6 +405,8 @@ export interface HookMetaFunnelPre extends HookMetaTimeAnchors {
     totalAttempts: number;
     /** True if this is the final attempt (attemptNumber === totalAttempts). */
     isFinalAttempt: boolean;
+    /** The user's assigned persona (if `personas` is configured), or null. */
+    persona: Persona | null;
 }
 
 /** Meta passed to the "funnel-post" hook (mutate generated funnel events in place). */
@@ -426,6 +428,8 @@ export interface HookMetaFunnelPost extends HookMetaTimeAnchors {
     totalAttempts: number;
     /** True if this is the final attempt. */
     isFinalAttempt: boolean;
+    /** The user's assigned persona (if `personas` is configured), or null. */
+    persona: Persona | null;
 }
 
 /** Meta passed to the "everything" hook — most powerful hook (sees all events for one user). */
@@ -452,6 +456,8 @@ export interface HookMetaEverything extends HookMetaTimeAnchors {
      * authed, returns true for every event.
      */
     isPreAuth: (event: EventSchema) => boolean;
+    /** The user's assigned persona (if `personas` is configured), or null. */
+    persona: Persona | null;
 }
 
 export interface hookArrayOptions<T> {
@@ -1370,4 +1376,39 @@ export interface TestContext {
     campaigns: Record<string, ValueValid>[];
     runtime: RuntimeState;
     [key: string]: unknown;
+}
+
+// ── Subpath module declarations ──
+
+declare module '@ak--47/dungeon-master/hook-helpers' {
+    export function binUsersByEventCount(events: EventSchema[], eventName: string, bins: Record<string, [number, number]>): string;
+    export function binUsersByEventInRange(events: EventSchema[], eventName: string, startTime: number | string, endTime: number | string, bins: Record<string, [number, number]>): string;
+    export function countEventsBetween(events: EventSchema[], eventA: string, eventB: string): number;
+    export function userInProfileSegment(profile: Record<string, unknown>, segmentKey: string, segmentValues: unknown[]): boolean;
+    export function cloneEvent(template: EventSchema, overrides?: Partial<EventSchema>): EventSchema;
+    export function dropEventsWhere(events: EventSchema[], predicate: (event: EventSchema) => boolean): number;
+    export function scaleEventCount(events: EventSchema[], eventName: string, factor: number): void;
+    export function scalePropertyValue(events: EventSchema[], predicate: (event: EventSchema) => boolean, propertyName: string, factor: number): void;
+    export function shiftEventTime(event: EventSchema, deltaMs: number): EventSchema;
+    export function scaleTimingBetween(events: EventSchema[], eventA: string, eventB: string, factor: number): void;
+    export function scaleFunnelTTC(funnelEvents: EventSchema[], factor: number): void;
+    export function findFirstSequence(events: EventSchema[], eventNames: string[], maxGapMin?: number): EventSchema[] | null;
+    export function injectAfterEvent(events: EventSchema[], sourceEvent: EventSchema, templateEvent: EventSchema, gapMs: number, overrides?: Partial<EventSchema>): void;
+    export function injectBetween(events: EventSchema[], eventA: EventSchema, eventB: EventSchema, templateEvent: EventSchema, overrides?: Partial<EventSchema>): void;
+    export function injectBurst(events: EventSchema[], templateEvent: EventSchema, count: number, anchorTime: number | string, spreadMs: number): void;
+    export function isPreAuthEvent(event: EventSchema, authTime: number | null): boolean;
+    export function splitByAuth(events: EventSchema[], authTime: number | null): { preAuth: EventSchema[]; postAuth: EventSchema[]; stitch: EventSchema | null };
+}
+
+declare module '@ak--47/dungeon-master/hook-patterns' {
+    export function applyFrequencyByFrequency(events: EventSchema[], profile: Record<string, unknown> | null, opts: { cohortEvent: string; bins: Record<string, [number, number]>; targetEvent: string; multipliers: Record<string, number> }): void;
+    export function applyFunnelFrequencyBreakdown(allUserEvents: EventSchema[], profile: Record<string, unknown> | null, funnelEvents: EventSchema[], opts: { cohortEvent: string; bins: Record<string, [number, number]>; dropMultipliers: Record<string, number> }): void;
+    export function applyAggregateByBin(events: EventSchema[], profile: Record<string, unknown> | null, opts: { cohortEvent: string; bins: Record<string, [number, number]>; event: string; propertyName: string; deltas: Record<string, number> }): void;
+    export function applyTTCBySegment(funnelEvents: EventSchema[], profile: Record<string, unknown>, opts: { segmentKey: string; factors: Record<string, number> }): void;
+    export function applyAttributedBySource(events: EventSchema[], profile: Record<string, unknown> | null, opts: { sourceEvent: string; sourceProperty: string; downstreamEvent: string; weights: Record<string, number>; model?: 'firstTouch' | 'lastTouch' }): void;
+}
+
+declare module '@ak--47/dungeon-master/verify' {
+    export function emulateBreakdown(events: EventSchema[], config: EmulateOptions): Array<Record<string, unknown>>;
+    export function verifyDungeon(config: Dungeon, checks: Array<{ name: string; breakdown: EmulateOptions; assert: (rows: Array<Record<string, unknown>>, ctx: { events: EventSchema[]; profiles: UserProfile[] }) => { pass: boolean; detail?: string } }>): Promise<{ pass: boolean; results: Array<{ name: string; pass: boolean; detail?: string; rows?: Array<Record<string, unknown>> }> }>;
 }

@@ -223,7 +223,6 @@ async function benchmarkMakeEventOptimization() {
             global.FIXED_BEGIN,
             chosenEvent,
             [],
-            [],
             {},
             [],
             false,

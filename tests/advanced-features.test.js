@@ -151,7 +151,7 @@ describe('Feature 2: World Events', () => {
 		const events = Array.from(result.eventData);
 		const withPromo = events.filter(e => e.promo_active === true);
 		// All events should have promo_active since it spans the entire dataset
-		expect(withPromo.length).toBeGreaterThan(events.length * 0.5);
+		expect(withPromo.length).toBeGreaterThan(events.length * 0.85);
 	}, 30000);
 });
 
@@ -293,7 +293,7 @@ describe('Feature 4: Data Quality', () => {
 		});
 		const events = Array.from(result.eventData);
 		// With 10% duplicate rate, total events should exceed original count
-		expect(events.length).toBeGreaterThan(900);
+		expect(events.length).toBeGreaterThan(1000);
 	}, 30000);
 });
 

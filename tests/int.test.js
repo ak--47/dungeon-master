@@ -192,11 +192,9 @@ describe.sequential('generators', () => {
 			},
 		};
 		const context = createTestContext();
-		const result = await makeEvent(context, "known_id", dayjs.unix(global.FIXED_NOW).subtract(30, 'd').unix(), eventConfig, ["anon_id"], ["session_id"]);
+		const result = await makeEvent(context, "known_id", dayjs.unix(global.FIXED_NOW).subtract(30, 'd').unix(), eventConfig, ["anon_id"]);
 		expect(result).toHaveProperty('event', 'test_event');
 		expect(result).toHaveProperty('device_id', 'anon_id');
-		// expect(result).toHaveProperty('user_id', 'known_id'); // Known ID not always on the event
-		// Session IDs are now assigned post-hoc in user-loop.js, not in makeEvent
 		expect(result).not.toHaveProperty('session_id');
 		// expect(result).toHaveProperty('source', 'dm4');
 		expect(result).toHaveProperty('insert_id');
@@ -228,7 +226,7 @@ describe.sequential('generators', () => {
 			},
 		};
 		const context = createTestContext();
-		const result = await makeEvent(context, "known_id", dayjs.unix(global.FIXED_NOW).subtract(30, 'd').unix(), eventConfig, ["anon_id"], ["session_id"]);
+		const result = await makeEvent(context, "known_id", dayjs.unix(global.FIXED_NOW).subtract(30, 'd').unix(), eventConfig, ["anon_id"]);
 		expect(result.prop1 === "value1" || result.prop1 === "value2").toBeTruthy();
 		expect(result.prop2 === "value3" || result.prop2 === "value4").toBeTruthy();
 	});
