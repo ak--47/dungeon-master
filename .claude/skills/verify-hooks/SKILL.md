@@ -98,9 +98,72 @@ node scripts/verify-runner.mjs dungeons/vertical/gaming.js verify-gaming --small
 
 Update your DuckDB queries to use the correct file prefix (e.g., `./data/verify-fintech-EVENTS.json` instead of `./data/verify-hooks-EVENTS.json`).
 
-## Step 3: Verify Each Hook with DuckDB
+## Step 3: Verify Each Hook
 
-For each cataloged hook, write and execute a DuckDB SQL query that tests whether the expected pattern exists in the data.
+**Prefer the emulator when the pattern matches one of the 5 supported analyses.**
+The Phase 4 emulator (`lib/verify/emulate-breakdown.js`) re-derives Mixpanel's
+own breakdown table shapes from the events array, so verifying against it gives
+verdicts that map directly to "what an analyst will see in the report":
+
+| Pattern style | Emulator type | Use when |
+|--------------|---------------|----------|
+| count(A) by per-user count(B) | `frequencyByFrequency` | "Insights frequency distribution by per-user count of X" |
+| Funnel completion by per-user count(X) | `funnelFrequency` | "Onboarding magic number" / "engaged users complete more" |
+| avg(prop X) by per-user count(B) | `aggregatePerUser` | "Average order value by sessions per user" |
+| Funnel TTC by user property | `timeToConvert` | "Trial users take 4× longer than enterprise" |
+| First/last touch attribution | `attributedBy` | "Conversions by Source" |
+
+Quick emulator script (run once, query results inline):
+
+```js
+import generate from './index.js';
+import { emulateBreakdown } from './lib/verify/index.js';
+
+const r = await generate('./dungeons/<path>.js');
+const events = Array.from(r.eventData);
+console.log(emulateBreakdown(events, {
+  type: 'frequencyByFrequency',
+  metricEvent: 'Purchase',
+  breakdownByFrequencyOf: 'Browse',
+}));
+```
+
+Or use `verifyDungeon` with a checks array for CI-style assertions; see
+`tests/my-buddy-stories.test.js` for a worked example.
+
+### Standard identity-model invariants (run for every dungeon)
+
+These should hold for any dungeon that uses the Phase 2 identity model
+(`isAuthEvent` + `attempts` + `avgDevicePerUser`). Run these BEFORE the
+per-pattern checks:
+
+```sql
+-- Stitch event count must match converted-born count, exactly one per user.
+WITH e AS (SELECT * FROM read_json_auto('./data/<file>-EVENTS.json')),
+     auth_event AS (SELECT 'Sign Up' AS name) -- name of your isAuthEvent
+SELECT
+  COUNT(*) AS auth_events_total,
+  SUM(CASE WHEN user_id IS NOT NULL AND device_id IS NOT NULL THEN 1 ELSE 0 END) AS stitches,
+  COUNT(DISTINCT CASE WHEN user_id IS NOT NULL THEN user_id END) AS converted_users
+FROM e WHERE event = (SELECT name FROM auth_event);
+
+-- Pre-existing users must have user_id on every event (no anon-only records).
+WITH e AS (SELECT * FROM read_json_auto('./data/<file>-EVENTS.json')),
+     u AS (SELECT * FROM read_json_auto('./data/<file>-USERS.json'))
+SELECT COUNT(*) AS preexisting_anon_only_records
+FROM e JOIN u ON u.distinct_id::VARCHAR = e.user_id::VARCHAR
+WHERE u.created < (SELECT MIN(time::TIMESTAMP) FROM e)
+  AND e.user_id IS NULL;
+```
+
+If any standard check fails, FLAG it in the report — it usually means the
+identity-model migration is incomplete.
+
+### Fall back to DuckDB for bespoke patterns
+
+When the pattern doesn't fit the 5 emulator analyses (custom time windows,
+property correlations, multi-hop sequences), drop down to raw DuckDB queries.
+The patterns below cover the common archetypes.
 
 **DuckDB command pattern:**
 ```bash
