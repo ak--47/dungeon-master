@@ -71,24 +71,32 @@ For each hook/pattern, catalog:
 
 The verify runner already exists at `scripts/verify-runner.mjs`. Use it — do NOT recreate.
 
-Two modes:
+**ALWAYS run at full fidelity. Never use `--small` for verification.**
 
-- **Default (full fidelity)** — runs the dungeon with its own `numUsers` / `avgEventsPerUserPerDay` / `numDays` settings as-shipped. This is the only mode whose verdicts you can trust for benchmark/production. Can take minutes for 50K-user dungeons.
-- **`--small`** — overrides to 1K users with `avgEventsPerUserPerDay` scaled so total events ≈ 100K. Use for fast smoke checks only. WEAK/FAIL verdicts from `--small` runs are unreliable due to small-cohort variance — re-verify at full fidelity before reporting.
+Full-fidelity runs use the dungeon's own `numUsers` / `avgEventsPerUserPerDay` /
+`numDays` as-shipped — that is the only configuration the dungeon's hooks were
+authored against, and the only signal magnitude you can write certain verdicts
+about. `--small` runs (1K users, 100K events) compress per-cohort populations
+and shift ratios within ±25%, hiding real bugs and flagging fake ones. They
+exist in the runner only as a developer-troubleshooting escape hatch.
 
 ```bash
-# Full fidelity (production-grade verification)
+# The only command verify-hooks should issue:
 node scripts/verify-runner.mjs <dungeon-path> <run-name>
-
-# Small smoke test
-node scripts/verify-runner.mjs <dungeon-path> <run-name> --small
 ```
 
-Examples:
+Example:
 ```bash
 node scripts/verify-runner.mjs dungeons/vertical/gaming.js verify-gaming
-node scripts/verify-runner.mjs dungeons/vertical/gaming.js verify-gaming --small
 ```
+
+Full-fidelity runs can take minutes (50K+ user dungeons). That cost is the
+price of certainty about the magnitudes you report. Plan accordingly — kick
+off the run, do other reading, return when the file lands.
+
+If a dungeon's full-fidelity run takes longer than your budget allows: report
+that as a finding ("dungeon too large to verify in current session") rather
+than falling back to `--small`.
 
 **Expected output files** (in `./data/`, using `<run-name>` as prefix):
 - `<run-name>-EVENTS.json` — all events (JSONL format, one JSON object per line)
@@ -587,14 +595,14 @@ ORDER BY users DESC;
 
 ### Statistical Caveats
 
-At full fidelity (the default — dungeon's own scale):
-- Cohorts of all sizes should produce clear signal because the absolute population is large
-- WEAK results at full fidelity indicate a real problem — investigate
+This skill always runs at full fidelity (the dungeon's own scale). At full
+fidelity, cohorts of all sizes should produce clear signal because the absolute
+population is large. WEAK or FAIL results at full fidelity indicate a real
+problem — investigate, do not retry at smaller scale.
 
-With `--small` (1K users / 100K events):
-- Most hooks with >= 10% affected population will show clear signal
-- Hooks affecting < 2% of users (e.g., "2% find legendary weapon") may show WEAK results due to small sample size — DO NOT report these as broken without re-running at full fidelity
-- Always re-verify any FAIL/WEAK at full fidelity before writing the report
+`--small` mode is a developer-troubleshooting escape hatch on the runner
+script; verdicts from `--small` runs are unreliable and not permitted in this
+skill's output.
 
 ### Verifying No-Flag Cohort Patterns (REV 2)
 
