@@ -91,6 +91,27 @@ Decisions made during the overnight execution that go beyond what
   ranking. Documented in the test comment that full-fidelity runs should
   re-assert the strict ordering.
 
+## Mixpanel `$user_id` / `$device_id` field naming — non-issue
+
+Earlier in the morning summary I flagged that the engine emits bare
+`user_id` / `device_id` instead of Mixpanel's reserved `$user_id` / `$device_id`.
+On verification this is a non-issue: `lib/orchestrators/mixpanel-sender.js`
+already sets both `fixData: true` and `v2_compat: true` on the shared
+`commonOpts` block (lines 48–62) and spreads them into every `mp(...)` call
+(events, users, ad-spend, groups, SCDs).
+
+Per `node_modules/mixpanel-import/index.d.ts`:
+- `fixData: true` (default true, explicit anyway) handles prefix normalization
+  for the reserved Mixpanel field names.
+- `v2_compat: true` "sets `distinct_id` from `$user_id`/`user_id` or
+  `$device_id`/`device_id` (prefixed forms win), falling back to `""` when
+  none are present. Existing `distinct_id` values are preserved."
+
+Net: simplified-ID Mixpanel projects get the `$`-prefixed merge fields they
+need, original-ID-merge projects get a populated `distinct_id` derived from
+the bare keys, and both project types ingest cleanly from the engine's
+default output. No engine-side rename required.
+
 ## Pre-existing flaky test (NOT my regression)
 
 `tests/hooks.test.js > everything hook — event duplication with time offset`
