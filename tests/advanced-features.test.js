@@ -297,8 +297,8 @@ describe('Feature 4: Data Quality', () => {
 	}, 30000);
 });
 
-// ── Feature 5: Subscription ──
-describe('Feature 5: Subscription', () => {
+// ── Feature 5: Subscription (REMOVED in 1.4) ──
+describe.skip('Feature 5: Subscription [removed in 1.4]', () => {
 	test('validates subscription config', () => {
 		initChance('sub-validate');
 		const config = validateDungeonConfig({
@@ -360,8 +360,8 @@ describe('Feature 5: Subscription', () => {
 	}, 30000);
 });
 
-// ── Feature 6: Attribution ──
-describe('Feature 6: Attribution', () => {
+// ── Feature 6: Attribution (REMOVED in 1.4 — replaced by EventConfig.isAttributionEvent) ──
+describe.skip('Feature 6: Attribution [removed in 1.4]', () => {
 	test('validates attribution config', () => {
 		initChance('attr-validate');
 		const config = validateDungeonConfig({
@@ -400,8 +400,8 @@ describe('Feature 6: Attribution', () => {
 	}, 30000);
 });
 
-// ── Feature 7: Geographic Intelligence ──
-describe('Feature 7: Geographic Intelligence', () => {
+// ── Feature 7: Geographic Intelligence (REMOVED in 1.4) ──
+describe.skip('Feature 7: Geographic Intelligence [removed in 1.4]', () => {
 	test('validates geo config', () => {
 		initChance('geo-validate');
 		const config = validateDungeonConfig({
@@ -444,8 +444,8 @@ describe('Feature 7: Geographic Intelligence', () => {
 	}, 30000);
 });
 
-// ── Feature 8: Progressive Feature Adoption ──
-describe('Feature 8: Progressive Feature Adoption', () => {
+// ── Feature 8: Progressive Feature Adoption (REMOVED in 1.4) ──
+describe.skip('Feature 8: Progressive Feature Adoption [removed in 1.4]', () => {
 	test('validates and resolves feature configs', () => {
 		initChance('feat-validate');
 		global.FIXED_BEGIN = FIXED_NOW - 90 * 86400;
@@ -501,8 +501,8 @@ describe('Feature 8: Progressive Feature Adoption', () => {
 	}, 30000);
 });
 
-// ── Feature 9: Anomalies ──
-describe('Feature 9: Anomalies', () => {
+// ── Feature 9: Anomalies (REMOVED in 1.4) ──
+describe.skip('Feature 9: Anomalies [removed in 1.4]', () => {
 	test('validates anomaly configs', () => {
 		initChance('anomaly-validate');
 		global.FIXED_BEGIN = FIXED_NOW - 90 * 86400;
@@ -566,7 +566,7 @@ describe('Feature 9: Anomalies', () => {
 
 // ── Audit Fix Tests ──
 describe('Audit Fixes', () => {
-	test('Fix 1: UTM properties appear on EVENTS not just profiles', async () => {
+	test.skip('[removed in 1.4] Fix 1: UTM properties appear on EVENTS not just profiles', async () => {
 		const result = await DUNGEON_MASTER({
 			numUsers: 100,
 			numEvents: 3000,
@@ -593,7 +593,7 @@ describe('Audit Fixes', () => {
 		expect(withMedium.length).toBeGreaterThan(0);
 	}, 30000);
 
-	test('Fix 1: multi-touch — users have multiple events with UTM', async () => {
+	test.skip('[removed in 1.4] Fix 1: multi-touch — users have multiple events with UTM', async () => {
 		const result = await DUNGEON_MASTER({
 			numUsers: 50,
 			numEvents: 5000,
@@ -641,7 +641,7 @@ describe('Audit Fixes', () => {
 		expect(uniqueIds.size).toBeGreaterThan(events.length * 0.95);
 	}, 30000);
 
-	test('Fix 3: subscription events survive engagement decay', async () => {
+	test.skip('[removed in 1.4] Fix 3: subscription events survive engagement decay', async () => {
 		const result = await DUNGEON_MASTER({
 			numUsers: 80,
 			numEvents: 3000,
@@ -736,7 +736,7 @@ describe('Audit Fixes', () => {
 		expect(outageEvents).toBeLessThan(normalEvents);
 	}, 30000);
 
-	test('coordinated anomaly generates sign-up burst', async () => {
+	test.skip('[removed in 1.4] coordinated anomaly generates sign-up burst', async () => {
 		const result = await DUNGEON_MASTER({
 			numUsers: 20,
 			numEvents: 500,
@@ -783,7 +783,7 @@ describe('Audit Fixes', () => {
 
 // ── Integration: Multiple features together ──
 describe('Advanced Features Integration', () => {
-	test('all features compose without errors', async () => {
+	test.skip('[removed in 1.4] all features compose without errors', async () => {
 		initChance('features-all');
 		global.FIXED_NOW = FIXED_NOW;
 		global.FIXED_BEGIN = FIXED_NOW - 90 * 86400;
