@@ -399,12 +399,17 @@ describe.sequential('options + tweaks', () => {
 	}, timeout);
 
 	test('creates anonymousIds', async () => {
+		// Phase 2 identity model: when `hasAnonIds: true` (alias for avgDevicePerUser:1)
+		// is set without `isAuthEvent`-flagged events, every event gets BOTH user_id and
+		// device_id (the legacy 42% user_id dice was removed). The pre-Phase-2 expectation
+		// that user_ids < device_ids no longer holds — opt into pre-auth/post-auth split
+		// by flagging `isAuthEvent: true` on the appropriate event.
 		const results = await generate({ writeToDisk: false, numEvents: 1000, numUsers: 100, hasAnonIds: true });
 		const { eventData } = results;
 		const anonymousEvents = eventData.map(a => a.device_id).filter(a => a);
 		const userIds = eventData.map(a => a.user_id).filter(a => a);
 		expect(anonymousEvents.length).toBe(eventData.length);
-		expect(userIds.length).toBeLessThan(anonymousEvents.length);
+		expect(userIds.length).toBe(eventData.length);
 	}, timeout);
 
 	test('no anonymousIds', async () => {
