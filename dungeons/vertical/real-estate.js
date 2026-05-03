@@ -1,7 +1,7 @@
 // ── TWEAK THESE ──
 const SEED = "homenest";
 const num_days = 150;
-const num_users = 6_000;
+const num_users = 10_000;
 const avg_events_per_user_per_day = 0.53;
 let token = "your-mixpanel-token";
 

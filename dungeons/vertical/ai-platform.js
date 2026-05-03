@@ -1,7 +1,7 @@
 // ── TWEAK THESE ──
 const SEED = "promptforge";
 const num_days = 120;
-const num_users = 8_000;
+const num_users = 10_000;
 const avg_events_per_user_per_day = 0.83;
 let token = "your-mixpanel-token";
 

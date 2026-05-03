@@ -1,7 +1,7 @@
 // ── TWEAK THESE ──
 const SEED = "harness-education";
 const num_days = 100;
-const num_users = 5_000;
+const num_users = 10_000;
 const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
 

@@ -65,6 +65,33 @@ double-fire mutations.
    `Math.random()`. Initialize `chance` at module scope with the dungeon seed:
    `const chance = u.initChance(SEED)`.
 
+7. **Temporal hooks go in `everything`.** Any hook that checks
+   `dayInDataset >= N` must live in the `everything` hook, not the `event`
+   hook. The `event` hook's `meta.datasetStart` produces unreliable day
+   calculations. The `everything` hook's `meta.datasetStart` is verified
+   correct (churn/silencing hooks work there consistently).
+
+8. **Event cloning requires `everything`.** The `event` hook's return value
+   REPLACES the original event. To DUPLICATE or INJECT events (spike
+   patterns, burst clones), use the `everything` hook and `push()` to the
+   array. Only use the `event` hook return for event REPLACEMENT patterns
+   (e.g., alert triggered → incident created).
+
+9. **Property baselines must contrast with hook targets.** If a hook sets
+   `event_type = "plan_upgraded"` during a time window, the baseline
+   distribution must make `plan_upgraded` rare (~10-15%). If it's already
+   20%+ at baseline, the hook produces no visible spike. Similarly, if a
+   hook forces `scale_direction = "down"`, the baseline must favor "up" so
+   the forced "down" creates measurable contrast.
+
+10. **TTC effects go in `everything`, not `funnel-post`.** Funnel-post TTC
+    scaling (e.g., enterprise converts 1.4x faster) is not verifiable via
+    cross-event SQL queries — standalone events drown the within-funnel
+    signal. Move TTC-by-segment effects to the `everything` hook where you
+    can directly scale time gaps between event pairs (e.g., alert triggered
+    → alert resolved). Use stronger factors (0.5x/1.8x) to compensate for
+    dilution by non-funnel events.
+
 ---
 
 ## 3. Recipe Catalog

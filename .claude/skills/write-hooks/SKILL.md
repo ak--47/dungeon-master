@@ -1,6 +1,6 @@
 ---
 name: write-hooks
-description: Engineer story trends and "magic number" patterns into an existing dungeon by writing its `hook` function. Uses the Phase 3 atom helpers + Phase 4 patterns. Adds NO new event flags. Iterates until /verify-hooks PASSes.
+description: Engineer story trends and "magic number" patterns into an existing dungeon by writing its `hook` function. Uses the Phase 3 atom helpers + Phase 4 patterns. Adds NO new event flags. Iterates until /verify-hooks scores STRONG or NAILED.
 argument-hint: [path/to/dungeon.js] [free-text story / trend description]
 model: claude-opus-4-6
 effort: max
@@ -236,14 +236,14 @@ checks against and what consumers read to understand the dataset.
    ```
    /verify-hooks <dungeon>
    ```
-   If verify-hooks returns FAIL or WEAK on any pattern, return to step 4 and
-   refine. Iterate until all patterns PASS or you've hit a hard ceiling.
+   If verify-hooks returns WEAK, NONE, or INVERSE on any pattern, return to
+   step 4 and refine. Iterate until all patterns score STRONG or NAILED.
 
 ## Stopping condition
 
-Stop after `/verify-hooks` reports all engineered patterns as PASS, OR after
-two iterations without convergence — at that point, document what's still off
-in the dungeon's overview comment and report the gap to the user.
+Stop after `/verify-hooks` reports all engineered patterns as STRONG or NAILED,
+OR after three iterations without convergence — at that point, document what's
+still off in the dungeon's overview comment and report the gap to the user.
 
 ## Output
 

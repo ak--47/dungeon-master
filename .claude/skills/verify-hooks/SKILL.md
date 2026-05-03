@@ -594,7 +594,7 @@ FROM (
   GROUP BY user_id
 );
 ```
-Verdict: **PASS** >= 99% consistent, **WEAK** 90-99%, **FAIL** < 90%.
+Verdict: **STRONG** >= 99% consistent, **WEAK** 90-99%, **FAIL** < 90%.
 
 **2. SuperProp-UserProp Mirror Check** — verify that every superProp key also appears on user profiles. Compare the dungeon's `superProps` keys against the columns in the USERS file. Any superProp not mirrored in `userProps` means the stamping fix is incomplete.
 
@@ -669,9 +669,9 @@ GROUP BY b.bucket;
 ```
 
 **Verdict criteria for inverted-U**:
-- `sweet` bucket avg target ≥ 1.2x `low` bucket → boost present (PASS)
-- `over` bucket target_per_user ≤ 0.7x `sweet` bucket → drop present (PASS)
-- Both visible → inverted-U PASS
+- `sweet` bucket avg target ≥ 1.2x `low` bucket → boost present (STRONG)
+- `over` bucket target_per_user ≤ 0.7x `sweet` bucket → drop present (STRONG)
+- Both visible → inverted-U STRONG
 - Either missing → flag as WEAK or FAIL with note about cohort sizes
 
 **Population caveat**: high-volume target events can push most users into the `over` bucket at small scale, masking the sweet effect. Re-run at full fidelity if `over` >> `sweet` cohort sizes.
@@ -711,9 +711,9 @@ ORDER BY median_min_a_to_b;
 ```
 
 **Verdict for T2C**:
-- Fast segment ≤ 0.85x baseline → PASS
-- Slow segment ≥ 1.2x baseline → PASS
-- Both directions visible → PASS
+- Fast segment ≤ 0.85x baseline → STRONG
+- Slow segment ≥ 1.2x baseline → STRONG
+- Both directions visible → STRONG
 - One/both missing → check that funnel exists in `funnels:` config and segment property is on `meta.profile`
 
 **Two-tier T2C interpretation**: When a dungeon has only 2 tiers (e.g. Free vs Paid) the funnel-post hook factor `1.0` branch (the "other" / baseline) never fires — both tiers fall into either fast or slow. Pick the slower of the two as the implicit baseline, then verify the faster shows ≤ 0.85x of it.
@@ -741,7 +741,7 @@ ORDER BY per_user DESC;
 
 Expected: paid tier ~ 1.5x non-paid per_user (matches 30% drop on non-paid → paid keeps 100%, non-paid keeps 70%, ratio 1/0.7 = 1.43x).
 
-If funnel completion gap < 5pt but per_user gap ≥ 30%, the hook IS firing — the doc just points to the wrong metric. Mark PASS, recommend doc redirect to per-user query.
+If funnel completion gap < 5pt but per_user gap ≥ 30%, the hook IS firing — the doc just points to the wrong metric. Mark STRONG, recommend doc redirect to per-user query.
 
 ### Subscription Tier Cohort Sizing Check
 
@@ -779,7 +779,7 @@ For any spike/burst hook with a tight day window, ALWAYS normalize by window len
 
 The pinned `datasetStart`/`datasetEnd` window plus seeded RNG produces near-bit-exact output across runs. To confirm no NEW non-determinism crept in (e.g. wall-clock leak in a hook):
 
-1. Run a previously-PASSing dungeon a second time.
+1. Run a previously-passing dungeon a second time.
 2. Compare `eventCount` in the runner's JSON output — should match within ~0.5%.
 3. Re-run the hook's headline query and verify ratios match to 2 decimals.
 
@@ -825,7 +825,7 @@ This measures **earliest A → earliest B across the user's entire event history
 
 **How to diagnose:** if the dungeon has a funnel-post T2C hook for tier `X` claiming `0.7x baseline` but your MIN-to-MIN query shows `~1.0x`, check whether the base event distribution naturally produces `B` events earlier than the funnel sequence. If yes, the hook needs an everything-hook companion that adjusts the user's earliest A→B pair directly (see create-dungeon SKILL.md "Common bugs to avoid #8").
 
-**Verdict rule:** if the dungeon's funnel-post JSDoc has the standard caveat (`NOTE (funnel-post measurement): visible only via Mixpanel funnel median TTC. Cross-event MIN→MIN SQL queries on raw events do NOT show this`), mark PASS as "mechanism" without re-running the within-funnel query — the hook code path is verified by code inspection. Only run the within-funnel query when the JSDoc claims the effect SHOULD be visible in cross-event SQL (e.g. dungeons with an explicit everything-hook companion).
+**Verdict rule:** if the dungeon's funnel-post JSDoc has the standard caveat (`NOTE (funnel-post measurement): visible only via Mixpanel funnel median TTC. Cross-event MIN→MIN SQL queries on raw events do NOT show this`), mark STRONG as "mechanism" without re-running the within-funnel query — the hook code path is verified by code inspection. Only run the within-funnel query when the JSDoc claims the effect SHOULD be visible in cross-event SQL (e.g. dungeons with an explicit everything-hook companion).
 
 **Fast verification workaround:** measure within-funnel T2C only:
 
@@ -882,6 +882,62 @@ read_json_auto('./data/verify-<NAME>-EVENTS-part-*.json', sample_size=-1, union_
 
 Without the glob, queries against `verify-<NAME>-EVENTS.json` fail with "No files found".
 
+### Event Hook meta.datasetStart Pitfall (REV 9)
+
+The `event` hook receives `meta.datasetStart` as a unix timestamp, but temporal
+hooks checking `dayInDataset >= N` often produce NONE verdicts because the
+anchor doesn't match expectations. Proven fix: move temporal windowing to the
+`everything` hook where `meta.datasetStart` is verified reliable (churn hooks
+work there consistently). The `everything` hook also allows push() for event
+cloning instead of return (which replaces the event in the `event` hook).
+
+**When to move temporal hooks to `everything`:**
+- Any hook that checks `dayInDataset` ranges and scores NONE at verification
+- Any hook that needs to CLONE events (push to array) rather than REPLACE
+- Any hook that needs access to the user's full event history for context
+
+**When to keep hooks in `event` type:**
+- Closure-based state patterns (module-level Maps) that track across users
+- Event REPLACEMENT (returning a different event, e.g., alert → incident)
+- Simple property mutations that don't need temporal context
+
+### Property Baseline Dilution (REV 9)
+
+When a hook overrides a property value (e.g., `event_type = "plan_upgraded"`),
+the effect is invisible if the baseline distribution already has a high rate
+of that value. Example: if `plan_upgraded` is 1 of 5 values (20% baseline),
+a 40% hook override produces ~28% observed — nearly invisible.
+
+**Fix:** skew the baseline distribution AWAY from the hook's target value.
+Make `plan_upgraded` 1 of 8+ values (12.5% baseline), then the 40% hook
+produces ~48% in the window — a clear 4x spike.
+
+Similarly, if a hook forces `scale_direction = "down"` but the baseline is
+already 86% "down" (6:1 ratio in config), the hook is invisible. Change
+the baseline to favor "up" (e.g., 3:1 up:down) so the hook's forced "down"
+creates a measurable shift.
+
+### Standard Dataset Window (REV 9)
+
+All vertical dungeons use a standardized 120-day window:
+- `datasetStart: "2026-01-01T00:00:00Z"`
+- `datasetEnd: "2026-05-01T23:59:59Z"`
+- `num_days = 120`
+
+DuckDB verification queries should anchor to `TIMESTAMP '2026-01-01'` for
+day-in-dataset calculations. Do NOT use `MAX(time) - INTERVAL 'N' DAY` as
+the anchor — it doesn't account for the pre-existing user spread period.
+
+### No Flag Stamping Audit (REV 9)
+
+Hooks must NEVER add cohort flags like `is_whale`, `power_user`,
+`sweet_spot`, `is_churned`, etc. All cohorts must be derived behaviorally
+from raw event data. When auditing a dungeon, check the hook for any
+property assignments that create boolean/categorical flags not defined in
+the original schema. If found, remove them and rewrite the hook to achieve
+the same effect through property value mutations, event filtering, or
+event injection.
+
 ## Step 3b: Stash Query Results to Disk
 
 If `./research/` exists locally, write a plain-text log of every DuckDB query execution to `./research/hook-query-log.txt`. If `./research/` does not exist, skip this step entirely — do not create the directory.
@@ -895,7 +951,7 @@ Use a consistent delimited format — one block per query, separated by a ruler 
 DUNGEON: gaming.js
 HOOK: #1 — Power users have 3x purchase amount
 TYPE: everything
-VERDICT: PASS
+VERDICT: STRONG
 EXPECTED: ~3x ratio between power and regular users
 OBSERVED: 3.05x ratio
 
@@ -932,11 +988,13 @@ Write the diagnostic report to `./research/hook-results.md` in the project root.
 ### Ordering: Failures First
 
 **Critical:** Within each dungeon section, order the detailed results by verdict severity:
-1. **FAIL** hooks first
-2. **WEAK** hooks second
-3. **PASS** hooks last
+1. **INVERSE** hooks first
+2. **NONE** hooks second
+3. **WEAK** hooks third
+4. **STRONG** hooks fourth
+5. **NAILED** hooks last
 
-The summary table should also be sorted this way (FAIL → WEAK → PASS). This ensures the actionable issues are immediately visible at the top.
+The summary table should also be sorted this way (INVERSE → NONE → WEAK → STRONG → NAILED). This ensures the actionable issues are immediately visible at the top.
 
 ### Single Dungeon Report Structure
 
@@ -953,21 +1011,21 @@ When verifying a single dungeon, use this structure:
 
 | # | Hook Name | Type | Expected Effect | Observed | Verdict |
 |---|-----------|------|-----------------|----------|---------|
-| 3 | ... | funnel-pre | ... | ... | FAIL |
+| 3 | ... | funnel-pre | ... | ... | INVERSE |
 | 2 | ... | everything | ... | ... | WEAK |
-| 1 | ... | event | ... | ... | PASS |
+| 1 | ... | event | ... | ... | NAILED |
 
 ## Detailed Results
 
-<hooks ordered FAIL → WEAK → PASS>
+<hooks ordered INVERSE → NONE → WEAK → STRONG → NAILED>
 
-### Hook #3: <Name> (FAIL)
+### Hook #3: <Name> (INVERSE)
 ...
 
 ### Hook #2: <Name> (WEAK)
 ...
 
-### Hook #1: <Name> (PASS)
+### Hook #1: <Name> (NAILED)
 ...
 
 ## Recommendations
@@ -986,10 +1044,10 @@ When verifying multiple dungeons, use this consolidated structure. Each dungeon 
 
 ## Overall Summary
 
-| Dungeon | Hooks | PASS | WEAK | FAIL |
-|---------|-------|------|------|------|
-| `harness-fintech.js` | 8 | 6 | 1 | 1 |
-| `harness-gaming.js` | 10 | 9 | 1 | 0 |
+| Dungeon | Hooks | NAILED | STRONG | WEAK | NONE | INVERSE |
+|---------|-------|--------|--------|------|------|---------|
+| `harness-fintech.js` | 8 | 4 | 2 | 1 | 1 | 0 |
+| `harness-gaming.js` | 10 | 7 | 2 | 1 | 0 | 0 |
 
 ---
 
@@ -1001,14 +1059,14 @@ When verifying multiple dungeons, use this consolidated structure. Each dungeon 
 
 | # | Hook Name | Type | Expected Effect | Observed | Verdict |
 |---|-----------|------|-----------------|----------|---------|
-| 4 | Low Balance Churn | everything | ... | ... | FAIL |
+| 4 | Low Balance Churn | everything | ... | ... | NONE |
 | 2 | Payday Patterns | event | ... | ... | WEAK |
-| 1 | Personal vs Business | user | ... | ... | PASS |
+| 1 | Personal vs Business | user | ... | ... | NAILED |
 | ... | ... | ... | ... | ... | ... |
 
 ### Detailed Results
 
-<hooks ordered FAIL → WEAK → PASS>
+<hooks ordered INVERSE → NONE → WEAK → STRONG → NAILED>
 
 ### Recommendations
 
@@ -1050,14 +1108,18 @@ Each hook's detailed section follows this template (same for single and multi-du
 
 **Analysis:** <interpret the numbers — does the ratio/difference match expectations?>
 
-**Verdict:** PASS / WEAK / FAIL
+**Verdict:** NAILED / STRONG / WEAK / NONE / INVERSE
 ```
 
-### Verdict Criteria
+### Verdict Criteria (5-Tier)
 
-- **PASS** — The observed effect is >= 60% of the expected magnitude and in the correct direction
-- **WEAK** — The pattern exists (correct direction) but is weaker than expected (30-60% of target), OR the sample size is too small to be conclusive
-- **FAIL** — No discernible pattern, the effect is reversed, or the hook-created properties don't appear in the data at all
+- **NAILED** — Within 10% of expected value/ratio. Direction correct, magnitude precise. The story reads exactly as documented.
+- **STRONG** — Within 25% of expected. Direction correct, clearly visible. An analyst would find this pattern immediately.
+- **WEAK** — Within 50% of expected. Directionally correct but magnitude is off, OR sample size is too small to be conclusive.
+- **NONE** — No statistically meaningful difference between cohorts. The hook has no observable effect.
+- **INVERSE** — Effect goes the opposite direction from intended. The story is backwards.
+
+Use NAILED and STRONG as passing verdicts. WEAK, NONE, and INVERSE are failing verdicts that require investigation.
 
 ## Step 5: Cleanup
 

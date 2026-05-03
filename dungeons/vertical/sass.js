@@ -1,7 +1,7 @@
 // ── TWEAK THESE ──
 const SEED = "harness-sass";
-const num_days = 100;
-const num_users = 5_000;
+const num_days = 120;
+const num_users = 10_000;
 const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
 
@@ -67,7 +67,7 @@ const chance = u.initChance(SEED);
  * 1. END-OF-QUARTER SPIKE (event)
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * PATTERN: Days 80-90 billing events shift event_type toward "plan_upgraded"
+ * PATTERN: Days 100-110 billing events shift event_type toward "plan_upgraded"
  * 40% of the time and team member invitations are duplicated 50% of the time.
  * No flag — discover via line chart by day.
  *
@@ -79,7 +79,7 @@ const chance = u.initChance(SEED);
  *   - Measure: Total
  *   - Filter: event_type = "plan_upgraded"
  *   - Line chart by day
- *   - Expected: ~4x normal upgrade volume during days 80-90
+ *   - Expected: ~4x normal upgrade volume during days 100-110
  *
  *   Report 2: Team Expansion Surge
  *   - Report type: Insights
@@ -322,7 +322,7 @@ const config = {
 	token,
 	seed: SEED,
 	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-04-28T23:59:59Z",
+	datasetEnd: "2026-05-01T23:59:59Z",
 	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
@@ -511,7 +511,7 @@ const config = {
 			weight: 5,
 			properties: {
 				service_id: serviceIds,
-				scale_direction: ["down", "down", "down", "down", "down", "down", "up"],
+				scale_direction: ["up", "up", "up", "down"],
 				previous_capacity: u.weighNumRange(1, 100),
 				new_capacity: u.weighNumRange(1, 100),
 				auto_scaled: [false, false, false, false, false, false, true],
@@ -564,7 +564,7 @@ const config = {
 			event: "billing event",
 			weight: 3,
 			properties: {
-				event_type: ["invoice_generated", "payment_received", "payment_failed", "plan_upgraded", "plan_downgraded"],
+				event_type: ["invoice_generated", "invoice_generated", "payment_received", "payment_received", "payment_received", "payment_failed", "plan_upgraded", "plan_downgraded"],
 				amount: u.weighNumRange(99, 25000),
 			}
 		},
@@ -643,7 +643,7 @@ const config = {
 	 *
 	 * This hook function creates 8 deliberate patterns in the data:
 	 *
-	 * 1. END-OF-QUARTER SPIKE: Days 80-90 drive plan upgrades and team expansion
+	 * 1. END-OF-QUARTER SPIKE: Days 100-110 drive plan upgrades and team expansion
 	 * 2. CHURNED ACCOUNT SILENCING: ~10% of users go completely silent after month 1
 	 * 3. ALERT ESCALATION REPLACEMENT: Critical alerts become "incident created" events
 	 * 4. INTEGRATION USERS SUCCEED: Slack+PagerDuty users resolve incidents 50-60% faster
@@ -653,29 +653,7 @@ const config = {
 	 * 8. ENTERPRISE VS STARTUP: Company size determines seat count, ACV, and health score
 	 */
 	hook: function (record, type, meta) {
-		// HOOK 1: END-OF-QUARTER SPIKE — days 80-90, 40% of billing events
-		// flip event_type to plan_upgraded; team-member-invited events get
-		// 50% chance of duplicate clone with unique time. No flag.
-		if (type === "event") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			const EVENT_TIME = dayjs(record.time);
-			const dayInDataset = EVENT_TIME.diff(datasetStart, "days", true);
-
-			if (record.event === "billing event") {
-				if (dayInDataset >= 80 && dayInDataset <= 90 && chance.bool({ likelihood: 40 })) {
-					record.event_type = "plan_upgraded";
-				}
-			}
-
-			if (record.event === "team member invited" && dayInDataset >= 80 && dayInDataset <= 90 && chance.bool({ likelihood: 50 })) {
-				return {
-					...record,
-					time: EVENT_TIME.add(chance.integer({ min: 1, max: 60 }), "minutes").toISOString(),
-					role: chance.pickone(["editor", "viewer"]),
-					invitation_method: chance.pickone(["email", "sso", "slack"]),
-				};
-			}
-		}
+		// (Hook 1a moved to everything hook for reliable datasetStart access)
 
 		// HOOK 3: ALERT ESCALATION REPLACEMENT (event) — critical/emergency
 		// alerts sometimes become incident-created events. Real product flow.
@@ -710,40 +688,6 @@ const config = {
 			}
 		}
 
-		// HOOK 7: FAILED DEPLOYMENT RECOVERY (event) — failed deploy records
-		// user, then next successful deploy gets duration_sec * 1.5. No flag.
-		if (type === "event") {
-			if (record.event === "deployment pipeline run") {
-				if (record.status === "failed") {
-					failedDeployUsers.set(record.user_id, true);
-				} else if (record.status === "success" && failedDeployUsers.has(record.user_id)) {
-					record.duration_sec = Math.floor((record.duration_sec || 300) * 1.5);
-					failedDeployUsers.delete(record.user_id);
-				}
-			}
-		}
-
-		// HOOK 9 (T2C): INCIDENT RESPONSE TIME-TO-CONVERT (funnel-post)
-		// Enterprise tier completes Incident Response funnel 1.4x faster
-		// (factor 0.71); Startup 1.25x slower (factor 1.25).
-		if (type === "funnel-post") {
-			const segment = meta?.profile?.company_size;
-			if (Array.isArray(record) && record.length > 1) {
-				const factor = (
-					segment === "enterprise" ? 0.71 :
-					segment === "startup" ? 1.25 :
-					1.0
-				);
-				if (factor !== 1.0) {
-					for (let i = 1; i < record.length; i++) {
-						const prev = dayjs(record[i - 1].time);
-						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-						record[i].time = prev.add(newGap, "milliseconds").toISOString();
-					}
-				}
-			}
-		}
-
 		if (type === "everything") {
 			const datasetStart = dayjs.unix(meta.datasetStart);
 			const userEvents = record;
@@ -753,6 +697,33 @@ const config = {
 				e.plan_tier = profile.plan_tier;
 				e.cloud_provider = profile.cloud_provider;
 			});
+
+			// HOOK 1a: END-OF-QUARTER SPIKE — days 100-110, billing events flip
+			// event_type to plan_upgraded 40% of the time. No flag.
+			userEvents.forEach(e => {
+				if (e.event !== "billing event") return;
+				const dayInDataset = dayjs(e.time).diff(datasetStart, "days", true);
+				if (dayInDataset >= 100 && dayInDataset <= 110 && chance.bool({ likelihood: 40 })) {
+					e.event_type = "plan_upgraded";
+				}
+			});
+
+			// HOOK 1b: END-OF-QUARTER TEAM INVITE SPIKE — days 100-110, clone
+			// 50% of team-member-invited events (push, not return). No flag.
+			for (let i = userEvents.length - 1; i >= 0; i--) {
+				const e = userEvents[i];
+				if (e.event !== "team member invited") continue;
+				const dayInDataset = dayjs(e.time).diff(datasetStart, "days", true);
+				if (dayInDataset >= 100 && dayInDataset <= 110 && chance.bool({ likelihood: 50 })) {
+					userEvents.push({
+						...e,
+						time: dayjs(e.time).add(chance.integer({ min: 1, max: 60 }), "minutes").toISOString(),
+						user_id: e.user_id,
+						role: chance.pickone(["editor", "viewer"]),
+						invitation_method: chance.pickone(["email", "sso", "slack"]),
+					});
+				}
+			}
 
 			// HOOK 2: CHURNED ACCOUNT SILENCING — ~20% of users (hash %5)
 			// have post-day-30 events removed. No flag.
@@ -791,10 +762,10 @@ const config = {
 				});
 			}
 
-			// HOOK 5 + HOOK 10: DOCS MAGIC NUMBER (in-funnel, no flags)
+			// HOOK 5 + HOOK 10: DOCS MAGIC NUMBER (no flags)
 			// Sweet 4-7 documentation-viewed events → +40% extra cloned
 			// service-deployed events. Over 8+ → drop 25% of service-deployed
-			// events (over-reading; no shipping). No flag.
+			// events. No flag.
 			const docsCount = userEvents.filter(e => e.event === "documentation viewed").length;
 			const deployTemplate = userEvents.find(e => e.event === "service deployed");
 			if (docsCount >= 4 && docsCount <= 7 && deployTemplate) {
@@ -816,6 +787,40 @@ const config = {
 					if (userEvents[i].event === "service deployed" && chance.bool({ likelihood: 25 })) {
 						userEvents.splice(i, 1);
 					}
+				}
+			}
+
+			// HOOK 7: FAILED DEPLOYMENT RECOVERY — find failed→success pairs
+			// in this user's pipeline events, multiply duration_sec by 1.5 on
+			// the recovery deploy. Full control via everything hook.
+			const pipelineEvents = userEvents
+				.filter(e => e.event === "deployment pipeline run")
+				.sort((a, b) => a.time.localeCompare(b.time));
+			for (let i = 1; i < pipelineEvents.length; i++) {
+				if (pipelineEvents[i - 1].status === "failed" && pipelineEvents[i].status === "success") {
+					pipelineEvents[i].duration_sec = Math.floor((pipelineEvents[i].duration_sec || 300) * 1.5);
+				}
+			}
+
+			// HOOK 9: INCIDENT RESPONSE TTC — enterprise resolves faster,
+			// startup resolves slower. Scale the time gap between alert
+			// triggered → acknowledged → resolved for this user.
+			const segment = profile?.company_size;
+			const ttcFactor = (
+				segment === "enterprise" ? 0.5 :
+				segment === "startup" ? 1.8 :
+				1.0
+			);
+			if (ttcFactor !== 1.0) {
+				const alertEvents = userEvents
+					.filter(e => e.event === "alert triggered" || e.event === "alert acknowledged" || e.event === "alert resolved")
+					.sort((a, b) => a.time.localeCompare(b.time));
+				for (let i = 1; i < alertEvents.length; i++) {
+					const prev = dayjs(alertEvents[i - 1].time);
+					const curr = dayjs(alertEvents[i].time);
+					const gap = curr.diff(prev);
+					const newGap = Math.round(gap * ttcFactor);
+					alertEvents[i].time = prev.add(newGap, "milliseconds").toISOString();
 				}
 			}
 		}
