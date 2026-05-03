@@ -1,6 +1,6 @@
 // ── TWEAK THESE ──
 const SEED = "harness-media";
-const num_days = 100;
+const num_days = 120;
 const num_users = 10_000;
 const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
@@ -29,7 +29,7 @@ const chance = u.initChance(SEED);
  * content with configurable playback options, rate and share content, and manage family
  * profiles under a single account.
  *
- * - 5,000 users over 100 days
+ * - 10,000 users over 120 days
  * - ~600,000 events across 17 event types
  * - 9 funnels (onboarding, content discovery, engagement loop, search, watchlist, etc.)
  * - Subscription tiers: Free (ad-supported), Standard ($9.99/mo), Premium ($14.99/mo)
@@ -271,14 +271,16 @@ const blockbusterId = `blockbuster_${v.uid(8)}`;
 
 /** @type {Config} */
 const config = {
+	version: 2,
 	token,
 	seed: SEED,
 	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-04-28T23:59:59Z",
+	datasetEnd: "2026-05-01T23:59:59Z",
 	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
-	hasAnonIds: false,
+	hasAnonIds: true,
+	avgDevicePerUser: 2,
 	hasSessionIds: true,
 	format: "json",
 	gzip: true,
@@ -368,6 +370,7 @@ const config = {
 			event: "account created",
 			weight: 1,
 			isFirstEvent: true,
+			isAuthEvent: true,
 			properties: {
 				"signup_source": ["organic", "referral", "trial_offer", "ad"],
 				"plan_selected": ["free", "standard", "premium"],
@@ -563,26 +566,6 @@ const config = {
 		}
 
 		if (type === "event") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			const BLOCKBUSTER_START = datasetStart.add(50, 'days');
-			const BLOCKBUSTER_END = datasetStart.add(65, 'days');
-			const EVENT_TIME = dayjs(record.time);
-
-			// Hook #5: NEW RELEASE SPIKE — days 50-65, 20% of selections/starts
-			// switch to the blockbuster id. Mutates existing content_id/content_type props.
-			if (record.event === "content selected" || record.event === "playback started") {
-				if (EVENT_TIME.isAfter(BLOCKBUSTER_START) && EVENT_TIME.isBefore(BLOCKBUSTER_END) && chance.bool({ likelihood: 20 })) {
-					record.content_type = "movie";
-					record.content_id = blockbusterId;
-				}
-			}
-			if (record.event === "content rated") {
-				if (EVENT_TIME.isAfter(BLOCKBUSTER_START) && EVENT_TIME.isBefore(BLOCKBUSTER_END) && chance.bool({ likelihood: 20 })) {
-					record.rating = chance.integer({ min: 4, max: 5 });
-					record.content_id = blockbusterId;
-				}
-			}
-
 			// Hook #6: KIDS PROFILE SAFETY — 15% of selections/starts get genre
 			// restricted to animation or documentary. Mutates existing genre prop.
 			if (chance.bool({ likelihood: 15 })) {
@@ -609,6 +592,25 @@ const config = {
 					if (stampPlan) e.subscription_plan = stampPlan;
 					if (stampDevice) e.device_type = stampDevice;
 				});
+			}
+
+			// Hook #5: NEW RELEASE SPIKE — days 50-65, 20% of selections/starts
+			// switch to the blockbuster id. Mutates existing content_id/content_type props.
+			// (Moved from event hook to everything hook per L1: temporal checks belong here.)
+			const BLOCKBUSTER_START = datasetStart.add(50, 'days');
+			const BLOCKBUSTER_END = datasetStart.add(65, 'days');
+			for (const e of userEvents) {
+				const eventTime = dayjs(e.time);
+				if (eventTime.isAfter(BLOCKBUSTER_START) && eventTime.isBefore(BLOCKBUSTER_END)) {
+					if ((e.event === "content selected" || e.event === "playback started") && chance.bool({ likelihood: 20 })) {
+						e.content_type = "movie";
+						e.content_id = blockbusterId;
+					}
+					if (e.event === "content rated" && chance.bool({ likelihood: 20 })) {
+						e.rating = chance.integer({ min: 4, max: 5 });
+						e.content_id = blockbusterId;
+					}
+				}
 			}
 
 			// Hook #3: WEEKEND VS WEEKDAY — 1.5x watch_duration_min on weekends.
