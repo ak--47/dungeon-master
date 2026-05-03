@@ -1,6 +1,6 @@
 // ── TWEAK THESE ──
 const SEED = "harness-social";
-const num_days = 100;
+const num_days = 120;
 const num_users = 10_000;
 const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
@@ -107,7 +107,7 @@ const chance = u.initChance(SEED);
  * receive follow-backs and post more frequently.
  *
  * -------------------------------------------------------------------------------------
- * 3. ALGORITHM CHANGE (event)
+ * 3. ALGORITHM CHANGE (everything)
  * -------------------------------------------------------------------------------------
  *
  * PATTERN: On day 45, the dominant `source` for "post viewed" flips from
@@ -146,7 +146,7 @@ const chance = u.initChance(SEED);
  * quality is awful, dragging down avg watch time.
  *
  * -------------------------------------------------------------------------------------
- * 5. NOTIFICATION RE-ENGAGEMENT (event)
+ * 5. NOTIFICATION RE-ENGAGEMENT (everything)
  * -------------------------------------------------------------------------------------
  *
  * PATTERN: After day 30, 30% of "post viewed" events have source flipped
@@ -190,14 +190,14 @@ const chance = u.initChance(SEED);
  * 7. TOXICITY CHURN (everything)
  * -------------------------------------------------------------------------------------
  *
- * PATTERN: Users with 3+ "report submitted" events lose 60% of activity
+ * PATTERN: Users with 2+ "report submitted" events lose 60% of activity
  * after day 30. No flag — discover via retention or per-user activity drop.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
  *   Report 1: Retention by Toxicity
  *   - Report type: Retention
- *   - Cohort A: users with >= 3 "report submitted"
+ *   - Cohort A: users with >= 2 "report submitted"
  *   - Cohort B: rest
  *   - Expected: A ~ 40% retention vs B ~ 80%
  *
@@ -276,15 +276,17 @@ const postIds = v.range(1, 1001).map(n => `post_${v.uid(8)}`);
 
 /** @type {Config} */
 const config = {
+	version: 2,
 	token,
 	seed: SEED,
 	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-04-28T23:59:59Z",
+	datasetEnd: "2026-05-01T23:59:59Z",
 	soup: { dayOfWeekWeights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.2, 1.2] },
 	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
-	hasAnonIds: false,
+	hasAnonIds: true,
+	avgDevicePerUser: 2,
 	hasSessionIds: true,
 	format: "json",
 	gzip: true,
@@ -379,6 +381,7 @@ const config = {
 			event: "account created",
 			weight: 1,
 			isFirstEvent: true,
+			isAuthEvent: true,
 			properties: {
 				"signup_method": ["email", "google", "apple", "sso"],
 				"referred_by": ["organic", "friend", "ad", "influencer"],
@@ -576,43 +579,6 @@ const config = {
 		}
 
 
-		// ─── EVENT-LEVEL HOOKS ───────────────────────────────────────────
-
-		if (type === "event") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			const ALGORITHM_CHANGE_DAY = datasetStart.add(45, 'days');
-			const REENGAGEMENT_START = datasetStart.add(30, 'days');
-			const EVENT_TIME = dayjs(record.time);
-
-			// Hook #3: ALGORITHM CHANGE - Day 45 flips feed -> explore.
-			// Mutates the existing config-defined `source` prop.
-			if (record.event === "post viewed") {
-				if (EVENT_TIME.isAfter(ALGORITHM_CHANGE_DAY)) {
-					if (chance.bool({ likelihood: 70 })) {
-						record.source = "explore";
-					}
-				} else {
-					if (chance.bool({ likelihood: 70 })) {
-						record.source = "feed";
-					}
-				}
-			}
-
-			// Hook #4: ENGAGEMENT BAIT - 20% of post views get crushed view duration.
-			// No flag — analyst sees bimodal duration distribution + low-tail share.
-			if (record.event === "post viewed") {
-				if (chance.bool({ likelihood: 20 })) {
-					record.view_duration_sec = chance.integer({ min: 1, max: 5 });
-				}
-
-				// Hook #5: NOTIFICATION RE-ENGAGEMENT — after day 30, 30% of views
-				// flip source to "notification". Mutates existing source prop.
-				if (EVENT_TIME.isAfter(REENGAGEMENT_START) && chance.bool({ likelihood: 30 })) {
-					record.source = "notification";
-				}
-			}
-		}
-
 		// ─── EVERYTHING-LEVEL HOOKS ──────────────────────────────────────
 
 		if (type === "everything") {
@@ -782,9 +748,42 @@ const config = {
 				}
 			}
 
+			// Hook #3: ALGORITHM CHANGE — day 45 flips feed → explore on post viewed.
+			// Hook #4: ENGAGEMENT BAIT — 20% of post-viewed events get crushed duration.
+			// Hook #5: NOTIFICATION RE-ENGAGEMENT — after day 30, 30% of views → notification.
+			// All three run AFTER injection passes so they apply to cloned events too.
+			const ALGORITHM_CHANGE_DAY = datasetStart.add(45, 'days');
+			const REENGAGEMENT_START = datasetStart.add(30, 'days');
+			userEvents.forEach(e => {
+				if (e.event === "post viewed") {
+					const eventTime = dayjs(e.time);
+
+					// Hook #3: Algorithm Change
+					if (eventTime.isAfter(ALGORITHM_CHANGE_DAY)) {
+						if (chance.bool({ likelihood: 70 })) {
+							e.source = "explore";
+						}
+					} else {
+						if (chance.bool({ likelihood: 70 })) {
+							e.source = "feed";
+						}
+					}
+
+					// Hook #4: Engagement Bait — 20% crushed view duration
+					if (chance.bool({ likelihood: 20 })) {
+						e.view_duration_sec = chance.integer({ min: 1, max: 5 });
+					}
+
+					// Hook #5: Notification Re-engagement (runs after #3 so can override)
+					if (eventTime.isAfter(REENGAGEMENT_START) && chance.bool({ likelihood: 30 })) {
+						e.source = "notification";
+					}
+				}
+			});
+
 			// Hook #7: TOXICITY CHURN — drop 60% of activity after day 30 for high reporters.
-			// Discovery: cohort users with >=3 report-submitted events, observe retention drop.
-			if (reportSubmittedCount >= 3) {
+			// Discovery: cohort users with >=2 report-submitted events, observe retention drop.
+			if (reportSubmittedCount >= 2) {
 				const churnCutoff = datasetStart.add(30, 'days');
 				for (let i = userEvents.length - 1; i >= 0; i--) {
 					const evt = userEvents[i];
