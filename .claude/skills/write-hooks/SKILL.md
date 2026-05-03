@@ -216,6 +216,47 @@ checks against and what consumers read to understand the dataset.
  *   Expected ratio: bin>=15 / bin<5 ≈ 3x (within ±15%)
 ```
 
+## Hook Ordering Within `everything` (REV 10)
+
+The order of operations inside the everything hook matters when hooks interact:
+
+1. **SuperProp stamping** — stamp profile values onto events (always first)
+2. **Temporal value mutations that DON'T need cloned events** — e.g., version stamping
+3. **Behavioral detection + event cloning** — agentic detection, KYC clones, pro clones, magic number clones
+4. **Event filtering** — churn, retention, rate-limit drops
+5. **Temporal value mutations that NEED cloned events** — e.g., spring price boost, gas spike, outage errors (always LAST before sort)
+6. **Sort** — `userEvents.sort((a, b) => new Date(a.time) - new Date(b.time))`
+
+**Why:** If a temporal mutation runs before cloning, cloned events that land in
+the temporal window miss the mutation. Moving temporal value mutations to the
+end ensures ALL events in the window — original and cloned — receive the effect.
+
+## Deprecated Feature Replacement (REV 10)
+
+When a dungeon relied on deprecated config blocks (`subscription`, `attribution`,
+`features`, `geo`, `anomalies`) for properties that hooks depend on, those
+properties no longer appear in the data. Replace them:
+
+1. Add the property to `superProps` and `userProps` with default values
+2. Assign meaningful values in the `user` hook (based on hash, persona, or profile)
+3. Use the assigned values in `everything` to drive downstream effects
+
+Example: deprecated `subscription` → add `subscription_tier` to superProps/userProps,
+assign tiers by hash in user hook, gate conversion/feature effects on tier in everything.
+
+## Cohort Sizing Guidelines (REV 10)
+
+Cohort detection conditions must be selective enough to create a meaningful
+control group, but not so broad they catch everyone:
+
+| Detection | Problem | Fix |
+|-----------|---------|-----|
+| `events.some(e => e.event === X)` with common X | 90%+ of users qualify | Require 3+ events: `events.filter(...).length >= 3` |
+| `charCodeAt(0) % 50 === 0` | Only 2% of users | Increase modulus denominator or use `% 10` for 10% |
+| `profile.tier === "premium"` | Fixed by config distribution | Adjust userProps distribution if cohort too small |
+
+Target: 10-30% of users in the affected cohort for clean signal at 10K users.
+
 ## Workflow
 
 1. Read the dungeon at `$ARGUMENTS[0]` and understand the existing schema.

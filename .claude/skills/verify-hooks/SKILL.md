@@ -938,6 +938,53 @@ the original schema. If found, remove them and rewrite the hook to achieve
 the same effect through property value mutations, event filtering, or
 event injection.
 
+### Clone Dilution of Temporal Effects (REV 10)
+
+When a dungeon has BOTH temporal value mutations (e.g., "days 30-60 offer_price
+2.5x") AND event cloning hooks (e.g., "pre-approved users get 5 extra offers"),
+cloned events with time offsets can land inside the temporal window without
+receiving the mutation — because the temporal hook ran BEFORE the cloning.
+
+**Diagnosis:** The temporal effect shows a lower ratio than expected (e.g., 1.2x
+instead of 2.5x). Check if other hooks clone events that could land in the
+temporal window.
+
+**Fix:** Move the temporal value mutation to the END of the everything hook,
+after all cloning/injection hooks. Re-run and verify.
+
+### Cohort Detection Survives Filtering (REV 10)
+
+If Hook A classifies users by event presence (`events.some(e => e.event === X)`)
+and Hook B later removes events (churn, retention filter), the verification
+query may misclassify users whose marker events were filtered. The "non-cohort"
+group gets contaminated with cohort members, diluting the measured ratio.
+
+**Diagnosis:** Expected ratio is 8x but observed is <2x. Check if the cohort
+detection event is also affected by a downstream filter.
+
+**Fixes:**
+1. Require 3+ marker events instead of 1+ (surviving events still identify)
+2. Accept the verification limitation and note it in the report
+3. Use a metric that doesn't depend on cohort reconstruction (e.g., overall
+   distribution shift instead of cohort comparison)
+
+### Deprecated Feature Property Gaps (REV 10)
+
+Dungeons using deprecated config blocks (`subscription`, `attribution`,
+`features`, `geo`, `anomalies`) may have hooks that depend on properties
+those blocks used to generate. The 1.4 engine silently strips deprecated
+configs, so properties like `coaching_mode`, `subscription_plan`, or
+`feature_tier` never appear in the data.
+
+**Diagnosis:** Hook logic references a property that's always NULL/undefined
+in the output. Check if the property was produced by a deprecated feature.
+
+**Fix:** The dungeon author must add equivalent property generation in the
+hook itself (via `user` or `everything` hook) or add the property to
+`superProps`/`userProps` with appropriate values. This is a schema-level fix,
+not a verification fix — flag it in the report as "NONE: deprecated feature
+property missing" with the recommended fix.
+
 ## Step 3b: Stash Query Results to Disk
 
 If `./research/` exists locally, write a plain-text log of every DuckDB query execution to `./research/hook-query-log.txt`. If `./research/` does not exist, skip this step entirely — do not create the directory.
