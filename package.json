@@ -11,7 +11,10 @@
 			"types": "./types.d.ts"
 		},
 		"./utils": "./lib/utils/utils.js",
-		"./text": "./lib/generators/text.js"
+		"./text": "./lib/generators/text.js",
+		"./hook-helpers": "./lib/hook-helpers/index.js",
+		"./hook-patterns": "./lib/hook-patterns/index.js",
+		"./verify": "./lib/verify/index.js"
 	},
 	"files": [
 		"index.js",
@@ -21,7 +24,6 @@
 		"!dungeons/customers/",
 		"!dungeons/user/",
 		"scripts/",
-		"!scripts/experiments/",
 		"package.json",
 		"README.md",
 		"CHANGELOG.md"
@@ -72,7 +74,7 @@
 		"dotenv": "^16.4.5",
 		"hyparquet-writer": "^0.6.1",
 		"mixpanel": "^0.18.0",
-		"mixpanel-import": "^3.2.9",
+		"mixpanel-import": "^3.3.1",
 		"p-limit": "^3.1.0",
 		"pino": "^9.0.0",
 		"pino-pretty": "^11.0.0",

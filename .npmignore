@@ -21,6 +21,7 @@ env.yml
 examples/
 docs/
 CLAUDE.md
+plans/
 
 # Version control and CI
 .git/

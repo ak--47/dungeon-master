@@ -326,7 +326,11 @@ const config = {
 	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
-	hasAnonIds: false,
+	// Phase 2 identity model — B2B SaaS reference. Engineers commonly use 1-2
+	// devices (desktop + work laptop). avgDevicePerUser:2 puts a meaningful
+	// per-session sticky-device pattern in Mixpanel device dashboards.
+	hasAnonIds: true,
+	avgDevicePerUser: 2,
 	hasSessionIds: true,
 	format: "json",
 	gzip: true,
@@ -360,10 +364,13 @@ const config = {
 
 	funnels: [
 		{
+			// First funnel — `workspace created` is the auth event for B2B users.
+			// Models real B2B onboarding: most teams take ≤1 retry before sticking.
 			sequence: ["workspace created", "service deployed", "dashboard viewed"],
 			isFirstFunnel: true,
 			conversionRate: 70,
 			timeToConvert: 2,
+			attempts: { min: 0, max: 1 },
 		},
 		{
 			// Daily monitoring: dashboards, queries, API calls (most common)
@@ -421,6 +428,10 @@ const config = {
 			event: "workspace created",
 			weight: 1,
 			isFirstEvent: true,
+			// Phase 2 identity: workspace creation is the B2B equivalent of Sign Up
+			// — engine stamps user_id+device_id on this event when it fires inside
+			// the user's first funnel.
+			isAuthEvent: true,
 			properties: {
 				company_size: ["startup", "smb", "mid_market", "enterprise"],
 				industry: ["tech", "finance", "healthcare", "retail", "media"],

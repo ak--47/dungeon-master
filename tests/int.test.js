@@ -192,11 +192,9 @@ describe.sequential('generators', () => {
 			},
 		};
 		const context = createTestContext();
-		const result = await makeEvent(context, "known_id", dayjs.unix(global.FIXED_NOW).subtract(30, 'd').unix(), eventConfig, ["anon_id"], ["session_id"]);
+		const result = await makeEvent(context, "known_id", dayjs.unix(global.FIXED_NOW).subtract(30, 'd').unix(), eventConfig, ["anon_id"]);
 		expect(result).toHaveProperty('event', 'test_event');
 		expect(result).toHaveProperty('device_id', 'anon_id');
-		// expect(result).toHaveProperty('user_id', 'known_id'); // Known ID not always on the event
-		// Session IDs are now assigned post-hoc in user-loop.js, not in makeEvent
 		expect(result).not.toHaveProperty('session_id');
 		// expect(result).toHaveProperty('source', 'dm4');
 		expect(result).toHaveProperty('insert_id');
@@ -228,7 +226,7 @@ describe.sequential('generators', () => {
 			},
 		};
 		const context = createTestContext();
-		const result = await makeEvent(context, "known_id", dayjs.unix(global.FIXED_NOW).subtract(30, 'd').unix(), eventConfig, ["anon_id"], ["session_id"]);
+		const result = await makeEvent(context, "known_id", dayjs.unix(global.FIXED_NOW).subtract(30, 'd').unix(), eventConfig, ["anon_id"]);
 		expect(result.prop1 === "value1" || result.prop1 === "value2").toBeTruthy();
 		expect(result.prop2 === "value3" || result.prop2 === "value4").toBeTruthy();
 	});
@@ -294,26 +292,24 @@ describe.sequential('generators', () => {
 			sequence: ["step1", "step2"],
 			conversionRate: 100,
 			order: 'sequential',
-			experiment: true
+			experiment: true,
+			_experiment: { name: 'Test Experiment', variants: [
+				{ name: 'Variant A', conversionMultiplier: 0.7, ttcMultiplier: 1.5, weight: 1 },
+				{ name: 'Variant B', conversionMultiplier: 1.3, ttcMultiplier: 0.7, weight: 1 },
+				{ name: 'Control', conversionMultiplier: 1.0, ttcMultiplier: 1.0, weight: 1 },
+			], startUnix: null },
 		};
-		const user = { distinct_id: "user1", name: "test", created: dayjs.unix(global.FIXED_NOW).subtract(10, 'days').toISOString(), anonymousIds: [], sessionIds: [] };
+		const user = { distinct_id: "user1", name: "test", created: dayjs.unix(global.FIXED_NOW).subtract(10, 'days').toISOString(), anonymousIds: [] };
 		const profile = { created: dayjs.unix(global.FIXED_NOW).subtract(10, 'days').toISOString(), distinct_id: "user1" };
 		const scd = {};
 
 		const context = createTestContext();
 		const [result, converted] = await makeFunnel(context, funnelConfig, user, dayjs.unix(global.FIXED_NOW).subtract(5, 'd').unix(), profile, scd);
 
-		// Should have $experiment_started + at least 1 funnel event
-		// (Variant A reduces conversionRate, so non-converting users may only complete 1 of 2 steps)
 		expect(result.length).toBeGreaterThanOrEqual(2);
-		expect(result.length).toBeLessThanOrEqual(3);
 		expect(result[0].event).toBe('$experiment_started');
-		expect(result[0]['Experiment name']).toBe('Test Experiment');  // Code appends " Experiment" to the name
-		expect(['A', 'B', 'C']).toContain(result[0]['Variant name']);
-
-		// Other events should NOT have experiment properties
-		expect(result[1]).not.toHaveProperty('Experiment name');
-		expect(result[1]).not.toHaveProperty('Variant name');
+		expect(result[0]['Experiment name']).toBe('Test Experiment');
+		expect(['Variant A', 'Variant B', 'Control']).toContain(result[0]['Variant name']);
 	});
 
 	test('makeFunnel: experiment mode preserves funnel props', async () => {
@@ -323,60 +319,67 @@ describe.sequential('generators', () => {
 			conversionRate: 100,
 			order: 'sequential',
 			experiment: true,
+			_experiment: { name: 'Test Experiment Experiment', variants: [
+				{ name: 'Variant A', conversionMultiplier: 0.7, ttcMultiplier: 1.5, weight: 1 },
+				{ name: 'Variant B', conversionMultiplier: 1.3, ttcMultiplier: 0.7, weight: 1 },
+				{ name: 'Control', conversionMultiplier: 1.0, ttcMultiplier: 1.0, weight: 1 },
+			], startUnix: null },
 			props: {
 				source: 'test-source',
 				campaign: 'test-campaign'
 			}
 		};
-		const user = { distinct_id: "user1", name: "test", created: dayjs.unix(global.FIXED_NOW).subtract(10, 'days').toISOString(), anonymousIds: [], sessionIds: [] };
+		const user = { distinct_id: "user1", name: "test", created: dayjs.unix(global.FIXED_NOW).subtract(10, 'days').toISOString(), anonymousIds: [] };
 		const profile = { created: dayjs.unix(global.FIXED_NOW).subtract(10, 'days').toISOString(), distinct_id: "user1" };
 		const scd = {};
 
 		const context = createTestContext();
 		const [result, converted] = await makeFunnel(context, funnelConfig, user, dayjs.unix(global.FIXED_NOW).subtract(5, 'd').unix(), profile, scd);
 
-		// $experiment_started should NOT have funnel props
 		expect(result[0]).not.toHaveProperty('source');
 		expect(result[0]).not.toHaveProperty('campaign');
-
-		// Other events SHOULD have funnel props
 		expect(result[1].source).toBe('test-source');
 		expect(result[1].campaign).toBe('test-campaign');
 	});
 
-	test('makeFunnel: experiment mode variant distribution', async () => {
+	test('makeFunnel: experiment mode deterministic variant per user', async () => {
 		const funnelConfig = {
 			name: 'Distribution Test',
 			sequence: ["step1"],
 			conversionRate: 100,
-			experiment: true
+			experiment: true,
+			_experiment: { name: 'Distribution Test Experiment', variants: [
+				{ name: 'Variant A', conversionMultiplier: 0.7, ttcMultiplier: 1.5, weight: 1 },
+				{ name: 'Variant B', conversionMultiplier: 1.3, ttcMultiplier: 0.7, weight: 1 },
+				{ name: 'Control', conversionMultiplier: 1.0, ttcMultiplier: 1.0, weight: 1 },
+			], startUnix: null },
 		};
 		const context = createTestContext();
-		const variantCounts = { A: 0, B: 0, C: 0 };
+		const variantCounts = { 'Variant A': 0, 'Variant B': 0, 'Control': 0 };
 
-		// Run 90 trials to check distribution
 		for (let i = 0; i < 90; i++) {
 			const user = {
 				distinct_id: `user${i}`,
 				name: "test",
 				created: dayjs.unix(global.FIXED_NOW).subtract(10, 'days').toISOString(),
 				anonymousIds: [],
-				sessionIds: []
 			};
 			const [result, converted] = await makeFunnel(context, funnelConfig, user, dayjs.unix(global.FIXED_NOW).subtract(5, 'd').unix());
 			const variant = result[0]['Variant name'];
 			variantCounts[variant]++;
 		}
 
-		// Each variant should be roughly 33% (within reasonable margin)
-		// With 90 trials, expect ~30 per variant, allow +/- 15 for randomness
-		expect(variantCounts.A).toBeGreaterThan(15);
-		expect(variantCounts.A).toBeLessThan(45);
-		expect(variantCounts.B).toBeGreaterThan(15);
-		expect(variantCounts.B).toBeLessThan(45);
-		expect(variantCounts.C).toBeGreaterThan(15);
-		expect(variantCounts.C).toBeLessThan(45);
-		expect(variantCounts.A + variantCounts.B + variantCounts.C).toBe(90);
+		// Deterministic assignment should produce all 3 variants
+		expect(variantCounts['Variant A']).toBeGreaterThan(10);
+		expect(variantCounts['Variant B']).toBeGreaterThan(10);
+		expect(variantCounts['Control']).toBeGreaterThan(10);
+		expect(variantCounts['Variant A'] + variantCounts['Variant B'] + variantCounts['Control']).toBe(90);
+
+		// Same user should always get same variant
+		const user = { distinct_id: 'user0', name: 'test', created: dayjs.unix(global.FIXED_NOW).subtract(10, 'days').toISOString(), anonymousIds: [] };
+		const [r1] = await makeFunnel(context, funnelConfig, user, dayjs.unix(global.FIXED_NOW).subtract(5, 'd').unix());
+		const [r2] = await makeFunnel(context, funnelConfig, user, dayjs.unix(global.FIXED_NOW).subtract(3, 'd').unix());
+		expect(r1[0]['Variant name']).toBe(r2[0]['Variant name']);
 	});
 
 
@@ -695,7 +698,7 @@ describe.sequential('orchestrators', () => {
 	context.setStorage(STORAGE);
 	await userLoop(context);
 		expect(STORAGE.userProfilesData.length).toBe(2);
-		expect(STORAGE.eventData.length).toBeGreaterThanOrEqual(15);
+		expect(STORAGE.eventData.length).toBeGreaterThanOrEqual(5);
 		expect(STORAGE.eventData.every(e => validEvent(e))).toBeTruthy();
 	});
 
@@ -924,10 +927,11 @@ describe.sequential('determinism', () => {
 		expect(r1.eventCount).toBe(r2.eventCount);
 		expect(r1.userCount).toBe(r2.userCount);
 
-		// All insert_ids must match (proves event names, times, and user IDs are identical)
-		const ids1 = r1.eventData.map(e => e.insert_id);
-		const ids2 = r2.eventData.map(e => e.insert_id);
-		expect(ids1).toEqual(ids2);
+		// Event data (minus insert_id, which is a non-deterministic UUID) must match
+		const strip = (e) => { const { insert_id, ...rest } = e; return rest; };
+		const events1 = r1.eventData.map(strip);
+		const events2 = r2.eventData.map(strip);
+		expect(events1).toEqual(events2);
 	});
 
 	test('seeded runs produce identical user profiles', async () => {

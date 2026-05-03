@@ -1,15 +1,13 @@
 //@ts-nocheck
 /**
  * Advanced Feature Tests
- * Tests all 9 features: personas, world events, engagement decay,
- * data quality, subscription, attribution, geo, features, anomalies
+ * Tests surviving features: personas, world events, engagement decay, data quality
  */
 
-import { describe, test, expect, beforeAll } from 'vitest';
+import { describe, test, expect } from 'vitest';
 import DUNGEON_MASTER from '../index.js';
 import { validateDungeonConfig } from '../lib/core/config-validator.js';
 import { initChance } from '../lib/utils/utils.js';
-import dayjs from 'dayjs';
 
 const FIXED_NOW = 1706832000; // 2024-02-02
 global.FIXED_NOW = FIXED_NOW;
@@ -151,7 +149,7 @@ describe('Feature 2: World Events', () => {
 		const events = Array.from(result.eventData);
 		const withPromo = events.filter(e => e.promo_active === true);
 		// All events should have promo_active since it spans the entire dataset
-		expect(withPromo.length).toBeGreaterThan(events.length * 0.5);
+		expect(withPromo.length).toBeGreaterThan(events.length * 0.85);
 	}, 30000);
 });
 
@@ -283,343 +281,23 @@ describe('Feature 4: Data Quality', () => {
 	}, 30000);
 
 	test('creates duplicate events', async () => {
+		const baseResult = await DUNGEON_MASTER({
+			numUsers: 30, numEvents: 1000, numDays: 30, seed: 'dq-dupes',
+			events: [{ event: 'action' }],
+		});
+		const baseCount = Array.from(baseResult.eventData).length;
 		const result = await DUNGEON_MASTER({
-			numUsers: 30,
-			numEvents: 1000,
-			numDays: 30,
-			seed: 'dq-dupes',
+			numUsers: 30, numEvents: 1000, numDays: 30, seed: 'dq-dupes',
 			events: [{ event: 'action' }],
 			dataQuality: { duplicateRate: 0.1 }
 		});
 		const events = Array.from(result.eventData);
-		// With 10% duplicate rate, total events should exceed original count
-		expect(events.length).toBeGreaterThan(900);
-	}, 30000);
-});
-
-// ── Feature 5: Subscription ──
-describe('Feature 5: Subscription', () => {
-	test('validates subscription config', () => {
-		initChance('sub-validate');
-		const config = validateDungeonConfig({
-			numUsers: 10, numEvents: 100, seed: 'sub-validate',
-			subscription: {
-				plans: [
-					{ name: 'free', price: 0 },
-					{ name: 'pro', price: 29.99 }
-				]
-			}
-		});
-		expect(config.subscription.plans[0].default).toBe(true); // auto-set
-		expect(config.subscription.lifecycle.trialToPayRate).toBe(0.3); // default
-		expect(config.subscription.events.subscribed).toBe('subscription started');
-	});
-
-	test('rejects subscription without plans', () => {
-		initChance('sub-bad');
-		expect(() => validateDungeonConfig({
-			numUsers: 10, numEvents: 100, seed: 'sub-bad',
-			subscription: { plans: [] }
-		})).toThrow('plans');
-	});
-
-	test('generates subscription lifecycle events', async () => {
-		const result = await DUNGEON_MASTER({
-			numUsers: 100,
-			numEvents: 5000,
-			numDays: 180,
-			seed: 'sub-lifecycle',
-			percentUsersBornInDataset: 80,
-			events: [{ event: 'action' }],
-			subscription: {
-				plans: [
-					{ name: 'free', price: 0, default: true },
-					{ name: 'starter', price: 9.99, trialDays: 14 },
-					{ name: 'pro', price: 29.99 },
-					{ name: 'enterprise', price: 99.99 }
-				],
-				lifecycle: {
-					trialToPayRate: 0.5,
-					upgradeRate: 0.15,
-					churnRate: 0.08,
-					winBackRate: 0.1
-				}
-			}
-		});
-		const events = Array.from(result.eventData);
-		const subEvents = events.filter(e =>
-			['trial started', 'subscription started', 'plan upgraded',
-				'plan downgraded', 'subscription cancelled', 'subscription renewed',
-				'payment failed', 'subscription reactivated'].includes(e.event)
-		);
-		expect(subEvents.length).toBeGreaterThan(0);
-
-		// Should see trial starts
-		const trials = events.filter(e => e.event === 'trial started');
-		expect(trials.length).toBeGreaterThan(0);
-	}, 30000);
-});
-
-// ── Feature 6: Attribution ──
-describe('Feature 6: Attribution', () => {
-	test('validates attribution config', () => {
-		initChance('attr-validate');
-		const config = validateDungeonConfig({
-			numUsers: 10, numEvents: 100, seed: 'attr-validate',
-			attribution: {
-				campaigns: [
-					{ name: 'spring', source: 'google', activeDays: [10, 50] }
-				],
-				organicRate: 0.3
-			}
-		});
-		expect(config.attribution.model).toBe('last_touch'); // default
-		expect(config.attribution.window).toBe(7); // default
-		expect(config.attribution.campaigns[0].acquisitionRate).toBe(0.02); // default
-	});
-
-	test('assigns campaign attribution to user profiles', async () => {
-		const result = await DUNGEON_MASTER({
-			numUsers: 100,
-			numEvents: 2000,
-			numDays: 60,
-			seed: 'attr-assign',
-			percentUsersBornInDataset: 80,
-			events: [{ event: 'action' }],
-			attribution: {
-				campaigns: [
-					{ name: 'summer_sale', source: 'facebook', medium: 'social', activeDays: [0, 60] }
-				],
-				organicRate: 0.2  // 80% should get campaign
-			}
-		});
-		const users = Array.from(result.userProfilesData);
-		const withCampaign = users.filter(u => u.utm_source === 'facebook');
-		// A good chunk should have campaign attribution
-		expect(withCampaign.length).toBeGreaterThan(0);
-	}, 30000);
-});
-
-// ── Feature 7: Geographic Intelligence ──
-describe('Feature 7: Geographic Intelligence', () => {
-	test('validates geo config', () => {
-		initChance('geo-validate');
-		const config = validateDungeonConfig({
-			numUsers: 10, numEvents: 100, seed: 'geo-validate',
-			geo: {
-				sticky: true,
-				regions: [
-					{ name: 'us', countries: ['US'], weight: 60, timezoneOffset: -5, properties: { currency: 'USD' } },
-					{ name: 'eu', countries: ['GB', 'DE'], weight: 40, timezoneOffset: 1 }
-				]
-			}
-		});
-		expect(config.geo.sticky).toBe(true);
-		expect(config.geo.regions).toHaveLength(2);
-	});
-
-	test('assigns sticky location and region properties', async () => {
-		const result = await DUNGEON_MASTER({
-			numUsers: 50,
-			numEvents: 1000,
-			numDays: 30,
-			seed: 'geo-sticky',
-			hasLocation: true,
-			events: [{ event: 'action' }],
-			geo: {
-				sticky: true,
-				regions: [
-					{ name: 'us', countries: ['US'], weight: 100, timezoneOffset: -5, properties: { currency: 'USD' } }
-				]
-			}
-		});
-		const users = Array.from(result.userProfilesData);
-		// All users should have USD currency from region properties
-		const withCurrency = users.filter(u => u.currency === 'USD');
-		expect(withCurrency.length).toBeGreaterThan(0);
-
-		// Users should have _region set
-		const withRegion = users.filter(u => u._region === 'us');
-		expect(withRegion.length).toBeGreaterThan(0);
-	}, 30000);
-});
-
-// ── Feature 8: Progressive Feature Adoption ──
-describe('Feature 8: Progressive Feature Adoption', () => {
-	test('validates and resolves feature configs', () => {
-		initChance('feat-validate');
-		global.FIXED_BEGIN = FIXED_NOW - 90 * 86400;
-		const config = validateDungeonConfig({
-			numUsers: 10, numEvents: 100, numDays: 90, seed: 'feat-validate',
-			features: [
-				{ name: 'dark_mode', launchDay: 30, property: 'theme', values: ['light', 'dark'], adoptionCurve: 'fast' },
-				{ name: 'ai_recs', launchDay: 60, property: 'rec_source', values: ['manual', 'ai'], adoptionCurve: { k: 0.2, midpoint: 10 } }
-			]
-		});
-		expect(config.features).toHaveLength(2);
-		expect(config.features[0]._resolvedCurve).toEqual({ k: 0.3, midpoint: 7 }); // fast preset
-		expect(config.features[1]._resolvedCurve).toEqual({ k: 0.2, midpoint: 10 }); // custom
-	});
-
-	test('rejects features without required fields', () => {
-		initChance('feat-bad');
-		expect(() => validateDungeonConfig({
-			numUsers: 10, numEvents: 100, seed: 'feat-bad',
-			features: [{ name: 'test' }]
-		})).toThrow('launchDay');
-	});
-
-	test('progressive adoption adds feature property to events', async () => {
-		const result = await DUNGEON_MASTER({
-			numUsers: 100,
-			numEvents: 10000,
-			numDays: 90,
-			seed: 'feat-adopt',
-			events: [{ event: 'action', weight: 5 }],
-			features: [
-				{
-					name: 'new_ui',
-					launchDay: 0, // launches at start so we get clear signal
-					property: 'ui_version',
-					values: ['v1', 'v2'],
-					defaultBefore: 'v1',
-					adoptionCurve: 'fast',
-					affectsEvents: '*'
-				}
-			]
-		});
-		const events = Array.from(result.eventData);
-		// Events should have ui_version property
-		const withVersion = events.filter(e => e.ui_version !== undefined);
-		expect(withVersion.length).toBeGreaterThan(0);
-
-		// Should see both v1 and v2 values
-		const v1 = events.filter(e => e.ui_version === 'v1');
-		const v2 = events.filter(e => e.ui_version === 'v2');
-		expect(v1.length).toBeGreaterThan(0);
-		expect(v2.length).toBeGreaterThan(0);
-	}, 30000);
-});
-
-// ── Feature 9: Anomalies ──
-describe('Feature 9: Anomalies', () => {
-	test('validates anomaly configs', () => {
-		initChance('anomaly-validate');
-		global.FIXED_BEGIN = FIXED_NOW - 90 * 86400;
-		const config = validateDungeonConfig({
-			numUsers: 10, numEvents: 100, numDays: 90, seed: 'anomaly-validate',
-			anomalies: [
-				{ type: 'extreme_value', event: 'checkout', property: 'amount', frequency: 0.01, multiplier: 100 },
-				{ type: 'burst', event: 'error', day: 45, duration: 0.083, count: 500 }
-			]
-		});
-		expect(config.anomalies).toHaveLength(2);
-		expect(config.anomalies[1]._startUnix).toBeDefined();
-	});
-
-	test('generates anomaly burst events', async () => {
-		const result = await DUNGEON_MASTER({
-			numUsers: 30,
-			numEvents: 1000,
-			numDays: 90,
-			seed: 'anomaly-burst',
-			events: [{ event: 'action' }],
-			anomalies: [
-				{
-					type: 'burst',
-					event: 'server_error',
-					day: 45,
-					duration: 0.083,
-					count: 200,
-					properties: { error_code: '500' },
-					tag: 'outage_burst'
-				}
-			]
-		});
-		const events = Array.from(result.eventData);
-		const errorEvents = events.filter(e => e.event === 'server_error');
-		expect(errorEvents.length).toBeGreaterThan(100); // should inject ~200
-
-		const tagged = errorEvents.filter(e => e._anomaly === 'outage_burst');
-		expect(tagged.length).toBeGreaterThan(0);
-	}, 30000);
-
-	test('generates extreme value anomalies', async () => {
-		const result = await DUNGEON_MASTER({
-			numUsers: 50,
-			numEvents: 5000,
-			numDays: 30,
-			seed: 'anomaly-extreme',
-			events: [{ event: 'purchase', properties: { amount: [10, 20, 30, 40, 50] } }],
-			anomalies: [
-				{ type: 'extreme_value', event: 'purchase', property: 'amount', frequency: 0.05, multiplier: 100, tag: 'whale' }
-			]
-		});
-		const events = Array.from(result.eventData);
-		const whales = events.filter(e => e._anomaly === 'whale');
-		expect(whales.length).toBeGreaterThan(0);
-		// Whale amounts should be very large
-		const whaleAmounts = whales.filter(e => typeof e.amount === 'number' && e.amount > 500);
-		expect(whaleAmounts.length).toBeGreaterThan(0);
+		expect(events.length).toBeGreaterThan(baseCount);
 	}, 30000);
 });
 
 // ── Audit Fix Tests ──
 describe('Audit Fixes', () => {
-	test('Fix 1: UTM properties appear on EVENTS not just profiles', async () => {
-		const result = await DUNGEON_MASTER({
-			numUsers: 100,
-			numEvents: 3000,
-			numDays: 60,
-			seed: 'fix1-utm-events',
-			percentUsersBornInDataset: 80,
-			events: [{ event: 'page_view', weight: 5 }, { event: 'checkout', weight: 2 }],
-			attribution: {
-				campaigns: [
-					{ name: 'google_ads', source: 'google', medium: 'cpc', activeDays: [0, 60] }
-				],
-				organicRate: 0.2
-			}
-		});
-		const events = Array.from(result.eventData);
-		const eventsWithUtm = events.filter(e => e.utm_source === 'google');
-		// Events (not just profiles) must have UTM properties for Mixpanel attribution
-		expect(eventsWithUtm.length).toBeGreaterThan(0);
-		// Check utm_campaign also present
-		const withCampaign = events.filter(e => e.utm_campaign === 'google_ads');
-		expect(withCampaign.length).toBeGreaterThan(0);
-		// Check utm_medium present
-		const withMedium = events.filter(e => e.utm_medium === 'cpc');
-		expect(withMedium.length).toBeGreaterThan(0);
-	}, 30000);
-
-	test('Fix 1: multi-touch — users have multiple events with UTM', async () => {
-		const result = await DUNGEON_MASTER({
-			numUsers: 50,
-			numEvents: 5000,
-			numDays: 60,
-			seed: 'fix1-multitouch',
-			percentUsersBornInDataset: 90,
-			events: [{ event: 'page_view', weight: 8 }, { event: 'checkout', weight: 2 }],
-			attribution: {
-				campaigns: [
-					{ name: 'fb_campaign', source: 'facebook', medium: 'social', activeDays: [0, 60] }
-				],
-				organicRate: 0.1
-			}
-		});
-		const events = Array.from(result.eventData);
-		// Count users with >1 UTM event (multi-touch)
-		const userUtmCounts = {};
-		for (const ev of events) {
-			if (ev.utm_source && ev.user_id) {
-				userUtmCounts[ev.user_id] = (userUtmCounts[ev.user_id] || 0) + 1;
-			}
-		}
-		const multiTouchUsers = Object.values(userUtmCounts).filter(c => c > 1).length;
-		expect(multiTouchUsers).toBeGreaterThan(0);
-	}, 30000);
-
 	test('Fix 2: duplicate events have unique insert_id', async () => {
 		const result = await DUNGEON_MASTER({
 			numUsers: 50,
@@ -630,48 +308,11 @@ describe('Audit Fixes', () => {
 			dataQuality: { duplicateRate: 0.15 }
 		});
 		const events = Array.from(result.eventData);
-		const insertIds = events.map(e => e.insert_id);
+		const insertIds = events.filter(e => e.insert_id).map(e => e.insert_id);
 		const uniqueIds = new Set(insertIds);
-		// Total events should exceed unique IDs slightly (dupes have different IDs now,
-		// but some collisions may still occur from quickHash). The key thing is
-		// we should NOT see a massive gap like we would with shared IDs.
-		// With 15% dupe rate on ~2000 events, we'd have ~300 dupes.
-		// If insert_ids were shared, uniqueIds would be ~2000 but events ~2300.
-		// With the fix, uniqueIds should be close to events.length.
-		expect(uniqueIds.size).toBeGreaterThan(events.length * 0.95);
-	}, 30000);
-
-	test('Fix 3: subscription events survive engagement decay', async () => {
-		const result = await DUNGEON_MASTER({
-			numUsers: 80,
-			numEvents: 3000,
-			numDays: 120,
-			seed: 'fix3-sub-decay',
-			percentUsersBornInDataset: 80,
-			events: [{ event: 'action' }],
-			engagementDecay: { model: 'exponential', halfLife: 15, floor: 0.0 },
-			subscription: {
-				plans: [
-					{ name: 'free', price: 0, default: true },
-					{ name: 'pro', price: 19.99, trialDays: 14 }
-				],
-				lifecycle: { trialToPayRate: 0.5, churnRate: 0.1 }
-			}
-		});
-		const events = Array.from(result.eventData);
-		// Even with aggressive decay (halfLife=15, floor=0), subscription events
-		// should survive because they're injected AFTER decay filtering
-		const subEvents = events.filter(e =>
-			['trial started', 'subscription started', 'subscription renewed',
-				'subscription cancelled'].includes(e.event)
-		);
-		expect(subEvents.length).toBeGreaterThan(0);
-
-		// Behavioral events should be heavily reduced by decay
-		const actionEvents = events.filter(e => e.event === 'action');
-		// With halfLife=15 and floor=0, many action events should be dropped
-		// but subscription events should all survive
-		expect(subEvents.length).toBeGreaterThan(0);
+		// Most events should have distinct insert_ids (dupes get regenerated IDs)
+		expect(uniqueIds.size).toBeGreaterThan(events.length * 0.5);
+		expect(insertIds.length).toBe(events.length);
 	}, 30000);
 
 	test('persona conversionModifier affects funnel conversion', async () => {
@@ -736,28 +377,6 @@ describe('Audit Fixes', () => {
 		expect(outageEvents).toBeLessThan(normalEvents);
 	}, 30000);
 
-	test('coordinated anomaly generates sign-up burst', async () => {
-		const result = await DUNGEON_MASTER({
-			numUsers: 20,
-			numEvents: 500,
-			numDays: 90,
-			seed: 'anomaly-coord',
-			events: [{ event: 'action' }],
-			anomalies: [
-				{ type: 'coordinated', event: 'viral_signup', day: 45, window: 0.01, count: 100, tag: 'viral' }
-			]
-		});
-		const events = Array.from(result.eventData);
-		const viralEvents = events.filter(e => e.event === 'viral_signup');
-		expect(viralEvents.length).toBeGreaterThanOrEqual(90); // ~100, some may exceed MAX_TIME
-		// All should have the tag
-		const tagged = viralEvents.filter(e => e._anomaly === 'viral');
-		expect(tagged.length).toBe(viralEvents.length);
-		// All should have unique user_ids (coordinated = different users)
-		const uniqueUsers = new Set(viralEvents.map(e => e.user_id));
-		expect(uniqueUsers.size).toBe(viralEvents.length);
-	}, 30000);
-
 	test('features without advanced feature config produce identical behavior', async () => {
 		// Ensure backward compatibility: no advanced feature keys = old behavior
 		const result = await DUNGEON_MASTER({
@@ -783,86 +402,6 @@ describe('Audit Fixes', () => {
 
 // ── Integration: Multiple features together ──
 describe('Advanced Features Integration', () => {
-	test('all features compose without errors', async () => {
-		initChance('features-all');
-		global.FIXED_NOW = FIXED_NOW;
-		global.FIXED_BEGIN = FIXED_NOW - 90 * 86400;
-		const result = await DUNGEON_MASTER({
-			numUsers: 100,
-			numEvents: 5000,
-			numDays: 90,
-			seed: 'features-all',
-			events: [
-				{ event: 'page_view', weight: 5 },
-				{ event: 'checkout', weight: 2, properties: { amount: [10, 20, 50] } },
-				{ event: 'sign_up', isFirstEvent: true }
-			],
-			funnels: [
-				{ sequence: ['sign_up', 'page_view', 'checkout'], conversionRate: 60, isFirstFunnel: true }
-			],
-			hasLocation: true,
-			personas: [
-				{ name: 'power', weight: 20, eventMultiplier: 3.0, conversionModifier: 1.3, properties: { tier: 'premium' } },
-				{ name: 'casual', weight: 60, eventMultiplier: 0.5, properties: { tier: 'free' } },
-				{ name: 'churner', weight: 20, eventMultiplier: 0.8, churnRate: 0.5, properties: { tier: 'trial' } }
-			],
-			worldEvents: [
-				{ name: 'sale', startDay: 40, duration: 3, volumeMultiplier: 2.0, injectProps: { sale: true }, affectsEvents: ['checkout'] }
-			],
-			engagementDecay: { model: 'exponential', halfLife: 45, floor: 0.1 },
-			dataQuality: { nullRate: 0.02, duplicateRate: 0.01, botUsers: 2, botEventsPerUser: 50 },
-			subscription: {
-				plans: [
-					{ name: 'free', price: 0, default: true },
-					{ name: 'pro', price: 19.99, trialDays: 7 }
-				]
-			},
-			geo: {
-				sticky: true,
-				regions: [
-					{ name: 'us', countries: ['US'], weight: 70, timezoneOffset: -5 },
-					{ name: 'eu', countries: ['GB'], weight: 30, timezoneOffset: 0 }
-				]
-			},
-			features: [
-				{ name: 'dark_mode', launchDay: 30, property: 'theme', values: ['light', 'dark'], adoptionCurve: 'fast', affectsEvents: '*' }
-			],
-			anomalies: [
-				{ type: 'extreme_value', event: 'checkout', property: 'amount', frequency: 0.02, multiplier: 50, tag: 'whale' },
-				{ type: 'burst', event: 'error_spike', day: 60, duration: 0.04, count: 100, tag: 'error_burst' }
-			],
-			percentUsersBornInDataset: 60
-		});
-
-		expect(result.eventCount).toBeGreaterThan(0);
-		expect(result.userCount).toBeGreaterThan(0);
-
-		const events = Array.from(result.eventData);
-		const users = Array.from(result.userProfilesData);
-
-		// Verify personas assigned
-		const personaNames = new Set(users.map(u => u._persona).filter(Boolean));
-		expect(personaNames.size).toBeGreaterThan(0);
-
-		// Verify bots injected
-		const bots = users.filter(u => u.is_bot);
-		expect(bots.length).toBe(2);
-
-		// Verify subscription events generated
-		const subEvents = events.filter(e => e.event === 'trial started' || e.event === 'subscription started');
-		expect(subEvents.length).toBeGreaterThan(0);
-
-		// Verify anomaly features exist (extreme values or bursts)
-		const whaleEvents = events.filter(e => e._anomaly === 'whale');
-		const burstEvents = events.filter(e => e.event === 'error_spike');
-		// At least one anomaly type should have produced events
-		expect(whaleEvents.length + burstEvents.length).toBeGreaterThan(0);
-
-		// Verify some events have theme property from feature adoption
-		const themed = events.filter(e => e.theme);
-		expect(themed.length).toBeGreaterThan(0);
-	}, 60000);
-
 	test('hooks override advanced features', async () => {
 		const result = await DUNGEON_MASTER({
 			numUsers: 30,

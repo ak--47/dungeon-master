@@ -17,6 +17,8 @@ export type ValueValid = Primitives | ValueValid[] | (() => ValueValid);
  */
 export interface Dungeon {
     // ── Core Parameters ──
+    /** Optional dungeon version string. Not used by the engine — serves as metadata for tracking revisions when configs are saved/shared. */
+    version?: string;
     /** Mixpanel project token. If provided, data will be imported to Mixpanel after generation. */
     token?: string;
     /** RNG seed for reproducible output. Same seed + concurrency=1 = identical data. */
@@ -69,7 +71,21 @@ export interface Dungeon {
     hasAvatar?: boolean;
     /** If true, events include geo properties (city, region, country, lat/lng). */
     hasLocation?: boolean;
-    /** If true, events include UTM campaign properties. */
+    /**
+     * If true, events include UTM campaign properties (utm_source / utm_campaign / utm_medium /
+     * utm_content / utm_term).
+     *
+     * Default: false.
+     *
+     * Behavior:
+     * - false: no UTM stamping anywhere.
+     * - true + at least one event in `events[]` has `isAttributionEvent: true`: only the flagged
+     *   events are eligible. Within those, ~25% are stamped with a randomly-picked campaign.
+     * - true + no event flagged: backwards-compat fallback — ~25% of ALL events are stamped
+     *   with a randomly-picked campaign (legacy behavior).
+     *
+     * @see EventConfig.isAttributionEvent
+     */
     hasCampaigns?: boolean;
     /** If true, generates ad spend data (impressions, clicks, cost). */
     hasAdSpend?: boolean;
@@ -87,8 +103,47 @@ export interface Dungeon {
     gzip?: boolean;
     /** If true, prints progress to stdout during generation. */
     verbose?: boolean;
-    /** If true, users get anonymous device IDs in addition to distinct_id. */
+    /**
+     * @deprecated Prefer `avgDevicePerUser`. `true` is now an alias for `avgDevicePerUser: 1`
+     * (single sticky device per user, every event stamped with that `device_id`). `false`
+     * (default) leaves the engine in legacy "no device_id stamping" mode unless
+     * `avgDevicePerUser` is set.
+     *
+     * @see Dungeon.avgDevicePerUser
+     */
     hasAnonIds?: boolean;
+    /**
+     * Number of distinct devices each user owns. Whole number ≥ 0. Default: 0 (legacy —
+     * no `device_id` stamping anywhere). `≤0` is coerced to `1` if `hasAnonIds: true` is
+     * also set; otherwise `0` keeps the engine in legacy mode for backwards compat.
+     *
+     * Behavior:
+     * - `0` (default): no `device_id` stamping. Every event gets `user_id` only. Same as
+     *   pre-1.4 behavior when `hasAnonIds` is not set.
+     * - `1`: one device per user. All of that user's events that need a device share a
+     *   single sticky `device_id`. `hasAnonIds: true` is an alias for this.
+     * - `>1`: per-user device pool sized via a normal distribution centered on this value
+     *   (sd ≈ value/2, clamped ≥ 1, integer-rounded). Sessions are sticky to a single
+     *   device drawn from the user's pool — every event in that session shares the same
+     *   `device_id`. Cross-session events for the same user may differ.
+     *
+     * Identity stamping interactions (multi-device + auth + first funnel):
+     * - Pre-existing users (born before dataset window): every event gets both `user_id`
+     *   and a per-session `device_id`.
+     * - Born-in-dataset users running their `isFirstFunnel`:
+     *     * Pre-auth steps (steps before the first `isAuthEvent` in the funnel sequence):
+     *       `device_id` only — no `user_id` yet.
+     *     * The stitch step (the first `isAuthEvent`): both `user_id` AND `device_id`.
+     *     * Post-auth steps in the same funnel: `user_id` only.
+     *     * All later (non-firstFunnel) events: `user_id` + per-session sticky `device_id`.
+     * - Born-in-dataset users on a `Funnel.attempts` retry that does not reach `isAuthEvent`:
+     *   every event in that failed attempt is `device_id` only (pre-auth, never stitched).
+     *
+     * @see Dungeon.hasAnonIds (deprecated alias when `true`)
+     * @see EventConfig.isAuthEvent
+     * @see Funnel.attempts
+     */
+    avgDevicePerUser?: number;
     /** If true, users get session IDs attached to events based on temporal clustering. */
     hasSessionIds?: boolean;
     /** Session timeout in minutes. Events with gaps exceeding this start a new session. Default: 30. Only used when hasSessionIds is true. */
@@ -139,16 +194,13 @@ export interface Dungeon {
     engagementDecay?: EngagementDecay;
     /** Data quality imperfections to inject (nulls, duplicates, bots, late-arriving events). */
     dataQuality?: DataQuality;
-    /** Subscription/revenue lifecycle configuration. */
-    subscription?: Subscription;
-    /** Connected attribution configuration linking campaigns to user acquisition. */
-    attribution?: Attribution;
-    /** Geographic intelligence: sticky locations, timezone-aware activity, regional launches. */
-    geo?: GeoConfig;
-    /** Progressive feature adoption: features that launch mid-dataset with S-curve adoption. */
-    features?: FeatureConfig[];
-    /** Anomaly/outlier injection: extreme values, bursts, coordinated spikes. */
-    anomalies?: AnomalyConfig[];
+
+    // ── Removed in 1.4 (silently ignored, one deprecation warning per dungeon) ──
+    // The following config keys were removed from the engine in 1.4. Existing dungeon
+    // files that still set them will load and run — `validateDungeonConfig` strips them
+    // with a single deprecation warning per dungeon. Recreate these patterns as hooks
+    // (see `lib/hook-patterns/*` once Phase 4 lands).
+    //   subscription, attribution, geo, features, anomalies
 
     /** Allow arbitrary additional properties on the config. */
     [key: string]: any;
@@ -341,8 +393,29 @@ export interface HookMetaFunnelPre extends HookMetaTimeAnchors {
     scd: Record<string, SCDSchema[]>;
     funnel: Funnel;
     config: Dungeon;
-    /** Unix seconds — earliest possible event time for this funnel's first step. */
+    /**
+     * Unix seconds — temporal anchor for this funnel run. For usage funnels, advances
+     * after each run so successive funnels spread across the user's active window.
+     * For first-funnel attempts, matches the attempt cursor. Use this to implement
+     * temporal conversion trends (e.g., "conversion increases after day 30").
+     */
     firstEventTime: number;
+    /** True if this funnel is the user's `isFirstFunnel`. */
+    isFirstFunnel: boolean;
+    /** True if the user's account creation falls inside the dataset window. */
+    isBorn: boolean;
+    /** Resolved attempts config for this funnel run, or null if attempts is not configured. */
+    attemptsConfig: AttemptsConfig | null;
+    /** 1-indexed attempt number for this run (1..totalAttempts). */
+    attemptNumber: number;
+    /** Total number of attempts (failed priors + 1 final). When attempts is omitted, this is 1. */
+    totalAttempts: number;
+    /** True if this is the final attempt (attemptNumber === totalAttempts). */
+    isFinalAttempt: boolean;
+    /** The user's assigned persona (if `personas` is configured), or null. */
+    persona: Persona | null;
+    /** Experiment context for this funnel run, or null if no experiment / pre-start-date. */
+    experiment: HookMetaExperiment | null;
 }
 
 /** Meta passed to the "funnel-post" hook (mutate generated funnel events in place). */
@@ -352,11 +425,29 @@ export interface HookMetaFunnelPost extends HookMetaTimeAnchors {
     scd: Record<string, SCDSchema[]>;
     funnel: Funnel;
     config: Dungeon;
+    /** Unix seconds — temporal anchor for this funnel run (see HookMetaFunnelPre.firstEventTime). */
+    firstEventTime: number;
+    /** True if this funnel is the user's `isFirstFunnel`. */
+    isFirstFunnel: boolean;
+    /** True if the user's account creation falls inside the dataset window. */
+    isBorn: boolean;
+    /** Resolved attempts config for this funnel run, or null if attempts is not configured. */
+    attemptsConfig: AttemptsConfig | null;
+    /** 1-indexed attempt number for this run (1..totalAttempts). */
+    attemptNumber: number;
+    /** Total number of attempts. */
+    totalAttempts: number;
+    /** True if this is the final attempt. */
+    isFinalAttempt: boolean;
+    /** The user's assigned persona (if `personas` is configured), or null. */
+    persona: Persona | null;
+    /** Experiment context for this funnel run, or null if no experiment / pre-start-date. */
+    experiment: HookMetaExperiment | null;
 }
 
 /** Meta passed to the "everything" hook — most powerful hook (sees all events for one user). */
 export interface HookMetaEverything extends HookMetaTimeAnchors {
-    /** The user's profile, including merged persona/region/attribution properties. */
+    /** The user's profile, including any merged persona properties. */
     profile: UserProfile;
     /** All SCD entries for this user, keyed by prop name. */
     scd: Record<string, SCDSchema[]>;
@@ -364,6 +455,22 @@ export interface HookMetaEverything extends HookMetaTimeAnchors {
     config: Dungeon;
     /** True if the user's account creation falls inside the dataset window. */
     userIsBornInDataset: boolean;
+    /**
+     * Unix milliseconds of the stitch event (the first `isAuthEvent` in the user's stream).
+     * `null` if this user never authed (pre-existing users have no stitch event in the
+     * dataset window — they're already authed; born-in-dataset users who never converted
+     * remain pre-auth forever).
+     */
+    authTime: number | null;
+    /**
+     * Predicate bound to this user's `authTime`. Returns true if the event happened before
+     * the stitch (i.e. the user was anonymous at that point). Returns false for pre-existing
+     * users (they're considered authed throughout). For born-in-dataset users that never
+     * authed, returns true for every event.
+     */
+    isPreAuth: (event: EventSchema) => boolean;
+    /** The user's assigned persona (if `personas` is configured), or null. */
+    persona: Persona | null;
 }
 
 export interface hookArrayOptions<T> {
@@ -534,6 +641,47 @@ export interface EventConfig {
     relativeTimeMs?: number;
     /** If true, this event is excluded from auto-generated funnels (inferFunnels and catch-all). Use for system events that shouldn't appear in conversion sequences. */
     isStrictEvent?: boolean;
+    /**
+     * If true, this event marks the moment a user transitions from anonymous (pre-auth)
+     * to identified (post-auth) — typically the "Sign Up" or "Login" event. Multiple events
+     * in a dungeon may carry this flag; the engine looks at the first occurrence in a user's
+     * stream to determine the identity stitch moment.
+     *
+     * Default: false.
+     *
+     * Behavior, when in a funnel marked `isFirstFunnel: true`:
+     * - All steps before the first `isAuthEvent` step in the funnel sequence are stamped
+     *   with `device_id` only (pre-auth).
+     * - The `isAuthEvent` step itself is the stitch — it carries BOTH `user_id` AND
+     *   `device_id`. Exactly one such record per converted born-in-dataset user.
+     * - Steps after the stitch in that funnel get `user_id` only.
+     *
+     * Behavior outside `isFirstFunnel`: the flag has no extra effect — those events follow
+     * the usual identity rules for that user (per `avgDevicePerUser`).
+     *
+     * Behavior on born-in-dataset users whose `Funnel.attempts` retries fail to reach the
+     * `isAuthEvent`: every event in those failed attempts is `device_id` only (pre-auth,
+     * never stitched). If their final attempt also fails, they remain pre-auth forever.
+     *
+     * @see Dungeon.avgDevicePerUser
+     * @see Funnel.isFirstFunnel
+     * @see Funnel.attempts
+     */
+    isAuthEvent?: boolean;
+    /**
+     * If true, this event is eligible to carry UTM campaign properties when
+     * `Dungeon.hasCampaigns: true`. ~25% of flagged events get a randomly-picked campaign
+     * stamped (utm_source / utm_campaign / utm_medium / utm_content / utm_term).
+     *
+     * Default: false.
+     *
+     * Backwards compat: if `Dungeon.hasCampaigns: true` but no event carries this flag,
+     * ~25% of ALL events are stamped (legacy behavior, preserved). Opt-in by flagging at
+     * least one event.
+     *
+     * @see Dungeon.hasCampaigns
+     */
+    isAttributionEvent?: boolean;
 }
 
 export interface GroupEventConfig extends EventConfig {
@@ -618,14 +766,137 @@ export interface Funnel {
      */
     conditions?: Record<string, ValueValid>;
 	/**
-	 * If true, the funnel will be part of an experiment where we generate 3 variants of the funnel with different conversion rates
+	 * Experiment configuration for this funnel.
 	 *
+	 * - `true` — backward-compatible shorthand: 3 variants (Variant A = worse, Variant B = better, Control),
+	 *   active for the entire dataset.
+	 * - `ExperimentConfig` object — custom variant names, conversion/TTC multipliers, temporal gating,
+	 *   and distribution weights.
+	 *
+	 * Variant assignment is **deterministic per user** (hash of user_id + experiment name), so the same
+	 * user is in the same variant across all funnel runs. `$experiment_started` is prepended to the
+	 * sequence for every post-start-date funnel run.
+	 *
+	 * Hook meta (`meta.experiment`) exposes the resolved variant in `funnel-pre` and `funnel-post`
+	 * hooks, enabling variant-specific story injection.
+	 *
+	 * @see ExperimentConfig
 	 */
-	experiment?: boolean;
+	experiment?: boolean | ExperimentConfig;
 	/**
 	 * optional: if set, in sequential funnels, this will determine WHEN the property is bound to the rest of the events in the funnel
 	 */
 	bindPropsIndex?: number;
+	/**
+	 * Multi-attempt iteration for this funnel. Models real users who land, abandon, come
+	 * back, and try again. Additive — omit for legacy single-attempt behavior.
+	 *
+	 * @see AttemptsConfig
+	 */
+	attempts?: AttemptsConfig;
+	/** @internal Resolved experiment config set by config-validator. */
+	_experiment?: { name: string; variants: Array<{ name: string; conversionMultiplier: number; ttcMultiplier: number; weight: number }>; startUnix: number | null };
+	/** @internal Set by funnels.js during experiment handling. */
+	_experimentName?: string;
+	/** @internal Set by funnels.js during experiment handling. */
+	_experimentVariant?: string;
+}
+
+/**
+ * Per-funnel multi-attempt config. `attempts.min`/`attempts.max` describe the count of
+ * **failed prior attempts** (NOT total attempts). The engine picks an integer
+ * `failedPriors = chance.integer({min, max})` then runs `failedPriors + 1` total
+ * passes through the funnel. The last pass is the "final attempt" — it converts per
+ * `attempts.conversionRate ?? funnel.conversionRate`. Each prior attempt is a truncated
+ * pre-auth pass that drops out at a random step before reaching any `isAuthEvent`.
+ *
+ * Identity interaction (when the funnel is `isFirstFunnel`):
+ * - Failed prior attempts: every event stamped with `device_id` only — never reach the
+ *   stitch step, so `user_id` is never assigned.
+ * - Final attempt: follows the standard pre-auth → stitch → post-auth identity model.
+ *   If the final attempt also fails, the user remains pre-auth forever.
+ *
+ * For non-`isFirstFunnel` funnels, each attempt is treated as an independent usage
+ * session (e.g. abandon-cart). Identity stamping uses the user's normal post-auth model.
+ *
+ * @example single attempt (default behavior)
+ * { attempts: { min: 0, max: 0 } }   // exactly one pass — equivalent to omitting attempts
+ *
+ * @example up to 3 failed retries before a 60% final conversion
+ * { conversionRate: 60, attempts: { min: 0, max: 3 } }
+ *
+ * @example heavy churn before final attempt with overridden conversion rate
+ * { conversionRate: 80, attempts: { min: 1, max: 5, conversionRate: 30 } }
+ */
+export interface AttemptsConfig {
+	/** Lower bound on the number of FAILED PRIOR attempts. 0 = a single attempt is possible. Whole number, ≥ 0. Default: 0. */
+	min?: number;
+	/** Upper bound on the number of FAILED PRIOR attempts (inclusive). Whole number, ≥ min. Default: 0. */
+	max?: number;
+	/**
+	 * Conversion rate (0–100) applied to the FINAL attempt only — overrides
+	 * `funnel.conversionRate` if set. Omit to inherit `funnel.conversionRate`.
+	 * Matches the existing `Funnel.conversionRate` scale (0–100, NOT 0–1).
+	 */
+	conversionRate?: number;
+}
+
+/**
+ * Experiment configuration for a funnel. Controls variant assignment, naming,
+ * conversion/TTC modifiers, and temporal gating.
+ *
+ * @example A/B test starting 30 days before dataset end
+ * {
+ *   name: "Checkout Redesign",
+ *   startDaysBeforeEnd: 30,
+ *   variants: [
+ *     { name: "Control" },
+ *     { name: "New Checkout", conversionMultiplier: 1.25, ttcMultiplier: 0.8 },
+ *   ]
+ * }
+ */
+export interface ExperimentConfig {
+	/** Human-readable experiment name. Default: `funnel.name + " Experiment"`. */
+	name?: string;
+	/**
+	 * Variant definitions. Each variant gets a deterministic share of users.
+	 * Default (when omitted): 3 variants — Variant A (worse), Variant B (better), Control.
+	 */
+	variants?: ExperimentVariant[];
+	/**
+	 * Days before dataset end that the experiment starts. Funnel runs before
+	 * the start date skip experiment logic entirely (no variant, no $experiment_started).
+	 * Default: 0 (entire dataset).
+	 */
+	startDaysBeforeEnd?: number;
+}
+
+/** A single variant in an experiment. */
+export interface ExperimentVariant {
+	/** Display name — appears in the "Variant name" property on $experiment_started. */
+	name: string;
+	/** Multiplier applied to funnel.conversionRate. 1.0 = unchanged. Default: 1.0. */
+	conversionMultiplier?: number;
+	/** Multiplier applied to funnel.timeToConvert. 1.0 = unchanged. Default: 1.0. */
+	ttcMultiplier?: number;
+	/** Distribution weight. Default: 1 (equal split across variants). */
+	weight?: number;
+}
+
+/** Experiment context exposed in funnel-pre and funnel-post hook meta. */
+export interface HookMetaExperiment {
+	/** Experiment name. */
+	name: string;
+	/** Name of the assigned variant. */
+	variantName: string;
+	/** 0-based index of the assigned variant. */
+	variantIndex: number;
+	/** Conversion multiplier applied for this variant. */
+	conversionMultiplier: number;
+	/** TTC multiplier applied for this variant. */
+	ttcMultiplier: number;
+	/** Unix seconds of experiment start, or null if active for entire dataset. */
+	startDate: number | null;
 }
 
 /**
@@ -845,196 +1116,12 @@ export interface DataQuality {
     emptyEvents?: number;
 }
 
-/**
- * Subscription plan definition.
- */
-export interface SubscriptionPlan {
-    /** Plan name (e.g., "free", "starter", "pro"). */
-    name: string;
-    /** Monthly price. 0 for free tier. */
-    price: number;
-    /** If true, users start on this plan. */
-    default?: boolean;
-    /** Trial period in days before requiring payment. */
-    trialDays?: number;
-}
-
-/**
- * Subscription lifecycle rates.
- */
-export interface SubscriptionLifecycle {
-    /** Rate of trial-to-paid conversion (0-1). */
-    trialToPayRate?: number;
-    /** Monthly upgrade rate (0-1). */
-    upgradeRate?: number;
-    /** Monthly downgrade rate (0-1). */
-    downgradeRate?: number;
-    /** Monthly churn/cancellation rate (0-1). */
-    churnRate?: number;
-    /** Rate of churned users who come back (0-1). */
-    winBackRate?: number;
-    /** Days before win-back attempt. */
-    winBackDelay?: number;
-    /** Rate of payment failures (0-1). */
-    paymentFailureRate?: number;
-}
-
-/**
- * Subscription configuration.
- */
-export interface Subscription {
-    /** Available plans, ordered from lowest to highest tier. */
-    plans: SubscriptionPlan[];
-    /** Lifecycle transition rates. */
-    lifecycle?: SubscriptionLifecycle;
-    /** Event names for subscription lifecycle events. */
-    events?: {
-        trialStarted?: string;
-        subscribed?: string;
-        upgraded?: string;
-        downgraded?: string;
-        renewed?: string;
-        cancelled?: string;
-        paymentFailed?: string;
-        wonBack?: string;
-    };
-}
-
-/**
- * Attribution campaign definition.
- */
-export interface AttributionCampaign {
-    /** Campaign name. */
-    name: string;
-    /** UTM source (e.g., "google", "facebook"). */
-    source: string;
-    /** UTM medium (e.g., "search_ad", "social"). */
-    medium?: string;
-    /** UTM content (e.g., "variant_a", "hero_image"). */
-    utm_content?: string;
-    /** UTM term (e.g., "running+shoes", "best+deals"). */
-    utm_term?: string;
-    /** Active days range [startDay, endDay] relative to dataset start. */
-    activeDays: [number, number];
-    /** Daily budget range [min, max]. */
-    dailyBudget?: [number, number];
-    /** Fraction of impressions that become users (0-1). */
-    acquisitionRate?: number;
-    /** Persona weight biases for users acquired by this campaign. */
-    userPersonaBias?: Record<string, number>;
-}
-
-/**
- * Connected attribution configuration.
- */
-export interface Attribution {
-    /** Attribution model type. */
-    model?: "last_touch" | "first_touch" | "linear" | "time_decay";
-    /** Attribution window in days. */
-    window?: number;
-    /** Campaign definitions. */
-    campaigns: AttributionCampaign[];
-    /** Fraction of users who arrive organically (no campaign) (0-1). */
-    organicRate?: number;
-}
-
-/**
- * Geographic region definition.
- */
-export interface GeoRegion {
-    /** Region name (e.g., "north_america"). */
-    name: string;
-    /** Country codes in this region. */
-    countries: string[];
-    /** Weight for user assignment (higher = more users). */
-    weight: number;
-    /** UTC timezone offset for this region (e.g., -5 for EST). */
-    timezoneOffset: number;
-    /** Properties injected for users in this region. */
-    properties?: Record<string, ValueValid>;
-}
-
-/**
- * Regional feature launch definition.
- */
-export interface RegionalLaunch {
-    /** Region name to match. */
-    region: string;
-    /** Feature name. */
-    featureName: string;
-    /** Day the feature launches in this region. */
-    startDay: number;
-}
-
-/**
- * Geographic intelligence configuration.
- */
-export interface GeoConfig {
-    /** If true, users keep their location across all events (default: false for backwards compat). */
-    sticky?: boolean;
-    /** Region definitions with timezone offsets and properties. */
-    regions?: GeoRegion[];
-    /** Regional feature launches. */
-    regionalLaunches?: RegionalLaunch[];
-}
-
-/**
- * Progressive feature adoption configuration.
- */
-export interface FeatureConfig {
-    /** Feature name (e.g., "dark_mode", "ai_recommendations"). */
-    name: string;
-    /** Day the feature launches (relative to dataset start). */
-    launchDay: number;
-    /** Adoption curve speed or custom logistic params. */
-    adoptionCurve?: "fast" | "slow" | "instant" | { k: number; midpoint: number };
-    /** Property name to inject on events. */
-    property: string;
-    /** Possible values for the property. First value is the "before" default if defaultBefore not set. */
-    values: ValueValid[];
-    /** Default value before the feature launches. If not set, property doesn't exist before launch. */
-    defaultBefore?: ValueValid;
-    /** Which events are affected ("*" for all, or array of event names). */
-    affectsEvents?: string[] | "*";
-    /** Conversion rate lift for users who adopted the feature. */
-    conversionLift?: number;
-    /** Resolved logistic curve params (set by config-validator). */
-    _resolvedCurve?: { k: number; midpoint: number };
-    /** Pre-computed adopted values (set by config-validator). */
-    _adoptedValues?: ValueValid[];
-}
-
-/**
- * Anomaly/outlier configuration.
- */
-export interface AnomalyConfig {
-    /** Type of anomaly. */
-    type: "extreme_value" | "burst" | "coordinated";
-    /** Event name this anomaly applies to. */
-    event: string;
-    /** For extreme_value: property to modify. */
-    property?: string;
-    /** For extreme_value: fraction of events affected (0-1). */
-    frequency?: number;
-    /** For extreme_value: multiplier applied to the property value. */
-    multiplier?: number;
-    /** Tag property added to anomalous events. */
-    tag?: string;
-    /** For burst/coordinated: day when the anomaly occurs. */
-    day?: number;
-    /** For burst: duration in days (0.083 = ~2 hours). */
-    duration?: number;
-    /** For burst/coordinated: time window in days (0.01 = ~15 minutes). */
-    window?: number;
-    /** For burst/coordinated: number of events to inject. */
-    count?: number;
-    /** Properties injected on anomalous events. */
-    properties?: Record<string, ValueValid>;
-    /** Resolved absolute start time in unix seconds (set by config-validator). */
-    _startUnix?: number;
-    /** Resolved absolute end time in unix seconds (set by config-validator). */
-    _endUnix?: number;
-}
+// ── Removed types in 1.4 ──
+// Subscription, SubscriptionPlan, SubscriptionLifecycle, Attribution, AttributionCampaign,
+// GeoConfig, GeoRegion, RegionalLaunch, FeatureConfig, AnomalyConfig were removed from
+// the engine in 1.4. Recreate these patterns via hooks (see lib/hook-patterns/* and the
+// `write-hooks` skill once Phase 4/5 land). The killed config keys are silently stripped
+// by `validateDungeonConfig` with a single deprecation warning per dungeon.
 
 /**
  * dungeon-master: generate realistic Mixpanel data at scale
@@ -1379,4 +1466,39 @@ export interface TestContext {
     campaigns: Record<string, ValueValid>[];
     runtime: RuntimeState;
     [key: string]: unknown;
+}
+
+// ── Subpath module declarations ──
+
+declare module '@ak--47/dungeon-master/hook-helpers' {
+    export function binUsersByEventCount(events: EventSchema[], eventName: string, bins: Record<string, [number, number]>): string;
+    export function binUsersByEventInRange(events: EventSchema[], eventName: string, startTime: number | string, endTime: number | string, bins: Record<string, [number, number]>): string;
+    export function countEventsBetween(events: EventSchema[], eventA: string, eventB: string): number;
+    export function userInProfileSegment(profile: Record<string, unknown>, segmentKey: string, segmentValues: unknown[]): boolean;
+    export function cloneEvent(template: EventSchema, overrides?: Partial<EventSchema>): EventSchema;
+    export function dropEventsWhere(events: EventSchema[], predicate: (event: EventSchema) => boolean): number;
+    export function scaleEventCount(events: EventSchema[], eventName: string, factor: number): void;
+    export function scalePropertyValue(events: EventSchema[], predicate: (event: EventSchema) => boolean, propertyName: string, factor: number): void;
+    export function shiftEventTime(event: EventSchema, deltaMs: number): EventSchema;
+    export function scaleTimingBetween(events: EventSchema[], eventA: string, eventB: string, factor: number): void;
+    export function scaleFunnelTTC(funnelEvents: EventSchema[], factor: number): void;
+    export function findFirstSequence(events: EventSchema[], eventNames: string[], maxGapMin?: number): EventSchema[] | null;
+    export function injectAfterEvent(events: EventSchema[], sourceEvent: EventSchema, templateEvent: EventSchema, gapMs: number, overrides?: Partial<EventSchema>): void;
+    export function injectBetween(events: EventSchema[], eventA: EventSchema, eventB: EventSchema, templateEvent: EventSchema, overrides?: Partial<EventSchema>): void;
+    export function injectBurst(events: EventSchema[], templateEvent: EventSchema, count: number, anchorTime: number | string, spreadMs: number): void;
+    export function isPreAuthEvent(event: EventSchema, authTime: number | null): boolean;
+    export function splitByAuth(events: EventSchema[], authTime: number | null): { preAuth: EventSchema[]; postAuth: EventSchema[]; stitch: EventSchema | null };
+}
+
+declare module '@ak--47/dungeon-master/hook-patterns' {
+    export function applyFrequencyByFrequency(events: EventSchema[], profile: Record<string, unknown> | null, opts: { cohortEvent: string; bins: Record<string, [number, number]>; targetEvent: string; multipliers: Record<string, number> }): void;
+    export function applyFunnelFrequencyBreakdown(allUserEvents: EventSchema[], profile: Record<string, unknown> | null, funnelEvents: EventSchema[], opts: { cohortEvent: string; bins: Record<string, [number, number]>; dropMultipliers: Record<string, number> }): void;
+    export function applyAggregateByBin(events: EventSchema[], profile: Record<string, unknown> | null, opts: { cohortEvent: string; bins: Record<string, [number, number]>; event: string; propertyName: string; deltas: Record<string, number> }): void;
+    export function applyTTCBySegment(funnelEvents: EventSchema[], profile: Record<string, unknown>, opts: { segmentKey: string; factors: Record<string, number> }): void;
+    export function applyAttributedBySource(events: EventSchema[], profile: Record<string, unknown> | null, opts: { sourceEvent: string; sourceProperty: string; downstreamEvent: string; weights: Record<string, number>; model?: 'firstTouch' | 'lastTouch' }): void;
+}
+
+declare module '@ak--47/dungeon-master/verify' {
+    export function emulateBreakdown(events: EventSchema[], config: EmulateOptions): Array<Record<string, unknown>>;
+    export function verifyDungeon(config: Dungeon, checks: Array<{ name: string; breakdown: EmulateOptions; assert: (rows: Array<Record<string, unknown>>, ctx: { events: EventSchema[]; profiles: UserProfile[] }) => { pass: boolean; detail?: string } }>): Promise<{ pass: boolean; results: Array<{ name: string; pass: boolean; detail?: string; rows?: Array<Record<string, unknown>> }> }>;
 }

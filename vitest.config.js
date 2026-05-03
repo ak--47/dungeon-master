@@ -16,7 +16,19 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
       reportsDirectory: './tests/coverage',
-      clean: true
+      clean: true,
+      exclude: [
+        'research/**',
+        'scripts/**',
+        'dungeons/**',
+        'tests/**',
+        'node_modules/**',
+        'plans/**',
+        'scratch.mjs',
+        'types.d.ts',
+        'vitest.config.js',
+        '*.config.*',
+      ],
     },
     
     // Test execution settings	
