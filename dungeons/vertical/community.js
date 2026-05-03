@@ -1,6 +1,6 @@
 // ── TWEAK THESE ──
 const SEED = "dm4-community";
-const num_days = 100;
+const num_days = 120;
 const num_users = 10_000;
 const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
@@ -31,7 +31,7 @@ const communityIds = v.range(1, 30).map(() => `COMM_${v.uid(4)}`);
  * users create articles, discuss topics, moderate content, and
  * build collaborative knowledge bases across fandoms.
  *
- * - 5,000 users over 100 days, ~600K events
+ * - 10,000 users over 120 days
  * - Multi-role system: power creators (5%), moderators (8%),
  *   active contributors (25%), readers (45%), lurkers (17%)
  * - Core loop: sign up -> search -> read articles -> contribute -> discuss
@@ -262,14 +262,16 @@ const communityIds = v.range(1, 30).map(() => `COMM_${v.uid(4)}`);
 
 /** @type {Config} */
 const config = {
+	version: 2,
 	token,
 	seed: SEED,
 	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-04-28T23:59:59Z",
+	datasetEnd: "2026-05-01T23:59:59Z",
 	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
-	hasAnonIds: false,
+	hasAnonIds: true,
+	avgDevicePerUser: 2,
 	hasSessionIds: true,
 	format: "json",
 	gzip: true,
@@ -302,6 +304,7 @@ const config = {
 			event: "account created",
 			weight: 1,
 			isFirstEvent: true,
+			isAuthEvent: true,
 			properties: {
 				referral_source: ["organic", "google_search", "reddit_referral", "youtube_link", "friend_invite"],
 			},
@@ -618,7 +621,7 @@ const config = {
 				name: "google_search",
 				source: "google",
 				medium: "organic",
-				activeDays: [0, 100],
+				activeDays: [0, 120],
 				dailyBudget: [100, 400],
 				acquisitionRate: 0.03,
 				userPersonaBias: { reader: 0.5, lurker: 0.3 },
@@ -627,7 +630,7 @@ const config = {
 				name: "reddit_referral",
 				source: "reddit",
 				medium: "referral",
-				activeDays: [0, 100],
+				activeDays: [0, 120],
 				dailyBudget: [50, 200],
 				acquisitionRate: 0.02,
 				userPersonaBias: { active_contributor: 0.5, moderator: 0.3 },
@@ -636,7 +639,7 @@ const config = {
 				name: "youtube_link",
 				source: "youtube",
 				medium: "referral",
-				activeDays: [0, 100],
+				activeDays: [0, 120],
 				dailyBudget: [75, 250],
 				acquisitionRate: 0.02,
 				userPersonaBias: { lurker: 0.5, reader: 0.3 },
