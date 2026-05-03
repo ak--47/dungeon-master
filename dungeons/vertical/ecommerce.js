@@ -1,6 +1,6 @@
 // ── TWEAK THESE ──
 const SEED = "simple is best";
-const num_days = 108;
+const num_days = 120;
 const num_users = 42_000;
 const avg_events_per_user_per_day = 0.37;
 let token = "your-mixpanel-token";
@@ -8,13 +8,12 @@ let token = "your-mixpanel-token";
 // ── env overrides ──
 if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
 
-import Chance from 'chance';
-let chance = new Chance();
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 import { uid, comma } from 'ak-tools';
-import { weighNumRange, date, integer, weighChoices, decimal } from "../../lib/utils/utils.js";
+import { weighNumRange, date, integer, weighChoices, decimal, initChance } from "../../lib/utils/utils.js";
+const chance = initChance(SEED);
 
 /** @typedef {import("../../types").Dungeon} Config */
 const itemCategories = ["Books", "Movies", "Music", "Games", "Electronics", "Computers", "Smart Home", "Home", "Garden", "Pet", "Beauty", "Health", "Toys", "Kids", "Baby", "Handmade", "Sports", "Outdoors", "Automotive", "Industrial", "Entertainment", "Art", "Food", "Appliances", "Office", "Wedding", "Software"];
@@ -292,17 +291,19 @@ function makeProducts(maxItems = 5) {
 
 /** @type {import('../types.d.ts').Dungeon} */
 const config = {
+	version: 2,
 	token,
 	seed: SEED,
 	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-04-28T23:59:59Z",
+	datasetEnd: "2026-05-01T23:59:59Z",
 	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	format: 'json', //csv or json
 	region: "US",
-	hasAnonIds: false, //if true, anonymousIds are created for each user
-	hasSessionIds: false, //if true, hasSessionIds are created for each user
+	hasAnonIds: true,
+	avgDevicePerUser: 2,
+	hasSessionIds: true,
 	hasAdSpend: false,
 	hasLocation: true,
 	hasAndroidDevices: true,
@@ -406,6 +407,7 @@ const config = {
 			event: "sign up",
 			weight: 1,
 			isFirstEvent: true,
+			isAuthEvent: true,
 			properties: {
 				signupMethod: ["email", "google", "facebook", "twitter", "linkedin", "github"],
 				referral: weighChoices(["none", "none", "none", "friend", "ad", "ad", "ad", "friend", "friend", "friend", "friend"]),
@@ -512,40 +514,10 @@ const config = {
 		}
 
 		if (type === "event") {
-			const datasetEnd = dayjs.unix(meta.datasetEnd);
-			const DAY_SIGNUPS_IMPROVED = datasetEnd.subtract(7, 'day');
-			const DAY_WATCH_TIME_WENT_UP = datasetEnd.subtract(30, 'day');
-			const eventTime = dayjs(record.time);
-
 			// unflattering 'items'
 			if (record.item && Array.isArray(record.item)) {
 				record = { ...record, ...record.item[0] };
 				delete record.item;
-			}
-
-			if (record.event === 'sign up') {
-				record.signup_flow = "v1";
-				if (eventTime.isBefore(DAY_SIGNUPS_IMPROVED)) {
-					// tag 50% for removal (filtered in "everything" hook)
-					if (chance.bool({ likelihood: 50 })) {
-						record._drop = true;
-					}
-				}
-				if (eventTime.isAfter(DAY_SIGNUPS_IMPROVED)) {
-					record.signup_flow = "v2";
-				}
-			}
-
-			if (record.event === 'watch video') {
-				const factor = decimal(0.25, 0.79);
-				if (eventTime.isBefore(DAY_WATCH_TIME_WENT_UP)) {
-					record.watchTimeSec = Math.round(record.watchTimeSec * (1 - factor));
-				}
-				if (eventTime.isAfter(DAY_WATCH_TIME_WENT_UP)) {
-					// increase watch time by 33%
-					record.watchTimeSec = Math.round(record.watchTimeSec * (1 + factor));
-				}
-
 			}
 
 			// toys + shoes frequently purchases together (and are higher cart values)
@@ -607,6 +579,38 @@ const config = {
 			const profile = meta.profile;
 			record.forEach(e => {
 				e.theme = profile.theme;
+			});
+
+			const datasetEnd = dayjs.unix(meta.datasetEnd);
+			const DAY_SIGNUPS_IMPROVED = datasetEnd.subtract(7, 'day');
+			const DAY_WATCH_TIME_WENT_UP = datasetEnd.subtract(30, 'day');
+
+			// Hook 1: Signup flow improvement — pre-fix signups (v1) get 50% dropped
+			record.forEach(e => {
+				if (e.event !== 'sign up') return;
+				const eventTime = dayjs(e.time);
+				e.signup_flow = "v1";
+				if (eventTime.isBefore(DAY_SIGNUPS_IMPROVED)) {
+					if (chance.bool({ likelihood: 50 })) {
+						e._drop = true;
+					}
+				}
+				if (eventTime.isAfter(DAY_SIGNUPS_IMPROVED)) {
+					e.signup_flow = "v2";
+				}
+			});
+
+			// Hook 2: Watch time inflection — before 30 days ago: reduce, after: increase
+			record.forEach(e => {
+				if (e.event !== 'watch video') return;
+				const eventTime = dayjs(e.time);
+				const factor = decimal(0.25, 0.79);
+				if (eventTime.isBefore(DAY_WATCH_TIME_WENT_UP)) {
+					e.watchTimeSec = Math.round(e.watchTimeSec * (1 - factor));
+				}
+				if (eventTime.isAfter(DAY_WATCH_TIME_WENT_UP)) {
+					e.watchTimeSec = Math.round(e.watchTimeSec * (1 + factor));
+				}
 			});
 
 			// Hook 6: View-Item Magic Number (behavioral, no flags)
