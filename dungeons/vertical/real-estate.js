@@ -1,6 +1,6 @@
 // ── TWEAK THESE ──
 const SEED = "homenest";
-const num_days = 150;
+const num_days = 120;
 const num_users = 10_000;
 const avg_events_per_user_per_day = 0.53;
 let token = "your-mixpanel-token";
@@ -267,14 +267,16 @@ const chance = u.initChance(SEED);
 
 /** @type {Config} */
 const config = {
+	version: 2,
 	token,
 	seed: SEED,
 	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-04-28T23:59:59Z",
+	datasetEnd: "2026-05-01T23:59:59Z",
 	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
-	hasAnonIds: false,
+	hasAnonIds: true,
+	avgDevicePerUser: 2,
 	hasSessionIds: true,
 	format: "json",
 	gzip: true,
@@ -333,6 +335,7 @@ const config = {
 			event: "account created",
 			weight: 1,
 			isFirstEvent: true,
+			isAuthEvent: true,
 			properties: {
 				signup_method: ["email", "google", "apple", "facebook"],
 			}
@@ -560,9 +563,7 @@ const config = {
 				if (inSpring && e.event === "tour scheduled" && typeof e.duration_mins === "number") {
 					e.duration_mins = Math.round(e.duration_mins * 3);
 				}
-				if (inSpring && e.event === "offer submitted") {
-					e.offer_price = Math.floor((e.offer_price || 400000) * 2.5);
-				}
+				// Spring offer_price boost moved to end (after all cloning)
 				if (e.event === "mortgage pre-approval") {
 					if ((t.isAfter(shockStart) || t.isSame(shockStart)) && t.isBefore(shockEnd)) {
 						e.mortgage_rate = 7.5;
@@ -772,6 +773,16 @@ const config = {
 					}
 				}
 			}
+
+			// HOOK 1 (cont): Spring offer_price boost — runs AFTER all cloning
+			// so cloned offers in the spring window also get the 2.5x boost
+			userEvents.forEach(e => {
+				if (e.event !== "offer submitted") return;
+				const t = dayjs.utc(e.time);
+				if ((t.isAfter(springStart) || t.isSame(springStart)) && t.isBefore(springEnd)) {
+					e.offer_price = Math.floor((e.offer_price || 400000) * 2.5);
+				}
+			});
 		}
 
 		return record;
