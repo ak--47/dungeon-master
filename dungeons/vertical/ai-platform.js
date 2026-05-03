@@ -112,7 +112,7 @@ const chance = u.initChance(SEED);
  * 3. AGENTIC LOOP POWER USERS (everything)
  * ---------------------------------------------------------------
  *
- * PATTERN: Users with both "tool use call" AND any api-call event with
+ * PATTERN: Users with 3+ "tool use call" AND 3+ api-call events with
  * multi_turn=true get 8x tokens_used on api calls plus 2 extra cloned
  * api-call events per existing (3x rate). Cloned events with unique
  * offset timestamps. No flag — discover via cohort builder.
@@ -121,7 +121,7 @@ const chance = u.initChance(SEED);
  *
  *   Report 1: Tokens per User — Agentic Cohort
  *   - Report type: Insights (with cohort)
- *   - Cohort A: users with both >= 1 "tool use call" AND >= 1 api-call with multi_turn=true
+ *   - Cohort A: users with >= 3 "tool use call" AND >= 3 api-call with multi_turn=true
  *   - Cohort B: rest
  *   - Event: "api call"
  *   - Measure: Average of "tokens_used"
@@ -272,23 +272,23 @@ const chance = u.initChance(SEED);
  * ---------------------------------------------------------------
  *
  * PATTERN: Count "docs searched" events between organization-created and
- * first billing-payment. Sweet 5-8 → +35% on amount_usd of billing
- * payment events. Over 9+ → drop 30% of billing payment events. No flag.
+ * first billing-payment. Sweet 2-4 → +35% on amount_usd of billing
+ * payment events. Over 5+ → drop 30% of billing payment events. No flag.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
  *   Report 1: Avg Billing Amount by Docs-Searched Bucket
  *   - Report type: Insights (with cohort)
- *   - Cohort A: users with 5-8 "docs searched" between sign-up and first billing
- *   - Cohort B: users with 0-4
+ *   - Cohort A: users with 2-4 "docs searched" between sign-up and first billing
+ *   - Cohort B: users with 0-1
  *   - Event: "billing payment"
  *   - Measure: Average of "amount_usd"
  *   - Expected: A ~ 1.35x B
  *
  *   Report 2: Billing Payments per User on Heavy Searchers
  *   - Report type: Insights (with cohort)
- *   - Cohort C: users with >= 9 "docs searched" between sign-up and billing
- *   - Cohort A: users with 5-8
+ *   - Cohort C: users with >= 5 "docs searched" between sign-up and billing
+ *   - Cohort A: users with 2-4
  *   - Event: "billing payment"
  *   - Measure: Total per user
  *   - Expected: C ~ 30% fewer billing payments per user
@@ -317,15 +317,17 @@ const chance = u.initChance(SEED);
 
 /** @type {Config} */
 const config = {
+	version: 2,
 	token,
 	seed: SEED,
 	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-04-28T23:59:59Z",
+	datasetEnd: "2026-05-01T23:59:59Z",
 	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
-	hasAnonIds: false,
-	hasSessionIds: false,
+	hasAnonIds: true,
+	avgDevicePerUser: 2,
+	hasSessionIds: true,
 	format: "json",
 	gzip: true,
 	alsoInferFunnels: false,
@@ -364,6 +366,7 @@ const config = {
 			event: "organization created",
 			weight: 1,
 			isFirstEvent: true,
+			isAuthEvent: true,
 			properties: {
 				org_size: ["solo", "startup", "growth", "enterprise"],
 				referral_source: ["docs", "blog", "github", "word_of_mouth", "search", "conference"],
@@ -588,38 +591,6 @@ const config = {
 
 	// -- Hook Function ----------------------------------------
 	hook: function (record, type, meta) {
-		// ─────────────────────────────────────────────────────────
-		// Hook #6: OUTAGE DAY (event)
-		// Days 40-41: 40% of api calls get is_error=true with
-		// service error types
-		// ─────────────────────────────────────────────────────────
-		if (type === "event") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			if (record.event === "api call") {
-				const eventTime = dayjs(record.time);
-				const dayInDataset = eventTime.diff(datasetStart, "days", true);
-
-				// Hook #6: Outage day errors
-				if (dayInDataset >= 40 && dayInDataset < 42) {
-					if (chance.bool({ likelihood: 40 })) {
-						record.is_error = true;
-						record.error_type = chance.pickone([
-							"service_overloaded",
-							"internal_server_error",
-							"gateway_timeout",
-						]);
-						record.latency_ms = Math.floor((record.latency_ms || 1500) * 3);
-					}
-				}
-
-				// Hook #2 (model migration wave) MOVED to everything hook —
-				// at event-hook time `record.api_tier` is the random per-event
-				// value, not the user's profile tier. Stamping happens later in
-				// the everything hook.
-			}
-
-			return record;
-		}
 
 		// ─────────────────────────────────────────────────────────
 		// Hook 9 (T2C): API-TO-EVAL TIME-TO-CONVERT (funnel-post)
@@ -659,6 +630,26 @@ const config = {
 				if (profile.api_tier) e.api_tier = profile.api_tier;
 				if (profile.primary_use_case) e.primary_use_case = profile.primary_use_case;
 				if (profile.sdk_language) e.sdk_language = profile.sdk_language;
+			});
+
+			// ─────────────────────────────────────────────────────
+			// Hook #6: OUTAGE DAY (days 40-41)
+			// 40% of api calls get is_error=true with service errors
+			// ─────────────────────────────────────────────────────
+			events.forEach(e => {
+				if (e.event !== "api call") return;
+				const dayInDataset = dayjs(e.time).diff(datasetStart, "days", true);
+				if (dayInDataset >= 40 && dayInDataset < 42) {
+					if (chance.bool({ likelihood: 40 })) {
+						e.is_error = true;
+						e.error_type = chance.pickone([
+							"service_overloaded",
+							"internal_server_error",
+							"gateway_timeout",
+						]);
+						e.latency_ms = Math.floor((e.latency_ms || 1500) * 3);
+					}
+				}
 			});
 
 			// Determine first event time for relative day calculations
@@ -727,11 +718,13 @@ const config = {
 
 			// ─────────────────────────────────────────────────────
 			// Hook #3: AGENTIC LOOP POWER USERS (BEHAVIORS TOGETHER)
-			// Users with tool use + multi_turn get 8x tokens, 3x events
+			// Users with 3+ tool use calls + 3+ multi_turn api calls
+			// get 8x tokens, 3x events. Threshold ensures a meaningful
+			// agentic cohort (~20-30% of users).
 			// ─────────────────────────────────────────────────────
-			const hasToolUse = events.some(e => e.event === "tool use call");
-			const hasMultiTurn = events.some(e => e.event === "api call" && e.multi_turn === true);
-			const isAgenticUser = hasToolUse && hasMultiTurn;
+			const toolUseCount = events.filter(e => e.event === "tool use call").length;
+			const multiTurnCount = events.filter(e => e.event === "api call" && e.multi_turn === true).length;
+			const isAgenticUser = toolUseCount >= 3 && multiTurnCount >= 3;
 
 			if (isAgenticUser) {
 				events.forEach(e => {
@@ -819,8 +812,8 @@ const config = {
 			// ─────────────────────────────────────────────────────
 			// Hook 10: DOCS-SEARCHED MAGIC NUMBER (in-funnel, no flags)
 			// Count "docs searched" events between first "organization
-			// created" (sign-up) and any "billing payment". Sweet 5-8 → +35%
-			// on amount_usd of billing-payment events. Over 9+ → drop 30%
+			// created" (sign-up) and any "billing payment". Sweet 2-4 → +35%
+			// on amount_usd of billing-payment events. Over 5+ → drop 30%
 			// of billing-payment events.
 			// ─────────────────────────────────────────────────────
 			const orgEvent = events.find(e => e.event === "organization created");
@@ -833,13 +826,13 @@ const config = {
 					dayjs(e.time).isAfter(aTime) &&
 					dayjs(e.time).isBefore(bTime)
 				).length;
-				if (docsBetween >= 5 && docsBetween <= 8) {
+				if (docsBetween >= 2 && docsBetween <= 4) {
 					events.forEach(e => {
 						if (e.event === "billing payment" && typeof e.amount_usd === "number") {
 							e.amount_usd = Math.round(e.amount_usd * 1.35);
 						}
 					});
-				} else if (docsBetween >= 9) {
+				} else if (docsBetween >= 5) {
 					for (let i = events.length - 1; i >= 0; i--) {
 						if (events[i].event === "billing payment" && chance.bool({ likelihood: 30 })) {
 							events.splice(i, 1);
