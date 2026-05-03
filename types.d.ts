@@ -19,6 +19,8 @@ export interface Dungeon {
     // ── Core Parameters ──
     /** Optional dungeon version. Not used by the engine — serves as metadata for tracking revisions when configs are saved/shared. */
     version?: string | number;
+    /** Optional app or dataset name. Not used by the engine — available for logging and metadata when set. */
+    appName?: string;
     /** Mixpanel project token. If provided, data will be imported to Mixpanel after generation. */
     token?: string;
     /** RNG seed for reproducible output. Same seed + concurrency=1 = identical data. */
