@@ -1,6 +1,6 @@
 // ── TWEAK THESE ──
 const SEED = "dm4-logistics";
-const num_days = 100;
+const num_days = 120;
 const num_users = 10_000;
 const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
@@ -31,7 +31,7 @@ const supplierIds = v.range(1, 150).map(() => `SUP_${v.uid(6)}`);
  * businesses to track stock levels, purchase orders, suppliers,
  * shipments, and quality inspections across multiple warehouses.
  *
- * - 5,000 users over 100 days, ~600K events
+ * - 10,000 users over 120 days
  * - Multi-tier system: enterprise (15%), mid-market (35%), small business (40%), trial (10%)
  * - Core loop: sign up -> check inventory -> create PO -> receive order -> track shipment
  * - Revenue: free_trial / starter ($49) / professional ($199) / enterprise ($599)
@@ -65,7 +65,7 @@ const supplierIds = v.range(1, 150).map(() => `SUP_${v.uid(6)}`);
  * 1. MONTH-END REPORTING SURGE (event hook)
  * -------------------------------------------------------------------
  *
- * PATTERN: Reports generated on calendar days 28-31 have 2x the
+ * PATTERN: Reports generated on calendar days 28-31 have 2.5x the
  * report_pages. Simulates end-of-month compliance and audit reporting.
  *
  * HOW TO FIND IT IN MIXPANEL:
@@ -309,14 +309,16 @@ const supplierIds = v.range(1, 150).map(() => `SUP_${v.uid(6)}`);
 
 /** @type {Config} */
 const config = {
+	version: 2,
 	token,
 	seed: SEED,
 	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-04-28T23:59:59Z",
+	datasetEnd: "2026-05-01T23:59:59Z",
 	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
-	hasAnonIds: false,
+	hasAnonIds: true,
+	avgDevicePerUser: 2,
 	hasSessionIds: true,
 	format: "json",
 	gzip: true,
@@ -349,6 +351,7 @@ const config = {
 			event: "account created",
 			weight: 1,
 			isFirstEvent: true,
+			isAuthEvent: true,
 			properties: {
 				referral_source: ["organic", "partner_referral", "google_search", "trade_show", "linkedin"],
 			},
@@ -771,6 +774,9 @@ const config = {
 			} else if (record.company_tier === "mid_market") {
 				record.warehouse_count = chance.integer({ min: 2, max: 6 });
 				record.employee_count = chance.integer({ min: 20, max: 200 });
+			} else if (record.company_tier === "small_business") {
+				record.warehouse_count = chance.integer({ min: 1, max: 3 });
+				record.employee_count = chance.integer({ min: 5, max: 80 });
 			} else if (record.company_tier === "trial") {
 				record.warehouse_count = 1;
 				record.employee_count = chance.integer({ min: 1, max: 10 });
@@ -818,7 +824,7 @@ const config = {
 				if (e.event === 'report generated') {
 					const dayOfMonth = new Date(e.time).getUTCDate();
 					if (dayOfMonth >= 28) {
-						e.report_pages = Math.floor((e.report_pages || 20) * 2);
+						e.report_pages = Math.floor((e.report_pages || 20) * 2.5);
 					}
 				}
 			}
@@ -896,7 +902,7 @@ const config = {
 
 			// -- HOOK 9: INVENTORY-CHECK MAGIC NUMBER (no flags) ------
 			// Sweet 5-15 inventory checks → +25% PO quantity.
-			// Over 16+ → drop 30% of PO created events.
+			// Over 16+ → drop 45% of PO created events.
 			const invCheckCount = record.filter(e => e.event === 'inventory checked').length;
 			if (invCheckCount >= 5 && invCheckCount <= 15) {
 				record.forEach(e => {
@@ -906,7 +912,7 @@ const config = {
 				});
 			} else if (invCheckCount >= 16) {
 				for (let i = record.length - 1; i >= 0; i--) {
-					if (record[i].event === 'purchase order created' && chance.bool({ likelihood: 30 })) {
+					if (record[i].event === 'purchase order created' && chance.bool({ likelihood: 45 })) {
 						record.splice(i, 1);
 					}
 				}
