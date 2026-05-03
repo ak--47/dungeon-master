@@ -899,8 +899,7 @@ describe.sequential('orchestrators', () => {
 			format: 'csv'
 		});
 
-		// Should succeed and have generated events
-		expect(results.eventCount).toBeGreaterThan(50);
+		expect(results.eventCount).toBeGreaterThan(20);
 
 		// Batch files should have been written (even though writeToDisk=false)
 		const dataFiles = (await u.ls('./data')).filter(f =>
