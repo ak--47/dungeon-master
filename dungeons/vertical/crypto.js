@@ -1,7 +1,7 @@
 // ── TWEAK THESE ──
 const SEED = "coinnest";
 const num_days = 120;
-const num_users = 6_000;
+const num_users = 10_000;
 const avg_events_per_user_per_day = 0.83;
 let token = "your-mixpanel-token";
 
@@ -200,7 +200,7 @@ const chance = u.initChance(SEED);
  * ---------------------------------------------------------------
  * 8. RUG-PULL AFTERMATH (everything)
  *
- * PATTERN: ~8% of pre-day-70 swaps get token_pair flipped to a SCAM
+ * PATTERN: ~2% of pre-day-70 swaps get token_pair flipped to a SCAM
  * pair. Users who held SCAM lose 80% of post-day-70 events. No flag.
  *
  * HOW TO FIND IT IN MIXPANEL:
@@ -307,14 +307,16 @@ const NFT_COLLECTIONS = [
 
 /** @type {Config} */
 const config = {
+	version: 2,
 	token,
 	seed: SEED,
 	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-04-28T23:59:59Z",
+	datasetEnd: "2026-05-01T23:59:59Z",
 	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
-	hasAnonIds: false,
+	hasAnonIds: true,
+	avgDevicePerUser: 2,
 	hasSessionIds: true,
 	format: "json",
 	gzip: true,
@@ -369,6 +371,7 @@ const config = {
 			event: "wallet connected",
 			weight: 1,
 			isFirstEvent: true,
+			isAuthEvent: true,
 			properties: {
 				wallet_type: ["MetaMask", "Phantom", "Coinbase Wallet", "Rainbow", "WalletConnect"],
 				chain: ["Ethereum", "Solana", "Base", "Arbitrum", "Polygon"],
@@ -575,21 +578,7 @@ const config = {
 				});
 			}
 
-			// HOOK 2: GAS PRICE SPIKE — days 35-37 swap+transfer gas_fee_usd 10x,
-			// 40% of swaps get swap_status=failed. Runs in everything hook so
-			// timestamp checks see post-bunchIntoSessions times.
-			const day35 = datasetStart.add(35, "days");
-			const day38 = datasetStart.add(38, "days");
-			userEvents.forEach(e => {
-				if (e.event !== "swap" && e.event !== "transfer") return;
-				const t = dayjs(e.time);
-				if (t.isAfter(day35) && t.isBefore(day38)) {
-					e.gas_fee_usd = Math.round((e.gas_fee_usd || 5) * 10);
-					if (e.event === "swap" && chance.bool({ likelihood: 40 })) {
-						e.swap_status = "failed";
-					}
-				}
-			});
+			// HOOK 2 moved to end (after all cloning) for full coverage
 
 			// HOOK 3: TOKEN LAUNCH SURGE — after d50, 25% of swaps flip token_pair to MOON.
 			const day50 = datasetStart.add(50, "days");
@@ -767,15 +756,11 @@ const config = {
 			// -----------------------------------------------------------
 			const day70 = datasetStart.add(70, "days");
 
-			// Check if user traded SCAM before day 70
-			// ~10% of pre-day-70 swaps naturally get SCAM token pair
-			// (injected here since SCAM isn't in the default TOKEN_PAIRS list)
 			let hadScam = false;
 			userEvents.forEach(e => {
 				if (e.event === "swap") {
 					const swapDay = dayjs(e.time).diff(datasetStart, "day");
-					// Before day 70, ~8% of swaps randomly become SCAM trades
-					if (swapDay >= 10 && swapDay < 70 && chance.bool({ likelihood: 8 })) {
+					if (swapDay >= 10 && swapDay < 70 && chance.bool({ likelihood: 2 })) {
 						e.token_pair = chance.pickone(["SCAM/USDC", "SCAM/ETH", "ETH/SCAM"]);
 						hadScam = true;
 					}
@@ -819,6 +804,22 @@ const config = {
 					}
 				}
 			}
+
+			// HOOK 2: GAS PRICE SPIKE — days 35-37 swap+transfer gas_fee_usd 10x,
+			// 40% of swaps get swap_status=failed. Runs AFTER all cloning to
+			// catch events that land in the spike window from clone offsets.
+			const day35 = datasetStart.add(35, "days");
+			const day38 = datasetStart.add(38, "days");
+			userEvents.forEach(e => {
+				if (e.event !== "swap" && e.event !== "transfer") return;
+				const t = dayjs(e.time);
+				if (t.isAfter(day35) && t.isBefore(day38)) {
+					e.gas_fee_usd = Math.round((e.gas_fee_usd || 5) * 10);
+					if (e.event === "swap" && chance.bool({ likelihood: 40 })) {
+						e.swap_status = "failed";
+					}
+				}
+			});
 
 			userEvents.sort((a, b) => new Date(a.time) - new Date(b.time));
 		}

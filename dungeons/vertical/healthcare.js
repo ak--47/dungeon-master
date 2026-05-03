@@ -1,7 +1,7 @@
 // ── TWEAK THESE ──
 const SEED = "dm4-healthcare";
-const num_days = 100;
-const num_users = 5_000;
+const num_days = 120;
+const num_users = 10_000;
 const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
 
@@ -292,14 +292,16 @@ const clinicIds = v.range(1, 25).map(() => `CLINIC_${v.uid(4)}`);
 
 /** @type {Config} */
 const config = {
+	version: 2,
 	token,
 	seed: SEED,
 	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-04-28T23:59:59Z",
+	datasetEnd: "2026-05-01T23:59:59Z",
 	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
-	hasAnonIds: false,
+	hasAnonIds: true,
+	avgDevicePerUser: 2,
 	hasSessionIds: true,
 	format: "json",
 	gzip: true,
@@ -332,6 +334,7 @@ const config = {
 			event: "account created",
 			weight: 1,
 			isFirstEvent: true,
+			isAuthEvent: true,
 			properties: {
 				referral_source: ["organic", "doctor_referral", "insurance_partner", "social_media", "search"],
 			},
@@ -360,7 +363,7 @@ const config = {
 			weight: 5,
 			properties: {
 				doctor_id: chance.pickone.bind(chance, doctorIds),
-				consultation_mode: ["phone"],  // default; feature rollout changes to video
+				consultation_mode: ["phone", "phone", "video"],
 				duration_minutes: u.weighNumRange(5, 60, 0.6, 15),
 				consultation_fee: u.weighNumRange(25, 200, 0.4, 75),
 				satisfaction_score: u.weighNumRange(1, 5, 0.8, 3),
@@ -394,7 +397,7 @@ const config = {
 				doctor_id: chance.pickone.bind(chance, doctorIds),
 				days_until_followup: u.weighNumRange(3, 30, 0.5, 7),
 				condition_type: ["general", "respiratory", "dermatology", "mental_health", "chronic", "pediatric"],
-				consultation_mode: ["phone"],
+				consultation_mode: ["phone", "phone", "video"],
 			},
 		},
 		{
@@ -845,10 +848,10 @@ const config = {
 			}
 
 			// HOOK 6: OCCASIONAL PATIENT NO-SHOWS — low-activity patients
-			// (< 15 events) lose 25% of appointments. No flag.
+			// (< 15 events) lose 25% of consultations (they booked but didn't show).
 			if (record.length < 15) {
 				for (let i = record.length - 1; i >= 0; i--) {
-					if (record[i].event === "appointment booked" && chance.bool({ likelihood: 25 })) {
+					if (record[i].event === "consultation completed" && chance.bool({ likelihood: 25 })) {
 						record.splice(i, 1);
 					}
 				}

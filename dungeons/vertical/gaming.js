@@ -1,7 +1,7 @@
 // ── TWEAK THESE ──
 const SEED = "questforge";
-const num_days = 100;
-const num_users = 5_000;
+const num_days = 120;
+const num_users = 10_000;
 const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
 
@@ -311,14 +311,16 @@ const itemIds = v.range(1, 301).map(n => `item_${v.uid(7)}`);
 
 /** @type {Config} */
 const config = {
+	version: 2,
 	token,
 	seed: SEED,
 	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-04-28T23:59:59Z",
+	datasetEnd: "2026-05-01T23:59:59Z",
 	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
-	hasAnonIds: false,
+	hasAnonIds: true,
+	avgDevicePerUser: 2,
 	hasSessionIds: true,
 	format: "json",
 	gzip: true,
@@ -398,6 +400,7 @@ const config = {
 			event: "character created",
 			weight: 1,
 			isFirstEvent: true,
+			isAuthEvent: true,
 			properties: {
 				"character_class": [
 					"Barbarian", "Bard", "Cleric", "Druid", "Fighter", "Monk",
@@ -885,8 +888,8 @@ const config = {
 				// Hook 5: PURCHASE VALUE — Lucky charm buyers see 2x prices
 				// and 35% chance of bonus high-value cloned purchase.
 				if (boughtLuckyCharm) {
-					if (event.event === "real money purchase" && event.price_usd && event.price_usd < 49.99) {
-						event.price_usd = event.price_usd * 2;
+					if (event.event === "real money purchase" && event.price_usd) {
+						event.price_usd = Math.round(event.price_usd * 2.5 * 100) / 100;
 					}
 					if (event.event === "item purchased" && chance.bool({ likelihood: 35 })) {
 						const purchaseTemplate = userEvents.find(e => e.event === "real money purchase");
@@ -937,7 +940,7 @@ const config = {
 					const isElite = subscriptionTier === "Elite";
 					if (event.event === "combat completed" && event.outcome !== "Victory") {
 						const winBoost = isElite ? 70 : 50;
-						if (Math.random() * 100 < winBoost) {
+						if (chance.bool({ likelihood: winBoost })) {
 							event.outcome = "Victory";
 							event.loot_gained = true;
 						}
@@ -950,7 +953,7 @@ const config = {
 					if (event.event === "exit dungeon") {
 						if (event.completion_status !== "completed") {
 							const completionBoost = isElite ? 65 : 45;
-							if (Math.random() * 100 < completionBoost) {
+							if (chance.bool({ likelihood: completionBoost })) {
 								event.completion_status = "completed";
 							}
 						}
@@ -964,24 +967,24 @@ const config = {
 						event.treasure_value = Math.floor((event.treasure_value || 50) * treasureBoost);
 					}
 					if (event.event === "player death") {
-						const survivalChance = isElite ? 50 : 30;
-						if (Math.random() * 100 < survivalChance) {
+						const survivalLikelihood = isElite ? 50 : 30;
+						if (chance.bool({ likelihood: survivalLikelihood })) {
 							event.event = "combat completed";
 							event.outcome = "Victory";
 							event.loot_gained = true;
 						}
 					}
-					if (isElite && Math.random() * 100 < 5) {
+					if (isElite && chance.bool({ likelihood: 5 })) {
 						if (event.event === "quest turned in" || event.event === "exit dungeon") {
 							const treasureTemplate = userEvents.find(e => e.event === "find treasure");
 							if (treasureTemplate) {
 								const treasureTypes = ["Rare Artifact", "Gold", "Weapon", "Armor"];
 								userEvents.splice(idx + 1, 0, {
 									...treasureTemplate,
-									time: eventTime.add(Math.floor(Math.random() * 26) + 5, 'minutes').toISOString(),
+									time: eventTime.add(chance.integer({ min: 5, max: 30 }), 'minutes').toISOString(),
 									user_id: event.user_id,
-									treasure_type: treasureTypes[Math.floor(Math.random() * treasureTypes.length)],
-									treasure_value: Math.floor(Math.random() * 601) + 200,
+									treasure_type: chance.pickone(treasureTypes),
+									treasure_value: chance.integer({ min: 200, max: 800 }),
 								});
 							}
 						}
@@ -1020,11 +1023,11 @@ const config = {
 			// Hook 3 RETENTION + Hook 4 CHURN — early guild-joiners get
 			// extra cloned combat events; non-joiners with 3+ deaths in
 			// first week lose 70% of post-week events. No flag.
-			const shouldChurn = (!joinedGuildEarly && earlyDeaths >= 3) || (earlyDeaths >= 5);
+			const shouldChurn = (!joinedGuildEarly && earlyDeaths >= 2) || (earlyDeaths >= 4);
 			if (shouldChurn) {
 				const firstWeekEnd = firstEventTime ? firstEventTime.add(7, 'days') : null;
 				for (let i = userEvents.length - 1; i >= 0; i--) {
-					if (firstWeekEnd && dayjs(userEvents[i].time).isAfter(firstWeekEnd) && chance.bool({ likelihood: 70 })) {
+					if (firstWeekEnd && dayjs(userEvents[i].time).isAfter(firstWeekEnd) && chance.bool({ likelihood: 80 })) {
 						userEvents.splice(i, 1);
 					}
 				}

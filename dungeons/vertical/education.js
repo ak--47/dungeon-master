@@ -1,7 +1,7 @@
 // ── TWEAK THESE ──
 const SEED = "harness-education";
-const num_days = 100;
-const num_users = 5_000;
+const num_days = 120;
+const num_users = 10_000;
 const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
 
@@ -28,7 +28,7 @@ const chance = u.initChance(SEED);
  * Supports self-paced and cohort-based learning with courses, quizzes,
  * assignments, and social study features.
  *
- * Scale: 5,000 users / 600K events / 100 days / 17 event types
+ * Scale: 10,000 users / ~1.4M events / 120 days / 17 event types
  *
  * CORE LOOP:
  * Register → browse/enroll in courses → watch lectures → practice problems →
@@ -314,14 +314,16 @@ const problemIds = v.range(1, 601).map(n => `problem_${v.uid(6)}`);
 
 /** @type {Config} */
 const config = {
+	version: 2,
 	token,
 	seed: SEED,
 	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-04-28T23:59:59Z",
+	datasetEnd: "2026-05-01T23:59:59Z",
 	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
-	hasAnonIds: false,
+	hasAnonIds: true,
+	avgDevicePerUser: 2,
 	hasSessionIds: true,
 	format: "json",
 	gzip: true,
@@ -394,6 +396,7 @@ const config = {
 			event: "account registered",
 			weight: 1,
 			isFirstEvent: true,
+			isAuthEvent: true,
 			properties: {
 				"account_type": ["instructor", "instructor", "instructor", "instructor", "instructor", "instructor", "student"],
 				"signup_source": ["organic", "referral", "school_partnership", "social_ad"],
@@ -660,6 +663,17 @@ const config = {
 			}
 		}
 
+		// HOOK 7 (funnel-pre): FREE VS PAID — free users get 0.5x conversion rate;
+		// paid subscribers get 1.5x. Applies to course-completion funnel.
+		if (type === "funnel-pre") {
+			const subStatus = meta?.profile?.subscription_status;
+			if (subStatus === "free") {
+				record.conversionRate = Math.round(record.conversionRate * 0.5);
+			} else if (subStatus === "monthly" || subStatus === "annual") {
+				record.conversionRate = Math.min(100, Math.round(record.conversionRate * 1.5));
+			}
+		}
+
 		// HOOK 9 (T2C): COURSE COMPLETION TIME-TO-CONVERT (funnel-post)
 		// Annual subscribers complete the Course Completion funnel 1.4x
 		// faster (factor 0.71); Free users 1.4x slower (factor 1.4).
@@ -732,11 +746,12 @@ const config = {
 					}
 				}
 			} else if (notesTakenCount >= 9) {
-				userEvents.forEach(e => {
-					if (e.event === "certificate earned" && typeof e.final_grade === "number") {
-						e.final_grade = Math.max(50, Math.round(e.final_grade * 0.5));
+				// Over-noters: drop 35% of certificates (stuck in study mode)
+				for (let i = userEvents.length - 1; i >= 0; i--) {
+					if (userEvents[i].event === "certificate earned" && chance.bool({ likelihood: 35 })) {
+						userEvents.splice(i, 1);
 					}
-				});
+				}
 			}
 
 			// HOOK 8 (cont): Speed learners (3+ lectures at 2.0x) score +8 on quizzes.

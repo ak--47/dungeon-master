@@ -1,7 +1,7 @@
 // ── TWEAK THESE ──
 const SEED = "harness-fintech";
-const num_days = 100;
-const num_users = 5_000;
+const num_days = 120;
+const num_users = 10_000;
 const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
 
@@ -348,14 +348,16 @@ const chance = u.initChance(SEED);
 
 /** @type {Config} */
 const config = {
+	version: 2,
 	token,
 	seed: SEED,
 	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-04-28T23:59:59Z",
+	datasetEnd: "2026-05-01T23:59:59Z",
 	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
-	hasAnonIds: false,
+	hasAnonIds: true,
+	avgDevicePerUser: 2,
 	hasSessionIds: true,
 	format: "json",
 	gzip: true,
@@ -453,6 +455,7 @@ const config = {
 			event: "account opened",
 			weight: 1,
 			isFirstEvent: true,
+			isAuthEvent: true,
 			properties: {
 				"account_type": ["personal", "business", "personal"],
 				"signup_channel": ["app", "web", "referral", "branch"],
@@ -505,6 +508,7 @@ const config = {
 		{
 			event: "bill payment missed",
 			weight: 1,
+			isStrictEvent: true, // hook-only: created by Hook 6 from manual bill-paid events
 			properties: {
 				"bill_type": ["rent", "utilities", "phone", "insurance", "subscription", "loan_payment"],
 				"amount": u.weighNumRange(20, 3000, 0.5, 150),
@@ -880,11 +884,12 @@ const config = {
 					}
 				});
 			} else if (txnCount >= 11) {
-				userEvents.forEach(e => {
-					if (e.event === "premium upgraded" && typeof e.monthly_fee === "number") {
-						e.monthly_fee = Math.round(e.monthly_fee * 0.7 * 100) / 100;
+				// Drop 20% of premium-upgraded events for heavy transactors
+				for (let i = userEvents.length - 1; i >= 0; i--) {
+					if (userEvents[i].event === "premium upgraded" && chance.bool({ likelihood: 20 })) {
+						userEvents.splice(i, 1);
 					}
-				});
+				}
 			}
 		}
 

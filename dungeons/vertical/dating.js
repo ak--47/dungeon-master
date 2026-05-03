@@ -81,7 +81,8 @@ const chance = u.initChance(SEED);
  * -------------------------------------------------------------------------------------
  * 2. WEEKEND SWIPE SURGE (everything)
  * -------------------------------------------------------------------------------------
- * PATTERN: Sunday 18-23 UTC swipes get 1.5x duplication. No flag.
+ * PATTERN: Sunday swipes get heavy cloning (evening 4x, daytime 2x)
+ * to overcome soup DOW weight deficit. No flag.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *   Report 1: Swipe Volume by Day of Week
@@ -215,14 +216,16 @@ const chance = u.initChance(SEED);
 
 /** @type {Config} */
 const config = {
+	version: 2,
 	token,
 	seed: SEED,
 	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-04-28T23:59:59Z",
+	datasetEnd: "2026-05-01T23:59:59Z",
 	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
-	hasAnonIds: false,
+	hasAnonIds: true,
+	avgDevicePerUser: 2,
 	hasSessionIds: true,
 	format: "json",
 	gzip: true,
@@ -246,6 +249,7 @@ const config = {
 			event: "profile created",
 			weight: 1,
 			isFirstEvent: true,
+			isAuthEvent: true,
 			properties: {
 				age_range: ["18-24", "25-29", "30-34", "35-39", "40+"],
 				gender: ["Male", "Male", "Female", "Female", "Non-binary"],
@@ -544,24 +548,22 @@ const config = {
 				});
 			}
 
-			// HOOK 2: WEEKEND SWIPE SURGE — Sunday 18-23 UTC swipes get cloned
-			// 1.5x. No flag — discover via day-of-week chart.
+			// HOOK 2: WEEKEND SWIPE SURGE — Sunday swipes get heavy cloning
+			// to overcome the soup DOW weight deficit. Evening swipes (18-23)
+			// get 4 clones; daytime Sunday swipes get 2 clones.
+			// No flag — discover via day-of-week chart.
 			for (let idx = events.length - 1; idx >= 0; idx--) {
 				const event = events[idx];
 				if (event.event === "swipe right") {
 					const dow = new Date(event.time).getUTCDay();
-					const hr = new Date(event.time).getUTCHours();
-					if (dow === 0 && hr >= 18 && hr <= 23) {
+					if (dow === 0) {
+						const hr = new Date(event.time).getUTCHours();
+						const clones = (hr >= 18 && hr <= 23) ? 4 : 2;
 						const etime = dayjs(event.time);
-						events.push({
-							...event,
-							time: etime.add(chance.integer({ min: 1, max: 30 }), "minutes").toISOString(),
-							user_id: event.user_id,
-						});
-						if (chance.bool({ likelihood: 50 })) {
+						for (let c = 0; c < clones; c++) {
 							events.push({
 								...event,
-								time: etime.add(chance.integer({ min: 5, max: 60 }), "minutes").toISOString(),
+								time: etime.add(chance.integer({ min: 1, max: 60 }), "minutes").toISOString(),
 								user_id: event.user_id,
 							});
 						}
@@ -587,15 +589,50 @@ const config = {
 				});
 			}
 
+			// HOOK 5: GHOSTING CHURN — users with match but no message within
+			// 48hrs lose 80% of post-match events. No flag.
+			// (runs BEFORE premium boost so injected premium matches survive)
+			if (matchEvents.length > 0) {
+				let hasTimely = false;
+				for (const m of matchEvents) {
+					const matchTime = dayjs(m.time);
+					const deadline = matchTime.add(48, "hours");
+					for (const msg of messageSentEvents) {
+						const msgTime = dayjs(msg.time);
+						if (msgTime.isAfter(matchTime) && msgTime.isBefore(deadline)) {
+							hasTimely = true;
+							break;
+						}
+					}
+					if (hasTimely) break;
+				}
+				if (!hasTimely) {
+					const earliestMatch = matchEvents.reduce((min, m) =>
+						dayjs(m.time).isBefore(dayjs(min.time)) ? m : min
+					);
+					const churnAfter = dayjs(earliestMatch.time);
+					for (let i = events.length - 1; i >= 0; i--) {
+						if (dayjs(events[i].time).isAfter(churnAfter) && chance.bool({ likelihood: 80 })) {
+							events.splice(i, 1);
+						}
+					}
+				}
+			}
+
 			// HOOK 4: PREMIUM MATCH BOOST — Premium 2x, Elite 4x match events.
 			// Elite users also get profile-viewed events injected (see-who-liked-you).
-			// Reads subscription from profile.
+			// Reads subscription from profile. Runs AFTER ghosting churn so
+			// injected matches are not culled.
 			const sub = profile.subscription;
 			if ((sub === "Premium" || sub === "Elite") && matchEvents.length > 0) {
-				const multiplier = sub === "Elite" ? 3 : 1;
+				// Count surviving match events post-churn
+				const survivingMatches = events.filter(e => e.event === "match received");
+				const baseCount = survivingMatches.length || 1;
+				const targetMultiplier = sub === "Elite" ? 4 : 2;
+				const toAdd = Math.max(0, baseCount * targetMultiplier - baseCount);
 				const matchTemplate = matchEvents[0];
-				for (let i = 0; i < matchEvents.length * multiplier; i++) {
-					const sourceMatch = matchEvents[i % matchEvents.length];
+				for (let i = 0; i < toAdd; i++) {
+					const sourceMatch = survivingMatches[i % survivingMatches.length] || matchTemplate;
 					events.push({
 						...matchTemplate,
 						time: dayjs(sourceMatch.time).add(chance.integer({ min: 10, max: 240 }), "minutes").toISOString(),
@@ -605,7 +642,7 @@ const config = {
 				}
 				if (sub === "Elite") {
 					const viewTemplate = events.find(e => e.event === "profile viewed") || matchTemplate;
-					matchEvents.forEach(m => {
+					survivingMatches.forEach(m => {
 						events.push({
 							...viewTemplate,
 							event: "profile viewed",
@@ -699,35 +736,6 @@ const config = {
 				} else {
 					for (let i = events.length - 1; i >= 0; i--) {
 						if (dayjs(events[i].time).isAfter(day30) && chance.bool({ likelihood: 80 })) {
-							events.splice(i, 1);
-						}
-					}
-				}
-			}
-
-			// HOOK 5: GHOSTING CHURN — users with match but no message within
-			// 48hrs lose 80% of post-match events. No flag.
-			if (matchEvents.length > 0) {
-				let hasTimely = false;
-				for (const m of matchEvents) {
-					const matchTime = dayjs(m.time);
-					const deadline = matchTime.add(48, "hours");
-					for (const msg of messageSentEvents) {
-						const msgTime = dayjs(msg.time);
-						if (msgTime.isAfter(matchTime) && msgTime.isBefore(deadline)) {
-							hasTimely = true;
-							break;
-						}
-					}
-					if (hasTimely) break;
-				}
-				if (!hasTimely) {
-					const earliestMatch = matchEvents.reduce((min, m) =>
-						dayjs(m.time).isBefore(dayjs(min.time)) ? m : min
-					);
-					const churnAfter = dayjs(earliestMatch.time);
-					for (let i = events.length - 1; i >= 0; i--) {
-						if (dayjs(events[i].time).isAfter(churnAfter) && chance.bool({ likelihood: 80 })) {
 							events.splice(i, 1);
 						}
 					}

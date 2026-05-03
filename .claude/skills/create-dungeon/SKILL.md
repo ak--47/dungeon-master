@@ -64,6 +64,7 @@ Before writing any code, scan:
 ```javascript
 // ── TWEAK THESE ──
 const SEED = "dm4-VERTICAL";
+const num_days = 120;
 const num_users = 5_000;
 const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
@@ -97,8 +98,7 @@ const productIds = v.range(1, 200).map(n => `prod_${v.uid(8)}`);
 /** @type {Config} */
 const config = {
   token, seed: SEED,
-  datasetStart: "2026-01-01T00:00:00Z",
-  datasetEnd:   "2026-04-30T23:59:59Z",
+  numDays: num_days,
   avgEventsPerUserPerDay: avg_events_per_user_per_day,
   numUsers: num_users,
 

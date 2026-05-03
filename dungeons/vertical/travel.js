@@ -1,7 +1,7 @@
 // ── TWEAK THESE ──
 const SEED = "dm4-travel";
-const num_days = 100;
-const num_users = 5_000;
+const num_days = 120;
+const num_users = 10_000;
 const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
 
@@ -29,7 +29,7 @@ const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", 
  * StayQuest — a hotel booking platform for business and leisure travelers.
  * Users search destinations, compare hotels, book rooms, and leave reviews.
  *
- * - 5,000 users over 100 days, ~600K events
+ * - 5,000 users over 120 days, ~600K events
  * - Segments: business travelers (weekday), leisure families, luxury, budget
  * - Core loop: search → view hotel → compare → book → stay → review
  * - Revenue: commission per booking + premium loyalty membership
@@ -210,14 +210,16 @@ const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", 
 
 /** @type {Config} */
 const config = {
+	version: 2,
 	token,
 	seed: SEED,
 	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-04-28T23:59:59Z",
+	datasetEnd: "2026-05-01T23:59:59Z",
 	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
-	hasAnonIds: false,
+	hasAnonIds: true,
+	avgDevicePerUser: 2,
 	hasSessionIds: true,
 	format: "json",
 	gzip: true,
@@ -250,6 +252,7 @@ const config = {
 			event: "account created",
 			weight: 1,
 			isFirstEvent: true,
+			isAuthEvent: true,
 			properties: {
 				signup_source: ["organic", "google", "instagram", "tripadvisor", "referral", "email_campaign"],
 			},

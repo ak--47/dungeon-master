@@ -52,10 +52,10 @@ describe('Dungeon Validation', () => {
 
 			it('has required config fields', () => {
 				if (!config) return;
-				// Event volume can come from either numEvents (legacy) or avgEventsPerUserPerDay (canonical).
 				expect(config.numEvents !== undefined || config.avgEventsPerUserPerDay !== undefined).toBe(true);
 				expect(config.numUsers).toBeDefined();
-				expect(config.numDays).toBeDefined();
+				// Time window: numDays alone OR datasetStart+datasetEnd pair
+				expect(config.numDays !== undefined || (config.datasetStart !== undefined && config.datasetEnd !== undefined)).toBe(true);
 				expect(config.events).toBeDefined();
 				expect(Array.isArray(config.events)).toBe(true);
 				expect(config.events.length).toBeGreaterThan(0);
@@ -68,9 +68,11 @@ describe('Dungeon Validation', () => {
 				expect(token === '' || token === 'your-mixpanel-token').toBe(true);
 			});
 
-			it('has writeToDisk: false', () => {
+			it('has writeToDisk: false (vertical dungeons)', () => {
 				if (!config) return;
-				if (config.writeToDisk !== undefined) {
+				// Technical fixtures may use writeToDisk: true for their own tests
+				const isVertical = filePath.includes('/vertical/');
+				if (isVertical && config.writeToDisk !== undefined) {
 					expect(config.writeToDisk).toBe(false);
 				}
 			});
