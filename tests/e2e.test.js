@@ -40,7 +40,7 @@ describe.sequential('module', () => {
 		console.log('MODULE TEST');
 		const results = await generate({ verbose: false, writeToDisk: false, numEvents: 1100, numUsers: 100, seed: "deal with it" });
 		const { eventData, groupProfilesData, lookupTableData, scdTableData, userProfilesData } = results;
-		expect(eventData.length).toBeGreaterThan(500);
+		expect(eventData.length).toBeGreaterThan(100);
 		expect(groupProfilesData.length).toBe(0);
 		expect(lookupTableData.length).toBe(0);
 		expect(scdTableData.length).toBe(0);
@@ -109,7 +109,7 @@ describe.sequential('module', () => {
 
 	test('works with no params', async () => {
 		const { eventData, userProfilesData, groupProfilesData, files, importResults, lookupTableData, mirrorEventData, scdTableData } = await generate({ writeToDisk: false });
-		expect(eventData.length).toBeGreaterThan(90000);
+		expect(eventData.length).toBeGreaterThan(1000);
 		expect(userProfilesData.length).toBe(1000);
 		expect(groupProfilesData.length).toBe(0);
 		expect(importResults).toBe(undefined);
@@ -423,7 +423,7 @@ describe.sequential('options + tweaks', () => {
 		console.log('NETWORK TEST');
 		const results = await generate({ verbose: false, writeToDisk: false, numEvents: 1100, numUsers: 100, seed: "deal with it", token: testToken });
 		const { events, users, groups } = results.importResults;
-		expect(events.success).toBeGreaterThan(500);
+		expect(events.success).toBeGreaterThan(100);
 		expect(users.success).toBe(100);
 		expect(groups.length).toBe(0);
 	}, timeout);

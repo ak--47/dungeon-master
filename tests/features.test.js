@@ -775,9 +775,9 @@ describe('funnel experiments', () => {
 		const expEvents = results.eventData.filter(e => e.event === '$experiment_started');
 		expect(expEvents.length).toBeGreaterThan(0);
 
-		// Experiment events should have "Variant name" property
+		// Experiment events should have "Variant name" property (new API uses full names)
 		for (const ev of expEvents) {
-			expect(['A', 'B', 'C']).toContain(ev['Variant name']);
+			expect(['Variant A', 'Variant B', 'Control']).toContain(ev['Variant name']);
 		}
 	});
 });

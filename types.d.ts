@@ -393,6 +393,13 @@ export interface HookMetaFunnelPre extends HookMetaTimeAnchors {
     config: Dungeon;
     /** Unix seconds — earliest possible event time for this funnel's first step. */
     firstEventTime: number;
+    /**
+     * Unix seconds — temporal anchor for this funnel run. For usage funnels, advances
+     * after each run so successive funnels spread across the user's active window.
+     * For first-funnel attempts, matches the attempt cursor. Use this to implement
+     * temporal conversion trends (e.g., "conversion increases after day 30").
+     */
+    funnelRunTime: number;
     /** True if this funnel is the user's `isFirstFunnel`. */
     isFirstFunnel: boolean;
     /** True if the user's account creation falls inside the dataset window. */
@@ -407,6 +414,8 @@ export interface HookMetaFunnelPre extends HookMetaTimeAnchors {
     isFinalAttempt: boolean;
     /** The user's assigned persona (if `personas` is configured), or null. */
     persona: Persona | null;
+    /** Experiment context for this funnel run, or null if no experiment / pre-start-date. */
+    experiment: HookMetaExperiment | null;
 }
 
 /** Meta passed to the "funnel-post" hook (mutate generated funnel events in place). */
@@ -416,6 +425,8 @@ export interface HookMetaFunnelPost extends HookMetaTimeAnchors {
     scd: Record<string, SCDSchema[]>;
     funnel: Funnel;
     config: Dungeon;
+    /** Unix seconds — temporal anchor for this funnel run (see HookMetaFunnelPre.funnelRunTime). */
+    funnelRunTime: number;
     /** True if this funnel is the user's `isFirstFunnel`. */
     isFirstFunnel: boolean;
     /** True if the user's account creation falls inside the dataset window. */
@@ -430,6 +441,8 @@ export interface HookMetaFunnelPost extends HookMetaTimeAnchors {
     isFinalAttempt: boolean;
     /** The user's assigned persona (if `personas` is configured), or null. */
     persona: Persona | null;
+    /** Experiment context for this funnel run, or null if no experiment / pre-start-date. */
+    experiment: HookMetaExperiment | null;
 }
 
 /** Meta passed to the "everything" hook — most powerful hook (sees all events for one user). */
@@ -753,10 +766,23 @@ export interface Funnel {
      */
     conditions?: Record<string, ValueValid>;
 	/**
-	 * If true, the funnel will be part of an experiment where we generate 3 variants of the funnel with different conversion rates
+	 * Experiment configuration for this funnel.
 	 *
+	 * - `true` — backward-compatible shorthand: 3 variants (Variant A = worse, Variant B = better, Control),
+	 *   active for the entire dataset.
+	 * - `ExperimentConfig` object — custom variant names, conversion/TTC multipliers, temporal gating,
+	 *   and distribution weights.
+	 *
+	 * Variant assignment is **deterministic per user** (hash of user_id + experiment name), so the same
+	 * user is in the same variant across all funnel runs. `$experiment_started` is prepended to the
+	 * sequence for every post-start-date funnel run.
+	 *
+	 * Hook meta (`meta.experiment`) exposes the resolved variant in `funnel-pre` and `funnel-post`
+	 * hooks, enabling variant-specific story injection.
+	 *
+	 * @see ExperimentConfig
 	 */
-	experiment?: boolean;
+	experiment?: boolean | ExperimentConfig;
 	/**
 	 * optional: if set, in sequential funnels, this will determine WHEN the property is bound to the rest of the events in the funnel
 	 */
@@ -768,6 +794,12 @@ export interface Funnel {
 	 * @see AttemptsConfig
 	 */
 	attempts?: AttemptsConfig;
+	/** @internal Resolved experiment config set by config-validator. */
+	_experiment?: { name: string; variants: Array<{ name: string; conversionMultiplier: number; ttcMultiplier: number; weight: number }>; startUnix: number | null };
+	/** @internal Set by funnels.js during experiment handling. */
+	_experimentName?: string;
+	/** @internal Set by funnels.js during experiment handling. */
+	_experimentVariant?: string;
 }
 
 /**
@@ -807,6 +839,64 @@ export interface AttemptsConfig {
 	 * Matches the existing `Funnel.conversionRate` scale (0–100, NOT 0–1).
 	 */
 	conversionRate?: number;
+}
+
+/**
+ * Experiment configuration for a funnel. Controls variant assignment, naming,
+ * conversion/TTC modifiers, and temporal gating.
+ *
+ * @example A/B test starting 30 days before dataset end
+ * {
+ *   name: "Checkout Redesign",
+ *   startDaysBeforeEnd: 30,
+ *   variants: [
+ *     { name: "Control" },
+ *     { name: "New Checkout", conversionMultiplier: 1.25, ttcMultiplier: 0.8 },
+ *   ]
+ * }
+ */
+export interface ExperimentConfig {
+	/** Human-readable experiment name. Default: `funnel.name + " Experiment"`. */
+	name?: string;
+	/**
+	 * Variant definitions. Each variant gets a deterministic share of users.
+	 * Default (when omitted): 3 variants — Variant A (worse), Variant B (better), Control.
+	 */
+	variants?: ExperimentVariant[];
+	/**
+	 * Days before dataset end that the experiment starts. Funnel runs before
+	 * the start date skip experiment logic entirely (no variant, no $experiment_started).
+	 * Default: 0 (entire dataset).
+	 */
+	startDaysBeforeEnd?: number;
+}
+
+/** A single variant in an experiment. */
+export interface ExperimentVariant {
+	/** Display name — appears in the "Variant name" property on $experiment_started. */
+	name: string;
+	/** Multiplier applied to funnel.conversionRate. 1.0 = unchanged. Default: 1.0. */
+	conversionMultiplier?: number;
+	/** Multiplier applied to funnel.timeToConvert. 1.0 = unchanged. Default: 1.0. */
+	ttcMultiplier?: number;
+	/** Distribution weight. Default: 1 (equal split across variants). */
+	weight?: number;
+}
+
+/** Experiment context exposed in funnel-pre and funnel-post hook meta. */
+export interface HookMetaExperiment {
+	/** Experiment name. */
+	name: string;
+	/** Name of the assigned variant. */
+	variantName: string;
+	/** 0-based index of the assigned variant. */
+	variantIndex: number;
+	/** Conversion multiplier applied for this variant. */
+	conversionMultiplier: number;
+	/** TTC multiplier applied for this variant. */
+	ttcMultiplier: number;
+	/** Unix seconds of experiment start, or null if active for entire dataset. */
+	startDate: number | null;
 }
 
 /**
