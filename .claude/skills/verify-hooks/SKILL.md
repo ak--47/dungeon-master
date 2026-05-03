@@ -917,16 +917,45 @@ already 86% "down" (6:1 ratio in config), the hook is invisible. Change
 the baseline to favor "up" (e.g., 3:1 up:down) so the hook's forced "down"
 creates a measurable shift.
 
-### Standard Dataset Window (REV 9)
+### Computing the Dataset Window (REV 9, updated REV 10)
 
-All vertical dungeons use a standardized 120-day window:
-- `datasetStart: "2026-01-01T00:00:00Z"`
-- `datasetEnd: "2026-05-01T23:59:59Z"`
-- `num_days = 120`
+Dungeons declare their time window in one of three ways — the verifier must
+derive the actual start/end before writing DuckDB queries:
 
-DuckDB verification queries should anchor to `TIMESTAMP '2026-01-01'` for
-day-in-dataset calculations. Do NOT use `MAX(time) - INTERVAL 'N' DAY` as
-the anchor — it doesn't account for the pre-existing user spread period.
+| Config shape | How to derive window |
+|---|---|
+| `datasetStart` + `datasetEnd` | Use directly |
+| `numDays` only (no explicit start/end) | `datasetEnd = NOW`, `datasetStart = NOW - numDays` |
+| `datasetStart` + `numDays` | `datasetEnd = datasetStart + numDays` |
+
+The engine always resolves to a `[datasetStart, datasetEnd]` pair internally
+(see `config-validator.js`). To find the actual window from the OUTPUT data:
+
+```sql
+-- Derive window from output events (works for any dungeon)
+SELECT
+  MAX(time::TIMESTAMP) as datasetEnd,
+  MAX(time::TIMESTAMP) - INTERVAL '<numDays>' DAY as datasetStart
+FROM read_json_auto('./data/verify-X-EVENTS*.json', sample_size=-1);
+```
+
+Use `datasetStart` (derived above) as the DuckDB anchor for day-in-dataset:
+
+```sql
+WITH bounds AS (
+  SELECT MAX(time::TIMESTAMP) - INTERVAL '<numDays>' DAY as ds_start
+  FROM read_json_auto('./data/verify-X-EVENTS*.json', sample_size=-1)
+)
+SELECT EXTRACT(EPOCH FROM (e.time::TIMESTAMP - b.ds_start)) / 86400 as day_in
+FROM events e, bounds b;
+```
+
+Do NOT use `MIN(time)` as the anchor — pre-existing users have events up
+to 30 days before `datasetStart` (from `preExistingSpread: 'uniform'`).
+
+When the dungeon has explicit `datasetStart` (e.g., `"2026-01-01T00:00:00Z"`),
+use it directly: `TIMESTAMP '2026-01-01'`. When `numDays` is used without
+explicit start, derive from MAX(time) as shown above.
 
 ### No Flag Stamping Audit (REV 9)
 

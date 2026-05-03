@@ -17,13 +17,25 @@ export type ValueValid = Primitives | ValueValid[] | (() => ValueValid);
  */
 export interface Dungeon {
     // ── Core Parameters ──
-    /** Optional dungeon version string. Not used by the engine — serves as metadata for tracking revisions when configs are saved/shared. */
-    version?: string;
+    /** Optional dungeon version. Not used by the engine — serves as metadata for tracking revisions when configs are saved/shared. */
+    version?: string | number;
     /** Mixpanel project token. If provided, data will be imported to Mixpanel after generation. */
     token?: string;
     /** RNG seed for reproducible output. Same seed + concurrency=1 = identical data. */
     seed?: string;
-    /** Number of days the dataset spans. Used as fallback when datasetStart/datasetEnd are NOT both set — window becomes (today_start - numDays, today_start). Default: 30. When datasetStart/datasetEnd ARE both set, numDays is recomputed from the window and any user-supplied value is ignored (with a warning). */
+    /**
+     * Number of days the dataset spans. Default: 30.
+     *
+     * Three resolution modes:
+     * 1. **`numDays` alone (no datasetStart/End):** Window = `[today - numDays, today]`.
+     *    Simplest API for ad-hoc dungeons. NOT deterministic across runs (today changes).
+     * 2. **`datasetStart` + `datasetEnd` (no numDays):** Window pinned exactly. `numDays`
+     *    derived automatically. Fully deterministic — use for vertical/production dungeons.
+     * 3. **All three set:** `datasetStart`/`datasetEnd` win. `numDays` is recomputed from
+     *    the window; user-supplied value is ignored (with a warning).
+     *
+     * Setting only one of `datasetStart`/`datasetEnd` throws.
+     */
     numDays?: number;
     /**
      * Explicit start of the dataset window. Pin BOTH `datasetStart` and `datasetEnd` for
@@ -354,7 +366,19 @@ export interface HookMetaTimeAnchors {
     datasetEnd: number;
 }
 
-/** Meta passed to the "event" hook. */
+/**
+ * Meta passed to the "event" hook.
+ *
+ * **Temporal-check warning:** `datasetStart`/`datasetEnd` are unix seconds in the
+ * shifted time frame, but `record.time` during the event hook is in the pre-shift
+ * fixed window. Comparing them directly (e.g., `dayjs(record.time).diff(dayjs.unix(meta.datasetStart))`)
+ * produces unreliable day-in-dataset values. Move any temporal check to the
+ * `everything` hook where both timestamps are in the same frame.
+ *
+ * Safe uses of the event hook: closure-based state (module-level Maps), event
+ * replacement (return a different object), simple property mutations not gated
+ * on time.
+ */
 export interface HookMetaEvent extends HookMetaTimeAnchors {
     /** The user this event belongs to (only `distinct_id` is guaranteed). */
     user: { distinct_id: string };
@@ -445,7 +469,17 @@ export interface HookMetaFunnelPost extends HookMetaTimeAnchors {
     experiment: HookMetaExperiment | null;
 }
 
-/** Meta passed to the "everything" hook — most powerful hook (sees all events for one user). */
+/**
+ * Meta passed to the "everything" hook — most powerful hook (sees all events for one user).
+ *
+ * **Ordering within the hook matters.** When multiple effects coexist:
+ * 1. SuperProp stamping (profile values → events)
+ * 2. Non-temporal mutations and event cloning/injection
+ * 3. Event filtering (churn, retention, rate-limit drops)
+ * 4. Temporal value mutations (price spikes, error windows) — run LAST
+ *    so cloned events that land in the window also get the mutation
+ * 5. Sort by time
+ */
 export interface HookMetaEverything extends HookMetaTimeAnchors {
     /** The user's profile, including any merged persona properties. */
     profile: UserProfile;
@@ -625,7 +659,7 @@ export interface Context {
 export interface EventConfig {
     /** The event name (e.g., "page viewed", "purchase completed"). */
     event?: string;
-    /** Relative frequency weight (1-10). Higher = more likely to be selected. Used for both standalone event selection and funnel sequence building. Default: 1 */
+    /** Relative frequency weight (1-10, clamped by validator). Higher = more likely to be selected for standalone event generation. Does NOT control funnel event frequency — funnels generate their own events. 0 is clamped to 1. Default: 1 */
     weight?: number;
     /** Properties to attach to this event type. Values can be arrays (random pick), functions, or primitives. */
     properties?: Record<string, ValueValid>;
@@ -639,7 +673,7 @@ export interface EventConfig {
     isSessionStartEvent?: boolean;
     /** Internal: timing offset in milliseconds (set by funnel system, not user-configured). */
     relativeTimeMs?: number;
-    /** If true, this event is excluded from auto-generated funnels (inferFunnels and catch-all). Use for system events that shouldn't appear in conversion sequences. */
+    /** If true, this event appears ONLY in explicitly-defined funnels that reference it — excluded from standalone event generation and auto-generated funnels. Use for events that should only occur in funnel context (e.g., "application approved" only after "application submitted"). Also useful to suppress standalone generation of events with weight > 0 that you only want from funnels. */
     isStrictEvent?: boolean;
     /**
      * If true, this event marks the moment a user transitions from anonymous (pre-auth)
@@ -1496,6 +1530,36 @@ declare module '@ak--47/dungeon-master/hook-patterns' {
     export function applyAggregateByBin(events: EventSchema[], profile: Record<string, unknown> | null, opts: { cohortEvent: string; bins: Record<string, [number, number]>; event: string; propertyName: string; deltas: Record<string, number> }): void;
     export function applyTTCBySegment(funnelEvents: EventSchema[], profile: Record<string, unknown>, opts: { segmentKey: string; factors: Record<string, number> }): void;
     export function applyAttributedBySource(events: EventSchema[], profile: Record<string, unknown> | null, opts: { sourceEvent: string; sourceProperty: string; downstreamEvent: string; weights: Record<string, number>; model?: 'firstTouch' | 'lastTouch' }): void;
+}
+
+/**
+ * Options for `emulateBreakdown`. Each `type` uses a different subset of fields.
+ *
+ * | type | Required fields | Optional |
+ * |---|---|---|
+ * | `frequencyByFrequency` | `metricEvent`, `breakdownByFrequencyOf` | `perUser` |
+ * | `funnelFrequency` | `steps`, `breakdownByFrequencyOf` | — |
+ * | `aggregatePerUser` | `event`, `property`, `breakdownByFrequencyOf` | `agg` (default: `'avg'`) |
+ * | `timeToConvert` | `fromEvent`, `toEvent`, `breakdownByUserProperty`, `profiles` | — |
+ * | `attributedBy` | `conversionEvent`, `attributionEvent`, `attributionProperty` | `model` (default: `'lastTouch'`) |
+ */
+export interface EmulateOptions {
+    type: 'frequencyByFrequency' | 'funnelFrequency' | 'aggregatePerUser' | 'timeToConvert' | 'attributedBy';
+    metricEvent?: string;
+    breakdownByFrequencyOf?: string;
+    perUser?: boolean;
+    steps?: string[];
+    event?: string;
+    property?: string;
+    agg?: 'avg' | 'sum' | 'count' | 'max' | 'min';
+    fromEvent?: string;
+    toEvent?: string;
+    breakdownByUserProperty?: string;
+    profiles?: UserProfile[];
+    conversionEvent?: string;
+    attributionEvent?: string;
+    attributionProperty?: string;
+    model?: 'firstTouch' | 'lastTouch';
 }
 
 declare module '@ak--47/dungeon-master/verify' {
