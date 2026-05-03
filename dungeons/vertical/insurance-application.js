@@ -1,6 +1,6 @@
 // ── TWEAK THESE ──
 const SEED = "dm4-insurance";
-const num_days = 100;
+const num_days = 120;
 const num_users = 15_000;
 const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
@@ -184,14 +184,16 @@ const chance = u.initChance(SEED);
 
 /** @type {Config} */
 const config = {
+	version: 2,
 	token,
 	seed: SEED,
 	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-04-28T23:59:59Z",
+	datasetEnd: "2026-05-01T23:59:59Z",
 	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
-	hasAnonIds: false,
+	hasAnonIds: true,
+	avgDevicePerUser: 2,
 	hasSessionIds: true,
 	format: "json",
 	gzip: true,
@@ -225,6 +227,7 @@ const config = {
 			event: "account created",
 			weight: 1,
 			isFirstEvent: true,
+			isAuthEvent: true,
 			properties: {
 				signup_source: ["web", "mobile", "agent_referral", "partner"],
 				account_type: ["individual", "family", "business"],
