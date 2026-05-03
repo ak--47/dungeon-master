@@ -1,6 +1,6 @@
 // ── TWEAK THESE ──
 const SEED = "dm4-devtools";
-const num_days = 100;
+const num_days = 120;
 const num_users = 10_000;
 const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
@@ -281,14 +281,16 @@ const repoIds = v.range(1, 150).map(() => `REPO_${v.uid(6)}`);
 
 /** @type {Config} */
 const config = {
+	version: 2,
 	token,
 	seed: SEED,
 	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-04-28T23:59:59Z",
+	datasetEnd: "2026-05-01T23:59:59Z",
 	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
-	hasAnonIds: false,
+	hasAnonIds: true,
+	avgDevicePerUser: 2,
 	hasSessionIds: true,
 	format: "json",
 	gzip: true,
@@ -321,6 +323,7 @@ const config = {
 			event: "account created",
 			weight: 1,
 			isFirstEvent: true,
+			isAuthEvent: true,
 			properties: {
 				referral_source: ["organic", "github", "conference", "blog_post", "colleague", "search"],
 			},
@@ -841,11 +844,16 @@ const config = {
 			}
 
 			// -- HOOK 3: COPILOT PR VELOCITY ----------------------
-			// Users with ai_assist="copilot" on any PR get 1.5x more PRs.
-			const hasCopilot = events.some(e =>
-				(e.event === "pull request created" || e.event === "code review completed") && e.ai_assist === "copilot"
-			);
-			if (hasCopilot) {
+			// ~30% of users are copilot adopters (hash-based cohort).
+			// Copilot users get ai_assist="copilot" stamped and 1.5x more PRs.
+			const uid = events[0]?.user_id || "";
+			const isCopilotUser = (typeof uid === "string" ? uid.charCodeAt(0) : uid) % 10 < 3;
+			if (isCopilotUser) {
+				events.forEach(e => {
+					if (e.event === "pull request created" || e.event === "code review completed") {
+						e.ai_assist = "copilot";
+					}
+				});
 				const prEvents = events.filter(e => e.event === "pull request created");
 				const extraCount = Math.floor(prEvents.length * 0.5);
 				for (let i = 0; i < extraCount; i++) {
@@ -909,16 +917,15 @@ const config = {
 			}
 
 			// -- HOOK 9: BUILD-COUNT MAGIC NUMBER (no flags) ------
-			// Sweet 15-30 builds → +30% deploys (clone with unique offset).
-			// Over 31+ → drop 25% of deploys (flaky CI burnout).
+			// Sweet 15-30 builds → +50% deploys (clone with unique offset).
+			// Over 31+ → drop 40% of deploys (flaky CI burnout).
 			const buildCount = events.filter(e => e.event === "build completed").length;
 			if (buildCount >= 15 && buildCount <= 30) {
-				const deployTemplate = events.find(e => e.event === "deployment completed");
-				if (deployTemplate) {
-					const deploys = events.filter(e => e.event === "deployment completed");
-					const extras = Math.floor(deploys.length * 0.3);
-					for (let k = 0; k < extras; k++) {
-						const tpl = deploys[k % deploys.length];
+				const deploys = events.filter(e => e.event === "deployment completed");
+				const extras = Math.max(Math.floor(deploys.length * 0.5), 1);
+				for (let k = 0; k < extras; k++) {
+					const tpl = deploys[k % deploys.length];
+					if (tpl) {
 						events.push({
 							...tpl,
 							time: dayjs(tpl.time).add(chance.integer({ min: 5, max: 360 }), "minutes").toISOString(),
@@ -928,7 +935,7 @@ const config = {
 				}
 			} else if (buildCount >= 31) {
 				for (let i = events.length - 1; i >= 0; i--) {
-					if (events[i].event === "deployment completed" && chance.bool({ likelihood: 25 })) {
+					if (events[i].event === "deployment completed" && chance.bool({ likelihood: 40 })) {
 						events.splice(i, 1);
 					}
 				}
