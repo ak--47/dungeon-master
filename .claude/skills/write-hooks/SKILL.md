@@ -40,6 +40,9 @@ Out of scope:
   hand-rolled logic.
 - `dungeons/technical/pattern-*.js` — five minimal pattern fixtures, one per
   Phase 4 recipe.
+- `HOOKS.md` — encyclopedia of hook recipes organized by story pattern. Contains
+  17+ worked examples with code snippets, Mixpanel report instructions, and
+  adaptation notes. **Start here** to find the right pattern for your story.
 
 ## Hook execution model
 
@@ -48,6 +51,12 @@ Hooks fire in this order per user (see `CLAUDE.md` for the canonical reference):
 1. `"user"` — profile created. Mutate in place; return ignored.
 2. `"scd-pre"` — SCD entries created. Mutate in place OR return new array.
 3. For each funnel: `"funnel-pre"` → `"event"` (per step) → `"funnel-post"`.
+
+**`funnel-pre` is now reliable for temporal patterns.** Usage funnels advance a
+cursor after each run, so successive `meta.firstEventTime` values spread across
+the user's active window. Persona and world-event modifiers apply BEFORE the
+hook — the hook has final authority on `conversionRate`, `timeToConvert`, and
+`props`.
 4. `"event"` — for non-funnel standalone events. Return value REPLACES the event.
 5. `"everything"` — array of ALL the user's events. Return array to replace.
 
@@ -72,6 +81,30 @@ Inside `everything`:
 
 Pattern: gate trend logic on `meta.isFinalAttempt` so failed prior attempts
 don't get the same treatment as the converted attempt.
+
+Inside `funnel-pre` and `funnel-post` (when experiment is active):
+- `meta.experiment.name: string` — experiment name
+- `meta.experiment.variantName: string` — assigned variant
+- `meta.experiment.variantIndex: number` — 0-based index
+- `meta.experiment.conversionMultiplier: number`
+- `meta.experiment.ttcMultiplier: number`
+- `meta.experiment` is `null` when no experiment or funnel run is before start date
+
+Pattern: use `funnel-post` + `meta.experiment` to inject variant-specific
+downstream effects:
+
+```js
+if (type === 'funnel-post' && meta.experiment) {
+  if (meta.experiment.variantName === 'Variant B') {
+    // Winner variant: inject downstream engagement event
+    const last = record[record.length - 1];
+    record.push(cloneEvent(last, {
+      event: 'Agenda Generated',
+      time: dayjs(last.time).add(5, 'minutes').toISOString(),
+    }));
+  }
+}
+```
 
 ## Atom + pattern catalog
 
@@ -187,6 +220,8 @@ checks against and what consumers read to understand the dataset.
 
 1. Read the dungeon at `$ARGUMENTS[0]` and understand the existing schema.
 2. Translate the user's story description into 3–5 engineered patterns.
+   Consult `HOOKS.md` for recipe ideas that match the user's story. Each recipe
+   includes the hook type, code snippet, and Mixpanel report format.
 3. For each pattern:
    - Pick a pattern from `lib/hook-patterns/` if it fits the analysis 1:1.
    - Otherwise compose atoms from `lib/hook-helpers/`.

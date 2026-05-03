@@ -119,7 +119,7 @@ describe('Experiment API', () => {
 			hook: function (record, type, meta) {
 				if (type === 'funnel-pre') {
 					experimentMetas.push({
-						funnelRunTime: meta.funnelRunTime,
+						firstEventTime: meta.firstEventTime,
 						experiment: meta.experiment,
 					});
 				}
@@ -132,10 +132,10 @@ describe('Experiment API', () => {
 
 		// Pre-start funnel runs should have meta.experiment = null
 		const preStart = experimentMetas.filter(m =>
-			m.funnelRunTime < EXPECTED_START && !m.experiment
+			m.firstEventTime < EXPECTED_START && !m.experiment
 		);
 		const postStart = experimentMetas.filter(m =>
-			m.funnelRunTime >= EXPECTED_START && m.experiment
+			m.firstEventTime >= EXPECTED_START && m.experiment
 		);
 		// Some funnel runs should be pre-start (no experiment)
 		expect(preStart.length).toBeGreaterThan(0);

@@ -17,6 +17,8 @@ export type ValueValid = Primitives | ValueValid[] | (() => ValueValid);
  */
 export interface Dungeon {
     // ── Core Parameters ──
+    /** Optional dungeon version string. Not used by the engine — serves as metadata for tracking revisions when configs are saved/shared. */
+    version?: string;
     /** Mixpanel project token. If provided, data will be imported to Mixpanel after generation. */
     token?: string;
     /** RNG seed for reproducible output. Same seed + concurrency=1 = identical data. */
@@ -391,15 +393,13 @@ export interface HookMetaFunnelPre extends HookMetaTimeAnchors {
     scd: Record<string, SCDSchema[]>;
     funnel: Funnel;
     config: Dungeon;
-    /** Unix seconds — earliest possible event time for this funnel's first step. */
-    firstEventTime: number;
     /**
      * Unix seconds — temporal anchor for this funnel run. For usage funnels, advances
      * after each run so successive funnels spread across the user's active window.
      * For first-funnel attempts, matches the attempt cursor. Use this to implement
      * temporal conversion trends (e.g., "conversion increases after day 30").
      */
-    funnelRunTime: number;
+    firstEventTime: number;
     /** True if this funnel is the user's `isFirstFunnel`. */
     isFirstFunnel: boolean;
     /** True if the user's account creation falls inside the dataset window. */
@@ -425,8 +425,8 @@ export interface HookMetaFunnelPost extends HookMetaTimeAnchors {
     scd: Record<string, SCDSchema[]>;
     funnel: Funnel;
     config: Dungeon;
-    /** Unix seconds — temporal anchor for this funnel run (see HookMetaFunnelPre.funnelRunTime). */
-    funnelRunTime: number;
+    /** Unix seconds — temporal anchor for this funnel run (see HookMetaFunnelPre.firstEventTime). */
+    firstEventTime: number;
     /** True if this funnel is the user's `isFirstFunnel`. */
     isFirstFunnel: boolean;
     /** True if the user's account creation falls inside the dataset window. */

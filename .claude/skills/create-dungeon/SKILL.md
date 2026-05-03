@@ -39,6 +39,9 @@ Out of scope (hand off to `write-hooks`):
   on injected events)
 - Engineered patterns (magic numbers, A/B effects, time-bomb regressions, etc.)
 
+For an encyclopedia of hook patterns, recipes, and real-world examples:
+see `HOOKS.md` at the project root.
+
 Removed from the engine in 1.4 (DO NOT use these config keys; they're silently
 ignored): `subscription`, `attribution`, `geo`, `features`, `anomalies`.
 Recreate with hooks via `write-hooks`.
@@ -149,6 +152,15 @@ export default config;
 - `isChurnEvent: true` + `returnLikelihood` — fire-and-stop semantics
 - `isSessionStartEvent: true` — auto-prepended 15s before each funnel sequence
 
+When using experiments, include `$experiment_started` in the events array with
+`isStrictEvent: true` so the engine schema includes its properties:
+```js
+{ event: "$experiment_started", weight: 1, isStrictEvent: true, properties: {
+    "Experiment name": ["My Experiment"],
+    "Variant name": ["Control", "Variant A", "Variant B"],
+}}
+```
+
 ### 2. Funnels (3–6)
 
 - First funnel: includes `isFirstEvent` AND has `isAuthEvent: true` on the
@@ -156,6 +168,21 @@ export default config;
 - Usage funnels: ordinary sequences without `isFirstFunnel`. Optionally use
   `attempts` for repeat-usage modeling (abandon-cart pattern).
 - Pick `conversionRate` between 30 and 80; `timeToConvert` in hours.
+
+Funnel `props` stamp constant properties on all events in that funnel run.
+Use for funnel-level context (checkout flow variant, onboarding version):
+
+```js
+{
+  sequence: ["View Item", "Add to Cart", "Checkout"],
+  conversionRate: 40,
+  timeToConvert: 2,
+  props: {
+    checkout_version: ["v1", "v2"],      // random per funnel run
+    payment_method: ["card", "paypal"],
+  },
+}
+```
 
 ### 3. SuperProps (2–3)
 
@@ -234,6 +261,68 @@ Typical ranges:
 When set, `attempts.conversionRate` (optional) overrides `funnel.conversionRate`
 on the FINAL attempt. Failed prior attempts truncate before the first
 `isAuthEvent` step (no stitch fires for those attempts).
+
+### Experiments (per-funnel, optional)
+
+Funnels can run A/B/C experiments with `experiment: true` (3 default variants) or
+a rich `ExperimentConfig`:
+
+```js
+{
+  sequence: ["Create Agenda", "Agenda Generated"],
+  conversionRate: 60,
+  timeToConvert: 0.5,
+  name: "Collaborative Agenda",
+  experiment: {
+    name: "Collaborative Agenda",
+    variants: [
+      { name: "Control (No Collab)" },
+      { name: "Variant A (Ask User)", conversionMultiplier: 1.15, ttcMultiplier: 0.9 },
+      { name: "Variant B (Assume + Confirm)", conversionMultiplier: 1.35, ttcMultiplier: 0.7 },
+    ],
+    startDaysBeforeEnd: 30,
+  },
+}
+```
+
+Key fields (see `ExperimentConfig` in `types.d.ts`):
+- `variants[]` — custom names, conversion/TTC multipliers, distribution weights
+- `startDaysBeforeEnd` — temporal gating (experiment activates N days before dataset end)
+- Variant assignment is **deterministic per user** (hash-based, not random per run)
+- Engine injects `$experiment_started` with "Experiment name" and "Variant name" properties
+- Add `$experiment_started` to the events array with `isStrictEvent: true` so the schema includes it
+
+Variant-specific downstream effects (e.g., "Variant B boosts downstream event X") go in the `write-hooks` skill via `funnel-post` hooks that check `meta.experiment.variantName`.
+
+### World Events (optional)
+
+Shared temporal events affecting all users. Good for modeling outages, campaigns,
+or launches that create visible inflection points:
+
+```js
+worldEvents: [
+  {
+    name: "Black Friday Sale",
+    startDay: 55,
+    duration: 3,
+    affectsEvents: ["Purchase", "Add to Cart"],
+    volumeMultiplier: 2.5,
+    conversionModifier: 1.3,
+    injectProps: { promo_active: true },
+  },
+  {
+    name: "API Outage",
+    startDay: 30,
+    duration: 1,
+    affectsEvents: "*",
+    volumeMultiplier: 0.3,
+  },
+]
+```
+
+World events stamp `injectProps` on matching events and modulate volume via
+accept/reject sampling. `conversionModifier` affects funnel conversion rates.
+See `types.d.ts` `ResolvedWorldEvent` for the full interface.
 
 ## Trend shape — `macro` and `soup`
 

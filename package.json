@@ -24,7 +24,6 @@
 		"!dungeons/customers/",
 		"!dungeons/user/",
 		"scripts/",
-		"!scripts/experiments/",
 		"package.json",
 		"README.md",
 		"CHANGELOG.md"

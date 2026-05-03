@@ -49,6 +49,14 @@ Event properties are usually flat, but some dungeons may use arrays of objects o
 - Check the dungeon's event property definitions for any non-scalar types before writing queries
 - Run a quick `SELECT * FROM read_json_auto('./data/verify-hooks-EVENTS.json') LIMIT 5` to inspect the actual schema
 
+## Reference
+
+- `HOOKS.md` — encyclopedia of hook recipes. When a dungeon's patterns match
+  a recipe, use the recipe's "What it looks like in Mixpanel" section to know
+  what the correct output should look like.
+- `types.d.ts` — source of truth for `HookMetaFunnelPre`, `HookMetaFunnelPost`,
+  `HookMetaEverything`, `ExperimentConfig`, and all hook meta interfaces.
+
 ## Step 1: Read & Catalog the Hooks
 
 Read the dungeon file at `$ARGUMENTS`. If it's a bare filename (no `/`), check `dungeons/` and `dungeons/` directories.
@@ -166,6 +174,32 @@ WHERE u.created < (SELECT MIN(time::TIMESTAMP) FROM e)
 
 If any standard check fails, FLAG it in the report — it usually means the
 identity-model migration is incomplete.
+
+### Experiment invariants (run when dungeon uses `experiment:` on any funnel)
+
+```sql
+-- Experiment variant distribution should be roughly even (within ±10% of expected share)
+SELECT "Variant name", COUNT(*) AS exposure_count,
+  COUNT(DISTINCT user_id) AS unique_users
+FROM read_json_auto('./data/<file>-EVENTS.json')
+WHERE event = '$experiment_started'
+GROUP BY "Variant name"
+ORDER BY exposure_count DESC;
+
+-- $experiment_started should only appear after experiment start date
+-- (if startDaysBeforeEnd is set, all exposure times should be >= start date)
+SELECT MIN(time) AS earliest_exposure, MAX(time) AS latest_exposure
+FROM read_json_auto('./data/<file>-EVENTS.json')
+WHERE event = '$experiment_started';
+
+-- Same user should always be in the same variant (deterministic assignment)
+SELECT user_id, COUNT(DISTINCT "Variant name") AS variant_count
+FROM read_json_auto('./data/<file>-EVENTS.json')
+WHERE event = '$experiment_started' AND user_id IS NOT NULL
+GROUP BY user_id
+HAVING variant_count > 1;
+-- Expected: 0 rows (no user in multiple variants)
+```
 
 ### Fall back to DuckDB for bespoke patterns
 

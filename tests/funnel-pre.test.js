@@ -47,7 +47,7 @@ describe('funnel-pre hooks', () => {
 			],
 			hook: function (record, type, meta) {
 				if (type !== 'funnel-pre') return;
-				if (meta.funnelRunTime > DAY45_UNIX) {
+				if (meta.firstEventTime > DAY45_UNIX) {
 					record.conversionRate = 90;
 				}
 			},
@@ -139,7 +139,7 @@ describe('funnel-pre hooks', () => {
 		expect(freePremium).toBe(0);
 	}, 30000);
 
-	test('usage funnel cursor advances: funnelRunTime spreads across the dataset', async () => {
+	test('usage funnel cursor advances: firstEventTime spreads across the dataset', async () => {
 		const runTimesByUser = new Map();
 		const DATASET_START = FIXED_NOW - 90 * 86400;
 		const result = await DUNGEON_MASTER(baseConfig({
@@ -171,11 +171,11 @@ describe('funnel-pre hooks', () => {
 				if (type !== 'funnel-pre' || meta.isFirstFunnel) return;
 				const uid = meta.user.distinct_id;
 				if (!runTimesByUser.has(uid)) runTimesByUser.set(uid, []);
-				runTimesByUser.get(uid).push(meta.funnelRunTime);
+				runTimesByUser.get(uid).push(meta.firstEventTime);
 			},
 		}));
 
-		// Verify funnelRunTime spreads across the dataset window (not all at birth time)
+		// Verify firstEventTime spreads across the dataset window (not all at birth time)
 		let usersWithSpread = 0;
 		let totalUsersWithMultiple = 0;
 		for (const [, times] of runTimesByUser) {
