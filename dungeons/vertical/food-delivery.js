@@ -1,6 +1,6 @@
 // ── TWEAK THESE ──
 const SEED = "harness-food";
-const num_days = 100;
+const num_days = 120;
 const num_users = 10_000;
 const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
@@ -261,14 +261,16 @@ const couponCodes = v.range(1, 51).map(n => `QUICK${v.uid(5).toUpperCase()}`);
 
 /** @type {Config} */
 const config = {
+	version: 2,
 	token,
 	seed: SEED,
 	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-04-28T23:59:59Z",
+	datasetEnd: "2026-05-01T23:59:59Z",
 	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
-	hasAnonIds: false,
+	hasAnonIds: true,
+	avgDevicePerUser: 2,
 	hasSessionIds: true,
 	format: "json",
 	gzip: true,
@@ -365,6 +367,7 @@ const config = {
 			event: "account created",
 			weight: 1,
 			isFirstEvent: true,
+			isAuthEvent: true,
 			properties: {
 				"signup_method": ["email", "google", "apple", "facebook"],
 				"referral_code": [false, false, true],
@@ -611,21 +614,6 @@ const config = {
 			}
 		}
 
-		if (type === "event") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			const RAINY_WEEK_START = datasetStart.add(20, 'days');
-			const RAINY_WEEK_END = datasetStart.add(27, 'days');
-			const EVENT_TIME = dayjs(record.time);
-
-			// HOOK 4: RAINY WEEK SURGE — days 20-27, double delivery_fee on
-			// order placed events. Mutates existing prop. No flag.
-			if (record.event === "order placed") {
-				if (EVENT_TIME.isAfter(RAINY_WEEK_START) && EVENT_TIME.isBefore(RAINY_WEEK_END)) {
-					record.delivery_fee = (record.delivery_fee || 5) * 2;
-				}
-			}
-		}
-
 		if (type === "everything") {
 			const datasetStart = dayjs.unix(meta.datasetStart);
 			const RAINY_WEEK_START = datasetStart.add(20, 'days');
@@ -767,6 +755,17 @@ const config = {
 					}
 				}
 			}
+
+			// HOOK 4: RAINY WEEK SURGE — days 20-27, double delivery_fee on
+			// order placed events. Mutates existing prop. No flag.
+			userEvents.forEach(e => {
+				if (e.event === "order placed") {
+					const t = dayjs(e.time);
+					if (t.isAfter(RAINY_WEEK_START) && t.isBefore(RAINY_WEEK_END)) {
+						e.delivery_fee = (e.delivery_fee || 5) * 2;
+					}
+				}
+			});
 
 			// HOOK 4 (cont): RAINY WEEK SURGE — duplicate 40% of order placed
 			// events that fall in the rainy window. Cloned with unique offset.
