@@ -1,6 +1,6 @@
 // ── TWEAK THESE ──
 const SEED = "dm4-marketplace";
-const num_days = 100;
+const num_days = 120;
 const num_users = 10_000;
 const avg_events_per_user_per_day = 1.2;
 let token = "your-mixpanel-token";
@@ -303,14 +303,16 @@ const listingIds = v.range(1, 500).map(() => `LST_${v.uid(8)}`);
 
 /** @type {Config} */
 const config = {
+	version: 2,
 	token,
 	seed: SEED,
 	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-04-28T23:59:59Z",
+	datasetEnd: "2026-05-01T23:59:59Z",
 	// numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
-	hasAnonIds: false,
+	hasAnonIds: true,
+	avgDevicePerUser: 2,
 	hasSessionIds: true,
 	format: "json",
 	gzip: true,
@@ -343,6 +345,7 @@ const config = {
 			event: "account created",
 			weight: 1,
 			isFirstEvent: true,
+			isAuthEvent: true,
 			properties: {
 				signup_source: ["organic", "google_shopping", "tiktok", "seller_referral", "email_campaign", "word_of_mouth"],
 			},
@@ -882,38 +885,44 @@ const config = {
 			}
 
 			// ── HOOK 5: RESPONSE TIME → CONVERSION ───────────
-			// Sellers with avg response_time < 12 hours get more offer_accepted.
-			// (response_time_hours centers around ~6h via weighNumRange, so a
-			// threshold of 2h was too tight — almost no users qualified.)
+			// Users with low avg response_time on messages get extra
+			// offer_accepted clones; slow responders lose half their accepts.
 			const messages = events.filter(e => e.event === "message sent" && e.response_time_hours);
 			if (messages.length > 0) {
 				const avgResponseTime = messages.reduce((sum, m) => sum + m.response_time_hours, 0) / messages.length;
-				if (avgResponseTime < 12) {
-					const templateOffer = events.find(e => e.event === "offer accepted");
-					if (templateOffer) {
-						const offers = events.filter(e => e.event === "offer received");
-						offers.forEach(offer => {
-							if (chance.bool({ likelihood: 50 })) {
-								events.push({
-									...templateOffer,
-									time: dayjs(offer.time).add(chance.integer({ min: 1, max: 4 }), "hours").toISOString(),
-									user_id: offer.user_id,
-									response_time_hours: chance.floating({ min: 0.1, max: 2, fixed: 1 }),
-								});
-							}
+				const templateOffer = events.find(e => e.event === "offer accepted");
+				if (avgResponseTime <= 11 && templateOffer) {
+					// Fast responders: clone every offer_received into an offer_accepted
+					const offers = events.filter(e => e.event === "offer received");
+					offers.forEach(offer => {
+						events.push({
+							...templateOffer,
+							time: dayjs(offer.time).add(chance.integer({ min: 1, max: 4 }), "hours").toISOString(),
+							user_id: offer.user_id,
+							response_time_hours: chance.floating({ min: 0.1, max: 2, fixed: 1 }),
 						});
+					});
+				} else if (avgResponseTime >= 25 && templateOffer) {
+					// Slow responders: drop half of offer_accepted events
+					for (let i = events.length - 1; i >= 0; i--) {
+						if (events[i].event === "offer accepted" && chance.bool({ likelihood: 50 })) {
+							events.splice(i, 1);
+						}
 					}
 				}
 			}
 
 			// ── HOOK 6: NEW SELLER CHURN ─────────────────────
-			// New sellers with <10 events lose 40% of events after day 14.
-			if (profile && profile.segment === "new_seller" && events.length < 10) {
-				const DAY_14 = datasetStart.add(14, "days");
-				for (let i = events.length - 1; i >= 0; i--) {
-					const eventTime = dayjs(events[i].time);
-					if (eventTime.isAfter(DAY_14) && chance.bool({ likelihood: 40 })) {
-						events.splice(i, 1);
+			// New sellers lose 50% of events after their first 14 days.
+			// Uses user's first event as anchor (not dataset start).
+			if (profile && profile.segment === "new_seller") {
+				const firstEventTime = events.length > 0 ? dayjs(events[0].time) : null;
+				if (firstEventTime) {
+					const userDay14 = firstEventTime.add(14, "days");
+					for (let i = events.length - 1; i >= 0; i--) {
+						if (dayjs(events[i].time).isAfter(userDay14) && chance.bool({ likelihood: 50 })) {
+							events.splice(i, 1);
+						}
 					}
 				}
 			}
