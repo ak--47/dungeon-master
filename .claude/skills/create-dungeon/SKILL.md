@@ -360,7 +360,7 @@ After writing the file:
 
 1. Smoke-test: `node scripts/verify-runner.mjs dungeons/user/<file>.js verify-<file> --small`. Confirm zero errors.
 2. Hand to the next skill: `/write-hooks dungeons/user/<file>.js "describe trends"`.
-3. After hooks land: `/verify-hooks dungeons/user/<file>.js`.
+3. After hooks land: `/verify-dungeon dungeons/user/<file>.js`.
 
 ## Output
 

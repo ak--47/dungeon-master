@@ -301,9 +301,9 @@ Storage-only hooks (no upstream execution):
 9. **Return `record`** from `event` hooks (single object only). For `everything`, return the (possibly modified) array
 10. **To drop/filter events (churn, drop-off, seasonal dips)**: use the `everything` hook: `return record.filter(e => !shouldDrop(e))`. The `everything` hook is the ONLY place where events can be removed.
 
-### Verifying Hooks with DuckDB
+### Verifying Dungeons
 
-After creating or modifying a dungeon, always verify that hooks actually produce their intended patterns by running `/verify-hooks`. This generates data at small scale (1K users, 100K events), queries the output with DuckDB, and produces a diagnostic report at `research/hook-results.md` with PASS/WEAK/FAIL verdicts for each hook. Verify BEFORE pushing data to Mixpanel.
+After creating or modifying a dungeon, always verify schema integrity and hook patterns by running `/verify-dungeon`. This runs the dungeon at full scale, validates that hooks don't introduce undeclared columns (flag stamping), queries the output with DuckDB, and produces a diagnostic report at `research/hook-results.md` with schema verdicts and PASS/WEAK/FAIL verdicts for each hook. Verify BEFORE pushing data to Mixpanel.
 
 ## Trend Shape — Macro and Soup
 
@@ -408,12 +408,15 @@ Four slash commands, with a clear schema → hooks → verify pipeline:
 - `/write-hooks <dungeon-path> <story>` — Writes the `hook` function on an
   existing dungeon, using the Phase 3 atom helpers and Phase 4 patterns. Adds
   a documentation block above the hook with Mixpanel report instructions per
-  pattern. Iterates with `verify-hooks` until patterns PASS.
-- `/verify-hooks <dungeon-path>` — Verifies engineered patterns. Prefers the
-  Phase 4 emulator (`emulateBreakdown`) when the pattern matches one of the 5
+  pattern. Iterates with `/verify-dungeon` until patterns PASS.
+- `/verify-dungeon <dungeon-path>` — Validates schema integrity (catches flag
+  stamping) and verifies engineered hook patterns. Prefers the Phase 4
+  emulator (`emulateBreakdown`) when the pattern matches one of the 5
   supported analyses; falls back to DuckDB for bespoke shapes. Always asserts
   the Phase 2 identity-model invariants (stitch count, pre-existing user
-  stamping).
+  stamping). Schema validation checks that hooks don't introduce undeclared
+  columns — new columns are acceptable only if they appear on 100% of events
+  of their type.
 - `/analyze-soup <dungeon-path>` — Run a dungeon and analyze its time
   distribution at week/day/hour granularities.
 
@@ -449,8 +452,8 @@ import {
   applyAttributedBySource
 } from '@ak--47/dungeon-master/hook-patterns';
 
-// Verifier + Mixpanel breakdown emulator (Phase 4)
-import { verifyDungeon, emulateBreakdown } from '@ak--47/dungeon-master/verify';
+// Verifier + Mixpanel breakdown emulator + schema validation (Phase 4)
+import { verifyDungeon, emulateBreakdown, deriveExpectedSchema, validateSchema } from '@ak--47/dungeon-master/verify';
 
 // Text generation
 import { createTextGenerator, generateBatch } from '@ak--47/dungeon-master/text';

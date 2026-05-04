@@ -1,14 +1,14 @@
 ---
-name: verify-hooks
-description: Run a dungeon with constrained parameters and use DuckDB to verify that hook-created data patterns actually appear in the output. Produces a hook-results.md diagnostic report.
+name: verify-dungeon
+description: Run a dungeon and verify schema integrity, hook patterns, identity model, and experiment invariants. Catches flag stamping (hooks adding undeclared columns) and produces a hook-results.md diagnostic report.
 argument-hint: [dungeon path(s), e.g. dungeons/gaming.js or dungeons/fintech.js]
 model: claude-opus-4-6
 effort: max
 ---
 
-# Verify Hooks
+# Verify Dungeon
 
-Verify that the hooks in one or more dungeon configs actually produce their intended data patterns. Run each dungeon at small scale, query the output with DuckDB, and produce a single consolidated `hook-results.md` diagnostic report.
+Verify that a dungeon's schema is clean and its hooks produce their intended data patterns. Run each dungeon at full scale, validate schema integrity, query the output with DuckDB, and produce a single consolidated `hook-results.md` diagnostic report.
 
 **Dungeon file(s):** `$ARGUMENTS`
 
@@ -19,7 +19,7 @@ Verify that the hooks in one or more dungeon configs actually produce their inte
 - Multiple space-separated paths: `dungeons/fintech.js dungeons/gaming.js`
 - A glob pattern: `dungeons/*.js`
 
-When multiple dungeons are provided, process each one sequentially through Steps 1-3 (read, run, verify), then write a single consolidated report in Step 4. Use a unique `name` prefix per dungeon when running (e.g., `verify-hooks-fintech`, `verify-hooks-gaming`) so output files don't collide. Clean up each dungeon's output files after querying them, before running the next dungeon.
+When multiple dungeons are provided, process each one sequentially through Steps 1-3 (read, run, verify), then write a single consolidated report in Step 4. Use a unique `name` prefix per dungeon when running (e.g., `verify-dungeon-fintech`, `verify-dungeon-gaming`) so output files don't collide. Clean up each dungeon's output files after querying them, before running the next dungeon.
 
 ## Important: How Hooks Execute in the Pipeline
 
@@ -47,7 +47,7 @@ Event properties are usually flat, but some dungeons may use arrays of objects o
 - Use `json_extract()` or arrow syntax (`column->'key'`) for nested JSON fields
 - Use `UNNEST()` for array-type columns
 - Check the dungeon's event property definitions for any non-scalar types before writing queries
-- Run a quick `SELECT * FROM read_json_auto('./data/verify-hooks-EVENTS.json') LIMIT 5` to inspect the actual schema
+- Run a quick `SELECT * FROM read_json_auto('./data/verify-dungeon-EVENTS.json') LIMIT 5` to inspect the actual schema
 
 ## Reference
 
@@ -89,7 +89,7 @@ and shift ratios within ±25%, hiding real bugs and flagging fake ones. They
 exist in the runner only as a developer-troubleshooting escape hatch.
 
 ```bash
-# The only command verify-hooks should issue:
+# The only command verify-dungeon should issue:
 node scripts/verify-runner.mjs <dungeon-path> <run-name>
 ```
 
@@ -112,7 +112,83 @@ than falling back to `--small`.
 - `<run-name>-*-GROUPS.json` — group profiles (if dungeon has groups)
 - `<run-name>-*-SCD.json` — SCD data (if dungeon has SCDs)
 
-Update your DuckDB queries to use the correct file prefix (e.g., `./data/verify-fintech-EVENTS.json` instead of `./data/verify-hooks-EVENTS.json`).
+Update your DuckDB queries to use the correct file prefix (e.g., `./data/verify-fintech-EVENTS.json` instead of `./data/verify-dungeon-EVENTS.json`).
+
+## Step 2b: Schema Validation
+
+**Run BEFORE per-hook pattern checks.** This catches hooks that introduce undeclared columns (flag stamping).
+
+For each unique event type in the output, compare the actual columns against the config-declared properties:
+
+```sql
+-- List all columns and their coverage per event type
+WITH event_data AS (
+  SELECT * FROM read_json_auto('./data/<run-name>-EVENTS.json', sample_size=-1)
+  WHERE event = '<EVENT_TYPE>'
+)
+SELECT
+  unnest(map_keys(columns(*))) as col_name,
+  COUNT(*) as total_events,
+  COUNT(col_name) FILTER (WHERE col_name IS NOT NULL) as non_null_count,
+  ROUND(COUNT(col_name) FILTER (WHERE col_name IS NOT NULL) * 100.0 / COUNT(*), 1) as coverage_pct
+FROM event_data
+GROUP BY col_name
+ORDER BY coverage_pct DESC;
+```
+
+Alternatively, use the programmatic API (`lib/verify/schema-validator.js`) which derives the expected schema from config and computes diffs automatically:
+
+```javascript
+import { deriveExpectedSchema, validateSchema } from './lib/verify/index.js';
+// deriveExpectedSchema(config) → Map<eventName, Set<propKey>>
+// validateSchema(events, config) → { pass, eventTypes, summary, flagStamping }
+```
+
+### Expected Schema Sources
+
+The expected set of columns per event type is derived from config:
+
+| Source | Keys | Condition |
+|--------|------|-----------|
+| Core | `event`, `time`, `insert_id`, `user_id` | Always |
+| Identity | `device_id` | `avgDevicePerUser > 0` |
+| Identity | `session_id` | `hasSessionIds` |
+| Event config | `events[i].properties` keys | Per event type |
+| Super props | `superProps` keys | All event types |
+| Location | `city`, `region`, `country`, `country_code` | `hasLocation` |
+| Browser | `browser` | `hasBrowser` |
+| Device | `model`, `screen_height`, `screen_width`, `os`, `Platform`, `carrier`, `radio` | `hasAndroidDevices`/`hasIOSDevices`/`hasDesktopDevices` |
+| Campaigns | `utm_source`, `utm_campaign`, `utm_medium`, `utm_content`, `utm_term` | `hasCampaigns` |
+| Group keys | group key name | Per event type from `groupKeys[i][2]`, or all if empty |
+| Funnel props | `funnel.props` keys | Events in funnel sequence |
+| Experiment | `Experiment name`, `Variant name` | `$experiment_started` event |
+| World events | `worldEvent.injectProps` keys | Events matching `affectsEvents` |
+
+### Schema Verdicts
+
+For each event type, classify any column present in the output but NOT in the expected schema:
+
+- **SCHEMA-PASS** — Column appears on 100% of events of this type. Uniform enrichment is acceptable (the hook adds the column to every event of this type, so the schema is consistent).
+- **SCHEMA-FAIL** — Column appears on <100% of events of this type. This is flag stamping — the hook conditionally adds a property, creating an inconsistent schema.
+
+### Report Format
+
+Include schema results in the report header, before per-hook results:
+
+```markdown
+## Schema Validation
+
+| Event Type | Added Columns | Coverage | Verdict |
+|-----------|---------------|----------|---------|
+| purchase | `is_whale` | 37.2% | SCHEMA-FAIL |
+| page view | (none) | — | SCHEMA-PASS |
+
+**Flag stamping detected:** `is_whale` on `purchase` events (37.2% coverage).
+The hook conditionally assigns `is_whale = true` only to high-value purchases.
+Remove the flag and derive the cohort behaviorally in verification queries.
+```
+
+If any event type has SCHEMA-FAIL, flag it prominently and include specific remediation: which hook line adds the property and how to remove it while preserving the intended pattern.
 
 ## Step 3: Verify Each Hook
 
@@ -215,10 +291,10 @@ duckdb -c "SQL_QUERY_HERE"
 **Reading data files:**
 ```sql
 -- Events
-SELECT * FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+SELECT * FROM read_json_auto('./data/verify-dungeon-EVENTS.json')
 
 -- User profiles
-SELECT * FROM read_json_auto('./data/verify-hooks-USERS.json')
+SELECT * FROM read_json_auto('./data/verify-dungeon-USERS.json')
 ```
 
 ### Important DuckDB Notes
@@ -319,7 +395,7 @@ SELECT
   COUNT(*) as event_count,
   AVG(metric) as avg_metric,
   COUNT(DISTINCT user_id) as unique_users
-FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+FROM read_json_auto('./data/verify-dungeon-EVENTS.json')
 WHERE event = 'relevant_event'
 GROUP BY segment_property
 ORDER BY segment_property;
@@ -329,7 +405,7 @@ ORDER BY segment_property;
 ```sql
 WITH events AS (
   SELECT *, time::TIMESTAMP as ts
-  FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+  FROM read_json_auto('./data/verify-dungeon-EVENTS.json')
 )
 SELECT
   CASE
@@ -347,7 +423,7 @@ GROUP BY period;
 ```sql
 WITH user_first_event AS (
   SELECT user_id, MIN(time::TIMESTAMP) as first_seen
-  FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+  FROM read_json_auto('./data/verify-dungeon-EVENTS.json')
   GROUP BY user_id
 ),
 user_segments AS (
@@ -355,7 +431,7 @@ user_segments AS (
     e.user_id,
     BOOL_OR(e.event = 'guild joined'
       AND (e.time::TIMESTAMP - f.first_seen) < INTERVAL '3 days') as early_joiner
-  FROM read_json_auto('./data/verify-hooks-EVENTS.json') e
+  FROM read_json_auto('./data/verify-dungeon-EVENTS.json') e
   JOIN user_first_event f ON e.user_id = f.user_id
   GROUP BY e.user_id
 ),
@@ -363,7 +439,7 @@ user_activity AS (
   SELECT
     e.user_id,
     MAX(e.time::TIMESTAMP) - MIN(e.time::TIMESTAMP) as active_span
-  FROM read_json_auto('./data/verify-hooks-EVENTS.json') e
+  FROM read_json_auto('./data/verify-dungeon-EVENTS.json') e
   GROUP BY e.user_id
 )
 SELECT
@@ -381,7 +457,7 @@ WITH buyer_segments AS (
   SELECT
     user_id,
     BOOL_OR(event = 'real money purchase' AND product = 'Lucky Charm Pack') as is_target_buyer
-  FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+  FROM read_json_auto('./data/verify-dungeon-EVENTS.json')
   GROUP BY user_id
 )
 SELECT
@@ -391,7 +467,7 @@ SELECT
   ROUND(SUM(TRY_CAST(e.price_usd AS DOUBLE)), 2) as total_revenue,
   COUNT(DISTINCT b.user_id) as users
 FROM buyer_segments b
-JOIN read_json_auto('./data/verify-hooks-EVENTS.json') e ON b.user_id = e.user_id
+JOIN read_json_auto('./data/verify-dungeon-EVENTS.json') e ON b.user_id = e.user_id
 GROUP BY b.is_target_buyer;
 ```
 
@@ -399,12 +475,12 @@ GROUP BY b.is_target_buyer;
 ```sql
 WITH step1 AS (
   SELECT DISTINCT user_id, segment_prop
-  FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+  FROM read_json_auto('./data/verify-dungeon-EVENTS.json')
   WHERE event = 'funnel_step_1'
 ),
 step2 AS (
   SELECT DISTINCT user_id
-  FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+  FROM read_json_auto('./data/verify-dungeon-EVENTS.json')
   WHERE event = 'funnel_step_2'
 )
 SELECT
@@ -424,7 +500,7 @@ SELECT
   property_column,
   COUNT(*) as cnt,
   ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (PARTITION BY segment_column), 2) as pct
-FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+FROM read_json_auto('./data/verify-dungeon-EVENTS.json')
 WHERE event = 'relevant_event'
 GROUP BY segment_column, property_column
 ORDER BY segment_column, cnt DESC;
@@ -435,7 +511,7 @@ ORDER BY segment_column, cnt DESC;
 SELECT
   CASE WHEN time::TIMESTAMP < 'release_date' THEN 'before' ELSE 'after' END as period,
   COUNT(*) as occurrences
-FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+FROM read_json_auto('./data/verify-dungeon-EVENTS.json')
 WHERE event = 'find treasure' AND treasure_type = 'Shadowmourne Legendary'
 GROUP BY period;
 ```
@@ -446,7 +522,7 @@ GROUP BY period;
 WITH ordered AS (
   SELECT *, time::TIMESTAMP as ts,
     LAG(time::TIMESTAMP) OVER (PARTITION BY user_id ORDER BY time) as prev_ts
-  FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+  FROM read_json_auto('./data/verify-dungeon-EVENTS.json')
 ),
 sessions AS (
   SELECT user_id,
@@ -465,7 +541,7 @@ SELECT
   ROUND(AVG(TRY_CAST(e.amount AS DOUBLE)), 2) as avg_amount,
   COUNT(DISTINCT seg.user_id) as users
 FROM segments seg
-JOIN read_json_auto('./data/verify-hooks-EVENTS.json') e ON seg.user_id = e.user_id
+JOIN read_json_auto('./data/verify-dungeon-EVENTS.json') e ON seg.user_id = e.user_id
 WHERE e.event = 'purchase'
 GROUP BY seg.segment;
 ```
@@ -477,7 +553,7 @@ SELECT
   COUNT(*) as event_count,
   ROUND(AVG(TRY_CAST(amount AS DOUBLE)), 2) as avg_amount,
   ROUND(MEDIAN(TRY_CAST(amount AS DOUBLE)), 2) as median_amount
-FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+FROM read_json_auto('./data/verify-dungeon-EVENTS.json')
 WHERE event = 'transaction completed'
 GROUP BY period;
 ```
@@ -488,7 +564,7 @@ GROUP BY period;
 WITH events AS (
   SELECT *, time::TIMESTAMP as ts,
     LAG(time::TIMESTAMP) OVER (PARTITION BY user_id, event ORDER BY time) as prev_same_event
-  FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+  FROM read_json_auto('./data/verify-dungeon-EVENTS.json')
   WHERE event = 'purchase'
 )
 SELECT
@@ -505,10 +581,10 @@ GROUP BY pattern;
 The `everything` hook can read `meta.profile` and modify event values based on user properties. To verify, JOIN events with user profiles:
 ```sql
 WITH users AS (
-  SELECT * FROM read_json_auto('./data/verify-hooks-USERS.json')
+  SELECT * FROM read_json_auto('./data/verify-dungeon-USERS.json')
 ),
 events AS (
-  SELECT * FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+  SELECT * FROM read_json_auto('./data/verify-dungeon-EVENTS.json')
 )
 SELECT
   u.tier,
@@ -528,10 +604,10 @@ When verifying `everything` hooks, you often MUST join events with user profiles
 - Churn simulation: users with certain profiles have fewer events in later time periods
 
 **Output files by data type:**
-- `verify-hooks-EVENTS.json` — events (most hooks produce effects here)
-- `verify-hooks-USERS.json` — user profiles (check for `user` hook enrichment)
-- `verify-hooks-*-GROUPS.json` — group profiles (if groups configured)
-- `verify-hooks-*-SCD.json` — SCD data (if SCDs configured)
+- `verify-dungeon-EVENTS.json` — events (most hooks produce effects here)
+- `verify-dungeon-USERS.json` — user profiles (check for `user` hook enrichment)
+- `verify-dungeon-*-GROUPS.json` — group profiles (if groups configured)
+- `verify-dungeon-*-SCD.json` — SCD data (if SCDs configured)
 
 **Advanced Feature Verification** (if the dungeon uses advanced features):
 
@@ -539,30 +615,30 @@ Advanced features (personas, worldEvents, engagementDecay, dataQuality, subscrip
 
 ```sql
 -- Personas: check distribution matches configured weights
-SELECT _persona, count(*) as users FROM read_json_auto('./data/verify-hooks-USERS.json') WHERE _persona IS NOT NULL GROUP BY 1;
+SELECT _persona, count(*) as users FROM read_json_auto('./data/verify-dungeon-USERS.json') WHERE _persona IS NOT NULL GROUP BY 1;
 
 -- World Events: check injected properties exist during event windows
-SELECT promo, count(*) FROM read_json_auto('./data/verify-hooks-EVENTS.json') WHERE promo IS NOT NULL GROUP BY 1;
+SELECT promo, count(*) FROM read_json_auto('./data/verify-dungeon-EVENTS.json') WHERE promo IS NOT NULL GROUP BY 1;
 
 -- Data Quality: verify bots, nulls, empty events
-SELECT 'bots' as metric, count(*) FROM read_json_auto('./data/verify-hooks-USERS.json') WHERE is_bot = true
-UNION ALL SELECT 'null_props', count(*) FROM read_json_auto('./data/verify-hooks-EVENTS.json') WHERE category IS NULL;
+SELECT 'bots' as metric, count(*) FROM read_json_auto('./data/verify-dungeon-USERS.json') WHERE is_bot = true
+UNION ALL SELECT 'null_props', count(*) FROM read_json_auto('./data/verify-dungeon-EVENTS.json') WHERE category IS NULL;
 
 -- Subscription: lifecycle events generated
-SELECT event, count(*) FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+SELECT event, count(*) FROM read_json_auto('./data/verify-dungeon-EVENTS.json')
 WHERE event IN ('trial started','subscription started','plan upgraded','subscription cancelled') GROUP BY 1;
 
 -- Attribution: campaign sources on profiles
-SELECT utm_source, count(*) FROM read_json_auto('./data/verify-hooks-USERS.json') WHERE utm_source IS NOT NULL GROUP BY 1;
+SELECT utm_source, count(*) FROM read_json_auto('./data/verify-dungeon-USERS.json') WHERE utm_source IS NOT NULL GROUP BY 1;
 
 -- Geo: region distribution
-SELECT _region, count(*) FROM read_json_auto('./data/verify-hooks-USERS.json') WHERE _region IS NOT NULL GROUP BY 1;
+SELECT _region, count(*) FROM read_json_auto('./data/verify-dungeon-USERS.json') WHERE _region IS NOT NULL GROUP BY 1;
 
 -- Features: progressive adoption properties
-SELECT theme, count(*) FROM read_json_auto('./data/verify-hooks-EVENTS.json') WHERE theme IS NOT NULL GROUP BY 1;
+SELECT theme, count(*) FROM read_json_auto('./data/verify-dungeon-EVENTS.json') WHERE theme IS NOT NULL GROUP BY 1;
 
 -- Anomalies: burst/extreme events
-SELECT _anomaly, count(*) FROM read_json_auto('./data/verify-hooks-EVENTS.json') WHERE _anomaly IS NOT NULL GROUP BY 1;
+SELECT _anomaly, count(*) FROM read_json_auto('./data/verify-dungeon-EVENTS.json') WHERE _anomaly IS NOT NULL GROUP BY 1;
 ```
 
 Include advanced feature verification results in the report when the dungeon uses these features. Advanced feature patterns should ALWAYS be present (they're deterministic from config), unlike hooks which may have statistical variance.
@@ -590,7 +666,7 @@ SELECT
   ROUND(COUNT(*) FILTER (WHERE n = 1) * 100.0 / COUNT(*), 1) as consistency_pct
 FROM (
   SELECT user_id, COUNT(DISTINCT PROP_NAME) as n
-  FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+  FROM read_json_auto('./data/verify-dungeon-EVENTS.json')
   GROUP BY user_id
 );
 ```
@@ -615,8 +691,8 @@ When a hook targets a specific segment, verify the affected population is large 
 SELECT
   segment_column,
   COUNT(DISTINCT user_id) as users,
-  ROUND(COUNT(DISTINCT user_id) * 100.0 / (SELECT COUNT(DISTINCT user_id) FROM read_json_auto('./data/verify-hooks-EVENTS.json')), 1) as pct_of_users
-FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+  ROUND(COUNT(DISTINCT user_id) * 100.0 / (SELECT COUNT(DISTINCT user_id) FROM read_json_auto('./data/verify-dungeon-EVENTS.json')), 1) as pct_of_users
+FROM read_json_auto('./data/verify-dungeon-EVENTS.json')
 WHERE event = 'relevant_event'
 GROUP BY segment_column
 ORDER BY users DESC;
@@ -1033,7 +1109,7 @@ OBSERVED: 3.05x ratio
 
 SQL:
 SELECT segment, AVG(amount) as avg_amt, COUNT(*) as n
-FROM read_json_auto('./data/verify-hooks-EVENTS.json')
+FROM read_json_auto('./data/verify-dungeon-EVENTS.json')
 WHERE event = 'purchase'
 GROUP BY segment;
 
@@ -1077,13 +1153,22 @@ The summary table should also be sorted this way (INVERSE → NONE → WEAK → 
 When verifying a single dungeon, use this structure:
 
 ```markdown
-# Hook Verification Report
+# Dungeon Verification Report
 
 **Dungeon:** `<filename>`
 **Run Date:** <date>
 **Users:** <count> | **Events:** <count> | **Duration:** <time>
 
-## Summary
+## Schema Validation
+
+| Event Type | Added Columns | Coverage | Verdict |
+|-----------|---------------|----------|---------|
+| purchase | (none) | — | SCHEMA-PASS |
+| page view | (none) | — | SCHEMA-PASS |
+
+<if any SCHEMA-FAIL, list remediation details here>
+
+## Hook Summary
 
 | # | Hook Name | Type | Expected Effect | Observed | Verdict |
 |---|-----------|------|-----------------|----------|---------|

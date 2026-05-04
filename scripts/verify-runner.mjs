@@ -29,7 +29,7 @@ if (!dungeonPath) {
 	process.exit(1);
 }
 
-const runName = positional[1] || 'verify-hooks';
+const runName = positional[1] || 'verify-dungeon';
 const isSmall = flags.has('--small');
 const absolutePath = path.isAbsolute(dungeonPath)
 	? dungeonPath

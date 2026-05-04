@@ -1,6 +1,6 @@
 ---
 name: write-hooks
-description: Engineer story trends and "magic number" patterns into an existing dungeon by writing its `hook` function. Uses the Phase 3 atom helpers + Phase 4 patterns. Adds NO new event flags. Iterates until /verify-hooks scores STRONG or NAILED.
+description: Engineer story trends and "magic number" patterns into an existing dungeon by writing its `hook` function. Uses the Phase 3 atom helpers + Phase 4 patterns. Adds NO new event flags. Iterates until /verify-dungeon scores STRONG or NAILED.
 argument-hint: [path/to/dungeon.js] [free-text story / trend description]
 model: claude-opus-4-6
 effort: max
@@ -15,7 +15,7 @@ based on the story description (remaining args).
 
 This skill writes the `hook` function ONLY. It assumes the dungeon's schema is
 already complete (produced by `create-dungeon`). After writing, hand off to
-`/verify-hooks` to confirm the engineered patterns actually appear.
+`/verify-dungeon` to confirm the engineered patterns actually appear.
 
 In scope:
 - The `hook: function(record, type, meta) { ... }` body
@@ -35,7 +35,7 @@ Out of scope:
   identity). One file per group; full JSDoc on each atom.
 - `lib/hook-patterns/index.js` — Phase 4 high-level recipes (one per Mixpanel
   analysis type).
-- `lib/verify/emulate-breakdown.js` — what `verify-hooks` will check.
+- `lib/verify/emulate-breakdown.js` — what `verify-dungeon` will check.
 - `dungeons/user/my-buddy.js` — reference dungeon using a mix of atoms and
   hand-rolled logic.
 - `dungeons/technical/pattern-*.js` — five minimal pattern fixtures, one per
@@ -132,7 +132,7 @@ if (type === 'funnel-post' && meta.experiment) {
 
 ### Patterns (`@ak--47/dungeon-master/hook-patterns`)
 
-Higher-level recipes. Each maps to ONE Mixpanel analysis the verify-hooks
+Higher-level recipes. Each maps to ONE Mixpanel analysis the verify-dungeon
 emulator can re-derive.
 
 | Pattern | Mixpanel analysis | Hook type |
@@ -198,7 +198,7 @@ if (type === 'funnel-post' && meta.isFirstFunnel && !meta.isFinalAttempt) {
 ## Pattern documentation block
 
 Above the `hook` function (or in the dataset overview comment), document each
-engineered pattern with a Mixpanel report block. This is what verify-hooks
+engineered pattern with a Mixpanel report block. This is what verify-dungeon
 checks against and what consumers read to understand the dataset.
 
 ```
@@ -270,19 +270,19 @@ Target: 10-30% of users in the affected cohort for clean signal at 10K users.
 4. Write the `hook` function, importing atoms/patterns at the top of the file.
 5. Smoke-test:
    ```bash
-   node scripts/verify-runner.mjs <dungeon> verify-hooks --small
+   node scripts/verify-runner.mjs <dungeon> verify-dungeon --small
    ```
    Confirm the run completes without errors.
 6. Hand off:
    ```
-   /verify-hooks <dungeon>
+   /verify-dungeon <dungeon>
    ```
-   If verify-hooks returns WEAK, NONE, or INVERSE on any pattern, return to
+   If verify-dungeon returns WEAK, NONE, or INVERSE on any pattern, return to
    step 4 and refine. Iterate until all patterns score STRONG or NAILED.
 
 ## Stopping condition
 
-Stop after `/verify-hooks` reports all engineered patterns as STRONG or NAILED,
+Stop after `/verify-dungeon` reports all engineered patterns as STRONG or NAILED,
 OR after three iterations without convergence — at that point, document what's
 still off in the dungeon's overview comment and report the gap to the user.
 
@@ -290,4 +290,4 @@ still off in the dungeon's overview comment and report the gap to the user.
 
 Modify the dungeon file in place. Add the `hook` function. Add the imports.
 Add the documentation block above the config. Do NOT modify any other file.
-Tell the user to run `/verify-hooks <dungeon>` next.
+Tell the user to run `/verify-dungeon <dungeon>` next.
