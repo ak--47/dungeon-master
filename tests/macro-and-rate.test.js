@@ -135,11 +135,11 @@ describe('macro integration with config-validator', () => {
 			numEvents: 1000,
 			macro: 'growth',
 			bornRecentBias: 0.9,           // overrides growth's 0.3
-			percentUsersBornInDataset: 60, // overrides growth's 25
+			percentUsersBornInDataset: 80, // overrides growth's 60
 			seed: 'macro-override'
 		});
 		expect(config.bornRecentBias).toBe(0.9);
-		expect(config.percentUsersBornInDataset).toBe(60);
+		expect(config.percentUsersBornInDataset).toBe(80);
 		// preExistingSpread came from macro: "growth"
 		expect(config.preExistingSpread).toBe(MACRO_PRESETS.growth.preExistingSpread);
 	});
@@ -163,10 +163,40 @@ describe('macro integration with config-validator', () => {
 			expect(typeof MACRO_PRESETS[n].bornRecentBias).toBe('number');
 			expect(typeof MACRO_PRESETS[n].percentUsersBornInDataset).toBe('number');
 		}
-		// flat is the only preset with bornRecentBias === 0 AND percentUsersBornInDataset === 15
-		const flat = MACRO_PRESETS.flat;
-		expect(flat.bornRecentBias).toBe(0);
-		expect(flat.percentUsersBornInDataset).toBe(15);
+	});
+
+	test('macro preset values are pinned (update test when changing presets)', () => {
+		expect(MACRO_PRESETS.flat).toEqual({
+			bornRecentBias: 0,
+			percentUsersBornInDataset: 50,
+			preExistingSpread: 'uniform',
+		});
+		expect(MACRO_PRESETS.steady).toEqual({
+			bornRecentBias: 0.1,
+			percentUsersBornInDataset: 35,
+			preExistingSpread: 'uniform',
+		});
+		expect(MACRO_PRESETS.growth).toEqual({
+			bornRecentBias: 0.3,
+			percentUsersBornInDataset: 60,
+			preExistingSpread: 'pinned',
+		});
+		expect(MACRO_PRESETS.viral).toEqual({
+			bornRecentBias: 0.6,
+			percentUsersBornInDataset: 95,
+			preExistingSpread: 'pinned',
+		});
+		expect(MACRO_PRESETS.decline).toEqual({
+			bornRecentBias: -0.3,
+			percentUsersBornInDataset: 25,
+			preExistingSpread: 'uniform',
+		});
+	});
+
+	test('no preset has percentUsersBornInDataset below 25', () => {
+		for (const [name, preset] of Object.entries(MACRO_PRESETS)) {
+			expect(preset.percentUsersBornInDataset, `${name} preset below 25%`).toBeGreaterThanOrEqual(25);
+		}
 	});
 });
 

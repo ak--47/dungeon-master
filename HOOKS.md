@@ -857,7 +857,71 @@ that survives re-runs.
 
 ---
 
-#### 3.22 Deprecated Feature Replacement
+#### 3.22 Retention Magic Number (N Actions in First X Days)
+
+**Hook type:** `everything` | **Meta:** `meta.userIsBornInDataset`
+
+**In Mixpanel:** Retention report — users who performed 5+ "user followed"
+events in their first 14 days retain ~2x better past day 36 than users who
+didn't hit that threshold. Discoverable via behavioral cohort comparison.
+
+```js
+// everything: born-in-dataset users with 5+ follows in first 14 days are retained
+if (type === "everything") {
+  if (!meta.userIsBornInDataset) return record;
+  const firstEventTime = record[0]?.time;
+  if (!firstEventTime) return record;
+
+  const userStart = dayjs(firstEventTime);
+  const windowEnd = userStart.add(14, "days").toISOString();
+  const followBin = binUsersByEventInRange(
+    record, "user followed",
+    firstEventTime, windowEnd,
+    { retained: [5, Infinity], not_retained: [0, 5] }
+  );
+  if (followBin === "not_retained") {
+    // Silence 36 days after user's first event
+    const cutoff = userStart.add(36, "days");
+    dropEventsWhere(record, e => dayjs(e.time).isAfter(cutoff));
+  }
+  return record;
+}
+```
+
+**Real-world analogue:** Twitter/social networks have a well-documented "aha
+moment" — users who follow N accounts in their first week build a feed worth
+returning to. Below that threshold, the timeline is empty and users churn.
+
+**Key design decisions:**
+
+- **User-relative cutoff, not dataset-relative.** The silence cutoff is anchored
+  to each user's first event (`userStart.add(36, "days")`), not `datasetStart`.
+  A dataset-anchored cutoff would miss late-born users entirely — their first
+  event is already past the cutoff date.
+
+- **`binUsersByEventInRange` over manual counting.** The atom handles time
+  parsing and bin matching. Use it instead of rolling your own
+  `filter().length >= N` to avoid ISO-string / unix-seconds footguns.
+
+- **`percentUsersBornInDataset: 50` is important.** At the default 15%, only
+  ~750 of 5K users are born-in-dataset. After splitting into retained/not-retained,
+  the retained cohort can be <100 users — too small for reliable signal. Bump to
+  50% for retention hooks. The "flat" macro preset defaults to 50%.
+
+- **Threshold calibration.** The threshold (5 follows) × window (14 days) must
+  be achievable but not trivial given the event rate. At 5 events/user/day with
+  `user followed` at weight 5 out of ~84 total weight, expect ~0.3 follows/day
+  → ~4.2 follows in 14 days. Threshold of 5 means ~15-20% of born users qualify.
+  Too high a threshold (7+ in 10 days) produces cohorts < 5% — too small.
+
+**Adaptation:** Replace the event name, threshold, window, and cutoff. Works
+for any "early activation predicts retention" story: messages sent, items
+purchased, friends added, content created. The pattern generalizes to any
+product's "aha moment" hypothesis.
+
+---
+
+#### 3.23 Deprecated Feature Replacement
 
 **Hook type:** `user` + `everything` | **Meta:** `meta.profile`
 
@@ -894,7 +958,7 @@ key property. Use the `user` hook for assignment (runs once) and
 
 ---
 
-#### 3.23 Post-Clone Temporal Mutation
+#### 3.24 Post-Clone Temporal Mutation
 
 **Hook type:** `everything` (must run LAST) | **Meta:** `meta.datasetStart`
 

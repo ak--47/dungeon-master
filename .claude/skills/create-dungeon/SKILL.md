@@ -326,12 +326,14 @@ See `types.d.ts` `ResolvedWorldEvent` for the full interface.
 
 ## Trend shape — `macro` and `soup`
 
-Default to NOT setting either. Defaults: `macro: "flat"` (no birth bias) +
-`soup: "growth"` (standard intra-week / intra-day rhythm). Only override when
-you have a specific reason:
+Default to NOT setting either. Defaults: `macro: "flat"` (no birth bias,
+50% of users born in dataset window) + `soup: "growth"` (standard intra-week /
+intra-day rhythm). The 50% born-in-dataset default ensures retention and
+onboarding hooks have large enough cohorts to produce visible signal. Only
+override when you have a specific reason:
 
 - Use `macro: "growth"` if you want a mild acquisition trend (visible births
-  over the window).
+  over the window, 25% born-in-dataset).
 - Use `macro: "viral"` only if the app has a hockey-stick acquisition story.
   Pair with `personas` so the late entrants behave differently.
 - Use `soup: "spiky"` for products with dramatic peaks / valleys (gaming

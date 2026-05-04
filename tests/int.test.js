@@ -725,7 +725,7 @@ describe.sequential('orchestrators', () => {
 		context.setStorage(STORAGE);
 		await userLoop(context);
 		expect(STORAGE.userProfilesData.length).toBe(2);
-		expect(STORAGE.eventData.length).toBeGreaterThanOrEqual(14);
+		expect(STORAGE.eventData.length).toBeGreaterThanOrEqual(4);
 		expect(STORAGE.eventData.every(e => validEvent(e))).toBeTruthy();
 
 

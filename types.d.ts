@@ -224,7 +224,7 @@ export interface Dungeon {
     // ── Distribution Controls ──
     // These three knobs are normally set by the `macro` preset (default "flat").
     // Setting them on the dungeon config directly overrides the preset's value.
-    /** Percentage of users whose account creation falls within the dataset window (vs. pre-existing). Default (from macro: "flat"): 15 */
+    /** Percentage of users whose account creation falls within the dataset window (vs. pre-existing). Default (from macro: "flat"): 50 */
     percentUsersBornInDataset?: number;
     /** Bias for birth dates of users born in dataset. -1..1; negative = early skew, positive = recent skew, 0 = uniform. Default (from macro: "flat"): 0 */
     bornRecentBias?: number;

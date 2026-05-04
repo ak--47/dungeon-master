@@ -149,7 +149,7 @@ Uses **Vitest** (ESM-native). Test files:
 
 | File | Purpose |
 |------|---------|
-| `user-loop.js` | Main generation loop. `strictEventCount` bailout, `bornRecentBias` (power function for birth dates), memory/time in progress display, `percentUsersBornInDataset` default=15 |
+| `user-loop.js` | Main generation loop. `strictEventCount` bailout, `bornRecentBias` (power function for birth dates), memory/time in progress display, `percentUsersBornInDataset` default=50 |
 | `mixpanel-sender.js` | Imports all data types to Mixpanel. Reads from batch files if needed. SCD type inference from values. |
 
 ## Key Config Properties
@@ -185,7 +185,7 @@ interface Dungeon {
   strictEventCount: boolean     // Stop at exact numEvents (forces concurrency=1)
   // The next three are normally set by the macro preset; override only when you need a custom shape
   bornRecentBias: number        // -1..1; positive = recent skew, 0 = uniform, negative = early skew
-  percentUsersBornInDataset     // 0..100; default 15 (from macro: "flat")
+  percentUsersBornInDataset     // 0..100; default 50 (from macro: "flat")
   preExistingSpread             // "uniform" (default) | "pinned"
 
   // I/O

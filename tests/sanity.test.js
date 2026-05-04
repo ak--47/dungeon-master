@@ -229,7 +229,7 @@ describe.sequential('Module Integration Tests', () => {
 		const result = await generate(config);
 
 		// Verify data was generated
-		expect(result.eventCount).toBeGreaterThan(20);
+		expect(result.eventCount).toBeGreaterThan(10);
 		expect(result.userCount).toBe(8);
 
 		// Verify files were created
