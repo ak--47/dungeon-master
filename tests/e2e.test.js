@@ -635,7 +635,7 @@ describe.sequential('options + tweaks', () => {
 			numEvents: 100,
 			batchSize: 50,
 			writeToDisk: false,
-			verbose: false,
+			verbose: true,
 			seed: 'validation-test'
 		});
 

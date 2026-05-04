@@ -18,14 +18,14 @@ import { detectInputType, loadFromFile, loadFromText, parseJSONDungeon, validate
 
 // Orchestrators
 import { userLoop } from './lib/orchestrators/user-loop.js';
-import { sendToMixpanel } from './lib/orchestrators/mixpanel-sender.js';
+import { sendToMixpanel, collectWrittenFiles } from './lib/orchestrators/mixpanel-sender.js';
 // Generators
 import { makeAdSpend } from './lib/generators/adspend.js';
 import { makeMirror } from './lib/generators/mirror.js';
 import { makeGroupProfile, makeProfile } from './lib/generators/profiles.js';
 
 // Utilities
-import { initChance, setDatasetNow } from './lib/utils/utils.js';
+import { initChance, setDatasetNow, deleteFile } from './lib/utils/utils.js';
 
 // External dependencies
 import dayjs from "dayjs";
@@ -122,6 +122,7 @@ async function runDungeon(config) {
 
 	if (config.verbose) logger.info({ seed: config.seed }, 'Configuring dungeon');
 	let validatedConfig;
+	let storage;
 	try {
 		// Initialize seeded RNG BEFORE validation — config-validator captures a
 		// chance reference for default userProps (spiritAnimal). If we init after,
@@ -148,7 +149,7 @@ async function runDungeon(config) {
 
 		// Step 3: Initialize storage containers
 		const storageManager = new StorageManager(context);
-		const storage = await storageManager.initializeContainers();
+		storage = await storageManager.initializeContainers();
 		updateContextWithStorage(context, storage);
 
 		// ! DATA GENERATION STARTS HERE
@@ -215,7 +216,7 @@ async function runDungeon(config) {
 		return {
 			...extractedData,
 			importResults,
-			files: await extractFileInfo(storage, validatedConfig),
+			files: extractFileInfo(storage),
 			time: { start, end, delta, human },
 			operations: context.getOperations(),
 			eventCount: context.getStoredEventCount(),
@@ -225,6 +226,15 @@ async function runDungeon(config) {
 	} catch (error) {
 		logger.error({ err: error }, `Error: ${error.message}`);
 		throw error;
+	} finally {
+		if (validatedConfig?.cleanup && storage) {
+			const allFiles = collectWrittenFiles(storage);
+			if (allFiles.length > 0) {
+				if (validatedConfig.verbose) console.log(`\nCleaning up ${allFiles.length} written files...`);
+				await Promise.allSettled(allFiles.map(f => deleteFile(f)));
+				if (validatedConfig.verbose) console.log(`Cleanup complete`);
+			}
+		}
 	}
 }
 
@@ -480,74 +490,10 @@ async function flushStorageToDisk(storage, config) {
 /**
  * Extract file information from storage containers
  * @param {import('./types').Storage} storage - Storage object
- * @param {import('./types').Dungeon} config - Configuration object
- * @returns {Promise<string[]>} Array of file paths
+ * @returns {string[]} Array of file paths
  */
-async function extractFileInfo(storage, config) {
-	const files = [];
-
-	// Try to get paths from containers first
-	Object.values(storage).forEach(container => {
-		if (Array.isArray(container)) {
-			container.forEach(subContainer => {
-				if (subContainer?.getWritePath) {
-					files.push(subContainer.getWritePath());
-				}
-			});
-		} else if (container?.getWritePath) {
-			files.push(container.getWritePath());
-		}
-	});
-
-	// If no files found from containers and writeToDisk is enabled, scan the data directory
-	if (files.length === 0 && config.writeToDisk) {
-		try {
-			const fs = await import('fs');
-			const path = await import('path');
-			
-			let dataDir = path.resolve("./data");
-			if (!fs.existsSync(dataDir)) {
-				dataDir = path.resolve("./");
-			}
-			
-			if (fs.existsSync(dataDir)) {
-				const allFiles = fs.readdirSync(dataDir);
-				const simulationName = config.name;
-				
-				// Filter files that match our patterns and were likely created by this run
-				const relevantFiles = allFiles.filter(file => {
-					// Skip system files
-					if (file.startsWith('.')) return false;
-					
-					// If we have a simulation name, only include files with that prefix
-					if (simulationName && !file.startsWith(simulationName)) {
-						return false;
-					}
-					
-					// Check for common patterns
-					const hasEventPattern = file.includes('-EVENTS.');
-					const hasUserPattern = file.includes('-USERS.');
-					const hasScdPattern = file.includes('-SCD.');
-					const hasGroupPattern = file.includes('-GROUPS.');
-					const hasLookupPattern = file.includes('-LOOKUP.');
-					const hasAdspendPattern = file.includes('-ADSPEND.');
-					const hasMirrorPattern = file.includes('-MIRROR.');
-					
-					return hasEventPattern || hasUserPattern || hasScdPattern || 
-						   hasGroupPattern || hasLookupPattern || hasAdspendPattern || hasMirrorPattern;
-				});
-				
-				// Convert to full paths
-				relevantFiles.forEach(file => {
-					files.push(path.join(dataDir, file));
-				});
-			}
-		} catch (error) {
-			// If scanning fails, just return empty array
-		}
-	}
-
-	return files;
+function extractFileInfo(storage) {
+	return collectWrittenFiles(storage);
 }
 
 /**

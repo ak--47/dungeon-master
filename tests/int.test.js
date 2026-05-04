@@ -816,7 +816,7 @@ describe.sequential('orchestrators', () => {
 
 	test('auto-batch: numEvents >= 2M auto-sets batchSize to 1M', () => {
 		const warnSpy = vi.spyOn(console, 'warn');
-		const config = validateDungeonConfig({ numEvents: 2_000_000, numUsers: 1000 });
+		const config = validateDungeonConfig({ numEvents: 2_000_000, numUsers: 1000, verbose: true });
 		expect(config.batchSize).toBe(1_000_000);
 		expect(warnSpy).toHaveBeenCalledWith(
 			expect.stringContaining('Auto-enabling batch mode')
@@ -876,7 +876,7 @@ describe.sequential('orchestrators', () => {
 			numEvents: 100,
 			batchSize: 50,
 			writeToDisk: false,
-			verbose: false,
+			verbose: true,
 			seed: 'batch-warn-test'
 		});
 		// Should not throw — just warn

@@ -111,8 +111,10 @@ export interface Dungeon {
     hasDesktopDevices?: boolean;
     /** If true, events include browser properties. */
     hasBrowser?: boolean;
-    /** If true (default), writes output files to ./data/. Can also be a directory path string. */
+    /** If true (default), writes output files to ./data/. Can also be a directory path string or gs:// URI. */
     writeToDisk?: boolean | string;
+    /** If true, deletes all written files (local and GCS) at end of run regardless of import success/failure. Default: false. */
+    cleanup?: boolean;
     /** If true, gzip-compresses output files. */
     gzip?: boolean;
     /** If true, prints progress to stdout during generation. */
@@ -543,6 +545,8 @@ export interface HookedArray<T> extends Array<T> {
     getWriteDir: () => string;
     /** Absolute path (with extension) of the next batch file. */
     getWritePath: () => string;
+    /** Returns all file paths written by this container during the current run. */
+    getWrittenFiles: () => string[];
     /** SCD prop name this array carries (only set on SCD HookedArrays). */
     scdKey?: string;
     /** Entity type for SCDs ("user" or a group key). */
