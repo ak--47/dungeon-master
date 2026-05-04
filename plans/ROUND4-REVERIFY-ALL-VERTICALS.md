@@ -29,28 +29,30 @@ No changes were made to the engine, generators, hook helpers, hook patterns, or 
 
 Process in this order (largest/most complex first — surface failures early):
 
-| # | Dungeon | Users | Days | Rate | ~Events | Hook branches |
-|---|---------|-------|------|------|---------|---------------|
-| 1 | dating.js | 30K | 120 | 1.5 | 5.4M | 2 |
-| 2 | ecommerce.js | 42K | 120 | 0.37 | 1.9M | 4 |
-| 3 | insurance-application.js | 15K | 120 | 1.2 | 2.2M | 2 |
-| 4 | social.js | 10K | 120 | 1.2 | 1.5M | 2 |
-| 5 | sass.js | 10K | 120 | 1.2 | 1.4M | 6 |
-| 6 | education.js | 10K | 120 | 1.2 | 1.4M | 6 |
-| 7 | fintech.js | 10K | 120 | 1.2 | 1.4M | 5 |
-| 8 | gaming.js | 10K | 120 | 1.2 | 1.4M | 5 |
-| 9 | healthcare.js | 10K | 120 | 1.2 | 1.4M | 5 |
-| 10 | logistics.js | 10K | 120 | 1.2 | 1.4M | 5 |
-| 11 | devtools.js | 10K | 120 | 1.2 | 1.4M | 4 |
-| 12 | travel.js | 10K | 120 | 1.2 | 1.4M | 4 |
-| 13 | community.js | 10K | 120 | 1.2 | 1.4M | 3 |
-| 14 | fitness.js | 10K | 120 | 1.2 | 1.4M | 3 |
-| 15 | marketplace.js | 10K | 120 | 1.2 | 1.4M | 3 |
-| 16 | media.js | 10K | 120 | 1.2 | 1.4M | 3 |
-| 17 | food-delivery.js | 10K | 120 | 1.2 | 1.4M | 2 |
-| 18 | ai-platform.js | 10K | 120 | 0.83 | 1.0M | 2 |
-| 19 | crypto.js | 10K | 120 | 0.83 | 1.0M | 2 |
-| 20 | real-estate.js | 10K | 120 | 0.53 | 636K | 2 |
+| # | Dungeon | Users | Days | Rate | ~Events | Hooks (v1) |
+|---|---------|-------|------|------|---------|------------|
+| 1 | dating.js | 30K | 120 | 1.5 | 5.4M | 9 |
+| 2 | ecommerce.js | 42K | 120 | 0.37 | 1.9M | 7 |
+| 3 | insurance-application.js | 15K | 120 | 1.2 | 2.2M | 5 |
+| 4 | social.js | 10K | 120 | 1.2 | 1.5M | 10 |
+| 5 | sass.js | 10K | 120 | 1.2 | 1.4M | 10 |
+| 6 | education.js | 10K | 120 | 1.2 | 1.4M | 9 |
+| 7 | fintech.js | 10K | 120 | 1.2 | 1.4M | 10 |
+| 8 | gaming.js | 10K | 120 | 1.2 | 1.4M | 13 |
+| 9 | healthcare.js | 10K | 120 | 1.2 | 1.4M | 10 |
+| 10 | logistics.js | 10K | 120 | 1.2 | 1.4M | 10 |
+| 11 | devtools.js | 10K | 120 | 1.2 | 1.4M | 10 |
+| 12 | travel.js | 10K | 120 | 1.2 | 1.4M | 10 |
+| 13 | community.js | 10K | 120 | 1.2 | 1.4M | 10 |
+| 14 | fitness.js | 10K | 120 | 1.2 | 1.4M | 10 |
+| 15 | marketplace.js | 10K | 120 | 1.2 | 1.4M | 10 |
+| 16 | media.js | 10K | 120 | 1.2 | 1.4M | 10 |
+| 17 | food-delivery.js | 10K | 120 | 1.2 | 1.4M | 9 |
+| 18 | ai-platform.js | 10K | 120 | 0.83 | 1.0M | 10 |
+| 19 | crypto.js | 10K | 120 | 0.83 | 1.0M | 10 |
+| 20 | real-estate.js | 10K | 120 | 0.53 | 636K | 10 |
+
+Hook counts come from `research/verifications/v1/README.md` — the authoritative source. A single `everything` hook block often contains multiple independent patterns (e.g., gaming has 5 `type ===` branches but 13 documented hooks).
 
 ## Verification procedure per dungeon
 
@@ -172,7 +174,14 @@ Write output to two locations:
 research/verifications/v2/<dungeon-name>.sql
 ```
 
-**Use the same format as v1** (`research/verifications/v1/*.sql`). Read any v1 file (e.g., `research/verifications/v1/gaming.sql`) as a reference template. The format is:
+**Start from the v1 SQL files** (`research/verifications/v1/*.sql`). No dungeon files changed since v1, so the hook queries are still valid. For each dungeon:
+
+1. Copy the v1 SQL file as a starting point
+2. Add the schema validation block at the top (new in v2)
+3. Verify each query still produces STRONG/NAILED results against fresh data
+4. Update any queries that need adjustment (e.g., if a schema fix changed a hook)
+
+Read `research/verifications/v1/README.md` for the v1 roll-up and format spec. The v2 format is:
 
 ```sql
 -- ============================================================================
