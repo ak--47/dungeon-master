@@ -1,6 +1,6 @@
 {
 	"name": "@ak--47/dungeon-master",
-	"version": "1.4.2",
+	"version": "1.4.3",
 	"description": "generate fancy datasets",
 	"type": "module",
 	"main": "index.js",
