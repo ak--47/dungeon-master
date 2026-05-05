@@ -120,6 +120,38 @@ double-fire mutations.
     used `new Chance()` without a seed. Replace with
     `const chance = u.initChance(SEED)` to ensure reproducible output.
 
+15. **TTC effects must shift timestamps, not just properties.** Mixpanel's
+    funnel TTC measures the delta between event *timestamps* (step A time →
+    step B time). Scaling a timing *property* (e.g., `wait_time_hours *= 0.67`)
+    changes what shows up in Insights AVG reports, but does NOT affect what
+    Mixpanel's funnel TTC report shows — that report uses the event's
+    timestamp, not any property value. To create a visible TTC-by-segment
+    story in Mixpanel Funnels, you MUST shift the actual event timestamps in
+    the `everything` hook using `findFirstSequence()` + `scaleFunnelTTC()`.
+    Property scaling is fine as a complementary Insights signal, but the
+    timestamp shift is the primary mechanism.
+
+16. **Scope `funnel-pre` to specific funnels.** When a `funnel-pre` hook
+    adjusts conversion rates for a segment (e.g., free users 0.5x), apply it
+    only to the intended funnel using `meta.funnel.sequence`. Unscoped
+    funnel-pre hooks affect ALL funnels, which can create unexpected
+    interactions — higher conversion on non-target funnels consumes the
+    user's event budget, displacing standalone events and triggering churn
+    hooks in unrelated code paths.
+    ```js
+    if (type === "funnel-pre") {
+      const isCertFunnel = meta.funnel?.sequence?.includes("certificate earned");
+      if (!isCertFunnel) return;  // only adjust the cert funnel
+      // ... apply conversion scaling
+    }
+    ```
+
+17. **SCD props live in `meta.scd`, not `meta.profile`.** Slowly Changing
+    Dimension values are never present on the profile object. If your hook
+    needs the user's current SCD value (e.g., `loyalty_tier`, `plan_tier`),
+    read it from `meta.scd.<scdName>` and extract the latest entry. Reading
+    `meta.profile.<scdPropName>` will always be `undefined`.
+
 ---
 
 ## 3. Recipe Catalog
@@ -576,37 +608,71 @@ affects a subset of users, invisible in aggregate metrics.
 
 ### Funnel Manipulation
 
-#### 3.14 TTC by User Segment
+#### 3.14 TTC by User Segment (Timestamp Shifting)
 
-**Hook type:** `funnel-post` | **Meta:** `meta.profile`
+**Hook type:** `everything` | **Meta:** `meta.profile`
 
-**In Mixpanel:** Funnel median time-to-convert, broken down by company_size,
-shows Enterprise completing 1.4x faster and Startup 1.25x slower.
+**In Mixpanel:** Funnel median TTC, broken down by segment, shows Enterprise
+completing 3x faster than Free. This is the ONLY approach that affects
+Mixpanel's Funnel TTC report — Mixpanel measures the delta between event
+timestamps, not property values.
 
 ```js
-// funnel-post: scale TTC by company size
-if (type === "funnel-post") {
-  const factor =
-    meta.profile?.company_size === "enterprise" ? 0.71 :
-    meta.profile?.company_size === "startup" ? 1.25 :
-    1.0;
+// everything: shift timestamps in funnel sequences by segment
+if (type === "everything") {
+  const factor = meta.profile?.tier === "elite" ? 0.3 : meta.profile?.tier === "free" ? 1.4 : 1.0;
   if (factor !== 1.0) {
-    for (let i = 1; i < record.length; i++) {
-      const prev = dayjs(record[i - 1].time);
-      const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-      record[i].time = prev.add(newGap, "milliseconds").toISOString();
-    }
+    const seq = findFirstSequence(record, ["step_a", "step_b", "step_c"], 60 * 24 * 30);
+    if (seq) scaleFunnelTTC(seq, factor);
   }
+  return record;
 }
 ```
 
-**Real-world analogue:** Enterprise customers with dedicated CSMs and priority
-support convert faster through multi-step workflows.
+**SQL verification** (bound-sequence pattern — don't use lazy MIN→MIN):
+```sql
+WITH steps AS (
+  SELECT user_id, event, time::TIMESTAMP AS t
+  FROM events WHERE event IN ('step_a', 'step_b', 'step_c')
+),
+funnel AS (
+  SELECT DISTINCT ON (a.user_id) a.user_id, a.t AS start_t,
+    (SELECT MIN(t) FROM steps c
+     WHERE c.user_id = a.user_id AND c.event = 'step_c' AND c.t > a.t) AS end_t
+  FROM steps a WHERE a.event = 'step_a'
+  ORDER BY a.user_id, a.t
+)
+SELECT segment,
+  COUNT(*) AS users,
+  ROUND(MEDIAN(EXTRACT(EPOCH FROM (end_t - start_t)) / 60), 1) AS median_min
+FROM funnel JOIN users USING (user_id)
+WHERE end_t IS NOT NULL GROUP BY segment ORDER BY median_min;
+```
 
-**Adaptation:** Change `meta.profile` key and factor values. Use
-`applyTTCBySegment` (Phase 4) for a declarative version. Note: funnel TTC is
-visible only in Mixpanel's funnel median TTC report, not in cross-event SQL
-queries.
+**Warning:** Never use the lazy proxy `MIN(step_a.time) → MIN(step_c.time)` per
+user. This mixes events from different funnel passes and produces inverted or
+flat results. Always bind the sequence: first A, then first C *after that A*.
+
+**Real-world analogue:** Enterprise customers with dedicated CSMs and priority
+support complete multi-step workflows faster.
+
+**Adaptation:** Change the profile key, funnel steps, and factors. Use stronger
+factors (0.3x/1.4x) to produce clear separation in the funnel TTC report.
+
+#### 3.14b Supplementary Property Scaling
+
+Optionally also scale timing *properties* (e.g., `response_time_mins`) by the
+same segment. This creates a complementary signal visible in Mixpanel Insights
+(`AVG(property) GROUP BY segment`) but does NOT affect the Funnel TTC report.
+Useful when the dungeon has timing properties on the relevant events:
+
+```js
+// everything: ALSO scale timing properties for Insights signal
+scalePropertyValue(record, e => e.event === "alert acknowledged", "response_time_mins", factor);
+scalePropertyValue(record, e => e.event === "alert resolved", "resolution_time_mins", factor);
+```
+
+This is supplementary. The timestamp shift (3.14) is the primary mechanism.
 
 ---
 
@@ -618,8 +684,12 @@ queries.
 paid users converting at 1.3x the rate of free users.
 
 ```js
-// funnel-pre: paid users get boosted conversion
+// funnel-pre: paid users get boosted conversion — SCOPED to a specific funnel
 if (type === "funnel-pre") {
+  // Always scope to the intended funnel (see principle #16)
+  const isTargetFunnel = meta.funnel?.sequence?.includes("certificate earned");
+  if (!isTargetFunnel) return;
+
   const tier = meta.profile?.plan_tier;
   if (tier === "enterprise" || tier === "business") {
     record.conversionRate = Math.min(95, record.conversionRate * 1.3);
@@ -632,8 +702,9 @@ if (type === "funnel-pre") {
 **Real-world analogue:** Paid-tier users who've invested in the product
 complete multi-step workflows at higher rates.
 
-**Adaptation:** Change the profile key and multipliers. Can also modify
-`record.timeToConvert` to affect TTC from funnel-pre.
+**Adaptation:** Change the profile key, multipliers, and funnel scope check.
+Always include the `isTargetFunnel` guard — unscoped funnel-pre hooks affect
+ALL funnels and create cascading event-budget interactions (see principle #16).
 
 ---
 

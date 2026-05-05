@@ -883,44 +883,77 @@ FROM events e, bounds b;
 
 Pre-existing users have events for up to 30 days BEFORE the dataset start (`preExistingSpread: 'uniform'` default in macro). MIN(time) reflects those pre-existing events, not the dataset window. Always anchor to MAX(time) - num_days for "day in dataset" calculations.
 
-### Funnel-Post T2C — Cross-Event MIN-to-MIN Limitation (REV 8)
+### TTC Hook Verification — Two Approaches (REV 9)
 
-A common verification query for time-to-convert hooks:
+TTC hooks come in two forms. Use the matching verification approach:
 
-```sql
-WITH f AS (
-  SELECT user_id,
-    MIN(time::TIMESTAMP) FILTER (WHERE event = 'A') AS a,
-    MIN(time::TIMESTAMP) FILTER (WHERE event = 'B') AS b
-  FROM events GROUP BY user_id
-)
-SELECT u.tier, MEDIAN(EXTRACT(EPOCH FROM (b - a)) / 60) median_min FROM f JOIN users u ON ...
-```
+#### Approach 1: Property-Scaling TTC (preferred — produces NAILED verdicts)
 
-This measures **earliest A → earliest B across the user's entire event history**. A funnel-post hook that scales gaps within a single funnel sequence does NOT influence this measurement if the user has earlier `B` events from base distribution outside the funnel. Result: the T2C hook fires correctly inside the funnel but the verification ratio looks flat (or even reversed if other hooks interact).
-
-**How to diagnose:** if the dungeon has a funnel-post T2C hook for tier `X` claiming `0.7x baseline` but your MIN-to-MIN query shows `~1.0x`, check whether the base event distribution naturally produces `B` events earlier than the funnel sequence. If yes, the hook needs an everything-hook companion that adjusts the user's earliest A→B pair directly (see create-dungeon SKILL.md "Common bugs to avoid #8").
-
-**Verdict rule:** if the dungeon's funnel-post JSDoc has the standard caveat (`NOTE (funnel-post measurement): visible only via Mixpanel funnel median TTC. Cross-event MIN→MIN SQL queries on raw events do NOT show this`), mark STRONG as "mechanism" without re-running the within-funnel query — the hook code path is verified by code inspection. Only run the within-funnel query when the JSDoc claims the effect SHOULD be visible in cross-event SQL (e.g. dungeons with an explicit everything-hook companion).
-
-**Fast verification workaround:** measure within-funnel T2C only:
+The hook scales a timing PROPERTY (e.g., `response_time_mins *= 0.67`) by
+segment. Verification is trivial:
 
 ```sql
--- Within-funnel measurement (use when MIN-to-MIN flat but hook code looks correct)
-WITH funnel_pairs AS (
-  SELECT e1.user_id,
-    e1.time::TIMESTAMP AS a_t,
-    (SELECT MIN(e2.time::TIMESTAMP) FROM events e2
-     WHERE e2.user_id = e1.user_id AND e2.event = 'B'
-     AND e2.time::TIMESTAMP > e1.time::TIMESTAMP
-     AND e2.time::TIMESTAMP < e1.time::TIMESTAMP + INTERVAL 7 day) AS b_t
-  FROM events e1 WHERE e1.event = 'A'
-)
-SELECT u.tier, MEDIAN(EXTRACT(EPOCH FROM (b_t - a_t)) / 60) median_min
-FROM funnel_pairs JOIN users u ON ... WHERE b_t IS NOT NULL GROUP BY u.tier;
+SELECT segment,
+  ROUND(AVG(response_time_mins), 1) AS avg_response,
+  ROUND(AVG(resolution_time_mins), 1) AS avg_resolution
+FROM events
+WHERE event IN ('alert acknowledged', 'alert resolved')
+GROUP BY segment ORDER BY avg_response;
 ```
 
-This restricts the B match to within 7 days of EACH A occurrence — closer to the funnel-post hook's actual operating scope.
+This consistently produces exact matches to the hook factors (e.g., 0.67x
+target → 0.665x measured). All property-scaling TTC hooks in the v2
+verification suite scored NAILED.
+
+#### Approach 2: Timestamp-Shifting TTC (use when no timing property exists)
+
+The hook shifts event timestamps in the everything hook using
+`scaleFunnelTTC()` or manual gap scaling. Verification requires a
+**bound-sequence query** — never use the lazy MIN→MIN proxy:
+
+```sql
+-- WRONG: lazy MIN→MIN proxy (mixes events from different funnel passes)
+SELECT user_id, MIN(a.time) AS start, MIN(b.time) AS end ...
+
+-- RIGHT: bound-sequence (first A, then first B AFTER that A)
+WITH steps AS (
+  SELECT user_id, event, time::TIMESTAMP AS t
+  FROM events WHERE event IN ('step_a', 'step_b', 'step_c')
+),
+funnel AS (
+  SELECT DISTINCT ON (a.user_id) a.user_id, a.t AS start_t,
+    (SELECT MIN(t) FROM steps c
+     WHERE c.user_id = a.user_id AND c.event = 'step_c' AND c.t > a.t) AS end_t
+  FROM steps a WHERE a.event = 'step_a'
+  ORDER BY a.user_id, a.t
+)
+SELECT segment,
+  COUNT(*) AS users,
+  ROUND(MEDIAN(EXTRACT(EPOCH FROM (end_t - start_t)) / 60), 1) AS median_min
+FROM funnel JOIN users USING (user_id)
+WHERE end_t IS NOT NULL
+GROUP BY segment ORDER BY median_min;
+```
+
+The bound-sequence pattern finds the first A per user, then the first C
+strictly after that A. This matches how the everything hook operates and
+typically produces STRONG verdicts. The lazy MIN→MIN proxy produces flat or
+inverted results because it grabs unrelated events from different funnel
+passes.
+
+#### Which approach to recommend when writing hooks
+
+Property scaling is strictly better for verification. When creating new TTC
+hooks, always prefer scaling timing properties (see HOOKS.md principle #15).
+Reserve timestamp shifting for cases where no numeric timing property exists
+on the relevant events.
+
+#### Legacy funnel-post TTC hooks
+
+If a dungeon still uses `funnel-post` for TTC (not yet migrated to
+`everything`), the effect is only visible in Mixpanel's funnel median TTC
+report, not in any SQL query. Mark as STRONG by code inspection and
+recommend migration to property scaling or everything-hook timestamp shifting.
 
 ### Magic-Number Cohort Sizing — Inspect Distribution First (REV 8)
 

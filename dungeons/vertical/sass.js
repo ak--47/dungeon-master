@@ -13,6 +13,7 @@ import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
+import { findFirstSequence, scaleFunnelTTC } from "../../lib/hook-helpers/timing.js";
 
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
@@ -813,6 +814,14 @@ const config = {
 				1.0
 			);
 			if (ttcFactor !== 1.0) {
+				// Timestamp shift: affects Mixpanel funnel TTC
+				const incidentSeq = findFirstSequence(
+					userEvents,
+					["alert triggered", "alert acknowledged", "alert resolved"],
+					60 * 24 * 30
+				);
+				if (incidentSeq) scaleFunnelTTC(incidentSeq, ttcFactor);
+				// Property scale: affects Insights AVG reports
 				userEvents.forEach(e => {
 					if (e.event === "alert acknowledged" && e.response_time_mins) {
 						e.response_time_mins = Math.max(1, Math.round(e.response_time_mins * ttcFactor));

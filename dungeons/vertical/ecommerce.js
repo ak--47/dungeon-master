@@ -13,6 +13,7 @@ import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 import { uid, comma } from 'ak-tools';
 import { weighNumRange, date, integer, weighChoices, decimal, initChance } from "../../lib/utils/utils.js";
+import { scaleFunnelTTC } from "../../lib/hook-helpers/timing.js";
 const chance = initChance(SEED);
 
 /** @typedef {import("../../types").Dungeon} Config */
@@ -51,11 +52,11 @@ const spiritAnimals = ["duck", "dog", "otter", "penguin", "cat", "elephant", "li
  * ============================================================================
  * ANALYTICS HOOKS (7 hooks)
  *
- * Adds 7. SIGNUP FLOW TIME-TO-CONVERT: gold/platinum loyalty 0.71x faster,
- * bronze 1.3x slower (funnel-post). Discover via funnel median time-to-convert
- * by loyalty_tier breakdown.
- * NOTE (funnel-post measurement): visible only via Mixpanel funnel median TTC.
- * Cross-event MIN→MIN SQL queries on raw events do NOT show this.
+ * Adds 7. SIGNUP FLOW TIME-TO-CONVERT: gold/platinum loyalty 0.67x faster,
+ * bronze 1.33x slower (everything hook via scaleFunnelTTC on the page-view-
+ * to-sign-up window). Loyalty tier is determined from SCD data
+ * (meta.scd.loyalty_tier) with deterministic hash fallback. Discover via
+ * bound-sequence funnel TTC breakdown by loyalty tier.
  * ============================================================================
  *
  * ----------------------------------------------------------------------------
@@ -244,6 +245,8 @@ const spiritAnimals = ["duck", "dog", "otter", "penguin", "cat", "elephant", "li
  * Item Flattening            | category breakdown      | nested     | flat        | n/a
  * View-Item Magic Number     | sweet (3-8) cart rate   | 1x         | ~ 1.45x     | 1.45x
  * View-Item Magic Number     | over (9+) checkouts/user| 1x         | ~ 0.7x      | -30%
+ * Signup TTC by Loyalty      | gold/plat median TTC    | 1x         | ~ 0.67x     | -33%
+ * Signup TTC by Loyalty      | bronze median TTC       | 1x         | ~ 1.33x     | +33%
  * ============================================================================
  */
 
@@ -494,27 +497,6 @@ const config = {
 	lookupTables: [],
 	hook: function (record, type, meta) {
 
-		// Hook 7 (T2C): SIGNUP FLOW TIME-TO-CONVERT (funnel-post)
-		// Gold/platinum loyalty tier users complete the Signup Flow funnel
-		// 1.4x faster (factor 0.71); bronze users 1.3x slower (factor 1.3).
-		if (type === "funnel-post") {
-			const segment = meta?.profile?.loyalty_tier;
-			if (Array.isArray(record) && record.length > 1) {
-				const factor = (
-					segment === "gold" || segment === "platinum" ? 0.71 :
-					segment === "bronze" ? 1.3 :
-					1.0
-				);
-				if (factor !== 1.0) {
-					for (let i = 1; i < record.length; i++) {
-						const prev = dayjs(record[i - 1].time);
-						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-						record[i].time = prev.add(newGap, "milliseconds").toISOString();
-					}
-				}
-			}
-		}
-
 		if (type === "event") {
 			// unflattering 'items'
 			if (record.item && Array.isArray(record.item)) {
@@ -648,6 +630,60 @@ const config = {
 				for (let i = record.length - 1; i >= 0; i--) {
 					if (record[i].event === 'checkout' && chance.bool({ likelihood: 30 })) {
 						record.splice(i, 1);
+					}
+				}
+			}
+
+			// Hook 7 (TTC): SIGNUP FLOW TIME-TO-CONVERT (everything)
+			// Gold/platinum loyalty users complete the Signup Flow funnel
+			// 0.67x faster; bronze users 1.33x slower. Loyalty tier is read
+			// from SCD data (meta.scd.loyalty_tier); falls back to a
+			// deterministic hash of user_id for consistent assignment.
+			//
+			// The funnel uses order:"first-and-last-fixed" so middle steps
+			// can reorder. We anchor on the first "sign up" event, look back
+			// up to 2 days for all funnel-step events in that window, and
+			// scale the whole cluster via scaleFunnelTTC.
+			{
+				// Determine loyalty tier from SCD (latest entry) or hash fallback
+				let loyaltyTier = "silver"; // default baseline
+				const scdEntries = meta?.scd?.loyalty_tier;
+				if (Array.isArray(scdEntries) && scdEntries.length > 0) {
+					// Pick the latest SCD entry
+					const latest = scdEntries.reduce((a, b) =>
+						(a.time > b.time ? a : b));
+					loyaltyTier = latest.loyalty_tier || "silver";
+				} else {
+					// Deterministic hash fallback: gold ~20%, silver ~30%, bronze ~50%
+					const uid = record[0]?.user_id || "";
+					const hash = uid.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0);
+					const bucket = hash % 100;
+					loyaltyTier = bucket < 20 ? "gold" : bucket < 50 ? "silver" : "bronze";
+				}
+
+				const ttcFactor = (
+					loyaltyTier === "gold" || loyaltyTier === "platinum" ? 0.67 :
+					loyaltyTier === "bronze" ? 1.33 :
+					1.0
+				);
+				if (ttcFactor !== 1.0) {
+					// Find signup funnel: anchor on first "sign up", look back 2 days
+					// for the cluster of funnel-step events
+					const funnelSteps = new Set(["page view", "view item", "save item", "sign up"]);
+					const sorted = record.slice().sort((a, b) =>
+						new Date(a.time) - new Date(b.time));
+					const signupEvent = sorted.find(e => e.event === "sign up");
+					if (signupEvent) {
+						const signupMs = new Date(signupEvent.time).getTime();
+						const windowMs = 2 * 24 * 60 * 60 * 1000; // 2-day lookback
+						const funnelEvents = sorted.filter(e =>
+							funnelSteps.has(e.event) &&
+							new Date(e.time).getTime() >= signupMs - windowMs &&
+							new Date(e.time).getTime() <= signupMs
+						);
+						if (funnelEvents.length >= 2) {
+							scaleFunnelTTC(funnelEvents, ttcFactor);
+						}
 					}
 				}
 			}

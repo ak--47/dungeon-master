@@ -13,6 +13,7 @@ import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
+import { findFirstSequence, scaleFunnelTTC } from "../../lib/hook-helpers/timing.js";
 
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
@@ -46,10 +47,9 @@ const chance = u.initChance(SEED);
  * ═══════════════════════════════════════════════════════════════════════════════
  * ANALYTICS HOOKS (10 hooks)
  *
- * Adds 10. CORE VIEWING LOOP TIME-TO-CONVERT: premium 0.71x faster, free 1.25x
- * slower (funnel-post). Discover via funnel median TTC by subscription_plan.
- * NOTE (funnel-post measurement): visible only via Mixpanel funnel median TTC.
- * Cross-event MIN→MIN SQL queries on raw events do NOT show this.
+ * Adds 10. CORE VIEWING LOOP: premium 0.67x watch_duration_min, free 1.4x
+ * (property scaling in everything hook). Discover via Insights → playback
+ * completed → Avg watch_duration_min → breakdown subscription_plan.
  * ═══════════════════════════════════════════════════════════════════════════════
  *
  * NOTE: All cohort effects are HIDDEN — discoverable only via behavioral cohorts
@@ -253,6 +253,28 @@ const chance = u.initChance(SEED);
  * REAL-WORLD ANALOGUE: A few good recs surface a watchworthy title; too many
  * clicks signals indecision and drives abandonment.
  *
+ * ───────────────────────────────────────────────────────────────────────────────
+ * 10. CORE VIEWING LOOP — SUBSCRIPTION PLAN PROPERTY SCALING (everything)
+ * ───────────────────────────────────────────────────────────────────────────────
+ *
+ * PATTERN: Premium subscribers have 0.67x watch_duration_min on "playback
+ * completed" (efficient viewers), free users have 1.4x (lingering viewers).
+ * Scales the existing watch_duration_min property — no flag. Applied BEFORE
+ * weekend/subtitle/rec-click hooks so each subsequent effect amplifies from
+ * the plan-adjusted base.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Avg Watch Duration by Subscription Plan
+ *   - Report type: Insights
+ *   - Event: "playback completed"
+ *   - Measure: Average of "watch_duration_min"
+ *   - Breakdown: "subscription_plan"
+ *   - Expected: premium < standard < free, free/premium ratio >= 2x
+ *
+ * REAL-WORLD ANALOGUE: Premium subscribers binge curated content efficiently;
+ * free-tier users browse and linger with ad interruptions.
+ *
  * ═══════════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY
  * ═══════════════════════════════════════════════════════════════════════════════
@@ -269,6 +291,7 @@ const chance = u.initChance(SEED);
  * Subtitle Users           | completion %            | 68%      | 85%         | 1.25x
  * Rec-Click Magic Number   | sweet watch duration    | 1x       | 1.25x       | 1.25x
  * Rec-Click Magic Number   | over watch_duration_min | 1x       | 0.5x        | -50%
+ * Core Viewing Loop        | free/premium duration   | 1x       | >= 2x       | 2.09x
  */
 
 // Generate consistent content IDs for lookup tables and events
@@ -550,27 +573,6 @@ const config = {
 	lookupTables: [],
 
 	hook: function (record, type, meta) {
-		// Hook #10 (T2C): CORE VIEWING LOOP TIME-TO-CONVERT (funnel-post)
-		// Premium subscribers complete browse→play funnel 1.4x faster
-		// (factor 0.71); free users 1.25x slower (factor 1.25).
-		if (type === "funnel-post") {
-			const segment = meta?.profile?.subscription_plan;
-			if (Array.isArray(record) && record.length > 1) {
-				const factor = (
-					segment === "premium" ? 0.71 :
-					segment === "free" ? 1.25 :
-					1.0
-				);
-				if (factor !== 1.0) {
-					for (let i = 1; i < record.length; i++) {
-						const prev = dayjs(record[i - 1].time);
-						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-						record[i].time = prev.add(newGap, "milliseconds").toISOString();
-					}
-				}
-			}
-		}
-
 		if (type === "event") {
 			// Hook #6: KIDS PROFILE SAFETY — 15% of selections/starts get genre
 			// restricted to animation or documentary. Mutates existing genre prop.
@@ -600,6 +602,30 @@ const config = {
 				});
 			}
 
+			// HOOK 10: CORE VIEWING LOOP TTC — premium 0.67x, free 1.4x.
+			// Timestamp shift for Mixpanel funnel TTC + property scale for
+			// Insights. Applied first so weekend/subtitle/rec-click hooks
+			// amplify from the plan-adjusted base.
+			{
+				const plan = profile ? profile.subscription_plan : "free";
+				const ttcFactor = plan === "premium" ? 0.67 : plan === "free" ? 1.4 : 1.0;
+				if (ttcFactor !== 1.0) {
+					// Timestamp shift: affects Mixpanel funnel TTC
+					const viewSeq = findFirstSequence(
+						userEvents,
+						["content browsed", "content selected", "playback started", "playback completed"],
+						60 * 24 * 7
+					);
+					if (viewSeq) scaleFunnelTTC(viewSeq, ttcFactor);
+					// Property scale: affects Insights AVG reports
+					for (const e of userEvents) {
+						if (e.event === "playback completed" && typeof e.watch_duration_min === "number") {
+							e.watch_duration_min = Math.round(e.watch_duration_min * ttcFactor * 10) / 10;
+						}
+					}
+				}
+			}
+
 			// Hook #5: NEW RELEASE SPIKE — days 50-65, 20% of selections/starts
 			// switch to the blockbuster id. Mutates existing content_id/content_type props.
 			// (Moved from event hook to everything hook per L1: temporal checks belong here.)
@@ -615,6 +641,28 @@ const config = {
 					if (e.event === "content rated" && chance.bool({ likelihood: 20 })) {
 						e.rating = chance.integer({ min: 4, max: 5 });
 						e.content_id = blockbusterId;
+					}
+				}
+			}
+
+			// Hook #10: CORE VIEWING LOOP — subscription_plan property scaling.
+			// Premium users watch more efficiently (shorter durations), free users
+			// linger (longer durations). Scales watch_duration_min on playback
+			// completed events BEFORE H3/H8/H9 so each subsequent hook amplifies
+			// from the plan-adjusted base.
+			// Discover via: Insights → playback completed → Avg watch_duration_min → breakdown subscription_plan.
+			{
+				const plan = stampPlan;
+				const factor = (
+					plan === "premium" ? 0.67 :
+					plan === "free" ? 1.4 :
+					1.0
+				);
+				if (factor !== 1.0) {
+					for (const e of userEvents) {
+						if (e.event === "playback completed" && typeof e.watch_duration_min === "number") {
+							e.watch_duration_min = Math.round(e.watch_duration_min * factor);
+						}
 					}
 				}
 			}

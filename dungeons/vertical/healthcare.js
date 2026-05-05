@@ -13,6 +13,7 @@ import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
+import { findFirstSequence, scaleFunnelTTC } from "../../lib/hook-helpers/timing.js";
 
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
@@ -740,6 +741,14 @@ const config = {
 				const userTier = profile.subscription_tier;
 				const ttcFactor = userTier === "premium" ? 0.67 : userTier === "free" ? 1.4 : 1.0;
 				if (ttcFactor !== 1.0) {
+					// Timestamp shift: affects Mixpanel funnel TTC
+					const bookingSeq = findFirstSequence(
+						record,
+						["appointment booked", "consultation completed", "follow up scheduled"],
+						60 * 24 * 30
+					);
+					if (bookingSeq) scaleFunnelTTC(bookingSeq, ttcFactor);
+					// Property scale: affects Insights AVG reports
 					record.forEach(e => {
 						if (e.event === "appointment booked" && typeof e.wait_time_hours === "number") {
 							e.wait_time_hours = Math.round(e.wait_time_hours * ttcFactor * 10) / 10;
