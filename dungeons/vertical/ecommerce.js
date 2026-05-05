@@ -200,10 +200,12 @@ const spiritAnimals = ["duck", "dog", "otter", "penguin", "cat", "elephant", "li
  *
  * PATTERN: Users who view 3-8 items in the dataset window are in the
  * "considered buyer" sweet spot — every cart item amount and total_value
- * gets boosted ~25%. Users who view 9 or more items are over-engaged
- * window-shoppers; ~30% of their checkout events are dropped (decision
- * paralysis / browse without buy). No flag is stamped — discoverable
- * only by binning users on view-item COUNT and comparing avg cart total.
+ * gets boosted ~25%, AND ~45% of their add-to-cart events are cloned
+ * (with time offsets) to elevate their cart add rate. Users who view
+ * 9 or more items are over-engaged window-shoppers; ~30% of their
+ * checkout events are dropped (decision paralysis / browse without buy).
+ * No flag is stamped — discoverable only by binning users on view-item
+ * COUNT and comparing avg cart total or add-to-cart rate.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -240,7 +242,7 @@ const spiritAnimals = ["duck", "dog", "otter", "penguin", "cat", "elephant", "li
  * Toys + Shoes Correlation   | toys/shoes co-occurrence| ~ 7%       | ~ 50%+      | ~ 7x
  * Quality -> Watch Time      | Avg watchTimeSec (240p->2160p) | 0.7x | 1.5x       | ~ 2.1x
  * Item Flattening            | category breakdown      | nested     | flat        | n/a
- * View-Item Magic Number     | sweet (3-8) cart total  | 1x         | ~ 1.25x     | 1.25x
+ * View-Item Magic Number     | sweet (3-8) cart rate   | 1x         | ~ 1.45x     | 1.45x
  * View-Item Magic Number     | over (9+) checkouts/user| 1x         | ~ 0.7x      | -30%
  * ============================================================================
  */
@@ -614,7 +616,8 @@ const config = {
 			});
 
 			// Hook 6: View-Item Magic Number (behavioral, no flags)
-			// Users in 3-8 view-item sweet spot show ~25% higher cart amounts.
+			// Users in 3-8 view-item sweet spot show ~25% higher cart amounts
+			// AND elevated add-to-cart rate (~45% boost via cloned events).
 			// Users >=9 are over-engaged window-shoppers; ~30% of their checkouts drop.
 			const viewItemCount = record.filter(e => e.event === 'view item').length;
 			if (viewItemCount >= 3 && viewItemCount <= 8) {
@@ -627,6 +630,20 @@ const config = {
 						}));
 					}
 				});
+				// Clone ~45% of add-to-cart events to boost cart add rate
+				const addToCartEvents = record.filter(e => e.event === 'add to cart');
+				const clones = [];
+				addToCartEvents.forEach(e => {
+					if (chance.bool({ likelihood: 45 })) {
+						const offsetMs = integer(60_000, 600_000); // 1-10 min offset
+						clones.push({
+							...e,
+							insert_id: uid(),
+							time: dayjs(e.time).add(offsetMs, 'milliseconds').toISOString()
+						});
+					}
+				});
+				if (clones.length > 0) record.push(...clones);
 			} else if (viewItemCount >= 9) {
 				for (let i = record.length - 1; i >= 0; i--) {
 					if (record[i].event === 'checkout' && chance.bool({ likelihood: 30 })) {

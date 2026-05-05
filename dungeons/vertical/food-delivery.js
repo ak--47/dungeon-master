@@ -51,10 +51,9 @@ const chance = u.initChance(SEED);
  * ═══════════════════════════════════════════════════════════════════════════════
  * ANALYTICS HOOKS (9 hooks)
  *
- * Adds 9. ORDER LIFECYCLE TIME-TO-CONVERT: QuickBite+ 0.74x faster, Free 1.3x
- * slower (funnel-post). Discover via order funnel median TTC by subscription_tier.
- * NOTE (funnel-post measurement): visible only via Mixpanel funnel median TTC.
- * Cross-event MIN→MIN SQL queries on raw events do NOT show this.
+ * Adds 9. ORDER LIFECYCLE TIME-TO-CONVERT: QuickBite+ 0.67x delivery times,
+ * Free 1.4x slower (everything hook, property scaling). Discover via
+ * avg(actual_delivery_mins) on "order delivered" by subscription_tier.
  * ═══════════════════════════════════════════════════════════════════════════════
  *
  * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable only via
@@ -237,6 +236,34 @@ const chance = u.initChance(SEED);
  * hit fatigue and slow down.
  *
  * ───────────────────────────────────────────────────────────────────────────────
+ * 9. ORDER LIFECYCLE TTC (everything)
+ * ───────────────────────────────────────────────────────────────────────────────
+ *
+ * PATTERN: QuickBite+ users get delivery timing properties scaled 0.67x
+ * (faster), Free users get 1.4x (slower). Affects actual_delivery_mins,
+ * eta_mins, delivery_time_est_mins. No flag — discover via property avg
+ * breakdown by subscription_tier.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Avg Delivery Time by Subscription Tier
+ *   - Report type: Insights
+ *   - Event: "order delivered"
+ *   - Measure: Average of "actual_delivery_mins"
+ *   - Breakdown: "subscription_tier"
+ *   - Expected: QuickBite+ ~ 0.67x Free
+ *
+ *   Report 2: Avg ETA by Subscription Tier
+ *   - Report type: Insights
+ *   - Event: "order tracked"
+ *   - Measure: Average of "eta_mins"
+ *   - Breakdown: "subscription_tier"
+ *   - Expected: QuickBite+ ~ 0.67x Free
+ *
+ * REAL-WORLD ANALOGUE: Premium subscribers get priority dispatch and faster
+ * delivery routing.
+ *
+ * ───────────────────────────────────────────────────────────────────────────────
  * EXPECTED METRICS SUMMARY
  * ───────────────────────────────────────────────────────────────────────────────
  *
@@ -251,6 +278,8 @@ const chance = u.initChance(SEED);
  * First Order Bonus     | returning conversion | 1x       | 0.7x        | -30%
  * Order-Count Magic Num | sweet order_total    | 1x       | 1.4x        | 1.4x
  * Order-Count Magic Num | over orders/user     | 1x       | 0.65x       | -35%
+ * Order Lifecycle TTC   | QB+ delivery_mins    | 1x       | 0.67x       | -33%
+ * Order Lifecycle TTC   | Free delivery_mins   | 1x       | 1.4x        | +40%
  */
 
 // Generate consistent IDs for lookup tables and event properties
@@ -593,27 +622,6 @@ const config = {
 	lookupTables: [],
 
 	hook: function (record, type, meta) {
-		// HOOK 9 (T2C): ORDER LIFECYCLE TIME-TO-CONVERT (funnel-post)
-		// QuickBite+ subscribers complete order funnels 1.35x faster
-		// (factor 0.74); Free users 1.3x slower (factor 1.3).
-		if (type === "funnel-post") {
-			const segment = meta?.profile?.subscription_tier;
-			if (Array.isArray(record) && record.length > 1) {
-				const factor = (
-					segment === "QuickBite+" ? 0.74 :
-					segment === "Free" ? 1.3 :
-					1.0
-				);
-				if (factor !== 1.0) {
-					for (let i = 1; i < record.length; i++) {
-						const prev = dayjs(record[i - 1].time);
-						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-						record[i].time = prev.add(newGap, "milliseconds").toISOString();
-					}
-				}
-			}
-		}
-
 		if (type === "everything") {
 			const datasetStart = dayjs.unix(meta.datasetStart);
 			const RAINY_WEEK_START = datasetStart.add(20, 'days');
@@ -628,6 +636,34 @@ const config = {
 					if (profile.subscription_tier !== undefined) event.subscription_tier = profile.subscription_tier;
 					if (profile.city !== undefined) event.city = profile.city;
 				});
+			}
+
+			// HOOK 9 (TTC): ORDER LIFECYCLE TIME-TO-CONVERT (everything)
+			// QuickBite+ users experience faster delivery times (0.67x);
+			// Free users experience slower delivery times (1.4x).
+			// Scales timing properties: actual_delivery_mins, eta_mins,
+			// delivery_time_est_mins. Discover via avg(actual_delivery_mins)
+			// on "order delivered" broken down by subscription_tier.
+			if (profile) {
+				const tier = profile.subscription_tier;
+				const ttcFactor = (
+					tier === "QuickBite+" ? 0.67 :
+					tier === "Free" ? 1.4 :
+					1.0
+				);
+				if (ttcFactor !== 1.0) {
+					userEvents.forEach(e => {
+						if (typeof e.actual_delivery_mins === "number") {
+							e.actual_delivery_mins = Math.round(e.actual_delivery_mins * ttcFactor);
+						}
+						if (typeof e.eta_mins === "number") {
+							e.eta_mins = Math.round(e.eta_mins * ttcFactor);
+						}
+						if (typeof e.delivery_time_est_mins === "number") {
+							e.delivery_time_est_mins = Math.round(e.delivery_time_est_mins * ttcFactor);
+						}
+					});
+				}
 			}
 
 			// HOOK 3: LATE NIGHT MUNCHIES — 10PM-2AM UTC, 70% of restaurant
@@ -694,7 +730,7 @@ const config = {
 				}
 			}
 
-			// HOOK 8: FIRST ORDER BONUS — hash-based ~50% of users (returning)
+			// HOOK 7: FIRST ORDER BONUS — hash-based ~50% of users (returning)
 			// drop 30% of order delivered events. New users keep all.
 			// Discover via cohort builder on hash bucket vs conversion.
 			const hashUser = userEvents[0] && userEvents[0].user_id;
@@ -782,7 +818,7 @@ const config = {
 			});
 			if (rainyDuplicates.length > 0) userEvents.push(...rainyDuplicates);
 
-			// HOOK 9: ORDER-COUNT MAGIC NUMBER (no flags)
+			// HOOK 8: ORDER-COUNT MAGIC NUMBER (no flags)
 			// Sweet 4-8 orders → +40% on order_total. Over 9+ → drop 35% of
 			// order placed events (oversaturated; analyst sees inverted-U).
 			if (orderPlacedCount >= 4 && orderPlacedCount <= 8) {

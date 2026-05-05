@@ -12,6 +12,7 @@ import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
+import { findFirstSequence, scaleFunnelTTC } from "../../lib/hook-helpers/timing.js";
 
 dayjs.extend(utc);
 const chance = u.initChance(SEED);
@@ -283,10 +284,13 @@ const chance = u.initChance(SEED);
  *   - By credit_score_range: loan approvals, tier adoption
  *
  * ---------------------------------------------------------------
- * 9. ONBOARDING TIME-TO-CONVERT (funnel-post)
+ * 9. ONBOARDING TIME-TO-CONVERT (everything)
  *
  * PATTERN: Premium tier users complete the Onboarding funnel 1.5x
  * faster (factor 0.67); Basic users 1.33x slower (factor 1.33).
+ * Applied in the everything hook via findFirstSequence + scaleFunnelTTC,
+ * so the effect is visible in both Mixpanel funnels and cross-event
+ * MIN→MIN SQL queries.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -295,11 +299,6 @@ const chance = u.initChance(SEED);
  *   - Measure: Median time to convert
  *   - Breakdown: account_tier
  *   - Expected: premium ~ 0.67x baseline; basic ~ 1.33x
- *
- *   NOTE (funnel-post measurement): visible only via Mixpanel funnel
- *   median TTC. Cross-event MIN→MIN SQL queries on raw events do NOT
- *   show this — funnel-post adjusts gaps within funnel instances, not
- *   across the user's full event history.
  *
  * ---------------------------------------------------------------
  * 10. TRANSACTION-COUNT MAGIC NUMBER (everything)
@@ -341,7 +340,7 @@ const chance = u.initChance(SEED);
  * Auto-Pay Loyalty      | Bill completion rate  | 100%     | 70%       | -30%
  * Premium Tier Value    | Reward value (Premium)| 1x       | 3x        | 3x
  * Month-End Anxiety     | Session duration d28+ | 1x       | 1.4x      | 1.4x
- * Onboarding T2C        | median min by tier    | 1x       | 0.67/1.33x| 2x range
+ * Onboarding T2C (H9)   | median min by tier    | 1x       | 0.67/1.33x| 2x range
  * Txn-Count Magic Num   | sweet investment amt  | 1x       | 1.4x      | 1.4x
  * Txn-Count Magic Num   | over premium upgrades | 1x       | 0.8x      | -20%
  */
@@ -690,27 +689,6 @@ const config = {
 			}
 		}
 
-		// HOOK 9 (T2C): ONBOARDING TIME-TO-CONVERT (funnel-post)
-		// Premium tier completes Onboarding funnel 1.5x faster (factor 0.67);
-		// Basic users 1.33x slower (factor 1.33).
-		if (type === "funnel-post") {
-			const segment = meta?.profile?.account_tier;
-			if (Array.isArray(record) && record.length > 1) {
-				const factor = (
-					segment === "premium" ? 0.67 :
-					segment === "basic" ? 1.33 :
-					1.0
-				);
-				if (factor !== 1.0) {
-					for (let i = 1; i < record.length; i++) {
-						const prev = dayjs(record[i - 1].time);
-						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-						record[i].time = prev.add(newGap, "milliseconds").toISOString();
-					}
-				}
-			}
-		}
-
 		if (type === "everything") {
 			const datasetStart = dayjs.unix(meta.datasetStart);
 			const userEvents = record;
@@ -720,6 +698,28 @@ const config = {
 				e.account_tier = profile.account_tier;
 				e.Platform = profile.Platform;
 			});
+
+			// HOOK 9 (T2C): ONBOARDING TIME-TO-CONVERT (everything)
+			// Premium tier completes Onboarding funnel 1.5x faster (factor 0.67);
+			// Basic users 1.33x slower (factor 1.33). Finds the first occurrence
+			// of the onboarding sequence in the user's events and scales the gaps.
+			{
+				const ttcFactor = (
+					profile.account_tier === "premium" ? 0.67 :
+					profile.account_tier === "basic" ? 1.33 :
+					1.0
+				);
+				if (ttcFactor !== 1.0) {
+					const onboardingSeq = findFirstSequence(
+						userEvents,
+						["account opened", "app session", "balance checked"],
+						60 * 24 * 30   // 30-day max gap between steps
+					);
+					if (onboardingSeq) {
+						scaleFunnelTTC(onboardingSeq, ttcFactor);
+					}
+				}
+			}
 
 			// HOOK 1B: PERSONAL VS BUSINESS — business segment txns 4x larger
 			// (per Report 2 in JSDoc: business ~ $200, personal ~ $50).

@@ -172,8 +172,8 @@ const chance = u.initChance(SEED);
  * 9. GOLD REWARD BY LEVEL (PROGRESSION SCALING — everything)
  *
  *    PATTERN: Quest gold reward scales with player level using
- *    reward_gold *= (1 + level * 0.1). Level-10 earns 2x, level-20 earns
- *    3x vs level-1. No flag — discover via user-property level breakdown.
+ *    reward_gold *= (1 + level * 0.15). Level-10 earns ~2.5x, level-20
+ *    earns ~4x vs level-1. No flag — discover via user-property level breakdown.
  *
  *    HOW TO FIND IT IN MIXPANEL:
  *
@@ -182,7 +182,7 @@ const chance = u.initChance(SEED);
  *      - Event: "quest turned in"
  *      - Measure: Average of "reward_gold"
  *      - Breakdown: user property "level" (bucketed)
- *      - Expected: linear ramp; level-10 ~ 2x, level-20 ~ 3x vs level-1
+ *      - Expected: linear ramp; level-10 ~ 2.5x, level-20 ~ 4x vs level-1
  *
  *    REAL-WORLD ANALOGUE: Quest economies scale rewards with player level
  *    so high-level zones remain meaningfully lucrative.
@@ -235,10 +235,12 @@ const chance = u.initChance(SEED);
  *     audience segmentation lens for narrative design and content tuning.
  *
  * ───────────────────────────────────────────────────────────────────────────────
- * 12. COMBAT FUNNEL TIME-TO-CONVERT (funnel-post)
+ * 12. COMBAT FUNNEL TIME-TO-CONVERT (everything)
  *
- *     PATTERN: Elite tier completes the Combat funnel 1.4x faster (factor
- *     0.71); Free tier 1.25x slower (factor 1.25). Mutates funnel timestamps.
+ *     PATTERN: Elite tier completes the Combat funnel ~3.3x faster (factor
+ *     0.30); Free tier ~1.4x slower (factor 1.40). Finds combat funnel
+ *     sequences (combat initiated → combat completed → use item) and scales
+ *     the inter-step time gaps in the everything hook.
  *
  *     HOW TO FIND IT IN MIXPANEL:
  *
@@ -246,14 +248,7 @@ const chance = u.initChance(SEED);
  *       - Funnels > "combat initiated" -> "combat completed" -> "use item"
  *       - Measure: Median time to convert
  *       - Breakdown: subscription_tier
- *       - Expected: Elite ~ 0.71x; Free ~ 1.25x
- *
- *       NOTE (funnel-post measurement): visible only via Mixpanel funnel
- *       median TTC. Cross-event MIN→MIN SQL queries on raw events do NOT
- *       show this — funnel-post adjusts gaps within funnel instances, not
- *       across the user's full event history. (This dungeon also has an
- *       everything-hook companion that compresses the cross-event Elite gap
- *       between earliest combat_initiated and earliest use_item.)
+ *       - Expected: Elite ~ 0.30x; Free ~ 1.40x vs Premium baseline
  *
  * ───────────────────────────────────────────────────────────────────────────────
  * 13. COMBAT-PREP MAGIC NUMBER (in-funnel, everything)
@@ -296,10 +291,10 @@ const chance = u.initChance(SEED);
  * Legendary Weapon      | Combat win rate      | 60%      | 90%         | 1.5x
  * Premium Tier          | Quest reward         | 1x       | 1.4x        | 1.4x
  * Elite Tier            | Quest reward         | 1x       | 1.8x        | 1.8x
- * Gold Scaling (lvl 10) | Avg quest gold       | ~ 100    | ~ 200       | 2x
+ * Gold Scaling (lvl 10) | Avg quest gold       | ~ 100    | ~ 250       | 2.5x
  * Whale Purchases       | Avg real money spend | 1x       | 1.8x        | 1.8x
  * Hero/Villain/Neutral  | User share           | --       | 22/22/56%   | n/a
- * Combat T2C            | median min by tier   | 1x       | 0.71/1.25x  | ~ 1.8x range
+ * Combat T2C            | median min by tier   | 1x       | 0.30/1.40x  | ~ 4.7x range
  * Combat-Prep Magic Num | sweet treasure_value | 1x       | 1.3x        | 1.3x
  * Combat-Prep Magic Num | over boss victory    | 1x       | 0.75x       | -25%
  */
@@ -705,7 +700,7 @@ const config = {
 	 * 6. BEHAVIORS TOGETHER: inspect + search before dungeon = 85% completion vs 45%
 	 * 7. TIMED RELEASE: Legendary weapon released day 45, early adopters dominate
 	 * 8. SUBSCRIPTION TIER: Premium/Elite users have higher engagement and success
-	 * 9. PROGRESSION SCALING: Quest gold scales with player level (1 + level * 0.1)
+	 * 9. PROGRESSION SCALING: Quest gold scales with player level (1 + level * 0.15)
 	 * 10. WHALE PURCHASES: ~33% of users via deterministic hash spend 1.8x more
 	 * 11. ALIGNMENT ARCHETYPE: Good=hero, Evil=villain, other=neutral (user hook)
 	 */
@@ -727,27 +722,8 @@ const config = {
 		// (moved to everything hook — event hook fires before bunchIntoSessions
 		// reshuffles timestamps, causing tagged events to leak across the d45 boundary)
 
-		// HOOK 12 (T2C): COMBAT FUNNEL TIME-TO-CONVERT (funnel-post)
-		// Elite tier completes Combat funnel 1.4x faster (factor 0.71);
-		// Free tier 1.25x slower (factor 1.25).
-		if (type === "funnel-post") {
-			const segment = meta?.profile?.subscription_tier;
-			if (Array.isArray(record) && record.length > 1) {
-				const factor = (
-					segment === "Elite" ? 0.30 :
-					segment === "Premium" ? 0.70 :
-					segment === "Free" ? 1.40 :
-					1.0
-				);
-				if (factor !== 1.0) {
-					for (let i = 1; i < record.length; i++) {
-						const prev = dayjs(record[i - 1].time);
-						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-						record[i].time = prev.add(newGap, "milliseconds").toISOString();
-					}
-				}
-			}
-		}
+		// HOOK 12 (T2C): moved to everything hook — funnel-post effects
+		// were invisible to SQL verification.
 
 		// Hooks #1, #3, #4, #5, #6, #8, #9, #10: per-user behavioral patterns
 		if (type === "everything") {
@@ -772,10 +748,10 @@ const config = {
 				}
 			});
 
-			// Hook #12 (everything-hook companion): COMBAT T2C — also compress
-			// gap between earliest combat_initiated and earliest use_item across
-			// the user's full event history (the funnel-post hook only adjusts
-			// within-funnel-instance gaps; this catches cross-funnel measurement).
+			// Hook #12: COMBAT T2C — scale time gaps in combat funnel
+			// sequences (combat initiated → combat completed → use item).
+			// Elite ~0.30x (faster), Premium ~0.70x, Free ~1.40x (slower).
+			// Finds all 3-step sequences and shifts step 2/3 timestamps.
 			const tier = profile.subscription_tier;
 			const t2cFactor = (
 				tier === "Elite" ? 0.30 :
@@ -784,23 +760,34 @@ const config = {
 				1.0
 			);
 			if (t2cFactor !== 1.0) {
-				let firstCombatTime = null;
-				let firstUseItemIdx = -1;
+				// Collect indices for each combat funnel step
+				const combatInitiated = [];
+				const combatCompleted = [];
+				const useItem = [];
 				for (let i = 0; i < userEvents.length; i++) {
 					const e = userEvents[i];
-					if (e.event === "combat initiated" && firstCombatTime === null) {
-						firstCombatTime = dayjs(e.time);
-					}
-					if (e.event === "use item" && firstUseItemIdx === -1) {
-						firstUseItemIdx = i;
-					}
+					if (e.event === "combat initiated") combatInitiated.push(i);
+					else if (e.event === "combat completed") combatCompleted.push(i);
+					else if (e.event === "use item") useItem.push(i);
 				}
-				if (firstCombatTime !== null && firstUseItemIdx !== -1) {
-					const useItemTime = dayjs(userEvents[firstUseItemIdx].time);
-					if (useItemTime.isAfter(firstCombatTime)) {
-						const newGap = Math.round(useItemTime.diff(firstCombatTime) * t2cFactor);
-						userEvents[firstUseItemIdx].time = firstCombatTime.add(newGap, "milliseconds").toISOString();
-					}
+				// Match sequences: for each combat initiated, find next
+				// combat completed after it, then next use item after that
+				const matched = new Set();
+				for (const ciIdx of combatInitiated) {
+					const ccIdx = combatCompleted.find(j => j > ciIdx && !matched.has(j));
+					if (ccIdx === undefined) continue;
+					const uiIdx = useItem.find(j => j > ccIdx && !matched.has(j));
+					if (uiIdx === undefined) continue;
+					matched.add(ccIdx);
+					matched.add(uiIdx);
+					// Scale gap between step 1→2 and 2→3
+					const t0 = dayjs(userEvents[ciIdx].time);
+					const t1 = dayjs(userEvents[ccIdx].time);
+					const t2 = dayjs(userEvents[uiIdx].time);
+					const gap1 = t1.diff(t0);
+					const gap2 = t2.diff(t1);
+					userEvents[ccIdx].time = t0.add(Math.round(gap1 * t2cFactor), 'milliseconds').toISOString();
+					userEvents[uiIdx].time = dayjs(userEvents[ccIdx].time).add(Math.round(gap2 * t2cFactor), 'milliseconds').toISOString();
 				}
 			}
 
@@ -863,9 +850,10 @@ const config = {
 				const eventTime = dayjs(event.time);
 
 				// Hook 9: PROGRESSION SCALING — Quest gold scales with level.
+				// Power curve so bucket-averaged high-level/low-level ratio >= 2.0x.
 				if (event.event === "quest turned in") {
 					const baseGold = event.reward_gold || 100;
-					event.reward_gold = Math.floor(baseGold * (1 + userLevel * 0.1));
+					event.reward_gold = Math.floor(baseGold * (1 + userLevel * 0.15));
 				}
 
 				// Hook 1: CONVERSION — Ancient Compass users earn 1.5x quest

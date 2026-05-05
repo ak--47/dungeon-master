@@ -229,7 +229,7 @@ const communityIds = v.range(1, 30).map(() => `COMM_${v.uid(4)}`);
  * 8. PRO SUBSCRIBER CONTENT CREATION LIFT (everything hook)
  * -------------------------------------------------------------------
  *
- * PATTERN: Free-tier users drop 35% of final funnel step events
+ * PATTERN: Free-tier users drop 50% of final funnel step events
  * ("comment posted"), creating a visible conversion gap between
  * paid and free users. Pro/supporter users keep all their events.
  *
@@ -239,7 +239,7 @@ const communityIds = v.range(1, 30).map(() => `COMM_${v.uid(4)}`);
  *   - Report type: Funnels
  *   - Steps: "article viewed" -> "article published" -> "comment posted"
  *   - Breakdown: "subscription_tier" (superProp)
- *   - Expected: pro ~ 52% vs free ~ 35% conversion
+ *   - Expected: pro ~ 52% vs free ~ 26% conversion (~2x gap)
  *
  * REAL-WORLD ANALOGUE: Premium wiki tools (analytics dashboards,
  * badge systems) incentivize more content creation from subscribers.
@@ -257,7 +257,7 @@ const communityIds = v.range(1, 30).map(() => `COMM_${v.uid(4)}`);
  * Edit War Detection            | edit_quality        | 3.0      | 1.5     | 0.5x
  * Lurker Churn                  | events after day 10 | 100%     | 40%     | 0.4x
  * Creator Profiles              | reputation_score    | 25       | 90      | 3.6x
- * Pro Content Creation Lift     | funnel conversion   | 35%      | 52%     | ~1.5x
+ * Pro Content Creation Lift     | funnel conversion   | ~26%     | 52%     | ~2.0x
  */
 
 /** @type {Config} */
@@ -768,11 +768,11 @@ const config = {
 			}
 
 			// -- HOOK 8: PRO SUBSCRIBER CONTENT CREATION LIFT ---------
-			// Free-tier users drop 35% of final funnel step events to
-			// create visible conversion gap vs paid subscribers.
+			// Free-tier users drop 50% of comment events to widen
+			// the gap to ~2.0x vs paid subscribers.
 			if (profile.subscription_tier !== "pro" && profile.subscription_tier !== "supporter") {
 				events = events.filter(e => {
-					if (e.event === "comment posted" && chance.bool({ likelihood: 35 })) return false;
+					if (e.event === "comment posted" && chance.bool({ likelihood: 50 })) return false;
 					return true;
 				});
 			}

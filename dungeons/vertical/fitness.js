@@ -103,9 +103,11 @@ const chance = u.initChance(SEED);
  * 3. STREAK RETENTION (everything hook)
  * ───────────────────────────────────────────────────────────────
  *
- * PATTERN: Users with >10 workout events get streak_days set
+ * PATTERN: Users with >=2 workout events get streak_days set
  * to their actual workout count on their profile, and receive
- * cloned "achievement unlocked" events for milestone streaks.
+ * achievement clones with super-linear scaling: 1 per workout
+ * for workouts 2-4, then 4 per workout beyond that. This
+ * amplifies the gap so athlete/casual ratio reaches 2x+.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -264,25 +266,27 @@ const chance = u.initChance(SEED);
  * 10. WORKOUT-COUNT MAGIC NUMBER (everything)
  * ───────────────────────────────────────────────────────────────
  *
- * PATTERN: Sweet 12-20 workouts/user → +35% on workout
- * duration_minutes (peak progression). Over 21+ → drop 30% of
- * post-day-30 events (overtraining churn). No flag.
+ * PATTERN: Sweet 12-14 workouts/user → +35% on workout
+ * duration_minutes (peak progression). Over 15+ → drop 65% of
+ * post-day-30 non-workout, non-progress events (overtraining
+ * churn). Preserves workout + progress events so H8 funnel
+ * lift isn't diluted. No flag.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
  *   Report 1: Avg Workout Duration by Workout-Count Bucket
- *   - Cohort A: users with 12-20 "workout completed"
+ *   - Cohort A: users with 12-14 "workout completed"
  *   - Cohort B: users with 0-11
  *   - Event: "workout completed"
  *   - Measure: Average of "duration_minutes"
  *   - Expected: A ~ 1.35x B
  *
  *   Report 2: D30+ Activity on Heavy Workout Cohort
- *   - Cohort C: users with >= 21 "workout completed"
- *   - Cohort A: users with 12-20
+ *   - Cohort C: users with >= 15 "workout completed"
+ *   - Cohort A: users with 12-14
  *   - Event: any event
- *   - Measure: Total per user, post-day-30
- *   - Expected: C ~ 30% fewer post-day-30 events per user
+ *   - Measure: post-d30/pre-d30 ratio per user
+ *   - Expected: C ~ 70% lower post/pre ratio than A (overtraining churn)
  *
  * REAL-WORLD ANALOGUE: Sweet-spot training drives progression;
  * over-training causes injury and burnout.
@@ -303,7 +307,7 @@ const chance = u.initChance(SEED);
  * Annual Funnel Lift          | funnel conversion   | 45%      | 63%       | 1.4x
  * Workout Loop T2C            | median min by tier  | 1x       | 0.77/1.25x| ~ 1.6x range
  * Workout Magic Number        | sweet duration_min  | 1x       | 1.35x     | 1.35x
- * Workout Magic Number        | over D30+ activity  | 1x       | 0.7x      | -30%
+ * Workout Magic Number        | over D30+ post/pre  | 1x       | 0.29x     | -71%
  */
 
 /** @type {Config} */
@@ -766,31 +770,38 @@ const config = {
 			}
 
 			// ── HOOK 3: STREAK RETENTION ─────────────────────
-			// Users with >10 workouts get streak_days updated and
-			// cloned achievement events for milestones.
+			// Users with >=2 workouts get streak_days updated and
+			// cloned achievement events. Achievements scale super-
+			// linearly: 1 per workout for workouts 2-4, then 4 per
+			// workout beyond that. This amplifies the gap between
+			// high-workout segments (athlete/coach) and casual users.
 			const workoutEvents = events.filter(e => e.event === "workout completed");
-			if (workoutEvents.length > 10) {
+			if (workoutEvents.length >= 2) {
 				// Update profile streak_days via a profile update event
 				if (meta && meta.profile) {
 					meta.profile.streak_days = workoutEvents.length;
 				}
 
-				// Clone achievement events for streak milestones
+				// Super-linear achievement scaling:
+				// workouts 2-4: 1 achievement each
+				// workouts 5+: 4 achievements each
 				const templateAchievement = events.find(e => e.event === "achievement unlocked");
 				if (templateAchievement) {
-					const milestones = [10, 25, 50, 75, 100];
-					milestones.forEach(m => {
-						if (workoutEvents.length >= m) {
-							const sourceEvent = workoutEvents[Math.min(m - 1, workoutEvents.length - 1)];
-							events.push({
-								...templateAchievement,
-								time: dayjs(sourceEvent.time).add(chance.integer({ min: 1, max: 30 }), "minutes").toISOString(),
-								user_id: sourceEvent.user_id,
-								achievement_type: "streak_milestone",
-								streak_days_at_unlock: m,
-							});
-						}
-					});
+					let achievementCount = Math.min(workoutEvents.length - 1, 3); // 1 each for workouts 2-4
+					if (workoutEvents.length > 4) {
+						achievementCount += (workoutEvents.length - 4) * 4; // 4 each for workouts 5+
+					}
+					for (let a = 0; a < achievementCount; a++) {
+						const srcIdx = Math.min(a, workoutEvents.length - 1);
+						const sourceEvent = workoutEvents[srcIdx];
+						events.push({
+							...templateAchievement,
+							time: dayjs(sourceEvent.time).add(chance.integer({ min: 1, max: 60 }), "minutes").toISOString(),
+							user_id: sourceEvent.user_id,
+							achievement_type: "streak_milestone",
+							streak_days_at_unlock: a + 2,
+						});
+					}
 				}
 			}
 
@@ -838,20 +849,23 @@ const config = {
 			}
 
 			// HOOK 10: WORKOUT-COUNT MAGIC NUMBER (no flags)
-			// Sweet 12-20 workouts → +35% on workout duration_minutes (peak
-			// progression). Over 21+ → drop 30% of post-day-30 events
-			// (overtraining → churn).
+			// Sweet 12-14 workouts → +35% on workout duration_minutes (peak
+			// progression). Over 15+ → drop 65% of post-day-30 non-workout
+			// events (overtraining → churn). Workout events are preserved
+			// so the bucket categorization stays consistent.
 			const workoutCount = events.filter(e => e.event === "workout completed").length;
-			if (workoutCount >= 12 && workoutCount <= 20) {
+			if (workoutCount >= 12 && workoutCount <= 14) {
 				events.forEach(e => {
 					if (e.event === "workout completed" && typeof e.duration_minutes === "number") {
 						e.duration_minutes = Math.round(e.duration_minutes * 1.35);
 					}
 				});
-			} else if (workoutCount >= 21) {
+			} else if (workoutCount >= 15) {
 				const day30 = datasetStart.add(30, "days");
+				const preserveEvents = new Set(["workout completed", "progress checked"]);
 				for (let i = events.length - 1; i >= 0; i--) {
-					if (dayjs(events[i].time).isAfter(day30) && chance.bool({ likelihood: 30 })) {
+					if (!preserveEvents.has(events[i].event) &&
+						dayjs(events[i].time).isAfter(day30) && chance.bool({ likelihood: 65 })) {
 						events.splice(i, 1);
 					}
 				}

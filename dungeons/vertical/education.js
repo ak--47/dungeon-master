@@ -216,7 +216,7 @@ const chance = u.initChance(SEED);
  * ---------------------------------------------------------------
  * 7. FREE VS PAID COURSES (funnel-pre + everything)
  *
- * PATTERN: Free users get 0.5x funnel conversion rate; paid
+ * PATTERN: Free users get 0.5x funnel conversion rate on the cert funnel only; paid
  * subscribers get 1.5x. Free users also lose 55% of their
  * certificates, producing a ~2.2x completion gap.
  *
@@ -266,10 +266,13 @@ const chance = u.initChance(SEED);
  * despite spending less time.
  *
  * ---------------------------------------------------------------
- * 9. COURSE COMPLETION TIME-TO-CONVERT (funnel-post)
+ * 9. COURSE COMPLETION TIME-TO-CONVERT (everything)
  *
  * PATTERN: Annual subscribers complete the course-completion funnel
- * 1.4x faster (factor 0.71); Free users 1.4x slower (factor 1.4).
+ * 2x faster (factor 0.5); Free users 1.8x slower (factor 1.8).
+ * Applied in the everything hook by scaling the enrolled-to-cert
+ * gap on the raw events. Stronger factors compensate for the
+ * composition effect from H7's conversion-rate gating.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -277,12 +280,11 @@ const chance = u.initChance(SEED);
  *   - Funnels > "course enrolled" -> "lecture completed" -> "quiz completed" -> "certificate earned"
  *   - Measure: Median time to convert
  *   - Breakdown: subscription_status
- *   - Expected: annual ~ 0.71x baseline; free ~ 1.4x baseline
+ *   - Expected: annual < monthly < free (direction)
  *
- *   NOTE (funnel-post measurement): visible only via Mixpanel funnel
- *   median TTC. Cross-event MIN→MIN SQL queries on raw events do NOT
- *   show this — funnel-post adjusts gaps within funnel instances, not
- *   across the user's full event history.
+ *   Also visible via cross-event SQL: MIN("course enrolled" time) to
+ *   MIN("certificate earned" time) per user, broken down by
+ *   subscription_status. Annual < monthly < free.
  *
  * REAL-WORLD ANALOGUE: Paid commitment accelerates throughput.
  *
@@ -301,7 +303,7 @@ const chance = u.initChance(SEED);
  * Semester-End Spike      | Assessment volume     | 1x       | ~ 2x         | 2x
  * Free vs Paid            | Course completion     | 15%      | 33%          | 2.2x
  * Playback Speed          | Quiz score (speed)    | ~ 65     | ~ 73         | +8 pt
- * Course Completion T2C   | median min by tier    | 1x       | 0.71x/1.4x   | ~ 2x range
+ * Course Completion T2C   | median min by tier    | 1x       | 0.5x/1.8x    | ~ 3.6x range
  */
 
 // Generate consistent IDs for lookup tables and event properties
@@ -617,7 +619,7 @@ const config = {
 	/**
 	 * ARCHITECTED ANALYTICS HOOKS
 	 *
-	 * This hook function creates 8 deliberate patterns in the data:
+	 * This hook function creates 9 deliberate patterns in the data:
 	 *
 	 * 1. STUDENT VS INSTRUCTOR PROFILES: Instructor profiles get teaching attributes; students get learning attributes
 	 * 2. DEADLINE CRAMMING: Assignments submitted on Sun/Mon are rushed and lower quality
@@ -625,8 +627,9 @@ const config = {
 	 * 4. STUDY GROUP RETENTION: Early study group joiners retain; non-joiners with low scores churn
 	 * 5. HINT DEPENDENCY: Hint users get locked into easy problems; non-hint users tackle harder ones
 	 * 6. SEMESTER-END SPIKE: Days 75-85 see doubled assessment activity (cramming period)
-	 * 7. FREE VS PAID COURSES: Paid subscribers convert through Course Completion funnel at ~2.2x rate
+	 * 7. FREE VS PAID COURSES: Paid subscribers convert through Course Completion funnel at ~2.2x rate (funnel-pre scoped to cert funnel only)
 	 * 8. PLAYBACK SPEED CORRELATION: Speed learners paradoxically score higher; thorough learners get extended time
+	 * 9. COURSE COMPLETION TTC: Annual subscribers complete cert funnel faster; free users slower (everything hook)
 	 */
 	hook: function (record, type, meta) {
 		// HOOK 1: STUDENT VS INSTRUCTOR PROFILES (user) — role-based attributes.
@@ -664,33 +667,18 @@ const config = {
 		}
 
 		// HOOK 7 (funnel-pre): FREE VS PAID — free users get 0.5x conversion rate;
-		// paid subscribers get 1.5x. Applies to course-completion funnel.
+		// paid subscribers get 1.5x. Scoped to the course-completion funnel ONLY
+		// (sequence ending in "certificate earned") to avoid displacing standalone
+		// events for paid users and triggering unintended churn in H4.
 		if (type === "funnel-pre") {
-			const subStatus = meta?.profile?.subscription_status;
-			if (subStatus === "free") {
-				record.conversionRate = Math.round(record.conversionRate * 0.5);
-			} else if (subStatus === "monthly" || subStatus === "annual") {
-				record.conversionRate = Math.min(100, Math.round(record.conversionRate * 1.5));
-			}
-		}
-
-		// HOOK 9 (T2C): COURSE COMPLETION TIME-TO-CONVERT (funnel-post)
-		// Annual subscribers complete the Course Completion funnel 1.4x
-		// faster (factor 0.71); Free users 1.4x slower (factor 1.4).
-		if (type === "funnel-post") {
-			const segment = meta?.profile?.subscription_status;
-			if (Array.isArray(record) && record.length > 1) {
-				const factor = (
-					segment === "annual" ? 0.71 :
-					segment === "free" ? 1.4 :
-					1.0
-				);
-				if (factor !== 1.0) {
-					for (let i = 1; i < record.length; i++) {
-						const prev = dayjs(record[i - 1].time);
-						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-						record[i].time = prev.add(newGap, "milliseconds").toISOString();
-					}
+			const isCertFunnel = Array.isArray(meta?.funnel?.sequence) &&
+				meta.funnel.sequence.includes("certificate earned");
+			if (isCertFunnel) {
+				const subStatus = meta?.profile?.subscription_status;
+				if (subStatus === "free") {
+					record.conversionRate = Math.round(record.conversionRate * 0.5);
+				} else if (subStatus === "monthly" || subStatus === "annual") {
+					record.conversionRate = Math.min(100, Math.round(record.conversionRate * 1.5));
 				}
 			}
 		}
@@ -779,8 +767,51 @@ const config = {
 			});
 			if (duplicates.length > 0) userEvents.push(...duplicates);
 
-			// HOOK 7: FREE VS PAID — free users lose 55% of certificates.
 			const subStatus = profile ? profile.subscription_status : "free";
+
+			// HOOK 9 (T2C): COURSE COMPLETION TIME-TO-CONVERT (everything)
+			// Annual subscribers complete the cert funnel 2x faster (factor 0.5);
+			// Free users 1.8x slower (factor 1.8). For each "certificate earned"
+			// event, find the nearest preceding "course enrolled" and scale the gap.
+			// Runs BEFORE cert-dropping (H7) so TTC adjustments aren't masked by
+			// survivorship bias from the 55% free cert removal.
+			{
+				const ttcFactor = (
+					subStatus === "annual" ? 0.5 :
+					subStatus === "free" ? 1.8 :
+					1.0
+				);
+				if (ttcFactor !== 1.0) {
+					// Collect all "course enrolled" times (sorted) for binary lookup
+					const enrolledTimes = userEvents
+						.filter(e => e.event === "course enrolled")
+						.map(e => dayjs(e.time))
+						.sort((a, b) => a.valueOf() - b.valueOf());
+
+					if (enrolledTimes.length > 0) {
+						for (const event of userEvents) {
+							if (event.event === "certificate earned") {
+								const certTime = dayjs(event.time);
+								// Find the latest enrolled time before this cert
+								let anchor = null;
+								for (let k = enrolledTimes.length - 1; k >= 0; k--) {
+									if (enrolledTimes[k].isBefore(certTime)) {
+										anchor = enrolledTimes[k];
+										break;
+									}
+								}
+								if (anchor) {
+									const gap = certTime.diff(anchor);
+									const newGap = Math.round(gap * ttcFactor);
+									event.time = anchor.add(newGap, "milliseconds").toISOString();
+								}
+							}
+						}
+					}
+				}
+			}
+
+			// HOOK 7: FREE VS PAID — free users lose 55% of certificates.
 			if (subStatus === "free") {
 				for (let i = userEvents.length - 1; i >= 0; i--) {
 					if (userEvents[i].event === "certificate earned" && chance.bool({ likelihood: 55 })) {

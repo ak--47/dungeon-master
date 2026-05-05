@@ -112,7 +112,7 @@ const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", 
  * ───────────────────────────────────────────────────────────────
  * 4. CANCELLATION BY BOOKING WINDOW (everything hook)
  * ───────────────────────────────────────────────────────────────
- * PATTERN: Users who book last-minute (< 7 days out) have 40% of
+ * PATTERN: Users who book last-minute (< 7 days out) have 60% of
  * their "booking cancelled" events dropped — they rarely cancel.
  * Advance bookers keep all cancellation events.
  *
@@ -774,10 +774,10 @@ const config = {
 				}
 			});
 
-			// Last-minute bookers rarely cancel — drop 40%.
+			// Last-minute bookers rarely cancel — drop 60%.
 			for (let i = events.length - 1; i >= 0; i--) {
 				if (events[i].event === "booking cancelled" && events[i].booking_window === "last_minute") {
-					if (chance.bool({ likelihood: 40 })) {
+					if (chance.bool({ likelihood: 60 })) {
 						events.splice(i, 1);
 					}
 				}

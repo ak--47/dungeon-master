@@ -120,16 +120,20 @@ const chance = u.initChance(SEED);
  * 4. AD FATIGUE CHURN (everything)
  * ───────────────────────────────────────────────────────────────────────────────
  *
- * PATTERN: Free-tier users with 10+ ad impressions lose 50% of events after
- * day 45 of their lifecycle. No flag — discover via cohort retention.
+ * PATTERN: Users with 5+ ad impressions in first 45 days lose 95% of events
+ * after day 45 of their lifecycle. Applies to all tiers (not just free).
+ * No flag — discover via cohort retention. The very high drop rate overcomes
+ * the inherent ~3x activity confound (heavy-ad users are naturally much more
+ * active). Runs last in the hook chain so event-adding hooks (binge-watching,
+ * subtitle) can't re-inflate the post-d45 count.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
  *   Report 1: Retention by Ad Exposure Cohort
  *   - Report type: Retention
- *   - Cohort A: free-tier users with >= 10 "ad impression"
- *   - Cohort B: free-tier users with < 10 ads
- *   - Expected: A ~ 50% retention drop after day 45
+ *   - Cohort A: users with >= 5 "ad impression" in first 45 days
+ *   - Cohort B: users with < 5 ads
+ *   - Expected: heavy_ad avg_post_d45_events < light_ad
  *
  * REAL-WORLD ANALOGUE: Ad-supported tiers carry a tolerance ceiling.
  *
@@ -223,8 +227,10 @@ const chance = u.initChance(SEED);
  *
  * PATTERN: Users in the 4-6 recommendation-clicked sweet spot get 1.25x
  * watch_duration_min on playback-completed events. Users with 7+ rec clicks
- * are over-engaged (decision fatigue); 30% of their playback-completed events
- * drop. No flag — discover by binning users on rec-click count.
+ * are over-engaged (decision fatigue); watch_duration_min is halved and 55%
+ * of their playback-completed events are dropped. The aggressive suppression
+ * overcomes the inherent engagement confound. No flag — discover by binning
+ * users on rec-click count.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -241,8 +247,8 @@ const chance = u.initChance(SEED);
  *   - Cohort C: users with >= 7 "recommendation clicked"
  *   - Cohort A: users with 4-6
  *   - Event: "playback completed"
- *   - Measure: Total per user
- *   - Expected: C ~ 30% fewer completions per user vs A
+ *   - Measure: Average of "watch_duration_min"
+ *   - Expected: C (over) has lower avg watch_duration_min than A (sweet)
  *
  * REAL-WORLD ANALOGUE: A few good recs surface a watchworthy title; too many
  * clicks signals indecision and drives abandonment.
@@ -256,13 +262,13 @@ const chance = u.initChance(SEED);
  * Genre Funnel Conversion  | documentary funnel conv | 1x       | 0.7x        | -30%
  * Binge-Watching           | completions per streak  | 1x       | ~ 1.5x      | 1.5x
  * Weekend vs Weekday       | weekend watch_duration  | 1x       | ~ 1.5x      | 1.5x
- * Ad Fatigue Churn         | retention free+10+ads   | 1x       | ~ 0.5x      | -50%
+ * Ad Fatigue Churn         | heavy_ad post_d45 events| 1x       | < light_ad  | -93%
  * New Release Spike        | blockbuster id share    | 0%       | ~ 20%       | n/a
  * Kids Profile Safety      | animation/doc share     | baseline | + 15%       | n/a
  * Rec Engine Improvement   | content-rated post day60| 1x       | ~ 1.5x      | 1.5x
  * Subtitle Users           | completion %            | 68%      | 85%         | 1.25x
  * Rec-Click Magic Number   | sweet watch duration    | 1x       | 1.25x       | 1.25x
- * Rec-Click Magic Number   | over completions/user   | 1x       | 0.7x        | -30%
+ * Rec-Click Magic Number   | over watch_duration_min | 1x       | 0.5x        | -50%
  */
 
 // Generate consistent content IDs for lookup tables and events
@@ -646,15 +652,12 @@ const config = {
 			// Identify behavioral patterns (no flags written)
 			let consecutiveCompletions = 0;
 			let maxConsecutiveCompletions = 0;
-			let adImpressionCount = 0;
-			let isFreeTier = false;
+			let earlyAdCount = 0;
 			let hasSubtitlesEnabled = false;
 			let recClickCount = 0;
 
+			const adCutoff = firstEventTime.add(45, 'days');
 			userEvents.forEach((event, idx) => {
-				if (idx === 0 && event.subscription_plan) {
-					isFreeTier = event.subscription_plan === "free";
-				}
 				if (event.event === "playback completed") {
 					consecutiveCompletions++;
 					if (consecutiveCompletions > maxConsecutiveCompletions) {
@@ -663,7 +666,7 @@ const config = {
 				} else if (event.event !== "playback started") {
 					consecutiveCompletions = 0;
 				}
-				if (event.event === "ad impression") adImpressionCount++;
+				if (event.event === "ad impression" && dayjs(event.time).isBefore(adCutoff)) earlyAdCount++;
 				if (event.event === "subtitle toggled" && event.action === "enabled") hasSubtitlesEnabled = true;
 				if (event.event === "recommendation clicked") recClickCount++;
 			});
@@ -708,18 +711,6 @@ const config = {
 				}
 			}
 
-			// Hook #4: AD FATIGUE CHURN — free-tier users w/ 10+ ads lose 50% of
-			// events after day 45. No flag — discover via cohort retention.
-			if (isFreeTier && adImpressionCount >= 10) {
-				const churnCutoff = firstEventTime.add(45, 'days');
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					const evt = userEvents[i];
-					if (dayjs(evt.time).isAfter(churnCutoff) && chance.bool({ likelihood: 50 })) {
-						userEvents.splice(i, 1);
-					}
-				}
-			}
-
 			// Hook #8: SUBTITLE USERS WATCH MORE — 1.25x completion_percent (cap 100),
 			// 1.15x watch_duration_min, plus 20% extra cloned playback completions.
 			// No flag — discover via cohort builder on subtitle-toggled-enabled.
@@ -756,7 +747,9 @@ const config = {
 
 			// Hook #9: RECOMMENDATION-CLICKED MAGIC NUMBER (no flags)
 			// Sweet 4-6 rec clicks → +25% watch_duration_min on playback completed.
-			// Over 7+ → drop 30% of playback completed events (rec fatigue).
+			// Over 7+ → halve watch_duration_min AND drop 55% of playback completed
+			// events (rec fatigue). Aggressive suppression overcomes the inherent
+			// engagement confound (high-rec-click users are naturally more active).
 			if (recClickCount >= 4 && recClickCount <= 6) {
 				userEvents.forEach(e => {
 					if (e.event === 'playback completed' && typeof e.watch_duration_min === 'number') {
@@ -765,8 +758,35 @@ const config = {
 				});
 			} else if (recClickCount >= 7) {
 				for (let i = userEvents.length - 1; i >= 0; i--) {
-					if (userEvents[i].event === 'playback completed' && chance.bool({ likelihood: 30 })) {
-						userEvents.splice(i, 1);
+					const evt = userEvents[i];
+					if (evt.event === 'playback completed') {
+						// Halve watch duration for surviving events
+						if (typeof evt.watch_duration_min === 'number') {
+							evt.watch_duration_min = Math.round(evt.watch_duration_min * 0.5);
+						}
+						// Drop 55% of completions
+						if (chance.bool({ likelihood: 55 })) {
+							userEvents.splice(i, 1);
+						}
+					}
+				}
+			}
+
+			// Hook #4: AD FATIGUE CHURN — users w/ 5+ early ad impressions lose
+			// nearly all events after day 45. Runs LAST so event-adding hooks
+			// (binge-watching, subtitle) can't re-inflate the post-d45 count.
+			// Applies to ALL tiers (ad fatigue affects anyone exposed to heavy ads,
+			// regardless of plan). 95% drop overcomes the ~3x activity confound.
+			if (earlyAdCount >= 5) {
+				const churnCutoff = firstEventTime.add(45, 'days');
+				for (let i = userEvents.length - 1; i >= 0; i--) {
+					const evt = userEvents[i];
+					if (dayjs(evt.time).isAfter(churnCutoff)) {
+						// Keep only ~5% of post-d45 events (drop 95%)
+						const keep = (i % 20) === 0;
+						if (!keep) {
+							userEvents.splice(i, 1);
+						}
 					}
 				}
 			}

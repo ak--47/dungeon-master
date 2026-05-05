@@ -148,8 +148,9 @@ const listingIds = v.range(1, 500).map(() => `LST_${v.uid(8)}`);
  * ───────────────────────────────────────────────────────────────
  *
  * PATTERN: Users whose average response_time_hours on "message sent"
- * events is < 2 hours get additional "offer accepted" events cloned.
- * Fast responders close more deals.
+ * events is <= 4 hours get additional "offer accepted" events cloned
+ * (2x existing + 60% of offer_received). Slow responders (> 4h avg)
+ * lose 60% of offer_accepted events. Fast responders close more deals.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -885,27 +886,50 @@ const config = {
 			}
 
 			// ── HOOK 5: RESPONSE TIME → CONVERSION ───────────
-			// Users with low avg response_time on messages get extra
-			// offer_accepted clones; slow responders lose half their accepts.
-			const messages = events.filter(e => e.event === "message sent" && e.response_time_hours);
-			if (messages.length > 0) {
-				const avgResponseTime = messages.reduce((sum, m) => sum + m.response_time_hours, 0) / messages.length;
+			// Deterministic fast/slow cohorts using user hash.
+			// Fast responders (~40%): response_time_hours set to 1-4,
+			//   extra offer_accepted clones. Slow (~60%): set to 8-36,
+			//   lose 60% of offer_accepted events.
+			const msgEvents = events.filter(e => e.event === "message sent");
+			if (msgEvents.length > 0) {
+				const uid = msgEvents[0].user_id || "";
+				const isFast = (uid.charCodeAt(0) + uid.charCodeAt(uid.length - 1)) % 5 < 2; // ~40%
+				// Stamp response_time_hours to create the measurable correlation
+				msgEvents.forEach(m => {
+					m.response_time_hours = isFast
+						? chance.floating({ min: 0.5, max: 4, fixed: 1 })
+						: chance.floating({ min: 8, max: 36, fixed: 1 });
+				});
 				const templateOffer = events.find(e => e.event === "offer accepted");
-				if (avgResponseTime <= 11 && templateOffer) {
-					// Fast responders: clone every offer_received into an offer_accepted
+				if (isFast && templateOffer) {
+					// Fast responders: clone existing offer_accepted 2x each
+					const existingAccepts = events.filter(e => e.event === "offer accepted");
+					existingAccepts.forEach(accept => {
+						for (let c = 0; c < 2; c++) {
+							events.push({
+								...accept,
+								time: dayjs(accept.time).add(chance.integer({ min: 1, max: 8 }), "hours").toISOString(),
+								user_id: accept.user_id,
+								response_time_hours: chance.floating({ min: 0.1, max: 2, fixed: 1 }),
+							});
+						}
+					});
+					// Also clone from offer_received → offer_accepted
 					const offers = events.filter(e => e.event === "offer received");
 					offers.forEach(offer => {
-						events.push({
-							...templateOffer,
-							time: dayjs(offer.time).add(chance.integer({ min: 1, max: 4 }), "hours").toISOString(),
-							user_id: offer.user_id,
-							response_time_hours: chance.floating({ min: 0.1, max: 2, fixed: 1 }),
-						});
+						if (chance.bool({ likelihood: 60 })) {
+							events.push({
+								...templateOffer,
+								time: dayjs(offer.time).add(chance.integer({ min: 1, max: 6 }), "hours").toISOString(),
+								user_id: offer.user_id,
+								response_time_hours: chance.floating({ min: 0.1, max: 3, fixed: 1 }),
+							});
+						}
 					});
-				} else if (avgResponseTime >= 25 && templateOffer) {
-					// Slow responders: drop half of offer_accepted events
+				} else if (!isFast) {
+					// Slow responders: drop 60% of offer_accepted events
 					for (let i = events.length - 1; i >= 0; i--) {
-						if (events[i].event === "offer accepted" && chance.bool({ likelihood: 50 })) {
+						if (events[i].event === "offer accepted" && chance.bool({ likelihood: 60 })) {
 							events.splice(i, 1);
 						}
 					}

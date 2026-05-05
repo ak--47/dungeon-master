@@ -58,9 +58,8 @@ const chance = u.initChance(SEED);
  * 10 deliberately architected patterns hidden in the data. NOTE: All cohort
  * effects are HIDDEN — no flag stamping. Discoverable via behavioral cohorts
  * or raw-prop breakdowns (company_size, day, doc_section). Adds:
- *   9. INCIDENT RESPONSE TIME-TO-CONVERT (Enterprise 1.4x faster vs Startup)
- *      [funnel-post: visible only in Mixpanel funnel median TTC; cross-event
- *      MIN→MIN SQL queries do NOT show this]
+ *   9. INCIDENT RESPONSE TIME-TO-CONVERT (Enterprise 0.67x gap vs Startup 1.5x)
+ *      [everything hook: scales response_time_mins and resolution_time_mins by company_size]
  *   10. DOCS MAGIC NUMBER (sweet 4-7 docs → +40% deploys; over 8+ → drop 25%)
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -803,25 +802,25 @@ const config = {
 			}
 
 			// HOOK 9: INCIDENT RESPONSE TTC — enterprise resolves faster,
-			// startup resolves slower. Scale the time gap between alert
-			// triggered → acknowledged → resolved for this user.
-			const segment = profile?.company_size;
+			// startup resolves slower. Scale response_time_mins on
+			// acknowledged events and resolution_time_mins on resolved
+			// events by company_size. This compounds with H4 (integration
+			// users) — realistic: enterprise + good tooling = fastest.
+			const companySegment = profile?.company_size;
 			const ttcFactor = (
-				segment === "enterprise" ? 0.5 :
-				segment === "startup" ? 1.8 :
+				companySegment === "enterprise" ? 0.67 :
+				companySegment === "startup" ? 1.5 :
 				1.0
 			);
 			if (ttcFactor !== 1.0) {
-				const alertEvents = userEvents
-					.filter(e => e.event === "alert triggered" || e.event === "alert acknowledged" || e.event === "alert resolved")
-					.sort((a, b) => a.time.localeCompare(b.time));
-				for (let i = 1; i < alertEvents.length; i++) {
-					const prev = dayjs(alertEvents[i - 1].time);
-					const curr = dayjs(alertEvents[i].time);
-					const gap = curr.diff(prev);
-					const newGap = Math.round(gap * ttcFactor);
-					alertEvents[i].time = prev.add(newGap, "milliseconds").toISOString();
-				}
+				userEvents.forEach(e => {
+					if (e.event === "alert acknowledged" && e.response_time_mins) {
+						e.response_time_mins = Math.max(1, Math.round(e.response_time_mins * ttcFactor));
+					}
+					if (e.event === "alert resolved" && e.resolution_time_mins) {
+						e.resolution_time_mins = Math.max(1, Math.round(e.resolution_time_mins * ttcFactor));
+					}
+				});
 			}
 		}
 

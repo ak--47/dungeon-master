@@ -261,7 +261,7 @@ const supplierIds = v.range(1, 150).map(() => `SUP_${v.uid(6)}`);
  * PATTERN: Users with 5-15 "inventory checked" events sit in the
  * "engaged-but-focused" sweet spot — every "purchase order created"
  * event gets quantity boosted ~25%. Users with 16 or more inventory
- * checks are over-engaged (paralysis); ~30% of their "purchase order
+ * checks are over-engaged (paralysis); ~60% of their "purchase order
  * created" events are dropped. No flag is stamped — discoverable only
  * by binning users on inventory-check COUNT and comparing PO totals.
  *
@@ -283,7 +283,7 @@ const supplierIds = v.range(1, 150).map(() => `SUP_${v.uid(6)}`);
  *   - Event: "purchase order created"
  *   - Measure: Total events per user
  *   - Compare cohort C vs cohort A
- *   - Expected: cohort C has ~ 30% fewer POs per user
+ *   - Expected: cohort C has ~ 60% fewer POs per user
  *
  * REAL-WORLD ANALOGUE: A focused operations team that monitors
  * stock just enough places larger, more confident orders; an
@@ -304,7 +304,7 @@ const supplierIds = v.range(1, 150).map(() => `SUP_${v.uid(6)}`);
  * Enterprise Profiles         | warehouse_count     | 3        | 10      | 3.3x
  * Small-Biz Conversion Drop   | funnel conversion   | 30%      | 20%     | 0.65x
  * Inventory-Check Magic Num   | sweet PO quantity   | 1x       | 1.25x   | 1.25x
- * Inventory-Check Magic Num   | over POs/user       | 1x       | 0.7x    | -30%
+ * Inventory-Check Magic Num   | over POs/user       | 1x       | 0.4x    | -60%
  */
 
 /** @type {Config} */
@@ -902,7 +902,7 @@ const config = {
 
 			// -- HOOK 9: INVENTORY-CHECK MAGIC NUMBER (no flags) ------
 			// Sweet 5-15 inventory checks → +25% PO quantity.
-			// Over 16+ → drop 45% of PO created events.
+			// Over 16+ → drop 60% of PO created events (high rate to overcome persona event multiplier dilution).
 			const invCheckCount = record.filter(e => e.event === 'inventory checked').length;
 			if (invCheckCount >= 5 && invCheckCount <= 15) {
 				record.forEach(e => {
@@ -912,7 +912,7 @@ const config = {
 				});
 			} else if (invCheckCount >= 16) {
 				for (let i = record.length - 1; i >= 0; i--) {
-					if (record[i].event === 'purchase order created' && chance.bool({ likelihood: 45 })) {
+					if (record[i].event === 'purchase order created' && chance.bool({ likelihood: 60 })) {
 						record.splice(i, 1);
 					}
 				}

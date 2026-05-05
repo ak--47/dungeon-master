@@ -110,7 +110,7 @@ const clinicIds = v.range(1, 25).map(() => `CLINIC_${v.uid(4)}`);
  * 3. EXPERIENCED DOCTOR SATISFACTION (everything hook)
  * ───────────────────────────────────────────────────────────────
  *
- * PATTERN: Users who had >50 consultation events get higher avg
+ * PATTERN: Users who had >12 consultation events get higher avg
  * satisfaction_score (boosted to 4.0-5.0 range) vs baseline 1-5.
  * Simulates experienced doctors earning better reviews.
  *
@@ -227,23 +227,26 @@ const clinicIds = v.range(1, 25).map(() => `CLINIC_${v.uid(4)}`);
  * and limited scheduling, reducing completed consultations.
  *
  * ───────────────────────────────────────────────────────────────
- * 9. BOOKING FUNNEL TIME-TO-CONVERT (funnel-post)
+ * 9. BOOKING FUNNEL TTC BY TIER (everything hook — property scaling)
  *
- * PATTERN: Premium tier completes Booking funnel 1.35x faster
- * (factor 0.74); Free tier 1.33x slower (factor 1.33).
+ * PATTERN: Premium users get shorter wait times and consultation
+ * durations (0.67x); Free users get longer (1.4x); Basic at 1.0x.
+ * Scales `wait_time_hours` on "appointment booked" and
+ * `duration_minutes` on "consultation completed".
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Booking Funnel Median Time-to-Convert by Tier
- *   - Funnels > "symptom search" -> "appointment booked" -> "consultation completed"
- *   - Measure: Median time to convert
+ *   Report 1: Wait Time by Subscription Tier
+ *   - Insights > "appointment booked"
+ *   - Measure: Average of "wait_time_hours"
  *   - Breakdown: subscription_tier
- *   - Expected: premium ~ 0.74x; free ~ 1.33x
+ *   - Expected: premium ~ 0.67x baseline; free ~ 1.4x baseline
  *
- *   NOTE (funnel-post measurement): visible only via Mixpanel funnel
- *   median TTC. Cross-event MIN→MIN SQL queries on raw events do NOT
- *   show this — funnel-post adjusts gaps within funnel instances, not
- *   across the user's full event history.
+ *   Report 2: Consultation Duration by Tier
+ *   - Insights > "consultation completed"
+ *   - Measure: Average of "duration_minutes"
+ *   - Breakdown: subscription_tier
+ *   - Expected: premium ~ 0.67x baseline; free ~ 1.4x baseline
  *
  * ───────────────────────────────────────────────────────────────
  * 10. CONSULTATION-COUNT MAGIC NUMBER (everything)
@@ -279,13 +282,13 @@ const clinicIds = v.range(1, 25).map(() => `CLINIC_${v.uid(4)}`);
  * ----------------------------|---------------------|----------|-----------|------
  * After-Hours Pricing         | consultation_fee    | 1x       | 1.5x      | 1.5x
  * Flu Season Spike            | respiratory share   | ~ 15%    | ~ 60%     | 4x
- * Experienced Doctor Sat.     | satisfaction_score  | 3.5      | 4.2       | 1.2x
+ * Experienced Doctor Sat.     | satisfaction_score  | ~2.0     | 4.0-5.0   | ~2x
  * Video Follow-Up Lift        | follow-ups/user     | 1x       | 2x        | 2x
  * Chronic Refill Chain        | refills (chronic)   | 1        | 3-4       | 3-4x
  * Occasional No-Shows         | booking→consult     | 95%      | 75%       | -20%
  * Doctor Specialization       | years_experience    | 5        | 22        | 4.4x
  * Free-Tier Conversion Drop   | funnel conversion   | 40%      | 28%       | -30%
- * Booking T2C                 | median min by tier  | 1x       | 0.74/1.33x| ~ 1.8x range
+ * Booking TTC by Tier          | wait_time/duration  | 1x       | 0.67/1.4x | ~ 2.1x range
  * Consult-Count Magic Number  | sweet consult fee   | 1x       | 1.25x     | 1.25x
  * Consult-Count Magic Number  | over days_until_fu  | 1x       | 1.5x      | +50%
  */
@@ -706,27 +709,6 @@ const config = {
 			}
 		}
 
-		// HOOK 9 (T2C): BOOKING FUNNEL TIME-TO-CONVERT (funnel-post)
-		// Premium tier completes Booking funnel 1.35x faster (factor 0.74);
-		// Free tier 1.33x slower (factor 1.33).
-		if (type === "funnel-post") {
-			const segment = meta?.profile?.subscription_tier;
-			if (Array.isArray(record) && record.length > 1) {
-				const factor = (
-					segment === "premium" ? 0.74 :
-					segment === "free" ? 1.33 :
-					1.0
-				);
-				if (factor !== 1.0) {
-					for (let i = 1; i < record.length; i++) {
-						const prev = dayjs(record[i - 1].time);
-						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-						record[i].time = prev.add(newGap, "milliseconds").toISOString();
-					}
-				}
-			}
-		}
-
 		// (HOOK 1: AFTER-HOURS SURGE PRICING moved to everything hook — hour checks
 		// must run after bunchIntoSessions redistributes timestamps)
 		// (HOOK 2: FLU SEASON SPIKE moved to everything hook — same reason)
@@ -748,6 +730,25 @@ const config = {
 					if (tier) e.subscription_tier = tier;
 					if (plat) e.Platform = plat;
 				});
+			}
+
+			// HOOK 9: BOOKING FUNNEL TTC BY TIER (property scaling)
+			// Premium users get shorter wait_time_hours (0.67x) and duration_minutes (0.67x).
+			// Free users get longer wait_time_hours (1.4x) and duration_minutes (1.4x).
+			// Basic users stay at baseline. SQL-measurable via AVG(wait_time_hours) broken by tier.
+			if (profile) {
+				const userTier = profile.subscription_tier;
+				const ttcFactor = userTier === "premium" ? 0.67 : userTier === "free" ? 1.4 : 1.0;
+				if (ttcFactor !== 1.0) {
+					record.forEach(e => {
+						if (e.event === "appointment booked" && typeof e.wait_time_hours === "number") {
+							e.wait_time_hours = Math.round(e.wait_time_hours * ttcFactor * 10) / 10;
+						}
+						if (e.event === "consultation completed" && typeof e.duration_minutes === "number") {
+							e.duration_minutes = Math.round(e.duration_minutes * ttcFactor);
+						}
+					});
+				}
 			}
 
 			// HOOK 1: AFTER-HOURS SURGE PRICING — consultations 7PM-7AM
@@ -783,13 +784,13 @@ const config = {
 			}
 
 			// ── HOOK 3: EXPERIENCED DOCTOR SATISFACTION ──────
-			// Users with >50 consultation events get boosted satisfaction scores.
+			// Users with >12 consultation events get boosted satisfaction scores.
 			let consultCount = 0;
 			record.forEach(e => {
 				if (e.event === "consultation completed") consultCount++;
 			});
 
-			if (consultCount > 50) {
+			if (consultCount > 12) {
 				record.forEach(e => {
 					if (e.event === "consultation completed") {
 						e.satisfaction_score = chance.floating({ min: 4.0, max: 5.0, fixed: 1 });

@@ -55,9 +55,8 @@ const chance = u.initChance(SEED);
  * ANALYTICS HOOKS (5 hooks)
  *
  * Adds 5. APPLICATION COMPLETION TIME-TO-CONVERT: business 0.74x faster,
- * family 1.3x slower (funnel-post). Discover via funnel median TTC by account_type.
- * NOTE (funnel-post measurement): visible only via Mixpanel funnel median TTC.
- * Cross-event MIN→MIN SQL queries on raw events do NOT show this.
+ * family 1.3x slower (everything hook). Discover via TTC breakdown by account_type.
+ * Measured via cross-event SQL (application started → application approved).
  * ===================================================================
  *
  * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable
@@ -169,6 +168,29 @@ const chance = u.initChance(SEED);
  * REAL-WORLD ANALOGUE: Engaged applicants get higher premiums approved;
  * over-engaged ones look like fraud and get flagged.
  *
+ * -------------------------------------------------------------------
+ * 5. APPLICATION COMPLETION TIME-TO-CONVERT (everything)
+ * -------------------------------------------------------------------
+ *
+ * PATTERN: In the everything hook, place each "application approved"
+ * event at a fixed target offset from the first "application started"
+ * event, determined by account_type (assigned via deterministic hash):
+ *   - business:   ~36h target offset (~0.75x baseline)
+ *   - individual: ~48h target offset (baseline)
+ *   - family:     ~63h target offset (~1.31x baseline)
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Application Funnel TTC by Account Type
+ *   - Report type: Funnels
+ *   - Steps: "application started" → "application approved"
+ *   - Breakdown: account_type (from account created event)
+ *   - Measure: Median time to convert
+ *   - Expected: business < individual < family
+ *
+ * REAL-WORLD ANALOGUE: Business applicants have streamlined processes
+ * and pre-filled forms; family policies require more documentation.
+ *
  * ===================================================================
  * EXPECTED METRICS SUMMARY
  * ===================================================================
@@ -180,6 +202,8 @@ const chance = u.initChance(SEED);
  * Application Conversion  | approval rate pre/post  | 1x       | ~ 1.3x  | step-up
  * Step-Count Magic Number | sweet approved_premium  | 1x       | 1.35x   | 1.35x
  * Step-Count Magic Number | over approvals/user     | 1x       | 0.6x    | -40%
+ * Application TTC         | business vs individual  | 1x       | 0.74x   | faster
+ * Application TTC         | family vs individual    | 1x       | 1.3x    | slower
  */
 
 /** @type {Config} */
@@ -510,7 +534,7 @@ const config = {
 	/**
 	 * ARCHITECTED ANALYTICS HOOKS
 	 *
-	 * This hook function creates 3 deliberate patterns in the data:
+	 * This hook function creates 5 deliberate patterns in the data:
 	 *
 	 * 1. VERSION STAMPING (everything): Every event gets a deterministic app_version
 	 *    based on its final timestamp. v2.10 → v2.11 → v2.12 → v2.13.
@@ -529,32 +553,10 @@ const config = {
 	 *    are left intact, making the conversion visibly jump up.
 	 */
 	hook: function (record, type, meta) {
-		// HOOK 5 (T2C): APPLICATION COMPLETION TIME-TO-CONVERT (funnel-post)
-		// Business accounts complete the Application Completion funnel 1.35x
-		// faster (factor 0.74); family accounts 1.3x slower (factor 1.3).
-		if (type === "funnel-post") {
-			const profile = meta?.profile;
-			const accountType = profile && profile.account_type;
-			if (Array.isArray(record) && record.length > 1) {
-				const factor = (
-					accountType === "business" ? 0.74 :
-					accountType === "family" ? 1.3 :
-					1.0
-				);
-				if (factor !== 1.0) {
-					for (let i = 1; i < record.length; i++) {
-						const prev = dayjs(record[i - 1].time);
-						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-						record[i].time = prev.add(newGap, "milliseconds").toISOString();
-					}
-				}
-			}
-		}
-
 		// =============================================================
-		// Hooks #1-#3 all run in the "everything" hook so that version
-		// stamping sees final timestamps (funnel events adjust time
-		// AFTER the event hook runs).
+		// All hooks run in the "everything" hook. Hook #5 (TTC scaling)
+		// runs first since it modifies timestamps; Hook #1 (version
+		// stamping) runs LAST so versions reflect final timestamps.
 		// =============================================================
 		if (type === "everything") {
 			const datasetStart = dayjs.unix(meta.datasetStart);
@@ -573,26 +575,60 @@ const config = {
 				e.app_version = profile.app_version;
 			});
 
-			// ─── Hook #1: VERSION STAMPING ───
-			// Deterministic app_version on every event based on its final timestamp.
-			// v2.10 (days 0-30) → v2.11 (30-60) → v2.12 (60-90) → v2.13 (last 10 days)
-			for (const evt of userEvents) {
-				const eventTime = dayjs(evt.time);
-				if (eventTime.isBefore(V211_DATE)) {
-					evt.app_version = "2.10";
-				} else if (eventTime.isBefore(V212_DATE)) {
-					evt.app_version = "2.11";
-				} else if (eventTime.isBefore(V213_DATE)) {
-					evt.app_version = "2.12";
-				} else {
-					evt.app_version = "2.13";
-				}
-			}
-
 			// Find a user_id from any existing event
 			const userId =
 				userEvents.find((e) => e.user_id)?.user_id ||
 				userEvents[0]?.device_id;
+
+			// ─── Hook #5: APPLICATION COMPLETION TIME-TO-CONVERT ───
+			// Runs FIRST: adjusts timestamps before version stamping.
+			// Business accounts complete the application funnel faster (0.74x),
+			// family accounts slower (1.3x). Individual stays at baseline.
+			// Assigns account_type deterministically per user via djb2 hash
+			// (independent of engine RNG). Places each "application approved"
+			// event at a fixed offset from the first "application started".
+			{
+				// djb2 hash of userId → deterministic cohort
+				let h = 5381;
+				for (let i = 0; i < userId.length; i++) {
+					h = ((h << 5) + h + userId.charCodeAt(i)) | 0;
+				}
+				const acctTypes = ["individual", "family", "business"];
+				const userAccountType = acctTypes[((h % 3) + 3) % 3];
+				// Stamp account created events with the deterministic type
+				for (const evt of userEvents) {
+					if (evt.event === "account created") {
+						evt.account_type = userAccountType;
+					}
+				}
+				userEvents.sort((a, b) => new Date(a.time) - new Date(b.time));
+				// Collect all "application started" times
+				const startedTimes = [];
+				for (const evt of userEvents) {
+					if (evt.event === "application started") {
+						startedTimes.push(dayjs(evt.time).valueOf());
+					}
+				}
+				if (startedTimes.length > 0) {
+					const firstStartTime = startedTimes[0];
+					// Target hours: biz=36, indiv=48, family=63
+					// Ratios: biz/indiv≈0.75, family/indiv≈1.31
+					const targetHours = (
+						userAccountType === "business" ? 36 :
+						userAccountType === "family" ? 63 :
+						48
+					);
+					const targetMs = targetHours * 3600000;
+					for (const evt of userEvents) {
+						if (evt.event !== "application approved") continue;
+						const evtTime = dayjs(evt.time).valueOf();
+						const origGap = evtTime - firstStartTime;
+						// Small jitter from original gap (mod 4h) for variance
+						const jitter = origGap > 0 ? (origGap % (4 * 3600000)) : 0;
+						evt.time = dayjs(firstStartTime + targetMs + jitter).toISOString();
+					}
+				}
+			}
 
 			// ─── Hook #2: SUPPORT TICKET VOLUME ───
 			// PRE-V2.13: Inject 2-3 extra support tickets with bug-related categories
@@ -715,7 +751,24 @@ const config = {
 				}
 			}
 
-			// Sort events by time after injection/removal
+			// ─── Hook #1: VERSION STAMPING ───
+			// Runs LAST: stamps app_version based on FINAL timestamps
+			// (after Hook #5 TTC scaling has adjusted event times).
+			// v2.10 (days 0-30) → v2.11 (30-60) → v2.12 (60-90) → v2.13 (last 10 days)
+			for (const evt of userEvents) {
+				const eventTime = dayjs(evt.time);
+				if (eventTime.isBefore(V211_DATE)) {
+					evt.app_version = "2.10";
+				} else if (eventTime.isBefore(V212_DATE)) {
+					evt.app_version = "2.11";
+				} else if (eventTime.isBefore(V213_DATE)) {
+					evt.app_version = "2.12";
+				} else {
+					evt.app_version = "2.13";
+				}
+			}
+
+			// Sort events by time after injection/removal/shifting
 			userEvents.sort(
 				(a, b) => new Date(a.time) - new Date(b.time)
 			);

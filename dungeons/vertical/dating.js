@@ -81,7 +81,7 @@ const chance = u.initChance(SEED);
  * -------------------------------------------------------------------------------------
  * 2. WEEKEND SWIPE SURGE (everything)
  * -------------------------------------------------------------------------------------
- * PATTERN: Sunday swipes get heavy cloning (evening 4x, daytime 2x)
+ * PATTERN: Sunday swipes get heavy cloning (evening 5x, daytime 2x)
  * to overcome soup DOW weight deficit. No flag.
  *
  * HOW TO FIND IT IN MIXPANEL:
@@ -550,7 +550,7 @@ const config = {
 
 			// HOOK 2: WEEKEND SWIPE SURGE — Sunday swipes get heavy cloning
 			// to overcome the soup DOW weight deficit. Evening swipes (18-23)
-			// get 4 clones; daytime Sunday swipes get 2 clones.
+			// get 5 clones; daytime Sunday swipes get 2 clones.
 			// No flag — discover via day-of-week chart.
 			for (let idx = events.length - 1; idx >= 0; idx--) {
 				const event = events[idx];
@@ -558,7 +558,7 @@ const config = {
 					const dow = new Date(event.time).getUTCDay();
 					if (dow === 0) {
 						const hr = new Date(event.time).getUTCHours();
-						const clones = (hr >= 18 && hr <= 23) ? 4 : 2;
+						const clones = (hr >= 18 && hr <= 23) ? 5 : 2;
 						const etime = dayjs(event.time);
 						for (let c = 0; c < clones; c++) {
 							events.push({

@@ -241,8 +241,9 @@ const chance = u.initChance(SEED);
  *
  * PATTERN: Users with 8-20 swaps in dataset get +30% on stake
  * amount_usd plus 1-2 extra cloned stake events per existing.
- * Users with 21+ swaps drop 40% of portfolio-viewed events
- * (over-active traders ignore portfolio review). No flag.
+ * Users with 21+ swaps drop 75% of portfolio-viewed events
+ * and halve total_value_usd on survivors (over-active traders
+ * ignore portfolio review). No flag.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -281,7 +282,7 @@ const chance = u.initChance(SEED);
  * Rug-Pull Aftermath    | victim post-D70       | 1x       | 0.2x    | -80%
  * Trading T2C           | median min by tier    | 1x       | 0.7x/1.3x | 1.86x range
  * Swap Magic Number     | sweet stake amount    | 1x       | 1.3x    | 1.3x
- * Swap Magic Number     | over portfolio/user   | 1x       | 0.6x    | -40%
+ * Swap Magic Number     | over portfolio/user   | 1x       | 0.25x   | -75%
  */
 
 // Token pairs used in swap events
@@ -778,8 +779,8 @@ const config = {
 
 			// HOOK 10: SWAP-COUNT MAGIC NUMBER (no flags)
 			// Sweet 8-20 swaps → +30% on stake amount_usd; clone 1-2 extra
-			// stake events per existing. Over 21+ → drop 40% of portfolio
-			// viewed events (over-active traders ignore their portfolio).
+			// stake events per existing. Over 21+ → drop 75% of portfolio viewed events and halve
+			// total_value_usd on survivors (overcomes H6 injection overlap).
 			const swapCount = userEvents.filter(e => e.event === "swap").length;
 			if (swapCount >= 8 && swapCount <= 20) {
 				const stakeTemplate = userEvents.find(e => e.event === "stake");
@@ -798,9 +799,16 @@ const config = {
 					});
 				}
 			} else if (swapCount >= 21) {
+				// Over-active traders ignore portfolio review.
+				// Drop aggressively (75%) to overcome H6 stake-to-retain injection,
+				// and halve total_value_usd on survivors to sharpen the signal.
 				for (let i = userEvents.length - 1; i >= 0; i--) {
-					if (userEvents[i].event === "portfolio viewed" && chance.bool({ likelihood: 40 })) {
-						userEvents.splice(i, 1);
+					if (userEvents[i].event === "portfolio viewed") {
+						if (chance.bool({ likelihood: 75 })) {
+							userEvents.splice(i, 1);
+						} else {
+							userEvents[i].total_value_usd = Math.round((userEvents[i].total_value_usd || 5000) * 0.5);
+						}
 					}
 				}
 			}
