@@ -252,6 +252,30 @@ const chance = u.initChance(SEED);
  * REAL-WORLD ANALOGUE: Moderate posters write thoughtful comments; the
  * over-prolific tend to spam and burn through audience patience.
  *
+ * -------------------------------------------------------------------------------------
+ * 10. ONBOARDING TIME-TO-CONVERT (funnel-post)
+ * -------------------------------------------------------------------------------------
+ *
+ * PATTERN: Creator and business account_type users complete the
+ * onboarding funnel (account created -> profile updated -> post created)
+ * 1.4x faster (factor 0.71). Personal account users complete it 1.25x
+ * slower (factor 1.25). The hook intercepts funnel-post arrays, computes
+ * the time gap between consecutive steps, and scales each gap by the
+ * account-type-specific factor before rewriting the step timestamps.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Onboarding Funnel Median TTC by Account Type
+ *   - Report type: Funnels
+ *   - Steps: "account created" -> "profile updated" -> "post created"
+ *   - Measure: Median time to convert
+ *   - Breakdown: "account_type" (superProp)
+ *   - Expected: creator/business ~ 0.71x baseline; personal ~ 1.25x baseline
+ *
+ * REAL-WORLD ANALOGUE: Creators and businesses arrive with clear intent
+ * and complete profile setup faster; personal users browse casually and
+ * take longer to commit to their first post.
+ *
  * =====================================================================================
  * EXPECTED METRICS SUMMARY
  * =====================================================================================
@@ -268,6 +292,7 @@ const chance = u.initChance(SEED);
  * Weekend Surge             | Weekend vs weekday       | 1x       | ~ 1.3x      | 1.3x
  * Post-Created Magic Number | sweet comment_length     | 1x       | ~ 1.4x      | 1.4x
  * Post-Created Magic Number | over engagement/user     | 1x       | ~ 0.7x      | -30%
+ * Onboarding TTC            | median TTC by acct type  | 1x       | 0.71/1.25x  | ~ 1.8x range
  * =====================================================================================
  */
 

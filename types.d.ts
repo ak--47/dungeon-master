@@ -1570,5 +1570,33 @@ export interface EmulateOptions {
 
 declare module '@ak--47/dungeon-master/verify' {
     export function emulateBreakdown(events: EventSchema[], config: EmulateOptions): Array<Record<string, unknown>>;
-    export function verifyDungeon(config: Dungeon, checks: Array<{ name: string; breakdown: EmulateOptions; assert: (rows: Array<Record<string, unknown>>, ctx: { events: EventSchema[]; profiles: UserProfile[] }) => { pass: boolean; detail?: string } }>): Promise<{ pass: boolean; results: Array<{ name: string; pass: boolean; detail?: string; rows?: Array<Record<string, unknown>> }> }>;
+    export function verifyDungeon(config: Dungeon, checks: Array<{ name: string; breakdown: EmulateOptions; assert: (rows: Array<Record<string, unknown>>, ctx: { events: EventSchema[]; profiles: UserProfile[] }) => { pass: boolean; detail?: string } }>): Promise<{ pass: boolean; results: Array<{ name: string; pass: boolean; detail?: string; rows?: Array<Record<string, unknown>> }>; schemaReport: SchemaReport }>;
+    export function deriveExpectedSchema(config: Dungeon): Map<string, Set<string>>;
+    export function validateSchema(events: EventSchema[], config: Dungeon): SchemaReport;
+
+    interface SchemaReport {
+        pass: boolean;
+        eventTypes: Record<string, {
+            expected: string[];
+            actual: string[];
+            added: string[];
+            missing: string[];
+            coverage: Record<string, { count: number; total: number; pct: number }>;
+            verdict: 'PASS' | 'FAIL';
+        }>;
+        summary: { pass: number; fail: number };
+        flagStamping: Array<{ eventType: string; column: string; coverage: number }>;
+    }
+}
+
+declare module '@ak--47/dungeon-master/utils' {
+    export function dateRange(start?: string | number, end?: string | number, format?: string | null): () => string;
+    export function listOf<T>(pool: T[], options?: { min?: number; max?: number }): () => T[];
+    export function objectList(template: Record<string, ValueValid>, options?: { min?: number; max?: number }): () => Array<Record<string, unknown>>;
+    export function weighNumRange(min: number, max: number, skew?: number, size?: number): number[];
+    export function pickAWinner(items: string[], mostChosenIndex?: number): () => string[];
+    export function initChance(seed?: string): unknown;
+    export function TimeSoup(earliestTime: number, latestTime: number, peaks?: number, deviation?: number, mean?: number, dayOfWeekWeights?: number[] | null, hourOfDayWeights?: number[] | null): number;
+    export function weighArray<T>(items: T[]): T[];
+    export function generateUser(user_id: string, opts: Record<string, unknown>): Record<string, unknown>;
 }

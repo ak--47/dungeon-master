@@ -362,6 +362,26 @@ After writing the file:
 2. Hand to the next skill: `/write-hooks dungeons/user/<file>.js "describe trends"`.
 3. After hooks land: `/verify-dungeon dungeons/user/<file>.js`.
 
+## Property Type Reference
+
+Use the correct helper for each Mixpanel property data type. All helpers are imported from `@ak--47/dungeon-master/utils` (already available as `u` in dungeon files).
+
+| Mixpanel Type | Helper | Example |
+|---|---|---|
+| **String** | Array of options | `["Basic", "Pro", "Enterprise"]` |
+| **Numeric** | `weighNumRange()` or array | `u.weighNumRange(1, 100)` or `[10, 20, 50, 100]` |
+| **Boolean** | Boolean array | `[true, false, false]` (weighted 33/67) |
+| **Date** | `dateRange()` | `dateRange()` (dataset window) or `dateRange('2023-01-01', '2024-01-01')` |
+| **List** | `listOf()` | `listOf(["tag1", "tag2", "tag3"], {min: 1, max: 3})` |
+| **Object** | Plain object | `{tier: "premium", seats: 5}` |
+| **List of Objects** | `objectList()` | `objectList({sku: u.weighNumRange(1000,9999), qty: [1,2,3]}, {min:1, max:4})` |
+
+When designing event properties, always consider which Mixpanel type best represents the data:
+- Tags, genres, interests → `listOf()`
+- Cart items, line items, participants → `objectList()`
+- Subscription start, trial end, next billing → `dateRange()`
+- Status, tier, category → string array
+
 ## Output
 
 Write the file to `dungeons/user/<descriptive-name>.js`. Do NOT inject hooks.

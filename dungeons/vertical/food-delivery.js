@@ -212,8 +212,8 @@ const chance = u.initChance(SEED);
  * ───────────────────────────────────────────────────────────────────────────────
  *
  * PATTERN: Users in the 4-8 order-placed sweet spot get +40% on order_total.
- * Users with 9+ orders are over-engaged; 35% of their order-placed events
- * drop. No flag — discover by binning users on order count.
+ * Users with 9+ orders are over-engaged; their order_total is reduced to
+ * 0.65x (basket fatigue). No flag — discover by binning users on order count.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -225,13 +225,13 @@ const chance = u.initChance(SEED);
  *   - Measure: Average of "order_total"
  *   - Expected: A ~ 1.4x B
  *
- *   Report 2: Orders per User on Heavy Orderers
+ *   Report 2: Avg Order Total on Heavy Orderers
  *   - Report type: Insights (with cohort)
  *   - Cohort C: users with >= 9 "order placed"
  *   - Cohort A: users with 4-8
  *   - Event: "order placed"
- *   - Measure: Total per user
- *   - Expected: C ~ 35% fewer orders per user vs A
+ *   - Measure: Average of "order_total"
+ *   - Expected: C ~ 0.65x order_total vs A (basket fatigue)
  *
  * REAL-WORLD ANALOGUE: Engaged orderers lift basket size; over-orderers
  * hit fatigue and slow down.
@@ -298,7 +298,7 @@ const chance = u.initChance(SEED);
  * Trial Conversion      | post-day-14 activity | 1x       | ~ 0.4x      | -60%
  * First Order Bonus     | returning conversion | 1x       | 0.7x        | -30%
  * Order-Count Magic Num | sweet order_total    | 1x       | 1.4x        | 1.4x
- * Order-Count Magic Num | over orders/user     | 1x       | 0.65x       | -35%
+ * Order-Count Magic Num | over order_total      | 1x       | 0.65x       | -35%
  * Order Lifecycle TTC   | QB+ delivery_mins    | 1x       | 0.67x       | -33%
  * Order Lifecycle TTC   | Free delivery_mins   | 1x       | 1.4x        | +40%
  * City Density Reorder  | SF/NYC reorder conv  | 1x       | 1.4x        | 1.4x

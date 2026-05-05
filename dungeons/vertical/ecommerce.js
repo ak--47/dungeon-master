@@ -247,6 +247,39 @@ const spiritAnimals = ["duck", "dog", "otter", "penguin", "cat", "elephant", "li
  * tire-kicker who abandons more often.
  *
  * ----------------------------------------------------------------------------
+ * Hook 7: Signup Flow Time-to-Convert (everything)
+ * ----------------------------------------------------------------------------
+ *
+ * PATTERN: The Signup Flow funnel (page view → view item → save item →
+ * page view → sign up) has its time-to-convert scaled by the user's
+ * loyalty tier from SCD data (meta.scd.loyalty_tier). Gold and platinum
+ * users complete the funnel 0.67x faster; bronze users take 1.33x longer;
+ * silver is unaffected. The hook reads the latest SCD entry for
+ * loyalty_tier, falling back to a deterministic hash of user_id for
+ * consistent tier assignment. It anchors on the first "sign up" event,
+ * looks back up to 2 days for all funnel-step events in that window,
+ * and scales the whole cluster via scaleFunnelTTC.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Signup Funnel TTC by Loyalty Tier
+ *   - Report type: Funnels
+ *   - Steps: "page view" → "view item" → "save item" → "page view" → "sign up"
+ *   - Measure: Median time to convert
+ *   - Breakdown: "loyalty_tier" (SCD property)
+ *   - Expected: gold/platinum ~ 0.67x median TTC vs silver; bronze ~ 1.33x
+ *
+ *   Report 2: Signup Funnel Conversion by Loyalty Tier
+ *   - Report type: Funnels
+ *   - Steps: same as above
+ *   - Breakdown: "loyalty_tier"
+ *   - Expected: conversion rate similar across tiers (TTC changes, not conversion)
+ *
+ * REAL-WORLD ANALOGUE: Loyal, high-tier customers already trust the
+ * platform and breeze through signup flows, while new or low-engagement
+ * users deliberate longer before committing.
+ *
+ * ----------------------------------------------------------------------------
  * Hook 8: Checkout Flow Experiment (funnel experiment config)
  * ----------------------------------------------------------------------------
  *

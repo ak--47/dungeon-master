@@ -25,7 +25,7 @@ import { makeMirror } from './lib/generators/mirror.js';
 import { makeGroupProfile, makeProfile } from './lib/generators/profiles.js';
 
 // Utilities
-import { initChance, setDatasetNow, deleteFile } from './lib/utils/utils.js';
+import { initChance, setDatasetNow, setDatasetBegin, deleteFile } from './lib/utils/utils.js';
 
 // External dependencies
 import dayjs from "dayjs";
@@ -143,6 +143,7 @@ async function runDungeon(config) {
 		// dungeon configs. Without this, those factories produce values relative
 		// to process-start, which leaks wall-clock time into the output.
 		setDatasetNow(fixedNow);
+		setDatasetBegin(fixedBegin);
 
 		// Step 2: Create context with validated config (pass time constants explicitly)
 		const context = createContext(validatedConfig, null, { fixedNow, fixedBegin });

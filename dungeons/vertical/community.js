@@ -244,6 +244,72 @@ const communityIds = v.range(1, 30).map(() => `COMM_${v.uid(4)}`);
  * REAL-WORLD ANALOGUE: Premium wiki tools (analytics dashboards,
  * badge systems) incentivize more content creation from subscribers.
  *
+ * -------------------------------------------------------------------
+ * 9. CONTENT CREATION TIME-TO-CONVERT (funnel-post hook)
+ * -------------------------------------------------------------------
+ *
+ * PATTERN: Pro/supporter subscribers complete the Content Creation
+ * funnel 1.3x faster (time gaps scaled by 0.77). Free-tier users
+ * complete it 1.25x slower (gaps scaled by 1.25). The hook iterates
+ * over the funnel-post event array, compresses or stretches the
+ * inter-step time gaps based on the user's subscription_tier from
+ * meta.profile, then rewrites each event's timestamp.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Content Creation TTC by Subscription Tier
+ *   - Report type: Funnels
+ *   - Steps: "article viewed" -> "article published" -> "comment posted"
+ *   - Breakdown: "subscription_tier" (superProp)
+ *   - Metric: Median time to convert
+ *   - Expected: pro/supporter median TTC ~ 0.77x of free-tier TTC
+ *     (e.g., pro ~ 27h vs free ~ 45h)
+ *
+ *   NOTE: This effect is visible ONLY in Mixpanel funnel median TTC.
+ *   Cross-event MIN->MIN SQL queries on raw events do NOT show this
+ *   because funnel-post mutates timestamps after event generation but
+ *   before storage.
+ *
+ * REAL-WORLD ANALOGUE: Premium wiki contributors with analytics
+ * dashboards and streamlined tools move from reading to publishing
+ * faster; free users hesitate longer without feedback loops.
+ *
+ * -------------------------------------------------------------------
+ * 10. ARTICLE-PUBLISHED MAGIC NUMBER (everything hook)
+ * -------------------------------------------------------------------
+ *
+ * PATTERN: Users who published 2-5 articles sit in a "sweet spot" --
+ * all their upvote_count values on "upvote given" events are boosted
+ * by +35% (factor 1.35). Users who published 6+ articles trigger
+ * over-publishing fatigue: 25% of their "upvote given" events are
+ * dropped entirely. No flag is stamped -- discoverable only by
+ * binning users on article-published COUNT and comparing upvote
+ * totals or upvote event volume.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Upvote Count by Article Volume Cohort
+ *   - Report type: Insights (with cohorts)
+ *   - Cohort A: users who did "article published" 2-5 times
+ *   - Cohort B: users who did "article published" 0-1 times
+ *   - Event: "upvote given"
+ *   - Measure: Average of "upvote_count"
+ *   - Compare cohort A vs cohort B
+ *   - Expected: cohort A ~ 1.35x higher avg upvote_count
+ *
+ *   Report 2: Upvote Events per User by Article Volume
+ *   - Report type: Insights (with cohorts)
+ *   - Cohort C: users who did "article published" 6+ times
+ *   - Cohort A: users who did "article published" 2-5 times
+ *   - Event: "upvote given"
+ *   - Measure: Total events per user
+ *   - Compare cohort C vs cohort A
+ *   - Expected: cohort C ~ 25% fewer upvote events per user
+ *
+ * REAL-WORLD ANALOGUE: Creators who publish a handful of quality
+ * articles earn outsized community engagement; over-publishers
+ * dilute their signal and get less traction per piece.
+ *
  * ===================================================================
  * EXPECTED METRICS SUMMARY
  * ===================================================================
@@ -258,6 +324,9 @@ const communityIds = v.range(1, 30).map(() => `COMM_${v.uid(4)}`);
  * Lurker Churn                  | events after day 10 | 100%     | 40%     | 0.4x
  * Creator Profiles              | reputation_score    | 25       | 90      | 3.6x
  * Pro Content Creation Lift     | funnel conversion   | ~26%     | 52%     | ~2.0x
+ * Content Creation TTC          | funnel median TTC   | 1x       | 0.77x   | 1.3x faster (pro)
+ * Article-Published Magic Num   | sweet upvote_count  | 1x       | 1.35x   | +35%
+ * Article-Published Magic Num   | over upvote events  | 1x       | 0.75x   | -25%
  */
 
 /** @type {Config} */

@@ -389,6 +389,60 @@ soup: { dayOfWeekWeights: null, hourOfDayWeights: null }
 - Default weights are derived from real Mixpanel data and produce realistic weekly "matterhorn hump" and daily curves
 - Soup presets are defined in `lib/templates/soup-presets.js`; macro presets in `lib/templates/macro-presets.js`. Both resolved in `config-validator.js`.
 
+## Property Type Helpers
+
+Helpers for generating all 7 Mixpanel property data types. All are thunks (functions returning values) — pass them directly as event property values. The `choose()` resolver calls them per event.
+
+| Helper | Mixpanel Type | Usage | Output Example |
+|--------|--------------|-------|----------------|
+| `["a","b","c"]` | String | Array of options → picks one | `"b"` |
+| `weighNumRange(1,100)` | Numeric | Weighted number range | `42` |
+| `[true, false]` | Boolean | Picks one | `false` |
+| `dateRange(start?, end?)` | Date | Random date in range (defaults to dataset window) | `"2024-03-15T14:22:33"` |
+| `listOf(pool, {min, max})` | List | Random subset from pool | `["Jazz","Folk"]` |
+| `{key: value}` | Object | Plain object returned as-is | `{"tier":"premium"}` |
+| `objectList(template, {min, max})` | List of Objects | Generate N objects from template | `[{id:42, cat:"A"}]` |
+
+### `dateRange(start?, end?, format?)`
+
+Generates a random date within a range. Defaults to dataset window (`datasetStart` → `datasetEnd`). Accepts ISO strings, unix seconds, or dayjs objects for bounds.
+
+```javascript
+properties: {
+  signup_date: dateRange(),                           // within dataset window
+  subscription_start: dateRange('2023-01-01', '2024-01-01'),  // custom range
+  next_billing: dateRange(null, null, 'YYYY-MM-DD'),  // date-only format
+}
+```
+
+### `listOf(pool, options?)`
+
+Picks a random-length unique subset from a pool. Returns a Mixpanel List (JSON array).
+
+```javascript
+properties: {
+  tags: listOf(['sale', 'new', 'featured', 'clearance'], { min: 1, max: 3 }),
+  genres: listOf(['Rock', 'Pop', 'Jazz', 'Folk', 'Blues'], { min: 1, max: 2 }),
+}
+```
+
+### `objectList(template, options?)`
+
+Generates a list of objects from a template. Each value is independently resolved per object via `choose()`. Returns a Mixpanel List of Objects.
+
+```javascript
+properties: {
+  cart_items: objectList({
+    sku: weighNumRange(1000, 9999),
+    name: ['Widget', 'Gadget', 'Thingamajig'],
+    qty: [1, 1, 1, 2, 2, 3],
+    price: weighNumRange(5, 200),
+  }, { min: 1, max: 5 }),
+}
+```
+
+For complex cases with cross-field dependencies, use a manual generator function instead (see `dungeons/technical/array-of-object-lookup.js` for example).
+
 ## Dependencies
 
 **Core**: `ak-tools`, `chance`, `dayjs`, `mixpanel-import`, `p-limit`, `seedrandom`, `pino`, `pino-pretty`, `mixpanel`, `sentiment`, `tracery-grammar`, `hyparquet-writer`
@@ -431,7 +485,8 @@ import DUNGEON_MASTER from '@ak--47/dungeon-master';
 // Utility primitives — used by every dungeon config
 import {
   weighNumRange, pickAWinner, initChance,
-  TimeSoup, weighArray, generateUser
+  TimeSoup, weighArray, generateUser,
+  dateRange, listOf, objectList
 } from '@ak--47/dungeon-master/utils';
 
 // Hook helper atoms (Phase 3)

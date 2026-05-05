@@ -192,6 +192,74 @@ const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", 
  * REAL-WORLD ANALOGUE: Business travelers book the same hotels
  * repeatedly, leading to faster, more confident conversions.
  *
+ * ───────────────────────────────────────────────────────────────
+ * 9. BOOKING TIME-TO-CONVERT (funnel-post hook)
+ * ───────────────────────────────────────────────────────────────
+ *
+ * PATTERN: Business travelers complete the Search-to-Book funnel
+ * 1.35x faster (time gaps scaled by 0.74). Budget and leisure-family
+ * users complete it 1.25x slower (gaps scaled by 1.25). The hook
+ * iterates over the funnel-post event array, compresses or stretches
+ * the inter-step time gaps based on the user's customer_segment from
+ * meta.profile, then rewrites each event's timestamp.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Search-to-Book TTC by Segment
+ *   - Report type: Funnels
+ *   - Steps: "destination searched" -> "hotel viewed" -> "price compared" -> "booking completed"
+ *   - Breakdown: user property "customer_segment"
+ *   - Metric: Median time to convert
+ *   - Expected: business_traveler median TTC ~ 0.74x of budget/leisure TTC
+ *     (e.g., business ~ 24h vs budget ~ 43h)
+ *
+ *   NOTE: This effect is visible ONLY in Mixpanel funnel median TTC.
+ *   Cross-event MIN->MIN SQL queries on raw events do NOT show this
+ *   because funnel-post mutates timestamps after event generation but
+ *   before storage.
+ *
+ * REAL-WORLD ANALOGUE: Business travelers know their preferred hotel
+ * chains and corporate rates, moving from search to booking with
+ * minimal comparison. Leisure and budget travelers deliberate longer,
+ * comparing options and waiting for deals.
+ *
+ * ───────────────────────────────────────────────────────────────
+ * 10. HOTEL-VIEWED MAGIC NUMBER (everything hook)
+ * ───────────────────────────────────────────────────────────────
+ *
+ * PATTERN: Users who viewed 5-10 hotels sit in a "decisive comparison
+ * shopper" sweet spot -- all their nightly_rate values on "booking
+ * completed" events are boosted by +30% (factor 1.3), indicating they
+ * chose higher-tier rooms after deliberate comparison. Users who
+ * viewed 11+ hotels trigger analysis paralysis: 35% of their
+ * "booking completed" events are dropped entirely. No flag is
+ * stamped -- discoverable only by binning users on hotel-viewed
+ * COUNT and comparing booking revenue or conversion volume.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Nightly Rate by Hotel-View Cohort
+ *   - Report type: Insights (with cohorts)
+ *   - Cohort A: users who did "hotel viewed" 5-10 times
+ *   - Cohort B: users who did "hotel viewed" 0-4 times
+ *   - Event: "booking completed"
+ *   - Measure: Average of "nightly_rate"
+ *   - Compare cohort A vs cohort B
+ *   - Expected: cohort A ~ 1.3x higher avg nightly_rate
+ *
+ *   Report 2: Bookings per User by Hotel-View Volume
+ *   - Report type: Insights (with cohorts)
+ *   - Cohort C: users who did "hotel viewed" 11+ times
+ *   - Cohort A: users who did "hotel viewed" 5-10 times
+ *   - Event: "booking completed"
+ *   - Measure: Total events per user
+ *   - Compare cohort C vs cohort A
+ *   - Expected: cohort C ~ 35% fewer bookings per user
+ *
+ * REAL-WORLD ANALOGUE: Travelers who compare a handful of hotels
+ * make confident, higher-value bookings; those who endlessly browse
+ * suffer decision fatigue and often abandon the search entirely.
+ *
  * ═══════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY
  * ═══════════════════════════════════════════════════════════════
@@ -206,6 +274,9 @@ const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", 
  * Review Quality              | review_length       | 120      | 180/80  | 1.5x/0.67x
  * Business Profile            | travel_frequency    | mixed    | weekly  | —
  * Repeat Destination          | funnel conversion   | 40%      | 52%     | 1.3x
+ * Booking TTC                 | funnel median TTC   | 1x       | 0.74x   | 1.35x faster (business)
+ * Hotel-Viewed Magic Num      | sweet nightly_rate  | 1x       | 1.3x    | +30%
+ * Hotel-Viewed Magic Num      | over bookings/user  | 1x       | 0.65x   | -35%
  */
 
 /** @type {Config} */

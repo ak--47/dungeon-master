@@ -247,6 +247,30 @@ const chance = u.initChance(SEED);
  * REAL-WORLD ANALOGUE: Focused buyers commit; obsessive browsers
  * tire-kick and never make the leap.
  *
+ * -------------------------------------------------------------------
+ * 10. TOUR FUNNEL TIME-TO-CONVERT (funnel-post)
+ * -------------------------------------------------------------------
+ *
+ * PATTERN: Premier-tier agents move users through the Tour funnel
+ * (property viewed -> tour scheduled -> offer submitted) 1.4x faster
+ * (factor 0.71). Standard-tier agents complete it 1.3x slower
+ * (factor 1.3). The hook intercepts funnel-post arrays, computes the
+ * time gap between consecutive steps, and scales each gap by the
+ * tier-specific factor before rewriting the step timestamps.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Tour Funnel Median TTC by Agent Tier
+ *   - Report type: Funnels
+ *   - Steps: "property viewed" -> "tour scheduled" -> "offer submitted"
+ *   - Measure: Median time to convert
+ *   - Breakdown: "agent_tier" (user property / SCD)
+ *   - Expected: Premier ~ 0.71x baseline; Standard ~ 1.3x baseline
+ *
+ * REAL-WORLD ANALOGUE: Premier agents have larger networks, faster
+ * scheduling workflows, and prioritized showing slots, translating
+ * to shorter tour-to-offer cycles.
+ *
  * ===================================================================
  * EXPECTED METRICS SUMMARY
  * ===================================================================
@@ -263,6 +287,7 @@ const chance = u.initChance(SEED);
  * Cold-Lead Churn          | non-save post-day-14   | 1x       | 0.1x    | -90%
  * View-Count Magic Number  | sweet offer_price      | 1x       | 1.3x    | 1.3x
  * View-Count Magic Number  | over offers/user       | 1x       | 0.65x   | -35%
+ * Tour Funnel TTC          | median TTC by tier     | 1x       | 0.71/1.3x| ~ 1.8x range
  */
 
 /** @type {Config} */

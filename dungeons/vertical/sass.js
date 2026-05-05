@@ -264,6 +264,81 @@ const chance = u.initChance(SEED);
  * customer segments — from a $99/mo startup to a $500K Fortune 500 contract.
  *
  * ─────────────────────────────────────────────────────────────────────────────
+ * 9. INCIDENT RESPONSE TTC (everything)
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * PATTERN: Enterprise companies resolve incidents faster; startups resolve
+ * slower. The hook reads company_size from the user profile and scales
+ * response_time_mins (on "alert acknowledged") and resolution_time_mins
+ * (on "alert resolved") by a factor: enterprise 0.67x, startup 1.5x,
+ * smb/mid_market unchanged. Additionally, the first incident-response
+ * funnel sequence (alert triggered → alert acknowledged → alert resolved)
+ * has its inter-step timestamps scaled via scaleFunnelTTC with the same
+ * factor, so Mixpanel funnel TTC reports reflect the gap. This compounds
+ * with Hook 4 (integration users) — an enterprise user with both Slack
+ * and PagerDuty configured gets the fastest resolution times.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Avg Response Time by Company Size
+ *   - Report type: Insights
+ *   - Event: "alert acknowledged"
+ *   - Measure: Average of "response_time_mins"
+ *   - Breakdown: "company_size" (user property)
+ *   - Expected: enterprise ~ 0.67x startup
+ *
+ *   Report 2: Incident Funnel TTC by Company Size
+ *   - Report type: Funnels
+ *   - Steps: "alert triggered" → "alert acknowledged" → "alert resolved"
+ *   - Measure: Median time to convert
+ *   - Breakdown: "company_size"
+ *   - Expected: enterprise ~ 0.67x median TTC vs startup ~ 1.5x
+ *
+ *   Report 3: Avg Resolution Time by Company Size
+ *   - Report type: Insights
+ *   - Event: "alert resolved"
+ *   - Measure: Average of "resolution_time_mins"
+ *   - Breakdown: "company_size"
+ *   - Expected: enterprise ~ 0.67x startup
+ *
+ * REAL-WORLD ANALOGUE: Enterprise teams have dedicated SRE rotations,
+ * automated runbooks, and premium support contracts that compress
+ * incident timelines. Startups rely on smaller teams with less tooling.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * 10. DOCS MAGIC NUMBER (everything)
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * PATTERN: Users in the 4-7 documentation-viewed sweet spot get 2-3 extra
+ * production "service deployed" events cloned into their stream (boosting
+ * deploy frequency ~40%). Users with 8+ documentation views are over-
+ * engaged browsers; 25% of their "service deployed" events are dropped.
+ * No flag is stamped — discoverable only by binning users on doc-view
+ * count and comparing per-user deploy volume.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Deploys per User by Docs-View Bucket
+ *   - Report type: Insights (with cohort)
+ *   - Cohort A: users with 4-7 "documentation viewed" events
+ *   - Cohort B: users with 0-3 "documentation viewed" events
+ *   - Event: "service deployed"
+ *   - Measure: Total per user
+ *   - Expected: Cohort A ~ 1.4x deploys per user vs Cohort B
+ *
+ *   Report 2: Deploys per User on Heavy Doc Readers
+ *   - Report type: Insights (with cohort)
+ *   - Cohort C: users with >= 8 "documentation viewed" events
+ *   - Cohort A: users with 4-7
+ *   - Event: "service deployed"
+ *   - Measure: Total per user
+ *   - Expected: Cohort C ~ 25% fewer deploys per user vs Cohort A
+ *
+ * REAL-WORLD ANALOGUE: Engineers who read just enough docs deploy with
+ * confidence; those who read excessively may be stuck troubleshooting
+ * and never ship, or are evaluating the product without committing.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
  * 11. DEPLOY PIPELINE EXPERIMENT (funnel experiment — engine-managed)
  * ─────────────────────────────────────────────────────────────────────────────
  *
@@ -316,6 +391,10 @@ const chance = u.initChance(SEED);
  * Cost Overrun             | Scale-down after overrun | 50%       | 100%           | 2x
  * Failed Deploy Recovery   | Deploy duration (sec)    | ~500      | ~750           | 1.5x
  * Enterprise vs Startup    | ACV range                | $0-3.6K   | $50K-500K      | 100x+
+ * Incident Response TTC    | Enterprise response_time | 1x        | 0.67x          | -33%
+ * Incident Response TTC    | Startup response_time    | 1x        | 1.5x           | +50%
+ * Docs Magic Number        | sweet (4-7) deploys/user | 1x        | ~1.4x          | +40%
+ * Docs Magic Number        | over (8+) deploys/user   | 1x        | ~0.75x         | -25%
  * Deploy Experiment        | Canary conversion        | 65%       | ~78%           | 1.2x
  * Deploy Experiment        | Canary TTC               | 1d        | ~0.85d         | 0.85x
  *
@@ -690,7 +769,7 @@ const config = {
 	/**
 	 * ARCHITECTED ANALYTICS HOOKS
 	 *
-	 * This hook function creates 8 deliberate patterns in the data.
+	 * This hook function creates 10 deliberate patterns in the data.
 	 * Hook 11 (Deploy Pipeline Experiment) is engine-managed via funnel
 	 * experiment config — no hook code needed.
 	 *
@@ -702,6 +781,8 @@ const config = {
 	 * 6. COST OVERRUN PATTERN: Budget-exceeded users react by scaling down infrastructure
 	 * 7. FAILED DEPLOYMENT RECOVERY: Recovery deploys take 1.5x longer, tracked across calls
 	 * 8. ENTERPRISE VS STARTUP: Company size determines seat count, ACV, and health score
+	 * 9. INCIDENT RESPONSE TTC: Enterprise 0.67x faster, startup 1.5x slower incident resolution
+	 * 10. DOCS MAGIC NUMBER: Sweet 4-7 docs → extra deploys; over 8+ → drop 25% of deploys
 	 * 11. DEPLOY PIPELINE EXPERIMENT: Canary Deploys A/B test on deployment funnel (engine-managed)
 	 */
 	hook: function (record, type, meta) {

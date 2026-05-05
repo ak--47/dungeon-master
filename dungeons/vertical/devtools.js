@@ -261,6 +261,30 @@ const repoIds = v.range(1, 150).map(() => `REPO_${v.uid(6)}`);
  * REAL-WORLD ANALOGUE: Healthy CI cadence drives reliable deploys;
  * runaway builds signal a flaky pipeline that scares teams off ships.
  *
+ * ---------------------------------------------------------------
+ * 10. BUILD-DEPLOY TIME-TO-CONVERT (funnel-post)
+ * ---------------------------------------------------------------
+ *
+ * PATTERN: Enterprise and business tier users complete the Build-Deploy
+ * Pipeline funnel (build completed -> deployment completed -> monitoring
+ * dashboard viewed) 1.5x faster (factor 0.67). Free-tier users complete
+ * it 1.33x slower (factor 1.33). The hook intercepts funnel-post arrays,
+ * computes the time gap between consecutive steps, and scales each gap
+ * by the tier-specific factor before rewriting the step timestamps.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Build-Deploy Pipeline Median TTC by Tier
+ *   - Report type: Funnels
+ *   - Steps: "build completed" -> "deployment completed" -> "monitoring dashboard viewed"
+ *   - Measure: Median time to convert
+ *   - Breakdown: "subscription_tier" (superProp)
+ *   - Expected: enterprise/business ~ 0.67x baseline; free ~ 1.33x baseline
+ *
+ * REAL-WORLD ANALOGUE: Enterprise CI/CD customers get priority build
+ * runners and dedicated deploy infrastructure, yielding faster
+ * end-to-end pipeline throughput.
+ *
  * ===============================================================
  * EXPECTED METRICS SUMMARY
  * ===============================================================
@@ -277,6 +301,7 @@ const repoIds = v.range(1, 150).map(() => `REPO_${v.uid(6)}`);
  * Enterprise Funnel Lift      | funnel conversion   | 40%      | 60%     | ~ 1.5x
  * Build-Count Magic Number    | sweet deploys/user  | 1x       | 1.3x    | 1.3x
  * Build-Count Magic Number    | over deploys/user   | 1x       | 0.75x   | -25%
+ * Build-Deploy TTC            | median TTC by tier  | 1x       | 0.67/1.33x| ~ 2x range
  */
 
 /** @type {Config} */

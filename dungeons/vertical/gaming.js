@@ -690,7 +690,7 @@ const config = {
 	lookupTables: [],
 
 	/**
-	 * 🎯 ARCHITECTED ANALYTICS HOOKS — 11 patterns
+	 * 🎯 ARCHITECTED ANALYTICS HOOKS — 13 patterns
 	 *
 	 * 1. CONVERSION: Ancient Compass users have 3x quest completion + 1.5x rewards
 	 * 2. TIME-BASED: "Cursed Week" (days 40-47) has 5x death rates
@@ -703,6 +703,8 @@ const config = {
 	 * 9. PROGRESSION SCALING: Quest gold scales with player level (1 + level * 0.15)
 	 * 10. WHALE PURCHASES: ~33% of users via deterministic hash spend 1.8x more
 	 * 11. ALIGNMENT ARCHETYPE: Good=hero, Evil=villain, other=neutral (user hook)
+	 * 12. COMBAT FUNNEL TTC: Elite 0.30x faster, Free 1.40x slower combat funnel T2C
+	 * 13. COMBAT-PREP MAGIC NUMBER: 3-6 prep events = +30% treasure; 7+ = -25% boss wins
 	 */
 	hook: function (record, type, meta) {
 		// Hook #11: ALIGNMENT ARCHETYPE — derive archetype on user profile

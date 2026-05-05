@@ -289,6 +289,37 @@ const supplierIds = v.range(1, 150).map(() => `SUP_${v.uid(6)}`);
  * stock just enough places larger, more confident orders; an
  * obsessive checker is paralysed and orders less.
  *
+ * -------------------------------------------------------------------
+ * 10. ONBOARDING TIME-TO-CONVERT (funnel-post hook)
+ * -------------------------------------------------------------------
+ *
+ * PATTERN: Enterprise-tier users complete the Onboarding funnel
+ * 1.4x faster (time gaps scaled by 0.71). Small-business and trial
+ * users complete it 1.3x slower (gaps scaled by 1.3). The hook
+ * iterates over the funnel-post event array, compresses or stretches
+ * the inter-step time gaps based on the user's company_tier from
+ * meta.profile, then rewrites each event's timestamp.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Onboarding TTC by Company Tier
+ *   - Report type: Funnels
+ *   - Steps: "account created" -> "inventory checked" -> "integration connected" -> "report generated"
+ *   - Breakdown: user property "company_tier"
+ *   - Metric: Median time to convert
+ *   - Expected: enterprise median TTC ~ 0.71x of small_business/trial TTC
+ *     (e.g., enterprise ~ 36h vs small_business ~ 66h)
+ *
+ *   NOTE: This effect is visible ONLY in Mixpanel funnel median TTC.
+ *   Cross-event MIN->MIN SQL queries on raw events do NOT show this
+ *   because funnel-post mutates timestamps after event generation but
+ *   before storage.
+ *
+ * REAL-WORLD ANALOGUE: Enterprise customers have dedicated IT teams
+ * and onboarding specialists who move through setup, integration,
+ * and first reporting much faster than small businesses configuring
+ * the platform themselves.
+ *
  * ===================================================================
  * EXPECTED METRICS SUMMARY
  * ===================================================================
@@ -305,6 +336,7 @@ const supplierIds = v.range(1, 150).map(() => `SUP_${v.uid(6)}`);
  * Small-Biz Conversion Drop   | funnel conversion   | 30%      | 20%     | 0.65x
  * Inventory-Check Magic Num   | sweet PO quantity   | 1x       | 1.25x   | 1.25x
  * Inventory-Check Magic Num   | over POs/user       | 1x       | 0.4x    | -60%
+ * Onboarding TTC              | funnel median TTC   | 1x       | 0.71x   | 1.4x faster (enterprise)
  */
 
 /** @type {Config} */
