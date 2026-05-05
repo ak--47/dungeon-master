@@ -50,7 +50,7 @@ const chance = u.initChance(SEED);
 
 /*
  * ═══════════════════════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (9 hooks)
+ * ANALYTICS HOOKS (10 hooks)
  *
  * Adds 9. ORDER LIFECYCLE TIME-TO-CONVERT: QuickBite+ 0.67x delivery times,
  * Free 1.4x slower (everything hook, property scaling). Discover via
@@ -265,6 +265,26 @@ const chance = u.initChance(SEED);
  * delivery routing.
  *
  * ───────────────────────────────────────────────────────────────────────────────
+ * 10. CITY DENSITY REORDER BOOST (funnel-pre)
+ * ───────────────────────────────────────────────────────────────────────────────
+ *
+ * PATTERN: On the reorder funnel (order delivered → order rated → reorder
+ * initiated), dense cities (SF, NYC) convert at 1.4x; sprawl cities
+ * (Houston, Phoenix) at 0.7x. Scoped to the funnel containing
+ * "reorder initiated".
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Reorder Funnel Conversion by City
+ *   - Report type: Funnels
+ *   - Steps: "order delivered" → "order rated" → "reorder initiated"
+ *   - Breakdown: "city"
+ *   - Expected: SF / NYC ~ 1.4x baseline; Houston / Phoenix ~ 0.7x
+ *
+ * REAL-WORLD ANALOGUE: Dense cities have more restaurant choice and
+ * faster delivery, driving higher repeat ordering behavior.
+ *
+ * ───────────────────────────────────────────────────────────────────────────────
  * EXPECTED METRICS SUMMARY
  * ───────────────────────────────────────────────────────────────────────────────
  *
@@ -281,6 +301,8 @@ const chance = u.initChance(SEED);
  * Order-Count Magic Num | over orders/user     | 1x       | 0.65x       | -35%
  * Order Lifecycle TTC   | QB+ delivery_mins    | 1x       | 0.67x       | -33%
  * Order Lifecycle TTC   | Free delivery_mins   | 1x       | 1.4x        | +40%
+ * City Density Reorder  | SF/NYC reorder conv  | 1x       | 1.4x        | 1.4x
+ * City Density Reorder  | HOU/PHX reorder conv | 1x       | 0.7x        | -30%
  */
 
 // Generate consistent IDs for lookup tables and event properties
@@ -623,6 +645,21 @@ const config = {
 	lookupTables: [],
 
 	hook: function (record, type, meta) {
+		// HOOK 10: CITY DENSITY REORDER BOOST (funnel-pre)
+		// Dense cities (SF, NYC) convert 1.4x on the reorder funnel;
+		// sprawl cities (Houston, Phoenix) at 0.7x.
+		if (type === "funnel-pre") {
+			const isReorderFunnel = meta.funnel?.sequence?.includes("reorder initiated");
+			if (isReorderFunnel) {
+				const city = meta.profile?.city;
+				if (city === "San Francisco" || city === "New York") {
+					record.conversionRate = Math.min(95, Math.round(record.conversionRate * 1.4));
+				} else if (city === "Houston" || city === "Phoenix") {
+					record.conversionRate = Math.round(record.conversionRate * 0.7);
+				}
+			}
+		}
+
 		if (type === "everything") {
 			const datasetStart = dayjs.unix(meta.datasetStart);
 			const RAINY_WEEK_START = datasetStart.add(20, 'days');

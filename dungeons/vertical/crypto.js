@@ -46,7 +46,7 @@ const chance = u.initChance(SEED);
 
 /**
  * ===================================================================
- * ANALYTICS HOOKS (10 hooks)
+ * ANALYTICS HOOKS (11 hooks)
  * ===================================================================
  *
  * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable
@@ -266,6 +266,34 @@ const chance = u.initChance(SEED);
  * REAL-WORLD ANALOGUE: Engaged swappers grow stake; over-active
  * day-traders ignore long-term portfolio review.
  *
+ * ---------------------------------------------------------------
+ * 11. EARLY STAKER RETENTION (everything — retention magic number)
+ *
+ * PATTERN: Born-in-dataset users with 2+ "stake" events in their
+ * first 10 days retain normally. Those with fewer than 2 early
+ * stakes lose 60% of post-day-40 events. No flag — discover via
+ * behavioral cohort on early stake count.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Retention by Early Stakers
+ *   - Report type: Retention
+ *   - Cohort A: users with >= 2 "stake" in first 10 days
+ *   - Cohort B: users with 0-1 "stake" in first 10 days
+ *   - Expected: A retains strongly; B drops ~60% after day 40
+ *
+ *   Report 2: Post-Day-40 Event Volume by Cohort
+ *   - Report type: Insights (with cohort)
+ *   - Cohort A vs B (as above)
+ *   - Event: any event
+ *   - Measure: Total per user
+ *   - Filter: date > day 40
+ *   - Expected: A ~ 2.5x B in post-d40 volume
+ *
+ * REAL-WORLD ANALOGUE: Users who stake early have skin in the game
+ * and stick around; the "magic number" for retention is 2 stakes
+ * in the first 10 days.
+ *
  * ===================================================================
  * EXPECTED METRICS SUMMARY
  * ===================================================================
@@ -283,6 +311,7 @@ const chance = u.initChance(SEED);
  * Trading T2C           | median min by tier    | 1x       | 0.7x/1.3x | 1.86x range
  * Swap Magic Number     | sweet stake amount    | 1x       | 1.3x    | 1.3x
  * Swap Magic Number     | over portfolio/user   | 1x       | 0.25x   | -75%
+ * Early Staker Retain   | post-d40 events (non) | 1x       | 0.4x    | -60%
  */
 
 // Token pairs used in swap events
@@ -808,6 +837,24 @@ const config = {
 							userEvents.splice(i, 1);
 						} else {
 							userEvents[i].total_value_usd = Math.round((userEvents[i].total_value_usd || 5000) * 0.5);
+						}
+					}
+				}
+			}
+
+			// HOOK 11: EARLY STAKER RETENTION — users with 2+ "stake" events in first
+			// 10 days retain; others lose 60% of post-day-40 events.
+			if (meta.userIsBornInDataset) {
+				const firstT = userEvents[0]?.time;
+				if (firstT) {
+					const window10 = dayjs(firstT).add(10, 'days').toISOString();
+					const earlyStakes = userEvents.filter(e => e.event === 'stake' && e.time <= window10).length;
+					if (earlyStakes < 2) {
+						const cutoff = dayjs(firstT).add(40, 'days');
+						for (let i = userEvents.length - 1; i >= 0; i--) {
+							if (dayjs(userEvents[i].time).isAfter(cutoff) && chance.bool({ likelihood: 60 })) {
+								userEvents.splice(i, 1);
+							}
 						}
 					}
 				}

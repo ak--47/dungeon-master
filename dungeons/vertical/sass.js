@@ -53,7 +53,7 @@ const chance = u.initChance(SEED);
 
 /*
  * ═══════════════════════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (10 hooks)
+ * ANALYTICS HOOKS (11 hooks)
  * ═══════════════════════════════════════════════════════════════════════════════
  *
  * 10 deliberately architected patterns hidden in the data. NOTE: All cohort
@@ -264,6 +264,45 @@ const chance = u.initChance(SEED);
  * customer segments — from a $99/mo startup to a $500K Fortune 500 contract.
  *
  * ─────────────────────────────────────────────────────────────────────────────
+ * 11. DEPLOY PIPELINE EXPERIMENT (funnel experiment — engine-managed)
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * PATTERN: The deployment funnel (deployment pipeline run → service deployed
+ * → dashboard viewed) runs a "Canary Deploys" experiment starting 45 days
+ * before dataset end. Users are randomly assigned to Control or "Canary
+ * Deploys" variant. The Canary variant gets 1.2x conversion multiplier and
+ * 0.85x time-to-convert multiplier (faster + higher conversion). The engine
+ * emits `$experiment_started` events with `Experiment Name` and
+ * `Variant Name` properties. No hook code needed — the engine handles
+ * variant assignment and conversion/TTC scaling.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Experiment Enrollment
+ *   - Report type: Insights
+ *   - Event: "$experiment_started"
+ *   - Measure: Total
+ *   - Breakdown: "Variant Name"
+ *   - Expected: roughly even split between "Control" and "Canary Deploys"
+ *
+ *   Report 2: Deploy Funnel by Variant
+ *   - Report type: Funnels
+ *   - Steps: "deployment pipeline run" → "service deployed" → "dashboard viewed"
+ *   - Breakdown: "Variant Name" (user property)
+ *   - Expected: Canary variant ~ 1.2x conversion vs Control
+ *
+ *   Report 3: Deploy TTC by Variant
+ *   - Report type: Funnels
+ *   - Steps: same as above
+ *   - Measure: Median time to convert
+ *   - Breakdown: "Variant Name"
+ *   - Expected: Canary variant ~ 0.85x TTC vs Control (faster)
+ *
+ * REAL-WORLD ANALOGUE: Teams A/B test canary deployment strategies.
+ * Canary deploys catch issues earlier, improving both success rate and
+ * deployment velocity.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
  * EXPECTED METRICS SUMMARY
  * ─────────────────────────────────────────────────────────────────────────────
  *
@@ -277,6 +316,8 @@ const chance = u.initChance(SEED);
  * Cost Overrun             | Scale-down after overrun | 50%       | 100%           | 2x
  * Failed Deploy Recovery   | Deploy duration (sec)    | ~500      | ~750           | 1.5x
  * Enterprise vs Startup    | ACV range                | $0-3.6K   | $50K-500K      | 100x+
+ * Deploy Experiment        | Canary conversion        | 65%       | ~78%           | 1.2x
+ * Deploy Experiment        | Canary TTC               | 1d        | ~0.85d         | 0.85x
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * ADVANCED ANALYSIS IDEAS
@@ -392,6 +433,14 @@ const config = {
 			conversionRate: 65,
 			timeToConvert: 1,
 			weight: 3,
+			experiment: {
+				name: "Canary Deploys",
+				variants: [
+					{ name: "Control" },
+					{ name: "Canary Deploys", conversionMultiplier: 1.2, ttcMultiplier: 0.85 },
+				],
+				startDaysBeforeEnd: 45,
+			},
 		},
 		{
 			// Infrastructure management
@@ -641,7 +690,9 @@ const config = {
 	/**
 	 * ARCHITECTED ANALYTICS HOOKS
 	 *
-	 * This hook function creates 8 deliberate patterns in the data:
+	 * This hook function creates 8 deliberate patterns in the data.
+	 * Hook 11 (Deploy Pipeline Experiment) is engine-managed via funnel
+	 * experiment config — no hook code needed.
 	 *
 	 * 1. END-OF-QUARTER SPIKE: Days 100-110 drive plan upgrades and team expansion
 	 * 2. CHURNED ACCOUNT SILENCING: ~10% of users go completely silent after month 1
@@ -651,6 +702,7 @@ const config = {
 	 * 6. COST OVERRUN PATTERN: Budget-exceeded users react by scaling down infrastructure
 	 * 7. FAILED DEPLOYMENT RECOVERY: Recovery deploys take 1.5x longer, tracked across calls
 	 * 8. ENTERPRISE VS STARTUP: Company size determines seat count, ACV, and health score
+	 * 11. DEPLOY PIPELINE EXPERIMENT: Canary Deploys A/B test on deployment funnel (engine-managed)
 	 */
 	hook: function (record, type, meta) {
 		// (Hook 1a moved to everything hook for reliable datasetStart access)

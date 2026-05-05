@@ -50,13 +50,27 @@ const spiritAnimals = ["duck", "dog", "otter", "penguin", "cat", "elephant", "li
 
 /*
  * ============================================================================
- * ANALYTICS HOOKS (7 hooks)
+ * ANALYTICS HOOKS (10 hooks)
  *
  * Adds 7. SIGNUP FLOW TIME-TO-CONVERT: gold/platinum loyalty 0.67x faster,
  * bronze 1.33x slower (everything hook via scaleFunnelTTC on the page-view-
  * to-sign-up window). Loyalty tier is determined from SCD data
  * (meta.scd.loyalty_tier) with deterministic hash fallback. Discover via
  * bound-sequence funnel TTC breakdown by loyalty tier.
+ *
+ * Adds 8. CHECKOUT FLOW EXPERIMENT: A/B/C experiment on the eCommerce
+ * Purchase funnel — "Control", "Express Checkout" (1.25x conversion),
+ * "Social Proof" (1.15x conversion, 0.9x TTC). Engine-managed via funnel
+ * experiment config; starts 30 days before dataset end.
+ *
+ * Adds 9. DARK THEME POWER USERS: funnel-pre hook that boosts purchase
+ * funnel conversion 1.3x for dark-theme users and penalizes light-theme
+ * users to 0.85x. Discoverable by breakdown of funnel conversion by theme.
+ *
+ * Adds 10. SAVE-ITEM RETENTION: born-in-dataset users who save 2+ items
+ * in their first 10 days retain long-term; those below threshold lose ~70%
+ * of post-day-25 events. Discoverable by retention or frequency analysis
+ * segmented by early save-item count.
  * ============================================================================
  *
  * ----------------------------------------------------------------------------
@@ -232,6 +246,88 @@ const spiritAnimals = ["duck", "dog", "otter", "penguin", "cat", "elephant", "li
  * tends to convert at higher cart value; an excessive browser is a
  * tire-kicker who abandons more often.
  *
+ * ----------------------------------------------------------------------------
+ * Hook 8: Checkout Flow Experiment (funnel experiment config)
+ * ----------------------------------------------------------------------------
+ *
+ * PATTERN: A/B/C experiment on the eCommerce Purchase funnel. Control
+ * group uses base conversion, "Express Checkout" variant gets 1.25x
+ * conversion multiplier, "Social Proof" gets 1.15x conversion and 0.9x
+ * time-to-convert. Starts 30 days before dataset end.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Experiment Events by Variant
+ *   - Report type: Insights
+ *   - Event: "$experiment_started"
+ *   - Measure: Total
+ *   - Breakdown: "$experiment_variant"
+ *   - Expected: roughly equal distribution across Control, Express Checkout, Social Proof
+ *
+ *   Report 2: Purchase Funnel Conversion by Variant
+ *   - Report type: Funnels
+ *   - Funnel: view item → add to cart → checkout
+ *   - Breakdown: "$experiment_variant"
+ *   - Expected: Express Checkout > Social Proof > Control conversion rate
+ *
+ * REAL-WORLD ANALOGUE: Product team tests a streamlined checkout and a
+ * social proof variant against the existing flow to lift conversion.
+ *
+ * ----------------------------------------------------------------------------
+ * Hook 9: Dark Theme Power Users (funnel-pre)
+ * ----------------------------------------------------------------------------
+ *
+ * PATTERN: Dark-theme users convert 1.3x better on the purchase funnel;
+ * light-theme users convert at 0.85x. Custom theme is unaffected.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Purchase Funnel by Theme
+ *   - Report type: Funnels
+ *   - Funnel: view item → add to cart → checkout
+ *   - Breakdown: "theme"
+ *   - Expected: dark > custom > light conversion rate
+ *
+ *   Report 2: Checkout Count by Theme
+ *   - Report type: Insights
+ *   - Event: "checkout"
+ *   - Measure: Total
+ *   - Breakdown: "theme"
+ *   - Expected: dark-theme users over-index on checkout counts
+ *
+ * REAL-WORLD ANALOGUE: Power users who customize their UI (dark mode)
+ * tend to be more committed and convert at higher rates.
+ *
+ * ----------------------------------------------------------------------------
+ * Hook 10: Save-Item Retention (everything — retention magic number)
+ * ----------------------------------------------------------------------------
+ *
+ * PATTERN: Born-in-dataset users who perform 2+ "save item" events in
+ * their first 10 days retain long-term. Users below that threshold lose
+ * ~70% of events after day 25, simulating churn. No flag is stamped —
+ * discoverable only by segmenting users on early save-item count and
+ * comparing retention or late-period activity.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Retention by Early Save Count
+ *   - Report type: Retention
+ *   - First event: any event
+ *   - Return event: any event
+ *   - Cohort A: users with >= 2 "save item" in first 10 days
+ *   - Cohort B: users with < 2 "save item" in first 10 days
+ *   - Expected: Cohort A retains at 4+ weeks; Cohort B drops sharply after week 3
+ *
+ *   Report 2: Post-Day-25 Activity
+ *   - Report type: Insights
+ *   - Event: any event
+ *   - Filter: time > first_event + 25 days
+ *   - Cohort A: >= 2 early saves; Cohort B: < 2 early saves
+ *   - Expected: Cohort B has ~70% fewer events in the late window
+ *
+ * REAL-WORLD ANALOGUE: Saving items signals purchase intent and product
+ * engagement; users who curate a wishlist early are more likely to return.
+ *
  * ============================================================================
  * EXPECTED METRICS SUMMARY
  * ============================================================================
@@ -247,6 +343,13 @@ const spiritAnimals = ["duck", "dog", "otter", "penguin", "cat", "elephant", "li
  * View-Item Magic Number     | over (9+) checkouts/user| 1x         | ~ 0.7x      | -30%
  * Signup TTC by Loyalty      | gold/plat median TTC    | 1x         | ~ 0.67x     | -33%
  * Signup TTC by Loyalty      | bronze median TTC       | 1x         | ~ 1.33x     | +33%
+ * Checkout Experiment         | Express Checkout conv   | 1x         | ~ 1.25x     | +25%
+ * Checkout Experiment         | Social Proof conv       | 1x         | ~ 1.15x     | +15%
+ * Checkout Experiment         | Social Proof TTC        | 1x         | ~ 0.9x      | -10%
+ * Dark Theme Power Users      | dark-theme conv rate    | 1x         | ~ 1.3x      | +30%
+ * Dark Theme Power Users      | light-theme conv rate   | 1x         | ~ 0.85x     | -15%
+ * Save-Item Retention         | post-d25 events (saver) | 1x         | ~ 1x        | baseline
+ * Save-Item Retention         | post-d25 events (non-s) | 1x         | ~ 0.3x      | -70%
  * ============================================================================
  */
 
@@ -462,6 +565,15 @@ const config = {
 			requireRepeats: true,
 			weight: 10,
 			order: "last-fixed",
+			experiment: {
+				name: "Express Checkout",
+				variants: [
+					{ name: "Control" },
+					{ name: "Express Checkout", conversionMultiplier: 1.25 },
+					{ name: "Social Proof", conversionMultiplier: 1.15, ttcMultiplier: 0.9 },
+				],
+				startDaysBeforeEnd: 30,
+			},
 		}
 
 	],
@@ -496,6 +608,18 @@ const config = {
 	groupProps: {},
 	lookupTables: [],
 	hook: function (record, type, meta) {
+
+		// H9: Dark Theme Power Users (funnel-pre)
+		// Dark-theme users convert 1.3x better on the purchase funnel;
+		// light-theme users convert 0.85x. Custom-theme is unchanged.
+		if (type === "funnel-pre") {
+			const isPurchaseFunnel = meta.funnel?.sequence?.includes("checkout");
+			if (isPurchaseFunnel) {
+				const theme = meta.profile?.theme;
+				if (theme === "dark") record.conversionRate = Math.min(95, Math.round(record.conversionRate * 1.3));
+				else if (theme === "light") record.conversionRate = Math.round(record.conversionRate * 0.85);
+			}
+		}
 
 		if (type === "event") {
 			// unflattering 'items'
@@ -688,6 +812,25 @@ const config = {
 				}
 			}
 
+		}
+
+		// H10: Save-Item Retention (everything — retention magic number)
+		// Born-in-dataset users with 2+ "save item" in their first 10 days
+		// retain; users below the threshold lose ~70% of events after day 25.
+		if (type === "everything" && meta.userIsBornInDataset) {
+			const firstT = record[0]?.time;
+			if (firstT) {
+				const window10 = dayjs(firstT).add(10, 'days').toISOString();
+				const saves = record.filter(e => e.event === 'save item' && e.time <= window10).length;
+				if (saves < 2) {
+					const cutoff = dayjs(firstT).add(25, 'days');
+					for (let i = record.length - 1; i >= 0; i--) {
+						if (dayjs(record[i].time).isAfter(cutoff) && chance.bool({ likelihood: 70 })) {
+							record.splice(i, 1);
+						}
+					}
+				}
+			}
 		}
 
 		// Filter out events tagged for removal in the event hook

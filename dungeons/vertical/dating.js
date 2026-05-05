@@ -48,7 +48,7 @@ const chance = u.initChance(SEED);
 
 /*
  * =====================================================================================
- * ANALYTICS HOOKS (9 hooks)
+ * ANALYTICS HOOKS (10 hooks)
  * =====================================================================================
  *
  * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable via
@@ -196,6 +196,22 @@ const chance = u.initChance(SEED);
  *
  * REAL-WORLD ANALOGUE: Premium notifications + boost surface matches faster.
  *
+ * -------------------------------------------------------------------------------------
+ * 10. AGE RANGE AFFECTS DATE CONVERSION (funnel-pre)
+ * -------------------------------------------------------------------------------------
+ * PATTERN: On the Date Funnel (message sent → phone number exchanged →
+ * date scheduled), users aged 25-34 convert at 1.3x baseline; 40+ at 0.6x.
+ * Scoped to the funnel containing "date scheduled".
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *   Report 1: Date Funnel Conversion by Age Range
+ *   - Funnels > "message sent" → "phone number exchanged" → "date scheduled"
+ *   - Breakdown: age_range
+ *   - Expected: 25-29 / 30-34 ~ 1.3x baseline; 40+ ~ 0.6x
+ *
+ * REAL-WORLD ANALOGUE: Peak dating age ranges convert faster to in-person
+ * dates; older users are more selective.
+ *
  * =====================================================================================
  * EXPECTED METRICS SUMMARY
  * =====================================================================================
@@ -212,6 +228,8 @@ const chance = u.initChance(SEED);
  * Valentine's Day Spike       | signups days 58-63   | 1x       | 3x       | 3x
  * Off-App Retention           | D30 retention        | ~ 20%    | ~ 60%    | 3x
  * Match Flow T2C              | median min by tier   | 1x       | 0.71x/1.4x| ~ 2x range
+ * Age Range Date Conv         | date funnel 25-34    | 1x       | 1.3x       | 1.3x
+ * Age Range Date Conv         | date funnel 40+      | 1x       | 0.6x       | 0.6x
  */
 
 /** @type {Config} */
@@ -452,6 +470,20 @@ const config = {
 	lookupTables: [],
 
 	hook: function (record, type, meta) {
+
+		// HOOK 10: AGE RANGE AFFECTS DATE CONVERSION (funnel-pre)
+		// 25-29 / 30-34 convert 1.3x on the date funnel; 40+ at 0.6x.
+		if (type === "funnel-pre") {
+			const isDateFunnel = meta.funnel?.sequence?.includes("date scheduled");
+			if (isDateFunnel) {
+				const age = meta.profile?.age_range;
+				if (age === "25-29" || age === "30-34") {
+					record.conversionRate = Math.min(95, Math.round(record.conversionRate * 1.3));
+				} else if (age === "40+") {
+					record.conversionRate = Math.round(record.conversionRate * 0.6);
+				}
+			}
+		}
 
 		// HOOK 9 (T2C): MATCH FLOW TIME-TO-CONVERT (funnel-post)
 		// Elite users complete swipe→match→message funnel 1.4x faster

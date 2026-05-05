@@ -31,6 +31,9 @@ const chance = u.initChance(SEED);
  *
  * - 5,000 users over 100 days
  * - 600,000 events across 18 event types
+ * - 10 hooks (version stamping, ticket volume, conversion boost, magic number,
+ *   TTC scaling, claims experiment, risk approval, doc upload retention,
+ *   renewal spike, claim-to-premium)
  * - 5 funnels (onboarding, application, approval, claims, renewal)
  * - 5 insurance types as super property (auto, home, life, health, renters)
  * - Deterministic app versioning (2.10 → 2.11 → 2.12 → 2.13)
@@ -52,11 +55,13 @@ const chance = u.initChance(SEED);
 
 /*
  * ===================================================================
- * ANALYTICS HOOKS (5 hooks)
+ * ANALYTICS HOOKS (10 hooks)
  *
- * Adds 5. APPLICATION COMPLETION TIME-TO-CONVERT: business 0.74x faster,
- * family 1.3x slower (everything hook). Discover via TTC breakdown by account_type.
- * Measured via cross-event SQL (application started → application approved).
+ * Hooks 1-5: Version stamping, support ticket volume drop, application
+ * conversion boost, step-count magic number, application TTC by account type.
+ *
+ * Hooks 6-10: Claims experiment, risk profile approval gating, document
+ * upload retention, end-of-quarter renewal spike, claim-to-premium increase.
  * ===================================================================
  *
  * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable
@@ -191,6 +196,127 @@ const chance = u.initChance(SEED);
  * REAL-WORLD ANALOGUE: Business applicants have streamlined processes
  * and pre-filled forms; family policies require more documentation.
  *
+ * -------------------------------------------------------------------
+ * 6. CLAIMS PROCESS EXPERIMENT (funnel config — no hook code)
+ * -------------------------------------------------------------------
+ *
+ * PATTERN: A/B experiment on the Claims Process funnel. The engine
+ * fires $experiment_started events and applies conversion/TTC
+ * multipliers automatically. "Simplified Claims" variant gets 1.3x
+ * conversion and 0.8x time-to-convert. Experiment runs in the last
+ * 35 days of the dataset.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Experiment Results
+ *   - Report type: Funnels
+ *   - Steps: "claim filed" -> "claim status checked" -> "support ticket created"
+ *   - Breakdown: "Variant name"
+ *   - Date range: last 35 days of dataset
+ *   - Expected: "Simplified Claims" has ~1.3x conversion vs "Control"
+ *
+ *   Report 2: Experiment Started Events
+ *   - Report type: Insights
+ *   - Event: "$experiment_started"
+ *   - Breakdown: "Variant name"
+ *   - Expected: roughly equal distribution between Control and Simplified Claims
+ *
+ * REAL-WORLD ANALOGUE: A/B testing a simplified claims flow to reduce
+ * friction and improve completion rates.
+ *
+ * -------------------------------------------------------------------
+ * 7. RISK PROFILE AFFECTS APPROVAL (funnel-pre)
+ * -------------------------------------------------------------------
+ *
+ * PATTERN: In the funnel-pre hook, low-risk users get 1.8x approval
+ * funnel conversion (capped at 95%), high-risk users get 0.3x.
+ * Medium-risk users are unchanged.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Application Approval Funnel by Risk Profile
+ *   - Report type: Funnels
+ *   - Steps: "application submitted" -> "application approved" -> "policy activated"
+ *   - Breakdown: "risk_profile" (user property)
+ *   - Expected: low >> medium >> high conversion rates
+ *
+ * REAL-WORLD ANALOGUE: Underwriting engines auto-approve low-risk
+ * applicants and require manual review for high-risk ones.
+ *
+ * -------------------------------------------------------------------
+ * 8. DOCUMENT UPLOAD RETENTION (everything — retention magic number)
+ * -------------------------------------------------------------------
+ *
+ * PATTERN: Users who upload 3+ documents in their first 14 days
+ * retain normally. Users with fewer uploads lose 75% of events after
+ * day 30. Only affects born-in-dataset users.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Retention by Document Upload Cohort
+ *   - Report type: Retention
+ *   - Starting event: "account created"
+ *   - Return event: any event
+ *   - Cohort A: users with >= 3 "document uploaded" in first 14 days
+ *   - Cohort B: users with < 3 "document uploaded" in first 14 days
+ *   - Expected: Cohort A retains well past day 30; Cohort B drops off sharply
+ *
+ *   Report 2: Post-Day-30 Event Volume
+ *   - Report type: Insights
+ *   - Event: all events
+ *   - Compare doc-uploader cohort vs non-uploader
+ *   - Expected: non-uploaders have ~75% fewer events after day 30
+ *
+ * REAL-WORLD ANALOGUE: Users who complete onboarding paperwork early
+ * are invested in the product and retain; those who don't churn.
+ *
+ * -------------------------------------------------------------------
+ * 9. END-OF-QUARTER RENEWAL SPIKE (everything — temporal)
+ * -------------------------------------------------------------------
+ *
+ * PATTERN: Days 85-95 of the dataset get 3x renewal completed events
+ * and 2x coverage reviewed events via cloning. Simulates end-of-quarter
+ * policy renewal batch processing.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Renewal Volume Over Time
+ *   - Report type: Insights
+ *   - Event: "renewal completed"
+ *   - Measure: Total
+ *   - Line chart by day
+ *   - Expected: visible spike at days 85-95, ~3x baseline volume
+ *
+ *   Report 2: Coverage Review Spike
+ *   - Report type: Insights
+ *   - Event: "coverage reviewed"
+ *   - Line chart by day
+ *   - Expected: ~2x volume during days 85-95
+ *
+ * REAL-WORLD ANALOGUE: Insurance companies batch-process renewals at
+ * quarter-end, producing predictable volume spikes.
+ *
+ * -------------------------------------------------------------------
+ * 10. CLAIM-TO-PREMIUM INCREASE (event — closure Map)
+ * -------------------------------------------------------------------
+ *
+ * PATTERN: After a user files a claim, their next "payment made" event
+ * gets premium_amount doubled (2.0x). Uses a module-level Map to
+ * track state across events. The Map entry is consumed (deleted) on
+ * the first payment after the claim, so the effect is one-shot.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: Average Premium After Claim
+ *   - Report type: Insights
+ *   - Event: "payment made"
+ *   - Measure: Average of "premium_amount"
+ *   - Cohort A: users who did "claim filed" before
+ *   - Cohort B: users who never filed a claim
+ *   - Expected: Cohort A premium_amount ~ 2.0x Cohort B
+ *
+ * REAL-WORLD ANALOGUE: Insurance premiums increase after filing a claim.
+ *
  * ===================================================================
  * EXPECTED METRICS SUMMARY
  * ===================================================================
@@ -204,7 +330,17 @@ const chance = u.initChance(SEED);
  * Step-Count Magic Number | over approvals/user     | 1x       | 0.6x    | -40%
  * Application TTC         | business vs individual  | 1x       | 0.74x   | faster
  * Application TTC         | family vs individual    | 1x       | 1.3x    | slower
+ * Claims Experiment       | simplified vs control   | 1x       | 1.3x    | +30%
+ * Risk Profile Approval   | low vs medium conv rate | 1x       | 1.8x    | +80%
+ * Risk Profile Approval   | high vs medium conv rate| 1x       | 0.3x    | -70%
+ * Document Upload Ret.    | post-d30 non-uploaders  | 1x       | 0.25x   | -75%
+ * Renewal Spike           | renewals d85-95 vs base | 1x       | 3x      | +200%
+ * Renewal Spike           | reviews d85-95 vs base  | 1x       | 2x      | +100%
+ * Claim-to-Premium        | premium after claim     | 1x       | 2.0x    | +100%
  */
+
+// ── H10 closure state: tracks users who filed a claim ──
+const claimFilers = new Map();
 
 /** @type {Config} */
 const config = {
@@ -388,6 +524,7 @@ const config = {
 			properties: {
 				payment_method: ["credit_card", "bank_transfer", "auto_pay", "check"],
 				amount: u.weighNumRange(30, 800, 0.3, 150),
+				premium_amount: u.weighNumRange(50, 600, 0.3, 150),
 				payment_status: ["success", "success", "success", "success", "failed"],
 			},
 		},
@@ -501,6 +638,14 @@ const config = {
 			conversionRate: 50,
 			timeToConvert: 24,
 			weight: 2,
+			experiment: {
+				name: "Simplified Claims Flow",
+				variants: [
+					{ name: "Control" },
+					{ name: "Simplified Claims", conversionMultiplier: 1.3, ttcMultiplier: 0.8 },
+				],
+				startDaysBeforeEnd: 35,
+			},
 		},
 		{
 			name: "Policy Renewal",
@@ -532,31 +677,50 @@ const config = {
 
 	// ── Hook Function ──
 	/**
-	 * ARCHITECTED ANALYTICS HOOKS
+	 * ARCHITECTED ANALYTICS HOOKS (10 total)
 	 *
-	 * This hook function creates 5 deliberate patterns in the data:
+	 * This hook function creates 10 deliberate patterns in the data:
 	 *
-	 * 1. VERSION STAMPING (everything): Every event gets a deterministic app_version
-	 *    based on its final timestamp. v2.10 → v2.11 → v2.12 → v2.13.
-	 *    All users shift simultaneously on release dates. Uses the everything
-	 *    hook (not event hook) because funnel events adjust time after the
-	 *    event hook runs.
-	 *
-	 * 2. SUPPORT TICKET VOLUME (everything): Pre-v2.13 period has inflated
-	 *    support ticket volume (2-3 extra tickets per user with bug-related
-	 *    categories). Post-v2.13, tickets are progressively removed — creating
-	 *    a clear volume drop that trends downward.
-	 *
-	 * 3. APPLICATION CONVERSION BOOST (everything): Pre-v2.13, ~40% of
-	 *    application approved and policy activated events are removed,
-	 *    lowering the effective funnel conversion rate. Post-v2.13 events
-	 *    are left intact, making the conversion visibly jump up.
+	 * 1. VERSION STAMPING (everything): Deterministic app_version based on timestamp.
+	 * 2. SUPPORT TICKET VOLUME (everything): Inflated pre-v2.13, progressive drop post.
+	 * 3. APPLICATION CONVERSION BOOST (everything): Pre-v2.13 approval drop.
+	 * 4. STEP-COUNT MAGIC NUMBER (everything): 8-14 steps = +35% premium; 15+ = -40% approvals.
+	 * 5. APPLICATION TTC (everything): Business 0.74x faster, family 1.3x slower.
+	 * 6. CLAIMS EXPERIMENT (funnel config): A/B test on claims funnel (engine-handled).
+	 * 7. RISK PROFILE APPROVAL (funnel-pre): Low-risk 1.8x, high-risk 0.3x conversion.
+	 * 8. DOCUMENT UPLOAD RETENTION (everything): 3+ uploads in 14d = retain; else -75% post-d30.
+	 * 9. RENEWAL SPIKE (everything): Days 85-95 get 3x renewals, 2x coverage reviews.
+	 * 10. CLAIM-TO-PREMIUM (event): Premium 2.0x on first payment after claim filed.
 	 */
 	hook: function (record, type, meta) {
 		// =============================================================
-		// All hooks run in the "everything" hook. Hook #5 (TTC scaling)
-		// runs first since it modifies timestamps; Hook #1 (version
-		// stamping) runs LAST so versions reflect final timestamps.
+		// H7: RISK PROFILE AFFECTS APPROVAL (funnel-pre)
+		// =============================================================
+		if (type === "funnel-pre") {
+			const isApprovalFunnel = meta.funnel?.sequence?.includes("application approved");
+			if (isApprovalFunnel) {
+				const risk = meta.profile?.risk_profile;
+				if (risk === "low") record.conversionRate = Math.min(95, Math.round(record.conversionRate * 1.8));
+				else if (risk === "high") record.conversionRate = Math.round(record.conversionRate * 0.3);
+			}
+		}
+
+		// =============================================================
+		// H10: CLAIM-TO-PREMIUM INCREASE (event — closure Map)
+		// =============================================================
+		if (type === "event") {
+			if (record.event === "claim filed") {
+				claimFilers.set(record.user_id, true);
+			}
+			if (record.event === "payment made" && claimFilers.has(record.user_id)) {
+				record.premium_amount = Math.round((record.premium_amount || 500) * 2.0);
+				claimFilers.delete(record.user_id);
+			}
+		}
+
+		// =============================================================
+		// Everything hooks: H5 first (timestamps), then H2-H4, then
+		// H8-H9, then H1 (version stamping LAST).
 		// =============================================================
 		if (type === "everything") {
 			const datasetStart = dayjs.unix(meta.datasetStart);
@@ -749,6 +913,70 @@ const config = {
 						userEvents.splice(i, 1);
 					}
 				}
+			}
+
+			// ─── Hook #8: DOCUMENT UPLOAD RETENTION ───
+			// Users with 3+ "document uploaded" in first 14 days retain;
+			// others lose 75% of events post-day-30.
+			if (meta.userIsBornInDataset) {
+				const firstT = userEvents[0]?.time;
+				if (firstT) {
+					const window14 = dayjs(firstT).add(14, "days").toISOString();
+					const docUploads = userEvents.filter(
+						(e) => e.event === "document uploaded" && e.time <= window14
+					).length;
+					if (docUploads < 3) {
+						const cutoff = dayjs(firstT).add(30, "days");
+						for (let i = userEvents.length - 1; i >= 0; i--) {
+							if (
+								dayjs(userEvents[i].time).isAfter(cutoff) &&
+								chance.bool({ likelihood: 75 })
+							) {
+								userEvents.splice(i, 1);
+							}
+						}
+					}
+				}
+			}
+
+			// ─── Hook #9: END-OF-QUARTER RENEWAL SPIKE ───
+			// Days 85-95 get 3x renewal clones + 2x coverage reviewed clones
+			{
+				const spikeStart = datasetStart.add(85, "days");
+				const spikeEnd = datasetStart.add(95, "days");
+				const clones = [];
+				userEvents.forEach((e) => {
+					const t = dayjs(e.time);
+					if (t.isAfter(spikeStart) && t.isBefore(spikeEnd)) {
+						if (e.event === "renewal completed") {
+							for (let c = 0; c < 2; c++) {
+								clones.push({
+									...e,
+									time: t
+										.add(
+											chance.integer({ min: 5, max: 240 }),
+											"minutes"
+										)
+										.toISOString(),
+									insert_id: chance.guid(),
+								});
+							}
+						}
+						if (e.event === "coverage reviewed") {
+							clones.push({
+								...e,
+								time: t
+									.add(
+										chance.integer({ min: 5, max: 120 }),
+										"minutes"
+									)
+									.toISOString(),
+								insert_id: chance.guid(),
+							});
+						}
+					}
+				});
+				if (clones.length) userEvents.push(...clones);
 			}
 
 			// ─── Hook #1: VERSION STAMPING ───

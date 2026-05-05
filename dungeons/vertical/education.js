@@ -52,7 +52,7 @@ const chance = u.initChance(SEED);
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (9 hooks)
+ * ANALYTICS HOOKS (10 hooks)
  * ═══════════════════════════════════════════════════════════════════════════════
  *
  * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable via
@@ -288,6 +288,32 @@ const chance = u.initChance(SEED);
  *
  * REAL-WORLD ANALOGUE: Paid commitment accelerates throughput.
  *
+ * ---------------------------------------------------------------
+ * 10. SOCIAL LEARNING EXPERIMENT (funnel experiment)
+ *
+ * PATTERN: A/B experiment on the Social Learning funnel (discussion
+ * posted → study group joined → resource downloaded). "AI Study
+ * Buddy" variant boosts conversion 1.4x and speeds TTC to 0.85x.
+ * Activates 30 days before dataset end.
+ *
+ * HOW TO FIND IT IN MIXPANEL:
+ *
+ *   Report 1: $experiment_started by Variant
+ *   - Report type: Insights
+ *   - Event: "$experiment_started"
+ *   - Measure: Total
+ *   - Breakdown: "$experiment_name" and "Variant"
+ *   - Expected: ~50% Control, ~50% AI Study Buddy
+ *
+ *   Report 2: Social Learning Funnel by Variant
+ *   - Report type: Funnels
+ *   - Steps: "discussion posted" → "study group joined" → "resource downloaded"
+ *   - Breakdown: Variant
+ *   - Expected: AI Study Buddy ~ 1.4x conversion vs Control
+ *
+ * REAL-WORLD ANALOGUE: AI-powered study companions boost social
+ * engagement and resource discovery in cohort-based courses.
+ *
  * ═══════════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY
  * ═══════════════════════════════════════════════════════════════════════════════
@@ -304,6 +330,8 @@ const chance = u.initChance(SEED);
  * Free vs Paid            | Course completion     | 15%      | 33%          | 2.2x
  * Playback Speed          | Quiz score (speed)    | ~ 65     | ~ 73         | +8 pt
  * Course Completion T2C   | median min by tier    | 1x       | 0.5x/1.8x    | ~ 3.6x range
+ * Social Learning Exp    | AI variant conversion | 1x       | 1.4x          | 1.4x
+ * Social Learning Exp    | AI variant TTC        | 1x       | 0.85x         | -15%
  */
 
 // Generate consistent IDs for lookup tables and event properties
@@ -376,6 +404,14 @@ const config = {
 			conversionRate: 50,
 			timeToConvert: 12,
 			weight: 2,
+			experiment: {
+				name: "AI Study Buddy",
+				variants: [
+					{ name: "Control" },
+					{ name: "AI Study Buddy", conversionMultiplier: 1.4, ttcMultiplier: 0.85 },
+				],
+				startDaysBeforeEnd: 30,
+			},
 		},
 		{
 			// Instructor interaction loop
@@ -619,7 +655,7 @@ const config = {
 	/**
 	 * ARCHITECTED ANALYTICS HOOKS
 	 *
-	 * This hook function creates 9 deliberate patterns in the data:
+	 * This hook function creates 10 deliberate patterns in the data:
 	 *
 	 * 1. STUDENT VS INSTRUCTOR PROFILES: Instructor profiles get teaching attributes; students get learning attributes
 	 * 2. DEADLINE CRAMMING: Assignments submitted on Sun/Mon are rushed and lower quality
@@ -630,6 +666,7 @@ const config = {
 	 * 7. FREE VS PAID COURSES: Paid subscribers convert through Course Completion funnel at ~2.2x rate (funnel-pre scoped to cert funnel only)
 	 * 8. PLAYBACK SPEED CORRELATION: Speed learners paradoxically score higher; thorough learners get extended time
 	 * 9. COURSE COMPLETION TTC: Annual subscribers complete cert funnel faster; free users slower (everything hook)
+	 * 10. SOCIAL LEARNING EXPERIMENT: A/B test on Social Learning funnel with AI Study Buddy variant (funnel experiment config)
 	 */
 	hook: function (record, type, meta) {
 		// HOOK 1: STUDENT VS INSTRUCTOR PROFILES (user) — role-based attributes.
