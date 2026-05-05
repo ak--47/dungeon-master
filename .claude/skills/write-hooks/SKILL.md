@@ -254,8 +254,39 @@ control group, but not so broad they catch everyone:
 | `events.some(e => e.event === X)` with common X | 90%+ of users qualify | Require 3+ events: `events.filter(...).length >= 3` |
 | `charCodeAt(0) % 50 === 0` | Only 2% of users | Increase modulus denominator or use `% 10` for 10% |
 | `profile.tier === "premium"` | Fixed by config distribution | Adjust userProps distribution if cohort too small |
+| `earlyEvents.length >= 5` for a low-weight event | 0% qualify (impossible threshold) | Check actual distribution first, set at ~80th percentile |
 
 Target: 10-30% of users in the affected cohort for clean signal at 10K users.
+
+### Threshold Calibration (REV 11)
+
+When a hook gates on "N+ events of type X in first Y days," check the actual
+distribution BEFORE choosing the threshold. With 200 event types and 2.5
+events/user/day, a weight-7 event might produce only ~0.2 per user per day.
+Setting threshold=5 for 7 days means ~0% of users qualify. Run this check
+in your smoke test:
+
+```sql
+SELECT n, COUNT(*) FROM (
+  SELECT user_id, COUNT(*) as n FROM events WHERE event = 'X' GROUP BY user_id
+) GROUP BY n ORDER BY n LIMIT 15;
+```
+
+Set the threshold at approximately the 80th percentile of the distribution.
+
+### Compounding Drop Hooks (REV 11)
+
+Use at most ONE drop-based retention hook per dungeon. Multiple hooks that
+each drop events after the same day threshold compound destructively:
+
+- Hook A: drop 40% after day 21 for non-loyal users
+- Hook B: drop 60% after day 21 for non-streak users
+- Combined: 76% drop for users in both groups (which is 95% of users)
+
+The control group barely exists. Fix: use boost-based patterns
+(`scaleEventCount(events, "X", 1.8)`) for positive cohorts instead of drops
+for negative cohorts. Boosts are additive and don't interact destructively.
+Reserve drops for a single churn/retention effect per dungeon.
 
 ## Workflow
 

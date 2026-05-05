@@ -1315,24 +1315,59 @@ Each hook's detailed section follows this template (same for single and multi-du
 
 Use NAILED and STRONG as passing verdicts. WEAK, NONE, and INVERSE are failing verdicts that require investigation.
 
+## Step 4b: Write Verification SQL for User Dungeons
+
+When verifying a dungeon in `dungeons/user/`, write a standalone DuckDB SQL
+file alongside the dungeon at `dungeons/user/<name>-verifications.sql`. This
+file is the reproducible verification artifact — anyone can re-run it against
+fresh data.
+
+Follow the format in `research/verifications/v2/` (see `research/verifications/v2/README.md`):
+
+```sql
+-- ============================================================================
+-- <name>.js — Hook Verification SQL (N hooks)
+-- ============================================================================
+-- USAGE:
+--   1. node scripts/verify-runner.mjs dungeons/user/<name>.js verify-<name>
+--   2. duckdb < dungeons/user/<name>-verifications.sql
+--   3. rm -f verify-<name>-*
+-- ============================================================================
+
+-- HOOK N: NAME (TYPE)
+-- PATTERN: <from dungeon JSDoc>
+-- R1 RESULT: <observed> => <verdict>
+<SQL>;
+```
+
+Each query block includes the pattern description, observed result, and verdict
+as SQL comments. This makes the file self-documenting and grep-friendly.
+
+**This step is mandatory for user dungeons.** Vertical dungeons already have
+their SQL in `research/verifications/v2/`. User dungeons keep theirs co-located
+with the dungeon file.
+
 ## Step 5: Cleanup
 
 After writing the report:
 
 ```bash
 rm -f ./data/verify-*
-rm -f ./verify-runner.mjs
+rm -f ./verify-*
 ```
 
-Remove ALL files matching the `verify-*` pattern in `./data/` (covers all per-dungeon prefixes like `verify-fintech-*`, `verify-gaming-*`, etc.). Also remove the temporary runner script.
+Remove ALL files matching the `verify-*` pattern in `./data/` and project root
+(covers all per-dungeon prefixes like `verify-fintech-*`, `verify-gaming-*`,
+etc.). Also remove any temporary runner scripts.
 
 ## Final Output
 
 After cleanup, tell the user:
 1. Where the report is: `./research/hook-results.md`
-2. Whether the query log was written: `./research/hook-query-log.txt` (only if `./research/` existed)
-3. How many hooks passed, were weak, or failed (per dungeon if batch mode)
-4. A one-line summary of the most interesting finding
+2. Where the verification SQL is: `dungeons/user/<name>-verifications.sql` (for user dungeons)
+3. Whether the query log was written: `./research/hook-query-log.txt` (only if `./research/` existed)
+4. How many hooks passed, were weak, or failed (per dungeon if batch mode)
+5. A one-line summary of the most interesting finding
 
 If hooks failed, note that `hook-results.md` can be used as context for fixing the hooks (e.g., "read hook-results.md and fix the failing hooks in <dungeon-file>").
 

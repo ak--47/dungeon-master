@@ -152,6 +152,37 @@ double-fire mutations.
     read it from `meta.scd.<scdName>` and extract the latest entry. Reading
     `meta.profile.<scdPropName>` will always be `undefined`.
 
+18. **Calibrate thresholds against actual event distributions.** When a hook
+    gates behavior on "N+ events of type X in first Y days," the threshold
+    must be achievable given the event weight, total event rate, and number
+    of event types. With 200 event types and 2.5 events/user/day, a weight-7
+    event gets ~0.2 occurrences/day. A threshold of 5 in 7 days is impossible
+    for most users. Always check the distribution before setting thresholds:
+    ```js
+    // Run this query to see the actual distribution
+    // SELECT count, COUNT(*) FROM (
+    //   SELECT user_id, COUNT(*) as count FROM events WHERE event = 'X' GROUP BY user_id
+    // ) GROUP BY count ORDER BY count;
+    ```
+    Set thresholds at roughly the 80th percentile — enough users exceed it to
+    form a meaningful cohort (~20%), but not so many that "everyone qualifies."
+
+19. **Prefer boosts over drops for retention hooks.** Using
+    `scaleEventCount(events, "X", 1.8)` on the positive cohort produces
+    cleaner signal than `dropEventsWhere` on the negative cohort.
+    Drops compound with other drop hooks and persona-level churn — two hooks
+    each dropping 40% after day 21 combine to drop 76% for users in both
+    cohorts, masking all intended signal. Boosts are additive and don't
+    interact destructively with other hooks. Reserve drops for single-hook
+    churn patterns where the cohort is precisely defined.
+
+20. **Compounding drop hooks destroy signal.** If Hook A drops 40% after
+    day 21 for "non-loyal" users AND Hook B drops 60% after day 21 for
+    "non-streak" users, and 95% of users are in BOTH groups, then baseline
+    post-day-21 events are pruned by ~76%. The "control group" barely exists.
+    Fix: use at most ONE drop-based retention hook per dungeon. Move other
+    retention effects to boost-based patterns (principle #19).
+
 ---
 
 ## 3. Recipe Catalog
