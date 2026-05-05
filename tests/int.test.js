@@ -709,6 +709,8 @@ describe.sequential('orchestrators', () => {
 			numUsers: 2,
 			numEvents: 50,
 			numDays: 30,
+			datasetStart: '2024-01-01T00:00:00Z',
+			datasetEnd: '2024-01-31T00:00:00Z',
 			userProps: {},
 			scdProps: {},
 			events: [

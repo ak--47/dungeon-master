@@ -1,6 +1,6 @@
 //@ts-nocheck
 import { describe, test, expect } from 'vitest';
-import { emulateBreakdown } from '../../lib/verify/emulate-breakdown.js';
+import { emulateBreakdown } from '../lib/verify/emulate-breakdown.js';
 
 const t0 = Date.parse('2024-02-01T00:00:00Z');
 const ev = (event, time, extra = {}) => ({ event, time: new Date(t0 + time).toISOString(), ...extra });

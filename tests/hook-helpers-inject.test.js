@@ -4,8 +4,8 @@ import {
 	injectAfterEvent,
 	injectBetween,
 	injectBurst,
-} from '../../lib/hook-helpers/inject.js';
-import { initChance } from '../../lib/utils/utils.js';
+} from '../lib/hook-helpers/inject.js';
+import { initChance } from '../lib/utils/utils.js';
 
 const t0 = Date.parse('2024-02-01T00:00:00Z');
 const isoAt = (offsetMs) => new Date(t0 + offsetMs).toISOString();

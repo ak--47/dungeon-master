@@ -6,8 +6,8 @@ import {
 	scaleEventCount,
 	scalePropertyValue,
 	shiftEventTime,
-} from '../../lib/hook-helpers/mutate.js';
-import { initChance } from '../../lib/utils/utils.js';
+} from '../lib/hook-helpers/mutate.js';
+import { initChance } from '../lib/utils/utils.js';
 
 beforeEach(() => initChance('mutate-tests'));
 

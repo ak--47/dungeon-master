@@ -283,11 +283,13 @@ describe('Feature 4: Data Quality', () => {
 	test('creates duplicate events', async () => {
 		const baseResult = await DUNGEON_MASTER({
 			numUsers: 30, numEvents: 1000, numDays: 30, seed: 'dq-dupes',
+			datasetStart: '2024-01-01T00:00:00Z', datasetEnd: '2024-01-31T00:00:00Z',
 			events: [{ event: 'action' }],
 		});
 		const baseCount = Array.from(baseResult.eventData).length;
 		const result = await DUNGEON_MASTER({
 			numUsers: 30, numEvents: 1000, numDays: 30, seed: 'dq-dupes',
+			datasetStart: '2024-01-01T00:00:00Z', datasetEnd: '2024-01-31T00:00:00Z',
 			events: [{ event: 'action' }],
 			dataQuality: { duplicateRate: 0.1 }
 		});

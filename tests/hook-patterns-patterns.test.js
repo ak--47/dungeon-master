@@ -8,15 +8,15 @@
  */
 
 import { describe, test, expect } from 'vitest';
-import DUNGEON_MASTER from '../../index.js';
-import { emulateBreakdown } from '../../lib/verify/emulate-breakdown.js';
+import DUNGEON_MASTER from '../index.js';
+import { emulateBreakdown } from '../lib/verify/emulate-breakdown.js';
 import {
 	applyFrequencyByFrequency,
 	applyFunnelFrequencyBreakdown,
 	applyAggregateByBin,
 	applyTTCBySegment,
 	applyAttributedBySource,
-} from '../../lib/hook-patterns/index.js';
+} from '../lib/hook-patterns/index.js';
 import dayjs from 'dayjs';
 
 const FIXED_NOW = dayjs('2024-02-02').unix();

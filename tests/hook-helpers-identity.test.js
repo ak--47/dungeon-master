@@ -1,6 +1,6 @@
 //@ts-nocheck
 import { describe, test, expect } from 'vitest';
-import { isPreAuthEvent, splitByAuth } from '../../lib/hook-helpers/identity.js';
+import { isPreAuthEvent, splitByAuth } from '../lib/hook-helpers/identity.js';
 
 const isoAt = (ms) => new Date(ms).toISOString();
 

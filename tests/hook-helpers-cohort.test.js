@@ -5,7 +5,7 @@ import {
 	binUsersByEventInRange,
 	countEventsBetween,
 	userInProfileSegment,
-} from '../../lib/hook-helpers/cohort.js';
+} from '../lib/hook-helpers/cohort.js';
 
 const mkEv = (event, time) => ({ event, time });
 

@@ -37,8 +37,7 @@ dungeons/
 ├── vertical/       # Customer-facing story dungeons (healthcare, fintech, gaming, etc.)
 └── technical/      # Feature/limit testing dungeons (SCDs, mirrors, groups, scale,
                     # plus pattern-* fixtures and identity-model-verify.js)
-tests/              # Vitest test suite (incl. tests/hook-helpers, hook-patterns,
-                    # identity-model.test.js, my-buddy-stories.test.js)
+tests/              # Vitest test suite (flat — all .test.js files at root level)
 ```
 
 ### Key Patterns
@@ -101,8 +100,8 @@ Uses **Vitest** (ESM-native). Test files:
 - `tests/e2e.test.js` — End-to-end generation + Mixpanel import
 - `tests/advanced-features.test.js` — Surviving advanced features (personas, world events, engagement decay, data quality). Killed-feature tests for subscription/attribution/geo/features/anomalies are `describe.skip`'d after the 1.4 audit.
 - `tests/identity-model.test.js` — Phase 2 identity model (stitch event, attempts, multi-device pool, pre-existing/born-in invariants).
-- `tests/hook-helpers/*.test.js` — Phase 3 atom unit tests (32 tests across 5 files).
-- `tests/hook-patterns/*.test.js` — Phase 4 pattern integration tests + emulator self-tests (9 tests).
+- `tests/hook-helpers-*.test.js` — Phase 3 atom unit tests (32 tests across 5 files).
+- `tests/hook-patterns-*.test.js` — Phase 4 pattern integration tests + emulator self-tests (9 tests).
 - `tests/my-buddy-stories.test.js` — Phase 6 acceptance gate: runs the migrated my-buddy dungeon at small scale and asserts each of its 3 documented stories via `emulateBreakdown`.
 - `tests/sanity.test.js` — Module integration (all dungeon types, formats, batch mode)
 - `tests/performance.test.js` — Context caching, device pools, time shift

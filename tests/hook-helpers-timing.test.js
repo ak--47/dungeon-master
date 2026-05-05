@@ -4,7 +4,7 @@ import {
 	scaleTimingBetween,
 	scaleFunnelTTC,
 	findFirstSequence,
-} from '../../lib/hook-helpers/timing.js';
+} from '../lib/hook-helpers/timing.js';
 
 const t0 = Date.parse('2024-02-01T00:00:00Z');
 const isoAt = (offsetMs) => new Date(t0 + offsetMs).toISOString();

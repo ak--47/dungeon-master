@@ -1,6 +1,6 @@
 //@ts-nocheck
 import { describe, test, expect } from 'vitest';
-import { verifyDungeon } from '../../lib/verify/index.js';
+import { verifyDungeon } from '../lib/verify/index.js';
 import dayjs from 'dayjs';
 
 const FIXED_NOW = dayjs('2024-02-02').unix();
