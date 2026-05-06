@@ -585,6 +585,8 @@ afterEach(() => {
 
 function clearData() {
 	try {
+		const fs = require('fs');
+		if (!fs.existsSync('./data')) fs.mkdirSync('./data', { recursive: true });
 		console.log('clearing data files...');
 		const { execSync } = require('child_process');
 		execSync(`npm run prune`, { stdio: 'ignore' });

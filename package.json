@@ -1,6 +1,6 @@
 {
 	"name": "@ak--47/dungeon-master",
-	"version": "1.4.3",
+	"version": "1.4.4",
 	"description": "generate fancy datasets",
 	"type": "module",
 	"main": "index.js",
@@ -26,7 +26,8 @@
 		"scripts/",
 		"package.json",
 		"README.md",
-		"CHANGELOG.md"
+		"CHANGELOG.md",
+		"HOOKS.md"
 	],
 	"engines": {
 		"node": ">=18.0.0"
