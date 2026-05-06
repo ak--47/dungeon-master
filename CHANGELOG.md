@@ -2,6 +2,14 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.4.5 — 2026-05-06
+
+### Added
+
+- **Progress callback.** Callers can pass `onProgress: (update) => void` on the dungeon config to receive throttled updates during generation, import, and pipeline step transitions. Update frequency is configurable via `progressInterval` (default 500ms). The callback is fault-tolerant — bad functions are caught and disabled after 3 failures, never breaking the job. Return value includes a `progress` summary with update count, error count, and disabled flag.
+- **Mixpanel import progress.** When `onProgress` is set and a Mixpanel token is provided, import progress from `mixpanel-import`'s `progressCallback` is surfaced through the same `onProgress` interface as `{ phase: "import" }` updates.
+- **Full TypeScript typings** for `ProgressUpdate` (discriminated union), `ProgressSummary`, `ProgressGeneration`, `ProgressImport`, and `ProgressStep`.
+
 ## 1.4.4 — 2026-05-06
 
 The "GCS imports actually work now" release.

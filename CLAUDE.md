@@ -107,6 +107,7 @@ Uses **Vitest** (ESM-native). Test files:
 - `tests/performance.test.js` — Context caching, device pools, time shift
 - `tests/hooks.test.js` — Hook system: all hook types, double-fire prevention, patterns (temporal, two-pass, closure state)
 - `tests/features.test.js` — strictEventCount, bornRecentBias, hook strings, product generators, function registry, JSON evaluator
+- `tests/progress.test.js` — Progress callback: throttle, fault tolerance, step updates, disable-after-3, return value summary
 
 ## Core Modules
 
@@ -190,8 +191,22 @@ interface Dungeon {
   // I/O
   writeToDisk, gzip, batchSize, concurrency, verbose
   hook: Hook                    // Transform function (string or function)
+
+  // Observability (1.4.5)
+  onProgress: (update: ProgressUpdate) => void  // Throttled progress callback (fire-and-forget)
+  progressInterval: number      // Min ms between callback invocations (default: 500)
 }
 ```
+
+## Progress Callback (post-1.4.5)
+
+Callers pass `onProgress` on the dungeon config to receive periodic updates. The callback receives a discriminated union (`ProgressUpdate`) with three phases:
+
+- **`generation`** — user/event counts, EPS, memory, percent complete (throttled to `progressInterval`)
+- **`import`** — record type, processed/total, EPS, bytes (sourced from mixpanel-import's `progressCallback`, throttled)
+- **`step`** — pipeline step name with `start`/`complete` status and duration (not throttled)
+
+The callback is fault-tolerant: if it throws 3 times it is silently disabled. Bad values (non-functions) are ignored with a `console.warn` in verbose mode. The return value includes a `progress: { updates, errors, disabled }` summary when a callback was provided.
 
 ## Identity Model (post-1.4)
 

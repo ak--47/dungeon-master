@@ -120,6 +120,24 @@ export interface Dungeon {
     /** If true, prints progress to stdout during generation. */
     verbose?: boolean;
     /**
+     * Optional callback that receives periodic progress updates during generation,
+     * import, and pipeline step transitions. Fire-and-forget: the callback is never
+     * awaited. If it throws 3 times, it is silently disabled for the rest of the job.
+     *
+     * The `update` argument is a discriminated union on `phase`:
+     * - `"generation"` — user/event counts, EPS, memory, percent complete
+     * - `"import"` — record type, processed/total counts, EPS, bytes
+     * - `"step"` — pipeline step name with start/complete status and duration
+     *
+     * @example
+     * onProgress: (update) => {
+     *   if (update.phase === 'generation') ws.send(JSON.stringify(update));
+     * }
+     */
+    onProgress?: (update: ProgressUpdate) => void;
+    /** Minimum interval (ms) between progress callback invocations. Default: 500. Only throttles `generation` and `import` phases; `step` updates always fire immediately. */
+    progressInterval?: number;
+    /**
      * @deprecated Prefer `avgDevicePerUser`. `true` is now an alias for `avgDevicePerUser: 1`
      * (single sticky device per user, every event stamped with that `device_id`). `false`
      * (default) leaves the engine in legacy "no device_id stamping" mode unless
@@ -657,6 +675,12 @@ export interface Context {
     incrementUserCount(): void;
     incrementEventCount(): void;
     isBatchMode(): boolean;
+
+    // Progress callback
+    /** Fire a progress update to the caller's `onProgress` callback (throttled, fault-tolerant). */
+    reportProgress(update: ProgressUpdate): void;
+    /** Return the progress callback summary (updates delivered, errors, disabled flag). */
+    getProgressSummary(): ProgressSummary;
 }
 
 /**
@@ -1053,7 +1077,60 @@ export type Result = {
     userCount?: number;
     groupCount?: number;
     avgEPS?: number;
+    /** Progress callback summary. Only present when `onProgress` was provided. */
+    progress?: ProgressSummary;
 };
+
+// ============= Progress Callback Types =============
+
+/** Discriminator for progress update types. */
+export type ProgressPhase = "generation" | "import" | "step";
+
+/** Progress update emitted during user/event generation (throttled to `progressInterval`). */
+export interface ProgressGeneration {
+    phase: "generation";
+    users: number;
+    events: number;
+    eps: number;
+    memory: string;
+    elapsed: string;
+    percentComplete: number;
+}
+
+/** Progress update emitted during Mixpanel import (throttled to `progressInterval`). */
+export interface ProgressImport {
+    phase: "import";
+    recordType: string;
+    processed: number;
+    total: number;
+    eps: string;
+    bytesProcessed: number;
+}
+
+/** Progress update emitted at pipeline step boundaries (not throttled). */
+export interface ProgressStep {
+    phase: "step";
+    step: string;
+    status: "start" | "complete";
+    /** Milliseconds elapsed (only present on `status: "complete"`). */
+    duration?: number;
+}
+
+/** Discriminated union of all progress update types. Discriminate on the `phase` field. */
+export type ProgressUpdate = ProgressGeneration | ProgressImport | ProgressStep;
+
+/** Convenience type for the `onProgress` callback signature. */
+export type ProgressCallback = (update: ProgressUpdate) => void;
+
+/** Summary of progress callback activity, included in the job result. */
+export interface ProgressSummary {
+    /** Total number of updates successfully delivered to the callback. */
+    updates: number;
+    /** Number of times the callback threw (0-3; disabled after 3). */
+    errors: number;
+    /** True if the callback was disabled due to repeated failures. */
+    disabled: boolean;
+}
 
 // ============= Advanced Feature Types =============
 

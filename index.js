@@ -157,31 +157,49 @@ async function runDungeon(config) {
 
 		// Step 4: Generate ad spend data (if enabled)
 		if (validatedConfig.hasAdSpend) {
+			context.reportProgress({ phase: "step", step: "adspend", status: "start" });
+			const _t4 = Date.now();
 			await generateAdSpendData(context);
+			context.reportProgress({ phase: "step", step: "adspend", status: "complete", duration: Date.now() - _t4 });
 		}
 
 		if (context.config.verbose) logger.info('Starting user and event generation...');
 		// Step 5: Main user and event generation
+		context.reportProgress({ phase: "step", step: "users", status: "start" });
+		const _t5 = Date.now();
 		await userLoop(context);
+		context.reportProgress({ phase: "step", step: "users", status: "complete", duration: Date.now() - _t5 });
 
 		// Step 6: Generate group profiles (if configured)
 		if (validatedConfig.groupKeys && validatedConfig.groupKeys.length > 0) {
+			context.reportProgress({ phase: "step", step: "group-profiles", status: "start" });
+			const _t6 = Date.now();
 			await generateGroupProfiles(context);
+			context.reportProgress({ phase: "step", step: "group-profiles", status: "complete", duration: Date.now() - _t6 });
 		}
 
 		// Step 7: Generate group SCDs (if configured)
 		if (validatedConfig.scdProps && validatedConfig.groupKeys && validatedConfig.groupKeys.length > 0) {
+			context.reportProgress({ phase: "step", step: "group-scds", status: "start" });
+			const _t7 = Date.now();
 			await generateGroupSCDs(context);
+			context.reportProgress({ phase: "step", step: "group-scds", status: "complete", duration: Date.now() - _t7 });
 		}
 
 		// Step 8: Generate lookup tables (if configured)
 		if (validatedConfig.lookupTables && validatedConfig.lookupTables.length > 0) {
+			context.reportProgress({ phase: "step", step: "lookups", status: "start" });
+			const _t8 = Date.now();
 			await generateLookupTables(context);
+			context.reportProgress({ phase: "step", step: "lookups", status: "complete", duration: Date.now() - _t8 });
 		}
 
 		// Step 9: Generate mirror datasets (if configured)
 		if (validatedConfig.mirrorProps && Object.keys(validatedConfig.mirrorProps).length > 0) {
+			context.reportProgress({ phase: "step", step: "mirrors", status: "start" });
+			const _t9 = Date.now();
 			await makeMirror(context);
+			context.reportProgress({ phase: "step", step: "mirrors", status: "complete", duration: Date.now() - _t9 });
 		}
 
 		if (context.config.verbose) logger.info('Data generation completed successfully');
@@ -191,21 +209,23 @@ async function runDungeon(config) {
 		// Flush when writeToDisk is enabled OR batch mode activated (to capture tail data)
 		const shouldFlush = validatedConfig.writeToDisk || context.isBatchMode();
 
-		// Step 10: Flush lookup tables to disk (always as CSVs)
+		// Step 10-11: Flush to disk
 		if (shouldFlush) {
+			context.reportProgress({ phase: "step", step: "flush", status: "start" });
+			const _tFlush = Date.now();
 			await flushLookupTablesToDisk(storage, validatedConfig);
-		}
-
-		// Step 11: Flush other storage containers to disk
-		if (shouldFlush) {
 			await flushStorageToDisk(storage, validatedConfig);
+			context.reportProgress({ phase: "step", step: "flush", status: "complete", duration: Date.now() - _tFlush });
 		}
 
 		// Step 12: Send to Mixpanel (if token provided)
 		// Now happens AFTER disk flush so batch files are available for import
 		let importResults;
 		if (validatedConfig.token) {
+			context.reportProgress({ phase: "step", step: "import", status: "start" });
+			const _t12 = Date.now();
 			importResults = await sendToMixpanel(context);
+			context.reportProgress({ phase: "step", step: "import", status: "complete", duration: Date.now() - _t12 });
 		}
 
 		// Step 13: Compile results
@@ -214,6 +234,8 @@ async function runDungeon(config) {
 
 		const extractedData = extractStorageData(storage);
 
+		const progressSummary = context.getProgressSummary();
+
 		return {
 			...extractedData,
 			importResults,
@@ -221,7 +243,8 @@ async function runDungeon(config) {
 			time: { start, end, delta, human },
 			operations: context.getOperations(),
 			eventCount: context.getStoredEventCount(),
-			userCount: context.getUserCount()
+			userCount: context.getUserCount(),
+			...(progressSummary.updates > 0 || progressSummary.errors > 0 ? { progress: progressSummary } : {})
 		};
 
 	} catch (error) {
