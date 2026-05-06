@@ -2,6 +2,77 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.4.4 — 2026-05-06
+
+The "GCS imports actually work now" release.
+
+### Fixed
+
+- **GCS-sourced imports hung indefinitely.** `streamJSON`, `streamCSV`, and `streamParquet` used `createWriteStream({ gzip: true })` for all GCS writes, setting `Content-Encoding: gzip` on objects. The HTTP transport auto-decompressed on some environments but not others (Cloud Run). When it didn't, raw gzip bytes reached parsers, stream errors didn't propagate through `.pipe()` chains, and the pipeline promise never resolved. Fix: GCS writes no longer use `Content-Encoding: gzip`. Gzip is handled at the application level (pipe through `zlib.createGzip()`), same as local writes.
+- **Group profiles silently skipped in batch mode.** After flush, `groupEntity.length === 0` triggered an early `continue` even when batch files existed on GCS. Events/users/ad-spend had `isBATCH_MODE` fallbacks — groups didn't.
+- **GCS gzip finish-event timing.** Promise resolved on gzip transform's `finish` (compression done) instead of GCS stream's `finish` (upload complete), potentially producing truncated files.
+- **Group events batch mode fallback** (latent). Added `isBATCH_MODE` guard for future use.
+
+### Changed
+
+- **GCS default format is now JSONL.** When `writeToDisk` is a `gs://` path and no `format` is specified, the default is `"json"` instead of `"csv"`. Explicit `format` settings are unaffected.
+- **HOOKS.md shipped in npm package.** The hook encyclopedia (24 recipes, 20 principles, atom/pattern reference) is now included in the published package.
+
+### Added
+
+- **GCS round-trip tests.** Three e2e tests that write to GCS and read back through `mixpanel-import`'s stream parser: default JSONL, gzipped JSONL, and full dungeon (events + users + groups + SCDs + ad spend). Verifies actual record counts, not just file existence.
+
+### Documentation
+
+- **`research/1.4.4-upgrade-guide.md`** — full details on the GCS fix, migration notes, and root cause analysis.
+
+## 1.4.3 — 2026-05-05
+
+### Changed
+
+- **`percentUsersBornInDataset` defaults raised.** The "flat" macro preset (default) changed from 15% to 50%. All other presets raised proportionally (floor 25%). Retention/onboarding hooks now have much larger cohorts for cleaner signal.
+- **Skill rename:** `verify-hooks` → `verify-dungeon`. Reflects broader scope (schema + hooks + identity + experiments).
+- **Test directory cleanup.** Removed benchmark scripts, intellisense test files, and legacy test helpers. Flattened hook helper/pattern test file names.
+
+### Added
+
+- **HOOKS.md recipe 3.22** — Retention Magic Number pattern ("N actions in first X days predicts retention"), drawn from the Twitter dungeon iteration.
+- **Schema validation** (`lib/verify/schema-validator.js`). Catches hooks that introduce undeclared columns. Integrated into `verifyDungeon()`.
+- **Property type helpers:** `dateRange()`, `listOf()`, `objectList()` — complete coverage of all 7 Mixpanel property data types.
+- **Twitter/X dungeon** (`dungeons/user/twitter.js`) — consumer social platform with 4 verified hooks.
+
+### Documentation
+
+- **`research/1.4.3-upgrade-guide.md`** — macro preset migration, retention hook calibration lessons, schema validation API.
+
+## 1.4.2 — 2026-05-04
+
+### Changed
+
+- **All 20 vertical dungeons verified STRONG or NAILED.** 200 hooks across 20 verticals evaluated and fixed via the verify-dungeon pipeline.
+
+### Fixed
+
+- Various hook bugs across `dating`, `social`, `travel`, `community`, `logistics`, `media`, `fintech`, `food-delivery`, `education`, `real-estate`, `devtools`, and `marketplace` dungeons surfaced by `/verify-dungeon`.
+- Vertical dungeon property defaults, temporal hook ordering, and cohort threshold calibration.
+
+## 1.4.1 — 2026-05-04
+
+### Added
+
+- **File path tracking (`getWrittenFiles()`).** HookedArray containers track exact file paths written during a run. Replaces fragile `ls()` + string-filter directory scans. Works for local and `gs://` paths.
+- **`cleanup: true` config option.** Deletes all written files at end of run (local and GCS). Runs in `finally` block.
+- **Cloud Run / serverless OOM guide** in upgrade guide — `batchSize` + `writeToDisk: 'gs://'` + `concurrency: 1` pattern for low peak memory.
+
+### Fixed
+
+- **SCD multi-batch import.** Sender used `.pop()` when discovering SCD batch files — only the last batch was imported. All batch files now imported.
+- **Warnings gated behind `verbose: true`.** Config validator and storage layer warnings no longer fire unconditionally.
+
+### Documentation
+
+- **`research/1.4.1-upgrade-guide.md`** — file tracking API, cleanup option, Cloud Run deployment guide.
+
 ## 1.4.0 — 2026-05-03
 
 The "identity model + hook verification" release. Users get multi-device identity, declarative experiments, and a complete hook authoring pipeline with verification. All 20 vertical dungeons upgraded and verified.
