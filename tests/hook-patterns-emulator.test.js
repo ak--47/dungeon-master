@@ -3,19 +3,28 @@ import { describe, test, expect } from 'vitest';
 import { emulateBreakdown } from '../lib/verify/emulate-breakdown.js';
 
 const t0 = Date.parse('2024-02-01T00:00:00Z');
+const DAY_MS = 86400000;
 const ev = (event, time, extra = {}) => ({ event, time: new Date(t0 + time).toISOString(), ...extra });
+// Day-spanning helper: counting now uses distinct-period (default day) so we
+// must place events on different UTC days to register as separate periods.
+// See lib/verify/counting.js for the rule.
+const evDay = (event, dayOffset, extra = {}) => ({
+	event,
+	time: new Date(t0 + dayOffset * DAY_MS).toISOString(),
+	...extra,
+});
 
 describe('emulateBreakdown', () => {
-	test('frequencyByFrequency: produces metric_freq × breakdown_freq cells', () => {
+	test('frequencyByFrequency: produces metric_freq × breakdown_freq cells (distinct-day counting)', () => {
 		const events = [
-			// user u1: 3 metric, 2 breakdown
-			ev('Buy', 0, { user_id: 'u1' }), ev('Buy', 1, { user_id: 'u1' }), ev('Buy', 2, { user_id: 'u1' }),
-			ev('Click', 3, { user_id: 'u1' }), ev('Click', 4, { user_id: 'u1' }),
-			// user u2: 1 metric, 5 breakdown
-			ev('Buy', 5, { user_id: 'u2' }),
-			...[6, 7, 8, 9, 10].map(t => ev('Click', t, { user_id: 'u2' })),
+			// user u1: 3 distinct days of Buy, 2 distinct days of Click
+			evDay('Buy', 0, { user_id: 'u1' }), evDay('Buy', 1, { user_id: 'u1' }), evDay('Buy', 2, { user_id: 'u1' }),
+			evDay('Click', 3, { user_id: 'u1' }), evDay('Click', 4, { user_id: 'u1' }),
+			// user u2: 1 distinct day of Buy, 5 distinct days of Click
+			evDay('Buy', 0, { user_id: 'u2' }),
+			...[1, 2, 3, 4, 5].map(d => evDay('Click', d, { user_id: 'u2' })),
 			// user u3: 0 metric, 0 breakdown — only present via "other" event
-			ev('Other', 11, { user_id: 'u3' }),
+			evDay('Other', 11, { user_id: 'u3' }),
 		];
 		const tbl = emulateBreakdown(events, {
 			type: 'frequencyByFrequency',
@@ -57,13 +66,13 @@ describe('emulateBreakdown', () => {
 		for (const r of step0) expect(r.conversion_pct).toBe(100);
 	});
 
-	test('aggregatePerUser: groups avg per user by breakdown_freq', () => {
+	test('aggregatePerUser: groups avg per user by breakdown_freq (distinct-day counting)', () => {
 		const events = [
-			// u1: 2 Browse → bin 2; 2 Purchase amounts (10, 20) → avg 15
-			ev('Browse', 0, { user_id: 'u1' }), ev('Browse', 1, { user_id: 'u1' }),
+			// u1: 2 distinct Browse days → bin 2; 2 Purchase amounts (10, 20) → avg 15
+			evDay('Browse', 0, { user_id: 'u1' }), evDay('Browse', 1, { user_id: 'u1' }),
 			ev('Purchase', 5, { user_id: 'u1', amount: 10 }), ev('Purchase', 10, { user_id: 'u1', amount: 20 }),
-			// u2: 5 Browse → bin 5; 1 Purchase amount 100
-			...[0, 1, 2, 3, 4].map(t => ev('Browse', t, { user_id: 'u2' })),
+			// u2: 5 distinct Browse days → bin 5; 1 Purchase amount 100
+			...[0, 1, 2, 3, 4].map(d => evDay('Browse', d, { user_id: 'u2' })),
 			ev('Purchase', 5, { user_id: 'u2', amount: 100 }),
 		];
 		const tbl = emulateBreakdown(events, {
