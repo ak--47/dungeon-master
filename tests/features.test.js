@@ -18,6 +18,10 @@ import { bytesHuman, formatDuration, initChance } from '../lib/utils/utils.js';
 import * as u from '../lib/utils/utils.js';
 import dayjs from 'dayjs';
 
+// Date pinning for determinism — without these, FIXED_NOW anchors to today
+// and shifts across runs. Required for byte-equal repeatability.
+const PINNED_DATES = { datasetStart: '2025-09-01T00:00:00Z', datasetEnd: '2025-10-01T00:00:00Z' };
+
 const FIXED_NOW = 1706832000; // 2024-02-02
 global.FIXED_NOW = FIXED_NOW;
 global.FIXED_BEGIN = FIXED_NOW - 90 * 86400;
@@ -449,7 +453,7 @@ describe('scd-pre hook return value', () => {
 		initChance('scd-hook-return');
 		const generate = (await import('../index.js')).default;
 
-		const results = await generate({
+		const results = await generate({ ...PINNED_DATES,
 			numUsers: 5,
 			numEvents: 50,
 			seed: 'scd-hook-return',
@@ -491,7 +495,7 @@ describe('isChurnEvent', () => {
 		initChance('churn-test');
 		const generate = (await import('../index.js')).default;
 
-		const results = await generate({
+		const results = await generate({ ...PINNED_DATES,
 			numUsers: 20,
 			numEvents: 2000,
 			seed: 'churn-test',
@@ -524,7 +528,7 @@ describe('isChurnEvent', () => {
 		initChance('churn-return');
 		const generate = (await import('../index.js')).default;
 
-		const results = await generate({
+		const results = await generate({ ...PINNED_DATES,
 			numUsers: 10,
 			numEvents: 500,
 			seed: 'churn-return',
@@ -657,7 +661,7 @@ describe('nested default properties on events', () => {
 		initChance('nested-props');
 		const generate = (await import('../index.js')).default;
 
-		const results = await generate({
+		const results = await generate({ ...PINNED_DATES,
 			numUsers: 3,
 			numEvents: 30,
 			seed: 'nested-props',
@@ -751,7 +755,7 @@ describe('funnel experiments', () => {
 	test('experiment=true generates events with experiment variant', async () => {
 		initChance('exp-test');
 		const generate = (await import('../index.js')).default;
-		const results = await generate({
+		const results = await generate({ ...PINNED_DATES,
 			numUsers: 50,
 			numEvents: 1000,
 			seed: 'exp-test-fixed',
@@ -829,7 +833,7 @@ describe('mirror strategies', () => {
 	test('mirror generation with create strategy', async () => {
 		initChance('mirror-create');
 		const generate = (await import('../index.js')).default;
-		const results = await generate({
+		const results = await generate({ ...PINNED_DATES,
 			numUsers: 5,
 			numEvents: 50,
 			seed: 'mirror-create',
@@ -853,7 +857,7 @@ describe('mirror strategies', () => {
 	test('mirror generation with delete strategy', async () => {
 		initChance('mirror-delete');
 		const generate = (await import('../index.js')).default;
-		const results = await generate({
+		const results = await generate({ ...PINNED_DATES,
 			numUsers: 5,
 			numEvents: 50,
 			seed: 'mirror-delete',
@@ -879,7 +883,7 @@ describe('group profile generation', () => {
 	test('generates group profiles with properties', async () => {
 		initChance('group-test');
 		const generate = (await import('../index.js')).default;
-		const results = await generate({
+		const results = await generate({ ...PINNED_DATES,
 			numUsers: 5,
 			numEvents: 50,
 			seed: 'group-test',

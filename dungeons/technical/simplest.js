@@ -69,6 +69,7 @@ const config = {
 		{
 			event: "page view",
 			weight: 10,
+			isStrictEvent: false,
 			properties: {
 				page: ["/", "/", "/help", "/account", "/pricing", "/product", "/about", "/blog"],
 				utm_source: ["$organic", "$organic", "$organic", "$organic", "google", "google", "google", "facebook", "facebook", "twitter", "linkedin"],
@@ -77,6 +78,7 @@ const config = {
 		{
 			event: "sign up",
 			weight: 1,
+			isStrictEvent: false,
 			isFirstEvent: true,
 			properties: {
 				signupMethod: ["email", "google", "facebook", "github"],
@@ -86,6 +88,7 @@ const config = {
 		{
 			event: "login",
 			weight: 8,
+			isStrictEvent: false,
 			properties: {
 				method: ["password", "google", "facebook", "github"],
 			}
@@ -93,6 +96,7 @@ const config = {
 		{
 			event: "search",
 			weight: 7,
+			isStrictEvent: false,
 			properties: {
 				query_length: weighNumRange(1, 50),
 				resultsReturned: weighNumRange(0, 100, .25),
@@ -102,6 +106,7 @@ const config = {
 		{
 			event: "view item",
 			weight: 9,
+			isStrictEvent: false,
 			properties: {
 				isFeaturedItem: [true, false, false],
 				itemCategory: pickAWinner(itemCategories, integer(0, 27)),
@@ -112,6 +117,7 @@ const config = {
 		{
 			event: "add to cart",
 			weight: 5,
+			isStrictEvent: false,
 			properties: {
 				amount: weighNumRange(5, 500, .25),
 				itemCategory: pickAWinner(itemCategories, integer(0, 27)),
@@ -121,6 +127,7 @@ const config = {
 		{
 			event: "checkout",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				amount: weighNumRange(10, 500, .25),
 				currency: ["USD", "CAD", "EUR", "JPY"],
@@ -131,6 +138,7 @@ const config = {
 		{
 			event: "watch video",
 			weight: 6,
+			isStrictEvent: false,
 			properties: {
 				videoCategory: pickAWinner(videoCategories, integer(0, 9)),
 				watchTimeSec: weighNumRange(10, 600, .25),
@@ -140,6 +148,7 @@ const config = {
 		{
 			event: "share content",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				platform: ["twitter", "facebook", "linkedin", "email", "link"],
 				contentType: ["video", "product", "article"],
@@ -148,6 +157,7 @@ const config = {
 		{
 			event: "rate item",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				rating: weighNumRange(1, 5),
 				itemCategory: pickAWinner(itemCategories, integer(0, 27)),
@@ -160,6 +170,7 @@ const config = {
 		{
 			event: "support ticket",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				priority: weighChoices(["low", "low", "medium", "medium", "medium", "high"]),
 				category: ["billing", "technical", "account", "shipping", "returns"],
@@ -168,6 +179,7 @@ const config = {
 		{
 			event: "add to wishlist",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				itemCategory: pickAWinner(itemCategories, integer(0, 27)),
 				price: weighNumRange(5, 500, .25),
@@ -176,6 +188,7 @@ const config = {
 		{
 			event: "remove from cart",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				reason: weighChoices(["changed mind", "too expensive", "found better", "duplicate", "changed mind", "changed mind"]),
 			}
@@ -183,6 +196,7 @@ const config = {
 		{
 			event: "apply coupon",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				couponCode: weighChoices(["SAVE10", "SAVE20", "WELCOME", "FREESHIP", "VIP30", "SAVE10", "SAVE10"]),
 				discountPercent: weighNumRange(5, 50),
@@ -191,6 +205,7 @@ const config = {
 		{
 			event: "notification received",
 			weight: 7,
+			isStrictEvent: false,
 			properties: {
 				channel: ["push", "email", "in-app", "sms"],
 				type: ["promo", "order update", "recommendation", "reminder"],
@@ -199,6 +214,7 @@ const config = {
 		{
 			event: "notification clicked",
 			weight: 5,
+			isStrictEvent: false,
 			properties: {
 				channel: ["push", "email", "in-app", "sms"],
 				type: ["promo", "order update", "recommendation", "reminder"],
@@ -207,6 +223,7 @@ const config = {
 		{
 			event: "add payment method",
 			weight: 1,
+			isStrictEvent: false,
 			properties: {
 				type: ["credit card", "debit card", "paypal", "apple pay", "google pay"],
 			}
@@ -214,6 +231,7 @@ const config = {
 		{
 			event: "update profile",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				field: ["avatar", "name", "email", "address", "phone", "preferences"],
 			}
@@ -221,6 +239,7 @@ const config = {
 		{
 			event: "invite friend",
 			weight: 1,
+			isStrictEvent: false,
 			properties: {
 				method: ["email", "link", "sms"],
 			}
@@ -228,6 +247,7 @@ const config = {
 		{
 			event: "view category",
 			weight: 8,
+			isStrictEvent: false,
 			properties: {
 				category: pickAWinner(itemCategories, integer(0, 27)),
 				sortBy: ["popular", "newest", "price low", "price high", "rating"],
@@ -236,6 +256,7 @@ const config = {
 		{
 			event: "save address",
 			weight: 1,
+			isStrictEvent: false,
 			properties: {
 				type: ["home", "work", "other"],
 			}
@@ -243,6 +264,7 @@ const config = {
 		{
 			event: "compare items",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				numItems: weighNumRange(2, 5),
 				itemCategory: pickAWinner(itemCategories, integer(0, 27)),
@@ -251,6 +273,7 @@ const config = {
 		{
 			event: "subscribe newsletter",
 			weight: 1,
+			isStrictEvent: false,
 			properties: {
 				frequency: ["daily", "weekly", "monthly"],
 				topics: ["deals", "new arrivals", "recommendations", "deals", "deals"],
@@ -259,6 +282,7 @@ const config = {
 		{
 			event: "leave review",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				rating: weighNumRange(1, 5),
 				wordCount: weighNumRange(10, 200, .25),
@@ -268,6 +292,7 @@ const config = {
 		{
 			event: "redeem reward",
 			weight: 1,
+			isStrictEvent: false,
 			properties: {
 				rewardType: ["discount", "free shipping", "free item", "points bonus"],
 				pointsUsed: weighNumRange(100, 5000, .25),

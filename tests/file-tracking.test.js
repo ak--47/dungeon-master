@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach } from 'vitest';
-import { execSync } from 'child_process';
 import fs from 'fs';
+import path from 'path';
 import { createRequire } from 'module';
 import main from '../index.js';
 import { Storage } from '@google-cloud/storage';
@@ -14,10 +14,16 @@ const gcs = new Storage();
 const timeout = 120_000;
 
 function clearData() {
-	try {
-		if (!fs.existsSync('./data')) fs.mkdirSync('./data', { recursive: true });
-		execSync('npm run prune', { stdio: 'ignore' });
-	} catch { }
+	const wipe = (dir) => {
+		if (!fs.existsSync(dir)) return;
+		for (const name of fs.readdirSync(dir)) {
+			try { fs.rmSync(path.join(dir, name), { recursive: true, force: true }); }
+			catch (_) { /* best effort */ }
+		}
+	};
+	if (!fs.existsSync('./data')) fs.mkdirSync('./data', { recursive: true });
+	wipe('./data');
+	wipe('./tmp');
 }
 
 async function clearGCSPrefix(prefix) {

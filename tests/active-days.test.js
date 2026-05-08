@@ -139,8 +139,10 @@ describe.sequential('v1.5 avgActiveDaysPerUser primitive', () => {
 		console.warn = (msg) => { warnings.push(String(msg)); };
 		try {
 			// 100 events/window-day × 30 days ÷ 2 active days = 1500 events/active day → warn
+			// 10 users is enough — warning fires per-config, not per-user.
 			await DUNGEON_MASTER(baseConfig({
 				seed: 'rate-warn',
+				numUsers: 10,
 				avgEventsPerUserPerDay: 100,
 				avgActiveDaysPerUser: 2,
 			}));

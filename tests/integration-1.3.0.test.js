@@ -15,6 +15,9 @@ import generate from '../index.js';
 const SMALL = {
 	seed: 'integration-1.3.0',
 	numUsers: 200,
+	// Pin dates for determinism. numDays kept for clarity but datasetStart/End take precedence.
+	datasetStart: '2025-09-01T00:00:00Z',
+	datasetEnd: '2025-10-01T00:00:00Z',
 	numDays: 30,
 	avgEventsPerUserPerDay: 3,
 	format: 'json',

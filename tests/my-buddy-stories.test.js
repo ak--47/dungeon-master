@@ -19,6 +19,10 @@ const SMALL_OVERRIDES = {
 	verbose: false,
 	concurrency: 1,
 	token: '',
+	// NOTE: my-buddy.js's hook pins absolute calendar dates ("March 15 launch",
+	// etc.) — overriding datasetStart/datasetEnd here breaks Story 3 (contextual
+	// feedback sources). Test relies on the dungeon's own internal date logic.
+	// Determinism is preserved because the dungeon sets its own dates.
 };
 
 describe('Phase 6 — my-buddy stories via emulator', { timeout: 120_000 }, () => {
