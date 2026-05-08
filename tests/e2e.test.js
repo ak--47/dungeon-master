@@ -16,7 +16,11 @@ import scd from '../dungeons/technical/scd.js';
 
 // 1 minute timeout
 const timeout = 60000;
-const testToken = process.env.TEST_TOKEN || "hello token!";
+// Empty fallback: "hello token!" (or any fake) triggers infinite mixpanel-import
+// retries, hanging the suite. Tests using `testToken` are network tests — they
+// either need a real env token or should stay skipped. Empty fallback fails
+// fast (crash on undefined importResults) instead of hanging.
+const testToken = process.env.TEST_TOKEN || "";
 
 /**
  * Clean up data directory between tests that write to disk

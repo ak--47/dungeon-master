@@ -3,7 +3,7 @@ const SEED = "SUPER DUPER DANGEROUS BROOO";
 const num_days = 92;
 const num_users = 8_000;
 const avg_events_per_user_per_day = 1.3;
-let token = "your-mixpanel-token";
+let token = "";
 
 // ── env overrides ──
 if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;

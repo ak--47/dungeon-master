@@ -189,7 +189,10 @@ describe.sequential('Module Integration Tests', () => {
 			format: 'csv',
 			batchSize: 50, // Force batch mode with small batch size
 			seed: 'batch-test',
-			token: process.env.MIXPANEL_TOKEN || 'test-token'
+			// Empty fallback token: with no real env token, skip the
+			// mixpanel-import call entirely. 'test-token' triggered an infinite
+			// retry loop in mixpanel-import, hanging the suite.
+			token: process.env.MIXPANEL_TOKEN || ''
 		};
 
 		const result = await generate(config);
@@ -225,7 +228,10 @@ describe.sequential('Module Integration Tests', () => {
 			writeToDisk: true,
 			format: 'json',
 			seed: 'write-import-test',
-			token: process.env.MIXPANEL_TOKEN || 'test-token'
+			// Empty fallback token: 'test-token' triggers infinite mixpanel-import
+			// retries, hanging the suite. Even though this test is currently
+			// skipped, defending against re-introduction if someone un-skips.
+			token: process.env.MIXPANEL_TOKEN || ''
 		};
 
 		const result = await generate(config);
