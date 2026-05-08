@@ -93,21 +93,51 @@ node scripts/verify-runner.mjs <path> [prefix]    # Run dungeon at test scale (1
 
 ## Tests
 
-Uses **Vitest** (ESM-native). Test files:
+Uses **Vitest** (ESM-native). Tests are organized into three tiers under `tests/`:
 
-- `tests/unit.test.js` — Individual function tests (text generator, utils, weights)
-- `tests/int.test.js` — Integration tests (context, storage, orchestrators)
-- `tests/e2e.test.js` — End-to-end generation + Mixpanel import
-- `tests/advanced-features.test.js` — Surviving advanced features (personas, world events, engagement decay, data quality). Killed-feature tests for subscription/attribution/geo/features/anomalies are `describe.skip`'d after the 1.4 audit.
-- `tests/identity-model.test.js` — Phase 2 identity model (stitch event, attempts, multi-device pool, pre-existing/born-in invariants).
-- `tests/hook-helpers-*.test.js` — Phase 3 atom unit tests (32 tests across 5 files).
-- `tests/hook-patterns-*.test.js` — Phase 4 pattern integration tests + emulator self-tests (9 tests).
-- `tests/my-buddy-stories.test.js` — Phase 6 acceptance gate: runs the migrated my-buddy dungeon at small scale and asserts each of its 3 documented stories via `emulateBreakdown`.
-- `tests/sanity.test.js` — Module integration (all dungeon types, formats, batch mode)
-- `tests/performance.test.js` — Context caching, device pools, time shift
-- `tests/hooks.test.js` — Hook system: all hook types, double-fire prevention, patterns (temporal, two-pass, closure state)
-- `tests/features.test.js` — strictEventCount, bornRecentBias, hook strings, product generators, function registry, JSON evaluator
-- `tests/progress.test.js` — Progress callback: throttle, fault tolerance, step updates, disable-after-3, return value summary
+| Tier | Criterion | Wall time | Allowed | Forbidden |
+|------|-----------|-----------|---------|-----------|
+| `tests/unit/` | Pure-function tests on helpers, validators, primitives | ~5s | Function calls, in-memory fixtures, mock event arrays | `DUNGEON_MASTER()`, `generate()`, file I/O |
+| `tests/integration/` | One generation pass through `DUNGEON_MASTER()` at small scale | ~50s | `generate()` with ≤300 users, in-memory output | `writeToDisk: true`, network, GCS |
+| `tests/e2e/` | Full pipeline: writes disk, loads dungeon files, GCS, multi-run | ~50s | All of the above | n/a |
+
+`tests/e2e/sanity.test.js` is excluded by default (parked — hangs after Module Integration block; run isolated via `npx vitest run tests/e2e/sanity.test.js`).
+
+### Running tests
+
+Use `vitest` directly via `npx` for tier targeting (no npm script wrappers — keeps `package.json` slim):
+
+```bash
+npm test                                              # full suite (~95s, 1018 tests)
+npx vitest run tests/unit                             # unit tier only (~5s)
+npx vitest run tests/integration                      # integration tier (~50s)
+npx vitest run tests/e2e                              # e2e tier (~50s)
+npx vitest run tests/unit tests/integration           # fast inner loop (skip e2e)
+npx vitest run tests/integration/features.test.js     # single file
+npx vitest tests/unit                                  # watch mode on unit tier
+```
+
+Always pipe to `tail -50` to capture results without reading the entire output stream.
+
+### Test files of note
+
+- `tests/unit/utils.test.js` — Individual function tests (text generator, utils, weights)
+- `tests/unit/dungeon-shapes.test.js` — Validates every dungeon under `dungeons/` imports + has valid config shape
+- `tests/unit/hook-helpers-*.test.js` — Phase 3 atom unit tests (32 tests across 5 files)
+- `tests/unit/macro-and-rate.test.js` — Macro preset + per-user-per-day rate primitive
+- `tests/integration/orchestrators.test.js` — Context, storage, user-loop orchestration
+- `tests/integration/advanced-features.test.js` — Personas, world events, engagement decay, data quality (killed-feature tests `describe.skip`'d after 1.4)
+- `tests/integration/identity-model.test.js` — Identity model (stitch event, attempts, multi-device pool, pre-existing/born-in invariants)
+- `tests/integration/hook-patterns-*.test.js` — Pattern integration tests + emulator self-tests (9 tests)
+- `tests/integration/hooks-system.test.js` — Hook system: all hook types, double-fire prevention, temporal/two-pass/closure-state patterns
+- `tests/integration/features.test.js` — strictEventCount, bornRecentBias, hook strings, product generators, function registry, JSON evaluator, mirror, ad spend, SCDs
+- `tests/integration/performance.test.js` — Context caching, device pools, time shift
+- `tests/integration/progress-callback.test.js` — Progress callback: throttle, fault tolerance, step updates, disable-after-3, return summary
+- `tests/integration/conversion-window.test.js` / `auto-sort.test.js` / `touchpoint-cap.test.js` / `strict-event-autopromote.test.js` — v1.5 alignment guarantees
+- `tests/e2e/module-api.test.js` — Module API + Mixpanel import end-to-end
+- `tests/e2e/sessions.test.js` / `formats.test.js` / `module-options.test.js` — Pipeline output formats and option surface
+- `tests/e2e/determinism.test.js` — Same seed → byte-equal output across canonical fixture
+- `tests/e2e/my-buddy-stories.test.js` — Story acceptance gate: runs the migrated my-buddy dungeon and asserts its 3 documented stories via `emulateBreakdown`
 
 ## Core Modules
 

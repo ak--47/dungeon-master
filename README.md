@@ -506,9 +506,32 @@ styles: `support`, `review`, `search`, `feedback`, `chat`, `email`, `forum`, `co
 npm run dungeon:run           # run a dungeon file locally
 npm run dungeon:to-json       # convert JS dungeon to JSON (for UI import)
 npm run dungeon:from-json     # convert JSON to JS dungeon
-npm test                      # vitest test suite
+npm test                      # vitest test suite (full, ~95s, 1018 tests)
 npm run typecheck             # typescript check
 ```
+
+## tests
+
+tests live under `tests/` in three tiers:
+
+| dir | scope | wall time |
+|---|---|---|
+| `tests/unit/` | pure-function tests on helpers, validators, primitives — no `DUNGEON_MASTER()` calls | ~5s |
+| `tests/integration/` | one generation pass per test, ≤300 users, in-memory output | ~50s |
+| `tests/e2e/` | full pipeline — disk writes, file-path loading, multi-pass | ~50s |
+
+run a single tier or file via `vitest` directly:
+
+```bash
+npx vitest run tests/unit                                  # unit tier (~5s)
+npx vitest run tests/integration                           # integration tier
+npx vitest run tests/e2e                                   # e2e tier
+npx vitest run tests/unit tests/integration                # fast inner loop
+npx vitest run tests/integration/features.test.js          # single file
+npx vitest tests/unit                                       # watch mode
+```
+
+`tests/e2e/sanity.test.js` is excluded by default (parked); run isolated with `npx vitest run tests/e2e/sanity.test.js`.
 
 ## config reference
 

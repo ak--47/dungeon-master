@@ -326,7 +326,7 @@ console.log(emulateBreakdown(events, {
 ```
 
 Or use `verifyDungeon` with a checks array for CI-style assertions; see
-`tests/my-buddy-stories.test.js` for a worked example.
+`tests/e2e/my-buddy-stories.test.js` for a worked example.
 
 ### Standard identity-model invariants (run for every dungeon)
 
