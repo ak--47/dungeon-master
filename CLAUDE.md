@@ -319,6 +319,8 @@ Storage-only hooks (no upstream execution):
 
 After creating or modifying a dungeon, always verify schema integrity and hook patterns by running `/verify-dungeon`. This runs the dungeon at full scale, validates that hooks don't introduce undeclared columns (flag stamping), queries the output with DuckDB, and produces a diagnostic report at `research/hook-results.md` with schema verdicts and PASS/WEAK/FAIL verdicts for each hook. Verify BEFORE pushing data to Mixpanel.
 
+The verifier (`@ak--47/dungeon-master/verify`) implements Mixpanel's exact counting semantics: greedy single-pass funnels with 2s grace + strict `<` conversion window (`history.cpp` / `conversion_window.cpp`), distinct-period frequency counting (`addiction_query.cpp`), null-aware aggregation (`normal_query.cpp`), and 10-touchpoint attribution cap (`attributed_value_reader.cpp`). Hook authors should read [HOOKS.md §2 "How Mixpanel Counts Things"](HOOKS.md#2-how-mixpanel-counts-things) before targeting any Mixpanel report — naive event-count or any-order-funnel intuitions diverge from what Mixpanel actually computes.
+
 ## Trend Shape — Macro and Soup
 
 Two orthogonal axes shape how events are distributed in time:
@@ -508,7 +510,7 @@ import {
   binUsersByEventCount, binUsersByEventInRange, countEventsBetween, userInProfileSegment,
   cloneEvent, dropEventsWhere, scaleEventCount, scalePropertyValue, shiftEventTime,
   scaleTimingBetween, scaleFunnelTTC, findFirstSequence,
-  injectAfterEvent, injectBetween, injectBurst,
+  injectAfterEvent, injectBetween, injectBurst, injectOnNewDays,
   isPreAuthEvent, splitByAuth
 } from '@ak--47/dungeon-master/hook-helpers';
 
@@ -522,7 +524,12 @@ import {
 } from '@ak--47/dungeon-master/hook-patterns';
 
 // Verifier + Mixpanel breakdown emulator + schema validation (Phase 4)
-import { verifyDungeon, emulateBreakdown, deriveExpectedSchema, validateSchema } from '@ak--47/dungeon-master/verify';
+// Counting primitives match Mixpanel's exact semantics — see HOOKS.md §2.
+import {
+  verifyDungeon, emulateBreakdown, deriveExpectedSchema, validateSchema,
+  evaluateFunnel, timestampComesAfter, withinConversionWindow,
+  countDistinctPeriods, nullAwareAvg, nullAwareSum, nullAwareExtreme, binByDistinctPeriods
+} from '@ak--47/dungeon-master/verify';
 
 // Text generation
 import { createTextGenerator, generateBatch } from '@ak--47/dungeon-master/text';
