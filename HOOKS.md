@@ -322,6 +322,7 @@ counting semantics matter) the rule from Section 2.
 #### 4.1 Conversion Change Over Time
 
 **Hook:** `funnel-pre` | **Meta:** `meta.firstEventTime`
+**Mixpanel report:** Funnels — conversion rate over time
 
 **In Mixpanel:** Funnel conversion shows a step-change at a specific date.
 
@@ -344,6 +345,7 @@ adjustments modest (1.2x is comfortable; 3x can saturate at the 95% cap).
 #### 4.2 Feature Launch Inflection
 
 **Hook:** `everything` | **Meta:** `meta.datasetStart`
+**Mixpanel report:** Insights — Total events broken down by `Feedback Source`
 
 **In Mixpanel:** Line chart of `Submit Feedback` broken down by `Feedback
 Source` shows new sources appearing only after a launch date.
@@ -376,6 +378,7 @@ if (type === "everything") {
 #### 4.3 End-of-Quarter Spike
 
 **Hook:** `event` | **Meta:** `meta.datasetStart`
+**Mixpanel report:** Insights — Total events filtered by `event_type`
 
 **In Mixpanel:** `billing event` filtered to `event_type = "plan_upgraded"`
 shows a 4x spike in the final 10 days.
@@ -394,6 +397,7 @@ if (type === "event" && record.event === "billing event") {
 #### 4.4 Degradation and Recovery
 
 **Hook:** `everything` | **Meta:** `meta.datasetEnd`, `meta.profile`
+**Mixpanel report:** Insights — Total events broken down by `Region`
 
 **In Mixpanel:** `Agenda Error` line chart shows zero before April 10, ramps
 during the bug window, decays after the fix. Breakdown by `Region` shows EU
@@ -438,6 +442,7 @@ if (type === "everything") {
 #### 4.5 Inverted-U Sweet Spot (Frequency Report)
 
 **Hook:** `everything` | **Counting:** distinct days (Section 2.1)
+**Mixpanel report:** Insights — Frequency Distribution (distinct-day count)
 
 **In Mixpanel:** Insights frequency distribution of `Onboarding Question`
 shows peak conversion at 3 distinct days of activity, dropping on both sides.
@@ -478,6 +483,7 @@ frequency distribution, swap `binByDistinctPeriods` for
 #### 4.6 Frequency × Engagement Sweet Spot
 
 **Hook:** `everything` | **Counting:** distinct days
+**Mixpanel report:** Insights — Frequency × Frequency cross-table (distinct-day counts on both axes)
 
 **In Mixpanel:** Users with 3-8 distinct browse days show 25% higher cart
 amounts. Users with 9+ distinct browse days are window-shoppers whose
@@ -502,6 +508,7 @@ if (type === "everything") {
 #### 4.7 Move Users Between Frequency Bins (Active Day Injection)
 
 **Hook:** `everything` | **Atom:** [`injectOnNewDays`](lib/hook-helpers/inject.js)
+**Mixpanel report:** Insights — Frequency Distribution (distinct-day buckets per user)
 
 **In Mixpanel:** A "power user" cohort needs ≥7 distinct days of `commit
 pushed` activity in the dataset window. Some users have the right total
@@ -542,6 +549,7 @@ amount.
 #### 4.8 A/B/C Test with Variant-Specific Effects
 
 **Hook:** `funnel-post` + `everything` | **Meta:** `meta.experiment`
+**Mixpanel report:** Experiments — variant performance on downstream metric
 
 ```js
 {
@@ -580,6 +588,7 @@ if (type === "funnel-post" && meta.experiment?.variantName === "Variant B") {
 #### 4.9 Subscription Tier Stacking
 
 **Hook:** `everything` | **Counting:** null-aware AVG (Section 2.3)
+**Mixpanel report:** Insights — AVG of `reward_gold` broken down by `subscription_tier`
 
 **In Mixpanel:** `quest turned in` AVG `reward_gold` broken down by
 `subscription_tier` shows Premium at 1.4x, Elite at 1.8x vs Free.
@@ -604,6 +613,7 @@ ignored — no need to fill defaults to keep the average sensible.
 #### 4.10 Integration Users Succeed (Compound Cohort)
 
 **Hook:** `everything`
+**Mixpanel report:** Insights — AVG of `response_time_mins` broken down by behavioral cohort
 
 ```js
 if (type === "everything") {
@@ -626,6 +636,7 @@ if (type === "everything") {
 #### 4.11 Power User Behavioral Amplification
 
 **Hook:** `everything`
+**Mixpanel report:** Insights — Total events + AVG of `reward_gold` for behavioral cohort
 
 ```js
 if (type === "everything") {
@@ -661,6 +672,7 @@ after the main cloning loop.
 #### 4.12 Night Deploy Failure Spike
 
 **Hook:** `everything`
+**Mixpanel report:** Insights — Total events filtered by `deploy_status='failed'`, broken down by hour-of-day
 
 ```js
 if (type === "everything") {
@@ -679,6 +691,8 @@ if (type === "everything") {
 
 #### 4.13 Regional Error Injection
 
+**Mixpanel report:** Insights — Total errors broken down by `Region`
+
 See [4.4 Degradation and Recovery](#44-degradation-and-recovery) — the same
 template with a profile-segment gate.
 
@@ -689,6 +703,7 @@ template with a profile-segment gate.
 #### 4.14 TTC by User Segment (Timestamp Shifting)
 
 **Hook:** `everything` | **Counting:** greedy funnel TTC (Section 2.2)
+**Mixpanel report:** Funnels — Time to Convert, broken down by user segment
 
 **In Mixpanel:** Funnel median TTC, broken down by segment, shows Enterprise
 completing 3x faster than Free.
@@ -733,6 +748,7 @@ under the conversion-window cap.
 #### 4.15 Funnel Conversion by Profile
 
 **Hook:** `funnel-pre` | **Meta:** `meta.profile`, `meta.funnel`
+**Mixpanel report:** Funnels — conversion rate broken down by `plan_tier`
 
 ```js
 if (type === "funnel-pre") {
@@ -755,6 +771,7 @@ if (type === "funnel-pre") {
 #### 4.16 Binge-Watching Pattern
 
 **Hook:** `everything`
+**Mixpanel report:** Insights — Total `playback completed` per user / Flows
 
 ```js
 if (type === "everything") {
@@ -792,6 +809,7 @@ if (type === "everything") {
 #### 4.17 Contextual Event Injection
 
 **Hook:** `everything`
+**Mixpanel report:** Flows — preceding-path analysis for `Submit Feedback`
 
 See [4.2 Feature Launch Inflection](#42-feature-launch-inflection) for the
 full implementation. Key atom: `findFirstSequence(tail, [eventA, eventB],
@@ -804,6 +822,7 @@ maxGapMin)` returns the matched events or `null`.
 #### 4.18 Closure-Based State (Cost Overrun → Scale Down)
 
 **Hook:** `event` | Module-level Map
+**Mixpanel report:** Insights — `infrastructure scaled` broken down by `scale_direction`, sequenced after `cost report generated`
 
 ```js
 const costOverrunUsers = new Map();
@@ -824,6 +843,7 @@ if (type === "event") {
 #### 4.19 Failed Deploy Recovery
 
 **Hook:** `event` | Module-level Map
+**Mixpanel report:** Insights — AVG of `duration_sec` broken down by `status`, sequenced after a failed run
 
 ```js
 const failedDeployUsers = new Map();
@@ -845,6 +865,7 @@ if (type === "event" && record.event === "deployment pipeline run") {
 #### 4.20 Segment-Based Profile Enrichment
 
 **Hook:** `user`
+**Mixpanel report:** Insights — User profile property AVG broken down by `company_size` (no event report — profile-only)
 
 ```js
 if (type === "user") {
@@ -868,6 +889,7 @@ if (type === "user") {
 #### 4.21 Hash-Based Churn Silencing
 
 **Hook:** `everything`
+**Mixpanel report:** Retention / Insights — surviving event count broken down by hash-derived cohort
 
 ```js
 if (type === "everything") {
@@ -886,6 +908,7 @@ if (type === "everything") {
 #### 4.22 Retention Magic Number (N Distinct Days in First X Days)
 
 **Hook:** `everything` | **Meta:** `meta.userIsBornInDataset` |
+**Mixpanel report:** Retention — N+1 day retention by cohort
 **Counting:** distinct days (Section 2.1)
 
 **In Mixpanel:** Born-in-dataset users with **5+ distinct days** of `user
@@ -934,6 +957,7 @@ for distinct days, not total events.
 #### 4.23 Deprecated Feature Replacement
 
 **Hook:** `user` + `everything`
+**Mixpanel report:** Varies by use — same report the deprecated feature targeted (typically Insights breakdown by `subscription_tier`)
 
 ```js
 if (type === "user") {
@@ -956,6 +980,7 @@ if (type === "everything") {
 #### 4.24 Post-Clone Temporal Mutation
 
 **Hook:** `everything` (must run LAST)
+**Mixpanel report:** Insights — AVG of `offer_price` over time, expecting consistent within-window value
 
 ```js
 // Run all cloning hooks first, THEN apply window mutation:
@@ -976,6 +1001,7 @@ return record;
 #### 4.25 First-Touch Attribution Bias (Capped at 10 Touches)
 
 **Hook:** `everything` | **Counting:** TOUCHPOINTS_LIMIT = 10 (Section 2.4)
+**Mixpanel report:** Attribution — Conversions by Source (first-touch model, last-10 lookback)
 
 **In Mixpanel:** `Convert` events broken down by first-touch `Touch.source`
 show Google >> Facebook >> Twitter (10:5:1 weights).
@@ -1013,6 +1039,7 @@ for sparse, deterministic touches.
 #### 4.26 Bias Engine-Stamped Touches (v1.5)
 
 **Hook:** `everything` | **Counting:** `maxTouchpointsPerUser` (default 10)
+**Mixpanel report:** Attribution — Conversions by `utm_source` (first-touch + last-touch models)
 
 **In Mixpanel:** First-touch attribution shows your campaign sources weighted
 toward "google" without changing total touch count.
@@ -1049,6 +1076,7 @@ window — giving them no effect. Overwriting is correct.
 #### 4.27 Active-Day Cohort Engineering (v1.5)
 
 **Hook:** `everything` | **Counting:** distinct calendar days (Section 2.1)
+**Mixpanel report:** Insights — Frequency Distribution; cohort-conditional active-day boost
 
 **In Mixpanel:** 10% of users land in a "power user" cohort with ≥10 distinct
 days of activity, while the rest stay at the dataset baseline.
@@ -1089,6 +1117,7 @@ fight its scheduling.
 #### 4.28 Conversion-Window-Aware TTC Scaling (v1.5)
 
 **Hook:** `funnel-pre` | **Meta:** `meta.funnel`
+**Mixpanel report:** Funnels — Time to Convert by user segment, respecting `conversionWindowDays`
 
 **In Mixpanel:** Funnel TTC for Enterprise users is 2x faster than Free, but
 the scaling factor must respect the funnel's `conversionWindowDays` cap so

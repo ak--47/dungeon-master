@@ -115,4 +115,34 @@ describe.sequential('v1.5 determinism — same seed → byte-equal output', () =
 		const r2 = await DUNGEON_MASTER(deep(fixture));
 		expect(eventsToString(r1.eventData)).toBe(eventsToString(r2.eventData));
 	});
+
+	// v1.5 follow-up (`reccomendations-agent-1.md` Fix #3): exercise the
+	// engagementDecay × active-day combination. Fix #1 added a pickedDayBuckets
+	// check inside applyEngagementDecay — this test fails if that check
+	// introduces any non-deterministic behavior (e.g., unseeded RNG).
+	test('decay + active-day config is deterministic', async () => {
+		const decayActive = () => ({
+			seed: 'det-decay-active',
+			datasetStart: '2025-09-01T00:00:00Z',
+			datasetEnd: '2025-10-01T00:00:00Z',
+			numUsers: 30,
+			avgEventsPerUserPerDay: 4,
+			avgActiveDaysPerUser: 5,
+			engagementDecay: { model: 'exponential', halfLife: 7, floor: 0.05 },
+			events: [
+				{ event: 'page view', weight: 5 },
+				{ event: 'click', weight: 3 },
+			],
+			funnels: [{
+				sequence: ['page view', 'click'],
+				timeToConvert: 1,
+				order: 'sequential',
+			}],
+			writeToDisk: false,
+			verbose: false,
+		});
+		const r1 = await DUNGEON_MASTER(deep(decayActive()));
+		const r2 = await DUNGEON_MASTER(deep(decayActive()));
+		expect(eventsToString(r1.eventData)).toBe(eventsToString(r2.eventData));
+	});
 });
