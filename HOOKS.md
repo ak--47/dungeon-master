@@ -153,6 +153,64 @@ count BELOW the configured target. Pick one. If you need both effects, set
 `avgActiveDaysPerUser` and write decay logic in an `everything` hook scoped
 to specific cohorts (gives explicit control over the interaction).
 
+### 2.6 Sessions are query-time computed (30-min gap, 24h max)
+
+Reference: `backend/arb/reader/queries/session_query.cpp`. Sessions are NOT
+persisted on raw events in Mixpanel — they're derived per query from a 30-min
+inactivity gap (default `session_timeout`) and a 24h max-time cap. Each
+session emits synthetic `$duration_s`, `$event_count`, `$origin_start`,
+`$origin_end` properties.
+
+**v1.5 contract:** the generator pre-stamps `session_id` using the same
+30-min-gap + 24h-max rules, so the verifier can trust pre-stamped IDs and
+group by `(user, session_id)` directly. Use
+`emulateBreakdown({ type: 'sessionMetrics' })` to verify session-level
+shapes; use `evaluateFunnel({ sessionScoped: true })` to require steps to
+land in the same session.
+
+### 2.7 Retention is birth-anchored, day-N return-event check
+
+Reference: `backend/arb/reader/queries/retention_query.cpp`. For each user,
+the engine finds the first occurrence of `birth_event` (cohort entry), then
+for each day bucket `N` checks whether the user has `return_event` on UTC day
+`(birth_day + N)`. **Same-day returns are NOT counted** — day 0 is the birth
+day; bucket day 1 = next UTC calendar day.
+
+`carry_forward` mode marks a user as retained for every later bucket once
+they hit any earlier bucket (Mixpanel's CARRY_FORWARD unbounded mode). Use
+when measuring "retained at any point through day N".
+
+`segmentBy` partitions the cohort by a property on the BIRTH event
+(Mixpanel's `segment_event=FIRST` mode). Birth-event property is captured at
+cohort entry time and follows the user through all retention buckets.
+
+### 2.8 Funnel reentry: state machine resets after completion
+
+Reference: `history.cpp` (`last_step_starts_next_funnel`). With reentry
+enabled, after the state machine reaches the final step the engine resets to
+step 0 and continues scanning. `result.completions` reports the total. In
+`countMode: 'totals'` the engine returns one `FunnelResult` per completion
+(simultaneous histories — one user, many funnel completions). Without
+reentry the funnel runs once per user.
+
+### 2.9 HPC (Hold Property Constant) — parallel sub-funnels
+
+Reference: `funnel_query.cpp` lines 749-784 (`aggregate_hash_get_key_cursor`).
+HPC partitions a single funnel into one parallel sub-funnel per unique value
+of the held property on the step-0 event. A user can complete the funnel in
+one HPC bucket and drop off in another simultaneously — the buckets are
+independent. Use `evaluateFunnelHPC(events, steps, holdProperty, options)`
+directly (not auto-routed through `funnelFrequency` in v1.5.0).
+
+### 2.10 Funnel segment modes (FIRST_TOUCH / LAST_TOUCH / STEP)
+
+Reference: `options.hpp` `funnel_segment_mode`; `history.cpp`
+`property_set_buffer`. The engine snapshots the matched event's properties
+at every funnel step. Segmentation chooses which step's properties to use:
+FIRST_TOUCH (step 0), LAST_TOUCH (last reached), or STEP N (specific index).
+Enable with `evaluateFunnel({ trackStepProperties: true })`, then pick with
+`resolveFunnelSegment(result, 'first' | 'last' | { step: N })`.
+
 ---
 
 ## 3. Core Principles
@@ -1225,3 +1283,174 @@ Import from `@ak--47/dungeon-master/hook-patterns`:
 Full JSDoc in [`lib/hook-patterns/*.js`](lib/hook-patterns/). Pair with
 `emulateBreakdown` from `@ak--47/dungeon-master/verify` to assert patterns
 in CI.
+
+---
+
+## 8. v1.5.0 Verification Recipes
+
+Verifier primitives added in v1.5.0. All accept the same `emulateBreakdown`
+options shape, with `type` selecting the analysis. Pass `profiles` on any
+type to enable identity merge (pre-auth `device_id` events resolve to the
+same canonical user as post-auth `user_id` events).
+
+### 8.1 Retention curves
+
+```js
+import { emulateBreakdown } from '@ak--47/dungeon-master/verify';
+
+const rows = emulateBreakdown(events, {
+  type: 'retention',
+  cohortEvent: 'Sign Up',
+  returnEvent: 'Login',
+  dayBuckets: [1, 7, 14, 30],
+  segmentBy: 'plan',         // optional — segment cohort by birth event prop
+  carry_forward: false,      // optional — once retained, retained on later buckets
+  profiles,                  // optional — auto-builds identity map
+});
+// → [{ day, retained_count, cohort_size, retained_pct, segment }, ...]
+```
+
+**In Mixpanel:** Retention report with cohort = "did Sign Up", return =
+"did Login". Day buckets are UTC calendar days from birth.
+
+### 8.2 Session metrics
+
+```js
+const rows = emulateBreakdown(events, {
+  type: 'sessionMetrics',
+  event: 'Page View',                                // optional — only sessions containing this event
+  metrics: ['count', 'duration', 'eventsPerSession'],
+});
+// → [{ metric, avg, median, p90, total_sessions }, ...]
+```
+
+Trusts the generator's pre-stamped `session_id`. If you need to verify
+session-scoped funnels (steps must land in same session), pass
+`sessionScoped: true` to `evaluateFunnel`.
+
+### 8.3 Funnel reentry (counting repeat completions)
+
+```js
+import { evaluateFunnel } from '@ak--47/dungeon-master/verify';
+
+// Per-user totals: how many times did this user complete the funnel?
+const r = evaluateFunnel(userEvents, ['Sign Up', 'Activate'], {
+  reentry: true,
+  countMode: 'totals',  // returns FunnelResult[] (one per completion)
+});
+console.log(r.length);  // e.g. 3 completions
+```
+
+For dungeon-level verification, set `Funnel.reentry: true` — the verifier
+auto-applies it in `funnelFrequency` / `timeToConvert` when matching the
+funnel.
+
+### 8.4 Exclusion step patterns
+
+```js
+// Direct API
+const r = evaluateFunnel(events, ['Sign Up', 'Activate'], {
+  exclusionSteps: [{ event: 'Bounce', afterStep: 1, beforeStep: 2 }],
+});
+```
+
+For dungeon-level wiring: declare exclusion events in `events[]` (schema-first),
+then add them to the funnel:
+
+```js
+{
+  events: [
+    { event: 'land', isFirstEvent: true },
+    { event: 'sign_up' },
+    { event: 'rage_click' },                     // declared
+  ],
+  funnels: [
+    { sequence: ['land', 'sign_up'],
+      conversionRate: 30,
+      exclusionEvents: ['rage_click'] },         // generator + verifier
+  ],
+}
+```
+
+The generator stamps 1-2 cloned `rage_click` events on non-converters; the
+verifier reads `funnel.exclusionEvents` and applies them as exclusion steps
+when emulating the funnel.
+
+### 8.5 Hold Property Constant (HPC) patterns
+
+```js
+import { evaluateFunnelHPC } from '@ak--47/dungeon-master/verify';
+
+// One sub-funnel per unique value of `plan` on the step-0 event.
+const map = evaluateFunnelHPC(userEvents, ['Add to Bag', 'Checkout'], 'plan');
+console.log(map.get('pro').completed);   // pro user completed
+console.log(map.get('free').completed);  // free user did not (independent)
+```
+
+NOT auto-routed through `funnelFrequency` in v1.5.0 — call `evaluateFunnelHPC`
+directly. To document on the funnel config: set `holdPropertyConstant: 'plan'`
+as a verifier-only hint.
+
+### 8.6 Step-level filter patterns
+
+```js
+const r = evaluateFunnel(events, [
+  { event: 'View Pricing' },
+  { event: 'Sign Up', where: { prop: 'plan', op: 'eq', value: 'pro' } },
+], { conversionWindowMs: 30 * 86400_000 });
+```
+
+For dungeon-level wiring: set `Funnel.stepFilters` (verifier-only hint):
+
+```js
+{
+  funnels: [{
+    sequence: ['View Pricing', 'Sign Up'],
+    stepFilters: { 1: { prop: 'plan', op: 'eq', value: 'pro' } },
+  }],
+}
+```
+
+The verifier auto-applies the filter to the matching step at index 1.
+
+### 8.7 Time-series verification (timeBucket)
+
+```js
+const rows = emulateBreakdown(events, {
+  type: 'frequencyByFrequency',
+  metricEvent: 'Purchase',
+  breakdownByFrequencyOf: 'Browse',
+  timeBucket: 'week',         // 'day' | 'week' | 'month'
+});
+// → [{ period: '2024-W01', metric_freq, breakdown_freq, user_count }, ...]
+```
+
+Cross-cutting on every breakdown type. Period labels: `YYYY-MM-DD` (day),
+`YYYY-Www` (ISO Monday-anchored week), `YYYY-MM` (month).
+
+### 8.8 Identity-aware verification
+
+For dungeons using `avgDevicePerUser > 0` or `hasAnonIds: true`, ALWAYS
+pass `profiles` so the verifier resolves pre-auth `device_id` events to the
+same canonical user as post-auth `user_id` events. Without it, pre-auth
+events bucket as separate "users" — funnel completion drops, retention
+deflates, attribution mis-routes.
+
+```js
+const rows = emulateBreakdown(events, {
+  type: 'funnelFrequency',
+  steps: ['visit_landing', 'sign_up', 'first_action'],
+  breakdownByFrequencyOf: 'visit_landing',
+  profiles,   // auto-builds identityMap from profile.device_ids/anonymousIds
+});
+```
+
+You can also pre-build the map and reuse:
+
+```js
+import { buildIdentityMap } from '@ak--47/dungeon-master/verify';
+const identityMap = buildIdentityMap(profiles);
+emulateBreakdown(events, { type: 'retention', cohortEvent: 'Sign Up',
+                          returnEvent: 'Login', dayBuckets: [7],
+                          identityMap });
+```

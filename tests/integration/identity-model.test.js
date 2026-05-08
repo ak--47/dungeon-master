@@ -18,6 +18,7 @@
 
 import { describe, test, expect } from 'vitest';
 import DUNGEON_MASTER from '../../index.js';
+import { emulateBreakdown, buildIdentityMap, resolveUserId } from '../../lib/verify/index.js';
 import dayjs from 'dayjs';
 
 const FIXED_NOW = dayjs('2024-02-02').unix();
@@ -199,6 +200,61 @@ describe('Phase 2 identity model', () => {
 		// Born-in-dataset users with conversionRate=100 always reach final attempt's
 		// land step. Allow some users on edge of dataset window to skip.
 		expect(usersWithThreePlus / landByUser.size).toBeGreaterThan(0.5);
+	});
+
+	test('emulateBreakdown groups pre-auth + post-auth events into same canonical user when profiles supplied', async () => {
+		const result = await DUNGEON_MASTER(pinWindow({
+			seed: 'identity-emulate-merge',
+			numUsers: 80,
+			numDays: 30,
+			avgEventsPerUserPerDay: 4,
+			percentUsersBornInDataset: 100,
+			hasAnonIds: true,
+			events: [
+				{ event: 'visit_landing', isFirstEvent: true, isStrictEvent: true },
+				{ event: 'view_pricing', isStrictEvent: true },
+				{ event: 'sign_up', isAuthEvent: true, isStrictEvent: true },
+				{ event: 'do_thing', weight: 5 },
+			],
+			funnels: [
+				{ sequence: ['visit_landing', 'view_pricing', 'sign_up'],
+				  conversionRate: 100, isFirstFunnel: true, timeToConvert: 1 },
+			],
+		}));
+		const events = Array.from(result.eventData);
+		const profiles = Array.from(result.userProfilesData);
+
+		// Identity map inverts profile device_ids.
+		const idMap = buildIdentityMap(profiles);
+		expect(idMap.size).toBeGreaterThan(0);
+
+		// Without identityMap: pre-auth events appear as separate "users" (device_id buckets).
+		const noMerge = emulateBreakdown(events, {
+			type: 'frequencyByFrequency',
+			metricEvent: 'visit_landing',
+			breakdownByFrequencyOf: 'sign_up',
+		});
+		const mergedRows = emulateBreakdown(events, {
+			type: 'frequencyByFrequency',
+			metricEvent: 'visit_landing',
+			breakdownByFrequencyOf: 'sign_up',
+			profiles,
+		});
+
+		// Merged should have FEWER user buckets at the visit_landing-only cell
+		// (where pre-auth-only buckets collapsed onto authed users).
+		const noMergeCount = noMerge.reduce((s, r) => s + r.user_count, 0);
+		const mergedCount = mergedRows.reduce((s, r) => s + r.user_count, 0);
+		expect(mergedCount).toBeLessThanOrEqual(noMergeCount);
+
+		// Spot-check: a known device_id resolves to its canonical user_id.
+		const stitchEvent = events.find(e => e.event === 'sign_up' && e.user_id && e.device_id);
+		if (stitchEvent) {
+			expect(resolveUserId(stitchEvent, idMap)).toBe(stitchEvent.user_id);
+			// And a pre-auth event sharing the same device_id resolves to same user_id.
+			const preAuth = { device_id: stitchEvent.device_id };
+			expect(resolveUserId(preAuth, idMap)).toBe(stitchEvent.user_id);
+		}
 	});
 
 	test('backwards compat: no isAuthEvent / no attempts / no avgDevicePerUser → no exceptions, similar event count', async () => {

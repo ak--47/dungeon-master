@@ -148,6 +148,41 @@ if (type === 'funnel-post' && meta.experiment) {
   engine-stamped values instead (e.g., `event.utm_source = "google"` on
   already-stamped touches).
 
+### v1.5.0 — when to use the new verifier primitives
+
+When designing a story, check if any of the new primitives match before
+writing a custom hook:
+
+- **Retention curves** ("70% retain at day 1, 30% at day 7") — verify with
+  `emulateBreakdown({ type: 'retention', cohortEvent, returnEvent, dayBuckets })`.
+  No special hook needed; engineer cohort behavior via `engagementDecay`,
+  `dropEventsWhere`, or per-user filtering in `everything`.
+- **Session metrics** ("avg session has 6 events, lasts 4 minutes") — verify
+  with `emulateBreakdown({ type: 'sessionMetrics' })`. Trust pre-stamped
+  `session_id`. Engineer via `avgEventsPerUserPerDay` + `engagementDecay`.
+- **Reentry funnels** ("power users complete the funnel 3+ times") — set
+  `Funnel.reentry: true` (verifier hint). Engineer multiple completions via
+  `funnel-post` injecting cloned funnel sequences for that cohort.
+- **Exclusion patterns** ("rage-clickers never convert") — declare an event
+  in `events[]` (e.g., `rage_click`), set `Funnel.exclusionEvents: ['rage_click']`.
+  The generator stamps it on non-converters; the verifier terminates the
+  attempt when it sees one.
+- **HPC / per-cart funnels** ("checkout completion per item type") — use
+  `evaluateFunnelHPC(events, steps, holdProperty)` directly (not auto-routed
+  through `funnelFrequency`).
+- **Step filters** ("only iOS users complete step 2") — set
+  `Funnel.stepFilters: { 1: { prop: 'platform', op: 'eq', value: 'iOS' }}`.
+- **Time-series trends** ("conversion rises week over week") — wrap any
+  breakdown with `timeBucket: 'week'`. Engineer via temporal-windowed hooks
+  using `DATASET_START.add(N, 'days')`.
+- **Identity-model dungeons** — when `avgDevicePerUser > 0` or
+  `hasAnonIds: true`, ALWAYS pass `profiles` to verification. Auto-builds
+  identity map merging pre-auth `device_id` events with post-auth `user_id`.
+
+**Schema-first reminder:** exclusion events must be declared in `events[]`
+before referencing them as `Funnel.exclusionEvents` — the validator throws
+on undeclared entries.
+
 ### Patterns (`@ak--47/dungeon-master/hook-patterns`)
 
 Higher-level recipes. Each maps to ONE Mixpanel analysis the verify-dungeon

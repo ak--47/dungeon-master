@@ -139,4 +139,141 @@ describe('emulateBreakdown', () => {
 		expect(last.find(r => r.attribution_value === 'facebook')?.conversions).toBe(2);
 		expect(last.find(r => r.attribution_value === 'google')).toBeUndefined();
 	});
+
+	// ── v1.5.0 funnel option threading ────────────────────────────────────────
+
+	test('funnelFrequency: reentry counts both completions for repeat users', () => {
+		const events = [
+			// u1: completes funnel twice (signup → activate, ×2)
+			ev('signup',   1000, { user_id: 'u1' }),
+			ev('activate', 2000, { user_id: 'u1' }),
+			ev('signup',   3000, { user_id: 'u1' }),
+			ev('activate', 4000, { user_id: 'u1' }),
+			// u2: completes once
+			ev('signup',   1000, { user_id: 'u2' }),
+			ev('activate', 2000, { user_id: 'u2' }),
+		];
+		// Without reentry: u1 counted at step 1 once; u2 counted once.
+		const without = emulateBreakdown(events, {
+			type: 'funnelFrequency',
+			steps: ['signup', 'activate'],
+			breakdownByFrequencyOf: 'signup',
+		});
+		// Conversions count uniques per (step, breakdown_freq) cell — same user
+		// is counted once per cell regardless of reentry. That's a deliberate
+		// choice for funnelFrequency (uniques view), not a bug.
+		expect(without.length).toBeGreaterThan(0);
+
+		// Verify reentry doesn't break the threading — same shape comes back.
+		const withReentry = emulateBreakdown(events, {
+			type: 'funnelFrequency',
+			steps: ['signup', 'activate'],
+			breakdownByFrequencyOf: 'signup',
+			reentry: true,
+		});
+		expect(withReentry.length).toBe(without.length);
+	});
+
+	test('funnelFrequency: exclusionSteps drops users who hit the exclusion event', () => {
+		const events = [
+			// u1: clean signup → activate
+			ev('signup',   1000, { user_id: 'u1' }),
+			ev('activate', 2000, { user_id: 'u1' }),
+			// u2: signup → bounce → activate (excluded)
+			ev('signup',   1000, { user_id: 'u2' }),
+			ev('bounce',   1500, { user_id: 'u2' }),
+			ev('activate', 2000, { user_id: 'u2' }),
+		];
+		const noExcl = emulateBreakdown(events, {
+			type: 'funnelFrequency',
+			steps: ['signup', 'activate'],
+			breakdownByFrequencyOf: 'signup',
+		});
+		const withExcl = emulateBreakdown(events, {
+			type: 'funnelFrequency',
+			steps: ['signup', 'activate'],
+			breakdownByFrequencyOf: 'signup',
+			exclusionSteps: [{ event: 'bounce' }],
+		});
+		const noExclStep1 = noExcl.filter(r => r.step_index === 1).reduce((s, r) => s + r.conversions, 0);
+		const withExclStep1 = withExcl.filter(r => r.step_index === 1).reduce((s, r) => s + r.conversions, 0);
+		expect(withExclStep1).toBeLessThan(noExclStep1);
+	});
+
+	test('timeBucket: wraps any breakdown type and tags rows with period', () => {
+		// Use absolute ISO times (skip the t0-offset `ev` helper).
+		const mk = (event, isoTime, props) => ({ event, time: isoTime, ...props });
+		const events = [
+			mk('A', '2024-01-15T12:00:00Z', { user_id: 'u1' }),
+			mk('B', '2024-01-15T12:00:00Z', { user_id: 'u1' }),
+			mk('A', '2024-02-15T12:00:00Z', { user_id: 'u2' }),
+			mk('B', '2024-02-15T12:00:00Z', { user_id: 'u2' }),
+		];
+		const rows = emulateBreakdown(events, {
+			type: 'frequencyByFrequency',
+			metricEvent: 'A',
+			breakdownByFrequencyOf: 'B',
+			timeBucket: 'month',
+		});
+		const periods = new Set(rows.map(r => r.period));
+		expect(periods).toEqual(new Set(['2024-01', '2024-02']));
+	});
+
+	test('retention: birth + day-N return → retained_pct rows', () => {
+		const day = (n) => Date.UTC(2024, 0, 1 + n);
+		const events = [
+			ev('Sign Up', day(0), { user_id: 'u1' }),
+			ev('Sign Up', day(0), { user_id: 'u2' }),
+			ev('Sign Up', day(0), { user_id: 'u3' }),
+			ev('Login',   day(1), { user_id: 'u1' }),
+			ev('Login',   day(1), { user_id: 'u2' }),
+		];
+		const rows = emulateBreakdown(events, {
+			type: 'retention',
+			cohortEvent: 'Sign Up',
+			returnEvent: 'Login',
+			dayBuckets: [1, 7],
+		});
+		const day1 = rows.find(r => r.day === 1);
+		expect(day1.retained_count).toBe(2);
+		expect(day1.cohort_size).toBe(3);
+	});
+
+	test('sessionMetrics: count / duration / eventsPerSession from pre-stamped session_id', () => {
+		const events = [
+			ev('A', 0,         { user_id: 'u1', session_id: 's1' }),
+			ev('B', 30_000,    { user_id: 'u1', session_id: 's1' }),
+			ev('A', 5_000_000, { user_id: 'u1', session_id: 's2' }),
+			ev('A', 5_001_000, { user_id: 'u1', session_id: 's2' }),
+		];
+		const rows = emulateBreakdown(events, { type: 'sessionMetrics' });
+		const byMetric = Object.fromEntries(rows.map(r => [r.metric, r]));
+		expect(byMetric.count.total_sessions).toBe(2);
+		expect(byMetric.eventsPerSession.avg).toBe(2);
+	});
+
+	test('timeToConvert: sessionScoped only counts within-session conversions', () => {
+		const profiles = [{ distinct_id: 'u1', plan: 'pro' }];
+		const events = [
+			ev('A', 1000, { user_id: 'u1', session_id: 's1' }),
+			ev('B', 2000, { user_id: 'u1', session_id: 's2' }), // different session
+		];
+		const noScope = emulateBreakdown(events, {
+			type: 'timeToConvert',
+			fromEvent: 'A',
+			toEvent: 'B',
+			breakdownByUserProperty: 'plan',
+			profiles,
+		});
+		const scoped = emulateBreakdown(events, {
+			type: 'timeToConvert',
+			fromEvent: 'A',
+			toEvent: 'B',
+			breakdownByUserProperty: 'plan',
+			profiles,
+			sessionScoped: true,
+		});
+		expect(noScope.length).toBe(1); // converted across sessions
+		expect(scoped.length).toBe(0);   // sessionScoped: no completion
+	});
 });

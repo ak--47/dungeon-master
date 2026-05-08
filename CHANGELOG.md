@@ -62,6 +62,82 @@ Full suite: **42 files, 1018 tests, ~87 seconds.**
 - `isStrictEvent` auto-promote may reduce standalone event variety for dungeons where funnel-step events overlap with `events[]`. Add `isStrictEvent: false` on specific events to preserve standalone instances.
 - Touchpoint cap (default 10) reduces UTM-stamped events from ~25% of all events to at most 10 per user. Attribution analysis produces more realistic distributions.
 
+### Added (verifier — second wave, ships in same release)
+
+The "verify like Mixpanel does" half of the release. Adds the remaining
+counting primitives behind `emulateBreakdown` so engineered hook patterns
+can be verified against the same shapes Mixpanel computes.
+
+- **Identity resolution in verifier** — `buildIdentityMap(profiles)` inverts
+  each profile's `device_ids` / `anonymousIds` into a flat
+  `Map<device_id, canonical_user_id>`. `resolveUserId(event, identityMap)`
+  resolves a single event. `emulateBreakdown` now auto-builds the map when
+  `profiles` are passed (any breakdown type), so pre-auth `device_id` events
+  collapse onto post-auth `user_id` events instead of bucketing as separate
+  users.
+- **Funnel engine extensions** — `evaluateFunnel` accepts:
+  - `reentry: boolean` — re-runs state machine after each completion;
+    `result.completions` reports total.
+  - `exclusionSteps: [{ event, afterStep?, beforeStep? }]` — events that
+    terminate the current attempt; cooperates with reentry.
+  - Step filters — steps may be `{ event, where: { prop, op, value } }`.
+    Supported ops: eq, neq, gt, lt, gte, lte, contains, not_contains.
+  - `trackStepProperties: boolean | string[]` — captures matched event
+    properties at each step into `result.stepProperties`.
+  - `countMode: 'uniques' | 'totals'` — totals mode (requires reentry)
+    returns `FunnelResult[]`, one per completion (simultaneous histories).
+  - `sessionScoped: boolean` — partition by `session_id`, run per session.
+- **HPC** — `evaluateFunnelHPC(events, steps, holdProperty, options)` runs
+  parallel sub-funnels per unique value of the held property on the step-0
+  event. Returns `Map<value, FunnelResult | FunnelResult[]>`.
+- **Segment modes** — `resolveFunnelSegment(result, 'first' | 'last' | { step: N })`
+  picks property snapshot for FIRST_TOUCH / LAST_TOUCH / STEP modes.
+- **`emulateBreakdown({ type: 'sessionMetrics' })`** — group by user→session,
+  emit `[{ metric, avg, median, p90, total_sessions }]` for count / duration /
+  eventsPerSession. Trusts pre-stamped `session_id`. Optional `event` filter
+  restricts to sessions containing a target event.
+- **`emulateBreakdown({ type: 'retention' })`** — birth-anchored day-bucket
+  retention. Inputs `cohortEvent`, `returnEvent`, `dayBuckets`. Optional
+  `segmentBy` partitions cohort by birth event property; optional
+  `carry_forward` marks once-retained users as retained on later buckets.
+- **`emulateBreakdown({ timeBucket: 'day' | 'week' | 'month' })`** —
+  cross-cutting wrapper on every breakdown type. Partitions events by UTC
+  bucket, runs the underlying analysis per partition, tags rows with
+  `period: string` (`YYYY-MM-DD`, `YYYY-Www`, `YYYY-MM`).
+- **`partitionByTimeBucket(events, bucket)`** — exposed helper.
+
+### Generator (v1.5.0 funnel extensions)
+
+- **`Funnel.exclusionEvents: string[]`** — events that terminate the funnel
+  for non-converters. The generator stamps 1-2 cloned events bearing one of
+  the listed names between the last completed step and where the next step
+  would have been. The verifier reads this and applies as `exclusionSteps`
+  to `evaluateFunnel`. Validator throws when an entry is not declared in
+  `events[]` (schema-first); warns on dual-use as a funnel step.
+- **`Funnel.holdPropertyConstant: string`** — verifier-only hint. Use
+  `evaluateFunnelHPC` directly to verify the funnel HPC-style.
+- **`Funnel.reentry: boolean`** — verifier-only hint. Auto-applied by
+  `verifyDungeon` when funnelFrequency / timeToConvert checks match the
+  funnel.
+- **`Funnel.stepFilters: Record<number, { prop, op, value }>`** —
+  verifier-only hint. The verifier mutates `breakdownArgs.steps` to attach
+  `where`-clauses at the matching index.
+
+### Tests (verifier second wave)
+
+| File | Tests | Coverage |
+|------|-------|----------|
+| `tests/unit/identity-resolution.test.js` | 14 | Map inversion, resolver fallback chain |
+| `tests/unit/funnel-engine.test.js` (extended) | 30 added (48 total) | Step filters, reentry, totals, exclusion, HPC, step properties, segment modes, sessionScoped — 5 ported fixtures from `test_qt_funnel.py` |
+| `tests/unit/session-metrics.test.js` | 9 | count/duration/eventsPerSession + 1 ported fixture from `test_qt_sessions.py` |
+| `tests/unit/retention.test.js` | 7 | birth retention + carry_forward + segmentBy + 1 ported fixture from `test_qt_retention.py` |
+| `tests/unit/time-bucketed.test.js` | 10 | day / week / month partitioning + cross-cutting on existing types |
+| `tests/integration/identity-model.test.js` (extended) | 1 added | `emulateBreakdown` profile-merge round-trip |
+| `tests/integration/hook-patterns-emulator.test.js` (extended) | 5 added | Funnel option threading + new breakdown types |
+| `tests/integration/features.test.js` (extended) | 3 added | exclusionEvents validator + generator injection |
+
+Full suite after v1.5.0 second wave: **46 files, 1098 tests.**
+
 ## 1.4.5 — 2026-05-06
 
 ### Added

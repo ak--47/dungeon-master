@@ -285,15 +285,78 @@ Direct access to the engine's counting + funnel primitives:
 ```js
 import {
   evaluateFunnel,
-  evaluateAnyOrderCompletion,   // v1.5 — non-sequential funnel modes
+  evaluateFunnelHPC,            // v1.5.0 — Hold Property Constant
+  resolveFunnelSegment,         // v1.5.0 — first / last / step segment modes
+  evaluateAnyOrderCompletion,
+  buildIdentityMap, resolveUserId,  // v1.5.0 — identity resolution
   countDistinctPeriods,
   nullAwareAvg,
   binByDistinctPeriods,
+  partitionByTimeBucket,        // v1.5.0 — day / week / month
 } from '@ak--47/dungeon-master/verify';
 ```
 
-Use these when the emulator's table shape doesn't match what you're checking
-— e.g., per-user funnel TTC assertions, per-user distinct-day counts.
+### v1.5.0 — new emulator types
+
+| Type | When to use | Required fields |
+|------|-------------|-----------------|
+| `'retention'` | Birth retention curves (Sign Up → Login on day N) | `cohortEvent`, `returnEvent`, `dayBuckets` |
+| `'sessionMetrics'` | Per-session count / duration / events distributions | none required (optional `event` filter, `metrics`) |
+
+Cross-cutting on EVERY type: `timeBucket: 'day' | 'week' | 'month'` partitions
+events into UTC buckets and emits one row per period.
+
+### v1.5.0 — Funnel option threading
+
+When the dungeon's `Funnel` config sets these fields, `verifyDungeon` auto-applies
+them to matching `funnelFrequency` / `timeToConvert` checks:
+
+| Funnel field | Verifier behavior |
+|--------------|-------------------|
+| `reentry: true` | Counts every completion via `result.completions` |
+| `exclusionEvents: string[]` | Wraps as `exclusionSteps: [{ event }]` and terminates the funnel attempt |
+| `stepFilters: { N: { prop, op, value } }` | Mutates `breakdownArgs.steps[N]` to attach the `where` clause |
+| `holdPropertyConstant` | NOT auto-routed — call `evaluateFunnelHPC` directly |
+
+### v1.5.0 — IDENTITY-MODEL DUNGEONS — pass profiles!
+
+When `avgDevicePerUser > 0` or `hasAnonIds: true`, ALWAYS pass `profiles` to
+`emulateBreakdown`. Without it, pre-auth `device_id` events bucket as
+separate "users" and your funnel/retention/attribution numbers all deflate.
+
+```js
+const events = Array.from(result.eventData);
+const profiles = Array.from(result.userProfilesData);
+
+emulateBreakdown(events, {
+  type: 'funnelFrequency',
+  steps: ['visit_landing', 'sign_up', 'first_action'],
+  breakdownByFrequencyOf: 'visit_landing',
+  profiles,        // ← REQUIRED for identity-model dungeons
+});
+```
+
+Auto-builds the device→user map via `buildIdentityMap(profiles)` (reads
+`device_ids` first, falls back to `anonymousIds`). For repeated calls,
+build once and pass `identityMap`.
+
+### v1.5.0 — Time-series verification (timeBucket)
+
+For temporal trends (engineered campaigns, weekly cycles, growth shapes),
+add `timeBucket` to any breakdown:
+
+```js
+emulateBreakdown(events, {
+  type: 'frequencyByFrequency',
+  metricEvent: 'Purchase',
+  breakdownByFrequencyOf: 'Browse',
+  timeBucket: 'week',
+});
+// → [{ period: '2024-W01', metric_freq, breakdown_freq, user_count }, ...]
+```
+
+Use `period` to assert weekly / monthly trend shapes (e.g., "engagement rises
+month over month").
 
 ---
 

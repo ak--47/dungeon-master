@@ -1022,6 +1022,74 @@ describe('config-validator userProps defaults', () => {
 	});
 });
 
+// ─── v1.5.0 Funnel exclusionEvents (generator + validator) ────────────────
+
+describe('Funnel.exclusionEvents (v1.5.0)', () => {
+	test('validator rejects exclusion events not declared in events[]', () => {
+		expect(() => validateDungeonConfig({
+			numUsers: 10,
+			seed: 'excl-validator',
+			events: [
+				{ event: 'land', isFirstEvent: true },
+				{ event: 'sign_up' },
+				{ event: 'browse', weight: 3 },
+			],
+			funnels: [
+				{ sequence: ['land', 'sign_up'], conversionRate: 50, exclusionEvents: ['ghost_event'] },
+			],
+		})).toThrow(/exclusionEvents/);
+	});
+
+	test('validator passes when exclusion events are declared', () => {
+		const cfg = validateDungeonConfig({
+			numUsers: 10,
+			seed: 'excl-pass',
+			events: [
+				{ event: 'land', isFirstEvent: true },
+				{ event: 'sign_up' },
+				{ event: 'rage_click' },
+				{ event: 'browse', weight: 3 },
+			],
+			funnels: [
+				{ sequence: ['land', 'sign_up'], conversionRate: 50, exclusionEvents: ['rage_click'] },
+			],
+		});
+		expect(cfg.funnels[0].exclusionEvents).toEqual(['rage_click']);
+	});
+
+	test('generator injects exclusion events for non-converters with partial completion', async () => {
+		const { default: DUNGEON_MASTER } = await import('../../index.js');
+		const result = await DUNGEON_MASTER({
+			seed: 'excl-inject',
+			numUsers: 100,
+			numDays: 14,
+			avgEventsPerUserPerDay: 3,
+			percentUsersBornInDataset: 100,
+			writeToDisk: false,
+			verbose: false,
+			concurrency: 1,
+			events: [
+				{ event: 'land',     isFirstEvent: true, isStrictEvent: true },
+				{ event: 'view_pricing', isStrictEvent: true },
+				{ event: 'sign_up',  isStrictEvent: true },
+				{ event: 'rage_click', isStrictEvent: true },
+				{ event: 'browse', weight: 5 },
+			],
+			funnels: [
+				{ sequence: ['land', 'view_pricing', 'sign_up'],
+				  conversionRate: 30,                          // 70% drop off
+				  isFirstFunnel: true,
+				  timeToConvert: 1,
+				  exclusionEvents: ['rage_click'] },
+			],
+		});
+		const events = Array.from(result.eventData);
+		const rageClicks = events.filter(e => e.event === 'rage_click');
+		// With 70% drop-off and 100 users → expect non-zero rage_click injections.
+		expect(rageClicks.length).toBeGreaterThan(0);
+	});
+});
+
 describe('inferFunnels strict event exclusion', () => {
 	test('excludes isStrictEvent events from usage funnels', () => {
 		const funnels = inferFunnels([

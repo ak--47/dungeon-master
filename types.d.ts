@@ -922,6 +922,39 @@ export interface Funnel {
 	 * @see AttemptsConfig
 	 */
 	attempts?: AttemptsConfig;
+
+	// v1.5.0 — funnel extensions
+	/**
+	 * v1.5.0 — Events that terminate the funnel attempt for non-converters. The generator
+	 * stamps 1-2 cloned exclusion events between the last completed step and where the next
+	 * step would have been; the verifier reads this and applies them as exclusionSteps to
+	 * `evaluateFunnel`. Each entry MUST be declared in `events[]` (schema-first) — the
+	 * validator throws otherwise.
+	 */
+	exclusionEvents?: string[];
+	/**
+	 * v1.5.0 — Verifier-only hint. When set, the verifier groups the funnel by unique
+	 * values of this property on the step-0 event and runs parallel sub-funnels (HPC).
+	 * Generator behavior unchanged. Currently exposed via `evaluateFunnelHPC` directly,
+	 * not auto-routed through `funnelFrequency`.
+	 */
+	holdPropertyConstant?: string;
+	/**
+	 * v1.5.0 — Verifier-only hint. When `true`, the verifier evaluates with reentry
+	 * enabled (counts every completion). Generator behavior unchanged.
+	 */
+	reentry?: boolean;
+	/**
+	 * v1.5.0 — Verifier-only hint. Per-step property conditions; the verifier mutates
+	 * its step list to attach `where`-clauses at the matching index. Generator behavior
+	 * unchanged.
+	 */
+	stepFilters?: Record<number, {
+		prop: string;
+		op: 'eq' | 'neq' | 'gt' | 'lt' | 'gte' | 'lte' | 'contains' | 'not_contains';
+		value: unknown;
+	}>;
+
 	/** @internal Resolved experiment config set by config-validator. */
 	_experiment?: { name: string; variants: Array<{ name: string; conversionMultiplier: number; ttcMultiplier: number; weight: number }>; startUnix: number | null };
 	/** @internal Set by funnels.js during experiment handling. */
@@ -1691,7 +1724,7 @@ declare module '@ak--47/dungeon-master/hook-patterns' {
  * | `attributedBy` | `conversionEvent`, `attributionEvent`, `attributionProperty` | `model` (default: `'lastTouch'`) |
  */
 export interface EmulateOptions {
-    type: 'frequencyByFrequency' | 'funnelFrequency' | 'aggregatePerUser' | 'timeToConvert' | 'attributedBy';
+    type: 'frequencyByFrequency' | 'funnelFrequency' | 'aggregatePerUser' | 'timeToConvert' | 'attributedBy' | 'sessionMetrics' | 'retention';
     metricEvent?: string;
     breakdownByFrequencyOf?: string;
     perUser?: boolean;
@@ -1707,6 +1740,56 @@ export interface EmulateOptions {
     attributionEvent?: string;
     attributionProperty?: string;
     model?: 'firstTouch' | 'lastTouch';
+    /**
+     * Pre-built device→user map (e.g. from `buildIdentityMap(profiles)`). When omitted but
+     * `profiles` are supplied with `device_ids`, the map is built automatically. Threaded
+     * through every breakdown type so pre-auth (device_id) events resolve to the same
+     * canonical user as post-auth (user_id) events.
+     */
+    identityMap?: Map<string, string>;
+    /** v1.5.0 — funnel reentry. After completing all steps, reset and continue scanning. Used by funnelFrequency + timeToConvert sequential modes. */
+    reentry?: boolean;
+    /** v1.5.0 — funnel exclusion steps. If an exclusion event fires between specified steps, terminate the attempt. */
+    exclusionSteps?: Array<{ event: string; afterStep?: number; beforeStep?: number }>;
+    /** v1.5.0 — funnel step property tracking. Captures matched event properties at each step into FunnelResult.stepProperties. */
+    trackStepProperties?: boolean | string[];
+    /** v1.5.0 — partition funnel evaluation by `session_id`; only steps in the same session can complete. */
+    sessionScoped?: boolean;
+    /** v1.5.0 — cross-cutting time-bucketed output. Wraps any breakdown type, returning rows tagged with `period` per UTC bucket. */
+    timeBucket?: 'day' | 'week' | 'month';
+    /** v1.5.0 — sessionMetrics: filter to sessions containing this event. Omit for all sessions. */
+    metrics?: Array<'count' | 'duration' | 'eventsPerSession'>;
+
+    // v1.5.0 retention extensions
+    /** Retention birth event name. */
+    cohortEvent?: string;
+    /** Retention return event name. */
+    returnEvent?: string;
+    /** Day buckets to check (offsets from birth, ≥1). */
+    dayBuckets?: number[];
+    /** Segment cohort by birth event property value (Mixpanel segment_event=FIRST). */
+    segmentBy?: string;
+    /** CARRY_FORWARD unbounded mode — once retained, counted on all later buckets. */
+    carry_forward?: boolean;
+}
+
+/** v1.5.0 — config for `emulateBreakdown({ type: 'retention' })`. */
+export interface RetentionConfig extends EmulateOptions {
+    type: 'retention';
+    cohortEvent: string;
+    returnEvent: string;
+    dayBuckets: number[];
+    segmentBy?: string;
+    carry_forward?: boolean;
+}
+
+/** v1.5.0 — config for `emulateBreakdown({ type: 'sessionMetrics' })`. */
+export interface SessionMetricsConfig extends EmulateOptions {
+    type: 'sessionMetrics';
+    /** Optional event filter — only sessions containing this event qualify. */
+    event?: string;
+    /** Which metrics to compute. Default: `['count', 'duration', 'eventsPerSession']`. */
+    metrics?: Array<'count' | 'duration' | 'eventsPerSession'>;
 }
 
 declare module '@ak--47/dungeon-master/verify' {
@@ -1714,6 +1797,48 @@ declare module '@ak--47/dungeon-master/verify' {
     export function verifyDungeon(config: Dungeon, checks: Array<{ name: string; breakdown: EmulateOptions; assert: (rows: Array<Record<string, unknown>>, ctx: { events: EventSchema[]; profiles: UserProfile[] }) => { pass: boolean; detail?: string } }>): Promise<{ pass: boolean; results: Array<{ name: string; pass: boolean; detail?: string; rows?: Array<Record<string, unknown>> }>; schemaReport: SchemaReport }>;
     export function deriveExpectedSchema(config: Dungeon): Map<string, Set<string>>;
     export function validateSchema(events: EventSchema[], config: Dungeon): SchemaReport;
+    /** Build a `Map<device_id, canonical_user_id>` by inverting each profile's `device_ids` array. */
+    export function buildIdentityMap(profiles: UserProfile[]): Map<string, string>;
+    /** Resolve canonical user id for an event using the identity map (device→user merge). */
+    export function resolveUserId(event: EventSchema | Record<string, unknown>, identityMap?: Map<string, string>): string | undefined;
+
+    /** Funnel step type — string OR `{ event, where? }` for step-level property filters. */
+    export type FunnelStep = string | { event: string; where?: { prop: string; op: 'eq' | 'neq' | 'gt' | 'lt' | 'gte' | 'lte' | 'contains' | 'not_contains'; value: unknown } };
+    /** Exclusion step config — fires between `afterStep` and `beforeStep` to terminate the funnel attempt. */
+    export interface ExclusionStep { event: string; afterStep?: number; beforeStep?: number }
+    /** Greedy single-pass funnel evaluator options. */
+    export interface FunnelOptions {
+        conversionWindowMs?: number;
+        graceperiod?: boolean;
+        reentry?: boolean;
+        exclusionSteps?: ExclusionStep[];
+        trackStepProperties?: boolean | string[];
+        countMode?: 'uniques' | 'totals';
+        sessionScoped?: boolean;
+    }
+    /** Per-attempt funnel result. */
+    export interface FunnelResult {
+        completed: boolean;
+        reached: number;
+        stepEvents: Array<Record<string, unknown> | null>;
+        stepTimes: Array<number | null>;
+        ttcMs: number | null;
+        completions: number;
+        stepProperties?: Array<Record<string, unknown>>;
+        sessionId?: string;
+    }
+    /** Evaluate a funnel against a user's events. Returns FunnelResult or array (totals mode). */
+    export function evaluateFunnel(events: Array<Record<string, unknown>>, steps: FunnelStep[], options?: FunnelOptions): FunnelResult | FunnelResult[];
+    /** Hold Property Constant — runs parallel sub-funnels per unique value of `holdProperty`. */
+    export function evaluateFunnelHPC(events: Array<Record<string, unknown>>, steps: FunnelStep[], holdProperty: string, options?: FunnelOptions): Map<string | number, FunnelResult | FunnelResult[]>;
+    /** Pick a property snapshot from a FunnelResult for the given segment mode. */
+    export function resolveFunnelSegment(result: FunnelResult, mode: 'first' | 'last' | { step: number }): Record<string, unknown> | undefined;
+    /** Normalize a FunnelStep to the `{ event, where? }` canonical shape. */
+    export function normalizeStep(step: FunnelStep): { event: string; where?: { prop: string; op: string; value: unknown } };
+    /** Test whether an event qualifies for a step's where-clause. */
+    export function matchesStepFilter(event: Record<string, unknown>, where?: { prop: string; op: string; value: unknown }): boolean;
+    /** Partition events into UTC `day` / `week` (ISO) / `month` buckets. */
+    export function partitionByTimeBucket(events: Array<Record<string, unknown>>, bucket: 'day' | 'week' | 'month'): Array<{ period: string; events: Array<Record<string, unknown>> }>;
 
     interface SchemaReport {
         pass: boolean;
