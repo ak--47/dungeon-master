@@ -200,6 +200,49 @@ describe('emulateBreakdown', () => {
 		expect(withExclStep1).toBeLessThan(noExclStep1);
 	});
 
+	test('aggregatePerUser SUM mode: cohort_sum = sum of per-user sums', () => {
+		// 2 users, both in breakdown_freq=1 cohort.
+		// u1: 2 purchases of 10 → per-user sum = 20
+		// u2: 1 purchase of 30 → per-user sum = 30
+		// cohort: avg = 25, sum = 50
+		const events = [
+			ev('Browse',   0, { user_id: 'u1' }),
+			ev('Purchase', 0, { user_id: 'u1', amount: 10 }),
+			ev('Purchase', 0, { user_id: 'u1', amount: 10 }),
+			ev('Browse',   0, { user_id: 'u2' }),
+			ev('Purchase', 0, { user_id: 'u2', amount: 30 }),
+		];
+		const rows = emulateBreakdown(events, {
+			type: 'aggregatePerUser',
+			event: 'Purchase',
+			property: 'amount',
+			agg: 'sum',
+			breakdownByFrequencyOf: 'Browse',
+		});
+		const r = rows.find(x => x.breakdown_freq === 1);
+		expect(r.avg_aggregate).toBe(25);
+		expect(r.cohort_sum).toBe(50);
+	});
+
+	test('aggregatePerUser MAX mode: cohort_max = max of per-user maxes', () => {
+		const events = [
+			ev('Browse',   0, { user_id: 'u1' }),
+			ev('Purchase', 0, { user_id: 'u1', amount: 10 }),
+			ev('Purchase', 0, { user_id: 'u1', amount: 50 }),
+			ev('Browse',   0, { user_id: 'u2' }),
+			ev('Purchase', 0, { user_id: 'u2', amount: 80 }),
+		];
+		const rows = emulateBreakdown(events, {
+			type: 'aggregatePerUser',
+			event: 'Purchase',
+			property: 'amount',
+			agg: 'max',
+			breakdownByFrequencyOf: 'Browse',
+		});
+		const r = rows.find(x => x.breakdown_freq === 1);
+		expect(r.cohort_max).toBe(80);  // max(50, 80)
+	});
+
 	test('timeBucket: wraps any breakdown type and tags rows with period', () => {
 		// Use absolute ISO times (skip the t0-offset `ev` helper).
 		const mk = (event, isoTime, props) => ({ event, time: isoTime, ...props });

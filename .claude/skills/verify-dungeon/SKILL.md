@@ -316,7 +316,6 @@ them to matching `funnelFrequency` / `timeToConvert` checks:
 | `reentry: true` | Counts every completion via `result.completions` |
 | `exclusionEvents: string[]` | Wraps as `exclusionSteps: [{ event }]` and terminates the funnel attempt |
 | `stepFilters: { N: { prop, op, value } }` | Mutates `breakdownArgs.steps[N]` to attach the `where` clause |
-| `holdPropertyConstant` | NOT auto-routed — call `evaluateFunnelHPC` directly |
 
 ### v1.5.0 — IDENTITY-MODEL DUNGEONS — pass profiles!
 

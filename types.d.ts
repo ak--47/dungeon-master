@@ -933,13 +933,6 @@ export interface Funnel {
 	 */
 	exclusionEvents?: string[];
 	/**
-	 * v1.5.0 — Verifier-only hint. When set, the verifier groups the funnel by unique
-	 * values of this property on the step-0 event and runs parallel sub-funnels (HPC).
-	 * Generator behavior unchanged. Currently exposed via `evaluateFunnelHPC` directly,
-	 * not auto-routed through `funnelFrequency`.
-	 */
-	holdPropertyConstant?: string;
-	/**
 	 * v1.5.0 — Verifier-only hint. When `true`, the verifier evaluates with reentry
 	 * enabled (counts every completion). Generator behavior unchanged.
 	 */
@@ -1762,6 +1755,10 @@ export interface EmulateOptions {
      * and emits a `{ period, _empty: true }` marker for buckets with no events
      * (Mixpanel normal_query.cpp emits zero rows for empty intervals). Without
      * this, only buckets containing events are returned.
+     *
+     * **Empty-row contract:** consumers MUST filter `r._empty` before any
+     * numerical aggregation. Populated rows have full breakdown fields plus
+     * `period`; empty rows have ONLY `period` and `_empty: true`.
      */
     timeBucketRange?: { from: number | string; to: number | string };
     /** v1.5.0 — sessionMetrics: filter to sessions containing this event. Omit for all sessions. */

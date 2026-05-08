@@ -323,14 +323,15 @@ describe('evaluateFunnel — exclusion steps', () => {
 	const ev5 = (event, time, props = {}) => ({ event, time, user_id: 'u1', ...props });
 
 	// ported from test_qt_funnel.py: "Standard case" exclusion fixture.
-	// Funnel [fs1, fs3], exclusion fs2 between them. d1: fs1→fs2→fs3 (excluded);
-	// d2: fs1→fs3 (converts).
+	// Funnel [fs1, fs3], exclusion fs2 between them. Mixpanel: exclusion[0]
+	// fires between step 0 and step 1 (user reached step 0, not step 1 yet)
+	// → afterStep=0, beforeStep=1.
 	test('exclusion event between steps terminates attempt', () => {
 		const events = [
 			ev5('fs1', 1000), ev5('fs2', 2000), ev5('fs3', 3000),
 		];
 		const r = evaluateFunnel(events, ['fs1', 'fs3'], {
-			exclusionSteps: [{ event: 'fs2', afterStep: 1, beforeStep: 2 }],
+			exclusionSteps: [{ event: 'fs2', afterStep: 0, beforeStep: 1 }],
 		});
 		expect(r.completed).toBe(false);
 		expect(r.reached).toBe(0);
@@ -339,22 +340,49 @@ describe('evaluateFunnel — exclusion steps', () => {
 	test('no exclusion event → funnel completes', () => {
 		const events = [ev5('fs1', 1000), ev5('fs3', 2000)];
 		const r = evaluateFunnel(events, ['fs1', 'fs3'], {
-			exclusionSteps: [{ event: 'fs2', afterStep: 1, beforeStep: 2 }],
+			exclusionSteps: [{ event: 'fs2', afterStep: 0, beforeStep: 1 }],
 		});
 		expect(r.completed).toBe(true);
 	});
 
 	// ported from test_qt_funnel.py: "exclusion step just before last step alone"
+	// Funnel [fs1, fs2, fs3] with exclusion es2 between step 1 and step 2:
+	// afterStep=1, beforeStep=2 (user reached fs2, not fs3 yet).
 	test('exclusion only between specific consecutive steps', () => {
 		const events = [
 			ev5('fs1', 1000), ev5('fs2', 2000), ev5('es2', 3000), ev5('fs3', 4000),
 		];
 		const r = evaluateFunnel(events, ['fs1', 'fs2', 'fs3'], {
-			exclusionSteps: [{ event: 'es2', afterStep: 2, beforeStep: 3 }],
+			exclusionSteps: [{ event: 'es2', afterStep: 1, beforeStep: 2 }],
 		});
 		// Reached fs2 (step 1) but es2 fires before fs3 → terminates at step 1.
 		expect(r.reached).toBe(1);
 		expect(r.completed).toBe(false);
+	});
+
+	test('explicit afterStep prevents pre-step-0 exclusion', () => {
+		// es fires BEFORE fs1 reached. With afterStep=0, exclusion requires
+		// reached >= 0 → does not fire when reached=-1.
+		const events = [
+			ev5('es', 500), ev5('fs1', 1000), ev5('fs2', 2000),
+		];
+		const r = evaluateFunnel(events, ['fs1', 'fs2'], {
+			exclusionSteps: [{ event: 'es', afterStep: 0, beforeStep: 1 }],
+		});
+		expect(r.completed).toBe(true);
+	});
+
+	test('default afterStep (anywhere) DOES fire pre-step-0', () => {
+		// Same fixture but no explicit afterStep — default -Infinity → fires
+		// anywhere in the attempt, including before reaching step 0.
+		const events = [
+			ev5('es', 500), ev5('fs1', 1000), ev5('fs2', 2000),
+		];
+		const r = evaluateFunnel(events, ['fs1', 'fs2'], {
+			exclusionSteps: [{ event: 'es' }],
+		});
+		expect(r.completed).toBe(false);
+		expect(r.reached).toBe(-1);
 	});
 
 	test('exclusion + reentry: terminates current attempt only', () => {

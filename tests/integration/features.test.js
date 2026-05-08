@@ -1057,6 +1057,59 @@ describe('Funnel.exclusionEvents (v1.5.0)', () => {
 		expect(cfg.funnels[0].exclusionEvents).toEqual(['rage_click']);
 	});
 
+	test('exclusion event injection does NOT pollute schema with source-event props', async () => {
+		// rage_click events MUST NOT inherit cart_value (source-event-specific)
+		// or schema validator flags undeclared columns.
+		const { default: DUNGEON_MASTER } = await import('../../index.js');
+		const { validateSchema } = await import('../../lib/verify/schema-validator.js');
+		const config = {
+			seed: 'excl-schema-clean',
+			numUsers: 50,
+			numDays: 14,
+			avgEventsPerUserPerDay: 3,
+			percentUsersBornInDataset: 100,
+			writeToDisk: false,
+			verbose: false,
+			concurrency: 1,
+			events: [
+				{ event: 'view_product', isFirstEvent: true, isStrictEvent: true,
+				  properties: { product_id: ['p1', 'p2'], cart_value: [10, 20, 30] } },
+				{ event: 'add_to_cart', isStrictEvent: true,
+				  properties: { cart_value: [50, 100, 150] } },
+				{ event: 'checkout', isStrictEvent: true,
+				  properties: { order_total: [99, 199] } },
+				{ event: 'rage_click', isStrictEvent: true,
+				  properties: { error_type: ['form', 'button', 'nav'] } },
+				{ event: 'browse', weight: 5 },
+			],
+			funnels: [
+				{ sequence: ['view_product', 'add_to_cart', 'checkout'],
+				  conversionRate: 30, isFirstFunnel: true, timeToConvert: 1,
+				  exclusionEvents: ['rage_click'] },
+			],
+		};
+		const result = await DUNGEON_MASTER(config);
+		const events = Array.from(result.eventData);
+		const rageClicks = events.filter(e => e.event === 'rage_click');
+		expect(rageClicks.length).toBeGreaterThan(0);
+
+		// Every rage_click MUST have error_type (declared) and MUST NOT have
+		// cart_value or order_total (source-event-specific props).
+		for (const rc of rageClicks) {
+			expect(rc.error_type).toBeDefined();
+			expect('cart_value' in rc).toBe(false);
+			expect('order_total' in rc).toBe(false);
+			expect('product_id' in rc).toBe(false);
+		}
+
+		// Schema validator should pass — no flag-stamping flagged on rage_click.
+		const report = validateSchema(events, config);
+		const rageClickReport = report.eventTypes['rage_click'];
+		if (rageClickReport) {
+			expect(rageClickReport.added.filter(c => c === 'cart_value' || c === 'order_total' || c === 'product_id')).toEqual([]);
+		}
+	});
+
 	test('generator injects exclusion events for non-converters with partial completion', async () => {
 		const { default: DUNGEON_MASTER } = await import('../../index.js');
 		const result = await DUNGEON_MASTER({

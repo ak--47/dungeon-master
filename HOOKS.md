@@ -1433,9 +1433,10 @@ console.log(map.get('pro').completed);   // pro user completed
 console.log(map.get('free').completed);  // free user did not (independent)
 ```
 
-NOT auto-routed through `funnelFrequency` in v1.5.0 — call `evaluateFunnelHPC`
-directly. To document on the funnel config: set `holdPropertyConstant: 'plan'`
-as a verifier-only hint.
+HPC is **not auto-routed** through `funnelFrequency` in v1.5.0 — the report
+shape differs (one row per `step × hpc_value` instead of `step × cohort`).
+Call `evaluateFunnelHPC` directly inside your `verifyDungeon` check's
+`assert` callback when you need it.
 
 ### 8.6 Step-level filter patterns
 
