@@ -67,17 +67,16 @@ describe('resolveUserId', () => {
 		{ distinct_id: 'user-1', device_ids: ['d1', 'd2'] },
 	]);
 
-	test('device_id resolves via map', () => {
+	test('event.distinct_id wins above all (Mixpanel canonical post-merge)', () => {
+		expect(resolveUserId({ distinct_id: 'stitched', device_id: 'd1', user_id: 'u99' }, map)).toBe('stitched');
+	});
+
+	test('device_id resolves via map when distinct_id absent', () => {
 		expect(resolveUserId({ device_id: 'd1' }, map)).toBe('user-1');
 		expect(resolveUserId({ device_id: 'd2' }, map)).toBe('user-1');
 	});
 
-	test('user_id wins when present alongside device_id (post-merge always returns canonical)', () => {
-		// device_id is checked first against the map; if matched, returns canonical
-		expect(resolveUserId({ user_id: 'user-1', device_id: 'd1' }, map)).toBe('user-1');
-	});
-
-	test('user_id resolves when device_id absent', () => {
+	test('user_id resolves when distinct_id + device_id both absent', () => {
 		expect(resolveUserId({ user_id: 'user-1' }, map)).toBe('user-1');
 	});
 

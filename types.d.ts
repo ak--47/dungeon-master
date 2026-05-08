@@ -1757,6 +1757,13 @@ export interface EmulateOptions {
     sessionScoped?: boolean;
     /** v1.5.0 — cross-cutting time-bucketed output. Wraps any breakdown type, returning rows tagged with `period` per UTC bucket. */
     timeBucket?: 'day' | 'week' | 'month';
+    /**
+     * v1.5.0 — when set with `timeBucket`, enumerates EVERY bucket in `[from, to]`
+     * and emits a `{ period, _empty: true }` marker for buckets with no events
+     * (Mixpanel normal_query.cpp emits zero rows for empty intervals). Without
+     * this, only buckets containing events are returned.
+     */
+    timeBucketRange?: { from: number | string; to: number | string };
     /** v1.5.0 — sessionMetrics: filter to sessions containing this event. Omit for all sessions. */
     metrics?: Array<'count' | 'duration' | 'eventsPerSession'>;
 
@@ -1771,6 +1778,13 @@ export interface EmulateOptions {
     segmentBy?: string;
     /** CARRY_FORWARD unbounded mode — once retained, counted on all later buckets. */
     carry_forward?: boolean;
+    /**
+     * v1.5.0 — Mixpanel `birth_can_retain` (retention_query.cpp:1097-1109). Default
+     * `false`: a return event at the EXACT birth ms is NOT counted (strict `<`).
+     * Set `true` to count exact-birth-ms returns (rare; usually a same-event-as-birth
+     * pattern requires COMPOUNDED retention which is not supported here).
+     */
+    birthCanRetain?: boolean;
 }
 
 /** v1.5.0 — config for `emulateBreakdown({ type: 'retention' })`. */

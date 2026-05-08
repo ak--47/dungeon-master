@@ -289,13 +289,30 @@ describe('evaluateFunnel — totals (simultaneous histories)', () => {
 		expect(r[2].stepTimes).toEqual([5000, 6000]);
 	});
 
-	test('throws when countMode=totals without reentry', () => {
-		expect(() => evaluateFunnel([], ['A', 'B'], { countMode: 'totals' }))
-			.toThrow(/reentry/);
+	test('totals mode without reentry: returns single-attempt array', () => {
+		// Mixpanel funnel_query.cpp:2055-2100 — totals does NOT require reentry.
+		// Without reentry, totals returns one attempt (complete or partial).
+		const r = evaluateFunnel([ev4('A', 1000), ev4('B', 2000)], ['A', 'B'], { countMode: 'totals' });
+		expect(Array.isArray(r)).toBe(true);
+		expect(r.length).toBe(1);
+		expect(r[0].completed).toBe(true);
 	});
 
-	test('returns empty array when never completed', () => {
-		const r = evaluateFunnel([ev4('A', 1000)], ['A', 'B'], { reentry: true, countMode: 'totals' });
+	test('totals mode includes incomplete attempts (drop-off contributes per-step counts)', () => {
+		// funnel_query.cpp:1747 aggregates `history_get_reached >= 0`, NOT "completed".
+		const events = [
+			ev4('A', 1000), ev4('B', 2000),  // complete
+			ev4('A', 3000),                   // partial — only step 0 reached
+		];
+		const r = evaluateFunnel(events, ['A', 'B'], { reentry: true, countMode: 'totals' });
+		expect(r.length).toBe(2);
+		expect(r[0].completed).toBe(true);
+		expect(r[1].completed).toBe(false);
+		expect(r[1].reached).toBe(0);
+	});
+
+	test('returns empty array when never reached any step', () => {
+		const r = evaluateFunnel([ev4('Z', 1000)], ['A', 'B'], { reentry: true, countMode: 'totals' });
 		expect(r).toEqual([]);
 	});
 });
@@ -352,8 +369,12 @@ describe('evaluateFunnel — exclusion steps', () => {
 			countMode: 'totals',
 			exclusionSteps: [{ event: 'X' }],
 		});
-		expect(r.length).toBe(1);
-		expect(r[0].stepTimes).toEqual([10000, 12000]);
+		// 2 attempts: first reached step 0 then excluded; second completed.
+		expect(r.length).toBe(2);
+		expect(r[0].completed).toBe(false);
+		expect(r[0].reached).toBe(0);
+		expect(r[1].completed).toBe(true);
+		expect(r[1].stepTimes).toEqual([10000, 12000]);
 	});
 });
 

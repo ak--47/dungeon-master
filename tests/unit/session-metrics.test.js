@@ -105,6 +105,36 @@ describe('emulateBreakdown — sessionMetrics', () => {
 	});
 });
 
+// ── Generator session day-boundary split (parity with session_query.cpp) ────
+
+describe('assignSessionIds — UTC day boundary splits sessions (Mixpanel parity)', () => {
+	test('events crossing UTC midnight produce 2 sessions even with no timeout gap', async () => {
+		const { default: utils } = await import('../../lib/utils/utils.js').then(m => ({ default: m }));
+		const events = [
+			{ time: new Date(Date.UTC(2024, 0, 1, 23, 55)).toISOString(), user_id: 'u1' },
+			{ time: new Date(Date.UTC(2024, 0, 1, 23, 59)).toISOString(), user_id: 'u1' },
+			{ time: new Date(Date.UTC(2024, 0, 2,  0,  5)).toISOString(), user_id: 'u1' }, // 10min later, but new UTC day
+		];
+		utils.assignSessionIds(events);
+		const sids = new Set(events.map(e => e.session_id));
+		expect(sids.size).toBe(2);
+		expect(events[0].session_id).toBe(events[1].session_id);
+		expect(events[1].session_id).not.toBe(events[2].session_id);
+	});
+
+	test('events on same UTC day with short gaps stay in one session', async () => {
+		const { default: utils } = await import('../../lib/utils/utils.js').then(m => ({ default: m }));
+		const events = [
+			{ time: new Date(Date.UTC(2024, 0, 1, 10, 0)).toISOString(), user_id: 'u1' },
+			{ time: new Date(Date.UTC(2024, 0, 1, 10, 15)).toISOString(), user_id: 'u1' },
+			{ time: new Date(Date.UTC(2024, 0, 1, 10, 25)).toISOString(), user_id: 'u1' },
+		];
+		utils.assignSessionIds(events);
+		const sids = new Set(events.map(e => e.session_id));
+		expect(sids.size).toBe(1);
+	});
+});
+
 // ── Session-scoped funnels ───────────────────────────────────────────────────
 
 describe('evaluateFunnel — sessionScoped (integration with session_id)', () => {

@@ -112,50 +112,101 @@ describe('emulateBreakdown — retention', () => {
 		expect(pro.retained_pct).toBe(1);
 	});
 
-	test('return event on birth day is NOT counted as retention', () => {
-		// Mixpanel definition: birth = day 0. Return must be on day >= 1.
+	test('return event 1h after birth lands in bucket 0 (ms-delta), NOT bucket 1', () => {
+		// Mixpanel retention_query.cpp:1227-1231 — bucket = floor((return - birth) / DAY_MS).
+		// 1h delta → bucket 0 → not counted in dayBuckets [1].
 		const events = [
 			ev('Sign Up', day(0),               { user_id: 'u1' }),
-			ev('Login',   day(0) + 3_600_000,   { user_id: 'u1' }),  // same UTC day as birth
+			ev('Login',   day(0) + 3_600_000,   { user_id: 'u1' }),  // 1h after birth
 		];
-		const rows = emulateBreakdown(events, {
+		const noDay1 = emulateBreakdown(events, {
 			type: 'retention',
 			cohortEvent: 'Sign Up',
 			returnEvent: 'Login',
 			dayBuckets: [1],
 		});
-		expect(rows[0].retained_count).toBe(0);
+		expect(noDay1[0].retained_count).toBe(0);
+		// But bucket 0 IS counted when requested.
+		const day0 = emulateBreakdown(events, {
+			type: 'retention',
+			cohortEvent: 'Sign Up',
+			returnEvent: 'Login',
+			dayBuckets: [0],
+		});
+		expect(day0[0].retained_count).toBe(1);
+	});
+
+	test('ms-delta bucketing: 23h after birth → bucket 0; 25h → bucket 1', () => {
+		// Both returns happen on the UTC day AFTER birth (calendar day+1) but
+		// the ms-delta puts them in different buckets.
+		const events = [
+			ev('Sign Up', Date.UTC(2024, 0, 1, 18, 0, 0), { user_id: 'u23h' }),
+			ev('Login',   Date.UTC(2024, 0, 2, 17, 0, 0), { user_id: 'u23h' }),  // 23h delta → bucket 0
+			ev('Sign Up', Date.UTC(2024, 0, 1, 18, 0, 0), { user_id: 'u25h' }),
+			ev('Login',   Date.UTC(2024, 0, 2, 19, 0, 0), { user_id: 'u25h' }),  // 25h delta → bucket 1
+		];
+		const rows = emulateBreakdown(events, {
+			type: 'retention',
+			cohortEvent: 'Sign Up',
+			returnEvent: 'Login',
+			dayBuckets: [0, 1],
+		});
+		expect(rows.find(r => r.day === 0).retained_count).toBe(1);
+		expect(rows.find(r => r.day === 1).retained_count).toBe(1);
+	});
+
+	test('birthCanRetain: when true, return at exact birth time is counted', () => {
+		const events = [
+			ev('Sign Up', day(0), { user_id: 'u1' }),
+			ev('Login',   day(0), { user_id: 'u1' }),  // same ms as birth
+		];
+		const off = emulateBreakdown(events, {
+			type: 'retention',
+			cohortEvent: 'Sign Up',
+			returnEvent: 'Login',
+			dayBuckets: [0],
+		});
+		const on = emulateBreakdown(events, {
+			type: 'retention',
+			cohortEvent: 'Sign Up',
+			returnEvent: 'Login',
+			dayBuckets: [0],
+			birthCanRetain: true,
+		});
+		expect(off[0].retained_count).toBe(0);   // strict < default
+		expect(on[0].retained_count).toBe(1);    // <= when birthCanRetain
 	});
 
 	// ported from test_qt_retention.py: test_retention basic case.
-	// Two cohort users (r9, r2), bucket 1 (next day) checks retention_event.
-	test('ported fixture: cohort = users with birth event; daily buckets', () => {
+	// With Mixpanel's ms-delta bucketing (retention_query.cpp:1227-1231):
+	//   r9 birth at 2011-12-01 20:58:41
+	//     return at 2011-12-01 20:58:43 → 2s delta → bucket 0
+	//     return at 2011-12-02 21:54:22 → 1d 0h 55m delta → bucket 1
+	//     return at 2011-12-05 20:58:22 → 3d 23h 59m 41s delta → bucket 3 (under 96h)
+	//   r2 birth at 2011-12-01 20:58:41
+	//     return at 2011-12-03 18:54:22 → 1d 21h 55m delta → bucket 1 (under 48h)
+	test('ported fixture (ms-delta bucketing): cohort = 2 users, distribute across buckets', () => {
 		const events = [
 			ev('$born',           Date.UTC(2011, 11, 1, 20, 58, 41), { user_id: 'r9' }),
 			ev('$born',           Date.UTC(2011, 11, 1, 20, 58, 41), { user_id: 'r2' }),
 			ev('$born',           Date.UTC(2011, 11, 1, 20, 58, 44), { user_id: 'r2' }),
-			ev('retention_event', Date.UTC(2011, 11, 1, 20, 58, 43), { user_id: 'r9' }),  // birth day, not counted
-			ev('retention_event', Date.UTC(2011, 11, 1, 20, 58, 43), { user_id: 'r3' }),  // no $born, not in cohort
-			ev('retention_event', Date.UTC(2011, 11, 2, 21, 54, 22), { user_id: 'r9' }),  // day 1
-			ev('retention_event', Date.UTC(2011, 11, 3, 18, 54, 22), { user_id: 'r2' }),  // day 2
-			ev('retention_event', Date.UTC(2011, 11, 5, 20, 58, 22), { user_id: 'r9' }),  // day 4
+			ev('retention_event', Date.UTC(2011, 11, 1, 20, 58, 43), { user_id: 'r9' }),
+			ev('retention_event', Date.UTC(2011, 11, 1, 20, 58, 43), { user_id: 'r3' }),  // r3 not in cohort
+			ev('retention_event', Date.UTC(2011, 11, 2, 21, 54, 22), { user_id: 'r9' }),
+			ev('retention_event', Date.UTC(2011, 11, 3, 18, 54, 22), { user_id: 'r2' }),
+			ev('retention_event', Date.UTC(2011, 11, 5, 20, 58, 22), { user_id: 'r9' }),
 		];
 		const rows = emulateBreakdown(events, {
 			type: 'retention',
 			cohortEvent: '$born',
 			returnEvent: 'retention_event',
-			dayBuckets: [1, 2, 3, 4],
+			dayBuckets: [0, 1, 2, 3],
 		});
-		// Cohort = {r9, r2} = 2 users. r3 excluded.
 		expect(rows[0].cohort_size).toBe(2);
-		// Day 1: only r9 (1 user)
-		expect(rows.find(r => r.day === 1).retained_count).toBe(1);
-		// Day 2: only r2 (1 user)
-		expect(rows.find(r => r.day === 2).retained_count).toBe(1);
-		// Day 3: nobody
-		expect(rows.find(r => r.day === 3).retained_count).toBe(0);
-		// Day 4: r9
-		expect(rows.find(r => r.day === 4).retained_count).toBe(1);
+		expect(rows.find(r => r.day === 0).retained_count).toBe(1); // r9 only (2s delta)
+		expect(rows.find(r => r.day === 1).retained_count).toBe(2); // r9 + r2 (24h-48h)
+		expect(rows.find(r => r.day === 2).retained_count).toBe(0);
+		expect(rows.find(r => r.day === 3).retained_count).toBe(1); // r9 (~96h)
 	});
 
 	test('throws on missing required config', () => {

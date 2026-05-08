@@ -153,36 +153,80 @@ count BELOW the configured target. Pick one. If you need both effects, set
 `avgActiveDaysPerUser` and write decay logic in an `everything` hook scoped
 to specific cohorts (gives explicit control over the interaction).
 
-### 2.6 Sessions are query-time computed (30-min gap, 24h max)
+### 2.6 Sessions are query-time computed (30-min gap, 24h max, day-boundary split)
 
-Reference: `backend/arb/reader/queries/session_query.cpp`. Sessions are NOT
-persisted on raw events in Mixpanel — they're derived per query from a 30-min
-inactivity gap (default `session_timeout`) and a 24h max-time cap. Each
-session emits synthetic `$duration_s`, `$event_count`, `$origin_start`,
+Reference: `backend/arb/reader/queries/session_query.cpp:828-830, 905-928`.
+Sessions are NOT persisted on raw events in Mixpanel — they're derived per
+query from THREE reset triggers:
+
+1. **Inactivity gap** > `session_timeout` (default 30 min, strict `>`)
+2. **Max session duration** > `session_max_time` (default 24h)
+3. **UTC (qtz) day boundary** — `last_event_day_idx != day_idx` ends the session
+
+Each session emits synthetic `$duration_s`, `$event_count`, `$origin_start`,
 `$origin_end` properties.
 
-**v1.5 contract:** the generator pre-stamps `session_id` using the same
-30-min-gap + 24h-max rules, so the verifier can trust pre-stamped IDs and
-group by `(user, session_id)` directly. Use
-`emulateBreakdown({ type: 'sessionMetrics' })` to verify session-level
-shapes; use `evaluateFunnel({ sessionScoped: true })` to require steps to
-land in the same session.
+**v1.5 contract:** the generator's `assignSessionIds` pre-stamps `session_id`
+using all three rules (UTC day boundary added in v1.5.0 audit). Verifier
+trusts pre-stamped IDs and groups by `(user, session_id)`. Use
+`emulateBreakdown({ type: 'sessionMetrics' })` to verify session-level shapes.
 
-### 2.7 Retention is birth-anchored, day-N return-event check
+**Verifier-only conveniences (not directly reproducible in Mixpanel UI):**
+- `evaluateFunnel({ sessionScoped: true })` partitions events per session and
+  runs the matcher independently. Mixpanel's closest analog is
+  `WINDOW_TYPE_SESSIONS` (`conversion_window.cpp:9-13`) — bounds the window
+  by session COUNT, not by partitioning. Use sessionScoped for clean
+  per-session funnel verification; for Mixpanel-replay accuracy, prefer
+  setting `conversionWindowMs = 1800000` (30 min).
+- `sessionMetrics({ event: 'X' })` filters to sessions containing event X.
+  Mixpanel has no direct equivalent in `session_query.cpp`.
 
-Reference: `backend/arb/reader/queries/retention_query.cpp`. For each user,
-the engine finds the first occurrence of `birth_event` (cohort entry), then
-for each day bucket `N` checks whether the user has `return_event` on UTC day
-`(birth_day + N)`. **Same-day returns are NOT counted** — day 0 is the birth
-day; bucket day 1 = next UTC calendar day.
+**Divergences (documented):**
+- Verifier uses **UTC**, not query timezone (qtz). For non-UTC accounts,
+  bucket boundaries shift by hours.
+- Percentiles use linear interpolation (d3.quantile). Mixpanel uses TDigest
+  in production — diverges by single-digit % at p90 on small samples.
+
+### 2.7 Retention is birth-anchored, ms-delta bucketed
+
+Reference: `backend/arb/reader/queries/retention_query.cpp:1227-1231`. For
+each user, the engine finds the first occurrence of `birth_event` →
+`first_event_time_s`. For each return event, it computes:
+
+```
+time_to_retention_event_s = retention_event_time_s - first_event_time_s
+bucket = floor(time_to_retention_event_s / bucket_seconds)
+```
+
+**Bucketing is ms-delta from birth, NOT a UTC-calendar-day-number difference.**
+A return 23h after birth lands in bucket 0; a return 25h after birth lands in
+bucket 1 — even when both fall on the UTC calendar day after the birth day.
+
+**`birth_can_retain`** (default `false`; `retention_query.cpp:1097-1109`):
+ms-strict check on whether returns AT the birth ms count. Default excludes
+them (`first_event_time < retention_event_time`). Set `birthCanRetain: true`
+on the verifier to count exact-birth-ms returns.
 
 `carry_forward` mode marks a user as retained for every later bucket once
-they hit any earlier bucket (Mixpanel's CARRY_FORWARD unbounded mode). Use
-when measuring "retained at any point through day N".
+they hit any earlier bucket (Mixpanel's CARRY_FORWARD unbounded mode,
+`retention_query.cpp:1824-1837`). Retention is monotonically non-decreasing
+across buckets in this mode.
 
 `segmentBy` partitions the cohort by a property on the BIRTH event
-(Mixpanel's `segment_event=FIRST` mode). Birth-event property is captured at
-cohort entry time and follows the user through all retention buckets.
+(Mixpanel's `segment_event=FIRST` mode — `retention_query.cpp:1309`).
+
+**Documented gaps (out of v1.5.0 verifier scope):**
+- **COMPOUNDED retention** (`retention_query.cpp:670`) reuses the first-event
+  filter as the return filter, making EVERY cohort event a retention
+  candidate. Used heavily in Mixpanel's "DAU coming back" reports — verify
+  these patterns in DuckDB or directly in Mixpanel.
+- **CARRY_BACK / CONSECUTIVE_FORWARD** unbounded modes
+- **CALENDAR_START** bucket alignment (anchor buckets to absolute calendar
+  periods instead of birth time)
+- **`segment_event=SECOND`** (segment by return-event property)
+- **Cohort window** — verifier uses ALL users with the birth event in the
+  dataset; Mixpanel restricts to users with birth in `[from_date, to_date]`
+- **Week / month bucket units** — verifier supports day buckets only
 
 ### 2.8 Funnel reentry: state machine resets after completion
 
@@ -1302,16 +1346,18 @@ const rows = emulateBreakdown(events, {
   type: 'retention',
   cohortEvent: 'Sign Up',
   returnEvent: 'Login',
-  dayBuckets: [1, 7, 14, 30],
-  segmentBy: 'plan',         // optional — segment cohort by birth event prop
-  carry_forward: false,      // optional — once retained, retained on later buckets
-  profiles,                  // optional — auto-builds identity map
+  dayBuckets: [0, 1, 7, 14, 30],   // bucket 0 = within 24h of birth
+  segmentBy: 'plan',               // optional — segment by birth event prop
+  carry_forward: false,            // optional — monotonically non-decreasing
+  birthCanRetain: false,           // optional — count returns AT birth ms (default false)
+  profiles,                        // optional — auto-builds identity map
 });
 // → [{ day, retained_count, cohort_size, retained_pct, segment }, ...]
 ```
 
 **In Mixpanel:** Retention report with cohort = "did Sign Up", return =
-"did Login". Day buckets are UTC calendar days from birth.
+"did Login". Buckets use ms-delta from birth, NOT calendar-day differences
+(see §2.7) — a return 23h after birth = bucket 0, 25h = bucket 1.
 
 ### 8.2 Session metrics
 
@@ -1427,6 +1473,25 @@ const rows = emulateBreakdown(events, {
 
 Cross-cutting on every breakdown type. Period labels: `YYYY-MM-DD` (day),
 `YYYY-Www` (ISO Monday-anchored week), `YYYY-MM` (month).
+
+**Empty-bucket backfill (Mixpanel parity):** Mixpanel's `normal_query.cpp`
+emits zero rows for empty intervals on its trend axis. Pass
+`timeBucketRange: { from, to }` to enumerate every bucket in the range and
+emit `{ period, _empty: true }` markers for buckets with no events:
+
+```js
+emulateBreakdown(events, {
+  type: 'frequencyByFrequency',
+  metricEvent: 'Purchase',
+  breakdownByFrequencyOf: 'Browse',
+  timeBucket: 'day',
+  timeBucketRange: { from: '2024-01-01', to: '2024-01-31' },
+});
+// → 31 rows, one per day. Days with no data: { period, _empty: true }.
+```
+
+**Documented divergence:** verifier uses UTC; Mixpanel uses qtz. For non-UTC
+accounts, day/week/month boundaries shift by hours.
 
 ### 8.8 Identity-aware verification
 

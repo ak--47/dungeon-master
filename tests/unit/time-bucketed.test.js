@@ -135,4 +135,28 @@ describe('emulateBreakdown — timeBucket cross-cutting', () => {
 		});
 		expect(rows.every(r => !('period' in r))).toBe(true);
 	});
+
+	test('timeBucketRange backfills empty days with { period, _empty: true }', () => {
+		// Events on Jan 1 and Jan 5; range Jan 1..Jan 7 → 7 day periods, 5 empty.
+		const events = [
+			ev('A', Date.UTC(2024, 0, 1, 12), { user_id: 'u1' }),
+			ev('B', Date.UTC(2024, 0, 1, 12), { user_id: 'u1' }),
+			ev('A', Date.UTC(2024, 0, 5, 12), { user_id: 'u2' }),
+			ev('B', Date.UTC(2024, 0, 5, 12), { user_id: 'u2' }),
+		];
+		const rows = emulateBreakdown(events, {
+			type: 'frequencyByFrequency',
+			metricEvent: 'A',
+			breakdownByFrequencyOf: 'B',
+			timeBucket: 'day',
+			timeBucketRange: { from: Date.UTC(2024, 0, 1), to: Date.UTC(2024, 0, 7) },
+		});
+		const periods = rows.map(r => r.period);
+		expect(periods).toEqual([
+			'2024-01-01', '2024-01-02', '2024-01-03', '2024-01-04',
+			'2024-01-05', '2024-01-06', '2024-01-07',
+		]);
+		expect(rows.find(r => r.period === '2024-01-02')._empty).toBe(true);
+		expect(rows.find(r => r.period === '2024-01-01')._empty).toBeUndefined();
+	});
 });
