@@ -2,6 +2,66 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.5.0 — 2026-05-08
+
+The "count like Mixpanel does" release. Aligns the data generation engine with Mixpanel's actual counting semantics — greedy single-pass funnels, distinct-period frequency counting, null-aware aggregation, and touchpoint-capped attribution. Removes `bunchIntoSessions`, the root cause of funnel ordering corruption since 1.0.
+
+### Added
+
+- **`avgActiveDaysPerUser`** — Concentrates events onto fewer distinct UTC days per user. Uses weighted-without-replacement day picking from soup DOW weights. Events per active day scale naturally (`rate × remaining_days ÷ active_days`). Interacts correctly with `engagementDecay` (protects last event per picked day from being dropped).
+- **`conversionWindowDays`** on funnels — Explicit conversion window (default 30, hard cap 180). Validator auto-bumps when `timeToConvert` exceeds the default. Funnel generator caps step-to-step time to the window. Verifier and `emulateBreakdown` apply the same window.
+- **`maxTouchpointsPerUser`** — Per-user touchpoint cap (default 10) matching Mixpanel's `attributed_value_reader.cpp`. Engine samples eligible events across user lifetime using `chance.pickset`, stamps UTMs on the sample only. Replaces the old inline 25% UTM stamping in `events.js`.
+- **`autoSortAfterEverything`** — Auto-sorts user events by time after the `everything` hook (default `true`). Defends greedy funnel verification from out-of-order hook-injected events. Opt out with `autoSortAfterEverything: false`.
+- **`isStrictEvent` auto-promote** — Config validator detects events that appear in both `events[]` and `funnels[].sequence` and auto-promotes them to `isStrictEvent: true`. Prevents greedy engine corruption where standalone instances of funnel-step events confound conversion counting. Opt out per-event with `isStrictEvent: false`. Runs BEFORE catch-all funnel creation.
+- **`evaluateAnyOrderCompletion`** — Verifier function for `unordered`/`random` funnel modes. `emulateBreakdown` auto-dispatches based on `funnel.order`.
+- **`weightedSampleNoReplacement`** — Seeded weighted sampling utility for active-day picking and touchpoint selection.
+
+### Changed
+
+- **`bunchIntoSessions` removed.** Was a wholesale timestamp overwrite that scrambled funnel ordering and destroyed TimeSoup's time distribution. Replaced by natural TimeSoup-driven timestamps + `assignSessionIds` (which was already running but had its work overwritten by `bunchIntoSessions`). Events now arrive in correct temporal order without post-hoc rewriting.
+- **Standalone events use `isFirstEvent: false`.** Previously all standalone events used `isFirstEvent: true`, pinning them to the same timestamp. The old `bunchIntoSessions` retimed them — now TimeSoup distributes them directly.
+- **UTM stamping moved to per-user pass.** Inline per-event UTM stamping in `events.js` replaced by `applyTouchpointCap` in `user-loop.js`. Runs after all events are generated, samples up to `maxTouchpointsPerUser` eligible events, stamps UTMs on the sample. Matches Mixpanel's attribution counting behavior.
+- **Funnel generator respects conversion window.** When a funnel's step-to-step span exceeds `conversionWindowDays`, the generator scales `relativeTimeMs` to fit. Prevents generated data from producing funnels that the verifier (correctly) rejects.
+- **`funnelFeatureCtx` preserves `latestTime`.** Bug fix: the funnel feature context reconstruction was dropping `featureCtx.latestTime`, causing funnel first events to use the full `[earliest, FIXED_NOW]` range instead of the picked day's bounds in active-day mode.
+- **Empty event pool bail-out.** When all events are funnel steps (auto-promoted to strict) and there are no standalone events, the user loop skips standalone generation instead of crashing on `pick([])`.
+- **Future-event filter now logs in verbose mode.** Events past `FIXED_NOW` (from catch-all funnel TTC drift) are filtered with a verbose log showing count, user, and time range.
+- **`buildActiveDayPlan` returns `pickedDayBuckets`.** Shape changed from `number[] | null` to `{ plan, pickedDayBuckets } | null` so engagement decay can protect last events on active days.
+- **User loop wrapped in try/finally.** SIGINT cleanup (progress interval, user count reset) runs even on error.
+
+### Test Suite
+
+9 new test files (57 tests) covering all v1.5 engine changes:
+
+| File | Tests | Coverage |
+|------|-------|----------|
+| `active-days.test.js` | 9 | Active-day distribution shape, rate warning, session integrity, sort guarantee |
+| `conversion-window.test.js` | 5 | Validator defaults, auto-bump, generation cap, verifier application |
+| `order-mode-dispatch.test.js` | 5 | `evaluateAnyOrderCompletion` + emulator dispatch |
+| `touchpoint-cap.test.js` | 4 | Cap enforcement, lifetime sampling, determinism |
+| `strict-event-autopromote.test.js` | 4 | Collision detection, opt-out, non-funnel preservation |
+| `auto-sort.test.js` | 4 | Default ON, opt-out, greedy defense |
+| `interrupt-funnel-completion.test.js` | 2 | Generator-verifier roundtrip, auto-promote integration |
+| `datagen-determinism.test.js` | 6 | Same-seed byte-equal verification (stripping insert_id) |
+| `decay-respects-active-days.test.js` | 2 | Engagement decay × active-day interaction |
+
+Full suite: **42 files, 1018 tests, ~87 seconds.**
+
+### Documentation
+
+- **`research/1.5.0-upgrade-guide.md`** — consumer upgrade guide with behavioral changes and migration checklist.
+- **`plans/DATAGEN/NEXT-STEPS.md`** — post-ship priorities: vertical re-eval, isStrictEvent audit, HOOKS.md recipe rewrites, retention modeling.
+- **CLAUDE.md** updated with `avgActiveDaysPerUser`, `conversionWindowDays`, `maxTouchpointsPerUser`, `autoSortAfterEverything`, active-day distribution section, 15-step execution order.
+- **HOOKS.md** — §2.4 touchpoint generation contract, §2.5 active-day distribution, principles 26-29, recipes 4.26-4.28.
+- **Skill files** updated: `create-dungeon`, `write-hooks`, `verify-dungeon` with v1.5 considerations.
+
+### Backward Compatibility
+
+- **No breaking changes to the public API.** `DUNGEON_MASTER(config)` signature unchanged. All named exports unchanged.
+- Existing dungeons run without modification. New config fields are additive and optional.
+- `bunchIntoSessions` removal changes timestamp distribution for all dungeons. Events now follow TimeSoup's natural distribution instead of being rewritten into synthetic session clusters. This is more correct — funnels maintain temporal ordering.
+- `isStrictEvent` auto-promote may reduce standalone event variety for dungeons where funnel-step events overlap with `events[]`. Add `isStrictEvent: false` on specific events to preserve standalone instances.
+- Touchpoint cap (default 10) reduces UTM-stamped events from ~25% of all events to at most 10 per user. Attribution analysis produces more realistic distributions.
+
 ## 1.4.5 — 2026-05-06
 
 ### Added
