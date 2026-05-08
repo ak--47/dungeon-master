@@ -177,12 +177,26 @@ Use for funnel-level context (checkout flow variant, onboarding version):
   sequence: ["View Item", "Add to Cart", "Checkout"],
   conversionRate: 40,
   timeToConvert: 2,
+  conversionWindowDays: 7,             // v1.5: cap how late "Checkout" can fire
   props: {
     checkout_version: ["v1", "v2"],      // random per funnel run
     payment_method: ["card", "paypal"],
   },
 }
 ```
+
+**v1.5 — `conversionWindowDays`:** explicit Mixpanel-style conversion window
+cap, in days. Default 30 (Mixpanel UI default). Hard cap 180 (Mixpanel max).
+The validator auto-bumps to `min(180, ceil(timeToConvert/24 * 1.5))` if your
+`timeToConvert` exceeds 30 days. Set explicitly to silence the warning. The
+verifier (`verifyDungeon`) reads this field automatically.
+
+**v1.5 — `isStrictEvent` auto-promote:** if you list a funnel-step event in
+`events[]`, the validator auto-sets `isStrictEvent: true` for you and warns.
+This heals the silent-corruption footgun where the greedy funnel engine
+consumed standalone instances as funnel matches. Set `isStrictEvent: false`
+explicitly only when you intend mixed funnel/standalone semantics for that
+event.
 
 ### 3. SuperProps (2–3)
 
@@ -339,6 +353,44 @@ override when you have a specific reason:
 - Use `soup: "spiky"` for products with dramatic peaks / valleys (gaming
   weekends, financial market hours).
 - Use `soup: "global"` to flatten all DOW/HOD weights (24/7 server-side products).
+
+### v1.5 — `avgActiveDaysPerUser` (concentrator)
+
+Top-level optional knob. Sets the mean number of distinct UTC days each user
+fires events on. Total event count is preserved (still `rate × numDays`),
+but events cluster onto fewer days. Per-user count drawn from
+`normal(mean=N, sd=N/3)`, clamped to `[1, userActiveDays]`.
+
+Default: undefined (legacy — events spread across the whole window via TimeSoup).
+
+**Concentrator semantic — per-active-day rate inflates.** Example:
+
+```
+avgEventsPerUserPerDay: 4
+avgActiveDaysPerUser: 2
+numDays: 30
+→ 120 events per user, concentrated onto 2 days = 60 events/active day
+```
+
+The validator warns when the implied per-active-day rate > 50. To reduce
+total events, lower `avgEventsPerUserPerDay`, NOT this knob.
+
+**Incompatibility with `engagementDecay`:** these two erosive primitives
+combine destructively — decay drops events from late picked days, eroding
+the effective active-day count below the configured target. Use one or the
+other in a dungeon. If you need both, set `avgActiveDaysPerUser` and write
+the decay as an `everything` hook scoped to specific cohorts (the `write-hooks`
+skill handles this).
+
+### v1.5 — `maxTouchpointsPerUser` (attribution cap)
+
+Top-level optional knob. Caps UTM stamping at this many events per user
+(default 10, matching Mixpanel `TOUCHPOINTS_LIMIT`). When `hasCampaigns: true`
+and a user has more eligible events than the cap, the engine takes a
+uniform-random sample across the user's lifetime and stamps UTMs on the
+sampled events only. Sampling across lifetime (NOT first-N) preserves
+realistic touch shape — Mixpanel's last-10-window then gives meaningful
+first/last-touch attribution. Set to `Infinity` to disable the cap.
 
 ## SuperProp consistency rule
 

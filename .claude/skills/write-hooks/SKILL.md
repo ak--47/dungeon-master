@@ -112,13 +112,13 @@ if (type === 'funnel-post' && meta.experiment) {
 
 | File | Atom | Purpose |
 |------|------|---------|
-| cohort | `binUsersByEventCount(events, eventName, bins)` | Classify by per-user event count |
+| cohort | `binUsersByEventCount(events, eventName, bins)` | Classify by per-user event count (Insights total events) |
 | cohort | `binUsersByEventInRange(events, eventName, start, end, bins)` | Same, time-windowed |
 | cohort | `countEventsBetween(events, eventA, eventB)` | Count between first A and first B |
 | cohort | `userInProfileSegment(profile, key, values)` | Profile-property cohort check |
 | mutate | `cloneEvent(template, overrides)` | Spread+override a template event |
 | mutate | `dropEventsWhere(events, predicate)` | In-place filter with count |
-| mutate | `scaleEventCount(events, eventName, factor)` | >1 clones, <1 drops (seeded RNG) |
+| mutate | `scaleEventCount(events, eventName, factor)` | >1 clones, <1 drops. **Targets Insights Total reports.** For frequency-distribution movement use `injectOnNewDays` |
 | mutate | `scalePropertyValue(events, predicate, prop, factor)` | Multiply numeric prop |
 | mutate | `shiftEventTime(event, deltaMs)` | Shift one event's time |
 | timing | `scaleTimingBetween(events, A, B, factor)` | Scale gap between first A and next B |
@@ -127,8 +127,26 @@ if (type === 'funnel-post' && meta.experiment) {
 | inject | `injectAfterEvent(events, source, template, gapMs, overrides)` | Splice clone after source |
 | inject | `injectBetween(events, A, B, template, overrides)` | Splice at midpoint |
 | inject | `injectBurst(events, template, count, anchorTime, spreadMs, overrides)` | Burst around anchor |
+| inject | `injectOnNewDays(events, eventName, targetDistinctDays)` | **Cohort-only in v1.5.** Spreads injections across previously-empty days. Use for cohort-conditional active-day boosts; for global active-day shape, use `Dungeon.avgActiveDaysPerUser` config knob. |
 | identity | `isPreAuthEvent(event, authTime)` | Standalone variant of meta.isPreAuth |
 | identity | `splitByAuth(events, authTime)` | { preAuth, postAuth, stitch } partition |
+
+### v1.5 hook anti-patterns
+
+- **DO NOT engineer global active-day distribution in hooks.** Use the
+  `Dungeon.avgActiveDaysPerUser` config knob — it's a concentrator that
+  preserves total event count while clustering events onto fewer days.
+  Hooks own cohort-conditional patterns ("premium users get 7+ days") only.
+- **DO NOT hand-sort `everything` hook output.** The engine auto-sorts events
+  ascending by time after `everything` returns (default ON; opt out via
+  `autoSortAfterEverything: false`). Cloned events with arbitrary timestamps
+  no longer need explicit sort calls.
+- **DO NOT stamp UTM properties from scratch in attribution hooks.** The
+  engine caps UTM stamping at `maxTouchpointsPerUser` (default 10) per user,
+  sampled across lifetime. Stamping fresh would push users past the cap; your
+  stamps would land outside Mixpanel's last-10 lookback window. OVERWRITE
+  engine-stamped values instead (e.g., `event.utm_source = "google"` on
+  already-stamped touches).
 
 ### Patterns (`@ak--47/dungeon-master/hook-patterns`)
 

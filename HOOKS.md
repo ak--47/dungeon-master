@@ -113,9 +113,45 @@ in the lookback window (`TOUCHPOINTS_LIMIT = 10` in
 when a user has > 10 touches before conversion — the cap shifts which
 touch is "first."
 
-**Implication for hooks:** If you stamp 50 touchpoint events per user before
-a conversion to bias attribution, only the last 10 enter the candidate pool.
-Stamp fewer, more decisive touches.
+**v1.5 generation contract:** the engine now caps UTM stamping at
+`maxTouchpointsPerUser` (default 10) per user, sampled uniform-random across
+the user's lifetime (NOT first-N-chronological). Stamps are sorted
+chronologically before being applied, so attribution properties land in
+time order. Hooks that bias attribution should OVERWRITE engine-stamped
+values, not stamp from scratch (those would push the user past the cap).
+
+### 2.5 Active-day distribution is config-first
+
+Mixpanel frequency reports count distinct days (§2.1). The v1.5 engine
+exposes `Dungeon.avgActiveDaysPerUser` as the canonical primitive for this
+shape. Set it at the config level and the engine concentrates each user's
+events onto a sampled subset of days drawn from `normal(mean=N, sd=N/3)`,
+clamped to `[1, userActiveDays]`.
+
+**Concentrator semantic — total event count is preserved.** The per-active-day
+rate INFLATES when `avgActiveDaysPerUser < userActiveDays`. Example:
+
+```
+avgEventsPerUserPerDay: 4
+avgActiveDaysPerUser: 2
+numDays: 30
+→ userEventBudget = 4 × 30 = 120 events  (preserved)
+→ events concentrated onto 2 days
+→ effective per-active-day rate = 120 / 2 = 60 events per active day
+```
+
+The validator emits a warning when implied per-active-day rate > 50.
+
+**Hook authoring rule:** do NOT engineer global active-day distribution in
+hooks. Use the config knob. Reserve `injectOnNewDays` for cohort-conditional
+patterns ("premium users get 7+ active days, rest stay default").
+
+**Incompatibility with `engagementDecay`:** decay drops events from late-day
+positions in the user's lifetime, eroding picked active days. Setting both
+`avgActiveDaysPerUser` AND `engagementDecay` produces an effective active-day
+count BELOW the configured target. Pick one. If you need both effects, set
+`avgActiveDaysPerUser` and write decay logic in an `everything` hook scoped
+to specific cohorts (gives explicit control over the interaction).
 
 ---
 
@@ -244,6 +280,35 @@ Stamp fewer, more decisive touches.
 25. **Null-aware aggregation removes the need to "fill" defaults.** Don't
     coalesce missing numeric properties to 0 to keep AVG sane — Mixpanel
     skips them. Use absence to signal "no measurement," not "zero."
+
+### v1.5 principles
+
+26. **Engine auto-sorts events by time after `everything` hook.** Default ON;
+    opt out via `autoSortAfterEverything: false` on the dungeon config. Hooks
+    that `push()` cloned events with arbitrary timestamps no longer need to
+    hand-sort to keep the greedy funnel engine happy. Sort is O(n log n)
+    where n is single-user events.
+
+27. **Validator auto-promotes funnel-step events to `isStrictEvent: true`.**
+    When an event in `events[]` also appears in any user-declared funnel
+    sequence, the validator stamps `isStrictEvent: true` and warns. This
+    heals the silent-corruption footgun where the greedy engine consumed
+    standalone instances as funnel matches. Set `isStrictEvent: false`
+    explicitly to opt out and preserve mixed funnel/standalone semantics.
+
+28. **Active-day distribution is set via config, not hooks.** Use
+    `Dungeon.avgActiveDaysPerUser` at the config level. Hooks should NOT
+    engineer global active-day patterns via `injectOnNewDays`. Reserve
+    `injectOnNewDays` for cohort-conditional cases ("premium users get 7+
+    active days, rest stay default"). See §2.5.
+
+29. **Touchpoint cap awareness for attribution hooks.** The engine now caps
+    UTM stamping at `maxTouchpointsPerUser` (default 10) per user, sampled
+    across the user's lifetime. Attribution-biasing hooks should OVERWRITE
+    engine-stamped values (e.g., set `event.utm_source = "google"` on
+    already-stamped touches), NOT stamp fresh touches from scratch. Stamping
+    from scratch would push the user past the cap and your hook's stamps
+    would land outside Mixpanel's last-10 lookback window.
 
 ---
 
@@ -942,6 +1007,119 @@ if (type === "everything") {
 first-touch result as stamping 10 — Mixpanel's attribution module
 (`attributed_value_reader.cpp`) only considers `TOUCHPOINTS_LIMIT = 10`. Aim
 for sparse, deterministic touches.
+
+---
+
+#### 4.26 Bias Engine-Stamped Touches (v1.5)
+
+**Hook:** `everything` | **Counting:** `maxTouchpointsPerUser` (default 10)
+
+**In Mixpanel:** First-touch attribution shows your campaign sources weighted
+toward "google" without changing total touch count.
+
+In v1.5, the engine stamps UTMs on up to `maxTouchpointsPerUser` events per
+user (default 10), sampled across the user's lifetime. Hooks bias attribution
+by OVERWRITING engine-stamped values rather than stamping new touches.
+
+```js
+import { weighArray } from "@ak--47/dungeon-master/utils";
+
+if (type === "everything") {
+  // Find events the engine already stamped with a campaign.
+  const stamped = record
+    .filter(e => e.utm_source != null)
+    .sort((a, b) => dayjs(a.time).valueOf() - dayjs(b.time).valueOf());
+  if (stamped.length === 0) return record;
+  // Bias the FIRST stamped touch (Mixpanel's first-touch model picks this).
+  const sources = weighArray(["google", "facebook", "twitter"], [10, 5, 1]);
+  stamped[0].utm_source = chance.pickone(sources);
+  // Optional: also bias the LAST stamped touch for last-touch attribution.
+  if (stamped.length > 1) stamped[stamped.length - 1].utm_source = chance.pickone(sources);
+  return record;
+}
+```
+
+**Why this works under v1.5:** the engine has already capped + sampled the
+touches. Stamping fresh ones from scratch in the hook would push the user
+past the cap, and your stamps would land outside Mixpanel's last-10 lookback
+window — giving them no effect. Overwriting is correct.
+
+---
+
+#### 4.27 Active-Day Cohort Engineering (v1.5)
+
+**Hook:** `everything` | **Counting:** distinct calendar days (Section 2.1)
+
+**In Mixpanel:** 10% of users land in a "power user" cohort with ≥10 distinct
+days of activity, while the rest stay at the dataset baseline.
+
+Use `Dungeon.avgActiveDaysPerUser` for the BASELINE distribution, then write
+a cohort-conditional `everything` hook that uses `injectOnNewDays` to push
+specific users above the baseline.
+
+```js
+import { injectOnNewDays } from "@ak--47/dungeon-master/hook-helpers";
+import { countDistinctPeriods } from "@ak--47/dungeon-master/verify";
+
+// Config:
+//   avgActiveDaysPerUser: 5      // baseline: most users active ~5 days
+//   events: [{ event: "open app", weight: 5 }, ...]
+
+if (type === "everything") {
+  // Hash-based cohort (deterministic, ~10% of users).
+  const uid = record[0]?.user_id || "";
+  const isPowerUser = uid.charCodeAt(0) % 10 === 0;
+  if (!isPowerUser) return record;
+
+  const days = countDistinctPeriods(record, "open app", "day");
+  if (days >= 10) return record;
+  // Boost: spread events across more days inside the user's active window.
+  injectOnNewDays(record, "open app", 10);
+  return record;
+}
+```
+
+**Why two layers:** the config knob keeps the dungeon's distribution sane.
+The hook engineers a SPECIFIC cohort above baseline. If you tried to use the
+hook ALONE for the global shape, you'd reinvent the engine's day-picking and
+fight its scheduling.
+
+---
+
+#### 4.28 Conversion-Window-Aware TTC Scaling (v1.5)
+
+**Hook:** `funnel-pre` | **Meta:** `meta.funnel`
+
+**In Mixpanel:** Funnel TTC for Enterprise users is 2x faster than Free, but
+the scaling factor must respect the funnel's `conversionWindowDays` cap so
+shifted timestamps don't fall outside the window (where Mixpanel's strict-`<`
+rule excludes them).
+
+```js
+if (type === "funnel-pre") {
+  const tier = meta.profile?.tier || "free";
+  const baseFactor = tier === "enterprise" ? 0.5 : tier === "free" ? 1.4 : 1.0;
+  if (baseFactor === 1.0) return;
+
+  // Read the funnel's conversion window (auto-applied by validator, default 30d).
+  const windowDays = meta.funnel?.conversionWindowDays || 30;
+  const ttcDays = (meta.funnel?.timeToConvert || 24) / 24;
+  // Clamp factor so scaled TTC stays at most 90% of the window — leaves slack
+  // for the strict-< boundary AND for engine-side per-step jitter.
+  const maxSafeFactor = (windowDays * 0.9) / ttcDays;
+  const factor = baseFactor < 1.0
+    ? baseFactor                          // shorter is always safe
+    : Math.min(baseFactor, maxSafeFactor); // longer must respect the window
+
+  meta.funnel.timeToConvert *= factor;
+}
+```
+
+**Why clamp:** A 1.4× factor on a `timeToConvert: 720h` (30d) funnel pushes
+the last step past 30d. Mixpanel's `is_within_conversion_window` is strict
+`<`, so step C at exactly window-boundary gets excluded — funnel completion
+silently drops. Always read `meta.funnel.conversionWindowDays` and bound
+your factor.
 
 ---
 

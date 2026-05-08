@@ -169,17 +169,24 @@ interface Dungeon {
   // Data model
   events: EventConfig[]         // event, weight, properties, isFirstEvent, isStrictEvent,
                                 //   isAuthEvent (1.4), isAttributionEvent (1.4)
+                                //   v1.5: validator auto-promotes funnel-step events to isStrictEvent: true (warns)
   funnels: Funnel[]             // sequence, conversionRate, order, experiment, bindPropsIndex,
-                                //   attempts (1.4: { min, max, conversionRate? })
+                                //   attempts (1.4: { min, max, conversionRate? }),
+                                //   conversionWindowDays (v1.5: default 30, hard cap 180, auto-bump if timeToConvert > 30d)
   userProps, superProps, groupKeys, groupProps, scdProps, mirrorProps, lookupTables
 
   // Event volume — pick ONE
   numEvents: number             // Total target events. Fallback if avgEventsPerUserPerDay not set.
   avgEventsPerUserPerDay: number  // Per-user-per-active-day rate. Canonical primitive — born-late users get rate × remaining_days.
 
-  // Trend shape — two orthogonal axes
+  // Trend shape — three orthogonal axes
   macro: MacroPreset | MacroConfig  // Big-picture trend across whole window. Default: "flat" (see Macro/Soup section)
   soup: SoupPreset | SoupConfig     // Intra-week / intra-day rhythm (see Macro/Soup section)
+  avgActiveDaysPerUser: number      // v1.5: distinct-day concentrator. Total event count preserved; events cluster onto fewer days. Orthogonal to macro/soup. (See "Active-day distribution" below.)
+
+  // v1.5 Mixpanel-aligned caps
+  maxTouchpointsPerUser: number  // v1.5: cap UTM stamping per user (default 10 = Mixpanel TOUCHPOINTS_LIMIT). Sampled across user lifetime, not first-N.
+  autoSortAfterEverything: boolean  // v1.5: engine sorts user events by time after `everything` hook (default true). Defends greedy funnel engine from out-of-order pushed clones.
 
   // Advanced
   strictEventCount: boolean     // Stop at exact numEvents (forces concurrency=1)
@@ -197,6 +204,24 @@ interface Dungeon {
   progressInterval: number      // Min ms between callback invocations (default: 500)
 }
 ```
+
+## Active-day distribution (v1.5)
+
+`avgActiveDaysPerUser` is a CONCENTRATOR — total event count is preserved
+(`avgEventsPerUserPerDay × userActiveDays`), but events cluster onto fewer
+distinct UTC days. Per-user count drawn from `normal(mean=N, sd=N/3)`,
+clamped to `[1, userActiveDays]`. Day picking weighted by `soup.dayOfWeekWeights`,
+preserving cohort-level weekly rhythm.
+
+Default: undefined (legacy — events spread across the whole window via TimeSoup).
+
+Per-active-day rate INFLATES when concentration is high. Validator warns when
+implied rate > 50.
+
+**Incompatibility with `engagementDecay`:** these two erosive primitives combine
+destructively (decay drops events from late picked days, eroding the effective
+active-day count). Use one or the other; if you need both, write decay as an
+`everything` hook scoped to specific cohorts. See HOOKS.md §2.5.
 
 ## Progress Callback (post-1.4.5)
 
@@ -314,6 +339,10 @@ Storage-only hooks (no upstream execution):
 8. **`everything` is the most powerful hook** — it sees all events for one user, can correlate across event types, and access `meta.profile` to drive behavior based on user properties
 9. **Return `record`** from `event` hooks (single object only). For `everything`, return the (possibly modified) array
 10. **To drop/filter events (churn, drop-off, seasonal dips)**: use the `everything` hook: `return record.filter(e => !shouldDrop(e))`. The `everything` hook is the ONLY place where events can be removed.
+11. **(v1.5) Engine auto-sorts events by time after `everything` hook** — default ON; opt out via `autoSortAfterEverything: false`. Cloned events with arbitrary timestamps no longer need hand-sort calls. Defends greedy funnel engine from out-of-order injections.
+12. **(v1.5) Validator auto-promotes funnel-step events to `isStrictEvent: true`** — set `isStrictEvent: false` explicitly to opt out and preserve mixed funnel/standalone semantics.
+13. **(v1.5) Active-day shape lives in config (`avgActiveDaysPerUser`), not hooks** — reserve `injectOnNewDays` for cohort-conditional cases only.
+14. **(v1.5) Touchpoint cap = 10** — engine stamps UTMs on up to `maxTouchpointsPerUser` (default 10) eligible events per user, sampled across lifetime. Attribution-biasing hooks should OVERWRITE engine-stamped values, not stamp fresh.
 
 ### Verifying Dungeons
 
@@ -569,21 +598,29 @@ with `EventConfig.isAttributionEvent: true`.
 - **Engagement Decay** filters events in `user-loop.js` between `_drop` filter and `everything` hook
 - **Data Quality** applies nulls/timezone in `events.js`, duplicates/late-arriving in `user-loop.js`, bots after user loop
 
-### Execution Order (per user, post-1.4)
+### Execution Order (per user, post-1.5)
 
 1. Assign persona → assign location (when `hasLocation`)
 2. Create profile → merge persona properties
 3. **User hook fires** (can override everything above)
-4. For each first funnel run (with attempts loop, identity stamping per step):
+4. **(v1.5)** Build active-day plan when `avgActiveDaysPerUser` set — picks
+   target days, builds shuffled per-event day schedule
+5. For each first funnel run (with attempts loop, identity stamping per step):
    funnel-pre → funnel events (with isAuthEvent stitch) → funnel-post
-5. Standalone events (stamping mode based on userAuthed)
-6. Generate events → apply world event props → apply data quality nulls
-7. **Event hook fires** (can override everything above)
-8. Filter `_drop` events → apply engagement decay → apply duplicate/late-arriving
-9. Bunch into sessions → assign session_ids → per-session sticky device pick
-10. **Everything hook fires** (final authority) — meta now exposes
+6. Standalone events (stamping mode based on userAuthed); active-day plan
+   constrains TimeSoup to picked days when set
+7. Generate events → apply world event props → apply data quality nulls
+8. **Event hook fires** (can override everything above)
+9. Filter `_drop` events → apply engagement decay → apply duplicate/late-arriving
+10. Sort events by time → assign session_ids → per-session sticky device pick
+    (v1.5: `bunchIntoSessions` REMOVED — natural TimeSoup-driven timestamps preserved)
+11. **(v1.5)** Touchpoint cap: sample up to `maxTouchpointsPerUser` across
+    lifetime, stamp UTMs (when `hasCampaigns: true`)
+12. **Everything hook fires** (final authority) — meta exposes
     `authTime` + `isPreAuth(event)` predicate
-11. Storage push (hooks for ad-spend / group / mirror / lookup fire here)
+13. **(v1.5)** Auto-sort by time (default ON; opt out via `autoSortAfterEverything: false`)
+14. Future-time guard (drop events past `FIXED_NOW`)
+15. Storage push (hooks for ad-spend / group / mirror / lookup fire here)
 
 ## Important Notes
 

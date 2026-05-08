@@ -248,6 +248,54 @@ export interface Dungeon {
     bornRecentBias?: number;
     /** How pre-existing users' first event time is placed. "pinned" stacks them all at FIXED_BEGIN; "uniform" spreads across [FIXED_BEGIN-30d, FIXED_BEGIN]. Default (from macro: "flat"): "uniform" */
     preExistingSpread?: "pinned" | "uniform";
+
+    // ── v1.5 Distinct-Day + Mixpanel Cap Primitives ──
+    /**
+     * Mean number of distinct UTC days each user fires events on. CONCENTRATOR semantic —
+     * total event count is preserved (still `avgEventsPerUserPerDay × userActiveDays`),
+     * but events cluster onto fewer days. Per-user count drawn from
+     * `normal(mean=avgActiveDaysPerUser, sd=mean/3)`, clamped to `[1, userActiveDays]`.
+     *
+     * Default: undefined (legacy — every window-day potentially active, no concentration).
+     *
+     * Per-active-day rate inflates: `(avgEventsPerUserPerDay × numDays) / avgActiveDaysPerUser`.
+     * Validator warns when implied per-active-day rate > 50.
+     *
+     * Day picking: weighted-without-replacement from candidate UTC days using
+     * `soup.dayOfWeekWeights`, so weekly rhythm is preserved at the cohort level.
+     *
+     * **Incompatibility with `engagementDecay`:** decay drops events from late picked days,
+     * eroding the effective active-day count below the configured target. Use one or the
+     * other; if you need both, write decay logic in an `everything` hook scoped to specific
+     * cohorts. See HOOKS.md §2.5.
+     */
+    avgActiveDaysPerUser?: number;
+    /**
+     * Maximum number of UTM-stamped events per user. Matches Mixpanel's `TOUCHPOINTS_LIMIT`
+     * (`backend/libquery/properties_over_time/attributed_value_reader.cpp` line 16).
+     *
+     * Default: 10.
+     *
+     * When `hasCampaigns: true` and a user has more eligible events than the cap, the
+     * engine takes a uniform-random sample of size `cap` from the eligible pool (seeded,
+     * deterministic), sorts the sample chronologically, then stamps UTMs. Sampling
+     * across the user's lifetime — NOT first-N-chronological — preserves realistic
+     * touch distribution and lets Mixpanel's last-10-window report give meaningful
+     * first/last-touch attribution.
+     *
+     * Set to `Infinity` to disable the cap (legacy behavior, ~25% of eligible events stamped).
+     */
+    maxTouchpointsPerUser?: number;
+    /**
+     * If true (default), the engine sorts each user's events ascending by `time` after
+     * the `everything` hook returns, before the events are pushed to storage. Defends
+     * against the most common new footgun: hooks that `push()` cloned events with arbitrary
+     * timestamps and break the greedy funnel engine's chronological-order requirement.
+     *
+     * Set to `false` to preserve the hook's order (advanced — hook must guarantee its own
+     * ordering for downstream Mixpanel-aligned counting).
+     */
+    autoSortAfterEverything?: boolean;
 }
 
 export type SCDProp = {
@@ -820,6 +868,22 @@ export interface Funnel {
      * the time it takes (on average) to convert in hours
      */
     timeToConvert?: number;
+    /**
+     * Mixpanel-style conversion window cap, in DAYS. Funnel-step events after step 0 must
+     * land within `conversionWindowDays * 86400000` ms of step 0's timestamp (strict `<`,
+     * matching `is_within_conversion_window` in `backend/arb/reader/funnels/conversion_window.cpp`).
+     *
+     * Default: 30 (Mixpanel UI default).
+     *
+     * If unset and `timeToConvert / 24 >= 30`, the validator auto-bumps to
+     * `min(180, ceil(timeToConvert / 24 * 1.5))` and warns. Hard cap: 180 days
+     * (Mixpanel's maximum). Validator throws if explicitly set above 180.
+     *
+     * The generator caps funnel runs at `conversionWindowDays * 86400000 - 1` ms (1ms slack
+     * to clear the strict-`<` boundary). The verifier (`verifyDungeon`) reads this field
+     * and applies it automatically when emulating funnel breakdowns.
+     */
+    conversionWindowDays?: number;
     /**
      * funnel properties go onto each event in the funnel and are held constant
      */

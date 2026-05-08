@@ -192,6 +192,111 @@ If any event type has SCHEMA-FAIL, flag it prominently and include specific reme
 
 ## Step 3: Verify Each Hook
 
+### Counting Semantics — Read Before Writing Any Verification
+
+Mixpanel does NOT count the way naive SQL does. The verifier (and any
+DuckDB query you write) must match Mixpanel's rules:
+
+| Concept | Mixpanel rule | Wrong SQL → Right SQL |
+|---------|--------------|----------------------|
+| Frequency / cohort by event count | Distinct calendar days, NOT total events | `COUNT(*)` → `COUNT(DISTINCT date_trunc('day', time::TIMESTAMP))` |
+| Funnels | Greedy single-pass, strict order, 2-second grace | NEVER hand-roll funnel SQL — use `emulateBreakdown` |
+| AVG / SUM / MIN / MAX | Skip null and non-numeric from BOTH num and denom | Always wrap in `TRY_CAST(prop AS DOUBLE)` |
+| Attribution | Cap at 10 touchpoints in lookback | Use `emulateBreakdown` with `attributedBy` |
+| Conversion window | Strict `<` boundary | Read `Funnel.conversionWindowDays` and respect it |
+
+Full rules: see [HOOKS.md Section 2](../../../HOOKS.md#2-how-mixpanel-counts-things).
+
+The emulator (`emulateBreakdown` from `@ak--47/dungeon-master/verify`)
+implements these rules natively. **ALWAYS use the emulator for funnel,
+frequency, aggregate, TTC, and attribution patterns.** Hand-written DuckDB
+queries for these pattern types diverge from what Mixpanel shows in reports
+— even when they look correct.
+
+Use DuckDB ONLY for:
+- Schema integrity checks (column coverage, flag detection)
+- Identity-model invariants (stitch counts, pre-existing user stamping)
+- Experiment invariants (variant distribution, exposure timing)
+- Bespoke patterns that don't fit the 5 emulator analyses
+
+If you find yourself writing `WITH step1 AS ..., step2 AS ...` for a funnel,
+STOP — use `emulateBreakdown` with `funnelFrequency` instead.
+
+### v1.5 — what the verifier auto-applies
+
+- **`Funnel.conversionWindowDays` auto-applied.** When a check's `breakdown`
+  matches a funnel by sequence, `verifyDungeon` reads `conversionWindowDays`
+  from the funnel config and passes it to the emulator. You do NOT need to
+  thread `conversionWindowMs` by hand for funnels declared in the dungeon.
+- **`Funnel.order` auto-dispatched.** For `sequential` / `interrupt` funnels,
+  the emulator runs the greedy single-pass engine. For other order modes
+  (`first-fixed`, `last-fixed`, `random`, etc.), it dispatches to
+  `evaluateAnyOrderCompletion` (set-membership check). For `random` mode,
+  results are `verificationKind: "informational"` — Mixpanel funnel shape
+  doesn't apply; do not assert PASS/FAIL.
+- **Auto-sort means custom DuckDB queries can trust event order.** Per-user
+  events arrive sorted ascending by time (default; opt out via
+  `autoSortAfterEverything: false`). `LAG`/`LEAD` window functions work
+  without explicit `ORDER BY time` in the partition.
+- **Auto-promote `isStrictEvent` is silent healing — not a regression.** If
+  a stale dungeon's funnel-step events also live in `events[]`, the
+  validator stamps `isStrictEvent: true` and warns. Verification of those
+  dungeons may show CHANGED standalone-event counts vs pre-v1.5 — that is
+  correct behavior, not a bug to chase.
+- **Touchpoint cap = 10 enforced at generation.** `hasCampaigns: true` users
+  get up to `maxTouchpointsPerUser` (default 10) UTM-stamped events,
+  sampled across lifetime. Attribution checks via `attributedBy` should
+  see realistic first/last-touch shapes, not all-stamps-at-birth.
+
+### v1.5 hook awareness
+
+- `injectOnNewDays(events, eventName, targetDays)` — clones events onto
+  previously empty days. Hook authors are expected to use it for
+  COHORT-CONDITIONAL active-day patterns only. Global active-day shape lives
+  in `Dungeon.avgActiveDaysPerUser` (config knob), so a dungeon that uses
+  this atom EVERYWHERE (not scoped to a cohort) is suspect — flag it.
+- Engine-stamped UTMs may already exist on events. Hooks that bias
+  attribution should OVERWRITE existing UTMs, not stamp fresh.
+
+### Common verification mistakes (post-emulator-fix)
+
+If a dungeon's frequency / funnel / TTC pattern shows WEAK or NONE in
+verification, check these BEFORE concluding the hook is broken:
+
+1. **Did you use `COUNT(*)` instead of distinct days?** Frequency-based
+   patterns require `COUNT(DISTINCT date_trunc('day', time::TIMESTAMP))`.
+2. **Did you hand-roll funnel SQL?** Self-joins find the optimal match;
+   Mixpanel uses greedy. Always use `emulateBreakdown` for funnels.
+3. **Are you including step events at the conversion-window boundary?**
+   Mixpanel uses strict `<`. An event exactly at the boundary is excluded.
+4. **Did the hook scale event count without spreading across days?**
+   `scaleEventCount(events, 'X', 3)` clones at sub-second offsets — same
+   day. Frequency reports show ZERO movement. Use `injectOnNewDays`.
+5. **Are you averaging a sometimes-missing property with `AVG()`?** Always
+   wrap in `TRY_CAST(prop AS DOUBLE)`.
+6. **Did you write a funnel-step event as a standalone in `events[]`?** In
+   v1.5 the validator auto-promotes it to `isStrictEvent: true`. Verify the
+   resulting standalone count matches expectations.
+
+### v1.5 verifier exports
+
+Direct access to the engine's counting + funnel primitives:
+
+```js
+import {
+  evaluateFunnel,
+  evaluateAnyOrderCompletion,   // v1.5 — non-sequential funnel modes
+  countDistinctPeriods,
+  nullAwareAvg,
+  binByDistinctPeriods,
+} from '@ak--47/dungeon-master/verify';
+```
+
+Use these when the emulator's table shape doesn't match what you're checking
+— e.g., per-user funnel TTC assertions, per-user distinct-day counts.
+
+---
+
 **Prefer the emulator when the pattern matches one of the 5 supported analyses.**
 The Phase 4 emulator (`lib/verify/emulate-breakdown.js`) re-derives Mixpanel's
 own breakdown table shapes from the events array, so verifying against it gives
