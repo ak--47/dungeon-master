@@ -37,15 +37,22 @@ describe('countDistinctPeriods', () => {
 		expect(countDistinctPeriods(events, 'Buy', 'day')).toBe(1);
 	});
 
-	test('events at 23:59 and next-day 00:01 UTC are 2 distinct days', () => {
+	test('events at 23:59 and next-day 00:01 UTC count as 2 calendar days (default)', () => {
 		const events = [
 			ev('Buy', iso('2024-02-01T23:59:00Z')),
 			ev('Buy', iso('2024-02-02T00:01:00Z')),
 		];
-		// Per addiction_query: gap is 120s, less than 86400s, so the second
-		// event does NOT increment count under Mixpanel's rolling-window check.
-		// This documents the divergence from naive `date_trunc('day')`.
-		expect(countDistinctPeriods(events, 'Buy', 'day')).toBe(1);
+		// Default algorithm is 'calendar' — UTC date_trunc, matches Mixpanel UI.
+		expect(countDistinctPeriods(events, 'Buy', 'day')).toBe(2);
+	});
+
+	test('rolling-window algorithm: 23:59 + 00:01 next day count as 1 (gap < 86400s)', () => {
+		const events = [
+			ev('Buy', iso('2024-02-01T23:59:00Z')),
+			ev('Buy', iso('2024-02-02T00:01:00Z')),
+		];
+		// addiction_query.cpp rule: qtz_time >= last_counted + seconds_for_unit.
+		expect(countDistinctPeriods(events, 'Buy', 'day', { algorithm: 'rolling' })).toBe(1);
 	});
 
 	test('hourly: events at 14:05 and 14:55 within same hour returns 1', () => {

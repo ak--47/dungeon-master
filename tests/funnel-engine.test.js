@@ -80,25 +80,19 @@ describe('evaluateFunnel', () => {
 		expect(r.reached).toBe(0);
 	});
 
-	test('greedy assignment: funnel [A,B,B] with stream [B,B,A] within 2s does NOT reach step 2', () => {
-		// This is the documented edge case from history.cpp ~line 456:
-		// "we will not attribute the second B to the later step"
+	test('greedy assignment: funnel [A,B,B] with stream [B,B,A] does NOT reach step 2', () => {
+		// Documented edge case from history.cpp ~line 456:
+		//   "we will not attribute the second B to the later step"
+		// In our greedy single-pass implementation each B at scan time is
+		// matched to the FIRST not-yet-reached step whose name matches. With
+		// reached=-1, both B events match step 1 (the first B step), never
+		// step 2. The second B overwrites the first at step 1's slot. Then
+		// A advances to step 0 and cascades to step 1 (B at t=2000), but
+		// step 2 was never recorded, so reached stays at 1.
 		const events = [ev('B', 1000), ev('B', 2000), ev('A', 3000)];
 		const r = evaluateFunnel(events, ['A', 'B', 'B']);
-		// A advances step 0. Cascade picks up the latest recorded B (t=2000) for
-		// step 1 (within 2s grace of A at t=3000). Step 2's recorded time is
-		// also 2000 (overwritten), but advancing to step 2 from step 1 requires
-		// timestamp_comes_after(2000, 2000) which is true — however the stored
-		// time at step 2 is the same as step 1, so timing-wise B at 2000 cannot
-		// be both step 1 and step 2 in Mixpanel's model. The greedy algorithm
-		// records the latest match for each step independently; the cascade then
-		// uses those recorded times. With only 2 distinct B events recorded as
-		// the same timestamp at step 1 and step 2, the cascade reaches step 2 if
-		// timing allows. Per Mixpanel's documented behavior the second B is NOT
-		// attributed — we match by treating step 1 and step 2 as needing
-		// distinct events, which the greedy single-pass algorithm enforces by
-		// the "matched step must equal reached + 1" check on the inbound event.
-		expect(r.reached).toBeLessThanOrEqual(2);
+		expect(r.reached).toBe(1);
+		expect(r.completed).toBe(false);
 	});
 
 	test('conversion window: B at 100s with 50s window not reached', () => {

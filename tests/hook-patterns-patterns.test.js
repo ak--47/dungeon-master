@@ -98,18 +98,19 @@ describe('Phase 4 hook patterns × emulator', () => {
 			breakdownByFrequencyOf: 'Browse',
 		});
 		// TODO: eval follow-up — pattern uses `binUsersByEventCount` (total
-		// events) but the emulator now bins by distinct-day. Cohort axes no
-		// longer align, so the high vs low signal washes out. Pattern needs
-		// to switch to `binByDistinctPeriods` (or equivalent) to recover the
-		// configured 4x delta against the new emulator. Until then the
-		// assertion is loosened to verify the *pattern* still produces some
-		// upward signal somewhere — even if the day-binned breakdown can't
-		// see it sharply. We compare overall purchase amount distribution
-		// against the unhooked baseline implicitly (negative control test
-		// already covers that). Here just verify the table is non-empty.
+		// events) but the emulator now bins by distinct-day. Cohort axes
+		// don't align, so the high-vs-low *per-bucket* signal washes out.
+		// However, the pattern still SCALES amounts on real events
+		// (multipliers low=1, mid=2, high=4), so the overall weighted-avg
+		// purchase amount is provably elevated vs the unhooked baseline of
+		// 20 (= mean of [10,20,30]). Assert that overall lift exists, even
+		// without cleanly attributing it to a single cohort row.
 		expect(tbl.length).toBeGreaterThan(0);
-		const totalUsers = tbl.reduce((a, r) => a + (r.user_count || 0), 0);
-		expect(totalUsers).toBeGreaterThan(0);
+		const overallAvg = weightedAvg(tbl);
+		// At avgEventsPerUserPerDay=10 over 30 days with Browse weight 6/8,
+		// most users fall in the high (≥15 events) cohort and get the 4x
+		// multiplier — overall avg should comfortably exceed baseline 20.
+		expect(overallAvg).toBeGreaterThan(40);
 	}, 60000);
 
 	test('applyTTCBySegment: trial users have notably longer TTC than enterprise', async () => {
