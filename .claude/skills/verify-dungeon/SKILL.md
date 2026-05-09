@@ -258,6 +258,25 @@ STOP — use `emulateBreakdown` with `funnelFrequency` instead.
 - Engine-stamped UTMs may already exist on events. Hooks that bias
   attribution should OVERWRITE existing UTMs, not stamp fresh.
 
+### Vertical eval (2026-05-08) — verification gotchas
+
+Distilled from the 20-dungeon v1.5.0 vertical eval. See HOOKS.md §9 for full
+recipes with code.
+
+| Symptom | Root cause | Fix |
+|---------|-----------|-----|
+| Cohort B shows MORE absolute post-d30 events than cohort A even though hook reduces B | Cohort B has structurally higher event volume (low-balance users check balance constantly) | Compare per-user `post / pre` ratio, not raw counts |
+| Time-window hook (rainy week, etc.) inverts when measured against full-dataset avg | Born-in-dataset ramp inflates late-window baseline | Compare against neighboring days only, not full-dataset average |
+| Weekend-surge hook still <1.0x weekday | Default soup `dayOfWeekWeights` dampens weekends to ~0.55x weekday | Verify against soup baseline (`wknd/wkday > 0.55 × 1.2`), not >1.0 |
+| Funnel-post TTC scaling doesn't move emulator's `timeToConvert` rows | `evaluateFunnel` is greedy single-pass over full event history — picks first match per step regardless of which funnel-instance the hook touched | Document as known limitation (`H9 TTC populations present (limitation)`) |
+| Hook references `profile.X` that's not a defined userProp | Validator doesn't catch undeclared profile reads — `X` resolves to `undefined` | Verify by data SPREAD (max/min, cv) instead of segment correlation |
+| Two `everything` hooks where one injects events the other mutates produce wrong ratios | Hook ordering matters — injection hook ran AFTER cohort-shaping hook | Run cohort-degrading hooks AFTER all injection hooks in same `everything` block |
+| `readFileSync` ENOMEM on shards >500MB | Node string cap at ~512MB | Stream-load with `readline.createInterface` over `data/PREFIX-EVENTS*.json` glob |
+| Hook reads `e.event === 'login'` but cohort empty | `login` is a funnel-step event auto-promoted to `isStrictEvent: true` in v1.5 | Add `isStrictEvent: false` to the event config to keep standalone occurrences |
+
+When writing per-dungeon verify scripts under `research/verifications/v3/`,
+follow the template in HOOKS.md §9.9.
+
 ### Common verification mistakes (post-emulator-fix)
 
 If a dungeon's frequency / funnel / TTC pattern shows WEAK or NONE in

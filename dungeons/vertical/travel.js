@@ -342,6 +342,7 @@ const config = {
 		{
 			event: "hotel viewed",
 			weight: 7,
+			isStrictEvent: false,
 			properties: {
 				hotel_id: chance.pickone.bind(chance, hotelIds),
 				destination: chance.pickone.bind(chance, destinationCities),
@@ -364,6 +365,7 @@ const config = {
 		{
 			event: "booking completed",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				hotel_id: chance.pickone.bind(chance, hotelIds),
 				destination: chance.pickone.bind(chance, destinationCities),
@@ -379,6 +381,7 @@ const config = {
 		{
 			event: "room upgrade selected",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				upgrade_type: ["suite", "ocean_view", "executive_floor", "club_lounge", "premium_king"],
 				upgrade_cost: u.weighNumRange(25, 200, 0.4, 75),
@@ -415,6 +418,7 @@ const config = {
 		{
 			event: "review submitted",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				hotel_id: chance.pickone.bind(chance, hotelIds),
 				stay_rating: u.weighNumRange(1, 5, 0.7, 4),
@@ -504,6 +508,7 @@ const config = {
 			order: "sequential",
 			timeToConvert: 48,
 			weight: 5,
+			reentry: true,
 		},
 		{
 			name: "Full Stay Journey",

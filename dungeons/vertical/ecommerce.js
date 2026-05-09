@@ -459,6 +459,7 @@ const config = {
 		{
 			event: "checkout",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				currency: ["USD", "CAD", "EUR", "BTC", "ETH", "JPY"],
 				coupon: weighChoices(["none", "none", "none", "none", "10%OFF", "20%OFF", "10%OFF", "20%OFF", "30%OFF", "40%OFF", "50%OFF"]),
@@ -468,6 +469,7 @@ const config = {
 		{
 			event: "add to cart",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				item: makeProducts(1),
 				amount: weighNumRange(1, 100, 0.3),
@@ -484,6 +486,7 @@ const config = {
 		{
 			event: "view item",
 			weight: 8,
+			isStrictEvent: false,
 			properties: {
 				item: makeProducts(1),
 				amount: weighNumRange(1, 100, 0.3),
@@ -500,6 +503,7 @@ const config = {
 		{
 			event: "save item",
 			weight: 5,
+			isStrictEvent: false,
 			properties: {
 				item: makeProducts(1),
 				amount: weighNumRange(1, 100, 0.3),
@@ -516,6 +520,7 @@ const config = {
 		{
 			event: "page view",
 			weight: 10,
+			isStrictEvent: false,
 			properties: {
 				page: ["/", "/help", "/account", "/watch", "/listen", "/product", "/people", "/peace"],
 			}
@@ -523,6 +528,7 @@ const config = {
 		{
 			event: "watch video",
 			weight: 8,
+			isStrictEvent: false,
 			properties: {
 				watchTimeSec: weighNumRange(10, 600, .25),
 				quality: ["2160p", "1440p", "1080p", "720p", "480p", "360p", "240p"],

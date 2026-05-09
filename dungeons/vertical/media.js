@@ -416,6 +416,7 @@ const config = {
 		{
 			event: "content selected",
 			weight: 15,
+			isStrictEvent: false,
 			properties: {
 				"content_type": ["movie", "series", "documentary", "special"],
 				"genre": ["action", "comedy", "drama", "documentary", "horror", "sci_fi", "animation", "thriller", "romance"],
@@ -425,6 +426,7 @@ const config = {
 		{
 			event: "playback started",
 			weight: 18,
+			isStrictEvent: false,
 			properties: {
 				"content_id": contentIds,
 				"content_type": ["movie", "series", "documentary", "special"],
@@ -436,6 +438,7 @@ const config = {
 		{
 			event: "playback completed",
 			weight: 12,
+			isStrictEvent: false,
 			properties: {
 				"content_id": contentIds,
 				"content_type": ["movie", "series", "documentary", "special"],
@@ -446,6 +449,7 @@ const config = {
 		{
 			event: "playback paused",
 			weight: 10,
+			isStrictEvent: false,
 			properties: {
 				"content_id": contentIds,
 				"pause_reason": ["manual", "ad_break", "buffering", "notification"],
@@ -454,6 +458,7 @@ const config = {
 		{
 			event: "content rated",
 			weight: 6,
+			isStrictEvent: false,
 			properties: {
 				"content_id": contentIds,
 				"rating": u.weighNumRange(1, 5, 2, 4),
@@ -489,6 +494,7 @@ const config = {
 		{
 			event: "recommendation clicked",
 			weight: 9,
+			isStrictEvent: false,
 			properties: {
 				"algorithm": ["collaborative_filtering", "content_based", "trending", "editorial"],
 				"position": u.weighNumRange(1, 20),
@@ -504,6 +510,7 @@ const config = {
 		{
 			event: "ad impression",
 			weight: 8,
+			isStrictEvent: false,
 			properties: {
 				"ad_type": ["pre_roll", "mid_roll", "banner", "interstitial"],
 				"ad_duration_sec": u.weighNumRange(5, 30),
@@ -539,6 +546,7 @@ const config = {
 		{
 			event: "subtitle toggled",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				"subtitle_language": ["none", "english", "spanish", "french", "japanese", "korean"],
 				"action": ["enabled", "disabled", "changed"],

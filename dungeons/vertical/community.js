@@ -381,6 +381,7 @@ const config = {
 		{
 			event: "article viewed",
 			weight: 9,
+			isStrictEvent: false,
 			properties: {
 				wiki_id: chance.pickone.bind(chance, wikiIds),
 				content_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
@@ -391,6 +392,7 @@ const config = {
 		{
 			event: "article published",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				wiki_id: chance.pickone.bind(chance, wikiIds),
 				content_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
@@ -413,6 +415,7 @@ const config = {
 		{
 			event: "discussion posted",
 			weight: 5,
+			isStrictEvent: false,
 			properties: {
 				community_id: chance.pickone.bind(chance, communityIds),
 				content_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
@@ -424,6 +427,7 @@ const config = {
 		{
 			event: "comment posted",
 			weight: 6,
+			isStrictEvent: false,
 			properties: {
 				community_id: chance.pickone.bind(chance, communityIds),
 				content_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
@@ -435,6 +439,7 @@ const config = {
 		{
 			event: "upvote given",
 			weight: 7,
+			isStrictEvent: false,
 			properties: {
 				content_type: ["article", "article", "discussion", "comment"],
 				content_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
@@ -565,6 +570,7 @@ const config = {
 			order: "sequential",
 			timeToConvert: 96,
 			weight: 4,
+			reentry: true,
 		},
 		{
 			name: "Creator to Supporter",
@@ -837,11 +843,11 @@ const config = {
 			}
 
 			// -- HOOK 8: PRO SUBSCRIBER CONTENT CREATION LIFT ---------
-			// Free-tier users drop 50% of comment events to widen
-			// the gap to ~2.0x vs paid subscribers.
+			// Free-tier users drop 65% of comment events to widen the funnel
+			// conversion gap to ~2x vs paid subscribers.
 			if (profile.subscription_tier !== "pro" && profile.subscription_tier !== "supporter") {
 				events = events.filter(e => {
-					if (e.event === "comment posted" && chance.bool({ likelihood: 50 })) return false;
+					if (e.event === "comment posted" && chance.bool({ likelihood: 65 })) return false;
 					return true;
 				});
 			}

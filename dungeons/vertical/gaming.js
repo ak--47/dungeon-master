@@ -435,6 +435,7 @@ const config = {
 		{
 			event: "quest turned in",
 			weight: 10,
+			isStrictEvent: false,
 			properties: {
 				"quest_id": questIds,
 				"reward_gold": u.weighNumRange(10, 500, 0.5, 100),
@@ -453,6 +454,7 @@ const config = {
 		{
 			event: "exit dungeon",
 			weight: 14,
+			isStrictEvent: false,
 			properties: {
 				"dungeon_id": dungeonIds,
 				"time_spent_mins": u.weighNumRange(5, 120, 0.6, 30),
@@ -462,6 +464,7 @@ const config = {
 		{
 			event: "find treasure",
 			weight: 16,
+			isStrictEvent: false,
 			properties: {
 				"treasure_type": ["Gold", "Weapon", "Armor", "Potion", "Scroll", "Rare Artifact"],
 				"treasure_value": u.weighNumRange(5, 1000, 1.2, 50),
@@ -488,6 +491,7 @@ const config = {
 		{
 			event: "item purchased",
 			weight: 11,
+			isStrictEvent: false,
 			properties: {
 				"item_id": itemIds,
 				"item_type": ["Weapon", "Armor", "Potion", "Scroll", "Mount", "Cosmetic"],
@@ -507,6 +511,7 @@ const config = {
 		{
 			event: "real money purchase",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				"product": [
 					"Premium Currency (1000)",
@@ -523,6 +528,7 @@ const config = {
 		{
 			event: "guild joined",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				"guild_size": u.weighNumRange(5, 100),
 				"guild_level": u.weighNumRange(1, 20),
@@ -538,6 +544,7 @@ const config = {
 		{
 			event: "inspect",
 			weight: 9,
+			isStrictEvent: false,
 			properties: {
 				"inspect_target": ["NPC", "Monster", "Treasure Chest", "Door", "Statue", "Bookshelf"],
 			}
@@ -545,6 +552,7 @@ const config = {
 		{
 			event: "search for clues",
 			weight: 8,
+			isStrictEvent: false,
 			properties: {
 				"location_type": ["Dungeon Entrance", "Hidden Room", "Quest Location", "Town Square"],
 				"clue_found": [false, false, true, true, true],
@@ -553,6 +561,7 @@ const config = {
 		{
 			event: "use item",
 			weight: 14,
+			isStrictEvent: false,
 			properties: {
 				"item_id": itemIds,
 				"item_type": [
@@ -574,6 +583,7 @@ const config = {
 		{
 			event: "combat completed",
 			weight: 18,
+			isStrictEvent: false,
 			properties: {
 				"outcome": ["Victory", "Defeat", "Fled"],
 				"loot_gained": [false, false, false, true, true, true, true, true, true, true],

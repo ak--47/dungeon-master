@@ -354,6 +354,7 @@ const config = {
 		{
 			event: "item searched",
 			weight: 8,
+			isStrictEvent: false,
 			properties: {
 				search_query: ["laptop", "vintage jacket", "sneakers", "headphones", "phone case", "gaming console", "watch", "sunglasses", "backpack", "camera"],
 				results_count: u.weighNumRange(0, 50, 0.5),
@@ -363,6 +364,7 @@ const config = {
 		{
 			event: "item viewed",
 			weight: 7,
+			isStrictEvent: false,
 			properties: {
 				listing_id: chance.pickone.bind(chance, listingIds),
 				item_price: u.weighNumRange(5, 500, 0.3, 45),
@@ -383,6 +385,7 @@ const config = {
 		{
 			event: "purchase completed",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				listing_id: chance.pickone.bind(chance, listingIds),
 				total_amount: u.weighNumRange(10, 500, 0.3, 60),
@@ -394,6 +397,7 @@ const config = {
 		{
 			event: "listing created",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				listing_id: chance.pickone.bind(chance, listingIds),
 				store_id: chance.pickone.bind(chance, storeIds),
@@ -414,6 +418,7 @@ const config = {
 		{
 			event: "offer received",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				listing_id: chance.pickone.bind(chance, listingIds),
 				offer_amount: u.weighNumRange(5, 400, 0.3, 40),
@@ -423,6 +428,7 @@ const config = {
 		{
 			event: "offer accepted",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				listing_id: chance.pickone.bind(chance, listingIds),
 				final_price: u.weighNumRange(10, 500, 0.3, 55),
@@ -452,6 +458,7 @@ const config = {
 		{
 			event: "message sent",
 			weight: 5,
+			isStrictEvent: false,
 			properties: {
 				message_type: ["inquiry", "inquiry", "negotiation", "shipping_question", "complaint", "thank_you"],
 				recipient_type: ["seller", "seller", "buyer", "support"],

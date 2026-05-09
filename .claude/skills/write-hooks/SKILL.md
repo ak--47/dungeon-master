@@ -341,6 +341,77 @@ The control group barely exists. Fix: use boost-based patterns
 for negative cohorts. Boosts are additive and don't interact destructively.
 Reserve drops for a single churn/retention effect per dungeon.
 
+## v1.5.0 Vertical Eval Lessons
+
+Distilled from the 20-dungeon eval (2026-05-08). See HOOKS.md §9 for full
+recipes. Apply these BEFORE handing off to `/verify-dungeon`:
+
+### isStrictEvent: false is NOT optional for hook-read events
+
+If your hook reads `event === 'X'` and `X` is also a funnel-step event, the
+v1.5 validator auto-promotes it to `isStrictEvent: true` and the engine
+won't emit standalone occurrences. Your cohort goes empty.
+
+```js
+// BAD — login is a funnel step + read by hook
+events: [{ event: 'login', weight: 4, properties: {...} }]
+// GOOD — explicit opt-out preserves standalone occurrences
+events: [{ event: 'login', weight: 4, isStrictEvent: false, properties: {...} }]
+```
+
+Audit: any event referenced in the `everything` hook by name AND appearing
+as a funnel step needs `isStrictEvent: false`.
+
+### Reentry on per-instance loops
+
+Funnels named "X loop" / "X cycle" / "session" / repeated user behaviors
+need `Funnel.reentry: true`. Without it, the engine produces ONE funnel
+sequence per user — no recurring loops. Examples that need it: workout
+loop, match flow, search-to-book, order fulfillment, engagement loop, tour
+funnel.
+
+### Hash-based cohorts produce textbook signals
+
+Cleanest hidden-cohort pattern. No flag, no schema mutation, easy to verify
+deterministically:
+
+```js
+// 2% whales with 50x trade amount → long-tail Insights distribution
+const isWhale = uid.charCodeAt(0) % 50 === 0;
+if (isWhale && e.event === 'swap') e.trade_amount_usd *= 50;
+```
+
+Use a large multiplier (≥10x, ideally 50x) so the signal beats soup noise.
+Use `% 50` for ~2% whales, `% 25` for ~4% bots, `% 10` for ~10% cohorts.
+
+### Hook ordering inside `everything`
+
+If hook A injects events that hook B mutates, B must run AFTER A in the
+same `everything` block — otherwise the injected events miss B's mutation.
+The existing "Hook Ordering Within `everything`" section above codifies
+this; the eval revealed it as the single most common subtle bug.
+
+### Avoid behavioral cohorts where the gating event IS the signal
+
+If hook says "users who did X often → reduce X count", the verifier sees
+inverted signal because users with high X naturally have higher absolute
+counts even after reduction. Either:
+- Use hash cohort for the same effect, OR
+- Verify by per-user post/pre ratio instead of raw counts
+
+### Don't reference profile.X unless X is a defined userProp
+
+```js
+// BAD — profile.level isn't in userProps; resolves to undefined
+if (meta.profile.level >= 50) e.gold_earned *= 3;
+// GOOD — verify by SPREAD instead, OR add level to userProps with weighted distribution
+```
+
+When the hook references a missing profile field, you can still get the
+data spread you want (gold range), but the cohort can't be analytically
+recovered. Either add the userProp or rewrite the hook to use a hash
+cohort.
+
 ## Workflow
 
 1. Read the dungeon at `$ARGUMENTS[0]` and understand the existing schema.

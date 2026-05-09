@@ -430,6 +430,7 @@ const config = {
 		{
 			event: "application started",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				coverage_level: ["basic", "standard", "premium"],
 				estimated_premium: u.weighNumRange(30, 800, 0.3, 150),
@@ -438,6 +439,7 @@ const config = {
 		{
 			event: "application step completed",
 			weight: 6,
+			isStrictEvent: false,
 			properties: {
 				step_name: [
 					"personal_info",
@@ -454,6 +456,7 @@ const config = {
 		{
 			event: "document uploaded",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				document_type: [
 					"drivers_license",
@@ -476,6 +479,7 @@ const config = {
 		{
 			event: "application approved",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				approved_premium: u.weighNumRange(30, 800, 0.3, 150),
 				approval_time_hours: u.weighNumRange(1, 72, 0.5, 24),
@@ -484,6 +488,7 @@ const config = {
 		{
 			event: "policy activated",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				policy_term_months: [6, 12, 12, 12, 24],
 				effective_date_offset_days: u.weighNumRange(0, 30, 0.5, 7),
@@ -492,6 +497,7 @@ const config = {
 		{
 			event: "claim filed",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				claim_type: [
 					"collision",
@@ -521,6 +527,7 @@ const config = {
 		{
 			event: "payment made",
 			weight: 5,
+			isStrictEvent: false,
 			properties: {
 				payment_method: ["credit_card", "bank_transfer", "auto_pay", "check"],
 				amount: u.weighNumRange(30, 800, 0.3, 150),
@@ -531,6 +538,7 @@ const config = {
 		{
 			event: "support ticket created",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				issue_category: [
 					"billing",
@@ -564,6 +572,7 @@ const config = {
 		{
 			event: "coverage reviewed",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				current_premium: u.weighNumRange(30, 800, 0.3, 150),
 				coverage_adequate: [true, true, true, false],
@@ -586,6 +595,7 @@ const config = {
 		{
 			event: "renewal completed",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				renewal_premium: u.weighNumRange(30, 800, 0.3, 150),
 				premium_change_pct: u.weighNumRange(-15, 20, 1, 3),

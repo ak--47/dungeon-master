@@ -390,6 +390,7 @@ const config = {
 		{
 			event: "api call",
 			weight: 10,
+			isStrictEvent: false,
 			properties: {
 				model: ["sonnet-4", "sonnet-4", "sonnet-4", "haiku-4", "haiku-4", "opus-4-6"],
 				input_tokens: u.weighNumRange(50, 8000, 0.4, 2000),
@@ -410,6 +411,7 @@ const config = {
 		{
 			event: "tool use call",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				tool_name: ["web_search", "code_interpreter", "file_reader", "calculator", "database_query", "api_connector"],
 				execution_time_ms: u.weighNumRange(50, 10000, 0.4, 800),
@@ -441,6 +443,7 @@ const config = {
 		{
 			event: "eval job",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				eval_type: ["accuracy", "relevance", "safety", "latency", "cost", "custom"],
 				num_test_cases: u.weighNumRange(10, 1000, 0.3, 100),
@@ -472,6 +475,7 @@ const config = {
 		{
 			event: "billing payment",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				amount_usd: u.weighNumRange(5, 50000, 0.2, 500),
 				payment_method: ["credit_card", "credit_card", "credit_card", "invoice", "wire_transfer"],

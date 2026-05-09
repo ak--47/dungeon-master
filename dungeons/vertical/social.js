@@ -415,6 +415,7 @@ const config = {
 		{
 			event: "post created",
 			weight: 12,
+			isStrictEvent: false,
 			properties: {
 				"post_type": ["text", "image", "video", "poll", "link"],
 				"character_count": u.weighNumRange(1, 280),
@@ -425,6 +426,7 @@ const config = {
 		{
 			event: "post viewed",
 			weight: 30,
+			isStrictEvent: false,
 			properties: {
 				"post_type": ["text", "image", "video", "poll", "link"],
 				"view_duration_sec": u.weighNumRange(1, 120, 0.3, 5),
@@ -434,6 +436,7 @@ const config = {
 		{
 			event: "post liked",
 			weight: 18,
+			isStrictEvent: false,
 			properties: {
 				"post_type": ["text", "image", "video", "poll", "link"],
 			}
@@ -441,6 +444,7 @@ const config = {
 		{
 			event: "post shared",
 			weight: 6,
+			isStrictEvent: false,
 			properties: {
 				"share_destination": ["repost", "dm", "external", "copy_link"],
 			}
@@ -448,6 +452,7 @@ const config = {
 		{
 			event: "comment posted",
 			weight: 10,
+			isStrictEvent: false,
 			properties: {
 				"comment_length": u.weighNumRange(1, 500, 0.3, 20),
 				"has_mention": [true, false, false],
@@ -456,6 +461,7 @@ const config = {
 		{
 			event: "user followed",
 			weight: 8,
+			isStrictEvent: false,
 			properties: {
 				"discovery_source": ["suggested", "search", "post", "profile", "mutual"],
 			}
@@ -470,6 +476,7 @@ const config = {
 		{
 			event: "story viewed",
 			weight: 15,
+			isStrictEvent: false,
 			properties: {
 				"story_type": ["photo", "video", "text"],
 				"view_duration_sec": u.weighNumRange(1, 30, 0.5, 5),
@@ -479,6 +486,7 @@ const config = {
 		{
 			event: "story created",
 			weight: 5,
+			isStrictEvent: false,
 			properties: {
 				"story_type": ["photo", "video", "text"],
 				"has_filter": [true, false],
@@ -504,6 +512,7 @@ const config = {
 		{
 			event: "dm sent",
 			weight: 8,
+			isStrictEvent: false,
 			properties: {
 				"message_type": ["text", "image", "voice", "link"],
 				"conversation_length": u.weighNumRange(1, 100),

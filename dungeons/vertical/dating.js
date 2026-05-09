@@ -277,6 +277,7 @@ const config = {
 		{
 			event: "photo uploaded",
 			weight: 12,
+			isStrictEvent: false,
 			properties: {
 				photo_number: u.weighNumRange(1, 6, 0.5, 2),
 				has_face: [true, true, true, true, false],
@@ -300,6 +301,7 @@ const config = {
 		{
 			event: "swipe right",
 			weight: 10,
+			isStrictEvent: false,
 			properties: {
 				is_super_like: [false, false, false, false, false, false, false, false, false, true],
 				swipe_source: ["feed", "feed", "feed", "discover", "boost", "nearby"],
@@ -315,6 +317,7 @@ const config = {
 		{
 			event: "match received",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				match_score: u.weighNumRange(50, 100, 0.5, 75),
 			},
@@ -322,6 +325,7 @@ const config = {
 		{
 			event: "message sent",
 			weight: 6,
+			isStrictEvent: false,
 			properties: {
 				message_length: u.weighNumRange(1, 500, 0.3, 40),
 				has_emoji: [false, false, true, true, true],
@@ -338,6 +342,7 @@ const config = {
 		{
 			event: "phone number exchanged",
 			weight: 1,
+			isStrictEvent: false,
 			properties: {
 				exchange_method: ["in_chat", "in_chat", "voice_call", "video_call"],
 			},
@@ -345,6 +350,7 @@ const config = {
 		{
 			event: "date scheduled",
 			weight: 1,
+			isStrictEvent: false,
 			properties: {
 				venue_type: ["coffee", "dinner", "drinks", "activity", "virtual"],
 			},
@@ -359,6 +365,7 @@ const config = {
 		{
 			event: "premium upgrade",
 			weight: 1,
+			isStrictEvent: false,
 			properties: {
 				plan: ["Premium", "Premium", "Premium", "Elite"],
 				price_usd: [14.99, 14.99, 14.99, 29.99],
@@ -392,6 +399,7 @@ const config = {
 		{
 			event: "app opened",
 			weight: 8,
+			isStrictEvent: false,
 			properties: {
 				session_duration_mins: u.weighNumRange(1, 120, 0.3, 8),
 			},
@@ -416,6 +424,7 @@ const config = {
 			order: "sequential",
 			timeToConvert: 24,
 			weight: 6,
+			reentry: true,
 		},
 		{
 			name: "Date Funnel",
@@ -424,6 +433,7 @@ const config = {
 			order: "sequential",
 			timeToConvert: 72,
 			weight: 3,
+			reentry: true,
 		},
 		{
 			name: "Monetization",
@@ -555,10 +565,9 @@ const config = {
 				});
 			}
 
-			// HOOK 1 + HOOK 9: PHOTO MAGIC NUMBER (no flags)
-			// Sweet 2-5 photos → clone 2-4 extra match events per existing.
-			// Over 6+ photos → drop match_score by 35% on match received events
-			// (over-curated profile reads as fake/staged).
+			// HOOK 1: PHOTO MAGIC NUMBER (sweet 2-5 photos → clone 2-4 extra matches)
+			// Over-6 score reduction is applied AT THE END of this hook so it also
+			// affects matches injected by HOOK 4 (premium boost).
 			if (photoUploadCount >= 2 && photoUploadCount <= 5 && matchEvents.length > 0) {
 				const matchTemplate = matchEvents[0];
 				matchEvents.forEach(m => {
@@ -570,12 +579,6 @@ const config = {
 							user_id: m.user_id,
 							match_score: chance.integer({ min: 60, max: 98 }),
 						});
-					}
-				});
-			} else if (photoUploadCount >= 6) {
-				events.forEach(e => {
-					if (e.event === "match received" && typeof e.match_score === "number") {
-						e.match_score = Math.max(20, Math.round(e.match_score * 0.65));
 					}
 				});
 			}
@@ -738,6 +741,16 @@ const config = {
 							plan: upgrade.plan,
 							price_usd: upgrade.price_usd,
 						});
+					}
+				});
+			}
+
+			// HOOK 1b: PHOTO MAGIC NUMBER — over-6 score reduction (applied LAST so
+			// it also affects matches injected by HOOK 4 premium boost).
+			if (photoUploadCount >= 6) {
+				events.forEach(e => {
+					if (e.event === "match received" && typeof e.match_score === "number") {
+						e.match_score = Math.max(20, Math.round(e.match_score * 0.65));
 					}
 				});
 			}

@@ -198,6 +198,20 @@ consumed standalone instances as funnel matches. Set `isStrictEvent: false`
 explicitly only when you intend mixed funnel/standalone semantics for that
 event.
 
+**Lesson from v1.5.0 vertical eval (2026-05-08):** dungeons whose hooks read
+`event === 'X'` for a funnel-step event MUST set `isStrictEvent: false` on
+that event, or the cohort goes empty. When designing the schema, mark
+"hook-readable" candidates explicitly so `write-hooks` doesn't have to
+re-thread the schema later. Common candidates: login, page view, search,
+add to cart, swap, deposit — anything that's both a funnel step AND a
+recurring user behavior the hooks will likely cohort on.
+
+**Lesson — funnels that represent loops need `reentry: true`:** any funnel
+named "X loop" / "X cycle" / "session" / per-instance recurring behavior
+should have `reentry: true` declared. Without it, the engine emits one
+sequence per user and downstream "power user" / "daily active" cohorts have
+no behavioral signal to bin on.
+
 ### 3. SuperProps (2–3)
 
 Properties present on EVERY event. Common picks: `Plan`, `Region`, `Platform`,

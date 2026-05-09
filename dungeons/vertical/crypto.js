@@ -426,6 +426,7 @@ const config = {
 		{
 			event: "deposit",
 			weight: 5,
+			isStrictEvent: false,
 			properties: {
 				token: ["ETH", "USDC", "USDT", "SOL", "BTC"],
 				deposit_amount_usd: u.weighNumRange(10, 5000, 0.3, 500),
@@ -436,6 +437,7 @@ const config = {
 		{
 			event: "withdrawal",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				token: ["ETH", "USDC", "USDT", "SOL", "BTC"],
 				amount_usd: u.weighNumRange(10, 5000, 0.3, 400),
@@ -446,6 +448,7 @@ const config = {
 		{
 			event: "swap",
 			weight: 10,
+			isStrictEvent: false,
 			properties: {
 				token_pair: TOKEN_PAIRS,
 				trade_amount_usd: u.weighNumRange(10, 10000, 0.3, 200),
@@ -458,6 +461,7 @@ const config = {
 		{
 			event: "stake",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				token: ["ETH", "SOL", "MATIC", "AVAX", "ATOM", "DOT"],
 				amount_usd: u.weighNumRange(50, 10000, 0.3, 500),
@@ -478,6 +482,7 @@ const config = {
 		{
 			event: "claim airdrop",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				airdrop_name: AIRDROP_NAMES,
 				token_amount: u.weighNumRange(10, 10000, 0.3, 500),

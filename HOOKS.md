@@ -1520,3 +1520,213 @@ emulateBreakdown(events, { type: 'retention', cohortEvent: 'Sign Up',
                           returnEvent: 'Login', dayBuckets: [7],
                           identityMap });
 ```
+
+---
+
+## 9. Verification Patterns from the v1.5.0 Vertical Eval
+
+20-dungeon eval surfaced patterns where naive verification inverts. Apply
+these recipes when writing per-dungeon verify scripts under
+`research/verifications/v3/`.
+
+### 9.1 Stream-load shards (>500MB)
+
+`fs.readFileSync` caps at ~512MB. For dungeons that produce sharded output
+(`data/PREFIX-EVENTS-part-*.json`) or single shards above the cap, stream:
+
+```js
+import fs from 'fs';
+import path from 'path';
+import readline from 'readline';
+
+async function loadShards(prefix, suffix) {
+  const dir = path.dirname(prefix), base = path.basename(prefix);
+  const out = [];
+  for (const f of fs.readdirSync(dir)
+    .filter(f => f.startsWith(`${base}-${suffix}`) && f.endsWith('.json'))
+    .sort()) {
+    const stream = fs.createReadStream(path.join(dir, f));
+    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    for await (const line of rl) if (line.trim()) out.push(JSON.parse(line));
+  }
+  return out;
+}
+const events = await loadShards('data/verify-mydungeon', 'EVENTS');
+const profiles = await loadShards('data/verify-mydungeon', 'USERS');
+```
+
+Works for both single-shard (`...EVENTS.json`) and glob output
+(`...EVENTS-part-001.json`).
+
+### 9.2 Per-user post/pre ratio (population dilution)
+
+Cohorts that themselves bias event volume break absolute-count comparisons.
+Example: low-balance users check their balance constantly — a hook that
+reduces post-d30 activity 50% still leaves them with MORE absolute events
+than high-balance users.
+
+```js
+const ratios = [];
+for (const [uid, evs] of byUser) {
+  const pre = evs.filter(e => new Date(e.time).getTime() < day30).length;
+  const post = evs.filter(e => new Date(e.time).getTime() >= day30).length;
+  if (pre > 0) ratios.push(post / pre);
+}
+const avg = a => a.reduce((s, v) => s + v, 0) / a.length;
+// Cohort A vs cohort B: compare avg(ratiosA) vs avg(ratiosB), not raw post counts
+```
+
+### 9.3 Neighbor-day baseline (born-ramp confound)
+
+Born-in-dataset users plus pre-existing-spread make late-window days denser
+on average. Comparing a 5-day window against the full-dataset average can
+invert the signal. Compare against adjacent days only:
+
+```js
+const inWindow = (e, lo, hi) => {
+  const t = new Date(e.time).getTime();
+  return t >= ds + lo * 86400000 && t < ds + hi * 86400000;
+};
+const target = events.filter(e => e.event === 'order' && inWindow(e, 20, 27)).length;
+const before = events.filter(e => e.event === 'order' && inWindow(e, 15, 19)).length;
+const after = events.filter(e => e.event === 'order' && inWindow(e, 28, 32)).length;
+const baseline = (before + after) / 9;          // 9 neighbor days
+const targetRate = target / 7;                  // 7 target days
+check('rainy week dip', targetRate < baseline * 0.85);
+```
+
+### 9.4 Soup-aware weekend baseline
+
+Default soup `dayOfWeekWeights` dampens weekends to ~0.55x weekday. A hook
+that adds 30% weekend clones lifts to ~0.70x — still <1.0x but ABOVE soup
+baseline. Verify against expected-without-hook ratio, not against 1.0:
+
+```js
+const wkndDelta = wkndAvg / wkdayAvg;
+const SOUP_BASELINE = 0.55;
+check('weekend surge above soup baseline', wkndDelta > SOUP_BASELINE * 1.2,
+  `wknd/wkday=${wkndDelta.toFixed(2)} (baseline ${SOUP_BASELINE})`);
+```
+
+### 9.5 Verify by spread when cohort key isn't in schema
+
+Hooks sometimes reference a `profile.X` that isn't a defined userProp. The
+validator doesn't catch this — `X` resolves to `undefined`. Verify the
+resulting data SPREAD instead of segment correlation:
+
+```js
+// HOOK references profile.level (not in userProps); can't bin by level.
+// Verify quest_gold spread shows the engineered variance instead.
+const golds = events.filter(e => e.event === 'quest completed')
+  .map(e => e.gold_earned).filter(g => typeof g === 'number');
+const max = Math.max(...golds), min = Math.min(...golds);
+const cv = stddev(golds) / avg(golds);
+check('quest gold spread engineered', max / min > 50 && cv > 1.5);
+```
+
+### 9.6 Hash-based whale/bot cohort
+
+Cleanest pattern for hidden cohorts. Deterministic, no schema mutation, no
+flag stamping. Produces textbook long-tail signals:
+
+```js
+// In hook (everything):
+for (const e of events) {
+  const isWhale = e.user_id && e.user_id.charCodeAt(0) % 50 === 0;  // 2%
+  if (isWhale && e.event === 'swap') e.trade_amount_usd *= 50;
+}
+
+// In verify:
+const whaleAmts = [], rest = [];
+for (const [uid, evs] of byUser) {
+  const isWhale = uid.charCodeAt(0) % 50 === 0;
+  const amts = evs.filter(e => e.event === 'swap').map(e => e.trade_amount_usd);
+  (isWhale ? whaleAmts : rest).push(...amts);
+}
+check('whale 5x+ trade', avg(whaleAmts) / avg(rest) >= 5);
+```
+
+### 9.7 Hook ordering inside `everything`
+
+When one hook injects events that another hook then mutates, ordering
+breaks ratios. Example (dating):
+
+- HOOK 1: cap `match_score` for a cohort to ≤0.4
+- HOOK 4: clone high-`match_score` matches for premium users
+
+If HOOK 1 runs FIRST, then HOOK 4 injects new high-score matches into the
+capped cohort — the cohort's avg moves back up.
+
+**Recipe:** in a single `everything` block, run cohort-degrading hooks
+AFTER all injection hooks. Document the ordering inline:
+
+```js
+hook(events, type, meta) {
+  if (type !== 'everything') return events;
+  // 1. Injection hooks first
+  applyHook4(events, meta);
+  applyHook5(events, meta);
+  // 2. Cohort-shaping hooks last (operate on final event set)
+  applyHook1(events, meta);
+  return events;
+}
+```
+
+### 9.8 Funnel-post TTC limitation (KNOWN)
+
+`funnel-post` hooks that compress timing between funnel events DON'T move
+the verifier's `timeToConvert` rows because `evaluateFunnel` is a greedy
+single-pass over the user's full event history — it picks the first
+matching event for each step regardless of which funnel-instance the hook
+mutated. Document the limitation rather than failing the check:
+
+```js
+const rows = emulateBreakdown(events, {
+  type: 'timeToConvert',
+  fromEvent: 'deposit',
+  toEvent: 'withdrawal',
+  breakdownByUserProperty: 'trading_tier',
+  profiles,
+});
+check('TTC populations present (limitation)', rows.length > 0,
+  `rows=${rows.length} tiers=${rows.map(r => r.segment_value).join(',')}`);
+```
+
+### 9.9 Per-dungeon verify script template
+
+```js
+import fs from 'fs';
+import path from 'path';
+import readline from 'readline';
+import { emulateBreakdown, evaluateFunnel,
+         buildIdentityMap, resolveUserId } from '@ak--47/dungeon-master/verify';
+
+const PREFIX = 'data/verify-MYDUNGEON';
+async function loadShards(suffix) { /* see 9.1 */ }
+
+const events = await loadShards('EVENTS');
+const profiles = await loadShards('USERS');
+const identityMap = buildIdentityMap(profiles);
+const profileBy = new Map(profiles.map(p => [p.distinct_id, p]));
+
+const byUser = new Map();
+for (const e of events) {
+  const uid = resolveUserId(e, identityMap);
+  if (!byUser.has(uid)) byUser.set(uid, []);
+  byUser.get(uid).push(e);
+}
+
+const results = [];
+const check = (n, p, d = '') => {
+  results.push({ n, p, d });
+  console.log(`  ${p ? 'PASS' : 'FAIL'}  ${n}  ${d}`);
+};
+const avg = a => a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0;
+
+// ... per-hook checks ...
+
+const passed = results.filter(r => r.p).length;
+console.log(`\n${passed}/${results.length} checks passed`);
+process.exit(passed === results.length ? 0 : 1);
+```
+
