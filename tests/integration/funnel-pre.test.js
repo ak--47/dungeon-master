@@ -139,9 +139,14 @@ describe('funnel-pre hooks', () => {
 		expect(freePremium).toBe(0);
 	}, 30000);
 
-	test('usage funnel cursor advances: firstEventTime spreads across the dataset', async () => {
-		const runTimesByUser = new Map();
-		const DATASET_START = FIXED_NOW - 90 * 86400;
+	test('usage funnel events spread across the dataset window', async () => {
+		// v1.5 engine bunchiness fix (2026-05-09): the legacy `usageFunnelCursor`
+		// accumulator was REMOVED. Every funnel call now passes `userFirstEventTime`
+		// (constant) as `firstEventTime`. Per-cluster spread comes from TimeSoup
+		// INSIDE makeFunnel sampling step1 over `[userFirstEventTime, FN]`, not from
+		// the cursor walking forward. So this test now checks the actual funnel
+		// event timestamps spread, not the `firstEventTime` parameter.
+		const stepTimesByUser = new Map();
 		const result = await DUNGEON_MASTER(baseConfig({
 			seed: 'funnel-pre-cursor',
 			numUsers: 30,
@@ -167,18 +172,20 @@ describe('funnel-pre hooks', () => {
 					weight: 2,
 				},
 			],
-			hook: function (record, type, meta) {
-				if (type !== 'funnel-pre' || meta.isFirstFunnel) return;
-				const uid = meta.user.distinct_id;
-				if (!runTimesByUser.has(uid)) runTimesByUser.set(uid, []);
-				runTimesByUser.get(uid).push(meta.firstEventTime);
-			},
 		}));
 
-		// Verify firstEventTime spreads across the dataset window (not all at birth time)
+		const events = Array.from(result.eventData);
+		for (const ev of events) {
+			if (ev.event !== 'Step1') continue;
+			const uid = ev.user_id || ev.distinct_id;
+			if (!uid) continue;
+			if (!stepTimesByUser.has(uid)) stepTimesByUser.set(uid, []);
+			stepTimesByUser.get(uid).push(Date.parse(ev.time) / 1000);
+		}
+
 		let usersWithSpread = 0;
 		let totalUsersWithMultiple = 0;
-		for (const [, times] of runTimesByUser) {
+		for (const [, times] of stepTimesByUser) {
 			if (times.length < 3) continue;
 			totalUsersWithMultiple++;
 			const minT = Math.min(...times);

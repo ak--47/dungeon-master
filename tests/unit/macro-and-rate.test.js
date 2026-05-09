@@ -166,37 +166,45 @@ describe('macro integration with config-validator', () => {
 	});
 
 	test('macro preset values are pinned (update test when changing presets)', () => {
+		// v1.5 engine bunchiness fix (2026-05-09): preset values reverted to v1.3-era
+		// values so the documented expected `tail_ratio` shapes (0.84/0.86/1.13/1.89/0.80
+		// per `research/end-bunchiness.md`) are reachable. The May 2026 "more new users"
+		// commit had bumped all `percentUsersBornInDataset` values, but the resulting
+		// cumulative-acquisition shape made the documented expected `tail_ratio` mathematically
+		// unreachable even with a perfect engine. See `plans/ENGINE-BUNCHINESS/FIX.md`.
 		expect(MACRO_PRESETS.flat).toEqual({
 			bornRecentBias: 0,
-			percentUsersBornInDataset: 50,
+			percentUsersBornInDataset: 15,
 			preExistingSpread: 'uniform',
 		});
 		expect(MACRO_PRESETS.steady).toEqual({
 			bornRecentBias: 0.1,
-			percentUsersBornInDataset: 35,
+			percentUsersBornInDataset: 10,
 			preExistingSpread: 'uniform',
 		});
 		expect(MACRO_PRESETS.growth).toEqual({
 			bornRecentBias: 0.3,
-			percentUsersBornInDataset: 60,
+			percentUsersBornInDataset: 25,
 			preExistingSpread: 'pinned',
 		});
 		expect(MACRO_PRESETS.viral).toEqual({
 			bornRecentBias: 0.6,
-			percentUsersBornInDataset: 95,
+			percentUsersBornInDataset: 50,
 			preExistingSpread: 'pinned',
 		});
 		expect(MACRO_PRESETS.decline).toEqual({
 			bornRecentBias: -0.3,
-			percentUsersBornInDataset: 25,
+			percentUsersBornInDataset: 5,
 			preExistingSpread: 'uniform',
 		});
 	});
 
-	test('no preset has percentUsersBornInDataset below 25', () => {
-		for (const [name, preset] of Object.entries(MACRO_PRESETS)) {
-			expect(preset.percentUsersBornInDataset, `${name} preset below 25%`).toBeGreaterThanOrEqual(25);
-		}
+	test('preset percentUsersBornInDataset values match documented intent', () => {
+		// v1.3-era values: low bornRecentBias presets keep <25% born to avoid the
+		// cumulative-acquisition uptrend dominating; viral/growth carry the higher
+		// born values to drive intentional shape.
+		expect(MACRO_PRESETS.flat.percentUsersBornInDataset).toBe(15);
+		expect(MACRO_PRESETS.viral.percentUsersBornInDataset).toBe(50);
 	});
 });
 

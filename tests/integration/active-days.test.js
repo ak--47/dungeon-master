@@ -177,11 +177,15 @@ describe('v1.5 bunchIntoSessions removal — session integrity preserved', () =>
 		// Every event should have a session_id.
 		const withSessions = events.filter(e => e.session_id);
 		expect(withSessions.length).toBe(events.length);
-		// Per-user session counts should be reasonable (1-100).
+		// Per-user session counts should be reasonable (1-700).
+		// v1.5 engine bunchiness fix increased per-user surviving event counts
+		// (cursor accumulation removed → no more cursor-spillover `_drop`s), so
+		// per-user session counts grew too. The assertion is "sensible, not
+		// pathological" — 700 is still fine for a heavy power user.
 		for (const [, evs] of userEvents(events)) {
 			const sessions = new Set(evs.map(e => e.session_id));
 			expect(sessions.size).toBeGreaterThan(0);
-			expect(sessions.size).toBeLessThan(200);
+			expect(sessions.size).toBeLessThan(700);
 		}
 	});
 
