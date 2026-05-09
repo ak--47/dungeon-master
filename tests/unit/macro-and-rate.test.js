@@ -166,30 +166,29 @@ describe('macro integration with config-validator', () => {
 	});
 
 	test('macro preset values are pinned (update test when changing presets)', () => {
-		// v1.5 engine bunchiness fix (2026-05-09): preset values reverted to v1.3-era
-		// values so the documented expected `tail_ratio` shapes (0.84/0.86/1.13/1.89/0.80
-		// per `research/end-bunchiness.md`) are reachable. The May 2026 "more new users"
-		// commit had bumped all `percentUsersBornInDataset` values, but the resulting
-		// cumulative-acquisition shape made the documented expected `tail_ratio` mathematically
-		// unreachable even with a perfect engine. See `plans/ENGINE-BUNCHINESS/FIX.md`.
+		// v1.5 engine bunchiness fix (2026-05-09 round 2): preset values tuned with
+		// the engine fix's ttc-constrained funnel anchoring + catch-all ttc=1d so
+		// the documented expected `tail_ratio` shapes (0.84/0.86/1.13/1.89/0.80) are
+		// reachable on the simplest dungeon (foobar) within ±25% per macro.
+		// See `plans/ENGINE-BUNCHINESS/FIX.md` round-2 results table.
 		expect(MACRO_PRESETS.flat).toEqual({
 			bornRecentBias: 0,
-			percentUsersBornInDataset: 15,
+			percentUsersBornInDataset: 12,
 			preExistingSpread: 'uniform',
 		});
 		expect(MACRO_PRESETS.steady).toEqual({
 			bornRecentBias: 0.1,
-			percentUsersBornInDataset: 10,
+			percentUsersBornInDataset: 12,
 			preExistingSpread: 'uniform',
 		});
 		expect(MACRO_PRESETS.growth).toEqual({
 			bornRecentBias: 0.3,
-			percentUsersBornInDataset: 25,
+			percentUsersBornInDataset: 30,
 			preExistingSpread: 'pinned',
 		});
 		expect(MACRO_PRESETS.viral).toEqual({
 			bornRecentBias: 0.6,
-			percentUsersBornInDataset: 50,
+			percentUsersBornInDataset: 55,
 			preExistingSpread: 'pinned',
 		});
 		expect(MACRO_PRESETS.decline).toEqual({
@@ -200,11 +199,11 @@ describe('macro integration with config-validator', () => {
 	});
 
 	test('preset percentUsersBornInDataset values match documented intent', () => {
-		// v1.3-era values: low bornRecentBias presets keep <25% born to avoid the
-		// cumulative-acquisition uptrend dominating; viral/growth carry the higher
-		// born values to drive intentional shape.
-		expect(MACRO_PRESETS.flat.percentUsersBornInDataset).toBe(15);
-		expect(MACRO_PRESETS.viral.percentUsersBornInDataset).toBe(50);
+		// Low-bias presets keep born% small (5-15) so cumulative-acquisition uptrend
+		// stays modest; viral/growth carry larger born values to drive intentional
+		// hockey-stick / clear-uptrend shape.
+		expect(MACRO_PRESETS.flat.percentUsersBornInDataset).toBe(12);
+		expect(MACRO_PRESETS.viral.percentUsersBornInDataset).toBe(55);
 	});
 });
 
