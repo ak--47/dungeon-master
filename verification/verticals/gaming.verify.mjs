@@ -142,16 +142,29 @@ for (const e of events) {
 		`Elite=${elite.toFixed(1)}m (n=${ttcs.Elite.length}) Free=${free.toFixed(1)}m (n=${ttcs.Free.length})`);
 }
 
-// HOOK 13: combat-prep magic — 3-6 prep events → +30% treasure
+// HOOK 13: combat-prep magic — 3-6 prep events between quest accepted and fight boss → +30% treasure
+// Match the hook's window (quest accepted → fight boss); raw counts include all
+// inspect/search events across user lifetime which dilutes the cohort signal.
 {
 	const sweet = [], over = [];
 	for (const [uid, evs] of byUser) {
-		const prep = evs.filter(e => e.event === 'inspect' || e.event === 'search for clues').length;
+		evs.sort((a, b) => new Date(a.time) - new Date(b.time));
+		const qa = evs.find(e => e.event === 'quest accepted');
+		const fb = evs.find(e => e.event === 'fight boss');
+		if (!qa || !fb) continue;
+		const aT = new Date(qa.time).getTime();
+		const bT = new Date(fb.time).getTime();
+		if (bT <= aT) continue;
+		const prep = evs.filter(e => {
+			if (e.event !== 'inspect' && e.event !== 'search for clues') return false;
+			const t = new Date(e.time).getTime();
+			return t > aT && t < bT;
+		}).length;
 		const treas = evs.filter(e => e.event === 'find treasure' && typeof e.treasure_value === 'number').map(e => e.treasure_value);
 		if (prep >= 3 && prep <= 6) sweet.push(...treas);
 		else if (prep >= 7) over.push(...treas);
 	}
-	check('H13 sweet 3-6 prep 1.05x+ treasure', avg(sweet) / Math.max(avg(over), 1) >= 1.05,
+	check('H13 sweet 3-6 prep 1.05x+ treasure (in-window)', avg(sweet) / Math.max(avg(over), 1) >= 1.05,
 		`sweet=${avg(sweet).toFixed(0)} (n=${sweet.length}) over=${avg(over).toFixed(0)} (n=${over.length}) ratio=${(avg(sweet) / avg(over)).toFixed(2)}x`);
 }
 

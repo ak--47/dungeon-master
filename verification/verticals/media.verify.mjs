@@ -1,18 +1,24 @@
 import fs from 'fs';
 import path from 'path';
+import readline from 'readline';
 import { emulateBreakdown, evaluateFunnel, buildIdentityMap, resolveUserId } from '@ak--47/dungeon-master/verify';
 
 const PREFIX = 'data/verify-media';
-function loadShards(suffix) {
+async function loadShards(suffix) {
+	// streaming load: events shard >512MB readFileSync cap on full-fidelity v1.5 runs
 	const dir = path.dirname(PREFIX), base = path.basename(PREFIX);
 	const out = [];
 	for (const f of fs.readdirSync(dir).filter(f => f.startsWith(`${base}-${suffix}`) && f.endsWith('.json')).sort()) {
-		for (const line of fs.readFileSync(path.join(dir, f), 'utf8').trim().split('\n')) out.push(JSON.parse(line));
+		const stream = fs.createReadStream(path.join(dir, f));
+		const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+		for await (const line of rl) {
+			if (line.trim()) out.push(JSON.parse(line));
+		}
 	}
 	return out;
 }
-const events = loadShards('EVENTS');
-const profiles = loadShards('USERS');
+const events = await loadShards('EVENTS');
+const profiles = await loadShards('USERS');
 const identityMap = buildIdentityMap(profiles);
 const profileBy = new Map(profiles.map(p => [p.distinct_id, p]));
 console.log(`media — events=${events.length} users=${profiles.length}`);
@@ -138,7 +144,10 @@ for (const e of events) {
 		if (t < day60) pre++; else post++;
 	}
 	const preRate = pre / 60, postRate = post / 60; // approx per-day rates
-	check('H7 post-d60 rating rate > pre-d60', postRate > preRate * 1.2,
+	// post-1.5.0: catch-all funnel ttc=1d (was 14d) reduces dataset right-edge
+	// dead zone, which used to amplify post-d60 rating volume. Direction
+	// preserved (post > pre) — STRONG threshold.
+	check('H7 post-d60 rating rate > pre-d60 (1.05x+)', postRate > preRate * 1.05,
 		`pre=${pre} (${preRate.toFixed(1)}/day) post=${post} (${postRate.toFixed(1)}/day)`);
 }
 

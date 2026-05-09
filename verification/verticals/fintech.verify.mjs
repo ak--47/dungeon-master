@@ -1,18 +1,24 @@
 import fs from 'fs';
 import path from 'path';
+import readline from 'readline';
 import { emulateBreakdown, evaluateFunnel, buildIdentityMap, resolveUserId } from '@ak--47/dungeon-master/verify';
 
 const PREFIX = 'data/verify-fintech';
-function loadShards(suffix) {
+async function loadShards(suffix) {
+	// streaming load: events shard >512MB readFileSync cap on full-fidelity v1.5 runs
 	const dir = path.dirname(PREFIX), base = path.basename(PREFIX);
 	const out = [];
 	for (const f of fs.readdirSync(dir).filter(f => f.startsWith(`${base}-${suffix}`) && f.endsWith('.json')).sort()) {
-		for (const line of fs.readFileSync(path.join(dir, f), 'utf8').trim().split('\n')) out.push(JSON.parse(line));
+		const stream = fs.createReadStream(path.join(dir, f));
+		const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+		for await (const line of rl) {
+			if (line.trim()) out.push(JSON.parse(line));
+		}
 	}
 	return out;
 }
-const events = loadShards('EVENTS');
-const profiles = loadShards('USERS');
+const events = await loadShards('EVENTS');
+const profiles = await loadShards('USERS');
 const identityMap = buildIdentityMap(profiles);
 const profileBy = new Map(profiles.map(p => [p.distinct_id, p]));
 console.log(`fintech — events=${events.length} users=${profiles.length}`);
