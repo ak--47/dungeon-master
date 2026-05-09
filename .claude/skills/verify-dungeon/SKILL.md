@@ -274,8 +274,15 @@ recipes with code.
 | `readFileSync` ENOMEM on shards >500MB | Node string cap at ~512MB | Stream-load with `readline.createInterface` over `data/PREFIX-EVENTS*.json` glob |
 | Hook reads `e.event === 'login'` but cohort empty | `login` is a funnel-step event auto-promoted to `isStrictEvent: true` in v1.5 | Add `isStrictEvent: false` to the event config to keep standalone occurrences |
 
-When writing per-dungeon verify scripts under `research/verifications/v3/`,
-follow the template in HOOKS.md §9.9.
+When writing per-dungeon verify scripts, follow the template in HOOKS.md §9.9.
+Reference proofs for all 20 vertical dungeons live at `verification/verticals/`
+— consult them as exemplars before authoring a new one.
+
+**Coverage discipline:** count documented hooks in the dungeon's top-level
+comment block; count `check()` calls in your verify script; the two MUST
+match. A "NAILED 7/7" claim against an 11-hook dungeon is misleading —
+either add the missing checks or document the limitation explicitly in
+the verify script and status file.
 
 ### Common verification mistakes (post-emulator-fix)
 

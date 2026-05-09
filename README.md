@@ -97,6 +97,8 @@ a dungeon is a javascript file that exports a configuration object. it defines y
 
 see `dungeons/vertical/` for customer-facing story dungeons (18 events, 8 hooks) and `dungeons/technical/` for feature-testing dungeons (mirrors, groups, scale, anonymous users).
 
+every vertical dungeon ships with a verification proof at `verification/verticals/<name>.{verify.mjs,sql}` — a CI-runnable assertion that the dungeon's documented hooks actually appear in the generated data at full fidelity. 20 dungeons, 107 hooks, 107 checks. see [`verification/verticals/README.md`](verification/verticals/README.md).
+
 ```javascript
 // dungeons/my-app.js
 import dayjs from 'dayjs';

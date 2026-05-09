@@ -380,6 +380,8 @@ After creating or modifying a dungeon, always verify schema integrity and hook p
 
 The verifier (`@ak--47/dungeon-master/verify`) implements Mixpanel's exact counting semantics: greedy single-pass funnels with 2s grace + strict `<` conversion window (`history.cpp` / `conversion_window.cpp`), distinct-period frequency counting (`addiction_query.cpp`), null-aware aggregation (`normal_query.cpp`), and 10-touchpoint attribution cap (`attributed_value_reader.cpp`). Hook authors should read [HOOKS.md §2 "How Mixpanel Counts Things"](HOOKS.md#2-how-mixpanel-counts-things) before targeting any Mixpanel report — naive event-count or any-order-funnel intuitions diverge from what Mixpanel actually computes.
 
+**Vertical dungeon proofs:** [`verification/verticals/`](verification/verticals/) ships a per-dungeon `<name>.verify.mjs` (CI gate) + `<name>.sql` (human inspection) for all 20 vertical dungeons. 107 documented hooks → 107 verification checks. Use these as reference when authoring new verifications; see [HOOKS.md §9](HOOKS.md#9-verification-patterns-from-the-v150-vertical-eval) for the recipe encyclopedia.
+
 ## Trend Shape — Macro and Soup
 
 Two orthogonal axes shape how events are distributed in time:
