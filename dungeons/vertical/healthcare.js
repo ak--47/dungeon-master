@@ -354,6 +354,7 @@ const config = {
 		{
 			event: "appointment booked",
 			weight: 6,
+			isStrictEvent: false,
 			properties: {
 				doctor_id: chance.pickone.bind(chance, doctorIds),
 				clinic_id: chance.pickone.bind(chance, clinicIds),
@@ -365,6 +366,7 @@ const config = {
 		{
 			event: "consultation completed",
 			weight: 5,
+			isStrictEvent: false,
 			properties: {
 				doctor_id: chance.pickone.bind(chance, doctorIds),
 				consultation_mode: ["phone", "phone", "video"],
@@ -377,6 +379,7 @@ const config = {
 		{
 			event: "prescription issued",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				medication_type: ["antibiotic", "antiviral", "painkiller", "anti_inflammatory", "antidepressant", "inhaler", "topical", "chronic_maintenance"],
 				quantity: u.weighNumRange(1, 90, 0.3, 30),
@@ -387,6 +390,7 @@ const config = {
 		{
 			event: "prescription refill",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				medication_type: ["antibiotic", "antiviral", "painkiller", "anti_inflammatory", "antidepressant", "inhaler", "topical", "chronic_maintenance"],
 				quantity: u.weighNumRange(1, 90, 0.3, 30),
@@ -397,6 +401,7 @@ const config = {
 		{
 			event: "follow up scheduled",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				doctor_id: chance.pickone.bind(chance, doctorIds),
 				days_until_followup: u.weighNumRange(3, 30, 0.5, 7),

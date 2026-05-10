@@ -2,6 +2,145 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.5.0 — 2026-05-08
+
+The "count and verify like Mixpanel does" release. Aligns BOTH the data generation engine AND the verifier with Mixpanel's actual counting semantics — greedy single-pass funnels, distinct-period frequency counting, null-aware aggregation, touchpoint-capped attribution, identity merge, retention, sessions, time-bucketed trends. Removes `bunchIntoSessions`, the root cause of funnel ordering corruption since 1.0.
+
+### Generator changes
+
+#### Added
+- **`avgActiveDaysPerUser`** — Concentrates events onto fewer distinct UTC days per user. Uses weighted-without-replacement day picking from soup DOW weights. Events per active day scale naturally (`rate × remaining_days ÷ active_days`). Interacts correctly with `engagementDecay` (protects last event per picked day from being dropped).
+- **`conversionWindowDays`** on funnels — Explicit conversion window (default 30, hard cap 180). Validator auto-bumps when `timeToConvert` exceeds the default. Funnel generator caps step-to-step time to the window. Verifier and `emulateBreakdown` apply the same window.
+- **`maxTouchpointsPerUser`** — Per-user touchpoint cap (default 10) matching Mixpanel's `attributed_value_reader.cpp`. Engine samples eligible events across user lifetime using `chance.pickset`, stamps UTMs on the sample only. Replaces the old inline 25% UTM stamping in `events.js`.
+- **`autoSortAfterEverything`** — Auto-sorts user events by time after the `everything` hook (default `true`). Defends greedy funnel verification from out-of-order hook-injected events. Opt out with `autoSortAfterEverything: false`.
+- **`isStrictEvent` auto-promote** — Config validator detects events that appear in both `events[]` and `funnels[].sequence` and auto-promotes them to `isStrictEvent: true`. Prevents greedy engine corruption where standalone instances of funnel-step events confound conversion counting. Opt out per-event with `isStrictEvent: false`. Runs BEFORE catch-all funnel creation.
+- **`Funnel.exclusionEvents: string[]`** — events that terminate the funnel for non-converters. Generator stamps 1-2 cloned events bearing one of the listed names between the last completed step and where the next step would have been. Schema-first: validator throws on undeclared entries; cloned events copy ONLY identity + super props + group keys + props declared on the exclusion event's own config (no source-event prop pollution).
+- **`Funnel.reentry: boolean`** — verifier-only hint. Auto-applied by `verifyDungeon` to matching `funnelFrequency` / `timeToConvert` checks.
+- **`Funnel.stepFilters: Record<number, { prop, op, value }>`** — verifier-only hint. The verifier attaches `where`-clauses at the matching step index.
+- **Session day-boundary split** — `assignSessionIds` now ends a session at the UTC day boundary (matches Mixpanel `session_query.cpp:828-830, 911`). Three reset triggers: timeout gap > 30 min, max session > 24h, OR day-index change.
+- **`weightedSampleNoReplacement`** — Seeded weighted sampling utility for active-day picking and touchpoint selection.
+
+#### Changed
+- **`bunchIntoSessions` removed.** Was a wholesale timestamp overwrite that scrambled funnel ordering and destroyed TimeSoup's time distribution. Replaced by natural TimeSoup-driven timestamps + `assignSessionIds` (which was already running but had its work overwritten by `bunchIntoSessions`). Events now arrive in correct temporal order without post-hoc rewriting.
+- **Standalone events use `isFirstEvent: false`.** Previously all standalone events used `isFirstEvent: true`, pinning them to the same timestamp. The old `bunchIntoSessions` retimed them — now TimeSoup distributes them directly.
+- **UTM stamping moved to per-user pass.** Inline per-event UTM stamping in `events.js` replaced by `applyTouchpointCap` in `user-loop.js`. Runs after all events are generated, samples up to `maxTouchpointsPerUser` eligible events. Matches Mixpanel's attribution counting behavior.
+- **Funnel generator respects conversion window.** When a funnel's step-to-step span exceeds `conversionWindowDays`, the generator scales `relativeTimeMs` to fit.
+- **`funnelFeatureCtx` preserves `latestTime`.** Bug fix: was dropping `featureCtx.latestTime`, causing funnel first events to use the full `[earliest, FIXED_NOW]` range instead of the picked day's bounds in active-day mode.
+- **Empty event pool bail-out.** When all events are funnel steps (auto-promoted to strict) and there are no standalone events, the user loop skips standalone generation instead of crashing on `pick([])`.
+- **Future-event filter now logs in verbose mode.** Events past `FIXED_NOW` (from catch-all funnel TTC drift) are filtered with a verbose log showing count, user, and time range.
+- **`buildActiveDayPlan` returns `pickedDayBuckets`.** Shape changed from `number[] | null` to `{ plan, pickedDayBuckets } | null` so engagement decay can protect last events on active days.
+- **User loop wrapped in try/finally.** SIGINT cleanup (progress interval, user count reset) runs even on error.
+
+### Verifier changes
+
+The "verify like Mixpanel does" half. Adds counting primitives behind `emulateBreakdown` so engineered hook patterns can be verified against the same shapes Mixpanel computes.
+
+#### Added
+- **Identity resolution** — `buildIdentityMap(profiles)` inverts each profile's `device_ids` / `anonymousIds` (legacy field name supported) into a flat `Map<device_id, canonical_user_id>`. `resolveUserId(event, identityMap)` resolves a single event with priority: `event.distinct_id` → identity map → `event.user_id` → `event.device_id` (Mixpanel canonical post-merge id wins). `emulateBreakdown` auto-builds the map when `profiles` are passed (any breakdown type, hoisted above `timeBucket` recursion to avoid rebuild per partition).
+- **Funnel engine extensions** — `evaluateFunnel` accepts:
+  - `reentry: boolean` — re-runs state machine after each completion; `result.completions` reports total.
+  - `exclusionSteps: [{ event, afterStep?, beforeStep? }]` — events that terminate the current attempt. `afterStep`/`beforeStep` use the index of the step that must (have) been reached; defaults `afterStep=-Infinity`, `beforeStep=steps.length` (fires anywhere, used by simple `Funnel.exclusionEvents` shape). Cooperates with reentry.
+  - Step filters — steps may be `{ event, where: { prop, op, value } }`. Supported ops: eq, neq, gt, lt, gte, lte, contains, not_contains.
+  - `trackStepProperties: boolean | string[]` — captures matched event properties at each step into `result.stepProperties`.
+  - `countMode: 'uniques' | 'totals'` — totals mode returns `FunnelResult[]` (Mixpanel `funnel_query.cpp:2055-2100`). Includes incomplete attempts so per-step drop-off counts are preserved (`history_get_reached >= 0`, NOT "completed"). Without reentry: single-attempt array.
+  - `sessionScoped: boolean` — partition by `session_id`, run per session. Verifier-only convenience; Mixpanel's closest analog is `WINDOW_TYPE_SESSIONS` on the conversion window.
+- **HPC** — `evaluateFunnelHPC(events, steps, holdProperty, options)` runs parallel sub-funnels per unique value of the held property on the step-0 event. Returns `Map<value, FunnelResult | FunnelResult[]>`. NOT auto-routed through `funnelFrequency` (different report shape); call directly inside `verifyDungeon` checks.
+- **Segment modes** — `resolveFunnelSegment(result, 'first' | 'last' | { step: N })` picks property snapshot for FIRST_TOUCH / LAST_TOUCH / STEP modes.
+- **`emulateBreakdown({ type: 'sessionMetrics' })`** — group by user→session, emit `[{ metric, avg, median, p90, total_sessions }]` for count / duration / eventsPerSession. Trusts pre-stamped `session_id`. Optional `event` filter restricts to sessions containing a target event (verifier-only convenience).
+- **`emulateBreakdown({ type: 'retention' })`** — birth-anchored ms-delta bucketed retention (`retention_query.cpp:1227-1231`). A return 23h after birth lands in bucket 0; 25h lands in bucket 1. `birthCanRetain: false` default (`retention_query.cpp:1097-1109`). Inputs `cohortEvent`, `returnEvent`, `dayBuckets`. Optional `segmentBy` partitions cohort by birth event property (`segment_event=FIRST` mode); optional `carry_forward` marks once-retained users as retained on later buckets (CARRY_FORWARD unbounded mode).
+- **`emulateBreakdown({ timeBucket: 'day' | 'week' | 'month' })`** — cross-cutting wrapper on every breakdown type. Partitions events by UTC bucket, tags rows with `period: string` (`YYYY-MM-DD`, `YYYY-Www`, `YYYY-MM`). Optional `timeBucketRange: { from, to }` enumerates every bucket and emits `{ period, _empty: true }` markers for empty intervals (Mixpanel `normal_query.cpp:352-356` parity).
+- **`aggregatePerUser` cohort-level rollup** — `cohort_sum` / `cohort_min` / `cohort_max` field added when the per-user `agg` is `sum`/`count`/`min`/`max`. `avg_aggregate` always populated. Matches Mixpanel's "Aggregate per user" report column for the corresponding agg mode.
+- **`partitionByTimeBucket(events, bucket, options?)`** — exposed helper. Accepts `{ from, to }` for empty-bucket enumeration.
+- **`evaluateAnyOrderCompletion`** — Verifier function for `unordered`/`random` funnel modes. `emulateBreakdown` auto-dispatches based on `funnel.order`.
+
+#### Changed
+- **Identity resolver order** — `event.distinct_id` now wins over the merge map (Mixpanel canonical post-merge id; never demote).
+- **Sessions split on UTC day** — `session_query.cpp:828-830` parity (added to `assignSessionIds` AND `sessionMetrics`).
+
+### Documented divergences (intentional v1.5.0 scope gaps)
+
+- **HPC list-property values** — scalar only; Mixpanel `aggregate_hash_get_key_cursor` explodes list values into N sub-funnels per event.
+- **`sessionScoped` funnel** + **`sessionMetrics({ event })`** — verifier-only conveniences; not directly reproducible in Mixpanel UI.
+- **Retention COMPOUNDED, CARRY_BACK, CONSECUTIVE_FORWARD, CALENDAR_START, segment_event=SECOND, cohort window, week/month bucket units** — out of v1.5.0 scope.
+- **Timezone** — verifier uses UTC; Mixpanel uses query timezone (qtz).
+- **Percentiles** — linear interpolation (d3.quantile); Mixpanel uses TDigest.
+- **Selector grammar** — eq/neq/gt/lt/gte/lte/contains/not_contains only; no is_set/between/regex/contains_ci.
+
+### Backward Compatibility
+
+- **No breaking changes to the public API.** `DUNGEON_MASTER(config)` signature unchanged. All named exports unchanged.
+- Existing dungeons run without modification. New config fields are additive and optional.
+- `bunchIntoSessions` removal changes timestamp distribution for all dungeons. Events now follow TimeSoup's natural distribution instead of being rewritten into synthetic session clusters. This is more correct — funnels maintain temporal ordering.
+- `isStrictEvent` auto-promote may reduce standalone event variety for dungeons where funnel-step events overlap with `events[]`. Add `isStrictEvent: false` on specific events to preserve standalone instances.
+- Touchpoint cap (default 10) reduces UTM-stamped events from ~25% of all events to at most 10 per user. Attribution analysis produces more realistic distributions.
+- UTC day-boundary session split may produce more sessions per user than 1.4 (sessions crossing midnight now split). Session metrics shift accordingly.
+
+### Documentation
+
+- **`research/1.5.0-upgrade-guide.md`** — consumer upgrade guide with behavioral changes, new verifier capabilities, identity-aware verification requirement.
+- **CLAUDE.md** updated with `avgActiveDaysPerUser`, `conversionWindowDays`, `maxTouchpointsPerUser`, `autoSortAfterEverything`, active-day distribution section, 15-step execution order.
+- **HOOKS.md** — §2.4 touchpoint generation contract, §2.5 active-day distribution, §2.6–2.10 (sessions, retention, reentry, HPC, segment modes), §8 v1.5.0 verification recipes (8 patterns).
+- **Skill files** updated: `create-dungeon`, `write-hooks`, `verify-dungeon` with v1.5 considerations + new primitive table.
+
+### Engine validation + strict clamps (post-eval ship gate)
+
+Final 1.5.0 hardening pass — proves the engine produces clean, in-band charts across the param space and adds validator guards against the worst foot-guns. Methodology + sweep evidence: `plans/ENGINE-VALIDATION/FIX.md`.
+
+#### Engine
+
+- **`FUNNEL_DEAD_ZONE_CAP_SEC = 0`** (`lib/orchestrators/user-loop.js`). Earlier rounds reserved a 1-day "dead zone" before `FIXED_NOW` for funnel step-1 anchors to defend against a cursor-accumulation bug. Round 1 fixed the cursor accumulation directly, leaving the cap as defense-in-depth. The future-time guard at storage step 14 already drops any `time > FIXED_NOW`, so removing the cap is safe — funnels can now anchor right up to `FN`. Eliminates the last-day cliff for funnel-heavy dungeons. Verified across 194-combo sweep: `futureEvents == 0` everywhere.
+
+#### Validator strict clamps (`lib/core/config-validator.js`)
+
+Seven clamps with `console.warn` messages explaining what changed and why. All fire either unconditionally (sanity bounds) or only when the user explicitly overrides via top-level field OR `macro: { preset, ... }` object override (raw preset names exempt — preset values are designed to be safe).
+
+| # | Clamp | Trigger | Action |
+|---|-------|---------|--------|
+| 1 | `percentUsersBornInDataset` ∈ [0, 100] | Always | Clamp + warn |
+| 2 | Per-macro born cap (flat=12, steady=12, growth=30, viral=55, decline=5) | User-explicit `macro` AND user-explicit `percentUsersBornInDataset` | Clamp + warn |
+| 3 | `bornRecentBias` ∈ [-0.5, 0.5] | User-explicit (incl. macro-object override) | Clamp + warn |
+| 4 | Compound: `born > 60 && bias > 0.4` → bias=0.3 | User-explicit (either) | Clamp + warn |
+| 5 | `bornRecentBias` ∈ [-1, 1] (`Math.pow` guard) | Always | Clamp |
+| 6 | `avgEventsPerUserPerDay` > 50 → 50 | Always | Clamp + warn (recompute `numEvents`) |
+| 7 | `avgActiveDaysPerUser` > `numDays * 0.5` → `floor(numDays * 0.5)` | Always | Clamp + warn |
+
+Plus a warning-only check for `numDays < 14` (window may be pinned via `datasetStart`/`datasetEnd` upstream).
+
+#### Sweep harness (`scripts/sweep-engine.mjs`)
+
+Validates `dungeons/technical/simplest.js` (no-hook baseline) across a 194-combo cross-product matrix of macro × numDays × born × rate × activeDays. Per-macro strict bars match each preset's design intent (flat is stationary, viral is hockey-stick). Pinned to most-recent past Wednesday-EOD-UTC anchor for full calendar-day determinism — back-to-back runs produce zero metric drift. **194 / 194 PASS.**
+
+`tests/unit/engine-shape-canary.test.js` — 10-test ~5s canary (runs every commit) with fixed-date pinning (`datasetEnd = '2026-04-30T23:59:59Z'`).
+
+`tests/e2e/engine-shape-full-sweep.test.js` — gated by `RUN_FULL_SWEEP=1`, runs the full 194-combo matrix (~5.5 min). Pre-release acceptance gate.
+
+#### Hook compatibility
+
+Spot-checked 5 verticals post-fix: **56 / 56 hook checks PASS** (fitness 12, dating 13, ecommerce 10, sass 10, social 11). Hook magnitudes match prior eval within ±10%. Engine fix is hook-compatible at full fidelity. None of the 20 vertical dungeons set `percentUsersBornInDataset` / `bornRecentBias` / `avgEventsPerUserPerDay > 50` explicitly → validator clamps don't fire on existing dungeons.
+
+#### Documentation
+
+- **CLAUDE.md** — new "Tuning guidance — safe ranges and engine guarantees (v1.5)" section under "Trend Shape — Macro and Soup". Per-tunable safe-range table, 6 strict-bar conditions, per-macro bar values, known-engine-guarantees subsection.
+- **types.d.ts** — JSDoc `safe range` + clamp behavior on `numDays`, `percentUsersBornInDataset`, `bornRecentBias`, `avgEventsPerUserPerDay`, `avgActiveDaysPerUser`.
+- **`.claude/skills/create-dungeon/SKILL.md`** — macro × born% compatibility note + clamp warnings.
+- **`.claude/skills/write-hooks/SKILL.md`** — "intentional strict-bar deviation" pattern (decline + churn cohorts and viral-with-persona-lift can intentionally exceed bars).
+
+### Test Suite
+
+Full suite: **46 files, 1100+ tests** (was 960 in 1.4). Engine-validation pass adds 12 (10 canary + 2 clamp + 4 macro-object form, minus updates) → **1122 passed / 2 skipped**. Highlights:
+
+| File | Tests | Coverage |
+|------|-------|----------|
+| Generator: `active-days`, `conversion-window`, `order-mode-dispatch`, `touchpoint-cap`, `strict-event-autopromote`, `auto-sort`, `interrupt-funnel`, `datagen-determinism`, `decay-respects-active-days` | 41 | Engine changes |
+| `tests/unit/identity-resolution.test.js` | 14 | Map inversion, resolver fallback chain |
+| `tests/unit/funnel-engine.test.js` (extended) | 51 | Reentry, exclusion, HPC, step filters, step properties, segment modes, sessionScoped — 5+ ported fixtures from `test_qt_funnel.py` |
+| `tests/unit/session-metrics.test.js` | 11 | count/duration/eventsPerSession + day-boundary + ported `test_qt_sessions.py` fixture |
+| `tests/unit/retention.test.js` | 9 | ms-delta bucketing + birthCanRetain + carry_forward + segmentBy + ported `test_qt_retention.py` fixture |
+| `tests/unit/time-bucketed.test.js` | 11 | day/week/month + cross-cutting + empty backfill |
+| `tests/integration/identity-model.test.js` (extended) | +1 | `emulateBreakdown` profile-merge round-trip |
+| `tests/integration/hook-patterns-emulator.test.js` (extended) | +7 | Funnel options + new breakdown types + cohort SUM/MAX |
+| `tests/integration/features.test.js` (extended) | +4 | exclusionEvents validator + injection + schema-clean clone |
+
 ## 1.4.5 — 2026-05-06
 
 ### Added

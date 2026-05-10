@@ -28,6 +28,11 @@ export interface Dungeon {
     /**
      * Number of days the dataset spans. Default: 30.
      *
+     * Safe range: `[14, 365]`. Below 14 → strict-bar engine-validation metrics use
+     * 14-day windows; results are noisy. Above 365 → memory cost grows linearly.
+     * Validator emits a warning below 14; does not clamp (because the window may have
+     * been pinned via `datasetStart`/`datasetEnd` upstream).
+     *
      * Three resolution modes:
      * 1. **`numDays` alone (no datasetStart/End):** Window = `[today - numDays, today]`.
      *    Simplest API for ad-hoc dungeons. NOT deterministic across runs (today changes).
@@ -58,7 +63,14 @@ export interface Dungeon {
     numEvents?: number;
     /** Number of unique users to generate. */
     numUsers?: number;
-    /** Average events per user per active day. The canonical event-volume primitive — born-late users get this rate × their remaining window, so per-day density stays constant. If both this and numEvents are set, this wins. */
+    /**
+     * Average events per user per active day. The canonical event-volume primitive —
+     * born-late users get this rate × their remaining window, so per-day density stays
+     * constant. If both this and numEvents are set, this wins.
+     *
+     * Safe range: `[0.1, 50]`. Above 50 → unrealistic load + memory cost; the v1.5
+     * validator strict-clamps to 50 with a warning.
+     */
     avgEventsPerUserPerDay?: number;
     /** Output format for files written to disk. */
     format?: "csv" | "json" | "parquet" | string;
@@ -242,12 +254,81 @@ export interface Dungeon {
     // ── Distribution Controls ──
     // These three knobs are normally set by the `macro` preset (default "flat").
     // Setting them on the dungeon config directly overrides the preset's value.
-    /** Percentage of users whose account creation falls within the dataset window (vs. pre-existing). Default (from macro: "flat"): 50 */
+    /**
+     * Percentage of users whose account creation falls within the dataset window (vs. pre-existing).
+     *
+     * Safe range: `[0, 100]` (sanity-clamped). Recommended `[0, 60]`. **v1.5 strict-clamp:**
+     * when `macro` is set to a named preset AND the user explicitly sets this field, it is
+     * clamped to the preset's default born% (flat=12, steady=12, growth=30, viral=55,
+     * decline=5) to preserve the macro's characteristic shape. Users who need higher born%
+     * should switch macros (flat→growth, growth→viral). When `macro` is not set, no clamp
+     * fires (legacy backward-compat).
+     */
     percentUsersBornInDataset?: number;
-    /** Bias for birth dates of users born in dataset. -1..1; negative = early skew, positive = recent skew, 0 = uniform. Default (from macro: "flat"): 0 */
+    /**
+     * Bias for birth dates of users born in dataset. -1..1; negative = early skew,
+     * positive = recent skew, 0 = uniform.
+     *
+     * Safe range: `[-0.5, 0.5]`. **v1.5 strict-clamp:** values outside `[-0.5, 0.5]` are
+     * clamped to the nearest bound (above 0.5 = unusable right-skew; below -0.5 = unusable
+     * left-skew). Compound clamp: when explicit `percentUsersBornInDataset > 60` AND
+     * explicit `bornRecentBias > 0.4`, bias is clamped to 0.3 to prevent right-edge
+     * cumulative-acquisition explosion. Macro presets (e.g., viral=0.6) are exempt.
+     */
     bornRecentBias?: number;
     /** How pre-existing users' first event time is placed. "pinned" stacks them all at FIXED_BEGIN; "uniform" spreads across [FIXED_BEGIN-30d, FIXED_BEGIN]. Default (from macro: "flat"): "uniform" */
     preExistingSpread?: "pinned" | "uniform";
+
+    // ── v1.5 Distinct-Day + Mixpanel Cap Primitives ──
+    /**
+     * Mean number of distinct UTC days each user fires events on. CONCENTRATOR semantic —
+     * total event count is preserved (still `avgEventsPerUserPerDay × userActiveDays`),
+     * but events cluster onto fewer days. Per-user count drawn from
+     * `normal(mean=avgActiveDaysPerUser, sd=mean/3)`, clamped to `[1, userActiveDays]`.
+     *
+     * Default: undefined (legacy — every window-day potentially active, no concentration).
+     *
+     * Per-active-day rate inflates: `(avgEventsPerUserPerDay × numDays) / avgActiveDaysPerUser`.
+     * Validator warns when implied per-active-day rate > 50.
+     *
+     * Day picking: weighted-without-replacement from candidate UTC days using
+     * `soup.dayOfWeekWeights`, so weekly rhythm is preserved at the cohort level.
+     *
+     * **Incompatibility with `engagementDecay`:** decay drops events from late picked days,
+     * eroding the effective active-day count below the configured target. Use one or the
+     * other; if you need both, write decay logic in an `everything` hook scoped to specific
+     * cohorts. See HOOKS.md §2.5.
+     *
+     * Safe range: `[1, numDays * 0.5]`. Above 50% of `numDays` defeats the concentrator
+     * purpose; the v1.5 validator strict-clamps to `floor(numDays * 0.5)` with a warning.
+     */
+    avgActiveDaysPerUser?: number;
+    /**
+     * Maximum number of UTM-stamped events per user. Matches Mixpanel's `TOUCHPOINTS_LIMIT`
+     * (`backend/libquery/properties_over_time/attributed_value_reader.cpp` line 16).
+     *
+     * Default: 10.
+     *
+     * When `hasCampaigns: true` and a user has more eligible events than the cap, the
+     * engine takes a uniform-random sample of size `cap` from the eligible pool (seeded,
+     * deterministic), sorts the sample chronologically, then stamps UTMs. Sampling
+     * across the user's lifetime — NOT first-N-chronological — preserves realistic
+     * touch distribution and lets Mixpanel's last-10-window report give meaningful
+     * first/last-touch attribution.
+     *
+     * Set to `Infinity` to disable the cap (legacy behavior, ~25% of eligible events stamped).
+     */
+    maxTouchpointsPerUser?: number;
+    /**
+     * If true (default), the engine sorts each user's events ascending by `time` after
+     * the `everything` hook returns, before the events are pushed to storage. Defends
+     * against the most common new footgun: hooks that `push()` cloned events with arbitrary
+     * timestamps and break the greedy funnel engine's chronological-order requirement.
+     *
+     * Set to `false` to preserve the hook's order (advanced — hook must guarantee its own
+     * ordering for downstream Mixpanel-aligned counting).
+     */
+    autoSortAfterEverything?: boolean;
 }
 
 export type SCDProp = {
@@ -821,6 +902,22 @@ export interface Funnel {
      */
     timeToConvert?: number;
     /**
+     * Mixpanel-style conversion window cap, in DAYS. Funnel-step events after step 0 must
+     * land within `conversionWindowDays * 86400000` ms of step 0's timestamp (strict `<`,
+     * matching `is_within_conversion_window` in `backend/arb/reader/funnels/conversion_window.cpp`).
+     *
+     * Default: 30 (Mixpanel UI default).
+     *
+     * If unset and `timeToConvert / 24 >= 30`, the validator auto-bumps to
+     * `min(180, ceil(timeToConvert / 24 * 1.5))` and warns. Hard cap: 180 days
+     * (Mixpanel's maximum). Validator throws if explicitly set above 180.
+     *
+     * The generator caps funnel runs at `conversionWindowDays * 86400000 - 1` ms (1ms slack
+     * to clear the strict-`<` boundary). The verifier (`verifyDungeon`) reads this field
+     * and applies it automatically when emulating funnel breakdowns.
+     */
+    conversionWindowDays?: number;
+    /**
      * funnel properties go onto each event in the funnel and are held constant
      */
     props?: Record<string, ValueValid>;
@@ -858,6 +955,32 @@ export interface Funnel {
 	 * @see AttemptsConfig
 	 */
 	attempts?: AttemptsConfig;
+
+	// v1.5.0 — funnel extensions
+	/**
+	 * v1.5.0 — Events that terminate the funnel attempt for non-converters. The generator
+	 * stamps 1-2 cloned exclusion events between the last completed step and where the next
+	 * step would have been; the verifier reads this and applies them as exclusionSteps to
+	 * `evaluateFunnel`. Each entry MUST be declared in `events[]` (schema-first) — the
+	 * validator throws otherwise.
+	 */
+	exclusionEvents?: string[];
+	/**
+	 * v1.5.0 — Verifier-only hint. When `true`, the verifier evaluates with reentry
+	 * enabled (counts every completion). Generator behavior unchanged.
+	 */
+	reentry?: boolean;
+	/**
+	 * v1.5.0 — Verifier-only hint. Per-step property conditions; the verifier mutates
+	 * its step list to attach `where`-clauses at the matching index. Generator behavior
+	 * unchanged.
+	 */
+	stepFilters?: Record<number, {
+		prop: string;
+		op: 'eq' | 'neq' | 'gt' | 'lt' | 'gte' | 'lte' | 'contains' | 'not_contains';
+		value: unknown;
+	}>;
+
 	/** @internal Resolved experiment config set by config-validator. */
 	_experiment?: { name: string; variants: Array<{ name: string; conversionMultiplier: number; ttcMultiplier: number; weight: number }>; startUnix: number | null };
 	/** @internal Set by funnels.js during experiment handling. */
@@ -1627,7 +1750,7 @@ declare module '@ak--47/dungeon-master/hook-patterns' {
  * | `attributedBy` | `conversionEvent`, `attributionEvent`, `attributionProperty` | `model` (default: `'lastTouch'`) |
  */
 export interface EmulateOptions {
-    type: 'frequencyByFrequency' | 'funnelFrequency' | 'aggregatePerUser' | 'timeToConvert' | 'attributedBy';
+    type: 'frequencyByFrequency' | 'funnelFrequency' | 'aggregatePerUser' | 'timeToConvert' | 'attributedBy' | 'sessionMetrics' | 'retention';
     metricEvent?: string;
     breakdownByFrequencyOf?: string;
     perUser?: boolean;
@@ -1643,6 +1766,74 @@ export interface EmulateOptions {
     attributionEvent?: string;
     attributionProperty?: string;
     model?: 'firstTouch' | 'lastTouch';
+    /**
+     * Pre-built device→user map (e.g. from `buildIdentityMap(profiles)`). When omitted but
+     * `profiles` are supplied with `device_ids`, the map is built automatically. Threaded
+     * through every breakdown type so pre-auth (device_id) events resolve to the same
+     * canonical user as post-auth (user_id) events.
+     */
+    identityMap?: Map<string, string>;
+    /** v1.5.0 — funnel reentry. After completing all steps, reset and continue scanning. Used by funnelFrequency + timeToConvert sequential modes. */
+    reentry?: boolean;
+    /** v1.5.0 — funnel exclusion steps. If an exclusion event fires between specified steps, terminate the attempt. */
+    exclusionSteps?: Array<{ event: string; afterStep?: number; beforeStep?: number }>;
+    /** v1.5.0 — funnel step property tracking. Captures matched event properties at each step into FunnelResult.stepProperties. */
+    trackStepProperties?: boolean | string[];
+    /** v1.5.0 — partition funnel evaluation by `session_id`; only steps in the same session can complete. */
+    sessionScoped?: boolean;
+    /** v1.5.0 — cross-cutting time-bucketed output. Wraps any breakdown type, returning rows tagged with `period` per UTC bucket. */
+    timeBucket?: 'day' | 'week' | 'month';
+    /**
+     * v1.5.0 — when set with `timeBucket`, enumerates EVERY bucket in `[from, to]`
+     * and emits a `{ period, _empty: true }` marker for buckets with no events
+     * (Mixpanel normal_query.cpp emits zero rows for empty intervals). Without
+     * this, only buckets containing events are returned.
+     *
+     * **Empty-row contract:** consumers MUST filter `r._empty` before any
+     * numerical aggregation. Populated rows have full breakdown fields plus
+     * `period`; empty rows have ONLY `period` and `_empty: true`.
+     */
+    timeBucketRange?: { from: number | string; to: number | string };
+    /** v1.5.0 — sessionMetrics: filter to sessions containing this event. Omit for all sessions. */
+    metrics?: Array<'count' | 'duration' | 'eventsPerSession'>;
+
+    // v1.5.0 retention extensions
+    /** Retention birth event name. */
+    cohortEvent?: string;
+    /** Retention return event name. */
+    returnEvent?: string;
+    /** Day buckets to check (offsets from birth, ≥1). */
+    dayBuckets?: number[];
+    /** Segment cohort by birth event property value (Mixpanel segment_event=FIRST). */
+    segmentBy?: string;
+    /** CARRY_FORWARD unbounded mode — once retained, counted on all later buckets. */
+    carry_forward?: boolean;
+    /**
+     * v1.5.0 — Mixpanel `birth_can_retain` (retention_query.cpp:1097-1109). Default
+     * `false`: a return event at the EXACT birth ms is NOT counted (strict `<`).
+     * Set `true` to count exact-birth-ms returns (rare; usually a same-event-as-birth
+     * pattern requires COMPOUNDED retention which is not supported here).
+     */
+    birthCanRetain?: boolean;
+}
+
+/** v1.5.0 — config for `emulateBreakdown({ type: 'retention' })`. */
+export interface RetentionConfig extends EmulateOptions {
+    type: 'retention';
+    cohortEvent: string;
+    returnEvent: string;
+    dayBuckets: number[];
+    segmentBy?: string;
+    carry_forward?: boolean;
+}
+
+/** v1.5.0 — config for `emulateBreakdown({ type: 'sessionMetrics' })`. */
+export interface SessionMetricsConfig extends EmulateOptions {
+    type: 'sessionMetrics';
+    /** Optional event filter — only sessions containing this event qualify. */
+    event?: string;
+    /** Which metrics to compute. Default: `['count', 'duration', 'eventsPerSession']`. */
+    metrics?: Array<'count' | 'duration' | 'eventsPerSession'>;
 }
 
 declare module '@ak--47/dungeon-master/verify' {
@@ -1650,6 +1841,48 @@ declare module '@ak--47/dungeon-master/verify' {
     export function verifyDungeon(config: Dungeon, checks: Array<{ name: string; breakdown: EmulateOptions; assert: (rows: Array<Record<string, unknown>>, ctx: { events: EventSchema[]; profiles: UserProfile[] }) => { pass: boolean; detail?: string } }>): Promise<{ pass: boolean; results: Array<{ name: string; pass: boolean; detail?: string; rows?: Array<Record<string, unknown>> }>; schemaReport: SchemaReport }>;
     export function deriveExpectedSchema(config: Dungeon): Map<string, Set<string>>;
     export function validateSchema(events: EventSchema[], config: Dungeon): SchemaReport;
+    /** Build a `Map<device_id, canonical_user_id>` by inverting each profile's `device_ids` array. */
+    export function buildIdentityMap(profiles: UserProfile[]): Map<string, string>;
+    /** Resolve canonical user id for an event using the identity map (device→user merge). */
+    export function resolveUserId(event: EventSchema | Record<string, unknown>, identityMap?: Map<string, string>): string | undefined;
+
+    /** Funnel step type — string OR `{ event, where? }` for step-level property filters. */
+    export type FunnelStep = string | { event: string; where?: { prop: string; op: 'eq' | 'neq' | 'gt' | 'lt' | 'gte' | 'lte' | 'contains' | 'not_contains'; value: unknown } };
+    /** Exclusion step config — fires between `afterStep` and `beforeStep` to terminate the funnel attempt. */
+    export interface ExclusionStep { event: string; afterStep?: number; beforeStep?: number }
+    /** Greedy single-pass funnel evaluator options. */
+    export interface FunnelOptions {
+        conversionWindowMs?: number;
+        graceperiod?: boolean;
+        reentry?: boolean;
+        exclusionSteps?: ExclusionStep[];
+        trackStepProperties?: boolean | string[];
+        countMode?: 'uniques' | 'totals';
+        sessionScoped?: boolean;
+    }
+    /** Per-attempt funnel result. */
+    export interface FunnelResult {
+        completed: boolean;
+        reached: number;
+        stepEvents: Array<Record<string, unknown> | null>;
+        stepTimes: Array<number | null>;
+        ttcMs: number | null;
+        completions: number;
+        stepProperties?: Array<Record<string, unknown>>;
+        sessionId?: string;
+    }
+    /** Evaluate a funnel against a user's events. Returns FunnelResult or array (totals mode). */
+    export function evaluateFunnel(events: Array<Record<string, unknown>>, steps: FunnelStep[], options?: FunnelOptions): FunnelResult | FunnelResult[];
+    /** Hold Property Constant — runs parallel sub-funnels per unique value of `holdProperty`. */
+    export function evaluateFunnelHPC(events: Array<Record<string, unknown>>, steps: FunnelStep[], holdProperty: string, options?: FunnelOptions): Map<string | number, FunnelResult | FunnelResult[]>;
+    /** Pick a property snapshot from a FunnelResult for the given segment mode. */
+    export function resolveFunnelSegment(result: FunnelResult, mode: 'first' | 'last' | { step: number }): Record<string, unknown> | undefined;
+    /** Normalize a FunnelStep to the `{ event, where? }` canonical shape. */
+    export function normalizeStep(step: FunnelStep): { event: string; where?: { prop: string; op: string; value: unknown } };
+    /** Test whether an event qualifies for a step's where-clause. */
+    export function matchesStepFilter(event: Record<string, unknown>, where?: { prop: string; op: string; value: unknown }): boolean;
+    /** Partition events into UTC `day` / `week` (ISO) / `month` buckets. */
+    export function partitionByTimeBucket(events: Array<Record<string, unknown>>, bucket: 'day' | 'week' | 'month'): Array<{ period: string; events: Array<Record<string, unknown>> }>;
 
     interface SchemaReport {
         pass: boolean;

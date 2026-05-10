@@ -10,6 +10,12 @@ export default defineConfig({
     
     // Test file patterns
     include: ['tests/**/*.test.js'],
+    exclude: ['node_modules/**'],
+
+    // Prune ./data and ./tmp before AND after the suite. Per-test isolation
+    // already lives in os.tmpdir(); this defends against a stray writer to
+    // ./data leaving artifacts in the workspace.
+    globalSetup: ['./tests/global-setup.js'],
     
     // Coverage settings
     coverage: {
@@ -24,8 +30,12 @@ export default defineConfig({
         'tests/**',
         'node_modules/**',
         'plans/**',
+        'verification/**',
+        'tmp/**',
+        'types/**',
+        '**/.dungeon-tmp/**',
+        '**/*.d.ts',
         'scratch.mjs',
-        'types.d.ts',
         'vitest.config.js',
         '*.config.*',
       ],
@@ -53,11 +63,9 @@ export default defineConfig({
     // Don't watch in CI/test environments
     watch: false,
     
-    // Tests within a file can run concurrently (describe.sequential overrides per-suite),
-    // but test FILES run sequentially to avoid ./data directory conflicts
     sequence: {
       concurrent: true
     },
-    fileParallelism: false
+    fileParallelism: true
   }
 });

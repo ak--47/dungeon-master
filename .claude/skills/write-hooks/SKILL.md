@@ -1,6 +1,6 @@
 ---
 name: write-hooks
-description: Engineer story trends and "magic number" patterns into an existing dungeon by writing its `hook` function. Uses the Phase 3 atom helpers + Phase 4 patterns. Adds NO new event flags. Iterates until /verify-dungeon scores STRONG or NAILED.
+description: Use when an existing dungeon needs engineered story trends or "magic number" patterns — writes the `hook` function using atom helpers and high-level patterns. Adds no new event flags; never mutates the schema.
 argument-hint: [path/to/dungeon.js] [free-text story / trend description]
 model: claude-opus-4-6
 effort: max
@@ -11,7 +11,7 @@ effort: max
 Engineer story trends into the dungeon at `$ARGUMENTS` (first positional arg)
 based on the story description (remaining args).
 
-## Scope (post-1.4 split)
+## Scope
 
 This skill writes the `hook` function ONLY. It assumes the dungeon's schema is
 already complete (produced by `create-dungeon`). After writing, hand off to
@@ -31,15 +31,15 @@ Out of scope:
 
 ## Reference reading
 
-- `lib/hook-helpers/index.js` — Phase 3 atoms (cohort, mutate, timing, inject,
+- `lib/hook-helpers/index.js` — atoms (cohort, mutate, timing, inject,
   identity). One file per group; full JSDoc on each atom.
-- `lib/hook-patterns/index.js` — Phase 4 high-level recipes (one per Mixpanel
+- `lib/hook-patterns/index.js` — high-level recipes (one per Mixpanel
   analysis type).
 - `lib/verify/emulate-breakdown.js` — what `verify-dungeon` will check.
 - `dungeons/user/my-buddy.js` — reference dungeon using a mix of atoms and
   hand-rolled logic.
 - `dungeons/technical/pattern-*.js` — five minimal pattern fixtures, one per
-  Phase 4 recipe.
+  recipe.
 - `HOOKS.md` — encyclopedia of hook recipes organized by story pattern. Contains
   17+ worked examples with code snippets, Mixpanel report instructions, and
   adaptation notes. **Start here** to find the right pattern for your story.
@@ -67,7 +67,7 @@ and you can mutate freely.
 Storage-only hooks (`ad-spend`, `group`, `mirror`, `lookup`) fire later in the
 pipeline and don't see the same `meta` shape.
 
-## Hook meta — Phase 2 identity context
+## Hook meta — identity context
 
 Inside `funnel-pre` and `funnel-post`:
 - `meta.isFirstFunnel: boolean`
@@ -112,13 +112,13 @@ if (type === 'funnel-post' && meta.experiment) {
 
 | File | Atom | Purpose |
 |------|------|---------|
-| cohort | `binUsersByEventCount(events, eventName, bins)` | Classify by per-user event count |
+| cohort | `binUsersByEventCount(events, eventName, bins)` | Classify by per-user event count (Insights total events) |
 | cohort | `binUsersByEventInRange(events, eventName, start, end, bins)` | Same, time-windowed |
 | cohort | `countEventsBetween(events, eventA, eventB)` | Count between first A and first B |
 | cohort | `userInProfileSegment(profile, key, values)` | Profile-property cohort check |
 | mutate | `cloneEvent(template, overrides)` | Spread+override a template event |
 | mutate | `dropEventsWhere(events, predicate)` | In-place filter with count |
-| mutate | `scaleEventCount(events, eventName, factor)` | >1 clones, <1 drops (seeded RNG) |
+| mutate | `scaleEventCount(events, eventName, factor)` | >1 clones, <1 drops. **Targets Insights Total reports.** For frequency-distribution movement use `injectOnNewDays` |
 | mutate | `scalePropertyValue(events, predicate, prop, factor)` | Multiply numeric prop |
 | mutate | `shiftEventTime(event, deltaMs)` | Shift one event's time |
 | timing | `scaleTimingBetween(events, A, B, factor)` | Scale gap between first A and next B |
@@ -127,8 +127,82 @@ if (type === 'funnel-post' && meta.experiment) {
 | inject | `injectAfterEvent(events, source, template, gapMs, overrides)` | Splice clone after source |
 | inject | `injectBetween(events, A, B, template, overrides)` | Splice at midpoint |
 | inject | `injectBurst(events, template, count, anchorTime, spreadMs, overrides)` | Burst around anchor |
+| inject | `injectOnNewDays(events, eventName, targetDistinctDays)` | **Cohort-only.** Spreads injections across previously-empty days. Use for cohort-conditional active-day boosts; for global active-day shape, use `Dungeon.avgActiveDaysPerUser` config knob. |
 | identity | `isPreAuthEvent(event, authTime)` | Standalone variant of meta.isPreAuth |
 | identity | `splitByAuth(events, authTime)` | { preAuth, postAuth, stitch } partition |
+
+### Hook anti-patterns
+
+- **DO NOT engineer global active-day distribution in hooks.** Use the
+  `Dungeon.avgActiveDaysPerUser` config knob — it's a concentrator that
+  preserves total event count while clustering events onto fewer days.
+  Hooks own cohort-conditional patterns ("premium users get 7+ days") only.
+
+### Intentional strict-bar deviation is OK
+
+The engine guarantees the no-hook baseline (`dungeons/technical/simplest.js`)
+satisfies the per-macro strict bar across the 194-combo sweep matrix
+(see [CLAUDE.md "Engine guarantees"](../../../CLAUDE.md#engine-guarantees)).
+**Hooks can intentionally violate the strict bar** for legitimate stories:
+
+- **Decline + churn cohort** (engagementDecay or `everything`-hook event-drop)
+  produces tail_ratio < 0.4 — well below the decline bar's 0.4 floor. This is
+  the design intent of a sunset story.
+- **Viral hook + persona-driven late-cohort lift** can push the spike above
+  the viral preset's 7.0 cap. Hockey-stick stories are louder than the engine
+  baseline.
+- **World-event spike** (e.g., a launch-day burst of 5x normal volume) creates
+  a single-day right-edge spike above the spike cap.
+
+When you write a hook that intentionally violates the strict bar, document the
+deviation in the dungeon's overview JSDoc + the hook's pattern documentation
+block. Engine-validation guarantees apply to **no-hook configs only**; hooks
+own their shape.
+- **DO NOT hand-sort `everything` hook output.** The engine auto-sorts events
+  ascending by time after `everything` returns (default ON; opt out via
+  `autoSortAfterEverything: false`). Cloned events with arbitrary timestamps
+  no longer need explicit sort calls.
+- **DO NOT stamp UTM properties from scratch in attribution hooks.** The
+  engine caps UTM stamping at `maxTouchpointsPerUser` (default 10) per user,
+  sampled across lifetime. Stamping fresh would push users past the cap; your
+  stamps would land outside Mixpanel's last-10 lookback window. OVERWRITE
+  engine-stamped values instead (e.g., `event.utm_source = "google"` on
+  already-stamped touches).
+
+### When to use the verifier primitives
+
+When designing a story, check if any of the new primitives match before
+writing a custom hook:
+
+- **Retention curves** ("70% retain at day 1, 30% at day 7") — verify with
+  `emulateBreakdown({ type: 'retention', cohortEvent, returnEvent, dayBuckets })`.
+  No special hook needed; engineer cohort behavior via `engagementDecay`,
+  `dropEventsWhere`, or per-user filtering in `everything`.
+- **Session metrics** ("avg session has 6 events, lasts 4 minutes") — verify
+  with `emulateBreakdown({ type: 'sessionMetrics' })`. Trust pre-stamped
+  `session_id`. Engineer via `avgEventsPerUserPerDay` + `engagementDecay`.
+- **Reentry funnels** ("power users complete the funnel 3+ times") — set
+  `Funnel.reentry: true` (verifier hint). Engineer multiple completions via
+  `funnel-post` injecting cloned funnel sequences for that cohort.
+- **Exclusion patterns** ("rage-clickers never convert") — declare an event
+  in `events[]` (e.g., `rage_click`), set `Funnel.exclusionEvents: ['rage_click']`.
+  The generator stamps it on non-converters; the verifier terminates the
+  attempt when it sees one.
+- **HPC / per-cart funnels** ("checkout completion per item type") — use
+  `evaluateFunnelHPC(events, steps, holdProperty)` directly (not auto-routed
+  through `funnelFrequency`).
+- **Step filters** ("only iOS users complete step 2") — set
+  `Funnel.stepFilters: { 1: { prop: 'platform', op: 'eq', value: 'iOS' }}`.
+- **Time-series trends** ("conversion rises week over week") — wrap any
+  breakdown with `timeBucket: 'week'`. Engineer via temporal-windowed hooks
+  using `DATASET_START.add(N, 'days')`.
+- **Identity-model dungeons** — when `avgDevicePerUser > 0` or
+  `hasAnonIds: true`, ALWAYS pass `profiles` to verification. Auto-builds
+  identity map merging pre-auth `device_id` events with post-auth `user_id`.
+
+**Schema-first reminder:** exclusion events must be declared in `events[]`
+before referencing them as `Funnel.exclusionEvents` — the validator throws
+on undeclared entries.
 
 ### Patterns (`@ak--47/dungeon-master/hook-patterns`)
 
@@ -216,7 +290,7 @@ checks against and what consumers read to understand the dataset.
  *   Expected ratio: bin>=15 / bin<5 ≈ 3x (within ±15%)
 ```
 
-## Hook Ordering Within `everything` (REV 10)
+## Hook Ordering Within `everything`
 
 The order of operations inside the everything hook matters when hooks interact:
 
@@ -231,7 +305,7 @@ The order of operations inside the everything hook matters when hooks interact:
 the temporal window miss the mutation. Moving temporal value mutations to the
 end ensures ALL events in the window — original and cloned — receive the effect.
 
-## Deprecated Feature Replacement (REV 10)
+## Deprecated Feature Replacement
 
 When a dungeon relied on deprecated config blocks (`subscription`, `attribution`,
 `features`, `geo`, `anomalies`) for properties that hooks depend on, those
@@ -244,7 +318,7 @@ properties no longer appear in the data. Replace them:
 Example: deprecated `subscription` → add `subscription_tier` to superProps/userProps,
 assign tiers by hash in user hook, gate conversion/feature effects on tier in everything.
 
-## Cohort Sizing Guidelines (REV 10)
+## Cohort Sizing Guidelines
 
 Cohort detection conditions must be selective enough to create a meaningful
 control group, but not so broad they catch everyone:
@@ -258,7 +332,7 @@ control group, but not so broad they catch everyone:
 
 Target: 10-30% of users in the affected cohort for clean signal at 10K users.
 
-### Threshold Calibration (REV 11)
+### Threshold Calibration
 
 When a hook gates on "N+ events of type X in first Y days," check the actual
 distribution BEFORE choosing the threshold. With 200 event types and 2.5
@@ -274,7 +348,7 @@ SELECT n, COUNT(*) FROM (
 
 Set the threshold at approximately the 80th percentile of the distribution.
 
-### Compounding Drop Hooks (REV 11)
+### Compounding Drop Hooks
 
 Use at most ONE drop-based retention hook per dungeon. Multiple hooks that
 each drop events after the same day threshold compound destructively:
@@ -287,6 +361,76 @@ The control group barely exists. Fix: use boost-based patterns
 (`scaleEventCount(events, "X", 1.8)`) for positive cohorts instead of drops
 for negative cohorts. Boosts are additive and don't interact destructively.
 Reserve drops for a single churn/retention effect per dungeon.
+
+## Common Hook Pitfalls
+
+Apply these BEFORE handing off to `/verify-dungeon`. See HOOKS.md §9 for full recipes.
+
+### isStrictEvent: false is NOT optional for hook-read events
+
+If your hook reads `event === 'X'` and `X` is also a funnel-step event, the
+validator auto-promotes it to `isStrictEvent: true` and the engine
+won't emit standalone occurrences. Your cohort goes empty.
+
+```js
+// BAD — login is a funnel step + read by hook
+events: [{ event: 'login', weight: 4, properties: {...} }]
+// GOOD — explicit opt-out preserves standalone occurrences
+events: [{ event: 'login', weight: 4, isStrictEvent: false, properties: {...} }]
+```
+
+Audit: any event referenced in the `everything` hook by name AND appearing
+as a funnel step needs `isStrictEvent: false`.
+
+### Reentry on per-instance loops
+
+Funnels named "X loop" / "X cycle" / "session" / repeated user behaviors
+need `Funnel.reentry: true`. Without it, the engine produces ONE funnel
+sequence per user — no recurring loops. Examples that need it: workout
+loop, match flow, search-to-book, order fulfillment, engagement loop, tour
+funnel.
+
+### Hash-based cohorts produce textbook signals
+
+Cleanest hidden-cohort pattern. No flag, no schema mutation, easy to verify
+deterministically:
+
+```js
+// 2% whales with 50x trade amount → long-tail Insights distribution
+const isWhale = uid.charCodeAt(0) % 50 === 0;
+if (isWhale && e.event === 'swap') e.trade_amount_usd *= 50;
+```
+
+Use a large multiplier (≥10x, ideally 50x) so the signal beats soup noise.
+Use `% 50` for ~2% whales, `% 25` for ~4% bots, `% 10` for ~10% cohorts.
+
+### Hook ordering inside `everything`
+
+If hook A injects events that hook B mutates, B must run AFTER A in the
+same `everything` block — otherwise the injected events miss B's mutation.
+The existing "Hook Ordering Within `everything`" section above codifies
+this; the eval revealed it as the single most common subtle bug.
+
+### Avoid behavioral cohorts where the gating event IS the signal
+
+If hook says "users who did X often → reduce X count", the verifier sees
+inverted signal because users with high X naturally have higher absolute
+counts even after reduction. Either:
+- Use hash cohort for the same effect, OR
+- Verify by per-user post/pre ratio instead of raw counts
+
+### Don't reference profile.X unless X is a defined userProp
+
+```js
+// BAD — profile.level isn't in userProps; resolves to undefined
+if (meta.profile.level >= 50) e.gold_earned *= 3;
+// GOOD — verify by SPREAD instead, OR add level to userProps with weighted distribution
+```
+
+When the hook references a missing profile field, you can still get the
+data spread you want (gold range), but the cohort can't be analytically
+recovered. Either add the userProp or rewrite the hook to use a hash
+cohort.
 
 ## Workflow
 

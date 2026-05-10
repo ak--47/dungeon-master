@@ -222,10 +222,25 @@ async function runDungeon(config) {
 		// Now happens AFTER disk flush so batch files are available for import
 		let importResults;
 		if (validatedConfig.token) {
-			context.reportProgress({ phase: "step", step: "import", status: "start" });
-			const _t12 = Date.now();
-			importResults = await sendToMixpanel(context);
-			context.reportProgress({ phase: "step", step: "import", status: "complete", duration: Date.now() - _t12 });
+			// Defensive guard: real Mixpanel project tokens are 32-char hex.
+			// Placeholder strings ("your-mixpanel-token", "test-token", "hello token!", etc.)
+			// trigger mixpanel-import's infinite retry loop and hang the entire
+			// process — historically a brutal source of silent test timeouts.
+			// If the token doesn't look like a real project token, warn loudly and skip the send.
+			// Set MP_BYPASS_TOKEN_CHECK=1 to override (e.g., legitimate non-standard tokens).
+			const looksReal = /^[0-9a-f]{32}$/i.test(String(validatedConfig.token).trim());
+			if (looksReal || process.env.MP_BYPASS_TOKEN_CHECK === '1') {
+				context.reportProgress({ phase: "step", step: "import", status: "start" });
+				const _t12 = Date.now();
+				importResults = await sendToMixpanel(context);
+				context.reportProgress({ phase: "step", step: "import", status: "complete", duration: Date.now() - _t12 });
+			} else {
+				console.warn(
+					`⚠️  Skipping Mixpanel import: token "${validatedConfig.token}" does not look like a real Mixpanel project token ` +
+					`(expected 32-char hex). Set a real token or pass empty string to skip. ` +
+					`Override with MP_BYPASS_TOKEN_CHECK=1 if your token is legitimately non-standard.`
+				);
+			}
 		}
 
 		// Step 13: Compile results

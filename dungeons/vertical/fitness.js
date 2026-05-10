@@ -362,6 +362,7 @@ const config = {
 		{
 			event: "workout completed",
 			weight: 8,
+			isStrictEvent: false,
 			properties: {
 				duration_minutes: u.weighNumRange(10, 90, 0.5, 40),
 				calories_burned: u.weighNumRange(50, 800, 0.4, 300),
@@ -374,6 +375,7 @@ const config = {
 		{
 			event: "workout planned",
 			weight: 6,
+			isStrictEvent: false,
 			properties: {
 				planned_duration_minutes: u.weighNumRange(15, 90, 0.5, 45),
 				day_of_week: ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
@@ -393,6 +395,7 @@ const config = {
 		{
 			event: "challenge joined",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				challenge_type: ["steps", "calories", "streak", "strength", "team_relay"],
 				duration_days: [7, 14, 21, 30],
@@ -403,6 +406,7 @@ const config = {
 		{
 			event: "challenge completed",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				challenge_type: ["steps", "calories", "streak", "strength", "team_relay"],
 				final_rank: u.weighNumRange(1, 50, 0.3, 10),
@@ -413,6 +417,7 @@ const config = {
 		{
 			event: "achievement unlocked",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				achievement_type: ["streak_milestone", "weight_goal", "distance_record", "calories_target", "social_champion", "first_workout"],
 				streak_days_at_unlock: u.weighNumRange(1, 100, 0.3, 10),
@@ -421,6 +426,7 @@ const config = {
 		{
 			event: "friend added",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				source: ["search", "contacts", "challenge", "suggestion", "qr_code"],
 			},
@@ -436,6 +442,7 @@ const config = {
 		{
 			event: "progress checked",
 			weight: 5,
+			isStrictEvent: false,
 			properties: {
 				metric_viewed: ["weight", "body_fat", "steps", "calories_burned", "workout_count", "streaks"],
 				trend_direction: ["improving", "improving", "stable", "declining"],
@@ -445,6 +452,7 @@ const config = {
 		{
 			event: "coach session",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				session_type: ["live_video", "chat", "plan_review", "form_check"],
 				duration_minutes: u.weighNumRange(10, 60, 0.5, 30),
@@ -497,6 +505,7 @@ const config = {
 		{
 			event: "profile updated",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				field_updated: ["weight", "height", "goal", "avatar", "workout_preferences", "notification_settings"],
 			},
@@ -531,6 +540,7 @@ const config = {
 			order: "sequential",
 			timeToConvert: 48,
 			weight: 5,
+			reentry: true,
 		},
 		{
 			name: "Social Engagement",

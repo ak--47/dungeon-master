@@ -344,7 +344,8 @@ const config = {
 			conversionRate: 40,
 			timeToConvert: 24,
 			weight: 5,
-			name: "Tour Funnel"
+			name: "Tour Funnel",
+			reentry: true,
 		},
 		{
 			sequence: ["property listed", "open house attended", "property sold"],
@@ -379,6 +380,7 @@ const config = {
 		{
 			event: "property viewed",
 			weight: 12,
+			isStrictEvent: false,
 			properties: {
 				listing_id: () => `LST-${chance.integer({ min: 10000, max: 99999 })}`,
 				listing_price: u.weighNumRange(150000, 1500000, 0.4, 60),
@@ -422,6 +424,7 @@ const config = {
 		{
 			event: "tour scheduled",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				listing_id: () => `LST-${chance.integer({ min: 10000, max: 99999 })}`,
 				agent_id: () => `AGT-${chance.integer({ min: 1000, max: 9999 })}`,
@@ -440,6 +443,7 @@ const config = {
 		{
 			event: "offer submitted",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				listing_id: () => `LST-${chance.integer({ min: 10000, max: 99999 })}`,
 				offer_price: u.weighNumRange(200000, 1500000, 0.4, 40),
@@ -465,6 +469,7 @@ const config = {
 		{
 			event: "property listed",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				listing_price: u.weighNumRange(200000, 1500000, 0.4, 50),
 				property_type: ["Single Family", "Condo", "Townhouse", "Multi-Family"],
@@ -475,6 +480,7 @@ const config = {
 		{
 			event: "property sold",
 			weight: 1,
+			isStrictEvent: false,
 			properties: {
 				sale_price: u.weighNumRange(200000, 1500000, 0.4, 40),
 				days_on_market: u.weighNumRange(5, 180, 0.4, 30),

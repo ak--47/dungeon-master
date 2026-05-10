@@ -463,6 +463,7 @@ const config = {
 		{
 			event: "app session",
 			weight: 20,
+			isStrictEvent: false,
 			properties: {
 				"session_duration_sec": u.weighNumRange(10, 600, 0.3, 60),
 				"pages_viewed": u.weighNumRange(1, 15, 0.5, 3),
@@ -471,6 +472,7 @@ const config = {
 		{
 			event: "balance checked",
 			weight: 15,
+			isStrictEvent: false,
 			properties: {
 				"account_balance": u.weighNumRange(0, 50000, 0.8, 2500),
 				"account_type": ["checking", "savings", "investment"],
@@ -479,6 +481,7 @@ const config = {
 		{
 			event: "transaction completed",
 			weight: 18,
+			isStrictEvent: false,
 			properties: {
 				"transaction_type": ["purchase", "atm", "direct_deposit", "refund"],
 				"amount": u.weighNumRange(1, 5000, 0.3, 50),
@@ -489,6 +492,7 @@ const config = {
 		{
 			event: "transfer sent",
 			weight: 8,
+			isStrictEvent: false,
 			properties: {
 				"transfer_type": ["internal", "external", "p2p", "wire"],
 				"amount": u.weighNumRange(10, 10000, 0.3, 200),
@@ -498,6 +502,7 @@ const config = {
 		{
 			event: "bill paid",
 			weight: 6,
+			isStrictEvent: false,
 			properties: {
 				"bill_type": ["rent", "utilities", "phone", "insurance", "subscription", "loan_payment"],
 				"amount": u.weighNumRange(20, 3000, 0.5, 150),
@@ -516,6 +521,7 @@ const config = {
 		{
 			event: "budget created",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				"category": ["food", "transport", "entertainment", "shopping", "bills", "savings"],
 				"monthly_limit": u.weighNumRange(50, 2000, 0.5, 300),
@@ -532,6 +538,7 @@ const config = {
 		{
 			event: "savings goal set",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				"goal_type": ["emergency", "vacation", "car", "home", "education", "retirement"],
 				"target_amount": u.weighNumRange(500, 50000, 0.3, 5000),
@@ -541,6 +548,7 @@ const config = {
 		{
 			event: "investment made",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				"investment_type": ["stocks", "etf", "crypto", "bonds", "mutual_fund"],
 				"amount": u.weighNumRange(10, 10000, 0.3, 250),
@@ -550,6 +558,7 @@ const config = {
 		{
 			event: "card locked",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				"reason": ["lost", "stolen", "suspicious_activity", "travel"],
 			}
@@ -557,6 +566,7 @@ const config = {
 		{
 			event: "dispute filed",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				"dispute_amount": u.weighNumRange(10, 2000, 0.5, 100),
 				"reason": ["unauthorized", "duplicate", "not_received", "damaged", "wrong_amount"],
@@ -582,6 +592,7 @@ const config = {
 		{
 			event: "premium upgraded",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				"old_tier": ["basic", "plus", "premium"],
 				"new_tier": ["plus", "premium", "premium"],
@@ -591,6 +602,7 @@ const config = {
 		{
 			event: "support contacted",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				"channel": ["chat", "phone", "email", "in_app"],
 				"issue_type": ["transaction", "account", "card", "transfer", "technical"],
@@ -608,6 +620,7 @@ const config = {
 		{
 			event: "reward redeemed",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				"reward_type": ["cashback", "points", "discount", "partner_offer"],
 				"value": u.weighNumRange(1, 100, 0.5, 10),

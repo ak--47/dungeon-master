@@ -3,7 +3,7 @@ const SEED = "simple is best";
 const num_days = 100;
 const num_users = 2_500;
 const avg_events_per_user_per_day = 1;
-let token = "your-mixpanel-token";
+let token = "";
 
 // ── env overrides ──
 if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
@@ -14,7 +14,7 @@ import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 import { uid, comma } from 'ak-tools';
-import { pickAWinner, weighNumRange, date, integer, weighChoices } from "../../lib/utils/utils.js";
+import { pickAWinner, weighNumRange, date, integer, weighChoices, dateRange, listOf, objectList } from "../../lib/utils/utils.js";
 
 /** @typedef {import("../../types").Dungeon} Config */
 const itemCategories = ["Books", "Movies", "Music", "Games", "Electronics", "Computers", "Smart Home", "Home", "Garden", "Pet", "Beauty", "Health", "Toys", "Kids", "Baby", "Handmade", "Sports", "Outdoors", "Automotive", "Industrial", "Entertainment", "Art", "Food", "Appliances", "Office", "Wedding", "Software"];
@@ -26,20 +26,29 @@ const videoCategories = ["funny", "educational", "inspirational", "music", "news
  * DATASET OVERVIEW
  * ═══════════════════════════════════════════════════════════════
  *
- * Simplest E-Commerce App — the minimal dungeon with no hooks.
+ * Simplest E-Commerce App — the canonical no-hook baseline dungeon.
  * - 2,500 users over 100 days, ~250K events
  * - 25 event types covering browse, search, cart, checkout,
  *   notifications, reviews, wishlists, rewards
- * - 11 funnels (signup, purchase, content, browse-to-cart, etc.)
+ * - 11 funnels with diverse weights (1-10) covering signup, purchase,
+ *   content engagement, browse-to-cart, post-purchase advocacy, etc.
+ * - At least one property of every Mixpanel data type:
+ *     string, numeric, boolean, date, list, object, list-of-objects
+ *   on both event properties and user properties.
  * - No device/location/campaign data — pure event stream
+ * - **No hooks.** This is the engine-validation baseline; engine + TimeSoup
+ *   alone produce the trend shape. Hook authors should reach for vertical
+ *   dungeons or write hooks against this template; do NOT add hooks here.
  *
  * ═══════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS
+ * USE CASES
  * ═══════════════════════════════════════════════════════════════
  *
- * None — this is a baseline dungeon with a no-op hook function.
- * Use it for testing core generation, funnel inference, or as a
- * starting template for new dungeons.
+ * - Engine sweep harness baseline (`scripts/sweep-engine.mjs`). Strict-bar
+ *   regression testing across the 184-combo macro/born/rate/active-day matrix.
+ * - Reference for "what an average dungeon looks like" — diverse events
+ *   + funnels + user props with no hook architecting on top.
+ * - Starting template for new dungeons before adding bespoke hooks.
  */
 
 /** @type {import('../types.js').Dungeon} */
@@ -69,6 +78,7 @@ const config = {
 		{
 			event: "page view",
 			weight: 10,
+			isStrictEvent: false,
 			properties: {
 				page: ["/", "/", "/help", "/account", "/pricing", "/product", "/about", "/blog"],
 				utm_source: ["$organic", "$organic", "$organic", "$organic", "google", "google", "google", "facebook", "facebook", "twitter", "linkedin"],
@@ -77,6 +87,7 @@ const config = {
 		{
 			event: "sign up",
 			weight: 1,
+			isStrictEvent: false,
 			isFirstEvent: true,
 			properties: {
 				signupMethod: ["email", "google", "facebook", "github"],
@@ -86,6 +97,7 @@ const config = {
 		{
 			event: "login",
 			weight: 8,
+			isStrictEvent: false,
 			properties: {
 				method: ["password", "google", "facebook", "github"],
 			}
@@ -93,6 +105,7 @@ const config = {
 		{
 			event: "search",
 			weight: 7,
+			isStrictEvent: false,
 			properties: {
 				query_length: weighNumRange(1, 50),
 				resultsReturned: weighNumRange(0, 100, .25),
@@ -102,16 +115,22 @@ const config = {
 		{
 			event: "view item",
 			weight: 9,
+			isStrictEvent: false,
 			properties: {
 				isFeaturedItem: [true, false, false],
 				itemCategory: pickAWinner(itemCategories, integer(0, 27)),
 				price: weighNumRange(5, 500, .25),
 				rating: weighNumRange(1, 5),
+				// list (array of strings) — Mixpanel "List" property type
+				tags: listOf(["new", "sale", "limited", "popular", "trending", "exclusive", "clearance", "preorder"], { min: 1, max: 3 }),
+				// date — Mixpanel "Date" property type, default ISO string
+				lastRestockedAt: dateRange(),
 			}
 		},
 		{
 			event: "add to cart",
 			weight: 5,
+			isStrictEvent: false,
 			properties: {
 				amount: weighNumRange(5, 500, .25),
 				itemCategory: pickAWinner(itemCategories, integer(0, 27)),
@@ -121,16 +140,27 @@ const config = {
 		{
 			event: "checkout",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				amount: weighNumRange(10, 500, .25),
 				currency: ["USD", "CAD", "EUR", "JPY"],
 				coupon: weighChoices(["none", "none", "none", "none", "10%OFF", "20%OFF", "30%OFF"]),
 				numItems: weighNumRange(1, 10),
+				// object — Mixpanel "Object" property type (plain object, returned as-is)
+				billingAddress: { country: "US", region: "CA", postalCode: "94016" },
+				// list of objects — Mixpanel "List of Objects" property type
+				lineItems: objectList({
+					sku: weighNumRange(10000, 99999),
+					name: pickAWinner(itemCategories, integer(0, 27)),
+					qty: [1, 1, 1, 2, 2, 3],
+					price: weighNumRange(5, 200, .25),
+				}, { min: 1, max: 5 }),
 			}
 		},
 		{
 			event: "watch video",
 			weight: 6,
+			isStrictEvent: false,
 			properties: {
 				videoCategory: pickAWinner(videoCategories, integer(0, 9)),
 				watchTimeSec: weighNumRange(10, 600, .25),
@@ -140,6 +170,7 @@ const config = {
 		{
 			event: "share content",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				platform: ["twitter", "facebook", "linkedin", "email", "link"],
 				contentType: ["video", "product", "article"],
@@ -148,6 +179,7 @@ const config = {
 		{
 			event: "rate item",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				rating: weighNumRange(1, 5),
 				itemCategory: pickAWinner(itemCategories, integer(0, 27)),
@@ -160,6 +192,7 @@ const config = {
 		{
 			event: "support ticket",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				priority: weighChoices(["low", "low", "medium", "medium", "medium", "high"]),
 				category: ["billing", "technical", "account", "shipping", "returns"],
@@ -168,6 +201,7 @@ const config = {
 		{
 			event: "add to wishlist",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				itemCategory: pickAWinner(itemCategories, integer(0, 27)),
 				price: weighNumRange(5, 500, .25),
@@ -176,6 +210,7 @@ const config = {
 		{
 			event: "remove from cart",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				reason: weighChoices(["changed mind", "too expensive", "found better", "duplicate", "changed mind", "changed mind"]),
 			}
@@ -183,6 +218,7 @@ const config = {
 		{
 			event: "apply coupon",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				couponCode: weighChoices(["SAVE10", "SAVE20", "WELCOME", "FREESHIP", "VIP30", "SAVE10", "SAVE10"]),
 				discountPercent: weighNumRange(5, 50),
@@ -191,6 +227,7 @@ const config = {
 		{
 			event: "notification received",
 			weight: 7,
+			isStrictEvent: false,
 			properties: {
 				channel: ["push", "email", "in-app", "sms"],
 				type: ["promo", "order update", "recommendation", "reminder"],
@@ -199,6 +236,7 @@ const config = {
 		{
 			event: "notification clicked",
 			weight: 5,
+			isStrictEvent: false,
 			properties: {
 				channel: ["push", "email", "in-app", "sms"],
 				type: ["promo", "order update", "recommendation", "reminder"],
@@ -207,6 +245,7 @@ const config = {
 		{
 			event: "add payment method",
 			weight: 1,
+			isStrictEvent: false,
 			properties: {
 				type: ["credit card", "debit card", "paypal", "apple pay", "google pay"],
 			}
@@ -214,6 +253,7 @@ const config = {
 		{
 			event: "update profile",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				field: ["avatar", "name", "email", "address", "phone", "preferences"],
 			}
@@ -221,6 +261,7 @@ const config = {
 		{
 			event: "invite friend",
 			weight: 1,
+			isStrictEvent: false,
 			properties: {
 				method: ["email", "link", "sms"],
 			}
@@ -228,6 +269,7 @@ const config = {
 		{
 			event: "view category",
 			weight: 8,
+			isStrictEvent: false,
 			properties: {
 				category: pickAWinner(itemCategories, integer(0, 27)),
 				sortBy: ["popular", "newest", "price low", "price high", "rating"],
@@ -236,6 +278,7 @@ const config = {
 		{
 			event: "save address",
 			weight: 1,
+			isStrictEvent: false,
 			properties: {
 				type: ["home", "work", "other"],
 			}
@@ -243,6 +286,7 @@ const config = {
 		{
 			event: "compare items",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				numItems: weighNumRange(2, 5),
 				itemCategory: pickAWinner(itemCategories, integer(0, 27)),
@@ -251,6 +295,7 @@ const config = {
 		{
 			event: "subscribe newsletter",
 			weight: 1,
+			isStrictEvent: false,
 			properties: {
 				frequency: ["daily", "weekly", "monthly"],
 				topics: ["deals", "new arrivals", "recommendations", "deals", "deals"],
@@ -259,6 +304,7 @@ const config = {
 		{
 			event: "leave review",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				rating: weighNumRange(1, 5),
 				wordCount: weighNumRange(10, 200, .25),
@@ -268,6 +314,7 @@ const config = {
 		{
 			event: "redeem reward",
 			weight: 1,
+			isStrictEvent: false,
 			properties: {
 				rewardType: ["discount", "free shipping", "free item", "points bonus"],
 				pointsUsed: weighNumRange(100, 5000, .25),
@@ -375,10 +422,26 @@ const config = {
 	each key should be an array or function reference
 	*/
 	userProps: {
+		// string
 		theme: ["light", "dark", "custom", "light", "dark"],
 		title: chance.profession.bind(chance),
+		spiritAnimal: ["duck", "dog", "otter", "penguin", "cat", "elephant", "lion", "cheetah", "giraffe", "zebra", "rhino", "hippo", "whale", "dolphin", "shark", "octopus", "squid", "jellyfish", "starfish", "seahorse", "crab", "lobster", "shrimp", "clam", "snail", "slug", "butterfly", "moth", "bee", "wasp", "ant", "beetle", "ladybug", "caterpillar", "centipede", "millipede", "scorpion", "spider", "tarantula", "tick", "mite", "mosquito", "fly", "dragonfly", "damselfly", "grasshopper", "cricket", "locust", "mantis", "cockroach", "termite", "praying mantis", "walking stick", "stick bug", "leaf insect", "lacewing", "aphid", "cicada", "thrips", "psyllid", "scale insect", "whitefly", "mealybug", "planthopper", "leafhopper", "treehopper", "flea", "louse", "bedbug", "flea beetle", "weevil", "longhorn beetle", "leaf beetle", "tiger beetle", "ground beetle", "lady beetle", "firefly", "click beetle", "rove beetle", "scarab beetle", "dung beetle", "stag beetle", "rhinoceros beetle", "hercules beetle", "goliath beetle", "jewel beetle", "tortoise beetle"],
+		// numeric
 		luckyNumber: weighNumRange(42, 420, .3),
-		spiritAnimal: ["duck", "dog", "otter", "penguin", "cat", "elephant", "lion", "cheetah", "giraffe", "zebra", "rhino", "hippo", "whale", "dolphin", "shark", "octopus", "squid", "jellyfish", "starfish", "seahorse", "crab", "lobster", "shrimp", "clam", "snail", "slug", "butterfly", "moth", "bee", "wasp", "ant", "beetle", "ladybug", "caterpillar", "centipede", "millipede", "scorpion", "spider", "tarantula", "tick", "mite", "mosquito", "fly", "dragonfly", "damselfly", "grasshopper", "cricket", "locust", "mantis", "cockroach", "termite", "praying mantis", "walking stick", "stick bug", "leaf insect", "lacewing", "aphid", "cicada", "thrips", "psyllid", "scale insect", "whitefly", "mealybug", "planthopper", "leafhopper", "treehopper", "flea", "louse", "bedbug", "flea beetle", "weevil", "longhorn beetle", "leaf beetle", "tiger beetle", "ground beetle", "lady beetle", "firefly", "click beetle", "rove beetle", "scarab beetle", "dung beetle", "stag beetle", "rhinoceros beetle", "hercules beetle", "goliath beetle", "jewel beetle", "tortoise beetle"]
+		// boolean
+		emailOptIn: [true, true, false],
+		// date
+		signupDate: dateRange(),
+		// list
+		favoriteCategories: listOf(itemCategories, { min: 1, max: 4 }),
+		// object
+		preferences: { notifications: true, currency: "USD", language: "en-US" },
+		// list of objects
+		recentOrders: objectList({
+			orderId: weighNumRange(100000, 999999),
+			total: weighNumRange(10, 500, .25),
+			itemCount: [1, 1, 2, 2, 3],
+		}, { min: 0, max: 3 }),
 	},
 	scdProps: {},
 	mirrorProps: {},
@@ -390,17 +453,8 @@ const config = {
 	groupKeys: [],
 	groupProps: {},
 	lookupTables: [],
-	hook: function (record, type, meta) {
-
-		if (type === "everything") {
-			const profile = meta.profile;
-			record.forEach(e => {
-				e.theme = profile.theme;
-			});
-		}
-
-		return record;
-	}
+	// No hook by design — this is the engine-validation baseline. Engine + TimeSoup
+	// alone produce the trend shape. To experiment with hooks, fork this file.
 };
 
 

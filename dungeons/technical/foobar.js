@@ -3,7 +3,7 @@ const SEED = "dm4-foobar";
 const num_days = 30;
 const num_users = 4_000_000;
 const avg_events_per_user_per_day = 16.67;
-let token = "your-mixpanel-token";
+let token = "";
 
 // ── env overrides ──
 if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;

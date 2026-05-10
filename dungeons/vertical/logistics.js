@@ -391,6 +391,7 @@ const config = {
 		{
 			event: "inventory checked",
 			weight: 8,
+			isStrictEvent: false,
 			properties: {
 				warehouse_id: chance.pickone.bind(chance, warehouseIds),
 				sku_category: ["electronics", "apparel", "food_beverage", "pharma", "raw_materials", "packaging", "automotive_parts"],
@@ -402,6 +403,7 @@ const config = {
 		{
 			event: "stockout alert",
 			weight: 5,
+			isStrictEvent: false,
 			properties: {
 				warehouse_id: chance.pickone.bind(chance, warehouseIds),
 				sku_category: ["electronics", "apparel", "food_beverage", "pharma", "raw_materials", "packaging"],
@@ -413,6 +415,7 @@ const config = {
 		{
 			event: "purchase order created",
 			weight: 5,
+			isStrictEvent: false,
 			properties: {
 				supplier_id: chance.pickone.bind(chance, supplierIds),
 				sku_category: ["electronics", "apparel", "food_beverage", "pharma", "raw_materials", "packaging", "automotive_parts"],
@@ -457,6 +460,7 @@ const config = {
 		{
 			event: "integration connected",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				integration_type: ["erp", "accounting", "shipping", "ecommerce", "crm", "bi_tool"],
 				integration_name: ["SAP", "QuickBooks", "ShipStation", "Shopify", "Salesforce", "NetSuite", "Xero"],
@@ -466,6 +470,7 @@ const config = {
 		{
 			event: "report generated",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				report_type: ["inventory_summary", "order_history", "supplier_performance", "cost_analysis", "forecast", "compliance"],
 				report_pages: u.weighNumRange(1, 50, 0.4, 20),
@@ -476,6 +481,7 @@ const config = {
 		{
 			event: "alert configured",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				alert_type: ["low_stock", "delivery_delay", "price_change", "quality_threshold", "expiry_warning"],
 				threshold_value: u.weighNumRange(1, 500, 0.4, 50),
@@ -569,6 +575,7 @@ const config = {
 			order: "sequential",
 			timeToConvert: 168,
 			weight: 5,
+			reentry: true,
 		},
 		{
 			name: "Supplier Management",
@@ -939,7 +946,7 @@ const config = {
 			if (invCheckCount >= 5 && invCheckCount <= 15) {
 				record.forEach(e => {
 					if (e.event === 'purchase order created' && typeof e.quantity === 'number') {
-						e.quantity = Math.round(e.quantity * 1.25);
+						e.quantity = Math.round(e.quantity * 1.4);
 					}
 				});
 			} else if (invCheckCount >= 16) {

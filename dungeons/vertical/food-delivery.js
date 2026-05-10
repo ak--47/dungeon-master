@@ -446,6 +446,7 @@ const config = {
 		{
 			event: "restaurant viewed",
 			weight: 15,
+			isStrictEvent: false,
 			properties: {
 				"restaurant_id": restaurantIds,
 				"cuisine_type": [
@@ -466,6 +467,7 @@ const config = {
 		{
 			event: "item added to cart",
 			weight: 14,
+			isStrictEvent: false,
 			properties: {
 				"item_id": itemIds,
 				"item_category": ["entree", "appetizer", "drink", "dessert", "side"],
@@ -484,6 +486,7 @@ const config = {
 		{
 			event: "coupon applied",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				"coupon_code": couponCodes,
 				"discount_type": ["percent", "flat", "free_delivery"],
@@ -493,6 +496,7 @@ const config = {
 		{
 			event: "checkout started",
 			weight: 12,
+			isStrictEvent: false,
 			properties: {
 				"cart_total": u.weighNumRange(8, 150, 0.8, 40),
 				"items_count": u.weighNumRange(1, 8, 1.2, 20),
@@ -502,6 +506,7 @@ const config = {
 		{
 			event: "order placed",
 			weight: 10,
+			isStrictEvent: false,
 			properties: {
 				"order_id": orderIds,
 				"payment_method": ["credit_card", "apple_pay", "google_pay", "paypal", "cash"],
@@ -522,6 +527,7 @@ const config = {
 		{
 			event: "order delivered",
 			weight: 9,
+			isStrictEvent: false,
 			properties: {
 				"order_id": orderIds,
 				"actual_delivery_mins": u.weighNumRange(12, 90, 1.0, 40),
@@ -531,6 +537,7 @@ const config = {
 		{
 			event: "order rated",
 			weight: 7,
+			isStrictEvent: false,
 			properties: {
 				"order_id": orderIds,
 				"food_rating": u.weighNumRange(1, 5, 0.8, 30),
@@ -563,6 +570,7 @@ const config = {
 		{
 			event: "subscription started",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				"plan": ["quickbite_plus_monthly", "quickbite_plus_monthly", "quickbite_plus_annual"],
 				"price": [9.99, 9.99, 79.99],
@@ -588,6 +596,7 @@ const config = {
 		{
 			event: "reorder initiated",
 			weight: 6,
+			isStrictEvent: false,
 			properties: {
 				"order_id": orderIds,
 				"original_order_age_days": u.weighNumRange(1, 60, 1.5, 30),

@@ -1,6 +1,6 @@
 ---
 name: create-dungeon
-description: Design and create a new dungeon-master dungeon configuration file with realistic events, funnels, and a clean schema. SCHEMA ONLY — no engineered story trends. Hooks are added later by the `write-hooks` skill.
+description: Use when authoring a new dungeon-master config from an app description — designs events, funnels, properties, identity model, and macro/soup. SCHEMA ONLY; engineered story trends + hooks are added separately by write-hooks.
 argument-hint: [free-text app description, e.g. "AI meeting assistant" or "B2B logistics platform"]
 model: claude-opus-4-6
 effort: max
@@ -10,7 +10,7 @@ effort: max
 
 Design and write a complete dungeon-master dungeon for: **$ARGUMENTS**
 
-## Scope (post-1.4 split)
+## Scope
 
 This skill produces a **realistic baseline schema** that runs cleanly out of the
 box. It does **NOT** engineer story trends or magic numbers — those are the
@@ -31,7 +31,7 @@ In scope here:
 - Top-level: `datasetStart`, `datasetEnd`, `numUsers`, `avgEventsPerUserPerDay`,
   `seed`, `format`, device flags, `avgDevicePerUser`, `hasLocation`,
   `hasCampaigns`, `hasSessionIds`, `hasAvatar`, `macro`, `soup`
-- Surviving Phase 2 entities: `personas`, `worldEvents`, `engagementDecay`,
+- Surviving advanced entities: `personas`, `worldEvents`, `engagementDecay`,
   `dataQuality` — use sparingly
 
 Out of scope (hand off to `write-hooks`):
@@ -42,9 +42,7 @@ Out of scope (hand off to `write-hooks`):
 For an encyclopedia of hook patterns, recipes, and real-world examples:
 see `HOOKS.md` at the project root.
 
-Removed from the engine in 1.4 (DO NOT use these config keys; they're silently
-ignored): `subscription`, `attribution`, `geo`, `features`, `anomalies`.
-Recreate with hooks via `write-hooks`.
+These config keys are silently ignored — DO NOT use them: `subscription`, `attribution`, `geo`, `features`, `anomalies`. Recreate with hooks via `write-hooks`.
 
 ## Reference reading
 
@@ -55,9 +53,9 @@ Before writing any code, scan:
   with full JSDoc. **Treat this as the source of truth.**
 - `lib/utils/utils.js` — `pickAWinner`, `weighNumRange`, `initChance`, `exhaust`,
   `takeSome` for property value distributions
-- `dungeons/vertical/sass.js` — B2B reference dungeon, post-1.4 identity model
+- `dungeons/vertical/sass.js` — B2B reference dungeon with full identity model
 - `dungeons/user/my-buddy.js` — consumer-app reference (gitignored)
-- `dungeons/technical/identity-model-verify.js` — minimal Phase 2 model fixture
+- `dungeons/technical/identity-model-verify.js` — minimal identity-model fixture
 
 ## File structure
 
@@ -177,12 +175,30 @@ Use for funnel-level context (checkout flow variant, onboarding version):
   sequence: ["View Item", "Add to Cart", "Checkout"],
   conversionRate: 40,
   timeToConvert: 2,
+  conversionWindowDays: 7,             // cap how late "Checkout" can fire
   props: {
     checkout_version: ["v1", "v2"],      // random per funnel run
     payment_method: ["card", "paypal"],
   },
 }
 ```
+
+**`conversionWindowDays`:** explicit Mixpanel-style conversion window
+cap, in days. Default 30 (Mixpanel UI default). Hard cap 180 (Mixpanel max).
+The validator auto-bumps to `min(180, ceil(timeToConvert/24 * 1.5))` if your
+`timeToConvert` exceeds 30 days. Set explicitly to silence the warning. The
+verifier (`verifyDungeon`) reads this field automatically.
+
+**`isStrictEvent` auto-promote:** if you list a funnel-step event in
+`events[]`, the validator auto-sets `isStrictEvent: true` for you and warns.
+This heals the silent-corruption footgun where the greedy funnel engine
+consumed standalone instances as funnel matches. Set `isStrictEvent: false`
+explicitly only when you intend mixed funnel/standalone semantics for that
+event.
+
+**Mark hook-readable funnel-step events with `isStrictEvent: false`.** When a hook reads `event === 'X'` and `X` is also a funnel step, the validator's auto-promote turns it into `isStrictEvent: true` and the engine stops emitting standalone occurrences — cohort goes empty. Identify these candidates at schema time so `write-hooks` doesn't have to re-thread the schema. Common candidates: login, page view, search, add to cart, swap, deposit — anything that's both a funnel step AND a recurring user behavior hooks will likely cohort on.
+
+**Funnels representing loops need `reentry: true`.** Any funnel named "X loop" / "X cycle" / "session" / per-instance recurring behavior must declare `reentry: true`. Without it, the engine emits one sequence per user and downstream "power user" / "daily active" cohorts have no behavioral signal to bin on.
 
 ### 3. SuperProps (2–3)
 
@@ -214,9 +230,9 @@ Skip the `hook:` field entirely (engine defaults to pass-through). The
 If you absolutely need a stub for downstream stamping consistency, leave a
 1-liner that returns the record unchanged.
 
-## Identity guidelines (Phase 2 model)
+## Identity guidelines
 
-The post-1.4 identity model has three knobs:
+The identity model has three knobs:
 
 ### `avgDevicePerUser` (whole number, default 0)
 
@@ -326,19 +342,76 @@ See `types.d.ts` `ResolvedWorldEvent` for the full interface.
 
 ## Trend shape — `macro` and `soup`
 
-Default to NOT setting either. Defaults: `macro: "flat"` (no birth bias,
-50% of users born in dataset window) + `soup: "growth"` (standard intra-week /
-intra-day rhythm). The 50% born-in-dataset default ensures retention and
-onboarding hooks have large enough cohorts to produce visible signal. Only
-override when you have a specific reason:
+Default to NOT setting either. Defaults: `macro: "flat"` (preset born=12,
+bias=0, uniform pre-existing spread) + `soup: "growth"` (standard intra-week /
+intra-day rhythm). Only override when you have a specific reason:
 
 - Use `macro: "growth"` if you want a mild acquisition trend (visible births
-  over the window, 25% born-in-dataset).
+  over the window, 30% born-in-dataset).
 - Use `macro: "viral"` only if the app has a hockey-stick acquisition story.
   Pair with `personas` so the late entrants behave differently.
+- Use `macro: "decline"` for sunsetting products. Pair with `engagementDecay`
+  or a churn cohort to get a real downtrend (the macro alone produces a flat
+  shape — see `lib/templates/macro-presets.js` decline JSDoc).
 - Use `soup: "spiky"` for products with dramatic peaks / valleys (gaming
   weekends, financial market hours).
 - Use `soup: "global"` to flatten all DOW/HOD weights (24/7 server-side products).
+
+### Macro × born% / bias compatibility (strict clamps)
+
+When you set `macro` AND `percentUsersBornInDataset` explicitly, the validator
+clamps born% to the macro's preset value: flat=12, steady=12, growth=30,
+viral=55, decline=5. Same for `bornRecentBias` outside `[-0.5, 0.5]`. If you
+need higher born% (e.g., "this app launched mid-window — every user is in the
+dataset"), switch macros first (flat → growth → viral) instead of pushing the
+preset's value. Setting born% without a macro keeps legacy behavior (no clamp).
+
+The clamp warning explains why and points to safe alternatives — read it.
+
+⚠️ **Don't set `percentUsersBornInDataset > 60`** with macro=flat / steady /
+decline. Cumulative-acquisition right-edge explosion is the inevitable result
+on a no-hook dungeon. The strict clamps will rescue the run, but the chart
+won't look like what you asked for.
+
+See [CLAUDE.md "Engine guarantees"](../../../CLAUDE.md#engine-guarantees) for the full safe-range table.
+
+### `avgActiveDaysPerUser` (concentrator)
+
+Top-level optional knob. Sets the mean number of distinct UTC days each user
+fires events on. Total event count is preserved (still `rate × numDays`),
+but events cluster onto fewer days. Per-user count drawn from
+`normal(mean=N, sd=N/3)`, clamped to `[1, userActiveDays]`.
+
+Default: undefined (legacy — events spread across the whole window via TimeSoup).
+
+**Concentrator semantic — per-active-day rate inflates.** Example:
+
+```
+avgEventsPerUserPerDay: 4
+avgActiveDaysPerUser: 2
+numDays: 30
+→ 120 events per user, concentrated onto 2 days = 60 events/active day
+```
+
+The validator warns when the implied per-active-day rate > 50. To reduce
+total events, lower `avgEventsPerUserPerDay`, NOT this knob.
+
+**Incompatibility with `engagementDecay`:** these two erosive primitives
+combine destructively — decay drops events from late picked days, eroding
+the effective active-day count below the configured target. Use one or the
+other in a dungeon. If you need both, set `avgActiveDaysPerUser` and write
+the decay as an `everything` hook scoped to specific cohorts (the `write-hooks`
+skill handles this).
+
+### `maxTouchpointsPerUser` (attribution cap)
+
+Top-level optional knob. Caps UTM stamping at this many events per user
+(default 10, matching Mixpanel `TOUCHPOINTS_LIMIT`). When `hasCampaigns: true`
+and a user has more eligible events than the cap, the engine takes a
+uniform-random sample across the user's lifetime and stamps UTMs on the
+sampled events only. Sampling across lifetime (NOT first-N) preserves
+realistic touch shape — Mixpanel's last-10-window then gives meaningful
+first/last-touch attribution. Set to `Infinity` to disable the cap.
 
 ## SuperProp consistency rule
 

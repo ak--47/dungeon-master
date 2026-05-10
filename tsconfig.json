@@ -14,7 +14,8 @@
 	"types": ["vitest/globals"]
   },
   "include": [
-    "**/*.js"
+    "**/*.js",
+    "types/**/*.d.ts"
 , "soupTemplates.mjs", "tests/testSoup.mjs", "tests/testCases.mjs", "tests/benchmark/concurrency.mjs", "dungeons/customers/pos.mjs", "scripts/new-project.mjs", "scripts/dana.mjs", "research/esm-intellisense.mjs"  ],
   "exclude": [
     "node_modules",

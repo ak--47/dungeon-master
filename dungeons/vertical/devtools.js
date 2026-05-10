@@ -356,6 +356,7 @@ const config = {
 		{
 			event: "build completed",
 			weight: 8,
+			isStrictEvent: false,
 			properties: {
 				pipeline_id: chance.pickone.bind(chance, pipelineIds),
 				repo_id: chance.pickone.bind(chance, repoIds),
@@ -369,6 +370,7 @@ const config = {
 		{
 			event: "deployment completed",
 			weight: 5,
+			isStrictEvent: false,
 			properties: {
 				pipeline_id: chance.pickone.bind(chance, pipelineIds),
 				repo_id: chance.pickone.bind(chance, repoIds),
@@ -381,6 +383,7 @@ const config = {
 		{
 			event: "pull request created",
 			weight: 6,
+			isStrictEvent: false,
 			properties: {
 				repo_id: chance.pickone.bind(chance, repoIds),
 				pr_size: ["small", "small", "medium", "medium", "large", "xlarge"],
@@ -393,6 +396,7 @@ const config = {
 		{
 			event: "code review completed",
 			weight: 5,
+			isStrictEvent: false,
 			properties: {
 				repo_id: chance.pickone.bind(chance, repoIds),
 				review_result: ["approved", "approved", "approved", "changes_requested", "commented"],
@@ -404,6 +408,7 @@ const config = {
 		{
 			event: "alert triggered",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				alert_type: ["error_rate", "latency", "cpu", "memory", "disk", "custom_metric"],
 				severity: ["info", "warning", "warning", "critical", "critical"],
@@ -414,6 +419,7 @@ const config = {
 		{
 			event: "incident created",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				severity: ["sev1", "sev2", "sev2", "sev3", "sev3", "sev3"],
 				service: ["api", "web", "worker", "database", "cdn", "auth"],
@@ -424,6 +430,7 @@ const config = {
 		{
 			event: "incident resolved",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				severity: ["sev1", "sev2", "sev2", "sev3", "sev3", "sev3"],
 				resolution_time_minutes: u.weighNumRange(5, 480, 0.3, 60),
@@ -461,6 +468,7 @@ const config = {
 		{
 			event: "monitoring dashboard viewed",
 			weight: 5,
+			isStrictEvent: false,
 			properties: {
 				dashboard_type: ["overview", "performance", "errors", "deploys", "custom"],
 				time_range: ["1h", "6h", "24h", "7d", "30d"],
@@ -541,6 +549,7 @@ const config = {
 			order: "sequential",
 			timeToConvert: 48,
 			weight: 5,
+			reentry: true,
 		},
 		{
 			name: "PR Review Flow",
@@ -557,6 +566,7 @@ const config = {
 			order: "sequential",
 			timeToConvert: 24,
 			weight: 3,
+			reentry: true,
 		},
 		{
 			name: "Upgrade Path",

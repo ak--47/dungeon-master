@@ -97,6 +97,8 @@ a dungeon is a javascript file that exports a configuration object. it defines y
 
 see `dungeons/vertical/` for customer-facing story dungeons (18 events, 8 hooks) and `dungeons/technical/` for feature-testing dungeons (mirrors, groups, scale, anonymous users).
 
+every vertical dungeon ships with a verification proof at `verification/verticals/<name>.{verify.mjs,sql}` — a CI-runnable assertion that the dungeon's documented hooks actually appear in the generated data at full fidelity. 20 dungeons, 107 hooks, 107 checks. see [`verification/verticals/README.md`](verification/verticals/README.md).
+
 ```javascript
 // dungeons/my-app.js
 import dayjs from 'dayjs';
@@ -152,6 +154,84 @@ import { createTextGenerator, generateBatch } from '@ak--47/dungeon-master/text'
 ```
 
 these are the same functions used internally. `pickAWinner` creates weighted distributions, `weighNumRange` generates realistic numeric ranges with configurable skew, and the text generators produce organic-looking strings with sentiment analysis and keyword injection.
+
+## how it works
+
+one call to `DUNGEON_MASTER(config)` runs through these phases in order:
+
+```
+  input  →  validate         →  create context     →  init storage         →  ad spend
+            (+ v1.5 clamps)     (FIXED_NOW, seed)     (HookedArray bins)      (if hasAdSpend)
+              │
+              ▼
+        ┌────────────┐
+        │  userLoop  │  ← per-user generation (most of the work happens here)
+        └────────────┘
+              │
+              ▼
+  groups + SCDs  →  lookup tables  →  mirror datasets  →  flush to disk  →  mixpanel  →  return
+                                                          (if writeToDisk)   (if token)
+```
+
+`userLoop` per-user lifecycle (hooks marked with `►`, terminal guards with `■`):
+
+```
+   [next user]
+        │
+        ▼
+   assign persona + location
+        │
+   create profile + merge persona props
+        │
+   ► HOOK: user                       — set computed segments / tiers
+        │
+   build active-day plan              — if avgActiveDaysPerUser set
+        │
+   generate SCD entries
+        │
+   ► HOOK: scd-pre                    — modify SCD mutation timeline
+        │
+   for each first funnel (attempts loop, identity stitching):
+        │
+        ├─► HOOK: funnel-pre          — change conversionRate, read meta.profile
+        │
+        ├── generate funnel events    — step1 anchored to FIXED_NOW
+        │
+        └─► HOOK: funnel-post         — splice cloned events between steps
+        │
+   generate standalone events         — active-day constrained
+        │
+   apply world-event props
+   apply data-quality nulls
+        │
+   ► HOOK: event                      — per-event mutate (fires ONCE per event)
+        │
+   filter _drop events
+   apply engagementDecay
+   duplicate + late-arriving
+        │
+   sort by time
+   assign session_ids
+   per-session sticky device pick
+        │
+   touchpoint cap pass                — UTM stamping, max maxTouchpointsPerUser
+        │
+   ► HOOK: everything                 — see ALL events for user (most powerful)
+        │
+   auto-sort by time                  — opt out: autoSortAfterEverything: false
+        │
+   ■ future-time guard                — drop events past FIXED_NOW (unconditional)
+        │
+   push to storage                    — storage hooks fire here:
+                                          ad-spend / group / mirror / lookup
+```
+
+key points:
+- **hook order matters.** `user` runs first, then per-funnel hooks, then per-event, then `everything` last. each hook can override what previous hooks did.
+- **`event` hook fires ONCE per event.** the storage layer skips re-running it to prevent double-fire mutations (`price *= 2` won't apply twice).
+- **`everything` is the most powerful hook.** sees the user's complete event history with `meta.profile` available. only place where you can drop events (return a filtered array).
+- **future-time guard is unconditional.** any event with `time > FIXED_NOW` is dropped before storage. hook authors can clone events with arbitrary timestamps without polluting the dataset.
+- **storage hooks** (`ad-spend`, `group`, `mirror`, `lookup`) fire during the storage push, not during userLoop. they're for transforming side-channel data only.
 
 ## the hook system
 
@@ -503,12 +583,62 @@ styles: `support`, `review`, `search`, `feedback`, `chat`, `email`, `forum`, `co
 ## scripts
 
 ```bash
+npm test                      # vitest test suite (~10s, 1122 tests)
+npm run typecheck             # typescript check
 npm run dungeon:run           # run a dungeon file locally
 npm run dungeon:to-json       # convert JS dungeon to JSON (for UI import)
 npm run dungeon:from-json     # convert JSON to JS dungeon
-npm test                      # vitest test suite
-npm run typecheck             # typescript check
+npm run dungeon:schema        # extract schema from a dungeon
 ```
+
+`./scripts/` ships with the npm package — direct-run utilities for dungeon authoring + verification:
+
+```bash
+node scripts/run-dungeon.mjs <path>              # run a single dungeon
+node scripts/run-many.mjs <dir> [--parallel N]   # run multiple dungeons concurrently
+node scripts/dungeon-to-json.mjs <path>          # convert JS → JSON
+node scripts/json-to-dungeon.mjs <path>          # convert JSON → JS
+node scripts/extract-dungeon-schema.mjs <path>   # extract schema
+node scripts/verify-runner.mjs <path> [prefix]   # generate at full fidelity for hook verification
+```
+
+## tests
+
+vitest tests live under `tests/` in three tiers:
+
+| dir | scope | wall time |
+|---|---|---|
+| `tests/unit/` | pure-function tests on helpers, validators, primitives — no `DUNGEON_MASTER()` calls | ~5s |
+| `tests/integration/` | one generation pass per test, ≤300 users, in-memory output | ~50s |
+| `tests/e2e/` | full pipeline — disk writes, file-path loading, multi-pass | ~50s |
+
+run a single tier or file via `vitest` directly:
+
+```bash
+npx vitest run tests/unit                                  # unit tier (~5s)
+npx vitest run tests/integration                           # integration tier
+npx vitest run tests/e2e                                   # e2e tier
+npx vitest run tests/unit tests/integration                # fast inner loop
+npx vitest run tests/integration/features.test.js          # single file
+npx vitest tests/unit                                       # watch mode
+```
+
+`tests/e2e/sanity.test.js` is excluded by default (parked); run isolated with `npx vitest run tests/e2e/sanity.test.js`.
+
+### engine tests (direct-run, NOT vitest)
+
+`tests/engine/` houses direct-run regression tests at scale. these are NOT vitest-compatible — invoke with `node` directly. used to catch engine regressions across a wide variety of dungeon configurations and for ad-hoc chart inspection. outputs land in `./tmp/` (gitignored).
+
+```bash
+node tests/engine/sweep-engine.mjs [--workers 4] [--tier short|normal|long|all]
+                                                  # 194-combo strict-bar sweep on simplest.js
+node tests/engine/sweep-bias.mjs                  # targeted bornRecentBias × born% exploration
+node tests/engine/test-bunchiness.mjs <path>      # chart inspector (last-14d / first-14d / spike)
+node tests/engine/test-nosedive.mjs <path>        # end-of-window nosedive check
+node tests/engine/smoke-test-all.mjs [--dir]      # tiny-scale generation across all dungeons (PASS/FAIL)
+```
+
+engine tests are NOT shipped in the npm package and NOT run as part of `npm test`. the vitest gate at `tests/e2e/engine-shape-full-sweep.test.js` wraps `sweep-engine.mjs` and runs only when `RUN_FULL_SWEEP=1` is set.
 
 ## config reference
 
@@ -519,7 +649,9 @@ see [types.d.ts](types.d.ts) for the complete `Dungeon` interface. here are the 
 | `numUsers` | number | 1000 | number of users to generate |
 | `numEvents` | number | 100000 | target event count (legacy fallback; derived from `avgEventsPerUserPerDay` when set) |
 | `avgEventsPerUserPerDay` | number | derived | per-user-per-day rate (canonical event-volume primitive) |
-| `numDays` | number | 30 | days the dataset spans |
+| `numDays` | number | 30 | days the dataset spans (safe range [14, 365]) |
+| `datasetStart` | ISO/unix | undefined | pin window start (for bit-exact deterministic runs); requires `datasetEnd` too |
+| `datasetEnd` | ISO/unix | undefined | pin window end; recomputes `numDays` from start/end span |
 | `seed` | string | random | RNG seed for reproducibility |
 | `format` | string | `'csv'` | output format (csv, json, parquet) |
 | `token` | string | null | mixpanel project token (triggers import) |
@@ -532,9 +664,12 @@ see [types.d.ts](types.d.ts) for the complete `Dungeon` interface. here are the 
 | `concurrency` | number | 1 | parallel user generation |
 | `macro` | string/object | `'flat'` | big-picture trend preset (flat/steady/growth/viral/decline) |
 | `soup` | string/object | `'growth'` | intra-week / intra-day rhythm preset |
-| `bornRecentBias` | number | 0 (from macro `flat`) | user birth date skew (-1..1) |
-| `percentUsersBornInDataset` | number | 15 (from macro `flat`) | % of users born in time window |
+| `bornRecentBias` | number | 0 (from macro `flat`) | user birth date skew (safe range [-0.5, 0.5]; user-explicit values outside the band are clamped) |
+| `percentUsersBornInDataset` | number | 12 (from macro `flat`) | % of users born in window (clamped per-macro when both `macro` and this field are explicit) |
 | `preExistingSpread` | string | `'uniform'` (from macro `flat`) | placement of pre-existing users' first event |
+| `avgActiveDaysPerUser` | number | undefined | concentrate events onto N distinct UTC days per user (preserves total event count) |
+| `maxTouchpointsPerUser` | number | 10 | UTM stamping cap per user (Mixpanel `TOUCHPOINTS_LIMIT` parity) |
+| `autoSortAfterEverything` | boolean | true | sort events by time after `everything` hook (defends greedy funnel engine) |
 | `hook` | function/string | passthrough | data transformation function |
 | `hasLocation` | boolean | false | include geo properties |
 | `hasCampaigns` | boolean | false | include UTM properties |

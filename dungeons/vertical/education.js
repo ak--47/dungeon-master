@@ -383,6 +383,7 @@ const config = {
 			conversionRate: 70,
 			timeToConvert: 4,
 			weight: 5,
+			reentry: true,
 		},
 		{
 			// Assessment flow: quizzes and assignments after studying
@@ -390,6 +391,7 @@ const config = {
 			conversionRate: 55,
 			timeToConvert: 8,
 			weight: 3,
+			reentry: true,
 		},
 		{
 			// Course completion journey: enroll → complete → earn certificate
@@ -443,6 +445,7 @@ const config = {
 		{
 			event: "course enrolled",
 			weight: 8,
+			isStrictEvent: false,
 			properties: {
 				"course_id": courseIds,
 				"course_category": ["CS", "Math", "Science", "Business", "Arts", "Languages"],
@@ -463,6 +466,7 @@ const config = {
 		{
 			event: "lecture completed",
 			weight: 14,
+			isStrictEvent: false,
 			properties: {
 				"course_id": courseIds,
 				"lecture_id": lectureIds,
@@ -474,6 +478,7 @@ const config = {
 		{
 			event: "quiz started",
 			weight: 10,
+			isStrictEvent: false,
 			properties: {
 				"course_id": courseIds,
 				"quiz_id": quizIds,
@@ -484,6 +489,7 @@ const config = {
 		{
 			event: "quiz completed",
 			weight: 8,
+			isStrictEvent: false,
 			properties: {
 				"course_id": courseIds,
 				"quiz_id": quizIds,
@@ -495,6 +501,7 @@ const config = {
 		{
 			event: "assignment submitted",
 			weight: 6,
+			isStrictEvent: false,
 			properties: {
 				"course_id": courseIds,
 				"assignment_id": assignmentIds,
@@ -517,6 +524,7 @@ const config = {
 		{
 			event: "discussion posted",
 			weight: 7,
+			isStrictEvent: false,
 			properties: {
 				"course_id": courseIds,
 				"post_type": ["question", "answer", "comment"],
@@ -526,6 +534,7 @@ const config = {
 		{
 			event: "certificate earned",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
 				"course_id": courseIds,
 				"completion_time_days": u.weighNumRange(7, 180, 0.5, 45),
@@ -535,6 +544,7 @@ const config = {
 		{
 			event: "study group joined",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				"group_id": groupIds,
 				"group_size": u.weighNumRange(3, 20, 0.7, 8),
@@ -587,6 +597,7 @@ const config = {
 		{
 			event: "practice problem solved",
 			weight: 12,
+			isStrictEvent: false,
 			properties: {
 				"course_id": courseIds,
 				"problem_id": problemIds,

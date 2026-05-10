@@ -568,6 +568,7 @@ const config = {
 		{
 			event: "service deployed",
 			weight: 10,
+			isStrictEvent: false,
 			properties: {
 				service_id: serviceIds,
 				service_type: ["web_app", "api", "database", "cache", "queue", "ml_model"],
@@ -578,6 +579,7 @@ const config = {
 		{
 			event: "dashboard viewed",
 			weight: 20,
+			isStrictEvent: false,
 			properties: {
 				dashboard_type: ["overview", "cost", "performance", "security", "custom"],
 				time_range: ["1h", "6h", "24h", "7d", "30d"],
@@ -586,6 +588,7 @@ const config = {
 		{
 			event: "alert triggered",
 			weight: 12,
+			isStrictEvent: false,
 			properties: {
 				alert_id: alertIds,
 				severity: ["info", "warning", "critical", "emergency"],
@@ -609,6 +612,7 @@ const config = {
 		{
 			event: "alert acknowledged",
 			weight: 8,
+			isStrictEvent: false,
 			properties: {
 				alert_id: alertIds,
 				response_time_mins: u.weighNumRange(1, 120),
@@ -618,6 +622,7 @@ const config = {
 		{
 			event: "alert resolved",
 			weight: 7,
+			isStrictEvent: false,
 			properties: {
 				alert_id: alertIds,
 				resolution_time_mins: u.weighNumRange(5, 1440),
@@ -627,6 +632,7 @@ const config = {
 		{
 			event: "deployment pipeline run",
 			weight: 9,
+			isStrictEvent: false,
 			properties: {
 				pipeline_id: pipelineIds,
 				status: ["success", "failed", "cancelled"],
@@ -637,6 +643,7 @@ const config = {
 		{
 			event: "infrastructure scaled",
 			weight: 5,
+			isStrictEvent: false,
 			properties: {
 				service_id: serviceIds,
 				scale_direction: ["up", "up", "up", "down"],
@@ -648,6 +655,7 @@ const config = {
 		{
 			event: "cost report generated",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				report_period: ["daily", "weekly", "monthly"],
 				total_cost: u.weighNumRange(100, 50000),
@@ -657,6 +665,7 @@ const config = {
 		{
 			event: "team member invited",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				role: ["admin", "editor", "viewer", "billing"],
 				invitation_method: ["email", "sso", "slack"],
@@ -665,6 +674,7 @@ const config = {
 		{
 			event: "integration configured",
 			weight: 4,
+			isStrictEvent: false,
 			properties: {
 				integration_type: ["slack", "pagerduty", "jira", "github", "datadog", "terraform"],
 				status: ["active", "paused", "error"],
@@ -691,6 +701,7 @@ const config = {
 		{
 			event: "billing event",
 			weight: 3,
+			isStrictEvent: false,
 			properties: {
 				event_type: ["invoice_generated", "invoice_generated", "payment_received", "payment_received", "payment_received", "payment_failed", "plan_upgraded", "plan_downgraded"],
 				amount: u.weighNumRange(99, 25000),
@@ -718,6 +729,7 @@ const config = {
 		{
 			event: "documentation viewed",
 			weight: 7,
+			isStrictEvent: false,
 			properties: {
 				doc_section: ["getting_started", "api_reference", "best_practices", "troubleshooting", "changelog"],
 				time_on_page_sec: u.weighNumRange(5, 600),
