@@ -11,6 +11,11 @@ export default defineConfig({
     // Test file patterns
     include: ['tests/**/*.test.js'],
     exclude: ['node_modules/**'],
+
+    // Prune ./data and ./tmp before AND after the suite. Per-test isolation
+    // already lives in os.tmpdir(); this defends against a stray writer to
+    // ./data leaving artifacts in the workspace.
+    globalSetup: ['./tests/global-setup.js'],
     
     // Coverage settings
     coverage: {

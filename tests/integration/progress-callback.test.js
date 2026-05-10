@@ -192,13 +192,15 @@ describe('progress callback', () => {
 	}, timeout);
 
 	test.skip('percentComplete reaches close to 100', async () => {
-		// SKIPPED — flaky under full-suite parallel load. Throttled callback may
-		// miss the very last user-loop iteration under M-series concurrency
-		// timing. Passes in isolation; observed 82% in parallel runs at 80%
-		// threshold. Re-enable when progress callback delivery is made
-		// deterministic (separate concern from verifier work).
+		// SKIPPED — throttled progress callback (default 500ms, here 10ms) gives
+		// no guarantee that a final update fires before generation completes on
+		// fast workloads. Reproducible: 3/5 isolated runs at numUsers:500 /
+		// numEvents:5000 still get stuck at 2%. Re-enable when callback delivery
+		// guarantees a flush at completion.
 		const updates = [];
 		await generate(baseConfig({
+			numUsers: 500,
+			numEvents: 5000,
 			progressInterval: 10,
 			onProgress: (u) => { if (u.phase === 'generation') updates.push(u); },
 		}));
