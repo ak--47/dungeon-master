@@ -86,7 +86,6 @@
 		"tracery-grammar": "^2.8.4"
 	},
 	"devDependencies": {
-		"@types/chance": "^1.1.8",
 		"@vitest/coverage-v8": "^2.1.9",
 		"@vitest/ui": "^2.1.9",
 		"nodemon": "^3.1.3",

@@ -24,7 +24,6 @@ tmp/*
 !tmp/.gitkeep
 .tmp/
 duckdb_temp_*
-.dungeon-tmp/
 *scratch*
 
 # ── User / customer dungeons (not shipped in package) ──────────────
