@@ -28,6 +28,11 @@ export interface Dungeon {
     /**
      * Number of days the dataset spans. Default: 30.
      *
+     * Safe range: `[14, 365]`. Below 14 → strict-bar engine-validation metrics use
+     * 14-day windows; results are noisy. Above 365 → memory cost grows linearly.
+     * Validator emits a warning below 14; does not clamp (because the window may have
+     * been pinned via `datasetStart`/`datasetEnd` upstream).
+     *
      * Three resolution modes:
      * 1. **`numDays` alone (no datasetStart/End):** Window = `[today - numDays, today]`.
      *    Simplest API for ad-hoc dungeons. NOT deterministic across runs (today changes).
@@ -58,7 +63,14 @@ export interface Dungeon {
     numEvents?: number;
     /** Number of unique users to generate. */
     numUsers?: number;
-    /** Average events per user per active day. The canonical event-volume primitive — born-late users get this rate × their remaining window, so per-day density stays constant. If both this and numEvents are set, this wins. */
+    /**
+     * Average events per user per active day. The canonical event-volume primitive —
+     * born-late users get this rate × their remaining window, so per-day density stays
+     * constant. If both this and numEvents are set, this wins.
+     *
+     * Safe range: `[0.1, 50]`. Above 50 → unrealistic load + memory cost; the v1.5
+     * validator strict-clamps to 50 with a warning.
+     */
     avgEventsPerUserPerDay?: number;
     /** Output format for files written to disk. */
     format?: "csv" | "json" | "parquet" | string;
@@ -242,9 +254,27 @@ export interface Dungeon {
     // ── Distribution Controls ──
     // These three knobs are normally set by the `macro` preset (default "flat").
     // Setting them on the dungeon config directly overrides the preset's value.
-    /** Percentage of users whose account creation falls within the dataset window (vs. pre-existing). Default (from macro: "flat"): 50 */
+    /**
+     * Percentage of users whose account creation falls within the dataset window (vs. pre-existing).
+     *
+     * Safe range: `[0, 100]` (sanity-clamped). Recommended `[0, 60]`. **v1.5 strict-clamp:**
+     * when `macro` is set to a named preset AND the user explicitly sets this field, it is
+     * clamped to the preset's default born% (flat=12, steady=12, growth=30, viral=55,
+     * decline=5) to preserve the macro's characteristic shape. Users who need higher born%
+     * should switch macros (flat→growth, growth→viral). When `macro` is not set, no clamp
+     * fires (legacy backward-compat).
+     */
     percentUsersBornInDataset?: number;
-    /** Bias for birth dates of users born in dataset. -1..1; negative = early skew, positive = recent skew, 0 = uniform. Default (from macro: "flat"): 0 */
+    /**
+     * Bias for birth dates of users born in dataset. -1..1; negative = early skew,
+     * positive = recent skew, 0 = uniform.
+     *
+     * Safe range: `[-0.5, 0.5]`. **v1.5 strict-clamp:** values outside `[-0.5, 0.5]` are
+     * clamped to the nearest bound (above 0.5 = unusable right-skew; below -0.5 = unusable
+     * left-skew). Compound clamp: when explicit `percentUsersBornInDataset > 60` AND
+     * explicit `bornRecentBias > 0.4`, bias is clamped to 0.3 to prevent right-edge
+     * cumulative-acquisition explosion. Macro presets (e.g., viral=0.6) are exempt.
+     */
     bornRecentBias?: number;
     /** How pre-existing users' first event time is placed. "pinned" stacks them all at FIXED_BEGIN; "uniform" spreads across [FIXED_BEGIN-30d, FIXED_BEGIN]. Default (from macro: "flat"): "uniform" */
     preExistingSpread?: "pinned" | "uniform";
@@ -268,6 +298,9 @@ export interface Dungeon {
      * eroding the effective active-day count below the configured target. Use one or the
      * other; if you need both, write decay logic in an `everything` hook scoped to specific
      * cohorts. See HOOKS.md §2.5.
+     *
+     * Safe range: `[1, numDays * 0.5]`. Above 50% of `numDays` defeats the concentrator
+     * purpose; the v1.5 validator strict-clamps to `floor(numDays * 0.5)` with a warning.
      */
     avgActiveDaysPerUser?: number;
     /**

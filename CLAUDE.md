@@ -466,6 +466,49 @@ soup: { dayOfWeekWeights: null, hourOfDayWeights: null }
 - Default weights are derived from real Mixpanel data and produce realistic weekly "matterhorn hump" and daily curves
 - Soup presets are defined in `lib/templates/soup-presets.js`; macro presets in `lib/templates/macro-presets.js`. Both resolved in `config-validator.js`.
 
+## Tuning guidance — safe ranges and engine guarantees (v1.5)
+
+The v1.5 ship gate validated that `dungeons/technical/simplest.js` (no-hook baseline) passes a strict per-macro shape bar across a 194-combo cross-product matrix of macro × numDays × born% × rate × activeDays. See [plans/ENGINE-VALIDATION/PLAN.md](plans/ENGINE-VALIDATION/PLAN.md) and [plans/ENGINE-VALIDATION/FIX.md](plans/ENGINE-VALIDATION/FIX.md) for the methodology + sweep evidence.
+
+### Safe ranges
+
+| Knob | Safe range | Validator behavior outside range | Notes |
+|------|-----------|----------------------------------|-------|
+| `numDays` | `[14, 365]` | Warn below 14, no clamp (window may be pinned) | Strict-bar metrics use 14-day windows; <14 days is noisy. >365 grows memory linearly. |
+| `percentUsersBornInDataset` | `[0, 100]` (sanity-clamped) | Hard clamp to [0,100]. **Per-macro clamp** when both `macro` AND this field are explicit: flat→12, steady→12, growth→30, viral→55, decline→5 | Macro = shape contract. Born above the cap breaks the macro's characteristic curve via cumulative-acquisition. To go higher, switch macros. |
+| `bornRecentBias` | `[-0.5, 0.5]` | User-explicit values clamped to nearest bound. Compound: `born > 60 && bias > 0.4` clamps bias to 0.3. Macro presets exempt (viral=0.6 allowed). | Above 0.5 = unusable right-skew → right-edge density explosion. |
+| `preExistingSpread` | `'uniform'` (default) or `'pinned'` | n/a | `'uniform'` is the clean baseline; `'pinned'` is for narrow growth shapes. |
+| `avgEventsPerUserPerDay` | `[0.1, 50]` | Clamped to 50 above; `numEvents` recomputed | Above 50 = unrealistic load + memory cost. |
+| `avgActiveDaysPerUser` | `[1, numDays * 0.5]` | Clamped to `floor(numDays/2)` above | Above 50% of `numDays` defeats the concentrator purpose. **Incompatible with `engagementDecay`** — see HOOKS.md §2.5. |
+| `macro` | `'flat' \| 'steady' \| 'growth' \| 'viral' \| 'decline'` (default `'flat'`) | Throws on unknown name | Tail_ratio targets per macro: flat ≈ 1.1, steady ≈ 1.1, growth ≈ 1.4, viral ≈ 2.2, decline ≈ 1.0 (foobar 89-day). |
+
+### The 6 strict-bar conditions (per-macro-tuned bands)
+
+A no-hook dungeon "passes" the v1.5 strict bar when, for the resolved combo's macro, ALL of:
+
+1. `tail_ratio = mean(events_last_W) / mean(events_first_W)` ∈ macro's tail band, where `W = min(14, floor(numDays/2))`
+2. `lastDay >= 0.7 * prevDay` (0.6 in `avgActiveDaysPerUser` mode — per-day variance is naturally higher there)
+3. `rightEdgeSpike = max(events_last_W) / median(events_window) < macro_spike_cap`
+4. `min(events_last_7d) >= macro_l7c * mean(events_last_7d)` — no multi-day collapse
+5. `futureEvents == 0` — no events past `FIXED_NOW`
+6. `signupFloor`: every day in last 7 has `signup_count >= 0.05 * mean(daily signups across window)`. Bypassed when `mean < 5/day` or `macro === 'decline'` (variance noise dominates low-signup configs).
+
+Per-macro bars (defined in `scripts/sweep-engine.mjs` `STRICT_BARS` and mirrored in `tests/unit/engine-shape-canary.test.js`):
+
+| Macro   | tail band     | spike cap | l7c min |
+|---------|---------------|-----------|---------|
+| flat    | `[0.85, 1.5]` | 2.5       | 0.5     |
+| steady  | `[0.85, 1.7]` | 2.5       | 0.5     |
+| growth  | `[0.85, 2.5]` | 3.5       | 0.45    |
+| viral   | `[0.5, 5.0]`  | 7.0       | 0.3     |
+| decline | `[0.4, 2.0]`  | 3.0       | 0.3     |
+
+### Known engine guarantees
+
+- The 6 strict-bar conditions are tested on every commit (10-test canary at `tests/unit/engine-shape-canary.test.js`, ~5s wall) and pre-release (full 194-combo sweep at `tests/e2e/engine-shape-full-sweep.test.js`, opt-in via `RUN_FULL_SWEEP=1`).
+- **Pure-engine outputs (no hooks) on `dungeons/technical/simplest.js` satisfy the strict bar across the documented safe ranges.** Departures from this guarantee are CI failures.
+- **Hooks can intentionally violate the strict bar.** Decline-with-churn stories (engagementDecay + churn cohorts) can produce tail_ratio < 0.4; viral hooks with persona-driven late-cohort lift can exceed the spike cap. Engine guarantees apply to no-hook configs only. Hook authors should document intentional deviations in the dungeon's overview JSDoc.
+
 ## Property Type Helpers
 
 Helpers for generating all 7 Mixpanel property data types. All are thunks (functions returning values) — pass them directly as event property values. The `choose()` resolver calls them per event.

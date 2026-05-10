@@ -354,19 +354,38 @@ See `types.d.ts` `ResolvedWorldEvent` for the full interface.
 
 ## Trend shape — `macro` and `soup`
 
-Default to NOT setting either. Defaults: `macro: "flat"` (no birth bias,
-50% of users born in dataset window) + `soup: "growth"` (standard intra-week /
-intra-day rhythm). The 50% born-in-dataset default ensures retention and
-onboarding hooks have large enough cohorts to produce visible signal. Only
-override when you have a specific reason:
+Default to NOT setting either. Defaults: `macro: "flat"` (preset born=12,
+bias=0, uniform pre-existing spread) + `soup: "growth"` (standard intra-week /
+intra-day rhythm). Only override when you have a specific reason:
 
 - Use `macro: "growth"` if you want a mild acquisition trend (visible births
-  over the window, 25% born-in-dataset).
+  over the window, 30% born-in-dataset).
 - Use `macro: "viral"` only if the app has a hockey-stick acquisition story.
   Pair with `personas` so the late entrants behave differently.
+- Use `macro: "decline"` for sunsetting products. Pair with `engagementDecay`
+  or a churn cohort to get a real downtrend (the macro alone produces a flat
+  shape — see `lib/templates/macro-presets.js` decline JSDoc).
 - Use `soup: "spiky"` for products with dramatic peaks / valleys (gaming
   weekends, financial market hours).
 - Use `soup: "global"` to flatten all DOW/HOD weights (24/7 server-side products).
+
+### Macro × born% / bias compatibility (v1.5 strict clamps)
+
+When you set `macro` AND `percentUsersBornInDataset` explicitly, the validator
+clamps born% to the macro's preset value: flat=12, steady=12, growth=30,
+viral=55, decline=5. Same for `bornRecentBias` outside `[-0.5, 0.5]`. If you
+need higher born% (e.g., "this app launched mid-window — every user is in the
+dataset"), switch macros first (flat → growth → viral) instead of pushing the
+preset's value. Setting born% without a macro keeps legacy behavior (no clamp).
+
+The clamp warning explains why and points to safe alternatives — read it.
+
+⚠️ **Don't set `percentUsersBornInDataset > 60`** with macro=flat / steady /
+decline. Cumulative-acquisition right-edge explosion is the inevitable result
+on a no-hook dungeon. The strict clamps will rescue the run, but the chart
+won't look like what you asked for.
+
+See [CLAUDE.md "Tuning guidance — safe ranges and engine guarantees"](../../../CLAUDE.md#tuning-guidance--safe-ranges-and-engine-guarantees-v15) for the full safe-range table.
 
 ### v1.5 — `avgActiveDaysPerUser` (concentrator)
 

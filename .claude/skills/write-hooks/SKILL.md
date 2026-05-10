@@ -137,6 +137,27 @@ if (type === 'funnel-post' && meta.experiment) {
   `Dungeon.avgActiveDaysPerUser` config knob — it's a concentrator that
   preserves total event count while clustering events onto fewer days.
   Hooks own cohort-conditional patterns ("premium users get 7+ days") only.
+
+### Intentional strict-bar deviation is OK
+
+The v1.5 engine guarantees the no-hook baseline (`dungeons/technical/simplest.js`)
+satisfies the per-macro strict bar across the 194-combo sweep matrix
+(see [CLAUDE.md "Tuning guidance"](../../../CLAUDE.md#tuning-guidance--safe-ranges-and-engine-guarantees-v15)).
+**Hooks can intentionally violate the strict bar** for legitimate stories:
+
+- **Decline + churn cohort** (engagementDecay or `everything`-hook event-drop)
+  produces tail_ratio < 0.4 — well below the decline bar's 0.4 floor. This is
+  the design intent of a sunset story.
+- **Viral hook + persona-driven late-cohort lift** can push the spike above
+  the viral preset's 7.0 cap. Hockey-stick stories are louder than the engine
+  baseline.
+- **World-event spike** (e.g., a launch-day burst of 5x normal volume) creates
+  a single-day right-edge spike above the spike cap.
+
+When you write a hook that intentionally violates the strict bar, document the
+deviation in the dungeon's overview JSDoc + the hook's pattern documentation
+block. Engine-validation guarantees apply to **no-hook configs only**; hooks
+own their shape.
 - **DO NOT hand-sort `everything` hook output.** The engine auto-sorts events
   ascending by time after `everything` returns (default ON; opt out via
   `autoSortAfterEverything: false`). Cloned events with arbitrary timestamps

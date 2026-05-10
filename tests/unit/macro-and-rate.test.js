@@ -128,20 +128,43 @@ describe('macro integration with config-validator', () => {
 		expect(config.preExistingSpread).toBe(MACRO_PRESETS.growth.preExistingSpread);
 	});
 
-	test('explicit dungeon-level fields override the macro preset', () => {
+	test('explicit dungeon-level fields override the macro preset (within strict clamps)', () => {
 		initChance('macro-override');
 		const config = validateDungeonConfig({
 			numUsers: 100,
 			numEvents: 1000,
 			macro: 'growth',
-			bornRecentBias: 0.9,           // overrides growth's 0.3
-			percentUsersBornInDataset: 80, // overrides growth's 60
+			bornRecentBias: 0.4,            // user override (in safe band [-0.5, 0.5])
+			percentUsersBornInDataset: 25,  // user override (within growth cap of 30)
 			seed: 'macro-override'
 		});
-		expect(config.bornRecentBias).toBe(0.9);
-		expect(config.percentUsersBornInDataset).toBe(80);
+		expect(config.bornRecentBias).toBe(0.4);
+		expect(config.percentUsersBornInDataset).toBe(25);
 		// preExistingSpread came from macro: "growth"
 		expect(config.preExistingSpread).toBe(MACRO_PRESETS.growth.preExistingSpread);
+	});
+
+	test('strict clamps fire on user-supplied born% above per-macro cap', () => {
+		initChance('macro-clamp-born');
+		const config = validateDungeonConfig({
+			numUsers: 100,
+			numEvents: 1000,
+			macro: 'flat',
+			percentUsersBornInDataset: 90,  // above flat's cap of 12
+			seed: 'macro-clamp-born',
+		});
+		expect(config.percentUsersBornInDataset).toBe(12);
+	});
+
+	test('strict clamps fire on user-supplied bornRecentBias above 0.5', () => {
+		initChance('macro-clamp-bias');
+		const config = validateDungeonConfig({
+			numUsers: 100,
+			numEvents: 1000,
+			bornRecentBias: 0.9,
+			seed: 'macro-clamp-bias',
+		});
+		expect(config.bornRecentBias).toBe(0.5);
 	});
 
 	test('macro object form supports preset+overrides at config level', () => {
@@ -236,7 +259,7 @@ describe('config-validator guards and clamping (1.3.0 hardening)', () => {
 		})).toThrow(/numDays must be a positive number/);
 	});
 
-	test('clamps bornRecentBias above 1', () => {
+	test('clamps bornRecentBias above 0.5 (v1.5 strict bound)', () => {
 		initChance('clamp-high');
 		const config = validateDungeonConfig({
 			numUsers: 100,
@@ -244,10 +267,10 @@ describe('config-validator guards and clamping (1.3.0 hardening)', () => {
 			bornRecentBias: 5,
 			seed: 'clamp-high'
 		});
-		expect(config.bornRecentBias).toBe(1);
+		expect(config.bornRecentBias).toBe(0.5);
 	});
 
-	test('clamps bornRecentBias below -1', () => {
+	test('clamps bornRecentBias below -0.5 (v1.5 strict bound)', () => {
 		initChance('clamp-low');
 		const config = validateDungeonConfig({
 			numUsers: 100,
@@ -255,7 +278,7 @@ describe('config-validator guards and clamping (1.3.0 hardening)', () => {
 			bornRecentBias: -3,
 			seed: 'clamp-low'
 		});
-		expect(config.bornRecentBias).toBe(-1);
+		expect(config.bornRecentBias).toBe(-0.5);
 	});
 
 	test('coerces non-finite bornRecentBias to 0', () => {
@@ -289,11 +312,11 @@ describe('config-validator guards and clamping (1.3.0 hardening)', () => {
 
 	test('auto-batch triggers when avgEventsPerUserPerDay implies >= 2M events', () => {
 		initChance('auto-batch-rate');
-		// 1000 users × 30 days × 70 rate = 2.1M events
+		// 5000 users × 30 days × 20 rate = 3M events (rate stays below v1.5 strict cap of 50)
 		const config = validateDungeonConfig({
-			numUsers: 1000,
+			numUsers: 5000,
 			numDays: 30,
-			avgEventsPerUserPerDay: 70,
+			avgEventsPerUserPerDay: 20,
 			seed: 'auto-batch-rate'
 		});
 		expect(config.numEvents).toBeGreaterThanOrEqual(2_000_000);
