@@ -7,16 +7,8 @@
  * They ensure proper validation, data quality, file output, and
  * that all input types (object, file, JSON, array, text, overrides) work.
  *
- * ╔══════════════════════════════════════════════════════════════════════════╗
- * ║ TODO (deferred): full file SKIPPED via `describe.skip`. Each describe    ║
- * ║ block runs cleanly in isolation but the file as a whole hangs after the  ║
- * ║ "batch mode - writes multiple files and imports correctly" test when     ║
- * ║ executed sequentially. Suspected: vitest worker state pollution between  ║
- * ║ writeToDisk:true and writeToDisk:false tests in the same fork. Needs a   ║
- * ║ deeper investigation (likely a per-test fork isolation flag or a flush-  ║
- * ║ wait between tests). For v1.5 we're skipping to keep the suite green.   ║
- * ║ Revisit when investigating the underlying interaction.                   ║
- * ╚══════════════════════════════════════════════════════════════════════════╝
+ * Sanity writes to os.tmpdir()/dungeon-master-sanity to avoid racing other
+ * e2e files that recursively wipe shared ./data and ./tmp.
  */
 
 import generate from '../../index.js';
@@ -26,6 +18,7 @@ import 'dotenv/config';
 import * as u from 'ak-tools';
 import Papa from 'papaparse';
 import path from 'path';
+import os from 'os';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -36,6 +29,9 @@ import foobar from '../../dungeons/technical/foobar.js';
 import scd from '../../dungeons/technical/scd.js';
 
 const timeout = 600000;
+// Sanity writes to OS tmp to avoid races with other e2e files that recursively
+// wipe ./data and ./tmp (formats, file-tracking, module-api).
+const DATA_DIR = path.join(os.tmpdir(), 'dungeon-master-sanity');
 
 /** @typedef {import('../../types').Dungeon} Dungeon */
 
@@ -58,7 +54,7 @@ describe.sequential('Module Integration Tests', () => {
 			numEvents: 100,
 			numUsers: 10,
 			numDays: 7,
-			writeToDisk: true,
+			writeToDisk: DATA_DIR,
 			format: 'csv',
 			seed: 'sanity-test'
 		};
@@ -71,7 +67,7 @@ describe.sequential('Module Integration Tests', () => {
 		expect(result.files.length).toBeGreaterThan(0);
 
 		// Check files were created
-		const files = (await u.ls('./data')).filter(a => a.includes('.csv'));
+		const files = (await u.ls(DATA_DIR)).filter(a => a.includes('.csv'));
 		expect(files.length).toBe(2);
 
 		const users = files.filter(a => a.includes('USERS'));
@@ -105,7 +101,7 @@ describe.sequential('Module Integration Tests', () => {
 		const config = {
 			numEvents: 100,
 			numUsers: 10,
-			writeToDisk: true,
+			writeToDisk: DATA_DIR,
 			seed: 'minimal-test'
 		};
 
@@ -113,7 +109,7 @@ describe.sequential('Module Integration Tests', () => {
 
 		expect(result.eventCount).toBeGreaterThan(0);
 		expect(result.userCount).toBe(10);
-		const csvs = (await u.ls('./data')).filter(a => a.includes('.csv'));
+		const csvs = (await u.ls(DATA_DIR)).filter(a => a.includes('.csv'));
 		expect(csvs.length).toBe(2);
 	}, timeout);
 
@@ -125,17 +121,17 @@ describe.sequential('Module Integration Tests', () => {
 			numEvents: 100,
 			numUsers: 10,
 			seed: "simple-test",
-			writeToDisk: true,
+			writeToDisk: DATA_DIR,
 			format: 'csv',
 			hasAdSpend: false
-		
+
 		};
 
 		const result = await generate(config);
 
 		expect(result.eventCount).toBeGreaterThan(0);
 		expect(result.userCount).toBe(10);
-		const csvs = (await u.ls('./data')).filter(a => a.includes('.csv'));
+		const csvs = (await u.ls(DATA_DIR)).filter(a => a.includes('.csv'));
 		expect(csvs.length).toBe(2);
 	}, timeout);
 
@@ -145,7 +141,7 @@ describe.sequential('Module Integration Tests', () => {
 		const config = {
 			numEvents: 50,
 			numUsers: 5,
-			writeToDisk: true,
+			writeToDisk: DATA_DIR,
 			format: 'parquet',
 			seed: 'parquet-test'
 		};
@@ -163,7 +159,7 @@ describe.sequential('Module Integration Tests', () => {
 		const config = {
 			numEvents: 50,
 			numUsers: 5,
-			writeToDisk: true,
+			writeToDisk: DATA_DIR,
 			format: 'json',
 			gzip: true,
 			seed: 'gzip-test'
@@ -203,7 +199,7 @@ describe.sequential('Module Integration Tests', () => {
 		const config = {
 			numEvents: 150,
 			numUsers: 10,
-			writeToDisk: true,
+			writeToDisk: DATA_DIR,
 			format: 'csv',
 			batchSize: 50, // Force batch mode with small batch size
 			seed: 'batch-test',
@@ -220,7 +216,7 @@ describe.sequential('Module Integration Tests', () => {
 		expect(result.userCount).toBe(10);
 
 		// Verify batch files were created
-		const files = (await u.ls('./data')).filter(a => a.includes('.csv'));
+		const files = (await u.ls(DATA_DIR)).filter(a => a.includes('.csv'));
 		expect(files.length).toBeGreaterThan(0);
 
 		// If a real token is provided, verify import results
@@ -243,7 +239,7 @@ describe.sequential('Module Integration Tests', () => {
 		const config = {
 			numEvents: 75,
 			numUsers: 8,
-			writeToDisk: true,
+			writeToDisk: DATA_DIR,
 			format: 'json',
 			seed: 'write-import-test',
 			// Empty fallback token: 'test-token' triggers infinite mixpanel-import
@@ -259,7 +255,7 @@ describe.sequential('Module Integration Tests', () => {
 		expect(result.userCount).toBe(8);
 
 		// Verify files were created
-		const files = (await u.ls('./data')).filter(a => a.includes('.json'));
+		const files = (await u.ls(DATA_DIR)).filter(a => a.includes('.json'));
 		expect(files.length).toBe(2); // events + users
 
 		const eventFiles = files.filter(f => f.includes('EVENTS'));
@@ -607,32 +603,14 @@ describe.sequential('parseJSONDungeon', () => {
 // the same set of files `npm run prune` removes (./data/*, ./tmp/*, ./vscode-profile-*),
 // done in-process via fs.rmSync.
 function clearData() {
+	// Sanity owns ./data/sanity-test/. Wiping shared ./data races other e2e
+	// files (formats, file-tracking, module-api) that also clear it.
 	try {
 		const fs = require('fs');
-		const path = require('path');
-		if (!fs.existsSync('./data')) fs.mkdirSync('./data', { recursive: true });
-		const wipe = (dir) => {
-			if (!fs.existsSync(dir)) return;
-			for (const name of fs.readdirSync(dir)) {
-				try { fs.rmSync(path.join(dir, name), { recursive: true, force: true }); }
-				catch (_) { /* best effort */ }
-			}
-		};
-		wipe('./data');
-		wipe('./tmp');
-		// Remove vscode-profile-* in cwd
-		try {
-			for (const name of fs.readdirSync('.')) {
-				if (name.startsWith('vscode-profile-')) {
-					try { fs.rmSync(name, { recursive: true, force: true }); }
-					catch (_) { /* best effort */ }
-				}
-			}
-		} catch (_) { /* best effort */ }
+		fs.rmSync(DATA_DIR, { recursive: true, force: true });
+		fs.mkdirSync(DATA_DIR, { recursive: true });
 	}
-	catch (err) {
-		// Best-effort cleanup. Don't fail tests on cleanup errors.
-	}
+	catch (_) { /* best effort */ }
 }
 
 function validateEvent(event) {

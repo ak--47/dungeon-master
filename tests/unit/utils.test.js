@@ -2,9 +2,13 @@ import generate from '../../index.js';
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import fs from 'fs';
+import os from 'os';
+import nodePath from 'path';
 import * as u from 'ak-tools';
 dayjs.extend(utc);
 import 'dotenv/config';
+
+const TMP_DIR = os.tmpdir();
 
 
 /** @typedef {import('../../types').Dungeon} Config */
@@ -898,23 +902,23 @@ describe('filenames', () => {
 
 
 	test('JSON: writes', async () => {
-		const path = 'test.json';
+		const filePath = nodePath.join(TMP_DIR, `dm-utils-stream-${process.pid}.json`);
 		const data = [{ a: 1, b: 2 }, { a: 3, b: 4 }];
-		const streamed = await streamJSON(path, data);
-		const content = fs.readFileSync(path, 'utf8');
+		const streamed = await streamJSON(filePath, data);
+		const content = fs.readFileSync(filePath, 'utf8');
 		const lines = content.trim().split('\n').map(line => JSON.parse(line));
 		expect(lines).toEqual(data);
-		fs.unlinkSync(path);
+		fs.unlinkSync(filePath);
 	});
 
 	test('CSV: writes', async () => {
-		const path = 'test.csv';
+		const filePath = nodePath.join(TMP_DIR, `dm-utils-stream-${process.pid}.csv`);
 		const data = [{ a: 1, b: 2 }, { a: 3, b: 4 }];
-		const streamed = await streamCSV(path, data);
-		const content = fs.readFileSync(path, 'utf8');
+		const streamed = await streamCSV(filePath, data);
+		const content = fs.readFileSync(filePath, 'utf8');
 		const lines = content.trim().split('\n');
 		expect(lines.length).toBe(3); // Including header
-		fs.unlinkSync(path);
+		fs.unlinkSync(filePath);
 	});
 
 

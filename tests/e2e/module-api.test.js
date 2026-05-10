@@ -10,6 +10,7 @@ import simplest from '../../dungeons/technical/simplest.js';
 import foobar from '../../dungeons/technical/foobar.js';
 
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 const timeout = 60000;
@@ -17,18 +18,14 @@ const timeout = 60000;
 // Date pinning for determinism — without these, FIXED_NOW anchors to today
 // and shifts across runs. Required for byte-equal repeatability.
 const PINNED_DATES = { datasetStart: '2025-09-01T00:00:00Z', datasetEnd: '2025-10-01T00:00:00Z' };
+// Isolated per-file tmp dir avoids races with parallel e2e files that wipe ./data.
+const DATA_DIR = path.join(os.tmpdir(), 'dungeon-master-module-api');
 
 function clearData() {
-	const wipe = (dir) => {
-		if (!fs.existsSync(dir)) return;
-		for (const name of fs.readdirSync(dir)) {
-			if (name === '.gitkeep') continue;
-			try { fs.rmSync(path.join(dir, name), { recursive: true, force: true }); }
-			catch (_) { /* best effort */ }
-		}
-	};
-	wipe('./data');
-	wipe('./tmp');
+	try {
+		fs.rmSync(DATA_DIR, { recursive: true, force: true });
+		fs.mkdirSync(DATA_DIR, { recursive: true });
+	} catch (_) { /* best effort */ }
 }
 
 describe.sequential('module', () => {
@@ -97,7 +94,7 @@ describe.sequential('module', () => {
 
 		const results = await generate({ ...PINNED_DATES,
 			name: customName,
-			writeToDisk: true,
+			writeToDisk: DATA_DIR,
 			numEvents: 100,
 			numUsers: 10,
 			seed: "explicit-name-test",
@@ -143,7 +140,7 @@ describe.sequential('module', () => {
 
 		const results = await generate({ ...PINNED_DATES,
 			name: "",
-			writeToDisk: true,
+			writeToDisk: DATA_DIR,
 			numEvents: 50,
 			numUsers: 5,
 			seed: "empty-name-test",

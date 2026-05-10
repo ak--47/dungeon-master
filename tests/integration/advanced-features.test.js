@@ -296,7 +296,7 @@ describe('Feature 4: Data Quality', () => {
 			numUsers: 30, numEvents: 1000, numDays: 30, seed: 'dq-dupes',
 			datasetStart: '2024-01-01T00:00:00Z', datasetEnd: '2024-01-31T00:00:00Z',
 			events: [{ event: 'action' }],
-			dataQuality: { duplicateRate: 0.1 }
+			dataQuality: { duplicateRate: .9 }
 		});
 		const events = Array.from(result.eventData);
 		expect(events.length).toBeGreaterThan(baseCount);

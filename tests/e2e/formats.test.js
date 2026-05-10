@@ -2,6 +2,7 @@
 /* eslint-disable no-undef */
 import generate from '../../index.js';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 const timeout = 60000;
@@ -9,18 +10,14 @@ const timeout = 60000;
 // Date pinning for determinism — without these, FIXED_NOW anchors to today
 // and shifts across runs. Required for byte-equal repeatability.
 const PINNED_DATES = { datasetStart: '2025-09-01T00:00:00Z', datasetEnd: '2025-10-01T00:00:00Z' };
+// Isolated per-file tmp dir avoids races with parallel e2e files that wipe ./data.
+const DATA_DIR = path.join(os.tmpdir(), 'dungeon-master-formats');
 
 function clearData() {
-	const wipe = (dir) => {
-		if (!fs.existsSync(dir)) return;
-		for (const name of fs.readdirSync(dir)) {
-			if (name === '.gitkeep') continue;
-			try { fs.rmSync(path.join(dir, name), { recursive: true, force: true }); }
-			catch (_) { /* best effort */ }
-		}
-	};
-	wipe('./data');
-	wipe('./tmp');
+	try {
+		fs.rmSync(DATA_DIR, { recursive: true, force: true });
+		fs.mkdirSync(DATA_DIR, { recursive: true });
+	} catch (_) { /* best effort */ }
 }
 
 describe.sequential('output formats + validation', () => {
@@ -30,7 +27,7 @@ describe.sequential('output formats + validation', () => {
 
 	test('parquet format support', async () => {
 		const results = await generate({ ...PINNED_DATES,
-			writeToDisk: true, format: 'parquet', verbose: false,
+			writeToDisk: DATA_DIR, format: 'parquet', verbose: false,
 			numEvents: 100, numUsers: 10, numDays: 5, seed: 'parquet-test',
 			events: [{ event: 'test_event', weight: 10, properties: { value: [1, 2, 3, 4, 5] } }]
 		});
@@ -47,7 +44,7 @@ describe.sequential('output formats + validation', () => {
 
 	test('gzip compression for CSV', async () => {
 		const results = await generate({ ...PINNED_DATES,
-			writeToDisk: true, format: 'csv', gzip: true, verbose: false,
+			writeToDisk: DATA_DIR, format: 'csv', gzip: true, verbose: false,
 			numEvents: 100, numUsers: 10, numDays: 5, seed: 'gzip-csv-test',
 			events: [{ event: 'test_event', weight: 10, properties: { value: [1, 2, 3, 4, 5] } }]
 		});
@@ -64,7 +61,7 @@ describe.sequential('output formats + validation', () => {
 
 	test('gzip compression for JSON', async () => {
 		const results = await generate({ ...PINNED_DATES,
-			writeToDisk: true, format: 'json', gzip: true, verbose: false,
+			writeToDisk: DATA_DIR, format: 'json', gzip: true, verbose: false,
 			numEvents: 100, numUsers: 10, numDays: 5, seed: 'gzip-json-test',
 			events: [{ event: 'test_event', weight: 10, properties: { value: [1, 2, 3, 4, 5] } }]
 		});
@@ -81,7 +78,7 @@ describe.sequential('output formats + validation', () => {
 
 	test('gzip compression for parquet', async () => {
 		const results = await generate({ ...PINNED_DATES,
-			writeToDisk: true, format: 'parquet', gzip: true, verbose: false,
+			writeToDisk: DATA_DIR, format: 'parquet', gzip: true, verbose: false,
 			numEvents: 100, numUsers: 10, numDays: 5, seed: 'gzip-parquet-test',
 			events: [{ event: 'test_event', weight: 10, properties: { value: [1, 2, 3, 4, 5] } }]
 		});

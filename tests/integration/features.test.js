@@ -937,12 +937,13 @@ describe('choose() edge cases', () => {
 describe('streaming output', () => {
 	test('streamJSON produces valid JSONL', async () => {
 		const fs = await import('fs');
+		const os = await import('os');
 		const path = await import('path');
 		const data = [
 			{ event: 'test', time: '2024-01-15T00:00:00.000Z', amount: 42 },
 			{ event: 'test2', time: '2024-01-16T00:00:00.000Z', amount: 99 }
 		];
-		const filePath = path.default.resolve('./data/test-stream.json');
+		const filePath = path.default.join(os.default.tmpdir(), `dm-features-stream-${process.pid}.json`);
 
 		await u.streamJSON(filePath, data);
 
@@ -961,12 +962,13 @@ describe('streaming output', () => {
 
 	test('streamCSV produces valid CSV with headers', async () => {
 		const fs = await import('fs');
+		const os = await import('os');
 		const path = await import('path');
 		const data = [
 			{ event: 'test', time: '2024-01-15T00:00:00.000Z', amount: 42 },
 			{ event: 'test2', time: '2024-01-16T00:00:00.000Z', amount: 99 }
 		];
-		const filePath = path.default.resolve('./data/test-stream.csv');
+		const filePath = path.default.join(os.default.tmpdir(), `dm-features-stream-${process.pid}.csv`);
 
 		await u.streamCSV(filePath, data);
 

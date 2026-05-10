@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { createRequire } from 'module';
 import main from '../../index.js';
@@ -12,18 +13,14 @@ const Job = require('mixpanel-import/components/job.js');
 const GCS_TEST_PREFIX = 'gs://dungeon_master_4/tests';
 const gcs = new Storage();
 const timeout = 120_000;
+// Isolated per-file tmp dir avoids races with parallel e2e files that wipe ./data.
+const DATA_DIR = path.join(os.tmpdir(), 'dungeon-master-file-tracking');
 
 function clearData() {
-	const wipe = (dir) => {
-		if (!fs.existsSync(dir)) return;
-		for (const name of fs.readdirSync(dir)) {
-			try { fs.rmSync(path.join(dir, name), { recursive: true, force: true }); }
-			catch (_) { /* best effort */ }
-		}
-	};
-	if (!fs.existsSync('./data')) fs.mkdirSync('./data', { recursive: true });
-	wipe('./data');
-	wipe('./tmp');
+	try {
+		fs.rmSync(DATA_DIR, { recursive: true, force: true });
+		fs.mkdirSync(DATA_DIR, { recursive: true });
+	} catch (_) { /* best effort */ }
 }
 
 async function clearGCSPrefix(prefix) {
@@ -57,7 +54,7 @@ describe.sequential('file tracking', () => {
 			numUsers: 50,
 			numEvents: 500,
 			batchSize: 100,
-			writeToDisk: true,
+			writeToDisk: DATA_DIR,
 			format: 'json',
 			verbose: false,
 			seed: 'track-local-batch',
@@ -82,7 +79,7 @@ describe.sequential('file tracking', () => {
 		const results = await main({
 			numUsers: 10,
 			numEvents: 50,
-			writeToDisk: true,
+			writeToDisk: DATA_DIR,
 			format: 'json',
 			verbose: false,
 			seed: 'track-no-batch',
@@ -106,7 +103,7 @@ describe.sequential('file tracking', () => {
 		const results = await main({
 			numUsers: 10,
 			numEvents: 50,
-			writeToDisk: true,
+			writeToDisk: DATA_DIR,
 			format: 'json',
 			verbose: false,
 			seed: 'cleanup-local',

@@ -10,9 +10,7 @@ export default defineConfig({
     
     // Test file patterns
     include: ['tests/**/*.test.js'],
-    // sanity hangs after Module Integration block (dynamic-import file-path tests
-    // hit the same isStrictEvent mutation bug). Run in isolation: `npx vitest run tests/e2e/sanity.test.js`
-    exclude: ['tests/e2e/sanity.test.js', 'node_modules/**'],
+    exclude: ['node_modules/**'],
     
     // Coverage settings
     coverage: {
