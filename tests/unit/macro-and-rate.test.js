@@ -11,11 +11,12 @@
 import { describe, test, expect } from 'vitest';
 import { validateDungeonConfig } from '../../lib/core/config-validator.js';
 import { resolveMacro, MACRO_PRESETS, MACRO_PRESET_NAMES } from '../../lib/templates/macro-presets.js';
-import { initChance } from '../../lib/utils/utils.js';
+import { initChance, setDatasetNow, setDatasetBegin } from '../../lib/utils/utils.js';
 
 const FIXED_NOW = 1706832000;
-global.FIXED_NOW = FIXED_NOW;
-global.FIXED_BEGIN = FIXED_NOW - 90 * 86400;
+const FIXED_BEGIN = FIXED_NOW - 90 * 86400;
+setDatasetNow(FIXED_NOW);
+setDatasetBegin(FIXED_BEGIN);
 
 describe('avgEventsPerUserPerDay primitive', () => {
 	test('numEvents-only path derives the rate from numEvents/numUsers/numDays', () => {

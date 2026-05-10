@@ -1,20 +1,23 @@
 #!/usr/bin/env node
 /**
- * Engine validation sweep harness.
+ * Engine validation sweep harness — DIRECT-RUN, NOT a vitest test.
  *
- * Runs `dungeons/technical/simplest.js` across the ~244-combo (post-dedup ~220-235)
- * cross-product matrix of macro/numDays/born/rate/activeDays. Per combo, computes
- * the 6 strict-bar conditions and emits a JSON report.
+ * Runs `dungeons/technical/simplest.js` across the 194-combo cross-product
+ * matrix of macro/numDays/born/rate/activeDays. Per combo, computes the 6
+ * strict-bar conditions and emits a JSON report. The vitest gate at
+ * `tests/e2e/engine-shape-full-sweep.test.js` wraps this script.
  *
  * Concurrency model: child-process workers via `child_process.fork` (default
- * --workers 4). `generate()` mutates `global.FIXED_NOW` + `global.FIXED_BEGIN` so
- * in-process parallelism is unsafe.
+ * --workers 4). `generate()` mutates module-scoped `DATASET_NOW` + `DATASET_BEGIN`
+ * in `lib/utils/utils.js` (via `setDatasetNow` / `setDatasetBegin`) so in-process
+ * parallelism is unsafe — concurrent calls clobber each other's dataset window.
+ * See `plans/globals/kill-globals.md` for the LATER plan to refactor this.
  *
  * Usage:
- *   node scripts/sweep-engine.mjs                          # full sweep, 4 workers
- *   node scripts/sweep-engine.mjs --tier short --workers 1 # short tier, sequential
- *   node scripts/sweep-engine.mjs --matrix-only            # print combos and exit
- *   node scripts/sweep-engine.mjs --out /tmp/result.json   # custom output
+ *   node tests/engine/sweep-engine.mjs                          # full sweep, 4 workers
+ *   node tests/engine/sweep-engine.mjs --tier short --workers 1 # short tier, sequential
+ *   node tests/engine/sweep-engine.mjs --matrix-only            # print combos and exit
+ *   node tests/engine/sweep-engine.mjs --out tmp/result.json    # custom output
  *
  * Exit code: 0 if all combos PASS, otherwise number of failures.
  */
@@ -50,7 +53,7 @@ for (let i = 0; i < args.length; i++) {
 const matrixOnly = flags.get('matrix-only') === true;
 const tier = flags.get('tier') || 'all';
 const workers = Math.max(1, Number(flags.get('workers') || 4));
-const outPath = flags.get('out') || `research/engine-sweep-${dayjs().format('YYYY-MM-DDTHH-mm-ss')}.json`;
+const outPath = flags.get('out') || `tmp/engine-sweep-${dayjs().format('YYYY-MM-DDTHH-mm-ss')}.json`;
 const isWorker = flags.get('worker') === true;
 const numUsersOverride = Number(flags.get('users') || 2000);
 const verbose = flags.get('verbose') === true;
@@ -182,9 +185,9 @@ function tierOf(numDays) {
 
 // ─── Combo runner (in-process, used by worker) ──────────────────────
 async function runCombo(combo) {
-	const generate = (await import('../index.js')).default;
+	const generate = (await import('../../index.js')).default;
 
-	const dungeonPath = path.resolve(__dirname, '..', 'dungeons/technical/simplest.js');
+	const dungeonPath = path.resolve(__dirname, '..', '..', 'dungeons/technical/simplest.js');
 	const baseConfig = (await import(dungeonPath)).default;
 
 	// Pin window to most-recent past Wednesday-EOD-UTC for full calendar-day

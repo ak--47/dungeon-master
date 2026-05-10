@@ -37,12 +37,18 @@ import { validateDungeonConfig } from '../../lib/core/config-validator.js';
 // Import utilities directly
 import { createHookArray } from '../../lib/core/storage.js';
 import { inferFunnels } from '../../lib/core/config-validator.js';
-import { validEvent, initChance } from '../../lib/utils/utils.js';
+import { validEvent, initChance, setDatasetNow, setDatasetBegin } from '../../lib/utils/utils.js';
 import { createContext } from '../../lib/core/context.js';
 import { validateDungeonConfig } from '../../lib/core/config-validator.js';
 
 // Alias for compatibility
 const hookArray = createHookArray;
+
+// Pinned dataset window for deterministic testing — same value as beforeEach
+// passes to setDatasetNow / setDatasetBegin. Kept as module-level const so
+// individual test bodies can compute relative times against it.
+const FIXED_NOW = dayjs('2024-02-02').unix();
+const FIXED_BEGIN = FIXED_NOW - 90 * 86400;
 
 /**
  * Creates a test context object for generator function testing
@@ -122,8 +128,8 @@ beforeEach(async () => {
 	global.DEFAULTS = DEFAULTS;
 	global.STORAGE = STORAGE;
 	global.CONFIG = CONFIG;
-	const FIXED_NOW = dayjs('2024-02-02').unix();
-	global.FIXED_NOW = FIXED_NOW;
+	setDatasetNow(FIXED_NOW);
+	setDatasetBegin(FIXED_BEGIN);
 
 });
 
@@ -192,7 +198,7 @@ describe.sequential('generators', () => {
 			},
 		};
 		const context = createTestContext();
-		const result = await makeEvent(context, "known_id", dayjs.unix(global.FIXED_NOW).subtract(30, 'd').unix(), eventConfig, ["anon_id"]);
+		const result = await makeEvent(context, "known_id", dayjs.unix(FIXED_NOW).subtract(30, 'd').unix(), eventConfig, ["anon_id"]);
 		expect(result).toHaveProperty('event', 'test_event');
 		expect(result).toHaveProperty('device_id', 'anon_id');
 		expect(result).not.toHaveProperty('session_id');
@@ -209,7 +215,7 @@ describe.sequential('generators', () => {
 	test('makeEvent: opt params', async () => {
 		const eventConfig = { event: "test_event", properties: {} };
 		const context = createTestContext();
-		const result = await makeEvent(context, "known_id", dayjs.unix(global.FIXED_NOW).subtract(30, 'd').unix(), eventConfig);
+		const result = await makeEvent(context, "known_id", dayjs.unix(FIXED_NOW).subtract(30, 'd').unix(), eventConfig);
 		expect(result).toHaveProperty('event', 'test_event');
 		expect(result).toHaveProperty('user_id', 'known_id');
 		// expect(result).toHaveProperty('source', 'dm4');
@@ -226,7 +232,7 @@ describe.sequential('generators', () => {
 			},
 		};
 		const context = createTestContext();
-		const result = await makeEvent(context, "known_id", dayjs.unix(global.FIXED_NOW).subtract(30, 'd').unix(), eventConfig, ["anon_id"]);
+		const result = await makeEvent(context, "known_id", dayjs.unix(FIXED_NOW).subtract(30, 'd').unix(), eventConfig, ["anon_id"]);
 		expect(result.prop1 === "value1" || result.prop1 === "value2").toBeTruthy();
 		expect(result.prop2 === "value3" || result.prop2 === "value4").toBeTruthy();
 	});
@@ -246,7 +252,7 @@ describe.sequential('generators', () => {
 		const scd = { "scd_example": [{ distinct_id: "user1", insertTime: dayjs().toISOString(), startTime: dayjs().toISOString() }] };
 
 		const context = createTestContext();
-		const [result, converted] = await makeFunnel(context, funnelConfig, user, dayjs.unix(global.FIXED_NOW).subtract(30, 'd').unix(), profile, scd);
+		const [result, converted] = await makeFunnel(context, funnelConfig, user, dayjs.unix(FIXED_NOW).subtract(30, 'd').unix(), profile, scd);
 		expect(result.length).toBe(2);
 		expect(converted).toBe(true);
 		expect(result.every(e => validEvent(e))).toBeTruthy();
@@ -263,7 +269,7 @@ describe.sequential('generators', () => {
 		const scd = { "scd_example": [{ distinct_id: "user1", insertTime: dayjs().toISOString(), startTime: dayjs().toISOString() }] };
 
 		const context = createTestContext();
-		const [result, converted] = await makeFunnel(context, funnelConfig, user, dayjs.unix(global.FIXED_NOW).subtract(30, 'd').unix(), profile, scd);
+		const [result, converted] = await makeFunnel(context, funnelConfig, user, dayjs.unix(FIXED_NOW).subtract(30, 'd').unix(), profile, scd);
 		expect(result.length).toBeGreaterThanOrEqual(1);
 		expect(result.length).toBeLessThanOrEqual(3);
 		expect(result.every(e => validEvent(e))).toBeTruthy();
@@ -280,7 +286,7 @@ describe.sequential('generators', () => {
 		const scd = { "scd_example": [{ distinct_id: "user1", insertTime: dayjs().toISOString(), startTime: dayjs().toISOString() }] };
 
 		const context = createTestContext();
-		const [result, converted] = await makeFunnel(context, funnelConfig, user, dayjs.unix(global.FIXED_NOW).subtract(30, 'd').unix(), profile, scd);
+		const [result, converted] = await makeFunnel(context, funnelConfig, user, dayjs.unix(FIXED_NOW).subtract(30, 'd').unix(), profile, scd);
 		expect(result.length).toBe(3);
 		expect(converted).toBe(true);
 		expect(result.every(e => validEvent(e))).toBeTruthy();
@@ -299,12 +305,12 @@ describe.sequential('generators', () => {
 				{ name: 'Control', conversionMultiplier: 1.0, ttcMultiplier: 1.0, weight: 1 },
 			], startUnix: null },
 		};
-		const user = { distinct_id: "user1", name: "test", created: dayjs.unix(global.FIXED_NOW).subtract(10, 'days').toISOString(), anonymousIds: [] };
-		const profile = { created: dayjs.unix(global.FIXED_NOW).subtract(10, 'days').toISOString(), distinct_id: "user1" };
+		const user = { distinct_id: "user1", name: "test", created: dayjs.unix(FIXED_NOW).subtract(10, 'days').toISOString(), anonymousIds: [] };
+		const profile = { created: dayjs.unix(FIXED_NOW).subtract(10, 'days').toISOString(), distinct_id: "user1" };
 		const scd = {};
 
 		const context = createTestContext();
-		const [result, converted] = await makeFunnel(context, funnelConfig, user, dayjs.unix(global.FIXED_NOW).subtract(5, 'd').unix(), profile, scd);
+		const [result, converted] = await makeFunnel(context, funnelConfig, user, dayjs.unix(FIXED_NOW).subtract(5, 'd').unix(), profile, scd);
 
 		expect(result.length).toBeGreaterThanOrEqual(2);
 		expect(result[0].event).toBe('$experiment_started');
@@ -329,12 +335,12 @@ describe.sequential('generators', () => {
 				campaign: 'test-campaign'
 			}
 		};
-		const user = { distinct_id: "user1", name: "test", created: dayjs.unix(global.FIXED_NOW).subtract(10, 'days').toISOString(), anonymousIds: [] };
-		const profile = { created: dayjs.unix(global.FIXED_NOW).subtract(10, 'days').toISOString(), distinct_id: "user1" };
+		const user = { distinct_id: "user1", name: "test", created: dayjs.unix(FIXED_NOW).subtract(10, 'days').toISOString(), anonymousIds: [] };
+		const profile = { created: dayjs.unix(FIXED_NOW).subtract(10, 'days').toISOString(), distinct_id: "user1" };
 		const scd = {};
 
 		const context = createTestContext();
-		const [result, converted] = await makeFunnel(context, funnelConfig, user, dayjs.unix(global.FIXED_NOW).subtract(5, 'd').unix(), profile, scd);
+		const [result, converted] = await makeFunnel(context, funnelConfig, user, dayjs.unix(FIXED_NOW).subtract(5, 'd').unix(), profile, scd);
 
 		expect(result[0]).not.toHaveProperty('source');
 		expect(result[0]).not.toHaveProperty('campaign');
@@ -361,10 +367,10 @@ describe.sequential('generators', () => {
 			const user = {
 				distinct_id: `user${i}`,
 				name: "test",
-				created: dayjs.unix(global.FIXED_NOW).subtract(10, 'days').toISOString(),
+				created: dayjs.unix(FIXED_NOW).subtract(10, 'days').toISOString(),
 				anonymousIds: [],
 			};
-			const [result, converted] = await makeFunnel(context, funnelConfig, user, dayjs.unix(global.FIXED_NOW).subtract(5, 'd').unix());
+			const [result, converted] = await makeFunnel(context, funnelConfig, user, dayjs.unix(FIXED_NOW).subtract(5, 'd').unix());
 			const variant = result[0]['Variant name'];
 			variantCounts[variant]++;
 		}
@@ -376,9 +382,9 @@ describe.sequential('generators', () => {
 		expect(variantCounts['Variant A'] + variantCounts['Variant B'] + variantCounts['Control']).toBe(90);
 
 		// Same user should always get same variant
-		const user = { distinct_id: 'user0', name: 'test', created: dayjs.unix(global.FIXED_NOW).subtract(10, 'days').toISOString(), anonymousIds: [] };
-		const [r1] = await makeFunnel(context, funnelConfig, user, dayjs.unix(global.FIXED_NOW).subtract(5, 'd').unix());
-		const [r2] = await makeFunnel(context, funnelConfig, user, dayjs.unix(global.FIXED_NOW).subtract(3, 'd').unix());
+		const user = { distinct_id: 'user0', name: 'test', created: dayjs.unix(FIXED_NOW).subtract(10, 'days').toISOString(), anonymousIds: [] };
+		const [r1] = await makeFunnel(context, funnelConfig, user, dayjs.unix(FIXED_NOW).subtract(5, 'd').unix());
+		const [r2] = await makeFunnel(context, funnelConfig, user, dayjs.unix(FIXED_NOW).subtract(3, 'd').unix());
 		expect(r1[0]['Variant name']).toBe(r2[0]['Variant name']);
 	});
 

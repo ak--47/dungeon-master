@@ -80,7 +80,7 @@ npm run dungeon:schema        # Extract simplified schema from dungeon
 
 ### Utility Scripts
 
-The `scripts/` directory is shipped with the npm package and can be used directly:
+The `scripts/` directory is shipped with the npm package — runnable utilities for dungeon authoring + verification:
 
 ```bash
 node scripts/run-dungeon.mjs <path>              # Run a single dungeon
@@ -90,6 +90,21 @@ node scripts/extract-dungeon-schema.mjs <path>    # Extract dungeon schema
 node scripts/run-many.mjs <dir> [--parallel N]    # Run multiple dungeons concurrently
 node scripts/verify-runner.mjs <path> [prefix]    # Run dungeon at test scale (1K users, 100K events)
 ```
+
+### Engine Tests (direct-run, NOT vitest)
+
+`tests/engine/` houses direct-run regression tests at scale. They are NOT vitest-compatible — invoke with `node` directly. Used for catching engine regressions across dungeon configurations + ad-hoc chart inspection. Outputs land in `./tmp/` (gitignored).
+
+```bash
+node tests/engine/sweep-engine.mjs [--workers 4] [--tier short|normal|long|all]
+                                                  # 194-combo strict-bar sweep on simplest.js
+node tests/engine/sweep-bias.mjs                  # Targeted bornRecentBias × born% exploration
+node tests/engine/test-bunchiness.mjs <path>      # Chart inspector (last-14d / first-14d / spike)
+node tests/engine/test-nosedive.mjs <path>        # End-of-window nosedive check
+node tests/engine/smoke-test-all.mjs [--dir]      # Tiny-scale generation across all dungeons (PASS/FAIL)
+```
+
+Engine tests are NOT shipped in the npm package and NOT run as part of `npm test`. The vitest gate at [tests/e2e/engine-shape-full-sweep.test.js](tests/e2e/engine-shape-full-sweep.test.js) wraps `sweep-engine.mjs` and runs only when `RUN_FULL_SWEEP=1` is set.
 
 ## Tests
 
@@ -493,9 +508,9 @@ A no-hook dungeon "passes" the v1.5 strict bar when, for the resolved combo's ma
 5. `futureEvents == 0` — no events past `FIXED_NOW`
 6. `signupFloor`: every day in last 7 has `signup_count >= 0.05 * mean(daily signups across window)`. Bypassed when `mean < 5/day` or `macro === 'decline'` (variance noise dominates low-signup configs).
 
-The harness (`scripts/sweep-engine.mjs`) pins `datasetEnd` to most-recent past Wednesday-EOD-UTC for full calendar-day determinism. Two back-to-back runs produce zero metric drift.
+The harness (`tests/engine/sweep-engine.mjs`) pins `datasetEnd` to most-recent past Wednesday-EOD-UTC for full calendar-day determinism. Two back-to-back runs produce zero metric drift.
 
-Per-macro bars (defined in `scripts/sweep-engine.mjs` `STRICT_BARS` and mirrored in `tests/unit/engine-shape-canary.test.js`):
+Per-macro bars (defined in `tests/engine/sweep-engine.mjs` `STRICT_BARS` and mirrored in `tests/unit/engine-shape-canary.test.js`):
 
 | Macro   | tail band     | spike cap | l7c min |
 |---------|---------------|-----------|---------|

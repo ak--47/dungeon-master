@@ -1,8 +1,8 @@
 //@ts-nocheck
 /**
  * Engine-shape full sweep — gated e2e regression gate. Wraps
- * `scripts/sweep-engine.mjs` (~5 min wall with --workers 4) and asserts every
- * combo in the 194-combo matrix passes its per-macro strict bar.
+ * `tests/engine/sweep-engine.mjs` (~5 min wall with --workers 4) and asserts
+ * every combo in the 194-combo matrix passes its per-macro strict bar.
  *
  * SKIP by default. Opt in via env var:
  *
@@ -15,7 +15,6 @@ import { execFileSync } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
-import os from 'os';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,8 +25,10 @@ const describer = RUN ? describe : describe.skip;
 describer('engine-shape full sweep (gated by RUN_FULL_SWEEP=1)', () => {
 	test('all combos in the matrix pass the per-macro strict bar', () => {
 		const repoRoot = path.resolve(__dirname, '..', '..');
-		const sweepScript = path.join(repoRoot, 'scripts', 'sweep-engine.mjs');
-		const outFile = path.join(os.tmpdir(), `engine-sweep-e2e-${Date.now()}.json`);
+		const sweepScript = path.join(repoRoot, 'tests', 'engine', 'sweep-engine.mjs');
+		// Project-local ./tmp/ — gitignored except .gitkeep; persists between runs
+		// so output can be inspected after the test finishes.
+		const outFile = path.join(repoRoot, 'tmp', `engine-sweep-e2e-${Date.now()}.json`);
 		try {
 			execFileSync(
 				process.execPath,

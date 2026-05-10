@@ -58,7 +58,9 @@ import {
 	datesBetween,
 	weighChoices,
 	generateSessionId,
-	assignSessionIds
+	assignSessionIds,
+	setDatasetNow,
+	setDatasetBegin,
 } from '../../lib/utils/utils.js';
 
 import {
@@ -70,7 +72,7 @@ import main from '../../index.js';
 import { createHookArray } from '../../lib/core/storage.js';
 import { inferFunnels } from '../../lib/core/config-validator.js';
 import { createGenerator, generateBatch } from '../../lib/generators/text.js';
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, beforeAll } from 'vitest';
 
 //todo: test for funnel inference
 const hookArray = createHookArray;
@@ -1075,11 +1077,17 @@ describe('generation', () => {
 });
 
 
+// Hoisted to module scope so tests in `validation`, `enrichment`, `utilities`,
+// etc. can all reference the same anchor (legacy code relied on
+// `global.FIXED_NOW` for cross-describe visibility).
+const FIXED_NOW = 1672531200; // fixed point in time for testing
+const FIXED_BEGIN = FIXED_NOW - (60 * 60 * 24 * 30); // 30 days ago
+
 describe('validation', () => {
 
 	beforeAll(() => {
-		global.FIXED_NOW = 1672531200; // fixed point in time for testing
-		global.FIXED_BEGIN = global.FIXED_NOW - (60 * 60 * 24 * 30); // 30 days ago
+		setDatasetNow(FIXED_NOW);
+		setDatasetBegin(FIXED_BEGIN);
 	});
 
 	test('events: non arrays', () => {
@@ -1124,33 +1132,33 @@ describe('validation', () => {
 	});
 
 	test('time: between', () => {
-		const chosenTime = global.FIXED_NOW - (60 * 60 * 24 * 15); // 15 days ago
-		const earliestTime = global.FIXED_NOW - (60 * 60 * 24 * 30); // 30 days ago
-		const latestTime = global.FIXED_NOW;
+		const chosenTime = FIXED_NOW - (60 * 60 * 24 * 15); // 15 days ago
+		const earliestTime = FIXED_NOW - (60 * 60 * 24 * 30); // 30 days ago
+		const latestTime = FIXED_NOW;
 		expect(validTime(chosenTime, earliestTime, latestTime)).toBe(true);
 	});
 
 	test('time: outside earliest', () => {
-		const chosenTime = global.FIXED_NOW - (60 * 60 * 24 * 31); // 31 days ago
-		const earliestTime = global.FIXED_NOW - (60 * 60 * 24 * 30); // 30 days ago
-		const latestTime = global.FIXED_NOW;
+		const chosenTime = FIXED_NOW - (60 * 60 * 24 * 31); // 31 days ago
+		const earliestTime = FIXED_NOW - (60 * 60 * 24 * 30); // 30 days ago
+		const latestTime = FIXED_NOW;
 		expect(validTime(chosenTime, earliestTime, latestTime)).toBe(false);
 	});
 
 	test('time: outside latest', () => {
 		const chosenTime = -1;
-		const earliestTime = global.FIXED_NOW - (60 * 60 * 24 * 30); // 30 days ago
-		const latestTime = global.FIXED_NOW;
+		const earliestTime = FIXED_NOW - (60 * 60 * 24 * 30); // 30 days ago
+		const latestTime = FIXED_NOW;
 		expect(validTime(chosenTime, earliestTime, latestTime)).toBe(false);
 	});
 
 	test('time: inference in', () => {
-		const chosenTime = global.FIXED_NOW - (60 * 60 * 24 * 15); // 15 days ago
+		const chosenTime = FIXED_NOW - (60 * 60 * 24 * 15); // 15 days ago
 		expect(validTime(chosenTime)).toBe(true);
 	});
 
 	test('time: inference out', () => {
-		const chosenTime = global.FIXED_NOW - (60 * 60 * 24 * 31); // 31 days ago
+		const chosenTime = FIXED_NOW - (60 * 60 * 24 * 31); // 31 days ago
 		expect(validTime(chosenTime)).toBe(false);
 	});
 });
@@ -1235,7 +1243,7 @@ describe('utilities', () => {
 	test('date: future', () => {
 		const futureDate = date(10, false, 'YYYY-MM-DD')();
 		expect(dayjs(futureDate, 'YYYY-MM-DD').isValid()).toBeTruthy();
-		expect(dayjs(futureDate).isAfter(dayjs.unix(global.FIXED_NOW))).toBeTruthy();
+		expect(dayjs(futureDate).isAfter(dayjs.unix(FIXED_NOW))).toBeTruthy();
 	});
 
 	test('dates: pairs', () => {

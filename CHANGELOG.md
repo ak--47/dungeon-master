@@ -82,9 +82,52 @@ The "verify like Mixpanel does" half. Adds counting primitives behind `emulateBr
 - **HOOKS.md** — §2.4 touchpoint generation contract, §2.5 active-day distribution, §2.6–2.10 (sessions, retention, reentry, HPC, segment modes), §8 v1.5.0 verification recipes (8 patterns).
 - **Skill files** updated: `create-dungeon`, `write-hooks`, `verify-dungeon` with v1.5 considerations + new primitive table.
 
+### Engine validation + strict clamps (post-eval ship gate)
+
+Final 1.5.0 hardening pass — proves the engine produces clean, in-band charts across the param space and adds validator guards against the worst foot-guns. Methodology + sweep evidence: `plans/ENGINE-VALIDATION/FIX.md`.
+
+#### Engine
+
+- **`FUNNEL_DEAD_ZONE_CAP_SEC = 0`** (`lib/orchestrators/user-loop.js`). Earlier rounds reserved a 1-day "dead zone" before `FIXED_NOW` for funnel step-1 anchors to defend against a cursor-accumulation bug. Round 1 fixed the cursor accumulation directly, leaving the cap as defense-in-depth. The future-time guard at storage step 14 already drops any `time > FIXED_NOW`, so removing the cap is safe — funnels can now anchor right up to `FN`. Eliminates the last-day cliff for funnel-heavy dungeons. Verified across 194-combo sweep: `futureEvents == 0` everywhere.
+
+#### Validator strict clamps (`lib/core/config-validator.js`)
+
+Seven clamps with `console.warn` messages explaining what changed and why. All fire either unconditionally (sanity bounds) or only when the user explicitly overrides via top-level field OR `macro: { preset, ... }` object override (raw preset names exempt — preset values are designed to be safe).
+
+| # | Clamp | Trigger | Action |
+|---|-------|---------|--------|
+| 1 | `percentUsersBornInDataset` ∈ [0, 100] | Always | Clamp + warn |
+| 2 | Per-macro born cap (flat=12, steady=12, growth=30, viral=55, decline=5) | User-explicit `macro` AND user-explicit `percentUsersBornInDataset` | Clamp + warn |
+| 3 | `bornRecentBias` ∈ [-0.5, 0.5] | User-explicit (incl. macro-object override) | Clamp + warn |
+| 4 | Compound: `born > 60 && bias > 0.4` → bias=0.3 | User-explicit (either) | Clamp + warn |
+| 5 | `bornRecentBias` ∈ [-1, 1] (`Math.pow` guard) | Always | Clamp |
+| 6 | `avgEventsPerUserPerDay` > 50 → 50 | Always | Clamp + warn (recompute `numEvents`) |
+| 7 | `avgActiveDaysPerUser` > `numDays * 0.5` → `floor(numDays * 0.5)` | Always | Clamp + warn |
+
+Plus a warning-only check for `numDays < 14` (window may be pinned via `datasetStart`/`datasetEnd` upstream).
+
+#### Sweep harness (`scripts/sweep-engine.mjs`)
+
+Validates `dungeons/technical/simplest.js` (no-hook baseline) across a 194-combo cross-product matrix of macro × numDays × born × rate × activeDays. Per-macro strict bars match each preset's design intent (flat is stationary, viral is hockey-stick). Pinned to most-recent past Wednesday-EOD-UTC anchor for full calendar-day determinism — back-to-back runs produce zero metric drift. **194 / 194 PASS.**
+
+`tests/unit/engine-shape-canary.test.js` — 10-test ~5s canary (runs every commit) with fixed-date pinning (`datasetEnd = '2026-04-30T23:59:59Z'`).
+
+`tests/e2e/engine-shape-full-sweep.test.js` — gated by `RUN_FULL_SWEEP=1`, runs the full 194-combo matrix (~5.5 min). Pre-release acceptance gate.
+
+#### Hook compatibility
+
+Spot-checked 5 verticals post-fix: **56 / 56 hook checks PASS** (fitness 12, dating 13, ecommerce 10, sass 10, social 11). Hook magnitudes match prior eval within ±10%. Engine fix is hook-compatible at full fidelity. None of the 20 vertical dungeons set `percentUsersBornInDataset` / `bornRecentBias` / `avgEventsPerUserPerDay > 50` explicitly → validator clamps don't fire on existing dungeons.
+
+#### Documentation
+
+- **CLAUDE.md** — new "Tuning guidance — safe ranges and engine guarantees (v1.5)" section under "Trend Shape — Macro and Soup". Per-tunable safe-range table, 6 strict-bar conditions, per-macro bar values, known-engine-guarantees subsection.
+- **types.d.ts** — JSDoc `safe range` + clamp behavior on `numDays`, `percentUsersBornInDataset`, `bornRecentBias`, `avgEventsPerUserPerDay`, `avgActiveDaysPerUser`.
+- **`.claude/skills/create-dungeon/SKILL.md`** — macro × born% compatibility note + clamp warnings.
+- **`.claude/skills/write-hooks/SKILL.md`** — "intentional strict-bar deviation" pattern (decline + churn cohorts and viral-with-persona-lift can intentionally exceed bars).
+
 ### Test Suite
 
-Full suite: **46 files, 1100+ tests** (was 960 in 1.4). Highlights:
+Full suite: **46 files, 1100+ tests** (was 960 in 1.4). Engine-validation pass adds 12 (10 canary + 2 clamp + 4 macro-object form, minus updates) → **1122 passed / 2 skipped**. Highlights:
 
 | File | Tests | Coverage |
 |------|-------|----------|

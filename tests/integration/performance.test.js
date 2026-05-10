@@ -6,17 +6,22 @@
 import { test, expect, describe, beforeAll } from 'vitest';
 import { createContext } from '../../lib/core/context.js';
 import { makeEvent } from '../../lib/generators/events.js';
-import { initChance, TimeSoup, weighArray, pickRandom } from '../../lib/utils/utils.js';
+import { initChance, TimeSoup, weighArray, pickRandom, setDatasetNow, setDatasetBegin } from '../../lib/utils/utils.js';
 import { validateDungeonConfig } from '../../lib/core/config-validator.js';
 import dayjs from 'dayjs';
 
 /** @typedef {import('../../types').Context} Context */
 /** @typedef {import('../../types').Dungeon} Config */
 
+// Production FIXED_NOW (2024-02-02) for consistent testing.
+// Used as both module-scoped DATASET_NOW (for utils fallbacks) and explicit
+// arg to TimeSoup() / makeEvent() in this file's tests.
+const FIXED_NOW = 1706832000;
+const FIXED_BEGIN = FIXED_NOW - (30 * 24 * 60 * 60);
+
 beforeAll(() => {
-    // Use production FIXED_NOW (2024-02-02) for consistent testing
-    global.FIXED_NOW = 1706832000;
-    global.FIXED_BEGIN = global.FIXED_NOW - (30 * 24 * 60 * 60);
+    setDatasetNow(FIXED_NOW);
+    setDatasetBegin(FIXED_BEGIN);
     initChance('test-performance-seed');
 });
 
@@ -112,8 +117,8 @@ describe('Performance Optimizations', () => {
 
     describe('TimeSoup Performance Characteristics', () => {
         test('TimeSoup should return unix seconds', () => {
-            const earliestTime = global.FIXED_BEGIN;
-            const latestTime = global.FIXED_NOW;
+            const earliestTime = FIXED_BEGIN;
+            const latestTime = FIXED_NOW;
 
             const result = TimeSoup(earliestTime, latestTime);
 
@@ -123,8 +128,8 @@ describe('Performance Optimizations', () => {
         });
 
         test('TimeSoup should produce valid timestamps within range', () => {
-            const earliestTime = global.FIXED_BEGIN;
-            const latestTime = global.FIXED_NOW;
+            const earliestTime = FIXED_BEGIN;
+            const latestTime = FIXED_NOW;
 
             const result = TimeSoup(earliestTime, latestTime, 5, 2, 0);
 
@@ -222,7 +227,7 @@ describe('Performance Optimizations', () => {
             const event = await makeEvent(
                 context,
                 'test_user_123',
-                global.FIXED_BEGIN,
+                FIXED_BEGIN,
                 chosenEvent,
                 [],
                 {},
@@ -298,7 +303,7 @@ describe('Performance Optimizations', () => {
                 promises.push(makeEvent(
                     context,
                     `user_${i}`,
-                    global.FIXED_BEGIN,
+                    FIXED_BEGIN,
                     chosenEvent,
                     [],
                     {},

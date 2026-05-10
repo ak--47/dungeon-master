@@ -255,6 +255,53 @@ FIRST_TOUCH (step 0), LAST_TOUCH (last reached), or STEP N (specific index).
 Enable with `evaluateFunnel({ trackStepProperties: true })`, then pick with
 `resolveFunnelSegment(result, 'first' | 'last' | { step: N })`.
 
+### 2.11 Engine-validation guarantees (v1.5+)
+
+The v1.5 ship gate added a 194-combo cross-product sweep
+(`tests/engine/sweep-engine.mjs`) that proves the **no-hook** baseline
+(`dungeons/technical/simplest.js`) satisfies a per-macro strict bar across
+the supported param space. Same 6 conditions enumerated in
+[CLAUDE.md "Tuning guidance"](CLAUDE.md#tuning-guidance--safe-ranges-and-engine-guarantees-v15).
+Validator strict-clamps prevent the worst pathological combos (e.g.,
+`percentUsersBornInDataset: 100` + `bornRecentBias: 0.6`) at config time.
+
+**What this means for hook authors:**
+
+1. **Engine gives you a clean canvas.** Without hooks, the per-day distribution
+   stays in-band across all 5 macro presets (flat / steady / growth / viral /
+   decline) at any reasonable `numDays` / `numUsers` / `rate` / `activeDays`
+   combo. You don't have to defend against engine drift — the canary at
+   `tests/unit/engine-shape-canary.test.js` runs every commit, the full sweep
+   gate at `tests/e2e/engine-shape-full-sweep.test.js` runs pre-release.
+
+2. **Hooks own their shape — guarantees stop applying.** The strict bar is
+   measured on no-hook output. Engineered hook patterns CAN and SHOULD
+   intentionally bend the bar:
+   - **Decline + churn cohort** (engagementDecay or `everything`-hook event-drop)
+     produces tail_ratio < 0.4 — well below the decline bar's 0.4 floor.
+     Sunset-story design intent.
+   - **Viral hooks with persona-driven late-cohort lift** can push the
+     right-edge spike above the viral preset's 7.0 cap. Hockey-stick stories
+     are louder than the engine baseline.
+   - **World-event spike** (e.g., a launch-day burst of 5x normal volume)
+     creates a single-day right-edge spike above the spike cap.
+   Document intentional deviations in the dungeon's overview JSDoc + the
+   hook's pattern documentation block.
+
+3. **Validator clamps fire only when you pass user-explicit values.** Macro
+   preset values (e.g., `viral` = bias=0.6 + born=55%) are exempt — clamp
+   targets dungeons that override `percentUsersBornInDataset`,
+   `bornRecentBias`, `avgEventsPerUserPerDay`, `avgActiveDaysPerUser` outside
+   safe bounds. If your dungeon explicitly sets these and you see a
+   `⚠️ ... clamped to ...` warning on first run, the validator just rescued
+   you from a broken-looking chart. Either accept the clamped value or fix
+   the config (the warning explains which).
+
+4. **`futureEvents == 0` is unconditional.** The future-time guard at storage
+   step 14 drops any event with `time > FIXED_NOW`. Hooks can clone events
+   with arbitrary timestamps without polluting the dataset. Verified across
+   the 194-combo matrix; this guarantee survives every hook pattern.
+
 ---
 
 ## 3. Core Principles

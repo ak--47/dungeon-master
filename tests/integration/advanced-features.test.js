@@ -7,11 +7,12 @@
 import { describe, test, expect } from 'vitest';
 import DUNGEON_MASTER from '../../index.js';
 import { validateDungeonConfig } from '../../lib/core/config-validator.js';
-import { initChance } from '../../lib/utils/utils.js';
+import { initChance, setDatasetNow, setDatasetBegin } from '../../lib/utils/utils.js';
 
 const FIXED_NOW = 1706832000; // 2024-02-02
-global.FIXED_NOW = FIXED_NOW;
-global.FIXED_BEGIN = FIXED_NOW - 90 * 86400;
+const FIXED_BEGIN = FIXED_NOW - 90 * 86400;
+setDatasetNow(FIXED_NOW);
+setDatasetBegin(FIXED_BEGIN);
 
 // ── Feature 1: Personas ──
 describe('Feature 1: Personas', () => {
@@ -119,7 +120,7 @@ describe('Feature 1: Personas', () => {
 describe('Feature 2: World Events', () => {
 	test('validates and resolves world events', () => {
 		initChance('world-validate');
-		global.FIXED_BEGIN = FIXED_NOW - 90 * 86400;
+		setDatasetBegin(FIXED_NOW - 90 * 86400);
 		const config = validateDungeonConfig({
 			numUsers: 10, numEvents: 100, numDays: 90, seed: 'world-validate',
 			worldEvents: [

@@ -1,31 +1,51 @@
-#ignore everything except
+# ── OS / editor noise ──────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+vscode-profile-*
+
+# ── Secrets ────────────────────────────────────────────────────────
+.env
+env.yml
+
+# ── Dependencies ───────────────────────────────────────────────────
 node_modules
-examples/*
+
+# ── Generated data + logs ──────────────────────────────────────────
 data/*
 !data/.gitkeep
-.DS_Store
-.env
-customers
-tmp/*
-!tmp/.gitkeep
-dungeons/customers/*
-!dungeons/customers/.gitkeep
+log.json
+*.log
+*.bak
+
+# ── Test coverage + temp scratch ───────────────────────────────────
 tests/coverage/*
 !tests/coverage/.gitkeep
-env.yml
-dungeons/customers/*.js
-!dungeons/customers/.gitkeep
-log.json
-vscode-profile-*
+tmp/*
+!tmp/.gitkeep
 .dungeon-tmp/
-PHASE1-IMPROVEMENTS.md
-dungeons/*ai-dungeon*
-ignore*
 *scratch*
-research/*
-!research/.gitkeep
-dungeons/capstone/*
+
+# ── User / customer dungeons (not shipped in package) ──────────────
+customers
+dungeons/customers/*
+!dungeons/customers/.gitkeep
 dungeons/user/*
 !dungeons/user/.gitkeep
-scripts/experiments/sweeps/
+dungeons/capstone/*
+dungeons/*ai-dungeon*
+
+# ── Internal working artifacts ─────────────────────────────────────
+# Plans + research are ephemeral working dirs (designs, sweep outputs,
+# implementor status files). Final docs land in docs/guides/ and CHANGELOG.md.
 plans/*
+!plans/.gitkeep
+research/*
+!research/.gitkeep
+scripts/experiments/
+
+# ── Excluded examples ──────────────────────────────────────────────
+examples/*
+
+# ── Catch-all ignore prefix ────────────────────────────────────────
+ignore*
+PHASE1-IMPROVEMENTS.md

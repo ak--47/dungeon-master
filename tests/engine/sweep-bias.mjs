@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 /**
- * Targeted bornRecentBias exploration. Tests TWO things:
+ * Targeted bornRecentBias exploration — DIRECT-RUN, NOT a vitest test.
+ *
+ * Usage: node tests/engine/sweep-bias.mjs
+ *
+ * Tests TWO things:
  *
  *  1. PRE-CLAMP shape — bypasses validator by setting bias via macro override
  *     object (preset values exempt from clamp). What does each bias × born
@@ -9,7 +13,7 @@
  *  2. POST-CLAMP shape — uses the user-explicit path (which DOES trigger
  *     clamps). Verifies clamps rescue the dangerous combos.
  *
- * Output: research/bias-sweep-<ISO>.json + console table.
+ * Output: tmp/bias-sweep-<ISO>.json + console table.
  */
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -38,8 +42,8 @@ const STRICT_BARS = {
 };
 
 async function runCombo(combo) {
-	const generate = (await import('../index.js')).default;
-	const baseConfig = (await import(path.resolve(__dirname, '..', 'dungeons/technical/simplest.js'))).default;
+	const generate = (await import('../../index.js')).default;
+	const baseConfig = (await import(path.resolve(__dirname, '..', '..', 'dungeons/technical/simplest.js'))).default;
 
 	const datasetEnd = dayjs.utc().subtract(1, 'day').endOf('day').toISOString();
 	const datasetStart = dayjs.utc(datasetEnd).subtract(combo.numDays, 'day').startOf('day').toISOString();
@@ -220,7 +224,7 @@ async function workerLoop() {
 }
 await Promise.all(Array.from({ length: workers }, workerLoop));
 
-const out = `research/bias-sweep-${dayjs().format('YYYY-MM-DDTHH-mm-ss')}.json`;
+const out = `tmp/bias-sweep-${dayjs().format('YYYY-MM-DDTHH-mm-ss')}.json`;
 fs.writeFileSync(out, JSON.stringify({ matrix, results }, null, 2));
 console.error(`\nOutput: ${out}`);
 

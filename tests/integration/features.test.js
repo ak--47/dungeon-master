@@ -14,7 +14,7 @@ import { generateProductLookup, getRandomProduct, getProductsByCategory, searchP
 import { productReviewGen, productSearchGen } from '../../lib/generators/product-names.js';
 import { FUNCTION_REGISTRY, validateFunctionCall, getValidFunctionNames } from '../../lib/utils/function-registry.js';
 import { evaluateValue, evaluateFunctionCall, convertDungeonConfig } from '../../lib/utils/json-evaluator.js';
-import { bytesHuman, formatDuration, initChance } from '../../lib/utils/utils.js';
+import { bytesHuman, formatDuration, initChance, setDatasetNow, setDatasetBegin } from '../../lib/utils/utils.js';
 import * as u from '../../lib/utils/utils.js';
 import dayjs from 'dayjs';
 
@@ -23,8 +23,9 @@ import dayjs from 'dayjs';
 const PINNED_DATES = { datasetStart: '2025-09-01T00:00:00Z', datasetEnd: '2025-10-01T00:00:00Z' };
 
 const FIXED_NOW = 1706832000; // 2024-02-02
-global.FIXED_NOW = FIXED_NOW;
-global.FIXED_BEGIN = FIXED_NOW - 90 * 86400;
+const FIXED_BEGIN = FIXED_NOW - 90 * 86400;
+setDatasetNow(FIXED_NOW);
+setDatasetBegin(FIXED_BEGIN);
 
 describe('strictEventCount', () => {
 	test('forces concurrency to 1 when enabled', () => {
