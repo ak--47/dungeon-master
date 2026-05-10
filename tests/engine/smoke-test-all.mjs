@@ -1,18 +1,22 @@
 #!/usr/bin/env node
 /**
- * Smoke-test runner — runs every dungeon at tiny scale in parallel to verify it
- * loads, generates events, and writes output without crashing.
+ * Smoke-test runner — DIRECT-RUN, NOT a vitest test.
  *
- * Default scale: 100 users, 1000 events per dungeon. NOT for verification —
- * use scripts/verify-runner.mjs at full fidelity for that.
+ * Runs every dungeon at tiny scale in parallel to verify it loads, generates
+ * events, and writes output without crashing. Useful as a pre-publish smoke
+ * check or for catching regressions across the dungeon catalog. NOT a
+ * verification gate (does not check hook fidelity) — use
+ * `scripts/verify-runner.mjs` + `verification/verticals/*.verify.mjs` for that.
+ *
+ * Default scale: 100 users, 1000 events per dungeon. Output written to ./tmp/.
  *
  * Usage:
- *   node scripts/smoke-test-all.mjs
- *   node scripts/smoke-test-all.mjs --dir dungeons/vertical    # default
- *   node scripts/smoke-test-all.mjs --dir dungeons/technical
- *   node scripts/smoke-test-all.mjs --dir dungeons             # both subdirs
- *   node scripts/smoke-test-all.mjs --concurrency 4            # default: cpu count
- *   node scripts/smoke-test-all.mjs --users 500 --events 5000  # override scale
+ *   node tests/engine/smoke-test-all.mjs
+ *   node tests/engine/smoke-test-all.mjs --dir dungeons/vertical    # default
+ *   node tests/engine/smoke-test-all.mjs --dir dungeons/technical
+ *   node tests/engine/smoke-test-all.mjs --dir dungeons             # both subdirs
+ *   node tests/engine/smoke-test-all.mjs --concurrency 4            # default: cpu count
+ *   node tests/engine/smoke-test-all.mjs --users 500 --events 5000  # override scale
  *
  * Output: per-dungeon PASS/FAIL line + a final summary table. Spawns each
  * dungeon as a child node process so a crash in one doesn't abort the run.
@@ -28,7 +32,7 @@ function arg(name, fallback) {
 	return i === -1 ? fallback : args[i + 1];
 }
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..');
 const dirArg = arg('dir', 'dungeons/vertical');
 const numUsers = parseInt(arg('users', '100'), 10);
 const numEvents = parseInt(arg('events', '1000'), 10);
@@ -56,18 +60,18 @@ if (dungeons.length === 0) {
 	process.exit(1);
 }
 
-const dataDir = path.join(ROOT, 'data');
+const dataDir = path.join(ROOT, 'tmp');
 mkdirSync(dataDir, { recursive: true });
 
 const RUNNER = `
 import generate from '${path.join(ROOT, 'index.js')}';
 // With node -e, process.argv = [nodePath, ...userArgs] — no script slot.
-const [dungeonPath, name, numUsers, numEvents] = process.argv.slice(1);
+const [dungeonPath, name, numUsers, numEvents, outDir] = process.argv.slice(1);
 const r = await generate(dungeonPath, {
 	numUsers: parseInt(numUsers, 10),
 	numEvents: parseInt(numEvents, 10),
 	avgEventsPerUserPerDay: undefined,  // force numEvents path
-	writeToDisk: true,
+	writeToDisk: outDir,
 	name,
 	format: 'json',
 	verbose: false,
@@ -85,7 +89,7 @@ function runOne(dungeonPath) {
 		const start = Date.now();
 		const child = spawn(
 			process.execPath,
-			['--input-type=module', '-e', RUNNER, dungeonPath, namePrefix, String(numUsers), String(numEvents)],
+			['--input-type=module', '-e', RUNNER, dungeonPath, namePrefix, String(numUsers), String(numEvents), dataDir],
 			{ cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] }
 		);
 		let out = '';

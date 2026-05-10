@@ -1,21 +1,26 @@
 /**
- * Bunchiness measurement script for engine regression hunt.
+ * Bunchiness measurement script — DIRECT-RUN, NOT a vitest test.
  *
- * Runs a dungeon in-memory at controlled scale, computes:
+ * One-off chart inspector: runs a dungeon in-memory at controlled scale, prints
+ * per-day distribution + tail/spike metrics. Useful for visually debugging a
+ * single dungeon. For comprehensive regression testing across the param matrix,
+ * use `tests/engine/sweep-engine.mjs`.
+ *
+ * Computes:
  *   - tail_ratio = mean(events_last_14d) / mean(events_first_14d)
  *   - last7_share, slope_per_day, future_events
  *   - Per-day DOD counts for last 14 days (eyeball)
  *
  * Usage:
- *   node scripts/test-bunchiness.mjs <dungeon-path> [--users N] [--rate R] [--days D] [--macro PRESET]
+ *   node tests/engine/test-bunchiness.mjs <dungeon-path> [--users N] [--rate R] [--days D] [--macro PRESET]
  *
  * Examples:
- *   node scripts/test-bunchiness.mjs dungeons/technical/foobar.js --users 2000 --rate 3.0 --days 89
- *   node scripts/test-bunchiness.mjs dungeons/technical/foobar.js --macro viral
+ *   node tests/engine/test-bunchiness.mjs dungeons/technical/foobar.js --users 2000 --rate 3.0 --days 89
+ *   node tests/engine/test-bunchiness.mjs dungeons/technical/foobar.js --macro viral
  */
 import path from 'path';
 import dayjs from 'dayjs';
-import generate from '../index.js';
+import generate from '../../index.js';
 
 const args = process.argv.slice(2);
 const positional = args.filter(a => !a.startsWith('--'));

@@ -1,10 +1,15 @@
-// Sweep dungeons for end-of-window "nosedive" pattern.
-// Reports last 7 days per-dungeon + nosedive metric:
+// DIRECT-RUN script (NOT a vitest test). Sweeps dungeons for end-of-window
+// "nosedive" pattern. Reports last 7 days per-dungeon + nosedive metric:
 //   nosedive = (mean of days[-3:]) / (mean of days[-7:-3])
 // nosedive > 0.85 = healthy. nosedive < 0.7 = visible drop. < 0.5 = bad.
+//
+// Usage: node tests/engine/test-nosedive.mjs <dungeon-path> [users] [rate] [days]
+//
+// Note: does NOT pin datasetEnd, so the last UTC day is partial when run
+// mid-day. For DOW-stable measurement use tests/engine/sweep-engine.mjs (Wed-pinned).
 import path from 'path';
 import dayjs from 'dayjs';
-import generate from '/Users/ak/code/dungeon-master/index.js';
+import generate from '../../index.js';
 import fs from 'fs';
 
 const args = process.argv.slice(2);
