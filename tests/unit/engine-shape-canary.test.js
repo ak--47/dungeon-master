@@ -119,7 +119,7 @@ describe('engine-shape canary — strict-bar invariants', () => {
 		expect(future.length).toBe(0);
 	}, 30000);
 
-	test('flat baseline has no last-day cliff (engine future-time guard works without dead zone)', async () => {
+	test('flat baseline has no last-day cliff vs same-DOW-1-week-prior (engine future-time guard works without dead zone)', async () => {
 		const { events, numDays } = await runCombo({ macro: 'flat', numDays: 60 });
 		const dayCounts = new Map();
 		for (const e of events) {
@@ -135,8 +135,10 @@ describe('engine-shape canary — strict-bar invariants', () => {
 			window.push(dayCounts.get(anchor.subtract(i, 'day').format('YYYY-MM-DD')) || 0);
 		}
 		const lastDay = window[window.length - 1];
-		const prevDay = window[window.length - 2];
-		expect(lastDay).toBeGreaterThanOrEqual(0.7 * prevDay);
+		// Compare against same DOW one week prior to cancel soup-DOW noise (Sat/Sun
+		// have weights 0.53/0.64 vs Tue=1.0; naive lastDay/prevDay is DOW-coupled).
+		const sameDowPrev = window[window.length - 8];
+		expect(lastDay).toBeGreaterThanOrEqual(0.7 * sameDowPrev);
 	}, 30000);
 });
 

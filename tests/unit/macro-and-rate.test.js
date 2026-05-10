@@ -167,8 +167,12 @@ describe('macro integration with config-validator', () => {
 		expect(config.bornRecentBias).toBe(0.5);
 	});
 
-	test('macro object form supports preset+overrides at config level', () => {
+	test('macro object form supports preset+overrides at config level (clamped)', () => {
 		initChance('macro-obj');
+		// macro-object overrides count as user-explicit and are subject to v1.5 strict
+		// clamps. Setting percentUsersBornInDataset=75 via macro object on viral
+		// (cap=55) clamps down to 55 with a warning. To go above the cap, switch
+		// macros (here: viral is already the highest-born preset).
 		const config = validateDungeonConfig({
 			numUsers: 100,
 			numEvents: 1000,
@@ -176,7 +180,30 @@ describe('macro integration with config-validator', () => {
 			seed: 'macro-obj'
 		});
 		expect(config.bornRecentBias).toBe(MACRO_PRESETS.viral.bornRecentBias);
-		expect(config.percentUsersBornInDataset).toBe(75);
+		expect(config.percentUsersBornInDataset).toBe(55);
+	});
+
+	test('macro object form respects clamps even when only overriding bias', () => {
+		initChance('macro-obj-bias');
+		const config = validateDungeonConfig({
+			numUsers: 100,
+			numEvents: 1000,
+			macro: { preset: 'flat', bornRecentBias: 0.9 }, // above [-0.5, 0.5] safe range
+			seed: 'macro-obj-bias'
+		});
+		expect(config.bornRecentBias).toBe(0.5);
+	});
+
+	test('macro object form within preset-cap stays as-supplied', () => {
+		initChance('macro-obj-noop');
+		const config = validateDungeonConfig({
+			numUsers: 100,
+			numEvents: 1000,
+			macro: { preset: 'growth', percentUsersBornInDataset: 25, bornRecentBias: 0.4 },
+			seed: 'macro-obj-noop'
+		});
+		expect(config.percentUsersBornInDataset).toBe(25);
+		expect(config.bornRecentBias).toBe(0.4);
 	});
 
 	test('all five named macro presets exist and are distinct', () => {

@@ -187,9 +187,18 @@ async function runCombo(combo) {
 	const dungeonPath = path.resolve(__dirname, '..', 'dungeons/technical/simplest.js');
 	const baseConfig = (await import(dungeonPath)).default;
 
-	// Pin window: yesterday-eod UTC, walk back numDays.
-	const datasetEnd = dayjs.utc().subtract(1, 'day').endOf('day').toISOString();
-	const datasetStart = dayjs.utc(datasetEnd).subtract(combo.numDays, 'day').startOf('day').toISOString();
+	// Pin window to most-recent past Wednesday-EOD-UTC for full calendar-day
+	// determinism. Soup DOW weights span 0.53 (Sat) to 1.0 (Tue/Wed); ANY
+	// floating anchor (yesterday, today) makes the strict-bar metrics shift
+	// based on which DOW the window edges land on. Pinning to a single DOW
+	// (Wednesday — peak of soup curve, central to the week) makes the harness
+	// reproducible across days. Override via `--end YYYY-MM-DD` (Phase 6 followup).
+	const todayUtc = dayjs.utc().startOf('day');
+	const dow = todayUtc.day(); // 0=Sun..6=Sat; Wednesday=3
+	const daysBackToWed = ((dow - 3 + 7) % 7) || 7; // always go back at least 1 week
+	const wednesdayEnd = todayUtc.subtract(daysBackToWed, 'day').endOf('day');
+	const datasetEnd = wednesdayEnd.toISOString();
+	const datasetStart = wednesdayEnd.subtract(combo.numDays, 'day').startOf('day').toISOString();
 
 	const override = {
 		...baseConfig,
@@ -268,9 +277,16 @@ async function runCombo(combo) {
 	const lastWMax = Math.max(...lastW.map(x => x.n));
 	const rightEdgeSpike = median > 0 ? lastWMax / median : Infinity;
 
-	// last-day vs prev-day
+	// last-day cliff metric — compare against SAME DOW one week prior (window[-8]),
+	// not the immediately previous day. Soup DOW weights span 0.53 (Sat) to 1.0
+	// (Mon-Wed); naive lastDay/prevDay produces 0.66 ratio when last day is Sat
+	// and prev is Fri, with no engine bug. Same-DOW comparison cancels DOW noise
+	// and isolates true engine cliff. Falls back to prevDay when window < 8 days.
 	const lastDay = windowDays[windowDays.length - 1].n;
 	const prevDay = windowDays[windowDays.length - 2]?.n || 0;
+	const sameDowPrev = windowDays.length >= 8
+		? windowDays[windowDays.length - 8].n
+		: prevDay;
 
 	// last-7 collapse: min of last 7 vs trailing-7 mean
 	const last7Mean = mean(last7);
@@ -304,14 +320,14 @@ async function runCombo(combo) {
 	if (!(tailRatio >= bar.tail[0] && tailRatio <= bar.tail[1])) {
 		failures.push(`tail_ratio=${tailRatio.toFixed(2)} outside [${bar.tail[0]}, ${bar.tail[1]}] (${combo.macro} bar)`);
 	}
-	// lastDay cliff threshold. Default 0.7 (catches engine bugs that suppress
-	// last-UTC-day events). When `avgActiveDaysPerUser` is set, per-day variance
-	// is naturally higher (each user's distinct-day picks shift the daily
-	// distribution) — relax to 0.6 to absorb RNG noise without losing the
-	// regression-detection signal.
+	// lastDay cliff threshold against same-DOW-1-week-prior (DOW-fair comparison).
+	// Default 0.7 (catches engine bugs that suppress last-UTC-day events). When
+	// `avgActiveDaysPerUser` is set, per-day variance is naturally higher (each
+	// user's distinct-day picks shift the daily distribution) — relax to 0.6 to
+	// absorb RNG noise without losing the regression-detection signal.
 	const lastDayThreshold = (combo.activeDays !== undefined && combo.activeDays !== null) ? 0.6 : 0.7;
-	if (!(lastDay >= lastDayThreshold * prevDay)) {
-		failures.push(`lastDay=${lastDay} < ${lastDayThreshold} * prevDay=${prevDay} (ratio=${prevDay ? (lastDay / prevDay).toFixed(2) : 'NA'})`);
+	if (!(lastDay >= lastDayThreshold * sameDowPrev)) {
+		failures.push(`lastDay=${lastDay} < ${lastDayThreshold} * sameDowPrev=${sameDowPrev} (ratio=${sameDowPrev ? (lastDay / sameDowPrev).toFixed(2) : 'NA'})`);
 	}
 	if (!(rightEdgeSpike < bar.spike)) {
 		failures.push(`rightEdgeSpike=${rightEdgeSpike.toFixed(2)} >= ${bar.spike} (${combo.macro} bar)`);
@@ -341,7 +357,9 @@ async function runCombo(combo) {
 			rightEdgeSpike: Number(rightEdgeSpike.toFixed(3)),
 			lastDay,
 			prevDay,
+			sameDowPrev,
 			lastDayRatio: prevDay ? Number((lastDay / prevDay).toFixed(3)) : null,
+			lastDayRatioSameDow: sameDowPrev ? Number((lastDay / sameDowPrev).toFixed(3)) : null,
 			last7CollapseRatio: Number(last7CollapseRatio.toFixed(3)),
 			last7Min,
 			last7Mean: Math.round(last7Mean),

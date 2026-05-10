@@ -487,11 +487,13 @@ The v1.5 ship gate validated that `dungeons/technical/simplest.js` (no-hook base
 A no-hook dungeon "passes" the v1.5 strict bar when, for the resolved combo's macro, ALL of:
 
 1. `tail_ratio = mean(events_last_W) / mean(events_first_W)` ∈ macro's tail band, where `W = min(14, floor(numDays/2))`
-2. `lastDay >= 0.7 * prevDay` (0.6 in `avgActiveDaysPerUser` mode — per-day variance is naturally higher there)
+2. `lastDay >= 0.7 * sameDowPrev` (0.6 in `avgActiveDaysPerUser` mode), where `sameDowPrev = window[len-8]` (same DOW one week prior). Same-DOW comparison cancels soup-DOW noise (Sat=0.53, Tue/Wed=1.0); naive `lastDay/prevDay` would couple the metric to wall-clock calendar day.
 3. `rightEdgeSpike = max(events_last_W) / median(events_window) < macro_spike_cap`
 4. `min(events_last_7d) >= macro_l7c * mean(events_last_7d)` — no multi-day collapse
 5. `futureEvents == 0` — no events past `FIXED_NOW`
 6. `signupFloor`: every day in last 7 has `signup_count >= 0.05 * mean(daily signups across window)`. Bypassed when `mean < 5/day` or `macro === 'decline'` (variance noise dominates low-signup configs).
+
+The harness (`scripts/sweep-engine.mjs`) pins `datasetEnd` to most-recent past Wednesday-EOD-UTC for full calendar-day determinism. Two back-to-back runs produce zero metric drift.
 
 Per-macro bars (defined in `scripts/sweep-engine.mjs` `STRICT_BARS` and mirrored in `tests/unit/engine-shape-canary.test.js`):
 
