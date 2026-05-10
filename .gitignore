@@ -22,6 +22,8 @@ tests/coverage/*
 !tests/coverage/.gitkeep
 tmp/*
 !tmp/.gitkeep
+.tmp/
+duckdb_temp_*
 .dungeon-tmp/
 *scratch*
 

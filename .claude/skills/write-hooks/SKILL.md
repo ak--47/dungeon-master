@@ -1,6 +1,6 @@
 ---
 name: write-hooks
-description: Engineer story trends and "magic number" patterns into an existing dungeon by writing its `hook` function. Uses the Phase 3 atom helpers + Phase 4 patterns. Adds NO new event flags. Iterates until /verify-dungeon scores STRONG or NAILED.
+description: Use when an existing dungeon needs engineered story trends or "magic number" patterns — writes the `hook` function using atom helpers and high-level patterns. Adds no new event flags; never mutates the schema.
 argument-hint: [path/to/dungeon.js] [free-text story / trend description]
 model: claude-opus-4-6
 effort: max
@@ -11,7 +11,7 @@ effort: max
 Engineer story trends into the dungeon at `$ARGUMENTS` (first positional arg)
 based on the story description (remaining args).
 
-## Scope (post-1.4 split)
+## Scope
 
 This skill writes the `hook` function ONLY. It assumes the dungeon's schema is
 already complete (produced by `create-dungeon`). After writing, hand off to
@@ -31,15 +31,15 @@ Out of scope:
 
 ## Reference reading
 
-- `lib/hook-helpers/index.js` — Phase 3 atoms (cohort, mutate, timing, inject,
+- `lib/hook-helpers/index.js` — atoms (cohort, mutate, timing, inject,
   identity). One file per group; full JSDoc on each atom.
-- `lib/hook-patterns/index.js` — Phase 4 high-level recipes (one per Mixpanel
+- `lib/hook-patterns/index.js` — high-level recipes (one per Mixpanel
   analysis type).
 - `lib/verify/emulate-breakdown.js` — what `verify-dungeon` will check.
 - `dungeons/user/my-buddy.js` — reference dungeon using a mix of atoms and
   hand-rolled logic.
 - `dungeons/technical/pattern-*.js` — five minimal pattern fixtures, one per
-  Phase 4 recipe.
+  recipe.
 - `HOOKS.md` — encyclopedia of hook recipes organized by story pattern. Contains
   17+ worked examples with code snippets, Mixpanel report instructions, and
   adaptation notes. **Start here** to find the right pattern for your story.
@@ -67,7 +67,7 @@ and you can mutate freely.
 Storage-only hooks (`ad-spend`, `group`, `mirror`, `lookup`) fire later in the
 pipeline and don't see the same `meta` shape.
 
-## Hook meta — Phase 2 identity context
+## Hook meta — identity context
 
 Inside `funnel-pre` and `funnel-post`:
 - `meta.isFirstFunnel: boolean`
@@ -127,11 +127,11 @@ if (type === 'funnel-post' && meta.experiment) {
 | inject | `injectAfterEvent(events, source, template, gapMs, overrides)` | Splice clone after source |
 | inject | `injectBetween(events, A, B, template, overrides)` | Splice at midpoint |
 | inject | `injectBurst(events, template, count, anchorTime, spreadMs, overrides)` | Burst around anchor |
-| inject | `injectOnNewDays(events, eventName, targetDistinctDays)` | **Cohort-only in v1.5.** Spreads injections across previously-empty days. Use for cohort-conditional active-day boosts; for global active-day shape, use `Dungeon.avgActiveDaysPerUser` config knob. |
+| inject | `injectOnNewDays(events, eventName, targetDistinctDays)` | **Cohort-only.** Spreads injections across previously-empty days. Use for cohort-conditional active-day boosts; for global active-day shape, use `Dungeon.avgActiveDaysPerUser` config knob. |
 | identity | `isPreAuthEvent(event, authTime)` | Standalone variant of meta.isPreAuth |
 | identity | `splitByAuth(events, authTime)` | { preAuth, postAuth, stitch } partition |
 
-### v1.5 hook anti-patterns
+### Hook anti-patterns
 
 - **DO NOT engineer global active-day distribution in hooks.** Use the
   `Dungeon.avgActiveDaysPerUser` config knob — it's a concentrator that
@@ -140,9 +140,9 @@ if (type === 'funnel-post' && meta.experiment) {
 
 ### Intentional strict-bar deviation is OK
 
-The v1.5 engine guarantees the no-hook baseline (`dungeons/technical/simplest.js`)
+The engine guarantees the no-hook baseline (`dungeons/technical/simplest.js`)
 satisfies the per-macro strict bar across the 194-combo sweep matrix
-(see [CLAUDE.md "Tuning guidance"](../../../CLAUDE.md#tuning-guidance--safe-ranges-and-engine-guarantees-v15)).
+(see [CLAUDE.md "Engine guarantees"](../../../CLAUDE.md#engine-guarantees)).
 **Hooks can intentionally violate the strict bar** for legitimate stories:
 
 - **Decline + churn cohort** (engagementDecay or `everything`-hook event-drop)
@@ -169,7 +169,7 @@ own their shape.
   engine-stamped values instead (e.g., `event.utm_source = "google"` on
   already-stamped touches).
 
-### v1.5.0 — when to use the new verifier primitives
+### When to use the verifier primitives
 
 When designing a story, check if any of the new primitives match before
 writing a custom hook:
@@ -290,7 +290,7 @@ checks against and what consumers read to understand the dataset.
  *   Expected ratio: bin>=15 / bin<5 ≈ 3x (within ±15%)
 ```
 
-## Hook Ordering Within `everything` (REV 10)
+## Hook Ordering Within `everything`
 
 The order of operations inside the everything hook matters when hooks interact:
 
@@ -305,7 +305,7 @@ The order of operations inside the everything hook matters when hooks interact:
 the temporal window miss the mutation. Moving temporal value mutations to the
 end ensures ALL events in the window — original and cloned — receive the effect.
 
-## Deprecated Feature Replacement (REV 10)
+## Deprecated Feature Replacement
 
 When a dungeon relied on deprecated config blocks (`subscription`, `attribution`,
 `features`, `geo`, `anomalies`) for properties that hooks depend on, those
@@ -318,7 +318,7 @@ properties no longer appear in the data. Replace them:
 Example: deprecated `subscription` → add `subscription_tier` to superProps/userProps,
 assign tiers by hash in user hook, gate conversion/feature effects on tier in everything.
 
-## Cohort Sizing Guidelines (REV 10)
+## Cohort Sizing Guidelines
 
 Cohort detection conditions must be selective enough to create a meaningful
 control group, but not so broad they catch everyone:
@@ -332,7 +332,7 @@ control group, but not so broad they catch everyone:
 
 Target: 10-30% of users in the affected cohort for clean signal at 10K users.
 
-### Threshold Calibration (REV 11)
+### Threshold Calibration
 
 When a hook gates on "N+ events of type X in first Y days," check the actual
 distribution BEFORE choosing the threshold. With 200 event types and 2.5
@@ -348,7 +348,7 @@ SELECT n, COUNT(*) FROM (
 
 Set the threshold at approximately the 80th percentile of the distribution.
 
-### Compounding Drop Hooks (REV 11)
+### Compounding Drop Hooks
 
 Use at most ONE drop-based retention hook per dungeon. Multiple hooks that
 each drop events after the same day threshold compound destructively:
@@ -362,15 +362,14 @@ The control group barely exists. Fix: use boost-based patterns
 for negative cohorts. Boosts are additive and don't interact destructively.
 Reserve drops for a single churn/retention effect per dungeon.
 
-## v1.5.0 Vertical Eval Lessons
+## Common Hook Pitfalls
 
-Distilled from the 20-dungeon eval (2026-05-08). See HOOKS.md §9 for full
-recipes. Apply these BEFORE handing off to `/verify-dungeon`:
+Apply these BEFORE handing off to `/verify-dungeon`. See HOOKS.md §9 for full recipes.
 
 ### isStrictEvent: false is NOT optional for hook-read events
 
 If your hook reads `event === 'X'` and `X` is also a funnel-step event, the
-v1.5 validator auto-promotes it to `isStrictEvent: true` and the engine
+validator auto-promotes it to `isStrictEvent: true` and the engine
 won't emit standalone occurrences. Your cohort goes empty.
 
 ```js

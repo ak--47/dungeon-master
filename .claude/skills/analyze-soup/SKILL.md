@@ -1,6 +1,6 @@
 ---
 name: analyze-soup
-description: Run a dungeon locally (no Mixpanel), then use DuckDB to analyze the time distribution at week/day/hour/minute granularities. Produces a soup-analysis.md diagnostic report.
+description: Use when investigating TimeSoup parameters, diagnosing event-distribution shape, or comparing soup configs — runs a dungeon locally and analyzes time distribution at week/day/hour/minute granularities, producing a soup-analysis.md diagnostic report.
 argument-hint: [dungeon path, e.g. dungeons/soup-test.js]
 model: claude-opus-4-6
 effort: max

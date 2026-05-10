@@ -1,6 +1,6 @@
 ---
 name: create-dungeon
-description: Design and create a new dungeon-master dungeon configuration file with realistic events, funnels, and a clean schema. SCHEMA ONLY — no engineered story trends. Hooks are added later by the `write-hooks` skill.
+description: Use when authoring a new dungeon-master config from an app description — designs events, funnels, properties, identity model, and macro/soup. SCHEMA ONLY; engineered story trends + hooks are added separately by write-hooks.
 argument-hint: [free-text app description, e.g. "AI meeting assistant" or "B2B logistics platform"]
 model: claude-opus-4-6
 effort: max
@@ -10,7 +10,7 @@ effort: max
 
 Design and write a complete dungeon-master dungeon for: **$ARGUMENTS**
 
-## Scope (post-1.4 split)
+## Scope
 
 This skill produces a **realistic baseline schema** that runs cleanly out of the
 box. It does **NOT** engineer story trends or magic numbers — those are the
@@ -31,7 +31,7 @@ In scope here:
 - Top-level: `datasetStart`, `datasetEnd`, `numUsers`, `avgEventsPerUserPerDay`,
   `seed`, `format`, device flags, `avgDevicePerUser`, `hasLocation`,
   `hasCampaigns`, `hasSessionIds`, `hasAvatar`, `macro`, `soup`
-- Surviving Phase 2 entities: `personas`, `worldEvents`, `engagementDecay`,
+- Surviving advanced entities: `personas`, `worldEvents`, `engagementDecay`,
   `dataQuality` — use sparingly
 
 Out of scope (hand off to `write-hooks`):
@@ -42,9 +42,7 @@ Out of scope (hand off to `write-hooks`):
 For an encyclopedia of hook patterns, recipes, and real-world examples:
 see `HOOKS.md` at the project root.
 
-Removed from the engine in 1.4 (DO NOT use these config keys; they're silently
-ignored): `subscription`, `attribution`, `geo`, `features`, `anomalies`.
-Recreate with hooks via `write-hooks`.
+These config keys are silently ignored — DO NOT use them: `subscription`, `attribution`, `geo`, `features`, `anomalies`. Recreate with hooks via `write-hooks`.
 
 ## Reference reading
 
@@ -55,9 +53,9 @@ Before writing any code, scan:
   with full JSDoc. **Treat this as the source of truth.**
 - `lib/utils/utils.js` — `pickAWinner`, `weighNumRange`, `initChance`, `exhaust`,
   `takeSome` for property value distributions
-- `dungeons/vertical/sass.js` — B2B reference dungeon, post-1.4 identity model
+- `dungeons/vertical/sass.js` — B2B reference dungeon with full identity model
 - `dungeons/user/my-buddy.js` — consumer-app reference (gitignored)
-- `dungeons/technical/identity-model-verify.js` — minimal Phase 2 model fixture
+- `dungeons/technical/identity-model-verify.js` — minimal identity-model fixture
 
 ## File structure
 
@@ -177,7 +175,7 @@ Use for funnel-level context (checkout flow variant, onboarding version):
   sequence: ["View Item", "Add to Cart", "Checkout"],
   conversionRate: 40,
   timeToConvert: 2,
-  conversionWindowDays: 7,             // v1.5: cap how late "Checkout" can fire
+  conversionWindowDays: 7,             // cap how late "Checkout" can fire
   props: {
     checkout_version: ["v1", "v2"],      // random per funnel run
     payment_method: ["card", "paypal"],
@@ -185,32 +183,22 @@ Use for funnel-level context (checkout flow variant, onboarding version):
 }
 ```
 
-**v1.5 — `conversionWindowDays`:** explicit Mixpanel-style conversion window
+**`conversionWindowDays`:** explicit Mixpanel-style conversion window
 cap, in days. Default 30 (Mixpanel UI default). Hard cap 180 (Mixpanel max).
 The validator auto-bumps to `min(180, ceil(timeToConvert/24 * 1.5))` if your
 `timeToConvert` exceeds 30 days. Set explicitly to silence the warning. The
 verifier (`verifyDungeon`) reads this field automatically.
 
-**v1.5 — `isStrictEvent` auto-promote:** if you list a funnel-step event in
+**`isStrictEvent` auto-promote:** if you list a funnel-step event in
 `events[]`, the validator auto-sets `isStrictEvent: true` for you and warns.
 This heals the silent-corruption footgun where the greedy funnel engine
 consumed standalone instances as funnel matches. Set `isStrictEvent: false`
 explicitly only when you intend mixed funnel/standalone semantics for that
 event.
 
-**Lesson from v1.5.0 vertical eval (2026-05-08):** dungeons whose hooks read
-`event === 'X'` for a funnel-step event MUST set `isStrictEvent: false` on
-that event, or the cohort goes empty. When designing the schema, mark
-"hook-readable" candidates explicitly so `write-hooks` doesn't have to
-re-thread the schema later. Common candidates: login, page view, search,
-add to cart, swap, deposit — anything that's both a funnel step AND a
-recurring user behavior the hooks will likely cohort on.
+**Mark hook-readable funnel-step events with `isStrictEvent: false`.** When a hook reads `event === 'X'` and `X` is also a funnel step, the validator's auto-promote turns it into `isStrictEvent: true` and the engine stops emitting standalone occurrences — cohort goes empty. Identify these candidates at schema time so `write-hooks` doesn't have to re-thread the schema. Common candidates: login, page view, search, add to cart, swap, deposit — anything that's both a funnel step AND a recurring user behavior hooks will likely cohort on.
 
-**Lesson — funnels that represent loops need `reentry: true`:** any funnel
-named "X loop" / "X cycle" / "session" / per-instance recurring behavior
-should have `reentry: true` declared. Without it, the engine emits one
-sequence per user and downstream "power user" / "daily active" cohorts have
-no behavioral signal to bin on.
+**Funnels representing loops need `reentry: true`.** Any funnel named "X loop" / "X cycle" / "session" / per-instance recurring behavior must declare `reentry: true`. Without it, the engine emits one sequence per user and downstream "power user" / "daily active" cohorts have no behavioral signal to bin on.
 
 ### 3. SuperProps (2–3)
 
@@ -242,9 +230,9 @@ Skip the `hook:` field entirely (engine defaults to pass-through). The
 If you absolutely need a stub for downstream stamping consistency, leave a
 1-liner that returns the record unchanged.
 
-## Identity guidelines (Phase 2 model)
+## Identity guidelines
 
-The post-1.4 identity model has three knobs:
+The identity model has three knobs:
 
 ### `avgDevicePerUser` (whole number, default 0)
 
@@ -369,7 +357,7 @@ intra-day rhythm). Only override when you have a specific reason:
   weekends, financial market hours).
 - Use `soup: "global"` to flatten all DOW/HOD weights (24/7 server-side products).
 
-### Macro × born% / bias compatibility (v1.5 strict clamps)
+### Macro × born% / bias compatibility (strict clamps)
 
 When you set `macro` AND `percentUsersBornInDataset` explicitly, the validator
 clamps born% to the macro's preset value: flat=12, steady=12, growth=30,
@@ -385,9 +373,9 @@ decline. Cumulative-acquisition right-edge explosion is the inevitable result
 on a no-hook dungeon. The strict clamps will rescue the run, but the chart
 won't look like what you asked for.
 
-See [CLAUDE.md "Tuning guidance — safe ranges and engine guarantees"](../../../CLAUDE.md#tuning-guidance--safe-ranges-and-engine-guarantees-v15) for the full safe-range table.
+See [CLAUDE.md "Engine guarantees"](../../../CLAUDE.md#engine-guarantees) for the full safe-range table.
 
-### v1.5 — `avgActiveDaysPerUser` (concentrator)
+### `avgActiveDaysPerUser` (concentrator)
 
 Top-level optional knob. Sets the mean number of distinct UTC days each user
 fires events on. Total event count is preserved (still `rate × numDays`),
@@ -415,7 +403,7 @@ other in a dungeon. If you need both, set `avgActiveDaysPerUser` and write
 the decay as an `everything` hook scoped to specific cohorts (the `write-hooks`
 skill handles this).
 
-### v1.5 — `maxTouchpointsPerUser` (attribution cap)
+### `maxTouchpointsPerUser` (attribution cap)
 
 Top-level optional knob. Caps UTM stamping at this many events per user
 (default 10, matching Mixpanel `TOUCHPOINTS_LIMIT`). When `hasCampaigns: true`
