@@ -85,7 +85,7 @@ describe('interrupt funnel completion (generator + verifier roundtrip)', () => {
 					timeToConvert: 1,
 				}],
 				writeToDisk: false,
-				verbose: false,
+				verbose: true,  // v1.5.1: warnings now gated on verbose
 			});
 		} finally {
 			console.warn = origWarn;

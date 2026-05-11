@@ -763,6 +763,149 @@ describe('datasetStart / datasetEnd parsing (v1.5.1)', () => {
 		expect(delta).toBeLessThan(86400);            // strictly less than full day
 	});
 
+	test('quiet by default: clamp-triggering config emits NO console output when verbose unset', () => {
+		initChance('quiet-default');
+		const warn = console.warn;
+		const log = console.log;
+		const messages = [];
+		console.warn = (...args) => messages.push(['warn', args.join(' ')]);
+		console.log = (...args) => messages.push(['log', args.join(' ')]);
+		try {
+			validateDungeonConfig({
+				numUsers: 100,
+				numEvents: 1000,
+				macro: 'flat',
+				percentUsersBornInDataset: 90, // would trigger clamp 2 if verbose
+				bornRecentBias: 0.9,            // would trigger clamp 3 if verbose
+				avgEventsPerUserPerDay: 100,    // would trigger clamp 5 if verbose
+				avgActiveDaysPerUser: 999,      // would trigger clamp 6 if verbose
+				numDays: 5,                     // would trigger numDays<14 warn if verbose
+				seed: 'quiet-default',
+			});
+		} finally {
+			console.warn = warn;
+			console.log = log;
+		}
+		expect(messages).toEqual([]);
+	});
+
+	test('quiet by default: bare-date pinned window emits NO output when verbose unset', () => {
+		initChance('quiet-bare-date');
+		const warn = console.warn;
+		const log = console.log;
+		const messages = [];
+		console.warn = (...args) => messages.push(['warn', args.join(' ')]);
+		console.log = (...args) => messages.push(['log', args.join(' ')]);
+		try {
+			validateDungeonConfig({
+				numUsers: 100,
+				numEvents: 1000,
+				datasetStart: '2026-02-19',
+				datasetEnd: '2026-05-10',
+				numDays: 999, // conflicts with pinned window — warn-on-verbose path
+				seed: 'quiet-bare-date',
+			});
+		} finally {
+			console.warn = warn;
+			console.log = log;
+		}
+		expect(messages).toEqual([]);
+	});
+
+	test('verbose=true: clamp warnings are emitted', () => {
+		initChance('verbose-on');
+		const warn = console.warn;
+		const messages = [];
+		console.warn = (...args) => messages.push(args.join(' '));
+		try {
+			validateDungeonConfig({
+				numUsers: 100,
+				numEvents: 1000,
+				macro: 'flat',
+				percentUsersBornInDataset: 90,
+				bornRecentBias: 0.9,
+				verbose: true,
+				seed: 'verbose-on',
+			});
+		} finally {
+			console.warn = warn;
+		}
+		// Both clamp warnings should fire
+		expect(messages.some(m => /clamped to 12/.test(m))).toBe(true);
+		expect(messages.some(m => /clamped to 0\.5/.test(m))).toBe(true);
+	});
+
+	test('verbose=true: rate clamp + active-days clamp both warn', () => {
+		initChance('verbose-rate-active');
+		const warn = console.warn;
+		const messages = [];
+		console.warn = (...args) => messages.push(args.join(' '));
+		try {
+			validateDungeonConfig({
+				numUsers: 100,
+				numEvents: 1000,
+				avgEventsPerUserPerDay: 200,
+				avgActiveDaysPerUser: 999,
+				numDays: 30,
+				verbose: true,
+				seed: 'verbose-rate-active',
+			});
+		} finally {
+			console.warn = warn;
+		}
+		expect(messages.some(m => /avgEventsPerUserPerDay=200 clamped to 50/.test(m))).toBe(true);
+		expect(messages.some(m => /avgActiveDaysPerUser=999/.test(m))).toBe(true);
+	});
+
+	test('quiet by default: isStrictEvent auto-promote does NOT warn unless verbose', () => {
+		initChance('quiet-autopromote');
+		const warn = console.warn;
+		const messages = [];
+		console.warn = (...args) => messages.push(args.join(' '));
+		try {
+			validateDungeonConfig({
+				numUsers: 100,
+				numEvents: 1000,
+				events: [
+					{ event: 'View' },          // appears in funnel — would auto-promote
+					{ event: 'Sign Up' },        // appears in funnel — would auto-promote
+				],
+				funnels: [
+					{ sequence: ['View', 'Sign Up'], conversionRate: 50, isFirstFunnel: true },
+				],
+				seed: 'quiet-autopromote',
+			});
+		} finally {
+			console.warn = warn;
+		}
+		expect(messages.filter(m => /Auto-promoted/.test(m))).toEqual([]);
+	});
+
+	test('verbose=true: isStrictEvent auto-promote warns', () => {
+		initChance('verbose-autopromote');
+		const warn = console.warn;
+		const messages = [];
+		console.warn = (...args) => messages.push(args.join(' '));
+		try {
+			validateDungeonConfig({
+				numUsers: 100,
+				numEvents: 1000,
+				events: [
+					{ event: 'View' },
+					{ event: 'Sign Up' },
+				],
+				funnels: [
+					{ sequence: ['View', 'Sign Up'], conversionRate: 50, isFirstFunnel: true },
+				],
+				verbose: true,
+				seed: 'verbose-autopromote',
+			});
+		} finally {
+			console.warn = warn;
+		}
+		expect(messages.filter(m => /Auto-promoted/.test(m)).length).toBeGreaterThan(0);
+	});
+
 	test('bare-date end on a Wednesday lands at Wednesday 23:59:59 UTC', () => {
 		initChance('wed-pin');
 		// 2026-05-13 is a Wednesday

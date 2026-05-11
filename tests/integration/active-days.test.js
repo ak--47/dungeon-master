@@ -145,6 +145,7 @@ describe.sequential('v1.5 avgActiveDaysPerUser primitive', () => {
 				numUsers: 10,
 				avgEventsPerUserPerDay: 100,
 				avgActiveDaysPerUser: 2,
+				verbose: true,  // v1.5.1: warnings now gated on verbose
 			}));
 		} finally {
 			console.warn = origWarn;

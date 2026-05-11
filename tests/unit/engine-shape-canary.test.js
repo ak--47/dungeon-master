@@ -154,6 +154,7 @@ describe('engine-shape canary — validator strict clamps', () => {
 				numEvents: 1000,
 				macro: 'flat',
 				percentUsersBornInDataset: 90,
+				verbose: true,  // v1.5.1: warnings now gated on verbose
 				seed: 'canary-clamp',
 			});
 			expect(config.percentUsersBornInDataset).toBe(12);
@@ -173,6 +174,7 @@ describe('engine-shape canary — validator strict clamps', () => {
 				numUsers: 100,
 				numEvents: 1000,
 				bornRecentBias: 0.9,
+				verbose: true,  // v1.5.1: warnings now gated on verbose
 				seed: 'canary-clamp-bias',
 			});
 			expect(config.bornRecentBias).toBe(0.5);

@@ -234,7 +234,7 @@ async function runDungeon(config) {
 				const _t12 = Date.now();
 				importResults = await sendToMixpanel(context);
 				context.reportProgress({ phase: "step", step: "import", status: "complete", duration: Date.now() - _t12 });
-			} else {
+			} else if (validatedConfig.verbose) {
 				console.warn(
 					`⚠️  Skipping Mixpanel import: token "${validatedConfig.token}" does not look like a real Mixpanel project token ` +
 					`(expected 32-char hex). Set a real token or pass empty string to skip. ` +
