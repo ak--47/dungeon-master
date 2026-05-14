@@ -43,6 +43,7 @@ plans/*
 research/*
 !research/.gitkeep
 scripts/experiments/
+scripts/kodiak/validate.sql
 
 # ── Excluded examples ──────────────────────────────────────────────
 examples/*
