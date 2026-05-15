@@ -46,7 +46,7 @@ const ids = (result) => (result.userProfilesData || []).map((u) => u.distinct_id
 const eventTimes = (result) => (result.eventData || []).map((e) => e.time).slice(0, 5);
 
 describe('userSeed split-RNG (single sequential test — vitest runs `it` blocks concurrently)', () => {
-	it('all userSeed contracts (sequential to avoid parallel state interleaving)', async () => {
+	it('all engine + userSeed contracts (one block to avoid vitest parallel state interleaving)', async () => {
 		// 1. Same userSeed + different seed → SAME distinct_ids, DIFFERENT events.
 		const r1 = await DUNGEON_MASTER({ ...baseConfig, userSeed: 'pool-A', seed: 'events-X' });
 		const r2 = await DUNGEON_MASTER({ ...baseConfig, userSeed: 'pool-A', seed: 'events-Y' });
@@ -63,5 +63,11 @@ describe('userSeed split-RNG (single sequential test — vitest runs `it` blocks
 		const r6 = await DUNGEON_MASTER({ ...baseConfig, seed: 'legacy-Y' });
 		expect(ids(r4)).toEqual(ids(r5));            // same seed → same pool
 		expect(ids(r4)).not.toEqual(ids(r6));        // different seed → different pool
-	});
+
+		// 4. REGRESSION: large numUsers does not blow V8's ~65K Promise.all ceiling.
+		// Engine batches userPromises in groups of 50K (user-loop.js). 60K verifies the
+		// boundary. Triggered the kodiak Cloud Run failure on 2026-05-15.
+		const big = await DUNGEON_MASTER({ ...baseConfig, numUsers: 60_000, numEvents: 100_000 });
+		expect(big.userProfilesData?.length).toBeGreaterThan(0);
+	}, 60_000);
 });
