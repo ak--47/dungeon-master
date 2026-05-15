@@ -51,6 +51,8 @@
 		"kodiak:deploy": "gcloud builds submit --config dungeons/user/kodiak/cloudbuild.yaml",
 		"kodiak:plan": "node dungeons/user/kodiak/kickoff.mjs --plan-only",
 		"kodiak:smoke": "node dungeons/user/kodiak/kickoff.mjs --total-events 1000000000 --chunk-cap 10",
+		"kodiak:generate": "node dungeons/user/kodiak/kickoff.mjs --no-wait",
+		"kodiak:status": "node dungeons/user/kodiak/status.mjs",
 		"kodiak:run": "bash dungeons/user/kodiak/run-all.sh",
 		"kodiak:split": "node dungeons/user/kodiak/split-gcs.mjs",
 		"kodiak:load": "node dungeons/user/kodiak/load-bq.mjs --replace"
