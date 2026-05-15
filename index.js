@@ -25,7 +25,7 @@ import { makeMirror } from './lib/generators/mirror.js';
 import { makeGroupProfile, makeProfile } from './lib/generators/profiles.js';
 
 // Utilities
-import { initChance, setDatasetNow, setDatasetBegin, deleteFile } from './lib/utils/utils.js';
+import { initChance, initUserChance, resetUserChance, setDatasetNow, setDatasetBegin, deleteFile } from './lib/utils/utils.js';
 
 // External dependencies
 import dayjs from "dayjs";
@@ -129,6 +129,15 @@ async function runDungeon(config) {
 		// run 1 binds an unseeded instance while run 2 binds a stale one → non-deterministic.
 		if (config.seed) {
 			initChance(config.seed);
+		}
+		// v1.5.1: optional separate user-id RNG. Same userSeed across runs
+		// produces the same user pool, regardless of `seed`. When unset, reset
+		// any leftover state from a prior in-process run so getUserChance()
+		// falls back to the event chance (= pre-v1.5.1 behavior).
+		if (config.userSeed) {
+			initUserChance(config.userSeed);
+		} else {
+			resetUserChance();
 		}
 
 		// Step 1: Validate and enrich configuration (resolves dataset window)

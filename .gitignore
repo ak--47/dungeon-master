@@ -44,6 +44,10 @@ research/*
 !research/.gitkeep
 scripts/experiments/
 scripts/kodiak/validate.sql
+dungeons/user/kodiak/validate.sql
+dungeons/user/kodiak/chunk-plan.json
+chunk-plan.json
+logs/kodiak/
 
 # ── Excluded examples ──────────────────────────────────────────────
 examples/*

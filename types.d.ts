@@ -26,6 +26,19 @@ export interface Dungeon {
     /** RNG seed for reproducible output. Same seed + concurrency=1 = identical data. */
     seed?: string;
     /**
+     * Optional separate RNG seed dedicated to `distinct_id` generation.
+     *
+     * When set, two runs with the same `userSeed` but different `seed` produce
+     * the SAME pool of user IDs but DIFFERENT events. Designed for sharded /
+     * massively-parallel runs (e.g., Cloud Run Job fan-out) that need cross-shard
+     * user identity — every shard generating bucket N pulls from the same 3M
+     * user IDs while producing unique events of its own.
+     *
+     * When unset, the engine falls back to `seed` for user-id generation —
+     * existing dungeons stay byte-identical.
+     */
+    userSeed?: string;
+    /**
      * Number of days the dataset spans. Default: 30.
      *
      * Safe range: `[14, 365]`. Below 14 → strict-bar engine-validation metrics use
@@ -1906,6 +1919,8 @@ declare module '@ak--47/dungeon-master/utils' {
     export function weighNumRange(min: number, max: number, skew?: number, size?: number): number[];
     export function pickAWinner(items: string[], mostChosenIndex?: number): () => string[];
     export function initChance(seed?: string): unknown;
+    export function initUserChance(seed?: string): unknown;
+    export function getUserChance(): unknown;
     export function TimeSoup(earliestTime: number, latestTime: number, peaks?: number, deviation?: number, mean?: number, dayOfWeekWeights?: number[] | null, hourOfDayWeights?: number[] | null): number;
     export function weighArray<T>(items: T[]): T[];
     export function generateUser(user_id: string, opts: Record<string, unknown>): Record<string, unknown>;
