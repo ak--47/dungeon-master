@@ -50,6 +50,7 @@
 		"dungeon:schema": "node ./scripts/extract-dungeon-schema.mjs",
 		"kodiak:deploy": "gcloud builds submit --config dungeons/user/kodiak/cloudbuild.yaml",
 		"kodiak:plan": "node dungeons/user/kodiak/kickoff.mjs --plan-only",
+		"kodiak:smoke:local": "bash dungeons/user/kodiak/smoke-local.sh",
 		"kodiak:smoke": "node dungeons/user/kodiak/kickoff.mjs --total-events 1000000000 --chunk-cap 10",
 		"kodiak:generate": "node dungeons/user/kodiak/kickoff.mjs --no-wait",
 		"kodiak:status": "node dungeons/user/kodiak/status.mjs",
