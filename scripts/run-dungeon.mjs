@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import path from 'path';
+import fs from 'fs';
 import generate from '../index.js';
 const { NODE_ENV = "unknown" } = process.env;
 
@@ -14,9 +15,19 @@ if (!dungeonPath) {
 }
 
 // Resolve the absolute path
-const absolutePath = path.isAbsolute(dungeonPath)
+let absolutePath = path.isAbsolute(dungeonPath)
 	? dungeonPath
 	: path.resolve(process.cwd(), dungeonPath);
+
+// Extension fallback: ESM requires explicit extension. Try .js / .mjs / .json.
+if (!fs.existsSync(absolutePath)) {
+	for (const ext of ['.js', '.mjs', '.json']) {
+		if (fs.existsSync(absolutePath + ext)) {
+			absolutePath += ext;
+			break;
+		}
+	}
+}
 
 // Handle Ctrl+C gracefully — let user-loop finish current user, then exit
 process.on('SIGINT', () => {
