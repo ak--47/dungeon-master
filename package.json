@@ -55,8 +55,7 @@
 		"kodiak:generate": "node dungeons/user/kodiak/kickoff.mjs --no-wait",
 		"kodiak:status": "node dungeons/user/kodiak/status.mjs",
 		"kodiak:run": "bash dungeons/user/kodiak/run-all.sh",
-		"kodiak:split": "node dungeons/user/kodiak/split-gcs.mjs",
-		"kodiak:load": "node dungeons/user/kodiak/load-bq.mjs --replace"
+		"kodiak:load": "node dungeons/user/kodiak/load-bq.mjs --replace --no-wait"
 	},
 	"repository": {
 		"type": "git",
