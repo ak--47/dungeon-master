@@ -1778,7 +1778,7 @@ declare module '@ak--47/dungeon-master/hook-patterns' {
  * | `attributedBy` | `conversionEvent`, `attributionEvent`, `attributionProperty` | `model` (default: `'lastTouch'`) |
  */
 export interface EmulateOptions {
-    type: 'frequencyByFrequency' | 'funnelFrequency' | 'aggregatePerUser' | 'timeToConvert' | 'attributedBy' | 'sessionMetrics' | 'retention';
+    type: 'frequencyByFrequency' | 'funnelFrequency' | 'aggregatePerUser' | 'timeToConvert' | 'attributedBy' | 'sessionMetrics' | 'retention' | 'distinctCount';
     metricEvent?: string;
     breakdownByFrequencyOf?: string;
     perUser?: boolean;
@@ -1843,6 +1843,10 @@ export interface EmulateOptions {
      * pattern requires COMPOUNDED retention which is not supported here).
      */
     birthCanRetain?: boolean;
+
+    // v1.5.1 distinctCount extensions
+    /** Optional cap on the number of top-N values returned in `top_values`. Defaults to 25 (matches Mixpanel UI). */
+    topN?: number;
 }
 
 /** v1.5.0 — config for `emulateBreakdown({ type: 'retention' })`. */
