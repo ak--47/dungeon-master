@@ -13,9 +13,65 @@ type Primitives = string | number | boolean | Date | Record<string, any>;
 export type ValueValid = Primitives | ValueValid[] | (() => ValueValid);
 
 /**
+ * v1.5.1 — credentials sub-object. Groups Mixpanel project credentials. Top-level
+ * `token` / `region` / etc. remain functional as a back-compat alias; when both
+ * are set, the top-level value wins with a verbose warning.
+ */
+export interface DungeonCredentials {
+    token?: string;
+    region?: 'US' | 'EU' | 'IN';
+    serviceAccount?: string;
+    serviceSecret?: string;
+    projectId?: string;
+}
+
+/**
+ * v1.5.1 — switches sub-object. Groups data-shape booleans. Top-level keys
+ * remain functional as a back-compat alias; same precedence rules as
+ * `DungeonCredentials`.
+ */
+export interface DungeonSwitches {
+    hasLocation?: boolean;
+    hasCampaigns?: boolean;
+    hasAdSpend?: boolean;
+    hasSessionIds?: boolean;
+    hasAvatar?: boolean;
+    hasIOSDevices?: boolean;
+    hasAndroidDevices?: boolean;
+    hasDesktopDevices?: boolean;
+    hasBrowser?: boolean;
+    isAnonymous?: boolean;
+    alsoInferFunnels?: boolean;
+    hasAttributionFlags?: boolean;
+}
+
+/**
+ * v1.5.1 — identity sub-object. Groups identity-model knobs. Top-level
+ * `avgDevicePerUser` / `sessionTimeout` remain functional as a back-compat
+ * alias.
+ *
+ * `hasAnonIds` is DEPRECATED — when present here, it maps to
+ * `avgDevicePerUser: 1` with a verbose warning. Use `avgDevicePerUser` instead.
+ */
+export interface DungeonIdentity {
+    avgDevicePerUser?: number;
+    sessionTimeout?: number;
+    /** @deprecated v1.5.1 — use `avgDevicePerUser: 1` instead. */
+    hasAnonIds?: boolean;
+}
+
+/**
  * main config object for the entire data generation
  */
 export interface Dungeon {
+    // ── v1.5.1 sub-object grouping (optional) ──
+    /** v1.5.1 — credentials sub-object. See `DungeonCredentials`. */
+    credentials?: DungeonCredentials;
+    /** v1.5.1 — switches sub-object. See `DungeonSwitches`. */
+    switches?: DungeonSwitches;
+    /** v1.5.1 — identity sub-object. See `DungeonIdentity`. */
+    identity?: DungeonIdentity;
+
     // ── Core Parameters ──
     /** Optional dungeon version. Not used by the engine — serves as metadata for tracking revisions when configs are saved/shared. */
     version?: string | number;
