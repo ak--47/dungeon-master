@@ -222,6 +222,7 @@ describe('macro integration with config-validator', () => {
 		// the documented expected `tail_ratio` shapes (0.84/0.86/1.13/1.89/0.80) are
 		// reachable on the simplest dungeon (foobar) within ±25% per macro.
 		// See `plans/ENGINE-BUNCHINESS/FIX.md` round-2 results table.
+		// v1.5.1: presets ship `avgActiveDaysPerUser` defaults (except `flat`).
 		expect(MACRO_PRESETS.flat).toEqual({
 			bornRecentBias: 0,
 			percentUsersBornInDataset: 12,
@@ -231,21 +232,25 @@ describe('macro integration with config-validator', () => {
 			bornRecentBias: 0.1,
 			percentUsersBornInDataset: 12,
 			preExistingSpread: 'uniform',
+			avgActiveDaysPerUser: 15,
 		});
 		expect(MACRO_PRESETS.growth).toEqual({
 			bornRecentBias: 0.3,
 			percentUsersBornInDataset: 30,
 			preExistingSpread: 'pinned',
+			avgActiveDaysPerUser: 10,
 		});
 		expect(MACRO_PRESETS.viral).toEqual({
 			bornRecentBias: 0.6,
 			percentUsersBornInDataset: 55,
 			preExistingSpread: 'pinned',
+			avgActiveDaysPerUser: 20,
 		});
 		expect(MACRO_PRESETS.decline).toEqual({
 			bornRecentBias: -0.3,
 			percentUsersBornInDataset: 5,
 			preExistingSpread: 'uniform',
+			avgActiveDaysPerUser: 5,
 		});
 	});
 
