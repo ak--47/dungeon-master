@@ -1128,6 +1128,15 @@ export interface UserProfile {
     avatar?: string;
     created: string | undefined;
     distinct_id: string;
+    /**
+     * v1.5.1: when `true`, the engine considers this profile "anonymous" — the
+     * user never reached an `isAuthEvent` step. Profile still exists in
+     * `userProfilesData` (so hooks and downstream tools can see the full
+     * population), but `mixpanel-sender` filters it out before pushing to
+     * `/engage`. Hooks can rescue by deleting the flag inside the `everything`
+     * hook.
+     */
+    _drop?: boolean;
     [key: string]: ValueValid;
 }
 
@@ -1213,6 +1222,12 @@ export type Result = {
     userCount?: number;
     groupCount?: number;
     avgEPS?: number;
+    /**
+     * v1.5.1: count of profiles eligible for Mixpanel `/engage` push (i.e., not
+     * flagged with `_drop: true`). Anonymous non-converters carry `_drop: true`
+     * so `userProfilesData.length - profilesPushed` = dropped profile count.
+     */
+    profilesPushed?: number;
     /** Progress callback summary. Only present when `onProgress` was provided. */
     progress?: ProgressSummary;
 };

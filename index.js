@@ -260,6 +260,12 @@ async function runDungeon(config) {
 
 		const progressSummary = context.getProgressSummary();
 
+		// v1.5.1: count of profiles that would be pushed to Mixpanel (non-`_drop`).
+		// Anonymous non-converters get `_drop: true` stamped in user-loop.js so
+		// mixpanel-sender skips them. `userProfilesData` still holds the full
+		// population for downstream tools.
+		const profilesPushed = countProfilesPushed(storage.userProfilesData);
+
 		return {
 			...extractedData,
 			importResults,
@@ -268,6 +274,7 @@ async function runDungeon(config) {
 			operations: context.getOperations(),
 			eventCount: context.getStoredEventCount(),
 			userCount: context.getUserCount(),
+			profilesPushed,
 			...(progressSummary.updates > 0 || progressSummary.errors > 0 ? { progress: progressSummary } : {})
 		};
 
@@ -542,6 +549,20 @@ async function flushStorageToDisk(storage, config) {
  */
 function extractFileInfo(storage) {
 	return collectWrittenFiles(storage);
+}
+
+/**
+ * Count profiles that would be pushed to Mixpanel (anonymous non-converters carry
+ * `_drop: true` and are skipped by mixpanel-sender). v1.5.1.
+ * @param {any} profilesContainer
+ * @returns {number}
+ */
+function countProfilesPushed(profilesContainer) {
+	if (!profilesContainer) return 0;
+	const arr = Array.isArray(profilesContainer) ? profilesContainer : Array.from(profilesContainer);
+	let n = 0;
+	for (const p of arr) if (p && !p._drop) n++;
+	return n;
 }
 
 /**
