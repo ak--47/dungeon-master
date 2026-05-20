@@ -317,6 +317,32 @@ export interface Dungeon {
      */
     avgActiveDaysPerUser?: number;
     /**
+     * v1.5.1 — target retention shape. Anchor points `day1`, `day7`, `day30`
+     * etc. define the per-day-offset weight a user is active. When set, biases
+     * `buildActiveDayPlan` toward the curve and the effective
+     * `avgActiveDaysPerUser` is derived from the curve's sum across the user's
+     * window (curve wins over an explicit `avgActiveDaysPerUser`).
+     *
+     * - `type`: `'logarithmic'` (default, real-world retention shape) or `'linear'`.
+     * - `dayN` keys: fraction active on day N from birth (0..1). Day 0 is
+     *   implicitly 1.0 (every user is active on their birth day).
+     * - Days beyond the largest anchor extrapolate from the last segment.
+     *
+     * Example: `{ day1: 0.40, day7: 0.20, day30: 0.08 }` produces a curve that
+     * approximates a typical product's 30-day retention.
+     */
+    retentionCurve?: {
+        type?: 'logarithmic' | 'linear';
+        day1?: number;
+        day3?: number;
+        day7?: number;
+        day14?: number;
+        day30?: number;
+        day60?: number;
+        day90?: number;
+        [dayKey: string]: number | 'logarithmic' | 'linear' | undefined;
+    };
+    /**
      * Maximum number of UTM-stamped events per user. Matches Mixpanel's `TOUCHPOINTS_LIMIT`
      * (`backend/libquery/properties_over_time/attributed_value_reader.cpp` line 16).
      *
