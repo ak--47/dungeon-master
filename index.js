@@ -26,6 +26,7 @@ import { makeGroupProfile, makeProfile } from './lib/generators/profiles.js';
 
 // Utilities
 import { initChance, initUserChance, resetUserChance, setDatasetNow, setDatasetBegin, deleteFile } from './lib/utils/utils.js';
+import { runWithDataset } from './lib/utils/dataset-context.js';
 
 // External dependencies
 import dayjs from "dayjs";
@@ -149,10 +150,19 @@ async function runDungeon(config) {
 		const fixedBegin = /** @type {number} */ (validatedConfig.datasetStart);
 
 		// Anchor the wall-clock-free reference used by date()/day() helpers in
-		// dungeon configs. Without this, those factories produce values relative
-		// to process-start, which leaks wall-clock time into the output.
+		// dungeon configs. v1.5.1: ALS-scoped via `runWithDataset` below; the
+		// legacy `setDatasetNow` / `setDatasetBegin` setters still fire as a
+		// back-compat fallback for tests that haven't migrated to the new API.
 		setDatasetNow(fixedNow);
 		setDatasetBegin(fixedBegin);
+
+		// v1.5.1: wrap the entire pipeline in an ALS scope so factory thunks
+		// (`date`, `day`, `dateRange`, `TimeSoup`, `validTime`) inside dungeon
+		// configs resolve the dataset window per-`generate()`-call instead of
+		// reading clobberable module state. Concurrent in-process `generate()`
+		// calls now run safely with distinct windows. See
+		// `lib/utils/dataset-context.js`.
+		return await runWithDataset(fixedBegin, fixedNow, async () => {
 
 		// Step 2: Create context with validated config (pass time constants explicitly)
 		const context = createContext(validatedConfig, null, { fixedNow, fixedBegin });
@@ -277,6 +287,8 @@ async function runDungeon(config) {
 			profilesPushed,
 			...(progressSummary.updates > 0 || progressSummary.errors > 0 ? { progress: progressSummary } : {})
 		};
+
+		}); // end runWithDataset
 
 	} catch (error) {
 		logger.error({ err: error }, `Error: ${error.message}`);
