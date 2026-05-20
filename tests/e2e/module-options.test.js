@@ -34,7 +34,11 @@ function validTime(str) {
 describe.sequential('validation + identity', () => {
 
 	test('creates anonymousIds', async () => {
-		const results = await generate({ ...PINNED_DATES, writeToDisk: false, numEvents: 1000, numUsers: 100, hasAnonIds: true });
+		// v1.5.1: pin `percentUsersBornInDataset: 0` so every user is pre-existing
+		// and `userAuthed` starts true (Phase 2 identity model). Without this,
+		// born-in-dataset users without an `isAuthEvent` step stay anonymous and
+		// their standalone events are device-only — breaking the user_id assertion.
+		const results = await generate({ ...PINNED_DATES, writeToDisk: false, numEvents: 1000, numUsers: 100, hasAnonIds: true, percentUsersBornInDataset: 0 });
 		const { eventData } = results;
 		expect(eventData.map(a => a.device_id).filter(a => a).length).toBe(eventData.length);
 		expect(eventData.map(a => a.user_id).filter(a => a).length).toBe(eventData.length);
