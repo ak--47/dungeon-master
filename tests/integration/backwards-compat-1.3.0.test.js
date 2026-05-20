@@ -116,13 +116,12 @@ describe('per-user-per-day budget', () => {
 });
 
 describe('preExistingSpread', () => {
-	test('"uniform" allows events to land before the dataset window start', async () => {
+	test('"uniform" spreads pre-existing users across the full dataset window', async () => {
 		// With percentUsersBornInDataset: 0, every user is pre-existing.
 		// Under "uniform", their adjustedCreated is sampled from
-		// [FIXED_BEGIN - 30d, FIXED_BEGIN], so userFirstEventTime can sit before
-		// the nominal window. TimeSoup will then place events anywhere in
-		// [userFirstEventTime, FIXED_NOW], so we expect at least some events to
-		// fall before the standard window start.
+		// [FIXED_BEGIN - 30d, FIXED_BEGIN]. v1.5.1 strictBornTime clamps
+		// userFirstEventTime at FIXED_BEGIN, so events stay inside the window
+		// but span its full width.
 		const result = await generate({
 			...SMALL,
 			seed: 'spread-uniform',
@@ -135,9 +134,10 @@ describe('preExistingSpread', () => {
 		const times = result.eventData.map(e => Date.parse(e.time)).sort((a, b) => a - b);
 		expect(times.length).toBeGreaterThan(0);
 		const span = (times[times.length - 1] - times[0]) / (86400 * 1000);
-		// Total span across all events should exceed the nominal 30-day window
-		// because uniform pushes some users' first event up to 30 days earlier.
-		expect(span).toBeGreaterThan(30);
+		// Span should cover most of the 30-day window (uniform spread fills it).
+		// strictBornTime (v1.5.1) prevents events before FIXED_BEGIN, so span ≤ 30.
+		expect(span).toBeGreaterThanOrEqual(25);
+		expect(span).toBeLessThanOrEqual(30);
 	});
 
 	test('"pinned" keeps pre-existing users\' first event near the dataset window start', async () => {
