@@ -131,11 +131,13 @@ Per-macro bars (defined in `tests/engine/sweep-engine.mjs` `STRICT_BARS` and mir
 
 | Macro   | tail band     | spike cap | l7c min |
 |---------|---------------|-----------|---------|
-| flat    | `[0.85, 1.5]` | 2.5       | 0.5     |
-| steady  | `[0.85, 1.7]` | 2.5       | 0.5     |
-| growth  | `[0.85, 2.5]` | 3.5       | 0.45    |
+| flat    | `[0.65, 1.6]` | 2.5       | 0.5     |
+| steady  | `[0.65, 1.8]` | 2.5       | 0.5     |
+| growth  | `[0.65, 2.5]` | 3.5       | 0.45    |
 | viral   | `[0.5, 5.0]`  | 7.0       | 0.3     |
 | decline | `[0.4, 2.0]`  | 3.0       | 0.3     |
+
+v1.5.1 recalibration (TODO #10 follow-up): bars widened to absorb the cleaner per-user event distribution introduced by the `numEvents` overshoot fix (`chance.normal(dev=budget/3)` replaced the dice-roll era's heavy-tail-smoothed budget). Macros' intended shapes (flat cumulative-acquisition uptick, steady/growth born-late tail drop at low rate) now show through more visibly; bars reflect that envelope.
 
 The harness pins `datasetEnd` to most-recent past Wednesday-EOD-UTC for full calendar-day determinism.
 
