@@ -1,70 +1,46 @@
-// ── TWEAK THESE ──
-const SEED = "dm4-community";
-const num_days = 120;
-const num_users = 10_000;
-const avg_events_per_user_per_day = 1.2;
-let token = "your-mixpanel-token";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
-
-dayjs.extend(utc);
-const chance = u.initChance(SEED);
 /** @typedef  {import("../../types").Dungeon} Config */
 
-// Generate consistent wiki/article IDs at module level
-const wikiIds = v.range(1, 500).map(() => `WIKI_${v.uid(6)}`);
-const communityIds = v.range(1, 30).map(() => `COMM_${v.uid(4)}`);
-
-/**
- * ===================================================================
- * DATASET OVERVIEW
- * ===================================================================
+// ── OVERVIEW ──
+/*
+ * NAME:       FanVerse
+ * APP:        Fan wiki and community discussion platform where users create
+ *             articles, discuss topics, moderate content, and build collaborative
+ *             knowledge bases across fandoms. Core loop: sign up → search → read
+ *             articles → contribute → discuss. Revenue: free / supporter ($4.99,
+ *             ad-free) / pro ($12.99, analytics + badges).
+ * SCALE:      10,000 users, ~1.4M events, 121 days (2026-01-01 → 2026-05-01)
+ * CORE LOOP:  account created → search performed → article viewed → article published → comment posted
  *
- * FanVerse -- a fan wiki and community discussion platform where
- * users create articles, discuss topics, moderate content, and
- * build collaborative knowledge bases across fandoms.
+ * EVENTS (18):
+ *   article viewed (9) > app session (8) > upvote given (7) > comment posted (6)
+ *   > search performed (6) > notification received (6) > discussion posted (5)
+ *   > article edited (4) > article published (3) > user followed (3)
+ *   > wiki page created (2) > media uploaded (2) > moderation action (2)
+ *   > profile updated (2) > account created (1) > support ticket created (1)
+ *   > report submitted (1) > account deactivated (1)
  *
- * - 10,000 users over 120 days
- * - Multi-role system: power creators (5%), moderators (8%),
- *   active contributors (25%), readers (45%), lurkers (17%)
- * - Core loop: sign up -> search -> read articles -> contribute -> discuss
- * - Revenue: free / supporter ($4.99, ad-free) / pro ($12.99, analytics+badges)
+ * FUNNELS (5):
+ *   - Onboarding Flow:     account created → search performed → article viewed → discussion posted (40%)
+ *   - Content Creation:    article viewed → article published → comment posted (35%)
+ *   - Engagement Loop:     article viewed → upvote given → comment posted → discussion posted (30%)
+ *   - Creator to Supporter: article published → profile updated → notification received (45%)
+ *   - Moderation Pipeline: report submitted → moderation action (60%)
  *
- * Advanced Features:
- * - Personas: 5 archetypes (power_creator, moderator, active_contributor, reader, lurker)
- * - Engagement Decay: linear decline with floor
- * - Subscription: 3-tier with supporter and pro plans
- * - Attribution: google_search, reddit_referral, youtube_link, organic
- * - Features: live_discussions (day 25), interactive_polls (day 55)
- *
- * Key entities:
- * - wiki_id: unique wiki article identifier
- * - community_id: community/fandom grouping
- * - content_hub: topical category (gaming, anime, movies, tv, comics, music)
- * - discussion_mode: classic vs live (driven by Feature rollout)
+ * USER PROPS:  role, contributor_level, articles_created, reputation_score, preferred_hub, subscription_tier, Platform, content_hub
+ * SUPER PROPS: subscription_tier, Platform, content_hub
+ * SCD PROPS:   contributor_level (newcomer/regular/trusted/admin, monthly fuzzy, max 8)
+ * GROUPS:      none
  */
 
-/**
- * ===================================================================
- * ANALYTICS HOOKS (10 hooks)
- *
- * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable via
- * raw-prop breakdowns (day, content_hub, subscription_tier) or behavioral cohorts.
- *
- * Adds 9. CONTENT CREATION TIME-TO-CONVERT (Pro 1.3x faster, Free 1.25x slower)
- *      [funnel-post: visible only in Mixpanel funnel median TTC; cross-event
- *      MIN→MIN SQL queries do NOT show this]
- * and 10. ARTICLE-PUBLISHED MAGIC NUMBER (sweet 2-5 → +35% upvote_count;
- * over 6+ → drop 25% upvote events).
- * ===================================================================
- *
+// ── HOOK STORIES ──
+/*
  * -------------------------------------------------------------------
  * 1. WEEKEND CONTENT SURGE (event hook)
  * -------------------------------------------------------------------
@@ -329,16 +305,238 @@ const communityIds = v.range(1, 30).map(() => `COMM_${v.uid(4)}`);
  * Article-Published Magic Num   | over upvote events  | 1x       | 0.75x   | -25%
  */
 
+// ── SCALE ──
+const SEED = "dm4-community";
+const NUM_USERS = 10_000;
+const DATASET_START = "2026-01-01T00:00:00Z";
+const DATASET_END = "2026-05-01T23:59:59Z";
+const EVENTS_PER_DAY = 1.2;
+const token = process.env.MP_TOKEN || "your-mixpanel-token";
+
+const chance = u.initChance(SEED);
+
+// ── KNOBS (tweak these to reshape stories) ──
+const WEEKEND_WORD_COUNT_MULT = 1.5;
+
+const TREND_START_DAY = 35;
+const TREND_END_DAY = 50;
+const TREND_VIEW_MULT = 2;
+
+const POWER_CREATOR_PUBLISH_THRESHOLD = 20;
+const POWER_CREATOR_UPVOTE_MULT = 3;
+
+const DISCUSSION_CLONE_LIKELIHOOD = 50;
+
+const EDIT_WAR_THRESHOLD = 5;
+const EDIT_WAR_QUALITY_MIN = 1.0;
+const EDIT_WAR_QUALITY_MAX = 2.0;
+
+const LURKER_EVENT_THRESHOLD = 5;
+const LURKER_CHURN_CUTOFF_DAYS = 10;
+const LURKER_DROP_LIKELIHOOD = 60;
+
+const PRO_LIFT_FREE_DROP_LIKELIHOOD = 65;
+
+const TTC_PRO_FACTOR = 0.77;
+const TTC_FREE_FACTOR = 1.25;
+
+const ARTICLE_SWEET_MIN = 2;
+const ARTICLE_SWEET_MAX = 5;
+const ARTICLE_OVER_THRESHOLD = 6;
+const ARTICLE_UPVOTE_BOOST = 1.35;
+const ARTICLE_UPVOTE_DROP_LIKELIHOOD = 25;
+
+// ── DATA ARRAYS ──
+// Generate consistent wiki/article IDs at module level
+const wikiIds = v.range(1, 500).map(() => `WIKI_${v.uid(6)}`);
+const communityIds = v.range(1, 30).map(() => `COMM_${v.uid(4)}`);
+
+// ── HELPER FUNCTIONS ──
+function handleUserHooks(record) {
+	// H7: CREATOR PROFILES — creators get high articles_created and reputation.
+	// Moderators get mid-range reputation. Readers/lurkers stay at defaults.
+	if (record.role === "creator") {
+		record.articles_created = chance.integer({ min: 50, max: 200 });
+		record.reputation_score = chance.integer({ min: 80, max: 100 });
+		record.contributor_level = "admin";
+	} else if (record.role === "moderator") {
+		record.articles_created = chance.integer({ min: 10, max: 50 });
+		record.reputation_score = chance.integer({ min: 40, max: 70 });
+		record.contributor_level = "trusted";
+	} else if (record.role === "contributor") {
+		record.articles_created = chance.integer({ min: 1, max: 15 });
+		record.reputation_score = chance.integer({ min: 15, max: 50 });
+		record.contributor_level = "regular";
+	} else {
+		record.articles_created = 0;
+		record.reputation_score = chance.integer({ min: 0, max: 20 });
+		record.contributor_level = "newcomer";
+	}
+	return record;
+}
+
+function handleFunnelPostHooks(record, meta) {
+	// H9: CONTENT CREATION TIME-TO-CONVERT — Pro/supporter complete 1.3x
+	// faster (factor 0.77); Free 1.25x slower (factor 1.25).
+	const segment = meta?.profile?.subscription_tier;
+	if (Array.isArray(record) && record.length > 1) {
+		const factor = (
+			segment === "pro" || segment === "supporter" ? TTC_PRO_FACTOR :
+			segment === "free" ? TTC_FREE_FACTOR :
+			1.0
+		);
+		if (factor !== 1.0) {
+			for (let i = 1; i < record.length; i++) {
+				const prev = dayjs(record[i - 1].time);
+				const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+				record[i].time = prev.add(newGap, "milliseconds").toISOString();
+			}
+		}
+	}
+	return record;
+}
+
+function handleEverythingHooks(record, meta) {
+	const datasetStart = dayjs.unix(meta.datasetStart);
+	let events = record;
+	if (!events.length) return record;
+	const profile = meta && meta.profile ? meta.profile : {};
+
+	// -- SUPERPROP STAMPING -----------------------------------
+	// Stamp superProp values from profile onto every event so
+	// they stay consistent per-user instead of randomizing per-event.
+	events.forEach(e => {
+		if (profile.subscription_tier) e.subscription_tier = profile.subscription_tier;
+		if (profile.Platform) e.Platform = profile.Platform;
+		if (profile.content_hub) e.content_hub = profile.content_hub;
+	});
+
+	// HOOK 1: WEEKEND CONTENT SURGE — articles on Sat/Sun get
+	// word_count 1.5x. Mutates raw prop. No flag.
+	for (const e of events) {
+		if (e.event === 'article published' || e.event === 'article viewed') {
+			const dow = new Date(e.time).getUTCDay();
+			if ((dow === 0 || dow === 6) && e.word_count) {
+				e.word_count = Math.floor(e.word_count * WEEKEND_WORD_COUNT_MULT);
+			}
+		}
+	}
+
+	// -- HOOK 2: TRENDING TOPIC WINDOW -------------------------
+	// Days 35-50: gaming hub articles get 2x view_count.
+	// Runs after superProp stamping so content_hub is the
+	// profile's consistent value, not the random event-level one.
+	const TREND_START = datasetStart.add(TREND_START_DAY, "days");
+	const TREND_END = datasetStart.add(TREND_END_DAY, "days");
+	if (profile.content_hub === "gaming") {
+		events.forEach(e => {
+			if (e.event === "article viewed") {
+				const eventTime = dayjs(e.time);
+				if (eventTime.isAfter(TREND_START) && eventTime.isBefore(TREND_END)) {
+					e.view_count = Math.floor((e.view_count || 50) * TREND_VIEW_MULT);
+				}
+			}
+		});
+	}
+
+	// -- HOOK 8: PRO SUBSCRIBER CONTENT CREATION LIFT ---------
+	// Free-tier users drop 65% of comment events to widen the funnel
+	// conversion gap to ~2x vs paid subscribers.
+	if (profile.subscription_tier !== "pro" && profile.subscription_tier !== "supporter") {
+		events = events.filter(e => {
+			if (e.event === "comment posted" && chance.bool({ likelihood: PRO_LIFT_FREE_DROP_LIKELIHOOD })) return false;
+			return true;
+		});
+	}
+
+	// -- HOOK 3: POWER CREATOR ENGAGEMENT LIFT ----------------
+	// Users with >20 article_published events get 3x upvote_count.
+	let publishCount = 0;
+	events.forEach(e => {
+		if (e.event === "article published") publishCount++;
+	});
+
+	if (publishCount > POWER_CREATOR_PUBLISH_THRESHOLD) {
+		events.forEach(e => {
+			if (e.event === "upvote given" && e.upvote_count) {
+				e.upvote_count = Math.floor(e.upvote_count * POWER_CREATOR_UPVOTE_MULT);
+			}
+		});
+	}
+
+	// -- HOOK 4: DISCUSSION DEPTH BY CONTRIBUTOR TYPE ---------
+	// Active contributors get cloned comment_posted events.
+	if (profile.segment === "active_contributor") {
+		const templateComment = events.find(e => e.event === "comment posted");
+		if (templateComment) {
+			const existingComments = events.filter(e => e.event === "comment posted");
+			existingComments.forEach(c => {
+				if (chance.bool({ likelihood: DISCUSSION_CLONE_LIKELIHOOD })) {
+					events.push({
+						...templateComment,
+						time: dayjs(c.time).add(chance.integer({ min: 1, max: 120 }), "minutes").toISOString(),
+						user_id: c.user_id,
+						is_reply: true,
+						comment_length: chance.integer({ min: 20, max: 300 }),
+					});
+				}
+			});
+		}
+	}
+
+	// -- HOOK 5: EDIT WAR DETECTION ---------------------------
+	// Users with >5 article_edited events get reduced edit_quality.
+	const editEvents = events.filter(e => e.event === "article edited");
+	if (editEvents.length > EDIT_WAR_THRESHOLD) {
+		editEvents.forEach(e => {
+			e.edit_quality = chance.floating({ min: EDIT_WAR_QUALITY_MIN, max: EDIT_WAR_QUALITY_MAX, fixed: 1 });
+		});
+	}
+
+	// HOOK 6: LURKER CHURN — users with <5 events lose 60% after
+	// day 10. No flag.
+	if (events.length < LURKER_EVENT_THRESHOLD && events.length > 0) {
+		const firstEventTime = dayjs(events[0].time);
+		const cutoff = firstEventTime.add(LURKER_CHURN_CUTOFF_DAYS, "days");
+		for (let i = events.length - 1; i >= 0; i--) {
+			if (dayjs(events[i].time).isAfter(cutoff) && chance.bool({ likelihood: LURKER_DROP_LIKELIHOOD })) {
+				events.splice(i, 1);
+			}
+		}
+	}
+
+	// HOOK 10: ARTICLE-PUBLISHED MAGIC NUMBER (no flags)
+	// Sweet 2-5 articles published → +35% on upvote_count for
+	// upvote-given events. Over 6+ → drop 25% of upvote-given events
+	// (over-publishing dilutes signal). No flag.
+	const articleCount = events.filter(e => e.event === "article published").length;
+	if (articleCount >= ARTICLE_SWEET_MIN && articleCount <= ARTICLE_SWEET_MAX) {
+		events.forEach(e => {
+			if (e.event === "upvote given" && typeof e.upvote_count === "number") {
+				e.upvote_count = Math.round(e.upvote_count * ARTICLE_UPVOTE_BOOST);
+			}
+		});
+	} else if (articleCount >= ARTICLE_OVER_THRESHOLD) {
+		for (let i = events.length - 1; i >= 0; i--) {
+			if (events[i].event === "upvote given" && chance.bool({ likelihood: ARTICLE_UPVOTE_DROP_LIKELIHOOD })) {
+				events.splice(i, 1);
+			}
+		}
+	}
+
+	return events;
+}
+
+// ── CONFIG ──
 /** @type {Config} */
 const config = {
 	version: 2,
 	token,
 	seed: SEED,
-	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-05-01T23:59:59Z",
-	// numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
+	datasetStart: DATASET_START,
+	datasetEnd: DATASET_END,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	hasAnonIds: true,
 	avgDevicePerUser: 2,
 	hasSessionIds: true,
@@ -752,184 +950,10 @@ const config = {
 		},
 	],
 
-	// -- Hook Function ------------------------------------------------
-	hook: function (record, type, meta) {
-		// -- HOOK 7: CREATOR PROFILES (user) --------------------------
-		// Creators get high articles_created and reputation. Moderators
-		// get mid-range reputation. Readers/lurkers stay at defaults.
-		if (type === "user") {
-			if (record.role === "creator") {
-				record.articles_created = chance.integer({ min: 50, max: 200 });
-				record.reputation_score = chance.integer({ min: 80, max: 100 });
-				record.contributor_level = "admin";
-			} else if (record.role === "moderator") {
-				record.articles_created = chance.integer({ min: 10, max: 50 });
-				record.reputation_score = chance.integer({ min: 40, max: 70 });
-				record.contributor_level = "trusted";
-			} else if (record.role === "contributor") {
-				record.articles_created = chance.integer({ min: 1, max: 15 });
-				record.reputation_score = chance.integer({ min: 15, max: 50 });
-				record.contributor_level = "regular";
-			} else {
-				record.articles_created = 0;
-				record.reputation_score = chance.integer({ min: 0, max: 20 });
-				record.contributor_level = "newcomer";
-			}
-		}
-
-		// HOOK 9 (T2C): CONTENT CREATION TIME-TO-CONVERT (funnel-post)
-		// Pro/supporter subscribers complete the Content Creation funnel
-		// 1.3x faster (factor 0.77); Free 1.25x slower (factor 1.25).
-		if (type === "funnel-post") {
-			const segment = meta?.profile?.subscription_tier;
-			if (Array.isArray(record) && record.length > 1) {
-				const factor = (
-					segment === "pro" || segment === "supporter" ? 0.77 :
-					segment === "free" ? 1.25 :
-					1.0
-				);
-				if (factor !== 1.0) {
-					for (let i = 1; i < record.length; i++) {
-						const prev = dayjs(record[i - 1].time);
-						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-						record[i].time = prev.add(newGap, "milliseconds").toISOString();
-					}
-				}
-			}
-		}
-
-		// -- EVERYTHING HOOKS -----------------------------------------
-		if (type === "everything") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			let events = record;
-			if (!events.length) return record;
-			const profile = meta && meta.profile ? meta.profile : {};
-
-			// -- SUPERPROP STAMPING -----------------------------------
-			// Stamp superProp values from profile onto every event so
-			// they stay consistent per-user instead of randomizing per-event.
-			events.forEach(e => {
-				if (profile.subscription_tier) e.subscription_tier = profile.subscription_tier;
-				if (profile.Platform) e.Platform = profile.Platform;
-				if (profile.content_hub) e.content_hub = profile.content_hub;
-			});
-
-			// HOOK 1: WEEKEND CONTENT SURGE — articles on Sat/Sun get
-			// word_count 1.5x. Mutates raw prop. No flag.
-			for (const e of events) {
-				if (e.event === 'article published' || e.event === 'article viewed') {
-					const dow = new Date(e.time).getUTCDay();
-					if ((dow === 0 || dow === 6) && e.word_count) {
-						e.word_count = Math.floor(e.word_count * 1.5);
-					}
-				}
-			}
-
-			// -- HOOK 2: TRENDING TOPIC WINDOW -------------------------
-			// Days 35-50: gaming hub articles get 2x view_count.
-			// Runs after superProp stamping so content_hub is the
-			// profile's consistent value, not the random event-level one.
-			const TREND_START = datasetStart.add(35, "days");
-			const TREND_END = datasetStart.add(50, "days");
-			if (profile.content_hub === "gaming") {
-				events.forEach(e => {
-					if (e.event === "article viewed") {
-						const eventTime = dayjs(e.time);
-						if (eventTime.isAfter(TREND_START) && eventTime.isBefore(TREND_END)) {
-							e.view_count = Math.floor((e.view_count || 50) * 2);
-						}
-					}
-				});
-			}
-
-			// -- HOOK 8: PRO SUBSCRIBER CONTENT CREATION LIFT ---------
-			// Free-tier users drop 65% of comment events to widen the funnel
-			// conversion gap to ~2x vs paid subscribers.
-			if (profile.subscription_tier !== "pro" && profile.subscription_tier !== "supporter") {
-				events = events.filter(e => {
-					if (e.event === "comment posted" && chance.bool({ likelihood: 65 })) return false;
-					return true;
-				});
-			}
-
-			// -- HOOK 3: POWER CREATOR ENGAGEMENT LIFT ----------------
-			// Users with >20 article_published events get 3x upvote_count.
-			let publishCount = 0;
-			events.forEach(e => {
-				if (e.event === "article published") publishCount++;
-			});
-
-			if (publishCount > 20) {
-				events.forEach(e => {
-					if (e.event === "upvote given" && e.upvote_count) {
-						e.upvote_count = Math.floor(e.upvote_count * 3);
-					}
-				});
-			}
-
-			// -- HOOK 4: DISCUSSION DEPTH BY CONTRIBUTOR TYPE ---------
-			// Active contributors get cloned comment_posted events.
-			if (profile.segment === "active_contributor") {
-				const templateComment = events.find(e => e.event === "comment posted");
-				if (templateComment) {
-					const existingComments = events.filter(e => e.event === "comment posted");
-					existingComments.forEach(c => {
-						if (chance.bool({ likelihood: 50 })) {
-							events.push({
-								...templateComment,
-								time: dayjs(c.time).add(chance.integer({ min: 1, max: 120 }), "minutes").toISOString(),
-								user_id: c.user_id,
-								is_reply: true,
-								comment_length: chance.integer({ min: 20, max: 300 }),
-							});
-						}
-					});
-				}
-			}
-
-			// -- HOOK 5: EDIT WAR DETECTION ---------------------------
-			// Users with >5 article_edited events get reduced edit_quality.
-			const editEvents = events.filter(e => e.event === "article edited");
-			if (editEvents.length > 5) {
-				editEvents.forEach(e => {
-					e.edit_quality = chance.floating({ min: 1.0, max: 2.0, fixed: 1 });
-				});
-			}
-
-			// HOOK 6: LURKER CHURN — users with <5 events lose 60% after
-			// day 10. No flag.
-			if (events.length < 5 && events.length > 0) {
-				const firstEventTime = dayjs(events[0].time);
-				const cutoff = firstEventTime.add(10, "days");
-				for (let i = events.length - 1; i >= 0; i--) {
-					if (dayjs(events[i].time).isAfter(cutoff) && chance.bool({ likelihood: 60 })) {
-						events.splice(i, 1);
-					}
-				}
-			}
-
-			// HOOK 10: ARTICLE-PUBLISHED MAGIC NUMBER (no flags)
-			// Sweet 2-5 articles published → +35% on upvote_count for
-			// upvote-given events. Over 6+ → drop 25% of upvote-given events
-			// (over-publishing dilutes signal). No flag.
-			const articleCount = events.filter(e => e.event === "article published").length;
-			if (articleCount >= 2 && articleCount <= 5) {
-				events.forEach(e => {
-					if (e.event === "upvote given" && typeof e.upvote_count === "number") {
-						e.upvote_count = Math.round(e.upvote_count * 1.35);
-					}
-				});
-			} else if (articleCount >= 6) {
-				for (let i = events.length - 1; i >= 0; i--) {
-					if (events[i].event === "upvote given" && chance.bool({ likelihood: 25 })) {
-						events.splice(i, 1);
-					}
-				}
-			}
-
-			return events;
-		}
-
+	hook(record, type, meta) {
+		if (type === "user") return handleUserHooks(record);
+		if (type === "funnel-post") return handleFunnelPostHooks(record, meta);
+		if (type === "everything") return handleEverythingHooks(record, meta);
 		return record;
 	},
 };
