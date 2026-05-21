@@ -1,70 +1,57 @@
-// ── TWEAK THESE ──
-const SEED = "harness-sass";
-const num_days = 120;
-const num_users = 10_000;
-const avg_events_per_user_per_day = 1.2;
-let token = "your-mixpanel-token";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 import { findFirstSequence, scaleFunnelTTC } from "../../lib/hook-helpers/timing.js";
-
-dayjs.extend(utc);
-const chance = u.initChance(SEED);
-
 /** @typedef  {import("../../types").Dungeon} Config */
 
+// ── OVERVIEW ──
 /*
- * ═══════════════════════════════════════════════════════════════════════════════
- * DATASET OVERVIEW
- * ═══════════════════════════════════════════════════════════════════════════════
+ * NAME:       CloudForge
+ * APP:        B2B SaaS that fuses infrastructure monitoring (Datadog-style) with
+ *             deployment automation (Terraform-style). Engineering teams create
+ *             workspaces, deploy services across AWS/GCP/Azure, monitor uptime
+ *             and cost, and respond to alerts via Slack/PagerDuty runbooks.
+ *             Pricing: Free / Team / Business / Enterprise (seats + usage).
+ * SCALE:      10,000 users, ~1.4M events, 121 days (2026-01-01 → 2026-05-01)
+ * CORE LOOP:  workspace created → service deployed → dashboard viewed → alert/resolve
  *
- * CLOUDFORGE - B2B Cloud Infrastructure Monitoring & Deployment Platform
+ * EVENTS (19):
+ *   dashboard viewed (20) > api call (16) > query executed (15) > alert triggered (12)
+ *   > service deployed (10) > deployment pipeline run (9) > alert acknowledged (8)
+ *   > alert resolved (7) > documentation viewed (7) > security scan (6)
+ *   > infrastructure scaled (5) > cost report generated (4) > integration configured (4)
+ *   > feature flag toggled (4) > team member invited (3) > runbook executed (3)
+ *   > billing event (3) > workspace created (1) > incident created (1)
  *
- * CloudForge is a B2B SaaS platform that combines infrastructure monitoring (like Datadog)
- * with deployment automation (like Terraform). It serves engineering teams across companies
- * of all sizes - from startups deploying their first microservice to enterprises managing
- * thousands of services across multi-cloud environments.
+ * FUNNELS (8):
+ *   - Onboarding:           workspace created → service deployed → dashboard viewed (70%)
+ *   - Daily Monitoring:     dashboard viewed → query executed → api call (80%)
+ *   - Incident Response:    alert triggered → alert acknowledged → alert resolved (55%)
+ *   - Deployment:           deployment pipeline run → service deployed → dashboard viewed (65%, Canary A/B)
+ *   - Infrastructure Mgmt:  cost report generated → infrastructure scaled → security scan (50%)
+ *   - Team & Config:        team member invited → integration configured → feature flag toggled (40%)
+ *   - Docs & Runbooks:      documentation viewed → runbook executed → service deployed (45%)
+ *   - Billing:              billing event → dashboard viewed (60%)
  *
- * - 5,000 users over 100 days
- * - 600K events across 18 event types (+ 1 hook-created event type)
- * - 8 funnels (onboarding, monitoring, incident response, deployment, infra, team, docs, billing)
- * - Group analytics (companies)
- * - Desktop/browser only (B2B SaaS - no mobile devices)
- *
- * CORE PLATFORM:
- * Teams create workspaces, deploy services across AWS/GCP/Azure, and monitor everything
- * from a unified dashboard. The platform tracks uptime, latency, error rates, CPU/memory
- * usage, and costs. When things go wrong, CloudForge triggers alerts that route through
- * PagerDuty/Slack integrations, and on-call engineers acknowledge and resolve incidents
- * using automated runbooks.
- *
- * PRICING MODEL:
- * Four tiers: Free, Team, Business, Enterprise. Enterprise customers get dedicated
- * customer success managers and annual contracts. Pricing based on seat count and
- * resource usage.
+ * USER PROPS:  company_size, primary_role, team_name, seat_count, annual_contract_value,
+ *              customer_success_manager, customer_health_score, plan_tier, cloud_provider
+ * SUPER PROPS: plan_tier, cloud_provider
+ * SCD PROPS:   primary_role (viewer/editor/admin/owner, monthly fuzzy, max 6),
+ *              plan_tier (starter/growth/enterprise/scale, monthly fixed, max 6, company_id-scoped)
+ * GROUPS:      company_id (300 companies)
  */
 
+// ── HOOK STORIES ──
 /*
- * ═══════════════════════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (11 hooks)
- * ═══════════════════════════════════════════════════════════════════════════════
- *
- * 10 deliberately architected patterns hidden in the data. NOTE: All cohort
- * effects are HIDDEN — no flag stamping. Discoverable via behavioral cohorts
- * or raw-prop breakdowns (company_size, day, doc_section). Adds:
- *   9. INCIDENT RESPONSE TIME-TO-CONVERT (Enterprise 0.67x gap vs Startup 1.5x)
- *      [everything hook: scales response_time_mins and resolution_time_mins by company_size]
- *   10. DOCS MAGIC NUMBER (sweet 4-7 docs → +40% deploys; over 8+ → drop 25%)
+ * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable via
+ * behavioral cohorts or raw-prop breakdowns (company_size, day, doc_section).
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * 1. END-OF-QUARTER SPIKE (event)
+ * 1. END-OF-QUARTER SPIKE (everything)
  * ─────────────────────────────────────────────────────────────────────────────
  *
  * PATTERN: Days 100-110 billing events shift event_type toward "plan_upgraded"
@@ -217,13 +204,13 @@ const chance = u.initChance(SEED);
  * downscale; no engineer ignores a 25% month-over-month cost jump.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * 7. FAILED DEPLOYMENT RECOVERY (event — closure state)
+ * 7. FAILED DEPLOYMENT RECOVERY (everything)
  * ─────────────────────────────────────────────────────────────────────────────
  *
  * PATTERN: After a failed pipeline run, the user's next successful deploy has
- * duration_sec * 1.5 (recovery deploys are slower). Uses a module-level Map
- * for cross-call state. No flag — discover by sequencing failed → next-success
- * pipeline events per user and comparing duration.
+ * duration_sec * 1.5 (recovery deploys are slower). No flag — discover by
+ * sequencing failed → next-success pipeline events per user and comparing
+ * duration.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -397,55 +384,269 @@ const chance = u.initChance(SEED);
  * Docs Magic Number        | over (8+) deploys/user   | 1x        | ~0.75x         | -25%
  * Deploy Experiment        | Canary conversion        | 65%       | ~78%           | 1.2x
  * Deploy Experiment        | Canary TTC               | 1d        | ~0.85d         | 0.85x
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * ADVANCED ANALYSIS IDEAS
- * ─────────────────────────────────────────────────────────────────────────────
- *
- * CROSS-HOOK PATTERNS:
- * - Churned + Enterprise: Do churned accounts skew toward startups or are
- *   enterprise accounts also silenced?
- * - Integration + Cost: Do teams with full integrations manage costs better?
- * - Docs + Deploys + Failures: Do docs readers have fewer failed deployments?
- * - Quarter Spike + Churn: Are quarter-end upgrades correlated with later churn?
- * - Enterprise Recovery: Do enterprise customers recover from failed deploys
- *   differently than startups?
- *
- * COHORT ANALYSIS:
- * - By company_size: Compare all metrics across startup/smb/mid_market/enterprise
- * - By plan_tier: Free vs. Team vs. Business vs. Enterprise engagement
- * - By cloud_provider: AWS vs. GCP vs. Azure deployment and alert patterns
- * - By primary_role: Engineer vs. SRE vs. DevOps vs. Manager behaviors
- *
- * KEY METRICS:
- * - MTTR: alert triggered → alert resolved duration
- * - Deployment Frequency: service deployed per user per week
- * - Deployment Success Rate: pipeline success vs. failure ratio
- * - Cost Efficiency: total_cost trend over time per company
- * - Feature Adoption: integration configured events by type
- * - Documentation Engagement: documentation viewed by section
  */
 
-// Generate consistent IDs for lookup tables and event properties
+// ── SCALE ──
+const SEED = "harness-sass";
+const NUM_USERS = 10_000;
+const DATASET_START = "2026-01-01T00:00:00Z";
+const DATASET_END = "2026-05-01T23:59:59Z";
+const EVENTS_PER_DAY = 1.2;
+const token = process.env.MP_TOKEN || "your-mixpanel-token";
+
+const chance = u.initChance(SEED);
+
+// ── KNOBS (tweak these to reshape stories) ──
+const EOQ_START_DAY = 100;
+const EOQ_END_DAY = 110;
+const EOQ_UPGRADE_LIKELIHOOD = 40;
+const EOQ_INVITE_CLONE_LIKELIHOOD = 50;
+
+const CHURN_USER_HASH_MOD = 5;
+const CHURN_CUTOFF_DAYS = 30;
+
+const ALERT_ESCALATION_LIKELIHOOD = 30;
+
+const INTEGRATION_RESPONSE_FACTOR = 0.4;
+const INTEGRATION_RESOLUTION_FACTOR = 0.5;
+
+const COST_OVERRUN_THRESHOLD = 25;
+
+const FAILED_DEPLOY_RECOVERY_MULT = 1.5;
+
+const DOCS_SWEET_MIN = 4;
+const DOCS_SWEET_MAX = 7;
+const DOCS_OVER_THRESHOLD = 8;
+const DOCS_EXTRA_DEPLOYS_MIN = 2;
+const DOCS_EXTRA_DEPLOYS_MAX = 3;
+const DOCS_DEPLOY_DROP_LIKELIHOOD = 25;
+
+const TTC_ENTERPRISE_FACTOR = 0.67;
+const TTC_STARTUP_FACTOR = 1.5;
+const INCIDENT_SEQ_WINDOW_MINS = 60 * 24 * 30;
+
+// ── DATA ARRAYS ──
 const serviceIds = v.range(1, 201).map(() => `svc_${v.uid(8)}`);
 const alertIds = v.range(1, 501).map(() => `alert_${v.uid(6)}`);
 const pipelineIds = v.range(1, 101).map(() => `pipe_${v.uid(6)}`);
 const runbookIds = v.range(1, 51).map(() => `rb_${v.uid(6)}`);
-const companyIds = v.range(1, 301).map(() => `comp_${v.uid(8)}`);
 
-// Module-level Maps for closure-based state tracking across hook calls
+// ── HOOK STATE ──
+// Module-level Map for closure-based state tracking across event-hook calls
 const costOverrunUsers = new Map();
-const failedDeployUsers = new Map();
 
+// ── HELPER FUNCTIONS ──
+function handleEventHooks(record) {
+	// H3: ALERT ESCALATION REPLACEMENT — critical/emergency alerts sometimes
+	// become incident-created events.
+	if (record.event === "alert triggered") {
+		const severity = record.severity;
+		if ((severity === "critical" || severity === "emergency") && chance.bool({ likelihood: ALERT_ESCALATION_LIKELIHOOD })) {
+			return {
+				...record,
+				event: "incident created",
+				escalation_level: chance.pickone(["P1", "P2"]),
+				teams_paged: chance.integer({ min: 1, max: 5 }),
+				incident_id: `inc_${v.uid(8)}`,
+				original_severity: severity,
+				original_alert_type: record.alert_type,
+				auto_escalated: true,
+			};
+		}
+	}
+
+	// H6: COST OVERRUN PATTERN — cost reports with cost_change > 25% record
+	// the user, then the next infrastructure-scaled event from that user is
+	// forced to scale_direction = "down".
+	if (record.event === "cost report generated" && record.cost_change_percent > COST_OVERRUN_THRESHOLD) {
+		costOverrunUsers.set(record.user_id, true);
+	}
+	if (record.event === "infrastructure scaled" && costOverrunUsers.has(record.user_id)) {
+		record.scale_direction = "down";
+		costOverrunUsers.delete(record.user_id);
+	}
+
+	return record;
+}
+
+function handleUserHooks(record) {
+	// H8: ENTERPRISE VS STARTUP — company size determines seat count, ACV,
+	// and CSM. Real profile attrs.
+	const companySize = record.company_size;
+	if (companySize === "enterprise") {
+		record.seat_count = chance.integer({ min: 50, max: 500 });
+		record.annual_contract_value = chance.integer({ min: 50000, max: 500000 });
+		record.customer_success_manager = true;
+	} else if (companySize === "mid_market") {
+		record.seat_count = chance.integer({ min: 10, max: 50 });
+		record.annual_contract_value = chance.integer({ min: 12000, max: 50000 });
+		record.customer_success_manager = false;
+	} else if (companySize === "smb") {
+		record.seat_count = chance.integer({ min: 3, max: 10 });
+		record.annual_contract_value = chance.integer({ min: 3600, max: 12000 });
+		record.customer_success_manager = false;
+	} else if (companySize === "startup") {
+		record.seat_count = chance.integer({ min: 1, max: 5 });
+		record.annual_contract_value = chance.integer({ min: 0, max: 3600 });
+		record.customer_success_manager = false;
+	}
+	record.customer_health_score = chance.integer({ min: 1, max: 100 });
+	return record;
+}
+
+function handleEverythingHooks(record, meta) {
+	const datasetStart = dayjs.unix(meta.datasetStart);
+	const userEvents = record;
+	const profile = meta.profile;
+
+	userEvents.forEach(e => {
+		e.plan_tier = profile.plan_tier;
+		e.cloud_provider = profile.cloud_provider;
+	});
+
+	// H1a: END-OF-QUARTER SPIKE — days 100-110, billing events flip
+	// event_type to plan_upgraded 40% of the time.
+	userEvents.forEach(e => {
+		if (e.event !== "billing event") return;
+		const dayInDataset = dayjs(e.time).diff(datasetStart, "days", true);
+		if (dayInDataset >= EOQ_START_DAY && dayInDataset <= EOQ_END_DAY && chance.bool({ likelihood: EOQ_UPGRADE_LIKELIHOOD })) {
+			e.event_type = "plan_upgraded";
+		}
+	});
+
+	// H1b: END-OF-QUARTER TEAM INVITE SPIKE — days 100-110, clone 50% of
+	// team-member-invited events (push, not return).
+	for (let i = userEvents.length - 1; i >= 0; i--) {
+		const e = userEvents[i];
+		if (e.event !== "team member invited") continue;
+		const dayInDataset = dayjs(e.time).diff(datasetStart, "days", true);
+		if (dayInDataset >= EOQ_START_DAY && dayInDataset <= EOQ_END_DAY && chance.bool({ likelihood: EOQ_INVITE_CLONE_LIKELIHOOD })) {
+			userEvents.push({
+				...e,
+				time: dayjs(e.time).add(chance.integer({ min: 1, max: 60 }), "minutes").toISOString(),
+				user_id: e.user_id,
+				role: chance.pickone(["editor", "viewer"]),
+				invitation_method: chance.pickone(["email", "sso", "slack"]),
+			});
+		}
+	}
+
+	// H2: CHURNED ACCOUNT SILENCING — ~20% of users (hash %5) have post-day-30
+	// events removed.
+	if (userEvents && userEvents.length > 0) {
+		const firstEvent = userEvents[0];
+		const idHash = String(firstEvent.user_id || firstEvent.device_id).split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
+		if ((idHash % CHURN_USER_HASH_MOD) === 0) {
+			for (let i = userEvents.length - 1; i >= 0; i--) {
+				const dayInDataset = dayjs(userEvents[i].time).diff(datasetStart, "days", true);
+				if (dayInDataset > CHURN_CUTOFF_DAYS) {
+					userEvents.splice(i, 1);
+				}
+			}
+		}
+	}
+
+	// H4: INTEGRATION USERS SUCCEED — Slack+PagerDuty users get alert
+	// response_time_mins 0.4x and resolution_time_mins 0.5x.
+	let hasSlack = false;
+	let hasPagerduty = false;
+	userEvents.forEach((event) => {
+		if (event.event === "integration configured") {
+			if (event.integration_type === "slack") hasSlack = true;
+			if (event.integration_type === "pagerduty") hasPagerduty = true;
+		}
+	});
+	if (hasSlack && hasPagerduty) {
+		userEvents.forEach((event) => {
+			if (event.event === "alert acknowledged" && event.response_time_mins) {
+				event.response_time_mins = Math.floor(event.response_time_mins * INTEGRATION_RESPONSE_FACTOR);
+			}
+			if (event.event === "alert resolved" && event.resolution_time_mins) {
+				event.resolution_time_mins = Math.floor(event.resolution_time_mins * INTEGRATION_RESOLUTION_FACTOR);
+			}
+		});
+	}
+
+	// H5 + H10: DOCS MAGIC NUMBER — sweet 4-7 docs → +40% extra cloned
+	// service-deployed events; over 8+ → drop 25% of service-deployed events.
+	const docsCount = userEvents.filter(e => e.event === "documentation viewed").length;
+	const deployTemplate = userEvents.find(e => e.event === "service deployed");
+	if (docsCount >= DOCS_SWEET_MIN && docsCount <= DOCS_SWEET_MAX && deployTemplate) {
+		const lastEvent = userEvents[userEvents.length - 1];
+		const extraDeploys = chance.integer({ min: DOCS_EXTRA_DEPLOYS_MIN, max: DOCS_EXTRA_DEPLOYS_MAX });
+		for (let i = 0; i < extraDeploys; i++) {
+			userEvents.push({
+				...deployTemplate,
+				time: dayjs(lastEvent.time).add(chance.integer({ min: 1, max: 48 }), "hours").toISOString(),
+				user_id: lastEvent.user_id,
+				service_id: chance.pickone(serviceIds),
+				service_type: chance.pickone(["web_app", "api", "database", "cache", "queue", "ml_model"]),
+				environment: "production",
+				cloud_provider: profile.cloud_provider,
+			});
+		}
+	} else if (docsCount >= DOCS_OVER_THRESHOLD) {
+		for (let i = userEvents.length - 1; i >= 0; i--) {
+			if (userEvents[i].event === "service deployed" && chance.bool({ likelihood: DOCS_DEPLOY_DROP_LIKELIHOOD })) {
+				userEvents.splice(i, 1);
+			}
+		}
+	}
+
+	// H7: FAILED DEPLOYMENT RECOVERY — find failed→success pairs in this
+	// user's pipeline events, multiply duration_sec by 1.5 on the recovery
+	// deploy.
+	const pipelineEvents = userEvents
+		.filter(e => e.event === "deployment pipeline run")
+		.sort((a, b) => a.time.localeCompare(b.time));
+	for (let i = 1; i < pipelineEvents.length; i++) {
+		if (pipelineEvents[i - 1].status === "failed" && pipelineEvents[i].status === "success") {
+			pipelineEvents[i].duration_sec = Math.floor((pipelineEvents[i].duration_sec || 300) * FAILED_DEPLOY_RECOVERY_MULT);
+		}
+	}
+
+	// H9: INCIDENT RESPONSE TTC — enterprise resolves faster, startup
+	// resolves slower. Scale response_time_mins on acknowledged events and
+	// resolution_time_mins on resolved events by company_size, and shift the
+	// first incident-response funnel sequence timestamps for funnel TTC
+	// reports. Compounds with H4 (integration users).
+	const companySegment = profile?.company_size;
+	const ttcFactor = (
+		companySegment === "enterprise" ? TTC_ENTERPRISE_FACTOR :
+		companySegment === "startup" ? TTC_STARTUP_FACTOR :
+		1.0
+	);
+	if (ttcFactor !== 1.0) {
+		// Timestamp shift: affects Mixpanel funnel TTC
+		const incidentSeq = findFirstSequence(
+			userEvents,
+			["alert triggered", "alert acknowledged", "alert resolved"],
+			INCIDENT_SEQ_WINDOW_MINS
+		);
+		if (incidentSeq) scaleFunnelTTC(incidentSeq, ttcFactor);
+		// Property scale: affects Insights AVG reports
+		userEvents.forEach(e => {
+			if (e.event === "alert acknowledged" && e.response_time_mins) {
+				e.response_time_mins = Math.max(1, Math.round(e.response_time_mins * ttcFactor));
+			}
+			if (e.event === "alert resolved" && e.resolution_time_mins) {
+				e.resolution_time_mins = Math.max(1, Math.round(e.resolution_time_mins * ttcFactor));
+			}
+		});
+	}
+
+	return record;
+}
+
+// ── CONFIG ──
 /** @type {Config} */
 const config = {
 	token,
 	seed: SEED,
-	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-05-01T23:59:59Z",
-	// numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
+	datasetStart: DATASET_START,
+	datasetEnd: DATASET_END,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	// Phase 2 identity model — B2B SaaS reference. Engineers commonly use 1-2
 	// devices (desktop + work laptop). avgDevicePerUser:2 puts a meaningful
 	// per-session sticky-device pattern in Mixpanel device dashboards.
@@ -778,230 +979,10 @@ const config = {
 
 	lookupTables: [],
 
-	/**
-	 * ARCHITECTED ANALYTICS HOOKS
-	 *
-	 * This hook function creates 10 deliberate patterns in the data.
-	 * Hook 11 (Deploy Pipeline Experiment) is engine-managed via funnel
-	 * experiment config — no hook code needed.
-	 *
-	 * 1. END-OF-QUARTER SPIKE: Days 100-110 drive plan upgrades and team expansion
-	 * 2. CHURNED ACCOUNT SILENCING: ~10% of users go completely silent after month 1
-	 * 3. ALERT ESCALATION REPLACEMENT: Critical alerts become "incident created" events
-	 * 4. INTEGRATION USERS SUCCEED: Slack+PagerDuty users resolve incidents 50-60% faster
-	 * 5. DOCS READERS DEPLOY MORE: Best practices readers get extra production deploys
-	 * 6. COST OVERRUN PATTERN: Budget-exceeded users react by scaling down infrastructure
-	 * 7. FAILED DEPLOYMENT RECOVERY: Recovery deploys take 1.5x longer, tracked across calls
-	 * 8. ENTERPRISE VS STARTUP: Company size determines seat count, ACV, and health score
-	 * 9. INCIDENT RESPONSE TTC: Enterprise 0.67x faster, startup 1.5x slower incident resolution
-	 * 10. DOCS MAGIC NUMBER: Sweet 4-7 docs → extra deploys; over 8+ → drop 25% of deploys
-	 * 11. DEPLOY PIPELINE EXPERIMENT: Canary Deploys A/B test on deployment funnel (engine-managed)
-	 */
-	hook: function (record, type, meta) {
-		// (Hook 1a moved to everything hook for reliable datasetStart access)
-
-		// HOOK 3: ALERT ESCALATION REPLACEMENT (event) — critical/emergency
-		// alerts sometimes become incident-created events. Real product flow.
-		if (type === "event") {
-			if (record.event === "alert triggered") {
-				const severity = record.severity;
-				if ((severity === "critical" || severity === "emergency") && chance.bool({ likelihood: 30 })) {
-					return {
-						...record,
-						event: "incident created",
-						escalation_level: chance.pickone(["P1", "P2"]),
-						teams_paged: chance.integer({ min: 1, max: 5 }),
-						incident_id: `inc_${v.uid(8)}`,
-						original_severity: severity,
-						original_alert_type: record.alert_type,
-						auto_escalated: true,
-					};
-				}
-			}
-		}
-
-		// HOOK 6: COST OVERRUN PATTERN (event) — cost reports with cost_change
-		// > 25% record user, then next infrastructure-scaled event from that
-		// user gets scale_direction = "down". No flag.
-		if (type === "event") {
-			if (record.event === "cost report generated" && record.cost_change_percent > 25) {
-				costOverrunUsers.set(record.user_id, true);
-			}
-			if (record.event === "infrastructure scaled" && costOverrunUsers.has(record.user_id)) {
-				record.scale_direction = "down";
-				costOverrunUsers.delete(record.user_id);
-			}
-		}
-
-		if (type === "everything") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			const userEvents = record;
-			const profile = meta.profile;
-
-			userEvents.forEach(e => {
-				e.plan_tier = profile.plan_tier;
-				e.cloud_provider = profile.cloud_provider;
-			});
-
-			// HOOK 1a: END-OF-QUARTER SPIKE — days 100-110, billing events flip
-			// event_type to plan_upgraded 40% of the time. No flag.
-			userEvents.forEach(e => {
-				if (e.event !== "billing event") return;
-				const dayInDataset = dayjs(e.time).diff(datasetStart, "days", true);
-				if (dayInDataset >= 100 && dayInDataset <= 110 && chance.bool({ likelihood: 40 })) {
-					e.event_type = "plan_upgraded";
-				}
-			});
-
-			// HOOK 1b: END-OF-QUARTER TEAM INVITE SPIKE — days 100-110, clone
-			// 50% of team-member-invited events (push, not return). No flag.
-			for (let i = userEvents.length - 1; i >= 0; i--) {
-				const e = userEvents[i];
-				if (e.event !== "team member invited") continue;
-				const dayInDataset = dayjs(e.time).diff(datasetStart, "days", true);
-				if (dayInDataset >= 100 && dayInDataset <= 110 && chance.bool({ likelihood: 50 })) {
-					userEvents.push({
-						...e,
-						time: dayjs(e.time).add(chance.integer({ min: 1, max: 60 }), "minutes").toISOString(),
-						user_id: e.user_id,
-						role: chance.pickone(["editor", "viewer"]),
-						invitation_method: chance.pickone(["email", "sso", "slack"]),
-					});
-				}
-			}
-
-			// HOOK 2: CHURNED ACCOUNT SILENCING — ~20% of users (hash %5)
-			// have post-day-30 events removed. No flag.
-			if (userEvents && userEvents.length > 0) {
-				const firstEvent = userEvents[0];
-				const idHash = String(firstEvent.user_id || firstEvent.device_id).split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
-				if ((idHash % 5) === 0) {
-					for (let i = userEvents.length - 1; i >= 0; i--) {
-						const dayInDataset = dayjs(userEvents[i].time).diff(datasetStart, "days", true);
-						if (dayInDataset > 30) {
-							userEvents.splice(i, 1);
-						}
-					}
-				}
-			}
-
-			// HOOK 4: INTEGRATION USERS SUCCEED — Slack+PagerDuty users get
-			// alert response_time_mins 0.4x and resolution_time_mins 0.5x.
-			// Mutates raw props. No flag.
-			let hasSlack = false;
-			let hasPagerduty = false;
-			userEvents.forEach((event) => {
-				if (event.event === "integration configured") {
-					if (event.integration_type === "slack") hasSlack = true;
-					if (event.integration_type === "pagerduty") hasPagerduty = true;
-				}
-			});
-			if (hasSlack && hasPagerduty) {
-				userEvents.forEach((event) => {
-					if (event.event === "alert acknowledged" && event.response_time_mins) {
-						event.response_time_mins = Math.floor(event.response_time_mins * 0.4);
-					}
-					if (event.event === "alert resolved" && event.resolution_time_mins) {
-						event.resolution_time_mins = Math.floor(event.resolution_time_mins * 0.5);
-					}
-				});
-			}
-
-			// HOOK 5 + HOOK 10: DOCS MAGIC NUMBER (no flags)
-			// Sweet 4-7 documentation-viewed events → +40% extra cloned
-			// service-deployed events. Over 8+ → drop 25% of service-deployed
-			// events. No flag.
-			const docsCount = userEvents.filter(e => e.event === "documentation viewed").length;
-			const deployTemplate = userEvents.find(e => e.event === "service deployed");
-			if (docsCount >= 4 && docsCount <= 7 && deployTemplate) {
-				const lastEvent = userEvents[userEvents.length - 1];
-				const extraDeploys = chance.integer({ min: 2, max: 3 });
-				for (let i = 0; i < extraDeploys; i++) {
-					userEvents.push({
-						...deployTemplate,
-						time: dayjs(lastEvent.time).add(chance.integer({ min: 1, max: 48 }), "hours").toISOString(),
-						user_id: lastEvent.user_id,
-						service_id: chance.pickone(serviceIds),
-						service_type: chance.pickone(["web_app", "api", "database", "cache", "queue", "ml_model"]),
-						environment: "production",
-						cloud_provider: profile.cloud_provider,
-					});
-				}
-			} else if (docsCount >= 8) {
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					if (userEvents[i].event === "service deployed" && chance.bool({ likelihood: 25 })) {
-						userEvents.splice(i, 1);
-					}
-				}
-			}
-
-			// HOOK 7: FAILED DEPLOYMENT RECOVERY — find failed→success pairs
-			// in this user's pipeline events, multiply duration_sec by 1.5 on
-			// the recovery deploy. Full control via everything hook.
-			const pipelineEvents = userEvents
-				.filter(e => e.event === "deployment pipeline run")
-				.sort((a, b) => a.time.localeCompare(b.time));
-			for (let i = 1; i < pipelineEvents.length; i++) {
-				if (pipelineEvents[i - 1].status === "failed" && pipelineEvents[i].status === "success") {
-					pipelineEvents[i].duration_sec = Math.floor((pipelineEvents[i].duration_sec || 300) * 1.5);
-				}
-			}
-
-			// HOOK 9: INCIDENT RESPONSE TTC — enterprise resolves faster,
-			// startup resolves slower. Scale response_time_mins on
-			// acknowledged events and resolution_time_mins on resolved
-			// events by company_size. This compounds with H4 (integration
-			// users) — realistic: enterprise + good tooling = fastest.
-			const companySegment = profile?.company_size;
-			const ttcFactor = (
-				companySegment === "enterprise" ? 0.67 :
-				companySegment === "startup" ? 1.5 :
-				1.0
-			);
-			if (ttcFactor !== 1.0) {
-				// Timestamp shift: affects Mixpanel funnel TTC
-				const incidentSeq = findFirstSequence(
-					userEvents,
-					["alert triggered", "alert acknowledged", "alert resolved"],
-					60 * 24 * 30
-				);
-				if (incidentSeq) scaleFunnelTTC(incidentSeq, ttcFactor);
-				// Property scale: affects Insights AVG reports
-				userEvents.forEach(e => {
-					if (e.event === "alert acknowledged" && e.response_time_mins) {
-						e.response_time_mins = Math.max(1, Math.round(e.response_time_mins * ttcFactor));
-					}
-					if (e.event === "alert resolved" && e.resolution_time_mins) {
-						e.resolution_time_mins = Math.max(1, Math.round(e.resolution_time_mins * ttcFactor));
-					}
-				});
-			}
-		}
-
-		// HOOK 8: ENTERPRISE VS STARTUP (user) — company size determines
-		// seat count, ACV, and CSM. Real profile attrs.
-		if (type === "user") {
-			const companySize = record.company_size;
-			if (companySize === "enterprise") {
-				record.seat_count = chance.integer({ min: 50, max: 500 });
-				record.annual_contract_value = chance.integer({ min: 50000, max: 500000 });
-				record.customer_success_manager = true;
-			} else if (companySize === "mid_market") {
-				record.seat_count = chance.integer({ min: 10, max: 50 });
-				record.annual_contract_value = chance.integer({ min: 12000, max: 50000 });
-				record.customer_success_manager = false;
-			} else if (companySize === "smb") {
-				record.seat_count = chance.integer({ min: 3, max: 10 });
-				record.annual_contract_value = chance.integer({ min: 3600, max: 12000 });
-				record.customer_success_manager = false;
-			} else if (companySize === "startup") {
-				record.seat_count = chance.integer({ min: 1, max: 5 });
-				record.annual_contract_value = chance.integer({ min: 0, max: 3600 });
-				record.customer_success_manager = false;
-			}
-			record.customer_health_score = chance.integer({ min: 1, max: 100 });
-		}
-
+	hook(record, type, meta) {
+		if (type === "event") return handleEventHooks(record);
+		if (type === "user") return handleUserHooks(record);
+		if (type === "everything") return handleEverythingHooks(record, meta);
 		return record;
 	}
 };
