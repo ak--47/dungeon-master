@@ -1183,6 +1183,13 @@ first-touch result as stamping 10 — Mixpanel's attribution module
 (`attributed_value_reader.cpp`) only considers `TOUCHPOINTS_LIMIT = 10`. Aim
 for sparse, deterministic touches.
 
+**v1.5 with `hasCampaigns: true`:** when the engine has already stamped UTMs
+on up to `maxTouchpointsPerUser` events per user (default 10), DO NOT stamp
+fresh touches in your hook — they'd push the user past the cap and fall
+outside Mixpanel's last-10 window. Use [Recipe 4.26](#426-bias-engine-stamped-touches-v15)
+to OVERWRITE the engine's `utm_source` on the existing stamped events
+instead. See [§2.4](#24-attribution-caps-at-10-touchpoints).
+
 ---
 
 #### 4.26 Bias Engine-Stamped Touches (v1.5)
@@ -1325,6 +1332,12 @@ Import from `@ak--47/dungeon-master/hook-helpers`:
 | **`injectOnNewDays`** | inject | `(events, eventName, targetDays, options?) -> events[]` | Inject clones on previously empty days within active window — **the right tool for moving frequency-distribution bins** |
 | `isPreAuthEvent` | identity | `(event, authTime) -> boolean` | Check if before user's stitch |
 | `splitByAuth` | identity | `(events, authTime) -> { preAuth, postAuth, stitch }` | Partition by auth boundary |
+
+**Inject atoms + v1.5:** the engine auto-sorts events by time after the
+`everything` hook (`autoSortAfterEverything: true` default — see Principle
+26). Hooks using `injectBetween` / `injectBurst` / `injectAfterEvent` /
+`injectOnNewDays` no longer need a trailing `record.sort(...)` to keep the
+greedy funnel engine happy.
 
 Full JSDoc in [`lib/hook-helpers/*.js`](lib/hook-helpers/).
 
