@@ -9,6 +9,7 @@ import { scaleFunnelTTC } from "../../lib/hook-helpers/timing.js";
 
 // ── OVERVIEW ──
 /*
+ * NAME:       ShopStream
  * APP:        eCommerce marketplace with integrated video content. Users browse
  *             products, watch videos, build carts, and check out. A signup
  *             funnel converts anonymous browsers into registered users; video
