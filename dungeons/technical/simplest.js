@@ -1,56 +1,48 @@
-// ── TWEAK THESE ──
+// ── IMPORTS ──
+import Chance from 'chance';
+let chance = new Chance();
+import { pickAWinner, weighNumRange, integer, weighChoices, dateRange, listOf, objectList } from "../../lib/utils/utils.js";
+/** @typedef {import("../../types").Dungeon} Config */
+
+// ── OVERVIEW ──
+/*
+ * NAME:       simplest
+ * PURPOSE:    Engine-validation baseline — no hooks. Engine + TimeSoup alone produce the trend shape. Used by engine-shape canary + full sweep.
+ * SCALE:      2,500 users, ~250K events, 100 days
+ * EVENTS (25): page view (10) > view item (9) > view category (8) > login (8) > search (7) > notification received (7) > watch video (6) > add to cart (5) > notification clicked (5) > rate item (4) > add to wishlist (4) > checkout (3) > remove from cart (3) > update profile (3) > compare items (3) > share content (2) > support ticket (2) > apply coupon (2) > leave review (2) > sign up (1) > add payment method (1) > invite friend (1) > save address (1) > subscribe newsletter (1) > redeem reward (1)
+ * FUNNELS (11): Signup Funnel, Purchase Funnel, Content Engagement, Review Funnel, Browse to Cart, Notification Engagement, Wishlist to Purchase, Post-Purchase Advocacy, Coupon Purchase Flow, Newsletter to Purchase, Support Recovery
+ * USER PROPS:  theme, title, spiritAnimal, luckyNumber, emailOptIn, signupDate, favoriteCategories, preferences, recentOrders
+ * SUPER PROPS: theme
+ * GROUPS:      none
+ *
+ * USE CASES:
+ *   - Engine sweep harness baseline (`scripts/sweep-engine.mjs`). Strict-bar regression
+ *     testing across the 184-combo macro/born/rate/active-day matrix.
+ *   - Reference for "what an average dungeon looks like" — diverse events + funnels +
+ *     user props with no hook architecting on top.
+ *   - Starting template for new dungeons before adding bespoke hooks.
+ *   - At least one property of every Mixpanel data type:
+ *       string, numeric, boolean, date, list, object, list-of-objects
+ *     on both event properties and user properties.
+ *   - No device/location/campaign data — pure event stream.
+ *   - **No hooks.** This is the engine-validation baseline; engine + TimeSoup alone
+ *     produce the trend shape. Hook authors should reach for vertical dungeons or
+ *     write hooks against this template; do NOT add hooks here.
+ */
+
+// ── SCALE ──
 const SEED = "simple is best";
 const num_days = 100;
 const num_users = 2_500;
 const avg_events_per_user_per_day = 1;
-let token = "";
+const token = process.env.MP_TOKEN || "";
 
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
-import Chance from 'chance';
-let chance = new Chance();
-import dayjs from "dayjs";
-import utc from "dayjs/plugin/utc.js";
-dayjs.extend(utc);
-import { uid, comma } from 'ak-tools';
-import { pickAWinner, weighNumRange, date, integer, weighChoices, dateRange, listOf, objectList } from "../../lib/utils/utils.js";
-
-/** @typedef {import("../../types").Dungeon} Config */
+// ── DATA ARRAYS ──
 const itemCategories = ["Books", "Movies", "Music", "Games", "Electronics", "Computers", "Smart Home", "Home", "Garden", "Pet", "Beauty", "Health", "Toys", "Kids", "Baby", "Handmade", "Sports", "Outdoors", "Automotive", "Industrial", "Entertainment", "Art", "Food", "Appliances", "Office", "Wedding", "Software"];
 
 const videoCategories = ["funny", "educational", "inspirational", "music", "news", "sports", "cooking", "DIY", "travel", "gaming"];
 
-/**
- * ═══════════════════════════════════════════════════════════════
- * DATASET OVERVIEW
- * ═══════════════════════════════════════════════════════════════
- *
- * Simplest E-Commerce App — the canonical no-hook baseline dungeon.
- * - 2,500 users over 100 days, ~250K events
- * - 25 event types covering browse, search, cart, checkout,
- *   notifications, reviews, wishlists, rewards
- * - 11 funnels with diverse weights (1-10) covering signup, purchase,
- *   content engagement, browse-to-cart, post-purchase advocacy, etc.
- * - At least one property of every Mixpanel data type:
- *     string, numeric, boolean, date, list, object, list-of-objects
- *   on both event properties and user properties.
- * - No device/location/campaign data — pure event stream
- * - **No hooks.** This is the engine-validation baseline; engine + TimeSoup
- *   alone produce the trend shape. Hook authors should reach for vertical
- *   dungeons or write hooks against this template; do NOT add hooks here.
- *
- * ═══════════════════════════════════════════════════════════════
- * USE CASES
- * ═══════════════════════════════════════════════════════════════
- *
- * - Engine sweep harness baseline (`scripts/sweep-engine.mjs`). Strict-bar
- *   regression testing across the 184-combo macro/born/rate/active-day matrix.
- * - Reference for "what an average dungeon looks like" — diverse events
- *   + funnels + user props with no hook architecting on top.
- * - Starting template for new dungeons before adding bespoke hooks.
- */
-
+// ── CONFIG ──
 /** @type {import('../types.js').Dungeon} */
 const config = {
 	token,
@@ -447,7 +439,7 @@ const config = {
 	mirrorProps: {},
 
 	/*
-	for group analytics keys, we need an array of arrays [[],[],[]] 
+	for group analytics keys, we need an array of arrays [[],[],[]]
 	each pair represents a group_key and the number of profiles for that key
 	*/
 	groupKeys: [],
@@ -456,8 +448,5 @@ const config = {
 	// No hook by design — this is the engine-validation baseline. Engine + TimeSoup
 	// alone produce the trend shape. To experiment with hooks, fork this file.
 };
-
-
-
 
 export default config;
