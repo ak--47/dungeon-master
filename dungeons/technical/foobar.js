@@ -1,63 +1,39 @@
-// ── TWEAK THESE ──
-const SEED = "dm4-foobar";
-const num_days = 30;
-const num_users = 4_000_000;
-const avg_events_per_user_per_day = 16.67;
-let token = "";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
-/**
- * ═══════════════════════════════════════════════════════════════
- * DATASET OVERVIEW
- * ═══════════════════════════════════════════════════════════════
- *
- * Foobar — minimal test/sanity dungeon with abstract event names.
- * - Configurable scale (default 2 billion events for stress testing)
- * - 10 events: foo, bar, baz, qux, garply, durtle, linny, fonk, crumn, yak
- * - Super props: string, number, boolean, date
- * - No funnels, no properties on events — pure weight-driven distribution
- *
- * ═══════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (2 patterns)
- * ═══════════════════════════════════════════════════════════════
- *
- * 1. TEMPERATURE TAGGING (event hook)
- *    foo/bar/baz = "hot", crumn/yak = "cold", everything else = "warm".
- *
- *    Mixpanel Report:
- *    - Insights: any event, total events, breakdown by temperature
- *      Expected: "hot" dominates (highest-weight events)
- *
- * 2. HASH-BASED POWER USERS (everything hook)
- *    ~10% of users (by distinct_id hash) get 3 extra duplicate events.
- *
- *    Mixpanel Report:
- *    - Insights: any event, total per user, breakdown by is_duplicate
- *      Expected: ~10% of users have extra events tagged is_duplicate=true
- */
-
-
-
-
-function integer(min = 1, max = 100) {
-	// If min equals max, just return the value
-	if (min === max) {
-		return min;
-	}
-
-	// Swap min and max if min is greater than max
-	if (min > max) {
-		[min, max] = [max, min];
-	}
-
-	// Generate a random integer between min and max (inclusive)
-	return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
+// ── IMPORTS ──
 /** @typedef {import("../../types").Dungeon} Config */
 
+// ── OVERVIEW ──
+/*
+ * NAME:       foobar
+ * PURPOSE:    minimal stress/sanity dungeon — abstract event names, weight-driven distribution, no funnels, no event properties
+ * SCALE:      4,000,000 users, ~2B events, 30 days (configurable for stress testing)
+ * EVENTS (10): foo, bar, baz, qux, garply, durtle, linny, fonk, crumn, yak
+ * FUNNELS (0): none
+ */
+
+// ── HOOK STORIES ──
+/*
+ * 1. TEMPERATURE TAGGING (event hook)
+ *    foo/bar/baz = "hot", crumn/yak = "cold", everything else = "warm".
+ *    Mixpanel report: Insights, any event, total events, breakdown by temperature.
+ *    Expected: "hot" dominates (highest-weight events).
+ *
+ * 2. HASH-BASED POWER USERS (everything hook)
+ *    ~10% of users (by distinct_id charCode mod 10) get 3 extra duplicate events
+ *    tagged is_duplicate=true.
+ *    Mixpanel report: Insights, any event, total per user, breakdown by is_duplicate.
+ *    Expected: ~10% of users have extra events tagged is_duplicate=true.
+ */
+
+// ── SCALE ──
+const SEED = "dm4-foobar";
+const NUM_DAYS = 30;
+const NUM_USERS = 4_000_000;
+const EVENTS_PER_DAY = 16.67;
+const token = process.env.MP_TOKEN || "";
+
+// ── DATA ARRAYS ──
+const colors = ["red", "orange", "yellow", "green", "blue", "indigo", "violet"];
+const spiritAnimals = ["duck", "dog", "otter", "penguin", "cat", "elephant", "lion", "cheetah", "giraffe", "zebra", "rhino", "hippo", "whale", "dolphin", "shark", "octopus", "squid", "jellyfish", "starfish", "seahorse", "crab", "lobster", "shrimp", "clam", "snail", "slug", "butterfly", "moth", "bee", "wasp", "ant", "beetle", "ladybug", "caterpillar", "centipede", "millipede", "scorpion", "spider", "tarantula", "tick", "mite", "mosquito", "fly", "dragonfly", "damselfly", "grasshopper", "cricket", "locust", "mantis", "cockroach", "termite", "praying mantis", "walking stick", "stick bug", "leaf insect", "lacewing", "aphid", "cicada", "thrips", "psyllid", "scale insect", "whitefly", "mealybug", "planthopper", "leafhopper", "treehopper", "flea", "louse", "bedbug", "flea beetle", "weevil", "longhorn beetle", "leaf beetle", "tiger beetle", "ground beetle", "lady beetle", "firefly", "click beetle", "rove beetle", "scarab beetle", "dung beetle", "stag beetle", "rhinoceros beetle", "hercules beetle", "goliath beetle", "jewel beetle", "tortoise beetle"];
 const dates = [
 	"2024-09-18T21:48:28.173Z",
 	"2024-12-09T03:17:46.661Z",
@@ -161,13 +137,72 @@ const dates = [
 	"2024-06-03T06:52:21.652Z"
 ];
 
-/** @type {import('../../types').Dungeon} */
+// ── HELPER FUNCTIONS ──
+function integer(min = 1, max = 100) {
+	// If min equals max, just return the value
+	if (min === max) {
+		return min;
+	}
+
+	// Swap min and max if min is greater than max
+	if (min > max) {
+		[min, max] = [max, min];
+	}
+
+	// Generate a random integer between min and max (inclusive)
+	return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function handleEventHook(record) {
+	// H1: temperature tagging — high-weight events "hot", low-weight "cold", rest "warm"
+	const hotEvents = ["foo", "bar", "baz"];
+	const coldEvents = ["crumn", "yak"];
+	if (hotEvents.includes(record.event)) {
+		record.temperature = "hot";
+	} else if (coldEvents.includes(record.event)) {
+		record.temperature = "cold";
+	} else {
+		record.temperature = "warm";
+	}
+	return record;
+}
+
+function handleEverythingHook(record, meta) {
+	// stamp profile-derived superProps for consistency
+	const profile = meta.profile;
+	record.forEach(e => {
+		e.string = profile.string;
+		e.number = profile.number;
+		e.boolean = profile.boolean;
+		e.date = profile.date;
+		e.temperature = profile.temperature;
+	});
+
+	// H2: hash-based power users — ~10% of users (distinct_id charCode mod 10) get 3 extra duplicate events
+	if (record.length > 0) {
+		const userId = record[0].user_id || record[0].distinct_id || "";
+		if (userId && userId.charCodeAt(0) % 10 === 0) {
+			const extras = record.slice(0, 3).map(e => ({
+				...e,
+				event: e.event,
+				user_id: e.user_id,
+				time: e.time,
+				is_duplicate: true,
+			}));
+			return record.concat(extras);
+		}
+	}
+	return record;
+}
+
+// ── CONFIG ──
+/** @type {Config} */
 const config = {
 	token,
 	seed: SEED,
-	numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
+	numDays: NUM_DAYS,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	format: 'json', //csv or json
 	region: "US",
 	hasAnonIds: false, //if true, anonymousIds are created for each user
@@ -237,7 +272,7 @@ const config = {
 		}
 	],
 	superProps: {
-		string: ["red", "orange", "yellow", "green", "blue", "indigo", "violet"],
+		string: colors,
 		number: integer,
 		boolean: [true, false],
 		date: dates,
@@ -245,9 +280,9 @@ const config = {
 	},
 	userProps: {
 		luckyNumber: integer,
-		spiritAnimal: ["duck", "dog", "otter", "penguin", "cat", "elephant", "lion", "cheetah", "giraffe", "zebra", "rhino", "hippo", "whale", "dolphin", "shark", "octopus", "squid", "jellyfish", "starfish", "seahorse", "crab", "lobster", "shrimp", "clam", "snail", "slug", "butterfly", "moth", "bee", "wasp", "ant", "beetle", "ladybug", "caterpillar", "centipede", "millipede", "scorpion", "spider", "tarantula", "tick", "mite", "mosquito", "fly", "dragonfly", "damselfly", "grasshopper", "cricket", "locust", "mantis", "cockroach", "termite", "praying mantis", "walking stick", "stick bug", "leaf insect", "lacewing", "aphid", "cicada", "thrips", "psyllid", "scale insect", "whitefly", "mealybug", "planthopper", "leafhopper", "treehopper", "flea", "louse", "bedbug", "flea beetle", "weevil", "longhorn beetle", "leaf beetle", "tiger beetle", "ground beetle", "lady beetle", "firefly", "click beetle", "rove beetle", "scarab beetle", "dung beetle", "stag beetle", "rhinoceros beetle", "hercules beetle", "goliath beetle", "jewel beetle", "tortoise beetle"],
+		spiritAnimal: spiritAnimals,
 		created: dates,
-		string: ["red", "orange", "yellow", "green", "blue", "indigo", "violet"],
+		string: colors,
 		number: integer,
 		boolean: [true, false],
 		date: dates,
@@ -257,56 +292,14 @@ const config = {
 	scdProps: {},
 	mirrorProps: {},
 	lookupTables: [],
-	groupKeys: [
-	],
-	groupProps: {
-	},
+	groupKeys: [],
+	groupProps: {},
 
 	hook: function (record, type, meta) {
-		// event hook: high-weight events get a "hot" flag, low-weight get "cold"
-		if (type === "event") {
-			const hotEvents = ["foo", "bar", "baz"];
-			const coldEvents = ["crumn", "yak"];
-			if (hotEvents.includes(record.event)) {
-				record.temperature = "hot";
-			} else if (coldEvents.includes(record.event)) {
-				record.temperature = "cold";
-			} else {
-				record.temperature = "warm";
-			}
-		}
-
-		// everything hook: hash-based cohort — 10% of users (by distinct_id) get doubled events
-		if (type === "everything") {
-			const profile = meta.profile;
-			record.forEach(e => {
-				e.string = profile.string;
-				e.number = profile.number;
-				e.boolean = profile.boolean;
-				e.date = profile.date;
-				e.temperature = profile.temperature;
-			});
-			if (record.length > 0) {
-				const userId = record[0].user_id || record[0].distinct_id || "";
-				if (userId && userId.charCodeAt(0) % 10 === 0) {
-					// power user: duplicate each event with a slight time offset
-					const extras = record.slice(0, 3).map(e => ({
-						...e,
-						event: e.event,
-						user_id: e.user_id,
-						time: e.time,
-						is_duplicate: true,
-					}));
-					return record.concat(extras);
-				}
-			}
-			return record;
-		}
-
+		if (type === "event") return handleEventHook(record);
+		if (type === "everything") return handleEverythingHook(record, meta);
 		return record;
 	}
 };
-
-
 
 export default config;
