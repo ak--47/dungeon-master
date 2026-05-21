@@ -1,66 +1,48 @@
-// ── TWEAK THESE ──
-const SEED = "dm4-marketplace";
-const num_days = 120;
-const num_users = 10_000;
-const avg_events_per_user_per_day = 1.2;
-let token = "your-mixpanel-token";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
-
-dayjs.extend(utc);
-const chance = u.initChance(SEED);
 /** @typedef  {import("../../types").Dungeon} Config */
 
-// Generate consistent seller store and listing IDs at module level
-const storeIds = v.range(1, 150).map(() => `STORE_${v.uid(6)}`);
-const listingIds = v.range(1, 500).map(() => `LST_${v.uid(8)}`);
-
-/**
- * ═══════════════════════════════════════════════════════════════
- * DATASET OVERVIEW
- * ═══════════════════════════════════════════════════════════════
+// ── OVERVIEW ──
+/*
+ * NAME:       TradeNest
+ * APP:        Two-sided marketplace connecting sellers who list products with
+ *             buyers who search, purchase, and review. Sellers list items;
+ *             buyers browse, message, negotiate, and buy. Revenue from
+ *             marketplace fees and listing fees.
+ * SCALE:      10,000 users, ~1.4M events, 121 days (2026-01-01 → 2026-05-01)
+ * CORE LOOP:  search → view → add to cart → purchase → review
+ *             (seller side: create listing → receive offers → accept → ship)
  *
- * TradeNest — a two-sided marketplace connecting sellers who list
- * products with buyers who search, purchase, and review items.
+ * EVENTS (18):
+ *   item searched (8) > app session (8) > item viewed (7) > notification received (6)
+ *   > add to cart (5) > message sent (5) > listing created (4) > purchase completed (3)
+ *   > listing updated (3) > offer received (3) > shipping updated (3) > offer accepted (2)
+ *   > review submitted (2) > seller rated (2) > profile updated (2) > account created (1)
+ *   > refund requested (1) > account deactivated (1)
  *
- * - 5,000 users over 100 days, ~600K events
- * - Two-sided: sellers (power, casual, new) and buyers (frequent, window_shopper)
- * - Core loop: search → view → add to cart → purchase → review
- * - Seller loop: create listing → receive offers → accept → ship
- * - Revenue: marketplace fees on transactions, seller listing fees
+ * FUNNELS (5):
+ *   - Buyer Onboarding:      account created → item searched → item viewed → add to cart (40%)
+ *   - Browse to Purchase:    item searched → item viewed → add to cart → purchase completed (30%)
+ *   - Seller Listing Flow:   listing created → listing updated → offer received → offer accepted (25%)
+ *   - Offer Negotiation:     offer received → message sent → offer accepted (35%)
+ *   - Review After Purchase: purchase completed → shipping updated → review submitted (20%)
  *
- * Advanced Features:
- * - Personas: 5 archetypes spanning both buyer and seller roles
- * - World Events: marketplace fee change (day 45, permanent), viral TikTok moment (day 55, 3 days)
- * - Engagement Decay: exponential with 75-day half-life, 0.1 floor
- * - Attribution: Google Shopping, TikTok, Seller Referral, organic
- * - Geo: US/UK/Australia/Canada with local currencies
- * - Anomalies: whale purchases, viral signup burst
- *
- * Key entities:
- * - store_id: unique seller storefront
- * - listing_id: individual product listing
- * - category: product vertical (electronics, clothing, etc.)
- * - user_type: buyer vs seller role
+ * USER PROPS:  user_type, segment, seller_rating, total_transactions, response_time_hours,
+ *              store_name, Platform, category
+ * SUPER PROPS: Platform, category
+ * SCD PROPS:   seller_tier (new/verified/power/featured, monthly fuzzy, max 8)
+ * GROUPS:      none
  */
 
-/**
- * ═══════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (10 hooks)
- *
+// ── HOOK STORIES ──
+/*
  * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable via
  * raw-prop breakdowns (segment, day, category) or behavioral cohorts.
- *
- * Adds 9. BROWSE TO PURCHASE TIME-TO-CONVERT and 10. MESSAGE-COUNT MAGIC
- * NUMBER on top of original 8.
- * ═══════════════════════════════════════════════════════════════
  *
  * ───────────────────────────────────────────────────────────────
  * 1. FEE CHANGE IMPACT (everything hook)
@@ -238,6 +220,7 @@ const listingIds = v.range(1, 500).map(() => `LST_${v.uid(8)}`);
  *
  * ───────────────────────────────────────────────────────────────
  * 9. BROWSE TO PURCHASE TIME-TO-CONVERT (funnel-post)
+ * ───────────────────────────────────────────────────────────────
  *
  * PATTERN: Power_seller and frequent_buyer users complete the
  * Browse to Purchase funnel 1.4x faster (factor 0.71); window_shopper
@@ -258,6 +241,7 @@ const listingIds = v.range(1, 500).map(() => `LST_${v.uid(8)}`);
  *
  * ───────────────────────────────────────────────────────────────
  * 10. MESSAGE-COUNT MAGIC NUMBER (in-funnel, everything)
+ * ───────────────────────────────────────────────────────────────
  *
  * PATTERN: Sweet 2-5 message-sent events between item-viewed and
  * offer-received → +35% on offer_amount of offer-received events.
@@ -302,16 +286,285 @@ const listingIds = v.range(1, 500).map(() => `LST_${v.uid(8)}`);
  * Message Magic Number        | over purchases/user | 1x       | 0.75x     | -25%
  */
 
+// ── SCALE ──
+const SEED = "dm4-marketplace";
+const NUM_USERS = 10_000;
+const DATASET_START = "2026-01-01T00:00:00Z";
+const DATASET_END = "2026-05-01T23:59:59Z";
+const EVENTS_PER_DAY = 1.2;
+const token = process.env.MP_TOKEN || "your-mixpanel-token";
+
+const chance = u.initChance(SEED);
+
+// ── KNOBS (tweak these to reshape stories) ──
+const FEE_CHANGE_DAY = 45;
+const FEE_CHANGE_MULT = 1.3;
+
+const WEEKEND_SPEND_MULT = 1.2;
+
+const POWER_SELLER_CLONE_LIKELIHOOD = 65;
+
+const ELECTRONICS_CLONE_LIKELIHOOD = 40;
+const ELECTRONICS_MAX_CLONES = 3;
+
+const FAST_RESPONDER_HASH_MOD = 5;
+const FAST_RESPONDER_HASH_THRESHOLD = 2;
+const FAST_OFFER_CLONE_COUNT = 2;
+const FAST_OFFER_FROM_RECEIVED_LIKELIHOOD = 60;
+const SLOW_OFFER_DROP_LIKELIHOOD = 60;
+
+const NEW_SELLER_CUTOFF_DAYS = 14;
+const NEW_SELLER_DROP_LIKELIHOOD = 50;
+
+const FREQUENT_BUYER_DROP_LIKELIHOOD = 25;
+
+const TTC_FAST_FACTOR = 0.71;
+const TTC_SLOW_FACTOR = 1.4;
+
+const MSG_SWEET_MIN = 2;
+const MSG_SWEET_MAX = 5;
+const MSG_OVER_THRESHOLD = 6;
+const MSG_OFFER_BOOST = 1.35;
+const MSG_PURCHASE_DROP_LIKELIHOOD = 25;
+
+// ── DATA ARRAYS ──
+// Generate consistent seller store and listing IDs at module level
+const storeIds = v.range(1, 150).map(() => `STORE_${v.uid(6)}`);
+const listingIds = v.range(1, 500).map(() => `LST_${v.uid(8)}`);
+
+// ── HELPER FUNCTIONS ──
+function handleUserHooks(record) {
+	// H7: Power seller profiles — enrich segment-tagged profiles
+	if (record.segment === "power_seller") {
+		record.total_transactions = chance.integer({ min: 100, max: 500 });
+		record.seller_rating = chance.floating({ min: 4.5, max: 5.0, fixed: 1 });
+		record.store_name = chance.pickone([
+			"TechVault Pro", "StyleHaven", "GearFactory", "PrimeFinds",
+			"TopShelf Goods", "EliteDeals", "QualityFirst Store", "BestBuy Resale",
+		]);
+	} else if (record.segment === "casual_seller") {
+		record.total_transactions = chance.integer({ min: 5, max: 50 });
+		record.seller_rating = chance.floating({ min: 3.0, max: 4.5, fixed: 1 });
+		record.store_name = chance.pickone([
+			"My Garage Sale", "Closet Cleanout", "Random Finds", "Weekend Seller",
+		]);
+	} else if (record.segment === "new_seller") {
+		record.total_transactions = chance.integer({ min: 0, max: 3 });
+		record.seller_rating = 0;
+		record.store_name = "New Store";
+	}
+	return record;
+}
+
+function handleFunnelPostHooks(record, meta) {
+	// H9: Browse-to-purchase TTC scaled by segment
+	const segment = meta?.profile?.segment;
+	if (Array.isArray(record) && record.length > 1) {
+		const factor = (
+			segment === "power_seller" || segment === "frequent_buyer" ? TTC_FAST_FACTOR :
+			segment === "window_shopper" ? TTC_SLOW_FACTOR :
+			1.0
+		);
+		if (factor !== 1.0) {
+			for (let i = 1; i < record.length; i++) {
+				const prev = dayjs(record[i - 1].time);
+				const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+				record[i].time = prev.add(newGap, "milliseconds").toISOString();
+			}
+		}
+	}
+	return record;
+}
+
+function handleEverythingHooks(record, meta) {
+	const datasetStart = dayjs.unix(meta.datasetStart);
+	const FEE_CHANGE_CUTOFF = datasetStart.add(FEE_CHANGE_DAY, "days");
+	let events = record;
+	if (!events.length) return record;
+
+	const profile = meta.profile;
+
+	// Stamp superProps from profile so they are consistent per user.
+	if (profile) {
+		events.forEach(e => {
+			if (profile.Platform) e.Platform = profile.Platform;
+			if (profile.category) e.category = profile.category;
+		});
+	}
+
+	// H1: Fee change impact — listings after d45 get listing_fee 1.3x.
+	// In everything hook so timestamp comparison sees post-bunchIntoSessions times.
+	events.forEach(e => {
+		if (e.event === "listing created" && dayjs(e.time).isAfter(FEE_CHANGE_CUTOFF)) {
+			e.listing_fee = Math.floor((e.listing_fee || 15) * FEE_CHANGE_MULT);
+		}
+	});
+
+	// H8: Frequent buyer conversion filter — non-frequent-buyer users
+	// drop ~25% of "purchase completed" events.
+	if (profile && profile.segment !== "frequent_buyer") {
+		record = record.filter(e => {
+			if (e.event === "purchase completed" && chance.bool({ likelihood: FREQUENT_BUYER_DROP_LIKELIHOOD })) return false;
+			return true;
+		});
+		events = record;
+	}
+
+	// H3: Seller success → buyer trust — power sellers get 2x purchase events cloned.
+	if (profile && profile.segment === "power_seller") {
+		const purchases = events.filter(e => e.event === "purchase completed");
+		const templatePurchase = purchases[0];
+		if (templatePurchase && purchases.length > 0) {
+			purchases.forEach(p => {
+				if (chance.bool({ likelihood: POWER_SELLER_CLONE_LIKELIHOOD })) {
+					events.push({
+						...templatePurchase,
+						time: dayjs(p.time).add(chance.integer({ min: 1, max: 48 }), "hours").toISOString(),
+						user_id: p.user_id,
+						total_amount: chance.integer({ min: 15, max: 400 }),
+						item_count: chance.integer({ min: 1, max: 4 }),
+					});
+				}
+			});
+		}
+	}
+
+	// H4: Search-to-purchase by category — electronics gets cloned purchase events.
+	const hasElectronicsSearch = events.some(e =>
+		e.event === "item searched" && e.category === "electronics"
+	);
+	if (hasElectronicsSearch) {
+		const templatePurchase = events.find(e => e.event === "purchase completed");
+		if (templatePurchase) {
+			const electronicsSearches = events.filter(e =>
+				e.event === "item searched" && e.category === "electronics"
+			);
+			electronicsSearches.slice(0, ELECTRONICS_MAX_CLONES).forEach(search => {
+				if (chance.bool({ likelihood: ELECTRONICS_CLONE_LIKELIHOOD })) {
+					events.push({
+						...templatePurchase,
+						time: dayjs(search.time).add(chance.integer({ min: 1, max: 12 }), "hours").toISOString(),
+						user_id: search.user_id,
+						total_amount: chance.integer({ min: 50, max: 300 }),
+						category: "electronics",
+					});
+				}
+			});
+		}
+	}
+
+	// H5: Response time → conversion — deterministic fast/slow cohorts via user hash.
+	// Fast (~40%): set response_time_hours 1-4, clone offer_accepted.
+	// Slow (~60%): set 8-36, drop 60% of offer_accepted events.
+	const msgEvents = events.filter(e => e.event === "message sent");
+	if (msgEvents.length > 0) {
+		const uid = msgEvents[0].user_id || "";
+		const isFast = (uid.charCodeAt(0) + uid.charCodeAt(uid.length - 1)) % FAST_RESPONDER_HASH_MOD < FAST_RESPONDER_HASH_THRESHOLD;
+		msgEvents.forEach(m => {
+			m.response_time_hours = isFast
+				? chance.floating({ min: 0.5, max: 4, fixed: 1 })
+				: chance.floating({ min: 8, max: 36, fixed: 1 });
+		});
+		const templateOffer = events.find(e => e.event === "offer accepted");
+		if (isFast && templateOffer) {
+			// Fast responders: clone existing offer_accepted 2x each
+			const existingAccepts = events.filter(e => e.event === "offer accepted");
+			existingAccepts.forEach(accept => {
+				for (let c = 0; c < FAST_OFFER_CLONE_COUNT; c++) {
+					events.push({
+						...accept,
+						time: dayjs(accept.time).add(chance.integer({ min: 1, max: 8 }), "hours").toISOString(),
+						user_id: accept.user_id,
+						response_time_hours: chance.floating({ min: 0.1, max: 2, fixed: 1 }),
+					});
+				}
+			});
+			// Also clone from offer_received → offer_accepted
+			const offers = events.filter(e => e.event === "offer received");
+			offers.forEach(offer => {
+				if (chance.bool({ likelihood: FAST_OFFER_FROM_RECEIVED_LIKELIHOOD })) {
+					events.push({
+						...templateOffer,
+						time: dayjs(offer.time).add(chance.integer({ min: 1, max: 6 }), "hours").toISOString(),
+						user_id: offer.user_id,
+						response_time_hours: chance.floating({ min: 0.1, max: 3, fixed: 1 }),
+					});
+				}
+			});
+		} else if (!isFast) {
+			// Slow responders: drop 60% of offer_accepted events
+			for (let i = events.length - 1; i >= 0; i--) {
+				if (events[i].event === "offer accepted" && chance.bool({ likelihood: SLOW_OFFER_DROP_LIKELIHOOD })) {
+					events.splice(i, 1);
+				}
+			}
+		}
+	}
+
+	// H6: New seller churn — drop 50% of events after user's first 14 days.
+	if (profile && profile.segment === "new_seller") {
+		const firstEventTime = events.length > 0 ? dayjs(events[0].time) : null;
+		if (firstEventTime) {
+			const userCutoff = firstEventTime.add(NEW_SELLER_CUTOFF_DAYS, "days");
+			for (let i = events.length - 1; i >= 0; i--) {
+				if (dayjs(events[i].time).isAfter(userCutoff) && chance.bool({ likelihood: NEW_SELLER_DROP_LIKELIHOOD })) {
+					events.splice(i, 1);
+				}
+			}
+		}
+	}
+
+	// H2: Weekend shopping surge — Sat/Sun purchases get total_amount 1.2x.
+	events.forEach(e => {
+		if (e.event === "purchase completed") {
+			const dow = new Date(e.time).getUTCDay();
+			if (dow === 0 || dow === 6) {
+				e.total_amount = Math.floor((e.total_amount || 60) * WEEKEND_SPEND_MULT);
+			}
+		}
+	});
+
+	// H10: Message-count magic number (in-funnel, no flags)
+	// Sweet 2-5 messages between item-viewed and offer-received →
+	// +35% on offer-received offer_amount. Over 6+ → drop 25% of purchases.
+	const itemViewed = events.find(e => e.event === "item viewed");
+	const offerReceived = events.find(e => e.event === "offer received");
+	if (itemViewed && offerReceived) {
+		const aTime = dayjs(itemViewed.time);
+		const bTime = dayjs(offerReceived.time);
+		const msgBetween = events.filter(e =>
+			e.event === "message sent" &&
+			dayjs(e.time).isAfter(aTime) &&
+			dayjs(e.time).isBefore(bTime)
+		).length;
+		if (msgBetween >= MSG_SWEET_MIN && msgBetween <= MSG_SWEET_MAX) {
+			events.forEach(e => {
+				if (e.event === "offer received" && typeof e.offer_amount === "number") {
+					e.offer_amount = Math.round(e.offer_amount * MSG_OFFER_BOOST);
+				}
+			});
+		} else if (msgBetween >= MSG_OVER_THRESHOLD) {
+			for (let i = events.length - 1; i >= 0; i--) {
+				if (events[i].event === "purchase completed" && chance.bool({ likelihood: MSG_PURCHASE_DROP_LIKELIHOOD })) {
+					events.splice(i, 1);
+				}
+			}
+		}
+	}
+
+	return record;
+}
+
+// ── CONFIG ──
 /** @type {Config} */
 const config = {
 	version: 2,
 	token,
 	seed: SEED,
-	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-05-01T23:59:59Z",
-	// numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
+	datasetStart: DATASET_START,
+	datasetEnd: DATASET_END,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	hasAnonIds: true,
 	avgDevicePerUser: 2,
 	hasSessionIds: true,
@@ -340,7 +593,6 @@ const config = {
 	mirrorProps: {},
 	lookupTables: [],
 
-	// ── Events (18) ──────────────────────────────────────────
 	events: [
 		{
 			event: "account created",
@@ -519,7 +771,6 @@ const config = {
 		},
 	],
 
-	// ── Funnels (5) ──────────────────────────────────────────
 	funnels: [
 		{
 			name: "Buyer Onboarding",
@@ -564,13 +815,11 @@ const config = {
 		},
 	],
 
-	// ── SuperProps ──────────────────────────────────────────
 	superProps: {
 		Platform: ["ios", "android", "web"],
 		category: ["electronics", "clothing", "home_garden", "collectibles", "sports", "toys", "automotive"],
 	},
 
-	// ── UserProps ──────────────────────────────────────────
 	userProps: {
 		user_type: ["buyer"],
 		segment: ["window_shopper"],
@@ -582,7 +831,6 @@ const config = {
 		category: ["electronics", "clothing", "home_garden", "collectibles", "sports", "toys", "automotive"],
 	},
 
-	// ── Personas ──────────────────────────────────
 	personas: [
 		{
 			name: "power_seller",
@@ -642,7 +890,6 @@ const config = {
 		},
 	],
 
-	// ── World Events ──────────────────────────────
 	worldEvents: [
 		{
 			name: "marketplace_fee_change",
@@ -662,14 +909,12 @@ const config = {
 		},
 	],
 
-	// ── Engagement Decay ──────────────────────────
 	engagementDecay: {
 		model: "exponential",
 		halfLife: 75,
 		floor: 0.1,
 	},
 
-	// ── Attribution ──────────────────────────────
 	attribution: {
 		model: "last_touch",
 		window: 7,
@@ -705,7 +950,6 @@ const config = {
 		organicRate: 0.30,
 	},
 
-	// ── Geo ──────────────────────────────────────
 	geo: {
 		sticky: true,
 		regions: [
@@ -740,7 +984,6 @@ const config = {
 		],
 	},
 
-	// ── Anomalies ──────────────────────────────────
 	anomalies: [
 		{
 			type: "extreme_value",
@@ -760,248 +1003,10 @@ const config = {
 		},
 	],
 
-	// ── Hook Function ──────────────────────────────────────
-	hook: function (record, type, meta) {
-		// ── HOOK 7: POWER SELLER PROFILES (user) ─────────────
-		// Power sellers get high total_transactions, top seller_rating,
-		// and a realistic store name. Casual sellers get mid-range stats.
-		if (type === "user") {
-			if (record.segment === "power_seller") {
-				record.total_transactions = chance.integer({ min: 100, max: 500 });
-				record.seller_rating = chance.floating({ min: 4.5, max: 5.0, fixed: 1 });
-				record.store_name = chance.pickone([
-					"TechVault Pro", "StyleHaven", "GearFactory", "PrimeFinds",
-					"TopShelf Goods", "EliteDeals", "QualityFirst Store", "BestBuy Resale",
-				]);
-			} else if (record.segment === "casual_seller") {
-				record.total_transactions = chance.integer({ min: 5, max: 50 });
-				record.seller_rating = chance.floating({ min: 3.0, max: 4.5, fixed: 1 });
-				record.store_name = chance.pickone([
-					"My Garage Sale", "Closet Cleanout", "Random Finds", "Weekend Seller",
-				]);
-			} else if (record.segment === "new_seller") {
-				record.total_transactions = chance.integer({ min: 0, max: 3 });
-				record.seller_rating = 0;
-				record.store_name = "New Store";
-			}
-		}
-
-		// HOOK 9 (T2C): BROWSE TO PURCHASE TIME-TO-CONVERT (funnel-post)
-		// Power_seller users complete Browse to Purchase funnel 1.4x faster
-		// (factor 0.71); window_shopper 1.4x slower (factor 1.4).
-		if (type === "funnel-post") {
-			const segment = meta?.profile?.segment;
-			if (Array.isArray(record) && record.length > 1) {
-				const factor = (
-					segment === "power_seller" || segment === "frequent_buyer" ? 0.71 :
-					segment === "window_shopper" ? 1.4 :
-					1.0
-				);
-				if (factor !== 1.0) {
-					for (let i = 1; i < record.length; i++) {
-						const prev = dayjs(record[i - 1].time);
-						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-						record[i].time = prev.add(newGap, "milliseconds").toISOString();
-					}
-				}
-			}
-		}
-
-		// HOOK 1: FEE CHANGE IMPACT — moved to everything hook below.
-		// (event hook fires before bunchIntoSessions reshuffles timestamps)
-
-		// ── EVERYTHING HOOKS ─────────────────────────────────
-		if (type === "everything") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			const FEE_CHANGE_DAY = datasetStart.add(45, "days");
-			let events = record;
-			if (!events.length) return record;
-
-			const profile = meta.profile;
-
-			// ── SUPERPROP STAMPING ──────────────────────────
-			// Stamp superProps from profile so they are consistent per user.
-			if (profile) {
-				events.forEach(e => {
-					if (profile.Platform) e.Platform = profile.Platform;
-					if (profile.category) e.category = profile.category;
-				});
-			}
-
-			// HOOK 1: FEE CHANGE IMPACT — listings after d45 get listing_fee 1.3x.
-			// In everything hook so timestamp comparison sees post-bunchIntoSessions times.
-			events.forEach(e => {
-				if (e.event === "listing created" && dayjs(e.time).isAfter(FEE_CHANGE_DAY)) {
-					e.listing_fee = Math.floor((e.listing_fee || 15) * 1.3);
-				}
-			});
-
-			// ── HOOK 8: FREQUENT BUYER CONVERSION FILTER ────
-			// Non-frequent-buyer users drop ~25% of "purchase completed"
-			// (last step of Browse to Purchase funnel) to simulate lower conversion.
-			if (profile && profile.segment !== "frequent_buyer") {
-				record = record.filter(e => {
-					if (e.event === "purchase completed" && chance.bool({ likelihood: 25 })) return false;
-					return true;
-				});
-				events = record;
-			}
-
-			// ── HOOK 3: SELLER SUCCESS → BUYER TRUST ─────────
-			// Power sellers get 2x purchase events (cloned from existing).
-			if (profile && profile.segment === "power_seller") {
-				const purchases = events.filter(e => e.event === "purchase completed");
-				const templatePurchase = purchases[0];
-				if (templatePurchase && purchases.length > 0) {
-					purchases.forEach(p => {
-						if (chance.bool({ likelihood: 65 })) {
-							events.push({
-								...templatePurchase,
-								time: dayjs(p.time).add(chance.integer({ min: 1, max: 48 }), "hours").toISOString(),
-								user_id: p.user_id,
-								total_amount: chance.integer({ min: 15, max: 400 }),
-								item_count: chance.integer({ min: 1, max: 4 }),
-							});
-						}
-					});
-				}
-			}
-
-			// ── HOOK 4: SEARCH-TO-PURCHASE BY CATEGORY ───────
-			// Electronics category gets cloned purchase events (higher conversion).
-			const hasElectronicsSearch = events.some(e =>
-				e.event === "item searched" && e.category === "electronics"
-			);
-			if (hasElectronicsSearch) {
-				const templatePurchase = events.find(e => e.event === "purchase completed");
-				if (templatePurchase) {
-					const electronicsSearches = events.filter(e =>
-						e.event === "item searched" && e.category === "electronics"
-					);
-					electronicsSearches.slice(0, 3).forEach(search => {
-						if (chance.bool({ likelihood: 40 })) {
-							events.push({
-								...templatePurchase,
-								time: dayjs(search.time).add(chance.integer({ min: 1, max: 12 }), "hours").toISOString(),
-								user_id: search.user_id,
-								total_amount: chance.integer({ min: 50, max: 300 }),
-								category: "electronics",
-							});
-						}
-					});
-				}
-			}
-
-			// ── HOOK 5: RESPONSE TIME → CONVERSION ───────────
-			// Deterministic fast/slow cohorts using user hash.
-			// Fast responders (~40%): response_time_hours set to 1-4,
-			//   extra offer_accepted clones. Slow (~60%): set to 8-36,
-			//   lose 60% of offer_accepted events.
-			const msgEvents = events.filter(e => e.event === "message sent");
-			if (msgEvents.length > 0) {
-				const uid = msgEvents[0].user_id || "";
-				const isFast = (uid.charCodeAt(0) + uid.charCodeAt(uid.length - 1)) % 5 < 2; // ~40%
-				// Stamp response_time_hours to create the measurable correlation
-				msgEvents.forEach(m => {
-					m.response_time_hours = isFast
-						? chance.floating({ min: 0.5, max: 4, fixed: 1 })
-						: chance.floating({ min: 8, max: 36, fixed: 1 });
-				});
-				const templateOffer = events.find(e => e.event === "offer accepted");
-				if (isFast && templateOffer) {
-					// Fast responders: clone existing offer_accepted 2x each
-					const existingAccepts = events.filter(e => e.event === "offer accepted");
-					existingAccepts.forEach(accept => {
-						for (let c = 0; c < 2; c++) {
-							events.push({
-								...accept,
-								time: dayjs(accept.time).add(chance.integer({ min: 1, max: 8 }), "hours").toISOString(),
-								user_id: accept.user_id,
-								response_time_hours: chance.floating({ min: 0.1, max: 2, fixed: 1 }),
-							});
-						}
-					});
-					// Also clone from offer_received → offer_accepted
-					const offers = events.filter(e => e.event === "offer received");
-					offers.forEach(offer => {
-						if (chance.bool({ likelihood: 60 })) {
-							events.push({
-								...templateOffer,
-								time: dayjs(offer.time).add(chance.integer({ min: 1, max: 6 }), "hours").toISOString(),
-								user_id: offer.user_id,
-								response_time_hours: chance.floating({ min: 0.1, max: 3, fixed: 1 }),
-							});
-						}
-					});
-				} else if (!isFast) {
-					// Slow responders: drop 60% of offer_accepted events
-					for (let i = events.length - 1; i >= 0; i--) {
-						if (events[i].event === "offer accepted" && chance.bool({ likelihood: 60 })) {
-							events.splice(i, 1);
-						}
-					}
-				}
-			}
-
-			// ── HOOK 6: NEW SELLER CHURN ─────────────────────
-			// New sellers lose 50% of events after their first 14 days.
-			// Uses user's first event as anchor (not dataset start).
-			if (profile && profile.segment === "new_seller") {
-				const firstEventTime = events.length > 0 ? dayjs(events[0].time) : null;
-				if (firstEventTime) {
-					const userDay14 = firstEventTime.add(14, "days");
-					for (let i = events.length - 1; i >= 0; i--) {
-						if (dayjs(events[i].time).isAfter(userDay14) && chance.bool({ likelihood: 50 })) {
-							events.splice(i, 1);
-						}
-					}
-				}
-			}
-
-			// HOOK 2: WEEKEND SHOPPING SURGE — Sat/Sun purchases get
-			// total_amount 1.2x. Mutates raw prop. No flag.
-			events.forEach(e => {
-				if (e.event === "purchase completed") {
-					const dow = new Date(e.time).getUTCDay();
-					if (dow === 0 || dow === 6) {
-						e.total_amount = Math.floor((e.total_amount || 60) * 1.2);
-					}
-				}
-			});
-
-			// HOOK 10: MESSAGE-COUNT MAGIC NUMBER (in-funnel, no flags)
-			// Sweet 2-5 message-sent events between item-viewed and
-			// offer-received → +35% on offer-received offer_amount/asking_price.
-			// Over 6+ → drop 25% of purchase-completed events (over-message
-			// signals haggling deadlock).
-			const itemViewed = events.find(e => e.event === "item viewed");
-			const offerReceived = events.find(e => e.event === "offer received");
-			if (itemViewed && offerReceived) {
-				const aTime = dayjs(itemViewed.time);
-				const bTime = dayjs(offerReceived.time);
-				const msgBetween = events.filter(e =>
-					e.event === "message sent" &&
-					dayjs(e.time).isAfter(aTime) &&
-					dayjs(e.time).isBefore(bTime)
-				).length;
-				if (msgBetween >= 2 && msgBetween <= 5) {
-					events.forEach(e => {
-						if (e.event === "offer received" && typeof e.offer_amount === "number") {
-							e.offer_amount = Math.round(e.offer_amount * 1.35);
-						}
-					});
-				} else if (msgBetween >= 6) {
-					for (let i = events.length - 1; i >= 0; i--) {
-						if (events[i].event === "purchase completed" && chance.bool({ likelihood: 25 })) {
-							events.splice(i, 1);
-						}
-					}
-				}
-			}
-
-			return record;
-		}
-
+	hook(record, type, meta) {
+		if (type === "user") return handleUserHooks(record);
+		if (type === "funnel-post") return handleFunnelPostHooks(record, meta);
+		if (type === "everything") return handleEverythingHooks(record, meta);
 		return record;
 	},
 };
