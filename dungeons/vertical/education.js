@@ -1,64 +1,50 @@
-// ── TWEAK THESE ──
-const SEED = "harness-education";
-const num_days = 120;
-const num_users = 10_000;
-const avg_events_per_user_per_day = 1.2;
-let token = "your-mixpanel-token";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
-
-dayjs.extend(utc);
-const chance = u.initChance(SEED);
-
 /** @typedef  {import("../../types").Dungeon} Config */
 
-/**
- * ═══════════════════════════════════════════════════════════════════════════════
- * DATASET OVERVIEW — LearnPath eLearning Platform
- * ═══════════════════════════════════════════════════════════════════════════════
+// ── OVERVIEW ──
+/*
+ * NAME:       LearnPath
+ * APP:        Online learning platform modeled after Coursera, Khan Academy,
+ *             and Udemy. Self-paced and cohort-based courses with quizzes,
+ *             assignments, certificates, and a social study layer. Two-sided
+ *             marketplace: ~89% students, ~11% instructors.
+ * SCALE:      10,000 users, ~1.4M events, 121 days (2026-01-01 → 2026-05-01)
+ * CORE LOOP:  account registered → course enrolled → lecture started/completed → quiz → certificate
  *
- * An online learning platform modeled after Coursera, Khan Academy, and Udemy.
- * Supports self-paced and cohort-based learning with courses, quizzes,
- * assignments, and social study features.
+ * EVENTS (17):
+ *   lecture started (18) > lecture completed (14) > practice problem solved (12)
+ *   > quiz started (10) > resource downloaded (9) > course enrolled (8)
+ *   > quiz completed (8) > discussion posted (7) > assignment submitted (6)
+ *   > assignment graded (5) > help requested (4) > study group joined (4)
+ *   > instructor feedback given (3) > course reviewed (3) > certificate earned (2)
+ *   > subscription purchased (2) > account registered (1)
  *
- * Scale: 10,000 users / ~1.4M events / 120 days / 17 event types
+ * FUNNELS (7):
+ *   - Onboarding:               account registered → course enrolled → lecture started (75%)
+ *   - Learning Loop:            lecture started → lecture completed → practice problem solved (70%, reentry)
+ *   - Assessment:               quiz started → quiz completed → assignment submitted (55%, reentry)
+ *   - Course Completion:        course enrolled → lecture completed → quiz completed → certificate earned (30%)
+ *   - Social Learning:          discussion posted → study group joined → resource downloaded (50%, AI Study Buddy A/B)
+ *   - Instructor Interaction:   assignment submitted → assignment graded → instructor feedback given (45%)
+ *   - Support/Monetization:     help requested → subscription purchased → course reviewed (35%)
  *
- * CORE LOOP:
- * Register → browse/enroll in courses → watch lectures → practice problems →
- * quizzes/assignments → certificate earned. Social layer (study groups,
- * discussions) drives retention. Subscription tiers (free/monthly/annual)
- * gate completion rates.
- *
- * FUNNELS:
- * - Onboarding: account registered → course enrolled → lecture started
- * - Learning loop: lecture started → lecture completed → practice problem solved
- * - Assessment: quiz started → quiz completed → assignment submitted
- * - Course completion: course enrolled → lecture completed → quiz completed → certificate earned
- * - Social learning: discussion posted → study group joined → resource downloaded
- * - Instructor interaction: assignment submitted → assignment graded → instructor feedback given
- * - Support/monetization: help requested → subscription purchased → course reviewed
- *
- * GROUPS: course_id (150 courses), group_id (300 study groups)
- * SUBSCRIPTIONS: free (~60%), monthly, annual
- * ACCOUNT TYPES: ~89% students, ~11% instructors (two-sided marketplace)
+ * USER PROPS:  account_type, subscription_status, learning_style, education_level, timezone, courses_created, teaching_experience_years, instructor_rating, learning_goal, study_hours_per_week, Platform
+ * SUPER PROPS: Platform
+ * SCD PROPS:   enrollment_status (enrolled/active/completed/dropped, monthly fuzzy, max 6), course_status (draft/published/archived/deprecated, monthly fixed, max 6, type: course_id)
+ * GROUPS:      course_id (150 courses), group_id (300 study groups)
  */
 
-/**
- * ═══════════════════════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (10 hooks)
- * ═══════════════════════════════════════════════════════════════════════════════
- *
- * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable via
- * behavioral cohorts, raw-prop breakdowns, or funnel time-to-convert.
- *
+// ── HOOK STORIES ──
+/*
+ * ---------------------------------------------------------------
  * 1. STUDENT VS INSTRUCTOR PROFILES (user)
+ * ---------------------------------------------------------------
  *
  * PATTERN: Instructor profiles get teaching attributes
  * (courses_created, teaching_experience_years, instructor_rating).
@@ -88,6 +74,7 @@ const chance = u.initChance(SEED);
  *
  * ---------------------------------------------------------------
  * 2. DEADLINE CRAMMING (everything)
+ * ---------------------------------------------------------------
  *
  * PATTERN: Assignments submitted on Sun/Mon are rushed — 60% are late
  * (raw is_late prop set true at 60% likelihood) vs ~20% baseline. Quiz
@@ -115,6 +102,7 @@ const chance = u.initChance(SEED);
  *
  * ---------------------------------------------------------------
  * 3. NOTES MAGIC NUMBER (everything, in-funnel)
+ * ---------------------------------------------------------------
  *
  * PATTERN: Sweet 5-8 lectures with notes_taken=true → +30% quiz
  * score_percent (cap 100) and 40% chance of bonus cloned certificate.
@@ -142,6 +130,7 @@ const chance = u.initChance(SEED);
  *
  * ---------------------------------------------------------------
  * 4. STUDY GROUP RETENTION (everything)
+ * ---------------------------------------------------------------
  *
  * PATTERN: Users who join a study group within 10 days get bonus
  * discussion events. Non-joiners with low quiz scores (<60) churn
@@ -166,6 +155,7 @@ const chance = u.initChance(SEED);
  *
  * ---------------------------------------------------------------
  * 5. HINT DEPENDENCY (event)
+ * ---------------------------------------------------------------
  *
  * PATTERN: On "practice problem solved", hint_used=true gets difficulty
  * forced to "easy" 60% of the time. hint_used=false gets difficulty forced
@@ -196,6 +186,7 @@ const chance = u.initChance(SEED);
  *
  * ---------------------------------------------------------------
  * 6. SEMESTER-END SPIKE (everything)
+ * ---------------------------------------------------------------
  *
  * PATTERN: Days 75-85 simulate semester crunch. quiz_started, quiz_completed,
  * and assignment_submitted events are duplicated at an 80% rate. No flag —
@@ -215,6 +206,7 @@ const chance = u.initChance(SEED);
  *
  * ---------------------------------------------------------------
  * 7. FREE VS PAID COURSES (funnel-pre + everything)
+ * ---------------------------------------------------------------
  *
  * PATTERN: Free users get 0.5x funnel conversion rate on the cert funnel only; paid
  * subscribers get 1.5x. Free users also lose 55% of their
@@ -239,7 +231,8 @@ const chance = u.initChance(SEED);
  * follow-through; free learners drop off long before completion.
  *
  * ---------------------------------------------------------------
- * 8. PLAYBACK SPEED CORRELATION (everything)
+ * 8. PLAYBACK SPEED CORRELATION (event + everything)
+ * ---------------------------------------------------------------
  *
  * PATTERN: Speed learners (>=2.0x speed on 3+ lectures) get 0.6x
  * watch_time and a paradoxical +8 quiz score boost. Thorough
@@ -267,6 +260,7 @@ const chance = u.initChance(SEED);
  *
  * ---------------------------------------------------------------
  * 9. COURSE COMPLETION TIME-TO-CONVERT (everything)
+ * ---------------------------------------------------------------
  *
  * PATTERN: Annual subscribers complete the course-completion funnel
  * 2x faster (factor 0.5); Free users 1.8x slower (factor 1.8).
@@ -290,6 +284,7 @@ const chance = u.initChance(SEED);
  *
  * ---------------------------------------------------------------
  * 10. SOCIAL LEARNING EXPERIMENT (funnel experiment)
+ * ---------------------------------------------------------------
  *
  * PATTERN: A/B experiment on the Social Learning funnel (discussion
  * posted → study group joined → resource downloaded). "AI Study
@@ -314,9 +309,9 @@ const chance = u.initChance(SEED);
  * REAL-WORLD ANALOGUE: AI-powered study companions boost social
  * engagement and resource discovery in cohort-based courses.
  *
- * ═══════════════════════════════════════════════════════════════════════════════
+ * ===============================================================
  * EXPECTED METRICS SUMMARY
- * ═══════════════════════════════════════════════════════════════════════════════
+ * ===============================================================
  *
  * Hook                    | Metric                | Baseline | Hook Effect  | Ratio
  * ------------------------|-----------------------|----------|--------------|------
@@ -330,10 +325,60 @@ const chance = u.initChance(SEED);
  * Free vs Paid            | Course completion     | 15%      | 33%          | 2.2x
  * Playback Speed          | Quiz score (speed)    | ~ 65     | ~ 73         | +8 pt
  * Course Completion T2C   | median min by tier    | 1x       | 0.5x/1.8x    | ~ 3.6x range
- * Social Learning Exp    | AI variant conversion | 1x       | 1.4x          | 1.4x
- * Social Learning Exp    | AI variant TTC        | 1x       | 0.85x         | -15%
+ * Social Learning Exp     | AI variant conversion | 1x       | 1.4x         | 1.4x
+ * Social Learning Exp     | AI variant TTC        | 1x       | 0.85x        | -15%
  */
 
+// ── SCALE ──
+const SEED = "harness-education";
+const NUM_USERS = 10_000;
+const DATASET_START = "2026-01-01T00:00:00Z";
+const DATASET_END = "2026-05-01T23:59:59Z";
+const EVENTS_PER_DAY = 1.2;
+const token = process.env.MP_TOKEN || "your-mixpanel-token";
+
+const chance = u.initChance(SEED);
+
+// ── KNOBS (tweak these to reshape stories) ──
+const HINT_EASY_LIKELIHOOD = 60;
+const HINT_HARD_LIKELIHOOD = 40;
+
+const SPEED_FAST_THRESHOLD = 2.0;
+const SPEED_FAST_WATCH_FACTOR = 0.6;
+const SPEED_FAST_WATCH_MIN = 3;
+const SPEED_SLOW_THRESHOLD = 1.0;
+const SPEED_SLOW_WATCH_FACTOR = 1.4;
+const SPEED_SLOW_WATCH_MAX = 90;
+const SPEED_LECTURE_COUNT_THRESHOLD = 3;
+const SPEED_QUIZ_BOOST_POINTS = 8;
+
+const FREE_FUNNEL_CONV_FACTOR = 0.5;
+const PAID_FUNNEL_CONV_FACTOR = 1.5;
+const FREE_CERT_DROP_LIKELIHOOD = 55;
+
+const NOTES_SWEET_MIN = 5;
+const NOTES_SWEET_MAX = 8;
+const NOTES_OVER_THRESHOLD = 9;
+const NOTES_QUIZ_BOOST = 1.3;
+const NOTES_BONUS_CERT_LIKELIHOOD = 40;
+const NOTES_OVER_CERT_DROP_LIKELIHOOD = 35;
+
+const SEMESTER_SPIKE_START_DAY = 75;
+const SEMESTER_SPIKE_END_DAY = 85;
+const SEMESTER_SPIKE_LIKELIHOOD = 80;
+
+const TTC_ANNUAL_FACTOR = 0.5;
+const TTC_FREE_FACTOR = 1.8;
+
+const STUDY_GROUP_EARLY_DAYS = 10;
+const STUDY_GROUP_LOW_QUIZ_THRESHOLD = 60;
+const STUDY_GROUP_CHURN_CUTOFF_DAYS = 14;
+const STUDY_GROUP_DISCUSSION_CLONE_LIKELIHOOD = 60;
+
+const DEADLINE_LATE_LIKELIHOOD = 60;
+const DEADLINE_QUIZ_PENALTY = 25;
+
+// ── DATA ARRAYS ──
 // Generate consistent IDs for lookup tables and event properties
 const courseIds = v.range(1, 151).map(n => `course_${v.uid(6)}`);
 const quizIds = v.range(1, 401).map(n => `quiz_${v.uid(6)}`);
@@ -342,16 +387,255 @@ const lectureIds = v.range(1, 501).map(n => `lecture_${v.uid(6)}`);
 const assignmentIds = v.range(1, 201).map(n => `assignment_${v.uid(6)}`);
 const problemIds = v.range(1, 601).map(n => `problem_${v.uid(6)}`);
 
+// ── HELPER FUNCTIONS ──
+function handleUserHooks(record) {
+	// H1: STUDENT VS INSTRUCTOR PROFILES — role-based attributes.
+	if (record.account_type === "instructor") {
+		record.courses_created = chance.integer({ min: 1, max: 15 });
+		record.teaching_experience_years = chance.integer({ min: 1, max: 20 });
+		record.instructor_rating = Math.round((chance.floating({ min: 3.0, max: 5.0 }) + Number.EPSILON) * 100) / 100;
+	} else {
+		record.learning_goal = chance.pickone(["career_change", "skill_upgrade", "hobby", "degree_requirement"]);
+		record.study_hours_per_week = chance.integer({ min: 2, max: 30 });
+	}
+	return record;
+}
+
+function handleEventHooks(record) {
+	// H5: HINT DEPENDENCY — hint users get 60% easy problems; non-hint
+	// users get 40% hard problems. Mutates difficulty (raw).
+	if (record.event === "practice problem solved") {
+		if (record.hint_used === true && chance.bool({ likelihood: HINT_EASY_LIKELIHOOD })) {
+			record.difficulty = "easy";
+		} else if (record.hint_used === false && chance.bool({ likelihood: HINT_HARD_LIKELIHOOD })) {
+			record.difficulty = "hard";
+		}
+	}
+	// H8 (event): PLAYBACK SPEED — speed learners (>= 2.0x) get
+	// watch_time_mins compressed 0.6x; thorough learners (<= 1.0x) get 1.4x.
+	if (record.event === "lecture completed") {
+		const speed = record.playback_speed;
+		if (speed >= SPEED_FAST_THRESHOLD && record.watch_time_mins !== undefined) {
+			record.watch_time_mins = Math.max(SPEED_FAST_WATCH_MIN, Math.floor(record.watch_time_mins * SPEED_FAST_WATCH_FACTOR));
+		} else if (speed !== undefined && speed <= SPEED_SLOW_THRESHOLD && record.watch_time_mins !== undefined) {
+			record.watch_time_mins = Math.min(SPEED_SLOW_WATCH_MAX, Math.floor(record.watch_time_mins * SPEED_SLOW_WATCH_FACTOR));
+		}
+	}
+	return record;
+}
+
+function handleFunnelPreHooks(record, meta) {
+	// H7: FREE VS PAID — free users get 0.5x conversion rate; paid
+	// subscribers get 1.5x. Scoped to the course-completion funnel ONLY
+	// (sequence ending in "certificate earned") to avoid displacing standalone
+	// events for paid users and triggering unintended churn in H4.
+	const isCertFunnel = Array.isArray(meta?.funnel?.sequence) &&
+		meta.funnel.sequence.includes("certificate earned");
+	if (isCertFunnel) {
+		const subStatus = meta?.profile?.subscription_status;
+		if (subStatus === "free") {
+			record.conversionRate = Math.round(record.conversionRate * FREE_FUNNEL_CONV_FACTOR);
+		} else if (subStatus === "monthly" || subStatus === "annual") {
+			record.conversionRate = Math.min(100, Math.round(record.conversionRate * PAID_FUNNEL_CONV_FACTOR));
+		}
+	}
+	return record;
+}
+
+function handleEverythingHooks(record, meta) {
+	const datasetStart = dayjs.unix(meta.datasetStart);
+	const userEvents = record;
+	const profile = meta.profile;
+	const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
+
+	if (profile) {
+		userEvents.forEach((event) => {
+			if (profile.Platform !== undefined) event.Platform = profile.Platform;
+		});
+	}
+
+	let notesTakenCount = 0;
+	let joinedStudyGroupEarly = false;
+	let hasLowQuizScore = false;
+	let speedLectureCount = 0;
+
+	userEvents.forEach((event) => {
+		const eventTime = dayjs(event.time);
+		const daysSinceStart = firstEventTime ? eventTime.diff(firstEventTime, 'days', true) : 0;
+		if (event.event === "lecture completed" && event.notes_taken === true) notesTakenCount++;
+		if (event.event === "study group joined" && daysSinceStart <= STUDY_GROUP_EARLY_DAYS) joinedStudyGroupEarly = true;
+		if (event.event === "quiz completed" && event.score_percent < STUDY_GROUP_LOW_QUIZ_THRESHOLD) hasLowQuizScore = true;
+		if (event.event === "lecture completed" && event.playback_speed >= SPEED_FAST_THRESHOLD) speedLectureCount++;
+	});
+
+	// H3 + H10: NOTES MAGIC NUMBER (in-funnel, no flags)
+	// Sweet 5-8 notes-taken lectures → +30% quiz score_percent (cap 100).
+	// Over 9+ → drop 35% of certificate-earned events (over-noted but
+	// can't synthesize; gets stuck in "study mode").
+	if (notesTakenCount >= NOTES_SWEET_MIN && notesTakenCount <= NOTES_SWEET_MAX) {
+		userEvents.forEach((event) => {
+			if (event.event === "quiz completed" && event.score_percent !== undefined) {
+				event.score_percent = Math.min(100, Math.round(event.score_percent * NOTES_QUIZ_BOOST));
+			}
+		});
+		if (chance.bool({ likelihood: NOTES_BONUS_CERT_LIKELIHOOD })) {
+			const lastEvent = userEvents[userEvents.length - 1];
+			const certTemplate = userEvents.find(e => e.event === "certificate earned");
+			if (lastEvent && certTemplate) {
+				userEvents.push({
+					...certTemplate,
+					time: dayjs(lastEvent.time).add(chance.integer({ min: 1, max: 5 }), 'days').toISOString(),
+					user_id: lastEvent.user_id,
+					course_id: chance.pickone(courseIds),
+					completion_time_days: chance.integer({ min: 14, max: 90 }),
+					final_grade: chance.integer({ min: 80, max: 100 }),
+				});
+			}
+		}
+	} else if (notesTakenCount >= NOTES_OVER_THRESHOLD) {
+		// Over-noters: drop 35% of certificates (stuck in study mode)
+		for (let i = userEvents.length - 1; i >= 0; i--) {
+			if (userEvents[i].event === "certificate earned" && chance.bool({ likelihood: NOTES_OVER_CERT_DROP_LIKELIHOOD })) {
+				userEvents.splice(i, 1);
+			}
+		}
+	}
+
+	// H8 (cont): Speed learners (3+ lectures at 2.0x) score +8 on quizzes.
+	if (speedLectureCount >= SPEED_LECTURE_COUNT_THRESHOLD) {
+		userEvents.forEach((event) => {
+			if (event.event === "quiz completed" && event.score_percent !== undefined) {
+				event.score_percent = Math.min(100, event.score_percent + SPEED_QUIZ_BOOST_POINTS);
+			}
+		});
+	}
+
+	// H6: SEMESTER-END SPIKE — duplicate quiz/assignment events
+	// in days 75-85 window. No flag — discover via line chart.
+	const duplicates = [];
+	const spikableEvents = ["quiz started", "quiz completed", "assignment submitted"];
+	userEvents.forEach((event) => {
+		if (spikableEvents.includes(event.event) && event.time) {
+			const dayInDataset = dayjs.utc(event.time).diff(datasetStart, 'days', true);
+			if (dayInDataset >= SEMESTER_SPIKE_START_DAY && dayInDataset <= SEMESTER_SPIKE_END_DAY && chance.bool({ likelihood: SEMESTER_SPIKE_LIKELIHOOD })) {
+				const dup = JSON.parse(JSON.stringify(event));
+				dup.time = dayjs(event.time).add(chance.integer({ min: 5, max: 120 }), 'minutes').toISOString();
+				duplicates.push(dup);
+			}
+		}
+	});
+	if (duplicates.length > 0) userEvents.push(...duplicates);
+
+	const subStatus = profile ? profile.subscription_status : "free";
+
+	// H9 (T2C): COURSE COMPLETION TIME-TO-CONVERT (everything)
+	// Annual subscribers complete the cert funnel 2x faster (factor 0.5);
+	// Free users 1.8x slower (factor 1.8). For each "certificate earned"
+	// event, find the nearest preceding "course enrolled" and scale the gap.
+	// Runs BEFORE cert-dropping (H7) so TTC adjustments aren't masked by
+	// survivorship bias from the 55% free cert removal.
+	{
+		const ttcFactor = (
+			subStatus === "annual" ? TTC_ANNUAL_FACTOR :
+			subStatus === "free" ? TTC_FREE_FACTOR :
+			1.0
+		);
+		if (ttcFactor !== 1.0) {
+			// Collect all "course enrolled" times (sorted) for binary lookup
+			const enrolledTimes = userEvents
+				.filter(e => e.event === "course enrolled")
+				.map(e => dayjs(e.time))
+				.sort((a, b) => a.valueOf() - b.valueOf());
+
+			if (enrolledTimes.length > 0) {
+				for (const event of userEvents) {
+					if (event.event === "certificate earned") {
+						const certTime = dayjs(event.time);
+						// Find the latest enrolled time before this cert
+						let anchor = null;
+						for (let k = enrolledTimes.length - 1; k >= 0; k--) {
+							if (enrolledTimes[k].isBefore(certTime)) {
+								anchor = enrolledTimes[k];
+								break;
+							}
+						}
+						if (anchor) {
+							const gap = certTime.diff(anchor);
+							const newGap = Math.round(gap * ttcFactor);
+							event.time = anchor.add(newGap, "milliseconds").toISOString();
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// H7: FREE VS PAID — free users lose 55% of certificates.
+	if (subStatus === "free") {
+		for (let i = userEvents.length - 1; i >= 0; i--) {
+			if (userEvents[i].event === "certificate earned" && chance.bool({ likelihood: FREE_CERT_DROP_LIKELIHOOD })) {
+				userEvents.splice(i, 1);
+			}
+		}
+	}
+
+	// H4: STUDY GROUP RETENTION — non-joiners with low scores lose
+	// all post-day-14 events. Joiners get extra cloned discussion events.
+	if (!joinedStudyGroupEarly && hasLowQuizScore) {
+		const churnCutoff = firstEventTime ? firstEventTime.add(STUDY_GROUP_CHURN_CUTOFF_DAYS, 'days') : null;
+		for (let i = userEvents.length - 1; i >= 0; i--) {
+			if (churnCutoff && dayjs(userEvents[i].time).isAfter(churnCutoff)) {
+				userEvents.splice(i, 1);
+			}
+		}
+	} else if (joinedStudyGroupEarly) {
+		const lastEvent = userEvents[userEvents.length - 1];
+		const discussionTemplate = userEvents.find(e => e.event === "discussion posted");
+		if (lastEvent && discussionTemplate && chance.bool({ likelihood: STUDY_GROUP_DISCUSSION_CLONE_LIKELIHOOD })) {
+			userEvents.push({
+				...discussionTemplate,
+				time: dayjs(lastEvent.time).add(chance.integer({ min: 1, max: 3 }), 'days').toISOString(),
+				user_id: lastEvent.user_id,
+				course_id: chance.pickone(courseIds),
+				post_type: chance.pickone(["question", "answer", "comment"]),
+				word_count: chance.integer({ min: 20, max: 400 }),
+			});
+		}
+	}
+
+	// H2: DEADLINE CRAMMING — Sun/Mon assignment_submitted events
+	// flip is_late to true 60% of the time and quiz_completed score_percent
+	// drops 25 points. Mutates raw is_late + score_percent.
+	for (const event of userEvents) {
+		if (event.event === "assignment submitted" && event.time) {
+			const dow = new Date(event.time).getUTCDay();
+			if (dow === 0 || dow === 1) {
+				event.is_late = chance.bool({ likelihood: DEADLINE_LATE_LIKELIHOOD });
+			}
+		}
+	}
+	userEvents.forEach((event) => {
+		if (event.event === "quiz completed" && event.time) {
+			const dow = new Date(event.time).getUTCDay();
+			if ((dow === 0 || dow === 1) && event.score_percent !== undefined) {
+				event.score_percent = Math.max(0, event.score_percent - DEADLINE_QUIZ_PENALTY);
+			}
+		}
+	});
+
+	return record;
+}
+
+// ── CONFIG ──
 /** @type {Config} */
 const config = {
 	version: 2,
 	token,
 	seed: SEED,
-	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-05-01T23:59:59Z",
-	// numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
+	datasetStart: DATASET_START,
+	datasetEnd: DATASET_END,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	hasAnonIds: true,
 	avgDevicePerUser: 2,
 	hasSessionIds: true,
@@ -663,256 +947,11 @@ const config = {
 
 	lookupTables: [],
 
-	/**
-	 * ARCHITECTED ANALYTICS HOOKS
-	 *
-	 * This hook function creates 10 deliberate patterns in the data:
-	 *
-	 * 1. STUDENT VS INSTRUCTOR PROFILES: Instructor profiles get teaching attributes; students get learning attributes
-	 * 2. DEADLINE CRAMMING: Assignments submitted on Sun/Mon are rushed and lower quality
-	 * 3. NOTES-TAKERS SUCCEED: Students who take notes during lectures score higher on quizzes
-	 * 4. STUDY GROUP RETENTION: Early study group joiners retain; non-joiners with low scores churn
-	 * 5. HINT DEPENDENCY: Hint users get locked into easy problems; non-hint users tackle harder ones
-	 * 6. SEMESTER-END SPIKE: Days 75-85 see doubled assessment activity (cramming period)
-	 * 7. FREE VS PAID COURSES: Paid subscribers convert through Course Completion funnel at ~2.2x rate (funnel-pre scoped to cert funnel only)
-	 * 8. PLAYBACK SPEED CORRELATION: Speed learners paradoxically score higher; thorough learners get extended time
-	 * 9. COURSE COMPLETION TTC: Annual subscribers complete cert funnel faster; free users slower (everything hook)
-	 * 10. SOCIAL LEARNING EXPERIMENT: A/B test on Social Learning funnel with AI Study Buddy variant (funnel experiment config)
-	 */
-	hook: function (record, type, meta) {
-		// HOOK 1: STUDENT VS INSTRUCTOR PROFILES (user) — role-based attributes.
-		if (type === "user") {
-			if (record.account_type === "instructor") {
-				record.courses_created = chance.integer({ min: 1, max: 15 });
-				record.teaching_experience_years = chance.integer({ min: 1, max: 20 });
-				record.instructor_rating = Math.round((chance.floating({ min: 3.0, max: 5.0 }) + Number.EPSILON) * 100) / 100;
-			} else {
-				record.learning_goal = chance.pickone(["career_change", "skill_upgrade", "hobby", "degree_requirement"]);
-				record.study_hours_per_week = chance.integer({ min: 2, max: 30 });
-			}
-		}
-
-		// HOOK 5 (event): HINT DEPENDENCY — hint users get 60% easy problems;
-		// non-hint users get 40% hard problems. Mutates difficulty (raw).
-		// HOOK 8 (event): PLAYBACK SPEED — speed learners (>= 2.0x) get
-		// watch_time_mins compressed 0.6x; thorough learners (<= 1.0x) get 1.4x.
-		if (type === "event") {
-			if (record.event === "practice problem solved") {
-				if (record.hint_used === true && chance.bool({ likelihood: 60 })) {
-					record.difficulty = "easy";
-				} else if (record.hint_used === false && chance.bool({ likelihood: 40 })) {
-					record.difficulty = "hard";
-				}
-			}
-			if (record.event === "lecture completed") {
-				const speed = record.playback_speed;
-				if (speed >= 2.0 && record.watch_time_mins !== undefined) {
-					record.watch_time_mins = Math.max(3, Math.floor(record.watch_time_mins * 0.6));
-				} else if (speed !== undefined && speed <= 1.0 && record.watch_time_mins !== undefined) {
-					record.watch_time_mins = Math.min(90, Math.floor(record.watch_time_mins * 1.4));
-				}
-			}
-		}
-
-		// HOOK 7 (funnel-pre): FREE VS PAID — free users get 0.5x conversion rate;
-		// paid subscribers get 1.5x. Scoped to the course-completion funnel ONLY
-		// (sequence ending in "certificate earned") to avoid displacing standalone
-		// events for paid users and triggering unintended churn in H4.
-		if (type === "funnel-pre") {
-			const isCertFunnel = Array.isArray(meta?.funnel?.sequence) &&
-				meta.funnel.sequence.includes("certificate earned");
-			if (isCertFunnel) {
-				const subStatus = meta?.profile?.subscription_status;
-				if (subStatus === "free") {
-					record.conversionRate = Math.round(record.conversionRate * 0.5);
-				} else if (subStatus === "monthly" || subStatus === "annual") {
-					record.conversionRate = Math.min(100, Math.round(record.conversionRate * 1.5));
-				}
-			}
-		}
-
-		if (type === "everything") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			const userEvents = record;
-			const profile = meta.profile;
-			const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
-
-			if (profile) {
-				userEvents.forEach((event) => {
-					if (profile.Platform !== undefined) event.Platform = profile.Platform;
-				});
-			}
-
-			let notesTakenCount = 0;
-			let joinedStudyGroupEarly = false;
-			let hasLowQuizScore = false;
-			let speedLectureCount = 0;
-
-			userEvents.forEach((event) => {
-				const eventTime = dayjs(event.time);
-				const daysSinceStart = firstEventTime ? eventTime.diff(firstEventTime, 'days', true) : 0;
-				if (event.event === "lecture completed" && event.notes_taken === true) notesTakenCount++;
-				if (event.event === "study group joined" && daysSinceStart <= 10) joinedStudyGroupEarly = true;
-				if (event.event === "quiz completed" && event.score_percent < 60) hasLowQuizScore = true;
-				if (event.event === "lecture completed" && event.playback_speed >= 2.0) speedLectureCount++;
-			});
-
-			// HOOK 3 + HOOK 10: NOTES MAGIC NUMBER (in-funnel, no flags)
-			// Sweet 5-8 notes-taken lectures → +30% quiz score_percent (cap 100).
-			// Over 9+ → drop 35% of certificate-earned events (over-noted but
-			// can't synthesize; gets stuck in "study mode").
-			if (notesTakenCount >= 5 && notesTakenCount <= 8) {
-				userEvents.forEach((event) => {
-					if (event.event === "quiz completed" && event.score_percent !== undefined) {
-						event.score_percent = Math.min(100, Math.round(event.score_percent * 1.3));
-					}
-				});
-				if (chance.bool({ likelihood: 40 })) {
-					const lastEvent = userEvents[userEvents.length - 1];
-					const certTemplate = userEvents.find(e => e.event === "certificate earned");
-					if (lastEvent && certTemplate) {
-						userEvents.push({
-							...certTemplate,
-							time: dayjs(lastEvent.time).add(chance.integer({ min: 1, max: 5 }), 'days').toISOString(),
-							user_id: lastEvent.user_id,
-							course_id: chance.pickone(courseIds),
-							completion_time_days: chance.integer({ min: 14, max: 90 }),
-							final_grade: chance.integer({ min: 80, max: 100 }),
-						});
-					}
-				}
-			} else if (notesTakenCount >= 9) {
-				// Over-noters: drop 35% of certificates (stuck in study mode)
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					if (userEvents[i].event === "certificate earned" && chance.bool({ likelihood: 35 })) {
-						userEvents.splice(i, 1);
-					}
-				}
-			}
-
-			// HOOK 8 (cont): Speed learners (3+ lectures at 2.0x) score +8 on quizzes.
-			if (speedLectureCount >= 3) {
-				userEvents.forEach((event) => {
-					if (event.event === "quiz completed" && event.score_percent !== undefined) {
-						event.score_percent = Math.min(100, event.score_percent + 8);
-					}
-				});
-			}
-
-			// HOOK 6: SEMESTER-END SPIKE — duplicate quiz/assignment events
-			// in days 75-85 window. No flag — discover via line chart.
-			const duplicates = [];
-			const spikableEvents = ["quiz started", "quiz completed", "assignment submitted"];
-			userEvents.forEach((event) => {
-				if (spikableEvents.includes(event.event) && event.time) {
-					const dayInDataset = dayjs.utc(event.time).diff(datasetStart, 'days', true);
-					if (dayInDataset >= 75 && dayInDataset <= 85 && chance.bool({ likelihood: 80 })) {
-						const dup = JSON.parse(JSON.stringify(event));
-						dup.time = dayjs(event.time).add(chance.integer({ min: 5, max: 120 }), 'minutes').toISOString();
-						duplicates.push(dup);
-					}
-				}
-			});
-			if (duplicates.length > 0) userEvents.push(...duplicates);
-
-			const subStatus = profile ? profile.subscription_status : "free";
-
-			// HOOK 9 (T2C): COURSE COMPLETION TIME-TO-CONVERT (everything)
-			// Annual subscribers complete the cert funnel 2x faster (factor 0.5);
-			// Free users 1.8x slower (factor 1.8). For each "certificate earned"
-			// event, find the nearest preceding "course enrolled" and scale the gap.
-			// Runs BEFORE cert-dropping (H7) so TTC adjustments aren't masked by
-			// survivorship bias from the 55% free cert removal.
-			{
-				const ttcFactor = (
-					subStatus === "annual" ? 0.5 :
-					subStatus === "free" ? 1.8 :
-					1.0
-				);
-				if (ttcFactor !== 1.0) {
-					// Collect all "course enrolled" times (sorted) for binary lookup
-					const enrolledTimes = userEvents
-						.filter(e => e.event === "course enrolled")
-						.map(e => dayjs(e.time))
-						.sort((a, b) => a.valueOf() - b.valueOf());
-
-					if (enrolledTimes.length > 0) {
-						for (const event of userEvents) {
-							if (event.event === "certificate earned") {
-								const certTime = dayjs(event.time);
-								// Find the latest enrolled time before this cert
-								let anchor = null;
-								for (let k = enrolledTimes.length - 1; k >= 0; k--) {
-									if (enrolledTimes[k].isBefore(certTime)) {
-										anchor = enrolledTimes[k];
-										break;
-									}
-								}
-								if (anchor) {
-									const gap = certTime.diff(anchor);
-									const newGap = Math.round(gap * ttcFactor);
-									event.time = anchor.add(newGap, "milliseconds").toISOString();
-								}
-							}
-						}
-					}
-				}
-			}
-
-			// HOOK 7: FREE VS PAID — free users lose 55% of certificates.
-			if (subStatus === "free") {
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					if (userEvents[i].event === "certificate earned" && chance.bool({ likelihood: 55 })) {
-						userEvents.splice(i, 1);
-					}
-				}
-			}
-
-			// HOOK 4: STUDY GROUP RETENTION — non-joiners with low scores lose
-			// all post-day-14 events. Joiners get extra cloned discussion events.
-			if (!joinedStudyGroupEarly && hasLowQuizScore) {
-				const churnCutoff = firstEventTime ? firstEventTime.add(14, 'days') : null;
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					if (churnCutoff && dayjs(userEvents[i].time).isAfter(churnCutoff)) {
-						userEvents.splice(i, 1);
-					}
-				}
-			} else if (joinedStudyGroupEarly) {
-				const lastEvent = userEvents[userEvents.length - 1];
-				const discussionTemplate = userEvents.find(e => e.event === "discussion posted");
-				if (lastEvent && discussionTemplate && chance.bool({ likelihood: 60 })) {
-					userEvents.push({
-						...discussionTemplate,
-						time: dayjs(lastEvent.time).add(chance.integer({ min: 1, max: 3 }), 'days').toISOString(),
-						user_id: lastEvent.user_id,
-						course_id: chance.pickone(courseIds),
-						post_type: chance.pickone(["question", "answer", "comment"]),
-						word_count: chance.integer({ min: 20, max: 400 }),
-					});
-				}
-			}
-
-			// HOOK 2: DEADLINE CRAMMING — Sun/Mon assignment_submitted events
-			// flip is_late to true 60% of the time and quiz_completed score_percent
-			// drops 25 points. Mutates raw is_late + score_percent.
-			for (const event of userEvents) {
-				if (event.event === "assignment submitted" && event.time) {
-					const dow = new Date(event.time).getUTCDay();
-					if (dow === 0 || dow === 1) {
-						event.is_late = chance.bool({ likelihood: 60 });
-					}
-				}
-			}
-			userEvents.forEach((event) => {
-				if (event.event === "quiz completed" && event.time) {
-					const dow = new Date(event.time).getUTCDay();
-					if ((dow === 0 || dow === 1) && event.score_percent !== undefined) {
-						event.score_percent = Math.max(0, event.score_percent - 25);
-					}
-				}
-			});
-		}
-
+	hook(record, type, meta) {
+		if (type === "user") return handleUserHooks(record);
+		if (type === "event") return handleEventHooks(record);
+		if (type === "funnel-pre") return handleFunnelPreHooks(record, meta);
+		if (type === "everything") return handleEverythingHooks(record, meta);
 		return record;
 	}
 };
