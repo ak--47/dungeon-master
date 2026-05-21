@@ -1,46 +1,32 @@
-// ── TWEAK THESE ──
-const SEED = "ad spend test";
-const num_days = 90;
-const num_users = 1_000;
-const avg_events_per_user_per_day = 0.56;
-let token = "";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
-import Chance from 'chance';
-let chance = new Chance();
-import dayjs from "dayjs";
-import utc from "dayjs/plugin/utc.js";
-dayjs.extend(utc);
-import { uid, comma } from 'ak-tools';
-import { weighNumRange, date, integer, weighChoices } from "../../lib/utils/utils.js";
-
+// ── IMPORTS ──
+import { weighNumRange } from "../../lib/utils/utils.js";
 /** @typedef {import("../../types").Dungeon} Config */
-/**
- * ═══════════════════════════════════════════════════════════════
- * TECHNICAL TEST: Ad Spend & Campaign Attribution
- * ═══════════════════════════════════════════════════════════════
- *
- * Tests Mixpanel ad spend data generation and campaign attribution.
- * - 1,000 users, 50K events, 90 days
- * - hasAdSpend: true — generates cost, CPC, CTR, impressions, clicks
- * - hasCampaigns: true — adds UTM parameters to events
- * - hasBrowser: true — required for campaign tracking
- * - 6 events: signup, page view, purchase, ad click, search, share
- *
- * No hooks. Focus is on verifying ad spend event structure
- * and campaign attribution properties flow through correctly.
+
+// ── OVERVIEW ──
+/*
+ * NAME:       ad-spend
+ * PURPOSE:    exercises hasAdSpend + hasCampaigns — generates cost/CPC/CTR/impressions/clicks + UTM attribution
+ * SCALE:      1,000 users, ~50K events, 90 days
+ * EVENTS (6): sign up, page view, purchase, ad click, search, share
+ * FUNNELS (0): none
  */
 
-/** @type {import('../../types').Dungeon} */
+// ── SCALE ──
+const SEED = "ad spend test";
+const NUM_DAYS = 90;
+const NUM_USERS = 1_000;
+const EVENTS_PER_DAY = 0.56;
+const token = process.env.MP_TOKEN || "";
+
+// ── CONFIG ──
+/** @type {Config} */
 const config = {
 	token,
 	seed: SEED,
 	name: "ad-spend",
-	numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
+	numDays: NUM_DAYS,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	format: 'json',
 	region: "US",
 	hasAnonIds: true,
