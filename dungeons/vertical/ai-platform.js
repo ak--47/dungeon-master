@@ -1,56 +1,43 @@
-// ── TWEAK THESE ──
-const SEED = "promptforge";
-const num_days = 120;
-const num_users = 10_000;
-const avg_events_per_user_per_day = 0.83;
-let token = "your-mixpanel-token";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
-import * as v from "ak-tools";
+/** @typedef {import("../../types").Dungeon} Config */
 
-dayjs.extend(utc);
-const chance = u.initChance(SEED);
-/** @typedef  {import("../../types").Dungeon} Config */
+// ── OVERVIEW ──
+/*
+ * NAME:       PromptForge
+ * APP:        LLM API platform (Anthropic/OpenAI-style). Customers send API
+ *             requests for chat completions, embeddings, evaluations, and tool
+ *             use. Billing is per input/output token. Features: prompt caching,
+ *             tool use, multi-turn conversations, batch API, model selection,
+ *             eval pipelines.
+ * SCALE:      10,000 users, ~800K events, 121 days (2026-01-01 → 2026-05-01)
+ * CORE LOOP:  organization created → api key created → api call → iterate
+ *
+ * EVENTS (18):
+ *   api call (10) > dashboard viewed (5) > tool use call (4) > docs searched (4)
+ *   > playground session (4) > eval job (3) > eval result (3) > rate limit error (3)
+ *   > model selected (3) > api key created (2) > batch job submitted (2)
+ *   > batch job completed (2) > billing payment (2) > member invited (2)
+ *   > organization created (1) > api key rotated (1) > webhook configured (1)
+ *   > account deactivated (1)
+ *
+ * FUNNELS (3):
+ *   - Onboarding:           organization created → api key created → api call (70%)
+ *   - API to Eval Pipeline: api call → tool use call → eval job (45%)
+ *   - Usage to Billing:     api call → billing payment (30%)
+ *
+ * USER PROPS:  api_tier, primary_use_case, sdk_language, monthly_spend, total_api_calls, preferred_model
+ * SUPER PROPS: api_tier, primary_use_case, sdk_language
+ * SCD PROPS:   monthly_api_usage (weekly fuzzy, max 20), api_tier_history (Free/Build/Enterprise, monthly fixed, max 6)
+ * GROUPS:      none
+ */
 
-/**
- * ===============================================================
- * DATASET OVERVIEW
- * ===============================================================
- *
- * PromptForge -- an LLM API platform (like Anthropic/OpenAI).
- * Customers (developers and companies) send API requests for chat
- * completions, embeddings, evaluations, and tool use. Billing is
- * per input/output token. Key features: prompt caching, tool use,
- * multi-turn conversations, batch API, model selection, and
- * evaluation pipelines.
- *
- * - 8,000 users over 120 days, ~800K events
- * - Three API tiers: Free, Build, Enterprise
- * - Core loop: org created -> api key created -> api call -> iterate
- * - Revenue: token-based billing with tier-based pricing
- *
- * Key entities:
- * - model: LLM model version (sonnet-4, haiku-4, opus-4-6, opus-4-7)
- * - api_tier: Free / Build / Enterprise (determines context window, rate limits)
- * - tokens_used: total tokens consumed per API call (input + output)
- * - cost_usd: dollar cost of a single API call
- * - cache_enabled: prompt caching flag that reduces cost 70%
- * - multi_turn: whether the call is part of a conversation
- *
- * ===============================================================
- * ANALYTICS HOOKS (10 hooks)
- * ===============================================================
- *
- * NOTE: Cohort effects are HIDDEN — no flag stamping. Discoverable
- * only via behavioral cohorts (count event per user) or raw-prop
- * breakdowns (api_tier from profile, model, error_type).
- *
+// ── HOOK STORIES ──
+/*
  * ---------------------------------------------------------------
  * 1. PROMPT CACHING ADOPTION (CONVERSION — everything)
  * ---------------------------------------------------------------
@@ -315,16 +302,250 @@ const chance = u.initChance(SEED);
  * Docs Magic Number           | over billing/user    | 1x         | 0.7x         | -30%
  */
 
+// ── SCALE ──
+const SEED = "promptforge";
+const NUM_USERS = 10_000;
+const DATASET_START = "2026-01-01T00:00:00Z";
+const DATASET_END = "2026-05-01T23:59:59Z";
+const EVENTS_PER_DAY = 0.83;
+const token = process.env.MP_TOKEN || "your-mixpanel-token";
+
+const chance = u.initChance(SEED);
+
+// ── KNOBS (tweak these to reshape stories) ──
+const OUTAGE_START_DAY = 40;
+const OUTAGE_END_DAY = 42;
+const OUTAGE_ERROR_LIKELIHOOD = 40;
+const OUTAGE_LATENCY_MULT = 3;
+
+const TIER_CONTEXT_WINDOW = { Free: 200000, Build: 1000000, Enterprise: 2000000 };
+const TIER_INPUT_MULT = { Free: 1, Build: 2, Enterprise: 4 };
+
+const CACHE_USER_HASH_MOD = 4;
+const CACHE_COST_FACTOR = 0.3;
+const CACHE_ACTIVATION_PCT = 0.2;
+
+const MODEL_MIGRATION_DAY = 60;
+const MODEL_MIGRATION_LIKELIHOOD = 35;
+const MODEL_MIGRATION_TOKEN_MULT = 1.5;
+
+const AGENTIC_TOOL_THRESHOLD = 3;
+const AGENTIC_MULTITURN_THRESHOLD = 3;
+const AGENTIC_TOKEN_MULT = 8;
+const AGENTIC_CLONE_MULT = 2;
+
+const RATE_LIMIT_THRESHOLD = 2;
+const RATE_LIMIT_KEEP_LIKELIHOOD = 40;
+
+const BATCH_COST_FACTOR = 0.5;
+const BATCH_TOKEN_MULT = 2;
+
+const EVAL_NON_USER_KEEP_LIKELIHOOD = 25;
+const EVAL_CUTOFF_DAYS = 30;
+
+const DOCS_SWEET_MIN = 2;
+const DOCS_SWEET_MAX = 4;
+const DOCS_OVER_THRESHOLD = 5;
+const DOCS_BILLING_BOOST = 1.35;
+const DOCS_BILLING_DROP_LIKELIHOOD = 30;
+
+const FUNNEL_TTC_ENTERPRISE = 0.67;
+const FUNNEL_TTC_FREE = 1.4;
+
+// ── HELPER FUNCTIONS ──
+function handleFunnelPostHooks(record, meta) {
+	// H9: API-to-Eval TTC scaled by tier
+	const segment = meta?.profile?.api_tier;
+	if (Array.isArray(record) && record.length > 1) {
+		const factor = (
+			segment === "Enterprise" ? FUNNEL_TTC_ENTERPRISE :
+			segment === "Free" ? FUNNEL_TTC_FREE :
+			1.0
+		);
+		if (factor !== 1.0) {
+			for (let i = 1; i < record.length; i++) {
+				const prev = dayjs(record[i - 1].time);
+				const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+				record[i].time = prev.add(newGap, "milliseconds").toISOString();
+			}
+		}
+	}
+	return record;
+}
+
+function handleEverythingHooks(record, meta) {
+	const datasetStart = dayjs.unix(meta.datasetStart);
+	let events = record;
+	if (!events.length) return record;
+	const profile = meta && meta.profile ? meta.profile : {};
+
+	events.forEach(e => {
+		if (profile.api_tier) e.api_tier = profile.api_tier;
+		if (profile.primary_use_case) e.primary_use_case = profile.primary_use_case;
+		if (profile.sdk_language) e.sdk_language = profile.sdk_language;
+	});
+
+	// H6: Outage day (days 40-41) — 40% of api calls flipped to errors
+	events.forEach(e => {
+		if (e.event !== "api call") return;
+		const dayInDataset = dayjs(e.time).diff(datasetStart, "days", true);
+		if (dayInDataset >= OUTAGE_START_DAY && dayInDataset < OUTAGE_END_DAY) {
+			if (chance.bool({ likelihood: OUTAGE_ERROR_LIKELIHOOD })) {
+				e.is_error = true;
+				e.error_type = chance.pickone(["service_overloaded", "internal_server_error", "gateway_timeout"]);
+				e.latency_ms = Math.floor((e.latency_ms || 1500) * OUTAGE_LATENCY_MULT);
+			}
+		}
+	});
+
+	const sortedByTime = [...events].sort((a, b) => dayjs(a.time).valueOf() - dayjs(b.time).valueOf());
+	const firstEventTime = sortedByTime.length > 0 ? dayjs(sortedByTime[0].time) : datasetStart;
+
+	// H5: Tier-based context window & input tokens
+	const tier = profile.api_tier || "Free";
+	const contextWindow = TIER_CONTEXT_WINDOW[tier] ?? TIER_CONTEXT_WINDOW.Free;
+	const inputMultiplier = TIER_INPUT_MULT[tier] ?? TIER_INPUT_MULT.Free;
+	events.forEach(e => {
+		if (e.event === "api call") {
+			e.context_window = contextWindow;
+			e.input_tokens = Math.floor((e.input_tokens || 2000) * inputMultiplier);
+		}
+	});
+
+	// H1: Prompt caching adoption — ~25% of users; activates 20% into stream
+	const userId = events[0] && events[0].user_id;
+	const idHash = String(userId || "").split("").reduce((acc, c) => acc + c.charCodeAt(0), 0);
+	const isCacheUser = (idHash % CACHE_USER_HASH_MOD) === 0;
+	if (isCacheUser) {
+		let cacheActivated = false;
+		const activationPoint = Math.floor(events.length * CACHE_ACTIVATION_PCT);
+		events.forEach((e, idx) => {
+			if (e.event === "api call") {
+				if (idx >= activationPoint) cacheActivated = true;
+				if (cacheActivated) {
+					e.cache_enabled = true;
+					e.cost_usd = Math.round((e.cost_usd || 0.01) * CACHE_COST_FACTOR * 10000) / 10000;
+				}
+			}
+		});
+	}
+
+	// H2: Model migration wave — post-day-60 Build/Enterprise calls migrate to opus-4-7
+	const migrationCutoff = datasetStart.add(MODEL_MIGRATION_DAY, "days");
+	if (tier === "Build" || tier === "Enterprise") {
+		events.forEach(e => {
+			if (e.event === "api call" && dayjs(e.time).isAfter(migrationCutoff)) {
+				if (chance.bool({ likelihood: MODEL_MIGRATION_LIKELIHOOD })) {
+					e.model = "opus-4-7";
+					e.tokens_used = Math.floor((e.tokens_used || 2500) * MODEL_MIGRATION_TOKEN_MULT);
+				}
+			}
+		});
+	}
+
+	// H3: Agentic loop power users — 3+ tool calls + 3+ multi_turn → 8x tokens, 3x events
+	const toolUseCount = events.filter(e => e.event === "tool use call").length;
+	const multiTurnCount = events.filter(e => e.event === "api call" && e.multi_turn === true).length;
+	const isAgenticUser = toolUseCount >= AGENTIC_TOOL_THRESHOLD && multiTurnCount >= AGENTIC_MULTITURN_THRESHOLD;
+	if (isAgenticUser) {
+		events.forEach(e => {
+			if (e.event === "api call") {
+				e.tokens_used = Math.floor((e.tokens_used || 2500) * AGENTIC_TOKEN_MULT);
+			}
+		});
+		const apiCalls = events.filter(e => e.event === "api call");
+		const extraCount = apiCalls.length * AGENTIC_CLONE_MULT;
+		for (let i = 0; i < extraCount; i++) {
+			const template = apiCalls[i % apiCalls.length];
+			if (template) {
+				events.push({
+					...template,
+					time: dayjs(template.time).add(chance.integer({ min: 1, max: 120 }), "minutes").toISOString(),
+					user_id: template.user_id,
+					multi_turn: true,
+				});
+			}
+		}
+	}
+
+	// H4: Rate-limit churn — 2+ early rate-limit errors → drop 60% of post-week-1 events
+	const firstWeekEnd = firstEventTime.add(7, "days");
+	const earlyRateLimits = events.filter(e =>
+		e.event === "rate limit error" && dayjs(e.time).isBefore(firstWeekEnd)
+	).length;
+	if (earlyRateLimits >= RATE_LIMIT_THRESHOLD) {
+		events = events.filter(e => {
+			if (dayjs(e.time).isAfter(firstWeekEnd)) {
+				return chance.bool({ likelihood: RATE_LIMIT_KEEP_LIKELIHOOD });
+			}
+			return true;
+		});
+	}
+
+	// H7: Batch API discount — any batch job submitted → 50% cost, 2x tokens
+	const isBatchUser = events.some(e => e.event === "batch job submitted");
+	if (isBatchUser) {
+		events.forEach(e => {
+			if (e.event === "api call") {
+				e.cost_per_token = Math.round((e.cost_per_token || 0.00001) * BATCH_COST_FACTOR * 10000000) / 10000000;
+				e.tokens_used = Math.floor((e.tokens_used || 2500) * BATCH_TOKEN_MULT);
+			}
+		});
+	}
+
+	// H8: Eval-driven retention — non-eval users lose 75% post-day-30
+	const hasEarlyEval = events.some(e =>
+		e.event === "eval job" && dayjs(e.time).isBefore(firstWeekEnd)
+	);
+	if (!hasEarlyEval) {
+		const cutoff = firstEventTime.add(EVAL_CUTOFF_DAYS, "days");
+		events = events.filter(e => {
+			if (dayjs(e.time).isAfter(cutoff)) {
+				return chance.bool({ likelihood: EVAL_NON_USER_KEEP_LIKELIHOOD });
+			}
+			return true;
+		});
+	}
+
+	// H10: Docs-searched magic number — count between org-created and first billing
+	const orgEvent = events.find(e => e.event === "organization created");
+	const firstBilling = events.find(e => e.event === "billing payment");
+	if (orgEvent && firstBilling) {
+		const aTime = dayjs(orgEvent.time);
+		const bTime = dayjs(firstBilling.time);
+		const docsBetween = events.filter(e =>
+			e.event === "docs searched" &&
+			dayjs(e.time).isAfter(aTime) &&
+			dayjs(e.time).isBefore(bTime)
+		).length;
+		if (docsBetween >= DOCS_SWEET_MIN && docsBetween <= DOCS_SWEET_MAX) {
+			events.forEach(e => {
+				if (e.event === "billing payment" && typeof e.amount_usd === "number") {
+					e.amount_usd = Math.round(e.amount_usd * DOCS_BILLING_BOOST);
+				}
+			});
+		} else if (docsBetween >= DOCS_OVER_THRESHOLD) {
+			for (let i = events.length - 1; i >= 0; i--) {
+				if (events[i].event === "billing payment" && chance.bool({ likelihood: DOCS_BILLING_DROP_LIKELIHOOD })) {
+					events.splice(i, 1);
+				}
+			}
+		}
+	}
+
+	return events;
+}
+
+// ── CONFIG ──
 /** @type {Config} */
 const config = {
 	version: 2,
 	token,
 	seed: SEED,
-	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-05-01T23:59:59Z",
-	// numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
+	datasetStart: DATASET_START,
+	datasetEnd: DATASET_END,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	hasAnonIds: true,
 	avgDevicePerUser: 2,
 	hasSessionIds: true,
@@ -342,9 +563,7 @@ const config = {
 	hasAvatar: true,
 	concurrency: 1,
 	writeToDisk: false,
-
 	soup: "growth",
-
 	scdProps: {
 		monthly_api_usage: {
 			values: u.weighNumRange(0, 1000000, 0.3, 50),
@@ -359,8 +578,6 @@ const config = {
 			max: 6,
 		},
 	},
-
-	// -- Events (18) ------------------------------------------
 	events: [
 		{
 			event: "organization created",
@@ -546,8 +763,6 @@ const config = {
 			},
 		},
 	],
-
-	// -- Funnels (3) ------------------------------------------
 	funnels: [
 		{
 			name: "Onboarding",
@@ -575,15 +790,11 @@ const config = {
 			weight: 2,
 		},
 	],
-
-	// -- SuperProps --------------------------------------------
 	superProps: {
 		api_tier: ["Free", "Free", "Build", "Build", "Enterprise"],
 		primary_use_case: ["chatbot", "code_generation", "data_extraction", "content_creation", "agents"],
 		sdk_language: ["python", "typescript", "java", "go", "curl"],
 	},
-
-	// -- UserProps ---------------------------------------------
 	userProps: {
 		api_tier: ["Free", "Free", "Build", "Build", "Enterprise"],
 		primary_use_case: ["chatbot", "code_generation", "data_extraction", "content_creation", "agents"],
@@ -592,262 +803,9 @@ const config = {
 		total_api_calls: u.weighNumRange(0, 500000, 0.2, 10000),
 		preferred_model: ["sonnet-4", "sonnet-4", "haiku-4", "opus-4-6"],
 	},
-
-	// -- Hook Function ----------------------------------------
-	hook: function (record, type, meta) {
-
-		// ─────────────────────────────────────────────────────────
-		// Hook 9 (T2C): API-TO-EVAL TIME-TO-CONVERT (funnel-post)
-		// Enterprise users complete API to Eval Pipeline funnel 1.5x faster
-		// (factor 0.67 on inter-event gaps); Free users 1.4x slower (factor
-		// 1.4). Mutates record[i].time. No flag.
-		// ─────────────────────────────────────────────────────────
-		if (type === "funnel-post") {
-			const segment = meta?.profile?.api_tier;
-			if (Array.isArray(record) && record.length > 1) {
-				const factor = (
-					segment === "Enterprise" ? 0.67 :
-					segment === "Free" ? 1.4 :
-					1.0
-				);
-				if (factor !== 1.0) {
-					for (let i = 1; i < record.length; i++) {
-						const prev = dayjs(record[i - 1].time);
-						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-						record[i].time = prev.add(newGap, "milliseconds").toISOString();
-					}
-				}
-			}
-		}
-
-		// ─────────────────────────────────────────────────────────
-		// EVERYTHING HOOKS
-		// ─────────────────────────────────────────────────────────
-		if (type === "everything") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			let events = record;
-			if (!events.length) return record;
-			const profile = meta && meta.profile ? meta.profile : {};
-
-			// Stamp superProps from profile for consistency
-			events.forEach(e => {
-				if (profile.api_tier) e.api_tier = profile.api_tier;
-				if (profile.primary_use_case) e.primary_use_case = profile.primary_use_case;
-				if (profile.sdk_language) e.sdk_language = profile.sdk_language;
-			});
-
-			// ─────────────────────────────────────────────────────
-			// Hook #6: OUTAGE DAY (days 40-41)
-			// 40% of api calls get is_error=true with service errors
-			// ─────────────────────────────────────────────────────
-			events.forEach(e => {
-				if (e.event !== "api call") return;
-				const dayInDataset = dayjs(e.time).diff(datasetStart, "days", true);
-				if (dayInDataset >= 40 && dayInDataset < 42) {
-					if (chance.bool({ likelihood: 40 })) {
-						e.is_error = true;
-						e.error_type = chance.pickone([
-							"service_overloaded",
-							"internal_server_error",
-							"gateway_timeout",
-						]);
-						e.latency_ms = Math.floor((e.latency_ms || 1500) * 3);
-					}
-				}
-			});
-
-			// Determine first event time for relative day calculations
-			const sortedByTime = [...events].sort((a, b) => dayjs(a.time).valueOf() - dayjs(b.time).valueOf());
-			const firstEventTime = sortedByTime.length > 0 ? dayjs(sortedByTime[0].time) : datasetStart;
-
-			// ─────────────────────────────────────────────────────
-			// Hook #5: TIER-BASED CONTEXT WINDOW (SUBSCRIPTION TIER)
-			// Scale context_window and input_tokens by tier
-			// ─────────────────────────────────────────────────────
-			const tier = profile.api_tier || "Free";
-			const contextWindow = tier === "Enterprise" ? 2000000 : tier === "Build" ? 1000000 : 200000;
-			const inputMultiplier = tier === "Enterprise" ? 4 : tier === "Build" ? 2 : 1;
-
-			events.forEach(e => {
-				if (e.event === "api call") {
-					e.context_window = contextWindow;
-					e.input_tokens = Math.floor((e.input_tokens || 2000) * inputMultiplier);
-				}
-			});
-
-			// ─────────────────────────────────────────────────────
-			// Hook #1: PROMPT CACHING ADOPTION (CONVERSION)
-			// Users with any cache_enabled=true get 70% cost reduction
-			// on all subsequent api calls
-			// ─────────────────────────────────────────────────────
-			// ~25% of users have caching enabled on at least one event
-			const userId = events[0] && events[0].user_id;
-			const idHash = String(userId || "").split("").reduce((acc, c) => acc + c.charCodeAt(0), 0);
-			const isCacheUser = (idHash % 4) === 0;
-
-			if (isCacheUser) {
-				let cacheActivated = false;
-				// Activate caching on events after the first 20% of user events
-				const activationPoint = Math.floor(events.length * 0.2);
-				events.forEach((e, idx) => {
-					if (e.event === "api call") {
-						if (idx >= activationPoint) {
-							cacheActivated = true;
-						}
-						if (cacheActivated) {
-							e.cache_enabled = true;
-							e.cost_usd = Math.round((e.cost_usd || 0.01) * 0.3 * 10000) / 10000;
-						}
-					}
-				});
-			}
-
-			// ─────────────────────────────────────────────────────
-			// Hook #2: MODEL MIGRATION WAVE
-			// After day 60, 35% of Build/Enterprise api_calls switch to
-			// opus-4-7 model and get 1.5x tokens_used. Reads profile.api_tier
-			// (authoritative) and uses post-shift event timestamps.
-			// ─────────────────────────────────────────────────────
-			const datasetStartDay60 = datasetStart.add(60, "days");
-			if (tier === "Build" || tier === "Enterprise") {
-				events.forEach(e => {
-					if (e.event === "api call" && dayjs(e.time).isAfter(datasetStartDay60)) {
-						if (chance.bool({ likelihood: 35 })) {
-							e.model = "opus-4-7";
-							e.tokens_used = Math.floor((e.tokens_used || 2500) * 1.5);
-						}
-					}
-				});
-			}
-
-			// ─────────────────────────────────────────────────────
-			// Hook #3: AGENTIC LOOP POWER USERS (BEHAVIORS TOGETHER)
-			// Users with 3+ tool use calls + 3+ multi_turn api calls
-			// get 8x tokens, 3x events. Threshold ensures a meaningful
-			// agentic cohort (~20-30% of users).
-			// ─────────────────────────────────────────────────────
-			const toolUseCount = events.filter(e => e.event === "tool use call").length;
-			const multiTurnCount = events.filter(e => e.event === "api call" && e.multi_turn === true).length;
-			const isAgenticUser = toolUseCount >= 3 && multiTurnCount >= 3;
-
-			if (isAgenticUser) {
-				events.forEach(e => {
-					if (e.event === "api call") {
-						e.tokens_used = Math.floor((e.tokens_used || 2500) * 8);
-					}
-				});
-
-				const apiCalls = events.filter(e => e.event === "api call");
-				const extraCount = apiCalls.length * 2;
-				for (let i = 0; i < extraCount; i++) {
-					const template = apiCalls[i % apiCalls.length];
-					if (template) {
-						events.push({
-							...template,
-							time: dayjs(template.time).add(chance.integer({ min: 1, max: 120 }), "minutes").toISOString(),
-							user_id: template.user_id,
-							multi_turn: true,
-						});
-					}
-				}
-			}
-
-			// ─────────────────────────────────────────────────────
-			// Hook #4: RATE LIMIT CHURN
-			// >=2 rate limit errors in first 7 days -> remove 60% of
-			// events after week 1. Threshold is intentionally low because
-			// avgEventsPerUserPerDay=0.83 means most users only generate
-			// a handful of events per week.
-			// ─────────────────────────────────────────────────────
-			const firstWeekEnd = firstEventTime.add(7, "days");
-			const earlyRateLimits = events.filter(e =>
-				e.event === "rate limit error" &&
-				dayjs(e.time).isBefore(firstWeekEnd)
-			).length;
-
-			if (earlyRateLimits >= 2) {
-				// Remove 60% of events after week 1
-				events = events.filter(e => {
-					if (dayjs(e.time).isAfter(firstWeekEnd)) {
-						return chance.bool({ likelihood: 40 });
-					}
-					return true;
-				});
-			}
-
-			// ─────────────────────────────────────────────────────
-			// Hook #7: BATCH API DISCOUNT (PURCHASE VALUE)
-			// Batch users get 50% lower cost_per_token, 2x tokens_used
-			// ─────────────────────────────────────────────────────
-			const isBatchUser = events.some(e => e.event === "batch job submitted");
-
-			if (isBatchUser) {
-				events.forEach(e => {
-					if (e.event === "api call") {
-						e.cost_per_token = Math.round((e.cost_per_token || 0.00001) * 0.5 * 10000000) / 10000000;
-						e.tokens_used = Math.floor((e.tokens_used || 2500) * 2);
-					}
-				});
-			}
-
-			// ─────────────────────────────────────────────────────
-			// Hook #8: EVAL-DRIVEN RETENTION
-			// Early eval users (first 7 days) get 75% D30 retention
-			// Non-eval users get only 25% D30 retention (remove events)
-			// ─────────────────────────────────────────────────────
-			const hasEarlyEval = events.some(e =>
-				e.event === "eval job" &&
-				dayjs(e.time).isBefore(firstWeekEnd)
-			);
-
-			if (hasEarlyEval) {
-				// Early eval users keep all their events (high retention)
-			} else {
-				// Non-eval users: remove 75% of events after day 30
-				const day30 = firstEventTime.add(30, "days");
-				events = events.filter(e => {
-					if (dayjs(e.time).isAfter(day30)) {
-						return chance.bool({ likelihood: 25 });
-					}
-					return true;
-				});
-			}
-
-			// ─────────────────────────────────────────────────────
-			// Hook 10: DOCS-SEARCHED MAGIC NUMBER (in-funnel, no flags)
-			// Count "docs searched" events between first "organization
-			// created" (sign-up) and any "billing payment". Sweet 2-4 → +35%
-			// on amount_usd of billing-payment events. Over 5+ → drop 30%
-			// of billing-payment events.
-			// ─────────────────────────────────────────────────────
-			const orgEvent = events.find(e => e.event === "organization created");
-			const firstBilling = events.find(e => e.event === "billing payment");
-			if (orgEvent && firstBilling) {
-				const aTime = dayjs(orgEvent.time);
-				const bTime = dayjs(firstBilling.time);
-				const docsBetween = events.filter(e =>
-					e.event === "docs searched" &&
-					dayjs(e.time).isAfter(aTime) &&
-					dayjs(e.time).isBefore(bTime)
-				).length;
-				if (docsBetween >= 2 && docsBetween <= 4) {
-					events.forEach(e => {
-						if (e.event === "billing payment" && typeof e.amount_usd === "number") {
-							e.amount_usd = Math.round(e.amount_usd * 1.35);
-						}
-					});
-				} else if (docsBetween >= 5) {
-					for (let i = events.length - 1; i >= 0; i--) {
-						if (events[i].event === "billing payment" && chance.bool({ likelihood: 30 })) {
-							events.splice(i, 1);
-						}
-					}
-				}
-			}
-
-			return events;
-		}
-
+	hook(record, type, meta) {
+		if (type === "funnel-post") return handleFunnelPostHooks(record, meta);
+		if (type === "everything") return handleEverythingHooks(record, meta);
 		return record;
 	},
 };
