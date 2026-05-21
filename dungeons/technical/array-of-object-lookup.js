@@ -1,40 +1,24 @@
-// ── TWEAK THESE ──
-const SEED = "dm4-array-of-object-lookup";
-const num_days = 60;
-const num_users = 1_000;
-const avg_events_per_user_per_day = 1.67;
-let token = "";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
-import Chance from 'chance';
-let chance = new Chance();
+// ── IMPORTS ──
+import Chance from "chance";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
-import { uid, comma } from 'ak-tools';
-import { weighNumRange, date, integer, weighChoices } from "../../lib/utils/utils.js";
-
+import { weighNumRange, integer, weighChoices } from "../../lib/utils/utils.js";
 /** @typedef {import("../../types").Dungeon} Config */
-const videoCategories = ["funny", "educational", "inspirational", "music", "news", "sports", "cooking", "DIY", "travel", "gaming"];
-const spiritAnimals = ["duck", "dog", "otter", "penguin", "cat", "elephant", "lion", "cheetah", "giraffe", "zebra", "rhino", "hippo", "whale", "dolphin", "shark", "octopus", "squid", "jellyfish", "starfish", "seahorse", "crab", "lobster", "shrimp", "clam", "snail", "slug", "butterfly", "moth", "bee", "wasp", "ant", "beetle", "ladybug", "caterpillar", "centipede", "millipede", "scorpion", "spider", "tarantula", "tick", "mite", "mosquito", "fly", "dragonfly", "damselfly", "grasshopper", "cricket", "locust", "mantis", "cockroach", "termite", "praying mantis", "walking stick", "stick bug", "leaf insect", "lacewing", "aphid", "cicada", "thrips", "psyllid", "scale insect", "whitefly", "mealybug", "planthopper", "leafhopper", "treehopper", "flea", "louse", "bedbug", "flea beetle", "weevil", "longhorn beetle", "leaf beetle", "tiger beetle", "ground beetle", "lady beetle", "firefly", "click beetle", "rove beetle", "scarab beetle", "dung beetle", "stag beetle", "rhinoceros beetle", "hercules beetle", "goliath beetle", "jewel beetle", "tortoise beetle"];
 
-/**
- * ═══════════════════════════════════════════════════════════════
- * DATASET OVERVIEW
- * ═══════════════════════════════════════════════════════════════
- *
- * Array-of-Object Lookup Test — tests nested product arrays in events.
- * - 1,000 users over 60 days, ~100K events
- * - Events: checkout (cart array), add to cart, view/save item (single item)
- * - Lookup table: 1,000 products with price, category, descriptor
- * - Tests Mixpanel's array-of-objects property handling
- *
- * ═══════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (3 patterns)
- * ═══════════════════════════════════════════════════════════════
- *
+// ── OVERVIEW ──
+/*
+ * NAME:       array-of-object-lookup
+ * PURPOSE:    Exercises nested product arrays in events plus a lookup table
+ *             keyed by product_id with rich attributes.
+ * SCALE:      1,000 users, ~100K events, 60 days
+ * EVENTS (4): checkout (cart array), add to cart, view item, save item (single item)
+ * FUNNELS (0): none
+ * LOOKUPS (1): product_id (1,000 entries; amount, quantity, featured, category, descriptor)
+ */
+
+// ── HOOK STORIES ──
+/*
  * 1. COUPON DISCOUNT TAGGING (event hook)
  *    Checkout events with coupons get discount_applied: true and
  *    discount_percent extracted from the coupon string.
@@ -48,18 +32,109 @@ const spiritAnimals = ["duck", "dog", "otter", "penguin", "cat", "elephant", "li
  *    events tagged user_segment: "window_shopper".
  */
 
-/** @type {import('../types.js').Dungeon} */
+// ── SCALE ──
+const SEED = "dm4-array-of-object-lookup";
+const NUM_DAYS = 60;
+const NUM_USERS = 1_000;
+const EVENTS_PER_DAY = 1.67;
+const token = process.env.MP_TOKEN || "";
+
+const chance = new Chance();
+
+// ── DATA ARRAYS ──
+const spiritAnimals = ["duck", "dog", "otter", "penguin", "cat", "elephant", "lion", "cheetah", "giraffe", "zebra", "rhino", "hippo", "whale", "dolphin", "shark", "octopus", "squid", "jellyfish", "starfish", "seahorse", "crab", "lobster", "shrimp", "clam", "snail", "slug", "butterfly", "moth", "bee", "wasp", "ant", "beetle", "ladybug", "caterpillar", "centipede", "millipede", "scorpion", "spider", "tarantula", "tick", "mite", "mosquito", "fly", "dragonfly", "damselfly", "grasshopper", "cricket", "locust", "mantis", "cockroach", "termite", "praying mantis", "walking stick", "stick bug", "leaf insect", "lacewing", "aphid", "cicada", "thrips", "psyllid", "scale insect", "whitefly", "mealybug", "planthopper", "leafhopper", "treehopper", "flea", "louse", "bedbug", "flea beetle", "weevil", "longhorn beetle", "leaf beetle", "tiger beetle", "ground beetle", "lady beetle", "firefly", "click beetle", "rove beetle", "scarab beetle", "dung beetle", "stag beetle", "rhinoceros beetle", "hercules beetle", "goliath beetle", "jewel beetle", "tortoise beetle"];
+
+// ── HELPER FUNCTIONS ──
+function makeProducts(maxItems = 5) {
+	return function () {
+		const categories = ["electronics", "books", "clothing", "home", "garden", "toys", "sports", "automotive", "beauty", "health", "grocery", "jewelry", "shoes", "tools", "office supplies"];
+		const descriptors = ["brand new", "open box", "refurbished", "used", "like new", "vintage", "antique", "collectible"];
+		const suffix = ["item", "product", "good", "merchandise", "thing", "object", "widget", "gadget", "device", "apparatus", "contraption", "instrument", "tool", "implement", "utensil", "appliance", "machine", "equipment", "gear", "kit", "set", "package"];
+		const assetPreview = ['.png', '.jpg', '.jpeg', '.heic', '.mp4', '.mov', '.avi'];
+		const data = [];
+		const numOfItems = integer(1, maxItems);
+
+		for (var i = 0; i < numOfItems; i++) {
+			const category = chance.pickone(categories);
+			const descriptor = chance.pickone(descriptors);
+			const suffixWord = chance.pickone(suffix);
+			const slug = `${descriptor.replace(/\s+/g, '-').toLowerCase()}-${suffixWord.replace(/\s+/g, '-').toLowerCase()}`;
+			const asset = chance.pickone(assetPreview);
+
+			const price = integer(1, 100);
+			const quantity = integer(1, 5);
+			const product_id = integer(1, 1_000);
+
+			const item = {
+				product_id: product_id,
+				product_url: `https://example.com/assets/${product_id}`,
+			};
+
+			data.push(item);
+		}
+
+		return () => [data];
+	};
+}
+
+function flip(likelihood = 50) {
+	return chance.bool({ likelihood });
+}
+
+function handleEventHooks(record) {
+	// Pattern 1: Checkouts with coupons get a discount_applied flag and adjusted total
+	if (record.event === "checkout" && record.coupon && record.coupon !== "none") {
+		record.discount_applied = true;
+		const pctMatch = record.coupon.match(/(\d+)%/);
+		if (pctMatch) {
+			record.discount_percent = parseInt(pctMatch[1]);
+		}
+	}
+
+	// Pattern 2: "save item" events on weekends are tagged as wishlist behavior
+	if (record.event === "save item") {
+		const dow = dayjs(record.time).day();
+		if (dow === 0 || dow === 6) {
+			record.save_context = "weekend_browse";
+		} else {
+			record.save_context = "weekday_intent";
+		}
+	}
+
+	return record;
+}
+
+function handleEverythingHooks(record, meta) {
+	const profile = meta.profile;
+	record.forEach(e => {
+		e.theme = profile.theme;
+	});
+
+	// Pattern 3: Users who view 5+ items but never checkout are tagged as window shoppers
+	const views = record.filter(e => e.event === "view item").length;
+	const checkouts = record.filter(e => e.event === "checkout").length;
+	if (views >= 5 && checkouts === 0) {
+		for (const e of record) {
+			e.user_segment = "window_shopper";
+		}
+	}
+
+	return record;
+}
+
+// ── CONFIG ──
+/** @type {Config} */
 const config = {
 	token,
 	seed: SEED,
 	name: "array-of-object-lookup",
-	numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
-	format: 'json', //csv or json
+	numDays: NUM_DAYS,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
+	format: 'json',
 	region: "US",
-	hasAnonIds: true, //if true, anonymousIds are created for each user
-	hasSessionIds: true, //if true, hasSessionIds are created for each user
+	hasAnonIds: true,
+	hasSessionIds: true,
 	hasAdSpend: false,
 	hasLocation: true,
 	hasAndroidDevices: false,
@@ -108,28 +183,18 @@ const config = {
 				save_context: ["weekday_intent"],
 				user_segment: ["regular"],
 			}
-		}		
+		}
 	],
-	funnels: [	],
+	funnels: [],
 	superProps: {
 		theme: ["light", "dark", "custom", "light", "dark"],
 	},
-	/*
-	user properties work the same as event properties
-	each key should be an array or function reference
-	*/
 	userProps: {
 		theme: ["light", "dark", "custom", "light", "dark"],
-		// title: chance.profession.bind(chance),
-		// luckyNumber: weighNumRange(1, 500, .3),
 		spiritAnimal: spiritAnimals
 	},
 	scdProps: {},
 	mirrorProps: {},
-	/*
-	for group analytics keys, we need an array of arrays [[],[],[]]
-	each pair represents a group_key and the number of profiles for that key
-	*/
 	groupKeys: [],
 	groupProps: {},
 	lookupTables: [{
@@ -141,101 +206,13 @@ const config = {
 			featured: flip,
 			category: ["electronics", "books", "clothing", "home", "garden", "toys", "sports", "automotive", "beauty", "health", "grocery", "jewelry", "shoes", "tools", "office supplies"],
 			descriptor: ["brand new", "open box", "refurbished", "used", "like new", "vintage", "antique", "collectible"]
-			
 		}
-
 	}],
 	hook: function (record, type, meta) {
-
-		if (type === "event") {
-			// Pattern 1: Checkouts with coupons get a discount_applied flag and adjusted total
-			if (record.event === "checkout" && record.coupon && record.coupon !== "none") {
-				record.discount_applied = true;
-				const pctMatch = record.coupon.match(/(\d+)%/);
-				if (pctMatch) {
-					record.discount_percent = parseInt(pctMatch[1]);
-				}
-			}
-
-			// Pattern 2: "save item" events on weekends are tagged as wishlist behavior
-			if (record.event === "save item") {
-				const dow = dayjs(record.time).day();
-				if (dow === 0 || dow === 6) {
-					record.save_context = "weekend_browse";
-				} else {
-					record.save_context = "weekday_intent";
-				}
-			}
-		}
-
-		if (type === "everything") {
-			const profile = meta.profile;
-			record.forEach(e => {
-				e.theme = profile.theme;
-			});
-
-			// Pattern 3: Users who view 5+ items but never checkout are tagged as window shoppers
-			const views = record.filter(e => e.event === "view item").length;
-			const checkouts = record.filter(e => e.event === "checkout").length;
-			if (views >= 5 && checkouts === 0) {
-				for (const e of record) {
-					e.user_segment = "window_shopper";
-				}
-			}
-		}
-
+		if (type === "event") return handleEventHooks(record);
+		if (type === "everything") return handleEverythingHooks(record, meta);
 		return record;
 	}
 };
-
-function makeProducts(maxItems = 5) {
-	return function () {
-		const categories = ["electronics", "books", "clothing", "home", "garden", "toys", "sports", "automotive", "beauty", "health", "grocery", "jewelry", "shoes", "tools", "office supplies"];
-		const descriptors = ["brand new", "open box", "refurbished", "used", "like new", "vintage", "antique", "collectible"];
-		const suffix = ["item", "product", "good", "merchandise", "thing", "object", "widget", "gadget", "device", "apparatus", "contraption", "instrument", "tool", "implement", "utensil", "appliance", "machine", "equipment", "gear", "kit", "set", "package"];
-		const assetPreview = ['.png', '.jpg', '.jpeg', '.heic', '.mp4', '.mov', '.avi'];
-		const data = [];
-		const numOfItems = integer(1, maxItems);
-
-		for (var i = 0; i < numOfItems; i++) {
-			const category = chance.pickone(categories);
-			const descriptor = chance.pickone(descriptors);
-			const suffixWord = chance.pickone(suffix);
-			const slug = `${descriptor.replace(/\s+/g, '-').toLowerCase()}-${suffixWord.replace(/\s+/g, '-').toLowerCase()}`;
-			const asset = chance.pickone(assetPreview);
-
-			// const product_id = chance.guid();
-			const price = integer(1, 100);
-			const quantity = integer(1, 5);
-			const product_id = integer(1, 1_000);
-
-			const item = {
-				product_id: product_id,
-				product_url: `https://example.com/assets/${product_id}`,
-				// sku: integer(11111, 99999),
-				// amount: price,
-				// quantity: quantity,
-				// total_value: price * quantity,
-				// featured: chance.pickone([true, false, false]),
-				// category: category,
-				// descriptor: descriptor,
-				// slug: slug,
-				
-				// assetType: asset
-
-			};
-
-			data.push(item);
-		}
-
-		return () => [data];
-	};
-};
-
-
-function flip(likelihood = 50) {
-	return chance.bool({ likelihood });
-}
-
 
 export default config;
