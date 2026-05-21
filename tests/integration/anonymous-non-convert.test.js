@@ -77,6 +77,15 @@ describe('v1.5.1 anonymous non-converters', () => {
 			expect(keptIds.has(uid)).toBe(true);
 		}
 
+		// Strict inverse (v1.5.1 engine fix at funnels.js:328): every kept profile
+		// must have a sign_up event. Born-late users whose auth event lands past
+		// FIXED_NOW no longer set userAuthTimeMs (the auth event is _drop'd),
+		// so they correctly stay anonymous — no kept-without-sign_up gap remains.
+		// The reverse direction above stays as defense-in-depth.
+		for (const p of kept) {
+			expect(signedUp.has(p.distinct_id)).toBe(true);
+		}
+
 		// profilesPushed count exposed on result.
 		expect(result.profilesPushed).toBe(kept.length);
 	});
