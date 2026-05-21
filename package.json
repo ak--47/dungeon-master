@@ -1,6 +1,6 @@
 {
 	"name": "@ak--47/dungeon-master",
-	"version": "1.5.0",
+	"version": "1.5.1",
 	"description": "generate fancy datasets",
 	"type": "module",
 	"main": "index.js",
@@ -47,7 +47,15 @@
 		"dungeon:run": "node ./scripts/run-dungeon.mjs",
 		"dungeon:to-json": "node ./scripts/dungeon-to-json.mjs",
 		"dungeon:from-json": "node ./scripts/json-to-dungeon.mjs",
-		"dungeon:schema": "node ./scripts/extract-dungeon-schema.mjs"
+		"dungeon:schema": "node ./scripts/extract-dungeon-schema.mjs",
+		"kodiak:deploy": "gcloud builds submit --config dungeons/user/kodiak/cloudbuild.yaml",
+		"kodiak:plan": "node dungeons/user/kodiak/kickoff.mjs --plan-only",
+		"kodiak:smoke:local": "bash dungeons/user/kodiak/smoke-local.sh",
+		"kodiak:smoke": "node dungeons/user/kodiak/kickoff.mjs --total-events 1000000000 --chunk-cap 10",
+		"kodiak:generate": "node dungeons/user/kodiak/kickoff.mjs --no-wait",
+		"kodiak:status": "node dungeons/user/kodiak/status.mjs",
+		"kodiak:run": "bash dungeons/user/kodiak/run-all.sh",
+		"kodiak:load": "node dungeons/user/kodiak/load-bq.mjs --replace --no-wait"
 	},
 	"repository": {
 		"type": "git",
@@ -70,6 +78,7 @@
 	},
 	"homepage": "https://github.com/ak--47/dungeon-master#readme",
 	"dependencies": {
+		"@google-cloud/bigquery": "^7.9.4",
 		"@google-cloud/storage": "^7.14.0",
 		"ak-tools": "^1.1.12",
 		"chance": "^1.1.11",

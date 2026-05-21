@@ -1,62 +1,49 @@
-// ── TWEAK THESE ──
-const SEED = "questforge";
-const num_days = 120;
-const num_users = 10_000;
-const avg_events_per_user_per_day = 1.2;
-let token = "your-mixpanel-token";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
-
-dayjs.extend(utc);
-const chance = u.initChance(SEED);
 /** @typedef  {import("../../types").Dungeon} Config */
 
+// ── OVERVIEW ──
 /*
- * ═══════════════════════════════════════════════════════════════════════════════
- * DATASET OVERVIEW
- * ═══════════════════════════════════════════════════════════════════════════════
+ * NAME:       QuestForge
+ * APP:        D&D-inspired action RPG with a deep character system, party-based
+ *             dungeon crawls, boss fights, a player-driven economy, guilds, and
+ *             subscription tiers. Combines tabletop-RPG strategic depth with the
+ *             monetization and engagement loops of a modern live-service game.
+ * SCALE:      10,000 users, ~1.4M events, 121 days (2026-01-01 → 2026-05-01)
+ * CORE LOOP:  character created → tutorial → quest → dungeon crawl → combat → loot → level up
  *
- * QuestForge — a D&D-inspired action RPG with a deep character system, party-
- * based dungeon crawls, boss fights, a player-driven economy, guilds, and
- * subscription tiers. Combines the strategic depth of a tabletop RPG with the
- * monetization and engagement loops of a modern live-service game.
+ * EVENTS (24):
+ *   combat initiated (20) > enter dungeon (18) > combat completed (18) > find treasure (16)
+ *   > quest accepted (15) > exit dungeon (14) > use item (14) > quest objective completed (12)
+ *   > item purchased (11) > quest turned in (10) > inspect (9) > player death (8)
+ *   > search for clues (8) > item sold (7) > gameplay summary (6) > level up (5)
+ *   > attack (5) > guild joined (4) > real money purchase (3) > fight boss (3)
+ *   > defend (3) > tutorial completed (2) > character created (1) > guild left (1)
  *
- * CORE LOOP: Players create characters (12 classes, 9 races, 9 alignments,
- * 13 backgrounds) and progress through quests, dungeon crawls, boss fights,
- * and combat encounters. Strategic preparation (inspect, search for clues,
- * Ancient Compass) creates skill gaps. Guild membership drives social
- * retention. Monetization via premium currency, lucky charms, season pass,
- * and subscription tiers (Free / Premium / Elite).
+ * FUNNELS (7):
+ *   - Onboarding:         character created → tutorial completed → quest accepted (75%)
+ *   - Combat Loop:        combat initiated → combat completed → use item (75%)
+ *   - Dungeon Crawl:      enter dungeon → find treasure → exit dungeon (60%)
+ *   - Quest Lifecycle:    quest accepted → quest objective completed → quest turned in (55%)
+ *   - Prep Funnel:        inspect → search for clues → enter dungeon (50%)
+ *   - Economy:            item purchased → use item → item sold (45%)
+ *   - Social/Progression: guild joined → level up → real money purchase (25%)
  *
- * SCALE: 5,000 users × 120 events = 600K events over 100 days
- * 24 event types, 7 funnels, guild group analytics, subscription tiers
- *
- * KEY SYSTEMS:
- * - Character: 12 D&D classes, 9 races, 9 alignments, 13 backgrounds
- * - Quests: accept → objective → turn in (5 quest types, gold/XP rewards)
- * - Dungeons: enter → find treasure → exit (50 dungeons, party-based, 3 outcomes)
- * - Combat: initiate → complete (6 enemy types), boss fights, attack/defend
- * - Economy: item purchase/sell, real money purchases, vendor types
- * - Progression: level up (1-50), stat points, level-scaled rewards
- * - Social: guild join/leave (5-100 members, guild levels 1-20)
- * - Monetization: premium currency, lucky charms, legendary chests, season pass
- * - Subscriptions: Free / Premium ($9.99/mo) / Elite ($19.99/mo)
- * - Experiments: A/B/C/Control variants across "fast leveling", "tension
- *   economy", "free trial"
+ * USER PROPS:  preferred_playstyle, total_playtime_hours, achievement_points, favorite_class,
+ *              Platform, graphics_quality, subscription_tier, race, class, alignment,
+ *              background, level, archetype, experiment, variant
+ * SUPER PROPS: Platform, graphics_quality, subscription_tier
+ * SCD PROPS:   player_rank (recruit/veteran/elite/legend, weekly fuzzy, max 20)
+ * GROUPS:      guild_id (cap 500; on guild joined / guild left / quest turned in / combat completed)
  */
 
+// ── HOOK STORIES ──
 /*
- * ═══════════════════════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (13 hooks)
- * ═══════════════════════════════════════════════════════════════════════════════
- *
  * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable via
  * behavioral cohorts (count event per user), raw-prop breakdowns
  * (treasure_type, subscription_tier, day-of-user-life), or funnel time-to-convert.
@@ -299,37 +286,461 @@ const chance = u.initChance(SEED);
  * Combat-Prep Magic Num | over boss victory    | 1x       | 0.75x       | -25%
  */
 
+// ── SCALE ──
+const SEED = "questforge";
+const NUM_USERS = 10_000;
+const DATASET_START = "2026-01-01T00:00:00Z";
+const DATASET_END = "2026-05-01T23:59:59Z";
+const EVENTS_PER_DAY = 1.2;
+const token = process.env.MP_TOKEN || "your-mixpanel-token";
+
+const chance = u.initChance(SEED);
+
+// ── KNOBS (tweak these to reshape stories) ──
+const COMPASS_REWARD_MULT = 1.5;
+const COMPASS_BONUS_QUEST_LIKELIHOOD = 40;
+
+const CURSED_WEEK_START_DAY = 40;
+const CURSED_WEEK_END_DAY = 47;
+const CURSED_DEATH_INJECTION_FACTOR = 0.6;
+
+const EARLY_GUILD_DAYS = 3;
+const EARLY_GUILD_COMBAT_CLONE_LIKELIHOOD = 60;
+
+const DEATH_SPIRAL_EARLY_DAYS = 7;
+const DEATH_SPIRAL_DROP_LIKELIHOOD = 80;
+
+const LUCKY_CHARM_PRICE_MULT = 2.5;
+const LUCKY_CHARM_BONUS_PURCHASE_LIKELIHOOD = 35;
+
+const STRATEGIC_COMPLETION_LIKELIHOOD = 85;
+const STRATEGIC_TREASURE_MULT = 2;
+
+const LEGENDARY_RELEASE_DAY = 45;
+const LEGENDARY_DROP_LIKELIHOOD = 2;
+const LEGENDARY_TREASURE_VALUE = 50000;
+const LEGENDARY_WIN_LIKELIHOOD = 90;
+const LEGENDARY_DUNGEON_SPEED_MULT = 0.6;
+
+const PREMIUM_WIN_LIKELIHOOD = 50;
+const PREMIUM_REWARD_MULT = 1.4;
+const PREMIUM_COMPLETION_LIKELIHOOD = 45;
+const PREMIUM_DUNGEON_SPEED_MULT = 0.85;
+const PREMIUM_TREASURE_MULT = 1.5;
+const PREMIUM_SURVIVAL_LIKELIHOOD = 30;
+
+const ELITE_WIN_LIKELIHOOD = 70;
+const ELITE_REWARD_MULT = 1.8;
+const ELITE_COMPLETION_LIKELIHOOD = 65;
+const ELITE_DUNGEON_SPEED_MULT = 0.7;
+const ELITE_TREASURE_MULT = 2.0;
+const ELITE_SURVIVAL_LIKELIHOOD = 50;
+const ELITE_BONUS_TREASURE_LIKELIHOOD = 5;
+
+const LEVEL_GOLD_SCALING = 0.15;
+
+const WHALE_PRICE_MULT = 1.8;
+
+const TTC_ELITE_FACTOR = 0.30;
+const TTC_PREMIUM_FACTOR = 0.70;
+const TTC_FREE_FACTOR = 1.40;
+
+const PREP_SWEET_MIN = 3;
+const PREP_SWEET_MAX = 6;
+const PREP_OVER_THRESHOLD = 7;
+const PREP_TREASURE_BOOST = 1.3;
+const PREP_BOSS_FLIP_LIKELIHOOD = 25;
+
+// ── DATA ARRAYS ──
 // Generate consistent item/location IDs for lookup tables
 const dungeonIds = v.range(1, 51).map(n => `dungeon_${v.uid(6)}`);
 const questIds = v.range(1, 201).map(n => `quest_${v.uid(8)}`);
 const itemIds = v.range(1, 301).map(n => `item_${v.uid(7)}`);
 
+// ── HELPER FUNCTIONS ──
+function handleUserHooks(record) {
+	// Hook #11: ALIGNMENT ARCHETYPE — derive archetype on user profile
+	if (record.alignment === "Chaotic Evil" || record.alignment === "Neutral Evil") {
+		record.archetype = "villain";
+	} else if (record.alignment === "Lawful Good" || record.alignment === "Neutral Good") {
+		record.archetype = "hero";
+	} else {
+		record.archetype = "neutral";
+	}
+	return record;
+}
+
+function handleEverythingHooks(record, meta) {
+	const userEvents = record;
+	const profile = meta.profile;
+	const datasetStart = dayjs.unix(meta.datasetStart);
+	const LEGENDARY_WEAPON_RELEASE = datasetStart.add(LEGENDARY_RELEASE_DAY, 'days');
+
+	// Stamp superProps from profile for consistency
+	userEvents.forEach(e => {
+		e.Platform = profile.Platform;
+		e.graphics_quality = profile.graphics_quality;
+		e.subscription_tier = profile.subscription_tier;
+	});
+
+	// Hook #7: TIMED RELEASE — Shadowmourne Legendary post-d45.
+	// Runs in everything hook so timestamps are post-bunchIntoSessions.
+	userEvents.forEach(e => {
+		if (e.event === "find treasure" && dayjs(e.time).isAfter(LEGENDARY_WEAPON_RELEASE) && chance.bool({ likelihood: LEGENDARY_DROP_LIKELIHOOD })) {
+			e.treasure_type = "Shadowmourne Legendary";
+			e.treasure_value = LEGENDARY_TREASURE_VALUE;
+		}
+	});
+
+	// Hook #12: COMBAT T2C — scale time gaps in combat funnel
+	// sequences (combat initiated → combat completed → use item).
+	// Elite ~0.30x (faster), Premium ~0.70x, Free ~1.40x (slower).
+	// Finds all 3-step sequences and shifts step 2/3 timestamps.
+	const tier = profile.subscription_tier;
+	const t2cFactor = (
+		tier === "Elite" ? TTC_ELITE_FACTOR :
+		tier === "Premium" ? TTC_PREMIUM_FACTOR :
+		tier === "Free" ? TTC_FREE_FACTOR :
+		1.0
+	);
+	if (t2cFactor !== 1.0) {
+		// Collect indices for each combat funnel step
+		const combatInitiated = [];
+		const combatCompleted = [];
+		const useItem = [];
+		for (let i = 0; i < userEvents.length; i++) {
+			const e = userEvents[i];
+			if (e.event === "combat initiated") combatInitiated.push(i);
+			else if (e.event === "combat completed") combatCompleted.push(i);
+			else if (e.event === "use item") useItem.push(i);
+		}
+		// Match sequences: for each combat initiated, find next
+		// combat completed after it, then next use item after that
+		const matched = new Set();
+		for (const ciIdx of combatInitiated) {
+			const ccIdx = combatCompleted.find(j => j > ciIdx && !matched.has(j));
+			if (ccIdx === undefined) continue;
+			const uiIdx = useItem.find(j => j > ccIdx && !matched.has(j));
+			if (uiIdx === undefined) continue;
+			matched.add(ccIdx);
+			matched.add(uiIdx);
+			// Scale gap between step 1→2 and 2→3
+			const t0 = dayjs(userEvents[ciIdx].time);
+			const t1 = dayjs(userEvents[ccIdx].time);
+			const t2 = dayjs(userEvents[uiIdx].time);
+			const gap1 = t1.diff(t0);
+			const gap2 = t2.diff(t1);
+			userEvents[ccIdx].time = t0.add(Math.round(gap1 * t2cFactor), 'milliseconds').toISOString();
+			userEvents[uiIdx].time = dayjs(userEvents[ccIdx].time).add(Math.round(gap2 * t2cFactor), 'milliseconds').toISOString();
+		}
+	}
+
+	const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
+	const userLevel = profile.level || 1;
+
+	// Track user behaviors
+	let usedAncientCompass = false;
+	let boughtLuckyCharm = false;
+	let joinedGuildEarly = false;
+	let earlyDeaths = 0;
+	let hasLegendaryWeapon = false;
+	let inspectedBeforeDungeon = false;
+	let searchedBeforeDungeon = false;
+	let subscriptionTier = "Free";
+
+	// Hook #10: Whale segmentation — deterministic via user_id hash (~33%)
+	const userId = userEvents.length > 0 ? (userEvents[0].user_id || userEvents[0].distinct_id || "") : "";
+	const isWhale = userId.length > 0 && userId.charCodeAt(0) % 3 === 0;
+
+	// First pass: identify user patterns
+	userEvents.forEach((event) => {
+		const eventTime = dayjs(event.time);
+		const daysSinceStart = firstEventTime ? eventTime.diff(firstEventTime, 'days', true) : 0;
+
+		if (event.subscription_tier) {
+			subscriptionTier = event.subscription_tier;
+		}
+
+		if (event.event === "use item" && event.item_type === "Ancient Compass") {
+			usedAncientCompass = true;
+		}
+
+		if (event.event === "real money purchase" && event.product === "Lucky Charm Pack") {
+			boughtLuckyCharm = true;
+		}
+
+		if (event.event === "guild joined" && daysSinceStart < EARLY_GUILD_DAYS) {
+			joinedGuildEarly = true;
+		}
+
+		if (event.event === "player death" && daysSinceStart < DEATH_SPIRAL_EARLY_DAYS) {
+			earlyDeaths++;
+		}
+
+		if (event.event === "find treasure" && event.treasure_type === "Shadowmourne Legendary") {
+			hasLegendaryWeapon = true;
+		}
+
+		if (event.event === "inspect") {
+			inspectedBeforeDungeon = true;
+		}
+		if (event.event === "search for clues") {
+			searchedBeforeDungeon = true;
+		}
+	});
+
+	// Second pass: raw mutations + cloning, no flag stamping
+	userEvents.forEach((event, idx) => {
+		const eventTime = dayjs(event.time);
+
+		// Hook 9: PROGRESSION SCALING — Quest gold scales with level.
+		// Power curve so bucket-averaged high-level/low-level ratio >= 2.0x.
+		if (event.event === "quest turned in") {
+			const baseGold = event.reward_gold || 100;
+			event.reward_gold = Math.floor(baseGold * (1 + userLevel * LEVEL_GOLD_SCALING));
+		}
+
+		// Hook 1: CONVERSION — Ancient Compass users earn 1.5x quest
+		// rewards plus 40% chance of bonus cloned quest.
+		if (usedAncientCompass && event.event === "quest turned in") {
+			event.reward_gold = Math.floor((event.reward_gold || 100) * COMPASS_REWARD_MULT);
+			event.reward_xp = Math.floor((event.reward_xp || 500) * COMPASS_REWARD_MULT);
+
+			if (chance.bool({ likelihood: COMPASS_BONUS_QUEST_LIKELIHOOD })) {
+				userEvents.splice(idx + 1, 0, {
+					...event,
+					time: eventTime.add(chance.integer({ min: 10, max: 120 }), 'minutes').toISOString(),
+					quest_id: chance.pickone(questIds),
+					reward_gold: chance.integer({ min: 100, max: 500 }),
+					reward_xp: chance.integer({ min: 500, max: 2000 }),
+				});
+			}
+		}
+
+		// Hook 5: PURCHASE VALUE — Lucky charm buyers see 2x prices
+		// and 35% chance of bonus high-value cloned purchase.
+		if (boughtLuckyCharm) {
+			if (event.event === "real money purchase" && event.price_usd) {
+				event.price_usd = Math.round(event.price_usd * LUCKY_CHARM_PRICE_MULT * 100) / 100;
+			}
+			if (event.event === "item purchased" && chance.bool({ likelihood: LUCKY_CHARM_BONUS_PURCHASE_LIKELIHOOD })) {
+				const purchaseTemplate = userEvents.find(e => e.event === "real money purchase");
+				if (purchaseTemplate) {
+					userEvents.splice(idx + 1, 0, {
+						...purchaseTemplate,
+						time: eventTime.add(chance.integer({ min: 1, max: 3 }), 'days').toISOString(),
+						user_id: event.user_id,
+						product: chance.pickone(["Premium Currency (5000)", "Legendary Weapon Chest", "Season Pass"]),
+						price_usd: chance.pickone([19.99, 49.99, 99.99]),
+						payment_method: chance.pickone(["Credit Card", "PayPal"]),
+					});
+				}
+			}
+		}
+
+		// Hook 10: WHALE PURCHASES — 1.8x price for whale cohort.
+		if (isWhale && event.event === "real money purchase" && event.price_usd) {
+			event.price_usd = Math.round(event.price_usd * WHALE_PRICE_MULT * 100) / 100;
+		}
+
+		// Hook 6: BEHAVIORS TOGETHER — inspect+search dungeons get
+		// 85% completion rate + 2x treasure value.
+		if (inspectedBeforeDungeon && searchedBeforeDungeon) {
+			if (event.event === "exit dungeon" && event.completion_status !== "completed" && chance.bool({ likelihood: STRATEGIC_COMPLETION_LIKELIHOOD })) {
+				event.completion_status = "completed";
+			}
+			if (event.event === "find treasure") {
+				event.treasure_value = Math.floor((event.treasure_value || 50) * STRATEGIC_TREASURE_MULT);
+			}
+		}
+
+		// Hook 7: TIMED RELEASE — Legendary owners get 90% combat
+		// wins + 0.6x dungeon time.
+		if (hasLegendaryWeapon) {
+			if (event.event === "combat completed" && event.outcome !== "Victory" && chance.bool({ likelihood: LEGENDARY_WIN_LIKELIHOOD })) {
+				event.outcome = "Victory";
+			}
+			if (event.event === "exit dungeon") {
+				event.completion_status = "completed";
+				event.time_spent_mins = Math.floor((event.time_spent_mins || 60) * LEGENDARY_DUNGEON_SPEED_MULT);
+			}
+		}
+
+		// Hook 8: SUBSCRIPTION TIER — Premium/Elite get win+reward+
+		// completion+treasure boosts. Reads tier from profile.
+		if (subscriptionTier === "Premium" || subscriptionTier === "Elite") {
+			const isElite = subscriptionTier === "Elite";
+			if (event.event === "combat completed" && event.outcome !== "Victory") {
+				const winBoost = isElite ? ELITE_WIN_LIKELIHOOD : PREMIUM_WIN_LIKELIHOOD;
+				if (chance.bool({ likelihood: winBoost })) {
+					event.outcome = "Victory";
+					event.loot_gained = true;
+				}
+			}
+			if (event.event === "quest turned in") {
+				const rewardMultiplier = isElite ? ELITE_REWARD_MULT : PREMIUM_REWARD_MULT;
+				event.reward_gold = Math.floor((event.reward_gold || 100) * rewardMultiplier);
+				event.reward_xp = Math.floor((event.reward_xp || 500) * rewardMultiplier);
+			}
+			if (event.event === "exit dungeon") {
+				if (event.completion_status !== "completed") {
+					const completionBoost = isElite ? ELITE_COMPLETION_LIKELIHOOD : PREMIUM_COMPLETION_LIKELIHOOD;
+					if (chance.bool({ likelihood: completionBoost })) {
+						event.completion_status = "completed";
+					}
+				}
+				if (event.completion_status === "completed") {
+					const speedBoost = isElite ? ELITE_DUNGEON_SPEED_MULT : PREMIUM_DUNGEON_SPEED_MULT;
+					event.time_spent_mins = Math.floor((event.time_spent_mins || 60) * speedBoost);
+				}
+			}
+			if (event.event === "find treasure") {
+				const treasureBoost = isElite ? ELITE_TREASURE_MULT : PREMIUM_TREASURE_MULT;
+				event.treasure_value = Math.floor((event.treasure_value || 50) * treasureBoost);
+			}
+			if (event.event === "player death") {
+				const survivalLikelihood = isElite ? ELITE_SURVIVAL_LIKELIHOOD : PREMIUM_SURVIVAL_LIKELIHOOD;
+				if (chance.bool({ likelihood: survivalLikelihood })) {
+					event.event = "combat completed";
+					event.outcome = "Victory";
+					event.loot_gained = true;
+				}
+			}
+			if (isElite && chance.bool({ likelihood: ELITE_BONUS_TREASURE_LIKELIHOOD })) {
+				if (event.event === "quest turned in" || event.event === "exit dungeon") {
+					const treasureTemplate = userEvents.find(e => e.event === "find treasure");
+					if (treasureTemplate) {
+						const treasureTypes = ["Rare Artifact", "Gold", "Weapon", "Armor"];
+						userEvents.splice(idx + 1, 0, {
+							...treasureTemplate,
+							time: eventTime.add(chance.integer({ min: 5, max: 30 }), 'minutes').toISOString(),
+							user_id: event.user_id,
+							treasure_type: chance.pickone(treasureTypes),
+							treasure_value: chance.integer({ min: 200, max: 800 }),
+						});
+					}
+				}
+			}
+		}
+	});
+
+	// Hook 2: CURSED WEEK — inject extra deaths in days 40-47 of
+	// user's timeline. Cause_of_death set to "Curse" on injected.
+	// Discover via line-chart of player-death by day-of-user-life.
+	if (firstEventTime) {
+		const deathTemplate = userEvents.find(e => e.event === "player death");
+		if (deathTemplate) {
+			const cursedStart = firstEventTime.add(CURSED_WEEK_START_DAY, 'days');
+			const cursedEnd = firstEventTime.add(CURSED_WEEK_END_DAY, 'days');
+			const cursedEvents = userEvents.filter(e => {
+				const t = dayjs(e.time);
+				return t.isAfter(cursedStart) && t.isBefore(cursedEnd);
+			});
+			const deathsToInject = Math.floor(cursedEvents.length * CURSED_DEATH_INJECTION_FACTOR);
+			for (let d = 0; d < deathsToInject; d++) {
+				const sourceEvent = cursedEvents[d % cursedEvents.length];
+				userEvents.push({
+					...deathTemplate,
+					time: dayjs(sourceEvent.time).add(chance.integer({ min: 1, max: 30 }), 'minutes').toISOString(),
+					user_id: sourceEvent.user_id,
+					event: "player death",
+					cause_of_death: "Curse",
+					player_level: chance.integer({ min: 1, max: 50 }),
+					resurrection_used: chance.bool({ likelihood: 80 }),
+				});
+			}
+		}
+	}
+
+	// Hook 3 RETENTION + Hook 4 CHURN — early guild-joiners get
+	// extra cloned combat events; non-joiners with 3+ deaths in
+	// first week lose 70% of post-week events. No flag.
+	const shouldChurn = (!joinedGuildEarly && earlyDeaths >= 2) || (earlyDeaths >= 4);
+	if (shouldChurn) {
+		const firstWeekEnd = firstEventTime ? firstEventTime.add(DEATH_SPIRAL_EARLY_DAYS, 'days') : null;
+		for (let i = userEvents.length - 1; i >= 0; i--) {
+			if (firstWeekEnd && dayjs(userEvents[i].time).isAfter(firstWeekEnd) && chance.bool({ likelihood: DEATH_SPIRAL_DROP_LIKELIHOOD })) {
+				userEvents.splice(i, 1);
+			}
+		}
+	} else if (joinedGuildEarly) {
+		const lastEvent = userEvents[userEvents.length - 1];
+		const combatTemplate = userEvents.find(e => e.event === "combat completed");
+		if (lastEvent && combatTemplate && chance.bool({ likelihood: EARLY_GUILD_COMBAT_CLONE_LIKELIHOOD })) {
+			userEvents.push({
+				...combatTemplate,
+				time: dayjs(lastEvent.time).add(chance.integer({ min: 1, max: 5 }), 'days').toISOString(),
+				user_id: lastEvent.user_id,
+				outcome: "Victory",
+				loot_gained: true,
+			});
+		}
+	}
+
+	// HOOK 13: COMBAT-PREP MAGIC NUMBER (in-funnel, no flags)
+	// Sweet 3-6 inspect+search events between quest accepted and
+	// fight boss → +30% loot/treasure_value on find-treasure events.
+	// Over 7+ → drop 25% of fight-boss completion (over-prep
+	// signals analysis paralysis). No flag.
+	const questAccept = userEvents.find(e => e.event === "quest accepted");
+	const bossFight = userEvents.find(e => e.event === "fight boss");
+	if (questAccept && bossFight) {
+		const aTime = dayjs(questAccept.time);
+		const bTime = dayjs(bossFight.time);
+		const prepCount = userEvents.filter(e =>
+			(e.event === "inspect" || e.event === "search for clues") &&
+			dayjs(e.time).isAfter(aTime) &&
+			dayjs(e.time).isBefore(bTime)
+		).length;
+		if (prepCount >= PREP_SWEET_MIN && prepCount <= PREP_SWEET_MAX) {
+			userEvents.forEach(e => {
+				if (e.event === "find treasure" && typeof e.treasure_value === "number") {
+					e.treasure_value = Math.round(e.treasure_value * PREP_TREASURE_BOOST);
+				}
+			});
+		} else if (prepCount >= PREP_OVER_THRESHOLD) {
+			for (let i = userEvents.length - 1; i >= 0; i--) {
+				const ev = userEvents[i];
+				if (ev.event === "fight boss" && ev.victory === true && chance.bool({ likelihood: PREP_BOSS_FLIP_LIKELIHOOD })) {
+					ev.victory = false;
+				}
+			}
+		}
+	}
+
+	return record;
+}
+
+// ── CONFIG ──
 /** @type {Config} */
 const config = {
 	version: 2,
-	token,
 	seed: SEED,
-	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-05-01T23:59:59Z",
-	// numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
-	hasAnonIds: true,
-	avgDevicePerUser: 2,
-	hasSessionIds: true,
+	datasetStart: DATASET_START,
+	datasetEnd: DATASET_END,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	format: "json",
 	gzip: true,
-	alsoInferFunnels: false,
-	hasLocation: true,
-	hasAndroidDevices: true,
-	hasIOSDevices: true,
-	hasDesktopDevices: true,
-	hasBrowser: false,
-	hasCampaigns: false,
-	isAnonymous: false,
-	hasAdSpend: false,
-
-	hasAvatar: true,
+	credentials: {
+		token,
+	},
+	switches: {
+		hasSessionIds: true,
+		alsoInferFunnels: false,
+		hasLocation: true,
+		hasAndroidDevices: true,
+		hasIOSDevices: true,
+		hasDesktopDevices: true,
+		hasBrowser: false,
+		hasCampaigns: false,
+		isAnonymous: false,
+		hasAdSpend: false,
+		hasAvatar: true,
+	},
+	identity: {
+		avgDevicePerUser: 2,
+	},
 
 	concurrency: 1,
 	writeToDisk: false,
@@ -699,386 +1110,11 @@ const config = {
 
 	lookupTables: [],
 
-	/**
-	 * 🎯 ARCHITECTED ANALYTICS HOOKS — 13 patterns
-	 *
-	 * 1. CONVERSION: Ancient Compass users have 3x quest completion + 1.5x rewards
-	 * 2. TIME-BASED: "Cursed Week" (days 40-47) has 5x death rates
-	 * 3. RETENTION: Early guild joiners (first 3 days) have 80% D30 retention vs 20%
-	 * 4. CHURN: Players with 3+ deaths in first week have 70% churn rate
-	 * 5. PURCHASE VALUE: Lucky Charm buyers spend 5x more (LTV pattern)
-	 * 6. BEHAVIORS TOGETHER: inspect + search before dungeon = 85% completion vs 45%
-	 * 7. TIMED RELEASE: Legendary weapon released day 45, early adopters dominate
-	 * 8. SUBSCRIPTION TIER: Premium/Elite users have higher engagement and success
-	 * 9. PROGRESSION SCALING: Quest gold scales with player level (1 + level * 0.15)
-	 * 10. WHALE PURCHASES: ~33% of users via deterministic hash spend 1.8x more
-	 * 11. ALIGNMENT ARCHETYPE: Good=hero, Evil=villain, other=neutral (user hook)
-	 * 12. COMBAT FUNNEL TTC: Elite 0.30x faster, Free 1.40x slower combat funnel T2C
-	 * 13. COMBAT-PREP MAGIC NUMBER: 3-6 prep events = +30% treasure; 7+ = -25% boss wins
-	 */
-	hook: function (record, type, meta) {
-		// Hook #11: ALIGNMENT ARCHETYPE — derive archetype on user profile
-		if (type === "user") {
-			if (record.alignment === "Chaotic Evil" || record.alignment === "Neutral Evil") {
-				record.archetype = "villain";
-			} else if (record.alignment === "Lawful Good" || record.alignment === "Neutral Good") {
-				record.archetype = "hero";
-			} else {
-				record.archetype = "neutral";
-			}
-		}
-
-		// Hook #2 event-level part removed — cursed week now handled in everything hook
-
-		// Hook #7: TIMED RELEASE — Legendary Weapon
-		// (moved to everything hook — event hook fires before bunchIntoSessions
-		// reshuffles timestamps, causing tagged events to leak across the d45 boundary)
-
-		// HOOK 12 (T2C): moved to everything hook — funnel-post effects
-		// were invisible to SQL verification.
-
-		// Hooks #1, #3, #4, #5, #6, #8, #9, #10: per-user behavioral patterns
-		if (type === "everything") {
-			const userEvents = record;
-			const profile = meta.profile;
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			const LEGENDARY_WEAPON_RELEASE = datasetStart.add(45, 'days');
-
-			// Stamp superProps from profile for consistency
-			userEvents.forEach(e => {
-				e.Platform = profile.Platform;
-				e.graphics_quality = profile.graphics_quality;
-				e.subscription_tier = profile.subscription_tier;
-			});
-
-			// Hook #7: TIMED RELEASE — Shadowmourne Legendary post-d45.
-			// Runs in everything hook so timestamps are post-bunchIntoSessions.
-			userEvents.forEach(e => {
-				if (e.event === "find treasure" && dayjs(e.time).isAfter(LEGENDARY_WEAPON_RELEASE) && chance.bool({ likelihood: 2 })) {
-					e.treasure_type = "Shadowmourne Legendary";
-					e.treasure_value = 50000;
-				}
-			});
-
-			// Hook #12: COMBAT T2C — scale time gaps in combat funnel
-			// sequences (combat initiated → combat completed → use item).
-			// Elite ~0.30x (faster), Premium ~0.70x, Free ~1.40x (slower).
-			// Finds all 3-step sequences and shifts step 2/3 timestamps.
-			const tier = profile.subscription_tier;
-			const t2cFactor = (
-				tier === "Elite" ? 0.30 :
-				tier === "Premium" ? 0.70 :
-				tier === "Free" ? 1.40 :
-				1.0
-			);
-			if (t2cFactor !== 1.0) {
-				// Collect indices for each combat funnel step
-				const combatInitiated = [];
-				const combatCompleted = [];
-				const useItem = [];
-				for (let i = 0; i < userEvents.length; i++) {
-					const e = userEvents[i];
-					if (e.event === "combat initiated") combatInitiated.push(i);
-					else if (e.event === "combat completed") combatCompleted.push(i);
-					else if (e.event === "use item") useItem.push(i);
-				}
-				// Match sequences: for each combat initiated, find next
-				// combat completed after it, then next use item after that
-				const matched = new Set();
-				for (const ciIdx of combatInitiated) {
-					const ccIdx = combatCompleted.find(j => j > ciIdx && !matched.has(j));
-					if (ccIdx === undefined) continue;
-					const uiIdx = useItem.find(j => j > ccIdx && !matched.has(j));
-					if (uiIdx === undefined) continue;
-					matched.add(ccIdx);
-					matched.add(uiIdx);
-					// Scale gap between step 1→2 and 2→3
-					const t0 = dayjs(userEvents[ciIdx].time);
-					const t1 = dayjs(userEvents[ccIdx].time);
-					const t2 = dayjs(userEvents[uiIdx].time);
-					const gap1 = t1.diff(t0);
-					const gap2 = t2.diff(t1);
-					userEvents[ccIdx].time = t0.add(Math.round(gap1 * t2cFactor), 'milliseconds').toISOString();
-					userEvents[uiIdx].time = dayjs(userEvents[ccIdx].time).add(Math.round(gap2 * t2cFactor), 'milliseconds').toISOString();
-				}
-			}
-
-			const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
-			const userLevel = profile.level || 1;
-
-			// Track user behaviors
-			let usedAncientCompass = false;
-			let boughtLuckyCharm = false;
-			let joinedGuildEarly = false;
-			let earlyDeaths = 0;
-			let hasLegendaryWeapon = false;
-			let inspectedBeforeDungeon = false;
-			let searchedBeforeDungeon = false;
-			let subscriptionTier = "Free";
-
-			// Hook #10: Whale segmentation — deterministic via user_id hash (~33%)
-			const userId = userEvents.length > 0 ? (userEvents[0].user_id || userEvents[0].distinct_id || "") : "";
-			const isWhale = userId.length > 0 && userId.charCodeAt(0) % 3 === 0;
-
-			// First pass: identify user patterns
-			userEvents.forEach((event) => {
-				const eventTime = dayjs(event.time);
-				const daysSinceStart = firstEventTime ? eventTime.diff(firstEventTime, 'days', true) : 0;
-
-				if (event.subscription_tier) {
-					subscriptionTier = event.subscription_tier;
-				}
-
-				if (event.event === "use item" && event.item_type === "Ancient Compass") {
-					usedAncientCompass = true;
-				}
-
-				if (event.event === "real money purchase" && event.product === "Lucky Charm Pack") {
-					boughtLuckyCharm = true;
-				}
-
-				if (event.event === "guild joined" && daysSinceStart < 3) {
-					joinedGuildEarly = true;
-				}
-
-				if (event.event === "player death" && daysSinceStart < 7) {
-					earlyDeaths++;
-				}
-
-				if (event.event === "find treasure" && event.treasure_type === "Shadowmourne Legendary") {
-					hasLegendaryWeapon = true;
-				}
-
-				if (event.event === "inspect") {
-					inspectedBeforeDungeon = true;
-				}
-				if (event.event === "search for clues") {
-					searchedBeforeDungeon = true;
-				}
-			});
-
-			// Second pass: raw mutations + cloning, no flag stamping
-			userEvents.forEach((event, idx) => {
-				const eventTime = dayjs(event.time);
-
-				// Hook 9: PROGRESSION SCALING — Quest gold scales with level.
-				// Power curve so bucket-averaged high-level/low-level ratio >= 2.0x.
-				if (event.event === "quest turned in") {
-					const baseGold = event.reward_gold || 100;
-					event.reward_gold = Math.floor(baseGold * (1 + userLevel * 0.15));
-				}
-
-				// Hook 1: CONVERSION — Ancient Compass users earn 1.5x quest
-				// rewards plus 40% chance of bonus cloned quest.
-				if (usedAncientCompass && event.event === "quest turned in") {
-					event.reward_gold = Math.floor((event.reward_gold || 100) * 1.5);
-					event.reward_xp = Math.floor((event.reward_xp || 500) * 1.5);
-
-					if (chance.bool({ likelihood: 40 })) {
-						userEvents.splice(idx + 1, 0, {
-							...event,
-							time: eventTime.add(chance.integer({ min: 10, max: 120 }), 'minutes').toISOString(),
-							quest_id: chance.pickone(questIds),
-							reward_gold: chance.integer({ min: 100, max: 500 }),
-							reward_xp: chance.integer({ min: 500, max: 2000 }),
-						});
-					}
-				}
-
-				// Hook 5: PURCHASE VALUE — Lucky charm buyers see 2x prices
-				// and 35% chance of bonus high-value cloned purchase.
-				if (boughtLuckyCharm) {
-					if (event.event === "real money purchase" && event.price_usd) {
-						event.price_usd = Math.round(event.price_usd * 2.5 * 100) / 100;
-					}
-					if (event.event === "item purchased" && chance.bool({ likelihood: 35 })) {
-						const purchaseTemplate = userEvents.find(e => e.event === "real money purchase");
-						if (purchaseTemplate) {
-							userEvents.splice(idx + 1, 0, {
-								...purchaseTemplate,
-								time: eventTime.add(chance.integer({ min: 1, max: 3 }), 'days').toISOString(),
-								user_id: event.user_id,
-								product: chance.pickone(["Premium Currency (5000)", "Legendary Weapon Chest", "Season Pass"]),
-								price_usd: chance.pickone([19.99, 49.99, 99.99]),
-								payment_method: chance.pickone(["Credit Card", "PayPal"]),
-							});
-						}
-					}
-				}
-
-				// Hook 10: WHALE PURCHASES — 1.8x price for whale cohort.
-				if (isWhale && event.event === "real money purchase" && event.price_usd) {
-					event.price_usd = Math.round(event.price_usd * 1.8 * 100) / 100;
-				}
-
-				// Hook 6: BEHAVIORS TOGETHER — inspect+search dungeons get
-				// 85% completion rate + 2x treasure value.
-				if (inspectedBeforeDungeon && searchedBeforeDungeon) {
-					if (event.event === "exit dungeon" && event.completion_status !== "completed" && chance.bool({ likelihood: 85 })) {
-						event.completion_status = "completed";
-					}
-					if (event.event === "find treasure") {
-						event.treasure_value = Math.floor((event.treasure_value || 50) * 2);
-					}
-				}
-
-				// Hook 7: TIMED RELEASE — Legendary owners get 90% combat
-				// wins + 0.6x dungeon time.
-				if (hasLegendaryWeapon) {
-					if (event.event === "combat completed" && event.outcome !== "Victory" && chance.bool({ likelihood: 90 })) {
-						event.outcome = "Victory";
-					}
-					if (event.event === "exit dungeon") {
-						event.completion_status = "completed";
-						event.time_spent_mins = Math.floor((event.time_spent_mins || 60) * 0.6);
-					}
-				}
-
-				// Hook 8: SUBSCRIPTION TIER — Premium/Elite get win+reward+
-				// completion+treasure boosts. Reads tier from profile.
-				if (subscriptionTier === "Premium" || subscriptionTier === "Elite") {
-					const isElite = subscriptionTier === "Elite";
-					if (event.event === "combat completed" && event.outcome !== "Victory") {
-						const winBoost = isElite ? 70 : 50;
-						if (chance.bool({ likelihood: winBoost })) {
-							event.outcome = "Victory";
-							event.loot_gained = true;
-						}
-					}
-					if (event.event === "quest turned in") {
-						const rewardMultiplier = isElite ? 1.8 : 1.4;
-						event.reward_gold = Math.floor((event.reward_gold || 100) * rewardMultiplier);
-						event.reward_xp = Math.floor((event.reward_xp || 500) * rewardMultiplier);
-					}
-					if (event.event === "exit dungeon") {
-						if (event.completion_status !== "completed") {
-							const completionBoost = isElite ? 65 : 45;
-							if (chance.bool({ likelihood: completionBoost })) {
-								event.completion_status = "completed";
-							}
-						}
-						if (event.completion_status === "completed") {
-							const speedBoost = isElite ? 0.7 : 0.85;
-							event.time_spent_mins = Math.floor((event.time_spent_mins || 60) * speedBoost);
-						}
-					}
-					if (event.event === "find treasure") {
-						const treasureBoost = isElite ? 2.0 : 1.5;
-						event.treasure_value = Math.floor((event.treasure_value || 50) * treasureBoost);
-					}
-					if (event.event === "player death") {
-						const survivalLikelihood = isElite ? 50 : 30;
-						if (chance.bool({ likelihood: survivalLikelihood })) {
-							event.event = "combat completed";
-							event.outcome = "Victory";
-							event.loot_gained = true;
-						}
-					}
-					if (isElite && chance.bool({ likelihood: 5 })) {
-						if (event.event === "quest turned in" || event.event === "exit dungeon") {
-							const treasureTemplate = userEvents.find(e => e.event === "find treasure");
-							if (treasureTemplate) {
-								const treasureTypes = ["Rare Artifact", "Gold", "Weapon", "Armor"];
-								userEvents.splice(idx + 1, 0, {
-									...treasureTemplate,
-									time: eventTime.add(chance.integer({ min: 5, max: 30 }), 'minutes').toISOString(),
-									user_id: event.user_id,
-									treasure_type: chance.pickone(treasureTypes),
-									treasure_value: chance.integer({ min: 200, max: 800 }),
-								});
-							}
-						}
-					}
-				}
-			});
-
-			// Hook 2: CURSED WEEK — inject extra deaths in days 40-47 of
-			// user's timeline. Cause_of_death set to "Curse" on injected.
-			// Discover via line-chart of player-death by day-of-user-life.
-			if (firstEventTime) {
-				const deathTemplate = userEvents.find(e => e.event === "player death");
-				if (deathTemplate) {
-					const cursedStart = firstEventTime.add(40, 'days');
-					const cursedEnd = firstEventTime.add(47, 'days');
-					const cursedEvents = userEvents.filter(e => {
-						const t = dayjs(e.time);
-						return t.isAfter(cursedStart) && t.isBefore(cursedEnd);
-					});
-					const deathsToInject = Math.floor(cursedEvents.length * 0.6);
-					for (let d = 0; d < deathsToInject; d++) {
-						const sourceEvent = cursedEvents[d % cursedEvents.length];
-						userEvents.push({
-							...deathTemplate,
-							time: dayjs(sourceEvent.time).add(chance.integer({ min: 1, max: 30 }), 'minutes').toISOString(),
-							user_id: sourceEvent.user_id,
-							event: "player death",
-							cause_of_death: "Curse",
-							player_level: chance.integer({ min: 1, max: 50 }),
-							resurrection_used: chance.bool({ likelihood: 80 }),
-						});
-					}
-				}
-			}
-
-			// Hook 3 RETENTION + Hook 4 CHURN — early guild-joiners get
-			// extra cloned combat events; non-joiners with 3+ deaths in
-			// first week lose 70% of post-week events. No flag.
-			const shouldChurn = (!joinedGuildEarly && earlyDeaths >= 2) || (earlyDeaths >= 4);
-			if (shouldChurn) {
-				const firstWeekEnd = firstEventTime ? firstEventTime.add(7, 'days') : null;
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					if (firstWeekEnd && dayjs(userEvents[i].time).isAfter(firstWeekEnd) && chance.bool({ likelihood: 80 })) {
-						userEvents.splice(i, 1);
-					}
-				}
-			} else if (joinedGuildEarly) {
-				const lastEvent = userEvents[userEvents.length - 1];
-				const combatTemplate = userEvents.find(e => e.event === "combat completed");
-				if (lastEvent && combatTemplate && chance.bool({ likelihood: 60 })) {
-					userEvents.push({
-						...combatTemplate,
-						time: dayjs(lastEvent.time).add(chance.integer({ min: 1, max: 5 }), 'days').toISOString(),
-						user_id: lastEvent.user_id,
-						outcome: "Victory",
-						loot_gained: true,
-					});
-				}
-			}
-
-			// HOOK 13: COMBAT-PREP MAGIC NUMBER (in-funnel, no flags)
-			// Sweet 3-6 inspect+search events between quest accepted and
-			// fight boss → +30% loot/treasure_value on find-treasure events.
-			// Over 7+ → drop 25% of fight-boss completion (over-prep
-			// signals analysis paralysis). No flag.
-			const questAccept = userEvents.find(e => e.event === "quest accepted");
-			const bossFight = userEvents.find(e => e.event === "fight boss");
-			if (questAccept && bossFight) {
-				const aTime = dayjs(questAccept.time);
-				const bTime = dayjs(bossFight.time);
-				const prepCount = userEvents.filter(e =>
-					(e.event === "inspect" || e.event === "search for clues") &&
-					dayjs(e.time).isAfter(aTime) &&
-					dayjs(e.time).isBefore(bTime)
-				).length;
-				if (prepCount >= 3 && prepCount <= 6) {
-					userEvents.forEach(e => {
-						if (e.event === "find treasure" && typeof e.treasure_value === "number") {
-							e.treasure_value = Math.round(e.treasure_value * 1.3);
-						}
-					});
-				} else if (prepCount >= 7) {
-					for (let i = userEvents.length - 1; i >= 0; i--) {
-						const ev = userEvents[i];
-						if (ev.event === "fight boss" && ev.victory === true && chance.bool({ likelihood: 25 })) {
-							ev.victory = false;
-						}
-					}
-				}
-			}
-		}
-
+	hook(record, type, meta) {
+		if (type === "user") return handleUserHooks(record);
+		if (type === "everything") return handleEverythingHooks(record, meta);
 		return record;
-	}
+	},
 };
 
 export default config;

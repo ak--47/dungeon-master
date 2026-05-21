@@ -1,66 +1,44 @@
-// ── TWEAK THESE ──
-const SEED = "dm4-logistics";
-const num_days = 120;
-const num_users = 10_000;
-const avg_events_per_user_per_day = 1.2;
-let token = "your-mixpanel-token";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
-
-dayjs.extend(utc);
-const chance = u.initChance(SEED);
 /** @typedef  {import("../../types").Dungeon} Config */
 
-// Generate consistent warehouse/supplier IDs at module level
-const warehouseIds = v.range(1, 80).map(() => `WH_${v.uid(6)}`);
-const supplierIds = v.range(1, 150).map(() => `SUP_${v.uid(6)}`);
-
-/**
- * ===================================================================
- * DATASET OVERVIEW
- * ===================================================================
+// ── OVERVIEW ──
+/*
+ * NAME:       SupplyStack
+ * APP:        B2B warehouse/inventory management SaaS for businesses to track
+ *             stock levels, purchase orders, suppliers, shipments, and quality
+ *             inspections across multiple warehouses. Multi-tier system with
+ *             enterprise, mid-market, small business, and trial customers.
+ * SCALE:      10,000 users, ~1.4M events, 121 days (2026-01-01 → 2026-05-01)
+ * CORE LOOP:  account created → inventory checked → purchase order → order received → shipment tracked
  *
- * SupplyStack -- a B2B warehouse/inventory management SaaS for
- * businesses to track stock levels, purchase orders, suppliers,
- * shipments, and quality inspections across multiple warehouses.
+ * EVENTS (17):
+ *   inventory checked (8) > app session (7) > shipment tracked (6) > notification received (6)
+ *   > stockout alert (5) > purchase order created (5) > order received (4) > report generated (4)
+ *   > supplier contacted (3) > warehouse transfer (3) > invoice processed (3)
+ *   > integration connected (2) > alert configured (2) > quality inspection (2)
+ *   > account created (1) > support ticket (1) > account deactivated (1)
  *
- * - 10,000 users over 120 days
- * - Multi-tier system: enterprise (15%), mid-market (35%), small business (40%), trial (10%)
- * - Core loop: sign up -> check inventory -> create PO -> receive order -> track shipment
- * - Revenue: free_trial / starter ($49) / professional ($199) / enterprise ($599)
+ * FUNNELS (5):
+ *   - Onboarding:          account created → inventory checked → integration connected → report generated (40%)
+ *   - Order Fulfillment:   inventory checked → purchase order created → order received → shipment tracked (35%, reentry)
+ *   - Supplier Management: supplier contacted → purchase order created → invoice processed (45%)
+ *   - Integration Setup:   integration connected → report generated → alert configured (30%)
+ *   - Alert Response:      stockout alert → purchase order created → order received (50%)
  *
- * Advanced Features:
- * - Personas: 4 archetypes (enterprise_ops, mid_market, small_business, trial_explorer)
- * - World Events: supply_chain_disruption (day 35), holiday_surge (day 70)
- * - Subscription: 4-tier revenue lifecycle with 30-day trial
- * - Geo: US/EU/APAC with currency and regional properties
- * - Features: predictive_reorder (day 40) and supplier_portal (day 65)
- * - Anomalies: extreme stockout spikes, coordinated holiday prep burst
- *
- * Key entities:
- * - warehouse_id: specific warehouse location
- * - supplier_id: vendor supplying goods
- * - sku_category: product category being managed
- * - priority: urgency level for orders and alerts
+ * USER PROPS:  company_tier, warehouse_count, employee_count, industry, integration_count, Platform, subscription_plan
+ * SUPER PROPS: Platform, subscription_plan
+ * SCD PROPS:   company_tier (trial/starter/professional/enterprise, monthly fuzzy, max 6)
+ * GROUPS:      none
  */
 
-/**
- * ===================================================================
- * ANALYTICS HOOKS (10 hooks)
- *
- * Adds 10. ONBOARDING TIME-TO-CONVERT: enterprise 0.71x faster, small_business
- * 1.3x slower (funnel-post). Discover via Onboarding funnel median TTC by company_tier.
- * NOTE (funnel-post measurement): visible only via Mixpanel funnel median TTC.
- * Cross-event MIN→MIN SQL queries on raw events do NOT show this.
- * ===================================================================
- *
+// ── HOOK STORIES ──
+/*
  * -------------------------------------------------------------------
  * 1. MONTH-END REPORTING SURGE (event hook)
  * -------------------------------------------------------------------
@@ -339,31 +317,246 @@ const supplierIds = v.range(1, 150).map(() => `SUP_${v.uid(6)}`);
  * Onboarding TTC              | funnel median TTC   | 1x       | 0.71x   | 1.4x faster (enterprise)
  */
 
+// ── SCALE ──
+const SEED = "dm4-logistics";
+const NUM_USERS = 10_000;
+const DATASET_START = "2026-01-01T00:00:00Z";
+const DATASET_END = "2026-05-01T23:59:59Z";
+const EVENTS_PER_DAY = 1.2;
+const token = process.env.MP_TOKEN || "your-mixpanel-token";
+
+const chance = u.initChance(SEED);
+
+// ── KNOBS (tweak these to reshape stories) ──
+const MONTH_END_DAY_THRESHOLD = 28;
+const MONTH_END_PAGES_MULT = 2.5;
+
+const RUSH_ORDER_COST_MULT = 1.5;
+
+const ENTERPRISE_STOCKOUT_DROP_LIKELIHOOD = 10;
+
+const INTEGRATION_THRESHOLD = 3;
+const INTEGRATION_REPORT_CLONE_LIKELIHOOD = 65;
+
+const ALERT_FATIGUE_THRESHOLD = 30;
+const ALERT_FATIGUE_START_IDX = 20;
+const ALERT_FATIGUE_BASE_MULT = 1.5;
+const ALERT_FATIGUE_RAMP_MULT = 1.5;
+
+const TRIAL_CHURN_EVENT_THRESHOLD = 10;
+const TRIAL_CHURN_CUTOFF_DAYS = 7;
+const TRIAL_CHURN_DROP_LIKELIHOOD = 50;
+
+const SMB_ALERT_DROP_LIKELIHOOD = 35;
+
+const INVENTORY_SWEET_MIN = 5;
+const INVENTORY_SWEET_MAX = 15;
+const INVENTORY_OVER_THRESHOLD = 16;
+const INVENTORY_PO_QUANTITY_BOOST = 1.4;
+const INVENTORY_OVER_PO_DROP_LIKELIHOOD = 60;
+
+const TTC_ENTERPRISE_FACTOR = 0.71;
+const TTC_SMB_FACTOR = 1.3;
+
+// ── DATA ARRAYS ──
+const warehouseIds = v.range(1, 80).map(() => `WH_${v.uid(6)}`);
+const supplierIds = v.range(1, 150).map(() => `SUP_${v.uid(6)}`);
+
+// ── HELPER FUNCTIONS ──
+function handleUserHooks(record) {
+	// H7: ENTERPRISE PROFILES — large warehouse_count + employee_count by tier.
+	if (record.company_tier === "enterprise") {
+		record.warehouse_count = chance.integer({ min: 5, max: 15 });
+		record.employee_count = chance.integer({ min: 200, max: 2000 });
+	} else if (record.company_tier === "mid_market") {
+		record.warehouse_count = chance.integer({ min: 2, max: 6 });
+		record.employee_count = chance.integer({ min: 20, max: 200 });
+	} else if (record.company_tier === "small_business") {
+		record.warehouse_count = chance.integer({ min: 1, max: 3 });
+		record.employee_count = chance.integer({ min: 5, max: 80 });
+	} else if (record.company_tier === "trial") {
+		record.warehouse_count = 1;
+		record.employee_count = chance.integer({ min: 1, max: 10 });
+	}
+	return record;
+}
+
+function handleEventHooks(record) {
+	// H2: RUSH ORDER PREMIUM — urgent purchase orders get 1.5x unit_cost.
+	if (record.event === "purchase order created" && record.priority === "urgent") {
+		record.unit_cost = Math.floor((record.unit_cost || 50) * RUSH_ORDER_COST_MULT);
+	}
+	return record;
+}
+
+function handleFunnelPostHooks(record, meta) {
+	// H10: ONBOARDING TIME-TO-CONVERT — enterprise 1.4x faster (0.71);
+	// small_business + trial 1.3x slower (1.3).
+	const segment = meta?.profile?.company_tier;
+	if (Array.isArray(record) && record.length > 1) {
+		const factor = (
+			segment === "enterprise" ? TTC_ENTERPRISE_FACTOR :
+			segment === "small_business" || segment === "trial" ? TTC_SMB_FACTOR :
+			1.0
+		);
+		if (factor !== 1.0) {
+			for (let i = 1; i < record.length; i++) {
+				const prev = dayjs(record[i - 1].time);
+				const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+				record[i].time = prev.add(newGap, "milliseconds").toISOString();
+			}
+		}
+	}
+	return record;
+}
+
+function handleEverythingHooks(record, meta) {
+	if (!record.length) return record;
+	const profile = meta.profile;
+
+	// ── SUPER-PROP STAMPING ──
+	// Stamp superProps from profile so they are consistent per-user.
+	if (profile) {
+		const plat = profile.Platform;
+		const plan = profile.subscription_plan;
+		record.forEach(e => {
+			if (plat) e.Platform = plat;
+			if (plan) e.subscription_plan = plan;
+		});
+	}
+
+	// H1: MONTH-END REPORTING SURGE — reports on calendar days 28-31 get
+	// 2.5x report_pages. Runs in everything (post-sessionization) so the
+	// day-of-month tag matches the final timestamp.
+	for (const e of record) {
+		if (e.event === "report generated") {
+			const dayOfMonth = new Date(e.time).getUTCDate();
+			if (dayOfMonth >= MONTH_END_DAY_THRESHOLD) {
+				e.report_pages = Math.floor((e.report_pages || 20) * MONTH_END_PAGES_MULT);
+			}
+		}
+	}
+
+	// H8: SMALL-BUSINESS CONVERSION DROP — small_business users lose
+	// ~35% of "alert configured" events (last step of Integration Setup
+	// funnel), simulating lower conversion without dedicated IT.
+	if (profile && profile.company_tier === "small_business") {
+		record = record.filter(e => {
+			if (e.event === "alert configured" && chance.bool({ likelihood: SMB_ALERT_DROP_LIKELIHOOD })) {
+				return false;
+			}
+			return true;
+		});
+	}
+
+	// H3: REORDER ACCURACY BY TIER — enterprise users get 10% of
+	// stockout alerts removed (better forecasting + safety stock).
+	if (profile && profile.company_tier === "enterprise") {
+		for (let i = record.length - 1; i >= 0; i--) {
+			if (record[i].event === "stockout alert" && chance.bool({ likelihood: ENTERPRISE_STOCKOUT_DROP_LIKELIHOOD })) {
+				record.splice(i, 1);
+			}
+		}
+	}
+
+	// H4: INTEGRATION COMPLETION DRIVES RETENTION — users with 3+
+	// "integration connected" events get cloned "report generated" events.
+	const integrationCount = record.filter(e => e.event === "integration connected").length;
+	if (integrationCount >= INTEGRATION_THRESHOLD) {
+		const templateReport = record.find(e => e.event === "report generated");
+		if (templateReport) {
+			const integrationEvents = record.filter(e => e.event === "integration connected");
+			integrationEvents.forEach(ie => {
+				if (chance.bool({ likelihood: INTEGRATION_REPORT_CLONE_LIKELIHOOD })) {
+					record.push({
+						...templateReport,
+						time: dayjs(ie.time).add(chance.integer({ min: 1, max: 5 }), "days").toISOString(),
+						user_id: ie.user_id,
+						report_type: "integration_summary",
+						report_pages: chance.integer({ min: 5, max: 25 }),
+					});
+				}
+			});
+		}
+	}
+
+	// H5: ALERT FATIGUE — users with >30 stockout alerts get increasing
+	// response_time_hours starting at the 20th alert.
+	const alertEvents = record.filter(e => e.event === "stockout alert");
+	if (alertEvents.length > ALERT_FATIGUE_THRESHOLD) {
+		alertEvents.forEach((alert, idx) => {
+			if (idx >= ALERT_FATIGUE_START_IDX) {
+				const fatigueMultiplier = ALERT_FATIGUE_BASE_MULT + ((idx - ALERT_FATIGUE_START_IDX) / alertEvents.length) * ALERT_FATIGUE_RAMP_MULT;
+				alert.response_time_hours = Math.floor((alert.response_time_hours || 4) * fatigueMultiplier);
+			}
+		});
+	}
+
+	// H6: TRIAL CHURN — users with <10 total events lose 50% after day 7.
+	if (record.length < TRIAL_CHURN_EVENT_THRESHOLD) {
+		const userFirstEvent = record[0];
+		if (userFirstEvent) {
+			const firstTime = dayjs(userFirstEvent.time);
+			const cutoff = firstTime.add(TRIAL_CHURN_CUTOFF_DAYS, "days");
+			for (let i = record.length - 1; i >= 0; i--) {
+				if (dayjs(record[i].time).isAfter(cutoff) && chance.bool({ likelihood: TRIAL_CHURN_DROP_LIKELIHOOD })) {
+					record.splice(i, 1);
+				}
+			}
+		}
+	}
+
+	// H9: INVENTORY-CHECK MAGIC NUMBER (no flags) — sweet 5-15 inventory
+	// checks → +25% PO quantity (1.4x to overcome dilution); over 16+ →
+	// drop 60% of PO created events.
+	const invCheckCount = record.filter(e => e.event === "inventory checked").length;
+	if (invCheckCount >= INVENTORY_SWEET_MIN && invCheckCount <= INVENTORY_SWEET_MAX) {
+		record.forEach(e => {
+			if (e.event === "purchase order created" && typeof e.quantity === "number") {
+				e.quantity = Math.round(e.quantity * INVENTORY_PO_QUANTITY_BOOST);
+			}
+		});
+	} else if (invCheckCount >= INVENTORY_OVER_THRESHOLD) {
+		for (let i = record.length - 1; i >= 0; i--) {
+			if (record[i].event === "purchase order created" && chance.bool({ likelihood: INVENTORY_OVER_PO_DROP_LIKELIHOOD })) {
+				record.splice(i, 1);
+			}
+		}
+	}
+
+	return record;
+}
+
+// ── CONFIG ──
 /** @type {Config} */
 const config = {
 	version: 2,
-	token,
 	seed: SEED,
-	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-05-01T23:59:59Z",
-	// numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
-	hasAnonIds: true,
-	avgDevicePerUser: 2,
-	hasSessionIds: true,
+	datasetStart: DATASET_START,
+	datasetEnd: DATASET_END,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	format: "json",
 	gzip: true,
-	alsoInferFunnels: false,
-	hasLocation: true,
-	hasAndroidDevices: false,
-	hasIOSDevices: false,
-	hasDesktopDevices: true,
-	hasBrowser: true,
-	hasCampaigns: false,
-	isAnonymous: false,
-	hasAdSpend: false,
-	hasAvatar: true,
+	credentials: {
+		token,
+	},
+	switches: {
+		hasSessionIds: true,
+		alsoInferFunnels: false,
+		hasLocation: true,
+		hasAndroidDevices: false,
+		hasIOSDevices: false,
+		hasDesktopDevices: true,
+		hasBrowser: true,
+		hasCampaigns: false,
+		isAnonymous: false,
+		hasAdSpend: false,
+		hasAvatar: true,
+	},
+	identity: {
+		avgDevicePerUser: 2,
+	},
 	concurrency: 1,
 	writeToDisk: false,
 	scdProps: {
@@ -781,185 +974,11 @@ const config = {
 		},
 	],
 
-	// -- Hook Function ------------------------------------------------
-	hook: function (record, type, meta) {
-		// HOOK 10 (T2C): ONBOARDING TIME-TO-CONVERT (funnel-post)
-		// Enterprise tier completes Onboarding funnel 1.4x faster (factor 0.71);
-		// small_business 1.3x slower (factor 1.3).
-		if (type === "funnel-post") {
-			const segment = meta?.profile?.company_tier;
-			if (Array.isArray(record) && record.length > 1) {
-				const factor = (
-					segment === "enterprise" ? 0.71 :
-					segment === "small_business" || segment === "trial" ? 1.3 :
-					1.0
-				);
-				if (factor !== 1.0) {
-					for (let i = 1; i < record.length; i++) {
-						const prev = dayjs(record[i - 1].time);
-						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-						record[i].time = prev.add(newGap, "milliseconds").toISOString();
-					}
-				}
-			}
-		}
-
-		// -- HOOK 7: ENTERPRISE PROFILES (user) -----------------------
-		// Enterprise ops get large warehouse_count and employee_count.
-		if (type === "user") {
-			if (record.company_tier === "enterprise") {
-				record.warehouse_count = chance.integer({ min: 5, max: 15 });
-				record.employee_count = chance.integer({ min: 200, max: 2000 });
-			} else if (record.company_tier === "mid_market") {
-				record.warehouse_count = chance.integer({ min: 2, max: 6 });
-				record.employee_count = chance.integer({ min: 20, max: 200 });
-			} else if (record.company_tier === "small_business") {
-				record.warehouse_count = chance.integer({ min: 1, max: 3 });
-				record.employee_count = chance.integer({ min: 5, max: 80 });
-			} else if (record.company_tier === "trial") {
-				record.warehouse_count = 1;
-				record.employee_count = chance.integer({ min: 1, max: 10 });
-			}
-		}
-
-		// -- HOOK 8: ENTERPRISE INTEGRATION FUNNEL LIFT (funnel-pre) --
-		// (conversionRate boost removed — filtering applied in everything hook instead)
-		if (type === "funnel-pre") {
-			// no-op: conversion differentiation handled via event filtering below
-		}
-
-		// -- HOOK 1: MONTH-END REPORTING SURGE ------------------------
-		// Moved to everything hook (after sessionization) so day-of-month
-		// tags match final timestamps. See everything hook below.
-
-		// -- HOOK 2: RUSH ORDER PREMIUM (event) -------------------
-		// Urgent purchase orders get 1.5x unit_cost.
-		if (type === "event") {
-			if (record.event === "purchase order created" && record.priority === "urgent") {
-				record.unit_cost = Math.floor((record.unit_cost || 50) * 1.5);
-			}
-		}
-
-		// -- EVERYTHING HOOKS -----------------------------------------
-		if (type === "everything") {
-			if (!record.length) return record;
-			const profile = meta.profile;
-
-			// -- SUPER-PROP STAMPING ----------------------------------
-			// Stamp superProps from profile so they are consistent per-user.
-			if (profile) {
-				const plat = profile.Platform;
-				const plan = profile.subscription_plan;
-				record.forEach(e => {
-					if (plat) e.Platform = plat;
-					if (plan) e.subscription_plan = plan;
-				});
-			}
-
-			// -- HOOK 1: MONTH-END REPORTING SURGE --------------------
-			// Reports on days 28-31 get 2x report_pages.
-			// Runs after sessionization so day-of-month matches final timestamps.
-			for (const e of record) {
-				if (e.event === 'report generated') {
-					const dayOfMonth = new Date(e.time).getUTCDate();
-					if (dayOfMonth >= 28) {
-						e.report_pages = Math.floor((e.report_pages || 20) * 2.5);
-					}
-				}
-			}
-
-			// -- HOOK 8: SMALL-BUSINESS CONVERSION DROP ---------------
-			// Small-business users lose ~35% of "alert configured" events
-			// (last step of Integration Setup funnel), simulating lower
-			// conversion for smaller teams without dedicated IT resources.
-			if (profile && profile.company_tier === "small_business") {
-				record = record.filter(e => {
-					if (e.event === "alert configured" && chance.bool({ likelihood: 35 })) {
-						return false;
-					}
-					return true;
-				});
-			}
-
-			// -- HOOK 3: REORDER ACCURACY BY TIER ---------------------
-			// Enterprise users get 10% of stockout alerts removed.
-			if (profile && profile.company_tier === "enterprise") {
-				for (let i = record.length - 1; i >= 0; i--) {
-					if (record[i].event === "stockout alert" && chance.bool({ likelihood: 10 })) {
-						record.splice(i, 1);
-					}
-				}
-			}
-
-			// -- HOOK 4: INTEGRATION COMPLETION DRIVES RETENTION ------
-			// Users with 3+ integration events get cloned report events.
-			const integrationCount = record.filter(e => e.event === "integration connected").length;
-			if (integrationCount >= 3) {
-				const templateReport = record.find(e => e.event === "report generated");
-				if (templateReport) {
-					const integrationEvents = record.filter(e => e.event === "integration connected");
-					integrationEvents.forEach(ie => {
-						if (chance.bool({ likelihood: 65 })) {
-							record.push({
-								...templateReport,
-								time: dayjs(ie.time).add(chance.integer({ min: 1, max: 5 }), "days").toISOString(),
-								user_id: ie.user_id,
-								report_type: "integration_summary",
-								report_pages: chance.integer({ min: 5, max: 25 }),
-							});
-						}
-					});
-				}
-			}
-
-			// -- HOOK 5: ALERT FATIGUE --------------------------------
-			// Users with >30 stockout alerts get increasing response times.
-			const alertEvents = record.filter(e => e.event === "stockout alert");
-			if (alertEvents.length > 30) {
-				alertEvents.forEach((alert, idx) => {
-					if (idx >= 20) {
-						const fatigueMultiplier = 1.5 + ((idx - 20) / alertEvents.length) * 1.5;
-						alert.response_time_hours = Math.floor((alert.response_time_hours || 4) * fatigueMultiplier);
-					}
-				});
-			}
-
-			// -- HOOK 6: TRIAL CHURN ----------------------------------
-			// Users with <10 events lose 50% after day 7.
-			if (record.length < 10) {
-				const userFirstEvent = record[0];
-				if (userFirstEvent) {
-					const firstTime = dayjs(userFirstEvent.time);
-					const cutoff = firstTime.add(7, "days");
-					for (let i = record.length - 1; i >= 0; i--) {
-						if (dayjs(record[i].time).isAfter(cutoff) && chance.bool({ likelihood: 50 })) {
-							record.splice(i, 1);
-						}
-					}
-				}
-			}
-
-			// -- HOOK 9: INVENTORY-CHECK MAGIC NUMBER (no flags) ------
-			// Sweet 5-15 inventory checks → +25% PO quantity.
-			// Over 16+ → drop 60% of PO created events (high rate to overcome persona event multiplier dilution).
-			const invCheckCount = record.filter(e => e.event === 'inventory checked').length;
-			if (invCheckCount >= 5 && invCheckCount <= 15) {
-				record.forEach(e => {
-					if (e.event === 'purchase order created' && typeof e.quantity === 'number') {
-						e.quantity = Math.round(e.quantity * 1.4);
-					}
-				});
-			} else if (invCheckCount >= 16) {
-				for (let i = record.length - 1; i >= 0; i--) {
-					if (record[i].event === 'purchase order created' && chance.bool({ likelihood: 60 })) {
-						record.splice(i, 1);
-					}
-				}
-			}
-
-			return record;
-		}
-
+	hook(record, type, meta) {
+		if (type === "user") return handleUserHooks(record);
+		if (type === "event") return handleEventHooks(record);
+		if (type === "funnel-post") return handleFunnelPostHooks(record, meta);
+		if (type === "everything") return handleEverythingHooks(record, meta);
 		return record;
 	},
 };

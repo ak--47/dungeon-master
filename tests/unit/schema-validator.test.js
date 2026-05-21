@@ -86,7 +86,8 @@ describe('deriveExpectedSchema', () => {
 		const keys = schema.get('page view');
 		expect(keys.has('model')).toBe(true);
 		expect(keys.has('os')).toBe(true);
-		expect(keys.has('Platform')).toBe(true);
+		// v1.5.1: Platform stamping removed (TODO #11).
+		expect(keys.has('Platform')).toBe(false);
 		expect(keys.has('device_id')).toBe(false);
 	});
 

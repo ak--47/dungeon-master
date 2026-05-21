@@ -1,50 +1,52 @@
-// ── TWEAK THESE ──
-const SEED = "group-analytics";
-const num_days = 60;
-const num_users = 500;
-const avg_events_per_user_per_day = 1;
-let token = "";
+// ── IMPORTS ──
+import Chance from 'chance';
+import { weighNumRange, weighChoices } from "../../lib/utils/utils.js";
+/** @typedef {import("../../types").Dungeon} Config */
 
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
-/**
- * Group Analytics — tests multiple group keys with varied entity counts.
- *
- * Exercises: 3 group keys (company, team, project) at different scales,
- * each with distinct event associations and group-level properties.
- *
- * - 500 users, 30K events, 60 days
- * - 3 group keys: company_id (50), team_id (200), project_id (500)
- * - groupProps with varied property types per key
- * - No hooks
+// ── OVERVIEW ──
+/*
+ * NAME:       group-analytics
+ * PURPOSE:    exercises 3 groupKeys (company/team/project) at varied scales with per-key groupProps
+ * SCALE:      500 users, ~30K events, 60 days
+ * EVENTS (8): feature used, subscription change, support ticket, task completed,
+ *             meeting scheduled, code committed, deployment run, login
+ * FUNNELS (0): none
+ * GROUPS:     company_id (50), team_id (200), project_id (500)
  */
 
-import Chance from 'chance';
-let chance = new Chance();
-import { weighNumRange, weighChoices } from "../../lib/utils/utils.js";
+// ── SCALE ──
+const SEED = "group-analytics";
+const NUM_DAYS = 60;
+const NUM_USERS = 500;
+const EVENTS_PER_DAY = 1;
+const token = process.env.MP_TOKEN || "";
 
-/** @typedef {import("../../types").Dungeon} Config */
-/** @type {import('../../types').Dungeon} */
+const chance = new Chance();
+
+// ── CONFIG ──
+/** @type {Config} */
 const config = {
-	token,
 	seed: SEED,
-	numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
+	numDays: NUM_DAYS,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	format: "json",
-	region: "US",
-	hasAnonIds: false,
-	hasSessionIds: false,
-	hasAdSpend: false,
-	hasLocation: false,
-	hasAndroidDevices: false,
-	hasIOSDevices: false,
-	hasDesktopDevices: true,
-	hasBrowser: true,
-	hasCampaigns: false,
-	isAnonymous: false,
-	alsoInferFunnels: false,
+	credentials: {
+		token,
+		region: "US",
+	},
+	switches: {
+		hasSessionIds: false,
+		hasAdSpend: false,
+		hasLocation: false,
+		hasAndroidDevices: false,
+		hasIOSDevices: false,
+		hasDesktopDevices: true,
+		hasBrowser: true,
+		hasCampaigns: false,
+		isAnonymous: false,
+		alsoInferFunnels: false,
+	},
 	concurrency: 1,
 	writeToDisk: false,
 

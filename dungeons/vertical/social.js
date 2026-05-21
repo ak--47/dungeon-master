@@ -1,56 +1,51 @@
-// ── TWEAK THESE ──
-const SEED = "harness-social";
-const num_days = 120;
-const num_users = 10_000;
-const avg_events_per_user_per_day = 1.2;
-let token = "your-mixpanel-token";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
-
-dayjs.extend(utc);
-const chance = u.initChance(SEED);
-
 /** @typedef  {import("../../types").Dungeon} Config */
 
+// ── OVERVIEW ──
 /*
- * =====================================================================================
- * DATASET OVERVIEW
- * =====================================================================================
+ * NAME:       Chirp
+ * APP:        Twitter+Instagram-style social media platform with algorithmic
+ *             feed, creator monetization, communities, and direct messaging.
+ *             Power users become "creators" with subscriber tiers; native ads
+ *             woven into feed and story placements.
+ * SCALE:      10,000 users, ~1.4M events, 121 days (2026-01-01 → 2026-05-01)
+ * CORE LOOP:  account created → profile updated → post created → consume + engage
  *
- * Chirp — A Twitter+Instagram-style social media platform with algorithmic feed,
- * creator monetization, communities, and direct messaging.
+ * EVENTS (18):
+ *   post viewed (30) > post liked (18) > story viewed (15) > post created (12)
+ *   > notification received (12) > comment posted (10) > ad viewed (10)
+ *   > user followed (8) > dm sent (8) > search performed (7) > post shared (6)
+ *   > story created (5) > profile updated (3) > user unfollowed (2)
+ *   > ad clicked (2) > creator subscription started (2) > report submitted (1)
+ *   > account created (1)
  *
- * CORE LOOP:
- * Users sign up, build a profile, follow people, consume content in their feed,
- * create their own posts/stories, and engage via likes, shares, and comments.
- * Power users become "creators" with subscriber tiers. Monetization through
- * native ads woven into feed and story placements.
+ * FUNNELS (8):
+ *   - Onboarding:       account created → profile updated → post created (70%)
+ *   - Feed Engagement:  post viewed → post liked → comment posted (45%)
+ *   - Content Cycle:    post created → post viewed → post liked → post shared (30%)
+ *   - Stories:          story created → story viewed → dm sent (40%)
+ *   - Discovery:        search performed → post viewed → user followed (35%)
+ *   - Notifications:    notification received → post viewed → post liked (50%)
+ *   - Creator Monetize: profile updated → creator subscription started → post created (15%)
+ *   - Ad Moderation:    ad viewed → ad clicked → report submitted (20%)
  *
- * - 5,000 users over 100 days
- * - 600,000 base events across 18 event types
- * - 8 funnels (onboarding, engagement, discovery, creator journey, ads)
- * - Group analytics (100 communities)
- * - Account types: personal, creator, business
- * =====================================================================================
+ * USER PROPS:  app_version, account_type, follower_count, following_count,
+ *              bio_length, verified, content_niche
+ * SUPER PROPS: app_version, account_type
+ * SCD PROPS:   account_type (personal/creator/business/verified, monthly fuzzy, max 6),
+ *              community_status (new/growing/established/featured, monthly fixed,
+ *              max 6, community_id-scoped)
+ * GROUPS:      community_id (100 communities)
  */
 
+// ── HOOK STORIES ──
 /*
- * =====================================================================================
- * ANALYTICS HOOKS (10 hooks)
- *
- * Adds 10. ONBOARDING TIME-TO-CONVERT: creator/business 0.71x faster, personal
- * 1.25x slower (funnel-post). Discover via Onboarding funnel median TTC by account_type.
- * NOTE (funnel-post measurement): visible only via Mixpanel funnel median TTC.
- * Cross-event MIN→MIN SQL queries on raw events do NOT show this.
- * =====================================================================================
- *
  * NOTE: All cohort effects are HIDDEN — discoverable only via behavioral cohorts
  * (count an event per user, then measure downstream). No cohort flag is stamped
  * on events. Algorithm-change source flips and engagement-bait short durations
@@ -272,6 +267,9 @@ const chance = u.initChance(SEED);
  *   - Breakdown: "account_type" (superProp)
  *   - Expected: creator/business ~ 0.71x baseline; personal ~ 1.25x baseline
  *
+ *   NOTE (funnel-post measurement): visible only via Mixpanel funnel median
+ *   TTC. Cross-event MIN→MIN SQL queries on raw events do NOT show this.
+ *
  * REAL-WORLD ANALOGUE: Creators and businesses arrive with clear intent
  * and complete profile setup faster; personal users browse casually and
  * take longer to commit to their first post.
@@ -296,35 +294,341 @@ const chance = u.initChance(SEED);
  * =====================================================================================
  */
 
+// ── SCALE ──
+const SEED = "harness-social";
+const NUM_USERS = 10_000;
+const DATASET_START = "2026-01-01T00:00:00Z";
+const DATASET_END = "2026-05-01T23:59:59Z";
+const EVENTS_PER_DAY = 1.2;
+const token = process.env.MP_TOKEN || "your-mixpanel-token";
+
+const chance = u.initChance(SEED);
+
+// ── KNOBS (tweak these to reshape stories) ──
+const VIRAL_POST_THRESHOLD = 10;
+const VIRAL_USER_LIKELIHOOD = 5;
+const VIRAL_CLONES_MIN = 60;
+const VIRAL_CLONES_MAX = 120;
+
+const FOLLOW_SNOWBALL_THRESHOLD = 5;
+const FOLLOW_SNOWBALL_LIKELIHOOD = 50;
+
+const ALGORITHM_CHANGE_DAY = 45;
+const ALGORITHM_FLIP_LIKELIHOOD = 70;
+
+const ENGAGEMENT_BAIT_LIKELIHOOD = 20;
+
+const REENGAGEMENT_START_DAY = 30;
+const REENGAGEMENT_LIKELIHOOD = 30;
+
+const CREATOR_POST_CLONES = 2;
+const CREATOR_STORY_CLONES = 2;
+const CREATOR_VIEW_CLONE_LIKELIHOOD = 25;
+
+const TOXICITY_THRESHOLD = 2;
+const TOXICITY_CUTOFF_DAYS = 30;
+const TOXICITY_DROP_LIKELIHOOD = 60;
+
+const WEEKEND_CLONE_LIKELIHOOD = 30;
+
+const POST_SWEET_MIN = 3;
+const POST_SWEET_MAX = 7;
+const POST_OVER_THRESHOLD = 8;
+const POST_SWEET_COMMENT_BOOST = 1.4;
+const POST_OVER_COMMENT_FACTOR = 0.7;
+
+const ONBOARDING_TTC_FAST = 0.71;
+const ONBOARDING_TTC_SLOW = 1.25;
+
+// ── DATA ARRAYS ──
 // Generate consistent post IDs for lookup tables
 const postIds = v.range(1, 1001).map(n => `post_${v.uid(8)}`);
 
+// ── HELPER FUNCTIONS ──
+function handleFunnelPostHooks(record, meta) {
+	// H10: ONBOARDING TIME-TO-CONVERT — creator/business 0.71x faster,
+	// personal 1.25x slower. Scales inter-step gaps via timestamp rewrite.
+	const segment = meta?.profile?.account_type;
+	if (Array.isArray(record) && record.length > 1) {
+		const factor = (
+			segment === "creator" || segment === "business" ? ONBOARDING_TTC_FAST :
+			segment === "personal" ? ONBOARDING_TTC_SLOW :
+			1.0
+		);
+		if (factor !== 1.0) {
+			for (let i = 1; i < record.length; i++) {
+				const prev = dayjs(record[i - 1].time);
+				const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+				record[i].time = prev.add(newGap, "milliseconds").toISOString();
+			}
+		}
+	}
+	return record;
+}
+
+function handleEverythingHooks(record, meta) {
+	const datasetStart = dayjs.unix(meta.datasetStart);
+	const userEvents = record;
+	if (!userEvents || userEvents.length === 0) return record;
+
+	// Stamp superProps from profile for consistency
+	const profile = meta.profile;
+	userEvents.forEach(e => {
+		e.app_version = profile.app_version;
+		e.account_type = profile.account_type;
+	});
+
+	// First pass: identify behavioral patterns (no flags written)
+	let postCreatedCount = 0;
+	let followReceivedCount = 0;
+	let reportSubmittedCount = 0;
+	let hasCreatorSubscription = false;
+	let isViralCreator = false;
+
+	userEvents.forEach((event) => {
+		if (event.event === "post created") postCreatedCount++;
+		if (event.event === "user followed") followReceivedCount++;
+		if (event.event === "report submitted") reportSubmittedCount++;
+		if (event.event === "creator subscription started") hasCreatorSubscription = true;
+	});
+
+	if (postCreatedCount >= VIRAL_POST_THRESHOLD && chance.bool({ likelihood: VIRAL_USER_LIKELIHOOD })) {
+		isViralCreator = true;
+	}
+
+	// Second pass: inject cloned events (no behavioral cohort flags)
+	for (let idx = userEvents.length - 1; idx >= 0; idx--) {
+		const event = userEvents[idx];
+		const eventTime = dayjs(event.time);
+
+		// H1: VIRAL CONTENT CASCADE — clone 60-120 view/like/share per post.
+		// Discovery: bin users by post-created count, observe per-user view/like/share volume.
+		if (isViralCreator && event.event === "post created") {
+			const viralViews = chance.integer({ min: VIRAL_CLONES_MIN, max: VIRAL_CLONES_MAX });
+			const viralLikes = chance.integer({ min: VIRAL_CLONES_MIN, max: VIRAL_CLONES_MAX });
+			const viralShares = chance.integer({ min: VIRAL_CLONES_MIN, max: VIRAL_CLONES_MAX });
+			const injected = [];
+
+			const viewTemplate = userEvents.find(e => e.event === "post viewed");
+			const likeTemplate = userEvents.find(e => e.event === "post liked");
+			const shareTemplate = userEvents.find(e => e.event === "post shared");
+
+			for (let i = 0; i < viralViews; i++) {
+				injected.push({
+					...(viewTemplate || event),
+					event: "post viewed",
+					time: eventTime.add(chance.integer({ min: 1, max: 180 }), 'minutes').toISOString(),
+					user_id: event.user_id,
+					post_type: event.post_type || "text",
+					source: chance.pickone(["feed", "explore", "search"]),
+					view_duration_sec: chance.integer({ min: 5, max: 90 }),
+				});
+			}
+			for (let i = 0; i < viralLikes; i++) {
+				injected.push({
+					...(likeTemplate || event),
+					event: "post liked",
+					time: eventTime.add(chance.integer({ min: 2, max: 240 }), 'minutes').toISOString(),
+					user_id: event.user_id,
+					post_type: event.post_type || "text",
+				});
+			}
+			for (let i = 0; i < viralShares; i++) {
+				injected.push({
+					...(shareTemplate || event),
+					event: "post shared",
+					time: eventTime.add(chance.integer({ min: 5, max: 300 }), 'minutes').toISOString(),
+					user_id: event.user_id,
+					share_destination: chance.pickone(["repost", "dm", "external", "copy_link"]),
+				});
+			}
+
+			userEvents.splice(idx + 1, 0, ...injected);
+		}
+
+		// H2: FOLLOW-BACK SNOWBALL — extra post + comment per user-followed cluster.
+		// Discovery: cohort users with >=5 user-followed events, compare posts/user.
+		if (followReceivedCount >= FOLLOW_SNOWBALL_THRESHOLD && event.event === "post created") {
+			if (chance.bool({ likelihood: FOLLOW_SNOWBALL_LIKELIHOOD })) {
+				const commentTemplate = userEvents.find(e => e.event === "comment posted");
+				const duplicatePost = {
+					...event,
+					time: eventTime.add(chance.integer({ min: 30, max: 240 }), 'minutes').toISOString(),
+					user_id: event.user_id,
+					post_type: chance.pickone(["text", "image", "video"]),
+					character_count: chance.integer({ min: 10, max: 280 }),
+					has_media: chance.bool({ likelihood: 60 }),
+					hashtag_count: chance.integer({ min: 0, max: 5 }),
+				};
+				const extraComment = {
+					...(commentTemplate || event),
+					event: "comment posted",
+					time: eventTime.add(chance.integer({ min: 10, max: 120 }), 'minutes').toISOString(),
+					user_id: event.user_id,
+					comment_length: chance.integer({ min: 5, max: 200 }),
+					has_mention: chance.bool({ likelihood: 40 }),
+				};
+				userEvents.splice(idx + 1, 0, duplicatePost, extraComment);
+			}
+		}
+
+		// H6: CREATOR MONETIZATION — 3x post/story rate for subscribers.
+		// Discovery: cohort users with creator-subscription-started event, compare posts/user.
+		if (hasCreatorSubscription && event.event === "post created") {
+			for (let i = 0; i < CREATOR_POST_CLONES; i++) {
+				const extraPost = {
+					...event,
+					time: eventTime.add(chance.integer({ min: 1, max: 12 }), 'hours').toISOString(),
+					user_id: event.user_id,
+					post_type: chance.pickone(["text", "image", "video", "link"]),
+					character_count: chance.integer({ min: 20, max: 280 }),
+					has_media: chance.bool({ likelihood: 70 }),
+					hashtag_count: chance.integer({ min: 1, max: 8 }),
+				};
+				userEvents.splice(idx + 1, 0, extraPost);
+			}
+		}
+		if (hasCreatorSubscription && event.event === "story created") {
+			for (let i = 0; i < CREATOR_STORY_CLONES; i++) {
+				const extraStory = {
+					...event,
+					time: eventTime.add(chance.integer({ min: 1, max: 8 }), 'hours').toISOString(),
+					user_id: event.user_id,
+					story_type: chance.pickone(["photo", "video", "text"]),
+					has_filter: chance.bool({ likelihood: 60 }),
+					has_sticker: chance.bool({ likelihood: 40 }),
+				};
+				userEvents.splice(idx + 1, 0, extraStory);
+			}
+		}
+		if (hasCreatorSubscription && event.event === "post viewed") {
+			if (chance.bool({ likelihood: CREATOR_VIEW_CLONE_LIKELIHOOD })) {
+				const analyticsView = {
+					...event,
+					time: eventTime.add(chance.integer({ min: 1, max: 30 }), 'minutes').toISOString(),
+					user_id: event.user_id,
+					post_type: event.post_type || "text",
+					source: "profile",
+					view_duration_sec: chance.integer({ min: 10, max: 60 }),
+				};
+				userEvents.splice(idx + 1, 0, analyticsView);
+			}
+		}
+	}
+
+	// H8: WEEKEND CONTENT SURGE — duplicate weekend posts/stories with offset.
+	// Discovery: line chart by day-of-week shows Sat/Sun bump.
+	for (let idx = userEvents.length - 1; idx >= 0; idx--) {
+		const event = userEvents[idx];
+		if (event.event === "post created" || event.event === "story created") {
+			const dow = new Date(event.time).getUTCDay();
+			if ((dow === 0 || dow === 6) && chance.bool({ likelihood: WEEKEND_CLONE_LIKELIHOOD })) {
+				const etime = dayjs(event.time);
+				const dup = {
+					...event,
+					time: etime.add(chance.integer({ min: 1, max: 3 }), 'hours').toISOString(),
+				};
+				userEvents.splice(idx + 1, 0, dup);
+			}
+		}
+	}
+
+	// H3: ALGORITHM CHANGE — day 45 flips feed → explore on post viewed.
+	// H4: ENGAGEMENT BAIT — 20% of post-viewed events get crushed duration.
+	// H5: NOTIFICATION RE-ENGAGEMENT — after day 30, 30% of views → notification.
+	// All three run AFTER injection passes so they apply to cloned events too.
+	const algorithmChangeDay = datasetStart.add(ALGORITHM_CHANGE_DAY, 'days');
+	const reengagementStart = datasetStart.add(REENGAGEMENT_START_DAY, 'days');
+	userEvents.forEach(e => {
+		if (e.event === "post viewed") {
+			const eventTime = dayjs(e.time);
+
+			// H3: Algorithm Change
+			if (eventTime.isAfter(algorithmChangeDay)) {
+				if (chance.bool({ likelihood: ALGORITHM_FLIP_LIKELIHOOD })) {
+					e.source = "explore";
+				}
+			} else {
+				if (chance.bool({ likelihood: ALGORITHM_FLIP_LIKELIHOOD })) {
+					e.source = "feed";
+				}
+			}
+
+			// H4: Engagement Bait — 20% crushed view duration
+			if (chance.bool({ likelihood: ENGAGEMENT_BAIT_LIKELIHOOD })) {
+				e.view_duration_sec = chance.integer({ min: 1, max: 5 });
+			}
+
+			// H5: Notification Re-engagement (runs after #3 so can override)
+			if (eventTime.isAfter(reengagementStart) && chance.bool({ likelihood: REENGAGEMENT_LIKELIHOOD })) {
+				e.source = "notification";
+			}
+		}
+	});
+
+	// H7: TOXICITY CHURN — drop 60% of activity after day 30 for high reporters.
+	// Discovery: cohort users with >=2 report-submitted events, observe retention drop.
+	if (reportSubmittedCount >= TOXICITY_THRESHOLD) {
+		const churnCutoff = datasetStart.add(TOXICITY_CUTOFF_DAYS, 'days');
+		for (let i = userEvents.length - 1; i >= 0; i--) {
+			const evt = userEvents[i];
+			if (dayjs(evt.time).isAfter(churnCutoff) && chance.bool({ likelihood: TOXICITY_DROP_LIKELIHOOD })) {
+				userEvents.splice(i, 1);
+			}
+		}
+	}
+
+	// H9: POST-CREATED MAGIC NUMBER (no flags)
+	// Sweet 3-7 posts → +40% on comment_length on the user's comment events.
+	// Over 8+ → -30% comment_length (engagement burnout).
+	if (postCreatedCount >= POST_SWEET_MIN && postCreatedCount <= POST_SWEET_MAX) {
+		userEvents.forEach(e => {
+			if (e.event === 'comment posted' && typeof e.comment_length === 'number') {
+				e.comment_length = Math.round(e.comment_length * POST_SWEET_COMMENT_BOOST);
+			}
+		});
+	} else if (postCreatedCount >= POST_OVER_THRESHOLD) {
+		userEvents.forEach(e => {
+			if (e.event === 'comment posted' && typeof e.comment_length === 'number') {
+				e.comment_length = Math.round(e.comment_length * POST_OVER_COMMENT_FACTOR);
+			}
+		});
+	}
+
+	return record;
+}
+
+// ── CONFIG ──
 /** @type {Config} */
 const config = {
 	version: 2,
-	token,
 	seed: SEED,
-	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-05-01T23:59:59Z",
+	datasetStart: DATASET_START,
+	datasetEnd: DATASET_END,
 	soup: { dayOfWeekWeights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.2, 1.2] },
-	// numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
-	hasAnonIds: true,
-	avgDevicePerUser: 2,
-	hasSessionIds: true,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	format: "json",
 	gzip: true,
-	alsoInferFunnels: false,
-	hasLocation: true,
-	hasAndroidDevices: true,
-	hasIOSDevices: true,
-	hasDesktopDevices: true,
-	hasBrowser: false,
-	hasCampaigns: false,
-	isAnonymous: false,
-	hasAdSpend: false,
-	hasAvatar: true,
+	credentials: {
+		token,
+	},
+	switches: {
+		hasSessionIds: true,
+		alsoInferFunnels: false,
+		hasLocation: true,
+		hasAndroidDevices: true,
+		hasIOSDevices: true,
+		hasDesktopDevices: true,
+		hasBrowser: false,
+		hasCampaigns: false,
+		isAnonymous: false,
+		hasAdSpend: false,
+		hasAvatar: true,
+	},
+	identity: {
+		avgDevicePerUser: 2,
+	},
 	concurrency: 1,
 	writeToDisk: false,
 	scdProps: {
@@ -590,261 +894,9 @@ const config = {
 
 	lookupTables: [],
 
-	hook: function (record, type, meta) {
-		// Hook #10 (T2C): ONBOARDING TIME-TO-CONVERT (funnel-post)
-		// Creator/business account_type users complete onboarding 1.4x
-		// faster (factor 0.71); personal accounts 1.25x slower (factor 1.25).
-		if (type === "funnel-post") {
-			const segment = meta?.profile?.account_type;
-			if (Array.isArray(record) && record.length > 1) {
-				const factor = (
-					segment === "creator" || segment === "business" ? 0.71 :
-					segment === "personal" ? 1.25 :
-					1.0
-				);
-				if (factor !== 1.0) {
-					for (let i = 1; i < record.length; i++) {
-						const prev = dayjs(record[i - 1].time);
-						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-						record[i].time = prev.add(newGap, "milliseconds").toISOString();
-					}
-				}
-			}
-		}
-
-
-		// ─── EVERYTHING-LEVEL HOOKS ──────────────────────────────────────
-
-		if (type === "everything") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			const userEvents = record;
-			if (!userEvents || userEvents.length === 0) return record;
-
-			// Stamp superProps from profile for consistency
-			const profile = meta.profile;
-			userEvents.forEach(e => {
-				e.app_version = profile.app_version;
-				e.account_type = profile.account_type;
-			});
-
-			// First pass: identify behavioral patterns (no flags written)
-			let postCreatedCount = 0;
-			let followReceivedCount = 0;
-			let reportSubmittedCount = 0;
-			let hasCreatorSubscription = false;
-			let isViralCreator = false;
-
-			userEvents.forEach((event) => {
-				if (event.event === "post created") postCreatedCount++;
-				if (event.event === "user followed") followReceivedCount++;
-				if (event.event === "report submitted") reportSubmittedCount++;
-				if (event.event === "creator subscription started") hasCreatorSubscription = true;
-			});
-
-			if (postCreatedCount >= 10 && chance.bool({ likelihood: 5 })) {
-				isViralCreator = true;
-			}
-
-			// Second pass: inject cloned events (no behavioral cohort flags)
-			for (let idx = userEvents.length - 1; idx >= 0; idx--) {
-				const event = userEvents[idx];
-				const eventTime = dayjs(event.time);
-
-				// Hook #1: VIRAL CONTENT CASCADE — clone 10-20 view/like/share per post.
-				// Discovery: bin users by post-created count, observe per-user view/like/share volume.
-				if (isViralCreator && event.event === "post created") {
-					const viralViews = chance.integer({ min: 60, max: 120 });
-					const viralLikes = chance.integer({ min: 60, max: 120 });
-					const viralShares = chance.integer({ min: 60, max: 120 });
-					const injected = [];
-
-					const viewTemplate = userEvents.find(e => e.event === "post viewed");
-					const likeTemplate = userEvents.find(e => e.event === "post liked");
-					const shareTemplate = userEvents.find(e => e.event === "post shared");
-
-					for (let i = 0; i < viralViews; i++) {
-						injected.push({
-							...(viewTemplate || event),
-							event: "post viewed",
-							time: eventTime.add(chance.integer({ min: 1, max: 180 }), 'minutes').toISOString(),
-							user_id: event.user_id,
-							post_type: event.post_type || "text",
-							source: chance.pickone(["feed", "explore", "search"]),
-							view_duration_sec: chance.integer({ min: 5, max: 90 }),
-						});
-					}
-					for (let i = 0; i < viralLikes; i++) {
-						injected.push({
-							...(likeTemplate || event),
-							event: "post liked",
-							time: eventTime.add(chance.integer({ min: 2, max: 240 }), 'minutes').toISOString(),
-							user_id: event.user_id,
-							post_type: event.post_type || "text",
-						});
-					}
-					for (let i = 0; i < viralShares; i++) {
-						injected.push({
-							...(shareTemplate || event),
-							event: "post shared",
-							time: eventTime.add(chance.integer({ min: 5, max: 300 }), 'minutes').toISOString(),
-							user_id: event.user_id,
-							share_destination: chance.pickone(["repost", "dm", "external", "copy_link"]),
-						});
-					}
-
-					userEvents.splice(idx + 1, 0, ...injected);
-				}
-
-				// Hook #2: FOLLOW-BACK SNOWBALL — extra post + comment per user-followed cluster.
-				// Discovery: cohort users with >=5 user-followed events, compare posts/user.
-				if (followReceivedCount >= 5 && event.event === "post created") {
-					if (chance.bool({ likelihood: 50 })) {
-						const commentTemplate = userEvents.find(e => e.event === "comment posted");
-						const duplicatePost = {
-							...event,
-							time: eventTime.add(chance.integer({ min: 30, max: 240 }), 'minutes').toISOString(),
-							user_id: event.user_id,
-							post_type: chance.pickone(["text", "image", "video"]),
-							character_count: chance.integer({ min: 10, max: 280 }),
-							has_media: chance.bool({ likelihood: 60 }),
-							hashtag_count: chance.integer({ min: 0, max: 5 }),
-						};
-						const extraComment = {
-							...(commentTemplate || event),
-							event: "comment posted",
-							time: eventTime.add(chance.integer({ min: 10, max: 120 }), 'minutes').toISOString(),
-							user_id: event.user_id,
-							comment_length: chance.integer({ min: 5, max: 200 }),
-							has_mention: chance.bool({ likelihood: 40 }),
-						};
-						userEvents.splice(idx + 1, 0, duplicatePost, extraComment);
-					}
-				}
-
-				// Hook #6: CREATOR MONETIZATION — 3x post/story rate for subscribers.
-				// Discovery: cohort users with creator-subscription-started event, compare posts/user.
-				if (hasCreatorSubscription && event.event === "post created") {
-					for (let i = 0; i < 2; i++) {
-						const extraPost = {
-							...event,
-							time: eventTime.add(chance.integer({ min: 1, max: 12 }), 'hours').toISOString(),
-							user_id: event.user_id,
-							post_type: chance.pickone(["text", "image", "video", "link"]),
-							character_count: chance.integer({ min: 20, max: 280 }),
-							has_media: chance.bool({ likelihood: 70 }),
-							hashtag_count: chance.integer({ min: 1, max: 8 }),
-						};
-						userEvents.splice(idx + 1, 0, extraPost);
-					}
-				}
-				if (hasCreatorSubscription && event.event === "story created") {
-					for (let i = 0; i < 2; i++) {
-						const extraStory = {
-							...event,
-							time: eventTime.add(chance.integer({ min: 1, max: 8 }), 'hours').toISOString(),
-							user_id: event.user_id,
-							story_type: chance.pickone(["photo", "video", "text"]),
-							has_filter: chance.bool({ likelihood: 60 }),
-							has_sticker: chance.bool({ likelihood: 40 }),
-						};
-						userEvents.splice(idx + 1, 0, extraStory);
-					}
-				}
-				if (hasCreatorSubscription && event.event === "post viewed") {
-					if (chance.bool({ likelihood: 25 })) {
-						const analyticsView = {
-							...event,
-							time: eventTime.add(chance.integer({ min: 1, max: 30 }), 'minutes').toISOString(),
-							user_id: event.user_id,
-							post_type: event.post_type || "text",
-							source: "profile",
-							view_duration_sec: chance.integer({ min: 10, max: 60 }),
-						};
-						userEvents.splice(idx + 1, 0, analyticsView);
-					}
-				}
-			}
-
-			// Hook #8: WEEKEND CONTENT SURGE — duplicate weekend posts/stories with offset.
-			// Discovery: line chart by day-of-week shows Sat/Sun bump.
-			for (let idx = userEvents.length - 1; idx >= 0; idx--) {
-				const event = userEvents[idx];
-				if (event.event === "post created" || event.event === "story created") {
-					const dow = new Date(event.time).getUTCDay();
-					if ((dow === 0 || dow === 6) && chance.bool({ likelihood: 30 })) {
-						const etime = dayjs(event.time);
-						const dup = {
-							...event,
-							time: etime.add(chance.integer({ min: 1, max: 3 }), 'hours').toISOString(),
-						};
-						userEvents.splice(idx + 1, 0, dup);
-					}
-				}
-			}
-
-			// Hook #3: ALGORITHM CHANGE — day 45 flips feed → explore on post viewed.
-			// Hook #4: ENGAGEMENT BAIT — 20% of post-viewed events get crushed duration.
-			// Hook #5: NOTIFICATION RE-ENGAGEMENT — after day 30, 30% of views → notification.
-			// All three run AFTER injection passes so they apply to cloned events too.
-			const ALGORITHM_CHANGE_DAY = datasetStart.add(45, 'days');
-			const REENGAGEMENT_START = datasetStart.add(30, 'days');
-			userEvents.forEach(e => {
-				if (e.event === "post viewed") {
-					const eventTime = dayjs(e.time);
-
-					// Hook #3: Algorithm Change
-					if (eventTime.isAfter(ALGORITHM_CHANGE_DAY)) {
-						if (chance.bool({ likelihood: 70 })) {
-							e.source = "explore";
-						}
-					} else {
-						if (chance.bool({ likelihood: 70 })) {
-							e.source = "feed";
-						}
-					}
-
-					// Hook #4: Engagement Bait — 20% crushed view duration
-					if (chance.bool({ likelihood: 20 })) {
-						e.view_duration_sec = chance.integer({ min: 1, max: 5 });
-					}
-
-					// Hook #5: Notification Re-engagement (runs after #3 so can override)
-					if (eventTime.isAfter(REENGAGEMENT_START) && chance.bool({ likelihood: 30 })) {
-						e.source = "notification";
-					}
-				}
-			});
-
-			// Hook #7: TOXICITY CHURN — drop 60% of activity after day 30 for high reporters.
-			// Discovery: cohort users with >=2 report-submitted events, observe retention drop.
-			if (reportSubmittedCount >= 2) {
-				const churnCutoff = datasetStart.add(30, 'days');
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					const evt = userEvents[i];
-					if (dayjs(evt.time).isAfter(churnCutoff) && chance.bool({ likelihood: 60 })) {
-						userEvents.splice(i, 1);
-					}
-				}
-			}
-
-			// Hook #9: POST-CREATED MAGIC NUMBER (no flags)
-			// Sweet 3-7 posts → +40% on comment_length on the user's comment events.
-			// Over 8+ → drop 30% of like/comment events (engagement burnout).
-			if (postCreatedCount >= 3 && postCreatedCount <= 7) {
-				userEvents.forEach(e => {
-					if (e.event === 'comment posted' && typeof e.comment_length === 'number') {
-						e.comment_length = Math.round(e.comment_length * 1.4);
-					}
-				});
-			} else if (postCreatedCount >= 8) {
-				userEvents.forEach(e => {
-					if (e.event === 'comment posted' && typeof e.comment_length === 'number') {
-						e.comment_length = Math.round(e.comment_length * 0.7);
-					}
-				});
-			}
-		}
-
+	hook(record, type, meta) {
+		if (type === "funnel-post") return handleFunnelPostHooks(record, meta);
+		if (type === "everything") return handleEverythingHooks(record, meta);
 		return record;
 	}
 };

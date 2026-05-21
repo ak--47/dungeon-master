@@ -1,50 +1,52 @@
-// ── TWEAK THESE ──
+// ── IMPORTS ──
+import Chance from 'chance';
+let chance = new Chance();
+import { weighNumRange, weighChoices } from "../../lib/utils/utils.js";
+/** @typedef {import("../../types").Dungeon} Config */
+
+// ── OVERVIEW ──
+/*
+ * NAME:       anonymous-users
+ * PURPOSE:    Anonymous-user mode fixture — exercises isAnonymous + hasAnonIds + anon-to-identified flow
+ * SCALE:      1,000 users, ~50K events, 180 days
+ * EVENTS (5): page view, signup, feature used, purchase, button click
+ * FUNNELS (0): none
+ */
+
+// ── SCALE ──
 const SEED = "anonymous-users";
 const num_days = 180;
 const num_users = 1_000;
 const avg_events_per_user_per_day = 0.28;
-let token = "";
+const token = process.env.MP_TOKEN || "";
 
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
-/**
- * Anonymous Users — tests anonymous user mode, anonIds, and identity merge.
- *
- * Exercises: isAnonymous mode, hasAnonIds for anonymous-to-identified
- * user flows, long 180-day timespan for tail behavior.
- *
- * - 1000 users, 50K events, 180 days
- * - isAnonymous: true, hasAnonIds: true
- * - Simple events with signup as isFirstEvent (identity resolution point)
- * - No hooks, minimal config
- */
-
-import Chance from 'chance';
-let chance = new Chance();
-import { weighNumRange, weighChoices } from "../../lib/utils/utils.js";
-
-/** @typedef {import("../../types").Dungeon} Config */
-/** @type {import('../../types').Dungeon} */
+// ── CONFIG ──
+/** @type {Config} */
 const config = {
-	token,
 	seed: SEED,
 	numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	format: "json",
-	region: "US",
-	isAnonymous: true,
-	hasAnonIds: true,
-	hasSessionIds: true,
-	hasAdSpend: false,
-	hasLocation: false,
-	hasAndroidDevices: true,
-	hasIOSDevices: true,
-	hasDesktopDevices: true,
-	hasBrowser: true,
-	hasCampaigns: false,
-	alsoInferFunnels: false,
+	credentials: {
+		token,
+		region: "US",
+	},
+	switches: {
+		isAnonymous: true,
+		hasSessionIds: true,
+		hasAdSpend: false,
+		hasLocation: false,
+		hasAndroidDevices: true,
+		hasIOSDevices: true,
+		hasDesktopDevices: true,
+		hasBrowser: true,
+		hasCampaigns: false,
+		alsoInferFunnels: false,
+	},
+	identity: {
+		avgDevicePerUser: 1,
+	},
 	concurrency: 1,
 	writeToDisk: false,
 

@@ -1,61 +1,41 @@
-// ── TWEAK THESE ──
-const SEED = "homenest";
-const num_days = 120;
-const num_users = 10_000;
-const avg_events_per_user_per_day = 0.53;
-let token = "your-mixpanel-token";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
-import * as v from "ak-tools";
-
-dayjs.extend(utc);
-const chance = u.initChance(SEED);
-
 /** @typedef  {import("../../types").Dungeon} Config */
 
-/**
- * ===================================================================
- * DATASET OVERVIEW
- * ===================================================================
+// ── OVERVIEW ──
+/*
+ * NAME:       HomeNest
+ * APP:        Property listings and agent CRM platform (Zillow meets
+ *             Compass). Buyers search listings, save properties, schedule
+ *             tours, get pre-approved for mortgages, and submit offers.
+ *             Agents list properties, manage clients, and close deals.
+ * SCALE:      10,000 users, 121 days (2026-01-01 → 2026-05-01)
+ * CORE LOOP:  account created → property search → property viewed → property saved → tour scheduled → offer submitted (buyer) | property listed → open house attended → property sold (agent)
  *
- * HomeNest — a property listings and agent CRM platform
- * (Zillow meets Compass). Buyers search listings, save properties,
- * schedule tours, get pre-approved for mortgages, and submit offers.
- * Agents list properties, manage clients, and close deals.
+ * EVENTS (17):
+ *   property viewed (12) > property search (10) > property saved (5) > virtual tour (4)
+ *   > tour scheduled (4) > agent contacted (4) > saved search created (3) > in-person tour (3)
+ *   > property listed (3) > mortgage pre-approval (2) > offer submitted (2) > open house attended (2)
+ *   > review submitted (2) > account created (1) > offer accepted (1) > offer rejected (1)
+ *   > property sold (1)
  *
- * Scale: 6,000 users · 480K events · 150 days · 17 event types
- * Groups: 200 brokerages
- * User types: Buyer (60%), Agent (20%), Both (20%)
- * Agent tiers: Standard (75%) / Premier (25%)
+ * FUNNELS (3):
+ *   - Buyer Journey:  account created → property search → property viewed (80%)
+ *   - Tour Funnel:    property viewed → tour scheduled → offer submitted (40%, reentry)
+ *   - Seller Funnel:  property listed → open house attended → property sold (35%)
  *
- * Core loops:
- *   Buyer:  account created → property search → property viewed →
- *           property saved → tour scheduled → offer submitted →
- *           offer accepted / offer rejected
- *
- *   Agent:  account created → property listed → open house attended →
- *           agent contacted → property sold
- *
- * Funnels:
- *   - Buyer journey: account created → property search → property viewed (80%)
- *   - Tour funnel: property viewed → tour scheduled → offer submitted (40%)
- *   - Seller funnel: property listed → open house attended → property sold (35%)
- *
- * ===================================================================
- * ANALYTICS HOOKS (10 hooks)
- *
- * Adds 10. TOUR FUNNEL TIME-TO-CONVERT: Premier agents 0.71x faster, Standard
- * 1.3x slower (funnel-post). Discover via Tour Funnel median TTC by agent_tier.
- * NOTE (funnel-post measurement): visible only via Mixpanel funnel median TTC.
- * Cross-event MIN→MIN SQL queries on raw events do NOT show this.
- * ===================================================================
- *
+ * USER PROPS:  user_type, preferred_location, property_preference, budget_max, agent_tier, total_properties_viewed, pre_approval_status
+ * SUPER PROPS: user_type, preferred_location, property_preference
+ * SCD PROPS:   agent_tier (Standard/Premier, monthly fuzzy, max 4)
+ * GROUPS:      brokerage_id (200 brokerages — property listed, property sold, agent contacted, open house attended)
+ */
+
+// ── HOOK STORIES ──
+/*
  * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable
  * only via behavioral cohorts (count event per user, then measure
  * downstream) or raw-prop breakdowns (date, agent_tier).
@@ -267,6 +247,11 @@ const chance = u.initChance(SEED);
  *   - Breakdown: "agent_tier" (user property / SCD)
  *   - Expected: Premier ~ 0.71x baseline; Standard ~ 1.3x baseline
  *
+ *   NOTE (funnel-post measurement): visible only via Mixpanel funnel
+ *   median TTC. Cross-event MIN→MIN SQL queries on raw events do NOT
+ *   show this — funnel-post adjusts gaps within funnel instances, not
+ *   across the user's full event history.
+ *
  * REAL-WORLD ANALOGUE: Premier agents have larger networks, faster
  * scheduling workflows, and prioritized showing slots, translating
  * to shorter tour-to-offer cycles.
@@ -290,32 +275,367 @@ const chance = u.initChance(SEED);
  * Tour Funnel TTC          | median TTC by tier     | 1x       | 0.71/1.3x| ~ 1.8x range
  */
 
+// ── SCALE ──
+const SEED = "homenest";
+const NUM_USERS = 10_000;
+const NUM_DAYS = 120;
+const DATASET_START = "2026-01-01T00:00:00Z";
+const DATASET_END = "2026-05-01T23:59:59Z";
+const EVENTS_PER_DAY = 0.53;
+const token = process.env.MP_TOKEN || "your-mixpanel-token";
+
+const chance = u.initChance(SEED);
+
+// ── KNOBS (tweak these to reshape stories) ──
+const SPRING_START_DAY = 30;
+const SPRING_END_DAY = 60;
+const SPRING_TOUR_DURATION_MULT = 3;
+const SPRING_OFFER_PRICE_MULT = 2.5;
+
+const SHOCK_START_DAY = 75;
+const SHOCK_END_DAY = 89;
+const SHOCK_MORTGAGE_RATE = 7.5;
+const SHOCK_OFFER_DROP_LIKELIHOOD = 45;
+
+const SAVED_SEARCH_WINDOW_DAYS = 7;
+const SAVED_SEARCH_VIEW_CLONES_MIN = 3;
+const SAVED_SEARCH_VIEW_CLONES_MAX = 8;
+const SAVED_SEARCH_TOUR_CLONES_MIN = 1;
+const SAVED_SEARCH_TOUR_CLONES_MAX = 3;
+const NON_SAVER_CUTOFF_DAY = 30;
+const NON_SAVER_DROP_LIKELIHOOD = 80;
+
+const PRE_APPROVAL_OFFER_CLONES_MIN = 4;
+const PRE_APPROVAL_OFFER_CLONES_MAX = 6;
+
+const PREMIER_LISTING_CLONE_MULT = 2;
+const PREMIER_SALE_CLONE_MULT = 1;
+
+const DUAL_TOUR_OFFER_CLONES_MIN = 5;
+const DUAL_TOUR_OFFER_CLONES_MAX = 7;
+
+const LUXURY_RELEASE_DAY = 50;
+const LUXURY_LISTING_LIKELIHOOD = 3;
+const LUXURY_PRICE_MIN = 5_000_000;
+const LUXURY_PRICE_MAX = 15_000_000;
+const LUXURY_USER_HASH_MOD = 33;
+const LUXURY_VIEW_CLONES_MIN = 3;
+const LUXURY_VIEW_CLONES_MAX = 6;
+
+const COLD_LEAD_WINDOW_DAYS = 14;
+const COLD_LEAD_DROP_LIKELIHOOD = 90;
+
+const VIEW_SWEET_MIN = 6;
+const VIEW_SWEET_MAX = 12;
+const VIEW_OVER_THRESHOLD = 13;
+const VIEW_OFFER_PRICE_BOOST = 1.3;
+const VIEW_OVER_OFFER_DROP_LIKELIHOOD = 35;
+
+const TTC_PREMIER_FACTOR = 0.71;
+const TTC_STANDARD_FACTOR = 1.3;
+
+// ── HELPER FUNCTIONS ──
+function handleFunnelPostHooks(record, meta) {
+	// H10: Tour Funnel TTC — Premier 0.71x, Standard 1.3x.
+	const segment = meta?.profile?.agent_tier;
+	if (Array.isArray(record) && record.length > 1) {
+		const factor = (
+			segment === "Premier" ? TTC_PREMIER_FACTOR :
+			segment === "Standard" ? TTC_STANDARD_FACTOR :
+			1.0
+		);
+		if (factor !== 1.0) {
+			for (let i = 1; i < record.length; i++) {
+				const prev = dayjs(record[i - 1].time);
+				const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+				record[i].time = prev.add(newGap, "milliseconds").toISOString();
+			}
+		}
+	}
+	return record;
+}
+
+function handleEverythingHooks(record, meta) {
+	const datasetStart = dayjs.unix(meta.datasetStart);
+	const userEvents = record;
+	const profile = meta.profile;
+
+	// Stamp superProps from profile for consistency
+	userEvents.forEach(e => {
+		e.user_type = profile.user_type;
+		e.preferred_location = profile.preferred_location;
+		e.property_preference = profile.property_preference;
+	});
+
+	// HOOK 1: SPRING BUYING SEASON — d30-60 tour duration 3x, offer_price 2.5x
+	// HOOK 2: MORTGAGE RATE SHOCK — d75-89 mortgage_rate pinned 7.5
+	// HOOK 7: LUXURY LISTING RELEASE — post-d50, 3% of listings priced $5M-$15M
+	const springStart = datasetStart.add(SPRING_START_DAY, "days");
+	const springEnd = datasetStart.add(SPRING_END_DAY, "days");
+	const shockStart = datasetStart.add(SHOCK_START_DAY, "days");
+	const shockEnd = datasetStart.add(SHOCK_END_DAY, "days");
+	const luxuryStart = datasetStart.add(LUXURY_RELEASE_DAY, "days");
+	userEvents.forEach(e => {
+		const t = dayjs.utc(e.time);
+		const inSpring = (t.isAfter(springStart) || t.isSame(springStart)) && t.isBefore(springEnd);
+		if (inSpring && e.event === "tour scheduled" && typeof e.duration_mins === "number") {
+			e.duration_mins = Math.round(e.duration_mins * SPRING_TOUR_DURATION_MULT);
+		}
+		// Spring offer_price boost moved to end (after all cloning)
+		if (e.event === "mortgage pre-approval") {
+			if ((t.isAfter(shockStart) || t.isSame(shockStart)) && t.isBefore(shockEnd)) {
+				e.mortgage_rate = SHOCK_MORTGAGE_RATE;
+			}
+		}
+		if (e.event === "property listed" && t.isAfter(luxuryStart) && chance.bool({ likelihood: LUXURY_LISTING_LIKELIHOOD })) {
+			e.listing_price = chance.integer({ min: LUXURY_PRICE_MIN, max: LUXURY_PRICE_MAX });
+		}
+	});
+
+	const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
+
+	// HOOK 2 (cont): MORTGAGE RATE SHOCK — drop 45% of post-day-75
+	// offer-submitted events. No flag.
+	const day75 = datasetStart.add(SHOCK_START_DAY, "days");
+	for (let i = userEvents.length - 1; i >= 0; i--) {
+		const evt = userEvents[i];
+		if (evt.event === "offer submitted" && dayjs(evt.time).isAfter(day75) && chance.bool({ likelihood: SHOCK_OFFER_DROP_LIKELIHOOD })) {
+			userEvents.splice(i, 1);
+		}
+	}
+
+	// HOOK 3: SAVED-SEARCH RETENTION — early savers (saved-search-created
+	// in first 7 days) get extra cloned view + tour events. Non-savers
+	// lose 80% of events after day 30. No flag.
+	const day7 = firstEventTime ? firstEventTime.add(SAVED_SEARCH_WINDOW_DAYS, "days") : null;
+	const day30 = datasetStart.add(NON_SAVER_CUTOFF_DAY, "days");
+	const hasSavedSearch = day7 ? userEvents.some(e =>
+		e.event === "saved search created" && dayjs(e.time).isBefore(day7)
+	) : false;
+
+	if (hasSavedSearch) {
+		const viewTemplate = userEvents.find(e => e.event === "property viewed");
+		const tourTemplate = userEvents.find(e => e.event === "tour scheduled");
+		if (viewTemplate) {
+			const extras = chance.integer({ min: SAVED_SEARCH_VIEW_CLONES_MIN, max: SAVED_SEARCH_VIEW_CLONES_MAX });
+			for (let i = 0; i < extras; i++) {
+				const offset = chance.integer({ min: 10, max: NUM_DAYS - 10 });
+				userEvents.push({
+					...viewTemplate,
+					time: datasetStart.add(offset, "days").add(chance.integer({ min: 0, max: 23 }), "hours").toISOString(),
+					user_id: viewTemplate.user_id,
+					listing_id: `LST-${chance.integer({ min: 10000, max: 99999 })}`,
+					listing_price: chance.integer({ min: 200000, max: 1200000 }),
+				});
+			}
+		}
+		if (tourTemplate) {
+			const extras = chance.integer({ min: SAVED_SEARCH_TOUR_CLONES_MIN, max: SAVED_SEARCH_TOUR_CLONES_MAX });
+			for (let i = 0; i < extras; i++) {
+				const offset = chance.integer({ min: 15, max: NUM_DAYS - 10 });
+				userEvents.push({
+					...tourTemplate,
+					time: datasetStart.add(offset, "days").add(chance.integer({ min: 8, max: 18 }), "hours").toISOString(),
+					user_id: tourTemplate.user_id,
+					listing_id: `LST-${chance.integer({ min: 10000, max: 99999 })}`,
+				});
+			}
+		}
+	} else {
+		for (let i = userEvents.length - 1; i >= 0; i--) {
+			const evt = userEvents[i];
+			if (dayjs(evt.time).isAfter(day30) && chance.bool({ likelihood: NON_SAVER_DROP_LIKELIHOOD })) {
+				userEvents.splice(i, 1);
+			}
+		}
+	}
+
+	// HOOK 4: PRE-APPROVED BUYER CONVERSION — clone 4-6 extra
+	// offer-submitted events for users with a mortgage pre-approval
+	// event. No flag.
+	const hasPreApproval = userEvents.some(e => e.event === "mortgage pre-approval");
+	if (hasPreApproval) {
+		profile.pre_approval_status = "approved";
+		const offerTemplate = userEvents.find(e => e.event === "offer submitted");
+		if (offerTemplate) {
+			const extras = chance.integer({ min: PRE_APPROVAL_OFFER_CLONES_MIN, max: PRE_APPROVAL_OFFER_CLONES_MAX });
+			for (let i = 0; i < extras; i++) {
+				const offset = chance.integer({ min: 20, max: NUM_DAYS - 5 });
+				userEvents.push({
+					...offerTemplate,
+					time: datasetStart.add(offset, "days").add(chance.integer({ min: 8, max: 20 }), "hours").toISOString(),
+					user_id: offerTemplate.user_id,
+					listing_id: `LST-${chance.integer({ min: 10000, max: 99999 })}`,
+					offer_price: chance.integer({ min: 250000, max: 1200000 }),
+					listing_price: chance.integer({ min: 250000, max: 1200000 }),
+				});
+			}
+		}
+	}
+
+	// HOOK 5: TOP-TIER AGENT ADVANTAGE — Premier agents get 2 extra
+	// cloned listings per existing (3x rate) and 1 extra clone per
+	// sale (2x rate). Reads agent_tier from profile. No flag.
+	if (profile.agent_tier === "Premier") {
+		const listTemplate = userEvents.find(e => e.event === "property listed");
+		const soldTemplate = userEvents.find(e => e.event === "property sold");
+
+		if (listTemplate) {
+			const existingListings = userEvents.filter(e => e.event === "property listed").length;
+			const extras = existingListings * PREMIER_LISTING_CLONE_MULT;
+			for (let i = 0; i < extras; i++) {
+				const offset = chance.integer({ min: 5, max: NUM_DAYS - 5 });
+				userEvents.push({
+					...listTemplate,
+					time: datasetStart.add(offset, "days").add(chance.integer({ min: 8, max: 18 }), "hours").toISOString(),
+					user_id: listTemplate.user_id,
+					listing_price: chance.integer({ min: 300000, max: 1500000 }),
+					listing_status: chance.pickone(["active", "pending", "coming soon"]),
+				});
+			}
+		}
+		if (soldTemplate) {
+			const existingSales = userEvents.filter(e => e.event === "property sold").length;
+			const extras = existingSales * PREMIER_SALE_CLONE_MULT;
+			for (let i = 0; i < extras; i++) {
+				const offset = chance.integer({ min: 10, max: NUM_DAYS - 5 });
+				userEvents.push({
+					...soldTemplate,
+					time: datasetStart.add(offset, "days").add(chance.integer({ min: 9, max: 17 }), "hours").toISOString(),
+					user_id: soldTemplate.user_id,
+					sale_price: chance.integer({ min: 300000, max: 1500000 }),
+					days_on_market: chance.integer({ min: 5, max: 90 }),
+				});
+			}
+		}
+	}
+
+	// HOOK 6: TOUR-TO-OFFER POWER USERS — users with both virtual
+	// tour AND in-person tour get 5-7 extra cloned offers. No flag.
+	const hasVirtualTour = userEvents.some(e => e.event === "virtual tour");
+	const hasInPersonTour = userEvents.some(e => e.event === "in-person tour");
+	if (hasVirtualTour && hasInPersonTour) {
+		const offerTemplate = userEvents.find(e => e.event === "offer submitted");
+		if (offerTemplate) {
+			const extras = chance.integer({ min: DUAL_TOUR_OFFER_CLONES_MIN, max: DUAL_TOUR_OFFER_CLONES_MAX });
+			for (let i = 0; i < extras; i++) {
+				const offset = chance.integer({ min: 15, max: NUM_DAYS - 5 });
+				userEvents.push({
+					...offerTemplate,
+					time: datasetStart.add(offset, "days").add(chance.integer({ min: 8, max: 20 }), "hours").toISOString(),
+					user_id: offerTemplate.user_id,
+					listing_id: `LST-${chance.integer({ min: 10000, max: 99999 })}`,
+					offer_price: chance.integer({ min: 300000, max: 1500000 }),
+					listing_price: chance.integer({ min: 300000, max: 1500000 }),
+				});
+			}
+		}
+	}
+
+	// HOOK 7 (cont): LUXURY LISTING RELEASE — ~3% of users (by hash)
+	// get 3-6 extra luxury property-viewed events after day 50. No flag.
+	if (userEvents.length > 0) {
+		const userId = userEvents[0].user_id || "";
+		const isLuxuryBrowser = typeof userId === "string" && userId.length > 0 && userId.charCodeAt(0) % LUXURY_USER_HASH_MOD === 0;
+		if (isLuxuryBrowser) {
+			const viewTemplate = userEvents.find(e => e.event === "property viewed");
+			if (viewTemplate) {
+				const extras = chance.integer({ min: LUXURY_VIEW_CLONES_MIN, max: LUXURY_VIEW_CLONES_MAX });
+				for (let i = 0; i < extras; i++) {
+					const offset = chance.integer({ min: LUXURY_RELEASE_DAY, max: NUM_DAYS - 5 });
+					userEvents.push({
+						...viewTemplate,
+						time: datasetStart.add(offset, "days").add(chance.integer({ min: 9, max: 21 }), "hours").toISOString(),
+						user_id: viewTemplate.user_id,
+						listing_id: `LST-${chance.integer({ min: 90000, max: 99999 })}`,
+						listing_price: chance.integer({ min: LUXURY_PRICE_MIN, max: LUXURY_PRICE_MAX }),
+						property_type: chance.pickone(["Single Family", "Condo"]),
+						bedrooms: chance.integer({ min: 4, max: 8 }),
+						square_feet: chance.integer({ min: 4000, max: 15000 }),
+					});
+				}
+			}
+		}
+	}
+
+	// HOOK 8: COLD-LEAD CHURN — users who view but never save in
+	// first 14 days lose 90% of post-day-14 events. No flag.
+	const day14 = firstEventTime ? firstEventTime.add(COLD_LEAD_WINDOW_DAYS, "days") : null;
+	if (day14) {
+		const earlyEvents = userEvents.filter(e => dayjs(e.time).isBefore(day14));
+		const hasView = earlyEvents.some(e => e.event === "property viewed");
+		const hasSave = earlyEvents.some(e => e.event === "property saved");
+		if (hasView && !hasSave) {
+			for (let i = userEvents.length - 1; i >= 0; i--) {
+				const evt = userEvents[i];
+				if (dayjs(evt.time).isAfter(day14) && chance.bool({ likelihood: COLD_LEAD_DROP_LIKELIHOOD })) {
+					userEvents.splice(i, 1);
+				}
+			}
+		}
+	}
+
+	// HOOK 9: PROPERTY-VIEWED MAGIC NUMBER (no flags)
+	// Sweet 6-12 views → +30% offer_price on offer submitted events.
+	// Over 13+ → drop 35% of offer submitted events (tire-kickers).
+	const viewCount = userEvents.filter(e => e.event === "property viewed").length;
+	if (viewCount >= VIEW_SWEET_MIN && viewCount <= VIEW_SWEET_MAX) {
+		userEvents.forEach(e => {
+			if (e.event === "offer submitted" && typeof e.offer_price === "number") {
+				e.offer_price = Math.round(e.offer_price * VIEW_OFFER_PRICE_BOOST);
+			}
+		});
+	} else if (viewCount >= VIEW_OVER_THRESHOLD) {
+		for (let i = userEvents.length - 1; i >= 0; i--) {
+			if (userEvents[i].event === "offer submitted" && chance.bool({ likelihood: VIEW_OVER_OFFER_DROP_LIKELIHOOD })) {
+				userEvents.splice(i, 1);
+			}
+		}
+	}
+
+	// HOOK 1 (cont): Spring offer_price boost — runs AFTER all cloning
+	// so cloned offers in the spring window also get the 2.5x boost
+	userEvents.forEach(e => {
+		if (e.event !== "offer submitted") return;
+		const t = dayjs.utc(e.time);
+		if ((t.isAfter(springStart) || t.isSame(springStart)) && t.isBefore(springEnd)) {
+			e.offer_price = Math.floor((e.offer_price || 400000) * SPRING_OFFER_PRICE_MULT);
+		}
+	});
+
+	return record;
+}
+
+// ── CONFIG ──
 /** @type {Config} */
 const config = {
 	version: 2,
-	token,
 	seed: SEED,
-	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-05-01T23:59:59Z",
-	// numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
-	hasAnonIds: true,
-	avgDevicePerUser: 2,
-	hasSessionIds: true,
+	datasetStart: DATASET_START,
+	datasetEnd: DATASET_END,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	format: "json",
 	gzip: true,
-	alsoInferFunnels: false,
-	hasLocation: true,
-	hasAndroidDevices: true,
-	hasIOSDevices: true,
-	hasDesktopDevices: true,
-	hasBrowser: true,
-	hasCampaigns: false,
-	isAnonymous: false,
-	hasAdSpend: false,
-
-	hasAvatar: true,
+	credentials: {
+		token,
+	},
+	switches: {
+		hasSessionIds: true,
+		alsoInferFunnels: false,
+		hasLocation: true,
+		hasAndroidDevices: true,
+		hasIOSDevices: true,
+		hasDesktopDevices: true,
+		hasBrowser: true,
+		hasCampaigns: false,
+		isAnonymous: false,
+		hasAdSpend: false,
+		hasAvatar: true,
+	},
+	identity: {
+		avgDevicePerUser: 2,
+	},
 
 	concurrency: 1,
 	writeToDisk: false,
@@ -542,280 +862,9 @@ const config = {
 
 	lookupTables: [],
 
-	hook: function (record, type, meta) {
-		// HOOK 10 (T2C): TOUR FUNNEL TIME-TO-CONVERT (funnel-post)
-		// Premier agents move users through Tour funnel 1.4x faster
-		// (factor 0.71); Standard agents 1.3x slower (factor 1.3).
-		if (type === "funnel-post") {
-			const segment = meta?.profile?.agent_tier;
-			if (Array.isArray(record) && record.length > 1) {
-				const factor = (
-					segment === "Premier" ? 0.71 :
-					segment === "Standard" ? 1.3 :
-					1.0
-				);
-				if (factor !== 1.0) {
-					for (let i = 1; i < record.length; i++) {
-						const prev = dayjs(record[i - 1].time);
-						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-						record[i].time = prev.add(newGap, "milliseconds").toISOString();
-					}
-				}
-			}
-		}
-
-		// HOOKS 1, 2, 7 (time-window event-level effects) moved to everything hook —
-		// event hook fires before bunchIntoSessions reshuffles timestamps, so day-window
-		// tags leak across boundaries.
-
-		if (type === "everything") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			const userEvents = record;
-			const profile = meta.profile;
-
-			// Stamp superProps from profile for consistency
-			userEvents.forEach(e => {
-				e.user_type = profile.user_type;
-				e.preferred_location = profile.preferred_location;
-				e.property_preference = profile.property_preference;
-			});
-
-			// HOOK 1: SPRING BUYING SEASON — d30-60 tour duration 3x, offer_price 2.5x
-			// HOOK 2: MORTGAGE RATE SHOCK — d75-89 mortgage_rate pinned 7.5
-			// HOOK 7: LUXURY LISTING RELEASE — post-d50, 3% of listings priced $5M-$15M
-			const springStart = datasetStart.add(30, "days");
-			const springEnd = datasetStart.add(60, "days");
-			const shockStart = datasetStart.add(75, "days");
-			const shockEnd = datasetStart.add(89, "days");
-			const luxuryStart = datasetStart.add(50, "days");
-			userEvents.forEach(e => {
-				const t = dayjs.utc(e.time);
-				const inSpring = (t.isAfter(springStart) || t.isSame(springStart)) && t.isBefore(springEnd);
-				if (inSpring && e.event === "tour scheduled" && typeof e.duration_mins === "number") {
-					e.duration_mins = Math.round(e.duration_mins * 3);
-				}
-				// Spring offer_price boost moved to end (after all cloning)
-				if (e.event === "mortgage pre-approval") {
-					if ((t.isAfter(shockStart) || t.isSame(shockStart)) && t.isBefore(shockEnd)) {
-						e.mortgage_rate = 7.5;
-					}
-				}
-				if (e.event === "property listed" && t.isAfter(luxuryStart) && chance.bool({ likelihood: 3 })) {
-					e.listing_price = chance.integer({ min: 5000000, max: 15000000 });
-				}
-			});
-
-			const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
-
-			// HOOK 2 (cont): MORTGAGE RATE SHOCK — drop 45% of post-day-75
-			// offer-submitted events. No flag.
-			const day75 = datasetStart.add(75, "days");
-			for (let i = userEvents.length - 1; i >= 0; i--) {
-				const evt = userEvents[i];
-				if (evt.event === "offer submitted" && dayjs(evt.time).isAfter(day75) && chance.bool({ likelihood: 45 })) {
-					userEvents.splice(i, 1);
-				}
-			}
-
-			// HOOK 3: SAVED-SEARCH RETENTION — early savers (saved-search-created
-			// in first 7 days) get extra cloned view + tour events. Non-savers
-			// lose 80% of events after day 30. No flag.
-			const day7 = firstEventTime ? firstEventTime.add(7, "days") : null;
-			const day30 = datasetStart.add(30, "days");
-			const hasSavedSearch = day7 ? userEvents.some(e =>
-				e.event === "saved search created" && dayjs(e.time).isBefore(day7)
-			) : false;
-
-			if (hasSavedSearch) {
-				const viewTemplate = userEvents.find(e => e.event === "property viewed");
-				const tourTemplate = userEvents.find(e => e.event === "tour scheduled");
-				if (viewTemplate) {
-					const extras = chance.integer({ min: 3, max: 8 });
-					for (let i = 0; i < extras; i++) {
-						const offset = chance.integer({ min: 10, max: num_days - 10 });
-						userEvents.push({
-							...viewTemplate,
-							time: datasetStart.add(offset, "days").add(chance.integer({ min: 0, max: 23 }), "hours").toISOString(),
-							user_id: viewTemplate.user_id,
-							listing_id: `LST-${chance.integer({ min: 10000, max: 99999 })}`,
-							listing_price: chance.integer({ min: 200000, max: 1200000 }),
-						});
-					}
-				}
-				if (tourTemplate) {
-					const extras = chance.integer({ min: 1, max: 3 });
-					for (let i = 0; i < extras; i++) {
-						const offset = chance.integer({ min: 15, max: num_days - 10 });
-						userEvents.push({
-							...tourTemplate,
-							time: datasetStart.add(offset, "days").add(chance.integer({ min: 8, max: 18 }), "hours").toISOString(),
-							user_id: tourTemplate.user_id,
-							listing_id: `LST-${chance.integer({ min: 10000, max: 99999 })}`,
-						});
-					}
-				}
-			} else {
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					const evt = userEvents[i];
-					if (dayjs(evt.time).isAfter(day30) && chance.bool({ likelihood: 80 })) {
-						userEvents.splice(i, 1);
-					}
-				}
-			}
-
-			// HOOK 4: PRE-APPROVED BUYER CONVERSION — clone 4-6 extra
-			// offer-submitted events for users with a mortgage pre-approval
-			// event. No flag.
-			const hasPreApproval = userEvents.some(e => e.event === "mortgage pre-approval");
-			if (hasPreApproval) {
-				profile.pre_approval_status = "approved";
-				const offerTemplate = userEvents.find(e => e.event === "offer submitted");
-				if (offerTemplate) {
-					const extras = chance.integer({ min: 4, max: 6 });
-					for (let i = 0; i < extras; i++) {
-						const offset = chance.integer({ min: 20, max: num_days - 5 });
-						userEvents.push({
-							...offerTemplate,
-							time: datasetStart.add(offset, "days").add(chance.integer({ min: 8, max: 20 }), "hours").toISOString(),
-							user_id: offerTemplate.user_id,
-							listing_id: `LST-${chance.integer({ min: 10000, max: 99999 })}`,
-							offer_price: chance.integer({ min: 250000, max: 1200000 }),
-							listing_price: chance.integer({ min: 250000, max: 1200000 }),
-						});
-					}
-				}
-			}
-
-			// HOOK 5: TOP-TIER AGENT ADVANTAGE — Premier agents get 2 extra
-			// cloned listings per existing (3x rate) and 1 extra clone per
-			// sale (2x rate). Reads agent_tier from profile. No flag.
-			if (profile.agent_tier === "Premier") {
-				const listTemplate = userEvents.find(e => e.event === "property listed");
-				const soldTemplate = userEvents.find(e => e.event === "property sold");
-
-				if (listTemplate) {
-					const existingListings = userEvents.filter(e => e.event === "property listed").length;
-					const extras = existingListings * 2;
-					for (let i = 0; i < extras; i++) {
-						const offset = chance.integer({ min: 5, max: num_days - 5 });
-						userEvents.push({
-							...listTemplate,
-							time: datasetStart.add(offset, "days").add(chance.integer({ min: 8, max: 18 }), "hours").toISOString(),
-							user_id: listTemplate.user_id,
-							listing_price: chance.integer({ min: 300000, max: 1500000 }),
-							listing_status: chance.pickone(["active", "pending", "coming soon"]),
-						});
-					}
-				}
-				if (soldTemplate) {
-					const existingSales = userEvents.filter(e => e.event === "property sold").length;
-					for (let i = 0; i < existingSales; i++) {
-						const offset = chance.integer({ min: 10, max: num_days - 5 });
-						userEvents.push({
-							...soldTemplate,
-							time: datasetStart.add(offset, "days").add(chance.integer({ min: 9, max: 17 }), "hours").toISOString(),
-							user_id: soldTemplate.user_id,
-							sale_price: chance.integer({ min: 300000, max: 1500000 }),
-							days_on_market: chance.integer({ min: 5, max: 90 }),
-						});
-					}
-				}
-			}
-
-			// HOOK 6: TOUR-TO-OFFER POWER USERS — users with both virtual
-			// tour AND in-person tour get 5-7 extra cloned offers. No flag.
-			const hasVirtualTour = userEvents.some(e => e.event === "virtual tour");
-			const hasInPersonTour = userEvents.some(e => e.event === "in-person tour");
-			if (hasVirtualTour && hasInPersonTour) {
-				const offerTemplate = userEvents.find(e => e.event === "offer submitted");
-				if (offerTemplate) {
-					const extras = chance.integer({ min: 5, max: 7 });
-					for (let i = 0; i < extras; i++) {
-						const offset = chance.integer({ min: 15, max: num_days - 5 });
-						userEvents.push({
-							...offerTemplate,
-							time: datasetStart.add(offset, "days").add(chance.integer({ min: 8, max: 20 }), "hours").toISOString(),
-							user_id: offerTemplate.user_id,
-							listing_id: `LST-${chance.integer({ min: 10000, max: 99999 })}`,
-							offer_price: chance.integer({ min: 300000, max: 1500000 }),
-							listing_price: chance.integer({ min: 300000, max: 1500000 }),
-						});
-					}
-				}
-			}
-
-			// HOOK 7 (cont): LUXURY LISTING RELEASE — ~3% of users (by hash)
-			// get 3-6 extra luxury property-viewed events after day 50. No flag.
-			if (userEvents.length > 0) {
-				const userId = userEvents[0].user_id || "";
-				const isLuxuryBrowser = typeof userId === "string" && userId.length > 0 && userId.charCodeAt(0) % 33 === 0;
-				if (isLuxuryBrowser) {
-					const viewTemplate = userEvents.find(e => e.event === "property viewed");
-					if (viewTemplate) {
-						const extras = chance.integer({ min: 3, max: 6 });
-						for (let i = 0; i < extras; i++) {
-							const offset = chance.integer({ min: 50, max: num_days - 5 });
-							userEvents.push({
-								...viewTemplate,
-								time: datasetStart.add(offset, "days").add(chance.integer({ min: 9, max: 21 }), "hours").toISOString(),
-								user_id: viewTemplate.user_id,
-								listing_id: `LST-${chance.integer({ min: 90000, max: 99999 })}`,
-								listing_price: chance.integer({ min: 5000000, max: 15000000 }),
-								property_type: chance.pickone(["Single Family", "Condo"]),
-								bedrooms: chance.integer({ min: 4, max: 8 }),
-								square_feet: chance.integer({ min: 4000, max: 15000 }),
-							});
-						}
-					}
-				}
-			}
-
-			// HOOK 8: COLD-LEAD CHURN — users who view but never save in
-			// first 14 days lose 90% of post-day-14 events. No flag.
-			const day14 = firstEventTime ? firstEventTime.add(14, "days") : null;
-			if (day14) {
-				const earlyEvents = userEvents.filter(e => dayjs(e.time).isBefore(day14));
-				const hasView = earlyEvents.some(e => e.event === "property viewed");
-				const hasSave = earlyEvents.some(e => e.event === "property saved");
-				if (hasView && !hasSave) {
-					for (let i = userEvents.length - 1; i >= 0; i--) {
-						const evt = userEvents[i];
-						if (dayjs(evt.time).isAfter(day14) && chance.bool({ likelihood: 90 })) {
-							userEvents.splice(i, 1);
-						}
-					}
-				}
-			}
-
-			// HOOK 9: PROPERTY-VIEWED MAGIC NUMBER (no flags)
-			// Sweet 6-12 views → +30% offer_price on offer submitted events.
-			// Over 13+ → drop 35% of offer submitted events (tire-kickers).
-			const viewCount = userEvents.filter(e => e.event === "property viewed").length;
-			if (viewCount >= 6 && viewCount <= 12) {
-				userEvents.forEach(e => {
-					if (e.event === "offer submitted" && typeof e.offer_price === "number") {
-						e.offer_price = Math.round(e.offer_price * 1.3);
-					}
-				});
-			} else if (viewCount >= 13) {
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					if (userEvents[i].event === "offer submitted" && chance.bool({ likelihood: 35 })) {
-						userEvents.splice(i, 1);
-					}
-				}
-			}
-
-			// HOOK 1 (cont): Spring offer_price boost — runs AFTER all cloning
-			// so cloned offers in the spring window also get the 2.5x boost
-			userEvents.forEach(e => {
-				if (e.event !== "offer submitted") return;
-				const t = dayjs.utc(e.time);
-				if ((t.isAfter(springStart) || t.isSame(springStart)) && t.isBefore(springEnd)) {
-					e.offer_price = Math.floor((e.offer_price || 400000) * 2.5);
-				}
-			});
-		}
-
+	hook(record, type, meta) {
+		if (type === "funnel-post") return handleFunnelPostHooks(record, meta);
+		if (type === "everything") return handleEverythingHooks(record, meta);
 		return record;
 	}
 };

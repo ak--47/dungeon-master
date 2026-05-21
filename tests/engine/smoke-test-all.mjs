@@ -76,8 +76,7 @@ const r = await generate(dungeonPath, {
 	format: 'json',
 	verbose: false,
 	concurrency: 1,
-	token: '',
-	serviceAccount: 'fake', serviceSecret: 'fake', projectId: '1',
+	credentials: { token: '', serviceAccount: 'fake', serviceSecret: 'fake', projectId: '1' },
 });
 console.log(JSON.stringify({ eventCount: r.eventCount, userCount: r.userCount }));
 `;

@@ -1,5 +1,14 @@
-/**
- * datagen-v1.5-verify.js — Canonical fixture exercising all v1.5 generation primitives.
+// ── IMPORTS ──
+import * as u from "../../lib/utils/utils.js";
+/** @typedef {import("../../types").Dungeon} Config */
+
+// ── OVERVIEW ──
+/*
+ * NAME:       datagen-v1.5-verify
+ * PURPOSE:    Canonical v1.5 fixture — active-days, conversion window, touchpoint cap, auto-sort, determinism
+ * SCALE:      500 users, ~60K events, 30 days
+ * EVENTS (4): page view, click, sign up, purchase
+ * FUNNELS (1): page view → sign up → purchase (50%, 14d window)
  *
  * Used by:
  *   - tests/active-days.test.js          → asserts distinct-day distribution shape
@@ -8,21 +17,21 @@
  *   - tests/datagen-determinism.test.js  → byte-equal verification across runs
  *   - tests/auto-sort.test.js            → relies on sorted output
  *
- * Realistic small-scale config: 500 users × 30 days × 4 events/day. Includes
- * `hasCampaigns: true` + an explicit `isAttributionEvent` flagged event so the
- * touchpoint cap has eligible candidates beyond the default ~25% legacy fallback.
+ * Realistic small-scale config with `hasCampaigns: true` + an explicit
+ * `isAttributionEvent` flagged event so the touchpoint cap has eligible
+ * candidates beyond the default ~25% legacy fallback.
  *
  * **DO NOT enable `engagementDecay`** — it interacts with `avgActiveDaysPerUser`
  * by dropping events on late picked days, eroding the effective active-day count
  * below the configured target. See HOOKS.md §2.5.
  */
 
-import * as u from "../../lib/utils/utils.js";
-
+// ── SCALE ──
 const SEED = "datagen-v1.5-verify";
 u.initChance(SEED);
 
-/** @type {import('../../types').Dungeon} */
+// ── CONFIG ──
+/** @type {Config} */
 const config = {
 	seed: SEED,
 	// Pin the dataset window for full determinism (independent of run date).
@@ -34,9 +43,13 @@ const config = {
 	avgActiveDaysPerUser: 6,
 	// v1.5 attribution cap — explicit (default is also 10).
 	maxTouchpointsPerUser: 10,
-	hasCampaigns: true,
-	hasSessionIds: true,
-	avgDevicePerUser: 1,
+	switches: {
+		hasCampaigns: true,
+		hasSessionIds: true,
+	},
+	identity: {
+		avgDevicePerUser: 1,
+	},
 	autoSortAfterEverything: true,
 	events: [
 		{ event: "page view", weight: 5, isAttributionEvent: true },

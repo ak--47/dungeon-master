@@ -2,6 +2,49 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.5.1 — 2026-05-20
+
+Quality + ergonomics release. No new analytical capabilities — fixes accumulated rough edges around concurrency, accuracy, profiles, and config ergonomics that surfaced after 1.5.0 shipped. Adds a generator-side retention shaper, exposes a config sub-object API for cleaner dungeon files, and restructures all 48 shipped dungeons to a canonical layout. Top-level keys keep working for back-compat.
+
+### Added
+
+- **`credentials` / `switches` / `identity` config sub-objects.** New ergonomic shape for grouping related dungeon keys: `credentials: { token, region, serviceAccount, serviceSecret, projectId }`, `switches: { hasLocation, hasCampaigns, hasSessionIds, hasAvatar, isAnonymous, ... }`, `identity: { avgDevicePerUser, sessionTimeout }`. `mergeConfigSubObjects` hoists sub-object values into top-level keys at validation time; top-level still wins when both set (with a verbose warn). Old flat top-level keys keep working — back-compat suite in `tests/unit/config-restructure.test.js`.
+- **`retentionCurve` config knob.** Generator-side retention shaper. Accepts an array of `{day, retention}` waypoints; the engine interpolates log-linearly to drop late events per user based on first-event age. Independent of `engagementDecay`. Enables analytical-style retention shapes (D1 80% → D7 50% → D30 20%) at dungeon-config level instead of via hooks.
+- **Per-macro `avgActiveDaysPerUser` defaults.** When `avgActiveDaysPerUser` is unset, defaults derived per macro: steady=15, growth=10, viral=20, decline=5, flat=20 (numDays/4 cap). Removes the need to hand-tune for every macro.
+- **`COUNT_DISTINCT` aggregation in `emulateBreakdown`** (`type: 'distinctCount'`). Mirrors Mixpanel's count-distinct measure for cohort sizing / unique-user breakdowns.
+- **`userSeed` config knob.** Separate distinct_id seed from the main `seed`. Lets you regenerate a dataset with a different event distribution while keeping the user pool stable across runs — useful for incremental data layering.
+- **`result.profilesPushed`** count exposed on the `Result` object. Reports how many profiles actually got pushed to `/engage` after `_drop` filtering.
+- **`runWithDataset(begin, now, fn)`** API for explicit dataset-window scoping (rare — most callers don't need this; in-process `generate()` calls now auto-scope via AsyncLocalStorage).
+
+### Changed
+
+- **Anonymous non-converters get `_drop: true` stamped on their profile.** Real-world Mixpanel `$identify` semantics — profiles only exist for users who actually identified. Born-in-dataset users who never reach an `isAuthEvent` step in their first funnel are anonymous: events still flow (tied to `device_id`), but no profile is pushed to `/engage`. `userProfilesData` still contains every profile object; `mixpanel-sender` filters `_drop:true` before push. Pre-existing users are considered already-identified and never get `_drop`. The `everything` hook can rescue a profile by `delete meta.profile._drop`.
+- **`numEvents` more accurate.** Removed dice rolls + `0.714` magic dampening from per-user budget computation; replaced with a clean `chance.normal(mean=budget, dev=budget/3)`. Old behavior overshot the target by 1.6-2x; new behavior matches the configured rate within ±3% across all 5 macros at 50K target. **If you previously tuned `avgEventsPerUserPerDay` around the old overshoot, expect ~40-60% fewer events at the same rate.** Recompute targets.
+- **Default `Platform` device property removed.** 59 entries commented out in `lib/templates/defaults.js` (15 iOS + 15 Android + 29 Desktop). `os` already carries the platform signal. If a dungeon reads `Platform` in hooks or downstream, you'll see undefined — define `Platform` explicitly in your event properties to opt back in.
+- **`hasAnonIds` deprecated.** Use `identity.avgDevicePerUser: 1` instead. The deprecated alias still works through 1.5.x: when `hasAnonIds: true` is set without an explicit `avgDevicePerUser`, the validator promotes to `avgDevicePerUser: 1`.
+- **`DATASET_NOW` / `DATASET_BEGIN` scoped via AsyncLocalStorage.** No more module-level mutable globals. In-process concurrent `generate()` calls with different `datasetStart`/`datasetEnd` windows now produce isolated, in-window output. Legacy `setDatasetNow` / `setDatasetBegin` setters remain as back-compat shims.
+- **UTC bare-date parsing** for `datasetStart` / `datasetEnd`. `"2026-01-01"` parses as `2026-01-01T00:00:00Z`, not as local-midnight (which shifted the window by UTC offset).
+- **Quiet by default.** `verbose: false` (default) now gates all warnings, info logs, and dataset-context messages. Set `verbose: true` to opt back into the chatty output.
+- **GCS upload retry hardening.** 10 retries with exponential backoff, 10-minute total budget. Handles transient cloud upload failures without giving up.
+- **>64K user runs no longer crash V8.** Internal data structure swap (`Array` for sparse-keyed maps) eliminates V8 limit hit at high user counts.
+- **All 48 shipped dungeons restructured to canonical layout.** Sections in fixed order: IMPORTS → OVERVIEW → HOOK STORIES → SCALE → KNOBS → DATA ARRAYS → HOOK STATE → HELPER FUNCTIONS → CONFIG. Hook stories preserve full per-hook Mixpanel report docs; `config.hook` becomes a thin dispatcher delegating to per-type helpers (`handleEventHooks`, `handleEverythingHooks`, etc.). Zero behavioral changes — every dungeon's seed-pinned output is unchanged.
+- **All 49 dungeons + ~18 test fixtures migrated to the new sub-object API.** Cosmetic adoption only — `mergeConfigSubObjects` already supported both shapes since Phase 1.
+
+### Fixed
+
+- **Standalone events now stamp `config.superProps`.** Was silently `{}` before — masked by the validator's auto-funnel pre-fix in 1.5.0. Surfaced by the `numEvents` overshoot fix when the `useFunnel` gate started routing more users to the standalone path.
+- **Born-late funnel auth events past `FIXED_NOW` no longer set `userAuthTimeMs`.** Engine drops the event at storage time (`funnels.js:640`) but previously still recorded the auth-time, marking the user as authed without a real sign_up event. Fix gates `authTimeMs` on `!_drop` (`funnels.js:328`). Affected 1-2% of users in test runs.
+- **Pre-existing user events strict-clamp at `FIXED_BEGIN`.** Born-outside-window users no longer leak events into the pre-dataset window via TimeSoup's sub-window distribution.
+
+### Docs
+
+- **HOOKS.md targeted edits.** Recipe 4.25 (First-Touch Attribution Bias) gains a v1.5 note pointing to Recipe 4.26's OVERWRITE pattern when `hasCampaigns: true`. Atom catalog gains a footnote that `injectBetween` / `injectBurst` / `injectAfterEvent` / `injectOnNewDays` no longer require trailing `record.sort(...)` calls — covered by `autoSortAfterEverything: true` default since 1.5.0.
+- **`docs/guides/1.5.1-upgrade-guide.md`** — TL;DR + per-change action items for existing dungeon authors.
+
+### Infra
+
+- 95+ commits across the branch; 1269 vitest tests pass; engine canary 10/10; engine-shape full sweep 194/194; smoke test 20/20 verticals; 5-vertical hook verifier matches Sprint 1 baseline (ecommerce 10/10, fitness 12/12, sass 10/10, social 11/11, dating 11/13 pre-existing small-mode artifacts).
+
 ## 1.5.0 — 2026-05-08
 
 The "count and verify like Mixpanel does" release. Aligns BOTH the data generation engine AND the verifier with Mixpanel's actual counting semantics — greedy single-pass funnels, distinct-period frequency counting, null-aware aggregation, touchpoint-capped attribution, identity merge, retention, sessions, time-bucketed trends. Removes `bunchIntoSessions`, the root cause of funnel ordering corruption since 1.0.

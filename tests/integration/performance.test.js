@@ -62,18 +62,20 @@ describe('Performance Optimizations', () => {
             const config = {
                 numUsers: 10,
                 numEvents: 50,
-                hasLocation: true,
-                hasIOSDevices: true,
-                hasAndroidDevices: true,
-                hasDesktopDevices: true,
-                hasBrowser: true,
-                hasCampaigns: true,
+                switches: {
+                    hasLocation: true,
+                    hasIOSDevices: true,
+                    hasAndroidDevices: true,
+                    hasDesktopDevices: true,
+                    hasBrowser: true,
+                    hasCampaigns: true,
+                },
                 seed: 'test-seed'
             };
-            
+
             const validatedConfig = validateDungeonConfig(config);
             const context = createContext(validatedConfig);
-            
+
             // Defaults should return arrays immediately (already weighted)
             const locationsUsers = context.defaults.locationsUsers();
             const locationsEvents = context.defaults.locationsEvents();
@@ -96,8 +98,10 @@ describe('Performance Optimizations', () => {
             const config = {
                 numUsers: 10,
                 numEvents: 50,
-                hasLocation: true,
-                hasIOSDevices: true,
+                switches: {
+                    hasLocation: true,
+                    hasIOSDevices: true,
+                },
                 seed: 'test-seed'
             };
             
@@ -175,7 +179,7 @@ describe('Performance Optimizations', () => {
             const config = {
                 numUsers: 10,
                 numEvents: 50,
-                hasLocation: true,
+                switches: { hasLocation: true },
                 datasetStart: '2024-01-01T00:00:00Z',
                 datasetEnd: '2024-04-01T00:00:00Z',
                 seed: 'test-seed'
@@ -212,7 +216,7 @@ describe('Performance Optimizations', () => {
             const config = {
                 numUsers: 10,
                 numEvents: 50,
-                hasLocation: true,
+                switches: { hasLocation: true },
                 seed: 'test-seed'
             };
             
@@ -279,8 +283,10 @@ describe('Performance Optimizations', () => {
             const config = {
                 numUsers: 50,
                 numEvents: 200,
-                hasLocation: true,
-                hasIOSDevices: true,
+                switches: {
+                    hasLocation: true,
+                    hasIOSDevices: true,
+                },
                 seed: 'perf-test-seed'
             };
             

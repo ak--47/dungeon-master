@@ -1,55 +1,45 @@
-// ── TWEAK THESE ──
-const SEED = "dm4-fitness";
-const num_days = 120;
-const num_users = 10_000;
-const avg_events_per_user_per_day = 1.2;
-let token = "your-mixpanel-token";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
-
-dayjs.extend(utc);
-const chance = u.initChance(SEED);
 /** @typedef  {import("../../types").Dungeon} Config */
 
-/**
- * ═══════════════════════════════════════════════════════════════
- * DATASET OVERVIEW
- * ═══════════════════════════════════════════════════════════════
+// ── OVERVIEW ──
+/*
+ * NAME:       FitQuest
+ * APP:        Fitness & wellness app for workout tracking, meal planning,
+ *             social fitness challenges, and AI coaching. Core loop: sign
+ *             up → plan workout → complete workout → track progress.
+ *             Revenue: free / monthly ($12.99, 7-day trial) / annual
+ *             ($99.99) / family ($149.99).
+ * SCALE:      10,000 users, ~1.4M events, 121 days (2026-01-01 → 2026-05-01)
+ * CORE LOOP:  account created → workout planned → workout completed → progress checked
  *
- * FitQuest — a fitness & wellness app for workout tracking, meal
- * planning, social fitness challenges, and AI coaching.
+ * EVENTS (18):
+ *   workout completed (8) > app session (8) > meal logged (7) > workout planned (6)
+ *   > progress checked (5) > notification received (5) > leaderboard viewed (4)
+ *   > nutrition plan viewed (4) > challenge joined (3) > coach session (3)
+ *   > heart rate recorded (3) > achievement unlocked (2) > friend added (2)
+ *   > challenge completed (2) > subscription managed (2) > profile updated (2)
+ *   > account created (1) > account deactivated (1)
  *
- * - 5,000 users over 120 days, ~600K events
- * - 5 personas: athlete (10%), casual_exerciser (40%),
- *   new_year_resolver (25%), social_motivator (15%), coach (10%)
- * - Core loop: sign up → plan workout → complete workout → track progress
- * - Revenue: free, monthly ($12.99, 7-day trial), annual ($99.99), family ($149.99)
+ * FUNNELS (5):
+ *   - Onboarding:           account created → profile updated → workout planned → workout completed (45%)
+ *   - Workout Loop:         workout planned → workout completed → progress checked (45%, reentry)
+ *   - Social Engagement:    friend added → leaderboard viewed → challenge joined (35%)
+ *   - Challenge Completion: challenge joined → workout completed → challenge completed → achievement unlocked (30%)
+ *   - Coaching Path:        coach session → workout planned → workout completed → progress checked (50%)
  *
- * Advanced Features:
- * - Personas: 5 archetypes with distinct engagement and churn profiles
- * - Subscription: 4-tier revenue lifecycle with trial conversion
- * - Attribution: 5 campaign sources with persona biases
- * - Engagement Decay: step model with 30-day half-life
- * - Features: ai_coach (day 35) and group_challenges (day 55)
- *
- * Key entities:
- * - workout_type: strength/cardio/yoga/hiit/running/cycling
- * - fitness_level: beginner/intermediate/advanced/expert
- * - coaching_mode: self_guided vs ai_assisted (driven by Feature rollout)
- * - challenge_mode: solo vs group (driven by Feature rollout)
+ * USER PROPS:  fitness_level, segment, streak_days, total_workouts, preferred_workout, goal, Platform, workout_type, subscription_tier
+ * SUPER PROPS: Platform, workout_type, subscription_tier
+ * SCD PROPS:   fitness_level (beginner/intermediate/advanced/elite, monthly fuzzy, max 8)
+ * GROUPS:      none
  */
 
-/**
- * ═══════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (10 hooks)
- * ═══════════════════════════════════════════════════════════════
- *
+// ── HOOK STORIES ──
+/*
  * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable
  * via raw-prop breakdowns (HOD, day, segment) or behavioral cohorts.
  *
@@ -310,31 +300,309 @@ const chance = u.initChance(SEED);
  * Workout Magic Number        | over D30+ post/pre  | 1x       | 0.29x     | -71%
  */
 
+// ── SCALE ──
+const SEED = "dm4-fitness";
+const NUM_USERS = 10_000;
+const DATASET_START = "2026-01-01T00:00:00Z";
+const DATASET_END = "2026-05-01T23:59:59Z";
+const EVENTS_PER_DAY = 1.2;
+const token = process.env.MP_TOKEN || "your-mixpanel-token";
+
+const chance = u.initChance(SEED);
+
+// ── KNOBS (tweak these to reshape stories) ──
+const MORNING_HOUR_START = 5;
+const MORNING_HOUR_END = 9;
+const MORNING_CALORIE_MULT = 1.3;
+
+const AI_LAUNCH_DAY = 35;
+const AI_ADOPTION_LIKELIHOOD = 40;
+const AI_DURATION_MULT = 1.2;
+
+const GROUP_LAUNCH_DAY = 55;
+const GROUP_ADOPTION_LIKELIHOOD = 30;
+
+const STREAK_MIN_WORKOUTS = 2;
+const STREAK_LINEAR_CAP = 3;     // workouts 2-4 (count - 1 capped to 3) → 1 achievement each
+const STREAK_SUPER_LINEAR_MULT = 4; // workouts 5+ → 4 achievements each
+
+const SOCIAL_FRIEND_THRESHOLD = 3;
+const SOCIAL_CHALLENGE_CLONE_FACTOR = 0.5;
+
+const RESOLVER_EVENT_THRESHOLD = 30;
+const RESOLVER_CLIFF_DAYS = 14;
+const RESOLVER_DROP_LIKELIHOOD = 70;
+
+const COACH_SESSION_SATISFACTION_MIN = 4.0;
+const COACH_SESSION_SATISFACTION_MAX = 5.0;
+
+const COACH_TOTAL_WORKOUTS_MIN = 200;
+const COACH_TOTAL_WORKOUTS_MAX = 500;
+const COACH_STREAK_DAYS_MIN = 60;
+const COACH_STREAK_DAYS_MAX = 365;
+
+const ANNUAL_FUNNEL_FREE_DROP_LIKELIHOOD = 30;
+
+const TTC_ANNUAL_FACTOR = 0.77;
+const TTC_FREE_FACTOR = 1.25;
+
+const WORKOUT_SWEET_MIN = 12;
+const WORKOUT_SWEET_MAX = 14;
+const WORKOUT_OVER_THRESHOLD = 15;
+const WORKOUT_DURATION_BOOST = 1.35;
+const WORKOUT_OVER_CUTOFF_DAYS = 30;
+const WORKOUT_OVER_DROP_LIKELIHOOD = 65;
+
+// ── HELPER FUNCTIONS ──
+function handleUserHooks(record) {
+	// H7: COACH PROFILE ENRICHMENT — coach segment users get high
+	// total_workouts + streak_days. Also assign subscription_tier by segment.
+	if (record.segment === "coach") {
+		record.total_workouts = chance.integer({ min: COACH_TOTAL_WORKOUTS_MIN, max: COACH_TOTAL_WORKOUTS_MAX });
+		record.streak_days = chance.integer({ min: COACH_STREAK_DAYS_MIN, max: COACH_STREAK_DAYS_MAX });
+	}
+	// Subscription tier: athletes/coaches → annual/family; social → monthly; casual/resolver → mostly free
+	if (record.segment === "athlete") {
+		record.subscription_tier = chance.pickone(["annual", "annual", "family", "monthly"]);
+	} else if (record.segment === "coach") {
+		record.subscription_tier = chance.pickone(["annual", "family", "family"]);
+	} else if (record.segment === "social") {
+		record.subscription_tier = chance.pickone(["monthly", "monthly", "annual", "free"]);
+	} else if (record.segment === "resolver") {
+		record.subscription_tier = chance.pickone(["free", "free", "free", "monthly"]);
+	} else {
+		record.subscription_tier = chance.pickone(["free", "free", "monthly"]);
+	}
+	return record;
+}
+
+function handleFunnelPostHooks(record, meta) {
+	// H9: WORKOUT LOOP TIME-TO-CONVERT — Annual/family complete 1.3x faster
+	// (factor 0.77); Free 1.25x slower (factor 1.25).
+	const tier = meta?.profile?.subscription_tier;
+	if (Array.isArray(record) && record.length > 1) {
+		const factor = (
+			tier === "annual" || tier === "family" ? TTC_ANNUAL_FACTOR :
+			tier === "free" ? TTC_FREE_FACTOR :
+			1.0
+		);
+		if (factor !== 1.0) {
+			for (let i = 1; i < record.length; i++) {
+				const prev = dayjs(record[i - 1].time);
+				const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+				record[i].time = prev.add(newGap, "milliseconds").toISOString();
+			}
+		}
+	}
+	return record;
+}
+
+function handleEverythingHooks(record, meta) {
+	const datasetStart = dayjs.unix(meta.datasetStart);
+	let events = record;
+	if (!events.length) return record;
+
+	// ── SUPERPROP STAMPING ──────────────────────────
+	// Stamp superProps from profile so they are consistent per user.
+	if (meta && meta.profile) {
+		const p = meta.profile;
+		events.forEach(e => {
+			if (p.Platform) e.Platform = p.Platform;
+			if (p.workout_type) e.workout_type = p.workout_type;
+			if (p.subscription_tier) e.subscription_tier = p.subscription_tier;
+		});
+	}
+
+	// HOOK 1: MORNING WORKOUT BOOST — 5AM-9AM UTC workouts get
+	// calories_burned 1.3x. No flag — analyst breaks down by HOD.
+	events.forEach(e => {
+		if (e.event === "workout completed") {
+			const hour = new Date(e.time).getUTCHours();
+			if (hour >= MORNING_HOUR_START && hour < MORNING_HOUR_END && e.calories_burned) {
+				e.calories_burned = Math.floor(e.calories_burned * MORNING_CALORIE_MULT);
+			}
+		}
+	});
+
+	// ── HOOK 2: POST-LAUNCH AI COACHING LIFT ────────────
+	// After day 35, ~40% of workouts switch to ai_assisted coaching,
+	// then ai_assisted workouts get 1.2x duration.
+	const AI_LAUNCH = datasetStart.add(AI_LAUNCH_DAY, "days");
+	events.forEach(e => {
+		if ((e.event === "workout completed" || e.event === "workout planned") &&
+			dayjs(e.time).isAfter(AI_LAUNCH)) {
+			// Adopt ai_assisted for ~40% of post-launch workouts
+			if (chance.bool({ likelihood: AI_ADOPTION_LIKELIHOOD })) {
+				e.coaching_mode = "ai_assisted";
+			}
+			// AI-assisted workouts get 1.2x duration
+			if (e.coaching_mode === "ai_assisted") {
+				if (e.duration_minutes) {
+					e.duration_minutes = Math.floor(e.duration_minutes * AI_DURATION_MULT);
+				}
+				if (e.planned_duration_minutes) {
+					e.planned_duration_minutes = Math.floor(e.planned_duration_minutes * AI_DURATION_MULT);
+				}
+			}
+		}
+	});
+
+	// ── GROUP CHALLENGES ADOPTION ────────────────────
+	// After day 55, ~30% of challenge events switch to group mode.
+	const GROUP_LAUNCH = datasetStart.add(GROUP_LAUNCH_DAY, "days");
+	events.forEach(e => {
+		if ((e.event === "challenge joined" || e.event === "workout completed") &&
+			dayjs(e.time).isAfter(GROUP_LAUNCH) &&
+			chance.bool({ likelihood: GROUP_ADOPTION_LIKELIHOOD })) {
+			e.challenge_mode = "group";
+		}
+	});
+
+	// ── HOOK 8: ANNUAL SUBSCRIBER CONVERSION FILTER ─
+	// Free/monthly-tier users drop ~30% of "progress checked"
+	// (last step of Workout Loop funnel) to simulate lower conversion.
+	if (meta && meta.profile) {
+		const tier = meta.profile.subscription_tier;
+		if (tier !== "annual" && tier !== "family" && chance.bool({ likelihood: ANNUAL_FUNNEL_FREE_DROP_LIKELIHOOD })) {
+			record = record.filter(e => e.event !== "progress checked");
+			events = record;
+		}
+	}
+
+	// ── HOOK 3: STREAK RETENTION ─────────────────────
+	// Users with >=2 workouts get streak_days updated and
+	// cloned achievement events. Achievements scale super-
+	// linearly: 1 per workout for workouts 2-4, then 4 per
+	// workout beyond that.
+	const workoutEvents = events.filter(e => e.event === "workout completed");
+	if (workoutEvents.length >= STREAK_MIN_WORKOUTS) {
+		// Update profile streak_days via a profile update event
+		if (meta && meta.profile) {
+			meta.profile.streak_days = workoutEvents.length;
+		}
+
+		// Super-linear achievement scaling:
+		// workouts 2-4: 1 achievement each
+		// workouts 5+: 4 achievements each
+		const templateAchievement = events.find(e => e.event === "achievement unlocked");
+		if (templateAchievement) {
+			let achievementCount = Math.min(workoutEvents.length - 1, STREAK_LINEAR_CAP); // 1 each for workouts 2-4
+			if (workoutEvents.length > 4) {
+				achievementCount += (workoutEvents.length - 4) * STREAK_SUPER_LINEAR_MULT; // 4 each for workouts 5+
+			}
+			for (let a = 0; a < achievementCount; a++) {
+				const srcIdx = Math.min(a, workoutEvents.length - 1);
+				const sourceEvent = workoutEvents[srcIdx];
+				events.push({
+					...templateAchievement,
+					time: dayjs(sourceEvent.time).add(chance.integer({ min: 1, max: 60 }), "minutes").toISOString(),
+					user_id: sourceEvent.user_id,
+					achievement_type: "streak_milestone",
+					streak_days_at_unlock: a + 2,
+				});
+			}
+		}
+	}
+
+	// ── HOOK 4: SOCIAL CHALLENGE COMPLETION ──────────
+	// Users with >=3 friend_added events get 1.5x challenge completions.
+	const friendCount = events.filter(e => e.event === "friend added").length;
+	if (friendCount >= SOCIAL_FRIEND_THRESHOLD) {
+		const templateChallenge = events.find(e => e.event === "challenge completed");
+		if (templateChallenge) {
+			const challengeCompletions = events.filter(e => e.event === "challenge completed");
+			const extraCount = Math.max(1, Math.floor(challengeCompletions.length * SOCIAL_CHALLENGE_CLONE_FACTOR));
+			for (let i = 0; i < extraCount; i++) {
+				const source = challengeCompletions[i % challengeCompletions.length];
+				events.push({
+					...templateChallenge,
+					time: dayjs(source.time).add(chance.integer({ min: 1, max: 48 }), "hours").toISOString(),
+					user_id: source.user_id,
+					challenge_type: source.challenge_type,
+					completion_pct: chance.integer({ min: 80, max: 100 }),
+				});
+			}
+		}
+	}
+
+	// ── HOOK 5: RESOLVER CHURN CLIFF ─────────────────
+	// Resolver segment users with <30 events lose 70% after day 14.
+	if (meta && meta.profile && meta.profile.segment === "resolver" && events.length < RESOLVER_EVENT_THRESHOLD) {
+		const CHURN_CLIFF = datasetStart.add(RESOLVER_CLIFF_DAYS, "days");
+		for (let i = events.length - 1; i >= 0; i--) {
+			const eventTime = dayjs(events[i].time);
+			if (eventTime.isAfter(CHURN_CLIFF) && chance.bool({ likelihood: RESOLVER_DROP_LIKELIHOOD })) {
+				events.splice(i, 1);
+			}
+		}
+	}
+
+	// HOOK 6: COACH SESSION QUALITY — coach-session satisfaction 4-5.
+	const hasCoachSessions = events.some(e => e.event === "coach session");
+	if (hasCoachSessions) {
+		events.forEach(e => {
+			if (e.event === "coach session") {
+				e.satisfaction_score = chance.floating({ min: COACH_SESSION_SATISFACTION_MIN, max: COACH_SESSION_SATISFACTION_MAX, fixed: 1 });
+			}
+		});
+	}
+
+	// HOOK 10: WORKOUT-COUNT MAGIC NUMBER (no flags)
+	// Sweet 12-14 workouts → +35% on workout duration_minutes (peak
+	// progression). Over 15+ → drop 65% of post-day-30 non-workout
+	// events (overtraining → churn). Workout events are preserved
+	// so the bucket categorization stays consistent.
+	const workoutCount = events.filter(e => e.event === "workout completed").length;
+	if (workoutCount >= WORKOUT_SWEET_MIN && workoutCount <= WORKOUT_SWEET_MAX) {
+		events.forEach(e => {
+			if (e.event === "workout completed" && typeof e.duration_minutes === "number") {
+				e.duration_minutes = Math.round(e.duration_minutes * WORKOUT_DURATION_BOOST);
+			}
+		});
+	} else if (workoutCount >= WORKOUT_OVER_THRESHOLD) {
+		const day30 = datasetStart.add(WORKOUT_OVER_CUTOFF_DAYS, "days");
+		const preserveEvents = new Set(["workout completed", "progress checked"]);
+		for (let i = events.length - 1; i >= 0; i--) {
+			if (!preserveEvents.has(events[i].event) &&
+				dayjs(events[i].time).isAfter(day30) && chance.bool({ likelihood: WORKOUT_OVER_DROP_LIKELIHOOD })) {
+				events.splice(i, 1);
+			}
+		}
+	}
+
+	return record;
+}
+
+// ── CONFIG ──
 /** @type {Config} */
 const config = {
 	version: 2,
-	token,
 	seed: SEED,
-	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-05-01T23:59:59Z",
-	// numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
-	hasAnonIds: true,
-	avgDevicePerUser: 3,
-	hasSessionIds: true,
+	datasetStart: DATASET_START,
+	datasetEnd: DATASET_END,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	format: "json",
 	gzip: true,
-	alsoInferFunnels: false,
-	hasLocation: true,
-	hasAndroidDevices: true,
-	hasIOSDevices: true,
-	hasDesktopDevices: false,
-	hasBrowser: false,
-	hasCampaigns: false,
-	isAnonymous: false,
-	hasAdSpend: false,
-	hasAvatar: true,
+	credentials: {
+		token,
+	},
+	switches: {
+		hasSessionIds: true,
+		alsoInferFunnels: false,
+		hasLocation: true,
+		hasAndroidDevices: true,
+		hasIOSDevices: true,
+		hasDesktopDevices: false,
+		hasBrowser: false,
+		hasCampaigns: false,
+		isAnonymous: false,
+		hasAdSpend: false,
+		hasAvatar: true,
+	},
+	identity: {
+		avgDevicePerUser: 3,
+	},
 	concurrency: 1,
 	writeToDisk: false,
 	scdProps: {
@@ -656,234 +924,10 @@ const config = {
 		reactivationChance: 0.02,
 	},
 
-	// ── Hook Function ──────────────────────────────────────
-	hook: function (record, type, meta) {
-		// HOOK 7: COACH PROFILE ENRICHMENT (user) — coach segment users
-		// get high total_workouts + streak_days.
-		// Also assign subscription_tier by segment (replacing deprecated subscription feature).
-		if (type === "user") {
-			if (record.segment === "coach") {
-				record.total_workouts = chance.integer({ min: 200, max: 500 });
-				record.streak_days = chance.integer({ min: 60, max: 365 });
-			}
-			// Subscription tier: athletes/coaches → annual/family; social → monthly; casual/resolver → mostly free
-			if (record.segment === "athlete") {
-				record.subscription_tier = chance.pickone(["annual", "annual", "family", "monthly"]);
-			} else if (record.segment === "coach") {
-				record.subscription_tier = chance.pickone(["annual", "family", "family"]);
-			} else if (record.segment === "social") {
-				record.subscription_tier = chance.pickone(["monthly", "monthly", "annual", "free"]);
-			} else if (record.segment === "resolver") {
-				record.subscription_tier = chance.pickone(["free", "free", "free", "monthly"]);
-			} else {
-				record.subscription_tier = chance.pickone(["free", "free", "monthly"]);
-			}
-		}
-
-		// HOOK 9 (T2C): WORKOUT LOOP TIME-TO-CONVERT (funnel-post)
-		// Annual subscribers complete the Workout Loop funnel 1.3x faster
-		// (factor 0.77); Free users 1.25x slower (factor 1.25).
-		if (type === "funnel-post") {
-			const tier = meta?.profile?.subscription_tier;
-			if (Array.isArray(record) && record.length > 1) {
-				const factor = (
-					tier === "annual" || tier === "family" ? 0.77 :
-					tier === "free" ? 1.25 :
-					1.0
-				);
-				if (factor !== 1.0) {
-					for (let i = 1; i < record.length; i++) {
-						const prev = dayjs(record[i - 1].time);
-						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-						record[i].time = prev.add(newGap, "milliseconds").toISOString();
-					}
-				}
-			}
-		}
-
-		// (HOOK 1 & 2 moved to everything hook — temporal and hour checks
-		// must run after bunchIntoSessions redistributes timestamps)
-
-		// ── EVERYTHING HOOKS ─────────────────────────────────
-		if (type === "everything") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			let events = record;
-			if (!events.length) return record;
-
-			// ── SUPERPROP STAMPING ──────────────────────────
-			// Stamp superProps from profile so they are consistent per user.
-			if (meta && meta.profile) {
-				const p = meta.profile;
-				events.forEach(e => {
-					if (p.Platform) e.Platform = p.Platform;
-					if (p.workout_type) e.workout_type = p.workout_type;
-					if (p.subscription_tier) e.subscription_tier = p.subscription_tier;
-				});
-			}
-
-			// HOOK 1: MORNING WORKOUT BOOST — 5AM-9AM UTC workouts get
-			// calories_burned 1.3x. No flag — analyst breaks down by HOD.
-			events.forEach(e => {
-				if (e.event === "workout completed") {
-					const hour = new Date(e.time).getUTCHours();
-					if (hour >= 5 && hour < 9 && e.calories_burned) {
-						e.calories_burned = Math.floor(e.calories_burned * 1.3);
-					}
-				}
-			});
-
-			// ── HOOK 2: POST-LAUNCH AI COACHING LIFT ────────────
-			// After day 35, ~40% of workouts switch to ai_assisted coaching,
-			// then ai_assisted workouts get 1.2x duration.
-			// (Replaces deprecated 'features' config; temporal check in everything per L1)
-			const AI_LAUNCH = datasetStart.add(35, "days");
-			events.forEach(e => {
-				if ((e.event === "workout completed" || e.event === "workout planned") &&
-					dayjs(e.time).isAfter(AI_LAUNCH)) {
-					// Adopt ai_assisted for ~40% of post-launch workouts
-					if (chance.bool({ likelihood: 40 })) {
-						e.coaching_mode = "ai_assisted";
-					}
-					// AI-assisted workouts get 1.2x duration
-					if (e.coaching_mode === "ai_assisted") {
-						if (e.duration_minutes) {
-							e.duration_minutes = Math.floor(e.duration_minutes * 1.2);
-						}
-						if (e.planned_duration_minutes) {
-							e.planned_duration_minutes = Math.floor(e.planned_duration_minutes * 1.2);
-						}
-					}
-				}
-			});
-
-			// ── GROUP CHALLENGES ADOPTION ────────────────────
-			// After day 55, ~30% of challenge events switch to group mode.
-			// (Replaces deprecated 'features' config)
-			const GROUP_LAUNCH = datasetStart.add(55, "days");
-			events.forEach(e => {
-				if ((e.event === "challenge joined" || e.event === "workout completed") &&
-					dayjs(e.time).isAfter(GROUP_LAUNCH) &&
-					chance.bool({ likelihood: 30 })) {
-					e.challenge_mode = "group";
-				}
-			});
-
-			// ── HOOK 8: ANNUAL SUBSCRIBER CONVERSION FILTER ─
-			// Free/monthly-tier users drop ~30% of "progress checked"
-			// (last step of Workout Loop funnel) to simulate lower conversion.
-			if (meta && meta.profile) {
-				const tier = meta.profile.subscription_tier;
-				if (tier !== "annual" && tier !== "family" && chance.bool({ likelihood: 30 })) {
-					record = record.filter(e => e.event !== "progress checked");
-					events = record;
-				}
-			}
-
-			// ── HOOK 3: STREAK RETENTION ─────────────────────
-			// Users with >=2 workouts get streak_days updated and
-			// cloned achievement events. Achievements scale super-
-			// linearly: 1 per workout for workouts 2-4, then 4 per
-			// workout beyond that. This amplifies the gap between
-			// high-workout segments (athlete/coach) and casual users.
-			const workoutEvents = events.filter(e => e.event === "workout completed");
-			if (workoutEvents.length >= 2) {
-				// Update profile streak_days via a profile update event
-				if (meta && meta.profile) {
-					meta.profile.streak_days = workoutEvents.length;
-				}
-
-				// Super-linear achievement scaling:
-				// workouts 2-4: 1 achievement each
-				// workouts 5+: 4 achievements each
-				const templateAchievement = events.find(e => e.event === "achievement unlocked");
-				if (templateAchievement) {
-					let achievementCount = Math.min(workoutEvents.length - 1, 3); // 1 each for workouts 2-4
-					if (workoutEvents.length > 4) {
-						achievementCount += (workoutEvents.length - 4) * 4; // 4 each for workouts 5+
-					}
-					for (let a = 0; a < achievementCount; a++) {
-						const srcIdx = Math.min(a, workoutEvents.length - 1);
-						const sourceEvent = workoutEvents[srcIdx];
-						events.push({
-							...templateAchievement,
-							time: dayjs(sourceEvent.time).add(chance.integer({ min: 1, max: 60 }), "minutes").toISOString(),
-							user_id: sourceEvent.user_id,
-							achievement_type: "streak_milestone",
-							streak_days_at_unlock: a + 2,
-						});
-					}
-				}
-			}
-
-			// ── HOOK 4: SOCIAL CHALLENGE COMPLETION ──────────
-			// Users with >=3 friend_added events get 1.5x challenge completions.
-			const friendCount = events.filter(e => e.event === "friend added").length;
-			if (friendCount >= 3) {
-				const templateChallenge = events.find(e => e.event === "challenge completed");
-				if (templateChallenge) {
-					const challengeCompletions = events.filter(e => e.event === "challenge completed");
-					const extraCount = Math.max(1, Math.floor(challengeCompletions.length * 0.5));
-					for (let i = 0; i < extraCount; i++) {
-						const source = challengeCompletions[i % challengeCompletions.length];
-						events.push({
-							...templateChallenge,
-							time: dayjs(source.time).add(chance.integer({ min: 1, max: 48 }), "hours").toISOString(),
-							user_id: source.user_id,
-							challenge_type: source.challenge_type,
-							completion_pct: chance.integer({ min: 80, max: 100 }),
-						});
-					}
-				}
-			}
-
-			// ── HOOK 5: RESOLVER CHURN CLIFF ─────────────────
-			// Resolver segment users with <30 events lose 70% after day 14.
-			if (meta && meta.profile && meta.profile.segment === "resolver" && events.length < 30) {
-				const CHURN_CLIFF = datasetStart.add(14, "days");
-				for (let i = events.length - 1; i >= 0; i--) {
-					const eventTime = dayjs(events[i].time);
-					if (eventTime.isAfter(CHURN_CLIFF) && chance.bool({ likelihood: 70 })) {
-						events.splice(i, 1);
-					}
-				}
-			}
-
-			// HOOK 6: COACH SESSION QUALITY — coach-session satisfaction 4-5.
-			const hasCoachSessions = events.some(e => e.event === "coach session");
-			if (hasCoachSessions) {
-				events.forEach(e => {
-					if (e.event === "coach session") {
-						e.satisfaction_score = chance.floating({ min: 4.0, max: 5.0, fixed: 1 });
-					}
-				});
-			}
-
-			// HOOK 10: WORKOUT-COUNT MAGIC NUMBER (no flags)
-			// Sweet 12-14 workouts → +35% on workout duration_minutes (peak
-			// progression). Over 15+ → drop 65% of post-day-30 non-workout
-			// events (overtraining → churn). Workout events are preserved
-			// so the bucket categorization stays consistent.
-			const workoutCount = events.filter(e => e.event === "workout completed").length;
-			if (workoutCount >= 12 && workoutCount <= 14) {
-				events.forEach(e => {
-					if (e.event === "workout completed" && typeof e.duration_minutes === "number") {
-						e.duration_minutes = Math.round(e.duration_minutes * 1.35);
-					}
-				});
-			} else if (workoutCount >= 15) {
-				const day30 = datasetStart.add(30, "days");
-				const preserveEvents = new Set(["workout completed", "progress checked"]);
-				for (let i = events.length - 1; i >= 0; i--) {
-					if (!preserveEvents.has(events[i].event) &&
-						dayjs(events[i].time).isAfter(day30) && chance.bool({ likelihood: 65 })) {
-						events.splice(i, 1);
-					}
-				}
-			}
-
-			return record;
-		}
-
+	hook(record, type, meta) {
+		if (type === "user") return handleUserHooks(record);
+		if (type === "funnel-post") return handleFunnelPostHooks(record, meta);
+		if (type === "everything") return handleEverythingHooks(record, meta);
 		return record;
 	},
 };

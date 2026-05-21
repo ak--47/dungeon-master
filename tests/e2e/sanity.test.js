@@ -123,7 +123,7 @@ describe.sequential('Module Integration Tests', () => {
 			seed: "simple-test",
 			writeToDisk: DATA_DIR,
 			format: 'csv',
-			hasAdSpend: false
+			switches: { hasAdSpend: false }
 
 		};
 

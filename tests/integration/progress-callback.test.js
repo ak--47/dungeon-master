@@ -226,7 +226,7 @@ describe('progress callback', () => {
 		const updates = [];
 		await generate(baseConfig({
 			onProgress: (u) => updates.push(structuredClone(u)),
-			hasAdSpend: false,
+			switches: { hasAdSpend: false },
 		}));
 
 		const stepNames = updates.filter(u => u.phase === 'step').map(u => u.step);

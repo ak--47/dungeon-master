@@ -1,56 +1,43 @@
-// ── TWEAK THESE ──
-const SEED = "meetcute";
-const num_days = 120;
-const num_users = 30_000;
-const avg_events_per_user_per_day = 1.5;
-let token = "your-mixpanel-token";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
-import * as v from "ak-tools";
-
-dayjs.extend(utc);
-const chance = u.initChance(SEED);
 /** @typedef  {import("../../types").Dungeon} Config */
 
+// ── OVERVIEW ──
 /*
- * =====================================================================================
- * DATASET OVERVIEW
- * =====================================================================================
+ * NAME:       MeetCute
+ * APP:        Swipe-based dating app (Hinge/Tinder-style) with profile prompts,
+ *             photo verification, matchmaking, messaging, premium tiers. Users
+ *             create a profile with photos and prompts, swipe on potential
+ *             matches, message, exchange numbers, and schedule dates. Premium
+ *             subscribers get boosts, super-likes, and see-who-liked-you.
+ * SCALE:      30,000 users, ~720K events, 121 days (2026-01-01 → 2026-05-01)
+ * CORE LOOP:  profile created → photo uploaded → swipe right → match received → message sent → phone number exchanged → date scheduled
  *
- * MeetCute — a swipe-based dating app (Hinge/Tinder-style) with profile
- * prompts, photo verification, matchmaking, messaging, and premium tiers.
+ * EVENTS (17):
+ *   photo uploaded (12) > swipe right (10) > swipe left (8) > app opened (8)
+ *   > message sent (6) > message received (5) > profile viewed (5) > match received (4)
+ *   > prompt answered (3) > bio updated (2) > boost activated (2)
+ *   > profile created (1) > phone number exchanged (1) > date scheduled (1)
+ *   > premium upgrade (1) > premium cancelled (1) > report user (1)
  *
- * CORE LOOP:
- * Users create a profile with photos and prompts, swipe on potential
- * matches, receive matches, message matches, exchange phone numbers,
- * and schedule dates. Premium subscribers get boosts, super-likes,
- * and see-who-liked-you.
+ * FUNNELS (4):
+ *   - Onboarding:   profile created → photo uploaded → swipe right (75%)
+ *   - Match Flow:   swipe right → match received → message sent (50%, reentry)
+ *   - Date Funnel:  message sent → phone number exchanged → date scheduled (25%, reentry)
+ *   - Monetization: app opened → boost activated → premium upgrade (20%)
  *
- * - 8,000 users over 120 days
- * - ~720,000 base events across 17 event types
- * - 4 funnels (onboarding, match flow, date funnel, monetization)
- * - 3 subscription tiers: Free, Premium, Elite
- *
- * Key entities:
- * - swipe_source: feed / discover / boost / nearby
- * - subscription: Free / Premium / Elite
- * - venue_type: coffee / dinner / drinks / activity / virtual
- * - prompt_type: icebreaker / opinion / hypothetical / personal / creative
- *
- * =====================================================================================
+ * USER PROPS:  subscription, age_range, gender, looking_for, photo_count, total_matches, total_messages_sent, profile_completeness, Platform
+ * SUPER PROPS: subscription, Platform
+ * SCD PROPS:   subscription_tier (Free/Premium/Elite, monthly fuzzy, max 6)
+ * GROUPS:      none
  */
 
+// ── HOOK STORIES ──
 /*
- * =====================================================================================
- * ANALYTICS HOOKS (10 hooks)
- * =====================================================================================
- *
  * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable via
  * behavioral cohorts, raw-prop breakdowns, or funnel analysis.
  *
@@ -232,36 +219,393 @@ const chance = u.initChance(SEED);
  * Age Range Date Conv         | date funnel 40+      | 1x       | 0.6x       | 0.6x
  */
 
+// ── SCALE ──
+const SEED = "meetcute";
+const NUM_USERS = 30_000;
+const DATASET_START = "2026-01-01T00:00:00Z";
+const DATASET_END = "2026-05-01T23:59:59Z";
+const EVENTS_PER_DAY = 1.5;
+const token = process.env.MP_TOKEN || "your-mixpanel-token";
+
+const chance = u.initChance(SEED);
+
+// ── KNOBS (tweak these to reshape stories) ──
+const PHOTO_SWEET_MIN = 2;
+const PHOTO_SWEET_MAX = 5;
+const PHOTO_OVER_THRESHOLD = 6;
+const PHOTO_OVER_SCORE_FACTOR = 0.65;
+
+const SUNDAY_EVENING_CLONES = 5;
+const SUNDAY_DAYTIME_CLONES = 2;
+
+const SUPER_LIKE_MATCH_CLONES = 3;
+
+const PREMIUM_MATCH_MULT = 2;
+const ELITE_MATCH_MULT = 4;
+
+const GHOSTING_WINDOW_HOURS = 48;
+const GHOSTING_DROP_LIKELIHOOD = 80;
+
+const BIO_PROMPT_THRESHOLD = 3;
+const BIO_PROMPT_DATE_CLONE_MULT = 3;
+
+const VDAY_WINDOW_START_DAY = 58;
+const VDAY_WINDOW_END_DAY = 63;
+const VDAY_SIGNUP_CLONES = 2;
+const VDAY_UPGRADE_CLONES = 4;
+
+const MILESTONE_WINDOW_DAYS = 14;
+const RETENTION_CUTOFF_DAYS = 30;
+const RETENTION_TARGET_PCT = 0.3;
+const OFFAPP_DROP_LIKELIHOOD = 80;
+
+const FUNNEL_TTC_ELITE = 0.71;
+const FUNNEL_TTC_FREE = 1.4;
+
+const AGE_CONV_BOOST = 1.3;
+const AGE_CONV_DROP = 0.6;
+
+// ── HELPER FUNCTIONS ──
+function handleFunnelPreHooks(record, meta) {
+	// H10: Age range affects date conversion — 25-34 +30%, 40+ -40%
+	const isDateFunnel = meta.funnel?.sequence?.includes("date scheduled");
+	if (isDateFunnel) {
+		const age = meta.profile?.age_range;
+		if (age === "25-29" || age === "30-34") {
+			record.conversionRate = Math.min(95, Math.round(record.conversionRate * AGE_CONV_BOOST));
+		} else if (age === "40+") {
+			record.conversionRate = Math.round(record.conversionRate * AGE_CONV_DROP);
+		}
+	}
+	return record;
+}
+
+function handleFunnelPostHooks(record, meta) {
+	// H9: Match Flow TTC scaled by subscription tier
+	const segment = meta?.profile?.subscription;
+	if (Array.isArray(record) && record.length > 1) {
+		const factor = (
+			segment === "Elite" ? FUNNEL_TTC_ELITE :
+			segment === "Free" ? FUNNEL_TTC_FREE :
+			1.0
+		);
+		if (factor !== 1.0) {
+			for (let i = 1; i < record.length; i++) {
+				const prev = dayjs(record[i - 1].time);
+				const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+				record[i].time = prev.add(newGap, "milliseconds").toISOString();
+			}
+		}
+	}
+	return record;
+}
+
+function handleEverythingHooks(record, meta) {
+	const datasetStart = dayjs.unix(meta.datasetStart);
+	const VDAY_WINDOW_START = datasetStart.add(VDAY_WINDOW_START_DAY, "days");
+	const VDAY_WINDOW_END = datasetStart.add(VDAY_WINDOW_END_DAY, "days");
+	const events = record;
+	if (!events || events.length === 0) return record;
+
+	const profile = meta.profile || {};
+
+	events.forEach(e => {
+		if (profile.subscription) e.subscription = profile.subscription;
+		if (profile.platform) e.platform = profile.platform;
+	});
+
+	let photoUploadCount = 0;
+	let promptAnsweredCount = 0;
+	let hasBioUpdated = false;
+	const matchEvents = [];
+	const messageSentEvents = [];
+	const superLikeEvents = [];
+	let hasPhoneExchangedEarly = false;
+	let hasDateScheduledEarly = false;
+	let firstEventTime = null;
+
+	events.forEach(event => {
+		if (!firstEventTime || dayjs(event.time).isBefore(dayjs(firstEventTime))) {
+			firstEventTime = event.time;
+		}
+		if (event.event === "photo uploaded") photoUploadCount++;
+		if (event.event === "prompt answered") promptAnsweredCount++;
+		if (event.event === "bio updated") hasBioUpdated = true;
+		if (event.event === "match received") matchEvents.push(event);
+		if (event.event === "message sent") messageSentEvents.push(event);
+		if (event.event === "swipe right" && event.is_super_like === true) superLikeEvents.push(event);
+	});
+
+	if (firstEventTime) {
+		const earlyWindow = dayjs(firstEventTime).add(MILESTONE_WINDOW_DAYS, "days");
+		events.forEach(event => {
+			const t = dayjs(event.time);
+			if (t.isBefore(earlyWindow)) {
+				if (event.event === "phone number exchanged") hasPhoneExchangedEarly = true;
+				if (event.event === "date scheduled") hasDateScheduledEarly = true;
+			}
+		});
+	}
+
+	// H1: PHOTO MAGIC NUMBER (sweet 2-5 photos → clone 2-4 extra matches)
+	// Over-6 score reduction is applied AT THE END of this hook so it also
+	// affects matches injected by H4 (premium boost).
+	if (photoUploadCount >= PHOTO_SWEET_MIN && photoUploadCount <= PHOTO_SWEET_MAX && matchEvents.length > 0) {
+		const matchTemplate = matchEvents[0];
+		matchEvents.forEach(m => {
+			const extras = chance.integer({ min: 2, max: 4 });
+			for (let i = 0; i < extras; i++) {
+				events.push({
+					...matchTemplate,
+					time: dayjs(m.time).add(chance.integer({ min: 1, max: 180 }), "minutes").toISOString(),
+					user_id: m.user_id,
+					match_score: chance.integer({ min: 60, max: 98 }),
+				});
+			}
+		});
+	}
+
+	// H2: WEEKEND SWIPE SURGE — Sunday swipes get heavy cloning
+	// to overcome the soup DOW weight deficit. Evening swipes (18-23)
+	// get 5 clones; daytime Sunday swipes get 2 clones.
+	// No flag — discover via day-of-week chart.
+	for (let idx = events.length - 1; idx >= 0; idx--) {
+		const event = events[idx];
+		if (event.event === "swipe right") {
+			const dow = new Date(event.time).getUTCDay();
+			if (dow === 0) {
+				const hr = new Date(event.time).getUTCHours();
+				const clones = (hr >= 18 && hr <= 23) ? SUNDAY_EVENING_CLONES : SUNDAY_DAYTIME_CLONES;
+				const etime = dayjs(event.time);
+				for (let c = 0; c < clones; c++) {
+					events.push({
+						...event,
+						time: etime.add(chance.integer({ min: 1, max: 60 }), "minutes").toISOString(),
+						user_id: event.user_id,
+					});
+				}
+			}
+		}
+	}
+
+	// H3: SUPER-LIKE EFFECT — clone 3 extra match events per
+	// super-like, near in time. No flag — discover via funnel
+	// "swipe right where is_super_like=true" → "match received".
+	if (superLikeEvents.length > 0) {
+		const matchTemplate = matchEvents[0] || events[0];
+		superLikeEvents.forEach(sle => {
+			for (let i = 0; i < SUPER_LIKE_MATCH_CLONES; i++) {
+				events.push({
+					...matchTemplate,
+					event: "match received",
+					time: dayjs(sle.time).add(chance.integer({ min: 5, max: 120 }), "minutes").toISOString(),
+					user_id: sle.user_id,
+					match_score: chance.integer({ min: 70, max: 99 }),
+				});
+			}
+		});
+	}
+
+	// H5: GHOSTING CHURN — users with match but no message within
+	// 48hrs lose 80% of post-match events. No flag.
+	// (runs BEFORE premium boost so injected premium matches survive)
+	if (matchEvents.length > 0) {
+		let hasTimely = false;
+		for (const m of matchEvents) {
+			const matchTime = dayjs(m.time);
+			const deadline = matchTime.add(GHOSTING_WINDOW_HOURS, "hours");
+			for (const msg of messageSentEvents) {
+				const msgTime = dayjs(msg.time);
+				if (msgTime.isAfter(matchTime) && msgTime.isBefore(deadline)) {
+					hasTimely = true;
+					break;
+				}
+			}
+			if (hasTimely) break;
+		}
+		if (!hasTimely) {
+			const earliestMatch = matchEvents.reduce((min, m) =>
+				dayjs(m.time).isBefore(dayjs(min.time)) ? m : min
+			);
+			const churnAfter = dayjs(earliestMatch.time);
+			for (let i = events.length - 1; i >= 0; i--) {
+				if (dayjs(events[i].time).isAfter(churnAfter) && chance.bool({ likelihood: GHOSTING_DROP_LIKELIHOOD })) {
+					events.splice(i, 1);
+				}
+			}
+		}
+	}
+
+	// H4: PREMIUM MATCH BOOST — Premium 2x, Elite 4x match events.
+	// Elite users also get profile-viewed events injected (see-who-liked-you).
+	// Reads subscription from profile. Runs AFTER ghosting churn so
+	// injected matches are not culled.
+	const sub = profile.subscription;
+	if ((sub === "Premium" || sub === "Elite") && matchEvents.length > 0) {
+		// Count surviving match events post-churn
+		const survivingMatches = events.filter(e => e.event === "match received");
+		const baseCount = survivingMatches.length || 1;
+		const targetMultiplier = sub === "Elite" ? ELITE_MATCH_MULT : PREMIUM_MATCH_MULT;
+		const toAdd = Math.max(0, baseCount * targetMultiplier - baseCount);
+		const matchTemplate = matchEvents[0];
+		for (let i = 0; i < toAdd; i++) {
+			const sourceMatch = survivingMatches[i % survivingMatches.length] || matchTemplate;
+			events.push({
+				...matchTemplate,
+				time: dayjs(sourceMatch.time).add(chance.integer({ min: 10, max: 240 }), "minutes").toISOString(),
+				user_id: sourceMatch.user_id,
+				match_score: chance.integer({ min: 65, max: 99 }),
+			});
+		}
+		if (sub === "Elite") {
+			const viewTemplate = events.find(e => e.event === "profile viewed") || matchTemplate;
+			survivingMatches.forEach(m => {
+				events.push({
+					...viewTemplate,
+					event: "profile viewed",
+					time: dayjs(m.time).subtract(chance.integer({ min: 10, max: 120 }), "minutes").toISOString(),
+					user_id: m.user_id,
+					viewer_source: "liked_you",
+				});
+			});
+		}
+	}
+
+	// H6: BIO + PROMPT POWER USERS — bio + 3+ prompts → 3 extra
+	// cloned date events per existing. No flag.
+	if (hasBioUpdated && promptAnsweredCount >= BIO_PROMPT_THRESHOLD) {
+		const dateEvents = events.filter(e => e.event === "date scheduled");
+		if (dateEvents.length > 0) {
+			const dateTemplate = dateEvents[0];
+			const venueTypes = ["coffee", "dinner", "drinks", "activity", "virtual"];
+			for (let i = 0; i < dateEvents.length * BIO_PROMPT_DATE_CLONE_MULT; i++) {
+				const sourceDate = dateEvents[i % dateEvents.length];
+				events.push({
+					...dateTemplate,
+					time: dayjs(sourceDate.time).add(chance.integer({ min: 1, max: 72 }), "hours").toISOString(),
+					user_id: sourceDate.user_id,
+					venue_type: chance.pickone(venueTypes),
+				});
+			}
+		}
+	}
+
+	// H7: VALENTINE'S DAY SPIKE — clone profile-created events during
+	// days 58-63 (3x volume), plus clone premium-upgrade events 5x. No flag.
+	const vdaySignups = events.filter(e =>
+		e.event === "profile created" &&
+		dayjs(e.time).isAfter(VDAY_WINDOW_START) &&
+		dayjs(e.time).isBefore(VDAY_WINDOW_END)
+	);
+	vdaySignups.forEach(signup => {
+		for (let i = 0; i < VDAY_SIGNUP_CLONES; i++) {
+			events.push({
+				...signup,
+				time: dayjs(signup.time).add(chance.integer({ min: 1, max: 48 }), "hours").toISOString(),
+				user_id: signup.user_id,
+			});
+		}
+	});
+
+	const vdayUpgrades = events.filter(e =>
+		e.event === "premium upgrade" &&
+		dayjs(e.time).isAfter(VDAY_WINDOW_START) &&
+		dayjs(e.time).isBefore(VDAY_WINDOW_END)
+	);
+	if (vdayUpgrades.length > 0) {
+		const upgradeTemplate = vdayUpgrades[0];
+		vdayUpgrades.forEach(upgrade => {
+			for (let i = 0; i < VDAY_UPGRADE_CLONES; i++) {
+				events.push({
+					...upgradeTemplate,
+					time: dayjs(upgrade.time).add(chance.integer({ min: 1, max: 24 }), "hours").toISOString(),
+					user_id: upgrade.user_id,
+					plan: upgrade.plan,
+					price_usd: upgrade.price_usd,
+				});
+			}
+		});
+	}
+
+	// H1b: PHOTO MAGIC NUMBER — over-6 score reduction (applied LAST so
+	// it also affects matches injected by H4 premium boost).
+	if (photoUploadCount >= PHOTO_OVER_THRESHOLD) {
+		events.forEach(e => {
+			if (e.event === "match received" && typeof e.match_score === "number") {
+				e.match_score = Math.max(20, Math.round(e.match_score * PHOTO_OVER_SCORE_FACTOR));
+			}
+		});
+	}
+
+	// H8: OFF-APP RETENTION — users with phone-exchanged or
+	// date-scheduled in first 14 days get extra cloned app-open + swipe
+	// events past day 30. Non-milestone users lose 80% of post-day-30
+	// events. No flag.
+	if (firstEventTime) {
+		const day30 = dayjs(firstEventTime).add(RETENTION_CUTOFF_DAYS, "days");
+		const hasEarlyMilestone = hasPhoneExchangedEarly || hasDateScheduledEarly;
+		if (hasEarlyMilestone) {
+			const appOpenedTemplate = events.find(e => e.event === "app opened") || events[0];
+			const swipeTemplate = events.find(e => e.event === "swipe right") || events[0];
+			const postDay30Events = events.filter(e => dayjs(e.time).isAfter(day30));
+			if (postDay30Events.length < events.length * RETENTION_TARGET_PCT) {
+				const retentionCount = Math.floor(events.length * RETENTION_TARGET_PCT);
+				for (let i = 0; i < retentionCount; i++) {
+					const daysAfter = chance.integer({ min: 1, max: 60 });
+					const template = chance.bool({ likelihood: 50 }) ? appOpenedTemplate : swipeTemplate;
+					events.push({
+						...template,
+						time: day30.add(daysAfter, "days").add(chance.integer({ min: 0, max: 23 }), "hours").toISOString(),
+						user_id: template.user_id,
+					});
+				}
+			}
+		} else {
+			for (let i = events.length - 1; i >= 0; i--) {
+				if (dayjs(events[i].time).isAfter(day30) && chance.bool({ likelihood: OFFAPP_DROP_LIKELIHOOD })) {
+					events.splice(i, 1);
+				}
+			}
+		}
+	}
+
+	return record;
+}
+
+// ── CONFIG ──
 /** @type {Config} */
 const config = {
 	version: 2,
-	token,
 	seed: SEED,
-	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-05-01T23:59:59Z",
-	// numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
-	hasAnonIds: true,
-	avgDevicePerUser: 2,
-	hasSessionIds: true,
+	datasetStart: DATASET_START,
+	datasetEnd: DATASET_END,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	format: "json",
 	gzip: true,
-	alsoInferFunnels: false,
-	hasLocation: true,
-	hasAndroidDevices: true,
-	hasIOSDevices: true,
-	hasDesktopDevices: false,
-	hasBrowser: false,
-	hasCampaigns: false,
-	isAnonymous: false,
-	hasAdSpend: false,
-	hasAvatar: true,
+	credentials: {
+		token,
+	},
+	switches: {
+		hasSessionIds: true,
+		alsoInferFunnels: false,
+		hasLocation: true,
+		hasAndroidDevices: true,
+		hasIOSDevices: true,
+		hasDesktopDevices: false,
+		hasBrowser: false,
+		hasCampaigns: false,
+		isAnonymous: false,
+		hasAdSpend: false,
+		hasAvatar: true,
+	},
+	identity: {
+		avgDevicePerUser: 2,
+	},
 	concurrency: 1,
 	writeToDisk: false,
 	soup: "growth",
 
-	// ── Events (17) ──────────────────────────────────────────
 	events: [
 		{
 			event: "profile created",
@@ -406,7 +750,6 @@ const config = {
 		},
 	],
 
-	// ── Funnels (4) ──────────────────────────────────────────
 	funnels: [
 		{
 			name: "Onboarding",
@@ -445,13 +788,11 @@ const config = {
 		},
 	],
 
-	// ── SuperProps ──────────────────────────────────────────
 	superProps: {
 		subscription: ["Free", "Free", "Free", "Premium", "Elite"],
 		Platform: ["ios", "ios", "android"],
 	},
 
-	// ── UserProps ──────────────────────────────────────────
 	userProps: {
 		subscription: ["Free", "Free", "Free", "Premium", "Elite"],
 		age_range: ["18-24", "25-29", "30-34", "35-39", "40+"],
@@ -464,7 +805,6 @@ const config = {
 		Platform: ["ios", "ios", "android"],
 	},
 
-	// ── SCD Props ──────────────────────────────────────────
 	scdProps: {
 		subscription_tier: {
 			values: ["Free", "Premium", "Elite"],
@@ -479,317 +819,10 @@ const config = {
 	mirrorProps: {},
 	lookupTables: [],
 
-	hook: function (record, type, meta) {
-
-		// HOOK 10: AGE RANGE AFFECTS DATE CONVERSION (funnel-pre)
-		// 25-29 / 30-34 convert 1.3x on the date funnel; 40+ at 0.6x.
-		if (type === "funnel-pre") {
-			const isDateFunnel = meta.funnel?.sequence?.includes("date scheduled");
-			if (isDateFunnel) {
-				const age = meta.profile?.age_range;
-				if (age === "25-29" || age === "30-34") {
-					record.conversionRate = Math.min(95, Math.round(record.conversionRate * 1.3));
-				} else if (age === "40+") {
-					record.conversionRate = Math.round(record.conversionRate * 0.6);
-				}
-			}
-		}
-
-		// HOOK 9 (T2C): MATCH FLOW TIME-TO-CONVERT (funnel-post)
-		// Elite users complete swipe→match→message funnel 1.4x faster
-		// (factor 0.71); Free users 1.4x slower (factor 1.4).
-		if (type === "funnel-post") {
-			const segment = meta?.profile?.subscription;
-			if (Array.isArray(record) && record.length > 1) {
-				const factor = (
-					segment === "Elite" ? 0.71 :
-					segment === "Free" ? 1.4 :
-					1.0
-				);
-				if (factor !== 1.0) {
-					for (let i = 1; i < record.length; i++) {
-						const prev = dayjs(record[i - 1].time);
-						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-						record[i].time = prev.add(newGap, "milliseconds").toISOString();
-					}
-				}
-			}
-		}
-
-		// ─── EVERYTHING-LEVEL HOOKS ──────────────────────────────────────
-
-		if (type === "everything") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			const VDAY_WINDOW_START = datasetStart.add(58, "days");
-			const VDAY_WINDOW_END = datasetStart.add(63, "days");
-			const events = record;
-			if (!events || events.length === 0) return record;
-
-			const profile = meta.profile || {};
-
-			events.forEach(e => {
-				if (profile.subscription) e.subscription = profile.subscription;
-				if (profile.platform) e.platform = profile.platform;
-			});
-
-			let photoUploadCount = 0;
-			let promptAnsweredCount = 0;
-			let hasBioUpdated = false;
-			const matchEvents = [];
-			const messageSentEvents = [];
-			const superLikeEvents = [];
-			let hasPhoneExchangedEarly = false;
-			let hasDateScheduledEarly = false;
-			let firstEventTime = null;
-
-			events.forEach(event => {
-				if (!firstEventTime || dayjs(event.time).isBefore(dayjs(firstEventTime))) {
-					firstEventTime = event.time;
-				}
-				if (event.event === "photo uploaded") photoUploadCount++;
-				if (event.event === "prompt answered") promptAnsweredCount++;
-				if (event.event === "bio updated") hasBioUpdated = true;
-				if (event.event === "match received") matchEvents.push(event);
-				if (event.event === "message sent") messageSentEvents.push(event);
-				if (event.event === "swipe right" && event.is_super_like === true) superLikeEvents.push(event);
-			});
-
-			if (firstEventTime) {
-				const earlyWindow = dayjs(firstEventTime).add(14, "days");
-				events.forEach(event => {
-					const t = dayjs(event.time);
-					if (t.isBefore(earlyWindow)) {
-						if (event.event === "phone number exchanged") hasPhoneExchangedEarly = true;
-						if (event.event === "date scheduled") hasDateScheduledEarly = true;
-					}
-				});
-			}
-
-			// HOOK 1: PHOTO MAGIC NUMBER (sweet 2-5 photos → clone 2-4 extra matches)
-			// Over-6 score reduction is applied AT THE END of this hook so it also
-			// affects matches injected by HOOK 4 (premium boost).
-			if (photoUploadCount >= 2 && photoUploadCount <= 5 && matchEvents.length > 0) {
-				const matchTemplate = matchEvents[0];
-				matchEvents.forEach(m => {
-					const extras = chance.integer({ min: 2, max: 4 });
-					for (let i = 0; i < extras; i++) {
-						events.push({
-							...matchTemplate,
-							time: dayjs(m.time).add(chance.integer({ min: 1, max: 180 }), "minutes").toISOString(),
-							user_id: m.user_id,
-							match_score: chance.integer({ min: 60, max: 98 }),
-						});
-					}
-				});
-			}
-
-			// HOOK 2: WEEKEND SWIPE SURGE — Sunday swipes get heavy cloning
-			// to overcome the soup DOW weight deficit. Evening swipes (18-23)
-			// get 5 clones; daytime Sunday swipes get 2 clones.
-			// No flag — discover via day-of-week chart.
-			for (let idx = events.length - 1; idx >= 0; idx--) {
-				const event = events[idx];
-				if (event.event === "swipe right") {
-					const dow = new Date(event.time).getUTCDay();
-					if (dow === 0) {
-						const hr = new Date(event.time).getUTCHours();
-						const clones = (hr >= 18 && hr <= 23) ? 5 : 2;
-						const etime = dayjs(event.time);
-						for (let c = 0; c < clones; c++) {
-							events.push({
-								...event,
-								time: etime.add(chance.integer({ min: 1, max: 60 }), "minutes").toISOString(),
-								user_id: event.user_id,
-							});
-						}
-					}
-				}
-			}
-
-			// HOOK 3: SUPER-LIKE EFFECT — clone 3 extra match events per
-			// super-like, near in time. No flag — discover via funnel
-			// "swipe right where is_super_like=true" → "match received".
-			if (superLikeEvents.length > 0) {
-				const matchTemplate = matchEvents[0] || events[0];
-				superLikeEvents.forEach(sle => {
-					for (let i = 0; i < 3; i++) {
-						events.push({
-							...matchTemplate,
-							event: "match received",
-							time: dayjs(sle.time).add(chance.integer({ min: 5, max: 120 }), "minutes").toISOString(),
-							user_id: sle.user_id,
-							match_score: chance.integer({ min: 70, max: 99 }),
-						});
-					}
-				});
-			}
-
-			// HOOK 5: GHOSTING CHURN — users with match but no message within
-			// 48hrs lose 80% of post-match events. No flag.
-			// (runs BEFORE premium boost so injected premium matches survive)
-			if (matchEvents.length > 0) {
-				let hasTimely = false;
-				for (const m of matchEvents) {
-					const matchTime = dayjs(m.time);
-					const deadline = matchTime.add(48, "hours");
-					for (const msg of messageSentEvents) {
-						const msgTime = dayjs(msg.time);
-						if (msgTime.isAfter(matchTime) && msgTime.isBefore(deadline)) {
-							hasTimely = true;
-							break;
-						}
-					}
-					if (hasTimely) break;
-				}
-				if (!hasTimely) {
-					const earliestMatch = matchEvents.reduce((min, m) =>
-						dayjs(m.time).isBefore(dayjs(min.time)) ? m : min
-					);
-					const churnAfter = dayjs(earliestMatch.time);
-					for (let i = events.length - 1; i >= 0; i--) {
-						if (dayjs(events[i].time).isAfter(churnAfter) && chance.bool({ likelihood: 80 })) {
-							events.splice(i, 1);
-						}
-					}
-				}
-			}
-
-			// HOOK 4: PREMIUM MATCH BOOST — Premium 2x, Elite 4x match events.
-			// Elite users also get profile-viewed events injected (see-who-liked-you).
-			// Reads subscription from profile. Runs AFTER ghosting churn so
-			// injected matches are not culled.
-			const sub = profile.subscription;
-			if ((sub === "Premium" || sub === "Elite") && matchEvents.length > 0) {
-				// Count surviving match events post-churn
-				const survivingMatches = events.filter(e => e.event === "match received");
-				const baseCount = survivingMatches.length || 1;
-				const targetMultiplier = sub === "Elite" ? 4 : 2;
-				const toAdd = Math.max(0, baseCount * targetMultiplier - baseCount);
-				const matchTemplate = matchEvents[0];
-				for (let i = 0; i < toAdd; i++) {
-					const sourceMatch = survivingMatches[i % survivingMatches.length] || matchTemplate;
-					events.push({
-						...matchTemplate,
-						time: dayjs(sourceMatch.time).add(chance.integer({ min: 10, max: 240 }), "minutes").toISOString(),
-						user_id: sourceMatch.user_id,
-						match_score: chance.integer({ min: 65, max: 99 }),
-					});
-				}
-				if (sub === "Elite") {
-					const viewTemplate = events.find(e => e.event === "profile viewed") || matchTemplate;
-					survivingMatches.forEach(m => {
-						events.push({
-							...viewTemplate,
-							event: "profile viewed",
-							time: dayjs(m.time).subtract(chance.integer({ min: 10, max: 120 }), "minutes").toISOString(),
-							user_id: m.user_id,
-							viewer_source: "liked_you",
-						});
-					});
-				}
-			}
-
-			// HOOK 6: BIO + PROMPT POWER USERS — bio + 3+ prompts → 3 extra
-			// cloned date events per existing. No flag.
-			if (hasBioUpdated && promptAnsweredCount >= 3) {
-				const dateEvents = events.filter(e => e.event === "date scheduled");
-				if (dateEvents.length > 0) {
-					const dateTemplate = dateEvents[0];
-					const venueTypes = ["coffee", "dinner", "drinks", "activity", "virtual"];
-					for (let i = 0; i < dateEvents.length * 3; i++) {
-						const sourceDate = dateEvents[i % dateEvents.length];
-						events.push({
-							...dateTemplate,
-							time: dayjs(sourceDate.time).add(chance.integer({ min: 1, max: 72 }), "hours").toISOString(),
-							user_id: sourceDate.user_id,
-							venue_type: chance.pickone(venueTypes),
-						});
-					}
-				}
-			}
-
-			// HOOK 7: VALENTINE'S DAY SPIKE — clone profile-created events during
-			// days 58-63 (3x volume), plus clone premium-upgrade events 5x. No flag.
-			const vdaySignups = events.filter(e =>
-				e.event === "profile created" &&
-				dayjs(e.time).isAfter(VDAY_WINDOW_START) &&
-				dayjs(e.time).isBefore(VDAY_WINDOW_END)
-			);
-			vdaySignups.forEach(signup => {
-				for (let i = 0; i < 2; i++) {
-					events.push({
-						...signup,
-						time: dayjs(signup.time).add(chance.integer({ min: 1, max: 48 }), "hours").toISOString(),
-						user_id: signup.user_id,
-					});
-				}
-			});
-
-			const vdayUpgrades = events.filter(e =>
-				e.event === "premium upgrade" &&
-				dayjs(e.time).isAfter(VDAY_WINDOW_START) &&
-				dayjs(e.time).isBefore(VDAY_WINDOW_END)
-			);
-			if (vdayUpgrades.length > 0) {
-				const upgradeTemplate = vdayUpgrades[0];
-				vdayUpgrades.forEach(upgrade => {
-					for (let i = 0; i < 4; i++) {
-						events.push({
-							...upgradeTemplate,
-							time: dayjs(upgrade.time).add(chance.integer({ min: 1, max: 24 }), "hours").toISOString(),
-							user_id: upgrade.user_id,
-							plan: upgrade.plan,
-							price_usd: upgrade.price_usd,
-						});
-					}
-				});
-			}
-
-			// HOOK 1b: PHOTO MAGIC NUMBER — over-6 score reduction (applied LAST so
-			// it also affects matches injected by HOOK 4 premium boost).
-			if (photoUploadCount >= 6) {
-				events.forEach(e => {
-					if (e.event === "match received" && typeof e.match_score === "number") {
-						e.match_score = Math.max(20, Math.round(e.match_score * 0.65));
-					}
-				});
-			}
-
-			// HOOK 8: OFF-APP RETENTION — users with phone-exchanged or
-			// date-scheduled in first 14 days get extra cloned app-open + swipe
-			// events past day 30. Non-milestone users lose 80% of post-day-30
-			// events. No flag.
-			if (firstEventTime) {
-				const day30 = dayjs(firstEventTime).add(30, "days");
-				const hasEarlyMilestone = hasPhoneExchangedEarly || hasDateScheduledEarly;
-				if (hasEarlyMilestone) {
-					const appOpenedTemplate = events.find(e => e.event === "app opened") || events[0];
-					const swipeTemplate = events.find(e => e.event === "swipe right") || events[0];
-					const postDay30Events = events.filter(e => dayjs(e.time).isAfter(day30));
-					if (postDay30Events.length < events.length * 0.3) {
-						const retentionCount = Math.floor(events.length * 0.3);
-						for (let i = 0; i < retentionCount; i++) {
-							const daysAfter = chance.integer({ min: 1, max: 60 });
-							const template = chance.bool({ likelihood: 50 }) ? appOpenedTemplate : swipeTemplate;
-							events.push({
-								...template,
-								time: day30.add(daysAfter, "days").add(chance.integer({ min: 0, max: 23 }), "hours").toISOString(),
-								user_id: template.user_id,
-							});
-						}
-					}
-				} else {
-					for (let i = events.length - 1; i >= 0; i--) {
-						if (dayjs(events[i].time).isAfter(day30) && chance.bool({ likelihood: 80 })) {
-							events.splice(i, 1);
-						}
-					}
-				}
-			}
-
-			return record;
-		}
-
+	hook(record, type, meta) {
+		if (type === "funnel-pre") return handleFunnelPreHooks(record, meta);
+		if (type === "funnel-post") return handleFunnelPostHooks(record, meta);
+		if (type === "everything") return handleEverythingHooks(record, meta);
 		return record;
 	},
 };

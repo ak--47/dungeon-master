@@ -1,68 +1,46 @@
-// ── TWEAK THESE ──
-const SEED = "dm4-devtools";
-const num_days = 120;
-const num_users = 10_000;
-const avg_events_per_user_per_day = 1.2;
-let token = "your-mixpanel-token";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
+/** @typedef {import("../../types").Dungeon} Config */
 
-dayjs.extend(utc);
-const chance = u.initChance(SEED);
-/** @typedef  {import("../../types").Dungeon} Config */
-
-// Generate consistent pipeline/repo IDs at module level
-const pipelineIds = v.range(1, 80).map(() => `PIPE_${v.uid(6)}`);
-const repoIds = v.range(1, 150).map(() => `REPO_${v.uid(6)}`);
-
-/**
- * ===============================================================
- * DATASET OVERVIEW
- * ===============================================================
+// ── OVERVIEW ──
+/*
+ * NAME:       CodeForge
+ * APP:        Developer platform for builds, deploys, monitoring, code review,
+ *             and team collaboration. Think GitHub + Vercel + PagerDuty in a
+ *             unified CI/CD experience. Multi-role devs ship code through a
+ *             connect-repo → configure-pipeline → build → deploy → monitor loop.
+ * SCALE:      10,000 users, ~1.4M events, 121 days (2026-01-01 → 2026-05-01)
+ * CORE LOOP:  connect repo → configure pipeline → build → deploy → monitor
  *
- * CodeForge -- a developer platform for builds, deploys, monitoring,
- * code review, and team collaboration. Think GitHub + Vercel + PagerDuty
- * in a unified CI/CD experience.
+ * EVENTS (18):
+ *   build completed (8) > app session (8) > pull request created (6)
+ *   > notification received (6) > deployment completed (5)
+ *   > code review completed (5) > monitoring dashboard viewed (5)
+ *   > alert triggered (4) > log searched (4) > incident created (2)
+ *   > incident resolved (2) > repository connected (2) > pipeline configured (2)
+ *   > collaboration invited (2) > environment created (2) > account created (1)
+ *   > billing updated (1) > account deactivated (1)
  *
- * - 5,000 users over 100 days, ~600K events
- * - Multi-role system: platform engineers (15%), full-stack devs (35%),
- *   junior devs (30%), devops leads (10%), open source users (10%)
- * - Core loop: connect repo -> configure pipeline -> build -> deploy -> monitor
- * - Revenue: free / team ($25, 14-day trial) / business ($75) / enterprise ($200)
+ * FUNNELS (5):
+ *   - Onboarding:            account created → repository connected → pipeline configured → build completed (45%)
+ *   - Build-Deploy Pipeline: build completed → deployment completed → monitoring dashboard viewed (40%)
+ *   - PR Review Flow:        pull request created → code review completed → build completed → deployment completed (35%)
+ *   - Incident Response:     alert triggered → incident created → incident resolved (50%)
+ *   - Upgrade Path:          app session → billing updated → collaboration invited (20%)
  *
- * Advanced Features:
- * - Personas: 5 archetypes with distinct activity, conversion, and churn profiles
- * - World Events: major outage (day 42), conference launch (day 60)
- * - Data Quality: late arrivals, duplicates, bot pollution
- * - Subscription: 4-tier revenue lifecycle with trial conversion
- * - Geo: US/EU/India/rest with timezone-aware activity
- * - Features: copilot_integration (day 30), deployment_preview (day 50)
- * - Anomalies: extreme build durations, alert burst during outage
- *
- * Key entities:
- * - pipeline_id: CI/CD pipeline for a repo
- * - repo_id: source code repository
- * - build_status / deploy_status: success/failed/cancelled
- * - ai_assist: manual vs copilot (driven by Feature rollout)
+ * USER PROPS:  dev_role, segment, team_size, repos_connected, org_name, experience_level, subscription_tier, Platform, language
+ * SUPER PROPS: subscription_tier, Platform, language
+ * SCD PROPS:   subscription_tier (free/pro/enterprise, monthly fuzzy, max 6)
+ * GROUPS:      none
  */
 
-/**
- * ===============================================================
- * ANALYTICS HOOKS (10 hooks)
- *
- * Adds 10. BUILD-DEPLOY TIME-TO-CONVERT: enterprise/business 0.67x faster, free
- * 1.33x slower (funnel-post). Discover via Build-Deploy Pipeline median TTC by tier.
- * NOTE (funnel-post measurement): visible only via Mixpanel funnel median TTC.
- * Cross-event MIN→MIN SQL queries on raw events do NOT show this.
- * ===============================================================
- *
+// ── HOOK STORIES ──
+/*
  * NOTE: All cohort effects are HIDDEN — discoverable only via behavioral
  * cohorts or raw-prop breakdowns. No cohort flag is stamped on events.
  *
@@ -281,6 +259,11 @@ const repoIds = v.range(1, 150).map(() => `REPO_${v.uid(6)}`);
  *   - Breakdown: "subscription_tier" (superProp)
  *   - Expected: enterprise/business ~ 0.67x baseline; free ~ 1.33x baseline
  *
+ *   NOTE (funnel-post measurement): visible only via Mixpanel funnel
+ *   median TTC. Cross-event MIN→MIN SQL queries on raw events do NOT
+ *   show this — funnel-post adjusts gaps within funnel instances, not
+ *   across the user's full event history.
+ *
  * REAL-WORLD ANALOGUE: Enterprise CI/CD customers get priority build
  * runners and dedicated deploy infrastructure, yielding faster
  * end-to-end pipeline throughput.
@@ -304,31 +287,304 @@ const repoIds = v.range(1, 150).map(() => `REPO_${v.uid(6)}`);
  * Build-Deploy TTC            | median TTC by tier  | 1x       | 0.67/1.33x| ~ 2x range
  */
 
+// ── SCALE ──
+const SEED = "dm4-devtools";
+const NUM_USERS = 10_000;
+const DATASET_START = "2026-01-01T00:00:00Z";
+const DATASET_END = "2026-05-01T23:59:59Z";
+const EVENTS_PER_DAY = 1.2;
+const token = process.env.MP_TOKEN || "your-mixpanel-token";
+
+const chance = u.initChance(SEED);
+
+// ── KNOBS (tweak these to reshape stories) ──
+const BUILD_FAILURE_DURATION_MULT = 2;
+
+const NIGHT_DEPLOY_HOUR_START = 22;
+const NIGHT_DEPLOY_HOUR_END = 6;
+const NIGHT_DEPLOY_FAIL_LIKELIHOOD = 40;
+
+const COPILOT_USER_HASH_MOD = 10;
+const COPILOT_USER_HASH_THRESHOLD = 3;
+const COPILOT_PR_CLONE_RATE = 0.5;
+
+const ONCALL_ALERT_THRESHOLD = 20;
+const ONCALL_FATIGUE_DIVISOR = 20;
+const ONCALL_FATIGUE_CAP = 3;
+
+const OSS_EVENT_THRESHOLD = 15;
+const OSS_CONVERSION_POINT_PCT = 0.7;
+const OSS_BUILD_CLONE_LIKELIHOOD = 30;
+const OSS_DEPLOY_CLONE_LIKELIHOOD = 20;
+
+const RECOVERY_START_DAY = 44;
+const RECOVERY_END_DAY = 48;
+const RECOVERY_CLONES_PER_EVENT = 3;
+
+const ENTERPRISE_DROP_LIKELIHOOD = 35;
+
+const BUILD_SWEET_MIN = 15;
+const BUILD_SWEET_MAX = 30;
+const BUILD_OVER_THRESHOLD = 31;
+const BUILD_SWEET_CLONE_RATE = 0.5;
+const BUILD_OVER_DROP_LIKELIHOOD = 40;
+
+const TTC_FAST_FACTOR = 0.67;
+const TTC_SLOW_FACTOR = 1.33;
+
+// ── DATA ARRAYS ──
+// Generate consistent pipeline/repo IDs at module level
+const pipelineIds = v.range(1, 80).map(() => `PIPE_${v.uid(6)}`);
+const repoIds = v.range(1, 150).map(() => `REPO_${v.uid(6)}`);
+
+// ── HELPER FUNCTIONS ──
+function handleFunnelPostHooks(record, meta) {
+	// H10: BUILD-DEPLOY TIME-TO-CONVERT
+	// Enterprise tier completes Build-Deploy Pipeline funnel 1.5x faster
+	// (factor 0.67); free tier 1.33x slower (factor 1.33).
+	const segment = meta?.profile?.subscription_tier;
+	if (Array.isArray(record) && record.length > 1) {
+		const factor = (
+			segment === "enterprise" || segment === "business" ? TTC_FAST_FACTOR :
+			segment === "free" ? TTC_SLOW_FACTOR :
+			1.0
+		);
+		if (factor !== 1.0) {
+			for (let i = 1; i < record.length; i++) {
+				const prev = dayjs(record[i - 1].time);
+				const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+				record[i].time = prev.add(newGap, "milliseconds").toISOString();
+			}
+		}
+	}
+	return record;
+}
+
+function handleUserHooks(record) {
+	// H7: DEVOPS LEAD PROFILE ENRICHMENT
+	// DevOps leads get team_size 10-50 and repos_connected 5-20.
+	// Platform engineers get moderate boosts. Others stay at defaults.
+	if (record.segment === "devops") {
+		record.team_size = chance.integer({ min: 10, max: 50 });
+		record.repos_connected = chance.integer({ min: 5, max: 20 });
+		record.experience_level = "senior";
+	} else if (record.segment === "platform_eng") {
+		record.team_size = chance.integer({ min: 5, max: 25 });
+		record.repos_connected = chance.integer({ min: 3, max: 15 });
+		record.experience_level = chance.pickone(["mid", "senior"]);
+	} else if (record.segment === "junior") {
+		record.team_size = chance.integer({ min: 1, max: 8 });
+		record.repos_connected = chance.integer({ min: 0, max: 3 });
+		record.experience_level = "junior";
+	}
+	return record;
+}
+
+function handleEventHooks(record) {
+	// H1: BUILD FAILURE CASCADE
+	// Failed builds get 2x duration (retries take longer).
+	if (record.event === "build completed" && record.build_status === "failed") {
+		record.build_duration_sec = Math.floor((record.build_duration_sec || 240) * BUILD_FAILURE_DURATION_MULT);
+	}
+	// (HOOK 2: NIGHT DEPLOY RISK moved to everything hook — hour checks
+	// must run after bunchIntoSessions redistributes timestamps)
+	return record;
+}
+
+function handleEverythingHooks(record, meta) {
+	const datasetStart = dayjs.unix(meta.datasetStart);
+	let events = record;
+	if (!events.length) return record;
+	const profile = meta && meta.profile ? meta.profile : {};
+
+	// SUPERPROP STAMPING
+	// Stamp superProp values from profile onto every event so they stay
+	// consistent per-user instead of randomizing per-event.
+	events.forEach(e => {
+		if (profile.subscription_tier) e.subscription_tier = profile.subscription_tier;
+		if (profile.Platform) e.Platform = profile.Platform;
+		if (profile.language) e.language = profile.language;
+	});
+
+	// H2: NIGHT DEPLOY RISK
+	// Deployments between 10PM-6AM get deploy_status forced to "failed"
+	// 40% of the time. No flag — analyst breaks down by hour-of-day.
+	events.forEach(e => {
+		if (e.event === "deployment completed") {
+			const hour = new Date(e.time).getUTCHours();
+			if ((hour >= NIGHT_DEPLOY_HOUR_START || hour < NIGHT_DEPLOY_HOUR_END) && chance.bool({ likelihood: NIGHT_DEPLOY_FAIL_LIKELIHOOD })) {
+				e.deploy_status = "failed";
+			}
+		}
+	});
+
+	// H8: ENTERPRISE BUILD-DEPLOY FUNNEL LIFT
+	// Free-tier users drop 35% of final funnel step events to create
+	// visible conversion gap vs paid subscribers.
+	if (profile.subscription_tier !== "enterprise" && profile.subscription_tier !== "business") {
+		events = events.filter(e => {
+			if (e.event === "monitoring dashboard viewed" && chance.bool({ likelihood: ENTERPRISE_DROP_LIKELIHOOD })) return false;
+			return true;
+		});
+	}
+
+	// H3: COPILOT PR VELOCITY
+	// ~30% of users are copilot adopters (hash-based cohort).
+	// Copilot users get ai_assist="copilot" stamped and 1.5x more PRs.
+	const uid = events[0]?.user_id || "";
+	const isCopilotUser = (typeof uid === "string" ? uid.charCodeAt(0) : uid) % COPILOT_USER_HASH_MOD < COPILOT_USER_HASH_THRESHOLD;
+	if (isCopilotUser) {
+		events.forEach(e => {
+			if (e.event === "pull request created" || e.event === "code review completed") {
+				e.ai_assist = "copilot";
+			}
+		});
+		const prEvents = events.filter(e => e.event === "pull request created");
+		const extraCount = Math.floor(prEvents.length * COPILOT_PR_CLONE_RATE);
+		for (let i = 0; i < extraCount; i++) {
+			const templateEvent = prEvents[i % prEvents.length];
+			if (templateEvent) {
+				events.push({
+					...templateEvent,
+					time: dayjs(templateEvent.time).add(chance.integer({ min: 1, max: 12 }), "hours").toISOString(),
+					user_id: templateEvent.user_id,
+					ai_assist: "copilot",
+					files_changed: chance.integer({ min: 1, max: 30 }),
+					lines_added: chance.integer({ min: 10, max: 800 }),
+				});
+			}
+		}
+	}
+
+	// H4: ON-CALL ROTATION FATIGUE
+	// Users with >20 alerts get increasing response_time_minutes.
+	const alertCount = events.filter(e => e.event === "alert triggered").length;
+	if (alertCount > ONCALL_ALERT_THRESHOLD) {
+		const fatigueMultiplier = 1 + Math.min(alertCount / ONCALL_FATIGUE_DIVISOR, ONCALL_FATIGUE_CAP);
+		events.forEach(e => {
+			if (e.event === "incident resolved" && e.response_time_minutes) {
+				e.response_time_minutes = Math.floor(e.response_time_minutes * fatigueMultiplier);
+			}
+			if (e.event === "incident created" && e.response_time_minutes) {
+				e.response_time_minutes = Math.floor(e.response_time_minutes * fatigueMultiplier);
+			}
+		});
+	}
+
+	// H5: OPEN SOURCE POWER USAGE
+	// OSS users with >15 events get extra cloned build + deploy events
+	// in their later activity (representing power usage that pushes them
+	// toward limits). No flag — discover via cohort by segment + event count.
+	if (profile.segment === "oss_user" && events.length > OSS_EVENT_THRESHOLD) {
+		const buildTemplate = events.find(e => e.event === "build completed");
+		const deployTemplate = events.find(e => e.event === "deployment completed");
+		if (buildTemplate || deployTemplate) {
+			const conversionPoint = Math.floor(events.length * OSS_CONVERSION_POINT_PCT);
+			const tail = events.slice(conversionPoint);
+			tail.forEach(e => {
+				const tBase = dayjs(e.time);
+				if (buildTemplate && chance.bool({ likelihood: OSS_BUILD_CLONE_LIKELIHOOD })) {
+					events.push({
+						...buildTemplate,
+						time: tBase.add(chance.integer({ min: 5, max: 240 }), "minutes").toISOString(),
+						user_id: e.user_id,
+					});
+				}
+				if (deployTemplate && chance.bool({ likelihood: OSS_DEPLOY_CLONE_LIKELIHOOD })) {
+					events.push({
+						...deployTemplate,
+						time: tBase.add(chance.integer({ min: 10, max: 240 }), "minutes").toISOString(),
+						user_id: e.user_id,
+					});
+				}
+			});
+		}
+	}
+
+	// H9: BUILD-COUNT MAGIC NUMBER (no flags)
+	// Sweet 15-30 builds → +50% deploys (clone with unique offset).
+	// Over 31+ → drop 40% of deploys (flaky CI burnout).
+	const buildCount = events.filter(e => e.event === "build completed").length;
+	if (buildCount >= BUILD_SWEET_MIN && buildCount <= BUILD_SWEET_MAX) {
+		const deploys = events.filter(e => e.event === "deployment completed");
+		const extras = Math.max(Math.floor(deploys.length * BUILD_SWEET_CLONE_RATE), 1);
+		for (let k = 0; k < extras; k++) {
+			const tpl = deploys[k % deploys.length];
+			if (tpl) {
+				events.push({
+					...tpl,
+					time: dayjs(tpl.time).add(chance.integer({ min: 5, max: 360 }), "minutes").toISOString(),
+					user_id: tpl.user_id,
+				});
+			}
+		}
+	} else if (buildCount >= BUILD_OVER_THRESHOLD) {
+		for (let i = events.length - 1; i >= 0; i--) {
+			if (events[i].event === "deployment completed" && chance.bool({ likelihood: BUILD_OVER_DROP_LIKELIHOOD })) {
+				events.splice(i, 1);
+			}
+		}
+	}
+
+	// H6: POST-OUTAGE RECOVERY
+	// After the outage volume rebound (d44-48), deployment events get
+	// aggressively cloned to produce a visible spike above baseline.
+	// Shifted later than outage end (d42.25) so natural volume has
+	// recovered from the 0.05x suppression before cloning kicks in.
+	const RECOVERY_START = datasetStart.add(RECOVERY_START_DAY, "days");
+	const RECOVERY_END = datasetStart.add(RECOVERY_END_DAY, "days");
+	const deployEvents = events.filter(e => {
+		if (e.event !== "deployment completed") return false;
+		const t = dayjs(e.time);
+		return t.isAfter(RECOVERY_START) && t.isBefore(RECOVERY_END);
+	});
+	deployEvents.forEach(dep => {
+		// 100% clone rate with 3 copies per event to clearly
+		// exceed baseline deploy volume (d35-41)
+		for (let c = 0; c < RECOVERY_CLONES_PER_EVENT; c++) {
+			events.push({
+				...dep,
+				time: dayjs(dep.time).add(chance.integer({ min: 1, max: 8 }), "hours").toISOString(),
+				user_id: dep.user_id,
+				deploy_status: chance.pickone(["success", "success", "rolled_back"]),
+				environment: "production",
+			});
+		}
+	});
+
+	return events;
+}
+
+// ── CONFIG ──
 /** @type {Config} */
 const config = {
 	version: 2,
-	token,
 	seed: SEED,
-	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-05-01T23:59:59Z",
-	// numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
-	hasAnonIds: true,
-	avgDevicePerUser: 2,
-	hasSessionIds: true,
+	datasetStart: DATASET_START,
+	datasetEnd: DATASET_END,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	format: "json",
 	gzip: true,
-	alsoInferFunnels: false,
-	hasLocation: true,
-	hasAndroidDevices: false,
-	hasIOSDevices: false,
-	hasDesktopDevices: true,
-	hasBrowser: true,
-	hasCampaigns: false,
-	isAnonymous: false,
-	hasAdSpend: false,
-	hasAvatar: true,
+	credentials: {
+		token,
+	},
+	switches: {
+		hasSessionIds: true,
+		alsoInferFunnels: false,
+		hasLocation: true,
+		hasAndroidDevices: false,
+		hasIOSDevices: false,
+		hasDesktopDevices: true,
+		hasBrowser: true,
+		hasCampaigns: false,
+		isAnonymous: false,
+		hasAdSpend: false,
+		hasAvatar: true,
+	},
+	identity: {
+		avgDevicePerUser: 2,
+	},
 	concurrency: 1,
 	writeToDisk: false,
 	scdProps: {
@@ -782,229 +1038,11 @@ const config = {
 		],
 	},
 
-	// -- Hook Function ----------------------------------------
-	hook: function (record, type, meta) {
-		// HOOK 10 (T2C): BUILD-DEPLOY TIME-TO-CONVERT (funnel-post)
-		// Enterprise tier completes Build-Deploy Pipeline funnel 1.5x faster
-		// (factor 0.67); free tier 1.33x slower (factor 1.33).
-		if (type === "funnel-post") {
-			const segment = meta?.profile?.subscription_tier;
-			if (Array.isArray(record) && record.length > 1) {
-				const factor = (
-					segment === "enterprise" || segment === "business" ? 0.67 :
-					segment === "free" ? 1.33 :
-					1.0
-				);
-				if (factor !== 1.0) {
-					for (let i = 1; i < record.length; i++) {
-						const prev = dayjs(record[i - 1].time);
-						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-						record[i].time = prev.add(newGap, "milliseconds").toISOString();
-					}
-				}
-			}
-		}
-
-		// -- HOOK 7: DEVOPS LEAD PROFILE ENRICHMENT (user) --------
-		// DevOps leads get team_size 10-50 and repos_connected 5-20.
-		// Platform engineers get moderate boosts. Others stay at defaults.
-		if (type === "user") {
-			if (record.segment === "devops") {
-				record.team_size = chance.integer({ min: 10, max: 50 });
-				record.repos_connected = chance.integer({ min: 5, max: 20 });
-				record.experience_level = "senior";
-			} else if (record.segment === "platform_eng") {
-				record.team_size = chance.integer({ min: 5, max: 25 });
-				record.repos_connected = chance.integer({ min: 3, max: 15 });
-				record.experience_level = chance.pickone(["mid", "senior"]);
-			} else if (record.segment === "junior") {
-				record.team_size = chance.integer({ min: 1, max: 8 });
-				record.repos_connected = chance.integer({ min: 0, max: 3 });
-				record.experience_level = "junior";
-			}
-		}
-
-		// -- HOOK 8: ENTERPRISE BUILD-DEPLOY FUNNEL LIFT
-		// Conversion differences handled in everything hook via event filtering.
-		// (funnel-pre conversionRate modifications are diluted by organic events)
-
-		// -- HOOK 1: BUILD FAILURE CASCADE (event) ----------------
-		// Failed builds get 2x duration (retries take longer).
-		if (type === "event") {
-			if (record.event === "build completed" && record.build_status === "failed") {
-				record.build_duration_sec = Math.floor((record.build_duration_sec || 240) * 2);
-			}
-
-			// (HOOK 2: NIGHT DEPLOY RISK moved to everything hook — hour checks
-			// must run after bunchIntoSessions redistributes timestamps)
-		}
-
-		// -- EVERYTHING HOOKS -------------------------------------
-		if (type === "everything") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			let events = record;
-			if (!events.length) return record;
-			const profile = meta && meta.profile ? meta.profile : {};
-
-			// -- SUPERPROP STAMPING -------------------------------
-			// Stamp superProp values from profile onto every event so
-			// they stay consistent per-user instead of randomizing per-event.
-			events.forEach(e => {
-				if (profile.subscription_tier) e.subscription_tier = profile.subscription_tier;
-				if (profile.Platform) e.Platform = profile.Platform;
-				if (profile.language) e.language = profile.language;
-			});
-
-			// -- HOOK 2: NIGHT DEPLOY RISK -------------------------
-			// Deployments between 10PM-6AM get deploy_status forced to
-			// "failed" 40% of the time. No flag — analyst breaks down by
-			// hour-of-day on deployment completed events.
-			events.forEach(e => {
-				if (e.event === "deployment completed") {
-					const hour = new Date(e.time).getUTCHours();
-					if ((hour >= 22 || hour < 6) && chance.bool({ likelihood: 40 })) {
-						e.deploy_status = "failed";
-					}
-				}
-			});
-
-			// -- HOOK 8: ENTERPRISE BUILD-DEPLOY FUNNEL LIFT ------
-			// Free-tier users drop 35% of final funnel step events to
-			// create visible conversion gap vs paid subscribers.
-			if (profile.subscription_tier !== "enterprise" && profile.subscription_tier !== "business") {
-				events = events.filter(e => {
-					if (e.event === "monitoring dashboard viewed" && chance.bool({ likelihood: 35 })) return false;
-					return true;
-				});
-			}
-
-			// -- HOOK 3: COPILOT PR VELOCITY ----------------------
-			// ~30% of users are copilot adopters (hash-based cohort).
-			// Copilot users get ai_assist="copilot" stamped and 1.5x more PRs.
-			const uid = events[0]?.user_id || "";
-			const isCopilotUser = (typeof uid === "string" ? uid.charCodeAt(0) : uid) % 10 < 3;
-			if (isCopilotUser) {
-				events.forEach(e => {
-					if (e.event === "pull request created" || e.event === "code review completed") {
-						e.ai_assist = "copilot";
-					}
-				});
-				const prEvents = events.filter(e => e.event === "pull request created");
-				const extraCount = Math.floor(prEvents.length * 0.5);
-				for (let i = 0; i < extraCount; i++) {
-					const templateEvent = prEvents[i % prEvents.length];
-					if (templateEvent) {
-						events.push({
-							...templateEvent,
-							time: dayjs(templateEvent.time).add(chance.integer({ min: 1, max: 12 }), "hours").toISOString(),
-							user_id: templateEvent.user_id,
-							ai_assist: "copilot",
-							files_changed: chance.integer({ min: 1, max: 30 }),
-							lines_added: chance.integer({ min: 10, max: 800 }),
-						});
-					}
-				}
-			}
-
-			// -- HOOK 4: ON-CALL ROTATION FATIGUE -----------------
-			// Users with >20 alerts get increasing response_time_minutes.
-			const alertCount = events.filter(e => e.event === "alert triggered").length;
-			if (alertCount > 20) {
-				const fatigueMultiplier = 1 + Math.min(alertCount / 20, 3);
-				events.forEach(e => {
-					if (e.event === "incident resolved" && e.response_time_minutes) {
-						e.response_time_minutes = Math.floor(e.response_time_minutes * fatigueMultiplier);
-					}
-					if (e.event === "incident created" && e.response_time_minutes) {
-						e.response_time_minutes = Math.floor(e.response_time_minutes * fatigueMultiplier);
-					}
-				});
-			}
-
-			// -- HOOK 5: OPEN SOURCE POWER USAGE ------------------
-			// OSS users with >15 events get extra cloned build + deploy events
-			// in their later activity (representing power usage that pushes them
-			// toward limits). No flag — discover via cohort by segment + event count.
-			if (profile.segment === "oss_user" && events.length > 15) {
-				const buildTemplate = events.find(e => e.event === "build completed");
-				const deployTemplate = events.find(e => e.event === "deployment completed");
-				if (buildTemplate || deployTemplate) {
-					const conversionPoint = Math.floor(events.length * 0.7);
-					const tail = events.slice(conversionPoint);
-					tail.forEach(e => {
-						const tBase = dayjs(e.time);
-						if (buildTemplate && chance.bool({ likelihood: 30 })) {
-							events.push({
-								...buildTemplate,
-								time: tBase.add(chance.integer({ min: 5, max: 240 }), "minutes").toISOString(),
-								user_id: e.user_id,
-							});
-						}
-						if (deployTemplate && chance.bool({ likelihood: 20 })) {
-							events.push({
-								...deployTemplate,
-								time: tBase.add(chance.integer({ min: 10, max: 240 }), "minutes").toISOString(),
-								user_id: e.user_id,
-							});
-						}
-					});
-				}
-			}
-
-			// -- HOOK 9: BUILD-COUNT MAGIC NUMBER (no flags) ------
-			// Sweet 15-30 builds → +50% deploys (clone with unique offset).
-			// Over 31+ → drop 40% of deploys (flaky CI burnout).
-			const buildCount = events.filter(e => e.event === "build completed").length;
-			if (buildCount >= 15 && buildCount <= 30) {
-				const deploys = events.filter(e => e.event === "deployment completed");
-				const extras = Math.max(Math.floor(deploys.length * 0.5), 1);
-				for (let k = 0; k < extras; k++) {
-					const tpl = deploys[k % deploys.length];
-					if (tpl) {
-						events.push({
-							...tpl,
-							time: dayjs(tpl.time).add(chance.integer({ min: 5, max: 360 }), "minutes").toISOString(),
-							user_id: tpl.user_id,
-						});
-					}
-				}
-			} else if (buildCount >= 31) {
-				for (let i = events.length - 1; i >= 0; i--) {
-					if (events[i].event === "deployment completed" && chance.bool({ likelihood: 40 })) {
-						events.splice(i, 1);
-					}
-				}
-			}
-
-			// -- HOOK 6: POST-OUTAGE RECOVERY ---------------------
-			// After the outage volume rebound (d44-48), deployment events get
-			// aggressively cloned to produce a visible spike above baseline.
-			// Shifted later than outage end (d42.25) so natural volume has
-			// recovered from the 0.05x suppression before cloning kicks in.
-			const RECOVERY_START = datasetStart.add(44, "days");
-			const RECOVERY_END = datasetStart.add(48, "days");
-			const deployEvents = events.filter(e => {
-				if (e.event !== "deployment completed") return false;
-				const t = dayjs(e.time);
-				return t.isAfter(RECOVERY_START) && t.isBefore(RECOVERY_END);
-			});
-			deployEvents.forEach(dep => {
-				// 100% clone rate with 3 copies per event to clearly
-				// exceed baseline deploy volume (d35-41)
-				for (let c = 0; c < 3; c++) {
-					events.push({
-						...dep,
-						time: dayjs(dep.time).add(chance.integer({ min: 1, max: 8 }), "hours").toISOString(),
-						user_id: dep.user_id,
-						deploy_status: chance.pickone(["success", "success", "rolled_back"]),
-						environment: "production",
-					});
-				}
-			});
-
-			return events;
-		}
-
+	hook(record, type, meta) {
+		if (type === "funnel-post") return handleFunnelPostHooks(record, meta);
+		if (type === "user") return handleUserHooks(record);
+		if (type === "event") return handleEventHooks(record);
+		if (type === "everything") return handleEverythingHooks(record, meta);
 		return record;
 	},
 };

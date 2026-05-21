@@ -37,6 +37,7 @@ const baseConfig = (overrides = {}) => ({
 describe('v1.5 isStrictEvent auto-promote', () => {
 	test('event listed in events[] AND in a funnel sequence → auto-promoted', () => {
 		const cfg = baseConfig({
+			verbose: true,  // v1.5.1: warnings now gated on verbose
 			events: [
 				{ event: 'sign up', weight: 1 },
 				{ event: 'onboard', weight: 5 },

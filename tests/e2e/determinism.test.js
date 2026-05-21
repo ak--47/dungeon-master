@@ -36,9 +36,8 @@ const identityModel = () => ({
 	datasetEnd: '2025-10-01T00:00:00Z',
 	numUsers: 30,
 	avgEventsPerUserPerDay: 3,
-	avgDevicePerUser: 2,
-	hasSessionIds: true,
-	hasCampaigns: true,
+	identity: { avgDevicePerUser: 2 },
+	switches: { hasSessionIds: true, hasCampaigns: true },
 	maxTouchpointsPerUser: 5,
 	events: [
 		{ event: 'sign up', isFirstEvent: true, isAuthEvent: true, isAttributionEvent: true },

@@ -290,7 +290,7 @@ describe.sequential('GCS round-trip (write → read → parse)', () => {
 				numUsers: 10, numEvents: 100,
 				writeToDisk: testDir,
 				verbose: false, seed: 'roundtrip-full', name: 'rt-full',
-				hasAdSpend: true,
+				switches: { hasAdSpend: true },
 				groupKeys: [['company', 1]],
 				groupProps: { company: { name: ['Acme', 'Globex', 'Initech'], size: [10, 50, 100] } },
 				scdProps: { plan: { values: ['free', 'pro', 'enterprise'] } },

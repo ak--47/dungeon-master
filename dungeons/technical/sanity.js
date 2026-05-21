@@ -1,60 +1,100 @@
-// ── TWEAK THESE ──
-const SEED = "foo bar";
-const num_days = 90;
-const num_users = 500;
-const avg_events_per_user_per_day = 1.11;
-let token = "";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import Chance from 'chance';
-const chance = new Chance();
-import dayjs from 'dayjs';
-import utc from 'dayjs/plugin/utc.js';
-dayjs.extend(utc);
 import { weighNumRange, integer } from "../../lib/utils/utils.js";
-
 /** @typedef {import("../../types").Dungeon} Config */
-/**
- * ═══════════════════════════════════════════════════════════════
- * DATASET OVERVIEW
- * ═══════════════════════════════════════════════════════════════
- *
- * Sanity Test — lightweight dungeon for module integration testing.
- * - 500 users over 30 days, ~50K events
- * - 10 abstract events (foo-yak) with no properties
- * - Super props: color, number — for quick breakdown testing
- * - Groups, SCDs, inferred funnels all disabled
- *
- * ═══════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (2 patterns)
- * ═══════════════════════════════════════════════════════════════
- *
+
+// ── OVERVIEW ──
+/*
+ * NAME:       sanity
+ * PURPOSE:    lightweight dungeon for module integration testing — abstract foo-yak events, inferred funnels
+ * SCALE:      500 users, ~50K events, 90 days
+ * EVENTS (10): foo, bar, baz, qux, garply, durtle, linny, fonk, crumn, yak
+ * FUNNELS (2): qux→garply→durtle→linny→fonk→crumn→yak; foo→bar→baz (first)
+ */
+
+// ── HOOK STORIES ──
+/*
  * 1. TEMPERATURE TAGGING (event hook)
  *    foo/bar/baz = "hot", crumn/yak = "cold", everything else = "warm".
+ *    (NOTE: current implementation stamps an integer engagement_score
+ *    bucketed by event name — high/mid/low engagement bands.)
  *
  * 2. HASH-BASED POWER USERS (everything hook)
  *    ~10% of users (by distinct_id hash) get 3 extra duplicate events.
+ *    (NOTE: current implementation trims the tail of users with 4-7
+ *    events to simulate light-user churn.)
  */
 
+// ── SCALE ──
+const SEED = "foo bar";
+const NUM_DAYS = 90;
+const NUM_USERS = 500;
+const EVENTS_PER_DAY = 1.11;
+const token = process.env.MP_TOKEN || "";
+
+const chance = new Chance();
+
+// ── DATA ARRAYS ──
+const spiritAnimals = ["duck", "dog", "otter", "penguin", "cat", "elephant", "lion", "cheetah", "giraffe", "zebra", "rhino", "hippo", "whale", "dolphin", "shark", "octopus", "squid", "jellyfish", "starfish", "seahorse", "crab", "lobster", "shrimp", "clam", "snail", "slug", "butterfly", "moth", "bee", "wasp", "ant", "beetle", "ladybug", "caterpillar", "centipede", "millipede", "scorpion", "spider", "tarantula", "tick", "mite", "mosquito", "fly", "dragonfly", "damselfly", "grasshopper", "cricket", "locust", "mantis", "cockroach", "termite", "praying mantis", "walking stick", "stick bug", "leaf insect", "lacewing", "aphid", "cicada", "thrips", "psyllid", "scale insect", "whitefly", "mealybug", "planthopper", "leafhopper", "treehopper", "flea", "louse", "bedbug", "flea beetle", "weevil", "longhorn beetle", "leaf beetle", "tiger beetle", "ground beetle", "lady beetle", "firefly", "click beetle", "rove beetle", "scarab beetle", "dung beetle", "stag beetle", "rhinoceros beetle", "hercules beetle", "goliath beetle", "jewel beetle", "tortoise beetle"];
+const colors = ["red", "orange", "yellow", "green", "blue", "indigo", "violet"];
+
+// ── HELPER FUNCTIONS ──
+function handleUserHook(record) {
+	// tag power users based on luckyNumber
+	record.userTier = record.luckyNumber > 300 ? "power" : "regular";
+	return record;
+}
+
+function handleEventHook(record) {
+	// add an engagement score based on event type
+	const highEngagement = ["fonk", "crumn", "yak"];
+	const midEngagement = ["garply", "durtle", "linny"];
+	if (highEngagement.includes(record.event)) {
+		record.engagement_score = chance.integer({ min: 70, max: 100 });
+	} else if (midEngagement.includes(record.event)) {
+		record.engagement_score = chance.integer({ min: 30, max: 69 });
+	} else {
+		record.engagement_score = chance.integer({ min: 1, max: 29 });
+	}
+	return record;
+}
+
+function handleEverythingHook(record, meta) {
+	// low-activity users lose their last few events (churn simulation)
+	const profile = meta.profile;
+	record.forEach(e => {
+		e.color = profile.color;
+		e.number = profile.number;
+		// engagement_score intentionally varies per event (set by event hook)
+	});
+	if (record.length > 3 && record.length < 8) {
+		// users with few events lose the tail end — simulates churn
+		return record.slice(0, Math.ceil(record.length * 0.6));
+	}
+	return record;
+}
+
+// ── CONFIG ──
 /** @type {import('../types.js').Dungeon} */
 const config = {
-	token,
 	seed: SEED,
-	numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
+	numDays: NUM_DAYS,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	format: 'json', //csv or json
-	region: "US",
-	hasAnonIds: false, //if true, anonymousIds are created for each user
-	hasSessionIds: false, //if true, hasSessionIds are created for each user
-	alsoInferFunnels: true, //if true, infer funnels from events
+	credentials: {
+		token,
+		region: "US",
+	},
+	switches: {
+		hasSessionIds: false, //if true, hasSessionIds are created for each user
+		alsoInferFunnels: true, //if true, infer funnels from events
+	},
 	writeToDisk: false,
 	concurrency: 1,
 	funnels: [
 		{
-			sequence: ["qux", "garply", "durtle", "linny", "fonk", "crumn", "yak"],			
+			sequence: ["qux", "garply", "durtle", "linny", "fonk", "crumn", "yak"],
 		},
 		{
 			sequence: ["foo", "bar", "baz"],
@@ -115,7 +155,7 @@ const config = {
 		}
 	],
 	superProps: {
-		color: ["red", "orange", "yellow", "green", "blue", "indigo", "violet"],
+		color: colors,
 		number: integer,
 		engagement_score: [0],
 	},
@@ -123,51 +163,17 @@ const config = {
 		title: chance.profession.bind(chance),
 		luckyNumber: weighNumRange(42, 420),
 		userTier: ["regular"],
-		spiritAnimal: ["duck", "dog", "otter", "penguin", "cat", "elephant", "lion", "cheetah", "giraffe", "zebra", "rhino", "hippo", "whale", "dolphin", "shark", "octopus", "squid", "jellyfish", "starfish", "seahorse", "crab", "lobster", "shrimp", "clam", "snail", "slug", "butterfly", "moth", "bee", "wasp", "ant", "beetle", "ladybug", "caterpillar", "centipede", "millipede", "scorpion", "spider", "tarantula", "tick", "mite", "mosquito", "fly", "dragonfly", "damselfly", "grasshopper", "cricket", "locust", "mantis", "cockroach", "termite", "praying mantis", "walking stick", "stick bug", "leaf insect", "lacewing", "aphid", "cicada", "thrips", "psyllid", "scale insect", "whitefly", "mealybug", "planthopper", "leafhopper", "treehopper", "flea", "louse", "bedbug", "flea beetle", "weevil", "longhorn beetle", "leaf beetle", "tiger beetle", "ground beetle", "lady beetle", "firefly", "click beetle", "rove beetle", "scarab beetle", "dung beetle", "stag beetle", "rhinoceros beetle", "hercules beetle", "goliath beetle", "jewel beetle", "tortoise beetle"],
-		color: ["red", "orange", "yellow", "green", "blue", "indigo", "violet"],
+		spiritAnimal: spiritAnimals,
+		color: colors,
 		number: integer,
 		engagement_score: [0],
 	},
 	hook: function (record, type, meta) {
-		// --- user hook: tag power users based on luckyNumber ---
-		if (type === "user") {
-			record.userTier = record.luckyNumber > 300 ? "power" : "regular";
-			return record;
-		}
-
-		// --- event hook: add an engagement score based on event type ---
-		if (type === "event") {
-			const highEngagement = ["fonk", "crumn", "yak"];
-			const midEngagement = ["garply", "durtle", "linny"];
-			if (highEngagement.includes(record.event)) {
-				record.engagement_score = chance.integer({ min: 70, max: 100 });
-			} else if (midEngagement.includes(record.event)) {
-				record.engagement_score = chance.integer({ min: 30, max: 69 });
-			} else {
-				record.engagement_score = chance.integer({ min: 1, max: 29 });
-			}
-			return record;
-		}
-
-		// --- everything hook: low-activity users lose their last few events (churn simulation) ---
-		if (type === "everything") {
-			const profile = meta.profile;
-			record.forEach(e => {
-				e.color = profile.color;
-				e.number = profile.number;
-				// engagement_score intentionally varies per event (set by event hook)
-			});
-			if (record.length > 3 && record.length < 8) {
-				// users with few events lose the tail end — simulates churn
-				return record.slice(0, Math.ceil(record.length * 0.6));
-			}
-			return record;
-		}
-
+		if (type === "user") return handleUserHook(record);
+		if (type === "event") return handleEventHook(record);
+		if (type === "everything") return handleEverythingHook(record, meta);
 		return record;
 	}
 };
-
-
 
 export default config;

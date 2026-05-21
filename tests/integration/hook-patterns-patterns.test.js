@@ -118,7 +118,6 @@ describe('Phase 4 hook patterns × emulator', () => {
 			numDays: 30,
 			avgEventsPerUserPerDay: 3,
 			percentUsersBornInDataset: 100,
-			hasAnonIds: false,
 			userProps: { tier: ['trial', 'trial', 'enterprise'] },
 			events: [
 				{ event: 'Land', isFirstEvent: true, isStrictEvent: true },
@@ -245,7 +244,6 @@ describe('Phase 4 hook patterns × emulator', () => {
 			numDays: 30,
 			avgEventsPerUserPerDay: 3,
 			percentUsersBornInDataset: 100,
-			hasAnonIds: false,
 			events: [
 				{ event: 'Land', isFirstEvent: true, isStrictEvent: true },
 				{ event: 'Sign Up', isAuthEvent: true, isStrictEvent: true },

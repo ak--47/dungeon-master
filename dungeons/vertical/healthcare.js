@@ -1,62 +1,49 @@
-// ── TWEAK THESE ──
-const SEED = "dm4-healthcare";
-const num_days = 120;
-const num_users = 10_000;
-const avg_events_per_user_per_day = 1.2;
-let token = "your-mixpanel-token";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 import { findFirstSequence, scaleFunnelTTC } from "../../lib/hook-helpers/timing.js";
-
-dayjs.extend(utc);
-const chance = u.initChance(SEED);
 /** @typedef  {import("../../types").Dungeon} Config */
 
-// Generate consistent doctor/clinic IDs at module level
-const doctorIds = v.range(1, 120).map(() => `DR_${v.uid(6)}`);
-const clinicIds = v.range(1, 25).map(() => `CLINIC_${v.uid(4)}`);
-
-/**
- * ═══════════════════════════════════════════════════════════════
- * DATASET OVERVIEW
- * ═══════════════════════════════════════════════════════════════
+// ── OVERVIEW ──
+/*
+ * NAME:       MedConnect
+ * APP:        Telehealth platform connecting doctors, nurses, and patients
+ *             through virtual consultations, prescriptions, and secure
+ *             messaging. Multi-role system; subscription tiers (free/basic/
+ *             premium); feature rollouts for video consultation and AI
+ *             symptom checker; geo-aware (US/EU/LATAM).
+ * SCALE:      10,000 users, ~1.2M events, 121 days (2026-01-01 → 2026-05-01)
+ * CORE LOOP:  sign up → symptom search → book appointment → consultation → prescription → follow-up
  *
- * MedConnect — a telehealth platform connecting doctors, nurses,
- * and patients through virtual consultations, prescriptions,
- * and secure messaging.
+ * EVENTS (18):
+ *   app session (8) > symptom search (7) > appointment booked (6) > notification received (6)
+ *   > consultation completed (5) > message sent (5) > prescription issued (4)
+ *   > health record accessed (4) > prescription refill (3) > follow up scheduled (3)
+ *   > lab results viewed (3) > payment processed (3) > insurance verified (2)
+ *   > provider rated (2) > profile updated (2) > account created (1)
+ *   > support ticket created (1) > account deactivated (1)
  *
- * - 5,000 users over 100 days, ~600K events
- * - Multi-role system: doctors (5%), nurses (10%), patients (85%)
- * - Core loop: sign up → book appointment → consultation → prescription → follow-up
- * - Revenue: free (2 visits/month), basic ($9.99, 14-day trial), premium ($29.99 unlimited)
+ * FUNNELS (5):
+ *   - Onboarding Flow:          account created → insurance verified → symptom search → appointment booked (45%)
+ *   - Booking to Consultation:  symptom search → appointment booked → consultation completed (40%)
+ *   - Full Care Journey:        appointment booked → consultation completed → prescription issued → follow up scheduled (30%)
+ *   - Prescription Lifecycle:   prescription issued → prescription refill → payment processed (55%)
+ *   - Patient Satisfaction:     consultation completed → provider rated → follow up scheduled (25%)
  *
- * Advanced Features:
- * - Personas: 5 archetypes (doctor, nurse, patient_active, patient_occasional, patient_churner)
- * - Subscription: 3-tier revenue lifecycle with trial conversion
- * - Geo: US/EU/LATAM with timezone-aware scheduling and regional compliance
- * - Features: video_consultation (day 30) and ai_symptom_checker (day 60)
- *
- * Key entities:
- * - doctor_id: assigned doctor for a consultation
- * - clinic_id: virtual clinic grouping
- * - condition_type: medical specialty area
- * - consultation_mode: phone vs video (driven by Feature rollout)
+ * USER PROPS:  role, specialty, years_experience, preferred_language, has_chronic_condition, age_range, subscription_tier, Platform
+ * SUPER PROPS: subscription_tier, Platform
+ * SCD PROPS:   care_plan (preventive/routine/chronic/acute, monthly fuzzy, max 8)
+ * GROUPS:      none
  */
 
-/**
- * ═══════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (10 hooks)
- *
+// ── HOOK STORIES ──
+/*
  * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable
  * via raw-prop breakdowns (HOD, day, tier) or behavioral cohorts.
- * ═══════════════════════════════════════════════════════════════
  *
  * ───────────────────────────────────────────────────────────────
  * 1. AFTER-HOURS SURGE PRICING (event hook)
@@ -294,31 +281,281 @@ const clinicIds = v.range(1, 25).map(() => `CLINIC_${v.uid(4)}`);
  * Consult-Count Magic Number  | over days_until_fu  | 1x       | 1.5x      | +50%
  */
 
+// ── SCALE ──
+const SEED = "dm4-healthcare";
+const NUM_USERS = 10_000;
+const DATASET_START = "2026-01-01T00:00:00Z";
+const DATASET_END = "2026-05-01T23:59:59Z";
+const EVENTS_PER_DAY = 1.2;
+const token = process.env.MP_TOKEN || "your-mixpanel-token";
+
+const chance = u.initChance(SEED);
+
+// ── KNOBS (tweak these to reshape stories) ──
+const AFTER_HOURS_START = 19;
+const AFTER_HOURS_END = 7;
+const AFTER_HOURS_FEE_MULT = 1.5;
+
+const FLU_START_DAY = 50;
+const FLU_END_DAY = 70;
+const FLU_RESPIRATORY_LIKELIHOOD = 60;
+const FLU_WAIT_MULT = 2;
+
+const EXPERIENCED_CONSULT_THRESHOLD = 12;
+const EXPERIENCED_SATISFACTION_MIN = 4.0;
+const EXPERIENCED_SATISFACTION_MAX = 5.0;
+
+const VIDEO_FOLLOWUP_LIKELIHOOD = 60;
+
+const CHRONIC_REFILL_MIN = 2;
+const CHRONIC_REFILL_MAX = 4;
+const CHRONIC_REFILL_INTERVAL_DAYS = 30;
+
+const NO_SHOW_EVENT_THRESHOLD = 15;
+const NO_SHOW_DROP_LIKELIHOOD = 25;
+
+const DOCTOR_EXPERIENCE_MIN = 15;
+const DOCTOR_EXPERIENCE_MAX = 30;
+const NURSE_EXPERIENCE_MIN = 3;
+const NURSE_EXPERIENCE_MAX = 15;
+
+const FREE_TIER_DROP_LIKELIHOOD = 30;
+
+const TTC_PREMIUM_FACTOR = 0.67;
+const TTC_FREE_FACTOR = 1.4;
+
+const CONSULT_SWEET_MIN = 3;
+const CONSULT_SWEET_MAX = 6;
+const CONSULT_OVER_THRESHOLD = 7;
+const CONSULT_FEE_BOOST = 1.25;
+const CONSULT_FOLLOWUP_STRETCH = 1.5;
+
+// ── DATA ARRAYS ──
+// Generate consistent doctor/clinic IDs at module level
+const doctorIds = v.range(1, 120).map(() => `DR_${v.uid(6)}`);
+const clinicIds = v.range(1, 25).map(() => `CLINIC_${v.uid(4)}`);
+
+// ── HELPER FUNCTIONS ──
+function handleUserHooks(record) {
+	// H7: DOCTOR PROFILE SPECIALIZATION — doctors get a real specialty and
+	// senior years_experience. Nurses get mid-range experience. Patients
+	// stay at defaults.
+	if (record.role === "doctor") {
+		record.specialty = chance.pickone(["cardiology", "dermatology", "pediatrics", "psychiatry", "general_practice", "pulmonology", "endocrinology"]);
+		record.years_experience = chance.integer({ min: DOCTOR_EXPERIENCE_MIN, max: DOCTOR_EXPERIENCE_MAX });
+	} else if (record.role === "nurse") {
+		record.specialty = chance.pickone(["general_practice", "pediatrics", "emergency"]);
+		record.years_experience = chance.integer({ min: NURSE_EXPERIENCE_MIN, max: NURSE_EXPERIENCE_MAX });
+	} else {
+		record.years_experience = 0;
+	}
+	return record;
+}
+
+function handleEverythingHooks(record, meta) {
+	if (!record.length) return record;
+	const profile = meta.profile;
+	const datasetStart = dayjs.unix(meta.datasetStart);
+	const FLU_START = datasetStart.add(FLU_START_DAY, "days");
+	const FLU_END = datasetStart.add(FLU_END_DAY, "days");
+
+	// ── SUPER-PROP STAMPING ──────────────────────────
+	// Stamp superProps from profile so they are consistent per-user.
+	if (profile) {
+		const tier = profile.subscription_tier;
+		const plat = profile.Platform;
+		record.forEach(e => {
+			if (tier) e.subscription_tier = tier;
+			if (plat) e.Platform = plat;
+		});
+	}
+
+	// HOOK 9: BOOKING FUNNEL TTC BY TIER (property scaling)
+	// Premium users get shorter wait_time_hours (0.67x) and duration_minutes (0.67x).
+	// Free users get longer wait_time_hours (1.4x) and duration_minutes (1.4x).
+	// Basic users stay at baseline. SQL-measurable via AVG(wait_time_hours) broken by tier.
+	if (profile) {
+		const userTier = profile.subscription_tier;
+		const ttcFactor = userTier === "premium" ? TTC_PREMIUM_FACTOR : userTier === "free" ? TTC_FREE_FACTOR : 1.0;
+		if (ttcFactor !== 1.0) {
+			// Timestamp shift: affects Mixpanel funnel TTC
+			const bookingSeq = findFirstSequence(
+				record,
+				["appointment booked", "consultation completed", "follow up scheduled"],
+				60 * 24 * 30
+			);
+			if (bookingSeq) scaleFunnelTTC(bookingSeq, ttcFactor);
+			// Property scale: affects Insights AVG reports
+			record.forEach(e => {
+				if (e.event === "appointment booked" && typeof e.wait_time_hours === "number") {
+					e.wait_time_hours = Math.round(e.wait_time_hours * ttcFactor * 10) / 10;
+				}
+				if (e.event === "consultation completed" && typeof e.duration_minutes === "number") {
+					e.duration_minutes = Math.round(e.duration_minutes * ttcFactor);
+				}
+			});
+		}
+	}
+
+	// HOOK 1: AFTER-HOURS SURGE PRICING — consultations 7PM-7AM
+	// UTC get consultation_fee 1.5x. No flag — discover via HOD chart.
+	record.forEach(e => {
+		if (e.event === "consultation completed" || e.event === "appointment booked") {
+			const hour = new Date(e.time).getUTCHours();
+			if ((hour >= AFTER_HOURS_START || hour < AFTER_HOURS_END) && e.consultation_fee) {
+				e.consultation_fee = Math.floor(e.consultation_fee * AFTER_HOURS_FEE_MULT);
+			}
+		}
+	});
+
+	// HOOK 2: FLU SEASON SPIKE — d50-70 respiratory dominates, wait_time doubles.
+	// Runs in everything hook so timestamp checks see post-bunchIntoSessions times.
+	record.forEach(e => {
+		if (e.event !== "appointment booked") return;
+		const t = dayjs(e.time);
+		if (t.isAfter(FLU_START) && t.isBefore(FLU_END)) {
+			if (chance.bool({ likelihood: FLU_RESPIRATORY_LIKELIHOOD })) e.condition_type = "respiratory";
+			if (e.condition_type === "respiratory") {
+				e.wait_time_hours = Math.floor((e.wait_time_hours || 12) * FLU_WAIT_MULT);
+			}
+		}
+	});
+
+	// ── HOOK 8: FREE-TIER CONVERSION DROP ────────────
+	// Free-tier users lose ~30% of "consultation completed" events
+	// (last step of Booking to Consultation funnel), simulating
+	// lower conversion for non-paying patients.
+	if (profile && profile.subscription_tier === "free" && chance.bool({ likelihood: FREE_TIER_DROP_LIKELIHOOD })) {
+		record = record.filter(e => e.event !== "consultation completed");
+	}
+
+	// ── HOOK 3: EXPERIENCED DOCTOR SATISFACTION ──────
+	// Users with >12 consultation events get boosted satisfaction scores.
+	let consultCount = 0;
+	record.forEach(e => {
+		if (e.event === "consultation completed") consultCount++;
+	});
+
+	if (consultCount > EXPERIENCED_CONSULT_THRESHOLD) {
+		record.forEach(e => {
+			if (e.event === "consultation completed") {
+				e.satisfaction_score = chance.floating({ min: EXPERIENCED_SATISFACTION_MIN, max: EXPERIENCED_SATISFACTION_MAX, fixed: 1 });
+			}
+		});
+	}
+
+	// ── HOOK 4: VIDEO CONSULTATION FOLLOW-UP LIFT ────
+	// Patients with video consultations get 2x follow-up events.
+	const hasVideoConsult = record.some(e =>
+		e.event === "consultation completed" && e.consultation_mode === "video"
+	);
+	if (hasVideoConsult) {
+		const templateFollowUp = record.find(e => e.event === "follow up scheduled");
+		if (templateFollowUp) {
+			const videoConsults = record.filter(e =>
+				e.event === "consultation completed" && e.consultation_mode === "video"
+			);
+			videoConsults.forEach(vc => {
+				if (chance.bool({ likelihood: VIDEO_FOLLOWUP_LIKELIHOOD })) {
+					record.push({
+						...templateFollowUp,
+						time: dayjs(vc.time).add(chance.integer({ min: 1, max: 7 }), "days").toISOString(),
+						user_id: vc.user_id,
+						consultation_mode: "video",
+						days_until_followup: chance.integer({ min: 3, max: 14 }),
+					});
+				}
+			});
+		}
+	}
+
+	// ── HOOK 5: CHRONIC CONDITION REFILL CHAIN ───────
+	// Patients with chronic prescriptions get refills every ~30 days.
+	const chronicRxs = record.filter(e =>
+		e.event === "prescription issued" && e.condition_type === "chronic"
+	);
+	if (chronicRxs.length > 0) {
+		const templateRefill = record.find(e => e.event === "prescription refill");
+		if (templateRefill) {
+			chronicRxs.forEach(rx => {
+				const rxTime = dayjs(rx.time);
+				const refillsToAdd = chance.integer({ min: CHRONIC_REFILL_MIN, max: CHRONIC_REFILL_MAX });
+				for (let i = 1; i <= refillsToAdd; i++) {
+					record.push({
+						...templateRefill,
+						time: rxTime.add(CHRONIC_REFILL_INTERVAL_DAYS * i + chance.integer({ min: -3, max: 3 }), "days").toISOString(),
+						user_id: rx.user_id,
+						condition_type: "chronic",
+						medication_type: "chronic_maintenance",
+						refill_count: i,
+					});
+				}
+			});
+		}
+	}
+
+	// HOOK 6: OCCASIONAL PATIENT NO-SHOWS — low-activity patients
+	// (< 15 events) lose 25% of consultations (they booked but didn't show).
+	if (record.length < NO_SHOW_EVENT_THRESHOLD) {
+		for (let i = record.length - 1; i >= 0; i--) {
+			if (record[i].event === "consultation completed" && chance.bool({ likelihood: NO_SHOW_DROP_LIKELIHOOD })) {
+				record.splice(i, 1);
+			}
+		}
+	}
+
+	// HOOK 10: CONSULTATION-COUNT MAGIC NUMBER (no flags)
+	// Sweet 3-6 consultations → +25% on consultation_fee. Over 7+ →
+	// drop 30% of "follow up scheduled" events (over-consulted →
+	// follow-up fatigue).
+	const consultCt = record.filter(e => e.event === "consultation completed").length;
+	if (consultCt >= CONSULT_SWEET_MIN && consultCt <= CONSULT_SWEET_MAX) {
+		record.forEach(e => {
+			if (e.event === "consultation completed" && typeof e.consultation_fee === "number") {
+				e.consultation_fee = Math.round(e.consultation_fee * CONSULT_FEE_BOOST);
+			}
+		});
+	} else if (consultCt >= CONSULT_OVER_THRESHOLD) {
+		record.forEach(e => {
+			if (e.event === "follow up scheduled" && typeof e.days_until_followup === "number") {
+				e.days_until_followup = Math.round(e.days_until_followup * CONSULT_FOLLOWUP_STRETCH);
+			}
+		});
+	}
+
+	return record;
+}
+
+// ── CONFIG ──
 /** @type {Config} */
 const config = {
 	version: 2,
-	token,
 	seed: SEED,
-	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-05-01T23:59:59Z",
-	// numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
-	hasAnonIds: true,
-	avgDevicePerUser: 2,
-	hasSessionIds: true,
+	datasetStart: DATASET_START,
+	datasetEnd: DATASET_END,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	format: "json",
 	gzip: true,
-	alsoInferFunnels: false,
-	hasLocation: true,
-	hasAndroidDevices: true,
-	hasIOSDevices: true,
-	hasDesktopDevices: true,
-	hasBrowser: false,
-	hasCampaigns: false,
-	isAnonymous: false,
-	hasAdSpend: false,
-	hasAvatar: true,
+	credentials: {
+		token,
+	},
+	switches: {
+		hasSessionIds: true,
+		alsoInferFunnels: false,
+		hasLocation: true,
+		hasAndroidDevices: true,
+		hasIOSDevices: true,
+		hasDesktopDevices: true,
+		hasBrowser: false,
+		hasCampaigns: false,
+		isAnonymous: false,
+		hasAdSpend: false,
+		hasAvatar: true,
+	},
+	identity: {
+		avgDevicePerUser: 2,
+	},
 	concurrency: 1,
 	writeToDisk: false,
 	scdProps: {
@@ -698,202 +935,9 @@ const config = {
 		},
 	],
 
-	// ── Hook Function ──────────────────────────────────────
-	hook: function (record, type, meta) {
-		// ── HOOK 7: DOCTOR PROFILE SPECIALIZATION (user) ─────
-		// Doctors get a real specialty and senior years_experience.
-		// Nurses get mid-range experience. Patients stay at defaults.
-		if (type === "user") {
-			if (record.role === "doctor") {
-				record.specialty = chance.pickone(["cardiology", "dermatology", "pediatrics", "psychiatry", "general_practice", "pulmonology", "endocrinology"]);
-				record.years_experience = chance.integer({ min: 15, max: 30 });
-			} else if (record.role === "nurse") {
-				record.specialty = chance.pickone(["general_practice", "pediatrics", "emergency"]);
-				record.years_experience = chance.integer({ min: 3, max: 15 });
-			} else {
-				record.years_experience = 0;
-			}
-		}
-
-		// (HOOK 1: AFTER-HOURS SURGE PRICING moved to everything hook — hour checks
-		// must run after bunchIntoSessions redistributes timestamps)
-		// (HOOK 2: FLU SEASON SPIKE moved to everything hook — same reason)
-
-		// ── EVERYTHING HOOKS ─────────────────────────────────
-		if (type === "everything") {
-			if (!record.length) return record;
-			const profile = meta.profile;
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			const FLU_START = datasetStart.add(50, "days");
-			const FLU_END = datasetStart.add(70, "days");
-
-			// ── SUPER-PROP STAMPING ──────────────────────────
-			// Stamp superProps from profile so they are consistent per-user.
-			if (profile) {
-				const tier = profile.subscription_tier;
-				const plat = profile.Platform;
-				record.forEach(e => {
-					if (tier) e.subscription_tier = tier;
-					if (plat) e.Platform = plat;
-				});
-			}
-
-			// HOOK 9: BOOKING FUNNEL TTC BY TIER (property scaling)
-			// Premium users get shorter wait_time_hours (0.67x) and duration_minutes (0.67x).
-			// Free users get longer wait_time_hours (1.4x) and duration_minutes (1.4x).
-			// Basic users stay at baseline. SQL-measurable via AVG(wait_time_hours) broken by tier.
-			if (profile) {
-				const userTier = profile.subscription_tier;
-				const ttcFactor = userTier === "premium" ? 0.67 : userTier === "free" ? 1.4 : 1.0;
-				if (ttcFactor !== 1.0) {
-					// Timestamp shift: affects Mixpanel funnel TTC
-					const bookingSeq = findFirstSequence(
-						record,
-						["appointment booked", "consultation completed", "follow up scheduled"],
-						60 * 24 * 30
-					);
-					if (bookingSeq) scaleFunnelTTC(bookingSeq, ttcFactor);
-					// Property scale: affects Insights AVG reports
-					record.forEach(e => {
-						if (e.event === "appointment booked" && typeof e.wait_time_hours === "number") {
-							e.wait_time_hours = Math.round(e.wait_time_hours * ttcFactor * 10) / 10;
-						}
-						if (e.event === "consultation completed" && typeof e.duration_minutes === "number") {
-							e.duration_minutes = Math.round(e.duration_minutes * ttcFactor);
-						}
-					});
-				}
-			}
-
-			// HOOK 1: AFTER-HOURS SURGE PRICING — consultations 7PM-7AM
-			// UTC get consultation_fee 1.5x. No flag — discover via HOD chart.
-			record.forEach(e => {
-				if (e.event === "consultation completed" || e.event === "appointment booked") {
-					const hour = new Date(e.time).getUTCHours();
-					if ((hour >= 19 || hour < 7) && e.consultation_fee) {
-						e.consultation_fee = Math.floor(e.consultation_fee * 1.5);
-					}
-				}
-			});
-
-			// HOOK 2: FLU SEASON SPIKE — d50-70 respiratory dominates, wait_time doubles.
-			// Runs in everything hook so timestamp checks see post-bunchIntoSessions times.
-			record.forEach(e => {
-				if (e.event !== "appointment booked") return;
-				const t = dayjs(e.time);
-				if (t.isAfter(FLU_START) && t.isBefore(FLU_END)) {
-					if (chance.bool({ likelihood: 60 })) e.condition_type = "respiratory";
-					if (e.condition_type === "respiratory") {
-						e.wait_time_hours = Math.floor((e.wait_time_hours || 12) * 2);
-					}
-				}
-			});
-
-			// ── HOOK 8: FREE-TIER CONVERSION DROP ────────────
-			// Free-tier users lose ~30% of "consultation completed" events
-			// (last step of Booking to Consultation funnel), simulating
-			// lower conversion for non-paying patients.
-			if (profile && profile.subscription_tier === "free" && chance.bool({ likelihood: 30 })) {
-				record = record.filter(e => e.event !== "consultation completed");
-			}
-
-			// ── HOOK 3: EXPERIENCED DOCTOR SATISFACTION ──────
-			// Users with >12 consultation events get boosted satisfaction scores.
-			let consultCount = 0;
-			record.forEach(e => {
-				if (e.event === "consultation completed") consultCount++;
-			});
-
-			if (consultCount > 12) {
-				record.forEach(e => {
-					if (e.event === "consultation completed") {
-						e.satisfaction_score = chance.floating({ min: 4.0, max: 5.0, fixed: 1 });
-					}
-				});
-			}
-
-			// ── HOOK 4: VIDEO CONSULTATION FOLLOW-UP LIFT ────
-			// Patients with video consultations get 2x follow-up events.
-			const hasVideoConsult = record.some(e =>
-				e.event === "consultation completed" && e.consultation_mode === "video"
-			);
-			if (hasVideoConsult) {
-				const templateFollowUp = record.find(e => e.event === "follow up scheduled");
-				if (templateFollowUp) {
-					const videoConsults = record.filter(e =>
-						e.event === "consultation completed" && e.consultation_mode === "video"
-					);
-					videoConsults.forEach(vc => {
-						if (chance.bool({ likelihood: 60 })) {
-							record.push({
-								...templateFollowUp,
-								time: dayjs(vc.time).add(chance.integer({ min: 1, max: 7 }), "days").toISOString(),
-								user_id: vc.user_id,
-								consultation_mode: "video",
-								days_until_followup: chance.integer({ min: 3, max: 14 }),
-							});
-						}
-					});
-				}
-			}
-
-			// ── HOOK 5: CHRONIC CONDITION REFILL CHAIN ───────
-			// Patients with chronic prescriptions get refills every ~30 days.
-			const chronicRxs = record.filter(e =>
-				e.event === "prescription issued" && e.condition_type === "chronic"
-			);
-			if (chronicRxs.length > 0) {
-				const templateRefill = record.find(e => e.event === "prescription refill");
-				if (templateRefill) {
-					chronicRxs.forEach(rx => {
-						const rxTime = dayjs(rx.time);
-						const refillsToAdd = chance.integer({ min: 2, max: 4 });
-						for (let i = 1; i <= refillsToAdd; i++) {
-							record.push({
-								...templateRefill,
-								time: rxTime.add(30 * i + chance.integer({ min: -3, max: 3 }), "days").toISOString(),
-								user_id: rx.user_id,
-								condition_type: "chronic",
-								medication_type: "chronic_maintenance",
-								refill_count: i,
-							});
-						}
-					});
-				}
-			}
-
-			// HOOK 6: OCCASIONAL PATIENT NO-SHOWS — low-activity patients
-			// (< 15 events) lose 25% of consultations (they booked but didn't show).
-			if (record.length < 15) {
-				for (let i = record.length - 1; i >= 0; i--) {
-					if (record[i].event === "consultation completed" && chance.bool({ likelihood: 25 })) {
-						record.splice(i, 1);
-					}
-				}
-			}
-
-			// HOOK 10: CONSULTATION-COUNT MAGIC NUMBER (no flags)
-			// Sweet 3-6 consultations → +25% on consultation_fee. Over 7+ →
-			// drop 30% of "follow up scheduled" events (over-consulted →
-			// follow-up fatigue).
-			const consultCt = record.filter(e => e.event === "consultation completed").length;
-			if (consultCt >= 3 && consultCt <= 6) {
-				record.forEach(e => {
-					if (e.event === "consultation completed" && typeof e.consultation_fee === "number") {
-						e.consultation_fee = Math.round(e.consultation_fee * 1.25);
-					}
-				});
-			} else if (consultCt >= 7) {
-				record.forEach(e => {
-					if (e.event === "follow up scheduled" && typeof e.days_until_followup === "number") {
-						e.days_until_followup = Math.round(e.days_until_followup * 1.5);
-					}
-				});
-			}
-
-			return record;
-		}
-
+	hook(record, type, meta) {
+		if (type === "user") return handleUserHooks(record);
+		if (type === "everything") return handleEverythingHooks(record, meta);
 		return record;
 	},
 };

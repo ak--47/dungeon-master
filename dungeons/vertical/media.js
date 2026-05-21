@@ -1,57 +1,51 @@
-// ── TWEAK THESE ──
-const SEED = "harness-media";
-const num_days = 120;
-const num_users = 10_000;
-const avg_events_per_user_per_day = 1.2;
-let token = "your-mixpanel-token";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 import { findFirstSequence, scaleFunnelTTC } from "../../lib/hook-helpers/timing.js";
-
-dayjs.extend(utc);
-const chance = u.initChance(SEED);
-
 /** @typedef  {import("../../types").Dungeon} Config */
 
-/**
- * ═══════════════════════════════════════════════════════════════════════════════
- * DATASET OVERVIEW — STREAMVAULT VIDEO STREAMING PLATFORM
- * ═══════════════════════════════════════════════════════════════════════════════
+// ── OVERVIEW ──
+/*
+ * NAME:       StreamVault
+ * APP:        Netflix/Hulu-style video streaming platform. Users browse a
+ *             catalog of movies, series, documentaries and specials, manage
+ *             watchlists, watch with configurable quality/subtitle/speed,
+ *             rate and share content, and switch household profiles (main,
+ *             kids, partner, guest) under a single account.
+ * SCALE:      10,000 users, ~600K events, 121 days (2026-01-01 → 2026-05-01)
+ * CORE LOOP:  account created → content browsed → content selected → playback started → playback completed
  *
- * StreamVault is a Netflix/Hulu-style video streaming platform where users browse a rich
- * catalog of movies, series, documentaries, and specials. Users manage watchlists, watch
- * content with configurable playback options, rate and share content, and manage family
- * profiles under a single account.
+ * EVENTS (17):
+ *   content browsed (20) > playback started (18) > content selected (15)
+ *   > playback completed (12) > playback paused (10) > recommendation clicked (9)
+ *   > watchlist added (8) > ad impression (8) > search performed (7)
+ *   > content rated (6) > download started (5) > profile switched (4)
+ *   > subtitle toggled (4) > watchlist removed (3) > share content (3)
+ *   > subscription changed (2) > account created (1)
  *
- * - 10,000 users over 120 days
- * - ~600,000 events across 17 event types
- * - 9 funnels (onboarding, content discovery, engagement loop, search, watchlist, etc.)
- * - Subscription tiers: Free (ad-supported), Standard ($9.99/mo), Premium ($14.99/mo)
- * - Device types: Smart TV, Mobile, Tablet, Laptop, Desktop
- * - Content catalog: 500 titles with genres, types, and a blockbuster release event
+ * FUNNELS (9):
+ *   - Account to Playback:   account created → content browsed → playback started (80%)
+ *   - Core Viewing Loop:     content browsed → content selected → playback started → playback completed (55%)
+ *   - Recommendation Driven: recommendation clicked → playback started → playback completed → content rated (35%)
+ *   - Search Discovery:      search performed → content selected → playback started (50%)
+ *   - Watchlist Management:  content browsed → watchlist added → content selected → playback started (40%)
+ *   - Profile + Subtitle:    profile switched → subtitle toggled → playback started → playback completed (45%)
+ *   - Ad Experience:         ad impression → playback started → playback paused (60%)
+ *   - Share + Download:      playback completed → share content → download started (25%)
+ *   - Subscription Change:   content browsed → subscription changed (15%)
  *
- * Core loop: onboarding -> discovery -> consumption -> engagement -> monetization.
- * Users land on a personalized home screen, discover content via browse/search/recommendations,
- * watch with quality and subtitle options, rate and share, and manage subscriptions.
- * Profile switching (main, kids, partner, guest) reveals household dynamics.
+ * USER PROPS:  preferred_genre, avg_session_duration_min, total_watch_hours, profiles_count, downloads_enabled, subscription_plan, device_type
+ * SUPER PROPS: subscription_plan, device_type
+ * SCD PROPS:   subscription_plan (free/basic/standard/premium, monthly fuzzy, max 6)
+ * GROUPS:      none
  */
 
-/**
- * ═══════════════════════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (10 hooks)
- *
- * Adds 10. CORE VIEWING LOOP: premium 0.67x watch_duration_min, free 1.4x
- * (property scaling in everything hook). Discover via Insights → playback
- * completed → Avg watch_duration_min → breakdown subscription_plan.
- * ═══════════════════════════════════════════════════════════════════════════════
- *
+// ── HOOK STORIES ──
+/*
  * NOTE: All cohort effects are HIDDEN — discoverable only via behavioral cohorts
  * (count an event per user, then measure downstream). No cohort flag is stamped
  * on events. Time-window patterns mutate config-defined props or drop events.
@@ -294,35 +288,355 @@ const chance = u.initChance(SEED);
  * Core Viewing Loop        | free/premium duration   | 1x       | >= 2x       | 2.09x
  */
 
-// Generate consistent content IDs for lookup tables and events
+// ── SCALE ──
+const SEED = "harness-media";
+const NUM_USERS = 10_000;
+const DATASET_START = "2026-01-01T00:00:00Z";
+const DATASET_END = "2026-05-01T23:59:59Z";
+const EVENTS_PER_DAY = 1.2;
+const token = process.env.MP_TOKEN || "your-mixpanel-token";
+
+const chance = u.initChance(SEED);
+
+// ── KNOBS (tweak these to reshape stories) ──
+const KIDS_RESTRICT_LIKELIHOOD = 15;
+
+const PLAN_TTC_PREMIUM = 0.67;
+const PLAN_TTC_FREE = 1.4;
+
+const BLOCKBUSTER_START_DAY = 50;
+const BLOCKBUSTER_END_DAY = 65;
+const BLOCKBUSTER_SWAP_LIKELIHOOD = 20;
+const BLOCKBUSTER_RATING_LIKELIHOOD = 20;
+
+const WEEKEND_WATCH_MULT = 1.5;
+
+const DOC_DROP_LIKELIHOOD = 25;
+
+const REC_IMPROVEMENT_DAY = 60;
+const REC_IMPROVEMENT_DROP_LIKELIHOOD = 30;
+
+const BINGE_STREAK_THRESHOLD = 3;
+const BINGE_PAUSE_DROP_LIKELIHOOD = 60;
+const BINGE_CLONE_LIKELIHOOD = 40;
+
+const SUBTITLE_COMPLETION_MULT = 1.25;
+const SUBTITLE_DURATION_MULT = 1.15;
+const SUBTITLE_CLONE_FACTOR = 0.2;
+
+const REC_SWEET_MIN = 4;
+const REC_SWEET_MAX = 6;
+const REC_OVER_THRESHOLD = 7;
+const REC_SWEET_DURATION_MULT = 1.25;
+const REC_OVER_DURATION_MULT = 0.5;
+const REC_OVER_DROP_LIKELIHOOD = 55;
+
+const AD_FATIGUE_THRESHOLD = 5;
+const AD_FATIGUE_CUTOFF_DAYS = 45;
+const AD_FATIGUE_KEEP_MODULO = 20;
+
+// ── DATA ARRAYS ──
 const contentIds = v.range(1, 501).map(n => `content_${v.uid(8)}`);
 const blockbusterId = `blockbuster_${v.uid(8)}`;
 
+// ── HELPER FUNCTIONS ──
+function handleEventHooks(record) {
+	// H6: KIDS PROFILE SAFETY — 15% of selections/starts get genre restricted
+	// to animation or documentary. Mutates existing genre prop.
+	if (chance.bool({ likelihood: KIDS_RESTRICT_LIKELIHOOD })) {
+		if (record.event === "content selected" || record.event === "playback started") {
+			record.genre = chance.pickone(["animation", "documentary"]);
+		}
+	}
+	return record;
+}
+
+function handleEverythingHooks(record, meta) {
+	const datasetStart = dayjs.unix(meta.datasetStart);
+	const userEvents = record;
+	if (!userEvents || userEvents.length === 0) return record;
+
+	const profile = meta.profile;
+
+	// Stamp superProps from profile (consistent per user)
+	const stampPlan = profile && profile.subscription_plan ? profile.subscription_plan : undefined;
+	const stampDevice = profile && profile.device_type ? profile.device_type : undefined;
+	if (stampPlan || stampDevice) {
+		userEvents.forEach(e => {
+			if (stampPlan) e.subscription_plan = stampPlan;
+			if (stampDevice) e.device_type = stampDevice;
+		});
+	}
+
+	// HOOK 10: CORE VIEWING LOOP TTC — premium 0.67x, free 1.4x.
+	// Timestamp shift for Mixpanel funnel TTC + property scale for
+	// Insights. Applied first so weekend/subtitle/rec-click hooks
+	// amplify from the plan-adjusted base.
+	{
+		const plan = profile ? profile.subscription_plan : "free";
+		const ttcFactor = plan === "premium" ? PLAN_TTC_PREMIUM : plan === "free" ? PLAN_TTC_FREE : 1.0;
+		if (ttcFactor !== 1.0) {
+			// Timestamp shift: affects Mixpanel funnel TTC
+			const viewSeq = findFirstSequence(
+				userEvents,
+				["content browsed", "content selected", "playback started", "playback completed"],
+				60 * 24 * 7
+			);
+			if (viewSeq) scaleFunnelTTC(viewSeq, ttcFactor);
+			// Property scale: affects Insights AVG reports
+			for (const e of userEvents) {
+				if (e.event === "playback completed" && typeof e.watch_duration_min === "number") {
+					e.watch_duration_min = Math.round(e.watch_duration_min * ttcFactor * 10) / 10;
+				}
+			}
+		}
+	}
+
+	// Hook #5: NEW RELEASE SPIKE — days 50-65, 20% of selections/starts
+	// switch to the blockbuster id. Mutates existing content_id/content_type props.
+	const BLOCKBUSTER_START = datasetStart.add(BLOCKBUSTER_START_DAY, "days");
+	const BLOCKBUSTER_END = datasetStart.add(BLOCKBUSTER_END_DAY, "days");
+	for (const e of userEvents) {
+		const eventTime = dayjs(e.time);
+		if (eventTime.isAfter(BLOCKBUSTER_START) && eventTime.isBefore(BLOCKBUSTER_END)) {
+			if ((e.event === "content selected" || e.event === "playback started") && chance.bool({ likelihood: BLOCKBUSTER_SWAP_LIKELIHOOD })) {
+				e.content_type = "movie";
+				e.content_id = blockbusterId;
+			}
+			if (e.event === "content rated" && chance.bool({ likelihood: BLOCKBUSTER_RATING_LIKELIHOOD })) {
+				e.rating = chance.integer({ min: 4, max: 5 });
+				e.content_id = blockbusterId;
+			}
+		}
+	}
+
+	// Hook #10: CORE VIEWING LOOP — subscription_plan property scaling.
+	// Premium users watch more efficiently (shorter durations), free users
+	// linger (longer durations). Scales watch_duration_min on playback
+	// completed events BEFORE H3/H8/H9 so each subsequent hook amplifies
+	// from the plan-adjusted base.
+	// Discover via: Insights → playback completed → Avg watch_duration_min → breakdown subscription_plan.
+	{
+		const plan = stampPlan;
+		const factor = (
+			plan === "premium" ? PLAN_TTC_PREMIUM :
+			plan === "free" ? PLAN_TTC_FREE :
+			1.0
+		);
+		if (factor !== 1.0) {
+			for (const e of userEvents) {
+				if (e.event === "playback completed" && typeof e.watch_duration_min === "number") {
+					e.watch_duration_min = Math.round(e.watch_duration_min * factor);
+				}
+			}
+		}
+	}
+
+	// Hook #3: WEEKEND VS WEEKDAY — 1.5x watch_duration_min on weekends.
+	// No flag — analyst breaks down by day of week.
+	for (const e of userEvents) {
+		const dow = new Date(e.time).getUTCDay();
+		if ((dow === 0 || dow === 6) && e.event === "playback completed" && typeof e.watch_duration_min === "number") {
+			e.watch_duration_min = Math.round(e.watch_duration_min * WEEKEND_WATCH_MULT);
+		}
+	}
+
+	// Hook #1: GENRE FUNNEL CONVERSION — drop 25% of documentary playback
+	// completed events to depress documentary funnel conversion. Raw genre check.
+	for (let i = userEvents.length - 1; i >= 0; i--) {
+		const evt = userEvents[i];
+		if (evt.event === "playback completed" && evt.genre === "documentary" && chance.bool({ likelihood: DOC_DROP_LIKELIHOOD })) {
+			userEvents.splice(i, 1);
+		}
+	}
+
+	// Hook #7: RECOMMENDATION ENGINE IMPROVEMENT — drop 30% of pre-day-60
+	// content rated events. Raw time check.
+	const IMPROVEMENT_DATE = datasetStart.add(REC_IMPROVEMENT_DAY, "days");
+	for (let i = userEvents.length - 1; i >= 0; i--) {
+		const evt = userEvents[i];
+		if (evt.event === "content rated" && dayjs(evt.time).isBefore(IMPROVEMENT_DATE) && chance.bool({ likelihood: REC_IMPROVEMENT_DROP_LIKELIHOOD })) {
+			userEvents.splice(i, 1);
+		}
+	}
+
+	const firstEventTime = dayjs(userEvents[0].time);
+
+	// Identify behavioral patterns (no flags written)
+	let consecutiveCompletions = 0;
+	let maxConsecutiveCompletions = 0;
+	let earlyAdCount = 0;
+	let hasSubtitlesEnabled = false;
+	let recClickCount = 0;
+
+	const adCutoff = firstEventTime.add(AD_FATIGUE_CUTOFF_DAYS, "days");
+	userEvents.forEach((event, idx) => {
+		if (event.event === "playback completed") {
+			consecutiveCompletions++;
+			if (consecutiveCompletions > maxConsecutiveCompletions) {
+				maxConsecutiveCompletions = consecutiveCompletions;
+			}
+		} else if (event.event !== "playback started") {
+			consecutiveCompletions = 0;
+		}
+		if (event.event === "ad impression" && dayjs(event.time).isBefore(adCutoff)) earlyAdCount++;
+		if (event.event === "subtitle toggled" && event.action === "enabled") hasSubtitlesEnabled = true;
+		if (event.event === "recommendation clicked") recClickCount++;
+	});
+
+	const isBingeWatcher = maxConsecutiveCompletions >= BINGE_STREAK_THRESHOLD;
+
+	// Hook #2: BINGE-WATCHING — drop pauses, inject extra start+complete pairs.
+	// Cloned events use unique offset timestamps. No flag.
+	if (isBingeWatcher) {
+		for (let i = userEvents.length - 1; i >= 0; i--) {
+			const event = userEvents[i];
+			const eventTime = dayjs(event.time);
+
+			if (event.event === "playback paused" && chance.bool({ likelihood: BINGE_PAUSE_DROP_LIKELIHOOD })) {
+				userEvents.splice(i, 1);
+				continue;
+			}
+
+			if (event.event === "playback completed" && chance.bool({ likelihood: BINGE_CLONE_LIKELIHOOD })) {
+				const nextContentId = chance.pickone(contentIds);
+				const startTemplate = userEvents.find(e => e.event === "playback started");
+				const extraStart = {
+					...(startTemplate || event),
+					event: "playback started",
+					time: eventTime.add(chance.integer({ min: 1, max: 5 }), "minutes").toISOString(),
+					user_id: event.user_id,
+					content_id: nextContentId,
+					content_type: "series",
+					playback_quality: event.playback_quality || "1080p",
+				};
+				const extraComplete = {
+					...event,
+					time: eventTime.add(chance.integer({ min: 25, max: 60 }), "minutes").toISOString(),
+					user_id: event.user_id,
+					content_id: nextContentId,
+					content_type: "series",
+					watch_duration_min: chance.integer({ min: 20, max: 55 }),
+					completion_percent: chance.integer({ min: 90, max: 100 }),
+				};
+				userEvents.splice(i + 1, 0, extraStart, extraComplete);
+			}
+		}
+	}
+
+	// Hook #8: SUBTITLE USERS WATCH MORE — 1.25x completion_percent (cap 100),
+	// 1.15x watch_duration_min, plus 20% extra cloned playback completions.
+	// No flag — discover via cohort builder on subtitle-toggled-enabled.
+	if (hasSubtitlesEnabled) {
+		for (let i = 0; i < userEvents.length; i++) {
+			const event = userEvents[i];
+			if (event.event === "playback completed") {
+				if (event.completion_percent) {
+					event.completion_percent = Math.min(100, Math.round(event.completion_percent * SUBTITLE_COMPLETION_MULT));
+				}
+				if (event.watch_duration_min) {
+					event.watch_duration_min = Math.round(event.watch_duration_min * SUBTITLE_DURATION_MULT);
+				}
+			}
+		}
+
+		const completionEvents = userEvents.filter(e => e.event === "playback completed");
+		const extraCount = Math.floor(completionEvents.length * SUBTITLE_CLONE_FACTOR);
+		for (let j = 0; j < extraCount; j++) {
+			const templateEvent = chance.pickone(completionEvents);
+			const templateTime = dayjs(templateEvent.time);
+			const extraCompletion = {
+				...templateEvent,
+				time: templateTime.add(chance.integer({ min: 30, max: 180 }), "minutes").toISOString(),
+				user_id: templateEvent.user_id,
+				content_id: chance.pickone(contentIds),
+				content_type: chance.pickone(["movie", "series", "documentary"]),
+				watch_duration_min: chance.integer({ min: 25, max: 120 }),
+				completion_percent: chance.integer({ min: 80, max: 100 }),
+			};
+			userEvents.push(extraCompletion);
+		}
+	}
+
+	// Hook #9: RECOMMENDATION-CLICKED MAGIC NUMBER (no flags)
+	// Sweet 4-6 rec clicks → +25% watch_duration_min on playback completed.
+	// Over 7+ → halve watch_duration_min AND drop 55% of playback completed
+	// events (rec fatigue). Aggressive suppression overcomes the inherent
+	// engagement confound (high-rec-click users are naturally more active).
+	if (recClickCount >= REC_SWEET_MIN && recClickCount <= REC_SWEET_MAX) {
+		userEvents.forEach(e => {
+			if (e.event === "playback completed" && typeof e.watch_duration_min === "number") {
+				e.watch_duration_min = Math.round(e.watch_duration_min * REC_SWEET_DURATION_MULT);
+			}
+		});
+	} else if (recClickCount >= REC_OVER_THRESHOLD) {
+		for (let i = userEvents.length - 1; i >= 0; i--) {
+			const evt = userEvents[i];
+			if (evt.event === "playback completed") {
+				// Halve watch duration for surviving events
+				if (typeof evt.watch_duration_min === "number") {
+					evt.watch_duration_min = Math.round(evt.watch_duration_min * REC_OVER_DURATION_MULT);
+				}
+				// Drop 55% of completions
+				if (chance.bool({ likelihood: REC_OVER_DROP_LIKELIHOOD })) {
+					userEvents.splice(i, 1);
+				}
+			}
+		}
+	}
+
+	// Hook #4: AD FATIGUE CHURN — users w/ 5+ early ad impressions lose
+	// nearly all events after day 45. Runs LAST so event-adding hooks
+	// (binge-watching, subtitle) can't re-inflate the post-d45 count.
+	// Applies to ALL tiers (ad fatigue affects anyone exposed to heavy ads,
+	// regardless of plan). 95% drop overcomes the ~3x activity confound.
+	if (earlyAdCount >= AD_FATIGUE_THRESHOLD) {
+		const churnCutoff = firstEventTime.add(AD_FATIGUE_CUTOFF_DAYS, "days");
+		for (let i = userEvents.length - 1; i >= 0; i--) {
+			const evt = userEvents[i];
+			if (dayjs(evt.time).isAfter(churnCutoff)) {
+				// Keep only ~5% of post-d45 events (drop 95%)
+				const keep = (i % AD_FATIGUE_KEEP_MODULO) === 0;
+				if (!keep) {
+					userEvents.splice(i, 1);
+				}
+			}
+		}
+	}
+
+	return record;
+}
+
+// ── CONFIG ──
 /** @type {Config} */
 const config = {
 	version: 2,
-	token,
 	seed: SEED,
-	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-05-01T23:59:59Z",
-	// numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
-	hasAnonIds: true,
-	avgDevicePerUser: 2,
-	hasSessionIds: true,
+	datasetStart: DATASET_START,
+	datasetEnd: DATASET_END,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	format: "json",
 	gzip: true,
-	alsoInferFunnels: false,
-	hasLocation: true,
-	hasAndroidDevices: true,
-	hasIOSDevices: true,
-	hasDesktopDevices: true,
-	hasBrowser: false,
-	hasCampaigns: false,
-	isAnonymous: false,
-	hasAdSpend: false,
-	hasAvatar: true,
+	credentials: {
+		token,
+	},
+	switches: {
+		hasSessionIds: true,
+		alsoInferFunnels: false,
+		hasLocation: true,
+		hasAndroidDevices: true,
+		hasIOSDevices: true,
+		hasDesktopDevices: true,
+		hasBrowser: false,
+		hasCampaigns: false,
+		isAnonymous: false,
+		hasAdSpend: false,
+		hasAvatar: true,
+	},
+	identity: {
+		avgDevicePerUser: 2,
+	},
 	concurrency: 1,
 	writeToDisk: false,
 
@@ -580,278 +894,11 @@ const config = {
 
 	lookupTables: [],
 
-	hook: function (record, type, meta) {
-		if (type === "event") {
-			// Hook #6: KIDS PROFILE SAFETY — 15% of selections/starts get genre
-			// restricted to animation or documentary. Mutates existing genre prop.
-			if (chance.bool({ likelihood: 15 })) {
-				if (record.event === "content selected" || record.event === "playback started") {
-					record.genre = chance.pickone(["animation", "documentary"]);
-				}
-			}
-
-			return record;
-		}
-
-		if (type === "everything") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			const userEvents = record;
-			if (!userEvents || userEvents.length === 0) return record;
-
-			const profile = meta.profile;
-
-			// Stamp superProps from profile (consistent per user)
-			const stampPlan = profile && profile.subscription_plan ? profile.subscription_plan : undefined;
-			const stampDevice = profile && profile.device_type ? profile.device_type : undefined;
-			if (stampPlan || stampDevice) {
-				userEvents.forEach(e => {
-					if (stampPlan) e.subscription_plan = stampPlan;
-					if (stampDevice) e.device_type = stampDevice;
-				});
-			}
-
-			// HOOK 10: CORE VIEWING LOOP TTC — premium 0.67x, free 1.4x.
-			// Timestamp shift for Mixpanel funnel TTC + property scale for
-			// Insights. Applied first so weekend/subtitle/rec-click hooks
-			// amplify from the plan-adjusted base.
-			{
-				const plan = profile ? profile.subscription_plan : "free";
-				const ttcFactor = plan === "premium" ? 0.67 : plan === "free" ? 1.4 : 1.0;
-				if (ttcFactor !== 1.0) {
-					// Timestamp shift: affects Mixpanel funnel TTC
-					const viewSeq = findFirstSequence(
-						userEvents,
-						["content browsed", "content selected", "playback started", "playback completed"],
-						60 * 24 * 7
-					);
-					if (viewSeq) scaleFunnelTTC(viewSeq, ttcFactor);
-					// Property scale: affects Insights AVG reports
-					for (const e of userEvents) {
-						if (e.event === "playback completed" && typeof e.watch_duration_min === "number") {
-							e.watch_duration_min = Math.round(e.watch_duration_min * ttcFactor * 10) / 10;
-						}
-					}
-				}
-			}
-
-			// Hook #5: NEW RELEASE SPIKE — days 50-65, 20% of selections/starts
-			// switch to the blockbuster id. Mutates existing content_id/content_type props.
-			// (Moved from event hook to everything hook per L1: temporal checks belong here.)
-			const BLOCKBUSTER_START = datasetStart.add(50, 'days');
-			const BLOCKBUSTER_END = datasetStart.add(65, 'days');
-			for (const e of userEvents) {
-				const eventTime = dayjs(e.time);
-				if (eventTime.isAfter(BLOCKBUSTER_START) && eventTime.isBefore(BLOCKBUSTER_END)) {
-					if ((e.event === "content selected" || e.event === "playback started") && chance.bool({ likelihood: 20 })) {
-						e.content_type = "movie";
-						e.content_id = blockbusterId;
-					}
-					if (e.event === "content rated" && chance.bool({ likelihood: 20 })) {
-						e.rating = chance.integer({ min: 4, max: 5 });
-						e.content_id = blockbusterId;
-					}
-				}
-			}
-
-			// Hook #10: CORE VIEWING LOOP — subscription_plan property scaling.
-			// Premium users watch more efficiently (shorter durations), free users
-			// linger (longer durations). Scales watch_duration_min on playback
-			// completed events BEFORE H3/H8/H9 so each subsequent hook amplifies
-			// from the plan-adjusted base.
-			// Discover via: Insights → playback completed → Avg watch_duration_min → breakdown subscription_plan.
-			{
-				const plan = stampPlan;
-				const factor = (
-					plan === "premium" ? 0.67 :
-					plan === "free" ? 1.4 :
-					1.0
-				);
-				if (factor !== 1.0) {
-					for (const e of userEvents) {
-						if (e.event === "playback completed" && typeof e.watch_duration_min === "number") {
-							e.watch_duration_min = Math.round(e.watch_duration_min * factor);
-						}
-					}
-				}
-			}
-
-			// Hook #3: WEEKEND VS WEEKDAY — 1.5x watch_duration_min on weekends.
-			// No flag — analyst breaks down by day of week.
-			for (const e of userEvents) {
-				const dow = new Date(e.time).getUTCDay();
-				if ((dow === 0 || dow === 6) && e.event === "playback completed" && typeof e.watch_duration_min === "number") {
-					e.watch_duration_min = Math.round(e.watch_duration_min * 1.5);
-				}
-			}
-
-			// Hook #1: GENRE FUNNEL CONVERSION — drop 25% of documentary playback
-			// completed events to depress documentary funnel conversion. Raw genre check.
-			for (let i = userEvents.length - 1; i >= 0; i--) {
-				const evt = userEvents[i];
-				if (evt.event === "playback completed" && evt.genre === "documentary" && chance.bool({ likelihood: 25 })) {
-					userEvents.splice(i, 1);
-				}
-			}
-
-			// Hook #7: RECOMMENDATION ENGINE IMPROVEMENT — drop 30% of pre-day-60
-			// content rated events. Raw time check.
-			const IMPROVEMENT_DATE = datasetStart.add(60, 'days');
-			for (let i = userEvents.length - 1; i >= 0; i--) {
-				const evt = userEvents[i];
-				if (evt.event === "content rated" && dayjs(evt.time).isBefore(IMPROVEMENT_DATE) && chance.bool({ likelihood: 30 })) {
-					userEvents.splice(i, 1);
-				}
-			}
-
-			const firstEventTime = dayjs(userEvents[0].time);
-
-			// Identify behavioral patterns (no flags written)
-			let consecutiveCompletions = 0;
-			let maxConsecutiveCompletions = 0;
-			let earlyAdCount = 0;
-			let hasSubtitlesEnabled = false;
-			let recClickCount = 0;
-
-			const adCutoff = firstEventTime.add(45, 'days');
-			userEvents.forEach((event, idx) => {
-				if (event.event === "playback completed") {
-					consecutiveCompletions++;
-					if (consecutiveCompletions > maxConsecutiveCompletions) {
-						maxConsecutiveCompletions = consecutiveCompletions;
-					}
-				} else if (event.event !== "playback started") {
-					consecutiveCompletions = 0;
-				}
-				if (event.event === "ad impression" && dayjs(event.time).isBefore(adCutoff)) earlyAdCount++;
-				if (event.event === "subtitle toggled" && event.action === "enabled") hasSubtitlesEnabled = true;
-				if (event.event === "recommendation clicked") recClickCount++;
-			});
-
-			const isBingeWatcher = maxConsecutiveCompletions >= 3;
-
-			// Hook #2: BINGE-WATCHING — drop pauses, inject extra start+complete pairs.
-			// Cloned events use unique offset timestamps. No flag.
-			if (isBingeWatcher) {
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					const event = userEvents[i];
-					const eventTime = dayjs(event.time);
-
-					if (event.event === "playback paused" && chance.bool({ likelihood: 60 })) {
-						userEvents.splice(i, 1);
-						continue;
-					}
-
-					if (event.event === "playback completed" && chance.bool({ likelihood: 40 })) {
-						const nextContentId = chance.pickone(contentIds);
-						const startTemplate = userEvents.find(e => e.event === "playback started");
-						const extraStart = {
-							...(startTemplate || event),
-							event: "playback started",
-							time: eventTime.add(chance.integer({ min: 1, max: 5 }), 'minutes').toISOString(),
-							user_id: event.user_id,
-							content_id: nextContentId,
-							content_type: "series",
-							playback_quality: event.playback_quality || "1080p",
-						};
-						const extraComplete = {
-							...event,
-							time: eventTime.add(chance.integer({ min: 25, max: 60 }), 'minutes').toISOString(),
-							user_id: event.user_id,
-							content_id: nextContentId,
-							content_type: "series",
-							watch_duration_min: chance.integer({ min: 20, max: 55 }),
-							completion_percent: chance.integer({ min: 90, max: 100 }),
-						};
-						userEvents.splice(i + 1, 0, extraStart, extraComplete);
-					}
-				}
-			}
-
-			// Hook #8: SUBTITLE USERS WATCH MORE — 1.25x completion_percent (cap 100),
-			// 1.15x watch_duration_min, plus 20% extra cloned playback completions.
-			// No flag — discover via cohort builder on subtitle-toggled-enabled.
-			if (hasSubtitlesEnabled) {
-				for (let i = 0; i < userEvents.length; i++) {
-					const event = userEvents[i];
-					if (event.event === "playback completed") {
-						if (event.completion_percent) {
-							event.completion_percent = Math.min(100, Math.round(event.completion_percent * 1.25));
-						}
-						if (event.watch_duration_min) {
-							event.watch_duration_min = Math.round(event.watch_duration_min * 1.15);
-						}
-					}
-				}
-
-				const completionEvents = userEvents.filter(e => e.event === "playback completed");
-				const extraCount = Math.floor(completionEvents.length * 0.2);
-				for (let j = 0; j < extraCount; j++) {
-					const templateEvent = chance.pickone(completionEvents);
-					const templateTime = dayjs(templateEvent.time);
-					const extraCompletion = {
-						...templateEvent,
-						time: templateTime.add(chance.integer({ min: 30, max: 180 }), 'minutes').toISOString(),
-						user_id: templateEvent.user_id,
-						content_id: chance.pickone(contentIds),
-						content_type: chance.pickone(["movie", "series", "documentary"]),
-						watch_duration_min: chance.integer({ min: 25, max: 120 }),
-						completion_percent: chance.integer({ min: 80, max: 100 }),
-					};
-					userEvents.push(extraCompletion);
-				}
-			}
-
-			// Hook #9: RECOMMENDATION-CLICKED MAGIC NUMBER (no flags)
-			// Sweet 4-6 rec clicks → +25% watch_duration_min on playback completed.
-			// Over 7+ → halve watch_duration_min AND drop 55% of playback completed
-			// events (rec fatigue). Aggressive suppression overcomes the inherent
-			// engagement confound (high-rec-click users are naturally more active).
-			if (recClickCount >= 4 && recClickCount <= 6) {
-				userEvents.forEach(e => {
-					if (e.event === 'playback completed' && typeof e.watch_duration_min === 'number') {
-						e.watch_duration_min = Math.round(e.watch_duration_min * 1.25);
-					}
-				});
-			} else if (recClickCount >= 7) {
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					const evt = userEvents[i];
-					if (evt.event === 'playback completed') {
-						// Halve watch duration for surviving events
-						if (typeof evt.watch_duration_min === 'number') {
-							evt.watch_duration_min = Math.round(evt.watch_duration_min * 0.5);
-						}
-						// Drop 55% of completions
-						if (chance.bool({ likelihood: 55 })) {
-							userEvents.splice(i, 1);
-						}
-					}
-				}
-			}
-
-			// Hook #4: AD FATIGUE CHURN — users w/ 5+ early ad impressions lose
-			// nearly all events after day 45. Runs LAST so event-adding hooks
-			// (binge-watching, subtitle) can't re-inflate the post-d45 count.
-			// Applies to ALL tiers (ad fatigue affects anyone exposed to heavy ads,
-			// regardless of plan). 95% drop overcomes the ~3x activity confound.
-			if (earlyAdCount >= 5) {
-				const churnCutoff = firstEventTime.add(45, 'days');
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					const evt = userEvents[i];
-					if (dayjs(evt.time).isAfter(churnCutoff)) {
-						// Keep only ~5% of post-d45 events (drop 95%)
-						const keep = (i % 20) === 0;
-						if (!keep) {
-							userEvents.splice(i, 1);
-						}
-					}
-				}
-			}
-
-			return record;
-		}
-
+	hook(record, type, meta) {
+		if (type === "event") return handleEventHooks(record);
+		if (type === "everything") return handleEverythingHooks(record, meta);
 		return record;
-	}
+	},
 };
 
 export default config;

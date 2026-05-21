@@ -1,0 +1,64 @@
+# gcloud builds submit upload-context exclusions.
+#
+# Without this file, gcloud falls back to .gitignore — but .gitignore excludes
+# `dungeons/user/*`, which would strip out the kodiak runner from the build
+# context and break the Dockerfile COPY step. So this file overrides.
+#
+# Rule: include EVERYTHING the Dockerfile needs to COPY at build time
+# (index.js, types.d.ts, lib/, scripts/, dungeons/user/kodiak/, package*.json).
+# Exclude everything else to keep the upload small + fast.
+
+# ── always exclude ──
+.git
+.gitignore
+.gcloudignore
+node_modules/
+.DS_Store
+**/.DS_Store
+*.log
+*.bak
+
+# ── secrets ──
+.env
+env.yml
+
+# ── tests, coverage, temp ──
+tests/coverage/
+tmp/
+.tmp/
+data/
+logs/
+duckdb_temp_*
+*scratch*
+
+# ── docs / dev artifacts (NOT shipped to runtime) ──
+docs/
+plans/
+research/
+verification/
+examples/
+PHASE1-IMPROVEMENTS.md
+LOGBOOK.md
+CHANGELOG.md
+README.md
+HOOKS.md
+
+# ── dungeons NOT used by kodiak runner ──
+# kodiak's Dockerfile only COPYs `dungeons/user/kodiak/`, so other dungeon
+# directories are useless bytes in the upload context. Excluded by directory.
+# (Avoiding the `dungeons/user/` + `!dungeons/user/kodiak/` re-include trick
+# because gitignore-style negation can't undo a parent-directory exclusion
+# in all gcloud client versions.)
+dungeons/customers/
+dungeons/capstone/
+dungeons/technical/
+dungeons/vertical/
+dungeons/*ai-dungeon*
+
+# ── catch-all ignore prefix ──
+ignore*
+
+# ── exclude generated artifacts that exist in the kodiak dir ──
+dungeons/user/kodiak/chunk-plan.json
+dungeons/user/kodiak/validate.sql
+dungeons/user/kodiak/examples/

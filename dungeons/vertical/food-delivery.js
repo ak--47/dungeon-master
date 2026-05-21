@@ -1,62 +1,50 @@
-// ── TWEAK THESE ──
-const SEED = "harness-food";
-const num_days = 120;
-const num_users = 10_000;
-const avg_events_per_user_per_day = 1.2;
-let token = "your-mixpanel-token";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
 import { findFirstSequence, scaleFunnelTTC } from "../../lib/hook-helpers/timing.js";
-
-dayjs.extend(utc);
-const chance = u.initChance(SEED);
 /** @typedef  {import("../../types").Dungeon} Config */
 
+// ── OVERVIEW ──
 /*
- * ═══════════════════════════════════════════════════════════════════════════════
- * DATASET OVERVIEW
- * ═══════════════════════════════════════════════════════════════════════════════
+ * NAME:       QuickBite
+ * APP:        Food delivery platform (DoorDash/Uber Eats style). Users browse
+ *             restaurants, build carts, place orders, track deliveries, and
+ *             rate their experiences. Monetization via delivery fees,
+ *             QuickBite+ subscription, and promotional coupons.
+ * SCALE:      10,000 users, ~1.4M events, 121 days (2026-01-01 → 2026-05-01)
+ * CORE LOOP:  sign up → browse/search → add to cart → checkout → order placed → track → rate → reorder
  *
- * QuickBite — a food delivery platform (DoorDash/Uber Eats style).
- * Users browse restaurants, build carts, place orders, track deliveries,
- * and rate their experiences.
+ * EVENTS (17):
+ *   restaurant browsed (18) > restaurant viewed (15) > item added to cart (14)
+ *   > order tracked (13) > checkout started (12) > search performed (11)
+ *   > order placed (10) > order delivered (9) > promotion viewed (8)
+ *   > order rated (7) > reorder initiated (6) > item removed from cart (5)
+ *   > coupon applied (4) > support ticket (3) > subscription started (2)
+ *   > subscription cancelled (1) > account created (1)
  *
- * Scale: 5,000 users · 600K events · 100 days · 17 event types
+ * FUNNELS (8):
+ *   - Onboarding:         account created → restaurant browsed → restaurant viewed (80%)
+ *   - Browse Discovery:   restaurant browsed → restaurant viewed → item added to cart (55%)
+ *   - Search Ordering:    search performed → restaurant viewed → item added to cart → checkout started (45%)
+ *   - Order Lifecycle:    checkout started → order placed → order tracked → order delivered (65%)
+ *   - Reorder Loop:       order delivered → order rated → reorder initiated (40%)
+ *   - Promo Flow:         promotion viewed → coupon applied → checkout started (50%)
+ *   - Support Flow:       support ticket → order rated (45%)
+ *   - Subscription Mgmt:  subscription started → order placed → subscription cancelled (20%)
  *
- * Core loop:
- *   sign up → browse/search restaurants → add items to cart →
- *   checkout → order placed → track delivery → rate → reorder
- *
- * Restaurant ecosystem: 200 restaurants across 8 cuisine types,
- * four price tiers ($–$$$$), modeled as group profiles.
- *
- * Monetization: delivery fees, QuickBite+ subscription ($9.99/mo or
- * $79.99/yr for free delivery), and promotional coupons.
- *
- * Support & retention: support tickets (missing items, wrong orders,
- * late delivery, quality, refunds) and reorder events model service
- * quality and repeat behavior.
- *
- * Subscription tiers: Free vs QuickBite+ create a natural A/B
- * comparison for monetization and retention analysis.
+ * USER PROPS:  preferred_cuisine, avg_order_value, orders_per_month, favorite_restaurant_count, Platform, subscription_tier, city
+ * SUPER PROPS: Platform, subscription_tier, city
+ * SCD PROPS:   subscription_tier (free/trial/monthly/annual, monthly fuzzy, max 6),
+ *              restaurant_tier (new/verified/featured/premium, monthly fixed, max 6, type=restaurant_id)
+ * GROUPS:      restaurant_id (200 restaurants; restaurant viewed / order placed / order rated)
  */
 
+// ── HOOK STORIES ──
 /*
- * ═══════════════════════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (10 hooks)
- *
- * Adds 9. ORDER LIFECYCLE TIME-TO-CONVERT: QuickBite+ 0.67x delivery times,
- * Free 1.4x slower (everything hook, property scaling). Discover via
- * avg(actual_delivery_mins) on "order delivered" by subscription_tier.
- * ═══════════════════════════════════════════════════════════════════════════════
- *
  * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable only via
  * behavioral cohorts or raw-prop breakdowns (HOD, day, segment).
  *
@@ -126,7 +114,7 @@ const chance = u.initChance(SEED);
  * REAL-WORLD ANALOGUE: Late-night ordering skews to fast food and impulse buys.
  *
  * ───────────────────────────────────────────────────────────────────────────────
- * 4. RAINY WEEK SURGE (event + everything)
+ * 4. RAINY WEEK SURGE (everything)
  * ───────────────────────────────────────────────────────────────────────────────
  *
  * PATTERN: Days 20-27, "order placed" delivery_fee doubled and 40% of those
@@ -298,44 +286,327 @@ const chance = u.initChance(SEED);
  * Trial Conversion      | post-day-14 activity | 1x       | ~ 0.4x      | -60%
  * First Order Bonus     | returning conversion | 1x       | 0.7x        | -30%
  * Order-Count Magic Num | sweet order_total    | 1x       | 1.4x        | 1.4x
- * Order-Count Magic Num | over order_total      | 1x       | 0.65x       | -35%
+ * Order-Count Magic Num | over order_total     | 1x       | 0.65x       | -35%
  * Order Lifecycle TTC   | QB+ delivery_mins    | 1x       | 0.67x       | -33%
  * Order Lifecycle TTC   | Free delivery_mins   | 1x       | 1.4x        | +40%
  * City Density Reorder  | SF/NYC reorder conv  | 1x       | 1.4x        | 1.4x
  * City Density Reorder  | HOU/PHX reorder conv | 1x       | 0.7x        | -30%
  */
 
-// Generate consistent IDs for lookup tables and event properties
+// ── SCALE ──
+const SEED = "harness-food";
+const NUM_USERS = 10_000;
+const DATASET_START = "2026-01-01T00:00:00Z";
+const DATASET_END = "2026-05-01T23:59:59Z";
+const EVENTS_PER_DAY = 1.2;
+const token = process.env.MP_TOKEN || "your-mixpanel-token";
+
+const chance = u.initChance(SEED);
+
+// ── KNOBS (tweak these to reshape stories) ──
+const RUSH_DROP_LIKELIHOOD = 30;
+const RUSH_LUNCH_START = 11;
+const RUSH_LUNCH_END = 13;
+const RUSH_DINNER_START = 17;
+const RUSH_DINNER_END = 20;
+
+const COUPON_INJECT_LIKELIHOOD = 30;
+
+const LATE_NIGHT_START = 22;
+const LATE_NIGHT_END = 2;
+const LATE_NIGHT_FLIP_LIKELIHOOD = 70;
+const LATE_NIGHT_PRICE_MULT = 1.3;
+
+const RAINY_START_DAY = 20;
+const RAINY_END_DAY = 27;
+const RAINY_FEE_MULT = 2;
+const RAINY_DUP_LIKELIHOOD = 40;
+
+const REFERRAL_CLONE_LIKELIHOOD = 50;
+const REFERRAL_RATING_MIN = 4;
+const REFERRAL_RATING_MAX = 5;
+
+const TRIAL_EARLY_DAYS = 14;
+const TRIAL_MIN_ORDERS = 3;
+const TRIAL_DROP_LIKELIHOOD = 60;
+
+const FIRST_ORDER_DROP_LIKELIHOOD = 30;
+
+const ORDER_SWEET_MIN = 4;
+const ORDER_SWEET_MAX = 8;
+const ORDER_OVER_THRESHOLD = 9;
+const ORDER_SWEET_BOOST = 1.4;
+const ORDER_OVER_FACTOR = 0.65;
+
+const TTC_QB_PLUS_FACTOR = 0.67;
+const TTC_FREE_FACTOR = 1.4;
+
+const CITY_DENSE_MULT = 1.4;
+const CITY_SPRAWL_MULT = 0.7;
+
+// ── DATA ARRAYS ──
 const restaurantIds = v.range(1, 201).map(n => `rest_${v.uid(6)}`);
 const itemIds = v.range(1, 301).map(n => `item_${v.uid(7)}`);
 const orderIds = v.range(1, 5001).map(n => `order_${v.uid(8)}`);
 const couponCodes = v.range(1, 51).map(n => `QUICK${v.uid(5).toUpperCase()}`);
 
+// ── HELPER FUNCTIONS ──
+function handleFunnelPreHooks(record, meta) {
+	// H10: CITY DENSITY REORDER BOOST — dense cities 1.4x; sprawl 0.7x
+	// on the reorder funnel.
+	const isReorderFunnel = meta.funnel?.sequence?.includes("reorder initiated");
+	if (isReorderFunnel) {
+		const city = meta.profile?.city;
+		if (city === "San Francisco" || city === "New York") {
+			record.conversionRate = Math.min(95, Math.round(record.conversionRate * CITY_DENSE_MULT));
+		} else if (city === "Houston" || city === "Phoenix") {
+			record.conversionRate = Math.round(record.conversionRate * CITY_SPRAWL_MULT);
+		}
+	}
+	return record;
+}
+
+function handleEverythingHooks(record, meta) {
+	const datasetStart = dayjs.unix(meta.datasetStart);
+	const RAINY_WEEK_START = datasetStart.add(RAINY_START_DAY, 'days');
+	const RAINY_WEEK_END = datasetStart.add(RAINY_END_DAY, 'days');
+	const userEvents = record;
+	const profile = meta.profile;
+
+	// Stamp superProps from profile so they stay consistent per user
+	if (profile) {
+		userEvents.forEach((event) => {
+			if (profile.Platform !== undefined) event.Platform = profile.Platform;
+			if (profile.subscription_tier !== undefined) event.subscription_tier = profile.subscription_tier;
+			if (profile.city !== undefined) event.city = profile.city;
+		});
+	}
+
+	// H9: ORDER LIFECYCLE TTC — QuickBite+ 0.67x, Free 1.4x on delivery
+	// timing properties + funnel timestamp shift.
+	if (profile) {
+		const tier = profile.subscription_tier;
+		const ttcFactor = (
+			tier === "QuickBite+" ? TTC_QB_PLUS_FACTOR :
+			tier === "Free" ? TTC_FREE_FACTOR :
+			1.0
+		);
+		if (ttcFactor !== 1.0) {
+			// Timestamp shift: affects Mixpanel funnel TTC
+			const orderSeq = findFirstSequence(
+				userEvents,
+				["checkout started", "order placed", "order tracked", "order delivered"],
+				60 * 24 * 7
+			);
+			if (orderSeq) scaleFunnelTTC(orderSeq, ttcFactor);
+			// Property scale: affects Insights AVG reports
+			userEvents.forEach(e => {
+				if (typeof e.actual_delivery_mins === "number") {
+					e.actual_delivery_mins = Math.round(e.actual_delivery_mins * ttcFactor);
+				}
+				if (typeof e.eta_mins === "number") {
+					e.eta_mins = Math.round(e.eta_mins * ttcFactor);
+				}
+				if (typeof e.delivery_time_est_mins === "number") {
+					e.delivery_time_est_mins = Math.round(e.delivery_time_est_mins * ttcFactor);
+				}
+			});
+		}
+	}
+
+	// H3: LATE NIGHT MUNCHIES — 22-02 UTC: 70% flip to American, 1.3x price
+	userEvents.forEach(e => {
+		if (e.event === "restaurant viewed" || e.event === "item added to cart") {
+			const hour = new Date(e.time).getUTCHours();
+			const isLateNight = hour >= LATE_NIGHT_START || hour <= LATE_NIGHT_END;
+			if (isLateNight) {
+				if (e.cuisine_type !== undefined && chance.bool({ likelihood: LATE_NIGHT_FLIP_LIKELIHOOD })) {
+					e.cuisine_type = "American";
+				}
+				if (e.item_price !== undefined) {
+					e.item_price = Math.round(e.item_price * LATE_NIGHT_PRICE_MULT * 100) / 100;
+				}
+			}
+		}
+	});
+
+	// H2: COUPON INJECTION — Free-tier users get coupon-applied events
+	// spliced near checkout. Cloned from existing template with unique offset.
+	if (profile && profile.subscription_tier === "Free") {
+		for (let i = userEvents.length - 1; i >= 1; i--) {
+			const evt = userEvents[i];
+			if (evt.event === "checkout started" && chance.bool({ likelihood: COUPON_INJECT_LIKELIHOOD })) {
+				const prevEvent = userEvents[i - 1];
+				const midTime = dayjs(prevEvent.time).add(
+					dayjs(evt.time).diff(dayjs(prevEvent.time)) / 2,
+					'milliseconds'
+				).toISOString();
+
+				const couponTemplate = userEvents.find(e => e.event === "coupon applied");
+				const couponEvent = {
+					...(couponTemplate || evt),
+					event: "coupon applied",
+					time: midTime,
+					user_id: evt.user_id,
+					subscription_tier: profile.subscription_tier,
+					Platform: profile.Platform,
+					city: profile.city,
+					coupon_code: chance.pickone(couponCodes),
+					discount_type: chance.pickone(["percent", "flat", "free_delivery"]),
+					discount_value: chance.integer({ min: 10, max: 30 }),
+				};
+				userEvents.splice(i, 0, couponEvent);
+			}
+		}
+	}
+
+	// H1: LUNCH/DINNER RUSH — drop 30% of order-delivered events outside
+	// meal windows (11-13 UTC and 17-20 UTC).
+	for (let i = userEvents.length - 1; i >= 0; i--) {
+		const event = userEvents[i];
+		if (event.event === "order delivered") {
+			const hour = new Date(event.time).getUTCHours();
+			const inRush = (hour >= RUSH_LUNCH_START && hour <= RUSH_LUNCH_END) || (hour >= RUSH_DINNER_START && hour <= RUSH_DINNER_END);
+			if (!inRush && chance.bool({ likelihood: RUSH_DROP_LIKELIHOOD })) {
+				userEvents.splice(i, 1);
+			}
+		}
+	}
+
+	// H7: FIRST ORDER BONUS — hash-based ~50% of users (returning) drop
+	// 30% of order delivered events. New users keep all.
+	const hashUser = userEvents[0] && userEvents[0].user_id;
+	const isNewUser = typeof hashUser === "string" && hashUser.charCodeAt(0) % 2 === 0;
+	if (!isNewUser) {
+		for (let i = userEvents.length - 1; i >= 0; i--) {
+			if (userEvents[i].event === "order delivered" && chance.bool({ likelihood: FIRST_ORDER_DROP_LIKELIHOOD })) {
+				userEvents.splice(i, 1);
+			}
+		}
+	}
+
+	// First pass: identify behavioral patterns (no flags written)
+	let isReferralUser = false;
+	let hasTrialSubscription = false;
+	let earlyOrderCount = 0;
+	let orderPlacedCount = 0;
+	const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
+
+	userEvents.forEach((event) => {
+		const eventTime = dayjs(event.time);
+		const daysSinceStart = firstEventTime ? eventTime.diff(firstEventTime, 'days', true) : 0;
+		if (event.event === "account created" && event.referral_code === true) isReferralUser = true;
+		if (event.event === "subscription started" && event.trial === true) hasTrialSubscription = true;
+		if (event.event === "order placed") {
+			orderPlacedCount++;
+			if (daysSinceStart <= TRIAL_EARLY_DAYS) earlyOrderCount++;
+		}
+	});
+
+	// H5: REFERRAL POWER USERS — boost food rating to 4-5, clone reorders.
+	userEvents.forEach((event, idx) => {
+		if (isReferralUser && event.event === "order rated") {
+			event.food_rating = chance.integer({ min: REFERRAL_RATING_MIN, max: REFERRAL_RATING_MAX });
+		}
+		if (isReferralUser && event.event === "reorder initiated" && chance.bool({ likelihood: REFERRAL_CLONE_LIKELIHOOD })) {
+			const eventTime = dayjs(event.time);
+			userEvents.splice(idx + 1, 0, {
+				...event,
+				time: eventTime.add(chance.integer({ min: 1, max: 7 }), 'days').toISOString(),
+				user_id: event.user_id,
+				order_id: chance.pickone(orderIds),
+				original_order_age_days: chance.integer({ min: 3, max: 30 }),
+			});
+		}
+	});
+
+	// H6: TRIAL CONVERSION — trial subs with <3 early orders drop 60% of
+	// post-day-14 events.
+	if (hasTrialSubscription && earlyOrderCount < TRIAL_MIN_ORDERS && chance.bool({ likelihood: TRIAL_DROP_LIKELIHOOD })) {
+		const trialCutoff = firstEventTime ? firstEventTime.add(TRIAL_EARLY_DAYS, 'days') : null;
+		if (trialCutoff) {
+			for (let i = userEvents.length - 1; i >= 0; i--) {
+				if (dayjs(userEvents[i].time).isAfter(trialCutoff)) {
+					userEvents.splice(i, 1);
+				}
+			}
+		}
+	}
+
+	// H4: RAINY WEEK SURGE — days 20-27, double delivery_fee on order-placed.
+	userEvents.forEach(e => {
+		if (e.event === "order placed") {
+			const t = dayjs(e.time);
+			if (t.isAfter(RAINY_WEEK_START) && t.isBefore(RAINY_WEEK_END)) {
+				e.delivery_fee = (e.delivery_fee || 5) * RAINY_FEE_MULT;
+			}
+		}
+	});
+
+	// H4 (cont): RAINY WEEK SURGE — duplicate 40% of order-placed events
+	// in the rainy window. Cloned with unique offset.
+	const rainyDuplicates = [];
+	userEvents.forEach((event) => {
+		if (event.event === "order placed") {
+			const t = dayjs(event.time);
+			if (t.isAfter(RAINY_WEEK_START) && t.isBefore(RAINY_WEEK_END) && chance.bool({ likelihood: RAINY_DUP_LIKELIHOOD })) {
+				const dup = JSON.parse(JSON.stringify(event));
+				dup.time = t.add(chance.integer({ min: 5, max: 60 }), 'minutes').toISOString();
+				rainyDuplicates.push(dup);
+			}
+		}
+	});
+	if (rainyDuplicates.length > 0) userEvents.push(...rainyDuplicates);
+
+	// H8: ORDER-COUNT MAGIC NUMBER — sweet 4-8 → +40% on order_total;
+	// over 9+ → 0.65x order_total (basket fatigue). No flag.
+	if (orderPlacedCount >= ORDER_SWEET_MIN && orderPlacedCount <= ORDER_SWEET_MAX) {
+		userEvents.forEach(e => {
+			if (e.event === "order placed" && typeof e.order_total === "number") {
+				e.order_total = Math.round(e.order_total * ORDER_SWEET_BOOST);
+			}
+		});
+	} else if (orderPlacedCount >= ORDER_OVER_THRESHOLD) {
+		userEvents.forEach(e => {
+			if (e.event === "order placed" && typeof e.order_total === "number") {
+				e.order_total = Math.round(e.order_total * ORDER_OVER_FACTOR);
+			}
+		});
+	}
+
+	return userEvents;
+}
+
+// ── CONFIG ──
 /** @type {Config} */
 const config = {
 	version: 2,
-	token,
 	seed: SEED,
-	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-05-01T23:59:59Z",
-	// numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
-	hasAnonIds: true,
-	avgDevicePerUser: 2,
-	hasSessionIds: true,
+	datasetStart: DATASET_START,
+	datasetEnd: DATASET_END,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	format: "json",
 	gzip: true,
-	alsoInferFunnels: false,
-	hasLocation: true,
-	hasAndroidDevices: true,
-	hasIOSDevices: true,
-	hasDesktopDevices: true,
-	hasBrowser: false,
-	hasCampaigns: false,
-	isAnonymous: false,
-	hasAdSpend: false,
-	hasAvatar: true,
+	credentials: {
+		token,
+	},
+	switches: {
+		hasSessionIds: true,
+		alsoInferFunnels: false,
+		hasLocation: true,
+		hasAndroidDevices: true,
+		hasIOSDevices: true,
+		hasDesktopDevices: true,
+		hasBrowser: false,
+		hasCampaigns: false,
+		isAnonymous: false,
+		hasAdSpend: false,
+		hasAvatar: true,
+	},
+	identity: {
+		avgDevicePerUser: 2,
+	},
 	concurrency: 1,
 	writeToDisk: false,
 	scdProps: {
@@ -653,244 +924,9 @@ const config = {
 
 	lookupTables: [],
 
-	hook: function (record, type, meta) {
-		// HOOK 10: CITY DENSITY REORDER BOOST (funnel-pre)
-		// Dense cities (SF, NYC) convert 1.4x on the reorder funnel;
-		// sprawl cities (Houston, Phoenix) at 0.7x.
-		if (type === "funnel-pre") {
-			const isReorderFunnel = meta.funnel?.sequence?.includes("reorder initiated");
-			if (isReorderFunnel) {
-				const city = meta.profile?.city;
-				if (city === "San Francisco" || city === "New York") {
-					record.conversionRate = Math.min(95, Math.round(record.conversionRate * 1.4));
-				} else if (city === "Houston" || city === "Phoenix") {
-					record.conversionRate = Math.round(record.conversionRate * 0.7);
-				}
-			}
-		}
-
-		if (type === "everything") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			const RAINY_WEEK_START = datasetStart.add(20, 'days');
-			const RAINY_WEEK_END = datasetStart.add(27, 'days');
-			const userEvents = record;
-			const profile = meta.profile;
-
-			// Stamp superProps from profile so they stay consistent per user
-			if (profile) {
-				userEvents.forEach((event) => {
-					if (profile.Platform !== undefined) event.Platform = profile.Platform;
-					if (profile.subscription_tier !== undefined) event.subscription_tier = profile.subscription_tier;
-					if (profile.city !== undefined) event.city = profile.city;
-				});
-			}
-
-			// HOOK 9 (TTC): ORDER LIFECYCLE TIME-TO-CONVERT (everything)
-			// QuickBite+ users experience faster delivery times (0.67x);
-			// Free users experience slower delivery times (1.4x).
-			// Scales timing properties: actual_delivery_mins, eta_mins,
-			// delivery_time_est_mins. Discover via avg(actual_delivery_mins)
-			// on "order delivered" broken down by subscription_tier.
-			if (profile) {
-				const tier = profile.subscription_tier;
-				const ttcFactor = (
-					tier === "QuickBite+" ? 0.67 :
-					tier === "Free" ? 1.4 :
-					1.0
-				);
-				if (ttcFactor !== 1.0) {
-					// Timestamp shift: affects Mixpanel funnel TTC
-					const orderSeq = findFirstSequence(
-						userEvents,
-						["checkout started", "order placed", "order tracked", "order delivered"],
-						60 * 24 * 7
-					);
-					if (orderSeq) scaleFunnelTTC(orderSeq, ttcFactor);
-					// Property scale: affects Insights AVG reports
-					userEvents.forEach(e => {
-						if (typeof e.actual_delivery_mins === "number") {
-							e.actual_delivery_mins = Math.round(e.actual_delivery_mins * ttcFactor);
-						}
-						if (typeof e.eta_mins === "number") {
-							e.eta_mins = Math.round(e.eta_mins * ttcFactor);
-						}
-						if (typeof e.delivery_time_est_mins === "number") {
-							e.delivery_time_est_mins = Math.round(e.delivery_time_est_mins * ttcFactor);
-						}
-					});
-				}
-			}
-
-			// HOOK 3: LATE NIGHT MUNCHIES — 10PM-2AM UTC, 70% of restaurant
-			// views/cart additions get cuisine flipped to American, 1.3x
-			// item_price. Mutates existing props. No flag — discover via
-			// HOD breakdown on cuisine_type / item_price.
-			userEvents.forEach(e => {
-				if (e.event === "restaurant viewed" || e.event === "item added to cart") {
-					const hour = new Date(e.time).getUTCHours();
-					const isLateNight = hour >= 22 || hour <= 2;
-					if (isLateNight) {
-						if (e.cuisine_type !== undefined && chance.bool({ likelihood: 70 })) {
-							e.cuisine_type = "American";
-						}
-						if (e.item_price !== undefined) {
-							e.item_price = Math.round(e.item_price * 1.3 * 100) / 100;
-						}
-					}
-				}
-			});
-
-			// HOOK 2: COUPON INJECTION — Free-tier users get coupon applied
-			// events spliced into stream near checkout. Cloned from existing
-			// coupon-applied event with unique offset time. No flag.
-			if (profile && profile.subscription_tier === "Free") {
-				for (let i = userEvents.length - 1; i >= 1; i--) {
-					const evt = userEvents[i];
-					if (evt.event === "checkout started" && chance.bool({ likelihood: 30 })) {
-						const prevEvent = userEvents[i - 1];
-						const midTime = dayjs(prevEvent.time).add(
-							dayjs(evt.time).diff(dayjs(prevEvent.time)) / 2,
-							'milliseconds'
-						).toISOString();
-
-						const couponTemplate = userEvents.find(e => e.event === "coupon applied");
-						const couponEvent = {
-							...(couponTemplate || evt),
-							event: "coupon applied",
-							time: midTime,
-							user_id: evt.user_id,
-							subscription_tier: profile.subscription_tier,
-							Platform: profile.Platform,
-							city: profile.city,
-							coupon_code: chance.pickone(couponCodes),
-							discount_type: chance.pickone(["percent", "flat", "free_delivery"]),
-							discount_value: chance.integer({ min: 10, max: 30 }),
-						};
-						userEvents.splice(i, 0, couponEvent);
-					}
-				}
-			}
-
-			// HOOK 1: LUNCH/DINNER RUSH — drop 30% of order delivered events
-			// that fall outside the meal hours (11-13 UTC and 17-20 UTC).
-			// Discoverable via order delivered breakdown by HOD.
-			for (let i = userEvents.length - 1; i >= 0; i--) {
-				const event = userEvents[i];
-				if (event.event === "order delivered") {
-					const hour = new Date(event.time).getUTCHours();
-					const inRush = (hour >= 11 && hour <= 13) || (hour >= 17 && hour <= 20);
-					if (!inRush && chance.bool({ likelihood: 30 })) {
-						userEvents.splice(i, 1);
-					}
-				}
-			}
-
-			// HOOK 7: FIRST ORDER BONUS — hash-based ~50% of users (returning)
-			// drop 30% of order delivered events. New users keep all.
-			// Discover via cohort builder on hash bucket vs conversion.
-			const hashUser = userEvents[0] && userEvents[0].user_id;
-			const isNewUser = typeof hashUser === "string" && hashUser.charCodeAt(0) % 2 === 0;
-			if (!isNewUser) {
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					if (userEvents[i].event === "order delivered" && chance.bool({ likelihood: 30 })) {
-						userEvents.splice(i, 1);
-					}
-				}
-			}
-
-			// First pass: identify behavioral patterns (no flags written)
-			let isReferralUser = false;
-			let hasTrialSubscription = false;
-			let earlyOrderCount = 0;
-			let orderPlacedCount = 0;
-			const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
-
-			userEvents.forEach((event) => {
-				const eventTime = dayjs(event.time);
-				const daysSinceStart = firstEventTime ? eventTime.diff(firstEventTime, 'days', true) : 0;
-				if (event.event === "account created" && event.referral_code === true) isReferralUser = true;
-				if (event.event === "subscription started" && event.trial === true) hasTrialSubscription = true;
-				if (event.event === "order placed") {
-					orderPlacedCount++;
-					if (daysSinceStart <= 14) earlyOrderCount++;
-				}
-			});
-
-			// HOOK 5: REFERRAL POWER USERS — boost food rating to 4-5,
-			// clone reorder events. No flag.
-			userEvents.forEach((event, idx) => {
-				if (isReferralUser && event.event === "order rated") {
-					event.food_rating = chance.integer({ min: 4, max: 5 });
-				}
-				if (isReferralUser && event.event === "reorder initiated" && chance.bool({ likelihood: 50 })) {
-					const eventTime = dayjs(event.time);
-					userEvents.splice(idx + 1, 0, {
-						...event,
-						time: eventTime.add(chance.integer({ min: 1, max: 7 }), 'days').toISOString(),
-						user_id: event.user_id,
-						order_id: chance.pickone(orderIds),
-						original_order_age_days: chance.integer({ min: 3, max: 30 }),
-					});
-				}
-			});
-
-			// HOOK 6: TRIAL CONVERSION — trial subs with <3 early orders
-			// drop 60% of post-day-14 events. No flag.
-			if (hasTrialSubscription && earlyOrderCount < 3 && chance.bool({ likelihood: 60 })) {
-				const trialCutoff = firstEventTime ? firstEventTime.add(14, 'days') : null;
-				if (trialCutoff) {
-					for (let i = userEvents.length - 1; i >= 0; i--) {
-						if (dayjs(userEvents[i].time).isAfter(trialCutoff)) {
-							userEvents.splice(i, 1);
-						}
-					}
-				}
-			}
-
-			// HOOK 4: RAINY WEEK SURGE — days 20-27, double delivery_fee on
-			// order placed events. Mutates existing prop. No flag.
-			userEvents.forEach(e => {
-				if (e.event === "order placed") {
-					const t = dayjs(e.time);
-					if (t.isAfter(RAINY_WEEK_START) && t.isBefore(RAINY_WEEK_END)) {
-						e.delivery_fee = (e.delivery_fee || 5) * 2;
-					}
-				}
-			});
-
-			// HOOK 4 (cont): RAINY WEEK SURGE — duplicate 40% of order placed
-			// events that fall in the rainy window. Cloned with unique offset.
-			const rainyDuplicates = [];
-			userEvents.forEach((event) => {
-				if (event.event === "order placed") {
-					const t = dayjs(event.time);
-					if (t.isAfter(RAINY_WEEK_START) && t.isBefore(RAINY_WEEK_END) && chance.bool({ likelihood: 40 })) {
-						const dup = JSON.parse(JSON.stringify(event));
-						dup.time = t.add(chance.integer({ min: 5, max: 60 }), 'minutes').toISOString();
-						rainyDuplicates.push(dup);
-					}
-				}
-			});
-			if (rainyDuplicates.length > 0) userEvents.push(...rainyDuplicates);
-
-			// HOOK 8: ORDER-COUNT MAGIC NUMBER (no flags)
-			// Sweet 4-8 orders → +40% on order_total. Over 9+ → drop 35% of
-			// order placed events (oversaturated; analyst sees inverted-U).
-			if (orderPlacedCount >= 4 && orderPlacedCount <= 8) {
-				userEvents.forEach(e => {
-					if (e.event === "order placed" && typeof e.order_total === "number") {
-						e.order_total = Math.round(e.order_total * 1.4);
-					}
-				});
-			} else if (orderPlacedCount >= 9) {
-				userEvents.forEach(e => {
-					if (e.event === "order placed" && typeof e.order_total === "number") {
-						e.order_total = Math.round(e.order_total * 0.65);
-					}
-				});
-			}
-		}
-
+	hook(record, type, meta) {
+		if (type === "funnel-pre") return handleFunnelPreHooks(record, meta);
+		if (type === "everything") return handleEverythingHooks(record, meta);
 		return record;
 	}
 };

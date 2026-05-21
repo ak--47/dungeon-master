@@ -1,69 +1,44 @@
-// ── TWEAK THESE ──
-const SEED = "dm4-insurance";
-const num_days = 120;
-const num_users = 15_000;
-const avg_events_per_user_per_day = 1.2;
-let token = "your-mixpanel-token";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
-
-dayjs.extend(utc);
-const chance = u.initChance(SEED);
-
 /** @typedef {import("../../types").Dungeon} Config */
 
+// ── OVERVIEW ──
 /*
- * ===================================================================
- * DATASET OVERVIEW
- * ===================================================================
+ * NAME:       SafeHaven Insurance
+ * APP:        Modern insurance web application. Users browse coverage options,
+ *             request quotes, complete multi-step applications, manage policies,
+ *             file claims, and make premium payments. Spans auto / home / life /
+ *             health / renters insurance types across web, iOS, and Android.
+ * SCALE:      15,000 users, ~1.8M events, 121 days (2026-01-01 → 2026-05-01)
+ * CORE LOOP:  account created → quote requested → application submitted → policy activated → payment made
  *
- * SAFEHAVEN INSURANCE — Web Application Dungeon
+ * EVENTS (18):
+ *   page viewed (10) > application step completed (6) > quote requested (5)
+ *   > payment made (5) > quote received (4) > application started (4)
+ *   > claim status checked (4) > support ticket created (4) > coverage reviewed (4)
+ *   > document uploaded (3) > application submitted (3) > support ticket resolved (3)
+ *   > application approved (2) > policy activated (2) > claim filed (2)
+ *   > profile updated (2) > renewal completed (2) > account created (1)
  *
- * SafeHaven Insurance is a modern insurance application where users
- * browse coverage options, request quotes, complete multi-step
- * applications, manage policies, file claims, and make premium payments.
+ * FUNNELS (5):
+ *   - Onboarding:             account created → page viewed → quote requested (85%)
+ *   - Application Completion: application started → step completed → document uploaded → application submitted (60%)
+ *   - Application Approval:   application submitted → application approved → policy activated (70%)
+ *   - Claims Process:         claim filed → claim status checked → support ticket created (50%, A/B experiment)
+ *   - Policy Renewal:         coverage reviewed → payment made → renewal completed (65%)
  *
- * - 5,000 users over 100 days
- * - 600,000 events across 18 event types
- * - 10 hooks (version stamping, ticket volume, conversion boost, magic number,
- *   TTC scaling, claims experiment, risk approval, doc upload retention,
- *   renewal spike, claim-to-premium)
- * - 5 funnels (onboarding, application, approval, claims, renewal)
- * - 5 insurance types as super property (auto, home, life, health, renters)
- * - Deterministic app versioning (2.10 → 2.11 → 2.12 → 2.13)
- * - Platforms: web, iOS, Android
- *
- * CORE LOOP:
- * Users create an account, browse insurance products, and request quotes.
- * They start multi-step applications (personal info, coverage selection,
- * document upload) and submit for approval. Once approved, they activate
- * a policy, make premium payments, and manage renewals. If something
- * goes wrong, they file claims and create support tickets.
- *
- * KEY DATA STORY — VERSION 2.13 RELEASE:
- * The app has gone through versions 2.10 → 2.11 → 2.12 → 2.13.
- * Version 2.13 was released 10 days ago and fixed critical UX issues.
- * Two effects are visible: support ticket volume drops immediately,
- * and application funnel conversion improves significantly.
+ * USER PROPS:  Platform, insurance_type, app_version, age_range, risk_profile, policy_count, lifetime_premium, preferred_contact
+ * SUPER PROPS: Platform, insurance_type, app_version
+ * SCD PROPS:   policy_status (pending/active/lapsed/renewed, monthly fuzzy, max 8)
+ * GROUPS:      none
  */
 
+// ── HOOK STORIES ──
 /*
- * ===================================================================
- * ANALYTICS HOOKS (10 hooks)
- *
- * Hooks 1-5: Version stamping, support ticket volume drop, application
- * conversion boost, step-count magic number, application TTC by account type.
- *
- * Hooks 6-10: Claims experiment, risk profile approval gating, document
- * upload retention, end-of-quarter renewal spike, claim-to-premium increase.
- * ===================================================================
- *
  * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable
  * via raw-prop breakdowns (date, app_version, issue_category) or
  * behavioral cohorts.
@@ -339,34 +314,406 @@ const chance = u.initChance(SEED);
  * Claim-to-Premium        | premium after claim     | 1x       | 2.0x    | +100%
  */
 
-// ── H10 closure state: tracks users who filed a claim ──
+// ── SCALE ──
+const SEED = "dm4-insurance";
+const NUM_USERS = 15_000;
+const DATASET_START = "2026-01-01T00:00:00Z";
+const DATASET_END = "2026-05-01T23:59:59Z";
+const EVENTS_PER_DAY = 1.2;
+const token = process.env.MP_TOKEN || "your-mixpanel-token";
+
+const chance = u.initChance(SEED);
+
+// ── KNOBS (tweak these to reshape stories) ──
+// H1: Version stamping cutoffs (days from datasetStart / before datasetEnd)
+const V211_DAY = 30;
+const V212_DAY = 60;
+const V213_DAYS_BEFORE_END = 10;
+
+// H2: Support ticket volume
+const TICKET_INJECT_MIN = 2;
+const TICKET_INJECT_MAX = 3;
+const TICKET_REMOVAL_BASE_PCT = 30;
+const TICKET_REMOVAL_PER_DAY_PCT = 5.5;
+const TICKET_REMOVAL_CAP_PCT = 85;
+
+// H3: Application conversion boost
+const PRE_V213_APPROVAL_DROP_LIKELIHOOD = 95;
+
+// H4: Application-step magic number
+const STEP_SWEET_MIN = 8;
+const STEP_SWEET_MAX = 14;
+const STEP_OVER_THRESHOLD = 15;
+const STEP_PREMIUM_BOOST = 1.35;
+const STEP_OVER_DROP_LIKELIHOOD = 40;
+
+// H5: Application TTC target offsets (hours from first application started)
+const TTC_BUSINESS_HOURS = 36;
+const TTC_INDIVIDUAL_HOURS = 48;
+const TTC_FAMILY_HOURS = 63;
+
+// H7: Risk profile approval multipliers
+const RISK_LOW_CONV_MULT = 1.8;
+const RISK_HIGH_CONV_MULT = 0.3;
+const RISK_CONV_CAP = 95;
+
+// H8: Document upload retention
+const DOC_RETENTION_MIN = 3;
+const DOC_RETENTION_WINDOW_DAYS = 14;
+const DOC_RETENTION_CUTOFF_DAYS = 30;
+const DOC_RETENTION_DROP_LIKELIHOOD = 75;
+
+// H9: End-of-quarter renewal spike (days from datasetStart)
+const RENEWAL_SPIKE_START_DAY = 85;
+const RENEWAL_SPIKE_END_DAY = 95;
+const RENEWAL_CLONE_COUNT = 2;       // 2 extra clones per renewal → 3x volume
+const COVERAGE_CLONE_COUNT = 1;      // 1 extra clone per coverage review → 2x volume
+
+// H10: Claim-to-premium increase
+const POST_CLAIM_PREMIUM_MULT = 2.0;
+
+// ── HOOK STATE ──
+// H10 closure: tracks users who filed a claim (one-shot consumption)
 const claimFilers = new Map();
 
+// ── HELPER FUNCTIONS ──
+function handleFunnelPreHooks(record, meta) {
+	// H7: RISK PROFILE AFFECTS APPROVAL — low-risk 1.8x, high-risk 0.3x conversion
+	const isApprovalFunnel = meta.funnel?.sequence?.includes("application approved");
+	if (isApprovalFunnel) {
+		const risk = meta.profile?.risk_profile;
+		if (risk === "low") record.conversionRate = Math.min(RISK_CONV_CAP, Math.round(record.conversionRate * RISK_LOW_CONV_MULT));
+		else if (risk === "high") record.conversionRate = Math.round(record.conversionRate * RISK_HIGH_CONV_MULT);
+	}
+	return record;
+}
+
+function handleEventHooks(record) {
+	// H10: CLAIM-TO-PREMIUM INCREASE — premium doubled on first payment after claim
+	if (record.event === "claim filed") {
+		claimFilers.set(record.user_id, true);
+	}
+	if (record.event === "payment made" && claimFilers.has(record.user_id)) {
+		record.premium_amount = Math.round((record.premium_amount || 500) * POST_CLAIM_PREMIUM_MULT);
+		claimFilers.delete(record.user_id);
+	}
+	return record;
+}
+
+function handleEverythingHooks(record, meta) {
+	const datasetStart = dayjs.unix(meta.datasetStart);
+	const datasetEnd = dayjs.unix(meta.datasetEnd);
+	const V211_DATE = datasetStart.add(V211_DAY, "days");
+	const V212_DATE = datasetStart.add(V212_DAY, "days");
+	const V213_DATE = datasetEnd.subtract(V213_DAYS_BEFORE_END, "days");
+	const userEvents = record;
+	if (userEvents.length === 0) return record;
+
+	// Stamp superProps from profile for consistency
+	const profile = meta.profile;
+	userEvents.forEach(e => {
+		e.Platform = profile.Platform;
+		e.insurance_type = profile.insurance_type;
+		e.app_version = profile.app_version;
+	});
+
+	// Find a user_id from any existing event
+	const userId =
+		userEvents.find((e) => e.user_id)?.user_id ||
+		userEvents[0]?.device_id;
+
+	// ─── Hook #5: APPLICATION COMPLETION TIME-TO-CONVERT ───
+	// Runs FIRST: adjusts timestamps before version stamping.
+	// Business accounts complete the application funnel faster (0.74x),
+	// family accounts slower (1.3x). Individual stays at baseline.
+	// Assigns account_type deterministically per user via djb2 hash
+	// (independent of engine RNG). Places each "application approved"
+	// event at a fixed offset from the first "application started".
+	{
+		// djb2 hash of userId → deterministic cohort
+		let h = 5381;
+		for (let i = 0; i < userId.length; i++) {
+			h = ((h << 5) + h + userId.charCodeAt(i)) | 0;
+		}
+		const acctTypes = ["individual", "family", "business"];
+		const userAccountType = acctTypes[((h % 3) + 3) % 3];
+		// Stamp account created events with the deterministic type
+		for (const evt of userEvents) {
+			if (evt.event === "account created") {
+				evt.account_type = userAccountType;
+			}
+		}
+		userEvents.sort((a, b) => new Date(a.time) - new Date(b.time));
+		// Collect all "application started" times
+		const startedTimes = [];
+		for (const evt of userEvents) {
+			if (evt.event === "application started") {
+				startedTimes.push(dayjs(evt.time).valueOf());
+			}
+		}
+		if (startedTimes.length > 0) {
+			const firstStartTime = startedTimes[0];
+			// Target hours: biz=36, indiv=48, family=63
+			// Ratios: biz/indiv≈0.75, family/indiv≈1.31
+			const targetHours = (
+				userAccountType === "business" ? TTC_BUSINESS_HOURS :
+				userAccountType === "family" ? TTC_FAMILY_HOURS :
+				TTC_INDIVIDUAL_HOURS
+			);
+			const targetMs = targetHours * 3600000;
+			for (const evt of userEvents) {
+				if (evt.event !== "application approved") continue;
+				const evtTime = dayjs(evt.time).valueOf();
+				const origGap = evtTime - firstStartTime;
+				// Small jitter from original gap (mod 4h) for variance
+				const jitter = origGap > 0 ? (origGap % (4 * 3600000)) : 0;
+				evt.time = dayjs(firstStartTime + targetMs + jitter).toISOString();
+			}
+		}
+	}
+
+	// ─── Hook #2: SUPPORT TICKET VOLUME ───
+	// PRE-V2.13: Inject 2-3 extra support tickets with bug-related categories
+	const preV213Tickets = userEvents.filter(
+		(e) =>
+			e.event === "support ticket created" &&
+			dayjs(e.time).isBefore(V213_DATE)
+	);
+
+	if (preV213Tickets.length > 0) {
+		const extraCount = chance.integer({ min: TICKET_INJECT_MIN, max: TICKET_INJECT_MAX });
+		const bugCategories = [
+			"form_crash",
+			"login_error",
+			"page_timeout",
+			"payment_failure",
+		];
+
+		for (let i = 0; i < extraCount; i++) {
+			// Pick a random pre-v2.13 ticket to base timing on
+			const sourceTicket = chance.pickone(preV213Tickets);
+			const sourceTime = dayjs(sourceTicket.time);
+			// Offset by a few hours to days
+			const offsetHours = chance.integer({ min: 1, max: 72 });
+			let newTime = sourceTime.add(offsetHours, "hours");
+			// Ensure it stays before v2.13
+			if (newTime.isAfter(V213_DATE)) {
+				newTime = V213_DATE.subtract(
+					chance.integer({ min: 1, max: 48 }),
+					"hours"
+				);
+			}
+
+			// Compute app_version for injected event
+			let injectedVersion;
+			if (newTime.isBefore(V211_DATE)) {
+				injectedVersion = "2.10";
+			} else if (newTime.isBefore(V212_DATE)) {
+				injectedVersion = "2.11";
+			} else {
+				injectedVersion = "2.12"; // always pre-v2.13
+			}
+
+			userEvents.push({
+				...sourceTicket,
+				time: newTime.toISOString(),
+				user_id: userId,
+				app_version: injectedVersion,
+				issue_category: chance.pickone(bugCategories),
+				priority: chance.pickone(["medium", "high", "high"]),
+				channel: chance.pickone([
+					"chat",
+					"phone",
+					"email",
+					"web_form",
+				]),
+			});
+		}
+	}
+
+	// POST-V2.13: Remove support tickets with increasing probability
+	// Day 1 after release: ~30% removal
+	// Day 5: ~60% removal
+	// Day 10: ~85% removal
+	for (let i = userEvents.length - 1; i >= 0; i--) {
+		const evt = userEvents[i];
+		if (evt.event === "support ticket created") {
+			const evtTime = dayjs(evt.time);
+			if (evtTime.isAfter(V213_DATE)) {
+				const daysSinceRelease = evtTime.diff(
+					V213_DATE,
+					"days",
+					true
+				);
+				// Linear ramp: 30% base + 5.5% per day → ~85% at day 10
+				const removalLikelihood = Math.min(
+					TICKET_REMOVAL_CAP_PCT,
+					TICKET_REMOVAL_BASE_PCT + daysSinceRelease * TICKET_REMOVAL_PER_DAY_PCT
+				);
+				if (chance.bool({ likelihood: removalLikelihood })) {
+					userEvents.splice(i, 1);
+				}
+			}
+		}
+	}
+
+	// ─── Hook #3: APPLICATION CONVERSION BOOST ───
+	// PRE-V2.13: Remove ALL application approved + policy activated events
+	// for ~95% of users (per-user gating, not per-event). This produces
+	// visible funnel completion gap pre-v2.13 vs post-v2.13.
+	if (chance.bool({ likelihood: PRE_V213_APPROVAL_DROP_LIKELIHOOD })) {
+		for (let i = userEvents.length - 1; i >= 0; i--) {
+			const evt = userEvents[i];
+			if (
+				(evt.event === "application approved" ||
+					evt.event === "policy activated") &&
+				dayjs(evt.time).isBefore(V213_DATE)
+			) {
+				userEvents.splice(i, 1);
+			}
+		}
+	}
+
+	// Hook 4: APPLICATION-STEP MAGIC NUMBER (no flags)
+	// Sweet 8-14 application step completed → +35% on approved_premium
+	// for application approved events. Over 15+ → drop 40% of
+	// application approved events (fraud filter triggers).
+	const stepCount = userEvents.filter(e => e.event === "application step completed").length;
+	if (stepCount >= STEP_SWEET_MIN && stepCount <= STEP_SWEET_MAX) {
+		userEvents.forEach(e => {
+			if (e.event === "application approved" && typeof e.approved_premium === "number") {
+				e.approved_premium = Math.round(e.approved_premium * STEP_PREMIUM_BOOST);
+			}
+		});
+	} else if (stepCount >= STEP_OVER_THRESHOLD) {
+		for (let i = userEvents.length - 1; i >= 0; i--) {
+			if (userEvents[i].event === "application approved" && chance.bool({ likelihood: STEP_OVER_DROP_LIKELIHOOD })) {
+				userEvents.splice(i, 1);
+			}
+		}
+	}
+
+	// ─── Hook #8: DOCUMENT UPLOAD RETENTION ───
+	// Users with 3+ "document uploaded" in first 14 days retain;
+	// others lose 75% of events post-day-30.
+	if (meta.userIsBornInDataset) {
+		const firstT = userEvents[0]?.time;
+		if (firstT) {
+			const window14 = dayjs(firstT).add(DOC_RETENTION_WINDOW_DAYS, "days").toISOString();
+			const docUploads = userEvents.filter(
+				(e) => e.event === "document uploaded" && e.time <= window14
+			).length;
+			if (docUploads < DOC_RETENTION_MIN) {
+				const cutoff = dayjs(firstT).add(DOC_RETENTION_CUTOFF_DAYS, "days");
+				for (let i = userEvents.length - 1; i >= 0; i--) {
+					if (
+						dayjs(userEvents[i].time).isAfter(cutoff) &&
+						chance.bool({ likelihood: DOC_RETENTION_DROP_LIKELIHOOD })
+					) {
+						userEvents.splice(i, 1);
+					}
+				}
+			}
+		}
+	}
+
+	// ─── Hook #9: END-OF-QUARTER RENEWAL SPIKE ───
+	// Days 85-95 get 3x renewal clones + 2x coverage reviewed clones
+	{
+		const spikeStart = datasetStart.add(RENEWAL_SPIKE_START_DAY, "days");
+		const spikeEnd = datasetStart.add(RENEWAL_SPIKE_END_DAY, "days");
+		const clones = [];
+		userEvents.forEach((e) => {
+			const t = dayjs(e.time);
+			if (t.isAfter(spikeStart) && t.isBefore(spikeEnd)) {
+				if (e.event === "renewal completed") {
+					for (let c = 0; c < RENEWAL_CLONE_COUNT; c++) {
+						clones.push({
+							...e,
+							time: t
+								.add(
+									chance.integer({ min: 5, max: 240 }),
+									"minutes"
+								)
+								.toISOString(),
+							insert_id: chance.guid(),
+						});
+					}
+				}
+				if (e.event === "coverage reviewed") {
+					for (let c = 0; c < COVERAGE_CLONE_COUNT; c++) {
+						clones.push({
+							...e,
+							time: t
+								.add(
+									chance.integer({ min: 5, max: 120 }),
+									"minutes"
+								)
+								.toISOString(),
+							insert_id: chance.guid(),
+						});
+					}
+				}
+			}
+		});
+		if (clones.length) userEvents.push(...clones);
+	}
+
+	// ─── Hook #1: VERSION STAMPING ───
+	// Runs LAST: stamps app_version based on FINAL timestamps
+	// (after Hook #5 TTC scaling has adjusted event times).
+	// v2.10 (days 0-30) → v2.11 (30-60) → v2.12 (60-90) → v2.13 (last 10 days)
+	for (const evt of userEvents) {
+		const eventTime = dayjs(evt.time);
+		if (eventTime.isBefore(V211_DATE)) {
+			evt.app_version = "2.10";
+		} else if (eventTime.isBefore(V212_DATE)) {
+			evt.app_version = "2.11";
+		} else if (eventTime.isBefore(V213_DATE)) {
+			evt.app_version = "2.12";
+		} else {
+			evt.app_version = "2.13";
+		}
+	}
+
+	// Sort events by time after injection/removal/shifting
+	userEvents.sort(
+		(a, b) => new Date(a.time) - new Date(b.time)
+	);
+
+	return record;
+}
+
+// ── CONFIG ──
 /** @type {Config} */
 const config = {
 	version: 2,
-	token,
 	seed: SEED,
-	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-05-01T23:59:59Z",
-	// numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
-	hasAnonIds: true,
-	avgDevicePerUser: 2,
-	hasSessionIds: true,
+	datasetStart: DATASET_START,
+	datasetEnd: DATASET_END,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	format: "json",
 	gzip: true,
-	alsoInferFunnels: false,
-	hasLocation: true,
-	hasAndroidDevices: true,
-	hasIOSDevices: true,
-	hasDesktopDevices: true,
-	hasBrowser: false,
-	hasCampaigns: false,
-	isAnonymous: false,
-	hasAdSpend: false,
-	hasAvatar: true,
+	credentials: {
+		token,
+	},
+	switches: {
+		hasSessionIds: true,
+		alsoInferFunnels: false,
+		hasLocation: true,
+		hasAndroidDevices: true,
+		hasIOSDevices: true,
+		hasDesktopDevices: true,
+		hasBrowser: false,
+		hasCampaigns: false,
+		isAnonymous: false,
+		hasAdSpend: false,
+		hasAvatar: true,
+	},
+	identity: {
+		avgDevicePerUser: 2,
+	},
 	concurrency: 1,
 	writeToDisk: false,
 
@@ -381,7 +728,6 @@ const config = {
 	mirrorProps: {},
 	lookupTables: [],
 
-	// ── Events ──
 	events: [
 		{
 			event: "account created",
@@ -604,7 +950,6 @@ const config = {
 		},
 	],
 
-	// ── Funnels ──
 	funnels: [
 		{
 			name: "Onboarding",
@@ -666,14 +1011,12 @@ const config = {
 		},
 	],
 
-	// ── Super Props (on every event) ──
 	superProps: {
 		Platform: ["web", "ios", "android"],
 		insurance_type: ["auto", "home", "life", "health", "renters"],
 		app_version: ["2.10"],
 	},
 
-	// ── User Props (set once per user) ──
 	userProps: {
 		Platform: ["web", "ios", "android"],
 		insurance_type: ["auto", "home", "life", "health", "renters"],
@@ -685,335 +1028,10 @@ const config = {
 		preferred_contact: ["email", "phone", "app_notification"],
 	},
 
-	// ── Hook Function ──
-	/**
-	 * ARCHITECTED ANALYTICS HOOKS (10 total)
-	 *
-	 * This hook function creates 10 deliberate patterns in the data:
-	 *
-	 * 1. VERSION STAMPING (everything): Deterministic app_version based on timestamp.
-	 * 2. SUPPORT TICKET VOLUME (everything): Inflated pre-v2.13, progressive drop post.
-	 * 3. APPLICATION CONVERSION BOOST (everything): Pre-v2.13 approval drop.
-	 * 4. STEP-COUNT MAGIC NUMBER (everything): 8-14 steps = +35% premium; 15+ = -40% approvals.
-	 * 5. APPLICATION TTC (everything): Business 0.74x faster, family 1.3x slower.
-	 * 6. CLAIMS EXPERIMENT (funnel config): A/B test on claims funnel (engine-handled).
-	 * 7. RISK PROFILE APPROVAL (funnel-pre): Low-risk 1.8x, high-risk 0.3x conversion.
-	 * 8. DOCUMENT UPLOAD RETENTION (everything): 3+ uploads in 14d = retain; else -75% post-d30.
-	 * 9. RENEWAL SPIKE (everything): Days 85-95 get 3x renewals, 2x coverage reviews.
-	 * 10. CLAIM-TO-PREMIUM (event): Premium 2.0x on first payment after claim filed.
-	 */
-	hook: function (record, type, meta) {
-		// =============================================================
-		// H7: RISK PROFILE AFFECTS APPROVAL (funnel-pre)
-		// =============================================================
-		if (type === "funnel-pre") {
-			const isApprovalFunnel = meta.funnel?.sequence?.includes("application approved");
-			if (isApprovalFunnel) {
-				const risk = meta.profile?.risk_profile;
-				if (risk === "low") record.conversionRate = Math.min(95, Math.round(record.conversionRate * 1.8));
-				else if (risk === "high") record.conversionRate = Math.round(record.conversionRate * 0.3);
-			}
-		}
-
-		// =============================================================
-		// H10: CLAIM-TO-PREMIUM INCREASE (event — closure Map)
-		// =============================================================
-		if (type === "event") {
-			if (record.event === "claim filed") {
-				claimFilers.set(record.user_id, true);
-			}
-			if (record.event === "payment made" && claimFilers.has(record.user_id)) {
-				record.premium_amount = Math.round((record.premium_amount || 500) * 2.0);
-				claimFilers.delete(record.user_id);
-			}
-		}
-
-		// =============================================================
-		// Everything hooks: H5 first (timestamps), then H2-H4, then
-		// H8-H9, then H1 (version stamping LAST).
-		// =============================================================
-		if (type === "everything") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			const datasetEnd = dayjs.unix(meta.datasetEnd);
-			const V211_DATE = datasetStart.add(30, "days");
-			const V212_DATE = datasetStart.add(60, "days");
-			const V213_DATE = datasetEnd.subtract(10, "days");
-			const userEvents = record;
-			if (userEvents.length === 0) return record;
-
-			// Stamp superProps from profile for consistency
-			const profile = meta.profile;
-			userEvents.forEach(e => {
-				e.Platform = profile.Platform;
-				e.insurance_type = profile.insurance_type;
-				e.app_version = profile.app_version;
-			});
-
-			// Find a user_id from any existing event
-			const userId =
-				userEvents.find((e) => e.user_id)?.user_id ||
-				userEvents[0]?.device_id;
-
-			// ─── Hook #5: APPLICATION COMPLETION TIME-TO-CONVERT ───
-			// Runs FIRST: adjusts timestamps before version stamping.
-			// Business accounts complete the application funnel faster (0.74x),
-			// family accounts slower (1.3x). Individual stays at baseline.
-			// Assigns account_type deterministically per user via djb2 hash
-			// (independent of engine RNG). Places each "application approved"
-			// event at a fixed offset from the first "application started".
-			{
-				// djb2 hash of userId → deterministic cohort
-				let h = 5381;
-				for (let i = 0; i < userId.length; i++) {
-					h = ((h << 5) + h + userId.charCodeAt(i)) | 0;
-				}
-				const acctTypes = ["individual", "family", "business"];
-				const userAccountType = acctTypes[((h % 3) + 3) % 3];
-				// Stamp account created events with the deterministic type
-				for (const evt of userEvents) {
-					if (evt.event === "account created") {
-						evt.account_type = userAccountType;
-					}
-				}
-				userEvents.sort((a, b) => new Date(a.time) - new Date(b.time));
-				// Collect all "application started" times
-				const startedTimes = [];
-				for (const evt of userEvents) {
-					if (evt.event === "application started") {
-						startedTimes.push(dayjs(evt.time).valueOf());
-					}
-				}
-				if (startedTimes.length > 0) {
-					const firstStartTime = startedTimes[0];
-					// Target hours: biz=36, indiv=48, family=63
-					// Ratios: biz/indiv≈0.75, family/indiv≈1.31
-					const targetHours = (
-						userAccountType === "business" ? 36 :
-						userAccountType === "family" ? 63 :
-						48
-					);
-					const targetMs = targetHours * 3600000;
-					for (const evt of userEvents) {
-						if (evt.event !== "application approved") continue;
-						const evtTime = dayjs(evt.time).valueOf();
-						const origGap = evtTime - firstStartTime;
-						// Small jitter from original gap (mod 4h) for variance
-						const jitter = origGap > 0 ? (origGap % (4 * 3600000)) : 0;
-						evt.time = dayjs(firstStartTime + targetMs + jitter).toISOString();
-					}
-				}
-			}
-
-			// ─── Hook #2: SUPPORT TICKET VOLUME ───
-			// PRE-V2.13: Inject 2-3 extra support tickets with bug-related categories
-			const preV213Tickets = userEvents.filter(
-				(e) =>
-					e.event === "support ticket created" &&
-					dayjs(e.time).isBefore(V213_DATE)
-			);
-
-			if (preV213Tickets.length > 0) {
-				const extraCount = chance.integer({ min: 2, max: 3 });
-				const bugCategories = [
-					"form_crash",
-					"login_error",
-					"page_timeout",
-					"payment_failure",
-				];
-
-				for (let i = 0; i < extraCount; i++) {
-					// Pick a random pre-v2.13 ticket to base timing on
-					const sourceTicket = chance.pickone(preV213Tickets);
-					const sourceTime = dayjs(sourceTicket.time);
-					// Offset by a few hours to days
-					const offsetHours = chance.integer({ min: 1, max: 72 });
-					let newTime = sourceTime.add(offsetHours, "hours");
-					// Ensure it stays before v2.13
-					if (newTime.isAfter(V213_DATE)) {
-						newTime = V213_DATE.subtract(
-							chance.integer({ min: 1, max: 48 }),
-							"hours"
-						);
-					}
-
-					// Compute app_version for injected event
-					let injectedVersion;
-					if (newTime.isBefore(V211_DATE)) {
-						injectedVersion = "2.10";
-					} else if (newTime.isBefore(V212_DATE)) {
-						injectedVersion = "2.11";
-					} else {
-						injectedVersion = "2.12"; // always pre-v2.13
-					}
-
-					userEvents.push({
-						...sourceTicket,
-						time: newTime.toISOString(),
-						user_id: userId,
-						app_version: injectedVersion,
-						issue_category: chance.pickone(bugCategories),
-						priority: chance.pickone(["medium", "high", "high"]),
-						channel: chance.pickone([
-							"chat",
-							"phone",
-							"email",
-							"web_form",
-						]),
-					});
-				}
-			}
-
-			// POST-V2.13: Remove support tickets with increasing probability
-			// Day 1 after release: ~30% removal
-			// Day 5: ~60% removal
-			// Day 10: ~85% removal
-			for (let i = userEvents.length - 1; i >= 0; i--) {
-				const evt = userEvents[i];
-				if (evt.event === "support ticket created") {
-					const evtTime = dayjs(evt.time);
-					if (evtTime.isAfter(V213_DATE)) {
-						const daysSinceRelease = evtTime.diff(
-							V213_DATE,
-							"days",
-							true
-						);
-						// Linear ramp: 30% base + 5.5% per day → ~85% at day 10
-						const removalLikelihood = Math.min(
-							85,
-							30 + daysSinceRelease * 5.5
-						);
-						if (chance.bool({ likelihood: removalLikelihood })) {
-							userEvents.splice(i, 1);
-						}
-					}
-				}
-			}
-
-			// ─── Hook #3: APPLICATION CONVERSION BOOST ───
-			// PRE-V2.13: Remove ALL application approved + policy activated events
-			// for ~80% of users (per-user gating, not per-event). This produces
-			// visible funnel completion gap pre-v2.13 vs post-v2.13.
-			if (chance.bool({ likelihood: 95 })) {
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					const evt = userEvents[i];
-					if (
-						(evt.event === "application approved" ||
-							evt.event === "policy activated") &&
-						dayjs(evt.time).isBefore(V213_DATE)
-					) {
-						userEvents.splice(i, 1);
-					}
-				}
-			}
-
-			// Hook 4: APPLICATION-STEP MAGIC NUMBER (no flags)
-			// Sweet 8-14 application step completed → +35% on approved_premium
-			// for application approved events. Over 15+ → drop 40% of
-			// application approved events (fraud filter triggers).
-			const stepCount = userEvents.filter(e => e.event === "application step completed").length;
-			if (stepCount >= 8 && stepCount <= 14) {
-				userEvents.forEach(e => {
-					if (e.event === "application approved" && typeof e.approved_premium === "number") {
-						e.approved_premium = Math.round(e.approved_premium * 1.35);
-					}
-				});
-			} else if (stepCount >= 15) {
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					if (userEvents[i].event === "application approved" && chance.bool({ likelihood: 40 })) {
-						userEvents.splice(i, 1);
-					}
-				}
-			}
-
-			// ─── Hook #8: DOCUMENT UPLOAD RETENTION ───
-			// Users with 3+ "document uploaded" in first 14 days retain;
-			// others lose 75% of events post-day-30.
-			if (meta.userIsBornInDataset) {
-				const firstT = userEvents[0]?.time;
-				if (firstT) {
-					const window14 = dayjs(firstT).add(14, "days").toISOString();
-					const docUploads = userEvents.filter(
-						(e) => e.event === "document uploaded" && e.time <= window14
-					).length;
-					if (docUploads < 3) {
-						const cutoff = dayjs(firstT).add(30, "days");
-						for (let i = userEvents.length - 1; i >= 0; i--) {
-							if (
-								dayjs(userEvents[i].time).isAfter(cutoff) &&
-								chance.bool({ likelihood: 75 })
-							) {
-								userEvents.splice(i, 1);
-							}
-						}
-					}
-				}
-			}
-
-			// ─── Hook #9: END-OF-QUARTER RENEWAL SPIKE ───
-			// Days 85-95 get 3x renewal clones + 2x coverage reviewed clones
-			{
-				const spikeStart = datasetStart.add(85, "days");
-				const spikeEnd = datasetStart.add(95, "days");
-				const clones = [];
-				userEvents.forEach((e) => {
-					const t = dayjs(e.time);
-					if (t.isAfter(spikeStart) && t.isBefore(spikeEnd)) {
-						if (e.event === "renewal completed") {
-							for (let c = 0; c < 2; c++) {
-								clones.push({
-									...e,
-									time: t
-										.add(
-											chance.integer({ min: 5, max: 240 }),
-											"minutes"
-										)
-										.toISOString(),
-									insert_id: chance.guid(),
-								});
-							}
-						}
-						if (e.event === "coverage reviewed") {
-							clones.push({
-								...e,
-								time: t
-									.add(
-										chance.integer({ min: 5, max: 120 }),
-										"minutes"
-									)
-									.toISOString(),
-								insert_id: chance.guid(),
-							});
-						}
-					}
-				});
-				if (clones.length) userEvents.push(...clones);
-			}
-
-			// ─── Hook #1: VERSION STAMPING ───
-			// Runs LAST: stamps app_version based on FINAL timestamps
-			// (after Hook #5 TTC scaling has adjusted event times).
-			// v2.10 (days 0-30) → v2.11 (30-60) → v2.12 (60-90) → v2.13 (last 10 days)
-			for (const evt of userEvents) {
-				const eventTime = dayjs(evt.time);
-				if (eventTime.isBefore(V211_DATE)) {
-					evt.app_version = "2.10";
-				} else if (eventTime.isBefore(V212_DATE)) {
-					evt.app_version = "2.11";
-				} else if (eventTime.isBefore(V213_DATE)) {
-					evt.app_version = "2.12";
-				} else {
-					evt.app_version = "2.13";
-				}
-			}
-
-			// Sort events by time after injection/removal/shifting
-			userEvents.sort(
-				(a, b) => new Date(a.time) - new Date(b.time)
-			);
-
-			return record;
-		}
-
+	hook(record, type, meta) {
+		if (type === "funnel-pre") return handleFunnelPreHooks(record, meta);
+		if (type === "event") return handleEventHooks(record);
+		if (type === "everything") return handleEverythingHooks(record, meta);
 		return record;
 	},
 };

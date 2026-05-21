@@ -1,49 +1,47 @@
-// ── TWEAK THESE ──
-const SEED = "mirror-strategies";
-const num_days = 30;
-const num_users = 500;
-const avg_events_per_user_per_day = 2;
-let token = "";
+// ── IMPORTS ──
+import { weighNumRange } from "../../lib/utils/utils.js";
+/** @typedef {import("../../types").Dungeon} Config */
 
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
-/**
- * Mirror Strategies — tests all 4 mirror data strategies.
- *
- * Exercises: create, update, fill, delete mirror transformations.
- * Each mirror prop targets a different event and uses a different
- * strategy so the output can be diffed against the original data.
- *
- * - 500 users, 30K events, 30 days
- * - 5 simple events, no funnels, no hooks
+// ── OVERVIEW ──
+/*
+ * NAME:       mirror-strategies
+ * PURPOSE:    exercises all 4 mirrorProps strategies (create, update, fill, delete)
+ * SCALE:      500 users, ~30K events, 30 days
+ * EVENTS (5): page view, checkout, profile update, subscription change, login
+ * FUNNELS (0): none
  */
 
-import Chance from 'chance';
-let chance = new Chance();
-import { weighNumRange, weighChoices } from "../../lib/utils/utils.js";
+// ── SCALE ──
+const SEED = "mirror-strategies";
+const NUM_DAYS = 30;
+const NUM_USERS = 500;
+const EVENTS_PER_DAY = 2;
+const token = process.env.MP_TOKEN || "";
 
-/** @typedef {import("../../types").Dungeon} Config */
-/** @type {import('../../types').Dungeon} */
+// ── CONFIG ──
+/** @type {Config} */
 const config = {
-	token,
 	seed: SEED,
-	numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
+	numDays: NUM_DAYS,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	format: "json",
-	region: "US",
-	hasAnonIds: false,
-	hasSessionIds: false,
-	hasAdSpend: false,
-	hasLocation: false,
-	hasAndroidDevices: false,
-	hasIOSDevices: false,
-	hasDesktopDevices: false,
-	hasBrowser: false,
-	hasCampaigns: false,
-	isAnonymous: false,
-	alsoInferFunnels: false,
+	credentials: {
+		token,
+		region: "US",
+	},
+	switches: {
+		hasSessionIds: false,
+		hasAdSpend: false,
+		hasLocation: false,
+		hasAndroidDevices: false,
+		hasIOSDevices: false,
+		hasDesktopDevices: false,
+		hasBrowser: false,
+		hasCampaigns: false,
+		isAnonymous: false,
+		alsoInferFunnels: false,
+	},
 	concurrency: 1,
 	writeToDisk: false,
 

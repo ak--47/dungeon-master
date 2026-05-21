@@ -11,14 +11,14 @@ const PINNED_DATES = { datasetStart: '2025-09-01T00:00:00Z', datasetEnd: '2025-1
 describe.sequential('sessions', () => {
 
 	test('creates sessionIds', async () => {
-		const results = await generate({ ...PINNED_DATES, writeToDisk: false, numEvents: 1000, numUsers: 100, hasSessionIds: true });
+		const results = await generate({ ...PINNED_DATES, writeToDisk: false, numEvents: 1000, numUsers: 100, switches: { hasSessionIds: true } });
 		const { eventData } = results;
 		const sessionIds = eventData.map(a => a.session_id).filter(a => a);
 		expect(sessionIds.length).toBe(eventData.length);
 	}, timeout);
 
 	test('no hasSessionIds', async () => {
-		const results = await generate({ ...PINNED_DATES, writeToDisk: false, numEvents: 1000, numUsers: 100, hasSessionIds: false });
+		const results = await generate({ ...PINNED_DATES, writeToDisk: false, numEvents: 1000, numUsers: 100, switches: { hasSessionIds: false } });
 		const { eventData } = results;
 		const noSessionIds = eventData.map(a => a.session_id).filter(a => a);
 		expect(noSessionIds.length).toBe(0);
@@ -27,7 +27,7 @@ describe.sequential('sessions', () => {
 	test('session IDs cluster temporally', async () => {
 		const results = await generate({ ...PINNED_DATES,
 			writeToDisk: false, numEvents: 5000, numUsers: 50,
-			hasSessionIds: true, numDays: 30, seed: 'session-cluster'
+			switches: { hasSessionIds: true }, numDays: 30, seed: 'session-cluster'
 		});
 		const { eventData } = results;
 
@@ -71,13 +71,13 @@ describe.sequential('sessions', () => {
 	test('respects custom sessionTimeout', async () => {
 		const results5 = await generate({ ...PINNED_DATES,
 			writeToDisk: false, numEvents: 2000, numUsers: 20,
-			hasSessionIds: true, sessionTimeout: 5, numDays: 30, seed: 'session-timeout'
+			switches: { hasSessionIds: true }, identity: { sessionTimeout: 5 }, numDays: 30, seed: 'session-timeout'
 		});
 		const sessions5 = new Set(results5.eventData.map(e => e.session_id));
 
 		const results30 = await generate({ ...PINNED_DATES,
 			writeToDisk: false, numEvents: 2000, numUsers: 20,
-			hasSessionIds: true, sessionTimeout: 30, numDays: 30, seed: 'session-timeout'
+			switches: { hasSessionIds: true }, identity: { sessionTimeout: 30 }, numDays: 30, seed: 'session-timeout'
 		});
 		const sessions30 = new Set(results30.eventData.map(e => e.session_id));
 

@@ -13,9 +13,65 @@ type Primitives = string | number | boolean | Date | Record<string, any>;
 export type ValueValid = Primitives | ValueValid[] | (() => ValueValid);
 
 /**
+ * v1.5.1 — credentials sub-object. Groups Mixpanel project credentials. Top-level
+ * `token` / `region` / etc. remain functional as a back-compat alias; when both
+ * are set, the top-level value wins with a verbose warning.
+ */
+export interface DungeonCredentials {
+    token?: string;
+    region?: 'US' | 'EU' | 'IN';
+    serviceAccount?: string;
+    serviceSecret?: string;
+    projectId?: string;
+}
+
+/**
+ * v1.5.1 — switches sub-object. Groups data-shape booleans. Top-level keys
+ * remain functional as a back-compat alias; same precedence rules as
+ * `DungeonCredentials`.
+ */
+export interface DungeonSwitches {
+    hasLocation?: boolean;
+    hasCampaigns?: boolean;
+    hasAdSpend?: boolean;
+    hasSessionIds?: boolean;
+    hasAvatar?: boolean;
+    hasIOSDevices?: boolean;
+    hasAndroidDevices?: boolean;
+    hasDesktopDevices?: boolean;
+    hasBrowser?: boolean;
+    isAnonymous?: boolean;
+    alsoInferFunnels?: boolean;
+    hasAttributionFlags?: boolean;
+}
+
+/**
+ * v1.5.1 — identity sub-object. Groups identity-model knobs. Top-level
+ * `avgDevicePerUser` / `sessionTimeout` remain functional as a back-compat
+ * alias.
+ *
+ * `hasAnonIds` is DEPRECATED — when present here, it maps to
+ * `avgDevicePerUser: 1` with a verbose warning. Use `avgDevicePerUser` instead.
+ */
+export interface DungeonIdentity {
+    avgDevicePerUser?: number;
+    sessionTimeout?: number;
+    /** @deprecated v1.5.1 — use `avgDevicePerUser: 1` instead. */
+    hasAnonIds?: boolean;
+}
+
+/**
  * main config object for the entire data generation
  */
 export interface Dungeon {
+    // ── v1.5.1 sub-object grouping (optional) ──
+    /** v1.5.1 — credentials sub-object. See `DungeonCredentials`. */
+    credentials?: DungeonCredentials;
+    /** v1.5.1 — switches sub-object. See `DungeonSwitches`. */
+    switches?: DungeonSwitches;
+    /** v1.5.1 — identity sub-object. See `DungeonIdentity`. */
+    identity?: DungeonIdentity;
+
     // ── Core Parameters ──
     /** Optional dungeon version. Not used by the engine — serves as metadata for tracking revisions when configs are saved/shared. */
     version?: string | number;
@@ -25,6 +81,19 @@ export interface Dungeon {
     token?: string;
     /** RNG seed for reproducible output. Same seed + concurrency=1 = identical data. */
     seed?: string;
+    /**
+     * Optional separate RNG seed dedicated to `distinct_id` generation.
+     *
+     * When set, two runs with the same `userSeed` but different `seed` produce
+     * the SAME pool of user IDs but DIFFERENT events. Designed for sharded /
+     * massively-parallel runs (e.g., Cloud Run Job fan-out) that need cross-shard
+     * user identity — every shard generating bucket N pulls from the same 3M
+     * user IDs while producing unique events of its own.
+     *
+     * When unset, the engine falls back to `seed` for user-id generation —
+     * existing dungeons stay byte-identical.
+     */
+    userSeed?: string;
     /**
      * Number of days the dataset spans. Default: 30.
      *
@@ -303,6 +372,32 @@ export interface Dungeon {
      * purpose; the v1.5 validator strict-clamps to `floor(numDays * 0.5)` with a warning.
      */
     avgActiveDaysPerUser?: number;
+    /**
+     * v1.5.1 — target retention shape. Anchor points `day1`, `day7`, `day30`
+     * etc. define the per-day-offset weight a user is active. When set, biases
+     * `buildActiveDayPlan` toward the curve and the effective
+     * `avgActiveDaysPerUser` is derived from the curve's sum across the user's
+     * window (curve wins over an explicit `avgActiveDaysPerUser`).
+     *
+     * - `type`: `'logarithmic'` (default, real-world retention shape) or `'linear'`.
+     * - `dayN` keys: fraction active on day N from birth (0..1). Day 0 is
+     *   implicitly 1.0 (every user is active on their birth day).
+     * - Days beyond the largest anchor extrapolate from the last segment.
+     *
+     * Example: `{ day1: 0.40, day7: 0.20, day30: 0.08 }` produces a curve that
+     * approximates a typical product's 30-day retention.
+     */
+    retentionCurve?: {
+        type?: 'logarithmic' | 'linear';
+        day1?: number;
+        day3?: number;
+        day7?: number;
+        day14?: number;
+        day30?: number;
+        day60?: number;
+        day90?: number;
+        [dayKey: string]: number | 'logarithmic' | 'linear' | undefined;
+    };
     /**
      * Maximum number of UTM-stamped events per user. Matches Mixpanel's `TOUCHPOINTS_LIMIT`
      * (`backend/libquery/properties_over_time/attributed_value_reader.cpp` line 16).
@@ -1115,6 +1210,15 @@ export interface UserProfile {
     avatar?: string;
     created: string | undefined;
     distinct_id: string;
+    /**
+     * v1.5.1: when `true`, the engine considers this profile "anonymous" — the
+     * user never reached an `isAuthEvent` step. Profile still exists in
+     * `userProfilesData` (so hooks and downstream tools can see the full
+     * population), but `mixpanel-sender` filters it out before pushing to
+     * `/engage`. Hooks can rescue by deleting the flag inside the `everything`
+     * hook.
+     */
+    _drop?: boolean;
     [key: string]: ValueValid;
 }
 
@@ -1200,6 +1304,12 @@ export type Result = {
     userCount?: number;
     groupCount?: number;
     avgEPS?: number;
+    /**
+     * v1.5.1: count of profiles eligible for Mixpanel `/engage` push (i.e., not
+     * flagged with `_drop: true`). Anonymous non-converters carry `_drop: true`
+     * so `userProfilesData.length - profilesPushed` = dropped profile count.
+     */
+    profilesPushed?: number;
     /** Progress callback summary. Only present when `onProgress` was provided. */
     progress?: ProgressSummary;
 };
@@ -1750,7 +1860,7 @@ declare module '@ak--47/dungeon-master/hook-patterns' {
  * | `attributedBy` | `conversionEvent`, `attributionEvent`, `attributionProperty` | `model` (default: `'lastTouch'`) |
  */
 export interface EmulateOptions {
-    type: 'frequencyByFrequency' | 'funnelFrequency' | 'aggregatePerUser' | 'timeToConvert' | 'attributedBy' | 'sessionMetrics' | 'retention';
+    type: 'frequencyByFrequency' | 'funnelFrequency' | 'aggregatePerUser' | 'timeToConvert' | 'attributedBy' | 'sessionMetrics' | 'retention' | 'distinctCount';
     metricEvent?: string;
     breakdownByFrequencyOf?: string;
     perUser?: boolean;
@@ -1815,6 +1925,10 @@ export interface EmulateOptions {
      * pattern requires COMPOUNDED retention which is not supported here).
      */
     birthCanRetain?: boolean;
+
+    // v1.5.1 distinctCount extensions
+    /** Optional cap on the number of top-N values returned in `top_values`. Defaults to 25 (matches Mixpanel UI). */
+    topN?: number;
 }
 
 /** v1.5.0 — config for `emulateBreakdown({ type: 'retention' })`. */
@@ -1906,6 +2020,8 @@ declare module '@ak--47/dungeon-master/utils' {
     export function weighNumRange(min: number, max: number, skew?: number, size?: number): number[];
     export function pickAWinner(items: string[], mostChosenIndex?: number): () => string[];
     export function initChance(seed?: string): unknown;
+    export function initUserChance(seed?: string): unknown;
+    export function getUserChance(): unknown;
     export function TimeSoup(earliestTime: number, latestTime: number, peaks?: number, deviation?: number, mean?: number, dayOfWeekWeights?: number[] | null, hourOfDayWeights?: number[] | null): number;
     export function weighArray<T>(items: T[]): T[];
     export function generateUser(user_id: string, opts: Record<string, unknown>): Record<string, unknown>;

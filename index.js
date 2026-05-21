@@ -25,7 +25,8 @@ import { makeMirror } from './lib/generators/mirror.js';
 import { makeGroupProfile, makeProfile } from './lib/generators/profiles.js';
 
 // Utilities
-import { initChance, setDatasetNow, setDatasetBegin, deleteFile } from './lib/utils/utils.js';
+import { initChance, initUserChance, resetUserChance, setDatasetNow, setDatasetBegin, deleteFile } from './lib/utils/utils.js';
+import { runWithDataset } from './lib/utils/dataset-context.js';
 
 // External dependencies
 import dayjs from "dayjs";
@@ -130,6 +131,15 @@ async function runDungeon(config) {
 		if (config.seed) {
 			initChance(config.seed);
 		}
+		// v1.5.1: optional separate user-id RNG. Same userSeed across runs
+		// produces the same user pool, regardless of `seed`. When unset, reset
+		// any leftover state from a prior in-process run so getUserChance()
+		// falls back to the event chance (= pre-v1.5.1 behavior).
+		if (config.userSeed) {
+			initUserChance(config.userSeed);
+		} else {
+			resetUserChance();
+		}
 
 		// Step 1: Validate and enrich configuration (resolves dataset window)
 		validatedConfig = validateDungeonConfig(config);
@@ -140,10 +150,19 @@ async function runDungeon(config) {
 		const fixedBegin = /** @type {number} */ (validatedConfig.datasetStart);
 
 		// Anchor the wall-clock-free reference used by date()/day() helpers in
-		// dungeon configs. Without this, those factories produce values relative
-		// to process-start, which leaks wall-clock time into the output.
+		// dungeon configs. v1.5.1: ALS-scoped via `runWithDataset` below; the
+		// legacy `setDatasetNow` / `setDatasetBegin` setters still fire as a
+		// back-compat fallback for tests that haven't migrated to the new API.
 		setDatasetNow(fixedNow);
 		setDatasetBegin(fixedBegin);
+
+		// v1.5.1: wrap the entire pipeline in an ALS scope so factory thunks
+		// (`date`, `day`, `dateRange`, `TimeSoup`, `validTime`) inside dungeon
+		// configs resolve the dataset window per-`generate()`-call instead of
+		// reading clobberable module state. Concurrent in-process `generate()`
+		// calls now run safely with distinct windows. See
+		// `lib/utils/dataset-context.js`.
+		return await runWithDataset(fixedBegin, fixedNow, async () => {
 
 		// Step 2: Create context with validated config (pass time constants explicitly)
 		const context = createContext(validatedConfig, null, { fixedNow, fixedBegin });
@@ -234,7 +253,7 @@ async function runDungeon(config) {
 				const _t12 = Date.now();
 				importResults = await sendToMixpanel(context);
 				context.reportProgress({ phase: "step", step: "import", status: "complete", duration: Date.now() - _t12 });
-			} else {
+			} else if (validatedConfig.verbose) {
 				console.warn(
 					`⚠️  Skipping Mixpanel import: token "${validatedConfig.token}" does not look like a real Mixpanel project token ` +
 					`(expected 32-char hex). Set a real token or pass empty string to skip. ` +
@@ -251,6 +270,12 @@ async function runDungeon(config) {
 
 		const progressSummary = context.getProgressSummary();
 
+		// v1.5.1: count of profiles that would be pushed to Mixpanel (non-`_drop`).
+		// Anonymous non-converters get `_drop: true` stamped in user-loop.js so
+		// mixpanel-sender skips them. `userProfilesData` still holds the full
+		// population for downstream tools.
+		const profilesPushed = countProfilesPushed(storage.userProfilesData);
+
 		return {
 			...extractedData,
 			importResults,
@@ -259,8 +284,11 @@ async function runDungeon(config) {
 			operations: context.getOperations(),
 			eventCount: context.getStoredEventCount(),
 			userCount: context.getUserCount(),
+			profilesPushed,
 			...(progressSummary.updates > 0 || progressSummary.errors > 0 ? { progress: progressSummary } : {})
 		};
+
+		}); // end runWithDataset
 
 	} catch (error) {
 		logger.error({ err: error }, `Error: ${error.message}`);
@@ -533,6 +561,20 @@ async function flushStorageToDisk(storage, config) {
  */
 function extractFileInfo(storage) {
 	return collectWrittenFiles(storage);
+}
+
+/**
+ * Count profiles that would be pushed to Mixpanel (anonymous non-converters carry
+ * `_drop: true` and are skipped by mixpanel-sender). v1.5.1.
+ * @param {any} profilesContainer
+ * @returns {number}
+ */
+function countProfilesPushed(profilesContainer) {
+	if (!profilesContainer) return 0;
+	const arr = Array.isArray(profilesContainer) ? profilesContainer : Array.from(profilesContainer);
+	let n = 0;
+	for (const p of arr) if (p && !p._drop) n++;
+	return n;
 }
 
 /**
