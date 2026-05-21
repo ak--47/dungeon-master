@@ -1,58 +1,41 @@
-// ── TWEAK THESE ──
-const SEED = "coinnest";
-const num_days = 120;
-const num_users = 10_000;
-const avg_events_per_user_per_day = 0.83;
-let token = "your-mixpanel-token";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
-import * as v from "ak-tools";
+/** @typedef {import("../../types").Dungeon} Config */
 
-dayjs.extend(utc);
-const chance = u.initChance(SEED);
-
-/** @typedef  {import("../../types").Dungeon} Config */
-
-/**
- * ===================================================================
- * DATASET OVERVIEW
- * ===================================================================
+// ── OVERVIEW ──
+/*
+ * NAME:       CoinNest
+ * APP:        DeFi cryptocurrency exchange platform. Users connect wallets,
+ *             swap tokens, stake for yield, mint NFTs, claim airdrops, and
+ *             trade. Features KYC verification, pro trading tiers, and
+ *             portfolio tracking.
+ * SCALE:      10,000 users, ~600K events, 121 days (2026-01-01 → 2026-05-01)
+ * CORE LOOP:  wallet connected → KYC → deposit → swap → stake/unstake → portfolio viewed → withdrawal
  *
- * CoinNest — a DeFi cryptocurrency exchange platform. Users connect
- * wallets, swap tokens, stake for yield, mint NFTs, claim airdrops,
- * and trade. Features KYC verification, pro trading tiers, and
- * portfolio tracking.
+ * EVENTS (16):
+ *   swap (10) > portfolio viewed (8) > deposit (5) > stake (4) > withdrawal (3)
+ *   > price alert set (3) > limit order placed (3) > transfer (3) > kyc started (2)
+ *   > unstake (2) > claim airdrop (2) > nft mint (2) > referral sent (2)
+ *   > wallet connected (1) > kyc completed (1)
  *
- * Scale: 6,000 users · 600K events · 120 days · 16 event types
- *
- * Core loop: wallet connected → KYC → deposit → swap → stake/unstake
- *   → portfolio viewed → withdrawal
- *
- * Funnels:
+ * FUNNELS (3):
  *   - Onboarding: wallet connected → kyc started → deposit (60%)
- *   - Trading: deposit → swap → withdrawal (70%)
- *   - DeFi: swap → stake → claim airdrop (35%)
+ *   - Trading:    deposit → swap → withdrawal (70%)
+ *   - DeFi:       swap → stake → claim airdrop (35%)
  *
- * Tiers: Standard (75%) / Pro (25%)
- * Chains: Ethereum, Solana, Base, Arbitrum, Polygon
- * Wallets: MetaMask, Phantom, Coinbase Wallet, Rainbow, WalletConnect
+ * USER PROPS:  trading_tier, preferred_chain, wallet_type, total_trade_volume, portfolio_value, kyc_status
+ * SUPER PROPS: trading_tier, preferred_chain, wallet_type
+ * SCD PROPS:   trading_tier (Standard/Pro, monthly fuzzy, max 4)
+ * GROUPS:      none
  */
 
-/**
- * ===================================================================
- * ANALYTICS HOOKS (11 hooks)
- * ===================================================================
- *
- * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable
- * via behavioral cohorts (count event per user, observe trade_amount
- * distribution) or raw-prop breakdowns (token_pair, day, trading_tier).
- *
+// ── HOOK STORIES ──
+/*
+ * ---------------------------------------------------------------
  * 1. WHALE WALLETS (everything)
  *
  * PATTERN: 2% of wallets (deterministic via id hash) get swap
@@ -314,7 +297,66 @@ const chance = u.initChance(SEED);
  * Early Staker Retain   | post-d40 events (non) | 1x       | 0.4x    | -60%
  */
 
-// Token pairs used in swap events
+// ── SCALE ──
+const SEED = "coinnest";
+const NUM_USERS = 10_000;
+const DATASET_START = "2026-01-01T00:00:00Z";
+const DATASET_END = "2026-05-01T23:59:59Z";
+const EVENTS_PER_DAY = 0.83;
+const token = process.env.MP_TOKEN || "your-mixpanel-token";
+
+const chance = u.initChance(SEED);
+
+// ── KNOBS (tweak these to reshape stories) ──
+const WHALE_HASH_MOD = 50;
+const WHALE_AMOUNT_MULT = 50;
+
+const GAS_SPIKE_START_DAY = 35;
+const GAS_SPIKE_END_DAY = 38;
+const GAS_SPIKE_MULT = 10;
+const GAS_SPIKE_FAIL_LIKELIHOOD = 40;
+
+const MOON_LAUNCH_DAY = 50;
+const MOON_FLIP_LIKELIHOOD = 25;
+const MOON_CLONE_COUNT = 4;
+
+const AIRDROP_BOT_HASH_MOD = 25;
+const AIRDROP_DROP_LIKELIHOOD = 95;
+
+const KYC_DEPOSIT_MULT = 4;
+const KYC_SWAP_CLONE_COUNT = 7;
+
+const STAKE_EARLY_WINDOW_DAYS = 14;
+const STAKE_RETENTION_CUTOFF_DAYS = 60;
+const STAKE_NON_STAKER_DROP_LIKELIHOOD = 85;
+const STAKE_INJECT_SWAP_COUNT = 8;
+const STAKE_INJECT_PORTFOLIO_COUNT = 4;
+
+const PRO_MAKER_FEE = 0.05;
+const STANDARD_MAKER_FEE = 0.30;
+const PRO_SWAP_CLONE_COUNT = 5;
+
+const SCAM_WINDOW_START_DAY = 10;
+const SCAM_WINDOW_END_DAY = 70;
+const SCAM_FLIP_LIKELIHOOD = 2;
+const SCAM_DROP_LIKELIHOOD = 80;
+
+const FUNNEL_TTC_PRO = 0.7;
+const FUNNEL_TTC_STANDARD = 1.3;
+
+const SWAP_SWEET_MIN = 8;
+const SWAP_SWEET_MAX = 20;
+const SWAP_OVER_THRESHOLD = 21;
+const SWAP_STAKE_BOOST = 1.3;
+const SWAP_OVER_PORTFOLIO_DROP_LIKELIHOOD = 75;
+const SWAP_OVER_PORTFOLIO_VALUE_FACTOR = 0.5;
+
+const EARLY_STAKE_MIN = 2;
+const EARLY_STAKE_WINDOW_DAYS = 10;
+const EARLY_STAKE_CUTOFF_DAYS = 40;
+const EARLY_STAKE_DROP_LIKELIHOOD = 60;
+
+// ── DATA ARRAYS ──
 const TOKEN_PAIRS = [
 	"ETH/USDC", "ETH/USDT", "BTC/USDC", "SOL/USDC",
 	"MATIC/ETH", "ARB/ETH", "OP/USDC", "AVAX/USDC",
@@ -335,16 +377,294 @@ const NFT_COLLECTIONS = [
 	"CryptoPunks", "Art Blocks"
 ];
 
+// ── HELPER FUNCTIONS ──
+function handleFunnelPostHooks(record, meta) {
+	// H9: Trading funnel TTC scaled by tier (Pro faster, Standard slower)
+	const segment = meta?.profile?.trading_tier;
+	if (Array.isArray(record) && record.length > 1) {
+		const factor = (
+			segment === "Pro" ? FUNNEL_TTC_PRO :
+			segment === "Standard" ? FUNNEL_TTC_STANDARD :
+			1.0
+		);
+		if (factor !== 1.0) {
+			for (let i = 1; i < record.length; i++) {
+				const prev = dayjs(record[i - 1].time);
+				const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+				record[i].time = prev.add(newGap, "milliseconds").toISOString();
+			}
+		}
+	}
+	return record;
+}
+
+function handleEverythingHooks(record, meta) {
+	const datasetStart = dayjs.unix(meta.datasetStart);
+	const userEvents = record;
+	const profile = meta.profile;
+
+	// Stamp superProps from profile for consistency
+	userEvents.forEach(e => {
+		e.trading_tier = profile.trading_tier;
+		e.preferred_chain = profile.preferred_chain;
+		e.wallet_type = profile.wallet_type;
+	});
+
+	// H1: Whale wallets — 2% of users (charCodeAt(0) % 50 === 0) get 50x swap volume
+	const userId = userEvents.length > 0 ? (userEvents[0].user_id || userEvents[0].distinct_id || "") : "";
+	const isWhale = userId.length > 0 && userId.charCodeAt(0) % WHALE_HASH_MOD === 0;
+	if (isWhale) {
+		userEvents.forEach(e => {
+			if (e.event === "swap") {
+				e.trade_amount_usd = Math.round((e.trade_amount_usd || 200) * WHALE_AMOUNT_MULT);
+			}
+		});
+	}
+
+	// H3: Token launch surge — after d50, 25% of swaps flip token_pair to MOON
+	const moonLaunchDay = datasetStart.add(MOON_LAUNCH_DAY, "days");
+	userEvents.forEach(e => {
+		if (e.event === "swap" && dayjs(e.time).isAfter(moonLaunchDay) && chance.bool({ likelihood: MOON_FLIP_LIKELIHOOD })) {
+			e.token_pair = chance.pickone(["MOON/USDC", "MOON/ETH", "ETH/MOON"]);
+		}
+	});
+
+	// H3 (cont): Clone 4 extra MOON-pair swaps per existing MOON swap with unique offset
+	const moonSwaps = userEvents.filter(e =>
+		e.event === "swap" &&
+		typeof e.token_pair === "string" &&
+		e.token_pair.includes("MOON")
+	);
+	if (moonSwaps.length > 0) {
+		const clonedMoonEvents = [];
+		moonSwaps.forEach(moonEvt => {
+			const moonTime = dayjs(moonEvt.time);
+			for (let i = 0; i < MOON_CLONE_COUNT; i++) {
+				clonedMoonEvents.push({
+					...moonEvt,
+					time: moonTime.add(chance.integer({ min: 1, max: 72 }), "hours").toISOString(),
+					user_id: moonEvt.user_id,
+					trade_amount_usd: Math.round((moonEvt.trade_amount_usd || 200) * chance.floating({ min: 0.5, max: 2.0 })),
+				});
+			}
+		});
+		userEvents.push(...clonedMoonEvents);
+	}
+
+	// H4: Airdrop hunter churn — 4% of users (charCodeAt(1) % 25 === 0) who claim
+	// an airdrop lose 95% of subsequent events after first claim
+	const isAirdropBot = userId.length > 1 && userId.charCodeAt(1) % AIRDROP_BOT_HASH_MOD === 0;
+	const hasAirdropClaim = userEvents.some(e => e.event === "claim airdrop");
+	if (isAirdropBot && hasAirdropClaim) {
+		const firstClaim = userEvents.find(e => e.event === "claim airdrop");
+		if (firstClaim) {
+			const claimTime = dayjs(firstClaim.time);
+			for (let i = userEvents.length - 1; i >= 0; i--) {
+				const evt = userEvents[i];
+				if (dayjs(evt.time).isAfter(claimTime) && evt.event !== "claim airdrop") {
+					if (chance.bool({ likelihood: AIRDROP_DROP_LIKELIHOOD })) {
+						userEvents.splice(i, 1);
+					}
+				}
+			}
+		}
+	}
+
+	// H5: KYC funnel completion — post-KYC deposits 4x boost + 7 extra cloned swaps
+	const kycCompleted = userEvents.find(e => e.event === "kyc completed");
+	if (kycCompleted) {
+		const kycTime = dayjs(kycCompleted.time);
+		userEvents.forEach(e => {
+			if (dayjs(e.time).isAfter(kycTime) && e.event === "deposit") {
+				e.deposit_amount_usd = Math.round((e.deposit_amount_usd || 500) * KYC_DEPOSIT_MULT);
+			}
+		});
+
+		const postKycSwaps = userEvents.filter(e =>
+			e.event === "swap" && dayjs(e.time).isAfter(kycTime)
+		);
+		const clonedKycSwaps = [];
+		postKycSwaps.forEach(swapEvt => {
+			const swapTime = dayjs(swapEvt.time);
+			for (let i = 0; i < KYC_SWAP_CLONE_COUNT; i++) {
+				clonedKycSwaps.push({
+					...swapEvt,
+					time: swapTime.add(chance.integer({ min: 1, max: 48 }), "hours").toISOString(),
+					user_id: swapEvt.user_id,
+					trade_amount_usd: Math.round((swapEvt.trade_amount_usd || 200) * chance.floating({ min: 0.8, max: 1.5 })),
+				});
+			}
+		});
+		userEvents.push(...clonedKycSwaps);
+	}
+
+	// H6: Stake-to-retain — early stakers get post-D60 events injected; non-stakers lose 85%
+	const earlyStakeDay = datasetStart.add(STAKE_EARLY_WINDOW_DAYS, "days");
+	const stakeRetentionCutoff = datasetStart.add(STAKE_RETENTION_CUTOFF_DAYS, "days");
+	const stakedEarly = userEvents.some(e =>
+		e.event === "stake" && dayjs(e.time).isBefore(earlyStakeDay)
+	);
+	if (stakedEarly) {
+		const postCutoffEvents = userEvents.filter(e => dayjs(e.time).isAfter(stakeRetentionCutoff));
+		if (postCutoffEvents.length < 5) {
+			const swapTemplate = userEvents.find(e => e.event === "swap");
+			const portfolioTemplate = userEvents.find(e => e.event === "portfolio viewed");
+			if (swapTemplate) {
+				for (let i = 0; i < STAKE_INJECT_SWAP_COUNT; i++) {
+					userEvents.push({
+						...swapTemplate,
+						time: stakeRetentionCutoff.add(chance.integer({ min: 1, max: 55 }), "days").toISOString(),
+						user_id: swapTemplate.user_id,
+						trade_amount_usd: Math.round((swapTemplate.trade_amount_usd || 200) * chance.floating({ min: 0.5, max: 2.0 })),
+					});
+				}
+			}
+			if (portfolioTemplate) {
+				for (let i = 0; i < STAKE_INJECT_PORTFOLIO_COUNT; i++) {
+					userEvents.push({
+						...portfolioTemplate,
+						time: stakeRetentionCutoff.add(chance.integer({ min: 1, max: 55 }), "days").toISOString(),
+						user_id: portfolioTemplate.user_id,
+					});
+				}
+			}
+		}
+	} else {
+		// Non-stakers: drop 85% of post-D60 events to simulate ~15% retention
+		for (let i = userEvents.length - 1; i >= 0; i--) {
+			const evt = userEvents[i];
+			if (dayjs(evt.time).isAfter(stakeRetentionCutoff)) {
+				if (chance.bool({ likelihood: STAKE_NON_STAKER_DROP_LIKELIHOOD })) {
+					userEvents.splice(i, 1);
+				}
+			}
+		}
+	}
+
+	// H7: Pro tier maker fees — Pro=0.05, Standard=0.30; Pro gets 5 extra cloned swaps
+	if (profile.trading_tier === "Pro") {
+		userEvents.forEach(e => {
+			if (e.event === "swap") e.maker_fee_pct = PRO_MAKER_FEE;
+		});
+		const proSwaps = userEvents.filter(e => e.event === "swap");
+		const clonedProSwaps = [];
+		proSwaps.forEach(swapEvt => {
+			const swapTime = dayjs(swapEvt.time);
+			for (let i = 0; i < PRO_SWAP_CLONE_COUNT; i++) {
+				clonedProSwaps.push({
+					...swapEvt,
+					time: swapTime.add(chance.integer({ min: 1, max: 96 }), "hours").toISOString(),
+					user_id: swapEvt.user_id,
+					trade_amount_usd: Math.round((swapEvt.trade_amount_usd || 200) * chance.floating({ min: 0.5, max: 3.0 })),
+					maker_fee_pct: PRO_MAKER_FEE,
+				});
+			}
+		});
+		userEvents.push(...clonedProSwaps);
+	} else {
+		userEvents.forEach(e => {
+			if (e.event === "swap") e.maker_fee_pct = STANDARD_MAKER_FEE;
+		});
+	}
+
+	// H8: Rug-pull aftermath — ~2% of pre-day-70 swaps flipped to SCAM; victims lose 80% post-D70
+	const scamCutoff = datasetStart.add(SCAM_WINDOW_END_DAY, "days");
+	let hadScam = false;
+	userEvents.forEach(e => {
+		if (e.event === "swap") {
+			const swapDay = dayjs(e.time).diff(datasetStart, "day");
+			if (swapDay >= SCAM_WINDOW_START_DAY && swapDay < SCAM_WINDOW_END_DAY && chance.bool({ likelihood: SCAM_FLIP_LIKELIHOOD })) {
+				e.token_pair = chance.pickone(["SCAM/USDC", "SCAM/ETH", "ETH/SCAM"]);
+				hadScam = true;
+			}
+		}
+	});
+	if (hadScam) {
+		for (let i = userEvents.length - 1; i >= 0; i--) {
+			const evt = userEvents[i];
+			if (dayjs(evt.time).isAfter(scamCutoff) && chance.bool({ likelihood: SCAM_DROP_LIKELIHOOD })) {
+				userEvents.splice(i, 1);
+			}
+		}
+	}
+
+	// H10: Swap-count magic number — sweet 8-20 boosts stake; over 21+ drops portfolio views
+	const swapCount = userEvents.filter(e => e.event === "swap").length;
+	if (swapCount >= SWAP_SWEET_MIN && swapCount <= SWAP_SWEET_MAX) {
+		const stakeTemplate = userEvents.find(e => e.event === "stake");
+		if (stakeTemplate) {
+			const stakes = userEvents.filter(e => e.event === "stake");
+			stakes.forEach(s => {
+				if (typeof s.amount_usd === "number") s.amount_usd = Math.round(s.amount_usd * SWAP_STAKE_BOOST);
+				const extras = chance.integer({ min: 1, max: 2 });
+				for (let k = 0; k < extras; k++) {
+					userEvents.push({
+						...s,
+						time: dayjs(s.time).add(chance.integer({ min: 5, max: 360 }), "minutes").toISOString(),
+						user_id: s.user_id,
+					});
+				}
+			});
+		}
+	} else if (swapCount >= SWAP_OVER_THRESHOLD) {
+		// Over-active traders ignore portfolio review: drop 75%, halve total_value_usd on survivors
+		for (let i = userEvents.length - 1; i >= 0; i--) {
+			if (userEvents[i].event === "portfolio viewed") {
+				if (chance.bool({ likelihood: SWAP_OVER_PORTFOLIO_DROP_LIKELIHOOD })) {
+					userEvents.splice(i, 1);
+				} else {
+					userEvents[i].total_value_usd = Math.round((userEvents[i].total_value_usd || 5000) * SWAP_OVER_PORTFOLIO_VALUE_FACTOR);
+				}
+			}
+		}
+	}
+
+	// H11: Early staker retention — born-in users with <2 early stakes lose 60% post-D40
+	if (meta.userIsBornInDataset) {
+		const firstT = userEvents[0]?.time;
+		if (firstT) {
+			const window10 = dayjs(firstT).add(EARLY_STAKE_WINDOW_DAYS, "days").toISOString();
+			const earlyStakes = userEvents.filter(e => e.event === "stake" && e.time <= window10).length;
+			if (earlyStakes < EARLY_STAKE_MIN) {
+				const cutoff = dayjs(firstT).add(EARLY_STAKE_CUTOFF_DAYS, "days");
+				for (let i = userEvents.length - 1; i >= 0; i--) {
+					if (dayjs(userEvents[i].time).isAfter(cutoff) && chance.bool({ likelihood: EARLY_STAKE_DROP_LIKELIHOOD })) {
+						userEvents.splice(i, 1);
+					}
+				}
+			}
+		}
+	}
+
+	// H2: Gas price spike — days 35-37 swap+transfer gas_fee_usd 10x; 40% of swaps fail.
+	// Runs AFTER all cloning to catch events that land in the spike window from clone offsets.
+	const gasSpikeStart = datasetStart.add(GAS_SPIKE_START_DAY, "days");
+	const gasSpikeEnd = datasetStart.add(GAS_SPIKE_END_DAY, "days");
+	userEvents.forEach(e => {
+		if (e.event !== "swap" && e.event !== "transfer") return;
+		const t = dayjs(e.time);
+		if (t.isAfter(gasSpikeStart) && t.isBefore(gasSpikeEnd)) {
+			e.gas_fee_usd = Math.round((e.gas_fee_usd || 5) * GAS_SPIKE_MULT);
+			if (e.event === "swap" && chance.bool({ likelihood: GAS_SPIKE_FAIL_LIKELIHOOD })) {
+				e.swap_status = "failed";
+			}
+		}
+	});
+
+	userEvents.sort((a, b) => new Date(a.time) - new Date(b.time));
+	return record;
+}
+
+// ── CONFIG ──
 /** @type {Config} */
 const config = {
 	version: 2,
 	token,
 	seed: SEED,
-	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-05-01T23:59:59Z",
-	// numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
+	datasetStart: DATASET_START,
+	datasetEnd: DATASET_END,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	hasAnonIds: true,
 	avgDevicePerUser: 2,
 	hasSessionIds: true,
@@ -560,330 +880,9 @@ const config = {
 	groupProps: {},
 	lookupTables: [],
 
-	hook: function (record, type, meta) {
-		// HOOKS 2 + 3: GAS PRICE SPIKE and TOKEN LAUNCH SURGE moved to everything
-		// hook below — event hook fires before bunchIntoSessions reshuffles timestamps,
-		// causing day-window tags to leak across the boundary.
-
-		// HOOK 9 (T2C): TRADING FUNNEL TIME-TO-CONVERT (funnel-post)
-		// Pro tier users complete deposit→swap→withdrawal funnel 1.4x faster
-		// (factor 0.7 on inter-event gaps); Standard 1.3x slower (factor 1.3).
-		if (type === "funnel-post") {
-			const segment = meta?.profile?.trading_tier;
-			if (Array.isArray(record) && record.length > 1) {
-				const factor = (
-					segment === "Pro" ? 0.7 :
-					segment === "Standard" ? 1.3 :
-					1.0
-				);
-				if (factor !== 1.0) {
-					for (let i = 1; i < record.length; i++) {
-						const prev = dayjs(record[i - 1].time);
-						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-						record[i].time = prev.add(newGap, "milliseconds").toISOString();
-					}
-				}
-			}
-		}
-
-		if (type === "everything") {
-			const datasetStart = dayjs.unix(meta.datasetStart);
-			const userEvents = record;
-			const profile = meta.profile;
-
-			// Stamp superProps from profile for consistency
-			userEvents.forEach(e => {
-				e.trading_tier = profile.trading_tier;
-				e.preferred_chain = profile.preferred_chain;
-				e.wallet_type = profile.wallet_type;
-			});
-
-			const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
-
-			// HOOK 1: WHALE WALLETS — 2% of users (charCodeAt(0) % 50 === 0)
-			// get swap trade_amount_usd boosted 50x. No flag.
-			const userId = userEvents.length > 0 ? (userEvents[0].user_id || userEvents[0].distinct_id || "") : "";
-			const isWhale = userId.length > 0 && userId.charCodeAt(0) % 50 === 0;
-
-			if (isWhale) {
-				userEvents.forEach(e => {
-					if (e.event === "swap") {
-						e.trade_amount_usd = Math.round((e.trade_amount_usd || 200) * 50);
-					}
-				});
-			}
-
-			// HOOK 2 moved to end (after all cloning) for full coverage
-
-			// HOOK 3: TOKEN LAUNCH SURGE — after d50, 25% of swaps flip token_pair to MOON.
-			const day50 = datasetStart.add(50, "days");
-			userEvents.forEach(e => {
-				if (e.event === "swap" && dayjs(e.time).isAfter(day50) && chance.bool({ likelihood: 25 })) {
-					e.token_pair = chance.pickone(["MOON/USDC", "MOON/ETH", "ETH/MOON"]);
-				}
-			});
-
-			// HOOK 3 (cont): TOKEN LAUNCH SURGE — clone 4 extra MOON-pair
-			// swap events per existing MOON swap. Cloned with unique offset.
-			const moonSwaps = userEvents.filter(e =>
-				e.event === "swap" &&
-				typeof e.token_pair === "string" &&
-				e.token_pair.includes("MOON")
-			);
-			if (moonSwaps.length > 0) {
-				const clonedMoonEvents = [];
-				moonSwaps.forEach(moonEvt => {
-					const moonTime = dayjs(moonEvt.time);
-					for (let i = 0; i < 4; i++) {
-						clonedMoonEvents.push({
-							...moonEvt,
-							time: moonTime.add(chance.integer({ min: 1, max: 72 }), "hours").toISOString(),
-							user_id: moonEvt.user_id,
-							trade_amount_usd: Math.round((moonEvt.trade_amount_usd || 200) * chance.floating({ min: 0.5, max: 2.0 })),
-						});
-					}
-				});
-				userEvents.push(...clonedMoonEvents);
-			}
-
-			// -----------------------------------------------------------
-			// Hook #4: AIRDROP HUNTER CHURN
-			// 4% of users are deterministically tagged as airdrop-farming bots
-			// via charCodeAt(1) % 25 === 0. Bots that have ever claimed an airdrop
-			// lose 95% of events after their first claim. (Original cohort
-			// "claimed-but-never-swapped" was empty because every claimer also
-			// has organic swap events at this scale.)
-			// -----------------------------------------------------------
-			const isAirdropBot = userId.length > 1 && userId.charCodeAt(1) % 25 === 0;
-			const hasAirdropClaim = userEvents.some(e => e.event === "claim airdrop");
-
-			if (isAirdropBot && hasAirdropClaim) {
-				const firstClaim = userEvents.find(e => e.event === "claim airdrop");
-				if (firstClaim) {
-					const claimTime = dayjs(firstClaim.time);
-					for (let i = userEvents.length - 1; i >= 0; i--) {
-						const evt = userEvents[i];
-						if (dayjs(evt.time).isAfter(claimTime) && evt.event !== "claim airdrop") {
-							if (chance.bool({ likelihood: 95 })) {
-								userEvents.splice(i, 1);
-							}
-						}
-					}
-				}
-			}
-
-			// HOOK 5: KYC FUNNEL COMPLETION — users with kyc-completed
-			// get post-KYC deposit_amount_usd boosted 4x and 7 extra cloned
-			// swaps per existing post-KYC swap. No flag.
-			const kycCompleted = userEvents.find(e => e.event === "kyc completed");
-			if (kycCompleted) {
-				const kycTime = dayjs(kycCompleted.time);
-
-				userEvents.forEach(e => {
-					if (dayjs(e.time).isAfter(kycTime) && e.event === "deposit") {
-						e.deposit_amount_usd = Math.round((e.deposit_amount_usd || 500) * 4);
-					}
-				});
-
-				const postKycSwaps = userEvents.filter(e =>
-					e.event === "swap" && dayjs(e.time).isAfter(kycTime)
-				);
-				const clonedKycSwaps = [];
-				postKycSwaps.forEach(swapEvt => {
-					const swapTime = dayjs(swapEvt.time);
-					for (let i = 0; i < 7; i++) {
-						clonedKycSwaps.push({
-							...swapEvt,
-							time: swapTime.add(chance.integer({ min: 1, max: 48 }), "hours").toISOString(),
-							user_id: swapEvt.user_id,
-							trade_amount_usd: Math.round((swapEvt.trade_amount_usd || 200) * chance.floating({ min: 0.8, max: 1.5 })),
-						});
-					}
-				});
-				userEvents.push(...clonedKycSwaps);
-			}
-
-			// -----------------------------------------------------------
-			// Hook #6: STAKE-TO-RETAIN
-			// Users who stake any token within the first 14 days of the
-			// dataset have 70% D60 retention (events injected beyond D60).
-			// Non-stakers lose events after day 60 to simulate 15% retention.
-			// -----------------------------------------------------------
-			const day14 = datasetStart.add(14, "days");
-			const day60 = datasetStart.add(60, "days");
-
-			const stakedEarly = userEvents.some(e =>
-				e.event === "stake" && dayjs(e.time).isBefore(day14)
-			);
-
-			if (stakedEarly) {
-				// 70% retention: inject late-stage events for stakers (no flag)
-				const postD60Events = userEvents.filter(e => dayjs(e.time).isAfter(day60));
-				if (postD60Events.length < 5) {
-					const swapTemplate = userEvents.find(e => e.event === "swap");
-					const portfolioTemplate = userEvents.find(e => e.event === "portfolio viewed");
-					if (swapTemplate) {
-						for (let i = 0; i < 8; i++) {
-							userEvents.push({
-								...swapTemplate,
-								time: day60.add(chance.integer({ min: 1, max: 55 }), "days").toISOString(),
-								user_id: swapTemplate.user_id,
-								trade_amount_usd: Math.round((swapTemplate.trade_amount_usd || 200) * chance.floating({ min: 0.5, max: 2.0 })),
-							});
-						}
-					}
-					if (portfolioTemplate) {
-						for (let i = 0; i < 4; i++) {
-							userEvents.push({
-								...portfolioTemplate,
-								time: day60.add(chance.integer({ min: 1, max: 55 }), "days").toISOString(),
-								user_id: portfolioTemplate.user_id,
-							});
-						}
-					}
-				}
-			} else {
-				// Non-stakers: 15% retention past D60 — remove 85% of post-D60 events
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					const evt = userEvents[i];
-					if (dayjs(evt.time).isAfter(day60)) {
-						if (chance.bool({ likelihood: 85 })) {
-							userEvents.splice(i, 1);
-						}
-					}
-				}
-			}
-
-			// HOOK 7: PRO TIER MAKER FEES — Pro users pay maker_fee_pct=0.05
-			// (vs Standard 0.30) and get 5 extra cloned swaps. Mutates raw
-			// maker_fee_pct prop. Reads trading_tier from profile.
-			if (profile.trading_tier === "Pro") {
-				userEvents.forEach(e => {
-					if (e.event === "swap") e.maker_fee_pct = 0.05;
-				});
-
-				const proSwaps = userEvents.filter(e => e.event === "swap");
-				const clonedProSwaps = [];
-				proSwaps.forEach(swapEvt => {
-					const swapTime = dayjs(swapEvt.time);
-					for (let i = 0; i < 5; i++) {
-						clonedProSwaps.push({
-							...swapEvt,
-							time: swapTime.add(chance.integer({ min: 1, max: 96 }), "hours").toISOString(),
-							user_id: swapEvt.user_id,
-							trade_amount_usd: Math.round((swapEvt.trade_amount_usd || 200) * chance.floating({ min: 0.5, max: 3.0 })),
-							maker_fee_pct: 0.05,
-						});
-					}
-				});
-				userEvents.push(...clonedProSwaps);
-			} else {
-				userEvents.forEach(e => {
-					if (e.event === "swap") e.maker_fee_pct = 0.30;
-				});
-			}
-
-			// -----------------------------------------------------------
-			// Hook #8: RUG-PULL AFTERMATH
-			// Day 70, "SCAM" token rugs. Users who swapped SCAM token
-			// before day 70 lose 80% of events after day 70. No flag —
-			// derive cohort by detecting users with token_pair containing "SCAM".
-			// -----------------------------------------------------------
-			const day70 = datasetStart.add(70, "days");
-
-			let hadScam = false;
-			userEvents.forEach(e => {
-				if (e.event === "swap") {
-					const swapDay = dayjs(e.time).diff(datasetStart, "day");
-					if (swapDay >= 10 && swapDay < 70 && chance.bool({ likelihood: 2 })) {
-						e.token_pair = chance.pickone(["SCAM/USDC", "SCAM/ETH", "ETH/SCAM"]);
-						hadScam = true;
-					}
-				}
-			});
-
-			if (hadScam) {
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					const evt = userEvents[i];
-					if (dayjs(evt.time).isAfter(day70) && chance.bool({ likelihood: 80 })) {
-						userEvents.splice(i, 1);
-					}
-				}
-			}
-
-			// HOOK 10: SWAP-COUNT MAGIC NUMBER (no flags)
-			// Sweet 8-20 swaps → +30% on stake amount_usd; clone 1-2 extra
-			// stake events per existing. Over 21+ → drop 75% of portfolio viewed events and halve
-			// total_value_usd on survivors (overcomes H6 injection overlap).
-			const swapCount = userEvents.filter(e => e.event === "swap").length;
-			if (swapCount >= 8 && swapCount <= 20) {
-				const stakeTemplate = userEvents.find(e => e.event === "stake");
-				if (stakeTemplate) {
-					const stakes = userEvents.filter(e => e.event === "stake");
-					stakes.forEach(s => {
-						if (typeof s.amount_usd === "number") s.amount_usd = Math.round(s.amount_usd * 1.3);
-						const extras = chance.integer({ min: 1, max: 2 });
-						for (let k = 0; k < extras; k++) {
-							userEvents.push({
-								...s,
-								time: dayjs(s.time).add(chance.integer({ min: 5, max: 360 }), "minutes").toISOString(),
-								user_id: s.user_id,
-							});
-						}
-					});
-				}
-			} else if (swapCount >= 21) {
-				// Over-active traders ignore portfolio review.
-				// Drop aggressively (75%) to overcome H6 stake-to-retain injection,
-				// and halve total_value_usd on survivors to sharpen the signal.
-				for (let i = userEvents.length - 1; i >= 0; i--) {
-					if (userEvents[i].event === "portfolio viewed") {
-						if (chance.bool({ likelihood: 75 })) {
-							userEvents.splice(i, 1);
-						} else {
-							userEvents[i].total_value_usd = Math.round((userEvents[i].total_value_usd || 5000) * 0.5);
-						}
-					}
-				}
-			}
-
-			// HOOK 11: EARLY STAKER RETENTION — users with 2+ "stake" events in first
-			// 10 days retain; others lose 60% of post-day-40 events.
-			if (meta.userIsBornInDataset) {
-				const firstT = userEvents[0]?.time;
-				if (firstT) {
-					const window10 = dayjs(firstT).add(10, 'days').toISOString();
-					const earlyStakes = userEvents.filter(e => e.event === 'stake' && e.time <= window10).length;
-					if (earlyStakes < 2) {
-						const cutoff = dayjs(firstT).add(40, 'days');
-						for (let i = userEvents.length - 1; i >= 0; i--) {
-							if (dayjs(userEvents[i].time).isAfter(cutoff) && chance.bool({ likelihood: 60 })) {
-								userEvents.splice(i, 1);
-							}
-						}
-					}
-				}
-			}
-
-			// HOOK 2: GAS PRICE SPIKE — days 35-37 swap+transfer gas_fee_usd 10x,
-			// 40% of swaps get swap_status=failed. Runs AFTER all cloning to
-			// catch events that land in the spike window from clone offsets.
-			const day35 = datasetStart.add(35, "days");
-			const day38 = datasetStart.add(38, "days");
-			userEvents.forEach(e => {
-				if (e.event !== "swap" && e.event !== "transfer") return;
-				const t = dayjs(e.time);
-				if (t.isAfter(day35) && t.isBefore(day38)) {
-					e.gas_fee_usd = Math.round((e.gas_fee_usd || 5) * 10);
-					if (e.event === "swap" && chance.bool({ likelihood: 40 })) {
-						e.swap_status = "failed";
-					}
-				}
-			});
-
-			userEvents.sort((a, b) => new Date(a.time) - new Date(b.time));
-		}
-
+	hook(record, type, meta) {
+		if (type === "funnel-post") return handleFunnelPostHooks(record, meta);
+		if (type === "everything") return handleEverythingHooks(record, meta);
 		return record;
 	}
 };
