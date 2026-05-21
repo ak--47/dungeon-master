@@ -1,37 +1,36 @@
-// ── TWEAK THESE ──
-const SEED = "experiments";
-const num_days = 60;
-const num_users = 2_000;
-const avg_events_per_user_per_day = 0.83;
-let token = "";
+// ── IMPORTS ──
+import Chance from "chance";
+import { weighNumRange, weighChoices } from "../../lib/utils/utils.js";
+/** @typedef {import("../../types").Dungeon} Config */
 
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
-/**
- * Experiments — tests funnel experiments with A/B/C variants.
- *
- * Exercises: experiment: true for variant generation, bindPropsIndex
- * for property binding, and multiple funnel ordering modes
- * (sequential, random, first-and-last-fixed).
- *
- * - 2000 users, 100K events, 60 days
- * - 7 events, 4 funnels with different experiment/order configs
- * - No hooks
+// ── OVERVIEW ──
+/*
+ * NAME:       experiments
+ * PURPOSE:    Exercises funnel experiments (A/B/C variants), bindPropsIndex,
+ *             and multiple funnel ordering modes (sequential, first-and-last-fixed, random).
+ * SCALE:      2,000 users, ~100K events, 60 days
+ * EVENTS (7): page view, signup, feature viewed, action taken, checkout, button click, help viewed
+ * FUNNELS (4): Onboarding Flow (sequential, experiment), Purchase Funnel (first-and-last-fixed, experiment),
+ *              Feature Adoption (random, experiment, bindPropsIndex), Quick Signup (sequential, control)
  */
 
-import Chance from 'chance';
-let chance = new Chance();
-import { weighNumRange, weighChoices } from "../../lib/utils/utils.js";
+// ── SCALE ──
+const SEED = "experiments";
+const NUM_DAYS = 60;
+const NUM_USERS = 2_000;
+const EVENTS_PER_DAY = 0.83;
+const token = process.env.MP_TOKEN || "";
 
-/** @typedef {import("../../types").Dungeon} Config */
-/** @type {import('../../types').Dungeon} */
+const chance = new Chance();
+
+// ── CONFIG ──
+/** @type {Config} */
 const config = {
 	token,
 	seed: SEED,
-	numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
+	numDays: NUM_DAYS,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	format: "json",
 	region: "US",
 	hasAnonIds: false,
