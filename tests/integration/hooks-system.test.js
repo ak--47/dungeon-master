@@ -18,6 +18,7 @@ const timeout = 30_000;
 
 /** base config for all hook tests */
 function baseConfig(overrides = {}) {
+	const { switches: ovSwitches, identity: ovIdentity, credentials: ovCreds, ...rest } = overrides;
 	return {
 		seed: 'hook-test',
 		numUsers: 30,
@@ -31,16 +32,20 @@ function baseConfig(overrides = {}) {
 		writeToDisk: false,
 		concurrency: 1,
 		batchSize: 500_000,
-		hasAdSpend: false,
-		hasAnonIds: false,
-		hasSessionIds: false,
-		hasCampaigns: false,
-		hasLocation: false,
-		hasAvatar: false,
-		hasBrowser: false,
-		hasAndroidDevices: false,
-		hasIOSDevices: false,
-		hasDesktopDevices: false,
+		switches: {
+			hasAdSpend: false,
+			hasSessionIds: false,
+			hasCampaigns: false,
+			hasLocation: false,
+			hasAvatar: false,
+			hasBrowser: false,
+			hasAndroidDevices: false,
+			hasIOSDevices: false,
+			hasDesktopDevices: false,
+			...(ovSwitches || {}),
+		},
+		...(ovIdentity ? { identity: { ...ovIdentity } } : {}),
+		...(ovCreds ? { credentials: { ...ovCreds } } : {}),
 		percentUsersBornInDataset: 50,
 		events: [
 			{ event: 'page view', weight: 5, properties: { page: ['home', 'about', 'pricing'] } },
@@ -54,7 +59,7 @@ function baseConfig(overrides = {}) {
 		lookupTables: [],
 		groupKeys: [],
 		groupProps: {},
-		...overrides
+		...rest
 	};
 }
 
@@ -294,8 +299,7 @@ describe('storage-only hook types', () => {
 	test('ad-spend hook — modifies ad spend events', async () => {
 		const config = baseConfig({
 			seed: 'adspend-hook',
-			hasAdSpend: true,
-			hasCampaigns: true,
+			switches: { hasAdSpend: true, hasCampaigns: true },
 			hook: function (record, type) {
 				if (type === 'ad-spend') {
 					record.ad_hooked = true;

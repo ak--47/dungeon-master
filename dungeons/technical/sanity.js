@@ -77,16 +77,19 @@ function handleEverythingHook(record, meta) {
 // ── CONFIG ──
 /** @type {import('../types.js').Dungeon} */
 const config = {
-	token,
 	seed: SEED,
 	numDays: NUM_DAYS,
 	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	numUsers: NUM_USERS,
 	format: 'json', //csv or json
-	region: "US",
-	hasAnonIds: false, //if true, anonymousIds are created for each user
-	hasSessionIds: false, //if true, hasSessionIds are created for each user
-	alsoInferFunnels: true, //if true, infer funnels from events
+	credentials: {
+		token,
+		region: "US",
+	},
+	switches: {
+		hasSessionIds: false, //if true, hasSessionIds are created for each user
+		alsoInferFunnels: true, //if true, infer funnels from events
+	},
 	writeToDisk: false,
 	concurrency: 1,
 	funnels: [

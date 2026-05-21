@@ -27,7 +27,7 @@ function pinWindow(extra = {}) {
 		numDays: 30,
 		avgEventsPerUserPerDay: 3,
 		percentUsersBornInDataset: 60,
-		hasAnonIds: true,
+		identity: { avgDevicePerUser: 1 },
 		events: [
 			{ event: 'visit', isStrictEvent: true },
 			{ event: 'sign_up', isAuthEvent: true, isStrictEvent: true },

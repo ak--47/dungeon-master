@@ -45,7 +45,7 @@ describe('Phase 2 identity model', () => {
 			numDays: 30,
 			avgEventsPerUserPerDay: 5,
 			percentUsersBornInDataset: 100,
-			hasAnonIds: true,
+			identity: { avgDevicePerUser: 1 },
 			events: [
 				{ event: 'land', weight: 5, isStrictEvent: true },
 				{ event: 'sign_up', isFirstEvent: true, isAuthEvent: true, isStrictEvent: true },
@@ -80,7 +80,7 @@ describe('Phase 2 identity model', () => {
 			numDays: 30,
 			avgEventsPerUserPerDay: 3,
 			percentUsersBornInDataset: 100,
-			hasAnonIds: true,
+			identity: { avgDevicePerUser: 1 },
 			events: [
 				{ event: 'visit_landing', isFirstEvent: true, isStrictEvent: true },
 				{ event: 'view_pricing', weight: 2, isStrictEvent: true },
@@ -120,8 +120,8 @@ describe('Phase 2 identity model', () => {
 			numDays: 30,
 			avgEventsPerUserPerDay: 8,
 			percentUsersBornInDataset: 0, // pre-existing users only — every event already authed
-			avgDevicePerUser: 3,
-			hasSessionIds: true,
+			identity: { avgDevicePerUser: 3 },
+			switches: { hasSessionIds: true },
 			events: [{ event: 'open_app', weight: 5 }, { event: 'do_thing', weight: 3 }],
 		}));
 		const events = Array.from(result.eventData);
@@ -155,7 +155,7 @@ describe('Phase 2 identity model', () => {
 			numDays: 30,
 			avgEventsPerUserPerDay: 4,
 			percentUsersBornInDataset: 0, // 100% pre-existing
-			hasAnonIds: true,
+			identity: { avgDevicePerUser: 1 },
 			events: [{ event: 'do_thing', weight: 5 }],
 		}));
 		const events = Array.from(result.eventData);
@@ -171,7 +171,7 @@ describe('Phase 2 identity model', () => {
 			numDays: 30,
 			avgEventsPerUserPerDay: 8,
 			percentUsersBornInDataset: 100,
-			hasAnonIds: true,
+			identity: { avgDevicePerUser: 1 },
 			events: [
 				{ event: 'land', isFirstEvent: true, isStrictEvent: true },
 				{ event: 'view_pricing', isStrictEvent: true },
@@ -209,7 +209,7 @@ describe('Phase 2 identity model', () => {
 			numDays: 30,
 			avgEventsPerUserPerDay: 4,
 			percentUsersBornInDataset: 100,
-			hasAnonIds: true,
+			identity: { avgDevicePerUser: 1 },
 			events: [
 				{ event: 'visit_landing', isFirstEvent: true, isStrictEvent: true },
 				{ event: 'view_pricing', isStrictEvent: true },

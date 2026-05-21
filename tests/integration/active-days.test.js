@@ -22,28 +22,33 @@ import { countDistinctPeriods } from '../../lib/verify/counting.js';
 // Test config uses explicit short-TTC funnels so the catch-all funnel
 // (auto-created when events are not in any funnel) does not drift past
 // FIXED_NOW and confound count comparisons.
-const baseConfig = (overrides = {}) => ({
-	seed: 'active-days-test',
-	datasetStart: '2025-09-01T00:00:00Z',
-	datasetEnd: '2025-10-01T00:00:00Z',
-	numUsers: 200,
-	avgEventsPerUserPerDay: 4,
-	hasSessionIds: false,
-	events: [
-		{ event: 'page view', weight: 5 },
-		{ event: 'click', weight: 3 },
-	],
-	// Explicit short-TTC funnel covering both events so no catch-all auto-runs.
-	funnels: [{
-		sequence: ['page view', 'click'],
-		conversionRate: 50,
-		timeToConvert: 1, // 1 hour — funnel stays inside a single day
-		order: 'sequential',
-	}],
-	writeToDisk: false,
-	verbose: false,
-	...overrides,
-});
+const baseConfig = (overrides = {}) => {
+	const { switches: ovSwitches, identity: ovIdentity, credentials: ovCreds, ...rest } = overrides;
+	return {
+		seed: 'active-days-test',
+		datasetStart: '2025-09-01T00:00:00Z',
+		datasetEnd: '2025-10-01T00:00:00Z',
+		numUsers: 200,
+		avgEventsPerUserPerDay: 4,
+		switches: { hasSessionIds: false, ...(ovSwitches || {}) },
+		...(ovIdentity ? { identity: { ...ovIdentity } } : {}),
+		...(ovCreds ? { credentials: { ...ovCreds } } : {}),
+		events: [
+			{ event: 'page view', weight: 5 },
+			{ event: 'click', weight: 3 },
+		],
+		// Explicit short-TTC funnel covering both events so no catch-all auto-runs.
+		funnels: [{
+			sequence: ['page view', 'click'],
+			conversionRate: 50,
+			timeToConvert: 1, // 1 hour — funnel stays inside a single day
+			order: 'sequential',
+		}],
+		writeToDisk: false,
+		verbose: false,
+		...rest,
+	};
+};
 
 function userEvents(events) {
 	const map = new Map();
@@ -171,7 +176,7 @@ describe('v1.5 bunchIntoSessions removal — session integrity preserved', () =>
 	test('hasSessionIds: true still produces sensible session counts via assignSessionIds', async () => {
 		const result = await DUNGEON_MASTER(baseConfig({
 			seed: 'sessions-emergent',
-			hasSessionIds: true,
+			switches: { hasSessionIds: true },
 		}));
 		const events = Array.from(result.eventData);
 		expect(events.length).toBeGreaterThan(0);
@@ -193,7 +198,7 @@ describe('v1.5 bunchIntoSessions removal — session integrity preserved', () =>
 	test('events arrive sorted (assignSessionIds + auto-sort guarantee)', async () => {
 		const result = await DUNGEON_MASTER(baseConfig({
 			seed: 'sort-check',
-			hasSessionIds: true,
+			switches: { hasSessionIds: true },
 		}));
 		const events = Array.from(result.eventData);
 		for (const [, evs] of userEvents(events)) {

@@ -43,9 +43,13 @@ const config = {
 	avgActiveDaysPerUser: 6,
 	// v1.5 attribution cap — explicit (default is also 10).
 	maxTouchpointsPerUser: 10,
-	hasCampaigns: true,
-	hasSessionIds: true,
-	avgDevicePerUser: 1,
+	switches: {
+		hasCampaigns: true,
+		hasSessionIds: true,
+	},
+	identity: {
+		avgDevicePerUser: 1,
+	},
 	autoSortAfterEverything: true,
 	events: [
 		{ event: "page view", weight: 5, isAttributionEvent: true },

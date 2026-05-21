@@ -32,7 +32,6 @@ export default {
 	numUsers: 1_000,
 	avgEventsPerUserPerDay: 6,
 	percentUsersBornInDataset: 30,
-	hasAnonIds: false,
 	format: 'json',
 	concurrency: 1,
 	writeToDisk: true,

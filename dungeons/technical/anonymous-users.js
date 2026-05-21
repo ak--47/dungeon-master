@@ -23,24 +23,30 @@ const token = process.env.MP_TOKEN || "";
 // ── CONFIG ──
 /** @type {Config} */
 const config = {
-	token,
 	seed: SEED,
 	numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	format: "json",
-	region: "US",
-	isAnonymous: true,
-	hasAnonIds: true,
-	hasSessionIds: true,
-	hasAdSpend: false,
-	hasLocation: false,
-	hasAndroidDevices: true,
-	hasIOSDevices: true,
-	hasDesktopDevices: true,
-	hasBrowser: true,
-	hasCampaigns: false,
-	alsoInferFunnels: false,
+	credentials: {
+		token,
+		region: "US",
+	},
+	switches: {
+		isAnonymous: true,
+		hasSessionIds: true,
+		hasAdSpend: false,
+		hasLocation: false,
+		hasAndroidDevices: true,
+		hasIOSDevices: true,
+		hasDesktopDevices: true,
+		hasBrowser: true,
+		hasCampaigns: false,
+		alsoInferFunnels: false,
+	},
+	identity: {
+		avgDevicePerUser: 1,
+	},
 	concurrency: 1,
 	writeToDisk: false,
 

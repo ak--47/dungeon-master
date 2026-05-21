@@ -794,7 +794,7 @@ describe('ad spend generation', () => {
 		const config = validateDungeonConfig({
 			numUsers: 5, numEvents: 50, numDays: 30,
 			events: [{ event: 'test', isFirstEvent: true }],
-			hasCampaigns: true, seed: 'adspend-test'
+			switches: { hasCampaigns: true }, seed: 'adspend-test'
 		});
 		const context = createContext(config);
 
@@ -819,7 +819,7 @@ describe('ad spend generation', () => {
 		const config = validateDungeonConfig({
 			numUsers: 5, numEvents: 50, numDays: 30,
 			events: [{ event: 'test', isFirstEvent: true }],
-			hasCampaigns: true, seed: 'adspend-organic'
+			switches: { hasCampaigns: true }, seed: 'adspend-organic'
 		});
 		const context = createContext(config);
 

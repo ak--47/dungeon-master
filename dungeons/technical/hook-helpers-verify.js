@@ -91,7 +91,6 @@ const config = {
 	numUsers: 1_000,
 	avgEventsPerUserPerDay: 4,
 	percentUsersBornInDataset: 30,
-	hasAnonIds: false,
 	format: 'json',
 	concurrency: 1,
 	writeToDisk: true,

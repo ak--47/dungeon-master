@@ -38,14 +38,14 @@ describe.sequential('validation + identity', () => {
 		// and `userAuthed` starts true (Phase 2 identity model). Without this,
 		// born-in-dataset users without an `isAuthEvent` step stay anonymous and
 		// their standalone events are device-only — breaking the user_id assertion.
-		const results = await generate({ ...PINNED_DATES, writeToDisk: false, numEvents: 1000, numUsers: 100, hasAnonIds: true, percentUsersBornInDataset: 0 });
+		const results = await generate({ ...PINNED_DATES, writeToDisk: false, numEvents: 1000, numUsers: 100, identity: { avgDevicePerUser: 1 }, percentUsersBornInDataset: 0 });
 		const { eventData } = results;
 		expect(eventData.map(a => a.device_id).filter(a => a).length).toBe(eventData.length);
 		expect(eventData.map(a => a.user_id).filter(a => a).length).toBe(eventData.length);
 	}, timeout);
 
 	test('no anonymousIds', async () => {
-		const results = await generate({ ...PINNED_DATES, writeToDisk: false, numEvents: 1000, numUsers: 100, hasAnonIds: false });
+		const results = await generate({ ...PINNED_DATES, writeToDisk: false, numEvents: 1000, numUsers: 100 });
 		const { eventData } = results;
 		expect(eventData.map(a => a.device_id).filter(a => a).length).toBe(0);
 	}, timeout);
@@ -70,7 +70,7 @@ describe.sequential('validation + identity', () => {
 	}, timeout);
 
 	test('yes avatars', async () => {
-		const results = await generate({ ...PINNED_DATES, ...simplest, writeToDisk: false, verbose: false, numEvents: 1000, numUsers: 100, hasAvatar: true, token: "" });
+		const results = await generate({ ...PINNED_DATES, ...simplest, writeToDisk: false, verbose: false, numEvents: 1000, numUsers: 100, switches: { hasAvatar: true }, credentials: { token: "" } });
 		const { userProfilesData } = results;
 		expect(userProfilesData.every(u => u.avatar)).toBe(true);
 	}, timeout);

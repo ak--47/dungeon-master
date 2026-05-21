@@ -56,20 +56,25 @@ const FIXED_BEGIN = FIXED_NOW - 90 * 86400;
  * @returns {Object} Test context object
  */
 function createTestContext(configOverrides = {}) {
+    const { switches: ovSwitches, identity: ovIdentity, credentials: ovCreds, ...restOverrides } = configOverrides;
     const baseConfig = {
         numEvents: 100,
         numUsers: 10,
         numDays: 30,
-        hasAdSpend: false,
-        hasLocation: false,
-        hasAvatar: false,
+        switches: {
+            hasAdSpend: false,
+            hasLocation: false,
+            hasAvatar: false,
+            isAnonymous: false,
+            hasSessionIds: false,
+            ...(ovSwitches || {}),
+        },
+        ...(ovIdentity ? { identity: { ...ovIdentity } } : {}),
+        ...(ovCreds ? { credentials: { ...ovCreds } } : {}),
         verbose: false,
         writeToDisk: false,
-        isAnonymous: false,
-        hasAnonIds: false,
-        hasSessionIds: false,
         concurrency: 1,
-        ...configOverrides
+        ...restOverrides
     };
     
     const validatedConfig = validateDungeonConfig(baseConfig);
@@ -693,11 +698,12 @@ describe.sequential('orchestrators', () => {
 			userProps: {},
 			scdProps: {},
 			funnels: [],
-			isAnonymous: false,
-			hasAnonIds: false,
-			hasSessionIds: false,
-			hasLocation: false,
-			alsoInferFunnels: false,
+			switches: {
+				isAnonymous: false,
+				hasSessionIds: false,
+				hasLocation: false,
+				alsoInferFunnels: false,
+			},
 			events: [{ event: "foo" }, { event: "bar" }, { event: "baz" }]
 		};
 		const context = createTestContext(config);
@@ -767,10 +773,11 @@ describe.sequential('orchestrators', () => {
 			userProps: {},
 			scdProps: {},
 			funnels: [],
-			isAnonymous: false,
-			hasAnonIds: false,
-			hasSessionIds: false,
-			hasLocation: false,
+			switches: {
+				isAnonymous: false,
+				hasSessionIds: false,
+				hasLocation: false,
+			},
 			events: []
 		};
 		const context = createTestContext(config);

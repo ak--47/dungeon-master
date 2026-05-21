@@ -641,30 +641,35 @@ function handleEverythingHooks(record, meta) {
 // ── CONFIG ──
 /** @type {Config} */
 const config = {
-	token,
 	seed: SEED,
 	datasetStart: DATASET_START,
 	datasetEnd: DATASET_END,
 	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	numUsers: NUM_USERS,
+	format: "json",
+	gzip: true,
+	credentials: {
+		token,
+	},
+	switches: {
+		hasSessionIds: true,
+		alsoInferFunnels: false,
+		hasLocation: true,
+		hasAndroidDevices: false,
+		hasIOSDevices: false,
+		hasDesktopDevices: true,
+		hasBrowser: true,
+		hasCampaigns: false,
+		isAnonymous: false,
+		hasAdSpend: false,
+		hasAvatar: true,
+	},
 	// Phase 2 identity model — B2B SaaS reference. Engineers commonly use 1-2
 	// devices (desktop + work laptop). avgDevicePerUser:2 puts a meaningful
 	// per-session sticky-device pattern in Mixpanel device dashboards.
-	hasAnonIds: true,
-	avgDevicePerUser: 2,
-	hasSessionIds: true,
-	format: "json",
-	gzip: true,
-	alsoInferFunnels: false,
-	hasLocation: true,
-	hasAndroidDevices: false,
-	hasIOSDevices: false,
-	hasDesktopDevices: true,
-	hasBrowser: true,
-	hasCampaigns: false,
-	isAnonymous: false,
-	hasAdSpend: false,
-	hasAvatar: true,
+	identity: {
+		avgDevicePerUser: 2,
+	},
 	concurrency: 1,
 	writeToDisk: false,
 	scdProps: {

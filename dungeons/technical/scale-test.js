@@ -27,7 +27,6 @@ const token = process.env.MP_TOKEN || "";
 // ── CONFIG ──
 /** @type {Config} */
 const config = {
-	token,
 	seed: SEED,
 	name: "scale-test",
 	numDays: num_days,
@@ -36,18 +35,22 @@ const config = {
 	format: 'json',
 	gzip: true,
 	concurrency: 1,
-	region: "US",
-	hasAnonIds: false,
-	hasSessionIds: false,
-	hasAdSpend: false,
-	hasLocation: false,
-	hasAndroidDevices: false,
-	hasIOSDevices: false,
-	hasDesktopDevices: false,
-	hasBrowser: false,
-	hasCampaigns: false,
-	isAnonymous: false,
-	alsoInferFunnels: false,
+	credentials: {
+		token,
+		region: "US",
+	},
+	switches: {
+		hasSessionIds: false,
+		hasAdSpend: false,
+		hasLocation: false,
+		hasAndroidDevices: false,
+		hasIOSDevices: false,
+		hasDesktopDevices: false,
+		hasBrowser: false,
+		hasCampaigns: false,
+		isAnonymous: false,
+		alsoInferFunnels: false,
+	},
 	writeToDisk: false,
 
 	events: [

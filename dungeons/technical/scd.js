@@ -115,23 +115,26 @@ function handleEverythingHook(record, meta) {
 // ── CONFIG ──
 /** @type {Config} */
 const config = {
-	token,
 	seed: SEED,
 	numDays: NUM_DAYS,
 	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	numUsers: NUM_USERS,
 	format: 'csv', //csv or json
-	region: "US",
-	hasAnonIds: false, //if true, anonymousIds are created for each user
-	hasSessionIds: false, //if true, hasSessionIds are created for each user
-	hasAdSpend: false,
-	hasLocation: true,
-	hasAndroidDevices: true,
-	hasIOSDevices: true,
-	hasDesktopDevices: true,
-	hasBrowser: true,
-	hasCampaigns: true,
-	isAnonymous: false,
+	credentials: {
+		token,
+		region: "US",
+	},
+	switches: {
+		hasSessionIds: false, //if true, hasSessionIds are created for each user
+		hasAdSpend: false,
+		hasLocation: true,
+		hasAndroidDevices: true,
+		hasIOSDevices: true,
+		hasDesktopDevices: true,
+		hasBrowser: true,
+		hasCampaigns: true,
+		isAnonymous: false,
+	},
 	events: [
 		{
 			event: "checkout",

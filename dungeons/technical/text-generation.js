@@ -413,23 +413,26 @@ function handleEverythingHook(record, meta) {
 /** @type {Dungeon} */
 const dungeon = {
 	seed: SEED,
-	token,
 	numDays: NUM_DAYS,
 	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	numUsers: NUM_USERS,
-	hasAnonIds: false,
-	hasSessionIds: true, // Enable for chat flow tracking
 	format: "json",
-	alsoInferFunnels: true,
-	hasLocation: true,
-	hasAndroidDevices: false,
-	hasIOSDevices: false,
-	hasDesktopDevices: false,
-	hasBrowser: false,
-	hasCampaigns: false,
-	isAnonymous: false,
-	hasAdSpend: false,	
-	hasAvatar: false,
+	credentials: {
+		token,
+	},
+	switches: {
+		hasSessionIds: true, // Enable for chat flow tracking
+		alsoInferFunnels: true,
+		hasLocation: true,
+		hasAndroidDevices: false,
+		hasIOSDevices: false,
+		hasDesktopDevices: false,
+		hasBrowser: false,
+		hasCampaigns: false,
+		isAnonymous: false,
+		hasAdSpend: false,
+		hasAvatar: false,
+	},
 
 	concurrency: 1,
 	writeToDisk: false,

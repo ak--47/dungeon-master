@@ -45,24 +45,27 @@ const videoCategories = ["funny", "educational", "inspirational", "music", "news
 // ── CONFIG ──
 /** @type {import('../types.js').Dungeon} */
 const config = {
-	token,
 	seed: SEED,
 	numDays: num_days,
 	avgEventsPerUserPerDay: avg_events_per_user_per_day,
 	numUsers: num_users,
 	format: 'json', //csv or json
-	region: "US",
-	hasAnonIds: false, //if true, anonymousIds are created for each user
-	hasSessionIds: false, //if true, hasSessionIds are created for each user
-	hasAdSpend: false,
-	hasLocation: false,
-	hasAndroidDevices: false,
-	hasIOSDevices: false,
-	hasDesktopDevices: false,
-	hasBrowser: false,
-	hasCampaigns: false,
-	isAnonymous: false,
-	alsoInferFunnels: false,
+	credentials: {
+		token,
+		region: "US",
+	},
+	switches: {
+		hasSessionIds: false, //if true, hasSessionIds are created for each user
+		hasAdSpend: false,
+		hasLocation: false,
+		hasAndroidDevices: false,
+		hasIOSDevices: false,
+		hasDesktopDevices: false,
+		hasBrowser: false,
+		hasCampaigns: false,
+		isAnonymous: false,
+		alsoInferFunnels: false,
+	},
 	concurrency: 1,
 	writeToDisk: false,
 

@@ -23,7 +23,7 @@ const baseConfig = (overrides = {}) => ({
 	datasetEnd: '2025-10-01T00:00:00Z',
 	numUsers: 30,
 	avgEventsPerUserPerDay: 8, // produce many eligible events per user
-	hasCampaigns: true,
+	switches: { hasCampaigns: true },
 	events: [
 		{ event: 'page view', weight: 5, isAttributionEvent: true },
 		{ event: 'click', weight: 3 }, // not attribution

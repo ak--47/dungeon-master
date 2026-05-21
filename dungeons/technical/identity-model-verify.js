@@ -26,9 +26,12 @@ export default {
 	numUsers: 1_000,
 	avgEventsPerUserPerDay: 3,
 	percentUsersBornInDataset: 100,
-	hasAnonIds: true,
-	avgDevicePerUser: 2,
-	hasSessionIds: true,
+	switches: {
+		hasSessionIds: true,
+	},
+	identity: {
+		avgDevicePerUser: 2,
+	},
 	format: 'json',
 	concurrency: 1,
 	writeToDisk: true,

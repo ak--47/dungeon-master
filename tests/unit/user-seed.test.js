@@ -17,16 +17,17 @@ import { describe, it, expect } from 'vitest';
 import DUNGEON_MASTER from '../../index.js';
 
 const baseConfig = {
-	token: '',
+	credentials: { token: '' },
 	numUsers: 8,
 	numEvents: 800,
 	format: 'json',
 	writeToDisk: false,
-	hasAnonIds: false,
-	hasSessionIds: false,
-	hasLocation: false,
-	hasBrowser: false,
-	hasCampaigns: false,
+	switches: {
+		hasSessionIds: false,
+		hasLocation: false,
+		hasBrowser: false,
+		hasCampaigns: false,
+	},
 	concurrency: 1,
 	events: [{ event: 'test_event', weight: 1, isStrictEvent: false, properties: { x: ['a', 'b', 'c'] } }],
 	funnels: [],
