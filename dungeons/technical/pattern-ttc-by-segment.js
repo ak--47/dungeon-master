@@ -1,15 +1,29 @@
-/**
- * Phase 4 reference dungeon — time to convert by segment.
- *
- * Trial users take 4× longer to complete the activation funnel than enterprise
- * users (0.5× faster). Verified via the timeToConvert emulator.
- */
-
+// ── IMPORTS ──
 import dayjs from 'dayjs';
 import { applyTTCBySegment } from '../../lib/hook-patterns/index.js';
 
+// ── OVERVIEW ──
+/*
+ * NAME:       pattern-ttc-by-segment
+ * PURPOSE:    Phase 4 reference fixture — time-to-convert by segment. Trial
+ *             users take 4× longer to complete the activation funnel; enterprise
+ *             0.5× faster. Verified via the timeToConvert emulator.
+ * SCALE:      1,000 users, ~120K events, 30 days
+ * EVENTS (4): Browse (5) > Land (1) > Sign Up (1) > Activate (1)
+ * FUNNELS (1): Activation: Land → Sign Up → Activate (100%)
+ */
+
+// ── HOOK STORIES ──
+/*
+ * PATTERN: Scale the activation funnel's time-to-convert by user tier:
+ * trial users 4× slower, enterprise 0.5× faster. Verified via the
+ * timeToConvert emulator.
+ */
+
+// ── SCALE ──
 const FIXED_NOW = dayjs('2024-02-02').unix();
 
+// ── CONFIG ──
 export default {
 	name: 'pattern-ttc-by-segment',
 	seed: 'phase4-ttc-seg',
