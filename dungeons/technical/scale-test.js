@@ -1,13 +1,4 @@
-// ── TWEAK THESE ──
-const SEED = "scale test";
-const num_days = 365;
-const num_users = 10_000;
-const avg_events_per_user_per_day = 0.14;
-let token = "";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import Chance from 'chance';
 let chance = new Chance();
 import dayjs from "dayjs";
@@ -15,24 +6,26 @@ import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 import { uid, comma } from 'ak-tools';
 import { weighNumRange, date, integer, weighChoices } from "../../lib/utils/utils.js";
-
 /** @typedef {import("../../types").Dungeon} Config */
-/**
- * ═══════════════════════════════════════════════════════════════
- * TECHNICAL TEST: Scale & Performance
- * ═══════════════════════════════════════════════════════════════
- *
- * Tests high-volume generation, batch sizing, gzip compression.
- * - 10,000 users, 500K events, 365 days (1 year)
- * - gzip enabled, large batch size
- * - Minimal event schema (3 events, few properties)
- * - No hooks, no funnels, no extras
- *
- * Explicitly for performance benchmarking and verifying
- * large file output + batch splitting behavior.
+
+// ── OVERVIEW ──
+/*
+ * NAME:       scale-test
+ * PURPOSE:    High-volume scale fixture — exercises batch sizing, gzip, large file output, no hooks
+ * SCALE:      10,000 users, ~500K events, 365 days
+ * EVENTS (3): page view, click, api call
+ * FUNNELS (0): none
  */
 
-/** @type {import('../../types').Dungeon} */
+// ── SCALE ──
+const SEED = "scale test";
+const num_days = 365;
+const num_users = 10_000;
+const avg_events_per_user_per_day = 0.14;
+const token = process.env.MP_TOKEN || "";
+
+// ── CONFIG ──
+/** @type {Config} */
 const config = {
 	token,
 	seed: SEED,
