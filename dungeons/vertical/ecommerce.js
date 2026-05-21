@@ -9,7 +9,10 @@ import { scaleFunnelTTC } from "../../lib/hook-helpers/timing.js";
 
 // ── OVERVIEW ──
 /*
- * APP:        eCommerce marketplace with integrated video content
+ * APP:        eCommerce marketplace with integrated video content. Users browse
+ *             products, watch videos, build carts, and check out. A signup
+ *             funnel converts anonymous browsers into registered users; video
+ *             engagement (like/dislike) runs alongside the shopping flow.
  * SCALE:      42,000 users, ~2M events, 121 days (2026-01-01 → 2026-05-01)
  * CORE LOOP:  page view → view item → save/add to cart → checkout (+ video like/dislike side loop)
  *
@@ -31,30 +34,6 @@ import { scaleFunnelTTC } from "../../lib/hook-helpers/timing.js";
 
 // ── HOOK STORIES ──
 /*
- * ============================================================================
- * ANALYTICS HOOKS (10 hooks)
- *
- * Adds 7. SIGNUP FLOW TIME-TO-CONVERT: gold/platinum loyalty 0.67x faster,
- * bronze 1.33x slower (everything hook via scaleFunnelTTC on the page-view-
- * to-sign-up window). Loyalty tier is determined from SCD data
- * (meta.scd.loyalty_tier) with deterministic hash fallback. Discover via
- * bound-sequence funnel TTC breakdown by loyalty tier.
- *
- * Adds 8. CHECKOUT FLOW EXPERIMENT: A/B/C experiment on the eCommerce
- * Purchase funnel — "Control", "Express Checkout" (1.25x conversion),
- * "Social Proof" (1.15x conversion, 0.9x TTC). Engine-managed via funnel
- * experiment config; starts 30 days before dataset end.
- *
- * Adds 9. DARK THEME POWER USERS: funnel-pre hook that boosts purchase
- * funnel conversion 1.3x for dark-theme users and penalizes light-theme
- * users to 0.85x. Discoverable by breakdown of funnel conversion by theme.
- *
- * Adds 10. SAVE-ITEM RETENTION: born-in-dataset users who save 2+ items
- * in their first 10 days retain long-term; those below threshold lose ~70%
- * of post-day-25 events. Discoverable by retention or frequency analysis
- * segmented by early save-item count.
- * ============================================================================
- *
  * ----------------------------------------------------------------------------
  * Hook 1: Signup Flow Improvement (event + everything)
  * ----------------------------------------------------------------------------
