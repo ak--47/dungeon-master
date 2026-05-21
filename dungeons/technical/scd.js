@@ -1,42 +1,23 @@
-// ── TWEAK THESE ──
-const SEED = "simple is best";
-const num_days = 30;
-const num_users = 500;
-const avg_events_per_user_per_day = 3.33;
-let token = "";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import Chance from 'chance';
-const chance = new Chance();
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
-import { uid, comma } from 'ak-tools';
 import { pickAWinner, weighNumRange, date, integer, weighChoices } from "../../lib/utils/utils.js";
-
 /** @typedef {import("../../types").Dungeon} Config */
-const itemCategories = ["Books", "Movies", "Music", "Games", "Electronics", "Computers", "Smart Home", "Home", "Garden", "Pet", "Beauty", "Health", "Toys", "Kids", "Baby", "Handmade", "Sports", "Outdoors", "Automotive", "Industrial", "Entertainment", "Art", "Food", "Appliances", "Office", "Wedding", "Software"];
 
-const videoCategories = ["funny", "educational", "inspirational", "music", "news", "sports", "cooking", "DIY", "travel", "gaming"];
+// ── OVERVIEW ──
+/*
+ * NAME:       scd
+ * PURPOSE:    SCD-focused dungeon — user + group slowly-changing dimensions across e-commerce events
+ * SCALE:      500 users, ~50K events, 30 days (CSV format, 1,000 company groups)
+ * EVENTS (7): checkout, add to cart, page view, watch video, view item, save item, sign up, cart_abandoned
+ * FUNNELS (0): none
+ * SCDs:       user — role (weekly), NPS (daily); company_id — MRR (monthly), AccountHealthScore (weekly), plan (monthly)
+ */
 
-/**
- * ═══════════════════════════════════════════════════════════════
- * DATASET OVERVIEW
- * ═══════════════════════════════════════════════════════════════
- *
- * SCD Test — dungeon focused on Slowly Changing Dimensions.
- * - 500 users over 30 days, ~50K events (CSV format)
- * - E-commerce events: checkout, add to cart, page view, watch video, view/save item
- * - User SCDs: role (weekly), NPS (daily)
- * - Group SCDs: MRR (monthly), AccountHealthScore (weekly), plan (monthly)
- * - 1,000 company groups with industry, segment, CSM assignments
- *
- * ═══════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (3 patterns)
- * ═══════════════════════════════════════════════════════════════
- *
+// ── HOOK STORIES ──
+/*
  * 1. SPEND TIERS (user hook)
  *    Users with luckyNumber > 250 = "high_spender", else "budget".
  *
@@ -59,13 +40,86 @@ const videoCategories = ["funny", "educational", "inspirational", "music", "news
  *      Expected: visible volume of abandoned cart events
  */
 
-/** @type {import('../../types').Dungeon} */
+// ── SCALE ──
+const SEED = "simple is best";
+const NUM_DAYS = 30;
+const NUM_USERS = 500;
+const EVENTS_PER_DAY = 3.33;
+const token = process.env.MP_TOKEN || "";
+
+const chance = new Chance();
+
+// ── KNOBS (tweak these to reshape stories) ──
+const HIGH_SPENDER_THRESHOLD = 250;
+const WEEKEND_WATCH_MULTIPLIER = 1.5;
+const ABANDONMENT_DELAY_MINUTES = 30;
+
+// ── DATA ARRAYS ──
+const itemCategories = ["Books", "Movies", "Music", "Games", "Electronics", "Computers", "Smart Home", "Home", "Garden", "Pet", "Beauty", "Health", "Toys", "Kids", "Baby", "Handmade", "Sports", "Outdoors", "Automotive", "Industrial", "Entertainment", "Art", "Food", "Appliances", "Office", "Wedding", "Software"];
+const videoCategories = ["funny", "educational", "inspirational", "music", "news", "sports", "cooking", "DIY", "travel", "gaming"];
+const spiritAnimals = ["duck", "dog", "otter", "penguin", "cat", "elephant", "lion", "cheetah", "giraffe", "zebra", "rhino", "hippo", "whale", "dolphin", "shark", "octopus", "squid", "jellyfish", "starfish", "seahorse", "crab", "lobster", "shrimp", "clam", "snail", "slug", "butterfly", "moth", "bee", "wasp", "ant", "beetle", "ladybug", "caterpillar", "centipede", "millipede", "scorpion", "spider", "tarantula", "tick", "mite", "mosquito", "fly", "dragonfly", "damselfly", "grasshopper", "cricket", "locust", "mantis", "cockroach", "termite", "praying mantis", "walking stick", "stick bug", "leaf insect", "lacewing", "aphid", "cicada", "thrips", "psyllid", "scale insect", "whitefly", "mealybug", "planthopper", "leafhopper", "treehopper", "flea", "louse", "bedbug", "flea beetle", "weevil", "longhorn beetle", "leaf beetle", "tiger beetle", "ground beetle", "lady beetle", "firefly", "click beetle", "rove beetle", "scarab beetle", "dung beetle", "stag beetle", "rhinoceros beetle", "hercules beetle", "goliath beetle", "jewel beetle", "tortoise beetle"];
+const industries = ["technology", "education", "finance", "healthcare", "retail", "manufacturing", "transportation", "entertainment", "media", "real estate", "construction", "hospitality", "energy", "utilities", "agriculture", "other"];
+const csmNames = ["AK", "Neha", "Rajiv", "Deepak", "Justin", "Hans", "Katie", "Somya", "Tony", "Kaan"];
+
+// ── HELPER FUNCTIONS ──
+function handleUserHook(record) {
+	// classify users into spending tiers
+	record.spendTier = record.luckyNumber > HIGH_SPENDER_THRESHOLD ? "high_spender" : "budget";
+	return record;
+}
+
+function handleEventHook(record) {
+	// coupon users get discounted checkout amounts
+	if (record.event === "checkout" && record.coupon && record.coupon !== "none") {
+		const discountPct = parseInt(record.coupon) || 10;
+		record.amount = Math.round(record.amount * (1 - discountPct / 100));
+		record.discount_applied = true;
+	}
+	// weekend watchers get longer watch times
+	if (record.event === "watch video" && record.time) {
+		const day = dayjs(record.time).day();
+		if (day === 0 || day === 6) {
+			record.watchTimeSec = Math.round((record.watchTimeSec || 60) * WEEKEND_WATCH_MULTIPLIER);
+			record.is_weekend = true;
+		}
+	}
+	return record;
+}
+
+function handleEverythingHook(record, meta) {
+	// stamp superProps from profile for consistency
+	const profile = meta.profile;
+	record.forEach(e => {
+		e.platform = profile.platform;
+		e.currentTheme = profile.currentTheme;
+	});
+
+	const hasAddToCart = record.some(e => e.event === "add to cart");
+	const hasCheckout = record.some(e => e.event === "checkout");
+	// users who added to cart but never checked out: synthesize a cart_abandoned event
+	if (hasAddToCart && !hasCheckout && record.length > 2) {
+		const lastAdd = record.filter(e => e.event === "add to cart").pop();
+		if (lastAdd) {
+			record.push({
+				...lastAdd,
+				event: "cart_abandoned",
+				time: dayjs(lastAdd.time).add(ABANDONMENT_DELAY_MINUTES, "minute").toISOString(),
+				user_id: lastAdd.user_id,
+				amount: lastAdd.amount,
+			});
+		}
+	}
+	return record;
+}
+
+// ── CONFIG ──
+/** @type {Config} */
 const config = {
 	token,
 	seed: SEED,
-	numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
+	numDays: NUM_DAYS,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	format: 'csv', //csv or json
 	region: "US",
 	hasAnonIds: false, //if true, anonymousIds are created for each user
@@ -78,8 +132,6 @@ const config = {
 	hasBrowser: true,
 	hasCampaigns: true,
 	isAnonymous: false,
-
-
 	events: [
 		{
 			event: "checkout",
@@ -168,14 +220,10 @@ const config = {
 		platform: ["web", "mobile", "web", "mobile", "web", "web", "kiosk", "smartTV"],
 		currentTheme: weighChoices(["light", "dark", "custom", "light", "dark"]),
 	},
-	/*
-	user properties work the same as event properties
-	each key should be an array or function reference
-	*/
 	userProps: {
 		title: chance.profession.bind(chance),
 		luckyNumber: weighNumRange(42, 420, .3),
-		spiritAnimal: ["duck", "dog", "otter", "penguin", "cat", "elephant", "lion", "cheetah", "giraffe", "zebra", "rhino", "hippo", "whale", "dolphin", "shark", "octopus", "squid", "jellyfish", "starfish", "seahorse", "crab", "lobster", "shrimp", "clam", "snail", "slug", "butterfly", "moth", "bee", "wasp", "ant", "beetle", "ladybug", "caterpillar", "centipede", "millipede", "scorpion", "spider", "tarantula", "tick", "mite", "mosquito", "fly", "dragonfly", "damselfly", "grasshopper", "cricket", "locust", "mantis", "cockroach", "termite", "praying mantis", "walking stick", "stick bug", "leaf insect", "lacewing", "aphid", "cicada", "thrips", "psyllid", "scale insect", "whitefly", "mealybug", "planthopper", "leafhopper", "treehopper", "flea", "louse", "bedbug", "flea beetle", "weevil", "longhorn beetle", "leaf beetle", "tiger beetle", "ground beetle", "lady beetle", "firefly", "click beetle", "rove beetle", "scarab beetle", "dung beetle", "stag beetle", "rhinoceros beetle", "hercules beetle", "goliath beetle", "jewel beetle", "tortoise beetle"],
+		spiritAnimal: spiritAnimals,
 		spendTier: ["budget"],
 		platform: ["web", "mobile", "web", "mobile", "web", "web", "kiosk", "smartTV"],
 		currentTheme: weighChoices(["light", "dark", "custom", "light", "dark"]),
@@ -221,86 +269,18 @@ const config = {
 	groupProps: {
 		company_id: {
 			name: () => { return chance.name(); },
-			email: () => { return `CSM: ${chance.pickone(["AK", "Neha", "Rajiv", "Deepak", "Justin", "Hans", "Katie", "Somya", "Tony", "Kaan"])}`; },
-			industry: [
-				"technology",
-				"education",
-				"finance",
-				"healthcare",
-				"retail",
-				"manufacturing",
-				"transportation",
-				"entertainment",
-				"media",
-				"real estate",
-				"construction",
-				"hospitality",
-				"energy",
-				"utilities",
-				"agriculture",
-				"other",
-			],
+			email: () => { return `CSM: ${chance.pickone(csmNames)}`; },
+			industry: industries,
 			segment: ["SMB", "SMB", "SMB", "Mid Market", "Mid Market", "Enterprise"],
 			"# active users": chance.integer({ min: 2, max: 20 })
 		}
 	},
 	hook: function (record, type, meta) {
-		// --- user hook: classify users into spending tiers ---
-		if (type === "user") {
-			record.spendTier = record.luckyNumber > 250 ? "high_spender" : "budget";
-			return record;
-		}
-
-		// --- event hook: coupon users get discounted checkout amounts ---
-		if (type === "event") {
-			if (record.event === "checkout" && record.coupon && record.coupon !== "none") {
-				const discountPct = parseInt(record.coupon) || 10;
-				record.amount = Math.round(record.amount * (1 - discountPct / 100));
-				record.discount_applied = true;
-			}
-			// weekend watchers get longer watch times
-			if (record.event === "watch video" && record.time) {
-				const day = dayjs(record.time).day();
-				if (day === 0 || day === 6) {
-					record.watchTimeSec = Math.round((record.watchTimeSec || 60) * 1.5);
-					record.is_weekend = true;
-				}
-			}
-			return record;
-		}
-
-		// --- everything hook: simulate cart abandonment ---
-		if (type === "everything") {
-			// stamp superProps from profile for consistency
-			const profile = meta.profile;
-			record.forEach(e => {
-				e.platform = profile.platform;
-				e.currentTheme = profile.currentTheme;
-			});
-
-			const hasAddToCart = record.some(e => e.event === "add to cart");
-			const hasCheckout = record.some(e => e.event === "checkout");
-			// users who added to cart but never checked out: remove checkout events (if any slipped through)
-			// and mark them as abandoned
-			if (hasAddToCart && !hasCheckout && record.length > 2) {
-				const lastAdd = record.filter(e => e.event === "add to cart").pop();
-				if (lastAdd) {
-					record.push({
-						...lastAdd,
-						event: "cart_abandoned",
-						time: dayjs(lastAdd.time).add(30, "minute").toISOString(),
-						user_id: lastAdd.user_id,
-						amount: lastAdd.amount,
-					});
-				}
-			}
-			return record;
-		}
-
+		if (type === "user") return handleUserHook(record);
+		if (type === "event") return handleEventHook(record);
+		if (type === "everything") return handleEverythingHook(record, meta);
 		return record;
 	}
 };
-
-
 
 export default config;
