@@ -1,64 +1,51 @@
-// ── TWEAK THESE ──
-const SEED = "dm4-travel";
-const num_days = 120;
-const num_users = 10_000;
-const avg_events_per_user_per_day = 1.2;
-let token = "your-mixpanel-token";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
-
-dayjs.extend(utc);
-const chance = u.initChance(SEED);
 /** @typedef  {import("../../types").Dungeon} Config */
 
-const hotelIds = v.range(1, 200).map(() => `HTL_${v.uid(6)}`);
-const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", "Dubai", "Sydney", "Rome", "Bangkok", "Cancun", "Bali", "Amsterdam", "Miami", "Singapore", "Lisbon"];
-
-/**
- * ═══════════════════════════════════════════════════════════════
- * DATASET OVERVIEW
- * ═══════════════════════════════════════════════════════════════
+// ── OVERVIEW ──
+/*
+ * NAME:       StayQuest
+ * APP:        Hotel booking platform for business and leisure travelers.
+ *             Users search destinations, compare hotels, book rooms, and leave
+ *             reviews. Revenue from commission per booking plus premium loyalty
+ *             membership. Four traveler archetypes: business, leisure family,
+ *             luxury, budget.
+ * SCALE:      10,000 users, ~600K events, 121 days (2026-01-01 → 2026-05-01)
+ * CORE LOOP:  search → view hotel → compare → book → stay → review
  *
- * StayQuest — a hotel booking platform for business and leisure travelers.
- * Users search destinations, compare hotels, book rooms, and leave reviews.
+ * EVENTS (17):
+ *   destination searched (8) > hotel viewed (7) > app session (7) > notification received (5)
+ *   > price compared (4) > amenity used (4) > booking completed (3) > wishlist updated (3)
+ *   > room upgrade selected (2) > booking cancelled (2) > check in completed (2)
+ *   > review submitted (2) > price alert set (2) > account created (1)
+ *   > loyalty points redeemed (1) > support contacted (1) > account deactivated (1)
  *
- * - 5,000 users over 120 days, ~600K events
- * - Segments: business travelers (weekday), leisure families, luxury, budget
- * - Core loop: search → view hotel → compare → book → stay → review
- * - Revenue: commission per booking + premium loyalty membership
+ * FUNNELS (5):
+ *   - Onboarding to First Booking: account created → destination searched → hotel viewed → booking completed (35%)
+ *   - Search to Book:              destination searched → hotel viewed → price compared → booking completed (25%)
+ *   - Full Stay Journey:           booking completed → check in completed → amenity used → review submitted (30%)
+ *   - Loyalty Engagement:          booking completed → loyalty points redeemed → review submitted (15%)
+ *   - Upsell Path:                 hotel viewed → booking completed → room upgrade selected (20%)
  *
- * Advanced Features:
- * - Personas: 4 traveler archetypes with different booking behaviors
- * - World Events: summer sale (day 40), hurricane disruption (day 65), loyalty launch (day 50)
- * - Engagement Decay: exponential with 90-day half-life (travel is infrequent)
- * - Attribution: Google Hotels, Instagram, TripAdvisor, organic
- * - Geo: North America, Europe, Asia-Pacific with timezone + currency
- * - Anomalies: whale bookings, coordinated group booking spike
+ * USER PROPS:  customer_segment, travel_frequency, company_name, preferred_destination,
+ *              avg_budget_per_night, Platform, membership_tier
+ * SUPER PROPS: Platform, membership_tier
+ * SCD PROPS:   membership_tier (member/silver/gold/platinum, monthly fuzzy, max 8)
+ * GROUPS:      none
  */
 
-/**
- * ═══════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (10 hooks)
- *
+// ── HOOK STORIES ──
+/*
  * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable via
  * raw-prop breakdowns (booking_window, day, segment) or behavioral cohorts.
  *
- * Adds 9. BOOKING TIME-TO-CONVERT (Business 1.35x faster, Budget 1.25x slower)
- *      [funnel-post: visible only in Mixpanel funnel median TTC; cross-event
- *      MIN→MIN SQL queries do NOT show this]
- * and 10. HOTEL-VIEWED MAGIC NUMBER (sweet 5-10 → +30% nightly_rate;
- * over 11+ → drop 35% of bookings).
- * ═══════════════════════════════════════════════════════════════
- *
  * ───────────────────────────────────────────────────────────────
- * 1. WEEKEND LEISURE SURGE (event hook)
+ * 1. WEEKEND LEISURE SURGE (everything)
  * ───────────────────────────────────────────────────────────────
  * PATTERN: Weekend bookings (Fri-Sun) get 1.3x higher nightly_rate
  * due to leisure demand pricing.
@@ -75,7 +62,7 @@ const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", 
  * weekend rates driven by leisure traveler demand.
  *
  * ───────────────────────────────────────────────────────────────
- * 2. ADVANCE BOOKING DISCOUNT (event hook)
+ * 2. ADVANCE BOOKING DISCOUNT (everything)
  * ───────────────────────────────────────────────────────────────
  * PATTERN: Bookings made > 21 days before the dataset end get 0.8x
  * nightly_rate (advance purchase discount). Last-minute bookings
@@ -93,7 +80,7 @@ const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", 
  * premiums for last-minute availability.
  *
  * ───────────────────────────────────────────────────────────────
- * 3. LOYALTY TIER UPGRADE PATH (everything hook)
+ * 3. LOYALTY TIER UPGRADE PATH (everything)
  * ───────────────────────────────────────────────────────────────
  * PATTERN: Users with 5+ bookings get boosted loyalty_points on all
  * booking events (3x the baseline).
@@ -110,7 +97,7 @@ const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", 
  * for frequent guests, creating a flywheel.
  *
  * ───────────────────────────────────────────────────────────────
- * 4. CANCELLATION BY BOOKING WINDOW (everything hook)
+ * 4. CANCELLATION BY BOOKING WINDOW (everything)
  * ───────────────────────────────────────────────────────────────
  * PATTERN: Users who book last-minute (< 7 days out) have 60% of
  * their "booking cancelled" events dropped — they rarely cancel.
@@ -127,7 +114,7 @@ const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", 
  * advance bookers have more flexible cancellation policies.
  *
  * ───────────────────────────────────────────────────────────────
- * 5. UPSELL SUCCESS BY SEGMENT (everything hook)
+ * 5. UPSELL SUCCESS BY SEGMENT (everything)
  * ───────────────────────────────────────────────────────────────
  * PATTERN: After a booking, luxury_seeker users get cloned "room
  * upgrade selected" events injected. Budget users rarely see upsells.
@@ -144,7 +131,7 @@ const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", 
  * upsells (suite upgrades, spa packages).
  *
  * ───────────────────────────────────────────────────────────────
- * 6. REVIEW QUALITY BY STAY RATING (everything hook)
+ * 6. REVIEW QUALITY BY STAY RATING (everything)
  * ───────────────────────────────────────────────────────────────
  * PATTERN: Users whose avg stay_rating is >= 4 have longer review_length
  * (1.5x words). Low-rating users write shorter, negative reviews.
@@ -161,7 +148,7 @@ const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", 
  * reviews; dissatisfied guests write brief complaints.
  *
  * ───────────────────────────────────────────────────────────────
- * 7. BUSINESS TRAVELER PROFILE (user hook)
+ * 7. BUSINESS TRAVELER PROFILE (user)
  * ───────────────────────────────────────────────────────────────
  * PATTERN: Users in business_traveler segment get company_name set
  * to a realistic company and travel_frequency to "weekly".
@@ -177,7 +164,7 @@ const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", 
  * with consistent, high-frequency booking patterns.
  *
  * ───────────────────────────────────────────────────────────────
- * 8. REPEAT DESTINATION CLUSTERING (everything hook — event filtering)
+ * 8. REPEAT DESTINATION CLUSTERING (everything — event filtering)
  * ───────────────────────────────────────────────────────────────
  * PATTERN: Non-business/luxury users have ~25% of "booking completed"
  * events dropped, simulating lower funnel conversion for casual segments.
@@ -193,7 +180,7 @@ const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", 
  * repeatedly, leading to faster, more confident conversions.
  *
  * ───────────────────────────────────────────────────────────────
- * 9. BOOKING TIME-TO-CONVERT (funnel-post hook)
+ * 9. BOOKING TIME-TO-CONVERT (funnel-post)
  * ───────────────────────────────────────────────────────────────
  *
  * PATTERN: Business travelers complete the Search-to-Book funnel
@@ -224,7 +211,7 @@ const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", 
  * comparing options and waiting for deals.
  *
  * ───────────────────────────────────────────────────────────────
- * 10. HOTEL-VIEWED MAGIC NUMBER (everything hook)
+ * 10. HOTEL-VIEWED MAGIC NUMBER (everything)
  * ───────────────────────────────────────────────────────────────
  *
  * PATTERN: Users who viewed 5-10 hotels sit in a "decisive comparison
@@ -279,16 +266,241 @@ const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", 
  * Hotel-Viewed Magic Num      | over bookings/user  | 1x       | 0.65x   | -35%
  */
 
+// ── SCALE ──
+const SEED = "dm4-travel";
+const NUM_USERS = 10_000;
+const DATASET_START = "2026-01-01T00:00:00Z";
+const DATASET_END = "2026-05-01T23:59:59Z";
+const EVENTS_PER_DAY = 1.2;
+const token = process.env.MP_TOKEN || "your-mixpanel-token";
+
+const chance = u.initChance(SEED);
+
+// ── KNOBS (tweak these to reshape stories) ──
+const WEEKEND_RATE_BOOST = 1.3;
+const ADVANCE_DAYS_THRESHOLD = 21;
+const ADVANCE_RATE_FACTOR = 0.8;
+const LAST_MINUTE_DAYS_THRESHOLD = 3;
+const LAST_MINUTE_RATE_FACTOR = 1.4;
+const LOYALTY_BOOKING_THRESHOLD = 5;
+const LOYALTY_POINT_BASE_MULT = 2.5;
+const LOYALTY_POINT_VARIANCE = 1.0;
+const REPEAT_DEST_DROP_LIKELIHOOD = 25;
+const CANCEL_LAST_MINUTE_DROP_LIKELIHOOD = 60;
+const UPSELL_LUXURY_LIKELIHOOD = 50;
+const REVIEW_HIGH_RATING_THRESHOLD = 4;
+const REVIEW_LOW_RATING_THRESHOLD = 2;
+const REVIEW_HIGH_LENGTH_MULT = 1.5;
+const REVIEW_LOW_LENGTH_MULT = 0.5;
+const HOTEL_SWEET_MIN = 5;
+const HOTEL_SWEET_MAX = 10;
+const HOTEL_OVER_THRESHOLD = 11;
+const HOTEL_SWEET_RATE_BOOST = 1.3;
+const HOTEL_OVER_BOOKING_DROP_LIKELIHOOD = 35;
+const TTC_BUSINESS_FACTOR = 0.74;
+const TTC_LEISURE_BUDGET_FACTOR = 1.25;
+
+// ── DATA ARRAYS ──
+const hotelIds = v.range(1, 200).map(() => `HTL_${v.uid(6)}`);
+const destinationCities = ["New York", "London", "Paris", "Tokyo", "Barcelona", "Dubai", "Sydney", "Rome", "Bangkok", "Cancun", "Bali", "Amsterdam", "Miami", "Singapore", "Lisbon"];
+
+// ── HELPER FUNCTIONS ──
+function handleUserHooks(record) {
+	// H7: BUSINESS TRAVELER PROFILE
+	if (record.customer_segment === "business_traveler") {
+		record.company_name = chance.pickone(["Acme Corp", "GlobalTech", "Initech", "Prestige Consulting", "Summit Partners", "Atlas Industries"]);
+		record.travel_frequency = "weekly";
+	} else if (record.customer_segment === "luxury_seeker") {
+		record.avg_budget_per_night = chance.integer({ min: 250, max: 500 });
+	} else if (record.customer_segment === "budget_hunter") {
+		record.avg_budget_per_night = chance.integer({ min: 50, max: 120 });
+	}
+	return record;
+}
+
+function handleFunnelPostHooks(record, meta) {
+	// H9: BOOKING TIME-TO-CONVERT — business 1.35x faster (0.74),
+	// leisure_family/budget 1.25x slower.
+	const segment = meta?.profile?.customer_segment;
+	if (Array.isArray(record) && record.length > 1) {
+		const factor = (
+			segment === "business_traveler" ? TTC_BUSINESS_FACTOR :
+			segment === "budget_hunter" || segment === "leisure_family" ? TTC_LEISURE_BUDGET_FACTOR :
+			1.0
+		);
+		if (factor !== 1.0) {
+			for (let i = 1; i < record.length; i++) {
+				const prev = dayjs(record[i - 1].time);
+				const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
+				record[i].time = prev.add(newGap, "milliseconds").toISOString();
+			}
+		}
+	}
+	return record;
+}
+
+function handleEverythingHooks(record, meta) {
+	const events = record;
+	if (!events.length) return record;
+
+	const profile = meta.profile;
+
+	// Stamp superProps from profile (consistent per user)
+	const stampPlatform = profile && profile.Platform ? profile.Platform : undefined;
+	const stampTier = profile && profile.membership_tier ? profile.membership_tier : undefined;
+	if (stampPlatform || stampTier) {
+		events.forEach(e => {
+			if (stampPlatform) e.Platform = stampPlatform;
+			if (stampTier) e.membership_tier = stampTier;
+		});
+	}
+
+	// H1: WEEKEND LEISURE SURGE — Fri/Sat/Sun bookings get +30% rate
+	events.forEach(e => {
+		if (e.event === "booking completed") {
+			const dayOfWeek = new Date(e.time).getUTCDay();
+			// Friday=5, Saturday=6, Sunday=0
+			if (dayOfWeek === 0 || dayOfWeek === 5 || dayOfWeek === 6) {
+				e.nightly_rate = Math.floor((e.nightly_rate || 150) * WEEKEND_RATE_BOOST);
+				e.total_cost = Math.floor((e.total_cost || 450) * WEEKEND_RATE_BOOST);
+			}
+		}
+	});
+
+	// H2: ADVANCE BOOKING DISCOUNT
+	const datasetEndForBooking = dayjs.unix(meta.datasetEnd);
+	events.forEach(e => {
+		if (e.event === "booking completed") {
+			const eventTime = dayjs(e.time);
+			const daysUntilEnd = datasetEndForBooking.diff(eventTime, "days");
+			if (daysUntilEnd > ADVANCE_DAYS_THRESHOLD) {
+				e.booking_window = "advance";
+				e.nightly_rate = Math.floor((e.nightly_rate || 150) * ADVANCE_RATE_FACTOR);
+			} else if (daysUntilEnd < LAST_MINUTE_DAYS_THRESHOLD) {
+				e.booking_window = "last_minute";
+				e.nightly_rate = Math.floor((e.nightly_rate || 150) * LAST_MINUTE_RATE_FACTOR);
+			}
+		}
+	});
+
+	// H8: REPEAT DESTINATION CLUSTERING — drop ~25% of "booking completed"
+	// for non-business/luxury users.
+	const segment = profile && profile.customer_segment;
+	if (segment !== "business_traveler" && segment !== "luxury_seeker"
+			&& chance.bool({ likelihood: REPEAT_DEST_DROP_LIKELIHOOD })) {
+		for (let i = events.length - 1; i >= 0; i--) {
+			if (events[i].event === "booking completed") {
+				events.splice(i, 1);
+			}
+		}
+	}
+
+	// H3: LOYALTY TIER UPGRADE PATH — 5+ bookings → ~3x loyalty_points
+	let bookingCount = 0;
+	events.forEach(e => { if (e.event === "booking completed") bookingCount++; });
+	if (bookingCount >= LOYALTY_BOOKING_THRESHOLD) {
+		events.forEach(e => {
+			if (e.event === "booking completed" && e.loyalty_points) {
+				e.loyalty_points = Math.floor(e.loyalty_points * (LOYALTY_POINT_BASE_MULT + chance.floating({ min: 0, max: LOYALTY_POINT_VARIANCE })));
+			}
+		});
+	}
+
+	// H4: CANCELLATION BY BOOKING WINDOW — copy nearest preceding booking's
+	// booking_window onto each cancellation, then drop 60% of last-minute cancels.
+	const bookingsByTime = events
+		.filter(e => e.event === "booking completed")
+		.sort((a, b) => new Date(a.time) - new Date(b.time));
+	events.forEach(e => {
+		if (e.event === "booking cancelled" && bookingsByTime.length > 0) {
+			const cancelTime = new Date(e.time).getTime();
+			let matched = bookingsByTime[0];
+			for (let b = bookingsByTime.length - 1; b >= 0; b--) {
+				if (new Date(bookingsByTime[b].time).getTime() <= cancelTime) {
+					matched = bookingsByTime[b];
+					break;
+				}
+			}
+			e.booking_window = matched.booking_window;
+		}
+	});
+	for (let i = events.length - 1; i >= 0; i--) {
+		if (events[i].event === "booking cancelled" && events[i].booking_window === "last_minute") {
+			if (chance.bool({ likelihood: CANCEL_LAST_MINUTE_DROP_LIKELIHOOD })) {
+				events.splice(i, 1);
+			}
+		}
+	}
+
+	// H5: UPSELL SUCCESS BY SEGMENT — luxury_seeker users get cloned upgrades
+	if (profile && profile.customer_segment === "luxury_seeker") {
+		const templateUpgrade = events.find(e => e.event === "room upgrade selected");
+		if (templateUpgrade) {
+			const bookings = events.filter(e => e.event === "booking completed");
+			bookings.forEach(booking => {
+				if (chance.bool({ likelihood: UPSELL_LUXURY_LIKELIHOOD })) {
+					events.push({
+						...templateUpgrade,
+						time: dayjs(booking.time).add(chance.integer({ min: 1, max: 30 }), "minutes").toISOString(),
+						user_id: booking.user_id,
+						upgrade_cost: chance.integer({ min: 75, max: 200 }),
+					});
+				}
+			});
+		}
+	}
+
+	// H6: REVIEW QUALITY BY STAY RATING — high avg → 1.5x review_length;
+	// low avg → 0.5x.
+	let totalRating = 0;
+	let ratingCount = 0;
+	events.forEach(e => {
+		if (e.event === "review submitted" && e.stay_rating) {
+			totalRating += e.stay_rating;
+			ratingCount++;
+		}
+	});
+	const avgRating = ratingCount > 0 ? totalRating / ratingCount : 3;
+	events.forEach(e => {
+		if (e.event === "review submitted") {
+			if (avgRating >= REVIEW_HIGH_RATING_THRESHOLD) {
+				e.review_length = Math.floor((e.review_length || 120) * REVIEW_HIGH_LENGTH_MULT);
+			} else if (avgRating <= REVIEW_LOW_RATING_THRESHOLD) {
+				e.review_length = Math.floor((e.review_length || 120) * REVIEW_LOW_LENGTH_MULT);
+			}
+		}
+	});
+
+	// H10: HOTEL-VIEWED MAGIC NUMBER — sweet 5-10 → +30% nightly_rate;
+	// over 11+ → drop 35% of bookings.
+	const hotelViews = events.filter(e => e.event === "hotel viewed").length;
+	if (hotelViews >= HOTEL_SWEET_MIN && hotelViews <= HOTEL_SWEET_MAX) {
+		events.forEach(e => {
+			if (e.event === "booking completed" && typeof e.nightly_rate === "number") {
+				e.nightly_rate = Math.round(e.nightly_rate * HOTEL_SWEET_RATE_BOOST);
+			}
+		});
+	} else if (hotelViews >= HOTEL_OVER_THRESHOLD) {
+		for (let i = events.length - 1; i >= 0; i--) {
+			if (events[i].event === "booking completed" && chance.bool({ likelihood: HOTEL_OVER_BOOKING_DROP_LIKELIHOOD })) {
+				events.splice(i, 1);
+			}
+		}
+	}
+
+	return record;
+}
+
+// ── CONFIG ──
 /** @type {Config} */
 const config = {
 	version: 2,
 	token,
 	seed: SEED,
-	datasetStart: "2026-01-01T00:00:00Z",
-	datasetEnd: "2026-05-01T23:59:59Z",
-	// numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
+	datasetStart: DATASET_START,
+	datasetEnd: DATASET_END,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	hasAnonIds: true,
 	avgDevicePerUser: 2,
 	hasSessionIds: true,
@@ -317,7 +529,6 @@ const config = {
 	mirrorProps: {},
 	lookupTables: [],
 
-	// ── Events (17) ──────────────────────────────────────────
 	events: [
 		{
 			event: "account created",
@@ -490,7 +701,6 @@ const config = {
 		},
 	],
 
-	// ── Funnels (5) ──────────────────────────────────────────
 	funnels: [
 		{
 			name: "Onboarding to First Booking",
@@ -536,13 +746,11 @@ const config = {
 		},
 	],
 
-	// ── SuperProps ──────────────────────────────────────────
 	superProps: {
 		Platform: ["ios", "android", "web", "web"],
 		membership_tier: ["standard", "standard", "standard", "gold", "platinum"],
 	},
 
-	// ── UserProps ──────────────────────────────────────────
 	userProps: {
 		customer_segment: ["leisure_family"],
 		travel_frequency: ["occasional", "occasional", "monthly", "weekly"],
@@ -553,7 +761,6 @@ const config = {
 		membership_tier: ["standard", "standard", "standard", "gold", "platinum"],
 	},
 
-	// ── Personas ──────────────────────────────────
 	personas: [
 		{
 			name: "business_traveler",
@@ -589,7 +796,6 @@ const config = {
 		},
 	],
 
-	// ── World Events ──────────────────────────────
 	worldEvents: [
 		{
 			name: "summer_sale",
@@ -620,7 +826,6 @@ const config = {
 		},
 	],
 
-	// ── Engagement Decay ──────────────────────────
 	engagementDecay: {
 		model: "exponential",
 		halfLife: 90,
@@ -628,7 +833,6 @@ const config = {
 		reactivationChance: 0.02,
 	},
 
-	// ── Attribution ──────────────────────────────
 	attribution: {
 		model: "last_touch",
 		window: 7,
@@ -664,7 +868,6 @@ const config = {
 		organicRate: 0.35,
 	},
 
-	// ── Geo ──────────────────────────────────────
 	geo: {
 		sticky: true,
 		regions: [
@@ -692,7 +895,6 @@ const config = {
 		],
 	},
 
-	// ── Anomalies ──────────────────────────────────
 	anomalies: [
 		{
 			type: "extreme_value",
@@ -712,215 +914,10 @@ const config = {
 		},
 	],
 
-	// ── Hook Function ──────────────────────────────────────
-	hook: function (record, type, meta) {
-		// ── HOOK 7: BUSINESS TRAVELER PROFILE (user) ─────────
-		if (type === "user") {
-			if (record.customer_segment === "business_traveler") {
-				record.company_name = chance.pickone(["Acme Corp", "GlobalTech", "Initech", "Prestige Consulting", "Summit Partners", "Atlas Industries"]);
-				record.travel_frequency = "weekly";
-			} else if (record.customer_segment === "luxury_seeker") {
-				record.avg_budget_per_night = chance.integer({ min: 250, max: 500 });
-			} else if (record.customer_segment === "budget_hunter") {
-				record.avg_budget_per_night = chance.integer({ min: 50, max: 120 });
-			}
-		}
-
-		// HOOK 9 (T2C): BOOKING TIME-TO-CONVERT (funnel-post)
-		// Business travelers complete the Search-to-Book funnel 1.35x faster
-		// (factor 0.74); leisure_family/budget customers 1.25x slower (1.25).
-		if (type === "funnel-post") {
-			const segment = meta?.profile?.customer_segment;
-			if (Array.isArray(record) && record.length > 1) {
-				const factor = (
-					segment === "business_traveler" ? 0.74 :
-					segment === "budget_hunter" || segment === "leisure_family" ? 1.25 :
-					1.0
-				);
-				if (factor !== 1.0) {
-					for (let i = 1; i < record.length; i++) {
-						const prev = dayjs(record[i - 1].time);
-						const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-						record[i].time = prev.add(newGap, "milliseconds").toISOString();
-					}
-				}
-			}
-		}
-
-		// ── HOOK 1: WEEKEND LEISURE SURGE ────────────
-		// Moved to everything hook (sessionization reassigns times after event hook)
-
-		// ── HOOK 2: ADVANCE BOOKING DISCOUNT ─────
-		// Moved to everything hook (sessionization reassigns times after event hook)
-		if (type === "event") {
-			// no-op: DOW-dependent hooks moved to everything hook
-		}
-
-		// ── EVERYTHING HOOKS ─────────────────────────────────
-		if (type === "everything") {
-			const events = record;
-			if (!events.length) return record;
-
-			const profile = meta.profile;
-
-			// ─── Stamp superProps from profile (consistent per user) ───
-			const stampPlatform = profile && profile.Platform ? profile.Platform : undefined;
-			const stampTier = profile && profile.membership_tier ? profile.membership_tier : undefined;
-			if (stampPlatform || stampTier) {
-				events.forEach(e => {
-					if (stampPlatform) e.Platform = stampPlatform;
-					if (stampTier) e.membership_tier = stampTier;
-				});
-			}
-
-			// ── HOOK 1: WEEKEND LEISURE SURGE ────────────
-			// Apply AFTER sessionization has finalized times
-			events.forEach(e => {
-				if (e.event === "booking completed") {
-					const dayOfWeek = new Date(e.time).getUTCDay();
-					// Friday=5, Saturday=6, Sunday=0
-					if (dayOfWeek === 0 || dayOfWeek === 5 || dayOfWeek === 6) {
-						e.nightly_rate = Math.floor((e.nightly_rate || 150) * 1.3);
-						e.total_cost = Math.floor((e.total_cost || 450) * 1.3);
-					}
-				}
-			});
-
-			// ── HOOK 2: ADVANCE BOOKING DISCOUNT ─────
-			const datasetEndForBooking = dayjs.unix(meta.datasetEnd);
-			events.forEach(e => {
-				if (e.event === "booking completed") {
-					const eventTime = dayjs(e.time);
-					const daysUntilEnd = datasetEndForBooking.diff(eventTime, "days");
-					if (daysUntilEnd > 21) {
-						e.booking_window = "advance";
-						e.nightly_rate = Math.floor((e.nightly_rate || 150) * 0.8);
-					} else if (daysUntilEnd < 3) {
-						e.booking_window = "last_minute";
-						e.nightly_rate = Math.floor((e.nightly_rate || 150) * 1.4);
-					}
-				}
-			});
-
-			// ─── Bug 2 fix: Repeat destination clustering conversion filtering ───
-			// Drop ~25% of "booking completed" events for users who are NOT
-			// business_traveler or luxury_seeker to simulate their lower funnel
-			// conversion (was conversionRate * 1.3 / 1.15 in funnel-pre)
-			const segment = profile && profile.customer_segment;
-			if (segment !== "business_traveler" && segment !== "luxury_seeker"
-					&& chance.bool({ likelihood: 25 })) {
-				for (let i = events.length - 1; i >= 0; i--) {
-					if (events[i].event === "booking completed") {
-						events.splice(i, 1);
-					}
-				}
-			}
-
-			// ── HOOK 3: LOYALTY TIER UPGRADE PATH ────────────
-			let bookingCount = 0;
-			events.forEach(e => { if (e.event === "booking completed") bookingCount++; });
-			if (bookingCount >= 5) {
-				events.forEach(e => {
-					if (e.event === "booking completed" && e.loyalty_points) {
-						e.loyalty_points = Math.floor(e.loyalty_points * (2.5 + chance.floating({ min: 0, max: 1.0 })));
-					}
-				});
-			}
-
-			// ── HOOK 4: CANCELLATION BY BOOKING WINDOW ───────
-			// Match each cancellation to its nearest preceding booking
-			// and copy the booking's booking_window. This replaces the
-			// random booking_window that the event config assigns to
-			// cancellation events independently.
-			const bookingsByTime = events
-				.filter(e => e.event === "booking completed")
-				.sort((a, b) => new Date(a.time) - new Date(b.time));
-			events.forEach(e => {
-				if (e.event === "booking cancelled" && bookingsByTime.length > 0) {
-					const cancelTime = new Date(e.time).getTime();
-					// Find the nearest preceding booking (or the first one)
-					let matched = bookingsByTime[0];
-					for (let b = bookingsByTime.length - 1; b >= 0; b--) {
-						if (new Date(bookingsByTime[b].time).getTime() <= cancelTime) {
-							matched = bookingsByTime[b];
-							break;
-						}
-					}
-					e.booking_window = matched.booking_window;
-				}
-			});
-
-			// Last-minute bookers rarely cancel — drop 60%.
-			for (let i = events.length - 1; i >= 0; i--) {
-				if (events[i].event === "booking cancelled" && events[i].booking_window === "last_minute") {
-					if (chance.bool({ likelihood: 60 })) {
-						events.splice(i, 1);
-					}
-				}
-			}
-
-			// ── HOOK 5: UPSELL SUCCESS BY SEGMENT ────────────
-			if (profile && profile.customer_segment === "luxury_seeker") {
-				const templateUpgrade = events.find(e => e.event === "room upgrade selected");
-				if (templateUpgrade) {
-					const bookings = events.filter(e => e.event === "booking completed");
-					bookings.forEach(booking => {
-						if (chance.bool({ likelihood: 50 })) {
-							events.push({
-								...templateUpgrade,
-								time: dayjs(booking.time).add(chance.integer({ min: 1, max: 30 }), "minutes").toISOString(),
-								user_id: booking.user_id,
-								upgrade_cost: chance.integer({ min: 75, max: 200 }),
-							});
-						}
-					});
-				}
-			}
-
-			// HOOK 6: REVIEW QUALITY BY STAY RATING — high avg ratings get
-			// review_length 1.5x; low avg ratings get 0.5x. Mutates raw prop.
-			let totalRating = 0;
-			let ratingCount = 0;
-			events.forEach(e => {
-				if (e.event === "review submitted" && e.stay_rating) {
-					totalRating += e.stay_rating;
-					ratingCount++;
-				}
-			});
-			const avgRating = ratingCount > 0 ? totalRating / ratingCount : 3;
-			events.forEach(e => {
-				if (e.event === "review submitted") {
-					if (avgRating >= 4) {
-						e.review_length = Math.floor((e.review_length || 120) * 1.5);
-					} else if (avgRating <= 2) {
-						e.review_length = Math.floor((e.review_length || 120) * 0.5);
-					}
-				}
-			});
-
-			// HOOK 10: HOTEL-VIEWED MAGIC NUMBER (in-funnel, no flags)
-			// Sweet 5-10 hotel-viewed events → +30% on booking nightly_rate
-			// (decisive comparison shoppers book higher-tier rooms).
-			// Over 11+ → drop 35% of booking-completed events (analysis
-			// paralysis blocks conversion).
-			const hotelViews = events.filter(e => e.event === "hotel viewed").length;
-			if (hotelViews >= 5 && hotelViews <= 10) {
-				events.forEach(e => {
-					if (e.event === "booking completed" && typeof e.nightly_rate === "number") {
-						e.nightly_rate = Math.round(e.nightly_rate * 1.3);
-					}
-				});
-			} else if (hotelViews >= 11) {
-				for (let i = events.length - 1; i >= 0; i--) {
-					if (events[i].event === "booking completed" && chance.bool({ likelihood: 35 })) {
-						events.splice(i, 1);
-					}
-				}
-			}
-
-			return record;
-		}
-
+	hook(record, type, meta) {
+		if (type === "user") return handleUserHooks(record);
+		if (type === "funnel-post") return handleFunnelPostHooks(record, meta);
+		if (type === "everything") return handleEverythingHooks(record, meta);
 		return record;
 	},
 };
