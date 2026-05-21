@@ -1,95 +1,56 @@
-// ── TWEAK THESE ──
-const SEED = "SUPER DUPER DANGEROUS BROOO";
-const num_days = 92;
-const num_users = 8_000;
-const avg_events_per_user_per_day = 1.3;
-let token = "";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import "dotenv/config";
-import { weighNumRange, range, date, initChance, exhaust, choose, integer } from "../../lib/utils/utils.js";
+import { weighNumRange, initChance, integer } from "../../lib/utils/utils.js";
 import { createTextGenerator, generateBatch } from "../../lib/generators/text.js";
-
 dayjs.extend(utc);
-const chance = initChance(SEED);
-
 /** @typedef  {import("../../types").Dungeon} Dungeon */
 
+// ── OVERVIEW ──
 /*
- * ============================================================================
- * DATASET OVERVIEW
- * ============================================================================
- *
- * App: Text Generation Demo — showcases dungeon-master's organic text generation
- * Scale: 8,000 users, ~960K events, 92 days
- *
- * A text-heavy SaaS analytics dungeon that exercises every text generation
- * style available in dungeon-master. Users interact through support tickets, product
- * reviews, forum posts, search queries, chat messages, social media posts
- * (Twitter, LinkedIn, Reddit), bug reports, feature requests, onboarding
- * feedback, charity/wedding comments, and webinar chat.
- *
- * Each event type uses a dedicated createTextGenerator() configured with its
- * own style, tone, formality, keyword banks, typo rates, and authenticity
- * levels. Text generator styles used: support, review, forum, search,
- * feedback, chat, email, tweet, comments (9 distinct styles).
- *
- * Events:
- *   social_media_tweet (15) > chat_message (10) > charity_comment_posted (8)
- *   > wedding_comment_posted (6) > company_announcement_tweet (3)
- *   > all others (1 each): support ticket, review, forum post, search,
- *     feedback, email, twitter, linkedin, reddit, bug report, feature
- *     request, onboarding, tutorial comment, webinar chat, api thread
- * ============================================================================
+ * NAME:       text-generation
+ * PURPOSE:    text-heavy fixture exercising every createTextGenerator style — support, review, forum, search, feedback, chat, email, tweet, comments
+ * SCALE:      8,000 users, ~960K events, 92 days
+ * EVENTS (20): enterprise_support_ticket, casual_product_review, technical_forum_post, search_query, business_feedback, chat_message (10), email_correspondence, twitter_post, linkedin_post, reddit_comment, bug_report_submitted, feature_request_submitted, onboarding_feedback, tutorial_comment_posted, webinar_chat_message, charity_comment_posted (8), wedding_comment_posted (6), social_media_tweet (15), company_announcement_tweet (3), api_discussion_thread, satisfaction_survey_triggered (hook-injected)
+ * FUNNELS (0): none (alsoInferFunnels: true)
  */
 
+// ── HOOK STORIES ──
 /*
- * ============================================================================
- * ANALYTICS HOOKS
- * ============================================================================
+ * Hook 1: Power User + Churn Risk Classification (user)
+ *   Users with engagement_score > 70 get is_power_user = true.
+ *   Users with last_active_days_ago > 20 get risk_level = "high_churn", else "healthy".
+ *   Mixpanel: Insights — user profile breakdown by "is_power_user" / "risk_level"
+ *   cross-referenced with "user_tier".
  *
- * Hook 1: Power User + Churn Risk Classification
- *   Type: user
- *   What: Users with engagement_score > 70 get is_power_user = true.
- *     Users inactive > 20 days get risk_level = "high_churn", else "healthy".
- *   Mixpanel report:
- *     - Insights > user profile breakdown by "is_power_user"
- *     - Insights > user profile breakdown by "risk_level", cross-reference
- *       with "user_tier" to see churn risk by plan
+ * Hook 2: Critical Ticket Auto-Escalation (event)
+ *   enterprise_support_ticket events with priority = "critical" get
+ *   escalation_level bumped by 1 (max 3) and auto_escalated = true.
+ *   Mixpanel: Insights — "enterprise_support_ticket" total, breakdown by auto_escalated.
  *
- * Hook 2: Critical Ticket Auto-Escalation
- *   Type: event
- *   What: enterprise_support_ticket events with priority = "critical" get
- *     escalation_level bumped by 1 (max 3) and auto_escalated = true.
- *   Mixpanel report:
- *     - Insights > "enterprise_support_ticket" total events, breakdown by
- *       auto_escalated
- *     - Expect: critical tickets show auto_escalated = true
+ * Hook 3: Critical Bug Flagging (event)
+ *   bug_report_submitted with severity = "critical" AND is_reproducible = true
+ *   get requires_immediate_review = true and random estimated_fix_hours (1-8).
+ *   Mixpanel: Insights — "bug_report_submitted" total, breakdown by requires_immediate_review.
  *
- * Hook 3: Critical Bug Flagging
- *   Type: event
- *   What: bug_report_submitted events with severity = "critical" AND
- *     is_reproducible = true get requires_immediate_review = true and a
- *     random estimated_fix_hours (1-8).
- *   Mixpanel report:
- *     - Insights > "bug_report_submitted" total events, breakdown by
- *       requires_immediate_review
- *     - Expect: only critical + reproducible bugs are flagged
- *
- * Hook 4: Enterprise Satisfaction Survey Injection
- *   Type: everything
- *   What: Enterprise-tier users with > 5 events get a
- *     "satisfaction_survey_triggered" event appended with a 1-10 NPS score.
- *   Mixpanel report:
- *     - Insights > "satisfaction_survey_triggered" AVG(score), breakdown by
- *       product_tier
- *     - Expect: only enterprise users have survey events
- * ============================================================================
+ * Hook 4: Enterprise Satisfaction Survey Injection (everything)
+ *   Enterprise-tier users with > 5 events get a "satisfaction_survey_triggered"
+ *   event appended with a 1-10 NPS score.
+ *   Mixpanel: Insights — "satisfaction_survey_triggered" AVG(score), breakdown by product_tier.
  */
+
+// ── SCALE ──
+const SEED = "SUPER DUPER DANGEROUS BROOO";
+const NUM_DAYS = 92;
+const NUM_USERS = 8_000;
+const EVENTS_PER_DAY = 1.3;
+const token = process.env.MP_TOKEN || "";
+
+const chance = initChance(SEED);
+
+// ── DATA ARRAYS ──
+// (text generator instances — one per event style)
 
 // Enterprise support ticket generator with keywords and high authenticity
 const enterpriseSupportGen = createTextGenerator({
@@ -402,13 +363,60 @@ const webinarChatGen = createTextGenerator({
 	includeMetadata: false
 });
 
+// ── HELPER FUNCTIONS ──
+function handleUserHook(record) {
+	// H1: classify users by engagement and tier
+	record.is_power_user = record.engagement_score > 70;
+	record.risk_level = record.last_active_days_ago > 20 ? "high_churn" : "healthy";
+	return record;
+}
+
+function handleEventHook(record) {
+	// H2: enterprise support tickets get auto-escalated if critical
+	if (record.event === "enterprise_support_ticket" && record.priority === "critical") {
+		record.escalation_level = Math.min((record.escalation_level || 1) + 1, 3);
+		record.auto_escalated = true;
+	}
+	// H3: bug reports with critical severity get flagged for immediate review
+	if (record.event === "bug_report_submitted" && record.severity === "critical" && record.is_reproducible === true) {
+		record.requires_immediate_review = true;
+		record.estimated_fix_hours = chance.integer({ min: 1, max: 8 });
+	}
+	return record;
+}
+
+function handleEverythingHook(record, meta) {
+	if (!meta || !meta.profile) return record;
+	// stamp superProps from profile for consistency (skip feature_flags — intentionally per-event)
+	const profile = meta.profile;
+	record.forEach(e => {
+		e.product_tier = profile.product_tier;
+		e.data_center = profile.data_center;
+	});
+
+	// H4: enterprise users with > 5 events get a satisfaction_survey_triggered event appended
+	if (meta.profile.user_tier === "enterprise" && record.length > 5) {
+		const lastEvent = record[record.length - 1];
+		record.push({
+			...lastEvent,
+			event: "satisfaction_survey_triggered",
+			time: lastEvent.time,
+			user_id: lastEvent.user_id,
+			survey_type: "quarterly_nps",
+			score: chance.integer({ min: 1, max: 10 }),
+		});
+	}
+	return record;
+}
+
+// ── CONFIG ──
 /** @type {Dungeon} */
 const dungeon = {
 	seed: SEED,
 	token,
-	numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
+	numDays: NUM_DAYS,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	hasAnonIds: false,
 	hasSessionIds: true, // Enable for chat flow tracking
 	format: "json",
@@ -426,8 +434,7 @@ const dungeon = {
 	concurrency: 1,
 	writeToDisk: false,
 
-	// ============= Enhanced Events with New API =============
-	events: [		
+	events: [
 		{
 			event: "enterprise_support_ticket",
 			weight: 1,
@@ -780,60 +787,14 @@ const dungeon = {
 		product_tier: ["free", "basic", "pro", "enterprise"],
 		data_center: ["us-east", "us-west", "eu-central", "asia-pacific"],
 	},
-	
-	// ============= Slowly Changing Dimensions =============
+
 	scdProps: {},
-	
-	// ============= Lookup Tables =============
-	lookupTables: [
-		
-	],
+	lookupTables: [],
 
 	hook: function (record, type, meta) {
-		// --- user hook: classify users by engagement and tier ---
-		if (type === "user") {
-			record.is_power_user = record.engagement_score > 70;
-			record.risk_level = record.last_active_days_ago > 20 ? "high_churn" : "healthy";
-			return record;
-		}
-
-		// --- event hook: enterprise support tickets get auto-escalated if critical ---
-		if (type === "event") {
-			if (record.event === "enterprise_support_ticket" && record.priority === "critical") {
-				record.escalation_level = Math.min((record.escalation_level || 1) + 1, 3);
-				record.auto_escalated = true;
-			}
-			// bug reports with critical severity get flagged for immediate review
-			if (record.event === "bug_report_submitted" && record.severity === "critical" && record.is_reproducible === true) {
-				record.requires_immediate_review = true;
-				record.estimated_fix_hours = chance.integer({ min: 1, max: 8 });
-			}
-			return record;
-		}
-
-		// --- everything hook: enterprise users get a satisfaction survey event ---
-		if (type === "everything" && meta && meta.profile) {
-			// stamp superProps from profile for consistency (skip feature_flags — intentionally per-event)
-			const profile = meta.profile;
-			record.forEach(e => {
-				e.product_tier = profile.product_tier;
-				e.data_center = profile.data_center;
-			});
-
-			if (meta.profile.user_tier === "enterprise" && record.length > 5) {
-				const lastEvent = record[record.length - 1];
-				record.push({
-					...lastEvent,
-					event: "satisfaction_survey_triggered",
-					time: lastEvent.time,
-					user_id: lastEvent.user_id,
-					survey_type: "quarterly_nps",
-					score: chance.integer({ min: 1, max: 10 }),
-				});
-			}
-			return record;
-		}
-
+		if (type === "user") return handleUserHook(record);
+		if (type === "event") return handleEventHook(record);
+		if (type === "everything") return handleEverythingHook(record, meta);
 		return record;
 	}
 };
