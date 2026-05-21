@@ -87,4 +87,22 @@ describe('v1.5.1 dataset-context (AsyncLocalStorage)', () => {
 			expect(getDatasetNow().unix()).toBe(A_NOW);
 		});
 	});
+
+	test('legacy setDatasetNow/setDatasetBegin shims still feed getters when no ALS scope', async () => {
+		// v1.5.1: legacy setters write to a module-scoped fallback; getters check
+		// ALS → legacy → wall-clock. Verifies back-compat for tests that haven't
+		// migrated to runWithDataset.
+		const { setDatasetNow, setDatasetBegin } = await import('../../lib/utils/utils.js');
+		setDatasetBegin(B_BEGIN);
+		setDatasetNow(B_NOW);
+		expect(getDatasetNow().unix()).toBe(B_NOW);
+		expect(getDatasetBegin().unix()).toBe(B_BEGIN);
+		// ALS scope must STILL win over legacy fallback when active.
+		runWithDataset(A_BEGIN, A_NOW, () => {
+			expect(getDatasetNow().unix()).toBe(A_NOW);
+			expect(getDatasetBegin().unix()).toBe(A_BEGIN);
+		});
+		// After scope ends, fallback values restored.
+		expect(getDatasetNow().unix()).toBe(B_NOW);
+	});
 });

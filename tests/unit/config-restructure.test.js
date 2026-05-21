@@ -117,4 +117,24 @@ describe('v1.5.1 config sub-object normalization', () => {
 		// At minimum, the validator should not throw — full effect of
 		// alsoInferFunnels is tested elsewhere.
 	});
+
+	test('mergeConfigSubObjects does not mutate the input config', () => {
+		initChance('no-mutate');
+		const input = base({
+			credentials: { token: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', region: 'EU' },
+			switches: { hasLocation: true },
+			identity: { avgDevicePerUser: 2 },
+		});
+		// Snapshot before
+		const snapshot = JSON.parse(JSON.stringify(input));
+		validateDungeonConfig(input);
+		// Input should be unchanged — sub-object hoisting only mutates the
+		// validator's internal copy, never the caller's reference.
+		expect(input.credentials).toEqual(snapshot.credentials);
+		expect(input.switches).toEqual(snapshot.switches);
+		expect(input.identity).toEqual(snapshot.identity);
+		expect(input.token).toBeUndefined();
+		expect(input.hasLocation).toBeUndefined();
+		expect(input.avgDevicePerUser).toBeUndefined();
+	});
 });
