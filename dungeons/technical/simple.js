@@ -1,42 +1,22 @@
-// ── TWEAK THESE ──
-const SEED = "simple is best";
-const num_days = 100;
-const num_users = 5_000;
-const avg_events_per_user_per_day = 1;
-let token = "";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
+// ── IMPORTS ──
 import Chance from 'chance';
-let chance = new Chance();
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
-import { uid, comma } from 'ak-tools';
 import { pickAWinner, weighNumRange, date, integer, weighChoices } from "../../lib/utils/utils.js";
-
 /** @typedef {import("../../types").Dungeon} Config */
-const itemCategories = ["Books", "Movies", "Music", "Games", "Electronics", "Computers", "Smart Home", "Home", "Garden", "Pet", "Beauty", "Health", "Toys", "Kids", "Baby", "Handmade", "Sports", "Outdoors", "Automotive", "Industrial", "Entertainment", "Art", "Food", "Appliances", "Office", "Wedding", "Software"];
 
-const videoCategories = ["funny", "educational", "inspirational", "music", "news", "sports", "cooking", "DIY", "travel", "gaming"];
+// ── OVERVIEW ──
+/*
+ * NAME:       simple
+ * PURPOSE:    simple e-commerce + media dungeon — exercises event/everything hooks, campaigns, signup funnel A/B
+ * SCALE:      5,000 users, ~500K events, 100 days
+ * EVENTS (9): ad impression, ad click, checkout, add to cart, page view, watch video, view item, save item, sign up
+ * FUNNELS (1): page view → view item → save item → page view → sign up (Signup Flow, A/B experiment)
+ */
 
-/**
- * ═══════════════════════════════════════════════════════════════
- * DATASET OVERVIEW
- * ═══════════════════════════════════════════════════════════════
- *
- * Simple E-Commerce + Media App
- * - 5,000 users over 100 days, ~500K events
- * - Events: ad impressions/clicks, page views, video watching,
- *   item browsing/saving, cart, checkout, signup
- * - Signup funnel with A/B experiment
- * - Campaigns, location, browser, and device data enabled
- *
- * ═══════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (3 patterns)
- * ═══════════════════════════════════════════════════════════════
- *
+// ── HOOK STORIES ──
+/*
  * 1. TEMPORAL IMPROVEMENT (event hook)
  *    After 15 days ago: checkout amounts 1.5x, watch times 1.5x.
  *    Before that: 33% of events are dropped (tagged _drop, filtered in everything).
@@ -68,13 +48,109 @@ const videoCategories = ["funny", "educational", "inspirational", "music", "news
  *      Expected: low-quality cohort volume thins out after midpoint
  */
 
-/** @type {import('../../types').Dungeon} */
+// ── SCALE ──
+const SEED = "simple is best";
+const NUM_DAYS = 100;
+const NUM_USERS = 5_000;
+const EVENTS_PER_DAY = 1;
+const token = process.env.MP_TOKEN || "";
+
+const chance = new Chance();
+
+// ── KNOBS (tweak these to reshape stories) ──
+const IMPROVEMENT_DAYS_AGO = 15;
+const IMPROVEMENT_MULTIPLIER = 1.5;
+const PRE_IMPROVEMENT_DROP_LIKELIHOOD = 33;
+const CUSTOM_THEME_CHECKOUT_AMOUNT_MULT = 2;
+const LOW_QUALITY_CHURN_LIKELIHOOD = 50;
+const LOW_QUALITY_TIERS = ["480p", "360p", "240p"];
+
+// ── DATA ARRAYS ──
+const itemCategories = ["Books", "Movies", "Music", "Games", "Electronics", "Computers", "Smart Home", "Home", "Garden", "Pet", "Beauty", "Health", "Toys", "Kids", "Baby", "Handmade", "Sports", "Outdoors", "Automotive", "Industrial", "Entertainment", "Art", "Food", "Appliances", "Office", "Wedding", "Software"];
+const videoCategories = ["funny", "educational", "inspirational", "music", "news", "sports", "cooking", "DIY", "travel", "gaming"];
+const spiritAnimals = ["duck", "dog", "otter", "penguin", "cat", "elephant", "lion", "cheetah", "giraffe", "zebra", "rhino", "hippo", "whale", "dolphin", "shark", "octopus", "squid", "jellyfish", "starfish", "seahorse", "crab", "lobster", "shrimp", "clam", "snail", "slug", "butterfly", "moth", "bee", "wasp", "ant", "beetle", "ladybug", "caterpillar", "centipede", "millipede", "scorpion", "spider", "tarantula", "tick", "mite", "mosquito", "fly", "dragonfly", "damselfly", "grasshopper", "cricket", "locust", "mantis", "cockroach", "termite", "praying mantis", "walking stick", "stick bug", "leaf insect", "lacewing", "aphid", "cicada", "thrips", "psyllid", "scale insect", "whitefly", "mealybug", "planthopper", "leafhopper", "treehopper", "flea", "louse", "bedbug", "flea beetle", "weevil", "longhorn beetle", "leaf beetle", "tiger beetle", "ground beetle", "lady beetle", "firefly", "click beetle", "rove beetle", "scarab beetle", "dung beetle", "stag beetle", "rhinoceros beetle", "hercules beetle", "goliath beetle", "jewel beetle", "tortoise beetle"];
+
+// ── HELPER FUNCTIONS ──
+function flip(likelihood = 50) {
+	return chance.bool({ likelihood });
+}
+
+function handleEventHook(record, meta) {
+	// Anchor relative dates to the resolved dataset window — never wall-clock.
+	const datasetEnd = dayjs.unix(meta.datasetEnd);
+	const OVER_THINGS_GET_BETTER = datasetEnd.subtract(IMPROVEMENT_DAYS_AGO, 'day');
+	const EVENT_TIME = dayjs(record.time);
+
+	if (EVENT_TIME.isAfter(OVER_THINGS_GET_BETTER)) {
+		// checkouts are bigger
+		if (record.event === "checkout") {
+			record.amount = Math.round(record.amount * IMPROVEMENT_MULTIPLIER);
+		}
+
+		// videos are longer
+		if (record.event === "watch video") {
+			record.watchTimeSec = Math.round(record.watchTimeSec * IMPROVEMENT_MULTIPLIER);
+		}
+	}
+
+	if (EVENT_TIME.isBefore(OVER_THINGS_GET_BETTER)) {
+		// tag 33% for removal (filtered in "everything" hook)
+		if (chance.bool({ likelihood: PRE_IMPROVEMENT_DROP_LIKELIHOOD })) record._drop = true;
+	}
+
+	return record;
+}
+
+function handleEverythingHook(record, meta) {
+	const profile = meta.profile;
+	record.forEach(e => {
+		e.theme = profile.theme;
+	});
+
+	// custom themes purchase more:
+	const numCustomMode = record.filter(a => a.theme === 'custom').length;
+	const numLightMode = record.filter(a => a.theme === 'light').length;
+	const numDarkMode = record.filter(a => a.theme === 'dark').length;
+	if (numCustomMode > numLightMode || numCustomMode > numDarkMode) {
+		// triple their checkout events
+		const checkoutEvents = record.filter(a => a.event === 'checkout');
+		const newCheckouts = checkoutEvents.map(a => {
+			const randomInt = integer(-48, 48);
+			const newCheckout = {
+				...a,
+				time: dayjs(a.time).add(randomInt, 'hour').toISOString(),
+				event: "checkout",
+				amount: a.amount * CUSTOM_THEME_CHECKOUT_AMOUNT_MULT,
+				coupon: "50%OFF"
+			};
+			return newCheckout;
+		});
+		record.push(...newCheckouts);
+	}
+
+	// users who watch low quality videos churn more:
+	const lowQualityWatches = record.filter(a => a.event === 'watch video' && LOW_QUALITY_TIERS.includes(a.quality));
+	const highQualityWatches = record.filter(a => a.event === 'watch video' && !LOW_QUALITY_TIERS.includes(a.quality));
+	if (lowQualityWatches.length > highQualityWatches.length) {
+		if (flip(LOW_QUALITY_CHURN_LIKELIHOOD)) {
+			// find midpoint of records
+			const midpoint = Math.floor(record.length / 2);
+			record = record.slice(0, midpoint);
+		}
+	}
+
+	// Filter out events tagged for removal in the event hook
+	return record.filter(e => !e._drop);
+}
+
+// ── CONFIG ──
+/** @type {Config} */
 const config = {
 	token,
 	seed: SEED,
-	numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
+	numDays: NUM_DAYS,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	format: 'json', //csv or json
 	region: "US",
 	hasAnonIds: true, //if true, anonymousIds are created for each user
@@ -89,8 +165,6 @@ const config = {
 	isAnonymous: false,
 	alsoInferFunnels: true,
 	concurrency: 1,
-
-
 	events: [
 		{
 			event: "ad impression",
@@ -114,7 +188,6 @@ const config = {
 				currency: ["USD", "CAD", "EUR", "BTC", "ETH", "JPY"],
 				coupon: weighChoices(["none", "none", "none", "none", "10%OFF", "20%OFF", "10%OFF", "20%OFF", "30%OFF", "40%OFF", "50%OFF"]),
 				numItems: weighNumRange(1, 10),
-
 			}
 		},
 		{
@@ -147,7 +220,6 @@ const config = {
 				quality: ["2160p", "1440p", "1080p", "720p", "480p", "360p", "240p"],
 				format: ["mp4", "avi", "mov", "mpg"],
 				uploader_id: chance.guid.bind(chance)
-
 			}
 		},
 		{
@@ -177,7 +249,6 @@ const config = {
 				referral: weighChoices(["none", "none", "none", "friend", "ad", "ad", "ad", "friend", "friend", "friend", "friend"]),
 			}
 		},
-
 	],
 	funnels: [
 		{
@@ -189,111 +260,27 @@ const config = {
 			timeToConvert: 2,
 			experiment: true,
 			name: "Signup Flow"
-
 		}
-
 	],
 	superProps: {
 		theme: ["light", "dark", "custom", "light", "dark"],
 	},
-	/*
-	user properties work the same as event properties
-	each key should be an array or function reference
-	*/
 	userProps: {
 		theme: ["light", "dark", "custom", "light", "dark"],
 		title: chance.profession.bind(chance),
 		luckyNumber: weighNumRange(42, 420, .3),
-		spiritAnimal: ["duck", "dog", "otter", "penguin", "cat", "elephant", "lion", "cheetah", "giraffe", "zebra", "rhino", "hippo", "whale", "dolphin", "shark", "octopus", "squid", "jellyfish", "starfish", "seahorse", "crab", "lobster", "shrimp", "clam", "snail", "slug", "butterfly", "moth", "bee", "wasp", "ant", "beetle", "ladybug", "caterpillar", "centipede", "millipede", "scorpion", "spider", "tarantula", "tick", "mite", "mosquito", "fly", "dragonfly", "damselfly", "grasshopper", "cricket", "locust", "mantis", "cockroach", "termite", "praying mantis", "walking stick", "stick bug", "leaf insect", "lacewing", "aphid", "cicada", "thrips", "psyllid", "scale insect", "whitefly", "mealybug", "planthopper", "leafhopper", "treehopper", "flea", "louse", "bedbug", "flea beetle", "weevil", "longhorn beetle", "leaf beetle", "tiger beetle", "ground beetle", "lady beetle", "firefly", "click beetle", "rove beetle", "scarab beetle", "dung beetle", "stag beetle", "rhinoceros beetle", "hercules beetle", "goliath beetle", "jewel beetle", "tortoise beetle"]
+		spiritAnimal: spiritAnimals,
 	},
 	scdProps: {},
 	mirrorProps: {},
-
-	/*
-	for group analytics keys, we need an array of arrays [[],[],[]] 
-	each pair represents a group_key and the number of profiles for that key
-	*/
 	groupKeys: [],
 	groupProps: {},
 	lookupTables: [],
 	hook: function (record, type, meta) {
-
-		// Anchor relative dates to the resolved dataset window — never wall-clock.
-		const datasetEnd = dayjs.unix(meta.datasetEnd);
-		const OVER_THINGS_GET_BETTER = datasetEnd.subtract(15, 'day');
-
-		if (type === "event") {
-			const EVENT_TIME = dayjs(record.time);
-
-			if (EVENT_TIME.isAfter(OVER_THINGS_GET_BETTER)) {
-				// checkouts are bigger
-				if (record.event === "checkout") {
-					record.amount = Math.round(record.amount * 1.5);
-				}
-
-				// videos are longer
-				if (record.event === "watch video") {
-					record.watchTimeSec = Math.round(record.watchTimeSec * 1.5);
-				}
-			}
-
-			if (EVENT_TIME.isBefore(OVER_THINGS_GET_BETTER)) {
-				// tag 33% for removal (filtered in "everything" hook)
-				if (chance.bool({ likelihood: 33 })) record._drop = true;
-			}
-		}
-
-		if (type === "everything") {
-			const profile = meta.profile;
-			record.forEach(e => {
-				e.theme = profile.theme;
-			});
-
-			//custom themes purchase more:
-			const numCustomMode = record.filter(a => a.theme === 'custom').length;
-			const numLightMode = record.filter(a => a.theme === 'light').length;
-			const numDarkMode = record.filter(a => a.theme === 'dark').length;
-			if (numCustomMode > numLightMode || numCustomMode > numDarkMode) {
-				//triple their checkout events
-				const checkoutEvents = record.filter(a => a.event === 'checkout');
-				const newCheckouts = checkoutEvents.map(a => {
-					const randomInt = integer(-48, 48);
-					const newCheckout = {
-						...a,
-						time: dayjs(a.time).add(randomInt, 'hour').toISOString(),
-						event: "checkout",
-						amount: a.amount * 2,
-						coupon: "50%OFF"
-					};
-					return newCheckout;
-				});
-				record.push(...newCheckouts);
-			}
-
-			//users who watch low quality videos churn more:
-			const loQuality = ["480p", "360p", "240p"];
-			const lowQualityWatches = record.filter(a => a.event === 'watch video' && loQuality.includes(a.quality));
-			const highQualityWatches = record.filter(a => a.event === 'watch video' && !loQuality.includes(a.quality));
-			if (lowQualityWatches.length > highQualityWatches.length) {
-				if (flip()) {
-					// find midpoint of records
-					const midpoint = Math.floor(record.length / 2);
-					record = record.slice(0, midpoint);
-
-				}
-			}
-
-			// Filter out events tagged for removal in the event hook
-			record = record.filter(e => !e._drop);
-		}
-
+		if (type === "event") return handleEventHook(record, meta);
+		if (type === "everything") return handleEverythingHook(record, meta);
 		return record;
 	}
 };
-
-function flip(likelihood = 50) {
-	return chance.bool({ likelihood });
-}
-
 
 export default config;
