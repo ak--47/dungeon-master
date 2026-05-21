@@ -1,38 +1,25 @@
-// ── TWEAK THESE ──
-const SEED = "kurby-retention";
-const num_days = 360;
-const num_users = 100;
-const avg_events_per_user_per_day = 0.14;
-let token = "";
-
-// ── env overrides ──
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
-
-import dayjs from 'dayjs';
-import utc from 'dayjs/plugin/utc.js';
+// ── IMPORTS ──
+import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 import * as u from "../../lib/utils/utils.js";
-import * as v from 'ak-tools';
-const chance = u.initChance(SEED);
-
+import * as v from "ak-tools";
 /** @typedef {import("../../types").Dungeon} Config */
 
-/**
- * ═══════════════════════════════════════════════════════════════
- * DATASET OVERVIEW
- * ═══════════════════════════════════════════════════════════════
- *
- * Retention Cadence — tests behavior frequency and color-based churn.
- * - 100 users over 360 days, ~5K base events (replaced by cadenced events)
- * - 4 behavior cadences: hourly, daily, weekly, monthly
- * - Churn rates vary by user's "favorite color" (red, blue, green, yellow, purple)
- * - The everything hook REPLACES all generated events with precisely
- *   cadenced behavior events, making this a pure retention analysis dataset
- *
- * ═══════════════════════════════════════════════════════════════
- * ANALYTICS HOOKS (1 pattern — everything hook)
- * ═══════════════════════════════════════════════════════════════
- *
+// ── OVERVIEW ──
+/*
+ * NAME:       retention-cadence
+ * PURPOSE:    Exercises retention shaping — the everything hook REPLACES all
+ *             generated events with precisely cadenced behavior streams
+ *             (hourly/daily/weekly/monthly) with color-driven churn.
+ * SCALE:      100 users, ~5K base events (replaced by cadenced events), 360 days
+ * EVENTS (6): first behavior, hourly behavior, daily behavior, weekly behavior,
+ *             monthly behavior, placeholder
+ * FUNNELS (0): none
+ */
+
+// ── HOOK STORIES ──
+/*
  * 1. COLOR-BASED CADENCED CHURN (everything hook)
  *    All raw events are replaced with 4 cadenced behavior streams
  *    (hourly/daily/weekly/monthly). Each user's "favorite color"
@@ -52,6 +39,16 @@ const chance = u.initChance(SEED);
  *      Expected: each color dominates its respective cadence's churn events
  */
 
+// ── SCALE ──
+const SEED = "kurby-retention";
+const NUM_DAYS = 360;
+const NUM_USERS = 100;
+const EVENTS_PER_DAY = 0.14;
+const token = process.env.MP_TOKEN || "";
+
+const chance = u.initChance(SEED);
+
+// ── KNOBS (tweak these to reshape stories) ──
 // Churn rates by favorite color per behavior type (percentage likelihood)
 const CHURN_RATES = {
 	red:    { hourly: 15, daily: 40, weekly: 15, monthly: 10 },
@@ -61,7 +58,7 @@ const CHURN_RATES = {
 	purple: { hourly: 40, daily: 15, weekly: 15, monthly: 10 },
 };
 
-// Behavior cadence definitions: [intervalAmount, intervalUnit, jitterMax, jitterUnit]
+// Behavior cadence definitions: interval + unit + jitter window
 const BEHAVIORS = {
 	hourly:  { interval: 1,  unit: 'hour',  jitterMax: 10, jitterUnit: 'minute' },
 	daily:   { interval: 1,  unit: 'day',   jitterMax: 2,  jitterUnit: 'hour' },
@@ -69,6 +66,7 @@ const BEHAVIORS = {
 	monthly: { interval: 30, unit: 'day',   jitterMax: 2,  jitterUnit: 'day' },
 };
 
+// ── HELPER FUNCTIONS ──
 function generateCadencedEvents(behaviorName, cadence, startTime, endTime, churnTime, userId) {
 	const events = [];
 	let cursor = dayjs(startTime);
@@ -105,13 +103,78 @@ function generateCadencedEvents(behaviorName, cadence, startTime, endTime, churn
 	return events;
 }
 
+function handleEverythingHooks(record, meta) {
+	if (!record.length) return record;
+
+	const userId = record[0].user_id || record[0].device_id;
+	if (!userId) return record;
+
+	const favoriteColor = meta.profile?.["favorite color"] || "green";
+	const colorChurnRates = CHURN_RATES[favoriteColor] || CHURN_RATES.green;
+
+	// Find the time range from the raw events
+	const times = record.map(e => new Date(e.time).getTime()).filter(t => !isNaN(t));
+	if (!times.length) return record;
+	const startTime = dayjs(Math.min(...times));
+	const endTime = dayjs(Math.max(...times));
+	const totalSpanHours = endTime.diff(startTime, 'hour');
+
+	if (totalSpanHours < 1) return record;
+
+	// Keep the "first behavior" event from the original stream
+	const firstBehavior = record.find(e => e.event === "first behavior");
+	const newEvents = [];
+
+	if (firstBehavior) {
+		newEvents.push(firstBehavior);
+	} else {
+		// Create a first behavior event at the start
+		newEvents.push({
+			event: "first behavior",
+			time: startTime.toISOString(),
+			user_id: userId,
+			insert_id: v.uid(12),
+		});
+	}
+
+	// For each behavior type, determine churn and generate cadenced events
+	for (const [behaviorKey, cadence] of Object.entries(BEHAVIORS)) {
+		const churnRate = colorChurnRates[behaviorKey];
+		let churnTime = null;
+
+		if (chance.bool({ likelihood: churnRate })) {
+			// Pick churn time between 20% and 80% into the active period
+			const churnOffsetHours = chance.integer({
+				min: Math.floor(totalSpanHours * 0.2),
+				max: Math.floor(totalSpanHours * 0.8),
+			});
+			churnTime = startTime.add(churnOffsetHours, 'hour');
+		}
+
+		const behaviorEvents = generateCadencedEvents(
+			behaviorKey,
+			cadence,
+			startTime,
+			endTime,
+			churnTime,
+			userId
+		);
+		newEvents.push(...behaviorEvents);
+	}
+
+	// Sort all events by time
+	newEvents.sort((a, b) => new Date(a.time) - new Date(b.time));
+	return newEvents;
+}
+
+// ── CONFIG ──
 /** @type {Config} */
 const config = {
 	token,
 	seed: SEED,
-	numDays: num_days,
-	avgEventsPerUserPerDay: avg_events_per_user_per_day,
-	numUsers: num_users,
+	numDays: NUM_DAYS,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
+	numUsers: NUM_USERS,
 	hasAnonIds: false,
 	hasSessionIds: false,
 	format: "json",
@@ -177,70 +240,7 @@ const config = {
 	lookupTables: [],
 
 	hook: function (record, type, meta) {
-		if (type === "everything") {
-			if (!record.length) return record;
-
-			const userId = record[0].user_id || record[0].device_id;
-			if (!userId) return record;
-
-			const favoriteColor = meta.profile?.["favorite color"] || "green";
-			const colorChurnRates = CHURN_RATES[favoriteColor] || CHURN_RATES.green;
-
-			// Find the time range from the raw events
-			const times = record.map(e => new Date(e.time).getTime()).filter(t => !isNaN(t));
-			if (!times.length) return record;
-			const startTime = dayjs(Math.min(...times));
-			const endTime = dayjs(Math.max(...times));
-			const totalSpanHours = endTime.diff(startTime, 'hour');
-
-			if (totalSpanHours < 1) return record;
-
-			// Keep the "first behavior" event from the original stream
-			const firstBehavior = record.find(e => e.event === "first behavior");
-			const newEvents = [];
-
-			if (firstBehavior) {
-				newEvents.push(firstBehavior);
-			} else {
-				// Create a first behavior event at the start
-				newEvents.push({
-					event: "first behavior",
-					time: startTime.toISOString(),
-					user_id: userId,
-					insert_id: v.uid(12),
-				});
-			}
-
-			// For each behavior type, determine churn and generate cadenced events
-			for (const [behaviorKey, cadence] of Object.entries(BEHAVIORS)) {
-				const churnRate = colorChurnRates[behaviorKey];
-				let churnTime = null;
-
-				if (chance.bool({ likelihood: churnRate })) {
-					// Pick churn time between 20% and 80% into the active period
-					const churnOffsetHours = chance.integer({
-						min: Math.floor(totalSpanHours * 0.2),
-						max: Math.floor(totalSpanHours * 0.8),
-					});
-					churnTime = startTime.add(churnOffsetHours, 'hour');
-				}
-
-				const behaviorEvents = generateCadencedEvents(
-					behaviorKey,
-					cadence,
-					startTime,
-					endTime,
-					churnTime,
-					userId
-				);
-				newEvents.push(...behaviorEvents);
-			}
-
-			// Sort all events by time
-			newEvents.sort((a, b) => new Date(a.time) - new Date(b.time));
-			return newEvents;
-		}
-
+		if (type === "everything") return handleEverythingHooks(record, meta);
 		return record;
 	},
 };
