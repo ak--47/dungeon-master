@@ -28,9 +28,18 @@ In scope here:
   `isFirstFunnel`, `attempts`
 - Event flags: `isAuthEvent`, `isAttributionEvent`, `isFirstEvent`,
   `isStrictEvent`, `isChurnEvent`, `isSessionStartEvent`
-- Top-level: `datasetStart`, `datasetEnd`, `numUsers`, `avgEventsPerUserPerDay`,
-  `seed`, `format`, device flags, `avgDevicePerUser`, `hasLocation`,
-  `hasCampaigns`, `hasSessionIds`, `hasAvatar`, `macro`, `soup`
+- Top-level scale + data model: `datasetStart`, `datasetEnd`, `numUsers`,
+  `avgEventsPerUserPerDay`, `seed`, `userSeed`, `format`, `macro`, `soup`,
+  `retentionCurve`, `avgActiveDaysPerUser`, `maxTouchpointsPerUser`
+- **Sub-object API (v1.5+):** group related keys into:
+  - `credentials: { token, region, serviceAccount, serviceSecret, projectId }`
+  - `switches: { hasLocation, hasCampaigns, hasSessionIds, hasAvatar,
+    hasIOSDevices, hasAndroidDevices, hasDesktopDevices, hasBrowser,
+    isAnonymous, alsoInferFunnels, hasAdSpend, hasAttributionFlags }`
+  - `identity: { avgDevicePerUser, sessionTimeout }`
+
+  Old top-level keys keep working (verbose warn nudges migration), but new
+  dungeons should ship the sub-object shape.
 - Surviving advanced entities: `personas`, `worldEvents`, `engagementDecay`,
   `dataQuality` — use sparingly
 
@@ -59,58 +68,78 @@ Before writing any code, scan:
 
 ## File structure
 
-```javascript
-// ── TWEAK THESE ──
-const SEED = "dm4-VERTICAL";
-const num_days = 120;
-const num_users = 5_000;
-const avg_events_per_user_per_day = 1.2;
-let token = "your-mixpanel-token";
-if (process.env.MP_TOKEN) token = process.env.MP_TOKEN;
+Use the canonical layout — sections in this fixed order. Skip any section
+that doesn't apply (e.g., schema-only dungeons omit HOOK STORIES and KNOBS).
+Section delimiter: `// ── SECTION NAME ──` (box-drawing chars).
 
+```javascript
+// ── IMPORTS ──
 import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc.js";
+dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "../../lib/utils/utils.js";
 import * as v from "ak-tools";
+/** @typedef {import("../../types").Dungeon} Config */
+
+// ── OVERVIEW ──
+/*
+ * NAME:       <BrandName>
+ * APP:        <2-4 line description: what users do, core flow, monetization>
+ * SCALE:      <numUsers> users, ~<numEvents> events, <numDays> days (<start> → <end>)
+ * CORE LOOP:  <event1> → <event2> → <event3> → ...
+ *
+ * EVENTS (N):
+ *   <event name (weight)> > ...   (sorted by weight desc)
+ *
+ * FUNNELS (N):
+ *   - <Funnel name>:  <step> → <step> (N%)
+ *
+ * USER PROPS:  <prop1, prop2, ...>
+ * SUPER PROPS: <prop1, prop2, ...>
+ * SCD PROPS:   <prop (values, freq, max)>
+ * GROUPS:      <key1, key2 | none>
+ */
+
+// ── SCALE ──
+const SEED = "dm4-VERTICAL";
+const NUM_USERS = 5_000;
+const DATASET_START = "2026-01-01T00:00:00Z";
+const DATASET_END = "2026-05-01T23:59:59Z";
+const EVENTS_PER_DAY = 1.2;
+const token = process.env.MP_TOKEN || "your-mixpanel-token";
 
 const chance = u.initChance(SEED);
 
-/** @typedef  {import("../../types").Dungeon} Config */
-
-// Generate consistent IDs at module level
+// ── DATA ARRAYS ──   (omit if none)
 const productIds = v.range(1, 200).map(n => `prod_${v.uid(8)}`);
 
-/**
- * ═══════════════════════════════════════════════════════════════
- * DATASET OVERVIEW
- * ═══════════════════════════════════════════════════════════════
- *
- * App Name — what it models, the core user loop, monetization.
- * - N users over M days, ~X events
- * - Key entities and relationships
- * - Why these events/properties were chosen
- *
- * NO STORY TRENDS YET — schema only. Pass to /write-hooks for engineering.
- */
-
+// ── CONFIG ──
 /** @type {Config} */
 const config = {
-  token, seed: SEED,
-  numDays: num_days,
-  avgEventsPerUserPerDay: avg_events_per_user_per_day,
-  numUsers: num_users,
+  seed: SEED,
+  datasetStart: DATASET_START,
+  datasetEnd: DATASET_END,
+  numUsers: NUM_USERS,
+  avgEventsPerUserPerDay: EVENTS_PER_DAY,
+  format: "json",
+  gzip: true,
+  writeToDisk: false,
+  concurrency: 1,
+  macro: "flat",   // optional — see "Trend shape" below
+  soup: "growth",  // optional
 
-  // Identity model — see "Identity guidelines" below
-  hasAnonIds: true,
-  avgDevicePerUser: 2,
-  hasSessionIds: true,
-
-  // I/O
-  format: "json", gzip: true, writeToDisk: false, concurrency: 1,
-
-  // Realistic platform
-  hasLocation: true, hasAndroidDevices: false, hasIOSDevices: false,
-  hasDesktopDevices: true, hasBrowser: true, hasAvatar: true,
+  credentials: { token },
+  switches: {
+    hasLocation: true,
+    hasAndroidDevices: false,
+    hasIOSDevices: false,
+    hasDesktopDevices: true,
+    hasBrowser: true,
+    hasAvatar: true,
+    hasSessionIds: true,
+  },
+  identity: { avgDevicePerUser: 2 },
 
   funnels: [ /* see "Funnels" below */ ],
   events: [ /* see "Events" below */ ],
@@ -124,6 +153,14 @@ const config = {
 
 export default config;
 ```
+
+When the dungeon has hooks (added later by `/write-hooks`), the layout
+extends with HOOK STORIES (full per-hook docs with Mixpanel report blocks),
+KNOBS (extracted tunable constants — timing, thresholds, multipliers),
+HOOK STATE (module-level Maps/Sets used across users), and HELPER FUNCTIONS
+(per-type handlers like `handleEventHooks`, `handleEverythingHooks`).
+`config.hook` becomes a thin dispatcher delegating to the helpers. See
+`dungeons/vertical/ecommerce.js` as the canonical exemplar.
 
 ## Required components
 
@@ -234,7 +271,9 @@ If you absolutely need a stub for downstream stamping consistency, leave a
 
 The identity model has three knobs:
 
-### `avgDevicePerUser` (whole number, default 0)
+### `identity.avgDevicePerUser` (whole number, default 0)
+
+Place inside the `identity` sub-object: `identity: { avgDevicePerUser: 2 }`.
 
 | App type | Recommended | Why |
 |----------|-------------|-----|
@@ -243,7 +282,11 @@ The identity model has three knobs:
 | Multi-device-heavy product (streaming, fitness) | 2–3 | TV + phone + tablet sessions distinguishable |
 | Server / API-only product | 0 | No client device concept |
 
-`hasAnonIds: true` aliases to `avgDevicePerUser: 1`. Set both for clarity.
+**`hasAnonIds: true` is deprecated.** Use `identity.avgDevicePerUser: 1`
+directly. The deprecated alias still works through 1.5.x — when
+`hasAnonIds: true` is set without an explicit `avgDevicePerUser`, the
+validator promotes to `identity.avgDevicePerUser: 1` and emits a verbose
+warning.
 
 ### `isAuthEvent` placement
 
@@ -256,6 +299,15 @@ Flag the event that represents "user becomes identified". Put it in the
 
 The engine stamps user_id+device_id on this event; pre-auth funnel steps get
 device_id only; post-auth funnel steps get user_id only.
+
+**Anonymous non-converters get `_drop: true` on their profile (v1.5.1).**
+Born-in-dataset users who never reach an `isAuthEvent` step are anonymous —
+their events still flow (tied to `device_id`), but `mixpanel-sender` filters
+`_drop:true` profiles before `/engage` push. `result.profilesPushed` reports
+actual push count vs `result.userProfilesData.size` (full population). The
+`everything` hook can rescue a profile via `delete meta.profile._drop`.
+Pre-existing users (born outside window) are always considered identified
+and never get `_drop`.
 
 ### `attempts` (per-funnel, optional)
 
@@ -406,12 +458,53 @@ skill handles this).
 ### `maxTouchpointsPerUser` (attribution cap)
 
 Top-level optional knob. Caps UTM stamping at this many events per user
-(default 10, matching Mixpanel `TOUCHPOINTS_LIMIT`). When `hasCampaigns: true`
+(default 10, matching Mixpanel `TOUCHPOINTS_LIMIT`). When `switches.hasCampaigns: true`
 and a user has more eligible events than the cap, the engine takes a
 uniform-random sample across the user's lifetime and stamps UTMs on the
 sampled events only. Sampling across lifetime (NOT first-N) preserves
 realistic touch shape — Mixpanel's last-10-window then gives meaningful
 first/last-touch attribution. Set to `Infinity` to disable the cap.
+
+**Generator/verifier asymmetry to know about:** the generator samples
+uniformly across user lifetime; the verifier (`emulateBreakdown` with
+`attributedBy`) and real Mixpanel attribution both read the **last N
+touchpoints before each conversion** (per `attributed_value_reader.cpp`).
+For users with ≤10 attribution-eligible events lifetime, no divergence
+(cap is a no-op). For users with >10 eligible events and multiple
+conversions, generator stamps may not align with Mixpanel's per-conversion
+last-10 window. Real-world impact: minor for first-touch, occasional
+divergence for last-touch in multi-conversion users. Tracked for 1.6.
+
+### `retentionCurve` (generator-side retention shape, v1.5+)
+
+Top-level optional knob. Shape retention via log-linear interpolation
+between waypoints. Independent of `engagementDecay`.
+
+```js
+retentionCurve: [
+  { day: 0,  retention: 1.0 },
+  { day: 1,  retention: 0.80 },
+  { day: 7,  retention: 0.50 },
+  { day: 30, retention: 0.20 },
+]
+```
+
+Each born-in-dataset user's events get filtered based on the interpolated
+retention at the event's age-from-first-event-day. Use when you want a
+declarative retention shape at config level (analytical-style D1/D7/D30
+targets) instead of writing hook logic.
+
+### `userSeed` (separate distinct_id RNG seed, v1.5+)
+
+Top-level optional knob. Separates the distinct_id RNG seed from the main
+`seed`. Lets you regenerate a dataset with a different event distribution
+while keeping the user pool stable across runs — useful for incremental
+data layering.
+
+```js
+seed: "v2",           // event-stream RNG (different distribution each version)
+userSeed: "users-v1", // user-pool RNG (stable across versions)
+```
 
 ## SuperProp consistency rule
 
