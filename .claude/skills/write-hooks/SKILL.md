@@ -78,6 +78,10 @@ Inside `funnel-pre` and `funnel-post`:
 Inside `everything`:
 - `meta.authTime: number | null` — unix-ms of the stitch event, null if never authed
 - `meta.isPreAuth(event): boolean` — convenience predicate
+- `meta.profile` — full profile object. Mutate or rescue here.
+- `meta.userIsBornInDataset: boolean` — true when user was born inside the dataset window
+- `meta.scd: { <key>: SCDEntry[] }` — SCD entries per key
+- `meta.datasetStart, meta.datasetEnd: number` — unix-seconds bounds
 
 Pattern: gate trend logic on `meta.isFinalAttempt` so failed prior attempts
 don't get the same treatment as the converted attempt.
@@ -196,9 +200,10 @@ writing a custom hook:
 - **Time-series trends** ("conversion rises week over week") — wrap any
   breakdown with `timeBucket: 'week'`. Engineer via temporal-windowed hooks
   using `DATASET_START.add(N, 'days')`.
-- **Identity-model dungeons** — when `avgDevicePerUser > 0` or
-  `hasAnonIds: true`, ALWAYS pass `profiles` to verification. Auto-builds
-  identity map merging pre-auth `device_id` events with post-auth `user_id`.
+- **Identity-model dungeons** — when `identity.avgDevicePerUser > 0`
+  (or the deprecated `hasAnonIds: true`), ALWAYS pass `profiles` to
+  verification. Auto-builds identity map merging pre-auth `device_id`
+  events with post-auth `user_id`.
 
 **Schema-first reminder:** exclusion events must be declared in `events[]`
 before referencing them as `Funnel.exclusionEvents` — the validator throws
@@ -234,6 +239,10 @@ record.was_dropped = false;      // ❌ flag-stamping
 event.engineered_pattern_id = 5; // ❌ flag-stamping
 ```
 
+(One narrow exception: `meta.profile._drop` is engine-recognized — see
+the "Anonymous non-converter `_drop` rescue" section above. All OTHER
+flags must live in `userProps`/event `properties` with a declared default.)
+
 DO WRITE:
 ```js
 record.amount *= 3;                            // ✅ scale existing numeric prop
@@ -258,6 +267,25 @@ hook: function(record, type, meta) {
   return record.filter(e => !(e.event === 'API Error' && meta.isPreAuth(e)));
 }
 ```
+
+### Anonymous non-converter `_drop` rescue (v1.5.1)
+
+Born-in-dataset users who never reach an `isAuthEvent` step get
+`_drop: true` stamped on their profile BEFORE the `everything` hook fires.
+`mixpanel-sender` filters those before pushing to `/engage`. Hooks can
+rescue a profile by deleting the flag:
+
+```js
+if (type === 'everything' && meta.profile) {
+  // Rescue: keep some anonymous power-users in /engage even without sign_up.
+  const eventCount = record.length;
+  if (eventCount >= 20) delete meta.profile._drop;
+}
+```
+
+`_drop` is the ONE engine-recognized flag a hook may set/clear on a
+profile — every other property must be declared in `userProps` first per
+the anti-flag-stamping rule below.
 
 When a dungeon uses funnel `attempts`, hooks can reach into individual attempts
 via funnel-post meta:

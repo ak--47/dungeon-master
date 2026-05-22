@@ -7,10 +7,25 @@ Mixpanel does NOT count the way naive SQL does. The verifier (and any DuckDB que
 | Concept | Mixpanel rule | Wrong SQL → Right SQL |
 |---------|--------------|----------------------|
 | Frequency / cohort by event count | Distinct calendar days, NOT total events | `COUNT(*)` → `COUNT(DISTINCT date_trunc('day', time::TIMESTAMP))` |
-| Funnels | Greedy single-pass, strict order, 2-second grace | NEVER hand-roll funnel SQL — use `emulateBreakdown` |
-| AVG / SUM / MIN / MAX | Skip null and non-numeric from BOTH num and denom | Always wrap in `TRY_CAST(prop AS DOUBLE)` |
-| Attribution | Cap at 10 touchpoints in lookback | Use `emulateBreakdown` with `attributedBy` |
-| Conversion window | Strict `<` boundary | Read `Funnel.conversionWindowDays` and respect it |
+| Funnels | Greedy single-pass, strict order, 2-second grace (`history.cpp` `OUT_OF_ORDER_MILLISECONDS = 2000`) | NEVER hand-roll funnel SQL — use `emulateBreakdown` |
+| AVG / SUM / MIN / MAX | Skip null and non-numeric from BOTH num and denom (`normal_query.cpp:1718-1733`) | Always wrap in `TRY_CAST(prop AS DOUBLE)` |
+| Attribution | Cap at 10 touchpoints in lookback (`attributed_value_reader.cpp:16` `TOUCHPOINTS_LIMIT`) | Use `emulateBreakdown` with `attributedBy` |
+| Conversion window | Strict `<` boundary (`conversion_window.cpp:48` `t1 < t2 + 1000*len`) | Read `Funnel.conversionWindowDays` and respect it |
+| Sessions | 3-trigger split: timeout `>`, max duration `>`, day-idx change (`session_query.cpp:906-911`) | Trust pre-stamped `session_id`; group by `(user, session_id)` |
+| Retention | Birth-anchored, ms-strict gate (default `birth_can_retain=false` → `<`), bucketed by `floor((ret−birth)/unit)` (`retention_query.cpp:1097-1109,1228-1231`) | Use `emulateBreakdown` with `retention` |
+
+**Known divergences from Mixpanel C++** (1.5.1):
+- `countDistinctPeriods` default = `algorithm: 'calendar'` (UTC bucket).
+  Mixpanel C++ (`addiction_query.cpp:359`) uses ROLLING window. Pass
+  `algorithm: 'rolling'` for exact Frequency-Distribution parity.
+- COMPOUNDED retention is NOT implemented — verifier silently ignores
+  `compounded: true`. Use DuckDB or query Mixpanel directly for "DAU
+  coming back" reports.
+- Touchpoint sampling: generator stamps uniform-random across user
+  lifetime; verifier reads last-N before conversion (matches C++).
+  For users with ≤10 attribution events lifetime, no divergence.
+- List-typed property AVG/SUM: C++ auto-flattens lists per item; our
+  `nullAwareAvg` requires pre-flattened input.
 
 Full rules: see [HOOKS.md Section 2](../../../../HOOKS.md#2-how-mixpanel-counts-things).
 
@@ -63,7 +78,7 @@ For CI-style assertions, use `verifyDungeon` with a checks array; see `tests/e2e
 - **`Funnel.order` auto-dispatched.** For `sequential` / `interrupt` funnels, the emulator runs the greedy single-pass engine. For other order modes (`first-fixed`, `last-fixed`, `random`, etc.), it dispatches to `evaluateAnyOrderCompletion` (set-membership check). For `random` mode, results are `verificationKind: "informational"` — Mixpanel funnel shape doesn't apply; do not assert PASS/FAIL.
 - **Auto-sort means custom DuckDB queries can trust event order.** Per-user events arrive sorted ascending by time (default; opt out via `autoSortAfterEverything: false`). `LAG`/`LEAD` window functions work without explicit `ORDER BY time` in the partition.
 - **Auto-promote `isStrictEvent` is silent healing — not a regression.** If a stale dungeon's funnel-step events also live in `events[]`, the validator stamps `isStrictEvent: true` and warns. Verification of those dungeons may show CHANGED standalone-event counts vs older runs — that is correct behavior, not a bug to chase.
-- **Touchpoint cap = 10 enforced at generation.** `hasCampaigns: true` users get up to `maxTouchpointsPerUser` (default 10) UTM-stamped events, sampled across lifetime. Attribution checks via `attributedBy` should see realistic first/last-touch shapes, not all-stamps-at-birth.
+- **Touchpoint cap = 10 enforced at generation.** `switches.hasCampaigns: true` users get up to `maxTouchpointsPerUser` (default 10) UTM-stamped events, sampled across lifetime. Attribution checks via `attributedBy` should see realistic first/last-touch shapes, not all-stamps-at-birth. The verifier's `attributedBy` reads last-N before conversion (matches Mixpanel); the generator samples uniform across lifetime. For users with >10 attribution events lifetime, expect minor divergence on multi-conversion users.
 
 ## Hook awareness for verification
 
@@ -128,7 +143,17 @@ When the dungeon's `Funnel` config sets these fields, `verifyDungeon` auto-appli
 
 ## Identity-model dungeons — pass profiles
 
-When `avgDevicePerUser > 0` or `hasAnonIds: true`, ALWAYS pass `profiles` to `emulateBreakdown`. Without it, pre-auth `device_id` events bucket as separate "users" and your funnel/retention/attribution numbers all deflate.
+When `identity.avgDevicePerUser > 0` (or the deprecated `hasAnonIds: true`),
+ALWAYS pass `profiles` to `emulateBreakdown`. Without it, pre-auth
+`device_id` events bucket as separate "users" and your funnel/retention/
+attribution numbers all deflate.
+
+**v1.5.1 anonymous non-converter semantic:** born-in-dataset users who
+never reach an `isAuthEvent` get `_drop: true` on their profile.
+`result.profilesPushed` reports the actual push count;
+`result.userProfilesData.size` reports full population (including dropped).
+Don't be surprised if profile-count assertions show
+`profilesPushed < userProfilesData.size` — that's correct.
 
 ```js
 const events = Array.from(result.eventData);

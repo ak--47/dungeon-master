@@ -36,14 +36,14 @@ The expected set of columns per event type is derived from config:
 | Source | Keys | Condition |
 |--------|------|-----------|
 | Core | `event`, `time`, `insert_id`, `user_id` | Always |
-| Identity | `device_id` | `avgDevicePerUser > 0` |
-| Identity | `session_id` | `hasSessionIds` |
+| Identity | `device_id` | `identity.avgDevicePerUser > 0` |
+| Identity | `session_id` | `switches.hasSessionIds` |
 | Event config | `events[i].properties` keys | Per event type |
 | Super props | `superProps` keys | All event types |
-| Location | `city`, `region`, `country`, `country_code` | `hasLocation` |
-| Browser | `browser` | `hasBrowser` |
-| Device | `model`, `screen_height`, `screen_width`, `os`, `Platform`, `carrier`, `radio` | `hasAndroidDevices`/`hasIOSDevices`/`hasDesktopDevices` |
-| Campaigns | `utm_source`, `utm_campaign`, `utm_medium`, `utm_content`, `utm_term` | `hasCampaigns` |
+| Location | `city`, `region`, `country`, `country_code` | `switches.hasLocation` |
+| Browser | `browser` | `switches.hasBrowser` |
+| Device | `model`, `screen_height`, `screen_width`, `os`, `carrier`, `radio` | `switches.hasAndroidDevices`/`hasIOSDevices`/`hasDesktopDevices`. **`Platform` removed in 1.5.1** — `os` covers the signal. Hooks/dungeons may opt back in by declaring `Platform` in event `properties`. |
+| Campaigns | `utm_source`, `utm_campaign`, `utm_medium`, `utm_content`, `utm_term` | `switches.hasCampaigns` |
 | Group keys | group key name | Per event type from `groupKeys[i][2]`, or all if empty |
 | Funnel props | `funnel.props` keys | Events in funnel sequence |
 | Experiment | `Experiment name`, `Variant name` | `$experiment_started` event |
@@ -60,7 +60,7 @@ If any event type has SCHEMA-FAIL, flag it prominently and include specific reme
 
 ## Standard identity-model invariants
 
-Run these for every dungeon that uses the identity model (`isAuthEvent` + `attempts` + `avgDevicePerUser`), BEFORE per-pattern checks:
+Run these for every dungeon that uses the identity model (`isAuthEvent` + `attempts` + `identity.avgDevicePerUser`), BEFORE per-pattern checks:
 
 ```sql
 -- Stitch event count must match converted-born count, exactly one per user.
@@ -420,7 +420,8 @@ When verifying `everything` hooks, you often MUST join events with user profiles
 
 ## Advanced feature verification
 
-Advanced features (personas, worldEvents, engagementDecay, dataQuality, subscription, attribution, geo, features, anomalies) produce data patterns alongside hooks. When verifying:
+Supported advanced features (still active in 1.5.x): `personas`,
+`worldEvents`, `engagementDecay`, `dataQuality`. When verifying:
 
 ```sql
 -- Personas: check distribution matches configured weights
@@ -432,27 +433,36 @@ SELECT promo, count(*) FROM read_json_auto('./data/verify-dungeon-EVENTS.json') 
 -- Data Quality: verify bots, nulls, empty events
 SELECT 'bots' as metric, count(*) FROM read_json_auto('./data/verify-dungeon-USERS.json') WHERE is_bot = true
 UNION ALL SELECT 'null_props', count(*) FROM read_json_auto('./data/verify-dungeon-EVENTS.json') WHERE category IS NULL;
-
--- Subscription: lifecycle events generated
-SELECT event, count(*) FROM read_json_auto('./data/verify-dungeon-EVENTS.json')
-WHERE event IN ('trial started','subscription started','plan upgraded','subscription cancelled') GROUP BY 1;
-
--- Attribution: campaign sources on profiles
-SELECT utm_source, count(*) FROM read_json_auto('./data/verify-dungeon-USERS.json') WHERE utm_source IS NOT NULL GROUP BY 1;
-
--- Geo: region distribution
-SELECT _region, count(*) FROM read_json_auto('./data/verify-dungeon-USERS.json') WHERE _region IS NOT NULL GROUP BY 1;
-
--- Features: progressive adoption properties
-SELECT theme, count(*) FROM read_json_auto('./data/verify-dungeon-EVENTS.json') WHERE theme IS NOT NULL GROUP BY 1;
-
--- Anomalies: burst/extreme events
-SELECT _anomaly, count(*) FROM read_json_auto('./data/verify-dungeon-EVENTS.json') WHERE _anomaly IS NOT NULL GROUP BY 1;
 ```
 
 Advanced feature patterns should ALWAYS be present (deterministic from config), unlike hooks which may have statistical variance.
 
+**Deprecated config blocks (silently stripped by validator since 1.4):**
+`subscription`, `attribution`, `geo`, `features`, `anomalies`. If a
+dungeon still references these, properties they used to generate
+(`subscription_plan`, `_region`, `theme`, `_anomaly`, etc.) will be
+missing from the output. Migration: add equivalents to `superProps` /
+`userProps` and drive downstream effects in `user` or `everything` hooks.
+
 ## Standard verification checks (run for every dungeon)
+
+### 0. Anonymous non-converter `_drop` audit (v1.5.1, identity-model dungeons)
+
+Born-in-dataset users who never reach an `isAuthEvent` get `_drop: true`
+stamped on their profile. Real Mixpanel `/engage` skips these — the
+verifier's profile-count assertions should mirror that. Quick check:
+
+```sql
+SELECT
+  COUNT(*) AS total_profiles,
+  SUM(CASE WHEN _drop = true THEN 1 ELSE 0 END) AS dropped,
+  SUM(CASE WHEN _drop IS NULL OR _drop = false THEN 1 ELSE 0 END) AS would_push
+FROM read_json_auto('./data/verify-dungeon-USERS.json');
+```
+
+`would_push` should equal `result.profilesPushed` from the run output.
+For pre-existing-only dungeons (`percentUsersBornInDataset: 0`) expect
+`dropped = 0`.
 
 ### 1. SuperProp Consistency
 Verify each user has exactly 1 value per superProp:
@@ -476,9 +486,18 @@ Verdict: **STRONG** ≥99% consistent, **WEAK** 90-99%, **FAIL** <90%.
 Every superProp key should also appear on user profiles. Compare the dungeon's `superProps` keys against columns in the USERS file. Any superProp not mirrored in `userProps` means the stamping fix is incomplete.
 
 ### 3. Mixpanel Default Property Casing Check
-The system generates device properties with Mixpanel's standard casing (`Platform` capital P, `os`, `model`, etc.) and location properties (`city`, `region`, `country`). If a dungeon defines a superProp with conflicting casing (e.g., lowercase `platform`), both properties appear on events — confusing in Mixpanel. Check for:
-- `platform` (lowercase) vs system `Platform` — verdict **FAIL** if dungeon uses lowercase
-- `City`, `Region`, `Country` vs system `city`, `region`, `country` — check casing matches
+The system generates device properties with Mixpanel's standard casing
+(`os`, `model`, `screen_height`, `screen_width`, `carrier`, `radio`,
+`browser`) and location properties (`city`, `region`, `country`,
+`country_code`). If a dungeon defines a superProp with conflicting casing
+(e.g., capitalized `City` vs system `city`), both properties appear on
+events — confusing in Mixpanel. Check for:
+- `City`, `Region`, `Country` (caps) vs system `city`, `region`, `country` — verdict **FAIL** if dungeon uses caps for these
+- `Browser` (caps) vs system `browser` — verdict **FAIL** if mismatched
+
+**Note:** `Platform` was REMOVED from default device props in 1.5.1.
+If a dungeon explicitly declares `Platform` in event `properties`, that's
+intentional opt-in — not a casing conflict.
 
 ### 4. funnel-pre Dilution Check
 For any dungeon with `funnel-pre` conversionRate modifications, verify the actual visible effect:

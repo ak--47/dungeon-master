@@ -2,6 +2,48 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.5.2 — 2026-05-21
+
+Docs-only patch. Aligns the `.claude/skills/` authoring + verification
+guides with the 1.5.1 engine + config API. No runtime changes.
+
+### Changed
+
+- **`create-dungeon` skill** now emits the canonical dungeon layout
+  (IMPORTS / OVERVIEW / SCALE / DATA ARRAYS / CONFIG sections) and the
+  sub-object config API (`credentials` / `switches` / `identity`).
+  Removed the old `// ── TWEAK THESE ──` template + flat-key example.
+- **`create-dungeon` skill** documents `hasAnonIds` as deprecated; nudges
+  authors to write `identity.avgDevicePerUser: 1` directly.
+- **`create-dungeon` skill** adds sections for `retentionCurve`,
+  `userSeed`, anonymous-non-converter `_drop: true` semantics, and
+  flags the touchpoint-sampling generator/verifier asymmetry.
+- **`write-hooks` skill** documents the `meta.profile._drop` rescue
+  pattern (the one engine-recognized flag a hook may set/clear on a
+  profile). Expanded `meta` interface listing for the `everything` hook.
+- **`verify-dungeon/references/counting-semantics.md`** notes known
+  divergences from Mixpanel C++ (calendar vs rolling distinct-period
+  default, COMPOUNDED retention not implemented, touchpoint sampling
+  asymmetry, list-typed AVG/SUM no auto-flatten). All references to
+  `hasAnonIds: true` updated to the new `identity.avgDevicePerUser` shape.
+- **`verify-dungeon/references/sql-recipes.md`** drops `Platform` from
+  the expected device-keys table (removed in 1.5.1; `os` covers the
+  signal). Updates casing check to drop `Platform`-vs-`platform` rule.
+  Adds an anonymous-non-converter `_drop` audit query as standard check
+  #0 for identity-model dungeons. Updates "Advanced feature verification"
+  to list only currently-supported features (`personas`, `worldEvents`,
+  `engagementDecay`, `dataQuality`); calls out the deprecated config
+  blocks (`subscription`, `attribution`, `geo`, `features`, `anomalies`)
+  the validator silently strips.
+
+### Why
+
+Skills are how most dungeons get authored. Drifting between skill-emitted
+output and 1.5.1 engine behavior would silently produce stale-shape
+dungeons + missed coverage of new features (`retentionCurve`, `userSeed`,
+`_drop` semantics, sub-object API). Patch keeps skill output and engine
+behavior synchronized.
+
 ## 1.5.1 — 2026-05-20
 
 Quality + ergonomics release. No new analytical capabilities — fixes accumulated rough edges around concurrency, accuracy, profiles, and config ergonomics that surfaced after 1.5.0 shipped. Adds a generator-side retention shaper, exposes a config sub-object API for cleaner dungeon files, and restructures all 48 shipped dungeons to a canonical layout. Top-level keys keep working for back-compat.
