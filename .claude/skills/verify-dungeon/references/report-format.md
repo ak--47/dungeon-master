@@ -1,6 +1,6 @@
 # Report Format
 
-Templates and conventions for writing `./research/hook-results.md` and per-dungeon verification SQL.
+Templates and conventions for writing `hook-results.md` and per-dungeon verification SQL. For user dungeons these live in the dungeon's folder (`dungeons/user/<name>/`); otherwise in `./research/`. See [SKILL.md "Artifact location"](../SKILL.md).
 
 ## Verdict criteria (5-tier)
 
@@ -147,9 +147,7 @@ Each hook's detailed section follows this template (same for single and multi-du
 
 ## Query log format
 
-If `./research/` exists locally, write a plain-text log of every DuckDB query execution to `./research/hook-query-log.txt`. If `./research/` does not exist, skip this step entirely — do not create the directory.
-
-Check with: `ls -d ./research/ 2>/dev/null`
+Write a plain-text log of every DuckDB query execution to `hook-query-log.txt`. For a user dungeon, write it to the dungeon's folder (`dungeons/user/<name>/hook-query-log.txt`). Otherwise, only if `./research/` exists locally write `./research/hook-query-log.txt` — if it doesn't exist, skip this step entirely (don't create the directory; check with `ls -d ./research/ 2>/dev/null`).
 
 Use a consistent delimited format — one block per query, separated by a ruler line. DuckDB table output is preserved verbatim:
 
@@ -191,7 +189,7 @@ grep "^DUNGEON:" research/hook-query-log.txt           # list of dungeons querie
 
 ## Verification SQL file (mandatory for user dungeons)
 
-When verifying a dungeon in `dungeons/user/`, write a standalone DuckDB SQL file alongside the dungeon at `dungeons/user/<name>-verifications.sql`. This file is the reproducible verification artifact — anyone can re-run it against fresh data.
+When verifying a dungeon in `dungeons/user/`, write a standalone DuckDB SQL file alongside the dungeon in its folder at `dungeons/user/<name>/<name>-verifications.sql`. This file is the reproducible verification artifact — anyone can re-run it against fresh data.
 
 Follow the format in `verification/verticals/`:
 
@@ -200,8 +198,8 @@ Follow the format in `verification/verticals/`:
 -- <name>.js — Hook Verification SQL (N hooks)
 -- ============================================================================
 -- USAGE:
---   1. node scripts/verify-runner.mjs dungeons/user/<name>.js verify-<name>
---   2. duckdb < dungeons/user/<name>-verifications.sql
+--   1. node scripts/verify-runner.mjs dungeons/user/<name>/<name>.js verify-<name>
+--   2. duckdb < dungeons/user/<name>/<name>-verifications.sql
 --   3. rm -f verify-<name>-*
 -- ============================================================================
 

@@ -7,6 +7,39 @@
             "script": "prune",
             "group": "build",
             "problemMatcher": []
+        },
+        {
+            // ── FAST PATH (no debugger) ──
+            // js-debug ALWAYS attaches the V8 inspector to a launch.json
+            // `type: node` config, and the inspector taxes the async-heavy
+            // Mixpanel import ~30x (CPU pinned, ~0.68 rps). There is no way to
+            // launch node without the inspector from launch.json, so the
+            // no-debugger run lives here as a task = full-speed import (~43k eps).
+            //
+            // Trigger: open a dungeon file, then Cmd+Shift+B (this is the
+            // default build task). Or bind a key to
+            // "workbench.action.tasks.runTask" with arg "🚀 run dungeon".
+            // Use the "🐞 debug dungeon" launch config only when you actually
+            // want breakpoints.
+            "label": "🚀 run dungeon",
+            "type": "process",
+            "command": "node",
+            "args": ["${workspaceFolder}/scripts/run-dungeon.mjs", "${file}"],
+            "options": {
+                // Belt-and-suspenders: strip any auto-attach inspector injection
+                // so the run stays fast regardless of Auto Attach mode.
+                "env": { "NODE_OPTIONS": "", "VSCODE_INSPECTOR_OPTIONS": "" }
+            },
+            "dependsOn": ["npm: prune"],
+            "dependsOrder": "sequence",
+            "group": { "kind": "build", "isDefault": true },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true,
+                "focus": true
+            },
+            "problemMatcher": []
         }
     ]
 }

@@ -181,7 +181,7 @@ Schema → hooks → verify, four slash commands at [.claude/skills/](.claude/sk
 
 | Skill | What it does |
 |-------|--------------|
-| `/create-dungeon <description>` | SCHEMA ONLY — designs events, funnels, superProps, userProps, identity-model knobs (`isAuthEvent`, `attempts`, `avgDevicePerUser`). Does NOT write the `hook` function. Output: `dungeons/user/<name>.js`. |
+| `/create-dungeon <description>` | SCHEMA ONLY — designs events, funnels, superProps, userProps, identity-model knobs (`isAuthEvent`, `attempts`, `avgDevicePerUser`). Does NOT write the `hook` function. Output: `dungeons/user/<name>/<name>.js` (one folder per customer). |
 | `/write-hooks <dungeon-path> <story>` | Writes the `hook` function on an existing dungeon using atoms + patterns. Adds Mixpanel report instructions per pattern. Iterates with `/verify-dungeon` until patterns PASS. |
 | `/verify-dungeon <dungeon-path>` | Schema integrity (flag stamping) + engineered hook pattern verification. Prefers the emulator (`emulateBreakdown`) for the supported analyses; falls back to DuckDB for bespoke shapes. Always asserts identity-model invariants (stitch count, pre-existing user stamping). |
 | `/analyze-soup <dungeon-path>` | Run a dungeon and analyze its time distribution at week/day/hour granularities. |

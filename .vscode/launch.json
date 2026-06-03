@@ -2,9 +2,13 @@
 	"version": "0.2.0",
 	"configurations": [
 		{
+			// Debugger ATTACHED — use only when you want breakpoints. The V8
+			// inspector taxes the async-heavy Mixpanel import ~30x (CPU pinned,
+			// ~0.68 rps). For a normal fast run, use the "🚀 run dungeon" task
+			// (Cmd+Shift+B) defined in .vscode/tasks.json instead.
 			"type": "node",
 			"request": "launch",
-			"name": "🚀 run dungeon",
+			"name": "🐞 debug dungeon",
 			"program": "${workspaceFolder}/scripts/run-dungeon.mjs",
 			"args": ["${file}"],
 			"console": "integratedTerminal",

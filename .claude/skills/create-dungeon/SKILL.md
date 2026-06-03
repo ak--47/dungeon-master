@@ -18,7 +18,7 @@ box. It does **NOT** engineer story trends or magic numbers — those are the
 should be:
 
 ```
-/write-hooks dungeons/user/<your-dungeon>.js "describe the trends to engineer"
+/write-hooks dungeons/user/<name>/<name>.js "describe the trends to engineer"
 ```
 
 In scope here:
@@ -63,7 +63,7 @@ Before writing any code, scan:
 - `lib/utils/utils.js` — `pickAWinner`, `weighNumRange`, `initChance`, `exhaust`,
   `takeSome` for property value distributions
 - `dungeons/vertical/sass.js` — B2B reference dungeon with full identity model
-- `dungeons/user/my-buddy.js` — consumer-app reference (gitignored)
+- `dungeons/user/my-buddy/my-buddy.js` — consumer-app reference (gitignored)
 - `dungeons/technical/identity-model-verify.js` — minimal identity-model fixture
 
 ## File structure
@@ -524,9 +524,9 @@ userProps:  { Plan: PLANS, Region: REGIONS, Role: ROLES, ... },
 
 After writing the file:
 
-1. Smoke-test: `node scripts/verify-runner.mjs dungeons/user/<file>.js verify-<file> --small`. Confirm zero errors.
-2. Hand to the next skill: `/write-hooks dungeons/user/<file>.js "describe trends"`.
-3. After hooks land: `/verify-dungeon dungeons/user/<file>.js`.
+1. Smoke-test: `node scripts/verify-runner.mjs dungeons/user/<name>/<name>.js verify-<name> --small`. Confirm zero errors.
+2. Hand to the next skill: `/write-hooks dungeons/user/<name>/<name>.js "describe trends"`.
+3. After hooks land: `/verify-dungeon dungeons/user/<name>/<name>.js`.
 
 ## Property Type Reference
 
@@ -550,8 +550,18 @@ When designing event properties, always consider which Mixpanel type best repres
 
 ## Output
 
-Write the file to `dungeons/user/<descriptive-name>.js`. Do NOT inject hooks.
-Do NOT use `subscription`, `attribution`, `geo`, `features`, or `anomalies`
-(the engine will silently strip them and warn).
+**One folder per customer/dungeon.** Write the dungeon to its own folder:
+`dungeons/user/<name>/<name>.js` (e.g. `dungeons/user/acme/acme.js`). This keeps
+`dungeons/user/` organized — EVERYTHING about this dungeon lives in the same
+folder: `hook-results.md` + `hook-query-log.txt` + `<name>-verifications.sql`
+(from `verify-dungeon`), `soup-analysis.md` (from `analyze-soup`), briefs,
+schema CSV/JSON, example data. The only thing kept outside is the throwaway
+verification data the runs write to `./data/` (cleaned after). Create the folder
+if it doesn't exist.
+Pick a short, kebab-case `<name>` from the app/customer (folder and file share
+the name, matching `kodiak/kodiak.js`, `my-buddy/my-buddy.js`).
+
+Do NOT inject hooks. Do NOT use `subscription`, `attribution`, `geo`,
+`features`, or `anomalies` (the engine will silently strip them and warn).
 
 When done, tell the user the next skill to run.

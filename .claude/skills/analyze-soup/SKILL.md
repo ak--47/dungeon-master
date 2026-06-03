@@ -134,7 +134,12 @@ FROM (
 
 ## Step 3: Write Report
 
-Create `soup-analysis.md` in the project root with:
+Create `soup-analysis.md` with the structure below. For a user dungeon
+(`dungeons/user/<name>/<name>.js`) write it into the dungeon's folder
+(`dungeons/user/<name>/soup-analysis.md`) — everything about a dungeon lives in
+its folder. Otherwise write it to the project root. (The generated
+`./data/soup-analysis-EVENTS.json` is throwaway verification data — leave it in
+`./data/`.) Contents:
 
 1. **Config**: The soup parameters used (peaks, deviation, mean, numDays)
 2. **Summary stats**: Total events, event count, avg EPS

@@ -102,13 +102,33 @@ For emulator details, identity-model dungeons (must pass `profiles`), and time-s
 - Experiment invariants (variant distribution, exposure timing, deterministic assignment) when any funnel uses `experiment:`
 - SuperProp consistency, SuperProp/UserProp mirror, Mixpanel default-property casing, funnel-pre dilution
 
-### Step 5: Stash query log (optional)
+### Artifact location
 
-If `./research/` exists locally, write every DuckDB query execution to `./research/hook-query-log.txt`. Format and conventions: see [report-format.md "Query log format"](references/report-format.md#query-log-format). If `./research/` does not exist, skip — do not create the directory.
+**Everything about a dungeon lives in its folder.** When the dungeon being
+verified is a user dungeon at `dungeons/user/<name>/<name>.js`, write ALL
+generated artifacts into `dungeons/user/<name>/`:
+- `hook-results.md` (Step 6)
+- `hook-query-log.txt` (Step 5)
+- `<name>-verifications.sql` (Step 6b)
 
-### Step 6: Write `./research/hook-results.md`
+The ONLY exception is the throwaway verification data the run writes to
+`./data/` (`verify-*` event/user files) — that stays in `./data/` and is
+deleted in Step 7.
 
-Use the templates in [report-format.md](references/report-format.md):
+For non-user dungeons (technical/vertical) or batch runs across many dungeons,
+fall back to `./research/` for `hook-results.md` / `hook-query-log.txt`.
+
+### Step 5: Stash query log
+
+Write every DuckDB query execution to `hook-query-log.txt`:
+- **User dungeon:** always write to `dungeons/user/<name>/hook-query-log.txt`.
+- **Otherwise:** if `./research/` exists locally, write to `./research/hook-query-log.txt`; if it doesn't exist, skip — do not create the directory.
+
+Format and conventions: see [report-format.md "Query log format"](references/report-format.md#query-log-format).
+
+### Step 6: Write `hook-results.md`
+
+Write to `dungeons/user/<name>/hook-results.md` for a user dungeon, else `./research/hook-results.md`. Use the templates in [report-format.md](references/report-format.md):
 - Single-dungeon report structure
 - Multi-dungeon report structure (when batch mode)
 - Per-hook detail block
@@ -118,7 +138,7 @@ Use the templates in [report-format.md](references/report-format.md):
 
 ### Step 6b: Write verification SQL (mandatory for user dungeons)
 
-When verifying a dungeon in `dungeons/user/`, also write a standalone DuckDB SQL file at `dungeons/user/<name>-verifications.sql`. Vertical dungeons already have their SQL in `verification/verticals/`. Format: see [report-format.md "Verification SQL file"](references/report-format.md#verification-sql-file-mandatory-for-user-dungeons).
+When verifying a dungeon in `dungeons/user/`, also write a standalone DuckDB SQL file alongside the dungeon in its folder at `dungeons/user/<name>/<name>-verifications.sql`. Vertical dungeons already have their SQL in `verification/verticals/`. Format: see [report-format.md "Verification SQL file"](references/report-format.md#verification-sql-file-mandatory-for-user-dungeons).
 
 ### Step 7: Cleanup
 
@@ -148,9 +168,9 @@ Return-value behavior:
 ## Final output
 
 Tell the user:
-1. Report path: `./research/hook-results.md`
-2. Verification SQL path (for user dungeons): `dungeons/user/<name>-verifications.sql`
-3. Query log path (if written): `./research/hook-query-log.txt`
+1. Report path: `dungeons/user/<name>/hook-results.md` (user dungeon) or `./research/hook-results.md`
+2. Verification SQL path (for user dungeons): `dungeons/user/<name>/<name>-verifications.sql`
+3. Query log path (if written): alongside the report (`dungeons/user/<name>/hook-query-log.txt`, else `./research/hook-query-log.txt`)
 4. Pass/weak/fail counts (per dungeon if batch mode)
 5. One-line summary of the most interesting finding
 

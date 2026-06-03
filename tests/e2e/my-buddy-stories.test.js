@@ -27,7 +27,7 @@ const SMALL_OVERRIDES = {
 
 describe('Phase 6 — my-buddy stories via emulator', { timeout: 120_000 }, () => {
 	test('all three stories show the expected shapes', async () => {
-		const { default: config } = await import('../../dungeons/user/my-buddy.js');
+		const { default: config } = await import('../../dungeons/user/my-buddy/my-buddy.js');
 		const result = await DUNGEON_MASTER({ ...config, ...SMALL_OVERRIDES });
 		const events = Array.from(result.eventData);
 

@@ -36,8 +36,8 @@ Out of scope:
 - `lib/hook-patterns/index.js` — high-level recipes (one per Mixpanel
   analysis type).
 - `lib/verify/emulate-breakdown.js` — what `verify-dungeon` will check.
-- `dungeons/user/my-buddy.js` — reference dungeon using a mix of atoms and
-  hand-rolled logic.
+- `dungeons/user/my-buddy/my-buddy.js` — reference dungeon using a mix of atoms
+  and hand-rolled logic.
 - `dungeons/technical/pattern-*.js` — five minimal pattern fixtures, one per
   recipe.
 - `HOOKS.md` — encyclopedia of hook recipes organized by story pattern. Contains
