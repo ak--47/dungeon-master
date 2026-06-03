@@ -550,16 +550,18 @@ When designing event properties, always consider which Mixpanel type best repres
 
 ## Output
 
-**One folder per customer/dungeon.** Write the dungeon to its own folder:
-`dungeons/user/<name>/<name>.js` (e.g. `dungeons/user/acme/acme.js`). This keeps
-`dungeons/user/` organized — EVERYTHING about this dungeon lives in the same
-folder: `hook-results.md` + `hook-query-log.txt` + `<name>-verifications.sql`
-(from `verify-dungeon`), `soup-analysis.md` (from `analyze-soup`), briefs,
-schema CSV/JSON, example data. The only thing kept outside is the throwaway
-verification data the runs write to `./data/` (cleaned after). Create the folder
-if it doesn't exist.
-Pick a short, kebab-case `<name>` from the app/customer (folder and file share
-the name, matching `kodiak/kodiak.js`, `my-buddy/my-buddy.js`).
+**One folder per customer/dungeon.** Pick a short, kebab-case `<name>` from the
+app/customer, then **create `dungeons/user/<name>/` if it doesn't already exist**
+(`mkdir -p dungeons/user/<name>`) and write the dungeon to
+`dungeons/user/<name>/<name>.js` (e.g. `dungeons/user/acme/acme.js`). Folder and
+file share the name, matching `kodiak/kodiak.js`, `my-buddy/my-buddy.js`.
+
+This keeps `dungeons/user/` organized — EVERYTHING about this dungeon lives in
+the same folder: `hook-results.md` + `hook-query-log.txt` +
+`<name>-verifications.sql` (from `verify-dungeon`), `soup-analysis.md` (from
+`analyze-soup`), briefs, schema CSV/JSON, example data. The only thing kept
+outside is the throwaway verification data the runs write to `./data/` (cleaned
+after).
 
 Do NOT inject hooks. Do NOT use `subscription`, `attribution`, `geo`,
 `features`, or `anomalies` (the engine will silently strip them and warn).
