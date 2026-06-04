@@ -177,7 +177,7 @@ After creating or modifying a dungeon, run `/verify-dungeon` to validate schema 
 
 ## Skills pipeline
 
-Schema → hooks → verify, four slash commands at [.claude/skills/](.claude/skills/):
+Schema → hooks → verify → provision, five slash commands at [.claude/skills/](.claude/skills/):
 
 | Skill | What it does |
 |-------|--------------|
@@ -185,6 +185,7 @@ Schema → hooks → verify, four slash commands at [.claude/skills/](.claude/sk
 | `/write-hooks <dungeon-path> <story>` | Writes the `hook` function on an existing dungeon using atoms + patterns. Adds Mixpanel report instructions per pattern. Iterates with `/verify-dungeon` until patterns PASS. |
 | `/verify-dungeon <dungeon-path>` | Schema integrity (flag stamping) + engineered hook pattern verification. Prefers the emulator (`emulateBreakdown`) for the supported analyses; falls back to DuckDB for bespoke shapes. Always asserts identity-model invariants (stitch count, pre-existing user stamping). |
 | `/analyze-soup <dungeon-path>` | Run a dungeon and analyze its time distribution at week/day/hour granularities. |
+| `/create-project <dungeon-path>` | Provisions a real Mixpanel project for an existing dungeon via the power-tools API (createProject + setTimezone UTC + mintServiceAccount + addGroupKey + setBusinessContext), then writes `credentials` back into the dungeon. Always creates fresh. Needs `BEARER_TOKEN` + `ORG_ID` in `.env`. Orchestrator: [.claude/skills/create-project/provision.mjs](.claude/skills/create-project/provision.mjs). |
 
 Use the existing `scripts/verify-runner.mjs` — do not create a new runner.
 
