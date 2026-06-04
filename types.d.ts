@@ -1508,6 +1508,79 @@ export declare function parseJSONDungeon(json: object): Dungeon;
 /** Validate that an object has the minimum shape of a dungeon config. Throws on shape violations. */
 export declare function validateDungeonShape(config: unknown): void;
 
+/**
+ * The serialized form of a function found in a dungeon schema. Produced by `dungeonToJSON`
+ * and revived by `parseJSONDungeon`.
+ *
+ * - `functionName: "arrow"` with a `body` — an inline/closure function, re-eval'd on revive.
+ * - `functionName: "chance.<method>"` — a bound chance method, e.g. `chance.name.bind(chance)`.
+ * - `functionName: "<utility>"` (weighNumRange, weighArray, …) — a detected utility; args are
+ *   not recoverable from the stringified source, so it revives to null (best effort).
+ *
+ * `dataType` records the function's sampled output type so the field's type is preserved even
+ * when the generator itself can't be revived.
+ */
+export interface SerializedFunction {
+	/** "arrow", "chance.<method>", or a known utility name. */
+	functionName: string;
+	/** Stringified function source (present for arrow/closure forms). */
+	body?: string;
+	/** Captured call arguments (best effort; usually empty for detected utilities). */
+	args?: unknown[];
+	/**
+	 * Inferred output type, sampled at serialization time:
+	 * "number" | "string" | "boolean" | "date" | "object" | "<elementType>[]" | "array".
+	 * Omitted when sampling failed (e.g. the function threw).
+	 */
+	dataType?: string;
+}
+
+/**
+ * The JSON/UI wrapper representation of a dungeon, as produced by `dungeonToJSON` and
+ * consumed by `parseJSONDungeon`. Functions in `schema` are serialized to
+ * {@link SerializedFunction} objects; everything else is plain JSON.
+ */
+export interface DungeonJSON {
+	/** The dungeon config with functions converted to {@link SerializedFunction} objects (hook excluded). */
+	schema: Record<string, unknown>;
+	/** The `hook` function stringified, or null if the dungeon has no hook. */
+	hooks: string | null;
+	/** ISO timestamp of when the JSON was produced. */
+	timestamp: string;
+	/** UI schema format version. */
+	version: string;
+}
+
+/** The doc blocks extracted from a dungeon's source by `extractComments`. */
+export interface DungeonComments {
+	/** Cleaned text of the `// ── OVERVIEW ──` block, or null if absent. */
+	overview: string | null;
+	/** Cleaned text of the `// ── HOOK STORIES ──` block, or null if absent. */
+	hookStories: string | null;
+	/** Every `// ── LABEL ──` header followed by a block comment, keyed by exact label. */
+	sections: Record<string, string>;
+}
+
+/**
+ * Convert a dungeon into its JSON representation (the inverse of `parseJSONDungeon`).
+ * Accepts a config object, a file path, raw JS source, or an array of file paths
+ * (returns an array). Credentials are stripped unless `includeCredentials` is set.
+ * Best effort: arrow functions and `chance.*` methods round-trip; detected utility
+ * calls lose their arguments. Always async.
+ */
+export declare function dungeonToJSON(input: Dungeon, options?: { includeCredentials?: boolean }): Promise<DungeonJSON>;
+export declare function dungeonToJSON(input: string, options?: { includeCredentials?: boolean }): Promise<DungeonJSON>;
+export declare function dungeonToJSON(input: string[], options?: { includeCredentials?: boolean }): Promise<DungeonJSON[]>;
+
+/**
+ * Extract the human-readable doc blocks (OVERVIEW, HOOK STORIES, …) from a dungeon's
+ * SOURCE. Operates on a file path or raw source string — never imports the dungeon
+ * (importing discards comments). Best effort: relies on the canonical `// ── LABEL ──`
+ * header + block-comment convention.
+ */
+export declare function extractComments(input: string): DungeonComments;
+export declare function extractComments(input: string[]): DungeonComments[];
+
 // ============= Text Generator Types =============
 
 /**
