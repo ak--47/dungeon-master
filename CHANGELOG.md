@@ -2,6 +2,34 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.5.4 — 2026-06-04
+
+Patch. Import-phase progress now reaches `onProgress` consumers.
+
+### Changed
+
+- **Bumped `mixpanel-import` to `^3.3.2`.** It now fires `progressCallback`
+  independently of `verbose` / `showProgress`. Previously the import callbacks
+  wired up in `mixpanel-sender.js` never fired in non-verbose runs because the
+  importer only invoked them when its stdout progress bar was enabled.
+
+### Fixed
+
+- **Import progress reaches `onProgress`** (requires `mixpanel-import >= 3.3.2`).
+  Every import call (events, user profiles, ad spend, group profiles, group
+  events, SCD) already passed a `progressCallback`; with the dependency bump
+  those now emit `{ phase: "import", recordType, processed, total, eps,
+  bytesProcessed }` to the consumer's `onProgress` during the import phase.
+  `showProgress: !!verbose` is unchanged — it still gates only the importer's
+  stdout bar, so non-verbose runs stay quiet while the callback fires.
+
+### Why
+
+Consumers (e.g. DM4) already handle `update.phase === 'import'` to render an
+import progress bar; the callbacks simply weren't firing. This is a dependency
+bump plus a regression test — no DM API change. Consumers pick it up via their
+normal upgrade flow with no code change.
+
 ## 1.5.3 — 2026-06-04
 
 Adds two JSON/source interop helpers to the public API. No breaking changes —
