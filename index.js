@@ -15,6 +15,8 @@ import { createContext, updateContextWithStorage } from './lib/core/context.js';
 import { validateDungeonConfig } from './lib/core/config-validator.js';
 import { StorageManager } from './lib/core/storage.js';
 import { detectInputType, loadFromFile, loadFromText, parseJSONDungeon, validateDungeonShape } from './lib/core/dungeon-loader.js';
+import { dungeonToJSON } from './lib/core/dungeon-to-json.js';
+import { extractComments } from './lib/core/extract-comments.js';
 
 // Orchestrators
 import { userLoop } from './lib/orchestrators/user-loop.js';
@@ -597,5 +599,5 @@ function extractStorageData(storage) {
 
 // ES Module exports
 export default DUNGEON_MASTER;
-export { parseJSONDungeon, validateDungeonShape, loadFromFile, loadFromText };
+export { parseJSONDungeon, validateDungeonShape, loadFromFile, loadFromText, dungeonToJSON, extractComments };
 

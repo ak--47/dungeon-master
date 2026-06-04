@@ -2,6 +2,57 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.5.3 — 2026-06-04
+
+Adds two JSON/source interop helpers to the public API. No breaking changes —
+existing exports and behavior are untouched.
+
+### Added
+
+- **`dungeonToJSON(input, options?)`** export. The inverse of `parseJSONDungeon`:
+  turns a dungeon into the `{ schema, hooks, timestamp, version }` JSON/UI wrapper
+  format. Accepts the same input flavors as the default export — a config object,
+  a `.js`/`.mjs`/`.json` file path, a raw JS source string, or an array of file
+  paths (returns an array). Output round-trips: `parseJSONDungeon(await
+  dungeonToJSON(x))` yields a runnable config. Best effort — arrow functions and
+  bound `chance.*` methods survive the round trip; detected utility calls
+  (`weighArray`, `weighNumRange`, …) are serialized by name without their
+  arguments and revive to `null` (handled gracefully by the validator). To keep
+  the field's **type** even when the generator can't be revived, every function
+  is sampled at serialization time (closures are still live) and its inferred
+  output type is recorded as `dataType` on the serialized object (e.g.
+  `{ functionName: "weighNumRange", args: [], dataType: "number" }`).
+  **Credentials (`token`, `serviceAccount`, `serviceSecret`, `projectId`,
+  `secret`) are stripped by default** so tokens never leak into JSON — pass
+  `{ includeCredentials: true }` to keep them.
+- **`DungeonJSON`, `DungeonComments`, and `SerializedFunction` types** in
+  `types.d.ts` — the JSON-representation shapes are now formally specced.
+- **`extractComments(input)`** export. Pulls the human-readable doc blocks out of
+  a dungeon's **source** — the `// ── OVERVIEW ──` and `// ── HOOK STORIES ──`
+  blocks plus every other `// ── LABEL ──` header that is immediately followed by
+  a block comment. Returns `{ overview, hookStories, sections }` with the comment
+  scaffolding (`// ──`, `/* */`, leading ` * `) stripped to readable prose.
+  Operates on a file path or raw source string — it never imports the dungeon,
+  since importing discards comments. Best effort: relies on the canonical
+  header + block-comment convention emitted by the `create-dungeon` /
+  `write-hooks` skills.
+
+### Changed
+
+- **`scripts/dungeon-to-json.mjs`** is now a thin CLI wrapper over the exported
+  `dungeonToJSON` (passing `includeCredentials: true` to preserve its legacy
+  full-config UI round-trip output). The inline `convertToJSON` /
+  `convertFunctionToObject` logic moved into `lib/core/dungeon-to-json.js`.
+
+### Why
+
+The package could ingest JSON dungeons (`parseJSONDungeon`, `loadFromFile`,
+`loadFromText`) but had no exported way to go the other direction, and no way to
+programmatically read a dungeon's OVERVIEW / HOOK STORIES documentation. Both
+existed only as un-importable script internals. Exporting them completes
+best-effort JSON interop and lets tools (UIs, LLM pipelines) read dungeon docs
+directly.
+
 ## 1.5.2 — 2026-05-21
 
 Docs-only patch. Aligns the `.claude/skills/` authoring + verification

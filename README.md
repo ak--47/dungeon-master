@@ -155,6 +155,32 @@ import { createTextGenerator, generateBatch } from '@ak--47/dungeon-master/text'
 
 these are the same functions used internally. `pickAWinner` creates weighted distributions, `weighNumRange` generates realistic numeric ranges with configurable skew, and the text generators produce organic-looking strings with sentiment analysis and keyword injection.
 
+### named exports
+
+alongside the default `DUNGEON_MASTER` export, the package root exports loader + interop helpers:
+
+```javascript
+import DUNGEON_MASTER, {
+    loadFromFile,          // (path)            → Promise<Dungeon>   load+validate a .js/.mjs/.json dungeon
+    loadFromText,          // (code)            → Promise<Dungeon>   load+validate a raw JS source string
+    parseJSONDungeon,      // (json)            → Dungeon            revive a JSON dungeon into a runnable config
+    validateDungeonShape,  // (config)          → void               throw if config isn't dungeon-shaped
+    dungeonToJSON,         // (input, options?) → Promise<DungeonJSON>     serialize a dungeon → JSON (inverse of parseJSONDungeon)
+    extractComments,       // (input)           → DungeonComments    pull OVERVIEW / HOOK STORIES doc blocks from source
+} from '@ak--47/dungeon-master';
+```
+
+`dungeonToJSON` accepts a config object, a file path, raw JS source, or an array of paths, and returns the `{ schema, hooks, timestamp, version }` wrapper format. it round-trips with `parseJSONDungeon`:
+
+```javascript
+const json   = await dungeonToJSON('./dungeons/vertical/ecommerce.js');  // creds stripped by default
+const config = parseJSONDungeon(json);                                   // back to a runnable dungeon
+```
+
+it's best effort — arrow functions and `chance.*` methods survive the round trip; detected utility calls (`weighArray`, `weighNumRange`, …) serialize by name without their args. pass `{ includeCredentials: true }` to keep `token` / `serviceAccount` / etc. in the output (stripped by default).
+
+`extractComments` reads a dungeon's **source** (file path or raw text — never the imported module, since importing discards comments) and returns `{ overview, hookStories, sections }` with the comment scaffolding stripped to readable prose.
+
 ## how it works
 
 one call to `DUNGEON_MASTER(config)` runs through these phases in order:
