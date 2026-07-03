@@ -219,9 +219,9 @@ describe('eventBreakdown', () => {
 		]);
 	});
 
-	test('countType "sessions" throws until P1.7.3 lands', () => {
-		expect(() => emulateBreakdown([], { type: 'eventBreakdown', breakdownProperty: 'p', countType: 'sessions' }))
-			.toThrow(/sessions/);
+	test('countType "sessions" on empty input returns no rows (P1.7.3 — full tests in sessions-count-type.test.js)', () => {
+		expect(emulateBreakdown([], { type: 'eventBreakdown', breakdownProperty: 'p', countType: 'sessions' }))
+			.toEqual([]);
 	});
 });
 

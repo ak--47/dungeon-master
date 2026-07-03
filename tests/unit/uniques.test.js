@@ -191,9 +191,9 @@ describe('uniques — guards', () => {
 			.toThrow(/mutually exclusive/);
 	});
 
-	test('countType "sessions" throws until P1.7.3 lands', () => {
-		expect(() => emulateBreakdown([], { type: 'uniques', countType: 'sessions' }))
-			.toThrow(/sessions/);
+	test('countType "sessions" rejects cumulative (ARB has no cumulative sessions count type)', () => {
+		expect(() => emulateBreakdown([], { type: 'uniques', countType: 'sessions', cumulative: true }))
+			.toThrow(/cumulative sessions/);
 	});
 
 	test('does not compose with the generic timeBucket wrapper', () => {
