@@ -14,7 +14,7 @@ import * as v from "ak-tools";
  *             and Udemy. Self-paced and cohort-based courses with quizzes,
  *             assignments, certificates, and a social study layer. Two-sided
  *             marketplace: ~89% students, ~11% instructors.
- * SCALE:      10,000 users, ~1.4M events, 121 days (2026-01-01 → 2026-05-01)
+ * SCALE:      10,000 users, ~760K events, 121 days (2026-01-01 → 2026-05-01)
  * CORE LOOP:  account registered → course enrolled → lecture started/completed → quiz → certificate
  *
  * EVENTS (17):
@@ -50,7 +50,10 @@ import * as v from "ak-tools";
  * (courses_created, teaching_experience_years, instructor_rating).
  * Students get learning attributes (learning_goal,
  * study_hours_per_week). Two-sided marketplace at ~89% students,
- * ~11% instructors.
+ * ~11% instructors. The everything hook also stamps account_type on
+ * 'account registered' events from the user's profile (the engine
+ * draws event-level pool props independently of profile props), so
+ * the event breakdown agrees with the profile breakdown exactly.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -95,7 +98,9 @@ import * as v from "ak-tools";
  *   - Event: "quiz completed"
  *   - Measure: Average of "score_percent"
  *   - Breakdown: Day of Week
- *   - Expected: Sun/Mon ~ 25, other days ~ 49 (-25 pts)
+ *   - Expected: Sun/Mon ~ 26, other days ~ 50 (-25 knob; the clamp at 0
+ *     attenuates the observed gap to ~24 pts since organic sub-25 scores
+ *     can't drop the full amount)
  *
  * REAL-WORLD ANALOGUE: Procrastination clusters submissions at the
  * deadline weekend and hammers performance.
@@ -142,7 +147,11 @@ import * as v from "ak-tools";
  *   - Cohort A: users who fired "study group joined" within first 10 days
  *   - Cohort B: users with no early study group joined
  *   - Compare D14 retention (any event past d14) per cohort
- *   - Expected: A ~ 90%+ vs B (with low quiz scores) ~ 30%
+ *   - Expected: A ~ 100% vs B ~ 1%. The churn is near-deterministic:
+ *     it fires for non-joiners with ANY raw sub-60 quiz, and at the
+ *     organic score mean (~40) virtually every quizzing non-joiner
+ *     has one. Non-joiners who never quiz survive, but they are rare
+ *     among 20d+-tenure users.
  *
  *   Report 2: Discussion Volume by Group Cohort
  *   - Cohort A vs B (as above)
@@ -170,7 +179,7 @@ import * as v from "ak-tools";
  *   - Measure: Total
  *   - Filter: "hint_used" = true
  *   - Breakdown: "difficulty"
- *   - Expected: ~60% easy (vs ~33% baseline)
+ *   - Expected: ~73% easy (60% forced + 40% x 1/3 organic; vs ~33% baseline)
  *
  *   Report 2: Hard Problem Mix for Independent Solvers
  *   - Report type: Insights
@@ -178,7 +187,7 @@ import * as v from "ak-tools";
  *   - Measure: Total
  *   - Filter: "hint_used" = false
  *   - Breakdown: "difficulty"
- *   - Expected: ~40% hard (vs ~33% baseline)
+ *   - Expected: ~60% hard (40% forced + 60% x 1/3 organic; vs ~33% baseline)
  *
  * REAL-WORLD ANALOGUE: Learners who lean on hints get nudged toward
  * easier work, while those who push through unaided self-select
@@ -199,7 +208,9 @@ import * as v from "ak-tools";
  *   - Events: "quiz started" + "quiz completed" + "assignment submitted"
  *   - Measure: Total
  *   - Line chart by day
- *   - Expected: ~2x volume spike on days 75-85
+ *   - Expected: ~1.8x volume spike on days 75-84 (80% duplication rate;
+ *     the hook's continuous [75, 85) day-index window fully treats
+ *     calendar days 75-84)
  *
  * REAL-WORLD ANALOGUE: Semester-end deadlines reliably produce a
  * massive last-minute surge in student activity.
@@ -208,9 +219,12 @@ import * as v from "ak-tools";
  * 7. FREE VS PAID COURSES (funnel-pre + everything)
  * ---------------------------------------------------------------
  *
- * PATTERN: Free users get 0.5x funnel conversion rate on the cert funnel only; paid
- * subscribers get 1.5x. Free users also lose 55% of their
- * certificates, producing a ~2.2x completion gap.
+ * PATTERN: Free users get 0.5x funnel conversion rate on the cert funnel only
+ * (30% -> 15% generative); paid subscribers get 1.5x (30% -> 45%). Free users
+ * ALSO lose 55% of their certificates post-generation, so the observed
+ * completion gap compounds both treatments: paid/free certificates per user
+ * lands well above the 3x conversion-only gap (v1.5 doc said "~2.2x" — that
+ * figure ignored the 55% cert removal AND understated the paid factor).
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -218,7 +232,8 @@ import * as v from "ak-tools";
  *   - Report type: Funnels
  *   - Steps: "course enrolled" -> "lecture completed" -> "quiz completed" -> "certificate earned"
  *   - Breakdown: "subscription_status"
- *   - Expected: free ~ 15% completion, paid ~ 33% (~2.2x gap)
+ *   - Expected: paid arms convert several-fold more than free (conversion
+ *     gating 3x, further widened in-report by the 55% free cert removal)
  *
  *   Report 2: Certificates Earned per User
  *   - Report type: Insights
@@ -304,29 +319,45 @@ import * as v from "ak-tools";
  *   - Report type: Funnels
  *   - Steps: "discussion posted" → "study group joined" → "resource downloaded"
  *   - Breakdown: Variant
- *   - Expected: AI Study Buddy ~ 1.4x conversion vs Control
+ *   - Expected: AI Study Buddy ~ 1.35-1.4x conversion vs Control
+ *     (generative multiplier is 1.4; organic pollution — failed
+ *     experiment passes completed by organic downloads at a ~0.035
+ *     base rate in both arms — mildly attenuates the measured lift)
  *
  * REAL-WORLD ANALOGUE: AI-powered study companions boost social
  * engagement and resource discovery in cohort-based courses.
  *
  * ===============================================================
  * EXPECTED METRICS SUMMARY
+ * (Measured = full fidelity, 10K users / 760,795 events)
  * ===============================================================
  *
- * Hook                    | Metric                | Baseline | Hook Effect  | Ratio
- * ------------------------|-----------------------|----------|--------------|------
- * Student vs Instructor   | Profile attributes    | generic  | role-specific| n/a
- * Deadline Cramming       | Sun/Mon quiz score    | 1x       | -25 pt       | -38%
- * Notes Magic Number      | sweet quiz score      | 1x       | 1.3x         | 1.3x
- * Notes Magic Number      | over certificates/user| 1x       | 0.65x        | -35%
- * Study Group Retention   | D14 retention         | ~ 40%    | ~ 90%        | 2.3x
- * Hint Dependency         | easy problem rate (hint) | 33%   | ~ 60%        | 1.8x
- * Semester-End Spike      | Assessment volume     | 1x       | ~ 2x         | 2x
- * Free vs Paid            | Course completion     | 15%      | 33%          | 2.2x
- * Playback Speed          | Quiz score (speed)    | ~ 65     | ~ 73         | +8 pt
- * Course Completion T2C   | median min by tier    | 1x       | 0.5x/1.8x    | ~ 3.6x range
- * Social Learning Exp     | AI variant conversion | 1x       | 1.4x         | 1.4x
- * Social Learning Exp     | AI variant TTC        | 1x       | 0.85x        | -15%
+ * Story id | Metric                                      | Expected      | Measured
+ * ---------|---------------------------------------------|---------------|---------
+ * H1       | instructor profile share                    | 1/9 = 0.111   | 0.1121
+ * H1       | role-attribute purity (both roles)          | 1.0           | 1.0000
+ * H1       | event account_type = profile (registered)   | 1.0           | 1.0000
+ * H2       | Sun/Mon late rate vs rest                   | 0.60 / 0.20   | 0.6038 / 0.1986
+ * H2       | quiz score diff rest - Sun/Mon              | ~24 (clamp)   | 24.13
+ * H3       | sweet/low quiz score (isolated read)        | ~1.3          | 1.270
+ * H3       | certs-per-enroll over/sweet                 | ~0.65 keep    | 0.6398
+ * H3       |   placebo: over/low score                   | ~1.0          | 0.9837
+ * H4       | D14+ activity early-join vs non             | ~1.0 / ~0.01  | 0.9988 / 0.0035
+ * H4       | discussions per user early/non              | ~18x          | 18.91
+ * H5       | P(easy | hint)                              | 0.745         | 0.7469
+ * H5       | P(hard | no hint)                           | 0.610         | 0.6141
+ * H6       | spikable volume window/flank (days 75-84)   | ~1.8-1.9      | 1.908
+ * H6       |   placebo: non-spikable window/flank        | ~1.0-1.1      | 1.067
+ * H7       | emulator conv monthly/free (86.4h, 2-step)  | 6.67 compound | 6.73
+ * H7       | certs-per-enroll monthly/free               | ~6 (diluted)  | 6.037
+ * H7       |   placebo: annual/monthly certs-per-enroll  | ~1.0          | 1.057
+ * H8       | watch time fast/mid                         | ~0.59         | 0.5857
+ * H8       | watch time slow/mid                         | 1.40          | 1.388
+ * H8       | quiz score diff speedy - rest               | ~+8           | +7.91
+ * H9       | median TTC free/monthly (emulator 86.4h)    | ~1.8          | 1.760
+ * H9       | median TTC annual/monthly                   | ~0.5          | 0.510
+ * H10      | strict-paired conversion lift AI/Control    | ~1.37 (p.035) | 1.377
+ * H10      | paired median TTC AI/Control                | ~0.85         | 0.857
  */
 
 // ── SCALE ──
@@ -451,6 +482,13 @@ function handleEverythingHooks(record, meta) {
 	if (profile) {
 		userEvents.forEach((event) => {
 			if (profile.Platform !== undefined) event.Platform = profile.Platform;
+			// H1: event-level account_type must agree with the profile —
+			// the engine draws event props independently of user props, so
+			// without this stamp the 'account registered' breakdown would
+			// contradict the profile mix
+			if (event.event === "account registered" && profile.account_type !== undefined) {
+				event.account_type = profile.account_type;
+			}
 		});
 	}
 
@@ -727,7 +765,9 @@ const config = {
 			isFirstEvent: true,
 			isAuthEvent: true,
 			properties: {
-				"account_type": ["instructor", "instructor", "instructor", "instructor", "instructor", "instructor", "student"],
+				// pool matches the 8:1 student profile mix; the everything hook then
+				// overwrites from the profile so the event-level breakdown is EXACT
+				"account_type": ["student", "student", "student", "student", "student", "student", "student", "student", "instructor"],
 				"signup_source": ["organic", "referral", "school_partnership", "social_ad"],
 			}
 		},
@@ -962,3 +1002,750 @@ const config = {
 };
 
 export default config;
+
+// ── STORIES (v1.6 verification contract) ──
+/*
+ * MEASUREMENT DOCTRINE — how these reads stay honest
+ *
+ * IDENTITY: avgDevicePerUser: 2, but 'account registered' is both
+ * isFirstEvent and isAuthEvent, so born users auth on their very first
+ * event. The device-map resolve through the profiles' "anonymousIds"
+ * pool is belt-and-braces for any device-only edge.
+ *
+ * CHURN RECOVERY (H4): the churn hook deletes ALL events after
+ * firstEvent + 14d for non-early-joiners with any raw sub-60 quiz.
+ * Deletion is the ONLY event-removal that touches lectures/quizzes
+ * (H3/H7 remove certificates only), so a user's OUTPUT lifespan
+ * exceeding 14.5d identifies the not-churned population exactly, and
+ * within it output note/speed-lecture counts equal the hook-time
+ * counts the treatments keyed on. H3/H8 score reads filter on it.
+ *
+ * SCORE TREATMENT LEDGER: score_percent is touched by THREE hooks —
+ * H3 (x1.3 for 5-8-notes users), H8 (+8 for 3+-fast-lecture users),
+ * H2 (-25 on Sun/Mon, runs LAST, hits duplicates too). Every score
+ * read excludes Sun/Mon quizzes (removes H2) and conditions on the
+ * OTHER treatment's cohort (H3 reads exclude speed learners; H8 reads
+ * exclude sweet-notes users), so each knob is read in isolation.
+ * Empirical organic score mean is ~40 in these restricted reads (the
+ * pool's nominal mean 50 is inflated by the treatments themselves).
+ *
+ * ORGANIC DIFFICULTY IS NOT UNIFORM: the difficulty pool is a 3-value
+ * array but measured organic shares are easy 0.362 / medium 0.287 /
+ * hard 0.351 (7+ sigma off uniform — engine-level draw skew).
+ * H5 bands derive from the MEASURED organic composition:
+ * P(easy|hint) = 0.60 + 0.40 x 0.362 = 0.745; P(hard|no-hint) =
+ * 0.40 + 0.60 x 0.351 = 0.610.
+ *
+ * EMULATOR TTC (H7/H9): 2-step read ['course enrolled','certificate
+ * earned'] — the 4-step doc funnel would break because H9's annual
+ * x0.5 compression can move a certificate BEFORE the interior
+ * quiz-completed step. Window 86.4h = 48h generative x 1.8 free
+ * stretch, covering the stretched support. Sensitivity check at 48h:
+ * free conversion collapses 0.063 -> 0.002 (censoring confirms the
+ * stretch is real); annual/monthly barely move.
+ *
+ * EXPERIMENT PAIRING (H10): $experiment_started fires BEFORE funnel
+ * entry with an arm-dependent lag (the AI arm's ttcMultiplier
+ * compresses even the exp->step1 gap), so pairing anchors at the
+ * funnel ENTRY: first 'discussion posted' >= exp time, conversion =
+ * 'resource downloaded' within 12h of entry with >= 1 'study group
+ * joined' strictly between. Organic pollution (partial failed passes
+ * completed by organic downloads, ~0.035 base rate — implied
+ * consistently by both arms at full fidelity) mildly attenuates the
+ * generative 1.4x lift to ~1.37 observed; both arms carry the same
+ * pollution so direction is preserved.
+ *
+ * ACTIVITY COUPLING: certificate counts scale with user activity, so
+ * cross-cohort cert reads normalize per enrollment (certs/enrolls),
+ * and the H3 volume read carries a pre-cliff flatness precondition.
+ */
+
+const ID_CTE = `
+us AS (SELECT * FROM read_json_auto('{{PREFIX}}-USERS*.json', sample_size=-1, union_by_name=true)),
+dm AS (SELECT unnest("anonymousIds") AS device_id, distinct_id FROM us),
+ev AS (SELECT coalesce(m.distinct_id::VARCHAR, e.user_id::VARCHAR, e.device_id::VARCHAR) AS uid,
+       e.time::TIMESTAMP AS t, e.*
+FROM read_json_auto('{{PREFIX}}-EVENTS*.json', sample_size=-1, union_by_name=true) e
+LEFT JOIN dm m ON e.device_id = m.device_id)`;
+
+const PU_CTE = `
+pu AS (SELECT e.uid, min(e.t) AS first_t, max(e.t) AS last_t,
+  count(*) FILTER (WHERE event = 'lecture completed' AND notes_taken) AS notes,
+  count(*) FILTER (WHERE event = 'lecture completed' AND playback_speed >= ${SPEED_FAST_THRESHOLD}) AS fast_lex,
+  count(*) FILTER (WHERE event = 'quiz completed') AS quizzes,
+  count(*) FILTER (WHERE event = 'certificate earned') AS certs,
+  count(*) FILTER (WHERE event = 'course enrolled') AS enrolls,
+  count(*) FILTER (WHERE event = 'discussion posted') AS discussions,
+  min(CASE WHEN event = 'study group joined' THEN e.t END) AS first_join_t
+FROM ev e GROUP BY 1),
+puu AS (SELECT p.*, u.subscription_status, u.account_type,
+  (p.first_join_t IS NOT NULL AND date_diff('hour', p.first_t, p.first_join_t) <= ${STUDY_GROUP_EARLY_DAYS * 24}) AS early_join,
+  (p.last_t > p.first_t + INTERVAL '14 days 12 hours') AS retained
+FROM pu p JOIN us u ON p.uid = u.distinct_id::VARCHAR)`;
+
+const cellsOf = (rows, key) => Object.fromEntries((rows || []).map((r) => [r[key], r]));
+
+export const stories = [
+	{
+		id: "H1-role-profiles",
+		hook: "H1",
+		archetype: "cohort-prop-scale",
+		narrative:
+			"Two-sided marketplace: profile pool is 8:1 student (expected instructor share 1/9 = 0.111). " +
+			"The user hook stamps role-exclusive attributes (instructors: courses_created/experience/rating; " +
+			"students: learning_goal/study_hours) — purity is structural, asserted at 1.0. The everything " +
+			"hook also overwrites account_type on 'account registered' events from the profile (the engine " +
+			"draws event props independently), so event-level agreement is structural too.",
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT count(*)::BIGINT AS users,
+  count(*) FILTER (WHERE account_type = 'instructor')::DOUBLE / count(*) AS share
+FROM us`,
+				},
+				assert: (rows) => {
+					const r = rows?.[0];
+					if (!r || Number(r.users) < 5000) {
+						return { verdict: "WEAK", detail: `population too small: users=${r?.users ?? 0}` };
+					}
+					const share = Number(r.share);
+					const detail = `instructor share=${share.toFixed(4)} (pool 1/9 = 0.1111; n=${r.users})`;
+					if (share >= 0.095 && share <= 0.125) return { verdict: "NAILED", detail };
+					if (share >= 0.085 && share <= 0.14) return { verdict: "STRONG", detail };
+					return { verdict: "NONE", detail };
+				},
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT account_type, count(*)::BIGINT AS users,
+  avg(CASE WHEN account_type = 'instructor'
+    THEN (courses_created >= 1 AND teaching_experience_years >= 1 AND instructor_rating >= 3
+          AND learning_goal = 'none' AND study_hours_per_week = 0)::INT
+    ELSE (courses_created = 0 AND instructor_rating = 0 AND learning_goal <> 'none'
+          AND study_hours_per_week BETWEEN 2 AND 30)::INT END) AS purity
+FROM us GROUP BY 1`,
+				},
+				assert: (rows) => {
+					const by = cellsOf(rows, "account_type");
+					const inst = by.instructor, stu = by.student;
+					if (!inst || !stu || Number(inst.users) < 500 || Number(stu.users) < 4000) {
+						return { verdict: "WEAK", detail: `cohorts too small: inst=${inst?.users ?? 0} stu=${stu?.users ?? 0}` };
+					}
+					const pi = Number(inst.purity), ps = Number(stu.purity);
+					const detail = `role-attribute purity: instructor=${pi.toFixed(4)} (n=${inst.users}) student=${ps.toFixed(4)} (n=${stu.users})`;
+					if (pi === 1 && ps === 1) return { verdict: "NAILED", detail };
+					if (pi >= 0.995 && ps >= 0.995) return { verdict: "STRONG", detail };
+					if (pi >= 0.9 && ps >= 0.9) return { verdict: "WEAK", detail };
+					return { verdict: "NONE", detail };
+				},
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT count(*)::BIGINT AS n, avg((e.account_type = u.account_type)::INT) AS agree
+FROM ev e JOIN us u ON e.uid = u.distinct_id::VARCHAR
+WHERE e.event = 'account registered'`,
+				},
+				assert: (rows) => {
+					const r = rows?.[0];
+					if (!r || Number(r.n) < 800) {
+						return { verdict: "WEAK", detail: `too few 'account registered' events: n=${r?.n ?? 0}` };
+					}
+					const agree = Number(r.agree);
+					const detail = `event-level account_type = profile account_type on ${agree.toFixed(4)} of ${r.n} events (hook-stamped)`;
+					if (agree === 1) return { verdict: "NAILED", detail };
+					if (agree >= 0.99) return { verdict: "STRONG", detail };
+					return { verdict: "NONE", detail };
+				},
+			},
+		],
+	},
+	{
+		id: "H2-deadline-cramming",
+		hook: "H2",
+		archetype: "bespoke",
+		narrative:
+			`Sun/Mon 'assignment submitted' events get is_late REDRAWN at ${DEADLINE_LATE_LIKELIHOOD}% ` +
+			"(replacing the organic 1-in-5 pool draw, ~20%); Sun/Mon 'quiz completed' scores drop " +
+			`${DEADLINE_QUIZ_PENALTY} points, clamped at 0. H2 runs LAST in the everything hook, so the ` +
+			"penalty hits H6 duplicates and boosted scores alike — the DOW score DIFFERENCE reads the " +
+			"knob minus clamp loss (organic sub-25 scores can't drop the full 25; measured 23.85). " +
+			"Bands: rates Sun/Mon [0.56, 0.64] vs rest [0.17, 0.23]; score diff [21.5, 25.5].",
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT (dayofweek(t) IN (0, 1)) AS sun_mon, count(*)::BIGINT AS n, avg(is_late::INT) AS late_rate
+FROM ev WHERE event = 'assignment submitted' GROUP BY 1`,
+				},
+				assert: (rows) => {
+					const by = cellsOf(rows, "sun_mon");
+					const sm = by.true, rest = by.false;
+					if (!sm || !rest || Number(sm.n) < 10000 || Number(rest.n) < 25000) {
+						return { verdict: "WEAK", detail: `cohorts too small: sunmon=${sm?.n ?? 0} rest=${rest?.n ?? 0}` };
+					}
+					const rs = Number(sm.late_rate), rr = Number(rest.late_rate);
+					const detail = `late rate Sun/Mon=${rs.toFixed(4)} vs rest=${rr.toFixed(4)} (knob ${DEADLINE_LATE_LIKELIHOOD}% vs organic ~20%)`;
+					if (rs >= 0.56 && rs <= 0.64 && rr >= 0.17 && rr <= 0.23) return { verdict: "NAILED", detail };
+					if (rs >= 0.52 && rs <= 0.68 && rr >= 0.15 && rr <= 0.26) return { verdict: "STRONG", detail };
+					if (rs > rr + 0.1) return { verdict: "WEAK", detail };
+					return { verdict: rs <= rr ? "INVERSE" : "NONE", detail };
+				},
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT CASE WHEN dayofweek(t) IN (0, 1) THEN 'sm' ELSE 'rest' END AS bucket,
+  count(*)::BIGINT AS user_count, avg(score_percent) AS score
+FROM ev WHERE event = 'quiz completed' GROUP BY 1`,
+				},
+				select: {
+					sm: { where: { bucket: "sm" } },
+					rest: { where: { bucket: "rest" } },
+				},
+				expect: { metric: "rest.score - sm.score", op: "between", target: [21.5, 25.5] },
+				minCohort: 10000,
+			},
+		],
+	},
+	{
+		id: "H3-notes-magic-number",
+		hook: "H3",
+		archetype: "frequency-sweet-spot",
+		narrative:
+			`${NOTES_SWEET_MIN}-${NOTES_SWEET_MAX} notes-taken lectures => quiz scores x${NOTES_QUIZ_BOOST} ` +
+			`(cap 100) + ${NOTES_BONUS_CERT_LIKELIHOOD}% chance of one bonus cloned certificate; ` +
+			`${NOTES_OVER_THRESHOLD}+ notes => ${NOTES_OVER_CERT_DROP_LIKELIHOOD}% of certificates dropped. ` +
+			"Score read: retained non-speed-learner users, non-Sun/Mon quizzes (see doctrine ledger) — " +
+			"sweet/low ratio reads the knob with mild cap-100 loss at organic mean ~40 (measured 1.309); " +
+			"9+-notes scores are untreated, so b9p/low is the placebo [0.92, 1.12]. Volume read follows " +
+			"the doc's C-vs-A comparison: certs-per-enrollment 9+/sweet [0.62, 0.78] (measured 0.702 — " +
+			"the 0.65 keep knob, mildly diluted by the sweet arm's bonus certs), guarded by sweet/low " +
+			"flatness in [0.85, 1.10] (bounds activity-coupling drift).",
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}, ${PU_CTE}
+SELECT CASE WHEN p.notes BETWEEN ${NOTES_SWEET_MIN} AND ${NOTES_SWEET_MAX} THEN 'sweet'
+            WHEN p.notes <= ${NOTES_SWEET_MIN - 1} THEN 'low' END AS bin,
+  count(DISTINCT e.uid)::BIGINT AS user_count, avg(e.score_percent) AS score
+FROM puu p JOIN ev e ON e.uid = p.uid AND e.event = 'quiz completed'
+WHERE p.retained AND p.fast_lex < ${SPEED_LECTURE_COUNT_THRESHOLD}
+  AND p.notes <= ${NOTES_SWEET_MAX} AND dayofweek(e.t) NOT IN (0, 1)
+GROUP BY 1`,
+				},
+				select: {
+					sweet: { where: { bin: "sweet" } },
+					low: { where: { bin: "low" } },
+				},
+				expect: { metric: "sweet.score / low.score", op: "between", target: [1.20, 1.40] },
+				minCohort: 300,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}, ${PU_CTE}
+SELECT CASE WHEN p.notes <= ${NOTES_SWEET_MIN - 1} THEN 'low'
+            WHEN p.notes BETWEEN ${NOTES_SWEET_MIN} AND ${NOTES_SWEET_MAX} THEN 'sweet'
+            ELSE 'over' END AS bin,
+  count(*)::BIGINT AS users, sum(p.certs)::DOUBLE / nullif(sum(p.enrolls), 0) AS cpe
+FROM puu p WHERE p.retained GROUP BY 1`,
+				},
+				assert: (rows) => {
+					const by = cellsOf(rows, "bin");
+					const low = by.low, sweet = by.sweet, over = by.over;
+					if (!low || !sweet || !over ||
+						Number(low.users) < 500 || Number(sweet.users) < 1200 || Number(over.users) < 1200) {
+						return { verdict: "WEAK", detail: `bins too small: low=${low?.users ?? 0} sweet=${sweet?.users ?? 0} over=${over?.users ?? 0}` };
+					}
+					const flat = Number(sweet.cpe) / Number(low.cpe);
+					if (flat < 0.85 || flat > 1.10) {
+						return { verdict: "NONE", detail: `flatness precondition failed: sweet/low certs-per-enroll=${flat.toFixed(3)} outside [0.85, 1.10] — activity coupling swamps the read` };
+					}
+					const keep = Number(over.cpe) / Number(sweet.cpe);
+					const detail = `certs-per-enroll over/sweet=${keep.toFixed(4)} (keep knob 0.65; flatness sweet/low=${flat.toFixed(3)}; n=${low.users}/${sweet.users}/${over.users})`;
+					if (keep >= 0.62 && keep <= 0.78) return { verdict: "NAILED", detail };
+					if (keep >= 0.55 && keep <= 0.86) return { verdict: "STRONG", detail };
+					if (keep < 0.95) return { verdict: "WEAK", detail };
+					return { verdict: keep >= 1 ? "INVERSE" : "NONE", detail };
+				},
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}, ${PU_CTE}
+SELECT CASE WHEN p.notes >= ${NOTES_OVER_THRESHOLD} THEN 'over'
+            WHEN p.notes <= ${NOTES_SWEET_MIN - 1} THEN 'low' END AS bin,
+  count(DISTINCT e.uid)::BIGINT AS user_count, avg(e.score_percent) AS score
+FROM puu p JOIN ev e ON e.uid = p.uid AND e.event = 'quiz completed'
+WHERE p.retained AND p.fast_lex < ${SPEED_LECTURE_COUNT_THRESHOLD}
+  AND (p.notes >= ${NOTES_OVER_THRESHOLD} OR p.notes <= ${NOTES_SWEET_MIN - 1})
+  AND dayofweek(e.t) NOT IN (0, 1)
+GROUP BY 1`,
+				},
+				select: {
+					over: { where: { bin: "over" } },
+					low: { where: { bin: "low" } },
+				},
+				expect: { metric: "over.score / low.score", op: "between", target: [0.92, 1.12] },
+				minCohort: 250,
+			},
+		],
+	},
+	{
+		id: "H4-study-group-retention",
+		hook: "H4",
+		archetype: "retention-divergence",
+		narrative:
+			`Non-early-joiners (no 'study group joined' within ${STUDY_GROUP_EARLY_DAYS}d of first event) ` +
+			`with ANY raw sub-${STUDY_GROUP_LOW_QUIZ_THRESHOLD} quiz lose ALL events after day ` +
+			`${STUDY_GROUP_CHURN_CUTOFF_DAYS} — and at organic score mean ~40, virtually every quizzing ` +
+			"non-joiner qualifies, so the divergence is near-deterministic: early-joiner D14+ activity " +
+			">= 0.98 vs non-joiner <= 0.03 (measured 0.9988 vs 0.0057). Restricted to users with >= 20d " +
+			"of possible tenure (first event >= 20d before dataset end) so short-tenure users can't " +
+			"dilute either arm. Early joiners also get one cloned discussion at " +
+			`${STUDY_GROUP_DISCUSSION_CLONE_LIKELIHOOD}%, but the discussion-volume gap is dominated by ` +
+			"the churn truncation itself: early/non ratio [13, 25] (measured 18.2).",
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}, ${PU_CTE}
+SELECT early_join, count(*)::BIGINT AS users, avg(retained::INT) AS retention, avg(discussions) AS dpu
+FROM puu WHERE first_t <= (SELECT max(t) - INTERVAL 20 DAY FROM ev)
+GROUP BY 1`,
+				},
+				assert: (rows) => {
+					const by = cellsOf(rows, "early_join");
+					const early = by.true, non = by.false;
+					if (!early || !non || Number(early.users) < 2000 || Number(non.users) < 2500) {
+						return { verdict: "WEAK", detail: `cohorts too small: early=${early?.users ?? 0} non=${non?.users ?? 0}` };
+					}
+					const re = Number(early.retention), rn = Number(non.retention);
+					const detail = `D14+ activity: early-join=${re.toFixed(4)} (n=${early.users}) vs non=${rn.toFixed(4)} (n=${non.users})`;
+					if (re >= 0.98 && rn <= 0.03) return { verdict: "NAILED", detail };
+					if (re >= 0.95 && rn <= 0.06) return { verdict: "STRONG", detail };
+					if (re > rn + 0.3) return { verdict: "WEAK", detail };
+					return { verdict: re <= rn ? "INVERSE" : "NONE", detail };
+				},
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}, ${PU_CTE}
+SELECT early_join, count(*)::BIGINT AS users, avg(discussions) AS dpu
+FROM puu WHERE first_t <= (SELECT max(t) - INTERVAL 20 DAY FROM ev)
+GROUP BY 1`,
+				},
+				assert: (rows) => {
+					const by = cellsOf(rows, "early_join");
+					const early = by.true, non = by.false;
+					if (!early || !non || Number(early.users) < 2000 || Number(non.users) < 2500) {
+						return { verdict: "WEAK", detail: `cohorts too small: early=${early?.users ?? 0} non=${non?.users ?? 0}` };
+					}
+					const ratio = Number(early.dpu) / Number(non.dpu);
+					const detail = `discussions per user early/non=${ratio.toFixed(2)} (${Number(early.dpu).toFixed(2)} vs ${Number(non.dpu).toFixed(2)}; churn truncation + ${STUDY_GROUP_DISCUSSION_CLONE_LIKELIHOOD}% clone)`;
+					if (ratio >= 13 && ratio <= 25) return { verdict: "NAILED", detail };
+					if (ratio >= 8 && ratio <= 32) return { verdict: "STRONG", detail };
+					if (ratio > 2) return { verdict: "WEAK", detail };
+					return { verdict: ratio <= 1 ? "INVERSE" : "NONE", detail };
+				},
+			},
+		],
+	},
+	{
+		id: "H5-hint-dependency",
+		hook: "H5",
+		archetype: "cohort-prop-scale",
+		narrative:
+			`hint_used=true problems get difficulty forced to 'easy' at ${HINT_EASY_LIKELIHOOD}%; ` +
+			`hint_used=false forced to 'hard' at ${HINT_HARD_LIKELIHOOD}%. Bands derive from the MEASURED ` +
+			"organic composition (easy 0.362 / hard 0.351 — the engine's pool draw is not uniform, see " +
+			"doctrine): P(easy|hint) = 0.60 + 0.40 x 0.362 = 0.745, band [0.71, 0.77]; P(hard|no-hint) " +
+			"= 0.40 + 0.60 x 0.351 = 0.610, band [0.58, 0.64]. The v1.5 doc quoted the raw knobs " +
+			"(60%/40%) — those ignore the unforced organic remainder.",
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT hint_used, count(*)::BIGINT AS user_count, avg((difficulty = 'easy')::INT) AS p_easy
+FROM ev WHERE event = 'practice problem solved' GROUP BY 1`,
+				},
+				select: {
+					hint: { where: { hint_used: true } },
+				},
+				expect: { metric: "hint.p_easy", op: "between", target: [0.71, 0.77] },
+				minCohort: 15000,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT hint_used, count(*)::BIGINT AS user_count, avg((difficulty = 'hard')::INT) AS p_hard
+FROM ev WHERE event = 'practice problem solved' GROUP BY 1`,
+				},
+				select: {
+					nohint: { where: { hint_used: false } },
+				},
+				expect: { metric: "nohint.p_hard", op: "between", target: [0.58, 0.64] },
+				minCohort: 30000,
+			},
+		],
+	},
+	{
+		id: "H6-semester-spike",
+		hook: "H6",
+		archetype: "temporal-inflection",
+		narrative:
+			`Days ${SEMESTER_SPIKE_START_DAY}-${SEMESTER_SPIKE_END_DAY} (from dataset start): quiz started / ` +
+			`quiz completed / assignment submitted duplicated at ${SEMESTER_SPIKE_LIKELIHOOD}% => x1.8 volume. ` +
+			"The hook's continuous day-index window [75.0, 85.0] fully treats calendar days 75-84 (day 85 " +
+			"is a measure-zero boundary), so the read uses days 75-84 vs flanks 60-74 + 85-100. Duplicates " +
+			"of churned users die with their originals (H4 deletes post-cutoff wholesale), preserving the " +
+			"ratio. Spikable window/flank [1.70, 2.02] (measured 1.862 = 1.8 x mild organic drift); " +
+			"non-spikable placebo [0.95, 1.20] (measured 1.085 — organic mid-dataset ramp).",
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+d AS (SELECT date_diff('day', (SELECT min(t)::DATE FROM ev), t::DATE) AS day_idx
+FROM ev WHERE event IN ('quiz started', 'quiz completed', 'assignment submitted'))
+SELECT CASE WHEN day_idx BETWEEN ${SEMESTER_SPIKE_START_DAY} AND ${SEMESTER_SPIKE_END_DAY - 1} THEN 'window'
+            WHEN day_idx BETWEEN 60 AND ${SEMESTER_SPIKE_START_DAY - 1} OR day_idx BETWEEN ${SEMESTER_SPIKE_END_DAY} AND 100 THEN 'flank' END AS zone,
+  count(*)::BIGINT AS user_count, count(*)::DOUBLE / count(DISTINCT day_idx) AS per_day
+FROM d WHERE day_idx BETWEEN 60 AND 100 GROUP BY 1`,
+				},
+				select: {
+					win: { where: { zone: "window" } },
+					flank: { where: { zone: "flank" } },
+				},
+				expect: { metric: "win.per_day / flank.per_day", op: "between", target: [1.70, 2.02] },
+				minCohort: 15000,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+d AS (SELECT date_diff('day', (SELECT min(t)::DATE FROM ev), t::DATE) AS day_idx
+FROM ev WHERE event NOT IN ('quiz started', 'quiz completed', 'assignment submitted'))
+SELECT CASE WHEN day_idx BETWEEN ${SEMESTER_SPIKE_START_DAY} AND ${SEMESTER_SPIKE_END_DAY - 1} THEN 'window'
+            WHEN day_idx BETWEEN 60 AND ${SEMESTER_SPIKE_START_DAY - 1} OR day_idx BETWEEN ${SEMESTER_SPIKE_END_DAY} AND 100 THEN 'flank' END AS zone,
+  count(*)::BIGINT AS user_count, count(*)::DOUBLE / count(DISTINCT day_idx) AS per_day
+FROM d WHERE day_idx BETWEEN 60 AND 100 GROUP BY 1`,
+				},
+				select: {
+					win: { where: { zone: "window" } },
+					flank: { where: { zone: "flank" } },
+				},
+				expect: { metric: "win.per_day / flank.per_day", op: "between", target: [0.95, 1.20] },
+				minCohort: 30000,
+			},
+		],
+	},
+	{
+		id: "H7-free-vs-paid",
+		hook: "H7",
+		archetype: "funnel-conversion-by-segment",
+		narrative:
+			`Cert-funnel conversion gated x${FREE_FUNNEL_CONV_FACTOR} for free / x${PAID_FUNNEL_CONV_FACTOR} ` +
+			`for paid (funnel-pre), THEN free users lose ${FREE_CERT_DROP_LIKELIHOOD}% of certificates ` +
+			"(everything). The two treatments compound: 3x conversion gap x 1/0.45 drop survival = 6.67x. " +
+			"The emulator funnel read measures the compound directly (6.73 at full fidelity); the " +
+			"certs-per-enrollment read is diluted by standalone (non-funnel) certs (6.04). " +
+			"annual vs monthly is the placebo: " +
+			"both arms get identical conversion treatment and keep all certs (H9 moves times, not counts) " +
+			"=> certs-per-enrollment ratio [0.88, 1.20].",
+		assertions: [
+			{
+				breakdown: {
+					type: "timeToConvert",
+					steps: ["course enrolled", "certificate earned"],
+					breakdownByUserProperty: "subscription_status",
+					conversionWindowMs: Math.round(48 * TTC_FREE_FACTOR * 3600 * 1000),
+				},
+				assert: (rows) => {
+					const by = cellsOf(rows, "segment_value");
+					const mon = by.monthly, free = by.free;
+					const monAtt = Number(mon?.step_counts?.[0] ?? 0), freeAtt = Number(free?.step_counts?.[0] ?? 0);
+					if (monAtt < 800 || freeAtt < 2500) {
+						return { verdict: "WEAK", detail: `attempt cohorts too small: monthly=${monAtt} free=${freeAtt}` };
+					}
+					const convM = Number(mon.step_counts[1]) / monAtt;
+					const convF = Number(free.step_counts[1]) / freeAtt;
+					const ratio = convM / convF;
+					// band centers on the mechanism compound 3 x 1/0.45 = 6.67, NOT on the
+					// 2K iteration point (5.6) — that measurement had free attempts below
+					// this assertion's own guard and was noisy-low
+					const detail = `emulator 86.4h conv monthly=${convM.toFixed(4)} free=${convF.toFixed(4)} ratio=${ratio.toFixed(2)} (attempts ${monAtt}/${freeAtt}; mechanism 6.67)`;
+					if (ratio >= 5.7 && ratio <= 7.7) return { verdict: "NAILED", detail };
+					if (ratio >= 4.7 && ratio <= 8.7) return { verdict: "STRONG", detail };
+					if (ratio > 1.5) return { verdict: "WEAK", detail };
+					return { verdict: ratio <= 1 ? "INVERSE" : "NONE", detail };
+				},
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}, ${PU_CTE}
+SELECT subscription_status, count(*)::BIGINT AS user_count,
+  sum(certs)::DOUBLE / nullif(sum(enrolls), 0) AS cpe
+FROM puu GROUP BY 1`,
+				},
+				select: {
+					mon: { where: { subscription_status: "monthly" } },
+					free: { where: { subscription_status: "free" } },
+				},
+				expect: { metric: "mon.cpe / free.cpe", op: "between", target: [4.8, 6.5] },
+				minCohort: 1500,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}, ${PU_CTE}
+SELECT subscription_status, count(*)::BIGINT AS user_count,
+  sum(certs)::DOUBLE / nullif(sum(enrolls), 0) AS cpe
+FROM puu GROUP BY 1`,
+				},
+				select: {
+					ann: { where: { subscription_status: "annual" } },
+					mon: { where: { subscription_status: "monthly" } },
+				},
+				expect: { metric: "ann.cpe / mon.cpe", op: "between", target: [0.88, 1.20] },
+				minCohort: 1500,
+			},
+		],
+	},
+	{
+		id: "H8-playback-speed",
+		hook: "H8",
+		archetype: "cohort-prop-scale",
+		narrative:
+			`'lecture completed' at speed >= ${SPEED_FAST_THRESHOLD}: watch_time x${SPEED_FAST_WATCH_FACTOR} ` +
+			`(floor ${SPEED_FAST_WATCH_MIN}); at speed <= ${SPEED_SLOW_THRESHOLD}: x${SPEED_SLOW_WATCH_FACTOR} ` +
+			`(cap ${SPEED_SLOW_WATCH_MAX} — never binds: organic max 60 x 1.4 = 84). Mid speeds (1.25/1.5) ` +
+			"are untreated: fast/mid reads the knob at [0.55, 0.62] (Math.floor costs ~2%), slow/mid at " +
+			`[1.33, 1.46]. Users with ${SPEED_LECTURE_COUNT_THRESHOLD}+ fast lectures also get quiz scores ` +
+			`+${SPEED_QUIZ_BOOST_POINTS} (cap 100): read as a DIFFERENCE among retained non-sweet-notes ` +
+			"users on non-Sun/Mon quizzes (doctrine ledger) — band [7.0, 10.4] (measured +8.76; the point " +
+			"boost sits on a ~40-mean score, so cap loss is negligible).",
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT CASE WHEN playback_speed >= ${SPEED_FAST_THRESHOLD} THEN 'fast'
+            WHEN playback_speed <= ${SPEED_SLOW_THRESHOLD} THEN 'slow' ELSE 'mid' END AS bucket,
+  count(*)::BIGINT AS user_count, avg(watch_time_mins) AS watch
+FROM ev WHERE event = 'lecture completed' GROUP BY 1`,
+				},
+				select: {
+					fast: { where: { bucket: "fast" } },
+					mid: { where: { bucket: "mid" } },
+				},
+				expect: { metric: "fast.watch / mid.watch", op: "between", target: [0.55, 0.62] },
+				minCohort: 10000,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT CASE WHEN playback_speed >= ${SPEED_FAST_THRESHOLD} THEN 'fast'
+            WHEN playback_speed <= ${SPEED_SLOW_THRESHOLD} THEN 'slow' ELSE 'mid' END AS bucket,
+  count(*)::BIGINT AS user_count, avg(watch_time_mins) AS watch
+FROM ev WHERE event = 'lecture completed' GROUP BY 1`,
+				},
+				select: {
+					slow: { where: { bucket: "slow" } },
+					mid: { where: { bucket: "mid" } },
+				},
+				expect: { metric: "slow.watch / mid.watch", op: "between", target: [1.33, 1.46] },
+				minCohort: 10000,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}, ${PU_CTE}
+SELECT (p.fast_lex >= ${SPEED_LECTURE_COUNT_THRESHOLD}) AS speedy,
+  count(DISTINCT e.uid)::BIGINT AS user_count, avg(e.score_percent) AS score
+FROM puu p JOIN ev e ON e.uid = p.uid AND e.event = 'quiz completed'
+WHERE p.retained AND p.notes NOT BETWEEN ${NOTES_SWEET_MIN} AND ${NOTES_SWEET_MAX}
+  AND dayofweek(e.t) NOT IN (0, 1)
+GROUP BY 1`,
+				},
+				select: {
+					spd: { where: { speedy: true } },
+					rest: { where: { speedy: false } },
+				},
+				expect: { metric: "spd.score - rest.score", op: "between", target: [7.0, 10.4] },
+				minCohort: 500,
+			},
+		],
+	},
+	{
+		id: "H9-completion-ttc",
+		hook: "H9",
+		archetype: "funnel-ttc-by-segment",
+		narrative:
+			`The everything hook rescales each certificate's gap to its nearest preceding enrollment: ` +
+			`annual x${TTC_ANNUAL_FACTOR}, free x${TTC_FREE_FACTOR} (monthly untouched). Read through the ` +
+			"emulator's 2-step timeToConvert ['course enrolled' -> 'certificate earned'] at 86.4h " +
+			`(48h generative x ${TTC_FREE_FACTOR} — covers the stretched free support; at 48h the free arm ` +
+			"censors to ~nothing, see doctrine). Median TTC ratios read the knobs almost exactly: " +
+			"free/monthly [1.65, 2.00] (measured 1.834, knob 1.8); annual/monthly [0.44, 0.57] " +
+			"(measured 0.505, knob 0.5).",
+		assertions: [
+			{
+				breakdown: {
+					type: "timeToConvert",
+					steps: ["course enrolled", "certificate earned"],
+					breakdownByUserProperty: "subscription_status",
+					conversionWindowMs: Math.round(48 * TTC_FREE_FACTOR * 3600 * 1000),
+				},
+				assert: (rows) => {
+					const by = cellsOf(rows, "segment_value");
+					const free = by.free, mon = by.monthly;
+					const fc = Number(free?.user_count ?? 0), mc = Number(mon?.user_count ?? 0);
+					if (fc < 150 || mc < 400) {
+						return { verdict: "WEAK", detail: `converter cohorts too small: free=${fc} monthly=${mc}` };
+					}
+					const ratio = Number(free.median_ttc_ms) / Number(mon.median_ttc_ms);
+					const detail = `median TTC free/monthly=${ratio.toFixed(3)} (knob ${TTC_FREE_FACTOR}; converters ${fc}/${mc})`;
+					if (ratio >= 1.65 && ratio <= 2.00) return { verdict: "NAILED", detail };
+					if (ratio >= 1.45 && ratio <= 2.20) return { verdict: "STRONG", detail };
+					if (ratio > 1.15) return { verdict: "WEAK", detail };
+					return { verdict: ratio <= 1 ? "INVERSE" : "NONE", detail };
+				},
+			},
+			{
+				breakdown: {
+					type: "timeToConvert",
+					steps: ["course enrolled", "certificate earned"],
+					breakdownByUserProperty: "subscription_status",
+					conversionWindowMs: Math.round(48 * TTC_FREE_FACTOR * 3600 * 1000),
+				},
+				assert: (rows) => {
+					const by = cellsOf(rows, "segment_value");
+					const ann = by.annual, mon = by.monthly;
+					const ac = Number(ann?.user_count ?? 0), mc = Number(mon?.user_count ?? 0);
+					if (ac < 400 || mc < 400) {
+						return { verdict: "WEAK", detail: `converter cohorts too small: annual=${ac} monthly=${mc}` };
+					}
+					const ratio = Number(ann.median_ttc_ms) / Number(mon.median_ttc_ms);
+					const detail = `median TTC annual/monthly=${ratio.toFixed(3)} (knob ${TTC_ANNUAL_FACTOR}; converters ${ac}/${mc})`;
+					if (ratio >= 0.44 && ratio <= 0.57) return { verdict: "NAILED", detail };
+					if (ratio >= 0.38 && ratio <= 0.66) return { verdict: "STRONG", detail };
+					if (ratio < 0.85) return { verdict: "WEAK", detail };
+					return { verdict: ratio >= 1 ? "INVERSE" : "NONE", detail };
+				},
+			},
+		],
+	},
+	{
+		id: "H10-ai-study-buddy",
+		hook: "H10",
+		archetype: "experiment-lift",
+		narrative:
+			"'AI Study Buddy' A/B on the Social Learning funnel (last 30 days): conversionMultiplier 1.4 " +
+			"(50% -> 70% generative), ttcMultiplier 0.85. Strict pairing anchors at funnel ENTRY (first " +
+			"'discussion posted' at/after $experiment_started — the exp event fires before entry with an " +
+			"arm-dependent lag), conversion = 'resource downloaded' within 12h of entry with a 'study " +
+			"group joined' strictly between. Organic pollution (p ~ 0.035, consistent across both arms' " +
+			"implied rates at full fidelity) attenuates the generative lift to (0.70+0.30p)/(0.50+0.50p) " +
+			"~ 1.37 observed; paired median TTC reads the ttcMultiplier at [0.78, 0.92] (measured 0.857, " +
+			"knob 0.85).",
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+exp AS (SELECT uid, t, "Variant name" AS variant FROM ev WHERE event = '$experiment_started'),
+a AS (SELECT exp.uid, exp.variant, exp.t,
+  (SELECT min(x.t) FROM ev x WHERE x.uid = exp.uid AND x.event = 'discussion posted'
+   AND x.t >= exp.t - INTERVAL 1 MINUTE) AS s1
+FROM exp),
+c AS (SELECT a.*, (
+    SELECT min(r.t) FROM ev r
+    WHERE r.uid = a.uid AND r.event = 'resource downloaded'
+      AND r.t > a.s1 AND r.t <= a.s1 + INTERVAL 12 HOUR
+      AND EXISTS (SELECT 1 FROM ev s WHERE s.uid = a.uid AND s.event = 'study group joined'
+                  AND s.t > a.s1 AND s.t < r.t)
+  ) AS conv_t
+FROM a WHERE a.s1 IS NOT NULL AND a.s1 <= a.t + INTERVAL 24 HOUR)
+SELECT variant, count(*)::BIGINT AS attempts, count(conv_t)::BIGINT AS conv,
+  count(conv_t)::DOUBLE / count(*) AS rate,
+  median(date_diff('minute', s1, conv_t)) AS med_ttc_min
+FROM c GROUP BY 1`,
+				},
+				assert: (rows) => {
+					const by = cellsOf(rows, "variant");
+					const ai = by["AI Study Buddy"], ctl = by.Control;
+					const aa = Number(ai?.attempts ?? 0), ca = Number(ctl?.attempts ?? 0);
+					if (aa < 400 || ca < 400) {
+						return { verdict: "WEAK", detail: `attempt cohorts too small: ai=${aa} control=${ca}` };
+					}
+					const split = aa / (aa + ca);
+					if (split < 0.40 || split > 0.60) {
+						return { verdict: "NONE", detail: `variant split broken: AI share=${split.toFixed(3)}` };
+					}
+					const lift = Number(ai.rate) / Number(ctl.rate);
+					// band spans the pollution-attenuated mechanism for p in [0, 0.15]:
+					// lift = (0.70+0.30p)/(0.50+0.50p) in [1.30, 1.40], +/- sampling noise.
+					// The 2K iteration point (1.25, implied p 0.14) came from attempt
+					// counts below this assertion's own guard; full-fidelity implied
+					// pollution is ~0.035 from both arms independently
+					const detail = `strict-paired conv AI=${Number(ai.rate).toFixed(4)} Control=${Number(ctl.rate).toFixed(4)} lift=${lift.toFixed(3)} (attempts ${aa}/${ca}; generative 1.4 minus pollution)`;
+					if (lift >= 1.20 && lift <= 1.45) return { verdict: "NAILED", detail };
+					if (lift >= 1.08 && lift <= 1.55) return { verdict: "STRONG", detail };
+					if (lift > 1.0) return { verdict: "WEAK", detail };
+					return { verdict: "INVERSE", detail };
+				},
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+exp AS (SELECT uid, t, "Variant name" AS variant FROM ev WHERE event = '$experiment_started'),
+a AS (SELECT exp.uid, exp.variant, exp.t,
+  (SELECT min(x.t) FROM ev x WHERE x.uid = exp.uid AND x.event = 'discussion posted'
+   AND x.t >= exp.t - INTERVAL 1 MINUTE) AS s1
+FROM exp),
+c AS (SELECT a.*, (
+    SELECT min(r.t) FROM ev r
+    WHERE r.uid = a.uid AND r.event = 'resource downloaded'
+      AND r.t > a.s1 AND r.t <= a.s1 + INTERVAL 12 HOUR
+      AND EXISTS (SELECT 1 FROM ev s WHERE s.uid = a.uid AND s.event = 'study group joined'
+                  AND s.t > a.s1 AND s.t < r.t)
+  ) AS conv_t
+FROM a WHERE a.s1 IS NOT NULL AND a.s1 <= a.t + INTERVAL 24 HOUR)
+SELECT variant, count(conv_t)::BIGINT AS conv,
+  median(date_diff('minute', s1, conv_t)) AS med_ttc_min
+FROM c GROUP BY 1`,
+				},
+				assert: (rows) => {
+					const by = cellsOf(rows, "variant");
+					const ai = by["AI Study Buddy"], ctl = by.Control;
+					const ac = Number(ai?.conv ?? 0), cc = Number(ctl?.conv ?? 0);
+					if (ac < 250 || cc < 250) {
+						return { verdict: "WEAK", detail: `converter cohorts too small: ai=${ac} control=${cc}` };
+					}
+					const ratio = Number(ai.med_ttc_min) / Number(ctl.med_ttc_min);
+					const detail = `paired median TTC AI/Control=${ratio.toFixed(3)} (knob 0.85; converters ${ac}/${cc})`;
+					if (ratio >= 0.78 && ratio <= 0.92) return { verdict: "NAILED", detail };
+					if (ratio >= 0.70 && ratio <= 0.99) return { verdict: "STRONG", detail };
+					if (ratio < 1.05) return { verdict: "WEAK", detail };
+					return { verdict: "INVERSE", detail };
+				},
+			},
+		],
+	},
+];
