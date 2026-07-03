@@ -835,6 +835,60 @@ describe('funnel experiments', () => {
 			expect(['Variant A', 'Variant B', 'Control']).toContain(ev['Variant name']);
 		}
 	});
+
+	test('$experiment_started stays first under shuffling order strategies', async () => {
+		// Mixpanel semantics: the exposure event must precede every funnel step
+		// it governs. applyOrderingStrategy must shuffle only the real steps —
+		// $experiment_started stays pinned at execution index 0 and last-fixed
+		// still pins the final step. conversionRate 100 → every pass emits the
+		// full sequence, so expected pass shape is hand-derivable:
+		// [$experiment_started, {browse|engage}, {browse|engage}, buy].
+		initChance('exp-order-test');
+		const generate = (await import('../../index.js')).default;
+		const results = await generate({ ...PINNED_DATES,
+			numUsers: 60,
+			numEvents: 600,
+			seed: 'exp-order-fixed',
+			writeToDisk: false,
+			events: [
+				{ event: 'browse', weight: 1 },
+				{ event: 'engage', weight: 1 },
+				{ event: 'buy', weight: 1 },
+			],
+			funnels: [{
+				sequence: ['browse', 'engage', 'buy'],
+				conversionRate: 100,
+				order: 'last-fixed',
+				timeToConvert: 1,
+				experiment: {
+					name: 'Order Pin Test',
+					variants: [{ name: 'Control' }, { name: 'Treatment', conversionMultiplier: 1.2 }],
+				},
+			}],
+		});
+
+		const byUser = new Map();
+		for (const e of results.eventData) {
+			if (!byUser.has(e.user_id)) byUser.set(e.user_id, []);
+			byUser.get(e.user_id).push(e);
+		}
+		expect(byUser.size).toBeGreaterThan(0);
+		let exactPassShapes = 0;
+		for (const [, evs] of byUser) {
+			evs.sort((a, b) => new Date(a.time) - new Date(b.time));
+			// every pass anchors at its exposure event (relativeTimeMs 0), so no
+			// funnel step may be the user's earliest event
+			expect(evs[0].event).toBe('$experiment_started');
+			const exps = evs.filter(e => e.event === '$experiment_started');
+			if (exps.length === 1 && evs.length === 4) {
+				exactPassShapes++;
+				expect([evs[1].event, evs[2].event].sort()).toEqual(['browse', 'engage']);
+				expect(evs[3].event).toBe('buy');
+			}
+		}
+		// fixture must actually exercise the single-pass shape assertion
+		expect(exactPassShapes).toBeGreaterThan(0);
+	});
 });
 
 describe('ad spend generation', () => {

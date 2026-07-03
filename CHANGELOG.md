@@ -6,6 +6,19 @@ All notable changes to `@ak--47/dungeon-master`.
 
 ### Changed
 
+- **`$experiment_started` is pinned to funnel-pass start** (P4.2 engine fix,
+  pre-existing since 1.4.0). For experiment funnels with a non-`sequential`
+  `order` (`last-fixed`, `random`, `first-fixed`, ...), `applyOrderingStrategy`
+  shuffled the synthetic exposure event into the funnel body — the exposure
+  landed mid-pass at a uniform position, so exposure→conversion TTC read ~58%
+  of `timeToConvert`, and any exposure-anchored conversion measurement (the
+  Mixpanel Experiments report, ordered-funnel pairing from
+  `$experiment_started`) undercounted variant lift. The ordering strategy now
+  shuffles only the real steps; `$experiment_started` stays at execution index
+  0 (offset 0), and `first-fixed`/`first-and-last-fixed` pin the true first
+  step instead of the exposure marker. Output changes (event order + RNG
+  stream) for experiment funnels with shuffle orders; `sequential` experiment
+  funnels are unaffected.
 - **Session IDs are re-derived after the `everything` hook** (P2.1). The first
   `assignSessionIds` pass still runs before hooks (hooks may read
   `session_id`), but a second pass now relabels on the FINAL event set — after
