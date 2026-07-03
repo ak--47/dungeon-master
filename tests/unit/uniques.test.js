@@ -196,11 +196,6 @@ describe('uniques — guards', () => {
 			.toThrow(/sessions/);
 	});
 
-	test('firstTimeOnly throws until P1.4 lands', () => {
-		expect(() => emulateBreakdown([], { type: 'uniques', firstTimeOnly: true }))
-			.toThrow(/firstTimeEver/i);
-	});
-
 	test('does not compose with the generic timeBucket wrapper', () => {
 		expect(() => emulateBreakdown([], { type: 'uniques', timeBucket: 'day' }))
 			.toThrow(/timeBucket/);
