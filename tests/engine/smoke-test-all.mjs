@@ -6,7 +6,7 @@
  * events, and writes output without crashing. Useful as a pre-publish smoke
  * check or for catching regressions across the dungeon catalog. NOT a
  * verification gate (does not check hook fidelity) — use
- * `scripts/verify-runner.mjs` + `verification/verticals/*.verify.mjs` for that.
+ * `scripts/verify-runner.mjs` + `dungeons/vertical/<name>/<name>.verify.mjs` for that.
  *
  * Default scale: 100 users, 1000 events per dungeon. Output written to ./tmp/.
  *

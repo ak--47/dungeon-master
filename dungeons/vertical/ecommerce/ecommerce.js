@@ -3,9 +3,9 @@ import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 import { uid } from "ak-tools";
-import { weighNumRange, integer, weighChoices, decimal, initChance } from "../../lib/utils/utils.js";
-import { scaleFunnelTTC } from "../../lib/hook-helpers/timing.js";
-/** @typedef {import("../../types").Dungeon} Config */
+import { weighNumRange, integer, weighChoices, decimal, initChance } from "@ak--47/dungeon-master/utils";
+import { scaleFunnelTTC } from "@ak--47/dungeon-master/hook-helpers";
+/** @typedef {import("../../../types").Dungeon} Config */
 
 // ── OVERVIEW ──
 /*

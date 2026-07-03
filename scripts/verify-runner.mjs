@@ -13,8 +13,8 @@
  *   node scripts/verify-runner.mjs <dungeon-path> [run-name] [--small]
  *
  * Examples:
- *   node scripts/verify-runner.mjs dungeons/vertical/gaming.js verify-gaming
- *   node scripts/verify-runner.mjs dungeons/vertical/gaming.js verify-gaming --small
+ *   node scripts/verify-runner.mjs dungeons/vertical/gaming/gaming.js verify-gaming
+ *   node scripts/verify-runner.mjs dungeons/vertical/gaming/gaming.js verify-gaming --small
  */
 import generate from '../index.js';
 import path from 'path';

@@ -16,7 +16,7 @@
  *
  * Usage:
  *   node scripts/extract-dungeon-schema.mjs <input.js> [output.json]
- *   node scripts/extract-dungeon-schema.mjs dungeons/vertical/*.js   # batch mode
+ *   node scripts/extract-dungeon-schema.mjs dungeons/vertical/<name>/<name>.js ...   # batch mode (shell glob OK)
  */
 
 import { writeFileSync } from 'fs';
@@ -29,7 +29,7 @@ const args = process.argv.slice(2);
 
 if (args.length === 0) {
 	console.error('Usage: node scripts/extract-dungeon-schema.mjs <dungeon.js> [output.json]');
-	console.error('       node scripts/extract-dungeon-schema.mjs dungeons/vertical/*.js');
+	console.error("       node scripts/extract-dungeon-schema.mjs 'dungeons/vertical/*/*.js'");
 	process.exit(1);
 }
 

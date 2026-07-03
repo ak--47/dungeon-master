@@ -15,7 +15,7 @@ The default export accepts: a config object, a path to a `.js`/`.mjs`/`.json` du
 | User-facing API, config reference, examples, full preset tables | [README.md](README.md) |
 | Hook encyclopedia, recipes, Mixpanel counting semantics | [HOOKS.md](HOOKS.md) |
 | Per-version upgrade guides (1.3 → 1.5) | [docs/guides/](docs/guides/) |
-| Per-dungeon verify scripts (20 dungeons, 107 hooks) | [verification/verticals/README.md](verification/verticals/README.md) |
+| Per-dungeon stories + verify scripts (vertical dungeons) | [dungeons/vertical/README.md](dungeons/vertical/README.md) |
 | Full `Dungeon` interface | [types.d.ts](types.d.ts) |
 | Changelog | [CHANGELOG.md](CHANGELOG.md) |
 
@@ -34,9 +34,10 @@ lib/
 ├── verify/         # emulateBreakdown + verifyDungeon + Mixpanel-aligned counting primitives
 └── templates/      # default data, phrase banks, AI instruction templates, macro/soup presets
 scripts/                 # run-dungeon, dungeon-to-json, json-to-dungeon, run-many, verify-runner
-dungeons/{vertical,technical,user}/
+dungeons/technical/      # engine fixtures
+dungeons/user/           # one folder per customer
+dungeons/vertical/       # one folder per vertical: <name>/<name>.js + <name>.verify.mjs + <name>.sql
 tests/{unit,integration,e2e,engine}/
-verification/verticals/  # <name>.verify.mjs + <name>.sql per vertical dungeon
 docs/guides/             # 1.3.0 → 1.5.0 upgrade guides
 plans/                   # historical implementation plans (ENGINE-VALIDATION, DATAGEN, etc.)
 ```

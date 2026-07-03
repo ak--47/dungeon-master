@@ -52,7 +52,7 @@ node scripts/verify-runner.mjs <dungeon-path> <run-name>
 
 Example:
 ```bash
-node scripts/verify-runner.mjs dungeons/vertical/gaming.js verify-gaming
+node scripts/verify-runner.mjs dungeons/vertical/gaming/gaming.js verify-gaming
 ```
 
 Full-fidelity runs can take minutes (50K+ user dungeons). Plan accordingly — kick off the run, do other reading, return when the file lands. If a run takes longer than your budget, report that as a finding ("dungeon too large to verify in current session") rather than falling back to `--small`.
@@ -138,7 +138,7 @@ Write to `dungeons/user/<name>/hook-results.md` for a user dungeon, else `./rese
 
 ### Step 6b: Write verification SQL (mandatory for user dungeons)
 
-When verifying a dungeon in `dungeons/user/`, also write a standalone DuckDB SQL file alongside the dungeon in its folder at `dungeons/user/<name>/<name>-verifications.sql`. Vertical dungeons already have their SQL in `verification/verticals/`. Format: see [report-format.md "Verification SQL file"](references/report-format.md#verification-sql-file-mandatory-for-user-dungeons).
+When verifying a dungeon in `dungeons/user/`, also write a standalone DuckDB SQL file alongside the dungeon in its folder at `dungeons/user/<name>/<name>-verifications.sql`. Vertical dungeons already have their SQL co-located at `dungeons/vertical/<name>/<name>.sql`. Format: see [report-format.md "Verification SQL file"](references/report-format.md#verification-sql-file-mandatory-for-user-dungeons).
 
 ### Step 7: Cleanup
 

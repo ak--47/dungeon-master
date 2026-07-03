@@ -3,9 +3,9 @@ import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 import "dotenv/config";
-import * as u from "../../lib/utils/utils.js";
+import * as u from "@ak--47/dungeon-master/utils";
 import * as v from "ak-tools";
-/** @typedef  {import("../../types").Dungeon} Config */
+/** @typedef  {import("../../../types").Dungeon} Config */
 
 // ── OVERVIEW ──
 /*

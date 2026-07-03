@@ -15,8 +15,8 @@ const CONCURRENCY = 10
  * Run multiple dungeons concurrently from the command line.
  *
  * Usage:
- *   node scripts/run-many.mjs dungeons/vertical/gaming.js dungeons/vertical/media.js dungeons/vertical/food-delivery.js
- *   node scripts/run-many.mjs dungeons/vertical/*.js
+ *   node scripts/run-many.mjs dungeons/vertical/gaming/gaming.js dungeons/vertical/media/media.js
+ *   (shell globs expand to file arguments, e.g. dungeons/vertical/<name> folders)
  */
 
 const args = process.argv.slice(2);

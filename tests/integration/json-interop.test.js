@@ -10,7 +10,7 @@ import { fileURLToPath } from 'url';
 import { dungeonToJSON, parseJSONDungeon, extractComments } from '../../index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ECOM = path.resolve(__dirname, '../../dungeons/vertical/ecommerce.js');
+const ECOM = path.resolve(__dirname, '../../dungeons/vertical/ecommerce/ecommerce.js');
 
 describe('dungeonToJSON (file input)', () => {
 	test('serializes a shipped dungeon and round-trips through parseJSONDungeon', async () => {

@@ -2002,9 +2002,9 @@ emulateBreakdown(events, { type: 'retention', cohortEvent: 'Sign Up',
 
 20-dungeon eval surfaced patterns where naive verification inverts. Apply
 these recipes when writing per-dungeon verify scripts under
-`verification/verticals/`.
+`dungeons/vertical/<name>/`.
 
-**Proof in repo:** `verification/verticals/<dungeon>.{verify.mjs,sql}` —
+**Proof in repo:** `dungeons/vertical/<dungeon>/<dungeon>.{verify.mjs,sql}` —
 20 dungeons, 107 documented hooks, 107 verification checks. Each
 `<dungeon>.verify.mjs` is a CI-runnable assertion that the dungeon's
 engineered story patterns appear in full-fidelity generated data.

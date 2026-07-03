@@ -3,10 +3,10 @@ import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 import "dotenv/config";
-import * as u from "../../lib/utils/utils.js";
+import * as u from "@ak--47/dungeon-master/utils";
 import * as v from "ak-tools";
-import { findFirstSequence, scaleFunnelTTC } from "../../lib/hook-helpers/timing.js";
-/** @typedef  {import("../../types").Dungeon} Config */
+import { findFirstSequence, scaleFunnelTTC } from "@ak--47/dungeon-master/hook-helpers";
+/** @typedef  {import("../../../types").Dungeon} Config */
 
 // ── OVERVIEW ──
 /*

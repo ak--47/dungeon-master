@@ -68,7 +68,7 @@ dayjs.extend(utc);
  *
  * @example
  * // multiple dungeons
- * const results = await DUNGEON_MASTER(['./dungeons/vertical/gaming.js', './dungeons/vertical/media.js']);
+ * const results = await DUNGEON_MASTER(['./dungeons/vertical/gaming/gaming.js', './dungeons/vertical/media/media.js']);
  *
  * @example
  * // raw JS text

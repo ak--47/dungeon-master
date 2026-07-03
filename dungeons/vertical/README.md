@@ -1,9 +1,12 @@
-# Vertical Dungeon Verification — Proof of Story-in-Data
+# Vertical Dungeons — Proof of Story-in-Data
 
-Per-dungeon verification scripts for the 20 vertical dungeons under
-[`dungeons/vertical/`](../../dungeons/vertical/). Each dungeon has two
-sibling files:
+One folder per vertical dungeon (v1.6 layout). Each
+`dungeons/vertical/<name>/` holds three sibling files:
 
+- **`<name>.js`** — the dungeon, exporting `stories` alongside the default
+  config. Stories are the machine-checkable contract for every numbered
+  hook; evaluate them with
+  `node scripts/verify-stories.mjs dungeons/vertical/<name>/<name>.js`.
 - **`<name>.verify.mjs`** — Node script using `@ak--47/dungeon-master/verify`
   primitives (`emulateBreakdown`, `evaluateFunnel`, `buildIdentityMap`,
   `resolveUserId`). Emulator-backed where Mixpanel-equivalent semantics
@@ -57,15 +60,18 @@ checks.** No documented hook is unverified.
 
 ```bash
 # 1. Generate fresh data (full fidelity — uses dungeon's shipped numUsers)
-node scripts/verify-runner.mjs dungeons/vertical/${NAME}.js verify-${NAME}
+node scripts/verify-runner.mjs dungeons/vertical/${NAME}/${NAME}.js verify-${NAME}
 
-# 2. Run the .mjs verifier (CI gate)
-node --max-old-space-size=4096 verification/verticals/${NAME}.verify.mjs
+# 2. Evaluate the dungeon's stories (five-tier verdict table)
+node scripts/verify-stories.mjs dungeons/vertical/${NAME}/${NAME}.js --data-prefix verify-${NAME}
 
-# 3. (Optional) Run the SQL for human inspection
-duckdb -c ".read verification/verticals/${NAME}.sql"
+# 3. Run the .mjs verifier (CI gate)
+node --max-old-space-size=4096 dungeons/vertical/${NAME}/${NAME}.verify.mjs
 
-# 4. Cleanup
+# 4. (Optional) Run the SQL for human inspection
+duckdb -c ".read dungeons/vertical/${NAME}/${NAME}.sql"
+
+# 5. Cleanup
 rm -f data/verify-${NAME}-*
 ```
 

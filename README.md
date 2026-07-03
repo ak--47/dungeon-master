@@ -51,9 +51,9 @@ const result = await DUNGEON_MASTER('./dungeons/technical/simple-schema.json');
 
 // run multiple dungeons
 const results = await DUNGEON_MASTER([
-  './dungeons/vertical/gaming.js',
-  './dungeons/vertical/media.js',
-  './dungeons/vertical/food-delivery.js'
+  './dungeons/vertical/gaming/gaming.js',
+  './dungeons/vertical/media/media.js',
+  './dungeons/vertical/food-delivery/food-delivery.js'
 ]);
 
 // pass raw javascript as a string
@@ -70,7 +70,7 @@ const result = await DUNGEON_MASTER(`
 `);
 
 // override any config when loading from files
-const result = await DUNGEON_MASTER('./dungeons/vertical/fintech.js', {
+const result = await DUNGEON_MASTER('./dungeons/vertical/fintech/fintech.js', {
   numUsers: 100,       // shrink for testing
   writeToDisk: true,
   verbose: true
@@ -97,7 +97,7 @@ a dungeon is a javascript file that exports a configuration object. it defines y
 
 see `dungeons/vertical/` for customer-facing story dungeons (18 events, 8 hooks) and `dungeons/technical/` for feature-testing dungeons (mirrors, groups, scale, anonymous users).
 
-every vertical dungeon ships with a verification proof at `verification/verticals/<name>.{verify.mjs,sql}` — a CI-runnable assertion that the dungeon's documented hooks actually appear in the generated data at full fidelity. 20 dungeons, 107 hooks, 107 checks. see [`verification/verticals/README.md`](verification/verticals/README.md).
+every vertical dungeon ships with a verification proof at `dungeons/vertical/<name>/<name>.{verify.mjs,sql}` — a CI-runnable assertion that the dungeon's documented hooks actually appear in the generated data at full fidelity. 20 dungeons, 107 hooks, 107 checks. see [`dungeons/vertical/README.md`](dungeons/vertical/README.md).
 
 ```javascript
 // dungeons/my-app.js
@@ -173,7 +173,7 @@ import DUNGEON_MASTER, {
 `dungeonToJSON` accepts a config object, a file path, raw JS source, or an array of paths, and returns the `{ schema, hooks, timestamp, version }` wrapper format. it round-trips with `parseJSONDungeon`:
 
 ```javascript
-const json   = await dungeonToJSON('./dungeons/vertical/ecommerce.js');  // creds stripped by default
+const json   = await dungeonToJSON('./dungeons/vertical/ecommerce/ecommerce.js');  // creds stripped by default
 const config = parseJSONDungeon(json);                                   // back to a runnable dungeon
 ```
 

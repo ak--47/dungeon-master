@@ -62,7 +62,7 @@ Before writing any code, scan:
   with full JSDoc. **Treat this as the source of truth.**
 - `lib/utils/utils.js` — `pickAWinner`, `weighNumRange`, `initChance`, `exhaust`,
   `takeSome` for property value distributions
-- `dungeons/vertical/sass.js` — B2B reference dungeon with full identity model
+- `dungeons/vertical/sass/sass.js` — B2B reference dungeon with full identity model
 - `dungeons/user/my-buddy/my-buddy.js` — consumer-app reference (gitignored)
 - `dungeons/technical/identity-model-verify.js` — minimal identity-model fixture
 
@@ -160,7 +160,7 @@ KNOBS (extracted tunable constants — timing, thresholds, multipliers),
 HOOK STATE (module-level Maps/Sets used across users), and HELPER FUNCTIONS
 (per-type handlers like `handleEventHooks`, `handleEverythingHooks`).
 `config.hook` becomes a thin dispatcher delegating to the helpers. See
-`dungeons/vertical/ecommerce.js` as the canonical exemplar.
+`dungeons/vertical/ecommerce/ecommerce.js` as the canonical exemplar.
 
 ## Required components
 

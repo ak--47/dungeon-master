@@ -191,7 +191,7 @@ grep "^DUNGEON:" research/hook-query-log.txt           # list of dungeons querie
 
 When verifying a dungeon in `dungeons/user/`, write a standalone DuckDB SQL file alongside the dungeon in its folder at `dungeons/user/<name>/<name>-verifications.sql`. This file is the reproducible verification artifact — anyone can re-run it against fresh data.
 
-Follow the format in `verification/verticals/`:
+Follow the format in `dungeons/vertical/<name>/`:
 
 ```sql
 -- ============================================================================
@@ -211,4 +211,4 @@ Follow the format in `verification/verticals/`:
 
 Each query block includes the pattern description, observed result, and verdict as SQL comments. This makes the file self-documenting and grep-friendly.
 
-**This step is mandatory for user dungeons.** Vertical dungeons already have their SQL in `verification/verticals/`. User dungeons keep theirs co-located with the dungeon file.
+**This step is mandatory for user dungeons.** Vertical dungeons already have their SQL co-located at `dungeons/vertical/<name>/<name>.sql`. User dungeons keep theirs co-located with the dungeon file.
