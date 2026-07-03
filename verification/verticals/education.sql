@@ -18,14 +18,14 @@
 SELECT account_type, COUNT(*) AS n,
   ROUND(AVG(courses_created), 1) AS avg_courses,
   ROUND(AVG(study_hours_per_week), 1) AS avg_study_hrs
-FROM read_json_auto('data/verify-education-USERS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-education-USERS*.json', sample_size=-1, union_by_name=true)
 GROUP BY account_type ORDER BY n DESC;
 
 
 -- Hook 2: DEADLINE CRAMMING — Sun/Mon assignments late
 SELECT EXTRACT(DOW FROM time::TIMESTAMP) AS dow, COUNT(*) AS n,
   ROUND(SUM(CASE WHEN is_late THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS pct_late
-FROM read_json_auto('data/verify-education-EVENTS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-education-EVENTS*.json', sample_size=-1, union_by_name=true)
 WHERE event = 'assignment submitted'
 GROUP BY dow ORDER BY dow;
 
@@ -33,12 +33,12 @@ GROUP BY dow ORDER BY dow;
 -- Hook 3: NOTES MAGIC NUMBER — sweet 5-8 → +30% quiz score
 WITH per_user AS (
   SELECT user_id, COUNT(*) FILTER (WHERE event = 'lecture completed' AND notes_taken) AS notes
-  FROM read_json_auto('data/verify-education-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-education-EVENTS*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 ),
 quizzes AS (
   SELECT e.user_id, e.score_percent
-  FROM read_json_auto('data/verify-education-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-education-EVENTS*.json', sample_size=-1, union_by_name=true) e
   WHERE e.event = 'quiz completed' AND e.score_percent IS NOT NULL
 )
 SELECT CASE WHEN p.notes BETWEEN 5 AND 8 THEN 'sweet' WHEN p.notes < 5 THEN 'lower' ELSE 'over' END AS bucket,
@@ -51,10 +51,10 @@ GROUP BY 1 ORDER BY 1;
 WITH per_user AS (
   SELECT user_id,
     MIN(time::TIMESTAMP) AS t0,
-    BOOL_OR(event = 'study group joined' AND time::TIMESTAMP < (SELECT MIN(time::TIMESTAMP) + INTERVAL '10 days' FROM read_json_auto('data/verify-education-EVENTS.json', sample_size=-1, union_by_name=true) e2 WHERE e2.user_id = e.user_id)) AS early_join,
+    BOOL_OR(event = 'study group joined' AND time::TIMESTAMP < (SELECT MIN(time::TIMESTAMP) + INTERVAL '10 days' FROM read_json_auto('data/verify-education-EVENTS*.json', sample_size=-1, union_by_name=true) e2 WHERE e2.user_id = e.user_id)) AS early_join,
     BOOL_OR(event = 'quiz completed' AND score_percent < 60) AS low_quiz,
     COUNT(*) AS n
-  FROM read_json_auto('data/verify-education-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-education-EVENTS*.json', sample_size=-1, union_by_name=true) e
   GROUP BY user_id
 )
 SELECT
@@ -67,7 +67,7 @@ FROM per_user GROUP BY 1 ORDER BY 1;
 
 -- Hook 5: HINT DEPENDENCY
 SELECT hint_used, difficulty, COUNT(*) AS n
-FROM read_json_auto('data/verify-education-EVENTS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-education-EVENTS*.json', sample_size=-1, union_by_name=true)
 WHERE event = 'practice problem solved'
 GROUP BY hint_used, difficulty ORDER BY hint_used, difficulty;
 
@@ -76,7 +76,7 @@ GROUP BY hint_used, difficulty ORDER BY hint_used, difficulty;
 WITH per_day AS (
   SELECT FLOOR(EXTRACT(EPOCH FROM (time::TIMESTAMP - TIMESTAMP '2026-01-01')) / 86400) AS day_n,
     COUNT(*) AS n
-  FROM read_json_auto('data/verify-education-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-education-EVENTS*.json', sample_size=-1, union_by_name=true)
   WHERE event IN ('quiz started', 'quiz completed', 'assignment submitted')
   GROUP BY day_n
 )
@@ -92,10 +92,10 @@ WITH per_user AS (
     MIN(time) FILTER (WHERE event = 'lecture completed') AS t2,
     MIN(time) FILTER (WHERE event = 'quiz completed') AS t3,
     MIN(time) FILTER (WHERE event = 'certificate earned') AS t4
-  FROM read_json_auto('data/verify-education-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-education-EVENTS*.json', sample_size=-1, union_by_name=true) e
   GROUP BY e.user_id
 ),
-users AS (SELECT distinct_id AS user_id, subscription_status FROM read_json_auto('data/verify-education-USERS.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id, subscription_status FROM read_json_auto('data/verify-education-USERS*.json', sample_size=-1, union_by_name=true))
 SELECT u.subscription_status,
   COUNT(*) AS users,
   ROUND(COUNT(*) FILTER (WHERE t4 > t3 AND t3 > t2 AND t2 > t1) * 100.0 / COUNT(*), 1) AS pct_complete
@@ -106,12 +106,12 @@ GROUP BY u.subscription_status ORDER BY pct_complete DESC;
 -- Hook 8: PLAYBACK SPEED CORRELATION
 WITH per_user AS (
   SELECT user_id, COUNT(*) FILTER (WHERE event = 'lecture completed' AND playback_speed >= 2.0) AS speed_n
-  FROM read_json_auto('data/verify-education-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-education-EVENTS*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 ),
 quizzes AS (
   SELECT e.user_id, e.score_percent
-  FROM read_json_auto('data/verify-education-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-education-EVENTS*.json', sample_size=-1, union_by_name=true) e
   WHERE e.event = 'quiz completed' AND e.score_percent IS NOT NULL
 )
 SELECT CASE WHEN p.speed_n >= 3 THEN 'speed_learner' ELSE 'thorough' END AS bucket,
@@ -125,10 +125,10 @@ WITH per_user AS (
   SELECT e.user_id,
     MIN(time) FILTER (WHERE event = 'course enrolled') AS t_enroll,
     MIN(time) FILTER (WHERE event = 'certificate earned') AS t_cert
-  FROM read_json_auto('data/verify-education-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-education-EVENTS*.json', sample_size=-1, union_by_name=true) e
   GROUP BY e.user_id
 ),
-users AS (SELECT distinct_id AS user_id, subscription_status FROM read_json_auto('data/verify-education-USERS.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id, subscription_status FROM read_json_auto('data/verify-education-USERS*.json', sample_size=-1, union_by_name=true))
 SELECT u.subscription_status,
   COUNT(*) AS converters,
   ROUND(MEDIAN(EXTRACT(EPOCH FROM (t_cert::TIMESTAMP - t_enroll::TIMESTAMP)) / 86400), 1) AS median_ttc_days
@@ -140,7 +140,7 @@ GROUP BY u.subscription_status ORDER BY median_ttc_days;
 -- Hook 10: SOCIAL LEARNING EXPERIMENT — AI Study Buddy variant
 WITH variant_users AS (
   SELECT DISTINCT user_id, "Variant name" AS variant
-  FROM read_json_auto('data/verify-education-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-education-EVENTS*.json', sample_size=-1, union_by_name=true)
   WHERE event = '$experiment_started'
 ),
 per_user AS (
@@ -148,7 +148,7 @@ per_user AS (
     MIN(time) FILTER (WHERE event = 'discussion posted') AS t1,
     MIN(time) FILTER (WHERE event = 'study group joined') AS t2,
     MIN(time) FILTER (WHERE event = 'resource downloaded') AS t3
-  FROM read_json_auto('data/verify-education-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-education-EVENTS*.json', sample_size=-1, union_by_name=true) e
   GROUP BY e.user_id
 )
 SELECT v.variant,

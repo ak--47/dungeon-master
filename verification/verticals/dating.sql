@@ -16,8 +16,8 @@
 --   profiles to all emulator checks.
 --
 -- Output is sharded; queries use glob:
---   data/verify-dating-EVENTS-part-*.json
---   data/verify-dating-USERS-part-*.json
+--   data/verify-dating-EVENTS*.json
+--   data/verify-dating-USERS*.json
 -- ============================================================
 
 
@@ -27,12 +27,12 @@
 -- Mixpanel: Insights → match received, Total per user, cohort filter on photo uploaded count
 WITH user_photos AS (
   SELECT user_id, COUNT(*) FILTER (WHERE event = 'photo uploaded') AS pc
-  FROM read_json_auto('data/verify-dating-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-dating-EVENTS*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 ),
 user_matches AS (
   SELECT user_id, COUNT(*) AS mc
-  FROM read_json_auto('data/verify-dating-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-dating-EVENTS*.json', sample_size=-1, union_by_name=true)
   WHERE event = 'match received'
   GROUP BY user_id
 )
@@ -49,12 +49,12 @@ GROUP BY 1 ORDER BY 1;
 -- Mixpanel: Insights → match received, Avg of match_score, cohort filter on photo count
 WITH user_photos AS (
   SELECT user_id, COUNT(*) FILTER (WHERE event = 'photo uploaded') AS pc
-  FROM read_json_auto('data/verify-dating-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-dating-EVENTS*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 ),
 matches AS (
   SELECT e.user_id, e.match_score
-  FROM read_json_auto('data/verify-dating-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-dating-EVENTS*.json', sample_size=-1, union_by_name=true) e
   WHERE e.event = 'match received' AND e.match_score IS NOT NULL
 )
 SELECT
@@ -69,7 +69,7 @@ GROUP BY 1 ORDER BY 1;
 -- Expected: Sunday (DOW 0) ~1.5-2x other days
 -- Mixpanel: Insights → swipe right, Total, breakdown by day of week
 SELECT EXTRACT(DOW FROM time::TIMESTAMP) AS dow, COUNT(*) AS swipes
-FROM read_json_auto('data/verify-dating-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-dating-EVENTS*.json', sample_size=-1, union_by_name=true)
 WHERE event = 'swipe right'
 GROUP BY dow ORDER BY dow;
 
@@ -80,12 +80,12 @@ GROUP BY dow ORDER BY dow;
 -- Mixpanel: Funnels → swipe right (filter is_super_like=true) → match received vs same with =false
 WITH swipes AS (
   SELECT user_id, time::TIMESTAMP AS swipe_time, is_super_like
-  FROM read_json_auto('data/verify-dating-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-dating-EVENTS*.json', sample_size=-1, union_by_name=true)
   WHERE event = 'swipe right'
 ),
 matches AS (
   SELECT user_id, time::TIMESTAMP AS match_time
-  FROM read_json_auto('data/verify-dating-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-dating-EVENTS*.json', sample_size=-1, union_by_name=true)
   WHERE event = 'match received'
 )
 SELECT s.is_super_like,
@@ -103,11 +103,11 @@ GROUP BY s.is_super_like ORDER BY s.is_super_like;
 -- Mixpanel: Insights → match received, Total per user, breakdown by subscription user prop
 WITH user_matches AS (
   SELECT user_id, COUNT(*) AS mc
-  FROM read_json_auto('data/verify-dating-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-dating-EVENTS*.json', sample_size=-1, union_by_name=true)
   WHERE event = 'match received'
   GROUP BY user_id
 ),
-users AS (SELECT distinct_id AS user_id, subscription FROM read_json_auto('data/verify-dating-USERS-part-*.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id, subscription FROM read_json_auto('data/verify-dating-USERS*.json', sample_size=-1, union_by_name=true))
 SELECT u.subscription, COUNT(*) AS users, ROUND(AVG(COALESCE(m.mc, 0)), 2) AS avg_matches
 FROM users u LEFT JOIN user_matches m USING (user_id)
 GROUP BY u.subscription ORDER BY avg_matches DESC;
@@ -119,14 +119,14 @@ GROUP BY u.subscription ORDER BY avg_matches DESC;
 -- Mixpanel: Retention → match received → any active event, breakdown by behavioral cohort
 WITH first_match AS (
   SELECT user_id, MIN(time::TIMESTAMP) AS m0
-  FROM read_json_auto('data/verify-dating-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-dating-EVENTS*.json', sample_size=-1, union_by_name=true)
   WHERE event = 'match received'
   GROUP BY user_id
 ),
 timely_users AS (
   SELECT DISTINCT m.user_id
   FROM first_match m
-  JOIN read_json_auto('data/verify-dating-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e
+  JOIN read_json_auto('data/verify-dating-EVENTS*.json', sample_size=-1, union_by_name=true) e
     ON e.user_id = m.user_id
   WHERE e.event = 'message sent' AND e.time::TIMESTAMP > m.m0
     AND e.time::TIMESTAMP < m.m0 + INTERVAL '48 hours'
@@ -134,7 +134,7 @@ timely_users AS (
 post_match_count AS (
   SELECT e.user_id, COUNT(*) AS post_n
   FROM first_match m
-  JOIN read_json_auto('data/verify-dating-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e USING (user_id)
+  JOIN read_json_auto('data/verify-dating-EVENTS*.json', sample_size=-1, union_by_name=true) e USING (user_id)
   WHERE e.time::TIMESTAMP > m.m0
   GROUP BY e.user_id
 )
@@ -153,7 +153,7 @@ WITH user_signals AS (
     BOOL_OR(event = 'bio updated') AS has_bio,
     COUNT(*) FILTER (WHERE event = 'prompt answered') AS prompt_n,
     COUNT(*) FILTER (WHERE event = 'date scheduled') AS date_n
-  FROM read_json_auto('data/verify-dating-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-dating-EVENTS*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 )
 SELECT
@@ -167,7 +167,7 @@ FROM user_signals GROUP BY 1 ORDER BY 1 DESC;
 -- Expected: days 58-63 (V-Day window) avg ~1.5-3x baseline daily signup volume
 -- Mixpanel: Insights → profile created, Total, line by day
 SELECT DATE_TRUNC('day', time::TIMESTAMP) AS day, COUNT(*) AS signups
-FROM read_json_auto('data/verify-dating-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-dating-EVENTS*.json', sample_size=-1, union_by_name=true)
 WHERE event = 'profile created'
 GROUP BY day ORDER BY day;
 
@@ -178,20 +178,20 @@ GROUP BY day ORDER BY day;
 -- Mixpanel: Retention → first activity, breakdown by milestone cohort
 WITH user_first AS (
   SELECT user_id, MIN(time::TIMESTAMP) AS t0
-  FROM read_json_auto('data/verify-dating-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-dating-EVENTS*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 ),
 milestones AS (
   SELECT DISTINCT e.user_id
   FROM user_first u
-  JOIN read_json_auto('data/verify-dating-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e USING (user_id)
+  JOIN read_json_auto('data/verify-dating-EVENTS*.json', sample_size=-1, union_by_name=true) e USING (user_id)
   WHERE e.event IN ('phone number exchanged', 'date scheduled')
     AND e.time::TIMESTAMP < u.t0 + INTERVAL '14 days'
 ),
 post_d30 AS (
   SELECT e.user_id, COUNT(*) AS n
   FROM user_first u
-  JOIN read_json_auto('data/verify-dating-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e USING (user_id)
+  JOIN read_json_auto('data/verify-dating-EVENTS*.json', sample_size=-1, union_by_name=true) e USING (user_id)
   WHERE e.time::TIMESTAMP > u.t0 + INTERVAL '30 days'
   GROUP BY e.user_id
 )
@@ -215,10 +215,10 @@ WITH per_user AS (
   SELECT e.user_id,
     MIN(time) FILTER (WHERE event = 'swipe right') AS t_swipe,
     MIN(time) FILTER (WHERE event = 'message sent') AS t_msg
-  FROM read_json_auto('data/verify-dating-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-dating-EVENTS*.json', sample_size=-1, union_by_name=true) e
   GROUP BY e.user_id
 ),
-users AS (SELECT distinct_id AS user_id, subscription FROM read_json_auto('data/verify-dating-USERS-part-*.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id, subscription FROM read_json_auto('data/verify-dating-USERS*.json', sample_size=-1, union_by_name=true))
 SELECT u.subscription,
   COUNT(*) FILTER (WHERE t_msg > t_swipe) AS converters,
   ROUND(MEDIAN(EXTRACT(EPOCH FROM (t_msg::TIMESTAMP - t_swipe::TIMESTAMP)) / 60), 1) AS median_ttc_min
@@ -236,10 +236,10 @@ WITH per_user AS (
     MIN(time) FILTER (WHERE event = 'message sent') AS t_msg,
     MIN(time) FILTER (WHERE event = 'phone number exchanged') AS t_phone,
     MIN(time) FILTER (WHERE event = 'date scheduled') AS t_date
-  FROM read_json_auto('data/verify-dating-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-dating-EVENTS*.json', sample_size=-1, union_by_name=true) e
   GROUP BY e.user_id
 ),
-users AS (SELECT distinct_id AS user_id, age_range FROM read_json_auto('data/verify-dating-USERS-part-*.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id, age_range FROM read_json_auto('data/verify-dating-USERS*.json', sample_size=-1, union_by_name=true))
 SELECT u.age_range,
   COUNT(*) AS users,
   COUNT(*) FILTER (WHERE t_date > t_phone AND t_phone > t_msg) AS conversions,

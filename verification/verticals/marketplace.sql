@@ -13,7 +13,7 @@
 SELECT
   CASE WHEN time::TIMESTAMP > TIMESTAMP '2026-02-15' THEN 'post_d45' ELSE 'pre_d45' END AS bucket,
   COUNT(*) AS n, ROUND(AVG(listing_fee), 1) AS avg_fee
-FROM read_json_auto('data/verify-marketplace-EVENTS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-marketplace-EVENTS*.json', sample_size=-1, union_by_name=true)
 WHERE event = 'listing created' AND listing_fee IS NOT NULL
 GROUP BY 1 ORDER BY 1;
 
@@ -22,7 +22,7 @@ GROUP BY 1 ORDER BY 1;
 SELECT
   CASE WHEN EXTRACT(DOW FROM time::TIMESTAMP) IN (0, 6) THEN 'weekend' ELSE 'weekday' END AS bucket,
   COUNT(*) AS n, ROUND(AVG(total_amount), 0) AS avg_amount
-FROM read_json_auto('data/verify-marketplace-EVENTS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-marketplace-EVENTS*.json', sample_size=-1, union_by_name=true)
 WHERE event = 'purchase completed' AND total_amount IS NOT NULL
 GROUP BY 1 ORDER BY 1;
 
@@ -30,10 +30,10 @@ GROUP BY 1 ORDER BY 1;
 -- Hook 3: POWER SELLER PURCHASES
 WITH per_user AS (
   SELECT user_id, COUNT(*) FILTER (WHERE event = 'purchase completed') AS purchases
-  FROM read_json_auto('data/verify-marketplace-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-marketplace-EVENTS*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 ),
-users AS (SELECT distinct_id AS user_id, segment FROM read_json_auto('data/verify-marketplace-USERS.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id, segment FROM read_json_auto('data/verify-marketplace-USERS*.json', sample_size=-1, union_by_name=true))
 SELECT u.segment, COUNT(*) AS users, ROUND(AVG(p.purchases), 2) AS avg_purchases
 FROM users u LEFT JOIN per_user p USING (user_id)
 GROUP BY u.segment ORDER BY avg_purchases DESC;
@@ -44,7 +44,7 @@ WITH per_user AS (
   SELECT user_id,
     BOOL_OR(event = 'item searched' AND category = 'electronics') AS has_elec,
     COUNT(*) FILTER (WHERE event = 'purchase completed') AS purchases
-  FROM read_json_auto('data/verify-marketplace-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-marketplace-EVENTS*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 )
 SELECT CASE WHEN has_elec THEN 'electronics' ELSE 'other' END AS bucket,
@@ -55,7 +55,7 @@ FROM per_user GROUP BY 1 ORDER BY 1 DESC;
 -- Hook 5: FAST RESPONDERS — hash-based cohort
 WITH per_user AS (
   SELECT user_id, COUNT(*) FILTER (WHERE event = 'offer accepted') AS accepts
-  FROM read_json_auto('data/verify-marketplace-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-marketplace-EVENTS*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 )
 SELECT
@@ -67,12 +67,12 @@ FROM per_user GROUP BY 1 ORDER BY 1;
 -- Hook 6: NEW SELLER CHURN — per-user post14/pre14 ratio
 WITH per_user AS (
   SELECT user_id, MIN(time::TIMESTAMP) AS t0,
-    COUNT(*) FILTER (WHERE time::TIMESTAMP <= (SELECT MIN(time::TIMESTAMP) + INTERVAL '14 days' FROM read_json_auto('data/verify-marketplace-EVENTS.json', sample_size=-1, union_by_name=true) e2 WHERE e2.user_id = e.user_id)) AS pre,
-    COUNT(*) FILTER (WHERE time::TIMESTAMP > (SELECT MIN(time::TIMESTAMP) + INTERVAL '14 days' FROM read_json_auto('data/verify-marketplace-EVENTS.json', sample_size=-1, union_by_name=true) e2 WHERE e2.user_id = e.user_id)) AS post
-  FROM read_json_auto('data/verify-marketplace-EVENTS.json', sample_size=-1, union_by_name=true) e
+    COUNT(*) FILTER (WHERE time::TIMESTAMP <= (SELECT MIN(time::TIMESTAMP) + INTERVAL '14 days' FROM read_json_auto('data/verify-marketplace-EVENTS*.json', sample_size=-1, union_by_name=true) e2 WHERE e2.user_id = e.user_id)) AS pre,
+    COUNT(*) FILTER (WHERE time::TIMESTAMP > (SELECT MIN(time::TIMESTAMP) + INTERVAL '14 days' FROM read_json_auto('data/verify-marketplace-EVENTS*.json', sample_size=-1, union_by_name=true) e2 WHERE e2.user_id = e.user_id)) AS post
+  FROM read_json_auto('data/verify-marketplace-EVENTS*.json', sample_size=-1, union_by_name=true) e
   GROUP BY user_id
 ),
-users AS (SELECT distinct_id AS user_id, segment FROM read_json_auto('data/verify-marketplace-USERS.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id, segment FROM read_json_auto('data/verify-marketplace-USERS*.json', sample_size=-1, union_by_name=true))
 SELECT u.segment, COUNT(*) AS users, ROUND(AVG(post::DOUBLE / NULLIF(pre, 0)), 2) AS avg_post_pre
 FROM per_user p JOIN users u USING (user_id)
 WHERE pre > 0
@@ -83,7 +83,7 @@ GROUP BY u.segment ORDER BY avg_post_pre;
 SELECT segment, COUNT(*) AS users,
   ROUND(AVG(total_transactions), 0) AS avg_txns,
   ROUND(AVG(seller_rating), 2) AS avg_rating
-FROM read_json_auto('data/verify-marketplace-USERS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-marketplace-USERS*.json', sample_size=-1, union_by_name=true)
 GROUP BY segment ORDER BY avg_txns DESC;
 
 
@@ -94,10 +94,10 @@ WITH per_user AS (
     MIN(time) FILTER (WHERE event = 'item viewed') AS t2,
     MIN(time) FILTER (WHERE event = 'add to cart') AS t3,
     MIN(time) FILTER (WHERE event = 'purchase completed') AS t4
-  FROM read_json_auto('data/verify-marketplace-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-marketplace-EVENTS*.json', sample_size=-1, union_by_name=true) e
   GROUP BY e.user_id
 ),
-users AS (SELECT distinct_id AS user_id, segment FROM read_json_auto('data/verify-marketplace-USERS.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id, segment FROM read_json_auto('data/verify-marketplace-USERS*.json', sample_size=-1, union_by_name=true))
 SELECT u.segment, COUNT(*) AS users,
   ROUND(COUNT(*) FILTER (WHERE t4 > t3 AND t3 > t2 AND t2 > t1) * 100.0 / COUNT(*), 1) AS pct_complete
 FROM per_user p JOIN users u USING (user_id)
@@ -113,19 +113,19 @@ WITH per_user AS (
   SELECT e.user_id,
     MIN(time) FILTER (WHERE event = 'item viewed') AS t_view,
     MIN(time) FILTER (WHERE event = 'offer received') AS t_offer
-  FROM read_json_auto('data/verify-marketplace-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-marketplace-EVENTS*.json', sample_size=-1, union_by_name=true) e
   GROUP BY e.user_id
 ),
 msgs_between AS (
   SELECT p.user_id, COUNT(*) AS msgs
   FROM per_user p
-  JOIN read_json_auto('data/verify-marketplace-EVENTS.json', sample_size=-1, union_by_name=true) e USING (user_id)
+  JOIN read_json_auto('data/verify-marketplace-EVENTS*.json', sample_size=-1, union_by_name=true) e USING (user_id)
   WHERE e.event = 'message sent' AND e.time > p.t_view AND e.time < p.t_offer
   GROUP BY p.user_id
 ),
 offers AS (
   SELECT e.user_id, e.offer_amount
-  FROM read_json_auto('data/verify-marketplace-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-marketplace-EVENTS*.json', sample_size=-1, union_by_name=true) e
   WHERE e.event = 'offer received' AND e.offer_amount IS NOT NULL
 )
 SELECT CASE WHEN m.msgs BETWEEN 2 AND 5 THEN 'sweet' WHEN m.msgs IS NULL OR m.msgs < 2 THEN 'lower' ELSE 'over' END AS bucket,

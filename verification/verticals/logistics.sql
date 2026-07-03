@@ -20,7 +20,7 @@
 SELECT
   CASE WHEN EXTRACT(DAY FROM time::TIMESTAMP) >= 28 THEN 'month_end' ELSE 'mid_month' END AS bucket,
   COUNT(*) AS n, ROUND(AVG(report_pages), 0) AS avg_pages
-FROM read_json_auto('data/verify-logistics-EVENTS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-logistics-EVENTS*.json', sample_size=-1, union_by_name=true)
 WHERE event = 'report generated' AND report_pages IS NOT NULL
 GROUP BY 1 ORDER BY 1;
 
@@ -30,7 +30,7 @@ GROUP BY 1 ORDER BY 1;
 -- Expected: urgent priority ~1.5x unit_cost vs standard
 -- Mixpanel: Insights → purchase order created, Avg unit_cost, breakdown by priority
 SELECT priority, COUNT(*) AS n, ROUND(AVG(unit_cost), 0) AS avg_cost
-FROM read_json_auto('data/verify-logistics-EVENTS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-logistics-EVENTS*.json', sample_size=-1, union_by_name=true)
 WHERE event = 'purchase order created' AND unit_cost IS NOT NULL
 GROUP BY priority ORDER BY avg_cost DESC;
 
@@ -43,8 +43,8 @@ WITH per_tier AS (
   SELECT u.company_tier,
     SUM(CASE WHEN e.event = 'stockout alert' THEN 1 ELSE 0 END) AS stockouts,
     SUM(CASE WHEN e.event = 'inventory checked' THEN 1 ELSE 0 END) AS checks
-  FROM read_json_auto('data/verify-logistics-EVENTS.json', sample_size=-1, union_by_name=true) e
-  JOIN read_json_auto('data/verify-logistics-USERS.json', sample_size=-1, union_by_name=true) u
+  FROM read_json_auto('data/verify-logistics-EVENTS*.json', sample_size=-1, union_by_name=true) e
+  JOIN read_json_auto('data/verify-logistics-USERS*.json', sample_size=-1, union_by_name=true) u
     ON e.user_id = u.distinct_id
   GROUP BY u.company_tier
 )
@@ -60,7 +60,7 @@ WITH per_user AS (
   SELECT user_id,
     COUNT(*) FILTER (WHERE event = 'integration connected') AS ic,
     COUNT(*) FILTER (WHERE event = 'report generated') AS rc
-  FROM read_json_auto('data/verify-logistics-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-logistics-EVENTS*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 )
 SELECT CASE WHEN ic >= 3 THEN 'big' ELSE 'rest' END AS bucket,
@@ -75,7 +75,7 @@ FROM per_user GROUP BY 1 ORDER BY 1 DESC;
 WITH alerts AS (
   SELECT user_id, time, response_time_hours,
     ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY time) AS rn
-  FROM read_json_auto('data/verify-logistics-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-logistics-EVENTS*.json', sample_size=-1, union_by_name=true)
   WHERE event = 'stockout alert' AND response_time_hours IS NOT NULL
 ),
 heavy_users AS (
@@ -93,10 +93,10 @@ GROUP BY 1 ORDER BY 1;
 -- Mixpanel: Retention → account created → any event, breakdown by company_tier
 WITH user_counts AS (
   SELECT user_id, COUNT(*) AS n
-  FROM read_json_auto('data/verify-logistics-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-logistics-EVENTS*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 ),
-users AS (SELECT distinct_id AS user_id, company_tier FROM read_json_auto('data/verify-logistics-USERS.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id, company_tier FROM read_json_auto('data/verify-logistics-USERS*.json', sample_size=-1, union_by_name=true))
 SELECT u.company_tier, COUNT(*) AS users, ROUND(AVG(COALESCE(c.n, 0)), 1) AS avg_events
 FROM users u LEFT JOIN user_counts c USING (user_id)
 GROUP BY u.company_tier ORDER BY avg_events;
@@ -109,7 +109,7 @@ GROUP BY u.company_tier ORDER BY avg_events;
 SELECT company_tier, COUNT(*) AS users,
   ROUND(AVG(warehouse_count), 1) AS avg_warehouses,
   ROUND(AVG(employee_count), 0) AS avg_employees
-FROM read_json_auto('data/verify-logistics-USERS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-logistics-USERS*.json', sample_size=-1, union_by_name=true)
 GROUP BY company_tier ORDER BY avg_warehouses DESC;
 
 
@@ -122,10 +122,10 @@ WITH per_user AS (
     MIN(time) FILTER (WHERE event = 'integration connected') AS t1,
     MIN(time) FILTER (WHERE event = 'report generated') AS t2,
     MIN(time) FILTER (WHERE event = 'alert configured') AS t3
-  FROM read_json_auto('data/verify-logistics-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-logistics-EVENTS*.json', sample_size=-1, union_by_name=true) e
   GROUP BY e.user_id
 ),
-users AS (SELECT distinct_id AS user_id, company_tier FROM read_json_auto('data/verify-logistics-USERS.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id, company_tier FROM read_json_auto('data/verify-logistics-USERS*.json', sample_size=-1, union_by_name=true))
 SELECT u.company_tier,
   COUNT(*) AS users,
   COUNT(*) FILTER (WHERE t3 > t2 AND t2 > t1) AS converters,
@@ -141,12 +141,12 @@ GROUP BY u.company_tier ORDER BY pct DESC;
 -- Mixpanel: Insights → purchase order created, Avg quantity, behavioral cohorts on inventory checked count
 WITH per_user AS (
   SELECT user_id, COUNT(*) FILTER (WHERE event = 'inventory checked') AS ic
-  FROM read_json_auto('data/verify-logistics-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-logistics-EVENTS*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 ),
 pos AS (
   SELECT e.user_id, e.quantity
-  FROM read_json_auto('data/verify-logistics-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-logistics-EVENTS*.json', sample_size=-1, union_by_name=true) e
   WHERE e.event = 'purchase order created' AND e.quantity IS NOT NULL
 )
 SELECT CASE WHEN p.ic BETWEEN 5 AND 15 THEN 'sweet' WHEN p.ic < 5 THEN 'lower' ELSE 'over' END AS bucket,
@@ -161,10 +161,10 @@ WITH per_user AS (
   SELECT e.user_id,
     MIN(time) FILTER (WHERE event = 'account created') AS t1,
     MIN(time) FILTER (WHERE event = 'report generated') AS t2
-  FROM read_json_auto('data/verify-logistics-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-logistics-EVENTS*.json', sample_size=-1, union_by_name=true) e
   GROUP BY e.user_id
 ),
-users AS (SELECT distinct_id AS user_id, company_tier FROM read_json_auto('data/verify-logistics-USERS.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id, company_tier FROM read_json_auto('data/verify-logistics-USERS*.json', sample_size=-1, union_by_name=true))
 SELECT u.company_tier,
   ROUND(MEDIAN(EXTRACT(EPOCH FROM (t2::TIMESTAMP - t1::TIMESTAMP)) / 3600), 2) AS median_ttc_hr
 FROM per_user p JOIN users u USING (user_id)

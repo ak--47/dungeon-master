@@ -15,7 +15,7 @@ WITH per_user AS (
   SELECT user_id,
     COUNT(*) FILTER (WHERE event = 'post created') AS pc,
     COUNT(*) FILTER (WHERE event = 'post viewed') AS pv
-  FROM read_json_auto('data/verify-social-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-social-EVENTS*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 )
 SELECT CASE WHEN pc >= 10 THEN 'viral' ELSE 'normal' END AS bucket,
@@ -28,7 +28,7 @@ WITH per_user AS (
   SELECT user_id,
     COUNT(*) FILTER (WHERE event = 'user followed') AS fc,
     COUNT(*) FILTER (WHERE event = 'post created') AS pc
-  FROM read_json_auto('data/verify-social-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-social-EVENTS*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 )
 SELECT CASE WHEN fc >= 5 THEN 'big_followers' ELSE 'small' END AS bucket,
@@ -40,7 +40,7 @@ FROM per_user GROUP BY 1 ORDER BY 1;
 SELECT
   CASE WHEN time::TIMESTAMP > TIMESTAMP '2026-02-15' THEN 'post_d45' ELSE 'pre_d45' END AS bucket,
   source, COUNT(*) AS n
-FROM read_json_auto('data/verify-social-EVENTS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-social-EVENTS*.json', sample_size=-1, union_by_name=true)
 WHERE event = 'post viewed'
 GROUP BY 1, source ORDER BY 1, n DESC;
 
@@ -50,7 +50,7 @@ WITH per_user AS (
   SELECT user_id,
     BOOL_OR(event = 'creator subscription started') AS is_sub,
     COUNT(*) FILTER (WHERE event = 'post created') AS pc
-  FROM read_json_auto('data/verify-social-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-social-EVENTS*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 )
 SELECT CASE WHEN is_sub THEN 'creator_sub' ELSE 'non' END AS bucket,
@@ -62,7 +62,7 @@ FROM per_user GROUP BY 1 ORDER BY 1;
 SELECT
   CASE WHEN EXTRACT(DOW FROM time::TIMESTAMP) IN (0, 6) THEN 'weekend' ELSE 'weekday' END AS bucket,
   COUNT(*) AS posts
-FROM read_json_auto('data/verify-social-EVENTS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-social-EVENTS*.json', sample_size=-1, union_by_name=true)
 WHERE event IN ('post created', 'story created')
 GROUP BY 1 ORDER BY 1;
 

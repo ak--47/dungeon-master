@@ -10,26 +10,26 @@
 
 -- Hook 1: ANCIENT COMPASS USERS — 1.5x quest gold
 WITH compass_users AS (
-  SELECT DISTINCT user_id FROM read_json_auto('data/verify-gaming-EVENTS.json', sample_size=-1, union_by_name=true)
+  SELECT DISTINCT user_id FROM read_json_auto('data/verify-gaming-EVENTS*.json', sample_size=-1, union_by_name=true)
   WHERE event = 'use item' AND item_type = 'Ancient Compass'
 )
 SELECT
   CASE WHEN q.user_id IN (SELECT user_id FROM compass_users) THEN 'compass' ELSE 'non' END AS bucket,
   COUNT(*) AS n, ROUND(AVG(reward_gold), 0) AS avg_gold
-FROM read_json_auto('data/verify-gaming-EVENTS.json', sample_size=-1, union_by_name=true) q
+FROM read_json_auto('data/verify-gaming-EVENTS*.json', sample_size=-1, union_by_name=true) q
 WHERE q.event = 'quest turned in' AND q.reward_gold IS NOT NULL
 GROUP BY 1 ORDER BY 1;
 
 
 -- Hook 5: LUCKY CHARM USERS — 2.5x price
 WITH lucky_users AS (
-  SELECT DISTINCT user_id FROM read_json_auto('data/verify-gaming-EVENTS.json', sample_size=-1, union_by_name=true)
+  SELECT DISTINCT user_id FROM read_json_auto('data/verify-gaming-EVENTS*.json', sample_size=-1, union_by_name=true)
   WHERE event = 'real money purchase' AND product = 'Lucky Charm Pack'
 )
 SELECT
   CASE WHEN p.user_id IN (SELECT user_id FROM lucky_users) THEN 'lucky' ELSE 'non' END AS bucket,
   COUNT(*) AS n, ROUND(AVG(price_usd), 2) AS avg_price
-FROM read_json_auto('data/verify-gaming-EVENTS.json', sample_size=-1, union_by_name=true) p
+FROM read_json_auto('data/verify-gaming-EVENTS*.json', sample_size=-1, union_by_name=true) p
 WHERE p.event = 'real money purchase' AND p.price_usd IS NOT NULL
 GROUP BY 1 ORDER BY 1;
 
@@ -39,12 +39,12 @@ WITH per_user AS (
   SELECT user_id,
     BOOL_OR(event = 'inspect') AS has_inspect,
     BOOL_OR(event = 'search for clues') AS has_search
-  FROM read_json_auto('data/verify-gaming-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-gaming-EVENTS*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 ),
 exits AS (
   SELECT user_id, COUNT(*) AS exits, COUNT(*) FILTER (WHERE completion_status = 'completed') AS completed
-  FROM read_json_auto('data/verify-gaming-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-gaming-EVENTS*.json', sample_size=-1, union_by_name=true)
   WHERE event = 'exit dungeon'
   GROUP BY user_id
 )
@@ -59,7 +59,7 @@ GROUP BY 1 ORDER BY 1 DESC;
 SELECT
   CASE WHEN time::TIMESTAMP < TIMESTAMP '2026-02-15' THEN 'pre_d45' ELSE 'post_d45' END AS bucket,
   COUNT(*) AS n
-FROM read_json_auto('data/verify-gaming-EVENTS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-gaming-EVENTS*.json', sample_size=-1, union_by_name=true)
 WHERE event = 'find treasure' AND treasure_type = 'Shadowmourne Legendary'
 GROUP BY 1 ORDER BY 1;
 
@@ -67,14 +67,14 @@ GROUP BY 1 ORDER BY 1;
 -- Hook 9: PROGRESSION SCALING — quest gold spread
 SELECT MIN(reward_gold) AS min_gold, MAX(reward_gold) AS max_gold, ROUND(AVG(reward_gold), 0) AS avg_gold,
   COUNT(*) AS quests
-FROM read_json_auto('data/verify-gaming-EVENTS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-gaming-EVENTS*.json', sample_size=-1, union_by_name=true)
 WHERE event = 'quest turned in' AND reward_gold IS NOT NULL;
 
 
 -- Hook 10: WHALE PURCHASES (hash %3 cohort)
 WITH per_user AS (
   SELECT user_id, AVG(price_usd) AS avg_p
-  FROM read_json_auto('data/verify-gaming-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-gaming-EVENTS*.json', sample_size=-1, union_by_name=true)
   WHERE event = 'real money purchase' AND price_usd IS NOT NULL
   GROUP BY user_id
 )
@@ -85,7 +85,7 @@ FROM per_user GROUP BY 1 ORDER BY 1;
 
 -- Hook 11: ARCHETYPE FROM ALIGNMENT
 SELECT archetype, COUNT(*) AS users
-FROM read_json_auto('data/verify-gaming-USERS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-gaming-USERS*.json', sample_size=-1, union_by_name=true)
 GROUP BY archetype ORDER BY users DESC;
 
 
@@ -94,10 +94,10 @@ WITH per_user AS (
   SELECT e.user_id,
     MIN(time) FILTER (WHERE event = 'combat initiated') AS t_init,
     MIN(time) FILTER (WHERE event = 'combat completed') AS t_done
-  FROM read_json_auto('data/verify-gaming-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-gaming-EVENTS*.json', sample_size=-1, union_by_name=true) e
   GROUP BY e.user_id
 ),
-users AS (SELECT distinct_id AS user_id, subscription_tier FROM read_json_auto('data/verify-gaming-USERS.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id, subscription_tier FROM read_json_auto('data/verify-gaming-USERS*.json', sample_size=-1, union_by_name=true))
 SELECT u.subscription_tier, COUNT(*) AS converters,
   ROUND(MEDIAN(EXTRACT(EPOCH FROM (t_done::TIMESTAMP - t_init::TIMESTAMP)) / 60), 1) AS median_ttc_min
 FROM per_user p JOIN users u USING (user_id)
@@ -108,12 +108,12 @@ GROUP BY u.subscription_tier ORDER BY median_ttc_min;
 -- Hook 13: COMBAT-PREP MAGIC NUMBER (sweet 3-6 prep events)
 WITH per_user AS (
   SELECT user_id, COUNT(*) FILTER (WHERE event IN ('inspect', 'search for clues')) AS prep
-  FROM read_json_auto('data/verify-gaming-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-gaming-EVENTS*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 ),
 treasures AS (
   SELECT e.user_id, e.treasure_value
-  FROM read_json_auto('data/verify-gaming-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-gaming-EVENTS*.json', sample_size=-1, union_by_name=true) e
   WHERE e.event = 'find treasure' AND e.treasure_value IS NOT NULL
 )
 SELECT CASE WHEN p.prep BETWEEN 3 AND 6 THEN 'sweet' WHEN p.prep < 3 THEN 'lower' ELSE 'over' END AS bucket,

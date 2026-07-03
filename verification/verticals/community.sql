@@ -21,7 +21,7 @@
 SELECT
   CASE WHEN EXTRACT(DOW FROM time::TIMESTAMP) IN (0, 6) THEN 'weekend' ELSE 'weekday' END AS bucket,
   COUNT(*) AS n, ROUND(AVG(word_count), 0) AS avg_word
-FROM read_json_auto('data/verify-community-EVENTS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-community-EVENTS*.json', sample_size=-1, union_by_name=true)
 WHERE event IN ('article published', 'article viewed') AND word_count IS NOT NULL
 GROUP BY 1 ORDER BY 1;
 
@@ -33,7 +33,7 @@ GROUP BY 1 ORDER BY 1;
 SELECT
   CASE WHEN time::TIMESTAMP BETWEEN TIMESTAMP '2026-02-05' AND TIMESTAMP '2026-02-20' THEN 'in_window' ELSE 'outside' END AS bucket,
   COUNT(*) AS n, ROUND(AVG(view_count), 0) AS avg_views
-FROM read_json_auto('data/verify-community-EVENTS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-community-EVENTS*.json', sample_size=-1, union_by_name=true)
 WHERE event = 'article viewed' AND content_hub = 'gaming' AND view_count IS NOT NULL
 GROUP BY 1 ORDER BY 1;
 
@@ -44,12 +44,12 @@ GROUP BY 1 ORDER BY 1;
 -- Mixpanel: Insights → upvote given, Avg of upvote_count, breakdown by behavioral cohort
 WITH per_user AS (
   SELECT user_id, COUNT(*) FILTER (WHERE event = 'article published') AS pc
-  FROM read_json_auto('data/verify-community-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-community-EVENTS*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 ),
 upvotes AS (
   SELECT e.user_id, e.upvote_count
-  FROM read_json_auto('data/verify-community-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-community-EVENTS*.json', sample_size=-1, union_by_name=true) e
   WHERE e.event = 'upvote given' AND e.upvote_count IS NOT NULL
 )
 SELECT CASE WHEN p.pc > 20 THEN 'big' ELSE 'rest' END AS bucket,
@@ -64,10 +64,10 @@ GROUP BY 1 ORDER BY 1 DESC;
 -- Mixpanel: Insights → comment posted, Total per user, breakdown by segment user prop
 WITH user_comments AS (
   SELECT user_id, COUNT(*) AS c_n
-  FROM read_json_auto('data/verify-community-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-community-EVENTS*.json', sample_size=-1, union_by_name=true)
   WHERE event = 'comment posted' GROUP BY user_id
 ),
-users AS (SELECT distinct_id AS user_id, segment FROM read_json_auto('data/verify-community-USERS.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id, segment FROM read_json_auto('data/verify-community-USERS*.json', sample_size=-1, union_by_name=true))
 SELECT u.segment, COUNT(*) AS users, ROUND(AVG(COALESCE(c.c_n, 0)), 2) AS avg_comments
 FROM users u LEFT JOIN user_comments c USING (user_id)
 GROUP BY u.segment ORDER BY avg_comments DESC;
@@ -79,12 +79,12 @@ GROUP BY u.segment ORDER BY avg_comments DESC;
 -- Mixpanel: Insights → article edited, Avg of edit_quality, breakdown by behavioral cohort
 WITH per_user AS (
   SELECT user_id, COUNT(*) AS edit_n
-  FROM read_json_auto('data/verify-community-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-community-EVENTS*.json', sample_size=-1, union_by_name=true)
   WHERE event = 'article edited' GROUP BY user_id
 ),
 edits AS (
   SELECT e.user_id, e.edit_quality
-  FROM read_json_auto('data/verify-community-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-community-EVENTS*.json', sample_size=-1, union_by_name=true) e
   WHERE e.event = 'article edited' AND e.edit_quality IS NOT NULL
 )
 SELECT CASE WHEN p.edit_n > 5 THEN 'heavy' ELSE 'light' END AS bucket,
@@ -99,10 +99,10 @@ GROUP BY 1 ORDER BY 1;
 -- Mixpanel: Insights → all events, Total per user, breakdown by segment, line by week
 WITH user_counts AS (
   SELECT user_id, COUNT(*) AS n
-  FROM read_json_auto('data/verify-community-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-community-EVENTS*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 ),
-users AS (SELECT distinct_id AS user_id, segment FROM read_json_auto('data/verify-community-USERS.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id, segment FROM read_json_auto('data/verify-community-USERS*.json', sample_size=-1, union_by_name=true))
 SELECT u.segment, COUNT(*) AS users, ROUND(AVG(COALESCE(c.n, 0)), 1) AS avg_events
 FROM users u LEFT JOIN user_counts c USING (user_id)
 GROUP BY u.segment ORDER BY avg_events;
@@ -115,7 +115,7 @@ GROUP BY u.segment ORDER BY avg_events;
 SELECT role, COUNT(*) AS users,
   ROUND(AVG(reputation_score), 1) AS avg_rep,
   ROUND(AVG(articles_created), 1) AS avg_articles
-FROM read_json_auto('data/verify-community-USERS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-community-USERS*.json', sample_size=-1, union_by_name=true)
 GROUP BY role ORDER BY avg_rep DESC;
 
 
@@ -125,7 +125,7 @@ GROUP BY role ORDER BY avg_rep DESC;
 -- Mixpanel: Funnels → article viewed → article published → comment posted, breakdown by subscription_tier
 WITH ordered AS (
   SELECT user_id, time, event
-  FROM read_json_auto('data/verify-community-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-community-EVENTS*.json', sample_size=-1, union_by_name=true)
   WHERE event IN ('article viewed', 'article published', 'comment posted')
 ),
 firsts AS (
@@ -135,7 +135,7 @@ firsts AS (
     MIN(time) FILTER (WHERE event = 'comment posted') AS t3
   FROM ordered GROUP BY user_id
 ),
-users AS (SELECT distinct_id AS user_id, subscription_tier FROM read_json_auto('data/verify-community-USERS.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id, subscription_tier FROM read_json_auto('data/verify-community-USERS*.json', sample_size=-1, union_by_name=true))
 SELECT u.subscription_tier,
   COUNT(*) AS users,
   COUNT(*) FILTER (WHERE t3 > t2 AND t2 > t1) AS converters,
@@ -153,10 +153,10 @@ WITH per_user AS (
   SELECT e.user_id,
     MIN(time) FILTER (WHERE event = 'article viewed') AS t_view,
     MIN(time) FILTER (WHERE event = 'comment posted') AS t_comment
-  FROM read_json_auto('data/verify-community-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-community-EVENTS*.json', sample_size=-1, union_by_name=true) e
   GROUP BY e.user_id
 ),
-users AS (SELECT distinct_id AS user_id, subscription_tier FROM read_json_auto('data/verify-community-USERS.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id, subscription_tier FROM read_json_auto('data/verify-community-USERS*.json', sample_size=-1, union_by_name=true))
 SELECT u.subscription_tier,
   COUNT(*) FILTER (WHERE t_comment > t_view) AS converters,
   ROUND(MEDIAN(EXTRACT(EPOCH FROM (t_comment::TIMESTAMP - t_view::TIMESTAMP)) / 3600), 2) AS median_ttc_hr
@@ -171,12 +171,12 @@ GROUP BY u.subscription_tier ORDER BY median_ttc_hr;
 -- Mixpanel: Insights → upvote given, Avg of upvote_count, behavioral cohorts on article published count
 WITH per_user AS (
   SELECT user_id, COUNT(*) FILTER (WHERE event = 'article published') AS ac
-  FROM read_json_auto('data/verify-community-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-community-EVENTS*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 ),
 upvotes AS (
   SELECT e.user_id, e.upvote_count
-  FROM read_json_auto('data/verify-community-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-community-EVENTS*.json', sample_size=-1, union_by_name=true) e
   WHERE e.event = 'upvote given' AND e.upvote_count IS NOT NULL
 )
 SELECT CASE WHEN p.ac BETWEEN 2 AND 5 THEN 'sweet' WHEN p.ac < 2 THEN 'lower' ELSE 'over' END AS bucket,

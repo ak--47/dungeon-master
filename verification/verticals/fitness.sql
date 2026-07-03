@@ -27,7 +27,7 @@ SELECT
   CASE WHEN EXTRACT(HOUR FROM time::TIMESTAMP) BETWEEN 5 AND 8 THEN 'morning' ELSE 'other' END AS bucket,
   COUNT(*) AS n,
   ROUND(AVG(calories_burned), 1) AS avg_cal
-FROM read_json_auto('data/verify-fitness-EVENTS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-fitness-EVENTS*.json', sample_size=-1, union_by_name=true)
 WHERE event = 'workout completed' AND calories_burned IS NOT NULL
 GROUP BY bucket
 ORDER BY bucket;
@@ -40,7 +40,7 @@ ORDER BY bucket;
 SELECT coaching_mode,
   COUNT(*) AS n,
   ROUND(AVG(duration_minutes), 2) AS avg_dur
-FROM read_json_auto('data/verify-fitness-EVENTS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-fitness-EVENTS*.json', sample_size=-1, union_by_name=true)
 WHERE event = 'workout completed'
   AND time::TIMESTAMP >= TIMESTAMP '2026-02-05'
   AND coaching_mode IS NOT NULL
@@ -54,12 +54,12 @@ ORDER BY coaching_mode;
 -- Mixpanel: Insights → achievement unlocked, Total per user, breakdown by segment user prop
 WITH achievements AS (
   SELECT user_id, COUNT(*) AS n
-  FROM read_json_auto('data/verify-fitness-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-fitness-EVENTS*.json', sample_size=-1, union_by_name=true)
   WHERE event = 'achievement unlocked'
   GROUP BY user_id
 ),
 users AS (
-  SELECT distinct_id AS user_id, segment FROM read_json_auto('data/verify-fitness-USERS.json', sample_size=-1, union_by_name=true)
+  SELECT distinct_id AS user_id, segment FROM read_json_auto('data/verify-fitness-USERS*.json', sample_size=-1, union_by_name=true)
 )
 SELECT u.segment, COUNT(*) AS users, ROUND(AVG(COALESCE(a.n, 0)), 2) AS avg_ach
 FROM users u LEFT JOIN achievements a USING (user_id)
@@ -72,15 +72,15 @@ GROUP BY u.segment ORDER BY avg_ach DESC;
 -- Mixpanel: Insights → challenge completed, Total per user, filter cohort users-who-did friend added>=3
 WITH friends AS (
   SELECT user_id, COUNT(*) AS f_n
-  FROM read_json_auto('data/verify-fitness-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-fitness-EVENTS*.json', sample_size=-1, union_by_name=true)
   WHERE event = 'friend added' GROUP BY user_id
 ),
 challenges AS (
   SELECT user_id, COUNT(*) AS c_n
-  FROM read_json_auto('data/verify-fitness-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-fitness-EVENTS*.json', sample_size=-1, union_by_name=true)
   WHERE event = 'challenge completed' GROUP BY user_id
 ),
-users AS (SELECT distinct_id AS user_id FROM read_json_auto('data/verify-fitness-USERS.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id FROM read_json_auto('data/verify-fitness-USERS*.json', sample_size=-1, union_by_name=true))
 SELECT
   CASE WHEN COALESCE(f.f_n, 0) >= 3 THEN 'social' ELSE 'non' END AS bucket,
   COUNT(*) AS users, ROUND(AVG(COALESCE(c.c_n, 0)), 3) AS avg_challenges
@@ -96,10 +96,10 @@ WITH per_user AS (
   SELECT e.user_id,
     COUNT(*) FILTER (WHERE e.time::TIMESTAMP < TIMESTAMP '2026-01-15') AS pre,
     COUNT(*) FILTER (WHERE e.time::TIMESTAMP >= TIMESTAMP '2026-01-15') AS post
-  FROM read_json_auto('data/verify-fitness-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-fitness-EVENTS*.json', sample_size=-1, union_by_name=true) e
   GROUP BY e.user_id
 ),
-users AS (SELECT distinct_id AS user_id, segment FROM read_json_auto('data/verify-fitness-USERS.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id, segment FROM read_json_auto('data/verify-fitness-USERS*.json', sample_size=-1, union_by_name=true))
 SELECT u.segment,
   ROUND(SUM(p.post)::DOUBLE / NULLIF(SUM(p.pre), 0), 3) AS post_pre_ratio
 FROM per_user p JOIN users u USING (user_id)
@@ -111,7 +111,7 @@ GROUP BY u.segment ORDER BY post_pre_ratio;
 -- Expected: coach session satisfaction_score avg ~4.5 (vs baseline ~3.0)
 -- Mixpanel: Insights → coach session, Avg of satisfaction_score
 SELECT event, COUNT(*) AS n, ROUND(AVG(satisfaction_score), 2) AS avg_sat
-FROM read_json_auto('data/verify-fitness-EVENTS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-fitness-EVENTS*.json', sample_size=-1, union_by_name=true)
 WHERE event = 'coach session' AND satisfaction_score IS NOT NULL
 GROUP BY event;
 
@@ -123,7 +123,7 @@ GROUP BY event;
 SELECT segment, COUNT(*) AS users,
   ROUND(AVG(total_workouts), 1) AS avg_workouts,
   ROUND(AVG(streak_days), 1) AS avg_streak
-FROM read_json_auto('data/verify-fitness-USERS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-fitness-USERS*.json', sample_size=-1, union_by_name=true)
 GROUP BY segment ORDER BY avg_workouts DESC;
 
 
@@ -135,7 +135,7 @@ GROUP BY segment ORDER BY avg_workouts DESC;
 WITH ordered AS (
   SELECT user_id, time, event,
     ROW_NUMBER() OVER (PARTITION BY user_id, event ORDER BY time) AS rn
-  FROM read_json_auto('data/verify-fitness-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-fitness-EVENTS*.json', sample_size=-1, union_by_name=true)
   WHERE event IN ('workout planned', 'workout completed', 'progress checked')
 ),
 firsts AS (
@@ -144,7 +144,7 @@ firsts AS (
     MIN(time) FILTER (WHERE event = 'workout completed' AND time > MIN(time) FILTER (WHERE event = 'workout planned')) AS t_done
   FROM ordered GROUP BY user_id
 ),
-users AS (SELECT distinct_id AS user_id, subscription_tier FROM read_json_auto('data/verify-fitness-USERS.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id, subscription_tier FROM read_json_auto('data/verify-fitness-USERS*.json', sample_size=-1, union_by_name=true))
 SELECT u.subscription_tier,
   COUNT(*) AS planned,
   COUNT(t_done) AS completed,
@@ -163,10 +163,10 @@ WITH per_user AS (
   SELECT e.user_id,
     MIN(time) FILTER (WHERE event = 'workout planned') AS t_plan,
     MIN(time) FILTER (WHERE event = 'progress checked') AS t_done
-  FROM read_json_auto('data/verify-fitness-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-fitness-EVENTS*.json', sample_size=-1, union_by_name=true) e
   GROUP BY e.user_id
 ),
-users AS (SELECT distinct_id AS user_id, subscription_tier FROM read_json_auto('data/verify-fitness-USERS.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id, subscription_tier FROM read_json_auto('data/verify-fitness-USERS*.json', sample_size=-1, union_by_name=true))
 SELECT u.subscription_tier,
   COUNT(*) FILTER (WHERE t_done > t_plan) AS converters,
   ROUND(MEDIAN(EXTRACT(EPOCH FROM (t_done::TIMESTAMP - t_plan::TIMESTAMP)) / 3600), 2) AS median_ttc_hr
@@ -181,7 +181,7 @@ GROUP BY u.subscription_tier ORDER BY median_ttc_hr;
 -- Mixpanel: Insights → workout completed, Avg duration_minutes, filter cohort users-who-did workout completed 12-14 times
 WITH per_user AS (
   SELECT user_id, COUNT(*) AS n, AVG(duration_minutes) AS avg_dur
-  FROM read_json_auto('data/verify-fitness-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-fitness-EVENTS*.json', sample_size=-1, union_by_name=true)
   WHERE event = 'workout completed' AND duration_minutes IS NOT NULL
   GROUP BY user_id
 )
@@ -198,12 +198,12 @@ FROM per_user GROUP BY 1 ORDER BY 1;
 -- Note: SQL bucketing here is calendar-day-floor; emulator uses ms-delta from birth (Mixpanel-aligned).
 WITH cohorts AS (
   SELECT user_id, MIN(time) AS birth_time
-  FROM read_json_auto('data/verify-fitness-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-fitness-EVENTS*.json', sample_size=-1, union_by_name=true)
   WHERE event = 'account created' GROUP BY user_id
 ),
 returns AS (
   SELECT e.user_id, FLOOR(EXTRACT(EPOCH FROM (e.time::TIMESTAMP - c.birth_time::TIMESTAMP)) / 86400) AS day_delta
-  FROM read_json_auto('data/verify-fitness-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-fitness-EVENTS*.json', sample_size=-1, union_by_name=true) e
   JOIN cohorts c ON e.user_id = c.user_id
   WHERE e.event = 'workout completed' AND e.time > c.birth_time
 )
