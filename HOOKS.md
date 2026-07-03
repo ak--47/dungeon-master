@@ -1273,10 +1273,14 @@ if (type === "user") {
 **Mixpanel report:** Retention / Insights — surviving event count broken down by hash-derived cohort
 
 ```js
+import { hashCohort } from "@ak--47/dungeon-master/hook-helpers";
+
 if (type === "everything") {
   const uid = record[0]?.user_id || record[0]?.device_id || "";
-  const idHash = String(uid).split("").reduce((acc, c) => acc + c.charCodeAt(0), 0);
-  if (idHash % 5 !== 0) return record;
+  // hashCohort = FNV-1a over the FULL id (v1.6). Don't hand-roll char-code
+  // arithmetic — id alphabets don't cover charcode space uniformly, so
+  // `% N` idioms silently miss their target rate (see §5, hashFloat).
+  if (!hashCohort(uid, 20)) return record; // ~20% of users churn-silenced
 
   const cutoff = dayjs.unix(meta.datasetStart).add(30, "days");
   dropEventsWhere(record, e => dayjs(e.time).isAfter(cutoff));
@@ -1341,9 +1345,11 @@ for distinct days, not total events.
 **Mixpanel report:** Varies by use — same report the deprecated feature targeted (typically Insights breakdown by `subscription_tier`)
 
 ```js
+import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
+
 if (type === "user") {
-  const hash = String(record.distinct_id || "").charCodeAt(0) % 10;
-  record.subscription_tier = hash < 6 ? "free" : hash < 8 ? "monthly" : "annual";
+  const h = hashFloat(record.distinct_id); // FNV-1a full-string → [0,1)
+  record.subscription_tier = h < 0.6 ? "free" : h < 0.8 ? "monthly" : "annual";
 }
 
 if (type === "everything") {
@@ -1474,7 +1480,7 @@ a cohort-conditional `everything` hook that uses `injectOnNewDays` to push
 specific users above the baseline.
 
 ```js
-import { injectOnNewDays } from "@ak--47/dungeon-master/hook-helpers";
+import { injectOnNewDays, hashCohort } from "@ak--47/dungeon-master/hook-helpers";
 import { countDistinctPeriods } from "@ak--47/dungeon-master/verify";
 
 // Config:
@@ -1482,10 +1488,9 @@ import { countDistinctPeriods } from "@ak--47/dungeon-master/verify";
 //   events: [{ event: "open app", weight: 5 }, ...]
 
 if (type === "everything") {
-  // Hash-based cohort (deterministic, ~10% of users).
+  // Hash-based cohort (deterministic, ~10% of users — FNV-1a full-string).
   const uid = record[0]?.user_id || "";
-  const isPowerUser = uid.charCodeAt(0) % 10 === 0;
-  if (!isPowerUser) return record;
+  if (!hashCohort(uid, 10)) return record;
 
   const days = countDistinctPeriods(record, "open app", "day");
   if (days >= 10) return record;
@@ -1550,6 +1555,8 @@ Import from `@ak--47/dungeon-master/hook-helpers`:
 | `binUsersByEventInRange` | cohort | `(events, eventName, start, end, bins) -> string\|null` | Same, restricted to a time range |
 | `countEventsBetween` | cohort | `(events, eventA, eventB) -> number` | Count events between first A and first B |
 | `userInProfileSegment` | cohort | `(profile, key, values) -> boolean` | Profile property match |
+| **`hashFloat`** | cohort | `(id) -> number` | FNV-1a over the FULL id string → [0,1). Deterministic bucketing primitive (v1.6) — replaces `charCodeAt(0) % N` idioms, which bias cohort rates on hex-ish id alphabets |
+| **`hashCohort`** | cohort | `(id, pct) -> boolean` | True for ~`pct`% of ids (pct on a 0–100 scale). Membership nests: `pct=5` ⊂ `pct=20` |
 | `cloneEvent` | mutate | `(template, overrides?) -> event` | Shallow clone with overrides |
 | `dropEventsWhere` | mutate | `(events, predicate) -> number` | Remove matching events in-place |
 | `scaleEventCount` | mutate | `(events, eventName, factor) -> number` | Scale total count via clones at sub-second offsets (does NOT move frequency-distribution bins — see Section 2.1) |
@@ -1978,21 +1985,31 @@ Cleanest pattern for hidden cohorts. Deterministic, no schema mutation, no
 flag stamping. Produces textbook long-tail signals:
 
 ```js
+import { hashCohort } from "@ak--47/dungeon-master/hook-helpers";
+
 // In hook (everything):
 for (const e of events) {
-  const isWhale = e.user_id && e.user_id.charCodeAt(0) % 50 === 0;  // 2%
+  const isWhale = e.user_id && hashCohort(e.user_id, 2);  // ~2% of users
   if (isWhale && e.event === 'swap') e.trade_amount_usd *= 50;
 }
 
-// In verify:
+// In verify (same primitive — hook and verifier CANNOT disagree on membership):
 const whaleAmts = [], rest = [];
 for (const [uid, evs] of byUser) {
-  const isWhale = uid.charCodeAt(0) % 50 === 0;
+  const isWhale = hashCohort(uid, 2);
   const amts = evs.filter(e => e.event === 'swap').map(e => e.trade_amount_usd);
   (isWhale ? whaleAmts : rest).push(...amts);
 }
 check('whale 5x+ trade', avg(whaleAmts) / avg(rest) >= 5);
 ```
+
+**Why not `uid.charCodeAt(0) % 50 === 0`** (the pre-1.6 idiom): first-char
+arithmetic depends on the id alphabet covering charcode space uniformly — it
+doesn't. GUID first chars are hex (0-9, a-f), which reach only ~2 of 50
+residues under `% 50`, so the "2% cohort" actually lands anywhere from 0% to
+~12% depending on id format. `hashCohort` runs FNV-1a over the FULL string;
+on engine-stamped GUIDs the share tracks the target within a few tenths of a
+point.
 
 ### 9.7 Hook ordering inside `everything`
 
