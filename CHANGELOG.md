@@ -27,6 +27,16 @@ All notable changes to `@ak--47/dungeon-master`.
   itself survives). Affects only dungeons using `isChurnEvent`; users who
   return (`returnLikelihood` roll succeeds) are untouched. `simplest.js` has
   no churn events, so the engine-shape canary and sweep are unaffected.
+- **Bin-based patterns bin by distinct days by default** (P2.4).
+  `applyFrequencyByFrequency`, `applyFunnelFrequencyBreakdown`, and
+  `applyAggregateByBin` gain `binBy: 'events' | 'distinctDays'` (default
+  `'distinctDays'`, via `binByDistinctPeriods`). Mixpanel's frequency reports
+  — and the local emulator — bucket users by distinct calendar days, so the
+  old total-event-count axis could put a user in a different cohort than the
+  report bucket their data lands in, diluting engineered signal. Pass
+  `binBy: 'events'` to restore the pre-1.6 axis (also the right choice for
+  `applyFunnelFrequencyBreakdown`'s funnelEvents fallback, where one funnel
+  run rarely spans two days).
 
 ## 1.5.4 — 2026-06-04
 

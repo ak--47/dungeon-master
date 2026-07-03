@@ -1727,19 +1727,20 @@ Import from `@ak--47/dungeon-master/hook-patterns`:
 
 | Pattern | Hook Type | Signature | Mixpanel Report |
 |---|---|---|---|
-| `applyFrequencyByFrequency` | everything | `(events, profile, { cohortEvent, bins, targetEvent, multipliers })` | Frequency of A by per-user count of B |
-| `applyFunnelFrequencyBreakdown` | funnel-post | `(allEvents, profile, funnelEvents, { cohortEvent, bins, dropMultipliers })` | Funnel conversion by per-user activity bucket |
-| `applyAggregateByBin` | everything | `(events, profile, { cohortEvent, bins, event, propertyName, deltas })` | Avg property value by per-user activity bucket |
+| `applyFrequencyByFrequency` | everything | `(events, profile, { cohortEvent, bins, targetEvent, multipliers, binBy? })` | Frequency of A by per-user frequency of B |
+| `applyFunnelFrequencyBreakdown` | funnel-post | `(allEvents, profile, funnelEvents, { cohortEvent, bins, dropMultipliers, binBy? })` | Funnel conversion by per-user activity bucket |
+| `applyAggregateByBin` | everything | `(events, profile, { cohortEvent, bins, event, propertyName, deltas, binBy? })` | Avg property value by per-user activity bucket |
 | `applyTTCBySegment` | funnel-post | `(funnelEvents, profile, { segmentKey, factors })` | Funnel median TTC by profile segment |
 | `applyAttributedBySource` | everything | `(events, profile, { sourceEvent, sourceProperty, downstreamEvent, weights })` | Conversions by source (first/last touch) |
 
-> **Caveat (eval follow-up).** The three `*ByBin` / `*Frequency*` patterns
-> currently use `binUsersByEventCount` (total events) for cohort assignment.
-> The verification emulator now bins by **distinct days**, so cohort axes
-> can mismatch — high-event-count users may not be high-distinct-day users.
-> When verifying these patterns, expect signal dilution until the patterns
-> switch to `binByDistinctPeriods`. For new dungeons targeting frequency
-> reports, use the recipes in Section 4.5–4.7 instead of these patterns.
+> **Bin axis (v1.6).** The three `*ByBin` / `*Frequency*` patterns bin by
+> **distinct calendar days** of `cohortEvent` by default
+> (`binBy: 'distinctDays'`, via `binByDistinctPeriods`) — the same axis the
+> verification emulator and Mixpanel's frequency reports use, so pattern
+> cohorts and report buckets align. Pass `binBy: 'events'` to restore the
+> pre-1.6 total-event-count axis (needed for
+> `applyFunnelFrequencyBreakdown`'s funnelEvents fallback, where a single
+> funnel run rarely spans more than one day).
 
 Full JSDoc in [`lib/hook-patterns/*.js`](lib/hook-patterns/). Pair with
 `emulateBreakdown` from `@ak--47/dungeon-master/verify` to assert patterns

@@ -97,17 +97,20 @@ describe('Phase 4 hook patterns × emulator', () => {
 			agg: 'avg',
 			breakdownByFrequencyOf: 'Browse',
 		});
-		// TODO: eval follow-up — pattern uses `binUsersByEventCount` (total
-		// events) but the emulator now bins by distinct-day. Cohort axes
-		// don't align, so the high-vs-low *per-bucket* signal washes out.
-		// However, the pattern still SCALES amounts on real events
-		// (multipliers low=1, mid=2, high=4), so the overall weighted-avg
-		// purchase amount is provably elevated vs the unhooked baseline of
-		// 20 (= mean of [10,20,30]). Assert that overall lift exists, even
-		// without cleanly attributing it to a single cohort row.
+		// v1.6 (P2.4): pattern now bins by DISTINCT DAYS by default — the same
+		// axis the emulator uses — so the per-bucket signal no longer washes
+		// out. Users the emulator puts at ≥15 distinct Browse days are exactly
+		// the users the pattern scaled 4x; <5-day users got 1x. Configured
+		// spread is 4x; assert > 2 to absorb small-N variance.
 		expect(tbl.length).toBeGreaterThan(0);
+		const highAvg = avgAggInBucket(tbl, r => r.breakdown_freq >= 15);
+		const lowAvg = avgAggInBucket(tbl, r => r.breakdown_freq < 5);
+		expect(highAvg).toBeGreaterThan(0);
+		expect(lowAvg).toBeGreaterThan(0);
+		expect(highAvg / lowAvg).toBeGreaterThan(2);
+		// Overall weighted avg still elevated vs the unhooked baseline of 20
+		// (= mean of [10,20,30]).
 		const overallAvg = weightedAvg(tbl);
-		// With 4x multiplier on high-cohort users, overall avg should exceed baseline 20.
 		expect(overallAvg).toBeGreaterThan(30);
 	}, 30000);
 
@@ -259,11 +262,15 @@ describe('Phase 4 hook patterns × emulator', () => {
 				if (!meta.isFirstFunnel) return;
 				// In funnel-post we don't have all user events — pass null so the
 				// pattern falls back to counting cohortEvent in the funnel events.
+				// binBy 'events' because a single funnel run rarely spans more
+				// than one calendar day — the default distinct-day axis is
+				// degenerate on the funnelEvents fallback (see pattern JSDoc).
 				applyFunnelFrequencyBreakdown(null, meta.profile || {}, record, {
 					cohortEvent: 'Browse',
 					bins: { low: [0, 3], high: [3, Infinity] },
 					dropMultipliers: { low: 0.5, high: 0.95 },
 					finalStep: 'Activate',
+					binBy: 'events',
 				});
 			},
 		}));
@@ -299,6 +306,16 @@ function weightedAvg(rows) {
 		count += (r.user_count || 0);
 	}
 	return count ? total / count : 0;
+}
+
+function avgAggInBucket(tbl, bucketFn) {
+	let total = 0, users = 0;
+	for (const r of tbl) {
+		if (!bucketFn(r)) continue;
+		total += (r.avg_aggregate || 0) * (r.user_count || 0);
+		users += (r.user_count || 0);
+	}
+	return users ? total / users : 0;
 }
 
 function avgMetricFreqInBucket(tbl, bucketFn) {
