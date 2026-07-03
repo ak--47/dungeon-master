@@ -41,7 +41,7 @@ checks.** No documented hook is unverified.
 | 12 | fintech | NAILED | 10/10 | 2 |
 | 13 | ai-platform | NAILED | 10/10 | 3 |
 | 14 | marketplace | NAILED | 10/10 | 1 |
-| 15 | media | STRONG | 10/10 | 2 |
+| 15 | media | NAILED | 10/10 | 2 |
 | 16 | ecommerce | NAILED | 10/10 | 3 |
 | 17 | sass | NAILED | 10/10 | 1 |
 | 18 | gaming | NAILED | 13/13 | 2 |
