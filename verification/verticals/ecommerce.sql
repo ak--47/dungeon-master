@@ -13,7 +13,7 @@
 
 -- Hook 1: SIGNUP FLOW V2
 SELECT signup_flow, COUNT(*) AS n
-FROM read_json_auto('data/verify-ecom-EVENTS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-ecommerce-EVENTS.json', sample_size=-1, union_by_name=true)
 WHERE event = 'sign up'
 GROUP BY signup_flow ORDER BY n DESC;
 
@@ -22,7 +22,7 @@ GROUP BY signup_flow ORDER BY n DESC;
 SELECT
   CASE WHEN time::TIMESTAMP > TIMESTAMP '2026-04-01' THEN 'post_inflection' ELSE 'pre' END AS bucket,
   COUNT(*) AS n, ROUND(AVG(watchTimeSec), 0) AS avg_watch_s
-FROM read_json_auto('data/verify-ecom-EVENTS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-ecommerce-EVENTS.json', sample_size=-1, union_by_name=true)
 WHERE event = 'watch video' AND watchTimeSec IS NOT NULL
 GROUP BY 1 ORDER BY 1;
 
@@ -30,7 +30,7 @@ GROUP BY 1 ORDER BY 1;
 -- Hook 3: TOYS+SHOES CO-OCCURRENCE (cart bundling)
 WITH carts AS (
   SELECT user_id, time, cart
-  FROM read_json_auto('data/verify-ecom-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-ecommerce-EVENTS.json', sample_size=-1, union_by_name=true)
   WHERE event = 'checkout' AND cart IS NOT NULL
 ),
 flat AS (
@@ -49,26 +49,26 @@ GROUP BY user_id, time, bucket;
 
 -- Hook 4: VIDEO QUALITY → WATCH TIME
 SELECT quality, COUNT(*) AS n, ROUND(AVG(watchTimeSec), 0) AS avg_watch_s
-FROM read_json_auto('data/verify-ecom-EVENTS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-ecommerce-EVENTS.json', sample_size=-1, union_by_name=true)
 WHERE event = 'watch video' AND watchTimeSec IS NOT NULL
 GROUP BY quality ORDER BY avg_watch_s DESC;
 
 
 -- Hook 5: ITEM FLATTENING (category present on view item)
 SELECT COUNT(*) AS view_items, COUNT(category) AS with_category
-FROM read_json_auto('data/verify-ecom-EVENTS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-ecommerce-EVENTS.json', sample_size=-1, union_by_name=true)
 WHERE event = 'view item';
 
 
 -- Hook 6: VIEW-ITEM MAGIC NUMBER
 WITH per_user AS (
   SELECT user_id, COUNT(*) FILTER (WHERE event = 'view item') AS vc
-  FROM read_json_auto('data/verify-ecom-EVENTS.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-ecommerce-EVENTS.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 ),
 checkouts AS (
   SELECT e.user_id, UNNEST(e.cart) AS item
-  FROM read_json_auto('data/verify-ecom-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-ecommerce-EVENTS.json', sample_size=-1, union_by_name=true) e
   WHERE e.event = 'checkout' AND e.cart IS NOT NULL
 )
 SELECT CASE WHEN p.vc BETWEEN 3 AND 8 THEN 'sweet' WHEN p.vc < 3 THEN 'lower' ELSE 'over' END AS bucket,
@@ -80,7 +80,7 @@ GROUP BY 1 ORDER BY 1;
 -- Hook 7: SIGNUP TTC BY LOYALTY (KNOWN MEASUREMENT GAP)
 -- Hook 8: A/B/C EXPERIMENT
 SELECT "Variant name", COUNT(DISTINCT user_id) AS users
-FROM read_json_auto('data/verify-ecom-EVENTS.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-ecommerce-EVENTS.json', sample_size=-1, union_by_name=true)
 WHERE event = '$experiment_started'
 GROUP BY "Variant name" ORDER BY users DESC;
 
@@ -91,10 +91,10 @@ WITH per_user AS (
     MIN(time) FILTER (WHERE event = 'view item') AS t1,
     MIN(time) FILTER (WHERE event = 'add to cart') AS t2,
     MIN(time) FILTER (WHERE event = 'checkout') AS t3
-  FROM read_json_auto('data/verify-ecom-EVENTS.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-ecommerce-EVENTS.json', sample_size=-1, union_by_name=true) e
   GROUP BY e.user_id
 ),
-users AS (SELECT distinct_id AS user_id, theme FROM read_json_auto('data/verify-ecom-USERS.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id, theme FROM read_json_auto('data/verify-ecommerce-USERS.json', sample_size=-1, union_by_name=true))
 SELECT u.theme, COUNT(*) AS users,
   ROUND(COUNT(*) FILTER (WHERE t3 > t2 AND t2 > t1) * 100.0 / COUNT(*), 1) AS pct_complete
 FROM per_user p JOIN users u USING (user_id)
@@ -104,9 +104,9 @@ GROUP BY u.theme ORDER BY pct_complete DESC;
 -- Hook 10: SAVE-ITEM RETENTION (born-in-dataset users)
 WITH per_user AS (
   SELECT user_id, MIN(time::TIMESTAMP) AS t0,
-    COUNT(*) FILTER (WHERE event = 'save item' AND time::TIMESTAMP < (SELECT MIN(time::TIMESTAMP) + INTERVAL '10 days' FROM read_json_auto('data/verify-ecom-EVENTS.json', sample_size=-1, union_by_name=true) e2 WHERE e2.user_id = e.user_id)) AS early_saves,
-    COUNT(*) FILTER (WHERE time::TIMESTAMP > (SELECT MIN(time::TIMESTAMP) + INTERVAL '25 days' FROM read_json_auto('data/verify-ecom-EVENTS.json', sample_size=-1, union_by_name=true) e2 WHERE e2.user_id = e.user_id)) AS post25
-  FROM read_json_auto('data/verify-ecom-EVENTS.json', sample_size=-1, union_by_name=true) e
+    COUNT(*) FILTER (WHERE event = 'save item' AND time::TIMESTAMP < (SELECT MIN(time::TIMESTAMP) + INTERVAL '10 days' FROM read_json_auto('data/verify-ecommerce-EVENTS.json', sample_size=-1, union_by_name=true) e2 WHERE e2.user_id = e.user_id)) AS early_saves,
+    COUNT(*) FILTER (WHERE time::TIMESTAMP > (SELECT MIN(time::TIMESTAMP) + INTERVAL '25 days' FROM read_json_auto('data/verify-ecommerce-EVENTS.json', sample_size=-1, union_by_name=true) e2 WHERE e2.user_id = e.user_id)) AS post25
+  FROM read_json_auto('data/verify-ecommerce-EVENTS.json', sample_size=-1, union_by_name=true) e
   GROUP BY user_id
 )
 SELECT CASE WHEN early_saves >= 2 THEN 'saver' ELSE 'non_saver' END AS bucket,

@@ -14,13 +14,13 @@
 SELECT app_version, COUNT(*) AS events,
   MIN(time::TIMESTAMP) AS first_seen,
   MAX(time::TIMESTAMP) AS last_seen
-FROM read_json_auto('data/verify-insurance-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-insurance-application-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
 GROUP BY app_version ORDER BY app_version;
 
 
 -- Hook 2: SUPPORT TICKET VOLUME — drop in v2.13
 SELECT app_version, COUNT(*) AS tickets
-FROM read_json_auto('data/verify-insurance-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-insurance-application-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
 WHERE event = 'support ticket created'
 GROUP BY app_version ORDER BY app_version;
 
@@ -33,7 +33,7 @@ WITH per_user AS (
     MIN(time) FILTER (WHERE event = 'policy activated') AS t_pol,
     -- pick app_version on submit event for cohort grouping
     MIN(app_version) FILTER (WHERE event = 'application submitted') AS sub_version
-  FROM read_json_auto('data/verify-insurance-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-insurance-application-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e
   GROUP BY e.user_id
 )
 SELECT sub_version,
@@ -47,12 +47,12 @@ GROUP BY sub_version ORDER BY sub_version;
 -- Hook 4: APP-STEP MAGIC NUMBER — sweet 8-14 → +35% approved_premium
 WITH per_user AS (
   SELECT user_id, COUNT(*) FILTER (WHERE event = 'application step completed') AS sc
-  FROM read_json_auto('data/verify-insurance-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-insurance-application-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 ),
 approvals AS (
   SELECT e.user_id, e.approved_premium
-  FROM read_json_auto('data/verify-insurance-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-insurance-application-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e
   WHERE e.event = 'application approved' AND e.approved_premium IS NOT NULL
 )
 SELECT CASE WHEN p.sc BETWEEN 8 AND 14 THEN 'sweet' WHEN p.sc < 8 THEN 'lower' ELSE 'over' END AS bucket,
@@ -68,7 +68,7 @@ WITH per_user AS (
     MIN(time) FILTER (WHERE event = 'application started') AS t_start,
     MIN(time) FILTER (WHERE event = 'application approved') AS t_approve,
     MIN(account_type) FILTER (WHERE event = 'account created') AS account_type
-  FROM read_json_auto('data/verify-insurance-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-insurance-application-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e
   GROUP BY e.user_id
 )
 SELECT account_type,
@@ -82,7 +82,7 @@ GROUP BY account_type ORDER BY median_ttc_hr;
 -- Hook 6: CLAIMS EXPERIMENT — Simplified Claims variant
 WITH variant_users AS (
   SELECT DISTINCT user_id, "Variant name" AS variant
-  FROM read_json_auto('data/verify-insurance-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-insurance-application-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
   WHERE event = '$experiment_started'
 ),
 per_user AS (
@@ -90,7 +90,7 @@ per_user AS (
     MIN(time) FILTER (WHERE event = 'claim filed') AS t1,
     MIN(time) FILTER (WHERE event = 'claim status checked') AS t2,
     MIN(time) FILTER (WHERE event = 'support ticket created') AS t3
-  FROM read_json_auto('data/verify-insurance-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-insurance-application-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e
   GROUP BY e.user_id
 )
 SELECT v.variant, COUNT(*) AS users,
@@ -105,10 +105,10 @@ WITH per_user AS (
     MIN(time) FILTER (WHERE event = 'application submitted') AS t1,
     MIN(time) FILTER (WHERE event = 'application approved') AS t2,
     MIN(time) FILTER (WHERE event = 'policy activated') AS t3
-  FROM read_json_auto('data/verify-insurance-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-insurance-application-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e
   GROUP BY e.user_id
 ),
-users AS (SELECT distinct_id AS user_id, risk_profile FROM read_json_auto('data/verify-insurance-USERS-part-*.json', sample_size=-1, union_by_name=true))
+users AS (SELECT distinct_id AS user_id, risk_profile FROM read_json_auto('data/verify-insurance-application-USERS-part-*.json', sample_size=-1, union_by_name=true))
 SELECT u.risk_profile, COUNT(*) AS users,
   ROUND(COUNT(*) FILTER (WHERE t3 > t2 AND t2 > t1) * 100.0 / COUNT(*), 1) AS pct
 FROM per_user p JOIN users u USING (user_id)
@@ -120,20 +120,20 @@ GROUP BY u.risk_profile ORDER BY pct DESC;
 WITH per_user AS (
   SELECT user_id, MIN(time::TIMESTAMP) AS t0,
     COUNT(*) AS total_events
-  FROM read_json_auto('data/verify-insurance-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-insurance-application-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
   GROUP BY user_id
 ),
 early_docs AS (
   SELECT e.user_id, COUNT(*) AS doc_n
   FROM per_user p
-  JOIN read_json_auto('data/verify-insurance-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e USING (user_id)
+  JOIN read_json_auto('data/verify-insurance-application-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e USING (user_id)
   WHERE e.event = 'document uploaded' AND e.time::TIMESTAMP < p.t0 + INTERVAL '14 days'
   GROUP BY e.user_id
 ),
 post_30 AS (
   SELECT e.user_id, COUNT(*) AS n
   FROM per_user p
-  JOIN read_json_auto('data/verify-insurance-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e USING (user_id)
+  JOIN read_json_auto('data/verify-insurance-application-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e USING (user_id)
   WHERE e.time::TIMESTAMP > p.t0 + INTERVAL '30 days'
   GROUP BY e.user_id
 )
@@ -148,7 +148,7 @@ GROUP BY 1 ORDER BY 1;
 SELECT
   CASE WHEN time::TIMESTAMP BETWEEN TIMESTAMP '2026-03-27' AND TIMESTAMP '2026-04-06' THEN 'spike' ELSE 'baseline' END AS bucket,
   COUNT(*) AS renewals
-FROM read_json_auto('data/verify-insurance-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
+FROM read_json_auto('data/verify-insurance-application-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
 WHERE event = 'renewal completed'
 GROUP BY 1 ORDER BY 1;
 
@@ -156,12 +156,12 @@ GROUP BY 1 ORDER BY 1;
 -- Hook 10: CLAIM-TO-PREMIUM — payment after claim has 2x premium
 WITH first_claim AS (
   SELECT user_id, MIN(time::TIMESTAMP) AS t_claim
-  FROM read_json_auto('data/verify-insurance-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
+  FROM read_json_auto('data/verify-insurance-application-EVENTS-part-*.json', sample_size=-1, union_by_name=true)
   WHERE event = 'claim filed' GROUP BY user_id
 ),
 payments AS (
   SELECT e.user_id, e.time, e.premium_amount
-  FROM read_json_auto('data/verify-insurance-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e
+  FROM read_json_auto('data/verify-insurance-application-EVENTS-part-*.json', sample_size=-1, union_by_name=true) e
   WHERE e.event = 'payment made' AND e.premium_amount IS NOT NULL
 )
 SELECT

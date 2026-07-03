@@ -3,7 +3,7 @@ import path from 'path';
 import readline from 'readline';
 import { emulateBreakdown, evaluateFunnel, buildIdentityMap, resolveUserId } from '@ak--47/dungeon-master/verify';
 
-const PREFIX = 'data/verify-insurance';
+const PREFIX = 'data/verify-insurance-application';
 async function loadShards(suffix) {
 	// streaming load: events shard >512MB readFileSync cap on full-fidelity v1.5 runs
 	const dir = path.dirname(PREFIX), base = path.basename(PREFIX);

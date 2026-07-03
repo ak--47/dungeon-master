@@ -3,7 +3,7 @@ import path from 'path';
 import readline from 'readline';
 import { emulateBreakdown, evaluateFunnel, buildIdentityMap, resolveUserId } from '@ak--47/dungeon-master/verify';
 
-const PREFIX = 'data/verify-ecom';
+const PREFIX = 'data/verify-ecommerce';
 async function loadShards(suffix) {
 	const dir = path.dirname(PREFIX), base = path.basename(PREFIX);
 	const out = [];
