@@ -27,7 +27,7 @@ checks.** No documented hook is unverified.
 
 | # | Dungeon | Score | Hooks | Iter |
 |---|---------|-------|-------|------|
-| 1 | fitness | NAILED | 12/12 | 1 |
+| 1 | fitness | NAILED | 10/10 | 2 |
 | 2 | dating | NAILED | 13/13 | 2 |
 | 3 | community | NAILED | 11/11 | 2 |
 | 4 | travel | NAILED | 10/10 | 1 |
