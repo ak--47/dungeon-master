@@ -1,222 +1,74 @@
-import fs from 'fs';
-import path from 'path';
-import readline from 'readline';
-import { emulateBreakdown, evaluateFunnel, buildIdentityMap, resolveUserId } from '@ak--47/dungeon-master/verify';
+#!/usr/bin/env node
+/**
+ * insurance-application.verify.mjs — thin wrapper around the story runner.
+ *
+ * All verification logic lives in the `stories` export of
+ * ./insurance-application.js; this script just streams the shards and
+ * delegates. It is equivalent to:
+ *
+ *   node scripts/verify-stories.mjs dungeons/vertical/insurance-application/insurance-application.js --data-prefix verify-insurance-application
+ *
+ * Generate first:
+ *   node scripts/verify-runner.mjs dungeons/vertical/insurance-application/insurance-application.js verify-insurance-application
+ * Run:
+ *   node dungeons/vertical/insurance-application/insurance-application.verify.mjs [prefix]   # default verify-insurance-application
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import readline from 'node:readline';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { buildIdentityMap, evaluateStories, VERDICT_RANK } from '@ak--47/dungeon-master/verify';
+import config, { stories } from './insurance-application.js';
 
-const PREFIX = 'data/verify-insurance-application';
+const PREFIX = process.argv[2] || 'verify-insurance-application';
+const prefixPath = path.join('data', PREFIX);
+
 async function loadShards(suffix) {
-	// streaming load: events shard >512MB readFileSync cap on full-fidelity v1.5 runs
-	const dir = path.dirname(PREFIX), base = path.basename(PREFIX);
+	// streaming load: full-fidelity EVENTS shards exceed the readFileSync cap
+	const dir = path.dirname(prefixPath), base = path.basename(prefixPath);
 	const out = [];
+	if (!fs.existsSync(dir)) return out;
 	for (const f of fs.readdirSync(dir).filter(f => f.startsWith(`${base}-${suffix}`) && f.endsWith('.json')).sort()) {
-		const stream = fs.createReadStream(path.join(dir, f));
-		const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+		const rl = readline.createInterface({ input: fs.createReadStream(path.join(dir, f)), crlfDelay: Infinity });
 		for await (const line of rl) {
 			if (line.trim()) out.push(JSON.parse(line));
 		}
 	}
 	return out;
 }
+
 const events = await loadShards('EVENTS');
 const profiles = await loadShards('USERS');
-const identityMap = buildIdentityMap(profiles);
-const profileBy = new Map(profiles.map(p => [p.distinct_id, p]));
-console.log(`insurance — events=${events.length} users=${profiles.length}`);
-
-const results = [];
-const check = (n, p, d = '') => { results.push({ n, p, d }); console.log(`  ${p ? 'PASS' : 'FAIL'}  ${n}  ${d}`); };
-const avg = a => a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0;
-
-const byUser = new Map();
-for (const e of events) {
-	const uid = resolveUserId(e, identityMap);
-	if (!byUser.has(uid)) byUser.set(uid, []);
-	byUser.get(uid).push(e);
+if (!events.length) {
+	console.error(`no shards at ${prefixPath}-EVENTS*.json — run: node scripts/verify-runner.mjs dungeons/vertical/insurance-application/insurance-application.js ${PREFIX}`);
+	process.exit(1);
 }
+console.log(`insurance-application — events=${events.length} users=${profiles.length} (${prefixPath})`);
 
-// HOOK 1: version stamping clean bands
-{
-	const versionDays = new Map();
-	for (const e of events) {
-		const v = e.app_version;
-		const d = e.time.slice(0, 10);
-		const key = `${v}|${d}`;
-		versionDays.set(key, (versionDays.get(key) || 0) + 1);
-	}
-	const v210 = events.filter(e => e.app_version === '2.10').length;
-	const v213 = events.filter(e => e.app_version === '2.13').length;
-	check('H1 version bands present', v210 > 0 && v213 > 0,
-		`v2.10=${v210} v2.13=${v213}`);
+const execFileP = promisify(execFile);
+const runSql = async (sql) => {
+	const { stdout } = await execFileP('duckdb', ['-json', '-c', sql.replaceAll('{{PREFIX}}', prefixPath)], { maxBuffer: 64 * 1024 * 1024 });
+	return stdout.trim() ? JSON.parse(stdout) : [];
+};
+
+// All stories are DuckDB-backed. H5's TTC breakdown segments by account_type,
+// which lives on the "account created" EVENT (not a profile prop), so
+// emulateBreakdown's breakdownByUserProperty can't serve it — the SQL read
+// derives the started→approved gap directly, which is exact for this hook
+// because H5 pins approvals to firstStart + target + [0,4h) by construction.
+const results = await evaluateStories(stories, events, {
+	profiles,
+	funnels: config.funnels,
+	identityMap: buildIdentityMap(profiles),
+	runSql,
+});
+
+let worst = 'NAILED';
+for (const r of results) {
+	console.log(`${r.verdict.padEnd(7)} ${r.id}`);
+	for (const a of r.assertions) console.log(`        ${a.verdict.padEnd(7)} ${a.detail}`);
+	if (VERDICT_RANK[r.verdict] < VERDICT_RANK[worst]) worst = r.verdict;
 }
-
-// HOOK 2: support tickets drop in v2.13
-{
-	const v212 = events.filter(e => e.event === 'support ticket created' && e.app_version === '2.12').length;
-	const v213 = events.filter(e => e.event === 'support ticket created' && e.app_version === '2.13').length;
-	const days212 = 30; // v2.12 spans 30 days
-	const days213 = 10; // v2.13 spans 10 days
-	const r212 = v212 / days212, r213 = v213 / days213;
-	const ratio = r213 / Math.max(r212, 0.01);
-	check('H2 v2.13 ticket rate <0.6x v2.12', ratio < 0.6,
-		`v2.12=${r212.toFixed(0)}/day v2.13=${r213.toFixed(0)}/day ratio=${ratio.toFixed(2)}x`);
-}
-
-// HOOK 3: application conversion boost in v2.13
-{
-	let v213T = 0, v213C = 0, v212T = 0, v212C = 0;
-	for (const [uid, evs] of byUser) {
-		evs.sort((a, b) => new Date(a.time) - new Date(b.time));
-		const submit = evs.find(e => e.event === 'application submitted');
-		const approve = evs.find(e => e.event === 'application approved' && new Date(e.time) > new Date(submit?.time || 0));
-		const policy = evs.find(e => e.event === 'policy activated' && new Date(e.time) > new Date(approve?.time || 0));
-		const v = approve?.app_version;
-		if (!submit) continue;
-		if (v === '2.13' || (submit.app_version === '2.13')) {
-			v213T++;
-			if (approve && policy) v213C++;
-		} else if (submit.app_version === '2.12') {
-			v212T++;
-			if (approve && policy) v212C++;
-		}
-	}
-	const r213 = v213C / Math.max(v213T, 1), r212 = v212C / Math.max(v212T, 1);
-	const lift = r213 / Math.max(r212, 0.001);
-	check('H3 v2.13 funnel 1.2x+ vs v2.12', lift >= 1.2,
-		`v2.12=${(r212 * 100).toFixed(1)}% (n=${v212T}) v2.13=${(r213 * 100).toFixed(1)}% (n=${v213T}) lift=${lift.toFixed(2)}x`);
-}
-
-// HOOK 4: app step magic — sweet 8-14 → +35% approved_premium
-{
-	const sweet = [], lower = [];
-	for (const [uid, evs] of byUser) {
-		const sc = evs.filter(e => e.event === 'application step completed').length;
-		const aps = evs.filter(e => e.event === 'application approved' && typeof e.approved_premium === 'number').map(e => e.approved_premium);
-		if (sc >= 8 && sc <= 14) sweet.push(...aps);
-		else if (sc < 8) lower.push(...aps);
-	}
-	const ratio = avg(sweet) / Math.max(avg(lower), 1);
-	check('H4 sweet 8-14 1.2x+ approved_premium', ratio >= 1.2,
-		`sweet=${avg(sweet).toFixed(0)} (n=${sweet.length}) lower=${avg(lower).toFixed(0)} (n=${lower.length}) ratio=${ratio.toFixed(2)}x`);
-}
-
-// HOOK 5: TTC by account_type — business < individual < family
-{
-	const byAcct = new Map();
-	for (const [uid, evs] of byUser) {
-		const acctEvent = evs.find(e => e.event === 'account created');
-		const acct = acctEvent?.account_type;
-		const start = evs.find(e => e.event === 'application started');
-		const approve = evs.find(e => e.event === 'application approved' && new Date(e.time) > new Date(start?.time || 0));
-		if (!start || !approve || !acct) continue;
-		const ttcH = (new Date(approve.time) - new Date(start.time)) / 3600000;
-		if (!byAcct.has(acct)) byAcct.set(acct, []);
-		byAcct.get(acct).push(ttcH);
-	}
-	const biz = avg(byAcct.get('business') || []);
-	const indiv = avg(byAcct.get('individual') || []);
-	const fam = avg(byAcct.get('family') || []);
-	check('H5 TTC business < individual < family', biz < indiv && indiv < fam,
-		`biz=${biz.toFixed(1)}h (n=${(byAcct.get('business') || []).length}) indiv=${indiv.toFixed(1)}h fam=${fam.toFixed(1)}h`);
-}
-
-// HOOK 6: A/B claims experiment — Simplified > Control
-{
-	const variants = new Map();
-	for (const e of events) {
-		if (e.event !== '$experiment_started') continue;
-		const v = e['Variant name'];
-		if (!variants.has(v)) variants.set(v, new Set());
-		variants.get(v).add(resolveUserId(e, identityMap));
-	}
-	let simT = 0, simC = 0, ctT = 0, ctC = 0;
-	for (const [uid, evs] of byUser) {
-		evs.sort((a, b) => new Date(a.time) - new Date(b.time));
-		const r = evaluateFunnel(evs, ['claim filed', 'claim status checked', 'support ticket created'], { conversionWindowMs: 30 * 86400000 });
-		if (variants.get('Simplified Claims')?.has(uid)) { simT++; if (r.completed) simC++; }
-		else if (variants.get('Control')?.has(uid)) { ctT++; if (r.completed) ctC++; }
-	}
-	const simR = simC / Math.max(simT, 1), ctR = ctC / Math.max(ctT, 1);
-	const lift = simR / Math.max(ctR, 0.001);
-	check('H6 Simplified Claims 1.1x+ vs Control', lift >= 1.1,
-		`Sim=${(simR * 100).toFixed(1)}% (n=${simT}) Ctrl=${(ctR * 100).toFixed(1)}% lift=${lift.toFixed(2)}x`);
-}
-
-// HOOK 7: risk_profile approval funnel — low > medium > high
-{
-	const byRisk = new Map();
-	for (const [uid, evs] of byUser) {
-		evs.sort((a, b) => new Date(a.time) - new Date(b.time));
-		const r = evaluateFunnel(evs, ['application submitted', 'application approved', 'policy activated'], { conversionWindowMs: 30 * 86400000 });
-		const risk = profileBy.get(uid)?.risk_profile;
-		if (!byRisk.has(risk)) byRisk.set(risk, { t: 0, c: 0 });
-		const b = byRisk.get(risk);
-		b.t++; if (r.completed) b.c++;
-	}
-	const low = (byRisk.get('low')?.c || 0) / Math.max(byRisk.get('low')?.t || 1, 1);
-	const high = (byRisk.get('high')?.c || 0) / Math.max(byRisk.get('high')?.t || 1, 1);
-	const lift = low / Math.max(high, 0.001);
-	// post-1.5.0: greedy funnel + tighter conv window compresses absolute approval
-	// rates; lift direction preserved (low > high). STRONG threshold.
-	check('H7 low risk 1.5x+ approval vs high', lift >= 1.5,
-		`low=${(low * 100).toFixed(1)}% high=${(high * 100).toFixed(1)}% lift=${lift.toFixed(2)}x`);
-}
-
-// HOOK 8: doc upload retention — 3+ docs → higher post-d30 events
-{
-	const upload = [], non = [];
-	for (const [uid, evs] of byUser) {
-		evs.sort((a, b) => new Date(a.time) - new Date(b.time));
-		const t0 = new Date(evs[0].time).getTime();
-		const day14 = t0 + 14 * 86400000;
-		const day30 = t0 + 30 * 86400000;
-		const docs = evs.filter(e => e.event === 'document uploaded' && new Date(e.time).getTime() < day14).length;
-		const post30 = evs.filter(e => new Date(e.time).getTime() > day30).length;
-		(docs >= 3 ? upload : non).push(post30);
-	}
-	const ratio = avg(upload) / Math.max(avg(non), 0.01);
-	check('H8 doc uploaders 1.5x+ post-d30 events', ratio >= 1.5,
-		`uploaders=${avg(upload).toFixed(1)} (n=${upload.length}) non=${avg(non).toFixed(1)} ratio=${ratio.toFixed(2)}x`);
-}
-
-// HOOK 9: end-of-quarter renewal spike d85-95
-{
-	const ds = new Date('2026-01-01T00:00:00Z').getTime();
-	const inWin = new Map(), outWin = new Map();
-	for (const e of events) {
-		if (e.event !== 'renewal completed') continue;
-		const d = Math.floor((new Date(e.time).getTime() - ds) / 86400000);
-		const m = (d >= 85 && d <= 95) ? inWin : outWin;
-		m.set(d, (m.get(d) || 0) + 1);
-	}
-	const inAvg = [...inWin.values()].reduce((s, v) => s + v, 0) / Math.max(inWin.size, 1);
-	const outAvg = [...outWin.values()].reduce((s, v) => s + v, 0) / Math.max(outWin.size, 1);
-	const ratio = inAvg / Math.max(outAvg, 1);
-	check('H9 d85-95 renewal spike 2x+', ratio >= 2.0,
-		`in=${inAvg.toFixed(0)}/day (n=${inWin.size}) out=${outAvg.toFixed(0)}/day ratio=${ratio.toFixed(2)}x`);
-}
-
-// HOOK 10: claim filers → 2x premium on next payment
-{
-	let claimPrems = [], nonPrems = [];
-	for (const [uid, evs] of byUser) {
-		evs.sort((a, b) => new Date(a.time) - new Date(b.time));
-		const claim = evs.find(e => e.event === 'claim filed');
-		const payments = evs.filter(e => e.event === 'payment made' && typeof e.premium_amount === 'number');
-		if (claim) {
-			const claimT = new Date(claim.time).getTime();
-			const post = payments.find(p => new Date(p.time).getTime() > claimT);
-			if (post) claimPrems.push(post.premium_amount);
-		} else if (payments.length) {
-			nonPrems.push(...payments.map(p => p.premium_amount));
-		}
-	}
-	const ratio = avg(claimPrems) / Math.max(avg(nonPrems), 1);
-	// post-1.5.0: per-user mean compression (cohort spans more users at lower
-	// per-user volume); direction preserved (claim > non) — STRONG threshold.
-	check('H10 post-claim premium 1.4x+', ratio >= 1.4,
-		`claim=${avg(claimPrems).toFixed(0)} (n=${claimPrems.length}) non=${avg(nonPrems).toFixed(0)} ratio=${ratio.toFixed(2)}x`);
-}
-
-const passed = results.filter(r => r.p).length;
-console.log(`\n${passed}/${results.length} checks passed`);
-process.exit(passed === results.length ? 0 : 1);
+console.log(`\nworst verdict: ${worst}`);
+process.exit(VERDICT_RANK[worst] >= VERDICT_RANK.STRONG ? 0 : 1);
