@@ -38,7 +38,7 @@ checks.** No documented hook is unverified.
 | 9 | food-delivery | NAILED | 12/12 | 2 |
 | 10 | devtools | NAILED | 10/10 | 1 |
 | 11 | healthcare | STRONG | 11/11 | 2 |
-| 12 | fintech | STRONG | 11/11 | 2 |
+| 12 | fintech | NAILED | 10/10 | 2 |
 | 13 | ai-platform | NAILED | 10/10 | 2 |
 | 14 | marketplace | NAILED | 10/10 | 1 |
 | 15 | media | STRONG | 10/10 | 2 |
