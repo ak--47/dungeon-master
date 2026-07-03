@@ -1545,6 +1545,111 @@ your factor.
 
 ---
 
+#### 4.29 Lifecycle Wave — Dormancy + Resurrection (v1.6)
+
+**Hook:** `everything`
+**Mixpanel report:** Lifecycle — Resurrected users spike after the dormancy window (Section 2.16)
+
+**In Mixpanel:** ~15% of users go dormant for two full weeks starting a week
+after signup, then resurrect with a burst of value-moment activity.
+
+```js
+import { applyLifecycleWave, hashCohort } from "@ak--47/dungeon-master/hook-helpers";
+
+if (type === "everything") {
+  const uid = record[0]?.user_id || "";
+  if (!hashCohort(uid, 15)) return record;
+  // Sweep [birth+7d, birth+21d] clean of value moments, then clone a
+  // 4-event resurrection burst 1-3h after the window.
+  return applyLifecycleWave(record, uid, {
+    dormantFromDay: 7,
+    dormantDays: 14,
+    resurrectBurst: 4,
+    valueMomentEvent: "complete workout",
+  });
+}
+```
+
+**Why the atom sweeps the whole window:** lifecycle "dormant" is an
+`EqualTo 0` filter per period — ONE stray value moment inside the window
+reclassifies the user and the Resurrected spike vanishes. The atom filters
+by timestamp over the array as passed, so events injected by EARLIER hook
+logic in the same pass get swept too. Size `dormantDays` to ≥ 2 lifecycle
+periods (2 weeks for weekly charts) so period tiling can't clip the gap, and
+keep the window inside the user's lifespan (clones past the dataset end are
+dropped by the future-time guard). `dropAll: true` silences the user
+completely for the window — use it when the lifecycle chart counts a broad
+event set rather than one value moment.
+
+---
+
+#### 4.30 Flows Path Share — Biased Branch After an Anchor (v1.6)
+
+**Hook:** `everything`
+**Mixpanel report:** Flows — top paths after the anchor event show the engineered branch (Section 2.17)
+
+**In Mixpanel:** ~30% of users who view an item proceed straight down
+`add to cart → begin checkout`, making it the dominant Sankey branch.
+
+```js
+import { applyPathBias } from "@ak--47/dungeon-master/hook-helpers";
+
+if (type === "everything") {
+  const uid = record[0]?.user_id || "";
+  return applyPathBias(record, uid, {
+    anchor: "view item",
+    path: ["add to cart", "begin checkout"],
+    share: 0.30,                    // FRACTION [0,1] — the atom hashes uid itself
+    gapSeconds: [2, 30],
+  });
+}
+```
+
+**Why the constraints exist:** Flows' unique mode reads only the FIRST flow
+per user, so the atom anchors on the first `anchor` occurrence; gaps are
+clamped ≥1s because sub-second jitter scrambles Sankey step order; and the
+branch needs roughly ≥20-25% share to survive top-3-per-level pruning —
+don't engineer a 5% path and expect to see it. Users missing a source event
+for ANY step are skipped entirely (a partial path would pollute the share);
+verify the effective share with `extractFlows`/`aggregateFlows` rather than
+assuming `share` landed.
+
+---
+
+#### 4.31 Session Shape — Deterministic Cadence (v1.6)
+
+**Hook:** `everything`
+**Mixpanel report:** Insights — sessions per user per week / events per session (Section 2.13)
+
+**In Mixpanel:** A "focused" cohort shows exactly ~3 tight sessions per week
+of ~5 events each, against a diffuse baseline.
+
+```js
+import { applySessionShape, hashCohort } from "@ak--47/dungeon-master/hook-helpers";
+
+if (type === "everything") {
+  const uid = record[0]?.user_id || "";
+  if (!hashCohort(uid, 20)) return record;   // cohort gating is the caller's job
+  return applySessionShape(record, uid, {
+    sessionsPerWeek: 3,
+    eventsPerSession: 5,
+    sessionMinutes: 25,
+  });
+}
+```
+
+**Why it's safe in v1.6:** the engine re-derives `session_id` on the FINAL
+event set (after the `everything` hook), so wholesale timestamp rewrites no
+longer leave stale session labels. The atom keeps intra-session gaps well
+under the 30-min timeout (spacing capped at 20min + bounded jitter), keeps
+inter-session gaps well over it, and never crosses UTC midnight inside one
+engineered session (the day-boundary split would cut it). Retiming only — no
+events are added or dropped, so total counts and event mixes are untouched.
+Session count follows `min(sessionsPerWeek × weeks, ceil(N /
+eventsPerSession))`: scarce users get fewer sessions, not fabricated events.
+
+---
+
 ## 5. Phase 3 Atom Reference
 
 Import from `@ak--47/dungeon-master/hook-helpers`:
@@ -1571,6 +1676,9 @@ Import from `@ak--47/dungeon-master/hook-helpers`:
 | **`injectOnNewDays`** | inject | `(events, eventName, targetDays, options?) -> events[]` | Inject clones on previously empty days within active window — **the right tool for moving frequency-distribution bins** |
 | `isPreAuthEvent` | identity | `(event, authTime) -> boolean` | Check if before user's stitch |
 | `splitByAuth` | identity | `(events, authTime) -> { preAuth, postAuth, stitch }` | Partition by auth boundary |
+| **`applyLifecycleWave`** | shape | `(events, uid, { dormantFromDay, dormantDays, resurrectBurst?, valueMomentEvent, dropAll? }) -> events[]` | Clean dormancy gap + resurrection burst; sweeps the ENTIRE window by timestamp (v1.6, recipe 4.29). Returns a NEW array |
+| **`applyPathBias`** | shape | `(events, uid, { anchor, path, share, gapSeconds? }) -> events[]` | Inject a Flows path after the user's first anchor for ~`share` (fraction) of users; skips users missing any step template (v1.6, recipe 4.30) |
+| **`applySessionShape`** | shape | `(events, uid, { sessionsPerWeek, eventsPerSession, sessionMinutes }) -> events[]` | Retime the stream into deterministic session clusters — intra-gaps ≪ 30min, inter-gaps ≫ 30min, never crosses UTC midnight (v1.6, recipe 4.31) |
 
 **Inject atoms + v1.5:** the engine auto-sorts events by time after the
 `everything` hook (`autoSortAfterEverything: true` default — see Principle
