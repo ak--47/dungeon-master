@@ -158,6 +158,66 @@ describe('funnelFrequency session-count conversion windows', () => {
 	});
 });
 
+describe('funnelFrequency excluded counts (P1.6.4)', () => {
+	// ARB surfaces exclusion tallies per step slot: `fr->excluded[reached + 1]`
+	// (funnel_query.cpp:3422) / `fr->excluded_uniques[reached + 1]` (:3337).
+	// Rows carry an `excluded` column at step_index = the boundary the
+	// terminated history failed to cross.
+
+	test('uniques: excluded user counted at the boundary it failed to cross', () => {
+		const events = [
+			// u1: A then exclusion X → reached 0, excluded at boundary 1
+			ev('u1', 'A', '2024-01-15T10:00:00.000Z'),
+			ev('u1', 'X', '2024-01-15T10:05:00.000Z'),
+			ev('u1', 'B', '2024-01-15T10:10:00.000Z'),
+			ev('u1', 'C', '2024-01-15T10:11:00.000Z'),
+			// u2: clean conversion (C event puts u2 in the same breakdown_freq=1 cohort)
+			ev('u2', 'A', '2024-01-15T10:00:00.000Z'),
+			ev('u2', 'B', '2024-01-15T10:01:00.000Z'),
+			ev('u2', 'C', '2024-01-15T10:02:00.000Z'),
+		];
+		// breakdown axis: u1 and u2 each have C on exactly 1 distinct day → freq 1
+		const rows = emulateBreakdown(events, { ...BASE, exclusionSteps: [{ event: 'X' }] });
+		// hand-computed: step0 = both users; step1 = u2 only; u1 excluded at 1
+		expect(row(rows, 0, 1).conversions).toBe(2);
+		expect(row(rows, 0, 1).excluded).toBe(0);
+		expect(row(rows, 1, 1).conversions).toBe(1);
+		expect(row(rows, 1, 1).excluded).toBe(1);
+	});
+
+	test('excluded-only boundary still gets a row (conversions 0)', () => {
+		const events = [
+			ev('u1', 'A', '2024-01-15T10:00:00.000Z'),
+			ev('u1', 'X', '2024-01-15T10:05:00.000Z'),
+			ev('u1', 'C', '2024-01-15T10:06:00.000Z'),
+		];
+		const rows = emulateBreakdown(events, { ...BASE, exclusionSteps: [{ event: 'X' }] });
+		// hand-computed: nobody reaches step 1, but the exclusion tally lives there
+		expect(row(rows, 0, 1).conversions).toBe(1);
+		expect(row(rows, 1, 1).conversions).toBe(0);
+		expect(row(rows, 1, 1).excluded).toBe(1);
+	});
+
+	test('totals + reentry: each excluded attempt tallies separately', () => {
+		const events = [
+			ev('u1', 'A', '2024-01-15T10:00:00.000Z'),
+			ev('u1', 'X', '2024-01-15T10:05:00.000Z'), // attempt 1 excluded
+			ev('u1', 'A', '2024-01-15T10:10:00.000Z'),
+			ev('u1', 'X', '2024-01-15T10:15:00.000Z'), // attempt 2 excluded
+			ev('u1', 'A', '2024-01-15T10:20:00.000Z'),
+			ev('u1', 'B', '2024-01-15T10:21:00.000Z'), // attempt 3 converts
+			ev('u1', 'C', '2024-01-15T10:22:00.000Z'),
+		];
+		const rows = emulateBreakdown(events, {
+			...BASE, countMode: 'totals', reentry: true, exclusionSteps: [{ event: 'X' }],
+		});
+		// hand-computed: 3 attempts at step 0; 1 reaches step 1; 2 excluded at boundary 1
+		expect(row(rows, 0, 1).conversions).toBe(3);
+		expect(row(rows, 1, 1).conversions).toBe(1);
+		expect(row(rows, 1, 1).excluded).toBe(2);
+	});
+});
+
 describe('funnelFrequency validation', () => {
 	const events = [ev('u1', 'A', '2024-01-15T10:00:00.000Z')];
 
