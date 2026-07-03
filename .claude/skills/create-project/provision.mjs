@@ -182,7 +182,10 @@ function slug(s) {
 
 function isoInDays(days) {
 	const ms = Date.now() + days * 24 * 60 * 60 * 1000;
-	return new Date(ms).toISOString();
+	// Mixpanel's createServiceAccount requires %Y-%m-%dT%H:%M:%SZ — seconds
+	// precision, NO milliseconds. toISOString() emits ".sssZ", which the API
+	// rejects ("Expiration date … does not match %Y-%m-%dT%H:%M:%SZ").
+	return new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 function buildContext(name, config, comments, groupKeys) {
@@ -268,8 +271,11 @@ function printSummary() {
 	console.log(`region:         ${REGION}    timezone: UTC`);
 	console.log(`service acct:   ${sa ? `${sa.username} (role ${sa.role}, expires ${sa.expires})` : '(FAILED — see warnings)'}`);
 	if (groupKeys.length) {
-		const added = groupKeyResult?.added?.map((g) => g.property_name).join(', ') || '(none)';
-		const skipped = groupKeyResult?.skipped?.join(', ') || '(none)';
+		// Defensive: the API's `added`/`skipped` entries may be objects, strings, or
+		// null. Never let summary formatting throw — it would swallow real warnings.
+		const fmt = (g) => (g == null ? null : typeof g === 'string' ? g : (g.property_name || g.name || null));
+		const added = (groupKeyResult?.added || []).map(fmt).filter(Boolean).join(', ') || '(none)';
+		const skipped = (groupKeyResult?.skipped || []).map(fmt).filter(Boolean).join(', ') || '(none)';
 		console.log(`group keys:     added [${added}]  skipped [${skipped}]`);
 	}
 	console.log(`business ctx:   ${content.length} chars uploaded`);
