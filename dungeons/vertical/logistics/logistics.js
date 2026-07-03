@@ -14,7 +14,7 @@ import * as v from "ak-tools";
  *             stock levels, purchase orders, suppliers, shipments, and quality
  *             inspections across multiple warehouses. Multi-tier system with
  *             enterprise, mid-market, small business, and trial customers.
- * SCALE:      10,000 users, ~1.4M events, 121 days (2026-01-01 → 2026-05-01)
+ * SCALE:      10,000 users, ~2.0M events, 121 days (2026-01-01 → 2026-05-01)
  * CORE LOOP:  account created → inventory checked → purchase order → order received → shipment tracked
  *
  * EVENTS (17):
@@ -163,25 +163,27 @@ import * as v from "ak-tools";
  * 6. TRIAL CHURN (everything hook)
  * -------------------------------------------------------------------
  *
- * PATTERN: Users with <10 total events lose 50% of their events after
- * day 7 of the dataset. Simulates trial users who briefly explore then
- * abandon the platform.
+ * PATTERN: Trial-tier users lose 50% of their events after day 7
+ * (measured from their first event). Simulates trial users who briefly
+ * explore then abandon the platform.
+ *
+ * v1.6 BEHAVIOR CHANGE: v1.5 keyed this hook on record.length < 10,
+ * which at this dungeon's event rate (~145 events/user; trial persona
+ * ~58) matched only ~0.9% of users and never touched actual trial
+ * users — the documented retention read below had no engineered signal
+ * behind it. Now keyed on company_tier === "trial" so the story and
+ * the report line up.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Retention by Event Volume
+ *   Report 1: Retention by Company Tier
  *   - Report type: Retention
  *   - Starting event: "account created"
  *   - Return event: Any event
  *   - Breakdown: user property "company_tier"
- *   - Expected: trial users show sharp drop after week 1 (~50% drop)
- *
- *   Report 2: Event Volume Distribution
- *   - Report type: Insights
- *   - Event: All events
- *   - Measure: Total per user
- *   - Breakdown: user property "company_tier"
- *   - Expected: trial users cluster at <5 events
+ *   - Expected: trial users show a sharp extra drop after week 1
+ *     (~50% of their post-week-1 activity is removed, on top of the
+ *     organic 14-day trial activity window)
  *
  * REAL-WORLD ANALOGUE: SaaS trial users who don't activate within
  * the first week rarely convert to paying customers.
@@ -238,7 +240,7 @@ import * as v from "ak-tools";
  *
  * PATTERN: Users with 5-15 "inventory checked" events sit in the
  * "engaged-but-focused" sweet spot — every "purchase order created"
- * event gets quantity boosted ~25%. Users with 16 or more inventory
+ * event gets quantity boosted 1.4x. Users with 16 or more inventory
  * checks are over-engaged (paralysis); ~60% of their "purchase order
  * created" events are dropped. No flag is stamped — discoverable only
  * by binning users on inventory-check COUNT and comparing PO totals.
@@ -252,7 +254,7 @@ import * as v from "ak-tools";
  *   - Event: "purchase order created"
  *   - Measure: Average of "quantity"
  *   - Compare cohort A vs cohort B
- *   - Expected: cohort A ~ 1.25x higher quantity than B
+ *   - Expected: cohort A ~ 1.4x higher quantity than B
  *
  *   Report 2: POs per User by Browse Intensity
  *   - Report type: Insights (with cohort)
@@ -278,6 +280,10 @@ import * as v from "ak-tools";
  * the inter-step time gaps based on the user's company_tier from
  * meta.profile, then rewrites each event's timestamp.
  *
+ * v1.6: scoped to the Onboarding funnel via meta.funnel.name — v1.5
+ * applied the factor to every funnel's gaps, contradicting this
+ * documented story.
+ *
  * HOW TO FIND IT IN MIXPANEL:
  *
  *   Report 1: Onboarding TTC by Company Tier
@@ -288,10 +294,12 @@ import * as v from "ak-tools";
  *   - Expected: enterprise median TTC ~ 0.71x of small_business/trial TTC
  *     (e.g., enterprise ~ 36h vs small_business ~ 66h)
  *
- *   NOTE: This effect is visible ONLY in Mixpanel funnel median TTC.
- *   Cross-event MIN->MIN SQL queries on raw events do NOT show this
- *   because funnel-post mutates timestamps after event generation but
- *   before storage.
+ *   NOTE: This effect is visible in Mixpanel funnel median TTC and in
+ *   emulateBreakdown's timeToConvert (the H10 story asserts it at a
+ *   93.6h window = 72h generative window x the 1.3 small-business
+ *   stretch). Cross-event MIN->MIN SQL queries on raw events do NOT
+ *   show it — greedy single-pass pairing across funnel instances
+ *   buries the signal.
  *
  * REAL-WORLD ANALOGUE: Enterprise customers have dedicated IT teams
  * and onboarding specialists who move through setup, integration,
@@ -299,22 +307,31 @@ import * as v from "ak-tools";
  * the platform themselves.
  *
  * ===================================================================
- * EXPECTED METRICS SUMMARY
+ * EXPECTED METRICS SUMMARY (Measured = full fidelity, 10K users / 2,020,201 events)
  * ===================================================================
  *
- * Hook                        | Metric              | Baseline | Effect  | Ratio
- * ----------------------------|---------------------|----------|---------|------
- * Month-End Reporting         | report_pages        | 20       | 40      | 2x
- * Rush Order Premium          | unit_cost           | $50      | $75     | 1.5x
- * Reorder Accuracy by Tier    | stockout alerts/user| 5        | 4.5     | 0.9x
- * Integration Retention       | reports/user        | 3        | 6       | 2x
- * Alert Fatigue               | response_time_hours | 4h       | 8-12h   | 2-3x
- * Trial Churn                 | events after wk 1   | 5        | 2.5     | 0.5x
- * Enterprise Profiles         | warehouse_count     | 3        | 10      | 3.3x
- * Small-Biz Conversion Drop   | funnel conversion   | 30%      | 20%     | 0.65x
- * Inventory-Check Magic Num   | sweet PO quantity   | 1x       | 1.25x   | 1.25x
- * Inventory-Check Magic Num   | over POs/user       | 1x       | 0.4x    | -60%
- * Onboarding TTC              | funnel median TTC   | 1x       | 0.71x   | 1.4x faster (enterprise)
+ * Story id                  | Metric                                     | Expected      | Measured
+ * --------------------------|--------------------------------------------|---------------|---------
+ * H1-month-end-pages        | organic month-end / mid-month report_pages | ≈2.47         | 2.476
+ *                           | placebo: clone month-end / mid-month pages | ≈1.0          | 1.002
+ * H2-rush-order-premium     | urgent / standard unit_cost                | ≈1.5          | 1.495
+ *                           | placebo: expedited / standard unit_cost    | ≈1.0          | 0.999
+ * H3-stockout-by-tier       | ent / smb stockout-per-inventory-check     | ≈0.89         | 0.905
+ *                           | placebo: mid / smb ratio                   | ≈1.0          | 1.010
+ * H4-integration-reports    | clones per integration (3+ cohort)         | ≈0.637        | 0.627
+ *                           | <3-integration users with any clone        | 0             | 0.0000
+ * H5-alert-fatigue          | late-treated / control response_time       | ≈2.0          | 2.002
+ *                           | placebo: early-untreated / control         | ≈1.0          | 1.003
+ * H6-trial-churn            | DiD trial wk2/wk1 rate vs small_business   | ≈0.5-0.55     | 0.448
+ *                           | placebo: mid_market vs small_business      | ≈1.0          | 1.143
+ * H7-enterprise-profiles    | per-tier profile ranges in-range share     | 100%          | 100%
+ * H8-smb-conversion-drop    | Integration Setup step2→3 smb/mid conv     | ≈0.50         | 0.472
+ *                           | placebo: Supplier Mgmt smb/mid conv        | ≈0.73         | 0.711
+ * H9-inventory-magic-number | sweet / low PO quantity                    | ≈1.4          | 1.388
+ *                           | keep_hat b16-23/b12-15 PO-per-inv (smb)    | ≈0.37         | 0.379
+ *                           | placebo: sweet / low unit_cost             | ≈1.0          | 1.005
+ * H10-onboarding-ttc        | Onboarding median TTC ent/mid (93.6h win)  | ≈0.62-0.74    | 0.741
+ *                           | Onboarding median TTC smb/mid              | ≈1.1-1.2      | 1.107
  */
 
 // ── SCALE ──
@@ -343,7 +360,6 @@ const ALERT_FATIGUE_START_IDX = 20;
 const ALERT_FATIGUE_BASE_MULT = 1.5;
 const ALERT_FATIGUE_RAMP_MULT = 1.5;
 
-const TRIAL_CHURN_EVENT_THRESHOLD = 10;
 const TRIAL_CHURN_CUTOFF_DAYS = 7;
 const TRIAL_CHURN_DROP_LIKELIHOOD = 50;
 
@@ -392,6 +408,10 @@ function handleEventHooks(record) {
 function handleFunnelPostHooks(record, meta) {
 	// H10: ONBOARDING TIME-TO-CONVERT — enterprise 1.4x faster (0.71);
 	// small_business + trial 1.3x slower (1.3).
+	// v1.6: scoped to the Onboarding funnel only. v1.5 applied the factor to
+	// EVERY funnel's inter-step gaps, contradicting the documented story
+	// (Onboarding TTC) and silently stretching/compressing all five funnels.
+	if (meta?.funnel?.name !== "Onboarding") return record;
 	const segment = meta?.profile?.company_tier;
 	if (Array.isArray(record) && record.length > 1) {
 		const factor = (
@@ -459,6 +479,28 @@ function handleEverythingHooks(record, meta) {
 		}
 	}
 
+	// H6: TRIAL CHURN — trial-tier users lose 50% of events after day 7
+	// (measured from their first event; account created is isFirstEvent so
+	// record[0] is the birth event).
+	// v1.6: keyed on company_tier === "trial". v1.5 keyed on
+	// record.length < 10, which at this dungeon's event rate (~145
+	// events/user; trial persona ~58) matched only ~0.9% of users and never
+	// touched actual trial users — the documented retention read (trial
+	// drop after week 1, broken down by company_tier) had no engineered
+	// signal behind it.
+	// Runs BEFORE H4 so the 3+-integration clone cohort is defined on
+	// FINAL integration counts — otherwise churned trial users keep clones
+	// while their output count falls below the threshold (leakage).
+	if (profile && profile.company_tier === "trial" && record.length > 1) {
+		const firstTime = dayjs(record[0].time);
+		const cutoff = firstTime.add(TRIAL_CHURN_CUTOFF_DAYS, "days");
+		for (let i = record.length - 1; i >= 0; i--) {
+			if (dayjs(record[i].time).isAfter(cutoff) && chance.bool({ likelihood: TRIAL_CHURN_DROP_LIKELIHOOD })) {
+				record.splice(i, 1);
+			}
+		}
+	}
+
 	// H4: INTEGRATION COMPLETION DRIVES RETENTION — users with 3+
 	// "integration connected" events get cloned "report generated" events.
 	const integrationCount = record.filter(e => e.event === "integration connected").length;
@@ -472,6 +514,7 @@ function handleEverythingHooks(record, meta) {
 						...templateReport,
 						time: dayjs(ie.time).add(chance.integer({ min: 1, max: 5 }), "days").toISOString(),
 						user_id: ie.user_id,
+						insert_id: chance.guid(), // clones must not share the template's insert_id (Mixpanel dedup)
 						report_type: "integration_summary",
 						report_pages: chance.integer({ min: 5, max: 25 }),
 					});
@@ -492,23 +535,8 @@ function handleEverythingHooks(record, meta) {
 		});
 	}
 
-	// H6: TRIAL CHURN — users with <10 total events lose 50% after day 7.
-	if (record.length < TRIAL_CHURN_EVENT_THRESHOLD) {
-		const userFirstEvent = record[0];
-		if (userFirstEvent) {
-			const firstTime = dayjs(userFirstEvent.time);
-			const cutoff = firstTime.add(TRIAL_CHURN_CUTOFF_DAYS, "days");
-			for (let i = record.length - 1; i >= 0; i--) {
-				if (dayjs(record[i].time).isAfter(cutoff) && chance.bool({ likelihood: TRIAL_CHURN_DROP_LIKELIHOOD })) {
-					record.splice(i, 1);
-				}
-			}
-		}
-	}
-
 	// H9: INVENTORY-CHECK MAGIC NUMBER (no flags) — sweet 5-15 inventory
-	// checks → +25% PO quantity (1.4x to overcome dilution); over 16+ →
-	// drop 60% of PO created events.
+	// checks → PO quantity x1.4; over 16+ → drop 60% of PO created events.
 	const invCheckCount = record.filter(e => e.event === "inventory checked").length;
 	if (invCheckCount >= INVENTORY_SWEET_MIN && invCheckCount <= INVENTORY_SWEET_MAX) {
 		record.forEach(e => {
@@ -984,3 +1012,619 @@ const config = {
 };
 
 export default config;
+
+// ═══════════════════════════════════════════════════════════════
+// STORIES — v1.6 machine-checkable verification contract
+// ═══════════════════════════════════════════════════════════════
+//
+// Measurement doctrine (why each read is shaped the way it is):
+//
+// - IDENTITY. avgDevicePerUser: 2, and "account created" is both
+//   isAuthEvent and isFirstEvent, so born users auth on their first
+//   event. The ID_CTE resolves device-only rows through the profile
+//   device pool (stored under the legacy "anonymousIds" key).
+//
+// - CLONE EXCLUSION (H1 vs H4). H4's cloned reports carry
+//   report_type = 'integration_summary' — a value outside the organic
+//   pool — and uniform report_pages [5, 25] stamped AFTER H1's
+//   month-end multiplier runs. Clones therefore dilute any pooled
+//   month-end read; H1 filters them out (and uses them as its placebo
+//   arm: their day-of-month page ratio must be ~1.0).
+//
+// - ONE-SIDED DELETIONS. Stockout alerts are deleted only for
+//   enterprise (H3), alert-configured only for small_business (H8),
+//   POs only for 16+ inventory checkers (H9), trial events only after
+//   day 7 (H6). H6 runs BEFORE both count-threshold hooks (H4, H9), so
+//   output integration-connected and inventory-check counts equal the
+//   hook-time counts those thresholds keyed on — cohort membership is
+//   exactly recoverable from the output.
+//
+// - ACTIVITY COUPLING (H9 volume read). Inventory-check count is
+//   coupled to total activity, so cross-arm PO-per-user levels are
+//   meaningless. The read uses PO-per-inventory-check within the
+//   small_business tier only (constant conversionModifier), and reads
+//   the treated cliff against the adjacent untreated bin, with a
+//   flatness guard on the pre-cliff bins (measured organic gradient:
+//   1.62 → 1.62 → 1.46 across bins 4-7/8-11/12-15).
+//
+// - RELATIVE-DAY DiD (H6). Trial users lose 50% of events after day 7
+//   from first event. Cross-tier LEVELS differ (activeWindow 14d,
+//   multipliers), but each tier's own rate(day 8-13)/rate(day 1-6)
+//   cancels its level; small_business is the untreated comparator.
+//   Derivation: DiD = 0.5 x (organic trial ratio / organic smb ratio);
+//   the organic composition term is bounded [0.9, 1.2] (smb measured
+//   0.91, mid 0.96, enterprise 1.06 — flat-to-mild-decline across
+//   personas), giving [0.45, 0.60]; band [0.44, 0.62].
+//
+// - EMULATOR TTC (H8, H10). Funnel-step conversion and TTC reads go
+//   through emulateBreakdown's timeToConvert (Mixpanel-aligned greedy
+//   in-window pairing). H10's window = 72h generative x 1.3 max
+//   stretch = 93.6h so slow-arm conversions are not right-censored
+//   into a fake speedup. Only born-in-dataset users (~12%) have
+//   "account created" inside the window — cohorts are structurally
+//   ~1/8 of numUsers; minCohort reflects that.
+//
+// - PERSONA CONVERSION GAP (H8). small_business carries an organic
+//   conversionModifier gap vs mid_market on EVERY funnel. The placebo
+//   assertion pins that organic gap on the untreated Supplier
+//   Management funnel (measured 0.73; Alert Response cross-check
+//   0.85); the treated Integration Setup ratio must sit at
+//   0.65 x organic [0.73, 0.85] x multi-candidate attenuation
+//   [1.0, 1.12] = [0.47, 0.62].
+
+const ID_CTE = `
+us AS (SELECT * FROM read_json_auto('{{PREFIX}}-USERS*.json', sample_size=-1, union_by_name=true)),
+dm AS (SELECT unnest("anonymousIds") AS device_id, distinct_id FROM us),
+ev AS (SELECT coalesce(m.distinct_id::VARCHAR, e.user_id::VARCHAR, e.device_id::VARCHAR) AS uid,
+       e.time::TIMESTAMP AS t, e.*
+FROM read_json_auto('{{PREFIX}}-EVENTS*.json', sample_size=-1, union_by_name=true) e
+LEFT JOIN dm m ON e.device_id = m.device_id)`;
+
+const PU_CTE = `
+pu AS (SELECT uid, count(*) AS total,
+  count(*) FILTER (WHERE event = 'inventory checked') AS inv,
+  count(*) FILTER (WHERE event = 'purchase order created') AS po,
+  count(*) FILTER (WHERE event = 'stockout alert') AS so,
+  count(*) FILTER (WHERE event = 'integration connected') AS ic,
+  count(*) FILTER (WHERE event = 'report generated' AND report_type = 'integration_summary') AS clones,
+  min(t) AS first_t
+FROM ev GROUP BY 1)`;
+
+const cellsOf = (rows, key) => Object.fromEntries((rows || []).map((r) => [r[key], r]));
+
+export const stories = [
+	{
+		id: "H1-month-end-pages",
+		hook: "H1",
+		archetype: "temporal-inflection",
+		narrative:
+			`Reports on calendar days >= ${MONTH_END_DAY_THRESHOLD} get report_pages x${MONTH_END_PAGES_MULT} ` +
+			"(floored). The read excludes H4's clones (report_type 'integration_summary' — stamped after " +
+			"H1 runs, with uniform [5, 25] pages regardless of day). Organic pool mean ~22 pages, so the " +
+			`floor costs ~1%: expected ratio ~${(MONTH_END_PAGES_MULT - 0.03).toFixed(2)}, band [2.25, 2.65]. ` +
+			"The clones themselves are the placebo arm: their day-of-month ratio must sit in [0.88, 1.12].",
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT CASE WHEN extract(day FROM t) >= ${MONTH_END_DAY_THRESHOLD} THEN 'me' ELSE 'mid' END AS bucket,
+  count(*)::BIGINT AS user_count, avg(report_pages) AS pages
+FROM ev WHERE event = 'report generated' AND report_type <> 'integration_summary'
+GROUP BY 1`,
+				},
+				select: {
+					me: { where: { bucket: "me" } },
+					mid: { where: { bucket: "mid" } },
+				},
+				expect: { metric: "me.pages / mid.pages", op: "between", target: [2.25, 2.65] },
+				minCohort: 5000,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT CASE WHEN extract(day FROM t) >= ${MONTH_END_DAY_THRESHOLD} THEN 'me' ELSE 'mid' END AS bucket,
+  count(*)::BIGINT AS user_count, avg(report_pages) AS pages
+FROM ev WHERE event = 'report generated' AND report_type = 'integration_summary'
+GROUP BY 1`,
+				},
+				select: {
+					me: { where: { bucket: "me" } },
+					mid: { where: { bucket: "mid" } },
+				},
+				expect: { metric: "me.pages / mid.pages", op: "between", target: [0.88, 1.12] },
+				minCohort: 4000,
+			},
+		],
+	},
+	{
+		id: "H2-rush-order-premium",
+		hook: "H2",
+		archetype: "cohort-prop-scale",
+		narrative:
+			`'purchase order created' with priority 'urgent' gets unit_cost x${RUSH_ORDER_COST_MULT}, floored. ` +
+			"unit_cost is an iid pool draw (organic mean ~93), priority is an iid 3:1:1 pool, and no other " +
+			"hook touches unit_cost — the urgent/standard mean ratio reads the knob within floor loss " +
+			"(<1%). Band [1.42, 1.58]. 'expedited' is untreated: placebo band [0.94, 1.06].",
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT priority, count(*)::BIGINT AS user_count, avg(unit_cost) AS cost
+FROM ev WHERE event = 'purchase order created' AND priority IN ('urgent', 'standard')
+GROUP BY 1`,
+				},
+				select: {
+					urg: { where: { priority: "urgent" } },
+					std: { where: { priority: "standard" } },
+				},
+				expect: { metric: "urg.cost / std.cost", op: "between", target: [1.42, 1.58] },
+				minCohort: 20000,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT priority, count(*)::BIGINT AS user_count, avg(unit_cost) AS cost
+FROM ev WHERE event = 'purchase order created' AND priority IN ('expedited', 'standard')
+GROUP BY 1`,
+				},
+				select: {
+					exp: { where: { priority: "expedited" } },
+					std: { where: { priority: "standard" } },
+				},
+				expect: { metric: "exp.cost / std.cost", op: "between", target: [0.94, 1.06] },
+				minCohort: 20000,
+			},
+		],
+	},
+	{
+		id: "H3-stockout-by-tier",
+		hook: "H3",
+		archetype: "cohort-count-scale",
+		narrative:
+			`Enterprise users get ${ENTERPRISE_STOCKOUT_DROP_LIKELIHOOD}% of stockout alerts removed. ` +
+			"Per-user LEVELS are dominated by persona event multipliers (enterprise 5x), so the read is " +
+			"the stockout-per-inventory-check ratio — both counts scale with the same multiplier, and " +
+			"the supply-chain worldEvent (x3 stockouts, days 35-40) hits all tiers alike and cancels " +
+			"cross-tier. Expected enterprise/small_business = 0.90 x organic composition (~0.98 measured), " +
+			"band [0.83, 0.95]; mid_market placebo [0.93, 1.07].",
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}, ${PU_CTE}
+SELECT u.company_tier AS tier, count(*)::BIGINT AS user_count,
+  sum(p.so)::DOUBLE / sum(p.inv) AS ratio
+FROM pu p JOIN us u ON u.distinct_id::VARCHAR = p.uid
+GROUP BY 1`,
+				},
+				select: {
+					ent: { where: { tier: "enterprise" } },
+					smb: { where: { tier: "small_business" } },
+				},
+				expect: { metric: "ent.ratio / smb.ratio", op: "between", target: [0.83, 0.95] },
+				minCohort: 1000,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}, ${PU_CTE}
+SELECT u.company_tier AS tier, count(*)::BIGINT AS user_count,
+  sum(p.so)::DOUBLE / sum(p.inv) AS ratio
+FROM pu p JOIN us u ON u.distinct_id::VARCHAR = p.uid
+GROUP BY 1`,
+				},
+				select: {
+					mid: { where: { tier: "mid_market" } },
+					smb: { where: { tier: "small_business" } },
+				},
+				expect: { metric: "mid.ratio / smb.ratio", op: "between", target: [0.93, 1.07] },
+				minCohort: 2500,
+			},
+		],
+	},
+	{
+		id: "H4-integration-reports",
+		hook: "H4",
+		archetype: "cohort-count-scale",
+		narrative:
+			`Users with >= ${INTEGRATION_THRESHOLD} 'integration connected' events get a cloned ` +
+			`'report generated' per integration at ${INTEGRATION_REPORT_CLONE_LIKELIHOOD}% likelihood, ` +
+			"+1-5 days after the integration, tagged report_type 'integration_summary'. H6 (the only " +
+			"hook that deletes integrations) runs BEFORE H4, so output integration counts equal H4's " +
+			"hook-time counts exactly — the clone cohort is defined on final counts. Clones landing " +
+			"past dataset end are killed by the future-time guard: expected rate = 0.65 x (1 - ~2% " +
+			"edge loss) = 0.637 (measured 0.6315 at iteration). Band [0.58, 0.70]. Users below the " +
+			"threshold must have ZERO clones — leakage is structural, not statistical.",
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}, ${PU_CTE}
+SELECT count(*)::BIGINT AS users, sum(p.clones)::DOUBLE / sum(p.ic) AS rate
+FROM pu p WHERE p.ic >= ${INTEGRATION_THRESHOLD}`,
+				},
+				assert: (rows) => {
+					const r = rows?.[0];
+					if (!r || Number(r.users) < 5000) {
+						return { verdict: "WEAK", detail: `cohort too small: users=${r?.users ?? 0}` };
+					}
+					const rate = Number(r.rate);
+					const detail = `clones-per-integration=${rate.toFixed(4)} (knob ${INTEGRATION_REPORT_CLONE_LIKELIHOOD}% x ~0.98 future-guard survival; n=${r.users})`;
+					if (rate >= 0.58 && rate <= 0.70) return { verdict: "NAILED", detail };
+					if (rate >= 0.54 && rate <= 0.74) return { verdict: "STRONG", detail };
+					if (rate >= 0.30) return { verdict: "WEAK", detail };
+					return { verdict: "NONE", detail };
+				},
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}, ${PU_CTE}
+SELECT count(*)::BIGINT AS users, avg((p.clones > 0)::INT) AS leak
+FROM pu p WHERE p.ic < ${INTEGRATION_THRESHOLD}`,
+				},
+				assert: (rows) => {
+					const r = rows?.[0];
+					if (!r || Number(r.users) < 800) {
+						return { verdict: "WEAK", detail: `cohort too small: users=${r?.users ?? 0}` };
+					}
+					const leak = Number(r.leak);
+					const detail = `share of <${INTEGRATION_THRESHOLD}-integration users with any clone=${leak.toFixed(4)} (n=${r.users})`;
+					if (leak <= 0.01) return { verdict: "NAILED", detail };
+					if (leak <= 0.03) return { verdict: "STRONG", detail };
+					return { verdict: "NONE", detail };
+				},
+			},
+		],
+	},
+	{
+		id: "H5-alert-fatigue",
+		hook: "H5",
+		archetype: "temporal-inflection",
+		narrative:
+			`Users with > ${ALERT_FATIGUE_THRESHOLD} stockout alerts get response_time_hours scaled on ` +
+			`alerts from index ${ALERT_FATIGUE_START_IDX} on: x(1.5 + 1.5 x (idx-20)/n). Hook index is ` +
+			"record order, read index is time order — iteration showed the alignment is exact (early-arm " +
+			"placebo 1.000). Reading indexes >= 25 (margin past the boundary), aggregate multiplier ~2.0 " +
+			"for the observed n distribution. Control = users with 20-30 alerts (never treated, same iid " +
+			"response_time pool, mean ~25h). Bands: treated-late/control [1.75, 2.25]; treated-early " +
+			"(idx <= 14, untreated) placebo [0.88, 1.12].",
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+al AS (SELECT uid, response_time_hours AS rt,
+  row_number() OVER (PARTITION BY uid ORDER BY t) - 1 AS idx,
+  count(*) OVER (PARTITION BY uid) AS n
+FROM ev WHERE event = 'stockout alert')
+SELECT 'late' AS cell, count(DISTINCT uid)::BIGINT AS user_count, avg(rt) AS rt
+FROM al WHERE n > ${ALERT_FATIGUE_THRESHOLD} AND idx >= 25
+UNION ALL
+SELECT 'ctl', count(DISTINCT uid)::BIGINT, avg(rt)
+FROM al WHERE n BETWEEN 20 AND ${ALERT_FATIGUE_THRESHOLD}`,
+				},
+				select: {
+					late: { where: { cell: "late" } },
+					ctl: { where: { cell: "ctl" } },
+				},
+				expect: { metric: "late.rt / ctl.rt", op: "between", target: [1.75, 2.25] },
+				minCohort: 500,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+al AS (SELECT uid, response_time_hours AS rt,
+  row_number() OVER (PARTITION BY uid ORDER BY t) - 1 AS idx,
+  count(*) OVER (PARTITION BY uid) AS n
+FROM ev WHERE event = 'stockout alert')
+SELECT 'early' AS cell, count(DISTINCT uid)::BIGINT AS user_count, avg(rt) AS rt
+FROM al WHERE n > ${ALERT_FATIGUE_THRESHOLD} AND idx <= 14
+UNION ALL
+SELECT 'ctl', count(DISTINCT uid)::BIGINT, avg(rt)
+FROM al WHERE n BETWEEN 20 AND ${ALERT_FATIGUE_THRESHOLD}`,
+				},
+				select: {
+					early: { where: { cell: "early" } },
+					ctl: { where: { cell: "ctl" } },
+				},
+				expect: { metric: "early.rt / ctl.rt", op: "between", target: [0.88, 1.12] },
+				minCohort: 500,
+			},
+		],
+	},
+	{
+		id: "H6-trial-churn",
+		hook: "H6",
+		archetype: "retention-divergence",
+		narrative:
+			`Trial-tier users lose ${TRIAL_CHURN_DROP_LIKELIHOOD}% of events after day ` +
+			`${TRIAL_CHURN_CUTOFF_DAYS} from their first event (v1.6 behavior change: v1.5 keyed on ` +
+			"record.length < 10, which matched ~0.9% of users and never touched trials). Cross-tier " +
+			"levels are incomparable (activeWindow 14d, 0.4x multiplier), so the read is a relative-day " +
+			"DiD: each tier's own rate(day 8-13)/rate(day 1-6) cancels its level. Derivation: DiD = " +
+			"0.5 x (organic trial ratio / organic smb ratio), organic term bounded [0.9, 1.2] from the " +
+			"untreated tiers' spread (smb 0.91, mid 0.96, ent 1.06) => band [0.44, 0.62]. Placebo " +
+			"mid_market/smb [0.92, 1.15].",
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+fe AS (SELECT uid, min(t) AS f FROM ev GROUP BY 1),
+rd AS (SELECT e.uid, date_diff('day', fe.f, e.t) AS d FROM ev e JOIN fe ON fe.uid = e.uid)
+SELECT u.company_tier AS tier, count(DISTINCT r.uid)::BIGINT AS user_count,
+  count(*) FILTER (WHERE d BETWEEN 8 AND 13)::DOUBLE / count(*) FILTER (WHERE d BETWEEN 1 AND 6) AS ratio
+FROM rd r JOIN us u ON u.distinct_id::VARCHAR = r.uid
+GROUP BY 1`,
+				},
+				select: {
+					trial: { where: { tier: "trial" } },
+					smb: { where: { tier: "small_business" } },
+				},
+				expect: { metric: "trial.ratio / smb.ratio", op: "between", target: [0.44, 0.62] },
+				minCohort: 500,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+fe AS (SELECT uid, min(t) AS f FROM ev GROUP BY 1),
+rd AS (SELECT e.uid, date_diff('day', fe.f, e.t) AS d FROM ev e JOIN fe ON fe.uid = e.uid)
+SELECT u.company_tier AS tier, count(DISTINCT r.uid)::BIGINT AS user_count,
+  count(*) FILTER (WHERE d BETWEEN 8 AND 13)::DOUBLE / count(*) FILTER (WHERE d BETWEEN 1 AND 6) AS ratio
+FROM rd r JOIN us u ON u.distinct_id::VARCHAR = r.uid
+GROUP BY 1`,
+				},
+				select: {
+					mid: { where: { tier: "mid_market" } },
+					smb: { where: { tier: "small_business" } },
+				},
+				expect: { metric: "mid.ratio / smb.ratio", op: "between", target: [0.92, 1.15] },
+				minCohort: 2500,
+			},
+		],
+	},
+	{
+		id: "H7-enterprise-profiles",
+		hook: "H7",
+		archetype: "cohort-prop-scale",
+		narrative:
+			"The user hook overwrites warehouse_count and employee_count per tier with disjoint uniform " +
+			"ranges: enterprise wh [5, 15] emp [200, 2000]; mid_market wh [2, 6] emp [20, 200]; " +
+			"small_business wh [1, 3] emp [5, 80]; trial wh = 1 emp [1, 10]. Personas cover 100% of " +
+			"users, so every profile is overwritten and the ranges are EXACT — min/max per tier must sit " +
+			"inside the knob ranges with zero out-of-range profiles for NAILED.",
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT company_tier AS tier, count(*)::BIGINT AS user_count,
+  avg((CASE company_tier
+    WHEN 'enterprise' THEN (warehouse_count BETWEEN 5 AND 15 AND employee_count BETWEEN 200 AND 2000)
+    WHEN 'mid_market' THEN (warehouse_count BETWEEN 2 AND 6 AND employee_count BETWEEN 20 AND 200)
+    WHEN 'small_business' THEN (warehouse_count BETWEEN 1 AND 3 AND employee_count BETWEEN 5 AND 80)
+    WHEN 'trial' THEN (warehouse_count = 1 AND employee_count BETWEEN 1 AND 10)
+  END)::INT) AS in_range
+FROM us GROUP BY 1`,
+				},
+				assert: (rows) => {
+					const by = cellsOf(rows, "tier");
+					const ent = by.enterprise, mid = by.mid_market, smb = by.small_business, tri = by.trial;
+					if (!ent || !mid || !smb || !tri ||
+						Number(ent.user_count) < 800 || Number(mid.user_count) < 2000 ||
+						Number(smb.user_count) < 2000 || Number(tri.user_count) < 400) {
+						return { verdict: "WEAK", detail: `cohort too small: ent=${ent?.user_count ?? 0} mid=${mid?.user_count ?? 0} smb=${smb?.user_count ?? 0} trial=${tri?.user_count ?? 0}` };
+					}
+					const shares = [ent, mid, smb, tri].map((c) => Number(c.in_range));
+					const detail = `in-range shares ent=${shares[0].toFixed(4)} mid=${shares[1].toFixed(4)} smb=${shares[2].toFixed(4)} trial=${shares[3].toFixed(4)}`;
+					if (shares.every((s) => s === 1)) return { verdict: "NAILED", detail };
+					if (shares.every((s) => s >= 0.99)) return { verdict: "STRONG", detail };
+					if (shares.every((s) => s >= 0.9)) return { verdict: "WEAK", detail };
+					return { verdict: "NONE", detail };
+				},
+			},
+		],
+	},
+	{
+		id: "H8-smb-conversion-drop",
+		hook: "H8",
+		archetype: "funnel-conversion-by-segment",
+		narrative:
+			`small_business users lose ${SMB_ALERT_DROP_LIKELIHOOD}% of 'alert configured' events — the ` +
+			"last step of Integration Setup. Read through the emulator's greedy in-window pairing " +
+			"(step2->step3 conditional conversion). small_business ALSO carries an organic " +
+			"conversionModifier gap vs mid_market on every funnel, so the treated ratio is " +
+			"0.65 x organic [0.73, 0.85] x multi-candidate attenuation [1.0, 1.12] = [0.47, 0.62] " +
+			"(measured 0.505 at iteration); band [0.44, 0.62]. The untreated Supplier Management funnel " +
+			"pins the organic gap itself: [0.68, 0.90] (measured 0.73; Alert Response cross-check 0.85). " +
+			"The two bands are disjoint — the gap between them IS the engineered effect.",
+		assertions: [
+			{
+				breakdown: {
+					type: "timeToConvert",
+					steps: ["integration connected", "report generated", "alert configured"],
+					breakdownByUserProperty: "company_tier",
+					conversionWindowMs: 48 * 3600 * 1000,
+				},
+				assert: (rows) => {
+					const by = cellsOf(rows, "segment_value");
+					const mid = by.mid_market, smb = by.small_business;
+					const midAtt = Number(mid?.step_counts?.[1] ?? 0), smbAtt = Number(smb?.step_counts?.[1] ?? 0);
+					if (midAtt < 1500 || smbAtt < 1500) {
+						return { verdict: "WEAK", detail: `step-2 cohorts too small: mid=${midAtt} smb=${smbAtt}` };
+					}
+					const convM = Number(mid.step_counts[2]) / midAtt;
+					const convS = Number(smb.step_counts[2]) / smbAtt;
+					const ratio = convS / convM;
+					const detail = `step2->3 conv smb=${convS.toFixed(4)} mid=${convM.toFixed(4)} ratio=${ratio.toFixed(3)} (attempts ${smbAtt}/${midAtt})`;
+					if (ratio >= 0.44 && ratio <= 0.62) return { verdict: "NAILED", detail };
+					if (ratio >= 0.38 && ratio <= 0.70) return { verdict: "STRONG", detail };
+					if (ratio < 0.85) return { verdict: "WEAK", detail };
+					return { verdict: ratio >= 1 ? "INVERSE" : "NONE", detail };
+				},
+			},
+			{
+				breakdown: {
+					type: "timeToConvert",
+					steps: ["supplier contacted", "purchase order created", "invoice processed"],
+					breakdownByUserProperty: "company_tier",
+					conversionWindowMs: 336 * 3600 * 1000,
+				},
+				assert: (rows) => {
+					const by = cellsOf(rows, "segment_value");
+					const mid = by.mid_market, smb = by.small_business;
+					const midAtt = Number(mid?.step_counts?.[1] ?? 0), smbAtt = Number(smb?.step_counts?.[1] ?? 0);
+					if (midAtt < 2000 || smbAtt < 2000) {
+						return { verdict: "WEAK", detail: `step-2 cohorts too small: mid=${midAtt} smb=${smbAtt}` };
+					}
+					const convM = Number(mid.step_counts[2]) / midAtt;
+					const convS = Number(smb.step_counts[2]) / smbAtt;
+					const ratio = convS / convM;
+					const detail = `placebo (untreated funnel) step2->3 conv smb=${convS.toFixed(4)} mid=${convM.toFixed(4)} ratio=${ratio.toFixed(3)} (attempts ${smbAtt}/${midAtt})`;
+					if (ratio >= 0.68 && ratio <= 0.90) return { verdict: "NAILED", detail };
+					if (ratio >= 0.60 && ratio <= 0.98) return { verdict: "STRONG", detail };
+					if (ratio >= 0.50) return { verdict: "WEAK", detail };
+					return { verdict: "NONE", detail };
+				},
+			},
+		],
+	},
+	{
+		id: "H9-inventory-magic-number",
+		hook: "H9",
+		archetype: "frequency-sweet-spot",
+		narrative:
+			`Sweet spot ${INVENTORY_SWEET_MIN}-${INVENTORY_SWEET_MAX} inventory checks => PO quantity ` +
+			`x${INVENTORY_PO_QUANTITY_BOOST}; ${INVENTORY_OVER_THRESHOLD}+ checks => ` +
+			`${INVENTORY_OVER_PO_DROP_LIKELIHOOD}% of POs dropped. Output inventory-check counts equal ` +
+			"hook-time counts (H9 reads them after H6, nothing later mutates them). Value read: " +
+			"quantity is an iid pool draw, so sweet/low mean ratio reads the knob [1.30, 1.50]; " +
+			"unit_cost placebo [0.94, 1.07]. Volume read: PO count is activity-coupled, so the read is " +
+			"PO-per-inventory-check within small_business only, treated cliff bin 16-23 vs adjacent " +
+			"untreated 12-15: keep_hat = 0.4 x organic gradient [0.83, 1.0] => band [0.31, 0.44] " +
+			"(measured 0.372), guarded by pre-cliff flatness (8-11 vs 4-7 in [0.85, 1.10]).",
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}, ${PU_CTE}
+SELECT CASE WHEN p.inv BETWEEN ${INVENTORY_SWEET_MIN} AND ${INVENTORY_SWEET_MAX} THEN 'sweet'
+            WHEN p.inv <= ${INVENTORY_SWEET_MIN - 1} THEN 'low' END AS arm,
+  count(DISTINCT p.uid)::BIGINT AS user_count, avg(e.quantity) AS qty
+FROM pu p JOIN ev e ON e.uid = p.uid AND e.event = 'purchase order created'
+WHERE p.inv <= ${INVENTORY_SWEET_MAX}
+GROUP BY 1`,
+				},
+				select: {
+					sweet: { where: { arm: "sweet" } },
+					low: { where: { arm: "low" } },
+				},
+				expect: { metric: "sweet.qty / low.qty", op: "between", target: [1.30, 1.50] },
+				minCohort: 400,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}, ${PU_CTE}
+SELECT CASE WHEN p.inv BETWEEN 4 AND 7 THEN 'b04'
+            WHEN p.inv BETWEEN 8 AND 11 THEN 'b08'
+            WHEN p.inv BETWEEN 12 AND ${INVENTORY_SWEET_MAX} THEN 'b12'
+            WHEN p.inv BETWEEN ${INVENTORY_OVER_THRESHOLD} AND 23 THEN 'b16' END AS bin,
+  count(*)::BIGINT AS user_count, sum(p.po)::DOUBLE / sum(p.inv) AS ppi
+FROM pu p JOIN us u ON u.distinct_id::VARCHAR = p.uid
+WHERE u.company_tier = 'small_business' AND p.inv BETWEEN 4 AND 23
+GROUP BY 1`,
+				},
+				assert: (rows) => {
+					const by = cellsOf(rows, "bin");
+					const b04 = by.b04, b08 = by.b08, b12 = by.b12, b16 = by.b16;
+					if (!b04 || !b08 || !b12 || !b16 ||
+						Number(b04.user_count) < 250 || Number(b08.user_count) < 500 ||
+						Number(b12.user_count) < 500 || Number(b16.user_count) < 800) {
+						return { verdict: "WEAK", detail: `bins too small: ${[b04, b08, b12, b16].map((b) => b?.user_count ?? 0).join("/")}` };
+					}
+					const flat = Number(b08.ppi) / Number(b04.ppi);
+					if (flat < 0.85 || flat > 1.10) {
+						return { verdict: "NONE", detail: `pre-cliff gradient assumption broken: b08/b04=${flat.toFixed(3)} outside [0.85, 1.10]` };
+					}
+					const keep = Number(b16.ppi) / Number(b12.ppi);
+					const detail = `keep_hat=${keep.toFixed(3)} (b16-23 ppi ${Number(b16.ppi).toFixed(3)} / b12-15 ppi ${Number(b12.ppi).toFixed(3)}; knob 0.4 x organic gradient [0.83, 1.0]; pre-cliff flat=${flat.toFixed(3)})`;
+					if (keep >= 0.31 && keep <= 0.44) return { verdict: "NAILED", detail };
+					if (keep >= 0.26 && keep <= 0.50) return { verdict: "STRONG", detail };
+					if (keep < 0.70) return { verdict: "WEAK", detail };
+					return { verdict: keep >= 1 ? "INVERSE" : "NONE", detail };
+				},
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}, ${PU_CTE}
+SELECT CASE WHEN p.inv BETWEEN ${INVENTORY_SWEET_MIN} AND ${INVENTORY_SWEET_MAX} THEN 'sweet'
+            WHEN p.inv <= ${INVENTORY_SWEET_MIN - 1} THEN 'low' END AS arm,
+  count(DISTINCT p.uid)::BIGINT AS user_count, avg(e.unit_cost) AS cost
+FROM pu p JOIN ev e ON e.uid = p.uid AND e.event = 'purchase order created'
+WHERE p.inv <= ${INVENTORY_SWEET_MAX}
+GROUP BY 1`,
+				},
+				select: {
+					sweet: { where: { arm: "sweet" } },
+					low: { where: { arm: "low" } },
+				},
+				expect: { metric: "sweet.cost / low.cost", op: "between", target: [0.94, 1.07] },
+				minCohort: 400,
+			},
+		],
+	},
+	{
+		id: "H10-onboarding-ttc",
+		hook: "H10",
+		archetype: "funnel-ttc-by-segment",
+		narrative:
+			`funnel-post scales Onboarding inter-step gaps: enterprise x${TTC_ENTERPRISE_FACTOR}, ` +
+			`small_business/trial x${TTC_SMB_FACTOR}, mid_market untouched (v1.6 scopes the hook to ` +
+			"Onboarding only). Cross-event SQL cannot see this (greedy single-pass pairing — the " +
+			"documented v1.5 limitation), so both reads use the emulator's timeToConvert at " +
+			`72h x ${TTC_SMB_FACTOR} = 93.6h — the generative window times the max stretch, so ` +
+			"slow-arm conversions are not right-censored into a fake speedup. Only born-in-dataset " +
+			"users (~12%) have 'account created' in-window, so converter cohorts are ~1/8 scale: " +
+			"minCohort 120. Window censoring and converter selection compress ratios toward 1 " +
+			"(iteration: ent/mid 0.62, smb/mid 1.18): bands [0.50, 0.80] and [1.04, 1.40].",
+		assertions: [
+			{
+				breakdown: {
+					type: "timeToConvert",
+					steps: ["account created", "inventory checked", "integration connected", "report generated"],
+					breakdownByUserProperty: "company_tier",
+					conversionWindowMs: Math.round(72 * TTC_SMB_FACTOR * 3600 * 1000),
+				},
+				select: {
+					ent: { where: { segment_value: "enterprise" } },
+					mid: { where: { segment_value: "mid_market" } },
+				},
+				expect: { metric: "ent.median_ttc_ms / mid.median_ttc_ms", op: "between", target: [0.50, 0.80] },
+				minCohort: 120,
+			},
+			{
+				breakdown: {
+					type: "timeToConvert",
+					steps: ["account created", "inventory checked", "integration connected", "report generated"],
+					breakdownByUserProperty: "company_tier",
+					conversionWindowMs: Math.round(72 * TTC_SMB_FACTOR * 3600 * 1000),
+				},
+				select: {
+					smb: { where: { segment_value: "small_business" } },
+					mid: { where: { segment_value: "mid_market" } },
+				},
+				expect: { metric: "smb.median_ttc_ms / mid.median_ttc_ms", op: "between", target: [1.04, 1.40] },
+				minCohort: 120,
+			},
+		],
+	},
+];

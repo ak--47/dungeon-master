@@ -1,172 +1,205 @@
 -- ============================================================
--- logistics.js — v1.5.0 Hook Verification Queries
--- Score: NAILED (10/10)
--- ============================================================
+-- logistics.js — v1.6 human-inspection queries (DuckDB)
 --
--- v1.5.0 changes:
--- - isStrictEvent: false on inventory checked, integration connected,
---   report generated, stockout alert, purchase order created, alert configured.
--- - reentry: true on Order Fulfillment.
--- - HOOK 9 quantity boost: 1.25x → 1.4x (compensates for cohort population overlap
---   with persona event multipliers; sweet 5-15 inv-check users overlap mid-market
---   tier whose baseline POs are already small).
+-- Every query is keyed to a story id in logistics.js's `stories` export;
+-- the machine-checked verdicts come from:
+--   node scripts/verify-stories.mjs dungeons/vertical/logistics/logistics.js --data-prefix verify-logistics
+-- Generate first:
+--   node scripts/verify-runner.mjs dungeons/vertical/logistics/logistics.js verify-logistics
+-- Run this file:
+--   duckdb -c ".read dungeons/vertical/logistics/logistics.sql"
 -- ============================================================
 
+-- ── identity-resolution prelude ─────────────────────────────
+-- avgDevicePerUser: 2 + account created is both isAuthEvent and
+-- isFirstEvent, so born users auth on their first event; the device-pool
+-- resolve is belt-and-braces for any device-only edge.
+CREATE OR REPLACE VIEW users AS
+SELECT * FROM read_json_auto('data/verify-logistics-USERS*.json', sample_size=-1, union_by_name=true);
 
--- Hook 1: MONTH-END REPORTING SURGE
--- Pattern: bespoke (DuckDB) — day-of-month breakdown
--- Expected: days 28-31 reports avg ~2-2.5x report_pages vs mid-month
--- Mixpanel: Insights → report generated, Avg report_pages, breakdown by DOM
-SELECT
-  CASE WHEN EXTRACT(DAY FROM time::TIMESTAMP) >= 28 THEN 'month_end' ELSE 'mid_month' END AS bucket,
-  COUNT(*) AS n, ROUND(AVG(report_pages), 0) AS avg_pages
-FROM read_json_auto('data/verify-logistics-EVENTS*.json', sample_size=-1, union_by_name=true)
-WHERE event = 'report generated' AND report_pages IS NOT NULL
+CREATE OR REPLACE VIEW device_map AS
+-- profiles store the device pool under the legacy "anonymousIds" key
+SELECT unnest("anonymousIds") AS device_id, distinct_id FROM users;
+
+CREATE OR REPLACE VIEW ev AS
+-- ::VARCHAR casts — user_id sniffs as UUID, device_id as VARCHAR; DuckDB
+-- refuses to coalesce mixed types
+SELECT coalesce(m.distinct_id::VARCHAR, e.user_id::VARCHAR, e.device_id::VARCHAR) AS uid,
+       e.time::TIMESTAMP AS t,
+       e.*
+FROM read_json_auto('data/verify-logistics-EVENTS*.json', sample_size=-1, union_by_name=true) e
+LEFT JOIN device_map m ON e.device_id = m.device_id;
+
+-- Per-user counts. Inventory checks are ONE-SIDED (only H6 deletes them,
+-- for trial users, and H9 reads them AFTER H6 ran) — output counts equal
+-- H9's hook-time counts exactly. POs are deleted only for 16+ checkers
+-- (H9); stockout alerts only for enterprise (H3); clones are identified
+-- by report_type = 'integration_summary' (outside the organic pool).
+CREATE OR REPLACE VIEW per_user AS
+SELECT uid,
+  count(*) AS total,
+  count(*) FILTER (WHERE event = 'inventory checked') AS inv,
+  count(*) FILTER (WHERE event = 'purchase order created') AS po,
+  count(*) FILTER (WHERE event = 'stockout alert') AS so,
+  count(*) FILTER (WHERE event = 'integration connected') AS ic,
+  count(*) FILTER (WHERE event = 'report generated' AND report_type = 'integration_summary') AS clones,
+  min(t) AS first_t
+FROM ev GROUP BY 1;
+
+
+-- ── H1-month-end-pages ──────────────────────────────────────
+-- Reports on calendar days >= 28 get report_pages ×2.5 (floored). H4's
+-- clones (report_type 'integration_summary', uniform [5,25] pages stamped
+-- AFTER H1) dilute a pooled read — exclude them; they are the placebo arm.
+SELECT (report_type = 'integration_summary') AS is_clone,
+  CASE WHEN extract(day FROM t) >= 28 THEN 'month_end' ELSE 'mid_month' END AS bucket,
+  count(*) AS n, round(avg(report_pages), 1) AS avg_pages
+FROM ev WHERE event = 'report generated'
+GROUP BY 1, 2 ORDER BY 1, 2;
+-- read: organic month_end/mid_month ≈ 2.4-2.5 (floor loss ~1%);
+--       clone ratio ≈ 1.0 (placebo)
+
+
+-- ── H2-rush-order-premium ───────────────────────────────────
+-- 'urgent' POs get unit_cost ×1.5 (floored); 'expedited' is untreated.
+SELECT priority, count(*) AS n, round(avg(unit_cost), 1) AS avg_cost
+FROM ev WHERE event = 'purchase order created'
 GROUP BY 1 ORDER BY 1;
+-- read: urgent/standard ≈ 1.5; expedited/standard ≈ 1.0 (placebo)
 
 
--- Hook 2: RUSH ORDER PREMIUM
--- Pattern: bespoke (DuckDB) — priority breakdown on unit_cost
--- Expected: urgent priority ~1.5x unit_cost vs standard
--- Mixpanel: Insights → purchase order created, Avg unit_cost, breakdown by priority
-SELECT priority, COUNT(*) AS n, ROUND(AVG(unit_cost), 0) AS avg_cost
-FROM read_json_auto('data/verify-logistics-EVENTS*.json', sample_size=-1, union_by_name=true)
-WHERE event = 'purchase order created' AND unit_cost IS NOT NULL
-GROUP BY priority ORDER BY avg_cost DESC;
-
-
--- Hook 3: REORDER ACCURACY BY TIER (NORMALIZED RATIO)
--- Pattern: bespoke (DuckDB) — stockout-to-inventory-check ratio by tier
--- Expected: enterprise ratio ~0.9x SMB ratio (10% reduction)
--- Mixpanel: Insights formula → stockout total / inventory checked total, breakdown by tier
-WITH per_tier AS (
-  SELECT u.company_tier,
-    SUM(CASE WHEN e.event = 'stockout alert' THEN 1 ELSE 0 END) AS stockouts,
-    SUM(CASE WHEN e.event = 'inventory checked' THEN 1 ELSE 0 END) AS checks
-  FROM read_json_auto('data/verify-logistics-EVENTS*.json', sample_size=-1, union_by_name=true) e
-  JOIN read_json_auto('data/verify-logistics-USERS*.json', sample_size=-1, union_by_name=true) u
-    ON e.user_id = u.distinct_id
-  GROUP BY u.company_tier
-)
-SELECT company_tier, stockouts, checks, ROUND(stockouts * 1.0 / NULLIF(checks, 0), 3) AS ratio
-FROM per_tier ORDER BY ratio;
-
-
--- Hook 4: INTEGRATION COMPLETION DRIVES RETENTION
--- Pattern: bespoke (DuckDB) — behavioral cohort
--- Expected: 3+ integration users have ~2x+ reports per user
--- Mixpanel: Insights → report generated, Total per user, cohort filter on integration count
-WITH per_user AS (
-  SELECT user_id,
-    COUNT(*) FILTER (WHERE event = 'integration connected') AS ic,
-    COUNT(*) FILTER (WHERE event = 'report generated') AS rc
-  FROM read_json_auto('data/verify-logistics-EVENTS*.json', sample_size=-1, union_by_name=true)
-  GROUP BY user_id
-)
-SELECT CASE WHEN ic >= 3 THEN 'big' ELSE 'rest' END AS bucket,
-  COUNT(*) AS users, ROUND(AVG(rc), 2) AS avg_reports
-FROM per_user GROUP BY 1 ORDER BY 1 DESC;
-
-
--- Hook 5: ALERT FATIGUE
--- Pattern: bespoke (DuckDB) — early vs late alerts for heavy-alert users
--- Expected: heavy-alert users (>30 alerts) have late alerts ~1.5-3x response_time vs early
--- Mixpanel: Insights → stockout alert, Avg response_time_hours, line by week, filter heavy users
-WITH alerts AS (
-  SELECT user_id, time, response_time_hours,
-    ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY time) AS rn
-  FROM read_json_auto('data/verify-logistics-EVENTS*.json', sample_size=-1, union_by_name=true)
-  WHERE event = 'stockout alert' AND response_time_hours IS NOT NULL
-),
-heavy_users AS (
-  SELECT user_id FROM alerts GROUP BY user_id HAVING COUNT(*) > 30
-)
-SELECT CASE WHEN rn < 20 THEN 'early' ELSE 'late' END AS phase,
-  COUNT(*) AS n, ROUND(AVG(response_time_hours), 1) AS avg_resp
-FROM alerts WHERE user_id IN (SELECT user_id FROM heavy_users)
+-- ── H3-stockout-by-tier ─────────────────────────────────────
+-- Enterprise loses 10% of stockout alerts. Per-user LEVELS are dominated
+-- by persona multipliers (enterprise 5x) — read the stockout-per-
+-- inventory-check ratio instead; the supply-chain worldEvent (×3, days
+-- 35-40) hits all tiers alike and cancels cross-tier.
+SELECT u.company_tier AS tier, count(*) AS users,
+  round(sum(p.so)::DOUBLE / sum(p.inv), 4) AS so_per_inv
+FROM per_user p JOIN users u ON u.distinct_id::VARCHAR = p.uid
 GROUP BY 1 ORDER BY 1;
+-- read: enterprise/small_business ≈ 0.88; mid_market/small_business ≈ 1.0
 
 
--- Hook 6: TRIAL CHURN
--- Pattern: bespoke (DuckDB) — events per user by tier
--- Expected: trial tier event volume ~0.5x other tiers
--- Mixpanel: Retention → account created → any event, breakdown by company_tier
-WITH user_counts AS (
-  SELECT user_id, COUNT(*) AS n
-  FROM read_json_auto('data/verify-logistics-EVENTS*.json', sample_size=-1, union_by_name=true)
-  GROUP BY user_id
-),
-users AS (SELECT distinct_id AS user_id, company_tier FROM read_json_auto('data/verify-logistics-USERS*.json', sample_size=-1, union_by_name=true))
-SELECT u.company_tier, COUNT(*) AS users, ROUND(AVG(COALESCE(c.n, 0)), 1) AS avg_events
-FROM users u LEFT JOIN user_counts c USING (user_id)
-GROUP BY u.company_tier ORDER BY avg_events;
+-- ── H4-integration-reports ──────────────────────────────────
+-- Users with >= 3 'integration connected' get a cloned 'report generated'
+-- per integration at 65% (+1-5d later, report_type 'integration_summary').
+-- H6 (the only integration-deleter) runs BEFORE H4 → output counts equal
+-- H4's hook-time counts exactly; the treated cohort is fully recoverable.
+SELECT (p.ic >= 3) AS treated, count(*) AS users,
+  round(sum(p.clones)::DOUBLE / nullif(sum(p.ic), 0), 4) AS clones_per_integration,
+  round(avg((p.clones > 0)::INT), 4) AS any_clone_share
+FROM per_user p GROUP BY 1 ORDER BY 1;
+-- read: treated clones_per_integration ≈ 0.63 (0.65 × ~2% future-guard
+--       loss); untreated any_clone_share = 0 (structural — leakage would
+--       mean the hook-order invariant broke)
 
 
--- Hook 7: ENTERPRISE PROFILES
--- Pattern: bespoke (DuckDB) — user-property breakdown
--- Expected: enterprise warehouse_count ~10, smb ~2 (5x ratio)
--- Mixpanel: Users → Avg warehouse_count, Avg employee_count, breakdown by company_tier
-SELECT company_tier, COUNT(*) AS users,
-  ROUND(AVG(warehouse_count), 1) AS avg_warehouses,
-  ROUND(AVG(employee_count), 0) AS avg_employees
-FROM read_json_auto('data/verify-logistics-USERS*.json', sample_size=-1, union_by_name=true)
-GROUP BY company_tier ORDER BY avg_warehouses DESC;
-
-
--- Hook 8: SMALL-BUSINESS CONVERSION DROP (Integration Setup funnel)
--- Pattern: funnelFrequency-style breakdown by tier
--- Expected: enterprise/mid_market ~1.5x+ funnel conversion vs small_business
--- Mixpanel: Funnels → integration connected → report generated → alert configured, breakdown by tier
-WITH per_user AS (
-  SELECT e.user_id,
-    MIN(time) FILTER (WHERE event = 'integration connected') AS t1,
-    MIN(time) FILTER (WHERE event = 'report generated') AS t2,
-    MIN(time) FILTER (WHERE event = 'alert configured') AS t3
-  FROM read_json_auto('data/verify-logistics-EVENTS*.json', sample_size=-1, union_by_name=true) e
-  GROUP BY e.user_id
-),
-users AS (SELECT distinct_id AS user_id, company_tier FROM read_json_auto('data/verify-logistics-USERS*.json', sample_size=-1, union_by_name=true))
-SELECT u.company_tier,
-  COUNT(*) AS users,
-  COUNT(*) FILTER (WHERE t3 > t2 AND t2 > t1) AS converters,
-  ROUND(COUNT(*) FILTER (WHERE t3 > t2 AND t2 > t1) * 100.0 / COUNT(*), 1) AS pct
-FROM per_user p JOIN users u USING (user_id)
-WHERE t1 IS NOT NULL
-GROUP BY u.company_tier ORDER BY pct DESC;
-
-
--- Hook 9: INVENTORY-CHECK MAGIC NUMBER
--- Pattern: bespoke (DuckDB) — sweet 5-15 inv checks → +40% PO quantity
--- Expected: sweet (5-15 checks) avg PO quantity ~1.15-1.4x lower (<5 checks) cohort
--- Mixpanel: Insights → purchase order created, Avg quantity, behavioral cohorts on inventory checked count
-WITH per_user AS (
-  SELECT user_id, COUNT(*) FILTER (WHERE event = 'inventory checked') AS ic
-  FROM read_json_auto('data/verify-logistics-EVENTS*.json', sample_size=-1, union_by_name=true)
-  GROUP BY user_id
-),
-pos AS (
-  SELECT e.user_id, e.quantity
-  FROM read_json_auto('data/verify-logistics-EVENTS*.json', sample_size=-1, union_by_name=true) e
-  WHERE e.event = 'purchase order created' AND e.quantity IS NOT NULL
+-- ── H5-alert-fatigue ────────────────────────────────────────
+-- Users with > 30 stockout alerts: response_time_hours scaled from alert
+-- index 20 on, ×(1.5 + 1.5×(idx-20)/n). Hook index = record order; time
+-- order matches exactly (iteration placebo 1.000). Control = 20-30-alert
+-- users (never treated, same iid response_time pool).
+WITH al AS (
+  SELECT uid, response_time_hours AS rt,
+    row_number() OVER (PARTITION BY uid ORDER BY t) - 1 AS idx,
+    count(*) OVER (PARTITION BY uid) AS n
+  FROM ev WHERE event = 'stockout alert'
 )
-SELECT CASE WHEN p.ic BETWEEN 5 AND 15 THEN 'sweet' WHEN p.ic < 5 THEN 'lower' ELSE 'over' END AS bucket,
-  COUNT(*) AS pos, ROUND(AVG(po.quantity), 0) AS avg_qty
-FROM pos po JOIN per_user p USING (user_id)
+SELECT arm, count(DISTINCT uid) AS users, round(avg(rt), 2) AS avg_rt FROM (
+  SELECT uid, rt, 'late_treated' AS arm FROM al WHERE n > 30 AND idx >= 25
+  UNION ALL
+  SELECT uid, rt, 'early_untreated' FROM al WHERE n > 30 AND idx <= 14
+  UNION ALL
+  SELECT uid, rt, 'control_20_30' FROM al WHERE n BETWEEN 20 AND 30
+) GROUP BY 1 ORDER BY 1;
+-- read: late_treated/control ≈ 2.0; early_untreated/control ≈ 1.0
+
+
+-- ── H6-trial-churn ──────────────────────────────────────────
+-- Trial-tier users lose 50% of events after day 7 from first event
+-- (v1.6 behavior change: v1.5 keyed on record.length < 10 — matched ~0.9%
+-- of users, never touched trials). Cross-tier levels are incomparable
+-- (activeWindow 14d, 0.4x multiplier) — read each tier's own
+-- rate(day 8-13)/rate(day 1-6); the ratio cancels the level.
+WITH fe AS (SELECT uid, min(t) AS f FROM ev GROUP BY 1),
+rd AS (SELECT e.uid, date_diff('day', fe.f, e.t) AS d FROM ev e JOIN fe ON fe.uid = e.uid)
+SELECT u.company_tier AS tier, count(DISTINCT r.uid) AS users,
+  round(count(*) FILTER (WHERE d BETWEEN 8 AND 13)::DOUBLE
+      / count(*) FILTER (WHERE d BETWEEN 1 AND 6), 4) AS wk2_over_wk1
+FROM rd r JOIN users u ON u.distinct_id::VARCHAR = r.uid
 GROUP BY 1 ORDER BY 1;
+-- read: trial ratio ≈ 0.5 × small_business ratio (DiD ≈ 0.55);
+--       mid_market ≈ small_business (placebo)
 
 
--- Hook 10: ONBOARDING TTC BY TIER (KNOWN MEASUREMENT GAP)
--- See dating.sql Hook 9 for the funnel-post limitation explanation.
-WITH per_user AS (
-  SELECT e.user_id,
-    MIN(time) FILTER (WHERE event = 'account created') AS t1,
-    MIN(time) FILTER (WHERE event = 'report generated') AS t2
-  FROM read_json_auto('data/verify-logistics-EVENTS*.json', sample_size=-1, union_by_name=true) e
-  GROUP BY e.user_id
-),
-users AS (SELECT distinct_id AS user_id, company_tier FROM read_json_auto('data/verify-logistics-USERS*.json', sample_size=-1, union_by_name=true))
-SELECT u.company_tier,
-  ROUND(MEDIAN(EXTRACT(EPOCH FROM (t2::TIMESTAMP - t1::TIMESTAMP)) / 3600), 2) AS median_ttc_hr
-FROM per_user p JOIN users u USING (user_id)
-WHERE t1 IS NOT NULL AND t2 > t1
-GROUP BY u.company_tier ORDER BY median_ttc_hr;
+-- ── H7-enterprise-profiles ──────────────────────────────────
+-- user hook overwrites warehouse_count/employee_count per tier with
+-- disjoint uniform ranges. Personas cover 100% of users → ranges EXACT.
+SELECT company_tier AS tier, count(*) AS users,
+  min(warehouse_count) AS min_wh, max(warehouse_count) AS max_wh,
+  min(employee_count) AS min_emp, max(employee_count) AS max_emp
+FROM users GROUP BY 1 ORDER BY 1;
+-- read: enterprise wh [5,15] emp [200,2000]; mid_market wh [2,6]
+--       emp [20,200]; small_business wh [1,3] emp [5,80];
+--       trial wh = 1 emp [1,10] — zero out-of-range rows
+
+
+-- ── H8-smb-conversion-drop ──────────────────────────────────
+-- small_business loses 35% of 'alert configured' — last step of
+-- Integration Setup. CAUTION: cross-event SQL step-pairing here is the
+-- documented greedy-single-pass limitation; the story asserts conversion
+-- through the emulator (timeToConvert, 48h treated / 336h Supplier
+-- Management placebo). This query shows the RAW event-count shadow only.
+SELECT u.company_tier AS tier,
+  count(*) FILTER (WHERE e.event = 'report generated') AS step2_events,
+  count(*) FILTER (WHERE e.event = 'alert configured') AS step3_events,
+  round(count(*) FILTER (WHERE e.event = 'alert configured')::DOUBLE
+      / count(*) FILTER (WHERE e.event = 'report generated'), 4) AS ac_per_rg
+FROM ev e JOIN users u ON u.distinct_id::VARCHAR = e.uid
+WHERE u.company_tier IN ('small_business', 'mid_market')
+GROUP BY 1 ORDER BY 1;
+-- read: smb ac_per_rg depressed vs mid_market (raw shadow of the 35% drop;
+--       trust the story's emulator verdict for the funnel-conversion read)
+
+
+-- ── H9-inventory-magic-number ───────────────────────────────
+-- Sweet 5-15 inventory checks → PO quantity ×1.4; 16+ checks → 60% of POs
+-- dropped. Value read: quantity is an iid pool draw — sweet/low mean ratio
+-- reads the knob; unit_cost is the placebo.
+SELECT CASE WHEN p.inv BETWEEN 5 AND 15 THEN 'sweet' WHEN p.inv <= 4 THEN 'low' END AS arm,
+  count(DISTINCT p.uid) AS users,
+  round(avg(e.quantity), 1) AS avg_qty, round(avg(e.unit_cost), 1) AS avg_cost
+FROM per_user p JOIN ev e ON e.uid = p.uid AND e.event = 'purchase order created'
+WHERE p.inv <= 15
+GROUP BY 1 ORDER BY 1;
+-- read: sweet/low avg_qty ≈ 1.4; avg_cost ≈ 1.0 (placebo)
+
+-- volume read: PO count is activity-coupled → no cross-arm level works.
+-- Read PO-per-inventory-check within small_business only (constant
+-- conversionModifier), treated cliff bin 16-23 vs adjacent untreated
+-- 12-15, with a flatness guard on the pre-cliff bins.
+SELECT CASE WHEN p.inv BETWEEN 4 AND 7 THEN 'b04_07'
+            WHEN p.inv BETWEEN 8 AND 11 THEN 'b08_11'
+            WHEN p.inv BETWEEN 12 AND 15 THEN 'b12_15'
+            WHEN p.inv BETWEEN 16 AND 23 THEN 'b16_23'
+            WHEN p.inv BETWEEN 24 AND 40 THEN 'b24_40' END AS bin,
+  count(*) AS users, round(sum(p.po)::DOUBLE / sum(p.inv), 4) AS po_per_inv
+FROM per_user p JOIN users u ON u.distinct_id::VARCHAR = p.uid
+WHERE u.company_tier = 'small_business' AND p.inv BETWEEN 4 AND 40
+GROUP BY 1 ORDER BY 1;
+-- read: pre-cliff bins flat (~1.6, mild organic decline), then
+--       b16_23/b12_15 ≈ 0.4 × organic gradient [0.83, 1.0] ≈ 0.37
+
+
+-- ── H10-onboarding-ttc ──────────────────────────────────────
+-- funnel-post scales Onboarding inter-step gaps: enterprise ×0.71,
+-- small_business/trial ×1.3, mid_market untouched (v1.6 scopes the hook
+-- to Onboarding only). CAUTION: cross-event TTC SQL is the documented
+-- greedy-single-pass limitation — it pairs steps across funnel instances
+-- and buries the signal. The story asserts TTC through the emulator
+-- (timeToConvert, 93.6h window = 72h generative × 1.3 max stretch);
+-- trust the story verdict, not ad-hoc pair SQL. Only born-in-dataset
+-- users (~12%) have 'account created' in-window — cohort sanity below.
+SELECT u.company_tier AS tier, count(*) AS account_created_events
+FROM ev e JOIN users u ON u.distinct_id::VARCHAR = e.uid
+WHERE e.event = 'account created' GROUP BY 1 ORDER BY 1;
