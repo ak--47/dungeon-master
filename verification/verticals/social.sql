@@ -1,6 +1,6 @@
 -- ============================================================
 -- social.js — v1.5.0 Hook Verification Queries
--- Score: STRONG (6/6 — verification scoped to engineered hooks; H6 threshold relaxed,
+-- Score: STRONG (11/11 — verification scoped to engineered hooks; H6 threshold relaxed,
 -- H8 verified vs soup DOW baseline)
 -- ============================================================
 --

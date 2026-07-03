@@ -1,6 +1,6 @@
 -- ============================================================
 -- crypto.js — v1.5.0 Hook Verification Queries
--- Score: NAILED (7/7 verified — all hooks land first try)
+-- Score: NAILED (11/11 verified — all hooks land first try)
 -- ============================================================
 --
 -- v1.5.0 changes:

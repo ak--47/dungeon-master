@@ -24,15 +24,15 @@ checks.** No documented hook is unverified.
 
 | # | Dungeon | Score | Hooks | Iter |
 |---|---------|-------|-------|------|
-| 1 | fitness | NAILED | 10/10 | 1 |
-| 2 | dating | NAILED | 10/10 | 2 |
-| 3 | community | NAILED | 10/10 | 2 |
+| 1 | fitness | NAILED | 12/12 | 1 |
+| 2 | dating | NAILED | 13/13 | 2 |
+| 3 | community | NAILED | 11/11 | 2 |
 | 4 | travel | NAILED | 10/10 | 1 |
 | 5 | logistics | NAILED | 10/10 | 2 |
 | 6 | education | STRONG | 10/10 | 2 |
 | 7 | real-estate | NAILED | 10/10 | 1 |
 | 8 | insurance-application | NAILED | 10/10 | 2 |
-| 9 | food-delivery | NAILED | 10/10 | 2 |
+| 9 | food-delivery | NAILED | 12/12 | 2 |
 | 10 | devtools | NAILED | 10/10 | 1 |
 | 11 | healthcare | STRONG | 11/11 | 2 |
 | 12 | fintech | STRONG | 11/11 | 2 |

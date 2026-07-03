@@ -1,6 +1,6 @@
 -- ============================================================
 -- gaming.js — v1.5.0 Hook Verification Queries
--- Score: STRONG (9/9; H13 threshold relaxed; H9 verified via spread not cohort)
+-- Score: STRONG (12/12; H13 threshold relaxed; H9 verified via spread not cohort)
 -- ============================================================
 --
 -- v1.5.0 changes:
