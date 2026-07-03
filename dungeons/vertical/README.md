@@ -33,7 +33,7 @@ checks.** No documented hook is unverified.
 | 4 | travel | NAILED | 10/10 | 2 |
 | 5 | logistics | NAILED | 10/10 | 3 |
 | 6 | education | NAILED | 10/10 | 3 |
-| 7 | real-estate | NAILED | 10/10 | 1 |
+| 7 | real-estate | NAILED | 10/10 | 2 |
 | 8 | insurance-application | NAILED | 10/10 | 2 |
 | 9 | food-delivery | NAILED | 12/12 | 2 |
 | 10 | devtools | NAILED | 10/10 | 1 |
@@ -103,17 +103,16 @@ Several engineered hooks intentionally use `funnel-post` to compress
 time-to-convert within a single funnel-instance. The verifier's
 `evaluateFunnel` is a greedy single-pass over the user's full event
 history — it picks the first matching event for each step regardless of
-which funnel-instance the hook touched. Affected dungeons (4):
-real-estate, marketplace,
-devtools, crypto. These hooks are checked for population
+which funnel-instance the hook touched. Affected dungeons (3):
+marketplace, devtools, crypto. These hooks are checked for population
 presence (`'TTC populations present (limitation)'`) rather than for the
 TTC delta itself; the engineered effect is visible in Mixpanel's funnel
 median TTC report but not in the cross-event SQL/JS aggregations.
-ai-platform, dating, community, travel, logistics, and education
-graduated off this list in v1.6: their TTC stories assert the TTC delta
-itself through `emulateBreakdown`'s `timeToConvert` at conversion windows
-covering the stretched support (see each story narrative for the
-censoring analysis).
+ai-platform, dating, community, travel, logistics, education, and
+real-estate graduated off this list in v1.6: their TTC stories assert
+the TTC delta itself through `emulateBreakdown`'s `timeToConvert` at
+conversion windows covering the stretched support (see each story
+narrative for the censoring analysis).
 
 See
 [`research/1.5.0-vertical-eval.md`](../../research/1.5.0-vertical-eval.md)
