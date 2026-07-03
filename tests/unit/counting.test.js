@@ -114,6 +114,28 @@ describe('nullAwareAvg', () => {
 	test('handles single numeric value', () => {
 		expect(nullAwareAvg([42])).toBe(42);
 	});
+
+	// v1.6.0 (P1.10): normal_query.cpp:1601-1617 ACTION_TYPE_AVERAGE
+	// VALUE_TYPE_LIST — each numeric list item joins numerator AND
+	// denominator independently. Hand-computed.
+	test('flatten: list items count independently in numerator and denominator', () => {
+		// 10 + (2+4) + 30 = 46 over 4 contributions (1 + 2 + 1)
+		expect(nullAwareAvg([10, [2, 4], 30], { flatten: true })).toBe(11.5);
+	});
+
+	test('flatten: non-numeric items inside lists are skipped; one level only', () => {
+		// 6 + (1+2) = 9 over 3 — 'x', null, and the NESTED [50] are skipped
+		// (list_cursor items must be VALUE_TYPE_NUMBER; a nested list is not)
+		expect(nullAwareAvg([6, ['x', 1, null, [50], 2]], { flatten: true })).toBe(3);
+	});
+
+	test('flatten: all-non-numeric list contributes nothing (null result stays null)', () => {
+		expect(nullAwareAvg([['a', null]], { flatten: true })).toBe(null);
+	});
+
+	test('default (no flatten) skips arrays whole — v1.5 behavior unchanged', () => {
+		expect(nullAwareAvg([10, [2, 4], 30])).toBe(20); // (10+30)/2
+	});
 });
 
 describe('nullAwareSum', () => {
@@ -124,6 +146,17 @@ describe('nullAwareSum', () => {
 
 	test('empty returns 0', () => {
 		expect(nullAwareSum([])).toBe(0);
+	});
+
+	// v1.6.0 (P1.10): normal_query.cpp:1585-1600 ACTION_TYPE_SUM
+	// VALUE_TYPE_LIST branch. Hand-computed.
+	test('flatten: numeric list items sum independently; one level; non-numeric skipped', () => {
+		expect(nullAwareSum([10, [2, 4], 30], { flatten: true })).toBe(46);
+		expect(nullAwareSum([['x', 1, [50], 2]], { flatten: true })).toBe(3);
+	});
+
+	test('default (no flatten) skips arrays whole — v1.5 behavior unchanged', () => {
+		expect(nullAwareSum([10, [2, 4], 30])).toBe(40);
 	});
 });
 
