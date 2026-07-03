@@ -496,6 +496,10 @@ describe('isChurnEvent', () => {
 		initChance('churn-test');
 		const generate = (await import('../../index.js')).default;
 
+		// NOTE: pre-1.6 this fixture had `isStrictEvent: true` on account_deleted
+		// with no funnels defined — strict events only fire inside funnels, so
+		// the churn event NEVER fired and every assertion was vacuous. v1.6
+		// (P2.2) removes the flag and asserts by TIMESTAMP, not array order.
 		const results = await generate({ ...PINNED_DATES,
 			numUsers: 20,
 			numEvents: 2000,
@@ -503,11 +507,10 @@ describe('isChurnEvent', () => {
 			writeToDisk: false,
 			events: [
 				{ event: 'page_view', weight: 5 },
-				{ event: 'account_deleted', weight: 1, isChurnEvent: true, returnLikelihood: 0, isStrictEvent: true },
+				{ event: 'account_deleted', weight: 1, isChurnEvent: true, returnLikelihood: 0 },
 			],
 		});
 
-		// Users who fire account_deleted should have it as their last event
 		const eventsByUser = {};
 		for (const ev of results.eventData) {
 			const id = ev.distinct_id || ev.user_id;
@@ -515,14 +518,21 @@ describe('isChurnEvent', () => {
 			eventsByUser[id].push(ev);
 		}
 
+		// Churn is a hard activity boundary: no event may be DATED after the
+		// churn event (P2.2 — pre-fix, already-generated events with later
+		// TimeSoup timestamps survived the budget-loop break).
+		let churnedUsers = 0;
 		for (const [userId, events] of Object.entries(eventsByUser)) {
-			const churnIndex = events.findIndex(e => e.event === 'account_deleted');
-			if (churnIndex !== -1) {
-				// No events after the churn event should exist
-				const eventsAfterChurn = events.slice(churnIndex + 1);
-				expect(eventsAfterChurn.length).toBe(0);
+			const churnEv = events.find(e => e.event === 'account_deleted');
+			if (!churnEv) continue;
+			churnedUsers++;
+			const churnMs = Date.parse(churnEv.time);
+			for (const e of events) {
+				expect(Date.parse(e.time)).toBeLessThanOrEqual(churnMs);
 			}
 		}
+		// Guard against vacuity: the churn event must actually fire.
+		expect(churnedUsers).toBeGreaterThan(0);
 	});
 
 	test('churn event with returnLikelihood=1 allows user to continue', async () => {
@@ -557,6 +567,46 @@ describe('isChurnEvent', () => {
 		}
 		// At least some users should have events after their churn event
 		expect(usersWithEventsAfterChurn).toBeGreaterThan(0);
+	});
+
+	test('churn boundary holds on the active-day-plan path (shuffled day plan)', async () => {
+		initChance('churn-dayplan');
+		const generate = (await import('../../index.js')).default;
+
+		// avgActiveDaysPerUser engages buildActiveDayPlan, whose per-event day
+		// plan is SHUFFLED — the exact path where pre-fix churned users kept
+		// events on later picked days (P2.2).
+		const results = await generate({ ...PINNED_DATES,
+			numUsers: 20,
+			numEvents: 2000,
+			numDays: 30,
+			avgActiveDaysPerUser: 10,
+			seed: 'churn-dayplan',
+			writeToDisk: false,
+			events: [
+				{ event: 'page_view', weight: 5 },
+				{ event: 'account_deleted', weight: 1, isChurnEvent: true, returnLikelihood: 0 },
+			],
+		});
+
+		const eventsByUser = {};
+		for (const ev of results.eventData) {
+			const id = ev.distinct_id || ev.user_id;
+			if (!eventsByUser[id]) eventsByUser[id] = [];
+			eventsByUser[id].push(ev);
+		}
+
+		let churnedUsers = 0;
+		for (const events of Object.values(eventsByUser)) {
+			const churnEv = events.find(e => e.event === 'account_deleted');
+			if (!churnEv) continue;
+			churnedUsers++;
+			const churnMs = Date.parse(churnEv.time);
+			for (const e of events) {
+				expect(Date.parse(e.time)).toBeLessThanOrEqual(churnMs);
+			}
+		}
+		expect(churnedUsers).toBeGreaterThan(0);
 	});
 });
 

@@ -18,6 +18,15 @@ All notable changes to `@ak--47/dungeon-master`.
   change only for dungeons whose hooks mutate event times; their stamped
   `session_id` values now match query-time derivation
   (`stampedDivergence === 0`).
+- **Churn is now a hard activity boundary** (P2.2). `isChurnEvent` broke the
+  budget loop (stopping generation), but already-generated events carry
+  independent timestamps — uniform TimeSoup draws on the legacy path, a
+  shuffled active-day plan under `avgActiveDaysPerUser`/`retentionCurve` — so
+  churned users kept events DATED after their churn event. Churned users'
+  events are now truncated at the churn event's timestamp (the churn event
+  itself survives). Affects only dungeons using `isChurnEvent`; users who
+  return (`returnLikelihood` roll succeeds) are untouched. `simplest.js` has
+  no churn events, so the engine-shape canary and sweep are unaffected.
 
 ## 1.5.4 — 2026-06-04
 
