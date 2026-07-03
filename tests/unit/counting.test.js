@@ -96,6 +96,24 @@ describe('countDistinctPeriods', () => {
 		expect(countDistinctPeriods([], 'Buy', 'day')).toBe(0);
 		expect(countDistinctPeriods([ev('Click', iso('2024-02-01T00:00:00Z'))], 'Buy', 'day')).toBe(0);
 	});
+
+	// v1.6.0 (P1.10, findings #3): documented names 'ui-bucket' /
+	// 'mixpanel-rolling'; 'calendar' / 'rolling' stay as silent aliases.
+	test("renames: 'ui-bucket' ≡ 'calendar', 'mixpanel-rolling' ≡ 'rolling'", () => {
+		const events = [
+			ev('Buy', iso('2024-02-01T23:59:00Z')),
+			ev('Buy', iso('2024-02-02T00:01:00Z')),
+		];
+		expect(countDistinctPeriods(events, 'Buy', 'day', { algorithm: 'ui-bucket' })).toBe(2);
+		expect(countDistinctPeriods(events, 'Buy', 'day', { algorithm: 'calendar' })).toBe(2);
+		expect(countDistinctPeriods(events, 'Buy', 'day', { algorithm: 'mixpanel-rolling' })).toBe(1);
+		expect(countDistinctPeriods(events, 'Buy', 'day', { algorithm: 'rolling' })).toBe(1);
+	});
+
+	test('unknown algorithm throws (previously fell through to rolling silently)', () => {
+		expect(() => countDistinctPeriods([], 'Buy', 'day', { algorithm: 'typo' }))
+			.toThrow(/unknown algorithm/);
+	});
 });
 
 describe('nullAwareAvg', () => {
