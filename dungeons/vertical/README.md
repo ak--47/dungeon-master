@@ -40,7 +40,7 @@ checks.** No documented hook is unverified.
 | 11 | healthcare | NAILED | 10/10 | 2 |
 | 12 | fintech | NAILED | 10/10 | 2 |
 | 13 | ai-platform | NAILED | 10/10 | 3 |
-| 14 | marketplace | NAILED | 10/10 | 1 |
+| 14 | marketplace | NAILED | 10/10 | 2 |
 | 15 | media | NAILED | 10/10 | 2 |
 | 16 | ecommerce | NAILED | 10/10 | 3 |
 | 17 | sass | NAILED | 10/10 | 1 |
@@ -103,16 +103,23 @@ Several engineered hooks intentionally use `funnel-post` to compress
 time-to-convert within a single funnel-instance. The verifier's
 `evaluateFunnel` is a greedy single-pass over the user's full event
 history — it picks the first matching event for each step regardless of
-which funnel-instance the hook touched. Affected dungeons (3):
-marketplace, devtools, crypto. These hooks are checked for population
-presence (`'TTC populations present (limitation)'`) rather than for the
+which funnel-instance the hook touched. Affected dungeon (1): crypto.
+Its hook is checked for population presence
+(`'TTC populations present (limitation)'`) rather than for the
 TTC delta itself; the engineered effect is visible in Mixpanel's funnel
 median TTC report but not in the cross-event SQL/JS aggregations.
-ai-platform, dating, community, travel, logistics, education, and
-real-estate graduated off this list in v1.6: their TTC stories assert
-the TTC delta itself through `emulateBreakdown`'s `timeToConvert` at
-conversion windows covering the stretched support (see each story
-narrative for the censoring analysis).
+ai-platform, dating, community, travel, logistics, education,
+real-estate, devtools, and marketplace graduated off this list in v1.6:
+their TTC stories assert the TTC delta itself through
+`emulateBreakdown`'s `timeToConvert` at conversion windows covering the
+stretched support (see each story narrative for the censoring
+analysis). Two graduation lessons generalize: pick the conversion
+window where each cohort's TTC distribution is unimodal (media — at
+multi-day windows the median sits on a bimodal mode boundary and flips
+on sampling noise), and restrict funnel-post scaling to the target
+funnel when another funnel shares a step prefix (marketplace — scaling
+everything let the greedy evaluator assemble chains across unscaled
+instances, collapsing the read).
 
 See
 [`research/1.5.0-vertical-eval.md`](../../research/1.5.0-vertical-eval.md)
