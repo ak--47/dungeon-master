@@ -24,7 +24,9 @@ function findDungeonFiles(dir) {
 		const fullPath = path.join(dir, entry.name);
 		if (entry.isDirectory()) {
 			files = files.concat(findDungeonFiles(fullPath));
-		} else if (entry.name.endsWith('.js')) {
+		} else if (entry.name.endsWith('.js') && !entry.name.startsWith('_')) {
+			// Underscore prefix = local support file, not a dungeon (e.g. the
+			// gitignored _credentials.js that /create-project writes).
 			files.push(fullPath);
 		}
 	}
