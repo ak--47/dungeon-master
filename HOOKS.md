@@ -166,10 +166,18 @@ query from THREE reset triggers:
 Each session emits synthetic `$duration_s`, `$event_count`, `$origin_start`,
 `$origin_end` properties.
 
-**v1.5 contract:** the generator's `assignSessionIds` pre-stamps `session_id`
-using all three rules (UTC day boundary added in v1.5.0 audit). Verifier
-trusts pre-stamped IDs and groups by `(user, session_id)`. Use
-`emulateBreakdown({ type: 'sessionMetrics' })` to verify session-level shapes.
+**v1.6 contract:** the verifier derives sessions at query time via
+`sessionize()` (`lib/verify/sessionize.js`) — the same three triggers, all
+strict `>`, plus synthetic `$session_start`/`$session_end` events carrying
+the four computed props. `sessionMetrics` defaults to `source: 'derived'`;
+the generator's pre-stamped `session_id` (from `assignSessionIds`) is a
+generator artifact Mixpanel never sees, kept available via
+`source: 'stamped'` and audited by the per-row `stampedDivergence` count.
+`eventBreakdown` and `uniques` accept `countType: 'sessions'` (count once
+per (user, session, segment) / distinct (user, session) pairs per bucket —
+`normal_query.cpp:1318-1352`). Sessions always derive from the FULL event
+stream; name filters select which events count, never which events shape
+sessions (`normal_query.cpp:2271-2280`).
 
 **Verifier-only conveniences (not directly reproducible in Mixpanel UI):**
 - `evaluateFunnel({ sessionScoped: true })` partitions events per session and
@@ -1424,15 +1432,56 @@ const rows = emulateBreakdown(events, {
 ```js
 const rows = emulateBreakdown(events, {
   type: 'sessionMetrics',
-  event: 'Page View',                                // optional — only sessions containing this event
+  event: 'Page View',                // optional — only sessions containing this event
   metrics: ['count', 'duration', 'eventsPerSession'],
+  source: 'derived',                 // default — sessions re-derived from timestamps
+  sessionTimeoutMs: 30 * 60_000,     // optional — gap trigger (strict >)
 });
-// → [{ metric, avg, median, p90, total_sessions }, ...]
+// → [{ metric, avg, median, p90, total_sessions, source, stampedDivergence }, ...]
 ```
 
-Trusts the generator's pre-stamped `session_id`. If you need to verify
-session-scoped funnels (steps must land in same session), pass
-`sessionScoped: true` to `evaluateFunnel`.
+`source: 'derived'` (default since v1.6.0) re-derives sessions from raw
+timestamps the way `session_query.cpp` does — pre-stamped `session_id`s are
+ignored. `source: 'stamped'` keeps the v1.5 group-by-`(user, session_id)`
+behavior. Either way, when events carry stamps, every row reports
+`stampedDivergence`: the number of consecutive stamped-event pairs whose
+stamped session boundary disagrees with the derived one (0 means the
+generator's stamping matches what Mixpanel will compute).
+
+**Session duration / depth metrics need no special type.** `sessionize()`
+returns `syntheticEvents` — `$session_start`/`$session_end` pairs carrying
+`$duration_s` and `$event_count` as plain numeric properties (plus
+`$origin_start`/`$origin_end` and the copy props). Aggregate them with the
+existing types, exactly like Mixpanel aggregates session properties:
+
+```js
+import { sessionize, emulateBreakdown } from '@ak--47/dungeon-master/verify';
+
+const { syntheticEvents } = sessionize(events);
+// Avg session duration per user, cohorted by # active session days
+// (Insights: AGGREGATE $duration_s on $session_end):
+emulateBreakdown(syntheticEvents, {
+  type: 'aggregatePerUser', event: '$session_end', property: '$duration_s',
+  agg: 'avg', breakdownByFrequencyOf: '$session_start',
+});
+// Session-depth distribution (Insights: $session_end segmented by $event_count):
+emulateBreakdown(syntheticEvents, {
+  type: 'eventBreakdown', event: '$session_end', breakdownProperty: '$event_count',
+});
+```
+
+For plain duration averages without a cohort axis, `sessionMetrics`'s
+`duration` row (avg/median/p90) is the direct path.
+
+Synthetic session events live OUTSIDE the regular event-name namespace
+(`libquery/event/filter.h`) — name filters and "all events" over raw events
+never match them, which is why `sessionize` returns them as a separate array
+you feed in explicitly.
+
+If you need to verify session-scoped funnels (steps must land in same
+session), pass `sessionScoped: true` to `evaluateFunnel`, or use the
+Mixpanel-faithful session count window
+(`conversionWindow: { unit: 'sessions', n: 1 }`).
 
 ### 8.3 Funnel reentry (counting repeat completions)
 
