@@ -35,7 +35,7 @@ checks.** No documented hook is unverified.
 | 6 | education | NAILED | 10/10 | 3 |
 | 7 | real-estate | NAILED | 10/10 | 2 |
 | 8 | insurance-application | STRONG | 10/10 | 3 |
-| 9 | food-delivery | NAILED | 12/12 | 2 |
+| 9 | food-delivery | STRONG | 10/10 | 2 |
 | 10 | devtools | NAILED | 10/10 | 1 |
 | 11 | healthcare | NAILED | 10/10 | 2 |
 | 12 | fintech | NAILED | 10/10 | 2 |
