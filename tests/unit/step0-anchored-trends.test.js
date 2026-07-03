@@ -93,17 +93,45 @@ describe('funnelFrequency under timeBucket (step-0 anchored)', () => {
 		expect(jan16.find(r => r.step_index === 1 && r.breakdown_freq === 1).conversions).toBe(1);
 	});
 
-	test('non-sequential order keeps plain partitioning (any-order has no anchor concept)', () => {
+	test('middle-fixed order keeps plain partitioning (set-membership has no anchor concept)', () => {
+		// P1.6.6: 'middle-fixed' is the ONLY order left on plain partitioning —
+		// its scrambled slots (the two ends) are non-contiguous, so it cannot
+		// map to engine anyOrder blocks.
 		const events = [
 			ev('u1', 'C', '2024-01-15T12:00:00.000Z'),
 			ev('u1', 'A', '2024-01-15T23:50:00.000Z'),
 			ev('u1', 'B', '2024-01-16T00:10:00.000Z'),
 		];
-		const rows = emulateBreakdown(events, { ...CFG, funnelOrder: 'last-fixed' });
-		// hand-computed: plain partition — Jan 15 sees {C, A} only → any-order
-		// [A,B] incomplete → reached -1 → no funnel rows for Jan 15.
+		const rows = emulateBreakdown(events, { ...CFG, funnelOrder: 'middle-fixed' });
+		// hand-computed: plain partition — Jan 15 sees {C, A} only → set
+		// membership [A,B] incomplete → reached -1 → no funnel rows for Jan 15.
 		const jan15 = rowsFor(rows, '2024-01-15');
 		expect(jan15.some(r => r.step_index >= 0 && r.conversions > 0)).toBe(false);
+	});
+
+	test('last-fixed order anchors through the engine anyOrder block (P1.6.6)', () => {
+		const events = [
+			ev('u1', 'C', '2024-01-15T12:00:00.000Z'),
+			ev('u1', 'B', '2024-01-15T23:40:00.000Z'), // chunk member fills position 0
+			ev('u1', 'A', '2024-01-15T23:50:00.000Z'), // second member, 10min later
+			ev('u1', 'L', '2024-01-16T00:10:00.000Z'), // fixed last anchor — 30min spill
+		];
+		const rows = emulateBreakdown(events, {
+			...CFG,
+			steps: ['A', 'B', 'L'],
+			funnelOrder: 'last-fixed',
+		});
+		// hand-computed: last-fixed maps to [{ anyOrder: [A, B] }, L]. Jan 15
+		// slice = [Jan15, Jan16+1h) ⊇ all four events; B@23:40 anchors position
+		// 0 inside [Jan15, Jan16), A joins the chunk, L crosses the anchor at
+		// 30min — all within the 1h window → full conversion credited to
+		// Jan 15. Pre-P1.6.6 this order used set-membership over the PLAIN
+		// partition: Jan 15 saw {C, B, A} only → incomplete → no rows.
+		const jan15 = rowsFor(rows, '2024-01-15');
+		expect(jan15.find(r => r.step_index === 0 && r.breakdown_freq === 1).conversions).toBe(1);
+		expect(jan15.find(r => r.step_index === 2 && r.breakdown_freq === 1).conversions).toBe(1);
+		// Jan 16: L alone cannot fill position 0 → empty marker.
+		expect(rowsFor(rows, '2024-01-16')).toEqual([{ period: '2024-01-16', _empty: true }]);
 	});
 });
 

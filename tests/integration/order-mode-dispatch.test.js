@@ -1,16 +1,17 @@
 //@ts-nocheck
 /**
  * v1.5 verifier order-mode dispatch tests.
- *
- * `evaluateAnyOrderCompletion` covers funnel modes that don't fit Mixpanel's
- * greedy single-pass funnel engine (sequential / interrupt). The `verifyDungeon`
- * + `emulateBreakdown` pipeline auto-dispatches:
+ * v1.6.0 (P1.6.6): orders with contiguous scrambled regions now route through
+ * the engine's `{ anyOrder }` blocks (Mixpanel's anchor/chunk greedy pass) —
+ * full semantics: windows, 2s rule, exclusions, ordering of the fixed steps.
  *
  *   - sequential, interrupt, interrupted → `evaluateFunnel` (greedy, Mixpanel-aligned)
- *   - first-fixed                        → step-0 greedy + any-order on rest (partial)
- *   - last-fixed, outside-in, middle-fixed, first-and-last-fixed
- *                                        → any-order completion (partial)
- *   - random                             → any-order, informational only
+ *   - first-fixed                        → `[s0, { anyOrder: rest }]`
+ *   - last-fixed                         → `[{ anyOrder: init }, sLast]`
+ *   - first-and-last-fixed               → `[s0, { anyOrder: middle }, sLast]`
+ *   - outside-in, random                 → `[{ anyOrder: all }]`
+ *   - middle-fixed                       → any-order completion (partial —
+ *     scrambled slots are the non-contiguous ends)
  */
 
 import { describe, test, expect } from 'vitest';
@@ -160,15 +161,42 @@ describe('emulateBreakdown — order-mode dispatch', () => {
 		expect(lastStepRows.length).toBe(0);
 	});
 
-	test('last-fixed mode: any-order completion check', () => {
+	test('last-fixed mode: fixed last step must come AFTER the scrambled block', () => {
+		// P1.6.6 behavior change (spec-mandated): last-fixed maps to
+		// [{ anyOrder: [A, B] }, C]. reverseOrderUser fired C FIRST — the
+		// buffered anchor C@00:00 fails timestamp_comes_after against the
+		// chunk completion at 02:00 (history.cpp cascade), so the funnel stops
+		// at reached 1. The old set-membership check wrongly completed here;
+		// Mixpanel does not. (The generator's last-fixed mode always emits the
+		// last step last, so this fixture is data the mode never produces.)
 		const rows = emulateBreakdown(reverseOrderUser, {
 			type: 'funnelFrequency',
 			steps: ['A', 'B', 'C'],
 			breakdownByFrequencyOf: 'breakdown-event',
 			funnelOrder: 'last-fixed',
 		});
-		// any-order: user fired all → completes.
-		const stepCRows = rows.filter(r => r.step_index === 2);
-		expect(stepCRows.length).toBeGreaterThan(0);
+		expect(rows.filter(r => r.step_index === 2).length).toBe(0);
+		// hand-computed: positions 0 (C→ no; B@01:00 fills position 0, A@02:00
+		// position 1) → steps 0 and 1 credited, step 2 never crossed.
+		expect(rows.filter(r => r.step_index === 1).length).toBeGreaterThan(0);
+	});
+
+	test('last-fixed mode: scrambled block then fixed last step completes', () => {
+		// Data the last-fixed generator actually produces: [A,B] shuffled, C last.
+		const events = [
+			ev('B', iso('2025-09-01T00:00:00Z'), 'u1'),
+			ev('A', iso('2025-09-01T01:00:00Z'), 'u1'),
+			ev('C', iso('2025-09-01T02:00:00Z'), 'u1'),
+			ev('breakdown-event', iso('2025-09-01T03:00:00Z'), 'u1'),
+		];
+		const rows = emulateBreakdown(events, {
+			type: 'funnelFrequency',
+			steps: ['A', 'B', 'C'],
+			breakdownByFrequencyOf: 'breakdown-event',
+			funnelOrder: 'last-fixed',
+		});
+		// hand-traced: B fills position 0, A position 1 (chunk in arrival
+		// order), C crosses the anchor → completed.
+		expect(rows.filter(r => r.step_index === 2).length).toBeGreaterThan(0);
 	});
 });
