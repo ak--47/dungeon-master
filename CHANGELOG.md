@@ -2,6 +2,23 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## Unreleased (1.6.0 branch)
+
+### Changed
+
+- **Session IDs are re-derived after the `everything` hook** (P2.1). The first
+  `assignSessionIds` pass still runs before hooks (hooks may read
+  `session_id`), but a second pass now relabels on the FINAL event set — after
+  the `everything` hook, auto-sort, and the future-time guard. Time-mutating
+  hooks (TTC scaling, injected bursts) previously left stale session ids that
+  disagreed with what Mixpanel derives from timestamps at query time. Session
+  ids hash from (user key + first event time of the session), so sessions
+  whose events did not move keep their exact ids. The per-session sticky-device
+  rewrite is NOT re-run — relabeling never mutates identity fields. Behavior
+  change only for dungeons whose hooks mutate event times; their stamped
+  `session_id` values now match query-time derivation
+  (`stampedDivergence === 0`).
+
 ## 1.5.4 — 2026-06-04
 
 Patch. Import-phase progress now reaches `onProgress` consumers.
