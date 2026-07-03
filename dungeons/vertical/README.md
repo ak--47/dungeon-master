@@ -45,7 +45,7 @@ checks.** No documented hook is unverified.
 | 16 | ecommerce | NAILED | 10/10 | 3 |
 | 17 | sass | NAILED | 11/11 | 2 |
 | 18 | gaming | NAILED | 13/13 | 2 |
-| 19 | social | STRONG | 11/11 | 2 |
+| 19 | social | NAILED | 10/10 | 2 |
 | 20 | crypto | NAILED | 11/11 | 2 |
 
 **Score legend:**
