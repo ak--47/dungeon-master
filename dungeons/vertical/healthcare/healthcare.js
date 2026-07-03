@@ -42,8 +42,11 @@ import { findFirstSequence, scaleFunnelTTC } from "@ak--47/dungeon-master/hook-h
 
 // ── HOOK STORIES ──
 /*
- * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable
- * via raw-prop breakdowns (HOD, day, tier) or behavioral cohorts.
+ * NOTE: Cohort effects are HIDDEN — discoverable via raw-prop breakdowns
+ * (HOD, day, tier) or behavioral cohorts. One exception: H6 stamps
+ * no_show=true on flagged bookings (a realistic appointment-status
+ * property, and the only selection-free way to verify per-event thinning
+ * on an activity-selected cohort).
  *
  * ───────────────────────────────────────────────────────────────
  * 1. AFTER-HOURS SURGE PRICING (event hook)
@@ -98,9 +101,10 @@ import { findFirstSequence, scaleFunnelTTC } from "@ak--47/dungeon-master/hook-h
  * 3. EXPERIENCED DOCTOR SATISFACTION (everything hook)
  * ───────────────────────────────────────────────────────────────
  *
- * PATTERN: Users who had >12 consultation events get higher avg
- * satisfaction_score (boosted to 4.0-5.0 range) vs baseline 1-5.
- * Simulates experienced doctors earning better reviews.
+ * PATTERN: Users who had >12 consultation events get ALL their
+ * satisfaction_scores redrawn uniform 4.0-5.0 (avg 4.5) vs the declared
+ * baseline weighNumRange(1,5,mode 3) ≈ 3.0. Simulates experienced
+ * doctors earning better reviews.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -108,8 +112,9 @@ import { findFirstSequence, scaleFunnelTTC } from "@ak--47/dungeon-master/hook-h
  *   • Report type: Insights
  *   • Event: "consultation completed"
  *   • Measure: Average of "satisfaction_score"
- *   • Breakdown: user property "role"
- *   • Expected: Doctors (high volume users) show ~4.2 avg vs ~3.5 baseline
+ *   • Breakdown: behavioral cohort (>12 consultations vs fewer)
+ *   • Expected: heavy consulters ~4.5 avg vs ~3.0 baseline; every one
+ *     of their scores sits in [4.0, 5.0]
  *
  * REAL-WORLD ANALOGUE: Experienced providers develop better bedside
  * manner and patient communication skills over time.
@@ -118,9 +123,10 @@ import { findFirstSequence, scaleFunnelTTC } from "@ak--47/dungeon-master/hook-h
  * 4. VIDEO CONSULTATION FOLLOW-UP LIFT (everything hook)
  * ───────────────────────────────────────────────────────────────
  *
- * PATTERN: Patients whose consultations used video mode (vs phone)
- * get 2x more follow-up appointment events injected. Cloned from
- * existing "follow up scheduled" events.
+ * PATTERN: Each video-mode consultation has a 60% chance to inject one
+ * cloned "follow up scheduled" event 1-7 days later (stamped
+ * consultation_mode="video", fresh days_until_followup 3-14). Users
+ * without an existing follow-up to clone from are skipped.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -129,7 +135,8 @@ import { findFirstSequence, scaleFunnelTTC } from "@ak--47/dungeon-master/hook-h
  *   • Event: "follow up scheduled"
  *   • Measure: Total per user
  *   • Breakdown: "consultation_mode" (from consultation completed)
- *   • Expected: video users ~2x more follow-ups than phone users
+ *   • Expected: video-consult users carry ~+0.6 extra follow-ups per
+ *     video consultation vs phone-only users
  *
  * REAL-WORLD ANALOGUE: Face-to-face (video) consultations build
  * stronger patient-doctor rapport, increasing follow-up compliance.
@@ -158,17 +165,26 @@ import { findFirstSequence, scaleFunnelTTC } from "@ak--47/dungeon-master/hook-h
  * 6. OCCASIONAL PATIENT NO-SHOWS (everything hook)
  * ───────────────────────────────────────────────────────────────
  *
- * PATTERN: Users with role "patient" and low event count (<15 events)
- * have 25% of their "appointment booked" events dropped. Simulates
- * occasional patients who book but don't show up.
+ * PATTERN: Low-activity users (<15 events — overwhelmingly occasional/
+ * churner patients; providers generate far more) lose 25% of their
+ * "consultation completed" events and get no_show=true stamped on 25%
+ * of their "appointment booked" events. Simulates occasional patients
+ * who book but don't show up.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
- *   Report 1: Appointment-to-Consultation Ratio
+ *   Report 1: No-Show Rate
+ *   • Report type: Insights
+ *   • Event: "appointment booked"
+ *   • Measure: Total, filtered no_show = true, vs Total overall
+ *   • Expected: no-shows concentrate entirely on low-activity users
+ *     (~25% of their bookings); zero no-shows on active users
+ *
+ *   Report 2: Appointment-to-Consultation Ratio
  *   • Report type: Funnels
  *   • Steps: "appointment booked" → "consultation completed"
- *   • Breakdown: user property "role"
- *   • Expected: patients with fewer events convert ~75% vs ~95% for active
+ *   • Expected: low-activity users convert visibly worse (engineered
+ *     25% thinning compounded by their organically lower conversion)
  *
  * REAL-WORLD ANALOGUE: Infrequent patients have higher no-show rates,
  * a major operational cost for healthcare providers.
@@ -197,11 +213,11 @@ import { findFirstSequence, scaleFunnelTTC } from "@ak--47/dungeon-master/hook-h
  * 8. FREE-TIER CONVERSION DROP (everything hook)
  * ───────────────────────────────────────────────────────────────
  *
- * PATTERN: Free-tier users lose ~30% of "consultation completed"
- * events (last step of the Booking to Consultation funnel).
- * This is implemented via event filtering in the everything hook
- * rather than conversionRate modification in funnel-pre, so the
- * effect is not diluted by organic (non-funnel) events.
+ * PATTERN: 30% of free-tier users (per-user coin flip) lose ALL their
+ * "consultation completed" events — a per-user cliff, not per-event
+ * thinning. Surviving free users are statistically identical to paid
+ * users, which makes the effect cleanly measurable: the excess
+ * zero-consultation share among free users reads the 30% knob directly.
  *
  * HOW TO FIND IT IN MIXPANEL:
  *
@@ -266,19 +282,24 @@ import { findFirstSequence, scaleFunnelTTC } from "@ak--47/dungeon-master/hook-h
  * EXPECTED METRICS SUMMARY
  * ═══════════════════════════════════════════════════════════════
  *
- * Hook                        | Metric              | Baseline | Effect    | Ratio
- * ----------------------------|---------------------|----------|-----------|------
- * After-Hours Pricing         | consultation_fee    | 1x       | 1.5x      | 1.5x
- * Flu Season Spike            | respiratory share   | ~ 15%    | ~ 60%     | 4x
- * Experienced Doctor Sat.     | satisfaction_score  | ~2.0     | 4.0-5.0   | ~2x
- * Video Follow-Up Lift        | follow-ups/user     | 1x       | 2x        | 2x
- * Chronic Refill Chain        | refills (chronic)   | 1        | 3-4       | 3-4x
- * Occasional No-Shows         | booking→consult     | 95%      | 75%       | -20%
- * Doctor Specialization       | years_experience    | 5        | 22        | 4.4x
- * Free-Tier Conversion Drop   | funnel conversion   | 40%      | 28%       | -30%
- * Booking TTC by Tier          | wait_time/duration  | 1x       | 0.67/1.4x | ~ 2.1x range
- * Consult-Count Magic Number  | sweet consult fee   | 1x       | 1.25x     | 1.25x
- * Consult-Count Magic Number  | over days_until_fu  | 1x       | 1.5x      | +50%
+ * Hook                        | Metric                        | Expected        | Measured (full fidelity)
+ * ----------------------------|-------------------------------|-----------------|-------------------------
+ * H1 After-Hours Pricing      | fee after-hours / business    | 1.5x            | 1.494 (avg = median)
+ * H2 Flu Season Spike         | respiratory share in-window   | 0.65 (vs 0.125) | 0.654 (out: 0.125)
+ * H2 Flu Season Spike         | resp/other wait in-window     | 2x              | 1.996
+ * H3 Experienced Doctor Sat.  | satisfaction >12-consult users| avg+median 4.5  | 4.499 / 4.500 (0 impure)
+ * H4 Video Follow-Up Lift     | extra follow-ups per video    | +0.6 within 7d  | +0.588
+ *                             |   consult (within-7d diff)    |                 |
+ * H5 Chronic Refill Chain     | surviving clones / model      | ~1.0            | 1.001 (placebo 0.048)
+ *                             |   expectation (survival-adj)  |                 |
+ * H6 Occasional No-Shows      | no_show rate, <15-event users | 0.25 (0 on rest)| 0.248 (0 impure)
+ * H7 Doctor Specialization    | years_experience by role      | 22.5 / 9 / 0    | 22.46 / 9.00 / 0 exact
+ * H8 Free-Tier Cliff          | excess zero-consult share     | 0.30            | 0.313 (survivors 0.986)
+ *                             |   (z_free−z_paid)/(1−z_paid)  |                 |
+ * H9 Wait/Duration by Tier    | free/basic, premium/basic     | 1.4x / 0.67x    | 1.40/0.671, 1.40/0.670
+ * H9 Funnel TTC by Tier       | median TTC free/basic (emu)   | >1 (diluted 1.4)| 1.157 (prem/basic 0.827)
+ * H10 Magic Number            | sweet fee / low fee (median)  | 1.25x           | 1.219
+ * H10 Magic Number            | over/sweet days_until_fu      | 1.5x (phone fu) | 1.500
  */
 
 // ── SCALE ──
@@ -355,7 +376,7 @@ function handleUserHooks(record) {
 function handleEverythingHooks(record, meta) {
 	if (!record.length) return record;
 	const profile = meta.profile;
-	const datasetStart = dayjs.unix(meta.datasetStart);
+	const datasetStart = dayjs.unix(meta.datasetStart).utc();
 	const FLU_START = datasetStart.add(FLU_START_DAY, "days");
 	const FLU_END = datasetStart.add(FLU_END_DAY, "days");
 
@@ -399,8 +420,11 @@ function handleEverythingHooks(record, meta) {
 
 	// HOOK 1: AFTER-HOURS SURGE PRICING — consultations 7PM-7AM
 	// UTC get consultation_fee 1.5x. No flag — discover via HOD chart.
+	// Only "consultation completed" declares consultation_fee ("appointment
+	// booked" was a dead branch — its guard on e.consultation_fee never held).
+	// Runs after H9's timestamp shift, so the hour check sees final times.
 	record.forEach(e => {
-		if (e.event === "consultation completed" || e.event === "appointment booked") {
+		if (e.event === "consultation completed") {
 			const hour = new Date(e.time).getUTCHours();
 			if ((hour >= AFTER_HOURS_START || hour < AFTER_HOURS_END) && e.consultation_fee) {
 				e.consultation_fee = Math.floor(e.consultation_fee * AFTER_HOURS_FEE_MULT);
@@ -409,10 +433,12 @@ function handleEverythingHooks(record, meta) {
 	});
 
 	// HOOK 2: FLU SEASON SPIKE — d50-70 respiratory dominates, wait_time doubles.
-	// Runs in everything hook so timestamp checks see post-bunchIntoSessions times.
+	// UTC parses throughout — a machine-local dayjs() here would move the
+	// window boundaries by the generating machine's TZ offset, breaking the
+	// same-seed-same-output determinism promise across machines.
 	record.forEach(e => {
 		if (e.event !== "appointment booked") return;
-		const t = dayjs(e.time);
+		const t = dayjs.utc(e.time);
 		if (t.isAfter(FLU_START) && t.isBefore(FLU_END)) {
 			if (chance.bool({ likelihood: FLU_RESPIRATORY_LIKELIHOOD })) e.condition_type = "respiratory";
 			if (e.condition_type === "respiratory") {
@@ -463,6 +489,11 @@ function handleEverythingHooks(record, meta) {
 						user_id: vc.user_id,
 						consultation_mode: "video",
 						days_until_followup: chance.integer({ min: 3, max: 14 }),
+						// fresh insert_id: the engine stamps insert_id at generation
+						// (lib/generators/events.js), so a bare spread copies the
+						// template's id and Mixpanel's $insert_id dedupe would
+						// silently drop every clone after the first
+						insert_id: chance.guid(),
 					});
 				}
 			});
@@ -483,31 +514,49 @@ function handleEverythingHooks(record, meta) {
 				for (let i = 1; i <= refillsToAdd; i++) {
 					record.push({
 						...templateRefill,
+						// clones past datasetEnd are dropped by the engine's
+						// unconditional future-time guard — late-window chronic
+						// prescriptions keep fewer of their refills by design
 						time: rxTime.add(CHRONIC_REFILL_INTERVAL_DAYS * i + chance.integer({ min: -3, max: 3 }), "days").toISOString(),
 						user_id: rx.user_id,
 						condition_type: "chronic",
 						medication_type: "chronic_maintenance",
 						refill_count: i,
+						// fresh insert_id — same $insert_id dedupe rationale as H4
+						insert_id: chance.guid(),
 					});
 				}
 			});
 		}
 	}
 
-	// HOOK 6: OCCASIONAL PATIENT NO-SHOWS — low-activity patients
-	// (< 15 events) lose 25% of consultations (they booked but didn't show).
+	// HOOK 6: OCCASIONAL PATIENT NO-SHOWS — low-activity users (< 15 events
+	// at this point in the pipeline, clones included) lose 25% of their
+	// consultations and get no_show=true stamped on 25% of their bookings
+	// (they booked but didn't show). no_show is DECLARED [false] on
+	// "appointment booked" (schema-first rule), so flipped rows are the only
+	// true values in the dataset. Because the flag is decided before any
+	// later deletion and every subsequent step only shrinks a user's stream,
+	// users with >= 15 output events provably carry zero no_show=true rows.
 	if (record.length < NO_SHOW_EVENT_THRESHOLD) {
 		for (let i = record.length - 1; i >= 0; i--) {
 			if (record[i].event === "consultation completed" && chance.bool({ likelihood: NO_SHOW_DROP_LIKELIHOOD })) {
 				record.splice(i, 1);
 			}
 		}
+		record.forEach(e => {
+			if (e.event === "appointment booked" && chance.bool({ likelihood: NO_SHOW_DROP_LIKELIHOOD })) {
+				e.no_show = true;
+			}
+		});
 	}
 
 	// HOOK 10: CONSULTATION-COUNT MAGIC NUMBER (no flags)
 	// Sweet 3-6 consultations → +25% on consultation_fee. Over 7+ →
-	// drop 30% of "follow up scheduled" events (over-consulted →
-	// follow-up fatigue).
+	// days_until_followup stretched 1.5x (over-consulted patients wait
+	// longer for the next visit). Counts run AFTER all filters (H8/H6)
+	// and nothing drops consultations later, so output-side consult
+	// counts rebuild these cohorts exactly.
 	const consultCt = record.filter(e => e.event === "consultation completed").length;
 	if (consultCt >= CONSULT_SWEET_MIN && consultCt <= CONSULT_SWEET_MAX) {
 		record.forEach(e => {
@@ -598,6 +647,8 @@ const config = {
 				condition_type: ["general", "general", "general", "respiratory", "dermatology", "mental_health", "chronic", "pediatric"],
 				wait_time_hours: u.weighNumRange(1, 72, 0.4),
 				appointment_type: ["new_patient", "follow_up", "follow_up", "urgent", "routine", "routine"],
+				// declared false; H6 flips to true on 25% of low-activity users' bookings
+				no_show: [false],
 			},
 		},
 		{
@@ -941,5 +992,566 @@ const config = {
 		return record;
 	},
 };
+
+// ── STORIES ──────────────────────────────────────────────────────────────
+// Machine-checkable contract for the 10 numbered hooks. Evaluate with:
+//   node scripts/verify-stories.mjs dungeons/vertical/healthcare/healthcare.js --data-prefix verify-healthcare
+
+const EV = `read_json_auto('{{PREFIX}}-EVENTS*.json', sample_size=-1, union_by_name=true)`;
+const US = `read_json_auto('{{PREFIX}}-USERS*.json', sample_size=-1, union_by_name=true)`;
+
+// Identity prelude. account created is both isAuthEvent and isFirstEvent, so
+// born users auth on their very first event and user_id should be present on
+// every record; the prelude still resolves through the device pool
+// (avgDevicePerUser: 2, "anonymousIds" is the legacy USERS-shard key) as
+// belt-and-braces for any device-only edge.
+const ID_CTE = `dmap AS (SELECT unnest("anonymousIds") AS device_id, distinct_id FROM ${US}),
+ev AS (SELECT coalesce(m.distinct_id::VARCHAR, e.user_id::VARCHAR, e.device_id::VARCHAR) AS uid,
+  e.time::TIMESTAMP AS t, e.* FROM ${EV} e LEFT JOIN dmap m ON e.device_id = m.device_id)`;
+
+// Temporal boundaries computed from the same knobs the hooks use (the hook
+// parses in UTC, so these UTC timestamps are exact window edges)
+const FLU_IN_START_TS = dayjs.utc(DATASET_START).add(FLU_START_DAY, "day").format("YYYY-MM-DD HH:mm:ss");
+const FLU_IN_END_TS = dayjs.utc(DATASET_START).add(FLU_END_DAY, "day").format("YYYY-MM-DD HH:mm:ss");
+const END_TS = dayjs.utc(DATASET_END).format("YYYY-MM-DD HH:mm:ss");
+// H4 window guard: consultations in the last 7 days can't be credited with a
+// clone that would land past datasetEnd (future-time guard drops it)
+const END_MINUS_7_TS = dayjs.utc(DATASET_END).subtract(7, "day").format("YYYY-MM-DD HH:mm:ss");
+
+// Per-user consultation counts. H10 (and H3) classify on counts taken AFTER
+// all filters (H8 free-tier cliff, H6 no-show thinning) and nothing drops
+// consultations later, so output-side counts rebuild the hook cohorts exactly.
+const CONSULT_CTE = `cc AS (SELECT uid, count(*) AS ct FROM ev WHERE event = 'consultation completed' GROUP BY 1)`;
+
+/** @type {import("../../../types").DungeonStory[]} */
+export const stories = [
+	{
+		id: "H1-after-hours-pricing",
+		hook: "H1",
+		archetype: "temporal-inflection",
+		narrative: `consultations between ${AFTER_HOURS_START}:00 and ${AFTER_HOURS_END}:00 UTC carry consultation_fee × ${AFTER_HOURS_FEE_MULT}. H10's sweet-spot fee boost rides both HOD bins equally (consult-count cohorts are hour-independent), so both the avg and median ratios read the ${AFTER_HOURS_FEE_MULT} knob directly (Math.floor bias < 1%)`,
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT CASE WHEN extract(hour FROM t) >= ${AFTER_HOURS_START} OR extract(hour FROM t) < ${AFTER_HOURS_END} THEN 'after' ELSE 'business' END AS grp,
+ count(*) AS event_count, count(DISTINCT uid) AS user_count,
+ avg(consultation_fee) AS avg_fee, median(consultation_fee) AS med_fee
+FROM ev WHERE event = 'consultation completed' GROUP BY 1`,
+				},
+				select: { a: { where: { grp: "after" } }, b: { where: { grp: "business" } } },
+				expect: { metric: "a.avg_fee / b.avg_fee", op: "between", target: [1.35, 1.65] },
+				minCohort: 400,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT CASE WHEN extract(hour FROM t) >= ${AFTER_HOURS_START} OR extract(hour FROM t) < ${AFTER_HOURS_END} THEN 'after' ELSE 'business' END AS grp,
+ count(*) AS event_count, count(DISTINCT uid) AS user_count,
+ avg(consultation_fee) AS avg_fee, median(consultation_fee) AS med_fee
+FROM ev WHERE event = 'consultation completed' GROUP BY 1`,
+				},
+				select: { a: { where: { grp: "after" } }, b: { where: { grp: "business" } } },
+				// scaling a whole bin scales every quantile: median ratio = knob too
+				expect: { metric: "a.med_fee / b.med_fee", op: "between", target: [1.35, 1.65] },
+				minCohort: 400,
+			},
+		],
+	},
+	{
+		id: "H2-flu-season",
+		hook: "H2",
+		archetype: "temporal-inflection",
+		narrative: `days ${FLU_START_DAY}-${FLU_END_DAY}: bookings are forced respiratory at ${FLU_RESPIRATORY_LIKELIHOOD}%, and every in-window respiratory booking gets wait_time_hours × ${FLU_WAIT_MULT}. Expected in-window respiratory share = 0.60 + 0.40 × 1/8 = 0.65 (declared mix is 1-in-8 respiratory); out-window share stays at the declared 0.125. H9's tier scaling rides all conditions equally, so the in-window resp/other wait ratio reads the ×${FLU_WAIT_MULT} knob`,
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT CASE WHEN t > TIMESTAMP '${FLU_IN_START_TS}' AND t < TIMESTAMP '${FLU_IN_END_TS}' THEN 'in' ELSE 'out' END AS grp,
+ count(*) AS event_count, count(DISTINCT uid) AS user_count,
+ count(*) FILTER (WHERE condition_type = 'respiratory')::DOUBLE / count(*) AS resp_share,
+ avg(wait_time_hours) FILTER (WHERE condition_type = 'respiratory') AS resp_wait,
+ avg(wait_time_hours) FILTER (WHERE condition_type <> 'respiratory') AS other_wait
+FROM ev WHERE event = 'appointment booked' GROUP BY 1`,
+				},
+				select: { i: { where: { grp: "in" } } },
+				expect: { metric: "i.resp_share", op: "between", target: [0.58, 0.72] },
+				minCohort: 200,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT CASE WHEN t > TIMESTAMP '${FLU_IN_START_TS}' AND t < TIMESTAMP '${FLU_IN_END_TS}' THEN 'in' ELSE 'out' END AS grp,
+ count(*) AS event_count, count(DISTINCT uid) AS user_count,
+ count(*) FILTER (WHERE condition_type = 'respiratory')::DOUBLE / count(*) AS resp_share
+FROM ev WHERE event = 'appointment booked' GROUP BY 1`,
+				},
+				select: { o: { where: { grp: "out" } } },
+				// purity: forcing happens only inside the window
+				expect: { metric: "o.resp_share", op: "between", target: [0.09, 0.16] },
+				minCohort: 200,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT CASE WHEN t > TIMESTAMP '${FLU_IN_START_TS}' AND t < TIMESTAMP '${FLU_IN_END_TS}' THEN 'in' ELSE 'out' END AS grp,
+ count(*) AS event_count, count(DISTINCT uid) AS user_count,
+ avg(wait_time_hours) FILTER (WHERE condition_type = 'respiratory') AS resp_wait,
+ avg(wait_time_hours) FILTER (WHERE condition_type <> 'respiratory') AS other_wait
+FROM ev WHERE event = 'appointment booked' GROUP BY 1`,
+				},
+				select: { i: { where: { grp: "in" } } },
+				expect: { metric: "i.resp_wait / i.other_wait", op: "between", target: [1.7, 2.35] },
+				minCohort: 200,
+			},
+		],
+	},
+	{
+		id: "H3-experienced-doctor-satisfaction",
+		hook: "H3",
+		archetype: "cohort-prop-scale",
+		narrative: `users with >${EXPERIENCED_CONSULT_THRESHOLD} consultations get every satisfaction_score redrawn uniform [${EXPERIENCED_SATISFACTION_MIN}, ${EXPERIENCED_SATISFACTION_MAX}] (avg AND median 4.5 — both quantile reads of the uniform). Purity is exact: later hooks only DELETE consultations, so any user still >${EXPERIENCED_CONSULT_THRESHOLD} in the output was boosted — all surviving scores sit in the redrawn range. No ratio-vs-baseline assertion: the declared weighNumRange(1, 5, 0.8, 3) baseline is a 3-value seeded pool (the 4th arg is POOL SIZE, not mode), so the organic mean is not derivable from the schema`,
+		assertions: [
+			{
+				// deterministic purity — a single sub-4.0 score on an
+				// output->12-consult user is a hook bug, not sampling noise
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}, ${CONSULT_CTE}
+SELECT count(*) FILTER (WHERE e.satisfaction_score < ${EXPERIENCED_SATISFACTION_MIN}) AS below_min,
+ count(*) AS scores, count(DISTINCT c.uid) AS exp_users
+FROM cc c JOIN ev e ON e.uid = c.uid AND e.event = 'consultation completed'
+WHERE c.ct > ${EXPERIENCED_CONSULT_THRESHOLD}`,
+				},
+				assert: (rows) => {
+					const r = (rows || [])[0];
+					if (!r || Number(r.exp_users) === 0) return { pass: false, verdict: "NONE", detail: "no >12-consult users" };
+					const clean = Number(r.below_min) === 0;
+					return {
+						pass: clean,
+						verdict: clean ? "NAILED" : "INVERSE",
+						detail: `below-4.0 scores=${r.below_min} of ${r.scores} across ${r.exp_users} experienced users (must be 0)`,
+					};
+				},
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}, ${CONSULT_CTE},
+lab AS (SELECT uid, CASE WHEN ct > ${EXPERIENCED_CONSULT_THRESHOLD} THEN 'exp' WHEN ct <= 9 THEN 'base' ELSE 'mid' END AS grp FROM cc)
+SELECT l.grp, count(DISTINCT l.uid) AS user_count, count(*) AS event_count, avg(e.satisfaction_score) AS avg_sat
+FROM lab l JOIN ev e ON e.uid = l.uid AND e.event = 'consultation completed' GROUP BY 1`,
+				},
+				select: { x: { where: { grp: "exp" } } },
+				// uniform [4.0, 5.0] → 4.5
+				expect: { metric: "x.avg_sat", op: "between", target: [4.35, 4.65] },
+				minCohort: 30,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}, ${CONSULT_CTE}
+SELECT 'exp' AS grp, count(DISTINCT c.uid) AS user_count, count(*) AS event_count, median(e.satisfaction_score) AS med_sat
+FROM cc c JOIN ev e ON e.uid = c.uid AND e.event = 'consultation completed'
+WHERE c.ct > ${EXPERIENCED_CONSULT_THRESHOLD}`,
+				},
+				select: { x: { where: { grp: "exp" } } },
+				// median of uniform [4.0, 5.0] = 4.5 — independent quantile read
+				expect: { metric: "x.med_sat", op: "between", target: [4.35, 4.65] },
+				minCohort: 30,
+			},
+		],
+	},
+	{
+		id: "H4-video-followup-lift",
+		hook: "H4",
+		archetype: "cohort-count-scale",
+		narrative: `each video consultation has a ${VIDEO_FOLLOWUP_LIKELIHOOD}% chance to inject one cloned follow-up 1-7 days later. Per-consultation attribution: counting follow-ups within 7d after each consultation, video minus phone reads the 0.6 knob with per-EVENT attribution that cancels user-level activity selection (organic near-rates are mode-blind: a consultation's mode is an iid per-event draw, so both bins sample the same users' timelines). Attenuation: a clone can also land within 7d of a neighboring phone consultation of the same user, inflating the phone bin — hence the band floor below 0.6. Cohort restricted to users with ≥1 follow-up (clone requires an organic template) and consultations ≥7d before datasetEnd (clones past the end are future-guard dropped). Deliberately single-assertion: user-level composites (video-users vs phone-only fu-per-consult) were tested and rejected — conditioning on fus>0 inflates the low-activity phone-only group, and tier/persona sampling coupling plus the video_consultation feature's launch-gated mode mix make any user-level band underivable from knobs`,
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+fu_users AS (SELECT DISTINCT uid FROM ev WHERE event = 'follow up scheduled'),
+cons AS (SELECT e.uid, e.t, e.consultation_mode AS mode
+  FROM ev e JOIN fu_users f ON f.uid = e.uid
+  WHERE e.event = 'consultation completed' AND e.t <= TIMESTAMP '${END_MINUS_7_TS}'),
+cnt AS (SELECT c.uid, c.mode, c.t, count(fu.uid) AS fu7
+  FROM cons c LEFT JOIN ev fu ON fu.uid = c.uid AND fu.event = 'follow up scheduled'
+    AND fu.t > c.t AND fu.t <= c.t + INTERVAL 7 DAY
+  GROUP BY 1, 2, 3)
+SELECT mode AS grp, count(*) AS consults, count(DISTINCT uid) AS user_count, avg(fu7) AS avg_fu7
+FROM cnt GROUP BY 1`,
+				},
+				select: { v: { where: { grp: "video" } }, p: { where: { grp: "phone" } } },
+				expect: { metric: "v.avg_fu7 - p.avg_fu7", op: "between", target: [0.33, 0.78] },
+				minCohort: 150,
+			},
+		],
+	},
+	{
+		id: "H5-chronic-refill-chain",
+		hook: "H5",
+		archetype: "cohort-count-scale",
+		narrative: `each chronic prescription spawns ${CHRONIC_REFILL_MIN}-${CHRONIC_REFILL_MAX} cloned refills at ~${CHRONIC_REFILL_INTERVAL_DAYS}d intervals (condition_type=chronic, medication_type=chronic_maintenance, refill_count=i); clones past datasetEnd are future-guard dropped. The assertion rebuilds the survival model per prescription from its actual date (attempt i at +${CHRONIC_REFILL_INTERVAL_DAYS}·i days; P(n≥3)=2/3, P(n≥4)=1/3 from the uniform 2-4 draw), subtracts the organic chronic∧chronic_maintenance baseline measured on non-chronic-rx users (declared mix: 2/7 × 1/8 ≈ 0.036), and checks measured clones ÷ model expectation ≈ 1. Cohort restricted to chronic-rx users with ≥1 refill (the hook needs an organic template)`,
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+refill_users AS (SELECT DISTINCT uid FROM ev WHERE event = 'prescription refill'),
+crx AS (SELECT e.uid, e.t FROM ev e JOIN refill_users ru ON ru.uid = e.uid
+  WHERE e.event = 'prescription issued' AND e.condition_type = 'chronic'),
+cohort AS (SELECT uid FROM crx GROUP BY 1),
+exp_calc AS (SELECT sum(
+   CASE WHEN t + INTERVAL 30 DAY <= TIMESTAMP '${END_TS}' THEN 1.0 ELSE 0 END
+ + CASE WHEN t + INTERVAL 60 DAY <= TIMESTAMP '${END_TS}' THEN 1.0 ELSE 0 END
+ + (2.0/3) * (CASE WHEN t + INTERVAL 90 DAY <= TIMESTAMP '${END_TS}' THEN 1.0 ELSE 0 END)
+ + (1.0/3) * (CASE WHEN t + INTERVAL 120 DAY <= TIMESTAMP '${END_TS}' THEN 1.0 ELSE 0 END)) AS expected_clones
+  FROM crx),
+r AS (SELECT e.uid, (e.condition_type = 'chronic' AND e.medication_type = 'chronic_maintenance') AS is_cm,
+  (c.uid IS NOT NULL) AS in_cohort
+  FROM ev e LEFT JOIN cohort c ON c.uid = e.uid WHERE e.event = 'prescription refill'),
+agg AS (SELECT count(*) FILTER (WHERE in_cohort) AS t_coh,
+  count(*) FILTER (WHERE in_cohort AND is_cm) AS cm_coh,
+  count(*) FILTER (WHERE NOT in_cohort) AS t_non,
+  count(*) FILTER (WHERE NOT in_cohort AND is_cm) AS cm_non FROM r)
+SELECT 'all' AS grp, (SELECT count(*) FROM cohort) AS user_count,
+ a.cm_non::DOUBLE / nullif(a.t_non, 0) AS organic_cm_rate,
+ ((a.cm_coh - (a.cm_non::DOUBLE / nullif(a.t_non, 0)) * a.t_coh)
+   / (1 - (a.cm_non::DOUBLE / nullif(a.t_non, 0)))) / nullif(x.expected_clones, 0) AS clone_yield
+FROM agg a, exp_calc x`,
+				},
+				select: { all: { where: { grp: "all" } } },
+				// ±3d jitter and boundary effects keep this near but not at 1.0
+				expect: { metric: "all.clone_yield", op: "between", target: [0.7, 1.35] },
+				minCohort: 80,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+refill_users AS (SELECT DISTINCT uid FROM ev WHERE event = 'prescription refill'),
+crx AS (SELECT e.uid, e.t FROM ev e JOIN refill_users ru ON ru.uid = e.uid
+  WHERE e.event = 'prescription issued' AND e.condition_type = 'chronic'),
+cohort AS (SELECT uid FROM crx GROUP BY 1)
+SELECT 'all' AS grp, count(*) AS event_count, count(DISTINCT e.uid) AS user_count,
+ count(*) FILTER (WHERE e.condition_type = 'chronic' AND e.medication_type = 'chronic_maintenance')::DOUBLE / count(*) AS cm_rate
+FROM ev e LEFT JOIN cohort c ON c.uid = e.uid
+WHERE e.event = 'prescription refill' AND c.uid IS NULL`,
+				},
+				select: { all: { where: { grp: "all" } } },
+				// placebo: non-chronic-rx users' refills carry only the declared
+				// organic chronic∧chronic_maintenance mix (2/7 × 1/8 ≈ 0.036)
+				expect: { metric: "all.cm_rate", op: "between", target: [0.015, 0.06] },
+				minCohort: 200,
+			},
+		],
+	},
+	{
+		id: "H6-occasional-no-shows",
+		hook: "H6",
+		archetype: "cohort-count-scale",
+		narrative: `users with <${NO_SHOW_EVENT_THRESHOLD} events (at hook time, clones included) lose ${NO_SHOW_DROP_LIKELIHOOD}% of consultations and get no_show=true on ${NO_SHOW_DROP_LIKELIHOOD}% of bookings. The flag gives selection-free verification of a per-event effect on an activity-selected cohort: flagged ⇒ hook-count ≤ 14 ⇒ output count ≤ 14 (everything after only deletes), so users with ≥15 output events provably carry ZERO no_show=true rows (exact purity), and the no_show rate among ≤14-event users reads the knob (diluted slightly by unflagged users who slipped under 15 when future-dated clones were guard-dropped). The consultation-drop side is asserted as a direction-only composite: the flagged cohort is dominated by occasional/churner personas whose conversionModifier (0.7/0.3) organically lowers consult-per-booking, and H8's free-tier cliff skews zero-consult users into the small bin — the engineered 25% thinning is inseparable from that selection, which is exactly why the no_show flag exists`,
+		assertions: [
+			{
+				// deterministic purity
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+tot AS (SELECT uid, count(*) AS ct FROM ev GROUP BY 1)
+SELECT count(*) FILTER (WHERE e.no_show = true AND t2.ct >= ${NO_SHOW_EVENT_THRESHOLD}) AS big_noshows,
+ count(*) FILTER (WHERE e.no_show = true) AS all_noshows,
+ count(DISTINCT t2.uid) FILTER (WHERE t2.ct < ${NO_SHOW_EVENT_THRESHOLD}) AS small_users
+FROM ev e JOIN tot t2 ON t2.uid = e.uid WHERE e.event = 'appointment booked'`,
+				},
+				assert: (rows) => {
+					const r = (rows || [])[0];
+					if (!r || Number(r.all_noshows) === 0) return { pass: false, verdict: "NONE", detail: "no no_show=true bookings at all" };
+					const clean = Number(r.big_noshows) === 0;
+					return {
+						pass: clean,
+						verdict: clean ? "NAILED" : "INVERSE",
+						detail: `no_show=true on ≥15-event users: ${r.big_noshows} of ${r.all_noshows} total (must be 0; small-bin users=${r.small_users})`,
+					};
+				},
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+tot AS (SELECT uid, count(*) AS ct FROM ev GROUP BY 1),
+bk AS (SELECT e.uid, count(*) AS bookings, count(*) FILTER (WHERE e.no_show = true) AS noshows
+  FROM ev e JOIN tot t2 ON t2.uid = e.uid
+  WHERE e.event = 'appointment booked' AND t2.ct < ${NO_SHOW_EVENT_THRESHOLD} GROUP BY 1)
+SELECT 'small' AS grp, count(*) AS user_count,
+ sum(noshows)::DOUBLE / nullif(sum(bookings), 0) AS ns_rate
+FROM bk`,
+				},
+				select: { s: { where: { grp: "small" } } },
+				expect: { metric: "s.ns_rate", op: "between", target: [0.15, 0.3] },
+				minCohort: 150,
+			},
+			{
+				// composite direction check (selection + engineered thinning)
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+tot AS (SELECT uid, count(*) AS ct FROM ev GROUP BY 1),
+per AS (SELECT t2.uid, (t2.ct >= ${NO_SHOW_EVENT_THRESHOLD}) AS big,
+  count(*) FILTER (WHERE e.event = 'appointment booked') AS bk,
+  count(*) FILTER (WHERE e.event = 'consultation completed') AS cons
+  FROM tot t2 JOIN ev e ON e.uid = t2.uid GROUP BY 1, 2)
+SELECT CASE WHEN big THEN 'big' ELSE 'small' END AS grp, count(*) AS user_count,
+ sum(cons)::DOUBLE / nullif(sum(bk), 0) AS cons_per_bk
+FROM per WHERE bk > 0 GROUP BY 1`,
+				},
+				select: { s: { where: { grp: "small" } }, b: { where: { grp: "big" } } },
+				expect: { metric: "s.cons_per_bk / b.cons_per_bk", op: "between", target: [0.2, 0.85] },
+				minCohort: 150,
+			},
+		],
+	},
+	{
+		id: "H7-doctor-specialization",
+		hook: "H7",
+		archetype: "cohort-prop-scale",
+		narrative: `user hook: doctors get specialty from a real list and years_experience uniform [${DOCTOR_EXPERIENCE_MIN}, ${DOCTOR_EXPERIENCE_MAX}] (avg 22.5); nurses uniform [${NURSE_EXPERIENCE_MIN}, ${NURSE_EXPERIENCE_MAX}] (avg 9); patients pinned to 0. Deterministic per-role ranges — range violations are hook bugs, not noise`,
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `SELECT role AS grp, count(*) AS user_count,
+ avg(years_experience) AS avg_yx, min(years_experience) AS min_yx, max(years_experience) AS max_yx,
+ count(*) FILTER (WHERE specialty = 'none') AS none_ct
+FROM ${US} GROUP BY 1`,
+				},
+				assert: (rows) => {
+					const by = Object.fromEntries((rows || []).map(r => [r.grp, r]));
+					const d = by.doctor, n = by.nurse, p = by.patient;
+					if (!d || !n || !p) return { pass: false, verdict: "NONE", detail: `missing role rows (${(rows || []).map(r => r.grp).join(",")})` };
+					const bad = [];
+					if (Number(d.min_yx) < DOCTOR_EXPERIENCE_MIN || Number(d.max_yx) > DOCTOR_EXPERIENCE_MAX) bad.push(`doctor yx [${d.min_yx}, ${d.max_yx}] outside [${DOCTOR_EXPERIENCE_MIN}, ${DOCTOR_EXPERIENCE_MAX}]`);
+					if (Number(d.none_ct) !== 0) bad.push(`${d.none_ct} doctors with specialty='none'`);
+					if (Number(n.min_yx) < NURSE_EXPERIENCE_MIN || Number(n.max_yx) > NURSE_EXPERIENCE_MAX) bad.push(`nurse yx [${n.min_yx}, ${n.max_yx}] outside [${NURSE_EXPERIENCE_MIN}, ${NURSE_EXPERIENCE_MAX}]`);
+					if (Number(p.min_yx) !== 0 || Number(p.max_yx) !== 0) bad.push(`patient yx [${p.min_yx}, ${p.max_yx}] not pinned to 0`);
+					return {
+						pass: bad.length === 0,
+						verdict: bad.length === 0 ? "NAILED" : "INVERSE",
+						detail: bad.length ? bad.join("; ") : `ranges exact: doctor [${d.min_yx}, ${d.max_yx}], nurse [${n.min_yx}, ${n.max_yx}], patient pinned 0 (${d.user_count}/${n.user_count}/${p.user_count} users)`,
+					};
+				},
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `SELECT role AS grp, count(*) AS user_count, avg(years_experience) AS avg_yx FROM ${US} GROUP BY 1`,
+				},
+				select: { d: { where: { grp: "doctor" } } },
+				expect: { metric: "d.avg_yx", op: "between", target: [21, 24] },
+				minCohort: 40,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `SELECT role AS grp, count(*) AS user_count, avg(years_experience) AS avg_yx FROM ${US} GROUP BY 1`,
+				},
+				select: { n: { where: { grp: "nurse" } } },
+				expect: { metric: "n.avg_yx", op: "between", target: [8, 10] },
+				minCohort: 80,
+			},
+		],
+	},
+	{
+		id: "H8-free-tier-cliff",
+		hook: "H8",
+		archetype: "funnel-conversion-by-segment",
+		narrative: `${FREE_TIER_DROP_LIKELIHOOD}% of free-tier users lose ALL consultations (per-user cliff). Estimator: (z_free − z_paid) / (1 − z_paid) where z = zero-consultation user share — the natural-zero baseline z cancels, and tier-blind processes (H6 thinning) cancel too, so the statistic reads the 0.30 knob directly. Sharp discriminator vs per-event thinning: SURVIVING free users are untouched, so their consult counts must match basic users (ratio ≈ 1.0); thinning would read ~0.7. The survivor comparison is SEGMENT-STANDARDIZED: tier and persona are sampled from the same seeded stream and come out measurably correlated (free skews occasional, premium skews provider), and persona eventModifier drives volume — raw cross-tier count comparisons are confounded by composition, standardizing on the persona-stamped segment removes it (thinning would still read ~0.7 within every segment)`,
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+per AS (SELECT u.distinct_id::VARCHAR AS uid, u.subscription_tier AS tier FROM ${US} u),
+cons AS (SELECT uid, count(*) AS ct FROM ev WHERE event = 'consultation completed' GROUP BY 1),
+j AS (SELECT p.tier, coalesce(c.ct, 0) AS ct FROM per p LEFT JOIN cons c ON c.uid = p.uid),
+z AS (SELECT count(*) AS user_count,
+ count(*) FILTER (WHERE tier = 'free' AND ct = 0)::DOUBLE / nullif(count(*) FILTER (WHERE tier = 'free'), 0) AS z_free,
+ count(*) FILTER (WHERE tier <> 'free' AND ct = 0)::DOUBLE / nullif(count(*) FILTER (WHERE tier <> 'free'), 0) AS z_paid
+ FROM j)
+SELECT 'all' AS grp, user_count, z_free, z_paid,
+ (z_free - z_paid) / nullif(1 - z_paid, 0) AS cliff_share FROM z`,
+				},
+				select: { all: { where: { grp: "all" } } },
+				expect: { metric: "all.cliff_share", op: "between", target: [0.24, 0.36] },
+				minCohort: 500,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+cons AS (SELECT uid, count(*) AS ct FROM ev WHERE event = 'consultation completed' GROUP BY 1),
+surv AS (SELECT u.subscription_tier AS tier, u.segment AS seg, c.ct
+  FROM ${US} u JOIN cons c ON c.uid = u.distinct_id::VARCHAR),
+seg AS (SELECT seg,
+  avg(ct) FILTER (WHERE tier = 'free') AS f_avg, count(*) FILTER (WHERE tier = 'free') AS f_n,
+  avg(ct) FILTER (WHERE tier = 'basic') AS b_avg, count(*) FILTER (WHERE tier = 'basic') AS b_n
+  FROM surv GROUP BY 1)
+SELECT 'all' AS grp, sum(f_n + b_n)::BIGINT AS user_count,
+ sum(f_n * f_avg / b_avg) / sum(f_n) AS std_ratio
+FROM seg WHERE f_avg IS NOT NULL AND b_avg IS NOT NULL AND b_n >= 10`,
+				},
+				select: { all: { where: { grp: "all" } } },
+				// per-user cliff, not thinning: survivors untouched → ratio ≈ 1.0
+				// (b_n >= 10 is a stability guard against tiny-segment blowup)
+				expect: { metric: "all.std_ratio", op: "between", target: [0.9, 1.1] },
+				minCohort: 500,
+			},
+			{
+				// the documented Mixpanel funnel report, through the emulator.
+				// Window = funnel's 48h × H9's max stretch 1.4 (the free-tier
+				// timestamp scaling rides this funnel's booked→consult gap).
+				// Composite: the cliff (×0.7) compounds with H9 window censoring
+				// on free — band sits below the pure-cliff 0.70
+				breakdown: {
+					type: "timeToConvert",
+					steps: ["symptom search", "appointment booked", "consultation completed"],
+					breakdownByUserProperty: "subscription_tier",
+					conversionWindowMs: Math.round(48 * TTC_FREE_FACTOR * 3600 * 1000),
+				},
+				assert: (rows) => {
+					const by = Object.fromEntries((rows || []).map(r => [r.segment_value, r]));
+					const f = by.free, b = by.basic;
+					if (!f || !b) return { pass: false, verdict: "NONE", detail: `missing tier rows (${(rows || []).map(r => r.segment_value).join(",")})` };
+					const cf = f.step_counts[2] / f.step_counts[0];
+					const cb = b.step_counts[2] / b.step_counts[0];
+					const ratio = cf / cb;
+					const pass = ratio >= 0.55 && ratio <= 0.8;
+					return {
+						pass,
+						verdict: pass ? (Math.abs(ratio - 0.7) <= 0.07 ? "NAILED" : "STRONG") : (ratio < 1 ? "WEAK" : "INVERSE"),
+						detail: `funnel conversion free=${cf.toFixed(4)} basic=${cb.toFixed(4)} ratio=${ratio.toFixed(3)} (expect ~0.70, band [0.55, 0.80]; entered free=${f.step_counts[0]} basic=${b.step_counts[0]})`,
+					};
+				},
+			},
+		],
+	},
+	{
+		id: "H9-ttc-by-tier",
+		hook: "H9",
+		archetype: "funnel-ttc-by-segment",
+		narrative: `premium × ${TTC_PREMIUM_FACTOR} / free × ${TTC_FREE_FACTOR} on (a) wait_time_hours and duration_minutes (iid property scale — avg ratios read the knobs exactly; H2's flu doubling is tier-blind and cancels) and (b) the first booked→consult→follow-up sequence's timestamps (scaleFunnelTTC). The TTC assertions run through the Mixpanel-aligned emulator at a 2016h conversion window = max stretch ${TTC_FREE_FACTOR} × (2 gaps × 30d per-gap cap in findFirstSequence) — the window must cover the stretched support or censoring dilutes the free tier (the ai-platform H9 lesson). Only each user's FIRST sequence is scaled and the emulator's greedy first-conversion aligns with findFirstSequence's greedy scan, but organic re-conversions still dilute the measured ratio toward 1 — bands assume ≥25% of the full effect survives`,
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT subscription_tier AS grp, count(*) AS event_count, count(DISTINCT uid) AS user_count, avg(wait_time_hours) AS avg_wait
+FROM ev WHERE event = 'appointment booked' GROUP BY 1`,
+				},
+				select: { f: { where: { grp: "free" } }, b: { where: { grp: "basic" } } },
+				expect: { metric: "f.avg_wait / b.avg_wait", op: "between", target: [1.26, 1.54] },
+				minCohort: 300,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT subscription_tier AS grp, count(*) AS event_count, count(DISTINCT uid) AS user_count, avg(wait_time_hours) AS avg_wait
+FROM ev WHERE event = 'appointment booked' GROUP BY 1`,
+				},
+				select: { p: { where: { grp: "premium" } }, b: { where: { grp: "basic" } } },
+				expect: { metric: "p.avg_wait / b.avg_wait", op: "between", target: [0.6, 0.74] },
+				minCohort: 300,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT subscription_tier AS grp, count(*) AS event_count, count(DISTINCT uid) AS user_count, avg(duration_minutes) AS avg_dur
+FROM ev WHERE event = 'consultation completed' GROUP BY 1`,
+				},
+				select: { f: { where: { grp: "free" } }, b: { where: { grp: "basic" } } },
+				expect: { metric: "f.avg_dur / b.avg_dur", op: "between", target: [1.26, 1.54] },
+				minCohort: 300,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT subscription_tier AS grp, count(*) AS event_count, count(DISTINCT uid) AS user_count, avg(duration_minutes) AS avg_dur
+FROM ev WHERE event = 'consultation completed' GROUP BY 1`,
+				},
+				select: { p: { where: { grp: "premium" } }, b: { where: { grp: "basic" } } },
+				expect: { metric: "p.avg_dur / b.avg_dur", op: "between", target: [0.6, 0.74] },
+				minCohort: 300,
+			},
+			{
+				breakdown: {
+					type: "timeToConvert",
+					steps: ["appointment booked", "consultation completed", "follow up scheduled"],
+					breakdownByUserProperty: "subscription_tier",
+					// 2016h = 1.4 × 2 gaps × 30d per-gap cap (covers stretched support)
+					conversionWindowMs: 2016 * 60 * 60 * 1000,
+				},
+				select: { f: { where: { segment_value: "free" } }, b: { where: { segment_value: "basic" } } },
+				expect: { metric: "f.median_ttc_ms / b.median_ttc_ms", op: "between", target: [1.04, 1.44] },
+				minCohort: 150,
+			},
+			{
+				breakdown: {
+					type: "timeToConvert",
+					steps: ["appointment booked", "consultation completed", "follow up scheduled"],
+					breakdownByUserProperty: "subscription_tier",
+					conversionWindowMs: 2016 * 60 * 60 * 1000,
+				},
+				select: { p: { where: { segment_value: "premium" } }, b: { where: { segment_value: "basic" } } },
+				expect: { metric: "p.median_ttc_ms / b.median_ttc_ms", op: "between", target: [0.6, 0.97] },
+				minCohort: 150,
+			},
+		],
+	},
+	{
+		id: "H10-consult-count-magic-number",
+		hook: "H10",
+		archetype: "frequency-sweet-spot",
+		narrative: `sweet ${CONSULT_SWEET_MIN}-${CONSULT_SWEET_MAX} consultations → consultation_fee × ${CONSULT_FEE_BOOST}; over ${CONSULT_OVER_THRESHOLD}+ → days_until_followup × ${CONSULT_FOLLOWUP_STRETCH}. Both are property-only mutations on cohorts the output rebuilds exactly (counts run after all filters). Median ratios are selection-free: scaling a whole cohort's iid draws scales every quantile by the knob. H1's after-hours boost rides all count-cohorts equally (hours are count-independent). The days assertion filters to consultation_mode='phone' follow-ups — H4's injected clones are always video with a different days distribution, and the over-cohort receives more clones`,
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}, ${CONSULT_CTE},
+coh AS (SELECT uid, CASE WHEN ct BETWEEN ${CONSULT_SWEET_MIN} AND ${CONSULT_SWEET_MAX} THEN 'sweet'
+  WHEN ct >= ${CONSULT_OVER_THRESHOLD} THEN 'over' ELSE 'low' END AS grp FROM cc)
+SELECT c.grp, count(DISTINCT c.uid) AS user_count, count(*) AS event_count, median(e.consultation_fee) AS med_fee
+FROM coh c JOIN ev e ON e.uid = c.uid AND e.event = 'consultation completed' GROUP BY 1`,
+				},
+				select: { s: { where: { grp: "sweet" } }, l: { where: { grp: "low" } } },
+				expect: { metric: "s.med_fee / l.med_fee", op: "between", target: [1.12, 1.4] },
+				minCohort: 60,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}, ${CONSULT_CTE},
+coh AS (SELECT uid, CASE WHEN ct BETWEEN ${CONSULT_SWEET_MIN} AND ${CONSULT_SWEET_MAX} THEN 'sweet'
+  WHEN ct >= ${CONSULT_OVER_THRESHOLD} THEN 'over' ELSE 'low' END AS grp FROM cc)
+SELECT c.grp, count(DISTINCT c.uid) AS user_count, count(*) AS event_count, median(e.days_until_followup) AS med_days
+FROM coh c JOIN ev e ON e.uid = c.uid AND e.event = 'follow up scheduled' AND e.consultation_mode = 'phone'
+GROUP BY 1`,
+				},
+				select: { o: { where: { grp: "over" } }, s: { where: { grp: "sweet" } } },
+				// Math.round on small integer days adds up to ~5% bias
+				expect: { metric: "o.med_days / s.med_days", op: "between", target: [1.3, 1.75] },
+				minCohort: 60,
+			},
+		],
+	},
+];
 
 export default config;
