@@ -128,6 +128,55 @@ describe('evaluateFunnel — conversionWindow { unit: sessions }', () => {
 			.toThrow(/mutually exclusive/);
 	});
 
+	test("countMode 'sessions' preset: totals shape + 1-session window (general_wo_repeat rewrite)", () => {
+		// P1.6.2 — __validate_sessions rewrite, api/version_2_0/arb_funnels/validate.py
+		const sameSession = [
+			ev('signup', '2024-01-15T10:00:00.000Z'),
+			ev('purchase', '2024-01-15T10:10:00.000Z'),
+		];
+		const r = evaluateFunnel(sameSession, ['signup', 'purchase'], { countMode: 'sessions' });
+		// hand-computed: totals shape (array), one attempt, completed in-session
+		expect(Array.isArray(r)).toBe(true);
+		expect(r).toHaveLength(1);
+		expect(r[0].completed).toBe(true);
+
+		const crossSession = [
+			ev('signup', '2024-01-15T10:00:00.000Z'),
+			ev('purchase', '2024-01-15T11:00:00.000Z'), // 60-min gap → next session
+		];
+		const r2 = evaluateFunnel(crossSession, ['signup', 'purchase'], { countMode: 'sessions' });
+		expect(r2).toHaveLength(1);
+		expect(r2[0].completed).toBe(false);
+		expect(r2[0].reached).toBe(0);
+	});
+
+	test("countMode 'sessions': no restart after a completed pass (wo_repeat)", () => {
+		// two full passes in one session — general_wo_repeat credits ONE
+		const events = [
+			ev('signup', '2024-01-15T10:00:00.000Z'),
+			ev('purchase', '2024-01-15T10:01:00.000Z'),
+			ev('signup', '2024-01-15T10:02:00.000Z'),
+			ev('purchase', '2024-01-15T10:03:00.000Z'),
+		];
+		const r = evaluateFunnel(events, ['signup', 'purchase'], { countMode: 'sessions' });
+		expect(r).toHaveLength(1);
+		expect(r[0].completed).toBe(true);
+	});
+
+	test("countMode 'sessions' validation: re-entry and conflicting windows throw; explicit (sessions, 1) tolerated", () => {
+		const events = [ev('signup', '2024-01-15T10:00:00.000Z')];
+		expect(() => evaluateFunnel(events, ['signup', 'purchase'], { countMode: 'sessions', reentry: true }))
+			.toThrow(/re-entry/);
+		expect(() => evaluateFunnel(events, ['signup', 'purchase'], { countMode: 'sessions', conversionWindowMs: 1000 }))
+			.toThrow(/1 session/);
+		expect(() => evaluateFunnel(events, ['signup', 'purchase'], { countMode: 'sessions', conversionWindow: { unit: 'sessions', n: 2 } }))
+			.toThrow(/1 session/);
+		expect(() => evaluateFunnel(events, ['signup', 'purchase'], { countMode: 'sessions', conversionWindow: { unit: 'sessions', n: 1 } }))
+			.not.toThrow();
+		// empty steps under the preset keep the totals shape
+		expect(evaluateFunnel(events, [], { countMode: 'sessions' })).toEqual([]);
+	});
+
 	test('time-based conversionWindowMs path unchanged by the refactor', () => {
 		const events = [
 			ev('signup', '2024-01-15T10:00:00.000Z'),
