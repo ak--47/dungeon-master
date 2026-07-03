@@ -54,6 +54,11 @@ All notable changes to `@ak--47/dungeon-master`.
   runs. Still functional; warns once. Use **`applyTTCBySegmentV2`** (new,
   `everything` hook) — finds the greedy first sequence via
   `findFirstSequence` and scales it with `scaleFunnelTTC`.
+- **`Persona.churnRate`, `Persona.activeWindow`, `Persona.soupOverride`**
+  (P2.5) — declared config surface that was never implemented: nothing in
+  lib/ reads them after validation. Marked `@deprecated` in types.d.ts; the
+  validator warns once per process when a dungeon sets any of them. Not
+  removed (declared surface) and not implemented (config-shape freeze).
 
 ## 1.5.4 — 2026-06-04
 

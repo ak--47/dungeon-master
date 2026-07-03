@@ -1380,15 +1380,29 @@ export interface Persona {
     eventMultiplier?: number;
     /** Multiplier for funnel conversion rates (1.0 = normal, 1.3 = 30% better). */
     conversionModifier?: number;
-    /** Base churn rate for this persona (0-1). */
+    /**
+     * Base churn rate for this persona (0-1).
+     * @deprecated — unimplemented; no-op. The validator defaults it to 0 but no
+     * generator reads it. Model churn with hooks instead (HOOKS.md §3 cohort
+     * atoms + `engagementDecay`).
+     */
     churnRate?: number;
     /** Properties merged into user profiles for this persona. */
     properties?: Record<string, ValueValid>;
-    /** Limit how long this persona is active (e.g., trial users active for 14 days). */
+    /**
+     * Limit how long this persona is active (e.g., trial users active for 14 days).
+     * @deprecated — unimplemented; no-op. Declared surface only; nothing in lib/
+     * reads it. Bound activity windows with an `everything` hook (drop events
+     * outside the window) instead.
+     */
     activeWindow?: { maxDays: number };
     /** Per-persona engagement decay override. */
     engagementDecay?: EngagementDecay;
-    /** Per-persona soup/timing override. */
+    /**
+     * Per-persona soup/timing override.
+     * @deprecated — unimplemented; no-op. Declared surface only; nothing in lib/
+     * reads it. Use the top-level `soup` config for timing shape.
+     */
     soupOverride?: SoupConfig;
 }
 
