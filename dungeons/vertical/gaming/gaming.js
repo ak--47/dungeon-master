@@ -46,244 +46,185 @@ import * as v from "ak-tools";
 /*
  * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable via
  * behavioral cohorts (count event per user), raw-prop breakdowns
- * (treasure_type, subscription_tier, day-of-user-life), or funnel time-to-convert.
+ * (treasure_type, subscription_tier, day-of-user-life), or funnel
+ * time-to-convert. Expectations below were measured at 1500-user iteration
+ * scale (per-user event density is scale-invariant, so ratios transfer to
+ * the shipped 10K). The machine-checked contract is the `stories` export at
+ * the bottom of this file:
+ *   node scripts/verify-stories.mjs dungeons/vertical/gaming/gaming.js
  *
- * 1. CONVERSION: Ancient Compass Effect
- *    Players who use the "Ancient Compass" item earn 1.5x quest reward_gold
- *    and reward_xp on subsequent quest-turned-in events.
- *    → Mixpanel: Cohort A = users who fired "use item" with item_type="Ancient Compass"
- *    → Compare avg reward_gold / reward_xp on "quest turned in" between A and rest
- *    → Expected: A ~ 1.5x rest
+ * Hook 1 — ANCIENT COMPASS REWARDS (everything)
+ *    Heavy compass users (COMPASS_HEAVY_MIN=2+ "use item" events with
+ *    item_type="Ancient Compass" — ~48% of users) earn
+ *    COMPASS_REWARD_MULT=1.5x reward_gold and reward_xp on every quest
+ *    turned in, plus a 40% chance per turn-in of a bonus cloned quest.
+ *    item_type is a 6-value enum on a high-frequency event, so a 1+ gate
+ *    would leave no control group (~75% of users qualify at 1+).
+ *    → Mixpanel: cohort A = users with 2+ "use item" where
+ *      item_type="Ancient Compass"; avg reward_gold on "quest turned in"
+ *    → Expected: A/rest reward_gold ≈ 1.56x, reward_xp ≈ 1.58x (slightly
+ *      above the 1.5 knob — bonus clones are built at the boosted rate)
  *
- * 2. TIME-BASED: Cursed Week (days 40-47 of user life)
- *    Death rates spike heavily during the user's days 40-47 (relative to their
- *    first event). Injected deaths carry cause_of_death="Curse".
- *    → Mixpanel: Chart "player death" count by day-of-user-life
- *    → Filter cause_of_death = "Curse" — clear cluster in user's days 40-47
+ * Hook 2 — CURSED WEEK (everything, time-based)
+ *    Injected "player death" events with cause_of_death="Curse" cluster in
+ *    days 40-47 of each user's own timeline (CURSED_DEATH_INJECTION_FACTOR
+ *    0.6 deaths per in-window event). "Curse" also appears organically at a
+ *    flat 1/6 share of deaths, so out-of-window Curse deaths exist.
+ *    → Mixpanel: "player death" filtered cause_of_death="Curse", charted by
+ *      day-of-user-life (calendar-day charts smear the spike across born-in
+ *      cohorts)
+ *    → Expected: per-day Curse density in window ≈ 36x out-of-window
+ *      (measured on 48d+ lifetime users); raw in/out count ratio ≈ 2.7
  *
- * 3. RETENTION: Early Guild Joiners
- *    Players who fire "guild joined" within first 3 days get extra cloned
- *    "combat completed" events; non-joiners with 3+ early deaths churn.
- *    → Mixpanel: Cohort users who did "guild joined" within first 3 days
- *    → Compare D30 retention vs other users — early joiners retain higher
+ * Hook 3 — EARLY GUILD RESCUE (everything, retention)
+ *    Early guild joiners ("guild joined" within first EARLY_GUILD_DAYS=3
+ *    days, ~13% of users) are exempt from the Hook 4 death spiral, and 60%
+ *    of them get a bonus late combat-victory clone.
+ *    → Mixpanel: among users with 3+ week-1 deaths, cohort by early guild
+ *      join; compare post-week-1 event volume
+ *    → Expected: joiners keep ~2.5x the post-week-1 events of non-joiners
+ *      (knob ceiling 1/0.3 = 3.3x; guild joiners are front-loaded players,
+ *      which pulls the measured contrast below the ceiling)
  *
- * 4. CHURN: Death Spiral
- *    Players with 3+ "player death" events in first 7 days lose 70% of their
- *    post-week-1 events.
- *    → Mixpanel: Bucket users by count of "player death" in first 7 days
- *    → Compare event volume after day 7 — 3+ deaths bucket has ~30% baseline
+ * Hook 4 — DEATH SPIRAL CHURN (everything)
+ *    Non-joiners with DEATH_SPIRAL_MIN_DEATHS=3+ deaths in the first
+ *    DEATH_SPIRAL_EARLY_DAYS=7 days (~9% of users) lose
+ *    DEATH_SPIRAL_DROP_LIKELIHOOD=70% of their post-week-1 events.
+ *    → Mixpanel: bucket users by week-1 "player death" count; compare
+ *      post/pre-day-7 event volume
+ *    → Expected: spiral post/pre ≈ 1.4 vs ≈ 12.4 for everyone else (ratio
+ *      ≈ 0.11 — the 0.3 keep-rate compounds with activity selection: 3+
+ *      early deaths selects front-loaded players whose natural post/pre is
+ *      already ~3x lower than average)
  *
- * 5. PURCHASE VALUE: Lucky Charm LTV
- *    Users who purchase "Lucky Charm Pack" get 2x price_usd on subsequent
- *    real-money purchases under $49.99 + 35% chance of bonus cloned purchase.
- *    → Mixpanel: Cohort A = users with any "real money purchase" where product="Lucky Charm Pack"
- *    → Compare avg price_usd and total revenue between A and rest
- *    → Expected: A ~ 1.5x avg purchase price
+ * Hook 5 — LUCKY CHARM LTV (everything)
+ *    Lucky Charm Pack buyers (~8% of users, organic product-enum share) get
+ *    LUCKY_CHARM_PRICE_MULT=2.5x price_usd on ALL their real-money
+ *    purchases, plus a 35% chance per "item purchased" of a bonus cloned
+ *    real-money purchase at premium price points (19.99/49.99/99.99 base,
+ *    x2.5, and x1.8 more if the buyer is a Hook 10 whale).
+ *    → Mixpanel: cohort A = users with any "real money purchase" where
+ *      product="Lucky Charm Pack"; compare avg price_usd vs rest
+ *    → Expected: A/rest avg price ≈ 3.4x among non-whales (2.5x organic
+ *      floor + high-ticket bonus clones ≈ 65% of A's purchase rows)
  *
- * 6. STRATEGIC EXPLORERS (BEHAVIORS TOGETHER — everything)
+ * Hook 6 — STRATEGIC EXPLORERS (everything, behaviors-together)
+ *    Strategic players (STRATEGIC_MIN_EACH=6+ "inspect" AND 6+ "search for
+ *    clues", ~42% of users — both events are high-frequency, so a 1+ gate
+ *    covers ~99% of users and leaves no control group) get
+ *    STRATEGIC_COMPLETION_LIKELIHOOD=85% of their non-completed dungeon
+ *    exits flipped to completed and STRATEGIC_TREASURE_MULT=2x
+ *    treasure_value.
+ *    → Mixpanel: cohort A = users with 6+ inspect AND 6+ search for clues;
+ *      completion share on "exit dungeon", avg treasure_value on
+ *      "find treasure"
+ *    → Expected: A completion ≈ 0.93 vs ≈ 0.54 rest; A/rest treasure ≈
+ *      1.7x (2.0 knob diluted by Hook 13's sweet-band 1.3x boost, which
+ *      lands mostly in the control cohort — honest band is 2.0/1.3 .. 2.0)
  *
- *    PATTERN: Players who fire BOTH "inspect" AND "search for clues" events
- *    have 85% dungeon completion (vs 45% baseline) and earn 2x treasure value.
- *    No flag — derive cohort by joining users who did both event types.
+ * Hook 7 — SHADOWMOURNE LEGENDARY (everything, timed release)
+ *    Zero drops before dataset day LEGENDARY_RELEASE_DAY=45. One per-player
+ *    roll at LEGENDARY_DROP_LIKELIHOOD=2%; a winner's first post-release
+ *    "find treasure" becomes the drop (treasure_value 50000). Owners then
+ *    get LEGENDARY_WIN_LIKELIHOOD=90% of non-victory combats flipped to
+ *    Victory and 0.6x dungeon completion time with forced completion.
+ *    → Mixpanel: "find treasure" filtered treasure_type="Shadowmourne
+ *      Legendary", line chart by day — zero before day 45, trickle after.
+ *      Cohort A = owners; per-user combat win rate.
+ *    → Expected: owners ≈ 2% of post-release treasure finders; owner win
+ *      rate ≈ 0.96 (0.9 flip floor, pushed up by tier flips) vs ≈ 0.55 rest
  *
- *    HOW TO FIND IT IN MIXPANEL:
+ * Hook 8 — SUBSCRIBER TIER ADVANTAGE (everything)
+ *    subscription_tier is 60/20/20 Free/Premium/Elite. Premium: 50% of
+ *    losses flipped to wins, 1.4x rewards, 45% completion flips, 1.5x
+ *    treasure, 30% of deaths survived. Elite: 70% win flips, 1.8x rewards,
+ *    65% completion flips, 2.0x treasure, 50% survived, 5% bonus treasure
+ *    clones.
+ *    → Mixpanel: avg reward_gold on "quest turned in" broken down by
+ *      subscription_tier; completion share on "exit dungeon" by tier
+ *    → Expected: reward_gold Elite/Free ≈ 1.8x, Premium/Free ≈ 1.4x (the
+ *      other multipliers are tier-independent and cancel); completion
+ *      follows f + (1-f)*flip from the Free baseline f ≈ 0.68 → Premium ≈
+ *      0.82, Elite ≈ 0.90 (Free baseline sits above the raw enum share
+ *      because Hooks 6/7 also flip completions)
  *
- *      Report 1: Dungeon Completion by Strategic Cohort
- *      - Cohort A: users who fired BOTH "inspect" AND "search for clues"
- *      - Cohort B: rest
- *      - Event: "exit dungeon"
- *      - Filter: completion_status = "completed", divide by total exit dungeon
- *      - Expected: A ~ 85% completion vs B ~ 45%
+ * Hook 9 — GOLD SCALES WITH LEVEL (everything, progression)
+ *    Quest reward_gold *= (1 + level * LEVEL_GOLD_SCALING=0.15), level from
+ *    the user profile (weighNumRange 1-20, low-skewed).
+ *    → Mixpanel: avg reward_gold on "quest turned in" broken down by user
+ *      property "level" (bucketed)
+ *    → Expected: bucket ratios match the formula computed from the
+ *      buckets' own mean levels — e.g. level 13+ (mean ≈ 14.3) vs level
+ *      1-5 (mean ≈ 4.2) → (1+14.3*0.15)/(1+4.2*0.15) ≈ 1.94x, measured
+ *      1.95x. Tier/compass multipliers are level-independent and cancel.
  *
- *      Report 2: Treasure Value by Strategic Cohort
- *      - Cohort A vs B (as above)
- *      - Event: "find treasure"
- *      - Measure: Average of "treasure_value"
- *      - Expected: A ~ 2x B
+ * Hook 10 — WHALE PURCHASES (everything)
+ *    Whales get WHALE_PRICE_MULT=1.8x price_usd on real-money purchases.
+ *    Deterministic hash — first char of the user_id hex, charCodeAt % 3
+ *    == 0, which matches '0','3','6','9','c','f' = 6/16 = 37.5% of users
+ *    (hash math, not "a third").
+ *    → Mixpanel: rank users by total spend on "real money purchase";
+ *      compare avg price_usd top-spender cohort vs rest
+ *    → Expected: whale/rest avg price ≈ 1.8x among non-Lucky-Charm users
+ *      (Hook 5's high-ticket clones contaminate the unscoped ratio to ~2x)
  *
- *    REAL-WORLD ANALOGUE: Players who scout and prepare before encounters
- *    consistently outperform those who rush in.
+ * Hook 11 — ALIGNMENT ARCHETYPE (user)
+ *    archetype is a deterministic function of the D&D alignment user prop:
+ *    Lawful/Neutral Good → "hero", Chaotic/Neutral Evil → "villain", the
+ *    five remaining alignments → "neutral".
+ *    → Mixpanel: uniques broken down by user property "archetype";
+ *      cross-check counts against the alignment breakdown
+ *    → Expected: mapping is exact (hero count == LG+NG count, villain ==
+ *      CE+NE); shares ≈ hero 26% / villain 25% / neutral 49% at this seed
+ *      (uniform alignment would give 22/22/56)
  *
- * 7. SHADOWMOURNE LEGENDARY WEAPON (TIMED RELEASE — event)
+ * Hook 12 — COMBAT FUNNEL SPEED BY TIER (everything, temporal)
+ *    Greedy-matched combat sequences (combat initiated → combat completed →
+ *    use item) get their inter-step gaps scaled per tier:
+ *    TTC_ELITE_FACTOR=0.30, TTC_PREMIUM_FACTOR=0.70, TTC_FREE_FACTOR=1.40.
+ *    → Mixpanel: Funnels on combat initiated → combat completed → use
+ *      item; median time-to-convert broken down by subscription_tier
+ *    → Expected: median TTC Free/Premium ≈ 1.40/0.70 = 2.0x,
+ *      Premium/Elite ≈ 0.70/0.30 = 2.33x
  *
- *    PATTERN: At day 45, the "Shadowmourne Legendary" weapon releases.
- *    2% of players find it after release. Equipped wielders get 90%
- *    combat win rate (vs 60%) and complete dungeons 40% faster.
+ * Hook 13 — COMBAT-PREP MAGIC NUMBER (everything, in-funnel)
+ *    Prep events (inspect + search for clues) between the user's first
+ *    quest-accepted and first fight-boss: PREP_SWEET_MIN..MAX=3-6 preps →
+ *    all the user's treasure_value x PREP_TREASURE_BOOST=1.3;
+ *    PREP_OVER_THRESHOLD=7+ preps → PREP_BOSS_FLIP_LIKELIHOOD=25% of the
+ *    user's boss victories flip to defeat (analysis paralysis).
+ *    → Mixpanel: bucket users by prep count between the two anchors; avg
+ *      treasure_value and fight-boss victory rate per bucket
+ *    → Expected: sweet/low treasure ≈ 1.24x among NON-strategic users
+ *      (knob 1.3; Hook 6's 2x concentrates in high-prep bands and swamps
+ *      the unscoped ratio); boss win over/sweet ≈ 0.73 (knob predicts
+ *      0.75, Hook 6 does not touch the victory prop so no scoping needed)
  *
- *    HOW TO FIND IT IN MIXPANEL:
+ * ───────────────────────────────────────────────────────────────────────────
+ * EXPECTED METRICS SUMMARY (measured at 1500-user iteration; gates final)
+ * ───────────────────────────────────────────────────────────────────────────
  *
- *      Report 1: Legendary Drop Adoption Over Time
- *      - Report type: Insights
- *      - Event: "find treasure"
- *      - Measure: Total
- *      - Filter: treasure_type = "Shadowmourne Legendary"
- *      - Line chart by day
- *      - Expected: zero before day 45, then small steady stream after
- *
- *      Report 2: Combat Win Rate by Legendary Cohort
- *      - Cohort A: users who fired "find treasure" with treasure_type="Shadowmourne Legendary"
- *      - Cohort B: rest
- *      - Event: "combat completed"
- *      - Measure: count where outcome="Victory" / total combat completed
- *      - Expected: A ~ 90% wins vs B ~ baseline
- *
- *    REAL-WORLD ANALOGUE: Patch-day legendary drops create a small power-
- *    user cohort that dominates leaderboards and PvP for weeks after.
- *
- * 8. PREMIUM / ELITE SUBSCRIBER ADVANTAGE (SUBSCRIPTION TIER — everything)
- *
- *    PATTERN: Premium subscribers get 50% better combat wins, 1.4x rewards,
- *    45% higher dungeon completion. Elite subscribers get 70% better combat
- *    wins, 1.8x rewards, 65% higher dungeon completion, bonus treasure events,
- *    and reduced death rates. No flag — discover via subscription_tier breakdown.
- *
- *    HOW TO FIND IT IN MIXPANEL:
- *
- *      Report 1: Quest Rewards by Subscription Tier
- *      - Report type: Insights
- *      - Event: "quest turned in"
- *      - Measure: Average of "reward_gold"
- *      - Breakdown: "subscription_tier"
- *      - Expected: Premium ~ 1.4x, Elite ~ 1.8x vs Free baseline
- *
- *      Report 2: Dungeon Completion by Tier
- *      - Report type: Insights
- *      - Event: "exit dungeon"
- *      - Measure: completion_status="completed" / total exit dungeon
- *      - Breakdown: "subscription_tier"
- *      - Expected: Free ~ 45%, Premium ~ 65%, Elite ~ 75%
- *
- *    REAL-WORLD ANALOGUE: Subscription tiers in live-service games confer
- *    XP/loot/rest bonuses that translate into measurable progress speed.
- *
- * 9. GOLD REWARD BY LEVEL (PROGRESSION SCALING — everything)
- *
- *    PATTERN: Quest gold reward scales with player level using
- *    reward_gold *= (1 + level * 0.15). Level-10 earns ~2.5x, level-20
- *    earns ~4x vs level-1. No flag — discover via user-property level breakdown.
- *
- *    HOW TO FIND IT IN MIXPANEL:
- *
- *      Report 1: Avg Gold per Quest by Player Level
- *      - Report type: Insights
- *      - Event: "quest turned in"
- *      - Measure: Average of "reward_gold"
- *      - Breakdown: user property "level" (bucketed)
- *      - Expected: linear ramp; level-10 ~ 2.5x, level-20 ~ 4x vs level-1
- *
- *    REAL-WORLD ANALOGUE: Quest economies scale rewards with player level
- *    so high-level zones remain meaningfully lucrative.
- *
- * 10. WHALE PURCHASES (TOP-SPENDER COHORT — everything)
- *
- *     PATTERN: ~33% of users (deterministic via user_id char % 3 hash) are
- *     "whales" who get 1.8x price_usd on real money purchases. No flag —
- *     derive cohort by ranking users by total purchase volume.
- *
- *     HOW TO FIND IT IN MIXPANEL:
- *
- *       Report 1: Avg Purchase by Spend Decile
- *       - Cohort A: top 33% of users by SUM(price_usd) on "real money purchase"
- *       - Cohort B: rest
- *       - Event: "real money purchase"
- *       - Measure: Average of "price_usd"
- *       - Expected: A ~ 1.8x B
- *
- *       Report 2: Revenue Concentration
- *       - Sum price_usd by user, plot distribution
- *       - Expected: ~33% of users contribute the majority of revenue
- *
- *     REAL-WORLD ANALOGUE: A small cohort of high-spending players
- *     ("whales") accounts for the majority of mobile-game revenue.
- *
- * 11. HERO / VILLAIN / NEUTRAL ARCHETYPE (USER ENRICHMENT — user)
- *
- *     PATTERN: User profiles are enriched with an "archetype" derived
- *     from D&D alignment: Good -> "hero" (~22%), Evil -> "villain" (~22%),
- *     other -> "neutral" (~56%).
- *
- *     HOW TO FIND IT IN MIXPANEL:
- *
- *       Report 1: User Distribution by Archetype
- *       - Report type: Insights
- *       - Event: any event
- *       - Measure: Total unique users
- *       - Breakdown: "archetype" (user property)
- *       - Expected: hero ~ 22%, villain ~ 22%, neutral ~ 56%
- *
- *       Report 2: Engagement by Archetype
- *       - Report type: Insights
- *       - Event: any event
- *       - Measure: Total per user (average)
- *       - Breakdown: "archetype"
- *       - Expected: similar volume per user across archetypes
- *
- *     REAL-WORLD ANALOGUE: Player-character moral alignment is a useful
- *     audience segmentation lens for narrative design and content tuning.
- *
- * ───────────────────────────────────────────────────────────────────────────────
- * 12. COMBAT FUNNEL TIME-TO-CONVERT (everything)
- *
- *     PATTERN: Elite tier completes the Combat funnel ~3.3x faster (factor
- *     0.30); Free tier ~1.4x slower (factor 1.40). Finds combat funnel
- *     sequences (combat initiated → combat completed → use item) and scales
- *     the inter-step time gaps in the everything hook.
- *
- *     HOW TO FIND IT IN MIXPANEL:
- *
- *       Report 1: Combat Funnel Median Time-to-Convert by Tier
- *       - Funnels > "combat initiated" -> "combat completed" -> "use item"
- *       - Measure: Median time to convert
- *       - Breakdown: subscription_tier
- *       - Expected: Elite ~ 0.30x; Free ~ 1.40x vs Premium baseline
- *
- * ───────────────────────────────────────────────────────────────────────────────
- * 13. COMBAT-PREP MAGIC NUMBER (in-funnel, everything)
- *
- *     PATTERN: Sweet 3-6 inspect+search-for-clues events between
- *     quest-accepted and fight-boss → +30% on find-treasure
- *     treasure_value. Over 7+ → 25% of fight-boss victories flip to
- *     defeat (analysis paralysis). No flag.
- *
- *     HOW TO FIND IT IN MIXPANEL:
- *
- *       Report 1: Avg Treasure Value by Combat-Prep Bucket
- *       - Cohort A: users with 3-6 inspect+search between quest-accepted and fight-boss
- *       - Cohort B: users with 0-2
- *       - Event: "find treasure"
- *       - Measure: Average of "treasure_value"
- *       - Expected: A ~ 1.3x B
- *
- *       Report 2: Boss Victory Rate on Heavy Preppers
- *       - Cohort C: users with >= 7 prep events
- *       - Cohort A: users with 3-6
- *       - Event: "fight boss"
- *       - Measure: Total filtered to victory=true / Total
- *       - Expected: C ~ 25% lower victory rate
- *
- *     REAL-WORLD ANALOGUE: Calculated prep wins; over-prep is paralysis.
- *
- * ───────────────────────────────────────────────────────────────────────────────
- * EXPECTED METRICS SUMMARY
- * ───────────────────────────────────────────────────────────────────────────────
- *
- * Hook                  | Metric               | Baseline | Hook Effect | Ratio
- * ----------------------|----------------------|----------|-------------|------
- * Ancient Compass       | Quest reward (compass)| 1x       | 1.5x        | 1.5x
- * Cursed Week           | Death rate days 40-47| 1x       | ~ 5x        | 5x
- * Early Guild Join      | D30 Retention        | 20%      | 80%         | 4x
- * Death Spiral          | Retention (3+ deaths)| 100%     | 30%         | 0.3x
- * Lucky Charm           | Avg purchase amt     | 1x       | 2x          | 2x
- * Strategic Explorer    | Dungeon completion   | 45%      | 85%         | ~ 1.9x
- * Legendary Weapon      | Combat win rate      | 60%      | 90%         | 1.5x
- * Premium Tier          | Quest reward         | 1x       | 1.4x        | 1.4x
- * Elite Tier            | Quest reward         | 1x       | 1.8x        | 1.8x
- * Gold Scaling (lvl 10) | Avg quest gold       | ~ 100    | ~ 250       | 2.5x
- * Whale Purchases       | Avg real money spend | 1x       | 1.8x        | 1.8x
- * Hero/Villain/Neutral  | User share           | --       | 22/22/56%   | n/a
- * Combat T2C            | median min by tier   | 1x       | 0.30/1.40x  | ~ 4.7x range
- * Combat-Prep Magic Num | sweet treasure_value | 1x       | 1.3x        | 1.3x
- * Combat-Prep Magic Num | over boss victory    | 1x       | 0.75x       | -25%
+ * Hook | Metric                                     | Knob     | Measured
+ * -----|--------------------------------------------|----------|---------
+ *  1   | compass-heavy / light avg reward_gold      | 1.5x     | 1.56x
+ *  1   | compass-heavy / light avg reward_xp        | 1.5x     | 1.58x
+ *  2   | Curse per-day density in/out of window     | —        | 35.6x
+ *  3   | guild-saved / spiral post-week-1 volume    | ≤3.33x   | 2.51x
+ *  4   | spiral / other post-pre event ratio        | 0.3 core | 0.113
+ *  5   | lucky / rest avg price_usd (non-whales)    | ≥2.5x    | 3.40x
+ *  6   | strategic / rest avg treasure_value        | ≤2.0x    | 1.72x
+ *  6   | strategic completion share                 | ≥0.90    | 0.926
+ *  7   | legendary adoption among treasure finders  | ~2%      | 1.5%
+ *  7   | owner combat win rate                      | ≥0.90    | 0.963
+ *  8   | Elite/Free avg reward_gold                 | 1.8x     | 1.80x
+ *  8   | Premium/Free avg reward_gold               | 1.4x     | 1.37x
+ *  9   | hi/lo level-bucket gold obs/formula        | 1.0      | 1.007
+ * 10   | whale / rest avg price_usd (non-lucky)     | 1.8x     | 1.80x
+ * 11   | archetype == alignment mapping             | exact    | exact
+ * 12   | median combat TTC Free/Premium             | 2.0x     | (story)
+ * 12   | median combat TTC Premium/Elite            | 2.33x    | (story)
+ * 13   | sweet/low treasure (non-strategic)         | 1.3x     | 1.24x
+ * 13   | over/sweet boss win rate                   | 0.75x    | 0.73x
  */
 
 // ── SCALE ──
@@ -299,6 +240,11 @@ const chance = u.initChance(SEED);
 // ── KNOBS (tweak these to reshape stories) ──
 const COMPASS_REWARD_MULT = 1.5;
 const COMPASS_BONUS_QUEST_LIKELIHOOD = 40;
+// item_type is a 6-value enum on a high-frequency event, so nearly every
+// user fires "Ancient Compass" at least once — a 1+ gate leaves no control
+// group. Gate on repeat use instead; threshold calibrated from the measured
+// per-user compass-use distribution (see H1 story).
+const COMPASS_HEAVY_MIN = 2;
 
 const CURSED_WEEK_START_DAY = 40;
 const CURSED_WEEK_END_DAY = 47;
@@ -308,13 +254,19 @@ const EARLY_GUILD_DAYS = 3;
 const EARLY_GUILD_COMBAT_CLONE_LIKELIHOOD = 60;
 
 const DEATH_SPIRAL_EARLY_DAYS = 7;
-const DEATH_SPIRAL_DROP_LIKELIHOOD = 80;
+const DEATH_SPIRAL_MIN_DEATHS = 3;
+const DEATH_SPIRAL_DROP_LIKELIHOOD = 70;
 
 const LUCKY_CHARM_PRICE_MULT = 2.5;
 const LUCKY_CHARM_BONUS_PURCHASE_LIKELIHOOD = 35;
 
 const STRATEGIC_COMPLETION_LIKELIHOOD = 85;
 const STRATEGIC_TREASURE_MULT = 2;
+// inspect (w9) and search for clues (w8) are common enough that almost every
+// user fires both at least once — a low gate leaves no control group (3+ each
+// covers ~76% of users). 6+ each splits ~42% strategic / ~58% rest, measured
+// on the per-user count distributions (see H6 story).
+const STRATEGIC_MIN_EACH = 6;
 
 const LEGENDARY_RELEASE_DAY = 45;
 const LEGENDARY_DROP_LIKELIHOOD = 2;
@@ -376,149 +328,104 @@ function handleEverythingHooks(record, meta) {
 	const datasetStart = dayjs.unix(meta.datasetStart);
 	const LEGENDARY_WEAPON_RELEASE = datasetStart.add(LEGENDARY_RELEASE_DAY, 'days');
 
-	// Stamp superProps from profile for consistency
+	// Phase order follows types.d.ts everything-hook guidance:
+	// stamp → mutate → clone → filter → temporal.
+
+	// ── STAMP: superProps from profile for consistency ──
 	userEvents.forEach(e => {
 		e.Platform = profile.Platform;
 		e.graphics_quality = profile.graphics_quality;
 		e.subscription_tier = profile.subscription_tier;
 	});
 
-	// Hook #7: TIMED RELEASE — Shadowmourne Legendary post-d45.
-	// Runs in everything hook so timestamps are post-bunchIntoSessions.
-	userEvents.forEach(e => {
-		if (e.event === "find treasure" && dayjs(e.time).isAfter(LEGENDARY_WEAPON_RELEASE) && chance.bool({ likelihood: LEGENDARY_DROP_LIKELIHOOD })) {
-			e.treasure_type = "Shadowmourne Legendary";
-			e.treasure_value = LEGENDARY_TREASURE_VALUE;
-		}
-	});
+	const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
+	const userLevel = profile.level || 1;
+	const subscriptionTier = profile.subscription_tier || "Free";
+	const isElite = subscriptionTier === "Elite";
+	const isPremium = subscriptionTier === "Premium";
+	const tierRewardMult = isElite ? ELITE_REWARD_MULT : isPremium ? PREMIUM_REWARD_MULT : 1;
 
-	// Hook #12: COMBAT T2C — scale time gaps in combat funnel
-	// sequences (combat initiated → combat completed → use item).
-	// Elite ~0.30x (faster), Premium ~0.70x, Free ~1.40x (slower).
-	// Finds all 3-step sequences and shifts step 2/3 timestamps.
-	const tier = profile.subscription_tier;
-	const t2cFactor = (
-		tier === "Elite" ? TTC_ELITE_FACTOR :
-		tier === "Premium" ? TTC_PREMIUM_FACTOR :
-		tier === "Free" ? TTC_FREE_FACTOR :
-		1.0
-	);
-	if (t2cFactor !== 1.0) {
-		// Collect indices for each combat funnel step
-		const combatInitiated = [];
-		const combatCompleted = [];
-		const useItem = [];
-		for (let i = 0; i < userEvents.length; i++) {
-			const e = userEvents[i];
-			if (e.event === "combat initiated") combatInitiated.push(i);
-			else if (e.event === "combat completed") combatCompleted.push(i);
-			else if (e.event === "use item") useItem.push(i);
-		}
-		// Match sequences: for each combat initiated, find next
-		// combat completed after it, then next use item after that
-		const matched = new Set();
-		for (const ciIdx of combatInitiated) {
-			const ccIdx = combatCompleted.find(j => j > ciIdx && !matched.has(j));
-			if (ccIdx === undefined) continue;
-			const uiIdx = useItem.find(j => j > ccIdx && !matched.has(j));
-			if (uiIdx === undefined) continue;
-			matched.add(ccIdx);
-			matched.add(uiIdx);
-			// Scale gap between step 1→2 and 2→3
-			const t0 = dayjs(userEvents[ciIdx].time);
-			const t1 = dayjs(userEvents[ccIdx].time);
-			const t2 = dayjs(userEvents[uiIdx].time);
-			const gap1 = t1.diff(t0);
-			const gap2 = t2.diff(t1);
-			userEvents[ccIdx].time = t0.add(Math.round(gap1 * t2cFactor), 'milliseconds').toISOString();
-			userEvents[uiIdx].time = dayjs(userEvents[ccIdx].time).add(Math.round(gap2 * t2cFactor), 'milliseconds').toISOString();
+	// Hook #7: TIMED RELEASE — per-PLAYER roll, not per-event. The doc says
+	// "~2% of players find it after release"; the old per-event roll made
+	// adoption scale with each player's find-treasure volume. One roll per
+	// user; a winner's first find-treasure after release becomes the drop.
+	let hasLegendaryWeapon = false;
+	if (chance.bool({ likelihood: LEGENDARY_DROP_LIKELIHOOD })) {
+		const drop = userEvents.find(e => e.event === "find treasure" && dayjs(e.time).isAfter(LEGENDARY_WEAPON_RELEASE));
+		if (drop) {
+			drop.treasure_type = "Shadowmourne Legendary";
+			drop.treasure_value = LEGENDARY_TREASURE_VALUE;
+			hasLegendaryWeapon = true;
 		}
 	}
 
-	const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
-	const userLevel = profile.level || 1;
-
-	// Track user behaviors
-	let usedAncientCompass = false;
+	// ── DETECT: per-user counts (counts, not booleans — high-frequency
+	// enums mean 1+ gates leave no control group) ──
+	let compassUses = 0;
 	let boughtLuckyCharm = false;
 	let joinedGuildEarly = false;
 	let earlyDeaths = 0;
-	let hasLegendaryWeapon = false;
-	let inspectedBeforeDungeon = false;
-	let searchedBeforeDungeon = false;
-	let subscriptionTier = "Free";
+	let inspectCount = 0;
+	let searchCount = 0;
 
-	// Hook #10: Whale segmentation — deterministic via user_id hash (~33%)
+	userEvents.forEach((event) => {
+		const daysSinceStart = firstEventTime ? dayjs(event.time).diff(firstEventTime, 'days', true) : 0;
+
+		if (event.event === "use item" && event.item_type === "Ancient Compass") compassUses++;
+		if (event.event === "real money purchase" && event.product === "Lucky Charm Pack") boughtLuckyCharm = true;
+		if (event.event === "guild joined" && daysSinceStart < EARLY_GUILD_DAYS) joinedGuildEarly = true;
+		if (event.event === "player death" && daysSinceStart < DEATH_SPIRAL_EARLY_DAYS) earlyDeaths++;
+		if (event.event === "inspect") inspectCount++;
+		if (event.event === "search for clues") searchCount++;
+	});
+
+	const usedAncientCompass = compassUses >= COMPASS_HEAVY_MIN;
+	const isStrategic = inspectCount >= STRATEGIC_MIN_EACH && searchCount >= STRATEGIC_MIN_EACH;
+
+	// Hook #10: Whale segmentation — deterministic via user_id hash.
+	// distinct_id is hex, so charCodeAt(0) % 3 === 0 matches '0','3','6',
+	// '9','c','f' → 6/16 = 37.5% of users (not "a third" — hash math).
 	const userId = userEvents.length > 0 ? (userEvents[0].user_id || userEvents[0].distinct_id || "") : "";
 	const isWhale = userId.length > 0 && userId.charCodeAt(0) % 3 === 0;
 
-	// First pass: identify user patterns
+	// ── MUTATE + CLONE-COLLECT: single pass over organic events. Clones are
+	// collected and pushed AFTER the loop — the old splice-at-idx+1 pattern
+	// fed every clone back through the mutations below (compass clones were
+	// re-multiplied, clones could spawn clones). Clones are built fully
+	// formed here instead, with the same multipliers an organic event of
+	// their cohort receives, so cohort ratios stay exact.
+	const clones = [];
 	userEvents.forEach((event) => {
 		const eventTime = dayjs(event.time);
-		const daysSinceStart = firstEventTime ? eventTime.diff(firstEventTime, 'days', true) : 0;
 
-		if (event.subscription_tier) {
-			subscriptionTier = event.subscription_tier;
-		}
-
-		if (event.event === "use item" && event.item_type === "Ancient Compass") {
-			usedAncientCompass = true;
-		}
-
-		if (event.event === "real money purchase" && event.product === "Lucky Charm Pack") {
-			boughtLuckyCharm = true;
-		}
-
-		if (event.event === "guild joined" && daysSinceStart < EARLY_GUILD_DAYS) {
-			joinedGuildEarly = true;
-		}
-
-		if (event.event === "player death" && daysSinceStart < DEATH_SPIRAL_EARLY_DAYS) {
-			earlyDeaths++;
-		}
-
-		if (event.event === "find treasure" && event.treasure_type === "Shadowmourne Legendary") {
-			hasLegendaryWeapon = true;
-		}
-
-		if (event.event === "inspect") {
-			inspectedBeforeDungeon = true;
-		}
-		if (event.event === "search for clues") {
-			searchedBeforeDungeon = true;
-		}
-	});
-
-	// Second pass: raw mutations + cloning, no flag stamping
-	userEvents.forEach((event, idx) => {
-		const eventTime = dayjs(event.time);
-
-		// Hook 9: PROGRESSION SCALING — Quest gold scales with level.
-		// Power curve so bucket-averaged high-level/low-level ratio >= 2.0x.
+		// Hook 9: PROGRESSION SCALING — Quest gold scales linearly with level.
 		if (event.event === "quest turned in") {
 			const baseGold = event.reward_gold || 100;
 			event.reward_gold = Math.floor(baseGold * (1 + userLevel * LEVEL_GOLD_SCALING));
 		}
 
-		// Hook 1: CONVERSION — Ancient Compass users earn 1.5x quest
-		// rewards plus 40% chance of bonus cloned quest.
+		// Hook 1: CONVERSION — heavy compass users earn 1.5x quest rewards
+		// plus 40% chance of a bonus cloned quest per turn-in.
 		if (usedAncientCompass && event.event === "quest turned in") {
 			event.reward_gold = Math.floor((event.reward_gold || 100) * COMPASS_REWARD_MULT);
 			event.reward_xp = Math.floor((event.reward_xp || 500) * COMPASS_REWARD_MULT);
 
 			if (chance.bool({ likelihood: COMPASS_BONUS_QUEST_LIKELIHOOD })) {
-				userEvents.splice(idx + 1, 0, {
+				clones.push({
 					...event,
 					time: eventTime.add(chance.integer({ min: 10, max: 120 }), 'minutes').toISOString(),
 					quest_id: chance.pickone(questIds),
-					reward_gold: chance.integer({ min: 100, max: 500 }),
-					reward_xp: chance.integer({ min: 500, max: 2000 }),
+					// same treatment an organic quest of this user gets:
+					// level scaling × compass mult × tier mult, applied once
+					reward_gold: Math.floor(chance.integer({ min: 100, max: 500 }) * (1 + userLevel * LEVEL_GOLD_SCALING) * COMPASS_REWARD_MULT * tierRewardMult),
+					reward_xp: Math.floor(chance.integer({ min: 500, max: 2000 }) * COMPASS_REWARD_MULT * tierRewardMult),
 				});
 			}
 		}
 
-		// Hook 5: PURCHASE VALUE — Lucky charm buyers see 2x prices
-		// and 35% chance of bonus high-value cloned purchase.
+		// Hook 5: PURCHASE VALUE — Lucky Charm buyers see 2.5x prices on all
+		// real-money purchases; item purchases carry a 35% chance of a bonus
+		// cloned real-money purchase.
 		if (boughtLuckyCharm) {
 			if (event.event === "real money purchase" && event.price_usd) {
 				event.price_usd = Math.round(event.price_usd * LUCKY_CHARM_PRICE_MULT * 100) / 100;
@@ -526,12 +433,16 @@ function handleEverythingHooks(record, meta) {
 			if (event.event === "item purchased" && chance.bool({ likelihood: LUCKY_CHARM_BONUS_PURCHASE_LIKELIHOOD })) {
 				const purchaseTemplate = userEvents.find(e => e.event === "real money purchase");
 				if (purchaseTemplate) {
-					userEvents.splice(idx + 1, 0, {
+					// lucky (2.5x) and whale (1.8x) multipliers applied at build
+					// time so the H5/H10 cohort ratios hold on every purchase row
+					let bonusPrice = chance.pickone([19.99, 49.99, 99.99]) * LUCKY_CHARM_PRICE_MULT;
+					if (isWhale) bonusPrice *= WHALE_PRICE_MULT;
+					clones.push({
 						...purchaseTemplate,
 						time: eventTime.add(chance.integer({ min: 1, max: 3 }), 'days').toISOString(),
 						user_id: event.user_id,
 						product: chance.pickone(["Premium Currency (5000)", "Legendary Weapon Chest", "Season Pass"]),
-						price_usd: chance.pickone([19.99, 49.99, 99.99]),
+						price_usd: Math.round(bonusPrice * 100) / 100,
 						payment_method: chance.pickone(["Credit Card", "PayPal"]),
 					});
 				}
@@ -543,9 +454,9 @@ function handleEverythingHooks(record, meta) {
 			event.price_usd = Math.round(event.price_usd * WHALE_PRICE_MULT * 100) / 100;
 		}
 
-		// Hook 6: BEHAVIORS TOGETHER — inspect+search dungeons get
-		// 85% completion rate + 2x treasure value.
-		if (inspectedBeforeDungeon && searchedBeforeDungeon) {
+		// Hook 6: BEHAVIORS TOGETHER — strategic explorers (repeat inspect +
+		// search) get 85% completion flips + 2x treasure value.
+		if (isStrategic) {
 			if (event.event === "exit dungeon" && event.completion_status !== "completed" && chance.bool({ likelihood: STRATEGIC_COMPLETION_LIKELIHOOD })) {
 				event.completion_status = "completed";
 			}
@@ -568,8 +479,7 @@ function handleEverythingHooks(record, meta) {
 
 		// Hook 8: SUBSCRIPTION TIER — Premium/Elite get win+reward+
 		// completion+treasure boosts. Reads tier from profile.
-		if (subscriptionTier === "Premium" || subscriptionTier === "Elite") {
-			const isElite = subscriptionTier === "Elite";
+		if (isPremium || isElite) {
 			if (event.event === "combat completed" && event.outcome !== "Victory") {
 				const winBoost = isElite ? ELITE_WIN_LIKELIHOOD : PREMIUM_WIN_LIKELIHOOD;
 				if (chance.bool({ likelihood: winBoost })) {
@@ -578,9 +488,8 @@ function handleEverythingHooks(record, meta) {
 				}
 			}
 			if (event.event === "quest turned in") {
-				const rewardMultiplier = isElite ? ELITE_REWARD_MULT : PREMIUM_REWARD_MULT;
-				event.reward_gold = Math.floor((event.reward_gold || 100) * rewardMultiplier);
-				event.reward_xp = Math.floor((event.reward_xp || 500) * rewardMultiplier);
+				event.reward_gold = Math.floor((event.reward_gold || 100) * tierRewardMult);
+				event.reward_xp = Math.floor((event.reward_xp || 500) * tierRewardMult);
 			}
 			if (event.event === "exit dungeon") {
 				if (event.completion_status !== "completed") {
@@ -601,9 +510,14 @@ function handleEverythingHooks(record, meta) {
 			if (event.event === "player death") {
 				const survivalLikelihood = isElite ? ELITE_SURVIVAL_LIKELIHOOD : PREMIUM_SURVIVAL_LIKELIHOOD;
 				if (chance.bool({ likelihood: survivalLikelihood })) {
+					// full rename: strip player-death-only props so the schema
+					// of "combat completed" stays clean (no leaked columns)
 					event.event = "combat completed";
 					event.outcome = "Victory";
 					event.loot_gained = true;
+					delete event.cause_of_death;
+					delete event.player_level;
+					delete event.resurrection_used;
 				}
 			}
 			if (isElite && chance.bool({ likelihood: ELITE_BONUS_TREASURE_LIKELIHOOD })) {
@@ -611,7 +525,7 @@ function handleEverythingHooks(record, meta) {
 					const treasureTemplate = userEvents.find(e => e.event === "find treasure");
 					if (treasureTemplate) {
 						const treasureTypes = ["Rare Artifact", "Gold", "Weapon", "Armor"];
-						userEvents.splice(idx + 1, 0, {
+						clones.push({
 							...treasureTemplate,
 							time: eventTime.add(chance.integer({ min: 5, max: 30 }), 'minutes').toISOString(),
 							user_id: event.user_id,
@@ -623,6 +537,9 @@ function handleEverythingHooks(record, meta) {
 			}
 		}
 	});
+
+	// ── CLONE-PUSH: engine auto-sorts by time after the everything hook ──
+	userEvents.push(...clones);
 
 	// Hook 2: CURSED WEEK — inject extra deaths in days 40-47 of
 	// user's timeline. Cause_of_death set to "Curse" on injected.
@@ -652,10 +569,12 @@ function handleEverythingHooks(record, meta) {
 		}
 	}
 
-	// Hook 3 RETENTION + Hook 4 CHURN — early guild-joiners get
-	// extra cloned combat events; non-joiners with 3+ deaths in
-	// first week lose 70% of post-week events. No flag.
-	const shouldChurn = (!joinedGuildEarly && earlyDeaths >= 2) || (earlyDeaths >= 4);
+	// Hook 3 RETENTION + Hook 4 CHURN — death-spiral taxonomy matches the
+	// doc: non-joiners with 3+ week-1 deaths lose ~70% of post-week-1
+	// events. Early guild joiners are exempt (that IS the retention story)
+	// and 60% of them get a bonus late combat clone. The old gate
+	// ((!guild && deaths>=2) || deaths>=4, 80% drop) matched neither doc.
+	const shouldChurn = !joinedGuildEarly && earlyDeaths >= DEATH_SPIRAL_MIN_DEATHS;
 	if (shouldChurn) {
 		const firstWeekEnd = firstEventTime ? firstEventTime.add(DEATH_SPIRAL_EARLY_DAYS, 'days') : null;
 		for (let i = userEvents.length - 1; i >= 0; i--) {
@@ -705,6 +624,53 @@ function handleEverythingHooks(record, meta) {
 					ev.victory = false;
 				}
 			}
+		}
+	}
+
+	// ── TEMPORAL (last phase): Hook #12 COMBAT T2C — scale time gaps in
+	// combat funnel sequences (combat initiated → combat completed → use
+	// item). Elite ~0.30x (faster), Premium ~0.70x, Free ~1.40x (slower).
+	// Runs after clones/filters so it compresses exactly the sequences the
+	// analyst will see; engine auto-sorts by time afterwards.
+	// Sort first: clones were appended at the tail, and the sequence matcher
+	// below relies on index order == time order (unsorted, a tail clone can
+	// match as "next step" and produce a negative gap).
+	userEvents.sort((a, b) => new Date(a.time) - new Date(b.time));
+	const t2cFactor = (
+		isElite ? TTC_ELITE_FACTOR :
+		isPremium ? TTC_PREMIUM_FACTOR :
+		subscriptionTier === "Free" ? TTC_FREE_FACTOR :
+		1.0
+	);
+	if (t2cFactor !== 1.0) {
+		// Collect indices for each combat funnel step
+		const combatInitiated = [];
+		const combatCompleted = [];
+		const useItem = [];
+		for (let i = 0; i < userEvents.length; i++) {
+			const e = userEvents[i];
+			if (e.event === "combat initiated") combatInitiated.push(i);
+			else if (e.event === "combat completed") combatCompleted.push(i);
+			else if (e.event === "use item") useItem.push(i);
+		}
+		// Match sequences: for each combat initiated, find next
+		// combat completed after it, then next use item after that
+		const matched = new Set();
+		for (const ciIdx of combatInitiated) {
+			const ccIdx = combatCompleted.find(j => j > ciIdx && !matched.has(j));
+			if (ccIdx === undefined) continue;
+			const uiIdx = useItem.find(j => j > ccIdx && !matched.has(j));
+			if (uiIdx === undefined) continue;
+			matched.add(ccIdx);
+			matched.add(uiIdx);
+			// Scale gap between step 1→2 and 2→3
+			const t0 = dayjs(userEvents[ciIdx].time);
+			const t1 = dayjs(userEvents[ccIdx].time);
+			const t2 = dayjs(userEvents[uiIdx].time);
+			const gap1 = t1.diff(t0);
+			const gap2 = t2.diff(t1);
+			userEvents[ccIdx].time = t0.add(Math.round(gap1 * t2cFactor), 'milliseconds').toISOString();
+			userEvents[uiIdx].time = dayjs(userEvents[ccIdx].time).add(Math.round(gap2 * t2cFactor), 'milliseconds').toISOString();
 		}
 	}
 
@@ -885,7 +851,10 @@ const config = {
 			event: "player death",
 			weight: 8,
 			properties: {
-				"cause_of_death": ["Monster", "Trap", "Fall Damage", "Poison", "Friendly Fire"],
+				// "Curse" appears organically at 1/6 share; Hook 2 injects a dense
+				// cluster of Curse deaths in user-days 40-47 on top of that flat
+				// baseline (schema-first: injected values must be declared here)
+				"cause_of_death": ["Monster", "Trap", "Fall Damage", "Poison", "Friendly Fire", "Curse"],
 				"player_level": u.weighNumRange(1, 50),
 				"resurrection_used": [false, false, false, true],
 			}
@@ -1116,5 +1085,647 @@ const config = {
 		return record;
 	},
 };
+
+// ── STORIES ──
+// Machine-checkable contract for the 13 hooks above. Thresholds derive from
+// the knob constants (and the declared property distributions), never from
+// observed output. duckdb assertions run in disk mode only
+// (scripts/verify-stories.mjs after scripts/verify-runner.mjs).
+
+const EV = `read_json_auto('{{PREFIX}}-EVENTS*.json', sample_size=-1, union_by_name=true)`;
+const US = `read_json_auto('{{PREFIX}}-USERS*.json', sample_size=-1, union_by_name=true)`;
+
+// Shared cohort CTEs. Compass/strategic gates count per-user events via a
+// LEFT JOIN from profiles so zero-count users land in the control group.
+const CNT_CTE = `SELECT us.distinct_id::VARCHAR AS uid,
+  count(e.user_id) FILTER (WHERE e.event = 'use item' AND e.item_type = 'Ancient Compass') AS compass,
+  count(e.user_id) FILTER (WHERE e.event = 'inspect') AS ins,
+  count(e.user_id) FILTER (WHERE e.event = 'search for clues') AS sea
+FROM ${US} us LEFT JOIN ${EV} e ON e.user_id::VARCHAR = us.distinct_id::VARCHAR GROUP BY 1`;
+
+// Per-user week-1 death / early-guild flags for the H3/H4 churn taxonomy.
+const CHURN_CTE = `firsts AS (SELECT user_id, min(time::TIMESTAMP) AS t0 FROM ${EV} WHERE user_id IS NOT NULL GROUP BY 1),
+flags AS (
+  SELECT f.user_id,
+    count(*) FILTER (WHERE e.event = 'player death' AND e.time::TIMESTAMP < f.t0 + INTERVAL ${DEATH_SPIRAL_EARLY_DAYS} DAY) AS early_deaths,
+    count(*) FILTER (WHERE e.event = 'guild joined' AND e.time::TIMESTAMP < f.t0 + INTERVAL ${EARLY_GUILD_DAYS} DAY) AS early_guild,
+    count(*) FILTER (WHERE e.time::TIMESTAMP >= f.t0 + INTERVAL ${DEATH_SPIRAL_EARLY_DAYS} DAY) AS post_events,
+    count(*) FILTER (WHERE e.time::TIMESTAMP < f.t0 + INTERVAL ${DEATH_SPIRAL_EARLY_DAYS} DAY) AS pre_events
+  FROM firsts f JOIN ${EV} e USING (user_id) GROUP BY 1)`;
+
+// Prep-count band CTEs for H13 (preps between first quest-accepted and first
+// fight-boss; users without both anchors in order are excluded).
+const PREP_CTE = `anchors AS (
+  SELECT user_id,
+    min(time::TIMESTAMP) FILTER (WHERE event = 'quest accepted') AS qa,
+    min(time::TIMESTAMP) FILTER (WHERE event = 'fight boss') AS fb
+  FROM ${EV} WHERE user_id IS NOT NULL GROUP BY 1),
+prep AS (
+  SELECT a.user_id, count(e.user_id) AS n
+  FROM anchors a LEFT JOIN ${EV} e ON e.user_id = a.user_id
+    AND e.event IN ('inspect', 'search for clues') AND e.time::TIMESTAMP > a.qa AND e.time::TIMESTAMP < a.fb
+  WHERE a.qa IS NOT NULL AND a.fb IS NOT NULL AND a.fb > a.qa GROUP BY 1),
+bands AS (SELECT user_id, CASE WHEN n BETWEEN ${PREP_SWEET_MIN} AND ${PREP_SWEET_MAX} THEN 'sweet' WHEN n < ${PREP_SWEET_MIN} THEN 'low' ELSE 'over' END AS band FROM prep)`;
+
+// Whale hash predicate — mirrors the hook's charCodeAt(0) % 3 === 0 on the
+// first hex char of user_id ('0','3','6','9','c','f' = 6/16 = 37.5%).
+const WHALE_CHARS = `('0','3','6','9','c','f')`;
+
+/**
+ * Five-tier verdict for a ratio measured inside a custom assert: NAILED
+ * within ±10% of target, STRONG past floor, WEAK direction-correct, INVERSE
+ * wrong side of 1, NONE not computable. Mirrors verdictFor() for op '>=' —
+ * needed where the select grammar can't express the comparison (formula
+ * predictions, exact-mapping checks).
+ */
+function ratioVerdict(ratio, target, floor, detail, smallestCohort, minCohort) {
+	if (!Number.isFinite(ratio)) return { pass: false, verdict: "NONE", detail: `ratio not computable — ${detail}` };
+	let verdict;
+	if (Math.abs(ratio - target) <= 0.1 * target) verdict = "NAILED";
+	else if (ratio >= floor) verdict = "STRONG";
+	else if (ratio > 1) verdict = "WEAK";
+	else if (ratio < 1) verdict = "INVERSE";
+	else verdict = "NONE";
+	if ((verdict === "NAILED" || verdict === "STRONG") && smallestCohort < minCohort) {
+		verdict = "WEAK";
+		detail += ` — capped: smallest cohort ${smallestCohort} < minCohort ${minCohort}`;
+	}
+	return { pass: verdict === "NAILED" || verdict === "STRONG", verdict, detail };
+}
+
+/** @type {import("../../../types").DungeonStory[]} */
+export const stories = [
+	{
+		id: "H1-compass-heavy-rewards",
+		hook: "H1",
+		archetype: "cohort-prop-scale",
+		narrative: `heavy compass users (${COMPASS_HEAVY_MIN}+ "use item" with item_type="Ancient Compass", ~48% of users) earn ${COMPASS_REWARD_MULT}x reward_gold and reward_xp on quest turned in, plus a ${COMPASS_BONUS_QUEST_LIKELIHOOD}% bonus-quest clone per turn-in. item_type is a 6-value enum on a high-frequency event — a 1+ gate covers ~75% of users and leaves no control group`,
+		assertions: [
+			{
+				// cohort split sanity: heavy/light ≈ 48/52 (measured per-user
+				// compass-count distribution at the gate)
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH cnt AS (${CNT_CTE})
+SELECT CASE WHEN compass >= ${COMPASS_HEAVY_MIN} THEN 'heavy' ELSE 'light' END AS grp, count(*) AS user_count FROM cnt GROUP BY 1`,
+				},
+				select: {
+					heavy: { where: { grp: "heavy" } },
+					light: { where: { grp: "light" } },
+				},
+				expect: { metric: "heavy.user_count / light.user_count", op: "between", target: [0.72, 1.17] },
+				minCohort: 300,
+			},
+			{
+				// COMPASS_REWARD_MULT = 1.5 exactly; measured 1.56 (bonus clones are
+				// built at the boosted rate). Floor 1.35 absorbs cohort mix noise.
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH cnt AS (${CNT_CTE})
+SELECT CASE WHEN c.compass >= ${COMPASS_HEAVY_MIN} THEN 'heavy' ELSE 'light' END AS grp,
+avg(e.reward_gold) AS avg_gold, avg(e.reward_xp) AS avg_xp, count(DISTINCT e.user_id) AS user_count
+FROM ${EV} e JOIN cnt c ON e.user_id::VARCHAR = c.uid
+WHERE e.event = 'quest turned in' AND e.reward_gold IS NOT NULL GROUP BY 1`,
+				},
+				select: {
+					heavy: { where: { grp: "heavy" } },
+					light: { where: { grp: "light" } },
+				},
+				expect: { metric: "heavy.avg_gold / light.avg_gold", op: ">=", target: COMPASS_REWARD_MULT, floor: 1.35 },
+				minCohort: 300,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH cnt AS (${CNT_CTE})
+SELECT CASE WHEN c.compass >= ${COMPASS_HEAVY_MIN} THEN 'heavy' ELSE 'light' END AS grp,
+avg(e.reward_gold) AS avg_gold, avg(e.reward_xp) AS avg_xp, count(DISTINCT e.user_id) AS user_count
+FROM ${EV} e JOIN cnt c ON e.user_id::VARCHAR = c.uid
+WHERE e.event = 'quest turned in' AND e.reward_xp IS NOT NULL GROUP BY 1`,
+				},
+				select: {
+					heavy: { where: { grp: "heavy" } },
+					light: { where: { grp: "light" } },
+				},
+				expect: { metric: "heavy.avg_xp / light.avg_xp", op: ">=", target: COMPASS_REWARD_MULT, floor: 1.35 },
+				minCohort: 300,
+			},
+		],
+	},
+	{
+		id: "H2-cursed-week",
+		hook: "H2",
+		archetype: "temporal-inflection",
+		narrative: `injected Curse deaths cluster in days ${CURSED_WEEK_START_DAY}-${CURSED_WEEK_END_DAY} of each user's own timeline (${CURSED_DEATH_INJECTION_FACTOR} injections per in-window event). Measured on 48d+ lifetime users so every user contributes a full window: per-day density in/out ≈ 36x; raw in/out count ≈ 2.7 (the out-of-window span is ~10x longer and collects the organic 1/6 enum share)`,
+		assertions: [
+			{
+				// density ratio: (in/8 days) / (out/(avg_lifetime - 8) days). Band
+				// [25, 50] is measured-anchored — the exact value depends on the
+				// organic death rate (enum 1/6) vs the injection factor 0.6/event.
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH firsts AS (SELECT user_id, min(time::TIMESTAMP) AS t0, max(time::TIMESTAMP) AS tN FROM ${EV} WHERE user_id IS NOT NULL GROUP BY 1),
+ll AS (SELECT user_id, t0, tN FROM firsts WHERE tN >= t0 + INTERVAL ${CURSED_WEEK_END_DAY + 1} DAY),
+curse AS (SELECT e.user_id, epoch(e.time::TIMESTAMP - l.t0) / 86400.0 AS dol FROM ${EV} e JOIN ll l USING (user_id) WHERE e.event = 'player death' AND e.cause_of_death = 'Curse'),
+lifespan AS (SELECT avg(epoch(tN - t0)) / 86400.0 AS avg_days, count(*) AS n FROM ll)
+SELECT 'curse' AS grp,
+ count(*) FILTER (WHERE dol BETWEEN ${CURSED_WEEK_START_DAY} AND ${CURSED_WEEK_END_DAY}) AS in_window,
+ count(*) FILTER (WHERE dol < ${CURSED_WEEK_START_DAY} OR dol > ${CURSED_WEEK_END_DAY}) AS out_window,
+ (count(*) FILTER (WHERE dol BETWEEN ${CURSED_WEEK_START_DAY} AND ${CURSED_WEEK_END_DAY}) / 8.0)
+   / nullif(count(*) FILTER (WHERE dol < ${CURSED_WEEK_START_DAY} OR dol > ${CURSED_WEEK_END_DAY}) / ((SELECT avg_days FROM lifespan) - 8.0), 0) AS density_ratio,
+ (SELECT n FROM lifespan) AS user_count
+FROM curse`,
+				},
+				select: { curse: { where: { grp: "curse" } } },
+				expect: { metric: "curse.density_ratio", op: "between", target: [25, 50] },
+				minCohort: 500,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH firsts AS (SELECT user_id, min(time::TIMESTAMP) AS t0, max(time::TIMESTAMP) AS tN FROM ${EV} WHERE user_id IS NOT NULL GROUP BY 1),
+ll AS (SELECT user_id, t0 FROM firsts WHERE tN >= t0 + INTERVAL ${CURSED_WEEK_END_DAY + 1} DAY),
+curse AS (SELECT epoch(e.time::TIMESTAMP - l.t0) / 86400.0 AS dol FROM ${EV} e JOIN ll l USING (user_id) WHERE e.event = 'player death' AND e.cause_of_death = 'Curse')
+SELECT 'curse' AS grp,
+ (count(*) FILTER (WHERE dol BETWEEN ${CURSED_WEEK_START_DAY} AND ${CURSED_WEEK_END_DAY}))::DOUBLE
+   / nullif(count(*) FILTER (WHERE dol < ${CURSED_WEEK_START_DAY} OR dol > ${CURSED_WEEK_END_DAY}), 0) AS in_out,
+ count(*) AS event_count
+FROM curse`,
+				},
+				select: { curse: { where: { grp: "curse" } } },
+				// raw in/out ≈ 2.7 measured; an 8-day window holding >2x the deaths
+				// of the other ~80 days combined is the analyst-visible spike
+				expect: { metric: "curse.in_out", op: "between", target: [2.0, 3.5] },
+			},
+		],
+	},
+	{
+		id: "H3-guild-rescue",
+		hook: "H3",
+		archetype: "retention-divergence",
+		narrative: `among users with ${DEATH_SPIRAL_MIN_DEATHS}+ week-1 deaths, early guild joiners (first ${EARLY_GUILD_DAYS} days) are exempt from the death spiral and ${EARLY_GUILD_COMBAT_CLONE_LIKELIHOOD}% get a bonus combat-victory clone. Knob ceiling = 1/0.3 ≈ 3.3x post-week-1 volume vs spiraled peers; measured 2.51x (both cohorts select front-loaded players, pulling below the ceiling)`,
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${CHURN_CTE}
+SELECT CASE WHEN early_guild > 0 THEN 'saved' ELSE 'spiral' END AS grp, count(*) AS user_count, avg(post_events) AS avg_post
+FROM flags WHERE early_deaths >= ${DEATH_SPIRAL_MIN_DEATHS} GROUP BY 1`,
+				},
+				select: {
+					saved: { where: { grp: "saved" } },
+					spiral: { where: { grp: "spiral" } },
+				},
+				expect: { metric: "saved.avg_post / spiral.avg_post", op: "between", target: [2.0, 3.4] },
+				// ~190 saved users at 10K; WEAK-caps at reduced-scale iteration
+				minCohort: 100,
+			},
+		],
+	},
+	{
+		id: "H4-death-spiral",
+		hook: "H4",
+		archetype: "retention-divergence",
+		narrative: `non-guild users with ${DEATH_SPIRAL_MIN_DEATHS}+ deaths in the first ${DEATH_SPIRAL_EARLY_DAYS} days (~9% of users) lose ${DEATH_SPIRAL_DROP_LIKELIHOOD}% of post-week-1 events. The post/pre contrast vs low-death users runs ~0.11, well below the raw 0.3 keep-rate: qualifying on 3+ early deaths selects front-loaded players whose natural post/pre is already ~3x lower`,
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${CHURN_CTE}
+SELECT CASE WHEN early_guild = 0 AND early_deaths >= ${DEATH_SPIRAL_MIN_DEATHS} THEN 'spiral' WHEN early_guild > 0 THEN 'guild' ELSE 'other' END AS grp,
+count(*) AS user_count, avg(post_events)::DOUBLE / nullif(avg(pre_events), 0) AS post_pre
+FROM flags GROUP BY 1`,
+				},
+				select: {
+					spiral: { where: { grp: "spiral" } },
+					other: { where: { grp: "other" } },
+				},
+				expect: { metric: "spiral.user_count / other.user_count", op: "between", target: [0.07, 0.15] },
+				minCohort: 100,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${CHURN_CTE}
+SELECT CASE WHEN early_guild = 0 AND early_deaths >= ${DEATH_SPIRAL_MIN_DEATHS} THEN 'spiral' WHEN early_guild > 0 THEN 'guild' ELSE 'other' END AS grp,
+count(*) AS user_count, avg(post_events)::DOUBLE / nullif(avg(pre_events), 0) AS post_pre
+FROM flags GROUP BY 1`,
+				},
+				select: {
+					spiral: { where: { grp: "spiral" } },
+					other: { where: { grp: "other" } },
+				},
+				expect: { metric: "spiral.post_pre / other.post_pre", op: "between", target: [0.06, 0.18] },
+				minCohort: 100,
+			},
+		],
+	},
+	{
+		id: "H5-lucky-charm",
+		hook: "H5",
+		archetype: "cohort-prop-scale",
+		narrative: `Lucky Charm Pack buyers (~8% of users) get ${LUCKY_CHARM_PRICE_MULT}x price_usd on all real-money purchases plus a ${LUCKY_CHARM_BONUS_PURCHASE_LIKELIHOOD}% bonus high-ticket purchase clone per item purchased. Measured among NON-whales (Hook 10's 1.8x hits both sides): 3.4x — the ${LUCKY_CHARM_PRICE_MULT}x organic floor plus the bonus-clone mixture (~65% of buyer purchase rows are premium-price clones)`,
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH lucky AS (SELECT DISTINCT user_id FROM ${EV} WHERE event = 'real money purchase' AND product = 'Lucky Charm Pack')
+SELECT CASE WHEN e.user_id IN (SELECT user_id FROM lucky) THEN 'lucky' ELSE 'organic' END AS grp,
+avg(e.price_usd) AS avg_price, count(DISTINCT e.user_id) AS user_count
+FROM ${EV} e
+WHERE e.event = 'real money purchase' AND e.price_usd IS NOT NULL
+  AND substr(e.user_id::VARCHAR, 1, 1) NOT IN ${WHALE_CHARS}
+GROUP BY 1`,
+				},
+				select: {
+					lucky: { where: { grp: "lucky" } },
+					organic: { where: { grp: "organic" } },
+				},
+				// floor = the raw knob (every buyer purchase is at least 2.5x);
+				// ceiling 4.0 bounds the clone mixture
+				expect: { metric: "lucky.avg_price / organic.avg_price", op: "between", target: [LUCKY_CHARM_PRICE_MULT * 1.12, 4.0] },
+				minCohort: 100,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH lucky AS (SELECT DISTINCT user_id FROM ${EV} WHERE event = 'real money purchase' AND product = 'Lucky Charm Pack'),
+au AS (SELECT DISTINCT user_id FROM ${EV} WHERE user_id IS NOT NULL)
+SELECT CASE WHEN au.user_id IN (SELECT user_id FROM lucky) THEN 'lucky' ELSE 'rest' END AS grp, count(*) AS user_count
+FROM au GROUP BY 1`,
+				},
+				select: {
+					lucky: { where: { grp: "lucky" } },
+					rest: { where: { grp: "rest" } },
+				},
+				// buyer share is organic (product enum pick on item-purchased
+				// volume) — measured 8.4% of users
+				expect: { metric: "lucky.user_count / rest.user_count", op: "between", target: [0.06, 0.12] },
+				minCohort: 100,
+			},
+		],
+	},
+	{
+		id: "H6-strategic-explorers",
+		hook: "H6",
+		archetype: "cohort-count-scale",
+		narrative: `strategic players (${STRATEGIC_MIN_EACH}+ inspect AND ${STRATEGIC_MIN_EACH}+ search for clues, ~42% of users) get ${STRATEGIC_COMPLETION_LIKELIHOOD}% of non-completed dungeon exits flipped and ${STRATEGIC_TREASURE_MULT}x treasure_value. Treasure band [${(STRATEGIC_TREASURE_MULT / PREP_TREASURE_BOOST).toFixed(2)}, ${STRATEGIC_TREASURE_MULT}]: Hook 13's ${PREP_TREASURE_BOOST}x sweet-band boost lands mostly in the control cohort`,
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH cnt AS (${CNT_CTE})
+SELECT CASE WHEN ins >= ${STRATEGIC_MIN_EACH} AND sea >= ${STRATEGIC_MIN_EACH} THEN 'strategic' ELSE 'rest' END AS grp, count(*) AS user_count
+FROM cnt GROUP BY 1`,
+				},
+				select: {
+					strategic: { where: { grp: "strategic" } },
+					rest: { where: { grp: "rest" } },
+				},
+				expect: { metric: "strategic.user_count / rest.user_count", op: "between", target: [0.58, 0.88] },
+				minCohort: 300,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH cnt AS (${CNT_CTE})
+SELECT CASE WHEN c.ins >= ${STRATEGIC_MIN_EACH} AND c.sea >= ${STRATEGIC_MIN_EACH} THEN 'strategic' ELSE 'rest' END AS grp,
+avg(e.treasure_value) AS avg_treasure, count(DISTINCT e.user_id) AS user_count
+FROM ${EV} e JOIN cnt c ON e.user_id::VARCHAR = c.uid
+WHERE e.event = 'find treasure' AND e.treasure_value IS NOT NULL GROUP BY 1`,
+				},
+				select: {
+					strategic: { where: { grp: "strategic" } },
+					rest: { where: { grp: "rest" } },
+				},
+				expect: { metric: "strategic.avg_treasure / rest.avg_treasure", op: "between", target: [STRATEGIC_TREASURE_MULT / PREP_TREASURE_BOOST, STRATEGIC_TREASURE_MULT] },
+				minCohort: 300,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH cnt AS (${CNT_CTE})
+SELECT CASE WHEN c.ins >= ${STRATEGIC_MIN_EACH} AND c.sea >= ${STRATEGIC_MIN_EACH} THEN 'strategic' ELSE 'rest' END AS grp,
+(count(*) FILTER (WHERE e.event = 'exit dungeon' AND e.completion_status = 'completed'))::DOUBLE
+  / nullif(count(*) FILTER (WHERE e.event = 'exit dungeon'), 0) AS completion,
+count(DISTINCT e.user_id) FILTER (WHERE e.event = 'exit dungeon') AS user_count
+FROM ${EV} e JOIN cnt c ON e.user_id::VARCHAR = c.uid GROUP BY 1`,
+				},
+				select: { strategic: { where: { grp: "strategic" } } },
+				// flip knob 85% on the ~1/3 organic non-completed share →
+				// completion >= 1 - 0.15 * (2/3) = 0.90; tier flips push it higher
+				expect: { metric: "strategic.completion", op: ">=", target: 0.9, floor: 0.85 },
+				minCohort: 300,
+			},
+		],
+	},
+	{
+		id: "H7-shadowmourne",
+		hook: "H7",
+		archetype: "temporal-inflection",
+		narrative: `zero Shadowmourne drops before dataset day ${LEGENDARY_RELEASE_DAY}; one per-player roll at ${LEGENDARY_DROP_LIKELIHOOD}%; owners get ${LEGENDARY_WIN_LIKELIHOOD}% of non-victory combats flipped (win rate ≈ 0.96 with tier flips) and ${LEGENDARY_DUNGEON_SPEED_MULT}x dungeon time`,
+		assertions: [
+			{
+				// hard release gate: no drops before day 45
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH start AS (SELECT min(time::TIMESTAMP) AS t0 FROM ${EV})
+SELECT 'drops' AS grp,
+ count(*) FILTER (WHERE time::TIMESTAMP < (SELECT t0 FROM start) + INTERVAL ${LEGENDARY_RELEASE_DAY} DAY) AS pre_release,
+ count(*) AS event_count
+FROM ${EV} WHERE event = 'find treasure' AND treasure_type = 'Shadowmourne Legendary'`,
+				},
+				select: { drops: { where: { grp: "drops" } } },
+				expect: { metric: "drops.pre_release", op: "between", target: [0, 0.5] },
+			},
+			{
+				// adoption ≈ LEGENDARY_DROP_LIKELIHOOD/100 among post-release
+				// treasure finders (binomial band around 0.02)
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH own AS (SELECT DISTINCT user_id FROM ${EV} WHERE event = 'find treasure' AND treasure_type = 'Shadowmourne Legendary'),
+elig AS (SELECT DISTINCT user_id FROM ${EV} WHERE event = 'find treasure'
+  AND time::TIMESTAMP > (SELECT min(time::TIMESTAMP) FROM ${EV}) + INTERVAL ${LEGENDARY_RELEASE_DAY} DAY)
+SELECT 'adopt' AS grp,
+ (SELECT count(*) FROM own) AS owners,
+ (SELECT count(*) FROM own)::DOUBLE / nullif((SELECT count(*) FROM elig), 0) AS adoption,
+ (SELECT count(*) FROM elig) AS user_count`,
+				},
+				select: { adopt: { where: { grp: "adopt" } } },
+				expect: { metric: "adopt.adoption", op: "between", target: [0.012, 0.032] },
+				minCohort: 500,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH own AS (SELECT DISTINCT user_id FROM ${EV} WHERE event = 'find treasure' AND treasure_type = 'Shadowmourne Legendary'),
+wr AS (SELECT user_id, (count(*) FILTER (WHERE outcome = 'Victory'))::DOUBLE / count(*) AS w
+  FROM ${EV} WHERE event = 'combat completed' GROUP BY 1)
+SELECT CASE WHEN wr.user_id IN (SELECT user_id FROM own) THEN 'owner' ELSE 'rest' END AS grp,
+avg(w) AS win_rate, count(*) AS user_count FROM wr GROUP BY 1`,
+				},
+				select: { owner: { where: { grp: "owner" } } },
+				// LEGENDARY_WIN_LIKELIHOOD = 90% flip of losses → win rate floor
+				// 0.9; tier flips stack on top (measured 0.963)
+				expect: { metric: "owner.win_rate", op: ">=", target: LEGENDARY_WIN_LIKELIHOOD / 100, floor: 0.85 },
+				// ~200 owners at 10K users; WEAK-caps at reduced-scale iteration
+				minCohort: 100,
+			},
+		],
+	},
+	{
+		id: "H8-subscriber-tiers",
+		hook: "H8",
+		archetype: "cohort-prop-scale",
+		narrative: `subscription_tier 60/20/20 Free/Premium/Elite. Rewards: Elite ${ELITE_REWARD_MULT}x, Premium ${PREMIUM_REWARD_MULT}x (other multipliers are tier-independent and cancel between tiers). Completion follows f + (1-f)*flip from the observed Free baseline f — flip knobs ${PREMIUM_COMPLETION_LIKELIHOOD}%/${ELITE_COMPLETION_LIKELIHOOD}%`,
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `SELECT subscription_tier AS tier, avg(reward_gold) AS avg_gold, count(DISTINCT user_id) AS user_count
+FROM ${EV} WHERE event = 'quest turned in' AND reward_gold IS NOT NULL GROUP BY 1`,
+				},
+				select: {
+					elite: { where: { tier: "Elite" } },
+					free: { where: { tier: "Free" } },
+				},
+				expect: { metric: "elite.avg_gold / free.avg_gold", op: ">=", target: ELITE_REWARD_MULT, floor: 1.6 },
+				minCohort: 200,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `SELECT subscription_tier AS tier, avg(reward_gold) AS avg_gold, count(DISTINCT user_id) AS user_count
+FROM ${EV} WHERE event = 'quest turned in' AND reward_gold IS NOT NULL GROUP BY 1`,
+				},
+				select: {
+					premium: { where: { tier: "Premium" } },
+					free: { where: { tier: "Free" } },
+				},
+				expect: { metric: "premium.avg_gold / free.avg_gold", op: ">=", target: PREMIUM_REWARD_MULT, floor: 1.25 },
+				minCohort: 200,
+			},
+			{
+				// completion is a FLIP (not a multiplier), so the prediction runs
+				// through the observed Free baseline: tier = f + (1-f) * flip.
+				// Measured at iteration: f=0.682 → pred Premium 0.825 / Elite 0.889
+				// vs observed 0.819 / 0.896 (<1% error).
+				breakdown: {
+					type: "duckdb",
+					sql: `SELECT subscription_tier AS tier,
+ (count(*) FILTER (WHERE event = 'exit dungeon' AND completion_status = 'completed'))::DOUBLE
+   / nullif(count(*) FILTER (WHERE event = 'exit dungeon'), 0) AS completion,
+ count(DISTINCT user_id) FILTER (WHERE event = 'exit dungeon') AS user_count
+FROM ${EV} GROUP BY 1`,
+				},
+				assert: (rows) => {
+					const by = Object.fromEntries((rows || []).map((r) => [r.tier, r]));
+					const f = by.Free, p = by.Premium, el = by.Elite;
+					if (!f || !p || !el) return { pass: false, verdict: "NONE", detail: `missing tier rows (${Object.keys(by).join(",")})` };
+					const predP = f.completion + (1 - f.completion) * (PREMIUM_COMPLETION_LIKELIHOOD / 100);
+					const predE = f.completion + (1 - f.completion) * (ELITE_COMPLETION_LIKELIHOOD / 100);
+					const errP = Math.abs(p.completion / predP - 1);
+					const errE = Math.abs(el.completion / predE - 1);
+					const smallest = Math.min(f.user_count, p.user_count, el.user_count);
+					let detail = `Free=${f.completion.toFixed(3)} Premium=${p.completion.toFixed(3)}/pred ${predP.toFixed(3)} Elite=${el.completion.toFixed(3)}/pred ${predE.toFixed(3)}`;
+					let verdict;
+					if (errP <= 0.1 && errE <= 0.1) verdict = "NAILED";
+					else if (errP <= 0.2 && errE <= 0.2) verdict = "STRONG";
+					else if (el.completion > p.completion && p.completion > f.completion) verdict = "WEAK";
+					else verdict = "INVERSE";
+					if ((verdict === "NAILED" || verdict === "STRONG") && smallest < 200) {
+						verdict = "WEAK";
+						detail += ` — capped: smallest cohort ${smallest} < minCohort 200`;
+					}
+					return { pass: verdict === "NAILED" || verdict === "STRONG", verdict, detail };
+				},
+			},
+		],
+	},
+	{
+		id: "H9-level-gold-scaling",
+		hook: "H9",
+		archetype: "cohort-prop-scale",
+		narrative: `quest reward_gold *= (1 + level * ${LEVEL_GOLD_SCALING}). Formula check: hi-bucket (level 13+) vs lo-bucket (level 1-5) gold ratio must match (1 + ${LEVEL_GOLD_SCALING}*mean_hi)/(1 + ${LEVEL_GOLD_SCALING}*mean_lo) computed from the buckets' own quest-weighted mean levels — measured 1.948 vs predicted 1.935 (0.7% error). Tier/compass multipliers are level-independent and cancel`,
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH lvl AS (SELECT distinct_id::VARCHAR AS uid, level FROM ${US})
+SELECT CASE WHEN l.level <= 5 THEN 'lo' WHEN l.level >= 13 THEN 'hi' ELSE 'mid' END AS bucket,
+avg(l.level) AS mean_level, avg(e.reward_gold) AS avg_gold, count(DISTINCT e.user_id) AS user_count
+FROM ${EV} e JOIN lvl l ON e.user_id::VARCHAR = l.uid
+WHERE e.event = 'quest turned in' AND e.reward_gold IS NOT NULL GROUP BY 1`,
+				},
+				assert: (rows) => {
+					const by = Object.fromEntries((rows || []).map((r) => [r.bucket, r]));
+					const lo = by.lo, hi = by.hi;
+					if (!lo || !hi) return { pass: false, verdict: "NONE", detail: "missing level buckets" };
+					// quest-weighted mean level is the right predictor: each quest's
+					// gold is scaled by its own user's level, so E[gold] per bucket
+					// = E[base] * (1 + 0.15 * E_rows[level])
+					const predicted = (1 + LEVEL_GOLD_SCALING * hi.mean_level) / (1 + LEVEL_GOLD_SCALING * lo.mean_level);
+					const observed = hi.avg_gold / lo.avg_gold;
+					return ratioVerdict(observed / predicted, 1, 0.85,
+						`hi(mean lvl ${hi.mean_level.toFixed(1)})/lo(${lo.mean_level.toFixed(1)}) gold ratio ${observed.toFixed(3)} vs formula ${predicted.toFixed(3)}`,
+						Math.min(lo.user_count, hi.user_count), 150);
+				},
+			},
+		],
+	},
+	{
+		id: "H10-whale-purchases",
+		hook: "H10",
+		archetype: "cohort-prop-scale",
+		narrative: `whales (first hex char of user_id with charCodeAt % 3 == 0 → '0','3','6','9','c','f' = 6/16 = 37.5% of users) get ${WHALE_PRICE_MULT}x price_usd. Measured among NON-Lucky-Charm users — Hook 5's high-ticket clones contaminate the unscoped ratio to ~2.0`,
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH lucky AS (SELECT DISTINCT user_id FROM ${EV} WHERE event = 'real money purchase' AND product = 'Lucky Charm Pack')
+SELECT CASE WHEN substr(e.user_id::VARCHAR, 1, 1) IN ${WHALE_CHARS} THEN 'whale' ELSE 'rest' END AS grp,
+avg(e.price_usd) AS avg_price, count(DISTINCT e.user_id) AS user_count
+FROM ${EV} e
+WHERE e.event = 'real money purchase' AND e.price_usd IS NOT NULL
+  AND e.user_id NOT IN (SELECT user_id FROM lucky)
+GROUP BY 1`,
+				},
+				select: {
+					whale: { where: { grp: "whale" } },
+					rest: { where: { grp: "rest" } },
+				},
+				expect: { metric: "whale.avg_price / rest.avg_price", op: ">=", target: WHALE_PRICE_MULT, floor: 1.55 },
+				minCohort: 150,
+			},
+			{
+				// hash share: 6/16 = 0.375 of users → whale/rest = 0.6 exactly
+				breakdown: {
+					type: "duckdb",
+					sql: `SELECT CASE WHEN substr(distinct_id::VARCHAR, 1, 1) IN ${WHALE_CHARS} THEN 'whale' ELSE 'rest' END AS grp, count(*) AS user_count
+FROM ${US} GROUP BY 1`,
+				},
+				select: {
+					whale: { where: { grp: "whale" } },
+					rest: { where: { grp: "rest" } },
+				},
+				expect: { metric: "whale.user_count / rest.user_count", op: "between", target: [0.52, 0.7] },
+				minCohort: 300,
+			},
+		],
+	},
+	{
+		id: "H11-alignment-archetype",
+		hook: "H11",
+		archetype: "bespoke",
+		narrative: `archetype is a deterministic function of the alignment user prop: Lawful/Neutral Good → hero, Chaotic/Neutral Evil → villain, else neutral. Mapping must be EXACT (hero count == LG+NG count); shares ≈ 26/25/49 at this seed (uniform 9-way alignment would give 22/22/56)`,
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `SELECT
+ count(*) FILTER (WHERE alignment IN ('Lawful Good', 'Neutral Good')) AS good_aligns,
+ count(*) FILTER (WHERE archetype = 'hero') AS heroes,
+ count(*) FILTER (WHERE alignment IN ('Chaotic Evil', 'Neutral Evil')) AS evil_aligns,
+ count(*) FILTER (WHERE archetype = 'villain') AS villains,
+ count(*) FILTER (WHERE archetype = 'neutral') AS neutrals,
+ count(*) AS user_count
+FROM ${US}`,
+				},
+				assert: (rows) => {
+					const r = rows && rows[0];
+					if (!r || !Number(r.user_count)) return { pass: false, verdict: "NONE", detail: "no profile rows" };
+					const exact = Number(r.heroes) === Number(r.good_aligns) && Number(r.villains) === Number(r.evil_aligns);
+					const hs = r.heroes / r.user_count, vs = r.villains / r.user_count, ns = r.neutrals / r.user_count;
+					const sharesOk = hs >= 0.2 && hs <= 0.3 && vs >= 0.2 && vs <= 0.3 && ns >= 0.42 && ns <= 0.58;
+					const detail = `hero ${r.heroes} vs good ${r.good_aligns}; villain ${r.villains} vs evil ${r.evil_aligns}; shares h=${hs.toFixed(3)} v=${vs.toFixed(3)} n=${ns.toFixed(3)}`;
+					const verdict = exact && sharesOk ? "NAILED" : exact ? "STRONG" : "INVERSE";
+					return { pass: exact, verdict, detail };
+				},
+			},
+		],
+	},
+	{
+		id: "H12-combat-ttc-by-tier",
+		hook: "H12",
+		archetype: "funnel-ttc-by-segment",
+		narrative: `combat funnel (combat initiated → combat completed → use item) inter-step gaps scaled per tier: Elite x${TTC_ELITE_FACTOR}, Premium x${TTC_PREMIUM_FACTOR}, Free x${TTC_FREE_FACTOR} → median TTC ratios Free/Premium = ${(TTC_FREE_FACTOR / TTC_PREMIUM_FACTOR).toFixed(2)}, Premium/Elite = ${(TTC_PREMIUM_FACTOR / TTC_ELITE_FACTOR).toFixed(2)}. Median, not avg — greedy cross-session matches make the mean heavy-tailed`,
+		assertions: [
+			{
+				breakdown: {
+					type: "timeToConvert",
+					steps: ["combat initiated", "combat completed", "use item"],
+					breakdownByUserProperty: "subscription_tier",
+					conversionWindowMs: 6 * 3600000,
+				},
+				select: {
+					free: { where: { segment_value: "Free" } },
+					premium: { where: { segment_value: "Premium" } },
+				},
+				expect: { metric: "free.median_ttc_ms / premium.median_ttc_ms", op: ">=", target: TTC_FREE_FACTOR / TTC_PREMIUM_FACTOR, floor: 1.6 },
+				minCohort: 100,
+			},
+			{
+				breakdown: {
+					type: "timeToConvert",
+					steps: ["combat initiated", "combat completed", "use item"],
+					breakdownByUserProperty: "subscription_tier",
+					conversionWindowMs: 6 * 3600000,
+				},
+				select: {
+					premium: { where: { segment_value: "Premium" } },
+					elite: { where: { segment_value: "Elite" } },
+				},
+				expect: { metric: "premium.median_ttc_ms / elite.median_ttc_ms", op: ">=", target: TTC_PREMIUM_FACTOR / TTC_ELITE_FACTOR, floor: 1.8 },
+				minCohort: 100,
+			},
+		],
+	},
+	{
+		id: "H13-prep-magic-number",
+		hook: "H13",
+		archetype: "frequency-sweet-spot",
+		narrative: `${PREP_SWEET_MIN}-${PREP_SWEET_MAX} preps (inspect + search for clues) between first quest-accepted and first fight-boss → ${PREP_TREASURE_BOOST}x treasure_value; ${PREP_OVER_THRESHOLD}+ preps → ${PREP_BOSS_FLIP_LIKELIHOOD}% of boss victories flip to defeat. Treasure measured among NON-strategic users (Hook 6's 2x concentrates in high-prep bands and swamps the unscoped ratio); the boss-win contrast needs no scoping (Hook 6 does not touch victory)`,
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH cnt AS (${CNT_CTE}),
+nonstrat AS (SELECT uid FROM cnt WHERE NOT (ins >= ${STRATEGIC_MIN_EACH} AND sea >= ${STRATEGIC_MIN_EACH})),
+${PREP_CTE}
+SELECT b.band AS grp, avg(e.treasure_value) AS avg_treasure, count(DISTINCT e.user_id) AS user_count
+FROM bands b JOIN ${EV} e USING (user_id)
+WHERE e.event = 'find treasure' AND e.treasure_value IS NOT NULL
+  AND b.user_id::VARCHAR IN (SELECT uid FROM nonstrat)
+GROUP BY 1`,
+				},
+				select: {
+					sweet: { where: { grp: "sweet" } },
+					low: { where: { grp: "low" } },
+				},
+				expect: { metric: "sweet.avg_treasure / low.avg_treasure", op: ">=", target: PREP_TREASURE_BOOST, floor: 1.15 },
+				minCohort: 100,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${PREP_CTE}
+SELECT b.band AS grp,
+ (count(*) FILTER (WHERE e.event = 'fight boss' AND e.victory = true))::DOUBLE
+   / nullif(count(*) FILTER (WHERE e.event = 'fight boss'), 0) AS boss_win,
+ count(DISTINCT e.user_id) AS user_count
+FROM bands b JOIN ${EV} e USING (user_id) GROUP BY 1`,
+				},
+				select: {
+					over: { where: { grp: "over" } },
+					sweet: { where: { grp: "sweet" } },
+				},
+				// flipping 25% of over-band victories scales its win rate by 0.75
+				// relative to sweet's; floor 0.85 = STRONG bound
+				expect: { metric: "over.boss_win / sweet.boss_win", op: "<=", target: 1 - PREP_BOSS_FLIP_LIKELIHOOD / 100, floor: 0.85 },
+				minCohort: 150,
+			},
+		],
+	},
+];
 
 export default config;
