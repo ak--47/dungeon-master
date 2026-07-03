@@ -37,6 +37,23 @@ All notable changes to `@ak--47/dungeon-master`.
   `binBy: 'events'` to restore the pre-1.6 axis (also the right choice for
   `applyFunnelFrequencyBreakdown`'s funnelEvents fallback, where one funnel
   run rarely spans two days).
+- **`applyAttributedBySource` rewritten to overwrite engine-stamped touches**
+  (P2.4, HOOKS.md recipe 4.26 as code). New opts:
+  `{ weights, property = 'utm_source', model = 'firstTouch'|'lastTouch'|'both' }`;
+  returns `{ overwritten, touches }`. The old copy-source-to-conversion
+  mechanism stamped fresh values, which under the v1.5 touchpoint cap land
+  outside Mixpanel's lookback and never move the attribution report. The
+  pattern now overwrites the value on the touch the chosen model reads and
+  never adds the property to unstamped events.
+
+### Deprecated
+
+- **`applyTTCBySegment`** (P2.4) — the funnel-post variant scales one run's
+  internal gaps, but Mixpanel's TTC measures the FIRST occurrence of each
+  step per user, so the scaling only reaches the report for `isFirstFunnel`
+  runs. Still functional; warns once. Use **`applyTTCBySegmentV2`** (new,
+  `everything` hook) — finds the greedy first sequence via
+  `findFirstSequence` and scales it with `scaleFunnelTTC`.
 
 ## 1.5.4 — 2026-06-04
 

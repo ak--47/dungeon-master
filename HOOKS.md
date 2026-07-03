@@ -1472,6 +1472,14 @@ touches. Stamping fresh ones from scratch in the hook would push the user
 past the cap, and your stamps would land outside Mixpanel's last-10 lookback
 window — giving them no effect. Overwriting is correct.
 
+**As a pattern (v1.6):** `applyAttributedBySource` from
+`@ak--47/dungeon-master/hook-patterns` packages this recipe:
+`applyAttributedBySource(record, null, { weights: { google: 10, facebook: 5,
+twitter: 1 }, model: 'firstTouch' })` overwrites the first engine-stamped
+touch with a seeded weighted pick (models: `firstTouch`, `lastTouch`,
+`both`). It never stamps unstamped events, so total touch count is
+unchanged.
+
 ---
 
 #### 4.27 Active-Day Cohort Engineering (v1.5)
@@ -1739,7 +1747,7 @@ Import from `@ak--47/dungeon-master/hook-patterns`:
 | `applyAggregateByBin` | everything | `(events, profile, { cohortEvent, bins, event, propertyName, deltas, binBy? })` | Avg property value by per-user activity bucket |
 | `applyTTCBySegmentV2` | everything | `(events, profile, { segmentKey, factors, steps, maxGapMinutes? })` | Funnel TTC by profile segment (greedy first sequence — recipe 4.14 as code, v1.6) |
 | `applyTTCBySegment` | funnel-post | `(funnelEvents, profile, { segmentKey, factors })` | **Deprecated (v1.6)** — scales one run's gaps; only reaches Mixpanel TTC for `isFirstFunnel` runs. Use V2. |
-| `applyAttributedBySource` | everything | `(events, profile, { sourceEvent, sourceProperty, downstreamEvent, weights })` | Conversions by source (first/last touch) |
+| `applyAttributedBySource` | everything | `(events, profile, { weights, property?, model? })` | Conversions by source — overwrites engine-stamped touches (recipe 4.26 as code, rewritten v1.6) |
 
 > **Bin axis (v1.6).** The three `*ByBin` / `*Frequency*` patterns bin by
 > **distinct calendar days** of `cohortEvent` by default

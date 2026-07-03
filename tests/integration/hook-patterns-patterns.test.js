@@ -159,53 +159,54 @@ describe('Phase 4 hook patterns × emulator', () => {
 		expect(trial.avg_ttc_ms / Math.max(1, ent.avg_ttc_ms)).toBeGreaterThan(2);
 	}, 30000);
 
-	test('applyAttributedBySource: stamping ratios bias attribution table', async () => {
+	test('applyAttributedBySource: overwrites engine-stamped first touches per weights', async () => {
+		// v1.6 (P2.4): the pattern OVERWRITES engine-stamped UTM values on the
+		// touch the attribution model reads — it no longer stamps fresh (fresh
+		// stamps would exceed the touchpoint cap; recipe 4.26).
 		const result = await DUNGEON_MASTER(baseConfig({
 			seed: 'pattern-attrib',
 			numUsers: 150,
 			numDays: 30,
 			avgEventsPerUserPerDay: 3,
 			percentUsersBornInDataset: 50,
+			switches: { hasCampaigns: true },
 			events: [
-				{ event: 'Touch', weight: 5, properties: { source: ['google', 'facebook', 'twitter'] } },
-				{ event: 'Convert', weight: 2, properties: { source: ['unknown'] } },
+				{ event: 'Touch', weight: 5 },
+				{ event: 'Convert', weight: 2 },
 			],
 			hook: function (record, type) {
 				if (type !== 'everything' || !Array.isArray(record)) return record;
 				applyAttributedBySource(record, null, {
-					sourceEvent: 'Touch',
-					sourceProperty: 'source',
-					downstreamEvent: 'Convert',
 					weights: { google: 10, facebook: 5, twitter: 1 },
+					property: 'utm_source',
 					model: 'firstTouch',
 				});
 				return record;
 			},
 		}));
 		const events = Array.from(result.eventData);
-		const tbl = emulateBreakdown(events, {
-			type: 'attributedBy',
-			conversionEvent: 'Convert',
-			attributionEvent: 'Touch',
-			attributionProperty: 'source',
-			model: 'firstTouch',
-		});
-		// Note: emulator looks at the underlying touch event source. The pattern stamps
-		// `source` ON the conversion based on weights — but for the emulator's report
-		// the touch's source is what's read. Use the raw conversion-row counts for
-		// Convert.source instead.
-		const bySource = new Map();
-		for (const ev of events.filter(e => e.event === 'Convert')) {
-			const v = ev.source || 'unknown';
-			bySource.set(v, (bySource.get(v) || 0) + 1);
+		// Tally each user's FIRST stamped touch — the value Mixpanel's
+		// first-touch model reads. Every first touch was overwritten with a
+		// weighted pick (10:5:1), so the tally must follow the weights.
+		const firstTouch = new Map(); // user → { time, value }
+		for (const ev of events) {
+			if (ev.utm_source === undefined || ev.utm_source === null) continue;
+			const user = ev.distinct_id || ev.user_id || ev.device_id;
+			const t = Date.parse(ev.time);
+			const cur = firstTouch.get(user);
+			if (!cur || t < cur.time) firstTouch.set(user, { time: t, value: ev.utm_source });
 		}
-		const g = bySource.get('google') || 0;
-		const f = bySource.get('facebook') || 0;
-		const t = bySource.get('twitter') || 0;
-		// Google should dominate facebook should dominate twitter (per weights 10:5:1).
+		expect(firstTouch.size).toBeGreaterThan(50); // engine actually stamped touches
+		const tally = new Map();
+		for (const { value } of firstTouch.values()) tally.set(value, (tally.get(value) || 0) + 1);
+		const g = tally.get('google') || 0;
+		const f = tally.get('facebook') || 0;
+		const t = tally.get('twitter') || 0;
+		// All first touches must come from the weight key set (all overwritten).
+		expect(g + f + t).toBe(firstTouch.size);
+		// Weighted 10:5:1 — google > facebook > twitter, google ≥ 3x twitter.
 		expect(g).toBeGreaterThan(f);
 		expect(f).toBeGreaterThan(t);
-		// Configured weights are 10:1 for google:twitter — expect ≥3x at reduced scale.
 		expect(g / Math.max(1, t)).toBeGreaterThan(3);
 	}, 30000);
 
