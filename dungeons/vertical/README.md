@@ -39,7 +39,7 @@ checks.** No documented hook is unverified.
 | 10 | devtools | NAILED | 10/10 | 1 |
 | 11 | healthcare | STRONG | 11/11 | 2 |
 | 12 | fintech | NAILED | 10/10 | 2 |
-| 13 | ai-platform | NAILED | 10/10 | 2 |
+| 13 | ai-platform | NAILED | 10/10 | 3 |
 | 14 | marketplace | NAILED | 10/10 | 1 |
 | 15 | media | STRONG | 10/10 | 2 |
 | 16 | ecommerce | NAILED | 10/10 | 3 |
@@ -103,12 +103,16 @@ Several engineered hooks intentionally use `funnel-post` to compress
 time-to-convert within a single funnel-instance. The verifier's
 `evaluateFunnel` is a greedy single-pass over the user's full event
 history — it picks the first matching event for each step regardless of
-which funnel-instance the hook touched. Affected dungeons (10): dating,
-community, travel, logistics, real-estate, ai-platform, marketplace,
+which funnel-instance the hook touched. Affected dungeons (9): dating,
+community, travel, logistics, real-estate, marketplace,
 devtools, education, crypto. These hooks are checked for population
 presence (`'TTC populations present (limitation)'`) rather than for the
 TTC delta itself; the engineered effect is visible in Mixpanel's funnel
 median TTC report but not in the cross-event SQL/JS aggregations.
+ai-platform graduated off this list in v1.6: its H9 story asserts the
+TTC delta itself through `emulateBreakdown`'s `timeToConvert` at a
+conversion window covering the stretched support (see the story
+narrative for the censoring analysis).
 
 See
 [`research/1.5.0-vertical-eval.md`](../../research/1.5.0-vertical-eval.md)
