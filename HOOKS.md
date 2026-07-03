@@ -1120,6 +1120,13 @@ max gap. If your sequence has multiple `step_a` events, only the first is
 used. The greedy engine in Mixpanel picks the same first one, so behavior
 matches.
 
+**As a pattern (v1.6):** `applyTTCBySegmentV2` from
+`@ak--47/dungeon-master/hook-patterns` packages this recipe — segment lookup,
+`findFirstSequence`, `scaleFunnelTTC` — in one call. The older funnel-post
+`applyTTCBySegment` is deprecated: it scales one run's internal gaps, which
+only reaches the TTC report when that run is the user's first occurrence of
+the steps.
+
 **Conversion-window strict `<`:** If `step_c` lands at exactly `step_a + window`,
 it is **excluded**. When shifting timestamps, leave at least 1ms of slack
 under the conversion-window cap.
@@ -1730,7 +1737,8 @@ Import from `@ak--47/dungeon-master/hook-patterns`:
 | `applyFrequencyByFrequency` | everything | `(events, profile, { cohortEvent, bins, targetEvent, multipliers, binBy? })` | Frequency of A by per-user frequency of B |
 | `applyFunnelFrequencyBreakdown` | funnel-post | `(allEvents, profile, funnelEvents, { cohortEvent, bins, dropMultipliers, binBy? })` | Funnel conversion by per-user activity bucket |
 | `applyAggregateByBin` | everything | `(events, profile, { cohortEvent, bins, event, propertyName, deltas, binBy? })` | Avg property value by per-user activity bucket |
-| `applyTTCBySegment` | funnel-post | `(funnelEvents, profile, { segmentKey, factors })` | Funnel median TTC by profile segment |
+| `applyTTCBySegmentV2` | everything | `(events, profile, { segmentKey, factors, steps, maxGapMinutes? })` | Funnel TTC by profile segment (greedy first sequence — recipe 4.14 as code, v1.6) |
+| `applyTTCBySegment` | funnel-post | `(funnelEvents, profile, { segmentKey, factors })` | **Deprecated (v1.6)** — scales one run's gaps; only reaches Mixpanel TTC for `isFirstFunnel` runs. Use V2. |
 | `applyAttributedBySource` | everything | `(events, profile, { sourceEvent, sourceProperty, downstreamEvent, weights })` | Conversions by source (first/last touch) |
 
 > **Bin axis (v1.6).** The three `*ByBin` / `*Frequency*` patterns bin by
