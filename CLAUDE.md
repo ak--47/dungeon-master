@@ -56,6 +56,10 @@ Dungeon authoring + verification (shipped in the npm package):
 node scripts/run-dungeon.mjs <path>              # run one dungeon
 node scripts/run-many.mjs <dir> [--parallel N]   # run many concurrently
 node scripts/verify-runner.mjs <path> [prefix]   # full-fidelity run for hook verification
+node scripts/verify-stories.mjs <path> [--data-prefix P] [--in-memory] [--json]
+                                                 # evaluate the dungeon's `stories` export: five-tier
+                                                 # verdicts (NAILED/STRONG/WEAK/NONE/INVERSE) + hook
+                                                 # coverage; disk mode reads verify-runner shards
 node scripts/dungeon-to-json.mjs <path>          # JS → JSON
 node scripts/json-to-dungeon.mjs <path>          # JSON → JS
 node scripts/extract-dungeon-schema.mjs <path>   # extract schema
