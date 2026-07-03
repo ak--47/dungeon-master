@@ -1595,6 +1595,110 @@ export declare function dungeonToJSON(input: string[], options?: { includeCreden
 export declare function extractComments(input: string): DungeonComments;
 export declare function extractComments(input: string[]): DungeonComments[];
 
+// ============= Story-Spec Types (v1.6) =============
+
+/**
+ * Closed enum of engineered-effect shapes, seeded from the corpus's real story
+ * types. Mirrors `lib/templates/story-spec.schema.json` (a unit test keeps the
+ * two in sync).
+ */
+export type StoryArchetype =
+    | "cohort-count-scale"
+    | "cohort-prop-scale"
+    | "temporal-inflection"
+    | "funnel-conversion-by-segment"
+    | "funnel-ttc-by-segment"
+    | "retention-divergence"
+    | "frequency-sweet-spot"
+    | "attribution-bias"
+    | "experiment-lift"
+    | "lifecycle-wave"
+    | "path-share"
+    | "session-shape"
+    | "composition-drift"
+    | "bespoke";
+
+/**
+ * Verdict tiers, worst → best: INVERSE < NONE < WEAK < STRONG < NAILED.
+ * NAILED = observed within ±10% of `target`; STRONG = passes `floor` (or
+ * `target` when no floor); WEAK = fails floor but effect direction correct, or
+ * cohort < `minCohort`; NONE = no measurable effect / selection empty;
+ * INVERSE = effect direction opposite the assertion. Story verdict = worst
+ * assertion.
+ */
+export type StoryVerdict = "NAILED" | "STRONG" | "WEAK" | "NONE" | "INVERSE";
+
+/** A where-clause value: plain equality, or an explicit comparison. */
+export type StoryWhereValue =
+    | string | number | boolean | null
+    | { op: "==" | "!=" | ">=" | "<=" | ">" | "<"; value: string | number | boolean | null };
+
+/** Named row-set over the breakdown result rows (all clauses AND together). */
+export interface StorySelect {
+    [name: string]: { where: Record<string, StoryWhereValue> };
+}
+
+/**
+ * The pinned expect grammar. `metric` is one of exactly three forms: a single
+ * ref `'<name>.<column>'`, a ratio `'<a>.<col> / <b>.<col>'`, or a difference
+ * `'<a>.<col> - <b>.<col>'`. At most one binary operator; operands are refs or
+ * numeric literals (at least one ref). If a selection matches multiple rows,
+ * count-like columns sum and value-like columns error. No free-form
+ * expressions.
+ */
+export interface StoryExpect {
+    metric: string;
+    op: ">=" | "<=" | ">" | "<" | "between";
+    /** The designed value — derive from the same exported knob constants the hook uses. `[lo, hi]` only with op `'between'`. */
+    target: number | [number, number];
+    /** Optional STRONG bound. Omitted → `target` doubles as the floor. */
+    floor?: number;
+}
+
+/** One mechanical assertion inside a story. Requires `expect` or `assert`. */
+export interface StoryAssertion {
+    /**
+     * Byte-compatible with `emulateBreakdown` / `verifyDungeon` args — or the
+     * `{ type: 'duckdb', sql }` escape hatch (disk mode only; `{{PREFIX}}` in
+     * the SQL is substituted with the run's data prefix path).
+     */
+    breakdown: Record<string, unknown> & { type: string; sql?: string };
+    select?: StorySelect;
+    expect?: StoryExpect;
+    /**
+     * JS-only escape hatch — discouraged; every use requires a comment
+     * justifying why the declarative grammar can't express it. Return
+     * `verdict` to place the result on the five-tier scale; otherwise
+     * `pass` maps to STRONG / NONE.
+     */
+    assert?: (rows: Array<Record<string, unknown>>, ctx?: Record<string, unknown>) => { pass: boolean; detail?: string; verdict?: StoryVerdict };
+    /** Population floor — below this, the verdict caps at WEAK. */
+    minCohort?: number;
+}
+
+/**
+ * One story of the `stories` named export of a JS dungeon file (v1.6
+ * story-spec). Living in the dungeon file means thresholds are computed from
+ * the same knob constants the hook uses — the assertion can't drift from the
+ * mechanism. Extra exports are ignored by `dungeon-loader` (zero compat
+ * impact); `dungeon-to-json` drops them, so stories are JS-dungeon-only.
+ * Schema: `lib/templates/story-spec.schema.json`.
+ */
+export interface DungeonStory {
+    /** Unique story id, conventionally `<hook>-<slug>` (e.g. `'H3-fraud-bursts'`). */
+    id: string;
+    /** Numbered hook this story verifies — matches the HOOK STORIES doc block (`'H3'` or `'Hook 3'`). */
+    hook: string;
+    archetype: StoryArchetype;
+    /** One-to-three sentence human story the data tells. */
+    narrative: string;
+    /** Free-form report pointer for humans and /create-project — not interpreted by the runner. */
+    mixpanelReport?: Record<string, unknown>;
+    assertions: StoryAssertion[];
+    /** Documented strict-bar / limitation notes. */
+    intentionalDeviations?: string[];
+}
+
 // ============= Text Generator Types =============
 
 /**
