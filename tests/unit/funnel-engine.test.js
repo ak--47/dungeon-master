@@ -196,6 +196,31 @@ describe('matchesStepFilter', () => {
 		expect(matchesStepFilter({ p: 'iOS 17' }, { prop: 'p', op: 'not_contains', value: 'Android' })).toBe(true);
 		expect(matchesStepFilter({ p: 'iOS 17' }, { prop: 'p', op: 'not_contains', value: 'iOS' })).toBe(false);
 	});
+
+	// Fix-round B6: step filters share the WHERE rulebook (coerce.js) — the
+	// expectations below are hand-derived from ARB's eval_node/value.c rules,
+	// which funnel step selectors compile through like any other filter.
+	test('B6: string equality is case-insensitive (value.c:285 arb_strcasecmp)', () => {
+		expect(matchesStepFilter({ plan: 'Pro' }, { prop: 'plan', op: 'eq', value: 'PRO' })).toBe(true);
+		expect(matchesStepFilter({ plan: 'Pro' }, { prop: 'plan', op: 'neq', value: 'pro' })).toBe(false);
+	});
+	test('B6: contains is case-insensitive (eval_node.c:2914 arb_strcaseinstr) and type-typed', () => {
+		expect(matchesStepFilter({ p: 'iOS 17' }, { prop: 'p', op: 'contains', value: 'ios' })).toBe(true);
+		expect(matchesStepFilter({ p: 'iOS 17' }, { prop: 'p', op: 'not_contains', value: 'IOS' })).toBe(false);
+		// numeric needle vs string haystack is a type mismatch in ARB — the
+		// old String(target) cast matched '17'; the rulebook does not
+		expect(matchesStepFilter({ p: 'iOS 17' }, { prop: 'p', op: 'contains', value: 17 })).toBe(false);
+	});
+	test('B6: string relational ops via arb_strcasecmp (eval_node.c:2931); mixed types fail', () => {
+		expect(matchesStepFilter({ tier: 'Gold' }, { prop: 'tier', op: 'gt', value: 'bronze' })).toBe(true);
+		expect(matchesStepFilter({ tier: 'Gold' }, { prop: 'tier', op: 'lt', value: 'SILVER' })).toBe(true);
+		expect(matchesStepFilter({ a: 5 }, { prop: 'a', op: 'gt', value: '3' })).toBe(false);
+	});
+	test('B6: list-valued properties test per-item membership (eval_node.c:2949-2959)', () => {
+		expect(matchesStepFilter({ tags: ['Pro', 'beta'] }, { prop: 'tags', op: 'eq', value: 'PRO' })).toBe(true);
+		expect(matchesStepFilter({ tags: ['Pro', 'beta'] }, { prop: 'tags', op: 'contains', value: 'beta' })).toBe(true);
+		expect(matchesStepFilter({ tags: ['Pro', 'beta'] }, { prop: 'tags', op: 'not_contains', value: 'pro' })).toBe(false);
+	});
 });
 
 // ─── Step-level filters in evaluateFunnel ────────────────────────────────────
