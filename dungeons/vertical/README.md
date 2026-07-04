@@ -22,7 +22,7 @@ data — at full fidelity, not at smoke-test scale.
 
 ## Coverage
 
-All 21 vertical dungeons. Every documented hook has a story-backed
+All 22 vertical dungeons. Every documented hook has a story-backed
 verification check — no documented hook is unverified. (Aggregate hook
 counts are rebuilt at each release; see the per-dungeon stories exports
 for the authoritative contract.)
@@ -50,6 +50,7 @@ for the authoritative contract.)
 | 19 | social | NAILED | 10/10 | 2 |
 | 20 | crypto | NAILED | 11/11 | 2 |
 | 21 | streaming | NAILED | 4/4 | 2 |
+| 22 | support-desk | NAILED | 3/3 | 1 |
 
 **Score legend:**
 - **NAILED** — every hook check passes at its target threshold.
