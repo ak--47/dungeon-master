@@ -97,29 +97,30 @@ Numbering is consistent across all three artifacts:
 - `<name>.verify.mjs`: `check('H1 whale 5x+ trade amount', ...)`
 - `<name>.sql`: `-- Hook 1: WHALE WALLETS — top 2% drive most volume`
 
-## Known limitations (documented per-hook)
+## Known limitations (historical — list now empty)
 
 Several engineered hooks intentionally use `funnel-post` to compress
 time-to-convert within a single funnel-instance. The verifier's
 `evaluateFunnel` is a greedy single-pass over the user's full event
 history — it picks the first matching event for each step regardless of
-which funnel-instance the hook touched. Affected dungeon (1): crypto.
-Its hook is checked for population presence
-(`'TTC populations present (limitation)'`) rather than for the
-TTC delta itself; the engineered effect is visible in Mixpanel's funnel
-median TTC report but not in the cross-event SQL/JS aggregations.
-ai-platform, dating, community, travel, logistics, education,
-real-estate, devtools, and marketplace graduated off this list in v1.6:
-their TTC stories assert the TTC delta itself through
+which funnel-instance the hook touched. Through v1.5 this forced some
+dungeons to check TTC hooks for population presence only. As of v1.6
+every affected dungeon (ai-platform, dating, community, travel,
+logistics, education, real-estate, devtools, marketplace, crypto) has
+graduated: their TTC stories assert the TTC delta itself through
 `emulateBreakdown`'s `timeToConvert` at conversion windows covering the
 stretched support (see each story narrative for the censoring
-analysis). Two graduation lessons generalize: pick the conversion
+analysis). Three graduation lessons generalize: pick the conversion
 window where each cohort's TTC distribution is unimodal (media — at
 multi-day windows the median sits on a bimodal mode boundary and flips
-on sampling noise), and restrict funnel-post scaling to the target
+on sampling noise); restrict funnel-post scaling to the target
 funnel when another funnel shares a step prefix (marketplace — scaling
 everything let the greedy evaluator assemble chains across unscaled
-instances, collapsing the read).
+instances, collapsing the read); and anchor the scaled funnel on a
+unique first step (crypto — `wallet connected` is `isFirstEvent` +
+`isAuthEvent`, so it occurs exactly once per user and the greedy
+evaluator has no earlier instance to latch onto, making the read
+stable across 1h–24h windows).
 
 See
 [`research/1.5.0-vertical-eval.md`](../../research/1.5.0-vertical-eval.md)
