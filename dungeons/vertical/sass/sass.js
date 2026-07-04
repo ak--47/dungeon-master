@@ -1154,6 +1154,15 @@ export default config;
  *
  * Scale guards sit at ~50% of expected 10K populations, so 2K runs trip
  * WEAK by design; verdicts ship only from full-fidelity runs.
+ *
+ * Fix-round Q5 (2026-07-04, adversarial-review S1): NAILED bands re-derived
+ * as knob ±10% wherever the knob converts directly to the metric; where the
+ * realized magnitude is confounded (activity curves, greedy-evaluator
+ * attenuation, clone-lift base rates, engine birth curves — H2 zero-event
+ * share, H3 mix, H5 rate lift, H6 armed share, H9 funnel TTC, H10 both
+ * legs), the assertion is a knob-bounded floor/ceiling/corridor that grades
+ * STRONG by design. The measured values above remain as documentation of
+ * the realized run, not as verdict targets.
  */
 
 const EV = `read_json_auto('{{PREFIX}}-EVENTS*.json', sample_size=-1, union_by_name=true)`;
@@ -1209,9 +1218,12 @@ FROM (SELECT event_type, ${EOQ_WIN} AS in_win FROM ${EV} WHERE event = 'billing 
 					return guarded(Number(r.bill_win) >= 1000 && Number(r.upg_rest) >= 1300, `billing volume: in-window=${r.bill_win ?? 0} rest-upgrades=${r.upg_rest ?? 0}`, () => {
 						const rateRatio = (Number(r.upg_win) / 10) / (Number(r.upg_rest) / 111);
 						const share = Number(r.upg_win) / Number(r.bill_win);
-						const detail = `upgrades/day EOQ vs rest=${rateRatio.toFixed(2)} (measured 3.95); in-window share=${share.toFixed(3)} (measured 0.447, baseline 0.113)`;
-						const legRate = bandVerdict(rateRatio, [3.4, 4.5], [2.9, 5.2], detail, v => v <= 1.3);
-						const legShare = bandVerdict(share, [0.40, 0.50], [0.35, 0.55], detail, v => v <= 0.16);
+						const detail = `upgrades/day EOQ vs rest=${rateRatio.toFixed(2)} (knob-implied 3.8); in-window share=${share.toFixed(3)} (knob-implied 0.475, baseline 0.113)`;
+						// Fix-round Q5 (S1): NAILED bands are knob ±10%. Implied in-window
+						// share = 0.40 + 0.60×0.125 = 0.475 → rate ratio 0.475/0.125 = 3.8
+						// → [3.42, 4.18]; share 0.475 → [0.43, 0.52].
+						const legRate = bandVerdict(rateRatio, [3.42, 4.18], [2.9, 5.2], detail, v => v <= 1.3);
+						const legShare = bandVerdict(share, [0.43, 0.52], [0.35, 0.55], detail, v => v <= 0.16);
 						return { verdict: worstOf(legRate, legShare), detail };
 					});
 				},
@@ -1228,8 +1240,9 @@ FROM (SELECT ${EOQ_WIN} AS in_win FROM ${EV} WHERE event = 'team member invited'
 					const r = rows?.[0] || {};
 					return guarded(Number(r.inv_win) >= 3200, `in-window invites=${r.inv_win ?? 0}`, () => {
 						const ratio = (Number(r.inv_win) / 10) / (Number(r.inv_rest) / 111);
-						const detail = `invites/day EOQ vs rest=${ratio.toFixed(3)} (measured 1.55; 50% clone knob)`;
-						return bandVerdict(ratio, [1.44, 1.67], [1.32, 1.80], detail, v => v <= 1.05);
+						const detail = `invites/day EOQ vs rest=${ratio.toFixed(3)} (50% clone knob → 1.5x)`;
+						// Fix-round Q5 (S1): knob 1 + 0.5 = 1.5x → NAILED = knob ±10%.
+						return bandVerdict(ratio, [1.35, 1.65], [1.32, 1.80], detail, v => v <= 1.05);
 					});
 				},
 			},
@@ -1262,7 +1275,10 @@ FROM ue GROUP BY 1 ORDER BY 1`,
 						const detail = `hashed silent(<Feb 4)=${silentT.toFixed(3)} (expect 1.0), non-hashed=${silentF.toFixed(3)} (expect 0), cohort share=${share.toFixed(3)} (measured 0.189)`;
 						const legT = bandVerdict(silentT, [0.97, 1.0], [0.90, 1.0], detail, v => v < 0.3);
 						const legF = bandVerdict(silentF, [0, 0.02], [0, 0.05], detail, v => v >= 0.5);
-						const legShare = bandVerdict(share, [0.16, 0.22], [0.14, 0.25], detail);
+						// Fix-round Q5 (S1): hash knob mod 5 → 0.20 → NAILED = knob ±10%
+						// (event-visible share sits near the low edge — late-born
+						// zero-event churners never appear in event data).
+						const legShare = bandVerdict(share, [0.18, 0.22], [0.14, 0.25], detail);
 						return { verdict: worstOf(legT, legF, legShare), detail };
 					});
 				},
@@ -1277,8 +1293,14 @@ FROM ue GROUP BY 1 ORDER BY 1`,
 					const r = rows?.[0] || {};
 					return guarded(Number(r.profiles) >= 5000, `profiles=${r.profiles ?? 0}`, () => {
 						const share = 1 - Number(r.event_users) / Number(r.profiles);
-						const detail = `zero-event profile share=${share.toFixed(4)} (measured 0.024 — churn-hashed users born after day 30)`;
-						return bandVerdict(share, [0.012, 0.038], [0.006, 0.055], detail);
+						const detail = `zero-event profile share=${share.toFixed(4)} (churn-hashed users born after day 30; hash-cohort ceiling 0.20)`;
+						// Fix-round Q5 (S1): share = P(churn-hash) × P(born after day 30),
+						// and the birth-time curve is engine behavior, not a knob — the
+						// magnitude is not knob-derivable. Knob-derived corridor (0 <
+						// share ≤ 0.20 hash-cohort ceiling) grades STRONG by design.
+						if (share === 0) return { verdict: "NONE", detail: `${detail} — no zero-event profiles; late-born churn signal absent` };
+						if (share > 0 && share <= 0.20) return { verdict: "STRONG", detail };
+						return { verdict: "WEAK", detail };
 					});
 				},
 			},
@@ -1304,9 +1326,16 @@ FROM ${EV}`,
 					return guarded(Number(r.esc) >= 7500, `escalated incidents=${r.esc ?? 0}`, () => {
 						const escRate = Number(r.esc) / (Number(r.esc) + Number(r.crit));
 						const escOfInc = Number(r.esc) / (Number(r.esc) + Number(r.organic));
-						const detail = `esc/(esc+remaining crit)=${escRate.toFixed(3)} (knob 0.30); esc share of incidents=${escOfInc.toFixed(3)} (measured 0.446)`;
+						const detail = `esc/(esc+remaining crit)=${escRate.toFixed(3)} (knob 0.30); esc share of incidents=${escOfInc.toFixed(3)} (mix confounded — corridor check)`;
 						const legRate = bandVerdict(escRate, [0.27, 0.33], [0.24, 0.37], detail, v => v < 0.05);
-						const legMix = bandVerdict(escOfInc, [0.40, 0.50], [0.33, 0.57], detail);
+						// Fix-round Q5 (S1): escalated/organic mix depends on funnel-driven
+						// alert volume vs weight-1 soup, not on a knob (naive weight math
+						// gives ~0.64, far from the realized value). Corridor sanity check
+						// grades STRONG by design; legRate carries the knob-derived 0.30
+						// invariant.
+						const legMix = escOfInc >= 0.2 && escOfInc <= 0.8 && Number(r.organic) > 0
+							? { verdict: "STRONG", detail }
+							: { verdict: "WEAK", detail };
 						return { verdict: worstOf(legRate, legMix), detail };
 					});
 				},
@@ -1340,7 +1369,9 @@ FROM ${EV} e JOIN integ i ON e.user_id::VARCHAR = i.uid GROUP BY 1 ORDER BY 1`,
 						const respRatio = Number(both.avg_resp) / Number(rest.avg_resp);
 						const resoRatio = Number(both.avg_reso) / Number(rest.avg_reso);
 						const detail = `both/rest response=${respRatio.toFixed(3)} (knob 0.4, measured 0.390); resolution=${resoRatio.toFixed(3)} (knob 0.5, measured 0.499)`;
-						const legResp = bandVerdict(respRatio, [0.35, 0.44], [0.31, 0.50], detail, v => v >= 0.95);
+						// Fix-round Q5 (S1): NAILED = knob ±10% (0.4 → [0.36, 0.44],
+						// 0.5 → [0.45, 0.55]).
+						const legResp = bandVerdict(respRatio, [0.36, 0.44], [0.31, 0.50], detail, v => v >= 0.95);
 						const legReso = bandVerdict(resoRatio, [0.45, 0.55], [0.40, 0.62], detail, v => v >= 0.95);
 						return { verdict: worstOf(legResp, legReso), detail };
 					});
@@ -1352,7 +1383,7 @@ FROM ${EV} e JOIN integ i ON e.user_id::VARCHAR = i.uid GROUP BY 1 ORDER BY 1`,
 		id: "sass-h5-docs-deploy-lift",
 		hook: "H5",
 		archetype: "frequency-sweet-spot",
-		narrative: "Sweet-spot doc readers (4-7 views) get cloned deploys: deploys-per-other-event ~1.26x the low bucket (non-churned).",
+		narrative: "Sweet-spot doc readers (4-7 views) get cloned deploys: deploys-per-other-event lifts above the low bucket (measured ~1.26x; asserted as a knob-derived floor >1.05 — the rate magnitude is activity-confounded, fix-round Q5).",
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: DOC_BUCKETS_SQL },
@@ -1361,8 +1392,15 @@ FROM ${EV} e JOIN integ i ON e.user_id::VARCHAR = i.uid GROUP BY 1 ORDER BY 1`,
 					const sweet = by.sweet, low = by.low;
 					return guarded(Number(sweet?.users) >= 1800 && Number(low?.users) >= 950, `buckets: sweet=${sweet?.users ?? 0} low=${low?.users ?? 0}`, () => {
 						const ratio = Number(sweet.d_per_o) / Number(low.d_per_o);
-						const detail = `sweet/low deploys-per-other=${ratio.toFixed(3)} (measured 1.26; +2.5 clones engineered, ~1/3 future-guard shave)`;
-						return bandVerdict(ratio, [1.17, 1.35], [1.09, 1.45], detail, v => v <= 1.02);
+						const detail = `sweet/low deploys-per-other=${ratio.toFixed(3)} (+2.5 clones engineered; rate lift not knob-derivable)`;
+						// Fix-round Q5 (S1): the +2.5-clone knob converts to a RATE ratio
+						// only through the organic deploy base rate, the future-guard
+						// shave, and the activity curve — none knob-derivable. Knob-derived
+						// floor (clones strictly add deploys → sweet/low > 1.05) grades
+						// STRONG by design; INVERSE at ≤1.02 (no lift).
+						if (ratio <= 1.02) return { verdict: "INVERSE", detail };
+						if (ratio > 1.05) return { verdict: "STRONG", detail };
+						return { verdict: "WEAK", detail };
 					});
 				},
 			},
@@ -1372,7 +1410,7 @@ FROM ${EV} e JOIN integ i ON e.user_id::VARCHAR = i.uid GROUP BY 1 ORDER BY 1`,
 		id: "sass-h6-cost-overrun",
 		hook: "H6",
 		archetype: "bespoke",
-		narrative: "After a >25% cost spike, the user's next infrastructure scale is forced down: armed-state down-share ~0.90 vs ~0.27 baseline.",
+		narrative: "After a >25% cost spike, the user's next infrastructure scale is forced down: armed-state down-share ≥0.75 floor (mechanism-implied 1.0, read-side order gap attenuates; measured ~0.90) vs the 0.25-array baseline (knob ±10%).",
 		assertions: [
 			{
 				breakdown: {
@@ -1397,9 +1435,16 @@ FROM marked WHERE event = 'infrastructure scaled' GROUP BY 1 ORDER BY 1`,
 					const armed = by.true, unarmed = by.false;
 					return guarded(Number(armed?.n) >= 3400 && Number(unarmed?.n) >= 15000, `scale events: armed=${armed?.n ?? 0} unarmed=${unarmed?.n ?? 0}`, () => {
 						const a = Number(armed.down_share), u = Number(unarmed.down_share);
-						const detail = `down-share armed=${a.toFixed(3)} (measured 0.896; time-vs-generation order gap explains <1.0) vs unarmed=${u.toFixed(3)} (baseline 0.25 array)`;
-						const legArmed = bandVerdict(a, [0.85, 0.94], [0.79, 0.97], detail, v => v <= 0.35);
-						const legBase = bandVerdict(u, [0.24, 0.30], [0.21, 0.34], detail);
+						const detail = `down-share armed=${a.toFixed(3)} (mechanism-implied 1.0; time-vs-generation order gap attenuates) vs unarmed=${u.toFixed(3)} (baseline 0.25 array)`;
+						// Fix-round Q5 (S1): the mechanism forces scale_direction="down"
+						// (implied 1.0), but the read-side generation-vs-timestamp order
+						// gap attenuates it non-derivably. Knob-derived floor (≥0.75 = 3x
+						// the 0.25 array baseline) grades STRONG by design.
+						const legArmed = a <= 0.35 ? { verdict: "INVERSE", detail }
+							: a >= 0.75 ? { verdict: "STRONG", detail }
+							: { verdict: "WEAK", detail };
+						// Fix-round Q5 (S1): NAILED = knob ±10% (0.25 → [0.225, 0.275]).
+						const legBase = bandVerdict(u, [0.225, 0.275], [0.21, 0.34], detail);
 						return { verdict: worstOf(legArmed, legBase), detail };
 					});
 				},
@@ -1457,10 +1502,12 @@ FROM ${US} GROUP BY 1 ORDER BY 1`,
 						`segments: ${sizes}`,
 						() => {
 							const detail = `ACV ent=${Math.round(ent.acv)} mid=${Math.round(mid.acv)} smb=${Math.round(smb.acv)} startup=${Math.round(st.acv)}; seats ${Number(ent.seats).toFixed(1)}/${Number(mid.seats).toFixed(1)}/${Number(smb.seats).toFixed(1)}/${Number(st.seats).toFixed(1)}; csm ${Number(ent.csm).toFixed(3)}/${Number(mid.csm).toFixed(3)}/${Number(smb.csm).toFixed(3)}/${Number(st.csm).toFixed(3)}`;
+							// Fix-round Q5 (S1): NAILED = uniform-range mean ±10% (ent 275K,
+							// mid 31K, smb 7.8K, startup 1.8K).
 							const legEnt = bandVerdict(ent.acv, [255000, 295000], [235000, 315000], detail, v => v < 50000);
-							const legMid = bandVerdict(mid.acv, [28500, 34500], [26000, 37500], detail);
+							const legMid = bandVerdict(mid.acv, [27900, 34100], [26000, 37500], detail);
 							const legSmb = bandVerdict(smb.acv, [7200, 8400], [6500, 9200], detail);
-							const legSt = bandVerdict(st.acv, [1550, 2050], [1300, 2300], detail);
+							const legSt = bandVerdict(st.acv, [1620, 1980], [1300, 2300], detail);
 							const seatsMonotonic = Number(ent.seats) > Number(mid.seats) && Number(mid.seats) > Number(smb.seats) && Number(smb.seats) > Number(st.seats);
 							const legSeats = { verdict: seatsMonotonic ? "NAILED" : "INVERSE", detail };
 							const csmOthers = Math.max(Number(mid.csm), Number(smb.csm), Number(st.csm));
@@ -1479,7 +1526,7 @@ FROM ${US} GROUP BY 1 ORDER BY 1`,
 		id: "sass-h9-incident-ttc",
 		hook: "H9",
 		archetype: "funnel-ttc-by-segment",
-		narrative: "Enterprise responds/resolves 0.67x, startup 1.5x (property legs full effect; funnel TTC attenuates asymmetrically to 0.79x/1.11x under greedy evaluation).",
+		narrative: "Enterprise responds/resolves 0.67x, startup 1.5x (property legs carry the knob ±10% NAILED read; funnel TTC attenuates asymmetrically under greedy evaluation and is asserted as knob-bounded corridors grading STRONG — fix-round Q5).",
 		assertions: [
 			{
 				breakdown: {
@@ -1533,9 +1580,19 @@ GROUP BY 1 ORDER BY 1`,
 							const base = (Number(mid.median_ttc_ms) + Number(smb.median_ttc_ms)) / 2;
 							const entRatio = Number(ent.median_ttc_ms) / base;
 							const stRatio = Number(st.median_ttc_ms) / base;
-							const detail = `funnel median TTC @24h vs smb/mid: ent=${entRatio.toFixed(3)} startup=${stRatio.toFixed(3)} (greedy attenuation of 0.67/1.5 → measured 0.79/1.11; medians ${(Number(ent.median_ttc_ms) / 3600000).toFixed(2)}h/${(base / 3600000).toFixed(2)}h/${(Number(st.median_ttc_ms) / 3600000).toFixed(2)}h)`;
-							const legEnt = bandVerdict(entRatio, [0.74, 0.85], [0.70, 0.91], detail, v => v >= 1.0);
-							const legSt = bandVerdict(stRatio, [1.06, 1.17], [1.02, 1.24], detail, v => v <= 0.98);
+							const detail = `funnel median TTC @24h vs smb/mid: ent=${entRatio.toFixed(3)} startup=${stRatio.toFixed(3)} (greedy attenuation of 0.67/1.5 knobs — corridor check; medians ${(Number(ent.median_ttc_ms) / 3600000).toFixed(2)}h/${(base / 3600000).toFixed(2)}h/${(Number(st.median_ttc_ms) / 3600000).toFixed(2)}h)`;
+							// Fix-round Q5 (S1): greedy-evaluator attenuation of the 0.67/1.5
+							// knobs is not knob-derivable (organic soup alerts win the greedy
+							// race). Knob-bounded corridors — the true effect lies between
+							// the full knob (±10%) and no-effect 1.0 — grade STRONG by
+							// design; the property legs above carry the knob-derived NAILED
+							// read.
+							const legEnt = entRatio >= 1.0 ? { verdict: "INVERSE", detail }
+								: entRatio >= 0.603 && entRatio <= 0.95 ? { verdict: "STRONG", detail }
+								: { verdict: "WEAK", detail };
+							const legSt = stRatio <= 0.98 ? { verdict: "INVERSE", detail }
+								: stRatio > 1.03 && stRatio <= 1.65 ? { verdict: "STRONG", detail }
+								: { verdict: "WEAK", detail };
 							return { verdict: worstOf(legEnt, legSt), detail };
 						}
 					);
@@ -1547,7 +1604,7 @@ GROUP BY 1 ORDER BY 1`,
 		id: "sass-h10-docs-magic-number",
 		hook: "H10",
 		archetype: "frequency-sweet-spot",
-		narrative: "Over-engaged doc readers (8+) lose 25% of deploys: deploys-per-other-event ~0.89x low bucket (0.75 knob x 1.18 activity curve), ~0.70x sweet.",
+		narrative: "Over-engaged doc readers (8+) lose 25% of deploys: asserted as knob-bounded corridors (over/low ∈ [0.675, 1.0), over/sweet ≤ 0.825) grading STRONG — the realized ratios compose the 0.75 keep-rate knob with a non-derivable activity curve and clone lift (fix-round Q5).",
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: DOC_BUCKETS_SQL },
@@ -1560,9 +1617,20 @@ GROUP BY 1 ORDER BY 1`,
 						() => {
 							const overLow = Number(over.d_per_o) / Number(low.d_per_o);
 							const overSweet = Number(over.d_per_o) / Number(sweet.d_per_o);
-							const detail = `deploys-per-other over/low=${overLow.toFixed(3)} (measured 0.888 = 0.75 knob x 1.18 activity curve); over/sweet=${overSweet.toFixed(3)} (measured 0.705)`;
-							const legLow = bandVerdict(overLow, [0.83, 0.94], [0.78, 1.01], detail, v => v >= 1.12);
-							const legSweet = bandVerdict(overSweet, [0.65, 0.76], [0.60, 0.84], detail, v => v >= 0.97);
+							const detail = `deploys-per-other over/low=${overLow.toFixed(3)} (0.75 keep-rate knob x non-derivable activity curve — corridor check); over/sweet=${overSweet.toFixed(3)} (0.75 knob ÷ non-derivable clone lift)`;
+							// Fix-round Q5 (S1): the realized ratios compose the 0.75
+							// keep-rate knob with the organic activity curve (over-readers
+							// are more active) and the H5 clone lift — both measured, not
+							// knob-derivable. Knob-bounded corridors grade STRONG by design:
+							// over/low ∈ [0.675 (knob −10%), 1.0) — the drop can only reduce,
+							// the activity curve alone would push ≥1; over/sweet ≤ 0.825
+							// (= 0.75 × 1.1, assuming clone lift ≥ 1).
+							const legLow = overLow >= 1.12 ? { verdict: "INVERSE", detail }
+								: overLow >= 0.675 && overLow < 1.0 ? { verdict: "STRONG", detail }
+								: { verdict: "WEAK", detail };
+							const legSweet = overSweet >= 0.97 ? { verdict: "INVERSE", detail }
+								: overSweet > 0 && overSweet <= 0.825 ? { verdict: "STRONG", detail }
+								: { verdict: "WEAK", detail };
 							return { verdict: worstOf(legLow, legSweet), detail };
 						}
 					);
@@ -1611,8 +1679,10 @@ FROM c3 GROUP BY 1 ORDER BY 1`,
 							const lift = Number(canary.conv_rate) / Number(control.conv_rate);
 							const ttcRatio = Number(canary.med_ttc_min) / Number(control.med_ttc_min);
 							const detail = `per-instance conversion lift=${lift.toFixed(3)} (knob 1.2, measured 1.21; rates ${Number(canary.conv_rate).toFixed(3)}/${Number(control.conv_rate).toFixed(3)}); median TTC ratio=${ttcRatio.toFixed(3)} (knob 0.85, measured 0.81)`;
-							const legLift = bandVerdict(lift, [1.12, 1.30], [1.04, 1.42], detail, v => v <= 1.00);
-							const legTtc = bandVerdict(ttcRatio, [0.72, 0.90], [0.65, 0.98], detail, v => v >= 1.03);
+							// Fix-round Q5 (S1): NAILED = knob ±10% (1.2 → [1.08, 1.32],
+							// 0.85 → [0.765, 0.935]).
+							const legLift = bandVerdict(lift, [1.08, 1.32], [1.04, 1.42], detail, v => v <= 1.00);
+							const legTtc = bandVerdict(ttcRatio, [0.765, 0.935], [0.65, 0.98], detail, v => v >= 1.03);
 							return { verdict: worstOf(legLift, legTtc), detail };
 						}
 					);
@@ -1629,8 +1699,9 @@ FROM ${EV} WHERE event = '$experiment_started' GROUP BY 1 ORDER BY 1`,
 					const canary = Number(by["Canary Deploys"]?.users || 0), control = Number(by.Control?.users || 0);
 					return guarded(canary + control >= 180, `enrolled users=${canary + control}`, () => {
 						const split = canary / (canary + control);
-						const detail = `enrollment split canary=${split.toFixed(3)} of ${canary + control} users (deterministic hash, measured 0.473)`;
-						return bandVerdict(split, [0.40, 0.56], [0.35, 0.62], detail);
+						const detail = `enrollment split canary=${split.toFixed(3)} of ${canary + control} users (deterministic 2-arm hash → 0.50)`;
+						// Fix-round Q5 (S1): implied split 0.50 → NAILED = knob ±10%.
+						return bandVerdict(split, [0.45, 0.55], [0.35, 0.62], detail);
 					});
 				},
 			},
@@ -1648,7 +1719,9 @@ FROM ${EV}`,
 					return guarded(Number(r.n) >= 500000, `events=${r.n ?? 0}`, () => {
 						const uid = Number(r.uid_share), dev = Number(r.device_share), dpu = Number(r.devices_per_user);
 						const detail = `identity invariants: uid_share=${uid} device_share=${dev.toFixed(4)} devices/user=${dpu.toFixed(2)} over ${r.n} events (auth on first event; avgDevicePerUser: 2)`;
-						if (uid === 1 && dev >= 0.99 && dpu >= 1.6 && dpu <= 2.4) return { verdict: "NAILED", detail };
+						// Fix-round Q5 (S1): dpu NAILED = knob ±10% (avgDevicePerUser: 2
+						// → [1.8, 2.2]).
+						if (uid === 1 && dev >= 0.99 && dpu >= 1.8 && dpu <= 2.2) return { verdict: "NAILED", detail };
 						if (uid >= 0.999 && dev >= 0.98) return { verdict: "STRONG", detail };
 						if (uid < 0.9) return { verdict: "INVERSE", detail };
 						return { verdict: "WEAK", detail };

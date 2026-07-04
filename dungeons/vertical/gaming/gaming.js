@@ -1286,7 +1286,7 @@ FROM flags WHERE early_deaths >= ${DEATH_SPIRAL_MIN_DEATHS} GROUP BY 1`,
 		id: "H4-death-spiral",
 		hook: "H4",
 		archetype: "retention-divergence",
-		narrative: `non-guild users with ${DEATH_SPIRAL_MIN_DEATHS}+ deaths in the first ${DEATH_SPIRAL_EARLY_DAYS} days (~9% of users) lose ${DEATH_SPIRAL_DROP_LIKELIHOOD}% of post-week-1 events. The post/pre contrast vs low-death users runs ~0.11, well below the raw 0.3 keep-rate: qualifying on 3+ early deaths selects front-loaded players whose natural post/pre is already ~3x lower`,
+		narrative: `non-guild users with ${DEATH_SPIRAL_MIN_DEATHS}+ deaths in the first ${DEATH_SPIRAL_EARLY_DAYS} days (~9% of users) lose ${DEATH_SPIRAL_DROP_LIKELIHOOD}% of post-week-1 events. The post/pre contrast vs low-death users runs ~0.11, well below the raw 0.3 keep-rate: qualifying on 3+ early deaths selects front-loaded players whose natural post/pre is already ~3x lower. Asserted as a knob-ceiling check (<= 0.33), not a band around the measured value — the selection-confounded magnitude is deliberately not pinned (fix-round Q5)`,
 		assertions: [
 			{
 				breakdown: {
@@ -1315,7 +1315,17 @@ FROM flags GROUP BY 1`,
 					spiral: { where: { grp: "spiral" } },
 					other: { where: { grp: "other" } },
 				},
-				expect: { metric: "spiral.post_pre / other.post_pre", op: "between", target: [0.06, 0.18] },
+				// Fix-round Q5 (S1): demoted from a measurement-wrapped band
+				// ([0.06, 0.18], centered on the observed 0.113) to a knob-honest
+				// ceiling check. The only knob-derivable bound is the ceiling:
+				// dropping DEATH_SPIRAL_DROP_LIKELIHOOD=70% of post-week-1 events
+				// caps the contrast at the 0.3 keep-rate (+10% tolerance = 0.33).
+				// How far BELOW the keep-rate it lands is selection-confounded
+				// (qualifying on 3+ early deaths picks front-loaded players) and
+				// deliberately not pinned. Passing a bound reads STRONG by design
+				// (SPEC P3.2) — this story no longer claims NAILED precision on
+				// the attenuated magnitude.
+				expect: { metric: "spiral.post_pre / other.post_pre", op: "<=", target: (1 - DEATH_SPIRAL_DROP_LIKELIHOOD / 100) * 1.1 },
 				minCohort: 100,
 			},
 		],

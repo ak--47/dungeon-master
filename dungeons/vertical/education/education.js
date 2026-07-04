@@ -1487,7 +1487,13 @@ FROM d WHERE day_idx BETWEEN 60 AND 100 GROUP BY 1`,
 					// 2K iteration point (5.6) — that measurement had free attempts below
 					// this assertion's own guard and was noisy-low
 					const detail = `emulator 86.4h conv monthly=${convM.toFixed(4)} free=${convF.toFixed(4)} ratio=${ratio.toFixed(2)} (attempts ${monAtt}/${freeAtt}; mechanism 6.67)`;
-					if (ratio >= 5.7 && ratio <= 7.7) return { verdict: "NAILED", detail };
+					// Fix-round Q5 (S2): this band moved [4.6, 6.6] → [5.7, 7.7] after
+					// the full-fidelity run (observed 6.73). The re-derivation above is
+					// real knob math — but a band produced with the observation in hand
+					// cannot claim NAILED this round. Verdict capped at STRONG inside
+					// the knob band; NAILED eligibility returns when the band is
+					// pre-registered ahead of a fresh full-fidelity run.
+					if (ratio >= 5.7 && ratio <= 7.7) return { verdict: "STRONG", detail: `${detail} — capped (S2: band re-derived post-output)` };
 					if (ratio >= 4.7 && ratio <= 8.7) return { verdict: "STRONG", detail };
 					if (ratio > 1.5) return { verdict: "WEAK", detail };
 					return { verdict: ratio <= 1 ? "INVERSE" : "NONE", detail };
@@ -1704,7 +1710,13 @@ FROM c GROUP BY 1`,
 					// counts below this assertion's own guard; full-fidelity implied
 					// pollution is ~0.035 from both arms independently
 					const detail = `strict-paired conv AI=${Number(ai.rate).toFixed(4)} Control=${Number(ctl.rate).toFixed(4)} lift=${lift.toFixed(3)} (attempts ${aa}/${ca}; generative 1.4 minus pollution)`;
-					if (lift >= 1.20 && lift <= 1.45) return { verdict: "NAILED", detail };
+					// Fix-round Q5 (S2): this band moved [1.14, 1.37] → [1.20, 1.45]
+					// after the full-fidelity run (observed 1.377). The pollution math
+					// above is real knob math — but a band produced with the observation
+					// in hand cannot claim NAILED this round. Verdict capped at STRONG
+					// inside the knob band; NAILED eligibility returns when the band is
+					// pre-registered ahead of a fresh full-fidelity run.
+					if (lift >= 1.20 && lift <= 1.45) return { verdict: "STRONG", detail: `${detail} — capped (S2: band re-derived post-output)` };
 					if (lift >= 1.08 && lift <= 1.55) return { verdict: "STRONG", detail };
 					if (lift > 1.0) return { verdict: "WEAK", detail };
 					return { verdict: "INVERSE", detail };

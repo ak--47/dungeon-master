@@ -447,9 +447,10 @@ export default config;
  *    profile cohort): agents 667/170 = 3.924/wk, requesters 1561/1830 =
  *    0.853/wk. Weekly requester counts DECLINE 1645→1214 across the
  *    window: splitEvenly hands remainder sessions to the earliest weeks,
- *    so low-budget users thin out late — bands widened below the 2K
- *    median to absorb the alignment shift when generation moves the
- *    window to the present. ORGANIC: agents 25.845/wk, requesters
+ *    so low-budget users thin out late. Fix-round Q5 (S1): NAILED bands
+ *    are now the knob ±10% (5/wk and 1/wk); the uniques attenuation is
+ *    absorbed by the STRONG bands and both per-capita legs are EXPECTED
+ *    to read STRONG at 2K fidelity. ORGANIC: agents 25.845/wk, requesters
  *    22.288/wk (ratio 1.04x).
  *  - sessionize per-user medians (cross-check, duckdb LAG >30min): agents
  *    4.583 sessions/wk @ 45.00 min, requesters 1.000/wk @ 10.00 min —
@@ -609,16 +610,23 @@ export const stories = [
 					const dur = rows.find(r => r.metric === "duration");
 					const eps = rows.find(r => r.metric === "eventsPerSession");
 					if (!count || !dur || !eps) return { verdict: "NONE", detail: "missing sessionMetrics rows" };
+					// Fix-round Q5 (S1): NAILED bands re-derived as knob ±10%.
+					// duration median knob = REQUESTER_SHAPE.sessionMinutes (10 min =
+					// 600000 ms); p90/median knob = 45/10 = 4.5; eventsPerSession
+					// knob = REQUESTER_SHAPE.eventsPerSession (28 — the median
+					// session is a requester session; the event budget attenuates
+					// the realized median to ~26, within ±10% of the knob). STRONG
+					// bands stay author-wide to absorb window-alignment shift.
 					return guarded(count.total_sessions >= 34000, `${count.total_sessions} sessions`, () => {
-						const legMedian = bandVerdict(dur.median_ms, [480000, 660000], [360000, 720000],
-							`duration median ${dur.median_ms}ms (expect 600000 — the 10-min requester mode; organic 0)`,
+						const legMedian = bandVerdict(dur.median_ms, [540000, 660000], [360000, 720000],
+							`duration median ${dur.median_ms}ms (knob 600000 — the 10-min requester mode; organic 0)`,
 							v => v < 120000);
 						const ratio = dur.median_ms > 0 ? dur.p90_ms / dur.median_ms : null;
-						const legRatio = bandVerdict(ratio, [3.8, 5.2], [3.0, 6.5],
-							`duration p90/median ${ratio == null ? "n/a" : ratio.toFixed(2)} (expect 4.50 — 45-min agent mode over 10-min requester mode)`,
+						const legRatio = bandVerdict(ratio, [4.05, 4.95], [3.0, 6.5],
+							`duration p90/median ${ratio == null ? "n/a" : ratio.toFixed(2)} (knob 4.50 — 45-min agent mode over 10-min requester mode)`,
 							v => v < 1.5);
-						const legEps = bandVerdict(eps.median, [23, 28], [19, 28],
-							`eventsPerSession median ${eps.median} (expect ~26; organic ~1)`,
+						const legEps = bandVerdict(eps.median, [25.2, 30.8], [19, 30.8],
+							`eventsPerSession median ${eps.median} (knob 28, budget-attenuated ~26; organic ~1)`,
 							v => v <= 3);
 						return worstOf(legMedian, legRatio, legEps);
 					});
@@ -631,9 +639,17 @@ export const stories = [
 					const cohort = (ctx?.profiles || []).filter(p => p.role === "agent").length;
 					if (!cohort) return { verdict: "NONE", detail: "no agent profiles in ctx" };
 					const perCapita = medianOf(rows.map(r => r.uniques)) / cohort;
+					// Fix-round Q5 (S1): NAILED re-derived from the knob
+					// (AGENT_SHAPE.sessionsPerWeek = 5, ±10% = [4.5, 5.5]),
+					// replacing the measurement-wrapped [3.2, 4.6] that excluded
+					// the knob entirely. Median weekly UNIQUES runs below the
+					// per-user cadence (partial weeks + splitEvenly's early-week
+					// remainder), so at 2K fidelity this reads STRONG (~3.9) —
+					// the honest verdict for a documented attenuation whose
+					// magnitude is not knob-derivable.
 					return guarded(cohort >= 210, `${cohort} agents`,
-						() => bandVerdict(perCapita, [3.2, 4.6], [2.8, 5.2],
-							`agent weekly sessions per capita ${perCapita.toFixed(2)} (expect ~3.9; organic ~25.8)`,
+						() => bandVerdict(perCapita, [4.5, 5.5], [2.8, 5.5],
+							`agent weekly sessions per capita ${perCapita.toFixed(2)} (knob 5/wk, uniques-attenuated ~3.9; organic ~25.8)`,
 							v => v > 8));
 				},
 			},
@@ -644,9 +660,13 @@ export const stories = [
 					const cohort = (ctx?.profiles || []).filter(p => p.role === "requester").length;
 					if (!cohort) return { verdict: "NONE", detail: "no requester profiles in ctx" };
 					const perCapita = medianOf(rows.map(r => r.uniques)) / cohort;
+					// Fix-round Q5 (S1): NAILED = knob ±10%
+					// (REQUESTER_SHAPE.sessionsPerWeek = 1 → [0.9, 1.1]); the
+					// measured ~0.85 (same uniques attenuation as agents) reads
+					// STRONG honestly.
 					return guarded(cohort >= 2250, `${cohort} requesters`,
-						() => bandVerdict(perCapita, [0.62, 1.10], [0.55, 1.30],
-							`requester weekly sessions per capita ${perCapita.toFixed(2)} (expect ~0.85, sagging late from splitEvenly's early-week remainder; organic ~22.3)`,
+						() => bandVerdict(perCapita, [0.9, 1.1], [0.55, 1.30],
+							`requester weekly sessions per capita ${perCapita.toFixed(2)} (knob 1/wk, uniques-attenuated ~0.85, sagging late from splitEvenly's early-week remainder; organic ~22.3)`,
 							v => v > 3));
 				},
 			},
@@ -680,11 +700,14 @@ SELECT
 					return guarded(Number(r.agent_users) >= 210, `${r.agent_users} agent users`, () => {
 						const cadence = Number(r.agent_spw) / Number(r.req_spw);
 						const durRatio = Number(r.agent_dur) / Number(r.req_dur);
-						const legCadence = bandVerdict(cadence, [3.6, 5.6], [3.0, 6.5],
-							`per-user cadence ratio ${Number(r.agent_spw).toFixed(2)}/${Number(r.req_spw).toFixed(2)} = ${cadence.toFixed(2)}x (expect ~4.6x; organic 1.04x)`,
+						// Fix-round Q5 (S1): NAILED bands = knob ±10% — cadence knob
+						// 5/1 = 5x → [4.5, 5.5]; duration knob 45/10 = 4.5x →
+						// [4.05, 4.95]. 2K measured 4.58x / 4.50x — both in-band.
+						const legCadence = bandVerdict(cadence, [4.5, 5.5], [3.0, 6.5],
+							`per-user cadence ratio ${Number(r.agent_spw).toFixed(2)}/${Number(r.req_spw).toFixed(2)} = ${cadence.toFixed(2)}x (knob 5x; organic 1.04x)`,
 							v => v < 1.5);
-						const legDur = bandVerdict(durRatio, [3.5, 5.5], [2.8, 6.5],
-							`median session duration ratio ${Number(r.agent_dur).toFixed(1)}min/${Number(r.req_dur).toFixed(1)}min = ${durRatio.toFixed(2)}x (expect 4.5x)`,
+						const legDur = bandVerdict(durRatio, [4.05, 4.95], [2.8, 6.5],
+							`median session duration ratio ${Number(r.agent_dur).toFixed(1)}min/${Number(r.req_dur).toFixed(1)}min = ${durRatio.toFixed(2)}x (knob 4.5x)`,
 							v => v < 1.5);
 						return worstOf(legCadence, legDur);
 					});
@@ -706,8 +729,10 @@ FROM ${EV}`,
 						`uid_share ${Number(r.uid_share).toFixed(4)} (every event carries user_id)`, v => v < 0.99);
 					const legDev = bandVerdict(Number(r.device_share), [0.99, 1], [0.97, 1],
 						`device_share ${Number(r.device_share).toFixed(4)} (avgDevicePerUser: 2)`, v => v < 0.9);
-					const legDpu = bandVerdict(Number(r.dpu), [1.6, 2.4], [1.4, 2.6],
-						`devices/user ${Number(r.dpu).toFixed(2)} (expect ~2.05)`, v => v < 1.05);
+					// Fix-round Q5 (S1): NAILED = knob ±10% (avgDevicePerUser: 2 →
+					// [1.8, 2.2]); 2K measured 2.05.
+					const legDpu = bandVerdict(Number(r.dpu), [1.8, 2.2], [1.4, 2.6],
+						`devices/user ${Number(r.dpu).toFixed(2)} (knob 2)`, v => v < 1.05);
 					return worstOf(legUid, legDev, legDpu);
 				},
 			},

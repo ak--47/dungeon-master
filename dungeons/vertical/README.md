@@ -57,18 +57,23 @@ verdict the runner printed, not an editorial judgment.
 | 21 | streaming | NAILED | 4/4 | 2 |
 | 22 | support-desk | NAILED | 3/3 | 1 |
 
-**Score legend** (verdicts are mechanical — each assertion in a
-dungeon's `stories` export declares NAILED/STRONG bands and an INVERSE
-guard; the story runner reports where the measured value landed):
-- **NAILED** — every assertion in every story landed inside its NAILED
-  band at full fidelity.
+**Score legend.** Grading is mechanical (the runner reports where the
+measured value landed), but the bands themselves are author-declared —
+band *selection* is an editorial act, and the score is only as honest
+as the band derivation. The fix-round band policy (2026-07-04):
+- A NAILED band must be derived from the hook's knob (knob ±10%),
+  never from a measurement of the dungeon's own output — a band
+  centered on a measurement passes by construction.
+- Where the realized magnitude is confounded (selection effects,
+  mixtures, budget attenuation), the assertion uses a knob-derived
+  floor or ceiling instead, which grades STRONG by design. STRONG is
+  not a blemish: it is the honest verdict for a real effect whose
+  exact magnitude is not knob-derivable.
+- **NAILED** — every assertion in every story landed inside its
+  knob-derived NAILED band at full fidelity.
 - **STRONG** — every assertion passed, but at least one landed in the
-  STRONG band outside the NAILED band. The two current cases document
-  why in their stories' derivation notes: food-delivery (H5
-  referral-reorder ratio, H6 trial-churn share — both read through
-  population filters that dilute the raw knob by construction) and
-  insurance-application (H10 premium gate — one straggler payment >600
-  outside the claimant cohort at full scale).
+  STRONG band outside the NAILED band (or is a floor/ceiling check).
+  Each such case documents why in its story's derivation notes.
 
 ## Running
 

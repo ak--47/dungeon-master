@@ -1040,6 +1040,10 @@ export const stories = [
 SELECT CASE WHEN whale THEN 'whale' ELSE 'non' END AS cohort, COUNT(*) AS users, AVG(avg_amt) AS amt
 FROM pu GROUP BY 1`,
 				},
+				// Custom assert (spec P3.1): per-cohort scale guards (whale/non user
+				// floors) + custom INVERSE threshold (≤5 ≈ organic 1.0x, not the
+				// ratio-neutral 1) — the declarative expect grammar (single metric,
+				// one op) has neither guards nor custom inverse.
 				assert: (rows) => {
 					const c = cellsOf(rows, "cohort");
 					if (!c.whale || !c.non) return { verdict: "NONE", detail: "whale/non cohorts missing" };
@@ -1062,6 +1066,9 @@ FROM pu GROUP BY 1`,
 )
 SELECT SUM(vol)::DOUBLE / MAX(tot) AS top5_share, MAX(n)::BIGINT AS traders FROM ranked WHERE rn <= CEIL(n * 0.05)`,
 				},
+				// Custom assert (spec P3.1): trader-count scale guard + custom
+				// INVERSE (share ≤0.20 ≈ organic 0.10) — inexpressible in the
+				// single-metric/single-op expect grammar.
 				assert: (rows) => {
 					const r = rows?.[0];
 					if (!r) return { verdict: "NONE", detail: "top5 query returned no rows" };
@@ -1089,6 +1096,9 @@ SELECT SUM(vol)::DOUBLE / MAX(tot) AS top5_share, MAX(n)::BIGINT AS traders FROM
   AVG((swap_status = 'failed')::INT) FILTER (WHERE event = 'swap') AS fail_share
 FROM ${EV} WHERE event IN ('swap', 'transfer') GROUP BY 1`,
 				},
+				// Custom assert (spec P3.1): two legs (gas ratio + fail share) under
+				// one scale guard, combined via worstOf — the expect grammar carries
+				// a single metric and cannot compose legs.
 				assert: (rows) => {
 					const c = cellsOf(rows, "win");
 					if (!c.in || !c.out) return { verdict: "NONE", detail: "in/out window cells missing" };
@@ -1117,6 +1127,10 @@ FROM ${EV} WHERE event IN ('swap', 'transfer') GROUP BY 1`,
   COUNT(*) AS swaps, AVG((token_pair LIKE '%MOON%')::INT) AS moon_share
 FROM ${EV} WHERE event = 'swap' GROUP BY 1`,
 				},
+				// Custom assert (spec P3.1): structural-zero branch (pre-launch MOON
+				// share must be EXACTLY ~0 → NAILED; >0.05 → INVERSE) plus a post-
+				// launch band leg via worstOf — no declarative op expresses
+				// structural exactness or multi-leg combination.
 				assert: (rows) => {
 					const c = cellsOf(rows, "win");
 					if (!c.post || !c.pre) return { verdict: "NONE", detail: "pre/post windows missing" };
@@ -1159,6 +1173,9 @@ SELECT CASE WHEN bot THEN 'bot' ELSE 'non' END AS cohort, COUNT(*) AS users,
   AVG(post_ev::DOUBLE / GREATEST(pre_ev, 1)) AS post_pre
 FROM pu GROUP BY 1`,
 				},
+				// Custom assert (spec P3.1): contrast-of-ratios metric + per-cohort
+				// scale guards + custom INVERSE (≥0.6 toward organic 1.0) — beyond
+				// the single-metric expect grammar.
 				assert: (rows) => {
 					const c = cellsOf(rows, "cohort");
 					if (!c.bot || !c.non) return { verdict: "NONE", detail: "bot/non claimer cohorts missing" };
@@ -1195,6 +1212,10 @@ SELECT CASE WHEN has_kyc THEN 'kyc' ELSE 'non' END AS cohort, COUNT(*) AS users,
   AVG(dep) AS avg_deposit, AVG(swaps) AS swaps_per_user
 FROM pu GROUP BY 1`,
 				},
+				// Custom assert (spec P3.1): two ratio legs (deposit + swaps/user)
+				// under one scale guard via worstOf, each with its own custom
+				// INVERSE (organic baselines 1.0x and 2.0x differ) — the expect
+				// grammar cannot compose legs or carry non-neutral inverses.
 				assert: (rows) => {
 					const c = cellsOf(rows, "cohort");
 					if (!c.kyc || !c.non) return { verdict: "NONE", detail: "kyc/non cohorts missing" };
@@ -1230,6 +1251,9 @@ FROM pu GROUP BY 1`,
 SELECT CASE WHEN early_staker THEN 'staker' ELSE 'non' END AS cohort, COUNT(*) AS users, AVG(post60) AS post60_per_user
 FROM pu GROUP BY 1`,
 				},
+				// Custom assert (spec P3.1): per-cohort scale guards + custom
+				// INVERSE (≤1.4 — organic baseline is 1.1x, not the ratio-neutral
+				// 1) — neither expressible declaratively.
 				assert: (rows) => {
 					const c = cellsOf(rows, "cohort");
 					if (!c.staker || !c.non) return { verdict: "NONE", detail: "staker/non cohorts missing" };
@@ -1257,6 +1281,10 @@ FROM pu GROUP BY 1`,
   COUNT(*)::DOUBLE / COUNT(DISTINCT user_id::VARCHAR) AS swaps_per_user
 FROM ${EV} WHERE event = 'swap' AND user_id IS NOT NULL GROUP BY 1`,
 				},
+				// Custom assert (spec P3.1): exact-pin ladder (|fee − knob| ≤ 0.005
+				// → NAILED, near-exact → STRONG) + ordering INVERSE (Pro ≥ Standard)
+				// + a second swaps-ratio leg via worstOf — exact-pin grading and
+				// leg composition have no declarative equivalent.
 				assert: (rows) => {
 					const c = cellsOf(rows, "tier");
 					if (!c.Pro || !c.Standard) return { verdict: "NONE", detail: "Pro/Standard tiers missing" };
@@ -1299,6 +1327,9 @@ SELECT CASE WHEN scam THEN 'scam' ELSE 'non' END AS cohort, COUNT(*) AS users,
   AVG(post_ev::DOUBLE / pre_ev) AS post_pre
 FROM pu WHERE pre_ev >= 5 GROUP BY 1`,
 				},
+				// Custom assert (spec P3.1): contrast-of-ratios + per-cohort scale
+				// guards + custom INVERSE (≥0.75; no organic SCAM cohort exists, so
+				// the neutral point is undefined) — beyond the expect grammar.
 				assert: (rows) => {
 					const c = cellsOf(rows, "cohort");
 					if (!c.scam || !c.non) return { verdict: "NONE", detail: "scam/non cohorts missing" };
@@ -1325,6 +1356,10 @@ FROM pu WHERE pre_ev >= 5 GROUP BY 1`,
 					breakdownByUserProperty: "trading_tier",
 					conversionWindowMs: 6 * 3600 * 1000,
 				},
+				// Custom assert (spec P3.1): ratio of two segments' median TTC +
+				// converter-count scale guards + custom INVERSE (≥0.97 ≈ organic
+				// 1.0) — the expect grammar's single metric can't divide two
+				// breakdown cells under guards.
 				assert: (rows) => {
 					const c = cellsOf(rows, "segment_value");
 					if (!c.Pro || !c.Standard) return { verdict: "NONE", detail: "Pro/Standard TTC segments missing" };
@@ -1358,6 +1393,10 @@ SELECT CASE WHEN swaps >= 21 THEN 'over' WHEN swaps >= 8 THEN 'sweet' ELSE 'low'
   COUNT(*) AS users, AVG(stake_amt) AS stake_amt, AVG(pv_val) AS pv_value
 FROM pu GROUP BY 1`,
 				},
+				// Custom assert (spec P3.1): three-bucket scale guard + two legs
+				// (stake ratio, portfolio-value ratio) with opposite-direction
+				// INVERSE thresholds via worstOf — no single-metric op composes
+				// this.
 				assert: (rows) => {
 					const c = cellsOf(rows, "bucket");
 					if (!c.sweet || !c.low || !c.over) return { verdict: "NONE", detail: "swap-count buckets missing" };
@@ -1400,6 +1439,10 @@ FROM pu GROUP BY 1`,
 SELECT CASE WHEN early_stakes >= 2 THEN 'early' ELSE 'non' END AS cohort, COUNT(*) AS users, AVG(post40) AS post40_per_user
 FROM pu GROUP BY 1`,
 				},
+				// Custom assert (spec P3.1): custom INVERSE at ≤0.85 — the organic
+				// baseline (0.52) is itself on the inverse side of neutral 1, so
+				// the hook's sign-flip semantics need a hand-set threshold; plus
+				// per-cohort scale guards. Neither fits the expect grammar.
 				assert: (rows) => {
 					const c = cellsOf(rows, "cohort");
 					if (!c.early || !c.non) return { verdict: "NONE", detail: "early/non born-in cohorts missing" };
@@ -1420,6 +1463,10 @@ FROM pu GROUP BY 1`,
   COUNT(DISTINCT device_id)::DOUBLE / COUNT(DISTINCT user_id) AS devices_per_user
 FROM ${EV}`,
 				},
+				// Custom assert (spec P3.1): identity-model invariant ladder over
+				// four metrics at once (uid_share exact 1, device_share floor,
+				// devices/user band) with exact-pin NAILED conditions — the expect
+				// grammar carries one metric per assertion.
 				assert: (rows) => {
 					const r = rows?.[0];
 					if (!r) return { verdict: "NONE", detail: "identity query returned no rows" };

@@ -1748,7 +1748,8 @@ FROM ev WHERE event = 'renewal completed'`,
 					}
 					const ratio = (Number(r.spike_n) / 10.0) / (Number(r.local_n) / 20.0);
 					const detail = `renewal spike/local=${ratio.toFixed(3)} (mechanism ${1 + RENEWAL_CLONE_COUNT}x; n=${r.spike_n}/${r.local_n})`;
-					if (ratio >= 2.7 && ratio <= 3.4) return { verdict: "NAILED", detail };
+					// Fix-round Q5 (S1): NAILED band is the knob ±10% — 3x → [2.7, 3.3].
+					if (ratio >= 2.7 && ratio <= 3.3) return { verdict: "NAILED", detail };
 					if (ratio >= 2.3 && ratio <= 3.9) return { verdict: "STRONG", detail };
 					if (ratio >= 1.5) return { verdict: "WEAK", detail };
 					return { verdict: ratio <= 1 ? "INVERSE" : "NONE", detail };
@@ -1769,7 +1770,14 @@ FROM ev WHERE event = 'coverage reviewed'`,
 					}
 					const ratio = (Number(r.spike_n) / 10.0) / (Number(r.local_n) / 20.0);
 					const detail = `coverage spike/local=${ratio.toFixed(3)} (mechanism ${1 + COVERAGE_CLONE_COUNT}x, weekend-heavy window drags low; n=${r.spike_n}/${r.local_n})`;
-					if (ratio >= 1.6 && ratio <= 2.1) return { verdict: "NAILED", detail };
+					// Fix-round Q5 (S1): NAILED band re-derived from the knob (2x ±10% =
+					// [1.8, 2.2]), replacing the measurement-wrapped [1.6, 2.1] that let
+					// 20%-below-knob read NAILED by construction. The weekend-heavy window
+					// genuinely drags the realized ratio below the knob (mechanism in the
+					// narrative), so at 2K fidelity this assertion is EXPECTED to land
+					// STRONG (~1.78) — the honest verdict for a knob whose realized effect
+					// is confounded by DOW weighting.
+					if (ratio >= 1.8 && ratio <= 2.2) return { verdict: "NAILED", detail };
 					if (ratio >= 1.4 && ratio <= 2.4) return { verdict: "STRONG", detail };
 					if (ratio >= 1.2) return { verdict: "WEAK", detail };
 					return { verdict: ratio <= 1 ? "INVERSE" : "NONE", detail };

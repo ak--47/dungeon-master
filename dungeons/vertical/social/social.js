@@ -1046,6 +1046,16 @@ export default config;
  *
  * Scale guards sit at ~50% of expected 10K populations, so 2K runs trip
  * WEAK by design; verdicts ship only from full-fidelity runs.
+ *
+ * Fix-round Q5 (2026-07-04, adversarial-review S1): NAILED bands
+ * re-derived as knob ±10% wherever the knob converts directly to the
+ * metric (H6 3.0x clone lifts, H9 sweet/over 1.4/0.7 → 2.00 + margin
+ * knobs, H10 TTC 0.71/1.25 → 0.568; H4/H7/dpu tightened to ±10%).
+ * Where the realized magnitude is confounded (H1 concentration share,
+ * H5 pre-d30 clone dilution), the assertion is a knob-bounded
+ * floor/ceiling that grades STRONG by design. The measured numbers
+ * above remain as documentation of expected full-fidelity readings —
+ * they are no longer verdict anchors.
  */
 
 const EV = `read_json_auto('{{PREFIX}}-EVENTS*.json', sample_size=-1, union_by_name=true)`;
@@ -1080,7 +1090,7 @@ export const stories = [
 		id: "social-h1-viral-concentration",
 		hook: "H1",
 		archetype: "cohort-count-scale",
-		narrative: "Viral creators (~3% of users) hold ~62% of all engagement events; organic concentration is ~6%.",
+		narrative: "Viral creators (~3% of users) dominate engagement: top-3% share floor 0.35 (~6x the 0.057 organic ceiling; magnitude confounded — graded STRONG by design).",
 		assertions: [
 			{
 				breakdown: {
@@ -1102,7 +1112,14 @@ FROM ranked WHERE rn <= CEIL(n * 0.03)`,
 					return guarded(Number(r.users) >= 5000, `users=${r.users ?? 0}`, () => {
 						const share = Number(r.top3_share);
 						const detail = `top-3% share of engagement events=${share.toFixed(3)} (measured 0.623; organic counterfactual 0.057)`;
-						return bandVerdict(share, [0.55, 0.68], [0.45, 0.75], detail, v => v <= 0.15);
+						// Fix-round Q5 (S1): concentration magnitude is confounded (organic engagement
+						// volume, H6 view clones, H7 drops) — not derivable from VIRAL_* knobs. Knob-derived
+						// floor: each viral creator injects >= 10 posts × 3 types × VIRAL_CLONES_MIN(60)
+						// = 1,800 engagement events vs ~145 organic events/user, so share >= 0.35 (~6× the
+						// 0.057 organic ceiling) grades STRONG by design; no NAILED band from a measured value.
+						if (share <= 0.15) return { verdict: "INVERSE", detail };
+						if (share >= 0.35) return { verdict: "STRONG", detail };
+						return { verdict: "WEAK", detail };
 					});
 				},
 			},
@@ -1155,6 +1172,8 @@ FROM pu GROUP BY 1 ORDER BY 1`,
 						const legs = [
 							bandVerdict(preFeed, [0.74, 0.82], [0.70, 0.86], detail, v => v <= 0.30),
 							bandVerdict(postExplore, [0.50, 0.58], [0.45, 0.63], detail, v => v <= 0.15),
+							// postFeed width is mixture-motivated (H1 clones carry 1/3 feed pre-flip); the
+							// pure knob residual 0.30 × 0.70 × 0.20 = 0.042 sits inside the NAILED band.
 							bandVerdict(postFeed, [0.03, 0.08], [0.02, 0.12], detail, v => v >= 0.30),
 						];
 						return { verdict: worstOf(...legs), detail };
@@ -1180,7 +1199,8 @@ FROM ${EV} WHERE event = 'post viewed' AND view_duration_sec IS NOT NULL`,
 					return guarded(Number(r.n) >= 375000, `views=${r.n ?? 0}`, () => {
 						const share = Number(r.crushed_share);
 						const detail = `share of views <= 5 sec=${share.toFixed(4)} (measured 0.204; organic 0.000, generator floors durations above 5s)`;
-						return bandVerdict(share, [0.18, 0.23], [0.15, 0.26], detail, v => v <= 0.05);
+						// Fix-round Q5 (S1): NAILED = ENGAGEMENT_BAIT_LIKELIHOOD(20) → 0.20 ±10%.
+						return bandVerdict(share, [0.18, 0.22], [0.15, 0.26], detail, v => v <= 0.05);
 					});
 				},
 			},
@@ -1190,7 +1210,7 @@ FROM ${EV} WHERE event = 'post viewed' AND view_duration_sec IS NOT NULL`,
 		id: "social-h5-notification-reengagement",
 		hook: "H5",
 		archetype: "temporal-inflection",
-		narrative: "After day 30, ~32% of post-viewed events carry source=notification, up from ~3% before (~10x).",
+		narrative: "After day 30, ~32% of post-viewed events carry source=notification (knob 0.30 + residual); pre-d30 share stays under the 0.066 knob ceiling (clone-diluted — pre leg graded STRONG by design).",
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: SOURCE_WINDOWS_SQL },
@@ -1202,8 +1222,16 @@ FROM ${EV} WHERE event = 'post viewed' AND view_duration_sec IS NOT NULL`,
 						const preNotif = Number(pre.notif);
 						const postNotif = (Number(mid.notif) * Number(mid.n) + Number(post.notif) * Number(post.n)) / postN;
 						const detail = `notification share pre-d30=${preNotif.toFixed(4)} (measured 0.033) → post-d30=${postNotif.toFixed(4)} (measured 0.322)`;
+						// Fix-round Q5 (S1): pre-d30 knob-implied notif share = 0.30 unflipped-by-H3
+						// × 0.20 organic = 0.06; H1/H6 clone dilution (clones never stamp notification)
+						// drags it lower by a non-knob-derivable amount. Knob-derived ceiling (low-before
+						// check): <= 0.066 (knob + 10%) grades STRONG by design; no NAILED band. postNotif
+						// keeps its knob band (REENGAGEMENT_LIKELIHOOD=30 floor + 0.042 residual).
+						const legPre = preNotif >= 0.15 ? { verdict: "INVERSE", detail }
+							: preNotif <= 0.066 ? { verdict: "STRONG", detail }
+							: { verdict: "WEAK", detail };
 						const legs = [
-							bandVerdict(preNotif, [0.02, 0.05], [0.01, 0.07], detail, v => v >= 0.15),
+							legPre,
 							bandVerdict(postNotif, [0.29, 0.35], [0.26, 0.38], detail, v => v <= 0.08),
 						];
 						return { verdict: worstOf(...legs), detail };
@@ -1216,7 +1244,7 @@ FROM ${EV} WHERE event = 'post viewed' AND view_duration_sec IS NOT NULL`,
 		id: "social-h6-creator-monetization",
 		hook: "H6",
 		archetype: "cohort-count-scale",
-		narrative: "Subscribers (~78% of users) post 3.3x and story 3.8x more per user than non-subscribers.",
+		narrative: "Subscribers (~78% of users) post and story ~3.0x more per user (CREATOR_*_CLONES=2 knob; activity confound lifts measured readings to 3.3x/3.8x — graded STRONG by design).",
 		assertions: [
 			{
 				breakdown: {
@@ -1238,9 +1266,13 @@ FROM pu GROUP BY 1 ORDER BY 1`,
 						const postRatio = Number(s.posts) / Number(n.posts);
 						const storyRatio = Number(s.stories) / Number(n.stories);
 						const detail = `sub vs non posts/user=${postRatio.toFixed(3)} (measured 3.32); stories/user=${storyRatio.toFixed(3)} (measured 3.82)`;
+						// Fix-round Q5 (S1): knob is CREATOR_POST_CLONES=2 / CREATOR_STORY_CLONES=2 → 3.0x
+						// per-user lift for both metrics; NAILED = knob ±10% = [2.70, 3.30]. Measured 3.32
+						// (posts) and 3.82 (stories) carry a subscriber activity confound on top of the knob
+						// (paired lifts land on 3.07x/3.00x) — those readings grade STRONG by design.
 						const legs = [
-							bandVerdict(postRatio, [3.00, 3.65], [2.70, 4.00], detail, v => v <= 1.5),
-							bandVerdict(storyRatio, [3.45, 4.20], [3.10, 4.60], detail, v => v <= 1.5),
+							bandVerdict(postRatio, [2.70, 3.30], [2.40, 4.00], detail, v => v <= 1.5),
+							bandVerdict(storyRatio, [2.70, 3.30], [2.40, 4.60], detail, v => v <= 1.5),
 						];
 						return { verdict: worstOf(...legs), detail };
 					});
@@ -1273,7 +1305,9 @@ FROM pu WHERE pre > 0 GROUP BY 1 ORDER BY 1`,
 					return guarded(Number(rep?.users) >= 310 && Number(norm?.users) >= 4000, `cohorts: reporters=${rep?.users ?? 0} normal=${norm?.users ?? 0}`, () => {
 						const contrast = Number(rep.ratio) / Number(norm.ratio);
 						const detail = `post/pre-d30 ratio reporters=${Number(rep.ratio).toFixed(2)} vs normal=${Number(norm.ratio).toFixed(2)} → contrast=${contrast.toFixed(3)} (measured 0.395; 60% drop knob)`;
-						return bandVerdict(contrast, [0.34, 0.46], [0.28, 0.55], detail, v => v >= 0.85);
+						// Fix-round Q5 (S1): NAILED = survival knob (1 − TOXICITY_DROP_LIKELIHOOD(60)/100)
+						// = 0.40 ±10% (was ±15%).
+						return bandVerdict(contrast, [0.36, 0.44], [0.28, 0.55], detail, v => v >= 0.85);
 					});
 				},
 			},
@@ -1312,7 +1346,7 @@ FROM d`,
 		id: "social-h9-magic-number",
 		hook: "H9",
 		archetype: "frequency-sweet-spot",
-		narrative: "Sweet-spot posters (3-7 final posts) average 1.7x the comment_length of 8+ posters; ordering sweet > low > over.",
+		narrative: "Sweet-spot posters (3-7 final posts) out-comment 8+ posters ~2.0x per knobs (1.4 boost / 0.7 factor); bucket migration attenuates the measured ratio to ~1.7 — graded STRONG by design. Ordering sweet > low > over.",
 		assertions: [
 			{
 				breakdown: {
@@ -1337,11 +1371,19 @@ GROUP BY 1 ORDER BY 1`,
 							const sweetOver = Number(sweet.len) / Number(over.len);
 							const sl = Number(sweet.len), ll = Number(low.len), ol = Number(over.len);
 							const detail = `comment_length sweet/over=${sweetOver.toFixed(3)} (measured 1.720); ordering sweet=${sl.toFixed(0)} low=${ll.toFixed(0)} over=${ol.toFixed(0)} (measured 250/200/145)`;
-							const legRatio = bandVerdict(sweetOver, [1.55, 1.90], [1.40, 2.10], detail, v => v <= 1.05);
+							// Fix-round Q5 (S1): knob-implied sweet/over = POST_SWEET_COMMENT_BOOST(1.4)
+							// / POST_OVER_COMMENT_FACTOR(0.7) = 2.00; NAILED = knob ±10% = [1.80, 2.20].
+							// Final-count bucket migration (H2/H6/H8 clones push boosted sweet users into
+							// the 8+ bucket) attenuates the measured ratio to 1.72 — that reading grades
+							// STRONG by design. Ordering leg: NAILED only when both margins sit within
+							// knob ±10% (sweet/low ∈ [1.26, 1.54] around 1.40; low/over ∈ [1.29, 1.57]
+							// around 1/0.7 = 1.43); the 1.15-margin ordering grades STRONG.
+							const legRatio = bandVerdict(sweetOver, [1.80, 2.20], [1.40, 2.20], detail, v => v <= 1.05);
+							const mSweetLow = sl / ll, mLowOver = ll / ol;
 							let legOrder;
 							if (sl < ol) legOrder = { verdict: "INVERSE", detail };
-							else if (sl >= 1.15 * ll && ll >= 1.15 * ol) legOrder = { verdict: "NAILED", detail };
-							else if (sl > ll && ll > ol) legOrder = { verdict: "STRONG", detail };
+							else if (mSweetLow >= 1.26 && mSweetLow <= 1.54 && mLowOver >= 1.29 && mLowOver <= 1.57) legOrder = { verdict: "NAILED", detail };
+							else if (sl >= 1.15 * ll && ll >= 1.15 * ol) legOrder = { verdict: "STRONG", detail };
 							else legOrder = { verdict: "WEAK", detail };
 							return { verdict: worstOf(legRatio, legOrder), detail };
 						}
@@ -1354,7 +1396,7 @@ GROUP BY 1 ORDER BY 1`,
 		id: "social-h10-onboarding-ttc",
 		hook: "H10",
 		archetype: "funnel-ttc-by-segment",
-		narrative: "Creator/business complete onboarding at 0.71x personal's median TTC (funnel-post gap scaling; window-stable 1h-24h).",
+		narrative: "Creator/business complete onboarding faster than personal: knob-implied TTC ratio 0.568 (0.71/1.25); step-matching attenuation realizes ~0.71 — graded STRONG by design (window-stable 1h-24h).",
 		assertions: [
 			{
 				breakdown: {
@@ -1374,7 +1416,15 @@ GROUP BY 1 ORDER BY 1`,
 							const fast = (Number(c.median_ttc_ms) + Number(b.median_ttc_ms)) / 2;
 							const ratio = fast / Number(p.median_ttc_ms);
 							const detail = `funnel median TTC @6h fast(creator/business)/personal=${ratio.toFixed(3)} (measured 0.709; medians ${(fast / 60000).toFixed(1)}min vs ${(Number(p.median_ttc_ms) / 60000).toFixed(1)}min; knobs 0.71/1.25 attenuate to 0.81/1.11 per leg)`;
-							return bandVerdict(ratio, [0.66, 0.76], [0.60, 0.83], detail, v => v >= 0.95);
+							// Fix-round Q5 (S1): knob-implied ratio = ONBOARDING_TTC_FAST(0.71) /
+							// ONBOARDING_TTC_SLOW(1.25) = 0.568; NAILED = knob ±10% = [0.52, 0.62].
+							// Greedy funnel step-matching substitutes organic standalone events and
+							// attenuates both legs toward 1 (0.81/1.11 realized — same mechanism as
+							// sass H9), by a non-knob-derivable amount; the measured 0.709 grades
+							// STRONG by design. Floor 0.51 = knob − 10% (mechanism can only attenuate
+							// toward 1, never overshoot); ceiling 0.85 sits clearly below the 0.963
+							// organic baseline.
+							return bandVerdict(ratio, [0.52, 0.62], [0.51, 0.85], detail, v => v >= 0.95);
 						}
 					);
 				},
@@ -1393,7 +1443,8 @@ FROM ${EV}`,
 					return guarded(Number(r.n) >= 1300000, `events=${r.n ?? 0}`, () => {
 						const uid = Number(r.uid_share), dev = Number(r.device_share), dpu = Number(r.devices_per_user);
 						const detail = `identity invariants: uid_share=${uid} device_share=${dev.toFixed(4)} devices/user=${dpu.toFixed(2)} over ${r.n} events (auth on first event; avgDevicePerUser: 2)`;
-						if (uid === 1 && dev >= 0.99 && dpu >= 1.6 && dpu <= 2.4) return { verdict: "NAILED", detail };
+						// Fix-round Q5 (S1): dpu NAILED tightened to avgDevicePerUser(2) ±10%.
+						if (uid === 1 && dev >= 0.99 && dpu >= 1.8 && dpu <= 2.2) return { verdict: "NAILED", detail };
 						if (uid >= 0.999 && dev >= 0.98) return { verdict: "STRONG", detail };
 						if (uid < 0.9) return { verdict: "INVERSE", detail };
 						return { verdict: "WEAK", detail };
