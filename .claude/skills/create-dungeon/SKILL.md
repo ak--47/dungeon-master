@@ -51,7 +51,14 @@ Out of scope (hand off to `write-hooks`):
 For an encyclopedia of hook patterns, recipes, and real-world examples:
 see `HOOKS.md` at the project root.
 
-These config keys are silently ignored — DO NOT use them: `subscription`, `attribution`, `geo`, `features`, `anomalies`. Recreate with hooks via `write-hooks`.
+> ⚠️ **Silently-ignored config keys — do not use.** The validator STRIPS these
+> five keys before generation: `subscription`, `attribution`, `geo`,
+> `features`, `anomalies`. They produce **zero data** — only a verbose-mode
+> warning. A dungeon that "configures" churn via `subscription:` or campaign
+> lift via `attribution:` is configuring nothing, and the omission is
+> invisible at smoke-test scale. Recreate those behaviors with hooks via
+> `/write-hooks` (churn cohorts, UTM biasing, geo weighting, feature-flag
+> cohorts, anomaly windows all have recipes in `HOOKS.md`).
 
 ## Reference reading
 
@@ -63,7 +70,9 @@ Before writing any code, scan:
 - `lib/utils/utils.js` — `pickAWinner`, `weighNumRange`, `initChance`, `exhaust`,
   `takeSome` for property value distributions
 - `dungeons/vertical/sass/sass.js` — B2B reference dungeon with full identity model
-- `dungeons/user/my-buddy/my-buddy.js` — consumer-app reference (gitignored)
+- `dungeons/vertical/ecommerce/ecommerce.js` — canonical consumer exemplar:
+  schema, funnels, stories export, and full hook layout (what your schema
+  becomes after `/write-hooks`)
 - `dungeons/technical/identity-model-verify.js` — minimal identity-model fixture
 
 ## File structure
@@ -88,6 +97,7 @@ import * as v from "ak-tools";
  * APP:        <2-4 line description: what users do, core flow, monetization>
  * SCALE:      <numUsers> users, ~<numEvents> events, <numDays> days (<start> → <end>)
  * CORE LOOP:  <event1> → <event2> → <event3> → ...
+ * VALUE MOMENT: <the one event representing realized value — lifecycle hooks anchor here>
  *
  * EVENTS (N):
  *   <event name (weight)> > ...   (sorted by weight desc)
@@ -195,6 +205,30 @@ When using experiments, include `$experiment_started` in the events array with
     "Variant name": ["Control", "Variant A", "Variant B"],
 }}
 ```
+
+**Design the vocabulary for the analyses hooks will target (v1.6):**
+
+- **Session-friendly next-events.** Flows (Sankey) reads collapse when an
+  anchor event can plausibly be followed by 15 different event types — every
+  branch gets a sliver and no engineered path clears the top level. For each
+  high-traffic anchor (post-login, post-search, post-add-to-cart), keep the
+  realistic next-event vocabulary to **≤5–6 event types**; if the app
+  genuinely has more surfaces, give the rare ones weight 1 so the top paths
+  stay legible. A path-share hook needs ~20–25% share to survive a Sankey's
+  top-3 — impossible against a 15-way fan-out.
+- **Designate a value moment.** Pick ONE event that represents realized value
+  (first workout logged, order delivered, report generated) and record it in
+  the OVERVIEW block as `VALUE MOMENT: <event>`. Lifecycle stories
+  (dormancy → resurrection waves) anchor on the value moment — hooks gate or
+  inject THAT event, not generic page views. A schema with no obvious value
+  moment forces `write-hooks` to invent one badly.
+- **Hidden-event hygiene.** Heartbeat/telemetry events (`ping`,
+  `app foregrounded`, `position updated`) at weight ≥5 drown every Sankey
+  level — every top path becomes anchor → heartbeat → heartbeat. Mixpanel
+  Flows (and the emulator's `topPaths` via `hiddenEvents`) can hide them at
+  query time, but the default view is what demos show. If realism demands
+  heartbeats, keep them at weight 1–2 and list them in the OVERVIEW so
+  `write-hooks` knows to pass `hiddenEvents` in flows stories.
 
 ### 2. Funnels (3–6)
 
@@ -554,7 +588,7 @@ When designing event properties, always consider which Mixpanel type best repres
 app/customer, then **create `dungeons/user/<name>/` if it doesn't already exist**
 (`mkdir -p dungeons/user/<name>`) and write the dungeon to
 `dungeons/user/<name>/<name>.js` (e.g. `dungeons/user/acme/acme.js`). Folder and
-file share the name, matching `kodiak/kodiak.js`, `my-buddy/my-buddy.js`.
+file share the name, matching the vertical layout (`ecommerce/ecommerce.js`).
 
 This keeps `dungeons/user/` organized — EVERYTHING about this dungeon lives in
 the same folder: `hook-results.md` + `hook-query-log.txt` +
