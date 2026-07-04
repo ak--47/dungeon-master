@@ -209,6 +209,44 @@ describe('retention under timeBucket (birth anchored)', () => {
 		// u3's own bucket (Jan 17 has only a Login — no birth) → empty too.
 		expect(rowsFor(rows, '2024-01-17')).toEqual([{ period: '2024-01-17', _empty: true }]);
 	});
+
+	test('B3: same user re-births in every bucket containing a cohort event', () => {
+		// ARB keeps a retention history per (user, interval) — the event loop
+		// feeds ALL intervals (retention_query.cpp:1334-1341) and each
+		// interval's history births at its own first in-birth-window cohort
+		// event (:1188, :1206-1208). A user with cohort events in two weeks
+		// belongs to BOTH weekly cohorts, with returns bucketed relative to
+		// each week's own birth.
+		const events = [
+			ev('u1', 'Sign Up', '2024-01-01T10:00:00.000Z'), // W01 birth (Jan 1 = Monday)
+			ev('u1', 'Login',   '2024-01-02T10:00:00.000Z'), // +24h → W01 day-1 return
+			ev('u1', 'Sign Up', '2024-01-08T10:00:00.000Z'), // W02 re-birth
+			ev('u1', 'Login',   '2024-01-09T10:00:00.000Z'), // +24h → W02 day-1 return
+		];
+		const rows = emulateBreakdown(events, {
+			type: 'retention',
+			cohortEvent: 'Sign Up',
+			returnEvent: 'Login',
+			dayBuckets: [1],
+			timeBucket: 'week',
+		});
+		// hand-computed per bucket:
+		//   W01 (window ∩ = Jan 1-7): birth Jan 1 10:00; Login Jan 2 10:00 →
+		//     floor(24h/24h) = 1 → retained. The Jan 9 Login is bucket 8 —
+		//     past the queried horizon, never recorded (:1264).
+		//   W02 (window ∩ = Jan 8-14): birth Jan 8 10:00 (RE-BIRTH — pre-fix
+		//     the user was dropped here because the first-EVER cohort event,
+		//     Jan 1, sat outside the intersected window); Login Jan 9 10:00 →
+		//     bucket 1 relative to the W02 birth → retained.
+		const w01 = rowsFor(rows, '2024-W01');
+		const w02 = rowsFor(rows, '2024-W02');
+		expect(w01.length).toBe(1);
+		expect(w01[0].cohort_size).toBe(1);
+		expect(w01[0].retained_count).toBe(1);
+		expect(w02.length).toBe(1);
+		expect(w02[0].cohort_size).toBe(1);
+		expect(w02[0].retained_count).toBe(1);
+	});
 });
 
 describe('evaluateFunnel anchorRange (engine primitive)', () => {

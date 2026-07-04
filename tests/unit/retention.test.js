@@ -15,6 +15,9 @@
  *   - calendarStart alignment of the birth time — :312-332 (applied :1260)
  *   - internal-event ignore list for any-event sides — :2546-2555
  *   - segmentOn 'return' (SEGMENT_EVENT_SECOND) — :1413-1419, :1421-1444
+ *   - birth window: in_birth_window gates first_time (:1188, :1206-1208) —
+ *     birth = first cohort match INSIDE the window; out-of-window cohort
+ *     events never consume the birth (fix-round B3)
  */
 
 import { describe, test, expect } from 'vitest';
@@ -683,6 +686,30 @@ describe('retention — cohortWindow', () => {
 			type: 'retention', cohortEvent: 'X', returnEvent: 'Y',
 			cohortWindow: { from: 'not-a-date' },
 		})).toThrow(/cohortWindow/);
+	});
+
+	test('B3: out-of-window cohort event does not consume the birth — first IN-WINDOW match births', () => {
+		// ARB gates the first-event branch on in_birth_window
+		// (retention_query.cpp:1188): a cohort event outside the birth window
+		// never sets first_time (:1206-1208), so the user births at their
+		// first in-window cohort match instead of being dropped.
+		const events = [
+			ev('Sign Up', day(0), { user_id: 'u1' }),  // before window — must NOT be the birth
+			ev('Sign Up', day(6), { user_id: 'u1' }),  // ← birth (first in-window match)
+			ev('Login',   day(7), { user_id: 'u1' }),
+		];
+		const rows = emulateBreakdown(events, {
+			type: 'retention', cohortEvent: 'Sign Up', returnEvent: 'Login',
+			cohortWindow: { from: day(5), to: day(9) }, dayBuckets: [1],
+		});
+		// hand-computed: birth = day 6; Login day 7 → floor(24h/24h) = bucket 1.
+		// Pre-fix the day-0 Sign Up was elected then window-dropped → no rows
+		// at all. (A birth wrongly anchored at day 0 would also miss: the
+		// Login would land in bucket 7 ∉ dayBuckets — so retained_count 1
+		// discriminates the birth anchor too.)
+		expect(rows.length).toBe(1);
+		expect(rows[0].cohort_size).toBe(1);
+		expect(rows[0].retained_count).toBe(1);
 	});
 });
 
