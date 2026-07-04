@@ -62,6 +62,20 @@ All notable changes to `@ak--47/dungeon-master`.
   emulator config now throw instead of being silently ignored — a typo'd
   option previously ran with defaults and produced plausible-but-wrong
   numbers. `carry_forward` is kept as a deprecated alias for `carryForward`.
+- **Funnel exclusions no longer fire before step 0** (P1.6.4).
+  `evaluateFunnel`'s `exclusionSteps` previously defaulted `afterStep` to
+  −Infinity, so an exclusion event could condemn an attempt before the first
+  step was ever reached. ARB has no exclusion gaps before the first step: a
+  pre-step-0 exclusion event now only matters inside the 2-second grace rule
+  at step 0 (condemns with `excludedAtStep`), otherwise the attempt proceeds.
+- **Non-sequential funnel orders verify with full ARB semantics** (P1.6.6).
+  `first-fixed` / `last-fixed` / `first-and-last-fixed` / `outside-in` /
+  `random` previously verified via set-membership ("fired all step events,
+  any order", `verificationKind: 'partial'`); they now route through
+  any-order step blocks with full conversion-window / 2-second-rule /
+  exclusion / anchor-ordering semantics. Users that passed the loose check
+  but violate window or anchor ordering no longer convert. `middle-fixed`
+  keeps set-membership (its scrambled slots are non-contiguous).
 - **`sessionMetrics` defaults to query-time derived sessions** (P1.7.2). New
   `source: 'derived' | 'stamped'` option, default `'derived'`: sessions are
   re-derived from raw timestamps via `sessionize()` — what Mixpanel actually
