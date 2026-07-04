@@ -18,6 +18,14 @@
  *   - n capped at 12 (_MAX_LENGTHS["session"],
  *     api/version_2_0/arb_funnels/validate.py)
  *   - session boundaries: 30-min gap (strict >), UTC day change
+ *   - restart machinery (fix-round B2+C5): an event past the conversion
+ *     window from step 0 finalizes the born history and a fresh history
+ *     processes that same event (funnel_query.cpp:1608-1617 termination,
+ *     :1663-1680 re-birth). GENERAL_WO_REPEAT (the count-by-sessions
+ *     rewrite) terminates ONLY on expiry — completed/excluded histories
+ *     idle until the window expires, so at most one attempt per window
+ *     span (:1611-1613); GENERAL (reentry) also restarts right after each
+ *     completion/exclusion.
  */
 
 import { describe, test, expect } from 'vitest';
@@ -158,8 +166,10 @@ describe('evaluateFunnel — conversionWindow { unit: sessions }', () => {
 		expect(r2[0].reached).toBe(0);
 	});
 
-	test("countMode 'sessions': no restart after a completed pass (wo_repeat)", () => {
-		// two full passes in one session — general_wo_repeat credits ONE
+	test("countMode 'sessions': no restart WITHIN the window — two passes in one session credit ONE (wo_repeat)", () => {
+		// hand-computed (funnel_query.cpp:1611-1613): the completed history
+		// idles until window expiry, absorbing the second pass — no new
+		// history is created inside the same window span.
 		const events = [
 			ev('signup', '2024-01-15T10:00:00.000Z'),
 			ev('purchase', '2024-01-15T10:01:00.000Z'),
@@ -195,5 +205,131 @@ describe('evaluateFunnel — conversionWindow { unit: sessions }', () => {
 		const fail = evaluateFunnel(events, ['signup', 'purchase'], { conversionWindowMs: 10 * 60_000 });
 		// strict <: t == t0 + window fails
 		expect(fail.completed).toBe(false);
+	});
+});
+
+describe('restart machinery — window expiry re-birth (fix-round B2+C5)', () => {
+	test('B2: count-by-sessions credits a conversion PER SESSION — cross-session double convert = 2', () => {
+		// hand-computed against funnel_query.cpp:1608-1617 + :1663-1680:
+		// H1 births signup@10:00, completes purchase@10:01 (ordinal 0 < 0+1),
+		// then IDLES. signup@12:00 (ordinal 1, past window) finalizes H1 —
+		// completion #1 — and the fresh history processes that same event,
+		// birthing H2; purchase@12:01 (ordinal 1 < 1+1) completes it.
+		// Stream end finalizes H2 — completion #2.
+		const events = [
+			ev('signup', '2024-01-15T10:00:00.000Z'),   // session 0
+			ev('purchase', '2024-01-15T10:01:00.000Z'), // session 0
+			ev('signup', '2024-01-15T12:00:00.000Z'),   // 1h59m gap → session 1
+			ev('purchase', '2024-01-15T12:01:00.000Z'), // session 1
+		];
+		const r = evaluateFunnel(events, ['signup', 'purchase'], { countMode: 'sessions' });
+		expect(r).toHaveLength(2);
+		expect(r[0].completed).toBe(true);
+		expect(r[1].completed).toBe(true);
+	});
+
+	test('wo_repeat: failed attempt finalizes at expiry as a drop-off; next attempt births AT the expiring event', () => {
+		// hand-computed: H1 births signup@10:00 (session 0, no purchase
+		// follows in-window) → drop-off at step 0 when signup@11:00
+		// (ordinal 1) expires it; the SAME signup@11:00 births H2, which
+		// completes at purchase@11:01 (ordinal 1 < 1+1).
+		const events = [
+			ev('signup', '2024-01-15T10:00:00.000Z'),   // session 0
+			ev('signup', '2024-01-15T11:00:00.000Z'),   // 59m gap → session 1
+			ev('purchase', '2024-01-15T11:01:00.000Z'), // session 1
+		];
+		const r = evaluateFunnel(events, ['signup', 'purchase'], { countMode: 'sessions' });
+		expect(r).toHaveLength(2);
+		expect(r[0].completed).toBe(false);
+		expect(r[0].reached).toBe(0);
+		expect(r[1].completed).toBe(true);
+	});
+
+	test('wo_repeat vs GENERAL discriminator: after an exclusion, wo_repeat does NOT re-enter within the window; reentry does', () => {
+		// hand-computed. wo_repeat (funnel_query.cpp:1611-1613 — expiry is
+		// the ONLY termination): H1 births signup@10:00, refund@10:01 kills
+		// it (gap 0, in-window, ties condemn), then it IDLES over
+		// signup@10:02/purchase@10:03; signup@11:00 (session 1) expires it
+		// and births H2 → purchase@11:01 completes. 1 completion.
+		// GENERAL (reentry): restarts right after the exclusion → converts
+		// signup@10:02→purchase@10:03 in-window, then again in session 1.
+		// 2 completions.
+		const events = [
+			ev('signup', '2024-01-15T10:00:00.000Z'),   // session 0
+			ev('refund', '2024-01-15T10:01:00.000Z'),   // session 0 — exclusion
+			ev('signup', '2024-01-15T10:02:00.000Z'),   // session 0
+			ev('purchase', '2024-01-15T10:03:00.000Z'), // session 0
+			ev('signup', '2024-01-15T11:00:00.000Z'),   // 57m gap → session 1
+			ev('purchase', '2024-01-15T11:01:00.000Z'), // session 1
+		];
+		const exclusionSteps = [{ event: 'refund' }];
+		const wr = evaluateFunnel(events, ['signup', 'purchase'], { countMode: 'sessions', exclusionSteps });
+		expect(wr).toHaveLength(2); // excluded drop-off + session-1 completion
+		expect(wr[0].terminatedByExclusion).toBe(true);
+		expect(wr[0].reached).toBe(0);
+		expect(wr[1].completed).toBe(true);
+		expect(wr.filter(a => a.completed)).toHaveLength(1);
+
+		const gen = evaluateFunnel(events, ['signup', 'purchase'], {
+			countMode: 'totals', reentry: true, conversionWindow: { unit: 'sessions', n: 1 }, exclusionSteps,
+		});
+		expect(gen.filter(a => a.completed)).toHaveLength(2);
+		expect(gen.filter(a => a.terminatedByExclusion)).toHaveLength(1);
+	});
+
+	test('C5: reentry (GENERAL) restarts after a live attempt\'s window expires — the expiring event can birth the next attempt', () => {
+		// hand-computed: H1 births signup@d1 10:00; signup@d2 10:00 is past
+		// the 1h window → H1 finalizes as a drop-off at step 0 and the SAME
+		// signup births H2 (funnel_query.cpp:1663-1680); purchase@d2 10:30
+		// (within 1h of H2's step 0) completes H2. ARB GENERAL total = 1
+		// conversion; the pre-fix engine reported 0 (the first attempt
+		// scanned to stream end with no restart).
+		const events = [
+			ev('signup', '2024-01-15T10:00:00.000Z'),
+			ev('signup', '2024-01-16T10:00:00.000Z'),
+			ev('purchase', '2024-01-16T10:30:00.000Z'),
+		];
+		const r = evaluateFunnel(events, ['signup', 'purchase'], {
+			countMode: 'totals', reentry: true, conversionWindowMs: 3600_000,
+		});
+		expect(r).toHaveLength(2);
+		expect(r[0].completed).toBe(false);
+		expect(r[0].reached).toBe(0);
+		expect(r[1].completed).toBe(true);
+
+		// Uniques (default, no reentry) is UNCHANGED: first attempt only —
+		// ARB's allow_record_multiple_history is false for plain uniques
+		// (funnel_query.cpp:592-610), and post-window events cannot advance
+		// the frozen attempt.
+		const u = evaluateFunnel(events, ['signup', 'purchase'], { conversionWindowMs: 3600_000 });
+		expect(u.completed).toBe(false);
+		expect(u.reached).toBe(0);
+	});
+
+	test('C5: expiring event that does NOT match step 0 restarts scanning without double-counting', () => {
+		// hand-computed: H1 births signup@10:00; purchase@12:00 expires it
+		// (past 1h) and processes against the fresh history — but purchase
+		// is not step 0, so H2 never births. One drop-off row, no phantom
+		// attempts.
+		const events = [
+			ev('signup', '2024-01-15T10:00:00.000Z'),
+			ev('purchase', '2024-01-15T12:00:00.000Z'),
+		];
+		const r = evaluateFunnel(events, ['signup', 'purchase'], {
+			countMode: 'totals', reentry: true, conversionWindowMs: 3600_000,
+		});
+		expect(r).toHaveLength(1);
+		expect(r[0].reached).toBe(0);
+		expect(r[0].completed).toBe(false);
+	});
+
+	test('woRepeat validation: requires totals, excludes reentry and sessionScoped', () => {
+		const events = [ev('signup', '2024-01-15T10:00:00.000Z')];
+		expect(() => evaluateFunnel(events, ['signup', 'purchase'], { woRepeat: true }))
+			.toThrow(/totals/);
+		expect(() => evaluateFunnel(events, ['signup', 'purchase'], { woRepeat: true, countMode: 'totals', reentry: true }))
+			.toThrow(/mutually exclusive/);
+		expect(() => evaluateFunnel(events, ['signup', 'purchase'], { woRepeat: true, countMode: 'totals', sessionScoped: true }))
+			.toThrow(/sessionScoped/);
 	});
 });
