@@ -225,6 +225,84 @@ describe('eventBreakdown', () => {
 	});
 });
 
+// v1.6.0 fix round (B5): timeBucket compositions. Hand-computed from the
+// ARB rules:
+//   - firstTimeOnly: ONE first_event_time per user over the whole lookback
+//     (event_selector.py:125-149) — the first-ever event lands in exactly
+//     one bucket; later buckets get nothing for that user. The wrapper must
+//     hoist the filter above the partition (the real B5 bug).
+//   - countType 'sessions' needs no hoist: sessions never cross UTC
+//     midnight (unconditional daySplit, sessionize.js) and every bucket
+//     unit cuts at midnights, so per-bucket slice re-derivation reproduces
+//     full-stream session boundaries exactly. The two session tests below
+//     LOCK that invariant — if daySplit is ever removed or made
+//     conditional, the wrapper needs a full-stream sessionize hoist and
+//     these fixtures must be re-derived.
+describe('eventBreakdown × timeBucket — full-stream compositions (B5)', () => {
+	test('firstTimeOnly: a user first-ever in bucket 1 does NOT re-qualify in bucket 2', () => {
+		const events = [
+			ev('Play', { platform: 'ios' }, 'u1', '2024-01-01T10:00:00.000Z'),     // u1 first ever
+			ev('Play', { platform: 'ios' }, 'u1', '2024-01-02T10:00:00.000Z'),     // NOT first — must not count
+			ev('Play', { platform: 'android' }, 'u2', '2024-01-02T11:00:00.000Z'), // u2 first ever
+		];
+		const rows = emulateBreakdown(events, {
+			type: 'eventBreakdown', event: 'Play', breakdownProperty: 'platform',
+			firstTimeOnly: true, timeBucket: 'day',
+		});
+		// Hand-computed: Jan 1 = u1's first (ios). Jan 2 = u2's first only
+		// (android). The per-bucket-recompute bug would add ios:1 on Jan 2.
+		expect(rows).toEqual([
+			{ period: '2024-01-01', value: 'ios', count: 1, total_users: 1 },
+			{ period: '2024-01-02', value: 'android', count: 1, total_users: 1 },
+		]);
+	});
+
+	test('sessions invariant: midnight ALWAYS splits — a would-be straddle is two sessions, one per bucket', () => {
+		// timeout 2h; gap 23:30 → 00:30 is only 1h, BUT daySplit fires at
+		// the midnight crossing (sessionize.js buildUserSessions) → session
+		// A = {23:30}, session B = {00:30}. Each bucket sees exactly its own
+		// session: Jan 1 → 1, Jan 2 → 1. Identical whether sessions derive
+		// from the full stream or the bucket slice — that identity is what
+		// makes the wrapper's slice recursion safe for countType 'sessions'.
+		const events = [
+			ev('Play', { platform: 'ios' }, 'u1', '2024-01-01T23:30:00.000Z'),
+			ev('Play', { platform: 'ios' }, 'u1', '2024-01-02T00:30:00.000Z'),
+		];
+		const rows = emulateBreakdown(events, {
+			type: 'eventBreakdown', event: 'Play', breakdownProperty: 'platform',
+			countType: 'sessions', sessionTimeoutMs: 2 * 3_600_000, timeBucket: 'day',
+		});
+		expect(rows).toEqual([
+			{ period: '2024-01-01', value: 'ios', count: 1, total_users: 1 },
+			{ period: '2024-01-02', value: 'ios', count: 1, total_users: 1 },
+		]);
+	});
+
+	test('sessions invariant: max-cap anchors reset at midnight with the daySplit, so slice = full-stream', () => {
+		// timeout 2h, maxSession 2h. Full-stream derivation:
+		//   23:00 Jan 1 starts session A. 00:30 Jan 2 — midnight crossed →
+		//   daySplit → session B starts 00:30. 01:30 — gap 1h < timeout,
+		//   1h from B's start ≤ max → still session B.
+		// Jan 1: {A} → 1. Jan 2: {B} → 1. A slice-derived Jan 2 gives the
+		// same session B — daySplit guarantees no session state carries
+		// across the bucket edge for ANY timeout/max-cap combination.
+		const events = [
+			ev('Play', { platform: 'ios' }, 'u1', '2024-01-01T23:00:00.000Z'),
+			ev('Play', { platform: 'ios' }, 'u1', '2024-01-02T00:30:00.000Z'),
+			ev('Play', { platform: 'ios' }, 'u1', '2024-01-02T01:30:00.000Z'),
+		];
+		const rows = emulateBreakdown(events, {
+			type: 'eventBreakdown', event: 'Play', breakdownProperty: 'platform',
+			countType: 'sessions', sessionTimeoutMs: 2 * 3_600_000, maxSessionMs: 2 * 3_600_000,
+			timeBucket: 'day',
+		});
+		expect(rows).toEqual([
+			{ period: '2024-01-01', value: 'ios', count: 1, total_users: 1 },
+			{ period: '2024-01-02', value: 'ios', count: 1, total_users: 1 },
+		]);
+	});
+});
+
 describe('countEvents', () => {
 	const events = [
 		ev('purchase', { platform: 'iOS', price: 10 }),
