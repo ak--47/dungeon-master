@@ -14,13 +14,10 @@ Mixpanel does NOT count the way naive SQL does. The verifier (and any DuckDB que
 | Sessions | 3-trigger split: timeout `>`, max duration `>`, day-idx change (`session_query.cpp:906-911`) | Trust pre-stamped `session_id`; group by `(user, session_id)` |
 | Retention | Birth-anchored, ms-strict gate (default `birth_can_retain=false` → `<`), bucketed by `floor((ret−birth)/unit)` (`retention_query.cpp:1097-1109,1228-1231`) | Use `emulateBreakdown` with `retention` |
 
-**Known divergences from Mixpanel C++** (1.5.1):
+**Known divergences from Mixpanel C++** (1.6.0):
 - `countDistinctPeriods` default = `algorithm: 'calendar'` (UTC bucket).
   Mixpanel C++ (`addiction_query.cpp:359`) uses ROLLING window. Pass
   `algorithm: 'rolling'` for exact Frequency-Distribution parity.
-- COMPOUNDED retention is NOT implemented — verifier silently ignores
-  `compounded: true`. Use DuckDB or query Mixpanel directly for "DAU
-  coming back" reports.
 - Touchpoint sampling: generator stamps uniform-random across user
   lifetime; verifier reads last-N before conversion (matches C++).
   For users with ≤10 attribution events lifetime, no divergence.
@@ -31,7 +28,7 @@ Full rules: see [HOOKS.md Section 2](../../../../HOOKS.md#2-how-mixpanel-counts-
 
 ## When to use the emulator vs DuckDB
 
-The emulator (`emulateBreakdown` from `@ak--47/dungeon-master/verify`) implements Mixpanel's rules natively. **ALWAYS use the emulator for funnel, frequency, aggregate, TTC, and attribution patterns.** Hand-written DuckDB queries for these pattern types diverge from what Mixpanel shows in reports — even when they look correct.
+The emulator (`emulateBreakdown` from `@ak--47/dungeon-master/verify`) implements Mixpanel's rules natively. **ALWAYS use the emulator for funnel, frequency, aggregate, TTC, attribution, retention, lifecycle, flows, sessions, and event-breakdown patterns.** Hand-written DuckDB queries for these pattern types diverge from what Mixpanel shows in reports — even when they look correct.
 
 Use DuckDB ONLY for:
 - Schema integrity checks (column coverage, flag detection)
@@ -51,9 +48,32 @@ If you find yourself writing `WITH step1 AS ..., step2 AS ...` for a funnel, STO
 | Funnel TTC by user property | `timeToConvert` | "Trial users take 4× longer than enterprise" |
 | First/last touch attribution | `attributedBy` | "Conversions by Source" |
 | Birth retention curves | `retention` | "Sign Up → Login on day N" — requires `cohortEvent`, `returnEvent`, `dayBuckets` |
+| Compounded retention ("DAU coming back") | `retention` + `compounded: true` | Sets `returnEvent := cohortEvent` internally; throws on a conflicting `returnEvent` |
 | Per-session metrics | `sessionMetrics` | Count / duration / events distributions per session |
+| Lifecycle states (new / retained / resurrected / dormant) | `lifecycle` | "Resurrection wave in week N" — per-period user-state classification |
+| Flows / top paths | `topPaths` | "What do users do after X" — Sankey top-path shares |
+| Event totals segmented by property | `eventBreakdown` | "Purchases by plan tier" — `countType: 'general' \| 'sessions'`; list props fan out per item |
+| Uniques per segment | `uniques` | "Unique users by plan tier" |
+| Distinct property values | `distinctCount` | "How many distinct SKUs" — see below |
+| Ratio / composite metrics | `evaluateFormula` (`lib/verify/formula.js`) | Conversion %, ARPU, any PEMDAS formula over emulator series |
 
 Cross-cutting on EVERY type: `timeBucket: 'day' | 'week' | 'month'` partitions events into UTC buckets and emits one row per period.
+
+### `distinctCount`
+
+Counts distinct values of a flat event property, Mixpanel COUNT_DISTINCT-style, with a top-values breakdown:
+
+```js
+emulateBreakdown(events, {
+  type: 'distinctCount',
+  property: 'sku',        // required — flat property name (dot-paths not supported)
+  event: 'Purchase',      // optional — restrict to one event type; omit = all events
+  topN: 25,               // optional — top values by count (default 25)
+});
+// → [{ distinct_count: 143, top_values: [{ value: 'SKU-001', count: 812 }, ...] }]
+```
+
+Single-row result. Use it for catalog-breadth stories ("power sellers list 5× more distinct SKUs") where `uniques` / `eventBreakdown` answer a different question (users or totals per bucket, not distinct values of the property itself).
 
 Quick emulator script:
 

@@ -4,13 +4,17 @@ Templates and conventions for writing `hook-results.md` and per-dungeon verifica
 
 ## Verdict criteria (5-tier)
 
-- **NAILED** — Within 10% of expected value/ratio. Direction correct, magnitude precise. The story reads exactly as documented.
-- **STRONG** — Within 25% of expected. Direction correct, clearly visible. An analyst would find this pattern immediately.
-- **WEAK** — Within 50% of expected. Directionally correct but magnitude is off, OR sample size is too small to be conclusive.
-- **NONE** — No statistically meaningful difference between cohorts. The hook has no observable effect.
-- **INVERSE** — Effect goes the opposite direction from intended. The story is backwards.
+Verdicts are **mechanical** — computed by `scripts/verify-stories.mjs` from each story assertion's declared `target` / `floor` / `minCohort` (see the `StoryVerdict` typedef in `types.d.ts`), not eyeballed percentages:
 
-NAILED and STRONG are passing verdicts. WEAK, NONE, and INVERSE are failing verdicts that require investigation.
+- **NAILED** — observed within ±10% of `target`.
+- **STRONG** — passes `floor` (or `target` when no floor is declared).
+- **WEAK** — fails `floor` but effect direction is correct, **or** the selected cohort is smaller than `minCohort`. The population floor is a hard cap: a 12-user cohort can never score NAILED, no matter how clean its ratio.
+- **NONE** — no measurable effect, or the selection matched no rows.
+- **INVERSE** — effect direction is opposite the assertion.
+
+Story verdict = worst assertion verdict. NAILED and STRONG are passing; WEAK, NONE, and INVERSE fail and require investigation.
+
+Hand-assigned verdicts appear only in the legacy no-stories fallback and MUST follow the same definitions: derive a target from the hook's knob constants, compute the band the observed value lands in, and state the derivation in the detail block — never assign a tier by feel.
 
 ## Ordering: failures first
 
@@ -24,6 +28,8 @@ Within each dungeon section, order detailed results by verdict severity:
 The summary table should also be sorted this way (INVERSE → NONE → WEAK → STRONG → NAILED). This ensures actionable issues are immediately visible at the top.
 
 ## Single-dungeon report structure
+
+For story-backed dungeons, `hook-results.md` **renders the runner's JSON**: run `verify-stories.mjs --json` and build the Hook Summary table directly from its per-story records (story id, hook number, archetype, observed vs target per assertion, computed verdict). Do not recompute verdicts the runner already settled. Detailed Results blocks exist only for stories below STRONG, `duckdb`-type assertions, and legacy no-stories hooks.
 
 ```markdown
 # Dungeon Verification Report
