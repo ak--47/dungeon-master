@@ -226,6 +226,12 @@ query from THREE reset triggers:
 Each session emits synthetic `$duration_s`, `$event_count`, `$origin_start`,
 `$origin_end` properties.
 
+**Namespace rule:** synthetic session events are `EVENT_TYPE_SESSION` — a
+separate selector namespace from regular events (`libquery/event/filter.h`).
+A dungeon event literally named `"$session_start"` would NOT merge with or
+shadow Mixpanel's session events; don't name events into the `$session_*`
+family (see `lib/verify/sessionize.js:41-42`).
+
 **v1.6 contract:** the verifier derives sessions at query time via
 `sessionize()` (`lib/verify/sessionize.js`) — the same three triggers, all
 strict `>`, plus synthetic `$session_start`/`$session_end` events carrying
@@ -415,11 +421,27 @@ topN })`.
 - **List-valued properties explode**: an event with `tags: ['a', 'b']`
   contributes one count to segment `a` AND one to segment `b`. An EMPTY list
   lands in the literal segment `"$empty_list"` (`normal_query.cpp:1762`).
-- **`null` and `undefined` both land in the `"undefined"` bucket** — Mixpanel
-  string-typecasts both to the same inner action.
 - **Segments are case-sensitive and type-tagged**: number `1` and string
   `'1'` are DIFFERENT segments. Engineer property values with exact casing
   and types.
+- **Two rulebooks — segment IDENTITY vs WHERE-filter matching**
+  (implementation: `lib/verify/coerce.js`):
+
+  | Operation | Case | Types | ARB source |
+  |---|---|---|---|
+  | Segment bucketing (breakdown key) | **sensitive** | tagged (`1` ≠ `'1'`) | `hash_value.c:114-115` (raw XXH3), `:92-97` (type tags); ordering `cmp.c:24-32` (`arb_strcmp`) |
+  | Filter `==` / `!=` | **INsensitive** | string-coerced | `value.c:285` (`arb_strcasecmp`) |
+  | Filter `contains` | **INsensitive** | string-coerced | `eval_node.c:2914` (`arb_strcaseinstr`) |
+  | Filter `<` `>` `<=` `>=` on strings | **INsensitive** | string-coerced | `eval_node.c:2931` (`arb_strcasecmp`) |
+
+  So `plan == "PRO"` in a WHERE filter matches `"pro"` events, but those
+  events still land in a `"pro"` segment distinct from `"PRO"` when broken
+  down. A hook that stamps mixed-case variants passes its own filter check
+  and STILL splits the breakdown table.
+- **Coercion to breakdown key**: `null`/`undefined` → `"undefined"`
+  (`arb_selector.py:889-916`), booleans → `"true"`/`"false"`, `-0` → `0`
+  (`hash_value.c:111`), objects JSON-stringify, lists fan out per item
+  BEFORE coercion.
 - **`topN` defaults to 250** (`normal_query.cpp:1195-1197` — "If no
   meaningful limit is supplied, set it to 250"), sorted count-desc, truncated
   with NO "other" bucket. Segments below the cut disappear from the table
