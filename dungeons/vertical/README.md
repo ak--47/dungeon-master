@@ -27,6 +27,11 @@ verification check — no documented hook is unverified. (Aggregate hook
 counts are rebuilt at each release; see the per-dungeon stories exports
 for the authoritative contract.)
 
+Score column regenerated 2026-07-03 from the v1.6.0 acceptance sweep:
+every dungeon regenerated at full fidelity (its shipped `numUsers`) and
+scored by `scripts/verify-stories.mjs` — the score is the worst story
+verdict the runner printed, not an editorial judgment.
+
 | # | Dungeon | Score | Hooks | Iter |
 |---|---------|-------|-------|------|
 | 1 | fitness | NAILED | 10/10 | 2 |
@@ -52,13 +57,18 @@ for the authoritative contract.)
 | 21 | streaming | NAILED | 4/4 | 2 |
 | 22 | support-desk | NAILED | 3/3 | 1 |
 
-**Score legend:**
-- **NAILED** — every hook check passes at its target threshold.
-- **STRONG** — every hook check passes; one or more thresholds relaxed
-  to acknowledge a known evaluator limit (greedy single-pass funnel
-  picks, soup DOW baseline, behavioral-cohort population dilution).
-  See per-dungeon status notes in
-  `research/IMPLENTOR-EPHEM-MEMORIES/eval-${name}-status.md`.
+**Score legend** (verdicts are mechanical — each assertion in a
+dungeon's `stories` export declares NAILED/STRONG bands and an INVERSE
+guard; the story runner reports where the measured value landed):
+- **NAILED** — every assertion in every story landed inside its NAILED
+  band at full fidelity.
+- **STRONG** — every assertion passed, but at least one landed in the
+  STRONG band outside the NAILED band. The two current cases document
+  why in their stories' derivation notes: food-delivery (H5
+  referral-reorder ratio, H6 trial-churn share — both read through
+  population filters that dilute the raw knob by construction) and
+  insurance-application (H10 premium gate — one straggler payment >600
+  outside the claimant cohort at full scale).
 
 ## Running
 

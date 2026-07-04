@@ -59,6 +59,32 @@ All notable changes to `@ak--47/dungeon-master`.
   pattern now overwrites the value on the touch the chosen model reads and
   never adds the property to unstamped events.
 
+- **Shipped vertical dungeons: hook fixes that change generated output**
+  (P4.2 rebuild — same seeds, different data where noted):
+  - **media**: H10 applied the plan-tier factor to `watch_duration_min` in
+    two separate blocks — the engineered free/premium ratio compounded to
+    ~4.4x instead of the documented 2.09x. Single application now; the
+    duplicate block is deleted (no RNG-stream impact).
+  - **marketplace**: H9 funnel-post TTC scaling is restricted to the
+    Browse-to-Purchase funnel (it previously scaled all five; Buyer
+    Onboarding shares the search→view→cart prefix, so first-occurrence
+    funnel evaluation assembled chains across unscaled instances and the
+    engineered ratio never reached the report). H10 redesigned from a
+    windowed message-cohort purchase-drop to a total-message-count cohort
+    with property-only `offer_amount` effects.
+  - **sass**: H9 TTC scaling moved from one stitched whole-history
+    sequence (everything hook) to per-instance funnel-post gap scaling
+    gated on the `alert triggered` funnel — the old single scaled sequence
+    was diluted by the user's unscaled instances and never survived to the
+    funnel report.
+  - **crypto**: all hook day-boundary math converted from local-time dayjs
+    to UTC (dataset timestamps are UTC; boundaries previously shifted by
+    the host's UTC offset). H9 TTC scaling restricted to the onboarding
+    funnel (same cross-instance dilution class as marketplace). H6 churn
+    no longer erases a user's first 24 hours — the old absolute-day cutoff
+    shredded late-born users' signup/onboarding/auth events under the
+    growth macro.
+
 ### Deprecated
 
 - **`applyTTCBySegment`** (P2.4) — the funnel-post variant scales one run's
