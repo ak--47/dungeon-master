@@ -7,9 +7,10 @@
  *   - attribution runs once PER conversion event: attributed_value_reader_read
  *     takes a single event_time_ms per read
  *     (backend/libquery/properties_over_time/attributed_value_reader.cpp)
- *   - each read caps the lookback to the last TOUCHPOINTS_LIMIT = 10
- *     touchpoints before that conversion (attributed_value_reader.cpp:16;
- *     cap passed per read via attributed_value_reader_create_params)
+ *   - FIRST/LAST models have NO touchpoint cap: they execute hard-LIMIT-1
+ *     statements (whoval/read.cpp:173-192 first_stmt_). TOUCHPOINTS_LIMIT=10
+ *     is consumed only by sorted_list_stmt_ (LIMIT ?4, read.cpp:595) for
+ *     multi-touch list models the emulator doesn't implement.
  *   - default perConversion: 'first' preserves the v1.5 one-conversion-per-user
  *     behavior (documented back-compat, not ARB semantics)
  */
@@ -62,18 +63,30 @@ describe('attributedBy — perConversion', () => {
 		]);
 	});
 
-	test("'all': the last-10 cap is re-applied per conversion (TOUCHPOINTS_LIMIT, attributed_value_reader.cpp:16)", () => {
+	test("'all' + firstTouch: NO 10-touch cap — >10 prior touches still attribute the globally first (whoval/read.cpp:173-192 LIMIT 1)", () => {
 		// 12 touches src0..src11, then c1; a 13th touch src12, then c2.
-		// c1: 12 touches → last 10 = src2..src11 → firstTouch = src2.
-		// c2: 13 touches → last 10 = src3..src12 → firstTouch = src3.
+		// FIRST runs `ORDER BY timestamp_ms ASC LIMIT 1` over the whole
+		// lookback — TOUCHPOINTS_LIMIT never binds (only sorted_list_stmt_'s
+		// LIMIT ?4 consumes it, and that serves multi-touch list models).
+		// c1: firstTouch over src0..src11 = src0.
+		// c2: firstTouch over src0..src12 = src0. Total src0: 2.
 		const events = [];
 		for (let i = 0; i < 12; i++) events.push(touch(T + i * MIN, `src${i}`));
 		events.push(buy(T + 12 * MIN));
 		events.push(touch(T + 13 * MIN, 'src12'));
 		events.push(buy(T + 14 * MIN));
 		expect(emulateBreakdown(events, { ...CFG, model: 'firstTouch', perConversion: 'all' })).toEqual([
-			{ attribution_value: 'src2', conversions: 1 },
-			{ attribution_value: 'src3', conversions: 1 },
+			{ attribution_value: 'src0', conversions: 2 },
+		]);
+	});
+
+	test("'all' + lastTouch: >10 prior touches attribute the most recent (get_last_value, whoval/read.cpp:650-655)", () => {
+		// Same 12-touch fixture, one conversion: lastTouch = src11.
+		const events = [];
+		for (let i = 0; i < 12; i++) events.push(touch(T + i * MIN, `src${i}`));
+		events.push(buy(T + 12 * MIN));
+		expect(emulateBreakdown(events, { ...CFG, model: 'lastTouch', perConversion: 'all' })).toEqual([
+			{ attribution_value: 'src11', conversions: 1 },
 		]);
 	});
 

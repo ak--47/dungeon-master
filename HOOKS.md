@@ -148,13 +148,16 @@ for 1-item-array data. If a dungeon carries numeric list properties and
 targets an Insights SUM/AVG, verify with `flatten: true` or the numbers
 won't match Mixpanel.
 
-### 2.4 Attribution caps at 10 touchpoints
+### 2.4 Attribution: first/last touch are UNCAPPED; only multi-touch caps at 10
 
-Multi-touch attribution models cap consideration at the last 10 touchpoints
-in the lookback window (`TOUCHPOINTS_LIMIT = 10` in
-`attributed_value_reader.cpp`). For first-touch attribution this matters
-when a user has > 10 touches before conversion — the cap shifts which
-touch is "first."
+First-touch and last-touch attribution read the globally first / most
+recent touch in the lookback window, no matter how many touches precede
+the conversion — ARB's FIRST/LAST paths execute hard-`LIMIT 1` statements
+(`whoval/read.cpp:173-192`, `:643-655`). `TOUCHPOINTS_LIMIT = 10`
+(`attributed_value_reader.cpp:16`) is consumed only by the sorted-list
+statement (`LIMIT ?4`, `read.cpp:595`) serving multi-touch models
+(linear / participation / time-decay). A user with 50 touches before
+conversion still first-touch-attributes to touch #1, not touch #41.
 
 **v1.5 generation contract:** the engine now caps UTM stamping at
 `maxTouchpointsPerUser` (default 10) per user, sampled uniform-random across
@@ -164,21 +167,22 @@ time order. Hooks that bias attribution should OVERWRITE engine-stamped
 values, not stamp from scratch (those would push the user past the cap).
 
 **Per-conversion attribution (v1.6):** Mixpanel runs attribution once PER
-conversion event — each conversion gets its own last-10 lookback read
-(`attributed_value_reader_read` takes one `event_time_ms` per read;
-`backend/libquery/properties_over_time/attributed_value_reader.cpp:16`).
+conversion event — each conversion gets its own lookback read ending at
+that conversion (`attributed_value_reader_read` takes one `event_time_ms`
+per read; `backend/libquery/properties_over_time/attributed_value_reader.cpp`).
 The verifier's `attributedBy` matches with `perConversion: 'all'`; its
 default stays `'first'` (one conversion per user — v1.5 back-compat, NOT
 ARB semantics).
 
 **⚠ Touchpoint seam (documented, by design):** the generator samples WHICH
-events get UTMs uniformly across a user's lifetime; the verifier and
-Mixpanel both read the last-N touchpoints BEFORE each conversion. A user
-with more eligible events than the cap can carry touches attribution never
-sees — and stamped touches can postdate every conversion. Divergence is
-theoretical below ~10 eligible events per user. Attribution-engineering
-hooks should overwrite engine-stamped UTMs NEAR the conversion rather than
-relying on lifetime-uniform sampling.
+events get UTMs uniformly across a user's lifetime (capped at
+`maxTouchpointsPerUser`, default 10); the verifier and Mixpanel read
+touches BEFORE each conversion. A user with more eligible events than the
+generator cap can carry touches that never got stamped — and stamped
+touches can postdate every conversion. Divergence is theoretical below
+~10 eligible events per user. Attribution-engineering hooks should
+overwrite engine-stamped UTMs rather than relying on lifetime-uniform
+sampling.
 
 ### 2.5 Active-day distribution is config-first
 
@@ -705,13 +709,16 @@ Reference: `flows_query.cpp:988-994` (next-anchor-only), `flows.cpp:680-717`
     `injectOnNewDays` for cohort-conditional cases ("premium users get 7+
     active days, rest stay default"). See §2.5.
 
-29. **Touchpoint cap awareness for attribution hooks.** The engine now caps
+29. **Touchpoint cap awareness for attribution hooks.** The engine caps
     UTM stamping at `maxTouchpointsPerUser` (default 10) per user, sampled
     across the user's lifetime. Attribution-biasing hooks should OVERWRITE
     engine-stamped values (e.g., set `event.utm_source = "google"` on
-    already-stamped touches), NOT stamp fresh touches from scratch. Stamping
-    from scratch would push the user past the cap and your hook's stamps
-    would land outside Mixpanel's last-10 lookback window.
+    already-stamped touches), NOT stamp fresh touches from scratch.
+    First/last-touch attribution is UNCAPPED (§2.4) — a fresh stamp
+    EARLIER than the engine's first stamp silently becomes the first-touch
+    winner, changing results out from under your derivation. Overwriting
+    the engine's stamps keeps the touch set fixed so your bias lands
+    exactly where attribution reads.
 
 ---
 
@@ -1414,10 +1421,10 @@ return record;
 
 ### Attribution
 
-#### 4.25 First-Touch Attribution Bias (Capped at 10 Touches)
+#### 4.25 First-Touch Attribution Bias
 
-**Hook:** `everything` | **Counting:** TOUCHPOINTS_LIMIT = 10 (Section 2.4)
-**Mixpanel report:** Attribution — Conversions by Source (first-touch model, last-10 lookback)
+**Hook:** `everything` | **Counting:** first-touch is uncapped (Section 2.4)
+**Mixpanel report:** Attribution — Conversions by Source (first-touch model)
 
 **In Mixpanel:** `Convert` events broken down by first-touch `Touch.source`
 show Google >> Facebook >> Twitter (10:5:1 weights).
@@ -1429,33 +1436,30 @@ if (type === "everything") {
   const conversion = record.find(e => e.event === "Convert");
   if (!conversion) return record;
   const convTime = dayjs(conversion.time).valueOf();
-  // Mixpanel only considers the LAST 10 touches before conversion. Stamp at
-  // most ~6-8 touches per user so the first one is clearly the bias target.
   const sources = weighArray(["google", "facebook", "twitter"], [10, 5, 1]);
   const touches = record.filter(e => e.event === "Touch" && dayjs(e.time).valueOf() <= convTime);
   if (touches.length === 0) return record;
-  // Bias the FIRST touch (chronologically earliest within the cap window).
-  // Sort descending by time, take last 10, then sort ascending.
-  const sortedDesc = touches.slice().sort((a, b) => dayjs(b.time).valueOf() - dayjs(a.time).valueOf());
-  const inCap = sortedDesc.slice(0, 10).sort((a, b) => dayjs(a.time).valueOf() - dayjs(b.time).valueOf());
-  if (inCap.length > 0) {
-    inCap[0].source = chance.pickone(sources);
-  }
+  // First-touch reads the CHRONOLOGICALLY FIRST touch before conversion —
+  // no cap (whoval/read.cpp LIMIT 1). Bias exactly that one.
+  const sorted = touches.slice().sort((a, b) => dayjs(a.time).valueOf() - dayjs(b.time).valueOf());
+  sorted[0].source = chance.pickone(sources);
   return record;
 }
 ```
 
-**Why the cap matters:** Stamping 50 weighted touches per user gives the same
-first-touch result as stamping 10 — Mixpanel's attribution module
-(`attributed_value_reader.cpp`) only considers `TOUCHPOINTS_LIMIT = 10`. Aim
-for sparse, deterministic touches.
+**Where the 10-cap DOES apply:** only multi-touch models (linear /
+participation / time-decay) consider just the last `TOUCHPOINTS_LIMIT = 10`
+touches. First/last-touch read the true first/most-recent touch however
+many exist. Sparse touches are still good practice — they keep the data
+legible — but they're realism, not a correctness requirement.
 
 **v1.5 with `hasCampaigns: true`:** when the engine has already stamped UTMs
 on up to `maxTouchpointsPerUser` events per user (default 10), DO NOT stamp
-fresh touches in your hook — they'd push the user past the cap and fall
-outside Mixpanel's last-10 window. Use [Recipe 4.26](#426-bias-engine-stamped-touches-v15)
-to OVERWRITE the engine's `utm_source` on the existing stamped events
-instead. See [§2.4](#24-attribution-caps-at-10-touchpoints).
+fresh touches in your hook — a fresh stamp earlier than the engine's first
+would silently become the first-touch winner. Use
+[Recipe 4.26](#426-bias-engine-stamped-touches-v15) to OVERWRITE the
+engine's `utm_source` on the existing stamped events instead. See
+[§2.4](#24-attribution-firstlast-touch-are-uncapped-only-multi-touch-caps-at-10).
 
 ---
 
@@ -1490,9 +1494,11 @@ if (type === "everything") {
 ```
 
 **Why this works under v1.5:** the engine has already capped + sampled the
-touches. Stamping fresh ones from scratch in the hook would push the user
-past the cap, and your stamps would land outside Mixpanel's last-10 lookback
-window — giving them no effect. Overwriting is correct.
+touches, so the stamped set IS the touch set attribution reads. Stamping
+fresh touches from scratch would change that set — an earlier fresh stamp
+becomes the new first-touch winner (first/last-touch are uncapped, §2.4) —
+invisibly to whatever derivation your bands came from. Overwriting is
+correct.
 
 **As a pattern (v1.6):** `applyAttributedBySource` from
 `@ak--47/dungeon-master/hook-patterns` packages this recipe:
