@@ -27,10 +27,16 @@ verification check — no documented hook is unverified. (Aggregate hook
 counts are rebuilt at each release; see the per-dungeon stories exports
 for the authoritative contract.)
 
-Score column regenerated 2026-07-03 from the v1.6.0 acceptance sweep:
-every dungeon regenerated at full fidelity (its shipped `numUsers`) and
-scored by `scripts/verify-stories.mjs` — the score is the worst story
-verdict the runner printed, not an editorial judgment.
+Score column regenerated 2026-07-04 from the fix-round sweep: every
+dungeon regenerated at full fidelity (its shipped `numUsers`) under the
+post-review verifier and scored by `scripts/verify-stories.mjs` — the
+score is the worst story verdict the runner printed, not an editorial
+judgment. 15 NAILED / 7 STRONG, 22/22 at STRONG or better. This is
+lower than the 2026-07-03 headline (20/2) **by design**: the fix-round
+band policy below re-derived NAILED bands from hook knobs, and verdicts
+that previously leaned on measurement-anchored bands now grade STRONG
+honestly. No hook regressed — the data is unchanged; the grading got
+stricter.
 
 | # | Dungeon | Score | Hooks | Iter |
 |---|---------|-------|-------|------|
@@ -39,7 +45,7 @@ verdict the runner printed, not an editorial judgment.
 | 3 | community | NAILED | 10/10 | 3 |
 | 4 | travel | NAILED | 10/10 | 2 |
 | 5 | logistics | NAILED | 10/10 | 3 |
-| 6 | education | NAILED | 10/10 | 3 |
+| 6 | education | STRONG | 10/10 | 3 |
 | 7 | real-estate | NAILED | 10/10 | 2 |
 | 8 | insurance-application | STRONG | 10/10 | 3 |
 | 9 | food-delivery | STRONG | 10/10 | 2 |
@@ -50,12 +56,12 @@ verdict the runner printed, not an editorial judgment.
 | 14 | marketplace | NAILED | 10/10 | 2 |
 | 15 | media | NAILED | 10/10 | 2 |
 | 16 | ecommerce | NAILED | 10/10 | 3 |
-| 17 | sass | NAILED | 11/11 | 2 |
-| 18 | gaming | NAILED | 13/13 | 2 |
-| 19 | social | NAILED | 10/10 | 2 |
+| 17 | sass | STRONG | 11/11 | 2 |
+| 18 | gaming | STRONG | 13/13 | 2 |
+| 19 | social | STRONG | 10/10 | 2 |
 | 20 | crypto | NAILED | 11/11 | 2 |
 | 21 | streaming | NAILED | 4/4 | 2 |
-| 22 | support-desk | NAILED | 3/3 | 1 |
+| 22 | support-desk | STRONG | 3/3 | 1 |
 
 **Score legend.** Grading is mechanical (the runner reports where the
 measured value landed), but the bands themselves are author-declared —
