@@ -926,88 +926,12 @@ const config = {
 		},
 	],
 
-	// -- Phase 2: Subscription ----------------------------------------
-	subscription: {
-		plans: [
-			{ name: "free", price: 0, default: true },
-			{ name: "supporter", price: 4.99 },
-			{ name: "pro", price: 12.99 },
-		],
-		lifecycle: {
-			trialToPayRate: 0.25,
-			upgradeRate: 0.06,
-			downgradeRate: 0.04,
-			churnRate: 0.06,
-			winBackRate: 0.08,
-			winBackDelay: 21,
-			paymentFailureRate: 0.02,
-		},
-	},
-
-	// -- Phase 2: Attribution -----------------------------------------
-	attribution: {
-		model: "last_touch",
-		window: 7,
-		campaigns: [
-			{
-				name: "google_search",
-				source: "google",
-				medium: "organic",
-				activeDays: [0, 120],
-				dailyBudget: [100, 400],
-				acquisitionRate: 0.03,
-				userPersonaBias: { reader: 0.5, lurker: 0.3 },
-			},
-			{
-				name: "reddit_referral",
-				source: "reddit",
-				medium: "referral",
-				activeDays: [0, 120],
-				dailyBudget: [50, 200],
-				acquisitionRate: 0.02,
-				userPersonaBias: { active_contributor: 0.5, moderator: 0.3 },
-			},
-			{
-				name: "youtube_link",
-				source: "youtube",
-				medium: "referral",
-				activeDays: [0, 120],
-				dailyBudget: [75, 250],
-				acquisitionRate: 0.02,
-				userPersonaBias: { lurker: 0.5, reader: 0.3 },
-			},
-		],
-		organicRate: 0.35,
-	},
-
 	// -- Phase 2: Engagement Decay ------------------------------------
 	engagementDecay: {
 		model: "linear",
 		halfLife: 60,
 		floor: 0.15,
 	},
-
-	// -- Phase 2: Features --------------------------------------------
-	features: [
-		{
-			name: "live_discussions",
-			launchDay: 25,
-			adoptionCurve: "fast",
-			property: "discussion_mode",
-			values: ["classic", "live"],
-			defaultBefore: "classic",
-			affectsEvents: ["discussion posted", "comment posted"],
-		},
-		{
-			name: "interactive_polls",
-			launchDay: 55,
-			adoptionCurve: { k: 0.1, midpoint: 20 },
-			property: "poll_enabled",
-			values: [false, true],
-			defaultBefore: false,
-			affectsEvents: ["article published"],
-		},
-	],
 
 	hook(record, type, meta) {
 		if (type === "user") return handleUserHooks(record);
