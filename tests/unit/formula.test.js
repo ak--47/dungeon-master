@@ -92,6 +92,24 @@ describe('evaluateFormula — dict broadcasting (operate, util.py:25-47)', () =>
 		expect(evaluateFormula('-A', { A: { x: 1, y: -2 } })).toEqual({ x: -1, y: 2 });
 	});
 
+	test('left-operand zero-pad persists across reuse within a formula (util.py:39-41 in-place mutation)', () => {
+		// util.py operate() writes the zero-pad INTO val1, so a series dict
+		// reused later in the same formula carries the grown key set.
+		// Numerically visible via pow(0,0) = 1.
+		const series = { A: { x: 2 }, B: { y: 3 }, C: { x: 1 } };
+		// hand-computed, evaluation order (A*B) then (A^C) then +:
+		//   A*B pads A in place → A = {x:2, y:0}; result {x: 2*0=0, y: 0*3=0}
+		//   A^C on the PADDED A → {x: 2^1=2, y: 0^0=1}   (pow(0,0) = 1)
+		//   sum → {x: 0+2=2, y: 0+1=1}
+		// (without the in-place pad, y would be 0)
+		expect(evaluateFormula('A*B + A^C', series)).toEqual({ x: 2, y: 1 });
+		// the pad is confined to the evaluation — caller's series untouched
+		// (Python leaks it to the shared per-request values dict,
+		// api.py:2890-2893; we clone on entry instead)
+		expect(series.A).toEqual({ x: 2 });
+		expect(series.B).toEqual({ y: 3 });
+	});
+
 	test('conversion-rate shape: (A/B)*100 over period dicts', () => {
 		const series = {
 			A: { '2024-01-15': 25, '2024-01-16': 30 },

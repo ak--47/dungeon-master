@@ -284,6 +284,20 @@ describe('retention — compounded', () => {
 			type: 'retention', cohortEvent: 'visit', returnEvent: 'visit', compounded: true,
 		})).not.toThrow();
 	});
+
+	test('compounded + a conflicting returnWhere throws — `rq->second = rq->first` replaces the whole return side, filters included (:677-685)', () => {
+		const where = { plan: 'pro' };
+		expect(() => emulateBreakdown([], {
+			type: 'retention', cohortEvent: 'visit', compounded: true,
+			cohortWhere: where, returnWhere: { plan: 'free' },
+		})).toThrow(/returnWhere/);
+		// Same reference restates what compounded already does → tolerated,
+		// mirroring the returnEvent guard above.
+		expect(() => emulateBreakdown([], {
+			type: 'retention', cohortEvent: 'visit', compounded: true,
+			cohortWhere: where, returnWhere: where,
+		})).not.toThrow();
+	});
 });
 
 // ── P1.5 rule 2: birthCanRetain matches_first nuance (COR-233, :1120-1139) ───
@@ -373,6 +387,29 @@ describe('retention — unbounded modes', () => {
 		const rows = emulateBreakdown(events, { ...base, unbounded: 'consecutiveForward' });
 		// hand-computed: chain {0, 1, 2}; 4 blocked by the gap at 3.
 		expect([0, 1, 2, 3, 4, 5].map(d => countAt(rows, d))).toEqual([1, 1, 1, 0, 0, 0]);
+	});
+
+	test('write horizon: a return past the last queried bucket is never recorded — carryBack cannot retro-mark from it (retention_query.cpp:1264)', () => {
+		// ARB bounds-checks every mark write against the queried bucket count
+		// (`bucket_index < time_duration_buckets_num_buckets`), so a bucket-10
+		// return with dayBuckets [1, 3] never enters the per-user state and
+		// carryBack ("active in any bucket ≥ N") has nothing to carry.
+		const events = [
+			ev('Sign Up', day(0),  { user_id: 'u1' }),
+			ev('Login',   day(10), { user_id: 'u1' }),  // bucket 10 > horizon 3 → dropped
+			ev('Sign Up', day(0),  { user_id: 'u2' }),
+			ev('Login',   day(3),  { user_id: 'u2' }),  // bucket 3 = horizon → kept
+		];
+		const rows = emulateBreakdown(events, {
+			type: 'retention', cohortEvent: 'Sign Up', returnEvent: 'Login',
+			dayBuckets: [1, 3], unbounded: 'carryBack',
+		});
+		// hand-computed: u1 has NO marks (bucket 10 out of horizon); u2's mark
+		// at 3 carries back over day 1. Without the horizon u1's bucket-10 mark
+		// would retro-mark both rows → 2/2.
+		expect(rows.find(r => r.day === 1).retained_count).toBe(1);
+		expect(rows.find(r => r.day === 3).retained_count).toBe(1);
+		expect(rows[0].cohort_size).toBe(2);
 	});
 
 	test('carry_forward boolean stays as a deprecated alias for carryForward', () => {
