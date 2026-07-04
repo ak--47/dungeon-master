@@ -95,6 +95,27 @@ describe('filter comparators — case-INSENSITIVE (filters only)', () => {
 		// mixed types fail relational tests (value_cmp orders by type first)
 		expect(matchesWhere({ price: '10' }, { price: { op: 'gt', value: 5 } })).toBe(false);
 	});
+
+	test('matchesWhere: list-valued props — eq/contains are per-item membership (eval_node.c:2949-2959 IN)', () => {
+		const rec = { tags: ['VIP', 'beta'], codes: [1, 2, 3] };
+		// per-item value_equal: case-insensitive for string items
+		expect(matchesWhere(rec, { tags: 'vip' })).toBe(true);
+		expect(matchesWhere(rec, { tags: { op: 'contains', value: 'Beta' } })).toBe(true);
+		// membership is EXACT per item, not substring (IN with a list right
+		// operand runs value_equal, never arb_strcaseinstr)
+		expect(matchesWhere(rec, { tags: { op: 'contains', value: 'vi' } })).toBe(false);
+		// typed: number needle matches number item; "1" does not match 1
+		expect(matchesWhere(rec, { codes: 2 })).toBe(true);
+		expect(matchesWhere(rec, { codes: '2' })).toBe(false);
+		// negations
+		expect(matchesWhere(rec, { tags: { op: 'neq', value: 'vip' } })).toBe(false);
+		expect(matchesWhere(rec, { tags: { op: 'not_contains', value: 'gold' } })).toBe(true);
+		// relational ops on list values stay false (no scalar-vs-list per-item relational in ARB)
+		expect(matchesWhere(rec, { codes: { op: 'gt', value: 0 } })).toBe(false);
+		// empty list never matches, and its negation always does
+		expect(matchesWhere({ tags: [] }, { tags: 'vip' })).toBe(false);
+		expect(matchesWhere({ tags: [] }, { tags: { op: 'neq', value: 'vip' } })).toBe(true);
+	});
 });
 
 describe('eventBreakdown', () => {
