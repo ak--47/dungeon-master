@@ -4,8 +4,70 @@ All notable changes to `@ak--47/dungeon-master`.
 
 ## Unreleased (1.6.0 branch)
 
-### Changed
+### Added
 
+- **Emulator: five new analysis types + retention completion**
+  (`emulateBreakdown`, all ARB-cited):
+  - `eventBreakdown` — Insights "Total" broken down by a property, with
+    Mixpanel's exact segment coercion (list fan-out, `$empty_list`,
+    `undefined` bucket, case-sensitive type-tagged segments, topN 250);
+    `countType: 'unique' | 'sessions'`, `firstTimeOnly` compose.
+  - `uniques` — per-interval independent dedup, rolling XAU windows,
+    cumulative running distinct; `countType: 'sessions'`, `firstTimeOnly`.
+  - `lifecycle` — Lifecycle Cohort Analysis board-template classification
+    (new / retained / resurrected / dormant) on a value-moment event, 7- or
+    30-day periods.
+  - `topPaths` — Flows: next-anchor-only matching, forward/reverse capacity
+    rings, per-level top-N pruning into `$mp_uncommon_flows_events`,
+    `hiddenEvents` / `visibleEvents`, `countType: 'general' | 'unique' |
+    'sessions'`.
+  - `distinctCount` — distinct values of a property + top-N value counts.
+  - `retention` completion — `compounded`, `birthCanRetain`,
+    `carryForward` / `carryBack` / `consecutiveForward`, `calendarStart`,
+    `cohortWindow`, `segmentOn: 'return'`, internal-event ignore list.
+- **Funnel evaluator upgrades**: session-count conversion windows,
+  `countMode: 'sessions'`, ARB-exact exclusion handling, any-order step
+  blocks, step-0-anchored trends under `timeBucket`.
+- **New verify primitives**: `sessionize()` (query-time sessions — 30-min
+  gap / 24h max / UTC-day triggers, synthetic `$session_start`/`$session_end`),
+  `filterFirstTimeEver()`, `evaluateFormula()` (ARB formula grammar),
+  `extractFlows` / `aggregateFlows`, breakdown-key coercion
+  (`lib/verify/coerce.js`), `frequencyHistogram`, null-aware avg/sum
+  `{ flatten: true }`, `attributedBy` per-conversion output.
+- **Hook atoms**: `hashCohort` (seed-stable cohort assignment),
+  `applyLifecycleWave`, `applyPathBias`, `applySessionShape`; pattern
+  `applyTTCBySegmentV2` (see Deprecated).
+- **Story layer**: `stories` named export on dungeons — one machine-checkable
+  story per hook (`DungeonStory` typedef,
+  `lib/templates/story-spec.schema.json`) — and the
+  `scripts/verify-stories.mjs` runner: mechanical five-tier verdicts
+  (NAILED / STRONG / WEAK / NONE / INVERSE), population floors (`minCohort`),
+  hook-coverage discipline, disk + in-memory modes, `--json`.
+- **Verticals**: `dungeons/vertical/` restructured to one folder per vertical
+  (`<name>/<name>.js` + `<name>.verify.mjs` + `<name>.sql`); `stories`
+  exports and rebuilt hooks across all verticals; two new showcase dungeons —
+  `streaming` (lifecycle) and `support-desk` (flows + sessions).
+- **Skills**: `/write-hooks` authors the stories export; `/verify-dungeon`
+  runs the story runner first and investigates only failures;
+  `/create-dungeon` designs analysis-friendly vocabularies (session
+  fan-out, value moment, hidden-event hygiene); `/analyze-soup` queries in
+  UTC; `/create-project` builds business context from the stories export.
+- **Docs**: HOOKS.md §2.12–2.17 (event breakdown coercion, uniques/XAU,
+  formulas, first-time-ever, lifecycle, flows, sessions), recipes 4.29–4.31,
+  atom/helper reference sections.
+
+### Behavior changes
+
+- **Retention option keys are strict** (P1.5). Unknown keys in a `retention`
+  emulator config now throw instead of being silently ignored — a typo'd
+  option previously ran with defaults and produced plausible-but-wrong
+  numbers. `carry_forward` is kept as a deprecated alias for `carryForward`.
+- **`sessionMetrics` defaults to query-time derived sessions** (P1.7.2). New
+  `source: 'derived' | 'stamped'` option, default `'derived'`: sessions are
+  re-derived from raw timestamps via `sessionize()` — what Mixpanel actually
+  computes — instead of reading the generator's pre-stamped `session_id`.
+  The stamped path remains via `source: 'stamped'`, and the per-row
+  `stampedDivergence` count audits the gap between the two.
 - **`$experiment_started` is pinned to funnel-pass start** (P4.2 engine fix,
   pre-existing since 1.4.0). For experiment funnels with a non-`sequential`
   `order` (`last-fixed`, `random`, `first-fixed`, ...), `applyOrderingStrategy`
@@ -58,6 +120,8 @@ All notable changes to `@ak--47/dungeon-master`.
   outside Mixpanel's lookback and never move the attribution report. The
   pattern now overwrites the value on the touch the chosen model reads and
   never adds the property to unstamped events.
+
+### Changed
 
 - **Shipped vertical dungeons: hook fixes that change generated output**
   (P4.2 rebuild — same seeds, different data where noted):
