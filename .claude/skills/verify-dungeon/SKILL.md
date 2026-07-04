@@ -1,7 +1,7 @@
 ---
 name: verify-dungeon
 description: Use when a dungeon's hooks need verification before pushing data to Mixpanel — runs the dungeon at full scale, evaluates the dungeon's `stories` export with the mechanical story runner (verify-stories.mjs), validates schema integrity (catches flag-stamping), and reports per-hook NAILED/STRONG/WEAK/NONE/INVERSE verdicts. LLM investigation is reserved for failures and duckdb-type assertions.
-argument-hint: [dungeon path(s), e.g. dungeons/gaming.js or dungeons/fintech.js]
+argument-hint: [dungeon path(s), e.g. dungeons/vertical/gaming/gaming.js or dungeons/vertical/fintech/fintech.js]
 model: claude-opus-4-6
 effort: max
 ---

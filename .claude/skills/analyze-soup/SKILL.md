@@ -1,7 +1,7 @@
 ---
 name: analyze-soup
 description: Use when investigating TimeSoup parameters, diagnosing event-distribution shape, or comparing soup configs — runs a dungeon locally and analyzes time distribution at week/day/hour/minute granularities, producing a soup-analysis.md diagnostic report.
-argument-hint: [dungeon path, e.g. dungeons/soup-test.js]
+argument-hint: [dungeon path, e.g. dungeons/technical/simplest.js]
 model: claude-opus-4-6
 effort: max
 ---
@@ -10,7 +10,7 @@ effort: max
 
 Run a dungeon and analyze the time distribution of generated events to evaluate TimeSoup parameters.
 
-**Dungeon file:** `$ARGUMENTS` (default: `dungeons/soup-test.js`)
+**Dungeon file:** `$ARGUMENTS` (default: `dungeons/technical/simplest.js`)
 
 ## Step 1: Run the Dungeon
 
