@@ -10,8 +10,11 @@
  *     (per_user_funnel_state_increment_session_id sits AFTER
  *     funnel_query_process_event in funnel_query.cpp — the closing event
  *     belongs to the session it closes)
- *   - wall-clock outer bound: t_step < t_step0 + n × 1 day
- *     (seconds_per_unit[QUERY_UNIT_SESSION] = SECONDS_PER_DAY, unit.c)
+ *   - the per-step check is ordinal-ONLY (conversion_window.cpp:50) — the
+ *     SESSIONS branch never reads the timestamps. ARB's n×1-day bound
+ *     (conversion_window_max_length_seconds = n × SECONDS_PER_DAY, unit.c:14)
+ *     binds only against the trend interval end (funnel_query.cpp:1620) and
+ *     the data-pull range — never per step.
  *   - n capped at 12 (_MAX_LENGTHS["session"],
  *     api/version_2_0/arb_funnels/validate.py)
  *   - session boundaries: 30-min gap (strict >), UTC day change
@@ -65,27 +68,32 @@ describe('evaluateFunnel — conversionWindow { unit: sessions }', () => {
 		const r1 = evaluateFunnel(events, ['signup', 'purchase'], { conversionWindow: { unit: 'sessions', n: 1 } });
 		expect(r1.completed).toBe(false);
 		expect(r1.reached).toBe(0);
-		// n=2 → 1 < 0+2 true; wall-clock 1h < 2d true
+		// n=2 → 1 < 0+2 true
 		const r2 = evaluateFunnel(events, ['signup', 'purchase'], { conversionWindow: { unit: 'sessions', n: 2 } });
 		expect(r2.completed).toBe(true);
 	});
 
-	test('wall-clock outer bound: ordinal passes but t ≥ t0 + n×1day kills the step (strict <)', () => {
+	test('ordinal-only: wall-clock distance is irrelevant — next session 2 days later converts with n=2 (conversion_window.cpp:50)', () => {
 		const events = [
 			ev('signup', '2024-01-15T10:00:00.000Z'),   // session 0
-			ev('purchase', '2024-01-17T10:00:00.000Z'), // session 1 (one gap), exactly +2 days
+			ev('purchase', '2024-01-17T10:00:00.000Z'), // session 1 (one boundary), +2 days
 		];
-		// hand-computed: ordinal 1 < 0+2 ✓ but t == t0 + 2×86400000 → strict < fails
-		const rAt = evaluateFunnel(events, ['signup', 'purchase'], { conversionWindow: { unit: 'sessions', n: 2 } });
-		expect(rAt.completed).toBe(false);
-		expect(rAt.reached).toBe(0);
-		// one second inside the bound → passes
-		const eventsIn = [
+		// hand-computed: ordinal(purchase)=1 < 0+2 ✓. The SESSIONS branch of
+		// is_within_conversion_window never reads t1_ms/t2_ms — the +2 days
+		// is invisible to the step check.
+		const r = evaluateFunnel(events, ['signup', 'purchase'], { conversionWindow: { unit: 'sessions', n: 2 } });
+		expect(r.completed).toBe(true);
+		expect(r.ttcMs).toBe(2 * 86400_000);
+		// n=1: 1 < 0+1 ✗ — the ordinal check alone gates it
+		const r1 = evaluateFunnel(events, ['signup', 'purchase'], { conversionWindow: { unit: 'sessions', n: 1 } });
+		expect(r1.completed).toBe(false);
+		expect(r1.reached).toBe(0);
+		// 30 days out, still the very next session → n=2 still converts
+		const far = [
 			ev('signup', '2024-01-15T10:00:00.000Z'),
-			ev('purchase', '2024-01-17T09:59:59.000Z'),
+			ev('purchase', '2024-02-14T10:00:00.000Z'),
 		];
-		const rIn = evaluateFunnel(eventsIn, ['signup', 'purchase'], { conversionWindow: { unit: 'sessions', n: 2 } });
-		expect(rIn.completed).toBe(true);
+		expect(evaluateFunnel(far, ['signup', 'purchase'], { conversionWindow: { unit: 'sessions', n: 2 } }).completed).toBe(true);
 	});
 
 	test('3-step funnel: every step bounds against STEP 0\'s ordinal, not the previous step\'s', () => {
