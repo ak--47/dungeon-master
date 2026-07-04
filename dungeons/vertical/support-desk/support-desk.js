@@ -417,6 +417,14 @@ export default config;
  *    escalate, unique): totalEntered 1924; created→reply→resolved 817 =
  *    0.4246 (the H1 band with ~95% template capture); created→reply→reply
  *    804 = 0.418 (H2's grind); created→reply→escalated 170 = 0.088.
+ *    Re-derived for fix-round B1 (leaf-row list semantics,
+ *    flows_merger.cpp:362/:174): list rows are now one-per-leaf with
+ *    count = leaf total_count. All three paths above sit at slot 2 — the
+ *    full forward-2 capacity — so their nodes are max-depth leaves where
+ *    leaf total == the old terminus dropoff: the counts and shares are
+ *    UNCHANGED. Short-prefix terminus rows (e.g. bare 'ticket created')
+ *    no longer appear as rows; pathShare's exact label match never
+ *    referenced them.
  *    ORGANIC: target 0.618 (any converting F2 pass eventually yields the
  *    same labels — the label-only read INVERTS), grind 0.171. So H1
  *    asserts the share is PINNED to the band (INVERSE = organic-diffuse
