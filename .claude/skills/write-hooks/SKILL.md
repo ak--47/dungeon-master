@@ -33,6 +33,18 @@ Out of scope:
 - New top-level config knobs.
 - Removing the `hook: function...` body to start over with a new schema.
 
+**Before writing a hook, ask: is this trend structural?** Between-path
+comparisons (path X converts worse / slower than path Y, detour-takers drop
+off, mix shift drags the blended rate) are better architected as initial
+conditions — duplicate funnels with swapped steps/props/`conversionRate`/
+`timeToConvert`/`weight` (see the "Structural trend engineering" section in
+`create-dungeon`). If a story reduces to structure, recommend the funnel
+change back to the schema instead of writing a hook to fight the engine —
+the knob IS the expected value, which makes the story band knob-derivable
+(NAILED-capable) instead of confounded (STRONG-capped). Hooks are for
+within-cohort behavior: segments doing more/less of something over time,
+property values that differ by cohort, injected bursts, lifecycle waves.
+
 ## Reference reading
 
 - `lib/hook-helpers/index.js` — atoms (cohort, mutate, timing, inject,

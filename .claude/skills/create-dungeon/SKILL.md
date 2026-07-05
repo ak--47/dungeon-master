@@ -271,6 +271,32 @@ event.
 
 **Funnels representing loops need `reentry: true`.** Any funnel named "X loop" / "X cycle" / "session" / per-instance recurring behavior must declare `reentry: true`. Without it, the engine emits one sequence per user and downstream "power user" / "daily active" cohorts have no behavioral signal to bin on.
 
+**Structural trend engineering — duplicate funnels instead of reaching for
+hooks.** Not every trend needs a hook: initial conditions can raise or lower
+a metric by themselves. The funnel array is a set of knobs — duplicate a
+funnel and swap steps, props, `conversionRate`, `timeToConvert`, or `weight`
+to architect a comparison directly into the schema:
+
+- **Exclusion-step story**: Mixpanel funnels can exclude users who did
+  `foo` between A and B. There's no `excludeSteps` config — model it with
+  two funnels, `[A, B, C]` and `[A, B, foo, C]`, giving the second a lower
+  `conversionRate`. The report shows the conversion dip for the
+  detour-takers with zero hook code.
+- **Segment-split story**: two copies of the same sequence with different
+  `props` (`{ checkout_version: "v1" }` vs `"v2"`) and different
+  `conversionRate` — an A/B story without the experiment machinery (use
+  `experiment` when you want `$experiment_started` + variant reports).
+- **Speed story**: same sequence, different `timeToConvert`, split by a
+  funnel-level prop — time-to-convert deltas appear structurally.
+- **Mix-shift story**: `weight` controls how often each variant funnel is
+  chosen; a heavy-weighted low-converting path drags the blended rate.
+
+Prefer structure when the story is a *between-path comparison* (this path
+converts worse / slower than that one). Reach for hooks when the story is a
+*within-cohort behavior* (these users do more of X over time, this segment's
+values differ). Structural trends are cheaper to verify — the knob IS the
+expected value.
+
 ### 3. SuperProps (2–3)
 
 Properties present on EVERY event. Common picks: `Plan`, `Region`, `Platform`,
