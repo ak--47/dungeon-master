@@ -568,7 +568,7 @@ function extractFileInfo(storage) {
 /**
  * Count profiles that would be pushed to Mixpanel (anonymous non-converters carry
  * `_drop: true` and are skipped by mixpanel-sender). v1.5.1.
- * @param {any} profilesContainer
+ * @param {Iterable<{ _drop?: boolean }> | null | undefined} profilesContainer
  * @returns {number}
  */
 function countProfilesPushed(profilesContainer) {

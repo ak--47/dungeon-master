@@ -107,7 +107,7 @@ describe('hashFloat / hashCohort (FNV-1a full-string)', () => {
 		expect(hashCohort('a', 0)).toBe(false);
 		expect(hashCohort('a', 100)).toBe(true);
 		expect(hashCohort('a', NaN)).toBe(false);
-		expect(hashCohort('a', /** @type {any} */ ('50'))).toBe(false); // non-number pct
+		expect(hashCohort('a', /** @type {number} */ (/** @type {unknown} */ ('50')))).toBe(false); // non-number pct
 	});
 
 	test('hashCohort: membership nests (pct 5 ⊂ pct 20) and tracks target on GUID ids', async () => {
