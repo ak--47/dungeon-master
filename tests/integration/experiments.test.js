@@ -199,6 +199,61 @@ describe('Experiment API', () => {
 		expect(allConsistent).toBe(true);
 	}, 30000);
 
+	test('sticky: false re-rolls the variant on each funnel pass', async () => {
+		const variantsByUser = new Map();
+		await DUNGEON_MASTER(baseConfig({
+			seed: 'exp-nonsticky',
+			numUsers: 100,
+			avgEventsPerUserPerDay: 5,
+			percentUsersBornInDataset: 100,
+			events: [
+				{ event: 'Start', isFirstEvent: true, isStrictEvent: true },
+				{ event: 'End', isStrictEvent: true },
+				{ event: 'Browse', weight: 5 },
+			],
+			funnels: [
+				{
+					sequence: ['Start', 'End'],
+					conversionRate: 100,
+					isFirstFunnel: true,
+					timeToConvert: 1,
+				},
+				{
+					sequence: ['Start', 'End'],
+					conversionRate: 100,
+					timeToConvert: 1,
+					weight: 3,
+					experiment: {
+						name: 'Nonsticky Test',
+						sticky: false,
+						variants: [
+							{ name: 'A' },
+							{ name: 'B' },
+							{ name: 'C' },
+						],
+					},
+				},
+			],
+			hook: function (record, type, meta) {
+				if (type === 'funnel-pre' && meta.experiment) {
+					const uid = meta.user.distinct_id;
+					if (!variantsByUser.has(uid)) variantsByUser.set(uid, new Set());
+					variantsByUser.get(uid).add(meta.experiment.variantName);
+				}
+			},
+		}));
+
+		// With per-pass re-rolls across 3 variants, multi-pass users land in
+		// more than one variant. (The sticky default is locked by the
+		// 'deterministic variant assignment' test above.)
+		const multiVariantUsers = [...variantsByUser.values()].filter(v => v.size > 1);
+		expect(variantsByUser.size).toBeGreaterThan(0);
+		expect(multiVariantUsers.length).toBeGreaterThan(0);
+		for (const variants of variantsByUser.values()) {
+			for (const name of variants) expect(['A', 'B', 'C']).toContain(name);
+		}
+	}, 30000);
+
 	test('hook meta exposes experiment context in funnel-pre and funnel-post', async () => {
 		let preExperiment = null;
 		let postExperiment = null;

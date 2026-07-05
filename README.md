@@ -535,6 +535,25 @@ funnels: [
 
 ordering strategies: `sequential`, `random`, `first-fixed`, `last-fixed`, `first-and-last-fixed`, `middle-fixed`, `interrupted`
 
+### experiments
+
+experiments are a property of funnels. any funnel with `experiment` set fires a `$experiment_started` event (with `Experiment name` / `Variant name` properties) at the start of every qualifying pass, and the assigned variant's `conversionMultiplier` / `ttcMultiplier` modify that pass:
+
+```javascript
+experiment: true                    // shorthand: Variant A (worse) / Variant B (better) / Control
+experiment: {
+  name: 'Checkout Redesign',
+  startDaysBeforeEnd: 30,           // runs before this date skip the experiment entirely
+  sticky: true,                     // default — see below
+  variants: [
+    { name: 'Control' },
+    { name: 'New Checkout', conversionMultiplier: 1.25, ttcMultiplier: 0.8, weight: 1 },
+  ]
+}
+```
+
+variant assignment is **sticky by default**: a deterministic hash of `user_id` + experiment name, so a user keeps their variant across every funnel pass (matches Mixpanel experiment SDK bucketing and makes variant lift verifiable). set `sticky: false` to re-roll the variant on each pass with the seeded RNG. hooks see the resolved variant on `meta.experiment` in `funnel-pre` / `funnel-post`.
+
 ## user generation
 
 users are generated with configurable birth distributions, normally controlled via the `macro` preset (see "time shape" above). these three knobs can also be set directly on the dungeon config — they override the preset's values.

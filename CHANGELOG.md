@@ -37,6 +37,11 @@ All notable changes to `@ak--47/dungeon-master`.
 - **Hook atoms**: `hashCohort` (seed-stable cohort assignment),
   `applyLifecycleWave`, `applyPathBias`, `applySessionShape`; pattern
   `applyTTCBySegmentV2` (see Deprecated).
+- **Experiments: `sticky` knob** (`ExperimentConfig.sticky`, default
+  `true`). Sticky bucketing — the pre-1.6 per-user hash — is now explicit
+  and opt-out-able: `sticky: false` re-rolls the variant on every funnel
+  pass via the seeded RNG. Default preserves byte-identical output for
+  existing dungeons.
 - **Story layer**: `stories` named export on dungeons — one machine-checkable
   story per hook (`DungeonStory` typedef,
   `lib/templates/story-spec.schema.json`) — and the

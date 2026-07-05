@@ -1029,9 +1029,10 @@ export interface Funnel {
 	 * - `ExperimentConfig` object — custom variant names, conversion/TTC multipliers, temporal gating,
 	 *   and distribution weights.
 	 *
-	 * Variant assignment is **deterministic per user** (hash of user_id + experiment name), so the same
-	 * user is in the same variant across all funnel runs. `$experiment_started` is prepended to the
-	 * sequence for every post-start-date funnel run.
+	 * Variant assignment is **sticky by default** — deterministic per user (hash of user_id +
+	 * experiment name), so the same user is in the same variant across all funnel runs. Set
+	 * `sticky: false` on the config object to re-randomize the variant on every funnel pass.
+	 * `$experiment_started` is prepended to the sequence for every post-start-date funnel run.
 	 *
 	 * Hook meta (`meta.experiment`) exposes the resolved variant in `funnel-pre` and `funnel-post`
 	 * hooks, enabling variant-specific story injection.
@@ -1077,7 +1078,7 @@ export interface Funnel {
 	}>;
 
 	/** @internal Resolved experiment config set by config-validator. */
-	_experiment?: { name: string; variants: Array<{ name: string; conversionMultiplier: number; ttcMultiplier: number; weight: number }>; startUnix: number | null };
+	_experiment?: { name: string; variants: Array<{ name: string; conversionMultiplier: number; ttcMultiplier: number; weight: number }>; startUnix: number | null; sticky: boolean };
 	/** @internal Set by funnels.js during experiment handling. */
 	_experimentName?: string;
 	/** @internal Set by funnels.js during experiment handling. */
@@ -1151,6 +1152,15 @@ export interface ExperimentConfig {
 	 * Default: 0 (entire dataset).
 	 */
 	startDaysBeforeEnd?: number;
+	/**
+	 * Sticky bucketing. When `true` (default), variant assignment is a deterministic
+	 * hash of user_id + experiment name — once a user falls into a variant they get
+	 * that variant on every funnel pass (matches Mixpanel experiment SDK behavior and
+	 * makes variant trends verifiable). When `false`, the variant is re-rolled on
+	 * every funnel pass using the seeded RNG, so a multi-pass user may see different
+	 * variants across passes.
+	 */
+	sticky?: boolean;
 }
 
 /** A single variant in an experiment. */
