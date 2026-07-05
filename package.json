@@ -1,6 +1,6 @@
 {
 	"name": "@ak--47/dungeon-master",
-	"version": "1.5.4",
+	"version": "1.6.0",
 	"description": "generate fancy datasets",
 	"type": "module",
 	"main": "index.js",
@@ -25,6 +25,7 @@
 		"!dungeons/user/",
 		"!dungeons/capstone/",
 		"scripts/",
+		"docs/",
 		".claude/skills/",
 		"package.json",
 		"README.md",
