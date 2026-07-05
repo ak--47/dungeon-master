@@ -1,0 +1,175 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://github.com/ak--47/dungeon-master/lib/templates/story-spec.schema.json",
+	"title": "Dungeon stories export (v1.6 story-spec)",
+	"description": "Schema for the `stories` named export of a JS dungeon file. Stories pin each engineered hook effect to a mechanical assertion over emulateBreakdown output (or a DuckDB SQL escape hatch), so verification is computed — not re-derived by an LLM. Verdict tiers per assertion: NAILED = observed within ±10% of target; STRONG = passes floor (or target when no floor); WEAK = fails floor but effect direction correct, or cohort < minCohort; NONE = no measurable effect / selection empty; INVERSE = effect direction opposite the assertion. Story verdict = worst assertion.",
+	"type": "array",
+	"minItems": 1,
+	"items": { "$ref": "#/definitions/story" },
+	"definitions": {
+		"story": {
+			"type": "object",
+			"required": ["id", "hook", "archetype", "narrative", "assertions"],
+			"additionalProperties": false,
+			"properties": {
+				"id": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Unique story id, conventionally '<hook>-<slug>' (e.g. 'H3-fraud-bursts')."
+				},
+				"hook": {
+					"type": "string",
+					"pattern": "^(?:H|Hook\\s*)?\\d+$",
+					"description": "Numbered hook this story verifies — matches the dungeon's HOOK STORIES doc block ('H3' or 'Hook 3' styles)."
+				},
+				"archetype": {
+					"type": "string",
+					"enum": [
+						"cohort-count-scale",
+						"cohort-prop-scale",
+						"temporal-inflection",
+						"funnel-conversion-by-segment",
+						"funnel-ttc-by-segment",
+						"retention-divergence",
+						"frequency-sweet-spot",
+						"attribution-bias",
+						"experiment-lift",
+						"lifecycle-wave",
+						"path-share",
+						"session-shape",
+						"composition-drift",
+						"bespoke"
+					],
+					"description": "Closed enum of engineered-effect shapes, seeded from the corpus's real story types."
+				},
+				"narrative": {
+					"type": "string",
+					"minLength": 1,
+					"description": "One-to-three sentence human story the data tells."
+				},
+				"mixpanelReport": {
+					"type": "object",
+					"description": "Free-form report pointer for humans and /create-project — NOT interpreted by the runner."
+				},
+				"assertions": {
+					"type": "array",
+					"minItems": 1,
+					"items": { "$ref": "#/definitions/assertion" }
+				},
+				"intentionalDeviations": {
+					"type": "array",
+					"items": { "type": "string" },
+					"description": "Documented strict-bar / limitation notes (e.g. 'tail_ratio < 0.4 by design — churn story')."
+				}
+			}
+		},
+		"assertion": {
+			"type": "object",
+			"required": ["breakdown"],
+			"additionalProperties": false,
+			"anyOf": [
+				{ "required": ["expect"] },
+				{ "required": ["assert"] }
+			],
+			"properties": {
+				"breakdown": { "$ref": "#/definitions/breakdown" },
+				"select": {
+					"type": "object",
+					"minProperties": 1,
+					"description": "Named row-sets over the breakdown result rows. Keys are the names referenced by expect.metric.",
+					"propertyNames": { "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$" },
+					"additionalProperties": {
+						"type": "object",
+						"required": ["where"],
+						"additionalProperties": false,
+						"properties": {
+							"where": {
+								"type": "object",
+								"minProperties": 1,
+								"description": "Column → value (equality) or { op, value } comparison. All clauses must match (AND).",
+								"additionalProperties": {
+									"oneOf": [
+										{ "type": ["string", "number", "boolean", "null"] },
+										{
+											"type": "object",
+											"required": ["op", "value"],
+											"additionalProperties": false,
+											"properties": {
+												"op": { "type": "string", "enum": ["==", "!=", ">=", "<=", ">", "<"] },
+												"value": { "type": ["string", "number", "boolean", "null"] }
+											}
+										}
+									]
+								}
+							}
+						}
+					}
+				},
+				"expect": { "$ref": "#/definitions/expect" },
+				"assert": {
+					"description": "JS-only escape hatch: (rows, ctx) => { pass, detail?, verdict? }. Function-valued — JSON Schema cannot validate it; every use requires a comment justifying why the declarative grammar can't express it. JSON dungeons cannot carry it (dungeon-to-json drops extra exports).",
+					"not": { "type": ["string", "number", "boolean", "array", "null"] }
+				},
+				"minCohort": {
+					"type": "number",
+					"exclusiveMinimum": 0,
+					"description": "Population floor — when any named selection's cohort is below this, the verdict caps at WEAK."
+				}
+			}
+		},
+		"breakdown": {
+			"type": "object",
+			"required": ["type"],
+			"properties": {
+				"type": { "type": "string", "minLength": 1 }
+			},
+			"if": {
+				"properties": { "type": { "const": "duckdb" } }
+			},
+			"then": {
+				"required": ["type", "sql"],
+				"properties": {
+					"type": { "const": "duckdb" },
+					"sql": {
+						"type": "string",
+						"minLength": 1,
+						"description": "DuckDB SQL escape hatch, for bespoke shapes only. The runner shells out to the `duckdb` CLI (no npm dep) and substitutes the literal token {{PREFIX}} with the run's data prefix path (e.g. data/verify-<name>), so globs read read_json_auto('{{PREFIX}}-EVENTS*.json'). Result rows feed select/expect like emulator rows. Disk mode only — skipped (with a warning) under --in-memory."
+					}
+				}
+			},
+			"else": {
+				"description": "Anything other than 'duckdb' is passed byte-compatible to emulateBreakdown / verifyDungeon (frequencyByFrequency, funnelFrequency, aggregatePerUser, timeToConvert, attributedBy, sessionMetrics, retention, distinctCount, eventBreakdown, uniques, lifecycle, topPaths)."
+			}
+		},
+		"expect": {
+			"type": "object",
+			"required": ["metric", "op", "target"],
+			"additionalProperties": false,
+			"properties": {
+				"metric": {
+					"type": "string",
+					"pattern": "^\\s*([A-Za-z_$][A-Za-z0-9_$]*\\.[A-Za-z_$][A-Za-z0-9_$]*|[0-9]+(?:\\.[0-9]+)?)(\\s*[/\\-]\\s*([A-Za-z_$][A-Za-z0-9_$]*\\.[A-Za-z_$][A-Za-z0-9_$]*|[0-9]+(?:\\.[0-9]+)?))?\\s*$",
+					"description": "Exactly three forms: single ref '<name>.<column>', ratio '<a>.<col> / <b>.<col>', or difference '<a>.<col> - <b>.<col>'. At most one binary operator; operands are refs or numeric literals (at least one ref — runtime-enforced). If a selection matches multiple rows, count-like columns sum and value-like columns error (single-row selection enforced). No free-form expressions."
+				},
+				"op": { "type": "string", "enum": [">=", "<=", ">", "<", "between"] },
+				"target": {
+					"oneOf": [
+						{ "type": "number" },
+						{
+							"type": "array",
+							"items": { "type": "number" },
+							"minItems": 2,
+							"maxItems": 2,
+							"description": "[lo, hi] — only valid with op 'between'."
+						}
+					],
+					"description": "The designed value — derive it from the same exported knob constants the hook uses so the assertion cannot drift from the mechanism."
+				},
+				"floor": {
+					"type": "number",
+					"description": "Optional STRONG bound — the minimum acceptable effect. Omitted → target doubles as the floor."
+				}
+			}
+		}
+	}
+}

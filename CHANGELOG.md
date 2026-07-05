@@ -2,6 +2,189 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.6.0 — 2026-07-04
+
+### Added
+
+- **Emulator: five new analysis types + retention completion**
+  (`emulateBreakdown`, all ARB-cited):
+  - `eventBreakdown` — Insights "Total" broken down by a property, with
+    Mixpanel's exact segment coercion (list fan-out, `$empty_list`,
+    `undefined` bucket, case-sensitive type-tagged segments, topN 250);
+    `countType: 'unique' | 'sessions'`, `firstTimeOnly` compose;
+    unrecognized `countType` values throw (same strict-option rule as
+    retention keys).
+  - `uniques` — per-interval independent dedup, rolling XAU windows,
+    cumulative running distinct; `countType: 'sessions'`, `firstTimeOnly`.
+  - `lifecycle` — Lifecycle Cohort Analysis board-template classification
+    (new / retained / resurrected / dormant) on a value-moment event, 7- or
+    30-day periods.
+  - `topPaths` — Flows: next-anchor-only matching, forward/reverse capacity
+    rings, per-level top-N pruning into `$mp_uncommon_flows_events`,
+    `hiddenEvents` / `visibleEvents`, `countType: 'general' | 'unique' |
+    'sessions'`.
+  - `distinctCount` — distinct values of a property + top-N value counts.
+  - `retention` completion — `compounded`, `birthCanRetain`,
+    `carryForward` / `carryBack` / `consecutiveForward`, `calendarStart`,
+    `cohortWindow`, `segmentOn: 'return'`, internal-event ignore list.
+- **Funnel evaluator upgrades**: session-count conversion windows,
+  `countMode: 'sessions'`, ARB-exact exclusion handling, any-order step
+  blocks, step-0-anchored trends under `timeBucket`.
+- **New verify primitives**: `sessionize()` (query-time sessions — 30-min
+  gap / 24h max / UTC-day triggers, synthetic `$session_start`/`$session_end`),
+  `filterFirstTimeEver()`, `evaluateFormula()` (ARB formula grammar),
+  `extractFlows` / `aggregateFlows`, breakdown-key coercion
+  (`lib/verify/coerce.js`), `frequencyHistogram`, null-aware avg/sum
+  `{ flatten: true }`, `attributedBy` per-conversion output.
+- **Hook atoms**: `hashCohort` (seed-stable cohort assignment),
+  `applyLifecycleWave`, `applyPathBias`, `applySessionShape`; pattern
+  `applyTTCBySegmentV2` (see Deprecated).
+- **Experiments: `sticky` knob** (`ExperimentConfig.sticky`, default
+  `true`). Sticky bucketing — the pre-1.6 per-user hash — is now explicit
+  and opt-out-able: `sticky: false` re-rolls the variant on every funnel
+  pass via the seeded RNG. Default preserves byte-identical output for
+  existing dungeons.
+- **Story layer**: `stories` named export on dungeons — one machine-checkable
+  story per hook (`DungeonStory` typedef,
+  `lib/templates/story-spec.schema.json`) — and the
+  `scripts/verify-stories.mjs` runner: mechanical five-tier verdicts
+  (NAILED / STRONG / WEAK / NONE / INVERSE), population floors (`minCohort`),
+  hook-coverage discipline, disk + in-memory modes, `--json`.
+- **Verticals**: `dungeons/vertical/` restructured to one folder per vertical
+  (`<name>/<name>.js` + `<name>.verify.mjs` + `<name>.sql`); `stories`
+  exports and rebuilt hooks across all verticals; two new showcase dungeons —
+  `streaming` (lifecycle) and `support-desk` (flows + sessions).
+- **Skills**: `/write-hooks` authors the stories export; `/verify-dungeon`
+  runs the story runner first and investigates only failures;
+  `/create-dungeon` designs analysis-friendly vocabularies (session
+  fan-out, value moment, hidden-event hygiene); `/analyze-soup` queries in
+  UTC; `/create-project` builds business context from the stories export.
+- **Docs**: HOOKS.md §2.12–2.17 (event breakdown coercion, uniques/XAU,
+  formulas, first-time-ever, lifecycle, flows, sessions), recipes 4.29–4.31,
+  atom/helper reference sections.
+
+### Behavior changes
+
+- **Retention option keys are strict** (P1.5). Unknown keys in a `retention`
+  emulator config now throw instead of being silently ignored — a typo'd
+  option previously ran with defaults and produced plausible-but-wrong
+  numbers. `carry_forward: true` is kept as a deprecated alias for
+  `unbounded: 'carryForward'`.
+- **Funnel exclusions no longer fire before step 0** (P1.6.4).
+  `evaluateFunnel`'s `exclusionSteps` previously defaulted `afterStep` to
+  −Infinity, so an exclusion event could condemn an attempt before the first
+  step was ever reached. ARB has no exclusion gaps before the first step: a
+  pre-step-0 exclusion event now only matters inside the 2-second grace rule
+  at step 0 (condemns with `excludedAtStep`), otherwise the attempt proceeds.
+- **Non-sequential funnel orders verify with full ARB semantics** (P1.6.6).
+  `first-fixed` / `last-fixed` / `first-and-last-fixed` / `outside-in` /
+  `random` previously verified via set-membership ("fired all step events,
+  any order", `verificationKind: 'partial'`); they now route through
+  any-order step blocks with full conversion-window / 2-second-rule /
+  exclusion / anchor-ordering semantics. Users that passed the loose check
+  but violate window or anchor ordering no longer convert. `middle-fixed`
+  keeps set-membership (its scrambled slots are non-contiguous).
+- **`sessionMetrics` defaults to query-time derived sessions** (P1.7.2). New
+  `source: 'derived' | 'stamped'` option, default `'derived'`: sessions are
+  re-derived from raw timestamps via `sessionize()` — what Mixpanel actually
+  computes — instead of reading the generator's pre-stamped `session_id`.
+  The stamped path remains via `source: 'stamped'`, and the per-row
+  `stampedDivergence` count audits the gap between the two.
+- **`$experiment_started` is pinned to funnel-pass start** (P4.2 engine fix,
+  pre-existing since 1.4.0). For experiment funnels with a non-`sequential`
+  `order` (`last-fixed`, `random`, `first-fixed`, ...), `applyOrderingStrategy`
+  shuffled the synthetic exposure event into the funnel body — the exposure
+  landed mid-pass at a uniform position, so exposure→conversion TTC read ~58%
+  of `timeToConvert`, and any exposure-anchored conversion measurement (the
+  Mixpanel Experiments report, ordered-funnel pairing from
+  `$experiment_started`) undercounted variant lift. The ordering strategy now
+  shuffles only the real steps; `$experiment_started` stays at execution index
+  0 (offset 0), and `first-fixed`/`first-and-last-fixed` pin the true first
+  step instead of the exposure marker. Output changes (event order + RNG
+  stream) for experiment funnels with shuffle orders; `sequential` experiment
+  funnels are unaffected.
+- **Session IDs are re-derived after the `everything` hook** (P2.1). The first
+  `assignSessionIds` pass still runs before hooks (hooks may read
+  `session_id`), but a second pass now relabels on the FINAL event set — after
+  the `everything` hook, auto-sort, and the future-time guard. Time-mutating
+  hooks (TTC scaling, injected bursts) previously left stale session ids that
+  disagreed with what Mixpanel derives from timestamps at query time. Session
+  ids hash from (user key + first event time of the session), so sessions
+  whose events did not move keep their exact ids. The per-session sticky-device
+  rewrite is NOT re-run — relabeling never mutates identity fields. Behavior
+  change only for dungeons whose hooks mutate event times; their stamped
+  `session_id` values now match query-time derivation
+  (`stampedDivergence === 0`).
+- **Churn is now a hard activity boundary** (P2.2). `isChurnEvent` broke the
+  budget loop (stopping generation), but already-generated events carry
+  independent timestamps — uniform TimeSoup draws on the legacy path, a
+  shuffled active-day plan under `avgActiveDaysPerUser`/`retentionCurve` — so
+  churned users kept events DATED after their churn event. Churned users'
+  events are now truncated at the churn event's timestamp (the churn event
+  itself survives). Affects only dungeons using `isChurnEvent`; users who
+  return (`returnLikelihood` roll succeeds) are untouched. `simplest.js` has
+  no churn events, so the engine-shape canary and sweep are unaffected.
+- **Bin-based patterns bin by distinct days by default** (P2.4).
+  `applyFrequencyByFrequency`, `applyFunnelFrequencyBreakdown`, and
+  `applyAggregateByBin` gain `binBy: 'events' | 'distinctDays'` (default
+  `'distinctDays'`, via `binByDistinctPeriods`). Mixpanel's frequency reports
+  — and the local emulator — bucket users by distinct calendar days, so the
+  old total-event-count axis could put a user in a different cohort than the
+  report bucket their data lands in, diluting engineered signal. Pass
+  `binBy: 'events'` to restore the pre-1.6 axis (also the right choice for
+  `applyFunnelFrequencyBreakdown`'s funnelEvents fallback, where one funnel
+  run rarely spans two days).
+- **`applyAttributedBySource` rewritten to overwrite engine-stamped touches**
+  (P2.4, HOOKS.md recipe 4.26 as code). New opts:
+  `{ weights, property = 'utm_source', model = 'firstTouch'|'lastTouch'|'both' }`;
+  returns `{ overwritten, touches }`. The old copy-source-to-conversion
+  mechanism stamped fresh values, which under the v1.5 touchpoint cap land
+  outside Mixpanel's lookback and never move the attribution report. The
+  pattern now overwrites the value on the touch the chosen model reads and
+  never adds the property to unstamped events.
+
+### Changed
+
+- **Shipped vertical dungeons: hook fixes that change generated output**
+  (P4.2 rebuild — same seeds, different data where noted):
+  - **media**: H10 applied the plan-tier factor to `watch_duration_min` in
+    two separate blocks — the engineered free/premium ratio compounded to
+    ~4.4x instead of the documented 2.09x. Single application now; the
+    duplicate block is deleted (no RNG-stream impact).
+  - **marketplace**: H9 funnel-post TTC scaling is restricted to the
+    Browse-to-Purchase funnel (it previously scaled all five; Buyer
+    Onboarding shares the search→view→cart prefix, so first-occurrence
+    funnel evaluation assembled chains across unscaled instances and the
+    engineered ratio never reached the report). H10 redesigned from a
+    windowed message-cohort purchase-drop to a total-message-count cohort
+    with property-only `offer_amount` effects.
+  - **sass**: H9 TTC scaling moved from one stitched whole-history
+    sequence (everything hook) to per-instance funnel-post gap scaling
+    gated on the `alert triggered` funnel — the old single scaled sequence
+    was diluted by the user's unscaled instances and never survived to the
+    funnel report.
+  - **crypto**: all hook day-boundary math converted from local-time dayjs
+    to UTC (dataset timestamps are UTC; boundaries previously shifted by
+    the host's UTC offset). H9 TTC scaling restricted to the onboarding
+    funnel (same cross-instance dilution class as marketplace). H6 churn
+    no longer erases a user's first 24 hours — the old absolute-day cutoff
+    shredded late-born users' signup/onboarding/auth events under the
+    growth macro.
+
+### Deprecated
+
+- **`applyTTCBySegment`** (P2.4) — the funnel-post variant scales one run's
+  internal gaps, but Mixpanel's TTC measures the FIRST occurrence of each
+  step per user, so the scaling only reaches the report for `isFirstFunnel`
+  runs. Still functional; warns once. Use **`applyTTCBySegmentV2`** (new,
+  `everything` hook) — finds the greedy first sequence via
+  `findFirstSequence` and scales it with `scaleFunnelTTC`.
+- **`Persona.churnRate`, `Persona.activeWindow`, `Persona.soupOverride`**
+  (P2.5) — declared config surface that was never implemented: nothing in
+  lib/ reads them after validation. Marked `@deprecated` in types.d.ts; the
+  validator warns once per process when a dungeon sets any of them. Not
+  removed (declared surface) and not implemented (config-shape freeze).
+
 ## 1.5.4 — 2026-06-04
 
 Patch. Import-phase progress now reaches `onProgress` consumers.

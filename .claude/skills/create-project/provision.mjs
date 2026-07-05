@@ -10,7 +10,9 @@
  *   1. createProject       (sets timezone UTC as a follow-up)
  *   2. mintServiceAccount  (admin, +30d) — scoped to the new project
  *   3. addGroupKey         (only if the dungeon declares groupKeys)
- *   4. setBusinessContext  (OVERVIEW + HOOK STORIES + schema summary)
+ *   4. setBusinessContext  (OVERVIEW + the dungeon's `stories` export
+ *      (narrative + mixpanelReport per story) — falls back to the HOOK
+ *      STORIES comment scrape when the dungeon has no stories — + schema summary)
  *   5. write `credentials: { token, projectId, serviceAccount, serviceSecret, region }`
  *      back into the dungeon (gitignored user dungeons — plaintext is fine)
  *
@@ -27,7 +29,7 @@
 
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import path, { dirname, resolve } from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import dotenv from 'dotenv';
 import { loadFromFile, extractComments } from '../../../index.js';
 
@@ -57,12 +59,26 @@ if (!existsSync(dungeonPath)) fail(`dungeon file not found: ${dungeonPath}`);
 const config = await loadFromFile(dungeonPath);
 const comments = extractComments(dungeonPath);
 
+// stories is a NAMED export of JS dungeons (v1.6 story-spec) — the verified
+// behavior contract. Preferred over the comment scrape for business context.
+let stories = null;
+if (/\.(js|mjs)$/i.test(dungeonPath)) {
+	try {
+		const mod = await import(pathToFileURL(dungeonPath).href);
+		if (Array.isArray(mod.stories) && mod.stories.length) stories = mod.stories;
+	} catch {
+		// loadFromFile above already imported the module; an error here would
+		// have surfaced there. Fall back to the comment scrape regardless.
+	}
+}
+
 const name = deriveName(comments, dungeonPath);
 const groupKeys = Array.isArray(config.groupKeys)
 	? config.groupKeys.filter(Boolean).map(([prop]) => ({ property_name: prop, display_name: titleize(prop) }))
 	: [];
 const saName = `${slug(name)}-dungeon-sa`.slice(0, 64);
-const content = buildContext(name, config, comments, groupKeys);
+const ctxSource = stories ? `stories export (${stories.length} stories)` : 'comment scrape';
+const content = buildContext(name, config, comments, groupKeys, stories);
 
 if (dryRun) {
 	printPlan();
@@ -188,10 +204,35 @@ function isoInDays(days) {
 	return new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
-function buildContext(name, config, comments, groupKeys) {
+function buildContext(name, config, comments, groupKeys, stories) {
 	const parts = [`# ${name}`, ''];
 	if (comments.overview) parts.push(comments.overview, '');
-	if (comments.hookStories) parts.push('## Engineered Behaviors', '', comments.hookStories, '');
+
+	// Preferred source: the stories export — each story's narrative is the
+	// human-readable behavior and mixpanelReport (free-form object) points at
+	// the report where it shows. Comment scrape is the fallback for dungeons
+	// without stories (schema-only or pre-1.6).
+	if (stories?.length) {
+		parts.push('## Engineered Behaviors', '');
+		parts.push(`${stories.length} machine-verified story patterns (from the dungeon's \`stories\` export):`, '');
+		for (const s of stories) {
+			const arch = s.archetype ? ` — ${s.archetype}` : '';
+			parts.push(`### ${s.id}${arch}`, '');
+			if (s.narrative) parts.push(String(s.narrative).trim(), '');
+			if (s.mixpanelReport && typeof s.mixpanelReport === 'object') {
+				parts.push('How to see it in Mixpanel:');
+				for (const [k, v] of Object.entries(s.mixpanelReport)) {
+					parts.push(`- **${k}**: ${typeof v === 'string' ? v : JSON.stringify(v)}`);
+				}
+				parts.push('');
+			}
+			if (Array.isArray(s.intentionalDeviations) && s.intentionalDeviations.length) {
+				parts.push('Notes:', ...s.intentionalDeviations.map((d) => `- ${d}`), '');
+			}
+		}
+	} else if (comments.hookStories) {
+		parts.push('## Engineered Behaviors', '', comments.hookStories, '');
+	}
 
 	parts.push('## Schema', '');
 	const events = config.events || [];
@@ -255,7 +296,7 @@ function printPlan() {
 	console.log(`region:         ${REGION}    timezone: UTC`);
 	console.log(`service acct:   ${saName}  (role admin, expires +${SA_TTL_DAYS}d)`);
 	console.log(`group keys:     ${groupKeys.length ? groupKeys.map((g) => `${g.property_name} → "${g.display_name}"`).join(', ') : '(none)'}`);
-	console.log(`business ctx:   ${content.length} chars`);
+	console.log(`business ctx:   ${content.length} chars (source: ${ctxSource})`);
 	console.log('');
 	console.log('would POST: createProject → mintServiceAccount' + (groupKeys.length ? ' → addGroupKey' : '') + ' → setBusinessContext');
 	console.log('then write credentials back into the dungeon.');
@@ -278,7 +319,7 @@ function printSummary() {
 		const skipped = (groupKeyResult?.skipped || []).map(fmt).filter(Boolean).join(', ') || '(none)';
 		console.log(`group keys:     added [${added}]  skipped [${skipped}]`);
 	}
-	console.log(`business ctx:   ${content.length} chars uploaded`);
+	console.log(`business ctx:   ${content.length} chars uploaded (source: ${ctxSource})`);
 	console.log(`credentials:    ${wroteBack ? 'written back into dungeon ✓' : 'NOT written (see warnings)'}`);
 	if (warnings.length) {
 		console.log('');

@@ -25,7 +25,7 @@ in order:
 1. **createProject** — name derived from the dungeon's `OVERVIEW` (`NAME:` line), region `US`, timezone `UTC` (set as a follow-up by the endpoint).
 2. **mintServiceAccount** — `admin`, expires `+30 days`, scoped to the new project. This is what the dungeon uses to **send** data.
 3. **addGroupKey** — one per `groupKeys` entry in the dungeon (`property_name` + a titleized `display_name`). Skipped if the dungeon has no group keys.
-4. **setBusinessContext** — markdown built from the dungeon's `OVERVIEW` + `HOOK STORIES` comment blocks (via the package's `extractComments`) plus an events/funnels/props/group-keys summary, capped at 50k chars.
+4. **setBusinessContext** — markdown built from the dungeon's `OVERVIEW` comment block plus the `stories` named export (per story: `narrative` + `mixpanelReport` + intentional deviations); dungeons without stories fall back to the `HOOK STORIES` comment scrape (via the package's `extractComments`). Plus an events/funnels/props/group-keys summary, capped at 50k chars. The dry-run plan prints which source was used.
 5. **write-back** — replaces the dungeon's `credentials: { … }` block with `{ token, projectId, serviceAccount, serviceSecret, region }`.
 
 **Always creates a fresh project.** Re-running mints a new project and overwrites

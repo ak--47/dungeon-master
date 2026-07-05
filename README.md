@@ -51,9 +51,9 @@ const result = await DUNGEON_MASTER('./dungeons/technical/simple-schema.json');
 
 // run multiple dungeons
 const results = await DUNGEON_MASTER([
-  './dungeons/vertical/gaming.js',
-  './dungeons/vertical/media.js',
-  './dungeons/vertical/food-delivery.js'
+  './dungeons/vertical/gaming/gaming.js',
+  './dungeons/vertical/media/media.js',
+  './dungeons/vertical/food-delivery/food-delivery.js'
 ]);
 
 // pass raw javascript as a string
@@ -70,7 +70,7 @@ const result = await DUNGEON_MASTER(`
 `);
 
 // override any config when loading from files
-const result = await DUNGEON_MASTER('./dungeons/vertical/fintech.js', {
+const result = await DUNGEON_MASTER('./dungeons/vertical/fintech/fintech.js', {
   numUsers: 100,       // shrink for testing
   writeToDisk: true,
   verbose: true
@@ -95,9 +95,9 @@ console.log(result.importResults);
 
 a dungeon is a javascript file that exports a configuration object. it defines your entire data model: events, funnels, user properties, group analytics, SCDs, and a hook function that engineers discoverable patterns into the data.
 
-see `dungeons/vertical/` for customer-facing story dungeons (18 events, 8 hooks) and `dungeons/technical/` for feature-testing dungeons (mirrors, groups, scale, anonymous users).
+see `dungeons/vertical/` for customer-facing story dungeons (one folder per vertical, each with engineered hooks and machine-checkable stories) and `dungeons/technical/` for feature-testing dungeons (mirrors, groups, scale, anonymous users).
 
-every vertical dungeon ships with a verification proof at `verification/verticals/<name>.{verify.mjs,sql}` — a CI-runnable assertion that the dungeon's documented hooks actually appear in the generated data at full fidelity. 20 dungeons, 107 hooks, 107 checks. see [`verification/verticals/README.md`](verification/verticals/README.md).
+every vertical dungeon ships with a verification proof at `dungeons/vertical/<name>/<name>.{verify.mjs,sql}` plus a `stories` export evaluated mechanically by `scripts/verify-stories.mjs` — a CI-runnable assertion that the dungeon's documented hooks actually appear in the generated data at full fidelity. 22 dungeons, 212 machine-checkable stories. see [`dungeons/vertical/README.md`](dungeons/vertical/README.md).
 
 ```javascript
 // dungeons/my-app.js
@@ -173,7 +173,7 @@ import DUNGEON_MASTER, {
 `dungeonToJSON` accepts a config object, a file path, raw JS source, or an array of paths, and returns the `{ schema, hooks, timestamp, version }` wrapper format. it round-trips with `parseJSONDungeon`:
 
 ```javascript
-const json   = await dungeonToJSON('./dungeons/vertical/ecommerce.js');  // creds stripped by default
+const json   = await dungeonToJSON('./dungeons/vertical/ecommerce/ecommerce.js');  // creds stripped by default
 const config = parseJSONDungeon(json);                                   // back to a runnable dungeon
 ```
 
@@ -535,6 +535,25 @@ funnels: [
 
 ordering strategies: `sequential`, `random`, `first-fixed`, `last-fixed`, `first-and-last-fixed`, `middle-fixed`, `interrupted`
 
+### experiments
+
+experiments are a property of funnels. any funnel with `experiment` set fires a `$experiment_started` event (with `Experiment name` / `Variant name` properties) at the start of every qualifying pass, and the assigned variant's `conversionMultiplier` / `ttcMultiplier` modify that pass:
+
+```javascript
+experiment: true                    // shorthand: Variant A (worse) / Variant B (better) / Control
+experiment: {
+  name: 'Checkout Redesign',
+  startDaysBeforeEnd: 30,           // runs before this date skip the experiment entirely
+  sticky: true,                     // default — see below
+  variants: [
+    { name: 'Control' },
+    { name: 'New Checkout', conversionMultiplier: 1.25, ttcMultiplier: 0.8, weight: 1 },
+  ]
+}
+```
+
+variant assignment is **sticky by default**: a deterministic hash of `user_id` + experiment name, so a user keeps their variant across every funnel pass (matches Mixpanel experiment SDK bucketing and makes variant lift verifiable). set `sticky: false` to re-roll the variant on each pass with the seeded RNG. hooks see the resolved variant on `meta.experiment` in `funnel-pre` / `funnel-post`.
+
 ## user generation
 
 users are generated with configurable birth distributions, normally controlled via the `macro` preset (see "time shape" above). these three knobs can also be set directly on the dungeon config — they override the preset's values.
@@ -609,7 +628,7 @@ styles: `support`, `review`, `search`, `feedback`, `chat`, `email`, `forum`, `co
 ## scripts
 
 ```bash
-npm test                      # vitest test suite (~10s, 1122 tests)
+npm test                      # full vitest test suite
 npm run typecheck             # typescript check
 npm run dungeon:run           # run a dungeon file locally
 npm run dungeon:to-json       # convert JS dungeon to JSON (for UI import)
@@ -649,7 +668,7 @@ npx vitest run tests/integration/features.test.js          # single file
 npx vitest tests/unit                                       # watch mode
 ```
 
-`tests/e2e/sanity.test.js` is excluded by default (parked); run isolated with `npx vitest run tests/e2e/sanity.test.js`.
+`tests/e2e/engine-shape-full-sweep.test.js` skips itself unless `RUN_FULL_SWEEP=1` is set (it wraps the long-running 194-combo engine sweep).
 
 ### engine tests (direct-run, NOT vitest)
 

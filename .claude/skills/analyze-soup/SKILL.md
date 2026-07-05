@@ -1,7 +1,7 @@
 ---
 name: analyze-soup
 description: Use when investigating TimeSoup parameters, diagnosing event-distribution shape, or comparing soup configs — runs a dungeon locally and analyzes time distribution at week/day/hour/minute granularities, producing a soup-analysis.md diagnostic report.
-argument-hint: [dungeon path, e.g. dungeons/soup-test.js]
+argument-hint: [dungeon path, e.g. dungeons/technical/simplest.js]
 model: claude-opus-4-6
 effort: max
 ---
@@ -10,7 +10,7 @@ effort: max
 
 Run a dungeon and analyze the time distribution of generated events to evaluate TimeSoup parameters.
 
-**Dungeon file:** `$ARGUMENTS` (default: `dungeons/soup-test.js`)
+**Dungeon file:** `$ARGUMENTS` (default: `dungeons/technical/simplest.js`)
 
 ## Step 1: Run the Dungeon
 
@@ -32,10 +32,19 @@ Wait for generation to complete. Note the event count and EPS.
 
 Run these DuckDB queries against the generated JSONL file. Use `duckdb` CLI.
 
+**All bucketing is UTC — do not convert timezones.** TimeSoup applies its
+day-of-week / hour-of-day weights in UTC, the engine's calendar-day logic
+(`avgActiveDaysPerUser`, lifecycle periods, session midnight splits) is UTC,
+and `/create-project` pins Mixpanel projects to UTC. Casting `time::timestamp`
+on the ISO strings keeps the UTC wall time. Converting to a local zone (e.g.
+`America/Los_Angeles`, −8h) shifts late-evening UTC events onto the previous
+calendar day — the DOW histogram you'd analyze would not be the one the soup
+generated or the one Mixpanel reports.
+
 ### 2a. Week over Week
 ```bash
 duckdb -c "
-SELECT date_trunc('week', (time::timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')) as week,
+SELECT date_trunc('week', time::timestamp) as week,
        count(*) as events
 FROM read_json_auto('./data/soup-analysis-EVENTS.json')
 GROUP BY 1 ORDER BY 1;
@@ -45,7 +54,7 @@ GROUP BY 1 ORDER BY 1;
 ### 2b. Day over Day
 ```bash
 duckdb -c "
-SELECT date_trunc('day', (time::timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')) as day,
+SELECT date_trunc('day', time::timestamp) as day,
        count(*) as events
 FROM read_json_auto('./data/soup-analysis-EVENTS.json')
 GROUP BY 1 ORDER BY 1;
@@ -55,10 +64,10 @@ GROUP BY 1 ORDER BY 1;
 ### 2c. Hour over Hour (last 7 days only)
 ```bash
 duckdb -c "
-SELECT date_trunc('hour', (time::timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')) as hour,
+SELECT date_trunc('hour', time::timestamp) as hour,
        count(*) as events
 FROM read_json_auto('./data/soup-analysis-EVENTS.json')
-WHERE (time::timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles') > (SELECT max((time::timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')) - interval '7 days' FROM read_json_auto('./data/soup-analysis-EVENTS.json'))
+WHERE time::timestamp > (SELECT max(time::timestamp) - interval '7 days' FROM read_json_auto('./data/soup-analysis-EVENTS.json'))
 GROUP BY 1 ORDER BY 1;
 "
 ```
@@ -66,10 +75,10 @@ GROUP BY 1 ORDER BY 1;
 ### 2d. Minute over Minute (last 24 hours only)
 ```bash
 duckdb -c "
-SELECT date_trunc('minute', (time::timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')) as minute,
+SELECT date_trunc('minute', time::timestamp) as minute,
        count(*) as events
 FROM read_json_auto('./data/soup-analysis-EVENTS.json')
-WHERE (time::timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles') > (SELECT max((time::timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')) - interval '1 day' FROM read_json_auto('./data/soup-analysis-EVENTS.json'))
+WHERE time::timestamp > (SELECT max(time::timestamp) - interval '1 day' FROM read_json_auto('./data/soup-analysis-EVENTS.json'))
 GROUP BY 1 ORDER BY 1;
 "
 ```
@@ -78,14 +87,14 @@ GROUP BY 1 ORDER BY 1;
 ```bash
 duckdb -c "
 WITH daily AS (
-  SELECT date_trunc('day', (time::timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')) as day, count(*) as events
+  SELECT date_trunc('day', time::timestamp) as day, count(*) as events
   FROM read_json_auto('./data/soup-analysis-EVENTS.json')
   GROUP BY 1
 ),
 hourly AS (
-  SELECT date_trunc('hour', (time::timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')) as hour, count(*) as events
+  SELECT date_trunc('hour', time::timestamp) as hour, count(*) as events
   FROM read_json_auto('./data/soup-analysis-EVENTS.json')
-  WHERE (time::timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles') > (SELECT max((time::timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')) - interval '7 days' FROM read_json_auto('./data/soup-analysis-EVENTS.json'))
+  WHERE time::timestamp > (SELECT max(time::timestamp) - interval '7 days' FROM read_json_auto('./data/soup-analysis-EVENTS.json'))
   GROUP BY 1
 )
 SELECT 'daily' as granularity,
@@ -112,7 +121,7 @@ FROM hourly;
 ```bash
 duckdb -c "
 WITH daily AS (
-  SELECT date_trunc('day', (time::timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')) as day, count(*) as events
+  SELECT date_trunc('day', time::timestamp) as day, count(*) as events
   FROM read_json_auto('./data/soup-analysis-EVENTS.json')
   GROUP BY 1
 )

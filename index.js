@@ -68,7 +68,7 @@ dayjs.extend(utc);
  *
  * @example
  * // multiple dungeons
- * const results = await DUNGEON_MASTER(['./dungeons/vertical/gaming.js', './dungeons/vertical/media.js']);
+ * const results = await DUNGEON_MASTER(['./dungeons/vertical/gaming/gaming.js', './dungeons/vertical/media/media.js']);
  *
  * @example
  * // raw JS text
@@ -568,7 +568,7 @@ function extractFileInfo(storage) {
 /**
  * Count profiles that would be pushed to Mixpanel (anonymous non-converters carry
  * `_drop: true` and are skipped by mixpanel-sender). v1.5.1.
- * @param {any} profilesContainer
+ * @param {Iterable<{ _drop?: boolean }> | null | undefined} profilesContainer
  * @returns {number}
  */
 function countProfilesPushed(profilesContainer) {

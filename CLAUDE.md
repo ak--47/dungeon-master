@@ -14,8 +14,8 @@ The default export accepts: a config object, a path to a `.js`/`.mjs`/`.json` du
 |---|---|
 | User-facing API, config reference, examples, full preset tables | [README.md](README.md) |
 | Hook encyclopedia, recipes, Mixpanel counting semantics | [HOOKS.md](HOOKS.md) |
-| Per-version upgrade guides (1.3 → 1.5) | [docs/guides/](docs/guides/) |
-| Per-dungeon verify scripts (20 dungeons, 107 hooks) | [verification/verticals/README.md](verification/verticals/README.md) |
+| Per-version upgrade guides (1.3 → 1.6) | [docs/guides/](docs/guides/) |
+| Per-dungeon stories + verify scripts (vertical dungeons) | [dungeons/vertical/README.md](dungeons/vertical/README.md) |
 | Full `Dungeon` interface | [types.d.ts](types.d.ts) |
 | Changelog | [CHANGELOG.md](CHANGELOG.md) |
 
@@ -34,10 +34,11 @@ lib/
 ├── verify/         # emulateBreakdown + verifyDungeon + Mixpanel-aligned counting primitives
 └── templates/      # default data, phrase banks, AI instruction templates, macro/soup presets
 scripts/                 # run-dungeon, dungeon-to-json, json-to-dungeon, run-many, verify-runner
-dungeons/{vertical,technical,user}/
+dungeons/technical/      # engine fixtures
+dungeons/user/           # one folder per customer
+dungeons/vertical/       # one folder per vertical: <name>/<name>.js + <name>.verify.mjs + <name>.sql
 tests/{unit,integration,e2e,engine}/
-verification/verticals/  # <name>.verify.mjs + <name>.sql per vertical dungeon
-docs/guides/             # 1.3.0 → 1.5.0 upgrade guides
+docs/guides/             # 1.3.0 → 1.6.0 upgrade guides
 plans/                   # historical implementation plans (ENGINE-VALIDATION, DATAGEN, etc.)
 ```
 
@@ -56,6 +57,10 @@ Dungeon authoring + verification (shipped in the npm package):
 node scripts/run-dungeon.mjs <path>              # run one dungeon
 node scripts/run-many.mjs <dir> [--parallel N]   # run many concurrently
 node scripts/verify-runner.mjs <path> [prefix]   # full-fidelity run for hook verification
+node scripts/verify-stories.mjs <path> [--data-prefix P] [--in-memory] [--json]
+                                                 # evaluate the dungeon's `stories` export: five-tier
+                                                 # verdicts (NAILED/STRONG/WEAK/NONE/INVERSE) + hook
+                                                 # coverage; disk mode reads verify-runner shards
 node scripts/dungeon-to-json.mjs <path>          # JS → JSON
 node scripts/json-to-dungeon.mjs <path>          # JSON → JS
 node scripts/extract-dungeon-schema.mjs <path>   # extract schema
@@ -82,7 +87,7 @@ npx vitest tests/unit                               # watch mode
 
 **Always pipe vitest output through `tail -50`** (`... 2>&1 | tail -50`) — captures the summary without flooding the transcript. Don't rerun expensive suites just to re-read the summary.
 
-`tests/e2e/sanity.test.js` is excluded by default (parked — hangs after Module Integration block; run isolated via `npx vitest run tests/e2e/sanity.test.js`).
+`tests/e2e/sanity.test.js` runs in the default suite (the historical hang after its Module Integration block is resolved). `tests/e2e/engine-shape-full-sweep.test.js` skips itself unless `RUN_FULL_SWEEP=1`.
 
 ### Engine tests (direct-run, NOT vitest)
 
@@ -182,8 +187,8 @@ Schema → hooks → verify → provision, five slash commands at [.claude/skill
 | Skill | What it does |
 |-------|--------------|
 | `/create-dungeon <description>` | SCHEMA ONLY — designs events, funnels, superProps, userProps, identity-model knobs (`isAuthEvent`, `attempts`, `avgDevicePerUser`). Does NOT write the `hook` function. Output: `dungeons/user/<name>/<name>.js` (one folder per customer). |
-| `/write-hooks <dungeon-path> <story>` | Writes the `hook` function on an existing dungeon using atoms + patterns. Adds Mixpanel report instructions per pattern. Iterates with `/verify-dungeon` until patterns PASS. |
-| `/verify-dungeon <dungeon-path>` | Schema integrity (flag stamping) + engineered hook pattern verification. Prefers the emulator (`emulateBreakdown`) for the supported analyses; falls back to DuckDB for bespoke shapes. Always asserts identity-model invariants (stitch count, pre-existing user stamping). |
+| `/write-hooks <dungeon-path> <story>` | Writes the `hook` function on an existing dungeon using atoms + patterns, plus the `stories` named export — one machine-checkable story per hook (spec: [lib/templates/story-spec.schema.json](lib/templates/story-spec.schema.json) + `DungeonStory` in [types.d.ts](types.d.ts)). Iterates with `/verify-dungeon` until stories PASS. |
+| `/verify-dungeon <dungeon-path>` | Schema integrity (flag stamping) + story verification. Primary check is `scripts/verify-stories.mjs` (mechanical five-tier verdicts); the LLM investigates only failures and `duckdb`-type assertions. Legacy no-stories dungeons fall back to the emulator (`emulateBreakdown`) / DuckDB flow. Always asserts identity-model invariants (stitch count, pre-existing user stamping). |
 | `/analyze-soup <dungeon-path>` | Run a dungeon and analyze its time distribution at week/day/hour granularities. |
 | `/create-project <dungeon-path>` | Provisions a real Mixpanel project for an existing dungeon via the power-tools API (createProject + setTimezone UTC + mintServiceAccount + addGroupKey + setBusinessContext), then writes `credentials` back into the dungeon. Always creates fresh. Needs `BEARER_TOKEN` + `ORG_ID` in `.env`. Orchestrator: [.claude/skills/create-project/provision.mjs](.claude/skills/create-project/provision.mjs). |
 

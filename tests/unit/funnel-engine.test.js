@@ -196,6 +196,31 @@ describe('matchesStepFilter', () => {
 		expect(matchesStepFilter({ p: 'iOS 17' }, { prop: 'p', op: 'not_contains', value: 'Android' })).toBe(true);
 		expect(matchesStepFilter({ p: 'iOS 17' }, { prop: 'p', op: 'not_contains', value: 'iOS' })).toBe(false);
 	});
+
+	// Fix-round B6: step filters share the WHERE rulebook (coerce.js) — the
+	// expectations below are hand-derived from ARB's eval_node/value.c rules,
+	// which funnel step selectors compile through like any other filter.
+	test('B6: string equality is case-insensitive (value.c:285 arb_strcasecmp)', () => {
+		expect(matchesStepFilter({ plan: 'Pro' }, { prop: 'plan', op: 'eq', value: 'PRO' })).toBe(true);
+		expect(matchesStepFilter({ plan: 'Pro' }, { prop: 'plan', op: 'neq', value: 'pro' })).toBe(false);
+	});
+	test('B6: contains is case-insensitive (eval_node.c:2914 arb_strcaseinstr) and type-typed', () => {
+		expect(matchesStepFilter({ p: 'iOS 17' }, { prop: 'p', op: 'contains', value: 'ios' })).toBe(true);
+		expect(matchesStepFilter({ p: 'iOS 17' }, { prop: 'p', op: 'not_contains', value: 'IOS' })).toBe(false);
+		// numeric needle vs string haystack is a type mismatch in ARB — the
+		// old String(target) cast matched '17'; the rulebook does not
+		expect(matchesStepFilter({ p: 'iOS 17' }, { prop: 'p', op: 'contains', value: 17 })).toBe(false);
+	});
+	test('B6: string relational ops via arb_strcasecmp (eval_node.c:2931); mixed types fail', () => {
+		expect(matchesStepFilter({ tier: 'Gold' }, { prop: 'tier', op: 'gt', value: 'bronze' })).toBe(true);
+		expect(matchesStepFilter({ tier: 'Gold' }, { prop: 'tier', op: 'lt', value: 'SILVER' })).toBe(true);
+		expect(matchesStepFilter({ a: 5 }, { prop: 'a', op: 'gt', value: '3' })).toBe(false);
+	});
+	test('B6: list-valued properties test per-item membership (eval_node.c:2949-2959)', () => {
+		expect(matchesStepFilter({ tags: ['Pro', 'beta'] }, { prop: 'tags', op: 'eq', value: 'PRO' })).toBe(true);
+		expect(matchesStepFilter({ tags: ['Pro', 'beta'] }, { prop: 'tags', op: 'contains', value: 'beta' })).toBe(true);
+		expect(matchesStepFilter({ tags: ['Pro', 'beta'] }, { prop: 'tags', op: 'not_contains', value: 'pro' })).toBe(false);
+	});
 });
 
 // ─── Step-level filters in evaluateFunnel ────────────────────────────────────
@@ -360,29 +385,40 @@ describe('evaluateFunnel — exclusion steps', () => {
 		expect(r.completed).toBe(false);
 	});
 
-	test('explicit afterStep prevents pre-step-0 exclusion', () => {
-		// es fires BEFORE fs1 reached. With afterStep=0, exclusion requires
-		// reached >= 0 → does not fire when reached=-1.
+	test('exclusion before step 0 (beyond 2s grace) never terminates', () => {
+		// v1.6.0 (P1.6.4): ARB has NO exclusion gaps before the first step
+		// (funnel_query_is_step_terminated: reached < 0 → false), and the
+		// buffered exclusion at t=500 fails timestamp_comes_after(500, 5000)
+		// once fs1 lands — 500 + 2000 < 5000. Times sit beyond the grace on
+		// purpose; within 2s the anti-conversion bias condemns (next test).
 		const events = [
-			ev5('es', 500), ev5('fs1', 1000), ev5('fs2', 2000),
+			ev5('es', 500), ev5('fs1', 5000), ev5('fs2', 10000),
 		];
 		const r = evaluateFunnel(events, ['fs1', 'fs2'], {
-			exclusionSteps: [{ event: 'es', afterStep: 0, beforeStep: 1 }],
+			exclusionSteps: [{ event: 'es' }],
 		});
 		expect(r.completed).toBe(true);
+		expect(r.terminatedByExclusion).toBe(false);
+		expect(r.excludedAtStep).toBe(null);
 	});
 
-	test('default afterStep (anywhere) DOES fire pre-step-0', () => {
-		// Same fixture but no explicit afterStep — default -Infinity → fires
-		// anywhere in the attempt, including before reaching step 0.
+	test('2s anti-conversion bias: exclusion within 2s BEFORE step 0 condemns at step 0', () => {
+		// v1.6.0 (P1.6.4): es@4000 is within 2s of fs1@5000 —
+		// timestamp_comes_after(4000, 5000) is true via the grace, and ties
+		// between exclusion and step "are ordered in such a way as to prevent
+		// the conversion" (funnel_query.cpp 2-second rule). The user still
+		// counts at step 0 (reached kept), then in excluded[1] — NOT reached=-1
+		// (pre-1.6.0 behavior); ARB never terminates before step 0.
 		const events = [
-			ev5('es', 500), ev5('fs1', 1000), ev5('fs2', 2000),
+			ev5('es', 4000), ev5('fs1', 5000), ev5('fs2', 10000),
 		];
 		const r = evaluateFunnel(events, ['fs1', 'fs2'], {
 			exclusionSteps: [{ event: 'es' }],
 		});
 		expect(r.completed).toBe(false);
-		expect(r.reached).toBe(-1);
+		expect(r.reached).toBe(0);
+		expect(r.terminatedByExclusion).toBe(true);
+		expect(r.excludedAtStep).toBe(1);
 	});
 
 	test('exclusion + reentry: terminates current attempt only', () => {
@@ -401,8 +437,137 @@ describe('evaluateFunnel — exclusion steps', () => {
 		expect(r.length).toBe(2);
 		expect(r[0].completed).toBe(false);
 		expect(r[0].reached).toBe(0);
+		expect(r[0].terminatedByExclusion).toBe(true);
+		expect(r[0].excludedAtStep).toBe(1);
 		expect(r[1].completed).toBe(true);
 		expect(r[1].stepTimes).toEqual([10000, 12000]);
+	});
+
+	// ── P1.6.4 ARB alignment tests (hand-computed from history.cpp /
+	//    funnel_query.cpp rules — see runOneAttempt for the citations) ──
+
+	test('DISQUALIFY-and-freeze: reached kept at killed gap, history immutable after', () => {
+		// [A,B,C], exclusion X in gap 1 only. User reaches step 1, X fires,
+		// then C arrives. hand-computed: reached stays 1 (freeze — no drop to
+		// -1, no restart from X), excludedAtStep = 2, C is never claimed.
+		const events = [
+			ev5('A', 1000), ev5('B', 5000), ev5('X', 10000), ev5('C', 15000),
+		];
+		const r = evaluateFunnel(events, ['A', 'B', 'C'], {
+			exclusionSteps: [{ event: 'X', afterStep: 1, beforeStep: 2 }],
+		});
+		expect(r.completed).toBe(false);
+		expect(r.reached).toBe(1);
+		expect(r.terminatedByExclusion).toBe(true);
+		expect(r.excludedAtStep).toBe(2);
+		expect(r.stepTimes).toEqual([1000, 5000]);
+	});
+
+	test('buffered exclusion retroactively kills a cascade-claimed step (second pass)', () => {
+		// history_record_step second pass (history.cpp): B@5000 pre-records at
+		// slot 1; X@6000 buffers into gap 0 (cannot terminate — reached is -1);
+		// A@7000 reaches step 0, cascade claims B via the 2s step grace
+		// (5000 + 2000 >= 7000). Second pass over [old_reached, reached]:
+		// gap 0's buffered X@6000 is at/after A@7000 per the grace
+		// (6000 + 2000 >= 7000) and before B per the grace (5000 + 2000 >= 6000)
+		// → retroactive kill. hand-computed: reached clamps 1 → 0.
+		const events = [
+			ev5('B', 5000), ev5('X', 6000), ev5('A', 7000),
+		];
+		const r = evaluateFunnel(events, ['A', 'B'], {
+			exclusionSteps: [{ event: 'X' }],
+		});
+		expect(r.completed).toBe(false);
+		expect(r.reached).toBe(0);
+		expect(r.terminatedByExclusion).toBe(true);
+		expect(r.excludedAtStep).toBe(1);
+	});
+
+	test('exclusion buffered before its gap opens goes stale once the gap opens >2s later', () => {
+		// X@2000 maps to gap 1 while the user sits at step 0 — recorded
+		// ("may be useful for a future exclusion step", history_record_exclusion_step)
+		// but when B@8000 opens gap 1, timestamp_comes_after(2000, 8000) fails
+		// (2000 + 2000 < 8000) → no termination. hand-computed: completes.
+		const events = [
+			ev5('A', 1000), ev5('X', 2000), ev5('B', 8000), ev5('C', 12000),
+		];
+		const r = evaluateFunnel(events, ['A', 'B', 'C'], {
+			exclusionSteps: [{ event: 'X', afterStep: 1, beforeStep: 2 }],
+		});
+		expect(r.completed).toBe(true);
+		expect(r.terminatedByExclusion).toBe(false);
+	});
+
+	test('buffered gap-1 exclusion within 2s of step 1 condemns (middle-gap anti-conversion bias)', () => {
+		// Same shape as above but X@7000 is within 2s of B@8000:
+		// timestamp_comes_after(7000, 8000) = 7000 + 2000 >= 8000 → true, and
+		// ties are "ordered in such a way as to prevent the conversion".
+		const events = [
+			ev5('A', 1000), ev5('X', 7000), ev5('B', 8000), ev5('C', 12000),
+		];
+		const r = evaluateFunnel(events, ['A', 'B', 'C'], {
+			exclusionSteps: [{ event: 'X', afterStep: 1, beforeStep: 2 }],
+		});
+		expect(r.completed).toBe(false);
+		expect(r.reached).toBe(1);
+		expect(r.excludedAtStep).toBe(2);
+	});
+
+	test('exclusion outside the conversion window from step 0 does not terminate', () => {
+		// funnel_query_is_step_terminated requires the exclusion to be within
+		// the conversion window from step 0. X@1000+11min is outside a 10-min
+		// window → attempt survives at step 0 (B is also outside the window).
+		const events = [
+			ev5('A', 1000), ev5('X', 1000 + 11 * 60_000), ev5('B', 1000 + 12 * 60_000),
+		];
+		const r = evaluateFunnel(events, ['A', 'B'], {
+			conversionWindowMs: 10 * 60_000,
+			exclusionSteps: [{ event: 'X' }],
+		});
+		expect(r.completed).toBe(false);
+		expect(r.reached).toBe(0);
+		expect(r.terminatedByExclusion).toBe(false);
+		expect(r.excludedAtStep).toBe(null);
+	});
+
+	test('completion killed by an exclusion in the 2s out-of-order tail', () => {
+		// funnel_query.cpp: after the last step, scanning continues only for
+		// events within 2s of the last-step time. X@10500 is 500ms after
+		// completion — timestamp_comes_after checks pass at gap 0
+		// (10500 >= step0@9000... within window; step1@10000 + 2000 >= 10500)
+		// → conversion retroactively terminated at gap 0.
+		const events = [
+			ev5('A', 9000), ev5('B', 10000), ev5('X', 10500),
+		];
+		const r = evaluateFunnel(events, ['A', 'B'], {
+			exclusionSteps: [{ event: 'X' }],
+		});
+		expect(r.completed).toBe(false);
+		expect(r.reached).toBe(0);
+		expect(r.terminatedByExclusion).toBe(true);
+		expect(r.excludedAtStep).toBe(1);
+	});
+
+	test('exclusion beyond the 2s tail cannot touch a completed conversion', () => {
+		// Same shape, X 2001ms after the last step → outside the tail; the
+		// scan stops and the completion stands.
+		const events = [
+			ev5('A', 9000), ev5('B', 10000), ev5('X', 12001),
+		];
+		const r = evaluateFunnel(events, ['A', 'B'], {
+			exclusionSteps: [{ event: 'X' }],
+		});
+		expect(r.completed).toBe(true);
+		expect(r.terminatedByExclusion).toBe(false);
+	});
+
+	test('single-step funnel has no gaps — exclusions can never fire', () => {
+		const events = [ev5('X', 500), ev5('A', 1000), ev5('X', 1500)];
+		const r = evaluateFunnel(events, ['A'], {
+			exclusionSteps: [{ event: 'X' }],
+		});
+		expect(r.completed).toBe(true);
+		expect(r.terminatedByExclusion).toBe(false);
 	});
 });
 

@@ -53,19 +53,32 @@ Mixpanel's frequency distribution / cohort-by-event-count reports count
 **distinct time periods** (default: days) on which the user fired the
 event. Two purchases on the same day = frequency **1**, not 2.
 
-Two related rules exist:
+Two related rules exist (v1.6 names them for what they are; the old
+`'calendar'` / `'rolling'` names remain as silent aliases, unknown names
+now throw):
 
-- **Calendar bucket** (default in our verifier, `algorithm: 'calendar'`):
+- **`algorithm: 'ui-bucket'`** (default in our verifier):
   `COUNT(DISTINCT date_trunc(unit, time))` in UTC. Matches what the Mixpanel
   UI shows and what [`injectOnNewDays`](lib/hook-helpers/inject.js) uses
   internally.
-- **Rolling window** (`algorithm: 'rolling'`): the C++
-  `addiction_query.cpp` rule `qtz_time >= last_counted + seconds_for_unit`.
-  Diverges from calendar at unit boundaries (events at 23:59 + 00:01 next
-  day = 1 rolling period, 2 calendar periods).
+- **`algorithm: 'mixpanel-rolling'`**: the C++
+  `addiction_query.cpp` rule `qtz_time >= last_counted + seconds_for_unit`
+  (`addiction_query_update_history`, `addiction_query.cpp:363-374`) — what
+  Mixpanel's reader actually computes. Diverges from ui-bucket at unit
+  boundaries (events at 23:59 + 00:01 next day = 1 rolling period, 2
+  calendar periods).
 
-Use the default (`calendar`) for hooks. Use `algorithm: 'rolling'` only
+Use the default (`ui-bucket`) for hooks. Use `'mixpanel-rolling'` only
 when verifying behavior that explicitly depends on the C++ implementation.
+
+**The actual Frequency report shape** is `frequencyHistogram(events,
+{ event, unit, intervalDays, profiles })` (v1.6): per report interval, a
+per-user ROLLING unit counter that **resets at every interval boundary**
+(`last_counted` is per-(user, interval), `addiction_query.cpp:363-374`),
+bucketed into `histogram[count - 1]` with zero-count users **omitted** — no
+zero bucket (`addiction_query.cpp:546-573`). Array length is
+`ceil(interval / unit)` (`unit.c:108-113`). Use it when a dungeon targets
+the Frequency report itself rather than a frequency-derived cohort.
 
 **Implication for hooks:** `scaleEventCount(record, "Buy", 3)` clones 3x as
 many Buy events at sub-second offsets — they all land on the same calendar
@@ -93,6 +106,26 @@ Implementation: [`evaluateFunnel`](lib/verify/funnel-engine.js).
 - TTC is `stepTimes[last] - stepTimes[0]` from the greedy match, not from a
   property value. To shift TTC, shift event timestamps (Recipe 3.14).
 
+**v1.6 funnel completion** (all in [`evaluateFunnel`](lib/verify/funnel-engine.js)
+/ `emulateBreakdown`):
+
+- **Session-count conversion windows** (`conversionWindowSessions`): the
+  window is bounded by N session boundaries after step 0, not wall-clock
+  (`WINDOW_TYPE_SESSIONS`, `conversion_window.cpp`). `countMode: 'sessions'`
+  is the API preset that rewrites count type + window together.
+- **Exclusion steps** use ARB's gap-slot semantics: an exclusion event
+  kills only the funnel attempt whose gap it lands in — full audit against
+  `history.cpp` shipped in v1.6.
+- **Any-order step blocks** run ARB's anchor/chunk greedy pass: unordered
+  steps inside a block match in any sequence between the surrounding
+  anchors.
+- **Trends under `timeBucket`** anchor on STEP 0's timestamp — a funnel
+  converting across midnight counts in the bucket where it STARTED
+  (`funnel_query.cpp` anchors step 0 in `[start, stop)`).
+- **TTC** aggregates use ARB's integer-second gap deltas: per-gap deltas
+  floor to whole seconds and clamp to 0 per gap; `$ttc` is integer seconds
+  (`history.cpp`). Sub-second TTC engineering is invisible to Mixpanel.
+
 ### 2.3 Aggregations are null-aware
 
 `AVG(x)` skips null/undefined/NaN/non-numeric from BOTH numerator AND
@@ -105,13 +138,26 @@ it exists. You don't need to "fill" missing values with 0 to keep the
 average sensible — Mixpanel ignores them. Conversely, if you want to dilute
 an average, removing the property is a no-op; you have to add zeros.
 
-### 2.4 Attribution caps at 10 touchpoints
+**List-valued properties (v1.6):** Mixpanel's list branch aggregates each
+numeric list ITEM independently — for AVG every item adds to the numerator
+AND increments the denominator (`normal_query.cpp:1585-1617`), one level
+deep (nested lists are skipped, not recursed). `nullAwareAvg` /
+`nullAwareSum` mirror this behind `{ flatten: true }` — opt-in, because the
+v1.5 default (arrays skipped whole) would otherwise silently change results
+for 1-item-array data. If a dungeon carries numeric list properties and
+targets an Insights SUM/AVG, verify with `flatten: true` or the numbers
+won't match Mixpanel.
 
-Multi-touch attribution models cap consideration at the last 10 touchpoints
-in the lookback window (`TOUCHPOINTS_LIMIT = 10` in
-`attributed_value_reader.cpp`). For first-touch attribution this matters
-when a user has > 10 touches before conversion — the cap shifts which
-touch is "first."
+### 2.4 Attribution: first/last touch are UNCAPPED; only multi-touch caps at 10
+
+First-touch and last-touch attribution read the globally first / most
+recent touch in the lookback window, no matter how many touches precede
+the conversion — ARB's FIRST/LAST paths execute hard-`LIMIT 1` statements
+(`whoval/read.cpp:173-192`, `:643-655`). `TOUCHPOINTS_LIMIT = 10`
+(`attributed_value_reader.cpp:16`) is consumed only by the sorted-list
+statement (`LIMIT ?4`, `read.cpp:595`) serving multi-touch models
+(linear / participation / time-decay). A user with 50 touches before
+conversion still first-touch-attributes to touch #1, not touch #41.
 
 **v1.5 generation contract:** the engine now caps UTM stamping at
 `maxTouchpointsPerUser` (default 10) per user, sampled uniform-random across
@@ -119,6 +165,24 @@ the user's lifetime (NOT first-N-chronological). Stamps are sorted
 chronologically before being applied, so attribution properties land in
 time order. Hooks that bias attribution should OVERWRITE engine-stamped
 values, not stamp from scratch (those would push the user past the cap).
+
+**Per-conversion attribution (v1.6):** Mixpanel runs attribution once PER
+conversion event — each conversion gets its own lookback read ending at
+that conversion (`attributed_value_reader_read` takes one `event_time_ms`
+per read; `backend/libquery/properties_over_time/attributed_value_reader.cpp`).
+The verifier's `attributedBy` matches with `perConversion: 'all'`; its
+default stays `'first'` (one conversion per user — v1.5 back-compat, NOT
+ARB semantics).
+
+**⚠ Touchpoint seam (documented, by design):** the generator samples WHICH
+events get UTMs uniformly across a user's lifetime (capped at
+`maxTouchpointsPerUser`, default 10); the verifier and Mixpanel read
+touches BEFORE each conversion. A user with more eligible events than the
+generator cap can carry touches that never got stamped — and stamped
+touches can postdate every conversion. Divergence is theoretical below
+~10 eligible events per user. Attribution-engineering hooks should
+overwrite engine-stamped UTMs rather than relying on lifetime-uniform
+sampling.
 
 ### 2.5 Active-day distribution is config-first
 
@@ -166,10 +230,24 @@ query from THREE reset triggers:
 Each session emits synthetic `$duration_s`, `$event_count`, `$origin_start`,
 `$origin_end` properties.
 
-**v1.5 contract:** the generator's `assignSessionIds` pre-stamps `session_id`
-using all three rules (UTC day boundary added in v1.5.0 audit). Verifier
-trusts pre-stamped IDs and groups by `(user, session_id)`. Use
-`emulateBreakdown({ type: 'sessionMetrics' })` to verify session-level shapes.
+**Namespace rule:** synthetic session events are `EVENT_TYPE_SESSION` — a
+separate selector namespace from regular events (`libquery/event/filter.h`).
+A dungeon event literally named `"$session_start"` would NOT merge with or
+shadow Mixpanel's session events; don't name events into the `$session_*`
+family (see `lib/verify/sessionize.js:41-42`).
+
+**v1.6 contract:** the verifier derives sessions at query time via
+`sessionize()` (`lib/verify/sessionize.js`) — the same three triggers, all
+strict `>`, plus synthetic `$session_start`/`$session_end` events carrying
+the four computed props. `sessionMetrics` defaults to `source: 'derived'`;
+the generator's pre-stamped `session_id` (from `assignSessionIds`) is a
+generator artifact Mixpanel never sees, kept available via
+`source: 'stamped'` and audited by the per-row `stampedDivergence` count.
+`eventBreakdown` and `uniques` accept `countType: 'sessions'` (count once
+per (user, session, segment) / distinct (user, session) pairs per bucket —
+`normal_query.cpp:1318-1352`). Sessions always derive from the FULL event
+stream; name filters select which events count, never which events shape
+sessions (`normal_query.cpp:2271-2280`).
 
 **Verifier-only conveniences (not directly reproducible in Mixpanel UI):**
 - `evaluateFunnel({ sessionScoped: true })` partitions events per session and
@@ -202,31 +280,63 @@ bucket = floor(time_to_retention_event_s / bucket_seconds)
 A return 23h after birth lands in bucket 0; a return 25h after birth lands in
 bucket 1 — even when both fall on the UTC calendar day after the birth day.
 
-**`birth_can_retain`** (default `false`; `retention_query.cpp:1097-1109`):
-ms-strict check on whether returns AT the birth ms count. Default excludes
-them (`first_event_time < retention_event_time`). Set `birthCanRetain: true`
-on the verifier to count exact-birth-ms returns.
+**`birth_can_retain`** (default `false`; `retention_query.cpp:1120-1139`,
+`retention_query_event_occurs_after_birth` — cites COR-233): returns strictly
+after the birth ms count by default (`first_event_time <
+retention_event_time`). `birthCanRetain: true` relaxes the gate to `<=` — but
+ONLY when the return event ALSO matches the birth filter (`matches_first`). A
+*distinct* return event at the exact birth ms stays excluded even with the
+flag on. The gate reads the RAW birth time — calendar alignment applies only
+inside the bucket delta.
 
-`carry_forward` mode marks a user as retained for every later bucket once
-they hit any earlier bucket (Mixpanel's CARRY_FORWARD unbounded mode,
-`retention_query.cpp:1824-1837`). Retention is monotonically non-decreasing
-across buckets in this mode.
+**Unbounded modes** — `unbounded: 'carryForward' | 'carryBack' |
+'consecutiveForward'` (v1.6; the v1.5 `carry_forward: true` spelling remains
+as an alias for `carryForward`):
 
-`segmentBy` partitions the cohort by a property on the BIRTH event
-(Mixpanel's `segment_event=FIRST` mode — `retention_query.cpp:1309`).
+- `carryForward` — retained at bucket N if active in ANY bucket ≤ N; read-time
+  carry (`retention_query.cpp:1854-1868`). Curve is monotonically
+  non-decreasing.
+- `carryBack` — retained at bucket N if active in ANY bucket ≥ N;
+  reverse-iteration carry (`retention_query.cpp:274-278`). Curve is
+  monotonically non-increasing.
+- `consecutiveForward` — gated at WRITE time (`retention_query.cpp:1275-1287`):
+  bucket N is marked only if N−1 is already marked (except N = 0), so a user's
+  surviving marks are exactly their maximal consecutive streak `{0..k}` from
+  birth.
 
-**Documented gaps (out of v1.5.0 verifier scope):**
-- **COMPOUNDED retention** (`retention_query.cpp:670`) reuses the first-event
-  filter as the return filter, making EVERY cohort event a retention
-  candidate. Used heavily in Mixpanel's "DAU coming back" reports — verify
-  these patterns in DuckDB or directly in Mixpanel.
-- **CARRY_BACK / CONSECUTIVE_FORWARD** unbounded modes
-- **CALENDAR_START** bucket alignment (anchor buckets to absolute calendar
-  periods instead of birth time)
-- **`segment_event=SECOND`** (segment by return-event property)
-- **Cohort window** — verifier uses ALL users with the birth event in the
-  dataset; Mixpanel restricts to users with birth in `[from_date, to_date]`
-- **Week / month bucket units** — verifier supports day buckets only
+**`compounded: true`** (`retention_query.cpp:677-685`): `rq->second =
+rq->first` — the return side IS the cohort side, so every cohort event is a
+return candidate. This is Mixpanel's "DAU coming back" report family. Setting
+a conflicting `returnEvent` alongside `compounded` throws.
+
+**`bucketUnit: 'hour' | 'day' | 'week' | 'month'`** — month is **31 days
+FIXED** ("maximum possible seconds in a month", `libquery/util.h:265-273`),
+NOT calendar months. Week is 7 fixed days.
+
+**`bucketAlignment: 'calendarStart'`** (`retention_query.cpp:312-332`): floors
+the BIRTH time to the bucket-unit boundary before computing deltas (week
+floors to ISO Monday, matching `partitionByTimeBucket`). Month alignment
+floors to the calendar month start while the bucket WIDTH stays 31d fixed.
+
+**`segmentBy` + `segmentOn: 'birth' | 'return'`**: `'birth'` (default,
+SEGMENT_EVENT_FIRST) reads the segment value from the BIRTH event; `'return'`
+(SEGMENT_EVENT_SECOND, `retention_query.cpp:1421-1444`) reads it from each
+RETURN event — a user joins a segment's cohort only via a qualifying return
+carrying that value, so births are unsegmented unless `birthCanRetain` lets
+the birth itself qualify as a return.
+
+**`cohortWindow: { from, to }`** restricts births to `[from, to]` inclusive —
+Mixpanel's `[from_date, to_date]` cohort restriction. Without it the verifier
+uses all users with the birth event anywhere in the dataset.
+
+**Internal-event ignore list** (`retention_query.cpp:2546-2555`): when a side
+has no explicit event selector (`'$any_event'`), `$campaign_delivery`,
+`$campaign_bounced`, `$create_alias`, `$identify`, `$merge` are ignored for
+that side. Explicit selectors bypass the list.
+
+All items on the v1.5.0 "documented gaps" list closed in 1.6.0. Unrecognized
+retention option keys now THROW — kills the silent-ignore class of bug where a
+typo'd `compounded: true` was dropped without effect.
 
 ### 2.8 Funnel reentry: state machine resets after completion
 
@@ -244,7 +354,9 @@ HPC partitions a single funnel into one parallel sub-funnel per unique value
 of the held property on the step-0 event. A user can complete the funnel in
 one HPC bucket and drop off in another simultaneously — the buckets are
 independent. Use `evaluateFunnelHPC(events, steps, holdProperty, options)`
-directly (not auto-routed through `funnelFrequency` in v1.5.0).
+directly, or (v1.6) pass `holdPropertyConstant: '<prop>'` to the
+`funnelFrequency` emulator — it routes through the HPC engine and reports
+per-held-value sub-funnel counts.
 
 ### 2.10 Funnel segment modes (FIRST_TOUCH / LAST_TOUCH / STEP)
 
@@ -301,6 +413,152 @@ Validator strict-clamps prevent the worst pathological combos (e.g.,
    step 14 drops any event with `time > FIXED_NOW`. Hooks can clone events
    with arbitrary timestamps without polluting the dataset. Verified across
    the 194-combo matrix; this guarantee survives every hook pattern.
+
+### 2.12 Event breakdown counts EVENTS, not users (v1.6)
+
+Reference: `normal_query.cpp:1718-1776` (ACTION_TYPE_FOR_EACH). Insights
+"Total" broken down by a property counts every matching EVENT into its
+segment — a user firing 50 times contributes 50, not 1. Emulator:
+`emulateBreakdown(events, { type: 'eventBreakdown', event, breakdownProperty,
+topN })`.
+
+- **List-valued properties explode**: an event with `tags: ['a', 'b']`
+  contributes one count to segment `a` AND one to segment `b`. An EMPTY list
+  lands in the literal segment `"$empty_list"` (`normal_query.cpp:1762`).
+- **Segments are case-sensitive and type-tagged**: number `1` and string
+  `'1'` are DIFFERENT segments. Engineer property values with exact casing
+  and types.
+- **Two rulebooks — segment IDENTITY vs WHERE-filter matching**
+  (implementation: `lib/verify/coerce.js`):
+
+  | Operation | Case | Types | ARB source |
+  |---|---|---|---|
+  | Segment bucketing (breakdown key) | **sensitive** | tagged (`1` ≠ `'1'`) | `hash_value.c:114-115` (raw XXH3), `:92-97` (type tags); ordering `cmp.c:24-32` (`arb_strcmp`) |
+  | Filter `==` / `!=` | **INsensitive** | string-coerced | `value.c:285` (`arb_strcasecmp`) |
+  | Filter `contains` | **INsensitive** | string-coerced | `eval_node.c:2914` (`arb_strcaseinstr`) |
+  | Filter `<` `>` `<=` `>=` on strings | **INsensitive** | string-coerced | `eval_node.c:2931` (`arb_strcasecmp`) |
+
+  So `plan == "PRO"` in a WHERE filter matches `"pro"` events, but those
+  events still land in a `"pro"` segment distinct from `"PRO"` when broken
+  down. A hook that stamps mixed-case variants passes its own filter check
+  and STILL splits the breakdown table.
+- **Coercion to breakdown key**: `null`/`undefined` → `"undefined"`
+  (`arb_selector.py:889-916`), booleans → `"true"`/`"false"`, `-0` → `0`
+  (`hash_value.c:111`), objects JSON-stringify, lists fan out per item
+  BEFORE coercion.
+- **`topN` defaults to 250** (`normal_query.cpp:1195-1197` — "If no
+  meaningful limit is supplied, set it to 250"), sorted count-desc, truncated
+  with NO "other" bucket. Segments below the cut disappear from the table
+  entirely — keep engineered breakdowns well under 250 distinct values.
+- `countType: 'unique'` switches to per-segment distinct users;
+  `countType: 'sessions'` counts distinct derived sessions per segment.
+  `firstTimeOnly: true` composes (see §2.15).
+
+### 2.13 Uniques, XAU rolling windows, and cumulative (v1.6)
+
+Reference: `normal_query.cpp:1300-1316` (per-interval dedup), `:1797-1830`
+(rolling), `:1834-1863` (cumulative). Emulator: `{ type: 'uniques', event,
+unit, rollingWindow, cumulative }`.
+
+- **Per-interval dedup is independent**: a user active on day 3 and day 5
+  counts once in EACH bucket. DAU across a week can sum to 7× the true user
+  count.
+- **XAU (`rollingWindow: W`) is a look-back window, NOT a calendar period**:
+  an event on day E contributes the user to buckets `[E, E+W−1]` — forward
+  tiling of the look-back. WAU on a Wednesday covers the 7 days ENDING that
+  Wednesday, not the ISO calendar week. Do not verify weekly-active stories
+  against calendar-week buckets.
+- **`cumulative: true`**: bucket N reports distinct users seen in buckets
+  0..N — each user counts once, at first appearance, and the curve is
+  monotonically non-decreasing.
+- **Empty/missing distinct_ids are skipped** (`normal_query.cpp:2200-2208`) —
+  events with `''` ids never count toward uniques.
+- `countType: 'sessions'` composes with `rollingWindow` but NOT with
+  `cumulative` (`normal_query.cpp:1318-1352` — no cumulative sessions path).
+
+### 2.14 Formulas evaluate in the API layer, zero-filled (v1.6)
+
+Reference: `analytics/api/.../formula/util.py` `operate()` (:25-47),
+div-by-zero (:81-86), `grammar.lark` (PEMDAS). Insights formulas (e.g.
+`A/B*100`) are NOT an ARB query — the API layer fetches each letter's series
+independently and combines them in Python:
+
+- **Union-of-keys broadcast**: series are joined on the union of their date
+  keys; a date missing from one series contributes **0** (not null, not
+  skipped).
+- **Division by zero yields 0** — not NaN, not infinity, not a gap. A
+  conversion-rate formula over a day with zero denominators shows 0%.
+- **A missing/empty series is all zeros.**
+
+Helper: `evaluateFormula(expr, { A: series, B: series })` implements the same
+grammar and zero-fill rules. Engineer stories so denominators are non-zero on
+days the chart must look alive.
+
+### 2.15 First-time-ever is a two-query rewrite (v1.6)
+
+Reference: `analytics/.../event_selector.py:59-149`,
+`arb_selector.py:1874-1936`. "First time ever doing X" runs TWO queries:
+pass 1 computes each user's `first_event_time` over (event + **pre-filters**);
+pass 2 selects events matching event name + `$time == first_event_time` +
+**post-filters**. Consequences:
+
+- **Pre-filters define the universe** — they decide WHICH event is "the
+  first". Post-filters only test the already-picked event; a first event
+  failing a post-filter is dropped, NOT replaced by the next candidate.
+- **Filter position decides pre vs post** — in Mixpanel's UI, filters above
+  the first-time operator are pre, below are post.
+- Helper: `filterFirstTimeEver(events, { event, preWhere, postWhere })`;
+  `firstTimeOnly: true` on the `eventBreakdown`/`uniques` emulators applies
+  the no-filter form.
+
+### 2.16 Lifecycle is a board template, not an engine query (v1.6)
+
+Mixpanel has NO lifecycle query type (`query_type.cpp:8-30` enumerates every
+ARB query — nothing lifecycle-shaped). "Lifecycle" is the Lifecycle Cohort
+Analysis BOARD TEMPLATE: Insights uniques filtered by four behavioral cohorts
+on a **Value Moment** event (`iron/common/report/dashboards/types.ts:367-390`),
+in 7- and 30-day period variants. The canonical cohort definition is
+`weeklyResurrectedUserBookmark`
+(`iron/common/widgets/profile-summary/bookmark_templates.ts:179-320`).
+
+Classification per period T: **new** = first-ever value moment in T;
+**retained** = active in T and T−1; **resurrected** = active in T, inactive
+in T−1, active in some period before; **dormant** = INACTIVE in T, active in
+T−1. Emulator: `{ type: 'lifecycle', valueMomentEvent, periodDays: 7|30 }`.
+
+- **Declared divergence (tiled vs rolling)**: the real template's cohort
+  windows are rolling, re-anchored as-of each charting interval; the emulator
+  tiles fixed periods back from the dataset's last event day — identical
+  classification rules, deterministic period edges.
+- **Dormancy is an EqualTo-0 filter**: ONE stray value-moment event inside a
+  would-be dormancy window reclassifies the user (resurrected → retained).
+  Resurrection stories need disciplined gaps — use the lifecycle-wave atom
+  rather than hand-rolled probabilistic gaps.
+
+### 2.17 Flows (Top Paths) are next-anchor-only with per-level pruning (v1.6)
+
+Reference: `flows_query.cpp:988-994` (next-anchor-only), `flows.cpp:680-717`
+(buffers), `bookmark.py:96/:110` (pruning thresholds). Emulator: `{ type:
+'topPaths', anchors, forward, reverse, countType, output }`; helpers
+`extractFlows` / `aggregateFlows`.
+
+- **Next-anchor-only matching**: an event only advances the flow if it
+  matches anchor `reached + 1`. Matching a LATER anchor (or an earlier one
+  again) makes it a plain step. Out-of-order anchor engineering does nothing.
+- **Capacity rings**: each anchor keeps `forward` steps after it (linear —
+  first N) and `reverse` steps before it (circular — LAST N). Defaults
+  forward=4, reverse=0 mirror the Flows UI view, not ARB constants.
+- **`countType: 'unique'`** = one flow per user across the whole stream;
+  `'general'` coincides for pure flows; `'sessions'` restarts the flow
+  universe at every session boundary (sessions derive from the user's FULL
+  stream, not the filtered steps).
+- **Per-level top-N pruning**: nodes below the per-level top
+  `cardinalityThreshold` coalesce into `$mp_uncommon_flows_events`. Defaults:
+  **50** for list output, **3** for sankey. ANCHOR nodes are exempt from
+  coalescing. A path must hold roughly ≥20-25% share at each level to survive
+  the sankey view — engineer dominant paths, not long tails.
+- **Step spacing**: give engineered path steps ≥1s spacing — same-ms steps
+  sort nondeterministically and can reorder the path.
 
 ---
 
@@ -451,13 +709,16 @@ Validator strict-clamps prevent the worst pathological combos (e.g.,
     `injectOnNewDays` for cohort-conditional cases ("premium users get 7+
     active days, rest stay default"). See §2.5.
 
-29. **Touchpoint cap awareness for attribution hooks.** The engine now caps
+29. **Touchpoint cap awareness for attribution hooks.** The engine caps
     UTM stamping at `maxTouchpointsPerUser` (default 10) per user, sampled
     across the user's lifetime. Attribution-biasing hooks should OVERWRITE
     engine-stamped values (e.g., set `event.utm_source = "google"` on
-    already-stamped touches), NOT stamp fresh touches from scratch. Stamping
-    from scratch would push the user past the cap and your hook's stamps
-    would land outside Mixpanel's last-10 lookback window.
+    already-stamped touches), NOT stamp fresh touches from scratch.
+    First/last-touch attribution is UNCAPPED (§2.4) — a fresh stamp
+    EARLIER than the engine's first stamp silently becomes the first-touch
+    winner, changing results out from under your derivation. Overwriting
+    the engine's stamps keeps the touch set fixed so your bias lands
+    exactly where attribution reads.
 
 ---
 
@@ -888,6 +1149,13 @@ max gap. If your sequence has multiple `step_a` events, only the first is
 used. The greedy engine in Mixpanel picks the same first one, so behavior
 matches.
 
+**As a pattern (v1.6):** `applyTTCBySegmentV2` from
+`@ak--47/dungeon-master/hook-patterns` packages this recipe — segment lookup,
+`findFirstSequence`, `scaleFunnelTTC` — in one call. The older funnel-post
+`applyTTCBySegment` is deprecated: it scales one run's internal gaps, which
+only reaches the TTC report when that run is the user's first occurrence of
+the steps.
+
 **Conversion-window strict `<`:** If `step_c` lands at exactly `step_a + window`,
 it is **excluded**. When shifting timestamps, leave at least 1ms of slack
 under the conversion-window cap.
@@ -1041,10 +1309,14 @@ if (type === "user") {
 **Mixpanel report:** Retention / Insights — surviving event count broken down by hash-derived cohort
 
 ```js
+import { hashCohort } from "@ak--47/dungeon-master/hook-helpers";
+
 if (type === "everything") {
   const uid = record[0]?.user_id || record[0]?.device_id || "";
-  const idHash = String(uid).split("").reduce((acc, c) => acc + c.charCodeAt(0), 0);
-  if (idHash % 5 !== 0) return record;
+  // hashCohort = FNV-1a over the FULL id (v1.6). Don't hand-roll char-code
+  // arithmetic — id alphabets don't cover charcode space uniformly, so
+  // `% N` idioms silently miss their target rate (see §5, hashFloat).
+  if (!hashCohort(uid, 20)) return record; // ~20% of users churn-silenced
 
   const cutoff = dayjs.unix(meta.datasetStart).add(30, "days");
   dropEventsWhere(record, e => dayjs(e.time).isAfter(cutoff));
@@ -1109,9 +1381,11 @@ for distinct days, not total events.
 **Mixpanel report:** Varies by use — same report the deprecated feature targeted (typically Insights breakdown by `subscription_tier`)
 
 ```js
+import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
+
 if (type === "user") {
-  const hash = String(record.distinct_id || "").charCodeAt(0) % 10;
-  record.subscription_tier = hash < 6 ? "free" : hash < 8 ? "monthly" : "annual";
+  const h = hashFloat(record.distinct_id); // FNV-1a full-string → [0,1)
+  record.subscription_tier = h < 0.6 ? "free" : h < 0.8 ? "monthly" : "annual";
 }
 
 if (type === "everything") {
@@ -1147,10 +1421,10 @@ return record;
 
 ### Attribution
 
-#### 4.25 First-Touch Attribution Bias (Capped at 10 Touches)
+#### 4.25 First-Touch Attribution Bias
 
-**Hook:** `everything` | **Counting:** TOUCHPOINTS_LIMIT = 10 (Section 2.4)
-**Mixpanel report:** Attribution — Conversions by Source (first-touch model, last-10 lookback)
+**Hook:** `everything` | **Counting:** first-touch is uncapped (Section 2.4)
+**Mixpanel report:** Attribution — Conversions by Source (first-touch model)
 
 **In Mixpanel:** `Convert` events broken down by first-touch `Touch.source`
 show Google >> Facebook >> Twitter (10:5:1 weights).
@@ -1162,33 +1436,30 @@ if (type === "everything") {
   const conversion = record.find(e => e.event === "Convert");
   if (!conversion) return record;
   const convTime = dayjs(conversion.time).valueOf();
-  // Mixpanel only considers the LAST 10 touches before conversion. Stamp at
-  // most ~6-8 touches per user so the first one is clearly the bias target.
   const sources = weighArray(["google", "facebook", "twitter"], [10, 5, 1]);
   const touches = record.filter(e => e.event === "Touch" && dayjs(e.time).valueOf() <= convTime);
   if (touches.length === 0) return record;
-  // Bias the FIRST touch (chronologically earliest within the cap window).
-  // Sort descending by time, take last 10, then sort ascending.
-  const sortedDesc = touches.slice().sort((a, b) => dayjs(b.time).valueOf() - dayjs(a.time).valueOf());
-  const inCap = sortedDesc.slice(0, 10).sort((a, b) => dayjs(a.time).valueOf() - dayjs(b.time).valueOf());
-  if (inCap.length > 0) {
-    inCap[0].source = chance.pickone(sources);
-  }
+  // First-touch reads the CHRONOLOGICALLY FIRST touch before conversion —
+  // no cap (whoval/read.cpp LIMIT 1). Bias exactly that one.
+  const sorted = touches.slice().sort((a, b) => dayjs(a.time).valueOf() - dayjs(b.time).valueOf());
+  sorted[0].source = chance.pickone(sources);
   return record;
 }
 ```
 
-**Why the cap matters:** Stamping 50 weighted touches per user gives the same
-first-touch result as stamping 10 — Mixpanel's attribution module
-(`attributed_value_reader.cpp`) only considers `TOUCHPOINTS_LIMIT = 10`. Aim
-for sparse, deterministic touches.
+**Where the 10-cap DOES apply:** only multi-touch models (linear /
+participation / time-decay) consider just the last `TOUCHPOINTS_LIMIT = 10`
+touches. First/last-touch read the true first/most-recent touch however
+many exist. Sparse touches are still good practice — they keep the data
+legible — but they're realism, not a correctness requirement.
 
 **v1.5 with `hasCampaigns: true`:** when the engine has already stamped UTMs
 on up to `maxTouchpointsPerUser` events per user (default 10), DO NOT stamp
-fresh touches in your hook — they'd push the user past the cap and fall
-outside Mixpanel's last-10 window. Use [Recipe 4.26](#426-bias-engine-stamped-touches-v15)
-to OVERWRITE the engine's `utm_source` on the existing stamped events
-instead. See [§2.4](#24-attribution-caps-at-10-touchpoints).
+fresh touches in your hook — a fresh stamp earlier than the engine's first
+would silently become the first-touch winner. Use
+[Recipe 4.26](#426-bias-engine-stamped-touches-v15) to OVERWRITE the
+engine's `utm_source` on the existing stamped events instead. See
+[§2.4](#24-attribution-firstlast-touch-are-uncapped-only-multi-touch-caps-at-10).
 
 ---
 
@@ -1223,9 +1494,19 @@ if (type === "everything") {
 ```
 
 **Why this works under v1.5:** the engine has already capped + sampled the
-touches. Stamping fresh ones from scratch in the hook would push the user
-past the cap, and your stamps would land outside Mixpanel's last-10 lookback
-window — giving them no effect. Overwriting is correct.
+touches, so the stamped set IS the touch set attribution reads. Stamping
+fresh touches from scratch would change that set — an earlier fresh stamp
+becomes the new first-touch winner (first/last-touch are uncapped, §2.4) —
+invisibly to whatever derivation your bands came from. Overwriting is
+correct.
+
+**As a pattern (v1.6):** `applyAttributedBySource` from
+`@ak--47/dungeon-master/hook-patterns` packages this recipe:
+`applyAttributedBySource(record, null, { weights: { google: 10, facebook: 5,
+twitter: 1 }, model: 'firstTouch' })` overwrites the first engine-stamped
+touch with a seeded weighted pick (models: `firstTouch`, `lastTouch`,
+`both`). It never stamps unstamped events, so total touch count is
+unchanged.
 
 ---
 
@@ -1242,7 +1523,7 @@ a cohort-conditional `everything` hook that uses `injectOnNewDays` to push
 specific users above the baseline.
 
 ```js
-import { injectOnNewDays } from "@ak--47/dungeon-master/hook-helpers";
+import { injectOnNewDays, hashCohort } from "@ak--47/dungeon-master/hook-helpers";
 import { countDistinctPeriods } from "@ak--47/dungeon-master/verify";
 
 // Config:
@@ -1250,10 +1531,9 @@ import { countDistinctPeriods } from "@ak--47/dungeon-master/verify";
 //   events: [{ event: "open app", weight: 5 }, ...]
 
 if (type === "everything") {
-  // Hash-based cohort (deterministic, ~10% of users).
+  // Hash-based cohort (deterministic, ~10% of users — FNV-1a full-string).
   const uid = record[0]?.user_id || "";
-  const isPowerUser = uid.charCodeAt(0) % 10 === 0;
-  if (!isPowerUser) return record;
+  if (!hashCohort(uid, 10)) return record;
 
   const days = countDistinctPeriods(record, "open app", "day");
   if (days >= 10) return record;
@@ -1308,6 +1588,111 @@ your factor.
 
 ---
 
+#### 4.29 Lifecycle Wave — Dormancy + Resurrection (v1.6)
+
+**Hook:** `everything`
+**Mixpanel report:** Lifecycle — Resurrected users spike after the dormancy window (Section 2.16)
+
+**In Mixpanel:** ~15% of users go dormant for two full weeks starting a week
+after signup, then resurrect with a burst of value-moment activity.
+
+```js
+import { applyLifecycleWave, hashCohort } from "@ak--47/dungeon-master/hook-helpers";
+
+if (type === "everything") {
+  const uid = record[0]?.user_id || "";
+  if (!hashCohort(uid, 15)) return record;
+  // Sweep [birth+7d, birth+21d] clean of value moments, then clone a
+  // 4-event resurrection burst 1-3h after the window.
+  return applyLifecycleWave(record, uid, {
+    dormantFromDay: 7,
+    dormantDays: 14,
+    resurrectBurst: 4,
+    valueMomentEvent: "complete workout",
+  });
+}
+```
+
+**Why the atom sweeps the whole window:** lifecycle "dormant" is an
+`EqualTo 0` filter per period — ONE stray value moment inside the window
+reclassifies the user and the Resurrected spike vanishes. The atom filters
+by timestamp over the array as passed, so events injected by EARLIER hook
+logic in the same pass get swept too. Size `dormantDays` to ≥ 2 lifecycle
+periods (2 weeks for weekly charts) so period tiling can't clip the gap, and
+keep the window inside the user's lifespan (clones past the dataset end are
+dropped by the future-time guard). `dropAll: true` silences the user
+completely for the window — use it when the lifecycle chart counts a broad
+event set rather than one value moment.
+
+---
+
+#### 4.30 Flows Path Share — Biased Branch After an Anchor (v1.6)
+
+**Hook:** `everything`
+**Mixpanel report:** Flows — top paths after the anchor event show the engineered branch (Section 2.17)
+
+**In Mixpanel:** ~30% of users who view an item proceed straight down
+`add to cart → begin checkout`, making it the dominant Sankey branch.
+
+```js
+import { applyPathBias } from "@ak--47/dungeon-master/hook-helpers";
+
+if (type === "everything") {
+  const uid = record[0]?.user_id || "";
+  return applyPathBias(record, uid, {
+    anchor: "view item",
+    path: ["add to cart", "begin checkout"],
+    share: 0.30,                    // FRACTION [0,1] — the atom hashes uid itself
+    gapSeconds: [2, 30],
+  });
+}
+```
+
+**Why the constraints exist:** Flows' unique mode reads only the FIRST flow
+per user, so the atom anchors on the first `anchor` occurrence; gaps are
+clamped ≥1s because sub-second jitter scrambles Sankey step order; and the
+branch needs roughly ≥20-25% share to survive top-3-per-level pruning —
+don't engineer a 5% path and expect to see it. Users missing a source event
+for ANY step are skipped entirely (a partial path would pollute the share);
+verify the effective share with `extractFlows`/`aggregateFlows` rather than
+assuming `share` landed.
+
+---
+
+#### 4.31 Session Shape — Deterministic Cadence (v1.6)
+
+**Hook:** `everything`
+**Mixpanel report:** Insights — sessions per user per week / events per session (Section 2.13)
+
+**In Mixpanel:** A "focused" cohort shows exactly ~3 tight sessions per week
+of ~5 events each, against a diffuse baseline.
+
+```js
+import { applySessionShape, hashCohort } from "@ak--47/dungeon-master/hook-helpers";
+
+if (type === "everything") {
+  const uid = record[0]?.user_id || "";
+  if (!hashCohort(uid, 20)) return record;   // cohort gating is the caller's job
+  return applySessionShape(record, uid, {
+    sessionsPerWeek: 3,
+    eventsPerSession: 5,
+    sessionMinutes: 25,
+  });
+}
+```
+
+**Why it's safe in v1.6:** the engine re-derives `session_id` on the FINAL
+event set (after the `everything` hook), so wholesale timestamp rewrites no
+longer leave stale session labels. The atom keeps intra-session gaps well
+under the 30-min timeout (spacing capped at 20min + bounded jitter), keeps
+inter-session gaps well over it, and never crosses UTC midnight inside one
+engineered session (the day-boundary split would cut it). Retiming only — no
+events are added or dropped, so total counts and event mixes are untouched.
+Session count follows `min(sessionsPerWeek × weeks, ceil(N /
+eventsPerSession))`: scarce users get fewer sessions, not fabricated events.
+
+---
+
 ## 5. Phase 3 Atom Reference
 
 Import from `@ak--47/dungeon-master/hook-helpers`:
@@ -1318,6 +1703,8 @@ Import from `@ak--47/dungeon-master/hook-helpers`:
 | `binUsersByEventInRange` | cohort | `(events, eventName, start, end, bins) -> string\|null` | Same, restricted to a time range |
 | `countEventsBetween` | cohort | `(events, eventA, eventB) -> number` | Count events between first A and first B |
 | `userInProfileSegment` | cohort | `(profile, key, values) -> boolean` | Profile property match |
+| **`hashFloat`** | cohort | `(id) -> number` | FNV-1a over the FULL id string → [0,1). Deterministic bucketing primitive (v1.6) — replaces `charCodeAt(0) % N` idioms, which bias cohort rates on hex-ish id alphabets |
+| **`hashCohort`** | cohort | `(id, pct) -> boolean` | True for ~`pct`% of ids (pct on a 0–100 scale). Membership nests: `pct=5` ⊂ `pct=20` |
 | `cloneEvent` | mutate | `(template, overrides?) -> event` | Shallow clone with overrides |
 | `dropEventsWhere` | mutate | `(events, predicate) -> number` | Remove matching events in-place |
 | `scaleEventCount` | mutate | `(events, eventName, factor) -> number` | Scale total count via clones at sub-second offsets (does NOT move frequency-distribution bins — see Section 2.1) |
@@ -1332,6 +1719,9 @@ Import from `@ak--47/dungeon-master/hook-helpers`:
 | **`injectOnNewDays`** | inject | `(events, eventName, targetDays, options?) -> events[]` | Inject clones on previously empty days within active window — **the right tool for moving frequency-distribution bins** |
 | `isPreAuthEvent` | identity | `(event, authTime) -> boolean` | Check if before user's stitch |
 | `splitByAuth` | identity | `(events, authTime) -> { preAuth, postAuth, stitch }` | Partition by auth boundary |
+| **`applyLifecycleWave`** | shape | `(events, uid, { dormantFromDay, dormantDays, resurrectBurst?, valueMomentEvent, dropAll? }) -> events[]` | Clean dormancy gap + resurrection burst; sweeps the ENTIRE window by timestamp (v1.6, recipe 4.29). Returns a NEW array |
+| **`applyPathBias`** | shape | `(events, uid, { anchor, path, share, gapSeconds? }) -> events[]` | Inject a Flows path after the user's first anchor for ~`share` (fraction) of users; skips users missing any step template (v1.6, recipe 4.30) |
+| **`applySessionShape`** | shape | `(events, uid, { sessionsPerWeek, eventsPerSession, sessionMinutes }) -> events[]` | Retime the stream into deterministic session clusters — intra-gaps ≪ 30min, inter-gaps ≫ 30min, never crosses UTC midnight (v1.6, recipe 4.31) |
 
 **Inject atoms + v1.5:** the engine auto-sorts events by time after the
 `everything` hook (`autoSortAfterEverything: true` default — see Principle
@@ -1349,15 +1739,25 @@ Import from `@ak--47/dungeon-master/verify`:
 
 | Function | Purpose | Mixpanel Reference |
 |---|---|---|
-| `emulateBreakdown(events, config)` | Run the table-shape emulator for one of 5 analyses | Insights / Funnels / Flows |
+| `emulateBreakdown(events, config)` | Run the table-shape emulator; `config.type` selects one of 12 analyses (`frequencyByFrequency`, `funnelFrequency`, `aggregatePerUser`, `timeToConvert`, `attributedBy`, `sessionMetrics`, `retention`, `distinctCount`, `eventBreakdown`, `uniques`, `lifecycle`, `topPaths` — `topPaths` returns an object, the rest return row arrays) | Insights / Funnels / Retention / Flows |
 | `verifyDungeon(dungeonConfig, assertions)` | High-level wrapper: run dungeon + run assertions | n/a |
 | `evaluateFunnel(events, steps, options?)` | Greedy single-pass funnel state machine | `history.cpp` |
+| `evaluateFunnelHPC(events, steps, holdProperty, options?)` | Hold-property-constant parallel sub-funnels (also routed via `funnelFrequency` + `holdPropertyConstant`) | `funnel_query.cpp` |
 | `timestampComesAfter(t1, t2, grace?)` | 2-second grace window check | `history.cpp` |
 | `withinConversionWindow(eventTime, step0Time, windowMs)` | Strict `<` window check | `conversion_window.cpp` |
-| `countDistinctPeriods(events, eventName, unit?, options?)` | Distinct-period count (default day, calendar bucket; pass `{algorithm:'rolling'}` for C++ semantics) | `addiction_query.cpp` |
-| `nullAwareAvg(values)` / `nullAwareSum(values)` | AVG/SUM that skip non-numeric | `normal_query.cpp` |
+| `countDistinctPeriods(events, eventName, unit?, options?)` | Distinct-period count (default `'ui-bucket'` calendar math; `{algorithm: 'mixpanel-rolling'}` for the C++ rolling counter; unknown names throw) | `addiction_query.cpp` |
+| `frequencyHistogram(events, { event, unit, intervalDays, profiles? })` | Full Frequency-report shape: per-interval histogram of users by rolling-counter value | `addiction_query.cpp` |
+| `countEvents(events, eventName?, where?)` | Total event count with optional name/property filter | `normal_query.cpp` |
+| `countDistinctValues(events, property, options?)` | Distinct property-value count | `normal_query.cpp` |
+| `nullAwareAvg(values, options?)` / `nullAwareSum(values, options?)` | AVG/SUM that skip non-numeric; `{ flatten: true }` explodes list values one level | `normal_query.cpp` |
 | `nullAwareExtreme(values, mode)` | MIN/MAX that skip non-numeric | `normal_query.cpp` |
 | `binByDistinctPeriods(events, eventName, bins, unit?)` | Distinct-period cohort assignment | `addiction_query.cpp` |
+| `partitionByTimeBucket(events, unit, range?)` | Split a stream into day/week/month buckets (week = ISO Monday) | `normal_query.cpp` |
+| `evaluateFormula(expr, series)` | API-layer formula math: PEMDAS, zero-fill broadcast, div-by-zero → 0 | `formula/util.py` |
+| `filterFirstTimeEver(events, { event, preWhere?, postWhere? })` | Two-query first-time-ever rewrite (§2.15) | `event_selector.py` |
+| `sessionize(events, options?)` / `sessionOrdinals(events, options?)` | Query-time session derivation (30-min gap, 24h max) | `session_query.cpp` |
+| `extractFlows(events, options)` / `aggregateFlows(flows, options?)` | Per-user flow extraction + Top Paths tree (`UNCOMMON_FLOWS_EVENT` = coalesced-node label) | `flows_query.cpp` |
+| `buildIdentityMap(profiles)` / `resolveUserId(event, identityMap?)` | device_id → canonical-id identity merge | n/a |
 | `deriveExpectedSchema(config)` / `validateSchema(events, schema)` | Schema integrity checks | n/a |
 
 Full JSDoc in [`lib/verify/*.js`](lib/verify/).
@@ -1370,19 +1770,21 @@ Import from `@ak--47/dungeon-master/hook-patterns`:
 
 | Pattern | Hook Type | Signature | Mixpanel Report |
 |---|---|---|---|
-| `applyFrequencyByFrequency` | everything | `(events, profile, { cohortEvent, bins, targetEvent, multipliers })` | Frequency of A by per-user count of B |
-| `applyFunnelFrequencyBreakdown` | funnel-post | `(allEvents, profile, funnelEvents, { cohortEvent, bins, dropMultipliers })` | Funnel conversion by per-user activity bucket |
-| `applyAggregateByBin` | everything | `(events, profile, { cohortEvent, bins, event, propertyName, deltas })` | Avg property value by per-user activity bucket |
-| `applyTTCBySegment` | funnel-post | `(funnelEvents, profile, { segmentKey, factors })` | Funnel median TTC by profile segment |
-| `applyAttributedBySource` | everything | `(events, profile, { sourceEvent, sourceProperty, downstreamEvent, weights })` | Conversions by source (first/last touch) |
+| `applyFrequencyByFrequency` | everything | `(events, profile, { cohortEvent, bins, targetEvent, multipliers, binBy? })` | Frequency of A by per-user frequency of B |
+| `applyFunnelFrequencyBreakdown` | funnel-post | `(allEvents, profile, funnelEvents, { cohortEvent, bins, dropMultipliers, binBy? })` | Funnel conversion by per-user activity bucket |
+| `applyAggregateByBin` | everything | `(events, profile, { cohortEvent, bins, event, propertyName, deltas, binBy? })` | Avg property value by per-user activity bucket |
+| `applyTTCBySegmentV2` | everything | `(events, profile, { segmentKey, factors, steps, maxGapMinutes? })` | Funnel TTC by profile segment (greedy first sequence — recipe 4.14 as code, v1.6) |
+| `applyTTCBySegment` | funnel-post | `(funnelEvents, profile, { segmentKey, factors })` | **Deprecated (v1.6)** — scales one run's gaps; only reaches Mixpanel TTC for `isFirstFunnel` runs. Use V2. |
+| `applyAttributedBySource` | everything | `(events, profile, { weights, property?, model? })` | Conversions by source — overwrites engine-stamped touches (recipe 4.26 as code, rewritten v1.6) |
 
-> **Caveat (eval follow-up).** The three `*ByBin` / `*Frequency*` patterns
-> currently use `binUsersByEventCount` (total events) for cohort assignment.
-> The verification emulator now bins by **distinct days**, so cohort axes
-> can mismatch — high-event-count users may not be high-distinct-day users.
-> When verifying these patterns, expect signal dilution until the patterns
-> switch to `binByDistinctPeriods`. For new dungeons targeting frequency
-> reports, use the recipes in Section 4.5–4.7 instead of these patterns.
+> **Bin axis (v1.6).** The three `*ByBin` / `*Frequency*` patterns bin by
+> **distinct calendar days** of `cohortEvent` by default
+> (`binBy: 'distinctDays'`, via `binByDistinctPeriods`) — the same axis the
+> verification emulator and Mixpanel's frequency reports use, so pattern
+> cohorts and report buckets align. Pass `binBy: 'events'` to restore the
+> pre-1.6 total-event-count axis (needed for
+> `applyFunnelFrequencyBreakdown`'s funnelEvents fallback, where a single
+> funnel run rarely spans more than one day).
 
 Full JSDoc in [`lib/hook-patterns/*.js`](lib/hook-patterns/). Pair with
 `emulateBreakdown` from `@ak--47/dungeon-master/verify` to assert patterns
@@ -1408,7 +1810,7 @@ const rows = emulateBreakdown(events, {
   returnEvent: 'Login',
   dayBuckets: [0, 1, 7, 14, 30],   // bucket 0 = within 24h of birth
   segmentBy: 'plan',               // optional — segment by birth event prop
-  carry_forward: false,            // optional — monotonically non-decreasing
+  unbounded: 'none',               // optional — 'carryForward' = monotonically non-decreasing
   birthCanRetain: false,           // optional — count returns AT birth ms (default false)
   profiles,                        // optional — auto-builds identity map
 });
@@ -1424,15 +1826,56 @@ const rows = emulateBreakdown(events, {
 ```js
 const rows = emulateBreakdown(events, {
   type: 'sessionMetrics',
-  event: 'Page View',                                // optional — only sessions containing this event
+  event: 'Page View',                // optional — only sessions containing this event
   metrics: ['count', 'duration', 'eventsPerSession'],
+  source: 'derived',                 // default — sessions re-derived from timestamps
+  sessionTimeoutMs: 30 * 60_000,     // optional — gap trigger (strict >)
 });
-// → [{ metric, avg, median, p90, total_sessions }, ...]
+// → [{ metric, avg, median, p90, total_sessions, source, stampedDivergence }, ...]
 ```
 
-Trusts the generator's pre-stamped `session_id`. If you need to verify
-session-scoped funnels (steps must land in same session), pass
-`sessionScoped: true` to `evaluateFunnel`.
+`source: 'derived'` (default since v1.6.0) re-derives sessions from raw
+timestamps the way `session_query.cpp` does — pre-stamped `session_id`s are
+ignored. `source: 'stamped'` keeps the v1.5 group-by-`(user, session_id)`
+behavior. Either way, when events carry stamps, every row reports
+`stampedDivergence`: the number of consecutive stamped-event pairs whose
+stamped session boundary disagrees with the derived one (0 means the
+generator's stamping matches what Mixpanel will compute).
+
+**Session duration / depth metrics need no special type.** `sessionize()`
+returns `syntheticEvents` — `$session_start`/`$session_end` pairs carrying
+`$duration_s` and `$event_count` as plain numeric properties (plus
+`$origin_start`/`$origin_end` and the copy props). Aggregate them with the
+existing types, exactly like Mixpanel aggregates session properties:
+
+```js
+import { sessionize, emulateBreakdown } from '@ak--47/dungeon-master/verify';
+
+const { syntheticEvents } = sessionize(events);
+// Avg session duration per user, cohorted by # active session days
+// (Insights: AGGREGATE $duration_s on $session_end):
+emulateBreakdown(syntheticEvents, {
+  type: 'aggregatePerUser', event: '$session_end', property: '$duration_s',
+  agg: 'avg', breakdownByFrequencyOf: '$session_start',
+});
+// Session-depth distribution (Insights: $session_end segmented by $event_count):
+emulateBreakdown(syntheticEvents, {
+  type: 'eventBreakdown', event: '$session_end', breakdownProperty: '$event_count',
+});
+```
+
+For plain duration averages without a cohort axis, `sessionMetrics`'s
+`duration` row (avg/median/p90) is the direct path.
+
+Synthetic session events live OUTSIDE the regular event-name namespace
+(`libquery/event/filter.h`) — name filters and "all events" over raw events
+never match them, which is why `sessionize` returns them as a separate array
+you feed in explicitly.
+
+If you need to verify session-scoped funnels (steps must land in same
+session), pass `sessionScoped: true` to `evaluateFunnel`, or use the
+Mixpanel-faithful session count window
+(`conversionWindow: { unit: 'sessions', n: 1 }`).
 
 ### 8.3 Funnel reentry (counting repeat completions)
 
@@ -1493,10 +1936,10 @@ console.log(map.get('pro').completed);   // pro user completed
 console.log(map.get('free').completed);  // free user did not (independent)
 ```
 
-HPC is **not auto-routed** through `funnelFrequency` in v1.5.0 — the report
-shape differs (one row per `step × hpc_value` instead of `step × cohort`).
-Call `evaluateFunnelHPC` directly inside your `verifyDungeon` check's
-`assert` callback when you need it.
+Since v1.6, passing `holdPropertyConstant: 'plan'` to the `funnelFrequency`
+emulator routes through the HPC engine and reports per-held-value sub-funnel
+rows. `evaluateFunnelHPC` remains available directly for bespoke assertions
+inside a `verifyDungeon` check's `assert` callback.
 
 ### 8.6 Step-level filter patterns
 
@@ -1587,10 +2030,11 @@ emulateBreakdown(events, { type: 'retention', cohortEvent: 'Sign Up',
 
 20-dungeon eval surfaced patterns where naive verification inverts. Apply
 these recipes when writing per-dungeon verify scripts under
-`verification/verticals/`.
+`dungeons/vertical/<name>/`.
 
-**Proof in repo:** `verification/verticals/<dungeon>.{verify.mjs,sql}` —
-20 dungeons, 107 documented hooks, 107 verification checks. Each
+**Proof in repo:** `dungeons/vertical/<dungeon>/<dungeon>.{verify.mjs,sql}` plus a
+`stories` export per dungeon — 22 dungeons, 212 machine-checkable stories,
+evaluated mechanically by `scripts/verify-stories.mjs`. Each
 `<dungeon>.verify.mjs` is a CI-runnable assertion that the dungeon's
 engineered story patterns appear in full-fidelity generated data.
 
@@ -1695,21 +2139,31 @@ Cleanest pattern for hidden cohorts. Deterministic, no schema mutation, no
 flag stamping. Produces textbook long-tail signals:
 
 ```js
+import { hashCohort } from "@ak--47/dungeon-master/hook-helpers";
+
 // In hook (everything):
 for (const e of events) {
-  const isWhale = e.user_id && e.user_id.charCodeAt(0) % 50 === 0;  // 2%
+  const isWhale = e.user_id && hashCohort(e.user_id, 2);  // ~2% of users
   if (isWhale && e.event === 'swap') e.trade_amount_usd *= 50;
 }
 
-// In verify:
+// In verify (same primitive — hook and verifier CANNOT disagree on membership):
 const whaleAmts = [], rest = [];
 for (const [uid, evs] of byUser) {
-  const isWhale = uid.charCodeAt(0) % 50 === 0;
+  const isWhale = hashCohort(uid, 2);
   const amts = evs.filter(e => e.event === 'swap').map(e => e.trade_amount_usd);
   (isWhale ? whaleAmts : rest).push(...amts);
 }
 check('whale 5x+ trade', avg(whaleAmts) / avg(rest) >= 5);
 ```
+
+**Why not `uid.charCodeAt(0) % 50 === 0`** (the pre-1.6 idiom): first-char
+arithmetic depends on the id alphabet covering charcode space uniformly — it
+doesn't. GUID first chars are hex (0-9, a-f), which reach only ~2 of 50
+residues under `% 50`, so the "2% cohort" actually lands anywhere from 0% to
+~12% depending on id format. `hashCohort` runs FNV-1a over the FULL string;
+on engine-stamped GUIDs the share tracks the target within a few tenths of a
+point.
 
 ### 9.7 Hook ordering inside `everything`
 

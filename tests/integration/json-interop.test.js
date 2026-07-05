@@ -10,7 +10,7 @@ import { fileURLToPath } from 'url';
 import { dungeonToJSON, parseJSONDungeon, extractComments } from '../../index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ECOM = path.resolve(__dirname, '../../dungeons/vertical/ecommerce.js');
+const ECOM = path.resolve(__dirname, '../../dungeons/vertical/ecommerce/ecommerce.js');
 
 describe('dungeonToJSON (file input)', () => {
 	test('serializes a shipped dungeon and round-trips through parseJSONDungeon', async () => {
@@ -33,6 +33,20 @@ describe('dungeonToJSON (file input)', () => {
 		expect(arr).toHaveLength(2);
 		expect(arr[0].version).toBe('4.0');
 		expect(arr[1].schema.events.length).toBeGreaterThan(0);
+	});
+
+	test('the `stories` named export is NOT carried into JSON (the .js file stays the story source of record)', async () => {
+		// ecommerce.js exports `stories` alongside the default config; the
+		// loader only reads the default export, so JSON output must not grow
+		// a stories key. If story round-tripping is ever wanted, it needs a
+		// deliberate wrapper field + json-to-dungeon support — not a silent
+		// schema leak.
+		const mod = await import(ECOM);
+		expect(Array.isArray(mod.stories)).toBe(true);
+		expect(mod.stories.length).toBeGreaterThan(0);
+
+		const json = await dungeonToJSON(ECOM);
+		expect(json.schema).not.toHaveProperty('stories');
 	});
 });
 

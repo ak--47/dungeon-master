@@ -20,7 +20,11 @@ already complete (produced by `create-dungeon`). After writing, hand off to
 In scope:
 - The `hook: function(record, type, meta) { ... }` body
 - Documentation comments above the hook explaining each engineered pattern,
-  including a reference Mixpanel report block per pattern
+  including a reference Mixpanel report block per pattern and the mandatory
+  EXPECTED METRICS SUMMARY table
+- The `stories` named export — one machine-checkable story per engineered
+  pattern (see "Stories export" below). A hook without stories is
+  unverifiable; this skill is not done until the stories exist.
 
 Out of scope:
 - Schema changes (events, properties, funnels, superProps, userProps).
@@ -29,6 +33,18 @@ Out of scope:
 - New top-level config knobs.
 - Removing the `hook: function...` body to start over with a new schema.
 
+**Before writing a hook, ask: is this trend structural?** Between-path
+comparisons (path X converts worse / slower than path Y, detour-takers drop
+off, mix shift drags the blended rate) are better architected as initial
+conditions — duplicate funnels with swapped steps/props/`conversionRate`/
+`timeToConvert`/`weight` (see the "Structural trend engineering" section in
+`create-dungeon`). If a story reduces to structure, recommend the funnel
+change back to the schema instead of writing a hook to fight the engine —
+the knob IS the expected value, which makes the story band knob-derivable
+(NAILED-capable) instead of confounded (STRONG-capped). Hooks are for
+within-cohort behavior: segments doing more/less of something over time,
+property values that differ by cohort, injected bursts, lifecycle waves.
+
 ## Reference reading
 
 - `lib/hook-helpers/index.js` — atoms (cohort, mutate, timing, inject,
@@ -36,8 +52,11 @@ Out of scope:
 - `lib/hook-patterns/index.js` — high-level recipes (one per Mixpanel
   analysis type).
 - `lib/verify/emulate-breakdown.js` — what `verify-dungeon` will check.
-- `dungeons/user/my-buddy/my-buddy.js` — reference dungeon using a mix of atoms
-  and hand-rolled logic.
+- `lib/templates/story-spec.schema.json` + `DungeonStory` in `types.d.ts` —
+  the story-spec grammar the `stories` export must follow.
+- `dungeons/vertical/ecommerce/ecommerce.js` — reference dungeon using a mix
+  of atoms and hand-rolled logic, with the mandatory EXPECTED METRICS SUMMARY
+  table and a full `stories` export.
 - `dungeons/technical/pattern-*.js` — five minimal pattern fixtures, one per
   recipe.
 - `HOOKS.md` — encyclopedia of hook recipes organized by story pattern. Contains
@@ -134,6 +153,10 @@ if (type === 'funnel-post' && meta.experiment) {
 | inject | `injectOnNewDays(events, eventName, targetDistinctDays)` | **Cohort-only.** Spreads injections across previously-empty days. Use for cohort-conditional active-day boosts; for global active-day shape, use `Dungeon.avgActiveDaysPerUser` config knob. |
 | identity | `isPreAuthEvent(event, authTime)` | Standalone variant of meta.isPreAuth |
 | identity | `splitByAuth(events, authTime)` | { preAuth, postAuth, stitch } partition |
+| cohort | `hashCohort(id, pct)` | Deterministic pct% cohort (0–100 scale). **Use this first for hidden cohorts** — replaces ad-hoc `charCodeAt % N`. When one dungeon needs several NON-overlapping cohorts, gate on disjoint `hashFloat(uid)` bands instead (e.g. `[0, 0.45)`, `[0.45, 0.70)`) |
+| shape | `applyLifecycleWave(events, uid, opts)` | Dormancy window + resurrection burst for Lifecycle reports. When-to-use: the story is "users go quiet, then come back". Gap discipline: ONE stray value moment inside the window destroys the Resurrected read — size `dormantDays` to cover ≥2 whole lifecycle periods, keep the window inside the user's lifespan |
+| shape | `applyPathBias(events, uid, opts)` | Inject a Flows path after the user's FIRST anchor occurrence. When-to-use: the story is "X% of users take this route". `share` is a 0–1 FRACTION (not `hashCohort`'s pct scale); needs ~≥0.20–0.25 to survive Sankey top-3-per-level pruning; per-step gaps clamped ≥1s so ordering survives |
+| shape | `applySessionShape(events, uid, opts)` | Retime the whole stream into `sessionsPerWeek` clusters of `sessionMinutes`. When-to-use: session-duration/cadence stories (sessionMetrics reads). Retiming ONLY — no adds/drops; intra-session gaps stay <28min, inter-session >30min, no cluster crosses UTC midnight. Combine with `hashCohort` for per-role shapes; call BEFORE `applyPathBias` so injected paths keep their own tight gaps |
 
 ### Hook anti-patterns
 
@@ -214,16 +237,50 @@ on undeclared entries.
 Higher-level recipes. Each maps to ONE Mixpanel analysis the verify-dungeon
 emulator can re-derive.
 
-| Pattern | Mixpanel analysis | Hook type |
-|---------|-------------------|-----------|
-| `applyFrequencyByFrequency` | Insights — count(A) by per-user count(B) | everything |
-| `applyFunnelFrequencyBreakdown` | Funnels — completion by per-user count(X) | funnel-post |
-| `applyAggregateByBin` | Insights — avg(prop X) by per-user count(B) | everything |
-| `applyTTCBySegment` | Funnel TTC — broken down by user-property segment | funnel-post |
-| `applyAttributedBySource` | Conversions by Source (first/last touch) | everything |
+| Pattern | Mixpanel analysis | Hook type | Caveat (HOOKS.md) |
+|---------|-------------------|-----------|-------------------|
+| `applyFrequencyByFrequency` | Insights — count(A) by per-user count(B) | everything | `binBy` defaults to `'distinctDays'` (v1.6) — bins match Mixpanel's per-user distinct-day counting, not raw event totals |
+| `applyFunnelFrequencyBreakdown` | Funnels — completion by per-user count(X) | funnel-post | When funnels share a step prefix, restrict scaling to the target funnel — scaling every instance lets first-occurrence funnel evaluation assemble chains across unscaled instances and the ratio never reaches the report |
+| `applyAggregateByBin` | Insights — avg(prop X) by per-user count(B) | everything | Same `binBy: 'distinctDays'` default as above |
+| `applyTTCBySegmentV2` | Funnel TTC — broken down by user-property segment | everything | v1 (`applyTTCBySegment`, funnel-post) is **deprecated**: Mixpanel TTC reads each step's FIRST occurrence per user, so per-run gap scaling only reaches the report on `isFirstFunnel` runs. V2 finds the greedy first sequence (`findFirstSequence`) and scales that |
+| `applyAttributedBySource` | Conversions by Source (first/last touch) | everything | OVERWRITES the engine-stamped touch the chosen model reads; never stamps UTMs onto unstamped events (would blow the `maxTouchpointsPerUser` cap and land outside the last-10 lookback) |
 
 Use a pattern when the trend matches its analysis 1:1. Drop down to atoms when
 the trend is bespoke or composite.
+
+### New story archetypes (v1.6) — design rules per report family
+
+Four archetypes joined the story-spec enum in v1.6. Each has a
+non-negotiable design rule learned the hard way:
+
+- **`lifecycle-wave`** (`applyLifecycleWave`) — GAP DISCIPLINE. Mixpanel's
+  "dormant" state is an `EqualTo 0` filter over the whole period: one stray
+  value-moment event inside the dormancy window (including events OTHER hooks
+  injected earlier in the same `everything` pass) flips the user out of
+  Resurrected. Run the wave AFTER every injecting hook, size `dormantDays` to
+  ≥2 lifecycle periods, and keep `dormantFromDay + dormantDays` inside the
+  user's lifespan (the future-time guard eats bursts past dataset end).
+- **`path-share`** (`applyPathBias`) — FIRST-FLOW ANCHORING. Flows' unique
+  counting reads only each user's FIRST flow past the anchor, so the injected
+  path must follow the FIRST anchor occurrence (the atom does this; don't
+  hand-roll a later anchor). Sankey prunes to the top ~3 branches per level:
+  an engineered branch below ~20–25% share silently disappears from the
+  visualization even though the data is there. Label-only path reads can
+  INVERT when a busier cohort glues extra visible events between path steps —
+  assert the share on the cohort you engineered, not globally.
+- **`session-shape`** (`applySessionShape`) — 30-MIN STRADDLING + MIDNIGHT
+  RULE. Mixpanel derives sessions with a 30-min idle timeout and splits at
+  UTC midnight. Engineered cadences must keep intra-session gaps clearly
+  UNDER 30min and inter-session gaps clearly OVER it — a gap that straddles
+  the timeout makes session counts jitter across runs. Never let an
+  engineered session cross UTC midnight (the day split cuts it in two). The
+  atom guarantees all three; hand-rolled retiming must too.
+- **`composition-drift`** — the breakdown's SHARE of a segment moves over
+  time while totals stay flat (e.g. plan-mix shifts toward premium). Engineer
+  by flipping an existing property value on a date-gated cohort, never by
+  changing volumes — volume changes read as `temporal-inflection` instead.
+  Assert with a `timeBucket` breakdown comparing first-window vs last-window
+  share.
 
 ## Anti-flag-stamping rule (HARD WALL)
 
@@ -317,6 +374,71 @@ checks against and what consumers read to understand the dataset.
  *   Breakdown: per-user count of "Browse"
  *   Expected ratio: bin>=15 / bin<5 ≈ 3x (within ±15%)
 ```
+
+### EXPECTED METRICS SUMMARY table (MANDATORY)
+
+The doc block MUST end with an EXPECTED METRICS SUMMARY table — one row per
+verifiable read, with the DERIVATION of each expected number from the hook's
+knob constants (never a bare number someone has to trust). Follow the style
+in `dungeons/vertical/ecommerce/ecommerce.js`:
+
+```
+ * EXPECTED METRICS SUMMARY
+ * ============================================================================
+ *
+ * Hook | Metric                          | Derivation          | Expected | Measured (full)
+ * -----|---------------------------------|---------------------|----------|----------------
+ * H2   | avg watchTimeSec post/pre       | 1.52/0.48           | 3.17x    | 3.19x
+ * H6   | sweet/over avg cart item amount | SWEET_CART_BOOST    | 1.25x    | 1.233x
+ * H9   | dark/light checkouts per user   | 20/13 diluted       | ~1.48x   | 1.412x
+ * ============================================================================
+```
+
+Fill the Measured column from the verification run (a reduced-scale iteration
+number is fine if labeled). "Diluted" derivations must say WHAT dilutes
+(organic events, cohort mixing) — the Derivation column is the anchor
+`/verify-dungeon` uses when a read misses.
+
+## Stories export (MANDATORY — the machine contract)
+
+Every engineered pattern ships with one story in a `stories` named export —
+the machine-checkable form of the doc block. `scripts/verify-stories.mjs`
+evaluates them; `/verify-dungeon` runs it as step 1. Grammar:
+`lib/templates/story-spec.schema.json` and `DungeonStory` in `types.d.ts`.
+
+```js
+export const stories = [
+  {
+    id: "H1-power-buyers",
+    hook: "H1",
+    archetype: "frequency-sweet-spot",
+    narrative: "Users with 15+ browse days buy 3x as often as light browsers.",
+    mixpanelReport: { type: "Insights", event: "Purchase", breakdown: "per-user count of Browse" },
+    assertions: [{
+      breakdown: { type: "frequency", event: "Purchase", cohortEvent: "Browse", bins: [5, 15] },
+      select: { hi: { where: { bin: ">=15" } }, lo: { where: { bin: "<5" } } },
+      expect: { metric: "hi.avg / lo.avg", op: ">=", target: POWER_BUYER_MULT, floor: POWER_BUYER_MULT * 0.8 },
+      minCohort: 200,
+    }],
+  },
+];
+```
+
+Rules:
+
+- **Thresholds derive from the knob you just wrote.** Export the hook's knob
+  constants (`const POWER_BUYER_MULT = 3`) and compute `target` from them —
+  never paste the number twice. If the read is diluted (organic mixing),
+  derive the dilution too and say so in a comment.
+- `floor` must itself be derived (e.g. `target * 0.8`) — never hand-tuned to
+  a run. A missed assertion means fixing the hook or the derivation, never
+  relaxing the number to match output.
+- Set `minCohort` from the cohort math (share × numUsers × ~0.5 safety) so
+  reduced-scale runs cap at WEAK instead of passing on noise.
+- One story per pattern; story `hook` matches the doc-block numbering (`H3`).
+- The `assert` function escape hatch is discouraged — each use needs a
+  comment saying why the declarative `expect` grammar can't express it.
+- Stories are JS-dungeon-only (`dungeon-to-json` drops them).
 
 ## Hook Ordering Within `everything`
 
@@ -466,22 +588,37 @@ cohort.
 2. Translate the user's story description into 3–5 engineered patterns.
    Consult `HOOKS.md` for recipe ideas that match the user's story. Each recipe
    includes the hook type, code snippet, and Mixpanel report format.
-3. For each pattern:
+3. **Calibrate thresholds against the real distribution.** Before choosing
+   any "N+ events" gate or cohort cutoff, generate a small run and query the
+   actual per-user distribution (see "Threshold Calibration" above for the
+   query). Set gates at ~the 80th percentile of what the data shows — a
+   threshold picked from intuition is the most common cause of empty cohorts.
+   ```bash
+   node scripts/verify-runner.mjs <dungeon> calib --small
+   ```
+4. For each pattern:
    - Pick a pattern from `lib/hook-patterns/` if it fits the analysis 1:1.
    - Otherwise compose atoms from `lib/hook-helpers/`.
    - Document the pattern in a comment block (Mixpanel report instructions).
-4. Write the `hook` function, importing atoms/patterns at the top of the file.
-5. Smoke-test:
+5. Write the `hook` function, importing atoms/patterns at the top of the
+   file. Finish the doc block with the EXPECTED METRICS SUMMARY table.
+6. Write the `stories` export — one story per pattern, `target`/`floor`
+   derived from the exported knob constants (see "Stories export" above).
+7. Smoke-test generation, then evaluate the stories:
    ```bash
    node scripts/verify-runner.mjs <dungeon> verify-dungeon --small
+   node scripts/verify-stories.mjs <dungeon> --data-prefix verify-dungeon
    ```
-   Confirm the run completes without errors.
-6. Hand off:
+   Reduced-scale runs legitimately cap at WEAK on `minCohort` guards; what
+   you're checking here is no NONE/INVERSE and no assertion errors.
+8. Hand off:
    ```
    /verify-dungeon <dungeon>
    ```
-   If verify-dungeon returns WEAK, NONE, or INVERSE on any pattern, return to
-   step 4 and refine. Iterate until all patterns score STRONG or NAILED.
+   If verify-dungeon returns WEAK, NONE, or INVERSE on any pattern at full
+   fidelity, return to step 4 and refine — fix the hook or the derivation,
+   never relax a threshold to match output. Iterate until all patterns score
+   STRONG or NAILED.
 
 ## Stopping condition
 
@@ -492,5 +629,6 @@ still off in the dungeon's overview comment and report the gap to the user.
 ## Output
 
 Modify the dungeon file in place. Add the `hook` function. Add the imports.
-Add the documentation block above the config. Do NOT modify any other file.
+Add the documentation block (with EXPECTED METRICS SUMMARY) above the config.
+Add the `stories` export after the config. Do NOT modify any other file.
 Tell the user to run `/verify-dungeon <dungeon>` next.

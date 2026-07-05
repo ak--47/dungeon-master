@@ -51,7 +51,14 @@ Out of scope (hand off to `write-hooks`):
 For an encyclopedia of hook patterns, recipes, and real-world examples:
 see `HOOKS.md` at the project root.
 
-These config keys are silently ignored — DO NOT use them: `subscription`, `attribution`, `geo`, `features`, `anomalies`. Recreate with hooks via `write-hooks`.
+> ⚠️ **Silently-ignored config keys — do not use.** The validator STRIPS these
+> five keys before generation: `subscription`, `attribution`, `geo`,
+> `features`, `anomalies`. They produce **zero data** — only a verbose-mode
+> warning. A dungeon that "configures" churn via `subscription:` or campaign
+> lift via `attribution:` is configuring nothing, and the omission is
+> invisible at smoke-test scale. Recreate those behaviors with hooks via
+> `/write-hooks` (churn cohorts, UTM biasing, geo weighting, feature-flag
+> cohorts, anomaly windows all have recipes in `HOOKS.md`).
 
 ## Reference reading
 
@@ -62,8 +69,10 @@ Before writing any code, scan:
   with full JSDoc. **Treat this as the source of truth.**
 - `lib/utils/utils.js` — `pickAWinner`, `weighNumRange`, `initChance`, `exhaust`,
   `takeSome` for property value distributions
-- `dungeons/vertical/sass.js` — B2B reference dungeon with full identity model
-- `dungeons/user/my-buddy/my-buddy.js` — consumer-app reference (gitignored)
+- `dungeons/vertical/sass/sass.js` — B2B reference dungeon with full identity model
+- `dungeons/vertical/ecommerce/ecommerce.js` — canonical consumer exemplar:
+  schema, funnels, stories export, and full hook layout (what your schema
+  becomes after `/write-hooks`)
 - `dungeons/technical/identity-model-verify.js` — minimal identity-model fixture
 
 ## File structure
@@ -88,6 +97,7 @@ import * as v from "ak-tools";
  * APP:        <2-4 line description: what users do, core flow, monetization>
  * SCALE:      <numUsers> users, ~<numEvents> events, <numDays> days (<start> → <end>)
  * CORE LOOP:  <event1> → <event2> → <event3> → ...
+ * VALUE MOMENT: <the one event representing realized value — lifecycle hooks anchor here>
  *
  * EVENTS (N):
  *   <event name (weight)> > ...   (sorted by weight desc)
@@ -160,7 +170,7 @@ KNOBS (extracted tunable constants — timing, thresholds, multipliers),
 HOOK STATE (module-level Maps/Sets used across users), and HELPER FUNCTIONS
 (per-type handlers like `handleEventHooks`, `handleEverythingHooks`).
 `config.hook` becomes a thin dispatcher delegating to the helpers. See
-`dungeons/vertical/ecommerce.js` as the canonical exemplar.
+`dungeons/vertical/ecommerce/ecommerce.js` as the canonical exemplar.
 
 ## Required components
 
@@ -195,6 +205,30 @@ When using experiments, include `$experiment_started` in the events array with
     "Variant name": ["Control", "Variant A", "Variant B"],
 }}
 ```
+
+**Design the vocabulary for the analyses hooks will target (v1.6):**
+
+- **Session-friendly next-events.** Flows (Sankey) reads collapse when an
+  anchor event can plausibly be followed by 15 different event types — every
+  branch gets a sliver and no engineered path clears the top level. For each
+  high-traffic anchor (post-login, post-search, post-add-to-cart), keep the
+  realistic next-event vocabulary to **≤5–6 event types**; if the app
+  genuinely has more surfaces, give the rare ones weight 1 so the top paths
+  stay legible. A path-share hook needs ~20–25% share to survive a Sankey's
+  top-3 — impossible against a 15-way fan-out.
+- **Designate a value moment.** Pick ONE event that represents realized value
+  (first workout logged, order delivered, report generated) and record it in
+  the OVERVIEW block as `VALUE MOMENT: <event>`. Lifecycle stories
+  (dormancy → resurrection waves) anchor on the value moment — hooks gate or
+  inject THAT event, not generic page views. A schema with no obvious value
+  moment forces `write-hooks` to invent one badly.
+- **Hidden-event hygiene.** Heartbeat/telemetry events (`ping`,
+  `app foregrounded`, `position updated`) at weight ≥5 drown every Sankey
+  level — every top path becomes anchor → heartbeat → heartbeat. Mixpanel
+  Flows (and the emulator's `topPaths` via `hiddenEvents`) can hide them at
+  query time, but the default view is what demos show. If realism demands
+  heartbeats, keep them at weight 1–2 and list them in the OVERVIEW so
+  `write-hooks` knows to pass `hiddenEvents` in flows stories.
 
 ### 2. Funnels (3–6)
 
@@ -236,6 +270,32 @@ event.
 **Mark hook-readable funnel-step events with `isStrictEvent: false`.** When a hook reads `event === 'X'` and `X` is also a funnel step, the validator's auto-promote turns it into `isStrictEvent: true` and the engine stops emitting standalone occurrences — cohort goes empty. Identify these candidates at schema time so `write-hooks` doesn't have to re-thread the schema. Common candidates: login, page view, search, add to cart, swap, deposit — anything that's both a funnel step AND a recurring user behavior hooks will likely cohort on.
 
 **Funnels representing loops need `reentry: true`.** Any funnel named "X loop" / "X cycle" / "session" / per-instance recurring behavior must declare `reentry: true`. Without it, the engine emits one sequence per user and downstream "power user" / "daily active" cohorts have no behavioral signal to bin on.
+
+**Structural trend engineering — duplicate funnels instead of reaching for
+hooks.** Not every trend needs a hook: initial conditions can raise or lower
+a metric by themselves. The funnel array is a set of knobs — duplicate a
+funnel and swap steps, props, `conversionRate`, `timeToConvert`, or `weight`
+to architect a comparison directly into the schema:
+
+- **Exclusion-step story**: Mixpanel funnels can exclude users who did
+  `foo` between A and B. There's no `excludeSteps` config — model it with
+  two funnels, `[A, B, C]` and `[A, B, foo, C]`, giving the second a lower
+  `conversionRate`. The report shows the conversion dip for the
+  detour-takers with zero hook code.
+- **Segment-split story**: two copies of the same sequence with different
+  `props` (`{ checkout_version: "v1" }` vs `"v2"`) and different
+  `conversionRate` — an A/B story without the experiment machinery (use
+  `experiment` when you want `$experiment_started` + variant reports).
+- **Speed story**: same sequence, different `timeToConvert`, split by a
+  funnel-level prop — time-to-convert deltas appear structurally.
+- **Mix-shift story**: `weight` controls how often each variant funnel is
+  chosen; a heavy-weighted low-converting path drags the blended rate.
+
+Prefer structure when the story is a *between-path comparison* (this path
+converts worse / slower than that one). Reach for hooks when the story is a
+*within-cohort behavior* (these users do more of X over time, this segment's
+values differ). Structural trends are cheaper to verify — the knob IS the
+expected value.
 
 ### 3. SuperProps (2–3)
 
@@ -554,7 +614,7 @@ When designing event properties, always consider which Mixpanel type best repres
 app/customer, then **create `dungeons/user/<name>/` if it doesn't already exist**
 (`mkdir -p dungeons/user/<name>`) and write the dungeon to
 `dungeons/user/<name>/<name>.js` (e.g. `dungeons/user/acme/acme.js`). Folder and
-file share the name, matching `kodiak/kodiak.js`, `my-buddy/my-buddy.js`.
+file share the name, matching the vertical layout (`ecommerce/ecommerce.js`).
 
 This keeps `dungeons/user/` organized — EVERYTHING about this dungeon lives in
 the same folder: `hook-results.md` + `hook-query-log.txt` +
