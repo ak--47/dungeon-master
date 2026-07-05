@@ -95,9 +95,9 @@ console.log(result.importResults);
 
 a dungeon is a javascript file that exports a configuration object. it defines your entire data model: events, funnels, user properties, group analytics, SCDs, and a hook function that engineers discoverable patterns into the data.
 
-see `dungeons/vertical/` for customer-facing story dungeons (18 events, 8 hooks) and `dungeons/technical/` for feature-testing dungeons (mirrors, groups, scale, anonymous users).
+see `dungeons/vertical/` for customer-facing story dungeons (one folder per vertical, each with engineered hooks and machine-checkable stories) and `dungeons/technical/` for feature-testing dungeons (mirrors, groups, scale, anonymous users).
 
-every vertical dungeon ships with a verification proof at `dungeons/vertical/<name>/<name>.{verify.mjs,sql}` — a CI-runnable assertion that the dungeon's documented hooks actually appear in the generated data at full fidelity. 20 dungeons, 107 hooks, 107 checks. see [`dungeons/vertical/README.md`](dungeons/vertical/README.md).
+every vertical dungeon ships with a verification proof at `dungeons/vertical/<name>/<name>.{verify.mjs,sql}` plus a `stories` export evaluated mechanically by `scripts/verify-stories.mjs` — a CI-runnable assertion that the dungeon's documented hooks actually appear in the generated data at full fidelity. 22 dungeons, 212 machine-checkable stories. see [`dungeons/vertical/README.md`](dungeons/vertical/README.md).
 
 ```javascript
 // dungeons/my-app.js
@@ -628,7 +628,7 @@ styles: `support`, `review`, `search`, `feedback`, `chat`, `email`, `forum`, `co
 ## scripts
 
 ```bash
-npm test                      # vitest test suite (~10s, 1122 tests)
+npm test                      # full vitest test suite
 npm run typecheck             # typescript check
 npm run dungeon:run           # run a dungeon file locally
 npm run dungeon:to-json       # convert JS dungeon to JSON (for UI import)
@@ -668,7 +668,7 @@ npx vitest run tests/integration/features.test.js          # single file
 npx vitest tests/unit                                       # watch mode
 ```
 
-`tests/e2e/sanity.test.js` is excluded by default (parked); run isolated with `npx vitest run tests/e2e/sanity.test.js`.
+`tests/e2e/engine-shape-full-sweep.test.js` skips itself unless `RUN_FULL_SWEEP=1` is set (it wraps the long-running 194-combo engine sweep).
 
 ### engine tests (direct-run, NOT vitest)
 

@@ -11,7 +11,9 @@ All notable changes to `@ak--47/dungeon-master`.
   - `eventBreakdown` — Insights "Total" broken down by a property, with
     Mixpanel's exact segment coercion (list fan-out, `$empty_list`,
     `undefined` bucket, case-sensitive type-tagged segments, topN 250);
-    `countType: 'unique' | 'sessions'`, `firstTimeOnly` compose.
+    `countType: 'unique' | 'sessions'`, `firstTimeOnly` compose;
+    unrecognized `countType` values throw (same strict-option rule as
+    retention keys).
   - `uniques` — per-interval independent dedup, rolling XAU windows,
     cumulative running distinct; `countType: 'sessions'`, `firstTimeOnly`.
   - `lifecycle` — Lifecycle Cohort Analysis board-template classification
@@ -66,7 +68,8 @@ All notable changes to `@ak--47/dungeon-master`.
 - **Retention option keys are strict** (P1.5). Unknown keys in a `retention`
   emulator config now throw instead of being silently ignored — a typo'd
   option previously ran with defaults and produced plausible-but-wrong
-  numbers. `carry_forward` is kept as a deprecated alias for `carryForward`.
+  numbers. `carry_forward: true` is kept as a deprecated alias for
+  `unbounded: 'carryForward'`.
 - **Funnel exclusions no longer fire before step 0** (P1.6.4).
   `evaluateFunnel`'s `exclusionSteps` previously defaulted `afterStep` to
   −Infinity, so an exclusion event could condemn an attempt before the first

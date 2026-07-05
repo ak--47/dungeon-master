@@ -147,7 +147,11 @@ export interface Dungeon {
     region?: "US" | "EU";
     /** User generation concurrency. Default: 1. Values > 1 break seed reproducibility and provide no performance benefit (CPU-bound). */
     concurrency?: number;
-    /** Number of records before auto-flushing to disk. Prevents OOM for large datasets. Default: 1,000,000 */
+    /**
+     * Number of records before auto-flushing to disk. Prevents OOM for large datasets.
+     * Default: 2,500,000. Auto-enabled at 1,000,000 when the projected event count
+     * reaches 2M and no explicit value is set (clamped lower when avgPropsPerEvent > 18).
+     */
     batchSize?: number;
 
     // ── Mixpanel Import Credentials (for SCD import) ──
@@ -2039,14 +2043,39 @@ declare module '@ak--47/dungeon-master/hook-helpers' {
     export function injectBurst(events: EventSchema[], templateEvent: EventSchema, count: number, anchorTime: number | string, spreadMs: number): void;
     export function isPreAuthEvent(event: EventSchema, authTime: number | null): boolean;
     export function splitByAuth(events: EventSchema[], authTime: number | null): { preAuth: EventSchema[]; postAuth: EventSchema[]; stitch: EventSchema | null };
+    /** v1.6.0 — deterministic FNV-1a hash of any id to [0, 1). Seed-independent and stable across runs. */
+    export function hashFloat(id: string): number;
+    /** v1.6.0 — deterministic cohort gate: true for `pct`% of ids (0-100 scale). Nest by hashing derived ids (e.g. `uid + ':wave2'`). */
+    export function hashCohort(id: string, pct: number): boolean;
+    /** Clone a template event of `eventName` onto `targetDays − existing` random inactive days within the user's active window. Schema-first: no template → no-op. */
+    export function injectOnNewDays(events: EventSchema[], eventName: string, targetDays: number, options?: { timeRange?: 'active'; overrides?: Partial<EventSchema> }): EventSchema[];
+    /** v1.6.0 — carve a dormant window (drop value moments, or all events with `dropAll`) then append a resurrection burst cloned from the surviving value-moment template. Returns a NEW array. */
+    export function applyLifecycleWave(events: EventSchema[], uid: string, opts: { dormantFromDay: number; dormantDays: number; valueMomentEvent: string; resurrectBurst?: number; dropAll?: boolean }): EventSchema[];
+    /** v1.6.0 — inject an ordered event path after each anchor for a deterministic `share` of users (hash-gated). Augments in place; engine auto-sort handles ordering. */
+    export function applyPathBias(events: EventSchema[], uid: string, opts: { anchor: string; path: string[]; share: number; gapSeconds?: [number, number] }): EventSchema[];
+    /** v1.6.0 — rewrite the user's timestamps into deterministic session clusters (n/week, m events, bounded span) that survive query-time re-derivation. */
+    export function applySessionShape(events: EventSchema[], uid: string, opts: { sessionsPerWeek: number; eventsPerSession: number; sessionMinutes: number }): EventSchema[];
 }
 
 declare module '@ak--47/dungeon-master/hook-patterns' {
-    export function applyFrequencyByFrequency(events: EventSchema[], profile: Record<string, unknown> | null, opts: { cohortEvent: string; bins: Record<string, [number, number]>; targetEvent: string; multipliers: Record<string, number> }): void;
-    export function applyFunnelFrequencyBreakdown(allUserEvents: EventSchema[], profile: Record<string, unknown> | null, funnelEvents: EventSchema[], opts: { cohortEvent: string; bins: Record<string, [number, number]>; dropMultipliers: Record<string, number> }): void;
-    export function applyAggregateByBin(events: EventSchema[], profile: Record<string, unknown> | null, opts: { cohortEvent: string; bins: Record<string, [number, number]>; event: string; propertyName: string; deltas: Record<string, number> }): void;
+    export function applyFrequencyByFrequency(events: EventSchema[], profile: Record<string, unknown> | null, opts: { cohortEvent: string; bins: Record<string, [number, number]>; targetEvent: string; multipliers: Record<string, number>; binBy?: 'events' | 'distinctDays' }): { bin: string | null; delta: number };
+    export function applyFunnelFrequencyBreakdown(allUserEvents: EventSchema[], profile: Record<string, unknown> | null, funnelEvents: EventSchema[], opts: { cohortEvent: string; bins: Record<string, [number, number]>; dropMultipliers: Record<string, number>; finalStep?: string; binBy?: 'events' | 'distinctDays' }): { bin: string | null; droppedFinal: boolean };
+    export function applyAggregateByBin(events: EventSchema[], profile: Record<string, unknown> | null, opts: { cohortEvent: string; bins: Record<string, [number, number]>; event: string; propertyName: string; deltas: Record<string, number>; binBy?: 'events' | 'distinctDays' }): { bin: string | null; scaled: number };
+    /**
+     * @deprecated v1.6.0 — the funnel-post variant only reaches the Mixpanel TTC
+     * report for `isFirstFunnel` runs (TTC measures each user's FIRST occurrence
+     * of the step sequence). Use `applyTTCBySegmentV2` from the `everything` hook.
+     * Still works; warns once per process.
+     */
     export function applyTTCBySegment(funnelEvents: EventSchema[], profile: Record<string, unknown>, opts: { segmentKey: string; factors: Record<string, number> }): void;
-    export function applyAttributedBySource(events: EventSchema[], profile: Record<string, unknown> | null, opts: { sourceEvent: string; sourceProperty: string; downstreamEvent: string; weights: Record<string, number>; model?: 'firstTouch' | 'lastTouch' }): void;
+    /** v1.6.0 — everything-hook TTC scaling of the user's FIRST occurrence of `steps` (what Mixpanel's TTC report measures). */
+    export function applyTTCBySegmentV2(events: EventSchema[], profile: Record<string, unknown>, opts: { segmentKey: string; factors: Record<string, number>; steps: string[]; maxGapMinutes?: number }): { segmentValue: string | null; factor: number; shifted: number };
+    /**
+     * v1.6.0 rewrite — overwrites ENGINE-STAMPED touch values (the user's lifetime-first
+     * and/or -last stamped `property` event) with a weighted draw, instead of stamping
+     * fresh values that land outside the touchpoint cap's lookback.
+     */
+    export function applyAttributedBySource(events: EventSchema[], profile: Record<string, unknown> | null, opts: { weights: Record<string, number>; property?: string; model?: 'firstTouch' | 'lastTouch' | 'both' }): { overwritten: number; touches: number };
 }
 
 /**
@@ -2059,9 +2088,16 @@ declare module '@ak--47/dungeon-master/hook-patterns' {
  * | `aggregatePerUser` | `event`, `property`, `breakdownByFrequencyOf` | `agg` (default: `'avg'`) |
  * | `timeToConvert` | `fromEvent`, `toEvent`, `breakdownByUserProperty`, `profiles` | — |
  * | `attributedBy` | `conversionEvent`, `attributionEvent`, `attributionProperty` | `model` (default: `'lastTouch'`) |
+ * | `sessionMetrics` | — | `event`, `metrics`, `source` (default: `'derived'`) |
+ * | `retention` | `cohortEvent`, `returnEvent` (or `compounded`) | see `RetentionConfig` |
+ * | `distinctCount` | `event`, `property` | `topN` |
+ * | `eventBreakdown` (v1.6) | `breakdownProperty` | `event`, `countType`, `topN`, `firstTimeOnly` |
+ * | `uniques` (v1.6) | `event` | `unit`, `rollingWindow`, `cumulative`, `countType`, `firstTimeOnly` |
+ * | `lifecycle` (v1.6) | `valueMomentEvent` | `periodDays` (7 or 30) |
+ * | `topPaths` (v1.6) | `anchors` | `forward`, `reverse`, `countType`, `hiddenEvents`, `visibleEvents`, `output` |
  */
 export interface EmulateOptions {
-    type: 'frequencyByFrequency' | 'funnelFrequency' | 'aggregatePerUser' | 'timeToConvert' | 'attributedBy' | 'sessionMetrics' | 'retention' | 'distinctCount';
+    type: 'frequencyByFrequency' | 'funnelFrequency' | 'aggregatePerUser' | 'timeToConvert' | 'attributedBy' | 'sessionMetrics' | 'retention' | 'distinctCount' | 'eventBreakdown' | 'uniques' | 'lifecycle' | 'topPaths';
     metricEvent?: string;
     breakdownByFrequencyOf?: string;
     perUser?: boolean;
@@ -2105,40 +2141,121 @@ export interface EmulateOptions {
      * `period`; empty rows have ONLY `period` and `_empty: true`.
      */
     timeBucketRange?: { from: number | string; to: number | string };
-    /** v1.5.0 — sessionMetrics: filter to sessions containing this event. Omit for all sessions. */
+    /** sessionMetrics: which metrics to compute. Default: `['count', 'duration', 'eventsPerSession']`. (The session filter to a containing event is the `event` field.) */
     metrics?: Array<'count' | 'duration' | 'eventsPerSession'>;
+    /**
+     * v1.6.0 — sessionMetrics session source. `'derived'` (default) re-derives
+     * sessions from raw timestamps via `sessionize()` — what Mixpanel actually
+     * computes at query time. `'stamped'` restores the 1.5 reading of the
+     * generator's pre-stamped `session_id`. Rows carry `stampedDivergence`
+     * auditing the gap. Invalid values throw.
+     */
+    source?: 'derived' | 'stamped';
+    /** v1.6.0 — session derivation timeout in ms (default 30 min). Used by sessionMetrics, `countType: 'sessions'`, and topPaths. */
+    sessionTimeoutMs?: number;
+    /** v1.6.0 — max session length in ms (default 24 h). */
+    maxSessionMs?: number;
 
-    // v1.5.0 retention extensions
-    /** Retention birth event name. */
-    cohortEvent?: string;
-    /** Retention return event name. */
-    returnEvent?: string;
+    // v1.5.0 retention extensions (completed in v1.6.0 — unknown option keys THROW)
+    /** Retention birth event name (`null` or `'$any_event'` = any event). */
+    cohortEvent?: string | null;
+    /** Retention return event name (`null` or `'$any_event'` = any event). Forbidden with `compounded: true`. */
+    returnEvent?: string | null;
     /** Day buckets to check (offsets from birth, ≥1). */
     dayBuckets?: number[];
-    /** Segment cohort by birth event property value (Mixpanel segment_event=FIRST). */
+    /** Segment by event property value (birth event by default; see `segmentOn`). */
     segmentBy?: string;
-    /** CARRY_FORWARD unbounded mode — once retained, counted on all later buckets. */
+    /**
+     * v1.6.0 — property filter on the birth event. Map of prop → value (shorthand
+     * for `eq`) or `{ op, value }` with the shared WHERE rulebook ops
+     * (`eq`/`neq`/`gt`/`lt`/`gte`/`lte`/`contains`/`not_contains`).
+     */
+    cohortWhere?: Record<string, unknown>;
+    /** v1.6.0 — property filter on the return event (same shape as `cohortWhere`). Forbidden with `compounded: true`. */
+    returnWhere?: Record<string, unknown>;
+    /** v1.6.0 — compounded retention: the return side is the cohort side (event AND filters — retention_query.cpp:677-685). */
+    compounded?: boolean;
+    /** v1.6.0 — bucket width. `month` is 31 FIXED days, not calendar months (libquery/util.h:265-273). Default `'day'`. */
+    bucketUnit?: 'hour' | 'day' | 'week' | 'month';
+    /** v1.6.0 — unbounded retention mode. Default `'none'`. */
+    unbounded?: 'none' | 'carryForward' | 'carryBack' | 'consecutiveForward';
+    /** @deprecated v1.6.0 — boolean alias for `unbounded: 'carryForward'`. Use `unbounded`. */
     carry_forward?: boolean;
+    /** v1.6.0 — birth-time alignment. `'calendarStart'` floors the birth to the bucket-unit boundary (ISO Monday for weeks). Default `'birth'`. */
+    bucketAlignment?: 'birth' | 'calendarStart';
+    /** v1.6.0 — restrict births to this inclusive ms/ISO window. */
+    cohortWindow?: { from?: number | string; to?: number | string };
+    /** v1.6.0 — which event `segmentBy` reads. `'return'` = SEGMENT_EVENT_SECOND (a user can appear in multiple segments). Default `'birth'`. */
+    segmentOn?: 'birth' | 'return';
     /**
      * v1.5.0 — Mixpanel `birth_can_retain` (retention_query.cpp:1097-1109). Default
      * `false`: a return event at the EXACT birth ms is NOT counted (strict `<`).
-     * Set `true` to count exact-birth-ms returns (rare; usually a same-event-as-birth
-     * pattern requires COMPOUNDED retention which is not supported here).
+     * Set `true` to count exact-birth-ms returns. For same-event-as-birth patterns
+     * see `compounded: true` (supported since v1.6.0).
      */
     birthCanRetain?: boolean;
 
     // v1.5.1 distinctCount extensions
-    /** Optional cap on the number of top-N values returned in `top_values`. Defaults to 25 (matches Mixpanel UI). */
+    /** distinctCount: cap on `top_values` (default 25, matches Mixpanel UI). eventBreakdown: segment cap (default 250, no "other" bucket). */
     topN?: number;
+
+    // v1.6.0 eventBreakdown / uniques / lifecycle / topPaths extensions
+    /** eventBreakdown + topPaths: event property to segment by (lists fan out per item; `null`/`undefined` → the "undefined" bucket). */
+    breakdownProperty?: string;
+    /**
+     * Count type. eventBreakdown: `'general'` (events, default), `'unique'`
+     * (distinct users), `'sessions'` (once per user-session per segment) —
+     * unrecognized values throw. uniques: `'sessions'` counts distinct
+     * (user, session) pairs per bucket. topPaths: `'unique' | 'general' | 'sessions'`.
+     */
+    countType?: 'general' | 'unique' | 'sessions';
+    /** v1.6.0 — restrict to each user's first-ever occurrence of `event` before counting (eventBreakdown + uniques). */
+    firstTimeOnly?: boolean;
+    /** uniques: bucket unit (default `'day'`; `'range'` = one bucket over the whole window). */
+    unit?: 'hour' | 'day' | 'week' | 'month' | 'range';
+    /** uniques: rolling look-back window in days (WAU=7, MAU=30). An event on day E lands the user in buckets [E, E+W−1]. */
+    rollingWindow?: number;
+    /** uniques: each bucket reports the running distinct-user count through that bucket. Not composable with `countType: 'sessions'`. */
+    cumulative?: boolean;
+    /** uniques: property filter on counted events (same shape as `cohortWhere`). */
+    where?: Record<string, unknown>;
+    /** lifecycle: the value-moment event classified into new/retained/resurrected/dormant. */
+    valueMomentEvent?: string;
+    /** lifecycle: period length — 7 or 30 (the LCA board-template variants). Default 7. */
+    periodDays?: 7 | 30;
+    /** topPaths: anchor event name(s) paths start from. */
+    anchors?: string[];
+    /** topPaths: steps captured after the anchor (default 2, ARB cap 10). */
+    forward?: number;
+    /** topPaths: steps captured before the anchor (default 0). */
+    reverse?: number;
+    /** topPaths: events removed from streams before matching. */
+    hiddenEvents?: string[];
+    /** topPaths: when set, ONLY these events (plus anchors) are visible. */
+    visibleEvents?: string[];
+    /** topPaths: collapse immediate repeats of the same event (default true). */
+    collapseRepeated?: boolean;
+    /** topPaths: output shape — `'list'` (ARB Top Paths leaf rows, top-50) or `'sankey'`. Default `'list'`. */
+    output?: 'list' | 'sankey';
+    /** topPaths: per-level top-N pruning threshold into `$mp_uncommon_flows_events`. */
+    cardinalityThreshold?: number;
 }
 
-/** v1.5.0 — config for `emulateBreakdown({ type: 'retention' })`. */
+/**
+ * v1.5.0 — config for `emulateBreakdown({ type: 'retention' })`. Completed in
+ * v1.6.0: `compounded`, `cohortWhere`/`returnWhere`, `bucketUnit`, `unbounded`
+ * (carryForward/carryBack/consecutiveForward), `bucketAlignment: 'calendarStart'`,
+ * `cohortWindow`, `segmentOn: 'return'`. Unknown option keys THROW (v1.6.0
+ * behavior change — a typo'd option no longer runs silently with defaults).
+ */
 export interface RetentionConfig extends EmulateOptions {
     type: 'retention';
-    cohortEvent: string;
-    returnEvent: string;
-    dayBuckets: number[];
+    cohortEvent: string | null;
+    /** Required unless `compounded: true` (which sets the return side := cohort side). */
+    returnEvent?: string | null;
+    dayBuckets?: number[];
     segmentBy?: string;
+    /** @deprecated v1.6.0 — use `unbounded: 'carryForward'`. */
     carry_forward?: boolean;
 }
 
@@ -2149,6 +2266,8 @@ export interface SessionMetricsConfig extends EmulateOptions {
     event?: string;
     /** Which metrics to compute. Default: `['count', 'duration', 'eventsPerSession']`. */
     metrics?: Array<'count' | 'duration' | 'eventsPerSession'>;
+    /** v1.6.0 — `'derived'` (default) re-derives sessions from timestamps; `'stamped'` reads pre-stamped `session_id` (the 1.5 behavior). */
+    source?: 'derived' | 'stamped';
 }
 
 declare module '@ak--47/dungeon-master/verify' {
@@ -2168,11 +2287,30 @@ declare module '@ak--47/dungeon-master/verify' {
     /** Greedy single-pass funnel evaluator options. */
     export interface FunnelOptions {
         conversionWindowMs?: number;
+        /**
+         * v1.6.0 — session-count conversion window (`{ unit: 'sessions', n }`,
+         * n ≤ 12): steps must land within n sessions of step 0 (ordinal-only
+         * per-step check). Mutually exclusive with `conversionWindowMs`.
+         */
+        conversionWindow?: { unit: 'sessions'; n: number };
         graceperiod?: boolean;
         reentry?: boolean;
         exclusionSteps?: ExclusionStep[];
         trackStepProperties?: boolean | string[];
-        countMode?: 'uniques' | 'totals';
+        /**
+         * `'totals'` returns an ARRAY of FunnelResult — one per attempt.
+         * v1.6.0 `'sessions'` is Mixpanel's "count by Sessions" API-rewrite
+         * preset: expands to `totals` + `woRepeat` + conversion window of 1
+         * session; throws when combined with `reentry` or another window.
+         */
+        countMode?: 'uniques' | 'totals' | 'sessions';
+        /**
+         * v1.6.0 — COUNT_TYPE_GENERAL_WO_REPEAT: totals counting where window
+         * expiry is the ONLY restart (at most one attempt per window span).
+         * Requires `countMode: 'totals'`; mutually exclusive with `reentry`
+         * and `sessionScoped`.
+         */
+        woRepeat?: boolean;
         sessionScoped?: boolean;
     }
     /** Per-attempt funnel result. */

@@ -1810,7 +1810,7 @@ const rows = emulateBreakdown(events, {
   returnEvent: 'Login',
   dayBuckets: [0, 1, 7, 14, 30],   // bucket 0 = within 24h of birth
   segmentBy: 'plan',               // optional — segment by birth event prop
-  carry_forward: false,            // optional — monotonically non-decreasing
+  unbounded: 'none',               // optional — 'carryForward' = monotonically non-decreasing
   birthCanRetain: false,           // optional — count returns AT birth ms (default false)
   profiles,                        // optional — auto-builds identity map
 });
@@ -2032,8 +2032,9 @@ emulateBreakdown(events, { type: 'retention', cohortEvent: 'Sign Up',
 these recipes when writing per-dungeon verify scripts under
 `dungeons/vertical/<name>/`.
 
-**Proof in repo:** `dungeons/vertical/<dungeon>/<dungeon>.{verify.mjs,sql}` —
-20 dungeons, 107 documented hooks, 107 verification checks. Each
+**Proof in repo:** `dungeons/vertical/<dungeon>/<dungeon>.{verify.mjs,sql}` plus a
+`stories` export per dungeon — 22 dungeons, 212 machine-checkable stories,
+evaluated mechanically by `scripts/verify-stories.mjs`. Each
 `<dungeon>.verify.mjs` is a CI-runnable assertion that the dungeon's
 engineered story patterns appear in full-fidelity generated data.
 

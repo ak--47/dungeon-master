@@ -14,7 +14,7 @@ The default export accepts: a config object, a path to a `.js`/`.mjs`/`.json` du
 |---|---|
 | User-facing API, config reference, examples, full preset tables | [README.md](README.md) |
 | Hook encyclopedia, recipes, Mixpanel counting semantics | [HOOKS.md](HOOKS.md) |
-| Per-version upgrade guides (1.3 → 1.5) | [docs/guides/](docs/guides/) |
+| Per-version upgrade guides (1.3 → 1.6) | [docs/guides/](docs/guides/) |
 | Per-dungeon stories + verify scripts (vertical dungeons) | [dungeons/vertical/README.md](dungeons/vertical/README.md) |
 | Full `Dungeon` interface | [types.d.ts](types.d.ts) |
 | Changelog | [CHANGELOG.md](CHANGELOG.md) |
@@ -38,7 +38,7 @@ dungeons/technical/      # engine fixtures
 dungeons/user/           # one folder per customer
 dungeons/vertical/       # one folder per vertical: <name>/<name>.js + <name>.verify.mjs + <name>.sql
 tests/{unit,integration,e2e,engine}/
-docs/guides/             # 1.3.0 → 1.5.0 upgrade guides
+docs/guides/             # 1.3.0 → 1.6.0 upgrade guides
 plans/                   # historical implementation plans (ENGINE-VALIDATION, DATAGEN, etc.)
 ```
 
@@ -87,7 +87,7 @@ npx vitest tests/unit                               # watch mode
 
 **Always pipe vitest output through `tail -50`** (`... 2>&1 | tail -50`) — captures the summary without flooding the transcript. Don't rerun expensive suites just to re-read the summary.
 
-`tests/e2e/sanity.test.js` is excluded by default (parked — hangs after Module Integration block; run isolated via `npx vitest run tests/e2e/sanity.test.js`).
+`tests/e2e/sanity.test.js` runs in the default suite (the historical hang after its Module Integration block is resolved). `tests/e2e/engine-shape-full-sweep.test.js` skips itself unless `RUN_FULL_SWEEP=1`.
 
 ### Engine tests (direct-run, NOT vitest)
 
