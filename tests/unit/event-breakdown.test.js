@@ -244,6 +244,56 @@ describe('eventBreakdown', () => {
 		expect(emulateBreakdown([], { type: 'eventBreakdown', breakdownProperty: 'p', countType: 'sessions' }))
 			.toEqual([]);
 	});
+
+	// COUNT_TYPE_UNIQUE: per-segment metric is distinct resolved users
+	// (query_record_per_user_state per segment, normal_query.cpp:1300-1316).
+	test('countType "unique": count is distinct users per segment, not events', () => {
+		const events = [
+			ev('a', { p: 'red' }, 'u1'),
+			ev('a', { p: 'red' }, 'u1'),
+			ev('a', { p: 'red' }, 'u1'),
+			ev('a', { p: 'red' }, 'u2'),
+			ev('a', { p: 'blue' }, 'u1'),
+		];
+		const rows = emulateBreakdown(events, { type: 'eventBreakdown', breakdownProperty: 'p', countType: 'unique' });
+		// hand-computed: red = {u1, u2} → 2; blue = {u1} → 1. General would
+		// have said red=4, blue=1.
+		expect(rows).toEqual([
+			{ value: 'red', count: 2, total_users: 2 },
+			{ value: 'blue', count: 1, total_users: 1 },
+		]);
+	});
+
+	test('countType "unique": topN sorts on the unique metric, not event volume', () => {
+		// red: 4 events, 1 user. blue: 2 events, 2 users. General ranks
+		// red first (4 > 2); unique ranks blue first (2 users > 1 user).
+		const events = [
+			ev('a', { p: 'red' }, 'u1'),
+			ev('a', { p: 'red' }, 'u1'),
+			ev('a', { p: 'red' }, 'u1'),
+			ev('a', { p: 'red' }, 'u1'),
+			ev('a', { p: 'blue' }, 'u1'),
+			ev('a', { p: 'blue' }, 'u2'),
+		];
+		const general = emulateBreakdown(events, { type: 'eventBreakdown', breakdownProperty: 'p' });
+		expect(general.map(r => r.value)).toEqual(['red', 'blue']);
+		const uniq = emulateBreakdown(events, { type: 'eventBreakdown', breakdownProperty: 'p', countType: 'unique' });
+		expect(uniq).toEqual([
+			{ value: 'blue', count: 2, total_users: 2 },
+			{ value: 'red', count: 1, total_users: 1 },
+		]);
+	});
+
+	test('explicit countType "general" is accepted and identical to the default', () => {
+		const events = [ev('a', { p: 'x' }, 'u1'), ev('a', { p: 'x' }, 'u1')];
+		expect(emulateBreakdown(events, { type: 'eventBreakdown', breakdownProperty: 'p', countType: 'general' }))
+			.toEqual(emulateBreakdown(events, { type: 'eventBreakdown', breakdownProperty: 'p' }));
+	});
+
+	test('unrecognized countType throws (strict-option rule — no silent general fallback)', () => {
+		expect(() => emulateBreakdown([ev('a', { p: 'x' })], { type: 'eventBreakdown', breakdownProperty: 'p', countType: 'uniques' }))
+			.toThrow(/countType/);
+	});
 });
 
 // v1.6.0 fix round (B5): timeBucket compositions. Hand-computed from the

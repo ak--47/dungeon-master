@@ -6,6 +6,7 @@
 
 import { describe, test, expect } from 'vitest';
 import DUNGEON_MASTER from '../../index.js';
+import { quickHash } from '../../lib/utils/utils.js';
 import dayjs from 'dayjs';
 
 const FIXED_NOW = dayjs('2024-02-02').unix();
@@ -253,6 +254,72 @@ describe('Experiment API', () => {
 			for (const name of variants) expect(['A', 'B', 'C']).toContain(name);
 		}
 	}, 30000);
+
+	test('explicit sticky: true is identical to omitting it (the default cannot silently flip)', async () => {
+		// Sticky assignment is a pure hash of user_id + experiment name —
+		// NOT a chance draw — so every participant's variant must match the
+		// documented quickHash formula, whether sticky is omitted or passed
+		// explicitly. (We assert the per-user hash mapping rather than
+		// comparing the two runs' user sets byte-for-byte: vitest runs `it`
+		// blocks concurrently, and a concurrent test's DUNGEON_MASTER call
+		// reseeds the shared module RNG mid-run, so WHICH users exist can
+		// drift between runs. The hash mapping is immune to that.)
+		const run = async (experiment) => {
+			const variantsByUser = new Map();
+			await DUNGEON_MASTER(baseConfig({
+				seed: 'exp-sticky-default',
+				numUsers: 60,
+				avgEventsPerUserPerDay: 5,
+				percentUsersBornInDataset: 100,
+				events: [
+					{ event: 'Start', isFirstEvent: true, isStrictEvent: true },
+					{ event: 'End', isStrictEvent: true },
+					{ event: 'Browse', weight: 5 },
+				],
+				funnels: [
+					{
+						sequence: ['Start', 'End'],
+						conversionRate: 100,
+						isFirstFunnel: true,
+						timeToConvert: 1,
+					},
+					{
+						sequence: ['Start', 'End'],
+						conversionRate: 100,
+						timeToConvert: 1,
+						weight: 3,
+						experiment,
+					},
+				],
+				hook: function (record, type, meta) {
+					if (type === 'funnel-pre' && meta.experiment) {
+						const uid = meta.user.distinct_id;
+						if (!variantsByUser.has(uid)) variantsByUser.set(uid, new Set());
+						variantsByUser.get(uid).add(meta.experiment.variantName);
+					}
+				},
+			}));
+			return variantsByUser;
+		};
+
+		const variants = [{ name: 'A' }, { name: 'B' }, { name: 'C' }];
+		const omitted = await run({ name: 'Sticky Default Test', variants });
+		const explicit = await run({ name: 'Sticky Default Test', sticky: true, variants });
+
+		// Unit weights → variant index is quickHash(uid:name) % 3 (funnels.js).
+		// If the default ever flipped to sticky: false, variants would be
+		// chance-rolled per pass and this prediction would fail for ~2/3 of
+		// users (and multi-pass users would collect multiple variants).
+		const expectedVariant = (uid) =>
+			['A', 'B', 'C'][Number(quickHash(`${uid}:Sticky Default Test`)) % 3];
+		for (const [label, map] of [['omitted', omitted], ['explicit', explicit]]) {
+			expect(map.size, label).toBeGreaterThan(0);
+			for (const [uid, set] of map) {
+				expect(set.size, `${label}: ${uid}`).toBe(1); // sticky: one variant per user
+				expect([...set][0], `${label}: ${uid}`).toBe(expectedVariant(uid));
+			}
+		}
+	}, 60000);
 
 	test('hook meta exposes experiment context in funnel-pre and funnel-post', async () => {
 		let preExperiment = null;

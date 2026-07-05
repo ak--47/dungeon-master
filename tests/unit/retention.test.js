@@ -542,6 +542,24 @@ describe('retention — bucketUnit widths', () => {
 		expect(rows.find(r => r.day === 0).retained_count).toBe(0);
 	});
 
+	test('week is a plain 7-day width — no ISO alignment without calendarStart', () => {
+		// Birth Mon Jan 1 2024. u1 returns +8d → floor(8/7) = bucket 1;
+		// u2 returns +6d → floor(6/7) = bucket 0. Pure width arithmetic
+		// (util.h:265-273); ISO-Monday flooring only enters via calendarStart.
+		const events = [
+			ev('Sign Up', day(0), { user_id: 'u1' }),
+			ev('Login',   day(8), { user_id: 'u1' }),
+			ev('Sign Up', day(0), { user_id: 'u2' }),
+			ev('Login',   day(6), { user_id: 'u2' }),
+		];
+		const rows = emulateBreakdown(events, {
+			type: 'retention', cohortEvent: 'Sign Up', returnEvent: 'Login',
+			bucketUnit: 'week', dayBuckets: [0, 1],
+		});
+		expect(rows.find(r => r.day === 0).retained_count).toBe(1);
+		expect(rows.find(r => r.day === 1).retained_count).toBe(1);
+	});
+
 	test('month is 31 FIXED days, not calendar months', () => {
 		// Birth Feb 1 2024 (leap year, Feb = 29d); return Mar 2 = +30d.
 		// Calendar-month intuition says bucket 1; ARB's fixed 31d width says bucket 0.
