@@ -2358,6 +2358,8 @@ declare module '@ak--47/dungeon-master/utils' {
     export function objectList(template: Record<string, ValueValid>, options?: { min?: number; max?: number }): () => Array<Record<string, unknown>>;
     export function weighNumRange(min: number, max: number, skew?: number, size?: number): number[];
     export function pickAWinner(items: string[], mostChosenIndex?: number): () => string[];
+    /** Clears the per-run stable-winner + weighted-array caches (also called by initChance and at every run start). */
+    export function resetValueCaches(): void;
     export function initChance(seed?: string): unknown;
     export function initUserChance(seed?: string): unknown;
     export function getUserChance(): unknown;

@@ -29,7 +29,12 @@ const baseConfig = (extra) => ({
 	...extra,
 });
 
-describe('Phase 4 hook patterns × emulator', () => {
+// describe.sequential — vitest.config sets sequence.concurrent, but every test
+// here awaits DUNGEON_MASTER() on the module-scoped seeded chance and re-seeds
+// it via initChance. Run concurrently, the tests interleave RNG draws (and
+// re-seeds!) and the statistical assertions only hold for one lucky
+// interleaving. Sequential = true per-seed determinism.
+describe.sequential('Phase 4 hook patterns × emulator', () => {
 	test('applyFrequencyByFrequency: heavy-cohort users see scaled metric counts', async () => {
 		const result = await DUNGEON_MASTER(baseConfig({
 			seed: 'pattern-freqxfreq',
@@ -213,7 +218,7 @@ describe('Phase 4 hook patterns × emulator', () => {
 	test('negative control: no pattern hook produces ratio < 1.5', async () => {
 		const result = await DUNGEON_MASTER(baseConfig({
 			seed: 'pattern-negctrl',
-			numUsers: 150,
+			numUsers: 600,
 			numDays: 30,
 			avgEventsPerUserPerDay: 3,
 			percentUsersBornInDataset: 30,

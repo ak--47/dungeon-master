@@ -96,7 +96,12 @@ function metricsFor(events, numDays, datasetEndIso) {
 	};
 }
 
-describe('engine-shape canary — per-macro baselines pass strict bar', () => {
+// NOTE: describe.sequential — vitest.config sets sequence.concurrent, but these
+// tests share the module-scoped seeded chance (initChance per generate()). Run
+// concurrently, their RNG draws interleave at await points and the metrics are
+// only "deterministic" for one lucky interleaving; any change to per-event draw
+// counts reshuffles it. Sequential = true per-seed determinism.
+describe.sequential('engine-shape canary — per-macro baselines pass strict bar', () => {
 	for (const macro of ['flat', 'steady', 'growth', 'viral', 'decline']) {
 		test(`${macro} baseline (60d, rate=1.2, 500 users) clears ${macro} strict bar`, async () => {
 			const { events, numDays } = await runCombo({ macro, numDays: 60 });
@@ -110,7 +115,7 @@ describe('engine-shape canary — per-macro baselines pass strict bar', () => {
 	}
 });
 
-describe('engine-shape canary — strict-bar invariants', () => {
+describe.sequential('engine-shape canary — strict-bar invariants', () => {
 	test('flat baseline produces no future-time events (storage guard intact)', async () => {
 		const { events } = await runCombo({ macro: 'flat', numDays: 60 });
 		const nowMs = Date.now();

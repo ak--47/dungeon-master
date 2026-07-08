@@ -2,6 +2,47 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.6.1 — 2026-07-08
+
+### Fixed
+
+- **Unweighted string arrays now produce stable power-law distributions**
+  (the long-documented intent finally works). Previously `choose()` rolled a
+  fresh random winner on every event — two compounding bugs (`!mostChosenIndex`
+  discarding an explicit `0`, plus a fresh `pickAWinner` closure per event) —
+  so aggregate breakdowns came out uniform (±edge noise). Now any plain array
+  of 3–19 unique strings gets ONE seed-deterministic winner per array per run,
+  drawn as ~45% winner / ~25% second / ~15% third / geometric-decay tail
+  (`winnerWeights` in `lib/utils/utils.js` is the single tuning point).
+  - Existing opt-outs unchanged: arrays containing
+    `variant`/`group`/`experiment`/`population`, arrays with explicit
+    duplicate entries (dupes honored exactly), arrays of length ≤2 or ≥20,
+    and non-string values.
+  - Direct `u.pickAWinner([...])` use in dungeon files gets the same stable
+    memoized winner for the run; explicit `pickAWinner(arr, 0)` is honored now.
+    (Note: `pickAWinner` calls at module-import time in dungeon files execute
+    before the run's seed is applied — as before — so those winners are stable
+    within a run but not pinned across processes.) Each `pickAWinner` resolver
+    now also carries its own expansion — previously `choose()`'s resolver cache
+    keyed by function source could serve one property's value list to a
+    different property.
+  - UTM properties (`utm_campaign` etc.) draw through the same path, so
+    campaign values now skew realistically per network instead of splitting
+    uniformly.
+  - New `resetValueCaches()` clears the per-run winner memo (and the
+    weighted-array resolver cache, which previously leaked across in-process
+    runs); called automatically by `initChance()` and at every run start.
+  - Side effect: ~1 RNG draw per string-array property per event instead of
+    ~30, and the seeded RNG stream shifts vs 1.6.0 — same seed no longer
+    reproduces 1.6.0 output byte-for-byte (within-version determinism is
+    unchanged).
+- **Engine-shape canary and hook-pattern integration tests made truly
+  deterministic** — their generating tests now run `describe.sequential`,
+  since concurrent in-process `generate()` calls interleave draws (and
+  re-seeds) on the shared seeded chance. The hook-pattern negative control
+  was recalibrated to 600 users; at 150 it exceeded its own threshold on
+  1.6.0 too and only passed under one lucky interleaving.
+
 ## 1.6.0 — 2026-07-04
 
 ### Added

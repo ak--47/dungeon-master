@@ -27,7 +27,7 @@ import { makeMirror } from './lib/generators/mirror.js';
 import { makeGroupProfile, makeProfile } from './lib/generators/profiles.js';
 
 // Utilities
-import { initChance, initUserChance, resetUserChance, setDatasetNow, setDatasetBegin, deleteFile } from './lib/utils/utils.js';
+import { initChance, initUserChance, resetUserChance, resetValueCaches, setDatasetNow, setDatasetBegin, deleteFile } from './lib/utils/utils.js';
 import { runWithDataset } from './lib/utils/dataset-context.js';
 
 // External dependencies
@@ -130,6 +130,10 @@ async function runDungeon(config) {
 		// Initialize seeded RNG BEFORE validation — config-validator captures a
 		// chance reference for default userProps (spiritAnimal). If we init after,
 		// run 1 binds an unseeded instance while run 2 binds a stale one → non-deterministic.
+		// v1.6.1: clear per-run winner/weighted-array caches unconditionally —
+		// a prior in-process run must never leak its winners into this one.
+		// (initChance also clears them, but only fires when a seed is set.)
+		resetValueCaches();
 		if (config.seed) {
 			initChance(config.seed);
 		}

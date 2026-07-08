@@ -155,6 +155,8 @@ import { createTextGenerator, generateBatch } from '@ak--47/dungeon-master/text'
 
 these are the same functions used internally. `pickAWinner` creates weighted distributions, `weighNumRange` generates realistic numeric ranges with configurable skew, and the text generators produce organic-looking strings with sentiment analysis and keyword injection.
 
+**you usually don't need `pickAWinner`** — as of 1.6.1, any property value that is a plain array of 3–19 unique strings automatically gets a stable power-law distribution: one seed-deterministic winner per array per run (~45% winner / ~25% second / ~15% third / decaying tail). to opt out and get uniform draws, use exactly 2 values, 20+, or include one of the keywords `variant` / `group` / `experiment` / `population` in a value (experiment arms stay balanced). arrays with explicit duplicate entries (`["card", "card", "apple_pay"]`) skip the auto-weighting and honor the duplicates exactly.
+
 ### named exports
 
 alongside the default `DUNGEON_MASTER` export, the package root exports loader + interop helpers:

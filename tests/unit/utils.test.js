@@ -39,6 +39,8 @@ import {
 	pickRandom,
 	range,
 	pickAWinner,
+	resetValueCaches,
+	ListValue,
 	weighNumRange,
 	fixFirstAndLast,
 	generateUser,
@@ -1614,6 +1616,180 @@ describe('weights', () => {
 	});
 
 
+});
+
+describe('stable power-law winners (v1.6.1)', () => {
+	const DRAWS = 20_000;
+
+	/** draw N times through choose() and tally */
+	function tally(arr, draws = DRAWS) {
+		const counts = {};
+		for (let i = 0; i < draws; i++) {
+			const v = choose(arr);
+			counts[v] = (counts[v] || 0) + 1;
+		}
+		return counts;
+	}
+
+	function sortedShares(counts, draws = DRAWS) {
+		return Object.values(counts).map(c => c / draws).sort((a, b) => b - a);
+	}
+
+	test('skew: top value ≥35%, top/bottom ≥2.5x', () => {
+		initChance('skew-seed');
+		const arr = ['alpha', 'beta', 'gamma', 'delta', 'epsilon'];
+		const shares = sortedShares(tally(arr));
+		expect(shares[0]).toBeGreaterThanOrEqual(0.35);
+		expect(shares[0] / shares[shares.length - 1]).toBeGreaterThanOrEqual(2.5);
+	});
+
+	test('stability: same winner across the entire run', () => {
+		initChance('stability-seed');
+		const arr = ['api', 'checkout', 'payment_link', 'tap_to_pay'];
+		const winners = [];
+		for (let batch = 0; batch < 4; batch++) {
+			const counts = tally(arr, 5_000);
+			winners.push(Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0]);
+		}
+		expect(new Set(winners).size).toBe(1);
+	});
+
+	test('determinism: same seed → identical distribution', () => {
+		const arr = ['api', 'checkout', 'payment_link', 'tap_to_pay'];
+		initChance('determinism-seed');
+		const first = tally(arr);
+		initChance('determinism-seed');
+		const second = tally(arr);
+		expect(second).toEqual(first);
+	});
+
+	test('isolation: sequential runs do not contaminate each other', () => {
+		const arr = ['north', 'south', 'east', 'west'];
+		initChance('run-a');
+		const runA = tally(arr);
+		initChance('run-b');
+		tally(arr); // interleaved run with a different seed
+		initChance('run-a');
+		const runAAgain = tally(arr);
+		expect(runAAgain).toEqual(runA);
+	});
+
+	test('opt-out: keyword arrays stay uniform', () => {
+		initChance('keyword-seed');
+		const arr = ['variant_a', 'variant_b', 'variant_c', 'variant_d'];
+		const shares = sortedShares(tally(arr));
+		expect(shares[0] / shares[shares.length - 1]).toBeLessThan(1.3);
+	});
+
+	test('opt-out: duplicate entries honor the dupes exactly', () => {
+		initChance('dupe-seed');
+		const counts = tally(['card', 'card', 'apple_pay']);
+		const cardShare = counts['card'] / DRAWS;
+		expect(cardShare).toBeGreaterThan(0.60);
+		expect(cardShare).toBeLessThan(0.73);
+	});
+
+	test('opt-out: arrays of length ≤2 stay uniform', () => {
+		initChance('two-seed');
+		const shares = sortedShares(tally(['on', 'off']));
+		expect(shares[0] / shares[1]).toBeLessThan(1.2);
+	});
+
+	test('opt-out: arrays of length ≥20 stay uniform', () => {
+		initChance('twenty-seed');
+		const arr = Array.from({ length: 20 }, (_, i) => `val_${i}`);
+		const shares = sortedShares(tally(arr));
+		expect(shares[0] / shares[shares.length - 1]).toBeLessThan(1.8);
+	});
+
+	test('non-string arrays unchanged: numeric arrays stay uniform', () => {
+		initChance('numeric-seed');
+		const shares = sortedShares(tally([1, 2, 3, 4]));
+		expect(shares[0] / shares[shares.length - 1]).toBeLessThan(1.3);
+	});
+
+	test('non-string values unchanged: thunks and ListValue pass through', () => {
+		initChance('thunk-seed');
+		expect(choose(() => 'fixed')).toBe('fixed');
+		const lv = new ListValue(['a', 'b']);
+		expect(choose(lv)).toBe(lv);
+	});
+
+	test('pickAWinner: explicit index 0 is honored (bug A)', () => {
+		initChance('bug-a-seed');
+		const items = ['first', 'second', 'third', 'fourth'];
+		const expansion = pickAWinner(items, 0)();
+		const counts = {};
+		expansion.forEach(v => counts[v] = (counts[v] || 0) + 1);
+		const mode = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+		expect(mode).toBe('first');
+	});
+
+	test('pickAWinner: direct use is stable and seed-deterministic', () => {
+		initChance('direct-seed');
+		const items = ['a', 'b', 'c', 'd', 'e'];
+		const first = pickAWinner(items)();
+		const again = pickAWinner(items)(); // memoized winner within the run
+		expect(again).toEqual(first);
+		initChance('direct-seed');
+		const rerun = pickAWinner(items)();
+		expect(rerun).toEqual(first);
+	});
+
+	test('pickAWinner: 2-item arrays with explicit index do not throw', () => {
+		initChance('two-item-seed');
+		expect(() => pickAWinner(['a', 'b'], 0)()).not.toThrow();
+		expect(() => pickAWinner(['a', 'b'], 1)()).not.toThrow();
+	});
+
+	test('resetValueCaches: clears memoized winners', () => {
+		initChance('reset-seed');
+		const items = ['x', 'y', 'z'];
+		pickAWinner(items)();
+		resetValueCaches();
+		// after reset, a new winner roll happens (no throw, valid expansion)
+		const expansion = pickAWinner(items)();
+		expect(expansion.every(v => items.includes(v))).toBe(true);
+	});
+
+	test('two pickAWinner closures through choose() return their OWN arrays (no cache collision)', () => {
+		initChance('collision-seed');
+		// closures share an identical toString(); the weightedArrayCache used to
+		// serve fA's expansion for fB
+		const fA = pickAWinner(['news', 'food', 'games', 'sports']);
+		const fB = pickAWinner(['rock', 'jazz', 'blues', 'folk']);
+		const aVals = new Set(['news', 'food', 'games', 'sports']);
+		const bVals = new Set(['rock', 'jazz', 'blues', 'folk']);
+		for (let i = 0; i < 50; i++) {
+			expect(aVals.has(choose(fA))).toBe(true);
+			expect(bVals.has(choose(fB))).toBe(true);
+		}
+	});
+
+	test('pickAWinner: NaN and fractional indexes never yield empty values', () => {
+		initChance('nan-seed');
+		const items = ['a', 'b', 'c', 'd'];
+		for (const idx of [NaN, 1.5, -2.7, Infinity]) {
+			const expansion = pickAWinner(items, idx)();
+			expect(expansion.length).toBeGreaterThan(0);
+			expect(expansion.every(v => items.includes(v))).toBe(true);
+		}
+	});
+
+	test('winner keyed by contents: equal-content array instances share a winner', () => {
+		initChance('identity-seed');
+		const a1 = ['red', 'green', 'blue', 'gold'];
+		const a2 = ['red', 'green', 'blue', 'gold'];
+		const top = arr => {
+			const counts = {};
+			for (let i = 0; i < 5_000; i++) {
+				const v = choose(arr);
+				counts[v] = (counts[v] || 0) + 1;
+			}
+			return Object.entries(counts).sort((x, y) => y[1] - x[1])[0][0];
+		};
+		expect(top(a2)).toBe(top(a1));
+	});
 });
 
 describe('high CPU usage functions', () => {
