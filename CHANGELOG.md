@@ -2,6 +2,103 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.6.2 — 2026-07-30
+
+### Fixed
+
+- **Running the same dungeon twice in one process no longer collapses the second
+  run.** `validateDungeonConfig` enriched in place — stamping `isStrictEvent` on
+  funnel-step events and `conversionWindowDays` / `_experiment` on funnels — and
+  `DUNGEON_MASTER` handed the pipeline a shallow spread, so those stamps landed on
+  the caller's own `events` / `funnels` arrays. For a file input that array belongs
+  to the ESM module cache, so run 2 got a config already enriched by run 1: every
+  event pre-promoted to strict, the catch-all funnel swept nothing, and event volume
+  collapsed (measured 317 → 0 on `dungeons/technical/simple.js`). The validator now
+  clones its input and enriches only what it returns; functions (`hook`,
+  `onProgress`, chance-bound prop thunks) are preserved by reference. Affects an
+  object config passed by a caller who reuses it, a file path run more than once in
+  a process, and an array of paths. Not affected: raw-text input (each call writes a
+  fresh temp module) and `scripts/run-many.mjs` (forks a child per dungeon). Pinned
+  by `tests/integration/config-isolation.test.js`.
+- **`verifyDungeon` now applies funnel config to path and JSON inputs.** It read
+  `conversionWindowDays` / `order` back off the caller's own `config`, which for a
+  string input has no `.funnels` at all — so every funnel check silently ran with
+  the default order and an unbounded window. It now reads
+  `result.validatedConfig.funnels`.
+- **`verifyDungeon`'s schema report is no longer spurious.** `validateSchema` also
+  ran against the raw input: a path input has no fields to derive an expected
+  schema from, and a v1.5.1 dungeon keeps `hasAndroidDevices` / `hasBrowser` under
+  `switches`, which `deriveExpectedSchema` only sees once flattened. Both produced
+  a wall of phantom `flagStamping` findings and a permanently false `report.pass`
+  (16 phantom findings on `dungeons/technical/experiments.js`; now 0). It now
+  validates against the config the run actually used.
+- **The 22 shipped `dungeons/vertical/*/*.verify.mjs` wrappers now thread VALIDATED
+  funnels** into `evaluateStories`. They passed `config.funnels` raw, so no funnel
+  story in any vertical had a conversion window — every vertical funnel resolves to
+  a 30- or 45-day `conversionWindowDays` that was being dropped. Pre-existing (these
+  scripts read shards off disk, so nothing ever enriched their config).
+  `validateDungeonConfig` is now exported from `@ak--47/dungeon-master/verify` for
+  exactly this.
+- **`verifyDungeon` throws on a multi-dungeon input** instead of silently verifying
+  `result[0]` and discarding the rest — which returned a green report for dungeons
+  nobody looked at. Call it once per dungeon.
+- **`tests/unit/dungeon-shapes.test.js` no longer asserts the lowercase-hyphen naming
+  convention against `dungeons/user/`.** That directory is gitignored per-machine
+  scratch space, so the check failed on whatever a given developer had checked out
+  locally and was unreproducible in CI. The convention still applies to the tracked
+  `technical/` and `vertical/` dungeons.
+
+### Added
+
+- **`result.validatedConfig`** — the enriched config the run actually used. Read
+  resolved values (`funnels[].conversionWindowDays`, `events[].isStrictEvent`, the
+  resolved dataset window) here now that the validator no longer writes them back to
+  the object you passed in. Two caveats, both documented on the type: credentials
+  are stripped (a Result gets logged), and it is **read-only** — validation is not
+  idempotent, so feeding it back into `DUNGEON_MASTER` grows the funnel set and
+  eventually yields an empty `sequence`. Re-run the original config instead.
+- **`verifyDungeon(config, checks, overrides)`** — an optional third argument,
+  merged into the dungeon before it runs exactly like `DUNGEON_MASTER`'s second
+  argument. Lets CI verify a production-scale dungeon at a small `numUsers` /
+  `numEvents` without editing it. The report also carries `validatedConfig`.
+- **`validateDungeonConfig`** re-exported from `@ak--47/dungeon-master/verify`, so a
+  standalone verify script that reads shards off disk can resolve funnel defaults
+  before calling `evaluateStories` / `applyFunnelDefaults`.
+- **`releaseConnections()`** exported from `lib/orchestrators/mixpanel-sender.js`,
+  for hosts that drive `mixpanel-import` directly and want the same pool teardown.
+
+### Changed
+
+- **`validateDungeonConfig` no longer mutates its input.** Enrichment lands only on
+  the returned object. If you called it directly and then read `isStrictEvent` /
+  `conversionWindowDays` back off the config you passed in, read the return value
+  instead (or `result.validatedConfig` after a run). Running a dungeon is
+  unaffected. This is the fix for the collapse bug above, so it ships on a patch.
+- **`mixpanel-import` bumped `^3.3.2` → `^3.5.1`.** Notable for dungeon-master:
+  - **Flat events past `epochEnd` no longer kill the entire import job.** The sender
+    sets `epochEnd: dayjs().unix()` and dungeon-master events are flat, which on
+    3.3.2 threw `Record has no properties object, cannot fix time` and failed the
+    whole batch; 3.5.1 counts the record as `outOfBounds` and carries on. Verified
+    directly against both versions.
+  - **India-region SCD imports go to `api-in`.** 3.3.2 routed `region: 'IN'` SCD
+    batches to `api-eu`.
+  - **The library no longer installs five process-global handlers**
+    (`unhandledRejection`, `uncaughtException`, `exit`, `SIGINT`, `SIGTERM`) as an
+    import side effect. **Hosts embedding dungeon-master will now crash on uncaught
+    exceptions and unhandled rejections instead of logging and continuing** — those
+    errors were always happening, only the reporting changes. Register your own
+    handlers to restore the old behavior. Upside: `user-loop`'s own SIGINT handler is
+    no longer preempted, so Ctrl+C cancellation works as designed.
+  - Prod-only `npm audit` for the dependency tree: 45 findings → 20 (critical 3 → 1).
+- **`sendToMixpanel` releases mixpanel-import's shared undici connection pools**
+  when it settles, so a host that runs occasional imports doesn't hold ingest
+  sockets open in between. Runs in a `finally`, guarded, and non-fatal; pools are
+  recreated on demand. The pools are process-global, so teardown is refcounted —
+  concurrent `DUNGEON_MASTER()` calls in one process won't close sockets out from
+  under each other.
+- **`engines.node` raised `>=18.0.0` → `>=20.20.0`**, matching what mixpanel-import
+  requires. The old floor had been wrong since 3.3.2 (which already wanted 20.18.1).
+
 ## 1.6.1 — 2026-07-08
 
 ### Fixed

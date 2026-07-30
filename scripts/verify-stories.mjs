@@ -176,7 +176,8 @@ if (inMemory) {
 
 	// Funnel auto-threading reads VALIDATED funnel fields (conversionWindowDays,
 	// order). The dungeon was not run in this process, so validate the config
-	// here — validateDungeonConfig resolves those defaults in place.
+	// here and use the RETURN value — as of v1.6.2 validateDungeonConfig does not
+	// enrich the object you hand it.
 	const validated = validateDungeonConfig({ ...config, token: '' });
 	const identityMap = buildIdentityMap(profiles);
 

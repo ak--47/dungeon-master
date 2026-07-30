@@ -17,7 +17,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { buildIdentityMap, evaluateStories, VERDICT_RANK } from '@ak--47/dungeon-master/verify';
+import { buildIdentityMap, evaluateStories, validateDungeonConfig, VERDICT_RANK } from '@ak--47/dungeon-master/verify';
 import config, { stories } from './real-estate.js';
 
 const PREFIX = process.argv[2] || 'verify-real-estate';
@@ -51,16 +51,11 @@ const runSql = async (sql) => {
 	return stdout.trim() ? JSON.parse(stdout) : [];
 };
 
-// funnels passed raw (unvalidated) — H10's emulator stories carry their own
-// conversion window: 31.2h = 24h generative Tour Funnel TTC × the 1.3
-// Standard-tier stretch, so the stretched support is fully covered. The
-// PRIMARY read is the 2-step view→tour-scheduled pair; the doc's 3-step read
-// (…→offer submitted) stays as a directional secondary because H4/H6 offer
-// clones at random timestamps collide with the greedy third-step pick and
-// attenuate the ratio toward 1 (see the H10 story narrative).
 const results = await evaluateStories(stories, events, {
 	profiles,
-	funnels: config.funnels,
+	// funnel defaults (conversionWindowDays, order) resolve on the VALIDATED
+	// config — the dungeon was not run in this process, so validate here.
+	funnels: validateDungeonConfig({ ...config, token: '' }).funnels,
 	identityMap: buildIdentityMap(profiles),
 	runSql,
 });

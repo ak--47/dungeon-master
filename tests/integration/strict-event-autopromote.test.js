@@ -10,6 +10,10 @@
  * v1.5 fix: the validator detects collisions and auto-promotes to
  * `isStrictEvent: true`, with a `console.warn`. Explicit `isStrictEvent: false`
  * opts out (advanced — preserves mixed semantics intentionally).
+ *
+ * v1.6.2: the validator no longer enriches its input, so these tests read
+ * `isStrictEvent` off the RETURNED config. Reading it back off the object passed
+ * in is exactly the aliasing bug that release fixed.
  */
 
 import { describe, test, expect } from 'vitest';
@@ -19,8 +23,9 @@ function captureWarnings(fn) {
 	const warnings = [];
 	const origWarn = console.warn;
 	console.warn = (msg) => { warnings.push(String(msg)); };
-	try { fn(); } finally { console.warn = origWarn; }
-	return warnings;
+	let value;
+	try { value = fn(); } finally { console.warn = origWarn; }
+	return { warnings, value };
 }
 
 const baseConfig = (overrides = {}) => ({
@@ -49,16 +54,18 @@ describe('v1.5 isStrictEvent auto-promote', () => {
 				timeToConvert: 1,
 			}],
 		});
-		const warnings = captureWarnings(() => validateDungeonConfig(cfg));
+		const { warnings, value: out } = captureWarnings(() => validateDungeonConfig(cfg));
 		const hasPromote = warnings.some(w =>
 			w.includes('Auto-promoted') && w.includes('isStrictEvent: true')
 		);
 		expect(hasPromote).toBe(true);
 		// All three funnel-step events should now be strict.
 		for (const eventName of ['sign up', 'onboard', 'purchase']) {
-			const ev = cfg.events.find(e => e.event === eventName);
+			const ev = out.events.find(e => e.event === eventName);
 			expect(ev.isStrictEvent).toBe(true);
 		}
+		// ...and the caller's own config is untouched (v1.6.2)
+		expect(cfg.events.every(e => e.isStrictEvent === undefined)).toBe(true);
 	});
 
 	test('explicit isStrictEvent: false opts out (preserved)', () => {
@@ -72,10 +79,10 @@ describe('v1.5 isStrictEvent auto-promote', () => {
 				timeToConvert: 1,
 			}],
 		});
-		validateDungeonConfig(cfg);
-		const su = cfg.events.find(e => e.event === 'sign up');
+		const out = validateDungeonConfig(cfg);
+		const su = out.events.find(e => e.event === 'sign up');
 		expect(su.isStrictEvent).toBe(false); // opt-out preserved
-		const pu = cfg.events.find(e => e.event === 'purchase');
+		const pu = out.events.find(e => e.event === 'purchase');
 		expect(pu.isStrictEvent).toBe(true); // auto-promoted (no explicit value)
 	});
 
@@ -90,7 +97,7 @@ describe('v1.5 isStrictEvent auto-promote', () => {
 				timeToConvert: 1,
 			}],
 		});
-		const warnings = captureWarnings(() => validateDungeonConfig(cfg));
+		const { warnings } = captureWarnings(() => validateDungeonConfig(cfg));
 		// No auto-promote warnings since both already strict.
 		const hasPromote = warnings.some(w => w.includes('Auto-promoted'));
 		expect(hasPromote).toBe(false);
@@ -107,9 +114,9 @@ describe('v1.5 isStrictEvent auto-promote', () => {
 				timeToConvert: 1,
 			}],
 		});
-		validateDungeonConfig(cfg);
-		const su = cfg.events.find(e => e.event === 'sign up');
-		const pv = cfg.events.find(e => e.event === 'page view');
+		const out = validateDungeonConfig(cfg);
+		const su = out.events.find(e => e.event === 'sign up');
+		const pv = out.events.find(e => e.event === 'page view');
 		expect(su.isStrictEvent).toBe(true);
 		// v1.5 auto-promote runs BEFORE the catch-all funnel auto-creation. So
 		// `page view` is not yet a funnel step when the promote runs → stays
@@ -129,8 +136,8 @@ describe('v1.5 isStrictEvent auto-promote', () => {
 				experiment: true,
 			}],
 		});
-		validateDungeonConfig(cfg);
-		const exp = cfg.events.find(e => e.event === '$experiment_started');
+		const out = validateDungeonConfig(cfg);
+		const exp = out.events.find(e => e.event === '$experiment_started');
 		// $experiment_started in events[] is left alone; experiments handle it specially.
 		expect(exp.isStrictEvent).toBeUndefined();
 	});

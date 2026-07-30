@@ -20,7 +20,7 @@ import { extractComments } from './lib/core/extract-comments.js';
 
 // Orchestrators
 import { userLoop } from './lib/orchestrators/user-loop.js';
-import { sendToMixpanel, collectWrittenFiles } from './lib/orchestrators/mixpanel-sender.js';
+import { sendToMixpanel, collectWrittenFiles, releaseConnections } from './lib/orchestrators/mixpanel-sender.js';
 // Generators
 import { makeAdSpend } from './lib/generators/adspend.js';
 import { makeMirror } from './lib/generators/mirror.js';
@@ -291,6 +291,12 @@ async function runDungeon(config) {
 			eventCount: context.getStoredEventCount(),
 			userCount: context.getUserCount(),
 			profilesPushed,
+			// v1.6.2: the enriched config this run actually used. `validateDungeonConfig`
+			// no longer writes back to the caller's object, so consumers that need
+			// resolved values (`funnels[].conversionWindowDays`, `events[].isStrictEvent`,
+			// the resolved dataset window) read them here. `verifyDungeon` depends on this.
+			// Credentials are stripped — a Result is a thing hosts log.
+			validatedConfig: redactCredentials(validatedConfig),
 			...(progressSummary.updates > 0 || progressSummary.errors > 0 ? { progress: progressSummary } : {})
 		};
 
@@ -561,6 +567,26 @@ async function flushStorageToDisk(storage, config) {
 }
 
 /**
+ * Shallow copy of the validated config with every credential removed, for the
+ * `validatedConfig` field on a Result.
+ *
+ * A Result is a thing hosts log, serialize, and attach to CI artifacts. Before
+ * v1.6.2 it carried no credentials at all, and surfacing the resolved config
+ * shouldn't quietly change that: the run object holds `token`, `serviceAccount`,
+ * `serviceSecret` and `projectId` both flattened and under `credentials`.
+ * @param {import('./types').Dungeon} validated
+ * @returns {import('./types').Dungeon}
+ */
+function redactCredentials(validated) {
+	if (!validated || typeof validated !== 'object') return validated;
+	const safe = { ...validated };
+	for (const key of ['token', 'serviceAccount', 'serviceSecret', 'projectId', 'credentials']) {
+		delete safe[key];
+	}
+	return safe;
+}
+
+/**
  * Extract file information from storage containers
  * @param {import('./types').Storage} storage - Storage object
  * @returns {string[]} Array of file paths
@@ -604,4 +630,7 @@ function extractStorageData(storage) {
 // ES Module exports
 export default DUNGEON_MASTER;
 export { parseJSONDungeon, validateDungeonShape, loadFromFile, loadFromText, dungeonToJSON, extractComments };
+// v1.6.2: pool teardown is automatic when the last import settles; exported for hosts
+// that drive `mixpanel-import` themselves and want the same cleanup.
+export { releaseConnections };
 

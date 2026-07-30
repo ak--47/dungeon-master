@@ -80,6 +80,15 @@ describe('Dungeon Validation', () => {
 			});
 
 			it('has lowercase-hyphen filename', () => {
+				// `dungeons/user/` is gitignored scratch space — one folder per
+				// customer, never shipped. Asserting a repo naming convention there
+				// fails on whatever a given machine happens to have checked out
+				// locally and is unreproducible in CI. Convention applies to the
+				// tracked dungeons (technical/ + vertical/) only.
+				// `name` is repo-relative (see above) — matching on the absolute
+				// `filePath` would skip every dungeon for anyone whose checkout
+				// happens to live under a directory called `user`.
+				if (name.startsWith(`user${path.sep}`)) return;
 				const baseName = path.basename(name);
 				expect(baseName).toMatch(/^[a-z0-9-]+$/);
 			});

@@ -17,7 +17,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { buildIdentityMap, evaluateStories, VERDICT_RANK } from '@ak--47/dungeon-master/verify';
+import { buildIdentityMap, evaluateStories, validateDungeonConfig, VERDICT_RANK } from '@ak--47/dungeon-master/verify';
 import config, { stories } from './community.js';
 
 const PREFIX = process.argv[2] || 'verify-community';
@@ -51,13 +51,11 @@ const runSql = async (sql) => {
 	return stdout.trim() ? JSON.parse(stdout) : [];
 };
 
-// funnels passed raw (unvalidated) — the H8/H9 emulator stories carry their
-// own explicit conversion window (48h Content Creation generative window ×
-// the 1.25 free-tier stretch = 60h, covering the stretched support), so no
-// funnel-default threading is needed
 const results = await evaluateStories(stories, events, {
 	profiles,
-	funnels: config.funnels,
+	// funnel defaults (conversionWindowDays, order) resolve on the VALIDATED
+	// config — the dungeon was not run in this process, so validate here.
+	funnels: validateDungeonConfig({ ...config, token: '' }).funnels,
 	identityMap: buildIdentityMap(profiles),
 	runSql,
 });

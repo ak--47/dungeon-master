@@ -17,7 +17,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { buildIdentityMap, evaluateStories, VERDICT_RANK } from '@ak--47/dungeon-master/verify';
+import { buildIdentityMap, evaluateStories, validateDungeonConfig, VERDICT_RANK } from '@ak--47/dungeon-master/verify';
 import config, { stories } from './education.js';
 
 const PREFIX = process.argv[2] || 'verify-education';
@@ -51,16 +51,11 @@ const runSql = async (sql) => {
 	return stdout.trim() ? JSON.parse(stdout) : [];
 };
 
-// funnels passed raw (unvalidated) — the emulator stories carry their own
-// explicit conversion windows (H7/H9: 86.4h = 48h generative × the 1.8 free
-// TTC stretch, on the 2-step enrolled→cert read; the 4-step doc funnel would
-// break because H9's annual ×0.5 compression can move a cert before the
-// interior quiz step). H10 pairs in SQL anchored at funnel ENTRY (first
-// 'discussion posted' at/after $experiment_started, conversion within 12h of
-// entry) because the exp→entry lag is arm-dependent.
 const results = await evaluateStories(stories, events, {
 	profiles,
-	funnels: config.funnels,
+	// funnel defaults (conversionWindowDays, order) resolve on the VALIDATED
+	// config — the dungeon was not run in this process, so validate here.
+	funnels: validateDungeonConfig({ ...config, token: '' }).funnels,
 	identityMap: buildIdentityMap(profiles),
 	runSql,
 });

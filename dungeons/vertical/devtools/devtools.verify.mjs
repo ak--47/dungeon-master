@@ -18,7 +18,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { buildIdentityMap, evaluateStories, VERDICT_RANK } from '@ak--47/dungeon-master/verify';
+import { buildIdentityMap, evaluateStories, validateDungeonConfig, VERDICT_RANK } from '@ak--47/dungeon-master/verify';
 import config, { stories } from './devtools.js';
 
 const PREFIX = process.argv[2] || 'verify-devtools';
@@ -58,7 +58,9 @@ const runSql = async (sql) => {
 // semantics, not cross-event SQL (greedy MIN→MIN picks flatten it).
 const results = await evaluateStories(stories, events, {
 	profiles,
-	funnels: config.funnels,
+	// funnel defaults (conversionWindowDays, order) resolve on the VALIDATED
+	// config — the dungeon was not run in this process, so validate here.
+	funnels: validateDungeonConfig({ ...config, token: '' }).funnels,
 	identityMap: buildIdentityMap(profiles),
 	runSql,
 });

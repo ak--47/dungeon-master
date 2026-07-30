@@ -1324,6 +1324,21 @@ export type Result = {
      * so `userProfilesData.length - profilesPushed` = dropped profile count.
      */
     profilesPushed?: number;
+    /**
+     * v1.6.2: the enriched config this run actually used. `validateDungeonConfig`
+     * no longer writes back to the object you passed in, so resolved values —
+     * `funnels[].conversionWindowDays`, `events[].isStrictEvent`, the resolved
+     * dataset window — must be read here rather than off your own config.
+     *
+     * READ-ONLY. Do NOT feed this back into `DUNGEON_MASTER` — validation is not
+     * idempotent (each pass appends to the funnel set, eventually producing an
+     * empty `sequence`), and the object carries engine scratch fields. Re-run the
+     * ORIGINAL config instead.
+     *
+     * Credentials (`token`, `serviceAccount`, `serviceSecret`, `projectId`,
+     * `credentials`) are stripped — a Result is a thing hosts log.
+     */
+    validatedConfig?: Dungeon;
     /** Progress callback summary. Only present when `onProgress` was provided. */
     progress?: ProgressSummary;
 };
