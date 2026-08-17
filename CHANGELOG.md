@@ -2,7 +2,7 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
-## Unreleased
+## 1.6.3 — 2026-08-17
 
 ### Fixed
 
