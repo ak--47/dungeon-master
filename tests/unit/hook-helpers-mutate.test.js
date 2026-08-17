@@ -17,12 +17,26 @@ describe('mutate atoms', () => {
 	test('cloneEvent: shallow merges overrides on top of template', () => {
 		const tpl = { event: 'X', time: 100, amount: 10 };
 		const c = cloneEvent(tpl, { time: 200, amount: 50 });
-		expect(c).toEqual({ event: 'X', time: 200, amount: 50 });
+		const { insert_id, ...rest } = c;
+		expect(rest).toEqual({ event: 'X', time: 200, amount: 50 });
 		expect(c).not.toBe(tpl);
 		// overrides default to {}
 		const c2 = cloneEvent(tpl);
-		expect(c2).toEqual(tpl);
+		const { insert_id: iid2, ...rest2 } = c2;
+		expect(rest2).toEqual(tpl);
 		expect(c2).not.toBe(tpl);
+	});
+
+	test('cloneEvent: stamps a fresh insert_id so Mixpanel cannot dedupe clones', () => {
+		const tpl = { event: 'X', time: 100, insert_id: 'original' };
+		const a = cloneEvent(tpl, { time: 200 });
+		const b = cloneEvent(tpl, { time: 300 });
+		expect(a.insert_id).toBeTruthy();
+		expect(a.insert_id).not.toBe('original');
+		expect(b.insert_id).not.toBe(a.insert_id);
+		expect(tpl.insert_id).toBe('original'); // template untouched
+		// an explicit override still wins
+		expect(cloneEvent(tpl, { insert_id: 'pinned' }).insert_id).toBe('pinned');
 	});
 
 	test('cloneEvent: throws when template missing', () => {
@@ -53,11 +67,17 @@ describe('mutate atoms', () => {
 			mkEv('A', new Date(t0).toISOString()),
 			mkEv('A', new Date(t0 + 1000).toISOString()),
 		];
+		const originals = new Set(events);
 		const added = scaleEventCount(events, 'A', 2); // double → 2 more
 		expect(added).toBe(2);
 		expect(events.length).toBe(4);
-		const aClones = events.filter(e => e.event === 'A' && e.insert_id === undefined);
-		expect(aClones.length).toBeGreaterThanOrEqual(2);
+		const aClones = events.filter(e => e.event === 'A' && !originals.has(e));
+		expect(aClones.length).toBe(2);
+		// Clones must carry distinct, non-empty insert_ids — a clone that reuses
+		// (or omits) the source's id is deduped away by Mixpanel on ingest.
+		const ids = aClones.map(c => c.insert_id);
+		expect(ids.every(Boolean)).toBe(true);
+		expect(new Set(ids).size).toBe(ids.length);
 	});
 
 	test('scaleEventCount: factor<1 drops some matching events using seeded RNG', () => {

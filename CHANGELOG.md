@@ -2,6 +2,49 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## Unreleased
+
+### Fixed
+
+- **Cloned events no longer get deduplicated away by Mixpanel on ingest.** All
+  eight clone-producing helpers now give each clone a fresh `insert_id`:
+  `cloneEvent`, `scaleEventCount`, `injectAfterEvent`, `injectBetween`,
+  `injectBurst`, `injectOnNewDays`, `applyLifecycleWave`, and `applyPathBias`.
+  Four of them (`cloneEvent` and the three `injectAfterEvent`/`injectBetween`/
+  `injectBurst`) copied the template's id verbatim, so clones arrived as
+  byte-identical twins and Mixpanel deduped them server-side. The others deleted
+  the id, which is no safer: `mixpanel-import` runs with `fixData: true` and
+  synthesizes a missing id by content-hashing the record, so identical clones
+  collide into one anyway. Measured on an 8K-user dungeon: 608,081 events
+  generated, 598,555 landed. The loss fell entirely on the two events the hooks
+  clone, and an engineered 4x comment surge read as **1.17x** in the project while
+  local story verification still reported 4.14x — verification never inspects
+  `insert_id`. After the fix, all 608,081 ids are distinct and in-project counts
+  match sent counts exactly. Affects any dungeon whose hooks clone or inject
+  events. New shared helper `stampFreshInsertId` in `lib/hook-helpers/_internal.js`;
+  `cloneEvent` honors an explicit `insert_id` override. Swept by
+  `tests/unit/clone-insert-id.test.js`, which covers every clone site rather than
+  the one that happened to break.
+- **`mixpanel-import` 3.5.1 → 3.6.1**, which fixes an undercount in the reported
+  user-profile success total (3.5.1 reported 196 profiles sent for a batch of
+  6,049 that had in fact all landed).
+- **`create-project` no longer reports a successful group-key add as a failure.**
+  The summary read `added [(none)] skipped [(none)]` even when the key was created
+  and ready, because the response's `added`/`skipped` arrays are not always
+  populated. It now reports against `all_group_keys`, the authoritative post-state,
+  and warns when a declared key is genuinely absent.
+
+### Added
+
+- **`/headless-build` skill** — final step of the pipeline (after `/create-project`).
+  Builds a demoable Mixpanel environment with `mixpanel_headless`: dashboards whose
+  narrative text is computed live from the project, Lexicon enrichment, saved
+  cohorts, custom properties, behaviors/metrics/formulas, and annotations — then
+  re-measures every hook story against the live project and fails on a miss.
+- **`powertools` skill: entity-CRUD index.** Documents the three inconsistent
+  response shapes across the create/list endpoints, the `createCohort` payload
+  contract, and which cohort filter types the API accepts.
+
 ## 1.6.2 — 2026-07-30
 
 ### Fixed

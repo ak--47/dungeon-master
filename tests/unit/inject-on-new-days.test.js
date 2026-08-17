@@ -87,11 +87,17 @@ describe('injectOnNewDays', () => {
 			expect(b.amount).toBe(100);
 			expect(b.category).toBe('electronics');
 		}
-		// Cloned events should NOT carry insert_id (stripped for re-dedup).
-		const clones = buys.filter(b => b !== events[0]);
+		// Each clone carries its OWN insert_id. Inheriting the template's id (or
+		// leaving it blank, which makes the importer content-hash a colliding one)
+		// gets the clones deduped away by Mixpanel on ingest.
+		const template = events[0];
+		const clones = buys.filter(b => b !== template);
+		expect(clones.length).toBeGreaterThan(0);
 		for (const c of clones) {
-			expect(c.insert_id).toBeUndefined();
+			expect(c.insert_id).toBeTruthy();
+			expect(c.insert_id).not.toBe(template.insert_id);
 		}
+		expect(new Set(clones.map(c => c.insert_id)).size).toBe(clones.length);
 	});
 
 	test('no template available: returns unchanged when event type does not exist on user', () => {

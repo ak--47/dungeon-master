@@ -315,9 +315,22 @@ function printSummary() {
 		// Defensive: the API's `added`/`skipped` entries may be objects, strings, or
 		// null. Never let summary formatting throw — it would swallow real warnings.
 		const fmt = (g) => (g == null ? null : typeof g === 'string' ? g : (g.property_name || g.name || null));
-		const added = (groupKeyResult?.added || []).map(fmt).filter(Boolean).join(', ') || '(none)';
-		const skipped = (groupKeyResult?.skipped || []).map(fmt).filter(Boolean).join(', ') || '(none)';
-		console.log(`group keys:     added [${added}]  skipped [${skipped}]`);
+		const added = (groupKeyResult?.added || []).map(fmt).filter(Boolean);
+		const skipped = (groupKeyResult?.skipped || []).map(fmt).filter(Boolean);
+		// `added`/`skipped` are not always populated (a create that lands via a
+		// different code path can return both empty), which made a perfectly good
+		// provision print "added [(none)] skipped [(none)]" and read as a failure.
+		// `all_group_keys` is the authoritative post-state, so report against that
+		// and only fall back to the deltas when it's absent.
+		const all = (groupKeyResult?.all_group_keys || []).map(fmt).filter(Boolean);
+		if (all.length) {
+			const present = groupKeys.map((g) => g.property_name).filter((p) => all.includes(p));
+			const missing = groupKeys.map((g) => g.property_name).filter((p) => !all.includes(p));
+			console.log(`group keys:     in project [${present.join(', ') || '(none)'}]${missing.length ? `  MISSING [${missing.join(', ')}]` : ''}`);
+			if (missing.length) warnings.push(`group keys missing after addGroupKey: ${missing.join(', ')}`);
+		} else {
+			console.log(`group keys:     added [${added.join(', ') || '(none)'}]  skipped [${skipped.join(', ') || '(none)'}]`);
+		}
 	}
 	console.log(`business ctx:   ${content.length} chars uploaded (source: ${ctxSource})`);
 	console.log(`credentials:    ${wroteBack ? 'written back into dungeon ✓' : 'NOT written (see warnings)'}`);

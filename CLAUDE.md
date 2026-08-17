@@ -182,7 +182,7 @@ After creating or modifying a dungeon, run `/verify-dungeon` to validate schema 
 
 ## Skills pipeline
 
-Schema → hooks → verify → provision, five slash commands at [.claude/skills/](.claude/skills/):
+Schema → hooks → verify → provision → build, six slash commands at [.claude/skills/](.claude/skills/):
 
 | Skill | What it does |
 |-------|--------------|
@@ -191,6 +191,7 @@ Schema → hooks → verify → provision, five slash commands at [.claude/skill
 | `/verify-dungeon <dungeon-path>` | Schema integrity (flag stamping) + story verification. Primary check is `scripts/verify-stories.mjs` (mechanical five-tier verdicts); the LLM investigates only failures and `duckdb`-type assertions. Legacy no-stories dungeons fall back to the emulator (`emulateBreakdown`) / DuckDB flow. Always asserts identity-model invariants (stitch count, pre-existing user stamping). |
 | `/analyze-soup <dungeon-path>` | Run a dungeon and analyze its time distribution at week/day/hour granularities. |
 | `/create-project <dungeon-path>` | Provisions a real Mixpanel project for an existing dungeon via the power-tools API (createProject + setTimezone UTC + mintServiceAccount + addGroupKey + setBusinessContext), then writes `credentials` back into the dungeon. Always creates fresh. Needs `BEARER_TOKEN` + `ORG_ID` in `.env`. Orchestrator: [.claude/skills/create-project/provision.mjs](.claude/skills/create-project/provision.mjs). |
+| `/headless-build <dungeon-path>` | AFTER data is loaded: builds the demoable Mixpanel environment with `mixpanel_headless` — dashboards whose narrative is computed live, Lexicon enrichment, cohorts, custom properties, behaviors/metrics/formulas, annotations — then re-measures every hook story **against the live project** and fails on a miss. Build code lives in `dungeons/user/<name>/build/`. |
 
 Use the existing `scripts/verify-runner.mjs` — do not create a new runner.
 
