@@ -40,6 +40,21 @@ with dashboard copy.
 - `uv` available. `mixpanel_headless` is on PyPI, so it needs no local checkout:
   `uv run --with mixpanel_headless python <script>`.
 
+## Step 0 — ask who creates the entities
+
+**Ask the user before building.** The answer changes who owns every asset:
+
+| Mode | Effect |
+|---|---|
+| **bearer** (recommended) | Entities are created by a real user via OAuth token (`BEARER_TOKEN` in the repo `.env`). They appear in that person's Mixpanel UI with owner access. |
+| **service** | Entities are created by the dungeon's service account. A human then sees **"Your access: None"**, and custom properties have no share endpoint — so it cannot be fixed from the UI at all. Only correct when no OAuth token exists. |
+
+Default to **bearer** whenever a token is available. To use it with
+`mixpanel_headless`, set `MP_OAUTH_TOKEN` and **unset `MP_USERNAME` / `MP_SECRET`** —
+the SDK prefers the service account whenever the full SA env set is present.
+Power-tools calls must use the same principal (`Authorization: Bearer …`), or
+entities created through that path land back under the service account.
+
 ## Reference implementation
 
 `dungeons/user/nyc-dcp/build/` is the worked example — read it before writing a
@@ -57,7 +72,8 @@ dungeons/user/<name>/build/
 ├── _common.py              # window detection, ws factory + retry, helpers, knobs, cohorts
 ├── build_all.py            # one-shot orchestrator, --only / --internal / --from-date
 ├── scripts/
-│   ├── 00_auth_check.py
+│   ├── 00_auth_check.py         # also prints WHO is authenticated
+│   ├── 01_reset_entities.py     # opt-in: delete this build's own entities
 │   ├── 02_custom_props.py
 │   ├── 03_cohorts.py
 │   ├── 04_lexicon.py
@@ -122,6 +138,39 @@ The difference between a dashboard and a demo:
 - Text card HTML must be single-line (`" ".join(html.split())`) — TipTap mangles
   newlines.
 
+**Board titles carry no app prefix.** The project is already the app; a
+`"<App> — "` prefix on every board is noise that eats the readable part of the
+name in the sidebar. Title them `Borough Equity & Access`, not
+`NYC DCP — Borough Equity & Access`.
+
+**Always label the legend.** By default a series reads
+`Data Export [Total Events]` — it names the event and the math, not the thing
+being measured. Mixpanel exposes this as **Rename** on a query block; on the
+wire it is `params.sections.show[i].name` plus `userNamed: true` (the flag is
+what stops the UI regenerating the label). Every insights report should pass a
+plain-English label: `Users`, `Exports`, `Comments Filed`.
+
+**Merge KPI cards into ONE multi-metric report.** Four big-number cards do not
+need four saved reports. Each report is another entity to create and another
+query to run, and the rate limit is the binding constraint on a full build.
+Concatenate the `sections.show` arrays of several single-metric queries into one
+params dict and keep `chart_type="insights-metric"` — Mixpanel still renders big
+numbers, one per metric. Only safe when the inputs share a time range and
+report-level filter, since `sections.filter` applies to the whole report; per-metric
+filters have to move into `show[i].behavior.filters`.
+
+**Share everything, and warm the cohorts.** Two separate failure modes:
+
+- *Unshared* — an entity is visible only to its creator. Call
+  `/crud/shareDash` (`view_only: false`) and `/crud/shareCohort`
+  (`can_edit: true`) for everything you create. There is no share endpoint for
+  custom properties, behaviors, or metrics — which is exactly why bearer auth
+  matters: get the owner right at creation, because you cannot fix it after.
+- *Unwarmed* — cohort membership computes **lazily**. A freshly created cohort
+  reports `count: 0` until something queries it, and a cohort showing 0 members
+  reads as broken in a demo. Run one cheap query per cohort after creating it.
+  Verify counts, not just existence.
+
 ### 6. Verify against the live project
 
 `99_verify.py` does two checks:
@@ -155,10 +204,24 @@ profile-property and behavior-nested property filters no).
 **Rate limits will kill a full build midway.** A build fires several hundred
 queries; the cap trips after the first couple of boards and the rest fail,
 leaving a half-built project that still looks fine until you count the boards.
-Always install retry-with-backoff around every query method (20s, doubling, cap
-300s, ~5 attempts) and retry transient 502s the same way. On Mixpanel-internal
-projects `--internal` additionally sends the bypass headers — it is a no-op
-elsewhere, so it supplements backoff rather than replacing it.
+The client must therefore:
+
+- **Issue one request at a time**, with a small fixed gap. Parallelism does not
+  help and actively hurts — the cap is request-rate based, so concurrency only
+  reaches the limit sooner and then every worker sits in backoff together.
+- **Back off hard and genuinely exponentially** on 429: start ~30s, double, cap
+  ~15 minutes, ~7 attempts. The cap is per-hour, so short retries just burn
+  attempts without letting the window refill. Retry transient 502s the same way.
+- **Be resumable.** Keep the entity registry on disk and reuse by name, so a
+  killed build picks up where it stopped instead of duplicating.
+
+On Mixpanel-internal projects `--internal` additionally sends the rate-limit
+bypass headers. It is a no-op elsewhere and does *not* remove the need for
+backoff — it supplements it.
+
+**Fewer entities is a rate-limit strategy, not just tidiness.** Merging four KPI
+cards into one multi-metric report removes three creates and three queries from
+every build. Prefer one report with N metrics wherever the chart allows it.
 
 **`ws._api_client` is lazy** — None immediately after construction. Force it via
 `ws._get_api_client()` before patching request headers.
@@ -172,13 +235,20 @@ look up by name and reuse. Re-running must never duplicate.
 cd dungeons/user/<name>/build
 set -a && . ./.env && set +a
 
-uv run --with mixpanel_headless python build_all.py                      # everything
+uv run --with mixpanel_headless python build_all.py --auth bearer        # recommended
+uv run --with mixpanel_headless python build_all.py --auth service       # SA-owned assets
 uv run --with mixpanel_headless python build_all.py --internal           # + rate-limit bypass
+uv run --with mixpanel_headless python build_all.py --only reset --apply # wipe this build's entities
 uv run --with mixpanel_headless python build_all.py --only dashboards verify
 uv run --with mixpanel_headless python build_all.py --skip-lexicon
 uv run --with mixpanel_headless python build_all.py --from-date 2026-04-18 --to-date 2026-08-17
 uv run --with mixpanel_headless python scripts/99_verify.py              # verify only
 ```
 
-Phases: `auth`, `customprops`, `cohorts`, `lexicon`, `entities`, `annotations`,
-`dashboards`, `verify`.
+Phases: `auth`, `reset` (opt-in only), `customprops`, `cohorts`, `lexicon`,
+`entities`, `annotations`, `dashboards`, `verify`.
+
+`reset` is never part of the default order — it deletes entities, and only ever
+the ones this build created, matched by name. Use it when assets were created
+under the wrong principal and must be recreated (there is no way to re-own an
+existing custom property).
