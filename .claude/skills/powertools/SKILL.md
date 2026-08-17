@@ -45,7 +45,27 @@ node .claude/skills/powertools/snapshot-project.mjs <project_id> --bearer <token
 
 GET the path for full docs. Full list: GET `/` and GET `/macro`.
 
-**crud** — `/crud/createProject`, `/crud/deleteProject`, `/crud/getProjects`, `/crud/mintServiceAccount`, `/crud/addGroupKey`, `/crud/setBusinessContext` (all used by the create-project skill's `provision.mjs`).
+**crud** — 187 endpoints. GET `/crud` for the full list.
+
+*Project lifecycle* (used by create-project's `provision.mjs`): `/crud/createProject`, `/crud/deleteProject` (**irreversible** — deletes the project and all its data; needs `org_id`), `/crud/getProjects`, `/crud/mintServiceAccount`, `/crud/deleteServiceAccount`, `/crud/addGroupKey`, `/crud/deleteGroupKey`, `/crud/setBusinessContext`.
+
+*Analysis entities* (used by the `headless-build` skill for what `mixpanel_headless` does not expose): `/crud/createCohort` + `getCohorts`/`getCohort`/`updateCohort`/`deleteCohort`, `/crud/createBehavior` + `getBehaviors`/`deleteBehavior`, `/crud/createMetric` + `getMetrics`/`deleteMetric`, `/crud/createFormula` + `getFormulas`/`deleteFormula`, `/crud/createDash`/`updateDash`/`pinDash`/`duplicateDash`, `/crud/makeInsightsReport`/`makeFunnelsReport`/`makeFlowsReport`/`makeRetentionReport`, `/crud/createCustomProp`, `/crud/createCustomEvent`, `/crud/createAnnotation`, `/crud/createLookupTable`.
+
+### Entity-CRUD response shapes (verified 2026-08-17 — these bite)
+
+Three different shapes across one API family. Assuming a flat list or a flat `results.id` silently yields `None`/empty rather than erroring:
+
+- **create** returns `{"status":"ok","results":{"<id>":{...}}}` — `results` is keyed BY id, so `results["id"]` is None. Take `next(iter(results.values()))["id"]`.
+- **list** (`getBehaviors`/`getMetrics`/`getFormulas`) returns numerically-keyed entries at the **top level** — `{"0":{...},"1":{...},"duration_ms":…}` — with nothing under `results`. Iterate `raw.values()` and keep dicts that carry a `name`+`id`.
+- `getMetrics` and `getFormulas` return the **same combined set** (metrics and formulas share one store), so dedupe by name if you call both.
+
+### Cohort payload limits (verified on project 4054934)
+
+`/crud/createCohort` accepts the native UI shape: `groups[]` of `cohort_group` (each `{type, event:{resourceType:"cohort",value:"$all_users"}, filters[]}`) plus `determiner: "all"|"any"`. What works and what does not:
+
+- ✅ behavioral counts — `customProperty.behavior` + `filterOperator: "is at least"|"is at most"`; multiple filters in one group give a RANGE; multiple groups give AND (`all`) / OR (`any`).
+- ❌ profile-property filters, and property filters nested inside a `behavior` — both fail with `Failed to resolve cohort references`. Express those as report `where` filters instead.
+- New cohorts report `count: 0` at creation; membership computes asynchronously.
 
 **query** — `/query/getTopEvents` (per-event counts, limit≤100 default), `/query/getEventNames`, `/query/getPropertyValues`, `/query/getTopProperties`, `/query/getSegmentation`, `/query/getFunnel`, `/query/listFunnels`, `/query/listCohorts`, `/query/runJQL`. Rate limits: 5 concurrent / 60 per hour; 1h response cache.
 

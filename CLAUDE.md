@@ -168,7 +168,7 @@ The rules below are non-negotiable when authoring or modifying hooks:
 
 1. **Schema-first.** Hooks do NOT add new properties. Every property in the final output must be defined in the dungeon config (`events` properties, `userProps`, `superProps`) with a default. Hooks modify existing values, filter events, and inject events cloned from existing ones. If a hook needs a boolean flag (e.g. `payday`), define it in the event's `properties` as `[false]` and let the hook flip it to `true`.
 2. **Properties are FLAT on event records** — `record.amount`, NOT `record.properties.amount`.
-3. **Injected events must be cloned** with spread (`{...existingEvent, time: newTime, user_id: uid}`). Never construct events from scratch.
+3. **Injected events must be cloned** from an existing one — never constructed from scratch. Prefer `cloneEvent(template, { time, user_id })` from `hook-helpers`, which stamps the clone a fresh `insert_id`. A bare spread (`{...existingEvent, time: newTime}`) also works: the engine re-stamps any duplicate or missing `insert_id` across the user's final stream, because a clone that keeps its source's id is silently deduplicated away by Mixpanel at ingest.
 4. Spliced events need `user_id` (not `distinct_id`) and a valid ISO `time` string.
 5. Use `dayjs` for time operations; use the seeded `chance` instance for randomness.
 6. **`event`/`user`/`scd` hooks fire ONCE** — storage skips re-running them to prevent double-fire mutations (`price *= 2` won't apply twice).
@@ -182,7 +182,7 @@ After creating or modifying a dungeon, run `/verify-dungeon` to validate schema 
 
 ## Skills pipeline
 
-Schema → hooks → verify → provision, five slash commands at [.claude/skills/](.claude/skills/):
+Schema → hooks → verify → provision → build, six slash commands at [.claude/skills/](.claude/skills/):
 
 | Skill | What it does |
 |-------|--------------|
@@ -191,6 +191,7 @@ Schema → hooks → verify → provision, five slash commands at [.claude/skill
 | `/verify-dungeon <dungeon-path>` | Schema integrity (flag stamping) + story verification. Primary check is `scripts/verify-stories.mjs` (mechanical five-tier verdicts); the LLM investigates only failures and `duckdb`-type assertions. Legacy no-stories dungeons fall back to the emulator (`emulateBreakdown`) / DuckDB flow. Always asserts identity-model invariants (stitch count, pre-existing user stamping). |
 | `/analyze-soup <dungeon-path>` | Run a dungeon and analyze its time distribution at week/day/hour granularities. |
 | `/create-project <dungeon-path>` | Provisions a real Mixpanel project for an existing dungeon via the power-tools API (createProject + setTimezone UTC + mintServiceAccount + addGroupKey + setBusinessContext), then writes `credentials` back into the dungeon. Always creates fresh. Needs `BEARER_TOKEN` + `ORG_ID` in `.env`. Orchestrator: [.claude/skills/create-project/provision.mjs](.claude/skills/create-project/provision.mjs). |
+| `/headless-build <dungeon-path>` | AFTER data is loaded: builds the demoable Mixpanel environment with `mixpanel_headless` — dashboards whose narrative is computed live, Lexicon enrichment, cohorts, custom properties, behaviors/metrics/formulas, annotations — then re-measures every hook story **against the live project** and fails on a miss. Build code lives in `dungeons/user/<name>/build/`. |
 
 Use the existing `scripts/verify-runner.mjs` — do not create a new runner.
 

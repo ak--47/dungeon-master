@@ -34,6 +34,10 @@ describe('applyLifecycleWave', () => {
 		return [...purchases, ...views];
 	};
 	const windowEnd = T0 + 12 * DAY + NOON;
+	// Clones get FRESH insert_ids (never the template's, never blank — either
+	// would let Mixpanel dedupe them away), so identify them by id-not-in-fixture.
+	const ORIGINAL_IDS = new Set(mkStream().map(e => e.insert_id));
+	const isClone = e => !ORIGINAL_IDS.has(e.insert_id);
 
 	test('drops value moments inside the window, keeps others, appends burst', () => {
 		const events = mkStream(); // 10 events
@@ -46,7 +50,7 @@ describe('applyLifecycleWave', () => {
 		// Appended: 3 clones. 10 - 3 + 3 = 10.
 		expect(out.length).toBe(10);
 		const purchases = out.filter(e => e.event === 'purchase');
-		const originals = purchases.filter(e => e.insert_id);
+		const originals = purchases.filter(e => !isClone(e));
 		expect(originals.map(e => e.amount).sort((a, b) => a - b)).toEqual([0, 3, 13, 20]);
 		// GAP DISCIPLINE: zero value moments inside the window after the call.
 		const windowStart = T0 + 5 * DAY + NOON;
@@ -62,15 +66,16 @@ describe('applyLifecycleWave', () => {
 		const out = applyLifecycleWave(mkStream(), 'u1', {
 			dormantFromDay: 5, dormantDays: 7, resurrectBurst: 3, valueMomentEvent: 'purchase',
 		});
-		const clones = out.filter(e => e.event === 'purchase' && !e.insert_id);
+		const clones = out.filter(e => e.event === 'purchase' && isClone(e));
 		expect(clones.length).toBe(3);
 		// Closest surviving purchase to the window: day 13 (1d after end;
 		// day 3 is 2d before start) → clones carry amount 13.
 		for (const c of clones) {
 			expect(c.amount).toBe(13);
 			expect(c.user_id).toBe('u1');
-			expect(c.insert_id).toBeUndefined();
+			expect(c.insert_id).toBeTruthy();
 		}
+		expect(new Set(clones.map(c => c.insert_id)).size).toBe(3);
 		// Burst lands strictly after the window (1-3h + 1-10min gaps), monotonic.
 		const times = clones.map(c => Date.parse(c.time)).sort((a, b) => a - b);
 		expect(times[0]).toBeGreaterThan(windowEnd);
@@ -113,6 +118,10 @@ describe('applyPathBias', () => {
 		{ event: 'checkout', time: iso(T0 + 3 * DAY), user_id: 'u1', co: 1, insert_id: 'k1' },
 		{ event: 'page_view', time: iso(T0 + DAY), user_id: 'u1', insert_id: 'pv' },
 	];
+	// See the note in applyLifecycleWave: clones carry fresh ids, so detect them
+	// by id-not-in-fixture rather than by a missing insert_id.
+	const ORIGINAL_IDS = new Set(mkStream().map(e => e.insert_id));
+	const isClone = e => !ORIGINAL_IDS.has(e.insert_id);
 
 	test('share=1: injects the path after the FIRST anchor with gaps in range', () => {
 		const events = mkStream();
@@ -121,7 +130,7 @@ describe('applyPathBias', () => {
 		});
 		expect(out).toBe(events); // augmented in place
 		expect(out.length).toBe(7);
-		const clones = out.filter(e => !e.insert_id);
+		const clones = out.filter(isClone);
 		expect(clones.map(e => e.event)).toEqual(['add_to_cart', 'checkout']);
 		const [atc, co] = clones.map(e => Date.parse(e.time));
 		// Anchored on the FIRST view_item (T0), not the array-first one (T0+2d).
@@ -155,7 +164,7 @@ describe('applyPathBias', () => {
 		const out = applyPathBias(mkStream(), 'u1', {
 			anchor: 'view_item', path: ['add_to_cart', 'checkout'], share: 1, gapSeconds: [0, 0],
 		});
-		const clones = out.filter(e => !e.insert_id);
+		const clones = out.filter(isClone);
 		const [atc, co] = clones.map(e => Date.parse(e.time));
 		expect(atc - T0).toBe(1000); // clamped lo = hi = 1s exactly
 		expect(co - atc).toBe(1000);
