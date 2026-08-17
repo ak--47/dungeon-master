@@ -168,7 +168,7 @@ The rules below are non-negotiable when authoring or modifying hooks:
 
 1. **Schema-first.** Hooks do NOT add new properties. Every property in the final output must be defined in the dungeon config (`events` properties, `userProps`, `superProps`) with a default. Hooks modify existing values, filter events, and inject events cloned from existing ones. If a hook needs a boolean flag (e.g. `payday`), define it in the event's `properties` as `[false]` and let the hook flip it to `true`.
 2. **Properties are FLAT on event records** — `record.amount`, NOT `record.properties.amount`.
-3. **Injected events must be cloned** with spread (`{...existingEvent, time: newTime, user_id: uid}`). Never construct events from scratch.
+3. **Injected events must be cloned** from an existing one — never constructed from scratch. Prefer `cloneEvent(template, { time, user_id })` from `hook-helpers`, which stamps the clone a fresh `insert_id`. A bare spread (`{...existingEvent, time: newTime}`) also works: the engine re-stamps any duplicate or missing `insert_id` across the user's final stream, because a clone that keeps its source's id is silently deduplicated away by Mixpanel at ingest.
 4. Spliced events need `user_id` (not `distinct_id`) and a valid ISO `time` string.
 5. Use `dayjs` for time operations; use the seeded `chance` instance for randomness.
 6. **`event`/`user`/`scd` hooks fire ONCE** — storage skips re-running them to prevent double-fire mutations (`price *= 2` won't apply twice).

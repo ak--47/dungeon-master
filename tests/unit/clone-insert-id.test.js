@@ -57,8 +57,20 @@ describe('clone helpers stamp fresh insert_ids', () => {
 		expect(tpl.insert_id).toBe('seed-purchase-0'); // template untouched
 	});
 
-	test('cloneEvent: an explicit insert_id override still wins', () => {
-		expect(cloneEvent(mk('purchase', 0), { insert_id: 'pinned' }).insert_id).toBe('pinned');
+	test('an explicit insert_id override still wins, uniformly across helpers', () => {
+		// The override contract must be the same everywhere. It briefly was not:
+		// cloneEvent honored a pinned id while the inject helpers clobbered it.
+		const tpl = mk('purchase', 0);
+		expect(cloneEvent(tpl, { insert_id: 'pinned' }).insert_id).toBe('pinned');
+
+		const src = mk('login', 0);
+		const events = [src, mk('logout', 1)];
+		expect(injectAfterEvent(events, src, tpl, 60_000, { insert_id: 'pinned-after' }).insert_id)
+			.toBe('pinned-after');
+		expect(injectBetween(events, 'login', 'logout', tpl, { insert_id: 'pinned-between' }).insert_id)
+			.toBe('pinned-between');
+		const burst = injectBurst(events, tpl, 2, T0 + DAY, 1000, { insert_id: 'pinned-burst' });
+		for (const b of burst) expect(b.insert_id).toBe('pinned-burst');
 	});
 
 	test('scaleEventCount: every clone is uniquely identified', () => {

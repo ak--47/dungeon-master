@@ -21,10 +21,22 @@ All notable changes to `@ak--47/dungeon-master`.
   local story verification still reported 4.14x — verification never inspects
   `insert_id`. After the fix, all 608,081 ids are distinct and in-project counts
   match sent counts exactly. Affects any dungeon whose hooks clone or inject
-  events. New shared helper `stampFreshInsertId` in `lib/hook-helpers/_internal.js`;
-  `cloneEvent` honors an explicit `insert_id` override. Swept by
-  `tests/unit/clone-insert-id.test.js`, which covers every clone site rather than
-  the one that happened to break.
+  events. New shared helpers `stampFreshInsertId` / `cloneWithFreshId` in
+  `lib/hook-helpers/_internal.js`; every clone site honors an explicit
+  `insert_id` override uniformly. Swept by `tests/unit/clone-insert-id.test.js`,
+  which covers every clone site rather than the one that happened to break.
+- **The engine now guarantees unique `insert_id` across each user's final event
+  stream.** Fixing the clone helpers was not sufficient: hooks are documented to
+  inject events by spreading an existing one, and a spread copies `insert_id`
+  too — so any hand-rolled clone reintroduced the bug. Several shipped dungeons
+  (including `dungeons/technical/simple.js` and most of `dungeons/vertical/`) do
+  exactly that, and measured 160 duplicate ids in a 3,254-event sample. The user
+  loop now re-stamps any duplicate or missing `insert_id` after the `everything`
+  hook, alongside the existing auto-sort and future-time guards. A legitimate
+  stream never carries two events with the same id, so any collision at that
+  point is a clone. Pinned by `tests/integration/insert-id-uniqueness.test.js`.
+  CLAUDE.md's hook rule now points at `cloneEvent` while documenting that a bare
+  spread remains safe.
 - **`mixpanel-import` 3.5.1 → 3.6.1**, which fixes an undercount in the reported
   user-profile success total (3.5.1 reported 196 profiles sent for a batch of
   6,049 that had in fact all landed).
