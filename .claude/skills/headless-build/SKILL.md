@@ -81,6 +81,7 @@ dungeons/user/<name>/build/
 │   ├── 06..09_dash_<story>.py   # one board per engineered story
 │   ├── 10_annotations.py
 │   ├── 11_behaviors_metrics.py  # via power-tools; headless lacks these
+│   ├── 13_render_check.py       # saved params must be RENDERABLE, not just queryable
 │   └── 99_verify.py
 └── results/                # entities.json registry, window.json, verification_*.json
 ```
@@ -103,10 +104,74 @@ actually works. Verified on both NYC DCP and Peloton:
 - Insights `group_by` / `where` / saved-cohort filters: **work**.
 - Funnels `group_by`: **silently does not segment** — returns rows identical to
   ungrouped. Use one funnel per segment with a `where` filter instead.
-- Day-granularity queries reject ranges **over 366 days**.
+- Day-granularity queries reject ranges **over 366 days**. `unit="hour"` works
+  fine, including with `group_by` — that is how you read hour-of-day, since the
+  App API rejects `hour(A)` in a custom-property formula as an unknown function.
 - Valid `displayOptions.chartType`: `bar`, `column`, `frequency-curve`,
   `funnel-steps`, `funnel-top-paths`, `insights-metric`, `line`, `pie`,
   `retention-curve`, `table`. There is no `stacked-area` — the API rejects it.
+
+**Filters and breakdowns fail SILENTLY, returning 0 rather than erroring.** Probe
+every one before a board depends on it. Verified on Square:
+
+| Intent | Wrong (returns 0 / "undefined") | Right |
+|---|---|---|
+| Profile property | `Filter.equals("plan", "Pro")` | `Filter.equals("plan", "Pro", resource_type="people")` |
+| Profile property breakdown | `group_by="plan"` | not supported — one query per segment with a user-scoped `where` |
+| Numeric event property | `Filter.equals("depth", 3)` | `Filter.equals("depth", "3")` — as a **string** |
+| Boolean event property | `Filter.equals("flag", True)` | `Filter.is_true("flag")` / `Filter.is_false(...)` |
+| Custom-property breakdown | `group_by="Ticket Band"` | `GroupBy(CustomPropertyRef(<id>))` |
+| Sum of a property | `math="sum"` (raises) | `math="total"` **with** `math_property` |
+| Flows, split by property | `query_flow(where=[Filter.equals(...)])` (raises `Invalid filter type: resourceType`) | cohort filters only — `query_flow(where=[Filter.in_cohort(...)])` |
+
+**Querying successfully is NOT evidence that a report renders.** The single most
+expensive bug in the Square build: `Filter.equals(..., resource_type="user")`
+instead of `"people"`. The SDK's type is `Literal["events", "people"]`, but the
+value is not validated, the query endpoint accepts it, and it returns byte-identical
+numbers — so the build printed correct figures, `99_verify.py` re-measured the story
+live and called it a MATCH, `query_saved_report` executed the saved bookmark without
+complaint, and `get_dashboard_erf` reported `is_valid_for_erf: true`. Six dashboard
+cards nonetheless rendered **"The client has issued a malformed request."** The
+defect only existed in what was *persisted*: `sections.filter[0].resourceType`.
+
+Two rules follow:
+
+- **Never invent an enum value.** If the SDK declares a `Literal`, use one of its
+  members even when another string is accepted and works.
+- **Ship a render check.** `scripts/13_render_check.py` in the Square build walks
+  every saved bookmark on every registered board and fails on any `resourceType`
+  outside `{events, people, user_profiles, cohort}`. It runs as the first step of
+  the `verify` phase, before `99_verify`. Inspect persisted params, not query
+  results — every query-based check passed while the boards were visibly broken.
+
+**Build the new board BEFORE deleting the old one.** The obvious `replace_dashboard`
+(delete by title, then create) means any interruption — and a rate-limit wall
+partway through a board's queries is routine — leaves the project with no board at
+all. Capture the old ids first, create the replacement, then retire the old ones
+(`existing_dashboard_ids` → `publish(..., supersedes=...)` in the Square `_common.py`).
+
+**Budget the per-hour query cap across the whole session, not per run.** Probing,
+building, and verifying all draw on the same hourly allowance. Interactive probes
+early in a session can exhaust it and strand a rebuild hours later. Boards with
+many segment-per-query funnels are the expensive ones — the Square activation board
+alone fires ~30.
+
+**Retention: cohort maturity will eat your effect.** `query_retention` pools every
+cohort in the range, including ones a fortnight old that cannot yet have failed to
+return in week 4, and there is no server-side way to restrict the cohort window.
+On Square the same attach-retention gap read **1.71x pooled and 2.98x** over cohorts
+with a fully observed horizon. Aggregate the frame yourself: weight buckets by cohort
+size, require each bucket to be observed END TO END (`(b+1)*unit - 1` days of history,
+not `b*unit`), and cap the cohort date. Put both numbers on the board — the diluted
+one is what the chart shows, and naming why is a better demo than hiding it.
+
+**Time-to-convert is a MEAN, and means are tail-dominated.** Funnel frames carry
+`avg_time` and `avg_time_from_start` (seconds; not monotonic across steps — each is
+over that step's own survivors). A dungeon knob expressed as a median ratio will not
+reproduce: Square's designed 13x median gap measured 1.95x as a mean over a 30-day
+window. Use the **speed curve** instead — run the same funnel at 1/3/7/14-day
+conversion windows and read what share of each segment's eventual conversions had
+landed by then. Same effect, expressed in a statistic Mixpanel actually computes.
 
 ### 3. Auto-detect the data window
 
@@ -195,6 +260,11 @@ counts, and the story verdict table.
 is accepted and applied, but every definition collapses to the same membership —
 three different cohorts return byte-identical numbers instead of erroring. Create
 cohorts first, then filter by id: `Filter.in_cohort(<saved_id>, "<name>")`.
+
+**`getCohorts` can report `count: 0` for every cohort** even when they hold thousands
+of members and filter queries correctly. Do not use the listing's count as the
+membership check in `99_verify.py` — run one cheap query per cohort instead. This is
+the same call that warms them, so it costs nothing extra.
 
 **`create_cohort` via headless 500s** on some projects; `CreateCohortParams.definition`
 also wants `.to_dict()`, not the builder object. Use `/crud/createCohort` — see the

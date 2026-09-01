@@ -13,22 +13,56 @@ type Primitives = string | number | boolean | Date | Record<string, any>;
 export type ValueValid = Primitives | ValueValid[] | (() => ValueValid);
 
 /**
- * v1.5.1 — credentials sub-object. Groups Mixpanel project credentials. Top-level
- * `token` / `region` / etc. remain functional as a back-compat alias; when both
- * are set, the top-level value wins with a verbose warning.
+ * Mixpanel data residency region. Matches the set `mixpanel-import` accepts.
+ */
+export type Region = 'US' | 'EU' | 'IN';
+
+/**
+ * v1.6.4 — named-object form of a group key. Equivalent to the positional tuple
+ * `[key, cardinality]` / `[key, cardinality, events]`, which stays supported.
+ * The validator normalizes this to the tuple form.
+ */
+export interface GroupKeyObject {
+    /** The group key property name (e.g. `"company_id"`). */
+    key: string;
+    /** How many distinct group entities to generate. */
+    cardinality: number;
+    /** Event names that carry this group key. Omit or leave empty for all events. */
+    events?: string[];
+}
+
+/**
+ * The normalized positional form of a group key. Everything downstream of
+ * `validateDungeonConfig` sees this shape — the validator converts
+ * `GroupKeyObject` entries for you.
+ */
+export type GroupKeyTuple = [string, number] | [string, number, string[]];
+
+/**
+ * A group analytics key as an author may write it: either the legacy tuple form
+ * or the named-object form. `result.validatedConfig.groupKeys` is always
+ * `GroupKeyTuple[]`.
+ */
+export type GroupKey = GroupKeyTuple | GroupKeyObject;
+
+/**
+ * v1.5.1 — credentials sub-object. **This is the canonical form.** Groups Mixpanel
+ * project credentials. Top-level `token` / `region` / etc. remain functional as a
+ * back-compat alias; when both are set, the top-level value wins with a verbose
+ * warning. Emit one form or the other, never both.
  */
 export interface DungeonCredentials {
     token?: string;
-    region?: 'US' | 'EU' | 'IN';
+    region?: Region;
     serviceAccount?: string;
     serviceSecret?: string;
     projectId?: string;
 }
 
 /**
- * v1.5.1 — switches sub-object. Groups data-shape booleans. Top-level keys
- * remain functional as a back-compat alias; same precedence rules as
- * `DungeonCredentials`.
+ * v1.5.1 — switches sub-object. **This is the canonical form.** Groups data-shape
+ * booleans. Top-level keys remain functional as a back-compat alias; same
+ * precedence rules as `DungeonCredentials`. Emit one form or the other, never both.
  */
 export interface DungeonSwitches {
     hasLocation?: boolean;
@@ -42,13 +76,13 @@ export interface DungeonSwitches {
     hasBrowser?: boolean;
     isAnonymous?: boolean;
     alsoInferFunnels?: boolean;
-    hasAttributionFlags?: boolean;
 }
 
 /**
- * v1.5.1 — identity sub-object. Groups identity-model knobs. Top-level
- * `avgDevicePerUser` / `sessionTimeout` remain functional as a back-compat
- * alias.
+ * v1.5.1 — identity sub-object. **This is the canonical form.** Groups
+ * identity-model knobs. Top-level `avgDevicePerUser` / `sessionTimeout` remain
+ * functional as a back-compat alias; when both are set, the top-level value wins
+ * with a verbose warning. Emit one form or the other, never both.
  *
  * `hasAnonIds` is DEPRECATED — when present here, it maps to
  * `avgDevicePerUser: 1` with a verbose warning. Use `avgDevicePerUser` instead.
@@ -143,8 +177,8 @@ export interface Dungeon {
     avgEventsPerUserPerDay?: number;
     /** Output format for files written to disk. */
     format?: "csv" | "json" | "parquet" | string;
-    /** Mixpanel data residency region. */
-    region?: "US" | "EU";
+    /** Mixpanel data residency region. Back-compat alias for `credentials.region`. */
+    region?: Region;
     /** User generation concurrency. Default: 1. Values > 1 break seed reproducibility and provide no performance benefit (CPU-bound). */
     concurrency?: number;
     /**
@@ -186,6 +220,12 @@ export interface Dungeon {
      * @see EventConfig.isAttributionEvent
      */
     hasCampaigns?: boolean;
+    /**
+     * @internal Derived, not settable. The validator unconditionally sets this to
+     * `events.some(e => e.isAttributionEvent)`. Read it off `result.validatedConfig`;
+     * setting it on an input config has no effect.
+     */
+    hasAttributionFlags?: boolean;
     /** If true, generates ad spend data (impressions, clicks, cost). */
     hasAdSpend?: boolean;
     /** If true, device pool includes iOS devices. */
@@ -196,7 +236,7 @@ export interface Dungeon {
     hasDesktopDevices?: boolean;
     /** If true, events include browser properties. */
     hasBrowser?: boolean;
-    /** If true (default), writes output files to ./data/. Can also be a directory path string or gs:// URI. */
+    /** If true, writes output files to ./data/. Can also be a directory path string or gs:// URI. Default: `false` — data is returned in memory only. */
     writeToDisk?: boolean | string;
     /** If true, deletes all written files (local and GCS) at end of run regardless of import success/failure. Default: false. */
     cleanup?: boolean;
@@ -289,12 +329,19 @@ export interface Dungeon {
     scdProps?: Record<string, SCDProp>;
     /** Mirror dataset definitions: create transformed copies of event data. */
     mirrorProps?: Record<string, MirrorProps>;
-    /** Group analytics keys. Format: [key, numGroups] or [key, numGroups, [associatedEvents]]. */
-    groupKeys?: [string, number][] | [string, number, string[]][];
+    /**
+     * Group analytics keys. Two interchangeable forms:
+     *
+     * - Tuple (legacy): `[key, numGroups]` or `[key, numGroups, [associatedEvents]]`
+     * - Named object (v1.6.4, preferred): `{ key, cardinality, events? }`
+     *
+     * The validator normalizes the named form to the tuple form, so hooks and the
+     * verifier always see tuples. Mixing both forms in one array is allowed.
+     * An empty or omitted `events` list means every event carries the group key.
+     */
+    groupKeys?: GroupKey[];
     /** Properties for each group key's entities. */
     groupProps?: Record<string, Record<string, ValueValid>>;
-    /** Group-level events (stub — not yet implemented). */
-    groupEvents?: GroupEventConfig[];
     /** Lookup table definitions for dimension tables. */
     lookupTables?: LookupTableSchema[];
     /** TimeSoup configuration: shapes intra-week and intra-day rhythm (peaks, deviation, DOW/HOD weights). Pair with `macro` for big-picture trend control. */
@@ -370,7 +417,11 @@ export interface Dungeon {
      * **Incompatibility with `engagementDecay`:** decay drops events from late picked days,
      * eroding the effective active-day count below the configured target. Use one or the
      * other; if you need both, write decay logic in an `everything` hook scoped to specific
-     * cohorts. See HOOKS.md §2.5.
+     * cohorts. See HOOKS.md §2.5. v1.6.4: the validator warns unconditionally (not gated
+     * behind `verbose`) when both are set.
+     *
+     * **Precedence with `retentionCurve`:** the curve WINS. When `retentionCurve` is set,
+     * the active-day plan is built from the curve and this value is ignored entirely.
      *
      * Safe range: `[1, numDays * 0.5]`. Above 50% of `numDays` defeats the concentrator
      * purpose; the v1.5 validator strict-clamps to `floor(numDays * 0.5)` with a warning.
@@ -928,12 +979,10 @@ export interface EventConfig {
     isAttributionEvent?: boolean;
 }
 
-export interface GroupEventConfig extends EventConfig {
-    frequency: number; //how often the event occurs (in days)
-    group_key: string; //the key that the group is based on
-    attribute_to_user: boolean; //if true, the event also goes to a user
-    group_size: number; //the number of users in the group
-}
+// v1.6.4 — `GroupEventConfig` and `Dungeon.groupEvents` were removed from the
+// public types. They were a declared-only stub: nothing in `lib/` ever read them,
+// and no shipped dungeon set them. Group-scoped events are modeled today by
+// listing the event name in a `groupKeys` entry's `events` array.
 
 /**
  * the generated event data

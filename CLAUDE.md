@@ -116,7 +116,8 @@ Pure-engine output (no hooks) on `dungeons/technical/simplest.js` satisfies a st
 | `bornRecentBias` | `[-0.5, 0.5]` | User-explicit values clamped; compound: `born > 60 && bias > 0.4` clamps bias to 0.3. Macro presets exempt (viral=0.6 allowed). |
 | `preExistingSpread` | `'uniform'` (default) or `'pinned'` | n/a |
 | `avgEventsPerUserPerDay` | `[0.1, 50]` | Clamped to 50 above; `numEvents` recomputed |
-| `avgActiveDaysPerUser` | `[1, numDays * 0.5]` | Clamped to `floor(numDays/2)` above. **Incompatible with `engagementDecay`** — see [HOOKS.md §2.5](HOOKS.md). |
+| `avgActiveDaysPerUser` | `[1, numDays * 0.5]` | Clamped to `floor(numDays/2)` above. **Incompatible with `engagementDecay`** — unconditional warn since 1.6.4, see [HOOKS.md §2.5](HOOKS.md). **`retentionCurve` wins** when both are set. |
+| `retentionCurve` | n/a | Takes precedence over `avgActiveDaysPerUser`; the active-day plan is built from the curve. |
 | `macro` | `'flat' \| 'steady' \| 'growth' \| 'viral' \| 'decline'` (default `'flat'`) | Throws on unknown name |
 
 The per-macro born% clamp is a **shape contract**: born above the cap breaks the macro's characteristic curve via cumulative-acquisition. To go higher, switch macros.
@@ -195,12 +196,26 @@ Schema → hooks → verify → provision → build, six slash commands at [.cla
 
 Use the existing `scripts/verify-runner.mjs` — do not create a new runner.
 
+## Config surface
+
+`credentials`, `switches`, and `identity` each accept a nested sub-object **and**
+a flat top-level form. **The sub-object form is canonical** — emit that. When a key
+is set in both places the top-level value wins, with a `verbose`-gated warning.
+Generators should emit one form, never both. Full table in [README.md](README.md#config-reference).
+
+`hasAttributionFlags` is derived, not settable — the validator overwrites it from
+`events[].isAttributionEvent`.
+
+`groupKeys` accepts the tuple form (`[key, cardinality]`, `[key, cardinality, events]`)
+or the named form (`{ key, cardinality, events? }`). The validator normalizes to tuples,
+so hooks and the verifier only ever see tuples.
+
 ## Critical gotchas
 
 - **ESM only** (`"type": "module"` in `package.json`).
 - **Time model:** events generate in a fixed historical window (`FIXED_NOW = 2024-02-02`), then shift forward to present via `.add(1, "day")`. `FIXED_BEGIN` computes dynamically from `numDays`. Test fixtures rely on this stability.
 - **No global state** beyond `FIXED_NOW`/`FIXED_BEGIN` constants. All state flows through a `Context` object built per run.
-- **Seeded RNG everywhere** via `chance` — same seed + same config + `concurrency: 1` = byte-identical output. `strictEventCount: true` forces `concurrency: 1`.
+- **Seeded RNG everywhere** via `chance` — same seed + same config + `concurrency: 1` = identical output, **with one exception: `insert_id`**. Since 1.4.0 it is a `randomUUID()` ([events.js](lib/generators/events.js)), so it differs on every run by design. Strip `insert_id` before diffing two runs. Everything else — event count, order, timestamps, every property, profiles, groups — is byte-identical. `strictEventCount: true` forces `concurrency: 1`.
 - **Hooks are a single function** on the dungeon config receiving `(record, type, meta)`. Type discriminates the record shape and metadata. See [HOOKS.md §1](HOOKS.md) for the full type table.
 - **Progress callback** (`onProgress`): fault-tolerant, throttled (default 500ms), disabled after 3 throws. Three phases — `generation`, `import`, `step`. Return value includes `progress: { updates, errors, disabled }`.
 - **Test count + wall time are not pinned.** `npm test` reports current numbers; treat any specific count in older docs as historical.

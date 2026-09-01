@@ -88,6 +88,58 @@ users between frequency bins. Both `injectOnNewDays` and the default
 `countDistinctPeriods` algorithm use calendar-bucket math, so they agree
 at boundaries.
 
+One second is also below Mixpanel's 30-minute session gap, so the default
+spread cannot create a new session either. The full list of metrics a default
+`scaleEventCount` call **cannot** move: active days per user, DAU, stickiness
+(DAU÷MAU), sessions per user, frequency bins, and retention. It moves event
+volume, and nothing else.
+
+As of v1.6.4 you can pass `{ spreadDays: N }` to scatter the clones across the
+next N days instead:
+
+```js
+// volume only — same day, same session
+scaleEventCount(record, "commit pushed", 3);
+
+// volume AND active days AND sessions
+scaleEventCount(record, "commit pushed", 3, { spreadDays: 7 });
+```
+
+`injectOnNewDays` remains the better tool when you want a specific target
+day count rather than a multiplier.
+
+### 2.1.1 Cloned events MUST carry a fresh `insert_id`
+
+Mixpanel deduplicates on `insert_id` at ingest. A clone that keeps its source's
+`insert_id` is silently discarded — the surge you engineered never appears in the
+project, no error is raised, and local verification does not catch it because
+`emulateBreakdown` never inspects `insert_id`.
+
+Leaving `insert_id` blank is not safe either. The importer content-hashes events
+that lack one, so identical clones hash to the same value and collide the same way.
+
+```js
+// PREFERRED — cloneEvent stamps a fresh insert_id
+record.push(cloneEvent(sourceEvent, { time: newTime }));
+
+// ALSO FINE — the engine re-stamps the duplicate id
+record.push({ ...sourceEvent, time: newTime });
+
+// HISTORICALLY BROKEN — pre-1.6.3 this deduped the whole surge away
+const clone = JSON.parse(JSON.stringify(sourceEvent));
+clone.time = newTime;
+record.push(clone);
+```
+
+Since v1.6.3 the engine re-stamps any duplicate or missing `insert_id` across each
+user's final stream ([user-loop.js:753-776](lib/orchestrators/user-loop.js#L753-L776)),
+so all three shapes now survive ingest. Prefer
+[`cloneEvent`](lib/hook-helpers/mutate.js) anyway: the engine pass is a per-user
+last resort, and it cannot help a clone that a hook moves onto a different user.
+
+If you generated data with a hand-rolled deep-copy clone on **1.6.2 or earlier**,
+that data is wrong in the project. Regenerate and re-import.
+
 ### 2.2 Funnels are GREEDY single-pass with a 2-second grace
 
 Mixpanel processes events in chronological order, single pass. Each event is
@@ -216,6 +268,15 @@ positions in the user's lifetime, eroding picked active days. Setting both
 count BELOW the configured target. Pick one. If you need both effects, set
 `avgActiveDaysPerUser` and write decay logic in an `everything` hook scoped
 to specific cohorts (gives explicit control over the interaction).
+
+As of v1.6.4 the validator warns **unconditionally** when both are set — the
+warning is not gated behind `verbose`, because the combination silently returns
+an active-day count the author did not ask for.
+
+**Precedence with `retentionCurve`:** when `retentionCurve` is set, it wins.
+The active-day planner runs from the curve and `avgActiveDaysPerUser` is ignored
+([user-loop.js:326-337](lib/orchestrators/user-loop.js#L326-L337)). Set one or
+the other, not both.
 
 ### 2.6 Sessions are query-time computed (30-min gap, 24h max, day-boundary split)
 
@@ -666,10 +727,12 @@ Reference: `flows_query.cpp:988-994` (next-anchor-only), `flows.cpp:680-717`
     still correct.
 
 22. **`scaleEventCount` does not move users between frequency bins.** Cloning
-    Buy events at sub-second offsets places them on the same calendar day, so
-    the user's distinct-day count is unchanged. To shift frequency bins use
+    Buy events at sub-second offsets places them on the same calendar day and
+    inside the same 30-minute session window, so distinct days, sessions, DAU,
+    stickiness, and retention are all unchanged. It moves event volume only. To
+    shift any of the others, pass `{ spreadDays: N }` (v1.6.4) or use
     [`injectOnNewDays`](lib/hook-helpers/inject.js), which spreads injections
-    across previously empty days within the user's active window.
+    across previously empty days within the user's active window. See §2.1.
 
 23. **Out-of-order injected events get consumed by the funnel engine.** Adding
     a "step C" event before "step B" in the stream causes Mixpanel's greedy
@@ -1705,9 +1768,9 @@ Import from `@ak--47/dungeon-master/hook-helpers`:
 | `userInProfileSegment` | cohort | `(profile, key, values) -> boolean` | Profile property match |
 | **`hashFloat`** | cohort | `(id) -> number` | FNV-1a over the FULL id string → [0,1). Deterministic bucketing primitive (v1.6) — replaces `charCodeAt(0) % N` idioms, which bias cohort rates on hex-ish id alphabets |
 | **`hashCohort`** | cohort | `(id, pct) -> boolean` | True for ~`pct`% of ids (pct on a 0–100 scale). Membership nests: `pct=5` ⊂ `pct=20` |
-| `cloneEvent` | mutate | `(template, overrides?) -> event` | Shallow clone with overrides |
+| `cloneEvent` | mutate | `(template, overrides?) -> event` | Shallow clone with overrides **and a fresh `insert_id`** — never hand-roll this (see Section 2.1) |
 | `dropEventsWhere` | mutate | `(events, predicate) -> number` | Remove matching events in-place |
-| `scaleEventCount` | mutate | `(events, eventName, factor) -> number` | Scale total count via clones at sub-second offsets (does NOT move frequency-distribution bins — see Section 2.1) |
+| `scaleEventCount` | mutate | `(events, eventName, factor, options?) -> number` | Scale total count via clones. Default 1s offsets do NOT move frequency, session, active-day, or retention metrics — see Section 2.1. Pass `{ spreadDays: N }` (v1.6.4) or use `injectOnNewDays` |
 | `scalePropertyValue` | mutate | `(events, predicate, prop, factor) -> number` | Multiply numeric property; null-aware safe |
 | `shiftEventTime` | mutate | `(event, deltaMs) -> event` | Shift one timestamp |
 | `scaleTimingBetween` | timing | `(events, eventA, eventB, factor) -> boolean` | Scale gap between first A and first B |

@@ -17,7 +17,7 @@ type ValueValid = Primitives | Primitives[] | FunctionCall;
  * This is the high-level object you will be constructing.
  *
  * REQUIRED fields: events, funnels, superProps, userProps
- * OPTIONAL fields: scdProps, groupKeys, groupProps, groupEvents
+ * OPTIONAL fields: scdProps, groupKeys, groupProps
  */
 export interface Dungeon {
     /** REQUIRED: A list of all possible events that can occur in the simulation. */
@@ -35,14 +35,15 @@ export interface Dungeon {
     /** OPTIONAL: Properties that change for users or groups over time (Slowly Changing Dimensions). Only include when properties explicitly change over time. */
     scdProps?: Record<string, SCDProp>;
 
-    /** OPTIONAL: Defines group entities (companies, teams). Format: [["group_key", count], ...]. ONLY for B2B/SaaS scenarios. */
-    groupKeys?: [string, number][];
+    /**
+     * OPTIONAL: Defines group entities (companies, teams). ONLY for B2B/SaaS scenarios.
+     * Tuple form: `[["group_key", count], ...]`.
+     * Named form: `[{ key: "group_key", cardinality: count, events: [...] }, ...]`.
+     */
+    groupKeys?: ([string, number] | { key: string; cardinality: number; events?: string[] })[];
 
     /** OPTIONAL: Properties for groups defined in groupKeys. ONLY include if groupKeys is defined. */
     groupProps?: Record<string, Record<string, ValueValid>>;
-
-    /** OPTIONAL: Events attributed to groups on a schedule (e.g., monthly billing). Rarely needed. */
-    groupEvents?: GroupEventConfig[];
 }
 
 
@@ -146,28 +147,6 @@ interface SCDProp {
 }
 
 
-/**
- * Defines an event attributed to a group on a regular schedule.
- * Example: monthly subscription charges, weekly reports, etc.
- *
- * This is rarely needed - only use for B2B scenarios with recurring group-level events.
- */
-interface GroupEventConfig {
-    /** REQUIRED: The name of the event. */
-    event: string;
-
-    /** REQUIRED: How often the event occurs (in days). e.g., 30 for monthly. */
-    frequency: number;
-
-    /** REQUIRED: The group key this event belongs to (e.g., "company_id"). */
-    group_key: string;
-
-    /** OPTIONAL: If true, a random user in the group is also attributed to the event. */
-    attribute_to_user?: boolean;
-
-    /** OPTIONAL: Properties for this event. */
-    properties?: Record<string, ValueValid>;
-
-    /** OPTIONAL: Relative frequency of this event. */
-    weight?: number;
-}
+// v1.6.4 — `GroupEventConfig` removed. It was a declared-only stub that nothing in
+// `lib/` ever read. To scope an event to a group, list its name in that group key's
+// `events` array instead.

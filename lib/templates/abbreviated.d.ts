@@ -37,15 +37,16 @@ export interface Dungeon {
     /** Properties that change for users or groups over time (Slowly Changing Dimensions). */
     scdProps?: Record<string, SCDProp>;
     
-    /** Defines group entities, like companies or teams, and how many of each to create. */
-    groupKeys?: [string, number, string[]?][]; // [key, numGroups, optional_events_for_group]
-    
+    /**
+     * Defines group entities, like companies or teams, and how many of each to create.
+     * Tuple form: `[key, numGroups]` or `[key, numGroups, [events]]`.
+     * Named form: `{ key, cardinality, events? }`. Both are accepted.
+     */
+    groupKeys?: ([string, number, string[]?] | { key: string; cardinality: number; events?: string[] })[];
+
     /** Properties that define the characteristics of the groups defined in groupKeys. */
     groupProps?: Record<string, Record<string, ValueValid>>;
 
-    /** Events that are attributed to a group entity rather than an individual user. */
-    groupEvents?: GroupEventConfig[];
-    
     /** Static data tables (e.g., product catalogs) that can be referenced in events. */
     lookupTables?: LookupTableSchema[];
 
@@ -131,25 +132,6 @@ interface SCDProp {
 
     /** The maximum number of times this property can change for a single entity. */
     max?: number;
-}
-
-
-/**
- * Defines an event that is attributed to a group and occurs on a regular schedule.
- * (e.g., a monthly subscription charge for a company).
- */
-interface GroupEventConfig extends EventConfig {
-    /** How often the event occurs (in days). */
-    frequency: number; 
-    
-    /** The group key this event is associated with (e.g., "company_id"). */
-    group_key: string; 
-    
-    /** If true, a random user within the group is also associated with the event. */
-    attribute_to_user: boolean; 
-    
-    /** The number of entities in this group. */
-    group_size: number; 
 }
 
 
