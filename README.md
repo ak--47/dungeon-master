@@ -584,6 +584,15 @@ all randomness is seeded. same seed + same config + concurrency=1 = identical ou
 }
 ```
 
+pin `datasetStart` and `datasetEnd` too, or the dataset window moves with the
+calendar and every timestamp shifts.
+
+**one exception: `insert_id`.** since 1.4.0 it is a `randomUUID()`, so it differs
+on every run by design — that is what keeps Mixpanel from deduping re-imports of
+the same dataset. strip `insert_id` before diffing two runs. everything else
+(event count, order, timestamps, every property, profiles, groups) is
+byte-identical.
+
 ## what gets generated
 
 the result object contains everything:
@@ -689,6 +698,53 @@ engine tests are NOT shipped in the npm package and NOT run as part of `npm test
 
 ## config reference
 
+### one config surface, not two
+
+three groups of keys accept both a nested sub-object and a flat top-level form:
+
+| sub-object | keys it groups |
+|---|---|
+| `credentials` | `token`, `region`, `serviceAccount`, `serviceSecret`, `projectId` |
+| `switches` | `hasLocation`, `hasCampaigns`, `hasAdSpend`, `hasSessionIds`, `hasAvatar`, `hasIOSDevices`, `hasAndroidDevices`, `hasDesktopDevices`, `hasBrowser`, `isAnonymous`, `alsoInferFunnels` |
+| `identity` | `avgDevicePerUser`, `sessionTimeout` |
+
+**the sub-object form is canonical.** the flat top-level keys are a back-compat
+alias and stay supported. emit one form or the other — never both. when a key is
+set in both places the **top-level value wins**, with a `verbose`-gated warning
+you will not see unless `verbose: true`.
+
+```javascript
+// canonical
+{ credentials: { token: process.env.MIXPANEL_TOKEN, region: 'US' },
+  switches:    { hasCampaigns: true, hasAdSpend: true },
+  identity:    { avgDevicePerUser: 2 } }
+
+// back-compat alias — still works
+{ token: process.env.MIXPANEL_TOKEN, region: 'US',
+  hasCampaigns: true, hasAdSpend: true, avgDevicePerUser: 2 }
+```
+
+`hasAttributionFlags` is **not** a switch. the validator derives it from
+`events[].isAttributionEvent`; setting it has no effect.
+
+### group keys
+
+`groupKeys` accepts a positional tuple or a named object. both normalize to the
+tuple internally, so hooks and the verifier see one shape:
+
+```javascript
+groupKeys: [
+  ['company_id', 50],                                  // tuple
+  ['team_id', 200, ['Deploy', 'Merge PR']],            // tuple + scoped events
+  { key: 'org_id', cardinality: 25 },                  // named (v1.6.4)
+  { key: 'workspace_id', cardinality: 80, events: ['Save'] },
+]
+```
+
+an omitted or empty `events` list means every event carries that group key.
+
+### commonly used properties
+
 see [types.d.ts](types.d.ts) for the complete `Dungeon` interface. here are the most commonly used properties:
 
 | property | type | default | description |
@@ -702,7 +758,7 @@ see [types.d.ts](types.d.ts) for the complete `Dungeon` interface. here are the 
 | `seed` | string | random | RNG seed for reproducibility |
 | `format` | string | `'csv'` | output format (csv, json, parquet) |
 | `token` | string | null | mixpanel project token (triggers import) |
-| `region` | string | `'US'` | mixpanel data residency |
+| `region` | string | `'US'` | mixpanel data residency (`US` / `EU` / `IN`) |
 | `writeToDisk` | boolean/string | false | write files to ./data/ or a gs:// path |
 | `gzip` | boolean | false | compress output files |
 | `verbose` | boolean | false | print progress |
@@ -714,7 +770,8 @@ see [types.d.ts](types.d.ts) for the complete `Dungeon` interface. here are the 
 | `bornRecentBias` | number | 0 (from macro `flat`) | user birth date skew (safe range [-0.5, 0.5]; user-explicit values outside the band are clamped) |
 | `percentUsersBornInDataset` | number | 12 (from macro `flat`) | % of users born in window (clamped per-macro when both `macro` and this field are explicit) |
 | `preExistingSpread` | string | `'uniform'` (from macro `flat`) | placement of pre-existing users' first event |
-| `avgActiveDaysPerUser` | number | undefined | concentrate events onto N distinct UTC days per user (preserves total event count) |
+| `avgActiveDaysPerUser` | number | undefined | concentrate events onto N distinct UTC days per user (preserves total event count). ignored when `retentionCurve` is set; warns when combined with `engagementDecay` |
+| `retentionCurve` | object | undefined | per-day return probabilities. **wins over `avgActiveDaysPerUser`** when both are set |
 | `maxTouchpointsPerUser` | number | 10 | UTM stamping cap per user (Mixpanel `TOUCHPOINTS_LIMIT` parity) |
 | `autoSortAfterEverything` | boolean | true | sort events by time after `everything` hook (defends greedy funnel engine) |
 | `hook` | function/string | passthrough | data transformation function |

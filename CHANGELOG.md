@@ -2,6 +2,121 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.6.4 — 2026-09-01
+
+Answers the doc/type half of the DM4 v5 engine request
+(`dungeon-master-library-changes-requested.md`, 2026-09-01). Every claim in that
+document was checked against source; all were accurate except the three noted
+under "Already correct" below.
+
+This release is deliberately scoped to changes that cannot alter generated data:
+docs, types, one additive helper option, one additive config form, and one
+warning. The feature requests are tracked for 1.7.0 — see "Deferred to 1.7.0".
+
+No generated output changes. Verified: same seed, same config, `concurrency: 1`,
+pinned dataset window — 1.6.4 and 1.6.3 produce byte-identical events, user
+profiles, and group profiles.
+
+### Added
+
+- **`scaleEventCount(events, name, factor, { spreadDays })`.** Scatters clones
+  uniformly across the next N days instead of stepping 1 second at a time. The
+  default 1-second spread cannot create a new distinct active day and cannot open
+  a new session under Mixpanel's 30-minute gap rule, so a default call moves event
+  volume and nothing else — not active days, DAU, stickiness, sessions, frequency
+  bins, or retention. 33 dungeons in the DM4 corpus used the default and then
+  documented an active-day, session, frequency, or stickiness claim. All 33 were
+  wrong. The limitation is now stated in the helper's JSDoc, in HOOKS.md §2.1, and
+  in HOOKS.md gotcha #22. Clones that land past `FIXED_NOW` are still dropped by
+  the future-time guard. Default behavior is unchanged.
+- **Named-object form for `groupKeys`.** `{ key, cardinality, events? }` alongside
+  the positional tuple `[key, cardinality]` / `[key, cardinality, events]`. Both
+  forms may be mixed in one array. The validator normalizes to tuples, so hooks,
+  the generators, and the verifier still see exactly one shape. Added so a
+  form-driven config generator never has to emit an untyped positional tuple.
+  Bad input throws with the offending index.
+- **HOOKS.md §2.1.1 — "Cloned events MUST carry a fresh `insert_id`."** The
+  consequence was only in a source comment before. Four DM4 corpus files
+  hand-rolled `JSON.parse(JSON.stringify(e))` and had their entire engineered
+  surge deduped away by Mixpanel at ingest, with local verification still
+  reporting the surge as present. Includes the note that data generated this way
+  on 1.6.2 or earlier is wrong in-project and must be regenerated.
+- **README "one config surface, not two."** States that the `credentials` /
+  `switches` / `identity` sub-objects are the canonical form, that the flat
+  top-level keys are a back-compat alias, and that top-level wins when both are
+  set. Mirrored in CLAUDE.md and in the three sub-object JSDoc blocks.
+
+### Changed
+
+- **The `avgActiveDaysPerUser` + `engagementDecay` warning is no longer gated
+  behind `verbose`.** The combination silently returns an active-day count at or
+  below the configured value, never above. A config UI that shows the requested
+  number was lying about it. Documented in HOOKS.md §2.5 and in the
+  `avgActiveDaysPerUser` JSDoc.
+- **`retentionCurve` precedence is now documented.** When both `retentionCurve`
+  and `avgActiveDaysPerUser` are set, the curve wins and `avgActiveDaysPerUser` is
+  ignored entirely. Behavior is unchanged — only the docs were missing. Added to
+  the CLAUDE.md safe-range table, the README config table, HOOKS.md §2.5, and the
+  `avgActiveDaysPerUser` JSDoc.
+
+### Fixed (types and docs)
+
+- **`writeToDisk` doc was wrong.** It read "If true (default), writes output files
+  to ./data/". The runtime default is `false` (`config-validator.js`).
+- **`region` types disagreed.** Top-level `region` was `"US" | "EU"` while
+  `DungeonCredentials.region` allowed `"IN"`. Both now use a shared `Region` type
+  of `'US' | 'EU' | 'IN'`, which matches what `mixpanel-import` accepts.
+- **`hasAttributionFlags` was presented as a settable switch.** The validator
+  unconditionally overwrites it with `events.some(e => e.isAttributionEvent)`. It
+  is removed from `DungeonSwitches` and from the `switches` hoisting allowlist,
+  and marked `@internal` on `Dungeon`. Read it off `result.validatedConfig`;
+  setting it never did anything.
+- **`GroupEventConfig` / `config.groupEvents` removed from the public types.** A
+  declared-only stub — nothing in `lib/` ever read it, its own doc comment said
+  "not yet implemented", and no shipped dungeon set it. Removed from `types.d.ts`,
+  `lib/templates/abbreviated.d.ts`, `lib/templates/schema.d.ts`, and the `wrapFunc`
+  whitelist. To scope an event to a group, list it in that group key's `events`
+  array.
+
+- **The determinism claim was overstated.** README and CLAUDE.md both said "same
+  seed + same config + `concurrency: 1` = byte-identical output". That has been
+  false since 1.4.0: `insert_id` is a `randomUUID()`, so it differs on every run
+  by design — which is what keeps Mixpanel from deduping a re-import of the same
+  dataset. Found while verifying that this release changes no output. Everything
+  else is byte-identical; strip `insert_id` before diffing two runs. Both docs now
+  say so.
+
+### Already correct (no change needed)
+
+- `funnels[].reentry` and `funnels[].stepFilters` were reported as reading like
+  generation features. Their JSDoc already says "Verifier-only hint … Generator
+  behavior unchanged."
+- The dead persona fields (`churnRate`, `activeWindow`, `soupOverride`) were
+  reported as `verbose`-gated. Their warning already fires unconditionally, once
+  per process. They stay accepted and warned; removing them from the `Persona`
+  type is a 1.7.0 change because it is a type-level break.
+
+### Deferred to 1.7.0
+
+Everything below is new public surface or a behavior change, so none of it belongs
+in a patch. Per-item design lives in the maintainer's local `plans/1.7.0/SPEC.md`
+(the `plans/` tree is not published).
+
+| Request | Why not in 1.6.4 |
+|---|---|
+| `funnels[].conditions` operators (`in`, `gte`, `neq`, …) | New public surface. Also throws on function/array condition values, which is a break. |
+| Experiment variant stamped on the user profile | New profile property; needs a change to when variants resolve. |
+| `(ctx) => value` for property value functions | New signature. Requires an arity guard on the `choose` source-string cache first, or context-aware functions get frozen at their first evaluation. |
+| `stickyEventProps` | New surface. Also needs `lib/verify/schema-validator.js` taught about it, or `/verify-dungeon` reports every sticky prop as flag stamping. |
+| Stable per-user `location` under `hasLocation` | A real fix (`featureCtx.userLocation` is computed and never read), but it changes generated event geo. |
+| `personas[].ttcModifier` | New surface. |
+| Removing the three dead persona fields from the `Persona` type | Type-level break. |
+| `campaignPerUser` | New surface. |
+| `autoPowerLaw: false` and `{ __weights }` | New surface. |
+| `result.warnings[]` for clamps | New result surface. |
+| Ad spend derived from users acquired per campaign | Needs a new cross-user aggregate pass. Deferred past 1.7.0. |
+| Engine-side `conversionRate` saturation reporting | Depends on `result.warnings[]`. Note: the engine can report its own `Math.min(100, …)` clamps, but not a hook's own `Math.min(95, rate * 3)` — that cap belongs to the hook and the engine never sees the intended value. |
+
 ## 1.6.3 — 2026-08-17
 
 ### Fixed

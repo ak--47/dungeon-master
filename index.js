@@ -347,7 +347,10 @@ async function generateAdSpendData(context) {
  */
 async function generateGroupProfiles(context) {
 	const { config, storage } = context;
-	const { groupKeys, groupProps = {} } = config;
+	// `config` here is the VALIDATED config, so `normalizeGroupKeys` has already
+	// converted any `{ key, cardinality }` entries to positional tuples.
+	const groupKeys = /** @type {import('./types').GroupKeyTuple[]} */ (config.groupKeys);
+	const { groupProps = {} } = config;
 
 	if (config.verbose) {
 		logger.info('Generating group profiles...');
@@ -430,7 +433,9 @@ async function generateLookupTables(context) {
  */
 async function generateGroupSCDs(context) {
 	const { config, storage } = context;
-	const { scdProps, groupKeys } = config;
+	const { scdProps } = config;
+	// Validated config: `normalizeGroupKeys` has already flattened named entries.
+	const groupKeys = /** @type {import('./types').GroupKeyTuple[]} */ (config.groupKeys);
 
 	if (config.verbose) {
 		logger.info('Generating group SCDs...');

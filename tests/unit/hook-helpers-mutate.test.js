@@ -80,6 +80,47 @@ describe('mutate atoms', () => {
 		expect(new Set(ids).size).toBe(ids.length);
 	});
 
+	test('scaleEventCount: default spread keeps clones on the SAME calendar day', () => {
+		// v1.6.4 contract: the default 1s step cannot move active-day, session,
+		// frequency, or retention metrics. This test pins that limitation so nobody
+		// "fixes" it silently — use { spreadDays } or injectOnNewDays instead.
+		initChance('same-day');
+		const t0 = Date.parse('2024-02-01T09:00:00Z');
+		const events = [mkEv('A', new Date(t0).toISOString())];
+		scaleEventCount(events, 'A', 20);
+		const days = new Set(events.map(e => e.time.slice(0, 10)));
+		expect(days.size).toBe(1);
+	});
+
+	test('scaleEventCount: spreadDays scatters clones across multiple calendar days', () => {
+		initChance('spread-days');
+		const t0 = Date.parse('2024-02-01T09:00:00Z');
+		const events = [mkEv('A', new Date(t0).toISOString())];
+		const added = scaleEventCount(events, 'A', 30, { spreadDays: 7 });
+		expect(added).toBe(29);
+		const days = new Set(events.map(e => e.time.slice(0, 10)));
+		expect(days.size).toBeGreaterThan(1);
+		// Every clone lands inside [t0 + 1s, t0 + 7d].
+		for (const ev of events.slice(1)) {
+			const ms = Date.parse(ev.time);
+			expect(ms).toBeGreaterThanOrEqual(t0 + 1000);
+			expect(ms).toBeLessThanOrEqual(t0 + 7 * 86_400_000);
+		}
+		// insert_ids stay unique so Mixpanel does not dedupe the surge away.
+		const ids = events.map(e => e.insert_id).filter(Boolean);
+		expect(new Set(ids).size).toBe(ids.length);
+	});
+
+	test('scaleEventCount: spreadDays is deterministic under the same seed', () => {
+		const run = () => {
+			initChance('spread-determinism');
+			const events = [mkEv('A', '2024-02-01T09:00:00Z')];
+			scaleEventCount(events, 'A', 10, { spreadDays: 3 });
+			return events.map(e => e.time);
+		};
+		expect(run()).toEqual(run());
+	});
+
 	test('scaleEventCount: factor<1 drops some matching events using seeded RNG', () => {
 		initChance('drop-some');
 		const events = Array.from({ length: 100 }, (_, i) => mkEv('A', i));
