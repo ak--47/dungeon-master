@@ -2,6 +2,18 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.6.5 — 2026-09-02
+
+### Changed
+
+- **`matchMixpanelDefaults: true` on every live send to Mixpanel.** Set in
+  `commonOpts` in `lib/orchestrators/mixpanel-sender.js`, passed straight through
+  to `mixpanel-import`. Renames warehouse-style property keys to Mixpanel's
+  reserved names (e.g. `current_url` → `$current_url`, `_browser` → `$browser`)
+  as records stream out. Only affects the wire payload sent to Mixpanel's
+  ingestion API — generated events, profiles, and files on disk are unchanged.
+  Same seed, same config still produces byte-identical generated output.
+
 ## 1.6.4 — 2026-09-01
 
 Answers the doc/type half of the DM4 v5 engine request
