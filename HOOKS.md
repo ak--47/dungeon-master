@@ -38,6 +38,31 @@ double-fire mutations.
 - `everything`: return the (possibly modified) array. Filtered array removes events.
 - All other types: mutate `record` in-place. Return value is ignored.
 
+**What 1.7.0 changed for hooks.** No hook signature, `meta` field, or firing
+order changed, and the hook-helper atoms and patterns are untouched. What a hook
+SEES did change in five places:
+
+1. `event` hook on funnel steps after the first: `record.time` is now the step's
+   FINAL time. Before 1.7.0 it was the pre-offset TimeSoup time, overwritten after
+   the hook returned — a hook that derived a property from `record.time` on step 2+
+   was reading the wrong timestamp.
+2. `everything` hook: the array already contains world-event clones
+   (`volumeMultiplier > 1`), `stickyEventProps` values on every event, and one
+   stable location per user under `hasLocation`. `meta.profile` carries
+   `"Experiment: <name>"` for exposed users (stamped before `everything`, after `user`).
+3. `funnel-pre`: `record.timeToConvert` already includes the persona `ttcModifier`
+   (like `conversionModifier` today). The hook stays the final authority. A rate the
+   hook leaves above 100 is clamped downstream exactly as before and now shows up in
+   `result.warnings`.
+4. `user` hook: under `campaignPerUser` the profile already carries the drawn
+   `utm_*` keys; a hook that overwrites them wins, and the touchpoint pass reads the
+   final values. `stickyEventProps` values are read from the profile AFTER the hook.
+5. Hooks may not add properties (rule 1) — `stickyEventProps`, the experiment
+   profile key, and world-event clones are engine-stamped and declared, so the
+   schema validator accepts them. Prefer these declarative knobs over a hook when
+   they express the story (README "segmented funnels", "sticky event properties",
+   "campaigns per user").
+
 ---
 
 ## 2. How Mixpanel Counts Things
@@ -398,6 +423,17 @@ that side. Explicit selectors bypass the list.
 All items on the v1.5.0 "documented gaps" list closed in 1.6.0. Unrecognized
 retention option keys now THROW — kills the silent-ignore class of bug where a
 typo'd `compounded: true` was dropped without effect.
+
+**`retentionCurve` cannot move day 1 (v1.7.0 doc).** `buildActiveDayPlan`
+picks which UTC days a user gets a SESSION; retention counts EVENTS. A funnel
+opened on the birth day spills its later steps across the following
+`timeToConvert` hours regardless of the day plan, so day 1 sits on a floor
+near 0.85 for funnel-driven dungeons no matter what `day1` asks for. Measured
+(2,000 users, 60 days): `{ day1: 0.15, day7: 0.06, day30: 0.02 }` delivered
+day 1 = 0.885, day 7 = 0.151, day 30 = 0.060 — the curve governs from day 7
+on and over-delivers by a consistent ~2.5x there. Verify retention stories from
+day 7 onward. To lower day 1, shorten `timeToConvert` on the funnels users
+enter on birth, or drop next-day spill in an `everything` hook.
 
 ### 2.8 Funnel reentry: state machine resets after completion
 
@@ -812,6 +848,19 @@ if (type === "funnel-pre") {
 
 Greedy funnel engine (Section 2.2) applies after — keep `conversionRate`
 adjustments modest (1.2x is comfortable; 3x can saturate at the 95% cap).
+
+**Saturation is reported, but only the engine's own clamp (v1.7.0, P2-4).** When a
+persona `conversionModifier`, an experiment variant, a world event, or the value a
+`funnel-pre` hook leaves behind pushes `conversionRate` above 100, the engine
+clamps to 100 and adds one aggregated entry per funnel and source to
+`result.warnings` (`funnels[Checkout].conversionRate:persona "whale"
+conversionModifier`, `requested: 195`, `applied: 100`). It cannot see a hook's own
+cap: `record.conversionRate = Math.min(95, rate * 3)` on a base of 65 yields 95 — a
+1.46x lift, not 3x — and the engine never learns the intended 195. To get a true
+multiple, read the base rate and solve for it, or lower the base rate so the multiple
+fits under the cap. For "one segment converts differently on one funnel" prefer the
+declarative `funnels[].conditions` (README "segmented funnels") over a `funnel-pre`
+hook — it needs no cap arithmetic.
 
 ---
 

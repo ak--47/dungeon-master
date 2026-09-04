@@ -27,7 +27,7 @@ import { makeMirror } from './lib/generators/mirror.js';
 import { makeGroupProfile, makeProfile } from './lib/generators/profiles.js';
 
 // Utilities
-import { initChance, initUserChance, resetUserChance, resetValueCaches, setDatasetNow, setDatasetBegin, deleteFile } from './lib/utils/utils.js';
+import { initChance, initUserChance, resetUserChance, resetValueCaches, setAutoPowerLaw, setDatasetNow, setDatasetBegin, deleteFile } from './lib/utils/utils.js';
 import { runWithDataset } from './lib/utils/dataset-context.js';
 
 // External dependencies
@@ -149,6 +149,12 @@ async function runDungeon(config) {
 
 		// Step 1: Validate and enrich configuration (resolves dataset window)
 		validatedConfig = validateDungeonConfig(config);
+
+		// v1.7.0 (P2-1): `autoPowerLaw: false` turns off the implicit 45/25/15 draw on
+		// 3–19-item string arrays for this run. Module-level flag, like the seeded
+		// chance instance — `choose()` has no config access. resetValueCaches()
+		// above already restored the default (true) for this run.
+		setAutoPowerLaw(validatedConfig.autoPowerLaw !== false);
 
 		// validateDungeonConfig always resolves these to unix seconds, but the
 		// public Dungeon type accepts string | number on input. Narrow here.
@@ -282,9 +288,18 @@ async function runDungeon(config) {
 		// population for downstream tools.
 		const profilesPushed = countProfilesPushed(storage.userProfilesData);
 
+		// v1.7.0 (P2-2): every value the engine changed or flagged, validator
+		// clamps first, then aggregated runtime warnings (conversionRate saturation,
+		// users matching no funnel, …). Always present, even when empty.
+		const warnings = [
+			...(Array.isArray(validatedConfig._warnings) ? validatedConfig._warnings : []),
+			...context.getWarnings(),
+		];
+
 		return {
 			...extractedData,
 			importResults,
+			warnings,
 			files: extractFileInfo(storage),
 			time: { start, end, delta, human },
 			operations: context.getOperations(),

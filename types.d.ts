@@ -7,10 +7,60 @@
 type Primitives = string | number | boolean | Date | Record<string, any>;
 
 /**
- * A "validValue" can be a primitive, an array of valid values, or a thunk that
- * returns one. Configs use this everywhere properties are user-defined.
+ * v1.7.0 (P1-1) — context handed to every property value function. Every member
+ * is optional: group profiles, lookup tables, ad spend and mirror props have no
+ * user, and `event` / `time` exist only while an event is being built.
+ *
+ * Existing zero-arity value functions keep working untouched — JavaScript ignores
+ * the extra argument. A function that DECLARES a parameter (`(ctx) => …`) is
+ * treated as context-aware and is never served from the source-string cache, so
+ * its result may legitimately differ per user or per event.
+ *
+ * @example
+ * userProps: {
+ *   plan: ['free', 'pro'],
+ *   revenue: (ctx) => ctx.profile.plan === 'pro' ? 100 : 10,   // profile keys resolve in declaration order
+ * },
+ * superProps: {
+ *   plan_on_event: (ctx) => ctx.profile.plan,                   // or use `stickyEventProps: ['plan']`
+ *   total: (ctx) => ctx.event.price * ctx.event.quantity,      // event props resolve in declaration order
+ * }
  */
-export type ValueValid = Primitives | ValueValid[] | (() => ValueValid);
+export interface ValueContext {
+    /** The user's resolved profile (partially built while userProps resolve). Undefined for group/lookup/ad-spend/mirror values. */
+    profile?: Record<string, any>;
+    /** The partially-built event record (identity + time set; earlier properties already resolved). Undefined outside event generation. */
+    event?: Record<string, any>;
+    /** The event's timestamp in unix milliseconds, when an event is being built. */
+    time?: number;
+    /** The validated dungeon config. */
+    config: Dungeon;
+}
+
+/**
+ * v1.7.0 (P2-1) — declarative weighted value. The numbers ARE the distribution:
+ * `{ __weights: { free: 60, pro: 30, enterprise: 10 } }` draws `free` 60% of the
+ * time. No automatic power law, no per-run winner; zero-weight keys never draw.
+ * Keys are strings (object keys), so numeric values come back as strings.
+ */
+export interface WeightedValue {
+    __weights: Record<string, number>;
+}
+
+/**
+ * A "validValue" can be a primitive, an array of valid values, a declarative
+ * weighted form, or a function that returns one. Configs use this everywhere
+ * properties are user-defined.
+ *
+ * **Arrays of 3–19 unique strings get an automatic power-law draw** (~45% / 25% /
+ * 15% / decaying tail, one stable winner per array per run). Repeated entries are
+ * the weights (`['card', 'card', 'apple_pay']` = 2:1) and skip the power law.
+ * Opt out globally with `autoPowerLaw: false`, or state the distribution with
+ * `{ __weights }`.
+ *
+ * v1.7.0: the function arm receives a `ValueContext`. Zero-arity functions still work.
+ */
+export type ValueValid = Primitives | ValueValid[] | WeightedValue | ((ctx?: ValueContext) => ValueValid);
 
 /**
  * Mixpanel data residency region. Matches the set `mixpanel-import` accepts.
@@ -76,6 +126,12 @@ export interface DungeonSwitches {
     hasBrowser?: boolean;
     isAnonymous?: boolean;
     alsoInferFunnels?: boolean;
+    /** v1.7.0 — see `Dungeon.singleCountry`. */
+    singleCountry?: string;
+    /** v1.7.0 — see `Dungeon.campaignPerUser`. */
+    campaignPerUser?: boolean;
+    /** v1.7.0 — see `Dungeon.stickyEventProps`. */
+    stickyEventProps?: string[];
 }
 
 /**
@@ -309,10 +365,63 @@ export interface Dungeon {
     sessionTimeout?: number;
     /** If true, auto-generates funnels from the events array in addition to any explicit funnels. */
     alsoInferFunnels?: boolean;
-    /** Restrict all location data to a single country (e.g., "US", "GB"). */
+    /**
+     * Restrict all location data (`hasLocation`) to one country. Accepts the ISO
+     * code (`"US"`, `"GB"`) or the full name (`"United States"`), case-insensitive.
+     *
+     * v1.7.0: a value that matches no country in the location template THROWS at
+     * validation. Before 1.7.0 a miss (including `"US"`, which only matched by full
+     * name) silently emptied the location pool and deleted every geo property from
+     * events and profiles. Also accepted inside `switches`.
+     */
     singleCountry?: string;
-    /** If true, stops generation at exactly numEvents (forces concurrency=1). Without this, event count is approximate. */
+    /**
+     * If true, the run delivers exactly `numEvents` events (forces `concurrency: 1`).
+     *
+     * v1.7.0: exact. Per-user budgets are scaled during the run so the total lands on
+     * the target, and the last user's stream is trimmed with a seeded uniform sample
+     * so the count never exceeds `numEvents`. If the users' capacity (rate × active
+     * days, minus drops) cannot reach the target, the run stops short and
+     * `result.warnings` carries a `numEvents` entry with `requested` / `applied`.
+     * Before 1.7.0 the flag stopped on the generated count (drops included) and
+     * never topped up, landing ~6% short with 4x headroom available.
+     *
+     * Without this flag the count is approximate (rate × users × days, thinned by
+     * born-late users and drops).
+     */
     strictEventCount?: boolean;
+    /**
+     * v1.7.0 (P1-2) — profile properties projected onto every event of the user.
+     * Each key must be declared in `userProps`, a persona's `properties`, or
+     * `superProps` (schema-first; the validator throws otherwise). Keys from the
+     * profile copy the profile's value (after the `user` hook). Keys declared only
+     * in `superProps` are resolved ONCE per user and held constant instead of
+     * re-rolled per event. Sticky values land after `superProps` and before the
+     * `event` hook, so hooks remain the final authority.
+     *
+     * The declarative alternative to `superProps: { plan: (ctx) => ctx.profile.plan }`.
+     * Also accepted inside `switches`.
+     */
+    stickyEventProps?: string[];
+    /**
+     * v1.7.0 (P1-4) — one acquisition campaign per user. With `hasCampaigns: true`,
+     * each user draws one campaign template at birth; its `utm_source`,
+     * `utm_campaign`, `utm_medium`, `utm_content`, `utm_term` are stamped on the
+     * profile and every sampled touchpoint carries those same values instead of a
+     * fresh random template per event. Any UTM key already on the profile (from a
+     * persona's `properties` or the `user` hook) wins over the draw, so
+     * `personas: [{ name: 'paid', properties: { utm_source: 'google', utm_medium: 'cpc' } }]`
+     * makes "paid search converts better" declarative. Default `false`. Also
+     * accepted inside `switches`.
+     */
+    campaignPerUser?: boolean;
+    /**
+     * v1.7.0 (P2-1) — set `false` to turn off the automatic power-law draw on
+     * arrays of 3–19 unique strings for the whole run (uniform picks instead).
+     * Default `true` (pre-1.7 behavior). Prefer `{ __weights }` when you want a
+     * specific distribution.
+     */
+    autoPowerLaw?: boolean;
     /** Internal flag for UI-triggered jobs (affects SCD credential handling). */
     isUIJob?: boolean;
 
@@ -441,6 +550,16 @@ export interface Dungeon {
      *
      * Example: `{ day1: 0.40, day7: 0.20, day30: 0.08 }` produces a curve that
      * approximates a typical product's 30-day retention.
+     *
+     * **Day 1 has a floor the curve cannot move (v1.7.0 doc, P1-6).** The curve
+     * picks which UTC days a user gets a SESSION; retention counts EVENTS. A funnel
+     * opened on the birth day spills its later steps across the following
+     * `timeToConvert` hours regardless of the day plan, so day-1 retention sits
+     * near 0.85 for funnel-driven dungeons no matter what `day1` says (measured
+     * 0.885 for an asked 0.15; days 7 and 30 followed the curve). Treat `day1` as
+     * governed by session and funnel structure and verify the curve from day 7 on.
+     * To lower day 1, shorten `timeToConvert` on funnels users enter on birth, or
+     * use an `everything` hook to drop next-day spill.
      */
     retentionCurve?: {
         type?: 'logarithmic' | 'linear';
@@ -532,13 +651,27 @@ export type MacroPreset = "flat" | "steady" | "growth" | "viral" | "decline";
 
 /**
  * Macro configuration object — fine-grained big-picture trend control.
+ *
+ * **Canonical spelling:** `macro: { preset, ...overrides }`. The top-level
+ * `bornRecentBias` / `percentUsersBornInDataset` / `preExistingSpread` keys are
+ * a legacy alias and win over the object when both are set.
+ *
+ * **Two shapes, two contracts (v1.7.0, R2-1):**
+ * - `{ preset: 'growth', percentUsersBornInDataset: 50 }` — a NAMED preset is a
+ *   shape contract, so its born% cap applies (flat 12, steady 12, growth 30,
+ *   viral 55, decline 5). Values above the cap are clamped and reported in
+ *   `result.warnings` (`key: 'percentUsersBornInDataset'`).
+ * - `{ bornRecentBias: 0.3, percentUsersBornInDataset: 50 }` — NO `preset` is a
+ *   custom macro: you own the shape, no cap applies, overrides are honored as
+ *   written (missing fields fill from `flat`). Before 1.7.0 this shape was
+ *   silently capped at 12.
  */
 export type MacroConfig = {
-    /** Use a named macro preset as the base, then override individual fields. */
+    /** Use a named macro preset as the base, then override individual fields. Omit for a custom, uncapped macro. */
     preset?: MacroPreset;
-    /** Bias for birth dates. -1..1; negative = early skew, positive = recent skew, 0 = uniform. */
+    /** Bias for birth dates. -1..1; negative = early skew, positive = recent skew, 0 = uniform. User-explicit values are clamped to [-0.5, 0.5]. */
     bornRecentBias?: number;
-    /** Percentage of users born in dataset window (0..100). */
+    /** Percentage of users born in dataset window (0..100). Capped per named preset; uncapped without `preset`. */
     percentUsersBornInDataset?: number;
     /** "pinned" = pre-existing users stack at FIXED_BEGIN; "uniform" = spread across [FIXED_BEGIN-30d, FIXED_BEGIN]. */
     preExistingSpread?: "pinned" | "uniform";
@@ -835,6 +968,10 @@ export interface RuntimeState {
     eventCount: number;
     storedEventCount: number;
     userCount: number;
+    /** v1.7.0 (R2-5): profiles pushed to storage (ticks at push time; batch-mode safe). */
+    profilesGenerated: number;
+    /** v1.7.0 (R2-5): `_drop`-flagged profiles pushed to storage (never sent to /engage). */
+    profilesDropped: number;
     isBatchMode: boolean;
     verbose: boolean;
 }
@@ -897,6 +1034,14 @@ export interface Context {
     incrementUsers(): void;
     incrementStoredEvents(count?: number): void;
     setStorage(storage: Storage): void;
+    /** v1.7.0 (P2-2): record or bump an aggregated runtime warning (keyed by `entry.key`). */
+    addWarning(entry: EngineWarning): void;
+    /** v1.7.0 (P2-2): aggregated runtime warnings collected so far. */
+    getWarnings(): EngineWarning[];
+    /** v1.7.0 (R2-5) */
+    incrementProfilesGenerated(): void;
+    /** v1.7.0 (R2-5) */
+    incrementProfilesDropped(): void;
 
     // State getter methods
     getOperations(): number;
@@ -926,7 +1071,15 @@ export interface EventConfig {
     properties?: Record<string, ValueValid>;
     /** If true, this is the user's first-ever event (e.g., "sign up"). Used to create onboarding funnels. */
     isFirstEvent?: boolean;
-    /** If true, generating this event signals the user has churned. The user stops producing further events unless returnLikelihood allows them to come back. */
+    /**
+     * If true, generating this event signals the user has churned. The user stops
+     * producing further events unless returnLikelihood allows them to come back.
+     *
+     * A churn event in the standalone pool is drawn by weight like any other, so it
+     * ends every user after roughly `total weight / its weight` events — which caps
+     * per-user volume and washes out `personas[].eventMultiplier` (measured 1.04x
+     * for an asked 3x). Keep its weight low, or drive churn from a hook.
+     */
     isChurnEvent?: boolean;
     /** Probability (0-1) that a churned user returns and continues generating events. 0 = permanent churn, 1 = always returns. Only used when isChurnEvent is true. Default: 0 */
     returnLikelihood?: number;
@@ -1070,10 +1223,33 @@ export interface Funnel {
      */
     props?: Record<string, ValueValid>;
     /**
-     * funnel conditions (user properties) are used to filter users who are eligible for the funnel
-     * these conditions must match the current user's profile for the user to be eligible for the funnel
+     * Profile conditions a user must satisfy to be offered this funnel (AND across
+     * keys). The only engine mechanism that makes ONE segment convert differently on
+     * ONE funnel — `personas[].conversionModifier` applies to every funnel.
+     *
+     * Each value is a scalar (strict equality) or an operator map:
+     * `eq`, `neq`, `in`, `nin`, `gt`, `gte`, `lt`, `lte` (v1.7.0). Operators within
+     * one key AND together. No `or`.
+     *
+     * The duplicate-funnel idiom: two funnels with the same `name` and `sequence`,
+     * different `conditions` and rates.
+     *
+     * @example
+     * userProps: { platform: ['iOS', 'Android'], seats: [1, 5, 10, 20] },
+     * funnels: [
+     *   { name: 'Checkout', sequence: [...], conditions: { platform: 'iOS' }, conversionRate: 80 },
+     *   { name: 'Checkout', sequence: [...], conditions: { platform: 'Android' }, conversionRate: 40 },
+     *   { name: 'Upgrade',  sequence: [...], conditions: { seats: { gte: 10 }, platform: { in: ['iOS', 'Android'] } } },
+     * ]
+     *
+     * Validation (v1.7.0): function values, bare arrays, unknown operators, and
+     * `in`/`nin` without an array THROW — those shapes silently never matched before.
+     * A key not declared in `userProps` / `superProps` / any persona's `properties`
+     * produces a `result.warnings` entry (only a `user` hook could supply it). Users
+     * who match no funnel at all fall through to standalone events; the run reports
+     * how many under `key: 'funnels.conditions'`.
      */
-    conditions?: Record<string, ValueValid>;
+    conditions?: FunnelConditions;
 	/**
 	 * Experiment configuration for this funnel.
 	 *
@@ -1131,7 +1307,9 @@ export interface Funnel {
 	}>;
 
 	/** @internal Resolved experiment config set by config-validator. */
-	_experiment?: { name: string; variants: Array<{ name: string; conversionMultiplier: number; ttcMultiplier: number; weight: number }>; startUnix: number | null; sticky: boolean };
+	_experiment?: { name: string; variants: Array<{ name: string; conversionMultiplier: number; ttcMultiplier: number; weight: number }>; startUnix: number | null; sticky: boolean; stampProfile: boolean };
+	/** @internal v1.7.0 — set by the validator on the engine-synthesized catch-all funnel. */
+	_catchAll?: boolean;
 	/** @internal Set by funnels.js during experiment handling. */
 	_experimentName?: string;
 	/** @internal Set by funnels.js during experiment handling. */
@@ -1214,7 +1392,42 @@ export interface ExperimentConfig {
 	 * variants across passes.
 	 */
 	sticky?: boolean;
+	/**
+	 * v1.7.0 (P0-2) — write the assigned variant onto the user profile as
+	 * `"Experiment: <name>": "<variant>"` so a funnel can be broken down by variant
+	 * without building a cohort from the exposure event. Default `true`. Stamped
+	 * lazily when the user is first exposed (respects `startDaysBeforeEnd`), so
+	 * never-exposed users carry no property and the `user` hook does not see it;
+	 * the `everything` hook does. Ignored when `sticky: false` (a re-rolled variant
+	 * has no single per-user value). The variant is NOT stamped on downstream funnel
+	 * step events (that would add undeclared columns).
+	 */
+	stampProfile?: boolean;
 }
+
+/**
+ * v1.7.0 (P0-1) — one funnel condition: a scalar (strict equality) or an operator map.
+ */
+export type FunnelCondition = Primitives | FunnelConditionOperators;
+
+/** Operator map for a funnel condition. Every operator present must hold (AND). */
+export interface FunnelConditionOperators {
+    /** strict equality */
+    eq?: Primitives;
+    /** strict inequality (a missing profile key satisfies it) */
+    neq?: Primitives;
+    /** value is one of these */
+    in?: Primitives[];
+    /** value is none of these (a missing profile key satisfies it) */
+    nin?: Primitives[];
+    gt?: number | string;
+    gte?: number | string;
+    lt?: number | string;
+    lte?: number | string;
+}
+
+/** Map of profile key → condition. AND across keys. */
+export type FunnelConditions = Record<string, FunnelCondition>;
 
 /** A single variant in an experiment. */
 export interface ExperimentVariant {
@@ -1328,10 +1541,46 @@ export interface GroupProfileSchema {
  */
 export interface ImportResults {
     events: ImportResult;
-    users: ImportResult;
+    /**
+     * v1.7.0 (R2-5): mixpanel-import's receipt plus two engine counters, so the
+     * consumer can reconcile without guessing:
+     * `generated - dropped_anonymous - failed === success`.
+     */
+    users: ImportResult & {
+        /** Profiles the engine pushed to storage (bots included). */
+        generated: number;
+        /** `_drop`-flagged anonymous non-converters that were never sent to /engage. */
+        dropped_anonymous: number;
+    };
     groups: ImportResult[];
 }
 type ImportResult = import("mixpanel-import").ImportResults;
+
+/**
+ * v1.7.0 (P2-2) — one value the engine changed or flagged. `result.warnings` is
+ * always present (empty array when nothing was touched), regardless of `verbose`.
+ *
+ * Validator clamps come first (`severity: 'clamp'`, `applied !== requested`),
+ * then run-level aggregates: conversionRate saturation per funnel and source
+ * (`key: 'funnels[<name>].conversionRate:<source>'`), users matching no
+ * conditioned funnel (`'funnels.conditions'`), churn washing out a persona
+ * multiplier (`'personas.eventMultiplier'`), and a strictEventCount shortfall
+ * (`'numEvents'`). Aggregated entries carry `count`.
+ */
+export interface EngineWarning {
+    /** Config path the entry is about, e.g. `percentUsersBornInDataset`, `funnels[Checkout].conversionRate:persona "power" conversionModifier`. */
+    key: string;
+    /** What the config (or a modifier) asked for. Undefined when nothing was requested (auto-set). */
+    requested?: unknown;
+    /** What the engine used. Equals `requested` for pure warnings. */
+    applied?: unknown;
+    /** Plain-language explanation and what to change. */
+    reason: string;
+    /** `clamp` = a value was changed; `warn` = flagged, nothing changed. */
+    severity: 'clamp' | 'warn';
+    /** Number of occurrences folded into this entry (runtime aggregates only). */
+    count?: number;
+}
 
 /**
  * the end result of the data generation
@@ -1353,6 +1602,11 @@ export type Result = {
     lookupTableData: LookupTableData[][];
     /** Mixpanel import results (only populated when a token was provided). */
     importResults?: ImportResults;
+    /**
+     * v1.7.0 (P2-2): every value the engine clamped or flagged this run. Always
+     * present, even when empty. See `EngineWarning`.
+     */
+    warnings: EngineWarning[];
     /** Absolute paths of all files written to disk. */
     files?: string[];
     /** Timing information. */
@@ -1454,34 +1708,38 @@ export interface Persona {
     name: string;
     /** Relative weight for persona assignment (higher = more users get this persona). */
     weight: number;
-    /** Multiplier for number of events this persona generates (1.0 = normal). */
+    /**
+     * Multiplier on the persona's whole per-user event budget (1.0 = normal). The
+     * budget drives BOTH usage-funnel passes and standalone events, so a 3x persona
+     * runs ~3x as many funnel passes (measured 2.9–3.2x).
+     *
+     * **`isChurnEvent` caps it.** A churn event in the standalone pool ends each
+     * user after roughly the same number of events regardless of budget, so the
+     * multiplier washes out (measured 1.04x for an asked 3x with a weight-1 churn
+     * event among 16 weight units). When more than half the users churn and a
+     * persona multiplier is in play, `result.warnings` carries
+     * `key: 'personas.eventMultiplier'`. Lower the churn event's weight, raise
+     * `returnLikelihood`, or drive churn from a hook.
+     */
     eventMultiplier?: number;
-    /** Multiplier for funnel conversion rates (1.0 = normal, 1.3 = 30% better). */
+    /** Multiplier for funnel conversion rates (1.0 = normal, 1.3 = 30% better). Applies to every funnel; for one segment on one funnel use `Funnel.conditions`. */
     conversionModifier?: number;
     /**
-     * Base churn rate for this persona (0-1).
-     * @deprecated — unimplemented; no-op. The validator defaults it to 0 but no
-     * generator reads it. Model churn with hooks instead (HOOKS.md §3 cohort
-     * atoms + `engagementDecay`).
+     * v1.7.0 (P1-3) — multiplier for funnel `timeToConvert` (1.0 = normal,
+     * 0.5 = converts twice as fast). Composes after an experiment's `ttcMultiplier`
+     * and before the `funnel-pre` hook. Must be a positive number.
      */
-    churnRate?: number;
+    ttcModifier?: number;
     /** Properties merged into user profiles for this persona. */
     properties?: Record<string, ValueValid>;
     /**
-     * Limit how long this persona is active (e.g., trial users active for 14 days).
-     * @deprecated — unimplemented; no-op. Declared surface only; nothing in lib/
-     * reads it. Bound activity windows with an `everything` hook (drop events
-     * outside the window) instead.
+     * Per-persona engagement decay override. This one IS implemented
+     * (`user-loop.js` reads `persona.engagementDecay` before the global one).
+     *
+     * v1.7.0 removed the never-implemented `churnRate`, `activeWindow`, and
+     * `soupOverride` from this type. The validator still accepts and warns on them.
      */
-    activeWindow?: { maxDays: number };
-    /** Per-persona engagement decay override. */
     engagementDecay?: EngagementDecay;
-    /**
-     * Per-persona soup/timing override.
-     * @deprecated — unimplemented; no-op. Declared surface only; nothing in lib/
-     * reads it. Use the top-level `soup` config for timing shape.
-     */
-    soupOverride?: SoupConfig;
 }
 
 /**
@@ -1496,7 +1754,18 @@ export interface WorldEvent {
     startDay: number;
     /** Duration in days (0.25 = 6 hours, null = permanent from startDay onward). */
     duration?: number | null;
-    /** Volume multiplier during this event (3.0 = 3x events, 0.1 = 90% drop). */
+    /**
+     * Volume multiplier during this event (3.0 = 3x events, 0.1 = 90% drop).
+     *
+     * Below 1: affected events are dropped at random so volume falls to the multiple.
+     * Above 1 (v1.7.0, P0-3): affected in-window events are CLONED — `floor(m - 1)`
+     * copies plus one more with probability `frac(m)` (2.5 = one guaranteed clone
+     * and a 50% second) — each with a fresh `insert_id` and a timestamp spread
+     * uniformly across the window (never past the dataset end). Measured 3.06x for
+     * an asked 3x; before 1.7.0 values above 1 were a silent no-op (measured 1.08x).
+     * Clones exist before `engagementDecay` and every hook, so they are visible to
+     * `everything`. The same rule applies to `aftermath.volumeMultiplier`.
+     */
     volumeMultiplier?: number;
     /** Conversion rate modifier during this event. */
     conversionModifier?: number;
