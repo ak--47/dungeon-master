@@ -39,7 +39,7 @@ dungeons/user/           # one folder per customer
 dungeons/vertical/       # one folder per vertical: <name>/<name>.js + <name>.verify.mjs + <name>.sql
 tests/{unit,integration,e2e,engine}/
 docs/guides/             # 1.3.0 → 1.6.0 upgrade guides
-plans/                   # historical implementation plans (ENGINE-VALIDATION, DATAGEN, etc.)
+plans/                   # implementation plans (gitignored, local only). Active: plans/<name>/. Finished: move the whole folder to plans/archived/<name>/ together with its request docs, measurement scripts, and reply — that is the repo convention.
 ```
 
 ## Commands
@@ -112,7 +112,7 @@ Pure-engine output (no hooks) on `dungeons/technical/simplest.js` satisfies a st
 | Knob | Safe range | Validator behavior outside range |
 |------|-----------|----------------------------------|
 | `numDays` | `[14, 365]` | Warn below 14, no clamp |
-| `percentUsersBornInDataset` | `[0, 100]` | Hard clamp to [0,100]. **Per-macro clamp** when both `macro` AND this field are explicit: flat→12, steady→12, growth→30, viral→55, decline→5 |
+| `percentUsersBornInDataset` | `[0, 100]` | Hard clamp to [0,100]. **Per-preset clamp** when a NAMED preset is in play (`macro: 'growth'` or `macro: { preset: 'growth', … }`) AND this field is explicit: flat→12, steady→12, growth→30, viral→55, decline→5. A macro object WITHOUT `preset` is a custom macro — no cap (1.7.0). Every clamp lands in `result.warnings`. |
 | `bornRecentBias` | `[-0.5, 0.5]` | User-explicit values clamped; compound: `born > 60 && bias > 0.4` clamps bias to 0.3. Macro presets exempt (viral=0.6 allowed). |
 | `preExistingSpread` | `'uniform'` (default) or `'pinned'` | n/a |
 | `avgEventsPerUserPerDay` | `[0.1, 50]` | Clamped to 50 above; `numEvents` recomputed |
@@ -120,7 +120,7 @@ Pure-engine output (no hooks) on `dungeons/technical/simplest.js` satisfies a st
 | `retentionCurve` | n/a | Takes precedence over `avgActiveDaysPerUser`; the active-day plan is built from the curve. |
 | `macro` | `'flat' \| 'steady' \| 'growth' \| 'viral' \| 'decline'` (default `'flat'`) | Throws on unknown name |
 
-The per-macro born% clamp is a **shape contract**: born above the cap breaks the macro's characteristic curve via cumulative-acquisition. To go higher, switch macros.
+The per-macro born% clamp is a **shape contract**: born above the cap breaks the macro's characteristic curve via cumulative-acquisition. To go higher, switch macros — or drop `preset` and own the shape with a custom macro object.
 
 ### The 6 strict-bar conditions
 
@@ -210,11 +210,25 @@ Generators should emit one form, never both. Full table in [README.md](README.md
 or the named form (`{ key, cardinality, events? }`). The validator normalizes to tuples,
 so hooks and the verifier only ever see tuples.
 
+**1.7.0 declarative knobs** (prefer these over hooks when they fit): `funnels[].conditions`
+with operator maps (`{ in, nin, eq, neq, gt, gte, lt, lte }`) for one segment on one funnel;
+`experiment.stampProfile` (default true) puts `Experiment: <name>` on the profile;
+`(ctx) => value` property functions read `ctx.profile` / `ctx.event` / `ctx.time`;
+`stickyEventProps` projects profile keys onto every event (schema-first — keys must be
+declared; the schema validator knows about them); `campaignPerUser` pins one campaign per
+user; `personas[].ttcModifier`; `{ __weights: { a: 60, b: 40 } }` and `autoPowerLaw: false`;
+`worldEvents[].volumeMultiplier > 1` clones (fresh `insert_id`, spread across the window).
+Every validator clamp and run-level aggregate lands in `result.warnings` (always present).
+`singleCountry` accepts ISO code or name and throws on a miss. `strictEventCount` is exact
+when capacity allows. `isChurnEvent` in the standalone pool caps per-user volume and washes
+out `eventMultiplier` — the run warns when it does.
+
 ## Critical gotchas
 
 - **ESM only** (`"type": "module"` in `package.json`).
 - **Time model:** events generate in a fixed historical window (`FIXED_NOW = 2024-02-02`), then shift forward to present via `.add(1, "day")`. `FIXED_BEGIN` computes dynamically from `numDays`. Test fixtures rely on this stability.
 - **No global state** beyond `FIXED_NOW`/`FIXED_BEGIN` constants. All state flows through a `Context` object built per run.
+- **Property value functions receive a `ValueContext`** (`{ profile?, event?, time?, config }`, 1.7.0). A function that declares a parameter is context-aware: it skips the source-string cache in `choose()` and, on funnel steps, resolves inside `makeEvent` with the step's final time (`featureCtx.fixedTimeMs`). Bound natives (`chance.x.bind(chance)`) are still called with no argument. Technical fixtures under `dungeons/technical/` instantiate their own unseeded `new Chance()` for some props (`title`, group `name`), so profile/group output from those files is not run-to-run stable — compare events, not profiles, when checking determinism against them.
 - **Seeded RNG everywhere** via `chance` — same seed + same config + `concurrency: 1` = identical output, **with one exception: `insert_id`**. Since 1.4.0 it is a `randomUUID()` ([events.js](lib/generators/events.js)), so it differs on every run by design. Strip `insert_id` before diffing two runs. Everything else — event count, order, timestamps, every property, profiles, groups — is byte-identical. `strictEventCount: true` forces `concurrency: 1`.
 - **Hooks are a single function** on the dungeon config receiving `(record, type, meta)`. Type discriminates the record shape and metadata. See [HOOKS.md §1](HOOKS.md) for the full type table.
 - **Progress callback** (`onProgress`): fault-tolerant, throttled (default 500ms), disabled after 3 throws. Three phases — `generation`, `import`, `step`. Return value includes `progress: { updates, errors, disabled }`.

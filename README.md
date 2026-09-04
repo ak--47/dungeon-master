@@ -155,7 +155,33 @@ import { createTextGenerator, generateBatch } from '@ak--47/dungeon-master/text'
 
 these are the same functions used internally. `pickAWinner` creates weighted distributions, `weighNumRange` generates realistic numeric ranges with configurable skew, and the text generators produce organic-looking strings with sentiment analysis and keyword injection.
 
-**you usually don't need `pickAWinner`** — as of 1.6.1, any property value that is a plain array of 3–19 unique strings automatically gets a stable power-law distribution: one seed-deterministic winner per array per run (~45% winner / ~25% second / ~15% third / decaying tail). to opt out and get uniform draws, use exactly 2 values, 20+, or include one of the keywords `variant` / `group` / `experiment` / `population` in a value (experiment arms stay balanced). arrays with explicit duplicate entries (`["card", "card", "apple_pay"]`) skip the auto-weighting and honor the duplicates exactly.
+**you usually don't need `pickAWinner`** — as of 1.6.1, any property value that is a plain array of 3–19 unique strings automatically gets a stable power-law distribution: one seed-deterministic winner per array per run (~45% winner / ~25% second / ~15% third / decaying tail). to opt out and get uniform draws, use exactly 2 values, 20+, or include one of the keywords `variant` / `group` / `experiment` / `population` in a value (experiment arms stay balanced). arrays with explicit duplicate entries (`["card", "card", "apple_pay"]`) skip the auto-weighting and honor the duplicates exactly — **repeats are the weights** (that array is 2:1).
+
+**state the distribution instead (1.7.0):** `{ __weights: { free: 60, pro: 30, enterprise: 10 } }` draws exactly those shares — no power law, no per-run winner, zero-weight keys never draw. `autoPowerLaw: false` at the top level turns the automatic power law off for the whole run (uniform picks).
+
+```javascript
+userProps: {
+  plan_tier: { __weights: { free: 60, pro: 30, enterprise: 10 } },   // honest 60/30/10
+  platform:  ['iOS', 'Android', 'web'],                              // 45/25/15 power law (default)
+}
+```
+
+**value functions see context (1.7.0):** a property function may declare a `ctx` parameter and read `ctx.profile` (the user's resolved profile), `ctx.event` (the event being built), `ctx.time` (unix ms) and `ctx.config`. this is how one field correlates with another without a hook. zero-arity functions keep working untouched.
+
+```javascript
+userProps: {
+  plan:    ['free', 'pro'],
+  revenue: (ctx) => ctx.profile.plan === 'pro' ? 100 : 10,      // profile keys resolve in declaration order
+},
+events: [{ event: 'Purchased', properties: {
+  price:    () => integer(5, 500),
+  quantity: [1, 1, 1, 2, 3],
+  total:    (ctx) => ctx.event.price * ctx.event.quantity,       // event props resolve in declaration order
+}}],
+superProps: { plan_on_event: (ctx) => ctx.profile.plan },         // or: stickyEventProps: ['plan']
+```
+
+`ctx.profile` is undefined for group profiles, lookup tables, ad spend and mirror props. on funnel steps the step's final time is known before its properties resolve, so `ctx.time` is the real timestamp.
 
 ### named exports
 
@@ -406,9 +432,13 @@ mix and match. most dungeons want `macro: "flat"` (the chart doesn't blow up at 
 ```javascript
 macro: 'flat'                                          // default
 macro: 'growth'                                        // preset string
-macro: { preset: 'growth', percentUsersBornInDataset: 40 }  // preset + override
-macro: { bornRecentBias: 0, percentUsersBornInDataset: 15, preExistingSpread: 'uniform' }  // fully custom
+macro: { preset: 'growth', percentUsersBornInDataset: 40 }  // preset + override (canonical object spelling)
+macro: { bornRecentBias: 0.3, percentUsersBornInDataset: 50 }  // custom macro — no preset, no cap
 ```
+
+**canonical spelling is the object with `preset`.** the top-level `bornRecentBias` / `percentUsersBornInDataset` / `preExistingSpread` keys are a legacy alias and win over the object when both are set.
+
+**a named preset is a shape contract.** its born% cap applies (flat 12, steady 12, growth 30, viral 55, decline 5) whether you spell it `macro: 'growth', percentUsersBornInDataset: 50` or `macro: { preset: 'growth', percentUsersBornInDataset: 50 }` — both clamp to 30 and report it in `result.warnings`. **an object without `preset` is a custom macro**: you own the shape, no cap applies, your numbers are used as written (missing fields fill from `flat`). before 1.7.0 the preset-less object was silently capped at 12.
 
 ## timesoup (intra-week / intra-day rhythm)
 
@@ -537,6 +567,24 @@ funnels: [
 
 ordering strategies: `sequential`, `random`, `first-fixed`, `last-fixed`, `first-and-last-fixed`, `middle-fixed`, `interrupted`
 
+### segmented funnels (`conditions`)
+
+`conditions` is the only mechanism that makes **one segment convert differently on one funnel** — `personas[].conversionModifier` applies to every funnel. a funnel with `conditions` is offered only to users whose profile satisfies every key (AND across keys). the idiom is two funnels with the same `name` and `sequence`, different `conditions` and rates:
+
+```javascript
+userProps: { platform: ['iOS', 'Android'], seats: [1, 5, 10, 20] },
+funnels: [
+  { name: 'Checkout', sequence: ['Viewed Item', 'Purchased'], conditions: { platform: 'iOS' },     conversionRate: 80, timeToConvert: 0.5 },
+  { name: 'Checkout', sequence: ['Viewed Item', 'Purchased'], conditions: { platform: 'Android' }, conversionRate: 40, timeToConvert: 4 },
+  { name: 'Upgrade',  sequence: ['Viewed Plans', 'Upgraded'],
+    conditions: { seats: { gte: 10 }, plan_tier: { in: ['pro', 'enterprise'] }, country: { neq: 'US' } } },
+]
+```
+
+each value is a scalar (strict equality) or an operator map with any of `eq`, `neq`, `in`, `nin`, `gt`, `gte`, `lt`, `lte` (1.7.0). operators within one key AND together; there is no `or`. measured: iOS 80.2% vs Android 39.8% purchased-per-viewed on the config above.
+
+the validator throws on shapes that can never match (a function, a bare array — use `{ in: [...] }`, an unknown operator, `in`/`nin` without an array). a condition key that is not declared in `userProps`, `superProps`, or a persona's `properties` lands in `result.warnings` — only a `user` hook could supply it. users who satisfy none of your funnels fall through to standalone events; the run reports how many under `result.warnings` (`key: 'funnels.conditions'`).
+
 ### experiments
 
 experiments are a property of funnels. any funnel with `experiment` set fires a `$experiment_started` event (with `Experiment name` / `Variant name` properties) at the start of every qualifying pass, and the assigned variant's `conversionMultiplier` / `ttcMultiplier` modify that pass:
@@ -556,6 +604,8 @@ experiment: {
 
 variant assignment is **sticky by default**: a deterministic hash of `user_id` + experiment name, so a user keeps their variant across every funnel pass (matches Mixpanel experiment SDK bucketing and makes variant lift verifiable). set `sticky: false` to re-roll the variant on each pass with the seeded RNG. hooks see the resolved variant on `meta.experiment` in `funnel-pre` / `funnel-post`.
 
+**the variant lands on the user profile (1.7.0).** every exposed user carries `"Experiment: <name>": "<variant>"` (e.g. `"Experiment: Checkout Redesign": "New Checkout"`), so the funnel breaks down by variant in Mixpanel with a user-property breakdown — no cohort built from the exposure event. stamped when the user is first exposed (respects `startDaysBeforeEnd`); never-exposed users carry nothing; the `user` hook fires before exposure and does not see it, the `everything` hook does. `stampProfile: false` turns it off; `sticky: false` implies off. measured: 0 mismatches between the profile value and the `Variant name` on 13,005 exposure events.
+
 ## user generation
 
 users are generated with configurable birth distributions, normally controlled via the `macro` preset (see "time shape" above). these three knobs can also be set directly on the dungeon config — they override the preset's values.
@@ -572,6 +622,48 @@ users are generated with configurable birth distributions, normally controlled v
   macro: { preset: 'growth', percentUsersBornInDataset: 40, bornRecentBias: 0.5 }
 }
 ```
+
+### personas
+
+`personas` split users into behavioral segments. each persona carries a `weight` (share of users), `properties` merged into the profile, and three multipliers:
+
+| field | applies to | default |
+|---|---|---|
+| `eventMultiplier` | the whole per-user event budget — funnel passes AND standalone events. a 3x persona runs ~3x the funnel passes (measured 2.9–3.2x) | 1.0 |
+| `conversionModifier` | `conversionRate` on every funnel (for one segment on one funnel use `conditions`) | 1.0 |
+| `ttcModifier` | `timeToConvert` on every funnel (0.25 = converts four times faster; measured median 0.50h vs 1.96h) — 1.7.0 | 1.0 |
+
+**`isChurnEvent` caps `eventMultiplier`.** a churn event in the standalone pool is drawn by weight like any other event, so it ends every user after roughly the same number of events regardless of budget — the multiplier washes out (measured 1.04x for an asked 3x with a weight-1 churn event among 16 weight units; 2.90x without it). when more than half the users churn and a persona multiplier is in play, `result.warnings` says so (`key: 'personas.eventMultiplier'`). lower the churn event's weight, raise `returnLikelihood`, or drive churn from a hook.
+
+1.7.0 removed the never-implemented `churnRate`, `activeWindow` and `soupOverride` from the `Persona` type. the validator still accepts and warns on them. `engagementDecay` per persona IS implemented and stays.
+
+### sticky event properties
+
+`superProps` re-roll on every event. to put a **stable per-user value on events** — the property behind the most common mixpanel breakdown — name profile keys in `stickyEventProps` (1.7.0):
+
+```javascript
+userProps:  { plan_tier: ['free', 'pro', 'enterprise'], platform: ['iOS', 'Android'] },
+superProps: { app_version: ['1.0', '1.1', '2.0'] },
+switches:   { stickyEventProps: ['plan_tier', 'platform', 'app_version'] },   // or top-level
+```
+
+each key must be declared in `userProps`, a persona's `properties`, or `superProps` (schema-first; undeclared keys throw). profile keys copy the profile's value (after the `user` hook). keys declared only in `superProps` resolve once per user and hold constant. sticky values land after `superProps` and before the `event` hook. measured: 67,355 of 67,355 events matched their profile. `(ctx) => ctx.profile.plan_tier` on a super prop does the same thing one field at a time.
+
+with `hasLocation: true`, a user's events now share the user's city / region / country (1.7.0). before, every event drew a fresh random city — 0.8% of events matched their own profile.
+
+### campaigns per user
+
+`hasCampaigns: true` stamps UTMs on up to `maxTouchpointsPerUser` events per user, and before 1.7.0 every touchpoint drew a fresh random campaign — attribution data was uncorrelated noise. `campaignPerUser: true` (1.7.0) draws **one acquisition campaign per user** at birth, stamps its `utm_source` / `utm_campaign` / `utm_medium` / `utm_content` / `utm_term` on the profile, and every touchpoint carries those same values. any UTM key already on the profile wins over the draw, so a persona can own a channel:
+
+```javascript
+switches: { hasCampaigns: true, campaignPerUser: true },
+personas: [
+  { name: 'paid search', weight: 30, conversionModifier: 2.0, properties: { utm_source: 'google', utm_medium: 'cpc' } },
+  { name: 'everyone else', weight: 70 },
+]
+```
+
+"paid search converts 2x better than organic" is now declarative. measured: 0 of 399 users with more than one `utm_source`; 400 of 400 profiles carry it. ad spend is still independent of acquisitions (deferred to 1.8.0).
 
 ## seeded generation
 
@@ -705,7 +797,7 @@ three groups of keys accept both a nested sub-object and a flat top-level form:
 | sub-object | keys it groups |
 |---|---|
 | `credentials` | `token`, `region`, `serviceAccount`, `serviceSecret`, `projectId` |
-| `switches` | `hasLocation`, `hasCampaigns`, `hasAdSpend`, `hasSessionIds`, `hasAvatar`, `hasIOSDevices`, `hasAndroidDevices`, `hasDesktopDevices`, `hasBrowser`, `isAnonymous`, `alsoInferFunnels` |
+| `switches` | `hasLocation`, `hasCampaigns`, `hasAdSpend`, `hasSessionIds`, `hasAvatar`, `hasIOSDevices`, `hasAndroidDevices`, `hasDesktopDevices`, `hasBrowser`, `isAnonymous`, `alsoInferFunnels`, `singleCountry`, `campaignPerUser`, `stickyEventProps` |
 | `identity` | `avgDevicePerUser`, `sessionTimeout` |
 
 **the sub-object form is canonical.** the flat top-level keys are a back-compat
@@ -726,6 +818,31 @@ you will not see unless `verbose: true`.
 
 `hasAttributionFlags` is **not** a switch. the validator derives it from
 `events[].isAttributionEvent`; setting it has no effect.
+
+### `result.warnings` — what the engine changed
+
+every value the engine clamped or flagged comes back on the result, regardless of
+`verbose` (1.7.0). a config UI that shows the requested value can now show the
+applied one instead of lying:
+
+```javascript
+const { warnings } = await DUNGEON_MASTER({ macro: 'growth', percentUsersBornInDataset: 80, ... });
+// [{ key: 'percentUsersBornInDataset', requested: 80, applied: 30, severity: 'clamp',
+//    reason: 'macro preset "growth" caps percentUsersBornInDataset at 30 to keep its shape; ...' }]
+```
+
+validator clamps come first (`percentUsersBornInDataset`, `bornRecentBias`,
+`avgEventsPerUserPerDay`, `avgActiveDaysPerUser`, the `numDays < 14` and
+`engagementDecay` warnings, auto-set `conversionWindowDays`), then run-level
+aggregates with a `count`: `conversionRate` saturation per funnel and source
+(`funnels[Checkout].conversionRate:persona "whale" conversionModifier`, requested 195,
+applied 100), users matching no conditioned funnel (`funnels.conditions`), churn
+washing out a persona multiplier (`personas.eventMultiplier`), and a
+`strictEventCount` shortfall (`numEvents`). always an array, empty when nothing was
+touched. console output stays `verbose`-gated.
+
+the engine can only report its own clamps. a hook's own `Math.min(95, rate * 3)` never
+reaches it — that cap belongs to the hook. see HOOKS.md.
 
 ### group keys
 
@@ -762,16 +879,20 @@ see [types.d.ts](types.d.ts) for the complete `Dungeon` interface. here are the 
 | `writeToDisk` | boolean/string | false | write files to ./data/ or a gs:// path |
 | `gzip` | boolean | false | compress output files |
 | `verbose` | boolean | false | print progress |
-| `strictEventCount` | boolean | false | stop at exact numEvents |
+| `strictEventCount` | boolean | false | deliver exactly `numEvents` (forces `concurrency: 1`). 1.7.0: exact when capacity allows; a shortfall lands in `result.warnings` (`key: 'numEvents'`) |
+| `autoPowerLaw` | boolean | true | `false` turns off the automatic 45/25/15 draw on 3–19-item string arrays (uniform picks). prefer `{ __weights }` |
+| `stickyEventProps` | string[] | `[]` | profile keys copied onto every event of the user (schema-first: must be declared) |
+| `campaignPerUser` | boolean | false | one campaign per user; UTMs on the profile and on every touchpoint. needs `hasCampaigns` |
+| `singleCountry` | string | undefined | pin `hasLocation` geo to one country by ISO code or name (`'US'`, `'United States'`). a value that matches nothing throws |
 | `batchSize` | number | 2500000 | records before auto-flush |
 | `concurrency` | number | 1 | parallel user generation |
-| `macro` | string/object | `'flat'` | big-picture trend preset (flat/steady/growth/viral/decline) |
+| `macro` | string/object | `'flat'` | big-picture trend preset (flat/steady/growth/viral/decline). canonical object spelling `{ preset, ...overrides }`; an object without `preset` is a custom, uncapped macro |
 | `soup` | string/object | `'growth'` | intra-week / intra-day rhythm preset |
 | `bornRecentBias` | number | 0 (from macro `flat`) | user birth date skew (safe range [-0.5, 0.5]; user-explicit values outside the band are clamped) |
-| `percentUsersBornInDataset` | number | 12 (from macro `flat`) | % of users born in window (clamped per-macro when both `macro` and this field are explicit) |
+| `percentUsersBornInDataset` | number | 12 (from macro `flat`) | % of users born in window (clamped to the named preset's cap; every clamp lands in `result.warnings`) |
 | `preExistingSpread` | string | `'uniform'` (from macro `flat`) | placement of pre-existing users' first event |
 | `avgActiveDaysPerUser` | number | undefined | concentrate events onto N distinct UTC days per user (preserves total event count). ignored when `retentionCurve` is set; warns when combined with `engagementDecay` |
-| `retentionCurve` | object | undefined | per-day return probabilities. **wins over `avgActiveDaysPerUser`** when both are set |
+| `retentionCurve` | object | undefined | per-day return probabilities. **wins over `avgActiveDaysPerUser`** when both are set. **day 1 has a floor near 0.85 the curve cannot move** — funnel steps spill into the next day regardless of the day plan (measured 0.885 for an asked 0.15; days 7 and 30 follow the curve). verify from day 7 on |
 | `maxTouchpointsPerUser` | number | 10 | UTM stamping cap per user (Mixpanel `TOUCHPOINTS_LIMIT` parity) |
 | `autoSortAfterEverything` | boolean | true | sort events by time after `everything` hook (defends greedy funnel engine) |
 | `hook` | function/string | passthrough | data transformation function |

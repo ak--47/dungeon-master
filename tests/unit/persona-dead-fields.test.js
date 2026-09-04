@@ -38,8 +38,11 @@ describe('P2.5 dead persona fields — one-time validator warning', () => {
 			'persona-dead-absent',
 		));
 		expect(deadFieldWarns(spy)).toHaveLength(0);
-		// Legacy default still applied (declared surface unchanged).
-		expect(config.personas[0].churnRate).toBe(0);
+		// v1.7.0: churnRate is no longer defaulted — it was removed from the Persona
+		// type (dead field). The validator still accepts + warns when a dungeon sets it.
+		expect(config.personas[0].churnRate).toBeUndefined();
+		// v1.7.0 (P1-3): ttcModifier defaults to 1.0 alongside the other modifiers.
+		expect(config.personas[0].ttcModifier).toBe(1.0);
 	});
 
 	test('warns exactly once across repeated validations, listing the set fields', () => {

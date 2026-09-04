@@ -28,7 +28,7 @@ describe('Feature 1: Personas', () => {
 			]
 		});
 		expect(config.personas).toHaveLength(2);
-		expect(config.personas[0].churnRate).toBe(0); // default
+		expect(config.personas[0].ttcModifier).toBe(1.0); // v1.7.0 default (churnRate was a dead field, removed)
 		expect(config.personas[1].conversionModifier).toBe(1.0); // default
 	});
 

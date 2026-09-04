@@ -2,6 +2,195 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.7.0 — 2026-09-03
+
+The engine round for DM4 v5. Executes the 1.6.4 "Deferred to 1.7.0" table plus
+the five round-two items (`dm-engine-round-two.md`) and the three round-one items
+that table missed (P0-3, P1-5, P1-6). Every behavior change below carries the
+number that proved the gap and the number after the fix, both from real
+generation passes (400 users × 60 days unless stated; scripts in the session
+scratchpad, assertions pinned in `tests/integration/v170-engine-requests.test.js`).
+
+**Output compatibility.** Same seed, same config, `concurrency: 1`, pinned window:
+1.7.0 and 1.6.5 produce byte-identical **events** (modulo `insert_id`) on every
+technical fixture that does not set `hasLocation` — `simplest`, `datagen-v15-verify`,
+`experiments`, `group-analytics`, `mirror-strategies`, `ad-spend`, `anonymous-users`
+(the funnel-step time pin below still runs TimeSoup, so the RNG stream is
+unchanged). Profiles and groups are identical where the fixture is deterministic
+(`datagen-v15-verify`, `ad-spend`, `anonymous-users`); `simplest`, `experiments`,
+`group-analytics` and `scd` build some profile/group props from their own unseeded
+`new Chance()` and were never run-to-run stable. Three changes alter output on
+purpose, each gated on a feature you would know you are using — see **Behavior
+changes** (B1–B3). The 10-test engine-shape canary passes; `smoke-test-all` runs
+22/22 shipped dungeons clean. The full 194-combo strict-bar sweep
+(`RUN_FULL_SWEEP=1`, 2026-09-04, window pinned to Wednesday 2026-09-02) passes
+191/194. The 3 failures are one config three times — `growth/365d/r1.2` with
+born `-`/`30`/`100`, which the growth cap resolves to the same 30 — failing the
+last-day bar at ratio 0.66 vs 0.70. Running the same `long` tier on 1.6.5 (`main`)
+produces the identical 3 failures with identical numbers, so this is a
+pre-existing, calendar-window-dependent marginal dip on one 365-day config, not a
+1.7.0 regression. Tracked as a follow-up; not a release blocker.
+
+**For DM4: tripwires that now flip.** `tests/integration/v5-engine.test.js` pins
+several of the old behaviors; when these assertions fail on 1.7.0 that is the fix
+landing, and the workaround it guards can go:
+- the spike hook for The Moment (`volumeMultiplier` amplifies — P0-3)
+- the flat-only born-share restriction (`macro: { bornRecentBias, percentUsersBornInDataset }` with no `preset` is uncapped — R2-1)
+- the 19-country `SINGLE_COUNTRY_NAMES` enum in `tests/v5-render.test.js` (`singleCountry: 'US'` works; a miss throws — R2-2)
+- the `importResults.users.success` overwrite (the receipt reconciles — R2-5)
+- the repeated-value weighting idiom (`{ __weights }` — P2-1)
+- the "fewer than two non-funnel events" refusal on Persona Difference — its premise was wrong; see P1-5 below
+
+### Tier 1 — silent lies fixed
+
+- **R2-1 `MacroConfig` object overrides.** Measured before: `macro: { preset: 'flat',
+  percentUsersBornInDataset: 50 }` → 10.3% born; `macro: { percentUsersBornInDataset: 50 }`
+  (no preset) → 10.0%; only the top-level key with no `macro` at all gave 52.3%.
+  Cause: the born% cap keyed the preset-less object to `flat` (12) and the warning was
+  `verbose`-gated. Now: a NAMED preset (string or `{ preset }`) is a shape contract and
+  still clamps — 12.3% after, with the clamp in `result.warnings`
+  (`{ key: 'percentUsersBornInDataset', requested: 50, applied: 12 }`); an object
+  WITHOUT `preset` is a custom macro and is honored as written — 55.0% after for
+  `{ percentUsersBornInDataset: 50 }`, 48.8% for `{ bornRecentBias: 0.3, percentUsersBornInDataset: 50 }`.
+  Canonical spelling: `macro: { preset, ...overrides }`; the top-level keys are a legacy
+  alias that wins over the object. Documented in README, `MacroConfig` JSDoc, CLAUDE.md.
+- **R2-2 `singleCountry`.** Accepts the ISO code or the full name, case-insensitive
+  (`resolveSingleCountry`, also hoisted from `switches`). A value matching no country
+  THROWS with the list of valid values. Measured before: `'US'` and `'Narnia'` both
+  silently deleted every geo property from events and profiles; after: `'US'` → 100%
+  `country_code: US` on events and profiles.
+- **R2-3 `strictEventCount` is exact.** Before: stopped on the GENERATED count (drops
+  included) and never topped up — 4,987 of 5,000 with ~4x headroom (DM4 measured 4,705
+  on its config). Now: the bailout reads the STORED count; a per-user budget controller
+  scales the remaining users' budgets by (events still needed ÷ expected remaining
+  delivery at the realized yield), clamped to [0.25, 4], aiming slightly high; the
+  final user's stream is trimmed with a seeded uniform sample so the count never
+  exceeds the target. Measured: 5,000 of 5,000; 30,000 of 30,000; test pins 3,000 of
+  3,000. When capacity cannot reach the target (e.g. a churn event ends every user
+  early) the run stops short and `result.warnings` carries
+  `{ key: 'numEvents', requested, applied }`. User creation still stops once the target
+  is met (legacy). Only under the flag — the default path is untouched.
+- **R2-5 profile receipt.** `importResults.users` now carries `generated` (profiles the
+  engine pushed to storage, bots included) and `dropped_anonymous` (`_drop`-flagged
+  anonymous non-converters never sent to `/engage`) alongside mixpanel-import's
+  `success` / `failed`, so `generated - dropped_anonymous - failed === success` is
+  checkable. Counters tick at push time, so they hold in batch mode. The sender logs
+  a line when the receipt does not reconcile. DM4's "100 generated, 45 reported" is
+  now decidable from the result object.
+
+### Tier 2 — the deferred 1.7.0 feature set
+
+- **P0-1 `funnels[].conditions`: operators, validation, docs, tests.** Operator maps
+  `eq`, `neq`, `in`, `nin`, `gt`, `gte`, `lt`, `lte` (AND within a key, AND across keys;
+  no `or`); the scalar shorthand is unchanged. Matching moved to
+  `lib/utils/conditions.js` (re-exported from user-loop). The validator THROWS on
+  shapes that silently never matched — function values, bare arrays (points at
+  `{ in: [...] }`), unknown operators, `in`/`nin` without an array — and warns into
+  `result.warnings` when a condition key is declared nowhere the profile is built from.
+  Users who satisfy none of the author's funnels (the engine catch-all excluded) are
+  counted and reported once per run (`key: 'funnels.conditions'`). Measured: iOS 80.2%
+  vs Android 39.8% purchased-per-viewed on the duplicate-funnel idiom; `{ gte: 10 }` 89.7%
+  vs `{ lt: 10 }` 20.0%. README "segmented funnels", typed `FunnelConditions`, 30 unit
+  cases + integration coverage of the filter branch that had none.
+- **P0-2 experiment variant on the profile.** Every exposed user carries
+  `"Experiment: <name>": "<variant>"`, stamped lazily at first exposure (so
+  `startDaysBeforeEnd` is respected and never-exposed users carry nothing), before the
+  `everything` hook. `experiment.stampProfile` (default `true`) opts out; `sticky: false`
+  implies off. Not stamped on step events (would be undeclared columns). Measured: 0
+  mismatches against `Variant name` on 13,005 exposure events.
+- **P1-1 `(ctx) => value`.** `choose(value, ctx)` passes
+  `{ profile?, event?, time?, config }` to every property function. Zero-arity functions
+  are untouched; a function that declares a parameter is context-aware and skips the
+  source-string cache (which would otherwise freeze its first result). Bound natives
+  (`chance.animal.bind(chance)`) are still called with no argument. Funnel steps after
+  the first now know their final time before properties resolve (`fixedTimeMs`, fed by
+  a synchronous side channel from step 0) — TimeSoup still runs so the RNG stream is
+  unchanged; context-aware step properties defer from `buildFunnelEvents` into
+  `makeEvent`. `json-evaluator` emits `(ctx) => body` for expression bodies and passes
+  whole-function bodies through unwrapped. Measured: 203 of 203 `pro` users got
+  `revenue: 100` from `(ctx) => ctx.profile.plan === 'pro' ? 100 : 0`; 0 events without
+  profile context.
+- **P1-2 `stickyEventProps` + stable location (B2).** `stickyEventProps: ['plan_tier']`
+  copies the profile value onto every event after `superProps`, before the `event`
+  hook; keys declared only in `superProps` resolve once per user. Schema-first: undeclared
+  keys throw; `lib/verify/schema-validator.js` treats sticky keys as legal on every event.
+  Measured: 67,355 of 67,355 events matched the profile. **B2:** with `hasLocation: true`
+  a user's events now share the user's location — `featureCtx.userLocation` was computed
+  and never read; measured 0.8% of events matched their profile city before, 100% after.
+- **P1-3 `personas[].ttcModifier`.** Multiplies `timeToConvert` after the experiment
+  `ttcMultiplier`, before `funnel-pre`. Measured median TTC 0.50h vs 1.96h for 0.25 vs 1.
+  **B3:** `churnRate`, `activeWindow`, `soupOverride` removed from the `Persona` type
+  (never implemented); the validator still accepts and warns on them, and no longer
+  defaults `churnRate`.
+- **P1-4 `campaignPerUser`.** One campaign template per user at birth; UTMs stamped on
+  the profile and reused on every touchpoint. Profile UTM keys already present (persona
+  `properties`, `user` hook) win over the draw, so a persona can own a channel. Measured:
+  0 of 399 users with more than one `utm_source` (400 of 400 before). Ad spend derived
+  from acquisitions is deferred to 1.8.0.
+- **P2-1 `{ __weights }` + `autoPowerLaw`.** `{ __weights: { free: 60, pro: 30,
+  enterprise: 10 } }` draws exactly those shares (measured 239/123/38 over 400 users);
+  `autoPowerLaw: false` turns the implicit 45/25/15 draw off for the run (module flag set
+  per run, reset with the value caches). Both round-trip through `dungeon-to-json`.
+- **P2-2 `result.warnings[]`.** Always present. Validator clamps (`percentUsersBornInDataset`,
+  `bornRecentBias`, compound bias, `avgEventsPerUserPerDay`, `avgActiveDaysPerUser`,
+  `numDays < 14`, `engagementDecay` + active days, auto-set `conversionWindowDays`) plus
+  runtime aggregates via `context.addWarning` (one entry per key with `count`). Console
+  output stays `verbose`-gated. `EngineWarning` type.
+- **P2-4 `conversionRate` saturation.** Every engine clamp of a modified rate above 100
+  — experiment variant, persona, world event, or whatever a `funnel-pre` hook left behind
+  — is reported once per funnel and source
+  (`funnels[Buy].conversionRate:persona "whale" conversionModifier`, requested 195,
+  applied 100). The engine cannot see a hook's own `Math.min(95, rate * 3)`; HOOKS.md
+  says so.
+
+### Tier 3 — open items outside the deferred table
+
+- **P0-3 `worldEvents[].volumeMultiplier > 1` amplifies.** New per-user pass
+  `amplifyWorldEvents` clones affected in-window events — `floor(m − 1)` copies plus one
+  with probability `frac(m)` — each with a fresh `insert_id` and a timestamp spread
+  uniformly across the window (never past the dataset end), after the churn cut and
+  before decay and hooks. Measured 3x on a 4-day window: **1.08x before, 3.06x after**,
+  all `insert_id`s unique, clones on every window day; 1.5x lands in [1.3, 1.7].
+  `aftermath.volumeMultiplier` follows the same rule. Validation rejects negative or
+  non-finite multipliers.
+- **P1-5 `eventMultiplier` and funnels — the premise was wrong.** The multiplier scales
+  the whole per-user budget, which drives funnel passes too: measured **3.19x / 2.96x**
+  for an asked 3x with every event a funnel step. DM4's 0.96x came from its fixture's
+  `isChurnEvent` (`Churned`, weight 1, `returnLikelihood: 0.15`): a churn event in the
+  standalone pool ends every user after roughly the same number of events regardless of
+  budget — measured **1.04x with the churn event, 2.90x without**, same config. The
+  engine now reports it (`key: 'personas.eventMultiplier'`) when more than half the
+  users churn while a persona multiplier is in play; `eventMultiplier` and `isChurnEvent`
+  docs state the cap. DM4 should replace its "fewer than two non-funnel events" check
+  with a churn-event check.
+- **P1-6 day-1 retention floor — documented (option 2).** `retentionCurve` picks session
+  days; retention counts events; birth-day funnels spill into day 1 regardless of the
+  day plan, so day 1 sits near 0.85 (DM4 measured 0.885 for an asked 0.15; days 7 and 30
+  follow the curve). Stated in the `retentionCurve` JSDoc, README config table, and
+  HOOKS.md §2.7. Verify from day 7 on.
+
+### Behavior changes (not purely additive)
+
+- **B1** — `conditions` values that are functions or bare arrays now THROW at validation.
+  Any dungeon relying on them was already producing an empty funnel.
+- **B2** — `hasLocation: true` now yields one stable location per user on events instead
+  of a fresh random city per event. Event geo distributions change; `scd.js` (the one
+  technical fixture with `hasLocation`) is the reference.
+- **B3** — `churnRate`, `activeWindow`, `soupOverride` are gone from the `Persona` type.
+  Runtime still accepts them with the existing once-per-process warning.
+- World-event windows on funnel steps after the first now test the step's FINAL time
+  (previously the pre-offset TimeSoup time). Only dungeons combining `worldEvents` with
+  multi-step funnels see different `_drop` / `injectProps` decisions; the fix is what the
+  docs always described.
+
+### Not built (by request)
+
+Session replay, per-funnel `soup`, `or` conditions, anything in `stories` / `verify` /
+`emulateBreakdown`, and ad spend derived from acquisitions (P1-4 item 3, 1.8.0). R2-4
+(the verticals as DM4 templates) is deferred to its own sprint per AK: each vertical
+should demonstrate a different declarative trend type so the template gallery doubles
+as a catalog demo; the R2-4 audit stands as that sprint's punch list.
+
 ## 1.6.5 — 2026-09-02
 
 ### Changed

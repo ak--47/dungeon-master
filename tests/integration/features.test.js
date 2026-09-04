@@ -264,7 +264,8 @@ describe('json evaluator', () => {
 			functionName: 'arrow',
 			body: 'Math.random() * 100'
 		});
-		expect(result).toBe('() => Math.random() * 100');
+		// v1.7.0 (P1-1): arrow bodies receive the value context.
+		expect(result).toBe('(ctx) => Math.random() * 100');
 	});
 
 	test('convertDungeonConfig processes objects', () => {
