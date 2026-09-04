@@ -22,7 +22,14 @@ unchanged). Profiles and groups are identical where the fixture is deterministic
 `new Chance()` and were never run-to-run stable. Three changes alter output on
 purpose, each gated on a feature you would know you are using — see **Behavior
 changes** (B1–B3). The 10-test engine-shape canary passes; `smoke-test-all` runs
-22/22 shipped dungeons clean.
+22/22 shipped dungeons clean. The full 194-combo strict-bar sweep
+(`RUN_FULL_SWEEP=1`, 2026-09-04, window pinned to Wednesday 2026-09-02) passes
+191/194. The 3 failures are one config three times — `growth/365d/r1.2` with
+born `-`/`30`/`100`, which the growth cap resolves to the same 30 — failing the
+last-day bar at ratio 0.66 vs 0.70. Running the same `long` tier on 1.6.5 (`main`)
+produces the identical 3 failures with identical numbers, so this is a
+pre-existing, calendar-window-dependent marginal dip on one 365-day config, not a
+1.7.0 regression. Tracked as a follow-up; not a release blocker.
 
 **For DM4: tripwires that now flip.** `tests/integration/v5-engine.test.js` pins
 several of the old behaviors; when these assertions fail on 1.7.0 that is the fix
