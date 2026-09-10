@@ -2489,6 +2489,21 @@ export interface WarehouseMetricSource {
 }
 
 export interface WarehouseMetricConfig {
+    /**
+     * @example
+     * warehouseMetrics: [{
+     *   name: 'daily_active_subscriptions',
+     *   type: 'point-in-time',
+     *   source: {
+     *     event: 'subscription_started',
+     *     minus: 'subscription_cancelled',
+     *     measure: 'count',
+     *   },
+     *   baseline: 40,
+     *   timeColumn: 'date',
+     *   valueColumn: 'active_subscriptions',
+     * }]
+     */
     /** Unique metric/table name. Must match `/^[a-z][a-z0-9_]{0,63}$/`. */
     name: string;
     /** Metric family: additive sums per bucket vs point-in-time carried levels. Default: `'additive'`. */

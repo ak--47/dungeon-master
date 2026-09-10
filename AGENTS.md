@@ -14,7 +14,7 @@ The default export accepts: a config object, a path to a `.js`/`.mjs`/`.json` du
 |---|---|
 | User-facing API, config reference, examples, full preset tables | [README.md](README.md) |
 | Hook encyclopedia, recipes, Mixpanel counting semantics | [HOOKS.md](HOOKS.md) |
-| Per-version upgrade guides (1.3 → 1.6) | [docs/guides/](docs/guides/) |
+| Per-version upgrade guides (1.3 → 1.8) | [docs/guides/](docs/guides/) |
 | Per-dungeon stories + verify scripts (vertical dungeons) | [dungeons/vertical/README.md](dungeons/vertical/README.md) |
 | Full `Dungeon` interface | [types.d.ts](types.d.ts) |
 | Changelog | [CHANGELOG.md](CHANGELOG.md) |
@@ -183,7 +183,7 @@ After creating or modifying a dungeon, run `/verify-dungeon` to validate schema 
 
 ## Skills pipeline
 
-Schema → hooks → verify → provision → build, six slash commands at [.claude/skills/](.claude/skills/):
+Schema → hooks → verify → provision → build, seven slash commands at [.claude/skills/](.claude/skills/):
 
 | Skill | What it does |
 |-------|--------------|
@@ -193,6 +193,7 @@ Schema → hooks → verify → provision → build, six slash commands at [.cla
 | `/analyze-soup <dungeon-path>` | Run a dungeon and analyze its time distribution at week/day/hour granularities. |
 | `/create-project <dungeon-path>` | Provisions a real Mixpanel project for an existing dungeon via the power-tools API (createProject + setTimezone UTC + mintServiceAccount + addGroupKey + setBusinessContext), then writes `credentials` back into the dungeon. Always creates fresh. Needs `BEARER_TOKEN` + `ORG_ID` in `.env`. Orchestrator: [.claude/skills/create-project/provision.mjs](.claude/skills/create-project/provision.mjs). |
 | `/headless-build <dungeon-path>` | AFTER data is loaded: builds the demoable Mixpanel environment with `mixpanel_headless` — dashboards whose narrative is computed live, Lexicon enrichment, cohorts, custom properties, behaviors/metrics/formulas, annotations — then re-measures every hook story **against the live project** and fails on a miss. Build code lives in `dungeons/user/<name>/build/`. |
+| `/deploy-warehouse <dungeon-path>` | AFTER a warehouse dungeon has run: loads the emitted `-WAREHOUSE-*` tables into BigQuery, connects the dataset to Mixpanel with the existing powertools macro, previews each metric SQL, and saves warehouse metrics when the CRUD endpoints are available. Dry-run is the review path; the direct live script does not prompt, so explicit operator consent is required before live execution. If the list route 404s, it still loads/connects and writes `warehouse/GAPS.md` for manual setup. |
 
 Use the existing `scripts/verify-runner.mjs` — do not create a new runner.
 
@@ -223,10 +224,16 @@ Every validator clamp and run-level aggregate lands in `result.warnings` (always
 when capacity allows. `isChurnEvent` in the standalone pool caps per-user volume and washes
 out `eventMultiplier` — the run warns when it does.
 
+**1.8.0 metric-table surfaces:** `standaloneEvents` emits identity-less cadence rows that
+import as events. `warehouseMetrics` materializes local warehouse source tables plus a
+manifest from the run's own event stream. `warehouseMetrics` is NOT part of
+`sendToMixpanel`; deploy it afterward with `/deploy-warehouse` from the emitted
+`-WAREHOUSE-MANIFEST.json` and table files.
+
 ## Critical gotchas
 
 - **ESM only** (`"type": "module"` in `package.json`).
-- **Time model:** events generate in a fixed historical window (`FIXED_NOW = 2024-02-02`), then shift forward to present via `.add(1, "day")`. `FIXED_BEGIN` computes dynamically from `numDays`. Test fixtures rely on this stability.
+- **Time model:** events generate directly inside the resolved dataset window `[FIXED_BEGIN, FIXED_NOW]`. No shift step. `FIXED_BEGIN` / `FIXED_NOW` come from the validated `datasetStart` / `datasetEnd` pair when pinned, else from the derived window. Test fixtures rely on this stability.
 - **No global state** beyond `FIXED_NOW`/`FIXED_BEGIN` constants. All state flows through a `Context` object built per run.
 - **Property value functions receive a `ValueContext`** (`{ profile?, event?, time?, config }`, 1.7.0). A function that declares a parameter is context-aware: it skips the source-string cache in `choose()` and, on funnel steps, resolves inside `makeEvent` with the step's final time (`featureCtx.fixedTimeMs`). Bound natives (`chance.x.bind(chance)`) are still called with no argument. Technical fixtures under `dungeons/technical/` instantiate their own unseeded `new Chance()` for some props (`title`, group `name`), so profile/group output from those files is not run-to-run stable — compare events, not profiles, when checking determinism against them.
 - **Seeded RNG everywhere** via `chance` — same seed + same config + `concurrency: 1` = identical output, **with one exception: `insert_id`**. Since 1.4.0 it is a `randomUUID()` ([events.js](lib/generators/events.js)), so it differs on every run by design. Strip `insert_id` before diffing two runs. Everything else — event count, order, timestamps, every property, profiles, groups — is byte-identical. `strictEventCount: true` forces `concurrency: 1`.
@@ -238,4 +245,4 @@ out `eventMultiplier` — the run warns when it does.
 
 ### Performance: dayjs optimization (deferred)
 
-Primary bottleneck is date/time manipulation. `TimeSoup` creates dayjs objects + `toISOString()` on every event. Fix: perform all time calculations using numeric Unix timestamps and only convert to ISO string once at the end. Key locations: `TimeSoup` in [lib/utils/utils.js](lib/utils/utils.js), timestamp handling in [lib/generators/events.js](lib/generators/events.js) and [lib/orchestrators/user-loop.js](lib/orchestrators/user-loop.js). Constraint: must preserve deterministic seeded generation within a bounded time range, then shift timestamps forward to present.
+Primary bottleneck is date/time manipulation. `TimeSoup` creates dayjs objects + `toISOString()` on every event. Fix: perform all time calculations using numeric Unix timestamps and only convert to ISO string once at the end. Key locations: `TimeSoup` in [lib/utils/utils.js](lib/utils/utils.js), timestamp handling in [lib/generators/events.js](lib/generators/events.js) and [lib/orchestrators/user-loop.js](lib/orchestrators/user-loop.js). Constraint: must preserve deterministic seeded generation inside the resolved dataset window with no forward-shift pass.

@@ -91,6 +91,11 @@ const result = await DUNGEON_MASTER({
 console.log(result.importResults);
 ```
 
+`token` imports event-shaped streams only: events, users, groups, ad spend, and
+`standaloneEvents`. `warehouseMetrics` does **not** import through this path.
+warehouse tables are materialized locally and need a separate warehouse deploy
+step after the run.
+
 ## dungeons
 
 a dungeon is a javascript file that exports a configuration object. it defines your entire data model: events, funnels, user properties, group analytics, SCDs, and a hook function that engineers discoverable patterns into the data.
@@ -538,6 +543,7 @@ dungeon-master generates multiple data types that mirror a real analytics implem
 | lookup tables | `lookupTables` | dimension tables (product catalog, region mapping) |
 | ad spend | `hasAdSpend` | daily ad spend with impressions, clicks, cost metrics |
 | standalone events | `standaloneEvents` | identity-less metric snapshots on a cadence (infrastructure, finance, ops) |
+| warehouse metrics | `warehouseMetrics` | warehouse source tables derived from generated events, with a manifest for downstream deploy |
 | mirror datasets | `mirrorProps` | transformed copies of event data (A/B versions) |
 | organic text | `createTextGenerator` | reviews, support tickets, search queries, chat messages |
 
@@ -674,6 +680,152 @@ hook: (record, type, meta) => {
 validation throws rather than skipping. a malformed entry would silently drop a whole data
 stream, and you would not notice until the charts were wrong.
 
+## warehouse metrics (local source tables)
+
+`warehouseMetrics` materializes warehouse-ready tables from the run's own event
+stream after user generation completes. use it when you need a bookings table, a
+subscription level snapshot, or an ARR table that reads like a real warehouse
+source. these rows land in `result.warehouseMetricData`, write to
+`<name>-WAREHOUSE-<table>.csv|json`, and emit one manifest at
+`<name>-WAREHOUSE-MANIFEST.json`.
+
+they are **not** imported by `token`. that is deliberate. the live path is:
+
+1. run the dungeon
+2. review `/deploy-warehouse` in dry-run mode
+3. obtain explicit operator consent for live execution
+4. load the tables to bigquery and save the metrics there
+
+live deploy uses `bq load --replace`, so it overwrites the destination warehouse
+tables. the shipped script does not prompt on its own, so the operator or agent
+must obtain explicit consent before running it in live mode. if the
+warehouse CRUD docs route returns 404, the deploy still loads tables and connects
+the source, then writes `warehouse/GAPS.md` for manual metric creation.
+
+the manifest carries `recommendedAggregation: 'sum' | 'last value'`. the
+Mixpanel warehouse metric API spells that second value as `last_value`; the
+deploy flow maps it for you.
+
+there is one real preview trap: `previewWarehouseMetric` rejects raw SQL
+containing `DROP`, `DELETE`, `TRUNCATE`, `ALTER`, `CREATE`, `INSERT`, or
+`UPDATE` as plain substrings. `created_at` trips `CREATE`; `updated_at` trips
+`UPDATE`. aliasing only helps if the blocked text disappears from the query
+entirely.
+
+### canonical shapes
+
+additive daily bookings:
+
+```javascript
+warehouseMetrics: [{
+  name: 'daily_new_bookings',
+  source: {
+    event: 'new_booking',
+    measure: 'sum',
+    property: 'booking_value',
+  },
+  timeColumn: 'date',
+  valueColumn: 'bookings',
+}]
+```
+
+point-in-time daily active subscriptions:
+
+```javascript
+warehouseMetrics: [{
+  name: 'daily_active_subscriptions',
+  type: 'point-in-time',
+  source: {
+    event: 'subscription_started',
+    minus: 'subscription_cancelled',
+    measure: 'count',
+  },
+  baseline: 40,
+  timeColumn: 'date',
+  valueColumn: 'active_subscriptions',
+}]
+```
+
+sparse monthly ARR with backfill:
+
+```javascript
+warehouseMetrics: [{
+  name: 'monthly_arr_snapshot',
+  type: 'point-in-time',
+  grain: 'month',
+  sparse: true,
+  history: 18,
+  source: {
+    event: 'subscription_started',
+    minus: 'subscription_cancelled',
+    measure: 'sum',
+    property: 'monthly_value',
+  },
+  baseline: 24000,
+  scale: 12,
+  timeColumn: 'month',
+  valueColumn: 'arr_usd',
+}]
+```
+
+the shipped technical fixture uses a 60-day live window plus 18 monthly backfill
+buckets. sample row counts are illustrative only. `grain`, `history`, `sparse`,
+and `groupBy` all change how many rows a table emits.
+
+### config surface
+
+| key | default | range / contract |
+|---|---|---|
+| `name` | required | unique table / metric name, `/^[a-z][a-z0-9_]{0,63}$/` |
+| `type` | `'additive'` | `'additive'` or `'point-in-time'` |
+| `grain` | `'day'` | `'day'`, `'week'`, `'month'` |
+| `sparse` | `false` | boolean, valid only with `type: 'point-in-time'` |
+| `source.event` | required | string or string[] of declared source events |
+| `source.minus` | `[]` | string or string[] of declared subtractive events |
+| `source.measure` | `'count'` | `'count'`, `'sum'`, `'avg'`, `'dau'`, `'users'`; point-in-time forbids `'avg'` and `'dau'` |
+| `source.property` | `null` | required for `'sum'` and `'avg'`; must be declared on every source event or in `superProps` |
+| `source.where` | `null` | optional function over flat event rows |
+| `source.groupBy` | `[]` | up to 2 keys, each declared on every source event or in `superProps`; observed cardinality above 50 warns |
+| `timeColumn` | `'date'` | valid JS identifier; becomes the ordered time axis in rows and manifest |
+| `valueColumn` | `'value'` | valid JS identifier |
+| `baseline` | `0` | number `>= 0`; used only for point-in-time metrics, ignored on additive |
+| `scale` | `1` | finite number `> 0`, applied after bucket aggregation |
+| `noise` | `0` | finite number, clamped to `[0, 0.5]` with a warning |
+| `history` | `0` | integer `>= 0`; warns above roughly 3 years at each grain (`1095` day, `156` week, `36` month) |
+| `columns` | `{}` | extra declared output columns; keys must be valid identifiers and cannot collide with time/value/groupBy columns |
+| `format` | dungeon `format`, else `'csv'` | `'csv'` or `'json'` |
+
+materialized tables are deterministic at the same seed and do not perturb the
+event stream. the warehouse pass runs after the user loop, so seeded noise and
+derived columns never change generated events.
+
+### result and manifest
+
+```javascript
+const result = await DUNGEON_MASTER(config);
+
+result.warehouseMetricData.daily_new_bookings
+result.warehouseManifest.tables
+result.files
+```
+
+each manifest table includes:
+
+| field | meaning |
+|---|---|
+| `table` | warehouse table name |
+| `file` | file prefix without extension |
+| `format` | `'csv'` or `'json'` |
+| `grain` | bucket grain |
+| `type` | additive vs point-in-time |
+| `timeColumn` | date axis column |
+| `valueColumn` | numeric value column |
+| `dimensionColumns` | copied `groupBy` keys |
+| `columns` | ordered BigQuery schema (`DATE`, `FLOAT64`, `BOOL`, `STRING`) |
+| `recommendedAggregation` | `'sum'` or `'last value'` |
+| `sql` | `SELECT * FROM \`{{DATASET}}.<table>\` ORDER BY <timeColumn>` |
+| `refreshHint` | currently `'hourly'` |
+
 ## user generation
 
 users are generated with configurable birth distributions, normally controlled via the `macro` preset (see "time shape" above). these three knobs can also be set directly on the dungeon config — they override the preset's values.
@@ -765,8 +917,11 @@ result.userProfilesData  // user profiles
 result.scdTableData      // SCD mutations
 result.groupProfilesData // group profiles
 result.adSpendData       // ad spend data
+result.standaloneEventData // identity-less event snapshots
 result.lookupTableData   // lookup table entries
 result.mirrorEventData   // mirror dataset
+result.warehouseMetricData // warehouse tables keyed by metric name
+result.warehouseManifest // warehouse table manifest
 
 result.eventCount        // total event count
 result.userCount         // total user count
@@ -967,6 +1122,8 @@ see [types.d.ts](types.d.ts) for the complete `Dungeon` interface. here are the 
 | `hasLocation` | boolean | false | include geo properties |
 | `hasCampaigns` | boolean | false | include UTM properties |
 | `hasAdSpend` | boolean | false | generate ad spend data |
+| `standaloneEvents` | array | `[]` | identity-less cadence streams that import as events |
+| `warehouseMetrics` | array | `[]` | local warehouse source tables + manifest, derived from generated events |
 | `hasAnonIds` | boolean | false | generate anonymous IDs |
 | `hasSessionIds` | boolean | false | generate session IDs |
 | `alsoInferFunnels` | boolean | false | auto-generate funnels from events |

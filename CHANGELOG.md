@@ -57,6 +57,61 @@ so the seeded RNG stream is untouched. `config.standaloneEvents` normalizes to
 New tests: `tests/unit/standalone-events.test.js` (25),
 `tests/integration/standalone-events.test.js` (15).
 
+### Added — `warehouseMetrics`: manifest-driven warehouse source tables
+
+A new top-level config key that materializes warehouse-ready tables from the
+run's own events after generation completes. This is the local source-table side
+of a warehouse metric demo: bookings rollups, active subscription levels, ARR
+snapshots, and other time-series tables that should read like a real warehouse.
+
+```js
+warehouseMetrics: [{
+  name: 'daily_new_bookings',
+  source: { event: 'new_booking', measure: 'sum', property: 'booking_value' },
+  valueColumn: 'bookings',
+}]
+```
+
+- Supports additive and point-in-time metrics.
+- Grain: `day`, `week`, `month`.
+- Supports subtractive `minus` legs, `groupBy` on up to two declared keys,
+  optional `history` backfill, sparse point-in-time emission, seeded `noise`,
+  `scale`, and derived `columns`.
+- Lands in `result.warehouseMetricData` keyed by metric name and emits
+  `result.warehouseManifest` with table schemas, SQL, and recommended
+  aggregation.
+- Writes `<name>-WAREHOUSE-<table>.csv|json` plus
+  `<name>-WAREHOUSE-MANIFEST.json` when `writeToDisk` is enabled.
+- Never imports through `token`. Warehouse deploy is a separate flow.
+- New hook type `warehouse` fires once per materialized row with
+  `metricName`, `bucketIndex`, `bucketCount`, `grain`, `seriesKey`,
+  `isBackfill`, and `raw` bucket stats.
+- Warehouse verification adds `warehouse` / `warehouse-stats` story breakdowns
+  plus automatic audits over gaps, monotonic time, empty numeric cells, sparse
+  first-bucket coverage, and source-shape correlation.
+
+### Added — `/deploy-warehouse`: BigQuery load + warehouse metric save flow
+
+The shipped skill at `.claude/skills/deploy-warehouse/` loads the generated
+warehouse tables into BigQuery, connects that dataset to Mixpanel with the
+existing powertools macro, previews each metric SQL, and saves new metrics when
+the CRUD endpoints are available.
+
+- Uses the emitted warehouse manifest as the contract.
+- Maps manifest `recommendedAggregation: 'last value'` to the API's
+  `aggregation: 'last_value'`.
+- If `GET /crud/getWarehouseMetrics` returns 404, the script still completes the
+  BigQuery load and source setup, then writes `warehouse/GAPS.md` for manual
+  metric creation.
+- Preview fails fast on the raw substring block (`CREATE`, `UPDATE`, etc.), so
+  identifiers like `created_at` and `updated_at` are a real deploy-time trap.
+
+### Changed — `streamCSV` preserves falsy cells
+
+CSV serialization now writes `0` and `false` as literal cell values instead of
+empty strings. If downstream warehouse SQL or fixtures were treating blank cells
+as zero or false, update them to read the actual value.
+
 ## 1.7.0 — 2026-09-03
 
 The engine round for DM4 v5. Executes the 1.6.4 "Deferred to 1.7.0" table plus
