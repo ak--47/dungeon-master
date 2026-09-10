@@ -2520,9 +2520,9 @@ export interface WarehouseValueContext {
     row: Record<string, any>;
     /** Bucket start in unix milliseconds. */
     time: number;
-    /** Zero-based bucket index within this series, including backfill buckets when present. */
+    /** Zero-based chronological bucket index within this series, including backfill buckets and sparse gaps when present. */
     bucketIndex: number;
-    /** Total number of buckets emitted for this series. */
+    /** Total chronological buckets in this series, including history buckets even when sparse rows are skipped. */
     bucketCount: number;
     /** Bucket grain for this metric. */
     grain: 'day' | 'week' | 'month';
@@ -2543,9 +2543,9 @@ export interface HookMetaWarehouse extends HookMetaTimeAnchors {
     config: Dungeon;
     /** Metric/table name. */
     metricName: string;
-    /** Zero-based bucket index within the emitted series. */
+    /** Zero-based chronological bucket index within this series, including history buckets and sparse gaps. */
     bucketIndex: number;
-    /** Total emitted buckets in this series. */
+    /** Total chronological buckets in this series, including history buckets even when sparse rows are skipped. */
     bucketCount: number;
     /** Bucket grain for the metric. */
     grain: 'day' | 'week' | 'month';
