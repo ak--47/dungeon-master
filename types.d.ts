@@ -943,6 +943,10 @@ export interface HookedArray<T> extends Array<T> {
     getWritePath: () => string;
     /** Returns all file paths written by this container during the current run. */
     getWrittenFiles: () => string[];
+    /** Storage hook type this array is configured for. */
+    type?: hookTypes | string;
+    /** Output serialization format for this array. */
+    format?: string;
     /** SCD prop name this array carries (only set on SCD HookedArrays). */
     scdKey?: string;
     /** Entity type for SCDs ("user" or a group key). */
@@ -951,6 +955,10 @@ export interface HookedArray<T> extends Array<T> {
     groupKey?: string;
     /** Lookup table key this array carries (only set on lookup table HookedArrays). */
     lookupKey?: string;
+    /** Warehouse metric name this array carries (only set on warehouse HookedArrays). */
+    metricName?: string;
+    /** Fixed CSV column order for warehouse metric tables. */
+    fixedColumns?: string[];
 }
 
 export type AllData =
@@ -971,6 +979,7 @@ export interface Storage {
     standaloneEventData?: HookedArray<EventSchema>;
     groupProfilesData?: HookedArray<GroupProfileSchema>[];
     lookupTableData?: HookedArray<LookupTableSchema>[];
+    warehouseMetricData?: HookedArray<Record<string, any>>[];
     scdTableData?: HookedArray<SCDSchema>[];
     groupEventData?: HookedArray<EventSchema>;
 }
@@ -1617,6 +1626,8 @@ export type Result = {
     groupProfilesData: GroupProfileSchema[][];
     /** Lookup tables — one inner array per table. */
     lookupTableData: LookupTableData[][];
+    /** Warehouse metrics — one inner array per metric table. */
+    warehouseMetricData?: Record<string, any>[][];
     /** Mixpanel import results (only populated when a token was provided). */
     importResults?: ImportResults;
     /**

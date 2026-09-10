@@ -607,7 +607,7 @@ async function flushStorageToDisk(storage, config) {
 	if (storage.groupEventData?.flush) flushPromises.push(storage.groupEventData.flush());
 
 	// Flush arrays of HookedArrays (excluding lookup tables which are handled separately)
-	[storage.scdTableData, storage.groupProfilesData].forEach(arrayOfContainers => {
+	[storage.scdTableData, storage.groupProfilesData, storage.warehouseMetricData].forEach(arrayOfContainers => {
 		if (Array.isArray(arrayOfContainers)) {
 			arrayOfContainers.forEach(container => {
 				if (container?.flush) flushPromises.push(container.flush());
@@ -680,7 +680,8 @@ function extractStorageData(storage) {
 		// Keep arrays of HookedArrays as separate arrays (don't flatten)
 		scdTableData: storage.scdTableData || [],
 		groupProfilesData: storage.groupProfilesData || [],
-		lookupTableData: storage.lookupTableData || []
+		lookupTableData: storage.lookupTableData || [],
+		warehouseMetricData: storage.warehouseMetricData || []
 	};
 }
 

@@ -76,13 +76,36 @@ import {
 } from '../../lib/orchestrators/user-loop.js';
 
 import main from '../../index.js';
-import { createHookArray } from '../../lib/core/storage.js';
+import { createHookArray, StorageManager } from '../../lib/core/storage.js';
+import { createContext } from '../../lib/core/context.js';
+import { validateDungeonConfig } from '../../lib/core/config-validator.js';
 import { inferFunnels } from '../../lib/core/config-validator.js';
 import { createGenerator, generateBatch } from '../../lib/generators/text.js';
-import { describe, test, expect, beforeAll } from 'vitest';
+import { describe, test, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 
 //todo: test for funnel inference
 const hookArray = createHookArray;
+
+function createStorageTestContext(configOverrides = {}) {
+	const baseConfig = {
+		name: 'warehouse-test',
+		numEvents: 10,
+		numUsers: 2,
+		numDays: 30,
+		writeToDisk: false,
+		concurrency: 1,
+		verbose: false,
+		hook: (record) => record,
+		...configOverrides,
+	};
+
+	const validatedConfig = validateDungeonConfig(baseConfig);
+	return createContext(validatedConfig);
+}
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 
 
@@ -879,6 +902,23 @@ describe('filenames', () => {
 		]);
 	});
 
+	test('warehouse tables', () => {
+		/** @type {Config} */
+		const config = {
+			name: 'testSim',
+			format: 'json',
+			warehouseMetrics: [
+				{ name: 'bookings', source: { event: ['checkout'], measure: 'count' } },
+				{ name: 'active_subscriptions', source: { event: ['renewal'], measure: 'users' }, format: 'csv' }
+			]
+		};
+		const result = buildFileNames(config);
+		expect(result.warehouseFiles).toEqual([
+			'testSim-WAREHOUSE-bookings.json',
+			'testSim-WAREHOUSE-active_subscriptions.csv'
+		]);
+	});
+
 	test('mirror tables', () => {
 		/** @type {Config} */
 		const config = {
@@ -1225,6 +1265,88 @@ describe('enrichment', () => {
 	// });
 
 
+});
+
+describe('storage', () => {
+	test('warehouse hook mutates in place and ignores return values', async () => {
+		const warehouseRows = await createHookArray([], {
+			type: 'warehouse',
+			hook(record, type) {
+				expect(type).toBe('warehouse');
+				record.total = (record.total || 0) + 1;
+				return { ignored: true };
+			},
+			context: {
+				config: { batchSize: 10, writeToDisk: false },
+				runtime: { isBatchMode: false, verbose: false }
+			}
+		});
+
+		const row = { date: '2024-01-01', total: 2 };
+		await warehouseRows.hookPush(row);
+
+		expect(warehouseRows).toHaveLength(1);
+		expect(warehouseRows[0]).toBe(row);
+		expect(warehouseRows[0]).toEqual({ date: '2024-01-01', total: 3 });
+	});
+
+	test('warehouse containers do not shard automatically at batch threshold and flush once with fixed columns', async () => {
+		const warehouseRows = await createHookArray([], {
+			type: 'warehouse',
+			format: 'csv',
+			fixedColumns: ['date', 'segment', 'value', 'label'],
+			context: {
+				config: { batchSize: 1, writeToDisk: false },
+				runtime: { isBatchMode: false, verbose: false }
+			}
+		});
+
+		await warehouseRows.hookPush({ date: '2024-01-01', segment: 'a', value: 1, label: 'x' });
+		await warehouseRows.hookPush({ date: '2024-01-02', segment: 'b', value: 2, label: 'y' });
+
+		expect(warehouseRows).toHaveLength(2);
+		expect(warehouseRows.getWrittenFiles()).toEqual([]);
+		expect(warehouseRows.fixedColumns).toEqual(['date', 'segment', 'value', 'label']);
+	});
+
+	test('storage manager creates one warehouse container per metric with metric metadata', async () => {
+		const context = createStorageTestContext({
+			name: 'warehouse-test',
+			format: 'json',
+			events: [
+				{ event: 'checkout', properties: { amount: [5], region: ['west'], plan: ['pro'] } },
+				{ event: 'refund', properties: { amount: [1], region: ['west'], plan: ['pro'] } }
+			],
+			warehouseMetrics: [
+				{
+					name: 'net_revenue',
+					source: { event: ['checkout'], minus: ['refund'], measure: 'sum', property: 'amount', groupBy: ['region'] },
+					timeColumn: 'day',
+					valueColumn: 'revenue',
+					columns: { label: () => 'rev' },
+					format: 'csv'
+				},
+				{
+					name: 'active_plans',
+					type: 'point-in-time',
+					source: { event: ['checkout'], measure: 'users', groupBy: ['plan'] },
+					columns: { source_name: () => 'users' }
+				}
+			]
+		});
+
+		const storage = await new StorageManager(context).initializeContainers();
+
+		expect(storage.warehouseMetricData).toHaveLength(2);
+		expect(storage.warehouseMetricData[0].type).toBe('warehouse');
+		expect(storage.warehouseMetricData[0].metricName).toBe('net_revenue');
+		expect(storage.warehouseMetricData[0].format).toBe('csv');
+		expect(storage.warehouseMetricData[0].fixedColumns).toEqual(['day', 'region', 'revenue', 'label']);
+		expect(storage.warehouseMetricData[1].type).toBe('warehouse');
+		expect(storage.warehouseMetricData[1].metricName).toBe('active_plans');
+		expect(storage.warehouseMetricData[1].format).toBe('json');
+		expect(storage.warehouseMetricData[1].fixedColumns).toEqual(['date', 'plan', 'value', 'source_name']);
+	});
 });
 
 
