@@ -23,6 +23,7 @@ const TMP_DIR = os.tmpdir();
 import {
 	applySkew,
 	boxMullerRandom,
+	csvRow,
 	choose,
 	date,
 	dates,
@@ -911,6 +912,19 @@ describe('filenames', () => {
 		const lines = content.trim().split('\n').map(line => JSON.parse(line));
 		expect(lines).toEqual(data);
 		fs.unlinkSync(filePath);
+	});
+
+	test('csvRow serializes falsy values and keeps nullish cells blank', () => {
+		const row = csvRow({ a: 0, b: false, c: null, d: undefined, e: 'x' }, ['a', 'b', 'c', 'd', 'e']);
+		expect(row).toBe('"0","false",,,"x"');
+	});
+
+	test('csvRow preserves column order and escapes strings and objects', () => {
+		const row = csvRow(
+			{ b: 'say "hi"', a: { nested: true }, c: '' },
+			['c', 'a', 'b']
+		);
+		expect(row).toBe('"","{""nested"":true}","say ""hi"""');
 	});
 
 	test('CSV: writes', async () => {
