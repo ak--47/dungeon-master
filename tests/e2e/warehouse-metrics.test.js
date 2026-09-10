@@ -280,4 +280,101 @@ export default {
 			fs.rmSync(tmpDir, { recursive: true, force: true });
 		}
 	}, timeout);
+
+	test('verify-stories preserves multiline CSV string columns, empty numeric cells, and audit parity between disk and in-memory', async () => {
+		const tmpDir = makeTempDir();
+		const fixturePath = path.join(tmpDir, 'warehouse-multiline-csv-parity.mjs');
+		const prefix = 'warehouse-multiline-csv-parity';
+		const trickyNote = 'north, "enterprise"\r\nrenewal\nline';
+		writeFixture(fixturePath, `export default {
+	name: 'warehouse-multiline-csv-parity',
+	seed: 'warehouse-multiline-csv-parity',
+	datasetStart: '2024-01-01T00:00:00Z',
+	datasetEnd: '2024-01-03T23:59:59Z',
+	numUsers: 3,
+	numEvents: 6,
+	format: 'csv',
+	writeToDisk: false,
+	verbose: false,
+	concurrency: 1,
+	credentials: { token: '', region: 'US' },
+	switches: {
+		hasSessionIds: false,
+		hasAdSpend: false,
+		hasLocation: false,
+		hasAndroidDevices: false,
+		hasIOSDevices: false,
+		hasDesktopDevices: false,
+		hasBrowser: false,
+		hasCampaigns: false,
+		isAnonymous: false,
+		alsoInferFunnels: false,
+	},
+	events: [
+		{ event: 'subscribe', weight: 3, isStrictEvent: false, properties: { plan: ['pro'], note_seed: ['x'] } },
+		{ event: 'cancel', weight: 1, isStrictEvent: false, properties: { plan: ['pro'], note_seed: ['x'] } },
+	],
+	warehouseMetrics: [{
+		name: 'multiline_notes',
+		type: 'point-in-time',
+		grain: 'day',
+		format: 'csv',
+		timeColumn: 'date',
+		valueColumn: 'active',
+		baseline: 10,
+		columns: {
+			note: '',
+			quality_score: 0,
+		},
+		source: {
+			event: 'subscribe',
+			minus: 'cancel',
+			measure: 'count',
+		},
+	}],
+	hook(row, type, meta) {
+		if (type !== 'warehouse' || meta.metricName !== 'multiline_notes') return row;
+		if (row.date === '2024-01-02') {
+			row.note = ${JSON.stringify(trickyNote)};
+			row.quality_score = '';
+		}
+		return row;
+	},
+};
+export const stories = [];
+`);
+		try {
+			const { default: fixture } = await import(`${pathToFileURL(fixturePath).href}?t=${Date.now()}`);
+			await generate({
+				...fixture,
+				name: prefix,
+				writeToDisk: tmpDir,
+				format: 'json',
+				gzip: false,
+				verbose: false,
+			});
+
+			const csvPath = path.join(tmpDir, `${prefix}-WAREHOUSE-multiline_notes.csv`);
+			const csvBody = fs.readFileSync(csvPath, 'utf8');
+			expect(csvBody).toContain('north, ""enterprise""');
+			expect(csvBody).toContain('renewal\nline');
+
+			const inMemory = runVerifyStories([fixturePath, '--in-memory', '--json']);
+			const disk = runVerifyStories([fixturePath, '--data-prefix', path.join(tmpDir, prefix), '--json']);
+
+			expect(inMemory.status).toBe(1);
+			expect(disk.status).toBe(1);
+
+			const inMemoryReport = JSON.parse(inMemory.stdout);
+			const diskReport = JSON.parse(disk.stdout);
+
+			expect(inMemoryReport.pass).toBe(false);
+			expect(diskReport.pass).toBe(false);
+			expect(inMemoryReport.warehouseAudits).toEqual(diskReport.warehouseAudits);
+			expect(diskReport.warehouseAudits[0].stats.emptyNumericCells).toBe(1);
+			expect(diskReport.warehouseAudits[0].failures.join(' | ')).toMatch(/empty numeric cell/i);
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	}, timeout);
 });

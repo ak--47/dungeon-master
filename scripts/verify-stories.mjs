@@ -34,6 +34,7 @@ import readline from 'readline';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { pathToFileURL } from 'url';
+import { parse as parseCsv } from 'csv-parse';
 import generate from '../index.js';
 import { extractComments } from '../lib/core/extract-comments.js';
 import { validateDungeonConfig } from '../lib/core/config-validator.js';
@@ -319,48 +320,20 @@ async function loadNdjson(filePath) {
 
 async function loadCsv(filePath, columns) {
 	const out = [];
-	const rl = readline.createInterface({ input: fs.createReadStream(filePath), crlfDelay: Infinity });
-	let headers = null;
-	for await (const line of rl) {
-		if (!line.trim()) continue;
-		if (!headers) {
-			headers = parseCsvLine(line);
-			continue;
-		}
-		const values = parseCsvLine(line);
+	const parser = fs.createReadStream(filePath).pipe(parseCsv({
+		bom: true,
+		columns: true,
+		skip_empty_lines: true,
+	}));
+	for await (const record of parser) {
 		const row = {};
-		for (let index = 0; index < headers.length; index += 1) {
-			const header = headers[index];
+		for (const [header, rawValue] of Object.entries(record)) {
 			const type = columns.find((column) => column.name === header)?.bqType;
-			row[header] = coerceWarehouseCell(values[index] ?? '', type);
+			row[header] = coerceWarehouseCell(rawValue ?? '', type);
 		}
 		out.push(row);
 	}
 	return out;
-}
-
-function parseCsvLine(line) {
-	const cells = [];
-	let current = '';
-	let inQuotes = false;
-	for (let index = 0; index < line.length; index += 1) {
-		const char = line[index];
-		if (char === '"') {
-			if (inQuotes && line[index + 1] === '"') {
-				current += '"';
-				index += 1;
-			} else {
-				inQuotes = !inQuotes;
-			}
-		} else if (char === ',' && !inQuotes) {
-			cells.push(current);
-			current = '';
-		} else {
-			current += char;
-		}
-	}
-	cells.push(current);
-	return cells;
 }
 
 function coerceWarehouseCell(value, bqType) {

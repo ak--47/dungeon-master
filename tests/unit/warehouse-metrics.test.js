@@ -518,6 +518,50 @@ describe('warehouse verify stats', () => {
 		expect(stats.corr).toBeCloseTo(1, 10);
 	});
 
+	test('computeWarehouseStats carries the last emitted pre-window PIT level into the first omitted live bucket without changing baseline math', () => {
+		const rows = [
+			{ date: '2023-12-31', region: 'eu', active: 22 },
+			{ date: '2023-12-31', region: 'us', active: 26 },
+			{ date: '2024-01-02', region: 'eu', active: 24 },
+			{ date: '2024-01-02', region: 'us', active: 30 },
+		];
+		const spec = {
+			name: 'active_subs_omitted_first_live_bucket',
+			type: 'point-in-time',
+			grain: 'day',
+			sparse: true,
+			history: 1,
+			baseline: 10,
+			scale: 2,
+			timeColumn: 'date',
+			valueColumn: 'active',
+			source: { groupBy: ['region'], minus: ['cancel'] },
+		};
+		const sourceRows = [
+			{ __t: Date.parse('2024-01-01T00:00:00Z') / 1000, value: 1, region: 'eu', source: 'subscribe' },
+			{ __t: Date.parse('2024-01-01T00:00:00Z') / 1000, value: 3, region: 'us', source: 'subscribe' },
+			{ __t: Date.parse('2024-01-02T00:00:00Z') / 1000, value: 1, region: 'eu', source: 'subscribe' },
+			{ __t: Date.parse('2024-01-02T00:00:00Z') / 1000, value: 2, region: 'us', source: 'subscribe' },
+			{ __t: Date.parse('2023-12-31T00:00:00Z') / 1000, value: 999, region: 'eu', source: 'subscribe' },
+			{ __t: Date.parse('2023-12-31T00:00:00Z') / 1000, value: 999, region: 'us', source: 'subscribe' },
+		];
+
+		const stats = computeWarehouseStats(rows, spec, sourceRows, {
+			datasetStart: '2024-01-01T00:00:00Z',
+			datasetEnd: '2024-01-02T00:00:00Z',
+		});
+
+		expect(stats.backfillBuckets).toBe(1);
+		expect(stats.buckets).toBe(3);
+		expect(stats.corr).toBeCloseTo(1, 10);
+		const corruptedRows = rows.map((row) => row.date === '2023-12-31' ? { ...row, active: 20 } : row);
+		const corruptedStats = computeWarehouseStats(corruptedRows, spec, sourceRows, {
+			datasetStart: '2024-01-01T00:00:00Z',
+			datasetEnd: '2024-01-02T00:00:00Z',
+		});
+		expect(corruptedStats.corr).toBeCloseTo(-1, 10);
+	});
+
 	test('computeWarehouseStats sums grouped additive series before comparing to source truth', () => {
 		const rows = [
 			{ date: '2024-01-01', region: 'eu', value: 2 },
