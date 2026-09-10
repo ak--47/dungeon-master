@@ -2,7 +2,13 @@
 import { describe, expect, test } from 'vitest';
 import { validateDungeonConfig } from '../../lib/core/config-validator.js';
 import { validateDungeonShape } from '../../lib/core/dungeon-loader.js';
-import { validateWarehouseMetrics } from '../../lib/generators/warehouse.js';
+import {
+	bucketStart,
+	buildBuckets,
+	nextBucket,
+	validateWarehouseMetrics,
+	WarehouseAccumulator,
+} from '../../lib/generators/warehouse.js';
 
 const baseConfig = () => ({
 	events: [
@@ -220,5 +226,191 @@ describe('validateWarehouseMetrics', () => {
 
 	test('dungeon-loader recognizes warehouseMetrics as a top-level dungeon key', () => {
 		expect(() => validateDungeonShape({ warehouseMetrics: [] })).not.toThrow();
+	});
+});
+
+describe('warehouse bucket math', () => {
+	test('computes UTC day, ISO week, and month bucket starts', () => {
+		const t = Date.parse('2024-01-17T15:30:00Z') / 1000;
+
+		expect(bucketStart(t, 'day')).toBe(Date.parse('2024-01-17T00:00:00Z') / 1000);
+		expect(bucketStart(t, 'week')).toBe(Date.parse('2024-01-15T00:00:00Z') / 1000);
+		expect(bucketStart(t, 'month')).toBe(Date.parse('2024-01-01T00:00:00Z') / 1000);
+		expect(nextBucket(bucketStart(t, 'day'), 'day')).toBe(Date.parse('2024-01-18T00:00:00Z') / 1000);
+		expect(nextBucket(bucketStart(t, 'week'), 'week')).toBe(Date.parse('2024-01-22T00:00:00Z') / 1000);
+		expect(nextBucket(bucketStart(t, 'month'), 'month')).toBe(Date.parse('2024-02-01T00:00:00Z') / 1000);
+	});
+
+	test('buildBuckets tiles partial windows and prepends history buckets', () => {
+		const begin = Date.parse('2024-01-10T12:00:00Z') / 1000;
+		const end = Date.parse('2024-01-20T06:00:00Z') / 1000;
+
+		expect(buildBuckets(begin, end, 'week', 2).map((s) => new Date(s * 1000).toISOString().slice(0, 10))).toEqual([
+			'2023-12-25',
+			'2024-01-01',
+			'2024-01-08',
+			'2024-01-15',
+		]);
+	});
+});
+
+describe('WarehouseAccumulator', () => {
+	const fixedBegin = Date.parse('2024-01-15T00:00:00Z') / 1000;
+	const fixedNow = Date.parse('2024-01-21T23:59:59Z') / 1000;
+	const day = Date.parse('2024-01-17T00:00:00Z') / 1000;
+	const week = Date.parse('2024-01-15T00:00:00Z') / 1000;
+	const ev = (event, time, extras = {}) => ({ event, time, user_id: 'u1', ...extras });
+	const spec = (overrides = {}) => ({
+		name: 'metric',
+		type: 'additive',
+		grain: 'day',
+		sparse: false,
+		baseline: 0,
+		scale: 1,
+		noise: 0,
+		history: 0,
+		timeColumn: 'date',
+		valueColumn: 'value',
+		columns: {},
+		format: 'csv',
+		source: {
+			event: ['purchase'],
+			minus: [],
+			measure: 'count',
+			property: null,
+			where: null,
+			groupBy: [],
+		},
+		...overrides,
+	});
+
+	test('accumulates plus and minus sums per series and ignores unrelated events', () => {
+		const acc = new WarehouseAccumulator([
+			spec({
+				name: 'bookings',
+				source: {
+					event: ['purchase'],
+					minus: ['refund'],
+					measure: 'sum',
+					property: 'amount',
+					where: null,
+					groupBy: ['region'],
+				},
+			}),
+		], { FIXED_BEGIN: fixedBegin, FIXED_NOW: fixedNow });
+
+		acc.ingest([
+			ev('purchase', '2024-01-17T10:00:00Z', { amount: 10, region: 'us' }),
+			ev('purchase', '2024-01-17T11:00:00Z', { amount: 5, region: 'us' }),
+			ev('purchase', '2024-01-17T12:00:00Z', { amount: 7, region: 'eu' }),
+			ev('refund', '2024-01-17T13:00:00Z', { amount: 4, region: 'us' }),
+			ev('page_view', '2024-01-17T14:00:00Z', { amount: 99, region: 'us' }),
+		]);
+
+		expect(acc.getCell('bookings', 'us', day)).toMatchObject({ sum: 15, count: 2, mSum: 4, mCount: 1 });
+		expect(acc.getCell('bookings', 'eu', day)).toMatchObject({ sum: 7, count: 1, mSum: 0, mCount: 0 });
+	});
+
+	test('tracks count, avg, users, and dau measures without mutating input events', () => {
+		const specs = [
+			spec({ name: 'count_metric' }),
+			spec({ name: 'avg_metric', source: { event: ['purchase'], minus: ['refund'], measure: 'avg', property: 'amount', where: null, groupBy: [] } }),
+			spec({ name: 'users_metric', grain: 'week', source: { event: ['purchase'], minus: ['refund'], measure: 'users', property: null, where: null, groupBy: [] } }),
+			spec({ name: 'dau_metric', grain: 'week', source: { event: ['purchase'], minus: ['refund'], measure: 'dau', property: null, where: null, groupBy: [] } }),
+		];
+		const acc = new WarehouseAccumulator(specs, { FIXED_BEGIN: fixedBegin, FIXED_NOW: fixedNow });
+		const events = [
+			ev('purchase', '2024-01-17T10:00:00Z', { amount: 10, keep: 'yes', user_id: 'a' }),
+			ev('purchase', '2024-01-17T11:00:00Z', { amount: 20, keep: 'yes', user_id: 'a' }),
+			ev('purchase', '2024-01-18T11:00:00Z', { amount: 30, keep: 'yes', user_id: 'b' }),
+			ev('refund', '2024-01-18T12:00:00Z', { amount: 5, keep: 'yes', user_id: 'a' }),
+		];
+		const before = JSON.stringify(events);
+
+		acc.ingest(events);
+
+		expect(acc.getCell('count_metric', '', day)).toMatchObject({ count: 2, mCount: 0 });
+		expect(acc.getCell('avg_metric', '', day)).toMatchObject({ sum: 30, count: 2, mSum: 0, mCount: 0 });
+		expect(acc.getCell('avg_metric', '', Date.parse('2024-01-18T00:00:00Z') / 1000)).toMatchObject({ sum: 30, count: 1, mSum: 5, mCount: 1 });
+		expect(Array.from(acc.getCell('users_metric', '', week).users).sort()).toEqual(['a', 'b']);
+		expect(Array.from(acc.getCell('users_metric', '', week).mUsers).sort()).toEqual(['a']);
+		expect(Array.from(acc.getCell('dau_metric', '', week).userDays).sort()).toEqual(['a|2024-01-17', 'b|2024-01-18']);
+		expect(Array.from(acc.getCell('dau_metric', '', week).mUserDays).sort()).toEqual(['a|2024-01-18']);
+		expect(JSON.stringify(events)).toBe(before);
+	});
+
+	test('applies where filters and computes empty cells on demand', () => {
+		const acc = new WarehouseAccumulator([
+			spec({
+				name: 'filtered_users',
+				grain: 'week',
+				source: {
+					event: ['purchase'],
+					minus: ['refund'],
+					measure: 'users',
+					property: null,
+					where: (event) => event.region === 'us' && event.plan === 'pro',
+					groupBy: [],
+				},
+			}),
+		], { FIXED_BEGIN: fixedBegin, FIXED_NOW: fixedNow });
+
+		acc.ingest([
+			ev('purchase', '2024-01-17T10:00:00Z', { region: 'us', plan: 'pro', user_id: 'a' }),
+			ev('purchase', '2024-01-17T10:00:00Z', { region: 'us', plan: 'free', user_id: 'b' }),
+			ev('refund', '2024-01-18T10:00:00Z', { region: 'eu', plan: 'pro', user_id: 'c' }),
+		]);
+
+		expect(Array.from(acc.getCell('filtered_users', '', week).users)).toEqual(['a']);
+		expect(acc.getCell('filtered_users', '', Date.parse('2024-01-22T00:00:00Z') / 1000)).toMatchObject({
+			count: 0,
+			sum: 0,
+			mCount: 0,
+			mSum: 0,
+			users: expect.any(Set),
+			mUsers: expect.any(Set),
+		});
+	});
+
+	test('includes events on the exact window boundaries and ignores events outside the window', () => {
+		const acc = new WarehouseAccumulator([
+			spec({ name: 'boundary_count' }),
+		], { FIXED_BEGIN: fixedBegin, FIXED_NOW: fixedNow });
+
+		acc.ingest([
+			ev('purchase', '2024-01-14T23:59:59Z'),
+			ev('purchase', '2024-01-15T00:00:00Z'),
+			ev('purchase', '2024-01-21T23:59:59Z'),
+			ev('purchase', '2024-01-22T00:00:00Z'),
+		]);
+
+		expect(acc.getCell('boundary_count', '', Date.parse('2024-01-15T00:00:00Z') / 1000)).toMatchObject({ count: 1 });
+		expect(acc.getCell('boundary_count', '', Date.parse('2024-01-21T00:00:00Z') / 1000)).toMatchObject({ count: 1 });
+		expect(acc.getCell('boundary_count', '', Date.parse('2024-01-14T00:00:00Z') / 1000)).toMatchObject({ count: 0 });
+	});
+
+	test('warns once per metric when sum inputs are non-numeric and treats them as zero', () => {
+		const acc = new WarehouseAccumulator([
+			spec({
+				name: 'sum_metric',
+				source: { event: ['purchase'], minus: ['refund'], measure: 'sum', property: 'amount', where: null, groupBy: [] },
+			}),
+			spec({
+				name: 'avg_metric',
+				source: { event: ['purchase'], minus: [], measure: 'avg', property: 'amount', where: null, groupBy: [] },
+			}),
+		], { FIXED_BEGIN: fixedBegin, FIXED_NOW: fixedNow });
+
+		acc.ingest([
+			ev('purchase', '2024-01-17T10:00:00Z', { amount: 'bad' }),
+			ev('purchase', '2024-01-17T11:00:00Z', { amount: 'worse' }),
+			ev('refund', '2024-01-17T12:00:00Z', { amount: 'nope' }),
+		]);
+
+		expect(acc.getCell('sum_metric', '', day)).toMatchObject({ sum: 0, count: 2, mSum: 0, mCount: 1 });
+		expect(acc.getCell('avg_metric', '', day)).toMatchObject({ sum: 0, count: 2 });
+		expect(acc.warnings).toHaveLength(2);
+		expect(acc.warnings[0]).toMatch(/sum_metric/);
+		expect(acc.warnings[1]).toMatch(/avg_metric/);
 	});
 });
