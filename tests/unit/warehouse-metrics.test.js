@@ -12,6 +12,12 @@ import {
 	validateWarehouseMetrics,
 	WarehouseAccumulator,
 } from '../../lib/generators/warehouse.js';
+import {
+	auditWarehouseRows,
+	computeWarehouseSourceRows,
+	computeWarehouseStats,
+	pearson,
+} from '../../lib/verify/warehouse.js';
 
 const baseConfig = () => ({
 	events: [
@@ -283,6 +289,329 @@ describe('warehouse bucket math', () => {
 			'2024-01-08',
 			'2024-01-15',
 		]);
+	});
+});
+
+describe('warehouse verify stats', () => {
+	test('pearson returns 1 for identical series, -1 for inverse series, and 0 for flat inputs', () => {
+		expect(pearson([1, 2, 3, 4], [1, 2, 3, 4])).toBeCloseTo(1, 10);
+		expect(pearson([1, 2, 3, 4], [4, 3, 2, 1])).toBeCloseTo(-1, 10);
+		expect(pearson([5, 5, 5], [1, 2, 3])).toBe(0);
+	});
+
+	test('computeWarehouseSourceRows derives direct source truth for all supported measures and where filters', () => {
+		const events = [
+			{ event: 'purchase', time: '2024-01-01T01:00:00Z', user_id: 'u1', amount: 10, region: 'us', plan: 'pro' },
+			{ event: 'purchase', time: '2024-01-01T08:00:00Z', user_id: 'u1', amount: 20, region: 'us', plan: 'pro' },
+			{ event: 'purchase', time: '2024-01-01T09:00:00Z', user_id: 'u2', amount: 30, region: 'eu', plan: 'free' },
+			{ event: 'purchase', time: '2024-01-02T03:00:00Z', user_id: 'u2', amount: 40, region: 'eu', plan: 'pro' },
+			{ event: 'purchase', time: '2024-01-03T03:00:00Z', user_id: 'u3', amount: 'oops', region: 'us', plan: 'pro' },
+			{ event: 'refund', time: '2024-01-01T03:00:00Z', user_id: 'u1', amount: 999, region: 'us', plan: 'pro' },
+		];
+
+		const specs = {
+			count: { source: { event: ['purchase'], measure: 'count' }, grain: 'day' },
+			sum: { source: { event: ['purchase'], measure: 'sum', property: 'amount' }, grain: 'day' },
+			avg: { source: { event: ['purchase'], measure: 'avg', property: 'amount' }, grain: 'day' },
+			users: { source: { event: ['purchase'], measure: 'users' }, grain: 'day' },
+			dau: { source: { event: ['purchase'], measure: 'dau' }, grain: 'day' },
+			where: { source: { event: ['purchase'], measure: 'sum', property: 'amount', where: (event) => event.plan === 'pro' }, grain: 'day' },
+		};
+
+		const toValues = (rows) => rows.map((row) => row.value);
+
+		expect(toValues(computeWarehouseSourceRows(events, specs.count))).toEqual([3, 1, 1]);
+		expect(toValues(computeWarehouseSourceRows(events, specs.sum))).toEqual([60, 40, 0]);
+		expect(toValues(computeWarehouseSourceRows(events, specs.avg))).toEqual([20, 40, 0]);
+		expect(toValues(computeWarehouseSourceRows(events, specs.users))).toEqual([2, 1, 1]);
+		expect(toValues(computeWarehouseSourceRows(events, specs.dau))).toEqual([2, 1, 1]);
+		expect(toValues(computeWarehouseSourceRows(events, specs.where))).toEqual([30, 40, 0]);
+	});
+
+	test('computeWarehouseStats measures additive shape, gaps, seam jump, and empty numeric cells independently of the materializer', () => {
+		const rows = [
+			{ date: '2024-01-01', bookings: 8 },
+				{ date: '2024-01-02', bookings: 6 },
+				{ date: '2024-01-04', bookings: '' },
+				{ date: '2024-01-05', bookings: 10 },
+		];
+		const spec = {
+			name: 'daily_new_bookings',
+			type: 'additive',
+			grain: 'day',
+			history: 1,
+			timeColumn: 'date',
+			valueColumn: 'bookings',
+			source: { minus: [] },
+		};
+		const eventDailyCounts = [
+			{ __t: Date.parse('2024-01-02T00:00:00Z') / 1000, value: 6 },
+			{ __t: Date.parse('2024-01-05T00:00:00Z') / 1000, value: 10 },
+		];
+
+		const stats = computeWarehouseStats(rows, spec, eventDailyCounts, {
+			datasetStart: '2024-01-02T00:00:00Z',
+			datasetEnd: '2024-01-05T00:00:00Z',
+		});
+
+		expect(stats).toMatchObject({
+			buckets: 4,
+			backfillBuckets: 1,
+			gaps: 1,
+			emptyNumericCells: 1,
+			nonMonotonicTime: 0,
+				mean: 6,
+				last: 10,
+			tailRatio: 10 / 6,
+			seamJumpPct: (2 / 6) * 100,
+		});
+			expect(stats.corr).toBeCloseTo(1, 10);
+	});
+
+	test('computeWarehouseStats compares point-in-time deltas against source deltas and excludes minus legs from source comparison', () => {
+		const rows = [
+			{ month: '2024-01-01', arr_usd: 40 },
+			{ month: '2024-02-01', arr_usd: 40 },
+			{ month: '2024-03-01', arr_usd: 80 },
+			{ month: '2024-04-01', arr_usd: 160 },
+		];
+		const spec = {
+			name: 'monthly_arr_snapshot',
+			type: 'point-in-time',
+			grain: 'month',
+			history: 0,
+			baseline: 40,
+			timeColumn: 'month',
+			valueColumn: 'arr_usd',
+			source: { minus: ['subscription_cancelled'] },
+		};
+		const eventDailyCounts = [
+			{ __t: Date.parse('2024-02-01T00:00:00Z') / 1000, value: 20, source: 'subscription_cancelled' },
+			{ __t: Date.parse('2024-03-01T00:00:00Z') / 1000, value: 40, source: 'subscription_started' },
+			{ __t: Date.parse('2024-04-01T00:00:00Z') / 1000, value: 80, source: 'subscription_started' },
+		];
+
+		const stats = computeWarehouseStats(rows, spec, eventDailyCounts, {
+			datasetStart: '2024-01-01T00:00:00Z',
+			datasetEnd: '2024-04-01T00:00:00Z',
+		});
+
+		expect(stats.buckets).toBe(4);
+		expect(stats.backfillBuckets).toBe(0);
+		expect(stats.gaps).toBe(0);
+		expect(stats.emptyNumericCells).toBe(0);
+		expect(stats.nonMonotonicTime).toBe(0);
+		expect(stats.last).toBe(160);
+		expect(stats.mean).toBe(80);
+		expect(stats.corr).toBeCloseTo(1, 10);
+	});
+
+	test('computeWarehouseStats reconstructs sparse grouped point-in-time buckets with carry-forward and baseline per series', () => {
+		const rows = [
+			{ month: '2024-01-01', region: 'eu', active: 10 },
+			{ month: '2024-01-01', region: 'us', active: 10 },
+			{ month: '2024-03-01', region: 'us', active: 15 },
+			{ month: '2024-04-01', region: 'eu', active: 13 },
+		];
+		const spec = {
+			name: 'active_subs',
+			type: 'point-in-time',
+			grain: 'month',
+			sparse: true,
+			history: 0,
+			baseline: 10,
+			timeColumn: 'month',
+			valueColumn: 'active',
+			source: { groupBy: ['region'], minus: ['cancel'] },
+		};
+		const sourceRows = [
+			{ __t: Date.parse('2024-03-01T00:00:00Z') / 1000, value: 5, region: 'us', source: 'subscribe' },
+			{ __t: Date.parse('2024-04-01T00:00:00Z') / 1000, value: 999, region: 'eu', source: 'cancel' },
+			{ __t: Date.parse('2024-04-01T00:00:00Z') / 1000, value: 3, region: 'eu', source: 'subscribe' },
+		];
+
+		const stats = computeWarehouseStats(rows, spec, sourceRows, {
+			datasetStart: '2024-01-01T00:00:00Z',
+			datasetEnd: '2024-04-01T00:00:00Z',
+		});
+
+		expect(stats.buckets).toBe(4);
+		expect(stats.backfillBuckets).toBe(0);
+		expect(stats.gaps).toBe(0);
+		expect(stats.corr).toBeCloseTo(1, 10);
+	});
+
+	test('computeWarehouseStats ignores large changing backfill and scores sparse point-in-time windows with zero buckets in-window', () => {
+		const rows = [
+			{ month: '2023-11-01', region: 'us', active: 500 },
+			{ month: '2023-12-01', region: 'us', active: 800 },
+			{ month: '2024-01-01', region: 'us', active: 10 },
+			{ month: '2024-03-01', region: 'us', active: 15 },
+		];
+		const spec = {
+			name: 'active_subs_sparse_history',
+			type: 'point-in-time',
+			grain: 'month',
+			sparse: true,
+			history: 2,
+			baseline: 10,
+			timeColumn: 'month',
+			valueColumn: 'active',
+			source: { groupBy: ['region'], minus: ['cancel'] },
+		};
+		const sourceRows = [
+			{ __t: Date.parse('2024-03-01T00:00:00Z') / 1000, value: 5, region: 'us', source: 'subscribe' },
+		];
+
+		const stats = computeWarehouseStats(rows, spec, sourceRows, {
+			datasetStart: '2024-01-01T00:00:00Z',
+			datasetEnd: '2024-04-01T00:00:00Z',
+		});
+
+		expect(stats.backfillBuckets).toBe(2);
+		expect(stats.buckets).toBe(6);
+		expect(stats.corr).toBeCloseTo(1, 10);
+		expect(stats.tailRatio).toBeCloseTo(1.5, 10);
+	});
+
+	test('computeWarehouseStats scores first in-window point-in-time delta against grouped baseline-scaled levels and excludes backfill levels', () => {
+		const rows = [
+			{ date: '2023-12-31', region: 'eu', active: 20 },
+			{ date: '2023-12-31', region: 'us', active: 20 },
+			{ date: '2024-01-01', region: 'eu', active: 24 },
+			{ date: '2024-01-01', region: 'us', active: 24 },
+			{ date: '2024-01-02', region: 'eu', active: 30 },
+			{ date: '2024-01-02', region: 'us', active: 30 },
+			{ date: '2024-01-03', region: 'eu', active: 32 },
+			{ date: '2024-01-03', region: 'us', active: 32 },
+		];
+		const spec = {
+			name: 'active_subs_first_window_delta',
+			type: 'point-in-time',
+			grain: 'day',
+			sparse: true,
+			history: 1,
+			baseline: 10,
+			scale: 2,
+			timeColumn: 'date',
+			valueColumn: 'active',
+			source: { groupBy: ['region'], minus: ['cancel'] },
+		};
+		const sourceRows = [
+			{ __t: Date.parse('2024-01-01T00:00:00Z') / 1000, value: 2, region: 'eu', source: 'subscribe' },
+			{ __t: Date.parse('2024-01-02T00:00:00Z') / 1000, value: 3, region: 'eu', source: 'subscribe' },
+			{ __t: Date.parse('2024-01-03T00:00:00Z') / 1000, value: 1, region: 'eu', source: 'subscribe' },
+			{ __t: Date.parse('2024-01-01T00:00:00Z') / 1000, value: 2, region: 'us', source: 'subscribe' },
+			{ __t: Date.parse('2024-01-02T00:00:00Z') / 1000, value: 3, region: 'us', source: 'subscribe' },
+			{ __t: Date.parse('2024-01-03T00:00:00Z') / 1000, value: 1, region: 'us', source: 'subscribe' },
+			{ __t: Date.parse('2023-12-31T00:00:00Z') / 1000, value: 999, region: 'eu', source: 'subscribe' },
+			{ __t: Date.parse('2023-12-31T00:00:00Z') / 1000, value: 999, region: 'us', source: 'subscribe' },
+		];
+
+		const stats = computeWarehouseStats(rows, spec, sourceRows, {
+			datasetStart: '2024-01-01T00:00:00Z',
+			datasetEnd: '2024-01-03T00:00:00Z',
+		});
+
+		expect(stats.backfillBuckets).toBe(1);
+		expect(stats.buckets).toBe(4);
+		expect(stats.corr).toBeCloseTo(1, 10);
+	});
+
+	test('computeWarehouseStats sums grouped additive series before comparing to source truth', () => {
+		const rows = [
+			{ date: '2024-01-01', region: 'eu', value: 2 },
+			{ date: '2024-01-01', region: 'us', value: 3 },
+			{ date: '2024-01-02', region: 'eu', value: 5 },
+			{ date: '2024-01-02', region: 'us', value: 7 },
+			{ date: '2024-01-03', region: 'eu', value: 11 },
+			{ date: '2024-01-03', region: 'us', value: 13 },
+		];
+		const spec = {
+			name: 'bookings',
+			type: 'additive',
+			grain: 'day',
+			timeColumn: 'date',
+			valueColumn: 'value',
+			source: { groupBy: ['region'], minus: [] },
+		};
+		const sourceRows = [
+			{ __t: Date.parse('2024-01-01T00:00:00Z') / 1000, value: 5 },
+			{ __t: Date.parse('2024-01-02T00:00:00Z') / 1000, value: 12 },
+			{ __t: Date.parse('2024-01-03T00:00:00Z') / 1000, value: 24 },
+		];
+
+		expect(computeWarehouseStats(rows, spec, sourceRows).corr).toBeCloseTo(1, 10);
+	});
+
+	test('auditWarehouseRows fails undeclared columns, every dense gap shape, and empty numeric declared columns', () => {
+		const spec = {
+			name: 'audit_dense',
+			type: 'additive',
+			grain: 'day',
+			timeColumn: 'date',
+			valueColumn: 'value',
+			columns: {
+				revenue: 0,
+				forecast_ratio: (ctx) => ctx.row.value / 10,
+				label: 'ok',
+			},
+			source: { groupBy: ['region'], minus: [] },
+		};
+		const audit = auditWarehouseRows([
+			{ date: '2024-01-02', region: 'us', value: 1, revenue: '', forecast_ratio: 0.1, extra_metric: 9 },
+			{ date: '2024-01-04', region: 'us', value: 2, forecast_ratio: 0.2 },
+			{ date: '2024-01-05', region: 'us', value: 3, revenue: 3, forecast_ratio: '' },
+		], spec, {
+			datasetStart: '2024-01-01T00:00:00Z',
+			datasetEnd: '2024-01-05T00:00:00Z',
+		});
+
+		expect(audit.pass).toBe(false);
+		expect(audit.failures.join(' | ')).toMatch(/schema mismatch/i);
+		expect(audit.failures.join(' | ')).toMatch(/bucket gap/i);
+		expect(audit.failures.join(' | ')).toMatch(/empty numeric cell/i);
+	});
+
+	test('auditWarehouseRows fails sparse repeats, empty sparse tables, row-count lower bounds, and missing observed series', () => {
+		const spec = {
+			name: 'audit_sparse',
+			type: 'point-in-time',
+			grain: 'month',
+			sparse: true,
+			baseline: 10,
+			timeColumn: 'month',
+			valueColumn: 'arr',
+			source: { groupBy: ['region'], minus: [] },
+		};
+		const sourceRows = [
+			{ __t: Date.parse('2024-01-01T00:00:00Z') / 1000, value: 5, region: 'us' },
+			{ __t: Date.parse('2024-02-01T00:00:00Z') / 1000, value: 0, region: 'us' },
+			{ __t: Date.parse('2024-01-01T00:00:00Z') / 1000, value: 2, region: 'eu' },
+		];
+
+		const repeated = auditWarehouseRows([
+			{ month: '2024-01-01', region: 'us', arr: 15 },
+			{ month: '2024-02-01', region: 'us', arr: 15 },
+		], spec, {
+			datasetStart: '2024-01-01T00:00:00Z',
+			datasetEnd: '2024-02-01T00:00:00Z',
+			sourceRows,
+		});
+
+		const empty = auditWarehouseRows([], spec, {
+			datasetStart: '2024-01-01T00:00:00Z',
+			datasetEnd: '2024-02-01T00:00:00Z',
+			sourceRows,
+		});
+
+		expect(repeated.pass).toBe(false);
+		expect(repeated.failures.join(' | ')).toMatch(/repeated/i);
+		expect(repeated.failures.join(' | ')).toMatch(/missing series|first bucket/i);
+
+		expect(empty.pass).toBe(false);
+		expect(empty.failures.join(' | ')).toMatch(/row count/i);
+		expect(empty.failures.join(' | ')).toMatch(/missing series|first bucket|empty sparse/i);
 	});
 });
 

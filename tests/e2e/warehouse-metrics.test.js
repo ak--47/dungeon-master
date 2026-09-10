@@ -3,11 +3,15 @@ import { beforeEach, afterEach, describe, test, expect } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { spawnSync } from 'child_process';
 import { pathToFileURL } from 'url';
 import generate from '../../index.js';
 
 const timeout = 120_000;
 const DATA_DIR = path.join(os.tmpdir(), 'dungeon-master-warehouse-metrics');
+const ROOT = path.resolve(import.meta.dirname, '../..');
+const VERIFY_STORIES = path.join(ROOT, 'scripts/verify-stories.mjs');
+const FIXTURE = path.join(ROOT, 'dungeons/technical/warehouse.js');
 
 function clearData() {
 	try {
@@ -31,6 +35,23 @@ function readLines(filePath) {
 
 function readNdjson(filePath) {
 	return readLines(filePath).map((line) => JSON.parse(line));
+}
+
+function runVerifyStories(args) {
+	return spawnSync(process.execPath, [VERIFY_STORIES, ...args], {
+		cwd: ROOT,
+		encoding: 'utf-8',
+		timeout,
+	});
+}
+
+function makeTempDir() {
+	return fs.mkdtempSync(path.join(os.tmpdir(), 'dm-wh-verify-'));
+}
+
+function writeFixture(filePath, content) {
+	fs.mkdirSync(path.dirname(filePath), { recursive: true });
+	fs.writeFileSync(filePath, content);
 }
 
 function countInclusiveDays(startIso, endIso) {
@@ -150,5 +171,113 @@ describe.sequential('warehouse metrics e2e', () => {
 			'daily_active_subscriptions',
 			'monthly_arr_snapshot',
 		]);
+	}, timeout);
+
+	test('verify-stories warehouse CLI matches disk and in-memory reports from temp-dir artifacts', async () => {
+		const fixture = await loadFixture({ bustCache: true });
+		const tmpDir = makeTempDir();
+		const prefix = 'warehouse-cli-parity';
+		try {
+			await generate({
+				...fixture,
+				name: prefix,
+				writeToDisk: tmpDir,
+				format: 'json',
+				gzip: false,
+				verbose: false,
+				credentials: { ...(fixture.credentials || {}), token: '' },
+			});
+
+			const inMemory = runVerifyStories([FIXTURE, '--in-memory', '--json']);
+			const disk = runVerifyStories([FIXTURE, '--data-prefix', path.join(tmpDir, prefix), '--json']);
+
+			expect(inMemory.status).toBe(0);
+			expect(disk.status).toBe(0);
+
+			const inMemoryReport = JSON.parse(inMemory.stdout);
+			const diskReport = JSON.parse(disk.stdout);
+
+			expect(diskReport.pass).toBe(true);
+			expect(diskReport.warehouseAudits).toEqual(inMemoryReport.warehouseAudits);
+			expect(diskReport.stories.map((story) => [story.id, story.verdict])).toEqual(
+				inMemoryReport.stories.map((story) => [story.id, story.verdict]),
+			);
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	}, timeout);
+
+	test('verify-stories runs warehouse audit with no stories present', async () => {
+		const tmpDir = makeTempDir();
+		const fixturePath = path.join(tmpDir, 'warehouse-no-stories.mjs');
+		const prefix = 'warehouse-no-stories';
+		writeFixture(fixturePath, `import base from ${JSON.stringify(pathToFileURL(FIXTURE).href)};
+export default { ...base, credentials: { ...(base.credentials || {}), token: '' } };
+`);
+		try {
+			const { default: fixture } = await import(`${pathToFileURL(fixturePath).href}?t=${Date.now()}`);
+			await generate({
+				...fixture,
+				name: prefix,
+				writeToDisk: tmpDir,
+				format: 'json',
+				gzip: false,
+				verbose: false,
+			});
+
+			const report = runVerifyStories([fixturePath, '--data-prefix', path.join(tmpDir, prefix), '--json']);
+
+			expect(report.status).toBe(0);
+			const parsed = JSON.parse(report.stdout);
+			expect(parsed.stories).toEqual([]);
+			expect(parsed.warehouseAudits.length).toBeGreaterThan(0);
+			expect(parsed.pass).toBe(true);
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	}, timeout);
+
+	test('verify-stories exits nonzero when warehouse audit fails on temp-dir disk artifacts', async () => {
+		const tmpDir = makeTempDir();
+		const fixturePath = path.join(tmpDir, 'warehouse-audit-fail.mjs');
+		const prefix = 'warehouse-audit-fail';
+		writeFixture(fixturePath, `import base from ${JSON.stringify(pathToFileURL(FIXTURE).href)};
+export default {
+	...base,
+	credentials: { ...(base.credentials || {}), token: '' },
+	stories: undefined,
+	warehouseMetrics: [
+		{
+			...base.warehouseMetrics[0],
+			columns: { revenue_quality: 0 },
+		},
+	],
+	hook(row, type) {
+		if (type !== 'warehouse') return row;
+		row.revenue_quality = '';
+		return row;
+	},
+};
+`);
+		try {
+			const { default: fixture } = await import(`${pathToFileURL(fixturePath).href}?t=${Date.now()}`);
+			await generate({
+				...fixture,
+				name: prefix,
+				writeToDisk: tmpDir,
+				format: 'json',
+				gzip: false,
+				verbose: false,
+			});
+
+			const report = runVerifyStories([fixturePath, '--data-prefix', path.join(tmpDir, prefix), '--json']);
+
+			expect(report.status).toBe(1);
+			const parsed = JSON.parse(report.stdout);
+			expect(parsed.pass).toBe(false);
+			expect(parsed.warehouseAudits[0].failures.join(' | ')).toMatch(/empty numeric cell/i);
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
 	}, timeout);
 });

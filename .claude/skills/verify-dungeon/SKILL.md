@@ -77,6 +77,8 @@ node scripts/verify-stories.mjs <dungeon-path> --data-prefix <run-name> --json  
 
 The runner streams the shards from Step 2, evaluates every assertion against its declared `target` / `floor` / `minCohort`, substitutes `{{PREFIX}}` into `duckdb`-type assertions and shells them out, enforces hook coverage (every numbered hook in the HOOK STORIES comment block must be targeted by at least one story), and prints a five-tier verdict table. Exit code is non-zero when any story lands WEAK / NONE / INVERSE or coverage is incomplete.
 
+When the dungeon declares `warehouseMetrics`, the runner also performs an automatic warehouse shape audit even if the dungeon exports no `stories`: it checks declared-column integrity, dense-gap absence, monotonic time ordering, empty numeric cells, sparse repeated-value suppression, and row-count sanity against the dataset window. Audit failures are reported alongside story verdicts and fail the CLI.
+
 **Verdicts are computed, not judged.** They include the population floor: a cohort smaller than the assertion's `minCohort` caps at WEAK — a 12-user cohort can no longer score NAILED regardless of how clean its ratio looks. See [report-format.md "Verdict criteria"](references/report-format.md#verdict-criteria-5-tier) for the mechanical definitions.
 
 **What the LLM investigates after this step — and nothing else:**

@@ -128,3 +128,60 @@ const config = {
 };
 
 export default config;
+
+export const stories = [
+	{
+		id: 'H1-bookings-corr',
+		hook: 'H1',
+		archetype: 'temporal-inflection',
+		narrative: 'The additive warehouse bookings table should track the generated booking revenue closely enough for a warehouse metric demo.',
+		assertions: [
+			{
+				breakdown: { type: 'warehouse-stats', table: 'daily_new_bookings' },
+				select: { s: { where: {} } },
+				expect: { metric: 's.corr', op: '>=', target: 0.9, floor: 0.7 },
+			},
+		],
+	},
+	{
+		id: 'H2-active-subs-shape',
+		hook: 'H2',
+		archetype: 'session-shape',
+		narrative: 'The dense active subscription snapshot should stay fully ordered, gap-free, and numerically populated across the full dataset window.',
+		assertions: [
+			{
+				breakdown: { type: 'warehouse-stats', table: 'daily_active_subscriptions' },
+				select: { s: { where: {} } },
+				expect: { metric: 's.gaps', op: '<=', target: 0 },
+			},
+			{
+				breakdown: { type: 'warehouse-stats', table: 'daily_active_subscriptions' },
+				select: { s: { where: {} } },
+				expect: { metric: 's.emptyNumericCells', op: '<=', target: 0 },
+			},
+			{
+				breakdown: { type: 'warehouse-stats', table: 'daily_active_subscriptions' },
+				select: { s: { where: {} } },
+				expect: { metric: 's.nonMonotonicTime', op: '<=', target: 0 },
+			},
+		],
+	},
+	{
+		id: 'H3-arr-history',
+		hook: 'H3',
+		archetype: 'composition-drift',
+		narrative: 'The sparse ARR snapshot should carry meaningful monthly history before the event window without a large seam jump into the live months.',
+		assertions: [
+			{
+				breakdown: { type: 'warehouse-stats', table: 'monthly_arr_snapshot' },
+				select: { s: { where: {} } },
+				expect: { metric: 's.buckets', op: '>=', target: 18 },
+			},
+			{
+				breakdown: { type: 'warehouse-stats', table: 'monthly_arr_snapshot' },
+				select: { s: { where: {} } },
+				expect: { metric: 's.seamJumpPct', op: '<=', target: 30 },
+			},
+		],
+	},
+];

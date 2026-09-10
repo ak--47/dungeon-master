@@ -2050,9 +2050,10 @@ export interface StoryAssertion {
     /**
      * Byte-compatible with `emulateBreakdown` / `verifyDungeon` args — or the
      * `{ type: 'duckdb', sql }` escape hatch (disk mode only; `{{PREFIX}}` in
-     * the SQL is substituted with the run's data prefix path).
+     * the SQL is substituted with the run's data prefix path), or warehouse
+     * verification rows via `{ type: 'warehouse' | 'warehouse-stats', table }`.
      */
-    breakdown: Record<string, unknown> & { type: string; sql?: string };
+    breakdown: Record<string, unknown> & { type: string; sql?: string; table?: string };
     select?: StorySelect;
     expect?: StoryExpect;
     /**
