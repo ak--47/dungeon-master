@@ -23,6 +23,7 @@ import { userLoop } from './lib/orchestrators/user-loop.js';
 import { sendToMixpanel, collectWrittenFiles, releaseConnections } from './lib/orchestrators/mixpanel-sender.js';
 // Generators
 import { makeAdSpend } from './lib/generators/adspend.js';
+import { makeStandaloneEvents } from './lib/generators/standalone.js';
 import { makeMirror } from './lib/generators/mirror.js';
 import { makeGroupProfile, makeProfile } from './lib/generators/profiles.js';
 
@@ -194,6 +195,14 @@ async function runDungeon(config) {
 			context.reportProgress({ phase: "step", step: "adspend", status: "complete", duration: Date.now() - _t4 });
 		}
 
+		// Step 4b: Generate standalone identity-less metric snapshots (if configured) — v1.8.0
+		if (validatedConfig.standaloneEvents?.length > 0) {
+			context.reportProgress({ phase: "step", step: "standalone", status: "start" });
+			const _t4b = Date.now();
+			await generateStandaloneData(context);
+			context.reportProgress({ phase: "step", step: "standalone", status: "complete", duration: Date.now() - _t4b });
+		}
+
 		if (context.config.verbose) logger.info('Starting user and event generation...');
 		// Step 5: Main user and event generation
 		context.reportProgress({ phase: "step", step: "users", status: "start" });
@@ -352,6 +361,32 @@ async function generateAdSpendData(context) {
 			for (const adSpendEvent of adSpendEvents) {
 				await storage.adSpendData.hookPush(adSpendEvent);
 			}
+		}
+	}
+}
+
+/**
+ * Generate standalone identity-less metric snapshots — v1.8.0.
+ *
+ * One record per cadence tick per dimension cross-product row. Records carry no
+ * `user_id` and no `device_id`; they describe a system, not a person.
+ *
+ * @param {Context} context - Context object
+ */
+async function generateStandaloneData(context) {
+	const { config, storage } = context;
+	const specs = /** @type {import('./types').ResolvedStandaloneEventConfig[]} */ (config.standaloneEvents);
+
+	for (const spec of specs) {
+		const records = makeStandaloneEvents(context, spec);
+		for (const record of records) {
+			// The `standalone` hook fires on push, like ad-spend. Meta carries the
+			// stream's resolved spec so a hook can tell the streams apart.
+			// `datasetStart`/`datasetEnd` are added by hookPush itself.
+			await storage.standaloneEventData.hookPush(
+				/** @type {import('./types').EventSchema} */ (record),
+				{ spec, config }
+			);
 		}
 	}
 }
@@ -567,6 +602,7 @@ async function flushStorageToDisk(storage, config) {
 	if (storage.eventData?.flush) flushPromises.push(storage.eventData.flush());
 	if (storage.userProfilesData?.flush) flushPromises.push(storage.userProfilesData.flush());
 	if (storage.adSpendData?.flush) flushPromises.push(storage.adSpendData.flush());
+	if (storage.standaloneEventData?.flush) flushPromises.push(storage.standaloneEventData.flush());
 	if (storage.mirrorEventData?.flush) flushPromises.push(storage.mirrorEventData.flush());
 	if (storage.groupEventData?.flush) flushPromises.push(storage.groupEventData.flush());
 
@@ -640,6 +676,7 @@ function extractStorageData(storage) {
 		mirrorEventData: storage.mirrorEventData || [],
 		userProfilesData: storage.userProfilesData || [],
 		adSpendData: storage.adSpendData || [],
+		standaloneEventData: storage.standaloneEventData || [],
 		// Keep arrays of HookedArrays as separate arrays (don't flatten)
 		scdTableData: storage.scdTableData || [],
 		groupProfilesData: storage.groupProfilesData || [],

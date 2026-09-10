@@ -453,6 +453,16 @@ export interface Dungeon {
     groupProps?: Record<string, Record<string, ValueValid>>;
     /** Lookup table definitions for dimension tables. */
     lookupTables?: LookupTableSchema[];
+    /**
+     * v1.8.0 — identity-less metric snapshots. One record per cadence tick per
+     * dimension cross-product row, carrying NO `user_id` and NO `device_id`.
+     *
+     * Use for infrastructure and finance telemetry: daily CDN egress per region,
+     * weekly billing rollups per plan tier, hourly queue depth per cluster.
+     * `$ad_spend` (`hasAdSpend: true`) is the same idea hard-coded; this is the
+     * general form and it does not use a Mixpanel reserved event name.
+     */
+    standaloneEvents?: StandaloneEventConfig[];
     /** TimeSoup configuration: shapes intra-week and intra-day rhythm (peaks, deviation, DOW/HOD weights). Pair with `macro` for big-picture trend control. */
     soup?: soup;
     /** Macro trend shape across the full dataset window: birth distribution + per-user event allocation. Default: "flat". Use "growth"/"viral"/"steady"/"decline" or a custom object. */
@@ -703,7 +713,7 @@ export interface ResolvedMacro {
  * - "everything"  — array of ALL events for one user (return array to replace; meta.profile available)
  *
  * Storage-only hooks (fire during hookPush, not in generators):
- * - "ad-spend", "group", "mirror", "lookup"
+ * - "ad-spend", "group", "mirror", "lookup", "standalone"
  */
 export type hookTypes =
     | "event"
@@ -716,6 +726,7 @@ export type hookTypes =
     | "funnel-pre"
     | "funnel-post"
     | "ad-spend"
+    | "standalone"
     | "churn"
     | "group-event"
     | "everything"
@@ -732,7 +743,7 @@ export type hookTypes =
  * - "event": return value REPLACES the event (must be the event object).
  * - "everything": return an array to REPLACE the user's event list (filter/inject/dedupe).
  * - "user", "scd-pre", "funnel-pre", "funnel-post": return value is IGNORED — mutate in place.
- * - storage-only ("ad-spend", "group", "mirror", "lookup"): return value is IGNORED.
+ * - storage-only ("ad-spend", "group", "mirror", "lookup", "standalone"): return value is IGNORED.
  *
  * @param record - The data being processed (event, profile, array of events, funnel config, etc.).
  * @param type - Which hook type is firing — see `hookTypes`.
@@ -954,6 +965,7 @@ export interface Storage {
     mirrorEventData?: HookedArray<EventSchema>;
     userProfilesData?: HookedArray<UserProfile>;
     adSpendData?: HookedArray<EventSchema>;
+    standaloneEventData?: HookedArray<EventSchema>;
     groupProfilesData?: HookedArray<GroupProfileSchema>[];
     lookupTableData?: HookedArray<LookupTableSchema>[];
     scdTableData?: HookedArray<SCDSchema>[];
@@ -1596,6 +1608,8 @@ export type Result = {
     scdTableData: SCDSchema[][];
     /** Ad-spend events (only populated when `hasAdSpend: true`). */
     adSpendData: EventSchema[];
+    /** Identity-less metric snapshots (only populated when `standaloneEvents` is set). v1.8.0. */
+    standaloneEventData: EventSchema[];
     /** Group profiles — one inner array per group key. */
     groupProfilesData: GroupProfileSchema[][];
     /** Lookup tables — one inner array per table. */
@@ -2325,11 +2339,107 @@ export interface WritePaths {
     eventFiles: string[];
     userFiles: string[];
     adSpendFiles: string[];
+    standaloneFiles: string[];
     scdFiles: string[];
     mirrorFiles: string[];
     groupFiles: string[];
     lookupFiles: string[];
     folder: string;
+}
+
+// ============= Standalone (identity-less) Events — v1.8.0 =============
+
+/**
+ * An identity-less metric snapshot stream.
+ *
+ * The engine emits one record per cadence tick per dimension cross-product row.
+ * Records carry `event`, `time`, `insert_id`, `distinct_id`, every dimension as
+ * a flat property, and every resolved entry in `properties`. They never carry
+ * `user_id` or `device_id`, because they describe a system, not a person.
+ *
+ * @example
+ * standaloneEvents: [{
+ *   event: 'cdn_egress',
+ *   cadence: 'day',
+ *   dimensions: { region: ['us-east', 'us-west', 'eu', 'apac'] },
+ *   distinctIdFrom: 'region',
+ *   properties: {
+ *     gb_out:   (ctx) => 400 + ctx.tickIndex * 3,
+ *     cost_usd: (ctx) => (400 + ctx.tickIndex * 3) * 0.085,
+ *     p95_ms:   [120, 140, 160],
+ *   },
+ * }]
+ */
+export interface StandaloneEventConfig {
+    /** Event name as it lands in Mixpanel. Must be unique across `standaloneEvents`. */
+    event: string;
+    /**
+     * How often a snapshot fires. Ticks start at the dataset start and step by
+     * the cadence; the last tick is the final one at or before the dataset end.
+     * Default: `'day'`.
+     */
+    cadence?: 'hour' | 'day' | 'week';
+    /**
+     * Dimension values to cross-product. Each key becomes a flat property on the
+     * record. `{ region: ['us','eu'], tier: ['a','b'] }` emits 4 records per tick.
+     * Omit for a single record per tick.
+     */
+    dimensions?: Record<string, any[]>;
+    /**
+     * Which dimension supplies the synthetic `distinct_id`. Must name a declared
+     * dimension. When omitted, `distinct_id` is the event name. The id exists so
+     * Mixpanel accepts the record; it never maps to a person.
+     */
+    distinctIdFrom?: string;
+    /**
+     * Snapshot metrics. Same `ValueValid` forms as event properties, and value
+     * functions receive a `StandaloneValueContext` so a metric can shape a trend
+     * across the window.
+     */
+    properties?: Record<string, ValueValid>;
+}
+
+/** @internal Normalized `StandaloneEventConfig` produced by the validator. */
+export interface ResolvedStandaloneEventConfig {
+    event: string;
+    cadence: 'hour' | 'day' | 'week';
+    dimensions: Record<string, any[]>;
+    distinctIdFrom: string | null;
+    properties: Record<string, ValueValid>;
+}
+
+/**
+ * Context handed to every standalone property value function.
+ * Shares `time` and `config` with `ValueContext`, so a function written for a
+ * normal event property still works unchanged.
+ */
+export interface StandaloneValueContext {
+    /** Tick timestamp in unix MILLISECONDS. */
+    time: number;
+    /** The full validated dungeon config. */
+    config: Dungeon;
+    /** This row's dimension values, e.g. `{ region: 'us-east' }`. */
+    dimensions: Record<string, any>;
+    /** Zero-based index of this tick within the window. Use it to shape a trend. */
+    tickIndex: number;
+    /** Total number of ticks in the window. `tickIndex / (tickCount - 1)` is window progress. */
+    tickCount: number;
+    /** The cadence this stream fires on. */
+    cadence: 'hour' | 'day' | 'week';
+    /** The partially built record (`event`, `time`, `insert_id`, `distinct_id`, dimensions). */
+    event: Record<string, any>;
+}
+
+/**
+ * Meta passed to the `"standalone"` hook.
+ *
+ * Storage-only: the return value is IGNORED. Mutate the record in place.
+ */
+export interface HookMetaStandalone extends HookMetaTimeAnchors {
+    /** The resolved config for the stream this record belongs to. */
+    spec: ResolvedStandaloneEventConfig;
+    /** The full validated dungeon config. */
+    config: Dungeon;
 }
 
 /**

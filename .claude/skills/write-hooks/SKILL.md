@@ -1,7 +1,7 @@
 ---
 name: write-hooks
 description: Use when an existing dungeon needs engineered story trends or "magic number" patterns — writes the `hook` function using atom helpers and high-level patterns. Adds no new event flags; never mutates the schema.
-argument-hint: [path/to/dungeon.js] [free-text story / trend description]
+argument-hint: '[path/to/dungeon.js] [free-text story / trend description]'
 model: claude-opus-4-6
 effort: max
 ---

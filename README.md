@@ -537,6 +537,7 @@ dungeon-master generates multiple data types that mirror a real analytics implem
 | SCDs | `scdProps` | slowly changing dimensions (subscription tier over time) |
 | lookup tables | `lookupTables` | dimension tables (product catalog, region mapping) |
 | ad spend | `hasAdSpend` | daily ad spend with impressions, clicks, cost metrics |
+| standalone events | `standaloneEvents` | identity-less metric snapshots on a cadence (infrastructure, finance, ops) |
 | mirror datasets | `mirrorProps` | transformed copies of event data (A/B versions) |
 | organic text | `createTextGenerator` | reviews, support tickets, search queries, chat messages |
 
@@ -605,6 +606,73 @@ experiment: {
 variant assignment is **sticky by default**: a deterministic hash of `user_id` + experiment name, so a user keeps their variant across every funnel pass (matches Mixpanel experiment SDK bucketing and makes variant lift verifiable). set `sticky: false` to re-roll the variant on each pass with the seeded RNG. hooks see the resolved variant on `meta.experiment` in `funnel-pre` / `funnel-post`.
 
 **the variant lands on the user profile (1.7.0).** every exposed user carries `"Experiment: <name>": "<variant>"` (e.g. `"Experiment: Checkout Redesign": "New Checkout"`), so the funnel breaks down by variant in Mixpanel with a user-property breakdown — no cohort built from the exposure event. stamped when the user is first exposed (respects `startDaysBeforeEnd`); never-exposed users carry nothing; the `user` hook fires before exposure and does not see it, the `everything` hook does. `stampProfile: false` turns it off; `sticky: false` implies off. measured: 0 mismatches between the profile value and the `Variant name` on 13,005 exposure events.
+
+## standalone events (identity-less metric snapshots)
+
+`standaloneEvents` generates records that describe a **system, not a person**. they carry
+no `user_id` and no `device_id`. use them for infrastructure, finance, and ops telemetry:
+daily CDN egress per region, weekly billing rollups per plan tier, hourly queue depth per
+cluster. `hasAdSpend` is the same idea hard-coded to `$ad_spend`; this is the general form
+and it does not use a Mixpanel reserved event name.
+
+```javascript
+standaloneEvents: [
+  {
+    event: 'cdn_egress',
+    cadence: 'day',                                       // 'hour' | 'day' | 'week' (default 'day')
+    dimensions: { region: ['us-east', 'us-west', 'eu'] }, // cross-producted
+    distinctIdFrom: 'region',                             // synthetic id, never a person
+    properties: {
+      gb_out:   (ctx) => 400 + ctx.tickIndex * 3,         // shape a trend across the window
+      cost_usd: (ctx) => (400 + ctx.tickIndex * 3) * 0.085,
+      p95_ms:   [120, 140, 160],                          // same ValueValid forms as event props
+    },
+  },
+  {
+    event: 'billing_rollup',
+    cadence: 'week',
+    dimensions: { tier: ['free', 'pro', 'max'] },
+    properties: { mrr_usd: (ctx) => ..., churn_usd: (ctx) => ... },
+  },
+]
+```
+
+the engine emits **one record per cadence tick per dimension cross-product row**. the
+example above produces 3 records per day (`cdn_egress`) plus 3 records per week
+(`billing_rollup`). ticks start at the dataset start and step by the cadence; the last tick
+is the final one at or before the dataset end, so nothing lands in the future.
+
+each record carries `event`, `time`, `insert_id`, `distinct_id`, every dimension as a flat
+property, and every resolved entry in `properties`.
+
+| field | behavior |
+|---|---|
+| `event` | required, unique across `standaloneEvents` |
+| `cadence` | `'hour'`, `'day'`, or `'week'`. default `'day'` |
+| `dimensions` | object of non-empty arrays, cross-producted. omit for one record per tick |
+| `distinctIdFrom` | must name a declared dimension. omitted → `distinct_id` is the event name |
+| `properties` | keys may not collide with a dimension or with `event`/`time`/`insert_id`/`distinct_id`/`user_id`/`device_id` |
+
+property value functions receive a `StandaloneValueContext`: `{ time, config, dimensions,
+tickIndex, tickCount, cadence, event }`. `tickIndex / (tickCount - 1)` is window progress —
+use it to shape growth, a dip, or a spike.
+
+the stream lands in `result.standaloneEventData`, writes to its own `-STANDALONE` file
+shard, and imports to Mixpanel as its own event stream. hooks fire with type
+`"standalone"`; `meta.spec` carries the resolved config so a hook can tell streams apart.
+like other storage-only hooks the return value is ignored — mutate the record in place.
+
+```javascript
+hook: (record, type, meta) => {
+  if (type === 'standalone' && meta.spec.event === 'cdn_egress' && record.region === 'us-east') {
+    record.err_5xx *= 40;   // an outage, in one region, on the infra stream only
+  }
+  return record;
+}
+```
+
+validation throws rather than skipping. a malformed entry would silently drop a whole data
+stream, and you would not notice until the charts were wrong.
 
 ## user generation
 

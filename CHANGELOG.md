@@ -2,6 +2,61 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.8.0 — 2026-09-09
+
+### Added — `standaloneEvents`: identity-less metric snapshots
+
+A new top-level config key that generates records describing a **system, not a
+person**. They carry no `user_id` and no `device_id`. Before 1.8.0 the only
+identity-less stream the engine could produce was `$ad_spend` via `hasAdSpend`,
+which is hard-coded to one shape, one cadence, and a Mixpanel reserved event
+name. `standaloneEvents` is the general form.
+
+```js
+standaloneEvents: [{
+  event: 'cdn_egress',
+  cadence: 'day',                                       // 'hour' | 'day' | 'week', default 'day'
+  dimensions: { region: ['us-east', 'us-west', 'eu'] }, // cross-producted
+  distinctIdFrom: 'region',                             // synthetic id, never a person
+  properties: {
+    gb_out:   (ctx) => 400 + ctx.tickIndex * 3,
+    cost_usd: (ctx) => (400 + ctx.tickIndex * 3) * 0.085,
+    p95_ms:   [120, 140, 160],
+  },
+}]
+```
+
+- One record per cadence tick per dimension cross-product row.
+- Ticks start at the dataset start and step by the cadence. The last tick is the
+  final one at or before the dataset end, so nothing lands in the future.
+- Each record carries `event`, `time`, `insert_id`, `distinct_id`, every
+  dimension as a flat property, and every resolved entry in `properties`.
+- `distinct_id` is the value of the dimension named by `distinctIdFrom`, else the
+  event name. It exists so Mixpanel accepts the record; it never maps to a person.
+- Property value functions receive a `StandaloneValueContext`:
+  `{ time, config, dimensions, tickIndex, tickCount, cadence, event }`.
+  `tickIndex / (tickCount - 1)` is window progress — use it to shape a trend.
+- New hook type `"standalone"` (storage-only, return value ignored, mutate in
+  place). `meta.spec` carries the stream's resolved config.
+- Lands in `result.standaloneEventData`, writes to a `-STANDALONE` file shard,
+  and imports to Mixpanel as its own event stream.
+- Validation **throws** on a malformed entry rather than skipping it. A silent
+  skip would drop a whole data stream without the author noticing.
+
+New types: `StandaloneEventConfig`, `ResolvedStandaloneEventConfig`,
+`StandaloneValueContext`, `HookMetaStandalone`. `WritePaths` gains
+`standaloneFiles`; `Result` gains `standaloneEventData`; `hookTypes` gains
+`"standalone"`.
+
+**Output compatibility.** Additive only. A config without `standaloneEvents` is
+byte-identical to 1.7.0 — the generation pass is gated on the key being present,
+so the seeded RNG stream is untouched. `config.standaloneEvents` normalizes to
+`[]` when absent. Full unit + integration suite: 1920 passed, 1 skipped, 0 failed.
+`tsc --noEmit` clean.
+
+New tests: `tests/unit/standalone-events.test.js` (25),
+`tests/integration/standalone-events.test.js` (15).
+
 ## 1.7.0 — 2026-09-03
 
 The engine round for DM4 v5. Executes the 1.6.4 "Deferred to 1.7.0" table plus
