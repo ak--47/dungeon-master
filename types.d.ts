@@ -463,6 +463,8 @@ export interface Dungeon {
      * general form and it does not use a Mixpanel reserved event name.
      */
     standaloneEvents?: StandaloneEventConfig[];
+    /** v1.8.0 — warehouse-backed metric source tables derived from the run's own event stream. */
+    warehouseMetrics?: WarehouseMetricConfig[];
     /** TimeSoup configuration: shapes intra-week and intra-day rhythm (peaks, deviation, DOW/HOD weights). Pair with `macro` for big-picture trend control. */
     soup?: soup;
     /** Macro trend shape across the full dataset window: birth distribution + per-user event allocation. Default: "flat". Use "growth"/"viral"/"steady"/"decline" or a custom object. */
@@ -713,7 +715,7 @@ export interface ResolvedMacro {
  * - "everything"  — array of ALL events for one user (return array to replace; meta.profile available)
  *
  * Storage-only hooks (fire during hookPush, not in generators):
- * - "ad-spend", "group", "mirror", "lookup", "standalone"
+ * - "ad-spend", "group", "mirror", "lookup", "standalone", "warehouse"
  */
 export type hookTypes =
     | "event"
@@ -727,6 +729,7 @@ export type hookTypes =
     | "funnel-post"
     | "ad-spend"
     | "standalone"
+    | "warehouse"
     | "churn"
     | "group-event"
     | "everything"
@@ -2440,6 +2443,121 @@ export interface HookMetaStandalone extends HookMetaTimeAnchors {
     spec: ResolvedStandaloneEventConfig;
     /** The full validated dungeon config. */
     config: Dungeon;
+}
+
+export interface WarehouseMetricSource {
+    /** Source event names whose bucketed measure contributes positively to the series. */
+    event: string | string[];
+    /** Source event names whose bucketed measure is subtracted from the series. */
+    minus?: string | string[];
+    /** Per-bucket measure. Default: `'count'`. */
+    measure?: 'count' | 'sum' | 'avg' | 'dau' | 'users';
+    /** Required when `measure` is `'sum'` or `'avg'`. */
+    property?: string;
+    /** Optional row filter over flat event records. */
+    where?: ((event: Record<string, any>) => boolean) | null;
+    /** Optional dimension columns copied from source event or super prop keys. */
+    groupBy?: string | string[];
+}
+
+export interface WarehouseMetricConfig {
+    /** Unique metric/table name. Must match `/^[a-z][a-z0-9_]{0,63}$/`. */
+    name: string;
+    /** Metric family: additive sums per bucket vs point-in-time carried levels. Default: `'additive'`. */
+    type?: 'additive' | 'point-in-time';
+    /** Bucket grain. Default: `'day'`. */
+    grain?: 'day' | 'week' | 'month';
+    /** Point-in-time only: emit only the first bucket and changed values. Default: `false`. */
+    sparse?: boolean;
+    /** Declarative source spec describing how to derive the table from generated events. */
+    source: WarehouseMetricSource;
+    /** Output time column name. Default: `'date'`. */
+    timeColumn?: string;
+    /** Output value column name. Default: `'value'`. */
+    valueColumn?: string;
+    /** Point-in-time starting level at the dataset window start. Default: `0`. */
+    baseline?: number;
+    /** Multiplier applied after bucket aggregation. Default: `1`. */
+    scale?: number;
+    /** Seeded jitter fraction clamped to `[0, 0.5]`. Default: `0`. */
+    noise?: number;
+    /** Grain periods of backfill before the dataset window. Default: `0`. */
+    history?: number;
+    /** Extra declared output columns, preserved in declaration order. */
+    columns?: Record<string, ValueValid | ((ctx: WarehouseValueContext) => ValueValid)>;
+    /** Output file format. Defaults to the dungeon format, else `'csv'`. */
+    format?: 'csv' | 'json';
+}
+
+/** @internal Normalized `WarehouseMetricConfig` produced by the validator. */
+export interface ResolvedWarehouseMetricConfig {
+    name: string;
+    type: 'additive' | 'point-in-time';
+    grain: 'day' | 'week' | 'month';
+    sparse: boolean;
+    source: {
+        event: string[];
+        minus: string[];
+        measure: 'count' | 'sum' | 'avg' | 'dau' | 'users';
+        property: string | null;
+        where: ((event: Record<string, any>) => boolean) | null;
+        groupBy: string[];
+    };
+    timeColumn: string;
+    valueColumn: string;
+    baseline: number;
+    scale: number;
+    noise: number;
+    history: number;
+    columns: Record<string, ValueValid | ((ctx: WarehouseValueContext) => ValueValid)>;
+    format: 'csv' | 'json';
+}
+
+export interface WarehouseValueContext {
+    /** Final bucket value after scale and noise. */
+    value: number;
+    /** Partially built row so later columns can depend on earlier ones. */
+    row: Record<string, any>;
+    /** Bucket start in unix milliseconds. */
+    time: number;
+    /** Zero-based bucket index within this series, including backfill buckets when present. */
+    bucketIndex: number;
+    /** Total number of buckets emitted for this series. */
+    bucketCount: number;
+    /** Bucket grain for this metric. */
+    grain: 'day' | 'week' | 'month';
+    /** True when this row was synthesized before the dataset window by `history`. */
+    isBackfill: boolean;
+    /** Stable joined dimension key for this series. Empty string when undimensioned. */
+    seriesKey: string;
+    /** The resolved metric spec for this table. */
+    spec: ResolvedWarehouseMetricConfig;
+    /** The full validated dungeon config. */
+    config: Dungeon;
+}
+
+export interface HookMetaWarehouse extends HookMetaTimeAnchors {
+    /** The resolved config for the metric this row belongs to. */
+    spec: ResolvedWarehouseMetricConfig;
+    /** The full validated dungeon config. */
+    config: Dungeon;
+    /** Metric/table name. */
+    metricName: string;
+    /** Zero-based bucket index within the emitted series. */
+    bucketIndex: number;
+    /** Total emitted buckets in this series. */
+    bucketCount: number;
+    /** Bucket grain for the metric. */
+    grain: 'day' | 'week' | 'month';
+    /** Stable joined dimension key for this series. Empty string when undimensioned. */
+    seriesKey: string;
+    /** True when the row belongs to the `history` backfill before the dataset window. */
+    isBackfill: boolean;
+    /** Raw bucket contributions before scale/noise and before point-in-time carry-forward. */
+    raw: {
+        plus: { count: number; sum: number; users: number };
+        minus: { count: number; sum: number; users: number };
+    };
 }
 
 /**
