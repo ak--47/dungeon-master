@@ -984,6 +984,7 @@ export interface Storage {
     groupProfilesData?: HookedArray<GroupProfileSchema>[];
     lookupTableData?: HookedArray<LookupTableSchema>[];
     warehouseMetricData?: HookedArray<Record<string, any>>[];
+    warehouseManifestFile?: string;
     scdTableData?: HookedArray<SCDSchema>[];
     groupEventData?: HookedArray<EventSchema>;
 }
@@ -1051,6 +1052,14 @@ export interface Context {
     FIXED_NOW: number;
     /** Start of the resolved dataset window (unix seconds). Equal to the user-supplied `datasetStart`, or fallback `today_start - numDays`. */
     FIXED_BEGIN?: number;
+    /** Runtime accumulator for post-loop warehouse metric materialization. */
+    warehouseAccumulator?: {
+        warnings?: string[];
+        ingest: (events: EventSchema[]) => void;
+        getCell: (metricName: string, seriesKey: string, bucketStartSec: number) => any;
+    };
+    /** Manifest describing materialized warehouse tables for downstream tooling. */
+    warehouseManifest?: WarehouseManifest;
     /** Alias of `FIXED_BEGIN` — surfaced on hook `meta.datasetStart`. */
     DATASET_START_SECONDS: number;
     /** Alias of `FIXED_NOW` — surfaced on hook `meta.datasetEnd`. */
@@ -1626,6 +1635,10 @@ export type Result = {
     adSpendData: EventSchema[];
     /** Identity-less metric snapshots (only populated when `standaloneEvents` is set). v1.8.0. */
     standaloneEventData: EventSchema[];
+    /** Materialized warehouse metric tables keyed by metric name. */
+    warehouseMetricData: Record<string, Record<string, any>[]>;
+    /** Warehouse table manifest surfaced whenever `warehouseMetrics` is configured. */
+    warehouseManifest?: WarehouseManifest;
     /** Group profiles — one inner array per group key. */
     groupProfilesData: GroupProfileSchema[][];
     /** Lookup tables — one inner array per table. */
@@ -2572,6 +2585,31 @@ export interface HookMetaWarehouse extends HookMetaTimeAnchors {
         plus: { count: number; sum: number; users: number };
         minus: { count: number; sum: number; users: number };
     };
+}
+
+export interface WarehouseManifestColumn {
+    name: string;
+    bqType: 'DATE' | 'FLOAT64' | 'BOOL' | 'STRING';
+}
+
+export interface WarehouseManifestTable {
+    table: string;
+    file: string;
+    format: 'csv' | 'json';
+    grain: 'day' | 'week' | 'month';
+    type: 'additive' | 'point-in-time';
+    timeColumn: string;
+    valueColumn: string;
+    dimensionColumns: string[];
+    columns: WarehouseManifestColumn[];
+    recommendedAggregation: 'sum' | 'last value';
+    sql: string;
+    refreshHint: string;
+}
+
+export interface WarehouseManifest {
+    configName: string;
+    tables: WarehouseManifestTable[];
 }
 
 /**
