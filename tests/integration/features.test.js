@@ -1088,27 +1088,6 @@ describe('streaming output', () => {
 		// Cleanup
 		fs.unlinkSync(filePath);
 	});
-
-	test('streamCSV respects fixedColumns order and preserves escaping', async () => {
-		const fs = await import('fs');
-		const os = await import('os');
-		const path = await import('path');
-		const data = [
-			{ b: 'say "hi"', a: { nested: true }, c: '' },
-		];
-		const filePath = path.default.join(os.default.tmpdir(), `dm-features-stream-fixed-${process.pid}.csv`);
-
-		await u.streamCSV(filePath, data, { fixedColumns: ['c', 'a', 'b'] });
-
-		const content = fs.readFileSync(filePath, 'utf8').trim();
-		const lines = content.split('\n');
-		expect(lines).toEqual([
-			'c,a,b',
-			'"","{""nested"":true}","say ""hi"""'
-		]);
-
-		fs.unlinkSync(filePath);
-	});
 });
 
 describe('config-validator userProps defaults', () => {

@@ -80,3 +80,38 @@ Observed output summary:
   - `M lib/utils/utils.js`
   - `M tests/integration/features.test.js`
   - `M tests/unit/utils.test.js`
+
+## Review Follow-up
+
+- Review issue fixed only: moved the newly added disk-backed `fixedColumns` coverage out of integration and into e2e.
+- Pure `csvRow` assertions remain in unit.
+- Preserved the existing integration `streamJSON` and header-writing `streamCSV` tests.
+
+### Updated Test Locations
+
+- Disk-backed `fixedColumns` case now lives in `tests/e2e/csv-stream.test.js`.
+- `tests/integration/features.test.js` no longer performs that extra filesystem-backed `fixedColumns` assertion.
+
+### Validation After Review Fix
+
+Command:
+
+```bash
+cd /Users/ak/code/dungeon-master && set -o pipefail && npx vitest run tests/e2e/csv-stream.test.js 2>&1 | tail -50
+```
+
+Observed output summary:
+
+- `Test Files  1 passed (1)`
+- `Tests  1 passed (1)`
+
+Command:
+
+```bash
+cd /Users/ak/code/dungeon-master && set -o pipefail && npx vitest run tests/integration/features.test.js -t 'streaming output' 2>&1 | tail -50
+```
+
+Observed output summary:
+
+- `Test Files  1 passed (1)`
+- `Tests  2 passed | 73 skipped (75)`
