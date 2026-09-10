@@ -1,10 +1,13 @@
 //@ts-nocheck
+import Chance from 'chance';
 import { describe, expect, test } from 'vitest';
 import { validateDungeonConfig } from '../../lib/core/config-validator.js';
 import { validateDungeonShape } from '../../lib/core/dungeon-loader.js';
 import {
+	buildManifest,
 	bucketStart,
 	buildBuckets,
+	materializeWarehouseMetrics,
 	nextBucket,
 	validateWarehouseMetrics,
 	WarehouseAccumulator,
@@ -24,6 +27,35 @@ const metric = (overrides = {}) => ({
 	source: { event: 'purchase' },
 	...overrides,
 });
+
+const seeded = (seed = 'test') => new Chance(seed);
+
+function buildAccumulator(specs, events, window = {
+	FIXED_BEGIN: Date.parse('2024-01-01T00:00:00Z') / 1000,
+	FIXED_NOW: Date.parse('2024-01-04T12:00:00Z') / 1000,
+}) {
+	const accumulator = new WarehouseAccumulator(specs, window);
+	accumulator.ingest(events);
+	return { accumulator, ...window };
+}
+
+function materialize(specs, events, options = {}) {
+	const window = options.window || {
+		FIXED_BEGIN: Date.parse('2024-01-01T00:00:00Z') / 1000,
+		FIXED_NOW: Date.parse('2024-01-04T12:00:00Z') / 1000,
+	};
+	const { accumulator, FIXED_BEGIN, FIXED_NOW } = buildAccumulator(specs, events, window);
+	const materialized = materializeWarehouseMetrics({
+		specs,
+		accumulator,
+		chance: options.chance || seeded(options.seed),
+		FIXED_BEGIN,
+		FIXED_NOW,
+		configName: options.configName || 'warehouse_test',
+		config: options.config || { name: options.configName || 'warehouse_test' },
+	});
+	return { materialized, accumulator, FIXED_BEGIN, FIXED_NOW };
+}
 
 describe('validateWarehouseMetrics', () => {
 	test('absent config normalizes to an empty array with no warnings', () => {
@@ -412,5 +444,307 @@ describe('WarehouseAccumulator', () => {
 		expect(acc.warnings).toHaveLength(2);
 		expect(acc.warnings[0]).toMatch(/sum_metric/);
 		expect(acc.warnings[1]).toMatch(/avg_metric/);
+	});
+
+	test('warns at runtime when observed groupBy cardinality exceeds 50', () => {
+		const acc = new WarehouseAccumulator([
+			spec({
+				name: 'runtime_cardinality',
+				source: {
+					event: ['purchase'],
+					minus: [],
+					measure: 'count',
+					property: null,
+					where: null,
+					groupBy: ['region'],
+				},
+			}),
+		], { FIXED_BEGIN: fixedBegin, FIXED_NOW: fixedNow });
+
+		acc.ingest(Array.from({ length: 51 }, (_, index) => ev('purchase', '2024-01-17T10:00:00Z', { region: `r${index}`, user_id: `u${index}` })));
+
+		expect(acc.warnings.some((warning) => /groupBy/i.test(String(warning)) && /50/i.test(String(warning)))).toBe(true);
+	});
+});
+
+describe('materializeWarehouseMetrics', () => {
+	const dailySpec = (overrides = {}) => ({
+		name: 'daily_metric',
+		type: 'additive',
+		grain: 'day',
+		sparse: false,
+		baseline: 0,
+		scale: 1,
+		noise: 0,
+		history: 0,
+		timeColumn: 'date',
+		valueColumn: 'value',
+		columns: {},
+		format: 'csv',
+		source: {
+			event: ['purchase'],
+			minus: [],
+			measure: 'count',
+			property: null,
+			where: null,
+			groupBy: [],
+		},
+		...overrides,
+	});
+	const ev = (event, time, extras = {}) => ({ event, time, user_id: extras.user_id || 'u1', ...extras });
+
+	test('additive dense emits one row per bucket with zeros for empty buckets', () => {
+		const specs = [dailySpec()];
+		const [{ rows }] = materialize(specs, [
+			ev('purchase', '2024-01-01T10:00:00Z'),
+			ev('purchase', '2024-01-03T10:00:00Z'),
+		]).materialized;
+
+		expect(rows.map((row) => [row.date, row.value])).toEqual([
+			['2024-01-01', 1],
+			['2024-01-02', 0],
+			['2024-01-03', 1],
+			['2024-01-04', 0],
+		]);
+	});
+
+	test('point-in-time dense running level uses baseline plus cumulative signed deltas floored at zero', () => {
+		const specs = [dailySpec({
+			name: 'subs',
+			type: 'point-in-time',
+			baseline: 100,
+			valueColumn: 'active',
+			source: { event: ['subscribe'], minus: ['cancel'], measure: 'count', property: null, where: null, groupBy: [] },
+		})];
+		const [{ rows }] = materialize(specs, [
+			ev('subscribe', '2024-01-01T10:00:00Z', { user_id: 'a' }),
+			ev('subscribe', '2024-01-02T10:00:00Z', { user_id: 'b' }),
+			ev('cancel', '2024-01-03T10:00:00Z', { user_id: 'a' }),
+		]).materialized;
+
+		expect(rows.map((row) => [row.date, row.active])).toEqual([
+			['2024-01-01', 101],
+			['2024-01-02', 102],
+			['2024-01-03', 101],
+			['2024-01-04', 101],
+		]);
+	});
+
+	test('point-in-time sparse emits first bucket then only changed rounded values', () => {
+		const specs = [dailySpec({
+			name: 'arr',
+			type: 'point-in-time',
+			sparse: true,
+			valueColumn: 'arr_usd',
+			source: { event: ['subscribe'], minus: ['cancel'], measure: 'sum', property: 'amount', where: null, groupBy: [] },
+		})];
+		const [{ rows }] = materialize(specs, [
+			ev('subscribe', '2024-01-02T10:00:00Z', { amount: 10 }),
+			ev('cancel', '2024-01-04T10:00:00Z', { amount: 4 }),
+		]).materialized;
+
+		expect(rows.map((row) => [row.date, row.arr_usd])).toEqual([
+			['2024-01-01', 0],
+			['2024-01-02', 10],
+			['2024-01-04', 6],
+		]);
+	});
+
+	test('scale and noise are deterministic and noise zero draws nothing', () => {
+		const specs = [dailySpec({ name: 'scaled', scale: 3, noise: 0.1 })];
+		const events = [ev('purchase', '2024-01-02T10:00:00Z')];
+		const first = materialize(specs, events, { seed: 'same-seed' }).materialized[0].rows;
+		const second = materialize(specs, events, { seed: 'same-seed' }).materialized[0].rows;
+		const zeroNoise = materialize([dailySpec({ name: 'no_noise', scale: 3, noise: 0 })], events).materialized[0].rows;
+
+		expect(first).toEqual(second);
+		expect(zeroNoise.map((row) => row.value)).toEqual([0, 3, 0, 0]);
+	});
+
+	test('month-grain dau divides by the actual bucket length', () => {
+		const specs = [dailySpec({
+			name: 'monthly_dau',
+			grain: 'month',
+			source: { event: ['purchase'], minus: [], measure: 'dau', property: null, where: null, groupBy: [] },
+		})];
+		const [{ rows }] = materialize(specs, [
+			ev('purchase', '2024-01-01T10:00:00Z', { user_id: 'a' }),
+			ev('purchase', '2024-01-31T10:00:00Z', { user_id: 'b' }),
+		], {
+			window: {
+				FIXED_BEGIN: Date.parse('2024-01-01T00:00:00Z') / 1000,
+				FIXED_NOW: Date.parse('2024-01-31T23:59:59Z') / 1000,
+			},
+		}).materialized;
+
+		expect(rows).toEqual([{ date: '2024-01-01', value: 0.06 }]);
+	});
+
+	test('backfill prepends history buckets using the unnoised scaled least-squares slope and marks meta rows', () => {
+		const specs = [dailySpec({ name: 'backfill_metric', scale: 2, history: 3 })];
+		const events = [
+			ev('purchase', '2024-01-01T10:00:00Z'),
+			ev('purchase', '2024-01-02T10:00:00Z'),
+			ev('purchase', '2024-01-02T11:00:00Z'),
+			ev('purchase', '2024-01-03T10:00:00Z'),
+			ev('purchase', '2024-01-03T11:00:00Z'),
+			ev('purchase', '2024-01-03T12:00:00Z'),
+			ev('purchase', '2024-01-04T09:00:00Z'),
+			ev('purchase', '2024-01-04T10:00:00Z'),
+			ev('purchase', '2024-01-04T11:00:00Z'),
+			ev('purchase', '2024-01-04T12:00:00Z'),
+		];
+		const [{ rows, metas }] = materialize(specs, events).materialized;
+
+		expect(rows.map((row) => [row.date, row.value])).toEqual([
+			['2023-12-29', 0],
+			['2023-12-30', 0],
+			['2023-12-31', 0],
+			['2024-01-01', 2],
+			['2024-01-02', 4],
+			['2024-01-03', 6],
+			['2024-01-04', 8],
+		]);
+		expect(metas.slice(0, 3).every((meta) => meta.isBackfill === true)).toBe(true);
+		expect(metas.slice(3).every((meta) => meta.isBackfill === false)).toBe(true);
+	});
+
+	test('groupBy emits sorted multi-key series, preserves null keys as empty series parts, and PIT carries levels independently', () => {
+		const specs = [dailySpec({
+			name: 'grouped_subs',
+			type: 'point-in-time',
+			baseline: 0,
+			valueColumn: 'active',
+			source: {
+				event: ['subscribe'],
+				minus: ['cancel'],
+				measure: 'count',
+				property: null,
+				where: null,
+				groupBy: ['region', 'plan'],
+			},
+		})];
+		const [{ rows }] = materialize(specs, [
+			ev('subscribe', '2024-01-01T10:00:00Z', { region: 'us', plan: 'pro', user_id: 'a' }),
+			ev('subscribe', '2024-01-02T10:00:00Z', { region: 'us', plan: null, user_id: 'b' }),
+			ev('cancel', '2024-01-03T10:00:00Z', { region: 'us', plan: 'pro', user_id: 'a' }),
+			ev('subscribe', '2024-01-03T11:00:00Z', { region: 'eu', plan: 'free', user_id: 'c' }),
+		]).materialized;
+
+		expect(rows.map((row) => [row.date, row.region, row.plan, row.active])).toEqual([
+			['2024-01-01', 'eu', 'free', 0],
+			['2024-01-02', 'eu', 'free', 0],
+			['2024-01-03', 'eu', 'free', 1],
+			['2024-01-04', 'eu', 'free', 1],
+			['2024-01-01', 'us', '', 0],
+			['2024-01-02', 'us', '', 1],
+			['2024-01-03', 'us', '', 1],
+			['2024-01-04', 'us', '', 1],
+			['2024-01-01', 'us', 'pro', 1],
+			['2024-01-02', 'us', 'pro', 1],
+			['2024-01-03', 'us', 'pro', 0],
+			['2024-01-04', 'us', 'pro', 0],
+		]);
+	});
+
+	test('declared columns stamp scalars and functions receive the chained warehouse value context', () => {
+		const specs = [dailySpec({
+			name: 'column_metric',
+			valueColumn: 'bookings',
+			columns: {
+				currency: 'USD',
+				is_backfill: ({ isBackfill }) => isBackfill,
+				target: ({ value, row, bucketIndex, grain, seriesKey }) => {
+					expect(row.currency).toBe('USD');
+					expect(bucketIndex).toBeGreaterThanOrEqual(0);
+					expect(grain).toBe('day');
+					expect(seriesKey).toBe('');
+					return value + bucketIndex + 1;
+				},
+			},
+		})];
+		const [{ rows }] = materialize(specs, [ev('purchase', '2024-01-01T10:00:00Z')]).materialized;
+
+		expect(rows[0]).toEqual({
+			date: '2024-01-01',
+			bookings: 1,
+			currency: 'USD',
+			is_backfill: false,
+			target: 2,
+		});
+	});
+
+	test('buildManifest matches row shape, aggregation semantics, and SQL template', () => {
+		const specs = [
+			dailySpec({
+				name: 'daily_new_bookings',
+				valueColumn: 'bookings',
+				columns: { currency: 'USD', is_forecast: false },
+			}),
+			dailySpec({
+				name: 'monthly_arr_snapshot',
+				type: 'point-in-time',
+				grain: 'month',
+				timeColumn: 'month',
+				valueColumn: 'arr_usd',
+				source: { event: ['subscribe'], minus: ['cancel'], measure: 'sum', property: 'amount', where: null, groupBy: ['region'] },
+				columns: { is_forecast: true },
+			}),
+		];
+		const { materialized } = materialize(specs, [
+			ev('purchase', '2024-01-01T10:00:00Z'),
+			ev('subscribe', '2024-01-01T10:00:00Z', { amount: 10, region: 'us' }),
+		], {
+			window: {
+				FIXED_BEGIN: Date.parse('2024-01-01T00:00:00Z') / 1000,
+				FIXED_NOW: Date.parse('2024-02-10T00:00:00Z') / 1000,
+			},
+			configName: 'demo_config',
+		});
+		const manifest = buildManifest(specs, materialized, 'demo_config');
+
+		expect(manifest).toEqual({
+			configName: 'demo_config',
+			tables: [
+				{
+					table: 'daily_new_bookings',
+					file: 'demo_config-WAREHOUSE-daily_new_bookings',
+					format: 'csv',
+					grain: 'day',
+					type: 'additive',
+					timeColumn: 'date',
+					valueColumn: 'bookings',
+					dimensionColumns: [],
+					columns: [
+						{ name: 'date', bqType: 'DATE' },
+						{ name: 'bookings', bqType: 'FLOAT64' },
+						{ name: 'currency', bqType: 'STRING' },
+						{ name: 'is_forecast', bqType: 'BOOL' },
+					],
+					recommendedAggregation: 'sum',
+					sql: 'SELECT * FROM `{{DATASET}}.daily_new_bookings` ORDER BY date',
+					refreshHint: 'hourly',
+				},
+				{
+					table: 'monthly_arr_snapshot',
+					file: 'demo_config-WAREHOUSE-monthly_arr_snapshot',
+					format: 'csv',
+					grain: 'month',
+					type: 'point-in-time',
+					timeColumn: 'month',
+					valueColumn: 'arr_usd',
+					dimensionColumns: ['region'],
+					columns: [
+						{ name: 'month', bqType: 'DATE' },
+						{ name: 'region', bqType: 'STRING' },
+						{ name: 'arr_usd', bqType: 'FLOAT64' },
+						{ name: 'is_forecast', bqType: 'BOOL' },
+					],
+					recommendedAggregation: 'last value',
+					sql: 'SELECT * FROM `{{DATASET}}.monthly_arr_snapshot` ORDER BY month',
+					refreshHint: 'hourly',
+				},
+			],
+		});
 	});
 });
