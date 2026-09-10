@@ -922,6 +922,10 @@ export interface hookArrayOptions<T> {
     concurrency?: number;
     /** Generation context (config, runtime, defaults). */
     context?: Context;
+    /** Warehouse metric name for warehouse containers. */
+    metricName?: string;
+    /** Fixed CSV column order for warehouse metric tables. */
+    fixedColumns?: string[];
 }
 
 /**
@@ -1626,8 +1630,6 @@ export type Result = {
     groupProfilesData: GroupProfileSchema[][];
     /** Lookup tables — one inner array per table. */
     lookupTableData: LookupTableData[][];
-    /** Warehouse metrics — one inner array per metric table. */
-    warehouseMetricData?: Record<string, any>[][];
     /** Mixpanel import results (only populated when a token was provided). */
     importResults?: ImportResults;
     /**
@@ -2358,6 +2360,7 @@ export interface WritePaths {
     mirrorFiles: string[];
     groupFiles: string[];
     lookupFiles: string[];
+    warehouseFiles: string[];
     folder: string;
 }
 

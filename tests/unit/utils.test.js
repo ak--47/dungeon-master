@@ -1269,10 +1269,11 @@ describe('enrichment', () => {
 
 describe('storage', () => {
 	test('warehouse hook mutates in place and ignores return values', async () => {
+		let calls = 0;
 		const warehouseRows = await createHookArray([], {
 			type: 'warehouse',
-			hook(record, type) {
-				expect(type).toBe('warehouse');
+			hook(record) {
+				calls++;
 				record.total = (record.total || 0) + 1;
 				return { ignored: true };
 			},
@@ -1285,6 +1286,7 @@ describe('storage', () => {
 		const row = { date: '2024-01-01', total: 2 };
 		await warehouseRows.hookPush(row);
 
+		expect(calls).toBe(1);
 		expect(warehouseRows).toHaveLength(1);
 		expect(warehouseRows[0]).toBe(row);
 		expect(warehouseRows[0]).toEqual({ date: '2024-01-01', total: 3 });

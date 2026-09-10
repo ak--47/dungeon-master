@@ -680,8 +680,7 @@ function extractStorageData(storage) {
 		// Keep arrays of HookedArrays as separate arrays (don't flatten)
 		scdTableData: storage.scdTableData || [],
 		groupProfilesData: storage.groupProfilesData || [],
-		lookupTableData: storage.lookupTableData || [],
-		warehouseMetricData: storage.warehouseMetricData || []
+		lookupTableData: storage.lookupTableData || []
 	};
 }
 
