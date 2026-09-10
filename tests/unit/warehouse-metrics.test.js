@@ -85,6 +85,10 @@ describe('validateWarehouseMetrics', () => {
 		expect(() => validateWarehouseMetrics({ ...baseConfig(), warehouseMetrics: [metric({ source: { event: 'purchase', measure: 'sum', property: 'missing' } })] })).toThrow(/property/i);
 		expect(() => validateWarehouseMetrics({
 			...baseConfig(),
+			warehouseMetrics: [metric({ source: { event: 'purchase', minus: 'signup', measure: 'sum', property: 'amount' } })],
+		})).toThrow(/property/i);
+		expect(() => validateWarehouseMetrics({
+			...baseConfig(),
 			warehouseMetrics: [metric({ source: { event: ['purchase', 'signup'], measure: 'sum', property: 'amount' } })],
 		})).toThrow(/property/i);
 	});
@@ -128,6 +132,10 @@ describe('validateWarehouseMetrics', () => {
 		expect(() => validateWarehouseMetrics({
 			...baseConfig(),
 			warehouseMetrics: [metric({ source: { event: ['purchase', 'refund'], groupBy: 'plan' } })],
+		})).toThrow(/groupBy/i);
+		expect(() => validateWarehouseMetrics({
+			...baseConfig(),
+			warehouseMetrics: [metric({ source: { event: 'purchase', minus: 'refund', groupBy: 'plan' } })],
 		})).toThrow(/groupBy/i);
 	});
 

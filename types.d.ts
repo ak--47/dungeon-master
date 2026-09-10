@@ -746,7 +746,7 @@ export type hookTypes =
  * - "event": return value REPLACES the event (must be the event object).
  * - "everything": return an array to REPLACE the user's event list (filter/inject/dedupe).
  * - "user", "scd-pre", "funnel-pre", "funnel-post": return value is IGNORED — mutate in place.
- * - storage-only ("ad-spend", "group", "mirror", "lookup", "standalone"): return value is IGNORED.
+ * - storage-only ("ad-spend", "group", "mirror", "lookup", "standalone", "warehouse"): return value is IGNORED.
  *
  * @param record - The data being processed (event, profile, array of events, funnel config, etc.).
  * @param type - Which hook type is firing — see `hookTypes`.
