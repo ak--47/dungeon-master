@@ -21,10 +21,12 @@ hook: function (record, type, meta) { ... return record; }
 | `event` | `events.js:176` | Single event (flat props) | **Used** (replaces event) | `user: { distinct_id }`, `config`, `datasetStart`, `datasetEnd` |
 | `funnel-post` | `funnels.js:153` | Array of funnel events | Ignored (mutate in-place) | `user`, `profile`, `scd`, `funnel`, `config`, `experiment` |
 | `everything` | `user-loop.js:280` | Array of ALL user events | **Used** if array returned | `profile`, `scd`, `config`, `datasetStart`, `datasetEnd`, `userIsBornInDataset`, `authTime`, `isPreAuth`, `persona` |
-| `ad-spend` | `storage.js` | Ad spend event | Ignored | -- |
-| `group` | `storage.js` | Group profile | Ignored | -- |
-| `mirror` | `storage.js` | Mirror data point | Ignored | -- |
-| `lookup` | `storage.js` | Lookup table entry | Ignored | -- |
+| `ad-spend` | `storage.js` | Ad spend event | Object or array used | -- |
+| `group` | `storage.js` | Group profile | Object or array used | -- |
+| `mirror` | `storage.js` | Mirror data point | Object or array used | -- |
+| `lookup` | `storage.js` | Lookup table entry | Object or array used | -- |
+| `standalone` | `storage.js`, before user loop | Identity-less cadence event | Object or array used; `undefined` drops | `spec`, `config`, `datasetStart`, `datasetEnd` |
+| `warehouse` | `storage.js` | One materialized warehouse row | Ignored | `spec`, `config`, `metricName`, `bucketIndex`, `bucketCount`, `grain`, `seriesKey`, `isBackfill`, `raw`, `datasetStart`, `datasetEnd` |
 
 **Per-user execution order:** `user` -> `scd-pre` -> `funnel-pre` -> `event` -> `funnel-post` -> `everything`
 
@@ -36,7 +38,105 @@ double-fire mutations.
 **Return rules:**
 - `event`: return the (possibly replaced) event object.
 - `everything`: return the (possibly modified) array. Filtered array removes events.
-- All other types: mutate `record` in-place. Return value is ignored.
+- `ad-spend`, `group`, `mirror`, `lookup`, `standalone`: return the record or an
+  array of records. Returning `undefined` drops the record.
+- `user`, `scd-pre`, `funnel-pre`, `funnel-post`, `warehouse`: mutate `record`
+  in place. Return value is ignored.
+
+`standaloneEvents` runs before the user loop; `warehouseMetrics` materializes
+after it. Neither hook receives person metadata or enters `everything`.
+Standalone synthetic `distinct_id` values identify series, never people. Use
+disk-backed `duckdb` assertions on `{{PREFIX}}-STANDALONE*.json` for cadence
+stories. Warehouse stories support `warehouse` and `warehouse-stats`
+assertions, with automatic table audits even when no stories are exported.
+
+### 1.1 Warehouse rows (`type === 'warehouse'`)
+
+`warehouse` fires once per materialized row, after the user loop and before the
+rows are written to disk. the row already matches the manifest contract:
+
+- `timeColumn`
+- every `source.groupBy` key, in order
+- `valueColumn`
+- every declared key in `columns`
+
+declare every key up front. warehouse containers are created with a fixed column
+list, and the manifest is built from that same list. an undeclared key is not
+part of the output contract even if it exists briefly in memory.
+
+`meta.seriesKey` is the joined group tuple in `source.groupBy` order, separated
+by `|`. examples:
+
+- no `groupBy` → `''`
+- `groupBy: ['region']` and `row.region === 'us'` → `'us'`
+- `groupBy: ['region', 'plan_tier']` and `row.region === 'us'`, `row.plan_tier === 'enterprise'` → `'us|enterprise'`
+
+`meta.bucketIndex` and `meta.bucketCount` are chronological and include history
+buckets even when `sparse: true` skips repeated rows. `meta.isBackfill` is true
+for the synthetic buckets created by `history`. `meta.raw` is the bucketed
+source truth before `scale`, `noise`, and point-in-time carry-forward.
+
+Treat the time axis as immutable. `row[spec.timeColumn]` drives ordering,
+manifest SQL, and warehouse verification. mutate the value column or declared
+extra columns instead.
+
+Recipe: scale a point-in-time level for an in-window story slice
+
+```js
+warehouseMetrics: [{
+  name: 'daily_active_subscriptions',
+  type: 'point-in-time',
+  source: { event: 'subscription_started', minus: 'subscription_cancelled', groupBy: 'region' },
+  baseline: 40,
+  timeColumn: 'date',
+  valueColumn: 'active_subscriptions',
+  columns: { lifted: false },
+}],
+
+hook: (row, type, meta) => {
+  if (type !== 'warehouse') return row;
+  if (meta.metricName !== 'daily_active_subscriptions') return row;
+  if (meta.isBackfill) return row;
+
+  const liveIndex = meta.bucketIndex - meta.spec.history;
+  if (meta.seriesKey === 'us' && liveIndex >= 7 && liveIndex < 14) {
+    row.active_subscriptions = Math.round(row.active_subscriptions * 1.2);
+    row.lifted = true;
+  }
+  return row;
+}
+```
+
+Recipe: apply an incident dip to one series only
+
+```js
+warehouseMetrics: [{
+  name: 'daily_new_bookings',
+  source: {
+    event: 'new_booking',
+    measure: 'sum',
+    property: 'booking_value',
+    groupBy: ['region', 'plan_tier'],
+  },
+  timeColumn: 'date',
+  valueColumn: 'bookings',
+  columns: { incident: false },
+}],
+
+hook: (row, type, meta) => {
+  if (type !== 'warehouse') return row;
+  if (meta.metricName !== 'daily_new_bookings') return row;
+  if (meta.isBackfill) return row;
+  if (meta.seriesKey !== 'us|enterprise') return row;
+
+  const liveIndex = meta.bucketIndex - meta.spec.history;
+  if (liveIndex >= 14 && liveIndex <= 16) {
+    row.bookings = Math.round(row.bookings * 0.35);
+    row.incident = true;
+  }
+  return row;
+}
+```
 
 **What 1.7.0 changed for hooks.** No hook signature, `meta` field, or firing
 order changed, and the hook-helper atoms and patterns are untouched. What a hook

@@ -2,6 +2,87 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "warehouse-metrics: validate task 6",
+            "type": "shell",
+            "command": "git status --short && git log -3 --oneline && npm run typecheck && set -o pipefail && npx vitest run tests/integration/warehouse-metrics.test.js 2>&1 | tail -50",
+            "problemMatcher": [],
+            "presentation": { "panel": "dedicated", "reveal": "always" }
+        },
+        {
+            "label": "warehouse-metrics: validate task 6 full",
+            "type": "shell",
+            "command": "git status --short && git log -3 --oneline && npx tsc --noEmit --ignoreDeprecations 6.0 && set -o pipefail && npx vitest run tests/unit tests/integration 2>&1 | tail -50",
+            "problemMatcher": [],
+            "presentation": { "panel": "dedicated", "reveal": "always" }
+        },
+        {
+            "label": "warehouse-metrics: commit task 6",
+            "type": "shell",
+            "command": "git add .superpowers/sdd/PLAN/task-6-report.md index.js lib/orchestrators/mixpanel-sender.js lib/orchestrators/user-loop.js tests/integration/warehouse-metrics.test.js types.d.ts && git commit -m \"feat(engine): wire warehouseMetrics pipeline\" && git status --short && git rev-parse --short HEAD",
+            "problemMatcher": [],
+            "presentation": { "panel": "dedicated", "reveal": "always" }
+        },
+        {
+            "label": "warehouse-metrics: stage task 6",
+            "type": "shell",
+            "command": "git add .superpowers/sdd/PLAN/task-6-report.md index.js lib/orchestrators/mixpanel-sender.js lib/orchestrators/user-loop.js tests/integration/warehouse-metrics.test.js types.d.ts",
+            "problemMatcher": [],
+            "presentation": { "panel": "dedicated", "reveal": "always" }
+        },
+        {
+            "label": "warehouse-metrics: commit staged task 6",
+            "type": "shell",
+            "command": "git commit -m \"feat(engine): wire warehouseMetrics pipeline\"",
+            "problemMatcher": [],
+            "presentation": { "panel": "dedicated", "reveal": "always" }
+        },
+        {
+            "label": "warehouse-metrics: inspect git state",
+            "type": "shell",
+            "command": "mkdir -p tmp && git status --short > tmp/task6-git-status.txt && git diff --cached --name-only > tmp/task6-staged.txt && git rev-parse --short HEAD > tmp/task6-head.txt && git log -1 --oneline > tmp/task6-log.txt",
+            "problemMatcher": [],
+            "presentation": { "panel": "dedicated", "reveal": "always" }
+        },
+        {
+            "label": "warehouse-metrics: commit staged task 6 capture",
+            "type": "shell",
+            "command": "mkdir -p tmp && git commit -m \"feat(engine): wire warehouseMetrics pipeline\" > tmp/task6-commit.txt 2>&1",
+            "problemMatcher": [],
+            "presentation": { "panel": "dedicated", "reveal": "always" }
+        },
+        {
+            "label": "warehouse-metrics: inspect git state process",
+            "type": "process",
+            "command": "node",
+            "args": ["${workspaceFolder}/tmp/task6-git-helper.mjs", "inspect"],
+            "problemMatcher": [],
+            "presentation": { "panel": "dedicated", "reveal": "always" }
+        },
+        {
+            "label": "warehouse-metrics: stage task 6 process",
+            "type": "process",
+            "command": "node",
+            "args": ["${workspaceFolder}/tmp/task6-git-helper.mjs", "stage"],
+            "problemMatcher": [],
+            "presentation": { "panel": "dedicated", "reveal": "always" }
+        },
+        {
+            "label": "warehouse-metrics: commit staged task 6 process",
+            "type": "process",
+            "command": "node",
+            "args": ["${workspaceFolder}/tmp/task6-git-helper.mjs", "commit"],
+            "problemMatcher": [],
+            "presentation": { "panel": "dedicated", "reveal": "always" }
+        },
+        {
+            "label": "warehouse-metrics: process sentinel",
+            "type": "process",
+            "command": "node",
+            "args": ["-e", "require('fs').writeFileSync('tmp/task6-sentinel.txt', 'ok\\n')"],
+            "problemMatcher": [],
+            "presentation": { "panel": "dedicated", "reveal": "always" }
+        },
+        {
             "label": "npm: prune",
             "type": "npm",
             "script": "prune",

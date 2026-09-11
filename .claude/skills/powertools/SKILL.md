@@ -1,7 +1,7 @@
 ---
 name: powertools
 description: Use when any task needs the Mixpanel Power Tools API ("use powertools") — schema export (get-schema), event volumes, project CRUD, query methods, macros, or snapshotting a prod project's schema to copy it into a dungeon. Companion to create-project (which handles provisioning specifically).
-argument-hint: [what to do, e.g. "get schema for project 12345" or "copy project 12345 into a dungeon"]
+argument-hint: '[what to do, e.g. "get schema for project 12345" or "copy project 12345 into a dungeon"]'
 ---
 
 # Power Tools API
@@ -42,6 +42,25 @@ node .claude/skills/powertools/snapshot-project.mjs <project_id> --bearer <token
 - **Never captures property values** — schema + volumes only. Snapshots stay privacy-safe by construction.
 
 ## Endpoint catalog (the useful subset)
+
+### Warehouse handoff (v1.8.0)
+
+For a dungeon with `warehouseMetrics`, use `/warehouse-metrics` after local
+verification produces disk tables and a manifest, and `/create-project` writes
+the project id. Pass the explicit verified `--data-prefix`; preserve those files.
+That skill owns load, source setup, SQL preview, and metric create-or-skip.
+Reuse `/macro/setup-bq-warehouse` through `pt.mjs`; do not reimplement its
+source creation, GCP IAM grant, or dataset ACL handling here.
+
+Warehouse metric endpoints include `getWarehouseMetrics`, `previewWarehouseMetric`,
+`createWarehouseMetric`, and `refreshWarehouseMetric` in the `/crud` family.
+Read endpoint docs before live use. Preview executes the read query; create does
+not validate SQL, and refresh only invalidates cache. A docs-route 404 uses the
+warehouse skill's manual-setup fallback; other errors must surface.
+
+`standaloneEvents` imports as a separate event stream through the ordinary sender.
+Its synthetic ids are series keys, so schema snapshots and dashboard counts must
+distinguish cadence telemetry from user `events[]`. It is not a warehouse source.
 
 GET the path for full docs. Full list: GET `/` and GET `/macro`.
 

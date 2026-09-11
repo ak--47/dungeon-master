@@ -2,6 +2,148 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.8.0 — 2026-09-10
+
+### Added — `standaloneEvents`: identity-less metric snapshots
+
+A new top-level config key that generates records describing a **system, not a
+person**. They carry no `user_id` and no `device_id`. Before 1.8.0 the only
+identity-less stream the engine could produce was `$ad_spend` via `hasAdSpend`,
+which is hard-coded to one shape, one cadence, and a Mixpanel reserved event
+name. `standaloneEvents` is the general form.
+
+```js
+standaloneEvents: [{
+  event: 'cdn_egress',
+  cadence: 'day',                                       // 'hour' | 'day' | 'week', default 'day'
+  dimensions: { region: ['us-east', 'us-west', 'eu'] }, // cross-producted
+  distinctIdFrom: 'region',                             // synthetic id, never a person
+  properties: {
+    gb_out:   (ctx) => 400 + ctx.tickIndex * 3,
+    cost_usd: (ctx) => (400 + ctx.tickIndex * 3) * 0.085,
+    p95_ms:   [120, 140, 160],
+  },
+}]
+```
+
+- One record per cadence tick per dimension cross-product row.
+- Ticks start at the dataset start and step by the cadence. The last tick is the
+  final one at or before the dataset end, so nothing lands in the future.
+- Each record carries `event`, `time`, `insert_id`, `distinct_id`, every
+  dimension as a flat property, and every resolved entry in `properties`.
+- `distinct_id` is the value of the dimension named by `distinctIdFrom`, else the
+  event name. It exists so Mixpanel accepts the record; it never maps to a person.
+- Property value functions receive a `StandaloneValueContext`:
+  `{ time, config, dimensions, tickIndex, tickCount, cadence, event }`.
+  `tickIndex / (tickCount - 1)` is window progress — use it to shape a trend.
+- New hook type `standalone` (storage-only). Return the record or an array of
+  records; returning nothing drops the record. `meta.spec` carries the resolved
+  stream config. The `warehouse` hook instead mutates its row and ignores returns.
+- Lands in `result.standaloneEventData`, writes to a `-STANDALONE` file shard,
+  and imports to Mixpanel as its own event stream.
+- Validation **throws** on a malformed entry rather than skipping it. A silent
+  skip would drop a whole data stream without the author noticing.
+
+New types: `StandaloneEventConfig`, `ResolvedStandaloneEventConfig`,
+`StandaloneValueContext`, `HookMetaStandalone`. `WritePaths` gains
+`standaloneFiles`; `Result` gains `standaloneEventData`; `hookTypes` gains
+`"standalone"`.
+
+**Output compatibility.** Additive only. A config without `standaloneEvents` is
+byte-identical to 1.7.0 — the generation pass is gated on the key being present,
+so the seeded RNG stream is untouched. `config.standaloneEvents` normalizes to
+`[]` when absent. Event determinism comparisons exclude the fresh `insert_id`.
+
+New tests: `tests/unit/standalone-events.test.js` (25),
+`tests/integration/standalone-events.test.js` (15).
+
+### Added — `warehouseMetrics`: manifest-driven warehouse source tables
+
+A new top-level config key that materializes warehouse-ready tables from the
+run's own events after generation completes. This is the local source-table side
+of a warehouse metric demo: bookings rollups, active subscription levels, ARR
+snapshots, and other time-series tables that should read like a real warehouse.
+
+```js
+warehouseMetrics: [{
+  name: 'daily_new_bookings',
+  source: { event: 'new_booking', measure: 'sum', property: 'booking_value' },
+  valueColumn: 'bookings',
+}]
+```
+
+- Supports additive and point-in-time metrics.
+- Grain: `day`, `week`, `month`.
+- Supports subtractive `minus` legs, `groupBy` on up to two declared keys,
+  optional `history` backfill, sparse point-in-time emission, seeded `noise`,
+  `scale`, and derived `columns`.
+- Lands in `result.warehouseMetricData` keyed by metric name and emits
+  `result.warehouseManifest` with table schemas, SQL, and recommended
+  aggregation.
+- Writes `<name>-WAREHOUSE-<table>.csv|json` plus
+  `<name>-WAREHOUSE-MANIFEST.json` when `writeToDisk` is enabled.
+- Never imports through `token`. Warehouse deploy is a separate flow.
+- New hook type `warehouse` fires once per materialized row with
+  `metricName`, `bucketIndex`, `bucketCount`, `grain`, `seriesKey`,
+  `isBackfill`, and `raw` bucket stats.
+- Warehouse verification adds `warehouse` / `warehouse-stats` story breakdowns
+  plus automatic audits over declared columns, gaps, monotonic time, empty numeric
+  cells, and sparse first-bucket coverage. Source correlation is available to story
+  assertions; it is not an automatic pass/fail gate.
+- Sparse point-in-time comparison carries emitted levels across missing buckets,
+  excludes history from correlation, and compares the first live delta to the scaled
+  baseline. Warehouse generation preserves the user event stream, including with noise.
+- Disk verification parses quoted multiline CSV records with `csv-parse` and keeps
+  disk and in-memory audit results consistent.
+
+### Added — `/warehouse-metrics`: BigQuery load + warehouse metric save flow
+
+The shipped skill at `.claude/skills/warehouse-metrics/` loads the generated
+warehouse tables into BigQuery, connects that dataset to Mixpanel with the
+existing powertools macro, previews each metric SQL, and saves new metrics when
+the CRUD endpoints are available.
+
+- Uses the emitted warehouse manifest as the contract.
+- Maps manifest `recommendedAggregation: 'last value'` to the API's
+  `aggregation: 'last_value'`.
+- If `GET /crud/getWarehouseMetrics` returns 404, the script still completes the
+  BigQuery load and source setup, then writes `warehouse/GAPS.md` for manual
+  metric creation.
+- Preview fails fast on the raw substring block (`CREATE`, `UPDATE`, etc.), so
+  identifiers like `created_at` and `updated_at` are a real deploy-time trap.
+- The canonical skill name is `/warehouse-metrics`. Bundled commands and handoffs
+  use `.claude/skills/warehouse-metrics/`.
+- Uses the shipped Powertools warehouse CRUD and IAM setup macro. Runtime IAM is
+  configured; permission failures still stop deployment with the original error.
+- Dry-run works before project provisioning, using placeholders without credentials.
+  Live table replacement requires explicit operator consent; the script does not prompt.
+
+### Changed — skill workflow and provisioning context
+
+- All nine bundled skills have parsed string argument hints and matching folder names.
+  Release tests check frontmatter and warehouse handoffs.
+- Authoring, hooks, and verification distinguish person events, identity-less cadence
+  events, and identity-free warehouse rows. Synthetic IDs never count as people.
+- Verification preserves the explicit run prefix and local uncompressed warehouse
+  artifacts for deployment. Soup analysis remains scoped to user-event timestamps.
+- Project business context includes separate cadence and warehouse summaries without
+  evaluating property functions or including credentials.
+- Headless builds preserve warehouse history and use query preview for fresh results;
+  warehouse refresh only invalidates the saved metric cache.
+
+### Added - `/release-check`
+
+The new `/release-check` skill audits tests, determinism, documentation, package
+contents, and release handoffs. `.agents/skills` and `.github/skills` link to the
+canonical `.claude/skills` directory for shared agent discovery. Publishing remains
+an explicitly authorized operator action.
+
+### Changed — `streamCSV` preserves falsy cells
+
+CSV serialization now writes `0` and `false` as literal cell values instead of
+empty strings. If downstream warehouse SQL or fixtures were treating blank cells
+as zero or false, update them to read the actual value.
+
 ## 1.7.0 — 2026-09-03
 
 The engine round for DM4 v5. Executes the 1.6.4 "Deferred to 1.7.0" table plus

@@ -81,9 +81,9 @@ describe('P3.2 story-spec schema', () => {
 	});
 
 	test('duckdb escape hatch requires sql; {{PREFIX}} convention documented', () => {
-		const bd = schema.definitions.breakdown;
-		expect(bd.then.required).toEqual(['type', 'sql']);
-		expect(bd.then.properties.sql.description).toContain('{{PREFIX}}');
+		const duckdbRule = schema.definitions.breakdown.allOf.find((rule) => rule.if?.properties?.type?.const === 'duckdb');
+		expect(duckdbRule.then.required).toEqual(['type', 'sql']);
+		expect(duckdbRule.then.properties.sql.description).toContain('{{PREFIX}}');
 	});
 
 	test('types.d.ts declares the same archetypes and verdict tiers', () => {

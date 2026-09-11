@@ -23,14 +23,18 @@ import { userLoop } from './lib/orchestrators/user-loop.js';
 import { sendToMixpanel, collectWrittenFiles, releaseConnections } from './lib/orchestrators/mixpanel-sender.js';
 // Generators
 import { makeAdSpend } from './lib/generators/adspend.js';
+import { makeStandaloneEvents } from './lib/generators/standalone.js';
 import { makeMirror } from './lib/generators/mirror.js';
 import { makeGroupProfile, makeProfile } from './lib/generators/profiles.js';
+import { WarehouseAccumulator, materializeWarehouseMetrics, buildManifest } from './lib/generators/warehouse.js';
 
 // Utilities
-import { initChance, initUserChance, resetUserChance, resetValueCaches, setAutoPowerLaw, setDatasetNow, setDatasetBegin, deleteFile } from './lib/utils/utils.js';
+import { initChance, initUserChance, resetUserChance, resetValueCaches, setAutoPowerLaw, setDatasetNow, setDatasetBegin, deleteFile, getChance } from './lib/utils/utils.js';
 import { runWithDataset } from './lib/utils/dataset-context.js';
 
 // External dependencies
+import { writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import { timer } from 'ak-tools';
@@ -184,6 +188,13 @@ async function runDungeon(config) {
 		storage = await storageManager.initializeContainers();
 		updateContextWithStorage(context, storage);
 
+		if (validatedConfig.warehouseMetrics?.length > 0) {
+			context.warehouseAccumulator = new WarehouseAccumulator(validatedConfig.warehouseMetrics, {
+				FIXED_BEGIN: context.FIXED_BEGIN,
+				FIXED_NOW: context.FIXED_NOW,
+			});
+		}
+
 		// ! DATA GENERATION STARTS HERE
 
 		// Step 4: Generate ad spend data (if enabled)
@@ -192,6 +203,14 @@ async function runDungeon(config) {
 			const _t4 = Date.now();
 			await generateAdSpendData(context);
 			context.reportProgress({ phase: "step", step: "adspend", status: "complete", duration: Date.now() - _t4 });
+		}
+
+		// Step 4b: Generate standalone identity-less metric snapshots (if configured) — v1.8.0
+		if (validatedConfig.standaloneEvents?.length > 0) {
+			context.reportProgress({ phase: "step", step: "standalone", status: "start" });
+			const _t4b = Date.now();
+			await generateStandaloneData(context);
+			context.reportProgress({ phase: "step", step: "standalone", status: "complete", duration: Date.now() - _t4b });
 		}
 
 		if (context.config.verbose) logger.info('Starting user and event generation...');
@@ -231,6 +250,13 @@ async function runDungeon(config) {
 			const _t9 = Date.now();
 			await makeMirror(context);
 			context.reportProgress({ phase: "step", step: "mirrors", status: "complete", duration: Date.now() - _t9 });
+		}
+
+		if (validatedConfig.warehouseMetrics?.length > 0) {
+			context.reportProgress({ phase: "step", step: "warehouse", status: "start" });
+			const _t9b = Date.now();
+			await generateWarehouseData(context);
+			context.reportProgress({ phase: "step", step: "warehouse", status: "complete", duration: Date.now() - _t9b });
 		}
 
 		if (context.config.verbose) logger.info('Data generation completed successfully');
@@ -293,11 +319,17 @@ async function runDungeon(config) {
 		// users matching no funnel, …). Always present, even when empty.
 		const warnings = [
 			...(Array.isArray(validatedConfig._warnings) ? validatedConfig._warnings : []),
+			...(Array.isArray(context.warehouseAccumulator?.warnings) ? context.warehouseAccumulator.warnings.map((reason) => ({
+				key: 'warehouseMetrics',
+				reason,
+				severity: 'warn',
+			})) : []),
 			...context.getWarnings(),
 		];
 
 		return {
 			...extractedData,
+			warehouseManifest: context.warehouseManifest,
 			importResults,
 			warnings,
 			files: extractFileInfo(storage),
@@ -353,6 +385,79 @@ async function generateAdSpendData(context) {
 				await storage.adSpendData.hookPush(adSpendEvent);
 			}
 		}
+	}
+}
+
+/**
+ * Generate standalone identity-less metric snapshots — v1.8.0.
+ *
+ * One record per cadence tick per dimension cross-product row. Records carry no
+ * `user_id` and no `device_id`; they describe a system, not a person.
+ *
+ * @param {Context} context - Context object
+ */
+async function generateStandaloneData(context) {
+	const { config, storage } = context;
+	const specs = /** @type {import('./types').ResolvedStandaloneEventConfig[]} */ (config.standaloneEvents);
+
+	for (const spec of specs) {
+		const records = makeStandaloneEvents(context, spec);
+		for (const record of records) {
+			// The `standalone` hook fires on push, like ad-spend. Meta carries the
+			// stream's resolved spec so a hook can tell the streams apart.
+			// `datasetStart`/`datasetEnd` are added by hookPush itself.
+			await storage.standaloneEventData.hookPush(
+				/** @type {import('./types').EventSchema} */ (record),
+				{ spec, config }
+			);
+		}
+	}
+}
+
+/**
+ * Materialize configured warehouse metric tables after the user loop completes.
+ *
+ * The accumulator taps the final per-user event stream during Step 5. This step
+ * runs afterward so seeded noise and column callbacks cannot perturb event generation.
+ *
+ * @param {Context} context - Context object
+ */
+async function generateWarehouseData(context) {
+	const { config, storage } = context;
+	const specs = /** @type {import('./types').ResolvedWarehouseMetricConfig[]} */ (config.warehouseMetrics);
+	const accumulator = context.warehouseAccumulator;
+	if (!Array.isArray(specs) || specs.length === 0 || !accumulator) return;
+
+	const materialized = materializeWarehouseMetrics({
+		specs,
+		accumulator,
+		chance: getChance(),
+		FIXED_BEGIN: context.FIXED_BEGIN,
+		FIXED_NOW: context.FIXED_NOW,
+		configName: config.name,
+		config,
+	});
+
+	for (let index = 0; index < materialized.length; index += 1) {
+		const entry = materialized[index];
+		const container = storage.warehouseMetricData?.[index];
+		if (!container) continue;
+
+		for (let rowIndex = 0; rowIndex < entry.rows.length; rowIndex += 1) {
+			await container.hookPush(entry.rows[rowIndex], entry.metas[rowIndex]);
+		}
+	}
+
+	const postHookMaterialized = specs.map((spec, index) => ({
+		spec,
+		rows: Array.from(storage.warehouseMetricData?.[index] || []),
+	}));
+	context.warehouseManifest = buildManifest(specs, postHookMaterialized, config.name);
+
+	if (config.writeToDisk && storage.warehouseMetricData?.[0]?.getWriteDir) {
+		const manifestPath = path.join(storage.warehouseMetricData[0].getWriteDir(), `${config.name}-WAREHOUSE-MANIFEST.json`);
+		await writeFile(manifestPath, JSON.stringify(context.warehouseManifest, null, 2));
+		storage.warehouseManifestFile = manifestPath;
 	}
 }
 
@@ -567,11 +672,12 @@ async function flushStorageToDisk(storage, config) {
 	if (storage.eventData?.flush) flushPromises.push(storage.eventData.flush());
 	if (storage.userProfilesData?.flush) flushPromises.push(storage.userProfilesData.flush());
 	if (storage.adSpendData?.flush) flushPromises.push(storage.adSpendData.flush());
+	if (storage.standaloneEventData?.flush) flushPromises.push(storage.standaloneEventData.flush());
 	if (storage.mirrorEventData?.flush) flushPromises.push(storage.mirrorEventData.flush());
 	if (storage.groupEventData?.flush) flushPromises.push(storage.groupEventData.flush());
 
 	// Flush arrays of HookedArrays (excluding lookup tables which are handled separately)
-	[storage.scdTableData, storage.groupProfilesData].forEach(arrayOfContainers => {
+	[storage.scdTableData, storage.groupProfilesData, storage.warehouseMetricData].forEach(arrayOfContainers => {
 		if (Array.isArray(arrayOfContainers)) {
 			arrayOfContainers.forEach(container => {
 				if (container?.flush) flushPromises.push(container.flush());
@@ -635,11 +741,19 @@ function countProfilesPushed(profilesContainer) {
  * @returns {object} Extracted data in Result format
  */
 function extractStorageData(storage) {
+	const warehouseMetricData = {};
+	for (const container of storage.warehouseMetricData || []) {
+		if (!container?.metricName) continue;
+		warehouseMetricData[container.metricName] = Array.from(container);
+	}
+
 	return {
 		eventData: storage.eventData || [],
 		mirrorEventData: storage.mirrorEventData || [],
 		userProfilesData: storage.userProfilesData || [],
 		adSpendData: storage.adSpendData || [],
+		standaloneEventData: storage.standaloneEventData || [],
+		warehouseMetricData,
 		// Keep arrays of HookedArrays as separate arrays (don't flatten)
 		scdTableData: storage.scdTableData || [],
 		groupProfilesData: storage.groupProfilesData || [],

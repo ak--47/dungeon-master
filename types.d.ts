@@ -453,6 +453,18 @@ export interface Dungeon {
     groupProps?: Record<string, Record<string, ValueValid>>;
     /** Lookup table definitions for dimension tables. */
     lookupTables?: LookupTableSchema[];
+    /**
+     * v1.8.0 — identity-less metric snapshots. One record per cadence tick per
+     * dimension cross-product row, carrying NO `user_id` and NO `device_id`.
+     *
+     * Use for infrastructure and finance telemetry: daily CDN egress per region,
+     * weekly billing rollups per plan tier, hourly queue depth per cluster.
+     * `$ad_spend` (`hasAdSpend: true`) is the same idea hard-coded; this is the
+     * general form and it does not use a Mixpanel reserved event name.
+     */
+    standaloneEvents?: StandaloneEventConfig[];
+    /** v1.8.0 — warehouse-backed metric source tables derived from the run's own event stream. */
+    warehouseMetrics?: WarehouseMetricConfig[];
     /** TimeSoup configuration: shapes intra-week and intra-day rhythm (peaks, deviation, DOW/HOD weights). Pair with `macro` for big-picture trend control. */
     soup?: soup;
     /** Macro trend shape across the full dataset window: birth distribution + per-user event allocation. Default: "flat". Use "growth"/"viral"/"steady"/"decline" or a custom object. */
@@ -703,7 +715,7 @@ export interface ResolvedMacro {
  * - "everything"  — array of ALL events for one user (return array to replace; meta.profile available)
  *
  * Storage-only hooks (fire during hookPush, not in generators):
- * - "ad-spend", "group", "mirror", "lookup"
+ * - "ad-spend", "group", "mirror", "lookup", "standalone", "warehouse"
  */
 export type hookTypes =
     | "event"
@@ -716,6 +728,8 @@ export type hookTypes =
     | "funnel-pre"
     | "funnel-post"
     | "ad-spend"
+    | "standalone"
+    | "warehouse"
     | "churn"
     | "group-event"
     | "everything"
@@ -732,7 +746,9 @@ export type hookTypes =
  * - "event": return value REPLACES the event (must be the event object).
  * - "everything": return an array to REPLACE the user's event list (filter/inject/dedupe).
  * - "user", "scd-pre", "funnel-pre", "funnel-post": return value is IGNORED — mutate in place.
- * - storage-only ("ad-spend", "group", "mirror", "lookup"): return value is IGNORED.
+ * - storage-only ("ad-spend", "group", "mirror", "lookup", "standalone"): return an object or array of records; undefined drops the record.
+ * - "warehouse": return value is IGNORED; mutate the row in place.
+ * - "standalone" runs before the user loop; "warehouse" runs after it. Neither receives person metadata or enters "everything".
  *
  * @param record - The data being processed (event, profile, array of events, funnel config, etc.).
  * @param type - Which hook type is firing — see `hookTypes`.
@@ -908,6 +924,10 @@ export interface hookArrayOptions<T> {
     concurrency?: number;
     /** Generation context (config, runtime, defaults). */
     context?: Context;
+    /** Warehouse metric name for warehouse containers. */
+    metricName?: string;
+    /** Fixed CSV column order for warehouse metric tables. */
+    fixedColumns?: string[];
 }
 
 /**
@@ -929,6 +949,10 @@ export interface HookedArray<T> extends Array<T> {
     getWritePath: () => string;
     /** Returns all file paths written by this container during the current run. */
     getWrittenFiles: () => string[];
+    /** Storage hook type this array is configured for. */
+    type?: hookTypes | string;
+    /** Output serialization format for this array. */
+    format?: string;
     /** SCD prop name this array carries (only set on SCD HookedArrays). */
     scdKey?: string;
     /** Entity type for SCDs ("user" or a group key). */
@@ -937,6 +961,10 @@ export interface HookedArray<T> extends Array<T> {
     groupKey?: string;
     /** Lookup table key this array carries (only set on lookup table HookedArrays). */
     lookupKey?: string;
+    /** Warehouse metric name this array carries (only set on warehouse HookedArrays). */
+    metricName?: string;
+    /** Fixed CSV column order for warehouse metric tables. */
+    fixedColumns?: string[];
 }
 
 export type AllData =
@@ -954,8 +982,11 @@ export interface Storage {
     mirrorEventData?: HookedArray<EventSchema>;
     userProfilesData?: HookedArray<UserProfile>;
     adSpendData?: HookedArray<EventSchema>;
+    standaloneEventData?: HookedArray<EventSchema>;
     groupProfilesData?: HookedArray<GroupProfileSchema>[];
     lookupTableData?: HookedArray<LookupTableSchema>[];
+    warehouseMetricData?: HookedArray<Record<string, any>>[];
+    warehouseManifestFile?: string;
     scdTableData?: HookedArray<SCDSchema>[];
     groupEventData?: HookedArray<EventSchema>;
 }
@@ -1023,6 +1054,14 @@ export interface Context {
     FIXED_NOW: number;
     /** Start of the resolved dataset window (unix seconds). Equal to the user-supplied `datasetStart`, or fallback `today_start - numDays`. */
     FIXED_BEGIN?: number;
+    /** Runtime accumulator for post-loop warehouse metric materialization. */
+    warehouseAccumulator?: {
+        warnings?: string[];
+        ingest: (events: EventSchema[]) => void;
+        getCell: (metricName: string, seriesKey: string, bucketStartSec: number) => any;
+    };
+    /** Manifest describing materialized warehouse tables for downstream tooling. */
+    warehouseManifest?: WarehouseManifest;
     /** Alias of `FIXED_BEGIN` — surfaced on hook `meta.datasetStart`. */
     DATASET_START_SECONDS: number;
     /** Alias of `FIXED_NOW` — surfaced on hook `meta.datasetEnd`. */
@@ -1596,6 +1635,12 @@ export type Result = {
     scdTableData: SCDSchema[][];
     /** Ad-spend events (only populated when `hasAdSpend: true`). */
     adSpendData: EventSchema[];
+    /** Identity-less metric snapshots (only populated when `standaloneEvents` is set). v1.8.0. */
+    standaloneEventData: EventSchema[];
+    /** Materialized warehouse metric tables keyed by metric name. */
+    warehouseMetricData: Record<string, Record<string, any>[]>;
+    /** Warehouse table manifest surfaced whenever `warehouseMetrics` is configured. */
+    warehouseManifest?: WarehouseManifest;
     /** Group profiles — one inner array per group key. */
     groupProfilesData: GroupProfileSchema[][];
     /** Lookup tables — one inner array per table. */
@@ -2007,9 +2052,10 @@ export interface StoryAssertion {
     /**
      * Byte-compatible with `emulateBreakdown` / `verifyDungeon` args — or the
      * `{ type: 'duckdb', sql }` escape hatch (disk mode only; `{{PREFIX}}` in
-     * the SQL is substituted with the run's data prefix path).
+     * the SQL is substituted with the run's data prefix path), or warehouse
+     * verification rows via `{ type: 'warehouse' | 'warehouse-stats', table }`.
      */
-    breakdown: Record<string, unknown> & { type: string; sql?: string };
+    breakdown: Record<string, unknown> & { type: string; sql?: string; table?: string };
     select?: StorySelect;
     expect?: StoryExpect;
     /**
@@ -2325,11 +2371,264 @@ export interface WritePaths {
     eventFiles: string[];
     userFiles: string[];
     adSpendFiles: string[];
+    standaloneFiles: string[];
     scdFiles: string[];
     mirrorFiles: string[];
     groupFiles: string[];
     lookupFiles: string[];
+    warehouseFiles: string[];
     folder: string;
+}
+
+// ============= Standalone (identity-less) Events — v1.8.0 =============
+
+/**
+ * An identity-less metric snapshot stream.
+ *
+ * The engine emits one record per cadence tick per dimension cross-product row.
+ * Records carry `event`, `time`, `insert_id`, `distinct_id`, every dimension as
+ * a flat property, and every resolved entry in `properties`. They never carry
+ * `user_id` or `device_id`, because they describe a system, not a person.
+ *
+ * @example
+ * standaloneEvents: [{
+ *   event: 'cdn_egress',
+ *   cadence: 'day',
+ *   dimensions: { region: ['us-east', 'us-west', 'eu', 'apac'] },
+ *   distinctIdFrom: 'region',
+ *   properties: {
+ *     gb_out:   (ctx) => 400 + ctx.tickIndex * 3,
+ *     cost_usd: (ctx) => (400 + ctx.tickIndex * 3) * 0.085,
+ *     p95_ms:   [120, 140, 160],
+ *   },
+ * }]
+ */
+export interface StandaloneEventConfig {
+    /** Event name as it lands in Mixpanel. Must be unique across `standaloneEvents`. */
+    event: string;
+    /**
+     * How often a snapshot fires. Ticks start at the dataset start and step by
+     * the cadence; the last tick is the final one at or before the dataset end.
+     * Default: `'day'`.
+     */
+    cadence?: 'hour' | 'day' | 'week';
+    /**
+     * Dimension values to cross-product. Each key becomes a flat property on the
+     * record. `{ region: ['us','eu'], tier: ['a','b'] }` emits 4 records per tick.
+     * Omit for a single record per tick.
+     */
+    dimensions?: Record<string, any[]>;
+    /**
+     * Which dimension supplies the synthetic `distinct_id`. Must name a declared
+     * dimension. When omitted, `distinct_id` is the event name. The id exists so
+     * Mixpanel accepts the record; it never maps to a person.
+     */
+    distinctIdFrom?: string;
+    /**
+     * Snapshot metrics. Same `ValueValid` forms as event properties, and value
+     * functions receive a `StandaloneValueContext` so a metric can shape a trend
+     * across the window.
+     */
+    properties?: Record<string, ValueValid>;
+}
+
+/** @internal Normalized `StandaloneEventConfig` produced by the validator. */
+export interface ResolvedStandaloneEventConfig {
+    event: string;
+    cadence: 'hour' | 'day' | 'week';
+    dimensions: Record<string, any[]>;
+    distinctIdFrom: string | null;
+    properties: Record<string, ValueValid>;
+}
+
+/**
+ * Context handed to every standalone property value function.
+ * Shares `time` and `config` with `ValueContext`, so a function written for a
+ * normal event property still works unchanged.
+ */
+export interface StandaloneValueContext {
+    /** Tick timestamp in unix MILLISECONDS. */
+    time: number;
+    /** The full validated dungeon config. */
+    config: Dungeon;
+    /** This row's dimension values, e.g. `{ region: 'us-east' }`. */
+    dimensions: Record<string, any>;
+    /** Zero-based index of this tick within the window. Use it to shape a trend. */
+    tickIndex: number;
+    /** Total number of ticks in the window. `tickIndex / (tickCount - 1)` is window progress. */
+    tickCount: number;
+    /** The cadence this stream fires on. */
+    cadence: 'hour' | 'day' | 'week';
+    /** The partially built record (`event`, `time`, `insert_id`, `distinct_id`, dimensions). */
+    event: Record<string, any>;
+}
+
+/**
+ * Meta passed to the `"standalone"` hook.
+ *
+ * Storage-only: return the record or an array of records to retain them.
+ * Returning undefined drops the record. Warehouse hooks instead ignore returns.
+ */
+export interface HookMetaStandalone extends HookMetaTimeAnchors {
+    /** The resolved config for the stream this record belongs to. */
+    spec: ResolvedStandaloneEventConfig;
+    /** The full validated dungeon config. */
+    config: Dungeon;
+}
+
+export interface WarehouseMetricSource {
+    /** Source event names whose bucketed measure contributes positively to the series. */
+    event: string | string[];
+    /** Source event names whose bucketed measure is subtracted from the series. */
+    minus?: string | string[];
+    /** Per-bucket measure. Default: `'count'`. */
+    measure?: 'count' | 'sum' | 'avg' | 'dau' | 'users';
+    /** Required when `measure` is `'sum'` or `'avg'`. */
+    property?: string;
+    /** Optional row filter over flat event records. */
+    where?: ((event: Record<string, any>) => boolean) | null;
+    /** Optional dimension columns copied from source event or super prop keys. */
+    groupBy?: string | string[];
+}
+
+export interface WarehouseMetricConfig {
+    /**
+     * @example
+     * warehouseMetrics: [{
+     *   name: 'daily_active_subscriptions',
+     *   type: 'point-in-time',
+     *   source: {
+     *     event: 'subscription_started',
+     *     minus: 'subscription_cancelled',
+     *     measure: 'count',
+     *   },
+     *   baseline: 40,
+     *   timeColumn: 'date',
+     *   valueColumn: 'active_subscriptions',
+     * }]
+     */
+    /** Unique metric/table name. Must match `/^[a-z][a-z0-9_]{0,63}$/`. */
+    name: string;
+    /** Metric family: additive sums per bucket vs point-in-time carried levels. Default: `'additive'`. */
+    type?: 'additive' | 'point-in-time';
+    /** Bucket grain. Default: `'day'`. */
+    grain?: 'day' | 'week' | 'month';
+    /** Point-in-time only: emit only the first bucket and changed values. Default: `false`. */
+    sparse?: boolean;
+    /** Declarative source spec describing how to derive the table from generated events. */
+    source: WarehouseMetricSource;
+    /** Output time column name. Default: `'date'`. */
+    timeColumn?: string;
+    /** Output value column name. Default: `'value'`. */
+    valueColumn?: string;
+    /** Point-in-time starting level at the dataset window start. Default: `0`. */
+    baseline?: number;
+    /** Multiplier applied after bucket aggregation. Default: `1`. */
+    scale?: number;
+    /** Seeded jitter fraction clamped to `[0, 0.5]`. Default: `0`. */
+    noise?: number;
+    /** Grain periods of backfill before the dataset window. Default: `0`. */
+    history?: number;
+    /** Extra declared output columns, preserved in declaration order. */
+    columns?: Record<string, ValueValid | ((ctx: WarehouseValueContext) => ValueValid)>;
+    /** Output file format. Defaults to the dungeon format, else `'csv'`. */
+    format?: 'csv' | 'json';
+}
+
+/** @internal Normalized `WarehouseMetricConfig` produced by the validator. */
+export interface ResolvedWarehouseMetricConfig {
+    name: string;
+    type: 'additive' | 'point-in-time';
+    grain: 'day' | 'week' | 'month';
+    sparse: boolean;
+    source: {
+        event: string[];
+        minus: string[];
+        measure: 'count' | 'sum' | 'avg' | 'dau' | 'users';
+        property: string | null;
+        where: ((event: Record<string, any>) => boolean) | null;
+        groupBy: string[];
+    };
+    timeColumn: string;
+    valueColumn: string;
+    baseline: number;
+    scale: number;
+    noise: number;
+    history: number;
+    columns: Record<string, ValueValid | ((ctx: WarehouseValueContext) => ValueValid)>;
+    format: 'csv' | 'json';
+}
+
+export interface WarehouseValueContext {
+    /** Final bucket value after scale and noise. */
+    value: number;
+    /** Partially built row so later columns can depend on earlier ones. */
+    row: Record<string, any>;
+    /** Bucket start in unix milliseconds. */
+    time: number;
+    /** Zero-based chronological bucket index within this series, including backfill buckets and sparse gaps when present. */
+    bucketIndex: number;
+    /** Total chronological buckets in this series, including history buckets even when sparse rows are skipped. */
+    bucketCount: number;
+    /** Bucket grain for this metric. */
+    grain: 'day' | 'week' | 'month';
+    /** True when this row was synthesized before the dataset window by `history`. */
+    isBackfill: boolean;
+    /** Stable joined dimension key for this series. Empty string when undimensioned. */
+    seriesKey: string;
+    /** The resolved metric spec for this table. */
+    spec: ResolvedWarehouseMetricConfig;
+    /** The full validated dungeon config. */
+    config: Dungeon;
+}
+
+export interface HookMetaWarehouse extends HookMetaTimeAnchors {
+    /** The resolved config for the metric this row belongs to. */
+    spec: ResolvedWarehouseMetricConfig;
+    /** The full validated dungeon config. */
+    config: Dungeon;
+    /** Metric/table name. */
+    metricName: string;
+    /** Zero-based chronological bucket index within this series, including history buckets and sparse gaps. */
+    bucketIndex: number;
+    /** Total chronological buckets in this series, including history buckets even when sparse rows are skipped. */
+    bucketCount: number;
+    /** Bucket grain for the metric. */
+    grain: 'day' | 'week' | 'month';
+    /** Stable joined dimension key for this series. Empty string when undimensioned. */
+    seriesKey: string;
+    /** True when the row belongs to the `history` backfill before the dataset window. */
+    isBackfill: boolean;
+    /** Raw bucket contributions before scale/noise and before point-in-time carry-forward. */
+    raw: {
+        plus: { count: number; sum: number; users: number };
+        minus: { count: number; sum: number; users: number };
+    };
+}
+
+export interface WarehouseManifestColumn {
+    name: string;
+    bqType: 'DATE' | 'FLOAT64' | 'BOOL' | 'STRING';
+}
+
+export interface WarehouseManifestTable {
+    table: string;
+    file: string;
+    format: 'csv' | 'json';
+    grain: 'day' | 'week' | 'month';
+    type: 'additive' | 'point-in-time';
+    timeColumn: string;
+    valueColumn: string;
+    dimensionColumns: string[];
+    columns: WarehouseManifestColumn[];
+    recommendedAggregation: 'sum' | 'last value';
+    sql: string;
+    refreshHint: string;
+}
+
+export interface WarehouseManifest {
+    configName: string;
+    tables: WarehouseManifestTable[];
 }
 
 /**

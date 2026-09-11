@@ -1,7 +1,7 @@
 ---
 name: write-hooks
 description: Use when an existing dungeon needs engineered story trends or "magic number" patterns — writes the `hook` function using atom helpers and high-level patterns. Adds no new event flags; never mutates the schema.
-argument-hint: [path/to/dungeon.js] [free-text story / trend description]
+argument-hint: '[path/to/dungeon.js] [free-text story / trend description]'
 model: claude-opus-4-6
 effort: max
 ---
@@ -68,7 +68,7 @@ property values that differ by cohort, injected bursts, lifecycle waves.
 Hooks fire in this order per user (see `CLAUDE.md` for the canonical reference):
 
 1. `"user"` — profile created. Mutate in place; return ignored.
-2. `"scd-pre"` — SCD entries created. Mutate in place OR return new array.
+2. `"scd-pre"` — SCD entries created. Mutate in place; return ignored.
 3. For each funnel: `"funnel-pre"` → `"event"` (per step) → `"funnel-post"`.
 
 **`funnel-pre` is now reliable for temporal patterns.** Usage funnels advance a
@@ -76,7 +76,7 @@ cursor after each run, so successive `meta.firstEventTime` values spread across
 the user's active window. Persona and world-event modifiers apply BEFORE the
 hook — the hook has final authority on `conversionRate`, `timeToConvert`, and
 `props`.
-4. `"event"` — for non-funnel standalone events. Return value REPLACES the event.
+4. `"event"` — for non-funnel user events from `events[]`. Return value REPLACES the event.
 5. `"everything"` — array of ALL the user's events. Return array to replace.
 
 **Most engineered trends belong in `everything`.** It sees the full user stream,
@@ -85,6 +85,36 @@ and you can mutate freely.
 
 Storage-only hooks (`ad-spend`, `group`, `mirror`, `lookup`) fire later in the
 pipeline and don't see the same `meta` shape.
+
+### Cadence streams and warehouse rows (v1.8.0)
+
+These hooks sit outside the per-user sequence and never enter `everything`.
+Neither has person metadata (`meta.profile`, auth state, sessions, or SCDs).
+
+- `standaloneEvents`: `type === 'standalone'` fires on storage push before the
+  user loop. Read `meta.spec` and `meta.config` to identify the stream. Return
+  the record object or an array of records. Returning `undefined` drops it.
+  Mutating without returning is therefore insufficient. Preserve required keys
+  and use fresh `insert_id` values for clones. Its synthetic `distinct_id` is a
+  series identifier, never a person or a retention cohort.
+- `warehouseMetrics`: `type === 'warehouse'` fires after user generation, once
+  per materialized row. Mutate the row in place; its return value is ignored.
+  Keep the time column and group keys stable. Modify only the value column and
+  declared extra columns. Meta includes `spec`, `config`, `metricName`,
+  `bucketIndex`, `bucketCount`, `grain`, `seriesKey`, `isBackfill`, and `raw`.
+  `raw` describes plus/minus source aggregates before scaling, noise, and carry.
+
+Do not add either schema here. Send missing `standaloneEvents` properties or
+warehouse `columns` back to `/create-dungeon`. Warehouse sources consume user
+`events[]` only, including both plus and minus legs; they cannot consume cadence
+streams. Standalone value functions use tick context, warehouse column functions
+use bucket context; neither supplies a user profile.
+
+Verify standalone stories with disk-backed `duckdb` assertions against
+`{{PREFIX}}-STANDALONE*.json`. The user-event emulator and `--in-memory` CLI mode
+do not evaluate this stream. Warehouse stories can use `warehouse` assertions
+or `warehouse-stats` assertions; automatic warehouse audits also run without
+stories. Hand off to `/verify-dungeon` with an explicit artifact prefix.
 
 ## Hook meta — identity context
 

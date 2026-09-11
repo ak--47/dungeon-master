@@ -1,7 +1,7 @@
 ---
 name: headless-build
 description: Use after a dungeon's data is loaded into a real Mixpanel project — builds the full demoable environment with mixpanel-headless (dashboards, charts, Lexicon, cohorts, custom properties, behaviors/metrics/formulas, annotations) targeted at that dungeon's engineered stories, then verifies the stories still read live. Final step after create-dungeon / write-hooks / verify-dungeon / create-project.
-argument-hint: [dungeon path, e.g. dungeons/user/nyc-dcp/nyc-dcp.js]
+argument-hint: '[dungeon path, e.g. dungeons/user/nyc-dcp/nyc-dcp.js]'
 model: claude-opus-4-6
 effort: max
 ---
@@ -13,6 +13,23 @@ Last step of the pipeline:
 ```
 /create-dungeon → /write-hooks → /verify-dungeon → /create-project → /headless-build
 ```
+
+For `warehouseMetrics`, insert `/warehouse-metrics` after verification and project
+provisioning, before this build. Use the verified local disk artifact prefix.
+Ordinary event import loads `standaloneEvents` but does not deploy warehouse tables.
+
+Keep cadence and warehouse metrics separate from people analyses. Synthetic
+standalone `distinct_id` values identify series; never count them as users or
+include them in funnels, retention, or identity stitching. Build aggregate reports
+from their declared numeric properties and dimensions.
+
+For warehouse-backed charts, read the manifest and saved metric ids from the
+warehouse handoff. `history` may extend the metric window before the user-event
+window; preserve that range and label synthetic backfill. Check saved definitions
+and `previewWarehouseMetric` results before narrating values. A successful
+`refreshWarehouseMetric` only invalidates cache; it does not execute the query.
+Use the existing `/macro/setup-bq-warehouse` flow through `/warehouse-metrics`
+for source setup. Do not reimplement source creation or IAM grants in build code.
 
 The project already has data. This skill builds everything a human sees: themed
 dashboards whose narrative is computed from the live data, an annotated Lexicon,

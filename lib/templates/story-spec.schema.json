@@ -85,7 +85,6 @@
 						"properties": {
 							"where": {
 								"type": "object",
-								"minProperties": 1,
 								"description": "Column → value (equality) or { op, value } comparison. All clauses must match (AND).",
 								"additionalProperties": {
 									"oneOf": [
@@ -123,23 +122,49 @@
 			"properties": {
 				"type": { "type": "string", "minLength": 1 }
 			},
-			"if": {
-				"properties": { "type": { "const": "duckdb" } }
-			},
-			"then": {
-				"required": ["type", "sql"],
-				"properties": {
-					"type": { "const": "duckdb" },
-					"sql": {
-						"type": "string",
-						"minLength": 1,
-						"description": "DuckDB SQL escape hatch, for bespoke shapes only. The runner shells out to the `duckdb` CLI (no npm dep) and substitutes the literal token {{PREFIX}} with the run's data prefix path (e.g. data/verify-<name>), so globs read read_json_auto('{{PREFIX}}-EVENTS*.json'). Result rows feed select/expect like emulator rows. Disk mode only — skipped (with a warning) under --in-memory."
+			"allOf": [
+				{
+					"if": {
+						"properties": { "type": { "const": "duckdb" } }
+					},
+					"then": {
+						"required": ["type", "sql"],
+						"properties": {
+							"type": { "const": "duckdb" },
+							"sql": {
+								"type": "string",
+								"minLength": 1,
+								"description": "DuckDB SQL escape hatch, for bespoke shapes only. The runner shells out to the `duckdb` CLI (no npm dep) and substitutes the literal token {{PREFIX}} with the run's data prefix path (e.g. data/verify-<name>), so globs read read_json_auto('{{PREFIX}}-EVENTS*.json'). Result rows feed select/expect like emulator rows. Disk mode only — skipped (with a warning) under --in-memory."
+							}
+						}
+					}
+				},
+				{
+					"if": {
+						"properties": { "type": { "const": "warehouse" } }
+					},
+					"then": {
+						"required": ["type", "table"],
+						"properties": {
+							"type": { "const": "warehouse" },
+							"table": { "type": "string", "minLength": 1 }
+						}
+					}
+				},
+				{
+					"if": {
+						"properties": { "type": { "const": "warehouse-stats" } }
+					},
+					"then": {
+						"required": ["type", "table"],
+						"properties": {
+							"type": { "const": "warehouse-stats" },
+							"table": { "type": "string", "minLength": 1 }
+						}
 					}
 				}
-			},
-			"else": {
-				"description": "Anything other than 'duckdb' is passed byte-compatible to emulateBreakdown / verifyDungeon (frequencyByFrequency, funnelFrequency, aggregatePerUser, timeToConvert, attributedBy, sessionMetrics, retention, distinctCount, eventBreakdown, uniques, lifecycle, topPaths)."
-			}
+			],
+			"description": "Anything other than 'duckdb', 'warehouse', or 'warehouse-stats' is passed byte-compatible to emulateBreakdown / verifyDungeon (frequencyByFrequency, funnelFrequency, aggregatePerUser, timeToConvert, attributedBy, sessionMetrics, retention, distinctCount, eventBreakdown, uniques, lifecycle, topPaths)."
 		},
 		"expect": {
 			"type": "object",

@@ -60,6 +60,41 @@ If any event type has SCHEMA-FAIL, flag it prominently and include specific reme
 
 ## Standard identity-model invariants
 
+### Metric artifacts use separate schemas
+
+The expected-schema table above applies only to user EVENTS. For `standaloneEvents`,
+expect `event`, `time`, `insert_id`, `distinct_id`, plus the matching spec's
+dimension and property keys. User superProps, session ids, and SDK flags do not
+apply. Check undeclared columns explicitly; the story CLI's user schema pass
+does not cover standalone shards.
+
+Use a `duckdb` story assertion with this source, filtering the declared event:
+
+```sql
+SELECT event, count(*) AS records, min(time::TIMESTAMP) AS first_tick,
+       max(time::TIMESTAMP) AS last_tick
+FROM read_json_auto('{{PREFIX}}-STANDALONE*.json',
+  union_by_name=true, sample_size=-1)
+GROUP BY event;
+```
+
+Compare the count with cadence ticks times the dimension cross-product size.
+Check duplicate `(event, time, <dimension keys>)` tuples and undeclared keys,
+and assert that `user_id` and `device_id` are absent. Synthetic `distinct_id`
+values identify series, never people. Do not union these shards into EVENTS
+for funnels, retention, stitching, or user counts. Substitute `{{PREFIX}}`
+with the exact artifact prefix when running SQL outside the story CLI.
+
+For `warehouseMetrics`, use the matching `-WAREHOUSE-MANIFEST.json` to resolve
+each table file and schema. Read JSONL with `read_json_auto` or CSV with
+`read_csv_auto` according to that manifest. Check the declared `timeColumn`,
+group keys, `valueColumn`, and extra `columns`; no identity fields are required.
+Use `warehouse` or `warehouse-stats` assertions for stories. The
+automatic warehouse audit runs even without stories. Account for `history`
+backfill and `sparse` point-in-time rows before judging counts or time coverage.
+
+### User-event identity checks
+
 Run these for every dungeon that uses the identity model (`isAuthEvent` + `attempts` + `identity.avgDevicePerUser`), BEFORE per-pattern checks:
 
 ```sql
@@ -775,7 +810,7 @@ Choice depends on whether the JSDoc's stated ranges are load-bearing for the dun
 If you edit a hook then query the existing data files, you'll get STALE results. The verifier must re-run the dungeon AND wait for full completion before re-querying:
 
 ```bash
-rm -f ./data/verify-<NAME>-*
+# Keep this run's files for verification and deployment; cleanup needs explicit consent.
 node scripts/verify-runner.mjs dungeons/vertical/<NAME>.js verify-<NAME>
 # Wait for the {"mode":"full","eventCount":...} JSON to print before querying
 ```

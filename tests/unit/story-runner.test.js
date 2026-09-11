@@ -196,6 +196,19 @@ describe('validateStories — mirrors the JSON schema', () => {
 		expect(errors.join('\n')).toMatch(/array form is between-only/);
 		expect(errors.join('\n')).toMatch(/requires a non-empty `sql`/);
 	});
+	test('warehouse and warehouse-stats breakdowns require a table name', () => {
+		const missingTable = [{
+			...goodStory(),
+			id: 'H5-warehouse',
+			assertions: [
+				{ breakdown: { type: 'warehouse' }, select: { s: { where: {} } }, expect: { metric: 's.value', op: '>=', target: 1 } },
+				{ breakdown: { type: 'warehouse-stats' }, select: { s: { where: {} } }, expect: { metric: 's.corr', op: '>=', target: 0.9 } },
+			],
+		}];
+		const { valid, errors } = validateStories(missingTable);
+		expect(valid).toBe(false);
+		expect(errors.join('\n')).toMatch(/table/);
+	});
 	test('assertion needs expect or assert', () => {
 		const { valid, errors } = validateStories([{ ...goodStory(), assertions: [{ breakdown: { type: 'x' } }] }]);
 		expect(valid).toBe(false);
@@ -265,6 +278,61 @@ describe('storiesToChecks / evaluateStories', () => {
 		expect(res.assertions[1].verdict).toBe('NONE');
 		expect(res.assertions[1].detail).toMatch(/disk mode/);
 		expect(res.verdict).toBe('NONE'); // worst of NAILED, NONE
+	});
+	test('evaluateStories supports warehouse rows and warehouse-stats summaries', async () => {
+		const events = [
+			{ event: 'new_booking', user_id: 'u1', time: '2024-01-01T12:00:00Z', booking_value: 100 },
+			{ event: 'new_booking', user_id: 'u2', time: '2024-01-02T12:00:00Z', booking_value: 150 },
+			{ event: 'new_booking', user_id: 'u3', time: '2024-01-03T12:00:00Z', booking_value: 200 },
+		];
+		const stories = [{
+			id: 'H8-warehouse-shape',
+			hook: 'H8',
+			archetype: 'temporal-inflection',
+			narrative: 'warehouse metric tracks booking totals',
+			assertions: [
+				{
+					breakdown: { type: 'warehouse', table: 'daily_new_bookings' },
+					select: { day3: { where: { date: '2024-01-03' } } },
+					expect: { metric: 'day3.bookings', op: '>=', target: 200 },
+				},
+				{
+					breakdown: { type: 'warehouse-stats', table: 'daily_new_bookings' },
+					select: { s: { where: {} } },
+					expect: { metric: 's.corr', op: '>=', target: 0.99, floor: 0.9 },
+				},
+			],
+		}];
+		const [res] = await evaluateStories(stories, events, {
+			warehouseRows: {
+				daily_new_bookings: [
+					{ date: '2024-01-01', bookings: 100 },
+					{ date: '2024-01-02', bookings: 150 },
+					{ date: '2024-01-03', bookings: 200 },
+				],
+			},
+			warehouseSpecs: {
+				daily_new_bookings: {
+					name: 'daily_new_bookings',
+					type: 'additive',
+					grain: 'day',
+					history: 0,
+					timeColumn: 'date',
+					valueColumn: 'bookings',
+					source: {
+						event: ['new_booking'],
+						minus: [],
+						measure: 'sum',
+						property: 'booking_value',
+						where: null,
+						groupBy: [],
+					},
+				},
+			},
+		});
+		expect(res.assertions[0].verdict).toBe('NAILED');
+		expect(res.assertions[1].verdict).toBe('NAILED');
+		expect(res.verdict).toBe('NAILED');
 	});
 	test('VERDICT_RANK ordering pinned: INVERSE < NONE < WEAK < STRONG < NAILED', () => {
 		expect(VERDICT_RANK).toEqual({ INVERSE: 0, NONE: 1, WEAK: 2, STRONG: 3, NAILED: 4 });
