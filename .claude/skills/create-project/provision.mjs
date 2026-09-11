@@ -32,6 +32,7 @@ import path, { dirname, resolve } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import dotenv from 'dotenv';
 import { loadFromFile, extractComments } from '../../../index.js';
+import { buildContext } from './context.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '../../../');
@@ -202,66 +203,6 @@ function isoInDays(days) {
 	// precision, NO milliseconds. toISOString() emits ".sssZ", which the API
 	// rejects ("Expiration date … does not match %Y-%m-%dT%H:%M:%SZ").
 	return new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
-}
-
-function buildContext(name, config, comments, groupKeys, stories) {
-	const parts = [`# ${name}`, ''];
-	if (comments.overview) parts.push(comments.overview, '');
-
-	// Preferred source: the stories export — each story's narrative is the
-	// human-readable behavior and mixpanelReport (free-form object) points at
-	// the report where it shows. Comment scrape is the fallback for dungeons
-	// without stories (schema-only or pre-1.6).
-	if (stories?.length) {
-		parts.push('## Engineered Behaviors', '');
-		parts.push(`${stories.length} machine-verified story patterns (from the dungeon's \`stories\` export):`, '');
-		for (const s of stories) {
-			const arch = s.archetype ? ` — ${s.archetype}` : '';
-			parts.push(`### ${s.id}${arch}`, '');
-			if (s.narrative) parts.push(String(s.narrative).trim(), '');
-			if (s.mixpanelReport && typeof s.mixpanelReport === 'object') {
-				parts.push('How to see it in Mixpanel:');
-				for (const [k, v] of Object.entries(s.mixpanelReport)) {
-					parts.push(`- **${k}**: ${typeof v === 'string' ? v : JSON.stringify(v)}`);
-				}
-				parts.push('');
-			}
-			if (Array.isArray(s.intentionalDeviations) && s.intentionalDeviations.length) {
-				parts.push('Notes:', ...s.intentionalDeviations.map((d) => `- ${d}`), '');
-			}
-		}
-	} else if (comments.hookStories) {
-		parts.push('## Engineered Behaviors', '', comments.hookStories, '');
-	}
-
-	parts.push('## Schema', '');
-	const events = config.events || [];
-	parts.push(`### Events (${events.length})`);
-	for (const e of events) {
-		const props = e.properties ? Object.keys(e.properties).join(', ') : '';
-		const weight = e.weight != null ? ` (weight ${e.weight})` : '';
-		parts.push(`- ${e.event}${weight}${props ? ` — ${props}` : ''}`);
-	}
-	parts.push('');
-
-	const funnels = config.funnels || [];
-	if (funnels.length) {
-		parts.push(`### Funnels (${funnels.length})`);
-		for (const f of funnels) {
-			const seq = (f.sequence || []).join(' → ');
-			const rate = f.conversionRate != null ? ` (${f.conversionRate}%)` : '';
-			parts.push(`- ${f.name || '(unnamed)'}: ${seq}${rate}`);
-		}
-		parts.push('');
-	}
-
-	if (groupKeys.length) {
-		parts.push('### Group keys', ...groupKeys.map((g) => `- ${g.property_name} (${g.display_name})`), '');
-	}
-
-	let md = parts.join('\n');
-	if (md.length > 50000) md = md.slice(0, 49900) + '\n\n…(truncated to 50,000 chars)';
-	return md;
 }
 
 function writeBackCredentials(p, creds) {

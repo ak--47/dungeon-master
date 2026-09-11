@@ -1,7 +1,7 @@
 ---
-name: deploy-warehouse
-description: Use when a completed warehouse dungeon needs its warehouse tables loaded into BigQuery and saved as Mixpanel warehouse metrics. Triggers: "deploy warehouse metrics", "load warehouse tables", "connect warehouse metric source", "save warehouse metrics", after a dungeon has already run.
-argument-hint: [dungeon path, e.g. dungeons/user/acme/acme.js]
+name: warehouse-metrics
+description: 'Use when a completed warehouse dungeon needs its warehouse tables loaded into BigQuery and saved as Mixpanel warehouse metrics. Triggers: "deploy warehouse metrics", "load warehouse tables", "connect warehouse metric source", "save warehouse metrics", after a dungeon has already run.'
+argument-hint: '[dungeon path, e.g. dungeons/user/acme/acme.js]'
 model: claude-opus-4-6
 effort: max
 ---
@@ -14,7 +14,7 @@ Load the generated warehouse tables for a dungeon into BigQuery, connect the dat
 
 ## What it does
 
-The orchestrator is `.claude/skills/deploy-warehouse/deploy.mjs`. It works from the warehouse manifest emitted by a completed dungeon run.
+The orchestrator is `.claude/skills/warehouse-metrics/deploy.mjs`. It works from the warehouse manifest emitted by a completed dungeon run.
 
 1. Loads the dungeon with the package loader and requires `warehouseMetrics`.
 2. Finds the latest warehouse manifest and table files, or uses `--data-prefix` when supplied.
@@ -29,7 +29,7 @@ The orchestrator is `.claude/skills/deploy-warehouse/deploy.mjs`. It works from 
 ## Flags
 
 ```bash
-node .claude/skills/deploy-warehouse/deploy.mjs <dungeon-path> [--dataset dm_name] [--data-prefix path/prefix] [--dry-run]
+node .claude/skills/warehouse-metrics/deploy.mjs <dungeon-path> [--dataset dm_name] [--data-prefix path/prefix] [--dry-run]
 ```
 
 - `--dataset`: override the normalized `dm_<name>` dataset.
@@ -38,10 +38,21 @@ node .claude/skills/deploy-warehouse/deploy.mjs <dungeon-path> [--dataset dm_nam
 
 ## Preflight
 
-- The dungeon must already have been run and produced warehouse files.
+- The dungeon must have passed `/verify-dungeon` and produced local warehouse
+	files with `writeToDisk: true` and `gzip: false`. Use the exact verified
+	`--data-prefix` and its matching `-WAREHOUSE-MANIFEST.json`; preserve all table
+	files referenced by the manifest. Do not use blanket prune before deployment.
 - Live mode requires `.env` `BEARER_TOKEN` for powertools.
 - Live mode requires working `bq` / gcloud ADC.
 - The dungeon must already have `credentials.projectId` from `/create-project`.
+- The Power Tools runtime principal needs `roles/resourcemanager.projectIamAdmin`
+	to grant project-level `roles/bigquery.jobUser`, and `roles/bigquery.admin`
+	(or equivalent permissions) for dataset creation and ACL changes. The macro
+	grants the Mixpanel principal `roles/bigquery.dataViewer` on the source dataset.
+	Keep these prerequisites; do not describe IAM as currently blocked. The operator
+	confirms the grant is fixed. Local Power Tools revision `7ae78aa` records the
+	successful one-shot live path and legacy `READER`/`WRITER`/`OWNER` ACL fix.
+	This audit used local evidence only and made no live calls.
 
 ## Warnings
 
@@ -61,7 +72,7 @@ This skill fails clearly in that case. It does not pretend preview succeeded. It
 ### 1. Show the plan
 
 ```bash
-node .claude/skills/deploy-warehouse/deploy.mjs <dungeon-path> --dry-run
+node .claude/skills/warehouse-metrics/deploy.mjs <dungeon-path> --data-prefix <verified-prefix> --dry-run
 ```
 
 Review the printed commands, the emitted SQL files, and the rendered `warehouse/GAPS.md`.
@@ -73,7 +84,7 @@ Live mode writes or replaces BigQuery tables and saves metrics into a real Mixpa
 ### 3. Run live
 
 ```bash
-node .claude/skills/deploy-warehouse/deploy.mjs <dungeon-path>
+node .claude/skills/warehouse-metrics/deploy.mjs <dungeon-path> --data-prefix <verified-prefix>
 ```
 
 ### 4. Report

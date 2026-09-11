@@ -1,3 +1,17 @@
+# v1.8.0 metric streams
+
+The user-event emulator receives EVENTS and profiles. `standaloneEvents` writes
+separate STANDALONE shards; verify these with disk `duckdb` assertions on
+`{{PREFIX}}-STANDALONE*.json`. The CLI's `--in-memory` mode skips disk-only SQL.
+Standalone synthetic `distinct_id` values identify series, never people, so
+exclude them from funnels, retention, lifecycle, identity stitching, and user counts.
+
+`warehouseMetrics` reads only user `events[]` sources. It materializes after
+the user loop and supports `warehouse` and `warehouse-stats` assertions.
+Automatic warehouse audits run even without stories. Its history buckets can
+precede the user-event window; sparse point-in-time tables intentionally omit
+unchanged rows. Do not apply cadence or user-population counting rules to them.
+
 # Counting Semantics — Mixpanel-Accurate Verification
 
 Mixpanel does NOT count the way naive SQL does. The verifier (and any DuckDB query you write) must match Mixpanel's rules.

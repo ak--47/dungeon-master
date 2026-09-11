@@ -746,7 +746,9 @@ export type hookTypes =
  * - "event": return value REPLACES the event (must be the event object).
  * - "everything": return an array to REPLACE the user's event list (filter/inject/dedupe).
  * - "user", "scd-pre", "funnel-pre", "funnel-post": return value is IGNORED — mutate in place.
- * - storage-only ("ad-spend", "group", "mirror", "lookup", "standalone", "warehouse"): return value is IGNORED.
+ * - storage-only ("ad-spend", "group", "mirror", "lookup", "standalone"): return an object or array of records; undefined drops the record.
+ * - "warehouse": return value is IGNORED; mutate the row in place.
+ * - "standalone" runs before the user loop; "warehouse" runs after it. Neither receives person metadata or enters "everything".
  *
  * @param record - The data being processed (event, profile, array of events, funnel config, etc.).
  * @param type - Which hook type is firing — see `hookTypes`.
@@ -2464,7 +2466,8 @@ export interface StandaloneValueContext {
 /**
  * Meta passed to the `"standalone"` hook.
  *
- * Storage-only: the return value is IGNORED. Mutate the record in place.
+ * Storage-only: return the record or an array of records to retain them.
+ * Returning undefined drops the record. Warehouse hooks instead ignore returns.
  */
 export interface HookMetaStandalone extends HookMetaTimeAnchors {
     /** The resolved config for the stream this record belongs to. */

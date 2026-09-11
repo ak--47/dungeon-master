@@ -210,7 +210,7 @@ export function parseArgs(argv) {
 	const positional = args.filter((arg) => !arg.startsWith('--'));
 	const [dungeonArg, extraArg] = positional;
 	if (!dungeonArg) {
-		throw new Error('Usage: node .claude/skills/deploy-warehouse/deploy.mjs <dungeon-path> [--dataset dm_name] [--data-prefix path/prefix] [--dry-run]');
+		throw new Error('Usage: node .claude/skills/warehouse-metrics/deploy.mjs <dungeon-path> [--dataset dm_name] [--data-prefix path/prefix] [--dry-run]');
 	}
 	if (extraArg) {
 		throw new Error(`unexpected extra argument: ${extraArg}`);

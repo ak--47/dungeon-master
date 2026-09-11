@@ -661,17 +661,20 @@ property, and every resolved entry in `properties`.
 
 property value functions receive a `StandaloneValueContext`: `{ time, config, dimensions,
 tickIndex, tickCount, cadence, event }`. `tickIndex / (tickCount - 1)` is window progress —
-use it to shape growth, a dip, or a spike.
+use it to shape growth, a dip, or a spike, guarding `tickCount <= 1` before division.
 
 the stream lands in `result.standaloneEventData`, writes to its own `-STANDALONE` file
 shard, and imports to Mixpanel as its own event stream. hooks fire with type
 `"standalone"`; `meta.spec` carries the resolved config so a hook can tell streams apart.
-like other storage-only hooks the return value is ignored — mutate the record in place.
+the hook runs before the user loop. return the record object or an array of records;
+returning `undefined` drops the record. it has no person metadata and never enters
+`everything`. warehouse hooks have a different contract: mutate the row in place;
+their return values are ignored.
 
 ```javascript
 hook: (record, type, meta) => {
   if (type === 'standalone' && meta.spec.event === 'cdn_egress' && record.region === 'us-east') {
-    record.err_5xx *= 40;   // an outage, in one region, on the infra stream only
+    record.p95_ms *= 40;
   }
   return record;
 }
@@ -692,7 +695,7 @@ source. these rows land in `result.warehouseMetricData`, write to
 they are **not** imported by `token`. that is deliberate. the live path is:
 
 1. run the dungeon
-2. review `/deploy-warehouse` in dry-run mode
+2. review `/warehouse-metrics` in dry-run mode
 3. obtain explicit operator consent for live execution
 4. load the tables to bigquery and save the metrics there
 

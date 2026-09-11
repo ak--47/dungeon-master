@@ -183,7 +183,7 @@ After creating or modifying a dungeon, run `/verify-dungeon` to validate schema 
 
 ## Skills pipeline
 
-Schema → hooks → verify → provision → build, seven slash commands at [.claude/skills/](.claude/skills/):
+Schema → hooks → verify → provision → build, with release validation. Canonical skills live at [.claude/skills/](.claude/skills/); `.agents/skills` and `.github/skills` are shared symlinks.
 
 | Skill | What it does |
 |-------|--------------|
@@ -193,9 +193,13 @@ Schema → hooks → verify → provision → build, seven slash commands at [.c
 | `/analyze-soup <dungeon-path>` | Run a dungeon and analyze its time distribution at week/day/hour granularities. |
 | `/create-project <dungeon-path>` | Provisions a real Mixpanel project for an existing dungeon via the power-tools API (createProject + setTimezone UTC + mintServiceAccount + addGroupKey + setBusinessContext), then writes `credentials` back into the dungeon. Always creates fresh. Needs `BEARER_TOKEN` + `ORG_ID` in `.env`. Orchestrator: [.claude/skills/create-project/provision.mjs](.claude/skills/create-project/provision.mjs). |
 | `/headless-build <dungeon-path>` | AFTER data is loaded: builds the demoable Mixpanel environment with `mixpanel_headless` — dashboards whose narrative is computed live, Lexicon enrichment, cohorts, custom properties, behaviors/metrics/formulas, annotations — then re-measures every hook story **against the live project** and fails on a miss. Build code lives in `dungeons/user/<name>/build/`. |
-| `/deploy-warehouse <dungeon-path>` | AFTER a warehouse dungeon has run: loads the emitted `-WAREHOUSE-*` tables into BigQuery, connects the dataset to Mixpanel with the existing powertools macro, previews each metric SQL, and saves warehouse metrics when the CRUD endpoints are available. Dry-run is the review path; the direct live script does not prompt, so explicit operator consent is required before live execution. If the list route 404s, it still loads/connects and writes `warehouse/GAPS.md` for manual setup. |
+| `/warehouse-metrics <dungeon-path>` | AFTER a warehouse dungeon has run: loads the emitted `-WAREHOUSE-*` tables into BigQuery, connects the dataset to Mixpanel with the existing powertools macro, previews each metric SQL, and saves warehouse metrics when the CRUD endpoints are available. Dry-run is the review path; the direct live script does not prompt, so explicit operator consent is required before live execution. If the list route 404s, it still loads/connects and writes `warehouse/GAPS.md` for manual setup. |
 
 Use the existing `scripts/verify-runner.mjs` — do not create a new runner.
+
+Use `/release-check <version>` before shipping the npm module. It checks tests,
+determinism, docs, skill metadata, and package contents. GitHub merge and npm
+publishing each require explicit authorization; the skill does not publish by default.
 
 ## Config surface
 
@@ -227,7 +231,7 @@ out `eventMultiplier` — the run warns when it does.
 **1.8.0 metric-table surfaces:** `standaloneEvents` emits identity-less cadence rows that
 import as events. `warehouseMetrics` materializes local warehouse source tables plus a
 manifest from the run's own event stream. `warehouseMetrics` is NOT part of
-`sendToMixpanel`; deploy it afterward with `/deploy-warehouse` from the emitted
+`sendToMixpanel`; deploy it afterward with `/warehouse-metrics` from the emitted
 `-WAREHOUSE-MANIFEST.json` and table files.
 
 ## Critical gotchas

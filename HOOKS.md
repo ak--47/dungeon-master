@@ -21,10 +21,11 @@ hook: function (record, type, meta) { ... return record; }
 | `event` | `events.js:176` | Single event (flat props) | **Used** (replaces event) | `user: { distinct_id }`, `config`, `datasetStart`, `datasetEnd` |
 | `funnel-post` | `funnels.js:153` | Array of funnel events | Ignored (mutate in-place) | `user`, `profile`, `scd`, `funnel`, `config`, `experiment` |
 | `everything` | `user-loop.js:280` | Array of ALL user events | **Used** if array returned | `profile`, `scd`, `config`, `datasetStart`, `datasetEnd`, `userIsBornInDataset`, `authTime`, `isPreAuth`, `persona` |
-| `ad-spend` | `storage.js` | Ad spend event | Ignored | -- |
-| `group` | `storage.js` | Group profile | Ignored | -- |
-| `mirror` | `storage.js` | Mirror data point | Ignored | -- |
-| `lookup` | `storage.js` | Lookup table entry | Ignored | -- |
+| `ad-spend` | `storage.js` | Ad spend event | Object or array used | -- |
+| `group` | `storage.js` | Group profile | Object or array used | -- |
+| `mirror` | `storage.js` | Mirror data point | Object or array used | -- |
+| `lookup` | `storage.js` | Lookup table entry | Object or array used | -- |
+| `standalone` | `storage.js`, before user loop | Identity-less cadence event | Object or array used; `undefined` drops | `spec`, `config`, `datasetStart`, `datasetEnd` |
 | `warehouse` | `storage.js` | One materialized warehouse row | Ignored | `spec`, `config`, `metricName`, `bucketIndex`, `bucketCount`, `grain`, `seriesKey`, `isBackfill`, `raw`, `datasetStart`, `datasetEnd` |
 
 **Per-user execution order:** `user` -> `scd-pre` -> `funnel-pre` -> `event` -> `funnel-post` -> `everything`
@@ -37,7 +38,17 @@ double-fire mutations.
 **Return rules:**
 - `event`: return the (possibly replaced) event object.
 - `everything`: return the (possibly modified) array. Filtered array removes events.
-- All other types: mutate `record` in-place. Return value is ignored.
+- `ad-spend`, `group`, `mirror`, `lookup`, `standalone`: return the record or an
+  array of records. Returning `undefined` drops the record.
+- `user`, `scd-pre`, `funnel-pre`, `funnel-post`, `warehouse`: mutate `record`
+  in place. Return value is ignored.
+
+`standaloneEvents` runs before the user loop; `warehouseMetrics` materializes
+after it. Neither hook receives person metadata or enters `everything`.
+Standalone synthetic `distinct_id` values identify series, never people. Use
+disk-backed `duckdb` assertions on `{{PREFIX}}-STANDALONE*.json` for cadence
+stories. Warehouse stories support `warehouse` and `warehouse-stats`
+assertions, with automatic table audits even when no stories are exported.
 
 ### 1.1 Warehouse rows (`type === 'warehouse'`)
 

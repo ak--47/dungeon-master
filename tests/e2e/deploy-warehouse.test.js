@@ -9,14 +9,14 @@ import generate from '../../index.js';
 
 const ROOT = path.resolve(import.meta.dirname, '../..');
 const FIXTURE = path.join(ROOT, 'dungeons/technical/warehouse.js');
-const CLI = path.join(ROOT, '.claude/skills/deploy-warehouse/deploy.mjs');
+const CLI = path.join(ROOT, '.claude/skills/warehouse-metrics/deploy.mjs');
 const TIMEOUT = 120_000;
 
 function makeTempDir() {
-	return fs.mkdtempSync(path.join(os.tmpdir(), 'dm-deploy-warehouse-'));
+	return fs.mkdtempSync(path.join(os.tmpdir(), 'dm-warehouse-metrics-'));
 }
 
-describe.sequential('deploy-warehouse dry-run', () => {
+describe.sequential('warehouse-metrics dry-run', () => {
 	test('prints the full plan, writes sql artifacts, and renders GAPS without executing live commands', async () => {
 		const tmpDir = makeTempDir();
 		const dataDir = path.join(tmpDir, 'data');

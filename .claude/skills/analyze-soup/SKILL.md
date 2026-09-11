@@ -1,7 +1,7 @@
 ---
 name: analyze-soup
 description: Use when investigating TimeSoup parameters, diagnosing event-distribution shape, or comparing soup configs — runs a dungeon locally and analyzes time distribution at week/day/hour/minute granularities, producing a soup-analysis.md diagnostic report.
-argument-hint: [dungeon path, e.g. dungeons/technical/simplest.js]
+argument-hint: '[dungeon path, e.g. dungeons/technical/simplest.js]'
 model: claude-opus-4-6
 effort: max
 ---
@@ -10,6 +10,12 @@ effort: max
 
 Run a dungeon and analyze the time distribution of generated events to evaluate TimeSoup parameters.
 
+Analyze user `eventData` / EVENTS shards only. `standaloneEvents` runs on a
+fixed cadence before the user loop; `warehouseMetrics` materializes tables
+afterward. Neither measures TimeSoup. Report their cadence or table checks
+separately through `/verify-dungeon`, and preserve warehouse files for
+`/warehouse-metrics`. Never count standalone synthetic ids as people.
+
 **Dungeon file:** `$ARGUMENTS` (default: `dungeons/technical/simplest.js`)
 
 ## Step 1: Run the Dungeon
@@ -17,14 +23,19 @@ Run a dungeon and analyze the time distribution of generated events to evaluate 
 Run the dungeon with forced local-only settings:
 
 ```bash
-npm run prune
-node -e "
+node --input-type=module -e "
 import generate from './index.js';
 import config from './$ARGUMENTS';
-const result = await generate({ ...config, writeToDisk: true, format: 'json', token: '', verbose: true, name: 'soup-analysis' });
+const result = await generate({ ...config, writeToDisk: true, gzip: false, format: 'json', token: '', verbose: true, name: 'soup-analysis' });
 console.log('Events:', result.eventCount, 'Users:', result.userCount);
 "
 ```
+
+Choose an unused run name before executing; `soup-analysis` below is an example.
+Record the explicit data prefix (`data/soup-analysis`) and use it in every query.
+If that prefix already exists, choose another and update the query paths. Do not
+prune or overwrite an earlier run. Use `<prefix>-EVENTS*.json` with
+`union_by_name=true` for batched output; never glob STANDALONE or WAREHOUSE into it.
 
 Wait for generation to complete. Note the event count and EPS.
 
@@ -147,7 +158,7 @@ Create `soup-analysis.md` with the structure below. For a user dungeon
 (`dungeons/user/<name>/<name>.js`) write it into the dungeon's folder
 (`dungeons/user/<name>/soup-analysis.md`) — everything about a dungeon lives in
 its folder. Otherwise write it to the project root. (The generated
-`./data/soup-analysis-EVENTS.json` is throwaway verification data — leave it in
+`./data/soup-analysis-EVENTS.json` is retained verification data; leave it in
 `./data/`.) Contents:
 
 1. **Config**: The soup parameters used (peaks, deviation, mean, numDays)
@@ -163,10 +174,9 @@ its folder. Otherwise write it to the project root. (The generated
 - **Last day spike**: < 1.5x average = PASS, < 2x = WARN, > 2x = FAIL
 - **Hourly pattern**: Should show visible peaks but no single hour > 5x average
 
-## Step 4: Cleanup
+## Step 4: Preserve artifacts
 
-```bash
-npm run prune
-```
-
-Remove `soup-analysis.md` only if the user asks. It's meant to persist for comparison across runs.
+Record the prefix and files in the report. Keep warehouse tables and the matching
+manifest until deployment completes. Cleanup requires user consent and an explicit
+list of this run's files. Never run blanket prune. Keep `soup-analysis.md` for
+comparison across runs unless the user asks to remove it.

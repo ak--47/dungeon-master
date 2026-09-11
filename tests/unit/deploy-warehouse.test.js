@@ -14,7 +14,7 @@ import {
 	resolveMetricActions,
 	runLiveDeploy,
 	validateDatasetName,
-} from '../../.claude/skills/deploy-warehouse/deploy.mjs';
+} from '../../.claude/skills/warehouse-metrics/deploy.mjs';
 
 function sampleTables() {
 	return [
@@ -49,7 +49,7 @@ function sampleTables() {
 	];
 }
 
-describe('deploy-warehouse helpers', () => {
+describe('warehouse-metrics helpers', () => {
 	test('normalizes dataset names per dungeon name', () => {
 		expect(normalizeDatasetName('My Buddy')).toBe('dm_my_buddy');
 		expect(normalizeDatasetName('Already__clean')).toBe('dm_already_clean');

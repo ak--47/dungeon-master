@@ -4,6 +4,23 @@ Templates and conventions for writing `hook-results.md` and per-dungeon verifica
 
 ## Verdict criteria (5-tier)
 
+Every report records the exact data prefix and retained artifact paths. Separate
+user EVENTS/USERS, standalone cadence shards, and warehouse tables/manifest.
+Keep deployment inputs until `/warehouse-metrics` completes; cleanup needs
+consent and must name this run's files only.
+
+Report standalone schema, cadence counts, dimension coverage, numeric values,
+and absence of person ids separately from user schema and identity checks.
+Name the disk DuckDB assertions and flag any skipped in-memory checks. Synthetic
+standalone ids never contribute to users, funnels, or retention.
+
+Render `warehouseAudits` from the runner JSON in a separate pass/fail table,
+including declared columns, gaps, ordering, numeric cells, sparse repeats, and
+row-count checks. Report these even without stories. Label an audit-only run
+"no stories declared"; do not invent NAILED/STRONG story verdicts. Distinguish
+warehouse history backfill from the user-event date window and record the
+project-provisioning and `/warehouse-metrics` handoff status.
+
 Verdicts are **mechanical** — computed by `scripts/verify-stories.mjs` from each story assertion's declared `target` / `floor` / `minCohort` (see the `StoryVerdict` typedef in `types.d.ts`), not eyeballed percentages:
 
 - **NAILED** — observed within ±10% of `target`.
@@ -206,7 +223,7 @@ Follow the format in `dungeons/vertical/<name>/`:
 -- USAGE:
 --   1. node scripts/verify-runner.mjs dungeons/user/<name>/<name>.js verify-<name>
 --   2. duckdb < dungeons/user/<name>/<name>-verifications.sql
---   3. rm -f verify-<name>-*
+--   3. Preserve this prefix through deployment; cleanup requires explicit consent.
 -- ============================================================================
 
 -- HOOK N: NAME (TYPE)

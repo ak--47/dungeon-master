@@ -13,7 +13,7 @@ All under `/crud`, POST to execute, GET for docs, standard `client_id` / `region
 
 | Endpoint | Required | Notes |
 |---|---|---|
-| `createWarehouseMetric` | `project_id`, `source_id`, `name`, `sql` | Optional: `metric_type`, `value_column`, `time_column`, `aggregation`, `refresh`, `description` |
+| `createWarehouseMetric` | `project_id`, `source_id`, `name`, `sql`, `value_column` | Optional: `metric_type`, `time_column`, `aggregation`, `refresh`, `description` |
 | `getWarehouseMetrics` | `project_id` | |
 | `getWarehouseMetric` | `project_id`, `metric_id` | |
 | `updateWarehouseMetric` | `project_id`, `metric_id`, `payload` | `source_id` is immutable; delete and recreate to rebind |

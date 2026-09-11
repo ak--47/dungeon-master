@@ -1,7 +1,7 @@
 ---
 name: create-project
 description: Use when an existing dungeon needs a real Mixpanel project provisioned before sending data — creates the project, sets timezone UTC, mints a scoped service account, adds the dungeon's group keys, uploads business context (AI context), and writes the resulting credentials back into the dungeon so it "just runs". Follows create-dungeon / write-hooks / verify-dungeon.
-argument-hint: [dungeon path, e.g. dungeons/user/shopstream/shopstream.js]
+argument-hint: '[dungeon path, e.g. dungeons/user/shopstream/shopstream.js]'
 model: claude-opus-4-6
 effort: max
 ---
@@ -25,7 +25,7 @@ in order:
 1. **createProject** — name derived from the dungeon's `OVERVIEW` (`NAME:` line), region `US`, timezone `UTC` (set as a follow-up by the endpoint).
 2. **mintServiceAccount** — `admin`, expires `+30 days`, scoped to the new project. This is what the dungeon uses to **send** data.
 3. **addGroupKey** — one per `groupKeys` entry in the dungeon (`property_name` + a titleized `display_name`). Skipped if the dungeon has no group keys.
-4. **setBusinessContext** — markdown built from the dungeon's `OVERVIEW` comment block plus the `stories` named export (per story: `narrative` + `mixpanelReport` + intentional deviations); dungeons without stories fall back to the `HOOK STORIES` comment scrape (via the package's `extractComments`). Plus an events/funnels/props/group-keys summary, capped at 50k chars. The dry-run plan prints which source was used.
+4. **setBusinessContext** — markdown built from the dungeon's `OVERVIEW` comment block plus the `stories` named export (per story: `narrative` + `mixpanelReport` + intentional deviations); dungeons without stories fall back to the `HOOK STORIES` comment scrape (via the package's `extractComments`). Plus an events/funnels/props/group-keys summary and separate standalone-event and warehouse-metric summaries, capped at 50k chars. The dry-run plan prints which source was used.
 5. **write-back** — replaces the dungeon's `credentials: { … }` block with `{ token, projectId, serviceAccount, serviceSecret, region }`.
 
 **Always creates a fresh project.** Re-running mints a new project and overwrites
@@ -83,7 +83,26 @@ run command:
 node scripts/run-dungeon.mjs <dungeon-path>
 ```
 
-## Error handling
+## Metric handoff (v1.8.0)
+
+Verify `standaloneEvents` and `warehouseMetrics` locally before provisioning.
+Keep the verified run's disk files and record its explicit prefix. Cadence events
+import through the normal send path; their synthetic `distinct_id` values must
+never become people counts or identity-model evidence.
+
+After credentials are written, route `warehouseMetrics` to `/warehouse-metrics`
+with that prefix and `credentials.projectId`. Require local uncompressed table
+files (`writeToDisk: true`, `gzip: false`) and the matching warehouse manifest.
+Review the deploy dry run before obtaining consent for live writes. Project
+provisioning alone does not load BigQuery tables or save warehouse metrics.
+
+The pure `context.mjs` helper summarizes cadence, dimension keys and cardinalities,
+property names, and synthetic identity separately from person events. Warehouse
+summaries include sources, measures, grain, type, point-in-time baseline, history,
+dimension and output columns, aggregation, and the separate deployment handoff.
+It does not evaluate property functions or include config credentials.
+
+## Provisioning errors
 
 - **Missing `BEARER_TOKEN` / `ORG_ID`** — orchestrator exits; have the user fix `.env`.
 - **`createProject` fails** — nothing is provisioned; surface the power-tools error (`{ error }` or `{ errors:[{param,message}] }`) verbatim and stop.

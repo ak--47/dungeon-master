@@ -36,6 +36,7 @@ dungeons/capstone/*
 dungeons/*ai-dungeon*
 
 # ── Internal working artifacts ─────────────────────────────────────
+/.superpowers/
 # Plans + research are ephemeral working dirs (designs, sweep outputs,
 # implementor status files). Final docs land in docs/guides/ and CHANGELOG.md.
 plans/*

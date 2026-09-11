@@ -1,7 +1,7 @@
 ---
 name: create-dungeon
-description: Use when authoring a new dungeon-master config from an app description — designs events, funnels, properties, identity model, and macro/soup. SCHEMA ONLY; engineered story trends + hooks are added separately by write-hooks.
-argument-hint: [free-text app description, e.g. "AI meeting assistant" or "B2B logistics platform"]
+description: Use when authoring a new dungeon-master config from an app description, including standaloneEvents cadence streams and warehouseMetrics source tables. Designs events, funnels, properties, identity model, and macro/soup. SCHEMA ONLY; engineered story trends and hooks are added separately by write-hooks.
+argument-hint: '[free-text app description, e.g. "AI meeting assistant" or "B2B logistics platform"]'
 model: claude-opus-4-6
 effort: max
 ---
@@ -87,9 +87,9 @@ import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 import "dotenv/config";
-import * as u from "../../lib/utils/utils.js";
+import * as u from "../../../lib/utils/utils.js";
 import * as v from "ak-tools";
-/** @typedef {import("../../types").Dungeon} Config */
+/** @typedef {import("../../../types").Dungeon} Config */
 
 // ── OVERVIEW ──
 /*
@@ -133,8 +133,8 @@ const config = {
   numUsers: NUM_USERS,
   avgEventsPerUserPerDay: EVENTS_PER_DAY,
   format: "json",
-  gzip: true,
-  writeToDisk: false,
+  gzip: false,
+  writeToDisk: true,
   concurrency: 1,
   macro: "flat",   // optional — see "Trend shape" below
   soup: "growth",  // optional
@@ -319,7 +319,40 @@ group attributes. Skip for B2C apps.
 Slowly-changing dimensions for plan tier, role, etc. JSDoc on `SCDProp` covers
 type/frequency/timing/values/max.
 
-### 7. Hook function — DO NOT WRITE
+### 7. Metric data surfaces (v1.8.0)
+
+Author these schemas here when the app needs system telemetry or warehouse tables.
+Requests that call these surfaces "v2" still target v1.8.0; do not bump the version.
+
+| Surface | Required design | Time settings | Output |
+|---|---|---|---|
+| `standaloneEvents` | `event`, declared `dimensions` and `properties`; optional `distinctIdFrom` naming a dimension | `cadence: 'hour'`, `'day'`, or `'week'` | `result.standaloneEventData`, `-STANDALONE*.json`; imports as events |
+| `warehouseMetrics` | `name`, `type: 'additive'` or `'point-in-time'`, `source`; declare extra `columns` | `grain: 'day'`, `'week'`, or `'month'`, optional `history` bucket count | `result.warehouseMetricData`, `-WAREHOUSE-*` tables and `-WAREHOUSE-MANIFEST.json`; separate deploy |
+
+`standaloneEvents` generates before the user loop. Each cadence tick emits one
+record per dimension cross-product row. Its synthetic `distinct_id` identifies a
+series, never a person. Do not put these events in funnels, retention, identity
+stitch checks, or people counts. They do not inherit user metadata or superProps.
+
+Standalone property functions receive `{ time, config, dimensions, tickIndex,
+tickCount, cadence, event }`, with `time` in milliseconds. Guard `tickCount <= 1`
+before dividing by `tickCount - 1`. Declare every property and dimension here.
+
+Warehouse sources reference only user `events[]`, including names in both
+`source.event` (plus) and optional `source.minus`. A `standaloneEvents` stream
+cannot be a warehouse source. Declare `source.property` and every `source.groupBy`
+key on every plus and minus event, or in `superProps`. `sum` and `avg` require
+`source.property`; point-in-time disallows `avg` and `dau`. Use at most two group
+keys. `sparse: true` applies only to point-in-time metrics.
+
+Warehouse materialization runs after the user loop. Extra column functions receive
+`{ value, row, time, bucketIndex, bucketCount, grain, isBackfill, seriesKey, spec,
+config }`. `time` is milliseconds. `history` adds synthetic pre-window buckets;
+it does not create historical user events. Keep `timeColumn`, `valueColumn`, group
+keys, and extra `columns` distinct and declared. Read `dungeons/technical/warehouse.js`
+and the warehouse interfaces in `types.d.ts` before choosing measures or backfill.
+
+### 8. Hook function — DO NOT WRITE
 
 Skip the `hook:` field entirely (engine defaults to pass-through). The
 `write-hooks` skill picks this up and engineers the trends.
@@ -620,10 +653,16 @@ This keeps `dungeons/user/` organized — EVERYTHING about this dungeon lives in
 the same folder: `hook-results.md` + `hook-query-log.txt` +
 `<name>-verifications.sql` (from `verify-dungeon`), `soup-analysis.md` (from
 `analyze-soup`), briefs, schema CSV/JSON, example data. The only thing kept
-outside is the throwaway verification data the runs write to `./data/` (cleaned
-after).
+outside is the verification data the runs write to `./data/`. Preserve the exact
+run prefix and its files until verification and warehouse deployment are complete.
 
 Do NOT inject hooks. Do NOT use `subscription`, `attribution`, `geo`,
 `features`, or `anomalies` (the engine will silently strip them and warn).
 
-When done, tell the user the next skill to run.
+When done, hand off to `/write-hooks` when trends are needed, then `/verify-dungeon`.
+For artifact generation use local `writeToDisk: true`, `format: 'json'`,
+`gzip: false`, and an explicit unique run name. Verification runs must disable
+sending with a top-level `token: ''` override. Provision with `/create-project`
+after verification. If `warehouseMetrics` exists, route to `/warehouse-metrics`
+with the verified disk artifact prefix after project provisioning. Keep those
+files; ordinary event import does not deploy warehouse tables.
