@@ -2,14 +2,17 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { makeFixture, runFixture, SEEDS } from './fixtures.mjs';
-import { measureFunnel, mean, range, wilson } from './measures.mjs';
-import { runScenario, SCENARIOS, scenarioConfig, measureScenario } from './scenarios.mjs';
-import { buildCoverage, writeCoverage } from './coverage-registry.mjs';
+import { measureFunnel, measureReport, mean, range, wilson } from './measures.mjs';
+import { runScenario, runHookTtcPair, SCENARIOS, scenarioConfig, measureScenario } from './scenarios.mjs';
+import { buildCoverage } from './coverage-registry.mjs';
 
 const summaries = [];
 const outcomes = [];
 const controls = [];
-const runtimeFiles = ['lib/orchestrators/user-loop.js', 'lib/generators/funnels.js'];
+const runtimeFiles = ['index.js', 'lib/orchestrators/user-loop.js', 'lib/generators/funnels.js',
+  'lib/generators/events.js', 'lib/hook-patterns/time-to-convert-by-segment.js', 'lib/hook-helpers/timing.js',
+  'lib/verify/funnel-engine.js', 'tests/alignment/fixtures.mjs', 'tests/alignment/scenarios.mjs',
+  'tests/alignment/measures.mjs', 'tests/alignment/generated.test.js'];
 const runtimeHashes = () => Object.fromEntries(runtimeFiles.map(file => [file,
   createHash('sha256').update(readFileSync(new URL(`../../${file}`, import.meta.url))).digest('hex')]));
 const runtimeAtStart = runtimeHashes();
@@ -18,17 +21,53 @@ afterEach(context => {
     errors: context.task.result?.errors?.map(error => error.message) ?? [] });
 });
 afterAll(() => {
+  const runtimeAtEnd = runtimeHashes();
   const report = { seeds: SEEDS, timezone: 'UTC', users: 1500, days: 30,
-    runtimeAtStart, runtimeAtEnd: runtimeHashes(),
+    runtimeAtStart, runtimeAtEnd, stableSource: JSON.stringify(runtimeAtStart) === JSON.stringify(runtimeAtEnd),
     densityDiagnosticEnabled: process.env.ALIGNMENT_DENSITY_DIAGNOSTIC === '1',
     inference: 'Descriptive three-seed regression evidence only; Wilson intervals are user-level binomial summaries, not universal power or engine probability calibration.',
     thresholds: SCENARIOS, outcomes, summaries, controls };
   writeFileSync(new URL('./generated-results.json', import.meta.url),
     JSON.stringify(report) + '\n');
-  writeCoverage();
+  expect(runtimeAtEnd, 'source changed during the generated run; rerun on stable source').toEqual(runtimeAtStart);
 });
 
 describe.sequential('generated alignment proofs', () => {
+  it('uses arithmetic mean of integer-second report gaps for two-step TTC', () => {
+    const events = [1999, 3999].flatMap((gap, index) => [
+      { event: 'Entry', user_id: `user-${index}`, time: '2025-01-01T00:00:00.000Z' },
+      { event: 'Success', user_id: `user-${index}`, time: new Date(Date.parse('2025-01-01T00:00:00Z') + gap).toISOString() },
+    ]);
+    const report = measureReport(events, { steps: ['Entry', 'Success'], options: { countMode: 'uniques' } });
+    expect(report.converted).toBe(2);
+    expect(report.meanHours).toBe(2 / 3600);
+    expect(report.perUserMeanHours).toBe(report.meanHours);
+    const rounded = measureReport(events.slice(0, 3).concat({ ...events[3], time: '2025-01-01T00:00:02.999Z' }),
+      { steps: ['Entry', 'Success'], options: { countMode: 'uniques' } });
+    expect(rounded.meanHours).toBe(2 / 3600);
+    expect(rounded.perUserMeanHours).toBeCloseTo(1.5 / 3600, 15);
+  });
+  it.each(['mixed', 'dense'])('hook-ttc absent and factor-1 arms are identical at %s noise', async strength => {
+    const scenario = SCENARIOS.find(entry => entry.id === 'hook-ttc');
+    const withoutInsertIds = events => Array.from(events, ({ insert_id, ...event }) => event);
+    for (const seed of SEEDS) {
+      const config = scenarioConfig('hook-ttc', seed, strength, false);
+      const neutral = await runFixture(config);
+      const absentConfig = scenarioConfig('hook-ttc', seed, strength, false);
+      delete absentConfig.hook;
+      const absent = await runFixture(absentConfig);
+      expect(Array.from(absent.profiles)).toEqual(Array.from(neutral.profiles));
+      expect(withoutInsertIds(absent.events)).toEqual(withoutInsertIds(neutral.events));
+      const absentMeasure = measureScenario('hook-ttc', absent);
+      const neutralMeasure = measureScenario('hook-ttc', neutral);
+      const absentAdjustedTtcRatio = absentMeasure.ttcRatio / neutralMeasure.ttcRatio;
+      controls.push({ id: 'hook-ttc-absent', seed, strength, events: absent.events.length,
+        absentAdjustedTtcRatio, interventionNeutralTtcRatio: neutralMeasure.ttcRatio / absentMeasure.ttcRatio,
+        exactProfiles: true, exactEventsExceptRandomInsertIds: true });
+      expect(absentAdjustedTtcRatio).toBe(1);
+      expect(absentAdjustedTtcRatio).toBeGreaterThan(scenario.effect[1]);
+    }
+  }, 90000);
   it('inventories author inputs and all hook exports without output field inflation', () => {
     const entries = buildCoverage();
     expect(entries.filter(entry => entry.id.startsWith('hook-helpers.'))).toHaveLength(23);
@@ -182,11 +221,16 @@ describe.sequential('generated alignment proofs', () => {
     it.each(['mixed', 'dense'])(`${scenario.id}: treatment and neutral at %s noise`, async strength => {
       const observations = [];
       for (const seed of SEEDS) {
+        if (scenario.id === 'hook-ttc') {
+          observations.push({ seed, ...await runHookTtcPair({ seed, strength }) });
+          continue;
+        }
         const treatment = await runScenario({ id: scenario.id, seed, strength });
         const neutral = await runScenario({ id: scenario.id, seed, strength, treatment: false });
         observations.push({ seed, treatment, neutral });
       }
       const statistic = sample => {
+        if (scenario.id === 'hook-ttc') return sample.baselineAdjustedTtcRatio;
         if (scenario.kind === 'conversion' || scenario.kind === 'experiment') return sample.conversionDifference;
         if (scenario.kind === 'ttc') return sample.ttcRatio;
         if (scenario.kind === 'volume') return sample.volumeRatio;
@@ -235,6 +279,10 @@ describe.sequential('generated alignment proofs', () => {
           treatmentEntrants: row.treatment.target.entrants, controlEntrants: row.treatment.control.entrants,
           treatmentConverted: row.treatment.target.converted, controlConverted: row.treatment.control.converted,
           ttcRatio: row.treatment.ttcRatio, neutralTtcRatio: row.neutral.ttcRatio,
+          baselineTtcRatio: row.treatment.baselineTtcRatio,
+          baselineAdjustedTtcRatio: row.treatment.baselineAdjustedTtcRatio,
+          interventionNeutralTtcRatio: row.treatment.interventionNeutralTtcRatio,
+          pairing: row.treatment.pairing,
           affected: [row.treatment.affected, row.neutral.affected], unaffected: [row.treatment.unaffected, row.neutral.unaffected],
           retention: [row.treatment.retention, row.neutral.retention],
           repeat: [row.treatment.repeat, row.treatment.repeatTotals],
@@ -242,6 +290,14 @@ describe.sequential('generated alignment proofs', () => {
       summaries.push(summary);
       console.log(JSON.stringify({ scenario: scenario.id, strength, effect, neutralEffect }));
       for (const row of observations) {
+        if (scenario.id === 'hook-ttc') {
+          expect(row.treatment.interventionNeutralTtcRatio).toBe(1);
+          expect(row.neutral.baselineAdjustedTtcRatio).toBe(1);
+          expect(row.baseline.ttcRatio).toBe(row.neutral.ttcRatio);
+          expect(row.neutral.baselineAdjustedTtcRatio).toBeGreaterThan(scenario.effect[1]);
+          expect(row.treatment.baselineAdjustedTtcRatio).toBeGreaterThanOrEqual(scenario.effect[0]);
+          expect(row.treatment.baselineAdjustedTtcRatio).toBeLessThanOrEqual(scenario.effect[1]);
+        }
         expect(direction(row), `${row.seed}: treatment must beat the neutral config`).toBeGreaterThan(0);
         if (['conversion', 'experiment'].includes(scenario.kind)) expect(row.treatment.conversionDifference).toBeGreaterThan(0);
         if (['ttc', 'experiment'].includes(scenario.kind)) expect(row.treatment.ttcRatio).toBeLessThan(1);

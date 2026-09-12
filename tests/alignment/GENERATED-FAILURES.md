@@ -165,3 +165,86 @@ The rebuilt registry has 321 entries for canonical inputs, presets and
 hook exports, including 23 helpers and 6 patterns. Untested controls remain
 explicit. Output-field inflation and repeated documentation entries were
 removed; the entry count is not a tested-feature percentage.
+
+## G2 correction: measure the paired helper effect
+
+The earlier G2 cohort-ratio reds above remain as historical evidence. Their
+interpretation as a failed neutral intervention is superseded by a test-design
+correction. No hook/runtime code, fixture, threshold, or denominator changed.
+
+Local analytics revision `717286d2d3ed03e9e3f9cb4346e4c6b2e561fb9a` supplies
+the report arithmetic. `backend/arb/reader/queries/funnel_query.cpp:3374`
+computes each nonnegative step gap with integer division by 1000. Lines
+3375-3380 sum those integer seconds. For this two-step report there is one
+gap, so arithmetic mean TTC is sum(gap seconds) / completed users.
+`backend/arb/merger/merger.cpp:2742-2744` rounds that mean to an integer
+second for `avg_time` and `avg_time_from_start`. `measureReport.meanHours`
+now uses this arithmetic and divides the rounded seconds by 3600. A direct
+reference test distinguishes truncation per gap and final mean rounding.
+Per-user descriptive means/medians remain separate from the rounded report.
+
+The local `applyTTCBySegmentV2` implementation returns at factor === 1 before
+sequence lookup or mutation. Its TTC arm consumes no randomness. With fixed
+matched users and anchors, factor 0.25 scales target gaps while control gaps
+stay fixed. Thus R_after is approximately 0.25 * R_before (integer-second
+truncation and report rounding explain small differences). Historical sparse
+neutral ratios [0.568121, 0.491002, 0.427335] imply a treatment mean of
+0.25 * mean(R_before) = 0.1238715 from the rounded inputs, matching the
+reported 0.123871. Comparing that raw mean to an absolute 0.25 target tested
+random cohort balance as well as the intervention.
+
+The corrected positive statistic is Q = R_emitted / R_before. It keeps the
+original [0.15, 0.40] band. The neutral statistic is
+N = R_factor1 / R_before; it retains [0.75, 1.30] and additionally must equal
+1 exactly. Raw baseline imbalance remains visible as `baselineTtcRatio`.
+Each seed must still show target faster than control in the emitted treatment.
+This corrects the estimand with source arithmetic; no numeric band was relaxed.
+
+The paired experiment copies the complete original dataset inside the actual
+`everything` hook, with all standalone competitors and repeated usage traffic.
+It checks exact IDs, matched completion membership, entry anchors, unchanged
+control records, event counts and timestamp bounds against final emitted
+treatment. Factor 1 must leave its entire copied stream unchanged. Only final
+session-ID re-derivation may differ on treatment records; control session IDs
+remain exact. Counts and bounds forbid future clipping from selecting a new
+completion population. No regenerated baseline or isolated clean funnel
+replaces the original mixed stream.
+
+Independent absent-hook versus factor-1 runs must produce identical profiles
+and final records except random UUID insert IDs. Their measured Q equals 1,
+outside the positive band. Together with within-run exact UUID assertions,
+this checks that removing the hook cannot pass the treatment experiment.
+The documented sweep fields are `baselineAdjustedTtcRatio` and
+`interventionNeutralTtcRatio`; `ttcRatio` still means raw target/control.
+
+### stable combined run after the G2 correction
+
+The complete generated file ran offline in the OS sandbox: 28 passed, 1 failed,
+29 total, 27.57 seconds. No optional density test, default global setup,
+dependency install, network, import, prune, or runtime edit ran in this slice.
+All 11 start/end SHA-256 entries matched (`stableSource: true`). Exact hashes
+and every seed's counts are in `generated-results.json`. The observed runtime
+included another executor's uncommitted compatibility edits; these results
+describe those file bytes, not HEAD alone. The main reviewer must rerun after
+any later runtime edits.
+
+| rate | baseline raw ratios, seeds 17 / 43 / 89 | Q per seed | mean Q | N |
+|---|---|---|---|---|
+| 0.5 | 0.568118 / 0.490999 / 0.427328 | 0.250000 / 0.250000 / 0.249989 | 0.24999645 | 1 / 1 / 1 |
+| 0.9 | 0.867964 / 1.444803 / 1.104658 | 0.249995 / 0.249998 / 0.250000 | 0.24999777 | 1 / 1 / 1 |
+
+All six paired captures preserve event IDs, matched membership, anchors,
+complete control records, and bounds. Final counts equal baseline counts:
+12,061 / 11,871 / 11,849 at 0.5; 21,845 / 20,499 / 21,279 at 0.9.
+All raw treatment ratios remain below 1. Both independent absent/factor-1
+tests pass, covering all three seeds at both rates, with Q exactly 1.
+
+The remaining mixed G2 red is a separate minimum-population failure. Target
+converted counts are 76 / 65 / 62; controls are 77 / 80 / 76. Seeds 43 and
+89 fall below the original 70 converted-user guard. The assertion first
+reports 65; the result artifact preserves 62 too. Treatment, untouched
+baseline and factor-1 arms have exactly the same matched completion sets.
+The paired correction does not waive this guard or raise generation volume.
+Dense counts (target 130 / 124 / 121, control 137 / 114 / 116) pass it.
+G1 and all other generated scenarios pass this combined run. The generated
+gate remains red until the denominator finding receives a separate decision.

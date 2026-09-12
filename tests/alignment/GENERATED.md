@@ -46,7 +46,9 @@ retention still requires 0.10 mean lift and 250 eligible users per arm.
 The retention neutral compares target and control profile segments within
 the same low-curve run on day seven, with at least 100 eligible users per
 segment. A repeated identical low-curve config is no longer neutral evidence.
-Seed pairing is not user-level common randomness.
+Seed pairing across different generation configs is not user-level common randomness.
+The hook-TTC experiment below instead copies the same generated streams inside
+one run and checks exact pairing.
 
 ## fixed bounds and reuse
 
@@ -54,7 +56,8 @@ Seed pairing is not user-level common randomness.
 denominators before execution. The original bounds are unchanged. Means
 weight the three seeds equally. Every seed must show the treatment direction
 and beat its neutral config, so ignoring all treatment knobs cannot pass.
-Every neutral seed must also meet its original band. Individual runs must
+Every neutral seed must also meet its original band. For hook-TTC this applies
+to the factor-1 intervention ratio, not raw random-cohort balance. Individual runs must
 pass denominator, standalone-count and non-saturation guards. No scenario
 is skipped based on observed data. Bounds are practical regression tolerances,
 not fitted confidence intervals. The report adds 95% Wilson intervals for
@@ -62,7 +65,10 @@ unique-user conversion and retention. Repeated attempts do not count as
 independent users in those intervals. TTC records each converted user's
 mean completion time, then reports the mean and median across users and
 their ranges across seeds. These ranges are descriptive, not TTC confidence
-intervals. Wilson intervals assume binomial user observations; they do not
+intervals. Report `meanHours` uses the arithmetic mean of integer-second
+gap sums, rounded to the nearest second before conversion to hours, matching
+the reader and merger. Per-user descriptive means retain the unrounded mean
+of those integer-second gaps. Wilson intervals assume binomial user observations; they do not
 establish literal engine probabilities or universal statistical power.
 
 Three seeds are too few to infer universal statistical power. This is a
@@ -96,6 +102,66 @@ const sample = await runFixture(config);
 const customMeasurement = measureScenario('persona-volume', sample, REPORTS);
 ```
 
+## G2 paired intervention contract
+
+`runScenario` keeps its argument and return shape. For `id: 'hook-ttc'`, it
+adds the fields below. `ttcRatio` remains the raw target/control ratio.
+Other scenarios retain their original effect statistics. No engine API changes.
+
+| field | exact meaning |
+|---|---|
+| `baselineTtcRatio` | R_before = target/control report mean TTC on the full untouched stream |
+| `baselineAdjustedTtcRatio` | Q = R_emitted / R_before for treatment; R_factor1 / R_before when `treatment: false` |
+| `interventionNeutralTtcRatio` | N = R_factor1 / R_before, asserted exactly 1 |
+| `pairing` | checked event counts, converted counts, exact identity/membership/anchor/control flags, timestamp bounds, session relabel count |
+
+Sweep executors must use `baselineAdjustedTtcRatio` for hook-TTC's unchanged
+positive band `[0.15, 0.40]`. Use `interventionNeutralTtcRatio` for the unchanged
+neutral band `[0.75, 1.30]`. The generated proof requires N exactly 1 and Q
+inside the positive band per seed, as well as the equal-weight three-seed mean.
+Raw treatment `ttcRatio < 1` remains required for every seed. Baseline random
+cohort imbalance is reported without a balance acceptance condition.
+
+For both arms from one generation, use the additive test-harness export:
+
+```js
+import { runHookTtcPair } from './scenarios.mjs';
+const { baseline, treatment, neutral } = await runHookTtcPair({
+	seed: 'sweep-001', strength: 'mixed', reports: REPORTS,
+});
+const effect = treatment.baselineAdjustedTtcRatio;
+const noOpEffect = neutral.interventionNeutralTtcRatio;
+```
+
+`runHookTtcPair` generates the complete original mixed fixture once per seed
+and rate. Inside the actual `everything` hook it copies every record before
+mutation, applies factor 1 to another deep copy, then applies factor 0.25 to
+the actual treatment records. It captures the post-hook records and measures
+the emitted final treatment. Copies consume no RNG; the TTC helper consumes
+no RNG. `treatment: false` runs the same paired capture with factor 1 on the
+actual stream. Independent calls to `runScenario` still generate independently;
+use `runHookTtcPair` to share one full realization.
+
+Assertions compare exact insert IDs, all matched step IDs, completed/drop-off
+membership and entry anchors. Factor 1 preserves the complete records exactly.
+Control records preserve every field, including session IDs. The treatment
+hook changes only timestamps. Final storage preserves every captured field
+except `session_id`, which the engine re-derives after time changes; the report
+counts those relabels. This unique-user report does not partition by session.
+Every arm must retain the complete original event count and ID set, and all
+timestamps must lie inside the pinned window. Future clipping therefore fails
+the test instead of silently changing completion membership.
+
+Separate absent-hook and factor-1 runs compare all profiles and all final event
+records in order, excluding only independently generated UUID `insert_id`s.
+Their measured Q must equal 1 and exceed the positive band's 0.40 ceiling.
+This tests hook removal through the actual generation pipeline. The paired
+within-run assertions compare exact UUIDs without excluding them.
+
+`scenarioConfig` and `measureScenario` remain available for raw measurements.
+They do not reconstruct lost pre-hook records or fabricate paired fields.
+Use `runScenario` or `runHookTtcPair` when the sweep needs the paired fields.
+
 Execute reuse code under the same OS sandbox. The API does not enforce the
 sandbox itself. The existing runner owns the overall deadline; the observed
 generated-only run takes about 30 seconds. Individual tests have a 90-second
@@ -107,5 +173,8 @@ types, resolved fields, hook metadata and duplicate documentation mentions
 are excluded. Untested inputs and source limits remain explicit.
 [COVERAGE.md](COVERAGE.md) separates proof classes from current outcomes.
 Inventory size is not proof completeness. [GENERATED-FAILURES.md](GENERATED-FAILURES.md)
-documents retained red findings. Test completion rewrites only this slice's
-coverage and result artifacts, including on failure.
+documents retained red findings. Test completion rewrites `generated-results.json`,
+including on failure. It no longer rewrites the separately owned coverage artifacts.
+Start/end hashes cover the entrypoint, lifecycle, generators, TTC helper,
+timing helper, funnel evaluator, fixtures, and the three generated harness files.
+The run also asserts identical hashes and records `stableSource`.

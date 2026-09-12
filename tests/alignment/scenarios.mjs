@@ -1,6 +1,8 @@
 import { applyTTCBySegmentV2 } from '../../lib/hook-patterns/index.js';
 import { makeFixture, runFixture, WINDOW } from './fixtures.mjs';
-import { measureReport, profileIds, volumePerUser, measureRetention } from './measures.mjs';
+import { measureReport, profileIds, volumePerUser, measureRetention, measurePairedTtc } from './measures.mjs';
+
+const hookCaptures = new WeakMap();
 
 export const REPORTS = {
   first: { steps: ['First Entry', 'First Success'], options: { countMode: 'uniques', reentry: false, graceperiod: true, conversionWindowMs: 30 * 86400000 } },
@@ -48,9 +50,19 @@ export function scenarioConfig(id, seed, strength, treatment) {
   if (id === 'world') config.worldEvents = [{ name: 'Browse boost', startDay: 5, duration: 15,
     affectsEvents: ['Browse'], volumeMultiplier: treatment ? 3 : 1 }];
   if (id === 'hook-ttc') config.hook = (record, type, meta) => {
-    if (type === 'everything') applyTTCBySegmentV2(record, meta.profile,
-      { segmentKey: 'segment', factors: { target: treatment ? 0.25 : 1, control: 1 },
-        steps: ['Repeat Entry', 'Repeat Success'], maxGapMinutes: 30 * 1440 });
+    if (type === 'everything') {
+      const capture = hookCaptures.get(config);
+      const options = { segmentKey: 'segment', factors: { target: treatment ? 0.25 : 1, control: 1 },
+        steps: ['Repeat Entry', 'Repeat Success'], maxGapMinutes: 30 * 1440 };
+      if (capture) {
+        capture.before.push(...structuredClone(record));
+        const neutral = structuredClone(record);
+        applyTTCBySegmentV2(neutral, meta.profile, { ...options, factors: { target: 1, control: 1 } });
+        capture.neutral.push(...neutral);
+      }
+      applyTTCBySegmentV2(record, meta.profile, options);
+      if (capture) capture.after.push(...structuredClone(record));
+    }
     return record;
   };
   if (id === 'retention') config.retentionCurve = treatment
@@ -85,6 +97,24 @@ export function measureScenario(id, sample, reports = REPORTS) {
 }
 
 export async function runScenario({ id, seed, strength = 'mixed', treatment = true, reports = REPORTS }) {
+  if (id === 'hook-ttc') {
+    const pair = await runHookTtcPair({ seed, strength, treatment, reports });
+    return treatment ? pair.treatment : pair.neutral;
+  }
   const sample = await runFixture(scenarioConfig(id, seed, strength, treatment));
   return measureScenario(id, sample, reports);
+}
+
+export async function runHookTtcPair({ seed, strength = 'mixed', treatment = true, reports = REPORTS }) {
+  const config = scenarioConfig('hook-ttc', seed, strength, treatment);
+  const capture = { before: [], neutral: [], after: [] };
+  hookCaptures.set(config, capture);
+  const sample = await runFixture(config);
+  const report = { ...reports.repeat, options: { ...reports.repeat.options, conversionWindowMs: 30 * 86400000 } };
+  const paired = measurePairedTtc({ ...capture, emitted: sample.events, profiles: sample.profiles, report, window: WINDOW });
+  const baseline = measureScenario('hook-ttc', { ...sample, events: capture.before }, reports);
+  const neutral = measureScenario('hook-ttc', { ...sample, events: capture.neutral }, reports);
+  const measured = measureScenario('hook-ttc', sample, reports);
+  return { baseline, treatment: { ...measured, ...paired }, neutral: { ...neutral, ...paired,
+    baselineAdjustedTtcRatio: paired.interventionNeutralTtcRatio } };
 }

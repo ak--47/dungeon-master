@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 import { evaluateFunnel } from '../../lib/verify/funnel-engine.js';
 
 export function mean(values) {
@@ -29,7 +30,7 @@ export function profileIds(profiles, key, value) {
   return new Set(profiles.filter(profile => profile[key] === value).map(profile => profile.distinct_id));
 }
 
-export function measureReport(events, { steps, options, userIds }) {
+export function measureReport(events, { steps, options, userIds, includeMembership = false }) {
   const streams = new Map();
   for (const event of events) {
     if (!event.user_id || (userIds && !userIds.has(event.user_id))) continue;
@@ -38,26 +39,83 @@ export function measureReport(events, { steps, options, userIds }) {
   }
   const attempts = [];
   const perUserHours = [];
+  const membership = [];
+  const reportSeconds = attempt => attempt.gapSeconds.reduce((total, seconds) => total + seconds, 0);
+  const reportHours = attempt => reportSeconds(attempt) / 3600;
   let uniqueEntrants = 0;
   for (const stream of streams.values()) {
     stream.sort((left, right) => Date.parse(left.time) - Date.parse(right.time));
     const result = evaluateFunnel(stream, steps, options);
     const userAttempts = Array.isArray(result) ? result : [result];
     attempts.push(...userAttempts);
+    if (includeMembership) membership.push(...userAttempts.map(attempt => ({
+      userId: stream[0].user_id, reached: attempt.reached, completed: attempt.completed,
+      stepIds: attempt.stepEvents.map(event => event?.insert_id ?? null), anchor: attempt.stepTimes[0],
+    })));
     if (userAttempts.some(attempt => attempt.reached >= 0)) uniqueEntrants++;
     const completions = userAttempts.filter(attempt => attempt.completed);
-    if (completions.length) perUserHours.push(mean(completions.map(attempt => attempt.ttcMs / 3600000)));
+    if (completions.length) perUserHours.push(mean(completions.map(reportHours)));
   }
   const entered = attempts.filter(attempt => attempt.reached >= 0);
   const completed = entered.filter(attempt => attempt.completed);
   return { entrants: entered.length, converted: completed.length,
-    rate: completed.length / entered.length, meanHours: mean(completed.map(attempt => attempt.ttcMs / 3600000)),
+    rate: completed.length / entered.length, meanHours: Math.round(mean(completed.map(reportSeconds))) / 3600,
     uniqueEntrants, uniqueConverted: perUserHours.length, conversionWilson95: wilson(perUserHours.length, uniqueEntrants),
-    perUserMeanHours: mean(perUserHours), perUserMedianHours: median(perUserHours) };
+    perUserMeanHours: mean(perUserHours), perUserMedianHours: median(perUserHours),
+    ...(includeMembership ? { membership: membership.sort((left, right) => left.userId.localeCompare(right.userId)) } : {}) };
 }
 
 export function volumePerUser(events, userIds) {
   return events.filter(event => userIds.has(event.user_id)).length / userIds.size;
+}
+
+export function measurePairedTtc({ before, neutral, after, emitted, profiles, report, window }) {
+  const byId = events => [...events].sort((left, right) => left.insert_id.localeCompare(right.insert_id));
+  const withoutSession = events => byId(events).map(({ session_id, ...event }) => event);
+  const baseline = byId(before);
+  const finalEvents = byId(emitted);
+  assert.equal(new Set(before.map(event => event.insert_id)).size, before.length, 'baseline IDs must be unique');
+  assert.ok(before.every(event => typeof event.insert_id === 'string' && event.insert_id.length > 0));
+  assert.deepEqual(byId(neutral), baseline, 'factor 1 must be an exact full-stream no-op');
+  assert.deepEqual(byId(after).map(({ time, ...event }) => event), baseline.map(({ time, ...event }) => event),
+    'the TTC intervention may change only timestamps');
+  assert.deepEqual(withoutSession(after), withoutSession(emitted),
+    'final storage must preserve all post-hook fields except re-derived session_id');
+  assert.deepEqual(byId(emitted).map(event => event.insert_id), baseline.map(event => event.insert_id),
+    'intervention and future clipping must not change event membership');
+  for (const events of [before, neutral, after, emitted]) {
+    assert.ok(events.every(event => Date.parse(event.time) >= Date.parse(window.datasetStart) &&
+      Date.parse(event.time) <= Date.parse(window.datasetEnd)), 'all arms must stay inside the dataset window');
+  }
+  const controlIds = profileIds(profiles, 'segment', 'control');
+  assert.deepEqual(byId(emitted.filter(event => controlIds.has(event.user_id))),
+    baseline.filter(event => controlIds.has(event.user_id)), 'control stream must be byte-identical');
+  const arms = Object.fromEntries(Object.entries({ before, neutral, after: emitted }).map(([name, events]) => [name,
+    Object.fromEntries(['target', 'control'].map(segment => [segment, measureReport(events, {
+      ...report, userIds: profileIds(profiles, 'segment', segment), includeMembership: true,
+    })]))]));
+  for (const segment of ['target', 'control']) {
+    for (const arm of ['neutral', 'after']) {
+      assert.deepEqual(arms[arm][segment].membership, arms.before[segment].membership,
+        `${segment}: exact matched IDs, completion membership and entry anchors must survive ${arm}`);
+    }
+    assert.ok(arms.before[segment].meanHours > 0 && Number.isFinite(arms.before[segment].meanHours));
+  }
+  const ratio = arm => arms[arm].target.meanHours / arms[arm].control.meanHours;
+  const baselineTtcRatio = ratio('before');
+  return {
+    baselineTtcRatio,
+    baselineAdjustedTtcRatio: ratio('after') / baselineTtcRatio,
+    interventionNeutralTtcRatio: ratio('neutral') / baselineTtcRatio,
+    pairing: { baselineEvents: before.length, neutralEvents: neutral.length, afterEvents: after.length,
+      emittedEvents: emitted.length, controlEvents: baseline.filter(event => controlIds.has(event.user_id)).length,
+      targetConverted: arms.before.target.converted, controlConverted: arms.before.control.converted,
+      exactNeutral: true, exactEventIds: true, exactCompletionMembership: true, exactAnchors: true,
+      onlyHookTimestampsChanged: true,
+      exactControl: true, exactEmittedAfterExceptSessionId: true,
+      rederivedSessionIds: byId(after).filter((event, index) => event.session_id !== finalEvents[index].session_id).length,
+      allTimestampsInBounds: true },
+  };
 }
 
 export function measureRetention(events, { birthEvent, day, datasetEnd, userIds }) {
