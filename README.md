@@ -957,7 +957,7 @@ styles: `support`, `review`, `search`, `feedback`, `chat`, `email`, `forum`, `co
 ## scripts
 
 ```bash
-npm test                      # full vitest test suite
+npm test                      # default unit/integration/e2e suite; prunes data/tmp
 npm run typecheck             # typescript check
 npm run dungeon:run           # run a dungeon file locally
 npm run dungeon:to-json       # convert JS dungeon to JSON (for UI import)
@@ -977,6 +977,8 @@ node scripts/verify-runner.mjs <path> [prefix]   # generate at full fidelity for
 ```
 
 ## tests
+
+1.8.1 compatibility and output changes: [upgrade guide](docs/guides/1.8.1-upgrade-guide.md).
 
 vitest tests live under `tests/` in three tiers:
 
@@ -998,6 +1000,31 @@ npx vitest tests/unit                                       # watch mode
 ```
 
 `tests/e2e/engine-shape-full-sweep.test.js` skips itself unless `RUN_FULL_SWEEP=1` is set (it wraps the long-running 194-combo engine sweep).
+
+### editor and offline alignment tests
+
+VS Code discovers one serial unit/integration suite through
+`tests/alignment/regression-vitest.config.js`. The workspace disables Go test
+discovery and ignores the overlapping diagnostic Vitest configs. After changing
+these settings, run **Developer: Reload Window** if stale providers or test runs
+remain in the Testing panel. Editor runs omit the pruning setup, but they are not
+OS-sandboxed.
+
+Use **Tasks: Run Test Task** for `test: regression (offline, macOS)`, or choose
+the named alignment and sweep tasks from **Tasks: Run Task**. These test tasks
+never invoke the prune or dungeon-run tasks. Existing dungeon-run cleanup is
+unchanged and remains separate from testing.
+
+```sh
+node tests/alignment/run.mjs                               # offline alignment gate
+node tests/alignment/run.mjs --sweep --timeout-ms=600000    # opt-in bounded sweep
+```
+
+Alignment is a separate test family, excluded from `npm test` and editor discovery.
+Its runner enforces OS network denial on macOS, fails closed elsewhere, and kills
+workers at the ten-minute deadline. Tests and reports live in the source checkout;
+they are not included in the npm package. The default `npm test` and direct root
+Vitest commands still prune `data` and `tmp` through their global setup.
 
 ### engine tests (direct-run, NOT vitest)
 

@@ -39,17 +39,11 @@
 		"whomacity"
 	],
 	// Vitest settings
-	"vitest.enable": true,
-	"vitest.commandLine": "npx vitest run",
-	"vitest.include": [
-		"tests/**/*.test.js"
-	],
-	"vitest.exclude": [
-		"**/node_modules/**",
-		"**/coverage/**",
-		"**/data/**",
-		"**/tmp/**"
-	],
+	"vitest.rootConfig": "tests/alignment/regression-vitest.config.js",
+	"vitest.configSearchPatternInclude": "tests/alignment/regression-vitest.config.js",
+	"vitest.ignoreWorkspace": true,
+	"vitest.nodeEnv": { "NODE_ENV": "test" },
+	"vitest.logLevel": "info",
 	// Test Explorer settings
 	"testing.automaticallyOpenPeekView": "never",
 	"testing.openTesting": "neverOpen",
@@ -73,6 +67,7 @@
 	},
 	"testing.automaticallyOpenTestResults": "neverOpen",
 	// Disable non-Vitest test adapters for this workspace
+	"go.testExplorer.enable": false,
 	"batsTestExplorer.enabled": false,
 	"batsTestExplorer.testAdapter": false,
 	"mochaExplorer.enabled": false,
