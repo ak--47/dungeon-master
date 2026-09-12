@@ -1,6 +1,20 @@
 # sweep history
 
-## final sweep completed all 99 three-seed groups
+## post-clone-repair sweep completed all 297 cells
+
+command: `sandbox-exec -p '(version 1) (allow default) (deny network*)' node tests/alignment/run.mjs --sweep --timeout-ms=600000`
+
+run commit: `6df615ec71bf700f7ef26271d06317b8de1d8e19`. production source includes clone repair `5e0caa55967a3d7c5ad0dbdb5d451e0d053d5dd7`. the run started at `2026-09-12T05:52:32.596Z` and completed in 339.097 seconds. status: `complete`. all 297 cells across 99 three-seed groups completed; zero groups were deferred. required coverage is complete.
+
+594 dungeon generations emitted 17,083,972 events, including 2,598,510 standalone rows. 125 cells were supported and 172 had insufficient evidence. diluted, inverse, and contractfail counts were all zero. insufficient evidence remains a separate verdict, not a pass. all thresholds and assertions stayed unchanged.
+
+the largest single dungeon emitted 281,751 events. the largest request was 299,997 events. peak worker RSS was 602 MiB against the existing sampled 900 MiB limit; the V8 heap cap remained 512 MiB. no worker, memory, or deadline failure occurred. the report retains 42 persona-conversion saturation warnings and has no undefined numeric quantities.
+
+build passed with TypeScript 5.8.3 and `--noEmit`. offline preflight passed 2 tests in 0.132 seconds. selected sweep infrastructure tests passed 8 tests, with 3 excluded by the existing name filter, in 0.365 seconds. Node was v24.11.1. all 77 start/end source hashes match the current worktree. the SHA-256 of `JSON.stringify(sourceAtEnd)` is `bb003a74f409b0777eddcd871f39d2d207ba103d6d96ff70d53ed8121987364e`.
+
+this run replaces the current [sweep-results.json](sweep-results.json) and [sweep-results.md](sweep-results.md). [FINAL-VALIDATION.md](FINAL-VALIDATION.md) records the wider unit/integration run and final source fingerprints. earlier runs below remain historical evidence.
+
+## earlier pre-clone-repair sweep completed all 99 three-seed groups
 
 command: `sandbox-exec -p '(version 1) (allow default) (deny network*)' node tests/alignment/run.mjs --sweep --timeout-ms=600000`
 
