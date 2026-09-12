@@ -537,12 +537,22 @@ enter on birth, or drop next-day spill in an `everything` hook.
 
 ### 2.8 Funnel reentry: state machine resets after completion
 
-Reference: `history.cpp` (`last_step_starts_next_funnel`). With reentry
-enabled, after the state machine reaches the final step the engine resets to
-step 0 and continues scanning. `result.completions` reports the total. In
-`countMode: 'totals'` the engine returns one `FunnelResult` per completion
-(simultaneous histories — one user, many funnel completions). Without
-reentry the funnel runs once per user.
+Reference: `history.cpp` (`history_is_mutable`) and `funnel_query.cpp`
+(shared first/last step handling). With `reentry: true`, completion absorbs
+events through the inclusive 2-second grace period. The next event beyond
+grace starts the next scan. Conversion-window expiry can restart earlier.
+`graceperiod: false` disables the completion wait.
+
+When an event records the ordered last step and also matches the ordered
+first step, it closes one attempt and anchors the next immediately. Both
+selectors must match. Any-order edges do not use this exception.
+`woRepeat` still restarts only at window expiry.
+
+`result.completions` reports repeat completions in uniques mode. In
+`countMode: 'totals'`, the engine returns one `FunnelResult` per attempt,
+including partial attempts. **Compatibility unchanged:** `reentry` defaults
+to `false`, even for totals. Totals alone does not enable analytics general
+counting's repeat-history behavior.
 
 ### 2.9 HPC (Hold Property Constant) — parallel sub-funnels
 
@@ -555,13 +565,24 @@ directly, or (v1.6) pass `holdPropertyConstant: '<prop>'` to the
 `funnelFrequency` emulator — it routes through the HPC engine and reports
 per-held-value sub-funnel counts.
 
+Session windows derive ordinals from the full user stream before HPC
+partitioning. Events with another held value can bridge a session but cannot
+fill steps in the current bucket. This applies to explicit session windows
+and `countMode: 'sessions'`. The local session defaults remain a 30-minute
+timeout, 24-hour maximum, and UTC day boundaries.
+
 ### 2.10 Funnel segment modes (FIRST_TOUCH / LAST_TOUCH / STEP)
 
 Reference: `options.hpp` `funnel_segment_mode`; `history.cpp`
 `property_set_buffer`. The engine snapshots the matched event's properties
-at every funnel step. Segmentation chooses which step's properties to use:
-FIRST_TOUCH (step 0), LAST_TOUCH (last reached), or STEP N (specific index).
-Enable with `evaluateFunnel({ trackStepProperties: true })`, then pick with
+at every reached position. FIRST_TOUCH and LAST_TOUCH merge those snapshots
+in recorded path order, including partial and any-order paths. The first
+or last defined non-null value wins, respectively. Undefined never replaces
+a defined value; null never replaces a defined non-null value. If only null
+and undefined are present, null wins. Snapshots remain unchanged.
+
+STEP N selects one reached position without merging fallback values.
+Enable with `evaluateFunnel(events, steps, { trackStepProperties: true })`, then pick with
 `resolveFunnelSegment(result, 'first' | 'last' | { step: N })`.
 
 ### 2.11 Engine-validation guarantees (v1.5+)
@@ -1843,8 +1864,9 @@ event set rather than one value moment.
 **Hook:** `everything`
 **Mixpanel report:** Flows — top paths after the anchor event show the engineered branch (Section 2.17)
 
-**In Mixpanel:** ~30% of users who view an item proceed straight down
-`add to cart → begin checkout`, making it the dominant Sankey branch.
+**In Mixpanel:** Bias the first branch toward `add to cart → begin checkout`.
+The helper selects ~30% of users for append-only injection. Existing traffic
+can interrupt the branch; the final branch share is not guaranteed to be 30%.
 
 ```js
 import { applyPathBias } from "@ak--47/dungeon-master/hook-helpers";
@@ -1889,6 +1911,8 @@ if (type === "everything") {
     sessionsPerWeek: 3,
     eventsPerSession: 5,
     sessionMinutes: 25,
+    datasetStart: meta.datasetStart,
+    datasetEnd: meta.datasetEnd,
   });
 }
 ```
@@ -1897,11 +1921,34 @@ if (type === "everything") {
 event set (after the `everything` hook), so wholesale timestamp rewrites no
 longer leave stale session labels. The atom keeps intra-session gaps well
 under the 30-min timeout (spacing capped at 20min + bounded jitter), keeps
-inter-session gaps well over it, and never crosses UTC midnight inside one
+inter-session gaps over it when explicit bounds are supplied, and never crosses UTC midnight inside one
 engineered session (the day-boundary split would cut it). Retiming only — no
 events are added or dropped, so total counts and event mixes are untouched.
 Session count follows `min(sessionsPerWeek × weeks, ceil(N /
 eventsPerSession))`: scarce users get fewer sessions, not fabricated events.
+
+`datasetStart` and `datasetEnd` are additive, optional arguments. Existing
+calls with neither bound keep the original full-UTC-day placement between
+the user's first and last active days. A two-event stream at 12:00/12:20 can
+still request two sessions with `eventsPerSession: 1` and `sessionMinutes: 5`.
+Legacy overfull requests also keep their old behavior: they do not throw,
+but their clusters can merge under the 30-minute timeout.
+
+The bounds accept ISO strings, unix seconds, or unix milliseconds. Hook
+metadata uses unix seconds and can be passed directly, as in the example.
+Either bound enables constrained placement; an omitted side uses the start
+of the first active UTC day or the end of the last active UTC day. The helper
+cannot infer `datasetEnd` from the last event. Pass known bounds when the
+dataset ends partway through an active day, including an inclusive midnight
+endpoint, to prevent later engine clipping.
+
+With explicit bounds, partial days compress clusters, including zero-duration
+clusters at midnight. If the requested sessions cannot fit inside a week's
+available day slices, the helper throws `RangeError` before changing any
+events. Invalid bounds also throw. It never silently reduces the target or
+drops records. Widen the allowed window or reduce the session target. Exact
+session separation assumes UTC and the default 30-minute timeout, without
+a maximum session duration.
 
 ---
 
@@ -1933,7 +1980,7 @@ Import from `@ak--47/dungeon-master/hook-helpers`:
 | `splitByAuth` | identity | `(events, authTime) -> { preAuth, postAuth, stitch }` | Partition by auth boundary |
 | **`applyLifecycleWave`** | shape | `(events, uid, { dormantFromDay, dormantDays, resurrectBurst?, valueMomentEvent, dropAll? }) -> events[]` | Clean dormancy gap + resurrection burst; sweeps the ENTIRE window by timestamp (v1.6, recipe 4.29). Returns a NEW array |
 | **`applyPathBias`** | shape | `(events, uid, { anchor, path, share, gapSeconds? }) -> events[]` | Inject a Flows path after the user's first anchor for ~`share` (fraction) of users; skips users missing any step template (v1.6, recipe 4.30) |
-| **`applySessionShape`** | shape | `(events, uid, { sessionsPerWeek, eventsPerSession, sessionMinutes }) -> events[]` | Retime the stream into deterministic session clusters — intra-gaps ≪ 30min, inter-gaps ≫ 30min, never crosses UTC midnight (v1.6, recipe 4.31) |
+| **`applySessionShape`** | shape | `(events, uid, { sessionsPerWeek, eventsPerSession, sessionMinutes, datasetStart?, datasetEnd? }) -> events[]` | Preserve records; default legacy full-UTC-day placement. Optional bounds constrain placement and throw atomically on insufficient capacity (recipe 4.31) |
 
 **Inject atoms + v1.5:** the engine auto-sorts events by time after the
 `everything` hook (`autoSortAfterEverything: true` default — see Principle

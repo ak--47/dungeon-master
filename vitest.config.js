@@ -10,7 +10,7 @@ export default defineConfig({
     
     // Test file patterns
     include: ['tests/**/*.test.js'],
-    exclude: ['node_modules/**'],
+    exclude: ['node_modules/**', 'tests/alignment/**'],
 
     // Prune ./data and ./tmp before AND after the suite. Per-test isolation
     // already lives in os.tmpdir(); this defends against a stray writer to

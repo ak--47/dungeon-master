@@ -262,19 +262,16 @@ describe('evaluateFunnel — step filters', () => {
 describe('evaluateFunnel — reentry', () => {
 	const ev3 = (event, time) => ({ event, time, user_id: 'u1' });
 
-	// ported from test_qt_funnel.py: reentry / `last_step_starts_next_funnel`.
-	// After completing [A, B], reset and continue scanning for another [A, B].
-	test('completes twice with reentry: true', () => {
+	// history.cpp:696 keeps completed histories mutable through inclusive 2s grace.
+	test('absorbs a second sequence inside completion grace with reentry: true', () => {
 		const events = [
 			ev3('A', 1000), ev3('B', 2000),
 			ev3('A', 3000), ev3('B', 4000),
 		];
 		const r = evaluateFunnel(events, ['A', 'B'], { reentry: true });
 		expect(r.completed).toBe(true);
-		expect(r.completions).toBe(2);
-		// Reports LAST completion's step times (history.cpp behavior).
-		expect(r.stepTimes[0]).toBe(3000);
-		expect(r.stepTimes[1]).toBe(4000);
+		expect(r.completions).toBe(1);
+		expect(r.stepTimes).toEqual([1000, 2000]);
 	});
 
 	test('completions=1 when reentry=false (default) even on repeated sequences', () => {
@@ -300,7 +297,7 @@ describe('evaluateFunnel — totals (simultaneous histories)', () => {
 
 	// ported from test_qt_funnel.py: count_type="general" with reentry returns
 	// one history per completion.
-	test('returns array with one FunnelResult per completion', () => {
+	test('returns one FunnelResult per completion outside the preceding grace', () => {
 		const events = [
 			ev4('A', 1000), ev4('B', 2000),
 			ev4('A', 3000), ev4('B', 4000),
@@ -308,10 +305,9 @@ describe('evaluateFunnel — totals (simultaneous histories)', () => {
 		];
 		const r = evaluateFunnel(events, ['A', 'B'], { reentry: true, countMode: 'totals' });
 		expect(Array.isArray(r)).toBe(true);
-		expect(r.length).toBe(3);
+		expect(r.length).toBe(2);
 		expect(r[0].stepTimes).toEqual([1000, 2000]);
-		expect(r[1].stepTimes).toEqual([3000, 4000]);
-		expect(r[2].stepTimes).toEqual([5000, 6000]);
+		expect(r[1].stepTimes).toEqual([5000, 6000]);
 	});
 
 	test('totals mode without reentry: returns single-attempt array', () => {
@@ -327,7 +323,7 @@ describe('evaluateFunnel — totals (simultaneous histories)', () => {
 		// funnel_query.cpp:1747 aggregates `history_get_reached >= 0`, NOT "completed".
 		const events = [
 			ev4('A', 1000), ev4('B', 2000),  // complete
-			ev4('A', 3000),                   // partial — only step 0 reached
+			ev4('A', 5000),                   // partial after completion grace
 		];
 		const r = evaluateFunnel(events, ['A', 'B'], { reentry: true, countMode: 'totals' });
 		expect(r.length).toBe(2);

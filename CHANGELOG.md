@@ -2,6 +2,47 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.8.1 — 2026-09-12
+
+### Fixed
+
+- Align funnel counting with source-derived Mixpanel contracts: shared first/last
+  steps finalize correctly with or without reentry, completion grace consumes
+  events through the inclusive two-second boundary, and first/last-touch
+  breakdowns merge properties across reached steps.
+- Derive session boundaries from the full event stream before hold-property-constant
+  partitioning, so unrelated activity can keep a session open.
+- Keep onboarding after user creation and usage after onboarding. Preserve retry
+  entries when strict event-count capacity allows. Short windows retain partial
+  output and report capacity limits through existing warnings.
+- Reconcile engine-generated identity against surviving auth events, including
+  engine-created duplicates and amplification clones. Preserve explicit hook
+  overrides and the synthetic experiment identity exception.
+- Select the earliest chronological anchor for append-only path injection.
+
+### Added
+
+- Optional `datasetStart` and `datasetEnd` bounds for `applySessionShape`, preventing
+  retimed events from being clipped outside a known dataset window. Explicit bounds
+  reject impossible session layouts before mutation; calls without bounds retain
+  legacy full-day placement.
+- An offline `tests/alignment` family with mixed-dungeon trend checks, neutral
+  controls, multiple seeds, sample-size guards, counting contracts, and a diagnostic
+  sweep with a hard ten-minute deadline. The runner denies network access at the OS
+  level on macOS and fails closed elsewhere.
+- A control inventory, failure-first repair evidence, and measured operating ranges.
+  Release validation passed 175 alignment tests and 2,022 unit/integration tests, with
+  one existing skip. The 297-cell sweep generated 17.08 million events cumulatively:
+  125 cells met their evidence thresholds and 172 had insufficient evidence.
+
+### Compatibility
+
+Existing call forms and defaults remain supported. Session bounds are additive,
+not required. Corrected timestamps, identities, and counts can change generated
+output relative to 1.8.0. Totals counting still requires explicit `reentry: true`
+for repeated histories. These tests use local Mixpanel source-derived contracts,
+not live engine execution, and do not establish complete coverage of every knob.
+
 ## 1.8.0 — 2026-09-10
 
 ### Added — `standaloneEvents`: identity-less metric snapshots
