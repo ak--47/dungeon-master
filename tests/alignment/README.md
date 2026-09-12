@@ -1,19 +1,22 @@
 # offline alignment checks
 
-start with [REPORT.md](REPORT.md) for recorded results and open blockers.
+start with [REPORT.md](REPORT.md) for completed validation and remaining proof gaps.
+[FINAL-VALIDATION.md](FINAL-VALIDATION.md) is the authoritative final run record.
 [INVENTORY.md](INVENTORY.md) lists author controls and proof gaps.
 [API-COMPATIBILITY.md](API-COMPATIBILITY.md) explains output changes and retained defaults.
 [PR.md](PR.md) is the local review handoff. no GitHub PR has been opened here.
 
-## run from the isolated worktree
+## run from the repository root
 
 use installed dependencies only. these commands install nothing and do not prune data/tmp.
+historical validation ran in `/Users/ak/code/dungeon-master-alignment-work`.
+after the main executor moves the branch checkout, use the final path below.
 
 ```sh
-cd /Users/ak/code/dungeon-master-alignment-work
+cd /Users/ak/code/dungeon-master
 set -o pipefail
 node tests/alignment/run.mjs --preflight 2>&1 | tail -50
-node tests/alignment/run.mjs 2>&1 | tail -50
+node tests/alignment/run.mjs --timeout-ms=600000 2>&1 | tail -50
 node tests/alignment/run.mjs --sweep --timeout-ms=600000 2>&1 | tail -50
 ```
 
@@ -47,13 +50,37 @@ network denial does not restrict filesystem writes. the dedicated
 worktree-local cache storage. do not substitute the default suite or the run-dungeon
 task; their setup can prune data/tmp.
 
-## final gate remains pending
+## sandbox regression commands
 
-after the provenance repair, the main executor must run the no-mode gate above
-and selected existing funnel regressions with a reviewed, committed, no-prune
-configuration. the local repair config currently covers contracts plus eight old
-unit files; it must be included in the reproducible handoff. keep OS network denial
-and the bounded supervisor when integrating those checks.
+[regression-vitest.config.js](regression-vitest.config.js), committed at `6df615e`,
+selects all unit and integration tests with globals and no global setup or setup
+files. the final run passed 1,838 tests with one existing skip across 93 files in
+20.58s. it excludes E2E and standalone industry-generation runners.
 
-record the exact final command, commit, test counts, and result in
-[REPORT.md](REPORT.md). a completed sweep alone does not close this gate.
+```sh
+cd /Users/ak/code/dungeon-master
+set -o pipefail
+sandbox-exec -p '(version 1) (allow default) (deny network*)' env NODE_ENV=test NODE_OPTIONS='' VSCODE_INSPECTOR_OPTIONS='' node node_modules/vitest/vitest.mjs run --config tests/alignment/regression-vitest.config.js 2>&1 | tail -50
+```
+
+[repair-vitest.config.js](repair-vitest.config.js) preserves the exact nine-file
+selection behind historical 207/235-test evidence: alignment counting contracts
+plus eight legacy unit files, with no global setup or setup files. this checkpoint
+includes the existing file unchanged after sandboxed syntax validation. a rerun
+uses current source, so those historical counts are not a promised result.
+
+```sh
+sandbox-exec -p '(version 1) (allow default) (deny network*)' env NODE_OPTIONS='' VSCODE_INSPECTOR_OPTIONS='' node node_modules/vitest/vitest.mjs run --config tests/alignment/repair-vitest.config.js 2>&1 | tail -50
+```
+
+these direct Vitest commands use serial forks and per-test timeouts. they do not
+use the alignment runner's 600-second process-group deadline.
+
+## final checks are complete within their recorded scope
+
+clone repair `5e0caa5` passed 12 focused contracts. the main executor reported
+175 gate tests passed across nine files in 60.65s. the post-repair sweep at
+`6df615e`, saved in `fd112f8`, completed 297 cells with 77 stable source hashes:
+125 supported and 172 insufficient-evidence, zero other verdicts. these results
+do not prove all knobs or live analytics parity. [REPORT.md](REPORT.md) retains
+exact results, historical failures, and proof gaps. this docs pass ran no tests.

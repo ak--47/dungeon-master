@@ -1,6 +1,6 @@
 # final validation after clone repair
 
-validation stayed in `/Users/ak/code/dungeon-master-alignment-work`, branch `alignment/knob-story-proof`. production source commit: `5e0caa55967a3d7c5ad0dbdb5d451e0d053d5dd7`. this includes documentation commit `53ece91`. regression config commit and sweep HEAD: `6df615ec71bf700f7ef26271d06317b8de1d8e19`.
+validation stayed in `/Users/ak/code/dungeon-master-alignment-work`, branch `alignment/knob-story-proof`. production source commit: `5e0caa55967a3d7c5ad0dbdb5d451e0d053d5dd7`. this includes documentation commit `53ece91`. regression config commit and sweep HEAD: `6df615ec71bf700f7ef26271d06317b8de1d8e19`. final artifact commit: `fd112f853463b5c68b14646adf6d1a74b0126fe2`. historical commands below ran in the isolated worktree; [README.md](README.md) gives repository-root commands for `/Users/ak/code/dungeon-master` after the main executor moves the checkout.
 
 ## unit and integration regression passed
 
@@ -22,7 +22,7 @@ set -o pipefail
 sandbox-exec -p '(version 1) (allow default) (deny network*)' env NODE_ENV=test NODE_OPTIONS='' VSCODE_INSPECTOR_OPTIONS='' node node_modules/vitest/vitest.mjs run --config tests/alignment/regression-vitest.config.js --reporter=default --reporter=json --outputFile.json=tmp/final-regression-results.json 2>&1 | sandbox-exec -p '(version 1) (allow default) (deny network*)' tee tmp/final-regression.log | sandbox-exec -p '(version 1) (allow default) (deny network*)' tail -50
 ```
 
-full logs and structured results remain in ignored local `tmp/final-regression.log` and `tmp/final-regression-results.json`. the pre-existing untracked [repair-vitest.config.js](repair-vitest.config.js) remains unchanged and uncommitted.
+full logs and structured results remain in ignored local `tmp/final-regression.log` and `tmp/final-regression-results.json`. the pre-existing [repair-vitest.config.js](repair-vitest.config.js) was untracked during validation. this documentation checkpoint includes it unchanged after sandboxed syntax validation. it selects exactly nine files with no global setup or setup files and preserves the earlier 207/235-test run configuration. this documentation pass reran no tests.
 
 ## fresh sweep completed after the repair
 
@@ -36,7 +36,7 @@ one sweep started at `2026-09-12T05:52:32.596Z`. it completed in 339.097 seconds
 | inverse | 0 |
 | contractfail | 0 |
 
-594 dungeon generations emitted 17,083,972 events and 2,598,510 standalone rows. the largest dungeon emitted 281,751 events; the largest request was 299,997. peak worker RSS was 602 MiB. no worker, memory, or deadline failure occurred. 42 persona-conversion saturation warnings remain recorded. insufficient-evidence cells do not establish supported effects. aggregate events do not establish single-dungeon capacity.
+594 dungeon generations emitted 17,083,972 events, including 2,598,510 standalone rows. the largest dungeon emitted 281,751 events; the largest request was 299,997. peak worker RSS was 602 MiB. no worker, memory, or deadline failure occurred. 42 persona-conversion saturation warnings remain recorded. insufficient-evidence cells do not establish supported effects. aggregate events do not establish single-dungeon capacity.
 
 the sweep passed its TypeScript 5.8.3 build with `--noEmit`, two offline-preflight tests (0.132 seconds), and eight selected infrastructure tests (0.365 seconds). the existing infrastructure name filter skipped three tests. Node was v24.11.1. all children inherited OS network denial.
 
@@ -49,7 +49,7 @@ full output remains in ignored local `tmp/final-sweep.log`. current evidence is 
 
 ## gate provenance and source fingerprints
 
-the main executor reported its final alignment gate at `5e0caa5`: 175 tests passed across nine files in 60.65 seconds. this executor did not rerun that gate. the inherited dirty [generated-results.json](generated-results.json) has matching start/end hashes, and all 11 recorded hashes match current source. its SHA-256 is `623b5681f07cf85226f329066d319fa0c34ef7afc8c1d37ef6f9474ea771f679`.
+the main executor reported its firsthand final alignment gate at `5e0caa5`: 175 tests passed across nine files in 60.65 seconds. this executor did not rerun that gate. [generated-results.json](generated-results.json), inherited dirty during validation and committed in `fd112f8`, has matching start/end hashes, and all 11 recorded hashes match current source. its SHA-256 is `623b5681f07cf85226f329066d319fa0c34ef7afc8c1d37ef6f9474ea771f679`.
 
 the fresh sweep records 77 matching start/end SHA-256 hashes, independently checked against current files. the SHA-256 of `JSON.stringify(sourceAtEnd)` is `bb003a74f409b0777eddcd871f39d2d207ba103d6d96ff70d53ed8121987364e`. full per-file hashes remain in the sweep JSON.
 
@@ -63,4 +63,4 @@ the fresh sweep records 77 matching start/end SHA-256 hashes, independently chec
 
 production files, public API, package metadata, and [coverage.json](coverage.json) did not change. coverage instrumentation was not requested or run. no installs, pushes, global pruning, or unsandboxed validation commands ran. Git staging uses explicit paths; commits use `core.hooksPath=/dev/null` under the same sandbox.
 
-the main worktree remained clean at `15a3fea8feba831f3c258c9dbcfbb386421337be`. this work adds only the reusable regression config and validation evidence. the existing repair config remains untracked.
+at validation time, the main worktree remained clean at `15a3fea8feba831f3c258c9dbcfbb386421337be`. that work added only the reusable regression config and validation evidence. this later documentation checkpoint closes the handoff and includes the existing repair config unchanged. it changes no runtime or report JSON and claims no push or PR creation.

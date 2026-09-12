@@ -2,14 +2,16 @@
 
 suggested title: `fix: offline alignment contracts and generated story evidence`
 
-branch: `alignment/knob-story-proof` in
-`/Users/ak/code/dungeon-master-alignment-work`. keep the work on this one unpushed
-branch. this file is review text, not a GitHub PR or a PR URL.
+branch: `alignment/knob-story-proof`. validation ran in
+`/Users/ak/code/dungeon-master-alignment-work`. the main executor will move the
+checkout to `/Users/ak/code/dungeon-master` after this checkpoint. this file is
+local review text. no push or GitHub PR creation is claimed.
 
 ## changes for review
 
 - repair source-derived funnel counting contracts and preserve opt-in reentry.
 - correct lifecycle clocks and emitted identity, with legacy partial-output warnings.
+- preserve source identity lineage on engine-created clones, including explicit hook overrides and later ordinary both-ID mapping evidence with no first-funnel restriction.
 - retain legacy session placement and add optional bounded placement; keep path injection append-only.
 - add generated proofs, an author-input registry, and a bounded offline sweep.
 
@@ -18,23 +20,28 @@ defaults. [REPORT.md](REPORT.md) owns results, remaining proof gaps, and the fin
 checklist. [INVENTORY.md](INVENTORY.md) maps controls to evidence without claiming
 all 321 registry entries are tested.
 
-## evidence and blockers
+## final evidence
 
-the sweep artifact commit is `b2f4c76`: 297 cells, 125 supported, 172 insufficient,
-zero other verdicts. all 77 start/end hashes matched during that run. detailed
-measurements and original red checkpoints remain linked from the report.
+[FINAL-VALIDATION.md](FINAL-VALIDATION.md) owns the authoritative results.
+production source is `5e0caa5`; regression config and sweep run HEAD are
+`6df615e`; latest artifact commit is `fd112f8`.
+
+- clone provenance: 12 contracts passed in 358ms after the two-failure red checkpoint. analytics source permits valid ordinary both-ID mapping evidence, subject to validation/conflicts, with no first-funnel restriction.
+- alignment gate: main executor's firsthand result, 175 passed across nine files in 60.65s at `5e0caa5`.
+- full unit/integration regression: 1,838 passed, one existing skip, 93 files, 20.58s. no E2E or standalone industry-generation runners ran.
+- fresh sweep: 297 cells, 594 generations, 17,083,972 events, 339097ms, 602 MiB peak RSS, 281,751 maximum events in one dungeon. 125 supported, 172 insufficient-evidence, zero diluted/inverse/contractfail, zero deferred groups, 77 stable start/end hashes.
+
+these checks have overlapping scopes. insufficient evidence is not a pass,
+cumulative output is not single-dungeon capacity, and registry gaps remain.
 analytics source informed local assertions; analytics and live Mixpanel never ran.
+all final execution used OS network denial. this docs pass reran no tests.
 
-**final gate pending. provenance blocker open.** earlier scoped passes and the
-completed sweep do not replace final validation after the active repair.
+- [x] provenance repaired at `5e0caa5`; red and green evidence retained in [LIFECYCLE-REPAIR.md](LIFECYCLE-REPAIR.md).
+- [x] final gate, full unit/integration regression, and post-repair sweep recorded in [REPORT.md](REPORT.md).
+- [x] reusable [regression-vitest.config.js](regression-vitest.config.js) committed at `6df615e`; historical nine-file [repair-vitest.config.js](repair-vitest.config.js) preserved unchanged in this checkpoint for earlier 207/235-test evidence.
+- [x] [API-COMPATIBILITY.md](API-COMPATIBILITY.md) documents additive session bounds, output changes, and provenance behavior. revised path acceptance, original G1 limits, and unproved knobs remain explicit in the linked reports.
+- [x] this handoff authorizes only an explicit-path documentation/config checkpoint on the local branch. it makes no push, publication, or PR claim.
 
-- [ ] main executor resolves provenance and records focused regression evidence.
-- [ ] main executor commits the reviewed repair config or an equivalent selected-regression runner. its current local config disables global setup and setup files and contains no prune command.
-- [ ] main executor runs the bounded alignment gate and selected old regressions with OS network denial, then records exact commands and results in [REPORT.md](REPORT.md).
-- [ ] reviewer checks the additive session options, output changes, revised path acceptance, and retained G1 capacity-limit evidence.
-- [ ] final Git review confirms explicit-path commits only, one local branch, and no unrelated staged files.
-
-use installed dependencies. no installs, network access, data/tmp pruning, push,
-or publication belongs to this handoff. [README.md](README.md) contains commands
-and the macOS-only fail-closed policy. the docs executor leaves the untracked repair
-config to the main executor and keeps the root shape report in place to preserve links.
+use installed dependencies. no installs, network access, or data/tmp pruning
+belongs to this handoff. [README.md](README.md) contains final gate, sweep, and
+sandbox regression commands with their distinct timeout scopes.

@@ -38,10 +38,27 @@ a required exception. aggregate warnings use the existing `result.warnings` chan
 `lifecycle.strictAttemptBudget`. configured TTC stays unchanged. hook filtering and
 world suppression do not recreate removed events.
 
-explicit hook identity overrides and the synthetic experiment exception are intended
-to survive reconciliation. a new provenance blocker is still under investigation;
-the earlier passing tests do not close it. see [LIFECYCLE-REPAIR.md](LIFECYCLE-REPAIR.md)
-and the pending gate in [REPORT.md](REPORT.md).
+explicit hook identity overrides and the synthetic experiment exception survive
+reconciliation. clone provenance was repaired at `5e0caa5`. engine-created
+data-quality and world-event clones retain the source's existing nonenumerable
+identity descriptor. unmarked input receives no invented lineage. serialization,
+fresh insert IDs, and explicit hook identity overrides remain unchanged;
+fresh-ID spread clones created by hooks remain outside engine ownership.
+
+all 12 clone contracts passed in 358ms. they include auth removal from actual
+original/clone output and a surviving later ordinary both-ID Login. analytics
+ingestion and identity-manager source at
+`717286d2d3ed03e9e3f9cb4346e4c6b2e561fb9a` accepts valid ordinary both-ID events
+as mapping evidence, subject to ID validation and mapping conflicts. it has no
+first-funnel restriction. earlier device-only rows can resolve retrospectively
+after that link. profile device pools alone establish no mapping. the generator's
+configured-auth-name scan remains lifecycle policy, not full ingestion parity.
+
+analytics was read locally, not compiled or executed. see the exact source paths,
+red checkpoint, and focused results in [LIFECYCLE-REPAIR.md](LIFECYCLE-REPAIR.md).
+[FINAL-VALIDATION.md](FINAL-VALIDATION.md) records the post-repair gate, full
+unit/integration regression, and refreshed sweep; [REPORT.md](REPORT.md) retains
+the remaining proof gaps.
 
 ## counting corrections preserve the reentry default
 
