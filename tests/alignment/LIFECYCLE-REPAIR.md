@@ -116,3 +116,93 @@ retention calibration. All denominators exceed the unchanged minimum 250.
 
 Unrelated helper session/path repairs and shared fixture/report changes belong to
 other agents and are excluded from this lifecycle commit.
+
+## Engine Clone Provenance Contract (Before Fix)
+
+Source reviewed locally, without network: analytics commit
+`717286d2d3ed03e9e3f9cb4346e4c6b2e561fb9a` (clean checkout).
+Paths below are relative to `/Users/ak/code/analytics`.
+
+- `go/src/mixpanel.com/ingestion/remap/transformers/identity_manager_transformer.go:122`
+  builds `LookupAndUpdateRequest` with distinct, device, and user IDs. It passes no
+  event name or dungeon funnel designation.
+- `go/src/mixpanel.com/arb/identity-manager/server/v3/lookup_and_update_handler.go:68`
+  normalizes IDs; `:109` processes them and `:184` writes the device/user pair.
+  Valid ordinary both-ID events can establish a mapping. Existing mapping conflicts
+  and invalid/reserved IDs still follow the server's own validation rules.
+- `go/src/mixpanel.com/arb/identity-manager/server/v3/lookup_and_update_handler_test.go:131`
+  (`TestLookupAndUpdateDeviceIDAndUserIDBoth`) asserts device `a1` first resolves to
+  `$device:a1`, then the pair `a1`/`u1` resolves to `u1` and stores `$device:a1 -> u1`.
+  `TestLookupAndUpdate` at `:170` checks later device-only lookups resolve to `u1`.
+  These are source assertions, not a locally executed Spanner test.
+
+Accepted: engine world/data-quality spread clones lose the nonenumerable
+`engineIdentity` snapshot. The pre-everything map then saves `original: undefined`.
+Removing auth repairs originals but skips clones, leaving unintended user identity.
+For valid IDs, a leaked user-only row counts as identified; a leaked both-ID row can
+also link its device in simplified identity. The failure concerns actual output IDs.
+
+Rejected: restricting stitch evidence to the first funnel. A later ordinary Login
+with both IDs can legitimately link. The current auth-name scan accepts that case;
+this patch leaves the scan unchanged. Its configured auth-name restriction is a
+generator lifecycle policy, not a complete implementation of Mixpanel ingestion.
+Earlier device-only rows can resolve retrospectively after a valid both-ID link.
+
+Repair contract: when the engine creates a clone, preserve an existing source
+provenance descriptor. Do not invent provenance for unmarked hook input. Keep the
+symbol nonenumerable, omit it from JSON and object spread, preserve fresh insert IDs,
+and preserve explicit hook identity overrides. Hook-created fresh-ID spread clones
+remain outside engine ownership. Public API and all other runtime behavior stay fixed.
+
+Discriminating check: `identity-clone-contracts.test.js` uses one born, device-enabled
+user, guaranteed auth conversion, then removes all auth rows in `everything`.
+Run separately with `duplicateRate: 1` and a world multiplier of 2. Require actual
+original and cloned usage rows; both must finish device-only. Adjacent controls cover
+event/funnel-post/everything identity overrides, unmarked input, hook clones,
+serialization, and a surviving later ordinary both-ID Login.
+
+Pre-fix red result (runtime unchanged): 2 failed, 10 passed, 372 ms wall.
+Both clone modes emitted two `Repeat Entry` clones with
+`user_id: 4bbcddf3-947d-5f35-8f84-9fb0b3f3d8e0` and
+`device_id: RwrilSZND7eNlZ3Jp9rVOWY1hO0dZaN6RpSxScJKXW` after auth removal.
+Original usage rows passed the device-only assertion in the same runs.
+The later Login and all explicit override controls passed before the fix.
+Command: `sandbox-exec -p '(version 1) (allow default) (deny network*)'
+./node_modules/.bin/vitest run --config tests/alignment/vitest.config.js
+tests/alignment/identity-clone-contracts.test.js` (with `pipefail`, output through
+`tail -50`). No network, installation, import, or upstream Spanner test ran.
+
+### Clone Repair Validation
+
+The runtime change copies `Object.getOwnPropertyDescriptor(source, engineIdentity)`
+onto each engine-created data-quality/world clone when that descriptor exists.
+No fallback snapshot is created. No change to events.js, stitch selection, public
+types, RNG calls, timestamps, hook ordering, or serialization is required.
+
+All checks below ran with the same network-denying sandbox and installed local
+binaries. Vitest used no global setup; output was piped through `tail -50` with
+`pipefail`. No installs or pushes ran.
+
+| Check | Result |
+|---|---|
+| New clone contracts, exact red command rerun | 12 passed, 358 ms |
+| Full lifecycle-vitest.config.js | 36 passed, 5.57 s |
+| helpers-generated.test.js, `-t identity` | 4 passed, 11 skipped, 4.49 s |
+| Full identity atoms, identity resolution, lifecycle helpers | 29 passed, 321 ms |
+| `./node_modules/.bin/tsc --noEmit` | exit 0 |
+| Editor diagnostics on runtime and new test | no errors |
+| `git diff --check` | exit 0 |
+
+Generated identity acceptance covers 18 runs: three seeds, devices 0/1/4, and 0/2
+failed priors. Every run reports `preAuthLeaks: 0`, `anonymousLeaks: 0`, and
+`attemptMismatches: 0`. The filter also selects attribution through its suite name.
+The full lifecycle configuration includes 16 lifecycle contracts, seven legacy
+identity tests, three retention tests, and ten macro canaries.
+
+Helper suites ran through `startVitest` from `vitest/node`, with
+`config: 'tests/alignment/vitest.config.js'`, `watch: false`, and an in-memory
+`include` override containing `tests/unit/hook-helpers-identity.test.js`,
+`tests/unit/identity-resolution.test.js`, and `tests/unit/lifecycle.test.js`.
+The runner checked that all three files ran and closed the Vitest context.
+No configuration file was changed. The main reviewer owns the final full suite;
+the prior sweep artifacts have not been regenerated against this runtime change.
