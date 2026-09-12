@@ -14,8 +14,12 @@ validates only this slice. Generation uses empty credentials and memory output.
 ## fixture and counting contract
 
 Each fresh config generates 1,500 users over January 2025 in UTC, concurrency
-one. Rates are 0.5 and 0.9 events/user/day. The explicit event targets are 22,500
-and 40,500; born-in lifetimes and scheduling mean realized volumes are lower.
+one, except hook-TTC, predeclared at 3,000 users. Rates remain 0.5 and 0.9
+events/user/day. Event targets are 22,500 and 40,500 for ordinary scenarios,
+and 45,000 and 81,000 for hook-TTC. Realized volumes are lower.
+The original 1,500-user hook-TTC case was underpowered for the unchanged
+70-conversion guard; its counts and rates remain in GENERATED-FAILURES.md.
+This is a descriptive denominator correction, not a universal power claim.
 Both rates are sparse. The legacy label `dense` means 0.9 only. It does not
 claim high density. Browse/Search/Help explicitly set `isStrictEvent: false`.
 Background Activity has weight 5 and appears in no funnel. Its observed count
@@ -101,6 +105,17 @@ const config = scenarioConfig('persona-volume', 'sweep-001', 'mixed', true);
 const sample = await runFixture(config);
 const customMeasurement = measureScenario('persona-volume', sample, REPORTS);
 ```
+
+Runner and sweep callers can independently pass `numUsers` to `runScenario`
+or `runHookTtcPair`, or as the fifth argument to `scenarioConfig`. The third
+argument to `makeFixture` also sets users. Every path scales `numEvents`
+proportionally without changing the rate, seeds, competitors, or thresholds.
+For example, `runHookTtcPair({ seed: 'sweep-001', numUsers: 1500 })` retains
+the original small-N diagnostic. No runner or sweep implementation changed.
+Results report `requestedUsersByScenario`, summary/seed `requestedUsers`,
+and `directControlUsers`; absent-hook controls report their actual 3,000 users.
+There is no global 1,500-user claim. The sizing test covers both rates and
+treatment states for every scenario, including independent 1,800-user overrides.
 
 ## G2 paired intervention contract
 

@@ -2419,7 +2419,7 @@
       "support": "declared author input; proof scope is limited to the cited case",
       "aliases": [],
       "line": 13,
-      "latestOutcome": "fail"
+      "latestOutcome": "pass"
     },
     {
       "id": "LookupTableSchema.attributes",

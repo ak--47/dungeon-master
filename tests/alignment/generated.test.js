@@ -22,7 +22,7 @@ afterEach(context => {
 });
 afterAll(() => {
   const runtimeAtEnd = runtimeHashes();
-  const report = { seeds: SEEDS, timezone: 'UTC', users: 1500, days: 30,
+  const report = { seeds: SEEDS, timezone: 'UTC', requestedUsersByScenario: Object.fromEntries(SCENARIOS.map(scenario => [scenario.id, scenario.numUsers ?? 1500])), directControlUsers: 1500, days: 30,
     runtimeAtStart, runtimeAtEnd, stableSource: JSON.stringify(runtimeAtStart) === JSON.stringify(runtimeAtEnd),
     densityDiagnosticEnabled: process.env.ALIGNMENT_DENSITY_DIAGNOSTIC === '1',
     inference: 'Descriptive three-seed regression evidence only; Wilson intervals are user-level binomial summaries, not universal power or engine probability calibration.',
@@ -33,6 +33,19 @@ afterAll(() => {
 });
 
 describe.sequential('generated alignment proofs', () => {
+  it('sizes only hook-ttc at 3000 and accepts independent proportional overrides', () => {
+    for (const scenario of SCENARIOS) for (const strength of ['mixed', 'dense']) for (const treatment of [true, false]) {
+      const config = scenarioConfig(scenario.id, SEEDS[0], strength, treatment);
+      expect(config.numUsers).toBe(scenario.id === 'hook-ttc' ? 3000 : 1500);
+      const override = scenarioConfig(scenario.id, SEEDS[0], strength, treatment, 1800);
+      expect(override.numUsers).toBe(1800);
+      expect(override.numEvents).toBe(1800 * 30 * (strength === 'mixed' ? 0.5 : 0.9));
+      expect(config.numEvents).toBe(config.numUsers * 30 * (strength === 'mixed' ? 0.5 : 0.9));
+      expect(config.funnels.map(funnel => funnel.name)).toContain('Organic');
+      expect(config.events.find(event => event.event === 'Background Activity').weight).toBe(5);
+      expect(typeof config.hook).toBe(scenario.id === 'hook-ttc' ? 'function' : 'undefined');
+    }
+  });
   it('uses arithmetic mean of integer-second report gaps for two-step TTC', () => {
     const events = [1999, 3999].flatMap((gap, index) => [
       { event: 'Entry', user_id: `user-${index}`, time: '2025-01-01T00:00:00.000Z' },
@@ -61,7 +74,7 @@ describe.sequential('generated alignment proofs', () => {
       const absentMeasure = measureScenario('hook-ttc', absent);
       const neutralMeasure = measureScenario('hook-ttc', neutral);
       const absentAdjustedTtcRatio = absentMeasure.ttcRatio / neutralMeasure.ttcRatio;
-      controls.push({ id: 'hook-ttc-absent', seed, strength, events: absent.events.length,
+      controls.push({ id: 'hook-ttc-absent', seed, strength, requestedUsers: config.numUsers, events: absent.events.length,
         absentAdjustedTtcRatio, interventionNeutralTtcRatio: neutralMeasure.ttcRatio / absentMeasure.ttcRatio,
         exactProfiles: true, exactEventsExceptRandomInsertIds: true });
       expect(absentAdjustedTtcRatio).toBe(1);
@@ -263,14 +276,14 @@ describe.sequential('generated alignment proofs', () => {
         if (scenario.kind === 'ttc') return statistic(row.neutral) - statistic(row.treatment);
         return statistic(row.treatment) - statistic(row.neutral);
       };
-      const summary = { scenario: scenario.id, strength, effect, neutralEffect, unaffectedRatio, worldNeutralRatios,
+      const summary = { scenario: scenario.id, strength, requestedUsers: scenario.numUsers ?? 1500, effect, neutralEffect, unaffectedRatio, worldNeutralRatios,
         seedDirectionRange: range(observations.map(direction)),
         ttcSeedRanges: Object.fromEntries(['treatment', 'neutral'].map(arm => [arm,
           Object.fromEntries(['target', 'control'].map(group => [group, {
             perUserMeanHours: range(observations.map(row => row[arm][group].perUserMeanHours)),
             perUserMedianHours: range(observations.map(row => row[arm][group].perUserMedianHours)),
           }]))])),
-        seeds: observations.map(row => ({ seed: row.seed,
+        seeds: observations.map(row => ({ seed: row.seed, requestedUsers: row.treatment.requestedUsers,
           direction: direction(row), directionPass: direction(row) > 0,
           conversion: [row.treatment.target, row.treatment.control, row.neutral.target, row.neutral.control],
           neutralRetentionCohorts: row.neutral.neutralRetentionCohorts,

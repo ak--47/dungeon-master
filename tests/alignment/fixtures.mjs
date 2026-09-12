@@ -4,10 +4,10 @@ export const SEEDS = ['alignment-generated-17', 'alignment-generated-43', 'align
 export const WINDOW = { datasetStart: '2025-01-01T00:00:00Z', datasetEnd: '2025-01-31T00:00:00Z' };
 export const NOISE = { mixed: 0.5, dense: 0.9, diagnostic: 5 };
 
-export function makeFixture(seed, strength = 'mixed') {
+export function makeFixture(seed, strength = 'mixed', numUsers = 1500) {
   return {
-    name: 'alignment-generated', seed, ...WINDOW, numDays: 30, numUsers: 1500,
-    avgEventsPerUserPerDay: NOISE[strength], numEvents: 1500 * 30 * NOISE[strength], concurrency: 1,
+    name: 'alignment-generated', seed, ...WINDOW, numDays: 30, numUsers,
+    avgEventsPerUserPerDay: NOISE[strength], numEvents: numUsers * 30 * NOISE[strength], concurrency: 1,
     credentials: { token: '', serviceAccount: '', serviceSecret: '', projectId: '' },
     writeToDisk: false, verbose: false, autoPowerLaw: false,
     percentUsersBornInDataset: 100, bornRecentBias: 0,

@@ -21,12 +21,12 @@ export const SCENARIOS = [
     ttcEffect: [0.15, 0.40], ttcNeutral: [0.75, 1.30] },
   { id: 'weights', kind: 'weights', effect: [0.74, 0.86], neutral: [0.44, 0.56], minimum: 300 },
   { id: 'world', kind: 'world', effect: [2.0, 4.1], neutral: [0.70, 1.40], minimum: 80 },
-  { id: 'hook-ttc', kind: 'ttc', effect: [0.15, 0.40], neutral: [0.75, 1.30], minimum: 70 },
+  { id: 'hook-ttc', kind: 'ttc', effect: [0.15, 0.40], neutral: [0.75, 1.30], minimum: 70, numUsers: 3000 },
   { id: 'retention', kind: 'retention', effect: [0.10, 0.65], neutral: [-0.12, 0.12], minimum: 250 },
 ];
 
-export function scenarioConfig(id, seed, strength, treatment) {
-  const config = makeFixture(seed, strength);
+export function scenarioConfig(id, seed, strength, treatment, numUsers = SCENARIOS.find(scenario => scenario.id === id)?.numUsers ?? 1500) {
+  const config = makeFixture(seed, strength, numUsers);
   const first = config.funnels[0];
   if (id === 'conditions') {
     config.funnels.splice(0, 1,
@@ -96,17 +96,18 @@ export function measureScenario(id, sample, reports = REPORTS) {
     events: sample.events.length, warnings: sample.warnings };
 }
 
-export async function runScenario({ id, seed, strength = 'mixed', treatment = true, reports = REPORTS }) {
+export async function runScenario({ id, seed, strength = 'mixed', treatment = true, reports = REPORTS, numUsers }) {
   if (id === 'hook-ttc') {
-    const pair = await runHookTtcPair({ seed, strength, treatment, reports });
+    const pair = await runHookTtcPair({ seed, strength, treatment, reports, numUsers });
     return treatment ? pair.treatment : pair.neutral;
   }
-  const sample = await runFixture(scenarioConfig(id, seed, strength, treatment));
-  return measureScenario(id, sample, reports);
+  const config = scenarioConfig(id, seed, strength, treatment, numUsers);
+  const sample = await runFixture(config);
+  return { ...measureScenario(id, sample, reports), requestedUsers: config.numUsers };
 }
 
-export async function runHookTtcPair({ seed, strength = 'mixed', treatment = true, reports = REPORTS }) {
-  const config = scenarioConfig('hook-ttc', seed, strength, treatment);
+export async function runHookTtcPair({ seed, strength = 'mixed', treatment = true, reports = REPORTS, numUsers }) {
+  const config = scenarioConfig('hook-ttc', seed, strength, treatment, numUsers);
   const capture = { before: [], neutral: [], after: [] };
   hookCaptures.set(config, capture);
   const sample = await runFixture(config);
@@ -115,6 +116,6 @@ export async function runHookTtcPair({ seed, strength = 'mixed', treatment = tru
   const baseline = measureScenario('hook-ttc', { ...sample, events: capture.before }, reports);
   const neutral = measureScenario('hook-ttc', { ...sample, events: capture.neutral }, reports);
   const measured = measureScenario('hook-ttc', sample, reports);
-  return { baseline, treatment: { ...measured, ...paired }, neutral: { ...neutral, ...paired,
+  return { baseline: { ...baseline, requestedUsers: config.numUsers }, treatment: { ...measured, ...paired, requestedUsers: config.numUsers }, neutral: { ...neutral, ...paired, requestedUsers: config.numUsers,
     baselineAdjustedTtcRatio: paired.interventionNeutralTtcRatio } };
 }

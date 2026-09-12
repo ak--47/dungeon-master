@@ -1,5 +1,53 @@
 # generated proof findings
 
+## G2 sample-size correction: 3,000-user acceptance envelope
+
+Only hook-TTC now defaults to 3,000 users. The original 1,500-user fixture
+was underpowered for the fixed minimum of 70 converted users per segment.
+No statistical power calculation is claimed. Rates remain 0.5/0.9; all three
+pinned seeds, competing traffic, paired assertions and acceptance bounds stay.
+Requested event targets scale from 22,500/40,500 to 45,000/81,000.
+Other scenarios and direct non-hook controls remain at 1,500 users.
+
+Original 1,500-user records from commit `5ff8e65` remain below. Counts are
+converted/entrants, followed by conversion rate. Treatment and neutral have
+identical membership. Seed order is 17, 43, 89 throughout.
+
+| rate | target counts (rates) | control counts (rates) | emitted events |
+|---|---|---|---|
+| 0.5 | 76/140 (54.29%), 65/134 (48.51%), 62/132 (46.97%) | 77/153 (50.33%), 80/150 (53.33%), 76/135 (56.30%) | 12061, 11871, 11849 |
+| 0.9 | 130/193 (67.36%), 124/210 (59.05%), 121/184 (65.76%) | 137/233 (58.80%), 114/199 (57.29%), 116/186 (62.37%) | 21845, 20499, 21279 |
+
+The 65 and 62 records failed, despite paired Q near 0.25 and N exactly 1.
+They are not excluded or rescued by a lower threshold. The original paired
+values and source hashes remain in `5ff8e65:tests/alignment/generated-results.json`
+and the historical G2 section below. Callers can still request 1,500 users
+independently through the fixture/scenario APIs; no small-N sweep rows are removed.
+
+Observed 3,000-user envelope:
+
+| rate | target counts (rates) | control counts (rates) | emitted events |
+|---|---|---|---|
+| 0.5 | 155/297 (52.19%), 128/275 (46.55%), 132/262 (50.38%) | 151/300 (50.33%), 158/296 (53.38%), 160/287 (55.75%) | 23848, 23768, 23635 |
+| 0.9 | 280/421 (66.51%), 254/416 (61.06%), 255/396 (64.39%) | 253/425 (59.53%), 239/401 (59.60%), 238/390 (61.03%) | 43059, 41860, 41637 |
+
+Minimum converted counts are 128 at 0.5 and 238 at 0.9, above unchanged 70.
+Mean Q is 0.24999730/0.24999755; every N equals 1. Every seed preserves
+paired IDs, membership, anchors, control records, counts and timestamp bounds.
+Standalone-only counts are 3473/3449/3616 and 6852/6652/6697.
+Actual absent-hook versus factor-1 generation tests cover all six seed/rate
+combinations at 3,000 users. Exact profiles and events (except random insert
+IDs) match; Q=1 cannot meet the unchanged positive [0.15, 0.40] band.
+All direct non-hook knob tests remain in the full generated run: conditions,
+sticky/context properties, campaign controls, world properties and event weights.
+Current test outcomes and start/end hashes are in generated-results.json.
+Source changes during a run invalidate acceptance even when all cases pass.
+The final generated-only run passed all 30 tests in 32.96 seconds under the
+OS network-denial sandbox and local Vitest config. All 11 start/end source
+hashes matched. This includes both actual absent/factor-1 tests and every
+direct non-hook knob test. An earlier all-case-pass run had unequal hashes;
+it was rejected and rerun, not accepted as stable evidence.
+
 ## G1: day-seven retention misses the practical lift floor
 
 Status: evidenced red. Both noise strengths fail the predeclared 0.10 absolute

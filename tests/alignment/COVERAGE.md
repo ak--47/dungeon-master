@@ -39,7 +39,7 @@ Classification describes intended proof strength; latestOutcome records this gen
 | FunnelConditionOperators.lte | exact (pass) | direct condition operators | generated First Entry user set equals independently filtered profile set; numeric 1..4 inputs only |
 | FunnelConditionOperators.neq | exact (pass) | direct condition operators | generated First Entry user set equals independently filtered profile set; numeric 1..4 inputs only |
 | FunnelConditionOperators.nin | exact (pass) | direct condition operators | generated First Entry user set equals independently filtered profile set; numeric 1..4 inputs only |
-| hook-patterns.applyTTCBySegmentV2 | calibrated (fail) | hook-ttc | repeated usage stream with competing organic events; inspect generated failures |
+| hook-patterns.applyTTCBySegmentV2 | calibrated (pass) | hook-ttc | repeated usage stream with competing organic events; inspect generated failures |
 | Persona.conversionModifier | calibrated (pass) | persona-conversion | first funnel; mixed repeat traffic remains |
 | Persona.eventMultiplier | directional (pass) | persona-volume | whole-stream per-profile mean volume; fixed first funnel dilutes multiplier |
 | Persona.ttcModifier | calibrated (pass) | persona-ttc | unique first-funnel completion TTC ratio |
