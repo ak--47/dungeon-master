@@ -1003,8 +1003,8 @@ npx vitest tests/unit                                       # watch mode
 
 ### editor and offline alignment tests
 
-VS Code discovers one serial unit/integration suite through
-`tests/alignment/regression-vitest.config.js`. The workspace disables Go test
+VS Code discovers unit, integration, E2E, and alignment tests through one serial
+`vitest.editor.config.js`. The workspace disables Go test
 discovery and ignores the overlapping diagnostic Vitest configs. After changing
 these settings, run **Developer: Reload Window** if stale providers or test runs
 remain in the Testing panel. Editor runs omit the pruning setup, but they are not
@@ -1015,12 +1015,21 @@ the named alignment and sweep tasks from **Tasks: Run Task**. These test tasks
 never invoke the prune or dungeon-run tasks. Existing dungeon-run cleanup is
 unchanged and remains separate from testing.
 
+The `test: engine matrix`, `test: engine short sweep`, and `test: engine full sweep`
+tasks expose the direct-run engine checks. They are opt-in and use OS network denial.
+The full engine wrapper is visible under E2E but skipped until `RUN_FULL_SWEEP=1`.
+Direct-run `.mjs` scripts are not Vitest tests, so they do not get a separate
+`engine` folder in the Testing tree. The legacy engine sweeps do not use the
+alignment runner's ten-minute deadline. E2E tests may write files or perform
+network operations when run directly in the editor; editor execution is not an
+offline guarantee.
+
 ```sh
 node tests/alignment/run.mjs                               # offline alignment gate
 node tests/alignment/run.mjs --sweep --timeout-ms=600000    # opt-in bounded sweep
 ```
 
-Alignment is a separate test family, excluded from `npm test` and editor discovery.
+Alignment is a separate test family, excluded from `npm test` but visible in the editor.
 Its runner enforces OS network denial on macOS, fails closed elsewhere, and kills
 workers at the ten-minute deadline. Tests and reports live in the source checkout;
 they are not included in the npm package. The default `npm test` and direct root

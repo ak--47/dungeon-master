@@ -39,8 +39,8 @@
 		"whomacity"
 	],
 	// Vitest settings
-	"vitest.rootConfig": "tests/alignment/regression-vitest.config.js",
-	"vitest.configSearchPatternInclude": "tests/alignment/regression-vitest.config.js",
+	"vitest.rootConfig": "vitest.editor.config.js",
+	"vitest.configSearchPatternInclude": "vitest.editor.config.js",
 	"vitest.ignoreWorkspace": true,
 	"vitest.nodeEnv": { "NODE_ENV": "test" },
 	"vitest.logLevel": "info",

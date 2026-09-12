@@ -29,6 +29,32 @@
             "presentation": { "panel": "dedicated", "reveal": "always" }
         },
         {
+            "label": "test: engine matrix (list only, offline)",
+            "type": "process",
+            "command": "/usr/bin/sandbox-exec",
+            "args": ["-p", "(version 1) (allow default) (deny network*)", "node", "tests/engine/sweep-engine.mjs", "--matrix-only"],
+            "options": { "cwd": "${workspaceFolder}", "env": { "NODE_ENV": "test", "NODE_OPTIONS": "", "VSCODE_INSPECTOR_OPTIONS": "" } },
+            "group": "test",
+            "problemMatcher": []
+        },
+        {
+            "label": "test: engine short sweep (offline, opt-in)",
+            "type": "process",
+            "command": "/usr/bin/sandbox-exec",
+            "args": ["-p", "(version 1) (allow default) (deny network*)", "node", "tests/engine/sweep-engine.mjs", "--tier", "short", "--workers", "1"],
+            "options": { "cwd": "${workspaceFolder}", "env": { "NODE_ENV": "test", "NODE_OPTIONS": "", "VSCODE_INSPECTOR_OPTIONS": "" } },
+            "group": "test",
+            "problemMatcher": []
+        },
+        {
+            "label": "test: engine full sweep (offline, opt-in)",
+            "type": "shell",
+            "command": "set -o pipefail && /usr/bin/sandbox-exec -p '(version 1) (allow default) (deny network*)' node node_modules/vitest/vitest.mjs run --config vitest.editor.config.js tests/e2e/engine-shape-full-sweep.test.js 2>&1 | tail -50",
+            "options": { "cwd": "${workspaceFolder}", "env": { "NODE_ENV": "test", "RUN_FULL_SWEEP": "1", "NODE_OPTIONS": "", "VSCODE_INSPECTOR_OPTIONS": "" } },
+            "group": "test",
+            "problemMatcher": []
+        },
+        {
             "label": "typecheck",
             "type": "process",
             "command": "node",
