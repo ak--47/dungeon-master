@@ -94,10 +94,9 @@ export async function executeCell(cell) {
     envelope: users < scenario.minimum ? 'below-evidence-minimum' : scenario.kind === 'retention' || cell.traffic === 'sparse' || cell.targetPercent !== 50 ? 'diagnostic-unsupported-envelope' : 'scenario-band-check' };
 }
 
-if (process.send) process.once('message', async ({ cell, probeHang, deadline }) => {
+if (process.send) process.once('message', async ({ cell, probeHang }) => {
   const monitor = new Worker(`
     const { writeSync } = require('node:fs');
-    setTimeout(() => process.kill(-process.pid, 'SIGKILL'), Math.max(1, ${deadline} - Date.now()));
     setInterval(() => {
       if (process.memoryUsage.rss() > ${MEMORY.rssMiB} * 1024 * 1024) {
         writeSync(2, 'sweep memory-limit exceeded\\n');

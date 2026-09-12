@@ -110,7 +110,7 @@ try {
       persist('deadline', 'hanging worker terminated');
     } else {
       code = await runStage('sweep infrastructure tests', [...testArgs, 'tests/alignment/sweep.test.js',
-        '--testNamePattern=^(?!.*kills a started hanging worker)']);
+        '--testNamePattern=sweep evidence|stratifies|persists explicit|requires practical']);
       if (code === 0) {
         const finished = await runSweep(report, { deadline, output, onChild: child => { activeChild = child; } });
         const diagnosticFailure = report.cells.some(cell => ['diluted', 'inverse', 'contractfail'].includes(cell.verdict));

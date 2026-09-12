@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runCell, candidateGroups, estimateGroup, writeReport, seedSpreads } from './sweep.mjs';
+import { runCell, candidateGroups, estimateGroup, writeReport, seedSpreads, coverageAudit, SEEDS } from './sweep.mjs';
 
 describe('sweep evidence', () => {
   it('uses users as the binomial denominator and handles empty cohorts', () => {
@@ -73,6 +73,17 @@ describe.sequential('sweep execution', () => {
     expect(readFileSync(`${output}.md`, 'utf8')).toContain('0/3');
     expect(seedSpreads([1, 2, 3].map(effect => ({ execution: 'complete', id: 'conditions', users: 100,
       traffic: 'sparse', targetPercent: 50, metrics: { primary: { effect } }, verdict: 'supported' })))[0].effect).toEqual({ min: 1, max: 3, mean: 2 });
+  });
+
+  it('requires practical-size focus evidence and prioritizes it before large-cell expansion', () => {
+    const groups = candidateGroups();
+    expect(groups.slice(0, 14).every(group => group.users === 1000 && group.targetPercent === 50)).toBe(true);
+    const cells = groups.flatMap(group => SEEDS.map(seed => ({ ...group, seed, execution: 'complete' })));
+    expect(coverageAudit(cells).complete).toBe(true);
+    const incomplete = coverageAudit(cells.filter(row => row.id !== 'retention' || row.users < 1000));
+    expect(incomplete.complete).toBe(false);
+    expect(incomplete.missing).toContain('focus:retention/dense/users>=1000');
+    expect(coverageAudit(cells.filter(row => row.seed !== SEEDS[2])).complete).toBe(false);
   });
 
   it('kills a started hanging worker and its descendant at the runner deadline after preflight', async () => {

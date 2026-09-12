@@ -6,6 +6,8 @@ node tests/alignment/run.mjs --sweep --timeout-ms=600000
 
 opt-in only. the runner performs the build check, OS network preflight, independent sweep infrastructure tests, then the actual sweep. it does not run generated regression tests. a red retention gate cannot block diagnostic data collection. build or network preflight failures still stop the run.
 
+the inline infrastructure stage selects pure evidence, scheduling, and reporting tests. process-lifecycle tests run separately before release. this prevents a short outer deadline from orphaning detached test workers under the Vitest stage.
+
 ## one deadline covers the whole command
 
 the outer runner owns the 600-second maximum, including build, preflight, tests, pilots, generation, measurement, and report writes. each generation cell runs in a fresh detached process group under macOS `sandbox-exec` with `(deny network*)`. there is no unsupported-OS fallback. worker descendants inherit the sandbox. no dependencies or network services are required.
@@ -18,9 +20,9 @@ the hanging-worker test runs the real runner with a 12-second deadline from insi
 
 the pilot runs all seven focus scenarios at 300 users, sparse traffic, and all three fixed seeds. candidates cover 100, 300, 1,000, 3,000, and 10,000 users, with 0.3 and 0.9 requested events per user per day. 5% and 95% target shares exercise both rare target and rare control cohorts at 1,000 users. conditions, personas, and experiment variants receive local weight overrides through the existing scenario API.
 
-conditions cells get first claim on every stratum, including a 10,000-user dense single dungeon. remaining budget goes to persona conversion, persona TTC, persona volume, experiment, hook TTC, and retention. every scheduled group contains all three seeds. the estimate scales the measured scenario pilot cost by users and traffic, adds process overhead, and applies a 1.5 safety factor. the scheduler reserves five seconds for final reporting. it records deferred groups and their estimates. a selected group is never silently skipped.
+all seven scenarios at 1,000 users and both traffic levels get first claim on the budget. conditions cells then cover the remaining strata, including a 10,000-user dense single dungeon. remaining budget expands other scenarios. every scheduled group contains all three seeds. the estimate scales the measured scenario pilot cost by users and traffic, adds process overhead, and applies a 1.5 safety factor. the scheduler reserves five seconds for final reporting. it records deferred groups and their estimates. a selected group is never silently skipped.
 
-the result is complete only when every scheduled cell completes and every required size, both traffic levels, and both rarity directions appear. the candidate matrix can exceed the budget; deferred groups are untested. full seed spreads for a scenario/stratum require three completed cells. memory failures and deadline kills produce partial results and nonzero exit status.
+the result is complete only when every scheduled cell completes and all three seeds cover every required size, both rarity directions, and each focus scenario at 1,000 or more users under both traffic levels. the candidate matrix can exceed the budget; deferred groups are untested. memory failures and deadline kills produce partial results and nonzero exit status.
 
 ## measurements preserve strict thresholds
 

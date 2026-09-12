@@ -72,7 +72,24 @@ export function candidateGroups() {
   const strata = [10000, 100, 1000, 3000, 300].flatMap(users => ['dense', 'sparse'].map(traffic => ({ users, traffic, targetPercent: 50 })));
   strata.push(...[5, 95].flatMap(targetPercent => ['sparse', 'dense'].map(traffic => ({ users: 1000, traffic, targetPercent }))));
   const groups = strata.flatMap(stratum => FOCUS.map(id => ({ id, ...stratum })));
-  return groups.filter(group => group.id === 'conditions').concat(groups.filter(group => group.id !== 'conditions'));
+  const priority = group => group.users === 1000 && group.targetPercent === 50 ? 0 : group.id === 'conditions' ? 1 : 2;
+  return groups.sort((left, right) => priority(left) - priority(right));
+}
+
+export function coverageAudit(cells) {
+  const complete = cells.filter(row => row.execution === 'complete');
+  const hasGroup = predicate => new Set(complete.filter(predicate).map(row => row.seed)).size === SEEDS.length;
+  const missing = [];
+  for (const users of [100, 300, 1000, 3000, 10000]) {
+    if (!hasGroup(row => row.users === users)) missing.push(`size:${users}`);
+  }
+  for (const id of FOCUS) for (const traffic of ['sparse', 'dense']) {
+    if (!hasGroup(row => row.id === id && row.traffic === traffic && row.users >= 1000 && row.targetPercent === 50)) missing.push(`focus:${id}/${traffic}/users>=1000`);
+  }
+  for (const targetPercent of [5, 95]) {
+    if (!hasGroup(row => row.targetPercent === targetPercent)) missing.push(`rarity:${targetPercent}`);
+  }
+  return { complete: missing.length === 0, missing };
 }
 
 export function estimateGroup(group, pilots) {
@@ -114,6 +131,7 @@ export function writeReport(report, output) {
     `status: **${report.status}**. elapsed: ${report.elapsedMs ?? 0}ms. deadline: ${report.budgetMs}ms (includes build and preflight).`, '',
     `completed cells: ${report.summary.completedCells}/${report.scheduledCells ?? 0}. dungeons: ${report.summary.dungeons}. events: ${report.summary.events}. largest single dungeon: ${report.summary.largestSingleDungeonEvents} events.`, '',
     `verdict counts: ${JSON.stringify(report.summary.verdicts)}. deferred groups: ${report.deferred?.length ?? 0}.`, '',
+    `required coverage missing: ${report.coverage?.missing?.join(', ') || 'none recorded'}.`, '',
     'event totals across cells do not establish single-dungeon capacity. intervals use unique users, never event totals. seed spreads are descriptive across three fixed seeds, not population confidence intervals.', '',
     'a completed schedule can contain diagnostic failures. insufficient evidence is expected at small N. diluted and inverse effects stay visible. contractfail includes strict band misses and broken count invariants. unsupported-envelope labels do not change thresholds.', '',
     'no universal upper-cliff claim is supported. inspect each tested size and its labels below. memory is bounded by one worker, a 512 MiB V8 heap cap, a 900 MiB sampled RSS kill threshold, and a 300,000 requested-event cap. sampled RSS can overshoot between polls.', '',
@@ -162,8 +180,7 @@ export async function runSweep(report, { deadline, onChild, output, probeHang = 
   report.schedule = scheduled;
   persist();
   for (const cell of scheduled) if (!await execute(cell)) return false;
-  report.coverageComplete = [100, 300, 1000, 3000, 10000].every(users => report.cells.some(row => row.users === users)) &&
-    ['dense', 'sparse'].every(traffic => report.cells.some(row => row.traffic === traffic)) &&
-    [5, 95].every(targetPercent => report.cells.some(row => row.targetPercent === targetPercent));
+  report.coverage = coverageAudit(report.cells);
+  report.coverageComplete = report.coverage.complete;
   return true;
 }
