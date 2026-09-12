@@ -2926,6 +2926,9 @@ declare module '@ak--47/dungeon-master/verify' {
          */
         conversionWindow?: { unit: 'sessions'; n: number };
         graceperiod?: boolean;
+        /** Defaults to false, including totals. Restart after inclusive 2s completion grace;
+         * ordered shared last/first edges restart on the completion event itself.
+         * graceperiod=false disables the wait; window expiry can restart earlier. */
         reentry?: boolean;
         exclusionSteps?: ExclusionStep[];
         trackStepProperties?: boolean | string[];
@@ -2958,9 +2961,10 @@ declare module '@ak--47/dungeon-master/verify' {
     }
     /** Evaluate a funnel against a user's events. Returns FunnelResult or array (totals mode). */
     export function evaluateFunnel(events: Array<Record<string, unknown>>, steps: FunnelStep[], options?: FunnelOptions): FunnelResult | FunnelResult[];
-    /** Hold Property Constant — runs parallel sub-funnels per unique value of `holdProperty`. */
+    /** Hold Property Constant: parallel sub-funnels per held value; session ordinals use the full user stream. */
     export function evaluateFunnelHPC(events: Array<Record<string, unknown>>, steps: FunnelStep[], holdProperty: string, options?: FunnelOptions): Map<string | number, FunnelResult | FunnelResult[]>;
-    /** Pick a property snapshot from a FunnelResult for the given segment mode. */
+    /** Merge reached snapshots in path order for first/last touch. Undefined and null preserve
+     * defined non-null fallback values. Explicit step selection returns its snapshot unchanged. */
     export function resolveFunnelSegment(result: FunnelResult, mode: 'first' | 'last' | { step: number }): Record<string, unknown> | undefined;
     /** Normalize a FunnelStep to the `{ event, where? }` canonical shape. */
     export function normalizeStep(step: FunnelStep): { event: string; where?: { prop: string; op: string; value: unknown } };

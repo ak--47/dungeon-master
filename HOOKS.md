@@ -537,12 +537,22 @@ enter on birth, or drop next-day spill in an `everything` hook.
 
 ### 2.8 Funnel reentry: state machine resets after completion
 
-Reference: `history.cpp` (`last_step_starts_next_funnel`). With reentry
-enabled, after the state machine reaches the final step the engine resets to
-step 0 and continues scanning. `result.completions` reports the total. In
-`countMode: 'totals'` the engine returns one `FunnelResult` per completion
-(simultaneous histories — one user, many funnel completions). Without
-reentry the funnel runs once per user.
+Reference: `history.cpp` (`history_is_mutable`) and `funnel_query.cpp`
+(shared first/last step handling). With `reentry: true`, completion absorbs
+events through the inclusive 2-second grace period. The next event beyond
+grace starts the next scan. Conversion-window expiry can restart earlier.
+`graceperiod: false` disables the completion wait.
+
+When an event records the ordered last step and also matches the ordered
+first step, it closes one attempt and anchors the next immediately. Both
+selectors must match. Any-order edges do not use this exception.
+`woRepeat` still restarts only at window expiry.
+
+`result.completions` reports repeat completions in uniques mode. In
+`countMode: 'totals'`, the engine returns one `FunnelResult` per attempt,
+including partial attempts. **Compatibility unchanged:** `reentry` defaults
+to `false`, even for totals. Totals alone does not enable analytics general
+counting's repeat-history behavior.
 
 ### 2.9 HPC (Hold Property Constant) — parallel sub-funnels
 
@@ -555,13 +565,24 @@ directly, or (v1.6) pass `holdPropertyConstant: '<prop>'` to the
 `funnelFrequency` emulator — it routes through the HPC engine and reports
 per-held-value sub-funnel counts.
 
+Session windows derive ordinals from the full user stream before HPC
+partitioning. Events with another held value can bridge a session but cannot
+fill steps in the current bucket. This applies to explicit session windows
+and `countMode: 'sessions'`. The local session defaults remain a 30-minute
+timeout, 24-hour maximum, and UTC day boundaries.
+
 ### 2.10 Funnel segment modes (FIRST_TOUCH / LAST_TOUCH / STEP)
 
 Reference: `options.hpp` `funnel_segment_mode`; `history.cpp`
 `property_set_buffer`. The engine snapshots the matched event's properties
-at every funnel step. Segmentation chooses which step's properties to use:
-FIRST_TOUCH (step 0), LAST_TOUCH (last reached), or STEP N (specific index).
-Enable with `evaluateFunnel({ trackStepProperties: true })`, then pick with
+at every reached position. FIRST_TOUCH and LAST_TOUCH merge those snapshots
+in recorded path order, including partial and any-order paths. The first
+or last defined non-null value wins, respectively. Undefined never replaces
+a defined value; null never replaces a defined non-null value. If only null
+and undefined are present, null wins. Snapshots remain unchanged.
+
+STEP N selects one reached position without merging fallback values.
+Enable with `evaluateFunnel(events, steps, { trackStepProperties: true })`, then pick with
 `resolveFunnelSegment(result, 'first' | 'last' | { step: N })`.
 
 ### 2.11 Engine-validation guarantees (v1.5+)
