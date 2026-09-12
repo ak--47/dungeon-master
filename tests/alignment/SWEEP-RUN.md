@@ -1,4 +1,10 @@
-# the first sweep exposed incomplete focus coverage
+# sweep history
+
+The appendix below preserves the original sweep and its audited partial result.
+The current run is recorded in `sweep-results.json` and `sweep-results.md`.
+A new complete sweep is explicitly authorized after the scheduler and paired-measurement repair.
+
+## historical appendix: the first sweep exposed incomplete focus coverage
 
 command: `node tests/alignment/run.mjs --sweep --timeout-ms=600000`
 

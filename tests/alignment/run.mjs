@@ -1,8 +1,8 @@
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { accessSync, constants, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-import { runSweep, runCell, writeReport } from './sweep.mjs';
+import { runSweep, runCell, writeReport, sourceHashes } from './sweep.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const sandbox = '/usr/bin/sandbox-exec';
@@ -40,12 +40,20 @@ const startedAt = Date.now();
 const deadline = startedAt + durationMs;
 const output = resolve(root, outputArgs[0]?.slice('--output='.length) || 'tests/alignment/sweep-results');
 const report = modes[0] === '--sweep' ? { version: 1, status: 'running', phase: 'build', budgetMs: durationMs,
+  startedAt: new Date(startedAt).toISOString(), compiler: compiler.version, node: process.version,
+  repoCommit: execFileSync(sandbox, ['-p', policy, 'git', '-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+  sourceAtStart: sourceHashes(),
   offline: 'macOS sandbox-exec deny network*; inherited by all descendants', cells: [], scheduledCells: 0 } : null;
 function persist(status, failure) {
   if (!report) return;
   report.status = status;
   report.elapsedMs = Date.now() - startedAt;
   if (failure) report.failure = failure;
+  if (status !== 'running') {
+    report.sourceAtEnd = sourceHashes();
+    report.stableSource = JSON.stringify(report.sourceAtStart) === JSON.stringify(report.sourceAtEnd);
+    if (!report.stableSource) { report.status = 'partial'; report.failure = 'source changed during execution'; }
+  }
   writeReport(report, output);
 }
 function killGroup() {
@@ -110,12 +118,13 @@ try {
       persist('deadline', 'hanging worker terminated');
     } else {
       code = await runStage('sweep infrastructure tests', [...testArgs, 'tests/alignment/sweep.test.js',
-        '--testNamePattern=sweep evidence|stratifies|persists explicit|requires practical']);
+        '--testNamePattern=sweep evidence|stratifies|persists explicit|requires practical|dynamic budget|paired metrics']);
       if (code === 0) {
         const finished = await runSweep(report, { deadline, output, onChild: child => { activeChild = child; } });
         const diagnosticFailure = report.cells.some(cell => ['diluted', 'inverse', 'contractfail'].includes(cell.verdict));
         code = !finished || !report.coverageComplete ? 2 : diagnosticFailure ? 1 : 0;
         persist(!finished || !report.coverageComplete ? 'partial' : diagnosticFailure ? 'complete-with-findings' : 'complete');
+        if (!report.stableSource) code = 2;
       }
     }
   }

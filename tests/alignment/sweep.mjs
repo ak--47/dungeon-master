@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import { writeFileSync, renameSync } from 'node:fs';
+import { writeFileSync, renameSync, readFileSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 export const ROOT = fileURLToPath(new URL('../../', import.meta.url));
@@ -7,6 +8,15 @@ export const POLICY = '(version 1) (allow default) (deny network*)';
 export const SEEDS = ['alignment-generated-17', 'alignment-generated-43', 'alignment-generated-89'];
 export const FOCUS = ['conditions', 'persona-conversion', 'persona-ttc', 'persona-volume', 'experiment', 'hook-ttc', 'retention'];
 export const MEMORY = { heapMiB: 512, rssMiB: 900, maxRequestedEvents: 300000 };
+
+export function sourceHashes() {
+  const walk = directory => readdirSync(new URL(directory, `file://${ROOT}`), { withFileTypes: true }).flatMap(entry =>
+    entry.isDirectory() ? walk(`${directory}/${entry.name}`) : [`${directory}/${entry.name}`]);
+  const files = ['index.js', 'package.json', 'package-lock.json', 'types.d.ts', 'tsconfig.build.json',
+    ...walk('lib'), ...['fixtures.mjs', 'scenarios.mjs', 'measures.mjs', 'sweep.mjs', 'sweep-worker.mjs', 'sweep.test.js', 'run.mjs', 'vitest.config.js', 'offline-preflight.test.js'].map(file => `tests/alignment/${file}`),
+    'node_modules/typescript/package.json', 'node_modules/typescript/lib/_tsc.js'];
+  return Object.fromEntries(files.sort().map(file => [file, createHash('sha256').update(readFileSync(new URL(file, `file://${ROOT}`))).digest('hex')]));
+}
 
 export function wilson(successes, users) {
   if (!Number.isInteger(users) || users < 1 || !Number.isInteger(successes) || successes < 0 || successes > users) return null;
@@ -18,9 +28,9 @@ export function wilson(successes, users) {
   return [Math.max(0, center - radius), Math.min(1, center + radius)];
 }
 
-export function classify({ effect, neutral, effectBand, neutralBand, users, minimum, nullValue = 0, contractErrors = [] }) {
+export function classify({ effect, neutral, effectBand, neutralBand, users, minimum, neutralUsers = users, neutralMinimum = minimum, nullValue = 0, contractErrors = [] }) {
   if (contractErrors.length) return 'contractfail';
-  if (users < minimum || !Number.isFinite(effect) || !Number.isFinite(neutral)) return 'insufficient-evidence';
+  if (users < minimum || neutralUsers < neutralMinimum || !Number.isFinite(effect) || !Number.isFinite(neutral)) return 'insufficient-evidence';
   const direction = Math.sign(effectBand[0] - nullValue);
   if ((effect - nullValue) * direction < 0) return 'inverse';
   if (neutral < neutralBand[0] || neutral > neutralBand[1]) return 'contractfail';
@@ -72,7 +82,9 @@ export function candidateGroups() {
   const strata = [10000, 100, 1000, 3000, 300].flatMap(users => ['dense', 'sparse'].map(traffic => ({ users, traffic, targetPercent: 50 })));
   strata.push(...[5, 95].flatMap(targetPercent => ['sparse', 'dense'].map(traffic => ({ users: 1000, traffic, targetPercent }))));
   const groups = strata.flatMap(stratum => FOCUS.map(id => ({ id, ...stratum })));
-  const priority = group => group.users === 1000 && group.targetPercent === 50 ? 0 : group.id === 'conditions' ? 1 : 2;
+  groups.push({ id: 'conditions', users: 11111, traffic: 'dense', targetPercent: 50 });
+  const priority = group => group.users === 1000 && group.targetPercent === 50 ? 0 :
+    group.id === 'hook-ttc' && group.users === 3000 ? 1 : group.id === 'conditions' ? 2 : 3;
   return groups.sort((left, right) => priority(left) - priority(right));
 }
 
@@ -89,14 +101,23 @@ export function coverageAudit(cells) {
   for (const targetPercent of [5, 95]) {
     if (!hasGroup(row => row.targetPercent === targetPercent)) missing.push(`rarity:${targetPercent}`);
   }
+  for (const traffic of ['sparse', 'dense']) {
+    if (!hasGroup(row => row.id === 'hook-ttc' && row.users === 3000 && row.traffic === traffic && row.targetPercent === 50)) missing.push(`hook-ttc:3000/${traffic}`);
+  }
+  if (!hasGroup(row => row.users === 11111 && row.traffic === 'dense')) missing.push('capacity:299997-requested');
   return { complete: missing.length === 0, missing };
 }
 
 export function estimateGroup(group, pilots) {
   const matching = pilots.filter(row => row.id === group.id && row.execution === 'complete');
-  const baseline = Math.max(500, ...matching.map(row => row.elapsedMs));
-  const scale = group.users / 300 * (group.traffic === 'dense' ? 3 : 1);
-  return Math.ceil(3 * (300 + baseline * Math.max(1, scale) * 1.5));
+  const work = row => row.users * (row.traffic === 'dense' ? 0.9 : 0.5);
+  const nearest = [...matching].sort((left, right) => Math.abs(Math.log(work(left) / work(group))) - Math.abs(Math.log(work(right) / work(group)))).slice(0, 3);
+  const estimate = nearest.length ? Math.max(...nearest.map(row => 200 + Math.max(0, row.elapsedMs - 200) * work(group) / work(row))) : 1000;
+  return Math.ceil(SEEDS.length * estimate * 1.35);
+}
+
+export function nextGroup(groups, cells, remainingMs) {
+  return groups.find(group => estimateGroup(group, cells) <= remainingMs - 5000);
 }
 
 export function seedSpreads(rows) {
@@ -122,9 +143,19 @@ export function writeReport(report, output) {
     dungeons: completeRows.reduce((sum, row) => sum + row.samples.length, 0),
     events: completeRows.reduce((sum, row) => sum + row.samples.reduce((total, sample) => total + sample.events, 0), 0),
     largestSingleDungeonEvents: Math.max(0, ...completeRows.flatMap(row => row.samples.map(sample => sample.events))),
+    largestRequestedEvents: Math.max(0, ...completeRows.flatMap(row => row.samples.map(sample => sample.requested.numEvents))),
+    peakRssMiB: Math.max(0, ...completeRows.map(row => row.peakRssMiB)),
+    standaloneEvents: completeRows.reduce((sum, row) => sum + row.samples.reduce((total, sample) => total + sample.standaloneCount, 0), 0),
     verdicts: Object.fromEntries(['supported', 'insufficient-evidence', 'diluted', 'inverse', 'contractfail'].map(label => [label, completeRows.filter(row => row.verdict === label).length])) };
   report.spreads = seedSpreads(completeRows);
-  const body = JSON.stringify(report, (_key, value) => typeof value === 'number' && !Number.isFinite(value) ? null : value) + '\n';
+  report.undefinedQuantities = [];
+  const finite = (value, path = '') => {
+    if (typeof value === 'number' && !Number.isFinite(value)) { report.undefinedQuantities.push(path); return null; }
+    if (Array.isArray(value)) return value.map((entry, index) => finite(entry, `${path}/${index}`));
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, finite(entry, `${path}/${key}`)]));
+    return value;
+  };
+  const body = JSON.stringify(finite(report)) + '\n';
   writeFileSync(`${output}.json.tmp`, body);
   renameSync(`${output}.json.tmp`, `${output}.json`);
   const lines = ['# bounded alignment sweep', '',
@@ -164,22 +195,20 @@ export async function runSweep(report, { deadline, onChild, output, probeHang = 
   report.scheduledCells = pilots.length;
   for (const cell of pilots) if (!await execute(cell)) return false;
   report.phase = 'sweep';
-  report.deferred = [];
-  const scheduled = [];
-  let available = deadline - Date.now() - 5000;
-  for (const group of candidateGroups()) {
-    if (group.users === 300 && group.traffic === 'sparse') continue;
-    const estimatedMs = estimateGroup(group, report.cells);
-    if (estimatedMs > available) report.deferred.push({ ...group, estimatedMs, reason: 'pilot-budget' });
-    else {
-      available -= estimatedMs;
-      scheduled.push(...SEEDS.map(seed => ({ ...group, seed, estimatedGroupMs: estimatedMs })));
-    }
+  const pending = candidateGroups().filter(group => group.users !== 300 || group.traffic !== 'sparse');
+  report.schedule = [];
+  while (pending.length) {
+    const group = nextGroup(pending, report.cells, deadline - Date.now());
+    if (!group) break;
+    pending.splice(pending.indexOf(group), 1);
+    const estimatedGroupMs = estimateGroup(group, report.cells);
+    const scheduled = SEEDS.map(seed => ({ ...group, seed, estimatedGroupMs, remainingMsAtSchedule: deadline - Date.now() }));
+    report.schedule.push(...scheduled);
+    report.scheduledCells += scheduled.length;
+    persist();
+    for (const cell of scheduled) if (!await execute(cell)) return false;
   }
-  report.scheduledCells += scheduled.length;
-  report.schedule = scheduled;
-  persist();
-  for (const cell of scheduled) if (!await execute(cell)) return false;
+  report.deferred = pending.map(group => ({ ...group, estimatedMs: estimateGroup(group, report.cells), reason: 'remaining-wall-budget' }));
   report.coverage = coverageAudit(report.cells);
   report.coverageComplete = report.coverage.complete;
   return true;

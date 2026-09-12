@@ -5,7 +5,8 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runCell, candidateGroups, estimateGroup, writeReport, seedSpreads, coverageAudit, SEEDS } from './sweep.mjs';
+import { runCell, candidateGroups, estimateGroup, nextGroup, writeReport, seedSpreads, coverageAudit, SEEDS, POLICY } from './sweep.mjs';
+import { evaluateCell } from './sweep-worker.mjs';
 
 describe('sweep evidence', () => {
   it('uses users as the binomial denominator and handles empty cohorts', () => {
@@ -56,10 +57,51 @@ describe.sequential('sweep execution', () => {
 
   it('stratifies sizes, traffic and both rarity directions with conservative estimates', () => {
     const groups = candidateGroups();
-    expect([...new Set(groups.map(group => group.users))].sort((left, right) => left - right)).toEqual([100, 300, 1000, 3000, 10000]);
+    expect([...new Set(groups.map(group => group.users))].sort((left, right) => left - right)).toEqual([100, 300, 1000, 3000, 10000, 11111]);
     expect(new Set(groups.map(group => group.targetPercent))).toEqual(new Set([5, 50, 95]));
-    expect(estimateGroup({ id: 'conditions', users: 10000, traffic: 'dense' }, [{ id: 'conditions', elapsedMs: 1000, execution: 'complete' }])).toBeGreaterThan(100000);
+    expect(estimateGroup({ id: 'conditions', users: 10000, traffic: 'dense' }, [{ id: 'conditions', users: 300, traffic: 'sparse', elapsedMs: 1000, execution: 'complete' }])).toBeGreaterThan(100000);
   });
+
+  it('dynamic budget uses updated actual costs and schedules whole seed groups', () => {
+    const group = { id: 'hook-ttc', users: 3000, traffic: 'dense', targetPercent: 50 };
+    const slowPilot = [{ ...group, users: 300, elapsedMs: 1000, execution: 'complete' }];
+    expect(nextGroup([group], slowPilot, 20000)).toBeUndefined();
+    const actual = [...slowPilot, ...SEEDS.map(seed => ({ ...group, seed, elapsedMs: 1000, execution: 'complete' }))];
+    expect(nextGroup([group], actual, 20000)).toEqual(group);
+    expect(nextGroup([group], actual, 5000)).toBeUndefined();
+  });
+
+  it('paired metrics use Q and N, retain baseline, and enforce retention segment minima', () => {
+    const sample = { target: { converted: 80, entrants: 300 }, control: { converted: 90, entrants: 300 }, countErrors: [],
+      ttcRatio: 0.6, baselineTtcRatio: 2.4, baselineAdjustedTtcRatio: 0.25, interventionNeutralTtcRatio: 1,
+      retention: { entrants: 300, rate: 0.4 }, neutralRetentionCohorts: [{ entrants: 150, rate: 0.2 }, { entrants: 150, rate: 0.25 }] };
+    const hook = evaluateCell({ id: 'hook-ttc' }, [sample, sample]);
+    expect(hook.metrics.primary).toMatchObject({ effect: 0.25, neutral: 1, baselineRatio: 2.4, verdict: 'supported' });
+    expect(evaluateCell({ id: 'hook-ttc' }, [{ ...sample, target: { converted: 69 } }, sample]).verdict).toBe('insufficient-evidence');
+    const low = { ...sample, retention: { entrants: 300, rate: 0.2 } };
+    const retention = evaluateCell({ id: 'retention' }, [sample, low]);
+    expect(retention.samples).toHaveLength(2);
+    expect(retention.metrics.primary.neutral).toBeCloseTo(-0.05);
+    expect(retention.verdict).toBe('supported');
+    expect(evaluateCell({ id: 'retention' }, [sample, { ...low, neutralRetentionCohorts: [{ entrants: 99, rate: 0.2 }, { entrants: 201, rate: 0.25 }] }]).verdict).toBe('insufficient-evidence');
+    expect(evaluateCell({ id: 'retention' }, [sample, { ...low, retention: { entrants: 249, rate: 0.2 } }]).verdict).toBe('insufficient-evidence');
+  });
+
+  it('runs real paired hook and same-low retention cells under the network sandbox', async () => {
+    for (const id of ['hook-ttc', 'retention']) {
+      const result = await runCell({ id, users: 3000, traffic: 'dense', targetPercent: 50, seed: SEEDS[0] }, { deadline: Date.now() + 20000 });
+      expect(result.execution, result.error).toBe('complete');
+      expect(result.samples).toHaveLength(2);
+      expect(result.samples.every(sample => sample.standaloneCount > 100)).toBe(true);
+      if (id === 'hook-ttc') {
+        expect(result.metrics.primary.effect).toBe(result.samples[0].baselineAdjustedTtcRatio);
+        expect(result.metrics.primary.neutral).toBe(1);
+        expect(result.samples[0].pairing.exactCompletionMembership).toBe(true);
+      } else {
+        expect(result.metrics.primary.neutral).toBe(result.samples[1].neutralRetentionCohorts[0].rate - result.samples[1].neutralRetentionCohorts[1].rate);
+      }
+    }
+  }, 45000);
 
   it('persists explicit partial reports without inventing completed evidence', () => {
     const output = join(mkdtempSync(join(tmpdir(), 'alignment-sweep-')), 'partial');
@@ -88,7 +130,7 @@ describe.sequential('sweep execution', () => {
 
   it('kills a started hanging worker and its descendant at the runner deadline after preflight', async () => {
     const output = join(mkdtempSync(join(tmpdir(), 'alignment-sweep-')), 'probe');
-    const child = spawn(process.execPath, [fileURLToPath(new URL('./run.mjs', import.meta.url)), '--sweep', '--probe-hang',
+    const child = spawn('/usr/bin/sandbox-exec', ['-p', POLICY, process.execPath, fileURLToPath(new URL('./run.mjs', import.meta.url)), '--sweep', '--probe-hang',
       '--timeout-ms=12000', `--output=${output}`], { stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';

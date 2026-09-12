@@ -1,16 +1,16 @@
 import { spawn } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
-import { scenarioConfig, measureScenario, SCENARIOS } from './scenarios.mjs';
-import { runFixture } from './fixtures.mjs';
+import { pathToFileURL } from 'node:url';
+import { scenarioConfig, measureScenario, SCENARIOS, REPORTS } from './scenarios.mjs';
+import { runFixture, WINDOW } from './fixtures.mjs';
+import { measurePairedTtc } from './measures.mjs';
+import { applyTTCBySegmentV2 } from '../../lib/hook-patterns/index.js';
 import { validateDungeonConfig } from '../../lib/core/config-validator.js';
 import { initChance, resetValueCaches } from '../../lib/utils/utils.js';
 import { classify, wilson, MEMORY } from './sweep.mjs';
 
 export function cellConfig(cell, treatment) {
-  const config = scenarioConfig(cell.id, cell.seed, cell.traffic === 'dense' ? 'dense' : 'mixed', treatment);
-  config.numUsers = cell.users;
-  config.avgEventsPerUserPerDay = cell.traffic === 'dense' ? 0.9 : 0.3;
-  config.numEvents = Math.round(cell.users * config.numDays * config.avgEventsPerUserPerDay);
+  const config = scenarioConfig(cell.id, cell.seed, cell.traffic === 'dense' ? 'dense' : 'mixed', treatment, cell.users);
   if (config.numEvents > MEMORY.maxRequestedEvents) throw new Error('Requested events exceed worker envelope');
   config.userProps.segment = { __weights: { target: cell.targetPercent, control: 100 - cell.targetPercent } };
   for (const persona of config.personas ?? []) persona.weight = persona.name === 'target' ? cell.targetPercent : 100 - cell.targetPercent;
@@ -36,10 +36,28 @@ async function sampleCell(cell, treatment) {
   resetValueCaches();
   initChance(config.seed);
   const resolved = compactConfig(validateDungeonConfig(cellConfig(cell, treatment)));
+  const capture = { before: [], neutral: [], after: [] };
+  if (cell.id === 'hook-ttc') {
+    const originalHook = config.hook;
+    config.hook = (record, type, meta) => {
+      if (type !== 'everything') return originalHook(record, type, meta);
+      capture.before.push(...structuredClone(record));
+      const neutral = structuredClone(record);
+      applyTTCBySegmentV2(neutral, meta.profile, { segmentKey: 'segment', factors: { target: 1, control: 1 },
+        steps: ['Repeat Entry', 'Repeat Success'], maxGapMinutes: 30 * 1440 });
+      capture.neutral.push(...neutral);
+      const emitted = originalHook(record, type, meta);
+      capture.after.push(...structuredClone(emitted));
+      return emitted;
+    };
+  }
   const started = performance.now();
   const sample = await runFixture(config);
   const generationMs = performance.now() - started;
   const measured = measureScenario(cell.id, sample);
+  const paired = cell.id === 'hook-ttc' ? measurePairedTtc({ ...capture, emitted: sample.events,
+    profiles: sample.profiles, window: WINDOW,
+    report: { ...REPORTS.repeat, options: { ...REPORTS.repeat.options, conversionWindowMs: 30 * 86400000 } } }) : {};
   const countErrors = [];
   for (const group of ['target', 'control']) {
     const counts = measured[group];
@@ -54,31 +72,32 @@ async function sampleCell(cell, treatment) {
     eventsPerSecond: Math.round(sample.events.length / (generationMs / 1000)),
     target: counts('target'), control: counts('control'), targetUsers: measured.targetUsers, controlUsers: measured.controlUsers,
     retention: { ...measured.retention, interval95: wilson(measured.retention.returned, measured.retention.entrants) },
+    neutralRetentionCohorts: measured.neutralRetentionCohorts,
+    standaloneCount: measured.standaloneCount, ...paired,
     conversionDifference: measured.conversionDifference, ttcRatio: measured.ttcRatio, volumeRatio: measured.volumeRatio, countErrors };
 }
 
-export async function executeCell(cell) {
-  const samples = [];
-  for (const treatment of [true, false]) {
-    samples.push(await sampleCell(cell, treatment));
-    global.gc?.();
-  }
+export function evaluateCell(cell, samples) {
   const [treatment, neutral] = samples;
   const scenario = SCENARIOS.find(entry => entry.id === cell.id);
   const isRatio = ['ttc', 'volume'].includes(scenario.kind);
-  const statistic = scenario.kind === 'ttc' ? 'ttcRatio' : scenario.kind === 'volume' ? 'volumeRatio' : 'conversionDifference';
+  const statistic = cell.id === 'hook-ttc' ? 'baselineAdjustedTtcRatio' : scenario.kind === 'ttc' ? 'ttcRatio' : scenario.kind === 'volume' ? 'volumeRatio' : 'conversionDifference';
   const users = scenario.kind === 'retention' ? Math.min(...samples.map(sample => sample.retention.entrants)) :
     Math.min(...samples.flatMap(sample => [sample.target, sample.control].map(group => scenario.kind === 'ttc' ? group.converted : group.entrants)));
   const contractErrors = samples.flatMap(sample => sample.countErrors);
   const primary = { effect: scenario.kind === 'retention' ? treatment.retention.rate - neutral.retention.rate : treatment[statistic],
-    neutral: scenario.kind === 'retention' ? null : neutral[statistic],
+    neutral: scenario.kind === 'retention' ? neutral.neutralRetentionCohorts[0].rate - neutral.neutralRetentionCohorts[1].rate :
+      cell.id === 'hook-ttc' ? treatment.interventionNeutralTtcRatio : neutral[statistic],
     effectBand: scenario.effect, neutralBand: scenario.neutral, users, minimum: scenario.minimum, nullValue: isRatio ? 1 : 0, contractErrors };
   if (scenario.kind === 'retention') {
-    const replay = await sampleCell(cell, false);
-    primary.neutral = replay.retention.rate - neutral.retention.rate;
-    samples.push(replay);
-    primary.contractErrors.push(...replay.countErrors);
-    global.gc?.();
+    primary.neutralUsers = Math.min(...neutral.neutralRetentionCohorts.map(cohort => cohort.entrants));
+    primary.neutralMinimum = 100;
+  }
+  if (cell.id === 'hook-ttc') {
+    primary.baselineRatio = treatment.baselineTtcRatio;
+    primary.rawRatio = treatment.ttcRatio;
+    if (users >= scenario.minimum && treatment.ttcRatio >= 1) contractErrors.push('raw treatment TTC must remain below 1');
+    if (samples.some(sample => sample.interventionNeutralTtcRatio !== 1)) contractErrors.push('factor-1 intervention must equal 1');
   }
   primary.verdict = classify(primary);
   const metrics = { primary };
@@ -94,7 +113,16 @@ export async function executeCell(cell) {
     envelope: users < scenario.minimum ? 'below-evidence-minimum' : scenario.kind === 'retention' || cell.traffic === 'sparse' || cell.targetPercent !== 50 ? 'diagnostic-unsupported-envelope' : 'scenario-band-check' };
 }
 
-if (process.send) process.once('message', async ({ cell, probeHang }) => {
+export async function executeCell(cell) {
+  const samples = [];
+  for (const treatment of [true, false]) {
+    samples.push(await sampleCell(cell, treatment));
+    global.gc?.();
+  }
+  return evaluateCell(cell, samples);
+}
+
+if (process.send && process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) process.once('message', async ({ cell, probeHang }) => {
   const monitor = new Worker(`
     const { writeSync } = require('node:fs');
     setInterval(() => {
