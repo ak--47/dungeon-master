@@ -1864,8 +1864,9 @@ event set rather than one value moment.
 **Hook:** `everything`
 **Mixpanel report:** Flows — top paths after the anchor event show the engineered branch (Section 2.17)
 
-**In Mixpanel:** ~30% of users who view an item proceed straight down
-`add to cart → begin checkout`, making it the dominant Sankey branch.
+**In Mixpanel:** Bias the first branch toward `add to cart → begin checkout`.
+The helper selects ~30% of users for append-only injection. Existing traffic
+can interrupt the branch; the final branch share is not guaranteed to be 30%.
 
 ```js
 import { applyPathBias } from "@ak--47/dungeon-master/hook-helpers";
@@ -1910,6 +1911,8 @@ if (type === "everything") {
     sessionsPerWeek: 3,
     eventsPerSession: 5,
     sessionMinutes: 25,
+    datasetStart: meta.datasetStart,
+    datasetEnd: meta.datasetEnd,
   });
 }
 ```
@@ -1923,6 +1926,17 @@ engineered session (the day-boundary split would cut it). Retiming only — no
 events are added or dropped, so total counts and event mixes are untouched.
 Session count follows `min(sessionsPerWeek × weeks, ceil(N /
 eventsPerSession))`: scarce users get fewer sessions, not fabricated events.
+
+The optional inclusive bounds accept ISO strings, unix seconds, or unix
+milliseconds. Hook metadata uses unix seconds and can be passed directly.
+Without bounds, the helper stays within the original stream's min/max time
+span; this is a safe span for valid input, not an inferred dataset boundary.
+Partial days compress clusters, including zero-duration clusters at midnight.
+If the requested sessions cannot fit inside the available day slices for a
+week, the helper throws `RangeError` before changing any events. It never
+silently reduces the target or drops records. Widen the allowed window or
+reduce the session target explicitly. These guarantees assume UTC and the
+default 30-minute timeout, without a maximum session duration.
 
 ---
 
@@ -1954,7 +1968,7 @@ Import from `@ak--47/dungeon-master/hook-helpers`:
 | `splitByAuth` | identity | `(events, authTime) -> { preAuth, postAuth, stitch }` | Partition by auth boundary |
 | **`applyLifecycleWave`** | shape | `(events, uid, { dormantFromDay, dormantDays, resurrectBurst?, valueMomentEvent, dropAll? }) -> events[]` | Clean dormancy gap + resurrection burst; sweeps the ENTIRE window by timestamp (v1.6, recipe 4.29). Returns a NEW array |
 | **`applyPathBias`** | shape | `(events, uid, { anchor, path, share, gapSeconds? }) -> events[]` | Inject a Flows path after the user's first anchor for ~`share` (fraction) of users; skips users missing any step template (v1.6, recipe 4.30) |
-| **`applySessionShape`** | shape | `(events, uid, { sessionsPerWeek, eventsPerSession, sessionMinutes }) -> events[]` | Retime the stream into deterministic session clusters — intra-gaps ≪ 30min, inter-gaps ≫ 30min, never crosses UTC midnight (v1.6, recipe 4.31) |
+| **`applySessionShape`** | shape | `(events, uid, { sessionsPerWeek, eventsPerSession, sessionMinutes, datasetStart?, datasetEnd? }) -> events[]` | Retime inside inclusive bounds (default original min/max); preserve records; throw before mutation on insufficient capacity (recipe 4.31) |
 
 **Inject atoms + v1.5:** the engine auto-sorts events by time after the
 `everything` hook (`autoSortAfterEverything: true` default — see Principle

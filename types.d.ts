@@ -2683,10 +2683,10 @@ declare module '@ak--47/dungeon-master/hook-helpers' {
     export function injectOnNewDays(events: EventSchema[], eventName: string, targetDays: number, options?: { timeRange?: 'active'; overrides?: Partial<EventSchema> }): EventSchema[];
     /** v1.6.0 — carve a dormant window (drop value moments, or all events with `dropAll`) then append a resurrection burst cloned from the surviving value-moment template. Returns a NEW array. */
     export function applyLifecycleWave(events: EventSchema[], uid: string, opts: { dormantFromDay: number; dormantDays: number; valueMomentEvent: string; resurrectBurst?: number; dropAll?: boolean }): EventSchema[];
-    /** v1.6.0 — inject an ordered event path after each anchor for a deterministic `share` of users (hash-gated). Augments in place; engine auto-sort handles ordering. */
+    /** v1.6.0 — append an ordered path after the FIRST chronological anchor for a deterministic `share` of users. Original traffic is untouched and can interrupt the immediate branch; share is an injection gate, not a measured Flows share. */
     export function applyPathBias(events: EventSchema[], uid: string, opts: { anchor: string; path: string[]; share: number; gapSeconds?: [number, number] }): EventSchema[];
-    /** v1.6.0 — rewrite the user's timestamps into deterministic session clusters (n/week, m events, bounded span) that survive query-time re-derivation. */
-    export function applySessionShape(events: EventSchema[], uid: string, opts: { sessionsPerWeek: number; eventsPerSession: number; sessionMinutes: number }): EventSchema[];
+    /** Retiming only, inside inclusive bounds (ISO, unix seconds or milliseconds; accepts hook meta directly). Omitted bounds use original stream min/max. Throws RangeError before mutation if bounds are invalid or per-week 30-minute-session capacity is insufficient. */
+    export function applySessionShape(events: EventSchema[], uid: string, opts: { sessionsPerWeek: number; eventsPerSession: number; sessionMinutes: number; datasetStart?: string | number; datasetEnd?: string | number }): EventSchema[];
 }
 
 declare module '@ak--47/dungeon-master/hook-patterns' {
