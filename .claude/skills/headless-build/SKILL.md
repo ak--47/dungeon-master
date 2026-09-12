@@ -37,9 +37,13 @@ saved cohorts and custom properties, saved behaviors/metrics/formulas, and
 annotations that explain the engineered moments. Then it re-measures the hook
 stories **against the live project** and fails if they no longer read.
 
-That last step is the point. Local story verification passes on the generated
-array in memory; it never sees what survived ingest. A build can render five
+Local story verification uses generated records in memory or retained disk
+artifacts. It does not establish what survived ingest. A build can render five
 perfect dashboards on top of a story that silently collapsed on the way in.
+
+Apply the [1.8.1 verification contract](../verify-dungeon/references/alignment-contract.md)
+when translating local stories into live reports. This build requires authorized
+online work; it is never an automatic step of offline verification.
 
 ## Scope
 
@@ -182,13 +186,14 @@ size, require each bucket to be observed END TO END (`(b+1)*unit - 1` days of hi
 not `b*unit`), and cap the cohort date. Put both numbers on the board — the diluted
 one is what the chart shows, and naming why is a better demo than hiding it.
 
-**Time-to-convert is a MEAN, and means are tail-dominated.** Funnel frames carry
+**These funnel response fields report means.** Funnel frames carry
 `avg_time` and `avg_time_from_start` (seconds; not monotonic across steps — each is
 over that step's own survivors). A dungeon knob expressed as a median ratio will not
 reproduce: Square's designed 13x median gap measured 1.95x as a mean over a 30-day
-window. Use the **speed curve** instead — run the same funnel at 1/3/7/14-day
+window. A **speed curve** can supplement the report: run the same funnel at 1/3/7/14-day
 conversion windows and read what share of each segment's eventual conversions had
-landed by then. Same effect, expressed in a statistic Mixpanel actually computes.
+landed by then. Preserve the requested real report and its statistic. A speed
+curve cannot silently replace its acceptance check.
 
 ### 3. Auto-detect the data window
 
@@ -260,10 +265,14 @@ filters have to move into `show[i].behavior.filters`.
 - **structure** — every registered entity still exists.
 - **stories** — re-measure each hook effect live and compare to the knob.
 
-Report MATCH / DIRECTIONAL / MISS per story and exit non-zero on any MISS.
-Use a wider tolerance than the dungeon's own ±10% bar (~25%): Mixpanel's cohort
-membership is computed over the whole window, not the dungeon's internal binning,
-so depth-band style cohorts will not line up exactly.
+Report MATCH / DIRECTIONAL / MISS / INSUFFICIENT_EVIDENCE per story. Exit non-zero
+on a MISS or unresolved evidence gap; insufficient eligible users or converters
+are neither a pass nor a measured miss. Use each story's declared tolerance.
+Document report-semantic differences separately rather than widening tolerances.
+Preserve explicit counting options: local totals default to `reentry: false`.
+Derive local sessions from the full user stream before HPC partitioning; local
+defaults are UTC, 30-minute idle timeout, and 24-hour maximum. Project exclusions
+and timezone variants remain outside the source-derived proof.
 
 ### 7. Report
 
@@ -313,8 +322,9 @@ every build. Prefer one report with N metrics wherever the chart allows it.
 **`ws._api_client` is lazy** — None immediately after construction. Force it via
 `ws._get_api_client()` before patching request headers.
 
-**Idempotency.** Dashboards: delete-by-title then recreate. Everything else:
-look up by name and reuse. Re-running must never duplicate.
+**Idempotency.** Dashboards: create the replacement first, then retire only the
+recorded old ids after confirmation. Everything else: look up by name and reuse.
+Re-running must never duplicate.
 
 ## Commands
 

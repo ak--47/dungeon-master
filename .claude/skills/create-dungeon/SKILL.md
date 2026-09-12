@@ -35,11 +35,12 @@ In scope here:
   - `credentials: { token, region, serviceAccount, serviceSecret, projectId }`
   - `switches: { hasLocation, hasCampaigns, hasSessionIds, hasAvatar,
     hasIOSDevices, hasAndroidDevices, hasDesktopDevices, hasBrowser,
-    isAnonymous, alsoInferFunnels, hasAdSpend, hasAttributionFlags }`
+    isAnonymous, alsoInferFunnels, hasAdSpend }`
   - `identity: { avgDevicePerUser, sessionTimeout }`
 
   Old top-level keys keep working (verbose warn nudges migration), but new
   dungeons should ship the sub-object shape.
+  `hasAttributionFlags` is derived from `events[].isAttributionEvent`; do not set it.
 - Surviving advanced entities: `personas`, `worldEvents`, `engagementDecay`,
   `dataQuality` — use sparingly
 
@@ -64,6 +65,7 @@ see `HOOKS.md` at the project root.
 
 Before writing any code, scan:
 
+- [1.8.1 verification contract](../verify-dungeon/references/alignment-contract.md) - report definitions, neutral controls, and proof limits.
 - `types.d.ts` — the complete API reference. Every Dungeon field, EventConfig
   flag, Funnel option, AttemptsConfig, and Hook meta interface is documented
   with full JSDoc. **Treat this as the source of truth.**
@@ -234,8 +236,8 @@ When using experiments, include `$experiment_started` in the events array with
 
 - First funnel: includes `isFirstEvent` AND has `isAuthEvent: true` on the
   identity-transition step.
-- Usage funnels: ordinary sequences without `isFirstFunnel`. Optionally use
-  `attempts` for repeat-usage modeling (abandon-cart pattern).
+- Usage funnels: ordinary sequences without `isFirstFunnel`. Volume and funnel
+  selection control repetitions; `attempts` applies only to born-user first funnels.
 - Pick `conversionRate` between 30 and 80; `timeToConvert` in hours.
 
 Funnel `props` stamp constant properties on all events in that funnel run.
@@ -267,9 +269,9 @@ consumed standalone instances as funnel matches. Set `isStrictEvent: false`
 explicitly only when you intend mixed funnel/standalone semantics for that
 event.
 
-**Mark hook-readable funnel-step events with `isStrictEvent: false`.** When a hook reads `event === 'X'` and `X` is also a funnel step, the validator's auto-promote turns it into `isStrictEvent: true` and the engine stops emitting standalone occurrences — cohort goes empty. Identify these candidates at schema time so `write-hooks` doesn't have to re-thread the schema. Common candidates: login, page view, search, add to cart, swap, deposit — anything that's both a funnel step AND a recurring user behavior hooks will likely cohort on.
+**Use `isStrictEvent: false` when a cohort needs standalone occurrences.** Auto-promotion removes standalone traffic but leaves funnel-generated occurrences readable. Declare the opt-out at schema time only when that extra traffic is part of the intended behavior; a hook reading an event name alone does not require it.
 
-**Funnels representing loops need `reentry: true`.** Any funnel named "X loop" / "X cycle" / "session" / per-instance recurring behavior must declare `reentry: true`. Without it, the engine emits one sequence per user and downstream "power user" / "daily active" cohorts have no behavioral signal to bin on.
+**`reentry` is verifier-only.** Usage volume, funnel selection, and the event budget control generated repetitions. Set `reentry: true` only when the intended report counts repeated histories. It does not generate loops; local totals also default to `reentry: false`.
 
 **Structural trend engineering — duplicate funnels instead of reaching for
 hooks.** Not every trend needs a hook: initial conditions can raise or lower
@@ -294,20 +296,19 @@ to architect a comparison directly into the schema:
 Prefer structure when the story is a *between-path comparison* (this path
 converts worse / slower than that one). Reach for hooks when the story is a
 *within-cohort behavior* (these users do more of X over time, this segment's
-values differ). Structural trends are cheaper to verify — the knob IS the
-expected value.
+values differ). Structural trends still need report-level proof: competing
+histories, saturation, and finite budgets can change the observed effect.
 
 ### 3. SuperProps (2–3)
 
 Properties present on EVERY event. Common picks: `Plan`, `Region`, `Platform`,
-`App Version`. Values must come from same enumerations used in `userProps` for
-consistency.
+`App Version`. Matching `userProps` enumerations only shares a value domain.
+Use `stickyEventProps` for values that must match each user's profile.
 
 ### 4. UserProps (4–8)
 
-User profile properties. Set once per user. Use enumerations whose values
-match `superProps` for any overlapping keys (so per-event Region matches per-user
-Region).
+User profile properties. Set once per user. Declare overlapping event keys in
+`superProps` and use `stickyEventProps` when profile/event equality is required.
 
 ### 5. Groups (0–2)
 
@@ -417,9 +418,9 @@ Typical ranges:
 
 - Direct-acquisition first funnels: `{ min: 0, max: 0 }` (single attempt) or omit
 - Shared-link / friction-heavy onboarding: `{ min: 0, max: 2 }` (some retry)
-- Re-engagement / abandon-cart usage funnels: `{ min: 0, max: 3 }`
+- Usage funnels do not consume this retry plan; model their repetitions through usage selection and volume.
 
-When set, `attempts.conversionRate` (optional) overrides `funnel.conversionRate`
+For a born user's first funnel, `attempts.conversionRate` (optional) overrides `funnel.conversionRate`
 on the FINAL attempt. Failed prior attempts truncate before the first
 `isAuthEvent` step (no stitch fires for those attempts).
 
@@ -504,12 +505,12 @@ intra-day rhythm). Only override when you have a specific reason:
 
 ### Macro × born% / bias compatibility (strict clamps)
 
-When you set `macro` AND `percentUsersBornInDataset` explicitly, the validator
-clamps born% to the macro's preset value: flat=12, steady=12, growth=30,
-viral=55, decline=5. Same for `bornRecentBias` outside `[-0.5, 0.5]`. If you
-need higher born% (e.g., "this app launched mid-window — every user is in the
-dataset"), switch macros first (flat → growth → viral) instead of pushing the
-preset's value. Setting born% without a macro keeps legacy behavior (no clamp).
+The per-preset born% cap applies only to a named preset (`macro: 'growth'` or
+`macro: { preset: 'growth', ... }`) with explicit `percentUsersBornInDataset`:
+flat=12, steady=12, growth=30, viral=55, decline=5. A custom macro object without
+`preset` has no per-preset cap; own and verify its shape. The global born% clamp
+to [0,100] still applies. Explicit `bornRecentBias` is separately clamped to
+[-0.5,0.5], with compound protection for high born% and bias. Preset bias is exempt.
 
 The clamp warning explains why and points to safe alternatives — read it.
 
@@ -574,18 +575,19 @@ Top-level optional knob. Shape retention via log-linear interpolation
 between waypoints. Independent of `engagementDecay`.
 
 ```js
-retentionCurve: [
-  { day: 0,  retention: 1.0 },
-  { day: 1,  retention: 0.80 },
-  { day: 7,  retention: 0.50 },
-  { day: 30, retention: 0.20 },
-]
+retentionCurve: {
+  type: 'logarithmic',
+  day1: 0.80,
+  day7: 0.50,
+  day30: 0.20,
+}
 ```
 
-Each born-in-dataset user's events get filtered based on the interpolated
-retention at the event's age-from-first-event-day. Use when you want a
-declarative retention shape at config level (analytical-style D1/D7/D30
-targets) instead of writing hook logic.
+Use `type: 'logarithmic'` (default) or `'linear'`, with `dayN` active-day
+weights; day 0 is implicitly 1. The curve weights the active-day plan and takes
+precedence over `avgActiveDaysPerUser`. It does not directly filter each event
+or guarantee report D1/D7/D30 percentages. Verify mature cohorts and account for
+funnel spill and finite event budgets.
 
 ### `userSeed` (separate distinct_id RNG seed, v1.5+)
 
@@ -601,16 +603,15 @@ userSeed: "users-v1", // user-pool RNG (stable across versions)
 
 ## SuperProp consistency rule
 
-If `superProps` and `userProps` both define a property like `Plan`, the
-enumeration must match exactly. Otherwise users with `userProps.Plan = 'pro'`
-will fire events with `superProps.Plan = 'free'` — Mixpanel will see broken
-breakdowns.
+Matching enumerations do not guarantee profile/event equality: independent draws
+can differ. Declare both keys and project the profile values with `stickyEventProps`.
 
 ```js
 const PLANS = ["Free", "Free", "Free", "Pro", "Pro", "Enterprise"];
 // ...
 superProps: { Plan: PLANS, Region: REGIONS },
 userProps:  { Plan: PLANS, Region: REGIONS, Role: ROLES, ... },
+stickyEventProps: ['Plan', 'Region'],
 ```
 
 ## Verification

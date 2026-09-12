@@ -10,7 +10,9 @@ Base URL: `https://mixpanel-power-tools-api-lmozz6xkha-uc.a.run.app`
 
 ## Auth model — read this first
 
-- **GET any endpoint path = documentation, no auth.** Always `curl -s GET <base><path>` before first use of an unfamiliar endpoint — docs include exact body params and response shapes.
+- **GET any endpoint path = documentation, no auth.** For authorized online work,
+  GET an unfamiliar endpoint's docs before use. During offline verification, use
+  local references and report unavailable documentation; make no network calls.
 - **POST = execute.** `Authorization: Bearer <oauth-token>` (employee OAuth from repo `.env` `BEARER_TOKEN`, or a customer's OAuth token) or `Basic base64(service_acct:secret)`.
 - **Customer OAuth tokens are accepted** (verified 2026-07-06): `/auth` and `/macro/get-schema` work with a customer token on projects that token can access. `ai_endpoints_allowed: false` for non-employees — the `ai-*` family stays employee-only.
 - **Every POST body** should include `client_id: "dungeon-master"` and `region` (`US` default).
@@ -62,7 +64,9 @@ warehouse skill's manual-setup fallback; other errors must surface.
 Its synthetic ids are series keys, so schema snapshots and dashboard counts must
 distinguish cadence telemetry from user `events[]`. It is not a warehouse source.
 
-GET the path for full docs. Full list: GET `/` and GET `/macro`.
+During authorized online work, GET the path for full docs. Full list: GET `/`
+and GET `/macro`. Preserve explicit report options when comparing local and live
+queries; see the [1.8.1 verification contract](../verify-dungeon/references/alignment-contract.md).
 
 **crud** — 187 endpoints. GET `/crud` for the full list.
 

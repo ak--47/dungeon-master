@@ -2,6 +2,14 @@
 
 Templates and conventions for writing `hook-results.md` and per-dungeon verification SQL. For user dungeons these live in the dungeon's folder (`dungeons/user/<name>/`); otherwise in `./research/`. See [SKILL.md "Artifact location"](../SKILL.md).
 
+Apply the [1.8.1 verification contract](alignment-contract.md). Keep the runner's
+computed verdict, semantic correctness, and evidence sufficiency in separate
+columns. Record the independent report definition, explicit options, baseline and
+neutral-control measurements, eligible users/converters, and source-derived scope.
+`INSUFFICIENT_EVIDENCE` is an unresolved acceptance status, not a new runner tier
+and not a pass or measured effect failure. Preserve actual deployment reports;
+offline and dry-run results must not replace live outcomes.
+
 ## Verdict criteria (5-tier)
 
 Every report records the exact data prefix and retained artifact paths. Separate
@@ -25,11 +33,13 @@ Verdicts are **mechanical** — computed by `scripts/verify-stories.mjs` from ea
 
 - **NAILED** — observed within ±10% of `target`.
 - **STRONG** — passes `floor` (or `target` when no floor is declared).
-- **WEAK** — fails `floor` but effect direction is correct, **or** the selected cohort is smaller than `minCohort`. The population floor is a hard cap: a 12-user cohort can never score NAILED, no matter how clean its ratio.
+- **WEAK** - fails `floor` but effect direction is correct, or a supported selected-row population field is below `minCohort`. Inspect actual independent users and converters separately; bespoke denominators may not be guarded.
 - **NONE** — no measurable effect, or the selection matched no rows.
 - **INVERSE** — effect direction is opposite the assertion.
 
-Story verdict = worst assertion verdict. NAILED and STRONG are passing; WEAK, NONE, and INVERSE fail and require investigation.
+Story verdict = worst assertion verdict. NAILED and STRONG pass the mechanical
+gate; WEAK, NONE, and INVERSE fail it. Acceptance also requires correct report
+semantics, neutral controls, and sufficient evidence, even for a passing target.
 
 Hand-assigned verdicts appear only in the legacy no-stories fallback and MUST follow the same definitions: derive a target from the hook's knob constants, compute the band the observed value lands in, and state the derivation in the detail block — never assign a tier by feel.
 
@@ -46,7 +56,10 @@ The summary table should also be sorted this way (INVERSE → NONE → WEAK → 
 
 ## Single-dungeon report structure
 
-For story-backed dungeons, `hook-results.md` **renders the runner's JSON**: run `verify-stories.mjs --json` and build the Hook Summary table directly from its per-story records (story id, hook number, archetype, observed vs target per assertion, computed verdict). Do not recompute verdicts the runner already settled. Detailed Results blocks exist only for stories below STRONG, `duckdb`-type assertions, and legacy no-stories hooks.
+For story-backed dungeons, render the runner's JSON without changing computed
+verdicts. Add semantic and evidence status for every story. Include detailed
+blocks for misses, bespoke SQL, legacy hooks, and semantic or evidence gaps,
+including those found in mechanically passing stories.
 
 ```markdown
 # Dungeon Verification Report
@@ -62,15 +75,15 @@ For story-backed dungeons, `hook-results.md` **renders the runner's JSON**: run 
 | purchase | (none) | — | SCHEMA-PASS |
 | page view | (none) | — | SCHEMA-PASS |
 
-<if any SCHEMA-FAIL, list remediation details here>
+<fail every undeclared column, even at 100% coverage; list remediation here>
 
 ## Hook Summary
 
-| # | Hook Name | Type | Expected Effect | Observed | Verdict |
-|---|-----------|------|-----------------|----------|---------|
-| 3 | ... | funnel-pre | ... | ... | INVERSE |
-| 2 | ... | everything | ... | ... | WEAK |
-| 1 | ... | event | ... | ... | NAILED |
+| # | Hook Name | Expected | Observed | Runner Verdict | Semantics | Evidence |
+|---|-----------|----------|----------|----------------|-----------|----------|
+| 3 | ... | ... | ... | INVERSE | MATCH | SUFFICIENT |
+| 2 | ... | ... | ... | WEAK | MATCH | INSUFFICIENT_EVIDENCE |
+| 1 | ... | ... | ... | NAILED | MATCH | SUFFICIENT |
 
 ## Detailed Results
 
@@ -141,6 +154,7 @@ When verifying multiple dungeons, use this consolidated structure. Each dungeon 
 **Key rules for multi-dungeon reports:**
 - The overall summary table at the top shows pass/weak/fail counts per dungeon, sorted with most failures first
 - Each dungeon section is self-contained with its own summary, details, and recommendations
+- Include the same semantic and evidence columns used in the single-dungeon template; report insufficient-evidence counts separately from runner tiers.
 - Dungeon sections are ordered by failure count descending (most problems first)
 - Use the dungeon filename (without path) as the section header for clarity
 

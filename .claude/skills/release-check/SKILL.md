@@ -44,6 +44,25 @@ a later success. Record exit codes, pass/skip counts, and the tested commit/diff
 The smoke script discovers vertical dungeons only. Verify changed technical or
 customer fixtures separately with the existing verification runners.
 
+`npm test` excludes alignment. Run its independent gates separately:
+
+```bash
+node tests/alignment/run.mjs
+node tests/alignment/run.mjs --sweep --timeout-ms=600000
+```
+
+Run the sweep when required by release scope. Both commands enforce macOS network
+denial and a ten-minute maximum. If editor tasks are unavailable, use these
+repository commands. If the runner or platform is unavailable, report NOT RUN;
+do not substitute unsandboxed execution. Offline checks must use installed
+dependencies, OS network denial, and empty global/setup-file lists. The default
+suite above is not the offline audit route: do not run pruning setup, customer
+evaluations, imports, or industry-generation scripts during an offline docs audit.
+For a skills-only audit, run only `tests/e2e/skills-contract.test.js` with
+`configFile: false`, that exact include, `globals: true`, `globalSetup: []`,
+`setupFiles: []`, `fileParallelism: false`, and `sequence.concurrent: false`
+through programmatic Vitest under `sandbox-exec` network denial.
+
 For generation changes, require the event-stream determinism test. Compare runs
 with the same seed, pinned window, and `concurrency: 1`; strip only `insert_id`.
 Use sequential test cases because the RNG is shared. Include warehouse noise in
@@ -59,12 +78,15 @@ warehouse determinism checks. Never accept an unrun or failing determinism gate.
 - Check README, HOOKS, type comments, changelog, and guide against actual code.
   Do not carry stale test counts, old skill paths, or historical operational
   failures forward as current release claims.
-- Follow the complete handoff: author, optional hooks, verify, provision,
+- Audit the documented order of the complete handoff: author, optional hooks, verify, provision,
   generate/import, optional `/warehouse-metrics`, then headless build.
+  Offline release verification does not execute provisioning, imports, warehouse
+  deployment, or headless builds.
 - Distinguish user events, identity-less `standaloneEvents`, and warehouse rows.
   Synthetic IDs are not people. Standalone hooks return retained records;
   warehouse hooks mutate rows and ignore returns. Preserve deployment artifacts.
-- If API integrations changed, read the current endpoint docs and local handback.
+- If API integrations changed, read local endpoint docs and handback evidence
+  during offline checks. Fetch endpoint docs only during authorized online work.
   Distinguish docs discovery, mocked execution, dry-run, and live verification.
   Live writes require explicit authorization. Never claim an endpoint GET proves
   authenticated write permission or end-to-end deployment.
@@ -85,6 +107,9 @@ whole under `plans/archived/`; leave active or ambiguous work in place.
 
 Report blockers first, then evidence, skipped checks, compatibility changes,
 and remaining operational limits. Do not fix unrelated failures or weaken tests.
+Apply the [1.8.1 verification contract](../verify-dungeon/references/alignment-contract.md):
+report source-derived scope and remaining gaps, separate insufficient evidence
+from passes and measured failures, and preserve actual deployment reports.
 
 Only when explicitly requested: inspect all staged files for secrets, commit the
 authorized changes, push the feature branch, create or reuse its PR, and inspect

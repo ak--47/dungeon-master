@@ -12,26 +12,28 @@ Automatic warehouse audits run even without stories. Its history buckets can
 precede the user-event window; sparse point-in-time tables intentionally omit
 unchanged rows. Do not apply cadence or user-population counting rules to them.
 
-# Counting Semantics — Mixpanel-Accurate Verification
+# Counting semantics and local proof limits
 
-Mixpanel does NOT count the way naive SQL does. The verifier (and any DuckDB query you write) must match Mixpanel's rules.
+Read the [1.8.1 verification contract](alignment-contract.md) first. The verifier
+implements selected source-derived counting rules. Record explicit report options
+and remaining gaps; a passing local assertion does not establish universal parity.
 
 ## Core rules
 
 | Concept | Mixpanel rule | Wrong SQL → Right SQL |
 |---------|--------------|----------------------|
-| Frequency / cohort by event count | Distinct calendar days, NOT total events | `COUNT(*)` → `COUNT(DISTINCT date_trunc('day', time::TIMESTAMP))` |
-| Funnels | Greedy single-pass, strict order, 2-second grace (`history.cpp` `OUT_OF_ORDER_MILLISECONDS = 2000`) | NEVER hand-roll funnel SQL — use `emulateBreakdown` |
+| Frequency / cohort by event count | Report-dependent: raw totals, calendar days, or rolling periods | Set the counting algorithm explicitly; distinct UTC days do not prove rolling-frequency parity |
+| Funnels | Ordered histories, restart/shared-edge behavior, inclusive 2000ms completion grace | Use `emulateBreakdown` with explicit window, order, and reentry; local totals default to `reentry: false` |
 | AVG / SUM / MIN / MAX | Skip null and non-numeric from BOTH num and denom (`normal_query.cpp:1718-1733`) | Always wrap in `TRY_CAST(prop AS DOUBLE)` |
 | Attribution | Cap at 10 touchpoints in lookback (`attributed_value_reader.cpp:16` `TOUCHPOINTS_LIMIT`) | Use `emulateBreakdown` with `attributedBy` |
 | Conversion window | Strict `<` boundary (`conversion_window.cpp:48` `t1 < t2 + 1000*len`) | Read `Funnel.conversionWindowDays` and respect it |
-| Sessions | 3-trigger split: timeout `>`, max duration `>`, day-idx change (`session_query.cpp:906-911`) | Trust pre-stamped `session_id`; group by `(user, session_id)` |
+| Sessions | 3-trigger split: timeout `>`, max duration `>`, day-idx change (`session_query.cpp:906-911`) | Derive from the full resolved user stream before HPC partitioning; local UTC / 30-minute / 24-hour defaults |
 | Retention | Birth-anchored, ms-strict gate (default `birth_can_retain=false` → `<`), bucketed by `floor((ret−birth)/unit)` (`retention_query.cpp:1097-1109,1228-1231`) | Use `emulateBreakdown` with `retention` |
 
 **Known divergences from Mixpanel C++** (1.6.0):
 - `countDistinctPeriods` default = `algorithm: 'calendar'` (UTC bucket).
   Mixpanel C++ (`addiction_query.cpp:359`) uses ROLLING window. Pass
-  `algorithm: 'rolling'` for exact Frequency-Distribution parity.
+  `algorithm: 'rolling'` when that is the intended report algorithm; validate the remaining report options separately.
 - Touchpoint sampling: generator stamps uniform-random across user
   lifetime; verifier reads last-N before conversion (matches C++).
   For users with ≤10 attribution events lifetime, no divergence.
@@ -42,7 +44,10 @@ Full rules: see [HOOKS.md Section 2](../../../../HOOKS.md#2-how-mixpanel-counts-
 
 ## When to use the emulator vs DuckDB
 
-The emulator (`emulateBreakdown` from `@ak--47/dungeon-master/verify`) implements Mixpanel's rules natively. **ALWAYS use the emulator for funnel, frequency, aggregate, TTC, attribution, retention, lifecycle, flows, sessions, and event-breakdown patterns.** Hand-written DuckDB queries for these pattern types diverge from what Mixpanel shows in reports — even when they look correct.
+Prefer `emulateBreakdown` from `@ak--47/dungeon-master/verify` for supported report
+types. Inspect its options against the independent report specification. If a
+required semantic is unsupported, report the gap; do not silently substitute SQL
+or a different metric and call the original report verified.
 
 Use DuckDB ONLY for:
 - Schema integrity checks (column coverage, flag detection)
@@ -110,7 +115,9 @@ For CI-style assertions, use `verifyDungeon` with a checks array; see `tests/e2e
 
 - **`Funnel.conversionWindowDays` auto-applied.** When a check's `breakdown` matches a funnel by sequence, `verifyDungeon` reads `conversionWindowDays` from the funnel config and passes it to the emulator. You do NOT need to thread `conversionWindowMs` by hand for funnels declared in the dungeon.
 - **`Funnel.order` auto-dispatched.** For `sequential` / `interrupt` funnels, the emulator runs the greedy single-pass engine. For other order modes (`first-fixed`, `last-fixed`, `random`, etc.), it dispatches to `evaluateAnyOrderCompletion` (set-membership check). For `random` mode, results are `verificationKind: "informational"` — Mixpanel funnel shape doesn't apply; do not assert PASS/FAIL.
-- **Auto-sort means custom DuckDB queries can trust event order.** Per-user events arrive sorted ascending by time (default; opt out via `autoSortAfterEverything: false`). `LAG`/`LEAD` window functions work without explicit `ORDER BY time` in the partition.
+- **SQL still needs explicit ordering.** The engine auto-sorts output by default,
+  but SQL row order is unspecified. Use `ORDER BY time` in `LAG`/`LEAD` windows
+  and define tie handling when the report depends on it.
 - **Auto-promote `isStrictEvent` is silent healing — not a regression.** If a stale dungeon's funnel-step events also live in `events[]`, the validator stamps `isStrictEvent: true` and warns. Verification of those dungeons may show CHANGED standalone-event counts vs older runs — that is correct behavior, not a bug to chase.
 - **Touchpoint cap = 10 enforced at generation.** `switches.hasCampaigns: true` users get up to `maxTouchpointsPerUser` (default 10) UTM-stamped events, sampled across lifetime. Attribution checks via `attributedBy` should see realistic first/last-touch shapes, not all-stamps-at-birth. The verifier's `attributedBy` reads last-N before conversion (matches Mixpanel); the generator samples uniform across lifetime. For users with >10 attribution events lifetime, expect minor divergence on multi-conversion users.
 
@@ -126,7 +133,7 @@ For CI-style assertions, use `verifyDungeon` with a checks array; see `tests/e2e
 | Cohort B shows MORE absolute post-d30 events than cohort A even though hook reduces B | Cohort B has structurally higher event volume (e.g., low-balance users check balance constantly) | Compare per-user `post / pre` ratio, not raw counts |
 | Time-window hook (rainy week, etc.) inverts when measured against full-dataset avg | Born-in-dataset ramp inflates late-window baseline | Compare against neighboring days only, not full-dataset average |
 | Weekend-surge hook still <1.0x weekday | Default soup `dayOfWeekWeights` dampens weekends to ~0.55x weekday | Verify against soup baseline (`wknd/wkday > 0.55 × 1.2`), not >1.0 |
-| Funnel-post TTC scaling doesn't move emulator's `timeToConvert` rows | `evaluateFunnel` is greedy single-pass over full event history — picks first match per step regardless of which funnel-instance the hook touched | Document as known limitation (`H9 TTC populations present (limitation)`) |
+| Funnel-post TTC scaling does not move the report | Completed histories can combine instances or restart; the scaled run may not be the reported history | Inspect completed histories under explicit options and compare paired baseline/treatment; do not accept by code inspection |
 | Hook references `profile.X` that's not a defined userProp | Validator doesn't catch undeclared profile reads — `X` resolves to `undefined` | Verify by data SPREAD (max/min, cv) instead of segment correlation |
 | Two `everything` hooks where one injects events the other mutates produce wrong ratios | Hook ordering matters — injection hook ran AFTER cohort-shaping hook | Run cohort-degrading hooks AFTER all injection hooks in same `everything` block |
 | `readFileSync` ENOMEM on shards >500MB | Node string cap at ~512MB | Stream-load with `readline.createInterface` over `data/PREFIX-EVENTS*.json` glob |
@@ -140,7 +147,7 @@ When writing per-dungeon verify scripts, follow the template in HOOKS.md §9.9. 
 
 If a dungeon's frequency / funnel / TTC pattern shows WEAK or NONE in verification, check these BEFORE concluding the hook is broken:
 
-1. **Did you use `COUNT(*)` instead of distinct days?** Frequency-based patterns require `COUNT(DISTINCT date_trunc('day', time::TIMESTAMP))`.
+1. **Did you choose the report's counting unit?** Raw totals, distinct UTC days, and rolling periods answer different questions; set the algorithm explicitly.
 2. **Did you hand-roll funnel SQL?** Self-joins find the optimal match; Mixpanel uses greedy. Always use `emulateBreakdown` for funnels.
 3. **Are you including step events at the conversion-window boundary?** Mixpanel uses strict `<`. An event exactly at the boundary is excluded.
 4. **Did the hook scale event count without spreading across days?** `scaleEventCount(events, 'X', 3)` clones at sub-second offsets — same day. Frequency reports show ZERO movement. Use `injectOnNewDays`.
@@ -175,12 +182,13 @@ When the dungeon's `Funnel` config sets these fields, `verifyDungeon` auto-appli
 | `exclusionEvents: string[]` | Wraps as `exclusionSteps: [{ event }]` and terminates the funnel attempt |
 | `stepFilters: { N: { prop, op, value } }` | Mutates `breakdownArgs.steps[N]` to attach the `where` clause |
 
-## Identity-model dungeons — pass profiles
+## Identity-model dungeons: profiles and emitted links
 
 When `identity.avgDevicePerUser > 0` (or the deprecated `hasAnonIds: true`),
-ALWAYS pass `profiles` to `emulateBreakdown`. Without it, pre-auth
-`device_id` events bucket as separate "users" and your funnel/retention/
-attribution numbers all deflate.
+pass `profiles` for profile-property segmentation. For identity proof, build an
+explicit `identityMap` from valid ordinary both-ID events in the emitted stream.
+Profile device pools alone do not establish a link. Later ordinary Login events
+can link earlier device-only rows retrospectively; report conflicts and ID limits.
 
 **v1.5.1 anonymous non-converter semantic:** born-in-dataset users who
 never reach an `isAuthEvent` get `_drop: true` on their profile.
@@ -197,11 +205,14 @@ emulateBreakdown(events, {
   type: 'funnelFrequency',
   steps: ['visit_landing', 'sign_up', 'first_action'],
   breakdownByFrequencyOf: 'visit_landing',
-  profiles,        // ← REQUIRED for identity-model dungeons
+  profiles,
+  identityMap,     // prepared from emitted both-ID evidence for this run
 });
 ```
 
-Auto-builds the device→user map via `buildIdentityMap(profiles)` (reads `device_ids` first, falls back to `anonymousIds`). For repeated calls, build once and pass `identityMap`.
+Without an explicit map, the compatibility path can call `buildIdentityMap(profiles)`
+(reads `device_ids`, then `anonymousIds`). Label that profile-derived assumption;
+it cannot prove that an identity link survived generation or ingest.
 
 ## Time-series verification (timeBucket)
 

@@ -2,26 +2,18 @@
 
 Use DuckDB only for schema integrity, identity-model invariants, experiment invariants, and bespoke patterns the emulator can't express. For funnel / frequency / aggregate / TTC / attribution patterns, use `emulateBreakdown` instead — see [counting-semantics.md](counting-semantics.md).
 
+Apply the [1.8.1 verification contract](alignment-contract.md) to every query.
+The SQL examples below are diagnostics for their named measures. They cannot
+replace a different report's acceptance check. Use explicit report options,
+paired baselines, neutral controls, and actual eligible population counts.
+
 ## Schema validation queries
 
-For each unique event type in the output, compare actual columns against the config-declared properties:
-
-```sql
-WITH event_data AS (
-  SELECT * FROM read_json_auto('./data/<run-name>-EVENTS.json', sample_size=-1)
-  WHERE event = '<EVENT_TYPE>'
-)
-SELECT
-  unnest(map_keys(columns(*))) as col_name,
-  COUNT(*) as total_events,
-  COUNT(col_name) FILTER (WHERE col_name IS NOT NULL) as non_null_count,
-  ROUND(COUNT(col_name) FILTER (WHERE col_name IS NOT NULL) * 100.0 / COUNT(*), 1) as coverage_pct
-FROM event_data
-GROUP BY col_name
-ORDER BY coverage_pct DESC;
-```
-
-Or use the programmatic API (`lib/verify/schema-validator.js`):
+For each event type, compare raw record keys against config-declared properties
+and enabled engine/SDK fields. SQL unioned columns lose per-record key presence;
+null coverage alone cannot distinguish an absent key from a declared null.
+Use the programmatic API (`lib/verify/schema-validator.js`) to derive expected
+keys, then explicitly fail any undeclared key in the raw records:
 
 ```javascript
 import { deriveExpectedSchema, validateSchema } from './lib/verify/index.js';
@@ -53,8 +45,11 @@ The expected set of columns per event type is derived from config:
 
 For each event type, classify any column present in output but NOT in expected schema:
 
-- **SCHEMA-PASS** — Column appears on 100% of events of this type. Uniform enrichment is acceptable.
-- **SCHEMA-FAIL** — Column appears on <100% of events of this type. This is flag stamping — hook conditionally adds a property, creating an inconsistent schema.
+- **SCHEMA-PASS** - every observed key is declared or a recognized enabled engine/SDK field.
+- **SCHEMA-FAIL** - any undeclared key, even at 100% coverage. Uniform enrichment does not bypass schema-first authorship.
+
+The runtime summary may permit uniform enrichment. Retain its output, but apply
+the stricter authorship gate separately. Declared nullable fields remain valid.
 
 If any event type has SCHEMA-FAIL, flag it prominently and include specific remediation: which hook line adds the property and how to remove it while preserving the intended pattern.
 
@@ -95,10 +90,12 @@ backfill and `sparse` point-in-time rows before judging counts or time coverage.
 
 ### User-event identity checks
 
-Run these for every dungeon that uses the identity model (`isAuthEvent` + `attempts` + `identity.avgDevicePerUser`), BEFORE per-pattern checks:
+Run identity checks whenever the dungeon uses device identity, before per-pattern
+checks. Count configured auth rows as a diagnostic, not as a universal one-stitch
+invariant; ordinary both-ID events can also establish a link.
 
 ```sql
--- Stitch event count must match converted-born count, exactly one per user.
+-- Diagnostic counts for a configured auth event, not a mapping proof.
 WITH e AS (SELECT * FROM read_json_auto('./data/<file>-EVENTS.json')),
      auth_event AS (SELECT 'Sign Up' AS name) -- name of your isAuthEvent
 SELECT
@@ -106,17 +103,14 @@ SELECT
   SUM(CASE WHEN user_id IS NOT NULL AND device_id IS NOT NULL THEN 1 ELSE 0 END) AS stitches,
   COUNT(DISTINCT CASE WHEN user_id IS NOT NULL THEN user_id END) AS converted_users
 FROM e WHERE event = (SELECT name FROM auth_event);
-
--- Pre-existing users must have user_id on every event (no anon-only records).
-WITH e AS (SELECT * FROM read_json_auto('./data/<file>-EVENTS.json')),
-     u AS (SELECT * FROM read_json_auto('./data/<file>-USERS.json'))
-SELECT COUNT(*) AS preexisting_anon_only_records
-FROM e JOIN u ON u.distinct_id::VARCHAR = e.user_id::VARCHAR
-WHERE u.created < (SELECT MIN(time::TIMESTAMP) FROM e)
-  AND e.user_id IS NULL;
 ```
 
-Failures usually indicate incomplete identity-model migration. Flag in report.
+Build the proof map from valid emitted both-ID events, including later ordinary
+Login events, and resolve earlier device-only rows retrospectively. Inspect
+conflicting links. Profile pools are not mapping evidence. For pre-existing
+stamping, use generator ownership evidence and resolved dataset bounds; joining
+on `e.user_id` and then testing it for NULL can never detect missing IDs. If row
+ownership is unavailable in retained artifacts, report that check as unproved.
 
 ## Experiment invariants
 
@@ -267,7 +261,10 @@ FROM events
 GROUP BY period;
 ```
 
-### Retention / Churn (e.g., "early guild joiners retain better")
+### Activity-span diagnostic (not a retention report)
+
+This measures first-to-last activity span. Use `retention` with the report's
+cohort, return event, buckets, and mature horizon for a retention claim.
 ```sql
 WITH user_first_event AS (
   SELECT user_id, MIN(time::TIMESTAMP) as first_seen
@@ -319,29 +316,13 @@ JOIN read_json_auto('./data/verify-dungeon-EVENTS.json') e ON b.user_id = e.user
 GROUP BY b.is_target_buyer;
 ```
 
-### Funnel Conversion by Segment (when emulator can't do it)
-```sql
-WITH step1 AS (
-  SELECT DISTINCT user_id, segment_prop
-  FROM read_json_auto('./data/verify-dungeon-EVENTS.json')
-  WHERE event = 'funnel_step_1'
-),
-step2 AS (
-  SELECT DISTINCT user_id
-  FROM read_json_auto('./data/verify-dungeon-EVENTS.json')
-  WHERE event = 'funnel_step_2'
-)
-SELECT
-  s1.segment_prop,
-  COUNT(DISTINCT s1.user_id) as started,
-  COUNT(DISTINCT s2.user_id) as completed,
-  ROUND(COUNT(DISTINCT s2.user_id) * 100.0 / COUNT(DISTINCT s1.user_id), 2) as conversion_pct
-FROM step1 s1
-LEFT JOIN step2 s2 ON s1.user_id = s2.user_id
-GROUP BY s1.segment_prop;
-```
+### Funnel conversion by segment
 
-For Mixpanel-accurate funnel verification, prefer `emulateBreakdown({type: 'funnelFrequency'})` — see [counting-semantics.md](counting-semantics.md).
+Use `emulateBreakdown({type: 'funnelFrequency'})` with explicit report options.
+A join between users who did A and users who did B does not check ordered
+completion, restart, grace, exclusions, or the conversion window. If the emulator
+cannot express the requested report, record the semantic gap instead of substituting
+an unordered SQL intersection. See [counting-semantics.md](counting-semantics.md).
 
 ### Property Distribution Shift
 ```sql
@@ -366,34 +347,13 @@ WHERE event = 'find treasure' AND treasure_type = 'Shadowmourne Legendary'
 GROUP BY period;
 ```
 
-### Value Magnitude by Behavioral Segment (sessionize derived cohorts)
-```sql
-WITH ordered AS (
-  SELECT *, time::TIMESTAMP as ts,
-    LAG(time::TIMESTAMP) OVER (PARTITION BY user_id ORDER BY time) as prev_ts
-  FROM read_json_auto('./data/verify-dungeon-EVENTS.json')
-),
-sessions AS (
-  SELECT user_id,
-    SUM(CASE WHEN prev_ts IS NULL OR ts - prev_ts > INTERVAL '30 minutes' THEN 1 ELSE 0 END) as session_count
-  FROM ordered
-  GROUP BY user_id
-),
-segments AS (
-  SELECT user_id,
-    CASE WHEN session_count > 20 THEN 'power_user' ELSE 'regular' END as segment
-  FROM sessions
-)
-SELECT
-  seg.segment,
-  COUNT(*) as purchase_count,
-  ROUND(AVG(TRY_CAST(e.amount AS DOUBLE)), 2) as avg_amount,
-  COUNT(DISTINCT seg.user_id) as users
-FROM segments seg
-JOIN read_json_auto('./data/verify-dungeon-EVENTS.json') e ON seg.user_id = e.user_id
-WHERE e.event = 'purchase'
-GROUP BY seg.segment;
-```
+### Value magnitude by session-derived cohort
+
+Derive sessions with the verifier from the full resolved user stream before
+filtering events or partitioning by hold-property value. Use all three split
+rules (idle timeout, maximum duration, UTC day change). A timeout-only SQL `LAG`
+query and generator-stamped `session_id` do not establish this contract. Export
+the resulting user/cohort mapping for a SQL value diagnostic if needed.
 
 ### Temporal Value Scaling (e.g., 3x amounts on 1st/15th)
 ```sql
@@ -470,7 +430,9 @@ SELECT 'bots' as metric, count(*) FROM read_json_auto('./data/verify-dungeon-USE
 UNION ALL SELECT 'null_props', count(*) FROM read_json_auto('./data/verify-dungeon-EVENTS.json') WHERE category IS NULL;
 ```
 
-Advanced feature patterns should ALWAYS be present (deterministic from config), unlike hooks which may have statistical variance.
+Check whether the relevant population and time window are present before asserting
+an advanced-feature effect. Seeded determinism does not guarantee that a finite
+sample contains every configured segment or outcome.
 
 **Deprecated config blocks (silently stripped by validator since 1.4):**
 `subscription`, `attribution`, `geo`, `features`, `anomalies`. If a
@@ -500,7 +462,8 @@ For pre-existing-only dungeons (`percentUsersBornInDataset: 0`) expect
 `dropped = 0`.
 
 ### 1. SuperProp Consistency
-Verify each user has exactly 1 value per superProp:
+For properties declared in `stickyEventProps` or explicitly promised as stable,
+check per-user consistency. Other `superProps` may legitimately vary by event:
 
 ```sql
 SELECT
@@ -515,10 +478,13 @@ FROM (
   GROUP BY user_id
 );
 ```
-Verdict: **STRONG** ≥99% consistent, **WEAK** 90-99%, **FAIL** <90%.
+For a strict profile projection contract, investigate every mismatch. Do not
+replace the declared contract with a generic percentage tolerance.
 
 ### 2. SuperProp-UserProp Mirror Check
-Every superProp key should also appear on user profiles. Compare the dungeon's `superProps` keys against columns in the USERS file. Any superProp not mirrored in `userProps` means the stamping fix is incomplete.
+Only keys promised as profile projections must mirror `userProps`. Matching
+enumerations alone do not guarantee equality; use `stickyEventProps`. Event-only
+context such as an app version does not require a profile mirror.
 
 ### 3. Mixpanel Default Property Casing Check
 The system generates device properties with Mixpanel's standard casing
@@ -536,9 +502,9 @@ intentional opt-in — not a casing conflict.
 
 ### 4. funnel-pre Dilution Check
 For any dungeon with `funnel-pre` conversionRate modifications, verify the actual visible effect:
-- A `conversionRate *= 1.5` in funnel-pre typically shows as ~1.02-1.08x in the data (diluted by organic events)
-- If observed ratio is <1.1x for a funnel-pre conversionRate hook, verdict is **FAIL** with note: "funnel-pre conversionRate diluted by organic events — migrate to `everything` hook event filtering"
-- When the dungeon uses `everything` hook filtering instead, expect the full intended ratio (1.3-1.5x)
+- Compare the declared funnel report on paired baseline and treatment streams.
+- Inspect organic competitors, repeated opportunities, saturation, and eligible populations.
+- Keep the target and report fixed; neither funnel-pre scaling nor everything filtering guarantees a universal ratio.
 
 ## Population threshold validation
 
@@ -555,14 +521,15 @@ GROUP BY segment_column
 ORDER BY users DESC;
 ```
 
-**Thresholds (at 1K users):**
-- Segment <20 users (<2%): hook signal will be WEAK or invisible — flag as "insufficient population"
-- Segment 20-50 users: may show signal but with high variance — note in report
-- Segment >50 users: should show clear signal if hook effect ≥1.3x
+Set population floors before measuring, based on the intended effect and report.
+Report actual independent eligible users and converters on both sides. No fixed
+user count guarantees a clear signal for every effect or distribution.
 
 ## Statistical caveats
 
-This skill always runs at full fidelity (the dungeon's own scale). At full fidelity, cohorts of all sizes should produce clear signal because the absolute population is large. WEAK or FAIL results at full fidelity indicate a real problem — investigate, do not retry at smaller scale.
+This skill uses the dungeon's configured scale for acceptance. Full fidelity does
+not guarantee enough eligible users, converters, or mature cohorts. Distinguish
+`INSUFFICIENT_EVIDENCE` from measured failure and investigate each accordingly.
 
 `--small` mode is a developer-troubleshooting escape hatch on the runner script; verdicts from `--small` runs are unreliable and not permitted in this skill's output.
 
@@ -614,35 +581,15 @@ GROUP BY b.bucket;
 
 When the dungeon doesn't have a natural "per-X" denominator, compute one from the cohort-binning event: `target_events / cohort_event_count`.
 
-**Time-to-convert (funnel-post) verification** — compute median A→B time per profile segment:
+**Time-to-convert verification:** use the steps-based `timeToConvert` emulator
+with explicit report options and completed histories. Independent MIN(A)/MIN(B)
+timestamps can mix attempts. Preserve the requested statistic and derive its
+target from the hook, with a measured factor-one or hook-disabled control. Two
+differently modified segments do not constitute a neutral baseline.
 
-```sql
-WITH funnel AS (
-    SELECT user_id,
-        MIN(time::TIMESTAMP) FILTER (WHERE event = '<STEP_A>') AS a_time,
-        MIN(time::TIMESTAMP) FILTER (WHERE event = '<STEP_B>') AS b_time
-    FROM read_json_auto('./data/<run>-EVENTS.json')
-    GROUP BY user_id
-)
-SELECT u.<SEGMENT_KEY>,
-    COUNT(*) AS users,
-    ROUND(MEDIAN(EXTRACT(EPOCH FROM (b_time - a_time)) / 60), 2) AS median_min_a_to_b
-FROM funnel f
-JOIN read_json_auto('./data/<run>-USERS.json') u ON f.user_id = u.distinct_id
-WHERE a_time IS NOT NULL AND b_time IS NOT NULL
-GROUP BY u.<SEGMENT_KEY>
-ORDER BY median_min_a_to_b;
-```
-
-**Verdict for T2C**:
-- Fast segment ≤0.85x baseline → STRONG
-- Slow segment ≥1.2x baseline → STRONG
-- Both directions visible → STRONG
-- One/both missing → check that funnel exists in `funnels:` config and segment property is on `meta.profile`
-
-**Two-tier T2C interpretation**: When a dungeon has only 2 tiers (e.g. Free vs Paid) the funnel-post hook factor `1.0` branch never fires — both tiers fall into either fast or slow. Pick the slower of the two as the implicit baseline, then verify the faster shows ≤0.85x of it.
-
-**No-flag verification rule**: NEVER attempt to verify a hook by querying for a flag like `WHERE sweet_spot = true`. If a dungeon has such flags, treat them as a doc bug — the hook should be reworked to hide the cohort behaviorally. The validator's job is to derive cohorts behaviorally.
+**No-flag verification rule:** derive hidden cohorts behaviorally or with the
+declared hash. A flag with a schema-declared default is allowed; an undeclared
+flag fails even when present on every record.
 
 ## Drop-event funnel dilution diagnosis
 
@@ -650,22 +597,27 @@ Many dungeons have hooks of pattern `record.filter(e => e.event === 'X' && chanc
 
 **Why:** the hook drops EVENTS not users. A user with 5 step-3 events still appears in the funnel after losing 1-2 events. Funnel completion = `users with ≥1 step-3 event` — only zero-step-3 users disappear from the conversion count, which is rare.
 
-**Correct verification metric:** per-user volume of step-3 events by tier:
+**Supplementary diagnostic:** per-user volume of step-3 events by tier. This
+does not replace the declared funnel completion check:
 
 ```sql
 SELECT u.subscription_tier,
   COUNT(DISTINCT user_id) AS users,
   COUNT(*) AS total_step3,
   ROUND(COUNT(*) * 1.0 / COUNT(DISTINCT user_id), 2) AS per_user
-FROM read_json_auto('./data/<run>-EVENTS.json')
-WHERE event = '<STEP_3_EVENT>'
+FROM read_json_auto('./data/<run>-EVENTS.json') e
+JOIN read_json_auto('./data/<run>-USERS.json') u
+  ON e.user_id::VARCHAR = u.distinct_id::VARCHAR
+WHERE e.event = '<STEP_3_EVENT>'
 GROUP BY u.subscription_tier
 ORDER BY per_user DESC;
 ```
 
 Expected: paid tier ~1.5x non-paid per_user (matches 30% drop on non-paid → paid keeps 100%, non-paid keeps 70%, ratio 1/0.7 = 1.43x).
 
-If funnel completion gap <5pt but per_user gap ≥30%, the hook IS firing — the doc just points to the wrong metric. Mark STRONG, recommend doc redirect to per-user query.
+A volume gap can show the mutation fired while the declared conversion story
+still fails. Preserve that failure. Change the report only through an explicit
+story revision, then verify the revised claim with its own controls.
 
 ## Subscription tier cohort sizing check
 
@@ -676,12 +628,10 @@ SELECT subscription_plan, COUNT(*) FROM read_json_auto('./data/<run>-USERS.json'
 GROUP BY subscription_plan;
 ```
 
-The default subscription lifecycle (`trialToPayRate=0.30`, `upgradeRate=0.06-0.08`) produces ~85% NULL/Free, ~10-15% Monthly, <2% Annual, ~0% Family at 5K users. Cohorts <50 users will not produce statistically clean signal at any effect size.
-
-**If annual cohort <50 users:**
-- Don't trust per-tier ratios — note "cohort too small" in results.md
-- Bump `numUsers` up to 5x to enlarge cohorts
-- Or recommend dungeon author tighten subscription lifecycle config
+There is no active subscription lifecycle config block. Read the declared
+`userProps` distribution and hook logic, then measure eligible populations.
+If evidence is insufficient, request a larger run or an authorized schema change;
+do not invent lifecycle defaults or silently relax the acceptance threshold.
 
 ## Per-day normalization for time-window hooks
 
@@ -701,41 +651,40 @@ For any spike/burst hook with a tight day window, ALWAYS normalize by window len
 
 ## Determinism check (optional confidence test)
 
-The pinned `datasetStart`/`datasetEnd` window plus seeded RNG produces near-bit-exact output across runs. To confirm no NEW non-determinism crept in (e.g. wall-clock leak in a hook):
+For seeded generation, pin `datasetStart`/`datasetEnd` and `concurrency: 1`.
+Use isolated sequential runs and strip only `insert_id` before comparing events:
 
 1. Run a previously-passing dungeon a second time.
-2. Compare `eventCount` in the runner's JSON output — should match within ~0.5%.
-3. Re-run the hook's headline query and verify ratios match to 2 decimals.
+2. Require identical event counts, timestamps, ordering, and seeded property values.
+3. Require identical report output under the same explicit options.
 
-**Tolerance note**: most vertical dungeons produce bit-exact event counts across runs, but a few show <0.5% variance from RNG-state interactions. Variance at this scale does NOT affect hook signal direction or magnitude — all signals remain stable across runs. Treat <1% event-count drift as acceptable; investigate only if drift exceeds 1% OR a hook ratio swings meaningfully (>10% relative change between runs).
-
-If event count differs by >1% OR a hook ratio swings sharply, the hook has a fresh non-determinism source (typically `dayjs()`, `Date.now()`, `Math.random()`, or stale module-level state). Fix before continuing.
+Investigate differences, including wall-clock calls, unseeded RNG, and stale
+module state. Document known unseeded property functions separately; do not
+accept a generic percentage drift as determinism proof.
 
 ## Critical time-window verification pattern
 
-Many dungeons use relative time windows (e.g., "spike on days 75-85"). The post-shift dataset start is exposed to hooks as `meta.datasetStart` (unix seconds). For DuckDB verification, use the same anchor:
+Use the resolved dataset bounds, also exposed as `meta.datasetStart` and
+`meta.datasetEnd` in unix seconds. Generation occurs inside this window without
+a post-generation shift. Observed event extrema do not reconstruct configured
+bounds, especially for sparse or partially observed windows:
 
 ```sql
--- WRONG: uses MIN(time) which is up to 30 days BEFORE dataset start (pre-existing user spread)
-SELECT *, EXTRACT(EPOCH FROM (time::TIMESTAMP - (SELECT MIN(time::TIMESTAMP) FROM events))) / 86400 as day_in
-FROM events;
-
--- RIGHT: anchor to MAX(time) - num_days, which is the post-shift dataset start
 WITH bounds AS (
-  SELECT MAX(time::TIMESTAMP) - INTERVAL 'NUM_DAYS' day as datasetStart
-  FROM events
+  SELECT TIMESTAMP '<RESOLVED_DATASET_START_UTC>' as datasetStart
 )
 SELECT *, EXTRACT(EPOCH FROM (e.time::TIMESTAMP - b.datasetStart)) / 86400 as day_in
 FROM events e, bounds b;
 ```
 
-Pre-existing users have events for up to 30 days BEFORE the dataset start (`preExistingSpread: 'uniform'` default in macro). MIN(time) reflects those pre-existing events, not the dataset window. Always anchor to MAX(time) - num_days for "day in dataset" calculations.
+Pre-existing profile creation can precede the window; generated user events still
+stay inside the resolved bounds. Never substitute `MAX(time) - numDays` for them.
 
 ## TTC hook verification — two approaches
 
 TTC hooks come in two forms. Use the matching verification approach:
 
-### Approach 1: Property-Scaling TTC (preferred — produces NAILED verdicts)
+### Approach 1: Numeric timing-property report
 
 The hook scales a timing PROPERTY (e.g., `response_time_mins *= 0.67`) by segment. Verification is trivial:
 
@@ -748,49 +697,33 @@ WHERE event IN ('alert acknowledged', 'alert resolved')
 GROUP BY segment ORDER BY avg_response;
 ```
 
-This consistently produces exact matches to the hook factors (e.g., 0.67x target → 0.665x measured).
+This proves a property aggregate only. Measure paired baseline/treatment and a
+factor-one control; raw segment ratios can reflect different starting distributions.
 
-### Approach 2: Timestamp-Shifting TTC (use when no timing property exists)
+### Approach 2: Funnel timestamp TTC report
 
-The hook shifts event timestamps in the everything hook using `scaleFunnelTTC()` or manual gap scaling. Verification requires a **bound-sequence query** — never use the lazy MIN→MIN proxy:
-
-```sql
--- WRONG: lazy MIN→MIN proxy (mixes events from different funnel passes)
-SELECT user_id, MIN(a.time) AS start, MIN(b.time) AS end ...
-
--- RIGHT: bound-sequence (first A, then first B AFTER that A)
-WITH steps AS (
-  SELECT user_id, event, time::TIMESTAMP AS t
-  FROM events WHERE event IN ('step_a', 'step_b', 'step_c')
-),
-funnel AS (
-  SELECT DISTINCT ON (a.user_id) a.user_id, a.t AS start_t,
-    (SELECT MIN(t) FROM steps c
-     WHERE c.user_id = a.user_id AND c.event = 'step_c' AND c.t > a.t) AS end_t
-  FROM steps a WHERE a.event = 'step_a'
-  ORDER BY a.user_id, a.t
-)
-SELECT segment,
-  COUNT(*) AS users,
-  ROUND(MEDIAN(EXTRACT(EPOCH FROM (end_t - start_t)) / 60), 1) AS median_min
-FROM funnel JOIN users USING (user_id)
-WHERE end_t IS NOT NULL
-GROUP BY segment ORDER BY median_min;
-```
-
-The bound-sequence pattern finds the first A per user, then the first C strictly after that A. This matches how the everything hook operates and typically produces STRONG verdicts. The lazy MIN→MIN proxy produces flat or inverted results because it grabs unrelated events from different funnel passes.
+Use steps-based `timeToConvert` on completed histories with the report's window,
+order, filters, identity, and reentry options. A first-A/next-C query can skip
+required B, miss restarts, or mishandle grace. Compare the same report on baseline,
+treatment, and neutral-control streams. Keep mean and median claims separate.
 
 ### Which approach to recommend when writing hooks
 
-Property scaling is strictly better for verification. When creating new TTC hooks, always prefer scaling timing properties (see HOOKS.md principle #15). Reserve timestamp shifting for cases where no numeric timing property exists on the relevant events.
+Choose the hook based on the intended report. Numeric property scaling answers
+a property report; timestamp changes target funnel elapsed time. Ease of
+verification does not authorize replacing one with the other.
 
 ### Legacy funnel-post TTC hooks
 
-If a dungeon still uses `funnel-post` for TTC (not yet migrated to `everything`), the effect is only visible in Mixpanel's funnel median TTC report, not in any SQL query. Mark as STRONG by code inspection and recommend migration to property scaling or everything-hook timestamp shifting.
+Measure legacy `funnel-post` effects with the same report contract and controls.
+Never assign STRONG by code inspection. If instance-level mutations fail to move
+completed report histories, retain the miss and investigate competing instances.
 
 ## Magic-number cohort sizing — inspect distribution first
 
-Before checking inverted-U signal magnitude, confirm the cohort sizes are statistically meaningful (≥200 in sweet bucket). If cohort is too small, signal magnitude is irrelevant:
+Before checking inverted-U signal magnitude, count independent eligible users in
+each bucket against a predeclared population floor. A floor such as 200 is a
+design choice, not universal statistical proof:
 
 ```sql
 SELECT pn, COUNT(*) FROM (
@@ -799,11 +732,9 @@ SELECT pn, COUNT(*) FROM (
 ) GROUP BY pn ORDER BY pn LIMIT 20;
 ```
 
-If 90%+ of users have 0-1 events of X, the dungeon's `sweet=4-7 / over=8+` ranges produce <50 users in sweet → no signal possible. Two fixes:
-1. Bump `numUsers` 5x (cohort grows linearly with users; preserves story)
-2. Recommend the dungeon author redefine ranges to match actual distribution (e.g. `sweet=2-5 / over=6+`)
-
-Choice depends on whether the JSDoc's stated ranges are load-bearing for the dungeon's narrative ("you need 8+ photos to seem fake" — preserve range, scale up users) or arbitrary ("sweet 4-7" can shift to "sweet 2-5" without losing the story).
+If too few users reach the declared buckets, report insufficient evidence.
+Request a larger run while preserving the story. Changing bucket ranges changes
+the report specification and requires an explicit story revision and new proof.
 
 ## Re-run required after hook edits
 
@@ -811,7 +742,7 @@ If you edit a hook then query the existing data files, you'll get STALE results.
 
 ```bash
 # Keep this run's files for verification and deployment; cleanup needs explicit consent.
-node scripts/verify-runner.mjs dungeons/vertical/<NAME>.js verify-<NAME>
+node scripts/verify-runner.mjs dungeons/vertical/<NAME>/<NAME>.js verify-<NAME>-r2
 # Wait for the {"mode":"full","eventCount":...} JSON to print before querying
 ```
 
@@ -839,49 +770,26 @@ The `event` hook receives `meta.datasetStart` as a unix timestamp, but temporal 
 
 ## Property baseline dilution
 
-When a hook overrides a property value (e.g., `event_type = "plan_upgraded"`), the effect is invisible if the baseline distribution already has a high rate of that value. Example: if `plan_upgraded` is 1 of 5 values (20% baseline), a 40% hook override produces ~28% observed — nearly invisible.
-
-**Fix:** skew the baseline distribution AWAY from the hook's target value. Make `plan_upgraded` 1 of 8+ values (12.5% baseline), then the 40% hook produces ~48% in the window — a clear 4x spike.
-
-Similarly, if a hook forces `scale_direction = "down"` but the baseline is already 86% "down" (6:1 ratio in config), the hook is invisible. Change the baseline to favor "up" (e.g., 3:1 up:down) so the hook's forced "down" creates a measurable shift.
+If an independent hook forces a value on fraction `q` of eligible events with
+baseline prevalence `p`, expected prevalence is `q + (1 - q) * p`. For `p=0.20`
+and `q=0.40`, that is 0.52. Other targeting and time-window rules need their own
+derivation. Measure the neutral baseline; request an authorized schema change if
+the baseline distribution must change. Do not tune it silently after a miss.
 
 ## Computing the dataset window
 
-Dungeons declare their time window in one of three ways — the verifier must derive the actual start/end before writing DuckDB queries:
-
-| Config shape | How to derive window |
-|---|---|
-| `datasetStart` + `datasetEnd` | Use directly |
-| `numDays` only (no explicit start/end) | `datasetEnd = NOW`, `datasetStart = NOW - numDays` |
-| `datasetStart` + `numDays` | `datasetEnd = datasetStart + numDays` |
-
-The engine always resolves to a `[datasetStart, datasetEnd]` pair internally (see `config-validator.js`). To find the actual window from the OUTPUT data:
-
-```sql
-SELECT
-  MAX(time::TIMESTAMP) as datasetEnd,
-  MAX(time::TIMESTAMP) - INTERVAL '<numDays>' DAY as datasetStart
-FROM read_json_auto('./data/verify-X-EVENTS*.json', sample_size=-1);
-```
-
-Use `datasetStart` (derived above) as the DuckDB anchor for day-in-dataset:
-
-```sql
-WITH bounds AS (
-  SELECT MAX(time::TIMESTAMP) - INTERVAL '<numDays>' DAY as ds_start
-  FROM read_json_auto('./data/verify-X-EVENTS*.json', sample_size=-1)
-)
-SELECT EXTRACT(EPOCH FROM (e.time::TIMESTAMP - b.ds_start)) / 86400 as day_in
-FROM events e, bounds b;
-```
-
-Do NOT use `MIN(time)` as the anchor — pre-existing users have events up to 30 days before `datasetStart` (from `preExistingSpread: 'uniform'`).
-
-When the dungeon has explicit `datasetStart` (e.g., `"2026-01-01T00:00:00Z"`), use it directly: `TIMESTAMP '2026-01-01'`. When `numDays` is used without explicit start, derive from MAX(time) as shown above.
+Record the engine's resolved `datasetStart`/`datasetEnd` from the run, including
+derived windows. Use those values in the query shown under "Critical time-window
+verification pattern". If the artifacts do not retain bounds, report the missing
+metadata or regenerate a separately named pinned run. Neither observed MIN/MAX
+nor the current wall clock can recover the original resolved window reliably.
 
 ## No flag stamping audit
 
-Hooks must NEVER add cohort flags like `is_whale`, `power_user`, `sweet_spot`, `is_churned`, etc. All cohorts must be derived behaviorally from raw event data. When auditing a dungeon, check the hook for any property assignments that create boolean/categorical flags not defined in the original schema. If found, remove them and rewrite the hook to achieve the same effect through property value mutations, event filtering, or event injection.
+Hooks must never add undeclared flags. A schema-declared flag with a default is
+valid; hidden cohorts can use behavioral or hash definitions. Flag undeclared
+assignments as SCHEMA-FAIL and request an authorized schema declaration or a hook
+rewrite using existing fields. Uniform coverage does not make them acceptable.
 
 ## Clone dilution of temporal effects
 
@@ -900,7 +808,7 @@ If Hook A classifies users by event presence (`events.some(e => e.event === X)`)
 **Fixes:**
 1. Require 3+ marker events instead of 1+ (surviving events still identify)
 2. Accept the verification limitation and note it in the report
-3. Use a metric that doesn't depend on cohort reconstruction (e.g., overall distribution shift instead of cohort comparison)
+3. Propose a separate distribution diagnostic while retaining the original cohort report's unresolved status; changing the report requires explicit revision.
 
 ## Deprecated feature property gaps
 
@@ -908,4 +816,6 @@ Dungeons using deprecated config blocks (`subscription`, `attribution`, `feature
 
 **Diagnosis:** Hook logic references a property that's always NULL/undefined in the output. Check if the property was produced by a deprecated feature.
 
-**Fix:** The dungeon author must add equivalent property generation in the hook itself (via `user` or `everything` hook) or add the property to `superProps`/`userProps` with appropriate values. This is a schema-level fix, not a verification fix — flag it in the report as "NONE: deprecated feature property missing" with the recommended fix.
+**Fix:** Request a schema declaration with a default through `/create-dungeon`
+before hooks assign values. Report the missing field and preserve the runner's
+verdict; adding undeclared property generation inside a hook is not a valid fix.

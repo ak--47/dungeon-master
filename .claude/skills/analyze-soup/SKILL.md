@@ -169,6 +169,15 @@ its folder. Otherwise write it to the project root. (The generated
 6. **Assessment**: Overall quality judgment and recommendations
 
 ### Quality Criteria
+
+These thresholds are diagnostic heuristics, not alignment acceptance criteria.
+Interpret them against the configured macro, soup, resolved window, and intentional
+hook effects. Read the [1.8.1 verification contract](../verify-dungeon/references/alignment-contract.md)
+for proof scope. Report insufficient observations separately from shape failures.
+Include empty buckets and identify partial buckets before computing distribution
+statistics; the SQL above reports observed buckets only. Sparse or partial buckets
+alone do not establish a distribution defect.
+
 - **Daily CV**: 0.2-0.6 is ideal (some variation, not flat or spiky)
 - **Max-to-avg ratio**: < 2.0 at daily level, < 3.0 at hourly level
 - **Last day spike**: < 1.5x average = PASS, < 2x = WARN, > 2x = FAIL

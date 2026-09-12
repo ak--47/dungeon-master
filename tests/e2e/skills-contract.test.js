@@ -8,6 +8,103 @@ const root = path.resolve(import.meta.dirname, '../..');
 const skillsRoot = path.join(root, '.claude/skills');
 const readSkill = (name) => fs.readFileSync(path.join(skillsRoot, name, 'SKILL.md'), 'utf8');
 
+describe('1.8.1 skill contracts', () => {
+	test('all nine skills share a resolvable proof contract through both aliases', () => {
+		const names = fs.readdirSync(skillsRoot, { withFileTypes: true })
+			.filter(entry => entry.isDirectory()).map(entry => entry.name);
+		expect(names).toHaveLength(9);
+		const contract = path.join(skillsRoot, 'verify-dungeon/references/alignment-contract.md');
+		for (const name of names) {
+			const canonical = path.join(skillsRoot, name, 'SKILL.md');
+			const reference = readSkill(name).match(/\]\(([^)]+alignment-contract\.md)\)/);
+			expect(reference, name).not.toBeNull();
+			expect(fs.realpathSync(path.resolve(path.dirname(canonical), reference[1])), name)
+				.toBe(fs.realpathSync(contract));
+			for (const alias of ['.agents', '.github']) {
+				expect(fs.realpathSync(path.join(root, alias, 'skills', name, 'SKILL.md')), name)
+					.toBe(fs.realpathSync(canonical));
+			}
+		}
+		const text = fs.readFileSync(contract, 'utf8').replace(/\s+/g, ' ');
+		for (const rule of ['independent report specification', 'including passing assertions',
+			'neutral control', 'INSUFFICIENT_EVIDENCE', 'selected source-derived contracts',
+			'before HPC partitioning', '24-hour maximum', 'Profile device pools alone',
+			'2000ms completion grace', 'append-only', 'actual deployment reports']) {
+			expect(text, rule).toContain(rule);
+		}
+	});
+
+	test('authoring separates generated repetitions from verifier reentry', () => {
+		for (const name of ['create-dungeon', 'write-hooks']) {
+			const text = readSkill(name).replace(/\s+/g, ' ');
+			expect(text, name).toContain('`reentry` is verifier-only');
+			expect(text, name).toContain('`reentry: false`');
+			expect(text, name).not.toMatch(/engine (?:emits one|produces ONE) (?:funnel )?sequence per user/);
+		}
+	});
+
+	test('schema authoring uses current retention and profile projection contracts', () => {
+		const text = readSkill('create-dungeon').replace(/\s+/g, ' ');
+		expect(text).toContain('retentionCurve: {');
+		expect(text).toContain("type: 'logarithmic'");
+		expect(text).toContain('day7: 0.50');
+		expect(text).not.toContain('retentionCurve: [');
+		expect(text).toContain("stickyEventProps: ['Plan', 'Region']");
+		expect(text).toContain('`hasAttributionFlags` is derived');
+		expect(text).not.toContain('hasAdSpend, hasAttributionFlags');
+		expect(text).toContain('only to a named preset');
+		expect(text).toContain('`attempts` applies only to born-user first funnels');
+	});
+
+	test('hook guidance rejects known cursor, cohort, sorting, and schema misconceptions', () => {
+		const text = readSkill('write-hooks').replace(/\s+/g, ' ');
+		expect(text).toContain('Usage anchors do not accumulate previous funnel TTC');
+		expect(text).toContain('This skill never changes schema');
+		expect(text).toContain('const isWhale = hashCohort(uid, 2)');
+		expect(text).toContain('no manual output sort');
+		expect(text).toContain('not exact visible branch share');
+		expect(text).not.toContain('Trust pre-stamped');
+		expect(text).not.toContain("userEvents.sort((a, b)");
+		expect(text).not.toContain('Mixpanel TTC reads each step\'s FIRST occurrence');
+		expect(text).not.toContain('Only modify schema if');
+	});
+
+	test('verification references retain strict schema gates and independent evidence review', () => {
+		const verification = readSkill('verify-dungeon').replace(/\s+/g, ' ');
+		expect(verification).toContain('Every story, including passing targets');
+		expect(verification).toContain('independent report specification');
+		expect(verification).toContain('INSUFFICIENT_EVIDENCE');
+		for (const name of ['sql-recipes.md', 'counting-semantics.md', 'report-format.md']) {
+			const text = fs.readFileSync(path.join(skillsRoot, 'verify-dungeon/references', name), 'utf8');
+			expect(text, name).toContain('(alignment-contract.md)');
+			expect(text, name).not.toMatch(/Uniform enrichment is acceptable|Mark as STRONG by code inspection|Trust pre-stamped|cohorts of all sizes should produce clear signal/);
+		}
+		const sql = fs.readFileSync(path.join(skillsRoot, 'verify-dungeon/references/sql-recipes.md'), 'utf8');
+		expect(sql).toContain('any undeclared key, even at 100% coverage');
+		expect(sql).not.toContain('WITH step1 AS');
+		expect(sql).not.toContain('MIN(time::TIMESTAMP) FILTER');
+		expect(sql).not.toContain('implicit baseline');
+		expect(sql).not.toContain('events up to 30 days before');
+		expect(sql).not.toContain('derive from MAX(time)');
+		expect(sql).toContain('Uniform coverage does not make them acceptable');
+	});
+
+	test('operational skills preserve offline boundaries and the actual report', () => {
+		expect(readSkill('analyze-soup')).toContain('diagnostic heuristics, not alignment acceptance criteria');
+		expect(readSkill('create-project')).toContain('never run it automatically during offline verification');
+		expect(readSkill('powertools')).toContain('make no network calls');
+		expect(readSkill('warehouse-metrics')).toContain('Dry-run is not read-only');
+		const headless = readSkill('headless-build');
+		expect(headless).toContain('INSUFFICIENT_EVIDENCE');
+		expect(headless).toContain('Use each story\'s declared tolerance');
+		expect(headless).not.toContain('Use a wider tolerance');
+		const release = readSkill('release-check');
+		expect(release).toContain('`npm test` excludes alignment');
+		expect(release).toContain('node tests/alignment/run.mjs --sweep --timeout-ms=600000');
+		expect(release).toContain('report NOT RUN');
+	});
+});
+
 describe('1.8.0 skill contracts', () => {
 	test('release-check is shared and keeps publishing explicitly gated', () => {
 		const canonical = path.join(skillsRoot, 'release-check/SKILL.md');

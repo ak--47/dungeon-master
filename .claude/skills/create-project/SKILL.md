@@ -16,6 +16,12 @@ This is the step after a dungeon is authored, reviewed, and tweaked. It turns a
 local dungeon into one you can actually send to Mixpanel by creating the project
 and stamping `credentials` back into the file.
 
+Follow the [1.8.1 verification contract](../verify-dungeon/references/alignment-contract.md)
+when carrying verification claims into business context. Preserve the actual report
+definition and explicit counting options. Local evidence is selected source-derived
+verification, not live Mixpanel parity. Provisioning is a separately authorized
+handoff; never run it automatically during offline verification.
+
 ## What it does
 
 All work runs through the orchestrator `provision.mjs` (this skill's directory),

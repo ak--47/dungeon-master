@@ -8,7 +8,7 @@ effort: max
 
 # Verify Dungeon
 
-Verify a dungeon at full scale: run the story runner (`scripts/verify-stories.mjs`) as the primary mechanical check, validate schema integrity, investigate only what the runner can't settle (failures + `duckdb`-type assertions), write a single consolidated `hook-results.md`.
+Verify a dungeon at its configured scale: run `scripts/verify-stories.mjs`, validate schema, and review report semantics and evidence sufficiency for every story. Investigate misses, bespoke SQL, and semantic gaps, then write one consolidated `hook-results.md`.
 
 **Dungeon file(s):** `$ARGUMENTS` — single path, multiple space-separated paths, or glob pattern. In batch mode, process each dungeon sequentially through Steps 1–5, then write one consolidated report in Step 7. Use a unique `name` prefix per dungeon (e.g., `verify-fintech`, `verify-gaming`) so output files don't collide.
 
@@ -16,6 +16,7 @@ Verify a dungeon at full scale: run the story runner (`scripts/verify-stories.mj
 
 Load these on demand:
 
+- [references/alignment-contract.md](references/alignment-contract.md) - required 1.8.1 proof contract: independent report specification, neutral controls, sufficient populations, and source-derived limits.
 - [references/counting-semantics.md](references/counting-semantics.md) — Mixpanel counting rules, when to use the emulator vs DuckDB, emulator analysis types, identity-model verification, time-series, common gotchas.
 - [references/sql-recipes.md](references/sql-recipes.md) — every DuckDB query template (schema validation, identity / experiment invariants, hook archetype queries, pitfalls, TTC verification, dataset-window computation).
 - [references/report-format.md](references/report-format.md) — single + multi-dungeon report templates, per-hook detail block, verdict criteria, query log format, mandatory verification SQL file for user dungeons.
@@ -41,11 +42,18 @@ For each hook/pattern, catalog:
 - Which output file the signal lives in (user events, users, groups, standalone cadence shards, warehouse tables)
 - Mixpanel report instructions — flag missing/vague ones for the report
 
+Before running, write the independent report specification from the intended
+analysis, then compare the assertion's actual options and defaults with it.
+Plan paired baselines and neutral controls using the shared contract.
+
 ### Step 2: Run the dungeon
 
 The runner already exists at `scripts/verify-runner.mjs`. Use it — do NOT recreate.
 
-**ALWAYS run at full fidelity. Never use `--small` for verification.** `--small` runs (1K users, 100K events) compress per-cohort populations and shift ratios within ±25%, hiding real bugs and flagging fake ones. They exist in the runner only as a developer-troubleshooting escape hatch.
+**Run at full fidelity for acceptance.** `--small` is for troubleshooting only.
+Configured scale does not guarantee sufficient eligible users or converters.
+Report `INSUFFICIENT_EVIDENCE` when actual independent populations or observation
+horizons cannot support the claim; do not classify sparse data as a measured miss.
 
 ```bash
 node scripts/verify-runner.mjs <dungeon-path> <run-name>
@@ -106,14 +114,19 @@ without those shards, run the same SQL directly and report that CLI limitation.
 A standalone-only config without stories does not receive an automatic cadence
 audit; perform the explicit schema, tick, dimension, and identity checks below.
 
-**Verdicts are computed, not judged.** They include the population floor: a cohort smaller than the assertion's `minCohort` caps at WEAK — a 12-user cohort can no longer score NAILED regardless of how clean its ratio looks. See [report-format.md "Verdict criteria"](references/report-format.md#verdict-criteria-5-tier) for the mechanical definitions.
+**Verdicts are computed, not judged.** `minCohort` caps verdicts when supported
+selected-row population fields fall below the floor. It does not validate every
+denominator or establish full proof. Check actual eligible users/converters and
+mature observation windows separately. See [report-format.md "Verdict criteria"](references/report-format.md#verdict-criteria-5-tier).
 
-**What the LLM investigates after this step — and nothing else:**
-1. **Stories below STRONG** (WEAK / NONE / INVERSE) — root-cause via Step 5's decision table. A miss means fixing the hook or the assertion's derivation, never relaxing the number to match output.
-2. **`duckdb`-type assertions** — the runner executes them but can't interpret bespoke shapes; sanity-check their output against the story narrative.
-3. **Dungeons without a `stories` export** — legacy fallback: full per-hook flow (Step 5) for every documented hook.
+**What to review after this step:**
+1. **Every story, including passing targets** - check its options against the independent report specification and inspect neutral controls and population sufficiency. An inherited default can verify the wrong report.
+2. **Stories below STRONG** (WEAK / NONE / INVERSE) - root-cause via Step 5. Distinguish insufficient evidence from an effect failure; never relax a target to match output.
+3. **`duckdb`-type assertions** - the runner executes them but cannot validate the bespoke query's report semantics.
+4. **Dungeons without a `stories` export** - legacy fallback: Step 5 for every documented hook.
 
-Do NOT re-derive verdicts the runner already computed as passing. `hook-results.md` (Step 7) renders the runner's JSON.
+Preserve computed verdicts in `hook-results.md`. Add separate semantic and evidence
+statuses; a passing runner verdict alone does not establish acceptance.
 
 ### Step 4: Validate schema (BEFORE per-hook checks)
 
@@ -129,14 +142,18 @@ group keys, value column, and declared extras. Never apply user superProp or
 identity requirements to cadence records or warehouse rows.
 
 **Schema verdicts:**
-- **SCHEMA-PASS** — added column appears on 100% of events of this type (uniform enrichment, acceptable)
-- **SCHEMA-FAIL** — added column appears on <100% (flag stamping; conditional property creates inconsistent schema)
+- **SCHEMA-PASS** - every output property is declared or a recognized enabled engine/SDK field for this stream.
+- **SCHEMA-FAIL** - any undeclared property, even at 100% coverage. Uniform flag stamping still violates schema-first authorship.
+
+If the runtime validator permits uniform enrichment, record that result separately
+and enforce this stricter authorship gate explicitly.
 
 If any event type has SCHEMA-FAIL, flag it prominently in the report header with specific remediation: which hook line adds the property and how to remove it while preserving the intended pattern.
 
 ### Step 5: Investigate failures (and legacy no-stories dungeons)
 
-Applies only to the investigation targets from Step 3 — failing stories, `duckdb`-type assertions, and dungeons with no `stories` export.
+Applies to Step 3's targets: failed stories, semantic or evidence gaps (including
+passing targets), bespoke SQL, and dungeons with no `stories` export.
 
 **Decision: emulator vs DuckDB**
 
@@ -167,7 +184,9 @@ The emulator now covers lifecycle, flows, sessions, event breakdowns, formulas, 
 
 **Hand-written DuckDB funnel SQL diverges from Mixpanel — never hand-roll.** If you find yourself writing `WITH step1 AS ..., step2 AS ...` for a funnel, STOP — use `emulateBreakdown` with `funnelFrequency` instead.
 
-For emulator details, identity-model dungeons (must pass `profiles`), and time-series breakdown via `timeBucket`, see [counting-semantics.md](references/counting-semantics.md). For DuckDB query templates by hook archetype, pitfalls, and standard checks, see [sql-recipes.md](references/sql-recipes.md).
+For emulator options, emitted-evidence identity maps, profile segments, and
+time-series breakdown via `timeBucket`, see [counting-semantics.md](references/counting-semantics.md).
+For DuckDB diagnostics and standard checks, see [sql-recipes.md](references/sql-recipes.md).
 
 **Always run for every dungeon** (before per-hook checks):
 - Standard identity-model invariants (stitch counts, pre-existing user stamping) when the dungeon uses the identity model
@@ -200,7 +219,7 @@ Format and conventions: see [report-format.md "Query log format"](references/rep
 
 ### Step 7: Write `hook-results.md`
 
-Write to `dungeons/user/<name>/hook-results.md` for a user dungeon, else `./research/hook-results.md`. For story-backed dungeons, **the report renders the runner's JSON** (`verify-stories.mjs --json`): the hook summary table comes straight from the runner's per-story verdicts (story id, hook, archetype, observed vs target, verdict), and detailed blocks exist only for the Step-3 investigation targets. Use the templates in [report-format.md](references/report-format.md):
+Write to `dungeons/user/<name>/hook-results.md` for a user dungeon, else `./research/hook-results.md`. Preserve the runner's JSON verdicts alongside independent semantic and evidence statuses, eligible populations, neutral controls, and source-derived scope. Add details for Step 3's investigation targets. Use [report-format.md](references/report-format.md):
 - Single-dungeon report structure
 - Multi-dungeon report structure (when batch mode)
 - Per-hook detail block

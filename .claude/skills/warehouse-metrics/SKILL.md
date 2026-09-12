@@ -36,8 +36,14 @@ node .claude/skills/warehouse-metrics/deploy.mjs <dungeon-path> [--dataset dm_na
 - `--data-prefix`: explicit run artifact prefix, for example `/tmp/run/warehouse-demo` for `/tmp/run/warehouse-demo-WAREHOUSE-MANIFEST.json`.
 - `--dry-run`: prints the full `bq ls`, docs probe, metric list, load, source, preview, and create plan without executing commands or requiring credentials. It still writes the SQL files and renders `warehouse/GAPS.md` for review.
 
+Dry-run is not read-only. Preserve any existing actual deployment report before
+running it. Keep proposed setup gaps separate from recorded live outcomes.
+
 ## Preflight
 
+- Apply the [1.8.1 verification contract](../verify-dungeon/references/alignment-contract.md).
+	Offline verification stops at local evidence and the deployment handoff. Do not
+	automatically run deployment, endpoint probes, previews, or cloud commands.
 - The dungeon must have passed `/verify-dungeon` and produced local warehouse
 	files with `writeToDisk: true` and `gzip: false`. Use the exact verified
 	`--data-prefix` and its matching `-WAREHOUSE-MANIFEST.json`; preserve all table

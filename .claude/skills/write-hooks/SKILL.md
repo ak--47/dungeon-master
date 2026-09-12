@@ -28,8 +28,8 @@ In scope:
 
 Out of scope:
 - Schema changes (events, properties, funnels, superProps, userProps).
-  Only modify schema if the hook can't possibly work without a new field —
-  and even then, prefer changing the value enumeration over adding a new field.
+  Send missing fields or enumeration changes back to `/create-dungeon` for an
+  explicitly authorized schema edit before continuing. This skill never changes schema.
 - New top-level config knobs.
 - Removing the `hook: function...` body to start over with a new schema.
 
@@ -39,14 +39,15 @@ off, mix shift drags the blended rate) are better architected as initial
 conditions — duplicate funnels with swapped steps/props/`conversionRate`/
 `timeToConvert`/`weight` (see the "Structural trend engineering" section in
 `create-dungeon`). If a story reduces to structure, recommend the funnel
-change back to the schema instead of writing a hook to fight the engine —
-the knob IS the expected value, which makes the story band knob-derivable
-(NAILED-capable) instead of confounded (STRONG-capped). Hooks are for
+change back to the schema instead of writing a hook to fight the engine.
+Derive the expected effect from the knob, then verify the report against a neutral
+control; finite budgets and competing histories can change the measured effect. Hooks are for
 within-cohort behavior: segments doing more/less of something over time,
 property values that differ by cohort, injected bursts, lifecycle waves.
 
 ## Reference reading
 
+- [1.8.1 verification contract](../verify-dungeon/references/alignment-contract.md) - independent reports, neutral controls, counting boundaries, and evidence sufficiency.
 - `lib/hook-helpers/index.js` — atoms (cohort, mutate, timing, inject,
   identity). One file per group; full JSDoc on each atom.
 - `lib/hook-patterns/index.js` — high-level recipes (one per Mixpanel
@@ -71,11 +72,11 @@ Hooks fire in this order per user (see `CLAUDE.md` for the canonical reference):
 2. `"scd-pre"` — SCD entries created. Mutate in place; return ignored.
 3. For each funnel: `"funnel-pre"` → `"event"` (per step) → `"funnel-post"`.
 
-**`funnel-pre` is now reliable for temporal patterns.** Usage funnels advance a
-cursor after each run, so successive `meta.firstEventTime` values spread across
-the user's active window. Persona and world-event modifiers apply BEFORE the
-hook — the hook has final authority on `conversionRate`, `timeToConvert`, and
-`props`.
+**Usage anchors do not accumulate previous funnel TTC.** Each usage run samples
+from its eligible window or active day after onboarding. `meta.firstEventTime`
+is the supplied anchor, not necessarily the first emitted event time. Persona
+and world-event modifiers apply before `funnel-pre`; the hook can mutate
+`conversionRate`, `timeToConvert`, and `props` within engine constraints.
 4. `"event"` — for non-funnel user events from `events[]`. Return value REPLACES the event.
 5. `"everything"` — array of ALL the user's events. Return array to replace.
 
@@ -186,7 +187,7 @@ if (type === 'funnel-post' && meta.experiment) {
 | cohort | `hashCohort(id, pct)` | Deterministic pct% cohort (0–100 scale). **Use this first for hidden cohorts** — replaces ad-hoc `charCodeAt % N`. When one dungeon needs several NON-overlapping cohorts, gate on disjoint `hashFloat(uid)` bands instead (e.g. `[0, 0.45)`, `[0.45, 0.70)`) |
 | shape | `applyLifecycleWave(events, uid, opts)` | Dormancy window + resurrection burst for Lifecycle reports. When-to-use: the story is "users go quiet, then come back". Gap discipline: ONE stray value moment inside the window destroys the Resurrected read — size `dormantDays` to cover ≥2 whole lifecycle periods, keep the window inside the user's lifespan |
 | shape | `applyPathBias(events, uid, opts)` | Inject a Flows path after the user's FIRST anchor occurrence. When-to-use: the story is "X% of users take this route". `share` is a 0–1 FRACTION (not `hashCohort`'s pct scale); needs ~≥0.20–0.25 to survive Sankey top-3-per-level pruning; per-step gaps clamped ≥1s so ordering survives |
-| shape | `applySessionShape(events, uid, opts)` | Retime the whole stream into `sessionsPerWeek` clusters of `sessionMinutes`. When-to-use: session-duration/cadence stories (sessionMetrics reads). Retiming ONLY — no adds/drops; intra-session gaps stay <28min, inter-session >30min, no cluster crosses UTC midnight. Combine with `hashCohort` for per-role shapes; call BEFORE `applyPathBias` so injected paths keep their own tight gaps |
+| shape | `applySessionShape(events, uid, opts)` | Retime the same records for session-duration/cadence stories. Pass known dataset bounds; explicit-bound mode rejects insufficient capacity before mutation. Legacy unbounded overfull layouts can merge sessions or cross dataset end. Call BEFORE `applyPathBias` so injected paths keep their own tight gaps. |
 
 ### Hook anti-patterns
 
@@ -236,8 +237,9 @@ writing a custom hook:
   No special hook needed; engineer cohort behavior via `engagementDecay`,
   `dropEventsWhere`, or per-user filtering in `everything`.
 - **Session metrics** ("avg session has 6 events, lasts 4 minutes") — verify
-  with `emulateBreakdown({ type: 'sessionMetrics' })`. Trust pre-stamped
-  `session_id`. Engineer via `avgEventsPerUserPerDay` + `engagementDecay`.
+  with `emulateBreakdown({ type: 'sessionMetrics' })`. Derive sessions from
+  timestamps; stamped `session_id` is diagnostic or explicit legacy mode.
+  Engineer with `applySessionShape`, passing known dataset bounds.
 - **Reentry funnels** ("power users complete the funnel 3+ times") — set
   `Funnel.reentry: true` (verifier hint). Engineer multiple completions via
   `funnel-post` injecting cloned funnel sequences for that cohort.
@@ -254,9 +256,10 @@ writing a custom hook:
   breakdown with `timeBucket: 'week'`. Engineer via temporal-windowed hooks
   using `DATASET_START.add(N, 'days')`.
 - **Identity-model dungeons** — when `identity.avgDevicePerUser > 0`
-  (or the deprecated `hasAnonIds: true`), ALWAYS pass `profiles` to
-  verification. Auto-builds identity map merging pre-auth `device_id`
-  events with post-auth `user_id`.
+  (or the deprecated `hasAnonIds: true`), pass `profiles` for profile segments.
+  For identity proof, pass an explicit `identityMap` derived from emitted valid
+  both-ID events. Profile pools alone establish no link; the compatibility helper
+  can merge users without emitted stitch evidence. See the shared contract.
 
 **Schema-first reminder:** exclusion events must be declared in `events[]`
 before referencing them as `Funnel.exclusionEvents` — the validator throws
@@ -270,9 +273,9 @@ emulator can re-derive.
 | Pattern | Mixpanel analysis | Hook type | Caveat (HOOKS.md) |
 |---------|-------------------|-----------|-------------------|
 | `applyFrequencyByFrequency` | Insights — count(A) by per-user count(B) | everything | `binBy` defaults to `'distinctDays'` (v1.6) — bins match Mixpanel's per-user distinct-day counting, not raw event totals |
-| `applyFunnelFrequencyBreakdown` | Funnels — completion by per-user count(X) | funnel-post | When funnels share a step prefix, restrict scaling to the target funnel — scaling every instance lets first-occurrence funnel evaluation assemble chains across unscaled instances and the ratio never reaches the report |
+| `applyFunnelFrequencyBreakdown` | Funnels - completion by per-user count(X) | funnel-post | Restrict scaling to the target funnel. Completed histories can combine competing instances; verify explicit report options and paired lift instead of assuming the per-run factor equals the report ratio. |
 | `applyAggregateByBin` | Insights — avg(prop X) by per-user count(B) | everything | Same `binBy: 'distinctDays'` default as above |
-| `applyTTCBySegmentV2` | Funnel TTC — broken down by user-property segment | everything | v1 (`applyTTCBySegment`, funnel-post) is **deprecated**: Mixpanel TTC reads each step's FIRST occurrence per user, so per-run gap scaling only reaches the report on `isFirstFunnel` runs. V2 finds the greedy first sequence (`findFirstSequence`) and scales that |
+| `applyTTCBySegmentV2` | Funnel TTC by user-property segment | everything | v1 (`applyTTCBySegment`, funnel-post) is deprecated. V2 scales `findFirstSequence`; verify the report's completed histories separately, including restart, grace, windows, and reentry. Neither helper guarantees the requested report ratio. |
 | `applyAttributedBySource` | Conversions by Source (first/last touch) | everything | OVERWRITES the engine-stamped touch the chosen model reads; never stamps UTMs onto unstamped events (would blow the `maxTouchpointsPerUser` cap and land outside the last-10 lookback) |
 
 Use a pattern when the trend matches its analysis 1:1. Drop down to atoms when
@@ -298,13 +301,17 @@ non-negotiable design rule learned the hard way:
   visualization even though the data is there. Label-only path reads can
   INVERT when a busier cohort glues extra visible events between path steps —
   assert the share on the cohort you engineered, not globally.
+  The helper is append-only: `share` selects injection recipients, not exact
+  visible branch share. Keep competing events and measure paired branch lift.
 - **`session-shape`** (`applySessionShape`) — 30-MIN STRADDLING + MIDNIGHT
-  RULE. Mixpanel derives sessions with a 30-min idle timeout and splits at
-  UTC midnight. Engineered cadences must keep intra-session gaps clearly
+  RULE. The local default derives sessions with a 30-min idle timeout and splits
+  at UTC midnight, with a 24-hour maximum. Engineered cadences must keep intra-session gaps clearly
   UNDER 30min and inter-session gaps clearly OVER it — a gap that straddles
   the timeout makes session counts jitter across runs. Never let an
   engineered session cross UTC midnight (the day split cuts it in two). The
-  atom guarantees all three; hand-rolled retiming must too.
+  bounded helper checks placement capacity before mutation. Legacy unbounded
+  overfull requests can merge sessions. Pass known bounds and measure derived
+  sessions; do not infer dataset end from the last observed event.
 - **`composition-drift`** — the breakdown's SHARE of a segment moves over
   time while totals stay flat (e.g. plan-mix shifts toward premium). Engineer
   by flipping an existing property value on a date-gated cohort, never by
@@ -339,9 +346,9 @@ events.push(clone);                            // ✅ inject from template
 return events.filter(e => !shouldDrop(e));     // ✅ filter inside `everything`
 ```
 
-If a trend genuinely needs a new property and the schema doesn't have it, add
-the property to the EVENT CONFIG with a default value (typically `[null]` or
-`[false]`), not via the hook.
+If a trend needs an undeclared property, stop that pattern and hand the schema
+request to `/create-dungeon`. Resume only after an authorized schema edit declares
+the default. Do not add the field or change its enumeration in this skill.
 
 ## Identity-aware hook patterns
 
@@ -463,8 +470,9 @@ Rules:
 - `floor` must itself be derived (e.g. `target * 0.8`) — never hand-tuned to
   a run. A missed assertion means fixing the hook or the derivation, never
   relaxing the number to match output.
-- Set `minCohort` from the cohort math (share × numUsers × ~0.5 safety) so
-  reduced-scale runs cap at WEAK instead of passing on noise.
+- Set `minCohort` from the planned eligible population, then inspect the actual
+  selected-row population fields and independent users/converters. The guard
+  does not prove every denominator. Report insufficient evidence separately.
 - One story per pattern; story `hook` matches the doc-block numbering (`H3`).
 - The `assert` function escape hatch is discouraged — each use needs a
   comment saying why the declarative `expect` grammar can't express it.
@@ -474,12 +482,12 @@ Rules:
 
 The order of operations inside the everything hook matters when hooks interact:
 
-1. **SuperProp stamping** — stamp profile values onto events (always first)
+1. **Profile projection** - prefer schema-declared `stickyEventProps`; preserve projected values in clones
 2. **Temporal value mutations that DON'T need cloned events** — e.g., version stamping
 3. **Behavioral detection + event cloning** — agentic detection, KYC clones, pro clones, magic number clones
 4. **Event filtering** — churn, retention, rate-limit drops
-5. **Temporal value mutations that NEED cloned events** — e.g., spring price boost, gas spike, outage errors (always LAST before sort)
-6. **Sort** — `userEvents.sort((a, b) => new Date(a.time) - new Date(b.time))`
+5. **Temporal value mutations that NEED cloned events** - e.g., spring price boost, gas spike, outage errors (last mutation)
+6. **Return** - the engine auto-sorts after `everything` by default; no manual output sort
 
 **Why:** If a temporal mutation runs before cloning, cloned events that land in
 the temporal window miss the mutation. Moving temporal value mutations to the
@@ -489,7 +497,8 @@ end ensures ALL events in the window — original and cloned — receive the eff
 
 When a dungeon relied on deprecated config blocks (`subscription`, `attribution`,
 `features`, `geo`, `anomalies`) for properties that hooks depend on, those
-properties no longer appear in the data. Replace them:
+properties no longer appear in the data. Request an authorized schema migration
+through `/create-dungeon` first:
 
 1. Add the property to `superProps` and `userProps` with default values
 2. Assign meaningful values in the `user` hook (based on hash, persona, or profile)
@@ -506,8 +515,8 @@ control group, but not so broad they catch everyone:
 | Detection | Problem | Fix |
 |-----------|---------|-----|
 | `events.some(e => e.event === X)` with common X | 90%+ of users qualify | Require 3+ events: `events.filter(...).length >= 3` |
-| `charCodeAt(0) % 50 === 0` | Only 2% of users | Increase modulus denominator or use `% 10` for 10% |
-| `profile.tier === "premium"` | Fixed by config distribution | Adjust userProps distribution if cohort too small |
+| `charCodeAt(0) % 50 === 0` | First-character distributions are biased; modulo does not imply 2% | Use `hashCohort(uid, 2)` and measure the realized population |
+| `profile.tier === "premium"` | Fixed by config distribution | Request a schema distribution change if cohort is too small |
 | `earlyEvents.length >= 5` for a low-weight event | 0% qualify (impossible threshold) | Check actual distribution first, set at ~80th percentile |
 
 Target: 10-30% of users in the affected cohort for clean signal at 10K users.
@@ -546,11 +555,12 @@ Reserve drops for a single churn/retention effect per dungeon.
 
 Apply these BEFORE handing off to `/verify-dungeon`. See HOOKS.md §9 for full recipes.
 
-### isStrictEvent: false is NOT optional for hook-read events
+### Opt out of strict events only when standalone occurrences are required
 
 If your hook reads `event === 'X'` and `X` is also a funnel-step event, the
 validator auto-promotes it to `isStrictEvent: true` and the engine
-won't emit standalone occurrences. Your cohort goes empty.
+won't emit standalone occurrences. Funnel-generated occurrences remain readable;
+only a cohort that depends on additional standalone traffic needs the opt-out.
 
 ```js
 // BAD — login is a funnel step + read by hook
@@ -559,16 +569,15 @@ events: [{ event: 'login', weight: 4, properties: {...} }]
 events: [{ event: 'login', weight: 4, isStrictEvent: false, properties: {...} }]
 ```
 
-Audit: any event referenced in the `everything` hook by name AND appearing
-as a funnel step needs `isStrictEvent: false`.
+Audit whether the cohort needs standalone occurrences. Request any required
+`isStrictEvent: false` schema edit through `/create-dungeon`; do not change it here.
 
 ### Reentry on per-instance loops
 
-Funnels named "X loop" / "X cycle" / "session" / repeated user behaviors
-need `Funnel.reentry: true`. Without it, the engine produces ONE funnel
-sequence per user — no recurring loops. Examples that need it: workout
-loop, match flow, search-to-book, order fulfillment, engagement loop, tour
-funnel.
+**`reentry` is verifier-only.** Usage volume, funnel selection, and the event
+budget control generated repetitions. Set `reentry: true` for a report that
+counts repeated histories; it does not generate loops. Local totals also
+default to `reentry: false`, so preserve the report's explicit counting options.
 
 ### Hash-based cohorts produce textbook signals
 
@@ -577,12 +586,13 @@ deterministically:
 
 ```js
 // 2% whales with 50x trade amount → long-tail Insights distribution
-const isWhale = uid.charCodeAt(0) % 50 === 0;
+const isWhale = hashCohort(uid, 2);
 if (isWhale && e.event === 'swap') e.trade_amount_usd *= 50;
 ```
 
 Use a large multiplier (≥10x, ideally 50x) so the signal beats soup noise.
-Use `% 50` for ~2% whales, `% 25` for ~4% bots, `% 10` for ~10% cohorts.
+Use `hashCohort(uid, 2)`, `hashCohort(uid, 4)`, or `hashCohort(uid, 10)` for
+those target percentages, then check realized eligible cohort sizes.
 
 ### Hook ordering inside `everything`
 
@@ -604,13 +614,13 @@ counts even after reduction. Either:
 ```js
 // BAD — profile.level isn't in userProps; resolves to undefined
 if (meta.profile.level >= 50) e.gold_earned *= 3;
-// GOOD — verify by SPREAD instead, OR add level to userProps with weighted distribution
+// Request a schema declaration before targeting this profile segment.
 ```
 
 When the hook references a missing profile field, you can still get the
 data spread you want (gold range), but the cohort can't be analytically
-recovered. Either add the userProp or rewrite the hook to use a hash
-cohort.
+recovered. Request the missing userProp through `/create-dungeon`, or rewrite
+the hook to use a hash cohort without changing schema.
 
 ## Workflow
 
@@ -648,11 +658,14 @@ cohort.
    If verify-dungeon returns WEAK, NONE, or INVERSE on any pattern at full
    fidelity, return to step 4 and refine — fix the hook or the derivation,
    never relax a threshold to match output. Iterate until all patterns score
-   STRONG or NAILED.
+  STRONG or NAILED with report semantics, neutral controls, and sufficient
+  independent populations verified. Insufficient evidence requires more evidence,
+  not an automatic hook rewrite or a weaker target.
 
 ## Stopping condition
 
-Stop after `/verify-dungeon` reports all engineered patterns as STRONG or NAILED,
+Stop after `/verify-dungeon` reports all engineered patterns as STRONG or NAILED
+and the shared proof contract is satisfied,
 OR after three iterations without convergence — at that point, document what's
 still off in the dungeon's overview comment and report the gap to the user.
 
