@@ -1,37 +1,59 @@
-# Offline alignment gate
+# offline alignment checks
 
-Run from the isolated alignment worktree. Use installed dependencies only.
+start with [REPORT.md](REPORT.md) for recorded results and open blockers.
+[INVENTORY.md](INVENTORY.md) lists author controls and proof gaps.
+[API-COMPATIBILITY.md](API-COMPATIBILITY.md) explains output changes and retained defaults.
+[PR.md](PR.md) is the local review handoff. no GitHub PR has been opened here.
+
+## run from the isolated worktree
+
+use installed dependencies only. these commands install nothing and do not prune data/tmp.
 
 ```sh
+cd /Users/ak/code/dungeon-master-alignment-work
 set -o pipefail
 node tests/alignment/run.mjs --preflight 2>&1 | tail -50
 node tests/alignment/run.mjs 2>&1 | tail -50
+node tests/alignment/run.mjs --sweep --timeout-ms=600000 2>&1 | tail -50
 ```
 
-The runner runs the build gate (`tsconfig.build.json`, no emit), then the
-offline preflight, then the serial regression gate. `--preflight` stops after
-the first two stages. The installed TypeScript major version controls whether
-the TS6 deprecation flag is needed. No install or default Vitest suite runs.
+| mode | stages |
+| --- | --- |
+| `--preflight` | declaration build check with no emit, then offline preflight |
+| no mode | build, preflight, serial alignment regression tests |
+| `--sweep` | build, preflight, selected sweep infrastructure checks, then bounded generated sweep |
 
-Every build/test stage executes under `/usr/bin/sandbox-exec -p
-'(version 1) (allow default) (deny network*)'`. The runner itself is a supervisor;
-the OS policy covers each test process and its descendants. The preflight
-requires EPERM/EACCES for both local TCP bind and local TCP connect. ECONNREFUSED,
-timeouts, and successful connections fail. It uses no external address.
-Only macOS is supported; other platforms fail closed. Network denial is not a
-filesystem sandbox. The dedicated configuration has no global setup or cleanup.
-Its cache location is local to this worktree, not the shared node_modules link.
+the sweep does **not** run the full regression gate. each command has its own deadline.
+the runner uses the installed TypeScript version and adds the TS6 compatibility flag when needed.
+the default sweep output replaces [sweep-results.json](sweep-results.json) and
+[sweep-results.md](sweep-results.md). use `--output=tests/alignment/.cache/review-sweep`
+to retain the committed evidence during a diagnostic rerun.
 
-The single 600-second deadline covers build, preflight, regression, and any
-future sweep. `--timeout-ms=N` can lower it, never raise it. The supervisor kills
-the active detached process group with SIGKILL when time expires (exit 124),
-including a blocked worker. SIGINT/SIGTERM also kill that group. The infrastructure
-test exercises a deadline during build, not a future generation worker.
+## the sandbox fails closed
 
-`--sweep` first requires the regression gate to pass, then selects only
-`*.sweep.test.js`. No sweep fixtures exist in this execution slice; requesting
-a sweep after a green gate therefore fails on empty collection. Do not run it yet.
+every compiler, test, and generation child runs under macOS
+`/usr/bin/sandbox-exec -p '(version 1) (allow default) (deny network*)'`.
+descendants inherit network denial. other platforms fail closed.
+preflight requires EPERM/EACCES from local TCP bind and connect; refusal, timeout,
+or success fails the check. it contacts no external endpoint.
 
-The normal Vitest configuration excludes this directory. Importing that config
-in the infrastructure test only inspects it; it never invokes its global setup.
-The normal suite's data/tmp pruning is not part of this harness.
+the supervisor enforces a maximum 600-second deadline across each invocation.
+`--timeout-ms=N` can lower it, never raise it. expiry kills the active process
+group and descendants with SIGKILL and exits 124. SIGINT/SIGTERM also kill the group.
+the sweep tests include a real hanging worker and descendant termination check.
+
+network denial does not restrict filesystem writes. the dedicated
+[vitest.config.js](vitest.config.js) disables global setup and cleanup and uses
+worktree-local cache storage. do not substitute the default suite or the run-dungeon
+task; their setup can prune data/tmp.
+
+## final gate remains pending
+
+after the provenance repair, the main executor must run the no-mode gate above
+and selected existing funnel regressions with a reviewed, committed, no-prune
+configuration. the local repair config currently covers contracts plus eight old
+unit files; it must be included in the reproducible handoff. keep OS network denial
+and the bounded supervisor when integrating those checks.
+
+record the exact final command, commit, test counts, and result in
+[REPORT.md](REPORT.md). a completed sweep alone does not close this gate.

@@ -2,7 +2,9 @@
 
 Sources: [types.d.ts](../../types.d.ts), [README.md](../../README.md), [HOOKS.md](../../HOOKS.md), both helper barrels, and read-only [coverage.json](coverage.json). This inventory groups actual author inputs. Output records, resolved types, hook metadata, internal runtime/storage/context fields, repeated documentation mentions, and arbitrary generated property names are excluded. An arbitrary config index signature does not make every key a supported input.
 
-Evidence: `H` = [helpers-generated.test.js](helpers-generated.test.js), 15 tests / 11 pass / 4 red, three seeds, 102 generated runs. `G` = existing [generated.test.js](generated.test.js) scenario evidence; not rerun here, and its registry classification is not a current pass claim. `gap` means no generated proof in this execution slice. [HELPERS-FAILURES.md](HELPERS-FAILURES.md) records metrics, source references, and red assertions.
+Evidence: `H` = [helpers-generated.test.js](helpers-generated.test.js), latest recorded 15/15 passed with 13 shape contracts; see [SHAPE-REPAIRS.md](../../SHAPE-REPAIRS.md). `G` = [generated.test.js](generated.test.js), latest recorded 30/30 passed with 11 stable hashes; see [GENERATED-FAILURES.md](GENERATED-FAILURES.md). `S` = the completed 297-cell [sweep-results.md](sweep-results.md), with 125 supported and 172 insufficient-evidence cells. These are scoped recorded runs, not a final gate result. The provenance blocker remains open in [REPORT.md](REPORT.md).
+
+The registry has **321 canonical entries**, including all 23 helpers and six patterns: 14 exact, three directional, nine calibrated, six structural, 281 gap, eight unsupported. Classes describe G's proof scope, not a tested-feature percentage. H and S add separately cited evidence; a G gap can have an H proof. `gap` below means no generated proof for the named behavior in this audit. Historical red records stay unchanged, including [HELPERS-FAILURES.md](HELPERS-FAILURES.md).
 
 ## dungeon controls
 
@@ -12,17 +14,17 @@ Canonical nested `credentials`, `switches`, and `identity` share their controls 
 |---|---|---|
 | metadata | version, appName, name | gap: logging/serialization only |
 | reproducibility | seed, userSeed, concurrency | H/G: three seeds, concurrency=1; userSeed, parallel identity and cross-run equality gaps |
-| population/window | numUsers, numEvents, avgEventsPerUserPerDay, numDays, datasetStart, datasetEnd | H/G fixed configurations; sweeps, precedence, exact count capacity gaps here |
+| population/window | numUsers, numEvents, avgEventsPerUserPerDay, numDays, datasetStart, datasetEnd | H/G fixed UTC window; S sampled sizes through 10,000 plus 11,111-user near-cap group at rates 0.5/0.9; long windows, precedence, exact-count capacity remain gaps |
 | generation limits | strictEventCount, batchSize | gap: capacity/top-up, batch equivalence |
 | output/operations | format, writeToDisk, cleanup, gzip, verbose, onProgress, progressInterval | H: in-memory, no network; all operational behavior gaps |
 | credentials | token, region, serviceAccount, serviceSecret, projectId | disabled; imports intentionally outside sandbox audit |
-| identity | avgDevicePerUser, sessionTimeout, hasSessionIds, isAnonymous | H: 0/1/4 devices, 5/30-minute full-stream sessions; enabled auth red; anonymous-only mode gap |
+| identity | avgDevicePerUser, sessionTimeout, hasSessionIds, isAnonymous | H passed: 0/1/4 devices, enabled auth/retries, 5/30-minute full-stream sessions; anonymous-only mode gap; new provenance blocker pending |
 | generated enrichment | hasAvatar, hasLocation, hasIOSDevices, hasAndroidDevices, hasDesktopDevices, hasBrowser, singleCountry | gap: distributions and country validation |
-| attribution/ad spend | hasCampaigns, campaignPerUser, maxTouchpointsPerUser, hasAdSpend | H engine-touch endpoint preservation; per-user campaign, cap sweep, ad spend gaps |
-| schema/value | events, userProps, superProps, stickyEventProps, autoPowerLaw | H declared numeric property and cloned existing events; G weights; sticky projection/power-law/context functions gaps |
+| attribution/ad spend | hasCampaigns, campaignPerUser, maxTouchpointsPerUser, hasAdSpend | H endpoint preservation; G five-field campaign stickiness, flagged eligibility and cap=2 passed; cap sweep/ad spend gaps |
+| schema/value | events, userProps, superProps, stickyEventProps, autoPowerLaw | H numeric property/clones; G weights, sticky projection and ctx.profile.segment passed; other context fields and power-law gaps |
 | funnels/hooks | funnels, alsoInferFunnels, hook, autoSortAfterEverything | H everything-hook output, final sorting exercised; other hook stages, inference, false-sort option gaps |
 | acquisition | macro, percentUsersBornInDataset, bornRecentBias, preExistingSpread | H 0/100 born with custom macro; preset caps and acquisition shape sweeps gaps here |
-| cadence/retention | soup, avgActiveDaysPerUser, retentionCurve, engagementDecay | G retention directional evidence only; calibrated retention, day1 spill, precedence, decay gaps |
+| cadence/retention | soup, avgActiveDaysPerUser, retentionCurve, engagementDecay | G/S D7 direction passed in current mixed-noise fixture; old all-strict G1 remains capacity-limited; calibrated probabilities, long-window soup interactions, day1 spill, precedence, decay/reactivation gaps |
 | segments/incidents | personas, worldEvents, dataQuality | G persona/world scenarios; other members below remain gaps |
 | other tables | scdProps, mirrorProps, groupKeys, groupProps, lookupTables, standaloneEvents, warehouseMetrics | gap: no helper-slice generated table proofs |
 
@@ -30,16 +32,16 @@ Canonical nested `credentials`, `switches`, and `identity` share their controls 
 
 | input | documented members/forms | evidence or precise gap |
 |---|---|---|
-| ValueValid | scalars, arrays, nested records, WeightedValue.__weights, zero-arg/value-context functions | H numeric constant; G 80/20 versus 50/50 weighted values; other forms gap |
-| EventConfig | event, weight, properties, isFirstEvent, isStrictEvent, isAuthEvent, isAttributionEvent, isSessionStartEvent, isChurnEvent, returnLikelihood, relativeTimeMs | H auth red, mixed names/properties exercised; weight calibration, all other flags and relative time gap |
-| Funnel | name, description, sequence, weight, isFirstFunnel, conversionRate, timeToConvert, props, order, requireRepeats, bindPropsIndex, attempts, conditions, experiment, conversionWindowDays, exclusionEvents, reentry, stepFilters | G conversion/conditions/TTC; H attempts/auth red; other controls gap |
-| AttemptsConfig | min, max, conversionRate | H min=max 0/2, final 70%; no random-range calibration; emitted retries red |
-| FunnelConditionOperators | eq, neq, in, nin, gt, gte, lt, lte | G eq/in only; others gap |
+| ValueValid | scalars, arrays, nested records, WeightedValue.__weights, zero-arg/value-context functions | H numeric constant; G 80/20 versus 50/50 weights and profile-context correlation passed; other forms gap |
+| EventConfig | event, weight, properties, isFirstEvent, isStrictEvent, isAuthEvent, isAttributionEvent, isSessionStartEvent, isChurnEvent, returnLikelihood, relativeTimeMs | H auth passed; G standalone weight contrast, explicit non-strict traffic and flagged campaign eligibility passed; remaining flags/relative time gaps |
+| Funnel | name, description, sequence, weight, isFirstFunnel, conversionRate, timeToConvert, props, order, requireRepeats, bindPropsIndex, attempts, conditions, experiment, conversionWindowDays, exclusionEvents, reentry, stepFilters | G conversion/conditions/TTC passed; H attempts/auth passed in recorded slice; other generation controls gap |
+| AttemptsConfig | min, max, conversionRate | H min=max 0/2, final 70%, emitted retries passed; random-range calibration gap |
+| FunnelConditionOperators | eq, neq, in, nin, gt, gte, lt, lte | G all eight passed against independently filtered profile sets for numeric 1..4; other domains/boundaries gap |
 | stepFilters | prop, op, value | gap: generated filter truth tables |
 | ExperimentConfig | name, stampProfile, startDaysBeforeEnd, sticky, variants | G exposure-based effect; profile/sticky/time boundary gaps |
 | ExperimentVariant | name, weight, conversionMultiplier, ttcMultiplier | G multipliers; assignment weight and named variant integrity gaps |
 | Persona | name, weight, properties, conversionModifier, eventMultiplier, ttcModifier, engagementDecay | G three modifiers; weight/property/decay gaps |
-| WorldEvent | name, type, startDay, duration, affectsEvents, volumeMultiplier, conversionModifier, injectProps, aftermath.duration, aftermath.volumeMultiplier | G affected Browse volume and Search control; wildcard, conversion, aftermath, injected values gaps |
+| WorldEvent | name, type, startDay, duration, affectsEvents, volumeMultiplier, conversionModifier, injectProps, aftermath.duration, aftermath.volumeMultiplier | G Browse volume/Search control and declared incident flag selectivity passed; wildcard, conversion, aftermath gaps |
 | EngagementDecay | model, halfLife, floor, reactivationChance, reactivationMultiplier | gap: decay/resurrection calibration |
 | DataQuality | nullRate, duplicateRate, lateArrivingRate, timezoneConfusion, botUsers, botEventsPerUser, nullProps, emptyEvents | gap: rates and interactions |
 | MacroConfig | preset, bornRecentBias, percentUsersBornInDataset, preExistingSpread | presets flat/steady/growth/viral/decline; no preset sweep in H |
@@ -58,7 +60,7 @@ Canonical nested `credentials`, `switches`, and `identity` share their controls 
 | text keyword vocabulary | brands, business_impact, categories, comparisons, competitors, credibility, emotions, error_messages, errors, events, features, issues, locations, metrics, products, services, specific_issues, specific_praise, team, technical, user_actions, vendors, versions | content inputs; gap for each vocabulary family |
 | TextBatchOptions | n, related, returnType, sharedContext, tone | auxiliary API; gap |
 
-Verifier query controls (`EmulateOptions`, retention/session query options, funnel count modes and predicates) are a separate report API, not dungeon generation knobs. Existing contracts cover portions of that API; H independently derives UTC days, full-stream sessions and emitted stitch maps. Query equivalence beyond the explicit source references is unclaimed. Loader path/array/raw-source input forms and serialization helpers are also gaps in H.
+Verifier query controls (`EmulateOptions`, retention/session query options, funnel count modes and predicates) are a separate report API, not dungeon generation knobs. Existing contracts cover portions of that API; H independently derives UTC days, full-stream sessions and emitted stitch maps. Non-UTC project timezone, list-valued HPC, and project hidden/excluded session-event parity remain unsupported or unproved here. Totals retains `reentry: false` by default. Query equivalence beyond explicit local source references is unclaimed; analytics and live Mixpanel were never executed. Loader path/array/raw-source forms and serialization remain gaps.
 
 ## every helper and pattern export
 
@@ -79,15 +81,15 @@ All **23 helper exports and 6 pattern exports** appear below. Grouped names shar
 | scaleTimingBetween, scaleFunnelTTC, findFirstSequence | gap: independent generated proofs; G V2 pattern is separate evidence |
 | injectAfterEvent, injectBetween, injectBurst | gap: position, competing events, clipping |
 | injectOnNewDays | H exact calendar-day target within lifespan capacity, fresh IDs, competing Search unchanged; rolling-period equivalence unclaimed |
-| isPreAuthEvent, splitByAuth | H timestamp partition and actual stitch; generated chronology red; never-auth partition covered |
+| isPreAuthEvent, splitByAuth | H timestamp partition, actual stitch, generated chronology and never-auth partition passed in recorded slice; new provenance blocker remains open |
 | applyLifecycleWave | H empty selected-event gap, >=3 burst rows, unaffected Search; dropAll and lifecycle report classification gaps |
-| applyPathBias | H exact clone counts; immediate first-branch proof red for seed 89; share calibration/top-N gaps |
-| applySessionShape | H full-stream exact session formula and event preservation red at end boundary; timeout sensitivity passes |
+| applyPathBias | H exact append payloads/order and paired branch lift passed under revised acceptance (>=95% share, >=15 percentage points lift); original seed-89 immediate-branch red preserved; arbitrary-share/top-N gaps |
+| applySessionShape | H bounded full-stream session formula, exact emitted ID preservation and timeout sensitivity passed; legacy omitted-bound behavior retained; arbitrary capacity combinations gap |
 | applyAggregateByBin | H exact numeric sum/count implied average by distinct UTC days and explicit events; rolling/report histogram not claimed |
 | applyFrequencyByFrequency | H exact target-event volume by both axes; unchanged active days; this does not prove frequency-histogram lift |
 | applyFunnelFrequencyBreakdown | gap: generated repeated funnel counts and true report bins |
 | applyTTCBySegment | gap: legacy pattern generated proof |
-| applyTTCBySegmentV2 | G hook-ttc scenario only; current status in existing generated result/failure artifacts |
+| applyTTCBySegmentV2 | G/S paired hook-TTC passed at 3,000 users, Q near 0.25 and N=1; smaller insufficient cells retained; other patterns/windows gap |
 | applyAttributedBySource | H firstTouch/lastTouch/both lifetime endpoints, exact touch set, neutral controls; conversion-aware lookback, weighted calibration and multi-touch report gaps |
 
 Removed controls stay unsupported: persona churnRate/activeWindow/soupOverride and legacy subscription/attribution/geo/features/anomalies. No output field count or tested-feature percentage is reported.
