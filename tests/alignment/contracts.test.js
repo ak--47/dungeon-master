@@ -98,6 +98,57 @@ describe('C1: ordered shared-edge restart', () => {
   });
 });
 
+describe('C1: shared-edge finalization without reentry', () => {
+  const modes = [
+    {},
+    { reentry: false },
+    { countMode: 'uniques' },
+    { countMode: 'uniques', reentry: false },
+    { countMode: 'totals' },
+    { countMode: 'totals', reentry: false },
+  ];
+
+  describe.each(['direct', 'HPC'])('%s', (evaluation) => {
+    function evaluate(events, funnelSteps, options) {
+      return evaluation === 'HPC'
+        ? evaluateFunnelHPC(events.map((record) => ({ ...record, plan: 'x' })), funnelSteps, 'plan', options).get('x')
+        : evaluateFunnel(events, funnelSteps, options);
+    }
+
+    it.each(modes)('finalizes before late exclusion: %j', (options) => {
+      const events = [event('A', 0), event('B', 10), event('A', 20), event('X', 21)];
+      const output = evaluate(events, ['A', 'B', 'A'], { ...options, exclusionSteps: [{ event: 'X' }] });
+      const attempts = Array.isArray(output) ? output : [output];
+      expect(attempts).toHaveLength(1);
+      expect(attempts[0]).toMatchObject({
+        completed: true, reached: 2, completions: 1, terminatedByExclusion: false, excludedAtStep: null,
+        stepTimes: [baseMs, baseMs + 10000, baseMs + 20000],
+      });
+    });
+
+    it.each(modes)('retains late exclusion grace on a nonshared edge: %j', (options) => {
+      const events = [event('A', 0), event('B', 10), event('C', 20), event('X', 21)];
+      const output = evaluate(events, ['A', 'B', 'C'], { ...options, exclusionSteps: [{ event: 'X' }] });
+      const attempts = Array.isArray(output) ? output : [output];
+      expect(attempts).toHaveLength(1);
+      expect(attempts[0]).toMatchObject({
+        completed: false, reached: 1, completions: 0, terminatedByExclusion: true, excludedAtStep: 2,
+      });
+    });
+
+    it.each([{ countMode: 'totals' }, { countMode: 'totals', reentry: false }])(
+      'does not generate a second totals attempt: %j', (options) => {
+        const events = [event('A', 0), event('B', 10), event('A', 20), event('B', 30), event('A', 40)];
+        const attempts = evaluate(events, ['A', 'B', 'A'], options);
+        expect(attempts).toHaveLength(1);
+        expect(attempts[0]).toMatchObject({
+          completed: true, reached: 2, completions: 1,
+          stepTimes: [baseMs, baseMs + 10000, baseMs + 20000],
+        });
+      });
+  });
+});
+
 describe('C2: inclusive completion grace', () => {
   it.each([[1.999, 1], [2, 1], [2.001, 2]])('handles a restart %s seconds after completion', (offset, completions) => {
     const events = [event('A', 0), event('B', 10), event('A', 10 + offset), event('B', 20)];
