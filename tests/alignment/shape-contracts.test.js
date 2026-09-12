@@ -27,11 +27,34 @@ function partition(events) {
 beforeEach(() => initChance('shape-contracts'));
 
 describe.sequential('session shape boundary contracts', () => {
+  it('preserves legacy full-day placement for a short noon stream without bounds', () => {
+    const events = [record(START + 12 * 60 * MINUTE, 0), record(START + (12 * 60 + 20) * MINUTE, 1)];
+    const originals = [...events];
+    expect(() => applySessionShape(events, 'shape-user', {
+      sessionsPerWeek: 2, eventsPerSession: 1, sessionMinutes: 5,
+    })).not.toThrow();
+    expect(events).toHaveLength(2);
+    expect(events.every((event, index) => event === originals[index])).toBe(true);
+    expect(events.every(event => Date.parse(event.time) >= START && Date.parse(event.time) < START + DAY)).toBe(true);
+    expect(partition(events)).toHaveLength(2);
+  });
+
+  it('keeps legacy overfull-day requests nonthrowing without bounds', () => {
+    const events = Array.from({ length: 60 }, (_, index) => record(START + 12 * 60 * MINUTE + index * 1000, index));
+    const before = events.map(({ time, ...event }) => event);
+    expect(() => applySessionShape(events, 'shape-user', {
+      sessionsPerWeek: 60, eventsPerSession: 1, sessionMinutes: 5,
+    })).not.toThrow();
+    expect(events.map(({ time, ...event }) => event)).toEqual(before);
+    expect(events.every(event => Date.parse(event.time) >= START && Date.parse(event.time) < START + DAY)).toBe(true);
+  });
+
   it('retains the exact stream at an inclusive midnight endpoint', () => {
     const events = [record(START + DAY / 2, 0), record(START + DAY, 1)];
     const originals = [...events];
     const out = applySessionShape(events, 'shape-user', {
       sessionsPerWeek: 2, eventsPerSession: 1, sessionMinutes: 10,
+      datasetStart: START + DAY / 2, datasetEnd: START + DAY,
     });
     expect(out).toBe(events);
     expect(out).toHaveLength(2);
@@ -56,6 +79,7 @@ describe.sequential('session shape boundary contracts', () => {
     const before = structuredClone(events);
     expect(() => applySessionShape(events, 'shape-user', {
       sessionsPerWeek: 2, eventsPerSession: 1, sessionMinutes: 10,
+      datasetStart: START, datasetEnd: START + 20 * MINUTE,
     })).toThrow(/capacity/i);
     expect(events).toEqual(before);
   });
@@ -65,6 +89,7 @@ describe.sequential('session shape boundary contracts', () => {
       const events = [record(START, 0), record(START + 30 * MINUTE + extra, 1)];
       const shape = () => applySessionShape(events, 'shape-user', {
         sessionsPerWeek: 2, eventsPerSession: 1, sessionMinutes: 10,
+        datasetStart: START, datasetEnd: START + 30 * MINUTE + extra,
       });
       if (!extra) expect(shape).toThrow(/capacity/i);
       else {
@@ -82,6 +107,7 @@ describe.sequential('session shape boundary contracts', () => {
       const before = events.map(({ time, ...event }) => event);
       applySessionShape(events, 'shape-user', {
         sessionsPerWeek: sessionCount, eventsPerSession: 3, sessionMinutes: 120,
+        datasetStart: START, datasetEnd: START + DAY - 1,
       });
       expect(events.map(({ time, ...event }) => event)).toEqual(before);
       const sessions = partition(events);
@@ -200,8 +226,8 @@ describe.sequential('append-only first-anchor Flows contracts', () => {
       const treatment = flows.filter(flow => eligibleUsers.has(flow.userId) &&
         flow.steps.map(step => step.label).join('>') === 'Browse>Search>Help').length;
       expect(eligible).toBeGreaterThanOrEqual(100);
-      expect(treatment / eligible - neutral / eligible).toBeGreaterThan(0.15);
-      expect(treatment / eligible).toBeGreaterThan(0.9);
+      expect(treatment / eligible).toBeGreaterThanOrEqual(neutral / eligible + 0.15);
+      expect(treatment / eligible).toBeGreaterThanOrEqual(0.95);
       console.log('SHAPE_FLOWS', JSON.stringify({ seed, eligible, neutral, treatment }));
     }
   }, 90000);

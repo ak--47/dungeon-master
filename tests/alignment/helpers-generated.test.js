@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { makeFixture, runFixture, SEEDS } from './fixtures.mjs';
+import { extractFlows } from '../../lib/verify/flows.js';
 import { applyAggregateByBin, applyFrequencyByFrequency, applyAttributedBySource } from '../../lib/hook-patterns/index.js';
 import { scaleEventCount, scalePropertyValue, injectOnNewDays, applySessionShape,
   applyLifecycleWave, applyPathBias, splitByAuth, isPreAuthEvent } from '../../lib/hook-helpers/index.js';
@@ -13,6 +14,11 @@ const sum = events => events.filter(event => event.event === 'Browse')
   .reduce((total, event) => total + event.amount, 0);
 const snapshot = events => ({ browse: count(events, 'Browse'), search: count(events, 'Search'),
   help: count(events, 'Help'), days: days(events, 'Browse'), cohortDays: days(events, 'Search'), sum: sum(events) });
+const firstBranch = events => extractFlows(events, {
+  anchors: ['Browse'], forward: 2, countType: 'unique', collapseRepeated: false,
+})[0]?.steps.map(step => step.label).join('>');
+const orderedPayload = events => events.map(({ session_id, ...event }) => event)
+  .sort((left, right) => Date.parse(left.time) - Date.parse(right.time));
 
 function configFor(seed) {
   const config = makeFixture(seed);
@@ -60,10 +66,18 @@ describe.sequential('generated session and shape proofs', () => {
       for (const timeout of [5, 30]) {
         const config = configFor(seed);
         config.identity = { sessionTimeout: timeout };
-        config.hook = (records, type) => type === 'everything'
-          ? applySessionShape(records, '', { sessionsPerWeek: 3, eventsPerSession: 3, sessionMinutes: 20 }) : records;
+        const originalIds = [];
+        config.hook = (records, type, meta) => {
+          if (type !== 'everything') return records;
+          originalIds.push(...records.map(event => event.insert_id));
+          return applySessionShape(records, '', {
+            sessionsPerWeek: 3, eventsPerSession: 3, sessionMinutes: 20,
+            datasetStart: meta.datasetStart, datasetEnd: meta.datasetEnd,
+          });
+        };
         const sample = await runFixture(config);
         integrity(sample.events);
+        expect(sample.events.map(event => event.insert_id).sort()).toEqual(originalIds.sort());
         let actual = 0;
         let filteredAfter = 0;
         for (const events of streams(sample.events).values()) {
@@ -90,24 +104,44 @@ describe.sequential('generated session and shape proofs', () => {
       for (const seed of SEEDS) for (const treatment of [false, true]) {
         const config = configFor(seed);
         const before = new Map();
-        config.hook = (records, type) => {
-          if (type !== 'everything') return records;
+        config.hook = (records, type, meta) => {
+          if (type !== 'everything' || !records.length) return records;
           const uid = records.find(event => event.user_id)?.user_id;
           const times = records.map(event => Date.parse(event.time));
           const first = Math.min(...times);
           const last = Math.max(...times);
           before.set(uid, { ...snapshot(records), count: records.length, first, last,
+            ...(mode === 'path' ? { branch: firstBranch(records), expectedPath: orderedPayload(records) } : {}),
+            ...(mode === 'session-shape' ? { ids: records.map(event => event.insert_id).sort() } : {}),
             sessionCount: sessions(records, 30).length,
             survivingTemplate: records.some(event => event.event === 'Browse' &&
               (Date.parse(event.time) < first + 3 * DAY || Date.parse(event.time) > first + 12 * DAY)) });
           if (!treatment) return records;
           if (mode === 'session-shape') return applySessionShape(records, uid,
-            { sessionsPerWeek: 2, eventsPerSession: 3, sessionMinutes: 10 });
+            { sessionsPerWeek: 2, eventsPerSession: 3, sessionMinutes: 10,
+              datasetStart: meta.datasetStart, datasetEnd: meta.datasetEnd });
           if (mode === 'new-days') return injectOnNewDays(records, 'Browse', 15);
           if (mode === 'lifecycle' && first + 13 * DAY < Date.parse(config.datasetEnd)) return applyLifecycleWave(records, uid,
             { dormantFromDay: 3, dormantDays: 9, resurrectBurst: 3, valueMomentEvent: 'Browse' });
-          if (mode === 'path') return applyPathBias(records, uid,
-            { anchor: 'Browse', path: ['Search', 'Help'], share: 1, gapSeconds: [2, 2] });
+          if (mode === 'path') {
+            const originals = structuredClone(records);
+            const selected = names.every(name => records.some(event => event.event === name));
+            const anchor = Math.min(...records.filter(event => event.event === 'Browse').map(event => Date.parse(event.time)));
+            const templates = ['Search', 'Help'].map(name => records.find(event => event.event === name));
+            const out = applyPathBias(records, uid,
+              { anchor: 'Browse', path: ['Search', 'Help'], share: 1, gapSeconds: [2, 2] });
+            expect(out).toBe(records);
+            expect(records.slice(0, originals.length)).toEqual(originals);
+            const clones = records.slice(originals.length);
+            expect(clones).toHaveLength(selected ? 2 : 0);
+            for (const [index, clone] of clones.entries()) {
+              expect(clone).toEqual({ ...templates[index], insert_id: clone.insert_id,
+                time: new Date(anchor + (index + 1) * 2000).toISOString() });
+              expect(originals.some(event => event.insert_id === clone.insert_id)).toBe(false);
+            }
+            before.get(uid).expectedPath = orderedPayload(records);
+            return out;
+          }
           return records;
         };
         const sample = await runFixture(config);
@@ -117,15 +151,19 @@ describe.sequential('generated session and shape proofs', () => {
         let neutralMetric = 0;
         let lostEvents = 0;
         let missingSessions = 0;
-        for (const [uid, events] of streams(sample.events)) {
+        const emitted = streams(sample.events);
+        if (mode === 'session-shape' || mode === 'path') expect([...emitted.keys()].sort()).toEqual([...before.keys()].sort());
+        for (const [uid, events] of emitted) {
           const original = before.get(uid);
           const final = snapshot(events);
+          if (mode === 'path') expect(orderedPayload(events)).toEqual(original.expectedPath);
           if (mode === 'session-shape') {
             eligible++;
             const expected = Math.min(2 * Math.max(1, Math.ceil((original.last - original.first + 1) / (7 * DAY))),
               Math.ceil(original.count / 3));
             const actual = sessions(events, 30).length;
             expect.soft(events.length).toBe(original.count);
+            expect(events.map(event => event.insert_id).sort()).toEqual(original.ids);
             expect.soft(actual).toBe(treatment ? expected : original.sessionCount);
             lostEvents += original.count - events.length;
             missingSessions += (treatment ? expected : original.sessionCount) - actual;
@@ -156,10 +194,9 @@ describe.sequential('generated session and shape proofs', () => {
             metric += inGap;
           }
           if (mode === 'path' && original.browse && original.search && original.help) {
-            const sorted = [...events].sort((left, right) => Date.parse(left.time) - Date.parse(right.time));
-            const first = sorted.findIndex(event => event.event === 'Browse');
             eligible++;
-            if (sorted[first + 1]?.event === 'Search' && sorted[first + 2]?.event === 'Help') metric++;
+            if (firstBranch(events) === 'Browse>Search>Help') metric++;
+            if (original.branch === 'Browse>Search>Help') neutralMetric++;
             expect.soft(final.search).toBe(original.search + (treatment ? 1 : 0));
             expect.soft(final.help).toBe(original.help + (treatment ? 1 : 0));
           }
@@ -167,7 +204,11 @@ describe.sequential('generated session and shape proofs', () => {
         expect(eligible).toBeGreaterThanOrEqual(100);
         if (mode === 'new-days') expect(metric).toBeGreaterThanOrEqual(neutralMetric * (treatment ? 1.5 : 1));
         if (mode === 'lifecycle' && !treatment) expect(metric).toBeGreaterThan(100);
-        if (mode === 'path' && treatment) expect.soft(metric / eligible).toBe(1);
+        if (mode === 'path' && treatment) {
+          expect(metric / eligible).toBeGreaterThanOrEqual(0.95);
+          expect(metric / eligible).toBeGreaterThanOrEqual(neutralMetric / eligible + 0.15);
+        }
+        if (mode === 'path' && !treatment) expect(metric).toBe(neutralMetric);
         if (mode === 'path' && !treatment) expect(metric / eligible).toBeLessThan(0.9);
         console.log('HELPERS_METRIC', JSON.stringify({ mode, seed, treatment, eligible, metric, neutralMetric, lostEvents, missingSessions }));
       }

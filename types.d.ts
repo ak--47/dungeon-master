@@ -2685,7 +2685,7 @@ declare module '@ak--47/dungeon-master/hook-helpers' {
     export function applyLifecycleWave(events: EventSchema[], uid: string, opts: { dormantFromDay: number; dormantDays: number; valueMomentEvent: string; resurrectBurst?: number; dropAll?: boolean }): EventSchema[];
     /** v1.6.0 — append an ordered path after the FIRST chronological anchor for a deterministic `share` of users. Original traffic is untouched and can interrupt the immediate branch; share is an injection gate, not a measured Flows share. */
     export function applyPathBias(events: EventSchema[], uid: string, opts: { anchor: string; path: string[]; share: number; gapSeconds?: [number, number] }): EventSchema[];
-    /** Retiming only, inside inclusive bounds (ISO, unix seconds or milliseconds; accepts hook meta directly). Omitted bounds use original stream min/max. Throws RangeError before mutation if bounds are invalid or per-week 30-minute-session capacity is insufficient. */
+    /** Retiming only; preserves every record. Both bounds omitted retain legacy full-UTC-day placement, including nonthrowing overfull requests whose clusters may merge. Optional inclusive bounds accept ISO, unix seconds or milliseconds (hook meta directly); an omitted side uses its original UTC day edge. The helper cannot infer datasetEnd. Explicit-bound mode throws RangeError before mutation for invalid bounds or insufficient per-week 30-minute-session capacity. Pass known metadata bounds to prevent later engine clipping. */
     export function applySessionShape(events: EventSchema[], uid: string, opts: { sessionsPerWeek: number; eventsPerSession: number; sessionMinutes: number; datasetStart?: string | number; datasetEnd?: string | number }): EventSchema[];
 }
 
