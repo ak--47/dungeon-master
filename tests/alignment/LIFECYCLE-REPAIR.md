@@ -10,6 +10,10 @@ Shared fixtures, helper shape code, and existing acceptance assertions stay unch
 - GENERATED-FAILURES G1: observed-entry elapsed D7 misses the unchanged 0.10 lift floor.
 - Analytics retention_query.cpp:1120 requires a distinct return strictly after birth.
   At :1259 it subtracts the observed aligned birth timestamp for bucket selection.
+- Analytics normal_query.cpp:2284-2293 skips absent/empty distinct identity for unique
+  counting. At :1919-1930 cumulative uniques use a set of distinct IDs. These are
+  reader counting rules, not ingestion merge rules. Generated identity acceptance
+  derives merge evidence only from emitted both-ID rows, never profile device pools.
 - Production first-funnel calls omit the active-day upper bound. makeEvent samples
   through dataset end. Usage uses the first attempt timestamp, not its completion.
 - buildActiveDayPlan weights days from adjusted creation, then shuffles the plan.
@@ -35,3 +39,63 @@ Run the tiny lifecycle regression red under the network-denying OS sandbox using
 tests/alignment/vitest.config.js, then commit this spec and regression checkpoint.
 After repair rerun that slice, unchanged generated identity and G1 acceptance,
 selected legacy identity/retention tests, typecheck, determinism, and macro canaries.
+
+## Repair And Evidence
+
+Red checkpoint: `8b161a0`. Both original regressions failed before runtime edits.
+The retention birth differed from creation by several days; retry traffic leaked
+user identity before auth.
+
+- Retention first entry is pinned to adjusted creation, while TimeSoup still consumes
+  seeded draws. Other first funnels retain bounded sampling within their selected day.
+- First-funnel timing reserves its actual generated span before dataset end. Retries
+  start at lifecycle creation and advance after the preceding attempt plus a seeded
+  retry gap. Usage starts strictly after the maximum onboarding timestamp.
+- Device-enabled born-user identity is reconciled after hooks, future filtering, and
+  strict-count sampling. Missing or later auth cannot leave earlier authenticated rows.
+  Deliberate hook timestamps remain unchanged. Disabled-device and pre-existing paths
+  retain their identity rules.
+- Insufficient first-funnel time, failed priors with no pre-auth step, and strict-count
+  removal of promised entries produce explicit `Lifecycle capacity` errors. The repair
+  does not compress configured TTC to conceal insufficient room. Intentional hook
+  deletion is not treated as a promise to recreate deleted events.
+
+Focused validation: ten lifecycle tests (birth, retry order, post-onboarding usage,
+three capacity cases, hook removal/retiming/clipping, disabled devices, determinism),
+seven legacy identity tests, three legacy retention tests, and ten macro canaries.
+The legacy configuration is `lifecycle-vitest.config.js`, extending the local sandbox
+configuration with no global setup. `tsc --noEmit` passes. This worktree rejects
+`--ignoreDeprecations 6.0`; that flag is not used in the successful check.
+
+Unchanged helpers-generated identity acceptance passes all three device tests:
+18 runs across three seeds, devices 0/1/4, and 0/2 failed priors. All runs report zero
+pre-auth leaks, zero anonymous invalid rows, and zero entry-count mismatches.
+
+## G1 Remains Capacity-Limited On The Original Fixture
+
+Do not conflate the concurrent shared-fixture update with the clock repair. The current
+fixture adds real standalone Background Activity and permits non-strict organic events.
+Its unchanged 0.10 floor passes: mean lifts 0.149419 mixed and 0.303977 dense.
+
+An offline in-memory probe loaded the committed fixture with
+`git show 8b161a0:tests/alignment/fixtures.mjs` and ran it against the repaired runtime.
+It used first First Entry per user, elapsed `[birth+7d,birth+8d)`, complete-bucket
+eligibility, and distinct retained users. No shared file or threshold was changed.
+
+| Noise | Seed | High retained / eligible | Low retained / eligible |
+|---|---|---|---|
+| mixed | 17 | 61 / 1152 | 39 / 1150 |
+| mixed | 43 | 81 / 1165 | 50 / 1146 |
+| mixed | 89 | 68 / 1129 | 51 / 1156 |
+| dense | 17 | 152 / 1153 | 69 / 1179 |
+| dense | 43 | 129 / 1166 | 74 / 1166 |
+| dense | 89 | 157 / 1186 | 85 / 1193 |
+
+Original-fixture G1 remains RED: mean lift **0.020350 mixed**, **0.060535 dense**.
+The curve selects weighted days; a finite per-user budget and multi-step funnels do
+not guarantee a return in each selected elapsed bucket. This repair changes neither
+that allocation model nor the 0.10 floor. Neither fixture proves literal 80%/20%
+retention calibration. All denominators exceed the unchanged minimum 250.
+
+Unrelated helper session/path repairs and shared fixture/report changes belong to
+other agents and are excluded from this lifecycle commit.
