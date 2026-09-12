@@ -114,3 +114,66 @@ the other executor owns generated alignment files. those files, the red
 `FAILURES.md` record, and alignment infrastructure were not edited or staged.
 commits use explicit paths and disable Git hooks to prevent unsandboxed setup;
 the sandboxed tests and compiler gates ran before committing.
+
+## C1 follow-up: shared-edge finalization does not require reentry
+
+red/spec commit: `c0a2c2e`. this follow-up changes only
+`lib/verify/funnel-engine.js`, `tests/alignment/contracts.test.js`, and this
+appendix. earlier results above describe the original repair.
+
+source re-read first: analytics `backend/arb/reader/queries/funnel_query.cpp`
+at 1368 sets the shared-edge flag without a count-mode restriction. at 1615,
+the history finalizes before the incoming event can apply exclusions. the
+decision to stop searching comes afterward, at 1651-1668.
+
+the exact repro uses seconds relative to `2024-01-15T00:00:00.000Z`:
+`A0 B10 A20 X21`, steps `A B A`, and `exclusionSteps: [{ event: 'X' }]`.
+with reentry omitted, the old matcher returned `completed: false, reached: 1`.
+the contract requires `completed: true, reached: 2`.
+
+28 new checks cover direct and HPC evaluation. each checks omitted options,
+explicit `reentry: false`, explicit uniques, and totals with reentry omitted
+or false. nonshared `A B C` completions still accept the late exclusion.
+separate totals controls include a second complete path and require exactly
+one attempt, anchored at the original A0.
+
+the repair separates `sharedEdgeCompleted` from `restartSharedEdge`.
+shared-edge completion ends the current scan even when replay is disabled.
+only restart permission lets the next scan reuse the completion event.
+`woRepeat` keeps its window-only finalization. public defaults and signatures
+are unchanged.
+
+completed focused command, before and immediately after the repair:
+
+```sh
+cd /Users/ak/code/dungeon-master-alignment-work
+set -o pipefail
+/usr/bin/sandbox-exec -p '(version 1) (allow default) (deny network*)' \
+  node node_modules/vitest/vitest.mjs run \
+  --config tests/alignment/repair-vitest.config.js \
+  tests/alignment/contracts.test.js \
+  -t 'C1: shared-edge finalization without reentry' 2>&1 | tail -50
+```
+
+red: 12 failed, 16 passed, 44 unselected. green: 28 passed, 44 unselected.
+the red/spec commit preceded every production edit in this follow-up.
+
+completed full regression command:
+
+```sh
+/usr/bin/sandbox-exec -p '(version 1) (allow default) (deny network*)' \
+  node /Users/ak/code/dungeon-master-alignment-work/node_modules/vitest/vitest.mjs run \
+  --config /Users/ak/code/dungeon-master-alignment-work/tests/alignment/repair-vitest.config.js \
+  2>&1 | tail -50
+```
+
+result: 235 passed across nine files, including all 72 contracts and 163
+existing funnel unit tests. no skipped tests in the full gate. the completed
+run started at 01:13:39 and took 1.52s. editor diagnostics found no errors in
+the two code files. one earlier full-run tool response showed another
+executor's command and was discarded as evidence.
+
+all Vitest runs used the installed local package and denied network access.
+the repair config disabled global setup and pruning. no install, network,
+push, public API edit, or other production edit occurred in this follow-up.
+other executors' changes remain outside these commits.
