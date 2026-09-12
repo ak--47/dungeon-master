@@ -77,6 +77,9 @@ export function measureScenario(id, sample, reports = REPORTS) {
     weightedCount: browse.length, commonShare: browse.filter(event => event.choice === 'common').length / browse.length,
     affected: countWindow('Browse'), unaffected: countWindow('Search'),
     retention: measureRetention(sample.events, { birthEvent: 'First Entry', day: 7, datasetEnd: WINDOW.datasetEnd }),
+    neutralRetentionCohorts: [targetIds, controlIds].map(userIds => measureRetention(sample.events,
+      { birthEvent: 'First Entry', day: 7, datasetEnd: WINDOW.datasetEnd, userIds })),
+    standaloneCount: sample.events.filter(event => event.event === 'Background Activity').length,
     repeat: measureReport(sample.events, reports.repeat), repeatTotals: measureReport(sample.events, reports.repeatTotals),
     events: sample.events.length, warnings: sample.warnings };
 }

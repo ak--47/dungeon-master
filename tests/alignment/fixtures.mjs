@@ -2,7 +2,7 @@ import DUNGEON_MASTER from '../../index.js';
 
 export const SEEDS = ['alignment-generated-17', 'alignment-generated-43', 'alignment-generated-89'];
 export const WINDOW = { datasetStart: '2025-01-01T00:00:00Z', datasetEnd: '2025-01-31T00:00:00Z' };
-export const NOISE = { mixed: 0.5, dense: 0.9 };
+export const NOISE = { mixed: 0.5, dense: 0.9, diagnostic: 5 };
 
 export function makeFixture(seed, strength = 'mixed') {
   return {
@@ -19,9 +19,10 @@ export function makeFixture(seed, strength = 'mixed') {
       { event: 'First Success' },
       { event: 'Repeat Entry' },
       { event: 'Repeat Success' },
-      { event: 'Browse', weight: 10, properties: { choice: { __weights: { common: 80, rare: 20 } }, amount: [10] } },
-      { event: 'Search', weight: 7 },
-      { event: 'Help', weight: 3 },
+      { event: 'Browse', isStrictEvent: false, weight: 10, properties: { choice: { __weights: { common: 80, rare: 20 } }, amount: [10] } },
+      { event: 'Search', isStrictEvent: false, weight: 7 },
+      { event: 'Help', isStrictEvent: false, weight: 3 },
+      { event: 'Background Activity', isStrictEvent: false, weight: 5 },
     ],
     funnels: [
       { name: 'First', sequence: ['First Entry', 'First Success'], isFirstFunnel: true,

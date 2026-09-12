@@ -4,6 +4,27 @@ export function mean(values) {
   return values.reduce((total, value) => total + value, 0) / values.length;
 }
 
+export function median(values) {
+  if (!values.length) return NaN;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+export function wilson(successes, total) {
+  if (!total) return [NaN, NaN];
+  const z = 1.959963984540054;
+  const rate = successes / total;
+  const denominator = 1 + z * z / total;
+  const center = (rate + z * z / (2 * total)) / denominator;
+  const radius = z * Math.sqrt(rate * (1 - rate) / total + z * z / (4 * total * total)) / denominator;
+  return [center - radius, center + radius];
+}
+
+export function range(values) {
+  return [Math.min(...values), Math.max(...values)];
+}
+
 export function profileIds(profiles, key, value) {
   return new Set(profiles.filter(profile => profile[key] === value).map(profile => profile.distinct_id));
 }
@@ -16,32 +37,41 @@ export function measureReport(events, { steps, options, userIds }) {
     streams.get(event.user_id).push(event);
   }
   const attempts = [];
+  const perUserHours = [];
+  let uniqueEntrants = 0;
   for (const stream of streams.values()) {
     stream.sort((left, right) => Date.parse(left.time) - Date.parse(right.time));
     const result = evaluateFunnel(stream, steps, options);
-    attempts.push(...(Array.isArray(result) ? result : [result]));
+    const userAttempts = Array.isArray(result) ? result : [result];
+    attempts.push(...userAttempts);
+    if (userAttempts.some(attempt => attempt.reached >= 0)) uniqueEntrants++;
+    const completions = userAttempts.filter(attempt => attempt.completed);
+    if (completions.length) perUserHours.push(mean(completions.map(attempt => attempt.ttcMs / 3600000)));
   }
   const entered = attempts.filter(attempt => attempt.reached >= 0);
   const completed = entered.filter(attempt => attempt.completed);
   return { entrants: entered.length, converted: completed.length,
-    rate: completed.length / entered.length, meanHours: mean(completed.map(attempt => attempt.ttcMs / 3600000)) };
+    rate: completed.length / entered.length, meanHours: mean(completed.map(attempt => attempt.ttcMs / 3600000)),
+    uniqueEntrants, uniqueConverted: perUserHours.length, conversionWilson95: wilson(perUserHours.length, uniqueEntrants),
+    perUserMeanHours: mean(perUserHours), perUserMedianHours: median(perUserHours) };
 }
 
 export function volumePerUser(events, userIds) {
   return events.filter(event => userIds.has(event.user_id)).length / userIds.size;
 }
 
-export function measureRetention(events, { birthEvent, day, datasetEnd }) {
+export function measureRetention(events, { birthEvent, day, datasetEnd, userIds }) {
   const births = new Map();
   for (const event of events) {
-    if (event.event !== birthEvent || !event.user_id) continue;
+    if (event.event !== birthEvent || !event.user_id || (userIds && !userIds.has(event.user_id))) continue;
     const time = Date.parse(event.time);
     births.set(event.user_id, Math.min(births.get(event.user_id) ?? Infinity, time));
   }
   const eligible = new Set([...births].filter(([, time]) => time + (day + 1) * 86400000 <= Date.parse(datasetEnd)).map(([userId]) => userId));
   const returned = new Set(events.filter(event => eligible.has(event.user_id) &&
     Math.floor((Date.parse(event.time) - births.get(event.user_id)) / 86400000) === day).map(event => event.user_id));
-  return { entrants: eligible.size, returned: returned.size, rate: returned.size / eligible.size };
+  return { entrants: eligible.size, returned: returned.size, rate: returned.size / eligible.size,
+    wilson95: wilson(returned.size, eligible.size) };
 }
 
 export function measureFunnel(events, options) {
