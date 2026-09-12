@@ -24,11 +24,12 @@ Shared fixtures, helper shape code, and existing acceptance assertions stay unch
 1. With retention enabled, the first observed entry starts at adjusted creation,
    clipped to dataset start. Usage follows completion of all onboarding attempts.
 2. Each failed prior precedes the final attempt. Engine-generated attempts fit the
-   lifecycle and dataset bounds. Impossible capacity raises an explicit error;
-   promised entry rows must not silently disappear through future clipping.
+  lifecycle and dataset bounds when representable. Insufficient time keeps the
+  in-window prefix and reports an aggregate warning. Configured TTC stays unchanged.
 3. For device-enabled born users, final emitted timestamps and surviving auth rows
-   determine identity. Earlier rows and users without an emitted auth stay device-only.
-   Hooks may deliberately change timestamps; final stamping does not undo those times.
+  determine engine identity. Earlier rows and users without an emitted auth stay
+  device-only, except the documented both-ID `$experiment_started` marker.
+  Explicit hook identity overrides and profile-drop rescue remain authoritative.
 4. Device-disabled and pre-existing identity behavior stays unchanged.
 5. Retention is still finite-budget weighted day scheduling, not literal calibrated
    Bernoulli retention. A clock fix alone does not prove G1 or eliminate capacity limits.
@@ -55,14 +56,24 @@ user identity before auth.
   strict-count sampling. Missing or later auth cannot leave earlier authenticated rows.
   Deliberate hook timestamps remain unchanged. Disabled-device and pre-existing paths
   retain their identity rules.
-- Insufficient first-funnel time, failed priors with no pre-auth step, and strict-count
-  removal of promised entries produce explicit `Lifecycle capacity` errors. The repair
-  does not compress configured TTC to conceal insufficient room. Intentional hook
-  deletion is not treated as a promise to recreate deleted events.
+- Compatibility correction: the capacity throws from `1ed2527` broke previously
+  valid configurations. Insufficient time now emits partial output with
+  `lifecycle.firstFunnelClipped`. Auth-first empty priors remain valid and report
+  `lifecycle.emptyPreAuthAttempt`. Strict sampling reserves surviving attempt entries
+  before sampling other rows. A genuinely insufficient budget wins and reports
+  `lifecycle.strictAttemptBudget`. Each warning aggregates through `result.warnings`.
+  World suppression and hook filtering do not imply scheduling failure or recreate rows.
+  Reservation uses surviving `insert_id` values, so hooks that copy records keep their
+  attempt entries when the strict budget fits.
+  Identity provenance stays internal; unchanged engine fields reconcile after final
+  filtering, while explicit hook fields and the synthetic experiment exception survive.
+  No public signature, option, default, or new required API exception is introduced.
 
-Focused validation: ten lifecycle tests (birth, retry order, post-onboarding usage,
-three capacity cases, hook removal/retiming/clipping, disabled devices, determinism),
-seven legacy identity tests, three legacy retention tests, and ten macro canaries.
+Focused compatibility validation: 16 lifecycle tests (birth, retry order,
+post-onboarding usage, partial-output warnings, copied-row retry reservation, world
+suppression, synthetic experiment IDs, explicit hook identity/profile overrides,
+auth removal/retiming/clipping, disabled devices, determinism), seven legacy identity
+tests, three legacy retention tests, and ten macro canaries passed offline.
 The legacy configuration is `lifecycle-vitest.config.js`, extending the local sandbox
 configuration with no global setup. `tsc --noEmit` passes. This worktree rejects
 `--ignoreDeprecations 6.0`; that flag is not used in the successful check.
@@ -70,6 +81,12 @@ configuration with no global setup. `tsc --noEmit` passes. This worktree rejects
 Unchanged helpers-generated identity acceptance passes all three device tests:
 18 runs across three seeds, devices 0/1/4, and 0/2 failed priors. All runs report zero
 pre-auth leaks, zero anonymous invalid rows, and zero entry-count mismatches.
+The requested `-t identity` filter also matches the attribution test through its
+parent suite name: four tests passed and eleven were skipped. All Vitest commands
+used `sandbox-exec -p '(version 1) (allow default) (deny network*)'`, local binaries,
+and configurations without global setup. Typecheck used the same network sandbox.
+The G1 evidence below is retained from the preceding repair, not rerun during this
+compatibility pass. No full-suite or synthetic-generation success is claimed here.
 
 ## G1 Remains Capacity-Limited On The Original Fixture
 

@@ -10,22 +10,27 @@ function configFor(users = 1) {
 }
 
 describe.sequential('lifecycle chronology contracts', () => {
-  it('fails explicitly when a first funnel cannot fit its lifecycle', async () => {
+  it('clips a first funnel that cannot fit and reports the timing limit', async () => {
     const config = configFor();
     config.funnels[0].conversionRate = 100;
     config.hook = (records, type, meta) => {
       if (type === 'funnel-pre' && meta.isFirstFunnel) records.timeToConvert = 10000;
       return records;
     };
-    await expect(runFixture(config)).rejects.toThrow(/Lifecycle capacity/);
+    const { events, warnings } = await runFixture(config);
+    expect(events.some(event => event.event === 'First Entry')).toBe(true);
+    expect(events.every(event => Date.parse(event.time) <= Date.parse(config.datasetEnd))).toBe(true);
+    expect(warnings.some(warning => warning.key === 'lifecycle.firstFunnelClipped')).toBe(true);
   });
 
-  it('fails explicitly when promised failed priors have no pre-auth step', async () => {
+  it('allows empty failed priors when auth is the first step', async () => {
     const config = configFor();
     config.events[0].isAuthEvent = true;
     config.identity = { avgDevicePerUser: 1 };
     config.funnels[0].attempts = { min: 2, max: 2, conversionRate: 100 };
-    await expect(runFixture(config)).rejects.toThrow(/Lifecycle capacity.*promised/);
+    const { events, warnings } = await runFixture(config);
+    expect(events.filter(event => event.event === 'First Entry')).toHaveLength(1);
+    expect(warnings.some(warning => warning.key === 'lifecycle.emptyPreAuthAttempt')).toBe(true);
   });
 
   it('keeps born users user-only when devices are disabled', async () => {
@@ -37,15 +42,86 @@ describe.sequential('lifecycle chronology contracts', () => {
     expect(events.every(event => event.user_id && !event.device_id)).toBe(true);
   });
 
-  it('rejects a strict event budget that cannot keep promised attempts', async () => {
+  it('honors an insufficient strict budget and warns about omitted attempts', async () => {
     const config = configFor();
     config.numEvents = 1;
     delete config.avgEventsPerUserPerDay;
     config.strictEventCount = true;
     config.events[1].isAuthEvent = true;
     config.funnels[0].attempts = { min: 2, max: 2, conversionRate: 100 };
-    await expect(runFixture(config)).rejects.toThrow(/Lifecycle capacity.*promised/);
+    const { events, warnings } = await runFixture(config);
+    expect(events).toHaveLength(1);
+    expect(warnings.some(warning => warning.key === 'lifecycle.strictAttemptBudget')).toBe(true);
   });
+
+  it('reserves surviving retry entries when the strict budget fits them', async () => {
+    const config = configFor();
+    config.numEvents = 3;
+    delete config.avgEventsPerUserPerDay;
+    config.strictEventCount = true;
+    config.events[1].isAuthEvent = true;
+    config.funnels[0].attempts = { min: 2, max: 2, conversionRate: 100 };
+    config.hook = (records, type) => type === 'everything'
+      ? records.map(event => ({ ...event })) : records;
+    const { events, warnings } = await runFixture(config);
+    expect(events).toHaveLength(3);
+    expect(events.every(event => event.event === 'First Entry')).toBe(true);
+    expect(warnings.some(warning => warning.key === 'lifecycle.strictAttemptBudget')).toBe(false);
+  });
+
+  it('allows world suppression of retry entries without a capacity error', async () => {
+    const config = configFor();
+    config.events[1].isAuthEvent = true;
+    config.funnels[0].attempts = { min: 2, max: 2, conversionRate: 100 };
+    config.worldEvents = [{ name: 'suppression', startDay: 0, duration: 31,
+      affectsEvents: ['First Entry'], volumeMultiplier: 0.000001 }];
+    const { events, warnings } = await runFixture(config);
+    expect(events.filter(event => event.event === 'First Entry')).toHaveLength(0);
+    expect(warnings.some(warning => warning.key === 'lifecycle.firstFunnelClipped')).toBe(false);
+  });
+
+  it('preserves both IDs on the synthetic experiment marker before auth', async () => {
+    const config = configFor();
+    config.identity = { avgDevicePerUser: 1 };
+    config.events[1].isAuthEvent = true;
+    config.funnels[0].conversionRate = 100;
+    config.funnels[0].experiment = { name: 'assignment', variants: [{ name: 'control', weight: 100 }] };
+    const { events } = await runFixture(config);
+    const markers = events.filter(event => event.event === '$experiment_started');
+    expect(markers.length).toBeGreaterThan(0);
+    expect(markers.every(event => event.user_id && event.device_id)).toBe(true);
+  });
+
+  for (const hookType of ['event', 'funnel-post', 'everything']) {
+    it(`preserves explicit ${hookType} identity overrides after auth removal`, async () => {
+      const config = configFor();
+      config.identity = { avgDevicePerUser: 1 };
+      config.events[1].isAuthEvent = true;
+      config.funnels[0].conversionRate = 100;
+      config.hook = (records, type, meta) => {
+        if (type === hookType) {
+          const entries = Array.isArray(records) ? records : [records];
+          for (const event of entries) {
+            if (event.event === 'First Entry') {
+              event.user_id = 'explicit-hook-user';
+              delete event.device_id;
+            }
+          }
+        }
+        if (type === 'everything') {
+          delete meta.profile._drop;
+          return records.filter(event => event.event !== 'First Success');
+        }
+        return records;
+      };
+      const { events, profiles } = await runFixture(config);
+      const entry = events.find(event => event.event === 'First Entry');
+      expect(entry.user_id).toBe('explicit-hook-user');
+      expect(entry.device_id).toBeUndefined();
+      expect(profiles).toHaveLength(1);
+      expect(profiles.every(profile => !profile._drop)).toBe(true);
+    });
+  }
 
   for (const mutation of ['remove-auth', 'move-usage-before-auth', 'clip-auth']) {
     it(`reconciles final identity after ${mutation}`, async () => {
