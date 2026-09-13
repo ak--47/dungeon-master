@@ -215,15 +215,17 @@ describe('eventBreakdown', () => {
 		expect(rows).toEqual([{ value: 'x', count: 2, total_users: 1 }]);
 	});
 
-	test('identity resolution: device-only pre-auth event joins the user segment', () => {
+	test('identity resolution: a device-only event joins only after an emitted both-ID pair', () => {
 		const events = [
 			{ event: 'a', time: T, device_id: 'd1', p: 'x' },       // pre-auth: no user_id
 			{ event: 'a', time: T, user_id: 'u9', p: 'x' },
 		];
 		const profiles = [{ distinct_id: 'u9', device_ids: ['d1'] }];
-		const rows = emulateBreakdown(events, { type: 'eventBreakdown', breakdownProperty: 'p', profiles });
-		// hand-computed: 2 events, ONE resolved user
-		expect(rows).toEqual([{ value: 'x', count: 2, total_users: 1 }]);
+		const config = { type: 'eventBreakdown', event: 'a', breakdownProperty: 'p', profiles };
+		expect(emulateBreakdown(events, config)).toEqual([{ value: 'x', count: 2, total_users: 2 }]);
+		expect(emulateBreakdown([
+			...events, { event: 'telemetry', time: T, device_id: 'd1', user_id: 'u9' },
+		], config)).toEqual([{ value: 'x', count: 2, total_users: 1 }]);
 	});
 
 	test('composes with timeBucket: per-day rows tagged with period', () => {

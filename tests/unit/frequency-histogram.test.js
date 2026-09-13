@@ -137,18 +137,20 @@ describe('frequencyHistogram', () => {
 			.toEqual([{ interval: '2022-08-21', histogram: expected }]);
 	});
 
-	test('profiles join device-only events to the canonical user', () => {
-		// Joined: d1 day0 10:00 + u9 day1 10:00 — gap exactly 86400s, `>=`
-		// passes → one user, count 2. Unjoined: two users, count 1 each.
+	test('emitted both-ID events join device history; profile pools alone do not', () => {
 		const events = [
 			{ event: 'Buy', time: D0 + 10 * HOUR, device_id: 'd1' },
 			{ event: 'Buy', time: D0 + DAY + 10 * HOUR, user_id: 'u9' },
 		];
 		const profiles = [{ distinct_id: 'u9', device_ids: ['d1'] }];
 		expect(frequencyHistogram(events, { event: 'Buy', unit: 'day', intervalDays: 7, profiles }))
-			.toEqual([{ interval: '2024-01-01', histogram: [0, 1, 0, 0, 0, 0, 0] }]);
+			.toEqual([{ interval: '2024-01-01', histogram: [2, 0, 0, 0, 0, 0, 0] }]);
 		expect(frequencyHistogram(events, { event: 'Buy', unit: 'day', intervalDays: 7 }))
 			.toEqual([{ interval: '2024-01-01', histogram: [2, 0, 0, 0, 0, 0, 0] }]);
+		expect(frequencyHistogram([
+			...events, { event: 'Telemetry', time: D0 + 2 * DAY, device_id: 'd1', user_id: 'u9' },
+		], { event: 'Buy', unit: 'day', intervalDays: 7, profiles }))
+			.toEqual([{ interval: '2024-01-01', histogram: [0, 1, 0, 0, 0, 0, 0] }]);
 	});
 
 	test('guards: event required; unit validated; intervalDays positive integer; empty → []', () => {

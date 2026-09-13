@@ -18,7 +18,8 @@
 
 import { describe, test, expect } from 'vitest';
 import DUNGEON_MASTER from '../../index.js';
-import { emulateBreakdown, buildIdentityMap, resolveUserId } from '../../lib/verify/index.js';
+import { emulateBreakdown, resolveUserId } from '../../lib/verify/index.js';
+import { buildEventIdentityMap } from '../../lib/verify/identity.js';
 import dayjs from 'dayjs';
 
 const FIXED_NOW = dayjs('2024-02-02').unix();
@@ -202,7 +203,7 @@ describe('Phase 2 identity model', () => {
 		expect(usersWithThreePlus / landByUser.size).toBeGreaterThan(0.5);
 	});
 
-	test('emulateBreakdown groups pre-auth + post-auth events into same canonical user when profiles supplied', async () => {
+	test('emulateBreakdown groups emitted pre-auth links with or without profiles', async () => {
 		const result = await DUNGEON_MASTER(pinWindow({
 			seed: 'identity-emulate-merge',
 			numUsers: 80,
@@ -224,15 +225,14 @@ describe('Phase 2 identity model', () => {
 		const events = Array.from(result.eventData);
 		const profiles = Array.from(result.userProfilesData);
 
-		// Identity map inverts profile device_ids.
-		const idMap = buildIdentityMap(profiles);
+		const idMap = buildEventIdentityMap(events);
 		expect(idMap.size).toBeGreaterThan(0);
 
-		// Without identityMap: pre-auth events appear as separate "users" (device_id buckets).
 		const noMerge = emulateBreakdown(events, {
 			type: 'frequencyByFrequency',
 			metricEvent: 'visit_landing',
 			breakdownByFrequencyOf: 'sign_up',
+			identityMap: new Map(),
 		});
 		const mergedRows = emulateBreakdown(events, {
 			type: 'frequencyByFrequency',
@@ -240,6 +240,11 @@ describe('Phase 2 identity model', () => {
 			breakdownByFrequencyOf: 'sign_up',
 			profiles,
 		});
+		expect(mergedRows).toEqual(emulateBreakdown(events, {
+			type: 'frequencyByFrequency',
+			metricEvent: 'visit_landing',
+			breakdownByFrequencyOf: 'sign_up',
+		}));
 
 		// Merged should have FEWER user buckets at the visit_landing-only cell
 		// (where pre-auth-only buckets collapsed onto authed users).

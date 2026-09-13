@@ -38,8 +38,8 @@ import { parse as parseCsv } from 'csv-parse';
 import generate from '../index.js';
 import { extractComments } from '../lib/core/extract-comments.js';
 import { validateDungeonConfig } from '../lib/core/config-validator.js';
+import { buildEventIdentityMap } from '../lib/verify/identity.js';
 import {
-	buildIdentityMap,
 	VERDICT_RANK,
 	validateStories,
 	validateSchema,
@@ -149,7 +149,7 @@ if (inMemory) {
 		? await evaluateStories(stories, events, {
 			profiles,
 			funnels: Array.isArray(validated.funnels) ? validated.funnels : [],
-			identityMap: buildIdentityMap(profiles),
+			identityMap: buildEventIdentityMap(events),
 			warehouseRows,
 			warehouseSpecs,
 			datasetStart: validated.datasetStart,
@@ -187,7 +187,7 @@ if (inMemory) {
 	// here and use the RETURN value — as of v1.6.2 validateDungeonConfig does not
 	// enrich the object you hand it.
 	const validated = validateDungeonConfig({ ...config, token: '' });
-	const identityMap = buildIdentityMap(profiles);
+	const identityMap = buildEventIdentityMap(events);
 	schemaPass = !!validateSchema(events, validated)?.pass;
 	const warehouseSpecs = Object.fromEntries((validated.warehouseMetrics || []).map((spec) => [spec.name, spec]));
 	const warehouseManifest = loadWarehouseManifest(prefixPath);
