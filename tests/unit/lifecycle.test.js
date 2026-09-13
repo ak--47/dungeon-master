@@ -110,11 +110,9 @@ describe('lifecycle — anchoring and identity', () => {
 	});
 
 	test('identity resolution: pre-auth device event anchors first-ever and activity', () => {
-		// d1 (device-only) fires the value moment on day 0; u9 on days 8 and
-		// 13. With profiles joining d1→u9: one user, active periods {0,1},
-		// first-ever@0 → new@0, retained@1.
 		const events = [
 			{ event: 'Value Moment', time: JAN1 + 0 * DAY, device_id: 'd1' },
+			{ event: 'Login', time: JAN1 + DAY, device_id: 'd1', user_id: 'u9' },
 			vm('u9', 8), vm('u9', 13),
 		];
 		const profiles = [{ distinct_id: 'u9', device_ids: ['d1'] }];
@@ -125,10 +123,7 @@ describe('lifecycle — anchoring and identity', () => {
 			{ period: '2024-01-07', new: 1, retained: 0, resurrected: 0, dormant: 0 },
 			{ period: '2024-01-14', new: 0, retained: 1, resurrected: 0, dormant: 0 },
 		]);
-		// Without profiles the unjoined device is its OWN distinct user
-		// (identity.js resolveUserId device_id fallback — Mixpanel's
-		// unmerged $device: identity): d1 new@0 then dormant@1, u9 new@1.
-		const noJoin = emulateBreakdown(events, { type: 'lifecycle', valueMomentEvent: 'Value Moment' });
+		const noJoin = emulateBreakdown(events.filter(event => event.event !== 'Login'), { type: 'lifecycle', valueMomentEvent: 'Value Moment', profiles });
 		expect(noJoin).toEqual([
 			{ period: '2024-01-07', new: 1, retained: 0, resurrected: 0, dormant: 0 },
 			{ period: '2024-01-14', new: 1, retained: 0, resurrected: 0, dormant: 1 },

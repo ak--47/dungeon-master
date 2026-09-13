@@ -100,7 +100,7 @@ describe('uniques — filters and identity', () => {
 	test('identity resolution: device-only event joins its user (no double count)', () => {
 		const events = [
 			{ event: 'ping', time: '2024-01-15T10:00:00.000Z', device_id: 'd1' }, // pre-auth
-			{ event: 'ping', time: '2024-01-15T11:00:00.000Z', user_id: 'u9' },
+			{ event: 'ping', time: '2024-01-15T11:00:00.000Z', user_id: 'u9', device_id: 'd1' },
 		];
 		const profiles = [{ distinct_id: 'u9', device_ids: ['d1'] }];
 		const rows = emulateBreakdown(events, { type: 'uniques', unit: 'day', profiles });

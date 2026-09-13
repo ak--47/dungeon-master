@@ -233,11 +233,11 @@ describe('funnelFrequency validation', () => {
 			.toThrow(/sequential/);
 	});
 
-	test('holdPropertyConstant + session windows refused (full-stream sessionization)', () => {
+	test('holdPropertyConstant accepts full-stream session windows', () => {
 		expect(() => emulateBreakdown(events, { ...BASE, holdPropertyConstant: 'plan', countMode: 'sessions' }))
-			.toThrow(/full event stream/);
+			.not.toThrow();
 		expect(() => emulateBreakdown(events, { ...BASE, holdPropertyConstant: 'plan', conversionWindow: { unit: 'sessions', n: 2 } }))
-			.toThrow(/full event stream/);
+			.not.toThrow();
 	});
 
 	test("countMode 'sessions' constraint errors propagate from the primitive", () => {

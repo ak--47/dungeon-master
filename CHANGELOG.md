@@ -2,6 +2,47 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.8.2 - 2026-09-13
+
+### Fixed
+
+- Build automatic verifier identity maps from emitted both-ID events. Profile
+  device pools no longer create links by themselves. Explicit identity maps
+  retain their existing behavior; conflicting authenticated events retain their user.
+- Pass supported held-property session funnels through the report wrapper. Keep
+  implicit one-session windows when applying matching dungeon funnel defaults.
+- Expand list-valued held properties into separate funnel histories, including
+  repeated cursor visits and full-stream session boundaries.
+- Preserve prior attribution touches across time buckets, ignore unstamped
+  touches, and retain conversions with no matching touch in the unknown segment.
+- Make `minCohort` use conservative independent-user evidence. Repeated period
+  rows cannot inflate populations, and custom assertions receive the same guard.
+- Include declared global properties on synthetic experiment exposure events,
+  so run and segment filters retain both exposures and outcomes.
+- Make funnel-frequency drop decisions independent of random insertion IDs.
+
+### Verified
+
+- Add opt-in live comparisons through the actual importer and Mixpanel query
+  layer, with run-isolated identities, import budgets, retained query payloads,
+  exact local/live comparisons, fixed seeds, and neutral controls.
+- Verify selected generated conversion, TTC, retention, volume, weight, incident,
+  frequency, aggregate, attribution, session, and Flows effects against live reports.
+- Separate ingestion readiness from import acceptance. Historical identity links
+  can become visible later; one retained fixture converged without another import.
+
+### Compatibility
+
+Public exports, signatures, options, and defaults remain unchanged. Corrected
+counts and seeded hook outcomes can differ from 1.8.1. Explicit profile-map
+overrides and totals' `reentry: false` default remain supported. Calendar-day
+activity, rolling frequency, and raw event-count histograms are separate reports.
+Finite-lookback attribution, ambiguous tied touches, non-UTC project settings,
+and arbitrary combinations remain subject to the documented limits.
+
+See the [upgrade guide](docs/guides/1.8.2-upgrade-guide.md) and the repository's
+live alignment report for measured scope. This entry does not indicate npm publication.
+
 ## 1.8.1 — 2026-09-12
 
 ### Fixed

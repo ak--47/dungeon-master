@@ -342,11 +342,11 @@ describe('topPaths — sankey output', () => {
 });
 
 describe('topPaths — identity and guards', () => {
-	test('profiles thread the identity map through the dispatch', () => {
+	test('emitted identity links thread through the dispatch', () => {
 		// d1 (device-only) anchors, u9 continues. Joined → one flow [A, x].
 		const events = [
 			{ event: 'A', time: T, device_id: 'd1' },
-			{ event: 'x', time: T + 1 * MIN, user_id: 'u9' },
+			{ event: 'x', time: T + 1 * MIN, user_id: 'u9', device_id: 'd1' },
 		];
 		const out = emulateBreakdown(events, {
 			type: 'topPaths', anchors: ['A'],
