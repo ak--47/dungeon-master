@@ -18,6 +18,10 @@ i built this because i needed it. and after using it across hundreds of customer
 npm install @ak--47/dungeon-master
 ```
 
+1.8.2 adds live counting verification and fixes identity, session-funnel,
+attribution, and experiment-filter defects. See the
+[upgrade guide](docs/guides/1.8.2-upgrade-guide.md) for compatibility and tested limits.
+
 ## quick start
 
 ```javascript

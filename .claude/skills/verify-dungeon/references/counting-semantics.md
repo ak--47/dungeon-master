@@ -210,9 +210,11 @@ emulateBreakdown(events, {
 });
 ```
 
-Without an explicit map, the compatibility path can call `buildIdentityMap(profiles)`
-(reads `device_ids`, then `anonymousIds`). Label that profile-derived assumption;
-it cannot prove that an identity link survived generation or ingest.
+In 1.8.2, automatic mapping uses emitted both-ID records before report filtering.
+The public `buildIdentityMap(profiles)` helper still reads profile pools when a
+caller explicitly requests that override. It cannot prove that a link survived
+generation or ingest. Imported historical identity can become query-visible later;
+verify readiness before accepting a local/live comparison.
 
 ## Time-series verification (timeBucket)
 

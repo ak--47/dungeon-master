@@ -1,9 +1,9 @@
 # HOOKS.md -- Hook Encyclopedia
 
-Hook reference and recipe catalog for dungeon-master. Every recipe is calibrated
-against Mixpanel's actual counting semantics (greedy single-pass funnels,
-distinct-period frequency, null-aware aggregation, capped attribution) — see
-[Section 2](#2-how-mixpanel-counts-things) before adapting any pattern.
+Hook reference and recipe catalog for dungeon-master. Recipes have different
+counting and evidence requirements. Read [Section 2](#2-how-mixpanel-counts-things)
+before adapting a pattern, then verify the exact report on the emitted dataset.
+The [1.8.2 guide](docs/guides/1.8.2-upgrade-guide.md) records live-tested scope and limits.
 
 ---
 
@@ -172,20 +172,28 @@ verification emulator (`@ak--47/dungeon-master/verify`) now matches these
 rules; old recipes that ignored them will look correct on the dataset but
 fail when verified or queried in Mixpanel.
 
-### 2.1 Frequency reports count DISTINCT PERIODS, not total events
+### 2.1 Frequency depends on the selected report
 
-Mixpanel's frequency distribution / cohort-by-event-count reports count
-**distinct time periods** (default: days) on which the user fired the
-event. Two purchases on the same day = frequency **1**, not 2.
+Three measurements require different checks:
+
+- **Raw per-user event count:** two purchases on one day count as two. Insights
+  per-user count histograms and frequency breakdowns using total event count use
+  this axis. `applyFrequencyByFrequency` scales this target count.
+- **Distinct calendar-day activity:** those purchases count as one active day.
+  `countDistinctPeriods` defaults to UTC calendar buckets (`ui-bucket`), and
+  `binBy: 'distinctDays'` uses the same rule. This default is retained for
+  compatibility; it is not a universal Mixpanel frequency-report rule.
+- **Rolling Frequency/Addiction:** an event counts when it is at least one
+  selected unit after the last counted event. Histories reset per report interval.
+  Two events around midnight can occupy two calendar days but one rolling period.
 
 Two related rules exist (v1.6 names them for what they are; the old
 `'calendar'` / `'rolling'` names remain as silent aliases, unknown names
 now throw):
 
 - **`algorithm: 'ui-bucket'`** (default in our verifier):
-  `COUNT(DISTINCT date_trunc(unit, time))` in UTC. Matches what the Mixpanel
-  UI shows and what [`injectOnNewDays`](lib/hook-helpers/inject.js) uses
-  internally.
+  `COUNT(DISTINCT date_trunc(unit, time))` in UTC. This is also what
+  [`injectOnNewDays`](lib/hook-helpers/inject.js) uses internally.
 - **`algorithm: 'mixpanel-rolling'`**: the C++
   `addiction_query.cpp` rule `qtz_time >= last_counted + seconds_for_unit`
   (`addiction_query_update_history`, `addiction_query.cpp:363-374`) — what
@@ -193,8 +201,8 @@ now throw):
   boundaries (events at 23:59 + 00:01 next day = 1 rolling period, 2
   calendar periods).
 
-Use the default (`ui-bucket`) for hooks. Use `'mixpanel-rolling'` only
-when verifying behavior that explicitly depends on the C++ implementation.
+Choose the algorithm from the requested report. Do not replace a raw-count
+histogram with active-day counts, or use calendar days to claim rolling parity.
 
 **The actual Frequency report shape** is `frequencyHistogram(events,
 { event, unit, intervalDays, profiles })` (v1.6): per report interval, a
@@ -205,19 +213,19 @@ zero bucket (`addiction_query.cpp:546-573`). Array length is
 `ceil(interval / unit)` (`unit.c:108-113`). Use it when a dungeon targets
 the Frequency report itself rather than a frequency-derived cohort.
 
-**Implication for hooks:** `scaleEventCount(record, "Buy", 3)` clones 3x as
-many Buy events at sub-second offsets — they all land on the same calendar
-day, so the user moves **zero bins** in Mixpanel's frequency report. Use
+**Implication for hooks:** `scaleEventCount(record, "Buy", 3)` targets 3x as
+many Buy events at one-second offsets. This changes raw-count histogram bins.
+It generally does not add active days or rolling periods. Use
 [`injectOnNewDays`](lib/hook-helpers/inject.js) when the goal is to move
-users between frequency bins. Both `injectOnNewDays` and the default
+users between calendar-day activity bins. Both `injectOnNewDays` and the default
 `countDistinctPeriods` algorithm use calendar-bucket math, so they agree
 at boundaries.
 
 One second is also below Mixpanel's 30-minute session gap, so the default
 spread cannot create a new session either. The full list of metrics a default
-`scaleEventCount` call **cannot** move: active days per user, DAU, stickiness
-(DAU÷MAU), sessions per user, frequency bins, and retention. It moves event
-volume, and nothing else.
+`scaleEventCount` call does not reliably move: active days per user, DAU,
+stickiness (DAU/MAU), sessions per user, rolling frequency, and retention.
+At dataset edges, clones can be clipped. Verify surviving counts separately.
 
 As of v1.6.4 you can pass `{ spreadDays: N }` to scatter the clones across the
 next N days instead:
@@ -363,7 +371,7 @@ sampling.
 
 ### 2.5 Active-day distribution is config-first
 
-Mixpanel frequency reports count distinct days (§2.1). The v1.5 engine
+Distinct-day activity is a separate measurement from raw counts (§2.1). The engine
 exposes `Dungeon.avgActiveDaysPerUser` as the canonical primitive for this
 shape. Set it at the config level and the engine concentrates each user's
 events onto a sampled subset of days drawn from `normal(mean=N, sd=N/3)`,
@@ -876,15 +884,12 @@ Reference: `flows_query.cpp:988-994` (next-anchor-only), `flows.cpp:680-717`
 
 ### New principles from the emulator alignment
 
-21. **Distinct-day vs total-event binning.** Frequency-distribution reports in
-    Mixpanel count distinct days (Section 2.1). For any hook whose verification
-    target is a frequency report, use [`binByDistinctPeriods`](lib/verify/counting.js)
-    instead of `binUsersByEventCount`. For hooks targeting raw event counts
-    (Insights `total events`, `events per user`), `binUsersByEventCount` is
-    still correct.
+21. **Match the bin to the report.** Use `binUsersByEventCount` for raw event
+  counts and `binByDistinctPeriods` for calendar-day activity. Use rolling
+  counting for the Frequency/Addiction report. Section 2.1 distinguishes them.
 
-22. **`scaleEventCount` does not move users between frequency bins.** Cloning
-    Buy events at sub-second offsets places them on the same calendar day and
+22. **`scaleEventCount` changes raw-count bins.** Cloning
+  Buy events at one-second offsets usually places them on the same calendar day and
     inside the same 30-minute session window, so distinct days, sessions, DAU,
     stickiness, and retention are all unchanged. It moves event volume only. To
     shift any of the others, pass `{ spreadDays: N }` (v1.6.4) or use
@@ -898,11 +903,10 @@ Reference: `flows_query.cpp:988-994` (next-anchor-only), `flows.cpp:680-717`
     after the prior step's timestamp (with margin > 2 seconds for the grace
     window).
 
-24. **Attribution stamping is capped at 10 touchpoints.** When biasing
-    `firstTouch` attribution by stamping touchpoint events, ≤10 touches per
-    user enter the candidate pool. Stamping 50 weighted Touch events per
-    user gives the same answer as stamping 10. Aim for sparse, distinct
-    touches with deterministic weight ratios.
+24. **Separate stamping caps from attribution reads.** The generator defaults
+  to ten stamped touches per user. Mixpanel first/last reads are uncapped
+  within their conversion-bounded lookback. Distinct touch timestamps avoid
+  ambiguous attribution when different values tie at the first or last time.
 
 25. **Null-aware aggregation removes the need to "fill" defaults.** Don't
     coalesce missing numeric properties to 0 to keep AVG sane — Mixpanel
@@ -1740,6 +1744,13 @@ twitter: 1 }, model: 'firstTouch' })` overwrites the first engine-stamped
 touch with a seeded weighted pick (models: `firstTouch`, `lastTouch`,
 `both`). It never stamps unstamped events, so total touch count is
 unchanged.
+
+The helper selects lifetime endpoints. A report reads eligible touches before
+each conversion and inside its lookback. The lifetime-last touch can occur after
+the conversion; the lifetime-first can expire. Neither endpoint is a general
+conversion-aware guarantee. Pass a deliberately eligible stream to the existing
+helper or implement that selection in the hook, then verify the requested report.
+Conflicting sources at an equal timestamp have no stable cross-ingestion order.
 
 ---
 

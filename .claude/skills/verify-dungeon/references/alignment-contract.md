@@ -1,5 +1,31 @@
 # 1.8.1 verification contract
 
+## 1.8.2 live verification update
+
+The [1.8.2 guide](../../../../docs/guides/1.8.2-upgrade-guide.md) and repository
+`tests/alignment/live/REPORT.md` extend this contract with retained live comparisons.
+The 1.8.1 audit below remains historical. It used selected source-derived contracts;
+1.8.2 also imports isolated datasets and compares native Mixpanel query results.
+Public options and defaults remain unchanged.
+
+Automatic verifier identity now derives from emitted both-ID events. Explicit
+`buildIdentityMap(profiles)` overrides retain their compatibility behavior.
+List-valued held-property expansion and supported HPC/session report combinations
+have source and live fixtures. Non-UTC/DST and custom session-exclusion variants
+still need separate verification.
+
+Import success is not query readiness. Reconcile totals and identity before
+accepting comparisons. Historical anonymous events can join later without another
+import. Every live test must use a run property and disjoint run identities.
+Retain incomplete responses and do other work before a bounded retry.
+
+Distinguish raw per-user count histograms, UTC calendar activity, and rolling
+Frequency/Addiction. The default local calendar algorithm is not a universal
+Mixpanel frequency rule. Lifetime attribution endpoints require conversion/lookback
+eligibility; conflicting values with tied timestamps are not stable across ingest.
+`minCohort` now enforces conservative independent-user lower bounds, including
+custom callbacks. Unknown evidence caps a passing verdict instead of counting rows.
+
 Use this contract when authoring, verifying, provisioning, or presenting a dungeon.
 The [1.8.1 guide](../../../../docs/guides/1.8.1-upgrade-guide.md) describes the
 release. The local repository's `tests/alignment/REPORT.md` and
@@ -17,8 +43,8 @@ a numeric property, a mean with a median, or conversion with event volume to
 rescue a failed story. Supplementary diagnostics must keep their own labels.
 
 Local checks prove selected source-derived contracts, not universal Mixpanel
-parity. The audit read analytics source without compiling or executing it. It
-did not run live differential queries. Macro/soup interactions, table surfaces,
+parity. The 1.8.1 audit read analytics source without compiling or executing it.
+That audit did not run live differential queries. Macro/soup interactions, table surfaces,
 arbitrary hooks, parallel execution, and several counting variants remain gaps.
 
 ## Separate a measured effect from enough evidence
@@ -52,8 +78,8 @@ and preserve its original failed evidence.
 - Derive sessions from the full resolved user stream before HPC partitioning.
   Local defaults are UTC, a 30-minute idle timeout, and a 24-hour maximum.
   `session_id` is a diagnostic or explicit legacy mode, not the default truth.
-  Non-UTC projects, list-valued HPC, and project-specific hidden/excluded session
-  events remain outside this proof.
+  Non-UTC projects and project-specific hidden/excluded session events remain
+  outside the live proof. List-valued HPC has 1.8.2 source and live fixtures.
 - Profile device pools alone establish no identity mapping evidence. The public
   `buildIdentityMap(profiles)` helper retains profile-based compatibility behavior.
   For emitted-identity proof, derive links from valid ordinary both-ID events,
