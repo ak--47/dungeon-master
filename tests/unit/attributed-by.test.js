@@ -90,10 +90,7 @@ describe('attributedBy — perConversion', () => {
 		]);
 	});
 
-	test("'all': a conversion with zero prior touches contributes nothing; same-ms touch is included", () => {
-		// u1: Buy BEFORE any touch (skipped), then google touch, then Buy →
-		// google 1. u2: touch and Buy at the SAME ms — lookback is
-		// time <= conversionTime, inclusive → bing 1.
+	test("'all': a conversion without prior touches remains unknown; same-ms touch is included", () => {
 		const events = [
 			buy(T, 'u1'),
 			touch(T + 1 * MIN, 'google', 'u1'),
@@ -102,6 +99,7 @@ describe('attributedBy — perConversion', () => {
 			buy(T + 5 * MIN, 'u2'),
 		];
 		expect(emulateBreakdown(events, { ...CFG, model: 'firstTouch', perConversion: 'all' })).toEqual([
+			{ attribution_value: 'unknown', conversions: 1 },
 			{ attribution_value: 'google', conversions: 1 },
 			{ attribution_value: 'bing', conversions: 1 },
 		]);
