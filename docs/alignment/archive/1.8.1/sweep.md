@@ -1,3 +1,5 @@
+> Historical 1.8.1 checkpoint. Results and unresolved claims below describe that stage of the work. See the [current alignment reference](../../README.md) and [1.8.2 live report](../../live-report.md) for subsequent repairs and proof.
+
 # bounded alignment sweep
 
 ```sh
@@ -44,7 +46,7 @@ experiment conversion and TTC receive separate labels. the cell reports the more
 
 ## reports and exits
 
-the default outputs are `tests/alignment/sweep-results.json` and `tests/alignment/sweep-results.md`. `--output=path-prefix` selects another existing directory. the runner writes atomic compact checkpoints before and after cells, then final status and summaries. JSON ordering follows the fixed schedule. measurements are seeded; elapsed time, RSS, budget selection, and process IDs are operational metadata and can vary.
+the default outputs are `tests/alignment/sweep-results.json` and `docs/alignment/sweep-results.md`. `--output=path-prefix` selects another existing directory. the runner writes atomic compact checkpoints before and after cells, then final status and summaries. JSON ordering follows the fixed schedule. measurements are seeded; elapsed time, RSS, budget selection, and process IDs are operational metadata and can vary.
 
 - exit `0`: completed required coverage, with only supported or insufficient-evidence cells.
 - exit `1`: completed with diagnostic findings, or build/test errors.

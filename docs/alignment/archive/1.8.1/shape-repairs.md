@@ -1,3 +1,5 @@
+> Historical 1.8.1 checkpoint. Results and unresolved claims below describe that stage of the work. See the [current alignment reference](../../README.md) and [1.8.2 live report](../../live-report.md) for subsequent repairs and proof.
+
 # Shape helper repairs
 
 ## compatibility and acceptance revision
@@ -33,7 +35,7 @@ separate RNG-consuming treatment/control runs are not claimed to be identical.
 These acceptance thresholds are **revised after observation**, for the semantic
 reason above. They were not predeclared before the original red. The original
 298/300 result and `share: 1 => every immediate branch` failure remain in
-[HELPERS-FAILURES.md](tests/alignment/HELPERS-FAILURES.md), unchanged. That result
+[HELPERS-FAILURES.md](helpers-failures.md), unchanged. That result
 supports a strong branch effect without proving 100% immediate-branch selection.
 The earlier repair record below remains as historical evidence, including its
 now-superseded min/max decision and the acceptance test it left red.

@@ -54,13 +54,14 @@ Namespaced users keep non-anchor paths isolated.
 
 ## evidence and scope
 
-`evidence.json` contains accepted results and retained native request/response
-records, including incomplete early snapshots. `evidence.test.js` checks internal
+[evidence.json](../../tests/alignment/live/evidence.json) contains accepted results and retained native request/response
+records, including incomplete early snapshots. [evidence.test.js](../../tests/alignment/live/evidence.test.js) checks internal
 consistency offline; it does not make live queries or prove new code against the
 server. `snapshot.mjs` freezes this release's explicit accepted run list and rejects
 failed accepted sets. Keep that list intentional when repeating the study.
 
 The raw synthetic event sets stay in ignored local storage. The committed evidence
 contains aggregate results and synthetic run identifiers, never credentials.
-`REPORT.md` distinguishes exact matches, effect checks, revised fixture conditions,
-and unresolved report/API limits. The npm package excludes this directory.
+[The live report](live-report.md) distinguishes exact matches, effect checks,
+revised fixture conditions, and unresolved report/API limits. The npm package
+includes these docs but excludes `tests/alignment/live`, its scripts, and evidence JSON.

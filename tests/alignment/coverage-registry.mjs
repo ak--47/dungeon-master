@@ -77,7 +77,7 @@ export function buildCoverage() {
     }
     const operatorProof = id.startsWith('FunnelConditionOperators.')
       ? ['exact', 'direct condition operators', 'generated First Entry user set equals independently filtered profile set; numeric 1..4 inputs only'] : null;
-    const [classification, scenario, scope] = proof[id] ?? operatorProof ?? ['gap', null, 'untested in this generated slice; see INVENTORY.md for other executor evidence'];
+    const [classification, scenario, scope] = proof[id] ?? operatorProof ?? ['gap', null, 'untested in this generated slice; see docs/alignment/inventory.md for other evidence'];
     entries.set(id, { id, category, classification, scenario, scope, source: file,
       group: groupFor(id), support: 'declared author input; proof scope is limited to the cited case', aliases: original === id ? [] : [original],
       line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1 });
@@ -139,7 +139,7 @@ export function buildCoverage() {
     'Dungeon.subscription', 'Dungeon.attribution', 'Dungeon.geo', 'Dungeon.features', 'Dungeon.anomalies']) {
     entries.set(name, { id: name, category: 'removed-control', classification: 'unsupported', scenario: null,
       group: 'unsupported', support: 'removed control; not an author input',
-      scope: 'removed controls listed in INVENTORY.md; no generated claim', source: 'tests/alignment/INVENTORY.md' });
+      scope: 'removed controls listed in docs/alignment/inventory.md; no generated claim', source: 'docs/alignment/inventory.md' });
   }
   return [...entries.values()].sort((left, right) => left.id.localeCompare(right.id));
 }
@@ -155,24 +155,24 @@ export function writeCoverage() {
   }
   writeFileSync(new URL('./coverage.json', import.meta.url), JSON.stringify({
     classifications: ['exact', 'directional', 'calibrated', 'structural', 'gap', 'unsupported'],
-    scope: 'Actual author inputs grouped like INVENTORY.md, canonicalized credential/switch/identity aliases, named presets, and all 29 helper/pattern exports. No output types or duplicate documentation occurrences.',
+    scope: 'Actual author inputs grouped like docs/alignment/inventory.md, canonicalized credential/switch/identity aliases, named presets, and all 29 helper/pattern exports. No output types or duplicate documentation occurrences.',
     limitations: ['Explicit input-type allowlist; new input types require review.',
       'An input declaration is not proof of runtime support; removed controls are unsupported.',
       'Arbitrary property keys, dayN anchors, callback bodies, dynamic recipes and external Chance APIs are not enumerated.',
       'Report/query APIs, loader forms and serialization have separate contracts; untested here.',
       'Three seeds and two sparse rates are descriptive coverage, not full Cartesian coverage or universal statistical power.',
-      'Source parity extends only to explicit local source references in INVENTORY.md and GENERATED-FAILURES.md; no live Mixpanel comparison.'],
+      'This offline slice uses source references in docs/alignment/inventory.md and docs/alignment/archive/1.8.1/generated-failures.md; separate live evidence is in docs/alignment/live-report.md.'],
     entries,
   }, null, 2) + '\n');
   const totals = Object.fromEntries(['exact', 'directional', 'calibrated', 'structural', 'gap', 'unsupported'].map(label =>
     [label, entries.filter(entry => entry.classification === label).length]));
-  writeFileSync(new URL('./COVERAGE.md', import.meta.url), `# generated proof coverage\n\n` +
-    `Registry: [coverage.json](coverage.json). Rebuilt with the generated test file using the installed TypeScript parser.\n\n` +
+  writeFileSync(new URL('../../docs/alignment/coverage.md', import.meta.url), `# generated proof coverage\n\n` +
+    `Registry: [coverage.json](../../tests/alignment/coverage.json). Rebuilt with the generated test file using the installed TypeScript parser.\n\n` +
     `Input inventory counts: ${JSON.stringify(totals)}. These are entries, not a tested-feature percentage.\n\n` +
-    `Groups match [INVENTORY.md](INVENTORY.md): dungeon controls, nested author inputs, helper/pattern exports. Aliases share one behavior entry. Output records, resolved types, hook metadata, internal fields and duplicate documentation mentions are excluded. All 23 helpers and 6 patterns are listed. Untested inputs remain gaps; removed controls are unsupported.\n\n` +
+    `Groups match [inventory](inventory.md): dungeon controls, nested author inputs, helper/pattern exports. Aliases share one behavior entry. Output records, resolved types, hook metadata, internal fields and duplicate documentation mentions are excluded. All 23 helpers and 6 patterns are listed. Untested inputs remain gaps; removed controls are unsupported.\n\n` +
     `The parser uses an explicit input-type allowlist. New type declarations need review. Arbitrary dayN/property keys, callback bodies, dynamic recipes and external Chance APIs are not exhaustively enumerated. Query/loader/serialization APIs have separate contracts and are untested here. This is not full Cartesian coverage.\n\n` +
-    `Source parity is limited to the local references in INVENTORY.md and GENERATED-FAILURES.md. No live Mixpanel equivalence is claimed. Three seeds provide descriptive regression evidence only.\n\n` +
-    `Classification describes intended proof strength; latestOutcome records this generated slice only. Other executor evidence remains in INVENTORY.md. Read [generated-results.json](generated-results.json) and [GENERATED-FAILURES.md](GENERATED-FAILURES.md) for red results.\n\n` +
+    `This registry describes the offline generated slice only. The [live report](live-report.md) records separate 1.8.2 evidence. Three seeds provide descriptive regression evidence only.\n\n` +
+    `Classification describes intended proof strength; latestOutcome records this generated slice only. Other evidence remains in [inventory](inventory.md). Read [generated-results.json](../../tests/alignment/generated-results.json) and [historical generated failures](archive/1.8.1/generated-failures.md) for red results.\n\n` +
     `## partial proofs\n\n| API | Class | Scenario | Scope |\n|---|---|---|---|\n` +
     entries.filter(entry => entry.scenario).map(entry => `| ${entry.id} | ${entry.classification} (${entry.latestOutcome}) | ${entry.scenario} | ${entry.scope} |`).join('\n') + '\n' +
     '\n## untested author inputs and exports\n\n' +

@@ -1,3 +1,5 @@
+> Historical 1.8.1 checkpoint. Results and unresolved claims below describe that stage of the work. See the [current alignment reference](../../README.md) and [1.8.2 live report](../../live-report.md) for subsequent repairs and proof.
+
 # local PR handoff
 
 suggested title: `fix: offline alignment contracts and generated story evidence`
@@ -15,14 +17,14 @@ local review text. no push or GitHub PR creation is claimed.
 - retain legacy session placement and add optional bounded placement; keep path injection append-only.
 - add generated proofs, an author-input registry, and a bounded offline sweep.
 
-[API-COMPATIBILITY.md](API-COMPATIBILITY.md) describes changed output and retained
-defaults. [REPORT.md](REPORT.md) owns results, remaining proof gaps, and the final
-checklist. [INVENTORY.md](INVENTORY.md) maps controls to evidence without claiming
+[API-COMPATIBILITY.md](api-compatibility.md) describes changed output and retained
+defaults. [REPORT.md](report.md) owns results, remaining proof gaps, and the final
+checklist. [INVENTORY.md](../../inventory.md) maps controls to evidence without claiming
 all 321 registry entries are tested.
 
 ## final evidence
 
-[FINAL-VALIDATION.md](FINAL-VALIDATION.md) owns the authoritative results.
+[FINAL-VALIDATION.md](final-validation.md) owns the authoritative results.
 production source is `5e0caa5`; regression config and sweep run HEAD are
 `6df615e`; latest artifact commit is `fd112f8`.
 
@@ -36,12 +38,12 @@ cumulative output is not single-dungeon capacity, and registry gaps remain.
 analytics source informed local assertions; analytics and live Mixpanel never ran.
 all final execution used OS network denial. this docs pass reran no tests.
 
-- [x] provenance repaired at `5e0caa5`; red and green evidence retained in [LIFECYCLE-REPAIR.md](LIFECYCLE-REPAIR.md).
-- [x] final gate, full unit/integration regression, and post-repair sweep recorded in [REPORT.md](REPORT.md).
-- [x] reusable [regression-vitest.config.js](regression-vitest.config.js) committed at `6df615e`; historical nine-file [repair-vitest.config.js](repair-vitest.config.js) preserved unchanged in this checkpoint for earlier 207/235-test evidence.
-- [x] [API-COMPATIBILITY.md](API-COMPATIBILITY.md) documents additive session bounds, output changes, and provenance behavior. revised path acceptance, original G1 limits, and unproved knobs remain explicit in the linked reports.
+- [x] provenance repaired at `5e0caa5`; red and green evidence retained in [LIFECYCLE-REPAIR.md](lifecycle-repair.md).
+- [x] final gate, full unit/integration regression, and post-repair sweep recorded in [REPORT.md](report.md).
+- [x] reusable [regression-vitest.config.js](../../../../tests/alignment/regression-vitest.config.js) committed at `6df615e`; historical nine-file [repair-vitest.config.js](../../../../tests/alignment/repair-vitest.config.js) preserved unchanged in this checkpoint for earlier 207/235-test evidence.
+- [x] [API-COMPATIBILITY.md](api-compatibility.md) documents additive session bounds, output changes, and provenance behavior. revised path acceptance, original G1 limits, and unproved knobs remain explicit in the linked reports.
 - [x] this handoff authorizes only an explicit-path documentation/config checkpoint on the local branch. it makes no push, publication, or PR claim.
 
 use installed dependencies. no installs, network access, or data/tmp pruning
-belongs to this handoff. [README.md](README.md) contains final gate, sweep, and
+belongs to this handoff. [README.md](../../validation.md) contains final gate, sweep, and
 sandbox regression commands with their distinct timeout scopes.

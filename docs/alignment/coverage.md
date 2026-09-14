@@ -1,16 +1,20 @@
 # generated proof coverage
 
-Registry: [coverage.json](coverage.json). Rebuilt with the generated test file using the installed TypeScript parser.
+This registry describes one offline generated slice. Read the
+[current alignment guide](README.md) and [live report](live-report.md) for
+subsequent 1.8.2 evidence. A gap here is not a missing-feature count.
+
+Registry: [coverage.json](../../tests/alignment/coverage.json). Rebuilt with the generated test file using the installed TypeScript parser.
 
 Input inventory counts: {"exact":14,"directional":3,"calibrated":9,"structural":6,"gap":281,"unsupported":8}. These are entries, not a tested-feature percentage.
 
-Groups match [INVENTORY.md](INVENTORY.md): dungeon controls, nested author inputs, helper/pattern exports. Aliases share one behavior entry. Output records, resolved types, hook metadata, internal fields and duplicate documentation mentions are excluded. All 23 helpers and 6 patterns are listed. Untested inputs remain gaps; removed controls are unsupported.
+Groups match [INVENTORY.md](inventory.md): dungeon controls, nested author inputs, helper/pattern exports. Aliases share one behavior entry. Output records, resolved types, hook metadata, internal fields and duplicate documentation mentions are excluded. All 23 helpers and 6 patterns are listed. Untested inputs remain gaps; removed controls are unsupported.
 
 The parser uses an explicit input-type allowlist. New type declarations need review. Arbitrary dayN/property keys, callback bodies, dynamic recipes and external Chance APIs are not exhaustively enumerated. Query/loader/serialization APIs have separate contracts and are untested here. This is not full Cartesian coverage.
 
 Source parity is limited to the local references in INVENTORY.md and GENERATED-FAILURES.md. No live Mixpanel equivalence is claimed. Three seeds provide descriptive regression evidence only.
 
-Classification describes intended proof strength; latestOutcome records this generated slice only. Other executor evidence remains in INVENTORY.md. Read [generated-results.json](generated-results.json) and [GENERATED-FAILURES.md](GENERATED-FAILURES.md) for red results.
+Classification describes intended proof strength; latestOutcome records this generated slice only. Other executor evidence remains in INVENTORY.md. Read [generated-results.json](../../tests/alignment/generated-results.json) and [GENERATED-FAILURES.md](archive/1.8.1/generated-failures.md) for red results.
 
 ## partial proofs
 

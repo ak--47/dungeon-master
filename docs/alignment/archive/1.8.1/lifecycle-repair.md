@@ -1,3 +1,5 @@
+> Historical 1.8.1 checkpoint. Results and unresolved claims below describe that stage of the work. See the [current alignment reference](../../README.md) and [1.8.2 live report](../../live-report.md) for subsequent repairs and proof.
+
 # Lifecycle FIX SPEC
 
 Scope: user-loop and funnel clocks, final identity stamping, and owned regressions.

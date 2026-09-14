@@ -1,3 +1,5 @@
+> Historical 1.8.1 checkpoint. Results and unresolved claims below describe that stage of the work. See the [current alignment reference](../../README.md) and [1.8.2 live report](../../live-report.md) for subsequent repairs and proof.
+
 # generated alignment slice
 
 Run only from the isolated alignment worktree with installed dependencies:
@@ -35,9 +37,9 @@ and anonymous identity stitching remain gaps.
 First-funnel cohorts calibrate conversion without unique-user saturation.
 The TTC hook operates on the repeated usage funnel amid competing traffic.
 The public evaluator receives caller-owned report steps, count mode, reentry,
-grace, and window options from [scenarios.mjs](scenarios.mjs), independent of
+grace, and window options from [scenarios.mjs](../../../../tests/alignment/scenarios.mjs), independent of
 generation config. Unique-user reports and totals/reentry reports are retained
-separately. The entry-delimited counter in [measures.mjs](measures.mjs) is a
+separately. The entry-delimited counter in [measures.mjs](../../../../tests/alignment/measures.mjs) is a
 diagnostic; it does not claim Mixpanel per-attempt semantics.
 
 Experiment conversion uses `$experiment_started` entrants, filtered to the
@@ -56,7 +58,7 @@ one run and checks exact pairing.
 
 ## fixed bounds and reuse
 
-[scenarios.mjs](scenarios.mjs) declares practical effect bounds and minimum
+[scenarios.mjs](../../../../tests/alignment/scenarios.mjs) declares practical effect bounds and minimum
 denominators before execution. The original bounds are unchanged. Means
 weight the three seeds equally. Every seed must show the treatment direction
 and beat its neutral config, so ignoring all treatment knobs cannot pass.
@@ -182,12 +184,12 @@ sandbox itself. The existing runner owns the overall deadline; the observed
 generated-only run takes about 30 seconds. Individual tests have a 90-second
 timeout. No claim is made that a slow machine must finish the full matrix in 90s.
 
-[coverage.json](coverage.json) records canonical author inputs, named presets
-and all 29 hook exports, grouped like [INVENTORY.md](INVENTORY.md). Output
+[coverage.json](../../../../tests/alignment/coverage.json) records canonical author inputs, named presets
+and all 29 hook exports, grouped like [INVENTORY.md](../../inventory.md). Output
 types, resolved fields, hook metadata and duplicate documentation mentions
 are excluded. Untested inputs and source limits remain explicit.
-[COVERAGE.md](COVERAGE.md) separates proof classes from current outcomes.
-Inventory size is not proof completeness. [GENERATED-FAILURES.md](GENERATED-FAILURES.md)
+[COVERAGE.md](../../coverage.md) separates proof classes from current outcomes.
+Inventory size is not proof completeness. [GENERATED-FAILURES.md](generated-failures.md)
 documents retained red findings. Test completion rewrites `generated-results.json`,
 including on failure. It no longer rewrites the separately owned coverage artifacts.
 Start/end hashes cover the entrypoint, lifecycle, generators, TTC helper,

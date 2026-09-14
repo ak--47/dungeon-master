@@ -12,6 +12,15 @@ The default export accepts: a config object, a path to a `.js`/`.mjs`/`.json` du
 
 | Topic | Doc |
 |---|---|
+| Simulation-to-Mixpanel contracts, parameter effects, evidence, and story design | [docs/alignment/README.md](docs/alignment/README.md) |
+| Documentation navigation and repair history | [docs/README.md](docs/README.md) |
+| Exact identity, funnel, TTC, session, frequency, retention, and attribution rules | [docs/alignment/counting-contracts.md](docs/alignment/counting-contracts.md) |
+| Parameter-to-story examples and acceptance templates | [docs/alignment/story-recipes.md](docs/alignment/story-recipes.md) |
+| Completed 1.8.2 live measurements, failures, and remaining limits | [docs/alignment/live-report.md](docs/alignment/live-report.md) |
+| Offline checks and generated report locations | [docs/alignment/validation.md](docs/alignment/validation.md) |
+| Authorized live imports, query isolation, budgets, and readiness | [docs/alignment/live-validation.md](docs/alignment/live-validation.md) |
+| Offline input inventory and scoped coverage | [docs/alignment/inventory.md](docs/alignment/inventory.md), [docs/alignment/coverage.md](docs/alignment/coverage.md) |
+| Retained sweep results and historical repair checkpoints | [docs/alignment/sweep-results.md](docs/alignment/sweep-results.md), [docs/alignment/archive/1.8.1/README.md](docs/alignment/archive/1.8.1/README.md) |
 | User-facing API, config reference, examples, full preset tables | [README.md](README.md) |
 | Hook encyclopedia, recipes, Mixpanel counting semantics | [HOOKS.md](HOOKS.md) |
 | Per-version upgrade guides (1.3 → 1.8) | [docs/guides/](docs/guides/) |
@@ -20,6 +29,20 @@ The default export accepts: a config object, a path to a `.js`/`.mjs`/`.json` du
 | Changelog | [CHANGELOG.md](CHANGELOG.md) |
 
 If a question is about the user-facing API, presets, hook recipes, or property type helpers — read those docs, not this one. CLAUDE.md is only the project-Claude contract.
+
+Start alignment work with these docs; normal authoring does not require reopening
+the analytics checkout or rerunning a long sweep. Revisit source and executable
+checks when extending a counting contract or investigating a new mismatch.
+Historical reports preserve superseded claims; the current reference and live
+report explain which repairs closed them.
+
+Keep prose in `docs/`, runnable checks and machine-readable evidence in `tests/`.
+The retained live evidence is [tests/alignment/live/evidence.json](tests/alignment/live/evidence.json).
+Do not rewrite historical JSON paths or fingerprints just to modernize references.
+Default sweep and coverage Markdown outputs belong in `docs/alignment`; custom
+sweep prefixes retain adjacent JSON/Markdown output. After moving docs, run
+[tests/alignment/documentation.test.js](tests/alignment/documentation.test.js)
+and the skill-contract tests using the offline no-prune configuration.
 
 ## Repo layout
 
@@ -37,8 +60,10 @@ scripts/                 # run-dungeon, dungeon-to-json, json-to-dungeon, run-ma
 dungeons/technical/      # engine fixtures
 dungeons/user/           # one folder per customer
 dungeons/vertical/       # one folder per vertical: <name>/<name>.js + <name>.verify.mjs + <name>.sql
-tests/{unit,integration,e2e,engine}/
-docs/guides/             # 1.3.0 → 1.6.0 upgrade guides
+tests/{unit,integration,e2e,engine,alignment}/ # executable tests and evidence JSON
+docs/alignment/          # current contracts, recipes, validation, and live report
+docs/alignment/archive/1.8.1/ # preserved historical repair checkpoints
+docs/guides/             # per-version upgrade guides through 1.8.2
 plans/                   # implementation plans (gitignored, local only). Active: plans/<name>/. Finished: move the whole folder to plans/archived/<name>/ together with its request docs, measurement scripts, and reply — that is the repo convention.
 ```
 
@@ -105,7 +130,7 @@ Engine tests are NOT shipped in the npm package and NOT run as part of `npm test
 
 ## Engine guarantees
 
-Pure-engine output (no hooks) on `dungeons/technical/simplest.js` satisfies a strict per-macro shape bar across the documented safe ranges. Departures are CI failures. The 10-test canary at [tests/unit/engine-shape-canary.test.js](tests/unit/engine-shape-canary.test.js) runs on every commit (~5s); the full 194-combo sweep runs pre-release via `RUN_FULL_SWEEP=1`. Methodology + sweep evidence: [plans/ENGINE-VALIDATION/PLAN.md](plans/ENGINE-VALIDATION/PLAN.md), [plans/ENGINE-VALIDATION/FIX.md](plans/ENGINE-VALIDATION/FIX.md).
+Pure-engine output (no hooks) on `dungeons/technical/simplest.js` satisfies a strict per-macro shape bar across the documented safe ranges. The canary is [tests/unit/engine-shape-canary.test.js](tests/unit/engine-shape-canary.test.js); the full 194-combo sweep runs pre-release via `RUN_FULL_SWEEP=1`. See [validation workflows](docs/alignment/validation.md), [live release evidence](docs/alignment/live-report.md), and [the engine sweep](tests/engine/sweep-engine.mjs). Do not assume these checks run automatically on every commit; inspect the current CI configuration.
 
 ### Safe ranges
 

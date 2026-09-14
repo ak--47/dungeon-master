@@ -1,5 +1,7 @@
 # dungeon-master
 
+[Documentation index](docs/README.md) | [Simulation and Mixpanel counting](docs/alignment/README.md)
+
 generate realistic fake analytics data at scale. events, users, groups, funnels, SCDs, lookup tables, ad spend, mirror datasets, organic text, and more.
 
 this is the best kind of test data: real fake data (really).
@@ -553,7 +555,9 @@ dungeon-master generates multiple data types that mirror a real analytics implem
 
 ## funnels
 
-funnels define conversion sequences. users enter a funnel, and at each step some percentage drops off. the ordering strategy controls how events within the funnel are sequenced:
+funnels define conversion sequences. each offered pass makes a completion draw;
+nonconverters receive a partial prefix. `conversionRate` is a percent per pass,
+not independent dropout at every step. the ordering strategy controls event order:
 
 ```javascript
 funnels: [
@@ -561,7 +565,7 @@ funnels: [
     sequence: ['page view', 'sign up', 'onboarding', 'first action'],
     conversionRate: 35,
     order: 'sequential',           // strict left-to-right ordering
-    timeToConvert: 24,             // hours between steps
+    timeToConvert: 24,             // timing budget in hours, distributed across steps
     isFirstFunnel: true,           // this is the entry funnel
     experiment: true               // generates A/B/C variants automatically
   },
@@ -580,7 +584,10 @@ ordering strategies: `sequential`, `random`, `first-fixed`, `last-fixed`, `first
 
 ### segmented funnels (`conditions`)
 
-`conditions` is the only mechanism that makes **one segment convert differently on one funnel** — `personas[].conversionModifier` applies to every funnel. a funnel with `conditions` is offered only to users whose profile satisfies every key (AND across keys). the idiom is two funnels with the same `name` and `sequence`, different `conditions` and rates:
+`conditions` selects **one segment on one funnel** declaratively; a scoped
+`funnel-pre` hook can also change its rate. `personas[].conversionModifier`
+applies across funnels. conditional funnels require every profile condition
+(AND across keys). use the same name and sequence with different conditions and rates:
 
 ```javascript
 userProps: { platform: ['iOS', 'Android'], seats: [1, 5, 10, 20] },

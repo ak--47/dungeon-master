@@ -1,3 +1,5 @@
+> Historical 1.8.1 checkpoint. Results and unresolved claims below describe that stage of the work. See the [current alignment reference](../../README.md) and [1.8.2 live report](../../live-report.md) for subsequent repairs and proof.
+
 # generated proof findings
 
 ## G2 sample-size correction: 3,000-user acceptance envelope
@@ -92,10 +94,10 @@ Local analytics revision: `717286d2d3ed03e9e3f9cb4346e4c6b2e561fb9a`.
 The current bucket calculation is at line 1259, subtracting aligned birth time
 from return time before `time_duration_buckets_get_bucket`. With calendar
 alignment off, this is elapsed-time bucketing. The saved source has moved since
-the older line numbers in [HOOKS.md](../../HOOKS.md#L454).
+the older line numbers in [HOOKS.md](../../../../HOOKS.md#L454).
 
 The generator's `buildActiveDayPlan` in
-[user-loop.js](../../lib/orchestrators/user-loop.js#L1154) selects weighted UTC
+[user-loop.js](../../../../lib/orchestrators/user-loop.js#L1154) selects weighted UTC
 days, derives a target day count from the curve, and allocates a finite event
 budget across them. If events are fewer than selected days, some days get zero.
 This is a plausible explanation for weak realized retention at sparse budgets.
@@ -112,7 +114,7 @@ Search volume 0.90 to 1.13x. The usage-funnel TTC hook realizes 0.217 to 0.258x.
 
 These are means across three seeds for each noise strength, not confidence
 intervals or a full parameter-space guarantee. See
-[generated-results.json](generated-results.json) for per-seed counts and test
+[generated-results.json](../../../../tests/alignment/generated-results.json) for per-seed counts and test
 outcomes. The generated gate intentionally exits nonzero while G1 remains red.
 
 ## review correction: real standalone competitors and stronger evidence

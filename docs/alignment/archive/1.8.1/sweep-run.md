@@ -1,3 +1,5 @@
+> Historical 1.8.1 checkpoint. Results and unresolved claims below describe that stage of the work. See the [current alignment reference](../../README.md) and [1.8.2 live report](../../live-report.md) for subsequent repairs and proof.
+
 # sweep history
 
 ## post-clone-repair sweep completed all 297 cells
@@ -12,7 +14,7 @@ the largest single dungeon emitted 281,751 events. the largest request was 299,9
 
 build passed with TypeScript 5.8.3 and `--noEmit`. offline preflight passed 2 tests in 0.132 seconds. selected sweep infrastructure tests passed 8 tests, with 3 excluded by the existing name filter, in 0.365 seconds. Node was v24.11.1. all 77 start/end source hashes match the current worktree. the SHA-256 of `JSON.stringify(sourceAtEnd)` is `bb003a74f409b0777eddcd871f39d2d207ba103d6d96ff70d53ed8121987364e`.
 
-this run replaces the current [sweep-results.json](sweep-results.json) and [sweep-results.md](sweep-results.md). [FINAL-VALIDATION.md](FINAL-VALIDATION.md) records the wider unit/integration run and final source fingerprints. earlier runs below remain historical evidence.
+this run replaces the current [sweep-results.json](../../../../tests/alignment/sweep-results.json) and [sweep-results.md](../../sweep-results.md). [FINAL-VALIDATION.md](final-validation.md) records the wider unit/integration run and final source fingerprints. earlier runs below remain historical evidence.
 
 ## earlier pre-clone-repair sweep completed all 99 three-seed groups
 
@@ -46,7 +48,7 @@ JSON retains 95% Wilson intervals for every unique-user conversion and retention
 
 all 11 sweep tests passed before the final run. they include real paired hook/retention cells, dynamic-budget updates, retention cohort minima, strict classification, and a real 12-second hanging-worker test. that test completes preflight, starts a worker and descendant, then requires exit 124 and both PIDs gone. every generation and test child runs under inherited OS network denial. the final command also passed its build, offline preflight, and selected infrastructure tests. the generated regression suite was not run or weakened.
 
-the current artifacts are [sweep-results.json](sweep-results.json) and [sweep-results.md](sweep-results.md). the original partial run remains below as history, including its original single-run restriction. that restriction was superseded by explicit authorization for this repaired final run.
+the current artifacts are [sweep-results.json](../../../../tests/alignment/sweep-results.json) and [sweep-results.md](../../sweep-results.md). the original partial run remains below as history, including its original single-run restriction. that restriction was superseded by explicit authorization for this repaired final run.
 
 ## historical appendix: the first sweep exposed incomplete focus coverage
 

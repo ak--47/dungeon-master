@@ -1,10 +1,16 @@
 # public input controls and proof gaps
 
-Sources: [types.d.ts](../../types.d.ts), [README.md](../../README.md), [HOOKS.md](../../HOOKS.md), both helper barrels, and read-only [coverage.json](coverage.json). This inventory groups actual author inputs. Output records, resolved types, hook metadata, internal runtime/storage/context fields, repeated documentation mentions, and arbitrary generated property names are excluded. An arbitrary config index signature does not make every key a supported input.
+This inventory describes the original offline generated-test slice. Its gap labels
+are not the current product support matrix. Clone provenance was subsequently
+repaired, and 1.8.2 added live proof; see the [current guide](README.md) and
+[live report](live-report.md). Historical per-control observations below retain
+their original scope.
 
-Evidence: `H` = [helpers-generated.test.js](helpers-generated.test.js), latest recorded 15/15 passed with 13 shape contracts; see [SHAPE-REPAIRS.md](../../SHAPE-REPAIRS.md). `G` = [generated.test.js](generated.test.js), latest recorded 30/30 passed with 11 stable hashes; see [GENERATED-FAILURES.md](GENERATED-FAILURES.md). `S` = the completed 297-cell [sweep-results.md](sweep-results.md), with 125 supported and 172 insufficient-evidence cells. These are scoped recorded runs, not a final gate result. The provenance blocker remains open in [REPORT.md](REPORT.md).
+Sources: [types.d.ts](../../types.d.ts), [README.md](../../README.md), [HOOKS.md](../../HOOKS.md), both helper barrels, and read-only [coverage.json](../../tests/alignment/coverage.json). This inventory groups actual author inputs. Output records, resolved types, hook metadata, internal runtime/storage/context fields, repeated documentation mentions, and arbitrary generated property names are excluded. An arbitrary config index signature does not make every key a supported input.
 
-The registry has **321 canonical entries**, including all 23 helpers and six patterns: 14 exact, three directional, nine calibrated, six structural, 281 gap, eight unsupported. Classes describe G's proof scope, not a tested-feature percentage. H and S add separately cited evidence; a G gap can have an H proof. `gap` below means no generated proof for the named behavior in this audit. Historical red records stay unchanged, including [HELPERS-FAILURES.md](HELPERS-FAILURES.md).
+Evidence: `H` = [helpers-generated.test.js](../../tests/alignment/helpers-generated.test.js), recorded 15/15 passed with 13 shape contracts; see [shape repairs](archive/1.8.1/shape-repairs.md). `G` = [generated.test.js](../../tests/alignment/generated.test.js), recorded 30/30 passed with 11 stable hashes; see [generated failures](archive/1.8.1/generated-failures.md). `S` = the completed 297-cell [sweep summary](sweep-results.md), with 125 supported and 172 insufficient-evidence cells. These are scoped recorded runs, not a current gate result. The later [audit report](archive/1.8.1/report.md) closes the original clone-provenance blocker.
+
+The registry has **321 canonical entries**, including all 23 helpers and six patterns: 14 exact, three directional, nine calibrated, six structural, 281 gap, eight unsupported. Classes describe G's proof scope, not a tested-feature percentage. H and S add separately cited evidence; a G gap can have an H proof. `gap` below means no generated proof for the named behavior in this audit. Historical red records stay unchanged, including [HELPERS-FAILURES.md](archive/1.8.1/helpers-failures.md).
 
 ## dungeon controls
 

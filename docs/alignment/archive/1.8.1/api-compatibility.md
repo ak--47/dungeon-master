@@ -1,3 +1,5 @@
+> Historical 1.8.1 checkpoint. Results and unresolved claims below describe that stage of the work. See the [current alignment reference](../../README.md) and [1.8.2 live report](../../live-report.md) for subsequent repairs and proof.
+
 # API compatibility and corrected output
 
 existing public names, call forms, and documented defaults remain. the session
@@ -22,7 +24,7 @@ capacity, before mutating records. two same-day sessions cannot fit within a
 20-minute interval when their gap must exceed the 30-minute timeout. reducing
 the requested session count or dropping records would violate the helper contract.
 unbounded legacy placement can still cross an unknown dataset end and get clipped
-by the engine. see [SHAPE-REPAIRS.md](../../SHAPE-REPAIRS.md).
+by the engine. see [SHAPE-REPAIRS.md](shape-repairs.md).
 
 ## corrected clocks change generated output
 
@@ -55,9 +57,9 @@ after that link. profile device pools alone establish no mapping. the generator'
 configured-auth-name scan remains lifecycle policy, not full ingestion parity.
 
 analytics was read locally, not compiled or executed. see the exact source paths,
-red checkpoint, and focused results in [LIFECYCLE-REPAIR.md](LIFECYCLE-REPAIR.md).
-[FINAL-VALIDATION.md](FINAL-VALIDATION.md) records the post-repair gate, full
-unit/integration regression, and refreshed sweep; [REPORT.md](REPORT.md) retains
+red checkpoint, and focused results in [LIFECYCLE-REPAIR.md](lifecycle-repair.md).
+[FINAL-VALIDATION.md](final-validation.md) records the post-repair gate, full
+unit/integration regression, and refreshed sweep; [REPORT.md](report.md) retains
 the remaining proof gaps.
 
 ## counting corrections preserve the reentry default
@@ -73,7 +75,7 @@ null/undefined predicate. explicit-step selection remains separate.
 gap with analytics general counting; no default migration occurred.
 local session counting retains UTC, a 30-minute timeout, and a 24-hour maximum.
 project timezone, list-valued HPC, and hidden/excluded session-event parity remain
-outside this proof. [REPAIRS.md](REPAIRS.md) contains the source references.
+outside this proof. [REPAIRS.md](repairs.md) contains the source references.
 
 ## path injection remains append-only
 
@@ -82,4 +84,4 @@ events intact. `share: 1` selects every eligible recipient for injection; it can
 guarantee every visible immediate branch. the revised acceptance checks exact
 append payloads plus at least 95% branch share and 15 percentage points of paired
 lift. those thresholds were revised after observation. the original red evidence
-remains in [HELPERS-FAILURES.md](HELPERS-FAILURES.md).
+remains in [HELPERS-FAILURES.md](helpers-failures.md).

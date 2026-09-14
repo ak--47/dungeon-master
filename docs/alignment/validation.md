@@ -1,16 +1,16 @@
 # offline alignment checks
 
-start with [REPORT.md](REPORT.md) for completed validation and remaining proof gaps.
-[FINAL-VALIDATION.md](FINAL-VALIDATION.md) is the authoritative final run record.
-[INVENTORY.md](INVENTORY.md) lists author controls and proof gaps.
-[API-COMPATIBILITY.md](API-COMPATIBILITY.md) explains output changes and retained defaults.
-[PR.md](PR.md) is the local review handoff. no GitHub PR has been opened here.
+Start with [the alignment reference](README.md) for the contracts and
+[the 1.8.2 live report](live-report.md) for completed evidence. Reading them
+requires no test run. [Inventory](inventory.md) and [coverage](coverage.md)
+describe narrower offline slices; [the archive](archive/1.8.1/README.md)
+preserves earlier checkpoints and superseded claims.
 
 ## run from the repository root
 
-use installed dependencies only. these commands install nothing and do not prune data/tmp.
-historical validation ran in `/Users/ak/code/dungeon-master-alignment-work`.
-after the main executor moves the branch checkout, use the final path below.
+Use installed dependencies from the repository root. These commands install
+nothing and do not prune data/tmp. Old worktree paths in archived reports are
+historical provenance, not required working directories.
 
 ```sh
 cd /Users/ak/code/dungeon-master
@@ -28,7 +28,7 @@ node tests/alignment/run.mjs --sweep --timeout-ms=600000 2>&1 | tail -50
 
 the sweep does **not** run the full regression gate. each command has its own deadline.
 the runner uses the installed TypeScript version and adds the TS6 compatibility flag when needed.
-the default sweep output replaces [sweep-results.json](sweep-results.json) and
+the default sweep output replaces [sweep-results.json](../../tests/alignment/sweep-results.json) and
 [sweep-results.md](sweep-results.md). use `--output=tests/alignment/.cache/review-sweep`
 to retain the committed evidence during a diagnostic rerun.
 
@@ -46,16 +46,17 @@ group and descendants with SIGKILL and exits 124. SIGINT/SIGTERM also kill the g
 the sweep tests include a real hanging worker and descendant termination check.
 
 network denial does not restrict filesystem writes. the dedicated
-[vitest.config.js](vitest.config.js) disables global setup and cleanup and uses
+[vitest.config.js](../../tests/alignment/vitest.config.js) disables global setup and cleanup and uses
 worktree-local cache storage. do not substitute the default suite or the run-dungeon
 task; their setup can prune data/tmp.
 
 ## sandbox regression commands
 
-[regression-vitest.config.js](regression-vitest.config.js), committed at `6df615e`,
-selects all unit and integration tests with globals and no global setup or setup
-files. the final run passed 1,838 tests with one existing skip across 93 files in
-20.58s. it excludes E2E and standalone industry-generation runners.
+[regression-vitest.config.js](../../tests/alignment/regression-vitest.config.js)
+selects unit and integration tests with no global setup or setup files. The
+1.8.2 release passed 2,022 tests with one existing skip across 93 files.
+It excludes E2E and standalone generation runners. Counts are historical,
+not fixed acceptance targets for future versions.
 
 ```sh
 cd /Users/ak/code/dungeon-master
@@ -63,7 +64,7 @@ set -o pipefail
 sandbox-exec -p '(version 1) (allow default) (deny network*)' env NODE_ENV=test NODE_OPTIONS='' VSCODE_INSPECTOR_OPTIONS='' node node_modules/vitest/vitest.mjs run --config tests/alignment/regression-vitest.config.js 2>&1 | tail -50
 ```
 
-[repair-vitest.config.js](repair-vitest.config.js) preserves the exact nine-file
+[repair-vitest.config.js](../../tests/alignment/repair-vitest.config.js) preserves the exact nine-file
 selection behind historical 207/235-test evidence: alignment counting contracts
 plus eight legacy unit files, with no global setup or setup files. this checkpoint
 includes the existing file unchanged after sandboxed syntax validation. a rerun
@@ -76,11 +77,28 @@ sandbox-exec -p '(version 1) (allow default) (deny network*)' env NODE_OPTIONS='
 these direct Vitest commands use serial forks and per-test timeouts. they do not
 use the alignment runner's 600-second process-group deadline.
 
-## final checks are complete within their recorded scope
+## use the cheapest check that can disprove a claim
 
-clone repair `5e0caa5` passed 12 focused contracts. the main executor reported
-175 gate tests passed across nine files in 60.65s. the post-repair sweep at
-`6df615e`, saved in `fd112f8`, completed 297 cells with 77 stable source hashes:
-125 supported and 172 insufficient-evidence, zero other verdicts. these results
-do not prove all knobs or live analytics parity. [REPORT.md](REPORT.md) retains
-exact results, historical failures, and proof gaps. this docs pass ran no tests.
+| change | first check |
+| --- | --- |
+| docs or report locations | documentation and report-writer tests |
+| one counting rule | tiny contract fixture and neighboring unit tests |
+| hook timing or mutation | paired before/after stream with neutral controls |
+| generation/lifecycle | small mixed dungeon, identity/bounds, deterministic rerun |
+| broad engine change | alignment gate, regression, bounded sweep, engine matrix |
+| live report translation | tiny imported fixture, readiness, then native query |
+
+The generated test file rewrites its JSON snapshot. Do not run it simply to read
+documentation. Coverage regeneration writes Markdown to `docs/alignment/coverage.md`
+and keeps registry JSON in tests. The default sweep writes Markdown to
+`docs/alignment/sweep-results.md` and keeps JSON in tests. Custom `--output`
+prefixes still produce adjacent JSON and Markdown.
+
+1.8.2 passed 335 alignment tests. Its bounded sweep completed 297 cells: 125
+supported, 172 insufficient evidence, and no effect/contract failures. Separate
+live comparisons measured imported data. See [the live report](live-report.md)
+for exact scope; old no-live statements in the archive are historical.
+
+Live checks are separately authorized. Follow [live validation](live-validation.md)
+for isolation, query budgets, readiness, and retained artifacts. Never use a
+pruning setup while evidence or deployment data is still needed.

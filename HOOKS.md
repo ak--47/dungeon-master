@@ -1,5 +1,10 @@
 # HOOKS.md -- Hook Encyclopedia
 
+Start with [the alignment reference](docs/alignment/README.md) and
+[story recipes](docs/alignment/story-recipes.md) for the accumulated 1.8.2
+contracts. Calendar activity, rolling frequency, and raw counts are distinct;
+use those definitions when interpreting older examples below.
+
 Hook reference and recipe catalog for dungeon-master. Recipes have different
 counting and evidence requirements. Read [Section 2](#2-how-mixpanel-counts-things)
 before adapting a pattern, then verify the exact report on the emitted dataset.

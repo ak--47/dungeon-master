@@ -1,9 +1,12 @@
 # 1.8.1 verification contract
 
+For the consolidated human/AI reference, read
+[simulation and counting alignment](../../../../docs/alignment/README.md).
+
 ## 1.8.2 live verification update
 
-The [1.8.2 guide](../../../../docs/guides/1.8.2-upgrade-guide.md) and repository
-`tests/alignment/live/REPORT.md` extend this contract with retained live comparisons.
+The [1.8.2 guide](../../../../docs/guides/1.8.2-upgrade-guide.md) and
+[live report](../../../../docs/alignment/live-report.md) extend this contract with retained live comparisons.
 The 1.8.1 audit below remains historical. It used selected source-derived contracts;
 1.8.2 also imports isolated datasets and compares native Mixpanel query results.
 Public options and defaults remain unchanged.
@@ -28,9 +31,10 @@ custom callbacks. Unknown evidence caps a passing verdict instead of counting ro
 
 Use this contract when authoring, verifying, provisioning, or presenting a dungeon.
 The [1.8.1 guide](../../../../docs/guides/1.8.1-upgrade-guide.md) describes the
-release. The local repository's `tests/alignment/REPORT.md` and
-`tests/alignment/API-COMPATIBILITY.md` retain the audit evidence; those test
-artifacts are not shipped in npm.
+release. The [archived report](../../../../docs/alignment/archive/1.8.1/report.md) and
+[compatibility record](../../../../docs/alignment/archive/1.8.1/api-compatibility.md) retain historical prose.
+Documentation ships in npm; machine-readable evidence and runnable tests remain
+repository-only under `tests/alignment`.
 
 ## Define the report before measuring
 

@@ -1,7 +1,9 @@
+> Historical 1.8.1 checkpoint. Results and unresolved claims below describe that stage of the work. See the [current alignment reference](../../README.md) and [1.8.2 live report](../../live-report.md) for subsequent repairs and proof.
+
 # alignment audit: final validation complete
 
 the clone provenance repair, alignment gate, full unit/integration regression,
-and post-repair sweep are complete. [FINAL-VALIDATION.md](FINAL-VALIDATION.md)
+and post-repair sweep are complete. [FINAL-VALIDATION.md](final-validation.md)
 is the authoritative record. the main executor reported its firsthand gate
 result: 175 tests passed across nine files in 60.65s at `5e0caa5`.
 this documentation pass reran no tests, generation, analytics, or live queries.
@@ -10,8 +12,8 @@ this documentation pass reran no tests, generation, analytics, or live queries.
 
 latest artifact commit: `fd112f8`. production source: `5e0caa5`.
 regression config commit and sweep run HEAD: `6df615e`.
-see [SWEEP-RUN.md](SWEEP-RUN.md) for commands, chronology, and sampling limits;
-[sweep-results.json](sweep-results.json) contains the measurements.
+see [SWEEP-RUN.md](sweep-run.md) for commands, chronology, and sampling limits;
+[sweep-results.json](../../../../tests/alignment/sweep-results.json) contains the measurements.
 
 | measurement | recorded result |
 | --- | ---: |
@@ -35,16 +37,16 @@ deadline failure occurred. the run retained 42 persona-conversion saturation war
 
 | evidence | recorded result and limit |
 | --- | --- |
-| [FINAL-VALIDATION.md](FINAL-VALIDATION.md), alignment gate | main executor's firsthand result: 175 passed, nine files, 60.65s at `5e0caa5`; includes 12 clone contracts |
-| [regression-vitest.config.js](regression-vitest.config.js), full unit/integration | 1,838 passed, one existing skip, 93 files, 20.58s; unit: 60 files / 1,486 passed; integration: 33 files / 352 passed / one skipped |
+| [FINAL-VALIDATION.md](final-validation.md), alignment gate | main executor's firsthand result: 175 passed, nine files, 60.65s at `5e0caa5`; includes 12 clone contracts |
+| [regression-vitest.config.js](../../../../tests/alignment/regression-vitest.config.js), full unit/integration | 1,838 passed, one existing skip, 93 files, 20.58s; unit: 60 files / 1,486 passed; integration: 33 files / 352 passed / one skipped |
 | post-repair sweep stages | TypeScript 5.8.3 `--noEmit` passed; two preflight tests passed in 0.132s; eight selected infrastructure tests passed in 0.365s, three excluded by the existing filter |
-| [REPAIRS.md](REPAIRS.md) | 72 counting contracts plus 163 existing funnel regressions passed; source-derived C1-C4 repairs, including shared-edge completion without reentry |
-| [GENERATED-FAILURES.md](GENERATED-FAILURES.md) | latest generated-only run: 30 passed, 32.96s, 11 stable start/end hashes; historical reds remain below that result |
-| [SHAPE-REPAIRS.md](../../SHAPE-REPAIRS.md) | 13 shape contracts plus 15 generated helper tests passed; session preservation and revised append/branch acceptance |
-| [LIFECYCLE-REPAIR.md](LIFECYCLE-REPAIR.md) | 16 lifecycle, seven legacy identity, three legacy retention, and ten macro canaries passed in that repair slice |
+| [REPAIRS.md](repairs.md) | 72 counting contracts plus 163 existing funnel regressions passed; source-derived C1-C4 repairs, including shared-edge completion without reentry |
+| [GENERATED-FAILURES.md](generated-failures.md) | latest generated-only run: 30 passed, 32.96s, 11 stable start/end hashes; historical reds remain below that result |
+| [SHAPE-REPAIRS.md](shape-repairs.md) | 13 shape contracts plus 15 generated helper tests passed; session preservation and revised append/branch acceptance |
+| [LIFECYCLE-REPAIR.md](lifecycle-repair.md) | 16 lifecycle, seven legacy identity, three legacy retention, and ten macro canaries passed in that repair slice |
 
 these scopes overlap; do not sum them. historical 207/235-test repair runs used
-[repair-vitest.config.js](repair-vitest.config.js), preserved unchanged in this
+[repair-vitest.config.js](../../../../tests/alignment/repair-vitest.config.js), preserved unchanged in this
 checkpoint. it selects exactly nine files: alignment contracts and eight legacy
 unit files, with empty global setup and setup-file lists. those counts describe
 earlier source states, not fresh runs of this checkpoint. earlier raw generated
@@ -68,7 +70,7 @@ and the clock repair alone did not clear the original fixture.
 on engine-created data-quality and world-event clones. it invents no lineage
 for unmarked input. explicit hook identity overrides and fresh-ID hook clones
 retain their existing treatment. all 12 clone contracts passed in 358ms;
-[LIFECYCLE-REPAIR.md](LIFECYCLE-REPAIR.md) retains the two pre-fix failures and
+[LIFECYCLE-REPAIR.md](lifecycle-repair.md) retains the two pre-fix failures and
 focused validation results.
 
 analytics ingestion sends IDs without an event name or funnel designation. its
@@ -81,11 +83,11 @@ parity. the lifecycle report records the exact analytics source paths.
 
 ## proof gaps remain explicit
 
-[coverage.json](coverage.json) has 321 canonical registry entries, including all
+[coverage.json](../../../../tests/alignment/coverage.json) has 321 canonical registry entries, including all
 23 helpers and six patterns. its classifications are 14 exact, three directional,
 nine calibrated, six structural, 281 gap, and eight unsupported. classification
 describes the generated slice's proof strength, not a global support percentage.
-other helper evidence lives in [INVENTORY.md](INVENTORY.md).
+other helper evidence lives in [INVENTORY.md](../../inventory.md).
 
 - macro/soup presets, long windows, and acquisition/cadence interactions lack generated proof in this audit.
 - decay and reactivation calibration, retention anchors, and budget interactions remain gaps.
@@ -109,7 +111,7 @@ comparison, customer import, network call, or install establishes broader parity
 
 historical runs used `/Users/ak/code/dungeon-master-alignment-work`. after the
 main executor relocates the checkout, run from `/Users/ak/code/dungeon-master`.
-[README.md](README.md) gives gate, sweep, and sandbox regression commands.
+[README.md](../../validation.md) gives gate, sweep, and sandbox regression commands.
 gate and sweep retain the 600-second maximum. direct Vitest commands have
 per-test timeouts, not the runner's process-group deadline. no default setup
 or data/tmp pruning is permitted.

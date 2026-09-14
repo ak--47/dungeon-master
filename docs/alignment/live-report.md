@@ -1,5 +1,10 @@
 # v1.8.2 live alignment report
 
+This report records pre-publication validation. PR #15 was subsequently merged
+as `2810f3b`, and the maintainer published 1.8.2. Statements below about actions
+not performed refer to the validation run. Start with the
+[alignment reference](README.md) for the accumulated counting knowledge.
+
 ## datasets now have live report evidence
 
 The run imported **2,603,397 synthetic events** into project **4063241**. Accepted
@@ -17,7 +22,7 @@ The source was inspected locally. It was not compiled or executed locally. The l
 query service supplied the independent execution evidence.
 
 Machine-readable results, query payloads, response hashes, and historical snapshots
-are in [evidence.json](evidence.json). Raw event sets remain under the explicit
+are in [evidence.json](../../tests/alignment/live/evidence.json). Raw event sets remain under the explicit
 run IDs in ignored `tmp/alignment-1.8.2/`.
 
 ## shipped corrections
@@ -134,7 +139,7 @@ queried, no data deleted, no merge performed, and no npm package published.
 
 ## reproduce and inspect
 
-See [README.md](README.md) for opt-in commands and prerequisites. Accepted run IDs
+See [README.md](live-validation.md) for opt-in commands and prerequisites. Accepted run IDs
 and exact query settings are stored in the snapshot. Run identifiers also exist as
 event properties in [the test project](https://mixpanel.com/project/4063241/app/settings/project).
 Run all live scripts serially. The ledger reserves 2,603,427 rows, including a

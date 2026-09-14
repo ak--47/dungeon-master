@@ -1,3 +1,5 @@
+> Historical 1.8.1 checkpoint. Results and unresolved claims below describe that stage of the work. See the [current alignment reference](../../README.md) and [1.8.2 live report](../../live-report.md) for subsequent repairs and proof.
+
 # Counting contracts: red checkpoint
 
 ## Scope and provenance
@@ -124,8 +126,8 @@ absent properties only; they do not prove the entire null/any-order contract.
 
 Source: `backend/arb/reader/queries/funnel_query.cpp:592` and `:609` enable multiple
 histories for general counting. Dungeon-master documents explicit opt-in reentry
-in [HOOKS.md](../../HOOKS.md#L538), and defaults reentry to false in
-[funnel-engine.js](../../lib/verify/funnel-engine.js#L814). Totals alone therefore
+in [HOOKS.md](../../../../HOOKS.md#L538), and defaults reentry to false in
+[funnel-engine.js](../../../../lib/verify/funnel-engine.js#L814). Totals alone therefore
 does not imply analytics general-count behavior. This is an existing public
 compatibility gap, not an authorization to change the default. All repeat-count
 fixtures here specify reentry=true. Decide migration/versioning separately.

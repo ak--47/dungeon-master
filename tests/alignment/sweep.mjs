@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { writeFileSync, renameSync, readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 
 export const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 export const POLICY = '(version 1) (allow default) (deny network*)';
@@ -170,8 +171,10 @@ export function writeReport(report, output) {
     '| --- | ---: | ---: | ---: | ---: | --- |',
     ...report.spreads.map(row => `| ${row.key} | ${row.seeds} | ${row.effect?.min?.toFixed(4) ?? 'n/a'} | ${row.effect?.mean?.toFixed(4) ?? 'n/a'} | ${row.effect?.max?.toFixed(4) ?? 'n/a'} | ${row.verdicts.join(', ')} |`)];
   if (report.failure) lines.push('', `failure: ${report.failure}`);
-  writeFileSync(`${output}.md.tmp`, lines.join('\n') + '\n');
-  renameSync(`${output}.md.tmp`, `${output}.md`);
+  const markdownOutput = resolve(output) === resolve(ROOT, 'tests/alignment/sweep-results')
+    ? resolve(ROOT, 'docs/alignment/sweep-results.md') : `${output}.md`;
+  writeFileSync(`${markdownOutput}.tmp`, lines.join('\n') + '\n');
+  renameSync(`${markdownOutput}.tmp`, markdownOutput);
 }
 
 export async function runSweep(report, { deadline, onChild, output, probeHang = false }) {
