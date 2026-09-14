@@ -20,9 +20,9 @@ i built this because i needed it. and after using it across hundreds of customer
 npm install @ak--47/dungeon-master
 ```
 
-1.8.2 adds live counting verification and fixes identity, session-funnel,
-attribution, and experiment-filter defects. See the
-[upgrade guide](docs/guides/1.8.2-upgrade-guide.md) for compatibility and tested limits.
+1.8.3 makes rolling windows end at generation start and fixes timestamp piles
+at dataset boundaries. It retains the 1.8.2 counting contracts. See the
+[upgrade guide](docs/guides/1.8.3-upgrade-guide.md) for migration and tested limits.
 
 ## quick start
 
@@ -1142,9 +1142,9 @@ see [types.d.ts](types.d.ts) for the complete `Dungeon` interface. here are the 
 | `numUsers` | number | 1000 | number of users to generate |
 | `numEvents` | number | 100000 | target event count (legacy fallback; derived from `avgEventsPerUserPerDay` when set) |
 | `avgEventsPerUserPerDay` | number | derived | per-user-per-day rate (canonical event-volume primitive) |
-| `numDays` | number | 30 | days the dataset spans (safe range [14, 365]) |
-| `datasetStart` | ISO/unix | undefined | pin window start (for bit-exact deterministic runs); requires `datasetEnd` too |
-| `datasetEnd` | ISO/unix | undefined | pin window end; recomputes `numDays` from start/end span |
+| `numDays` | number | 30 | days the dataset spans (safe range [14, 365]); without explicit dates, ends at the current instant captured once when generation starts |
+| `datasetStart` | ISO/unix | undefined | pin window start; bare `YYYY-MM-DD` means UTC start-of-day; requires `datasetEnd` too |
+| `datasetEnd` | ISO/unix | undefined | pin window end; bare `YYYY-MM-DD` means UTC end-of-day; explicit timestamps retain their time; recomputes `numDays` |
 | `seed` | string | random | RNG seed for reproducibility |
 | `format` | string | `'csv'` | output format (csv, json, parquet) |
 | `token` | string | null | mixpanel project token (triggers import) |
@@ -1165,7 +1165,7 @@ see [types.d.ts](types.d.ts) for the complete `Dungeon` interface. here are the 
 | `percentUsersBornInDataset` | number | 12 (from macro `flat`) | % of users born in window (clamped to the named preset's cap; every clamp lands in `result.warnings`) |
 | `preExistingSpread` | string | `'uniform'` (from macro `flat`) | placement of pre-existing users' first event |
 | `avgActiveDaysPerUser` | number | undefined | concentrate events onto N distinct UTC days per user (preserves total event count). ignored when `retentionCurve` is set; warns when combined with `engagementDecay` |
-| `retentionCurve` | object | undefined | per-day return probabilities. **wins over `avgActiveDaysPerUser`** when both are set. **day 1 has a floor near 0.85 the curve cannot move** — funnel steps spill into the next day regardless of the day plan (measured 0.885 for an asked 0.15; days 7 and 30 follow the curve). verify from day 7 on |
+| `retentionCurve` | object | undefined | active-day selection weights, not literal report probabilities. **wins over `avgActiveDaysPerUser`**. measure mature birth/return cohorts; event budget, UTC days, funnel spill, and repeat activity affect D1, D7, and D30. see [retention contracts](docs/alignment/counting-contracts.md#retention-needs-a-birth-and-a-mature-return-window) |
 | `maxTouchpointsPerUser` | number | 10 | UTM stamping cap per user (Mixpanel `TOUCHPOINTS_LIMIT` parity) |
 | `autoSortAfterEverything` | boolean | true | sort events by time after `everything` hook (defends greedy funnel engine) |
 | `hook` | function/string | passthrough | data transformation function |

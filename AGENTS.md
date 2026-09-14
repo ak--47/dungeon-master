@@ -63,7 +63,7 @@ dungeons/vertical/       # one folder per vertical: <name>/<name>.js + <name>.ve
 tests/{unit,integration,e2e,engine,alignment}/ # executable tests and evidence JSON
 docs/alignment/          # current contracts, recipes, validation, and live report
 docs/alignment/archive/1.8.1/ # preserved historical repair checkpoints
-docs/guides/             # per-version upgrade guides through 1.8.2
+docs/guides/             # per-version upgrade guides through 1.8.3
 plans/                   # implementation plans (gitignored, local only). Active: plans/<name>/. Finished: move the whole folder to plans/archived/<name>/ together with its request docs, measurement scripts, and reply — that is the repo convention.
 ```
 

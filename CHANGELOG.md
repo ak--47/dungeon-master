@@ -2,6 +2,36 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.8.3 - 2026-09-13
+
+### Fixed
+
+- End relative `numDays` windows at the instant captured when generation starts,
+  rather than the host's local midnight. Keep bare absolute dates at UTC
+  start-of-day and end-of-day; preserve explicit timestamp precision in seconds.
+- Exclude zero-duration UTC days from active-day plans. Thin partial-day slots
+  once by their available duration and redistribute unused slots to full days,
+  preventing final-midnight event piles without double-thinning recent traffic.
+- Reflect TimeSoup Gaussian overflow within its selected chunk and sample hour
+  weights inside the available interval instead of clamping to dataset edges.
+- Keep fractional peak counts in bounds. If the sampled partial day has no
+  positive-weight hours, use eligible hours elsewhere in the requested window;
+  throw when the whole window has no eligible hours.
+- Exclude active-day slots with no permitted hours, including partial days before
+  business hours and intervals shortened by onboarding.
+- Compare funnel end bounds in milliseconds before full-stream hook verification.
+  Sub-second future steps no longer survive the early guard and disappear only
+  at storage. Per-event hooks still run before that guard.
+- Correct retention documentation: curve anchors weight activity scheduling;
+  they do not guarantee literal D1, D7, or D30 report percentages.
+
+Corrected timestamps and random draws can change generated output for a fixed
+seed compared with 1.8.2. Pinned windows remain reproducible within this version.
+Exports, signatures, dependencies, and verifier counting defaults are unchanged.
+The new checks are offline evidence; this release does not claim a fresh live
+Mixpanel comparison. See the [upgrade guide](docs/guides/1.8.3-upgrade-guide.md).
+This entry does not indicate npm publication.
+
 ## 1.8.2 - 2026-09-13
 
 ### Fixed

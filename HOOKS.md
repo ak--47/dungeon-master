@@ -537,16 +537,18 @@ All items on the v1.5.0 "documented gaps" list closed in 1.6.0. Unrecognized
 retention option keys now THROW — kills the silent-ignore class of bug where a
 typo'd `compounded: true` was dropped without effect.
 
-**`retentionCurve` cannot move day 1 (v1.7.0 doc).** `buildActiveDayPlan`
-picks which UTC days a user gets a SESSION; retention counts EVENTS. A funnel
-opened on the birth day spills its later steps across the following
-`timeToConvert` hours regardless of the day plan, so day 1 sits on a floor
-near 0.85 for funnel-driven dungeons no matter what `day1` asks for. Measured
-(2,000 users, 60 days): `{ day1: 0.15, day7: 0.06, day30: 0.02 }` delivered
-day 1 = 0.885, day 7 = 0.151, day 30 = 0.060 — the curve governs from day 7
-on and over-delivers by a consistent ~2.5x there. Verify retention stories from
-day 7 onward. To lower day 1, shorten `timeToConvert` on the funnels users
-enter on birth, or drop next-day spill in an `everything` hook.
+**`retentionCurve` weights active-day selection.** `buildActiveDayPlan` picks
+UTC days for activity; retention counts emitted events relative to a selected
+birth event. Funnel steps can spill into later buckets. Event budgets, repeated
+activity, and observation horizons affect D1, D7, and D30.
+
+The historical 2,000-user, 60-day fixture asked for
+`{ day1: 0.15, day7: 0.06, day30: 0.02 }` and measured 0.885, 0.151, and 0.060.
+Those are fixture results, not a universal D1 floor or a calibration factor.
+Measure each requested bucket with explicit birth, return, alignment, and mature
+cohort rules. Filtering later activity to force a percentage can break other
+funnel, experiment, or volume stories; recheck all affected reports.
+See the [retention contract](docs/alignment/counting-contracts.md#retention-needs-a-birth-and-a-mature-return-window).
 
 ### 2.8 Funnel reentry: state machine resets after completion
 

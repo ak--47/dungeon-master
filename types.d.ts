@@ -193,8 +193,8 @@ export interface Dungeon {
      * been pinned via `datasetStart`/`datasetEnd` upstream).
      *
      * Three resolution modes:
-     * 1. **`numDays` alone (no datasetStart/End):** Window = `[today - numDays, today]`.
-     *    Simplest API for ad-hoc dungeons. NOT deterministic across runs (today changes).
+    * 1. **`numDays` alone (no datasetStart/End):** Window = `[runStart - numDays * 86400, runStart]`.
+    *    Capture runStart once in unix seconds. NOT deterministic across runs; pin both bounds for reruns.
      * 2. **`datasetStart` + `datasetEnd` (no numDays):** Window pinned exactly. `numDays`
      *    derived automatically. Fully deterministic — use for vertical/production dungeons.
      * 3. **All three set:** `datasetStart`/`datasetEnd` win. `numDays` is recomputed from
@@ -207,11 +207,13 @@ export interface Dungeon {
      * Explicit start of the dataset window. Pin BOTH `datasetStart` and `datasetEnd` for
      * bit-exact deterministic runs. Accepts ISO string ("2026-01-01T00:00:00Z"), unix
      * seconds (1735689600), unix milliseconds (1735689600000), or anything `dayjs()`
-     * can parse. Setting only one of datasetStart/datasetEnd throws.
+    * can parse. Bare YYYY-MM-DD dates mean UTC start-of-day. Explicit timestamps
+    * retain their time. Setting only one of datasetStart/datasetEnd throws.
      */
     datasetStart?: string | number;
     /**
      * Explicit end of the dataset window. See `datasetStart` — both must be set together.
+    * Bare YYYY-MM-DD dates mean UTC end-of-day; explicit timestamps retain their time.
      */
     datasetEnd?: string | number;
     /** @deprecated Legacy alias internally aliased to datasetStart on validated config. Prefer `datasetStart`. */
@@ -1050,9 +1052,9 @@ export interface Context {
     /** Pre-built UTM campaign pool (used when `hasCampaigns: true`). */
     campaigns: Record<string, ValueValid>[];
     runtime: RuntimeState;
-    /** End of the resolved dataset window (unix seconds). Equal to the user-supplied `datasetEnd`, or fallback `today_start`. */
+    /** End of the resolved dataset window (unix seconds). Parsed `datasetEnd`, or the captured run-start instant. */
     FIXED_NOW: number;
-    /** Start of the resolved dataset window (unix seconds). Equal to the user-supplied `datasetStart`, or fallback `today_start - numDays`. */
+    /** Start of the resolved dataset window (unix seconds). Parsed `datasetStart`, or `runStart - numDays * 86400`. */
     FIXED_BEGIN?: number;
     /** Runtime accumulator for post-loop warehouse metric materialization. */
     warehouseAccumulator?: {

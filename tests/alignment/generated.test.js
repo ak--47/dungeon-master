@@ -27,7 +27,7 @@ afterAll(() => {
     densityDiagnosticEnabled: process.env.ALIGNMENT_DENSITY_DIAGNOSTIC === '1',
     inference: 'Descriptive three-seed regression evidence only; Wilson intervals are user-level binomial summaries, not universal power or engine probability calibration.',
     thresholds: SCENARIOS, outcomes, summaries, controls };
-  writeFileSync(new URL('./generated-results.json', import.meta.url),
+  writeFileSync(process.env.ALIGNMENT_GENERATED_RESULTS || new URL('./generated-results.json', import.meta.url),
     JSON.stringify(report) + '\n');
   expect(runtimeAtEnd, 'source changed during the generated run; rerun on stable source').toEqual(runtimeAtStart);
 });

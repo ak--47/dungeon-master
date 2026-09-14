@@ -24,11 +24,12 @@ artifacts; repository-relative test links are for checkout readers.
 
 - [Validation workflows](alignment/validation.md): offline gates, targeted reruns, generated report locations.
 - [Live validation operations](alignment/live-validation.md): authorized imports, isolation, budgets, and query readiness.
+- [1.8.3 upgrade guide](guides/1.8.3-upgrade-guide.md): rolling windows, endpoint repairs, and UI integration.
 - [1.8.2 upgrade guide](guides/1.8.2-upgrade-guide.md)
 - [1.8.1 upgrade guide](guides/1.8.1-upgrade-guide.md)
 - [1.8.0 upgrade guide](guides/1.8.0-upgrade-guide.md)
 - [Changelog](../CHANGELOG.md); earlier version guides remain in `guides/`.
 
-1.8.2 is published. This documentation cleanup does not change its API or start
-the 1.8.3 implementation. Historical reports preserve what was known at each
-checkpoint; use the current alignment guide to interpret superseded claims.
+1.8.3 is prepared for release; npm publication is a separate operator action.
+The retained live report describes 1.8.2. Historical reports preserve what was
+known at each checkpoint; use the current guide to interpret superseded claims.

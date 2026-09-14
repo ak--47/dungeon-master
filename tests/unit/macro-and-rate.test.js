@@ -8,7 +8,7 @@
  * preset system whose default ("flat") removes the legacy growth-bias defaults.
  */
 
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, vi } from 'vitest';
 import { validateDungeonConfig } from '../../lib/core/config-validator.js';
 import { resolveMacro, MACRO_PRESETS, MACRO_PRESET_NAMES } from '../../lib/templates/macro-presets.js';
 import { initChance, setDatasetNow, setDatasetBegin } from '../../lib/utils/utils.js';
@@ -426,6 +426,32 @@ describe('soup presets no longer carry birth-distribution fields', () => {
 		});
 		expect(config.bornRecentBias).toBe(MACRO_PRESETS.flat.bornRecentBias);
 		expect(config.percentUsersBornInDataset).toBe(MACRO_PRESETS.flat.percentUsersBornInDataset);
+	});
+});
+
+describe.sequential('relative dataset windows', () => {
+	test.each([
+		'2026-09-13T21:23:45.678Z',
+		'2026-03-08T10:15:00Z',
+		'2026-11-01T09:15:00Z',
+	])('ends at the captured current instant: %s', (now) => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		vi.setSystemTime(new Date(now));
+		try {
+			initChance('relative-window');
+			const config = validateDungeonConfig({
+				numUsers: 10,
+				numEvents: 100,
+				numDays: 90,
+				seed: 'relative-window',
+			});
+			const expectedEnd = Math.floor(Date.parse(now) / 1000);
+			expect(config.datasetEnd).toBe(expectedEnd);
+			expect(config.datasetStart).toBe(expectedEnd - 90 * 86400);
+			expect(config.numDays).toBe(90);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 

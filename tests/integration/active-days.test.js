@@ -15,7 +15,7 @@
  * Reference: `mixpanel/analytics/backend/arb/reader/queries/addiction_query.cpp`
  */
 
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, vi } from 'vitest';
 import DUNGEON_MASTER from '../../index.js';
 import { countDistinctPeriods } from '../../lib/verify/counting.js';
 
@@ -81,6 +81,131 @@ const mean = (xs) => xs.reduce((s, x) => s + x, 0) / xs.length;
 // file. Active-day distribution depends on a deterministic chance stream;
 // concurrent tests interleave consumption.
 describe.sequential('v1.5 avgActiveDaysPerUser primitive', () => {
+	test.each([
+		{},
+		{ avgActiveDaysPerUser: 5 },
+		{ retentionCurve: { day1: 0.35, day7: 0.18, day30: 0.08 } },
+	])('generates through captured run start without moving the clock: %j', async (activity) => {
+		const runStartMs = Date.parse('2026-09-13T12:34:56Z');
+		vi.useFakeTimers({ toFake: ['Date'] });
+		vi.setSystemTime(new Date(runStartMs));
+		try {
+			const result = await DUNGEON_MASTER(baseConfig({
+				...activity,
+				datasetStart: undefined,
+				datasetEnd: undefined,
+				numDays: 30,
+				percentUsersBornInDataset: 0,
+				concurrency: 1,
+				hook(record, type) {
+					if (type === 'user') vi.setSystemTime(new Date(runStartMs + 3600000));
+					return record;
+				},
+			}));
+			const times = Array.from(result.eventData, event => Date.parse(event.time));
+			expect(result.validatedConfig.datasetEnd).toBe(runStartMs / 1000);
+			expect(result.validatedConfig.datasetStart).toBe(runStartMs / 1000 - 30 * 86400);
+			expect(Math.max(...times)).toBeGreaterThan(runStartMs - 1800000);
+			expect(times.every(time => time >= runStartMs - 30 * 86400000 && time <= runStartMs)).toBe(true);
+			expect(times.filter(time => time === runStartMs).length).toBeLessThan(5);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test.each([
+		{ avgActiveDaysPerUser: 5 },
+		{ retentionCurve: { day1: 0.35, day7: 0.18, day30: 0.08 } },
+	])('does not allocate activity to a zero-duration endpoint: %j', async (activity) => {
+		const result = await DUNGEON_MASTER(baseConfig({
+			...activity,
+			percentUsersBornInDataset: 0,
+			concurrency: 1,
+		}));
+		const endMs = Date.parse('2025-10-01T00:00:00Z');
+		const events = Array.from(result.eventData);
+		const endpointEvents = events.filter(event => Date.parse(event.time) === endMs);
+		expect(events.length).toBeGreaterThan(1000);
+		expect(endpointEvents.length).toBeLessThan(5);
+		expect(events.every(event => Date.parse(event.time) <= endMs)).toBe(true);
+	});
+
+	test.each([
+		{ avgActiveDaysPerUser: 5 },
+		{ retentionCurve: { day1: 0.35, day7: 0.18, day30: 0.08 } },
+	])('scales a short final day by its available duration: %j', async (activity) => {
+		const result = await DUNGEON_MASTER(baseConfig({
+			...activity,
+			percentUsersBornInDataset: 0,
+			concurrency: 1,
+			datasetEnd: '2025-10-01T00:15:00Z',
+		}));
+		const events = Array.from(result.eventData);
+		const finalDayMs = Date.parse('2025-10-01T00:00:00Z');
+		const finalDayEvents = events.filter(event => Date.parse(event.time) >= finalDayMs);
+		const previousDayEvents = events.filter(event => {
+			const time = Date.parse(event.time);
+			return time >= finalDayMs - 86400000 && time < finalDayMs;
+		});
+		expect(previousDayEvents.length).toBeGreaterThan(100);
+		expect(finalDayEvents.length).toBeLessThan(previousDayEvents.length * 0.1);
+	});
+
+	test('preserves proportional traffic through a half-day endpoint', async () => {
+		const result = await DUNGEON_MASTER(baseConfig({
+			seed: 'half-day-capacity',
+			numUsers: 300,
+			avgActiveDaysPerUser: 5,
+			percentUsersBornInDataset: 0,
+			concurrency: 1,
+			soup: { dayOfWeekWeights: Array(7).fill(1), hourOfDayWeights: Array(24).fill(1) },
+			datasetEnd: '2025-10-01T12:00:00Z',
+		}));
+		const finalDayMs = Date.parse('2025-10-01T00:00:00Z');
+		const events = Array.from(result.eventData);
+		const finalDayEvents = events.filter(event => Date.parse(event.time) >= finalDayMs).length;
+		const fullDayMean = events.filter(event => {
+			const time = Date.parse(event.time);
+			return time >= finalDayMs - 14 * 86400000 && time < finalDayMs;
+		}).length / 14;
+		expect(finalDayEvents / fullDayMean).toBeGreaterThan(0.35);
+		expect(finalDayEvents / fullDayMean).toBeLessThan(0.7);
+	});
+
+	test.each([
+		{ avgActiveDaysPerUser: 5 },
+		{ retentionCurve: { day1: 1, day30: 1 } },
+	])('skips partial days without available business hours: %j', async (activity) => {
+		const result = await DUNGEON_MASTER(baseConfig({
+			...activity,
+			seed: 'business-hours-partial-day',
+			percentUsersBornInDataset: 0,
+			concurrency: 1,
+			soup: {
+				dayOfWeekWeights: Array(7).fill(1),
+				hourOfDayWeights: Array.from({ length: 24 }, (_, hour) => hour >= 9 && hour < 17 ? 1 : 0),
+			},
+			datasetEnd: '2025-10-01T08:00:00Z',
+		}));
+		const events = Array.from(result.eventData);
+		expect(events.length).toBeGreaterThan(1000);
+		expect(events.filter(event => Date.parse(event.time) >= Date.parse('2025-10-01T00:00:00Z'))).toHaveLength(0);
+	});
+
+	test('does not fill a one-second final day when every day is selected', async () => {
+		const result = await DUNGEON_MASTER(baseConfig({
+			retentionCurve: { day1: 1, day30: 1 },
+			percentUsersBornInDataset: 0,
+			concurrency: 1,
+			datasetEnd: '2025-10-01T00:00:01Z',
+		}));
+		const finalDayMs = Date.parse('2025-10-01T00:00:00Z');
+		const events = Array.from(result.eventData);
+		const finalDayEvents = events.filter(event => Date.parse(event.time) >= finalDayMs);
+		expect(events.length).toBeGreaterThan(1000);
+		expect(finalDayEvents.length).toBeLessThan(5);
+	});
+
 	test('mean distinct-day count matches configured target ±20%', async () => {
 		// 200 users × 30 days. Target: ~5 active days per user (sd ≈ mean/3 ≈ 1.67).
 		// Expect mean across users in [4, 6] (20% tolerance to absorb engine
