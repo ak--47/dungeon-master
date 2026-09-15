@@ -9,10 +9,10 @@ const skillsRoot = path.join(root, '.claude/skills');
 const readSkill = (name) => fs.readFileSync(path.join(skillsRoot, name, 'SKILL.md'), 'utf8');
 
 describe('1.8.1 skill contracts', () => {
-	test('all nine skills share a resolvable proof contract through both aliases', () => {
+	test('all ten skills share a resolvable proof contract through both aliases', () => {
 		const names = fs.readdirSync(skillsRoot, { withFileTypes: true })
 			.filter(entry => entry.isDirectory()).map(entry => entry.name);
-		expect(names).toHaveLength(9);
+		expect(names).toHaveLength(10);
 		const contract = path.join(skillsRoot, 'verify-dungeon/references/alignment-contract.md');
 		for (const name of names) {
 			const canonical = path.join(skillsRoot, name, 'SKILL.md');
@@ -102,6 +102,23 @@ describe('1.8.1 skill contracts', () => {
 		expect(release).toContain('`npm test` excludes alignment');
 		expect(release).toContain('node tests/alignment/run.mjs --sweep --timeout-ms=600000');
 		expect(release).toContain('report NOT RUN');
+	});
+
+	test('audit-dm4 requires production provenance and a scoped implementation plan', () => {
+		const text = readSkill('audit-dm4');
+		for (const requirement of ['gs://dungeon_master_4/DUNGEONS',
+			'~/code/dm4/plans/dungeon-master-improvements-{date}.md',
+			'Generation-pin source and metadata downloads', 'read-only on production storage',
+			'500 users', 'configured full scale', 'independent report specification',
+			'held-out seeds', 'never mutate originals', 'Do not fix engine or DM4 source']) {
+			expect(text, requirement).toContain(requirement);
+		}
+		const workflow = path.join(skillsRoot, 'audit-dm4/references/workflow.md');
+		expect(fs.existsSync(workflow)).toBe(true);
+		const reference = fs.readFileSync(workflow, 'utf8');
+		expect(reference).toContain('Network denial does not block filesystem effects');
+		expect(reference).toContain('synthetic session marker at -15 seconds');
+		expect(reference).toContain('Separate diagnostic execution from strict evidence acceptance');
 	});
 });
 
