@@ -2,6 +2,16 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.8.4 - 2026-09-21
+
+### Changed
+
+- Upgrade `mixpanel-import` to `^3.6.2`. That release corrects the profile and
+  group success counts reported under concurrency. Import summaries from
+  `sendToMixpanel` now report accurate profile totals.
+
+No dungeon-master source changes. Generated output is unchanged for a fixed seed.
+
 ## 1.8.3 - 2026-09-13
 
 ### Fixed
