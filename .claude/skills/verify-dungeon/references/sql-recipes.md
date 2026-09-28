@@ -652,7 +652,8 @@ For any spike/burst hook with a tight day window, ALWAYS normalize by window len
 ## Determinism check (optional confidence test)
 
 For seeded generation, pin `datasetStart`/`datasetEnd` and `concurrency: 1`.
-Use isolated sequential runs and strip only `insert_id` before comparing events:
+Use isolated sequential runs and compare every event field, including `insert_id`
+(deterministic since 1.8.5):
 
 1. Run a previously-passing dungeon a second time.
 2. Require identical event counts, timestamps, ordering, and seeded property values.

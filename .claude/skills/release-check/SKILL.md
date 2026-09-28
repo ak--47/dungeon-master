@@ -64,7 +64,8 @@ For a skills-only audit, run only `tests/e2e/skills-contract.test.js` with
 through programmatic Vitest under `sandbox-exec` network denial.
 
 For generation changes, require the event-stream determinism test. Compare runs
-with the same seed, pinned window, and `concurrency: 1`; strip only `insert_id`.
+with the same seed, pinned window, and `concurrency: 1`; compare every field,
+including `insert_id` (deterministic since 1.8.5).
 Use sequential test cases because the RNG is shared. Include warehouse noise in
 warehouse determinism checks. Never accept an unrun or failing determinism gate.
 

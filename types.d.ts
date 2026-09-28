@@ -1070,6 +1070,8 @@ export interface Context {
     DATASET_END_SECONDS: number;
 
     // State update methods
+    /** Mint the next deterministic `insert_id` (hash of seed, scope, ordinal) for a scope. Default scope `'events'`. */
+    nextInsertId(scope?: string): string;
     incrementOperations(): void;
     incrementEvents(): void;
     incrementUsers(): void;

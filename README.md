@@ -913,11 +913,12 @@ all randomness is seeded. same seed + same config + concurrency=1 = identical ou
 pin `datasetStart` and `datasetEnd` too, or the dataset window moves with the
 calendar and every timestamp shifts.
 
-**one exception: `insert_id`.** since 1.4.0 it is a `randomUUID()`, so it differs
-on every run by design — that is what keeps Mixpanel from deduping re-imports of
-the same dataset. strip `insert_id` before diffing two runs. everything else
-(event count, order, timestamps, every property, profiles, groups) is
-byte-identical.
+that includes `insert_id`. since 1.8.5 every id is a hash (36 chars, hex and
+dashes, valid for Mixpanel import), not a `randomUUID()`. so a re-import of the
+same seeded dataset into the same project dedupes instead of doubling. to load a
+second copy on purpose, change the `seed`. an unseeded run salts its ids with a
+random value, so its ids differ run to run. everything (event count, order,
+timestamps, every property, `insert_id`, profiles, groups) is byte-identical.
 
 ## what gets generated
 
