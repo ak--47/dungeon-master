@@ -270,8 +270,21 @@ record.push(clone);
 ```
 
 Since v1.6.3 the engine re-stamps any duplicate or missing `insert_id` across each
-user's final stream ([user-loop.js:753-776](lib/orchestrators/user-loop.js#L753-L776)),
-so all three shapes now survive ingest. Prefer
+user's final stream ([user-loop.js](lib/orchestrators/user-loop.js), the
+"guarantee unique `insert_id`" pass after the `everything` hook), so all three
+shapes now survive ingest.
+
+Since v1.8.5 every `insert_id` is deterministic: a hash, never `randomUUID()`.
+`cloneEvent` and the inject helpers hash the template's id with the clone's event,
+time, and identity. The engine's re-stamp pass mints ids from the seeded run. Same
+seed, same hook, same ids. Two consequences for hook authors:
+
+- Change the clone's `time` through the helper (`cloneEvent(src, { time })`, or the
+  inject helpers' time argument), not by assignment after the clone. Two clones of
+  one template at one time hash to one id; the engine pass re-stamps the second, so
+  nothing is lost, but the helper path keeps ids stable if you add clones later.
+- Do not call `randomUUID()` or `Math.random()` for an id in a hook. That breaks
+  run-to-run determinism. Leave the id to the helper or the engine. Prefer
 [`cloneEvent`](lib/hook-helpers/mutate.js) anyway: the engine pass is a per-user
 last resort, and it cannot help a clone that a hook moves onto a different user.
 

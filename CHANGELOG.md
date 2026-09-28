@@ -2,6 +2,25 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.8.5 - 2026-09-27
+
+### Fixed
+
+- Make `insert_id` deterministic. A seeded run now emits the same ids every
+  time, so re-importing the same dataset into the same project dedupes instead
+  of doubling. Every id is a SHA-1 hash laid out as 8-4-4-4-12 (36 chars,
+  hex and dashes), which passes Mixpanel's import validation. Covered paths:
+  the event generator, `dataQuality.duplicateRate` copies, `worldEvents`
+  `volumeMultiplier` clones, the per-user uniqueness pass after `everything`,
+  `standaloneEvents`, and the hook-helper clones (`cloneEvent`, `inject*`,
+  `scaleEventCount`, shape helpers). Unseeded runs salt ids with a random UUID.
+- Hash the funnel exclusion-step `insert_id`. The old value embedded the event
+  name and ISO time, which broke the 36-byte alphanumeric-or-dash rule.
+
+All other output is byte-identical to 1.8.4 for a fixed seed; no RNG draws were
+added or removed. To import a second copy of a seeded dataset on purpose,
+change the `seed`.
+
 ## 1.8.4 - 2026-09-21
 
 ### Changed
