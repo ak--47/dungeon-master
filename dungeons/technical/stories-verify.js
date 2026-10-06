@@ -132,7 +132,7 @@ export const stories = [
 			{
 				breakdown: {
 					type: 'duckdb',
-					sql: "SELECT plan, count(*) AS n FROM read_json_auto('{{PREFIX}}-EVENTS*.json') WHERE event = 'purchase' GROUP BY plan",
+					sql: "SELECT plan, count(*) AS n FROM read_json_auto('{{PREFIX}}-EVENTS*.json*') WHERE event = 'purchase' GROUP BY plan",
 				},
 				assert: (rows) => {
 					const by = Object.fromEntries((rows || []).map(r => [r.plan, Number(r.n)]));

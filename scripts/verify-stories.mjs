@@ -34,6 +34,7 @@ import readline from 'readline';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { pathToFileURL } from 'url';
+import zlib from 'zlib';
 import { parse as parseCsv } from 'csv-parse';
 import generate from '../index.js';
 import { extractComments } from '../lib/core/extract-comments.js';
@@ -167,8 +168,8 @@ if (inMemory) {
 		// streaming load: full-fidelity event shards can exceed the readFileSync cap
 		if (!fs.existsSync(dir)) return [];
 		const out = [];
-		for (const f of fs.readdirSync(dir).filter(f => f.startsWith(`${base}-${suffix}`) && f.endsWith('.json')).sort()) {
-			const rl = readline.createInterface({ input: fs.createReadStream(path.join(dir, f)), crlfDelay: Infinity });
+		for (const f of fs.readdirSync(dir).filter(f => f.startsWith(`${base}-${suffix}`) && /\.json(\.gz)?$/.test(f)).sort()) {
+			const rl = readline.createInterface({ input: openMaybeGz(path.join(dir, f)), crlfDelay: Infinity });
 			for await (const line of rl) {
 				if (line.trim()) out.push(JSON.parse(line));
 			}
@@ -293,6 +294,12 @@ function buildWarehouseAudits(warehouseSpecs, warehouseRows, validated, events =
 	});
 }
 
+/** Read stream for a shard or table file; `.gz` files are gunzipped in-stream. */
+function openMaybeGz(filePath) {
+	const stream = fs.createReadStream(filePath);
+	return filePath.endsWith('.gz') ? stream.pipe(zlib.createGunzip()) : stream;
+}
+
 function loadWarehouseManifest(prefixPath) {
 	const manifestPath = `${prefixPath}-WAREHOUSE-MANIFEST.json`;
 	if (!fs.existsSync(manifestPath)) return null;
@@ -303,7 +310,8 @@ async function loadWarehouseRows(prefixPath, spec, manifest) {
 	const manifestEntry = manifest?.tables?.find((table) => table.table === spec.name) || null;
 	const fileBase = manifestEntry?.file || `${path.basename(prefixPath)}-WAREHOUSE-${spec.name}`;
 	const format = manifestEntry?.format || spec.format || 'csv';
-	const filePath = path.join(path.dirname(prefixPath), `${fileBase}.${format}`);
+	const plainPath = path.join(path.dirname(prefixPath), `${fileBase}.${format}`);
+	const filePath = fs.existsSync(plainPath) ? plainPath : `${plainPath}.gz`;
 	if (!fs.existsSync(filePath)) return [];
 	if (format === 'json') return loadNdjson(filePath);
 	return loadCsv(filePath, manifestEntry?.columns || []);
@@ -311,7 +319,7 @@ async function loadWarehouseRows(prefixPath, spec, manifest) {
 
 async function loadNdjson(filePath) {
 	const out = [];
-	const rl = readline.createInterface({ input: fs.createReadStream(filePath), crlfDelay: Infinity });
+	const rl = readline.createInterface({ input: openMaybeGz(filePath), crlfDelay: Infinity });
 	for await (const line of rl) {
 		if (line.trim()) out.push(JSON.parse(line));
 	}
@@ -320,7 +328,7 @@ async function loadNdjson(filePath) {
 
 async function loadCsv(filePath, columns) {
 	const out = [];
-	const parser = fs.createReadStream(filePath).pipe(parseCsv({
+	const parser = openMaybeGz(filePath).pipe(parseCsv({
 		bom: true,
 		columns: true,
 		skip_empty_lines: true,

@@ -65,6 +65,22 @@ describe('P3.3 verify-stories CLI', () => {
 			expect(diskById['H2-duckdb-crosscheck'].assertions[0].detail).toMatch(/duckdb/);
 		}
 
+		// ── gzipped shards in a custom directory: same verdicts as plain JSON ──
+		const gzDir = path.join(ROOT, 'tmp', 'verify-stories-e2e-gz');
+		fs.rmSync(gzDir, { recursive: true, force: true });
+		fs.mkdirSync(gzDir, { recursive: true });
+		try {
+			await generate({ ...dungeonConfig, token: '', writeToDisk: gzDir, format: 'json', gzip: true, name: PREFIX, verbose: false });
+			expect(fs.readdirSync(gzDir).some(f => f.startsWith(`${PREFIX}-EVENTS`) && f.endsWith('.json.gz'))).toBe(true);
+			const gz = runCli([DUNGEON, '--data-prefix', path.join(gzDir, PREFIX), '--json']);
+			const gzById = Object.fromEntries(JSON.parse(gz.stdout).stories.map(s => [s.id, s]));
+			expect(gzById['H1-pro-browse-3x'].verdict).toBe(diskById['H1-pro-browse-3x'].verdict);
+			expect(gzById['H2-free-purchase-drop'].verdict).toBe(diskById['H2-free-purchase-drop'].verdict);
+			if (duckdbAvailable) expect(gzById['H2-duckdb-crosscheck'].verdict).toBe(diskById['H2-duckdb-crosscheck'].verdict);
+		} finally {
+			fs.rmSync(gzDir, { recursive: true, force: true });
+		}
+
 		// ── failure paths: INVERSE verdict + uncovered hook ──
 		const failPath = path.join(ROOT, 'tmp', 'stories-e2e-fail.fixture.mjs');
 		fs.mkdirSync(path.dirname(failPath), { recursive: true });
