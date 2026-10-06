@@ -7,6 +7,8 @@
  *    [created, FIXED_NOW].
  * 2. engagementDecay never drops the signup (isFirstEvent / stitch
  *    isAuthEvent) and anchors on the user's first emitted event.
+ * 3. worldEvents volumeMultiplier > 1 clones land only inside the user's
+ *    lifetime (never before the first event / stitch, never past FIXED_NOW).
  */
 
 import { describe, test, expect } from 'vitest';
@@ -40,7 +42,9 @@ function signupsByUser(events) {
 	const map = new Map();
 	for (const ev of events) {
 		if (ev.event !== 'sign up' || !ev.user_id) continue;
-		map.set(ev.user_id, ms(ev.time));
+		// Earliest signup: world-event clones of the signup can land later.
+		const t = ms(ev.time);
+		if (!map.has(ev.user_id) || t < map.get(ev.user_id)) map.set(ev.user_id, t);
 	}
 	return map;
 }
@@ -84,5 +88,27 @@ describe.sequential('born-user lifecycle', () => {
 		const signups = signupsByUser(events);
 		expect(profiles.filter(p => !signups.has(p.distinct_id))).toHaveLength(0);
 		expect(events.filter(ev => !ev.user_id)).toHaveLength(0);
+	});
+
+	test('volumeMultiplier clones never land before the stitch or past FIXED_NOW', async () => {
+		const result = await DUNGEON_MASTER(base({
+			worldEvents: [{ name: 'promo', startDay: 10, duration: 40, volumeMultiplier: 3, affectsEvents: '*' }],
+		}));
+		const events = Array.from(result.eventData);
+		const signups = signupsByUser(events);
+		const fixedNow = Date.parse('2025-04-01T00:00:00Z');
+		let before = 0;
+		let future = 0;
+		let deviceOnly = 0;
+		for (const ev of events) {
+			const t = ms(ev.time);
+			if (t > fixedNow) future++;
+			if (!ev.user_id) { deviceOnly++; continue; }
+			const s = signups.get(ev.user_id);
+			if (s !== undefined && t < s) before++;
+		}
+		expect(future).toBe(0);
+		expect(before).toBe(0);
+		expect(deviceOnly).toBe(0);
 	});
 });
