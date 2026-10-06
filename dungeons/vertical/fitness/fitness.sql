@@ -112,9 +112,13 @@ j AS (SELECT (p.date::DATE >= DATE '2026-06-15' AND p.date::DATE < DATE '2026-07
   FROM wh_paid p LEFT JOIN s ON s.d = p.date::DATE WHERE p.acquisition_channel = 'paid_social' GROUP BY 1)
 SELECT shred, round(spend, 2) AS spend_usd, signups, round(spend / signups, 2) AS spend_per_signup FROM j ORDER BY shred;
 
-WITH g AS (SELECT (t0 >= TIMESTAMP '2026-06-15' AND t0 < TIMESTAMP '2026-07-15') AS shred, count(*) AS n,
-  count(*) FILTER (WHERE ch = 'paid_social')::DOUBLE / count(*) AS social_share FROM signups GROUP BY 1)
-SELECT shred, n, round(social_share, 4) AS paid_social_share FROM g ORDER BY shred;
+-- daily signups inside (30 days) vs outside (90 days) the campaign: total and non-paid-social
+WITH g AS (SELECT (t0 >= TIMESTAMP '2026-06-15' AND t0 < TIMESTAMP '2026-07-15') AS shred,
+  count(*)::DOUBLE / (CASE WHEN (t0 >= TIMESTAMP '2026-06-15' AND t0 < TIMESTAMP '2026-07-15') THEN 30 ELSE 90 END) AS per_day,
+  count(*) FILTER (WHERE ch <> 'paid_social')::DOUBLE / (CASE WHEN (t0 >= TIMESTAMP '2026-06-15' AND t0 < TIMESTAMP '2026-07-15') THEN 30 ELSE 90 END) AS other_per_day
+  FROM signups GROUP BY 1)
+SELECT round(max(per_day) FILTER (WHERE shred) / max(per_day) FILTER (WHERE NOT shred), 4) AS volume_lift,
+ round(max(other_per_day) FILTER (WHERE shred) / max(other_per_day) FILTER (WHERE NOT shred), 4) AS other_channels_lift FROM g;
 
 WITH b AS (SELECT DISTINCT uid FROM ev WHERE event = 'subscription purchased'),
 w AS (SELECT date_trunc('week', s.t0) AS wk,
@@ -199,8 +203,9 @@ GROUP BY 1 ORDER BY 1;
 SELECT round(count(*) FILTER (WHERE coaching_mode = 'ai_coach')::DOUBLE / count(*), 4) AS ai_share_overall
 FROM ev WHERE event = 'workout completed' AND subscription_tier <> 'free' AND t >= TIMESTAMP '2026-08-12';
 
--- EVAL Q5 — calories per workout, Stride Coach vs self-guided (Plus, after launch)
-SELECT coaching_mode, count(*) AS workouts, round(avg(calories_burned), 1) AS avg_calories, median(calories_burned) AS median_calories
+-- EVAL Q5 — workout intensity, Stride Coach vs self-guided (Plus, after launch)
+SELECT coaching_mode, count(*) AS workouts, round(avg(avg_heart_rate), 1) AS avg_heart_rate, round(avg(perceived_effort), 2) AS avg_perceived_effort,
+ round(sum(calories_burned)::DOUBLE / sum(duration_minutes), 2) AS calories_per_minute
 FROM ev WHERE event = 'workout completed' AND subscription_tier <> 'free' AND t >= TIMESTAMP '2026-08-12'
 GROUP BY 1 ORDER BY 1;
 
@@ -260,10 +265,27 @@ j AS (SELECT p.acquisition_channel AS ch, (p.date::DATE >= DATE '2026-06-15' AND
   FROM wh_paid p LEFT JOIN s ON s.d = p.date::DATE AND s.ch = p.acquisition_channel GROUP BY ALL)
 SELECT ch, shred, round(spend, 2) AS spend_usd, signups, round(spend / signups, 2) AS spend_per_signup FROM j ORDER BY ch, shred;
 
--- EVAL Q11 — signup channel mix inside vs outside Summer Shred
+-- EVAL Q11 — did Summer Shred add members? daily signups by channel inside (30 days) vs outside (90 days)
 WITH s AS (SELECT (t0 >= TIMESTAMP '2026-06-15' AND t0 < TIMESTAMP '2026-07-15') AS shred, ch FROM signups),
 g AS (SELECT shred, ch, count(*) AS signups FROM s GROUP BY ALL)
-SELECT shred, ch, signups, round(signups::DOUBLE / sum(signups) OVER (PARTITION BY shred), 4) AS share FROM g ORDER BY shred, ch;
+SELECT ch, max(signups) FILTER (WHERE shred) AS shred_signups, round(max(signups) FILTER (WHERE shred) / 30.0, 2) AS shred_per_day,
+ round(max(signups) FILTER (WHERE NOT shred) / 90.0, 2) AS other_per_day,
+ round((max(signups) FILTER (WHERE shred) / 30.0) / (max(signups) FILTER (WHERE NOT shred) / 90.0), 4) AS lift,
+ round(max(signups) FILTER (WHERE shred)::DOUBLE / sum(max(signups) FILTER (WHERE shred)) OVER (), 4) AS shred_share,
+ round(max(signups) FILTER (WHERE NOT shred)::DOUBLE / sum(max(signups) FILTER (WHERE NOT shred)) OVER (), 4) AS other_share
+FROM g GROUP BY ch ORDER BY ch;
+-- totals, and the cost of the extra members: extra paid-social spend / extra signups
+WITH t AS (SELECT count(*) FILTER (WHERE t0 >= TIMESTAMP '2026-06-15' AND t0 < TIMESTAMP '2026-07-15') / 30.0 AS in_pd,
+  count(*) FILTER (WHERE NOT (t0 >= TIMESTAMP '2026-06-15' AND t0 < TIMESTAMP '2026-07-15')) / 90.0 AS out_pd FROM signups),
+sp AS (SELECT sum(spend_usd) FILTER (WHERE date::DATE >= DATE '2026-06-15' AND date::DATE < DATE '2026-07-15') / 30.0 AS in_pd,
+  sum(spend_usd) FILTER (WHERE NOT (date::DATE >= DATE '2026-06-15' AND date::DATE < DATE '2026-07-15')) / 90.0 AS out_pd
+  FROM wh_paid WHERE acquisition_channel = 'paid_social')
+SELECT round(t.in_pd, 2) AS signups_per_day_shred, round(t.out_pd, 2) AS signups_per_day_other, round(t.in_pd / t.out_pd, 4) AS volume_lift,
+ round((t.in_pd - t.out_pd) * 30) AS extra_members,
+ round(sp.in_pd, 2) AS paid_social_spend_per_day_shred, round(sp.out_pd, 2) AS paid_social_spend_per_day_other,
+ round((sp.in_pd - sp.out_pd) * 30, 2) AS extra_spend_usd,
+ round((sp.in_pd - sp.out_pd) / (t.in_pd - t.out_pd), 2) AS cost_per_extra_member
+FROM t, sp;
 
 -- EVAL Q12 — Plus purchase rate and spend per paying member by acquisition channel (new members)
 WITH b AS (SELECT DISTINCT uid FROM ev WHERE event = 'subscription purchased'),
@@ -332,6 +354,10 @@ SELECT 'paid social same-week buy rate vs other channels' AS metric,
    count(*) FILTER (WHERE ch <> 'paid_social') AS onn, count(b.uid) FILTER (WHERE ch <> 'paid_social') AS ob FROM signups s LEFT JOIN b ON b.uid = s.uid GROUP BY 1)
   SELECT round(sum(sb)::DOUBLE / sum(sn * ob::DOUBLE / nullif(onn, 0)), 4) FROM w WHERE onn > 0) AS value
 UNION ALL
+SELECT 'Summer Shred daily signup lift (all channels)',
+ (SELECT round((count(*) FILTER (WHERE t0 >= TIMESTAMP '2026-06-15' AND t0 < TIMESTAMP '2026-07-15') / 30.0)
+   / (count(*) FILTER (WHERE NOT (t0 >= TIMESTAMP '2026-06-15' AND t0 < TIMESTAMP '2026-07-15')) / 90.0), 4) FROM signups)
+UNION ALL
 SELECT 'monthly/annual purchase mix, after vs before Sep 1',
  (WITH g AS (SELECT (t >= TIMESTAMP '2026-09-01') AS post, count(*) FILTER (WHERE plan = 'monthly')::DOUBLE / count(*) FILTER (WHERE plan = 'annual') AS m FROM ev WHERE event = 'subscription purchased' GROUP BY 1)
   SELECT round(max(m) FILTER (WHERE post) / max(m) FILTER (WHERE NOT post), 4) FROM g)
@@ -341,5 +367,7 @@ UNION ALL
 SELECT 'members with 20+ notifications (share)', (SELECT round(avg((n >= 20)::INT), 4) FROM push)
 UNION ALL
 SELECT 'D28 retention, low first week (0-2 workouts)', (SELECT round(avg((d28_events > 0)::INT), 4) FROM habit WHERE early_workouts < 3)
+UNION ALL
+SELECT 'D28 retention, habit first week (3+ workouts)', (SELECT round(avg((d28_events > 0)::INT), 4) FROM habit WHERE early_workouts >= 3)
 UNION ALL
 SELECT 'share of new members with 0-2 first-week workouts', (SELECT round(avg((early_workouts < 3)::INT), 4) FROM habit);

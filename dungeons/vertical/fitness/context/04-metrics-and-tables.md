@@ -55,7 +55,7 @@ Daily health of wearable workout sync, by device type, from the integration team
 | `synced_workouts` | FLOAT | count | Wearable-tracked workouts that synced successfully that day. |
 | `sync_error_rate` | FLOAT | share 0-1 | Share of sync attempts that failed. |
 | `sync_requests` | FLOAT | count | Sync attempts made (successful plus failed). |
-| `partner_api_status` | STRING | — | Daily status from the partner feed: `operational` or `major_outage`. Chest straps do not use the partner API, so their status reflects only our own pipeline. |
+| `partner_api_status` | STRING | — | Daily sync status for the device type: `operational` or `major_outage`. Combines the partner status feed with our own pipeline monitoring. |
 | `p95_sync_latency_ms` | FLOAT | milliseconds | 95th-percentile time from workout end to sync. |
 
 Caveats: a workout that never synced is not in Mixpanel and is not in `synced_workouts`. Phone-tracked and manual workouts are not in this table.
@@ -78,6 +78,5 @@ Caveats: the table covers first purchases only, not renewals, refunds, or upgrad
 
 ## Analysis tips
 
-- For a before/after question around a dated change, compare against a control that the change did not touch (another plan, another device, another event) so that seasonality and the overall trend cancel out.
+- For a before/after question around a dated change, consider seasonality, the overall trend, and mix shifts before you attribute a change to the event.
 - New-member funnels and retention depend on signup date: members who joined late in the window have had less time to act. Compare cohorts that joined in the same weeks.
-- Plus purchases come mostly from new members (trial) and from long-time free members (direct); the pool of long-time free members shrinks as they upgrade.

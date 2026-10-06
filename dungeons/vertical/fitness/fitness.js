@@ -16,7 +16,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             (Monthly $12.99 → $14.99 from 2026-09-01, Annual $99.99).
  *             New members get one 7-day trial; Stride Coach (AI coaching) is a
  *             Plus feature from 2026-08-12.
- * SCALE:      10,000 users (≈40% join inside the window), ~1.52M events,
+ * SCALE:      10,000 simulated users → ≈9,050 active members (≈4,000 join
+ *             inside the window; ≈950 would-be joiners are removed by the
+ *             Summer Shred baseline thinning, see H5), ~1.21M events,
  *             120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  workout planned → workout completed → progress checked
  * VALUE MOMENT: workout completed
@@ -60,6 +62,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   then delete the signup event itself (orphaned anonymous members).
  * - World-event clones are spread across the whole event window, including
  *   before a new member's signup; the everything hook drops pre-signup rows.
+ * - The engine draws births uniformly over the window and has no campaign
+ *   acquisition knob. Summer Shred's extra members are produced by thinning
+ *   the baseline outside the campaign (user hook returns null, scd-pre and
+ *   everything return []) and re-attributing the same share inside it.
  */
 
 // ── HOOK STORIES ──
@@ -84,8 +90,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: from 2026-08-12, 45% of Plus workouts (event-time
  *   subscription_tier monthly/annual) run with coaching_mode = "ai_coach" and
- *   last 1.2x longer. Free and pre-launch workouts stay self_guided.
- *   Calories are untouched (an honest null).
+ *   last 1.2x longer (calories scale with the longer session). Free and
+ *   pre-launch workouts stay self_guided. Heart rate, perceived effort, and
+ *   calories per minute are untouched (an honest null: longer, not harder).
  * MIXPANEL: Insights, workout completed, average duration_minutes, breakdown
  *   coaching_mode, filter subscription_tier != free, after 2026-08-12.
  * REAL WORLD: real-time pacing cues keep people training longer.
@@ -117,23 +124,28 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * H5. SUMMER SHRED PAID SOCIAL (everything + warehouse paid_acquisition_daily)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: 2026-06-15 to 2026-07-14, 40% of non-referral signups arrive via
- *   paid_social and paid-social CPI bids double (warehouse spend = installs ×
- *   CPI). Half of all paid-social signups never buy Plus.
- * MIXPANEL: Insights, account created, breakdown acquisition_channel, weekly;
- *   join paid_acquisition_daily.spend_usd for spend per signup; Funnels or
- *   Insights for Plus purchase rate by acquisition_channel.
- * REAL WORLD: a performance push buys volume at a higher CPI from a
- *   lower-intent audience.
+ * PATTERN: 2026-06-15 to 2026-07-14, the campaign adds members: 25% of daily
+ *   signups inside the window are extra paid-social members, so total daily
+ *   signups rise 1.33x and every other channel keeps its daily volume.
+ *   Paid-social CPI bids double (warehouse spend = installs × CPI × seeded
+ *   ±10% day noise). Half of all paid-social signups never buy Plus.
+ * MIXPANEL: Insights, account created, breakdown acquisition_channel, daily
+ *   or weekly; join paid_acquisition_daily.spend_usd for spend per signup and
+ *   cost per extra member; Funnels or Insights for Plus purchase rate by
+ *   acquisition_channel.
+ * REAL WORLD: a performance push buys real extra volume, at a higher CPI,
+ *   from a lower-intent audience.
  *
  * ─────────────────────────────────────────────────────────────────────────
  * H6. FIRST-WEEK HABIT (everything)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: new members with fewer than 3 workouts in their first 7 days:
  *   50% of them go dark after day 14. Classification uses first-week
- *   activity only.
+ *   activity only. Separately, 80% of all new members lapse on a uniform
+ *   day in [8, 45] (organic churn, independent of the habit split), which
+ *   sets realistic D28 levels without touching the 2x ratio.
  * MIXPANEL: Retention, account created → any event, cohort "3+ workout
- *   completed in first 7 days" vs the rest; D28 ≈ 96% vs 46%.
+ *   completed in first 7 days" vs the rest; D28 ≈ 52% vs 23%.
  * REAL WORLD: the first week sets the habit; most fitness churn is early.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -170,26 +182,27 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                      | Derivation              | Expected  | Measured
  * -----|---------------------------------------------|-------------------------|-----------|---------
- * H1   | onboarding conversion Guided/Control        | GUIDED_CONV_MULT        | 1.30      | 1.262 (57.3% vs 45.4%)
- * H1   | median onboarding TTC Guided/Control        | GUIDED_TTC_MULT         | 0.70      | 0.698
- * H1   | Guided share of enrolled                    | equal 2-arm hash        | 0.50      | 0.511
+ * H1   | onboarding conversion Guided/Control        | GUIDED_CONV_MULT        | 1.30      | 1.318 (58.9% vs 44.7%)
+ * H1   | median onboarding TTC Guided/Control        | GUIDED_TTC_MULT         | 0.70      | 0.691
+ * H1   | Guided share of enrolled                    | equal 2-arm hash        | 0.50      | 0.504
  * H2   | ai_coach rows pre-launch or free tier       | exact purity            | 0         | 0
- * H2   | post-launch Plus duration ai/self           | AI_DURATION_MULT        | 1.20      | 1.201
- * H2   | post-launch Plus ai_coach share             | AI_ADOPTION             | 0.45      | 0.451
- * H3   | watch+band / phone, outage vs ±7 days       | OUTAGE_KEEP             | 0.25      | 0.260
+ * H2   | post-launch Plus duration ai/self           | AI_DURATION_MULT        | 1.20      | 1.194
+ * H2   | post-launch Plus ai_coach share             | AI_ADOPTION             | 0.45      | 0.445
+ * H3   | watch+band / phone, outage vs ±7 days       | OUTAGE_KEEP             | 0.25      | 0.274
  * H3   | warehouse sync_error_rate during outage     | 1 − OUTAGE_KEEP         | 0.75      | 0.750
- * H4   | monthly/annual purchases, after vs before   | 1 − MONTHLY_LOSS        | 0.65      | 0.701
- * H4   | monthly/annual bookings, after vs before    | 0.65 × 14.99/12.99      | 0.75      | 0.809
- * H5   | paid-social spend per signup, Shred/rest    | SHRED_CPI_MULT          | 2.00      | 2.000
- * H5   | paid-social signup share, Shred/rest        | (.18+.4×.66)/.18        | 2.47      | 2.261
- * H5   | paid-social buy rate vs same-week others    | 1 − PAID_SOCIAL_NO_BUY  | 0.50      | 0.494
- * H6   | D28 retention habit/low                     | ≥ 1/(1 − 0.5) (floor)   | ≥ 2.0     | 2.102 (96.3% vs 45.8%)
+ * H4   | monthly/annual purchases, after vs before   | 1 − MONTHLY_LOSS        | 0.65      | 0.659
+ * H4   | monthly/annual bookings, after vs before    | 0.65 × 14.99/12.99      | 0.75      | 0.760
+ * H5   | paid-social spend per signup, Shred/rest    | SHRED_CPI_MULT          | 2.00      | 1.948
+ * H5   | daily signups, Shred/rest (all channels)    | 1/(1 − SHRED_INCREMENTAL)| 1.33     | 1.350
+ * H5   | daily signups, Shred/rest (non-paid-social) | control                 | 1.00      | 1.023
+ * H5   | paid-social buy rate vs same-week others    | 1 − PAID_SOCIAL_NO_BUY  | 0.50      | 0.476
+ * H6   | D28 retention habit/low                     | ≥ 1/(1 − 0.5) (floor)   | ≥ 2.0     | 2.261 (52.4% vs 23.2%)
  * H7   | per-challenge completion, team              | TEAM_CONV               | 0.60      | 0.590
- * H7   | per-challenge completion, solo              | SOLO_CONV               | 0.30      | 0.297
- * H8   | open rate heavy (20+) / light               | 1 − PUSH_FATIGUE_FLIP   | 0.40      | 0.400
- * H8   | open rate light (control)                   | declared pool 3 of 4    | 0.75      | 0.748
- * H9   | completed per app open, program/before      | FALL_RESET_MULT         | 1.50      | 1.502
- * H9   | planned per app open, program/before        | FALL_RESET_MULT         | 1.50      | 1.495
+ * H7   | per-challenge completion, solo              | SOLO_CONV               | 0.30      | 0.296
+ * H8   | open rate heavy (20+) / light               | 1 − PUSH_FATIGUE_FLIP   | 0.40      | 0.402
+ * H8   | open rate light (control)                   | declared pool 3 of 4    | 0.75      | 0.751
+ * H9   | completed per app open, program/before      | FALL_RESET_MULT         | 1.50      | 1.503
+ * H9   | planned per app open, program/before        | FALL_RESET_MULT         | 1.50      | 1.497
  * ═════════════════════════════════════════════════════════════════════════
  */
 
@@ -243,8 +256,16 @@ const MONTHLY_LOSS = 0.35;         // share of post-change monthly purchases los
 // H5 Summer Shred paid social
 const PAID_CHANNELS = ["paid_social", "paid_search", "app_store_ads"];
 const CPI_USD = { paid_social: 9, paid_search: 14, app_store_ads: 6 };
+const CPI_NOISE = 0.1;             // ± day-level CPI variation per channel (seeded)
 const SHRED_CPI_MULT = 2;          // paid_social CPI bids during Summer Shred
-const SHRED_RELABEL = 0.4;         // share of non-referral campaign-window signups that came via paid social
+// Summer Shred adds members: inside the campaign window, this share of daily
+// signups are extra paid-social members on top of the baseline. Births are
+// uniform in the engine, so the baseline outside the window is thinned by the
+// same share (those would-be members never exist) and, inside the window, the
+// same share of non-paid-social births are re-attributed to paid social. Net:
+// every non-paid-social channel keeps its daily volume, total daily signups
+// rise 1/(1 − 0.25) = 1.33x, and all of the extra arrives through paid social.
+const SHRED_INCREMENTAL = 0.25;
 const PAID_SOCIAL_NO_BUY = 0.5;    // share of paid_social signups that never buy Plus
 
 // H6 first-week habit
@@ -252,6 +273,11 @@ const HABIT_DAYS = 7;
 const HABIT_MIN_WORKOUTS = 3;
 const HABIT_CHURN_AFTER_DAYS = 14;
 const HABIT_CHURN_SHARE = 0.5;     // share of low-habit new users who go dark after day 14
+// organic new-member lapse (applies to every new member, independent of H6):
+// this share stop using the app on a uniform day in [8, 45] after signup
+const LAPSE_SHARE = 0.8;
+const LAPSE_DAY_MIN = 8;
+const LAPSE_DAY_MAX = 45;
 
 // H7 team vs solo challenges
 const TEAM_CONV = 60;
@@ -266,10 +292,16 @@ const PUSH_FATIGUE_FLIP = 0.6;     // share of opened pushes that go unopened ab
 const FALL_RESET_MULT = 1.5;
 const FALL_RESET_EVENTS = ["workout planned", "workout completed"];
 
+// workout calorie model (kcal per minute at moderate effort)
+const KCAL_PER_MIN = { strength: 6, running: 10.5, hiit: 11, yoga: 3.5, cycling: 8.5, walking: 4.5 };
+
 // lifecycle hygiene
 const DEACTIVATION_QUIET_DAYS = 21;
 
 // ── HELPERS ──
+// members the Summer Shred baseline thinning removes (see SHRED_INCREMENTAL);
+// filled by the user hook, read by the scd-pre and everything hooks
+const NOT_ACQUIRED = new Set();
 const salt = (uid, tag) => hashFloat(`${uid}|${tag}`);
 const round2 = (n) => Math.round(n * 100) / 100;
 const inShred = (t) => t >= ms(SUMMER_SHRED_START) && t < ms(SUMMER_SHRED_END);
@@ -281,6 +313,16 @@ const T = (e) => dayjs.utc(e.time).valueOf();
 function handleUserHook(profile, meta) {
 	// pre-existing members already hold a plan; new signups start on Free
 	if (meta.userIsBornInDataset) {
+		// ── H5a: Summer Shred adds paid-social members (births are uniform) ──
+		const uid = profile.distinct_id;
+		const birth = ms(meta.user.created);
+		if (!inShred(birth) && salt(uid, "shred-base") < SHRED_INCREMENTAL) {
+			NOT_ACQUIRED.add(uid);
+			return null;
+		}
+		if (inShred(birth) && profile.acquisition_channel !== "paid_social" && salt(uid, "shred") < SHRED_INCREMENTAL) {
+			profile.acquisition_channel = "paid_social";
+		}
 		profile.subscription_tier = "free";
 		profile.trial_eligible = true;
 		return profile;
@@ -301,6 +343,7 @@ function handleEverything(events, meta) {
 	if (!events.length) return events;
 	const profile = meta.profile;
 	const uid = profile.distinct_id;
+	if (NOT_ACQUIRED.has(uid)) return [];
 	const START = ms(DATASET_START);
 	const END = ms(DATASET_END);
 	const signup = events.find((e) => e.event === "account created");
@@ -308,14 +351,6 @@ function handleEverything(events, meta) {
 	// engine workaround: world-event clones are spread across the whole event
 	// window, including before a new member's signup — nobody trains before install
 	if (signup) events = events.filter((e) => T(e) >= birthMs || e.event === "$experiment_started");
-
-	// ── H5a: Summer Shred relabels campaign-window signups to paid social ──
-	if (signup && birthMs >= ms(SUMMER_SHRED_START) && birthMs < ms(SUMMER_SHRED_END)
-		&& profile.acquisition_channel !== "referral" && profile.acquisition_channel !== "paid_social"
-		&& salt(uid, "shred") < SHRED_RELABEL) {
-		profile.acquisition_channel = "paid_social";
-		signup.acquisition_channel = "paid_social";
-	}
 
 	// ── trial hygiene: one free trial per member ──
 	const firstTrial = events.filter((e) => e.event === "trial started").sort((a, b) => T(a) - T(b))[0];
@@ -355,6 +390,13 @@ function handleEverything(events, meta) {
 			events = events.filter((e) => T(e) < cut);
 			if (purchase && T(purchase) >= cut) purchase = null;
 		}
+		// organic lapse: most new members drift away at some point after week one
+		if (salt(uid, "lapse") < LAPSE_SHARE) {
+			const lapseDay = LAPSE_DAY_MIN + salt(uid, "lapse-day") * (LAPSE_DAY_MAX - LAPSE_DAY_MIN);
+			const cut = birthMs + lapseDay * 86_400_000;
+			events = events.filter((e) => T(e) < cut);
+			if (purchase && T(purchase) >= cut) purchase = null;
+		}
 	}
 
 	// ── H3: partner health-API outage — most smartwatch / band workouts never sync ──
@@ -375,7 +417,10 @@ function handleEverything(events, meta) {
 		if ((e.event === "workout completed" || e.event === "workout planned") && T(e) >= launch && e.subscription_tier !== "free"
 			&& chance.bool({ likelihood: AI_ADOPTION * 100 })) {
 			e.coaching_mode = "ai_coach";
-			if (e.event === "workout completed") e.duration_minutes = Math.round(e.duration_minutes * AI_DURATION_MULT);
+			if (e.event === "workout completed") {
+				e.duration_minutes = Math.round(e.duration_minutes * AI_DURATION_MULT);
+				e.calories_burned = Math.round(e.calories_burned * AI_DURATION_MULT); // longer session, same intensity
+			}
 			else e.planned_duration_minutes = Math.round(e.planned_duration_minutes * AI_DURATION_MULT);
 		}
 	}
@@ -412,7 +457,8 @@ function handleWarehouse(row, meta) {
 	const channel = row.acquisition_channel;
 	const t = dayjs.utc(row.date).valueOf();
 	const mult = channel === "paid_social" && inShred(t) ? SHRED_CPI_MULT : 1;
-	row.spend_usd = round2(meta.raw.plus.count * CPI_USD[channel] * mult);
+	const noise = 1 + (hashFloat(`cpi|${row.date}|${channel}`) - 0.5) * 2 * CPI_NOISE;
+	row.spend_usd = round2(meta.raw.plus.count * CPI_USD[channel] * mult * noise);
 	return row;
 }
 
@@ -428,7 +474,7 @@ const config = {
 	gzip: true,
 	concurrency: 1,
 	writeToDisk: false,
-	macro: { percentUsersBornInDataset: 40, bornRecentBias: 0, preExistingSpread: "uniform" },
+	macro: { percentUsersBornInDataset: 50, bornRecentBias: 0, preExistingSpread: "uniform" },
 	credentials: { token },
 	switches: {
 		hasSessionIds: true,
@@ -508,9 +554,15 @@ const config = {
 			properties: {
 				workout_category: ["strength", "running", "hiit", "yoga", "cycling", "walking"],
 				duration_minutes: u.weighNumRange(10, 90, 0.5, 40),
-				calories_burned: u.weighNumRange(60, 900, 0.4, 60),
 				avg_heart_rate: u.weighNumRange(90, 175, 0.6, 40),
 				perceived_effort: [3, 4, 5, 5, 6, 6, 7, 7, 8, 9],
+				// minutes × category burn rate × effort, with person-to-person spread
+				calories_burned: (ctx) => {
+					const e = ctx.event || {};
+					const rate = KCAL_PER_MIN[e.workout_category] || 6;
+					const effort = 0.7 + 0.05 * (Number(e.perceived_effort) || 6);
+					return Math.max(20, Math.round((Number(e.duration_minutes) || 30) * rate * effort * chance.normal({ mean: 1, dev: 0.12 })));
+				},
 				coaching_mode: ["self_guided"],
 				wearable_type: (ctx) => ctx.profile.wearable_type,
 				tracking_source: (ctx) => ctx.profile.wearable_type === "none"
@@ -743,9 +795,10 @@ const config = {
 			valueColumn: "spend_usd",
 			columns: {
 				// ad platforms claim ~8% more installs than product analytics records
-				platform_reported_installs: (ctx) => Math.round(ctx.value * 1.08),
-				clicks: (ctx) => Math.round(ctx.value / 0.21),
-				impressions: (ctx) => Math.round(ctx.value / 0.21 / 0.011),
+				platform_reported_installs: (ctx) => Math.round(ctx.value * (1.05 + 0.06 * hashFloat(`pri|${dayKey(ctx.time)}|${ctx.seriesKey}`))),
+				// click-to-install ≈ 21% and click-through ≈ 1.1%, each with day-level jitter
+				clicks: (ctx) => Math.round(ctx.value / (0.21 * (0.85 + 0.3 * hashFloat(`cti|${dayKey(ctx.time)}|${ctx.seriesKey}`)))),
+				impressions: (ctx) => Math.round(ctx.row.clicks / (0.011 * (0.85 + 0.3 * hashFloat(`ctr|${dayKey(ctx.time)}|${ctx.seriesKey}`)))),
 			},
 		},
 		{
@@ -834,6 +887,7 @@ const config = {
 
 	hook(record, type, meta) {
 		if (type === "user") return handleUserHook(record, meta);
+		if (type === "scd-pre") return NOT_ACQUIRED.has(meta.profile.distinct_id) ? [] : record;
 		if (type === "everything") return handleEverything(record, meta);
 		if (type === "warehouse") return handleWarehouse(record, meta);
 		return record;
@@ -859,10 +913,11 @@ const TS = (iso) => dayjs.utc(iso).format("YYYY-MM-DD HH:mm:ss");
 const DAY_MS = 86_400_000;
 const ONBOARDING_STEPS = ["account created", "goal quiz completed", "plan generated", "starter workout completed"];
 const EXP_KEY = `Experiment: ${GUIDED_EXPERIMENT}`;
-// Summer Shred share of paid-social signups, derived from the declared channel
-// weights (paid_social 18, referral 16 of 100) and the relabel knob
-const P_SOCIAL = 0.18, P_REFERRAL = 0.16;
-const SHRED_SHARE_LIFT = (P_SOCIAL + SHRED_RELABEL * (1 - P_SOCIAL - P_REFERRAL)) / P_SOCIAL;
+// Summer Shred volume: total daily signups rise 1/(1 − SHRED_INCREMENTAL);
+// non-paid-social channels keep their daily volume (ratio 1.0)
+const SHRED_DAYS = (ms(SUMMER_SHRED_END) - ms(SUMMER_SHRED_START)) / 86_400_000;
+const WINDOW_DAYS = Math.round((ms(DATASET_END) - ms(DATASET_START)) / 86_400_000);
+const SHRED_VOLUME_LIFT = 1 / (1 - SHRED_INCREMENTAL);
 const OUTAGE_BASE_FROM = TS(dayjs.utc(SYNC_OUTAGE_START).subtract(7, "day"));
 const OUTAGE_BASE_TO = TS(dayjs.utc(SYNC_OUTAGE_END).add(7, "day"));
 const RESET_BASE_FROM = TS(dayjs.utc(FALL_RESET_START).subtract(FALL_RESET_DAYS, "day"));
@@ -1052,7 +1107,7 @@ FROM g`,
 		id: "H5-summer-shred-paid-social",
 		hook: "H5",
 		archetype: "attribution-bias",
-		narrative: `Summer Shred (${SUMMER_SHRED_START.slice(0, 10)} to ${SUMMER_SHRED_END.slice(0, 10)}, exclusive) pushes paid social: ${SHRED_RELABEL * 100}% of non-referral signups in the window arrive through paid_social, and paid-social CPI bids double. The warehouse table paid_acquisition_daily bills spend = installs × CPI, so spend per Mixpanel signup on paid social reads ${SHRED_CPI_MULT}x inside the campaign. Paid-social signups are also low intent: ${PAID_SOCIAL_NO_BUY * 100}% of them never buy Plus, so their purchase rate is half that of other channels' signups from the same week (channel is drawn independently of persona; the same-week standardization removes the signup-date effect on how long members have had to buy).`,
+		narrative: `Summer Shred (${SUMMER_SHRED_START.slice(0, 10)} to ${SUMMER_SHRED_END.slice(0, 10)}, exclusive) buys extra members through paid social: ${SHRED_INCREMENTAL * 100}% of daily signups inside the window are campaign-driven paid-social members on top of the baseline, so total daily signups rise ${SHRED_VOLUME_LIFT.toFixed(2)}x while every other channel keeps its daily volume. Paid-social CPI bids double. The warehouse table paid_acquisition_daily bills spend = installs × CPI, so spend per Mixpanel signup on paid social reads ${SHRED_CPI_MULT}x inside the campaign. Paid-social signups are also low intent: ${PAID_SOCIAL_NO_BUY * 100}% of them never buy Plus, so their purchase rate is half that of other channels' signups from the same week (channel is drawn independently of persona; the same-week standardization removes the signup-date effect on how long members have had to buy).`,
 		mixpanelReport: { type: "Insights + warehouse", event: "account created", breakdown: "acquisition_channel", join: "paid_acquisition_daily.spend_usd" },
 		assertions: [
 			{
@@ -1076,14 +1131,33 @@ FROM j`,
 					type: "duckdb",
 					sql: `WITH ${ID_CTE},
 s AS (SELECT (t >= TIMESTAMP '${TS(SUMMER_SHRED_START)}' AND t < TIMESTAMP '${TS(SUMMER_SHRED_END)}') AS shred, acquisition_channel AS ch, uid FROM ev WHERE event = 'account created'),
-g AS (SELECT shred, count(*) FILTER (WHERE ch = 'paid_social')::DOUBLE / count(*) AS social_share, count(DISTINCT uid) AS users FROM s GROUP BY 1)
+g AS (SELECT shred, count(*)::DOUBLE / (CASE WHEN shred THEN ${SHRED_DAYS} ELSE ${WINDOW_DAYS - SHRED_DAYS} END) AS per_day,
+  count(*) FILTER (WHERE ch <> 'paid_social')::DOUBLE / (CASE WHEN shred THEN ${SHRED_DAYS} ELSE ${WINDOW_DAYS - SHRED_DAYS} END) AS other_per_day,
+  count(DISTINCT uid) AS users FROM s GROUP BY 1)
 SELECT 'all' AS grp, min(users) AS user_count,
- max(social_share) FILTER (WHERE shred) / max(social_share) FILTER (WHERE NOT shred) AS share_lift
+ max(per_day) FILTER (WHERE shred) / max(per_day) FILTER (WHERE NOT shred) AS volume_lift,
+ max(other_per_day) FILTER (WHERE shred) / max(other_per_day) FILTER (WHERE NOT shred) AS other_lift
 FROM g`,
 				},
 				select: { a: { where: { grp: "all" } } },
-				// (0.18 + 0.4 × (1 − 0.18 − 0.16)) / 0.18 from the declared channel weights
-				expect: { metric: "a.share_lift", op: "between", target: band(SHRED_SHARE_LIFT) },
+				// total daily signups inside vs outside = 1 / (1 − SHRED_INCREMENTAL)
+				expect: { metric: "a.volume_lift", op: "between", target: band(SHRED_VOLUME_LIFT) },
+				minCohort: 800,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+s AS (SELECT (t >= TIMESTAMP '${TS(SUMMER_SHRED_START)}' AND t < TIMESTAMP '${TS(SUMMER_SHRED_END)}') AS shred, acquisition_channel AS ch, uid FROM ev WHERE event = 'account created'),
+g AS (SELECT shred, count(*) FILTER (WHERE ch <> 'paid_social')::DOUBLE / (CASE WHEN shred THEN ${SHRED_DAYS} ELSE ${WINDOW_DAYS - SHRED_DAYS} END) AS other_per_day,
+  count(DISTINCT uid) AS users FROM s GROUP BY 1)
+SELECT 'all' AS grp, min(users) AS user_count,
+ max(other_per_day) FILTER (WHERE shred) / max(other_per_day) FILTER (WHERE NOT shred) AS other_lift
+FROM g`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				// control: organic, referral, paid search, app-store ads keep their daily volume
+				expect: { metric: "a.other_lift", op: "between", target: band(1) },
 				minCohort: 800,
 			},
 			{
@@ -1112,7 +1186,7 @@ FROM w WHERE onn > 0`,
 		id: "H6-first-week-habit",
 		hook: "H6",
 		archetype: "retention-divergence",
-		narrative: `New members who log fewer than ${HABIT_MIN_WORKOUTS} workouts in their first ${HABIT_DAYS} days are at risk: ${HABIT_CHURN_SHARE * 100}% of them go completely dark after day ${HABIT_CHURN_AFTER_DAYS}. Classification uses only first-week activity, so the return window never leaks into the segment. Day-28 retention (any event in days 28-34 after signup, signups at least 35 days before the window end) is at least 1/(1−${HABIT_CHURN_SHARE}) = ${1 / (1 - HABIT_CHURN_SHARE)}x higher for habit formers; organic selection (busier people retain better anyway) can only push it higher, so the knob is a floor and the read grades STRONG when selection adds lift.`,
+		narrative: `New members who log fewer than ${HABIT_MIN_WORKOUTS} workouts in their first ${HABIT_DAYS} days are at risk: ${HABIT_CHURN_SHARE * 100}% of them go completely dark after day ${HABIT_CHURN_AFTER_DAYS}. Classification uses only first-week activity, so the return window never leaks into the segment. Every new member also faces organic lapse (${LAPSE_SHARE * 100}% stop on a uniform day ${LAPSE_DAY_MIN}-${LAPSE_DAY_MAX}), independent of the split, which sets realistic levels but cancels in the ratio. Day-28 retention (any event in days 28-34 after signup, signups at least 35 days before the window end) is at least 1/(1−${HABIT_CHURN_SHARE}) = ${1 / (1 - HABIT_CHURN_SHARE)}x higher for habit formers; organic selection (busier people retain better anyway) can only push it higher, so the knob is a floor and the read grades STRONG when selection adds lift.`,
 		mixpanelReport: { type: "Retention", birth: "account created", return: "any event", breakdown: "cohort: ≥3 workout completed in first 7 days" },
 		assertions: [
 			{

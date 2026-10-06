@@ -14,7 +14,7 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 | 2026-08-20 (Thu) to 2026-08-22 (Sat) | Incident | **Wearable sync incident.** Our third-party health-data partner had an API incident. Their status page reported degraded sync for some device integrations for about three days. It was resolved early on August 23. Engineering did not change the app. The partner's daily status per device type is in `wearable_sync_daily`. |
 | 2026-09-01 (Tue) | Pricing | **Plus Monthly price change**: $12.99 → $14.99 per month for new purchases. Plus Annual stays $99.99. Existing subscribers keep their price until renewal. |
 | 2026-09-07 (Mon) | Holiday | US Labor Day. |
-| 2026-09-08 (Tue) to 2026-09-21 (Mon) | Program | **Fall Reset**: a 14-day back-to-routine program with in-app workout plans and email and push support for all members. |
+| 2026-09-08 (Tue) to 2026-09-21 (Mon) | Program | **Fall Reset**: a 14-day back-to-routine program with in-app workout plans for all members. |
 | 2026-10-01 (Thu) | — | End of the analysis window (data runs through 23:59 UTC). |
 
 ## Things that did not change in the window
