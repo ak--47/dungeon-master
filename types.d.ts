@@ -574,6 +574,11 @@ export interface Dungeon {
      * governed by session and funnel structure and verify the curve from day 7 on.
      * To lower day 1, shorten `timeToConvert` on funnels users enter on birth, or
      * use an `everything` hook to drop next-day spill.
+     *
+     * **The curve shapes born-in-dataset users only (1.8.6).** Pre-existing users
+     * get their active-day count from the curve, but their days are picked by
+     * day-of-week weight, so their per-member activity stays flat across the
+     * window. Build retention stories on born users.
      */
     retentionCurve?: {
         type?: 'logarithmic' | 'linear';
