@@ -174,11 +174,23 @@ describe('normalizeStep', () => {
 		expect(() => normalizeStep(null)).toThrow();
 		expect(() => normalizeStep({ where: {} })).toThrow();
 	});
+	test('throws on a where filter that is not { prop, op, value }', () => {
+		// Map shorthand is not a documented step-filter form; it used to match every event.
+		expect(() => normalizeStep({ event: 'A', where: { challenge_format: 'team' } }))
+			.toThrow(/\{ prop, op, value \}/);
+		expect(() => normalizeStep({ event: 'A', where: { prop: 'x', value: 1 } })).toThrow(/op/);
+		expect(() => normalizeStep({ event: 'A', where: { prop: 'x', op: 'eq' } })).toThrow(/value/);
+		expect(() => normalizeStep({ event: 'A', where: 'x' })).toThrow();
+	});
 });
 
 describe('matchesStepFilter', () => {
 	test('returns true when filter undefined', () => {
 		expect(matchesStepFilter({ x: 1 }, undefined)).toBe(true);
+	});
+	test('throws on a wrong-shaped filter instead of matching everything', () => {
+		expect(() => matchesStepFilter({ challenge_format: 'solo' }, { challenge_format: 'team' }))
+			.toThrow(/\{ prop, op, value \}/);
 	});
 	test('eq / neq', () => {
 		expect(matchesStepFilter({ x: 1 }, { prop: 'x', op: 'eq', value: 1 })).toBe(true);
