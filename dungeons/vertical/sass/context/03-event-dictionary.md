@@ -91,7 +91,7 @@ Every alert has an `alert_id`. The trigger, the acknowledgement, and the resolut
 | `acquisition_channel` | Channel at signup (for established users, the channel they originally came from). |
 | `seat_count`, `annual_contract_value`, `customer_success_manager` | The company's contracted seats, annual contract value (USD), and whether it has a CSM. |
 | `Experiment: Smart Test Selection` | `Control` or `Smart Selection` for users enrolled in the pipeline test; empty for everyone else. |
-| `created` | Signup time for users who joined in the window; empty for established users. |
+| `created` | Signup time for users who joined in the window (the time of their `account created` event); empty for established users. |
 | `country`, `country_code`, `region`, `city` | Location. |
 | `anonymousIds`, `sessionIds` | Devices and sessions seen for the user (pipeline metadata). |
 
@@ -109,7 +109,7 @@ Every alert has an `alert_id`. The trigger, the acknowledgement, and the resolut
 
 ## Account health history (slowly changing dimension)
 
-One row per health rating: `distinct_id`, `account_health` (`healthy`, `neutral`, `at_risk`), and `startTime` (when that rating began). Customer success reviews each account often: consecutive rows are typically about a week apart, sometimes three weeks or more. A new row is written at every review, even when the rating stays the same, so about a third of rows repeat the previous rating. A few accounts have a first row dated June 3, the day before the window. Use it to read an account's rating as of an event's date.
+One row per health rating: `distinct_id`, `account_health` (`healthy`, `neutral`, `at_risk`), and `startTime` (when that rating began). Ratings are written by customer success's nightly scoring job, so `startTime` falls in the early morning (about 05:00-05:45 UTC). A new account gets its first rating the night after it signs up. Customer success reviews each account often: consecutive rows are typically about a week apart, sometimes three weeks or more. A new row is written at every review, even when the rating stays the same, so about a third of rows repeat the previous rating. A few accounts have a first row dated June 3, the day before the window. Use it to read an account's rating as of an event's date.
 
 ## Funnels the business tracks
 

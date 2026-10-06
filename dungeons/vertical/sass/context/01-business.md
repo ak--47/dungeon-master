@@ -53,7 +53,7 @@ The three paid channels bill for clicks and leads. Daily spend by paid channel i
 Leadership set these goals for the quarter:
 
 1. **Grow self-serve revenue.** Increase new paid subscriptions and new MRR. The pricing team raised the Team price in August; leadership asked whether it hurt Team sales and whether it paid off.
-2. **Make acquisition efficient.** Marketing considers LinkedIn its strongest channel for reaching engineering leaders. Finance asked whether it is worth its cost compared with search.
+2. **Make acquisition efficient.** Marketing put a large share of the paid budget into LinkedIn to reach engineering leaders. Finance asked which paid channels are worth their cost.
 3. **Activate new signups.** The growth team believes the first week decides whether a new workspace sticks. They also see too many signups stall during setup.
 4. **Cut incident time.** Reduce time to acknowledge (MTTA) and time to resolve (MTTR) alerts. Root Cause Assist is the main bet. The SRE advisory board has raised alert noise as a concern.
 5. **Ship faster, more reliably.** Improve pipeline success rates and pipeline speed (the Smart Test Selection experiment).

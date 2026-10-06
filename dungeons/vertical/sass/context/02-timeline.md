@@ -14,7 +14,7 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 | 2026-08-17 (Mon) | Pricing | **Team plan price change**: $20 → $25 per seat per month for new Team subscriptions. Business stays $45 per seat. Existing Team subscribers keep their price until renewal. |
 | 2026-08-25 (Tue) to 2026-08-27 (Thu) | Incident | **Hosted CI runner incident.** A capacity problem in one hosted runner region caused pipeline jobs to fail or queue. The status page reported a major outage for that region for three days; it was resolved early on August 28. No customer action was needed. Daily runner health by region is in `ci_runner_health_daily`. |
 | 2026-09-07 (Mon) | Holiday | US Labor Day. |
-| 2026-09-16 (Wed) to 2026-09-30 (Wed) | Promotion | **Q3 quarter-close seat promotion**: 20% off added seats for existing paid customers (Team, Business, and Enterprise), announced in-app and by account managers. Free workspaces were not eligible. |
+| 2026-09-16 (Wed) to 2026-09-30 (Wed) | Promotion | **Q3 quarter-close seat promotion**: 20% off added seats for eligible paid customers, announced in-app and by account managers. |
 | 2026-09-30 (Wed) | Fiscal | End of Q3. |
 | 2026-10-01 (Thu) | — | End of the analysis window (data runs through 23:59 UTC). Q4 starts. |
 

@@ -9,7 +9,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 | New signups | Unique users with `account created` in the period. |
 | Onboarding completion | Share of new users who reach `dashboard created` after `account created` → `cloud account connected` → `agent installed`, in order, within 7 days of signup. |
 | Activation | The growth team's working definition of an activated new workspace is still under discussion; it is measured from first-week behavior only. |
-| Day-N retention | Of new users who signed up on day 0, the share with any event in days N to N+6 after signup. Only count users who signed up at least N+7 days before the end of the data. |
+| Day-N retention | Of new users who signed up on day 0, the share with any event in days N to N+6 after signup. Only count users who signed up at least N+7 days before the end of the data. In Mixpanel Retention this needs custom brackets (for example day 30-36). |
 | Weekly active users | Unique users with any event in a calendar week (Monday start). |
 | Time to acknowledge (MTTA) | Per alert, time from `alert triggered` to `alert acknowledged` (same `alert_id`). Report the median; `response_time_mins` on the acknowledgement holds the same value. |
 | Time to resolve (MTTR) | Per alert, time from `alert acknowledged` to `alert resolved` (same `alert_id`); `resolution_time_mins` on the resolution. |
@@ -23,7 +23,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 | New MRR | Seats on new subscriptions × list price per seat on the start date, from `subscription_bookings_daily`. New ARR = new MRR × 12. |
 | CAC (paid) | Spend for a paid channel divided by new signups Mixpanel recorded from that channel (`account created` with that `acquisition_channel`) over the same days. Finance uses Mixpanel signups, not the leads the ad platforms report. |
 | Cost per paying customer | Spend for a paid channel divided by signups from that channel who started a subscription. |
-| Seat expansion | `teammate invited` events per active user. |
+| Seat expansion | Seats added at existing paid customers. Seat changes on existing subscriptions are billed outside the self-serve flow and are not in Mixpanel or `subscription_bookings_daily`; teams watch collaboration activity as a leading indicator. |
 
 ## Warehouse tables
 
@@ -54,13 +54,13 @@ Daily health of Tallyboard's hosted CI runners by region, from the infrastructur
 |---|---|---|---|
 | `date` | DATE | UTC day | Day. |
 | `runner_region` | STRING | — | `us-east`, `us-west`, `eu-west`, or `ap-south`. Matches `runner_region` on `deployment pipeline run`. |
-| `jobs_started` | FLOAT | count | Pipeline jobs started in the region that day. |
+| `jobs_started` | FLOAT | count | All jobs started on the region's runners that day: customer pipeline runs plus scheduled and API-triggered jobs. |
 | `infra_error_rate` | FLOAT | share 0-1 | Share of jobs that hit a runner-side infrastructure error (not a test or build failure in the customer's code). |
 | `queue_p95_seconds` | FLOAT | seconds | 95th-percentile time a job waited for a runner. |
 | `runner_status` | STRING | — | Daily status for the region: `operational` or `major_outage`, as posted on the status page. |
 | `runner_capacity_vcpu` | FLOAT | vCPU | Provisioned runner capacity in the region. |
 
-Caveats: customer code failures do not count toward `infra_error_rate`. Mixpanel's `pipeline_status` does not say why a run failed.
+Caveats: customer code failures do not count toward `infra_error_rate`. Mixpanel's `pipeline_status` does not say why a run failed. Scheduled and API-triggered jobs do not send a product event, so `jobs_started` runs higher than the Mixpanel count of `deployment pipeline run` and does not track it exactly day to day.
 
 ### `subscription_bookings_daily`
 
@@ -76,7 +76,7 @@ Daily new self-serve subscriptions, seats, and bookings by plan, from the billin
 | `new_mrr_usd` | FLOAT | USD per month | `new_seats` × `list_price_per_seat_usd`. |
 | `new_arr_usd` | FLOAT | USD per year | `new_mrr_usd` × 12. |
 
-Caveats: the table covers new self-serve subscriptions only, not renewals, seat changes on existing subscriptions, or Enterprise contracts. Annual-billing discounts are not applied; finance reports bookings at list price.
+Caveats: the table covers new self-serve subscriptions only, not renewals, seat changes on existing subscriptions, or Enterprise contracts. Annual-billing discounts are not applied; finance reports bookings at list price. Billing and Mixpanel differ a little day to day: customers can edit the seat count before the first invoice, and a few checkouts never reach Mixpanel (blocked or dropped browser calls). Use this table, not Mixpanel, for booked seats and MRR.
 
 ## Analysis tips
 

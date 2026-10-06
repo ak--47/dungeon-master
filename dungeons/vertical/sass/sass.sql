@@ -276,6 +276,12 @@ FROM onboarding GROUP BY 1 ORDER BY 1;
 WITH g AS (SELECT signup_method AS m, count(*) AS n, avg(converted::INT) AS p FROM onboarding WHERE signup_method IN ('github', 'google') GROUP BY 1),
 x AS (SELECT max(n) FILTER (WHERE m = 'github') AS n1, max(p) FILTER (WHERE m = 'github') AS p1, max(n) FILTER (WHERE m = 'google') AS n2, max(p) FILTER (WHERE m = 'google') AS p2 FROM g)
 SELECT round(p1 - p2, 4) AS diff, round((p1 - p2) / sqrt(((p1 * n1 + p2 * n2) / (n1 + n2)) * (1 - (p1 * n1 + p2 * n2) / (n1 + n2)) * (1.0 / n1 + 1.0 / n2)), 2) AS z FROM x;
+-- each method vs all other signups (two-proportion z)
+WITH t AS (SELECT count(*) AS n, avg(converted::INT) AS p FROM onboarding),
+g AS (SELECT signup_method AS m, count(*) AS n1, avg(converted::INT) AS p1 FROM onboarding GROUP BY 1),
+x AS (SELECT g.m, g.n1, g.p1, t.n - g.n1 AS n2, (t.p * t.n - g.p1 * g.n1) / (t.n - g.n1) AS p2, t.p FROM g, t)
+SELECT m AS signup_method, round(p1, 4) AS conversion, round(p2, 4) AS rest_conversion,
+ round((p1 - p2) / sqrt(p * (1 - p) * (1.0 / n1 + 1.0 / n2)), 2) AS z_vs_rest FROM x ORDER BY 1;
 
 -- EVAL Q6 — Slack + PagerDuty: acknowledgement and resolution time
 SELECT CASE WHEN i.uid IS NOT NULL THEN 'slack_and_pagerduty' ELSE 'rest' END AS grp,
@@ -354,6 +360,13 @@ WITH w AS (SELECT (t_run >= TIMESTAMP '2026-08-25' AND t_run < TIMESTAMP '2026-0
 SELECT runner_region, count(*) FILTER (WHERE incident) AS incident_runs, round(avg(ok::INT) FILTER (WHERE incident), 4) AS incident_success,
  round(avg(ok::INT) FILTER (WHERE NOT incident), 4) AS surrounding_success
 FROM w GROUP BY 1 ORDER BY 1;
+-- the three other regions pooled, with a two-proportion z (incident vs surrounding days)
+WITH w AS (SELECT (t_run >= TIMESTAMP '2026-08-25' AND t_run < TIMESTAMP '2026-08-28') AS incident, pipeline_status = 'success' AS ok
+  FROM runs WHERE t_run >= TIMESTAMP '2026-08-18' AND t_run < TIMESTAMP '2026-09-04' AND runner_region <> 'us-east'),
+x AS (SELECT count(*) FILTER (WHERE incident) AS n1, avg(ok::INT) FILTER (WHERE incident) AS p1,
+  count(*) FILTER (WHERE NOT incident) AS n2, avg(ok::INT) FILTER (WHERE NOT incident) AS p2, avg(ok::INT) AS p FROM w)
+SELECT n1 AS incident_runs, round(p1, 4) AS incident_success, round(p2, 4) AS surrounding_success,
+ round((p1 - p2) / sqrt(p * (1 - p) * (1.0 / n1 + 1.0 / n2)), 2) AS z FROM x;
 
 -- EVAL Q13 — spend per signup by paid channel (warehouse join)
 WITH s AS (SELECT ch, count(*) AS n FROM signups GROUP BY 1),
@@ -392,6 +405,11 @@ SELECT (t >= TIMESTAMP '2026-08-17') AS post, count(*) FILTER (WHERE plan = 'tea
  round(avg(seats) FILTER (WHERE plan = 'team'), 2) AS team_avg_seats
 FROM ev WHERE event = 'subscription started' AND t >= TIMESTAMP '2026-07-06' AND t < TIMESTAMP '2026-09-28' GROUP BY 1 ORDER BY 1;
 
+-- new subscriptions by month and plan (events), for the overall trend behind Q15 and Q18
+SELECT strftime(t, '%Y-%m') AS month, count(*) FILTER (WHERE plan = 'team') AS team, count(*) FILTER (WHERE plan = 'business') AS business,
+ round(count(*) FILTER (WHERE plan = 'team')::DOUBLE / count(*), 4) AS team_share
+FROM ev WHERE event = 'subscription started' GROUP BY 1 ORDER BY 1;
+
 -- EVAL Q16 — Team new MRR before vs after the price change (warehouse)
 SELECT plan, (date::DATE >= DATE '2026-08-17') AS post, count(*) AS days, sum(new_subscriptions) AS subscriptions, sum(new_seats) AS seats,
  round(sum(new_mrr_usd), 0) AS new_mrr_usd, round(sum(new_mrr_usd) / count(*), 1) AS new_mrr_per_day,
@@ -422,6 +440,14 @@ SELECT (t >= TIMESTAMP '2026-08-25' AND t < TIMESTAMP '2026-08-28') AS incident,
  round(count(*) FILTER (WHERE event = 'dashboard viewed')::DOUBLE / count(DISTINCT t::DATE), 1) AS dashboard_views_per_day,
  round(count(*) FILTER (WHERE event = 'alert triggered')::DOUBLE / count(DISTINCT t::DATE), 1) AS alerts_per_day
 FROM ev WHERE t >= TIMESTAMP '2026-08-18' AND t < TIMESTAMP '2026-09-04' GROUP BY 1 ORDER BY 1;
+-- day-to-day range on the 14 surrounding days vs the incident days
+WITH d AS (SELECT t::DATE AS day, (t >= TIMESTAMP '2026-08-25' AND t < TIMESTAMP '2026-08-28') AS incident,
+  avg(response_time_mins) FILTER (WHERE event = 'alert acknowledged') AS resp,
+  count(*) FILTER (WHERE event = 'dashboard viewed') AS views, count(*) FILTER (WHERE event = 'alert triggered') AS alerts
+  FROM ev WHERE t >= TIMESTAMP '2026-08-18' AND t < TIMESTAMP '2026-09-04' GROUP BY 1, 2)
+SELECT incident, count(*) AS days, round(min(resp), 2) AS min_daily_response, round(max(resp), 2) AS max_daily_response,
+ min(views) AS min_daily_views, max(views) AS max_daily_views, min(alerts) AS min_daily_alerts, max(alerts) AS max_daily_alerts
+FROM d GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q20 — headline numbers for the Q4 risk review
 SELECT 'azure_onboarding' AS metric, round(avg(converted::INT) FILTER (WHERE cloud_provider = 'azure'), 4) AS value FROM onboarding
