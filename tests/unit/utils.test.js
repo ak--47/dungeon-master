@@ -1055,7 +1055,8 @@ describe('generation', () => {
 		for (let k = 1; k <= 37; k++) {
 			const user = person('u', k, false, false, false, false, end, undefined, start, onlyHour13);
 			expect(user.created).toMatch(/^\d{4}-\d{2}-\d{2}T13:\d{2}:\d{2}\.000Z$/);
-			// k = 1 is the window's last UTC day; k = 37 is its first.
+			// The window ends at 23:59:59, so slice k is (almost exactly) the k-th UTC day
+			// counted back: k = 1 is the window's last day; k = 37 is its first.
 			const expectedDay = new Date((Math.floor(end / 86400) - (k - 1)) * 86400 * 1000).toISOString().slice(0, 10);
 			expect(user.created.slice(0, 10)).toBe(expectedDay);
 			expect(Date.parse(user.created) / 1000).toBeGreaterThanOrEqual(start);
@@ -1065,12 +1066,27 @@ describe('generation', () => {
 	test('person: created never precedes the window start or passes the window end', () => {
 		initChance('born-instant-clamp');
 		const start = Date.UTC(2025, 9, 15, 18, 0, 0) / 1000; // window starts mid-day
-		const end = Date.UTC(2025, 9, 20, 6, 0, 0) / 1000; // and ends mid-day
+		const end = Date.UTC(2025, 9, 20, 6, 0, 0) / 1000; // and ends mid-day (numDays = 5)
 		for (let i = 0; i < 200; i++) {
-			const firstDay = person('u', 6, false, false, false, false, end, undefined, start, null);
+			const firstDay = person('u', 5, false, false, false, false, end, undefined, start, null);
 			expect(Date.parse(firstDay.created) / 1000).toBeGreaterThanOrEqual(start);
 			const lastDay = person('u', 1, false, false, false, false, end, undefined, start, null);
 			expect(Date.parse(lastDay.created) / 1000).toBeLessThanOrEqual(end);
+		}
+	});
+
+	test('person: a window ending at exactly 00:00:00 has no zero-length last day', () => {
+		initChance('born-instant-midnight-end');
+		const start = Date.UTC(2025, 0, 1) / 1000;
+		const end = Date.UTC(2025, 0, 31) / 1000; // numDays = 30
+		for (let k = 1; k <= 30; k++) {
+			for (let i = 0; i < 20; i++) {
+				const ms = Date.parse(person('u', k, false, false, false, false, end, undefined, start, null).created);
+				expect(ms / 1000).toBeLessThan(end);
+				expect(ms / 1000).toBeGreaterThanOrEqual(start);
+				// Slice k is exactly calendar day Jan (31 - k).
+				expect(new Date(ms).getUTCDate()).toBe(31 - k);
+			}
 		}
 	});
 
@@ -1115,8 +1131,8 @@ describe('generation', () => {
 	});
 
 	test('dates: unix times', () => {
-		const start = dayjs('2023-06-10').unix();
-		const end = dayjs('2023-06-13').unix();
+		const start = dayjs.utc('2023-06-10').unix();
+		const end = dayjs.utc('2023-06-13').unix();
 		const result = datesBetween(start, end);
 		expect(result).toEqual([
 			'2023-06-10T12:00:00.000Z',
@@ -1127,7 +1143,7 @@ describe('generation', () => {
 
 	test('dates: mixed formats', () => {
 		const start = '2023-06-10';
-		const end = dayjs('2023-06-13').unix();
+		const end = dayjs.utc('2023-06-13').unix();
 		const result = datesBetween(start, end);
 		expect(result).toEqual([
 			'2023-06-10T12:00:00.000Z',
@@ -1412,9 +1428,17 @@ describe('utilities', () => {
 	});
 
 	test('date: future', () => {
-		const futureDate = date(10, false, 'YYYY-MM-DD')();
-		expect(dayjs(futureDate, 'YYYY-MM-DD').isValid()).toBeTruthy();
-		expect(dayjs(futureDate).isAfter(dayjs.unix(FIXED_NOW))).toBeTruthy();
+		// date(n, false) returns an instant in [now, now + n days + 23:59:59]; with a
+		// day-only format the result is a UTC day on or after now's UTC day (inclusive:
+		// an offset of 0 days lands on now's own day).
+		const nowDay = dayjs.unix(FIXED_NOW).utc().format('YYYY-MM-DD');
+		const lastDay = dayjs.unix(FIXED_NOW).utc().add(11, 'day').format('YYYY-MM-DD');
+		for (let i = 0; i < 200; i++) {
+			const futureDate = date(10, false, 'YYYY-MM-DD')();
+			expect(dayjs.utc(futureDate, 'YYYY-MM-DD').isValid()).toBeTruthy();
+			expect(futureDate >= nowDay).toBe(true);
+			expect(futureDate <= lastDay).toBe(true);
+		}
 	});
 
 	test('dates: pairs', () => {
@@ -1486,9 +1510,16 @@ describe('utilities', () => {
 		const start = '2020-01-01';
 		const end = '2020-01-30';
 		const result = day(start, end);
-		const dayResult = result(0, 9);
-		expect(dayjs(dayResult.day).isAfter(dayjs(dayResult.start))).toBe(true);
-		expect(dayjs(dayResult.day).isBefore(dayjs(dayResult.end))).toBe(true);
+		// day() promises an inclusive range: start + min <= day <= end (UTC days).
+		for (let i = 0; i < 200; i++) {
+			const dayResult = result(0, 9);
+			expect(dayResult.start).toBe('2020-01-01');
+			expect(dayResult.end).toBe('2020-01-30');
+			expect(dayResult.day >= dayResult.start).toBe(true);
+			expect(dayResult.day <= dayResult.end).toBe(true);
+		}
+		const lateOnly = result(10, 9);
+		expect(lateOnly.day >= '2020-01-11').toBe(true);
 	});
 
 	test('exhaust: works', () => {
