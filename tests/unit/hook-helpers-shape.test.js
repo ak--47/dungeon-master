@@ -10,6 +10,7 @@ import {
 	applyPathBias,
 	applySessionShape,
 } from '../../lib/hook-helpers/shape.js';
+import { hashFloat } from '../../lib/hook-helpers/cohort.js';
 import { initChance } from '../../lib/utils/utils.js';
 import { sessionize } from '../../lib/verify/sessionize.js';
 
@@ -145,11 +146,12 @@ describe('applyPathBias', () => {
 		expect(clones[0].user_id).toBe('u1');
 	});
 
-	test('share=0 skips; hash gate follows the published FNV-1a vector for "a"', () => {
+	test('share=0 skips; hash gate follows hashFloat for "a"', () => {
 		expect(applyPathBias(mkStream(), 'u1', { anchor: 'view_item', path: ['add_to_cart'], share: 0 }).length).toBe(5);
-		// hashFloat('a') = 0xe40c292c / 2^32 ≈ 0.89073 (published vector).
-		expect(applyPathBias(mkStream(), 'a', { anchor: 'view_item', path: ['add_to_cart'], share: 0.89 }).length).toBe(5);
-		expect(applyPathBias(mkStream(), 'a', { anchor: 'view_item', path: ['add_to_cart'], share: 0.90 }).length).toBe(6);
+		// gate is hashFloat(uid) < share: just below the hash skips, just above injects
+		const h = hashFloat('a');
+		expect(applyPathBias(mkStream(), 'a', { anchor: 'view_item', path: ['add_to_cart'], share: h - 0.005 }).length).toBe(5);
+		expect(applyPathBias(mkStream(), 'a', { anchor: 'view_item', path: ['add_to_cart'], share: h + 0.005 }).length).toBe(6);
 	});
 
 	test('missing template for ANY step skips the user entirely', () => {

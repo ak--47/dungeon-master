@@ -74,15 +74,45 @@ describe('cohort atoms', () => {
 	});
 });
 
-describe('hashFloat / hashCohort (FNV-1a full-string)', () => {
+// murmur3 fmix32 reference (Appleby, MurmurHash3.cpp), written out here so the
+// expected values do not come from running the implementation under test.
+const fmix32 = (h) => {
+	h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b);
+	h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35);
+	h ^= h >>> 16;
+	return h >>> 0;
+};
+const pearson = (xs, ys) => {
+	const n = xs.length, mx = xs.reduce((a, b) => a + b, 0) / n, my = ys.reduce((a, b) => a + b, 0) / n;
+	let sxy = 0, sxx = 0, syy = 0;
+	for (let i = 0; i < n; i++) { const dx = xs[i] - mx, dy = ys[i] - my; sxy += dx * dy; sxx += dx * dx; syy += dy * dy; }
+	return sxy / Math.sqrt(sxx * syy);
+};
+
+describe('hashFloat / hashCohort (FNV-1a + fmix32 full-string)', () => {
 	// Expected values are the PUBLISHED FNV-1a 32-bit test vectors from the
-	// draft-eastlake-fnv test suite (hand-traceable from the FNV-1a rule:
-	// h = 0x811c9dc5; per byte: h ^= byte; h = (h * 0x01000193) mod 2^32),
-	// divided by 2^32 — NOT derived from running this implementation.
-	test('hashFloat matches published FNV-1a 32-bit vectors', () => {
-		expect(hashFloat('')).toBe(0x811c9dc5 / 2 ** 32); // empty string = offset basis
-		expect(hashFloat('a')).toBe(0xe40c292c / 2 ** 32);
-		expect(hashFloat('foobar')).toBe(0xbf9cf968 / 2 ** 32);
+	// draft-eastlake-fnv test suite (h = 0x811c9dc5; per byte: h ^= byte;
+	// h = (h * 0x01000193) mod 2^32), passed through the murmur3 fmix32
+	// finalizer and divided by 2^32.
+	test('hashFloat = fmix32(published FNV-1a 32-bit vector) / 2^32', () => {
+		expect(hashFloat('')).toBe(fmix32(0x811c9dc5) / 2 ** 32); // empty string = offset basis
+		expect(hashFloat('a')).toBe(fmix32(0xe40c292c) / 2 ** 32);
+		expect(hashFloat('foobar')).toBe(fmix32(0xbf9cf968) / 2 ** 32);
+	});
+
+	test('salted keys that share a prefix are uncorrelated (independent cohort splits)', async () => {
+		// Hooks salt one uid per cohort split: `${uid}|shred`, `${uid}|habit`.
+		// Raw FNV-1a has no final avalanche, so these splits correlated at
+		// |r| 0.05-0.10 over ~9k GUIDs and one cohort leaked into another.
+		const { default: Chance } = await import('chance');
+		const c = new Chance('hash-salt-independence');
+		const uids = Array.from({ length: 9000 }, () => c.guid());
+		const salts = ['|shred', '|habit', '|lapse', '|lapse-day', '|coach-use', '|a', '|b'];
+		const cols = salts.map(salt => uids.map(u => hashFloat(u + salt)));
+		let worst = 0;
+		for (let i = 0; i < cols.length; i++) for (let j = i + 1; j < cols.length; j++) worst = Math.max(worst, Math.abs(pearson(cols[i], cols[j])));
+		// independent uniforms at n=9000: sd(r) ≈ 0.0105, so 0.035 is > 3 sd
+		expect(worst).toBeLessThan(0.035);
 	});
 
 	test('hashFloat: [0,1) range, deterministic, full-string sensitive', () => {
@@ -99,10 +129,9 @@ describe('hashFloat / hashCohort (FNV-1a full-string)', () => {
 	});
 
 	test('hashCohort: boundary from the known vector for "a"', () => {
-		// hashFloat('a') = 0xe40c292c / 2^32 ≈ 0.890729... → ~89.07 on the pct scale.
-		const pctOfA = (0xe40c292c / 2 ** 32) * 100;
-		expect(hashCohort('a', 89)).toBe(false); // 89 < 89.07…
-		expect(hashCohort('a', 90)).toBe(true); // 90 > 89.07…
+		const pctOfA = (fmix32(0xe40c292c) / 2 ** 32) * 100;
+		expect(hashCohort('a', Math.floor(pctOfA))).toBe(false);
+		expect(hashCohort('a', Math.ceil(pctOfA))).toBe(true);
 		expect(hashCohort('a', pctOfA)).toBe(false); // strict <
 		expect(hashCohort('a', 0)).toBe(false);
 		expect(hashCohort('a', 100)).toBe(true);
@@ -113,8 +142,8 @@ describe('hashFloat / hashCohort (FNV-1a full-string)', () => {
 	test('hashCohort: membership nests (pct 5 ⊂ pct 20) and tracks target on GUID ids', async () => {
 		// Distribution is asserted on GUID-shaped ids — what the engine stamps
 		// as user_id — via an independently seeded Chance. (Short SEQUENTIAL
-		// synthetic ids like `usr_1..n` drift a few points: FNV-1a avalanche
-		// is weak on short correlated inputs. Documented in the JSDoc.)
+		// synthetic ids like `usr_1..n` drifted under raw FNV-1a; the fmix32
+		// finalizer fixes that, but GUIDs remain the engine's real input.)
 		const { default: Chance } = await import('chance');
 		const c = new Chance('hash-cohort-dist');
 		let in5 = 0, in20 = 0;
