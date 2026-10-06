@@ -23,15 +23,17 @@ All KPIs use UTC days and count people by unique `user_id`.
 | New MRR | Seats on new subscriptions × list price per seat on the start date, from `subscription_bookings_daily`. New ARR = new MRR × 12. |
 | CAC (paid) | Spend for a paid channel divided by new signups Mixpanel recorded from that channel (`account created` with that `acquisition_channel`) over the same days. Finance uses Mixpanel signups, not the leads the ad platforms report. |
 | Cost per paying customer | Spend for a paid channel divided by signups from that channel who started a subscription. |
-| Seat expansion | `teammate invited` events per active user or per dashboard view. |
+| Seat expansion | `teammate invited` events per active user. |
 
 ## Warehouse tables
 
 Three tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). Days with no activity have a row with zeros. They join to events on the UTC date of the event and on the named dimension.
 
+Numeric columns are stored as FLOAT64 (shown as FLOAT below). Count columns (leads, clicks, impressions, jobs, seats, subscriptions) always hold whole numbers.
+
 ### `paid_marketing_daily`
 
-Daily paid marketing cost by channel, from the ad platforms' billing exports.
+Daily paid marketing cost by channel, from the ad platforms' billing exports. Each channel runs on a daily budget that the ad platform paces through the day, so spend is billed every day, including weekends and days with few signups.
 
 | Column | Type | Unit | Meaning |
 |---|---|---|---|

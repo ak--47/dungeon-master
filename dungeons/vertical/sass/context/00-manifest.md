@@ -21,12 +21,12 @@ This folder is the internal analytics wiki for **Tallyboard**, a B2B cloud opera
 - **Events** (the Mixpanel event stream) record what users do in the product. Each event has a timestamp, the user's identity, and flat properties. Attributes that describe the user's plan, cloud, and company are copied onto events (`plan_tier`, `cloud_provider`, `company_id`), so you can break down events without a lookup table.
 - **User profiles** hold one row per user with their current attributes: company, company size, industry, role, plan, cloud provider, acquisition channel, customer-since date, and experiment enrollment.
 - **Companies** are a Mixpanel group (`company_id`). Each company has a group profile with its name, size, industry, cloud provider, annual contract value, contracted seats, and whether it has a customer success manager. Every event carries the user's own `company_id`.
-- **Account health history** is a slowly changing record: each row is the customer success team's health rating for a user's account from a given date.
+- **Account health history** is a slowly changing record: each row is the customer success team's health rating for a user's account from a given date. Reviews are frequent (typically about a week apart), and a row is written at every review even when the rating does not change.
 - **Warehouse tables** are daily business facts that are not in the event stream: paid marketing spend by channel, hosted CI runner health by region, and new seats, list prices, and new MRR by plan. They join to events on the UTC date and a shared dimension (`acquisition_channel`, `runner_region`, or `plan`).
 
 ## Identity notes
 
-- A new user is identified when they create an account. The `account created` event carries both the user's `user_id` and the `device_id`, so Mixpanel links earlier activity on that device to the user.
+- A new user is identified when they create an account. `account created` is each new user's first event and carries both the user's `user_id` and the `device_id`. There is no anonymous pre-signup activity in the data.
 - Every event carries `user_id`. Users work from about two devices (for example a laptop and a desktop); `device_id` changes between devices but `user_id` does not.
 - Users who joined before June 4 have no `account created` event in this window. Their `customer_since` profile date is before the window. For users who joined in the window, `customer_since` is their signup date.
 - Count people with unique `user_id` (Mixpanel "Uniques"), not with `device_id`. Count companies with the `company_id` group.

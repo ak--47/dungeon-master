@@ -109,7 +109,7 @@ Every alert has an `alert_id`. The trigger, the acknowledgement, and the resolut
 
 ## Account health history (slowly changing dimension)
 
-One row per health rating: `distinct_id`, `account_health` (`healthy`, `neutral`, `at_risk`), and `startTime` (when that rating began). Customer success updates ratings every few weeks. Use it to read an account's rating as of an event's date.
+One row per health rating: `distinct_id`, `account_health` (`healthy`, `neutral`, `at_risk`), and `startTime` (when that rating began). Customer success reviews each account often: consecutive rows are typically about a week apart, sometimes three weeks or more. A new row is written at every review, even when the rating stays the same, so about a third of rows repeat the previous rating. A few accounts have a first row dated June 3, the day before the window. Use it to read an account's rating as of an event's date.
 
 ## Funnels the business tracks
 

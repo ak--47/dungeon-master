@@ -4,7 +4,7 @@ import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "@ak--47/dungeon-master/utils";
-import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
+import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
 /** @typedef  {import("../../../types").Dungeon} Config */
 
 // ── OVERVIEW ──
@@ -17,7 +17,7 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  *             month from 2026-08-17) and Business ($45 per seat); Enterprise
  *             is sales-led. Root Cause Assist (AI incident help) is a Business
  *             and Enterprise feature from 2026-07-22.
- * SCALE:      10,000 users (≈4,490 sign up inside the window), ~1.11M events,
+ * SCALE:      10,000 users (≈4,550 sign up inside the window), ~1.07M events,
  *             120 days (2026-06-04 → 2026-10-01, UTC), 300 customer companies
  * CORE LOOP:  dashboard viewed → query executed; alert triggered → alert
  *             acknowledged → alert resolved; deployment pipeline run → service deployed
@@ -51,7 +51,7 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  *              seat_count, annual_contract_value, customer_success_manager,
  *              "Experiment: Smart Test Selection" (enrolled users)
  * SUPER PROPS: plan_tier (plan at event time), cloud_provider (sticky per user)
- * SCD PROPS:   account_health (healthy/neutral/at_risk, monthly, max 4)
+ * SCD PROPS:   account_health (healthy/neutral/at_risk, fuzzy timing ~weekly, max 4)
  * GROUPS:      company_id (300 companies; every event carries the user's own company)
  * WAREHOUSE:   paid_marketing_daily (spend by paid channel),
  *              ci_runner_health_daily (hosted CI runner health by region),
@@ -60,7 +60,7 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  *
  * IDENTITY: new users are identified at "account created" (isAuthEvent, first
  * event, carries user_id + device_id); 2 devices per user on average. Every
- * event carries user_id.
+ * event carries user_id; there is no anonymous pre-signup activity.
  *
  * DESIGN NOTES:
  * - Company attributes (size, industry, cloud, ACV, contracted seats, CSM) come
@@ -74,6 +74,12 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  *   when its deploy (same deploy_id) happened.
  * - retentionCurve (not engagementDecay) shapes activity and pins each new
  *   user's signup to their creation day.
+ * - paid_marketing_daily spend is a paced daily budget per channel (CPL x
+ *   expected signups per day, weekday shape, seeded noise, never zero); leads,
+ *   clicks, and impressions follow spend. The CPL knob holds at window level.
+ * - account_health uses fuzzy SCD timing: rows are about a week apart and can
+ *   repeat the prior value; a few start the day before the window. timing:
+ *   "fixed" was tried and rejected (local-time month starts, rows past the end).
  */
 
 // ── HOOK STORIES ──
@@ -83,25 +89,31 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  * shared by hooks, stories, SQL, warehouse columns, and the timeline guide.
  *
  * ─────────────────────────────────────────────────────────────────────────
- * H1. Q3 QUARTER-CLOSE SEAT PUSH (declarative world event)
+ * H1. Q3 QUARTER-CLOSE SEAT PUSH (everything)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: 2026-09-16 through 2026-09-30, the sales team's quarter-close seat
- *   promotion multiplies "teammate invited" by 1.5. Dashboard views are
- *   untouched.
+ * PATTERN: 2026-09-16 through 2026-09-30, the quarter-close seat promotion
+ *   (20% off added seats) makes paid workspaces (plan_tier at event time:
+ *   team, business, enterprise) send 1.5x the "teammate invited" events (each
+ *   in-window invite gets a cloned follow-up invite with probability 0.5).
+ *   Free workspaces have no seats to discount and do not change. Dashboard
+ *   views are untouched.
  * MIXPANEL: Insights, teammate invited and dashboard viewed, daily, formula
- *   A/B; Sep 16-30 vs Sep 1-15.
+ *   A/B, breakdown plan_tier; Sep 16-30 vs Sep 1-15.
  * REAL WORLD: discounts on added seats at quarter close pull expansion forward.
  *
  * ─────────────────────────────────────────────────────────────────────────
  * H2. ROOT CAUSE ASSIST LAUNCH (everything)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: from 2026-07-22, 50% of users on a Business or Enterprise plan
- *   (plan at event time) adopt Root Cause Assist and use it on 80% of their
- *   resolutions: 40% of eligible resolutions carry resolution_method =
- *   "ai_assist", and their acknowledge → resolve time is 0.55x. Free and Team
- *   never use it. Time to acknowledge is untouched (honest null).
+ *   (plan at event time) adopt Root Cause Assist. Each adopter starts on a
+ *   salted day in the 28 days after launch and uses it on a salted 60-100% of
+ *   resolutions (mean 80%), so adoption ramps for four weeks and then holds at
+ *   40% of eligible resolutions with resolution_method = "ai_assist"; their
+ *   acknowledge → resolve time is 0.55x. Free and Team never use it. Time to
+ *   acknowledge is untouched (honest null).
  * MIXPANEL: Insights, alert resolved, average resolution_time_mins, breakdown
- *   resolution_method, filter plan_tier in (business, enterprise), after launch.
+ *   resolution_method, filter plan_tier in (business, enterprise), after launch;
+ *   weekly share of ai_assist shows the ramp.
  * REAL WORLD: AI summaries of logs and recent changes shorten diagnosis, not
  *   the time it takes to notice a page.
  *
@@ -118,21 +130,29 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * H4. SLACK + PAGERDUTY SPEED UP RESPONSE (everything)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: users who configured both the Slack and PagerDuty integrations
- *   acknowledge alerts in 0.4x the time. Acknowledge → resolve is unchanged.
+ * PATTERN: once both the Slack and PagerDuty integrations are live, alerts are
+ *   acknowledged in 0.4x the time. Acknowledge → resolve is unchanged. New
+ *   signups: alerts triggered after the later of their first slack and first
+ *   pagerduty "integration configured". Established customers who configure
+ *   both in the window had them before June 4 (in-window events are
+ *   reconfigurations), so their whole window is faster.
  * MIXPANEL: Insights, alert acknowledged, average response_time_mins,
- *   breakdown by a cohort "configured slack AND pagerduty".
+ *   breakdown by a cohort "configured slack AND pagerduty", filter
+ *   customer_since before 2026-06-04; for new signups compare alerts before vs
+ *   after the user's second integration.
  * REAL WORLD: the page reaches the on-call where they already are.
  *
  * ─────────────────────────────────────────────────────────────────────────
  * H5. FIRST-WEEK TEAM ACTIVATION (everything)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: new users with fewer than 2 "teammate invited" in their first 7
- *   days: 50% go dark after day 14. Separately, 70% of all new users lapse on
- *   a uniform day 4-75 (organic, independent of activation). D30 retention
- *   ratio activated / not activated ≥ 2.
+ * PATTERN: new users go dark after day 14 on a ramp by first-week "teammate
+ *   invited" count: 60% with none, 40% with one, none with 2+. Separately,
+ *   70% of all new users lapse on a uniform day 4-75 (organic), and 55% of new
+ *   users who never finish onboarding abandon on day 1.5-5 (keeps D7 at B2B
+ *   levels). Onboarded users: D30 2+ / 0 invites = 1/(1-0.6) = 2.5. All new
+ *   users: activated / not activated ≥ 1/(1-0.4) (floor; abandonment adds).
  * MIXPANEL: Retention, account created → any event, cohort "≥2 teammate
- *   invited in first 7 days".
+ *   invited in first 7 days", optionally filtered to "did dashboard created".
  * REAL WORLD: a tool one engineer uses alone is easy to abandon; a team tool
  *   is not.
  *
@@ -162,8 +182,10 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * H8. PAID CHANNEL ECONOMICS (everything + warehouse paid_marketing_daily)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: spend per Mixpanel signup is $420 LinkedIn Ads, $210 G2, $140 paid
- *   search (seeded ±12% day noise). Share of would-be paid subscriptions kept
+ * PATTERN: window spend per Mixpanel signup is $420 LinkedIn Ads, $210 G2,
+ *   $140 paid search: each channel bills a paced daily budget (CPL x expected
+ *   signups per day, weekday shape, seeded ±12% noise, never zero), so daily
+ *   cost per signup moves with the day's signups. Share of would-be paid subscriptions kept
  *   by channel: LinkedIn 1.0, outbound 0.9, referral 0.8, G2 0.7, organic 0.65,
  *   paid search 0.5, so LinkedIn signups buy at 2x the paid-search rate.
  * MIXPANEL: Insights, account created by acquisition_channel joined to
@@ -191,7 +213,7 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  * REAL WORLD: dedicated on-call rotations vs part-time ownership.
  *
  * ─────────────────────────────────────────────────────────────────────────
- * H11. ALERT FATIGUE (everything)
+ * H11. ALERT FATIGUE (everything, dose-response)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: users who receive more than 12 alerts in the window leave a
  *   growing share unacknowledged: the loss ramps linearly to 50% of would-be
@@ -205,31 +227,36 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                       | Derivation               | Expected | Measured
  * -----|----------------------------------------------|--------------------------|----------|---------
- * H1   | invites per dashboard view, promo/before     | QUARTER_CLOSE_INVITE_MULT| 1.50     | 1.495
+ * H1   | paid invites per dashboard view, promo/before| QUARTER_CLOSE_INVITE_MULT| 1.50     | 1.477
+ * H1   | Free invites per dashboard view (control)    | unchanged                | 1.00     | 1.040
  * H2   | ai_assist rows pre-launch or Free/Team       | exact purity             | 0        | 0
- * H2   | ai/other resolution time, Biz+Ent post-launch| RCA_RESOLVE_MULT         | 0.55     | 0.545 (71.4 vs 130.9 min)
- * H2   | ai share of eligible resolutions             | 0.5 × 0.8                | 0.40     | 0.391
- * H3   | onboarding conversion Azure/others           | 34/62                    | 0.548    | 0.537 (33.4% vs 62.1%)
- * H4   | avg response time Slack+PD / rest            | INTEGRATED_RESPONSE_MULT | 0.40     | 0.399 (10.9 vs 27.3 min)
- * H5   | D30 retention activated/not activated        | ≥ 1/(1 − 0.5) (floor)    | ≥ 2.0    | 2.093 (70.4% vs 33.6%)
- * H6   | per-run deploy rate Smart/Control            | SMART_TEST_CONV_MULT     | 1.20     | 1.203 (81.1% vs 67.4%)
- * H6   | median run → deploy time Smart/Control       | SMART_TEST_TTC_MULT      | 0.75     | 0.749 (22.5 vs 30.0 min)
- * H6   | Smart Selection share of enrolled users      | equal 2-arm hash         | 0.50     | 0.495
- * H7   | us-east / other success, incident vs ±7 days | 1 − RUNNER_INCIDENT_FAIL | 0.40     | 0.378
+ * H2   | ai/other resolution time, Biz+Ent post-launch| RCA_RESOLVE_MULT         | 0.55     | 0.545 (70.7 vs 129.7 min)
+ * H2   | ai share of eligible resolutions after ramp  | 0.5 × 0.8                | 0.40     | 0.387 (weekly 3% → 40%)
+ * H3   | onboarding conversion Azure/others           | 34/62                    | 0.548    | 0.512 (32.2% vs 62.8%)
+ * H4   | avg response Slack+PD / rest, established    | INTEGRATED_RESPONSE_MULT | 0.40     | 0.401 (10.9 vs 27.3 min)
+ * H4   | new signups: after / before pair is live     | INTEGRATED_RESPONSE_MULT | 0.40     | 0.404 (10.4 vs 25.9 min)
+ * H5   | D30 activated/not activated, all new users   | ≥ 1/(1 − 0.4) (floor)    | ≥ 1.67   | 2.743 (57.6% vs 21.0%, STRONG)
+ * H5   | D30 2+ / 0 invites, onboarded new users      | 1/(1 − 0.6)              | 2.50     | 2.721 (68.2% vs 25.1%)
+ * H6   | per-run deploy rate Smart/Control            | SMART_TEST_CONV_MULT     | 1.20     | 1.191 (81.0% vs 68.1%)
+ * H6   | median run → deploy time Smart/Control       | SMART_TEST_TTC_MULT      | 0.75     | 0.753 (22.6 vs 29.9 min)
+ * H6   | Smart Selection share of enrolled users      | equal 2-arm hash         | 0.50     | 0.505
+ * H7   | us-east / other success, incident vs ±7 days | 1 − RUNNER_INCIDENT_FAIL | 0.40     | 0.411
  * H7   | warehouse infra_error_rate during incident   | RUNNER_INCIDENT_FAIL     | 0.60     | 0.610
- * H8   | spend per signup LinkedIn / paid search      | 420 / 140                | 3.00     | 2.976
- * H8   | same-week paid rate LinkedIn / paid search   | 1.0 / 0.5 (floor 1.5)    | 2.00     | 2.270 (STRONG)
- * H9   | avg seats Team post/pre                      | TEAM_SEAT_MULT           | 0.70     | 0.737 (8.87 vs 12.04)
- * H9   | avg seats Business post/pre (control)        | unchanged                | 1.00     | 0.950
- * H9   | new MRR per Team subscription post/pre       | 0.7 × 25/20              | 0.875    | 0.921
+ * H8   | spend per signup LinkedIn / paid search      | 420 / 140                | 3.00     | 2.876 ($414 vs $144)
+ * H8   | same-week paid rate LinkedIn / paid search   | 1.0 / 0.5 (floor 1.5)    | 2.00     | 1.835
+ * H9   | avg seats Team post/pre                      | TEAM_SEAT_MULT           | 0.70     | 0.727 (8.56 vs 11.79)
+ * H9   | avg seats Business post/pre (control)        | unchanged                | 1.00     | 0.989
+ * H9   | new MRR per Team subscription post/pre       | 0.7 × 25/20              | 0.875    | 0.908
  * H10  | median trigger → ack, enterprise / SMB+mid   | RESPONSE_SIZE_MULT       | 0.60     | 0.599
- * H10  | median trigger → ack, startup / SMB+mid      | RESPONSE_SIZE_MULT       | 1.50     | 1.516
- * H11  | ack rate 30+ alerts / ≤12 alerts             | 1 − FATIGUE_FLIP         | 0.50     | 0.492
+ * H10  | median trigger → ack, startup / SMB+mid      | RESPONSE_SIZE_MULT       | 1.50     | 1.488
+ * H11  | ack rate 30+ alerts / ≤12 alerts             | 1 − FATIGUE_FLIP         | 0.50     | 0.502
  * ═════════════════════════════════════════════════════════════════════════
  *
- * H8's paid-rate ratio grades STRONG: a few hundred paying signups per
- * channel give it about ±10% sampling error, so the knob is the target and
- * half the effect (1.5) is the floor.
+ * H5's all-user read grades STRONG by design: setup abandoners rarely invite,
+ * so the activated/not-activated gap exceeds the dark-share floor. The
+ * onboarded-only dose read isolates the knob and grades NAILED. H8's spend
+ * ratio sits below 3.0 because realized LinkedIn and search signups differ
+ * from the expected counts the budgets were paced on.
  */
 
 // ── SCALE ──
@@ -258,14 +285,17 @@ const D0 = DATASET_START.slice(0, 10);
 const MIN_MS = 60_000;
 
 // ── KNOBS ──
-// H1 quarter-close seat push (world event on "teammate invited")
+// H1 quarter-close seat push: paid workspaces invite more teammates (Free has no seats to discount)
 const QUARTER_CLOSE_INVITE_MULT = 1.5;
+const PAID_PLANS = ["team", "business", "enterprise"];
 
 // H2 Root Cause Assist: Business/Enterprise resolutions after launch
 const RCA_PLANS = ["business", "enterprise"];
 const RCA_ADOPTER_SHARE = 0.5;     // share of eligible users who adopt Root Cause Assist (salted per user)
-const RCA_ADOPTER_USE = 0.8;       // share of an adopter's resolutions that use it
-const RCA_ADOPTION = RCA_ADOPTER_SHARE * RCA_ADOPTER_USE; // 0.40 of eligible resolutions
+const RCA_ADOPTER_USE = 0.8;       // mean share of an adopter's resolutions that use it (per adopter: uniform ±0.2)
+const RCA_USE_SPREAD = 0.2;
+const RCA_RAMP_DAYS = 28;          // each adopter starts on a salted day in the 4 weeks after launch
+const RCA_ADOPTION = RCA_ADOPTER_SHARE * RCA_ADOPTER_USE; // 0.40 of eligible resolutions once ramped
 const RCA_RESOLVE_MULT = 0.55;     // ack → resolve time with Root Cause Assist
 
 // H3 onboarding by cloud provider (declarative duplicate first funnels)
@@ -273,7 +303,11 @@ const ONBOARD_CONV = 62;
 const AZURE_ONBOARD_MULT = 0.55;
 const ONBOARD_TTC_H = 30;
 
-// H4 Slack + PagerDuty: alerts reach the on-call faster (ack only)
+// H4 Slack + PagerDuty: alerts reach the on-call faster (ack only), from the
+// moment both are connected. New users: alerts triggered after the later of
+// their first slack and first pagerduty configuration. Established users who
+// configure both in the window had them before June 4 (in-window events are
+// reconfigurations), so every in-window alert is faster.
 const INTEGRATION_PAIR = ["slack", "pagerduty"];
 const INTEGRATED_RESPONSE_MULT = 0.4;
 
@@ -281,8 +315,11 @@ const INTEGRATED_RESPONSE_MULT = 0.4;
 const ACTIVATION_EVENT = "teammate invited";
 const ACTIVATION_DAYS = 7;
 const ACTIVATION_MIN = 2;          // invites in the first 7 days that mark an activated workspace
-const DARK_SHARE = 0.5;            // share of non-activated new users who go dark after day 14
+const DARK_SHARE_BY_INVITES = [0.6, 0.4]; // share who go dark after day 14, by first-week invites (0, 1); 2+ → 0
 const DARK_AFTER_DAYS = 14;
+const SETUP_ABANDON_SHARE = 0.55;  // new users who never finish onboarding: share who stop on day 1.5-5
+const SETUP_ABANDON_DAY_MIN = 1.5;
+const SETUP_ABANDON_DAY_MAX = 5;
 const LAPSE_SHARE = 0.7;           // organic lapse, every new user, independent of activation
 const LAPSE_DAY_MIN = 4;
 const LAPSE_DAY_MAX = 75;
@@ -302,8 +339,21 @@ const RUNNER_INCIDENT_FAIL = 0.6;  // share of would-be successful us-east runs 
 
 // H8 paid channel economics (warehouse paid_marketing_daily)
 const PAID_CHANNELS = ["paid_search", "linkedin_ads", "g2_reviews"];
-const CPL_USD = { paid_search: 140, linkedin_ads: 420, g2_reviews: 210 }; // cost per Mixpanel signup
-const CPL_NOISE = 0.12;            // ± day-level cost variation per channel (seeded)
+const CPL_USD = { paid_search: 140, linkedin_ads: 420, g2_reviews: 210 }; // window cost per Mixpanel signup
+const CHANNEL_WEIGHTS = { organic: 25, paid_search: 22, linkedin_ads: 20, g2_reviews: 10, referral: 13, outbound_sales: 10 };
+const BORN_PCT = 45;               // percentUsersBornInDataset
+const WINDOW_DAYS = 120;
+// paced daily budget per paid channel: CPL × expected signups per day. Spend is
+// steady (weekday shape + seeded noise), never derived from the day's signups.
+const DAILY_BUDGET_USD = Object.fromEntries(PAID_CHANNELS.map((ch) => {
+	const totalW = Object.values(CHANNEL_WEIGHTS).reduce((a, b) => a + b, 0);
+	return [ch, CPL_USD[ch] * (NUM_USERS * BORN_PCT / 100) * (CHANNEL_WEIGHTS[ch] / totalW) / WINDOW_DAYS];
+}));
+const SPEND_WEEKDAY = [0.7, 1.12, 1.12, 1.12, 1.12, 1.12, 0.7]; // Sun..Sat, mean 1
+const SPEND_NOISE = 0.12;          // ± day-level pacing variation per channel (seeded)
+const PLATFORM_LEAD_INFLATION = 1.15; // ad platforms claim ~15% more leads than Mixpanel signups
+const CPC_USD = { paid_search: 8, linkedin_ads: 14, g2_reviews: 12 };
+const CTR = { paid_search: 0.025, linkedin_ads: 0.006, g2_reviews: 0.025 };
 // share of would-be paid subscriptions that happen, by acquisition channel
 const PURCHASE_KEEP = { linkedin_ads: 1.0, outbound_sales: 0.9, referral: 0.8, g2_reviews: 0.7, organic: 0.65, paid_search: 0.5 };
 
@@ -391,6 +441,9 @@ const inRunnerIncident = (t) => t >= ms(RUNNER_INCIDENT_START) && t < ms(RUNNER_
 const teamPrice = (t) => (t >= ms(TEAM_PRICE_CHANGE) ? TEAM_PRICE_NEW : TEAM_PRICE_OLD);
 // seeded log-normal multiplier with median 1 (sigma in log space)
 const logNormal = (sigma) => Math.exp(chance.normal({ mean: 0, dev: sigma }));
+const jitter = (key, spread) => 1 + (hashFloat(key) - 0.5) * 2 * spread;
+// H8: paid media spend for one channel-day (paced budget, never zero)
+const paidSpend = (date, ch) => round2(DAILY_BUDGET_USD[ch] * SPEND_WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()] * jitter(`spend|${date}|${ch}`, SPEND_NOISE));
 
 function handleUserHook(profile, meta) {
 	const uid = profile.distinct_id;
@@ -452,12 +505,15 @@ function handleEverything(events, meta) {
 		purchase = null;
 	}
 
-	// ── H5: first-week activation, plus organic lapse (new signups only) ──
+	// ── H5: first-week activation, setup abandonment, organic lapse (new signups only) ──
 	if (signup) {
 		const actEnd = birthMs + ACTIVATION_DAYS * DAY_MS;
 		const early = events.filter((e) => e.event === ACTIVATION_EVENT && T(e) >= birthMs && T(e) < actEnd).length;
+		const onboarded = events.some((e) => e.event === "dashboard created");
 		const cuts = [];
-		if (early < ACTIVATION_MIN && salt(uid, "dark") < DARK_SHARE) cuts.push(birthMs + DARK_AFTER_DAYS * DAY_MS);
+		const dark = early < ACTIVATION_MIN ? DARK_SHARE_BY_INVITES[early] : 0;
+		if (salt(uid, "dark") < dark) cuts.push(birthMs + DARK_AFTER_DAYS * DAY_MS);
+		if (!onboarded && salt(uid, "abandon") < SETUP_ABANDON_SHARE) cuts.push(birthMs + (SETUP_ABANDON_DAY_MIN + salt(uid, "abandon-day") * (SETUP_ABANDON_DAY_MAX - SETUP_ABANDON_DAY_MIN)) * DAY_MS);
 		if (salt(uid, "lapse") < LAPSE_SHARE) cuts.push(birthMs + (LAPSE_DAY_MIN + salt(uid, "lapse-day") * (LAPSE_DAY_MAX - LAPSE_DAY_MIN)) * DAY_MS);
 		if (cuts.length) {
 			const cut = Math.min(...cuts);
@@ -485,10 +541,15 @@ function handleEverything(events, meta) {
 	}
 	const alertCount = events.filter((e) => e.event === "alert triggered").length;
 	const flip = fatigueFlip(alertCount);
-	const integrations = new Set(events.filter((e) => e.event === "integration configured").map((e) => e.integration_type));
-	const integrated = INTEGRATION_PAIR.every((x) => integrations.has(x));
+	// H4: when both integrations are live (see knob note)
+	const firstConfig = (type) => Math.min(...events.filter((e) => e.event === "integration configured" && e.integration_type === type).map(T));
+	const pairReady = Math.max(...INTEGRATION_PAIR.map(firstConfig)); // Infinity when either is missing
+	const integratedFrom = pairReady === Infinity ? Infinity : signup ? pairReady : -Infinity;
 	const sizeMult = RESPONSE_SIZE_MULT[profile.company_size] ?? 1;
+	// H2: adopters phase in over the 4 weeks after launch, each with their own usage rate
 	const rcaAdopter = salt(uid, "rca-adopter") < RCA_ADOPTER_SHARE;
+	const rcaStart = ms(RCA_LAUNCH) + salt(uid, "rca-start") * RCA_RAMP_DAYS * DAY_MS;
+	const rcaUse = RCA_ADOPTER_USE + (salt(uid, "rca-use") - 0.5) * 2 * RCA_USE_SPREAD;
 	const drop = new Set();
 	for (const a of byAlert.values()) {
 		const trig = a["alert triggered"], ack = a["alert acknowledged"], res = a["alert resolved"];
@@ -509,7 +570,7 @@ function handleEverything(events, meta) {
 		}
 		// trigger → ack: base log-normal × severity × H10 company size × H4 integrations
 		const sev = SEVERITY_SPEED[trig.severity] ?? 1;
-		const ackGap = ACK_MEDIAN_MIN * MIN_MS * logNormal(0.7) * sev * sizeMult * (integrated ? INTEGRATED_RESPONSE_MULT : 1);
+		const ackGap = ACK_MEDIAN_MIN * MIN_MS * logNormal(0.7) * sev * sizeMult * (T(trig) >= integratedFrom ? INTEGRATED_RESPONSE_MULT : 1);
 		const ackT = T(trig) + ackGap;
 		ack.time = new Date(ackT).toISOString();
 		ack.response_time_mins = round1(ackGap / MIN_MS);
@@ -520,8 +581,8 @@ function handleEverything(events, meta) {
 		// eligibility is checked at the (earlier) assisted resolve time, so every
 		// ai_assist row lands after launch on a Business/Enterprise plan
 		const resTai = ackT + resGap * RCA_RESOLVE_MULT;
-		const eligible = resTai >= ms(RCA_LAUNCH) && RCA_PLANS.includes(planAt(resTai));
-		if (eligible && rcaAdopter && chance.bool({ likelihood: RCA_ADOPTER_USE * 100 })) {
+		const eligible = resTai >= rcaStart && RCA_PLANS.includes(planAt(resTai));
+		if (eligible && rcaAdopter && chance.bool({ likelihood: rcaUse * 100 })) {
 			res.resolution_method = "ai_assist";
 			resGap *= RCA_RESOLVE_MULT;
 		} else if (res.resolution_method === "ai_assist") {
@@ -562,6 +623,21 @@ function handleEverything(events, meta) {
 	}
 	if (dropDeploy.size) events = events.filter((e) => !dropDeploy.has(e));
 
+	// ── H1: quarter-close seat promotion — paid workspaces invite more teammates ──
+	const qcStart = ms(QUARTER_CLOSE_START), qcEnd = qcStart + QUARTER_CLOSE_DAYS * DAY_MS;
+	const lastMs = events.reduce((m, e) => Math.max(m, T(e)), 0);
+	const promoClones = [];
+	for (const e of events) {
+		if (e.event !== "teammate invited") continue;
+		const t = T(e);
+		if (t < qcStart || t >= qcEnd || !PAID_PLANS.includes(planAt(t))) continue;
+		if (!chance.bool({ likelihood: (QUARTER_CLOSE_INVITE_MULT - 1) * 100 })) continue;
+		const tc = t + chance.integer({ min: 2, max: 180 }) * MIN_MS;
+		if (tc >= qcEnd || tc > END || tc > lastMs) continue;
+		promoClones.push(cloneEvent(e, { time: new Date(tc).toISOString() }));
+	}
+	if (promoClones.length) events = events.concat(promoClones);
+
 	// ── plan at event time (superProp plan_tier) + final profile plan ──
 	for (const e of events) e.plan_tier = planAt(T(e));
 	if (purchase) profile.plan_tier = purchase.plan;
@@ -573,9 +649,8 @@ function handleEverything(events, meta) {
 function handleWarehouse(row, meta) {
 	if (meta.isBackfill) return row;
 	if (meta.metricName === "paid_marketing_daily") {
-		const ch = row.acquisition_channel;
-		const noise = 1 + (hashFloat(`cpl|${row.date}|${ch}`) - 0.5) * 2 * CPL_NOISE;
-		row.spend_usd = round2(meta.raw.plus.count * CPL_USD[ch] * noise);
+		// the source counts Mixpanel signups; billed spend is the paced budget
+		row.spend_usd = paidSpend(row.date, row.acquisition_channel);
 		return row;
 	}
 	if (meta.metricName === "subscription_bookings_daily") {
@@ -611,7 +686,7 @@ const config = {
 	gzip: true,
 	concurrency: 1,
 	writeToDisk: false,
-	macro: { percentUsersBornInDataset: 45, bornRecentBias: 0, preExistingSpread: "uniform" },
+	macro: { percentUsersBornInDataset: BORN_PCT, bornRecentBias: 0, preExistingSpread: "uniform" },
 	credentials: { token },
 	switches: {
 		hasSessionIds: true,
@@ -984,10 +1059,11 @@ const config = {
 			timeColumn: "date",
 			valueColumn: "spend_usd",
 			columns: {
-				// ad platforms claim more leads than product analytics records signups
-				platform_reported_leads: (ctx) => Math.round(ctx.value * (1.1 + 0.15 * hashFloat(`lead|${dayKey(ctx.time)}|${ctx.seriesKey}`))),
-				clicks: (ctx) => Math.round(ctx.value / ((ctx.seriesKey === "linkedin_ads" ? 0.035 : 0.06) * (0.85 + 0.3 * hashFloat(`cvr|${dayKey(ctx.time)}|${ctx.seriesKey}`)))),
-				impressions: (ctx) => Math.round(ctx.row.clicks / ((ctx.seriesKey === "linkedin_ads" ? 0.006 : 0.025) * (0.85 + 0.3 * hashFloat(`ctr|${dayKey(ctx.time)}|${ctx.seriesKey}`)))),
+				// platform metrics follow the day's spend, not Mixpanel signups;
+				// ad platforms claim more leads than product analytics records
+				platform_reported_leads: (ctx) => Math.round(paidSpend(dayKey(ctx.time), ctx.seriesKey) * PLATFORM_LEAD_INFLATION / CPL_USD[ctx.seriesKey] * jitter(`lead|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.25)),
+				clicks: (ctx) => Math.round(paidSpend(dayKey(ctx.time), ctx.seriesKey) / (CPC_USD[ctx.seriesKey] * jitter(`cpc|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.15))),
+				impressions: (ctx) => Math.round(ctx.row.clicks / (CTR[ctx.seriesKey] * jitter(`ctr|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.15))),
 			},
 		},
 		{
@@ -1051,7 +1127,7 @@ const config = {
 		plan_tier: ["free"],
 		customer_since: ["2025-01-01"],
 		cloud_provider: ["aws"],
-		acquisition_channel: { __weights: { organic: 25, paid_search: 22, linkedin_ads: 20, g2_reviews: 10, referral: 13, outbound_sales: 10 } },
+		acquisition_channel: { __weights: CHANNEL_WEIGHTS },
 		seat_count: [1],
 		annual_contract_value: [0],
 		customer_success_manager: [false],
@@ -1077,17 +1153,6 @@ const config = {
 			customer_success_manager: [false],
 		},
 	},
-
-	worldEvents: [
-		{
-			name: "q3_quarter_close_seat_promo",
-			type: "campaign",
-			startDay: dayIndex(QUARTER_CLOSE_START),
-			duration: QUARTER_CLOSE_DAYS,
-			affectsEvents: ["teammate invited"],
-			volumeMultiplier: QUARTER_CLOSE_INVITE_MULT,
-		},
-	],
 
 	// retention shape (also pins each new user's signup to their creation day)
 	retentionCurve: { type: "logarithmic", day1: 0.75, day7: 0.6, day30: 0.5 },
@@ -1126,7 +1191,19 @@ const QC_END = TS(dayjs.utc(QUARTER_CLOSE_START).add(QUARTER_CLOSE_DAYS, "day"))
 const INC_BASE_FROM = TS(dayjs.utc(RUNNER_INCIDENT_START).subtract(7, "day"));
 const INC_BASE_TO = TS(dayjs.utc(RUNNER_INCIDENT_END).add(7, "day"));
 const RETENTION_DAY = 30;
+const RCA_RAMPED = TS(dayjs.utc(RCA_LAUNCH).add(RCA_RAMP_DAYS, "day"));
 const SQL_LIST = (xs) => xs.map((x) => `'${x}'`).join(", ");
+// H5 dose read: onboarded new users, D30 retention by first-week invites
+const H5_DOSE_SQL = `WITH ${ID_CTE},
+s AS (SELECT uid, t AS t0 FROM ev WHERE event = 'account created' AND t < TIMESTAMP '${TS(DATASET_END)}' - INTERVAL ${RETENTION_DAY + 7} DAY
+  AND uid IN (SELECT uid FROM ev WHERE event = 'dashboard created')),
+f AS (SELECT s.uid,
+  count(*) FILTER (WHERE e.event = '${ACTIVATION_EVENT}' AND e.t < s.t0 + INTERVAL ${ACTIVATION_DAYS} DAY) AS early,
+  count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL ${RETENTION_DAY} DAY AND e.t < s.t0 + INTERVAL ${RETENTION_DAY + 7} DAY) AS ret
+  FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
+SELECT CASE WHEN early >= ${ACTIVATION_MIN} THEN 'two_plus' WHEN early = 1 THEN 'one' ELSE 'zero' END AS grp, count(*) AS user_count,
+ avg((ret > 0)::INT) AS retention
+FROM f GROUP BY 1`;
 
 /** step_counts conversion for a set of segments from a timeToConvert breakdown. */
 const convOf = (rows, segs) => {
@@ -1143,21 +1220,35 @@ export const stories = [
 		id: "H1-quarter-close-seat-push",
 		hook: "H1",
 		archetype: "temporal-inflection",
-		narrative: `The Q3 quarter-close seat promotion (${D(QUARTER_CLOSE_START)} for ${QUARTER_CLOSE_DAYS} days, through Sep 30) is a world event that multiplies teammate invitations by ${QUARTER_CLOSE_INVITE_MULT}. Dashboard views are untouched, so invites per dashboard view during the promotion vs the ${QUARTER_CLOSE_DAYS} days before reads the multiplier while cancelling weekday mix and the overall trend.`,
-		mixpanelReport: { type: "Insights", events: ["teammate invited", "dashboard viewed"], measure: "total", chart: "daily line, formula A/B" },
+		narrative: `The Q3 quarter-close seat promotion (${D(QUARTER_CLOSE_START)} for ${QUARTER_CLOSE_DAYS} days, through Sep 30) discounts added seats, so workspaces on a paid plan (plan_tier at event time: ${PAID_PLANS.join(", ")}) send ${QUARTER_CLOSE_INVITE_MULT}x as many teammate invitations; Free workspaces have no seats to discount and do not change. Dashboard views are untouched, so invites per dashboard view during the promotion vs the ${QUARTER_CLOSE_DAYS} days before reads the multiplier for paid plans and 1.0 for Free, cancelling weekday mix and the overall trend.`,
+		mixpanelReport: { type: "Insights", events: ["teammate invited", "dashboard viewed"], measure: "total", breakdown: "plan_tier", chart: "daily line, formula A/B" },
 		assertions: [
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE},
-w AS (SELECT (t >= TIMESTAMP '${TS(QUARTER_CLOSE_START)}') AS promo, event, uid FROM ev
+w AS (SELECT CASE WHEN plan_tier IN (${SQL_LIST(PAID_PLANS)}) THEN 'paid' ELSE 'free' END AS grp, (t >= TIMESTAMP '${TS(QUARTER_CLOSE_START)}') AS promo, event, uid FROM ev
   WHERE event IN ('teammate invited', 'dashboard viewed') AND t >= TIMESTAMP '${QC_BASE_FROM}' AND t < TIMESTAMP '${QC_END}'),
-g AS (SELECT promo, count(*) FILTER (WHERE event = 'teammate invited')::DOUBLE / count(*) FILTER (WHERE event = 'dashboard viewed') AS r, count(DISTINCT uid) AS users FROM w GROUP BY 1)
-SELECT 'all' AS grp, min(users) AS user_count, max(r) FILTER (WHERE promo) / max(r) FILTER (WHERE NOT promo) AS did FROM g`,
+g AS (SELECT grp, promo, count(*) FILTER (WHERE event = 'teammate invited')::DOUBLE / count(*) FILTER (WHERE event = 'dashboard viewed') AS r, count(DISTINCT uid) AS users FROM w GROUP BY 1, 2)
+SELECT grp, min(users) AS user_count, max(r) FILTER (WHERE promo) / max(r) FILTER (WHERE NOT promo) AS did FROM g GROUP BY 1`,
 				},
-				select: { a: { where: { grp: "all" } } },
+				select: { a: { where: { grp: "paid" } } },
 				expect: { metric: "a.did", op: "between", target: band(QUARTER_CLOSE_INVITE_MULT) },
-				minCohort: 2000,
+				minCohort: 1000,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+w AS (SELECT CASE WHEN plan_tier IN (${SQL_LIST(PAID_PLANS)}) THEN 'paid' ELSE 'free' END AS grp, (t >= TIMESTAMP '${TS(QUARTER_CLOSE_START)}') AS promo, event, uid FROM ev
+  WHERE event IN ('teammate invited', 'dashboard viewed') AND t >= TIMESTAMP '${QC_BASE_FROM}' AND t < TIMESTAMP '${QC_END}'),
+g AS (SELECT grp, promo, count(*) FILTER (WHERE event = 'teammate invited')::DOUBLE / count(*) FILTER (WHERE event = 'dashboard viewed') AS r, count(DISTINCT uid) AS users FROM w GROUP BY 1, 2)
+SELECT grp, min(users) AS user_count, max(r) FILTER (WHERE promo) / max(r) FILTER (WHERE NOT promo) AS did FROM g GROUP BY 1`,
+				},
+				select: { f: { where: { grp: "free" } } },
+				// control: Free workspaces have no seats to discount
+				expect: { metric: "f.did", op: "between", target: band(1) },
+				minCohort: 1000,
 			},
 		],
 	},
@@ -1165,7 +1256,7 @@ SELECT 'all' AS grp, min(users) AS user_count, max(r) FILTER (WHERE promo) / max
 		id: "H2-root-cause-assist-launch",
 		hook: "H2",
 		archetype: "temporal-inflection",
-		narrative: `Root Cause Assist launches ${D(RCA_LAUNCH)} for Business and Enterprise plans. ${RCA_ADOPTER_SHARE * 100}% of eligible users adopt it and use it on ${RCA_ADOPTER_USE * 100}% of their resolutions, so ${RCA_ADOPTION * 100}% of eligible post-launch resolutions carry resolution_method = 'ai_assist'; those take ${RCA_RESOLVE_MULT}x as long from acknowledgement to resolution. Free and Team plans and every pre-launch resolution never use it, so purity is exact. plan_tier on each event is the plan at that moment; the acknowledgement step is untouched.`,
+		narrative: `Root Cause Assist launches ${D(RCA_LAUNCH)} for Business and Enterprise plans. ${RCA_ADOPTER_SHARE * 100}% of eligible users adopt it, each starting on a day in the ${RCA_RAMP_DAYS} days after launch and using it on ${(RCA_ADOPTER_USE - RCA_USE_SPREAD) * 100}-${(RCA_ADOPTER_USE + RCA_USE_SPREAD) * 100}% of their resolutions (mean ${RCA_ADOPTER_USE * 100}%), so adoption ramps up and then holds at ${RCA_ADOPTION * 100}% of eligible resolutions with resolution_method = 'ai_assist'; those take ${RCA_RESOLVE_MULT}x as long from acknowledgement to resolution. Free and Team plans and every pre-launch resolution never use it, so purity is exact. plan_tier on each event is the plan at that moment; the acknowledgement step is untouched.`,
 		mixpanelReport: { type: "Insights", event: "alert resolved", measure: "average resolution_time_mins", breakdown: "resolution_method", filter: "plan_tier in (business, enterprise), after launch" },
 		assertions: [
 			{
@@ -1196,9 +1287,10 @@ FROM ev WHERE event = 'alert resolved' AND t >= TIMESTAMP '${TS(RCA_LAUNCH)}' AN
 					type: "duckdb",
 					sql: `WITH ${ID_CTE}
 SELECT 'eligible' AS grp, count(DISTINCT uid) AS user_count, count(*) FILTER (WHERE resolution_method = 'ai_assist')::DOUBLE / count(*) AS ai_share
-FROM ev WHERE event = 'alert resolved' AND t >= TIMESTAMP '${TS(RCA_LAUNCH)}' AND plan_tier IN (${SQL_LIST(RCA_PLANS)})`,
+FROM ev WHERE event = 'alert resolved' AND t >= TIMESTAMP '${RCA_RAMPED}' AND plan_tier IN (${SQL_LIST(RCA_PLANS)})`,
 				},
 				select: { e: { where: { grp: "eligible" } } },
+				// after the ramp: every adopter has started
 				expect: { metric: "e.ai_share", op: "between", target: band(RCA_ADOPTION) },
 				minCohort: 500,
 			},
@@ -1233,21 +1325,39 @@ FROM ev WHERE event = 'alert resolved' AND t >= TIMESTAMP '${TS(RCA_LAUNCH)}' AN
 		id: "H4-slack-pagerduty-response",
 		hook: "H4",
 		archetype: "cohort-prop-scale",
-		narrative: `Users who have configured both the Slack and PagerDuty integrations acknowledge alerts in ${INTEGRATED_RESPONSE_MULT}x the time of everyone else: the page reaches the on-call engineer where they already are. Only trigger → acknowledge is affected; acknowledge → resolve is not. response_time_mins on "alert acknowledged" is the real gap between the trigger and the acknowledgement. Company size, severity, and alert fatigue are independent of the integration cohort, so the ratio of averages reads the knob.`,
-		mixpanelReport: { type: "Insights", event: "alert acknowledged", measure: "average response_time_mins", breakdown: "cohort: configured slack AND pagerduty" },
+		narrative: `Once a user has both the Slack and PagerDuty integrations connected, they acknowledge alerts in ${INTEGRATED_RESPONSE_MULT}x the time: the page reaches the on-call engineer where they already are. Only trigger → acknowledge is affected; acknowledge → resolve is not. The speed-up starts when the pair is live: for a new signup, alerts triggered after the later of their first slack and first pagerduty configuration; established customers who touch both integrations in the window had them before June 4, so their whole window is faster. Read 1: established customers, cohort "configured slack AND pagerduty" vs the rest (company size, severity, and fatigue are independent of the cohort, so the ratio of averages reads the knob). Read 2: within-user before/after for new signups in the cohort; fewer acknowledgements and per-user mix noise, so the knob is the target with a knob-derived ceiling.`,
+		mixpanelReport: { type: "Insights", event: "alert acknowledged", measure: "average response_time_mins", breakdown: "cohort: configured slack AND pagerduty", filter: "customer_since before 2026-06-04 (read 1)" },
 		assertions: [
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE},
-i AS (SELECT uid, bool_or(integration_type = 'slack') AND bool_or(integration_type = 'pagerduty') AS both_integ FROM ev WHERE event = 'integration configured' GROUP BY 1)
+i AS (SELECT uid, bool_or(integration_type = 'slack') AND bool_or(integration_type = 'pagerduty') AS both_integ FROM ev WHERE event = 'integration configured' GROUP BY 1),
+est AS (SELECT distinct_id::VARCHAR AS uid FROM ${US} WHERE customer_since < '${D0}')
 SELECT CASE WHEN coalesce(i.both_integ, false) THEN 'integrated' ELSE 'rest' END AS grp, count(DISTINCT ev.uid) AS user_count,
  avg(response_time_mins) AS avg_resp
-FROM ev LEFT JOIN i ON i.uid = ev.uid WHERE ev.event = 'alert acknowledged' GROUP BY 1`,
+FROM ev JOIN est ON est.uid = ev.uid LEFT JOIN i ON i.uid = ev.uid WHERE ev.event = 'alert acknowledged' GROUP BY 1`,
 				},
 				select: { i: { where: { grp: "integrated" } }, r: { where: { grp: "rest" } } },
 				expect: { metric: "i.avg_resp / r.avg_resp", op: "between", target: band(INTEGRATED_RESPONSE_MULT) },
 				minCohort: 500,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+s AS (SELECT DISTINCT uid FROM ev WHERE event = 'account created'),
+c AS (SELECT uid, greatest(min(t) FILTER (WHERE integration_type = 'slack'), min(t) FILTER (WHERE integration_type = 'pagerduty')) AS ready
+  FROM ev WHERE event = 'integration configured' GROUP BY 1 HAVING bool_or(integration_type = 'slack') AND bool_or(integration_type = 'pagerduty')),
+a AS (SELECT alert_id, any_value(uid) AS uid, min(t) FILTER (WHERE event = 'alert triggered') AS t0, any_value(response_time_mins) FILTER (WHERE event = 'alert acknowledged') AS resp
+  FROM ev WHERE event IN ('alert triggered', 'alert acknowledged') GROUP BY 1)
+SELECT CASE WHEN a.t0 >= c.ready THEN 'after' ELSE 'before' END AS grp, count(DISTINCT a.uid) AS user_count, count(*) AS acks, avg(a.resp) AS avg_resp
+FROM a JOIN c ON c.uid = a.uid JOIN s ON s.uid = a.uid WHERE a.resp IS NOT NULL AND a.t0 IS NOT NULL GROUP BY 1`,
+				},
+				select: { a: { where: { grp: "after" } }, b: { where: { grp: "before" } } },
+				// ceiling: at least half the knob's effect
+				expect: { metric: "a.avg_resp / b.avg_resp", op: "<=", target: INTEGRATED_RESPONSE_MULT, floor: 1 - 0.5 * (1 - INTEGRATED_RESPONSE_MULT) },
+				minCohort: 150,
 			},
 		],
 	},
@@ -1255,7 +1365,7 @@ FROM ev LEFT JOIN i ON i.uid = ev.uid WHERE ev.event = 'alert acknowledged' GROU
 		id: "H5-first-week-team-activation",
 		hook: "H5",
 		archetype: "retention-divergence",
-		narrative: `New users who invite fewer than ${ACTIVATION_MIN} teammates in their first ${ACTIVATION_DAYS} days are at risk: ${DARK_SHARE * 100}% of them go dark after day ${DARK_AFTER_DAYS}. Classification uses first-week activity only. Every new user also faces organic lapse (${LAPSE_SHARE * 100}% stop on a uniform day ${LAPSE_DAY_MIN}-${LAPSE_DAY_MAX}), independent of the split. Day-${RETENTION_DAY} retention (any event in days ${RETENTION_DAY}-${RETENTION_DAY + 6} after signup, signups at least ${RETENTION_DAY + 7} days before the window end) is at least 1/(1−${DARK_SHARE}) = ${1 / (1 - DARK_SHARE)}x higher for activated users; organic selection (busier people invite more and also stay active) can only push it higher, so the knob is a floor.`,
+		narrative: `New users who invite fewer than ${ACTIVATION_MIN} teammates in their first ${ACTIVATION_DAYS} days are at risk, on a ramp: ${DARK_SHARE_BY_INVITES[0] * 100}% of users with no first-week invite and ${DARK_SHARE_BY_INVITES[1] * 100}% with one go dark after day ${DARK_AFTER_DAYS}. Classification uses first-week activity only. Every new user also faces organic lapse (${LAPSE_SHARE * 100}% stop on a uniform day ${LAPSE_DAY_MIN}-${LAPSE_DAY_MAX}), and ${SETUP_ABANDON_SHARE * 100}% of users who never finish onboarding stop on day ${SETUP_ABANDON_DAY_MIN}-${SETUP_ABANDON_DAY_MAX}. Day-${RETENTION_DAY} retention (any event in days ${RETENTION_DAY}-${RETENTION_DAY + 6} after signup, signups at least ${RETENTION_DAY + 7} days before the window end): among users who finished onboarding (no setup abandonment), 2+ invites vs none reads 1/(1−${DARK_SHARE_BY_INVITES[0]}) (the one-invite group is too small at this scale to grade on its own); across all new users, activated vs not activated is at least 1/(1−${DARK_SHARE_BY_INVITES[1]}), and setup abandoners (who rarely invite) push it higher, so that read uses a knob floor.`,
 		mixpanelReport: { type: "Retention", birth: "account created", return: "any event", breakdown: `cohort: ≥${ACTIVATION_MIN} teammate invited in first ${ACTIVATION_DAYS} days` },
 		assertions: [
 			{
@@ -1272,8 +1382,15 @@ SELECT CASE WHEN early >= ${ACTIVATION_MIN} THEN 'activated' ELSE 'not_activated
 FROM f GROUP BY 1`,
 				},
 				select: { a: { where: { grp: "activated" } }, n: { where: { grp: "not_activated" } } },
-				expect: { metric: "a.retention / n.retention", op: ">=", target: 1 / (1 - DARK_SHARE), floor: 0.9 / (1 - DARK_SHARE) },
+				// confounded by setup abandonment: knob-derived floor, grades STRONG above it
+				expect: { metric: "a.retention / n.retention", op: ">=", target: 1 / (1 - DARK_SHARE_BY_INVITES[1]), floor: 0.9 / (1 - DARK_SHARE_BY_INVITES[1]) },
 				minCohort: 400,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H5_DOSE_SQL },
+				select: { a: { where: { grp: "two_plus" } }, z: { where: { grp: "zero" } } },
+				expect: { metric: "a.retention / z.retention", op: "between", target: band(1 / (1 - DARK_SHARE_BY_INVITES[0])) },
+				minCohort: 200,
 			},
 		],
 	},
@@ -1374,7 +1491,7 @@ FROM ${WH("ci_runner_health_daily")}`,
 		id: "H8-paid-channel-economics",
 		hook: "H8",
 		archetype: "attribution-bias",
-		narrative: `LinkedIn Ads signups cost ${CPL_USD.linkedin_ads / CPL_USD.paid_search}x as much as paid search signups (warehouse paid_marketing_daily bills spend = Mixpanel signups × cost per signup × seeded ±${CPL_NOISE * 100}% day noise: $${CPL_USD.linkedin_ads} vs $${CPL_USD.paid_search}), but they buy a paid plan ${PURCHASE_KEEP.linkedin_ads / PURCHASE_KEEP.paid_search}x as often (share of would-be purchases kept: ${PURCHASE_KEEP.linkedin_ads} vs ${PURCHASE_KEEP.paid_search}; channel is drawn independently of company size and persona). Spend per signup needs the warehouse join; the purchase-rate read compares signups from the same weeks so later signups' shorter time to buy cancels. Paid-subscription counts per channel are a few hundred, so the purchase-rate ratio uses the knob as target with a knob-derived floor.`,
+		narrative: `LinkedIn Ads signups cost ${CPL_USD.linkedin_ads / CPL_USD.paid_search}x as much as paid search signups over the window (warehouse paid_marketing_daily bills a paced daily budget per channel = cost per signup × expected signups per day, with a weekday shape and seeded ±${SPEND_NOISE * 100}% day noise, never zero: $${CPL_USD.linkedin_ads} vs $${CPL_USD.paid_search} per signup at the window level; day-level cost per signup moves with the day's signups), but they buy a paid plan ${PURCHASE_KEEP.linkedin_ads / PURCHASE_KEEP.paid_search}x as often (share of would-be purchases kept: ${PURCHASE_KEEP.linkedin_ads} vs ${PURCHASE_KEEP.paid_search}; channel is drawn independently of company size and persona). Spend per signup needs the warehouse join; the purchase-rate read compares signups from the same weeks so later signups' shorter time to buy cancels. Paid-subscription counts per channel are a few hundred, so the purchase-rate ratio uses the knob as target with a knob-derived floor.`,
 		mixpanelReport: { type: "Insights + warehouse", event: "account created", breakdown: "acquisition_channel", join: "paid_marketing_daily.spend_usd", funnel: "account created → subscription started by acquisition_channel" },
 		assertions: [
 			{
@@ -1496,8 +1613,8 @@ SELECT 'smb_mid' AS grp, count(DISTINCT uid) AS user_count, median(ttc) AS med_t
 	{
 		id: "H11-alert-fatigue",
 		hook: "H11",
-		archetype: "frequency-sweet-spot",
-		narrative: `Alert fatigue: the more alerts a user receives in the window, the larger the share they never acknowledge. Up to ${FATIGUE_START} alerts nothing changes; from there the share of would-be acknowledgements lost ramps linearly to ${FATIGUE_FLIP * 100}% at ${FATIGUE_FULL}+ alerts (no cliff). The ramp is applied to the user's final alert count, so per-alert acknowledgement rate for users with ${FATIGUE_FULL}+ alerts vs users with at most ${FATIGUE_START} reads 1 − ${FATIGUE_FLIP}.`,
+		archetype: "bespoke",
+		narrative: `Alert fatigue (dose-response with a floor): the more alerts a user receives in the window, the larger the share they never acknowledge. Up to ${FATIGUE_START} alerts nothing changes; from there the share of would-be acknowledgements lost ramps linearly to ${FATIGUE_FLIP * 100}% at ${FATIGUE_FULL}+ alerts (no cliff). The ramp is applied to the user's final alert count, so per-alert acknowledgement rate for users with ${FATIGUE_FULL}+ alerts vs users with at most ${FATIGUE_START} reads 1 − ${FATIGUE_FLIP}.`,
 		mixpanelReport: { type: "Funnels", steps: ["alert triggered", "alert acknowledged"], counting: "totals", holdPropertyConstant: "alert_id", breakdown: "cohort: count of alert triggered in window (bins)" },
 		assertions: [
 			{
