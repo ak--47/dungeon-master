@@ -1,206 +1,345 @@
--- ============================================================
--- fitness.js — v1.6 human-inspection queries (DuckDB)
+-- Stridewell (fitness vertical) — story-keyed and eval-keyed DuckDB queries.
 --
--- Every query is keyed to a story id in fitness.js's `stories` export;
--- the machine-checked verdicts come from:
---   node scripts/verify-stories.mjs dungeons/vertical/fitness/fitness.js --data-prefix verify-fitness
--- Generate first:
+-- Generate first (repo root):
 --   node scripts/verify-runner.mjs dungeons/vertical/fitness/fitness.js verify-fitness
--- Run this file:
+-- Run:
 --   duckdb -c ".read dungeons/vertical/fitness/fitness.sql"
--- ============================================================
+-- Against a gzipped export:
+--   duckdb -c "SET VARIABLE data_prefix='<dir>/fitness'" -c ".read fitness.sql"
+--
+-- All times are UTC. Window: 2026-06-04 00:00 to 2026-10-01 23:59:59.
 
--- ── identity-resolution prelude ─────────────────────────────
--- avgDevicePerUser: 3 + account created is both isAuthEvent and
--- isFirstEvent, so born users auth on their first event; the device-pool
--- resolve is belt-and-braces for any device-only edge.
-CREATE OR REPLACE VIEW users AS
-SELECT * FROM read_json_auto('data/verify-fitness-USERS*.json', sample_size=-1, union_by_name=true);
+SET VARIABLE data_prefix = COALESCE(getvariable('data_prefix'), 'data/verify-fitness');
 
-CREATE OR REPLACE VIEW device_map AS
--- profiles store the device pool under the legacy "anonymousIds" key
-SELECT unnest("anonymousIds") AS device_id, distinct_id FROM users;
+-- ─────────────────────────────────────────────────────────────────────────
+-- PRELUDE: raw files, identity resolution, warehouse tables
+-- ─────────────────────────────────────────────────────────────────────────
+-- Identity: new members sign up with "account created" (the auth event, which
+-- carries both user_id and device_id). A device resolves to the user seen with
+-- it on any event that carries both ids, the way Mixpanel stitches. Every
+-- remaining event already carries user_id.
 
-CREATE OR REPLACE VIEW ev AS
--- ::VARCHAR casts — user_id sniffs as UUID, device_id as VARCHAR; DuckDB
--- refuses to coalesce mixed types
-SELECT coalesce(m.distinct_id::VARCHAR, e.user_id::VARCHAR, e.device_id::VARCHAR) AS uid,
-       e.time::TIMESTAMP AS t,
-       e.*
-FROM read_json_auto('data/verify-fitness-EVENTS*.json', sample_size=-1, union_by_name=true) e
-LEFT JOIN device_map m ON e.device_id = m.device_id;
+CREATE OR REPLACE TEMP TABLE raw_events AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-EVENTS*.json*', sample_size=-1, union_by_name=true);
 
--- Per-user workout counts. H3/H4/H10 classify on counts taken after H8's
--- progress-checked drop and H5's resolver thinning; for non-resolver users
--- no later hook deletes "workout completed", so output counts rebuild the
--- hook cohorts exactly (resolver-sensitive queries exclude that segment).
-CREATE OR REPLACE VIEW workout_ct AS
-SELECT uid, count(*) AS w FROM ev WHERE event = 'workout completed' GROUP BY 1;
+CREATE OR REPLACE TEMP TABLE users AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-USERS*.json*', sample_size=-1, union_by_name=true);
 
+CREATE OR REPLACE TEMP TABLE device_map AS
+SELECT device_id, min(user_id::VARCHAR) AS mapped
+FROM raw_events WHERE user_id IS NOT NULL AND device_id IS NOT NULL GROUP BY 1;
 
--- ── H1-morning-calorie-boost ────────────────────────────────
--- workouts 05:00-09:00 UTC carry calories_burned × 1.3. Nothing else
--- touches calories_burned, so avg AND median ratios read the knob.
-SELECT CASE WHEN extract(hour FROM t) >= 5 AND extract(hour FROM t) < 9 THEN 'morning' ELSE 'other' END AS grp,
-  count(*) AS workouts, round(avg(calories_burned), 1) AS avg_cal, median(calories_burned) AS med_cal
-FROM ev WHERE event = 'workout completed' GROUP BY 1 ORDER BY 1;
+CREATE OR REPLACE TEMP TABLE ev AS
+SELECT coalesce(e.user_id::VARCHAR, m.mapped) AS uid, e.time::TIMESTAMP AS t, e.*
+FROM raw_events e LEFT JOIN device_map m ON e.device_id = m.device_id;
 
+CREATE OR REPLACE TEMP TABLE wh_paid AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-paid_acquisition_daily.json*', sample_size=-1, union_by_name=true);
+CREATE OR REPLACE TEMP TABLE wh_sync AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-wearable_sync_daily.json*', sample_size=-1, union_by_name=true);
+CREATE OR REPLACE TEMP TABLE wh_billing AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-subscription_billing_daily.json*', sample_size=-1, union_by_name=true);
 
--- ── H2-ai-coaching-lift ─────────────────────────────────────
--- after day 35 (2026-02-05), workouts flip to coaching_mode='ai_assisted'
--- at 40% per-event, and ai_assisted duration × 1.2. Pre-launch ai rows
--- must be ZERO (declared pool is the single value 'self_guided').
-SELECT count(*) FILTER (WHERE coaching_mode = 'ai_assisted' AND t <= TIMESTAMP '2026-02-05') AS pre_launch_ai,
-  count(*) FILTER (WHERE coaching_mode = 'ai_assisted') AS ai_total
+-- new-member signups (one per member who joined in the window)
+CREATE OR REPLACE TEMP TABLE signups AS
+SELECT uid, t AS t0, acquisition_channel AS ch, Platform AS platform FROM ev WHERE event = 'account created';
+
+-- dataset overview
+SELECT count(*) AS events, count(DISTINCT uid) AS users, min(t) AS first_event, max(t) AS last_event FROM ev;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H1-guided-first-week — onboarding A/B starting 2026-07-01
+-- ─────────────────────────────────────────────────────────────────────────
+-- Onboarding steps are onboarding-only events, so a per-user "reached every
+-- step in order within 7 days" read equals the Mixpanel funnel.
+CREATE OR REPLACE TEMP TABLE onboarding AS
+WITH s AS (SELECT u."Experiment: Guided First Week" AS variant, g.uid, g.t0, g.platform FROM signups g JOIN users u ON u.distinct_id::VARCHAR = g.uid),
+q AS (SELECT uid, min(t) AS tq FROM ev WHERE event = 'goal quiz completed' GROUP BY 1),
+p AS (SELECT uid, min(t) AS tp FROM ev WHERE event = 'plan generated' GROUP BY 1),
+w AS (SELECT uid, min(t) AS tw FROM ev WHERE event = 'starter workout completed' GROUP BY 1)
+SELECT s.*, coalesce(q.tq >= s.t0 AND p.tp >= q.tq AND w.tw >= p.tp AND w.tw < s.t0 + INTERVAL 7 DAY, false) AS converted,
+ CASE WHEN w.tw >= p.tp AND p.tp >= q.tq AND q.tq >= s.t0 AND w.tw < s.t0 + INTERVAL 7 DAY THEN date_diff('second', s.t0, w.tw) END AS ttc_s
+FROM s LEFT JOIN q USING (uid) LEFT JOIN p USING (uid) LEFT JOIN w USING (uid);
+
+SELECT coalesce(variant, '(not enrolled)') AS variant, count(*) AS signups,
+ round(avg(converted::INT), 4) AS onboarding_conversion,
+ round(median(ttc_s) / 3600.0, 2) AS median_hours_to_finish
+FROM onboarding GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H2-stride-coach-launch — AI coaching for Plus from 2026-08-12
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT coaching_mode, count(*) AS workouts, round(avg(duration_minutes), 2) AS avg_minutes, round(avg(calories_burned), 1) AS avg_calories
+FROM ev WHERE event = 'workout completed' AND t >= TIMESTAMP '2026-08-12' AND subscription_tier <> 'free'
+GROUP BY 1 ORDER BY 1;
+
+SELECT count(*) FILTER (WHERE coaching_mode = 'ai_coach' AND (t < TIMESTAMP '2026-08-12' OR subscription_tier = 'free')) AS impure_rows
 FROM ev WHERE event IN ('workout completed', 'workout planned');
 
-SELECT coaching_mode, count(*) AS workouts, round(avg(duration_minutes), 1) AS avg_dur
-FROM ev WHERE event = 'workout completed' AND t > TIMESTAMP '2026-02-05' GROUP BY 1 ORDER BY 1;
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H3-wearable-sync-outage — partner health-API outage 2026-08-20..22
+-- ─────────────────────────────────────────────────────────────────────────
+WITH od AS (SELECT DISTINCT date::DATE AS d FROM wh_sync WHERE sync_error_rate > 0.2),
+w AS (SELECT t::DATE AS d,
+  CASE WHEN tracking_source = 'wearable' AND wearable_type IN ('smartwatch', 'fitness_band') THEN 'aff'
+       WHEN tracking_source = 'phone' THEN 'phone' END AS arm
+  FROM ev WHERE event = 'workout completed' AND t >= TIMESTAMP '2026-08-13' AND t < TIMESTAMP '2026-08-30'),
+g AS (SELECT (d IN (SELECT d FROM od)) AS outage, count(*) FILTER (WHERE arm = 'aff') AS aff, count(*) FILTER (WHERE arm = 'phone') AS phone FROM w GROUP BY 1)
+SELECT round((max(aff::DOUBLE / phone) FILTER (WHERE outage)) / (max(aff::DOUBLE / phone) FILTER (WHERE NOT outage)), 4) AS affected_vs_phone_did FROM g;
 
+SELECT wearable_type, round(avg(sync_error_rate) FILTER (WHERE partner_api_status = 'major_outage'), 4) AS outage_error_rate,
+ count(*) FILTER (WHERE partner_api_status = 'major_outage') AS outage_days
+FROM wh_sync GROUP BY 1 ORDER BY 1;
 
--- ── H3-streak-achievements ──────────────────────────────────
--- ≥2-workout users: profile streak_days OVERWRITTEN to hook-time workout
--- count, plus C(w) = min(w−1, 3) + 4·max(w−4, 0) cloned achievements.
--- Contract is ONE-SIDED for non-resolvers: sd < w impossible (nothing adds
--- workouts after H3); sd > w happens when the silent future-time guard
--- deletes a counted workout post-hook (~0.5% of users) — so expect
--- below_w = 0 and eq_share ≥ 0.99, NOT perfect equality.
-WITH j AS (SELECT u.distinct_id::VARCHAR AS uid, u.segment, u.streak_days AS sd, coalesce(w.w, 0) AS w
-  FROM users u LEFT JOIN workout_ct w ON w.uid = u.distinct_id::VARCHAR
-  WHERE u.segment <> 'resolver')
-SELECT count(*) FILTER (WHERE w >= 2 AND sd < w) AS below_w,
-  count(*) FILTER (WHERE segment <> 'coach' AND sd = 1) AS unreachable_one,
-  round(count(*) FILTER (WHERE w >= 2 AND sd = w)::DOUBLE / nullif(count(*) FILTER (WHERE w >= 2), 0), 4) AS eq_share,
-  count(*) FILTER (WHERE w >= 2) AS streak_users
-FROM j;
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H4-monthly-price-change — Plus Monthly $12.99 → $14.99 on 2026-09-01
+-- ─────────────────────────────────────────────────────────────────────────
+WITH p AS (SELECT (t >= TIMESTAMP '2026-09-01') AS post, plan FROM ev WHERE event = 'subscription purchased'),
+g AS (SELECT post, count(*) FILTER (WHERE plan = 'monthly') AS monthly, count(*) FILTER (WHERE plan = 'annual') AS annual FROM p GROUP BY 1)
+SELECT post, monthly, annual, round(monthly::DOUBLE / annual, 4) AS monthly_per_annual FROM g ORDER BY post;
 
--- implied organic achievements (total − C(w)) — median should sit in the
--- low single digits (ach weight 2 of 68); a drifted clone formula would
--- push it negative or huge.
-WITH ac AS (SELECT uid, count(*) AS a FROM ev WHERE event = 'achievement unlocked' GROUP BY 1),
-j AS (SELECT u.distinct_id::VARCHAR AS uid, coalesce(w.w, 0) AS w, coalesce(a.a, 0) AS a
-  FROM users u LEFT JOIN workout_ct w ON w.uid = u.distinct_id::VARCHAR LEFT JOIN ac a ON a.uid = u.distinct_id::VARCHAR
-  WHERE u.segment <> 'resolver')
-SELECT count(*) AS cohort,
-  round(count(*) FILTER (WHERE a - (LEAST(w - 1, 3) + GREATEST(w - 4, 0) * 4) >= 1)::DOUBLE / count(*), 4) AS ok_share,
-  median(a - (LEAST(w - 1, 3) + GREATEST(w - 4, 0) * 4)) AS med_organic
-FROM j WHERE w BETWEEN 2 AND 14 AND a >= 1;
+WITH p AS (SELECT t::DATE AS d, plan FROM ev WHERE event = 'subscription purchased'),
+j AS (SELECT p.*, b.list_price_usd FROM p JOIN wh_billing b ON b.date::DATE = p.d AND b.plan = p.plan),
+g AS (SELECT (d >= DATE '2026-09-01') AS post,
+  sum(list_price_usd) FILTER (WHERE plan = 'monthly') / sum(list_price_usd) FILTER (WHERE plan = 'annual') AS m_rev_per_a FROM j GROUP BY 1)
+SELECT round(max(m_rev_per_a) FILTER (WHERE post) / max(m_rev_per_a) FILTER (WHERE NOT post), 4) AS monthly_bookings_did FROM g;
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H5-summer-shred-paid-social — 2026-06-15..07-14 campaign
+-- ─────────────────────────────────────────────────────────────────────────
+WITH s AS (SELECT t0::DATE AS d, count(*) AS n FROM signups WHERE ch = 'paid_social' GROUP BY 1),
+j AS (SELECT (p.date::DATE >= DATE '2026-06-15' AND p.date::DATE < DATE '2026-07-15') AS shred, sum(p.spend_usd) AS spend, sum(coalesce(s.n, 0)) AS signups
+  FROM wh_paid p LEFT JOIN s ON s.d = p.date::DATE WHERE p.acquisition_channel = 'paid_social' GROUP BY 1)
+SELECT shred, round(spend, 2) AS spend_usd, signups, round(spend / signups, 2) AS spend_per_signup FROM j ORDER BY shred;
 
--- ── H4-social-challenge-completion ──────────────────────────
--- ≥3-friend users get max(1, floor(cc × 0.5)) cloned challenge completions.
--- out = cc + max(1, floor(cc/2)) skips {5, 8, 11, …} = {n≥5 : n≡2 mod 3} —
--- gap hits on the clean cohort only come from the future-time guard (~2%).
-WITH fr AS (SELECT uid, count(*) AS f FROM ev WHERE event = 'friend added' GROUP BY 1),
-ch AS (SELECT uid, count(*) AS c FROM ev WHERE event = 'challenge completed' GROUP BY 1),
-j AS (SELECT u.distinct_id::VARCHAR AS uid, coalesce(w.w, 0) AS w, coalesce(f.f, 0) AS f, coalesce(c.c, 0) AS c
-  FROM users u LEFT JOIN workout_ct w ON w.uid = u.distinct_id::VARCHAR
-  LEFT JOIN fr f ON f.uid = u.distinct_id::VARCHAR LEFT JOIN ch c ON c.uid = u.distinct_id::VARCHAR
-  WHERE u.segment <> 'resolver')
-SELECT count(*) AS clean_cohort, count(*) FILTER (WHERE c >= 5 AND c % 3 = 2) AS gap_hits
-FROM j WHERE w <= 14 AND f >= 3 AND c >= 2;
+WITH g AS (SELECT (t0 >= TIMESTAMP '2026-06-15' AND t0 < TIMESTAMP '2026-07-15') AS shred, count(*) AS n,
+  count(*) FILTER (WHERE ch = 'paid_social')::DOUBLE / count(*) AS social_share FROM signups GROUP BY 1)
+SELECT shred, n, round(social_share, 4) AS paid_social_share FROM g ORDER BY shred;
 
--- within-social-segment gradient (composite: clone lift × activity correlation)
-WITH fr AS (SELECT uid, count(*) AS f FROM ev WHERE event = 'friend added' GROUP BY 1),
-ch AS (SELECT uid, count(*) AS c FROM ev WHERE event = 'challenge completed' GROUP BY 1),
-j AS (SELECT u.distinct_id::VARCHAR AS uid, coalesce(f.f, 0) AS f, coalesce(c.c, 0) AS c
-  FROM users u LEFT JOIN fr f ON f.uid = u.distinct_id::VARCHAR LEFT JOIN ch c ON c.uid = u.distinct_id::VARCHAR
-  WHERE u.segment = 'social')
-SELECT CASE WHEN f >= 3 THEN 'friend_heavy' ELSE 'friend_light' END AS grp,
-  count(*) AS users, round(avg(c), 3) AS avg_challenge_completions
-FROM j WHERE f >= 3 OR f <= 1 GROUP BY 1 ORDER BY 1;
+WITH b AS (SELECT DISTINCT uid FROM ev WHERE event = 'subscription purchased'),
+w AS (SELECT date_trunc('week', s.t0) AS wk,
+  count(*) FILTER (WHERE ch = 'paid_social') AS sn, count(b.uid) FILTER (WHERE ch = 'paid_social') AS sb,
+  count(*) FILTER (WHERE ch <> 'paid_social') AS onn, count(b.uid) FILTER (WHERE ch <> 'paid_social') AS ob
+  FROM signups s LEFT JOIN b ON b.uid = s.uid GROUP BY 1)
+SELECT round(sum(sb)::DOUBLE / sum(sn * ob::DOUBLE / nullif(onn, 0)), 4) AS paid_social_vs_other_buy_rate_std FROM w WHERE onn > 0;
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H6-first-week-habit — 3+ workouts in the first 7 days
+-- ─────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE TEMP TABLE habit AS
+WITH s AS (SELECT * FROM signups WHERE t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 35 DAY)
+SELECT s.uid, s.t0,
+ count(*) FILTER (WHERE e.event = 'workout completed' AND e.t < s.t0 + INTERVAL 7 DAY) AS early_workouts,
+ count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 28 DAY AND e.t < s.t0 + INTERVAL 35 DAY) AS d28_events
+FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1, 2;
 
--- ── H5-resolver-churn-cliff ─────────────────────────────────
--- resolvers with <30 hook-time events lose 70% of post-day-14
--- (2026-01-15) events. Persona churnRate/activeWindow are deprecated
--- engine no-ops — the cliff is the hook alone, so the estimator targets
--- the 0.30 keep-rate. Deletions-only ⇒ eligible ⟺ output n < 30.
--- Double-difference: birth pinned to first event < day 2 (removes
--- birth-composition), lo/hi volume split normalized by the same split
--- inside casual (removes n-selection; casual lo/hi ≈ 1.22 measured).
--- DD = (res_lo/res_hi) ÷ (cas_lo/cas_hi) ≈ 0.30.
-WITH tot AS (SELECT uid, count(*) AS n, min(t) AS first_t,
-  count(*) FILTER (WHERE t < TIMESTAMP '2026-01-15') AS pre,
-  count(*) FILTER (WHERE t >= TIMESTAMP '2026-01-15') AS post
-  FROM ev GROUP BY 1),
-j AS (SELECT u.segment AS seg, CASE WHEN t.n < 30 THEN 'lo' ELSE 'hi' END AS arm, t.pre, t.post
-  FROM users u JOIN tot t ON t.uid = u.distinct_id::VARCHAR
-  WHERE t.first_t < TIMESTAMP '2026-01-03' AND u.segment IN ('resolver', 'casual'))
-SELECT seg, arm, count(*) AS users,
-  round(sum(post)::DOUBLE / nullif(sum(pre), 0), 4) AS rho
-FROM j GROUP BY 1, 2 ORDER BY 1, 2;
--- read: (rho[resolver,lo] / rho[resolver,hi]) / (rho[casual,lo] / rho[casual,hi])
--- ≈ 0.30; the casual lo/hi ratio itself is the placebo (~1, far from 0.3).
+SELECT CASE WHEN early_workouts >= 3 THEN 'habit (3+)' ELSE 'low (0-2)' END AS grp, count(*) AS members,
+ round(avg((d28_events > 0)::INT), 4) AS d28_retention
+FROM habit GROUP BY 1 ORDER BY 1;
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H7-team-vs-solo-challenges — per-challenge completion
+-- ─────────────────────────────────────────────────────────────────────────
+-- challenge_id is held constant, so each challenge converts on its own completion
+CREATE OR REPLACE TEMP TABLE challenges AS
+WITH j AS (SELECT uid, challenge_id, challenge_format, min(t) AS tj FROM ev WHERE event = 'challenge joined' GROUP BY ALL),
+c AS (SELECT uid, challenge_id, min(t) AS tc FROM ev WHERE event = 'challenge completed' GROUP BY ALL)
+SELECT j.*, coalesce(c.tc >= j.tj AND c.tc < j.tj + INTERVAL 30 DAY, false) AS completed FROM j LEFT JOIN c USING (uid, challenge_id);
 
--- ── H6-coach-session-quality ────────────────────────────────
--- every coach-session satisfaction_score redrawn uniform [4.0, 5.0]
--- (unconditional — a single sub-4.0 score is a hook bug; avg = median = 4.5).
-SELECT count(*) FILTER (WHERE satisfaction_score < 4.0) AS below_min,
-  count(*) AS sessions, round(avg(satisfaction_score), 3) AS avg_sat, median(satisfaction_score) AS med_sat
-FROM ev WHERE event = 'coach session';
+SELECT challenge_format, count(*) AS challenges, round(avg(completed::INT), 4) AS completion_rate
+FROM challenges GROUP BY 1 ORDER BY 1;
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H8-push-fatigue — 20+ notifications in the window
+-- ─────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE TEMP TABLE push AS
+SELECT uid, count(*) AS n, sum(opened::INT) AS opens FROM ev WHERE event = 'notification received' GROUP BY 1;
 
--- ── H7-coach-profile-enrichment ─────────────────────────────
--- user hook: coaches get total_workouts uniform [200, 500] (avg 350);
--- everyone else keeps the declared 0. Ranges deterministic. (streak_days
--- 60-365 also seeded here, but H3 overwrites it for ≥2-workout users —
--- total_workouts is the durable coach signature.)
-SELECT CASE WHEN segment = 'coach' THEN 'coach' ELSE 'other' END AS grp,
-  count(*) AS users, min(total_workouts) AS min_tw, max(total_workouts) AS max_tw,
-  round(avg(total_workouts), 1) AS avg_tw
-FROM users GROUP BY 1 ORDER BY 1;
+SELECT CASE WHEN n >= 20 THEN 'heavy (20+)' ELSE 'light (<20)' END AS grp, count(*) AS members,
+ round(sum(opens)::DOUBLE / sum(n), 4) AS open_rate
+FROM push GROUP BY 1 ORDER BY 1;
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H9-fall-reset-program — 2026-09-08 for 14 days
+-- ─────────────────────────────────────────────────────────────────────────
+WITH w AS (SELECT (t >= TIMESTAMP '2026-09-08') AS prog, event FROM ev
+  WHERE event IN ('workout completed', 'workout planned', 'app opened') AND t >= TIMESTAMP '2026-08-25' AND t < TIMESTAMP '2026-09-22'),
+g AS (SELECT prog, count(*) FILTER (WHERE event = 'workout completed') AS completed, count(*) FILTER (WHERE event = 'workout planned') AS planned,
+  count(*) FILTER (WHERE event = 'app opened') AS opens FROM w GROUP BY 1)
+SELECT prog, completed, planned, opens, round(completed::DOUBLE / opens, 4) AS completed_per_open, round(planned::DOUBLE / opens, 4) AS planned_per_open FROM g ORDER BY prog;
 
--- ── H8-annual-follow-through ────────────────────────────────
--- 30% of free/monthly users lose ALL progress-checked events (per-user
--- cliff). Tier assigned BY segment → raw cross-tier reads are confounded
--- by persona composition BY CONSTRUCTION; only athlete and social contain
--- both an affected and a control tier, so standardize within those.
-WITH pc AS (SELECT uid, count(*) AS ct FROM ev WHERE event = 'progress checked' GROUP BY 1),
-j AS (SELECT u.segment AS seg, CASE WHEN u.subscription_tier IN ('annual', 'family') THEN 'ctl' ELSE 'aff' END AS arm,
-  coalesce(p.ct, 0) AS ct
-  FROM users u LEFT JOIN pc p ON p.uid = u.distinct_id::VARCHAR
-  WHERE u.segment IN ('athlete', 'social'))
-SELECT seg, arm, count(*) AS users,
-  round(count(*) FILTER (WHERE ct = 0)::DOUBLE / count(*), 4) AS zero_share,
-  round(avg(ct) FILTER (WHERE ct > 0), 2) AS avg_ct_survivors
-FROM j GROUP BY 1, 2 ORDER BY 1, 2;
--- read: (z_aff − z_ctl) / (1 − z_ctl) per segment ≈ 0.30; survivor avgs
--- match within segment (per-user cliff, not thinning).
+-- ═════════════════════════════════════════════════════════════════════════
+-- EVAL QUERIES (one per question in eval/fitness.eval.md)
+-- ═════════════════════════════════════════════════════════════════════════
 
+-- EVAL Q1 — Guided First Week onboarding conversion by variant (7-day window)
+SELECT variant, count(*) AS enrolled_signups, count(*) FILTER (WHERE converted) AS finished,
+ round(avg(converted::INT), 4) AS conversion,
+ round(avg(converted::INT) / (SELECT avg(converted::INT) FROM onboarding WHERE variant = 'Control'), 4) AS lift_vs_control
+FROM onboarding WHERE variant IS NOT NULL GROUP BY 1 ORDER BY 1;
 
--- ── H9-workout-loop-ttc ─────────────────────────────────────
--- funnel-post scales EVERY funnel instance's gaps by tier: annual/family
--- × 0.77, free × 1.25, monthly = 1.0.
--- CAUTION: cross-event TTC SQL here would be censored by its lookback
--- window (the ai-platform H9 lesson — censoring can invert the measured
--- direction). The story asserts TTC through the Mixpanel-aligned emulator
--- at a 60h window (= 48h generative window × 1.25 max stretch, covering
--- the stretched support); trust the story verdict, not ad-hoc pair SQL.
-SELECT subscription_tier, count(*) AS planned_events
-FROM ev WHERE event = 'workout planned' GROUP BY 1 ORDER BY 1;
+-- EVAL Q2 — median time from signup to starter workout, by variant
+SELECT variant, round(median(ttc_s) / 3600.0, 2) AS median_hours,
+ round(median(ttc_s) / (SELECT median(ttc_s) FROM onboarding WHERE variant = 'Control'), 4) AS ratio_vs_control
+FROM onboarding WHERE variant IS NOT NULL AND converted GROUP BY 1 ORDER BY 1;
 
+-- EVAL Q3 — Plus workout duration before vs after the Stride Coach launch, by coaching mode
+SELECT (t >= TIMESTAMP '2026-08-12') AS after_launch, coaching_mode, count(*) AS workouts, round(avg(duration_minutes), 2) AS avg_minutes
+FROM ev WHERE event = 'workout completed' AND subscription_tier <> 'free' GROUP BY ALL ORDER BY ALL;
 
--- ── H10-workout-magic-number ────────────────────────────────
--- sweet 12-14 workouts → ALL workout durations × 1.35; over 15+ → 65% of
--- post-day-30 (2026-01-31) events dropped EXCEPT workout completed /
--- progress checked. Duration read restricted to pre-AI-launch (≤2026-02-05)
--- where H2 never touched durations — AVG ratio reads the 1.35 knob exactly;
--- median atom-snaps on the discrete duration pool (reads high, ~1.48).
-WITH coh AS (SELECT uid, CASE WHEN w BETWEEN 12 AND 14 THEN 'sweet'
-  WHEN w BETWEEN 2 AND 11 THEN 'low' WHEN w >= 15 THEN 'over' END AS grp FROM workout_ct)
-SELECT c.grp, count(DISTINCT c.uid) AS users, round(avg(e.duration_minutes), 2) AS avg_dur_prelaunch
-FROM coh c JOIN ev e ON e.uid = c.uid AND e.event = 'workout completed' AND e.t <= TIMESTAMP '2026-02-05'
-WHERE c.grp IS NOT NULL GROUP BY 1 ORDER BY avg_dur_prelaunch;
+-- all workouts before vs after launch (the diluted read)
+SELECT (t >= TIMESTAMP '2026-08-12') AS after_launch, round(avg(duration_minutes), 2) AS avg_minutes_all_workouts
+FROM ev WHERE event = 'workout completed' GROUP BY 1 ORDER BY 1;
 
--- over-drop: within-user-normalized double ratio of non-preserved volume
-WITH coh AS (SELECT uid, CASE WHEN w >= 15 THEN 'over' WHEN w BETWEEN 12 AND 14 THEN 'sweet' END AS grp
-  FROM workout_ct WHERE w >= 12),
-per AS (SELECT c.grp, c.uid,
-  count(*) FILTER (WHERE e.event NOT IN ('workout completed', 'progress checked') AND e.t < TIMESTAMP '2026-01-31') AS pre,
-  count(*) FILTER (WHERE e.event NOT IN ('workout completed', 'progress checked') AND e.t >= TIMESTAMP '2026-01-31') AS post
-  FROM coh c JOIN ev e ON e.uid = c.uid GROUP BY 1, 2)
-SELECT grp, count(*) AS users, round(sum(post)::DOUBLE / nullif(sum(pre), 0), 4) AS post_pre
-FROM per WHERE grp IS NOT NULL GROUP BY 1 ORDER BY 1;
+-- EVAL Q4 — share of Plus workouts using Stride Coach since launch, by week and overall
+SELECT date_trunc('week', t) AS week, count(*) AS plus_workouts,
+ round(count(*) FILTER (WHERE coaching_mode = 'ai_coach')::DOUBLE / count(*), 4) AS ai_share
+FROM ev WHERE event = 'workout completed' AND subscription_tier <> 'free' AND t >= TIMESTAMP '2026-08-12'
+GROUP BY 1 ORDER BY 1;
+SELECT round(count(*) FILTER (WHERE coaching_mode = 'ai_coach')::DOUBLE / count(*), 4) AS ai_share_overall
+FROM ev WHERE event = 'workout completed' AND subscription_tier <> 'free' AND t >= TIMESTAMP '2026-08-12';
+
+-- EVAL Q5 — calories per workout, Stride Coach vs self-guided (Plus, after launch)
+SELECT coaching_mode, count(*) AS workouts, round(avg(calories_burned), 1) AS avg_calories, median(calories_burned) AS median_calories
+FROM ev WHERE event = 'workout completed' AND subscription_tier <> 'free' AND t >= TIMESTAMP '2026-08-12'
+GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q6 — daily workouts by tracking source around the August incident, with warehouse error rate
+WITH d AS (SELECT t::DATE AS day,
+  count(*) FILTER (WHERE tracking_source = 'wearable' AND wearable_type IN ('smartwatch', 'fitness_band')) AS watch_band,
+  count(*) FILTER (WHERE tracking_source = 'wearable' AND wearable_type = 'chest_strap') AS chest_strap,
+  count(*) FILTER (WHERE tracking_source = 'phone') AS phone
+  FROM ev WHERE event = 'workout completed' AND t >= TIMESTAMP '2026-08-13' AND t < TIMESTAMP '2026-08-30' GROUP BY 1),
+e AS (SELECT date::DATE AS day, max(sync_error_rate) FILTER (WHERE wearable_type = 'smartwatch') AS smartwatch_err FROM wh_sync GROUP BY 1)
+SELECT d.*, e.smartwatch_err FROM d JOIN e USING (day) ORDER BY day;
+WITH od AS (SELECT DISTINCT date::DATE AS d FROM wh_sync WHERE sync_error_rate > 0.2),
+w AS (SELECT t::DATE AS d,
+  CASE WHEN tracking_source = 'wearable' AND wearable_type IN ('smartwatch', 'fitness_band') THEN 'aff'
+       WHEN tracking_source = 'phone' THEN 'phone' END AS arm
+  FROM ev WHERE event = 'workout completed' AND t >= TIMESTAMP '2026-08-13' AND t < TIMESTAMP '2026-08-30'),
+g AS (SELECT (d IN (SELECT d FROM od)) AS outage, count(DISTINCT d) AS days, count(*) FILTER (WHERE arm = 'aff') AS aff, count(*) FILTER (WHERE arm = 'phone') AS phone FROM w GROUP BY 1)
+SELECT outage, days, round(aff::DOUBLE / days, 1) AS watch_band_per_day, round(phone::DOUBLE / days, 1) AS phone_per_day,
+ round(aff::DOUBLE / phone, 4) AS watch_band_per_phone FROM g ORDER BY outage;
+
+-- EVAL Q7 — which devices were hit: per-device workouts per phone workout, outage vs the surrounding week
+WITH od AS (SELECT DISTINCT date::DATE AS d FROM wh_sync WHERE sync_error_rate > 0.2),
+w AS (SELECT t::DATE AS d, CASE WHEN tracking_source = 'wearable' THEN wearable_type ELSE tracking_source END AS src
+  FROM ev WHERE event = 'workout completed' AND t >= TIMESTAMP '2026-08-13' AND t < TIMESTAMP '2026-08-30'),
+g AS (SELECT (d IN (SELECT d FROM od)) AS outage, src, count(*) AS n FROM w GROUP BY ALL),
+r AS (SELECT outage, src, n::DOUBLE / sum(n) FILTER (WHERE src = 'phone') OVER (PARTITION BY outage) AS per_phone FROM g)
+SELECT src, round(max(per_phone) FILTER (WHERE outage) / max(per_phone) FILTER (WHERE NOT outage), 4) AS outage_vs_baseline
+FROM r WHERE src <> 'phone' GROUP BY 1 ORDER BY 1;
+SELECT wearable_type, partner_api_status, count(*) AS days, round(avg(sync_error_rate), 4) AS avg_error_rate, round(avg(p95_sync_latency_ms)) AS avg_p95_ms
+FROM wh_sync GROUP BY ALL ORDER BY ALL;
+
+-- EVAL Q8 — Plus purchases by plan, August vs September, and the full-period mix shift
+SELECT CASE WHEN t >= TIMESTAMP '2026-09-01' THEN 'after (Sep 1-Oct 1)' ELSE 'before (Aug 1-31)' END AS period,
+ count(*) FILTER (WHERE plan = 'monthly') AS monthly, count(*) FILTER (WHERE plan = 'annual') AS annual,
+ round(count(*) FILTER (WHERE plan = 'monthly')::DOUBLE / count(*), 4) AS monthly_share
+FROM ev WHERE event = 'subscription purchased' AND t >= TIMESTAMP '2026-08-01' GROUP BY 1 ORDER BY 1;
+WITH g AS (SELECT (t >= TIMESTAMP '2026-09-01') AS post, count(*) FILTER (WHERE plan = 'monthly')::DOUBLE / count(*) FILTER (WHERE plan = 'annual') AS m_per_a
+  FROM ev WHERE event = 'subscription purchased' GROUP BY 1)
+SELECT round(max(m_per_a) FILTER (WHERE NOT post), 4) AS monthly_per_annual_before, round(max(m_per_a) FILTER (WHERE post), 4) AS monthly_per_annual_after,
+ round(max(m_per_a) FILTER (WHERE post) / max(m_per_a) FILTER (WHERE NOT post), 4) AS ratio FROM g;
+
+-- EVAL Q9 — plan gross bookings (warehouse list price x Mixpanel purchases), August vs September
+WITH p AS (SELECT t::DATE AS d, plan FROM ev WHERE event = 'subscription purchased' AND t >= TIMESTAMP '2026-08-01'),
+j AS (SELECT p.*, b.list_price_usd FROM p JOIN wh_billing b ON b.date::DATE = p.d AND b.plan = p.plan)
+SELECT CASE WHEN d >= DATE '2026-09-01' THEN 'Sep 1-Oct 1' ELSE 'Aug 1-31' END AS period, plan, count(*) AS purchases,
+ round(sum(list_price_usd), 2) AS gross_bookings
+FROM j GROUP BY ALL ORDER BY ALL;
+WITH p AS (SELECT t::DATE AS d, plan FROM ev WHERE event = 'subscription purchased'),
+j AS (SELECT p.*, b.list_price_usd FROM p JOIN wh_billing b ON b.date::DATE = p.d AND b.plan = p.plan),
+g AS (SELECT (d >= DATE '2026-09-01') AS post, sum(list_price_usd) FILTER (WHERE plan = 'monthly') / sum(list_price_usd) FILTER (WHERE plan = 'annual') AS m_rev_per_a FROM j GROUP BY 1)
+SELECT round(max(m_rev_per_a) FILTER (WHERE post) / max(m_rev_per_a) FILTER (WHERE NOT post), 4) AS monthly_vs_annual_bookings_ratio FROM g;
+
+-- EVAL Q10 — spend per Mixpanel signup by paid channel, Summer Shred vs rest of window
+WITH s AS (SELECT t0::DATE AS d, ch, count(*) AS n FROM signups GROUP BY ALL),
+j AS (SELECT p.acquisition_channel AS ch, (p.date::DATE >= DATE '2026-06-15' AND p.date::DATE < DATE '2026-07-15') AS shred,
+  sum(p.spend_usd) AS spend, sum(coalesce(s.n, 0)) AS signups
+  FROM wh_paid p LEFT JOIN s ON s.d = p.date::DATE AND s.ch = p.acquisition_channel GROUP BY ALL)
+SELECT ch, shred, round(spend, 2) AS spend_usd, signups, round(spend / signups, 2) AS spend_per_signup FROM j ORDER BY ch, shred;
+
+-- EVAL Q11 — signup channel mix inside vs outside Summer Shred
+WITH s AS (SELECT (t0 >= TIMESTAMP '2026-06-15' AND t0 < TIMESTAMP '2026-07-15') AS shred, ch FROM signups),
+g AS (SELECT shred, ch, count(*) AS signups FROM s GROUP BY ALL)
+SELECT shred, ch, signups, round(signups::DOUBLE / sum(signups) OVER (PARTITION BY shred), 4) AS share FROM g ORDER BY shred, ch;
+
+-- EVAL Q12 — Plus purchase rate and spend per paying member by acquisition channel (new members)
+WITH b AS (SELECT DISTINCT uid FROM ev WHERE event = 'subscription purchased'),
+c AS (SELECT s.ch, count(*) AS signups, count(b.uid) AS buyers FROM signups s LEFT JOIN b ON b.uid = s.uid GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM wh_paid GROUP BY 1)
+SELECT c.ch, signups, buyers, round(buyers::DOUBLE / signups, 4) AS buy_rate, round(sp.spend, 2) AS spend_usd,
+ round(sp.spend / nullif(buyers, 0), 2) AS spend_per_paying_member
+FROM c LEFT JOIN sp USING (ch) ORDER BY ch;
+WITH b AS (SELECT DISTINCT uid FROM ev WHERE event = 'subscription purchased'),
+w AS (SELECT date_trunc('week', s.t0) AS wk,
+  count(*) FILTER (WHERE ch = 'paid_social') AS sn, count(b.uid) FILTER (WHERE ch = 'paid_social') AS sb,
+  count(*) FILTER (WHERE ch <> 'paid_social') AS onn, count(b.uid) FILTER (WHERE ch <> 'paid_social') AS ob
+  FROM signups s LEFT JOIN b ON b.uid = s.uid GROUP BY 1)
+SELECT round(sum(sb)::DOUBLE / sum(sn * ob::DOUBLE / nullif(onn, 0)), 4) AS paid_social_vs_other_same_week FROM w WHERE onn > 0;
+
+-- EVAL Q13 — day-28 retention by first-week workout count (members who signed up by 2026-08-27)
+SELECT least(early_workouts, 6) AS first_week_workouts_capped, count(*) AS members, round(avg((d28_events > 0)::INT), 4) AS d28_retention
+FROM habit GROUP BY 1 ORDER BY 1;
+SELECT CASE WHEN early_workouts >= 3 THEN 'habit (3+)' ELSE 'low (0-2)' END AS grp, count(*) AS members, round(avg((d28_events > 0)::INT), 4) AS d28_retention
+FROM habit GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q14 — per-challenge completion by format
+SELECT challenge_format, count(*) AS challenges, count(*) FILTER (WHERE completed) AS completed,
+ round(avg(completed::INT), 4) AS completion_rate
+FROM challenges GROUP BY 1 ORDER BY 1;
+
+-- member-level read (any completion per format): hides most of the gap
+WITH j AS (SELECT uid, challenge_format AS f, min(t) AS tj FROM ev WHERE event = 'challenge joined' GROUP BY ALL),
+c AS (SELECT uid, challenge_format AS f, max(t) AS tc FROM ev WHERE event = 'challenge completed' GROUP BY ALL)
+SELECT j.f AS challenge_format, count(*) AS members, round(avg(coalesce(c.tc >= j.tj, false)::INT), 4) AS share_completing_any
+FROM j LEFT JOIN c USING (uid, f) GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q15 — notification open rate by members' notification volume
+SELECT CASE WHEN n < 10 THEN '01-09' WHEN n < 15 THEN '10-14' WHEN n < 20 THEN '15-19' WHEN n < 25 THEN '20-24' WHEN n < 35 THEN '25-34' ELSE '35+' END AS notifications_received,
+ count(*) AS members, round(sum(opens)::DOUBLE / sum(n), 4) AS open_rate
+FROM push GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q16 — workouts per app open, Fall Reset (Sep 8-21) vs the two weeks before
+WITH w AS (SELECT (t >= TIMESTAMP '2026-09-08') AS prog, event FROM ev
+  WHERE event IN ('workout completed', 'app opened') AND t >= TIMESTAMP '2026-08-25' AND t < TIMESTAMP '2026-09-22'),
+g AS (SELECT prog, count(*) FILTER (WHERE event = 'workout completed') AS completed, count(*) FILTER (WHERE event = 'app opened') AS opens FROM w GROUP BY 1)
+SELECT prog, completed, opens, round(completed::DOUBLE / opens, 4) AS completed_per_open,
+ round((completed::DOUBLE / opens) / (SELECT completed::DOUBLE / opens FROM g WHERE NOT prog), 4) AS vs_before FROM g ORDER BY prog;
+
+-- EVAL Q17 — onboarding conversion by platform (all new members, 7-day window)
+SELECT platform, count(*) AS signups, round(avg(converted::INT), 4) AS onboarding_conversion FROM onboarding GROUP BY 1 ORDER BY 1;
+SELECT variant, platform, count(*) AS signups, round(avg(converted::INT), 4) AS onboarding_conversion
+FROM onboarding WHERE variant IS NOT NULL GROUP BY ALL ORDER BY ALL;
+
+-- EVAL Q18 — meal logging per app open during the sync outage vs the surrounding week
+WITH w AS (SELECT (t >= TIMESTAMP '2026-08-20' AND t < TIMESTAMP '2026-08-23') AS outage, event FROM ev
+  WHERE event IN ('meal logged', 'app opened') AND t >= TIMESTAMP '2026-08-13' AND t < TIMESTAMP '2026-08-30'),
+g AS (SELECT outage, count(*) FILTER (WHERE event = 'meal logged') AS meals, count(*) FILTER (WHERE event = 'app opened') AS opens FROM w GROUP BY 1)
+SELECT outage, meals, opens, round(meals::DOUBLE / opens, 4) AS meals_per_open,
+ round((meals::DOUBLE / opens) / (SELECT meals::DOUBLE / opens FROM g WHERE NOT outage), 4) AS vs_baseline FROM g ORDER BY outage;
+
+-- EVAL Q19 — subscription bookings by month (warehouse)
+SELECT strftime(date::DATE, '%Y-%m') AS month, sum(new_subscriptions) AS new_subscriptions,
+ round(sum(gross_bookings_usd), 2) AS gross_bookings_usd, round(sum(store_fees_usd), 2) AS store_fees_usd, round(sum(net_bookings_usd), 2) AS net_bookings_usd
+FROM wh_billing GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q20 — open-ended: headline numbers for a Q4 risk review
+SELECT 'paid social same-week buy rate vs other channels' AS metric,
+ (WITH b AS (SELECT DISTINCT uid FROM ev WHERE event = 'subscription purchased'),
+  w AS (SELECT date_trunc('week', s.t0) AS wk, count(*) FILTER (WHERE ch = 'paid_social') AS sn, count(b.uid) FILTER (WHERE ch = 'paid_social') AS sb,
+   count(*) FILTER (WHERE ch <> 'paid_social') AS onn, count(b.uid) FILTER (WHERE ch <> 'paid_social') AS ob FROM signups s LEFT JOIN b ON b.uid = s.uid GROUP BY 1)
+  SELECT round(sum(sb)::DOUBLE / sum(sn * ob::DOUBLE / nullif(onn, 0)), 4) FROM w WHERE onn > 0) AS value
+UNION ALL
+SELECT 'monthly/annual purchase mix, after vs before Sep 1',
+ (WITH g AS (SELECT (t >= TIMESTAMP '2026-09-01') AS post, count(*) FILTER (WHERE plan = 'monthly')::DOUBLE / count(*) FILTER (WHERE plan = 'annual') AS m FROM ev WHERE event = 'subscription purchased' GROUP BY 1)
+  SELECT round(max(m) FILTER (WHERE post) / max(m) FILTER (WHERE NOT post), 4) FROM g)
+UNION ALL
+SELECT 'heavy-notification open rate (20+)', (SELECT round(sum(opens)::DOUBLE / sum(n), 4) FROM push WHERE n >= 20)
+UNION ALL
+SELECT 'members with 20+ notifications (share)', (SELECT round(avg((n >= 20)::INT), 4) FROM push)
+UNION ALL
+SELECT 'D28 retention, low first week (0-2 workouts)', (SELECT round(avg((d28_events > 0)::INT), 4) FROM habit WHERE early_workouts < 3)
+UNION ALL
+SELECT 'share of new members with 0-2 first-week workouts', (SELECT round(avg((early_workouts < 3)::INT), 4) FROM habit);

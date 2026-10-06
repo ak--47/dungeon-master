@@ -4,608 +4,432 @@ import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "@ak--47/dungeon-master/utils";
+import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
 /** @typedef  {import("../../../types").Dungeon} Config */
 
 // ── OVERVIEW ──
 /*
- * NAME:       FitQuest
- * APP:        Fitness & wellness app for workout tracking, meal planning,
- *             social fitness challenges, and AI coaching. Core loop: sign
- *             up → plan workout → complete workout → track progress.
- *             Revenue: free / monthly ($12.99, 7-day trial) / annual
- *             ($99.99) / family ($149.99).
- * SCALE:      10,000 users, ~1.4M events, 121 days (2026-01-01 → 2026-05-01)
- * CORE LOOP:  account created → workout planned → workout completed → progress checked
+ * NAME:       Stridewell
+ * APP:        Consumer fitness app: plan a workout, do it (phone or wearable
+ *             tracked), check progress, join solo or team challenges, book
+ *             human coach sessions, log meals. Free tier plus Stridewell Plus
+ *             (Monthly $12.99 → $14.99 from 2026-09-01, Annual $99.99).
+ *             New members get one 7-day trial; Stride Coach (AI coaching) is a
+ *             Plus feature from 2026-08-12.
+ * SCALE:      10,000 users (≈40% join inside the window), ~1.52M events,
+ *             120 days (2026-06-04 → 2026-10-01, UTC)
+ * CORE LOOP:  workout planned → workout completed → progress checked
+ * VALUE MOMENT: workout completed
  *
- * EVENTS (18):
- *   workout completed (8) > app session (8) > meal logged (7) > workout planned (6)
- *   > progress checked (5) > notification received (5) > leaderboard viewed (4)
- *   > nutrition plan viewed (4) > challenge joined (3) > coach session (3)
- *   > heart rate recorded (3) > achievement unlocked (2) > friend added (2)
- *   > challenge completed (2) > subscription managed (2) > profile updated (2)
- *   > account created (1) > account deactivated (1)
+ * EVENTS (22):
+ *   workout completed (8) > app opened (7) > workout planned (6) > meal logged (6)
+ *   > progress checked (5) > notification received (5) > leaderboard viewed (3)
+ *   > challenge joined (2) > friend added (2) > achievement unlocked (2)
+ *   > coach session (2) > profile updated (2) > challenge completed (1)
+ *   > paywall viewed (1) > trial started (1) > subscription purchased (1)
+ *   > account deactivated (1) > account created / goal quiz completed /
+ *   plan generated / starter workout completed / $experiment_started (funnel-only)
  *
- * FUNNELS (5):
- *   - Onboarding:           account created → profile updated → workout planned → workout completed (45%)
- *   - Workout Loop:         workout planned → workout completed → progress checked (45%, reentry)
- *   - Social Engagement:    friend added → leaderboard viewed → challenge joined (35%)
- *   - Challenge Completion: challenge joined → workout completed → challenge completed → achievement unlocked (30%)
- *   - Coaching Path:        coach session → workout planned → workout completed → progress checked (50%)
+ * FUNNELS (7):
+ *   - Onboarding (first funnel, A/B "Guided First Week" from 2026-07-01):
+ *       account created → goal quiz completed → plan generated → starter workout completed (45%)
+ *   - Workout Loop: workout planned → workout completed → progress checked (55%)
+ *   - Upgrade to Plus (trial), new free members: paywall viewed → trial started → subscription purchased (35%)
+ *   - Upgrade to Plus (direct), long-time free members: paywall viewed → subscription purchased (10%)
+ *   - Team Challenge: challenge joined → challenge completed (60%, challenge_format "team")
+ *   - Solo Challenge: challenge joined → challenge completed (30%, challenge_format "solo")
+ *   - Coaching: coach session → workout planned → workout completed (50%)
  *
- * USER PROPS:  fitness_level, segment, streak_days, total_workouts, preferred_workout, goal, Platform, workout_type, subscription_tier
- * SUPER PROPS: Platform, workout_type, subscription_tier
- * SCD PROPS:   fitness_level (beginner/intermediate/advanced/elite, monthly fuzzy, max 8)
+ * USER PROPS:  segment, fitness_level, primary_goal, acquisition_channel,
+ *              wearable_type, subscription_tier, trial_eligible, Platform,
+ *              "Experiment: Guided First Week" (enrolled members)
+ * SUPER PROPS: Platform (sticky per member), subscription_tier (plan at event time)
+ * SCD PROPS:   fitness_level (beginner/intermediate/advanced/elite, monthly, max 6)
  * GROUPS:      none
+ * WAREHOUSE:   paid_acquisition_daily (spend by paid channel),
+ *              wearable_sync_daily (partner sync health by device type),
+ *              subscription_billing_daily (list price and bookings by plan)
+ * LOOKUPS:     none — every attribute is denormalized onto events/profiles
+ *
+ * IDENTITY: new members are anonymous until "account created" (isAuthEvent,
+ * first event, carries user_id + device_id); 2 devices per member on average.
+ *
+ * ENGINE NOTES (workarounds, see openProblems in the re-eval report):
+ * - retentionCurve instead of engagementDecay: in legacy mode a new member's
+ *   first funnel is not pinned to their join time, and engagementDecay can
+ *   then delete the signup event itself (orphaned anonymous members).
+ * - World-event clones are spread across the whole event window, including
+ *   before a new member's signup; the everything hook drops pre-signup rows.
  */
 
 // ── HOOK STORIES ──
 /*
- * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable
- * via raw-prop breakdowns (HOD, day, segment) or behavioral cohorts.
+ * All effects are hidden: no flag properties. Each is found by a breakdown,
+ * a date comparison, or a cohort. Dates live in the TIMELINE constants and are
+ * shared by hooks, stories, SQL, warehouse columns, and the timeline guide.
  *
- * ───────────────────────────────────────────────────────────────
- * 1. MORNING WORKOUT BOOST (everything)
- * ───────────────────────────────────────────────────────────────
+ * ─────────────────────────────────────────────────────────────────────────
+ * H1. GUIDED FIRST WEEK EXPERIMENT (declarative funnel experiment)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: from 2026-07-01 new signups split 50/50. "Guided Plan" gets
+ *   onboarding conversion × 1.3 and onboarding time × 0.7.
+ * MIXPANEL: Funnels, account created → goal quiz completed → plan generated →
+ *   starter workout completed, 7-day window, breakdown user property
+ *   "Experiment: Guided First Week". Guided ≈ 57% vs Control ≈ 45%; median
+ *   time to finish ≈ 12.5 h vs 17.9 h.
+ * REAL WORLD: a guided first-week plan reduces choice paralysis for new users.
  *
- * PATTERN: Workouts in 5-9 UTC get calories_burned 1.3x. Mutates
- * raw prop. No flag.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H2. STRIDE COACH LAUNCH (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: from 2026-08-12, 45% of Plus workouts (event-time
+ *   subscription_tier monthly/annual) run with coaching_mode = "ai_coach" and
+ *   last 1.2x longer. Free and pre-launch workouts stay self_guided.
+ *   Calories are untouched (an honest null).
+ * MIXPANEL: Insights, workout completed, average duration_minutes, breakdown
+ *   coaching_mode, filter subscription_tier != free, after 2026-08-12.
+ * REAL WORLD: real-time pacing cues keep people training longer.
  *
- * HOW TO FIND IT IN MIXPANEL:
+ * ─────────────────────────────────────────────────────────────────────────
+ * H3. WEARABLE SYNC OUTAGE (everything + warehouse wearable_sync_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: 2026-08-20 to 2026-08-22, the partner health API fails. Only 25%
+ *   of smartwatch and fitness-band workouts sync; chest straps (direct
+ *   Bluetooth) and phone tracking are untouched. The warehouse table shows
+ *   sync_error_rate ≈ 0.75 and partner_api_status = "major_outage" on those
+ *   days for those devices.
+ * MIXPANEL: Insights, workout completed, daily, breakdown tracking_source and
+ *   wearable_type; join the warehouse sync_error_rate to explain the dip.
+ * REAL WORLD: third-party health-data integrations fail silently.
  *
- *   Report 1: Avg Calories Burned by Hour of Day
- *   - Event: "workout completed"
- *   - Measure: Average of "calories_burned"
- *   - Breakdown: hour of day
- *   - Expected: 5-9 hours show ~ 1.3x baseline
+ * ─────────────────────────────────────────────────────────────────────────
+ * H4. PLUS MONTHLY PRICE CHANGE (everything + warehouse subscription_billing_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: on 2026-09-01 Plus Monthly goes from $12.99 to $14.99. 35% of
+ *   would-be monthly purchases after that date never happen; Annual is
+ *   untouched. Prices exist only in the warehouse table.
+ * MIXPANEL: Insights, subscription purchased, weekly, breakdown plan; the
+ *   monthly/annual ratio drops after Sep 1. Bookings need the warehouse
+ *   list_price_usd joined to purchases.
+ * REAL WORLD: a 15% price rise on the entry plan costs more volume than it
+ *   gains in price.
  *
- * REAL-WORLD ANALOGUE: Morning workouts get a metabolic boost.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H5. SUMMER SHRED PAID SOCIAL (everything + warehouse paid_acquisition_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: 2026-06-15 to 2026-07-14, 40% of non-referral signups arrive via
+ *   paid_social and paid-social CPI bids double (warehouse spend = installs ×
+ *   CPI). Half of all paid-social signups never buy Plus.
+ * MIXPANEL: Insights, account created, breakdown acquisition_channel, weekly;
+ *   join paid_acquisition_daily.spend_usd for spend per signup; Funnels or
+ *   Insights for Plus purchase rate by acquisition_channel.
+ * REAL WORLD: a performance push buys volume at a higher CPI from a
+ *   lower-intent audience.
  *
- * ───────────────────────────────────────────────────────────────
- * 2. POST-LAUNCH AI COACHING LIFT (everything hook)
- * ───────────────────────────────────────────────────────────────
+ * ─────────────────────────────────────────────────────────────────────────
+ * H6. FIRST-WEEK HABIT (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: new members with fewer than 3 workouts in their first 7 days:
+ *   50% of them go dark after day 14. Classification uses first-week
+ *   activity only.
+ * MIXPANEL: Retention, account created → any event, cohort "3+ workout
+ *   completed in first 7 days" vs the rest; D28 ≈ 96% vs 46%.
+ * REAL WORLD: the first week sets the habit; most fitness churn is early.
  *
- * PATTERN: After day 35 (ai_coach feature launch), workouts
- * with coaching_mode="ai_assisted" get 1.2x duration_minutes.
- * AI coaching helps users push through longer sessions.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H7. TEAM VS SOLO CHALLENGES (declarative duplicate funnels)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: team challenges complete at 60% per challenge, solo at 30%.
+ *   challenge_id identifies each challenge.
+ * MIXPANEL: Funnels, challenge joined → challenge completed, totals, hold
+ *   challenge_id constant, breakdown challenge_format.
+ * REAL WORLD: social accountability finishes what motivation starts.
  *
- * HOW TO FIND IT IN MIXPANEL:
+ * ─────────────────────────────────────────────────────────────────────────
+ * H8. PUSH FATIGUE (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: members who receive 20+ notifications in the window stop opening
+ *   them: 60% of would-be opens go unopened (open rate ≈ 30% vs 75%).
+ * MIXPANEL: Insights, notification received, share with opened = true,
+ *   breakdown by a cohort on notification count (bins 15-19 vs 20-24 show the
+ *   cliff).
+ * REAL WORLD: notification overload trains people to ignore the app.
  *
- *   Report 1: AI Coaching Duration Lift
- *   • Report type: Insights
- *   • Event: "workout completed"
- *   • Measure: Average of "duration_minutes"
- *   • Breakdown: "coaching_mode"
- *   • Filter: time after day 35
- *   • Expected: ai_assisted ≈ 48 min vs self_guided ≈ 40 min
+ * ─────────────────────────────────────────────────────────────────────────
+ * H9. FALL RESET PROGRAM (declarative world event)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: 2026-09-08 for 14 days, workout planned and workout completed run
+ *   at 1.5x; app opens are untouched.
+ * MIXPANEL: Insights, workout completed and app opened, daily; formula A/B
+ *   rises ≈ 1.5x during the program.
+ * REAL WORLD: a back-to-routine program after Labor Day lifts training, not
+ *   app visits.
  *
- *   Report 2: AI Coaching Adoption Over Time
- *   • Report type: Insights
- *   • Event: "workout completed"
- *   • Measure: Total
- *   • Breakdown: "coaching_mode"
- *   • Line chart by week
- *   • Expected: ai_assisted grows from 0 after day 35
- *
- * REAL-WORLD ANALOGUE: AI-powered coaching features increase
- * session duration as users get real-time form and pacing guidance.
- *
- * ───────────────────────────────────────────────────────────────
- * 3. STREAK RETENTION (everything hook)
- * ───────────────────────────────────────────────────────────────
- *
- * PATTERN: Users with >=2 workout events get streak_days set
- * to their actual workout count on their profile (this OVERWRITES
- * H7's coach initialization for any coach with >=2 workouts), and
- * receive achievement clones with super-linear scaling:
- * C(w) = min(w-1, 3) + 4*max(w-4, 0) — 1 per workout for
- * workouts 2-4, then 4 per workout beyond that. This amplifies
- * the gap so athlete/casual ratio reaches 2x+.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Achievement Events by Workout Volume
- *   • Report type: Insights
- *   • Event: "achievement unlocked"
- *   • Measure: Total per user
- *   • Breakdown: user property "segment"
- *   • Expected: athlete and coach segments show 2-3x more
- *     achievements than casual and resolver segments
- *
- *   Report 2: Streak Days Distribution
- *   • Report type: Insights
- *   • Event: "profile updated"
- *   • Measure: Average of user property "streak_days"
- *   • Breakdown: user property "segment"
- *   • Expected: athlete/coach ≈ 30-50 streaks, casual ≈ 10-15
- *
- * REAL-WORLD ANALOGUE: Gamification streaks are the #1 retention
- * driver in fitness apps — users who hit milestones stay longer.
- *
- * ───────────────────────────────────────────────────────────────
- * 4. SOCIAL CHALLENGE COMPLETION (everything hook)
- * ───────────────────────────────────────────────────────────────
- *
- * PATTERN: Users with >=3 "friend added" events receive
- * max(1, floor(0.5 × completions)) cloned "challenge completed"
- * events (≈1.5x total). Social users are more accountable.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Challenge Completion Rate by Social Activity
- *   • Report type: Insights
- *   • Event: "challenge completed"
- *   • Measure: Total per user
- *   • Filter: users who did "friend added" at least once
- *   • Compare to: users who never did "friend added"
- *   • Expected: social users ≈ 1.5x more challenge completions
- *
- * REAL-WORLD ANALOGUE: Social accountability is a proven
- * motivator — users with friends complete more challenges.
- *
- * ───────────────────────────────────────────────────────────────
- * 5. RESOLVER CHURN CLIFF (everything hook)
- * ───────────────────────────────────────────────────────────────
- *
- * PATTERN: Users in the "resolver" segment with <30 events
- * (at hook time) lose 70% of their post-day-14 events — the classic
- * New Year's resolution drop-off. The cliff is engineered entirely
- * by this hook (persona churnRate/activeWindow fields are deprecated
- * engine no-ops). Because deletions are the only mutation, the
- * treated cohort is output-identifiable: eligible ⟺ output events
- * < 30 (treated users can only shrink; untreated keep ≥ 30).
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Resolver Retention Drop
- *   • Report type: Insights
- *   • Event: All events
- *   • Measure: Total
- *   • Filter: segment = "resolver"
- *   • Line chart by week
- *   • Expected: Sharp cliff after week 2, ~70% drop in volume
- *
- *   Report 2: Segment Retention Comparison
- *   • Report type: Retention
- *   • Starting event: "account created"
- *   • Return event: Any active event
- *   • Breakdown: user property "segment"
- *   • Expected: resolver retention drops to <30% by week 3
- *
- * REAL-WORLD ANALOGUE: 80% of New Year's gym memberships are
- * abandoned by mid-February — the "resolution cliff."
- *
- * ───────────────────────────────────────────────────────────────
- * 6. COACH SESSION QUALITY (everything hook)
- * ───────────────────────────────────────────────────────────────
- *
- * PATTERN: Users with "coach session" events get higher
- * satisfaction_score (4.0-5.0) on those events. Coached users
- * rate their experience higher.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Satisfaction by Session Type
- *   • Report type: Insights
- *   • Event: "coach session"
- *   • Measure: Average of "satisfaction_score"
- *   • Expected: ≈ 4.5 avg (uniform [4.0, 5.0] redraw)
- *
- * REAL-WORLD ANALOGUE: Personal coaching sessions have higher
- * satisfaction scores because of personalized attention.
- *
- * ───────────────────────────────────────────────────────────────
- * 7. COACH PROFILE ENRICHMENT (user hook)
- * ───────────────────────────────────────────────────────────────
- *
- * PATTERN: Users in the "coach" segment get total_workouts
- * boosted to 200-500 (uniform, avg 350). Coaches are power users
- * who lead by example. (The hook also seeds streak_days 60-365,
- * but H3 overwrites streak_days with the actual workout count for
- * any user with >=2 workouts — which is nearly every coach — so
- * total_workouts is the durable coach signature.)
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Workout Volume by Segment
- *   • Report type: Insights
- *   • Event: "workout completed"
- *   • Measure: Average of user property "total_workouts"
- *   • Breakdown: user property "segment"
- *   • Expected: coach ≈ 350 vs athlete ≈ 0 (default) vs casual ≈ 0
- *
- * REAL-WORLD ANALOGUE: Fitness coaches maintain extreme workout
- * consistency to build credibility with their clients.
- *
- * ───────────────────────────────────────────────────────────────
- * 8. ANNUAL SUBSCRIBER WORKOUT FUNNEL LIFT (everything hook)
- * ───────────────────────────────────────────────────────────────
- *
- * PATTERN: Free/monthly-tier users lose ~30% of "progress checked"
- * events (last step of the Workout Loop funnel), simulating lower
- * follow-through. Annual/family subscribers retain all events.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Workout Funnel Conversion by Tier
- *   • Report type: Funnels
- *   • Steps: "workout planned" → "workout completed" → "progress checked"
- *   • Breakdown: "subscription_tier" (superProp)
- *   • Expected: annual ≈ 63% vs free ≈ 45% conversion
- *
- * REAL-WORLD ANALOGUE: Annual gym memberships have higher
- * utilization — sunk cost + commitment drives consistency.
- *
- * ───────────────────────────────────────────────────────────────
- * 9. WORKOUT LOOP TIME-TO-CONVERT (funnel-post)
- * ───────────────────────────────────────────────────────────────
- *
- * PATTERN: Annual + family subscribers complete funnels 1.3x
- * faster (factor 0.77); Free users 1.25x slower (factor 1.25).
- * The funnel-post hook scales EVERY funnel instance's gaps by the
- * tier factor (not only Workout Loop) — the story is measured on
- * the Workout Loop funnel, where volume is highest.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Workout Loop Median Time-to-Convert by Subscription
- *   - Funnels > "workout planned" -> "workout completed" -> "progress checked"
- *   - Measure: Median time to convert
- *   - Breakdown: subscription_tier
- *   - Expected: annual ~ 0.77x; free ~ 1.25x (vs monthly = 1.0)
- *
- *   NOTE (funnel-post measurement): visible only via Mixpanel funnel
- *   median TTC. Cross-event MIN→MIN SQL queries on raw events do NOT
- *   show this — funnel-post adjusts gaps within funnel instances, not
- *   across the user's full event history.
- *
- * ───────────────────────────────────────────────────────────────
- * 10. WORKOUT-COUNT MAGIC NUMBER (everything)
- * ───────────────────────────────────────────────────────────────
- *
- * PATTERN: Sweet 12-14 workouts/user → +35% on workout
- * duration_minutes (peak progression). Over 15+ → drop 65% of
- * post-day-30 non-workout, non-progress events (overtraining
- * churn). Preserves workout + progress events so H8 funnel
- * lift isn't diluted. No flag.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Avg Workout Duration by Workout-Count Bucket
- *   - Cohort A: users with 12-14 "workout completed"
- *   - Cohort B: users with 0-11
- *   - Event: "workout completed"
- *   - Measure: Average of "duration_minutes"
- *   - Expected: A ~ 1.35x B
- *
- *   Report 2: D30+ Activity on Heavy Workout Cohort
- *   - Cohort C: users with >= 15 "workout completed"
- *   - Cohort A: users with 12-14
- *   - Event: any event
- *   - Measure: post-d30/pre-d30 ratio per user
- *   - Expected: C ~ 70% lower post/pre ratio than A (overtraining churn)
- *
- * REAL-WORLD ANALOGUE: Sweet-spot training drives progression;
- * over-training causes injury and burnout.
- *
- * ═══════════════════════════════════════════════════════════════
- * EXPECTED METRICS SUMMARY
- * ═══════════════════════════════════════════════════════════════
- *
- * Hook                        | Metric                       | Expected      | Measured (10K full fidelity)
- * ----------------------------|------------------------------|---------------|------------------------------
- * Morning Workout Boost       | calories 5-9h / other        | 1.30          | 1.304 avg / 1.303 med
- * AI Coaching Lift            | post-launch dur ai/self      | 1.20          | 1.192 (pre-launch ai rows: 0)
- * AI Coaching Lift            | post-launch ai share         | 0.40          | 0.4004
- * Streak Retention            | streak_days ≥ workouts (1-s) | 0 violations  | 0 (6602 streak users)
- * Streak Retention            | streak_days == workouts share| ≥0.99         | 0.9961
- * Streak Retention            | ach − C(w) ≥ 1 share         | ≥0.995        | 0.9967 (med organic = 1)
- * Social Challenge Completion | count-fingerprint gap hits   | ~0            | 0 of 1681
- * Social Challenge Completion | social hi/lo challenges/user | 1.5-4x        | 3.348
- * Resolver Churn Cliff        | birth-pinned DD (lo/hi ÷ cas)| 0.30 keep-rate| 0.2968
- * Resolver Churn Cliff        | casual lo/hi placebo         | ~1 (sel. only)| 1.370
- * Coach Session Quality       | satisfaction avg (median)    | 4.5           | 4.498 (4.500); sub-4.0 rows: 0
- * Coach Profile Enrichment    | coach total_workouts         | [200,500]/350 | [200, 500] exact / avg 350
- * Annual Follow-Through       | std zero-share cliff         | 0.30          | 0.3003
- * Annual Follow-Through       | std survivor ratio           | 1.0           | 0.9360
- * Workout Loop T2C            | median TTC free/monthly      | ≤1.25         | 1.079
- * Workout Loop T2C            | median TTC annual/monthly    | ≥0.77         | 0.8847
- * Workout Magic Number        | sweet/low pre-d35 avg dur    | 1.35          | 1.362
- * Workout Magic Number        | over/sweet d30 post-pre      | ~0.35×τ       | 0.3710
+ * ═════════════════════════════════════════════════════════════════════════
+ * EXPECTED METRICS SUMMARY (measured: data/verify-fitness, 2026-10-06)
+ * ═════════════════════════════════════════════════════════════════════════
+ * Hook | Metric                                      | Derivation              | Expected  | Measured
+ * -----|---------------------------------------------|-------------------------|-----------|---------
+ * H1   | onboarding conversion Guided/Control        | GUIDED_CONV_MULT        | 1.30      | 1.262 (57.3% vs 45.4%)
+ * H1   | median onboarding TTC Guided/Control        | GUIDED_TTC_MULT         | 0.70      | 0.698
+ * H1   | Guided share of enrolled                    | equal 2-arm hash        | 0.50      | 0.511
+ * H2   | ai_coach rows pre-launch or free tier       | exact purity            | 0         | 0
+ * H2   | post-launch Plus duration ai/self           | AI_DURATION_MULT        | 1.20      | 1.201
+ * H2   | post-launch Plus ai_coach share             | AI_ADOPTION             | 0.45      | 0.451
+ * H3   | watch+band / phone, outage vs ±7 days       | OUTAGE_KEEP             | 0.25      | 0.260
+ * H3   | warehouse sync_error_rate during outage     | 1 − OUTAGE_KEEP         | 0.75      | 0.750
+ * H4   | monthly/annual purchases, after vs before   | 1 − MONTHLY_LOSS        | 0.65      | 0.701
+ * H4   | monthly/annual bookings, after vs before    | 0.65 × 14.99/12.99      | 0.75      | 0.809
+ * H5   | paid-social spend per signup, Shred/rest    | SHRED_CPI_MULT          | 2.00      | 2.000
+ * H5   | paid-social signup share, Shred/rest        | (.18+.4×.66)/.18        | 2.47      | 2.261
+ * H5   | paid-social buy rate vs same-week others    | 1 − PAID_SOCIAL_NO_BUY  | 0.50      | 0.494
+ * H6   | D28 retention habit/low                     | ≥ 1/(1 − 0.5) (floor)   | ≥ 2.0     | 2.102 (96.3% vs 45.8%)
+ * H7   | per-challenge completion, team              | TEAM_CONV               | 0.60      | 0.590
+ * H7   | per-challenge completion, solo              | SOLO_CONV               | 0.30      | 0.297
+ * H8   | open rate heavy (20+) / light               | 1 − PUSH_FATIGUE_FLIP   | 0.40      | 0.400
+ * H8   | open rate light (control)                   | declared pool 3 of 4    | 0.75      | 0.748
+ * H9   | completed per app open, program/before      | FALL_RESET_MULT         | 1.50      | 1.502
+ * H9   | planned per app open, program/before        | FALL_RESET_MULT         | 1.50      | 1.495
+ * ═════════════════════════════════════════════════════════════════════════
  */
 
 // ── SCALE ──
 const SEED = "dm4-fitness";
 const NUM_USERS = 10_000;
-const DATASET_START = "2026-01-01T00:00:00Z";
-const DATASET_END = "2026-05-01T23:59:59Z";
+const DATASET_START = "2026-06-04T00:00:00Z";
+const DATASET_END = "2026-10-01T23:59:59Z"; // 120 days
 const EVENTS_PER_DAY = 1.2;
 const token = process.env.MP_TOKEN || "your-mixpanel-token";
 
 const chance = u.initChance(SEED);
 
-// ── KNOBS (tweak these to reshape stories) ──
-const MORNING_HOUR_START = 5;
-const MORNING_HOUR_END = 9;
-const MORNING_CALORIE_MULT = 1.3;
+// ── TIMELINE (shared by hooks, stories, SQL, warehouse columns, guides) ──
+const SUMMER_SHRED_START = "2026-06-15T00:00:00Z"; // paid-social push, CPI bids raised
+const SUMMER_SHRED_END = "2026-07-15T00:00:00Z";   // exclusive
+const GUIDED_TEST_START = "2026-07-01T00:00:00Z";  // "Guided First Week" onboarding A/B
+const AI_COACH_LAUNCH = "2026-08-12T00:00:00Z";    // Stride Coach (AI coaching) for Plus
+const SYNC_OUTAGE_START = "2026-08-20T00:00:00Z";  // partner health-API outage
+const SYNC_OUTAGE_END = "2026-08-23T00:00:00Z";    // exclusive (3 days)
+const PRICE_CHANGE = "2026-09-01T00:00:00Z";       // Plus Monthly $12.99 → $14.99
+const FALL_RESET_START = "2026-09-08T00:00:00Z";   // Fall Reset program (14 days)
+const FALL_RESET_DAYS = 14;
 
-const AI_LAUNCH_DAY = 35;
-const AI_ADOPTION_LIKELIHOOD = 40;
+const ms = (iso) => dayjs.utc(iso).valueOf();
+const dayIndex = (iso) => Math.round((ms(iso) - ms(DATASET_START)) / 86_400_000);
+
+// ── KNOBS ──
+// H1 Guided First Week (experiment on the onboarding funnel)
+const GUIDED_EXPERIMENT = "Guided First Week";
+const GUIDED_VARIANT = "Guided Plan";
+const GUIDED_CONV_MULT = 1.3;
+const GUIDED_TTC_MULT = 0.7;
+const ONBOARDING_CONV = 45;
+const ONBOARDING_TTC_H = 24;
+
+// H2 Stride Coach
+const AI_ADOPTION = 0.45;          // share of Plus workouts run with Stride Coach after launch
 const AI_DURATION_MULT = 1.2;
 
-const GROUP_LAUNCH_DAY = 55;
-const GROUP_ADOPTION_LIKELIHOOD = 30;
+// H3 wearable sync outage
+const OUTAGE_TYPES = ["smartwatch", "fitness_band"]; // devices that sync through the partner health API
+const OUTAGE_KEEP = 0.25;          // share of affected wearable workouts that still sync
 
-const STREAK_MIN_WORKOUTS = 2;
-const STREAK_LINEAR_CAP = 3;     // workouts 2-4 (count - 1 capped to 3) → 1 achievement each
-const STREAK_SUPER_LINEAR_MULT = 4; // workouts 5+ → 4 achievements each
+// H4 Plus Monthly price change
+const PRICE_MONTHLY_OLD = 12.99;
+const PRICE_MONTHLY_NEW = 14.99;
+const PRICE_ANNUAL = 99.99;
+const MONTHLY_LOSS = 0.35;         // share of post-change monthly purchases lost
 
-const SOCIAL_FRIEND_THRESHOLD = 3;
-const SOCIAL_CHALLENGE_CLONE_FACTOR = 0.5;
+// H5 Summer Shred paid social
+const PAID_CHANNELS = ["paid_social", "paid_search", "app_store_ads"];
+const CPI_USD = { paid_social: 9, paid_search: 14, app_store_ads: 6 };
+const SHRED_CPI_MULT = 2;          // paid_social CPI bids during Summer Shred
+const SHRED_RELABEL = 0.4;         // share of non-referral campaign-window signups that came via paid social
+const PAID_SOCIAL_NO_BUY = 0.5;    // share of paid_social signups that never buy Plus
 
-const RESOLVER_EVENT_THRESHOLD = 30;
-const RESOLVER_CLIFF_DAYS = 14;
-const RESOLVER_DROP_LIKELIHOOD = 70;
+// H6 first-week habit
+const HABIT_DAYS = 7;
+const HABIT_MIN_WORKOUTS = 3;
+const HABIT_CHURN_AFTER_DAYS = 14;
+const HABIT_CHURN_SHARE = 0.5;     // share of low-habit new users who go dark after day 14
 
-const COACH_SESSION_SATISFACTION_MIN = 4.0;
-const COACH_SESSION_SATISFACTION_MAX = 5.0;
+// H7 team vs solo challenges
+const TEAM_CONV = 60;
+const SOLO_CONV = 30;
+const CHALLENGE_TTC_H = 96;
 
-const COACH_TOTAL_WORKOUTS_MIN = 200;
-const COACH_TOTAL_WORKOUTS_MAX = 500;
-const COACH_STREAK_DAYS_MIN = 60;
-const COACH_STREAK_DAYS_MAX = 365;
+// H8 notification fatigue
+const PUSH_FATIGUE_THRESHOLD = 20; // notifications received in the window (calibrated ≈ p80)
+const PUSH_FATIGUE_FLIP = 0.6;     // share of opened pushes that go unopened above the threshold
 
-const ANNUAL_FUNNEL_FREE_DROP_LIKELIHOOD = 30;
+// H9 Fall Reset program
+const FALL_RESET_MULT = 1.5;
+const FALL_RESET_EVENTS = ["workout planned", "workout completed"];
 
-const TTC_ANNUAL_FACTOR = 0.77;
-const TTC_FREE_FACTOR = 1.25;
+// lifecycle hygiene
+const DEACTIVATION_QUIET_DAYS = 21;
 
-const WORKOUT_SWEET_MIN = 12;
-const WORKOUT_SWEET_MAX = 14;
-const WORKOUT_OVER_THRESHOLD = 15;
-const WORKOUT_DURATION_BOOST = 1.35;
-const WORKOUT_OVER_CUTOFF_DAYS = 30;
-const WORKOUT_OVER_DROP_LIKELIHOOD = 65;
+// ── HELPERS ──
+const salt = (uid, tag) => hashFloat(`${uid}|${tag}`);
+const round2 = (n) => Math.round(n * 100) / 100;
+const inShred = (t) => t >= ms(SUMMER_SHRED_START) && t < ms(SUMMER_SHRED_END);
+const inOutage = (t) => t >= ms(SYNC_OUTAGE_START) && t < ms(SYNC_OUTAGE_END);
+const monthlyPrice = (t) => (t >= ms(PRICE_CHANGE) ? PRICE_MONTHLY_NEW : PRICE_MONTHLY_OLD);
+const dayKey = (t) => new Date(t).toISOString().slice(0, 10);
+const T = (e) => dayjs.utc(e.time).valueOf();
 
-// ── HELPER FUNCTIONS ──
-function handleUserHooks(record) {
-	// H7: COACH PROFILE ENRICHMENT — coach segment users get high
-	// total_workouts + streak_days. Also assign subscription_tier by segment.
-	if (record.segment === "coach") {
-		record.total_workouts = chance.integer({ min: COACH_TOTAL_WORKOUTS_MIN, max: COACH_TOTAL_WORKOUTS_MAX });
-		record.streak_days = chance.integer({ min: COACH_STREAK_DAYS_MIN, max: COACH_STREAK_DAYS_MAX });
+function handleUserHook(profile, meta) {
+	// pre-existing members already hold a plan; new signups start on Free
+	if (meta.userIsBornInDataset) {
+		profile.subscription_tier = "free";
+		profile.trial_eligible = true;
+		return profile;
 	}
-	// Subscription tier: athletes/coaches → annual/family; social → monthly; casual/resolver → mostly free
-	if (record.segment === "athlete") {
-		record.subscription_tier = chance.pickone(["annual", "annual", "family", "monthly"]);
-	} else if (record.segment === "coach") {
-		record.subscription_tier = chance.pickone(["annual", "family", "family"]);
-	} else if (record.segment === "social") {
-		record.subscription_tier = chance.pickone(["monthly", "monthly", "annual", "free"]);
-	} else if (record.segment === "resolver") {
-		record.subscription_tier = chance.pickone(["free", "free", "free", "monthly"]);
-	} else {
-		record.subscription_tier = chance.pickone(["free", "free", "monthly"]);
-	}
-	return record;
+	profile.trial_eligible = false;
+	const mix = {
+		athlete: [25, 30, 45],
+		trainer: [10, 30, 60],
+		social: [50, 35, 15],
+		casual: [70, 20, 10],
+		beginner: [85, 10, 5],
+	}[profile.segment] || [70, 20, 10];
+	profile.subscription_tier = chance.weighted(["free", "monthly", "annual"], mix);
+	return profile;
 }
 
-function handleFunnelPostHooks(record, meta) {
-	// H9: WORKOUT LOOP TIME-TO-CONVERT — Annual/family complete 1.3x faster
-	// (factor 0.77); Free 1.25x slower (factor 1.25).
-	const tier = meta?.profile?.subscription_tier;
-	if (Array.isArray(record) && record.length > 1) {
-		const factor = (
-			tier === "annual" || tier === "family" ? TTC_ANNUAL_FACTOR :
-			tier === "free" ? TTC_FREE_FACTOR :
-			1.0
-		);
-		if (factor !== 1.0) {
-			for (let i = 1; i < record.length; i++) {
-				const prev = dayjs(record[i - 1].time);
-				const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-				record[i].time = prev.add(newGap, "milliseconds").toISOString();
-			}
+function handleEverything(events, meta) {
+	if (!events.length) return events;
+	const profile = meta.profile;
+	const uid = profile.distinct_id;
+	const START = ms(DATASET_START);
+	const END = ms(DATASET_END);
+	const signup = events.find((e) => e.event === "account created");
+	const birthMs = signup ? T(signup) : null;
+	// engine workaround: world-event clones are spread across the whole event
+	// window, including before a new member's signup — nobody trains before install
+	if (signup) events = events.filter((e) => T(e) >= birthMs || e.event === "$experiment_started");
+
+	// ── H5a: Summer Shred relabels campaign-window signups to paid social ──
+	if (signup && birthMs >= ms(SUMMER_SHRED_START) && birthMs < ms(SUMMER_SHRED_END)
+		&& profile.acquisition_channel !== "referral" && profile.acquisition_channel !== "paid_social"
+		&& salt(uid, "shred") < SHRED_RELABEL) {
+		profile.acquisition_channel = "paid_social";
+		signup.acquisition_channel = "paid_social";
+	}
+
+	// ── trial hygiene: one free trial per member ──
+	const firstTrial = events.filter((e) => e.event === "trial started").sort((a, b) => T(a) - T(b))[0];
+	if (firstTrial) events = events.filter((e) => e.event !== "trial started" || e === firstTrial);
+
+	// ── purchase hygiene: a member buys Plus once; later upgrade passes vanish ──
+	const firstBuy = events.filter((e) => e.event === "subscription purchased").sort((a, b) => T(a) - T(b))[0];
+	if (firstBuy) {
+		const t0 = T(firstBuy);
+		events = events.filter((e) => {
+			if (e === firstBuy) return true;
+			if (e.event === "subscription purchased") return false;
+			if ((e.event === "trial started" || e.event === "paywall viewed") && T(e) > t0) return false;
+			return true;
+		});
+	}
+
+	// ── H5b: half of paid-social signups never buy ──
+	let purchase = events.find((e) => e.event === "subscription purchased");
+	if (purchase && profile.acquisition_channel === "paid_social" && salt(uid, "nobuy") < PAID_SOCIAL_NO_BUY) {
+		events = events.filter((e) => e !== purchase);
+		purchase = null;
+	}
+
+	// ── H4a: Plus Monthly price change loses a share of monthly purchases ──
+	if (purchase && purchase.plan === "monthly" && T(purchase) >= ms(PRICE_CHANGE) && chance.bool({ likelihood: MONTHLY_LOSS * 100 })) {
+		events = events.filter((e) => e !== purchase);
+		purchase = null;
+	}
+
+	// ── H6: first-week habit — low-habit new users go dark after day 14 ──
+	if (signup) {
+		const habitEnd = birthMs + HABIT_DAYS * 86_400_000;
+		const early = events.filter((e) => e.event === "workout completed" && T(e) >= birthMs && T(e) < habitEnd).length;
+		if (early < HABIT_MIN_WORKOUTS && salt(uid, "habit") < HABIT_CHURN_SHARE) {
+			const cut = birthMs + HABIT_CHURN_AFTER_DAYS * 86_400_000;
+			events = events.filter((e) => T(e) < cut);
+			if (purchase && T(purchase) >= cut) purchase = null;
 		}
 	}
-	return record;
+
+	// ── H3: partner health-API outage — most smartwatch / band workouts never sync ──
+	const oStart = ms(SYNC_OUTAGE_START), oEnd = ms(SYNC_OUTAGE_END);
+	events = events.filter((e) => !(e.event === "workout completed" && e.tracking_source === "wearable"
+		&& OUTAGE_TYPES.includes(e.wearable_type) && T(e) >= oStart && T(e) < oEnd
+		&& !chance.bool({ likelihood: OUTAGE_KEEP * 100 })));
+
+	// ── plan at event time (superProp subscription_tier) + final profile plan ──
+	const initialTier = profile.subscription_tier;
+	const buyMs = purchase ? T(purchase) : Infinity;
+	for (const e of events) e.subscription_tier = T(e) >= buyMs ? purchase.plan : initialTier;
+	if (purchase) profile.subscription_tier = purchase.plan;
+
+	// ── H2: Stride Coach — Plus workouts after launch, longer sessions ──
+	const launch = ms(AI_COACH_LAUNCH);
+	for (const e of events) {
+		if ((e.event === "workout completed" || e.event === "workout planned") && T(e) >= launch && e.subscription_tier !== "free"
+			&& chance.bool({ likelihood: AI_ADOPTION * 100 })) {
+			e.coaching_mode = "ai_coach";
+			if (e.event === "workout completed") e.duration_minutes = Math.round(e.duration_minutes * AI_DURATION_MULT);
+			else e.planned_duration_minutes = Math.round(e.planned_duration_minutes * AI_DURATION_MULT);
+		}
+	}
+
+	// ── deactivation hygiene: one deactivation, only for members who actually went quiet ──
+	const deacts = events.filter((e) => e.event === "account deactivated");
+	events = events.filter((e) => e.event !== "account deactivated");
+	if (deacts.length && events.length) {
+		const last = events.reduce((m, e) => Math.max(m, T(e)), 0);
+		if (last < END - DEACTIVATION_QUIET_DAYS * 86_400_000) {
+			const when = last + chance.integer({ min: 20, max: 180 }) * 60_000;
+			const d = cloneEvent(deacts[0], { time: new Date(when).toISOString() });
+			d.subscription_tier = profile.subscription_tier;
+			events.push(d);
+		}
+	}
+
+	// ── H8: notification fatigue — heavy push recipients stop opening ──
+	const pushes = events.filter((e) => e.event === "notification received");
+	if (pushes.length >= PUSH_FATIGUE_THRESHOLD) {
+		for (const p of pushes) {
+			if (p.opened === true && chance.bool({ likelihood: PUSH_FATIGUE_FLIP * 100 })) p.opened = false;
+		}
+	}
+
+	return events;
 }
 
-function handleEverythingHooks(record, meta) {
-	// UTC anchor: the day-offset cutoffs below (day 35/55/14/30) must not
-	// depend on the generating machine's timezone/DST rules
-	const datasetStart = dayjs.unix(meta.datasetStart).utc();
-	let events = record;
-	if (!events.length) return record;
-
-	// ── SUPERPROP STAMPING ──────────────────────────
-	// Stamp superProps from profile so they are consistent per user.
-	if (meta && meta.profile) {
-		const p = meta.profile;
-		events.forEach(e => {
-			if (p.Platform) e.Platform = p.Platform;
-			if (p.workout_type) e.workout_type = p.workout_type;
-			if (p.subscription_tier) e.subscription_tier = p.subscription_tier;
-		});
-	}
-
-	// HOOK 1: MORNING WORKOUT BOOST — 5AM-9AM UTC workouts get
-	// calories_burned 1.3x. No flag — analyst breaks down by HOD.
-	events.forEach(e => {
-		if (e.event === "workout completed") {
-			const hour = new Date(e.time).getUTCHours();
-			if (hour >= MORNING_HOUR_START && hour < MORNING_HOUR_END && e.calories_burned) {
-				e.calories_burned = Math.floor(e.calories_burned * MORNING_CALORIE_MULT);
-			}
-		}
-	});
-
-	// ── HOOK 2: POST-LAUNCH AI COACHING LIFT ────────────
-	// After day 35, ~40% of workouts switch to ai_assisted coaching,
-	// then ai_assisted workouts get 1.2x duration.
-	const AI_LAUNCH = datasetStart.add(AI_LAUNCH_DAY, "days");
-	events.forEach(e => {
-		if ((e.event === "workout completed" || e.event === "workout planned") &&
-			dayjs(e.time).isAfter(AI_LAUNCH)) {
-			// Adopt ai_assisted for ~40% of post-launch workouts
-			if (chance.bool({ likelihood: AI_ADOPTION_LIKELIHOOD })) {
-				e.coaching_mode = "ai_assisted";
-			}
-			// AI-assisted workouts get 1.2x duration
-			if (e.coaching_mode === "ai_assisted") {
-				if (e.duration_minutes) {
-					e.duration_minutes = Math.floor(e.duration_minutes * AI_DURATION_MULT);
-				}
-				if (e.planned_duration_minutes) {
-					e.planned_duration_minutes = Math.floor(e.planned_duration_minutes * AI_DURATION_MULT);
-				}
-			}
-		}
-	});
-
-	// ── GROUP CHALLENGES ADOPTION ────────────────────
-	// After day 55, ~30% of challenge events switch to group mode.
-	const GROUP_LAUNCH = datasetStart.add(GROUP_LAUNCH_DAY, "days");
-	events.forEach(e => {
-		if ((e.event === "challenge joined" || e.event === "workout completed") &&
-			dayjs(e.time).isAfter(GROUP_LAUNCH) &&
-			chance.bool({ likelihood: GROUP_ADOPTION_LIKELIHOOD })) {
-			e.challenge_mode = "group";
-		}
-	});
-
-	// ── HOOK 8: ANNUAL SUBSCRIBER CONVERSION FILTER ─
-	// Free/monthly-tier users drop ~30% of "progress checked"
-	// (last step of Workout Loop funnel) to simulate lower conversion.
-	if (meta && meta.profile) {
-		const tier = meta.profile.subscription_tier;
-		if (tier !== "annual" && tier !== "family" && chance.bool({ likelihood: ANNUAL_FUNNEL_FREE_DROP_LIKELIHOOD })) {
-			record = record.filter(e => e.event !== "progress checked");
-			events = record;
-		}
-	}
-
-	// ── HOOK 3: STREAK RETENTION ─────────────────────
-	// Users with >=2 workouts get streak_days updated and
-	// cloned achievement events. Achievements scale super-
-	// linearly: 1 per workout for workouts 2-4, then 4 per
-	// workout beyond that.
-	const workoutEvents = events.filter(e => e.event === "workout completed");
-	if (workoutEvents.length >= STREAK_MIN_WORKOUTS) {
-		// Update profile streak_days via a profile update event
-		if (meta && meta.profile) {
-			meta.profile.streak_days = workoutEvents.length;
-		}
-
-		// Super-linear achievement scaling:
-		// workouts 2-4: 1 achievement each
-		// workouts 5+: 4 achievements each
-		const templateAchievement = events.find(e => e.event === "achievement unlocked");
-		if (templateAchievement) {
-			let achievementCount = Math.min(workoutEvents.length - 1, STREAK_LINEAR_CAP); // 1 each for workouts 2-4
-			if (workoutEvents.length > 4) {
-				achievementCount += (workoutEvents.length - 4) * STREAK_SUPER_LINEAR_MULT; // 4 each for workouts 5+
-			}
-			for (let a = 0; a < achievementCount; a++) {
-				const srcIdx = Math.min(a, workoutEvents.length - 1);
-				const sourceEvent = workoutEvents[srcIdx];
-				events.push({
-					...templateAchievement,
-					time: dayjs(sourceEvent.time).add(chance.integer({ min: 1, max: 60 }), "minutes").toISOString(),
-					user_id: sourceEvent.user_id,
-					// engine stamps insert_id at generation — clones need fresh
-					// ids or Mixpanel dedups them against the template
-					insert_id: chance.guid(),
-					achievement_type: "streak_milestone",
-					streak_days_at_unlock: a + 2,
-				});
-			}
-		}
-	}
-
-	// ── HOOK 4: SOCIAL CHALLENGE COMPLETION ──────────
-	// Users with >=3 friend_added events get 1.5x challenge completions.
-	const friendCount = events.filter(e => e.event === "friend added").length;
-	if (friendCount >= SOCIAL_FRIEND_THRESHOLD) {
-		const templateChallenge = events.find(e => e.event === "challenge completed");
-		if (templateChallenge) {
-			const challengeCompletions = events.filter(e => e.event === "challenge completed");
-			const extraCount = Math.max(1, Math.floor(challengeCompletions.length * SOCIAL_CHALLENGE_CLONE_FACTOR));
-			for (let i = 0; i < extraCount; i++) {
-				const source = challengeCompletions[i % challengeCompletions.length];
-				events.push({
-					...templateChallenge,
-					time: dayjs(source.time).add(chance.integer({ min: 1, max: 48 }), "hours").toISOString(),
-					user_id: source.user_id,
-					insert_id: chance.guid(),
-					challenge_type: source.challenge_type,
-					completion_pct: chance.integer({ min: 80, max: 100 }),
-				});
-			}
-		}
-	}
-
-	// ── HOOK 5: RESOLVER CHURN CLIFF ─────────────────
-	// Resolver segment users with <30 events lose 70% after day 14.
-	if (meta && meta.profile && meta.profile.segment === "resolver" && events.length < RESOLVER_EVENT_THRESHOLD) {
-		const CHURN_CLIFF = datasetStart.add(RESOLVER_CLIFF_DAYS, "days");
-		for (let i = events.length - 1; i >= 0; i--) {
-			const eventTime = dayjs(events[i].time);
-			if (eventTime.isAfter(CHURN_CLIFF) && chance.bool({ likelihood: RESOLVER_DROP_LIKELIHOOD })) {
-				events.splice(i, 1);
-			}
-		}
-	}
-
-	// HOOK 6: COACH SESSION QUALITY — coach-session satisfaction 4-5.
-	const hasCoachSessions = events.some(e => e.event === "coach session");
-	if (hasCoachSessions) {
-		events.forEach(e => {
-			if (e.event === "coach session") {
-				e.satisfaction_score = chance.floating({ min: COACH_SESSION_SATISFACTION_MIN, max: COACH_SESSION_SATISFACTION_MAX, fixed: 1 });
-			}
-		});
-	}
-
-	// HOOK 10: WORKOUT-COUNT MAGIC NUMBER (no flags)
-	// Sweet 12-14 workouts → +35% on workout duration_minutes (peak
-	// progression). Over 15+ → drop 65% of post-day-30 non-workout
-	// events (overtraining → churn). Workout events are preserved
-	// so the bucket categorization stays consistent.
-	const workoutCount = events.filter(e => e.event === "workout completed").length;
-	if (workoutCount >= WORKOUT_SWEET_MIN && workoutCount <= WORKOUT_SWEET_MAX) {
-		events.forEach(e => {
-			if (e.event === "workout completed" && typeof e.duration_minutes === "number") {
-				e.duration_minutes = Math.round(e.duration_minutes * WORKOUT_DURATION_BOOST);
-			}
-		});
-	} else if (workoutCount >= WORKOUT_OVER_THRESHOLD) {
-		const day30 = datasetStart.add(WORKOUT_OVER_CUTOFF_DAYS, "days");
-		const preserveEvents = new Set(["workout completed", "progress checked"]);
-		for (let i = events.length - 1; i >= 0; i--) {
-			if (!preserveEvents.has(events[i].event) &&
-				dayjs(events[i].time).isAfter(day30) && chance.bool({ likelihood: WORKOUT_OVER_DROP_LIKELIHOOD })) {
-				events.splice(i, 1);
-			}
-		}
-	}
-
-	return record;
+// paid acquisition spend: performance channels bill per install (CPI); Summer
+// Shred raised paid-social bids. Spend is the value column, set from the raw
+// install count so the row's other columns stay consistent.
+function handleWarehouse(row, meta) {
+	if (meta.metricName !== "paid_acquisition_daily" || meta.isBackfill) return row;
+	const channel = row.acquisition_channel;
+	const t = dayjs.utc(row.date).valueOf();
+	const mult = channel === "paid_social" && inShred(t) ? SHRED_CPI_MULT : 1;
+	row.spend_usd = round2(meta.raw.plus.count * CPI_USD[channel] * mult);
+	return row;
 }
 
 // ── CONFIG ──
 /** @type {Config} */
 const config = {
-	version: 2,
 	seed: SEED,
 	datasetStart: DATASET_START,
 	datasetEnd: DATASET_END,
-	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	numUsers: NUM_USERS,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	format: "json",
 	gzip: true,
-	credentials: {
-		token,
-	},
+	concurrency: 1,
+	writeToDisk: false,
+	macro: { percentUsersBornInDataset: 40, bornRecentBias: 0, preExistingSpread: "uniform" },
+	credentials: { token },
 	switches: {
 		hasSessionIds: true,
 		alsoInferFunnels: false,
@@ -619,23 +443,18 @@ const config = {
 		hasAdSpend: false,
 		hasAvatar: true,
 	},
-	identity: {
-		avgDevicePerUser: 3,
-	},
-	concurrency: 1,
-	writeToDisk: false,
+	identity: { avgDevicePerUser: 2 },
+	stickyEventProps: ["Platform"],
+
 	scdProps: {
 		fitness_level: {
 			values: ["beginner", "intermediate", "advanced", "elite"],
 			frequency: "month",
 			timing: "fuzzy",
-			max: 8
-		}
+			max: 6,
+		},
 	},
-	mirrorProps: {},
-	lookupTables: [],
 
-	// ── Events (18) ──────────────────────────────────────────
 	events: [
 		{
 			event: "account created",
@@ -643,20 +462,33 @@ const config = {
 			isFirstEvent: true,
 			isAuthEvent: true,
 			properties: {
-				referral_source: ["organic", "friend_invite", "app_store", "social_media", "search"],
+				acquisition_channel: (ctx) => ctx.profile.acquisition_channel,
 			},
 		},
 		{
-			event: "workout completed",
-			weight: 8,
-			isStrictEvent: false,
+			event: "goal quiz completed",
+			weight: 1,
+			isStrictEvent: true,
 			properties: {
-				duration_minutes: u.weighNumRange(10, 90, 0.5, 40),
-				calories_burned: u.weighNumRange(50, 800, 0.4, 300),
-				heart_rate_avg: u.weighNumRange(80, 185, 0.5, 130),
-				satisfaction_score: u.weighNumRange(1, 5, 0.7, 3),
-				coaching_mode: ["self_guided"],
-				challenge_mode: ["solo"],
+				primary_goal: (ctx) => ctx.profile.primary_goal,
+				days_per_week_target: [2, 3, 3, 4, 4, 5],
+			},
+		},
+		{
+			event: "plan generated",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				plan_length_weeks: [4, 6, 8, 12],
+				workout_category: ["strength", "running", "hiit", "yoga", "cycling", "walking"],
+			},
+		},
+		{
+			event: "starter workout completed",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				duration_minutes: [8, 10, 10, 12, 15],
 			},
 		},
 		{
@@ -664,66 +496,26 @@ const config = {
 			weight: 6,
 			isStrictEvent: false,
 			properties: {
-				planned_duration_minutes: u.weighNumRange(15, 90, 0.5, 45),
-				day_of_week: ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
+				planned_duration_minutes: u.weighNumRange(15, 75, 0.6, 30),
+				workout_category: ["strength", "running", "hiit", "yoga", "cycling", "walking"],
 				coaching_mode: ["self_guided"],
 			},
 		},
 		{
-			event: "meal logged",
-			weight: 7,
-			properties: {
-				meal_type: ["breakfast", "lunch", "dinner", "snack"],
-				calories: u.weighNumRange(50, 1200, 0.5, 400),
-				protein_g: u.weighNumRange(0, 60, 0.5, 20),
-				meal_quality: ["healthy", "healthy", "balanced", "balanced", "indulgent"],
-			},
-		},
-		{
-			event: "challenge joined",
-			weight: 3,
+			event: "workout completed",
+			weight: 8,
 			isStrictEvent: false,
 			properties: {
-				challenge_type: ["steps", "calories", "streak", "strength", "team_relay"],
-				duration_days: [7, 14, 21, 30],
-				participants: u.weighNumRange(2, 50, 0.3, 10),
-				challenge_mode: ["solo"],
-			},
-		},
-		{
-			event: "challenge completed",
-			weight: 2,
-			isStrictEvent: false,
-			properties: {
-				challenge_type: ["steps", "calories", "streak", "strength", "team_relay"],
-				final_rank: u.weighNumRange(1, 50, 0.3, 10),
-				completion_pct: u.weighNumRange(50, 100, 0.7, 85),
-				challenge_mode: ["solo"],
-			},
-		},
-		{
-			event: "achievement unlocked",
-			weight: 2,
-			isStrictEvent: false,
-			properties: {
-				achievement_type: ["streak_milestone", "weight_goal", "distance_record", "calories_target", "social_champion", "first_workout"],
-				streak_days_at_unlock: u.weighNumRange(1, 100, 0.3, 10),
-			},
-		},
-		{
-			event: "friend added",
-			weight: 2,
-			isStrictEvent: false,
-			properties: {
-				source: ["search", "contacts", "challenge", "suggestion", "qr_code"],
-			},
-		},
-		{
-			event: "leaderboard viewed",
-			weight: 4,
-			properties: {
-				leaderboard_type: ["friends", "global", "challenge", "local"],
-				user_rank: u.weighNumRange(1, 500, 0.3, 50),
+				workout_category: ["strength", "running", "hiit", "yoga", "cycling", "walking"],
+				duration_minutes: u.weighNumRange(10, 90, 0.5, 40),
+				calories_burned: u.weighNumRange(60, 900, 0.4, 60),
+				avg_heart_rate: u.weighNumRange(90, 175, 0.6, 40),
+				perceived_effort: [3, 4, 5, 5, 6, 6, 7, 7, 8, 9],
+				coaching_mode: ["self_guided"],
+				wearable_type: (ctx) => ctx.profile.wearable_type,
+				tracking_source: (ctx) => ctx.profile.wearable_type === "none"
+					? chance.pickone(["phone", "phone", "manual"])
+					: chance.pickone(["wearable", "wearable", "wearable", "wearable", "wearable", "phone"]),
 			},
 		},
 		{
@@ -731,765 +523,720 @@ const config = {
 			weight: 5,
 			isStrictEvent: false,
 			properties: {
-				metric_viewed: ["weight", "body_fat", "steps", "calories_burned", "workout_count", "streaks"],
-				trend_direction: ["improving", "improving", "stable", "declining"],
-				time_range: ["week", "month", "3_months", "year"],
+				metric_viewed: ["weekly_minutes", "workout_streak", "body_weight", "personal_records", "heart_rate_trend"],
+				time_range: ["week", "month", "3_months"],
+			},
+		},
+		{
+			event: "meal logged",
+			weight: 6,
+			properties: {
+				meal_type: ["breakfast", "lunch", "dinner", "snack"],
+				calories: u.weighNumRange(80, 1100, 0.5, 40),
+				protein_g: u.weighNumRange(2, 70, 0.5, 30),
+			},
+		},
+		{
+			event: "challenge joined",
+			weight: 2,
+			properties: {
+				challenge_id: ["unassigned"],
+				challenge_format: ["solo"],
+				challenge_type: ["steps", "strength", "streak", "distance"],
+				duration_days: [7, 14, 21, 30],
+			},
+		},
+		{
+			event: "challenge completed",
+			weight: 1,
+			properties: {
+				challenge_id: ["unassigned"],
+				challenge_format: ["solo"],
+				challenge_type: ["steps", "strength", "streak", "distance"],
+				final_rank: u.weighNumRange(1, 60, 0.3, 30),
+			},
+		},
+		{
+			event: "friend added",
+			weight: 2,
+			properties: {
+				source: ["contacts", "search", "challenge", "suggested"],
+			},
+		},
+		{
+			event: "leaderboard viewed",
+			weight: 3,
+			properties: {
+				leaderboard_type: ["friends", "challenge", "city", "global"],
+			},
+		},
+		{
+			event: "achievement unlocked",
+			weight: 2,
+			properties: {
+				achievement_type: ["streak_7", "streak_30", "personal_record", "first_5k", "challenge_badge", "minutes_milestone"],
 			},
 		},
 		{
 			event: "coach session",
-			weight: 3,
-			isStrictEvent: false,
+			weight: 2,
 			properties: {
-				session_type: ["live_video", "chat", "plan_review", "form_check"],
-				duration_minutes: u.weighNumRange(10, 60, 0.5, 30),
-				satisfaction_score: u.weighNumRange(1, 5, 0.6, 3),
-				coach_speciality: ["strength", "cardio", "nutrition", "yoga", "general"],
+				session_type: ["live_video", "form_check", "plan_review", "chat"],
+				coach_speciality: ["strength", "running", "mobility", "nutrition"],
+				session_minutes: [15, 20, 30, 30, 45],
+				satisfaction_score: [3, 4, 4, 5, 5],
 			},
 		},
 		{
-			event: "nutrition plan viewed",
-			weight: 4,
+			event: "paywall viewed",
+			weight: 1,
 			properties: {
-				plan_type: ["weight_loss", "muscle_gain", "maintenance", "custom"],
-				adherence_pct: u.weighNumRange(0, 100, 0.5, 60),
+				paywall_trigger: ["workout_library", "advanced_plans", "coach_teaser", "challenge_limit", "settings"],
 			},
 		},
 		{
-			event: "heart rate recorded",
-			weight: 3,
+			event: "trial started",
+			weight: 1,
 			properties: {
-				bpm: u.weighNumRange(50, 200, 0.5, 110),
-				activity_state: ["resting", "warmup", "active", "peak", "cooldown"],
-				device: ["watch", "chest_strap", "phone_sensor"],
+				plan: ["monthly"],
+				trial_days: [7],
 			},
 		},
 		{
-			event: "app session",
-			weight: 8,
+			event: "subscription purchased",
+			weight: 1,
 			properties: {
-				session_duration_sec: u.weighNumRange(10, 1800, 0.4, 120),
-				pages_viewed: u.weighNumRange(1, 15, 0.5, 3),
+				plan: ["monthly"],
+				payment_method: ["apple_pay", "google_pay", "card", "card"],
 			},
 		},
 		{
 			event: "notification received",
 			weight: 5,
 			properties: {
-				notification_type: ["workout_reminder", "workout_reminder", "challenge_update", "friend_activity", "streak_warning", "coaching_tip"],
-				channel: ["push", "push", "email", "sms"],
+				notification_type: ["workout_reminder", "workout_reminder", "streak_at_risk", "challenge_update", "friend_activity", "weekly_recap"],
+				channel: ["push", "push", "push", "email"],
 				opened: [true, true, true, false],
 			},
 		},
 		{
-			event: "subscription managed",
-			weight: 2,
+			event: "app opened",
+			weight: 7,
 			properties: {
-				action: ["viewed_plans", "started_trial", "upgraded", "downgraded", "cancelled", "renewed"],
-				plan_viewed: ["free", "monthly", "annual", "family"],
+				entry_point: ["home_screen", "push", "widget", "watch_app"],
+				session_minutes: u.weighNumRange(1, 40, 0.4, 30),
 			},
 		},
 		{
 			event: "profile updated",
 			weight: 2,
-			isStrictEvent: false,
 			properties: {
-				field_updated: ["weight", "height", "goal", "avatar", "workout_preferences", "notification_settings"],
+				field_updated: ["body_weight", "goal", "photo", "units", "notification_settings", "connected_devices"],
 			},
 		},
 		{
 			event: "account deactivated",
 			weight: 1,
-			isChurnEvent: true,
-			returnLikelihood: 0.15,
+			properties: {
+				reason: ["lost_motivation", "switched_apps", "injury", "reached_goal", "too_busy"],
+			},
+		},
+		{
+			event: "$experiment_started",
+			weight: 1,
 			isStrictEvent: true,
 			properties: {
-				reason: ["lost_motivation", "cost", "switched_app", "injury", "achieved_goal"],
+				"Experiment name": [GUIDED_EXPERIMENT],
+				"Variant name": ["Control", GUIDED_VARIANT],
 			},
 		},
 	],
 
-	// ── Funnels (5) ──────────────────────────────────────────
 	funnels: [
 		{
 			name: "Onboarding",
-			sequence: ["account created", "profile updated", "workout planned", "workout completed"],
-			conversionRate: 45,
-			order: "sequential",
+			sequence: ["account created", "goal quiz completed", "plan generated", "starter workout completed"],
 			isFirstFunnel: true,
-			timeToConvert: 72,
-			weight: 3,
+			conversionRate: ONBOARDING_CONV,
+			timeToConvert: ONBOARDING_TTC_H,
+			order: "sequential",
+			weight: 1,
+			experiment: {
+				name: GUIDED_EXPERIMENT,
+				startDaysBeforeEnd: (dayjs.utc(DATASET_END).unix() - dayjs.utc(GUIDED_TEST_START).unix()) / 86400,
+				variants: [
+					{ name: "Control" },
+					{ name: GUIDED_VARIANT, conversionMultiplier: GUIDED_CONV_MULT, ttcMultiplier: GUIDED_TTC_MULT },
+				],
+			},
 		},
 		{
 			name: "Workout Loop",
 			sequence: ["workout planned", "workout completed", "progress checked"],
-			conversionRate: 45,
+			conversionRate: 55,
+			timeToConvert: 36,
 			order: "sequential",
-			timeToConvert: 48,
-			weight: 5,
-			reentry: true,
+			weight: 6,
 		},
 		{
-			name: "Social Engagement",
-			sequence: ["friend added", "leaderboard viewed", "challenge joined"],
+			// new members get one 7-day free trial
+			name: "Upgrade to Plus (trial)",
+			sequence: ["paywall viewed", "trial started", "subscription purchased"],
+			conditions: { subscription_tier: "free", trial_eligible: true },
 			conversionRate: 35,
+			timeToConvert: 168,
 			order: "sequential",
-			timeToConvert: 96,
-			weight: 3,
-		},
-		{
-			name: "Challenge Completion",
-			sequence: ["challenge joined", "workout completed", "challenge completed", "achievement unlocked"],
-			conversionRate: 30,
-			order: "sequential",
-			timeToConvert: 336,
 			weight: 2,
+			props: { plan: ["monthly", "monthly", "annual"] },
 		},
 		{
-			name: "Coaching Path",
-			sequence: ["coach session", "workout planned", "workout completed", "progress checked"],
+			// long-time free members already used their trial
+			name: "Upgrade to Plus (direct)",
+			sequence: ["paywall viewed", "subscription purchased"],
+			conditions: { subscription_tier: "free", trial_eligible: false },
+			conversionRate: 10,
+			timeToConvert: 24,
+			order: "sequential",
+			weight: 2,
+			props: { plan: ["monthly", "monthly", "annual"] },
+		},
+		{
+			name: "Team Challenge",
+			sequence: ["challenge joined", "challenge completed"],
+			conversionRate: TEAM_CONV,
+			timeToConvert: CHALLENGE_TTC_H,
+			order: "sequential",
+			weight: 1,
+			props: { challenge_id: (ctx) => `ch_${chance.hash({ length: 12 })}`, challenge_format: "team", challenge_type: ["steps", "strength", "streak", "distance"] },
+		},
+		{
+			name: "Solo Challenge",
+			sequence: ["challenge joined", "challenge completed"],
+			conversionRate: SOLO_CONV,
+			timeToConvert: CHALLENGE_TTC_H,
+			order: "sequential",
+			weight: 1,
+			props: { challenge_id: (ctx) => `ch_${chance.hash({ length: 12 })}`, challenge_format: "solo", challenge_type: ["steps", "strength", "streak", "distance"] },
+		},
+		{
+			name: "Coaching",
+			sequence: ["coach session", "workout planned", "workout completed"],
 			conversionRate: 50,
+			timeToConvert: 48,
 			order: "sequential",
-			timeToConvert: 72,
-			weight: 2,
+			weight: 1,
 		},
 	],
 
-	// ── SuperProps ──────────────────────────────────────────
+	warehouseMetrics: [
+		{
+			name: "paid_acquisition_daily",
+			type: "additive",
+			grain: "day",
+			source: {
+				event: "account created",
+				measure: "count",
+				where: (e) => PAID_CHANNELS.includes(e.acquisition_channel),
+				groupBy: "acquisition_channel",
+			},
+			timeColumn: "date",
+			valueColumn: "spend_usd",
+			columns: {
+				// ad platforms claim ~8% more installs than product analytics records
+				platform_reported_installs: (ctx) => Math.round(ctx.value * 1.08),
+				clicks: (ctx) => Math.round(ctx.value / 0.21),
+				impressions: (ctx) => Math.round(ctx.value / 0.21 / 0.011),
+			},
+		},
+		{
+			name: "wearable_sync_daily",
+			type: "additive",
+			grain: "day",
+			source: {
+				event: "workout completed",
+				measure: "count",
+				where: (e) => e.tracking_source === "wearable",
+				groupBy: "wearable_type",
+			},
+			timeColumn: "date",
+			valueColumn: "synced_workouts",
+			columns: {
+				sync_error_rate: (ctx) => {
+					const affected = OUTAGE_TYPES.includes(ctx.row.wearable_type) && inOutage(ctx.time);
+					const jitter = hashFloat(`${dayKey(ctx.time)}|${ctx.seriesKey}`);
+					return affected ? round2(1 - OUTAGE_KEEP + (jitter - 0.5) * 0.04) : Math.round((0.004 + jitter * 0.01) * 10000) / 10000;
+				},
+				sync_requests: (ctx) => Math.round(ctx.value / Math.max(0.05, 1 - ctx.row.sync_error_rate)),
+				partner_api_status: (ctx) => (OUTAGE_TYPES.includes(ctx.row.wearable_type) && inOutage(ctx.time) ? "major_outage" : "operational"),
+				p95_sync_latency_ms: (ctx) => {
+					const jitter = hashFloat(`lat|${dayKey(ctx.time)}|${ctx.seriesKey}`);
+					return OUTAGE_TYPES.includes(ctx.row.wearable_type) && inOutage(ctx.time) ? Math.round(28000 + jitter * 6000) : Math.round(900 + jitter * 500);
+				},
+			},
+		},
+		{
+			name: "subscription_billing_daily",
+			type: "additive",
+			grain: "day",
+			source: {
+				event: "subscription purchased",
+				measure: "count",
+				groupBy: "plan",
+			},
+			timeColumn: "date",
+			valueColumn: "new_subscriptions",
+			columns: {
+				list_price_usd: (ctx) => (ctx.row.plan === "annual" ? PRICE_ANNUAL : monthlyPrice(ctx.time)),
+				gross_bookings_usd: (ctx) => round2(ctx.value * ctx.row.list_price_usd),
+				store_fees_usd: (ctx) => round2(ctx.value * ctx.row.list_price_usd * 0.15),
+				net_bookings_usd: (ctx) => round2(ctx.value * ctx.row.list_price_usd * 0.85),
+			},
+		},
+	],
+
 	superProps: {
-		Platform: ["ios", "ios", "android"],
-		workout_type: ["strength", "cardio", "yoga", "hiit", "running", "cycling"],
+		Platform: { __weights: { ios: 62, android: 38 } },
 		subscription_tier: ["free"],
 	},
 
-	// ── UserProps ──────────────────────────────────────────
 	userProps: {
-		fitness_level: ["beginner"],
 		segment: ["casual"],
-		streak_days: [0],
-		total_workouts: u.weighNumRange(0, 0, 0.5),
-		preferred_workout: ["strength", "cardio", "yoga", "hiit", "running", "cycling"],
-		goal: ["weight_loss", "muscle_gain", "endurance", "flexibility", "general_health"],
-		Platform: ["ios", "ios", "android"],
-		workout_type: ["strength", "cardio", "yoga", "hiit", "running", "cycling"],
+		fitness_level: ["beginner"],
+		primary_goal: ["lose_weight", "build_strength", "improve_endurance", "stay_active", "reduce_stress"],
+		acquisition_channel: { __weights: { organic: 34, paid_social: 18, paid_search: 14, referral: 16, app_store_ads: 18 } },
+		wearable_type: { __weights: { none: 35, smartwatch: 35, fitness_band: 20, chest_strap: 10 } },
 		subscription_tier: ["free"],
+		trial_eligible: [true],
+		Platform: { __weights: { ios: 62, android: 38 } },
 	},
 
-	// ── Personas ──────────────────────────────────
 	personas: [
+		{ name: "athlete", weight: 12, eventMultiplier: 3.0, properties: { segment: "athlete", fitness_level: "advanced" } },
+		{ name: "casual", weight: 40, eventMultiplier: 1.0, properties: { segment: "casual", fitness_level: "intermediate" } },
+		{ name: "beginner", weight: 25, eventMultiplier: 0.6, properties: { segment: "beginner", fitness_level: "beginner" } },
+		{ name: "social", weight: 15, eventMultiplier: 1.8, properties: { segment: "social", fitness_level: "intermediate" } },
+		{ name: "trainer", weight: 8, eventMultiplier: 2.5, properties: { segment: "trainer", fitness_level: "elite" } },
+	],
+
+	worldEvents: [
 		{
-			name: "athlete",
-			weight: 10,
-			eventMultiplier: 4.0,
-			conversionModifier: 1.5,
-			properties: {
-				fitness_level: "advanced",
-				segment: "athlete",
-			},
-		},
-		{
-			name: "casual_exerciser",
-			weight: 40,
-			eventMultiplier: 1.0,
-			conversionModifier: 0.8,
-			properties: {
-				fitness_level: "intermediate",
-				segment: "casual",
-			},
-		},
-		{
-			name: "new_year_resolver",
-			weight: 25,
-			eventMultiplier: 0.6,
-			conversionModifier: 0.5,
-			// churn/activeWindow persona fields are deprecated no-ops in the
-			// engine — the resolver cliff is engineered entirely by hook H5
-			properties: {
-				fitness_level: "beginner",
-				segment: "resolver",
-			},
-		},
-		{
-			name: "social_motivator",
-			weight: 15,
-			eventMultiplier: 2.0,
-			conversionModifier: 1.2,
-			properties: {
-				fitness_level: "intermediate",
-				segment: "social",
-			},
-		},
-		{
-			name: "coach",
-			weight: 10,
-			eventMultiplier: 3.0,
-			conversionModifier: 1.5,
-			properties: {
-				fitness_level: "expert",
-				segment: "coach",
-			},
+			name: "fall_reset_program",
+			type: "campaign",
+			startDay: dayIndex(FALL_RESET_START),
+			duration: FALL_RESET_DAYS,
+			affectsEvents: FALL_RESET_EVENTS,
+			volumeMultiplier: FALL_RESET_MULT,
 		},
 	],
 
-	// ── Engagement Decay ──────────────────────────
-	engagementDecay: {
-		model: "step",
-		halfLife: 30,
-		floor: 0.1,
-		reactivationChance: 0.02,
-	},
+	// retention shape (also pins each new member's signup to their install day)
+	retentionCurve: { type: "logarithmic", day1: 0.8, day7: 0.6, day30: 0.45 },
 
 	hook(record, type, meta) {
-		if (type === "user") return handleUserHooks(record);
-		if (type === "funnel-post") return handleFunnelPostHooks(record, meta);
-		if (type === "everything") return handleEverythingHooks(record, meta);
+		if (type === "user") return handleUserHook(record, meta);
+		if (type === "everything") return handleEverything(record, meta);
+		if (type === "warehouse") return handleWarehouse(record, meta);
 		return record;
 	},
 };
 
 // ── STORIES ──────────────────────────────────────────────────────────────
-// Machine-checkable contract for the 10 numbered hooks. Evaluate with:
-//   node scripts/verify-stories.mjs dungeons/vertical/fitness/fitness.js --data-prefix verify-fitness
+// Machine-checkable contract for hooks H1-H9. Evaluate with:
+//   node dungeons/vertical/fitness/fitness.verify.mjs
 
-const EV = `read_json_auto('{{PREFIX}}-EVENTS*.json', sample_size=-1, union_by_name=true)`;
-const US = `read_json_auto('{{PREFIX}}-USERS*.json', sample_size=-1, union_by_name=true)`;
+const EV = `read_json_auto('{{PREFIX}}-EVENTS*.json*', sample_size=-1, union_by_name=true)`;
+const US = `read_json_auto('{{PREFIX}}-USERS*.json*', sample_size=-1, union_by_name=true)`;
+const WH = (table) => `read_json_auto('{{PREFIX}}-WAREHOUSE-${table}.json*', sample_size=-1, union_by_name=true)`;
 
-// Identity prelude. account created is both isAuthEvent and isFirstEvent, so
-// born users auth on their very first event and user_id should be present on
-// every record; the prelude still resolves through the device pool
-// (avgDevicePerUser: 3, "anonymousIds" is the legacy USERS-shard key) as
-// belt-and-braces for any device-only edge.
-const ID_CTE = `dmap AS (SELECT unnest("anonymousIds") AS device_id, distinct_id FROM ${US}),
-ev AS (SELECT coalesce(m.distinct_id::VARCHAR, e.user_id::VARCHAR, e.device_id::VARCHAR) AS uid,
-  e.time::TIMESTAMP AS t, e.* FROM ${EV} e LEFT JOIN dmap m ON e.device_id = m.device_id)`;
+// Identity prelude: a device resolves to the user who appears with it on any
+// event carrying both ids (emitted stitch evidence, not the profile pool).
+const ID_CTE = `dmap AS (SELECT device_id, min(user_id::VARCHAR) AS mapped FROM ${EV}
+  WHERE user_id IS NOT NULL AND device_id IS NOT NULL GROUP BY 1),
+ev AS (SELECT coalesce(e.user_id::VARCHAR, m.mapped) AS uid, e.time::TIMESTAMP AS t, e.*
+  FROM ${EV} e LEFT JOIN dmap m ON e.device_id = m.device_id)`;
 
-// Temporal boundaries computed from the same knobs the hook uses (the hook
-// anchors day offsets in UTC, so these UTC timestamps are exact cutoffs)
-const AI_LAUNCH_TS = dayjs.utc(DATASET_START).add(AI_LAUNCH_DAY, "day").format("YYYY-MM-DD HH:mm:ss");
-const D14_TS = dayjs.utc(DATASET_START).add(RESOLVER_CLIFF_DAYS, "day").format("YYYY-MM-DD HH:mm:ss");
-const D30_TS = dayjs.utc(DATASET_START).add(WORKOUT_OVER_CUTOFF_DAYS, "day").format("YYYY-MM-DD HH:mm:ss");
-// birth-pin cutoff for H5's double-difference: users whose first event lands in
-// the window's first two days (mostly pre-existing users; birth ⊥ persona)
-const D2_TS = dayjs.utc(DATASET_START).add(2, "day").format("YYYY-MM-DD HH:mm:ss");
+const TS = (iso) => dayjs.utc(iso).format("YYYY-MM-DD HH:mm:ss");
+const DAY_MS = 86_400_000;
+const ONBOARDING_STEPS = ["account created", "goal quiz completed", "plan generated", "starter workout completed"];
+const EXP_KEY = `Experiment: ${GUIDED_EXPERIMENT}`;
+// Summer Shred share of paid-social signups, derived from the declared channel
+// weights (paid_social 18, referral 16 of 100) and the relabel knob
+const P_SOCIAL = 0.18, P_REFERRAL = 0.16;
+const SHRED_SHARE_LIFT = (P_SOCIAL + SHRED_RELABEL * (1 - P_SOCIAL - P_REFERRAL)) / P_SOCIAL;
+const OUTAGE_BASE_FROM = TS(dayjs.utc(SYNC_OUTAGE_START).subtract(7, "day"));
+const OUTAGE_BASE_TO = TS(dayjs.utc(SYNC_OUTAGE_END).add(7, "day"));
+const RESET_BASE_FROM = TS(dayjs.utc(FALL_RESET_START).subtract(FALL_RESET_DAYS, "day"));
+const RESET_END = TS(dayjs.utc(FALL_RESET_START).add(FALL_RESET_DAYS, "day"));
+const band = (k) => [Math.round(k * 0.9 * 1000) / 1000, Math.round(k * 1.1 * 1000) / 1000];
 
-// Per-user workout counts. H3/H4/H10 classify on counts taken after H8's
-// progress-checked drop and H5's resolver thinning; for NON-resolver users no
-// later hook deletes "workout completed" (H10's over-drop preserves it), so
-// output-side counts rebuild those hook cohorts exactly. Resolver users can
-// lose workouts to H5 AFTER H3 classified them — resolver-sensitive stories
-// exclude that segment.
-const WORKOUT_CTE = `wc AS (SELECT uid, count(*) AS w FROM ev WHERE event = 'workout completed' GROUP BY 1)`;
+/** step_counts conversion by segment from a timeToConvert breakdown. */
+const convOf = (rows, seg) => {
+	const r = (rows || []).find((x) => x.segment_value === seg);
+	if (!r || !Array.isArray(r.step_counts) || !r.step_counts[0]) return null;
+	return { entered: r.step_counts[0], converted: r.step_counts[r.step_counts.length - 1], rate: r.step_counts[r.step_counts.length - 1] / r.step_counts[0] };
+};
 
 /** @type {import("../../../types").DungeonStory[]} */
 export const stories = [
 	{
-		id: "H1-morning-calorie-boost",
+		id: "H1-guided-first-week",
 		hook: "H1",
-		archetype: "temporal-inflection",
-		narrative: `workouts between ${MORNING_HOUR_START}:00 and ${MORNING_HOUR_END}:00 UTC carry calories_burned × ${MORNING_CALORIE_MULT}. calories_burned is an iid per-event draw independent of the event's hour, and no other hook touches it (H2/H10 scale duration_minutes), so both the avg and the median morning/other ratios read the ${MORNING_CALORIE_MULT} knob directly (Math.floor bias < 1%). TimeSoup's hour-of-day volume shape cancels: it moves event COUNTS across bins, not the property distribution within a bin`,
+		archetype: "experiment-lift",
+		narrative: `The "${GUIDED_EXPERIMENT}" onboarding test starts ${GUIDED_TEST_START.slice(0, 10)} and splits new signups 50/50. "${GUIDED_VARIANT}" multiplies onboarding conversion by ${GUIDED_CONV_MULT} and onboarding time by ${GUIDED_TTC_MULT}. Every onboarding step is an onboarding-only event, so the funnel conversion and median time-to-convert read the knobs directly.`,
+		mixpanelReport: { type: "Funnels", steps: ONBOARDING_STEPS, breakdown: `user property "${EXP_KEY}"`, window: "7 days" },
 		assertions: [
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT CASE WHEN extract(hour FROM t) >= ${MORNING_HOUR_START} AND extract(hour FROM t) < ${MORNING_HOUR_END} THEN 'morning' ELSE 'other' END AS grp,
- count(*) AS event_count, count(DISTINCT uid) AS user_count,
- avg(calories_burned) AS avg_cal, median(calories_burned) AS med_cal
-FROM ev WHERE event = 'workout completed' GROUP BY 1`,
+				breakdown: { type: "timeToConvert", steps: ONBOARDING_STEPS, breakdownByUserProperty: EXP_KEY, conversionWindowMs: 7 * DAY_MS },
+				// custom assert: conversion lives in the step_counts ARRAY of each
+				// segment row; the expect grammar cannot index arrays
+				assert: (rows) => {
+					const g = convOf(rows, GUIDED_VARIANT), c = convOf(rows, "Control");
+					if (!g || !c) return { verdict: "NONE", detail: "missing variant rows" };
+					if (g.entered < 800 || c.entered < 800) return { verdict: "WEAK", detail: `small arms ${g.entered}/${c.entered}` };
+					const lift = g.rate / c.rate;
+					const [lo, hi] = band(GUIDED_CONV_MULT);
+					const detail = `onboarding conversion ${g.converted}/${g.entered}=${g.rate.toFixed(4)} vs ${c.converted}/${c.entered}=${c.rate.toFixed(4)}; lift ${lift.toFixed(4)} (knob ${GUIDED_CONV_MULT}, band [${lo}, ${hi}])`;
+					if (lift >= lo && lift <= hi) return { verdict: "NAILED", detail };
+					return { verdict: lift > 1 ? "WEAK" : "INVERSE", detail };
 				},
-				select: { m: { where: { grp: "morning" } }, o: { where: { grp: "other" } } },
-				expect: { metric: "m.avg_cal / o.avg_cal", op: "between", target: [1.22, 1.38] },
+			},
+			{
+				breakdown: { type: "timeToConvert", steps: ONBOARDING_STEPS, breakdownByUserProperty: EXP_KEY, conversionWindowMs: 7 * DAY_MS },
+				select: { g: { where: { segment_value: GUIDED_VARIANT } }, c: { where: { segment_value: "Control" } } },
+				expect: { metric: "g.median_ttc_ms / c.median_ttc_ms", op: "between", target: band(GUIDED_TTC_MULT) },
 				minCohort: 400,
 			},
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE}
-SELECT CASE WHEN extract(hour FROM t) >= ${MORNING_HOUR_START} AND extract(hour FROM t) < ${MORNING_HOUR_END} THEN 'morning' ELSE 'other' END AS grp,
- count(*) AS event_count, count(DISTINCT uid) AS user_count,
- avg(calories_burned) AS avg_cal, median(calories_burned) AS med_cal
-FROM ev WHERE event = 'workout completed' GROUP BY 1`,
+SELECT 'all' AS grp, count(DISTINCT uid) AS user_count,
+ count(DISTINCT uid) FILTER (WHERE "Variant name" = '${GUIDED_VARIANT}')::DOUBLE / count(DISTINCT uid) AS guided_share,
+ count(*) FILTER (WHERE t < TIMESTAMP '${TS(GUIDED_TEST_START)}') AS pre_start_exposures
+FROM ev WHERE event = '$experiment_started'`,
 				},
-				select: { m: { where: { grp: "morning" } }, o: { where: { grp: "other" } } },
-				// scaling a whole bin scales every quantile: median ratio = knob too
-				expect: { metric: "m.med_cal / o.med_cal", op: "between", target: [1.2, 1.4] },
-				minCohort: 400,
+				select: { a: { where: { grp: "all" } } },
+				// equal-weight 2-arm hash → 0.5
+				expect: { metric: "a.guided_share", op: "between", target: band(0.5) },
+				minCohort: 1000,
 			},
 		],
 	},
 	{
-		id: "H2-ai-coaching-lift",
+		id: "H2-stride-coach-launch",
 		hook: "H2",
 		archetype: "temporal-inflection",
-		narrative: `after day ${AI_LAUNCH_DAY}, each workout (planned or completed) flips to coaching_mode='ai_assisted' at ${AI_ADOPTION_LIKELIHOOD}% (per-event Bernoulli — the post-launch ai share reads the knob), and ai_assisted workouts get duration × ${AI_DURATION_MULT}. Purity is exact: the declared coaching_mode pool is the single value 'self_guided' and the hook only stamps strictly after the launch instant, so ANY pre-launch ai_assisted row is a hook bug. H10's sweet-spot ×${WORKOUT_DURATION_BOOST} boost is mode-blind (applies to all of a sweet user's workouts), so it cancels in the ai/self avg ratio in expectation`,
+		narrative: `Stride Coach launches ${AI_COACH_LAUNCH.slice(0, 10)} for Plus members. ${AI_ADOPTION * 100}% of Plus workouts after launch run with coaching_mode = 'ai_coach', and those sessions last ${AI_DURATION_MULT}x longer. Free-tier workouts and every pre-launch workout stay self_guided, so purity is exact. subscription_tier on each event is the member's plan at that moment.`,
+		mixpanelReport: { type: "Insights", event: "workout completed", measure: "average duration_minutes", breakdown: "coaching_mode", filter: "subscription_tier != free, after launch" },
 		assertions: [
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE}
-SELECT count(*) FILTER (WHERE coaching_mode = 'ai_assisted' AND t <= TIMESTAMP '${AI_LAUNCH_TS}') AS pre_launch_ai,
- count(*) FILTER (WHERE coaching_mode = 'ai_assisted') AS ai_total,
- count(DISTINCT uid) AS user_count
+SELECT 'all' AS grp, count(DISTINCT uid) AS user_count,
+ count(*) FILTER (WHERE coaching_mode = 'ai_coach' AND (t < TIMESTAMP '${TS(AI_COACH_LAUNCH)}' OR subscription_tier = 'free')) AS impure_rows
 FROM ev WHERE event IN ('workout completed', 'workout planned')`,
 				},
-				assert: (rows) => {
-					const r = (rows || [])[0];
-					if (!r || Number(r.ai_total) === 0) return { pass: false, verdict: "NONE", detail: "no ai_assisted workouts at all" };
-					const clean = Number(r.pre_launch_ai) === 0;
-					return {
-						pass: clean,
-						verdict: clean ? "NAILED" : "INVERSE",
-						detail: `pre-launch ai_assisted rows=${r.pre_launch_ai} of ${r.ai_total} total (must be 0)`,
-					};
-				},
+				select: { a: { where: { grp: "all" } } },
+				// exact: any ai_coach row before launch or on a free-tier event is a bug
+				expect: { metric: "a.impure_rows", op: "between", target: [0, 0] },
 			},
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE}
-SELECT coaching_mode AS grp, count(*) AS event_count, count(DISTINCT uid) AS user_count, avg(duration_minutes) AS avg_dur
-FROM ev WHERE event = 'workout completed' AND t > TIMESTAMP '${AI_LAUNCH_TS}' GROUP BY 1`,
+SELECT coaching_mode AS grp, count(*) AS event_count, count(DISTINCT uid) AS user_count, avg(duration_minutes) AS avg_dur, avg(calories_burned) AS avg_cal
+FROM ev WHERE event = 'workout completed' AND t >= TIMESTAMP '${TS(AI_COACH_LAUNCH)}' AND subscription_tier <> 'free' GROUP BY 1`,
 				},
-				select: { a: { where: { grp: "ai_assisted" } }, s: { where: { grp: "self_guided" } } },
-				expect: { metric: "a.avg_dur / s.avg_dur", op: "between", target: [1.1, 1.32] },
-				minCohort: 300,
+				select: { a: { where: { grp: "ai_coach" } }, s: { where: { grp: "self_guided" } } },
+				expect: { metric: "a.avg_dur / s.avg_dur", op: "between", target: band(AI_DURATION_MULT) },
+				minCohort: 500,
 			},
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE}
-SELECT 'post' AS grp, count(*) AS event_count, count(DISTINCT uid) AS user_count,
- count(*) FILTER (WHERE coaching_mode = 'ai_assisted')::DOUBLE / count(*) AS ai_share
-FROM ev WHERE event = 'workout completed' AND t > TIMESTAMP '${AI_LAUNCH_TS}'`,
+SELECT 'plus' AS grp, count(DISTINCT uid) AS user_count,
+ count(*) FILTER (WHERE coaching_mode = 'ai_coach')::DOUBLE / count(*) AS ai_share
+FROM ev WHERE event = 'workout completed' AND t >= TIMESTAMP '${TS(AI_COACH_LAUNCH)}' AND subscription_tier <> 'free'`,
 				},
-				select: { p: { where: { grp: "post" } } },
-				// per-event Bernoulli at 40% over tens of thousands of draws
-				expect: { metric: "p.ai_share", op: "between", target: [0.35, 0.45] },
-				minCohort: 300,
+				select: { p: { where: { grp: "plus" } } },
+				expect: { metric: "p.ai_share", op: "between", target: band(AI_ADOPTION) },
+				minCohort: 500,
 			},
 		],
 	},
 	{
-		id: "H3-streak-achievements",
+		id: "H3-wearable-sync-outage",
 		hook: "H3",
-		archetype: "cohort-count-scale",
-		narrative: `users with ≥${STREAK_MIN_WORKOUTS} workouts get profile streak_days OVERWRITTEN to their exact workout count (the everything hook mutates meta.profile before storage pushes it), plus C(w) = min(w−1, ${STREAK_LINEAR_CAP}) + ${STREAK_SUPER_LINEAR_MULT}·max(w−4, 0) cloned achievements (template = the user's first organic achievement — no organic achievement, no clones). The streak_days contract for non-resolvers is ONE-SIDED EXACT: after H3 runs, nothing ever ADDS a workout, so output w ≤ hook-time w = streak_days — a single sd < w row (or an unreachable sd = 1 on a non-coach) is a hook bug. Full equality is NOT exact: the future-time guard runs after the everything hook and silently deletes events past datasetEnd (engine end-of-window funnel spillover is filtered at storage by design, and H9's free-tier 1.25× stretch pushes borderline steps out), so ~0.5% of users lose a counted workout post-classification — equality share floor 0.99 (measured 0.6% violators at iter scale, all sd = w+1, all free-tier). The structural check total_ach − C(w) ≥ 1 holds for every non-resolver user with 2 ≤ w ≤ 14 and ≥1 achievement (w ≤ 14 excludes H10's over-drop, which deletes achievements): organic ≥ 1 forced the template, clones are exactly C(w), and only the same future-guard (clone lands past datasetEnd, or its source workout was guard-dropped) can break it — hence the 99.5% floor. The median of total_ach − C(w) sandwiches from above: it recovers the ORGANIC achievement count (weight 2 of 68 ≈ 3% of a user's events → median ∈ [1, 6]); a drifted clone formula would push it negative or huge`,
+		archetype: "bespoke",
+		narrative: `A partner health-API outage (${SYNC_OUTAGE_START.slice(0, 10)} to ${SYNC_OUTAGE_END.slice(0, 10)}, exclusive) stops most smartwatch and fitness-band workouts from syncing: only ${OUTAGE_KEEP * 100}% arrive. Chest straps pair directly and phone-tracked workouts are untouched. The outage days come from the warehouse table wearable_sync_daily (sync_error_rate > 0.2); the event-side read is a ratio of ratios (affected wearable / phone workouts, outage days vs the 7 days either side), which cancels weekday and seasonal volume and reads the keep rate.`,
+		mixpanelReport: { type: "Insights", event: "workout completed", measure: "total", breakdown: "tracking_source, wearable_type", chart: "daily line", join: "warehouse wearable_sync_daily.sync_error_rate" },
 		assertions: [
 			{
-				// one-sided purity — deletions-only pipeline makes sd < w
-				// impossible; sd = 1 is unreachable (H3 assigns ≥2, default 0,
-				// H7 coaches 60-365)
 				breakdown: {
 					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${WORKOUT_CTE},
-j AS (SELECT u.distinct_id::VARCHAR AS uid, u.segment AS seg, u.streak_days AS sd, coalesce(w.w, 0) AS w
-  FROM ${US} u LEFT JOIN wc w ON w.uid = u.distinct_id::VARCHAR
-  WHERE u.segment <> 'resolver')
-SELECT count(*) FILTER (WHERE w >= ${STREAK_MIN_WORKOUTS} AND sd < w) AS below_w,
- count(*) FILTER (WHERE seg <> 'coach' AND sd = 1) AS unreachable_one,
- count(*) FILTER (WHERE w >= ${STREAK_MIN_WORKOUTS}) AS streak_users, count(*) AS user_count
+					sql: `WITH ${ID_CTE},
+od AS (SELECT DISTINCT date::DATE AS d FROM ${WH("wearable_sync_daily")} WHERE sync_error_rate > 0.2),
+w AS (SELECT t::DATE AS d, uid,
+  CASE WHEN tracking_source = 'wearable' AND wearable_type IN (${OUTAGE_TYPES.map((x) => `'${x}'`).join(", ")}) THEN 'aff'
+       WHEN tracking_source = 'phone' THEN 'phone' END AS arm
+  FROM ev WHERE event = 'workout completed' AND t >= TIMESTAMP '${OUTAGE_BASE_FROM}' AND t < TIMESTAMP '${OUTAGE_BASE_TO}'),
+g AS (SELECT (d IN (SELECT d FROM od)) AS outage, count(*) FILTER (WHERE arm = 'aff') AS aff, count(*) FILTER (WHERE arm = 'phone') AS phone, count(DISTINCT uid) AS users
+  FROM w GROUP BY 1)
+SELECT 'all' AS grp, (SELECT count(*) FROM od) AS outage_days, min(users) AS user_count,
+ (max(aff::DOUBLE / phone) FILTER (WHERE outage)) / (max(aff::DOUBLE / phone) FILTER (WHERE NOT outage)) AS did
+FROM g`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.did", op: "between", target: band(OUTAGE_KEEP) },
+				minCohort: 1000,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `SELECT 'all' AS grp,
+ count(*) FILTER (WHERE partner_api_status = 'major_outage') AS outage_rows,
+ avg(sync_error_rate) FILTER (WHERE partner_api_status = 'major_outage') AS outage_err,
+ count(*) FILTER (WHERE partner_api_status = 'major_outage' AND (date::DATE < DATE '${SYNC_OUTAGE_START.slice(0, 10)}' OR date::DATE >= DATE '${SYNC_OUTAGE_END.slice(0, 10)}' OR wearable_type NOT IN (${OUTAGE_TYPES.map((x) => `'${x}'`).join(", ")}))) AS misplaced
+FROM ${WH("wearable_sync_daily")}`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				// warehouse error rate during the outage = 1 − keep rate
+				expect: { metric: "a.outage_err", op: "between", target: band(1 - OUTAGE_KEEP) },
+			},
+		],
+	},
+	{
+		id: "H4-monthly-price-change",
+		hook: "H4",
+		archetype: "temporal-inflection",
+		narrative: `On ${PRICE_CHANGE.slice(0, 10)} Plus Monthly rises from $${PRICE_MONTHLY_OLD} to $${PRICE_MONTHLY_NEW}; Annual stays $${PRICE_ANNUAL}. ${MONTHLY_LOSS * 100}% of would-be monthly purchases after the change never happen. Annual is the control: the monthly/annual purchase ratio after vs before reads the ${1 - MONTHLY_LOSS} keep rate. The prices live only in the warehouse table subscription_billing_daily, so the bookings read needs the join: monthly bookings fall to ${(1 - MONTHLY_LOSS).toFixed(2)} × ${PRICE_MONTHLY_NEW}/${PRICE_MONTHLY_OLD} of trend. Post-change monthly volume is a few hundred purchases, so the NAILED band (knob ±10%) can miss on sampling noise; the floor is a knob-derived ceiling.`,
+		mixpanelReport: { type: "Insights", event: "subscription purchased", measure: "total", breakdown: "plan", chart: "weekly line" },
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+p AS (SELECT (t >= TIMESTAMP '${TS(PRICE_CHANGE)}') AS post, plan, uid FROM ev WHERE event = 'subscription purchased'),
+g AS (SELECT post, count(*) FILTER (WHERE plan = 'monthly')::DOUBLE / count(*) FILTER (WHERE plan = 'annual') AS m_per_a, count(DISTINCT uid) AS users FROM p GROUP BY 1)
+SELECT 'all' AS grp, min(users) AS user_count,
+ max(m_per_a) FILTER (WHERE post) / max(m_per_a) FILTER (WHERE NOT post) AS did
+FROM g`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.did", op: "<=", target: 1 - MONTHLY_LOSS, floor: 1 - MONTHLY_LOSS / 2 },
+				minCohort: 250,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+p AS (SELECT t::DATE AS d, plan, uid FROM ev WHERE event = 'subscription purchased'),
+j AS (SELECT p.*, b.list_price_usd FROM p JOIN ${WH("subscription_billing_daily")} b ON b.date::DATE = p.d AND b.plan = p.plan),
+g AS (SELECT (d >= DATE '${PRICE_CHANGE.slice(0, 10)}') AS post,
+  sum(list_price_usd) FILTER (WHERE plan = 'monthly') / sum(list_price_usd) FILTER (WHERE plan = 'annual') AS m_rev_per_a, count(DISTINCT uid) AS users
+  FROM j GROUP BY 1)
+SELECT 'all' AS grp, min(users) AS user_count,
+ max(m_rev_per_a) FILTER (WHERE post) / max(m_rev_per_a) FILTER (WHERE NOT post) AS did
+FROM g`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				// bookings DiD = keep rate × price ratio
+				expect: { metric: "a.did", op: "<=", target: Math.round((1 - MONTHLY_LOSS) * PRICE_MONTHLY_NEW / PRICE_MONTHLY_OLD * 1000) / 1000, floor: Math.round((1 - MONTHLY_LOSS / 2) * PRICE_MONTHLY_NEW / PRICE_MONTHLY_OLD * 1000) / 1000 },
+				minCohort: 250,
+			},
+		],
+	},
+	{
+		id: "H5-summer-shred-paid-social",
+		hook: "H5",
+		archetype: "attribution-bias",
+		narrative: `Summer Shred (${SUMMER_SHRED_START.slice(0, 10)} to ${SUMMER_SHRED_END.slice(0, 10)}, exclusive) pushes paid social: ${SHRED_RELABEL * 100}% of non-referral signups in the window arrive through paid_social, and paid-social CPI bids double. The warehouse table paid_acquisition_daily bills spend = installs × CPI, so spend per Mixpanel signup on paid social reads ${SHRED_CPI_MULT}x inside the campaign. Paid-social signups are also low intent: ${PAID_SOCIAL_NO_BUY * 100}% of them never buy Plus, so their purchase rate is half that of other channels' signups from the same week (channel is drawn independently of persona; the same-week standardization removes the signup-date effect on how long members have had to buy).`,
+		mixpanelReport: { type: "Insights + warehouse", event: "account created", breakdown: "acquisition_channel", join: "paid_acquisition_daily.spend_usd" },
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+s AS (SELECT t::DATE AS d, count(*) AS signups, count(DISTINCT uid) AS users FROM ev WHERE event = 'account created' AND acquisition_channel = 'paid_social' GROUP BY 1),
+sp AS (SELECT date::DATE AS d, spend_usd FROM ${WH("paid_acquisition_daily")} WHERE acquisition_channel = 'paid_social'),
+j AS (SELECT (sp.d >= DATE '${SUMMER_SHRED_START.slice(0, 10)}' AND sp.d < DATE '${SUMMER_SHRED_END.slice(0, 10)}') AS shred, sum(sp.spend_usd) AS spend, sum(coalesce(s.signups, 0)) AS signups, sum(coalesce(s.users, 0))::BIGINT AS users
+  FROM sp LEFT JOIN s ON s.d = sp.d GROUP BY 1)
+SELECT 'all' AS grp, min(users) AS user_count,
+ (max(spend / signups) FILTER (WHERE shred)) / (max(spend / signups) FILTER (WHERE NOT shred)) AS cac_ratio
 FROM j`,
 				},
-				assert: (rows) => {
-					const r = (rows || [])[0];
-					if (!r || Number(r.streak_users) === 0) return { pass: false, verdict: "NONE", detail: "no ≥2-workout users" };
-					const bad = Number(r.below_w) + Number(r.unreachable_one);
-					return {
-						pass: bad === 0,
-						verdict: bad === 0 ? "NAILED" : "INVERSE",
-						detail: `streak_days < workout-count rows: ${r.below_w}; unreachable sd=1 rows: ${r.unreachable_one} (both must be 0; ${r.streak_users} streak users of ${r.user_count} non-resolvers)`,
-					};
-				},
-			},
-			{
-				// equality share — bounded below by the silent future-guard
-				// drop rate (post-hook deletions of counted workouts)
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${WORKOUT_CTE},
-j AS (SELECT u.distinct_id::VARCHAR AS uid, u.streak_days AS sd, coalesce(w.w, 0) AS w
-  FROM ${US} u LEFT JOIN wc w ON w.uid = u.distinct_id::VARCHAR
-  WHERE u.segment <> 'resolver')
-SELECT 'all' AS grp, count(*) AS user_count,
- count(*) FILTER (WHERE sd = w)::DOUBLE / count(*) AS eq_share
-FROM j WHERE w >= ${STREAK_MIN_WORKOUTS}`,
-				},
-				select: { all: { where: { grp: "all" } } },
-				expect: { metric: "all.eq_share", op: "between", target: [0.99, 1.0] },
-				minCohort: 200,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${WORKOUT_CTE},
-ac AS (SELECT uid, count(*) AS a FROM ev WHERE event = 'achievement unlocked' GROUP BY 1),
-j AS (SELECT u.distinct_id::VARCHAR AS uid, coalesce(w.w, 0) AS w, coalesce(a.a, 0) AS a
-  FROM ${US} u LEFT JOIN wc w ON w.uid = u.distinct_id::VARCHAR LEFT JOIN ac a ON a.uid = u.distinct_id::VARCHAR
-  WHERE u.segment <> 'resolver'),
-coh AS (SELECT *, LEAST(w - 1, ${STREAK_LINEAR_CAP}) + GREATEST(w - 4, 0) * ${STREAK_SUPER_LINEAR_MULT} AS clones
-  FROM j WHERE w BETWEEN ${STREAK_MIN_WORKOUTS} AND ${WORKOUT_OVER_THRESHOLD - 1} AND a >= 1)
-SELECT 'all' AS grp, count(*) AS user_count,
- count(*) FILTER (WHERE a - clones >= 1)::DOUBLE / count(*) AS ok_share,
- median(a - clones) AS med_organic
-FROM coh`,
-				},
-				select: { all: { where: { grp: "all" } } },
-				expect: { metric: "all.ok_share", op: "between", target: [0.995, 1.0] },
-				minCohort: 200,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${WORKOUT_CTE},
-ac AS (SELECT uid, count(*) AS a FROM ev WHERE event = 'achievement unlocked' GROUP BY 1),
-j AS (SELECT u.distinct_id::VARCHAR AS uid, coalesce(w.w, 0) AS w, coalesce(a.a, 0) AS a
-  FROM ${US} u LEFT JOIN wc w ON w.uid = u.distinct_id::VARCHAR LEFT JOIN ac a ON a.uid = u.distinct_id::VARCHAR
-  WHERE u.segment <> 'resolver'),
-coh AS (SELECT *, LEAST(w - 1, ${STREAK_LINEAR_CAP}) + GREATEST(w - 4, 0) * ${STREAK_SUPER_LINEAR_MULT} AS clones
-  FROM j WHERE w BETWEEN ${STREAK_MIN_WORKOUTS} AND ${WORKOUT_OVER_THRESHOLD - 1} AND a >= 1)
-SELECT 'all' AS grp, count(*) AS user_count, median(a - clones) AS med_organic
-FROM coh`,
-				},
-				select: { all: { where: { grp: "all" } } },
-				// implied organic achievements — clone over-injection would blow this up
-				expect: { metric: "all.med_organic", op: "between", target: [1, 6] },
-				minCohort: 200,
-			},
-		],
-	},
-	{
-		id: "H4-social-challenge-completion",
-		hook: "H4",
-		archetype: "cohort-count-scale",
-		narrative: `users with ≥${SOCIAL_FRIEND_THRESHOLD} friend-added events get max(1, floor(cc × ${SOCIAL_CHALLENGE_CLONE_FACTOR})) cloned challenge completions (cc = organic count; no organic completion → no template → no clones). The output total is then out = cc + max(1, floor(cc/2)), whose image skips exactly {5, 8, 11, …} = {n ≥ 5 : n ≡ 2 (mod 3)} — a count FINGERPRINT: for the clean cohort (non-resolver, ≤14 workouts so H10's over-drop never fires, output friends ≥ ${SOCIAL_FRIEND_THRESHOLD}, ≥2 completions) no later hook deletes challenge events, so landing in a gap is impossible except via the future-time guard (clone lands ≤48h past datasetEnd), bounded ≲2% of the cohort. The companion gradient (friend-heavy vs friend-light challenge counts WITHIN the social segment) is a composite: the ≥1.5× clone lift compounds with organic activity correlation (more friends ⇒ more events ⇒ more completions), so its band is wide and bounded away from 1 rather than pinned`,
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${WORKOUT_CTE},
-fr AS (SELECT uid, count(*) AS f FROM ev WHERE event = 'friend added' GROUP BY 1),
-ch AS (SELECT uid, count(*) AS c FROM ev WHERE event = 'challenge completed' GROUP BY 1),
-j AS (SELECT u.distinct_id::VARCHAR AS uid, coalesce(w.w, 0) AS w, coalesce(f.f, 0) AS f, coalesce(c.c, 0) AS c
-  FROM ${US} u LEFT JOIN wc w ON w.uid = u.distinct_id::VARCHAR
-  LEFT JOIN fr f ON f.uid = u.distinct_id::VARCHAR LEFT JOIN ch c ON c.uid = u.distinct_id::VARCHAR
-  WHERE u.segment <> 'resolver'),
-coh AS (SELECT * FROM j WHERE w <= ${WORKOUT_OVER_THRESHOLD - 1} AND f >= ${SOCIAL_FRIEND_THRESHOLD} AND c >= 2)
-SELECT 'all' AS grp, count(*) AS user_count,
- count(*) FILTER (WHERE c >= 5 AND c % 3 = 2) AS gap_hits
-FROM coh`,
-				},
-				assert: (rows) => {
-					const r = (rows || [])[0];
-					const n = Number(r?.user_count || 0);
-					if (n < 50) return { pass: false, verdict: "NONE", detail: `clean cohort too small (${n})` };
-					const share = Number(r.gap_hits) / n;
-					const pass = share <= 0.02;
-					return {
-						pass,
-						verdict: pass ? (share <= 0.005 ? "NAILED" : "STRONG") : "INVERSE",
-						detail: `unreachable challenge totals (n≥5, n≡2 mod 3): ${r.gap_hits} of ${n} clean-cohort users (${(share * 100).toFixed(2)}% — future-guard bound ~2%)`,
-					};
-				},
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.cac_ratio", op: "between", target: band(SHRED_CPI_MULT) },
+				minCohort: 300,
 			},
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE},
-fr AS (SELECT uid, count(*) AS f FROM ev WHERE event = 'friend added' GROUP BY 1),
-ch AS (SELECT uid, count(*) AS c FROM ev WHERE event = 'challenge completed' GROUP BY 1),
-j AS (SELECT u.distinct_id::VARCHAR AS uid, coalesce(f.f, 0) AS f, coalesce(c.c, 0) AS c
-  FROM ${US} u LEFT JOIN fr f ON f.uid = u.distinct_id::VARCHAR LEFT JOIN ch c ON c.uid = u.distinct_id::VARCHAR
-  WHERE u.segment = 'social')
-SELECT CASE WHEN f >= ${SOCIAL_FRIEND_THRESHOLD} THEN 'hi' ELSE 'lo' END AS grp,
- count(*) AS user_count, avg(c) AS avg_cc
-FROM j WHERE f >= ${SOCIAL_FRIEND_THRESHOLD} OR f <= 1 GROUP BY 1`,
+s AS (SELECT (t >= TIMESTAMP '${TS(SUMMER_SHRED_START)}' AND t < TIMESTAMP '${TS(SUMMER_SHRED_END)}') AS shred, acquisition_channel AS ch, uid FROM ev WHERE event = 'account created'),
+g AS (SELECT shred, count(*) FILTER (WHERE ch = 'paid_social')::DOUBLE / count(*) AS social_share, count(DISTINCT uid) AS users FROM s GROUP BY 1)
+SELECT 'all' AS grp, min(users) AS user_count,
+ max(social_share) FILTER (WHERE shred) / max(social_share) FILTER (WHERE NOT shred) AS share_lift
+FROM g`,
 				},
-				select: { h: { where: { grp: "hi" } }, l: { where: { grp: "lo" } } },
-				expect: { metric: "h.avg_cc / l.avg_cc", op: "between", target: [1.35, 4.5] },
-				minCohort: 100,
-			},
-		],
-	},
-	{
-		id: "H5-resolver-churn-cliff",
-		hook: "H5",
-		archetype: "cohort-count-scale",
-		narrative: `resolver-segment users with <${RESOLVER_EVENT_THRESHOLD} events (at hook time) lose ${RESOLVER_DROP_LIKELIHOOD}% of post-day-${RESOLVER_CLIFF_DAYS} events. The cliff is engineered ENTIRELY by this hook — the persona's churnRate/activeWindow fields are deprecated engine no-ops (the engine warns so at generation), so the estimator targets the ${(100 - RESOLVER_DROP_LIKELIHOOD) / 100} keep-rate directly. Deletions-only pipeline makes the treated cohort output-identifiable: eligible ⟺ output events < ${RESOLVER_EVENT_THRESHOLD} (treated users only shrink below the threshold they were already under; untreated resolvers keep their ≥${RESOLVER_EVENT_THRESHOLD} count). Two composition traps force the double-difference design: (1) birth time dominates raw post/pre mass, so both cells pin birth to the window's first two days (first event < day 2 — mostly pre-existing users, and birth ⊥ persona); (2) splitting on total volume tilts post/pre by itself (low-n users' realized timing differs — measured 1.22 inside casual where NO hook fires), so the resolver lo/hi contrast is normalized by the identical lo/hi split inside casual, which measures pure selection. DD = (ρ_res_lo/ρ_res_hi) ÷ (ρ_cas_lo/ρ_cas_hi) then reads the keep-rate: iter-scale measured 0.314 vs knob 0.30. The placebo asserts the casual split itself sits near 1 — nowhere near the 0.3 keep-rate — or the normalizer would be absorbing treatment`,
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-tot AS (SELECT uid, count(*) AS n, min(t) AS first_t,
-  count(*) FILTER (WHERE t < TIMESTAMP '${D14_TS}') AS pre,
-  count(*) FILTER (WHERE t >= TIMESTAMP '${D14_TS}') AS post
-  FROM ev GROUP BY 1),
-j AS (SELECT u.segment AS seg, CASE WHEN t.n < ${RESOLVER_EVENT_THRESHOLD} THEN 'lo' ELSE 'hi' END AS arm, t.pre, t.post
-  FROM ${US} u JOIN tot t ON t.uid = u.distinct_id::VARCHAR
-  WHERE t.first_t < TIMESTAMP '${D2_TS}' AND u.segment IN ('resolver', 'casual')),
-g AS (SELECT seg, arm, count(*)::BIGINT AS user_count, sum(post)::DOUBLE / nullif(sum(pre), 0) AS rho FROM j GROUP BY 1, 2)
-SELECT seg || '_' || arm AS grp, user_count, rho FROM g`,
-				},
-				// DD is a 4-cell statistic (two ops) — parseMetric caps at one, so
-				// the ratio-of-ratios is computed in a custom assert. Band [0.2,
-				// 0.42]: knob 0.30 + headroom for the second-order multiplier-depth
-				// mismatch (0.6× res vs 1.0× cas at the same n=30 cut); STRONG
-				// buffer [0.15, 0.5] absorbs smallest-cell sampling noise
-				// (resolver_hi ≈ 30 at 1500 users, ≈ 200 at 10K).
-				assert: (rows) => {
-					const cell = (g) => (rows || []).find((r) => r.grp === g);
-					const rl = cell("resolver_lo"), rh = cell("resolver_hi"), cl = cell("casual_lo"), ch = cell("casual_hi");
-					const cells = { rl, rh, cl, ch };
-					for (const [k, c] of Object.entries(cells)) {
-						if (!c || Number(c.user_count) < 15 || !Number(c.rho)) {
-							return { pass: false, verdict: "NONE", detail: `cell ${k} missing or too small (${c ? c.user_count : 0} users)` };
-						}
-					}
-					const dd = (Number(rl.rho) / Number(rh.rho)) / (Number(cl.rho) / Number(ch.rho));
-					const inBand = dd >= 0.2 && dd <= 0.42;
-					const inBuffer = dd >= 0.15 && dd <= 0.5;
-					return {
-						pass: inBuffer,
-						verdict: inBand ? "NAILED" : inBuffer ? "STRONG" : "INVERSE",
-						detail: `DD = (${Number(rl.rho).toFixed(4)}/${Number(rh.rho).toFixed(4)}) ÷ (${Number(cl.rho).toFixed(4)}/${Number(ch.rho).toFixed(4)}) = ${dd.toFixed(4)} (keep-rate knob 0.30, band [0.2, 0.42]; cells rl=${rl.user_count} rh=${rh.user_count} cl=${cl.user_count} ch=${ch.user_count})`,
-					};
-				},
+				select: { a: { where: { grp: "all" } } },
+				// (0.18 + 0.4 × (1 − 0.18 − 0.16)) / 0.18 from the declared channel weights
+				expect: { metric: "a.share_lift", op: "between", target: band(SHRED_SHARE_LIFT) },
+				minCohort: 800,
 			},
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE},
-tot AS (SELECT uid, count(*) AS n, min(t) AS first_t,
-  count(*) FILTER (WHERE t < TIMESTAMP '${D14_TS}') AS pre,
-  count(*) FILTER (WHERE t >= TIMESTAMP '${D14_TS}') AS post
-  FROM ev GROUP BY 1),
-j AS (SELECT CASE WHEN t.n < ${RESOLVER_EVENT_THRESHOLD} THEN 'lo' ELSE 'hi' END AS arm, t.pre, t.post
-  FROM ${US} u JOIN tot t ON t.uid = u.distinct_id::VARCHAR
-  WHERE t.first_t < TIMESTAMP '${D2_TS}' AND u.segment = 'casual')
-SELECT arm AS grp, count(*)::BIGINT AS user_count, sum(post)::DOUBLE / nullif(sum(pre), 0) AS rho
-FROM j GROUP BY 1`,
+s AS (SELECT uid, t AS t0, date_trunc('week', t) AS wk, acquisition_channel AS ch FROM ev WHERE event = 'account created'),
+b AS (SELECT DISTINCT s.uid FROM s JOIN ev e ON e.uid = s.uid AND e.event = 'subscription purchased'),
+w AS (SELECT wk,
+  count(*) FILTER (WHERE ch = 'paid_social') AS sn, count(b.uid) FILTER (WHERE ch = 'paid_social') AS sb,
+  count(*) FILTER (WHERE ch <> 'paid_social') AS onn, count(b.uid) FILTER (WHERE ch <> 'paid_social') AS ob
+  FROM s LEFT JOIN b ON b.uid = s.uid GROUP BY 1)
+-- signup-week standardized: time to purchase depends on signup date and paid
+-- social is concentrated in Summer Shred weeks, so compare within each week
+SELECT 'all' AS grp, LEAST(sum(sn), sum(onn))::BIGINT AS user_count,
+ sum(sb)::DOUBLE / sum(sn * ob::DOUBLE / nullif(onn, 0)) AS std_ratio
+FROM w WHERE onn > 0`,
 				},
-				select: { l: { where: { grp: "lo" } }, h: { where: { grp: "hi" } } },
-				// placebo: no hook fires on casual — volume split alone must stay
-				// near 1 (measured 1.22 at iter scale), far from the 0.3 keep-rate
-				expect: { metric: "l.rho / h.rho", op: "between", target: [0.7, 1.8] },
-				minCohort: 150,
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.std_ratio", op: "<=", target: 1 - PAID_SOCIAL_NO_BUY, floor: 1 - PAID_SOCIAL_NO_BUY / 2 },
+				minCohort: 500,
 			},
 		],
 	},
 	{
-		id: "H6-coach-session-quality",
+		id: "H6-first-week-habit",
 		hook: "H6",
-		archetype: "cohort-prop-scale",
-		narrative: `every coach-session event gets satisfaction_score redrawn uniform [${COACH_SESSION_SATISFACTION_MIN}, ${COACH_SESSION_SATISFACTION_MAX}] (fixed to 1 decimal — avg AND median 4.5, both quantile reads of the uniform). The redraw is unconditional on all coach sessions, so purity is exact: a single sub-${COACH_SESSION_SATISFACTION_MIN} score is a hook bug. No ratio-vs-baseline assertion: the declared weighNumRange(1, 5, 0.6, 3) baseline is a 3-value seeded pool (the 4th arg is POOL SIZE, not mode), so the organic mean is not derivable from the schema`,
+		archetype: "retention-divergence",
+		narrative: `New members who log fewer than ${HABIT_MIN_WORKOUTS} workouts in their first ${HABIT_DAYS} days are at risk: ${HABIT_CHURN_SHARE * 100}% of them go completely dark after day ${HABIT_CHURN_AFTER_DAYS}. Classification uses only first-week activity, so the return window never leaks into the segment. Day-28 retention (any event in days 28-34 after signup, signups at least 35 days before the window end) is at least 1/(1−${HABIT_CHURN_SHARE}) = ${1 / (1 - HABIT_CHURN_SHARE)}x higher for habit formers; organic selection (busier people retain better anyway) can only push it higher, so the knob is a floor and the read grades STRONG when selection adds lift.`,
+		mixpanelReport: { type: "Retention", birth: "account created", return: "any event", breakdown: "cohort: ≥3 workout completed in first 7 days" },
 		assertions: [
 			{
 				breakdown: {
 					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT count(*) FILTER (WHERE satisfaction_score < ${COACH_SESSION_SATISFACTION_MIN}) AS below_min,
- count(*) AS scores, count(DISTINCT uid) AS user_count
-FROM ev WHERE event = 'coach session'`,
+					sql: `WITH ${ID_CTE},
+s AS (SELECT uid, t AS t0 FROM ev WHERE event = 'account created' AND t < TIMESTAMP '${TS(DATASET_END)}' - INTERVAL 35 DAY),
+f AS (SELECT s.uid,
+  count(*) FILTER (WHERE e.event = 'workout completed' AND e.t < s.t0 + INTERVAL ${HABIT_DAYS} DAY) AS early,
+  count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 28 DAY AND e.t < s.t0 + INTERVAL 35 DAY) AS d28
+  FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
+SELECT CASE WHEN early >= ${HABIT_MIN_WORKOUTS} THEN 'habit' ELSE 'low' END AS grp, count(*) AS user_count,
+ avg((d28 > 0)::INT) AS d28_retention
+FROM f GROUP BY 1`,
 				},
-				assert: (rows) => {
-					const r = (rows || [])[0];
-					if (!r || Number(r.scores) === 0) return { pass: false, verdict: "NONE", detail: "no coach sessions" };
-					const clean = Number(r.below_min) === 0;
-					return {
-						pass: clean,
-						verdict: clean ? "NAILED" : "INVERSE",
-						detail: `below-${COACH_SESSION_SATISFACTION_MIN} scores=${r.below_min} of ${r.scores} coach sessions (must be 0)`,
-					};
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT 'all' AS grp, count(*) AS event_count, count(DISTINCT uid) AS user_count,
- avg(satisfaction_score) AS avg_sat, median(satisfaction_score) AS med_sat
-FROM ev WHERE event = 'coach session'`,
-				},
-				select: { x: { where: { grp: "all" } } },
-				expect: { metric: "x.avg_sat", op: "between", target: [4.4, 4.6] },
-				minCohort: 200,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT 'all' AS grp, count(*) AS event_count, count(DISTINCT uid) AS user_count,
- avg(satisfaction_score) AS avg_sat, median(satisfaction_score) AS med_sat
-FROM ev WHERE event = 'coach session'`,
-				},
-				select: { x: { where: { grp: "all" } } },
-				expect: { metric: "x.med_sat", op: "between", target: [4.4, 4.6] },
-				minCohort: 200,
-			},
-		],
-	},
-	{
-		id: "H7-coach-profile-enrichment",
-		hook: "H7",
-		archetype: "cohort-prop-scale",
-		narrative: `user hook: coach-segment users get total_workouts uniform [${COACH_TOTAL_WORKOUTS_MIN}, ${COACH_TOTAL_WORKOUTS_MAX}] (avg 350); every other segment keeps the declared default 0. Deterministic ranges — violations are hook bugs, not noise. (The hook also seeds streak_days 60-365, but H3 overwrites streak_days for ≥2-workout users, so total_workouts is the durable signature — see the H3 story for the streak_days contract)`,
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `SELECT CASE WHEN segment = 'coach' THEN 'coach' ELSE 'other' END AS grp,
- count(*) AS user_count, min(total_workouts) AS min_tw, max(total_workouts) AS max_tw, avg(total_workouts) AS avg_tw
-FROM ${US} GROUP BY 1`,
-				},
-				assert: (rows) => {
-					const by = Object.fromEntries((rows || []).map(r => [r.grp, r]));
-					const c = by.coach, o = by.other;
-					if (!c || !o) return { pass: false, verdict: "NONE", detail: `missing segment rows (${(rows || []).map(r => r.grp).join(",")})` };
-					const bad = [];
-					if (Number(c.min_tw) < COACH_TOTAL_WORKOUTS_MIN || Number(c.max_tw) > COACH_TOTAL_WORKOUTS_MAX) bad.push(`coach total_workouts [${c.min_tw}, ${c.max_tw}] outside [${COACH_TOTAL_WORKOUTS_MIN}, ${COACH_TOTAL_WORKOUTS_MAX}]`);
-					if (Number(o.min_tw) !== 0 || Number(o.max_tw) !== 0) bad.push(`non-coach total_workouts [${o.min_tw}, ${o.max_tw}] not pinned to 0`);
-					return {
-						pass: bad.length === 0,
-						verdict: bad.length === 0 ? "NAILED" : "INVERSE",
-						detail: bad.length ? bad.join("; ") : `ranges exact: coach [${c.min_tw}, ${c.max_tw}], non-coach pinned 0 (${c.user_count}/${o.user_count} users)`,
-					};
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `SELECT CASE WHEN segment = 'coach' THEN 'coach' ELSE 'other' END AS grp,
- count(*) AS user_count, avg(total_workouts) AS avg_tw
-FROM ${US} GROUP BY 1`,
-				},
-				select: { c: { where: { grp: "coach" } } },
-				// uniform [200, 500] → 350
-				expect: { metric: "c.avg_tw", op: "between", target: [330, 370] },
+				select: { h: { where: { grp: "habit" } }, l: { where: { grp: "low" } } },
+				expect: { metric: "h.d28_retention / l.d28_retention", op: ">=", target: 1 / (1 - HABIT_CHURN_SHARE), floor: 0.9 / (1 - HABIT_CHURN_SHARE) },
 				minCohort: 400,
 			},
 		],
 	},
 	{
-		id: "H8-annual-follow-through",
-		hook: "H8",
+		id: "H7-team-vs-solo-challenges",
+		hook: "H7",
 		archetype: "funnel-conversion-by-segment",
-		narrative: `free/monthly users have a ${ANNUAL_FUNNEL_FREE_DROP_LIKELIHOOD}% chance to lose ALL progress-checked events (per-user cliff; annual/family untouched). Tier is assigned BY segment in the user hook, and personas' eventMultiplier/conversionModifier drive volume — so any raw cross-tier comparison is confounded by composition BY CONSTRUCTION. Both estimators are SEGMENT-STANDARDIZED over the two segments that contain both an affected and a control tier (athlete: monthly vs annual+family; social: free+monthly vs annual). Within a segment, tier is an independent pickone draw, so the natural-zero baseline and volume distribution are tier-blind: (z_aff − z_ctl)/(1 − z_ctl) reads the 0.30 knob, and SURVIVING affected users' progress-checked counts must match controls (ratio ≈ 1.0 — per-user cliff, not per-event thinning; thinning would read ~0.7 in every segment). H10's over-drop preserves progress checked and H5 only touches resolvers, so no other hook moves this event for these segments. The doc's funnel-conversion read (annual 63% vs free 45%) is the analyst-facing composite of this cliff plus persona conversionModifier — deliberately not machine-asserted, since no knob-derived band exists for the composite`,
+		narrative: `Team challenges finish at ${TEAM_CONV}% per challenge and solo challenges at ${SOLO_CONV}% (two declared funnels with challenge_format props). Every challenge carries a challenge_id, so a totals funnel that holds challenge_id constant measures per-challenge completion without crediting one challenge's finish to another. Late joins that would finish after the window end trim both rates slightly.`,
+		mixpanelReport: { type: "Funnels", steps: ["challenge joined", "challenge completed"], counting: "totals", holdPropertyConstant: "challenge_id", breakdown: "challenge_format" },
 		assertions: [
 			{
 				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-pc AS (SELECT uid, count(*) AS ct FROM ev WHERE event = 'progress checked' GROUP BY 1),
-u AS (SELECT u.distinct_id::VARCHAR AS uid, u.segment AS seg, u.subscription_tier AS tier
-  FROM ${US} u WHERE u.segment IN ('athlete', 'social')),
-j AS (SELECT u.seg, CASE WHEN u.tier IN ('annual', 'family') THEN 'ctl' ELSE 'aff' END AS arm, coalesce(p.ct, 0) AS ct
-  FROM u LEFT JOIN pc p ON p.uid = u.uid),
-seg AS (SELECT seg,
-  count(*) FILTER (WHERE arm = 'aff') AS n_aff, count(*) FILTER (WHERE arm = 'ctl') AS n_ctl,
-  count(*) FILTER (WHERE arm = 'aff' AND ct = 0)::DOUBLE / nullif(count(*) FILTER (WHERE arm = 'aff'), 0) AS z_aff,
-  count(*) FILTER (WHERE arm = 'ctl' AND ct = 0)::DOUBLE / nullif(count(*) FILTER (WHERE arm = 'ctl'), 0) AS z_ctl
-  FROM j GROUP BY 1)
-SELECT 'all' AS grp, sum(n_aff + n_ctl)::BIGINT AS user_count,
- sum(n_aff * (z_aff - z_ctl) / nullif(1 - z_ctl, 0)) / sum(n_aff) AS cliff_share
-FROM seg WHERE n_ctl >= 25`,
+					type: "funnelFrequency",
+					steps: [{ event: "challenge joined", where: { prop: "challenge_format", op: "eq", value: "team" } }, { event: "challenge completed", where: { prop: "challenge_format", op: "eq", value: "team" } }],
+					breakdownByFrequencyOf: "challenge joined",
+					countMode: "totals",
+					holdPropertyConstant: "challenge_id",
+					conversionWindowMs: 30 * DAY_MS,
 				},
-				select: { all: { where: { grp: "all" } } },
-				expect: { metric: "all.cliff_share", op: "between", target: [0.22, 0.38] },
-				minCohort: 500,
+				select: { c: { where: { step_index: 1 } }, e: { where: { step_index: 0 } } },
+				expect: { metric: "c.conversions / e.conversions", op: "between", target: band(TEAM_CONV / 100) },
 			},
 			{
 				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-pc AS (SELECT uid, count(*) AS ct FROM ev WHERE event = 'progress checked' GROUP BY 1),
-surv AS (SELECT u.segment AS seg, CASE WHEN u.subscription_tier IN ('annual', 'family') THEN 'ctl' ELSE 'aff' END AS arm, p.ct
-  FROM ${US} u JOIN pc p ON p.uid = u.distinct_id::VARCHAR
-  WHERE u.segment IN ('athlete', 'social')),
-g AS (SELECT seg,
-  avg(ct) FILTER (WHERE arm = 'aff') AS aff_avg, count(*) FILTER (WHERE arm = 'aff') AS aff_n,
-  avg(ct) FILTER (WHERE arm = 'ctl') AS ctl_avg, count(*) FILTER (WHERE arm = 'ctl') AS ctl_n
-  FROM surv GROUP BY 1)
-SELECT 'all' AS grp, sum(aff_n + ctl_n)::BIGINT AS user_count,
- sum(aff_n * aff_avg / ctl_avg) / sum(aff_n) AS std_ratio
-FROM g WHERE ctl_n >= 25 AND aff_avg IS NOT NULL AND ctl_avg IS NOT NULL`,
+					type: "funnelFrequency",
+					steps: [{ event: "challenge joined", where: { prop: "challenge_format", op: "eq", value: "solo" } }, { event: "challenge completed", where: { prop: "challenge_format", op: "eq", value: "solo" } }],
+					breakdownByFrequencyOf: "challenge joined",
+					countMode: "totals",
+					holdPropertyConstant: "challenge_id",
+					conversionWindowMs: 30 * DAY_MS,
 				},
-				select: { all: { where: { grp: "all" } } },
-				// per-user cliff, not thinning: survivors untouched → ratio ≈ 1.0
-				expect: { metric: "all.std_ratio", op: "between", target: [0.85, 1.15] },
-				minCohort: 500,
+				select: { c: { where: { step_index: 1 } }, e: { where: { step_index: 0 } } },
+				expect: { metric: "c.conversions / e.conversions", op: "between", target: band(SOLO_CONV / 100) },
 			},
 		],
 	},
 	{
-		id: "H9-workout-loop-ttc",
-		hook: "H9",
-		archetype: "funnel-ttc-by-segment",
-		narrative: `funnel-post scales every funnel instance's inter-step gaps by tier: annual/family × ${TTC_ANNUAL_FACTOR}, free × ${TTC_FREE_FACTOR}, monthly = 1.0 control. Measured on the Workout Loop through the Mixpanel-aligned emulator at a ${Math.round(48 * TTC_FREE_FACTOR)}h conversion window = the funnel's 48h generative window × the max stretch ${TTC_FREE_FACTOR} (the window must cover the stretched support or censoring dilutes the free tier — the ai-platform H9 lesson). Every instance of an affected user is scaled (the hook fires per funnel-post record), but the emulator's greedy matching can pair steps across neighboring instances of high-frequency events, diluting the measured ratio toward 1 — bands assume ≥25% of the effect survives on the slow side and cap attenuation at ~90% on the fast side`,
-		assertions: [
-			{
-				breakdown: {
-					type: "timeToConvert",
-					steps: ["workout planned", "workout completed", "progress checked"],
-					breakdownByUserProperty: "subscription_tier",
-					// 60h = 48h generative window × 1.25 max stretch
-					conversionWindowMs: Math.round(48 * TTC_FREE_FACTOR * 3600 * 1000),
-				},
-				select: { f: { where: { segment_value: "free" } }, m: { where: { segment_value: "monthly" } } },
-				expect: { metric: "f.median_ttc_ms / m.median_ttc_ms", op: "between", target: [1.05, 1.35] },
-				minCohort: 100,
-			},
-			{
-				breakdown: {
-					type: "timeToConvert",
-					steps: ["workout planned", "workout completed", "progress checked"],
-					breakdownByUserProperty: "subscription_tier",
-					conversionWindowMs: Math.round(48 * TTC_FREE_FACTOR * 3600 * 1000),
-				},
-				select: { a: { where: { segment_value: "annual" } }, m: { where: { segment_value: "monthly" } } },
-				expect: { metric: "a.median_ttc_ms / m.median_ttc_ms", op: "between", target: [0.7, 0.97] },
-				minCohort: 100,
-			},
-		],
-	},
-	{
-		id: "H10-workout-magic-number",
-		hook: "H10",
+		id: "H8-push-fatigue",
+		hook: "H8",
 		archetype: "frequency-sweet-spot",
-		narrative: `sweet ${WORKOUT_SWEET_MIN}-${WORKOUT_SWEET_MAX} workouts → ALL the user's workout duration_minutes × ${WORKOUT_DURATION_BOOST}; over ${WORKOUT_OVER_THRESHOLD}+ → ${WORKOUT_OVER_DROP_LIKELIHOOD}% of post-day-${WORKOUT_OVER_CUTOFF_DAYS} non-workout non-progress events dropped. Cohort counts are output-exact for every user (H10 runs after H5's resolver thinning and preserves workouts itself). The duration read restricts to PRE-day-${AI_LAUNCH_DAY} workouts, where H2's ai_assisted ×${AI_DURATION_MULT} never fired — the AVG ratio reads the ${WORKOUT_DURATION_BOOST} knob exactly (whole-cohort scaling: E[kX]/E[X] = k for any pool). Median deliberately NOT used: duration_minutes draws from a discrete weighNumRange atom pool, so the scaled cohort's median snaps to an atom quotient, not the knob (iter-scale median read 1.476 while avg read 1.395). The over-drop read is a within-user-normalized double ratio: (over post-d30/pre-d30 non-preserved volume) ÷ (sweet same) = 0.35 × τ, where τ captures residual timing composition (over-users' longer lifetimes skew τ ≥ 1) — band [0.25, 0.6]`,
+		narrative: `Members who receive ${PUSH_FATIGUE_THRESHOLD}+ notifications in the window stop opening them: ${PUSH_FATIGUE_FLIP * 100}% of their would-be opens go unopened, so their open rate is ${(1 - PUSH_FATIGUE_FLIP).toFixed(1)}x that of lighter recipients. Opens are an independent per-notification draw (3 in 4 organically), and the threshold is applied to the final notification count, so the cohort split is exact and the ratio reads the knob.`,
+		mixpanelReport: { type: "Insights", event: "notification received", measure: "share with opened = true", breakdown: `cohort: ${PUSH_FATIGUE_THRESHOLD}+ notification received` },
 		assertions: [
 			{
 				breakdown: {
 					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${WORKOUT_CTE},
-coh AS (SELECT uid, CASE WHEN w BETWEEN ${WORKOUT_SWEET_MIN} AND ${WORKOUT_SWEET_MAX} THEN 'sweet'
-  WHEN w BETWEEN ${STREAK_MIN_WORKOUTS} AND ${WORKOUT_SWEET_MIN - 1} THEN 'low' END AS grp FROM wc)
-SELECT c.grp, count(DISTINCT c.uid) AS user_count, count(*) AS event_count, avg(e.duration_minutes) AS avg_dur
-FROM coh c JOIN ev e ON e.uid = c.uid AND e.event = 'workout completed' AND e.t <= TIMESTAMP '${AI_LAUNCH_TS}'
-WHERE c.grp IS NOT NULL GROUP BY 1`,
+					sql: `WITH ${ID_CTE},
+n AS (SELECT uid, count(*) AS c, avg(opened::INT) AS open_rate, sum(opened::INT) AS opens FROM ev WHERE event = 'notification received' GROUP BY 1)
+SELECT CASE WHEN c >= ${PUSH_FATIGUE_THRESHOLD} THEN 'heavy' ELSE 'light' END AS grp, count(*) AS user_count,
+ sum(opens)::DOUBLE / sum(c) AS open_rate
+FROM n GROUP BY 1`,
 				},
-				select: { s: { where: { grp: "sweet" } }, l: { where: { grp: "low" } } },
-				expect: { metric: "s.avg_dur / l.avg_dur", op: "between", target: [1.25, 1.45] },
-				minCohort: 40,
+				select: { h: { where: { grp: "heavy" } }, l: { where: { grp: "light" } } },
+				expect: { metric: "h.open_rate / l.open_rate", op: "between", target: band(1 - PUSH_FATIGUE_FLIP) },
+				minCohort: 1000,
 			},
 			{
 				breakdown: {
 					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${WORKOUT_CTE},
-coh AS (SELECT uid, CASE WHEN w >= ${WORKOUT_OVER_THRESHOLD} THEN 'over'
-  WHEN w BETWEEN ${WORKOUT_SWEET_MIN} AND ${WORKOUT_SWEET_MAX} THEN 'sweet' END AS grp FROM wc WHERE w >= ${WORKOUT_SWEET_MIN}),
-per AS (SELECT c.grp, c.uid,
-  count(*) FILTER (WHERE e.event NOT IN ('workout completed', 'progress checked') AND e.t < TIMESTAMP '${D30_TS}') AS pre,
-  count(*) FILTER (WHERE e.event NOT IN ('workout completed', 'progress checked') AND e.t >= TIMESTAMP '${D30_TS}') AS post
-  FROM coh c JOIN ev e ON e.uid = c.uid GROUP BY 1, 2)
-SELECT grp, count(*) AS user_count, sum(post)::DOUBLE / nullif(sum(pre), 0) AS post_pre
-FROM per GROUP BY 1`,
+					sql: `WITH ${ID_CTE},
+n AS (SELECT uid, count(*) AS c, sum(opened::INT) AS opens FROM ev WHERE event = 'notification received' GROUP BY 1)
+SELECT 'light' AS grp, count(*) AS user_count, sum(opens)::DOUBLE / sum(c) AS open_rate FROM n WHERE c < ${PUSH_FATIGUE_THRESHOLD}`,
 				},
-				select: { o: { where: { grp: "over" } }, s: { where: { grp: "sweet" } } },
-				expect: { metric: "o.post_pre / s.post_pre", op: "between", target: [0.25, 0.6] },
-				minCohort: 40,
+				select: { l: { where: { grp: "light" } } },
+				// untouched control = the declared pool [true, true, true, false]
+				expect: { metric: "l.open_rate", op: "between", target: band(0.75) },
+				minCohort: 1000,
+			},
+		],
+	},
+	{
+		id: "H9-fall-reset-program",
+		hook: "H9",
+		archetype: "temporal-inflection",
+		narrative: `The Fall Reset program (${FALL_RESET_START.slice(0, 10)}, ${FALL_RESET_DAYS} days) is a world event that multiplies workout planning and completion by ${FALL_RESET_MULT}. App opens are untouched, so (workouts / app opens) during the program vs the ${FALL_RESET_DAYS} days before reads the multiplier while cancelling weekday mix and the overall trend.`,
+		mixpanelReport: { type: "Insights", events: ["workout completed", "app opened"], measure: "total", chart: "daily line, formula A/B" },
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+w AS (SELECT (t >= TIMESTAMP '${TS(FALL_RESET_START)}') AS prog, event, uid FROM ev
+  WHERE event IN ('workout completed', 'app opened') AND t >= TIMESTAMP '${RESET_BASE_FROM}' AND t < TIMESTAMP '${RESET_END}'),
+g AS (SELECT prog, count(*) FILTER (WHERE event = 'workout completed')::DOUBLE / count(*) FILTER (WHERE event = 'app opened') AS r, count(DISTINCT uid) AS users FROM w GROUP BY 1)
+SELECT 'all' AS grp, min(users) AS user_count, max(r) FILTER (WHERE prog) / max(r) FILTER (WHERE NOT prog) AS did FROM g`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.did", op: "between", target: band(FALL_RESET_MULT) },
+				minCohort: 2000,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+w AS (SELECT (t >= TIMESTAMP '${TS(FALL_RESET_START)}') AS prog, event, uid FROM ev
+  WHERE event IN ('workout planned', 'app opened') AND t >= TIMESTAMP '${RESET_BASE_FROM}' AND t < TIMESTAMP '${RESET_END}'),
+g AS (SELECT prog, count(*) FILTER (WHERE event = 'workout planned')::DOUBLE / count(*) FILTER (WHERE event = 'app opened') AS r, count(DISTINCT uid) AS users FROM w GROUP BY 1)
+SELECT 'all' AS grp, min(users) AS user_count, max(r) FILTER (WHERE prog) / max(r) FILTER (WHERE NOT prog) AS did FROM g`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.did", op: "between", target: band(FALL_RESET_MULT) },
+				minCohort: 2000,
 			},
 		],
 	},
 ];
+
 
 export default config;
