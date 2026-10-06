@@ -1047,6 +1047,33 @@ describe('generation', () => {
 		expect(user).not.toHaveProperty('sessionIds');
 	});
 
+	test('person: created is a UTC instant on the requested day, drawn from the hour weights', () => {
+		initChance('born-instant');
+		const start = Date.UTC(2025, 9, 15) / 1000;
+		const end = Date.UTC(2025, 10, 20, 23, 59, 59) / 1000;
+		const onlyHour13 = Array.from({ length: 24 }, (_, h) => (h === 13 ? 1 : 0));
+		for (let k = 1; k <= 37; k++) {
+			const user = person('u', k, false, false, false, false, end, undefined, start, onlyHour13);
+			expect(user.created).toMatch(/^\d{4}-\d{2}-\d{2}T13:\d{2}:\d{2}\.000Z$/);
+			// k = 1 is the window's last UTC day; k = 37 is its first.
+			const expectedDay = new Date((Math.floor(end / 86400) - (k - 1)) * 86400 * 1000).toISOString().slice(0, 10);
+			expect(user.created.slice(0, 10)).toBe(expectedDay);
+			expect(Date.parse(user.created) / 1000).toBeGreaterThanOrEqual(start);
+		}
+	});
+
+	test('person: created never precedes the window start or passes the window end', () => {
+		initChance('born-instant-clamp');
+		const start = Date.UTC(2025, 9, 15, 18, 0, 0) / 1000; // window starts mid-day
+		const end = Date.UTC(2025, 9, 20, 6, 0, 0) / 1000; // and ends mid-day
+		for (let i = 0; i < 200; i++) {
+			const firstDay = person('u', 6, false, false, false, false, end, undefined, start, null);
+			expect(Date.parse(firstDay.created) / 1000).toBeGreaterThanOrEqual(start);
+			const lastDay = person('u', 1, false, false, false, false, end, undefined, start, null);
+			expect(Date.parse(lastDay.created) / 1000).toBeLessThanOrEqual(end);
+		}
+	});
+
 	test('person: anon', () => {
 		const numDays = 30;
 		const user = person('uuid-123', numDays, true);

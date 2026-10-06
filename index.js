@@ -374,10 +374,10 @@ async function generateAdSpendData(context) {
 
 	for (let day = 0; day < numDays; day++) {
 		const dayUnix = Math.min(
-			dayjs.unix(context.FIXED_BEGIN).add(day, 'day').unix(),
+			dayjs.unix(context.FIXED_BEGIN).utc().add(day, 'day').unix(),
 			context.FIXED_NOW
 		);
-		const targetDay = dayjs.unix(dayUnix).toISOString();
+		const targetDay = dayjs.unix(dayUnix).utc().toISOString();
 		const adSpendEvents = await makeAdSpend(context, targetDay);
 
 		if (adSpendEvents.length > 0) {
