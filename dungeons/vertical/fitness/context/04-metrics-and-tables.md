@@ -38,9 +38,9 @@ Daily paid-media cost by channel, from the ad platforms' billing exports.
 | `date` | DATE | UTC day | Spend day. |
 | `acquisition_channel` | STRING | — | `paid_social`, `paid_search`, or `app_store_ads`. Matches `acquisition_channel` on `account created`. |
 | `spend_usd` | FLOAT | USD | Media spend billed for the day. All three channels are bought per install (CPI). |
-| `platform_reported_installs` | FLOAT | count | Installs the ad platform claims for the day. Platforms use their own attribution and usually claim more than Mixpanel records. |
-| `clicks` | FLOAT | count | Ad clicks reported by the platform. |
-| `impressions` | FLOAT | count | Ad impressions reported by the platform. |
+| `platform_reported_installs` | INTEGER | count | Installs the ad platform claims for the day. Platforms use their own attribution and usually claim more than Mixpanel records. |
+| `clicks` | INTEGER | count | Ad clicks reported by the platform. |
+| `impressions` | INTEGER | count | Ad impressions reported by the platform. |
 
 Caveats: organic and referral channels have no spend and are not in this table. Use Mixpanel signups, not `platform_reported_installs`, for CAC.
 
@@ -52,11 +52,11 @@ Daily health of wearable workout sync, by device type, from the integration team
 |---|---|---|---|
 | `date` | DATE | UTC day | Day. |
 | `wearable_type` | STRING | — | `smartwatch`, `fitness_band`, or `chest_strap`. Matches `wearable_type` on `workout completed`. |
-| `synced_workouts` | FLOAT | count | Wearable-tracked workouts that synced successfully that day. |
+| `synced_workouts` | INTEGER | count | Wearable-tracked workouts that synced successfully that day. |
 | `sync_error_rate` | FLOAT | share 0-1 | Share of sync attempts that failed. |
-| `sync_requests` | FLOAT | count | Sync attempts made (successful plus failed). |
+| `sync_requests` | INTEGER | count | Sync attempts made (successful plus failed). |
 | `partner_api_status` | STRING | — | Daily sync status for the device type: `operational` or `major_outage`. Combines the partner status feed with our own pipeline monitoring. |
-| `p95_sync_latency_ms` | FLOAT | milliseconds | 95th-percentile time from workout end to sync. |
+| `p95_sync_latency_ms` | INTEGER | milliseconds | 95th-percentile time from workout end to sync. |
 
 Caveats: a workout that never synced is not in Mixpanel and is not in `synced_workouts`. Phone-tracked and manual workouts are not in this table.
 
@@ -68,7 +68,7 @@ Daily new Plus subscriptions and bookings by plan, from the billing system.
 |---|---|---|---|
 | `date` | DATE | UTC day | Purchase day. |
 | `plan` | STRING | — | `monthly` or `annual`. Matches `plan` on `subscription purchased`. |
-| `new_subscriptions` | FLOAT | count | New Plus purchases that day. |
+| `new_subscriptions` | INTEGER | count | New Plus purchases that day. |
 | `list_price_usd` | FLOAT | USD | List price for a new purchase of this plan on this day. |
 | `gross_bookings_usd` | FLOAT | USD | `new_subscriptions` × `list_price_usd`. |
 | `store_fees_usd` | FLOAT | USD | App-store fees (15% of gross). |

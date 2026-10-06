@@ -22,11 +22,11 @@ New members go through onboarding once, right after they install. These four eve
 
 | Event | Meaning | Properties |
 |---|---|---|
-| `account created` | The member creates an account. First event of every new member and the moment their device is linked to their `user_id`. | `acquisition_channel`: how the member found us (`organic`, `referral`, `paid_social`, `paid_search`, `app_store_ads`); same value as the profile property. |
+| `account created` | The member creates an account. The first product event of every new member and the moment their device is linked to their `user_id`. | `acquisition_channel`: how the member found us (`organic`, `referral`, `paid_social`, `paid_search`, `app_store_ads`); same value as the profile property. |
 | `goal quiz completed` | The member answers the goals survey. | `primary_goal` (same as profile); `days_per_week_target` (2-5): how many days a week they want to train. |
 | `plan generated` | The app builds the member's first training plan. | `plan_length_weeks` (4, 6, 8, 12); `workout_category`: the plan's main focus. |
 | `starter workout completed` | The member finishes the short guided starter session that ends onboarding. | `duration_minutes` (8-15). |
-| `$experiment_started` | Mixpanel experiment exposure, sent when a new member enters the Guided First Week test (from 2026-07-01). It fires just before the member's `account created`. | `Experiment name` = `Guided First Week`; `Variant name` = `Control` or `Guided Plan`. |
+| `$experiment_started` | Mixpanel experiment exposure, sent when a new member enters the Guided First Week test (from 2026-07-01). It is logged one second before the member's `account created` and already carries their `user_id`. | `Experiment name` = `Guided First Week`; `Variant name` = `Control` or `Guided Plan`. |
 
 ## Training
 
@@ -53,7 +53,7 @@ New members go through onboarding once, right after they install. These four eve
 | Event | Meaning | Properties |
 |---|---|---|
 | `paywall viewed` | A free member sees the Plus paywall. | `paywall_trigger` (`workout_library`, `advanced_plans`, `coach_teaser` (the Stride Coach teaser, shown from 2026-08-12), `challenge_limit`, `settings`); `plan`: the plan highlighted on the paywall. |
-| `trial started` | A new member starts their one 7-day Plus trial. | `plan` (`monthly` or `annual`): the plan the trial converts to; `trial_days` (7). |
+| `trial started` | A trial-eligible member starts their one 7-day Plus trial. | `plan` (`monthly` or `annual`): the plan the trial converts to; `trial_days` (7). |
 | `subscription purchased` | The member buys Plus. One per member. Price is **not** tracked here; see `subscription_billing_daily`. | `plan` (`monthly` or `annual`); `payment_method` (`apple_pay`, `google_pay`, `card`). |
 
 ## Engagement and lifecycle
@@ -78,7 +78,7 @@ New members go through onboarding once, right after they install. These four eve
 | `acquisition_channel` | Channel at signup (for members who joined before the window, the channel they originally came from). |
 | `wearable_type` | `smartwatch`, `fitness_band`, `chest_strap`, or `none`. |
 | `subscription_tier` | Current plan: `free`, `monthly`, `annual`. |
-| `trial_eligible` | `true` for members who joined in the window (they get one trial); `false` for earlier members. |
+| `trial_eligible` | `true` for members whose one trial was still available or in progress on June 4: everyone who joined in the window, plus a small number who joined in the weeks just before it. `false` for earlier members, who already used their trial. |
 | `Platform` | `ios` or `android`. |
 | `Experiment: Guided First Week` | `Control` or `Guided Plan` for members enrolled in the onboarding test; empty for everyone else. |
 | `created` | Signup time for members who joined in the window; empty for earlier members. |
@@ -95,7 +95,7 @@ One row per change in a member's self-reported fitness level: `distinct_id`, `fi
 |---|---|---|
 | Onboarding | `account created` → `goal quiz completed` → `plan generated` → `starter workout completed` | New members only. The business reads it with a 7-day conversion window. |
 | Workout loop | `workout planned` → `workout completed` → `progress checked` | The core habit loop. Members repeat it many times. |
-| Upgrade (trial) | `paywall viewed` → `trial started` → `subscription purchased` | New members. |
-| Upgrade (direct) | `paywall viewed` → `subscription purchased` | Members who joined before the window. |
+| Upgrade (trial) | `paywall viewed` → `trial started` → `subscription purchased` | Trial-eligible members (`trial_eligible = true`): mostly new members. |
+| Upgrade (direct) | `paywall viewed` → `subscription purchased` | Members who already used their trial (`trial_eligible = false`). |
 | Challenge completion | `challenge joined` → `challenge completed` | Members join many challenges; hold `challenge_id` constant to measure each challenge on its own. |
 | Coaching | `coach session` → `workout planned` → `workout completed` | |

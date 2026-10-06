@@ -16,8 +16,10 @@ SET VARIABLE data_prefix = COALESCE(getvariable('data_prefix'), 'data/verify-fit
 -- ─────────────────────────────────────────────────────────────────────────
 -- Identity: new members sign up with "account created" (the auth event, which
 -- carries both user_id and device_id). A device resolves to the user seen with
--- it on any event that carries both ids, the way Mixpanel stitches. Every
--- remaining event already carries user_id.
+-- it on any event that carries both ids, the way Mixpanel stitches. In this
+-- data every event already carries user_id (there is no anonymous pre-signup
+-- activity; an enrolled member's $experiment_started fires 1 s before
+-- "account created" and already carries user_id), so the stitch is a no-op.
 
 CREATE OR REPLACE TEMP TABLE raw_events AS
 SELECT * FROM read_json_auto(getvariable('data_prefix') || '-EVENTS*.json*', sample_size=-1, union_by_name=true);
@@ -223,7 +225,7 @@ FROM ev WHERE event = 'workout completed' AND subscription_tier <> 'free' AND t 
 -- adoption by member: Plus members with 10+ workouts from Sep 2, by their own Stride Coach share
 WITH m AS (SELECT uid, avg((coaching_mode = 'ai_coach')::INT) AS s FROM ev
   WHERE event = 'workout completed' AND subscription_tier <> 'free' AND t >= TIMESTAMP '2026-09-02' GROUP BY 1 HAVING count(*) >= 10)
-SELECT CASE WHEN s = 0 THEN 'never' WHEN s < 0.5 THEN 'under half' ELSE 'half or more' END AS member_use, count(*) AS members,
+SELECT CASE WHEN s = 0 THEN '1 never' WHEN s < 0.25 THEN '2 under 25%' WHEN s < 0.5 THEN '3 25-49%' WHEN s < 0.75 THEN '4 50-74%' ELSE '5 75%+' END AS member_use, count(*) AS members,
  round(count(*)::DOUBLE / sum(count(*)) OVER (), 4) AS share_of_members
 FROM m GROUP BY 1 ORDER BY 1;
 
@@ -261,20 +263,20 @@ FROM r WHERE src <> 'phone' GROUP BY 1 ORDER BY 1;
 SELECT wearable_type, partner_api_status, count(*) AS days, round(avg(sync_error_rate), 4) AS avg_error_rate, round(avg(p95_sync_latency_ms)) AS avg_p95_ms
 FROM wh_sync GROUP BY ALL ORDER BY ALL;
 
--- EVAL Q8 — Plus purchases by plan, August vs September, and the full-period mix shift
-SELECT CASE WHEN t >= TIMESTAMP '2026-09-01' THEN 'after (Sep 1-Oct 1)' ELSE 'before (Aug 1-31)' END AS period,
+-- EVAL Q8 — Plus purchases by plan, August vs September (calendar months), and the before/after-Sep-1 mix shift
+SELECT strftime(t, '%Y-%m') AS month,
  count(*) FILTER (WHERE plan = 'monthly') AS monthly, count(*) FILTER (WHERE plan = 'annual') AS annual,
  round(count(*) FILTER (WHERE plan = 'monthly')::DOUBLE / count(*), 4) AS monthly_share
-FROM ev WHERE event = 'subscription purchased' AND t >= TIMESTAMP '2026-08-01' GROUP BY 1 ORDER BY 1;
+FROM ev WHERE event = 'subscription purchased' AND t >= TIMESTAMP '2026-08-01' AND t < TIMESTAMP '2026-10-01' GROUP BY 1 ORDER BY 1;
 WITH g AS (SELECT (t >= TIMESTAMP '2026-09-01') AS post, count(*) FILTER (WHERE plan = 'monthly')::DOUBLE / count(*) FILTER (WHERE plan = 'annual') AS m_per_a
   FROM ev WHERE event = 'subscription purchased' GROUP BY 1)
 SELECT round(max(m_per_a) FILTER (WHERE NOT post), 4) AS monthly_per_annual_before, round(max(m_per_a) FILTER (WHERE post), 4) AS monthly_per_annual_after,
  round(max(m_per_a) FILTER (WHERE post) / max(m_per_a) FILTER (WHERE NOT post), 4) AS ratio FROM g;
 
--- EVAL Q9 — plan gross bookings (warehouse list price x Mixpanel purchases), August vs September
-WITH p AS (SELECT t::DATE AS d, plan FROM ev WHERE event = 'subscription purchased' AND t >= TIMESTAMP '2026-08-01'),
+-- EVAL Q9 — plan gross bookings (warehouse list price x Mixpanel purchases), August vs September (calendar months)
+WITH p AS (SELECT t::DATE AS d, plan FROM ev WHERE event = 'subscription purchased' AND t >= TIMESTAMP '2026-08-01' AND t < TIMESTAMP '2026-10-01'),
 j AS (SELECT p.*, b.list_price_usd FROM p JOIN wh_billing b ON b.date::DATE = p.d AND b.plan = p.plan)
-SELECT CASE WHEN d >= DATE '2026-09-01' THEN 'Sep 1-Oct 1' ELSE 'Aug 1-31' END AS period, plan, count(*) AS purchases,
+SELECT strftime(d, '%Y-%m') AS month, plan, count(*) AS purchases,
  round(sum(list_price_usd), 2) AS gross_bookings
 FROM j GROUP BY ALL ORDER BY ALL;
 WITH p AS (SELECT t::DATE AS d, plan FROM ev WHERE event = 'subscription purchased'),
@@ -376,6 +378,12 @@ SELECT outage, meals, opens, round(meals::DOUBLE / opens, 4) AS meals_per_open,
 SELECT strftime(date::DATE, '%Y-%m') AS month, sum(new_subscriptions) AS new_subscriptions,
  round(sum(gross_bookings_usd), 2) AS gross_bookings_usd, round(sum(store_fees_usd), 2) AS store_fees_usd, round(sum(net_bookings_usd), 2) AS net_bookings_usd
 FROM wh_billing GROUP BY 1 ORDER BY 1;
+-- weekly new subscriptions (Monday weeks; the first and last weeks are partial): June has no ramp
+SELECT date_trunc('week', date::DATE) AS week, count(DISTINCT date::DATE) AS days, sum(new_subscriptions) AS new_subscriptions,
+ round(sum(new_subscriptions)::DOUBLE / count(DISTINCT date::DATE), 2) AS per_day
+FROM wh_billing GROUP BY 1 ORDER BY 1;
+-- weekly trial starts (members who joined shortly before June 4 still start trials in June)
+SELECT date_trunc('week', t) AS week, count(*) AS trial_starts FROM ev WHERE event = 'trial started' GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q20 — open-ended: headline numbers for a Q4 risk review
 SELECT 'paid social same-week buy rate vs other channels' AS metric,
@@ -402,6 +410,7 @@ SELECT 'Week-4 retention, 5+ first-week workouts', (SELECT round(avg((w4_events 
 UNION ALL
 SELECT 'share of new members with 0-2 first-week workouts', (SELECT round(avg((early_workouts < 3)::INT), 4) FROM habit)
 UNION ALL
-SELECT 'pre-existing free members who bought Plus in the window (share)',
- (WITH nm AS (SELECT uid FROM signups), pf AS (SELECT DISTINCT uid FROM ev WHERE uid NOT IN (SELECT uid FROM nm) AND subscription_tier = 'free')
+SELECT 'long-time free members (trial used) who bought Plus in the window (share)',
+ (WITH lt AS (SELECT distinct_id::VARCHAR AS uid FROM users WHERE NOT trial_eligible),
+  pf AS (SELECT DISTINCT uid FROM ev WHERE uid IN (SELECT uid FROM lt) AND subscription_tier = 'free')
   SELECT round(count(DISTINCT e.uid)::DOUBLE / (SELECT count(*) FROM pf), 4) FROM ev e WHERE e.event = 'subscription purchased' AND e.uid IN (SELECT uid FROM pf));

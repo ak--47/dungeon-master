@@ -23,7 +23,7 @@ Stridewell is a consumer fitness app for people who want to train consistently w
 | Plus Monthly | $12.99/month until 2026-08-31; $14.99/month for new purchases from 2026-09-01 | Full workout library, advanced plans, Stride Coach (from Aug 12), unlimited challenges |
 | Plus Annual | $99.99/year (unchanged) | Same as Plus Monthly |
 
-- **Trials.** A member who joins gets one 7-day free trial of Plus. Members who joined before the window have already used their trial, so they can only buy directly.
+- **Trials.** A member who joins gets one 7-day free trial of Plus. Most members who joined before the window have already used their trial and can only buy directly. Members who joined in the last few weeks before June 4 and had not started their trial yet (or were still in it) keep it, so some trials and trial conversions in early June come from them.
 - **How people upgrade.** A paywall appears when a free member opens a Plus feature (workout library, advanced plans, a Stride Coach teaser, the challenge limit, or settings). From there they start a trial or buy.
 - **Billing.** Purchases go through the Apple and Google app stores. The stores keep a 15% fee on subscriptions. Finance reports bookings at list price (gross) and after store fees (net).
 - The Mixpanel project tracks the purchase event and the plan, but not the price. Prices and bookings live in the warehouse table `subscription_billing_daily`.

@@ -16,9 +16,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             (Monthly $12.99 → $14.99 from 2026-09-01, Annual $99.99).
  *             New members get one 7-day trial; Stride Coach (AI coaching) is a
  *             Plus feature from 2026-08-12.
- * SCALE:      10,000 simulated users → ≈9,090 member profiles (≈4,090 join
- *             inside the window; ≈900 would-be joiners are removed by the
- *             Summer Shred baseline thinning, see H5), ~1.21M events,
+ * SCALE:      10,000 simulated users → 9,046 member profiles (4,169 join
+ *             inside the window; ≈950 would-be joiners are removed by the
+ *             Summer Shred baseline thinning, see H5), 1.17M events,
  *             120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  workout planned → workout completed → progress checked
  * VALUE MOMENT: workout completed
@@ -36,7 +36,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   - Onboarding (first funnel, A/B "Guided First Week" from 2026-07-01):
  *       account created → goal quiz completed → plan generated → starter workout completed (45%)
  *   - Workout Loop: workout planned → workout completed → progress checked (55%)
- *   - Upgrade to Plus (trial), new free members: paywall viewed → trial started → subscription purchased (35%)
+ *   - Upgrade to Plus (trial), trial-eligible free members: paywall viewed → trial started → subscription purchased (35%)
+ *       (new members, plus pre-window members who joined shortly before June 4 and
+ *       still have a trial to start: the window-start trial pipeline, see below)
  *   - Upgrade to Plus (direct), long-time free members: paywall viewed → subscription purchased (1%;
  *       ≈7% of the long-time free pool buys in the window, so purchases stay ≈flat week to week)
  *   - Team Challenge: challenge joined → challenge completed (60%, challenge_format "team")
@@ -54,19 +56,29 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *              subscription_billing_daily (list price and bookings by plan)
  * LOOKUPS:     none — every attribute is denormalized onto events/profiles
  *
- * IDENTITY: new members are anonymous until "account created" (isAuthEvent,
- * first event, carries user_id + device_id); 2 devices per member on average.
+ * IDENTITY: "account created" is the auth event (carries user_id + device_id)
+ * and the first real event of every new member; 2 devices per member on
+ * average. Every event carries user_id: there is no anonymous pre-signup
+ * activity. An enrolled member's $experiment_started sits 1 s before
+ * "account created" (engine placement) and also carries user_id.
  *
- * ENGINE NOTES (workarounds, see openProblems in the re-eval report):
- * - retentionCurve instead of engagementDecay: in legacy mode a new member's
- *   first funnel is not pinned to their join time, and engagementDecay can
- *   then delete the signup event itself (orphaned anonymous members).
- * - World-event clones are spread across the whole event window, including
- *   before a new member's signup; the everything hook drops pre-signup rows.
+ * DESIGN NOTES:
+ * - retentionCurve shapes new members' activity; pre-existing members'
+ *   per-member activity is flat across the window (≈13 events a week).
+ * - Window-start trial pipeline: 8% of pre-window members joined in the 45
+ *   days before June 4. Each draws a join age and a signup-to-trial lag
+ *   (lognormal, median 7.8 days, like new members'); when the lag outlasts
+ *   the age (minus the 7-day trial) the member is trial_eligible, and the
+ *   everything hook moves their first trial (with its paywall view and
+ *   in-trial purchase) to that date. June trial starts and purchases run at
+ *   the steady rate instead of ramping up from an empty pipeline.
  * - The engine draws births uniformly over the window and has no campaign
  *   acquisition knob. Summer Shred's extra members are produced by thinning
  *   the baseline outside the campaign (user hook returns null, scd-pre and
  *   everything return []) and re-attributing the same share inside it.
+ * - Per-member salts use hashFloat plus a murmur3 fmix32 finalizer (mixHash):
+ *   raw hashFloat salts that share the member id correlate, which leaked the
+ *   Summer Shred re-attribution into H6 habit churn and organic lapse.
  */
 
 // ── HOOK STORIES ──
@@ -82,8 +94,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   onboarding conversion × 1.3 and onboarding time × 0.7.
  * MIXPANEL: Funnels, account created → goal quiz completed → plan generated →
  *   starter workout completed, 7-day window, breakdown user property
- *   "Experiment: Guided First Week". Guided ≈ 57% vs Control ≈ 45%; median
- *   time to finish ≈ 12.5 h vs 17.9 h.
+ *   "Experiment: Guided First Week". Guided ≈ 59% vs Control ≈ 44%; median
+ *   time to finish ≈ 12.6 h vs 17.9 h.
  * REAL WORLD: a guided first-week plan reduces choice paralysis for new users.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -91,10 +103,12 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: from 2026-08-12, Plus workouts (event-time subscription_tier
  *   monthly/annual) can run with coaching_mode = "ai_coach". Adoption is per
- *   member: 60% of Plus members adopt (salted), and adopters' use ramps from
- *   40% of full use on launch day to 75% of their workouts after 21 days, so
- *   the Plus-workout share climbs from ≈20% in launch week to 0.6 × 0.75 =
- *   45% from 2026-09-02. Coached sessions last 1.2x longer (calories scale
+ *   member: 60% of Plus members adopt (salted), and each adopter has their
+ *   own full-use rate drawn from Beta(3, 1) (mean 75%, so use is spread, not
+ *   all-or-nothing). Adopters' use ramps from 40% of their full rate on launch
+ *   day to 100% after 21 days, so the Plus-workout share climbs from ≈23% in
+ *   launch week to 0.6 × 0.75 = 45% from 2026-09-02. Coached sessions last
+ *   1.2x longer (calories scale
  *   with the longer session). Free and pre-launch workouts stay self_guided.
  *   Heart rate, perceived effort, and calories per minute are untouched (an
  *   honest null: longer, not harder).
@@ -140,7 +154,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * MIXPANEL: Insights, account created, breakdown acquisition_channel, daily
  *   or weekly; join paid_acquisition_daily.spend_usd for spend per signup and
  *   cost per extra member; Funnels or Insights for Plus purchase rate by
- *   acquisition_channel.
+ *   acquisition_channel. The buy-rate read rests on ≈100 paid-social buyers
+ *   (sampling sd of the ratio ≈ 0.06) and on how active the buying half of
+ *   paid-social members happens to be, so it can land on either side of the
+ *   0.5 knob; the knob-derived floor (0.75) backs the NAILED ceiling.
  * REAL WORLD: a performance push buys real extra volume, at a higher CPI,
  *   from a lower-intent audience.
  *
@@ -160,8 +177,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   created falls in week W and who did workout completed N+ times between
  *   the start of W and 7 days after its end (an approximation of each
  *   member's first 7 days; the exact per-member window needs the raw export).
- *   Week 4 ≈ 18% for 0 early workouts, ≈ 30% for 1-2, ≈ 39% for 3-4,
- *   ≈ 53% for 5+.
+ *   Week 4 ≈ 16% for 0 early workouts, ≈ 28% for 1-2, ≈ 42% for 3-4,
+ *   ≈ 53% for 5+. The 5+/0 ratio sits above the 2.5x knob floor because
+ *   busier members retain better anyway (graded STRONG by design).
  * REAL WORLD: the first week sets the habit; most fitness churn is early.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -183,7 +201,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   of heavy recipients stay fresh.
  * MIXPANEL: Insights, notification received, share with opened = true,
  *   breakdown by cohorts on notification count in the window (<12, 12-19,
- *   20-27, 28+): the open rate bends down gradually (≈75% → ≈48% for 40+).
+ *   20-27, 28+): the open rate bends down gradually (≈75% → ≈49% for 40+).
  * REAL WORLD: notification overload trains people to ignore the app.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -193,7 +211,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   at 1.5x and app opens at 1.2x (two world events); meal logging is
  *   untouched.
  * MIXPANEL: Insights, workout completed, app opened, meal logged, daily;
- *   formula workouts / app opens rises ≈ 1.25x and app opens / meals ≈ 1.2x
+ *   formula workouts / app opens rises ≈ 1.26x and app opens / meals ≈ 1.19x
  *   during the program.
  * REAL WORLD: a back-to-routine program after Labor Day brings members back
  *   a bit more often and makes each visit a training session.
@@ -203,30 +221,32 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                      | Derivation              | Expected  | Measured
  * -----|---------------------------------------------|-------------------------|-----------|---------
- * H1   | onboarding conversion Guided/Control        | GUIDED_CONV_MULT        | 1.30      | 1.290 (58.3% vs 45.2%)
- * H1   | median onboarding TTC Guided/Control        | GUIDED_TTC_MULT         | 0.70      | 0.703
+ * H1   | onboarding conversion Guided/Control        | GUIDED_CONV_MULT        | 1.30      | 1.327 (58.6% vs 44.2%)
+ * H1   | median onboarding TTC Guided/Control        | GUIDED_TTC_MULT         | 0.70      | 0.702
  * H1   | Guided share of enrolled                    | equal 2-arm hash        | 0.50      | 0.502
  * H2   | ai_coach rows pre-launch or free tier       | exact purity            | 0         | 0
- * H2   | post-launch Plus duration ai/self           | AI_DURATION_MULT        | 1.20      | 1.191
- * H2   | Plus ai_coach share after the 21-day ramp   | ADOPTER_SHARE × USE     | 0.45      | 0.448
- * H3   | watch+band / unaffected, outage vs ±7 days  | OUTAGE_KEEP             | 0.25      | 0.249
- * H3   | warehouse sync_error_rate during outage     | 1 − OUTAGE_KEEP         | 0.75      | 0.750
- * H4   | monthly/annual purchases, after vs before   | 1 − MONTHLY_LOSS        | ≤ 0.65    | 0.640
- * H4   | monthly/annual bookings, after vs before    | 0.65 × 14.99/12.99      | ≤ 0.75    | 0.739
- * H4   | long-time free members buying in window     | DIRECT_CONV (realism)   | 3-8%      | 7.2%
- * H5   | paid-social spend per signup, Shred/rest    | SHRED_CPI_MULT          | 2.00      | 1.936
- * H5   | daily signups, Shred/rest (all channels)    | 1/(1 − SHRED_INCREMENTAL)| 1.33     | 1.316
- * H5   | daily signups, Shred/rest (non-paid-social) | control                 | 1.00      | 1.021
- * H5   | paid-social buy rate vs same-week others    | 1 − PAID_SOCIAL_NO_BUY  | ≤ 0.50    | 0.588 (STRONG)
- * H6   | Week-4 retention, 5+ vs 0 early workouts    | ≥ 1/(1 − 0.6) (floor)   | ≥ 2.5     | 2.912 (53.3% vs 18.3%)
+ * H2   | post-launch Plus duration ai/self           | AI_DURATION_MULT        | 1.20      | 1.208
+ * H2   | Plus ai_coach share after the 21-day ramp   | ADOPTER_SHARE × USE     | 0.45      | 0.457
+ * H2   | Plus members (10+ workouts) using it 25-74% | Beta(3,1) use rate      | spread    | 24.3% (40.4% never)
+ * H3   | watch+band / unaffected, outage vs ±7 days  | OUTAGE_KEEP             | 0.25      | 0.250
+ * H3   | warehouse sync_error_rate during outage     | 1 − OUTAGE_KEEP         | 0.75      | 0.752
+ * H4   | monthly/annual purchases, after vs before   | 1 − MONTHLY_LOSS        | ≤ 0.65    | 0.562 (STRONG, sampling)
+ * H4   | monthly/annual bookings, after vs before    | 0.65 × 14.99/12.99      | ≤ 0.75    | 0.649 (STRONG, sampling)
+ * H4   | long-time free members buying in window     | DIRECT_CONV (realism)   | 3-8%      | 6.8%
+ * H5   | paid-social spend per signup, Shred/rest    | SHRED_CPI_MULT          | 2.00      | 2.020
+ * H5   | daily signups, Shred/rest (all channels)    | 1/(1 − SHRED_INCREMENTAL)| 1.33     | 1.367
+ * H5   | daily signups, Shred/rest (non-paid-social) | control                 | 1.00      | 1.045
+ * H5   | paid-social buy rate vs same-week others    | 1 − PAID_SOCIAL_NO_BUY  | ≤ 0.50    | 0.483
+ * H6   | Week-4 retention, 5+ vs 0 early workouts    | ≥ 1/(1 − 0.6) (floor)   | ≥ 2.5     | 3.282 (52.8% vs 16.1%, STRONG)
  * H6   | retention rises across 0 / 1-2 / 3-4 / 5+   | monotone churn share    | 3 steps   | 3
- * H7   | per-challenge completion, team              | TEAM_CONV               | 0.60      | 0.588
- * H7   | per-challenge completion, solo              | SOLO_CONV               | 0.30      | 0.295
- * H8   | open rate 28th+ / first 12, same members    | 1 − PUSH_FATIGUE_FLIP   | 0.40      | 0.403
- * H8   | open rate, first 12 notifications (control) | declared pool 3 of 4    | 0.75      | 0.754
- * H9   | completed per app open, program/before      | 1.5 / 1.2               | 1.25      | 1.211
- * H9   | planned per app open, program/before        | 1.5 / 1.2               | 1.25      | 1.223
- * H9   | app opens per meal logged, program/before   | FALL_RESET_OPEN_MULT    | 1.20      | 1.206
+ * H7   | per-challenge completion, team              | TEAM_CONV               | 0.60      | 0.587
+ * H7   | per-challenge completion, solo              | SOLO_CONV               | 0.30      | 0.294
+ * H8   | open rate 28th+ / first 12, same members    | 1 − PUSH_FATIGUE_FLIP   | 0.40      | 0.408
+ * H8   | open rate, first 12 notifications (control) | declared pool 3 of 4    | 0.75      | 0.748
+ * H9   | completed per app open, program/before      | 1.5 / 1.2               | 1.25      | 1.258
+ * H9   | planned per app open, program/before        | 1.5 / 1.2               | 1.25      | 1.267
+ * H9   | app opens per meal logged, program/before   | FALL_RESET_OPEN_MULT    | 1.20      | 1.194
+ * --   | June new subscriptions per day vs Jul-Aug   | trial pipeline seeding  | no ramp   | 6.9 vs 8.2
  * ═════════════════════════════════════════════════════════════════════════
  */
 
@@ -265,8 +285,9 @@ const ONBOARDING_TTC_H = 24;
 
 // H2 Stride Coach: adoption is per member, and ramps up over the first weeks
 const AI_ADOPTER_SHARE = 0.6;      // share of Plus members who adopt Stride Coach (salted per member)
-const AI_ADOPTER_USE = 0.75;       // share of an adopter's workouts run with Stride Coach once the ramp ends
-const AI_ADOPTION = AI_ADOPTER_SHARE * AI_ADOPTER_USE; // steady-state share of Plus workouts (0.45)
+const AI_ADOPTER_USE = 0.75;       // mean share of an adopter's workouts run with Stride Coach once the ramp ends
+const AI_USE_SHAPE = AI_ADOPTER_USE / (1 - AI_ADOPTER_USE); // per-adopter use rate ~ Beta(3, 1): spread out, mean 0.75
+const AI_ADOPTION = Math.round(AI_ADOPTER_SHARE * AI_ADOPTER_USE * 1000) / 1000; // steady-state share of Plus workouts (0.45)
 const AI_RAMP_DAYS = 21;           // days after launch until adopters reach full use
 const AI_RAMP_FLOOR = 0.4;         // adopters' use on launch day, as a share of full use
 const AI_DURATION_MULT = 1.2;
@@ -283,6 +304,16 @@ const MONTHLY_LOSS = 0.35;         // share of post-change monthly purchases los
 // long-time free members (trial already used) rarely buy straight from the
 // paywall: ≈ 1% per paywall visit, a few percent of the free pool per quarter
 const DIRECT_CONV = 1;
+// window-start trial pipeline: this share of pre-window members joined in the
+// RECENT_JOIN_DAYS before June 4; those whose signup-to-trial lag outlasts their
+// age still have a trial to start (or one still running) in the window (new
+// members' lag: median ≈ 7.8 days, lognormal). Sized so June trial starts match
+// the steady new-member rate.
+const RECENT_JOIN_SHARE = 0.08;
+const RECENT_JOIN_DAYS = 45;
+const TRIAL_LAG_MEDIAN_DAYS = 7.8;
+const TRIAL_LAG_SIGMA = 0.7;
+const TRIAL_PAIR_DAYS = 8;         // a trial's own purchase lands within the 7-day trial (+1 day)
 
 // H5 Summer Shred paid social
 const PAID_CHANNELS = ["paid_social", "paid_search", "app_store_ads"];
@@ -343,7 +374,21 @@ const DEACTIVATION_QUIET_DAYS = 21;
 // members the Summer Shred baseline thinning removes (see SHRED_INCREMENTAL);
 // filled by the user hook, read by the scd-pre and everything hooks
 const NOT_ACQUIRED = new Set();
-const salt = (uid, tag) => hashFloat(`${uid}|${tag}`);
+// pre-window members still waiting to start their trial → trial start time (ms);
+// filled by the user hook, read by the everything hook
+const PENDING_TRIAL = new Map();
+// hashFloat (FNV-1a) has no final avalanche, so salts that share a member-id
+// prefix correlate (|r| up to 0.1) and one cohort split leaks into another
+// (e.g. Summer Shred re-attribution picked better-retaining members). A
+// murmur3 fmix32 finalizer makes the per-member draws independent.
+const mixHash = (key) => {
+	let h = Math.floor(hashFloat(key) * 4294967296) >>> 0;
+	h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b);
+	h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35);
+	h ^= h >>> 16;
+	return (h >>> 0) / 4294967296;
+};
+const salt = (uid, tag) => mixHash(`${uid}|${tag}`);
 const round2 = (n) => Math.round(n * 100) / 100;
 const inShred = (t) => t >= ms(SUMMER_SHRED_START) && t < ms(SUMMER_SHRED_END);
 const inOutage = (t) => t >= ms(SYNC_OUTAGE_START) && t < ms(SYNC_OUTAGE_END);
@@ -368,6 +413,23 @@ function handleUserHook(profile, meta) {
 		profile.trial_eligible = true;
 		return profile;
 	}
+	// ── trial pipeline at window start: some pre-window members joined in the
+	// weeks before June 4 and have not started their trial yet. Each draws a join
+	// age and a signup-to-trial lag (lognormal, like new members'); a lag longer
+	// than the age leaves a trial still to come inside the window.
+	const uid = profile.distinct_id;
+	if (salt(uid, "recent-joiner") < RECENT_JOIN_SHARE) {
+		const ageDays = salt(uid, "join-age") * RECENT_JOIN_DAYS;
+		const z = Math.sqrt(-2 * Math.log(1 - salt(uid, "lag-a"))) * Math.cos(2 * Math.PI * salt(uid, "lag-b"));
+		const lagDays = TRIAL_LAG_MEDIAN_DAYS * Math.exp(TRIAL_LAG_SIGMA * z);
+		// a trial that started up to TRIAL_PAIR_DAYS before June 4 can still convert inside the window
+		if (lagDays > ageDays - TRIAL_PAIR_DAYS) {
+			PENDING_TRIAL.set(uid, ms(DATASET_START) + (lagDays - ageDays) * 86_400_000);
+			profile.subscription_tier = "free";
+			profile.trial_eligible = true;
+			return profile;
+		}
+	}
 	profile.trial_eligible = false;
 	const mix = {
 		athlete: [25, 30, 45],
@@ -380,6 +442,23 @@ function handleUserHook(profile, meta) {
 	return profile;
 }
 
+function seedPendingTrial(events, trial, trialAt) {
+	if (!trial) return events;
+	const START = ms(DATASET_START), END = ms(DATASET_END);
+	const t0 = T(trial);
+	// the trial's own purchase converts within the trial (later purchases belong to other passes)
+	const buy = events.filter((e) => e.event === "subscription purchased" && T(e) >= t0 && T(e) <= t0 + TRIAL_PAIR_DAYS * 86_400_000)
+		.sort((a, b) => T(a) - T(b))[0];
+	const wall = events.filter((e) => e.event === "paywall viewed" && T(e) <= t0).sort((a, b) => T(b) - T(a))[0];
+	const delta = trialAt - t0;
+	for (const e of [wall, trial, buy]) if (e) e.time = new Date(T(e) + delta).toISOString();
+	// a trial (or its paywall view) that began before June 4 is outside the window
+	return events.filter((e) => {
+		if (e.event === "subscription purchased" && e !== buy) return false;
+		return T(e) >= START && T(e) <= END;
+	});
+}
+
 function handleEverything(events, meta) {
 	if (!events.length) return events;
 	const profile = meta.profile;
@@ -389,13 +468,14 @@ function handleEverything(events, meta) {
 	const END = ms(DATASET_END);
 	const signup = events.find((e) => e.event === "account created");
 	const birthMs = signup ? T(signup) : null;
-	// engine workaround: world-event clones are spread across the whole event
-	// window, including before a new member's signup — nobody trains before install
-	if (signup) events = events.filter((e) => T(e) >= birthMs || e.event === "$experiment_started");
 
 	// ── trial hygiene: one free trial per member ──
 	const firstTrial = events.filter((e) => e.event === "trial started").sort((a, b) => T(a) - T(b))[0];
 	if (firstTrial) events = events.filter((e) => e.event !== "trial started" || e === firstTrial);
+
+	// ── window-start trial pipeline: a pre-window member's pending trial (with its
+	// paywall view and, if it converts, its purchase) moves to their trial date ──
+	if (PENDING_TRIAL.has(uid)) events = seedPendingTrial(events, firstTrial, PENDING_TRIAL.get(uid));
 
 	// ── purchase hygiene: a member buys Plus once; later upgrade passes vanish ──
 	const firstBuy = events.filter((e) => e.event === "subscription purchased").sort((a, b) => T(a) - T(b))[0];
@@ -455,6 +535,8 @@ function handleEverything(events, meta) {
 	// ── H2: Stride Coach — adopting Plus members, ramping up after launch, longer sessions ──
 	const launch = ms(AI_COACH_LAUNCH);
 	const adopter = salt(uid, "coach-adopter") < AI_ADOPTER_SHARE;
+	// each adopter has their own use rate: Beta(a, 1) via inverse CDF u^(1/a), mean AI_ADOPTER_USE
+	const useRate = salt(uid, "coach-use") ** (1 / AI_USE_SHAPE);
 	for (const e of events) {
 		if (e.event === "paywall viewed" && e.paywall_trigger === "coach_teaser" && T(e) < launch) {
 			// the Stride Coach teaser only exists on the paywall from launch day
@@ -463,7 +545,7 @@ function handleEverything(events, meta) {
 		if (!adopter) continue;
 		const ramp = AI_RAMP_FLOOR + (1 - AI_RAMP_FLOOR) * Math.min(1, (T(e) - launch) / (AI_RAMP_DAYS * 86_400_000));
 		if ((e.event === "workout completed" || e.event === "workout planned") && T(e) >= launch && e.subscription_tier !== "free"
-			&& chance.bool({ likelihood: AI_ADOPTER_USE * ramp * 100 })) {
+			&& chance.bool({ likelihood: useRate * ramp * 100 })) {
 			e.coaching_mode = "ai_coach";
 			if (e.event === "workout completed") {
 				e.duration_minutes = Math.round(e.duration_minutes * AI_DURATION_MULT);
@@ -504,7 +586,7 @@ function handleWarehouse(row, meta) {
 	const channel = row.acquisition_channel;
 	const t = dayjs.utc(row.date).valueOf();
 	const mult = channel === "paid_social" && inShred(t) ? SHRED_CPI_MULT : 1;
-	const noise = 1 + (hashFloat(`cpi|${row.date}|${channel}`) - 0.5) * 2 * CPI_NOISE;
+	const noise = 1 + (mixHash(`cpi|${row.date}|${channel}`) - 0.5) * 2 * CPI_NOISE;
 	row.spend_usd = round2(meta.raw.plus.count * CPI_USD[channel] * mult * noise);
 	return row;
 }
@@ -842,10 +924,10 @@ const config = {
 			valueColumn: "spend_usd",
 			columns: {
 				// ad platforms claim ~8% more installs than product analytics records
-				platform_reported_installs: (ctx) => Math.round(ctx.value * (1.05 + 0.06 * hashFloat(`pri|${dayKey(ctx.time)}|${ctx.seriesKey}`))),
+				platform_reported_installs: (ctx) => Math.round(ctx.value * (1.05 + 0.06 * mixHash(`pri|${dayKey(ctx.time)}|${ctx.seriesKey}`))),
 				// click-to-install ≈ 21% and click-through ≈ 1.1%, each with day-level jitter
-				clicks: (ctx) => Math.round(ctx.value / (0.21 * (0.85 + 0.3 * hashFloat(`cti|${dayKey(ctx.time)}|${ctx.seriesKey}`)))),
-				impressions: (ctx) => Math.round(ctx.row.clicks / (0.011 * (0.85 + 0.3 * hashFloat(`ctr|${dayKey(ctx.time)}|${ctx.seriesKey}`)))),
+				clicks: (ctx) => Math.round(ctx.value / (0.21 * (0.85 + 0.3 * mixHash(`cti|${dayKey(ctx.time)}|${ctx.seriesKey}`)))),
+				impressions: (ctx) => Math.round(ctx.row.clicks / (0.011 * (0.85 + 0.3 * mixHash(`ctr|${dayKey(ctx.time)}|${ctx.seriesKey}`)))),
 			},
 		},
 		{
@@ -863,13 +945,13 @@ const config = {
 			columns: {
 				sync_error_rate: (ctx) => {
 					const affected = OUTAGE_TYPES.includes(ctx.row.wearable_type) && inOutage(ctx.time);
-					const jitter = hashFloat(`${dayKey(ctx.time)}|${ctx.seriesKey}`);
+					const jitter = mixHash(`${dayKey(ctx.time)}|${ctx.seriesKey}`);
 					return affected ? round2(1 - OUTAGE_KEEP + (jitter - 0.5) * 0.04) : Math.round((0.004 + jitter * 0.01) * 10000) / 10000;
 				},
 				sync_requests: (ctx) => Math.round(ctx.value / Math.max(0.05, 1 - ctx.row.sync_error_rate)),
 				partner_api_status: (ctx) => (OUTAGE_TYPES.includes(ctx.row.wearable_type) && inOutage(ctx.time) ? "major_outage" : "operational"),
 				p95_sync_latency_ms: (ctx) => {
-					const jitter = hashFloat(`lat|${dayKey(ctx.time)}|${ctx.seriesKey}`);
+					const jitter = mixHash(`lat|${dayKey(ctx.time)}|${ctx.seriesKey}`);
 					return OUTAGE_TYPES.includes(ctx.row.wearable_type) && inOutage(ctx.time) ? Math.round(28000 + jitter * 6000) : Math.round(900 + jitter * 500);
 				},
 			},
@@ -1040,7 +1122,7 @@ FROM ev WHERE event = '$experiment_started'`,
 		id: "H2-stride-coach-launch",
 		hook: "H2",
 		archetype: "temporal-inflection",
-		narrative: `Stride Coach launches ${AI_COACH_LAUNCH.slice(0, 10)} for Plus members. Adoption is per member: ${AI_ADOPTER_SHARE * 100}% of Plus members adopt it, and adopters' use ramps from ${AI_RAMP_FLOOR * 100}% of full use on launch day to full use (${AI_ADOPTER_USE * 100}% of their workouts) after ${AI_RAMP_DAYS} days, so from then on ${AI_ADOPTER_SHARE} × ${AI_ADOPTER_USE} = ${AI_ADOPTION} of Plus workouts run with coaching_mode = 'ai_coach' (adoption is salted independently of workout volume). Those sessions last ${AI_DURATION_MULT}x longer. Free-tier workouts and every pre-launch workout stay self_guided, so purity is exact. subscription_tier on each event is the member's plan at that moment.`,
+		narrative: `Stride Coach launches ${AI_COACH_LAUNCH.slice(0, 10)} for Plus members. Adoption is per member: ${AI_ADOPTER_SHARE * 100}% of Plus members adopt it, and each adopter has their own full-use rate drawn from Beta(${AI_USE_SHAPE}, 1) (mean ${AI_ADOPTER_USE * 100}% of their workouts, so use is spread rather than all-or-nothing). Adopters' use ramps from ${AI_RAMP_FLOOR * 100}% of their full rate on launch day to their full rate after ${AI_RAMP_DAYS} days, so from then on ${AI_ADOPTER_SHARE} × ${AI_ADOPTER_USE} = ${AI_ADOPTION} of Plus workouts run with coaching_mode = 'ai_coach' (adoption is salted independently of workout volume). Those sessions last ${AI_DURATION_MULT}x longer. Free-tier workouts and every pre-launch workout stay self_guided, so purity is exact. subscription_tier on each event is the member's plan at that moment.`,
 		mixpanelReport: { type: "Insights", event: "workout completed", measure: "average duration_minutes", breakdown: "coaching_mode", filter: "subscription_tier != free, after launch" },
 		assertions: [
 			{
@@ -1125,7 +1207,7 @@ FROM ${WH("wearable_sync_daily")}`,
 		id: "H4-monthly-price-change",
 		hook: "H4",
 		archetype: "temporal-inflection",
-		narrative: `On ${PRICE_CHANGE.slice(0, 10)} Plus Monthly rises from $${PRICE_MONTHLY_OLD} to $${PRICE_MONTHLY_NEW}; Annual stays $${PRICE_ANNUAL}. ${MONTHLY_LOSS * 100}% of would-be monthly purchases after the change never happen. Annual is the control: the monthly/annual purchase ratio after vs before reads the ${1 - MONTHLY_LOSS} keep rate. The prices live only in the warehouse table subscription_billing_daily, so the bookings read needs the join: monthly bookings fall to ${(1 - MONTHLY_LOSS).toFixed(2)} × ${PRICE_MONTHLY_NEW}/${PRICE_MONTHLY_OLD} of trend. Purchases run at a realistic ≈50 a week (long-time free members rarely buy straight from the paywall), so the post-change month holds ≈170 buyers: the evidence gate is 150 buyers per side, and the NAILED band (knob ±10%) can miss on sampling noise, so a knob-derived floor backs it.`,
+		narrative: `On ${PRICE_CHANGE.slice(0, 10)} Plus Monthly rises from $${PRICE_MONTHLY_OLD} to $${PRICE_MONTHLY_NEW}; Annual stays $${PRICE_ANNUAL}. ${MONTHLY_LOSS * 100}% of would-be monthly purchases after the change never happen. Annual is the control: the monthly/annual purchase ratio after vs before reads the ${1 - MONTHLY_LOSS} keep rate. The prices live only in the warehouse table subscription_billing_daily, so the bookings read needs the join: monthly bookings fall to ${(1 - MONTHLY_LOSS).toFixed(2)} × ${PRICE_MONTHLY_NEW}/${PRICE_MONTHLY_OLD} of trend. Purchases run at a realistic ≈50 a week (long-time free members rarely buy straight from the paywall), so the post-change month holds ≈185 buyers: the evidence gate is 150 buyers per side, and the NAILED band (knob ±10%) can miss on sampling noise, so a knob-derived floor backs it.`,
 		mixpanelReport: { type: "Insights", event: "subscription purchased", measure: "total", breakdown: "plan", chart: "weekly line" },
 		assertions: [
 			{
@@ -1166,7 +1248,7 @@ FROM g`,
 		id: "H5-summer-shred-paid-social",
 		hook: "H5",
 		archetype: "attribution-bias",
-		narrative: `Summer Shred (${SUMMER_SHRED_START.slice(0, 10)} to ${SUMMER_SHRED_END.slice(0, 10)}, exclusive) buys extra members through paid social: ${SHRED_INCREMENTAL * 100}% of daily signups inside the window are campaign-driven paid-social members on top of the baseline, so total daily signups rise ${SHRED_VOLUME_LIFT.toFixed(2)}x while every other channel keeps its daily volume. Paid-social CPI bids double. The warehouse table paid_acquisition_daily bills spend = installs × CPI, so spend per Mixpanel signup on paid social reads ${SHRED_CPI_MULT}x inside the campaign. Paid-social signups are also low intent: ${PAID_SOCIAL_NO_BUY * 100}% of them never buy Plus, so their purchase rate is half that of other channels' signups from the same week (channel is drawn independently of persona; the same-week standardization removes the signup-date effect on how long members have had to buy).`,
+		narrative: `Summer Shred (${SUMMER_SHRED_START.slice(0, 10)} to ${SUMMER_SHRED_END.slice(0, 10)}, exclusive) buys extra members through paid social: ${SHRED_INCREMENTAL * 100}% of daily signups inside the window are campaign-driven paid-social members on top of the baseline, so total daily signups rise ${SHRED_VOLUME_LIFT.toFixed(2)}x while every other channel keeps its daily volume. Paid-social CPI bids double. The warehouse table paid_acquisition_daily bills spend = installs × CPI, so spend per Mixpanel signup on paid social reads ${SHRED_CPI_MULT}x inside the campaign. Paid-social signups are also low intent: ${PAID_SOCIAL_NO_BUY * 100}% of them never buy Plus, so their purchase rate is half that of other channels' signups from the same week (channel is drawn independently of persona; the same-week standardization removes the signup-date effect on how long members have had to buy). The read rests on ≈100 paid-social buyers, so sampling noise (sd of the ratio ≈ 0.06) and how active the buying half of paid-social members happens to be can move it to either side of ${1 - PAID_SOCIAL_NO_BUY}; the knob-derived floor ${1 - PAID_SOCIAL_NO_BUY / 2} backs the NAILED ceiling.`,
 		mixpanelReport: { type: "Insights + warehouse", event: "account created", breakdown: "acquisition_channel", join: "paid_acquisition_daily.spend_usd" },
 		assertions: [
 			{
