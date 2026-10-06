@@ -152,3 +152,50 @@ describe('v1.5.1 retentionCurve generator round-trip', () => {
 		expect(avgDistinctDays).toBeLessThan(15);
 	});
 });
+
+describe('retentionCurve and pre-existing users', () => {
+	test('pre-existing users keep flat per-member activity across the window', async () => {
+		// Pre-existing users have no in-window birth. The curve is birth-relative,
+		// so it must not age them from FIXED_BEGIN (that fabricates a day-0 signup
+		// cohort whose activity decays across the window).
+		const start = FIXED_NOW - 84 * 86400;
+		const result = await DUNGEON_MASTER({
+			seed: 'retcurve-pre-existing',
+			datasetStart: start,
+			datasetEnd: FIXED_NOW,
+			writeToDisk: false,
+			verbose: false,
+			concurrency: 1,
+			numUsers: 300,
+			avgEventsPerUserPerDay: 2,
+			percentUsersBornInDataset: 50,
+			retentionCurve: { type: 'logarithmic', day1: 0.8, day7: 0.6, day30: 0.45 },
+			events: [
+				{ event: 'sign up', isFirstEvent: true },
+				{ event: 'visit', weight: 5 },
+				{ event: 'browse', weight: 3 },
+			],
+			funnels: [{ sequence: ['sign up', 'visit'], isFirstFunnel: true, conversionRate: 100, timeToConvert: 1 }],
+		});
+		const events = Array.from(result.eventData);
+		const profiles = Array.from(result.userProfilesData);
+		const preExisting = new Set(profiles.filter(p => !p.created || Date.parse(p.created) < start * 1000).map(p => p.distinct_id));
+		expect(preExisting.size).toBeGreaterThan(100);
+		const weeks = Array.from({ length: 12 }, () => ({ n: 0, users: new Set() }));
+		for (const e of events) {
+			if (!preExisting.has(e.user_id)) continue;
+			const w = Math.floor((Date.parse(e.time) - start * 1000) / (7 * 86400000));
+			if (w < 0 || w >= 12) continue;
+			weeks[w].n++;
+			weeks[w].users.add(e.user_id);
+		}
+		const perActive = weeks.map(w => w.n / w.users.size);
+		const first = (perActive[0] + perActive[1]) / 2;
+		const last = (perActive[10] + perActive[11]) / 2;
+		expect(last / first).toBeGreaterThan(0.85);
+		expect(last / first).toBeLessThan(1.15);
+		const wauFirst = (weeks[0].users.size + weeks[1].users.size) / 2;
+		const wauLast = (weeks[10].users.size + weeks[11].users.size) / 2;
+		expect(wauLast / wauFirst).toBeGreaterThan(0.9);
+	});
+});

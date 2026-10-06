@@ -336,3 +336,40 @@ describe('v1.5 bunchIntoSessions removal — session integrity preserved', () =>
 		}
 	});
 });
+
+describe('active-day plan has no time trend', () => {
+	test('pre-existing users keep flat events per active member across the window', async () => {
+		// Equal day weights (no soup DOW weights): the plan's rounding remainder
+		// must not always land on the earliest picked days.
+		const end = Date.parse('2024-04-01T00:00:00Z') / 1000;
+		const start = end - 84 * 86400;
+		const result = await DUNGEON_MASTER({
+			seed: 'active-day-flat',
+			datasetStart: start,
+			datasetEnd: end,
+			writeToDisk: false,
+			verbose: false,
+			concurrency: 1,
+			numUsers: 300,
+			avgEventsPerUserPerDay: 1.2,
+			avgActiveDaysPerUser: 40,
+			percentUsersBornInDataset: 0,
+			events: [
+				{ event: 'visit', weight: 5 },
+				{ event: 'browse', weight: 3 },
+			],
+		});
+		const weeks = Array.from({ length: 12 }, () => ({ n: 0, users: new Set() }));
+		for (const e of result.eventData) {
+			const w = Math.floor((Date.parse(e.time) - start * 1000) / (7 * 86400000));
+			if (w < 0 || w >= 12) continue;
+			weeks[w].n++;
+			weeks[w].users.add(e.user_id);
+		}
+		const perActive = weeks.map(w => w.n / w.users.size);
+		const first = (perActive[0] + perActive[1]) / 2;
+		const last = (perActive[10] + perActive[11]) / 2;
+		expect(last / first).toBeGreaterThan(0.9);
+		expect(last / first).toBeLessThan(1.1);
+	});
+});
