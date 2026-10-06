@@ -5,6 +5,8 @@
  * 1. Legacy mode (no retentionCurve, no avgActiveDaysPerUser, no attempts):
  *    a born user's first funnel starts at profile.created, not anywhere in
  *    [created, FIXED_NOW].
+ * 2. engagementDecay never drops the signup (isFirstEvent / stitch
+ *    isAuthEvent) and anchors on the user's first emitted event.
  */
 
 import { describe, test, expect } from 'vitest';
@@ -67,5 +69,20 @@ describe.sequential('born-user lifecycle', () => {
 		expect(Math.min(...lagsHours)).toBeGreaterThanOrEqual(-1 / 3600);
 		expect(Math.max(...lagsHours)).toBeLessThan(1 / 3600 + 1e-9);
 		expect(median(lagsHours)).toBeLessThan(1);
+	});
+
+	test('engagementDecay never drops the signup stitch (active-day mode)', async () => {
+		// Active-day mode anchors the signup on a picked day, often days after
+		// adjustedCreated, so the old created-anchored decay could drop it.
+		const result = await DUNGEON_MASTER(base({
+			numUsers: 300,
+			avgActiveDaysPerUser: 10,
+			engagementDecay: { model: 'exponential', halfLife: 60, floor: 0.3 },
+		}));
+		const events = Array.from(result.eventData);
+		const profiles = Array.from(result.userProfilesData);
+		const signups = signupsByUser(events);
+		expect(profiles.filter(p => !signups.has(p.distinct_id))).toHaveLength(0);
+		expect(events.filter(ev => !ev.user_id)).toHaveLength(0);
 	});
 });
