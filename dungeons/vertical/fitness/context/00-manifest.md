@@ -8,6 +8,7 @@ This folder is the internal analytics wiki for **Stridewell**, a consumer fitnes
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, early summer through the end of Q3.
 - **Scale:** about 9,000 members were active in the window. About 4,200 of them joined during the window; the rest were members before June 4. The project holds about 1.2 million events.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC.
+- **June 4 is a partial day.** The export starts at 00:00 UTC on June 4. Activity that belongs to plans and challenges members started before then is not included, so June 4 shows fewer events than a normal day. Start daily trends on June 5 or treat June 4 with care.
 
 ## The other files
 
@@ -27,7 +28,8 @@ This folder is the internal analytics wiki for **Stridewell**, a consumer fitnes
 ## Identity notes
 
 - The app tracks nothing before a member creates an account, so there is no anonymous (device-only) activity in the project. The `account created` event carries both the member's `user_id` and the `device_id`.
-- Every event carries `user_id`, including the onboarding experiment's `$experiment_started` exposure, which is logged one second before `account created`. Members use about two devices on average; `device_id` changes between devices but `user_id` does not.
+- Every event carries `user_id`, including the onboarding experiment's `$experiment_started` exposure, which is logged one second before `account created`.
+- `device_id` is on every event except the three onboarding steps after signup (`goal quiz completed`, `plan generated`, `starter workout completed`), which the onboarding service sends server-side with `user_id` only. Members use about two devices on average; `device_id` changes between devices but `user_id` does not.
 - Members who joined before June 4 have no `account created` event in this window. Their profile `created` field is empty. For members who joined in the window, `created` is their signup time.
 - Count people with unique `user_id` (Mixpanel "Uniques"), not with `device_id`.
 

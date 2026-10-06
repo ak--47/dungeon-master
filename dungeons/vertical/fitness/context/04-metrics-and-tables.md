@@ -52,13 +52,13 @@ Daily health of wearable workout sync, by device type, from the integration team
 |---|---|---|---|
 | `date` | DATE | UTC day | Day. |
 | `wearable_type` | STRING | — | `smartwatch`, `fitness_band`, or `chest_strap`. Matches `wearable_type` on `workout completed`. |
-| `synced_workouts` | INTEGER | count | Wearable-tracked workouts that synced successfully that day. |
+| `synced_workouts` | INTEGER | count | Wearable-tracked workouts that the partner synced successfully that day, counted on the sync day. |
 | `sync_error_rate` | FLOAT | share 0-1 | Share of sync attempts that failed. |
 | `sync_requests` | INTEGER | count | Sync attempts made (successful plus failed). |
 | `partner_api_status` | STRING | — | Daily sync status for the device type: `operational` or `major_outage`. Combines the partner status feed with our own pipeline monitoring. |
 | `p95_sync_latency_ms` | INTEGER | milliseconds | 95th-percentile time from workout end to sync. |
 
-Caveats: a workout that never synced is not in Mixpanel and is not in `synced_workouts`. Phone-tracked and manual workouts are not in this table.
+Caveats: a workout that never synced is not in Mixpanel and is not in `synced_workouts`. Phone-tracked and manual workouts are not in this table. `synced_workouts` does not match the Mixpanel count of wearable workouts exactly: it counts by sync day (a workout finished late in the evening often syncs after midnight UTC and lands in the next day's row), partner retries are sometimes counted twice, and a few synced workouts never reach Mixpanel because the member did not reopen the app.
 
 ### `subscription_billing_daily`
 
@@ -68,13 +68,13 @@ Daily new Plus subscriptions and bookings by plan, from the billing system.
 |---|---|---|---|
 | `date` | DATE | UTC day | Purchase day. |
 | `plan` | STRING | — | `monthly` or `annual`. Matches `plan` on `subscription purchased`. |
-| `new_subscriptions` | INTEGER | count | New Plus purchases that day. |
+| `new_subscriptions` | INTEGER | count | New Plus first payments that settled that day. |
 | `list_price_usd` | FLOAT | USD | List price for a new purchase of this plan on this day. |
 | `gross_bookings_usd` | FLOAT | USD | `new_subscriptions` × `list_price_usd`. |
 | `store_fees_usd` | FLOAT | USD | App-store fees (15% of gross). |
 | `net_bookings_usd` | FLOAT | USD | Gross bookings minus store fees. |
 
-Caveats: the table covers first purchases only, not renewals, refunds, or upgrades between plans. Bookings are the first payment (one month for Monthly, one year for Annual), so Monthly and Annual bookings are not directly comparable as lifetime value.
+Caveats: the table covers first purchases only, not renewals or upgrades between plans. Bookings are the first payment (one month for Monthly, one year for Annual), so Monthly and Annual bookings are not directly comparable as lifetime value. `new_subscriptions` differs slightly from the Mixpanel count of `subscription purchased`: the stores sometimes settle a purchase on the next UTC day, first payments that fail or are refunded within 48 hours are not booked, and purchases made from the app store's own subscription page are billed but send no app event. Use this table for bookings and Mixpanel for purchase behavior.
 
 ## Analysis tips
 

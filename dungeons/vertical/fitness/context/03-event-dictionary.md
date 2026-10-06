@@ -8,7 +8,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 |---|---|
 | `time` | When the event happened (UTC). |
 | `user_id` | The member's ID. Present on every event after signup. |
-| `device_id` | The device the event came from. A member has about two devices. |
+| `device_id` | The device the event came from. A member has about two devices. Not present on `goal quiz completed`, `plan generated`, and `starter workout completed`, which the onboarding service sends with `user_id` only. |
 | `insert_id` | Unique event ID used for de-duplication. |
 | `session_id` | The app session the event belongs to (diagnostic; Mixpanel computes its own sessions). |
 | `Platform` | `ios` or `android`. Fixed per member. |

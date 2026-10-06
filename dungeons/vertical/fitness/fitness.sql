@@ -20,6 +20,9 @@ SET VARIABLE data_prefix = COALESCE(getvariable('data_prefix'), 'data/verify-fit
 -- data every event already carries user_id (there is no anonymous pre-signup
 -- activity; an enrolled member's $experiment_started fires 1 s before
 -- "account created" and already carries user_id), so the stitch is a no-op.
+-- device_id is on every event except the three onboarding steps after signup
+-- (goal quiz completed, plan generated, starter workout completed), which
+-- carry user_id only.
 
 CREATE OR REPLACE TEMP TABLE raw_events AS
 SELECT * FROM read_json_auto(getvariable('data_prefix') || '-EVENTS*.json*', sample_size=-1, union_by_name=true);
@@ -200,6 +203,11 @@ SELECT variant, count(*) AS enrolled_signups, count(*) FILTER (WHERE converted) 
  round(avg(converted::INT), 4) AS conversion,
  round(avg(converted::INT) / (SELECT avg(converted::INT) FROM onboarding WHERE variant = 'Control'), 4) AS lift_vs_control
 FROM onboarding WHERE variant IS NOT NULL GROUP BY 1 ORDER BY 1;
+-- downstream: Plus buyers per enrolled signup by variant (only members who finish onboarding go on to buy)
+WITH b AS (SELECT DISTINCT uid FROM ev WHERE event = 'subscription purchased')
+SELECT variant, count(*) AS enrolled_signups, count(b.uid) AS buyers, round(count(b.uid)::DOUBLE / count(*), 4) AS buy_rate,
+ count(b.uid) FILTER (WHERE NOT converted) AS buyers_without_onboarding
+FROM onboarding o LEFT JOIN b USING (uid) WHERE variant IS NOT NULL GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q2 — median time from signup to starter workout, by variant
 SELECT variant, round(median(ttc_s) / 3600.0, 2) AS median_hours,
@@ -283,6 +291,12 @@ WITH p AS (SELECT t::DATE AS d, plan FROM ev WHERE event = 'subscription purchas
 j AS (SELECT p.*, b.list_price_usd FROM p JOIN wh_billing b ON b.date::DATE = p.d AND b.plan = p.plan),
 g AS (SELECT (d >= DATE '2026-09-01') AS post, sum(list_price_usd) FILTER (WHERE plan = 'monthly') / sum(list_price_usd) FILTER (WHERE plan = 'annual') AS m_rev_per_a FROM j GROUP BY 1)
 SELECT round(max(m_rev_per_a) FILTER (WHERE post) / max(m_rev_per_a) FILTER (WHERE NOT post), 4) AS monthly_vs_annual_bookings_ratio FROM g;
+-- the same reads from the billing table alone (billing counts drift slightly from Mixpanel purchases)
+SELECT strftime(date::DATE, '%Y-%m') AS month, plan, sum(new_subscriptions) AS new_subscriptions, round(sum(gross_bookings_usd), 2) AS gross_bookings_usd
+FROM wh_billing WHERE date::DATE >= DATE '2026-08-01' AND date::DATE < DATE '2026-10-01' GROUP BY ALL ORDER BY ALL;
+WITH g AS (SELECT (date::DATE >= DATE '2026-09-01') AS post,
+  sum(gross_bookings_usd) FILTER (WHERE plan = 'monthly') / sum(gross_bookings_usd) FILTER (WHERE plan = 'annual') AS m_rev_per_a FROM wh_billing GROUP BY 1)
+SELECT round(max(m_rev_per_a) FILTER (WHERE post) / max(m_rev_per_a) FILTER (WHERE NOT post), 4) AS billing_table_monthly_vs_annual_bookings_ratio FROM g;
 
 -- EVAL Q10 — spend per Mixpanel signup by paid channel, Summer Shred vs rest of window
 WITH s AS (SELECT t0::DATE AS d, ch, count(*) AS n FROM signups GROUP BY ALL),
@@ -294,11 +308,15 @@ SELECT ch, shred, round(spend, 2) AS spend_usd, signups, round(spend / signups, 
 -- EVAL Q11 — did Summer Shred add members? daily signups by channel inside (30 days) vs outside (90 days)
 WITH s AS (SELECT (t0 >= TIMESTAMP '2026-06-15' AND t0 < TIMESTAMP '2026-07-15') AS shred, ch FROM signups),
 g AS (SELECT shred, ch, count(*) AS signups FROM s GROUP BY ALL)
-SELECT ch, max(signups) FILTER (WHERE shred) AS shred_signups, round(max(signups) FILTER (WHERE shred) / 30.0, 2) AS shred_per_day,
+-- z = (campaign signups − 30 days at the outside rate) / Poisson sd of that difference
+SELECT ch, max(signups) FILTER (WHERE shred) AS shred_signups, max(signups) FILTER (WHERE NOT shred) AS other_signups,
+ round(max(signups) FILTER (WHERE shred) / 30.0, 2) AS shred_per_day,
  round(max(signups) FILTER (WHERE NOT shred) / 90.0, 2) AS other_per_day,
  round((max(signups) FILTER (WHERE shred) / 30.0) / (max(signups) FILTER (WHERE NOT shred) / 90.0), 4) AS lift,
  round(max(signups) FILTER (WHERE shred)::DOUBLE / sum(max(signups) FILTER (WHERE shred)) OVER (), 4) AS shred_share,
- round(max(signups) FILTER (WHERE NOT shred)::DOUBLE / sum(max(signups) FILTER (WHERE NOT shred)) OVER (), 4) AS other_share
+ round(max(signups) FILTER (WHERE NOT shred)::DOUBLE / sum(max(signups) FILTER (WHERE NOT shred)) OVER (), 4) AS other_share,
+ round((max(signups) FILTER (WHERE shred) - max(signups) FILTER (WHERE NOT shred) / 3.0)
+  / sqrt(max(signups) FILTER (WHERE shred) + max(signups) FILTER (WHERE NOT shred) / 9.0), 2) AS z
 FROM g GROUP BY ch ORDER BY ch;
 -- totals, and the cost of the extra members: extra paid-social spend / extra signups
 WITH t AS (SELECT count(*) FILTER (WHERE t0 >= TIMESTAMP '2026-06-15' AND t0 < TIMESTAMP '2026-07-15') / 30.0 AS in_pd,
@@ -366,6 +384,17 @@ SELECT prog, completed, opens, meals, round(completed::DOUBLE / opens, 4) AS com
 SELECT platform, count(*) AS signups, round(avg(converted::INT), 4) AS onboarding_conversion FROM onboarding GROUP BY 1 ORDER BY 1;
 SELECT variant, platform, count(*) AS signups, round(avg(converted::INT), 4) AS onboarding_conversion
 FROM onboarding WHERE variant IS NOT NULL GROUP BY ALL ORDER BY ALL;
+-- two-proportion z test, android vs ios (all new members, then within each variant);
+-- two-sided p from the normal CDF via the Abramowitz-Stegun 7.1.26 erf approximation
+WITH g AS (SELECT CASE WHEN grouping(variant) = 1 THEN 'all new members' ELSE coalesce(variant, 'not enrolled') END AS scope,
+  platform, count(*) AS n, sum(converted::INT) AS x FROM onboarding GROUP BY GROUPING SETS ((platform), (variant, platform))),
+w AS (SELECT a.scope, a.x::DOUBLE / a.n AS pa, i.x::DOUBLE / i.n AS pi, (a.x + i.x)::DOUBLE / (a.n + i.n) AS pp, a.n AS na, i.n AS ni
+  FROM g a JOIN g i ON a.scope = i.scope AND a.platform = 'android' AND i.platform = 'ios'),
+z AS (SELECT scope, pa, pi, (pa - pi) / sqrt(pp * (1 - pp) * (1.0 / na + 1.0 / ni)) AS z FROM w),
+e AS (SELECT *, abs(z) / sqrt(2) AS x, 1 / (1 + 0.3275911 * abs(z) / sqrt(2)) AS t FROM z)
+SELECT scope, round(pa, 4) AS android, round(pi, 4) AS ios, round(z, 2) AS z,
+ round(1 - (1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * exp(-x * x)), 3) AS p_two_sided
+FROM e ORDER BY scope;
 
 -- EVAL Q18 — meal logging per app open during the sync outage vs the surrounding week
 WITH w AS (SELECT (t >= TIMESTAMP '2026-08-20' AND t < TIMESTAMP '2026-08-23') AS outage, event FROM ev
@@ -378,10 +407,20 @@ SELECT outage, meals, opens, round(meals::DOUBLE / opens, 4) AS meals_per_open,
 SELECT strftime(date::DATE, '%Y-%m') AS month, sum(new_subscriptions) AS new_subscriptions,
  round(sum(gross_bookings_usd), 2) AS gross_bookings_usd, round(sum(store_fees_usd), 2) AS store_fees_usd, round(sum(net_bookings_usd), 2) AS net_bookings_usd
 FROM wh_billing GROUP BY 1 ORDER BY 1;
+-- billing counts vs Mixpanel purchases by month: settlement timing, failed or
+-- refunded first payments, and store-page purchases make them differ slightly
+WITH b AS (SELECT strftime(date::DATE, '%Y-%m') AS month, sum(new_subscriptions) AS billing FROM wh_billing GROUP BY 1),
+m AS (SELECT strftime(t, '%Y-%m') AS month, count(*) AS mixpanel FROM ev WHERE event = 'subscription purchased' GROUP BY 1)
+SELECT month, billing, mixpanel, billing - mixpanel AS difference FROM b FULL JOIN m USING (month) ORDER BY month;
 -- weekly new subscriptions (Monday weeks; the first and last weeks are partial): June has no ramp
 SELECT date_trunc('week', date::DATE) AS week, count(DISTINCT date::DATE) AS days, sum(new_subscriptions) AS new_subscriptions,
  round(sum(new_subscriptions)::DOUBLE / count(DISTINCT date::DATE), 2) AS per_day
 FROM wh_billing GROUP BY 1 ORDER BY 1;
+-- Mixpanel purchases by month and buyer type: pre-window members, new paid-social members, other new members
+WITH p AS (SELECT uid, t FROM ev WHERE event = 'subscription purchased')
+SELECT strftime(p.t, '%Y-%m') AS month, count(*) FILTER (WHERE s.uid IS NULL) AS pre_window_members,
+ count(*) FILTER (WHERE s.ch = 'paid_social') AS new_paid_social, count(*) FILTER (WHERE s.ch <> 'paid_social') AS new_other_channels
+FROM p LEFT JOIN signups s USING (uid) GROUP BY 1 ORDER BY 1;
 -- weekly trial starts (members who joined shortly before June 4 still start trials in June)
 SELECT date_trunc('week', t) AS week, count(*) AS trial_starts FROM ev WHERE event = 'trial started' GROUP BY 1 ORDER BY 1;
 
