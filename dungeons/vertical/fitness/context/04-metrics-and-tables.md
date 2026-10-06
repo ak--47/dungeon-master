@@ -11,7 +11,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 | Time to onboard | Time from `account created` to `starter workout completed` for members who complete onboarding (median preferred). |
 | Weekly active members | Unique members with any event in a calendar week (Monday start). |
 | Workout frequency | `workout completed` events per active member per week. |
-| Day-N retention | Of new members who signed up on day 0, the share with any event in days N to N+6 after signup. Only count members who signed up at least N+7 days before the end of the data. |
+| Week-N retention | Of new members who signed up on day 0, the share with any event in days 7N to 7N+6 after signup (Mixpanel Retention, weekly unit, Week N bucket; Week 4 = days 28-34). Only count members who signed up at least 7N+7 days before the end of the data. |
 | Trial start rate | Share of new members with `trial started`. |
 | Trial-to-paid | Share of trial starters with `subscription purchased` (on any plan). |
 | New Plus subscriptions | Count of `subscription purchased`, split by `plan`. Each member buys at most once. |

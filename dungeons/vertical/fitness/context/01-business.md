@@ -7,7 +7,7 @@ Stridewell is a consumer fitness app for people who want to train consistently w
 ## What members do in the app
 
 - **Plan and train.** A member picks a workout (strength, running, HIIT, yoga, cycling, or walking) and schedules it. When they finish, the app records the workout. The core habit loop is *plan → train → check progress*.
-- **Track.** A workout can be tracked by a connected wearable (smartwatch, fitness band, or chest strap), by the phone's sensors, or entered by hand. Some wearables sync through a third-party health-data partner; others pair directly with the phone.
+- **Track.** A workout can be tracked by a connected wearable (smartwatch, fitness band, or chest strap), by the phone's sensors, or entered by hand. A wearable workout reaches Stridewell when the device syncs after the workout.
 - **Progress.** Members check weekly minutes, streaks, body weight, personal records, and heart-rate trends.
 - **Challenges.** Members join time-boxed challenges (steps, strength, streak, or distance), either **solo** or as part of a **team** with friends. Each challenge has its own ID.
 - **Social.** Members add friends and view leaderboards (friends, challenge, city, global).

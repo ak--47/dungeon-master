@@ -52,7 +52,7 @@ New members go through onboarding once, right after they install. These four eve
 
 | Event | Meaning | Properties |
 |---|---|---|
-| `paywall viewed` | A free member sees the Plus paywall. | `paywall_trigger` (`workout_library`, `advanced_plans`, `coach_teaser`, `challenge_limit`, `settings`); `plan`: the plan highlighted on the paywall. |
+| `paywall viewed` | A free member sees the Plus paywall. | `paywall_trigger` (`workout_library`, `advanced_plans`, `coach_teaser` (the Stride Coach teaser, shown from 2026-08-12), `challenge_limit`, `settings`); `plan`: the plan highlighted on the paywall. |
 | `trial started` | A new member starts their one 7-day Plus trial. | `plan` (`monthly` or `annual`): the plan the trial converts to; `trial_days` (7). |
 | `subscription purchased` | The member buys Plus. One per member. Price is **not** tracked here; see `subscription_billing_daily`. | `plan` (`monthly` or `annual`); `payment_method` (`apple_pay`, `google_pay`, `card`). |
 

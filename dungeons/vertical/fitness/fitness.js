@@ -16,8 +16,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             (Monthly $12.99 → $14.99 from 2026-09-01, Annual $99.99).
  *             New members get one 7-day trial; Stride Coach (AI coaching) is a
  *             Plus feature from 2026-08-12.
- * SCALE:      10,000 simulated users → ≈9,050 active members (≈4,000 join
- *             inside the window; ≈950 would-be joiners are removed by the
+ * SCALE:      10,000 simulated users → ≈9,090 member profiles (≈4,090 join
+ *             inside the window; ≈900 would-be joiners are removed by the
  *             Summer Shred baseline thinning, see H5), ~1.21M events,
  *             120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  workout planned → workout completed → progress checked
@@ -37,7 +37,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *       account created → goal quiz completed → plan generated → starter workout completed (45%)
  *   - Workout Loop: workout planned → workout completed → progress checked (55%)
  *   - Upgrade to Plus (trial), new free members: paywall viewed → trial started → subscription purchased (35%)
- *   - Upgrade to Plus (direct), long-time free members: paywall viewed → subscription purchased (10%)
+ *   - Upgrade to Plus (direct), long-time free members: paywall viewed → subscription purchased (1%;
+ *       ≈7% of the long-time free pool buys in the window, so purchases stay ≈flat week to week)
  *   - Team Challenge: challenge joined → challenge completed (60%, challenge_format "team")
  *   - Solo Challenge: challenge joined → challenge completed (30%, challenge_format "solo")
  *   - Coaching: coach session → workout planned → workout completed (50%)
@@ -88,13 +89,18 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * H2. STRIDE COACH LAUNCH (everything)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: from 2026-08-12, 45% of Plus workouts (event-time
- *   subscription_tier monthly/annual) run with coaching_mode = "ai_coach" and
- *   last 1.2x longer (calories scale with the longer session). Free and
- *   pre-launch workouts stay self_guided. Heart rate, perceived effort, and
- *   calories per minute are untouched (an honest null: longer, not harder).
+ * PATTERN: from 2026-08-12, Plus workouts (event-time subscription_tier
+ *   monthly/annual) can run with coaching_mode = "ai_coach". Adoption is per
+ *   member: 60% of Plus members adopt (salted), and adopters' use ramps from
+ *   40% of full use on launch day to 75% of their workouts after 21 days, so
+ *   the Plus-workout share climbs from ≈20% in launch week to 0.6 × 0.75 =
+ *   45% from 2026-09-02. Coached sessions last 1.2x longer (calories scale
+ *   with the longer session). Free and pre-launch workouts stay self_guided.
+ *   Heart rate, perceived effort, and calories per minute are untouched (an
+ *   honest null: longer, not harder).
  * MIXPANEL: Insights, workout completed, average duration_minutes, breakdown
- *   coaching_mode, filter subscription_tier != free, after 2026-08-12.
+ *   coaching_mode, filter subscription_tier != free, after 2026-08-12; weekly
+ *   share of ai_coach for the ramp.
  * REAL WORLD: real-time pacing cues keep people training longer.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -106,7 +112,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   sync_error_rate ≈ 0.75 and partner_api_status = "major_outage" on those
  *   days for those devices.
  * MIXPANEL: Insights, workout completed, daily, breakdown tracking_source and
- *   wearable_type; join the warehouse sync_error_rate to explain the dip.
+ *   wearable_type; join the warehouse sync_error_rate to explain the dip. The
+ *   assertion divides watch + band workouts by all unaffected workouts (phone,
+ *   manual, chest strap) to keep the 3-day denominator large.
  * REAL WORLD: third-party health-data integrations fail silently.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -139,13 +147,21 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * H6. FIRST-WEEK HABIT (everything)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: new members with fewer than 3 workouts in their first 7 days:
- *   50% of them go dark after day 14. Classification uses first-week
- *   activity only. Separately, 80% of all new members lapse on a uniform
- *   day in [8, 45] (organic churn, independent of the habit split), which
- *   sets realistic D28 levels without touching the 2x ratio.
- * MIXPANEL: Retention, account created → any event, cohort "3+ workout
- *   completed in first 7 days" vs the rest; D28 ≈ 52% vs 23%.
+ * PATTERN: a new member with k workouts in their first 7 days goes dark
+ *   after day 14 with probability 0.6 × (1 − k/5), floored at 0 (0 → 60%,
+ *   2 → 36%, 4 → 12%, 5+ → 0%). Retention climbs with each early workout;
+ *   there is no cliff. Classification uses first-week activity only.
+ *   Separately, 80% of all new members lapse on a uniform day in [8, 45]
+ *   (organic churn, independent of the habit split), which sets realistic
+ *   levels without touching the ratio.
+ * MIXPANEL: Retention, birth account created → return any event, weekly
+ *   unit, read the Week 4 bucket (days 28-34 after signup). Segment by
+ *   first-week workouts with per-signup-week cohorts: members whose account
+ *   created falls in week W and who did workout completed N+ times between
+ *   the start of W and 7 days after its end (an approximation of each
+ *   member's first 7 days; the exact per-member window needs the raw export).
+ *   Week 4 ≈ 18% for 0 early workouts, ≈ 30% for 1-2, ≈ 39% for 3-4,
+ *   ≈ 53% for 5+.
  * REAL WORLD: the first week sets the habit; most fitness churn is early.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -160,49 +176,57 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * H8. PUSH FATIGUE (everything)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: members who receive 20+ notifications in the window stop opening
- *   them: 60% of would-be opens go unopened (open rate ≈ 30% vs 75%).
+ * PATTERN: fatigue builds per notification. A member's first 12
+ *   notifications in the window open at the organic 75%. From the 13th, the
+ *   chance a would-be open goes unopened ramps linearly to 60% at the 28th
+ *   and stays there (open rate ≈ 30% from the 28th on). Early notifications
+ *   of heavy recipients stay fresh.
  * MIXPANEL: Insights, notification received, share with opened = true,
- *   breakdown by a cohort on notification count (bins 15-19 vs 20-24 show the
- *   cliff).
+ *   breakdown by cohorts on notification count in the window (<12, 12-19,
+ *   20-27, 28+): the open rate bends down gradually (≈75% → ≈48% for 40+).
  * REAL WORLD: notification overload trains people to ignore the app.
  *
  * ─────────────────────────────────────────────────────────────────────────
  * H9. FALL RESET PROGRAM (declarative world event)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: 2026-09-08 for 14 days, workout planned and workout completed run
- *   at 1.5x; app opens are untouched.
- * MIXPANEL: Insights, workout completed and app opened, daily; formula A/B
- *   rises ≈ 1.5x during the program.
- * REAL WORLD: a back-to-routine program after Labor Day lifts training, not
- *   app visits.
+ *   at 1.5x and app opens at 1.2x (two world events); meal logging is
+ *   untouched.
+ * MIXPANEL: Insights, workout completed, app opened, meal logged, daily;
+ *   formula workouts / app opens rises ≈ 1.25x and app opens / meals ≈ 1.2x
+ *   during the program.
+ * REAL WORLD: a back-to-routine program after Labor Day brings members back
+ *   a bit more often and makes each visit a training session.
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-fitness, 2026-10-06)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                      | Derivation              | Expected  | Measured
  * -----|---------------------------------------------|-------------------------|-----------|---------
- * H1   | onboarding conversion Guided/Control        | GUIDED_CONV_MULT        | 1.30      | 1.318 (58.9% vs 44.7%)
- * H1   | median onboarding TTC Guided/Control        | GUIDED_TTC_MULT         | 0.70      | 0.691
- * H1   | Guided share of enrolled                    | equal 2-arm hash        | 0.50      | 0.504
+ * H1   | onboarding conversion Guided/Control        | GUIDED_CONV_MULT        | 1.30      | 1.290 (58.3% vs 45.2%)
+ * H1   | median onboarding TTC Guided/Control        | GUIDED_TTC_MULT         | 0.70      | 0.703
+ * H1   | Guided share of enrolled                    | equal 2-arm hash        | 0.50      | 0.502
  * H2   | ai_coach rows pre-launch or free tier       | exact purity            | 0         | 0
- * H2   | post-launch Plus duration ai/self           | AI_DURATION_MULT        | 1.20      | 1.194
- * H2   | post-launch Plus ai_coach share             | AI_ADOPTION             | 0.45      | 0.445
- * H3   | watch+band / phone, outage vs ±7 days       | OUTAGE_KEEP             | 0.25      | 0.274
+ * H2   | post-launch Plus duration ai/self           | AI_DURATION_MULT        | 1.20      | 1.191
+ * H2   | Plus ai_coach share after the 21-day ramp   | ADOPTER_SHARE × USE     | 0.45      | 0.448
+ * H3   | watch+band / unaffected, outage vs ±7 days  | OUTAGE_KEEP             | 0.25      | 0.249
  * H3   | warehouse sync_error_rate during outage     | 1 − OUTAGE_KEEP         | 0.75      | 0.750
- * H4   | monthly/annual purchases, after vs before   | 1 − MONTHLY_LOSS        | 0.65      | 0.659
- * H4   | monthly/annual bookings, after vs before    | 0.65 × 14.99/12.99      | 0.75      | 0.760
- * H5   | paid-social spend per signup, Shred/rest    | SHRED_CPI_MULT          | 2.00      | 1.948
- * H5   | daily signups, Shred/rest (all channels)    | 1/(1 − SHRED_INCREMENTAL)| 1.33     | 1.350
- * H5   | daily signups, Shred/rest (non-paid-social) | control                 | 1.00      | 1.023
- * H5   | paid-social buy rate vs same-week others    | 1 − PAID_SOCIAL_NO_BUY  | 0.50      | 0.476
- * H6   | D28 retention habit/low                     | ≥ 1/(1 − 0.5) (floor)   | ≥ 2.0     | 2.261 (52.4% vs 23.2%)
- * H7   | per-challenge completion, team              | TEAM_CONV               | 0.60      | 0.590
- * H7   | per-challenge completion, solo              | SOLO_CONV               | 0.30      | 0.296
- * H8   | open rate heavy (20+) / light               | 1 − PUSH_FATIGUE_FLIP   | 0.40      | 0.402
- * H8   | open rate light (control)                   | declared pool 3 of 4    | 0.75      | 0.751
- * H9   | completed per app open, program/before      | FALL_RESET_MULT         | 1.50      | 1.503
- * H9   | planned per app open, program/before        | FALL_RESET_MULT         | 1.50      | 1.497
+ * H4   | monthly/annual purchases, after vs before   | 1 − MONTHLY_LOSS        | ≤ 0.65    | 0.640
+ * H4   | monthly/annual bookings, after vs before    | 0.65 × 14.99/12.99      | ≤ 0.75    | 0.739
+ * H4   | long-time free members buying in window     | DIRECT_CONV (realism)   | 3-8%      | 7.2%
+ * H5   | paid-social spend per signup, Shred/rest    | SHRED_CPI_MULT          | 2.00      | 1.936
+ * H5   | daily signups, Shred/rest (all channels)    | 1/(1 − SHRED_INCREMENTAL)| 1.33     | 1.316
+ * H5   | daily signups, Shred/rest (non-paid-social) | control                 | 1.00      | 1.021
+ * H5   | paid-social buy rate vs same-week others    | 1 − PAID_SOCIAL_NO_BUY  | ≤ 0.50    | 0.588 (STRONG)
+ * H6   | Week-4 retention, 5+ vs 0 early workouts    | ≥ 1/(1 − 0.6) (floor)   | ≥ 2.5     | 2.912 (53.3% vs 18.3%)
+ * H6   | retention rises across 0 / 1-2 / 3-4 / 5+   | monotone churn share    | 3 steps   | 3
+ * H7   | per-challenge completion, team              | TEAM_CONV               | 0.60      | 0.588
+ * H7   | per-challenge completion, solo              | SOLO_CONV               | 0.30      | 0.295
+ * H8   | open rate 28th+ / first 12, same members    | 1 − PUSH_FATIGUE_FLIP   | 0.40      | 0.403
+ * H8   | open rate, first 12 notifications (control) | declared pool 3 of 4    | 0.75      | 0.754
+ * H9   | completed per app open, program/before      | 1.5 / 1.2               | 1.25      | 1.211
+ * H9   | planned per app open, program/before        | 1.5 / 1.2               | 1.25      | 1.223
+ * H9   | app opens per meal logged, program/before   | FALL_RESET_OPEN_MULT    | 1.20      | 1.206
  * ═════════════════════════════════════════════════════════════════════════
  */
 
@@ -239,8 +263,12 @@ const GUIDED_TTC_MULT = 0.7;
 const ONBOARDING_CONV = 45;
 const ONBOARDING_TTC_H = 24;
 
-// H2 Stride Coach
-const AI_ADOPTION = 0.45;          // share of Plus workouts run with Stride Coach after launch
+// H2 Stride Coach: adoption is per member, and ramps up over the first weeks
+const AI_ADOPTER_SHARE = 0.6;      // share of Plus members who adopt Stride Coach (salted per member)
+const AI_ADOPTER_USE = 0.75;       // share of an adopter's workouts run with Stride Coach once the ramp ends
+const AI_ADOPTION = AI_ADOPTER_SHARE * AI_ADOPTER_USE; // steady-state share of Plus workouts (0.45)
+const AI_RAMP_DAYS = 21;           // days after launch until adopters reach full use
+const AI_RAMP_FLOOR = 0.4;         // adopters' use on launch day, as a share of full use
 const AI_DURATION_MULT = 1.2;
 
 // H3 wearable sync outage
@@ -252,6 +280,9 @@ const PRICE_MONTHLY_OLD = 12.99;
 const PRICE_MONTHLY_NEW = 14.99;
 const PRICE_ANNUAL = 99.99;
 const MONTHLY_LOSS = 0.35;         // share of post-change monthly purchases lost
+// long-time free members (trial already used) rarely buy straight from the
+// paywall: ≈ 1% per paywall visit, a few percent of the free pool per quarter
+const DIRECT_CONV = 1;
 
 // H5 Summer Shred paid social
 const PAID_CHANNELS = ["paid_social", "paid_search", "app_store_ads"];
@@ -272,7 +303,12 @@ const PAID_SOCIAL_NO_BUY = 0.5;    // share of paid_social signups that never bu
 const HABIT_DAYS = 7;
 const HABIT_MIN_WORKOUTS = 3;
 const HABIT_CHURN_AFTER_DAYS = 14;
-const HABIT_CHURN_SHARE = 0.5;     // share of low-habit new users who go dark after day 14
+// share of new members who go dark after day 14, by first-week workout count k:
+// HABIT_CHURN_MAX × (1 − k / HABIT_SAFE_WORKOUTS), floored at 0 (0 → 60%, 1 → 48%,
+// 2 → 36%, 3 → 24%, 4 → 12%, 5+ → 0%): each extra early workout helps, no cliff
+const HABIT_CHURN_MAX = 0.6;
+const HABIT_SAFE_WORKOUTS = 5;
+const habitChurnShare = (k) => HABIT_CHURN_MAX * Math.max(0, 1 - k / HABIT_SAFE_WORKOUTS);
 // organic new-member lapse (applies to every new member, independent of H6):
 // this share stop using the app on a uniform day in [8, 45] after signup
 const LAPSE_SHARE = 0.8;
@@ -284,13 +320,18 @@ const TEAM_CONV = 60;
 const SOLO_CONV = 30;
 const CHALLENGE_TTC_H = 96;
 
-// H8 notification fatigue
-const PUSH_FATIGUE_THRESHOLD = 20; // notifications received in the window (calibrated ≈ p80)
-const PUSH_FATIGUE_FLIP = 0.6;     // share of opened pushes that go unopened above the threshold
+// H8 notification fatigue: a member's k-th notification (in time order) is
+// fresh up to PUSH_FATIGUE_START; from there the chance that a would-be open
+// goes unopened ramps linearly to PUSH_FATIGUE_FLIP at PUSH_FATIGUE_FULL
+const PUSH_FATIGUE_START = 12;     // ≈ the median member's notification count in the window
+const PUSH_FATIGUE_FULL = 28;      // ≈ p90
+const PUSH_FATIGUE_FLIP = 0.6;     // share of would-be opens lost once fully fatigued
+const pushFlip = (k) => PUSH_FATIGUE_FLIP * Math.min(1, Math.max(0, (k - PUSH_FATIGUE_START) / (PUSH_FATIGUE_FULL - PUSH_FATIGUE_START)));
 
 // H9 Fall Reset program
 const FALL_RESET_MULT = 1.5;
 const FALL_RESET_EVENTS = ["workout planned", "workout completed"];
+const FALL_RESET_OPEN_MULT = 1.2;  // the program also brings members into the app a bit more
 
 // workout calorie model (kcal per minute at moderate effort)
 const KCAL_PER_MIN = { strength: 6, running: 10.5, hiit: 11, yoga: 3.5, cycling: 8.5, walking: 4.5 };
@@ -381,11 +422,11 @@ function handleEverything(events, meta) {
 		purchase = null;
 	}
 
-	// ── H6: first-week habit — low-habit new users go dark after day 14 ──
+	// ── H6: first-week habit — fewer early workouts, more likely to go dark after day 14 ──
 	if (signup) {
 		const habitEnd = birthMs + HABIT_DAYS * 86_400_000;
 		const early = events.filter((e) => e.event === "workout completed" && T(e) >= birthMs && T(e) < habitEnd).length;
-		if (early < HABIT_MIN_WORKOUTS && salt(uid, "habit") < HABIT_CHURN_SHARE) {
+		if (salt(uid, "habit") < habitChurnShare(early)) {
 			const cut = birthMs + HABIT_CHURN_AFTER_DAYS * 86_400_000;
 			events = events.filter((e) => T(e) < cut);
 			if (purchase && T(purchase) >= cut) purchase = null;
@@ -411,11 +452,18 @@ function handleEverything(events, meta) {
 	for (const e of events) e.subscription_tier = T(e) >= buyMs ? purchase.plan : initialTier;
 	if (purchase) profile.subscription_tier = purchase.plan;
 
-	// ── H2: Stride Coach — Plus workouts after launch, longer sessions ──
+	// ── H2: Stride Coach — adopting Plus members, ramping up after launch, longer sessions ──
 	const launch = ms(AI_COACH_LAUNCH);
+	const adopter = salt(uid, "coach-adopter") < AI_ADOPTER_SHARE;
 	for (const e of events) {
+		if (e.event === "paywall viewed" && e.paywall_trigger === "coach_teaser" && T(e) < launch) {
+			// the Stride Coach teaser only exists on the paywall from launch day
+			e.paywall_trigger = chance.pickone(["workout_library", "advanced_plans", "challenge_limit", "settings"]);
+		}
+		if (!adopter) continue;
+		const ramp = AI_RAMP_FLOOR + (1 - AI_RAMP_FLOOR) * Math.min(1, (T(e) - launch) / (AI_RAMP_DAYS * 86_400_000));
 		if ((e.event === "workout completed" || e.event === "workout planned") && T(e) >= launch && e.subscription_tier !== "free"
-			&& chance.bool({ likelihood: AI_ADOPTION * 100 })) {
+			&& chance.bool({ likelihood: AI_ADOPTER_USE * ramp * 100 })) {
 			e.coaching_mode = "ai_coach";
 			if (e.event === "workout completed") {
 				e.duration_minutes = Math.round(e.duration_minutes * AI_DURATION_MULT);
@@ -438,13 +486,12 @@ function handleEverything(events, meta) {
 		}
 	}
 
-	// ── H8: notification fatigue — heavy push recipients stop opening ──
-	const pushes = events.filter((e) => e.event === "notification received");
-	if (pushes.length >= PUSH_FATIGUE_THRESHOLD) {
-		for (const p of pushes) {
-			if (p.opened === true && chance.bool({ likelihood: PUSH_FATIGUE_FLIP * 100 })) p.opened = false;
-		}
-	}
+	// ── H8: notification fatigue — each notification past the START-th is less likely to be opened ──
+	const pushes = events.filter((e) => e.event === "notification received").sort((a, b) => T(a) - T(b));
+	pushes.forEach((p, i) => {
+		const flip = pushFlip(i + 1);
+		if (flip > 0 && p.opened === true && chance.bool({ likelihood: flip * 100 })) p.opened = false;
+	});
 
 	return events;
 }
@@ -746,7 +793,7 @@ const config = {
 			name: "Upgrade to Plus (direct)",
 			sequence: ["paywall viewed", "subscription purchased"],
 			conditions: { subscription_tier: "free", trial_eligible: false },
-			conversionRate: 10,
+			conversionRate: DIRECT_CONV,
 			timeToConvert: 24,
 			order: "sequential",
 			weight: 2,
@@ -880,6 +927,14 @@ const config = {
 			affectsEvents: FALL_RESET_EVENTS,
 			volumeMultiplier: FALL_RESET_MULT,
 		},
+		{
+			name: "fall_reset_app_visits",
+			type: "campaign",
+			startDay: dayIndex(FALL_RESET_START),
+			duration: FALL_RESET_DAYS,
+			affectsEvents: ["app opened"],
+			volumeMultiplier: FALL_RESET_OPEN_MULT,
+		},
 	],
 
 	// retention shape (also pins each new member's signup to their install day)
@@ -922,6 +977,10 @@ const OUTAGE_BASE_FROM = TS(dayjs.utc(SYNC_OUTAGE_START).subtract(7, "day"));
 const OUTAGE_BASE_TO = TS(dayjs.utc(SYNC_OUTAGE_END).add(7, "day"));
 const RESET_BASE_FROM = TS(dayjs.utc(FALL_RESET_START).subtract(FALL_RESET_DAYS, "day"));
 const RESET_END = TS(dayjs.utc(FALL_RESET_START).add(FALL_RESET_DAYS, "day"));
+const AI_RAMP_END = TS(dayjs.utc(AI_COACH_LAUNCH).add(AI_RAMP_DAYS, "day"));
+const OUTAGE_LIST = OUTAGE_TYPES.map((x) => `'${x}'`).join(", ");
+// one month of post-change purchases at ≈50 a week (see the H4 narrative)
+const H4_MIN_BUYERS = 150;
 const band = (k) => [Math.round(k * 0.9 * 1000) / 1000, Math.round(k * 1.1 * 1000) / 1000];
 
 /** step_counts conversion by segment from a timeToConvert breakdown. */
@@ -981,7 +1040,7 @@ FROM ev WHERE event = '$experiment_started'`,
 		id: "H2-stride-coach-launch",
 		hook: "H2",
 		archetype: "temporal-inflection",
-		narrative: `Stride Coach launches ${AI_COACH_LAUNCH.slice(0, 10)} for Plus members. ${AI_ADOPTION * 100}% of Plus workouts after launch run with coaching_mode = 'ai_coach', and those sessions last ${AI_DURATION_MULT}x longer. Free-tier workouts and every pre-launch workout stay self_guided, so purity is exact. subscription_tier on each event is the member's plan at that moment.`,
+		narrative: `Stride Coach launches ${AI_COACH_LAUNCH.slice(0, 10)} for Plus members. Adoption is per member: ${AI_ADOPTER_SHARE * 100}% of Plus members adopt it, and adopters' use ramps from ${AI_RAMP_FLOOR * 100}% of full use on launch day to full use (${AI_ADOPTER_USE * 100}% of their workouts) after ${AI_RAMP_DAYS} days, so from then on ${AI_ADOPTER_SHARE} × ${AI_ADOPTER_USE} = ${AI_ADOPTION} of Plus workouts run with coaching_mode = 'ai_coach' (adoption is salted independently of workout volume). Those sessions last ${AI_DURATION_MULT}x longer. Free-tier workouts and every pre-launch workout stay self_guided, so purity is exact. subscription_tier on each event is the member's plan at that moment.`,
 		mixpanelReport: { type: "Insights", event: "workout completed", measure: "average duration_minutes", breakdown: "coaching_mode", filter: "subscription_tier != free, after launch" },
 		assertions: [
 			{
@@ -1013,9 +1072,10 @@ FROM ev WHERE event = 'workout completed' AND t >= TIMESTAMP '${TS(AI_COACH_LAUN
 					sql: `WITH ${ID_CTE}
 SELECT 'plus' AS grp, count(DISTINCT uid) AS user_count,
  count(*) FILTER (WHERE coaching_mode = 'ai_coach')::DOUBLE / count(*) AS ai_share
-FROM ev WHERE event = 'workout completed' AND t >= TIMESTAMP '${TS(AI_COACH_LAUNCH)}' AND subscription_tier <> 'free'`,
+FROM ev WHERE event = 'workout completed' AND t >= TIMESTAMP '${AI_RAMP_END}' AND subscription_tier <> 'free'`,
 				},
 				select: { p: { where: { grp: "plus" } } },
+				// steady state after the ramp: adopter share × adopter use
 				expect: { metric: "p.ai_share", op: "between", target: band(AI_ADOPTION) },
 				minCohort: 500,
 			},
@@ -1025,7 +1085,7 @@ FROM ev WHERE event = 'workout completed' AND t >= TIMESTAMP '${TS(AI_COACH_LAUN
 		id: "H3-wearable-sync-outage",
 		hook: "H3",
 		archetype: "bespoke",
-		narrative: `A partner health-API outage (${SYNC_OUTAGE_START.slice(0, 10)} to ${SYNC_OUTAGE_END.slice(0, 10)}, exclusive) stops most smartwatch and fitness-band workouts from syncing: only ${OUTAGE_KEEP * 100}% arrive. Chest straps pair directly and phone-tracked workouts are untouched. The outage days come from the warehouse table wearable_sync_daily (sync_error_rate > 0.2); the event-side read is a ratio of ratios (affected wearable / phone workouts, outage days vs the 7 days either side), which cancels weekday and seasonal volume and reads the keep rate.`,
+		narrative: `A partner health-API outage (${SYNC_OUTAGE_START.slice(0, 10)} to ${SYNC_OUTAGE_END.slice(0, 10)}, exclusive) stops most smartwatch and fitness-band workouts from syncing: only ${OUTAGE_KEEP * 100}% arrive. Chest-strap, phone-tracked, and manual workouts are untouched. The outage days come from the warehouse table wearable_sync_daily (sync_error_rate > 0.2); the event-side read is a ratio of ratios (affected wearable / all unaffected workouts, outage days vs the 7 days either side), which cancels weekday and seasonal volume and reads the keep rate. Pooling every unaffected source keeps the 3-day denominator large.`,
 		mixpanelReport: { type: "Insights", event: "workout completed", measure: "total", breakdown: "tracking_source, wearable_type", chart: "daily line", join: "warehouse wearable_sync_daily.sync_error_rate" },
 		assertions: [
 			{
@@ -1034,13 +1094,12 @@ FROM ev WHERE event = 'workout completed' AND t >= TIMESTAMP '${TS(AI_COACH_LAUN
 					sql: `WITH ${ID_CTE},
 od AS (SELECT DISTINCT date::DATE AS d FROM ${WH("wearable_sync_daily")} WHERE sync_error_rate > 0.2),
 w AS (SELECT t::DATE AS d, uid,
-  CASE WHEN tracking_source = 'wearable' AND wearable_type IN (${OUTAGE_TYPES.map((x) => `'${x}'`).join(", ")}) THEN 'aff'
-       WHEN tracking_source = 'phone' THEN 'phone' END AS arm
+  CASE WHEN tracking_source = 'wearable' AND wearable_type IN (${OUTAGE_LIST}) THEN 'aff' ELSE 'ctl' END AS arm
   FROM ev WHERE event = 'workout completed' AND t >= TIMESTAMP '${OUTAGE_BASE_FROM}' AND t < TIMESTAMP '${OUTAGE_BASE_TO}'),
-g AS (SELECT (d IN (SELECT d FROM od)) AS outage, count(*) FILTER (WHERE arm = 'aff') AS aff, count(*) FILTER (WHERE arm = 'phone') AS phone, count(DISTINCT uid) AS users
+g AS (SELECT (d IN (SELECT d FROM od)) AS outage, count(*) FILTER (WHERE arm = 'aff') AS aff, count(*) FILTER (WHERE arm = 'ctl') AS ctl, count(DISTINCT uid) AS users
   FROM w GROUP BY 1)
 SELECT 'all' AS grp, (SELECT count(*) FROM od) AS outage_days, min(users) AS user_count,
- (max(aff::DOUBLE / phone) FILTER (WHERE outage)) / (max(aff::DOUBLE / phone) FILTER (WHERE NOT outage)) AS did
+ (max(aff::DOUBLE / ctl) FILTER (WHERE outage)) / (max(aff::DOUBLE / ctl) FILTER (WHERE NOT outage)) AS did
 FROM g`,
 				},
 				select: { a: { where: { grp: "all" } } },
@@ -1066,7 +1125,7 @@ FROM ${WH("wearable_sync_daily")}`,
 		id: "H4-monthly-price-change",
 		hook: "H4",
 		archetype: "temporal-inflection",
-		narrative: `On ${PRICE_CHANGE.slice(0, 10)} Plus Monthly rises from $${PRICE_MONTHLY_OLD} to $${PRICE_MONTHLY_NEW}; Annual stays $${PRICE_ANNUAL}. ${MONTHLY_LOSS * 100}% of would-be monthly purchases after the change never happen. Annual is the control: the monthly/annual purchase ratio after vs before reads the ${1 - MONTHLY_LOSS} keep rate. The prices live only in the warehouse table subscription_billing_daily, so the bookings read needs the join: monthly bookings fall to ${(1 - MONTHLY_LOSS).toFixed(2)} × ${PRICE_MONTHLY_NEW}/${PRICE_MONTHLY_OLD} of trend. Post-change monthly volume is a few hundred purchases, so the NAILED band (knob ±10%) can miss on sampling noise; the floor is a knob-derived ceiling.`,
+		narrative: `On ${PRICE_CHANGE.slice(0, 10)} Plus Monthly rises from $${PRICE_MONTHLY_OLD} to $${PRICE_MONTHLY_NEW}; Annual stays $${PRICE_ANNUAL}. ${MONTHLY_LOSS * 100}% of would-be monthly purchases after the change never happen. Annual is the control: the monthly/annual purchase ratio after vs before reads the ${1 - MONTHLY_LOSS} keep rate. The prices live only in the warehouse table subscription_billing_daily, so the bookings read needs the join: monthly bookings fall to ${(1 - MONTHLY_LOSS).toFixed(2)} × ${PRICE_MONTHLY_NEW}/${PRICE_MONTHLY_OLD} of trend. Purchases run at a realistic ≈50 a week (long-time free members rarely buy straight from the paywall), so the post-change month holds ≈170 buyers: the evidence gate is 150 buyers per side, and the NAILED band (knob ±10%) can miss on sampling noise, so a knob-derived floor backs it.`,
 		mixpanelReport: { type: "Insights", event: "subscription purchased", measure: "total", breakdown: "plan", chart: "weekly line" },
 		assertions: [
 			{
@@ -1081,7 +1140,7 @@ FROM g`,
 				},
 				select: { a: { where: { grp: "all" } } },
 				expect: { metric: "a.did", op: "<=", target: 1 - MONTHLY_LOSS, floor: 1 - MONTHLY_LOSS / 2 },
-				minCohort: 250,
+				minCohort: H4_MIN_BUYERS,
 			},
 			{
 				breakdown: {
@@ -1099,7 +1158,7 @@ FROM g`,
 				select: { a: { where: { grp: "all" } } },
 				// bookings DiD = keep rate × price ratio
 				expect: { metric: "a.did", op: "<=", target: Math.round((1 - MONTHLY_LOSS) * PRICE_MONTHLY_NEW / PRICE_MONTHLY_OLD * 1000) / 1000, floor: Math.round((1 - MONTHLY_LOSS / 2) * PRICE_MONTHLY_NEW / PRICE_MONTHLY_OLD * 1000) / 1000 },
-				minCohort: 250,
+				minCohort: H4_MIN_BUYERS,
 			},
 		],
 	},
@@ -1186,8 +1245,8 @@ FROM w WHERE onn > 0`,
 		id: "H6-first-week-habit",
 		hook: "H6",
 		archetype: "retention-divergence",
-		narrative: `New members who log fewer than ${HABIT_MIN_WORKOUTS} workouts in their first ${HABIT_DAYS} days are at risk: ${HABIT_CHURN_SHARE * 100}% of them go completely dark after day ${HABIT_CHURN_AFTER_DAYS}. Classification uses only first-week activity, so the return window never leaks into the segment. Every new member also faces organic lapse (${LAPSE_SHARE * 100}% stop on a uniform day ${LAPSE_DAY_MIN}-${LAPSE_DAY_MAX}), independent of the split, which sets realistic levels but cancels in the ratio. Day-28 retention (any event in days 28-34 after signup, signups at least 35 days before the window end) is at least 1/(1−${HABIT_CHURN_SHARE}) = ${1 / (1 - HABIT_CHURN_SHARE)}x higher for habit formers; organic selection (busier people retain better anyway) can only push it higher, so the knob is a floor and the read grades STRONG when selection adds lift.`,
-		mixpanelReport: { type: "Retention", birth: "account created", return: "any event", breakdown: "cohort: ≥3 workout completed in first 7 days" },
+		narrative: `The first week sets the habit. A new member with k workouts in their first ${HABIT_DAYS} days goes completely dark after day ${HABIT_CHURN_AFTER_DAYS} with probability ${HABIT_CHURN_MAX} × (1 − k/${HABIT_SAFE_WORKOUTS}), floored at 0: 0 workouts → ${HABIT_CHURN_MAX * 100}%, ${HABIT_SAFE_WORKOUTS}+ workouts → 0%, so retention climbs with each early workout and has no cliff. Classification uses only first-week activity, so the return window never leaks into the segment. Every new member also faces organic lapse (${LAPSE_SHARE * 100}% stop on a uniform day ${LAPSE_DAY_MIN}-${LAPSE_DAY_MAX}), independent of the split, which sets realistic levels but cancels in the ratio. Week-4 retention (Mixpanel Retention, weekly unit, birth-aligned: any event in days 28-34 after signup, signups at least 35 days before the window end) for ${HABIT_SAFE_WORKOUTS}+ early workouts vs 0 is at least 1/(1−${HABIT_CHURN_MAX}) = ${1 / (1 - HABIT_CHURN_MAX)}x; organic selection (busier people retain better anyway) can only push it higher, so the knob is a floor. A second read checks the curve is monotone across 0, 1-2, 3-4, and 5+.`,
+		mixpanelReport: { type: "Retention", birth: "account created", return: "any event", unit: "week", bucket: "Week 4", breakdown: "cohorts on first-week workout completed count (0 / 5+)" },
 		assertions: [
 			{
 				breakdown: {
@@ -1196,15 +1255,34 @@ FROM w WHERE onn > 0`,
 s AS (SELECT uid, t AS t0 FROM ev WHERE event = 'account created' AND t < TIMESTAMP '${TS(DATASET_END)}' - INTERVAL 35 DAY),
 f AS (SELECT s.uid,
   count(*) FILTER (WHERE e.event = 'workout completed' AND e.t < s.t0 + INTERVAL ${HABIT_DAYS} DAY) AS early,
-  count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 28 DAY AND e.t < s.t0 + INTERVAL 35 DAY) AS d28
+  count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 28 DAY AND e.t < s.t0 + INTERVAL 35 DAY) AS w4
   FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
-SELECT CASE WHEN early >= ${HABIT_MIN_WORKOUTS} THEN 'habit' ELSE 'low' END AS grp, count(*) AS user_count,
- avg((d28 > 0)::INT) AS d28_retention
+SELECT CASE WHEN early = 0 THEN 'zero' WHEN early >= ${HABIT_SAFE_WORKOUTS} THEN 'safe' ELSE 'mid' END AS grp, count(*) AS user_count,
+ avg((w4 > 0)::INT) AS w4_retention
 FROM f GROUP BY 1`,
 				},
-				select: { h: { where: { grp: "habit" } }, l: { where: { grp: "low" } } },
-				expect: { metric: "h.d28_retention / l.d28_retention", op: ">=", target: 1 / (1 - HABIT_CHURN_SHARE), floor: 0.9 / (1 - HABIT_CHURN_SHARE) },
+				select: { h: { where: { grp: "safe" } }, z: { where: { grp: "zero" } } },
+				expect: { metric: "h.w4_retention / z.w4_retention", op: ">=", target: 1 / (1 - HABIT_CHURN_MAX), floor: 0.9 / (1 - HABIT_CHURN_MAX) },
 				minCohort: 400,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+s AS (SELECT uid, t AS t0 FROM ev WHERE event = 'account created' AND t < TIMESTAMP '${TS(DATASET_END)}' - INTERVAL 35 DAY),
+f AS (SELECT s.uid,
+  count(*) FILTER (WHERE e.event = 'workout completed' AND e.t < s.t0 + INTERVAL ${HABIT_DAYS} DAY) AS early,
+  count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 28 DAY AND e.t < s.t0 + INTERVAL 35 DAY) AS w4
+  FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1),
+b AS (SELECT CASE WHEN early = 0 THEN 0 WHEN early <= 2 THEN 1 WHEN early < ${HABIT_SAFE_WORKOUTS} THEN 2 ELSE 3 END AS bin, avg((w4 > 0)::INT) AS r, count(*) AS n FROM f GROUP BY 1)
+SELECT 'all' AS grp, min(n) AS user_count,
+ (SELECT count(*) FROM b b1 JOIN b b2 ON b2.bin = b1.bin + 1 WHERE b2.r > b1.r) AS rising_steps
+FROM b`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				// 4 bins → 3 adjacent steps; the churn share falls with every bin
+				expect: { metric: "a.rising_steps", op: "between", target: [3, 3] },
+				minCohort: 200,
 			},
 		],
 	},
@@ -1245,32 +1323,33 @@ FROM f GROUP BY 1`,
 		id: "H8-push-fatigue",
 		hook: "H8",
 		archetype: "frequency-sweet-spot",
-		narrative: `Members who receive ${PUSH_FATIGUE_THRESHOLD}+ notifications in the window stop opening them: ${PUSH_FATIGUE_FLIP * 100}% of their would-be opens go unopened, so their open rate is ${(1 - PUSH_FATIGUE_FLIP).toFixed(1)}x that of lighter recipients. Opens are an independent per-notification draw (3 in 4 organically), and the threshold is applied to the final notification count, so the cohort split is exact and the ratio reads the knob.`,
-		mixpanelReport: { type: "Insights", event: "notification received", measure: "share with opened = true", breakdown: `cohort: ${PUSH_FATIGUE_THRESHOLD}+ notification received` },
+		narrative: `Notification fatigue builds with volume. A member's first ${PUSH_FATIGUE_START} notifications in the window open at the organic 3-in-4 rate. From the ${PUSH_FATIGUE_START + 1}th on, the chance a would-be open goes unopened ramps linearly to ${PUSH_FATIGUE_FLIP * 100}% at the ${PUSH_FATIGUE_FULL}th, and stays there. Same-member read: for members with at least ${PUSH_FATIGUE_FULL} notifications, the open rate of their ${PUSH_FATIGUE_FULL}th-and-later notifications divided by that of their first ${PUSH_FATIGUE_START} reads 1 − ${PUSH_FATIGUE_FLIP} = ${(1 - PUSH_FATIGUE_FLIP).toFixed(1)}. Member-level open rate by notification count bends down gradually instead of stepping.`,
+		mixpanelReport: { type: "Insights", event: "notification received", measure: "share with opened = true", breakdown: "cohorts on notification received count in the window (<12, 12-19, 20-27, 28+)" },
 		assertions: [
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE},
-n AS (SELECT uid, count(*) AS c, avg(opened::INT) AS open_rate, sum(opened::INT) AS opens FROM ev WHERE event = 'notification received' GROUP BY 1)
-SELECT CASE WHEN c >= ${PUSH_FATIGUE_THRESHOLD} THEN 'heavy' ELSE 'light' END AS grp, count(*) AS user_count,
- sum(opens)::DOUBLE / sum(c) AS open_rate
-FROM n GROUP BY 1`,
+n AS (SELECT uid, opened, row_number() OVER (PARTITION BY uid ORDER BY t, insert_id) AS k, count(*) OVER (PARTITION BY uid) AS c
+  FROM ev WHERE event = 'notification received')
+SELECT 'heavy' AS grp, count(DISTINCT uid) AS user_count,
+ avg(opened::INT) FILTER (WHERE k >= ${PUSH_FATIGUE_FULL}) / avg(opened::INT) FILTER (WHERE k <= ${PUSH_FATIGUE_START}) AS late_vs_early
+FROM n WHERE c >= ${PUSH_FATIGUE_FULL}`,
 				},
-				select: { h: { where: { grp: "heavy" } }, l: { where: { grp: "light" } } },
-				expect: { metric: "h.open_rate / l.open_rate", op: "between", target: band(1 - PUSH_FATIGUE_FLIP) },
-				minCohort: 1000,
+				select: { h: { where: { grp: "heavy" } } },
+				expect: { metric: "h.late_vs_early", op: "between", target: band(1 - PUSH_FATIGUE_FLIP) },
+				minCohort: 500,
 			},
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE},
-n AS (SELECT uid, count(*) AS c, sum(opened::INT) AS opens FROM ev WHERE event = 'notification received' GROUP BY 1)
-SELECT 'light' AS grp, count(*) AS user_count, sum(opens)::DOUBLE / sum(c) AS open_rate FROM n WHERE c < ${PUSH_FATIGUE_THRESHOLD}`,
+n AS (SELECT uid, opened, row_number() OVER (PARTITION BY uid ORDER BY t, insert_id) AS k FROM ev WHERE event = 'notification received')
+SELECT 'fresh' AS grp, count(DISTINCT uid) AS user_count, avg(opened::INT) AS open_rate FROM n WHERE k <= ${PUSH_FATIGUE_START}`,
 				},
-				select: { l: { where: { grp: "light" } } },
+				select: { f: { where: { grp: "fresh" } } },
 				// untouched control = the declared pool [true, true, true, false]
-				expect: { metric: "l.open_rate", op: "between", target: band(0.75) },
+				expect: { metric: "f.open_rate", op: "between", target: band(0.75) },
 				minCohort: 1000,
 			},
 		],
@@ -1279,8 +1358,8 @@ SELECT 'light' AS grp, count(*) AS user_count, sum(opens)::DOUBLE / sum(c) AS op
 		id: "H9-fall-reset-program",
 		hook: "H9",
 		archetype: "temporal-inflection",
-		narrative: `The Fall Reset program (${FALL_RESET_START.slice(0, 10)}, ${FALL_RESET_DAYS} days) is a world event that multiplies workout planning and completion by ${FALL_RESET_MULT}. App opens are untouched, so (workouts / app opens) during the program vs the ${FALL_RESET_DAYS} days before reads the multiplier while cancelling weekday mix and the overall trend.`,
-		mixpanelReport: { type: "Insights", events: ["workout completed", "app opened"], measure: "total", chart: "daily line, formula A/B" },
+		narrative: `The Fall Reset program (${FALL_RESET_START.slice(0, 10)}, ${FALL_RESET_DAYS} days) multiplies workout planning and completion by ${FALL_RESET_MULT} and app opens by ${FALL_RESET_OPEN_MULT} (two world events): members train much more and visit the app somewhat more. Meal logging is untouched. Ratios against the ${FALL_RESET_DAYS} days before cancel weekday mix and the overall trend: workouts per app open read ${FALL_RESET_MULT}/${FALL_RESET_OPEN_MULT} = ${(FALL_RESET_MULT / FALL_RESET_OPEN_MULT).toFixed(2)}, and app opens per meal logged read ${FALL_RESET_OPEN_MULT}.`,
+		mixpanelReport: { type: "Insights", events: ["workout completed", "app opened", "meal logged"], measure: "total", chart: "daily line, formulas A/B and B/C" },
 		assertions: [
 			{
 				breakdown: {
@@ -1292,7 +1371,7 @@ g AS (SELECT prog, count(*) FILTER (WHERE event = 'workout completed')::DOUBLE /
 SELECT 'all' AS grp, min(users) AS user_count, max(r) FILTER (WHERE prog) / max(r) FILTER (WHERE NOT prog) AS did FROM g`,
 				},
 				select: { a: { where: { grp: "all" } } },
-				expect: { metric: "a.did", op: "between", target: band(FALL_RESET_MULT) },
+				expect: { metric: "a.did", op: "between", target: band(FALL_RESET_MULT / FALL_RESET_OPEN_MULT) },
 				minCohort: 2000,
 			},
 			{
@@ -1305,7 +1384,21 @@ g AS (SELECT prog, count(*) FILTER (WHERE event = 'workout planned')::DOUBLE / c
 SELECT 'all' AS grp, min(users) AS user_count, max(r) FILTER (WHERE prog) / max(r) FILTER (WHERE NOT prog) AS did FROM g`,
 				},
 				select: { a: { where: { grp: "all" } } },
-				expect: { metric: "a.did", op: "between", target: band(FALL_RESET_MULT) },
+				expect: { metric: "a.did", op: "between", target: band(FALL_RESET_MULT / FALL_RESET_OPEN_MULT) },
+				minCohort: 2000,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+w AS (SELECT (t >= TIMESTAMP '${TS(FALL_RESET_START)}') AS prog, event, uid FROM ev
+  WHERE event IN ('app opened', 'meal logged') AND t >= TIMESTAMP '${RESET_BASE_FROM}' AND t < TIMESTAMP '${RESET_END}'),
+g AS (SELECT prog, count(*) FILTER (WHERE event = 'app opened')::DOUBLE / count(*) FILTER (WHERE event = 'meal logged') AS r, count(DISTINCT uid) AS users FROM w GROUP BY 1)
+SELECT 'all' AS grp, min(users) AS user_count, max(r) FILTER (WHERE prog) / max(r) FILTER (WHERE NOT prog) AS did FROM g`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				// app opens rise modestly; meal logging is the untouched control
+				expect: { metric: "a.did", op: "between", target: band(FALL_RESET_OPEN_MULT) },
 				minCohort: 2000,
 			},
 		],

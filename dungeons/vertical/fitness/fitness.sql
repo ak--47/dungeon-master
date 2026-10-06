@@ -44,8 +44,10 @@ SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-subscript
 CREATE OR REPLACE TEMP TABLE signups AS
 SELECT uid, t AS t0, acquisition_channel AS ch, Platform AS platform FROM ev WHERE event = 'account created';
 
--- dataset overview
-SELECT count(*) AS events, count(DISTINCT uid) AS users, min(t) AS first_event, max(t) AS last_event FROM ev;
+-- dataset overview (a few pre-existing profiles have no events in the window,
+-- so profiles can exceed members with events)
+SELECT count(*) AS events, count(DISTINCT uid) AS users_with_events, (SELECT count(*) FROM users) AS profiles,
+ min(t) AS first_event, max(t) AS last_event FROM ev;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H1-guided-first-week — onboarding A/B starting 2026-07-01
@@ -76,16 +78,20 @@ GROUP BY 1 ORDER BY 1;
 SELECT count(*) FILTER (WHERE coaching_mode = 'ai_coach' AND (t < TIMESTAMP '2026-08-12' OR subscription_tier = 'free')) AS impure_rows
 FROM ev WHERE event IN ('workout completed', 'workout planned');
 
+-- steady-state Stride Coach share of Plus workouts, after the 21-day adoption ramp
+SELECT round(count(*) FILTER (WHERE coaching_mode = 'ai_coach')::DOUBLE / count(*), 4) AS ai_share_after_ramp
+FROM ev WHERE event = 'workout completed' AND t >= TIMESTAMP '2026-09-02' AND subscription_tier <> 'free';
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H3-wearable-sync-outage — partner health-API outage 2026-08-20..22
 -- ─────────────────────────────────────────────────────────────────────────
 WITH od AS (SELECT DISTINCT date::DATE AS d FROM wh_sync WHERE sync_error_rate > 0.2),
+-- control = every unaffected workout (phone, manual, chest strap)
 w AS (SELECT t::DATE AS d,
-  CASE WHEN tracking_source = 'wearable' AND wearable_type IN ('smartwatch', 'fitness_band') THEN 'aff'
-       WHEN tracking_source = 'phone' THEN 'phone' END AS arm
+  CASE WHEN tracking_source = 'wearable' AND wearable_type IN ('smartwatch', 'fitness_band') THEN 'aff' ELSE 'ctl' END AS arm
   FROM ev WHERE event = 'workout completed' AND t >= TIMESTAMP '2026-08-13' AND t < TIMESTAMP '2026-08-30'),
-g AS (SELECT (d IN (SELECT d FROM od)) AS outage, count(*) FILTER (WHERE arm = 'aff') AS aff, count(*) FILTER (WHERE arm = 'phone') AS phone FROM w GROUP BY 1)
-SELECT round((max(aff::DOUBLE / phone) FILTER (WHERE outage)) / (max(aff::DOUBLE / phone) FILTER (WHERE NOT outage)), 4) AS affected_vs_phone_did FROM g;
+g AS (SELECT (d IN (SELECT d FROM od)) AS outage, count(*) FILTER (WHERE arm = 'aff') AS aff, count(*) FILTER (WHERE arm = 'ctl') AS ctl FROM w GROUP BY 1)
+SELECT round((max(aff::DOUBLE / ctl) FILTER (WHERE outage)) / (max(aff::DOUBLE / ctl) FILTER (WHERE NOT outage)), 4) AS affected_vs_unaffected_did FROM g;
 
 SELECT wearable_type, round(avg(sync_error_rate) FILTER (WHERE partner_api_status = 'major_outage'), 4) AS outage_error_rate,
  count(*) FILTER (WHERE partner_api_status = 'major_outage') AS outage_days
@@ -128,18 +134,22 @@ w AS (SELECT date_trunc('week', s.t0) AS wk,
 SELECT round(sum(sb)::DOUBLE / sum(sn * ob::DOUBLE / nullif(onn, 0)), 4) AS paid_social_vs_other_buy_rate_std FROM w WHERE onn > 0;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- STORY H6-first-week-habit — 3+ workouts in the first 7 days
+-- STORY H6-first-week-habit — first-week workout count vs Week-4 retention
 -- ─────────────────────────────────────────────────────────────────────────
+-- Week 4 = Mixpanel Retention, weekly unit, birth-aligned bucket 4 (days 28-34
+-- after signup). Signups at least 35 days before the window end.
 CREATE OR REPLACE TEMP TABLE habit AS
 WITH s AS (SELECT * FROM signups WHERE t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 35 DAY)
 SELECT s.uid, s.t0,
  count(*) FILTER (WHERE e.event = 'workout completed' AND e.t < s.t0 + INTERVAL 7 DAY) AS early_workouts,
- count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 28 DAY AND e.t < s.t0 + INTERVAL 35 DAY) AS d28_events
+ count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 28 DAY AND e.t < s.t0 + INTERVAL 35 DAY) AS w4_events
 FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1, 2;
 
-SELECT CASE WHEN early_workouts >= 3 THEN 'habit (3+)' ELSE 'low (0-2)' END AS grp, count(*) AS members,
- round(avg((d28_events > 0)::INT), 4) AS d28_retention
+SELECT CASE WHEN early_workouts = 0 THEN '0' WHEN early_workouts <= 2 THEN '1-2' WHEN early_workouts <= 4 THEN '3-4' ELSE '5+' END AS first_week_workouts,
+ count(*) AS members, round(avg((w4_events > 0)::INT), 4) AS week4_retention
 FROM habit GROUP BY 1 ORDER BY 1;
+SELECT round((SELECT avg((w4_events > 0)::INT) FROM habit WHERE early_workouts >= 5)
+ / (SELECT avg((w4_events > 0)::INT) FROM habit WHERE early_workouts = 0), 4) AS five_plus_vs_zero;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H7-team-vs-solo-challenges — per-challenge completion
@@ -154,23 +164,30 @@ SELECT challenge_format, count(*) AS challenges, round(avg(completed::INT), 4) A
 FROM challenges GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- STORY H8-push-fatigue — 20+ notifications in the window
+-- STORY H8-push-fatigue — open rate falls with each notification past ~12
 -- ─────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE TEMP TABLE push_seq AS
+SELECT uid, t, opened, row_number() OVER (PARTITION BY uid ORDER BY t, insert_id) AS k, count(*) OVER (PARTITION BY uid) AS c
+FROM ev WHERE event = 'notification received';
 CREATE OR REPLACE TEMP TABLE push AS
-SELECT uid, count(*) AS n, sum(opened::INT) AS opens FROM ev WHERE event = 'notification received' GROUP BY 1;
+SELECT uid, count(*) AS n, sum(opened::INT) AS opens FROM push_seq GROUP BY 1;
 
-SELECT CASE WHEN n >= 20 THEN 'heavy (20+)' ELSE 'light (<20)' END AS grp, count(*) AS members,
- round(sum(opens)::DOUBLE / sum(n), 4) AS open_rate
-FROM push GROUP BY 1 ORDER BY 1;
+-- same members (28+ notifications): 28th-and-later vs first 12
+SELECT count(DISTINCT uid) AS members,
+ round(avg(opened::INT) FILTER (WHERE k <= 12), 4) AS open_rate_first_12,
+ round(avg(opened::INT) FILTER (WHERE k >= 28), 4) AS open_rate_28th_on,
+ round(avg(opened::INT) FILTER (WHERE k >= 28) / avg(opened::INT) FILTER (WHERE k <= 12), 4) AS late_vs_early
+FROM push_seq WHERE c >= 28;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H9-fall-reset-program — 2026-09-08 for 14 days
 -- ─────────────────────────────────────────────────────────────────────────
 WITH w AS (SELECT (t >= TIMESTAMP '2026-09-08') AS prog, event FROM ev
-  WHERE event IN ('workout completed', 'workout planned', 'app opened') AND t >= TIMESTAMP '2026-08-25' AND t < TIMESTAMP '2026-09-22'),
+  WHERE event IN ('workout completed', 'workout planned', 'app opened', 'meal logged') AND t >= TIMESTAMP '2026-08-25' AND t < TIMESTAMP '2026-09-22'),
 g AS (SELECT prog, count(*) FILTER (WHERE event = 'workout completed') AS completed, count(*) FILTER (WHERE event = 'workout planned') AS planned,
-  count(*) FILTER (WHERE event = 'app opened') AS opens FROM w GROUP BY 1)
-SELECT prog, completed, planned, opens, round(completed::DOUBLE / opens, 4) AS completed_per_open, round(planned::DOUBLE / opens, 4) AS planned_per_open FROM g ORDER BY prog;
+  count(*) FILTER (WHERE event = 'app opened') AS opens, count(*) FILTER (WHERE event = 'meal logged') AS meals FROM w GROUP BY 1)
+SELECT prog, completed, planned, opens, meals, round(completed::DOUBLE / opens, 4) AS completed_per_open, round(planned::DOUBLE / opens, 4) AS planned_per_open,
+ round(opens::DOUBLE / meals, 4) AS opens_per_meal FROM g ORDER BY prog;
 
 -- ═════════════════════════════════════════════════════════════════════════
 -- EVAL QUERIES (one per question in eval/fitness.eval.md)
@@ -200,8 +217,15 @@ SELECT date_trunc('week', t) AS week, count(*) AS plus_workouts,
  round(count(*) FILTER (WHERE coaching_mode = 'ai_coach')::DOUBLE / count(*), 4) AS ai_share
 FROM ev WHERE event = 'workout completed' AND subscription_tier <> 'free' AND t >= TIMESTAMP '2026-08-12'
 GROUP BY 1 ORDER BY 1;
-SELECT round(count(*) FILTER (WHERE coaching_mode = 'ai_coach')::DOUBLE / count(*), 4) AS ai_share_overall
+SELECT round(count(*) FILTER (WHERE coaching_mode = 'ai_coach')::DOUBLE / count(*), 4) AS ai_share_overall,
+ round(count(*) FILTER (WHERE coaching_mode = 'ai_coach' AND t >= TIMESTAMP '2026-09-02')::DOUBLE / count(*) FILTER (WHERE t >= TIMESTAMP '2026-09-02'), 4) AS ai_share_from_sep_2
 FROM ev WHERE event = 'workout completed' AND subscription_tier <> 'free' AND t >= TIMESTAMP '2026-08-12';
+-- adoption by member: Plus members with 10+ workouts from Sep 2, by their own Stride Coach share
+WITH m AS (SELECT uid, avg((coaching_mode = 'ai_coach')::INT) AS s FROM ev
+  WHERE event = 'workout completed' AND subscription_tier <> 'free' AND t >= TIMESTAMP '2026-09-02' GROUP BY 1 HAVING count(*) >= 10)
+SELECT CASE WHEN s = 0 THEN 'never' WHEN s < 0.5 THEN 'under half' ELSE 'half or more' END AS member_use, count(*) AS members,
+ round(count(*)::DOUBLE / sum(count(*)) OVER (), 4) AS share_of_members
+FROM m GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q5 — workout intensity, Stride Coach vs self-guided (Plus, after launch)
 SELECT coaching_mode, count(*) AS workouts, round(avg(avg_heart_rate), 1) AS avg_heart_rate, round(avg(perceived_effort), 2) AS avg_perceived_effort,
@@ -219,12 +243,12 @@ e AS (SELECT date::DATE AS day, max(sync_error_rate) FILTER (WHERE wearable_type
 SELECT d.*, e.smartwatch_err FROM d JOIN e USING (day) ORDER BY day;
 WITH od AS (SELECT DISTINCT date::DATE AS d FROM wh_sync WHERE sync_error_rate > 0.2),
 w AS (SELECT t::DATE AS d,
-  CASE WHEN tracking_source = 'wearable' AND wearable_type IN ('smartwatch', 'fitness_band') THEN 'aff'
-       WHEN tracking_source = 'phone' THEN 'phone' END AS arm
+  CASE WHEN tracking_source = 'wearable' AND wearable_type IN ('smartwatch', 'fitness_band') THEN 'aff' ELSE 'ctl' END AS arm
   FROM ev WHERE event = 'workout completed' AND t >= TIMESTAMP '2026-08-13' AND t < TIMESTAMP '2026-08-30'),
-g AS (SELECT (d IN (SELECT d FROM od)) AS outage, count(DISTINCT d) AS days, count(*) FILTER (WHERE arm = 'aff') AS aff, count(*) FILTER (WHERE arm = 'phone') AS phone FROM w GROUP BY 1)
-SELECT outage, days, round(aff::DOUBLE / days, 1) AS watch_band_per_day, round(phone::DOUBLE / days, 1) AS phone_per_day,
- round(aff::DOUBLE / phone, 4) AS watch_band_per_phone FROM g ORDER BY outage;
+g AS (SELECT (d IN (SELECT d FROM od)) AS outage, count(DISTINCT d) AS days, count(*) FILTER (WHERE arm = 'aff') AS aff, count(*) FILTER (WHERE arm = 'ctl') AS ctl FROM w GROUP BY 1)
+SELECT outage, days, round(aff::DOUBLE / days, 1) AS watch_band_per_day, round(ctl::DOUBLE / days, 1) AS unaffected_per_day,
+ round(aff::DOUBLE / ctl, 4) AS watch_band_per_unaffected,
+ round((aff::DOUBLE / ctl) / (SELECT aff::DOUBLE / ctl FROM g WHERE NOT outage), 4) AS vs_baseline FROM g ORDER BY outage;
 
 -- EVAL Q7 — which devices were hit: per-device workouts per phone workout, outage vs the surrounding week
 WITH od AS (SELECT DISTINCT date::DATE AS d FROM wh_sync WHERE sync_error_rate > 0.2),
@@ -301,10 +325,10 @@ w AS (SELECT date_trunc('week', s.t0) AS wk,
   FROM signups s LEFT JOIN b ON b.uid = s.uid GROUP BY 1)
 SELECT round(sum(sb)::DOUBLE / sum(sn * ob::DOUBLE / nullif(onn, 0)), 4) AS paid_social_vs_other_same_week FROM w WHERE onn > 0;
 
--- EVAL Q13 — day-28 retention by first-week workout count (members who signed up by 2026-08-27)
-SELECT least(early_workouts, 6) AS first_week_workouts_capped, count(*) AS members, round(avg((d28_events > 0)::INT), 4) AS d28_retention
+-- EVAL Q13 — Week-4 retention by first-week workout count (members who signed up by 2026-08-27)
+SELECT least(early_workouts, 6) AS first_week_workouts_capped, count(*) AS members, round(avg((w4_events > 0)::INT), 4) AS week4_retention
 FROM habit GROUP BY 1 ORDER BY 1;
-SELECT CASE WHEN early_workouts >= 3 THEN 'habit (3+)' ELSE 'low (0-2)' END AS grp, count(*) AS members, round(avg((d28_events > 0)::INT), 4) AS d28_retention
+SELECT CASE WHEN early_workouts >= 3 THEN '3+' ELSE '0-2' END AS grp, count(*) AS members, round(avg((w4_events > 0)::INT), 4) AS week4_retention
 FROM habit GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q14 — per-challenge completion by format
@@ -318,17 +342,23 @@ c AS (SELECT uid, challenge_format AS f, max(t) AS tc FROM ev WHERE event = 'cha
 SELECT j.f AS challenge_format, count(*) AS members, round(avg(coalesce(c.tc >= j.tj, false)::INT), 4) AS share_completing_any
 FROM j LEFT JOIN c USING (uid, f) GROUP BY 1 ORDER BY 1;
 
--- EVAL Q15 — notification open rate by members' notification volume
-SELECT CASE WHEN n < 10 THEN '01-09' WHEN n < 15 THEN '10-14' WHEN n < 20 THEN '15-19' WHEN n < 25 THEN '20-24' WHEN n < 35 THEN '25-34' ELSE '35+' END AS notifications_received,
+-- EVAL Q15 — notification open rate by members' notification volume, and by notification order
+SELECT CASE WHEN n < 12 THEN '01-11' WHEN n < 20 THEN '12-19' WHEN n < 28 THEN '20-27' WHEN n < 40 THEN '28-39' ELSE '40+' END AS notifications_received,
  count(*) AS members, round(sum(opens)::DOUBLE / sum(n), 4) AS open_rate
 FROM push GROUP BY 1 ORDER BY 1;
+SELECT CASE WHEN k <= 12 THEN '01-12' WHEN k <= 16 THEN '13-16' WHEN k <= 20 THEN '17-20' WHEN k <= 24 THEN '21-24' WHEN k <= 27 THEN '25-27' ELSE '28+' END AS nth_notification,
+ count(*) AS notifications, round(avg(opened::INT), 4) AS open_rate
+FROM push_seq GROUP BY 1 ORDER BY 1;
 
--- EVAL Q16 — workouts per app open, Fall Reset (Sep 8-21) vs the two weeks before
+-- EVAL Q16 — Fall Reset (Sep 8-21) vs the two weeks before: workouts, app opens, meals (untouched control)
 WITH w AS (SELECT (t >= TIMESTAMP '2026-09-08') AS prog, event FROM ev
-  WHERE event IN ('workout completed', 'app opened') AND t >= TIMESTAMP '2026-08-25' AND t < TIMESTAMP '2026-09-22'),
-g AS (SELECT prog, count(*) FILTER (WHERE event = 'workout completed') AS completed, count(*) FILTER (WHERE event = 'app opened') AS opens FROM w GROUP BY 1)
-SELECT prog, completed, opens, round(completed::DOUBLE / opens, 4) AS completed_per_open,
- round((completed::DOUBLE / opens) / (SELECT completed::DOUBLE / opens FROM g WHERE NOT prog), 4) AS vs_before FROM g ORDER BY prog;
+  WHERE event IN ('workout completed', 'app opened', 'meal logged') AND t >= TIMESTAMP '2026-08-25' AND t < TIMESTAMP '2026-09-22'),
+g AS (SELECT prog, count(*) FILTER (WHERE event = 'workout completed') AS completed, count(*) FILTER (WHERE event = 'app opened') AS opens,
+  count(*) FILTER (WHERE event = 'meal logged') AS meals FROM w GROUP BY 1)
+SELECT prog, completed, opens, meals, round(completed::DOUBLE / opens, 4) AS completed_per_open,
+ round((completed::DOUBLE / opens) / (SELECT completed::DOUBLE / opens FROM g WHERE NOT prog), 4) AS per_open_vs_before,
+ round((completed::DOUBLE / meals) / (SELECT completed::DOUBLE / meals FROM g WHERE NOT prog), 4) AS workouts_per_meal_vs_before,
+ round((opens::DOUBLE / meals) / (SELECT opens::DOUBLE / meals FROM g WHERE NOT prog), 4) AS opens_per_meal_vs_before FROM g ORDER BY prog;
 
 -- EVAL Q17 — onboarding conversion by platform (all new members, 7-day window)
 SELECT platform, count(*) AS signups, round(avg(converted::INT), 4) AS onboarding_conversion FROM onboarding GROUP BY 1 ORDER BY 1;
@@ -362,12 +392,16 @@ SELECT 'monthly/annual purchase mix, after vs before Sep 1',
  (WITH g AS (SELECT (t >= TIMESTAMP '2026-09-01') AS post, count(*) FILTER (WHERE plan = 'monthly')::DOUBLE / count(*) FILTER (WHERE plan = 'annual') AS m FROM ev WHERE event = 'subscription purchased' GROUP BY 1)
   SELECT round(max(m) FILTER (WHERE post) / max(m) FILTER (WHERE NOT post), 4) FROM g)
 UNION ALL
-SELECT 'heavy-notification open rate (20+)', (SELECT round(sum(opens)::DOUBLE / sum(n), 4) FROM push WHERE n >= 20)
+SELECT 'open rate, 28th-and-later notifications', (SELECT round(avg(opened::INT), 4) FROM push_seq WHERE k >= 28)
 UNION ALL
-SELECT 'members with 20+ notifications (share)', (SELECT round(avg((n >= 20)::INT), 4) FROM push)
+SELECT 'members with 28+ notifications (share)', (SELECT round(avg((n >= 28)::INT), 4) FROM push)
 UNION ALL
-SELECT 'D28 retention, low first week (0-2 workouts)', (SELECT round(avg((d28_events > 0)::INT), 4) FROM habit WHERE early_workouts < 3)
+SELECT 'Week-4 retention, 0 first-week workouts', (SELECT round(avg((w4_events > 0)::INT), 4) FROM habit WHERE early_workouts = 0)
 UNION ALL
-SELECT 'D28 retention, habit first week (3+ workouts)', (SELECT round(avg((d28_events > 0)::INT), 4) FROM habit WHERE early_workouts >= 3)
+SELECT 'Week-4 retention, 5+ first-week workouts', (SELECT round(avg((w4_events > 0)::INT), 4) FROM habit WHERE early_workouts >= 5)
 UNION ALL
-SELECT 'share of new members with 0-2 first-week workouts', (SELECT round(avg((early_workouts < 3)::INT), 4) FROM habit);
+SELECT 'share of new members with 0-2 first-week workouts', (SELECT round(avg((early_workouts < 3)::INT), 4) FROM habit)
+UNION ALL
+SELECT 'pre-existing free members who bought Plus in the window (share)',
+ (WITH nm AS (SELECT uid FROM signups), pf AS (SELECT DISTINCT uid FROM ev WHERE uid NOT IN (SELECT uid FROM nm) AND subscription_tier = 'free')
+  SELECT round(count(DISTINCT e.uid)::DOUBLE / (SELECT count(*) FROM pf), 4) FROM ev e WHERE e.event = 'subscription purchased' AND e.uid IN (SELECT uid FROM pf));
