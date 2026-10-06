@@ -111,4 +111,87 @@ describe.sequential('born-user lifecycle', () => {
 		expect(before).toBe(0);
 		expect(deviceOnly).toBe(0);
 	});
+
+	// Exposure → first step gap, per variant. The exposure marker belongs to the
+	// funnel instance it opens: it must sit a few seconds before that instance's
+	// first real step, independent of the variant's ttcMultiplier.
+	function exposureGaps(events, firstStep) {
+		const byUser = new Map();
+		// Pre-auth steps carry only device_id (one device per user here).
+		for (const ev of events) {
+			const key = ev.device_id || ev.user_id;
+			if (!byUser.has(key)) byUser.set(key, []);
+			byUser.get(key).push(ev);
+		}
+		const gaps = {};
+		for (const list of byUser.values()) {
+			list.sort((a, b) => ms(a.time) - ms(b.time));
+			for (const ev of list) {
+				if (ev.event !== '$experiment_started') continue;
+				const t = ms(ev.time);
+				const next = list.find(o => o.event === firstStep && ms(o.time) >= t);
+				if (!next) continue;
+				(gaps[ev['Variant name']] ||= []).push((ms(next.time) - t) / 1000);
+			}
+		}
+		return gaps;
+	}
+	const expVariants = [
+		{ name: 'Control' },
+		{ name: 'Fast', conversionMultiplier: 1.2, ttcMultiplier: 0.3 },
+	];
+	const expCases = {
+		'legacy pinned': {},
+		retentionCurve: { retentionCurve: { type: 'logarithmic', day1: 0.8, day7: 0.6, day30: 0.45 } },
+		'active-day': { avgActiveDaysPerUser: 10 },
+	};
+	for (const [label, overrides] of Object.entries(expCases)) {
+		test(`experiment exposure sits just before the first funnel's first step (${label})`, async () => {
+			const result = await DUNGEON_MASTER(base({
+				...overrides,
+				funnels: [
+					{ sequence: ['sign up', 'workout'], isFirstFunnel: true, conversionRate: 100, timeToConvert: 24,
+						experiment: { name: 'onboarding test', variants: expVariants } },
+					{ sequence: ['browse', 'workout'], conversionRate: 50, timeToConvert: 2 },
+				],
+			}));
+			const gaps = exposureGaps(Array.from(result.eventData), 'sign up');
+			expect(Object.keys(gaps).sort()).toEqual(['Control', 'Fast']);
+			for (const list of Object.values(gaps)) {
+				expect(list.length).toBeGreaterThan(30);
+				expect(Math.min(...list)).toBeGreaterThan(0);
+				expect(Math.max(...list)).toBeLessThanOrEqual(5);
+			}
+		});
+	}
+
+	test('experiment exposure sits just before each attempt and each usage funnel', async () => {
+		const result = await DUNGEON_MASTER(base({
+			percentUsersBornInDataset: 50,
+			events: [
+				{ event: 'landing', isFirstEvent: true },
+				{ event: 'sign up', isAuthEvent: true },
+				{ event: 'workout', weight: 5 },
+				{ event: 'browse', weight: 3 },
+			],
+			funnels: [
+				{ sequence: ['landing', 'sign up', 'workout'], isFirstFunnel: true, conversionRate: 100, timeToConvert: 24,
+					attempts: { min: 1, max: 2 },
+					experiment: { name: 'onboarding test', variants: expVariants } },
+				{ sequence: ['browse', 'workout'], conversionRate: 50, timeToConvert: 12,
+					experiment: { name: 'usage test', variants: expVariants } },
+			],
+		}));
+		const events = Array.from(result.eventData);
+		const onboarding = exposureGaps(events.filter(e => e.event !== '$experiment_started' || e['Experiment name'] === 'onboarding test'), 'landing');
+		const usage = exposureGaps(events.filter(e => e.event !== '$experiment_started' || e['Experiment name'] === 'usage test'), 'browse');
+		for (const gaps of [onboarding, usage]) {
+			expect(Object.keys(gaps).sort()).toEqual(['Control', 'Fast']);
+			for (const list of Object.values(gaps)) {
+				expect(list.length).toBeGreaterThan(30);
+				expect(Math.min(...list)).toBeGreaterThan(0);
+				expect(Math.max(...list)).toBeLessThanOrEqual(5);
+			}
+		}
+	});
 });
