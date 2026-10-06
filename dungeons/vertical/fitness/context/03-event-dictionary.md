@@ -97,5 +97,5 @@ One row per change in a member's self-reported fitness level: `distinct_id`, `fi
 | Workout loop | `workout planned` → `workout completed` → `progress checked` | The core habit loop. Members repeat it many times. |
 | Upgrade (trial) | `paywall viewed` → `trial started` → `subscription purchased` | Trial-eligible members (`trial_eligible = true`): mostly new members. |
 | Upgrade (direct) | `paywall viewed` → `subscription purchased` | Members who already used their trial (`trial_eligible = false`). |
-| Challenge completion | `challenge joined` → `challenge completed` | Members join many challenges; hold `challenge_id` constant to measure each challenge on its own. |
+| Challenge completion | `challenge joined` → `challenge completed` | Members join many challenges. Each challenge has its own `challenge_id`. |
 | Coaching | `coach session` → `workout planned` → `workout completed` | |

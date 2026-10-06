@@ -20,7 +20,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 | Net bookings | Gross bookings minus app-store fees (15%). |
 | CAC (paid) | Paid-media spend for a channel divided by the new members Mixpanel recorded from that channel (`account created` with that `acquisition_channel`) over the same days. Finance uses Mixpanel signups, not the installs the ad platforms report. |
 | Cost per paying member | Paid-media spend for a channel divided by members from that channel who bought Plus. |
-| Challenge completion rate | Share of joined challenges that the member completed, matched on `challenge_id`. |
+| Challenge completion rate | Share of joined challenges that were completed. |
 | Notification open rate | Share of `notification received` events with `opened = true`. |
 | Stride Coach adoption | Share of Plus members' completed workouts with `coaching_mode = ai_coach` (since 2026-08-12). |
 | Sync success rate | 1 − `sync_error_rate` in `wearable_sync_daily`. |
@@ -79,4 +79,4 @@ Caveats: the table covers first purchases only, not renewals or upgrades between
 ## Analysis tips
 
 - For a before/after question around a dated change, consider seasonality, the overall trend, and mix shifts before you attribute a change to the event.
-- New-member funnels and retention depend on signup date: members who joined late in the window have had less time to act. Compare cohorts that joined in the same weeks.
+- New-member funnels and retention depend on signup date: members who joined late in the window have had less time to act.
