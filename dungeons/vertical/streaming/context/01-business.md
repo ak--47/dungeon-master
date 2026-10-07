@@ -76,4 +76,4 @@ Leadership set these goals for the quarter:
 4. **Efficient acquisition.** Finance asked which paid channel is worth its cost.
 5. **Reliable streaming.** The streaming infrastructure team reports playback quality every week and wants to understand what the August TV incident cost.
 6. **Reduce churn.** Member support and finance want to know which households cancel and why.
-7. **Better discovery.** The TV team asked how search works across screens; the CRM team wants to know which pushes are worth sending.
+7. **Better discovery.** The product team asked how search works across screens; the CRM team wants to know which pushes are worth sending.

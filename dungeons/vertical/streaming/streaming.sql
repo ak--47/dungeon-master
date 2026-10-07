@@ -222,6 +222,10 @@ SELECT (SELECT count(*) FROM a) AS active_members,
  round((SELECT avg((eps = 8)::INT) FROM v), 4) AS share_started_all_8,
  (SELECT count(*) FROM ev WHERE event = 'playback completed' AND title_name = 'Saltmarsh' AND season_number = 2) AS season2_completions;
 
+-- new season 2 viewers by week of their first season 2 play (the premiere fortnight, then the long tail)
+WITH f AS (SELECT uid, min(t) AS first_s2 FROM ev WHERE event = 'playback started' AND title_name = 'Saltmarsh' AND season_number = 2 GROUP BY 1)
+SELECT date_trunc('week', first_s2)::DATE AS week, count(*) AS new_season2_viewers FROM f GROUP BY 1 ORDER BY 1;
+
 -- EVAL Q2 — the late-July viewing jump: plays per day and per active household
 WITH d AS (SELECT CASE WHEN t >= '2026-07-03' AND t < '2026-07-17' THEN '1 Jul 3-16' WHEN t >= '2026-07-17' AND t < '2026-07-31' THEN '2 Jul 17-30'
   WHEN t >= '2026-07-31' AND t < '2026-08-14' THEN '3 Jul 31-Aug 13' END AS per, uid, title_name, season_number

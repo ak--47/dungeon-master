@@ -76,7 +76,9 @@ import Chance from "chance";
  *   About 4% of them were mid-trial on June 4 (trial started May 28-Jun 3), so
  *   conversions and trial cancellations run from the first week. A cancellation
  *   lands 1 h to 6 days before the renewal it replaces; access ends at that
- *   renewal date. Trials last exactly 7 days: "trial converted" fires at
+ *   renewal date. The first renewal after Oct 1 gets the same check, so
+ *   cancellations for renewals due Oct 2-7 land Sep 26 - Oct 1 (that renewal
+ *   is not emitted, and the household stays active on Oct 1). Trials last exactly 7 days: "trial converted" fires at
  *   trial start + 7 d; a trial that does not convert has a "subscription
  *   cancelled" (during_trial = true) during the trial and access ends at day 7.
  *   User-initiated events stop when access ends; push notifications continue
@@ -103,13 +105,14 @@ import Chance from "chance";
  *   sequence per cell, one step per household in generation order) instead of
  *   independent coin flips: trial conversion (cell = k, paid_social, tourist,
  *   arm, country), the early-completion count k (cell = arm), plan choice
- *   (cell = price period), playback failure and completion, and push opens.
+ *   (cell = price period), and playback failure and completion.
  *   A cell's realized rate tracks its probability, so a story's ratio reads
  *   its knob instead of binomial noise, and null splits (country, arm by
  *   platform) stay null. Per-event draws add the household's occurrence index
  *   to the cell, so no household walks consecutive steps of one sequence.
- *   Renewal-time cancellation (H8) and Saltmarsh reach (H1) keep salted coin
- *   flips, so monthly churn and reach carry ordinary sampling noise.
+ *   Renewal-time cancellation (H8), Saltmarsh reach (H1), and push opens (H9,
+ *   salted on the notification's insert_id) keep coin flips, so monthly
+ *   churn, reach, and open rates carry ordinary sampling noise.
  * - The hook moves $experiment_started to 3-20 s after trial started (the
  *   taste picker opens after the trial starts); the engine's default spot is
  *   1 s before the Signup funnel's first step, which would expose households
@@ -154,7 +157,13 @@ import Chance from "chance";
  *   start season 2 in those two weeks (salted delay, most in the first days),
  *   and watch 1-8 episodes in sittings of 1-4. Season 2 plays are added
  *   viewing (clones), so daily plays rise in late July. No season 2 play
- *   exists before the premiere.
+ *   exists before the premiere. Realism, outside the read: in the fortnight
+ *   organic Saltmarsh plays stay on season 1; from Jul 31 organic viewing
+ *   moves on (S1E8 continues to S2E1; 25% of fresh Saltmarsh picks start at
+ *   S2E1), and a decaying long tail of new season 2 starters runs through
+ *   September (10% of still-watching members, mean delay 21 days; 30% of
+ *   newcomers who sign up after Jul 30, decaying with signup date, mean
+ *   delay 3 days).
  * MIXPANEL: Insights, date range Jul 17-30, chart type Bar or Metric (so
  *   Uniques counts each household once over the range; a daily line shows
  *   daily uniques). A = playback started, Uniques, filter title_name =
@@ -278,11 +287,11 @@ import Chance from "chance";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-streaming, 2026-10-07, full
- * fidelity, 10,000 households, 987,686 events)
+ * fidelity, 10,000 households, 994,255 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation               | Expected | Measured
  * -----|------------------------------------------------|--------------------------|----------|---------
- * H1   | S2 viewers / active members, Jul 17-30         | SALTMARSH_REACH          | 0.35     | 0.351 (1,609 / 4,581)
+ * H1   | S2 viewers / active members, Jul 17-30         | SALTMARSH_REACH          | 0.35     | 0.351 (1,609 / 4,578)
  * H1   | season 2 plays before the premiere             | exact purity             | 0        | 0
  * H2   | accounts/day, Jul 17 - Aug 6 / other days      | PREMIERE_LIFT            | 1.559    | 1.610 (59.4 vs 36.9)
  * H2   | premiere trials with S2 start within a day     | TOURIST_S2_SHARE (not asserted) | 0.80 | 0.799
@@ -293,7 +302,7 @@ import Chance from "chance";
  * H3   | early completions, Smart Start / Control       | not engineered           | 1.00     | 0.997 (2.835 vs 2.844)
  * H4   | conversion, 3+ early completions / 0-2         | k-weighted CONV_BY_EARLY | 1.804    | 1.785 (56.6% vs 31.7%)
  * H4   | conversion, 5+ / 3-4 early completions         | plateau                  | 1.017    | 0.989 (56.3% vs 56.9%)
- * H5   | TV/other completion per start, incident / ±14 d| (1-0.5)/(1-0.02)         | 0.510    | 0.515 (TV 39.7% vs 75.5%)
+ * H5   | TV/other completion per start, incident / ±14 d| (1-0.5)/(1-0.02)         | 0.510    | 0.514 (TV 40.1% vs 76.0%)
  * H5   | warehouse tv failure rate on degraded days     | INCIDENT_FAIL            | 0.50     | 0.497
  * H6   | Standard share of plan selections, after/before| 1 - PRICE_SWITCH_SHARE   | 0.65     | 0.657 (49.8% → 32.7%)
  * H6   | Basic with Ads share, after/before             | (30 + 0.35 x 50) / 30    | 1.583    | 1.571 (29.9% → 47.0%)
@@ -301,14 +310,14 @@ import Chance from "chance";
  * H7   | spend per signup, paid_social / paid_search    | 21 / 32                  | 0.656    | 0.651 ($21.06 vs $32.35)
  * H7   | trial conversion, paid_social / other channels | SOCIAL_CONV_MULT         | 0.55     | 0.560 (27.4% vs 48.8%)
  * H7   | spend per paid sub, paid_social / paid_search  | (21 / 0.55) / 32 (not asserted) | 1.193 | 1.168 ($100.41 vs $85.98)
- * H8   | renewal-time churn, 2+ profiles / 1 profile    | MULTI_PROFILE_HAZARD_MULT (≤, floor 0.75) | 0.50 | 0.530 (3.06% vs 5.78%)
- * H9   | open rate, new_episode / trending_now          | 0.146 / 0.049            | 2.980    | 2.974 (14.6% vs 4.91%)
- * H9   | open rate, because_you_watched / trending_now  | 0.087 / 0.049            | 1.776    | 1.776 (8.71% vs 4.91%)
- * H10  | median search → play, tv / other               | TV_SEARCH_TTC_MULT       | 2.20     | 2.196 (165.7 s vs 75.4 s)
+ * H8   | renewal-time churn, 2+ profiles / 1 profile    | MULTI_PROFILE_HAZARD_MULT (≤, floor 0.75) | 0.50 | 0.527 (3.12% vs 5.93%)
+ * H9   | open rate, new_episode / trending_now          | 0.146 / 0.049            | 2.980    | 2.959 (14.67% vs 4.96%)
+ * H9   | open rate, because_you_watched / trending_now  | 0.087 / 0.049            | 1.776    | 1.766 (8.75% vs 4.96%)
+ * H10  | median search → play, tv / other               | TV_SEARCH_TTC_MULT       | 2.20     | 2.203 (164.8 s vs 74.8 s)
  * ═════════════════════════════════════════════════════════════════════════
  *
  * Noise notes: the low-discrepancy draws (DESIGN NOTES) remove binomial
- * noise from the designed rates, so H2, H3, H4, H5, H6, H7, and H9 read
+ * noise from the designed rates, so H2, H3, H4, H5, H6, and H7 read
  * their knobs up to composition (each group's realized mix of the other
  * factors). The previous build drew conversion with coin flips: H2's
  * conversion ratio sat at the NAILED edge (0.542 vs a 0.540 lower bound) and
@@ -316,8 +325,10 @@ import Chance from "chance";
  * knob. Re-check H2 and H3 after any engine change anyway. H2's signup lift
  * reads above the knob: 1,247 accounts in those 21 days vs 774 at the other
  * days' rate is about 470 extra against 440 designed premiere joiners (the
- * engine's own signups in those days drew a little high). H8 keeps salted
- * coin flips (about 420 paid cancellations per group, ratio SE about 7%), so
+ * engine's own signups in those days drew a little high). H9 opens are coin
+ * flips on about 16,000-19,000 pushes per campaign type (ratio SE about 4%).
+ * H8 keeps salted coin flips (about 430 paid cancellations per group, ratio
+ * SE about 7%), so
  * it uses the knob as target with a half-effect floor. Premium's share of plan selections is not
  * engineered and is flat across the price change; the designed trade-down
  * moves the average list price per new subscription by about -2%. H7's spend
@@ -372,6 +383,11 @@ const SALTMARSH_REACH = 0.35;        // share of members active in the premiere 
 const S2_EPISODES = 8;
 const S2_DELAY_WEIGHTS = { 0: 30, 1: 16, 2: 11, 3: 8, 4: 7, 5: 6, 6: 5, 7: 4, 8: 3, 9: 3, 10: 2, 11: 2, 12: 2, 13: 1 }; // days after the premiere of the first season 2 play
 const S2_DEPTH_WEIGHTS = { 1: 16, 2: 13, 3: 11, 4: 10, 5: 9, 6: 8, 7: 8, 8: 25 };  // season 2 episodes a viewer watches
+// realism: after the premiere fortnight season 2 keeps finding viewers (outside the H1 read)
+const LATE_S2_SHARE = { member: 0.1, newcomer: 0.3 }; // households active after Jul 30 (not already season 2 viewers) that start season 2 later
+const LATE_S2_DECAY_DAYS = 45;       // a newcomer's share decays with signup date after the fortnight
+const LATE_S2_DELAY_DAYS = { member: 21, newcomer: 3 }; // mean (exponential) delay from Jul 31 (members) or from signup (newcomers)
+const SALTMARSH_S2_PICK = 0.25;      // organic Saltmarsh picks after the fortnight that start season 2 at episode 1
 
 // H2 premiere tourists
 const TOURIST_CONV_MULT = 0.6;
@@ -818,7 +834,8 @@ function handleEverything(events, meta) {
 	const seqOnce = (cell) => { nth[cell] = (nth[cell] ?? -1) + 1; return seqDraw(`${cell}|${nth[cell]}`); };
 
 	const scheduleRenewals = (first) => {
-		for (let r = first, j = 0; r <= END_MS; r += 30 * DAY_MS, j++) {
+		let r = first, j = 0;
+		for (; r <= END_MS; r += 30 * DAY_MS, j++) {
 			if (salt(uid, `cancel|${j}`) < hazard) {
 				const lead = HOUR_MS + salt(uid, `cancel-lead|${j}`) * (CANCEL_LEAD_MAX_DAYS * DAY_MS - HOUR_MS);
 				// a renewal early in June whose cancellation would land before the
@@ -840,6 +857,15 @@ function handleEverything(events, meta) {
 				}
 			}
 			lifecycle.push({ name: "subscription renewed", t: r });
+		}
+		// the first renewal after the window: its cancellation can land inside the
+		// window (up to CANCEL_LEAD_MAX_DAYS before it); the renewal itself is not emitted
+		if (salt(uid, `cancel|${j}`) < hazard) {
+			const lead = HOUR_MS + salt(uid, `cancel-lead|${j}`) * (CANCEL_LEAD_MAX_DAYS * DAY_MS - HOUR_MS);
+			if (r - lead <= END_MS) {
+				lifecycle.push({ name: "subscription cancelled", t: r - lead, duringTrial: false });
+				accessEnd = r;
+			}
 		}
 	};
 
@@ -880,21 +906,27 @@ function handleEverything(events, meta) {
 	events.sort(byT);
 
 	// ── titles and playback units ──
-	const seriesProgress = {}; // title id → [season, episode] to watch next
-	const nextEpisode = (title) => {
+	// title id → [season, episode] to watch next; the episode can run past the
+	// season's end and wraps when it is read, so the next season can open later
+	const seriesProgress = {};
+	const nextEpisode = (title, t) => {
 		if (title.type !== "series") return [null, null];
-		const seasons = title.id === SALTMARSH.id ? [title.seasons[0]] : title.seasons; // organic Saltmarsh plays are season 1
+		const saltmarsh = title.id === SALTMARSH.id;
+		// organic Saltmarsh plays are season 1 up to the end of the premiere
+		// fortnight (the H1 read); after it, season 2 is part of the show
+		const seasons = saltmarsh && t < ms(REACH_END) ? [title.seasons[0]] : title.seasons;
 		let pos = seriesProgress[title.id];
+		if (pos && pos[1] > seasons[pos[0] - 1]) pos = pos[0] < seasons.length ? [pos[0] + 1, 1] : [1, 1];
+		if (pos && pos[0] > seasons.length) pos = null;
 		if (!pos) {
-			const s = 1 + Math.floor(rnd() * seasons.length);
-			pos = [s, 1 + Math.floor(rnd() * seasons[s - 1])];
+			if (saltmarsh && seasons.length > 1 && rnd() < SALTMARSH_S2_PICK) pos = [2, 1];
+			else {
+				const s = 1 + Math.floor(rnd() * seasons.length);
+				pos = [s, 1 + Math.floor(rnd() * seasons[s - 1])];
+			}
 		}
-		const out = [...pos];
-		let [s, ep] = pos;
-		ep += 1;
-		if (ep > seasons[s - 1]) { s = s < seasons.length ? s + 1 : 1; ep = 1; }
-		seriesProgress[title.id] = [s, ep];
-		return out;
+		seriesProgress[title.id] = [pos[0], pos[1] + 1];
+		return [...pos];
 	};
 	const inProgress = (kids) => {
 		const ids = Object.keys(seriesProgress).filter((id) => !!TITLE_BY_ID[id].kids === !!kids);
@@ -934,7 +966,7 @@ function handleEverything(events, meta) {
 			} else {
 				title = inProgress(sessKids) || pickTitle(pool, rnd()); source = "continue_watching";
 			}
-			const [season, episode] = nextEpisode(title);
+			const [season, episode] = nextEpisode(title, T(e));
 			const unit = { start: e, startT: null, title, season, episode, source, chainPrev, origin: "organic", kids: sessKids, device: chainPrev ? chainPrev.device : (e.device_id || viewingDevice()) };
 			if (fromSearch) {
 				// H10: search → play gap, 2.2x on TV
@@ -957,7 +989,7 @@ function handleEverything(events, meta) {
 	const premiere = ms(SALTMARSH_PREMIERE);
 	const memberAtPremiere = !born || signupT < premiere;
 	const activeInFortnight = units.some((x) => { const t = x.startT ?? T(x.start); return t >= premiere && t < ms(REACH_END); });
-	let s2Viewer = false, s2FirstT = null, s2Depth = 0, s2FromPush = false;
+	let s2Viewer = false, s2Late = false, s2FirstT = null, s2Depth = 0, s2FromPush = false;
 	if (memberAtPremiere && activeInFortnight && salt(uid, "s2") < SALTMARSH_REACH) {
 		s2Viewer = true;
 		// the first season 2 play lands in the fortnight and before access ends
@@ -970,6 +1002,24 @@ function handleEverything(events, meta) {
 		s2Viewer = true;
 		s2FirstT = trialStartT + (0.1 + rnd() * 23.9) * HOUR_MS;
 		s2Depth = 2 + Math.floor(salt(uid, "s2-depth") * (S2_EPISODES - 1));
+	} else {
+		// long tail after the fortnight: members catch up on season 2 over August
+		// and September, and later signups start it (a share that decays with the
+		// signup date). Only households that still watch after the fortnight.
+		const lateFrom = Math.max(ms(REACH_END), accessStart);
+		const kind = born && signupT >= ms(REACH_END) ? "newcomer" : "member";
+		const share = LATE_S2_SHARE[kind] * Math.exp(-(lateFrom - ms(REACH_END)) / (LATE_S2_DECAY_DAYS * DAY_MS));
+		const watchesLater = units.some((x) => (x.startT ?? T(x.start)) >= lateFrom);
+		if (watchesLater && salt(uid, "s2-late") < share) {
+			const t0 = lateFrom - Math.log(1 - salt(uid, "s2-late-delay")) * LATE_S2_DELAY_DAYS[kind] * DAY_MS;
+			const until = Math.min(accessEnd - HOUR_MS, END_MS);
+			if (t0 + HOUR_MS < until) {
+				s2Viewer = true;
+				s2Late = true;
+				s2FirstT = eveningTime(t0, Math.min(t0 + DAY_MS, until));
+				s2Depth = Number(pickWeighted(S2_DEPTH_WEIGHTS, salt(uid, "s2-depth")));
+			}
+		}
 	}
 
 	// ── H9: push notifications (plus the one-off new_season push) ──
@@ -1002,7 +1052,7 @@ function handleEverything(events, meta) {
 				n.title_name = title.name;
 			}
 		}
-		if (seqOnce(`open|${n.campaign_type}`) >= OPEN_RATE[n.campaign_type]) continue;
+		if (hashFloat(`${n.insert_id}|open`) >= OPEN_RATE[n.campaign_type]) continue;
 		const openT = t + Math.min(12 * HOUR_MS, 25 * MIN_MS * logNormal(1.1));
 		const o = clone("notification opened", openT);
 		if (!o) continue;
@@ -1013,13 +1063,14 @@ function handleEverything(events, meta) {
 		if (openT < accessStart || openT >= accessEnd) continue;
 		if (n.campaign_type === "new_season") {
 			// a season 2 viewer who opens the push starts episode 1 right away
-			if (s2Viewer && openT < s2FirstT) { s2FirstT = openT + (1 + rnd() * 4) * MIN_MS; s2FromPush = true; }
+			if (s2Viewer && !s2Late && openT < s2FirstT) { s2FirstT = openT + (1 + rnd() * 4) * MIN_MS; s2FromPush = true; }
 			continue;
 		}
 		if (rnd() < PUSH_PLAY_SHARE) {
 			const title = TITLE_BY_NAME[n.title_name] || pickTitle(ADULT_TITLES, rnd());
-			const [season, episode] = nextEpisode(title);
-			units.push({ start: null, startT: openT + (0.5 + rnd() * 3) * MIN_MS, title, season, episode, source: "push_notification", chainPrev: null, origin: "push", kids: false, device: o.device_id });
+			const playT = openT + (0.5 + rnd() * 3) * MIN_MS;
+			const [season, episode] = nextEpisode(title, playT);
+			units.push({ start: null, startT: playT, title, season, episode, source: "push_notification", chainPrev: null, origin: "push", kids: false, device: o.device_id });
 		}
 	}
 	events = events.concat(opened);
@@ -1110,11 +1161,11 @@ function handleEverything(events, meta) {
 			for (let i = have.length; i < k; i++) {
 				const s2 = tourist && s2Viewer && s2Next <= S2_EPISODES;
 				const title = s2 ? SALTMARSH : (inProgress(false) || pickTitle(ADULT_TITLES, rnd()));
-				const [season, episode] = s2 ? [2, s2Next++] : nextEpisode(title);
 				const runtime = title.runtime * MIN_MS;
 				const latest = Math.min(hi, END_MS, accessEnd) - runtime;
 				if (latest <= lo + 10 * MIN_MS) break;
 				const st = eveningTime(lo + 10 * MIN_MS, latest);
+				const [season, episode] = s2 ? [2, s2Next++] : nextEpisode(title, st);
 				let device = viewingDevice();
 				if (platformOf(device) === INCIDENT_PLATFORM && inIncident(st)) device = devices.find((d) => platformOf(d) !== INCIDENT_PLATFORM) || device;
 				const watchMs = runtime * (0.92 + rnd() * 0.08);
@@ -1764,7 +1815,7 @@ export const stories = [
 		id: "H1-saltmarsh-season-2-premiere",
 		hook: "H1",
 		archetype: "temporal-inflection",
-		narrative: `All ${S2_EPISODES} episodes of Saltmarsh season 2 (Reelhouse's flagship original) drop ${D(SALTMARSH_PREMIERE)}. ${SALTMARSH_REACH * 100}% of households that joined before the premiere and played anything ${D(SALTMARSH_PREMIERE)} to ${REACH_LAST} start season 2 in that fortnight (most in the first days), watching 1-${S2_EPISODES} episodes in sittings of 1-4; the plays are added viewing, so daily plays rise in late July. A new_season push goes out ${TS(SALTMARSH_PUSH)} UTC. Read: households with a season 2 play over households with any play, ${D(SALTMARSH_PREMIERE)} to ${REACH_LAST}, members who joined before the premiere. No season 2 play exists before the premiere.`,
+		narrative: `All ${S2_EPISODES} episodes of Saltmarsh season 2 (Reelhouse's flagship original) drop ${D(SALTMARSH_PREMIERE)}. ${SALTMARSH_REACH * 100}% of households that joined before the premiere and played anything ${D(SALTMARSH_PREMIERE)} to ${REACH_LAST} start season 2 in that fortnight (most in the first days), watching 1-${S2_EPISODES} episodes in sittings of 1-4; the plays are added viewing, so daily plays rise in late July. A new_season push goes out ${TS(SALTMARSH_PUSH)} UTC. Read: households with a season 2 play over households with any play, ${D(SALTMARSH_PREMIERE)} to ${REACH_LAST}, members who joined before the premiere. No season 2 play exists before the premiere. After ${REACH_LAST} season 2 keeps finding viewers (organic viewing moves on from season 1, plus a decaying tail of new starters among members and later signups); that tail is outside this read.`,
 		mixpanelReport: { type: "Insights", event: "playback started", measure: "Uniques", chart: "Bar or Metric (Uniques over the whole date range, not daily uniques)", filter: "title_name = Saltmarsh AND season_number = 2", denominator: "playback started (Uniques)", formula: "A / B", dateRange: `${D(SALTMARSH_PREMIERE)} to ${REACH_LAST}`, cohort: `exclude households with account created on or after ${D(SALTMARSH_PREMIERE)} (member_since before ${D(SALTMARSH_PREMIERE)})` },
 		assertions: [
 			{
