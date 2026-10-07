@@ -27,7 +27,7 @@ All KPIs use UTC days. People are counted by their merged identity (Mixpanel "Un
 
 Three tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). Days with no activity have a row with zeros. They join to events on the UTC date of the event and on the named dimension.
 
-In the warehouse, numeric columns are loaded as FLOAT64 (shown as FLOAT below). Count columns always hold whole numbers, and raw file exports show them as integers.
+Count columns are loaded as INT64 (shown as INTEGER below); money, hours, and index columns are FLOAT64 (shown as FLOAT).
 
 ### `marketing_spend_daily`
 
@@ -38,9 +38,9 @@ Daily paid acquisition cost by channel, from the ad platforms' and comparison si
 | `date` | DATE | UTC day | Spend day. |
 | `acquisition_channel` | STRING | — | `search_ads`, `comparison_site`, or `social_ads`. Matches `acquisition_channel` on `quote started`. |
 | `spend_usd` | FLOAT | USD | Media spend billed for the day. Search and social run on daily budgets that the platform paces through the day (following the weekly rhythm, with a floor on quiet days) plus bids that rise and fall with the traffic delivered. Comparison sites bill per lead. |
-| `clicks` | FLOAT | count | Ad clicks or click-throughs reported by the platform. |
-| `impressions` | FLOAT | count | Ad impressions or listing views reported by the platform. |
-| `conversions_reported` | FLOAT | count | Quote starts the platform claims (search and social, by their own attribution); for comparison sites, the leads they billed. Platforms usually claim more than Mixpanel records. |
+| `clicks` | INTEGER | count | Ad clicks or click-throughs reported by the platform. |
+| `impressions` | INTEGER | count | Ad impressions or listing views reported by the platform. |
+| `conversions_reported` | INTEGER | count | Quote starts the platform claims (search and social, by their own attribution); for comparison sites, the leads they billed. Platforms usually claim more than Mixpanel records. |
 
 Caveats: organic and referral have no media spend and are not in this table. Use Mixpanel quote starts and purchases, not `conversions_reported`, for cost per quote and per policy.
 
@@ -52,9 +52,9 @@ Daily claims operations by claims region, from the claims system and the adjuste
 |---|---|---|---|
 | `date` | DATE | UTC day | Day. |
 | `region` | STRING | — | `gulf_coast`, `south`, `midwest`, `west`, `northeast`. Matches `region` on claim events. |
-| `new_claims_reported` | FLOAT | count | Claims reported that day through every channel: app, website, and phone (in-house service representatives). |
-| `claims_closed` | FLOAT | count | Claims closed (paid or denied) that day, every channel. |
-| `open_claims` | FLOAT | count | Claims open at the end of the day, every channel. |
+| `new_claims_reported` | INTEGER | count | Claims reported that day through every channel: app, website, and phone (in-house service representatives). |
+| `claims_closed` | INTEGER | count | Claims closed (paid or denied) that day, every channel. |
+| `open_claims` | INTEGER | count | Claims open at the end of the day, every channel. |
 | `adjuster_hours` | FLOAT | hours | Adjuster hours worked on the region's claims that day: staff adjusters plus independent adjusters hired for catastrophes. |
 | `catastrophe_code` | STRING | — | Industry catastrophe code when the day falls in a declared catastrophe reporting period for that region (for example `PCS-2614`), otherwise `none`. |
 
@@ -70,7 +70,7 @@ Daily written premium by product line and transaction type, from the policy admi
 | `product_line` | STRING | — | `auto`, `home`, `renters`. Matches `product_line` on events. |
 | `transaction_type` | STRING | — | `new_business` (matches `policy purchased`) or `renewal` (matches `policy renewed`). |
 | `written_premium_usd` | FLOAT | USD | Premium for the full term of the policies written that day. |
-| `policies_written` | FLOAT | count | Policies written that day. |
+| `policies_written` | INTEGER | count | Policies written that day. |
 | `rate_level_index` | FLOAT | index | The rate plan in force for this product and transaction type, relative to the plan at the start of the window (1.00). |
 
 Caveats: billing includes a few policies sold or renewed by the in-house phone sales team that are not in Mixpanel, nets out policies cancelled on their first day, and renewal premium includes mid-term adjustments made in billing. Use this table, not Mixpanel, for premium totals.

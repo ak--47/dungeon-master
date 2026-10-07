@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Shieldstone Insurance**, a dire
 
 - **Product:** the Shieldstone website and the iOS and Android apps. People get a quote for auto, homeowners, or renters insurance, create an account, buy a policy, and then manage it online: ID cards, policy documents, bills and payments, coverage changes, roadside assistance, and claims. Back-office systems (billing, policy administration, claims) also send events: autopay payments, renewal notices, renewals, cancellations, policy issue, and claim settlements.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early summer through the end of September and the first day of October.
-- **Scale:** about 10,000 people. About 6,000 were already Shieldstone customers on June 4. About 3,700 new shoppers started a quote during the window; about 2,450 of them never created an account and appear only as anonymous devices. The project holds about 760,000 events.
+- **Scale:** about 10,000 people. About 5,900 were already Shieldstone customers on June 4. About 3,700 new shoppers started a quote during the window; about 2,600 of them never created an account and appear only as anonymous devices. The project holds about 760,000 events.
 - **Where customers live:** twelve US states (Texas, Florida, Pennsylvania, Illinois, Arizona, Georgia, Ohio, North Carolina, Colorado, Michigan, Louisiana, Tennessee), grouped into five claims regions.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. Customers are in US time zones, so a US afternoon is UTC evening and a US evening runs past midnight UTC.
 

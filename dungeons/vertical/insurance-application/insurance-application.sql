@@ -99,7 +99,13 @@ FROM ev;
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H1-snap-and-settle: photo-estimate auto claims settle in 0.3x the time
 -- ─────────────────────────────────────────────────────────────────────────
--- Eligible auto claims (collision, glass, comprehensive) submitted Jul 21 - Sep 15, settled within 30 days.
+-- Story read: eligible auto claims (collision, glass, comprehensive) submitted Jun 4 - Sep 15, settled
+-- within 30 days, by claim_channel. Photo estimates exist only from Jul 21; adjuster handling did not
+-- change at launch, so every eligible adjuster claim in the window is the comparison group.
+SELECT claim_channel, count(*) AS claims, median(days_to_settle) FILTER (WHERE days_to_settle < 30) AS median_days
+FROM claims WHERE product_line = 'auto' AND peril IN ('collision', 'glass', 'comprehensive')
+  AND t_submit < TIMESTAMP '2026-09-16' GROUP BY 1 ORDER BY 1;
+-- the same split after launch only (Jul 21 - Sep 15)
 SELECT claim_channel, count(*) AS claims, median(days_to_settle) FILTER (WHERE days_to_settle < 30) AS median_days
 FROM claims WHERE product_line = 'auto' AND peril IN ('collision', 'glass', 'comprehensive')
   AND t_submit >= TIMESTAMP '2026-07-21' AND t_submit < TIMESTAMP '2026-09-16' GROUP BY 1 ORDER BY 1;
@@ -137,6 +143,10 @@ SELECT q.ch, count(*) AS quote_starts, round(any_value(m.spend), 2) AS spend,
  avg(q.bound14::INT) FILTER (WHERE q.t_complete IS NOT NULL AND q.t_complete < TIMESTAMP '2026-09-18') AS purchase_per_completed_quote
 FROM quotes q LEFT JOIN (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM wh_marketing GROUP BY 1) m ON m.ch = q.ch
 GROUP BY 1 ORDER BY 1;
+-- purchase per completed quote: comparison sites vs every other channel (quotes completed by Sep 17)
+SELECT CASE WHEN ch = 'comparison_site' THEN 'comparison_site' ELSE 'other channels' END AS grp, count(*) AS completed_quotes,
+ avg(bound14::INT) AS purchase_per_completed_quote
+FROM quotes WHERE t_complete IS NOT NULL AND t_complete < TIMESTAMP '2026-09-18' GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H5-auto-rate-change: auto quotes 1.14x, purchases per completed auto quote 0.75x
@@ -222,9 +232,10 @@ SELECT c.n AS n_standard, round(c.p, 4) AS purchase_standard, v.n AS n_express, 
 FROM g v, g c WHERE v.quote_flow = 'express' AND c.quote_flow = 'standard';
 
 -- EVAL Q2: Snap & Settle — photo vs adjuster settle time, adoption, auto cycle time before/after launch
-SELECT claim_channel, count(*) AS claims, round(median(days_to_settle) FILTER (WHERE days_to_settle < 30), 2) AS median_days
+SELECT CASE WHEN t_submit >= TIMESTAMP '2026-07-21' THEN '2 after launch' ELSE '1 before launch' END AS period, claim_channel,
+ count(*) AS claims, round(median(days_to_settle) FILTER (WHERE days_to_settle < 30), 2) AS median_days
 FROM claims WHERE product_line = 'auto' AND peril IN ('collision', 'glass', 'comprehensive')
-  AND t_submit >= TIMESTAMP '2026-07-21' AND t_submit < TIMESTAMP '2026-09-16' GROUP BY 1 ORDER BY 1;
+  AND t_submit < TIMESTAMP '2026-09-16' GROUP BY 1, 2 ORDER BY 1, 2;
 SELECT CASE WHEN t_submit >= TIMESTAMP '2026-07-21' THEN 'after' ELSE 'before' END AS period, count(*) AS auto_claims,
  round(avg((claim_channel = 'photo_estimate')::INT), 4) AS photo_share,
  round(median(days_to_settle) FILTER (WHERE days_to_settle < 30), 2) AS median_days_all_auto
@@ -259,7 +270,7 @@ SELECT CASE WHEN t_complete >= TIMESTAMP '2026-08-17' THEN 'after' ELSE 'before'
  round(avg(bound14::INT) FILTER (WHERE t_complete < TIMESTAMP '2026-09-18'), 4) AS purchase_rate
 FROM quotes WHERE product_line = 'auto' AND t_complete IS NOT NULL GROUP BY 1 ORDER BY 1 DESC;
 SELECT period, written_premium, policies, completed_auto_quotes, round(written_premium / completed_auto_quotes, 2) AS premium_per_completed_quote,
- round(written_premium / days, 2) AS premium_per_day
+ round(written_premium / days, 2) AS premium_per_day, round(completed_auto_quotes / days, 1) AS completed_auto_quotes_per_day
 FROM (
   SELECT 'before (Jun 4-Aug 16)' AS period, 74 AS days, round(sum(written_premium_usd)) AS written_premium, sum(policies_written) AS policies,
    (SELECT count(*) FROM ev WHERE event = 'quote completed' AND product_line = 'auto' AND t < TIMESTAMP '2026-08-17') AS completed_auto_quotes
@@ -310,6 +321,12 @@ SELECT CASE WHEN ch = 'social_ads' THEN 'social_ads' ELSE 'other channels' END A
  round(count(*) FILTER (WHERE t_start >= TIMESTAMP '2026-09-08') / 24.0, 2) AS per_day_campaign
 FROM quotes GROUP BY 1 ORDER BY 1;
 
+-- who the campaign brought: product and shopping reason of social shoppers, before vs from Sep 8
+SELECT CASE WHEN t_start >= TIMESTAMP '2026-09-08' THEN 'campaign' ELSE 'before' END AS period, count(*) AS social_shoppers,
+ round(avg((product_line = 'auto')::INT), 3) AS auto_share,
+ round(avg((shopping_reason = 'switching')::INT) FILTER (WHERE t_complete IS NOT NULL), 3) AS switching_share_of_completed
+FROM quotes WHERE ch = 'social_ads' GROUP BY 1 ORDER BY 1;
+
 SELECT round(count(*) FILTER (WHERE t < TIMESTAMP '2026-09-08') / 96.0, 3) AS social_purchases_per_day_before,
  round(count(*) FILTER (WHERE t >= TIMESTAMP '2026-09-08') / 24.0, 3) AS social_purchases_per_day_campaign
 FROM ev WHERE event = 'policy purchased' AND acquisition_channel = 'social_ads';
@@ -318,7 +335,8 @@ FROM ev WHERE event = 'policy purchased' AND acquisition_channel = 'social_ads';
 SELECT shopping_reason, count(*) AS purchases, round(median(date_diff('second', t_complete, t_purchase) / 3600.0), 1) AS median_hours,
  round(avg((t_purchase < t_complete + INTERVAL 1 DAY)::INT), 3) AS same_day_share
 FROM quotes WHERE bound14 AND t_complete < TIMESTAMP '2026-09-18' GROUP BY ROLLUP (shopping_reason) ORDER BY 1;
-SELECT product_line, round(median(date_diff('second', t_complete, t_purchase) / 3600.0), 1) AS median_hours, count(*) AS purchases
+SELECT product_line, round(median(date_diff('second', t_complete, t_purchase) / 3600.0), 1) AS median_hours, count(*) AS purchases,
+ round(avg((shopping_reason = 'switching')::INT), 3) AS switching_share
 FROM quotes WHERE bound14 AND t_complete < TIMESTAMP '2026-09-18' GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q10: autopay — failure rate, lapses, nonpayment cancellations, autopay share
@@ -359,6 +377,10 @@ SELECT coverage_tier, CASE WHEN product_line = 'auto' THEN 'auto' ELSE 'property
  CASE WHEN ch = 'comparison_site' THEN 'comparison_site' ELSE 'other channels' END AS chgrp, bound14
 FROM quotes WHERE t_complete IS NOT NULL AND t_complete < TIMESTAMP '2026-09-18';
 SELECT coverage_tier, count(*) AS completed_quotes, round(avg(bound14::INT), 4) AS purchase_rate FROM tier_quotes GROUP BY 1 ORDER BY 1;
+-- all three tiers at once: chi-square test of purchase by tier (2 degrees of freedom, p = exp(-chi2 / 2))
+WITH o AS (SELECT coverage_tier, bound14, count(*) AS n FROM tier_quotes GROUP BY 1, 2),
+m AS (SELECT o.*, sum(n) OVER (PARTITION BY coverage_tier) * sum(n) OVER (PARTITION BY bound14) / sum(n) OVER () AS e FROM o)
+SELECT round(sum((n - e) ^ 2 / e), 2) AS chi2, round(exp(-sum((n - e) ^ 2 / e) / 2), 3) AS p_value FROM m;
 WITH g AS (SELECT 'all' AS split, coverage_tier, count(*) AS n, avg(bound14::INT) AS p FROM tier_quotes GROUP BY 2
   UNION ALL SELECT line, coverage_tier, count(*), avg(bound14::INT) FROM tier_quotes GROUP BY 1, 2
   UNION ALL SELECT chgrp, coverage_tier, count(*), avg(bound14::INT) FROM tier_quotes GROUP BY 1, 2)
@@ -366,18 +388,22 @@ SELECT b.split, b.n AS n_basic, round(b.p, 4) AS rate_basic, pr.n AS n_premium, 
  round((pr.p - b.p) / sqrt(((pr.p * pr.n + b.p * b.n) / (pr.n + b.n)) * (1 - (pr.p * pr.n + b.p * b.n) / (pr.n + b.n)) * (1.0 / pr.n + 1.0 / b.n)), 2) AS z_premium_vs_basic
 FROM g b JOIN g pr ON pr.split = b.split AND pr.coverage_tier = 'premium' WHERE b.coverage_tier = 'basic' ORDER BY 1;
 
--- EVAL Q13 (null): do shoppers on phones complete quotes less often than on the web?
+-- EVAL Q13 (null): do Android shoppers complete quotes less often than iPhone / iPad shoppers?
+-- platform of the quote device: ios (iPhone, iPad) vs android; overall, by quote form, by product line
 CREATE OR REPLACE TEMP TABLE device_quotes AS
-SELECT CASE WHEN platform = 'web' THEN 'web' ELSE 'mobile' END AS device, quote_flow,
- (t_complete IS NOT NULL AND t_complete < t_start + INTERVAL 1 DAY) AS done FROM quotes;
-WITH g AS (SELECT device, count(*) AS n, avg(done::INT) AS p FROM device_quotes GROUP BY 1)
-SELECT w.n AS n_web, round(w.p, 4) AS completion_web, m.n AS n_mobile, round(m.p, 4) AS completion_mobile,
- round((m.p - w.p) / sqrt(((m.p * m.n + w.p * w.n) / (m.n + w.n)) * (1 - (m.p * m.n + w.p * w.n) / (m.n + w.n)) * (1.0 / m.n + 1.0 / w.n)), 2) AS z
+SELECT platform AS device, quote_flow, product_line,
+ (t_complete IS NOT NULL AND t_complete < t_start + INTERVAL 1 DAY) AS done FROM quotes WHERE platform IN ('ios', 'android');
+WITH g AS (SELECT 'all' AS split, device, count(*) AS n, avg(done::INT) AS p FROM device_quotes GROUP BY 2
+  UNION ALL SELECT quote_flow, device, count(*), avg(done::INT) FROM device_quotes GROUP BY 1, 2
+  UNION ALL SELECT product_line, device, count(*), avg(done::INT) FROM device_quotes GROUP BY 1, 2)
+SELECT i.split, i.n AS n_ios, round(i.p, 4) AS completion_ios, a.n AS n_android, round(a.p, 4) AS completion_android,
+ round((a.p - i.p) / sqrt(((a.p * a.n + i.p * i.n) / (a.n + i.n)) * (1 - (a.p * a.n + i.p * i.n) / (a.n + i.n)) * (1.0 / a.n + 1.0 / i.n)), 2) AS z
+FROM g i JOIN g a ON a.split = i.split AND a.device = 'android' WHERE i.device = 'ios' ORDER BY 1;
+-- for context: web vs all mobile
+WITH g AS (SELECT CASE WHEN platform = 'web' THEN 'web' ELSE 'mobile' END AS device, count(*) AS n,
+   avg((t_complete IS NOT NULL AND t_complete < t_start + INTERVAL 1 DAY)::INT) AS p FROM quotes GROUP BY 1)
+SELECT w.n AS n_web, round(w.p, 4) AS completion_web, m.n AS n_mobile, round(m.p, 4) AS completion_mobile
 FROM g w, g m WHERE w.device = 'web' AND m.device = 'mobile';
-WITH g AS (SELECT quote_flow, device, count(*) AS n, avg(done::INT) AS p FROM device_quotes GROUP BY 1, 2)
-SELECT w.quote_flow, w.n AS n_web, round(w.p, 4) AS completion_web, m.n AS n_mobile, round(m.p, 4) AS completion_mobile,
- round((m.p - w.p) / sqrt(((m.p * m.n + w.p * w.n) / (m.n + w.n)) * (1 - (m.p * m.n + w.p * w.n) / (m.n + w.n)) * (1.0 / m.n + 1.0 / w.n)), 2) AS z
-FROM g w JOIN g m ON m.quote_flow = w.quote_flow AND m.device = 'mobile' WHERE w.device = 'web' ORDER BY 1;
 
 -- EVAL Q14 (null): do autopay customers leave at renewal less often than manual payers?
 CREATE OR REPLACE TEMP TABLE renewal_pay AS

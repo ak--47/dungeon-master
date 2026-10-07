@@ -18,7 +18,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             roadside help, and claims. Autopay or manual monthly installments
  *             (or the full term up front).
  * SCALE:      10,000 people (≈3,700 shoppers start a first quote in the window,
- *             ≈2,450 of them never create an account; ≈6,000 are existing
+ *             ≈2,600 of them never create an account; ≈5,900 are existing
  *             policyholders), ~0.76M events, 120 days
  *             (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  quote started → quote completed → account created → policy
@@ -37,8 +37,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * FUNNELS (2 declared; the everything hook builds the policy lifecycle):
  *   - Quote (first funnel, born shoppers): quote started → quote completed →
  *       account created → policy purchased (engine 100%; the hook decides every
- *       step). Carries the Express Quote experiment (multipliers 1.0; the hook
- *       applies the effect).
+ *       step, because completion depends on the experiment arm (H3), purchase on
+ *       channel, product and quote date (H4, H5), and purchase timing on the
+ *       shopping reason (H9)). Carries the Express Quote experiment (multipliers
+ *       1.0; the hook applies the effect).
  *   - Account visit (weight 12, first-fixed): app opened → policy viewed /
  *       billing viewed / id card viewed / documents viewed
  *
@@ -68,7 +70,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * (_drop). Existing customers are identified throughout; a person with no
  * events in the window (policies cancelled before June 4, or no activity at
  * all) has no profile either, so profiles = identified people with events.
- * App events carry user_id + device_id (1-3 devices per person, about half use
+ * App events carry user_id + device_id (1-4 devices per person, about half use
  * more than one; platform agrees with the device OS). Back-office events
  * (policy purchased, autopay payments and failures, renewal offered, policy
  * renewed, policy cancelled, claim settled) carry user_id only and
@@ -95,8 +97,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * - Window start: a few existing customers quoted in late May and buy in early
  *   June, so purchases are flat from week 1.
  * - Warehouse drift: marketing networks over-claim conversions and comparison
- *   sites bill their own lead counts; claims ops counts phone-reported claims
- *   that never touch the app; written premium adds phone-sold policies and nets
+ *   sites bill their own lead counts (clicks = leads x 1.0-1.3); claims ops adds
+ *   phone-reported claims that never touch the app (an independent daily
+ *   Poisson count, plus storm calls that queue behind the reps' daily capacity
+ *   after the hurricane); written premium adds phone-sold policies and nets
  *   flat cancellations.
  */
 
@@ -108,11 +112,13 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * each event still fires with its knob probability, but a stratum's total does
  * not carry binomial noise, so reads on a few hundred events land on the knob.
  * Strata: purchase by channel group x auto/property x before/after the rate
- * change x quote week (H4, H5); non-renewal by bundled x notice month x
- * price-change band (H6, H7); photo adoption by peril (H1); shopper channel
- * mix by period and pre-campaign social thinning (H8); autopay retries that
- * fail again (H10). The manual-payment lapse (H10), quote completion (H3),
- * settle times (H1, H2) and purchase gaps (H9) are ordinary seeded draws.
+ * change x quote week (H4, H5); non-renewal by bundled x notice month (H6;
+ * each notice fires with its own price-curve probability, so the H7 price
+ * buckets are not strata and carry ordinary sampling noise); photo adoption by
+ * peril (H1); shopper channel mix by period and pre-campaign social thinning
+ * (H8); autopay retries that fail again (H10). The manual-payment lapse (H10),
+ * quote completion (H3), settle times (H1, H2) and purchase gaps (H9) are
+ * ordinary seeded draws.
  *
  * ─────────────────────────────────────────────────────────────────────────
  * H1. SNAP & SETTLE LAUNCH (everything)
@@ -122,7 +128,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   time of adjuster-inspected claims with the same peril mix.
  * MIXPANEL: Funnels, claim submitted → claim settled, Totals, hold claim_id
  *   constant, 30-day window, filter product_line = auto and peril in (collision,
- *   glass, comprehensive), Jul 21 - Sep 15, breakdown claim_channel, median TTC.
+ *   glass, comprehensive), Jun 4 - Sep 15 (photo estimates exist only from Jul
+ *   21; adjuster handling did not change), breakdown claim_channel, median TTC.
  * REAL WORLD: AI photo estimating cuts days of waiting for an adjuster visit.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -198,8 +205,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H8. FALL SOCIAL CAMPAIGN (everything + warehouse marketing_spend_daily)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: from 2026-09-08 the social budget doubles and social quote starts
- *   per day rise 1.8x (new shoppers; other channels flat). Warehouse social
- *   spend per day ≈ 1.9x.
+ *   per day rise 1.8x (new shoppers; other channels flat). Campaign shoppers
+ *   answer a "Switch & Save" ad, so they lean to auto (80%) and switching
+ *   (72%). Warehouse social spend per day ≈ 1.9x.
  * MIXPANEL: Insights, quote started per day by acquisition_channel, before vs
  *   from Sep 8; join social spend for the incremental cost per quote.
  * REAL WORLD: a seasonal "switch and save" push on social feeds.
@@ -221,55 +229,57 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   failed manual payments end in a nonpayment cancellation 10-25 days later;
  *   autopay failures retry after 3 days (5% fail again and lapse).
  * MIXPANEL: Insights, payment failed / (payment made + payment failed), both
- *   is_retry = false, breakdown payment_method; Funnels, payment failed →
- *   policy cancelled (cancel_reason = nonpayment), Totals, hold policy_id,
- *   30-day window.
+ *   is_retry = false, breakdown payment_method; Funnels, payment failed (step 1
+ *   filter is_retry = false) → policy cancelled (cancel_reason = nonpayment),
+ *   Totals, hold policy_id, 30-day window.
  * REAL WORLD: nonpayment is the largest source of mid-term cancellations.
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-insurance-application,
- * 2026-10-07, full fidelity, 10,000 people, 756,491 events)
+ * 2026-10-07, full fidelity, 10,000 people, 757,612 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                          | Derivation                  | Expected | Measured
  * -----|-------------------------------------------------|-----------------------------|----------|---------
- * H1   | median days to settle, photo / adjuster (elig.) | PHOTO_SETTLE_MULT           | 0.30     | 0.276 (1.94 vs 7.02 d)
- * H1   | photo_estimate share of eligible auto claims    | PHOTO_ADOPT                 | 0.60     | 0.613 (100 of 163)
+ * H1   | median days to settle, photo / adjuster (elig.) | PHOTO_SETTLE_MULT           | 0.30     | 0.302 (1.87 vs 6.19 d)
+ * H1   | photo_estimate share of eligible auto claims    | PHOTO_ADOPT                 | 0.60     | 0.619 (117 of 189)
  * H1   | photo_estimate claims before launch             | exact purity                | 0        | 0
- * H2   | median days, Gulf CAT property / other property | CAT_SETTLE_MULT             | 2.50     | 2.552 (17.74 vs 6.95 d)
+ * H2   | median days, Gulf CAT property / other property | CAT_SETTLE_MULT             | 2.50     | 2.491 (17.35 vs 6.97 d)
  * H2   | warehouse catastrophe-code rows                 | 14 days x 1 region          | 14       | 14
- * H3   | quote completion, Express / Control             | EXPRESS_CONV_MULT           | 1.30     | 1.378 (73.4% vs 53.3%)
- * H3   | median minutes to complete, Express / Control   | EXPRESS_TIME_MULT           | 0.50     | 0.508 (8.1 vs 15.9)
- * H3   | Express share of exposed shoppers               | equal 2-arm hash            | 0.50     | 0.486 (1,302 of 2,680)
- * H4   | spend per quote start, comparison / search      | 45 / 95                     | 0.474    | 0.461 ($44.45 vs $96.39)
- * H4   | purchase per completed quote, comparison / rest | COMPARISON_BIND_MULT        | 0.45     | 0.472 (18.0% vs 38.0%)
- * H5   | avg quoted auto premium, after / before         | AUTO_RATE_MULT              | 1.14     | 1.118 ($178.72 vs $159.89)
- * H5   | auto purchase per completed quote, after/before | AUTO_BIND_KEEP              | 0.75     | 0.733 (25.4% vs 34.6%)
- * H5   | property purchase per completed quote (control) | unchanged (knob ±10%)       | 1.00     | 0.981 (33.8% vs 34.4%)
- * H5   | warehouse auto NB premium per completed quote   | 0.75 x 1.14                 | 0.855    | 0.809 ($296 vs $366)
- * H6   | non-renewal per notice, bundled / single-line   | BUNDLE_NONRENEW_MULT        | 0.40     | 0.412 (6.5% vs 15.7%)
- * H7   | single-line non-renewal, ≥ 15% / no increase    | NONRENEW_HIGH / NONRENEW_LOW| 4.00     | 3.708 (27.7% vs 7.5%)
- * H7   | single-line non-renewal, 0-15% / no increase    | linear curve over the draw  | 2.40     | 2.219 (16.6% vs 7.5%)
- * H8   | social quote starts per day, campaign / before  | SOCIAL_LIFT                 | 1.80     | 1.843 (5.38 vs 2.92)
- * H8   | other channels per day, campaign / before       | unchanged                   | 1.00     | 1.030
- * H8   | warehouse social spend per day                  | (2.0 + 1.8) / 2             | 1.90     | 1.906 ($223.64 vs $117.35)
- * H9   | median hours quote → purchase, switching/other  | SWITCHER_TTC_MULT           | 3.00     | 3.030 (49.0 vs 16.2 h)
- * H10  | scheduled payment failure, autopay / manual     | FAIL_AUTOPAY / FAIL_MANUAL  | 0.30     | 0.276 (1.36% vs 4.92%)
- * H10  | failed manual payments lapsing within 30 days   | LAPSE_AFTER_MANUAL_FAIL     | 0.25     | 0.219 (421 failures)
+ * H3   | quote completion, Express / Control             | EXPRESS_CONV_MULT           | 1.30     | 1.317 (71.8% vs 54.5%)
+ * H3   | median minutes to complete, Express / Control   | EXPRESS_TIME_MULT           | 0.50     | 0.519 (8.0 vs 15.5)
+ * H3   | Express share of exposed shoppers               | equal 2-arm hash            | 0.50     | 0.494 (1,340 of 2,710)
+ * H4   | spend per quote start, comparison / search      | 45 / 95                     | 0.474    | 0.461 ($44.41 vs $96.24)
+ * H4   | purchase per completed quote, comparison / rest | COMPARISON_BIND_MULT        | 0.45     | 0.467 (13.3% vs 28.5%)
+ * H5   | avg quoted auto premium, after / before         | AUTO_RATE_MULT              | 1.14     | 1.136 ($181.04 vs $159.41)
+ * H5   | auto purchase per completed quote, after/before | AUTO_BIND_KEEP              | 0.75     | 0.753 (19.2% vs 25.6%)
+ * H5   | property purchase per completed quote (control) | unchanged (knob ±10%)       | 1.00     | 0.970 (25.5% vs 26.3%)
+ * H5   | warehouse auto NB premium per completed quote   | 0.75 x 1.14                 | 0.855    | 0.888 ($251 vs $282)
+ * H6   | non-renewal per notice, bundled / single-line   | BUNDLE_NONRENEW_MULT        | 0.40     | 0.396 (6.5% vs 16.4%)
+ * H7   | single-line non-renewal, ≥ 15% / no increase    | NONRENEW_HIGH / NONRENEW_LOW| 4.00     | 2.909 (23.3% vs 8.0%)
+ * H7   | single-line non-renewal, 0-15% / no increase    | linear curve over the draw  | 2.40     | 2.208 (17.7% vs 8.0%)
+ * H8   | social quote starts per day, campaign / before  | SOCIAL_LIFT                 | 1.80     | 1.726 (5.13 vs 2.97)
+ * H8   | other channels per day, campaign / before       | unchanged                   | 1.00     | 0.963
+ * H8   | warehouse social spend per day                  | (2.0 + 1.8) / 2             | 1.90     | 1.851 ($218.45 vs $118.03)
+ * H9   | median hours quote → purchase, switching/other  | SWITCHER_TTC_MULT           | 3.00     | 3.233 (52.4 vs 16.2 h)
+ * H10  | scheduled payment failure, autopay / manual     | FAIL_AUTOPAY / FAIL_MANUAL  | 0.30     | 0.297 (1.47% vs 4.95%)
+ * H10  | failed manual payments lapsing within 30 days   | LAPSE_AFTER_MANUAL_FAIL     | 0.25     | 0.260 (465 failures)
  * ═════════════════════════════════════════════════════════════════════════
  *
- * Verdicts: 9 NAILED, 1 STRONG (H10: the manual lapse share is an ordinary
- * seeded draw on 421 failures, SE about 2 points, and reads 21.9% against the
- * 25% knob; it passes the 15% floor). Every one-sided bound is the half-effect
- * bound 1 + 0.5 x (knob - 1); controls use knob ±10%. Noise notes: insurance
- * events are rare at 10,000 people (about 90 comparison-site purchases, 107
- * bundled vs 233 single-line non-renewals, 23 single-line non-renewals with no
- * price increase), so the stratified draws above carry these reads; sub-splits
- * outside a stratum keep ordinary sampling noise. claims_operations_daily
- * correlates 0.99 with Mixpanel claim submissions because the hurricane spike
- * dominates the series; on ordinary days phone-reported claims make the table
- * drift from the event count. Auto claim frequency is 0.10 per policy per 120
- * days (about 0.3 per policy-year with glass, a policy often covers two cars),
- * which leaves H1 about 160 eligible claims after launch.
+ * Verdicts: 9 NAILED, 1 STRONG (H7: the ≥ 15% bucket reads 2.91x no increase
+ * against the 4.0x knob and passes the 2.5x half-effect floor; the price
+ * buckets are not strata, so 163 shock notices and 23 no-increase
+ * non-renewals carry ordinary sampling noise). Every one-sided bound is the
+ * half-effect bound 1 + 0.5 x (knob - 1); controls use knob ±10%. Noise notes:
+ * insurance events are rare at 10,000 people (about 70 comparison-site
+ * purchases, 109 bundled vs 244 single-line non-renewals), so the stratified
+ * draws above carry the H4, H5 and H6 reads; sub-splits outside a stratum keep
+ * ordinary sampling noise. The H8 control (other channels per day) rests on
+ * engine births, about ±4% per period. claims_operations_daily correlates
+ * 0.97 with Mixpanel claim submissions: phone-reported claims follow their own
+ * daily count and, after the hurricane, the reps' daily capacity. Auto claim
+ * frequency is 0.10 per policy per 120 days (about 0.3 per policy-year with
+ * glass, a policy often covers two cars), which leaves H1 about 190 eligible
+ * claims after launch.
  */
 
 // ── SCALE ──
@@ -333,7 +343,7 @@ const BORN_PCT = 40;
 const QUOTE_COMPLETE_BASE = 0.55;      // share of quote starts that finish the quote (Control)
 const QUOTE_MINUTES_MEDIAN = 16;       // minutes from quote started to quote completed (Control)
 const SAVE_QUOTE_SHARE = 0.35;         // non-buyers who create an account to save their quote
-const BIND_BASE = 0.4;                 // share of completed quotes that buy (search, social, organic, referral)
+const BIND_BASE = 0.3;                 // share of completed quotes that buy (search, social, organic, referral)
 
 // H3 Express Quote experiment (pre-filled vehicle / property data)
 const EXPRESS_EXPERIMENT = "Express Quote";
@@ -362,6 +372,10 @@ const RENEWAL_NOTICE_DAYS = 30;
 // H8 fall social campaign
 const SOCIAL_LIFT = 1.8;               // social_ads quote starts per day, campaign / before
 const SOCIAL_BUDGET_MULT = 2.0;        // social planned budget, campaign / before
+// "Switch & Save" targets drivers who already have a policy elsewhere: campaign
+// shoppers lean to auto quotes and switching
+const CAMPAIGN_PRODUCT_WEIGHTS = { auto: 80, home: 10, renters: 10 };
+const CAMPAIGN_REASON_WEIGHTS = { switching: 72, life_change: 18, first_policy: 10 };
 
 // H9 time from quote to purchase, by shopping reason
 const BIND_GAP_MEDIAN_H = 16;
@@ -638,6 +652,11 @@ function handleEverything(events, meta) {
 		profile.acquisition_channel = channel;
 		// H8: before the fall campaign, social brought fewer shoppers (the campaign adds volume)
 		if (channel === "social_ads" && t0 < ms(SOCIAL_CAMPAIGN_START) && !quota("social-pre", 1 / SOCIAL_LIFT)) return [];
+		// H8: campaign shoppers answer the "Switch & Save" ad: mostly drivers switching carriers
+		if (channel === "social_ads" && t0 >= ms(SOCIAL_CAMPAIGN_START)) {
+			profile.product_lines = pickWeighted(CAMPAIGN_PRODUCT_WEIGHTS, salt(uid, "campaign-product"));
+			profile.shopping_reason = pickWeighted(CAMPAIGN_REASON_WEIGHTS, salt(uid, "campaign-reason"));
+		}
 		const product = profile.product_lines;
 		const reason = profile.shopping_reason;
 		const variant = ex && profile[EXP_KEY] !== undefined ? profile[EXP_KEY] : null;
@@ -828,9 +847,9 @@ function simulatePolicy(pol, ctx) {
 		if (end > END_MS + RENEWAL_NOTICE_DAYS * DAY_MS) break;
 		const offerT = dayStart(end - RENEWAL_NOTICE_DAYS * DAY_MS) + chance.integer({ min: 9 * 60, max: 12 * 60 }) * MIN_MS;
 		const chg = round1(Math.min(30, Math.max(-12, chance.normal({ mean: 6, dev: 7 }))));
-		// stratum: bundled vs single line x month of the renewal notice x price-change band (<= 0, 5-point steps, >= 15)
-		const chgBand = chg <= 0 ? 0 : chg >= PRICE_SHOCK_PCT ? 4 : 1 + Math.floor(chg / 5);
-		const leaves = quota(`renew|${bundled}|${dayKey(offerT).slice(0, 7)}|${chgBand}`, nonRenewProb(chg, bundled));
+		// stratum: bundled vs single line x month of the renewal notice. Each notice fires
+		// with its own price-curve probability; the price buckets the H7 read uses are not strata.
+		const leaves = quota(`renew|${bundled}|${dayKey(offerT).slice(0, 7)}`, nonRenewProb(chg, bundled));
 		let leaveT = leaves ? Math.min(end - DAY_MS, offerT + between(5, 27) * DAY_MS) : null;
 		if (leaveT !== null) leaveT = customerTime(dayStart(leaveT), dayStart(leaveT) + DAY_MS);
 		// a non-renewal decided before the window looks like a policy that never was; keep those renewing
@@ -949,7 +968,7 @@ function simulatePolicy(pol, ctx) {
 		const denied = bool(DENIAL_SHARE);
 		const loss = Math.round(AVG_LOSS[peril] * Math.exp(chance.normal({ mean: 0, dev: 0.55 })));
 		const cb = { claim_id: claimId, product_line: pol.product };
-		CLAIM_LEDGER.push({ region, submitDay: dayKey(tSubmit), settleDay: tSettle <= END_MS ? dayKey(tSettle) : null, submitMs: tSubmit });
+		CLAIM_LEDGER.push({ region, submitDay: dayKey(tSubmit), settleDay: tSettle <= END_MS ? dayKey(tSettle) : null, submitMs: tSubmit, cat: inCat });
 		if (t0 >= BEGIN_MS) {
 			specs.push({ name: "claim started", t: t0, mode: "user", props: { ...cb, peril } });
 			if (photo || bool(0.6)) {
@@ -998,6 +1017,48 @@ const PLATFORM_CLAIM_INFLATION = { search_ads: 1.12, comparison_site: 1.06, soci
 const ADJUSTER_HOURS_BASE = { gulf_coast: 16, south: 26, midwest: 16, west: 12, northeast: 8 }; // staff adjuster hours per weekday
 const CAT_ADJUSTER_HOURS = 80; // ten independent catastrophe adjusters, 8 h a day
 const PHONE_CLAIM_SHARE = 0.22; // claims reported by phone to in-house service reps, never in the app
+const PHONE_PER_APP = PHONE_CLAIM_SHARE / (1 - PHONE_CLAIM_SHARE); // phone claims per app claim, ordinary days
+const CAT_PHONE_RATIO = 0.6;    // storm claims phoned in, per storm claim filed in the app
+const CAT_PHONE_DECAY_DAYS = 3; // calls arrive over the days after landfall...
+const CAT_PHONE_CAPACITY = 9;   // ...but the service reps can log only about this many storm claims a day; the rest wait in the queue
+const DOW_MEAN = DOW_WEIGHTS.reduce((a, b) => a + b, 0) / DOW_WEIGHTS.length;
+/** expected phone-reported claims per day for a region (ordinary days), from this run's app claims */
+let PHONE_BASE = null;
+function phoneBaseline(region) {
+	if (!PHONE_BASE || PHONE_BASE.run !== RUN_CONFIG) {
+		const n = Object.fromEntries(REGIONS.map((x) => [x, 0]));
+		for (const c of CLAIM_LEDGER) if (!c.cat && c.submitMs >= BEGIN_MS && c.submitMs <= END_MS) n[c.region]++;
+		const catApp = CLAIM_LEDGER.filter((c) => c.cat).length;
+		const catDays = (ms(CAT_END) - ms(HURRICANE_LANDFALL)) / DAY_MS;
+		const w = Array.from({ length: catDays }, (_, d) => Math.exp(-d / CAT_PHONE_DECAY_DAYS));
+		const wSum = w.reduce((a, b) => a + b, 0);
+		PHONE_BASE = { run: RUN_CONFIG, perDay: Object.fromEntries(REGIONS.map((x) => [x, n[x] / WINDOW_DAYS * PHONE_PER_APP])),
+			catPerDay: (() => {
+				// callers queue: each day the reps log up to capacity, the rest call back later
+				let queue = 0;
+				return w.map((x) => {
+					queue += catApp * CAT_PHONE_RATIO * x / wSum;
+					const logged = Math.min(CAT_PHONE_CAPACITY, queue);
+					queue -= logged;
+					return logged;
+				});
+			})() };
+	}
+	return PHONE_BASE.perDay[region];
+}
+/** expected phoned-in storm claims on a catastrophe day (gulf_coast only) */
+function catPhoneExpected(region, dayMs) {
+	if (catCode(region, dayMs) === "none") return 0;
+	phoneBaseline(region);
+	return PHONE_BASE.catPerDay[Math.floor((dayMs - ms(HURRICANE_LANDFALL)) / DAY_MS)] || 0;
+}
+/** seeded Poisson draw (inverse CDF on a salted hash) */
+function seededPoisson(lambda, key) {
+	const u = hashFloat(key);
+	let p = Math.exp(-lambda), F = p, k = 0;
+	while (u > F && k < 100) { k++; p *= lambda / k; F += p; }
+	return k;
+}
 
 function handleWarehouse(row, meta) {
 	if (meta.isBackfill) return row;
@@ -1013,29 +1074,40 @@ function handleWarehouse(row, meta) {
 			const leads = Math.round(quotes * 1.08 * jitter(`leads|${k}`, 0.05));
 			row.conversions_reported = leads;
 			spend = leads * COST_PER_QUOTE[ch] / 1.08 * jitter(`cpl|${k}`, 0.04);
+			// click-throughs from the comparison listing: every lead, plus shoppers who
+			// clicked through and left before the site counted a lead
+			row.clicks = Math.round(leads * (1 + 0.3 * hashFloat(`clk|${k}`)));
 		} else {
 			const planQuotes = DAILY_QUOTES[ch] * (ch === "social_ads" ? (campaign ? 1 : 1 / SOCIAL_LIFT) : 1);
 			const plan = COST_PER_QUOTE[ch] * planQuotes * SPEND_WEEKDAY[dow] * (campaign ? SOCIAL_BUDGET_MULT / SOCIAL_LIFT : 1);
 			spend = (0.5 * plan + 0.5 * COST_PER_QUOTE[ch] * quotes) * jitter(`spend|${k}`, 0.12);
 			row.conversions_reported = Math.round(quotes * PLATFORM_CLAIM_INFLATION[ch] * jitter(`conv|${k}`, 0.2));
+			row.clicks = Math.round(spend / (CPC_USD[ch] * jitter(`cpc|${k}`, 0.15)));
 		}
 		row.spend_usd = round2(spend);
-		row.clicks = Math.round(spend / (CPC_USD[ch] * jitter(`cpc|${k}`, 0.15)));
 		row.impressions = Math.round(row.clicks / (CTR[ch] * jitter(`ctr|${k}`, 0.15)));
 		return row;
 	}
 	if (meta.metricName === "claims_operations_daily") {
 		const r = row.region;
 		const k = `${row.date}|${r}`;
-		row.new_claims_reported = Math.round(row.new_claims_reported * (1 + PHONE_CLAIM_SHARE * jitter(`phone|${k}`, 0.6)) + (hashFloat(`walk|${k}`) < 0.3 ? 1 : 0));
+		// phone-reported claims: an independent daily count around the region's usual
+		// level (weekday rhythm), plus storm victims who call in during a catastrophe
+		// (no power, no data) at a share that swings day to day
+		const dayMs = ms(`${row.date}T00:00:00Z`);
+		const dow = new Date(dayMs).getUTCDay();
+		const appNow = row.new_claims_reported;
+		const lambda = phoneBaseline(r) * DOW_WEIGHTS[dow] / DOW_MEAN;
+		const catPhone = seededPoisson(catPhoneExpected(r, dayMs), `catph|${k}`);
+		row.new_claims_reported = appNow + seededPoisson(lambda, `phone|${k}`) + catPhone;
 		let closed = 0, open = 0;
 		for (const c of CLAIM_LEDGER) {
 			if (c.region !== r) continue;
 			if (c.settleDay === row.date) closed++;
 			if (c.submitDay <= row.date && (c.settleDay === null || c.settleDay > row.date)) open++;
 		}
-		row.claims_closed = Math.round(closed * (1 + PHONE_CLAIM_SHARE * jitter(`phclose|${k}`, 0.6)));
-		row.open_claims = Math.round(open * (1 + PHONE_CLAIM_SHARE));
+		row.claims_closed = Math.round(closed * (1 + PHONE_PER_APP * jitter(`phclose|${k}`, 0.6)));
+		row.open_claims = Math.round(open * (1 + PHONE_PER_APP));
 		return row;
 	}
 	if (meta.metricName === "written_premium_daily") {
@@ -1490,13 +1562,14 @@ const RATE_AFTER_FROM = "2026-08-31 00:00:00"; // H5 warehouse read: two weeks a
 const H1_SQL = `WITH ${ID_CTE},
 s AS (SELECT claim_id, any_value(uid) AS uid, min(t) AS t0, any_value(claim_channel) AS ch FROM ev
   WHERE event = 'claim submitted' AND product_line = 'auto' AND peril IN (${SQL_LIST(PHOTO_ELIGIBLE)})
-    AND t >= TIMESTAMP '${TS(SNAP_SETTLE_LAUNCH)}' AND t < TIMESTAMP '${H1_READ_END}' GROUP BY 1),
+    AND t < TIMESTAMP '${H1_READ_END}' GROUP BY 1),
 d AS (SELECT claim_id, min(t) AS t1 FROM ev WHERE event = 'claim settled' GROUP BY 1)
 SELECT s.ch AS grp, count(DISTINCT s.uid) AS user_count, count(*) AS claims,
  median(date_diff('second', s.t0, d.t1) / 86400.0) FILTER (WHERE d.t1 < s.t0 + INTERVAL ${CLAIM_WINDOW_DAYS} DAY) AS med_days
 FROM s LEFT JOIN d ON d.claim_id = s.claim_id GROUP BY 1
 UNION ALL
-SELECT 'all' AS grp, count(DISTINCT uid) AS user_count, count(*) AS claims, avg((ch = 'photo_estimate')::INT) AS med_days FROM s`;
+SELECT 'all' AS grp, count(DISTINCT uid) AS user_count, count(*) AS claims, avg((ch = 'photo_estimate')::INT) AS med_days
+FROM s WHERE t0 >= TIMESTAMP '${TS(SNAP_SETTLE_LAUNCH)}'`;
 
 const H2_SQL = `WITH ${ID_CTE},
 cat AS (SELECT DISTINCT date::DATE AS d, region FROM ${WH("claims_operations_daily")} WHERE catastrophe_code <> 'none'),
@@ -1609,8 +1682,8 @@ export const stories = [
 		id: "H1-snap-and-settle",
 		hook: "H1",
 		archetype: "funnel-ttc-by-segment",
-		narrative: `Snap & Settle launches ${D(SNAP_SETTLE_LAUNCH)}: an auto customer with a ${PHOTO_ELIGIBLE.join(", ")} claim can upload photos and get an AI damage estimate instead of waiting for an adjuster inspection. About ${PHOTO_ADOPT * 100}% of eligible auto claims after launch go through it (claim_channel = photo_estimate); theft and liability claims, property claims, and every claim before launch use adjuster_inspection. A photo-estimate claim settles in ${PHOTO_SETTLE_MULT}x the time of an adjuster claim with the same peril mix (base medians: glass ${AUTO_SETTLE_DAYS.glass} d, comprehensive ${AUTO_SETTLE_DAYS.comprehensive} d, collision ${AUTO_SETTLE_DAYS.collision} d). Read: per claim (claim_id), median days claim submitted → claim settled within ${CLAIM_WINDOW_DAYS} days, eligible auto claims submitted ${D(SNAP_SETTLE_LAUNCH)} to ${H1_READ_END.slice(0, 10)} (exclusive), photo_estimate over adjuster_inspection. With about 160 claims the ratio carries ~8% noise, so the read uses the knob as target with a ceiling.`,
-		mixpanelReport: { type: "Funnels", steps: ["claim submitted", "claim settled"], counting: "totals", holdPropertyConstant: "claim_id", window: `${CLAIM_WINDOW_DAYS} days`, filter: "product_line = auto, peril in collision/glass/comprehensive", dateRange: `${D(SNAP_SETTLE_LAUNCH)} to 2026-09-15`, breakdown: "claim_channel (step 1)", measure: "median time to convert" },
+		narrative: `Snap & Settle launches ${D(SNAP_SETTLE_LAUNCH)}: an auto customer with a ${PHOTO_ELIGIBLE.join(", ")} claim can upload photos and get an AI damage estimate instead of waiting for an adjuster inspection. About ${PHOTO_ADOPT * 100}% of eligible auto claims after launch go through it (claim_channel = photo_estimate); theft and liability claims, property claims, and every claim before launch use adjuster_inspection. A photo-estimate claim settles in ${PHOTO_SETTLE_MULT}x the time of an adjuster claim with the same peril mix (base medians: glass ${AUTO_SETTLE_DAYS.glass} d, comprehensive ${AUTO_SETTLE_DAYS.comprehensive} d, collision ${AUTO_SETTLE_DAYS.collision} d). Read: per claim (claim_id), median days claim submitted → claim settled within ${CLAIM_WINDOW_DAYS} days, eligible auto claims submitted ${D(DATASET_START)} to ${H1_READ_END.slice(0, 10)} (exclusive), photo_estimate over adjuster_inspection. Photo estimates exist only from launch; adjuster handling did not change, so every eligible adjuster claim in the window is the comparison group (adoption is stratified per peril, so the post-launch adjuster claims keep the same peril mix). With about 120 photo claims the ratio carries ~8% noise, so the read uses the knob as target with a ceiling.`,
+		mixpanelReport: { type: "Funnels", steps: ["claim submitted", "claim settled"], counting: "totals", holdPropertyConstant: "claim_id", window: `${CLAIM_WINDOW_DAYS} days`, filter: "product_line = auto, peril in collision/glass/comprehensive", dateRange: `${D(DATASET_START)} to 2026-09-15`, breakdown: "claim_channel (step 1)", measure: "median time to convert" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H1_SQL },
@@ -1704,7 +1777,7 @@ FROM ev WHERE event = '$experiment_started'`,
 		id: "H4-comparison-site-economics",
 		hook: "H4",
 		archetype: "external-join",
-		narrative: `Comparison sites are Shieldstone's cheapest paid source of quotes and its weakest at turning quotes into policies. Warehouse marketing_spend_daily: comparison sites bill per lead ($${COST_PER_QUOTE.comparison_site} per quote start delivered, invoiced on the site's own lead count), search ads $${COST_PER_QUOTE.search_ads} and social ads $${COST_PER_QUOTE.social_ads} per Mixpanel quote start over the window (half a paced daily budget, half bid x that day's quote starts, seeded day noise). Comparison-site shoppers buy at ${COMPARISON_BIND_MULT}x the rate of every other channel (${r3(BIND_BASE * COMPARISON_BIND_MULT * 100)}% vs ${BIND_BASE * 100}% of completed quotes before other effects), so the price advantage per quote (${COST_PER_QUOTE.comparison_site}/${COST_PER_QUOTE.search_ads} = ${r3(COST_PER_QUOTE.comparison_site / COST_PER_QUOTE.search_ads)}) disappears per policy. Reads: warehouse spend per Mixpanel quote start, comparison / search; and purchase within ${BIND_WINDOW_DAYS} days per completed quote, comparison / all other channels (quotes completed before ${QUOTE_READ_END.slice(0, 10)}). About 90 comparison-site purchases carry ~10% noise, so the conversion read uses the knob as target with a ceiling.`,
+		narrative: `Comparison sites are Shieldstone's cheapest paid source of quotes and its weakest at turning quotes into policies. Warehouse marketing_spend_daily: comparison sites bill per lead ($${COST_PER_QUOTE.comparison_site} per quote start delivered, invoiced on the site's own lead count), search ads $${COST_PER_QUOTE.search_ads} and social ads $${COST_PER_QUOTE.social_ads} per Mixpanel quote start over the window (half a paced daily budget, half bid x that day's quote starts, seeded day noise). Comparison-site shoppers buy at ${COMPARISON_BIND_MULT}x the rate of every other channel (${r3(BIND_BASE * COMPARISON_BIND_MULT * 100)}% vs ${BIND_BASE * 100}% of completed quotes before other effects), so the price advantage per quote (${COST_PER_QUOTE.comparison_site}/${COST_PER_QUOTE.search_ads} = ${r3(COST_PER_QUOTE.comparison_site / COST_PER_QUOTE.search_ads)}) disappears per policy. Reads: warehouse spend per Mixpanel quote start, comparison / search; and purchase within ${BIND_WINDOW_DAYS} days per completed quote, comparison / all other channels (quotes completed before ${QUOTE_READ_END.slice(0, 10)}). About 70 comparison-site purchases carry ~12% noise, so the conversion read uses the knob as target with a ceiling.`,
 		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "quote started", breakdown: "acquisition_channel", join: "marketing_spend_daily.spend_usd on date + acquisition_channel", funnel: `quote completed → policy purchased, ${BIND_WINDOW_DAYS}-day window, breakdown acquisition_channel` },
 		assertions: [
 			{
@@ -1725,7 +1798,7 @@ FROM ev WHERE event = '$experiment_started'`,
 		id: "H5-auto-rate-change",
 		hook: "H5",
 		archetype: "temporal-inflection",
-		narrative: `On ${D(AUTO_RATE_CHANGE)} Shieldstone's new auto rate plan takes effect for new business: auto quotes price ${AUTO_RATE_MULT}x (quoted_premium_monthly; renewals keep current rates in the window, home and renters are unchanged). Auto shoppers push back: purchases per completed auto quote fall to ${AUTO_BIND_KEEP}x. Prices are on quote completed and policy purchased; the money is in warehouse written_premium_daily (product_line, transaction_type), which also carries rate_level_index = ${AUTO_RATE_MULT} for auto new business from the change. Written premium per completed auto quote therefore lands at ${AUTO_BIND_KEEP} x ${AUTO_RATE_MULT} = ${r3(AUTO_BIND_KEEP * AUTO_RATE_MULT)} of before: the higher price does not pay for the lost buyers. Reads: average quoted premium on auto quote completed, after / before; auto purchase within ${BIND_WINDOW_DAYS} days per completed quote, after / before (property quotes are the control); warehouse auto new-business written premium per completed auto quote, from ${RATE_AFTER_FROM.slice(0, 10)} (when nearly all purchases come from new-rate quotes) vs before the change. Purchase reads rest on ~90 auto purchases after the change, so they use the knob as target with a half-effect bound.`,
+		narrative: `On ${D(AUTO_RATE_CHANGE)} Shieldstone's new auto rate plan takes effect for new business: auto quotes price ${AUTO_RATE_MULT}x (quoted_premium_monthly; renewals keep current rates in the window, home and renters are unchanged). Auto shoppers push back: purchases per completed auto quote fall to ${AUTO_BIND_KEEP}x. Prices are on quote completed and policy purchased; the money is in warehouse written_premium_daily (product_line, transaction_type), which also carries rate_level_index = ${AUTO_RATE_MULT} for auto new business from the change. Written premium per completed auto quote therefore lands at ${AUTO_BIND_KEEP} x ${AUTO_RATE_MULT} = ${r3(AUTO_BIND_KEEP * AUTO_RATE_MULT)} of before: the higher price does not pay for the lost buyers. Reads: average quoted premium on auto quote completed, after / before; auto purchase within ${BIND_WINDOW_DAYS} days per completed quote, after / before (property quotes are the control); warehouse auto new-business written premium per completed auto quote, from ${RATE_AFTER_FROM.slice(0, 10)} (when nearly all purchases come from new-rate quotes) vs before the change. Purchase reads rest on ~75 auto purchases after the change, so they use the knob as target with a half-effect bound.`,
 		mixpanelReport: { type: "Insights + Funnels + warehouse", events: ["quote completed (product_line = auto): average quoted_premium_monthly"], funnel: `quote completed → policy purchased, ${BIND_WINDOW_DAYS}-day window, breakdown product_line, before vs after ${D(AUTO_RATE_CHANGE)}`, join: "written_premium_daily (product_line = auto, transaction_type = new_business)" },
 		assertions: [
 			{
@@ -1774,7 +1847,7 @@ FROM ev WHERE event = '$experiment_started'`,
 		id: "H7-renewal-price-shock",
 		hook: "H7",
 		archetype: "cohort-prop-scale",
-		narrative: `Renewal price drives renewal, dose by dose: the renewal notice carries premium_change_pct (mean +6%, sd 7, range -12 to +30). The chance a customer leaves at renewal is ${NONRENEW_LOW * 100}% when the premium does not rise and climbs linearly with the increase to ${NONRENEW_HIGH * 100}% at +${PRICE_SHOCK_PCT}% (times ${BUNDLE_NONRENEW_MULT} for bundled policies, H6). The model holds ${NONRENEW_HIGH * 100}% above +${PRICE_SHOCK_PCT}%, but fewer than 100 notices exceed +20%, so that cap is not a readable claim; the story is the rising curve. Reads, on single-line policies (is_bundled = false) so the bundle effect is held constant: non-renewal (cancel_reason found_cheaper or price_increase within ${RENEWAL_WINDOW_DAYS} days of the offer, offers through ${RENEWAL_READ_END.slice(0, 10)}) in three buckets of premium_change_pct: an increase of ${PRICE_SHOCK_PCT}% or more over no increase = ${NONRENEW_HIGH}/${NONRENEW_LOW} = ${r3(NONRENEW_HIGH / NONRENEW_LOW)}; an increase above 0 and below ${PRICE_SHOCK_PCT}% over no increase = ${H7_MID_RATIO} (the linear curve averaged over the price-change draw). The no-increase group has about 20 non-renewals, so both reads use the knob as target with a half-effect floor.`,
+		narrative: `Renewal price drives renewal, dose by dose: the renewal notice carries premium_change_pct (mean +6%, sd 7, range -12 to +30). The chance a customer leaves at renewal is ${NONRENEW_LOW * 100}% when the premium does not rise and climbs linearly with the increase to ${NONRENEW_HIGH * 100}% at +${PRICE_SHOCK_PCT}% (times ${BUNDLE_NONRENEW_MULT} for bundled policies, H6). The model holds ${NONRENEW_HIGH * 100}% above +${PRICE_SHOCK_PCT}%, but fewer than 100 notices exceed +20%, so that cap is not a readable claim; the story is the rising curve. Reads, on single-line policies (is_bundled = false) so the bundle effect is held constant: non-renewal (cancel_reason found_cheaper or price_increase within ${RENEWAL_WINDOW_DAYS} days of the offer, offers through ${RENEWAL_READ_END.slice(0, 10)}) in three buckets of premium_change_pct: an increase of ${PRICE_SHOCK_PCT}% or more over no increase = ${NONRENEW_HIGH}/${NONRENEW_LOW} = ${r3(NONRENEW_HIGH / NONRENEW_LOW)}; an increase above 0 and below ${PRICE_SHOCK_PCT}% over no increase = ${H7_MID_RATIO} (the linear curve averaged over the price-change draw). Non-renewal draws are stratified by bundled x notice month only, not by these price buckets, so the buckets carry ordinary sampling noise; the no-increase group has about 23 non-renewals, so both reads use the knob as target with a half-effect floor.`,
 		mixpanelReport: { type: "Funnels", steps: ["renewal offered", "policy cancelled (cancel_reason in found_cheaper, price_increase)"], counting: "totals", holdPropertyConstant: "policy_id", window: `${RENEWAL_WINDOW_DAYS} days`, dateRange: `${D(DATASET_START)} to 2026-08-31`, filter: "is_bundled = false (step 1)", breakdown: "premium_change_pct (custom buckets ≤ 0, 0-15, ≥ 15)" },
 		assertions: [
 			{
@@ -1796,7 +1869,7 @@ FROM ev WHERE event = '$experiment_started'`,
 		id: "H8-fall-social-campaign",
 		hook: "H8",
 		archetype: "temporal-inflection",
-		narrative: `The fall "Switch & Save" social campaign starts ${D(SOCIAL_CAMPAIGN_START)} and runs to the end of the window: the social planned budget doubles (${SOCIAL_BUDGET_MULT}x) and social ads bring ${SOCIAL_LIFT}x as many quote starts per day as before (new shoppers, not relabeled ones: the other channels do not move). Warehouse social spend per day = half planned budget (x${SOCIAL_BUDGET_MULT}) and half bid x delivered quote starts (x${SOCIAL_LIFT}), about ${r3((SOCIAL_BUDGET_MULT + SOCIAL_LIFT) / 2)}x. Reads: social_ads quote starts per day, campaign over before; all other channels per day, campaign over before (control, 1.0); warehouse social spend per day, campaign over before. About 130 social quote starts in the campaign carry ~9% noise, so the lift read uses the knob as target with a floor.`,
+		narrative: `The fall "Switch & Save" social campaign starts ${D(SOCIAL_CAMPAIGN_START)} and runs to the end of the window: the social planned budget doubles (${SOCIAL_BUDGET_MULT}x) and social ads bring ${SOCIAL_LIFT}x as many quote starts per day as before (new shoppers, not relabeled ones: the other channels do not move). The ads target drivers insured elsewhere, so campaign shoppers lean to auto (${CAMPAIGN_PRODUCT_WEIGHTS.auto}%) and switching (${CAMPAIGN_REASON_WEIGHTS.switching}%). Warehouse social spend per day = half planned budget (x${SOCIAL_BUDGET_MULT}) and half bid x delivered quote starts (x${SOCIAL_LIFT}), about ${r3((SOCIAL_BUDGET_MULT + SOCIAL_LIFT) / 2)}x. Reads: social_ads quote starts per day, campaign over before; all other channels per day, campaign over before (control, 1.0); warehouse social spend per day, campaign over before. About 130 social quote starts in the campaign carry ~9% noise, so the lift read uses the knob as target with a floor.`,
 		mixpanelReport: { type: "Insights + warehouse", event: "quote started", measure: "total per day", breakdown: "acquisition_channel", chart: `daily line; before vs from ${D(SOCIAL_CAMPAIGN_START)}`, join: "marketing_spend_daily.spend_usd (acquisition_channel = social_ads)" },
 		assertions: [
 			{
@@ -1823,7 +1896,7 @@ FROM ev WHERE event = '$experiment_started'`,
 		id: "H9-switchers-take-longer",
 		hook: "H9",
 		archetype: "funnel-ttc-by-segment",
-		narrative: `Why a shopper is shopping decides how fast they buy. quote completed carries shopping_reason (asked in the quote flow): switching (already insured elsewhere), life_change (new car, new home, a move), first_policy. Switchers take ${SWITCHER_TTC_MULT}x as long from quote to purchase as everyone else (base median ${BIND_GAP_MEDIAN_H} h, log-normal); purchase probability itself does not depend on the reason. Read: median hours quote completed → policy purchased among purchases within ${BIND_WINDOW_DAYS} days, quotes through ${QUOTE_READ_END.slice(0, 10)} (exclusive), switching over the other two reasons. About 330 purchases per group carry ~6% noise, so the read uses the knob as target with a floor.`,
+		narrative: `Why a shopper is shopping decides how fast they buy. quote completed carries shopping_reason (asked in the quote flow): switching (already insured elsewhere), life_change (new car, new home, a move), first_policy. Switchers take ${SWITCHER_TTC_MULT}x as long from quote to purchase as everyone else (base median ${BIND_GAP_MEDIAN_H} h, log-normal); purchase probability itself does not depend on the reason. Read: median hours quote completed → policy purchased among purchases within ${BIND_WINDOW_DAYS} days, quotes through ${QUOTE_READ_END.slice(0, 10)} (exclusive), switching over the other two reasons. About 230-260 purchases per group carry ~7% noise, so the read uses the knob as target with a floor.`,
 		mixpanelReport: { type: "Funnels", steps: ["quote completed", "policy purchased"], counting: "uniques", window: `${BIND_WINDOW_DAYS} days`, dateRange: `${D(DATASET_START)} to 2026-09-17`, breakdown: "shopping_reason (step 1)", measure: "median time to convert" },
 		assertions: [
 			{
@@ -1839,7 +1912,7 @@ FROM ev WHERE event = '$experiment_started'`,
 		hook: "H10",
 		archetype: "funnel-conversion-by-segment",
 		narrative: `Autopay keeps policies alive. A scheduled installment fails ${FAIL_MANUAL * 100}% of the time for customers who pay by hand (card or bank transfer) and ${FAIL_AUTOPAY * 100}% for autopay draws (ratio ${r3(FAIL_AUTOPAY / FAIL_MANUAL)}). After a failed manual payment, ${LAPSE_AFTER_MANUAL_FAIL * 100}% of policies are cancelled for nonpayment 10-25 days later; the rest pay within a week (is_retry = true). Autopay failures are retried automatically after ${AUTOPAY_RETRY_DAYS} days and only ${AUTOPAY_RETRY_FAIL * 100}% of retries fail again. Reads: failed scheduled payments / scheduled payments (payment made with is_retry = false + payment failed with is_retry = false), autopay over manual; and among failed scheduled manual payments through ${LAPSE_READ_END.slice(0, 10)}, the share followed by policy cancelled (cancel_reason = nonpayment) on the same policy within ${LAPSE_WINDOW_DAYS} days. About 200 autopay failures carry ~7% noise, so both reads use the knob as target with a bound.`,
-		mixpanelReport: { type: "Insights + Funnels", events: ["payment failed (is_retry = false)", "payment made (is_retry = false)"], formula: "A / (A + B)", breakdown: "payment_method", funnel: `payment failed → policy cancelled (cancel_reason = nonpayment), Totals, hold policy_id constant, ${LAPSE_WINDOW_DAYS}-day window, breakdown payment_method` },
+		mixpanelReport: { type: "Insights + Funnels", events: ["payment failed (is_retry = false)", "payment made (is_retry = false)"], formula: "A / (A + B)", breakdown: "payment_method", funnel: `payment failed (step 1 filter is_retry = false) → policy cancelled (cancel_reason = nonpayment), Totals, hold policy_id constant, ${LAPSE_WINDOW_DAYS}-day window, breakdown payment_method` },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H10_SQL },

@@ -12,7 +12,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 | `insert_id` | Unique event ID used for de-duplication. |
 | `platform` | `web` (computer browser), `ios` (iPhone or iPad app), `android` (Android app), or `server` (back-office systems: policy administration, billing, claims). |
 | `state` | The customer's state (two-letter code), from their address. Fixed per person. |
-| `os`, `model`, `screen_height`, `screen_width`, `carrier`, `radio` | Device details from the SDK, on events that carry a `device_id` (`carrier` and `radio` on phones and tablets only). Fixed per device. `os` is `iOS`, `iPadOS`, `Android`, `Windows`, `macOS`, or a Linux variant. |
+| `os`, `model`, `screen_height`, `screen_width`, `carrier`, `radio` | Device details from the SDK, on events that carry a `device_id` (`carrier` and `radio` on phones and tablets only). Fixed per device. `os` is `iOS`, `iPadOS`, `Android`, `Windows`, `macOS`, or `Linux`. |
 
 ## Shopping: quote and purchase (new customers)
 
@@ -95,4 +95,4 @@ Profiles exist for identified people only (customers and shoppers who created an
 | Quote to purchase | `quote started` → `quote completed` → `account created` → `policy purchased` | New shoppers. Needs identity merging (the first steps are anonymous). The growth team reads quote completion with a 1-day window and purchase with a 14-day window from `quote completed`. |
 | Claim cycle | `claim submitted` → `claim settled` | Hold `claim_id` constant. Report the median time to convert. |
 | Renewal | `renewal offered` → `policy renewed` (or → `policy cancelled`) | Hold `policy_id` constant. The term ends 30 days after the notice; use a 35-day window. |
-| Payment recovery | `payment failed` → `payment made` (or → `policy cancelled`) | Hold `policy_id` constant. |
+| Payment recovery | `payment failed` → `payment made` (or → `policy cancelled`) | Hold `policy_id` constant. Filter step 1 to `is_retry = false` so each failed bill counts once. |
