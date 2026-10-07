@@ -525,3 +525,27 @@ describe('Experiment variant does not starve other funnels', () => {
 		expect(depositRatio).toBeLessThan(1.15);
 	}, 60000);
 });
+
+// 1.9.0: the variant timeToConvert was floored at 0.1h after ttcMultiplier
+// (0.15h x 0.6 -> 0.1h) with no warning and no reason for the floor.
+describe('Experiment ttcMultiplier', () => {
+	test('a short funnel keeps the exact variant time to convert', async () => {
+		const ttcByVariant = new Map();
+		await DUNGEON_MASTER(baseConfig({
+			seed: 'exp-ttc-floor',
+			numUsers: 60,
+			avgEventsPerUserPerDay: 2,
+			percentUsersBornInDataset: 0,
+			events: [{ event: 'a' }, { event: 'b' }, { event: 'browse', weight: 2 }],
+			funnels: [{
+				sequence: ['a', 'b'], conversionRate: 50, timeToConvert: 0.15,
+				experiment: { name: 'Fast', variants: [{ name: 'Control' }, { name: 'Faster', ttcMultiplier: 0.6 }] },
+			}],
+			hook: function (record, type, meta) {
+				if (type === 'funnel-pre' && meta.experiment) ttcByVariant.set(meta.experiment.variantName, record.timeToConvert);
+			},
+		}));
+		expect(ttcByVariant.get('Control')).toBeCloseTo(0.15, 10);
+		expect(ttcByVariant.get('Faster')).toBeCloseTo(0.09, 10);
+	}, 30000);
+});

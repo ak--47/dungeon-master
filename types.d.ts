@@ -345,9 +345,11 @@ export interface Dungeon {
      */
     hasAnonIds?: boolean;
     /**
-     * Number of distinct devices each user owns. Whole number ≥ 0. Default: 0 (legacy —
+     * Number of distinct devices each user owns: `0`, `1`, or the mean pool size above 1
+     * (fractional values such as `1.3` are honored since 1.9.0). Default: 0 (legacy —
      * no `device_id` stamping anywhere). `≤0` is coerced to `1` if `hasAnonIds: true` is
-     * also set; otherwise `0` keeps the engine in legacy mode for backwards compat.
+     * also set; otherwise `0` keeps the engine in legacy mode for backwards compat. A value
+     * between 0 and 1 is rounded (to 0 or 1) and lands in `result.warnings`.
      *
      * Behavior:
      * - `0` (default): no `device_id` stamping. Every event gets `user_id` only. Same as

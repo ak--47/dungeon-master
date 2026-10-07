@@ -122,6 +122,18 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   now emit more events in total, so `numEvents` overshoots a little when a
   variant lifts conversion (and undershoots when it lowers it). Output shift:
   experiment dungeons change.
+- Honor fractional `identity.avgDevicePerUser` values of 1 or more. The
+  validator rounded them silently (1.3 became 1, so every user had one
+  device); a value above 1 is now the mean of the per-user pool size, as
+  documented (300 users at 1.3: 1.0 devices per user before, 1.45 now). A
+  value between 0 and 1 is still rounded to 0 or 1 and now lands in
+  `result.warnings` as `identity.avgDevicePerUser`.
+- Remove the silent 0.1-hour floor on a funnel's `timeToConvert` after an
+  experiment variant's `ttcMultiplier` or a persona's `ttcModifier` (0.15h x
+  0.6 became 0.1h instead of 0.09h). The floor had no stated reason; both
+  multipliers are already positive, so the product stays positive. Output
+  shift: dungeons with fractional `avgDevicePerUser` above 1, or with a
+  multiplied `timeToConvert` below 0.1h.
 
 ### Added
 

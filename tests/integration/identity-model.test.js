@@ -279,3 +279,46 @@ describe('Phase 2 identity model', () => {
 		expect(events.every(e => !e.device_id)).toBe(true);
 	});
 });
+
+// 1.9.0: identity.avgDevicePerUser was Math.round'ed (1.3 -> 1) with no warning.
+// Values >= 1 are now honored as the mean of the per-user pool size; a value in
+// (0, 1) is still rounded and lands in result.warnings.
+describe('fractional avgDevicePerUser', () => {
+	const devicesPerUser = (result) => {
+		const byUser = new Map();
+		for (const ev of result.eventData) {
+			if (!ev.user_id || !ev.device_id) continue;
+			if (!byUser.has(ev.user_id)) byUser.set(ev.user_id, new Set());
+			byUser.get(ev.user_id).add(ev.device_id);
+		}
+		const sizes = [...byUser.values()].map(s => s.size);
+		return sizes.reduce((a, b) => a + b, 0) / sizes.length;
+	};
+	const cfg = (avgDevicePerUser) => pinWindow({
+		seed: 'identity-fractional',
+		numUsers: 300,
+		numDays: 30,
+		avgEventsPerUserPerDay: 6,
+		percentUsersBornInDataset: 0,
+		identity: { avgDevicePerUser },
+		switches: { hasSessionIds: true },
+		events: [{ event: 'open_app', weight: 5 }, { event: 'do_thing', weight: 3 }],
+	});
+
+	test('1.3 gives a per-user pool between 1 and 2 devices on average', async () => {
+		const result = await DUNGEON_MASTER(cfg(1.3));
+		const mean = devicesPerUser(result);
+		expect(mean).toBeGreaterThan(1.15);
+		expect(mean).toBeLessThan(1.7);
+		expect(result.warnings.some(w => w.key === 'identity.avgDevicePerUser')).toBe(false);
+	});
+
+	test('a value in (0, 1) is rounded and warns', async () => {
+		const result = await DUNGEON_MASTER(cfg(0.6));
+		const warning = result.warnings.find(w => w.key === 'identity.avgDevicePerUser');
+		expect(warning).toBeDefined();
+		expect(warning.requested).toBe(0.6);
+		expect(warning.applied).toBe(1);
+		expect(devicesPerUser(result)).toBe(1);
+	});
+});
