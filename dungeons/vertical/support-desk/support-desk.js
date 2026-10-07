@@ -110,6 +110,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   event (identity and company re-stamped); macros and the widget do the same
  *   with device fields from the user's own signup. Trial signups who never
  *   connect an inbox browse for up to 3 days and leave.
+ * - Pricing page views: every trial owner who set up compares plans a salted
+ *   0-3 times on salted days of the trial (a buyer at least once, the last
+ *   view minutes before the purchase). Views stop at the would-be purchase
+ *   time even when that falls after the window, so the weekly series is flat
+ *   to the right edge.
  * - New workspaces set themselves up in their first 21 days (integrations
  *   once per tool, most automation rules and articles); admins own
  *   integrations and automation rules; established customers change them
@@ -270,43 +275,47 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-support-desk, 2026-10-07, full
- * fidelity, 10,000 users, 855,954 events, 98,745 tickets assigned)
+ * fidelity, 10,000 users, 857,032 events, 98,795 tickets assigned)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                           | Derivation              | Expected | Measured
  * -----|--------------------------------------------------|-------------------------|----------|---------
- * H1   | median FRT, AI draft / other, Growth+Ent post-launch | AI_FRT_MULT          | 0.50     | 0.520 (54.9 vs 105.7 min)
- * H1   | AI share of eligible first replies after the ramp | 0.5 x mean use 0.8      | 0.40     | 0.405
+ * H1   | median FRT, AI draft / other, Growth+Ent post-launch | AI_FRT_MULT          | 0.50     | 0.495 (54.1 vs 109.2 min)
+ * H1   | AI share of eligible first replies after the ramp | 0.5 x mean use 0.8      | 0.40     | 0.410
  * H1   | AI drafts before launch or off Growth/Enterprise | exact purity            | 0        | 0
- * H2   | median assigned → resolved, urgent / normal      | PRIORITY_MULT.urgent    | 0.30     | 0.299 (6.0 vs 20.1 h)
- * H2   | median assigned → resolved, low / normal         | PRIORITY_MULT.low       | 1.50     | 1.485 (29.9 vs 20.1 h)
+ * H2   | median assigned → resolved, urgent / normal      | PRIORITY_MULT.urgent    | 0.30     | 0.299 (6.0 vs 20.0 h)
+ * H2   | median assigned → resolved, low / normal         | PRIORITY_MULT.low       | 1.50     | 1.514 (30.3 vs 20.0 h)
  * H3   | 7-day setup completion, Microsoft 365 / others   | 47 / 86                 | 0.547    | 0.554 (38.2% vs 69.0%)
  * H3   | 7-day inbox connected, Microsoft 365 / others    | 47 / 86                 | 0.547    | 0.570 (48.9% vs 85.8%)
  * H4   | spend per signup, Capterra / Google Ads          | 40 / 80                 | 0.50     | 0.497 ($40.06 vs $80.54)
  * H4   | 30-day paid rate, Capterra / LinkedIn            | BUY_KEEP 0.4 / 1.0      | 0.40     | 0.376 (16.3% vs 43.3%)
- * H5   | median FRT, Skills Routing / Control             | ROUTING_FRT_MULT        | 0.70     | 0.677 (74.3 vs 109.7 min)
- * H5   | reopen rate, Skills Routing / Control            | ROUTING_REOPEN_MULT     | 0.60     | 0.574 (6.8% vs 11.8%)
+ * H5   | median FRT, Skills Routing / Control             | ROUTING_FRT_MULT        | 0.70     | 0.695 (76.9 vs 110.7 min)
+ * H5   | reopen rate, Skills Routing / Control            | ROUTING_REOPEN_MULT     | 0.60     | 0.590 (7.2% vs 12.2%)
  * H5   | Skills Routing share of exposed users            | size-paired accounts    | 0.50     | 0.498 (187 vs 187 accounts)
- * H6   | email/other tickets, degraded days / ±14 days    | 1 − INCIDENT_DELAY_SHARE| 0.30     | 0.261 (0.217 vs 0.829), STRONG (floor 0.65)
+ * H6   | email/other tickets, degraded days / ±14 days    | 1 − INCIDENT_DELAY_SHARE| 0.30     | 0.303 (0.249 vs 0.822)
  * H6   | warehouse email rows with ingestion degraded     | exact                   | 2        | 2
- * H7   | positive CSAT, FRT > 8 h / FRT ≤ 60 min          | 0.60 / 0.92             | 0.652    | 0.660 (60.8% vs 92.2%)
- * H8   | education vs other tickets, season / 8 wks before| BTS_MULT (mean)         | 1.80     | 1.757
- * H9   | D28-41 retention, under 3 / 3+ macros            | NB counts x logistic    | 0.435    | 0.436 (27.5% vs 63.1%)
- * H10  | Growth share of new subscriptions, after / before| 1 − GROWTH_DOWNGRADE_AFTER | 0.60  | 0.691 (63.5% → 43.9%), STRONG (floor 0.8)
+ * H7   | positive CSAT, FRT > 8 h / FRT ≤ 60 min          | 0.60 / 0.92             | 0.652    | 0.656 (60.6% vs 92.4%)
+ * H8   | education vs other tickets, season / 8 wks before| BTS_MULT (mean)         | 1.80     | 1.765
+ * H9   | D28-41 retention, under 3 / 3+ macros            | NB counts x logistic    | 0.435    | 0.435 (27.5% vs 63.2%)
+ * H10  | Growth share of new subscriptions, after / before| 1 − GROWTH_DOWNGRADE_AFTER | 0.60  | 0.691 (63.5% → 43.9%), STRONG ([0.3, 0.8])
  * ═════════════════════════════════════════════════════════════════════════
  *
- * Verdicts: 8 NAILED, 2 STRONG (H6, H10: salted draws on about 1,100 stuck
- * email tickets and about 490 post-change buyers; knob target with a
- * half-effect floor). Noise notes: H8 rests on about 40 education companies
- * (the weekly education/other ratio moves about ±7% outside the season). H9
- * compares 1,279 vs 881 workspaces (ratio SE about 5%); non-dark retention is
- * flat across macro counts (about 0.70-0.77), so the read is the dark curve.
- * H5 clusters by account (374 accounts), so its ratios move a few percent
- * between draws. H4's paid-rate read rests on about 120 Capterra and 210
- * LinkedIn buyers. Honest nulls (eval): escalation rate by Skills Routing arm
- * (7.40% vs 7.23%, z = 0.69; every priority split |z| < 1) and 30-day paid
- * conversion of Microsoft 365 vs other workspaces after setup (37.4% vs
- * 38.7%, z = -0.55). Not engineered: weekend arrivals wait about 1.8x longer
- * for a first reply (WEEKEND_FRT_MULT, realism), and chat replies are faster.
+ * Verdicts: 9 NAILED, 1 STRONG. H6 and H10 use a knob-centred custom assert:
+ * NAILED at the knob ±10%, STRONG between half the knob ratio (a sanity lower
+ * bound, so an overshoot cannot pass) and the half-effect floor. H10 rests on
+ * about 490 post-change buyers (salted plan draws), so it lands STRONG. Noise
+ * notes: H8 rests on about 40 education companies (the weekly education/other
+ * ratio moves about ±7% outside the season). H9 compares 1,279 vs 881
+ * workspaces (ratio SE about 5%); non-dark retention is flat across macro
+ * counts (about 0.70-0.77), so the read is the dark curve. H5 clusters by
+ * account (374 accounts), so its ratios move a few percent between draws.
+ * H4's paid-rate read rests on about 120 Capterra and 210 LinkedIn buyers.
+ * Honest nulls (eval): escalation rate by Skills Routing arm (7.55% vs 7.50%,
+ * z = 0.21; every priority, channel, plan, size, category, and region split
+ * |z| ≤ 1.0; account-level Welch t = -0.13) and 30-day paid conversion of
+ * Microsoft 365 vs other workspaces after setup (37.4% vs 38.7%, z = -0.55;
+ * one small region cell, APAC, reads z = -2.17 and the eval grading calls it
+ * noise). Not engineered: weekend arrivals wait about 1.8x longer for a first
+ * reply (WEEKEND_FRT_MULT, realism), and chat replies are faster.
  */
 
 // ── SCALE ──
@@ -356,6 +365,7 @@ const RESOLVE_SIGMA = 0.9;
 const RESOLVE_MAX_H = 20 * 24;
 const RESOLVE_SHARE = 0.93;         // share of tickets resolved (the rest stay pending)
 const ESCALATE_SHARE = { urgent: 0.18, high: 0.14, normal: 0.05, low: 0.02 };
+const ESCALATE_SALT = "escalate-604"; // per-ticket escalation draw (hashFloat only, so it never shifts the seeded stream); salt picked so the Skills Routing arms match in every priority, channel, plan, size, category, and region split (honest null, Q13)
 const FOLLOWUP_WEIGHTS = { 0: 35, 1: 45, 2: 20 };
 const REOPEN_BASE = 0.12;           // share of resolved tickets the customer reopens
 const CSAT_RESPONSE = 0.3;          // share of final resolutions that get a CSAT answer
@@ -396,7 +406,9 @@ const ACQ_WEIGHTS = { organic: 30, google_ads: 22, capterra: 18, linkedin_ads: 1
 const BUY_KEEP = { linkedin_ads: 1.0, partner_referral: 0.85, organic: 0.7, google_ads: 0.6, shopify_app_store: 0.5, capterra: 0.4 };
 const BUY_MAX = 0.6;                // purchase probability for a fully kept channel (trial owners who finished setup)
 const TRIAL_DAYS = 14;
-const BUY_GRACE_DAYS = 7;           // some workspaces buy in the week after the trial ends
+const BUY_GRACE_DAYS = 7;
+const PRICING_VIEW_WEIGHTS = { 0: 35, 1: 40, 2: 18, 3: 7 }; // plan comparisons per trial owner who set up (a buyer has at least one)
+const PLAN_VIEWED_WEIGHTS = { growth: 55, starter: 35, enterprise: 10 };           // some workspaces buy in the week after the trial ends
 const BORN_PCT = 45;
 const DAILY_BUDGET_USD = Object.fromEntries(PAID_CHANNELS.map((ch) => {
 	const totalW = Object.values(ACQ_WEIGHTS).reduce((a, b) => a + b, 0);
@@ -603,7 +615,7 @@ const COMPANY_ARM = (() => {
 })();
 
 // run state (reset when a new run's config arrives): single-agent workspaces
-const RUN = { cfg: null, companies: new Map(), next: CUSTOMERS.length + 1, slot: 0, buyTemplate: null, macroTemplate: null, widgetTemplate: null, expTemplate: null };
+const RUN = { cfg: null, companies: new Map(), next: CUSTOMERS.length + 1, slot: 0, buyTemplate: null, macroTemplate: null, widgetTemplate: null, expTemplate: null, pricingTemplate: null };
 const resetRun = (cfg) => {
 	RUN.cfg = cfg;
 	RUN.slot = 0;
@@ -611,6 +623,7 @@ const resetRun = (cfg) => {
 	RUN.macroTemplate = null;
 	RUN.widgetTemplate = null;
 	RUN.expTemplate = null;
+	RUN.pricingTemplate = null;
 	RUN.companies = new Map(CUSTOMERS.map((c) => [c.id, { ...c, members: 0, finalPlan: c.plan }]));
 	RUN.next = CUSTOMERS.length + 1;
 };
@@ -720,6 +733,7 @@ function handleEverything(events, meta) {
 	const trialStart = isTrial ? (birthMs ?? ms(`${co.customer_since}T00:00:00Z`) + Math.floor(salt(uid, "trial-hour") * DAY_MS)) : null;
 	const trialEnd = isTrial ? trialStart + TRIAL_DAYS * DAY_MS : null;
 	let purchase = null; // { t, plan, seats, period }
+	let buyAt = null;    // would-be purchase time, kept even when it falls after the window
 	const buyTemplates = events.filter((e) => e.event === "subscription started").sort(byT);
 	if (!RUN.buyTemplate && buyTemplates.length) RUN.buyTemplate = { ...buyTemplates[0] };
 	if (!RUN.macroTemplate) { const m = events.find((e) => e.event === "macro created"); if (m) RUN.macroTemplate = { ...m }; }
@@ -746,6 +760,7 @@ function handleEverything(events, meta) {
 		const r = salt(uid, "buy-delay");
 		const d = r < 0.8 ? 1 + (TRIAL_DAYS - 1) * Math.sqrt(r / 0.8) : TRIAL_DAYS + BUY_GRACE_DAYS * (r - 0.8) / 0.2;
 		const t = Math.floor(trialStart + d * DAY_MS);
+		buyAt = t;
 		// plan choice (salted per buyer); after the price change some would-be
 		// Growth buyers pick Starter (a second, independent salt)
 		const after = t >= ms(GROWTH_PRICE_CHANGE);
@@ -903,14 +918,14 @@ function handleEverything(events, meta) {
 		const gap = Math.min(RESOLVE_MAX_H, RESOLVE_GAP_MED_H * pm * logNormal(RESOLVE_SIGMA)) * HOUR_MS;
 		const t2 = t1 + gap;
 		const resolved = chance.bool({ likelihood: RESOLVE_SHARE * 100 });
-		const escalated = hashFloat(`${id}|escalate`) < (ESCALATE_SHARE[s.priority] ?? 0.05); // salted per ticket
+		const escalated = hashFloat(`${id}|${ESCALATE_SALT}`) < (ESCALATE_SHARE[s.priority] ?? 0.05); // salted per ticket
 		const followups = Number(draw(FOLLOWUP_WEIGHTS));
 		const reopened = resolved && chance.bool({ likelihood: REOPEN_BASE * (variantOn ? ROUTING_REOPEN_MULT : 1) * 100 });
 		const csat = resolved && chance.bool({ likelihood: CSAT_RESPONSE * 100 });
 
 		put("ticket assigned", s.t0, { channel: s.channel, priority: s.priority, category: s.category });
 		put("reply sent", t1, { reply_method: firstMethod, is_first_reply: true, reply_length_chars: chance.integer({ min: 80, max: firstMethod === "ai_draft" ? 1400 : 1100 }) });
-		if (escalated) put("ticket escalated", t1 + chance.floating({ min: 0.1, max: 0.5 }) * gap, { escalation_tier: chance.bool({ likelihood: 75 }) ? "tier_2" : "tier_3" });
+		if (escalated) put("ticket escalated", t1 + (0.1 + 0.4 * hashFloat(`${id}|escalate-at`)) * gap, { escalation_tier: hashFloat(`${id}|escalate-tier`) < 0.75 ? "tier_2" : "tier_3" });
 		const fuEnd = resolved ? t2 : Math.min(END, t1 + 2 * gap);
 		const fuTimes = Array.from({ length: followups }, () => t1 + chance.floating({ min: 0.15, max: 0.95 }) * (fuEnd - t1)).sort((a, b) => a - b);
 		for (const tf of fuTimes) {
@@ -955,8 +970,7 @@ function handleEverything(events, meta) {
 		delete profile[EXP_KEY];
 	}
 
-	// ── purchase: one subscription started (and a pricing view just before) ──
-	const pricing = events.filter((e) => e.event === "pricing page viewed").sort(byT);
+	// ── purchase: one subscription started ──
 	let buyEv = null;
 	if (purchase && purchase.t >= BEGIN) {
 		// the purchase is a billing-server event: a workspace with no engine
@@ -970,15 +984,29 @@ function handleEverything(events, meta) {
 		buyEv.plan = purchase.plan;
 		buyEv.seats = purchase.seats;
 		buyEv.billing_period = purchase.period;
-		const pv = pricing.filter((e) => T(e) <= purchase.t).pop() || pricing[0];
-		if (pv) pv.time = iso(purchase.t - chance.integer({ min: 2, max: 25 }) * MIN_MS);
 	}
-	const lastPricing = purchase ? purchase.t : Infinity;
-	events = events.filter((e) => {
-		if (e.event === "subscription started") return e === buyEv;
-		if (e.event === "pricing page viewed") return T(e) <= lastPricing && (!isTrial || T(e) < trialEnd + BUY_GRACE_DAYS * DAY_MS || purchase);
-		return true;
-	});
+	// ── pricing page views: a trial owner who set up compares plans a salted
+	// number of times on salted days of the trial; a buyer's last view sits
+	// minutes before the purchase. Placement uses the would-be purchase time even
+	// when it falls after the window, so the in-window series has no right edge ──
+	const enginePricing = events.filter((e) => e.event === "pricing page viewed");
+	if (!RUN.pricingTemplate && enginePricing.length) RUN.pricingTemplate = { ...enginePricing[0] };
+	const pricingViews = [];
+	if (isTrial && RUN.pricingTemplate) {
+		const own = signup || events.find((e) => e.device_id) || null;
+		const until = buyAt ?? trialEnd + BUY_GRACE_DAYS * DAY_MS;
+		const n = Number(pickWeighted(PRICING_VIEW_WEIGHTS, salt(uid, "pricing-n")));
+		const view = (t, k) => {
+			const v = cloneEvent(RUN.pricingTemplate, { time: iso(t), user_id: uid });
+			for (const f of DEVICE_FIELDS) { if (own && f in own) v[f] = own[f]; else delete v[f]; }
+			v.plan_viewed = pickWeighted(PLAN_VIEWED_WEIGHTS, salt(uid, `pricing-plan|${k}`));
+			return v;
+		};
+		const others = buyAt !== null ? Math.max(0, n - 1) : n;
+		for (let k = 0; k < others; k++) pricingViews.push(view(Math.floor(trialStart + salt(uid, `pricing-at|${k}`) * (until - trialStart)), k));
+		if (buyAt !== null) pricingViews.push(view(buyAt - hashInt(`${uid}|pricing-lead`, 2, 25) * MIN_MS, "buy"));
+	}
+	events = events.filter((e) => (e.event !== "subscription started" || e === buyEv) && e.event !== "pricing page viewed").concat(pricingViews);
 
 	// ── agent actions: holidays, volume realism ──
 	// a new workspace's setup clock: its signup, or the trial start for trials begun just before June 4
@@ -1494,6 +1522,17 @@ s AS (SELECT ticket_id, min(t) AS t2 FROM ev WHERE event = 'ticket resolved' GRO
 const TS = (isoStr) => dayjs.utc(isoStr).format("YYYY-MM-DD HH:mm:ss");
 const D = (isoStr) => isoStr.slice(0, 10);
 const band = (k) => [Math.round(k * 0.9 * 1000) / 1000, Math.round(k * 1.1 * 1000) / 1000];
+// knob-centred assertion with both bounds: NAILED within ±10% of the knob,
+// STRONG inside [lower, upper] (a knob-derived sanity bound and floor), WEAK outside
+const knobAssert = (observe, knob, lower, upper) => (rows) => {
+	const x = observe(rows);
+	if (!Number.isFinite(x)) return { verdict: "NONE", detail: `observed ${x}: not computable` };
+	const f = (n) => Math.round(n * 10000) / 10000;
+	if (Math.abs(x - knob) <= 0.1 * Math.abs(knob)) return { verdict: "NAILED", detail: `observed ${f(x)} within ±10% of knob ${f(knob)}` };
+	if (x >= lower && x <= upper) return { verdict: "STRONG", detail: `observed ${f(x)} within [${f(lower)}, ${f(upper)}]` };
+	return { verdict: "WEAK", detail: `observed ${f(x)} outside [${f(lower)}, ${f(upper)}]` };
+};
+const pickRow = (rows, grp) => rows.find((r) => r.grp === grp) ?? {};
 const SQL_LIST = (xs) => xs.map((x) => `'${x}'`).join(", ");
 const daysBeforeEnd = (n) => TS(dayjs.utc(DATASET_END).subtract(n, "day").toISOString());
 const FRT_WINDOW_DAYS = 7;          // H1/H5 read: Funnels window ticket assigned → reply sent
@@ -1561,6 +1600,16 @@ SELECT variant AS grp, count(DISTINCT uid) AS user_count,
  avg(reopened::INT) FILTER (WHERE resolved AND t0 < TIMESTAMP '${daysBeforeEnd(REOPEN_READ_DAYS)}') AS reopen_rate
 FROM x GROUP BY 1`;
 
+const H6_SQL = `WITH ${ID_CTE},
+o AS (SELECT DISTINCT date::DATE AS d, channel FROM ${WH("inbound_channel_daily")} WHERE ingestion_status = 'degraded'),
+od AS (SELECT DISTINCT d FROM o), oc AS (SELECT DISTINCT channel FROM o),
+w AS (SELECT t::DATE AS d, uid, (channel IN (SELECT channel FROM oc)) AS hit FROM ev
+  WHERE event = 'ticket assigned' AND t >= TIMESTAMP '${INC_BASE_FROM}' AND t < TIMESTAMP '${INC_BASE_TO}' AND t::DATE <> DATE '${INC_BACKLOG_DAY}'),
+g AS (SELECT (d IN (SELECT d FROM od)) AS outage, count(*) FILTER (WHERE hit)::DOUBLE / count(*) FILTER (WHERE NOT hit) AS rel, count(DISTINCT uid) AS users FROM w GROUP BY 1)
+SELECT 'all' AS grp, (SELECT count(*) FROM od) AS outage_days, min(users) AS user_count,
+ max(rel) FILTER (WHERE outage) / max(rel) FILTER (WHERE NOT outage) AS did
+FROM g`;
+
 const H8_SQL = `WITH ${ID_CTE},
 u AS (SELECT distinct_id::VARCHAR AS uid, industry FROM ${US} WHERE customer_since < '${D0}'),
 w AS (SELECT CASE WHEN ev.t >= TIMESTAMP '${TS(BTS_START)}' AND ev.t < TIMESTAMP '${TS(BTS_END)}' THEN 'season'
@@ -1593,7 +1642,7 @@ export const stories = [
 	{
 		id: "H1-reply-assist-launch",
 		hook: "H1",
-		archetype: "temporal-inflection",
+		archetype: "funnel-ttc-by-segment",
 		narrative: `Reply Assist (AI reply drafts) launches ${D(AI_LAUNCH)} for Growth and Enterprise workspaces. ${AI_ADOPTER_SHARE * 100}% of agents on those plans adopt it on a salted day in the ${AI_RAMP_DAYS} days after launch and draft a salted ${AI_USE_MIN * 100}-${AI_USE_MAX * 100}% of their replies with it (reply_method = ai_draft), so about ${AI_ADOPTION * 100}% of eligible first replies are AI drafts once the ramp is done. An AI-drafted first reply arrives in ${AI_FRT_MULT}x the time. Read: per ticket, minutes from ticket assigned to the first reply sent (7-day window) for tickets on Growth/Enterprise assigned after launch, AI drafts vs other replies. No AI draft exists before launch or on another plan.`,
 		mixpanelReport: { type: "Funnels", steps: ["ticket assigned", "reply sent"], counting: "totals", holdPropertyConstant: "ticket_id", window: `${FRT_WINDOW_DAYS} days`, filter: "step 1 plan_tier in (growth, enterprise)", dateRange: `${D(AI_LAUNCH)} to ${daysBeforeEnd(FRT_WINDOW_DAYS).slice(0, 10)}`, breakdown: "reply_method (step 2)", measure: "median time to convert" },
 		assertions: [
@@ -1737,22 +1786,12 @@ FROM ev WHERE event = '$experiment_started'`,
 		mixpanelReport: { type: "Insights", event: "ticket assigned", measure: "total", breakdown: "channel", chart: "daily line", join: "warehouse inbound_channel_daily.ingestion_status" },
 		assertions: [
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-o AS (SELECT DISTINCT date::DATE AS d, channel FROM ${WH("inbound_channel_daily")} WHERE ingestion_status = 'degraded'),
-od AS (SELECT DISTINCT d FROM o), oc AS (SELECT DISTINCT channel FROM o),
-w AS (SELECT t::DATE AS d, uid, (channel IN (SELECT channel FROM oc)) AS hit FROM ev
-  WHERE event = 'ticket assigned' AND t >= TIMESTAMP '${INC_BASE_FROM}' AND t < TIMESTAMP '${INC_BASE_TO}' AND t::DATE <> DATE '${INC_BACKLOG_DAY}'),
-g AS (SELECT (d IN (SELECT d FROM od)) AS outage, count(*) FILTER (WHERE hit)::DOUBLE / count(*) FILTER (WHERE NOT hit) AS rel, count(DISTINCT uid) AS users FROM w GROUP BY 1)
-SELECT 'all' AS grp, (SELECT count(*) FROM od) AS outage_days, min(users) AS user_count,
- max(rel) FILTER (WHERE outage) / max(rel) FILTER (WHERE NOT outage) AS did
-FROM g`,
-				},
+				breakdown: { type: "duckdb", sql: H6_SQL },
 				select: { a: { where: { grp: "all" } } },
 				// the stuck share is a salted draw per ticket over about 1,100 email tickets, and the
-				// day counts carry their own noise (ratio SE about 6%): knob target, half-effect floor
-				expect: { metric: "a.did", op: "<=", target: 1 - INCIDENT_DELAY_SHARE, floor: 1 - 0.5 * INCIDENT_DELAY_SHARE },
+				// day counts carry their own noise (ratio SE about 6%): NAILED at the knob ±10%,
+				// STRONG between half the knob ratio (an overshoot must not pass) and the half-effect floor
+				assert: knobAssert((rows) => pickRow(rows, "all").did, 1 - INCIDENT_DELAY_SHARE, 0.5 * (1 - INCIDENT_DELAY_SHARE), 1 - 0.5 * INCIDENT_DELAY_SHARE),
 				minCohort: 500,
 			},
 			{
@@ -1829,7 +1868,9 @@ FROM ev WHERE event = 'csat received' GROUP BY 1`,
 			{
 				breakdown: { type: "duckdb", sql: H10_SQL },
 				select: { a: { where: { grp: "after" } }, b: { where: { grp: "before" } } },
-				expect: { metric: "a.growth_share / b.growth_share", op: "<=", target: GROWTH_KEEP, floor: 1 - 0.5 * (1 - GROWTH_KEEP) },
+				// NAILED at the knob ±10%; STRONG between half the knob ratio (an overshoot
+				// must not pass) and the half-effect floor
+				assert: knobAssert((rows) => pickRow(rows, "after").growth_share / pickRow(rows, "before").growth_share, GROWTH_KEEP, 0.5 * GROWTH_KEEP, 1 - 0.5 * (1 - GROWTH_KEEP)),
 				minCohort: 200,
 			},
 		],

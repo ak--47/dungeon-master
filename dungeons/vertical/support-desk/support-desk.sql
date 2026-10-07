@@ -381,11 +381,27 @@ s AS (SELECT sum(k)::DOUBLE / sum(n) AS p0,
 SELECT g.variant, g.n AS tickets, g.k AS escalated, round(g.k::DOUBLE / g.n, 4) AS escalation_rate,
  round((s.pv - s.pc) / sqrt(s.p0 * (1 - s.p0) * (1.0 / s.nv + 1.0 / s.nc)), 2) AS z
 FROM g, s ORDER BY 1;
--- sub-splits by priority
-SELECT priority, round(avg(escalated::INT) FILTER (WHERE variant = 'Control'), 4) AS control_rate, round(avg(escalated::INT) FILTER (WHERE variant = 'Skills Routing'), 4) AS skills_rate,
- count(*) FILTER (WHERE variant = 'Control') AS control_n, count(*) FILTER (WHERE variant = 'Skills Routing') AS skills_n,
- round((skills_rate - control_rate) / sqrt(avg(escalated::INT) * (1 - avg(escalated::INT)) * (1.0 / control_n + 1.0 / skills_n)), 2) AS z
-FROM (SELECT p.variant, k.priority, k.escalated FROM tickets k JOIN prof p ON p.uid = k.uid WHERE k.t0 >= TIMESTAMP '2026-07-08' AND p.variant IS NOT NULL) GROUP BY 1 ORDER BY 1;
+-- sub-splits: priority, channel, plan, company size, category, region (ticket-level z per split)
+WITH x AS (SELECT p.variant, k.escalated, k.priority, k.channel, k.plan_at_assignment AS plan, p.company_size, k.category, p.region
+  FROM tickets k JOIN prof p ON p.uid = k.uid WHERE k.t0 >= TIMESTAMP '2026-07-08' AND p.variant IS NOT NULL),
+l AS (SELECT variant, escalated, 'priority' AS dim, priority AS val FROM x UNION ALL SELECT variant, escalated, 'channel', channel FROM x
+  UNION ALL SELECT variant, escalated, 'plan', plan FROM x UNION ALL SELECT variant, escalated, 'company_size', company_size FROM x
+  UNION ALL SELECT variant, escalated, 'category', category FROM x UNION ALL SELECT variant, escalated, 'region', region FROM x),
+g AS (SELECT dim, val, avg(escalated::INT) AS p0,
+  avg(escalated::INT) FILTER (WHERE variant = 'Control') AS control_rate, avg(escalated::INT) FILTER (WHERE variant = 'Skills Routing') AS skills_rate,
+  count(*) FILTER (WHERE variant = 'Control') AS control_n, count(*) FILTER (WHERE variant = 'Skills Routing') AS skills_n FROM l GROUP BY 1, 2)
+SELECT dim, val, round(control_rate, 4) AS control_rate, round(skills_rate, 4) AS skills_rate, control_n, skills_n,
+ round((skills_rate - control_rate) / sqrt(p0 * (1 - p0) * (1.0 / control_n + 1.0 / skills_n)), 2) AS z
+FROM g ORDER BY 1, 2;
+-- account level: escalation rate per account, Welch t between arms
+WITH a AS (SELECT p.company_id, any_value(p.variant) AS variant, avg(k.escalated::INT) AS r
+  FROM tickets k JOIN prof p ON p.uid = k.uid WHERE k.t0 >= TIMESTAMP '2026-07-08' AND p.variant IS NOT NULL GROUP BY 1),
+s AS (SELECT variant, count(*) AS n, avg(r) AS m, var_samp(r) AS v FROM a GROUP BY 1)
+SELECT max(n) FILTER (WHERE variant = 'Skills Routing') AS skills_accounts, max(n) FILTER (WHERE variant = 'Control') AS control_accounts,
+ round(max(m) FILTER (WHERE variant = 'Skills Routing'), 4) AS skills_mean, round(max(m) FILTER (WHERE variant = 'Control'), 4) AS control_mean,
+ round((max(m) FILTER (WHERE variant = 'Skills Routing') - max(m) FILTER (WHERE variant = 'Control'))
+  / sqrt(max(v / n) FILTER (WHERE variant = 'Skills Routing') + max(v / n) FILTER (WHERE variant = 'Control')), 2) AS welch_t
+FROM s;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q14 — null: once set up, do Microsoft 365 trials convert to paid any worse?
@@ -412,6 +428,15 @@ SELECT CASE WHEN ch IN ('google_ads', 'capterra', 'linkedin_ads') THEN 'paid cha
 FROM setup_paid GROUP BY 1 ORDER BY 1;
 SELECT x.provider_group, count(*) AS buyers, round(avg((p.plan = 'growth')::INT), 4) AS growth_share
 FROM setup_paid x JOIN first_purchase p ON p.uid = x.uid GROUP BY 1 ORDER BY 1;
+-- sub-splits by acquisition channel and by region (9 splits; one |z| near 2 has about a 1-in-4 chance under the null)
+WITH l AS (SELECT 'channel' AS dim, x.ch AS val, x.provider_group, x.paid FROM setup_paid x
+  UNION ALL SELECT 'region', p.region, x.provider_group, x.paid FROM setup_paid x JOIN prof p ON p.uid = x.uid),
+g AS (SELECT dim, val, avg(paid::INT) AS p0,
+  avg(paid::INT) FILTER (WHERE provider_group = 'microsoft_365') AS m365_rate, avg(paid::INT) FILTER (WHERE provider_group <> 'microsoft_365') AS other_rate,
+  count(*) FILTER (WHERE provider_group = 'microsoft_365') AS m365_n, count(*) FILTER (WHERE provider_group <> 'microsoft_365') AS other_n FROM l GROUP BY 1, 2)
+SELECT dim, val, round(m365_rate, 4) AS m365_rate, round(other_rate, 4) AS other_rate, m365_n, other_n,
+ round((m365_rate - other_rate) / sqrt(p0 * (1 - p0) * (1.0 / m365_n + 1.0 / other_n)), 2) AS z
+FROM g ORDER BY 1, 2;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q15 — where trials come from: signups by acquisition channel, by month
@@ -441,6 +466,11 @@ SELECT CASE WHEN dayofweek(t0) IN (0, 6) THEN 'weekend arrival' ELSE 'weekday ar
 FROM tickets WHERE t1 < t0 + INTERVAL 7 DAY AND t0 < TIMESTAMP '2026-09-24 23:59:59' GROUP BY 1 ORDER BY 1;
 SELECT channel, round(median(date_diff('second', t0, t1)) / 60.0, 1) AS median_minutes_first_reply, count(*) AS tickets
 FROM tickets WHERE t1 < t0 + INTERVAL 7 DAY AND t0 < TIMESTAMP '2026-09-24 23:59:59' GROUP BY 1 ORDER BY 2;
+-- the Mixpanel date-range recipe: one weekend vs the weekdays that follow, two sample weeks
+SELECT CASE WHEN t0::DATE BETWEEN DATE '2026-09-12' AND DATE '2026-09-13' THEN '1 Sat-Sun Sep 12-13' WHEN t0::DATE BETWEEN DATE '2026-09-14' AND DATE '2026-09-18' THEN '2 Mon-Fri Sep 14-18'
+  WHEN t0::DATE BETWEEN DATE '2026-09-19' AND DATE '2026-09-20' THEN '3 Sat-Sun Sep 19-20' ELSE '4 Mon-Fri Sep 21-25' END AS date_range, count(*) AS tickets,
+ round(median(date_diff('second', t0, t1)) / 60.0, 1) AS median_minutes_first_reply
+FROM tickets WHERE t1 < t0 + INTERVAL 7 DAY AND t0::DATE BETWEEN DATE '2026-09-12' AND DATE '2026-09-25' GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q18 — reopen rate overall and by channel
@@ -465,7 +495,8 @@ FROM ev JOIN prof p ON p.uid = ev.uid WHERE ev.t >= TIMESTAMP '2026-07-08' GROUP
 -- ─────────────────────────────────────────────────────────────────────────
 SELECT month(t0) AS month, count(*) AS tickets,
  round(median(date_diff('second', t0, t1)) FILTER (WHERE t1 < t0 + INTERVAL 7 DAY) / 60.0, 1) AS median_first_reply_min,
- round(avg(reopened::INT) FILTER (WHERE t2 IS NOT NULL), 4) AS reopen_rate,
+ -- reopen rate: resolved tickets assigned through Sep 10 only (the reopen window must have passed; same cap as Q18)
+ round(avg(reopened::INT) FILTER (WHERE t2 IS NOT NULL AND t0 < TIMESTAMP '2026-09-10 23:59:59'), 4) AS reopen_rate,
  round(avg((csat_score >= 4)::INT) FILTER (WHERE csat_score IS NOT NULL), 4) AS csat_positive
 FROM tickets WHERE t0 >= TIMESTAMP '2026-06-04' AND t0 < TIMESTAMP '2026-10-01' GROUP BY 1 ORDER BY 1;
 SELECT month(t0) AS month, count(*) AS trial_signups, round(avg(completed_7d::INT), 4) AS setup_completed_7d FROM onboarding WHERE t0 < TIMESTAMP '2026-10-01' GROUP BY 1 ORDER BY 1;

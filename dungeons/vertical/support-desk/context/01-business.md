@@ -4,7 +4,7 @@
 
 Ticketloop makes help desk software for small and mid-size support teams: online stores, software companies, schools and online-learning companies, fintech and healthcare startups, travel companies, and game studios. It started in 2022 and has about 45 employees across product and engineering, a sales team for larger accounts, customer success, marketing, and our own support team (which runs on Ticketloop).
 
-Revenue comes from per-seat subscriptions. At the start of the window, recurring revenue was about $250,000 a month, most of it from customer companies with support teams; several hundred one-person workspaces pay for Starter or Growth on their own.
+Revenue comes from per-seat subscriptions. At the start of the window, recurring revenue was about $250,000 a month, almost all of it from customer companies with support teams. One-person workspaces are on the Free plan or in a trial; a trial owner who buys pays for Starter or Growth on their own.
 
 ## How Ticketloop works
 
@@ -59,7 +59,7 @@ Larger customers also came through **outbound_sales**. The three paid channels b
 1. **Faster first replies.** First response time is the headline number on every customer's Ticketloop dashboard. The product team launched Reply Assist and is testing Skills Routing; leadership wants to know what each one did.
 2. **Happier end customers.** Raise the share of positive CSAT answers and cut reopened tickets.
 3. **More trials that finish setup.** The onboarding team wants to know where trials stall and whether it differs by segment.
-4. **Efficient acquisition.** Finance asked which paid channel is worth its cost, counting paying workspaces, not just signups.
+4. **Efficient acquisition.** Finance asked which paid channel is worth its cost.
 5. **Revenue from the Growth price change.** The pricing team raised Growth in August and wants to know whether it helped.
 6. **Keep new workspaces.** Customer success believes some early setup habits predict which trials stay, and wants to know which.
 7. **Reliable ticket intake.** After the late-August email incident, engineering wants the size of the impact written down.
