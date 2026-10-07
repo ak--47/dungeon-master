@@ -9,7 +9,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 | New signups | Unique learners with `account created` in the period. |
 | Onboarding completion | Share of new learners who reach `lesson started` after `account created` → `learning goals set` → `course enrolled`, in order, within 7 days of signup. |
 | Time to first lesson | For new learners who complete onboarding, time from `account created` to the onboarding `lesson started`. Report the median. |
-| Weekly active learners | Unique learners with any event in a calendar week (Monday start), not counting `certificate earned` (a backend event). |
+| Weekly active learners | Unique learners with any event in a calendar week (Monday start), not counting the backend events `certificate earned` and `subscription started`. |
 | Lesson completion rate | Share of `lesson started` events whose lesson (same `lesson_id`) was completed. |
 | Quiz score / pass rate | Average `score_pct` / share of `quiz submitted` with `passed = true`. |
 | Enrollment conversion | Share of course page views followed by an enrollment in the same course (hold `course_id` constant, totals) within a day. |

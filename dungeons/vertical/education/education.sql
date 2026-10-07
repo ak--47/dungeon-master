@@ -111,17 +111,33 @@ FROM f3 GROUP BY 1 ORDER BY 1;
 SELECT course_format, count(*) AS enrollments, count(DISTINCT uid) AS learners, round(avg((t_cert IS NOT NULL)::INT), 4) AS completion
 FROM enrollments WHERE t_enroll < TIMESTAMP '2026-07-01' GROUP BY 1 ORDER BY 1;
 
+-- CONTEXT cohort schedule — cohort groups share a Monday start and an end date; live sessions run at fixed weekly section times
+WITH g AS (SELECT course_id, cohort_start_date, count(*) AS n FROM ev WHERE event = 'course enrolled' AND course_format = 'cohort' GROUP BY 1, 2)
+SELECT 'enrollments_per_cohort_group' AS metric, round(median(n), 1) AS median, round(avg(n), 2) AS mean, count(*) AS cohort_groups FROM g
+UNION ALL
+SELECT 'certificates_per_cohort_group', median(n), round(avg(n), 2), count(*) FROM (SELECT course_id, cohort_start_date, count(*) AS n FROM ev
+  WHERE event = 'certificate earned' AND course_format = 'cohort' GROUP BY 1, 2)
+UNION ALL
+SELECT 'attendees_per_live_session', median(n), round(avg(n), 2), count(*) FROM (SELECT course_id, date_trunc('hour', t + INTERVAL 3 MINUTE) AS h,
+  count(DISTINCT uid) AS n FROM ev WHERE event = 'live session attended' GROUP BY 1, 2);
+
 -- STORY H5-first-week-lessons — retention (learner-initiated events) on or after day 30 by first-week completed lessons
 -- (new learners who started a lesson; signups at least 37 days before the window end)
+-- graded read: exactly 3 vs exactly 2 first-week lessons (knob 0.85 / 0.55 = 1.545); 3+ vs fewer is context
 WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 37 DAY
   AND uid IN (SELECT uid FROM ev WHERE event = 'lesson started')),
 f AS (SELECT s.uid, count(*) FILTER (WHERE e.event = 'lesson completed' AND e.t < s.t0 + INTERVAL 7 DAY) AS first_week,
   count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 30 DAY AND e.event NOT IN ('certificate earned', 'subscription started')) AS ret_unbounded,
   count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 30 DAY AND e.t < s.t0 + INTERVAL 37 DAY AND e.event NOT IN ('certificate earned', 'subscription started')) AS ret_d30_week
-  FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
-SELECT CASE WHEN first_week >= 3 THEN '3+' ELSE '0-2' END AS first_week_lessons, count(*) AS learners,
- round(avg((ret_unbounded > 0)::INT), 4) AS retained_day30_or_later, round(avg((ret_d30_week > 0)::INT), 4) AS retained_day30_36
-FROM f GROUP BY 1 ORDER BY 1;
+  FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1),
+g AS (SELECT 'exactly_' || first_week AS first_week_lessons, count(*) AS learners, avg((ret_unbounded > 0)::INT) AS r,
+  avg((ret_d30_week > 0)::INT) AS r_week FROM f WHERE first_week IN (2, 3) GROUP BY 1
+  UNION ALL SELECT CASE WHEN first_week >= 3 THEN 'context_3_plus' ELSE 'context_0_2' END, count(*), avg((ret_unbounded > 0)::INT),
+  avg((ret_d30_week > 0)::INT) FROM f GROUP BY 1)
+SELECT first_week_lessons, learners, round(r, 4) AS retained_day30_or_later, round(r_week, 4) AS retained_day30_36,
+ round((SELECT max(r) FILTER (WHERE first_week_lessons = 'exactly_3') / max(r) FILTER (WHERE first_week_lessons = 'exactly_2') FROM g), 3) AS ratio_3_over_2,
+ round((SELECT max(r) FILTER (WHERE first_week_lessons = 'context_3_plus') / max(r) FILTER (WHERE first_week_lessons = 'context_0_2') FROM g), 3) AS ratio_3plus_over_0_2
+FROM g ORDER BY 1;
 
 -- STORY H6-plus-price-change — annual share of new Plus subscriptions, first payment (warehouse list price), volume 53 days either side
 WITH s AS (SELECT ev.uid, ev.t, ev.billing_interval, b.list_price_usd FROM ev
@@ -387,11 +403,11 @@ FROM g ORDER BY 1;
 SELECT platform, round(avg(crash_free_session_rate), 4) AS crash_free, round(avg(playback_failure_rate), 4) AS playback_failure
 FROM wh_stability WHERE NOT (date::DATE BETWEEN DATE '2026-09-09' AND DATE '2026-09-12') GROUP BY 1 ORDER BY 1;
 
--- EVAL Q15 — Weekly active learners (any event except certificate earned), new vs established
+-- EVAL Q15 — Weekly active learners (any event except the backend events certificate earned and subscription started), new vs established
 SELECT date_trunc('week', ev.t)::DATE AS week, count(DISTINCT ev.uid) AS active_learners,
  count(DISTINCT ev.uid) FILTER (WHERE ev.uid IN (SELECT uid FROM signups)) AS new_this_window,
  count(DISTINCT ev.uid) FILTER (WHERE ev.uid NOT IN (SELECT uid FROM signups)) AS established
-FROM ev WHERE ev.event <> 'certificate earned' GROUP BY 1 ORDER BY 1;
+FROM ev WHERE ev.event NOT IN ('certificate earned', 'subscription started') GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q16 — Enrollments and completion by course category (enrollments Jun 4-30 for completion)
 SELECT course_category, count(*) AS enrollments, round(count(*) / (SELECT count(*) FROM enrollments), 4) AS share,
@@ -423,17 +439,24 @@ UNION ALL SELECT 'self_paced_share_of_enrollments', round(avg((course_format = '
 UNION ALL SELECT 'paid_social_share_of_paid_signups', round((SELECT count(*) FROM signups WHERE ch = 'paid_social') / (SELECT count(*) FROM signups WHERE ch IN ('paid_search', 'paid_social', 'youtube_ads')), 4)
 UNION ALL SELECT 'new_learners_started_lesson_share', round((SELECT count(DISTINCT s.uid) FROM signups s JOIN ev e ON e.uid = s.uid AND e.event = 'lesson started') / (SELECT count(*) FROM signups), 4);
 
--- EVAL Q20 — null: do learners who sign up on a weekend (Saturday or Sunday, UTC) finish onboarding at a different rate?
--- full onboarding funnel within 7 days, all signups and within each account type and signup platform
+-- EVAL Q20 — null: do learners who sign up in the mobile apps (iOS or Android) finish onboarding at a different rate than web signups?
+-- full onboarding funnel within 7 days; signup platform from account created; all signups and within each account type and weekday/weekend signup day
 WITH f AS (SELECT s.uid, s.account_type, s.t0, dayofweek(s.t0) IN (0, 6) AS weekend,
   (SELECT platform FROM ev e WHERE e.uid = s.uid AND e.event = 'account created') AS platform,
   (SELECT min(t) FROM ev e WHERE e.uid = s.uid AND e.event = 'learning goals set' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 7 DAY) AS t1 FROM signups s),
 f2 AS (SELECT f.*, (SELECT min(t) FROM ev e WHERE e.uid = f.uid AND e.event = 'course enrolled' AND e.t >= f.t1 AND e.t < f.t0 + INTERVAL 7 DAY) AS t2 FROM f),
 f3 AS (SELECT f2.*, (SELECT min(t) FROM ev e WHERE e.uid = f2.uid AND e.event = 'lesson started' AND e.t >= f2.t2 AND e.t < f2.t0 + INTERVAL 7 DAY) AS t3 FROM f2),
-g AS (SELECT 'all' AS cut, weekend, (t3 IS NOT NULL)::INT AS ok FROM f3
-  UNION ALL SELECT 'account_' || account_type, weekend, (t3 IS NOT NULL)::INT FROM f3
-  UNION ALL SELECT 'platform_' || platform, weekend, (t3 IS NOT NULL)::INT FROM f3),
-w AS (SELECT cut, count(*) FILTER (WHERE weekend) AS n1, avg(ok) FILTER (WHERE weekend) AS r1, count(*) FILTER (WHERE NOT weekend) AS n0, avg(ok) FILTER (WHERE NOT weekend) AS r0 FROM g GROUP BY 1)
-SELECT cut, n1 AS weekend_signups, round(r1, 4) AS weekend, n0 AS weekday_signups, round(r0, 4) AS weekday,
+x AS (SELECT *, platform IN ('ios', 'android') AS mobile, (t3 IS NOT NULL)::INT AS ok FROM f3),
+g AS (SELECT 'all' AS cut, mobile, ok FROM x
+  UNION ALL SELECT 'account_' || account_type, mobile, ok FROM x
+  UNION ALL SELECT CASE WHEN weekend THEN 'signup_weekend' ELSE 'signup_weekday' END, mobile, ok FROM x),
+w AS (SELECT cut, count(*) FILTER (WHERE mobile) AS n1, avg(ok) FILTER (WHERE mobile) AS r1, count(*) FILTER (WHERE NOT mobile) AS n0, avg(ok) FILTER (WHERE NOT mobile) AS r0 FROM g GROUP BY 1)
+SELECT cut, n1 AS mobile_signups, round(r1, 4) AS mobile, n0 AS web_signups, round(r0, 4) AS web,
  round((r1 - r0) / sqrt(((r1 * n1 + r0 * n0) / (n1 + n0)) * (1 - (r1 * n1 + r0 * n0) / (n1 + n0)) * (1.0 / n1 + 1.0 / n0)), 2) AS z
 FROM w ORDER BY 1;
+-- by app: iOS and Android separately vs web
+WITH f AS (SELECT s.uid, s.t0, (SELECT platform FROM ev e WHERE e.uid = s.uid AND e.event = 'account created') AS platform,
+  (SELECT min(t) FROM ev e WHERE e.uid = s.uid AND e.event = 'learning goals set' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 7 DAY) AS t1 FROM signups s),
+f2 AS (SELECT f.*, (SELECT min(t) FROM ev e WHERE e.uid = f.uid AND e.event = 'course enrolled' AND e.t >= f.t1 AND e.t < f.t0 + INTERVAL 7 DAY) AS t2 FROM f),
+f3 AS (SELECT f2.*, (SELECT min(t) FROM ev e WHERE e.uid = f2.uid AND e.event = 'lesson started' AND e.t >= f2.t2 AND e.t < f2.t0 + INTERVAL 7 DAY) AS t3 FROM f2)
+SELECT platform, count(*) AS signups, round(avg((t3 IS NOT NULL)::INT), 4) AS completed FROM f3 GROUP BY 1 ORDER BY 1;

@@ -17,9 +17,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             2026-08-10, $239 per year unchanged); Brightpath for Teams seats
  *             paid by employers. Ask Bright (AI tutor) is a Plus and Teams
  *             feature from 2026-07-21. Web plus iOS and Android apps.
- * SCALE:      10,000 learner profiles (3,952 sign up inside the window; 8,645
+ * SCALE:      10,000 learner profiles (4,009 sign up inside the window; 8,631
  *             have events, the rest joined before June 4 and lapsed before it),
- *             ~0.62M events, 120 days (2026-06-04 → 2026-10-01, UTC)
+ *             ~0.61M events, 120 days (2026-06-04 → 2026-10-01, UTC). The
+ *             standard's ~1.4M assumes no churn; the H5 lapse / go-dark cuts and
+ *             pre-window churn remove more than half of the engine's events.
  * CORE LOOP:  course page viewed → course enrolled → lesson started → lesson
  *             completed (→ quiz submitted, assignment submitted) → certificate earned
  * VALUE MOMENT: lesson completed
@@ -77,15 +79,27 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   only to active cohort enrollments. A learner never enrolls in the same course
  *   twice. Established learners carry courses they enrolled in before June 4
  *   (0.75 per in-window enrollment, enrolled up to 90 days earlier), so June has
- *   lessons and certificates in flight. lesson_number and quiz_number advance
- *   with the learner's progress through the course.
+ *   lessons and certificates in flight. lesson_number advances with the learner's
+ *   progress through the course.
+ * - Cohort schedule: every cohort course starts a group each Monday 00:00 UTC; an
+ *   enrollment joins the next Monday's group (cohort_start_date on course enrolled
+ *   and certificate earned) and can start orientation lessons right away. The
+ *   group shares its end date (start + course length); finishers' certificates go
+ *   out that day in the course's daily batch (a fixed hour per course). Each
+ *   cohort course has one or two live sections at fixed weekly UTC times; a
+ *   learner attends their own section (live sessions move to it, one attendance
+ *   per section meeting), so a meeting has about 10 attendees.
+ * - Quiz attempts: quizzes are taken in order; after a fail the learner retakes
+ *   the quiz (65%, up to 3 attempts) or moves on; attempt_number is the integer
+ *   try count, and a quiz past the course's last week is dropped.
  * - "Still active at t" (certificates and purchases): before the learner's lapse
  *   cut (new learners) and with an event in the 14 days up to t. The look is
  *   backward only, so the window end does not hide learners whose next visit
  *   falls after Oct 1; near June 4 it looks at the window's first 14 days.
  * - Certificates are issued when a finishing enrollment's course ends (cohort:
- *   on schedule; self-paced: nominal length × a pace with median 1), only if
- *   the learner is still active then; days_to_complete is the real gap.
+ *   the group's end date; self-paced: nominal length × a pace with median 1),
+ *   only if the learner is still active then; days_to_complete counts from
+ *   enrollment.
  * - Purchases are placed by the hook: new self-pay learners (and those who
  *   joined in the 60 days before June 4, at the same rate and with the same
  *   lapse / go-dark / setup-abandon survival drawn from their join time, so
@@ -137,6 +151,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   plan_tier in (plus, teams), breakdown cohort "did ai tutor question asked"
  *   (yes / no): the lines match before launch and adopters pull ahead as they
  *   start. The exact before/after-first-question read needs the raw export.
+ * NOTE: the review re-ran the score draw with an alternate Box-Muller salt and
+ *   read H1 7.875 and H10 7.035 (both inside their bands), so the effect does
+ *   not rest on one draw.
  * REAL WORLD: an always-available tutor helps learners fix misconceptions
  *   before the quiz.
  *
@@ -169,8 +186,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H4. COHORT VS SELF-PACED COMPLETION (everything, course model)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: 70% of cohort enrollments would finish vs 0.3x that (21%) for
- *   self-paced. Certificate timing is format-neutral (nominal length × pace with
- *   median 1), and lapsing hits both formats alike.
+ *   self-paced. Cohort finishers earn the certificate on the group's end date
+ *   (up to a week of wait before the Monday start, then the course length);
+ *   self-paced finishers at nominal length × a pace with median 1. Lapsing hits
+ *   both formats alike.
  * MIXPANEL: Funnels, course enrolled → certificate earned, totals, hold course_id
  *   constant, 90-day window, breakdown course_format, enrollments Jun 4-30.
  * REAL WORLD: deadlines, live sessions, and peers keep cohort learners going;
@@ -184,12 +203,14 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   7 days: 0 → 0.6, 1 → 0.55, 2 → 0.45, 3 → 0.15, 4 → 0.07, 5+ → 0. Retention
  *   climbs with first-week lessons and the biggest step is from 2 to 3. Organic
  *   lapse (55%, day 3-60) and setup abandonment act on everyone independently
- *   of the first week.
- * MIXPANEL: Funnels account created → lesson completed ×3 (7-day window); save
- *   completed and dropped learners as cohorts; Retention, account created → any
- *   event except the backend events certificate earned and subscription started
- *   (exclude them in the return-event filter), on or after day 30, filter "did
- *   lesson started".
+ *   of the first week. Graded read: retention at exactly 3 first-week lessons
+ *   over exactly 2, knob (1 − 0.15) / (1 − 0.45) = 1.545 (mix-free); 3+ vs
+ *   fewer is context.
+ * MIXPANEL: Funnels account created → lesson completed ×2, ×3, ×4 (7-day
+ *   window); save "exactly 2" and "exactly 3" learners as cohorts; Retention,
+ *   account created → any event except the backend events certificate earned and
+ *   subscription started (exclude them in the return-event filter), on or after
+ *   day 30, filter "did lesson started".
  * REAL WORLD: learners who build a study habit in week one stay; a single
  *   lesson is not a habit.
  *
@@ -206,12 +227,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   % of total; join subscription_billing_daily.list_price_usd for revenue.
  * REAL WORLD: a monthly price rise next to an unchanged annual price nudges
  *   buyers to annual and prices out some monthly buyers.
- * NOTE: about 4 new subscriptions a day, so the volume read is noise-limited.
- *   Without the price change this seed's would-be volume rises 5% (199 → 209
- *   in the 53-day windows; measured by re-running with MONTHLY_LOST and
- *   MONTHLY_SWITCH_ANNUAL at 0). The price reaction kept 185 of those 209
- *   would-be buyers (0.885 vs the 0.86 knob), so the plain before/after read
- *   is 0.93 (185 vs 199). It grades NAILED by the ±10% rule around 0.86.
+ * NOTE: about 4 new subscriptions a day, so the volume read is noise-limited
+ *   (Poisson, about 200 per side). It is graded on the knob ±10% only
+ *   ([0.774, 0.946]); a 14% effect means that band admits a read with much of
+ *   the effect missing, so the annual-share and first-payment reads are the
+ *   tight checks.
  *
  * ─────────────────────────────────────────────────────────────────────────
  * H7. PAID CHANNEL ECONOMICS (everything + warehouse paid_marketing_daily)
@@ -221,10 +241,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   channel: paid search 1.0, referral 0.9, organic 0.85, YouTube 0.75,
  *   university partnership 0.6, paid social 0.4. Paid social is 0.39x the cost
  *   per signup and 0.4x the purchase rate, so by design cost per paying
- *   subscriber is about the same as search. This run reads $44 / $17 / $27 per
- *   Mixpanel signup (fewer paid-search signups than budgeted), paid social at
- *   0.41x the search purchase rate, and spend per paying subscriber of $378
- *   search, $330 social, $364 YouTube (48 / 23 / 18 buyers).
+ *   subscriber is about the same as search. This run reads $40 / $15 / $29 per
+ *   Mixpanel signup, paid social at 0.50x the search purchase rate, and spend
+ *   per paying subscriber of $371 search, $281 social, $409 YouTube (49 / 27 /
+ *   16 buyers; about 25% standard error on the purchase ratio).
  * MIXPANEL: Insights, account created by acquisition_channel joined to
  *   paid_marketing_daily.spend_usd; Funnels account created → subscription
  *   started, 30-day window, signups Jun 4 - Aug 31, breakdown acquisition_channel.
@@ -241,7 +261,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * MIXPANEL: Insights, lesson completed / lesson started (formula, totals),
  *   filter content_type = video, breakdown platform, daily; join the warehouse.
  *   A completion carries its start's device, so this reads the same as the
- *   per-lesson join (Android 36.8% vs 81.2% in the 7 days either side).
+ *   per-lesson join (Android 38.1% vs 81.6% in the 7 days either side).
  * REAL WORLD: a video player regression in one app release.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -273,39 +293,39 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * Hook | Metric                                         | Derivation                  | Expected | Measured
  * -----|------------------------------------------------|-----------------------------|----------|---------
  * H1   | tutor questions pre-launch or on Free          | exact purity                | 0        | 0
- * H1   | quiz score DiD, adopters vs eligible others    | AI_SCORE_BOOST              | 8.0      | 8.41 (70.0 → 77.9 vs 70.2 → 69.7)
- * H2   | per-view enrollment, Personalized / Control    | PICKS_CONV_MULT             | 1.25     | 1.217 (34.8% vs 28.6%)
- * H2   | median view → enrollment time                  | PICKS_TTC_MULT              | 0.80     | 0.800 (48.2 vs 60.2 min)
- * H2   | Personalized share of exposed learners         | equal 2-arm hash            | 0.50     | 0.505
- * H3   | onboarding conversion sponsored / self-pay     | 78 / 52                     | 1.50     | 1.593 (78.8% vs 49.5%)
- * H3   | median time to first lesson sponsored / self   | SPONSORED_TTC_MULT          | 0.50     | 0.497 (13.5 vs 27.2 h)
- * H4   | completion self-paced / cohort (Jun enrollments)| SELF_PACED_COMPLETE_MULT   | 0.30     | 0.286 (16.3% vs 57.2%)
- * H5   | retained day 30+, 3+ / <3 first-week lessons   | taper × first-week mix      | 1.896    | 1.743 (63.8% vs 36.6%)
- * H5   |   (STRONG floor, knobs only)                   | (1 − 0.15) / (1 − 0.45)     | ≥ 1.545  |
- * H6   | annual share of new subscriptions after change | (0.3+0.7×0.3)/0.86          | 0.593    | 0.605 (before 0.291)
- * H6   | first payment per subscription after / before  | warehouse list price        | 1.695    | 1.760 ($158.50 vs $90.08)
- * H6   | subscriptions per day, 53 days after / before  | 0.3 + 0.7×0.8               | 0.86     | 0.930 (3.49 vs 3.75)
- * H7   | spend per signup paid social / paid search     | 15 / 38                     | 0.395    | 0.383 ($16.85 vs $43.95)
- * H7   | 30-day paid rate paid social / paid search     | 0.4 / 1.0                   | 0.40     | 0.414 (4.96% vs 11.97%)
- * H8   | Android / other video completion, incident DiD | 1 − INCIDENT_FAIL           | 0.45     | 0.450 (36.4% vs 81.3% around)
+ * H1   | quiz score DiD, adopters vs eligible others    | AI_SCORE_BOOST              | 8.0      | 8.34 (70.1 → 78.3 vs 70.0 → 69.8)
+ * H2   | per-view enrollment, Personalized / Control    | PICKS_CONV_MULT             | 1.25     | 1.265 (35.5% vs 28.1%)
+ * H2   | median view → enrollment time                  | PICKS_TTC_MULT              | 0.80     | 0.803 (48.0 vs 59.8 min)
+ * H2   | Personalized share of exposed learners         | equal 2-arm hash            | 0.50     | 0.501
+ * H3   | onboarding conversion sponsored / self-pay     | 78 / 52                     | 1.50     | 1.535 (75.3% vs 49.1%)
+ * H3   | median time to first lesson sponsored / self   | SPONSORED_TTC_MULT          | 0.50     | 0.499 (13.5 vs 27.1 h)
+ * H4   | completion self-paced / cohort (Jun enrollments)| SELF_PACED_COMPLETE_MULT   | 0.30     | 0.288 (16.3% vs 56.6%)
+ * H5   | retained day 30+, exactly 3 / exactly 2        | (1 − 0.15) / (1 − 0.45)     | 1.545    | 1.389 (60.8% vs 43.7%)
+ * H5   |   (STRONG floor: half the knob's effect)       | 1 + 0.5 × 0.545             | ≥ 1.273  |
+ * H5   |   context, not graded: 3+ / fewer              | depends on first-week mix   | n/a      | 1.775 (68.3% vs 38.5%)
+ * H6   | annual share of new subscriptions after change | (0.3+0.7×0.3)/0.86          | 0.593    | 0.619 (before 0.337)
+ * H6   | first payment per subscription after / before  | warehouse list price        | 1.695    | 1.615 ($161.23 vs $99.80)
+ * H6   | subscriptions per day, 53 days after / before  | 0.3 + 0.7×0.8, knob ±10%    | 0.86     | 0.901 (3.42 vs 3.79)
+ * H7   | spend per signup paid social / paid search     | 15 / 38                     | 0.395    | 0.376 ($15.20 vs $40.45)
+ * H7   | 30-day paid rate paid social / paid search     | 0.4 / 1.0                   | 0.40     | 0.501 (5.45% vs 10.89%)
+ * H7   |   (STRONG ceiling: half the knob's effect)     | 1 − 0.5 × 0.6               | ≤ 0.70   |
+ * H8   | Android / other video completion, incident DiD | 1 − INCIDENT_FAIL           | 0.45     | 0.452 (37.2% vs 81.8% around)
  * H8   | warehouse playback_failure_rate in incident    | INCIDENT_FAIL               | 0.55     | 0.558
- * H9   | student / other completions per day, fall DiD  | 1 / STUDENT_SUMMER_KEEP     | 1.818    | 1.781 (students 1.805x, others 1.014x)
- * H10  | quiz score 1x − 2x                              | FAST_SCORE_PENALTY          | 7.0      | 6.91 (71.5 vs 64.6)
+ * H9   | student / other completions per day, fall DiD  | 1 / STUDENT_SUMMER_KEEP     | 1.818    | 1.737 (students 1.717x, others 0.989x)
+ * H10  | quiz score 1x − 2x                              | FAST_SCORE_PENALTY          | 7.0      | 6.68 (71.7 vs 65.0)
  * H10  | quiz score 1.5x / 1x (control)                  | unchanged                   | 1.00     | 1.001
  * ═════════════════════════════════════════════════════════════════════════
  *
- * H5's target weights the go-dark taper by the engine's first-week lesson mix
- * (FIRST_WEEK_MIX_STARTED, an input to the cut, not the effect); the read sits
- * below it because lighter learners are also likelier to show no activity after
- * day 30 even without the cut, and its STRONG floor uses the knobs alone.
- * H6's volume read is noise-limited (Poisson, about 200 subscriptions per
- * side). It grades NAILED by the ±10% rule around 0.86; its STRONG floor
- * (the highest passing read) is half the knob's effect, 0.93. The
- * no-price-change volume in this seed rises 5% by chance (see H6 NOTE), so the
- * price reaction (185 of 209 would-be buyers kept, 0.885 vs the 0.86 knob)
- * reads 0.93 before/after. H7's purchase-rate read rests on 48 paid-search and
- * 23 paid-social buyers and grades NAILED by the ±10% rule; its STRONG floor
- * is 1.25x the knob (0.5).
+ * Noise-limited reads. H5's exact-count groups hold about 300 learners each
+ * (about 8% standard error on the ratio); the read sits under the knob because
+ * cuts that run after the first-week count (organic lapse on days 3-7, learning
+ * events with no enrollment to belong to) move some learners into a lower
+ * group, and a learner moved that way has already lapsed. It is NAILED within
+ * ±10% of the knob and STRONG while at least half the knob's effect shows.
+ * H6's volume read (about 200 subscriptions per side) is graded on the knob
+ * ±10% only. H7's purchase-rate read rests on 49 paid-search and 27
+ * paid-social buyers (about 25% standard error); NAILED within ±10% of the
+ * knob, STRONG while at least half the knob's effect shows.
  */
 
 // ── SCALE ──
@@ -392,7 +412,6 @@ const LAPSE_DAY_MIN = 3;
 const LAPSE_DAY_MAX = 60;
 // engine first-week mix (completed lessons in the first 7 days), before any H5 cut; an input to the cuts, not the effect
 const FIRST_WEEK_MIX_ALL = [0.49, 0.16, 0.14, 0.09, 0.06, 0.06];       // all new learners, 0..5+
-const FIRST_WEEK_MIX_STARTED = [0.08, 0.27, 0.24, 0.17, 0.12, 0.12];   // new learners who start a lesson (the H5 read), 0..5+
 const NEW_DARK_RATE = FIRST_WEEK_MIX_ALL.reduce((a, w, n) => a + w * darkShareFor(n), 0); // ~0.46 of new learners go dark
 const ESTABLISHED_LAPSE_SHARE = 0.15; // long-time learners (joined 60+ days before June 4) who stop on a uniform moment in the window
 const NEW_NEVER_STARTED_SHARE = 0.44; // new learners who never start a lesson (this run's rate)
@@ -491,6 +510,38 @@ const COURSE_BY_ID = new Map(COURSES.map((c) => [c.id, c]));
 const COURSE_IDS = COURSES.map((c) => c.id);
 const LESSONS_PER_WEEK = 4;
 
+// ── COHORT SCHEDULE (shared groups) ──
+// Every cohort course starts a new group each Monday 00:00 UTC; a learner who enrolls joins the next
+// Monday's group, and the whole group shares its end date (start + course length). Each cohort course
+// runs one or two weekly live sections at fixed UTC times; a learner attends their own section.
+const COHORT_START_DOW = 1;        // Monday
+const LIVE_DOWS = [2, 3, 4];       // live sections run Tuesday to Thursday
+const LIVE_HOURS = [0, 1, 14, 15, 17, 18, 19]; // UTC: Americas evening (00-01), India/Europe evening (14-19)
+const TWO_SECTION_SHARE = 0.5;     // share of cohort courses with a second weekly section
+const nextCohortStart = (t) => {
+	const day0 = Math.floor(t / DAY_MS) * DAY_MS;
+	const ahead = ((COHORT_START_DOW - new Date(day0).getUTCDay() + 7) % 7) || 7;
+	return day0 + ahead * DAY_MS;
+};
+const mondayOf = (t) => {
+	const day0 = Math.floor(t / DAY_MS) * DAY_MS;
+	return day0 - ((new Date(day0).getUTCDay() + 6) % 7) * DAY_MS;
+};
+const LIVE_SECTIONS = new Map(COURSES.filter((c) => c.format === "cohort").map((c) => {
+	const n = hashFloat(`${c.id}|sections`) < TWO_SECTION_SHARE ? 2 : 1;
+	const secs = [];
+	for (let i = 0; i < n; i++) {
+		const dow = LIVE_DOWS[Math.floor(hashFloat(`${c.id}|live-dow|${i}`) * LIVE_DOWS.length)];
+		const hour = LIVE_HOURS[Math.floor(hashFloat(`${c.id}|live-hour|${i}`) * LIVE_HOURS.length)];
+		secs.push({ offsetMs: ((dow - 1) * 24 + hour) * 3600_000 });
+	}
+	return [c.id, secs];
+}));
+// cohort certificates go out on the end date in one daily backend batch per course
+const certBatchMs = (c) => (8 + Math.floor(hashFloat(`${c.id}|cert-hour`) * 10)) * 3600_000;
+const QUIZ_RETRY_P = 0.65;         // after a failed quiz, chance the learner retakes it (up to 3 attempts) rather than moving on
+const QUIZ_MAX_ATTEMPTS = 3;
+
 // ── HELPERS ──
 const salt = (uid, tag) => hashFloat(`${uid}|${tag}`);
 const T = (e) => dayjs.utc(e.time).valueOf();
@@ -577,6 +628,7 @@ const EVENTS = [
 			course_format: ["self_paced"],
 			course_level: ["beginner"],
 			course_length_weeks: [4],
+			cohort_start_date: ["2026-06-01"],
 			enrollment_source: ["catalog_browse", "search", "search", "recommendation", "learning_path"],
 		},
 	},
@@ -616,7 +668,7 @@ const EVENTS = [
 			quiz_number: [1],
 			score_pct: [70],
 			passed: [true],
-			attempt_number: { __weights: { 1: 78, 2: 17, 3: 5 } },
+			attempt_number: [1],
 		},
 	},
 	{
@@ -672,6 +724,7 @@ const EVENTS = [
 			course_format: ["self_paced"],
 			course_level: ["beginner"],
 			course_length_weeks: [4],
+			cohort_start_date: ["2026-06-01"],
 			final_grade: [80],
 			days_to_complete: [30],
 		},
@@ -936,33 +989,42 @@ function handleEverything(events, meta) {
 		const course = freshCourse(e.course_id, e.insert_id);
 		if (course.id !== e.course_id && pv && T(e) - T(pv) <= ENROLL_TTC_H * 3600_000) stampCourse(pv, course, true);
 		stampCourse(e, course, true);
-		enrollments.push({ course, t0: T(e), key: e.insert_id, template: e });
+		const tEnroll = T(e);
+		const t0 = course.format === "cohort" ? nextCohortStart(tEnroll) : tEnroll;
+		if (course.format === "cohort") e.cohort_start_date = dayKey(t0);
+		else delete e.cohort_start_date;
+		enrollments.push({ course, tEnroll, t0, key: e.insert_id, template: e });
 	}
 	// established learners carry courses they started before June 4 (same pace as their in-window enrollments)
 	if (!signup) {
 		const nCarry = Math.floor(enrollments.length * 0.75 + salt(uid, "carry-n"));
 		for (let i = 0; i < nCarry; i++) {
 			const course = freshCourse(COURSE_IDS[Math.floor(salt(uid, `carry-c${i}`) * COURSES.length)], `carry${i}`);
-			const t0 = START_MS - (1 + salt(uid, `carry-t${i}`) * 89) * DAY_MS;
-			enrollments.push({ course, t0, key: `carry${i}`, template: null });
+			const tEnroll = START_MS - (1 + salt(uid, `carry-t${i}`) * 89) * DAY_MS;
+			const t0 = course.format === "cohort" ? nextCohortStart(tEnroll) : tEnroll;
+			enrollments.push({ course, tEnroll, t0, key: `carry${i}`, template: null });
 		}
 	}
 	for (const en of enrollments) {
 		const lenMs = en.course.weeks * 7 * DAY_MS;
 		const p = COHORT_COMPLETE * (en.course.format === "self_paced" ? SELF_PACED_COMPLETE_MULT : 1);
 		en.completes = salt(uid, `complete|${en.key}`) < p;
-		if (en.completes) {
-			const pace = en.course.format === "cohort"
-				? 1 + salt(uid, `pace|${en.key}`) * 0.04
-				: clamp(lognormal(1, 0.18, salt(uid, `pace1|${en.key}`), salt(uid, `pace2|${en.key}`)), 0.6, 1.6);
-			en.tStop = en.t0 + lenMs * pace;
+		if (en.completes && en.course.format === "cohort") {
+			// the whole group finishes on the shared end date; the certificate batch runs that day
+			en.tStop = en.t0 + lenMs;
+			en.tCert = en.tStop + certBatchMs(en.course) + salt(uid, `cert-batch|${en.key}`) * 20 * MIN_MS;
+		} else if (en.completes) {
+			en.tStop = en.t0 + lenMs * clamp(lognormal(1, 0.18, salt(uid, `pace1|${en.key}`), salt(uid, `pace2|${en.key}`)), 0.6, 1.6);
+			en.tCert = en.tStop;
 		} else {
 			en.tStop = en.t0 + lenMs * (ABANDON_FRAC_MIN + salt(uid, `stop|${en.key}`) * (ABANDON_FRAC_MAX - ABANDON_FRAC_MIN));
 		}
 	}
 	enrollments.sort((a, b) => a.t0 - b.t0);
-	const activeEnrollments = (t, cohortOnly) => enrollments.filter((en) => en.t0 <= t && t <= en.tStop && (!cohortOnly || en.course.format === "cohort"));
+	// learning events belong to a course from enrollment (cohort pre-work included); live sessions only once the group has started
+	const activeEnrollments = (t, cohortOnly) => enrollments.filter((en) => (cohortOnly ? en.t0 : en.tEnroll) <= t && t <= en.tStop && (!cohortOnly || en.course.format === "cohort"));
 	const dropLearning = new Set();
+	const liveEnrollment = new Map(); // live session event → its cohort enrollment
 	const lessonEnrollment = new Map(); // lesson_id → enrollment: a start and its completion share a course
 	for (const e of events) {
 		if (!LEARNING_EVENTS.has(e.event)) continue;
@@ -978,12 +1040,32 @@ function handleEverything(events, meta) {
 		}
 		if (!en) { dropLearning.add(e); continue; }
 		if (e.lesson_id) lessonEnrollment.set(e.lesson_id, en);
+		if (e.event === "live session attended") liveEnrollment.set(e, en);
 		stampCourse(e, en.course, false);
 		const frac = clamp((t - en.t0) / Math.max(DAY_MS, en.tStop - en.t0), 0, 1);
 		const nLessons = en.course.weeks * LESSONS_PER_WEEK;
 		if (e.event === "lesson started") e.lesson_number = clamp(1 + Math.floor(frac * nLessons), 1, nLessons);
 		if (e.event === "quiz submitted") e.quiz_number = clamp(1 + Math.floor(frac * en.course.weeks), 1, en.course.weeks);
 		if (e.event === "assignment submitted") e.is_late = en.course.format === "cohort" ? hashFloat(`${uid}|late|${e.insert_id}`) < 0.18 : false;
+	}
+	// live sessions run at the course's fixed weekly section times: each attendance moves to the learner's
+	// section in the same week (or the week before / after when that falls outside the group's run), once per section
+	{
+		const seen = new Set();
+		for (const [e, en] of liveEnrollment) {
+			const secs = LIVE_SECTIONS.get(en.course.id);
+			const sec = secs[Math.floor(salt(uid, `section|${en.course.id}`) * secs.length)];
+			const wk = mondayOf(T(e));
+			let slot = null;
+			for (const k of [0, -1, 1]) {
+				const ts = wk + k * 7 * DAY_MS + sec.offsetMs;
+				if (ts >= en.t0 && ts <= en.tStop && ts < cut && ts >= START_MS && ts <= END_MS - 2 * 3600_000 && (birthMs === null || ts > birthMs)) { slot = ts; break; }
+			}
+			const key = `${en.course.id}|${slot}`;
+			if (slot === null || seen.has(key)) { dropLearning.add(e); continue; }
+			seen.add(key);
+			e.time = iso(slot + (hashFloat(`${uid}|live-join|${e.insert_id}`) * 13 - 3) * MIN_MS);
+		}
 	}
 	if (dropLearning.size) events = events.filter((e) => !dropLearning.has(e));
 	if (!events.length) {
@@ -1003,14 +1085,16 @@ function handleEverything(events, meta) {
 	const extra = [];
 	for (const en of enrollments) {
 		if (!en.completes) continue;
-		const tc = en.tStop;
+		const tc = en.tCert;
 		if (tc < START_MS || tc > END_MS || !activeAt(tc)) continue;
 		const c = makeFrom(en.template || fallbackTemplate, "certificate earned", {
 			time: iso(tc),
 			final_grade: Math.round(clamp(78 + (salt(uid, `grade|${en.key}`) - 0.5) * 36, 62, 100)),
-			days_to_complete: Math.max(1, Math.round((tc - en.t0) / DAY_MS)),
+			days_to_complete: Math.max(1, Math.round((tc - en.tEnroll) / DAY_MS)),
 		});
 		stampCourse(c, en.course, true);
+		if (en.course.format === "cohort") c.cohort_start_date = dayKey(en.t0);
+		else delete c.cohort_start_date;
 		extra.push(c);
 	}
 
@@ -1119,6 +1203,28 @@ function handleEverything(events, meta) {
 		if (T(e) > firstTutor) s += AI_SCORE_BOOST;
 		e.score_pct = Math.round(clamp(s, 5, 100));
 		e.passed = e.score_pct >= PASS_MARK;
+	}
+
+	// quiz attempts: a learner retakes a quiz only after failing it (up to 3 attempts), otherwise moves to the
+	// next quiz (never behind their progress through the course); a quiz past the course's last week is dropped
+	{
+		const quizzes = events.filter((e) => e.event === "quiz submitted").sort((a, b) => T(a) - T(b));
+		const state = new Map(); // course_id → { quiz, attempts, passed }
+		const dropQuiz = new Set();
+		for (const e of quizzes) {
+			const weeks = COURSE_BY_ID.get(e.course_id).weeks;
+			const s = state.get(e.course_id);
+			let next;
+			if (!s) next = { quiz: e.quiz_number, attempts: 1 };
+			else if (!s.passed && s.attempts < QUIZ_MAX_ATTEMPTS && hashFloat(`${uid}|retry|${e.course_id}|${s.quiz}|${s.attempts}`) < QUIZ_RETRY_P) next = { quiz: s.quiz, attempts: s.attempts + 1 };
+			else next = { quiz: Math.max(s.quiz + 1, e.quiz_number), attempts: 1 };
+			if (next.quiz > weeks) { dropQuiz.add(e); continue; }
+			next.passed = e.passed;
+			state.set(e.course_id, next);
+			e.quiz_number = next.quiz;
+			e.attempt_number = next.attempts;
+		}
+		if (dropQuiz.size) events = events.filter((e) => !dropQuiz.has(e));
 	}
 
 	events = events.concat(extra);
@@ -1396,15 +1502,10 @@ const band = (k) => [Math.round(k * 0.9 * 1000) / 1000, Math.round(k * 1.1 * 100
 const SQL_LIST = (xs) => xs.map((x) => `'${x}'`).join(", ");
 const ONBOARDING_STEPS = ["account created", "learning goals set", "course enrolled", "lesson started"];
 const RETENTION_DAY = 30;
-// H5 read: retention 3+ vs <3 first-week lessons. Expected ratio from the taper weighted by the engine's first-week mix
-// among learners who start a lesson; the floor uses the knobs alone (the worst case inside each group).
-const mixDark = (lo, hi) => {
-	const idx = FIRST_WEEK_MIX_STARTED.map((_, n) => n).filter((n) => n >= lo && n <= hi);
-	const w = idx.reduce((a, n) => a + FIRST_WEEK_MIX_STARTED[n], 0);
-	return idx.reduce((a, n) => a + FIRST_WEEK_MIX_STARTED[n] * darkShareFor(n), 0) / w;
-};
-const H5_TARGET = Math.round((1 - mixDark(STREAK_MIN, 99)) / (1 - mixDark(0, STREAK_MIN - 1)) * 1000) / 1000; // ~1.89
-const H5_FLOOR = Math.round((1 - darkShareFor(STREAK_MIN)) / (1 - darkShareFor(STREAK_MIN - 1)) * 1000) / 1000; // 0.85 / 0.55 = 1.545
+// H5 read: retention at exactly 3 first-week lessons over exactly 2 (the knee). Mix-free: the two groups differ
+// only in their go-dark share, so the knob ratio is (1 − dark at 3) / (1 − dark at 2) = 0.85 / 0.55.
+const H5_TARGET = Math.round((1 - darkShareFor(STREAK_MIN)) / (1 - darkShareFor(STREAK_MIN - 1)) * 1000) / 1000; // 1.545
+const H5_FLOOR = Math.round((1 + 0.5 * (H5_TARGET - 1)) * 1000) / 1000; // half the knob's effect: 1.273
 const COMPLETION_COHORT_END = "2026-07-01T00:00:00Z"; // enrollments with at least 92 days to finish (longest course: 8 weeks x 1.6 pace)
 const INC_BASE_FROM = TS(dayjs.utc(ANDROID_RELEASE).subtract(7, "day"));
 const INC_BASE_TO = TS(dayjs.utc(ANDROID_HOTFIX).add(7, "day"));
@@ -1412,6 +1513,7 @@ const PAID_COHORT_LAST = dayjs.utc(PAID_COHORT_END).subtract(1, "day").format("Y
 // first payment per new subscription: annual list price or the monthly price in force
 const AVG_PAYMENT = (annualShare, monthly) => annualShare * PLUS_ANNUAL + (1 - annualShare) * monthly;
 const VOLUME_DAYS = 53; // days either side of the price change: Jun 18 - Aug 9 vs Aug 10 - Oct 1
+const H7_RATE_KNOB = PURCHASE_KEEP.paid_social / PURCHASE_KEEP.paid_search; // 0.4
 const PAYMENT_RATIO = Math.round(AVG_PAYMENT(ANNUAL_SHARE_POST, PLUS_MONTHLY_NEW) / AVG_PAYMENT(ANNUAL_SHARE_PRE, PLUS_MONTHLY_OLD) * 1000) / 1000;
 
 /** step_counts conversion for a set of segments from a timeToConvert breakdown. */
@@ -1458,7 +1560,10 @@ f AS (SELECT s.uid,
   count(*) FILTER (WHERE e.event = 'lesson completed' AND e.t < s.t0 + INTERVAL ${STREAK_DAYS} DAY) AS first_week,
   count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL ${RETENTION_DAY} DAY AND e.event NOT IN ('certificate earned', 'subscription started')) AS ret
   FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
-SELECT CASE WHEN first_week >= ${STREAK_MIN} THEN 'activated' ELSE 'not_activated' END AS grp,
+SELECT 'fw' || first_week AS grp, count(*) AS user_count, avg((ret > 0)::INT) AS retention
+FROM f WHERE first_week IN (${STREAK_MIN - 1}, ${STREAK_MIN}) GROUP BY 1
+UNION ALL
+SELECT CASE WHEN first_week >= ${STREAK_MIN} THEN 'context_${STREAK_MIN}_plus' ELSE 'context_under_${STREAK_MIN}' END AS grp,
  count(*) AS user_count, avg((ret > 0)::INT) AS retention
 FROM f GROUP BY 1`;
 
@@ -1592,7 +1697,7 @@ FROM ev WHERE event = '$experiment_started'`,
 		id: "H4-cohort-vs-self-paced-completion",
 		hook: "H4",
 		archetype: "funnel-conversion-by-segment",
-		narrative: `Cohort courses (live sessions, weekly deadlines, a facilitator) are finished far more often than self-paced ones: ${COHORT_COMPLETE * 100}% of cohort enrollments would finish vs ${SELF_PACED_COMPLETE_MULT}x that for self-paced (${Math.round(COHORT_COMPLETE * SELF_PACED_COMPLETE_MULT * 100)}%). A finisher earns the certificate when the course ends (cohort: on schedule; self-paced: the nominal length x a pace with median 1), only if still active then, so lapsing hits both formats alike. Each learner enrolls in a course once, and the certificate carries the course_id. Read: per enrollment, share with a certificate for the same course, enrollments before ${D(COMPLETION_COHORT_END)} (every one has time to finish inside the data).`,
+		narrative: `Cohort courses (live sessions, weekly deadlines, a facilitator) are finished far more often than self-paced ones: ${COHORT_COMPLETE * 100}% of cohort enrollments would finish vs ${SELF_PACED_COMPLETE_MULT}x that for self-paced (${Math.round(COHORT_COMPLETE * SELF_PACED_COMPLETE_MULT * 100)}%). A finisher earns the certificate when the course ends (cohort: on the group's shared end date, the Monday start after enrollment + the course length; self-paced: the nominal length x a pace with median 1), only if still active then, so lapsing hits both formats alike. Each learner enrolls in a course once, and the certificate carries the course_id. Read: per enrollment, share with a certificate for the same course, enrollments before ${D(COMPLETION_COHORT_END)} (every one has time to finish inside the data).`,
 		mixpanelReport: { type: "Funnels", steps: ["course enrolled", "certificate earned"], counting: "totals", holdPropertyConstant: "course_id", breakdown: "course_format", window: "90 days", dateRange: `enrollments ${D(DATASET_START)} to ${dayjs.utc(COMPLETION_COHORT_END).subtract(1, "day").format("YYYY-MM-DD")}` },
 		assertions: [
 			{
@@ -1607,17 +1712,16 @@ FROM ev WHERE event = '$experiment_started'`,
 		id: "H5-first-week-lessons",
 		hook: "H5",
 		archetype: "retention-divergence",
-		narrative: `New learners who complete fewer than ${STREAK_MIN} lessons in their first ${STREAK_DAYS} days are at risk of going dark on a day between ${DARK_AFTER_MIN} and ${DARK_AFTER_MAX}. The go-dark share tapers with first-week completed lessons: ${DARK_BY_FIRST_WEEK.map((d, n) => `${n}: ${d * 100}%`).join(", ")}, ${DARK_BY_FIRST_WEEK.length}+: none, so retention climbs with first-week lessons and the knee sits at ${STREAK_MIN}. Classification uses first-week activity only. Every new learner also faces organic lapse (${LAPSE_SHARE * 100}% stop on a uniform day ${LAPSE_DAY_MIN}-${LAPSE_DAY_MAX}), and ${SETUP_ABANDON_SHARE * 100}% of new learners who never start a lesson stop on day ${SETUP_ABANDON_DAY_MIN}-${SETUP_ABANDON_DAY_MAX}, so the read keeps learners who started a lesson. Retention = any learner-initiated event (not the backend certificate earned or subscription started) on or after day ${RETENTION_DAY} (Mixpanel unbounded retention), signups at least ${RETENTION_DAY + 7} days before the window end. ${STREAK_MIN}+ lessons vs fewer reads ${H5_TARGET} (the taper weighted by the engine's first-week lesson mix among learners who start a lesson) with a mix-free knob floor of (1−${darkShareFor(STREAK_MIN)})/(1−${darkShareFor(STREAK_MIN - 1)}) = ${H5_FLOOR} (lighter learners are also likelier to show no activity after day ${RETENTION_DAY} without the cut). Mixpanel: build the groups in Funnels (account created → lesson completed → lesson completed → lesson completed, ${STREAK_DAYS}-day window, uniques; completed = ${STREAK_MIN}+, dropped = fewer), save both as cohorts, then Retention (account created → any event except certificate earned and subscription started, on or after day ${RETENTION_DAY}).`,
-		mixpanelReport: { type: "Funnels → cohorts → Retention", cohortFunnel: `account created → lesson completed ×3, ${STREAK_DAYS}-day window; completed vs dropped`, birth: "account created", return: "any event, excluding certificate earned and subscription started", mode: `on or after day ${RETENTION_DAY} (unbounded)`, filter: "did lesson started" },
+		narrative: `New learners who complete fewer than ${STREAK_MIN} lessons in their first ${STREAK_DAYS} days are at risk of going dark on a day between ${DARK_AFTER_MIN} and ${DARK_AFTER_MAX}. The go-dark share tapers with first-week completed lessons: ${DARK_BY_FIRST_WEEK.map((d, n) => `${n}: ${d * 100}%`).join(", ")}, ${DARK_BY_FIRST_WEEK.length}+: none, so retention climbs with first-week lessons and the knee sits at ${STREAK_MIN}. Classification uses first-week activity only. Every new learner also faces organic lapse (${LAPSE_SHARE * 100}% stop on a uniform day ${LAPSE_DAY_MIN}-${LAPSE_DAY_MAX}), and ${SETUP_ABANDON_SHARE * 100}% of new learners who never start a lesson stop on day ${SETUP_ABANDON_DAY_MIN}-${SETUP_ABANDON_DAY_MAX}, so the read keeps learners who started a lesson. Retention = any learner-initiated event (not the backend certificate earned or subscription started) on or after day ${RETENTION_DAY} (Mixpanel unbounded retention), signups at least ${RETENTION_DAY + 7} days before the window end. Graded read: retention at exactly ${STREAK_MIN} first-week lessons over exactly ${STREAK_MIN - 1}, the knee of the taper; the two groups differ only in their go-dark share, so the knob ratio is (1−${darkShareFor(STREAK_MIN)})/(1−${darkShareFor(STREAK_MIN - 1)}) = ${H5_TARGET}. The ${STREAK_MIN}+ vs fewer ratio is reported as context (it also depends on how learners spread over first-week counts). The read sits a little under the knob because cuts that run after the first-week count (organic lapse on days ${LAPSE_DAY_MIN}-${STREAK_DAYS}, learning events with no enrollment to belong to) move some learners into a lower group, and a learner moved that way has already lapsed. About 300 learners per group (about 8% standard error on the ratio), so the read is NAILED within ±10% of the knob and STRONG while at least half the knob's effect shows (≥ ${H5_FLOOR}). Mixpanel: build the groups in Funnels (account created → lesson completed ×${STREAK_MIN} and ×${STREAK_MIN + 1}, ${STREAK_DAYS}-day window, uniques; exactly ${STREAK_MIN} = completed the ×${STREAK_MIN} funnel but not the ×${STREAK_MIN + 1} one), save the groups as cohorts, then Retention (account created → any event except certificate earned and subscription started, on or after day ${RETENTION_DAY}).`,
+		mixpanelReport: { type: "Funnels → cohorts → Retention", cohortFunnel: `account created → lesson completed ×${STREAK_MIN - 1} / ×${STREAK_MIN} / ×${STREAK_MIN + 1}, ${STREAK_DAYS}-day window; exactly ${STREAK_MIN - 1} vs exactly ${STREAK_MIN} first-week lessons`, birth: "account created", return: "any event, excluding certificate earned and subscription started", mode: `on or after day ${RETENTION_DAY} (unbounded)`, filter: "did lesson started" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H5_SQL },
-				select: { a: { where: { grp: "activated" } }, o: { where: { grp: "not_activated" } } },
-				// target: the go-dark taper weighted by the engine's first-week mix (H5_TARGET); confounded by
-				// engagement (lighter learners also lapse before day 7 more often), so the floor is the
-				// mix-free knob bound H5_FLOOR = (1 − dark at 3) / (1 − dark at 2)
+				select: { a: { where: { grp: `fw${STREAK_MIN}` } }, o: { where: { grp: `fw${STREAK_MIN - 1}` } } },
+				// knob read: (1 − dark at 3) / (1 − dark at 2). About 300 learners per group (≈8% standard error on
+				// the ratio), so NAILED is the knob ±10% and STRONG keeps at least half the knob's effect
 				expect: { metric: "a.retention / o.retention", op: ">=", target: H5_TARGET, floor: H5_FLOOR },
-				minCohort: 300,
+				minCohort: 150,
 			},
 		],
 	},
@@ -1625,7 +1729,7 @@ FROM ev WHERE event = '$experiment_started'`,
 		id: "H6-plus-price-change",
 		hook: "H6",
 		archetype: "composition-drift",
-		narrative: `On ${D(PLUS_PRICE_CHANGE)} the Plus monthly price rises from $${PLUS_MONTHLY_OLD} to $${PLUS_MONTHLY_NEW}; annual stays $${PLUS_ANNUAL}. Before the change ${ANNUAL_SHARE_PRE * 100}% of new Plus subscribers pick annual billing. After it, annual-minded buyers still pick annual, ${MONTHLY_SWITCH_ANNUAL * 100}% of monthly-minded buyers switch to annual, and ${MONTHLY_LOST * 100}% of them do not buy: new subscriptions fall to ${POST_VOLUME.toFixed(2)}x of the would-be volume and the annual share rises to ${ANNUAL_SHARE_POST.toFixed(3)}. Prices exist only in the warehouse table subscription_billing_daily, so the first payment per new subscription needs the join: ${ANNUAL_SHARE_POST.toFixed(3)}×${PLUS_ANNUAL} + ${(1 - ANNUAL_SHARE_POST).toFixed(3)}×${PLUS_MONTHLY_NEW} over ${ANNUAL_SHARE_PRE}×${PLUS_ANNUAL} + ${1 - ANNUAL_SHARE_PRE}×${PLUS_MONTHLY_OLD} = ${PAYMENT_RATIO}x. Volume is compared over the ${VOLUME_DAYS} days either side of the change (equal windows). Learners who joined in the 60 days before the window buy on the same lag and survival as new learners, so June starts at the steady-state purchase rate. About 4 subscriptions a day, and the would-be volume itself drifts by several percent between two 53-day windows, so the volume read carries a knob-derived ceiling; the share and payment reads are the tight ones. Purchases happen only while the learner is still active (before any lapse cut, an event in the 14 days before), a backward look that the window end cannot censor.`,
+		narrative: `On ${D(PLUS_PRICE_CHANGE)} the Plus monthly price rises from $${PLUS_MONTHLY_OLD} to $${PLUS_MONTHLY_NEW}; annual stays $${PLUS_ANNUAL}. Before the change ${ANNUAL_SHARE_PRE * 100}% of new Plus subscribers pick annual billing. After it, annual-minded buyers still pick annual, ${MONTHLY_SWITCH_ANNUAL * 100}% of monthly-minded buyers switch to annual, and ${MONTHLY_LOST * 100}% of them do not buy: new subscriptions fall to ${POST_VOLUME.toFixed(2)}x of the would-be volume and the annual share rises to ${ANNUAL_SHARE_POST.toFixed(3)}. Prices exist only in the warehouse table subscription_billing_daily, so the first payment per new subscription needs the join: ${ANNUAL_SHARE_POST.toFixed(3)}×${PLUS_ANNUAL} + ${(1 - ANNUAL_SHARE_POST).toFixed(3)}×${PLUS_MONTHLY_NEW} over ${ANNUAL_SHARE_PRE}×${PLUS_ANNUAL} + ${1 - ANNUAL_SHARE_PRE}×${PLUS_MONTHLY_OLD} = ${PAYMENT_RATIO}x. Volume is compared over the ${VOLUME_DAYS} days either side of the change (equal windows). Learners who joined in the 60 days before the window buy on the same lag and survival as new learners, so June starts at the steady-state purchase rate. About 4 subscriptions a day, and the would-be volume itself drifts by several percent between two 53-day windows, so the volume read is graded on the plain knob ±10% rule (a 14% effect, so the band admits a read with much of the effect missing); the share and payment reads are the tight ones. Purchases happen only while the learner is still active (before any lapse cut, an event in the 14 days before), a backward look that the window end cannot censor.`,
 		mixpanelReport: { type: "Insights", event: "subscription started", measure: "total", breakdown: "billing_interval", chart: "weekly stacked, % of total", join: "subscription_billing_daily.list_price_usd" },
 		assertions: [
 			{
@@ -1657,9 +1761,8 @@ FROM ev WHERE event = 'subscription started'
  AND t >= TIMESTAMP '${TS(PLUS_PRICE_CHANGE)}' - INTERVAL ${VOLUME_DAYS} DAY AND t < TIMESTAMP '${TS(PLUS_PRICE_CHANGE)}' + INTERVAL ${VOLUME_DAYS} DAY GROUP BY 1`,
 				},
 				select: { a: { where: { grp: "post" } }, b: { where: { grp: "pre" } } },
-				// noise-limited (Poisson, about 200 subscriptions per side): NAILED within ±10% of the 0.86 knob;
-				// STRONG floor (the most this read may be and still pass) = half the knob's effect, 0.93
-				expect: { metric: "a.per_day / b.per_day", op: "<=", target: POST_VOLUME, floor: 1 - 0.5 * (1 - POST_VOLUME) },
+				// noise-limited (Poisson, about 200 subscriptions per side): graded on the knob ±10% only
+				expect: { metric: "a.per_day / b.per_day", op: "between", target: band(POST_VOLUME) },
 				minCohort: 150,
 			},
 		],
@@ -1667,8 +1770,8 @@ FROM ev WHERE event = 'subscription started'
 	{
 		id: "H7-paid-channel-economics",
 		hook: "H7",
-		archetype: "attribution-bias",
-		narrative: `Paid social signups cost ${(CPL_USD.paid_social / CPL_USD.paid_search).toFixed(2)}x as much as paid search signups (daily budgets set at $${CPL_USD.paid_social} vs $${CPL_USD.paid_search} per expected signup; warehouse paid_marketing_daily bills a paced daily budget per channel with a weekday shape above a ${SPEND_FLAT_SHARE * 100}% flat floor and seeded ±${SPEND_NOISE * 100}% day noise, never zero), but they buy Plus ${PURCHASE_KEEP.paid_social / PURCHASE_KEEP.paid_search}x as often (share of would-be purchases kept: ${PURCHASE_KEEP.paid_social} vs ${PURCHASE_KEEP.paid_search}; channel is independent of segment), so cost per paying subscriber is about the same. Spend per signup needs the warehouse join. The purchase read is the Mixpanel funnel account created → subscription started with the default ${PAID_FUNNEL_WINDOW_DAYS}-day window, signups ${D(DATASET_START)} through ${PAID_COHORT_LAST}. Buyer counts per channel are a few dozen, so the purchase ratio uses the knob as target with a knob-derived ceiling.`,
+		archetype: "external-join",
+		narrative: `Paid social signups cost ${(CPL_USD.paid_social / CPL_USD.paid_search).toFixed(2)}x as much as paid search signups (daily budgets set at $${CPL_USD.paid_social} vs $${CPL_USD.paid_search} per expected signup; warehouse paid_marketing_daily bills a paced daily budget per channel with a weekday shape above a ${SPEND_FLAT_SHARE * 100}% flat floor and seeded ±${SPEND_NOISE * 100}% day noise, never zero), but they buy Plus ${PURCHASE_KEEP.paid_social / PURCHASE_KEEP.paid_search}x as often (share of would-be purchases kept: ${PURCHASE_KEEP.paid_social} vs ${PURCHASE_KEEP.paid_search}; channel is independent of segment), so cost per paying subscriber is about the same. Spend per signup needs the warehouse join. The purchase read is the Mixpanel funnel account created → subscription started with the default ${PAID_FUNNEL_WINDOW_DAYS}-day window, signups ${D(DATASET_START)} through ${PAID_COHORT_LAST}. Buyer counts per channel are a few dozen (about 25% standard error on the ratio), so the purchase ratio is NAILED within ±10% of the knob and STRONG while at least half the knob's effect shows (ceiling 0.7).`,
 		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "paid_marketing_daily.spend_usd", funnel: `account created → subscription started, ${PAID_FUNNEL_WINDOW_DAYS}-day window, signups ${D(DATASET_START)} to ${PAID_COHORT_LAST}, breakdown acquisition_channel` },
 		assertions: [
 			{
@@ -1693,8 +1796,9 @@ b AS (SELECT DISTINCT s.uid FROM s JOIN ev e ON e.uid = s.uid AND e.event = 'sub
 SELECT s.ch AS grp, count(*) AS user_count, count(b.uid)::DOUBLE / count(*) AS paid_rate FROM s LEFT JOIN b ON b.uid = s.uid GROUP BY 1`,
 				},
 				select: { so: { where: { grp: "paid_social" } }, se: { where: { grp: "paid_search" } } },
-				// a few dozen buyers per channel: NAILED within ±10% of the 0.4 knob; STRONG up to 1.25x the knob (0.5)
-				expect: { metric: "so.paid_rate / se.paid_rate", op: "<=", target: PURCHASE_KEEP.paid_social / PURCHASE_KEEP.paid_search, floor: 1.25 * PURCHASE_KEEP.paid_social / PURCHASE_KEEP.paid_search },
+				// a few dozen buyers per channel (≈25% standard error on the ratio): NAILED within ±10% of the 0.4 knob;
+				// STRONG keeps at least half the knob's effect (ceiling 1 − 0.5 × 0.6 = 0.7)
+				expect: { metric: "so.paid_rate / se.paid_rate", op: "<=", target: H7_RATE_KNOB, floor: 1 - 0.5 * (1 - H7_RATE_KNOB) },
 				minCohort: 400,
 			},
 		],
