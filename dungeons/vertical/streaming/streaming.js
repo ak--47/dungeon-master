@@ -542,8 +542,8 @@ const salt = (uid, tag) => hashFloat(`${uid}|${tag}`);
 // order, so a cell's realized rate tracks its designed probability without
 // binomial noise. Used for trial conversion (cell = every factor of p, plus
 // country), the early-completion count (cell = test arm), plan choice (cell =
-// price period), playback failure and completion (cell = platform, title type,
-// chained, incident days), and push opens (cell = campaign type). Per-event
+// price period), and playback failure and completion (cell = platform, title
+// type, chained, incident days). Per-event
 // draws add the household's occurrence index to the cell, so one household
 // never takes consecutive steps of a sequence. Any subset chosen independently of
 // generation order (a date range, a country) still varies like a sample.
@@ -2013,7 +2013,7 @@ FROM ${WH("playback_qos_daily")}`,
 	{
 		id: "H9-personalized-pushes",
 		hook: "H9",
-		archetype: "funnel-conversion-by-segment", // segment difference: notification received → opened rate by campaign_type
+		archetype: "bespoke", // segment difference: open rate (ratio of totals, not a funnel) by campaign_type; the closed enum has no segment-rate shape
 		narrative: `Push open rate depends on the campaign: new_episode (a new episode of a series the household is watching) ${OPEN_RATE.new_episode * 100}%, because_you_watched ${OPEN_RATE.because_you_watched * 100}%, trending_now ${OPEN_RATE.trending_now * 100}%; win_back pushes to lapsed households ${OPEN_RATE.win_back * 100}%, and the one-off new_season push for Saltmarsh on ${D(SALTMARSH_PUSH)} ${OPEN_RATE.new_season * 100}%. About half of the opens lead to a play of the pushed title. Read: notification opened / notification received (totals) by campaign_type, against trending_now.`,
 		mixpanelReport: { type: "Insights", events: ["notification opened", "notification received"], formula: "A / B", measure: "Totals", breakdown: "campaign_type" },
 		assertions: [
