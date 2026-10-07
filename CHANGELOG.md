@@ -134,6 +134,15 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   multipliers are already positive, so the product stays positive. Output
   shift: dungeons with fractional `avgDevicePerUser` above 1, or with a
   multiplied `timeToConvert` below 0.1h.
+- Give a born user's pre-auth first-funnel steps (every attempt) the stitch
+  event's `device_id` when the user has several devices. A first visit that
+  crossed UTC midnight split into two sessions, and the per-session device
+  pass gave the pre-midnight steps another device; without `hasSessionIds`
+  every pre-auth step drew a random device. Anonymous rows on a device that
+  never appears with `user_id` never stitch (ecommerce vertical: 10 events).
+  Repro, 1,600 born users with 3 devices: 14 pre-auth events off the stitch
+  device with session ids, 1,625 without; now 0. Output shift: `device_id`
+  (and its device fields) on those pre-auth rows.
 
 ### Added
 

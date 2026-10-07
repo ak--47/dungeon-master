@@ -322,3 +322,52 @@ describe('fractional avgDevicePerUser', () => {
 		expect(devicesPerUser(result)).toBe(1);
 	});
 });
+
+// 1.9.0: a born user's pre-auth first-funnel steps must share the auth event's
+// device. With session ids, a first visit that crossed UTC midnight split into two
+// sessions and the pre-midnight session drew another device; without session ids
+// every pre-auth step drew a random device from the pool. Those anonymous events
+// sat on a device that might never appear with user_id, so they never stitched.
+describe('pre-auth steps share the stitch device', () => {
+	for (const hasSessionIds of [true, false]) {
+		test(`hasSessionIds: ${hasSessionIds}`, async () => {
+			let preAuth = 0;
+			let offDevice = 0;
+			let acrossMidnight = 0;
+			await DUNGEON_MASTER(pinWindow({
+				seed: 'stitch-device',
+				numUsers: 300,
+				avgEventsPerUserPerDay: 2,
+				percentUsersBornInDataset: 90,
+				identity: { avgDevicePerUser: 3 },
+				switches: { hasSessionIds },
+				events: [
+					{ event: 'land' }, { event: 'browse' },
+					{ event: 'signup', isAuthEvent: true, isFirstEvent: true },
+					{ event: 'use', weight: 5 },
+				],
+				// 4h to convert: many first visits cross UTC midnight.
+				funnels: [{ sequence: ['land', 'browse', 'signup'], isFirstFunnel: true, conversionRate: 90, timeToConvert: 4 }],
+				sessionTimeout: 300,
+				hook(record, type, meta) {
+					if (type !== 'everything' || !meta.userIsBornInDataset) return;
+					const stitch = record
+						.filter(e => e.event === 'signup' && e.user_id && e.device_id)
+						.sort((a, b) => Date.parse(a.time) - Date.parse(b.time))[0];
+					if (!stitch) return;
+					const stitchMs = Date.parse(stitch.time);
+					for (const e of record) {
+						if (e.user_id || !e.device_id || Date.parse(e.time) >= stitchMs) continue;
+						preAuth++;
+						if (e.device_id !== stitch.device_id) {
+							offDevice++;
+							if (Math.floor(Date.parse(e.time) / 864e5) !== Math.floor(stitchMs / 864e5)) acrossMidnight++;
+						}
+					}
+				},
+			}));
+			expect(preAuth).toBeGreaterThan(200);
+			expect({ offDevice, acrossMidnight }).toEqual({ offDevice: 0, acrossMidnight: 0 });
+		}, 60000);
+	}
+});

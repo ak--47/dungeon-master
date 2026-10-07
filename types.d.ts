@@ -366,7 +366,8 @@ export interface Dungeon {
      *   and a per-session `device_id`.
      * - Born-in-dataset users running their `isFirstFunnel`:
      *     * Pre-auth steps (steps before the first `isAuthEvent` in the funnel sequence):
-     *       `device_id` only — no `user_id` yet.
+     *       `device_id` only — no `user_id` yet. They share the stitch event's `device_id`
+     *       (every attempt of the first funnel), even when the visit crosses UTC midnight.
      *     * The stitch step (the first `isAuthEvent`): both `user_id` AND `device_id`.
      *     * Post-auth steps in the same funnel: `user_id` only.
      *     * All later (non-firstFunnel) events: `user_id` + per-session sticky `device_id`.
