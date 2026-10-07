@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Clearwell Health**, a virtual c
 
 - **Product:** the Clearwell iOS and Android apps: on-demand urgent care visits (symptom check, virtual waiting room, video or phone visit), Clearwell Async questionnaire visits, scheduled primary care appointments, therapy, remote monitoring for hypertension and diabetes, prescriptions sent to the patient's pharmacy, lab results, the health record, and secure messaging with the care team.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early June through the end of September and the first day of October.
-- **Scale:** about 10,000 patients were active in the window. About 3,500 of them signed up during the window; the rest joined before June 4. The project holds about 1.04 million events.
+- **Scale:** about 10,000 patients were active in the window. About 3,500 of them signed up during the window; the rest joined before June 4. The project holds about 1.05 million events.
 - **Geography:** patients live in the United States, mostly in California, Texas, Florida, and New York. The apps are available in English and Spanish.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. Patients are in US time zones, so a US evening falls after midnight UTC, and a US business day runs from about 13:00 to 03:00 UTC.
 
@@ -28,7 +28,7 @@ This folder is the internal analytics wiki for **Clearwell Health**, a virtual c
 ## Identity notes
 
 - A new patient is identified when they create an account. `account created` is each new patient's first event and carries both the patient's `user_id` and the `device_id` of their phone or tablet. There is no anonymous pre-signup activity in the data.
-- Every event carries `user_id`. Most events also carry `device_id` and device details (`os`, `model`, and so on). The exceptions: `coverage added` and `program enrolled` (sent by the enrollment service with `user_id` only, no `device_id`), and the server-side events `reminder sent` and `appointment missed` (sent by Clearwell's systems with `user_id` and no device fields at all).
+- Every event carries `user_id`. Most events also carry `device_id` and device details (`os`, `model`, and so on). The exceptions: `coverage added` and `program enrolled` (sent by the app's enrollment flow after signup with `user_id` and device details such as `os`, but no `device_id`), and the server-side events `reminder sent` and `appointment missed` (sent by Clearwell's systems with `user_id` and no device fields at all).
 - Each patient uses one device: an iPhone, an iPad, or an Android phone (`os` = `iOS`, `iPadOS`, or `Android`).
 - Patients who joined before June 4 have no `account created` event in this window. Their `member_since` profile date is before the window. For patients who joined in the window, `member_since` is their signup date.
 - Count people with unique `user_id` (Mixpanel "Uniques"), not with `device_id`.

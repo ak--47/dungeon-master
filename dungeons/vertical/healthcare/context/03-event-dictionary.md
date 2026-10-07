@@ -8,7 +8,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 |---|---|
 | `time` | When the event happened (UTC). |
 | `user_id` | The patient's ID. Present on every event. |
-| `device_id` | The patient's device. Present on every event except `coverage added` and `program enrolled` (enrollment service, `user_id` only) and the server-side events `reminder sent` and `appointment missed`. |
+| `device_id` | The patient's device. Present on every event except `coverage added` and `program enrolled` (the enrollment flow sends `user_id` and device details, but no `device_id`) and the server-side events `reminder sent` and `appointment missed`. |
 | `insert_id` | Unique event ID used for de-duplication. |
 | `session_id` | The app session the event belongs to (diagnostic; Mixpanel computes its own sessions). |
 | `coverage_type` | The patient's coverage: `employer`, `commercial`, `medicare`, `medicaid`, or `self_pay` (see 01-business.md). Fixed per patient. |
@@ -47,8 +47,8 @@ Every step of one urgent-care visit shares one `visit_id`, from the symptom chec
 | `visit completed` | The visit ends and the clinician signs the note (urgent care, primary care, and Async). | `visit_id`; `service_line`; `visit_type`; `reason_category` (for primary care: the appointment reason); `duration_min`: clinician minutes with the patient (for Async: review time); `clinician_type` (`physician`, `nurse_practitioner`, `physician_assistant`). |
 | `prescription sent` | The clinician sends a prescription to the patient's pharmacy (urgent care and primary care). At most one per visit. | `visit_id`; `service_line`; `medication_class` (for example `antibiotic`, `antiviral`, `inhaler`, `topical_steroid`, `antihistamine`, `nsaid`, `blood_pressure`, `diabetes`); `pharmacy_type` (`chain`, `grocery`, `independent`). |
 | `prescription picked up` | The pharmacy confirms the patient picked up the prescription. | `visit_id`; `service_line`; `pharmacy_type`. |
-| `visit rated` | The patient rates the visit after it ends (optional). | `visit_id`; `service_line`; `rating` (1-5 stars); `would_recommend` (true or false). |
-| `$experiment_started` | Mixpanel experiment exposure for the Pickup Reminders test: sent one second after each urgent-care prescription in the test (from 2026-07-28). | `Experiment name` = `Pickup Reminders`; `Variant name` = `Control` or `Text Reminders`. |
+| `visit rated` | The patient rates the visit after it ends (optional). | `visit_id`; `service_line`; `visit_type` (`video`, `phone`, or `async`); `rating` (1-5 stars); `would_recommend` (true or false). |
+| `$experiment_started` | Mixpanel experiment exposure for the Pickup Reminders test: sent once per patient, one second after the patient's first urgent-care prescription in the test (from 2026-07-28). | `Experiment name` = `Pickup Reminders`; `Variant name` = `Control` or `Text Reminders`. |
 
 ## Primary care
 
@@ -95,7 +95,6 @@ Primary care visits use `visit started`, `visit completed`, `prescription sent`,
 | `member_since` | Date the patient first signed up (YYYY-MM-DD). Before 2026-06-04 for established patients. |
 | `Experiment: Pickup Reminders` | `Control` or `Text Reminders` for patients in the test; empty for everyone else. |
 | `created` | Signup time for patients who joined in the window; empty for established patients. |
-| `_persona` | CRM lifecycle segment (`monitoring_member`, `frequent_patient`, `regular_patient`, `occasional_patient`). |
 | `anonymousIds`, `sessionIds` | Devices and sessions seen for the patient (pipeline metadata). |
 
 ## Funnels the business tracks

@@ -19,7 +19,7 @@ All KPIs use UTC days and count people by unique `user_id`. Visit-level KPIs hol
 | Time to pickup | Per prescription, hours from `prescription sent` to `prescription picked up`. Report the median. |
 | No-show rate | Per primary care appointment (`appointment booked`), the share that ends in `appointment missed`. Count only appointments whose date has passed. |
 | Time to first therapy session | Per new therapy client, time from `therapy intake completed` to their first `therapy session completed`, within 30 days. Report the median. Count only intakes with a full 30 days of data. |
-| Remote monitoring engagement | Share of program patients with at least one `reading logged` in a period. The programs team follows a fixed starting cohort over time rather than monthly totals, because new enrollees keep joining. |
+| Remote monitoring engagement | Share of program patients with at least one `reading logged` in a period. New enrollees join throughout the window, so monthly totals mix new and established patients. |
 | Visit rating | Average `rating` on `visit rated`, and the share of 4-5 star ratings. Ratings are optional. |
 | Revenue per visit | `total_revenue_usd` / `visits_billed` in `visit_revenue_daily`, by service line and coverage. Employer-covered visits show $0 here because employers pay a monthly fee instead (see 01-business.md). |
 | Clinician hours per request | Urgent-care `clinician_hours` in `clinician_staffing_daily` divided by urgent-care `visit requested` events on the same day. |
@@ -42,7 +42,7 @@ Daily clinician hours by service line, from the scheduling and time-keeping syst
 | `employed_clinician_hours` | FLOAT | hours | Hours worked by Clearwell-employed clinicians. |
 | `agency_clinician_hours` | FLOAT | hours | Hours worked by clinicians from a staffing agency. |
 | `spanish_speaking_clinician_hours` | FLOAT | hours | Hours worked by clinicians who see patients in Spanish (included in `clinician_hours`). |
-| `clinicians_on_shift` | FLOAT | count | Clinicians who worked that day (hours / 7.5, rounded). |
+| `clinicians_on_shift` | FLOAT | count | Clinicians who worked that day. Shift lengths vary; the average shift is about 7.5 hours. |
 
 Caveats: primary care has 0 hours on days the clinic is closed (Sundays and the July 3 and September 7 holidays). Hours include charting and time between visits, so hours per visit are higher than visit durations on events. Remote monitoring nurses are not in this table.
 

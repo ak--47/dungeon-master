@@ -391,22 +391,29 @@ SELECT visit_type, count(*) AS minor_requests_after_ramp, round(avg(coalesce(t_d
 FROM visits WHERE t_req >= TIMESTAMP '2026-07-29' AND reason IN ('urinary', 'skin_rash', 'pink_eye', 'allergy') GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- EVAL Q14 — are patients less satisfied with Async visits? (null)
+-- EVAL Q14 — are patients less satisfied with Async? (null)
 -- ─────────────────────────────────────────────────────────────────────────
--- urgent-care visits requested from the Async launch (Jul 15) with a rating
-WITH r AS (SELECT CASE WHEN visit_type = 'async' THEN 'async' ELSE 'live (video/phone)' END AS kind,
-  reason IN ('urinary', 'skin_rash', 'pink_eye', 'allergy') AS minor, rating
-  FROM visits WHERE service_line = 'urgent_care' AND rating IS NOT NULL AND t_req >= TIMESTAMP '2026-07-15')
-SELECT 'all urgent' AS scope, kind, count(*) AS ratings, round(avg(rating), 3) AS avg_rating, round(stddev(rating), 3) AS sd,
- round(avg((rating >= 4)::INT), 4) AS share_4_5 FROM r GROUP BY 2
+-- urgent-care ratings since the Async launch (Jul 15); visit_type is on "visit rated"
+CREATE OR REPLACE TEMP TABLE q14 AS
+SELECT CASE WHEN r.visit_type = 'async' THEN 'async' ELSE 'live (video/phone)' END AS kind, r.rating,
+ v.reason IN ('urinary', 'skin_rash', 'pink_eye', 'allergy') AS minor,
+ CASE WHEN r.os = 'Android' THEN 'Android' ELSE 'iOS/iPadOS' END AS platform, p.variant
+FROM ev r JOIN visits v ON v.visit_id = r.visit_id LEFT JOIN prof p ON p.uid = r.uid
+WHERE r.event = 'visit rated' AND r.service_line = 'urgent_care' AND r.t >= TIMESTAMP '2026-07-15';
+
+SELECT 'all urgent' AS scope, kind, count(*) AS ratings, round(avg(rating), 3) AS avg_rating, round(avg((rating >= 4)::INT), 4) AS share_4_5 FROM q14 GROUP BY 2
 UNION ALL
-SELECT 'minor reasons only', kind, count(*), round(avg(rating), 3), round(stddev(rating), 3), round(avg((rating >= 4)::INT), 4) FROM r WHERE minor GROUP BY 2
+SELECT 'eligible reasons only', kind, count(*), round(avg(rating), 3), round(avg((rating >= 4)::INT), 4) FROM q14 WHERE minor GROUP BY 2
 ORDER BY 1, 2;
 
-WITH r AS (SELECT (visit_type = 'async') AS is_async, rating FROM visits WHERE service_line = 'urgent_care' AND rating IS NOT NULL AND t_req >= TIMESTAMP '2026-07-15'),
-s AS (SELECT is_async, count(*) AS n, avg(rating) AS m, var_samp(rating) AS v FROM r GROUP BY 1)
-SELECT round((a.m - l.m) / sqrt(a.v / a.n + l.v / l.n), 2) AS z_avg_rating
-FROM s a, s l WHERE a.is_async AND NOT l.is_async;
+-- z for async vs live, overall and in the obvious sub-splits
+WITH x AS (SELECT 'all urgent' AS k, kind, rating FROM q14
+  UNION ALL SELECT 'eligible reasons only', kind, rating FROM q14 WHERE minor
+  UNION ALL SELECT 'platform ' || platform, kind, rating FROM q14
+  UNION ALL SELECT 'variant ' || coalesce(variant, 'not in test'), kind, rating FROM q14),
+s AS (SELECT k, kind, count(*) AS n, avg(rating) AS m, var_samp(rating) AS v FROM x GROUP BY 1, 2)
+SELECT a.k AS scope, a.n AS async_ratings, l.n AS live_ratings, round((a.m - l.m) / sqrt(a.v / a.n + l.v / l.n), 2) AS z_async_vs_live
+FROM s a JOIN s l ON a.k = l.k AND a.kind = 'async' AND l.kind <> 'async' ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q15 — did the self-pay price cut change insured patients' requests? (null)
