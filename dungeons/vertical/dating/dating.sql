@@ -1,288 +1,422 @@
--- ============================================================
--- dating.js — v1.6 human-inspection queries (DuckDB)
+-- Kindred (dating vertical) — story-keyed and eval-keyed DuckDB queries.
 --
--- Every query is keyed to a story id in dating.js's `stories` export;
--- the machine-checked verdicts come from:
---   node scripts/verify-stories.mjs dungeons/vertical/dating/dating.js --data-prefix verify-dating
--- Generate first:
+-- Generate first (repo root):
 --   node scripts/verify-runner.mjs dungeons/vertical/dating/dating.js verify-dating
--- Run this file:
+-- Run:
 --   duckdb -c ".read dungeons/vertical/dating/dating.sql"
--- ============================================================
+-- Against a gzipped export:
+--   duckdb -c "SET VARIABLE data_prefix='<dir>/dating'" -c ".read dating.sql"
+--
+-- All times are UTC. Window: 2026-06-04 00:00 to 2026-10-01 23:59:59.
 
--- ── identity-resolution prelude ─────────────────────────────
--- avgDevicePerUser: 2 + profile created is both isAuthEvent and
--- isFirstEvent, so born users auth on their first event; the device-pool
--- resolve is belt-and-braces for any device-only edge.
-CREATE OR REPLACE VIEW users AS
-SELECT * FROM read_json_auto('data/verify-dating-USERS*.json', sample_size=-1, union_by_name=true);
+SET VARIABLE data_prefix = COALESCE(getvariable('data_prefix'), 'data/verify-dating');
 
-CREATE OR REPLACE VIEW device_map AS
--- profiles store the device pool under the legacy "anonymousIds" key
-SELECT unnest("anonymousIds") AS device_id, distinct_id FROM users;
+-- ─────────────────────────────────────────────────────────────────────────
+-- PRELUDE: raw files, identity resolution, warehouse tables
+-- ─────────────────────────────────────────────────────────────────────────
+-- Identity: a new member signs up with "account created" (the auth event,
+-- which carries user_id and device_id). A device resolves to the member seen
+-- with it on any event that carries both ids, the way Mixpanel stitches.
+-- Every Kindred event carries user_id, so uid = user_id in practice.
 
-CREATE OR REPLACE VIEW ev AS
--- ::VARCHAR casts — user_id sniffs as UUID, device_id as VARCHAR; DuckDB
--- refuses to coalesce mixed types
-SELECT coalesce(m.distinct_id::VARCHAR, e.user_id::VARCHAR, e.device_id::VARCHAR) AS uid,
-       e.time::TIMESTAMP AS t,
-       e.*
-FROM read_json_auto('data/verify-dating-EVENTS*.json', sample_size=-1, union_by_name=true) e
-LEFT JOIN device_map m ON e.device_id = m.device_id;
+CREATE OR REPLACE TEMP TABLE raw_events AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-EVENTS*.json*', sample_size=-1, union_by_name=true);
 
--- Per-user counts. Deletions-only hooks (H5 ghosting, H8 off-app drop,
--- future-time guard) make hook-time cohort recovery ONE-SIDED: output
--- count >= threshold implies hook-time count >= threshold, but not the
--- reverse. Stories handle this with output-implies-hook cohort choices;
--- read these tables the same way.
-CREATE OR REPLACE VIEW per_user AS
-SELECT uid,
-  count(*) FILTER (WHERE event = 'photo uploaded') AS photos,
-  count(*) FILTER (WHERE event = 'match received') AS matches,
-  count(*) FILTER (WHERE event = 'swipe right') AS swipes,
-  count(*) FILTER (WHERE event = 'swipe right' AND is_super_like = true) AS sls,
-  count(*) FILTER (WHERE event = 'message sent') AS msgs,
-  count(*) FILTER (WHERE event = 'date scheduled') AS dates
-FROM ev GROUP BY 1;
+CREATE OR REPLACE TEMP TABLE users AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-USERS*.json*', sample_size=-1, union_by_name=true);
 
--- output-visible timely pair (match → message within 48h) proves the user
--- was NOT ghosted at hook time (H5 deletes but never adds)
-CREATE OR REPLACE VIEW timely AS
-SELECT DISTINCT a.uid FROM ev a
-JOIN ev b ON b.uid = a.uid AND b.event = 'message sent'
-WHERE a.event = 'match received' AND b.t > a.t AND b.t < a.t + INTERVAL 48 HOUR;
+CREATE OR REPLACE TEMP TABLE device_map AS
+SELECT device_id, min(user_id::VARCHAR) AS mapped
+FROM raw_events WHERE user_id IS NOT NULL AND device_id IS NOT NULL GROUP BY 1;
 
--- output-visible early milestone (phone/date inside first 14 days)
-CREATE OR REPLACE VIEW first_ev AS
-SELECT uid, min(t) AS f FROM ev GROUP BY 1;
+CREATE OR REPLACE TEMP TABLE ev AS
+SELECT coalesce(e.user_id::VARCHAR, m.mapped) AS uid, e.time::TIMESTAMP AS t, e.*
+FROM raw_events e LEFT JOIN device_map m ON e.device_id = m.device_id;
 
-CREATE OR REPLACE VIEW milestone AS
-SELECT DISTINCT e.uid FROM ev e JOIN first_ev fe ON fe.uid = e.uid
-WHERE e.event IN ('phone number exchanged', 'date scheduled')
-  AND e.t < fe.f + INTERVAL 14 DAY;
+CREATE OR REPLACE TEMP TABLE wh_paid AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-paid_acquisition_daily.json*', sample_size=-1, union_by_name=true);
+CREATE OR REPLACE TEMP TABLE wh_chat AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-chat_delivery_daily.json*', sample_size=-1, union_by_name=true);
+CREATE OR REPLACE TEMP TABLE wh_bookings AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-subscription_bookings_daily.json*', sample_size=-1, union_by_name=true);
 
+-- profile attributes keyed by the resolved member id
+CREATE OR REPLACE TEMP TABLE prof AS
+SELECT distinct_id::VARCHAR AS uid, photo_count, relationship_goal, acquisition_channel, gender, age_band, market,
+ member_since, verified, subscription_plan AS current_plan, "Experiment: Icebreakers" AS variant
+FROM users;
 
--- ── H1-photo-magic-number ───────────────────────────────────
--- score cut: 6+ uploaders' match_score × 0.65 applied at the END of the
--- everything hook (covers H3/H4-injected matches too). Compare vs 0-1
--- uploaders, NOT vs sweet (sweet users' H1 clones redraw score U[60,98]).
-SELECT CASE WHEN p.photos >= 6 THEN 'over' WHEN p.photos <= 1 THEN 'low' ELSE 'sweet' END AS grp,
-  count(DISTINCT p.uid) AS users, round(avg(e.match_score), 2) AS avg_score
-FROM per_user p JOIN ev e ON e.uid = p.uid AND e.event = 'match received'
+-- new-member signups (one per member who joined in the window)
+CREATE OR REPLACE TEMP TABLE signups AS
+SELECT uid, t AS t0, acquisition_channel AS ch, signup_method FROM ev WHERE event = 'account created';
+
+-- onboarding: profile completed within 7 days of signup (each step happens once per member)
+CREATE OR REPLACE TEMP TABLE onboarding AS
+SELECT s.uid, s.t0, s.ch, s.signup_method,
+ coalesce(bool_or(e.t >= s.t0 AND e.t < s.t0 + INTERVAL 7 DAY), false) AS completed
+FROM signups s LEFT JOIN ev e ON e.uid = s.uid AND e.event = 'profile completed' GROUP BY 1, 2, 3, 4;
+
+-- one row per match: match, opener, date plan, feedback (match_id is shared by all four)
+CREATE OR REPLACE TEMP TABLE matches AS
+SELECT match_id, any_value(uid) AS uid,
+ min(t) FILTER (WHERE event = 'match created') AS t_match,
+ min(t) FILTER (WHERE event = 'conversation started') AS t_conv,
+ min(t) FILTER (WHERE event = 'date planned') AS t_date,
+ min(t) FILTER (WHERE event = 'date feedback submitted') AS t_fb,
+ any_value(match_source) FILTER (WHERE event = 'match created') AS match_source,
+ any_value(hours_since_match) FILTER (WHERE event = 'conversation started') AS hours_since_match,
+ any_value(opener_type) FILTER (WHERE event = 'conversation started') AS opener_type,
+ any_value(rating) FILTER (WHERE event = 'date feedback submitted') AS rating
+FROM ev WHERE event IN ('match created', 'conversation started', 'date planned', 'date feedback submitted') GROUP BY 1;
+
+-- dataset overview
+SELECT count(*) AS events, count(DISTINCT uid) AS members_with_events, (SELECT count(*) FROM users) AS profiles,
+ (SELECT count(*) FROM signups) AS new_signups, min(t) AS first_event, max(t) AS last_event FROM ev;
+
+-- identity check: every event resolves to a member; platform agrees with the device OS
+SELECT count(*) FILTER (WHERE uid IS NULL) AS unresolved_events,
+ count(*) FILTER (WHERE (platform = 'ios' AND os NOT IN ('iOS', 'iPadOS')) OR (platform = 'android' AND os <> 'Android')) AS platform_os_mismatch
+FROM ev;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H1-verified-profiles-launch — fake/scam reports ×0.4 after 2026-07-14 (21-day ramp)
+-- ─────────────────────────────────────────────────────────────────────────
+WITH w AS (SELECT CASE WHEN t < TIMESTAMP '2026-07-14' THEN '1 before launch' WHEN t >= TIMESTAMP '2026-08-04' THEN '2 after ramp' END AS period, event, report_reason
+  FROM ev WHERE event IN ('profile reported', 'like sent', 'profile passed'))
+SELECT period,
+ count(*) FILTER (WHERE event = 'profile reported' AND report_reason IN ('fake_profile', 'scam')) AS fake_scam_reports,
+ count(*) FILTER (WHERE event = 'profile reported' AND report_reason NOT IN ('fake_profile', 'scam')) AS other_reports,
+ count(*) FILTER (WHERE event <> 'profile reported') AS profile_decisions,
+ round(1000.0 * fake_scam_reports / profile_decisions, 2) AS fake_scam_per_1000,
+ round(1000.0 * other_reports / profile_decisions, 2) AS other_per_1000
+FROM w WHERE period IS NOT NULL GROUP BY 1 ORDER BY 1;
+
+SELECT count(*) FILTER (WHERE t < TIMESTAMP '2026-07-14') AS verifications_before_launch, count(*) AS verifications FROM ev WHERE event = 'selfie verified';
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H2-photo-count-sweet-spot — matches per like by profile photo_count
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT CASE WHEN p.photo_count <= 2 THEN '1-2' WHEN p.photo_count = 3 THEN '3' WHEN p.photo_count <= 6 THEN '4-6' ELSE '7-9' END AS photo_band,
+ count(DISTINCT e.uid) AS members,
+ count(*) FILTER (WHERE event = 'like sent') AS likes, count(*) FILTER (WHERE event = 'match created') AS matches,
+ round(matches::DOUBLE / likes, 4) AS matches_per_like
+FROM ev e JOIN prof p ON p.uid = e.uid WHERE event IN ('like sent', 'match created') GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H3-sparks-match-rate — Sparks match at 3x a standard like
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT count(*) FILTER (WHERE event = 'like sent' AND like_type = 'spark') AS sparks,
+ count(*) FILTER (WHERE event = 'like sent' AND like_type = 'standard') AS standard_likes,
+ round(count(*) FILTER (WHERE event = 'match created' AND match_source = 'spark')::DOUBLE / sparks, 4) AS spark_match_rate,
+ round(count(*) FILTER (WHERE event = 'match created' AND match_source = 'like')::DOUBLE / standard_likes, 4) AS standard_match_rate,
+ round(spark_match_rate / standard_match_rate, 3) AS ratio
+FROM ev WHERE event IN ('like sent', 'match created');
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H4-icebreakers-experiment — opener rate ×1.25, opener time ×0.6 from 2026-07-22
+-- ─────────────────────────────────────────────────────────────────────────
+-- per match (hold match_id constant), opener within 7 days; matches Jul 22 - Sep 24
+SELECT p.variant, count(DISTINCT m.uid) AS members, count(*) AS matches,
+ round(avg(coalesce(m.t_conv < m.t_match + INTERVAL 7 DAY, false)::INT), 4) AS opener_rate,
+ round(median(m.hours_since_match) FILTER (WHERE m.t_conv < m.t_match + INTERVAL 7 DAY), 2) AS median_hours_to_opener,
+ round(avg((m.opener_type = 'icebreaker')::INT) FILTER (WHERE m.t_conv IS NOT NULL), 4) AS icebreaker_share_of_openers
+FROM matches m JOIN prof p ON p.uid = m.uid
+WHERE m.t_match >= TIMESTAMP '2026-07-22' AND m.t_match < TIMESTAMP '2026-09-24 23:59:59' AND p.variant IS NOT NULL
 GROUP BY 1 ORDER BY 1;
--- read: over/low avg_score ≈ 0.65 (knob); sweet reads high (clone redraws)
 
--- count lift: activity-normalized double ratio, Free tier, H3's additive
--- term subtracted arithmetically (adj = matches − 3·super_likes).
--- Conditioning on sls=0 instead would select the near-inactive tail
--- (P(no SL) ≈ 0.9^swipes) and starve the sweet cell. DD ≈ 1+E[U{2..4}] = 4.
-SELECT CASE WHEN p.photos BETWEEN 2 AND 5 THEN 'sweet' WHEN p.photos <= 1 THEN 'low' END AS arm,
-  count(*) AS users, round(avg(p.matches - 3 * p.sls), 3) AS avg_adj_m, round(avg(p.swipes), 3) AS avg_s
-FROM per_user p JOIN users u ON u.distinct_id::VARCHAR = p.uid
-WHERE u.subscription = 'Free' AND p.swipes > 0
-  AND (p.photos BETWEEN 2 AND 5 OR p.photos <= 1)
+SELECT "Variant name" AS variant, count(DISTINCT uid) AS exposed_members FROM ev WHERE event = '$experiment_started' GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H5-success-churn — after a 4-5 star date, 45% leave within 2-10 days
+-- ─────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE TEMP TABLE first_feedback AS
+WITH f AS (SELECT uid, t AS f0, rating, row_number() OVER (PARTITION BY uid ORDER BY t, insert_id) AS rn FROM ev WHERE event = 'date feedback submitted')
+SELECT f.uid, f.f0, f.rating,
+ coalesce(bool_or(e.t >= f.f0 + INTERVAL 14 DAY AND e.t < f.f0 + INTERVAL 28 DAY), false) AS retained_d14_27
+FROM f LEFT JOIN ev e ON e.uid = f.uid AND e.event = 'app opened'
+WHERE f.rn = 1 AND f.f0 <= TIMESTAMP '2026-09-03 23:59:59' GROUP BY 1, 2, 3;
+
+SELECT CASE WHEN rating >= 4 THEN '4-5 stars' ELSE '1-3 stars' END AS first_date_rating, count(*) AS members,
+ round(avg(retained_d14_27::INT), 4) AS retention_d14_27
+FROM first_feedback GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H6-paid-channel-economics — spend per signup, onboarding, spend per completed profile
+-- ─────────────────────────────────────────────────────────────────────────
+WITH g AS (SELECT ch, count(*) AS signups, count(*) FILTER (WHERE completed) AS completed FROM onboarding GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM wh_paid GROUP BY 1)
+SELECT g.ch, g.signups, round(g.completed::DOUBLE / g.signups, 4) AS completion_7d, round(sp.spend, 0) AS spend_usd,
+ round(sp.spend / g.signups, 2) AS spend_per_signup, round(sp.spend / g.completed, 2) AS spend_per_completed_profile
+FROM g LEFT JOIN sp ON sp.ch = g.ch ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H7-android-chat-incident — 60% of Android sends fail 2026-08-24..28 (warehouse join)
+-- ─────────────────────────────────────────────────────────────────────────
+WITH o AS (SELECT DISTINCT date::DATE AS d FROM wh_chat WHERE service_status = 'major_outage'),
+w AS (SELECT t::DATE AS d, platform FROM ev WHERE event = 'message sent' AND t >= TIMESTAMP '2026-08-10' AND t < TIMESTAMP '2026-09-12'),
+g AS (SELECT (d IN (SELECT d FROM o)) AS incident_days, count(*) FILTER (WHERE platform = 'android') AS android, count(*) FILTER (WHERE platform = 'ios') AS ios FROM w GROUP BY 1)
+SELECT incident_days, android, ios, round(android::DOUBLE / ios, 4) AS android_per_ios FROM g ORDER BY 1;
+
+SELECT platform, count(*) FILTER (WHERE service_status = 'major_outage') AS outage_days, min(date) FILTER (WHERE service_status = 'major_outage') AS first_day,
+ round(avg(delivery_failure_rate) FILTER (WHERE service_status = 'major_outage'), 4) AS outage_failure_rate,
+ round(avg(delivery_failure_rate) FILTER (WHERE service_status <> 'major_outage'), 4) AS normal_failure_rate
+FROM wh_chat GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H8-plus-price-change — Kindred+ +17% on 2026-08-18; purchases per view ×0.7 (warehouse join)
+-- ─────────────────────────────────────────────────────────────────────────
+WITH p AS (SELECT DISTINCT date::DATE AS d, plan, billing_period, list_price_usd FROM wh_bookings),
+w AS (SELECT CASE WHEN e.t >= TIMESTAMP '2026-08-18' THEN '2 after' ELSE '1 before' END AS period, e.event, e.plan, p.list_price_usd
+  FROM ev e LEFT JOIN p ON e.event = 'subscription started' AND p.d = e.t::DATE AND p.plan = e.plan AND p.billing_period = e.billing_period
+  WHERE e.event IN ('paywall viewed', 'subscription started'))
+SELECT period, count(*) FILTER (WHERE event = 'paywall viewed') AS paywall_views,
+ count(*) FILTER (WHERE event = 'subscription started' AND plan = 'plus') AS plus_subs,
+ count(*) FILTER (WHERE event = 'subscription started' AND plan = 'premier') AS premier_subs,
+ round(plus_subs::DOUBLE / paywall_views, 4) AS plus_per_view, round(premier_subs::DOUBLE / paywall_views, 4) AS premier_per_view,
+ round(sum(list_price_usd) FILTER (WHERE event = 'subscription started' AND plan = 'plus') / paywall_views, 3) AS plus_bookings_per_view
+FROM w GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H9-date-speed-by-goal — opener → date plan time ×1.5 long_term, ×0.6 short_term_fun
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT p.relationship_goal, count(*) AS dates,
+ round(median(date_diff('second', m.t_conv, m.t_date)) / 3600.0, 1) AS median_hours_opener_to_date
+FROM matches m JOIN prof p ON p.uid = m.uid
+WHERE m.t_conv < TIMESTAMP '2026-09-01' AND m.t_date >= m.t_conv AND m.t_date < m.t_conv + INTERVAL 30 DAY
 GROUP BY 1 ORDER BY 1;
--- read: (avg_adj_m_sweet/avg_adj_m_low) ÷ (avg_s_sweet/avg_s_low) ≈ 4
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H10-fast-openers — openers within 24 h plan a date 2x as often
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT CASE WHEN hours_since_match <= 24 THEN 'within 24h' ELSE 'after 24h' END AS opener_speed, count(*) AS conversations,
+ round(avg(coalesce(t_date < t_conv + INTERVAL 30 DAY, false)::INT), 4) AS date_rate_30d
+FROM matches WHERE t_conv IS NOT NULL AND t_conv < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
 
--- ── H2-sunday-swipe-surge ───────────────────────────────────
--- Sunday swipes cloned in place: evening (18-23 UTC) ×6, daytime ×3.
--- dayofweek(): Sunday = 0 (matches JS getUTCDay).
-SELECT dayofweek(t) AS dow, count(*) AS swipes
-FROM ev WHERE event = 'swipe right' GROUP BY 1 ORDER BY 1;
--- read: dow 0 strict max; Sunday / mean(other six) in [2, 6]
+-- ═════════════════════════════════════════════════════════════════════════
+-- EVAL QUERIES (eval/dating.eval.md)
+-- ═════════════════════════════════════════════════════════════════════════
 
--- hour-of-day mix inside Sunday (evening share drives where the
--- multiplier lands between 3 and 6)
-SELECT CASE WHEN extract(hour FROM t) >= 18 THEN 'evening' ELSE 'daytime' END AS bucket,
-  count(*) AS sunday_swipes
-FROM ev WHERE event = 'swipe right' AND dayofweek(t) = 0 GROUP BY 1 ORDER BY 1;
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q1 — fake-profile and scam reports before vs after Verified Profiles
+-- ─────────────────────────────────────────────────────────────────────────
+WITH w AS (SELECT date_trunc('week', t)::DATE AS week, event, report_reason FROM ev WHERE event IN ('profile reported', 'like sent', 'profile passed'))
+SELECT week,
+ round(1000.0 * count(*) FILTER (WHERE event = 'profile reported' AND report_reason IN ('fake_profile', 'scam')) / count(*) FILTER (WHERE event <> 'profile reported'), 2) AS fake_scam_per_1000,
+ round(1000.0 * count(*) FILTER (WHERE event = 'profile reported' AND report_reason NOT IN ('fake_profile', 'scam')) / count(*) FILTER (WHERE event <> 'profile reported'), 2) AS other_per_1000
+FROM w GROUP BY 1 ORDER BY 1;
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q2 — Verified Profiles adoption
+-- ─────────────────────────────────────────────────────────────────────────
+WITH active AS (SELECT DISTINCT uid FROM ev WHERE t >= TIMESTAMP '2026-07-14' AND event = 'app opened'),
+v AS (SELECT uid, min(t) AS tv FROM ev WHERE event = 'selfie verified' GROUP BY 1),
+s AS (SELECT uid, t0 FROM signups)
+SELECT count(*) AS members_active_after_launch, count(v.uid) AS verified,
+ round(count(v.uid)::DOUBLE / count(*), 4) AS verified_share,
+ count(v.uid) FILTER (WHERE s.uid IS NULL OR s.t0 < TIMESTAMP '2026-07-14') AS verified_existing_members,
+ round(count(v.uid) FILTER (WHERE s.uid IS NULL OR s.t0 < TIMESTAMP '2026-07-14')::DOUBLE / count(*) FILTER (WHERE s.uid IS NULL OR s.t0 < TIMESTAMP '2026-07-14'), 4) AS existing_share,
+ round(count(v.uid) FILTER (WHERE s.t0 >= TIMESTAMP '2026-07-14')::DOUBLE / count(*) FILTER (WHERE s.t0 >= TIMESTAMP '2026-07-14'), 4) AS new_member_share
+FROM active a LEFT JOIN v ON v.uid = a.uid LEFT JOIN s ON s.uid = a.uid;
 
--- ── H3-super-like-effect ────────────────────────────────────
--- each super-like injects exactly 3 cloned matches (additive, scores
--- U[70,99]). Cohort: Free, photos outside sweet 2-5 (isolates from H1/H4).
-SELECT CASE WHEN p.sls >= 1 THEN 'super_liker' ELSE 'no_sl' END AS arm,
-  count(*) AS users, round(avg(p.matches), 3) AS avg_m,
-  round(avg(p.swipes), 3) AS avg_s, round(avg(p.sls), 3) AS avg_sl
-FROM per_user p JOIN users u ON u.distinct_id::VARCHAR = p.uid
-WHERE u.subscription = 'Free' AND p.photos NOT BETWEEN 2 AND 5 AND p.swipes > 0
-GROUP BY 1 ORDER BY 1;
--- read: measured lift avg_m(sl)/[avg_m(none) × avg_s(sl)/avg_s(none)]
--- vs predicted (organic + 3·avg_sl)/organic — ratio ≈ 1
+SELECT date_trunc('week', t)::DATE AS week, count(*) AS verifications FROM ev WHERE event = 'selfie verified' GROUP BY 1 ORDER BY 1;
 
--- injected-match score floor: H3 clones draw match_score U[70,99]; for
--- non-over-6 users nothing lowers scores, so super-liker matches skew high
-SELECT CASE WHEN p.sls >= 1 THEN 'super_liker' ELSE 'no_sl' END AS arm,
-  round(avg(e.match_score), 2) AS avg_score, median(e.match_score) AS med_score
-FROM per_user p JOIN ev e ON e.uid = p.uid AND e.event = 'match received'
-WHERE p.photos < 6 GROUP BY 1 ORDER BY 1;
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q3 — matches per like by photo count (see STORY H2 for bands)
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT p.photo_count, count(*) FILTER (WHERE event = 'like sent') AS likes,
+ round(count(*) FILTER (WHERE event = 'match created')::DOUBLE / count(*) FILTER (WHERE event = 'like sent'), 4) AS matches_per_like
+FROM ev e JOIN prof p ON p.uid = e.uid WHERE event IN ('like sent', 'match created') GROUP BY 1 ORDER BY 1;
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q4 — Spark vs standard like match rate, by plan at the time (see STORY H3)
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT subscription_plan,
+ count(*) FILTER (WHERE event = 'like sent' AND like_type = 'spark') AS sparks,
+ round(count(*) FILTER (WHERE event = 'like sent' AND like_type = 'spark')::DOUBLE / count(*) FILTER (WHERE event = 'like sent'), 4) AS spark_share_of_likes,
+ round(count(*) FILTER (WHERE event = 'match created' AND match_source = 'spark')::DOUBLE / count(*) FILTER (WHERE event = 'like sent' AND like_type = 'spark'), 4) AS spark_match_rate,
+ round(count(*) FILTER (WHERE event = 'match created' AND match_source = 'like')::DOUBLE / count(*) FILTER (WHERE event = 'like sent' AND like_type = 'standard'), 4) AS standard_match_rate
+FROM ev WHERE event IN ('like sent', 'match created') GROUP BY 1 ORDER BY 1;
 
--- ── H4-premium-match-boost ──────────────────────────────────
--- H4 runs after H5's churn: surviving matches × 2 (Premium) / × 4 (Elite),
--- toAdd = base×mult − base exactly. Tier ⊥ activity → cross-tier avg ratio
--- reads the multiplier (diluted only by zero-hook-match users).
-SELECT u.subscription AS tier, count(*) AS users,
-  round(avg(coalesce(p.matches, 0)), 3) AS avg_matches
-FROM users u LEFT JOIN per_user p ON p.uid = u.distinct_id::VARCHAR
-GROUP BY 1 ORDER BY avg_matches;
--- read: Elite/Free ≈ 4, Premium/Free ≈ 2 (both slightly diluted)
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q5 — Icebreakers: opener rate and speed (see STORY H4); plus significance
+-- ─────────────────────────────────────────────────────────────────────────
+WITH x AS (SELECT p.variant, coalesce(m.t_conv < m.t_match + INTERVAL 7 DAY, false) AS ok
+  FROM matches m JOIN prof p ON p.uid = m.uid
+  WHERE m.t_match >= TIMESTAMP '2026-07-22' AND m.t_match < TIMESTAMP '2026-09-24 23:59:59' AND p.variant IS NOT NULL),
+g AS (SELECT variant, count(*) AS n, avg(ok::INT) AS r FROM x GROUP BY 1)
+SELECT max(r) FILTER (WHERE variant = 'Icebreakers') AS variant_rate, max(r) FILTER (WHERE variant = 'Control') AS control_rate,
+ round((max(r) FILTER (WHERE variant = 'Icebreakers') - max(r) FILTER (WHERE variant = 'Control'))
+  / sqrt(max(r * (1 - r) / n) FILTER (WHERE variant = 'Icebreakers') + max(r * (1 - r) / n) FILTER (WHERE variant = 'Control')), 1) AS z
+FROM g;
 
--- structural signature: timely ∩ milestone Elite users (non-ghosted, H8
--- add-branch) have matches ≡ 0 mod 4 except the ~1-2% future-guard tail;
--- Free is the placebo (~0.25 random).
-SELECT u.subscription AS tier, count(*) AS users,
-  round(count(*) FILTER (WHERE p.matches % 4 = 0)::DOUBLE / count(*), 4) AS mod4_share
-FROM users u
-JOIN per_user p ON p.uid = u.distinct_id::VARCHAR
-JOIN timely tp ON tp.uid = p.uid
-JOIN milestone ms ON ms.uid = p.uid
-WHERE p.matches >= 4 AND u.subscription IN ('Elite', 'Free')
-GROUP BY 1 ORDER BY 1;
--- read: Elite mod4_share ≥ 0.9, Free ≈ 0.25
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q6 — retention after a member's first rated date (see STORY H5); cancellation reasons
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT rating, count(*) AS members, round(avg(retained_d14_27::INT), 4) AS retention_d14_27 FROM first_feedback GROUP BY 1 ORDER BY 1;
 
+SELECT cancel_reason, count(*) AS cancellations, round(count(*)::DOUBLE / sum(count(*)) OVER (), 4) AS share
+FROM ev WHERE event = 'subscription cancelled' GROUP BY 1 ORDER BY 2 DESC;
 
--- ── H5-ghosting-churn ───────────────────────────────────────
--- no timely message within 48h of any match → 80% of post-first-match
--- events dropped (keep 0.2). Non-milestone restriction: H8's post-day-30
--- drop applies to BOTH arms and cancels in the ρ ratio (milestone users
--- get H8 ADDS, which would inflate the timely arm only).
--- The raw ρ ratio is confounded DOWNWARD by activity selection (the
--- ghosted arm is the least-engaged matched tail on a flatter organic
--- trajectory), so the story self-calibrates on the PRE-first-match
--- half-split (rho_pre) — H5 never touches pre-match events.
-WITH fm AS (SELECT uid, min(t) AS first_match FROM ev WHERE event = 'match received' GROUP BY 1),
-per AS (
-  SELECT fm.uid,
-    count(*) FILTER (WHERE e.t <= fm.first_match) AS pre,
-    count(*) FILTER (WHERE e.t > fm.first_match) AS post,
-    count(*) FILTER (WHERE e.t <= to_timestamp((epoch(fe.f) + epoch(fm.first_match)) / 2)) AS pre_a,
-    count(*) FILTER (WHERE e.t > to_timestamp((epoch(fe.f) + epoch(fm.first_match)) / 2) AND e.t <= fm.first_match) AS pre_b
-  FROM fm JOIN first_ev fe ON fe.uid = fm.uid JOIN ev e ON e.uid = fm.uid GROUP BY 1
-)
-SELECT CASE WHEN tp.uid IS NOT NULL THEN 'timely' ELSE 'ghosted' END AS arm,
-  count(*) AS users, round(sum(post)::DOUBLE / nullif(sum(pre), 0), 4) AS rho,
-  round(sum(pre_b)::DOUBLE / nullif(sum(pre_a), 0), 4) AS rho_pre
-FROM per LEFT JOIN timely tp ON tp.uid = per.uid
-WHERE per.uid NOT IN (SELECT uid FROM milestone)
-GROUP BY 1 ORDER BY 1;
--- read: (rho_g/rho_t) ÷ (rho_pre_g/rho_pre_t) ≈ 0.2 keep rate (±40%)
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q7 — paid channel economics: spend per signup, completed profile, and paid subscriber
+-- ─────────────────────────────────────────────────────────────────────────
+WITH b AS (SELECT DISTINCT s.uid FROM signups s JOIN ev e ON e.uid = s.uid AND e.event = 'subscription started'),
+g AS (SELECT o.ch, count(*) AS signups, count(*) FILTER (WHERE o.completed) AS completed, count(b.uid) AS subscribers
+  FROM onboarding o LEFT JOIN b ON b.uid = o.uid GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, round(sum(spend_usd), 0) AS spend, sum(installs_reported) AS installs_reported FROM wh_paid GROUP BY 1)
+SELECT g.ch, sp.spend, g.signups, sp.installs_reported, g.completed, g.subscribers,
+ round(sp.spend / g.signups, 2) AS per_signup, round(sp.spend / g.completed, 2) AS per_completed_profile,
+ round(sp.spend / g.subscribers, 2) AS per_new_subscriber, round(g.subscribers::DOUBLE / g.signups, 4) AS subscriber_rate
+FROM g LEFT JOIN sp ON sp.ch = g.ch ORDER BY 1;
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q8 — onboarding funnel by acquisition channel (step by step, 7 days)
+-- ─────────────────────────────────────────────────────────────────────────
+WITH st AS (SELECT s.uid, s.ch,
+  bool_or(e.event = 'photos uploaded' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 7 DAY) AS photos,
+  bool_or(e.event = 'profile completed' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 7 DAY) AS completed
+  FROM signups s LEFT JOIN ev e ON e.uid = s.uid AND e.event IN ('photos uploaded', 'profile completed') GROUP BY 1, 2)
+SELECT CASE WHEN ch = 'tiktok_ads' THEN 'tiktok_ads' ELSE 'all other channels' END AS channel_group, count(*) AS signups,
+ round(avg(coalesce(photos, false)::INT), 4) AS reached_photos, round(avg(coalesce(completed, false)::INT), 4) AS completed_profile
+FROM st GROUP BY 1 ORDER BY 1;
 
--- ── H6-bio-prompt-power-users ───────────────────────────────
--- bio ≥1 ∧ prompts ≥3 → 3 cloned dates per existing date (×4 at hook
--- time). At ~190 events/user the power cohort is ~80% of users; the rest
--- arm is the low-activity tail whose messages come disproportionately
--- from Date Funnel instances (which co-emit dates), so its ORGANIC
--- dates-per-message runs ~2× the power arm's. Population rate ratio is a
--- composite: 4× mechanism × 0.4-0.85 composition → [1.5, 3.4].
-WITH pw AS (
-  SELECT uid,
-    count(*) FILTER (WHERE event = 'bio updated') AS bios,
-    count(*) FILTER (WHERE event = 'prompt answered') AS prompts,
-    count(*) FILTER (WHERE event = 'date scheduled') AS dates,
-    count(*) FILTER (WHERE event = 'message sent') AS msgs
-  FROM ev GROUP BY 1
-)
-SELECT CASE WHEN bios >= 1 AND prompts >= 3 THEN 'power' ELSE 'rest' END AS arm,
-  count(*) AS users, round(sum(dates)::DOUBLE / sum(msgs), 5) AS date_rate
-FROM pw WHERE msgs > 0 GROUP BY 1 ORDER BY 1;
--- read: power/rest date_rate in [1.5, 3.4] (composite, see above)
+SELECT count(*) AS signups, round(avg(completed::INT), 4) AS overall_completion FROM onboarding;
 
--- exact mechanism: timely ∩ milestone power users have no post-H6 date
--- deletions → output dates ≡ 0 (mod 4) except the ~9% future-guard tail
--- (H6 clones stamped source+1..72h past datasetEnd silently dropped);
--- clean-cohort rest arm is the placebo (~0.25 random).
-WITH pw AS (
-  SELECT uid,
-    count(*) FILTER (WHERE event = 'bio updated') AS bios,
-    count(*) FILTER (WHERE event = 'prompt answered') AS prompts,
-    count(*) FILTER (WHERE event = 'date scheduled') AS dates
-  FROM ev GROUP BY 1
-)
-SELECT CASE WHEN p.bios >= 1 AND p.prompts >= 3 THEN 'power' ELSE 'rest' END AS arm,
-  count(*) AS users,
-  round(count(*) FILTER (WHERE p.dates % 4 = 0)::DOUBLE / count(*), 4) AS mod4_share
-FROM pw p
-JOIN timely tp ON tp.uid = p.uid
-JOIN milestone ms ON ms.uid = p.uid
-WHERE p.dates >= 4 GROUP BY 1 ORDER BY 1;
--- read: power mod4_share ≥ 0.9, rest ≈ 0.25
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q9 — the late-August message dip (daily messages by platform + warehouse)
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT e.d, e.android, e.ios, round(e.android::DOUBLE / e.ios, 3) AS android_per_ios, w.service_status, w.delivery_failure_rate
+FROM (SELECT t::DATE AS d, count(*) FILTER (WHERE platform = 'android') AS android, count(*) FILTER (WHERE platform = 'ios') AS ios
+  FROM ev WHERE event = 'message sent' AND t >= TIMESTAMP '2026-08-17' AND t < TIMESTAMP '2026-09-05' GROUP BY 1) e
+LEFT JOIN wh_chat w ON w.date::DATE = e.d AND w.platform = 'android' ORDER BY 1;
 
+-- lost Android messages: expected (baseline Android/iOS ratio x incident iOS) minus observed
+WITH o AS (SELECT DISTINCT date::DATE AS d FROM wh_chat WHERE service_status = 'major_outage'),
+w AS (SELECT t::DATE AS d, platform FROM ev WHERE event = 'message sent' AND t >= TIMESTAMP '2026-08-10' AND t < TIMESTAMP '2026-09-12'),
+g AS (SELECT (d IN (SELECT d FROM o)) AS inc, count(*) FILTER (WHERE platform = 'android') AS a, count(*) FILTER (WHERE platform = 'ios') AS i FROM w GROUP BY 1)
+SELECT round(max(a::DOUBLE / i) FILTER (WHERE inc) / max(a::DOUBLE / i) FILTER (WHERE NOT inc), 4) AS relative_android_volume,
+ round(max(a::DOUBLE / i) FILTER (WHERE NOT inc) * max(i) FILTER (WHERE inc) - max(a) FILTER (WHERE inc), 0) AS android_messages_lost_in_mixpanel,
+ (SELECT sum(messages_attempted - messages_delivered) FROM wh_chat WHERE service_status = 'major_outage') AS warehouse_failed_sends
+FROM g;
 
--- ── H7-vday-spike ───────────────────────────────────────────
--- V-Day window = dataset days 58-63 (2026-02-28 → 2026-03-05): signups
--- ×3 total (clones +U[1,48]h, E[leak] 20%), upgrades ×5 total (clones
--- +U[1,24]h, E[leak] 10%). Baseline flanks skip 3 days post-window so
--- clone spill can't inflate them.
-SELECT date_trunc('day', t) AS day, count(*) AS signups
-FROM ev WHERE event = 'profile created'
-  AND t >= TIMESTAMP '2026-02-21' AND t < TIMESTAMP '2026-03-12'
-GROUP BY 1 ORDER BY 1;
--- read: 02-28..03-04 daily ≈ 2.6× the flanking days
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q10 — Kindred+ price change: conversion, bookings, Premier (see STORY H8)
+-- ─────────────────────────────────────────────────────────────────────────
+WITH p AS (SELECT DISTINCT date::DATE AS d, plan, billing_period, list_price_usd FROM wh_bookings),
+w AS (SELECT CASE WHEN e.t >= TIMESTAMP '2026-08-18' THEN 'after' ELSE 'before' END AS period, e.event, e.plan, p.list_price_usd
+  FROM ev e LEFT JOIN p ON e.event = 'subscription started' AND p.d = e.t::DATE AND p.plan = e.plan AND p.billing_period = e.billing_period
+  WHERE e.event IN ('paywall viewed', 'subscription started')),
+g AS (SELECT period, count(*) FILTER (WHERE event = 'paywall viewed') AS v,
+  count(*) FILTER (WHERE event = 'subscription started' AND plan = 'premier') AS pr FROM w GROUP BY 1)
+SELECT max(pr::DOUBLE / v) FILTER (WHERE period = 'before') AS premier_before, max(pr::DOUBLE / v) FILTER (WHERE period = 'after') AS premier_after,
+ round((max(pr::DOUBLE / v) FILTER (WHERE period = 'after') - max(pr::DOUBLE / v) FILTER (WHERE period = 'before'))
+  / sqrt(max(pr::DOUBLE / v * (1 - pr::DOUBLE / v) / v) FILTER (WHERE period = 'after') + max(pr::DOUBLE / v * (1 - pr::DOUBLE / v) / v) FILTER (WHERE period = 'before')), 2) AS z_premier
+FROM g;
 
-SELECT
-  count(*) FILTER (WHERE t >= TIMESTAMP '2026-02-28' AND t < TIMESTAMP '2026-03-05') / 5.0 AS window_daily,
-  count(*) FILTER (WHERE (t >= TIMESTAMP '2026-02-14' AND t < TIMESTAMP '2026-02-28')
-                OR (t >= TIMESTAMP '2026-03-08' AND t < TIMESTAMP '2026-03-22')) / 28.0 AS baseline_daily
-FROM ev WHERE event = 'premium upgrade';
--- read: window/baseline ≈ 4.6 (band [3.5, 5.6])
+-- warehouse bookings per day, Kindred+ vs Premier, before vs after
+SELECT plan, CASE WHEN date::DATE >= DATE '2026-08-18' THEN 'after' ELSE 'before' END AS period,
+ sum(new_subscriptions) AS new_subscriptions, round(sum(gross_bookings_usd), 0) AS gross_bookings_usd,
+ round(sum(gross_bookings_usd) / count(DISTINCT date), 1) AS bookings_per_day
+FROM wh_bookings GROUP BY 1, 2 ORDER BY 1, 2 DESC;
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q11 — opener → date plan time by relationship goal (see STORY H9); overall
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT round(median(date_diff('second', t_conv, t_date)) / 3600.0, 1) AS median_hours_all,
+ round(median(date_diff('second', t_match, t_date)) / 3600.0, 1) AS median_hours_match_to_date
+FROM matches WHERE t_conv < TIMESTAMP '2026-09-01' AND t_date >= t_conv AND t_date < t_conv + INTERVAL 30 DAY;
 
--- ── H8-offapp-retention ─────────────────────────────────────
--- milestone users (early phone/date) get post-day-30 top-up clones toward
--- 30% share; non-milestone lose 80% of post-day-30 events. Cohort: born
--- before day 30 (clone support day30+U[1,60] fits the 121-day window) AND
--- timely-or-match-free (removes the H5 confound).
-WITH per AS (
-  SELECT fe.uid,
-    count(*) FILTER (WHERE e.t > fe.f + INTERVAL 30 DAY) AS post30,
-    count(*) AS total
-  FROM first_ev fe JOIN ev e ON e.uid = fe.uid
-  WHERE fe.f < TIMESTAMP '2026-01-31' GROUP BY 1
-)
-SELECT CASE WHEN ms.uid IS NOT NULL THEN 'milestone' ELSE 'rest' END AS arm,
-  count(*) AS users, round(sum(post30)::DOUBLE / sum(total), 4) AS post30_share
-FROM per
-LEFT JOIN milestone ms ON ms.uid = per.uid
-LEFT JOIN timely tp ON tp.uid = per.uid
-LEFT JOIN per_user pu ON pu.uid = per.uid
-WHERE tp.uid IS NOT NULL OR coalesce(pu.matches, 0) = 0
-GROUP BY 1 ORDER BY 1;
--- read: with keep k=0.2 and milestone share s (≈ organic), predicted rest
--- share = k·s / (1 − (1−k)·s); measured rest / predicted ≈ 1
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q12 — opener speed and date rate, finer buckets (see STORY H10)
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT CASE WHEN hours_since_match <= 6 THEN '0-6h' WHEN hours_since_match <= 12 THEN '6-12h' WHEN hours_since_match <= 24 THEN '12-24h'
+  WHEN hours_since_match <= 48 THEN '24-48h' ELSE '48h+' END AS opener_speed, count(*) AS conversations,
+ round(avg(coalesce(t_date < t_conv + INTERVAL 30 DAY, false)::INT), 4) AS date_rate_30d
+FROM matches WHERE t_conv IS NOT NULL AND t_conv < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY min(hours_since_match);
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q13 — Icebreakers downstream: date plans per match
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT p.variant, count(*) AS matches,
+ round(avg(coalesce(m.t_date < m.t_match + INTERVAL 30 DAY, false)::INT), 4) AS date_plan_rate_30d
+FROM matches m JOIN prof p ON p.uid = m.uid
+WHERE m.t_match >= TIMESTAMP '2026-07-22' AND m.t_match < TIMESTAMP '2026-09-01' AND p.variant IS NOT NULL GROUP BY 1 ORDER BY 1;
 
--- ── H9-match-flow-ttc ───────────────────────────────────────
--- funnel-post stretches Match Flow gaps by tier: Elite ×0.71, Free ×1.4,
--- Premium untouched (v1.6 scopes the hook to Match Flow only).
--- CAUTION: cross-event TTC SQL here is the documented greedy-single-pass
--- limitation — it pairs swipes/matches across funnel instances and buries
--- the signal. The story asserts TTC through the Mixpanel-aligned emulator
--- (timeToConvert, 33.6h window = 24h generative × 1.4 max stretch); trust
--- the story verdict, not ad-hoc pair SQL.
-SELECT u.subscription AS tier, count(*) AS matches
-FROM ev e JOIN users u ON u.distinct_id::VARCHAR = e.uid
-WHERE e.event = 'match received' GROUP BY 1 ORDER BY 1;
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q14 — verified vs unverified members: matches per like after the ramp (null)
+-- ─────────────────────────────────────────────────────────────────────────
+WITH x AS (SELECT p.verified, e.platform, count(*) FILTER (WHERE event = 'like sent') AS likes, count(*) FILTER (WHERE event = 'match created') AS m
+  FROM ev e JOIN prof p ON p.uid = e.uid WHERE e.t >= TIMESTAMP '2026-08-04' AND event IN ('like sent', 'match created') GROUP BY ROLLUP (1, 2))
+SELECT coalesce(platform, 'all') AS platform, coalesce(verified::VARCHAR, 'all') AS verified, likes, m AS matches, round(m::DOUBLE / likes, 4) AS matches_per_like
+FROM x ORDER BY 1, 2;
 
+WITH x AS (SELECT p.verified, count(*) FILTER (WHERE event = 'like sent') AS n, count(*) FILTER (WHERE event = 'match created')::DOUBLE / count(*) FILTER (WHERE event = 'like sent') AS r
+  FROM ev e JOIN prof p ON p.uid = e.uid WHERE e.t >= TIMESTAMP '2026-08-04' AND event IN ('like sent', 'match created') GROUP BY 1)
+SELECT round((max(r) FILTER (WHERE verified) - max(r) FILTER (WHERE NOT verified)) / sqrt(max(r * (1 - r) / n) FILTER (WHERE verified) + max(r * (1 - r) / n) FILTER (WHERE NOT verified)), 2) AS z_like_level
+FROM x;
 
--- ── H10-age-date-conversion ─────────────────────────────────
--- funnel-pre scales Date Funnel completion: 25-29/30-34 ×1.3, 40+ ×0.6.
--- Emulator story reads step_counts at the 72h generative window; this
--- query approximates the same read with a sequenced 72h pairing per user
--- (close enough for eyeballing, not for the verdict).
-WITH msg AS (SELECT uid, min(t) AS m0 FROM ev WHERE event = 'message sent' GROUP BY 1),
-done AS (
-  SELECT DISTINCT m.uid FROM msg m
-  JOIN ev d ON d.uid = m.uid AND d.event = 'date scheduled'
-  WHERE d.t > m.m0 AND d.t < m.m0 + INTERVAL 72 HOUR
-)
-SELECT u.age_range, count(*) AS msg_users,
-  round(count(*) FILTER (WHERE dn.uid IS NOT NULL)::DOUBLE / count(*), 4) AS date_rate_72h
-FROM msg m
-JOIN users u ON u.distinct_id::VARCHAR = m.uid
-LEFT JOIN done dn ON dn.uid = m.uid
-GROUP BY 1 ORDER BY 1;
--- read: 25-29/30-34 rates > 18-24/35-39 > 40+ (compressed vs the
--- 1.3/0.6 knobs by organic age-independent dates)
+-- activity trap: verified members like more, so they collect more matches per member
+SELECT p.verified, count(DISTINCT e.uid) AS members,
+ round(count(*) FILTER (WHERE event = 'like sent')::DOUBLE / count(DISTINCT e.uid), 1) AS likes_per_member,
+ round(count(*) FILTER (WHERE event = 'match created')::DOUBLE / count(DISTINCT e.uid), 2) AS matches_per_member
+FROM ev e JOIN prof p ON p.uid = e.uid WHERE e.t >= TIMESTAMP '2026-08-04' GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q15 — onboarding completion, Android vs iOS (null), overall and by channel group
+-- ─────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE TEMP TABLE onboarding_platform AS
+SELECT o.*, a.platform, CASE WHEN o.ch = 'tiktok_ads' THEN 'tiktok_ads' ELSE 'other channels' END AS channel_group
+FROM onboarding o JOIN (SELECT uid, any_value(platform) AS platform FROM ev WHERE event = 'account created' GROUP BY 1) a ON a.uid = o.uid;
+
+SELECT coalesce(channel_group, 'all') AS channel_group, platform, count(*) AS signups, round(avg(completed::INT), 4) AS completion
+FROM onboarding_platform GROUP BY GROUPING SETS ((platform), (channel_group, platform)) ORDER BY 1, 2;
+
+WITH g AS (SELECT coalesce(channel_group, 'all') AS grp, platform, count(*) AS n, avg(completed::INT) AS r
+  FROM onboarding_platform GROUP BY GROUPING SETS ((platform), (channel_group, platform)))
+SELECT grp, round((max(r) FILTER (WHERE platform = 'android') - max(r) FILTER (WHERE platform = 'ios'))
+  / sqrt(max(r * (1 - r) / n) FILTER (WHERE platform = 'android') + max(r * (1 - r) / n) FILTER (WHERE platform = 'ios')), 2) AS z
+FROM g GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q16 — matches per like by gender
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT p.gender, count(DISTINCT e.uid) AS members, count(*) FILTER (WHERE event = 'like sent') AS likes,
+ round(count(*) FILTER (WHERE event = 'like sent')::DOUBLE / count(DISTINCT e.uid), 1) AS likes_per_member,
+ round(count(*) FILTER (WHERE event = 'match created')::DOUBLE / count(*) FILTER (WHERE event = 'like sent'), 4) AS matches_per_like
+FROM ev e JOIN prof p ON p.uid = e.uid WHERE event IN ('like sent', 'match created') GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q17 — the paying base: current plans, new subscriptions, warehouse bookings
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT current_plan, count(*) AS members, round(count(*)::DOUBLE / sum(count(*)) OVER (), 4) AS share FROM prof GROUP BY 1 ORDER BY 2 DESC;
+
+SELECT plan, billing_period, count(*) AS new_subscriptions_mixpanel FROM ev WHERE event = 'subscription started' GROUP BY 1, 2 ORDER BY 1, 2;
+
+SELECT plan, sum(new_subscriptions) AS new_subscriptions_billing, round(sum(gross_bookings_usd), 0) AS gross_bookings_usd FROM wh_bookings GROUP BY ROLLUP (1) ORDER BY 1 NULLS LAST;
+
+SELECT (SELECT count(*) FROM ev WHERE event = 'subscription started') AS mixpanel_subscriptions,
+ (SELECT sum(new_subscriptions) FROM wh_bookings) AS billing_subscriptions,
+ (SELECT count(*) FROM ev WHERE event = 'subscription cancelled') AS cancellations;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q18 — weekly and daily rhythm (UTC)
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT dayname(t) AS day_of_week, count(*) AS events, round(count(*)::DOUBLE / (SELECT count(*) FROM ev) * 7, 3) AS index_vs_average_day
+FROM ev GROUP BY 1, dayofweek(t) ORDER BY dayofweek(t);
+
+SELECT hour(t) AS hour_utc, count(*) AS events FROM ev GROUP BY 1 ORDER BY 2 DESC LIMIT 6;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q19 — quarter review inputs: weekly active members, signups, dates, revenue
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT date_trunc('month', t)::DATE AS month, count(DISTINCT uid) FILTER (WHERE event = 'app opened') AS monthly_active_members,
+ count(*) FILTER (WHERE event = 'account created') AS signups, count(*) FILTER (WHERE event = 'match created') AS matches,
+ count(*) FILTER (WHERE event = 'date planned') AS dates_planned, count(*) FILTER (WHERE event = 'subscription started') AS new_subscriptions
+FROM ev GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q20 — budget inputs: see EVAL Q7 (spend per signup / completed profile / subscriber)
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT acquisition_channel, round(sum(spend_usd), 0) AS spend_usd, round(sum(spend_usd) / count(DISTINCT date), 1) AS spend_per_day,
+ round(sum(spend_usd) / sum(installs_reported), 2) AS platform_cost_per_install
+FROM wh_paid GROUP BY 1 ORDER BY 1;

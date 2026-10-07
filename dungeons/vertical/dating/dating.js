@@ -4,625 +4,735 @@ import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "@ak--47/dungeon-master/utils";
+import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
 /** @typedef  {import("../../../types").Dungeon} Config */
 
 // ── OVERVIEW ──
 /*
- * NAME:       MeetCute
- * APP:        Swipe-based dating app (Hinge/Tinder-style) with profile prompts,
- *             photo verification, matchmaking, messaging, premium tiers. Users
- *             create a profile with photos and prompts, swipe on potential
- *             matches, message, exchange numbers, and schedule dates. Premium
- *             subscribers get boosts, super-likes, and see-who-liked-you.
- * SCALE:      30,000 users, ~5.8M events, 121 days (2026-01-01 → 2026-05-01)
- * CORE LOOP:  profile created → photo uploaded → swipe right → match received → message sent → phone number exchanged → date scheduled
+ * NAME:       Kindred
+ * APP:        Mobile dating app (iOS, Android) for people who want a
+ *             relationship: build a profile with photos and prompts, like or
+ *             pass on profiles, match, open a chat, plan a date in the app, and
+ *             rate the date afterwards ("date feedback"). Free plan plus
+ *             Kindred+ ($29.99/month → $34.99 from 2026-08-18) and Kindred
+ *             Premier ($49.99/month). Sparks are premium likes with a note.
+ *             Verified Profiles (video selfie check) launches 2026-07-14.
+ * SCALE:      10,000 simulated members (≈4,500 sign up inside the window;
+ *             ≈1,750 of those never finish their profile and leave within
+ *             days), ~0.65M events, 120 days (2026-06-04 → 2026-10-01, UTC)
+ * CORE LOOP:  like sent → match created → conversation started → date planned
+ *             → date feedback submitted
+ * VALUE MOMENT: date planned
  *
- * EVENTS (17):
- *   photo uploaded (12) > swipe right (10) > swipe left (8) > app opened (8)
- *   > message sent (6) > message received (5) > profile viewed (5) > match received (4)
- *   > prompt answered (3) > bio updated (2) > boost activated (2)
- *   > profile created (1) > phone number exchanged (1) > date scheduled (1)
- *   > premium upgrade (1) > premium cancelled (1) > report user (1)
+ * EVENTS (21):
+ *   app opened > like sent > profile passed > message sent > profile viewed
+ *   > match created > paywall viewed > prompt edited > filters updated
+ *   > boost activated > conversation started > $experiment_started
+ *   > profile reported > account created > selfie verified > photos uploaded
+ *   > date planned > profile completed > date feedback submitted
+ *   > subscription started > subscription cancelled
  *
- * FUNNELS (4):
- *   - Onboarding:   profile created → photo uploaded → swipe right (75%)
- *   - Match Flow:   swipe right → match received → message sent (50%, reentry)
- *   - Date Funnel:  message sent → phone number exchanged → date scheduled (25%, reentry)
- *   - Monetization: app opened → boost activated → premium upgrade (20%)
+ * FUNNELS (7 declared):
+ *   - Onboarding (first funnel, two copies by acquisition_channel, H6):
+ *       account created → photos uploaded → profile completed (70%; TikTok 35%)
+ *   - Discover (session): app opened → selfie verified / like sent / profile
+ *       passed / profile viewed (first-fixed; selfie verified is a template the
+ *       hook keeps at most once per member, after launch)
+ *   - Chat (session): app opened → message sent ×6 (first-fixed; a message with
+ *       no open conversation never happens)
+ *   - Conversation: match created → conversation started → date planned → date
+ *       feedback submitted (engine 100%; the everything hook builds every match
+ *       from a like and decides each step, see below). Carries the Icebreakers
+ *       experiment (multipliers 1.0; the hook applies the effect)
+ *   - Upgrade (free members): paywall viewed → subscription started (9%)
  *
- * USER PROPS:  subscription, age_range, gender, looking_for, photo_count, total_matches, total_messages_sent, profile_completeness, Platform
- * SUPER PROPS: subscription, Platform
- * SCD PROPS:   subscription_tier (Free/Premium/Elite, monthly fuzzy, max 6)
+ * USER PROPS:  market, age_band, gender, seeking, relationship_goal,
+ *              photo_count, subscription_plan, acquisition_channel,
+ *              member_since, verified, "Experiment: Icebreakers"
+ * SUPER PROPS: subscription_plan (plan at event time), platform (ios/android,
+ *              from the member's phone), market (sticky per member)
+ * SCD PROPS:   none
  * GROUPS:      none
+ * WAREHOUSE:   paid_acquisition_daily (spend by paid channel),
+ *              chat_delivery_daily (message delivery health by platform),
+ *              subscription_bookings_daily (new subscriptions, list price,
+ *              bookings by plan and billing period)
+ * LOOKUPS:     none — every attribute is denormalized onto events/profiles
+ * SOUP:        Sunday-heavy dayOfWeekWeights; evening hourOfDayWeights for US
+ *              time zones plus London and Toronto (UTC)
+ *
+ * IDENTITY: a new member is identified at "account created" (isAuthEvent, first
+ * event, user_id + device_id). One device per member (avgDevicePerUser 1).
+ * Every event carries user_id; there is no anonymous pre-signup activity. The
+ * two onboarding steps after signup (photos uploaded, profile completed) carry
+ * user_id only; every other event also carries device_id. platform agrees with
+ * the engine's os field (iOS and iPadOS → ios, Android → android).
+ *
+ * DESIGN NOTES:
+ * - Matches come from likes. For each like the hook draws a match with
+ *   p = BASE_MATCH_RATE x photo keep (H2) x Spark multiplier (H3); a match lands
+ *   2-40 s after the like (25%, the other member had already liked you) or a
+ *   log-normal gap (median 6 h). Each match takes an engine Conversation unit
+ *   (or a clone) with its own match_id; unused units are dropped. The opener,
+ *   the date plan, and the feedback are drawn per match (H4, H9, H10), with
+ *   real gaps: opener after the match (hours_since_match), date plan days after
+ *   the opener, feedback 1-7 days after the plan (days_until_date) plus 10-40 h.
+ * - Matches per like also depend on gender (realism, not a story): x0.7 for
+ *   men, x1.45 for women, x1.0 for nonbinary members. photo_count, Sparks, and
+ *   plan are drawn independently of gender, so H2 and H3 reads are unaffected.
+ * - Messages: "message sent" carries the match_id of an open conversation (the
+ *   latest opener in the past 28 days); a message with no open conversation
+ *   never happens. chat_delivery_daily counts "message sent" only (openers are
+ *   not in it), which matches the H7 fault (openers were unaffected).
+ * - Window start: established members have conversations already running.
+ *   Each gets matches in the 28 days before June 4 at their in-window rate;
+ *   only the in-window steps (openers, messages, date plans, feedback) remain,
+ *   so June messages and dates do not ramp from zero.
+ * - Members who never finish their profile keep their signup steps and a few
+ *   days of browsing (app opened, profile viewed), then leave.
+ * - Subscriptions: one purchase per member (the first would-be purchase
+ *   decides, H8); paywall visits stop at that moment. 35% of paid members
+ *   cancel during the window at a random moment (members paid before June 4
+ *   from day one, new subscribers after 10 days); the plan reverts to free at
+ *   the cancellation.
+ * - Reports: 40% of engine report events are kept (about 1 report per 45
+ *   profile decisions before launch), then H1 thins fake-profile and scam reports.
+ * - Warehouse drift: chat_delivery_daily adds messages from members who opted
+ *   out of analytics (0-16% by day) and automated greetings / safety tips
+ *   (about 115 a day per platform, ±60%); subscription_bookings_daily adds store
+ *   purchases Mixpanel never received and same-day refunds; paid spend is a
+ *   paced budget, never derived from the day's signups.
+ * - retentionCurve shapes new members' activity; established members' activity
+ *   is flat across the window (DOW weights). Session funnels keep an active
+ *   day's events to a few sessions.
  */
 
 // ── HOOK STORIES ──
 /*
- * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable via
- * behavioral cohorts, raw-prop breakdowns, or funnel analysis.
+ * All effects are hidden: no flag properties. Dates live in the TIMELINE
+ * constants and are shared by hooks, stories, SQL, warehouse columns, and the
+ * timeline guide.
  *
- * -------------------------------------------------------------------------------------
- * 1. PHOTO MAGIC NUMBER (everything)
- * -------------------------------------------------------------------------------------
- * PATTERN: Sweet 2-5 photos uploaded → 2-4 extra cloned match-received events
- * per existing match. Over 6+ photos → match_score drops 35% on match-received
- * events (over-curated profile reads as fake; quality matches don't trust it).
- * No flag.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H1. VERIFIED PROFILES LAUNCH (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: Verified Profiles launches 2026-07-14. 55% of members are adopters
+ *   and verify in their next app session after a salted moment (existing
+ *   members within 21 days of launch, new members within 48 h of signup), so
+ *   about half of the members active after launch verify.
+ *   Reports with reason fake_profile or scam fall on a 21-day ramp to 0.4x
+ *   their pre-launch rate per profile decision; other reasons do not change.
+ * MIXPANEL: Insights, profile reported (report_reason in fake_profile, scam)
+ *   per 1,000 (like sent + profile passed), weekly; before Jul 14 vs from Aug 4.
+ * REAL WORLD: verification deters catfish accounts and romance scammers.
  *
- * HOW TO FIND IT IN MIXPANEL:
- *   Report 1: Matches per User by Photo-Count Bucket
- *   - Cohort A: users with 2-5 "photo uploaded"
- *   - Cohort B: users with 0-1
- *   - Event: "match received" → Total per user
- *   - Expected: ~4x activity-normalized (matches-per-swipe); the raw
- *     per-user ratio is smaller because sweet uploaders skew less active
+ * ─────────────────────────────────────────────────────────────────────────
+ * H2. PHOTO COUNT SWEET SPOT (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: share of would-be matches kept by profile photo_count: 1-2 photos
+ *   0.45, 3 photos 0.75, 4-6 photos 1.0, 7-9 photos 0.8.
+ * MIXPANEL: Insights, match created / like sent, breakdown user property
+ *   photo_count.
+ * REAL WORLD: a few good photos earn trust; a long gallery reads as curated.
  *
- *   Report 2: Avg match_score on Heavy Photo Uploaders
- *   - Cohort C: users with >= 6 "photo uploaded"
- *   - Cohort A: users with 2-5
- *   - Event: "match received" → AVG of match_score
- *   - Expected: C ~ 0.65x A (35% lower match quality)
+ * ─────────────────────────────────────────────────────────────────────────
+ * H3. SPARKS MATCH AT 3X (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: a Spark (like_type = spark) becomes a match 3x as often as a
+ *   standard like; the match carries match_source = spark.
+ * MIXPANEL: Insights, (match created where match_source = spark / like sent
+ *   where like_type = spark) vs the same for standard likes.
+ * REAL WORLD: a like with a note signals real interest.
  *
- * REAL-WORLD ANALOGUE: A few good photos signal authenticity; too many
- * curated shots read as catfish or staged.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H4. ICEBREAKERS EXPERIMENT (Conversation funnel experiment + everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: from 2026-07-22 matched members split 50/50. Icebreakers (suggested
+ *   openers) multiply the share of matches with an opener by 1.25 (60% →
+ *   75%) and the match → opener time by 0.6; 45% of variant openers have
+ *   opener_type = icebreaker.
+ * MIXPANEL: Funnels, match created → conversation started, totals, hold
+ *   match_id constant, 7-day window, breakdown "Experiment: Icebreakers";
+ *   median time to convert. Or the Experiments report on $experiment_started.
+ * REAL WORLD: a blank chat box is the hardest message to write.
  *
- * -------------------------------------------------------------------------------------
- * 2. WEEKEND SWIPE SURGE (everything)
- * -------------------------------------------------------------------------------------
- * PATTERN: Sunday swipes get heavy cloning (evening 5 extra clones = 6x,
- * daytime 2 extra = 3x) to overcome soup DOW weight deficit. No flag.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H5. SUCCESS CHURN (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: after each date rated 4-5 stars, the member leaves the app with
+ *   probability 0.45, 2-10 days later (paid members cancel, reason
+ *   met_someone).
+ * MIXPANEL: Retention, birth date feedback submitted (first time), breakdown
+ *   rating, return app opened, custom bracket day 14-27.
+ * REAL WORLD: a dating app that works loses the people it works for.
  *
- * HOW TO FIND IT IN MIXPANEL:
- *   Report 1: Swipe Volume by Day of Week
- *   - Insights > "swipe right" → Total → Breakdown: Day of Week
- *   - Expected: Sunday taller than other days
+ * ─────────────────────────────────────────────────────────────────────────
+ * H6. PAID CHANNEL ECONOMICS (first funnels + warehouse paid_acquisition_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: spend per Mixpanel signup $7 TikTok, $14 Meta, $22 Apple Search
+ *   Ads (paced daily budgets); TikTok signups finish their profile at 0.5x the
+ *   rate of every other channel, so spend per completed profile is level
+ *   between TikTok and Meta (1.0).
+ * MIXPANEL: Insights, account created by acquisition_channel joined to
+ *   paid_acquisition_daily.spend_usd; Funnels, account created → photos
+ *   uploaded → profile completed, 7-day window, breakdown acquisition_channel.
+ * REAL WORLD: cheap installs from a swipe-happy feed often never set up.
  *
- * REAL-WORLD ANALOGUE: Sunday Scaries drive swipe activity.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H7. ANDROID CHAT INCIDENT (everything + warehouse chat_delivery_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: 2026-08-24 to 2026-08-28, 60% of Android message sends in open
+ *   conversations fail and never fire "message sent". Openers and iOS are
+ *   untouched. The warehouse (which counts message sends) shows
+ *   service_status = major_outage and delivery_failure_rate ≈ 0.6 for android
+ *   on those days.
+ * MIXPANEL: Insights, message sent, daily, breakdown platform; Android/iOS
+ *   ratio on incident days vs 14 days either side; join the warehouse status.
+ * REAL WORLD: a bad Android release looks like "people stopped talking".
  *
- * -------------------------------------------------------------------------------------
- * 3. SUPER-LIKE EFFECT (everything)
- * -------------------------------------------------------------------------------------
- * PATTERN: Each is_super_like=true swipe clones 3 extra match-received events
- * within 5-120 minutes. No flag.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H8. KINDRED+ PRICE CHANGE (everything + warehouse subscription_bookings_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: on 2026-08-18 Kindred+ prices rise ~17%; Premier is unchanged.
+ *   30% of would-be Kindred+ buyers decline, so Kindred+ purchases per paywall
+ *   view are 0.7x and Kindred+ list-price bookings per view are 0.7 x 1.167 =
+ *   0.817x.
+ * MIXPANEL: Insights, subscription started (plan = plus) / paywall viewed,
+ *   before vs after Aug 18; bookings need list_price_usd from the warehouse.
+ * REAL WORLD: a price rise that loses more buyers than it gains per buyer.
  *
- * HOW TO FIND IT IN MIXPANEL:
- *   Report 1: Super-Like to Match Funnel
- *   - Funnels > "swipe right" (filter: is_super_like=true) → "match received"
- *   - vs same with is_super_like=false
- *   - Expected: super-like funnel ~ 3x higher conversion
+ * ─────────────────────────────────────────────────────────────────────────
+ * H9. DATE SPEED BY RELATIONSHIP GOAL (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: opener → date plan time is 1.5x for long_term and 0.6x for
+ *   short_term_fun, vs long_term_open and figuring_it_out (median 72 h).
+ * MIXPANEL: Funnels, conversation started → date planned, hold match_id, 30-day
+ *   window, median time to convert, breakdown relationship_goal.
+ * REAL WORLD: people looking for a partner take longer to commit to a first date.
  *
- * REAL-WORLD ANALOGUE: Super-likes dramatically lift match rates.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H10. FAST OPENERS PLAN MORE DATES (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: an opener within 24 h of the match leads to a planned date 32% of
+ *   the time vs 16% for slower openers (0.5x).
+ * MIXPANEL: Funnels, conversation started → date planned, hold match_id, 30-day
+ *   window, breakdown hours_since_match (≤ 24, > 24).
+ * REAL WORLD: momentum matters; a match that waits goes cold.
  *
- * -------------------------------------------------------------------------------------
- * 4. PREMIUM MATCH BOOST (everything)
- * -------------------------------------------------------------------------------------
- * PATTERN: Premium subscribers get 2x match events; Elite get 4x + cloned
- * profile-viewed events (see-who-liked-you). Reads subscription from profile.
+ * ═════════════════════════════════════════════════════════════════════════
+ * EXPECTED METRICS SUMMARY (measured: data/verify-dating, 2026-10-07, full fidelity,
+ * 10,000 members, 652,879 events)
+ * ═════════════════════════════════════════════════════════════════════════
+ * Hook | Metric                                        | Derivation              | Expected | Measured
+ * -----|-----------------------------------------------|-------------------------|----------|---------
+ * H1   | fake+scam reports / 1k decisions, after/before| FAKE_REPORT_KEEP        | 0.40     | 0.395 (10.23 → 4.04)
+ * H1   | other reasons / 1k decisions (control)        | unchanged               | 1.00     | 1.018 (11.79 → 12.01)
+ * H1   | selfie verified before launch                 | exact purity            | 0        | 0
+ * H2   | matches per like, 1-2 photos / 4-6 photos     | PHOTO_MATCH_KEEP[1]     | 0.45     | 0.483 (9.9% vs 20.5%)
+ * H2   | matches per like, 7-9 photos / 4-6 photos     | PHOTO_MATCH_KEEP[7]     | 0.80     | 0.790 (16.2% vs 20.5%)
+ * H3   | Spark match rate / standard like match rate   | SPARK_MATCH_MULT        | 3.00     | 3.045 (49.5% vs 16.3%)
+ * H4   | opener within 7 d per match, variant/control  | ICEBREAKER_CONV_MULT    | 1.25     | 1.267 (74.2% vs 58.6%)
+ * H4   | median hours match → opener, variant/control  | ICEBREAKER_DELAY_MULT   | 0.60     | 0.589 (8.3 vs 14.1 h)
+ * H4   | variant share of exposed members              | equal 2-arm hash        | 0.50     | 0.507
+ * H4   | icebreaker openers in Control or pre-test     | exact purity            | 0        | 0
+ * H5   | D14-27 retention, first date 4-5★ / 1-3★      | 1 − SUCCESS_CHURN_SHARE | 0.55     | 0.554 (48.1% vs 86.7%)
+ * H6   | spend per signup, TikTok / Apple Search Ads   | 7 / 22                  | 0.318    | 0.297 ($6.81 vs $22.94)
+ * H6   | 7-day profile completion, TikTok / others     | 35 / 70                 | 0.50     | 0.490 (33.9% vs 69.1%)
+ * H6   | spend per completed profile, TikTok / Meta    | (7 / 0.5) / 14          | 1.00     | 0.988 ($20.10 vs $20.34)
+ * H7   | Android/iOS message sends, incident / ±14 d   | 1 − CHAT_FAIL           | 0.40     | 0.411
+ * H7   | warehouse delivery_failure_rate, incident     | CHAT_FAIL               | 0.60     | 0.598
+ * H8   | Kindred+ purchases per paywall view, after/before | PLUS_KEEP_AFTER (≤, floor 0.85) | 0.70 | 0.680 (6.95% → 4.72%)
+ * H8   | Kindred+ list-price bookings per view, after/before | 0.7 × 34.99/29.99 (≤, floor 0.908) | 0.817 | 0.744
+ * H9   | median opener → date hours, long_term / base  | GOAL_TTC_MULT.long_term | 1.50     | 1.552 (109.6 h)
+ * H9   | median opener → date hours, short_term_fun / base | GOAL_TTC_MULT.short_term_fun | 0.60 | 0.596 (42.1 h)
+ * H10  | date planned within 30 d per opener, >24 h / ≤24 h | 0.16 / 0.32       | 0.50     | 0.483 (15.8% vs 32.7%)
+ * ═════════════════════════════════════════════════════════════════════════
  *
- * HOW TO FIND IT IN MIXPANEL:
- *   Report 1: Matches by Subscription Tier
- *   - Insights > "match received" → Total per user → Breakdown: subscription
- *   - Expected: Free ~ 1x, Premium ~ 2x, Elite ~ 4x
- *
- * REAL-WORLD ANALOGUE: Premium tiers boost visibility.
- *
- * -------------------------------------------------------------------------------------
- * 5. GHOSTING CHURN (everything)
- * -------------------------------------------------------------------------------------
- * PATTERN: Users with match-received but no message-sent within 48 hours lose
- * 80% of post-match events. No flag.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *   Report 1: Retention by Messaging Behavior
- *   - Retention starting "match received"
- *   - Cohort A: users with >= 1 "message sent" within 48 hours of match
- *   - Cohort B: rest
- *   - Expected: B drops sharply
- *
- * REAL-WORLD ANALOGUE: Non-responders churn.
- *
- * -------------------------------------------------------------------------------------
- * 6. BIO + PROMPT POWER USERS (everything)
- * -------------------------------------------------------------------------------------
- * PATTERN: Users with bio-updated AND 3+ prompt-answered events get 3 extra
- * cloned date-scheduled events per existing. No flag.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *   Report 1: Dates per User by Profile Effort
- *   - Cohort A: users with bio-updated AND >= 3 "prompt answered"
- *   - Cohort B: rest
- *   - Event: "date scheduled" → Total per user
- *   - Expected: 4x mechanism; the population-level rate ratio reads
- *     ~2x because the rest cohort is the low-activity tail whose
- *     messages co-occur with funnel dates (see story H6)
- *
- * REAL-WORLD ANALOGUE: Profile effort signals serious intent.
- *
- * -------------------------------------------------------------------------------------
- * 7. VALENTINE'S DAY SPIKE (everything)
- * -------------------------------------------------------------------------------------
- * PATTERN: Days 58-63 (V-Day window): profile-created events cloned 3x and
- * premium-upgrade events cloned 5x. No flag — discover via line chart by day.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *   Report 1: Signup Volume Over Time
- *   - Insights > "profile created" → Total → Line by day
- *   - Expected: spike ~ 3x days 58-63
- *
- * REAL-WORLD ANALOGUE: Love is expensive.
- *
- * -------------------------------------------------------------------------------------
- * 8. OFF-APP RETENTION (everything)
- * -------------------------------------------------------------------------------------
- * PATTERN: Users with phone-exchanged OR date-scheduled in first 14 days
- * get extra cloned app-open + swipe events past day 30. Non-milestone
- * users lose 80% of post-day-30 events. No flag.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *   Report 1: Retention by Milestone Cohort
- *   - Cohort A: users with phone-exchanged OR date-scheduled in first 14 days
- *   - Cohort B: rest
- *   - Expected: A ~ 60% D30 retention vs B ~ 20%
- *
- * REAL-WORLD ANALOGUE: Once they find someone IRL, app becomes irrelevant.
- *
- * -------------------------------------------------------------------------------------
- * 9. MATCH FLOW TIME-TO-CONVERT (funnel-post)
- * -------------------------------------------------------------------------------------
- * PATTERN: Elite users complete the MATCH FLOW funnel (swipe→match→message)
- * 1.4x faster (factor 0.71 on inter-event gaps); Free users 1.4x slower
- * (factor 1.4). v1.6: scoped to Match Flow only — the v1.5 hook stretched
- * every funnel, leaking an undocumented tier-speed pattern into
- * Onboarding/Date Funnel/Monetization.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *   Report 1: Match Flow Median Time-to-Convert by Tier
- *   - Funnels > "swipe right" → "match received" → "message sent"
- *   - Measure: Median time to convert
- *   - Breakdown: subscription
- *   - Expected: Elite ~ 0.71x; Free ~ 1.4x (both compressed toward 1 by
- *     organic cross-instance pairings; see the H9 story narrative)
- *
- *   NOTE (funnel-post measurement): visible via Mixpanel funnel median
- *   TTC and via emulateBreakdown's timeToConvert (the H9 story asserts
- *   the delta itself at a 33.6h conversion window = 24h generative
- *   window × 1.4 max stretch). Cross-event MIN→MIN SQL queries on raw
- *   events do NOT show this — funnel-post adjusts gaps within funnel
- *   instances, not across the user's full event history.
- *
- * REAL-WORLD ANALOGUE: Premium notifications + boost surface matches faster.
- *
- * -------------------------------------------------------------------------------------
- * 10. AGE RANGE AFFECTS DATE CONVERSION (funnel-pre)
- * -------------------------------------------------------------------------------------
- * PATTERN: On the Date Funnel (message sent → phone number exchanged →
- * date scheduled), users aged 25-34 convert at 1.3x baseline; 40+ at 0.6x.
- * Scoped to the funnel containing "date scheduled".
- *
- * HOW TO FIND IT IN MIXPANEL:
- *   Report 1: Date Funnel Conversion by Age Range
- *   - Funnels > "message sent" → "phone number exchanged" → "date scheduled"
- *   - Breakdown: age_range
- *   - Expected: 25-29 / 30-34 ~ 1.3x baseline; 40+ ~ 0.6x
- *
- * REAL-WORLD ANALOGUE: Peak dating age ranges convert faster to in-person
- * dates; older users are more selective.
- *
- * =====================================================================================
- * EXPECTED METRICS SUMMARY (Measured = full fidelity, 30K users / 5,839,522 events)
- * =====================================================================================
- *
- * Story id                    | Metric                              | Expected     | Measured
- * ----------------------------|-------------------------------------|--------------|---------
- * H1-photo-magic-number[0]    | over/low avg match_score            | [0.60, 0.73] | 0.659
- * H1-photo-magic-number[1]    | sweet/low adj-match-per-swipe DD    | [2.8, 5.2]   | 4.10
- * H2-sunday-swipe-surge[0]    | Sunday / mean(other DOW) swipes     | [2.0, 6.0]   | 2.38
- * H3-super-like-effect[0]     | measured/predicted additive lift    | [0.75, 1.25] | 0.881
- * H4-premium-match-boost[0]   | Elite/Free avg matches              | [3.2, 4.6]   | 3.99
- * H4-premium-match-boost[1]   | Premium/Free avg matches            | [1.6, 2.4]   | 2.01
- * H4-premium-match-boost[2]   | Elite mod-4 share (Free placebo)    | ≥0.9 (≤0.4)  | 0.987 (0.248)
- * H5-ghosting-churn[0]        | pre-calibrated keep / knob 0.2      | [0.6, 1.4]   | 0.982
- * H6-bio-prompt-power-users[0]| power/rest dates-per-message        | [1.5, 3.4]   | 2.09
- * H6-bio-prompt-power-users[1]| power mod-4 share (rest placebo)    | ≥0.9 (≤0.4)  | 0.906 (0.378)
- * H7-vday-spike[0]            | V-Day window/baseline daily signups | [2.0, 3.3]   | 2.30
- * H7-vday-spike[1]            | V-Day window/baseline daily upgrades| [3.5, 5.6]   | 4.25
- * H8-offapp-retention[0]      | rest post-30d share / predicted     | [0.7, 1.35]  | 1.04
- * H9-match-flow-ttc[0]        | Elite/Premium median TTC (emulator) | [0.55, 0.92] | 0.820
- * H9-match-flow-ttc[1]        | Free/Premium median TTC (emulator)  | [1.05, 1.55] | 1.11
- * H10-age-date-conversion[0]  | 25-34/base date-funnel conv ratio   | [1.05, 1.45] | 1.28
- * H10-age-date-conversion[0]  | 40+/base date-funnel conv ratio     | [0.45, 0.88] | 0.604
+ * Noise notes: H8 rests on about 200 Kindred+ purchases after the change, so
+ * its reads use the knob as target with a half-effect floor (STRONG above the
+ * ±10% band, which happens on some seeds); its bookings read also moves with
+ * the billing-period mix. H7 rests on about 900 Android sends on incident days
+ * (relative SE about 5%). H10's slow arm has about 430 dates (relative SE
+ * about 5%). Premier purchases per paywall view are not engineered (2.46% →
+ * 2.67% across the price change, z = 0.7).
  */
 
 // ── SCALE ──
 const SEED = "meetcute";
-const NUM_USERS = 30_000;
-const DATASET_START = "2026-01-01T00:00:00Z";
-const DATASET_END = "2026-05-01T23:59:59Z";
-const EVENTS_PER_DAY = 1.5;
+const NUM_USERS = 10_000;
+const DATASET_START = "2026-06-04T00:00:00Z";
+const DATASET_END = "2026-10-01T23:59:59Z"; // 120 days
+const EVENTS_PER_DAY = 1.2;
 const token = process.env.MP_TOKEN || "your-mixpanel-token";
 
 const chance = u.initChance(SEED);
 
-// ── KNOBS (tweak these to reshape stories) ──
-const PHOTO_SWEET_MIN = 2;
-const PHOTO_SWEET_MAX = 5;
-const PHOTO_OVER_THRESHOLD = 6;
-const PHOTO_OVER_SCORE_FACTOR = 0.65;
+// ── TIMELINE (shared by hooks, stories, SQL, warehouse columns, guides) ──
+const VERIFY_LAUNCH = "2026-07-14T00:00:00Z";       // Verified Profiles (video selfie check) launches
+const ICEBREAKERS_START = "2026-07-22T00:00:00Z";   // "Icebreakers" A/B test starts in new-match chats
+const PLUS_PRICE_CHANGE = "2026-08-18T00:00:00Z";   // Kindred+ list prices rise
+const CHAT_INCIDENT_START = "2026-08-24T00:00:00Z"; // Android chat incident starts (replies in open chats fail)
+const CHAT_INCIDENT_END = "2026-08-29T00:00:00Z";   // exclusive (5 days: Aug 24-28)
 
-const SUNDAY_EVENING_CLONES = 5;
-const SUNDAY_DAYTIME_CLONES = 2;
+const ms = (iso) => dayjs.utc(iso).valueOf();
+const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
+const MIN_MS = 60_000;
+const D0 = DATASET_START.slice(0, 10);
+const WINDOW_DAYS = 120;
 
-const SUPER_LIKE_MATCH_CLONES = 3;
+// ── WEEKLY AND DAILY RHYTHM (soup) ──
+// Sun..Sat. Sunday evening is the busiest dating hour of the week; Friday and
+// Saturday nights people are out, not swiping.
+const DOW_WEIGHTS = [1.25, 1.08, 1.0, 1.0, 0.96, 0.8, 0.84];
+// UTC hours. Members are mostly in US time zones (evening 19-23 local = 23-07
+// UTC across ET..PT), with London and Toronto adding 17-23 UTC.
+const HOUR_WEIGHTS = [1.0, 1.0, 0.96, 0.9, 0.78, 0.6, 0.42, 0.3, 0.22, 0.18, 0.18, 0.2,
+	0.25, 0.3, 0.36, 0.42, 0.48, 0.55, 0.62, 0.68, 0.74, 0.8, 0.88, 0.95];
 
-const PREMIUM_MATCH_MULT = 2;
-const ELITE_MATCH_MULT = 4;
+// ── KNOBS ──
+// H1 Verified Profiles: fake-profile and scam reports fall as verification spreads
+const VERIFY_ADOPT_SHARE = 0.55;    // share of members who adopt verification (salted per member)
+const VERIFY_RAMP_DAYS = 21;        // existing members verify on a salted day in the 3 weeks after launch
+const VERIFY_NEW_MEMBER_HOURS = 48; // members who join after launch verify within 2 days of signup
+const FAKE_REPORT_KEEP = 0.4;       // share of fake-profile/scam reports left once the ramp is done
+const FAKE_REASONS = ["fake_profile", "scam"];
+const REPORT_KEEP = 0.4;            // realism: share of standalone report events kept (report rate per view)
 
-const GHOSTING_WINDOW_HOURS = 48;
-const GHOSTING_DROP_LIKELIHOOD = 80;
+// H2 photo count sweet spot: share of would-be matches kept, by profile photo_count
+const PHOTO_MATCH_KEEP = { 1: 0.45, 2: 0.45, 3: 0.75, 4: 1, 5: 1, 6: 1, 7: 0.8, 8: 0.8, 9: 0.8 };
+const BASE_MATCH_RATE = 0.2;       // chance a standard like becomes a match (4-6 photos)
+// realism (not a story): men like freely and match less per like; women like selectively and match more
+const GENDER_MATCH_MULT = { man: 0.7, woman: 1.45, nonbinary: 1.0 };
 
-const BIO_PROMPT_THRESHOLD = 3;
-const BIO_PROMPT_DATE_CLONE_MULT = 3;
+// H3 Sparks (premium likes) match at 3x a standard like
+const SPARK_MATCH_MULT = 3;
+const SPARK_SHARE = { free: 0.03, plus: 0.07, premier: 0.12 }; // share of a member's likes sent as Sparks, by plan at the time
 
-const VDAY_WINDOW_START_DAY = 58;
-const VDAY_WINDOW_END_DAY = 63;
-const VDAY_SIGNUP_CLONES = 2;
-const VDAY_UPGRADE_CLONES = 4;
+// match timing: some likes land on someone who already liked you (instant match)
+const INSTANT_MATCH_SHARE = 0.25;
+const MATCH_GAP_MEDIAN_H = 6;
 
-const MILESTONE_WINDOW_DAYS = 14;
-const RETENTION_CUTOFF_DAYS = 30;
-const RETENTION_TARGET_PCT = 0.3;
-const OFFAPP_DROP_LIKELIHOOD = 80;
+// H4 Icebreakers experiment (new-match chat shows suggested openers)
+const ICEBREAKERS_EXPERIMENT = "Icebreakers";
+const ICEBREAKERS_VARIANT = "Icebreakers";
+const EXP_KEY = `Experiment: ${ICEBREAKERS_EXPERIMENT}`;
+const CONV_BASE = 0.6;              // share of matches where the member sends an opener
+const ICEBREAKER_CONV_MULT = 1.25;
+const ICEBREAKER_DELAY_MULT = 0.6;  // match → opener time
+const ICEBREAKER_OPENER_SHARE = 0.45; // variant openers that use a suggested icebreaker
+const OPENER_MEDIAN_H = 14;
+const OPENER_SIGMA = 1.25;
 
-const FUNNEL_TTC_ELITE = 0.71;
-const FUNNEL_TTC_FREE = 1.4;
+// H5 success churn: a good first date takes members off the app
+const SUCCESS_CHURN_SHARE = 0.45;   // chance a 4-5 star date takes the member off the app
+const SUCCESS_CHURN_DAY_MIN = 2;
+const SUCCESS_CHURN_DAY_MAX = 10;
+const POSITIVE_RATING = 4;
 
-const AGE_CONV_BOOST = 1.3;
-const AGE_CONV_DROP = 0.6;
+// H6 paid acquisition (warehouse paid_acquisition_daily) + onboarding by channel
+const PAID_CHANNELS = ["meta_ads", "tiktok_ads", "apple_search_ads"];
+const CPI_USD = { meta_ads: 14, tiktok_ads: 7, apple_search_ads: 22 }; // window spend per Mixpanel signup
+const CHANNEL_WEIGHTS = { organic: 30, referral: 12, meta_ads: 22, tiktok_ads: 22, apple_search_ads: 14 };
+const ONBOARD_CONV = 70;
+const TIKTOK_ONBOARD_MULT = 0.5;
+const ONBOARD_TTC_H = 2;
+const BORN_PCT = 45;
+const DAILY_BUDGET_USD = Object.fromEntries(PAID_CHANNELS.map((ch) => {
+	const totalW = Object.values(CHANNEL_WEIGHTS).reduce((a, b) => a + b, 0);
+	return [ch, CPI_USD[ch] * (NUM_USERS * BORN_PCT / 100) * (CHANNEL_WEIGHTS[ch] / totalW) / WINDOW_DAYS];
+}));
+const SPEND_FLAT_SHARE = 0.4;
+const SPEND_WEEKDAY = (() => {
+	const m = DOW_WEIGHTS.reduce((a, b) => a + b, 0) / DOW_WEIGHTS.length;
+	return DOW_WEIGHTS.map((w) => SPEND_FLAT_SHARE + (1 - SPEND_FLAT_SHARE) * w / m);
+})();
+const SPEND_NOISE = 0.12;
+const PLATFORM_INSTALL_INFLATION = 1.18; // ad networks claim more installs than Mixpanel signups
+const CPC_USD = { meta_ads: 1.6, tiktok_ads: 0.9, apple_search_ads: 2.4 };
+const CTR = { meta_ads: 0.011, tiktok_ads: 0.008, apple_search_ads: 0.06 };
 
-// ── HELPER FUNCTIONS ──
-function handleFunnelPreHooks(record, meta) {
-	// H10: Age range affects date conversion — 25-34 +30%, 40+ -40%
-	const isDateFunnel = meta.funnel?.sequence?.includes("date scheduled");
-	if (isDateFunnel) {
-		const age = meta.profile?.age_range;
-		if (age === "25-29" || age === "30-34") {
-			record.conversionRate = Math.min(95, Math.round(record.conversionRate * AGE_CONV_BOOST));
-		} else if (age === "40+") {
-			record.conversionRate = Math.round(record.conversionRate * AGE_CONV_DROP);
-		}
+// H7 Android chat incident (warehouse chat_delivery_daily)
+const CHAT_FAIL = 0.6;              // share of Android sends that fail during the incident
+const UNTRACKED_MESSAGE_SHARE = 0.08; // mean share of delivered messages from members who opted out of analytics (varies 0-16% by day)
+const SYSTEM_MESSAGES_PER_DAY = { ios: 120, android: 110 }; // automated match greetings and safety tips (±60% by day)
+
+// H8 Kindred+ price change (warehouse subscription_bookings_daily)
+const PRICES = {
+	plus: { "1_month": [29.99, 34.99], "3_month": [74.99, 86.99], "6_month": [119.99, 139.99] },
+	premier: { "1_month": [49.99, 49.99], "3_month": [119.99, 119.99], "6_month": [179.99, 179.99] },
+};
+const PLUS_KEEP_AFTER = 0.7;        // share of would-be Kindred+ purchases kept after the change
+const UPGRADE_CONV = 9;            // share of free members' paywall visits that end in a purchase
+const CANCEL_SHARE = 0.35;          // paid members who cancel during the window (first eligible cancel event)
+const CANCEL_MIN_DAYS = 10;
+const STORE_UNTRACKED_SHARE = 0.12; // plan-days with one store purchase Mixpanel never received
+const REFUND_SHARE = 0.05;          // plan-days with one same-day refund
+
+// H9 time from first message to a planned date, by relationship goal
+const DATE_GAP_MEDIAN_H = 72;
+const DATE_GAP_SIGMA = 0.5;
+const GOAL_TTC_MULT = { long_term: 1.5, long_term_open: 1, figuring_it_out: 1, short_term_fun: 0.6 };
+
+// H10 fast openers plan more dates
+const FAST_OPENER_HOURS = 24;
+const DATE_RATE_FAST = 0.32;
+const DATE_RATE_SLOW = 0.16;
+const FEEDBACK_RATE = 0.8;
+const CONV_OPEN_DAYS = 28;          // a conversation takes follow-up messages for 4 weeks
+
+// window start: established members have conversations already running
+const PREWINDOW_DAYS = 28;
+const NONCOMPLETER_DAYS = 4;        // members who never finish their profile browse for a few days, then leave
+
+// ── DATA ──
+const weighted = (obj) => Object.entries(obj).flatMap(([k, w]) => Array(w).fill(isNaN(Number(k)) ? k : Number(k)));
+const MARKETS = { "New York": 20, "Los Angeles": 14, Chicago: 10, Austin: 7, "San Francisco": 7, "Washington DC": 7, Boston: 6, Miami: 6, Seattle: 6, Denver: 5, London: 7, Toronto: 5 };
+const PHOTO_WEIGHTS = { 1: 4, 2: 8, 3: 14, 4: 20, 5: 20, 6: 16, 7: 8, 8: 6, 9: 4 };
+const GOAL_WEIGHTS = { long_term: 32, long_term_open: 25, figuring_it_out: 23, short_term_fun: 20 };
+const RATING_WEIGHTS = { 1: 6, 2: 10, 3: 22, 4: 34, 5: 28 };
+
+// ── HELPERS ──
+const salt = (uid, tag) => hashFloat(`${uid}|${tag}`);
+const round1 = (n) => Math.round(n * 10) / 10;
+const round2 = (n) => Math.round(n * 100) / 100;
+const T = (e) => dayjs.utc(e.time).valueOf();
+const iso = (t) => new Date(t).toISOString();
+const dayKey = (t) => new Date(t).toISOString().slice(0, 10);
+const byT = (a, b) => T(a) - T(b);
+const logNormal = (sigma) => Math.exp(chance.normal({ mean: 0, dev: sigma }));
+const jitter = (key, spread) => 1 + (hashFloat(key) - 0.5) * 2 * spread;
+const inChatIncident = (t) => t >= ms(CHAT_INCIDENT_START) && t < ms(CHAT_INCIDENT_END);
+const price = (plan, period, t) => (PRICES[plan]?.[period] ?? [0, 0])[t >= ms(PLUS_PRICE_CHANGE) ? 1 : 0];
+const paidSpend = (date, ch) => round2(DAILY_BUDGET_USD[ch] * SPEND_WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()] * jitter(`spend|${date}|${ch}`, SPEND_NOISE));
+const pickWeighted = (obj, r) => {
+	const entries = Object.entries(obj);
+	const total = entries.reduce((s, [, w]) => s + w, 0);
+	let acc = 0;
+	for (const [k, w] of entries) {
+		acc += w / total;
+		if (r < acc) return k;
 	}
-	return record;
+	return entries[entries.length - 1][0];
+};
+const UNIT_STEPS = ["match created", "conversation started", "date planned", "date feedback submitted"];
+const ONBOARDING = new Set(["account created", "photos uploaded", "profile completed"]);
+const BROWSE_ONLY = new Set(["app opened", "profile viewed"]);
+
+function handleUserHook(profile, meta) {
+	const uid = profile.distinct_id;
+	const g = profile.gender;
+	profile.seeking = g === "man"
+		? (salt(uid, "seek") < 0.93 ? "women" : salt(uid, "seek2") < 0.5 ? "men" : "everyone")
+		: g === "woman"
+			? (salt(uid, "seek") < 0.88 ? "men" : salt(uid, "seek2") < 0.5 ? "women" : "everyone")
+			: "everyone";
+	if (meta.userIsBornInDataset) {
+		profile.subscription_plan = "free";
+		profile.member_since = dayKey(dayjs.utc(profile.created ?? meta.user.created).valueOf());
+		return profile;
+	}
+	const tenureDays = Math.floor(salt(uid, "tenure") * (ms(DATASET_START) - ms("2024-01-01T00:00:00Z")) / DAY_MS);
+	profile.member_since = dayjs.utc("2024-01-01T00:00:00Z").add(tenureDays, "day").format("YYYY-MM-DD");
+	profile.subscription_plan = pickWeighted({ free: 72, plus: 20, premier: 8 }, salt(uid, "plan"));
+	return profile;
 }
 
-function handleFunnelPostHooks(record, meta) {
-	// H9: Match Flow TTC scaled by subscription tier. Scoped to the Match
-	// Flow funnel only — the documented story (and the Mixpanel report it
-	// teaches) is Match Flow median TTC; the v1.5 hook stretched EVERY
-	// funnel, leaking an undocumented tier-speed pattern into
-	// Onboarding/Date Funnel/Monetization.
-	if (meta?.funnel?.name !== "Match Flow") return record;
-	const segment = meta?.profile?.subscription;
-	if (Array.isArray(record) && record.length > 1) {
-		const factor = (
-			segment === "Elite" ? FUNNEL_TTC_ELITE :
-			segment === "Free" ? FUNNEL_TTC_FREE :
-			1.0
-		);
-		if (factor !== 1.0) {
-			for (let i = 1; i < record.length; i++) {
-				const prev = dayjs(record[i - 1].time);
-				const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-				record[i].time = prev.add(newGap, "milliseconds").toISOString();
-			}
+function handleEverything(events, meta) {
+	if (!events.length) return events;
+	const profile = meta.profile;
+	const uid = profile.distinct_id;
+	const BEGIN = ms(DATASET_START), END = ms(DATASET_END);
+	const signup = events.find((e) => e.event === "account created");
+	const birthMs = signup ? T(signup) : null;
+
+	// ── platform: the member's phone (one device per member) ──
+	const osEv = events.find((e) => e.device_id && e.os) || events.find((e) => e.os);
+	const platform = osEv && osEv.os === "Android" ? "android" : "ios";
+	const stampPlan = (evs, planAt) => {
+		for (const e of evs) {
+			e.platform = platform;
+			e.subscription_plan = planAt(T(e));
+		}
+	};
+
+	// ── members who never finish their profile browse briefly, then leave ──
+	if (signup && !events.some((e) => e.event === "profile completed")) {
+		const lim = birthMs + NONCOMPLETER_DAYS * DAY_MS;
+		events = events.filter((e) => ONBOARDING.has(e.event) || (BROWSE_ONLY.has(e.event) && T(e) < lim));
+		if (profile[EXP_KEY] !== undefined) delete profile[EXP_KEY];
+		profile.subscription_plan = "free";
+		profile.verified = false;
+		stampPlan(events, () => "free");
+		return events;
+	}
+
+	// ── subscriptions: one purchase; H8 Kindred+ price change; cancellations ──
+	const initialPlan = profile.subscription_plan || "free";
+	// the member's first would-be purchase decides: after the Kindred+ price
+	// change, a share of would-be Plus buyers decline and do not buy in the window.
+	// Paywall visits stop at that moment either way, so paywall traffic is the
+	// same with or without the price change.
+	const firstBuy = events.filter((e) => e.event === "subscription started").sort(byT)[0] || null;
+	const decideT = firstBuy ? T(firstBuy) : Infinity;
+	let purchase = firstBuy;
+	if (firstBuy && firstBuy.plan === "plus" && decideT >= ms(PLUS_PRICE_CHANGE) && salt(uid, "plus-price") >= PLUS_KEEP_AFTER) purchase = null;
+	const cancelEvents = events.filter((e) => e.event === "subscription cancelled").sort(byT);
+	const cancelTemplate = cancelEvents[0] || null;
+	const paidFrom = initialPlan !== "free" ? BEGIN : purchase ? T(purchase) : null;
+	let cancel = null;
+	if (paidFrom !== null && salt(uid, "cancel") < CANCEL_SHARE) {
+		// a steady hazard: any of the member's eligible cancel moments, not the first
+		// (members paid before the window can cancel from day one; new subscribers after a first stretch)
+		const eligible = cancelEvents.filter((e) => T(e) >= (paidFrom === BEGIN ? BEGIN : paidFrom + CANCEL_MIN_DAYS * DAY_MS));
+		cancel = eligible.length ? eligible[Math.floor(salt(uid, "cancel-pick") * eligible.length)] : null;
+	}
+	const buyT = purchase ? T(purchase) : Infinity;
+	events = events.filter((e) => {
+		if (e.event === "subscription started") return e === purchase;
+		if (e.event === "subscription cancelled") return e === cancel;
+		if (e.event === "paywall viewed" && T(e) > decideT) return false;
+		return true;
+	});
+	let cancelT = cancel ? T(cancel) : Infinity;
+	const planAt = (t) => (t >= cancelT ? "free" : t >= buyT ? purchase.plan : initialPlan);
+
+	// ── like types: Sparks by plan at the time ──
+	// each member's own Spark habit scatters around their plan's allowance (x0.5-1.5)
+	const likes = events.filter((e) => e.event === "like sent").sort(byT);
+	const sparkHabit = 0.5 + salt(uid, "spark-habit");
+	for (const l of likes) {
+		l.like_type = hashFloat(`${l.insert_id}|spark`) < (SPARK_SHARE[planAt(T(l))] ?? SPARK_SHARE.free) * sparkHabit ? "spark" : "standard";
+	}
+
+	// ── conversation units (match → opener → date → feedback), one per match ──
+	const pool = new Map();
+	const templates = {};
+	const exposures = [];
+	for (const e of events) {
+		if (e.event === "$experiment_started") { exposures.push(e); continue; }
+		if (!UNIT_STEPS.includes(e.event)) continue;
+		if (!templates[e.event]) templates[e.event] = { ...e }; // a copy: pool events are mutated below
+		if (!pool.has(e.match_id)) pool.set(e.match_id, {});
+		pool.get(e.match_id)[e.event] = e;
+	}
+	const poolUnits = [...pool.values()];
+	const haveTemplates = UNIT_STEPS.every((s) => templates[s]);
+	const variant = (exposures.length && profile[EXP_KEY] !== undefined) ? profile[EXP_KEY] : null;
+
+	// H2 + H3: which likes become matches
+	const photoKeep = PHOTO_MATCH_KEEP[profile.photo_count] ?? 1;
+	const genderMult = GENDER_MATCH_MULT[profile.gender] ?? 1;
+	const slots = [];
+	if (haveTemplates) {
+		for (const l of likes) {
+			const spark = l.like_type === "spark";
+			const p = Math.min(0.95, BASE_MATCH_RATE * genderMult * photoKeep * (spark ? SPARK_MATCH_MULT : 1));
+			if (!chance.bool({ likelihood: p * 100 })) continue;
+			const gap = chance.bool({ likelihood: INSTANT_MATCH_SHARE * 100 })
+				? chance.integer({ min: 2, max: 40 }) * 1000
+				: Math.min(7 * DAY_MS, MATCH_GAP_MEDIAN_H * HOUR_MS * logNormal(1.0));
+			slots.push({ matchT: T(l) + gap, source: spark ? "spark" : "like" });
+		}
+		// established members: conversations already running at the window start
+		if (!signup) {
+			const x = slots.length * PREWINDOW_DAYS / WINDOW_DAYS;
+			const n = Math.floor(x) + (chance.bool({ likelihood: (x % 1) * 100 }) ? 1 : 0);
+			for (let i = 0; i < n; i++) slots.push({ matchT: BEGIN - chance.floating({ min: 0.01, max: PREWINDOW_DAYS }) * DAY_MS, source: "like", pre: true });
 		}
 	}
-	return record;
+
+	// per-match pipeline
+	const goalMult = GOAL_TTC_MULT[profile.relationship_goal] ?? 1;
+	const plans = slots.map((s) => {
+		const isIce = variant === ICEBREAKERS_VARIANT && s.matchT >= ms(ICEBREAKERS_START);
+		const enrolled = variant !== null && s.matchT >= ms(ICEBREAKERS_START);
+		const delayH = Math.min(14 * 24, OPENER_MEDIAN_H * logNormal(OPENER_SIGMA) * (isIce ? ICEBREAKER_DELAY_MULT : 1));
+		const convT = s.matchT + delayH * HOUR_MS;
+		const hasConv = chance.bool({ likelihood: CONV_BASE * (isIce ? ICEBREAKER_CONV_MULT : 1) * 100 });
+		const opener = isIce && chance.bool({ likelihood: ICEBREAKER_OPENER_SHARE * 100 }) ? "icebreaker" : null;
+		const hasDate = hasConv && chance.bool({ likelihood: (delayH <= FAST_OPENER_HOURS ? DATE_RATE_FAST : DATE_RATE_SLOW) * 100 });
+		const dateGapH = DATE_GAP_MEDIAN_H * logNormal(DATE_GAP_SIGMA) * goalMult;
+		const dateT = convT + dateGapH * HOUR_MS;
+		const daysUntil = chance.integer({ min: 1, max: 7 });
+		const hasFb = hasDate && chance.bool({ likelihood: FEEDBACK_RATE * 100 });
+		const fbT = dateT + daysUntil * DAY_MS + chance.integer({ min: 10 * 60, max: 40 * 60 }) * MIN_MS;
+		const rating = Number(chance.weighted(Object.keys(RATING_WEIGHTS), Object.values(RATING_WEIGHTS)));
+		const again = rating >= POSITIVE_RATING ? chance.bool({ likelihood: 80 }) : chance.bool({ likelihood: 8 });
+		return { ...s, isIce, enrolled, delayH, convT, hasConv, opener, hasDate, dateT, daysUntil, hasFb, fbT, rating, again };
+	});
+
+	// H5: success churn — after each good date (4-5 stars) the member leaves the
+	// app with probability SUCCESS_CHURN_SHARE, 2-10 days later. The earliest
+	// such date ends their activity.
+	let cut = Infinity;
+	for (const p of plans.filter((x) => x.hasFb && x.fbT >= BEGIN && x.fbT <= END).sort((a, b) => a.fbT - b.fbT)) {
+		if (p.fbT >= cut) break;
+		if (p.rating >= POSITIVE_RATING && chance.bool({ likelihood: SUCCESS_CHURN_SHARE * 100 })) {
+			cut = p.fbT + chance.floating({ min: SUCCESS_CHURN_DAY_MIN, max: SUCCESS_CHURN_DAY_MAX }) * DAY_MS;
+			break;
+		}
+	}
+
+	// materialize units
+	const unitEvents = [];
+	const conversations = []; // { id, convT }
+	let poolIdx = 0;
+	for (const p of plans) {
+		if (p.matchT >= cut) continue;
+		const src = poolUnits[poolIdx++] || null;
+		const id = src && src["match created"] ? src["match created"].match_id : `m_${chance.hash({ length: 12 })}`;
+		const put = (step, t, set) => {
+			if (t >= cut) return;
+			const base = src && src[step];
+			const ev = base || cloneEvent(templates[step], { time: iso(t) });
+			ev.time = iso(t);
+			ev.match_id = id;
+			Object.assign(ev, set);
+			unitEvents.push(ev);
+		};
+		put("match created", p.matchT, { match_source: p.source });
+		if (!p.hasConv) continue;
+		const convSet = { hours_since_match: round1(p.delayH) };
+		if (p.opener) convSet.opener_type = p.opener;
+		put("conversation started", p.convT, convSet);
+		if (p.convT < cut) conversations.push({ id, convT: p.convT });
+		if (!p.hasDate) continue;
+		put("date planned", p.dateT, { days_until_date: p.daysUntil });
+		if (!p.hasFb) continue;
+		put("date feedback submitted", p.fbT, { rating: p.rating, would_meet_again: p.again });
+	}
+	events = events.filter((e) => !UNIT_STEPS.includes(e.event) && e.event !== "$experiment_started");
+
+	// H5 cut on everything else; a paid member cancels when they leave
+	if (cut < Infinity) {
+		events = events.filter((e) => T(e) < cut || ONBOARDING.has(e.event));
+		if (planAt(cut) !== "free" && cancelTemplate) {
+			const tc = cut - chance.integer({ min: 30, max: 24 * 60 }) * MIN_MS;
+			events = events.filter((e) => e.event !== "subscription cancelled");
+			const c = cancel || cloneEvent(cancelTemplate, { time: iso(tc) });
+			c.time = iso(tc);
+			c.cancel_reason = "met_someone";
+			events.push(c);
+			cancel = c;
+			cancelT = tc;
+		}
+	}
+
+	// ── messages: follow-ups in open conversations (a message with no open
+	// conversation never happens) ──
+	conversations.sort((a, b) => a.convT - b.convT);
+	events = events.filter((e) => {
+		if (e.event !== "message sent") return true;
+		const t = T(e);
+		if (t >= cut) return false;
+		let hit = null;
+		for (let i = conversations.length - 1; i >= 0; i--) {
+			const c = conversations[i];
+			if (c.convT <= t && t < c.convT + CONV_OPEN_DAYS * DAY_MS) { hit = c; break; }
+		}
+		if (!hit) return false;
+		e.match_id = hit.id;
+		// H7: Android sends fail during the incident
+		if (platform === "android" && inChatIncident(t) && chance.bool({ likelihood: CHAT_FAIL * 100 })) return false;
+		return true;
+	});
+
+	// ── H1: reports; fake-profile and scam reports fall after Verified Profiles ──
+	const launch = ms(VERIFY_LAUNCH);
+	events = events.filter((e) => {
+		if (e.event !== "profile reported") return true;
+		if (!chance.bool({ likelihood: REPORT_KEEP * 100 })) return false;
+		const t = T(e);
+		if (FAKE_REASONS.includes(e.report_reason) && t >= launch) {
+			const keep = 1 - (1 - FAKE_REPORT_KEEP) * Math.min(1, (t - launch) / (VERIFY_RAMP_DAYS * DAY_MS));
+			return chance.bool({ likelihood: keep * 100 });
+		}
+		return true;
+	});
+
+	// ── Verified Profiles adoption: one selfie check per adopter, after launch ──
+	const selfies = events.filter((e) => e.event === "selfie verified");
+	let verifiedEv = null;
+	if (selfies.length && salt(uid, "verify") < VERIFY_ADOPT_SHARE) {
+		const adoptT = birthMs && birthMs >= launch
+			? birthMs + salt(uid, "verify-day") * VERIFY_NEW_MEMBER_HOURS * HOUR_MS
+			: launch + salt(uid, "verify-day") * VERIFY_RAMP_DAYS * DAY_MS;
+		// verified in the next app session after the adoption moment
+		const session = events.filter((e) => e.event === "app opened" && T(e) >= adoptT && T(e) < adoptT + VERIFY_RAMP_DAYS * DAY_MS).sort(byT)[0];
+		if (session) {
+			verifiedEv = selfies[0];
+			verifiedEv.time = iso(T(session) + chance.integer({ min: 20, max: 600 }) * 1000);
+		}
+	}
+	events = events.filter((e) => e.event !== "selfie verified" || e === verifiedEv);
+	profile.verified = Boolean(verifiedEv);
+
+	// ── experiment exposure: one per match after the test starts, 1 s before it ──
+	const exposed = [];
+	if (variant !== null) {
+		const matches = unitEvents.filter((e) => e.event === "match created" && T(e) >= ms(ICEBREAKERS_START)).sort(byT);
+		matches.forEach((m, i) => {
+			const t = T(m) - 1000;
+			const ex = exposures[i] || cloneEvent(exposures[0], { time: iso(t) });
+			ex.time = iso(t);
+			exposed.push(ex);
+		});
+	}
+	if (!exposed.length && profile[EXP_KEY] !== undefined) delete profile[EXP_KEY];
+
+	// conversations already running at the window start keep only their in-window steps
+	events = events.concat(unitEvents, exposed).filter((e) => T(e) >= BEGIN);
+	stampPlan(events, planAt);
+	profile.subscription_plan = planAt(END);
+	return events;
 }
 
-function handleEverythingHooks(record, meta) {
-	const datasetStart = dayjs.unix(meta.datasetStart);
-	const VDAY_WINDOW_START = datasetStart.add(VDAY_WINDOW_START_DAY, "days");
-	const VDAY_WINDOW_END = datasetStart.add(VDAY_WINDOW_END_DAY, "days");
-	const events = record;
-	if (!events || events.length === 0) return record;
-
-	const profile = meta.profile || {};
-
-	events.forEach(e => {
-		if (profile.subscription) e.subscription = profile.subscription;
-		// pin Platform per-user — the engine draws super props per-event,
-		// which gives one user mixed platforms (profile key is capital-P;
-		// the v1.5 lowercase read was dead code)
-		if (profile.Platform) e.Platform = profile.Platform;
-	});
-
-	let photoUploadCount = 0;
-	let promptAnsweredCount = 0;
-	let hasBioUpdated = false;
-	const matchEvents = [];
-	const messageSentEvents = [];
-	const superLikeEvents = [];
-	let hasPhoneExchangedEarly = false;
-	let hasDateScheduledEarly = false;
-	let firstEventTime = null;
-
-	events.forEach(event => {
-		if (!firstEventTime || dayjs(event.time).isBefore(dayjs(firstEventTime))) {
-			firstEventTime = event.time;
-		}
-		if (event.event === "photo uploaded") photoUploadCount++;
-		if (event.event === "prompt answered") promptAnsweredCount++;
-		if (event.event === "bio updated") hasBioUpdated = true;
-		if (event.event === "match received") matchEvents.push(event);
-		if (event.event === "message sent") messageSentEvents.push(event);
-		if (event.event === "swipe right" && event.is_super_like === true) superLikeEvents.push(event);
-	});
-
-	if (firstEventTime) {
-		const earlyWindow = dayjs(firstEventTime).add(MILESTONE_WINDOW_DAYS, "days");
-		events.forEach(event => {
-			const t = dayjs(event.time);
-			if (t.isBefore(earlyWindow)) {
-				if (event.event === "phone number exchanged") hasPhoneExchangedEarly = true;
-				if (event.event === "date scheduled") hasDateScheduledEarly = true;
-			}
-		});
+// warehouse rows: exogenous business facts layered on event-derived volumes
+function handleWarehouse(row, meta) {
+	if (meta.isBackfill) return row;
+	if (meta.metricName === "paid_acquisition_daily") {
+		row.spend_usd = paidSpend(row.date, row.acquisition_channel);
+		return row;
 	}
-
-	// H1: PHOTO MAGIC NUMBER (sweet 2-5 photos → clone 2-4 extra matches)
-	// Over-6 score reduction is applied AT THE END of this hook so it also
-	// affects matches injected by H4 (premium boost).
-	if (photoUploadCount >= PHOTO_SWEET_MIN && photoUploadCount <= PHOTO_SWEET_MAX && matchEvents.length > 0) {
-		const matchTemplate = matchEvents[0];
-		matchEvents.forEach(m => {
-			const extras = chance.integer({ min: 2, max: 4 });
-			for (let i = 0; i < extras; i++) {
-				events.push({
-					...matchTemplate,
-					time: dayjs(m.time).add(chance.integer({ min: 1, max: 180 }), "minutes").toISOString(),
-					user_id: m.user_id,
-					match_score: chance.integer({ min: 60, max: 98 }),
-					// engine stamps insert_id at generation — clones need fresh
-					// ids or Mixpanel's $insert_id dedupe silently eats them
-					insert_id: chance.guid(),
-				});
-			}
-		});
+	if (meta.metricName === "chat_delivery_daily") {
+		const k = `${row.date}|${row.platform}`;
+		row.messages_delivered = Math.round(row.messages_delivered * (1 + UNTRACKED_MESSAGE_SHARE * jitter(`untracked|${k}`, 1))
+			+ (SYSTEM_MESSAGES_PER_DAY[row.platform] ?? 0) * jitter(`system|${k}`, 0.6));
+		row.messages_attempted = Math.round(row.messages_delivered / (1 - row.delivery_failure_rate));
+		return row;
 	}
-
-	// H2: WEEKEND SWIPE SURGE — Sunday swipes get heavy cloning
-	// to overcome the soup DOW weight deficit. Evening swipes (18-23)
-	// get 5 clones; daytime Sunday swipes get 2 clones.
-	// No flag — discover via day-of-week chart.
-	for (let idx = events.length - 1; idx >= 0; idx--) {
-		const event = events[idx];
-		if (event.event === "swipe right") {
-			const dow = new Date(event.time).getUTCDay();
-			if (dow === 0) {
-				const hr = new Date(event.time).getUTCHours();
-				const clones = (hr >= 18 && hr <= 23) ? SUNDAY_EVENING_CLONES : SUNDAY_DAYTIME_CLONES;
-				const etime = dayjs(event.time);
-				for (let c = 0; c < clones; c++) {
-					events.push({
-						...event,
-						time: etime.add(chance.integer({ min: 1, max: 60 }), "minutes").toISOString(),
-						user_id: event.user_id,
-						insert_id: chance.guid(),
-					});
-				}
-			}
-		}
+	if (meta.metricName === "subscription_bookings_daily") {
+		const k = `${row.date}|${row.plan}|${row.billing_period}`;
+		let subs = row.new_subscriptions;
+		if (hashFloat(`store|${k}`) < STORE_UNTRACKED_SHARE) subs += 1;
+		if (subs > 0 && hashFloat(`refund|${k}`) < REFUND_SHARE) subs -= 1;
+		row.new_subscriptions = subs;
+		row.gross_bookings_usd = round2(subs * row.list_price_usd);
+		return row;
 	}
-
-	// H3: SUPER-LIKE EFFECT — clone 3 extra match events per
-	// super-like, near in time. No flag — discover via funnel
-	// "swipe right where is_super_like=true" → "match received".
-	if (superLikeEvents.length > 0) {
-		const matchTemplate = matchEvents[0] || events[0];
-		superLikeEvents.forEach(sle => {
-			for (let i = 0; i < SUPER_LIKE_MATCH_CLONES; i++) {
-				events.push({
-					...matchTemplate,
-					event: "match received",
-					time: dayjs(sle.time).add(chance.integer({ min: 5, max: 120 }), "minutes").toISOString(),
-					user_id: sle.user_id,
-					match_score: chance.integer({ min: 70, max: 99 }),
-					insert_id: chance.guid(),
-				});
-			}
-		});
-	}
-
-	// H5: GHOSTING CHURN — users with match but no message within
-	// 48hrs lose 80% of post-match events. No flag.
-	// (runs BEFORE premium boost so injected premium matches survive)
-	if (matchEvents.length > 0) {
-		let hasTimely = false;
-		for (const m of matchEvents) {
-			const matchTime = dayjs(m.time);
-			const deadline = matchTime.add(GHOSTING_WINDOW_HOURS, "hours");
-			for (const msg of messageSentEvents) {
-				const msgTime = dayjs(msg.time);
-				if (msgTime.isAfter(matchTime) && msgTime.isBefore(deadline)) {
-					hasTimely = true;
-					break;
-				}
-			}
-			if (hasTimely) break;
-		}
-		if (!hasTimely) {
-			const earliestMatch = matchEvents.reduce((min, m) =>
-				dayjs(m.time).isBefore(dayjs(min.time)) ? m : min
-			);
-			const churnAfter = dayjs(earliestMatch.time);
-			for (let i = events.length - 1; i >= 0; i--) {
-				if (dayjs(events[i].time).isAfter(churnAfter) && chance.bool({ likelihood: GHOSTING_DROP_LIKELIHOOD })) {
-					events.splice(i, 1);
-				}
-			}
-		}
-	}
-
-	// H4: PREMIUM MATCH BOOST — Premium 2x, Elite 4x match events.
-	// Elite users also get profile-viewed events injected (see-who-liked-you).
-	// Reads subscription from profile. Runs AFTER ghosting churn so
-	// injected matches are not culled.
-	const sub = profile.subscription;
-	if ((sub === "Premium" || sub === "Elite") && matchEvents.length > 0) {
-		// Count surviving match events post-churn
-		const survivingMatches = events.filter(e => e.event === "match received");
-		const baseCount = survivingMatches.length || 1;
-		const targetMultiplier = sub === "Elite" ? ELITE_MATCH_MULT : PREMIUM_MATCH_MULT;
-		const toAdd = Math.max(0, baseCount * targetMultiplier - baseCount);
-		const matchTemplate = matchEvents[0];
-		for (let i = 0; i < toAdd; i++) {
-			const sourceMatch = survivingMatches[i % survivingMatches.length] || matchTemplate;
-			events.push({
-				...matchTemplate,
-				time: dayjs(sourceMatch.time).add(chance.integer({ min: 10, max: 240 }), "minutes").toISOString(),
-				user_id: sourceMatch.user_id,
-				match_score: chance.integer({ min: 65, max: 99 }),
-				insert_id: chance.guid(),
-			});
-		}
-		if (sub === "Elite") {
-			const viewTemplate = events.find(e => e.event === "profile viewed") || matchTemplate;
-			survivingMatches.forEach(m => {
-				events.push({
-					...viewTemplate,
-					event: "profile viewed",
-					time: dayjs(m.time).subtract(chance.integer({ min: 10, max: 120 }), "minutes").toISOString(),
-					user_id: m.user_id,
-					viewer_source: "liked_you",
-					insert_id: chance.guid(),
-				});
-			});
-		}
-	}
-
-	// H6: BIO + PROMPT POWER USERS — bio + 3+ prompts → 3 extra
-	// cloned date events per existing. No flag.
-	if (hasBioUpdated && promptAnsweredCount >= BIO_PROMPT_THRESHOLD) {
-		const dateEvents = events.filter(e => e.event === "date scheduled");
-		if (dateEvents.length > 0) {
-			const dateTemplate = dateEvents[0];
-			const venueTypes = ["coffee", "dinner", "drinks", "activity", "virtual"];
-			for (let i = 0; i < dateEvents.length * BIO_PROMPT_DATE_CLONE_MULT; i++) {
-				const sourceDate = dateEvents[i % dateEvents.length];
-				events.push({
-					...dateTemplate,
-					time: dayjs(sourceDate.time).add(chance.integer({ min: 1, max: 72 }), "hours").toISOString(),
-					user_id: sourceDate.user_id,
-					venue_type: chance.pickone(venueTypes),
-					insert_id: chance.guid(),
-				});
-			}
-		}
-	}
-
-	// H7: VALENTINE'S DAY SPIKE — clone profile-created events during
-	// days 58-63 (3x volume), plus clone premium-upgrade events 5x. No flag.
-	const vdaySignups = events.filter(e =>
-		e.event === "profile created" &&
-		dayjs(e.time).isAfter(VDAY_WINDOW_START) &&
-		dayjs(e.time).isBefore(VDAY_WINDOW_END)
-	);
-	vdaySignups.forEach(signup => {
-		for (let i = 0; i < VDAY_SIGNUP_CLONES; i++) {
-			events.push({
-				...signup,
-				time: dayjs(signup.time).add(chance.integer({ min: 1, max: 48 }), "hours").toISOString(),
-				user_id: signup.user_id,
-				insert_id: chance.guid(),
-			});
-		}
-	});
-
-	const vdayUpgrades = events.filter(e =>
-		e.event === "premium upgrade" &&
-		dayjs(e.time).isAfter(VDAY_WINDOW_START) &&
-		dayjs(e.time).isBefore(VDAY_WINDOW_END)
-	);
-	if (vdayUpgrades.length > 0) {
-		const upgradeTemplate = vdayUpgrades[0];
-		vdayUpgrades.forEach(upgrade => {
-			for (let i = 0; i < VDAY_UPGRADE_CLONES; i++) {
-				events.push({
-					...upgradeTemplate,
-					time: dayjs(upgrade.time).add(chance.integer({ min: 1, max: 24 }), "hours").toISOString(),
-					user_id: upgrade.user_id,
-					plan: upgrade.plan,
-					price_usd: upgrade.price_usd,
-					insert_id: chance.guid(),
-				});
-			}
-		});
-	}
-
-	// H1b: PHOTO MAGIC NUMBER — over-6 score reduction (applied LAST so
-	// it also affects matches injected by H4 premium boost).
-	if (photoUploadCount >= PHOTO_OVER_THRESHOLD) {
-		events.forEach(e => {
-			if (e.event === "match received" && typeof e.match_score === "number") {
-				e.match_score = Math.max(20, Math.round(e.match_score * PHOTO_OVER_SCORE_FACTOR));
-			}
-		});
-	}
-
-	// H8: OFF-APP RETENTION — users with phone-exchanged or
-	// date-scheduled in first 14 days get extra cloned app-open + swipe
-	// events past day 30. Non-milestone users lose 80% of post-day-30
-	// events. No flag.
-	if (firstEventTime) {
-		const day30 = dayjs(firstEventTime).add(RETENTION_CUTOFF_DAYS, "days");
-		const hasEarlyMilestone = hasPhoneExchangedEarly || hasDateScheduledEarly;
-		if (hasEarlyMilestone) {
-			const appOpenedTemplate = events.find(e => e.event === "app opened") || events[0];
-			const swipeTemplate = events.find(e => e.event === "swipe right") || events[0];
-			const postDay30Events = events.filter(e => dayjs(e.time).isAfter(day30));
-			if (postDay30Events.length < events.length * RETENTION_TARGET_PCT) {
-				const retentionCount = Math.floor(events.length * RETENTION_TARGET_PCT);
-				for (let i = 0; i < retentionCount; i++) {
-					const daysAfter = chance.integer({ min: 1, max: 60 });
-					const template = chance.bool({ likelihood: 50 }) ? appOpenedTemplate : swipeTemplate;
-					events.push({
-						...template,
-						time: day30.add(daysAfter, "days").add(chance.integer({ min: 0, max: 23 }), "hours").toISOString(),
-						user_id: template.user_id,
-						insert_id: chance.guid(),
-					});
-				}
-			}
-		} else {
-			for (let i = events.length - 1; i >= 0; i--) {
-				if (dayjs(events[i].time).isAfter(day30) && chance.bool({ likelihood: OFFAPP_DROP_LIKELIHOOD })) {
-					events.splice(i, 1);
-				}
-			}
-		}
-	}
-
-	return record;
+	return row;
 }
 
 // ── CONFIG ──
 /** @type {Config} */
 const config = {
-	version: 2,
 	seed: SEED,
 	datasetStart: DATASET_START,
 	datasetEnd: DATASET_END,
-	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	numUsers: NUM_USERS,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	format: "json",
 	gzip: true,
-	credentials: {
-		token,
-	},
+	concurrency: 1,
+	writeToDisk: false,
+	macro: { percentUsersBornInDataset: BORN_PCT, bornRecentBias: 0, preExistingSpread: "uniform" },
+	soup: { dayOfWeekWeights: DOW_WEIGHTS, hourOfDayWeights: HOUR_WEIGHTS },
+	credentials: { token },
 	switches: {
 		hasSessionIds: true,
 		alsoInferFunnels: false,
-		hasLocation: true,
+		hasLocation: false,
 		hasAndroidDevices: true,
 		hasIOSDevices: true,
 		hasDesktopDevices: false,
@@ -632,153 +742,188 @@ const config = {
 		hasAdSpend: false,
 		hasAvatar: true,
 	},
-	identity: {
-		avgDevicePerUser: 2,
-	},
-	concurrency: 1,
-	writeToDisk: false,
-	soup: "growth",
+	identity: { avgDevicePerUser: 1 },
+	stickyEventProps: ["market"],
 
 	events: [
 		{
-			event: "profile created",
+			event: "account created",
 			weight: 1,
 			isFirstEvent: true,
 			isAuthEvent: true,
 			properties: {
-				age_range: ["18-24", "25-29", "30-34", "35-39", "40+"],
-				gender: ["Male", "Male", "Female", "Female", "Non-binary"],
-				looking_for: ["Men", "Women", "Everyone"],
+				signup_method: { __weights: { apple: 40, phone: 35, google: 25 } },
+				acquisition_channel: (ctx) => ctx.profile.acquisition_channel,
 			},
 		},
 		{
-			event: "photo uploaded",
-			weight: 12,
-			isStrictEvent: false,
-			properties: {
-				photo_number: u.weighNumRange(1, 6, 0.5, 2),
-				has_face: [true, true, true, true, false],
-			},
-		},
-		{
-			event: "bio updated",
-			weight: 2,
-			properties: {
-				bio_length: u.weighNumRange(10, 500, 0.4, 120),
-			},
-		},
-		{
-			event: "prompt answered",
-			weight: 3,
-			properties: {
-				prompt_type: ["icebreaker", "opinion", "hypothetical", "personal", "creative"],
-				answer_length: u.weighNumRange(10, 300, 0.4, 80),
-			},
-		},
-		{
-			event: "swipe right",
-			weight: 10,
-			isStrictEvent: false,
-			properties: {
-				is_super_like: [false, false, false, false, false, false, false, false, false, true],
-				swipe_source: ["feed", "feed", "feed", "discover", "boost", "nearby"],
-			},
-		},
-		{
-			event: "swipe left",
-			weight: 8,
-			properties: {
-				swipe_source: ["feed", "feed", "feed", "discover", "boost", "nearby"],
-			},
-		},
-		{
-			event: "match received",
-			weight: 4,
-			isStrictEvent: false,
-			properties: {
-				match_score: u.weighNumRange(50, 100, 0.5, 75),
-			},
-		},
-		{
-			event: "message sent",
-			weight: 6,
-			isStrictEvent: false,
-			properties: {
-				message_length: u.weighNumRange(1, 500, 0.3, 40),
-				has_emoji: [false, false, true, true, true],
-				response_time_mins: u.weighNumRange(1, 1440, 0.3, 30),
-			},
-		},
-		{
-			event: "message received",
-			weight: 5,
-			properties: {
-				message_length: u.weighNumRange(1, 500, 0.3, 50),
-			},
-		},
-		{
-			event: "phone number exchanged",
+			event: "photos uploaded",
 			weight: 1,
-			isStrictEvent: false,
+			isStrictEvent: true,
 			properties: {
-				exchange_method: ["in_chat", "in_chat", "voice_call", "video_call"],
+				photo_count: (ctx) => ctx.profile.photo_count,
 			},
 		},
 		{
-			event: "date scheduled",
+			event: "profile completed",
 			weight: 1,
-			isStrictEvent: false,
+			isStrictEvent: true,
 			properties: {
-				venue_type: ["coffee", "dinner", "drinks", "activity", "virtual"],
+				photo_count: (ctx) => ctx.profile.photo_count,
+				prompts_answered: [1, 2, 3, 3, 3, 3],
+				relationship_goal: (ctx) => ctx.profile.relationship_goal,
+			},
+		},
+		{
+			event: "app opened",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				open_source: { __weights: { organic: 55, push_notification: 35, widget: 10 } },
 			},
 		},
 		{
 			event: "profile viewed",
-			weight: 5,
-			properties: {
-				viewer_source: ["feed", "discover", "liked_you", "nearby"],
-			},
-		},
-		{
-			event: "premium upgrade",
-			weight: 1,
-			isStrictEvent: false,
-			properties: {
-				plan: ["Premium", "Premium", "Premium", "Elite"],
-				price_usd: [14.99, 14.99, 14.99, 29.99],
-			},
-		},
-		{
-			event: "premium cancelled",
 			weight: 1,
 			isStrictEvent: true,
 			properties: {
-				cancel_reason: ["found_someone", "too_expensive", "not_enough_matches", "bad_experience", "taking_a_break"],
-				subscription_duration_days: u.weighNumRange(7, 365, 0.3, 30),
+				view_source: { __weights: { discover: 60, likes_you: 25, standouts: 15 } },
+			},
+		},
+		{
+			event: "like sent",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				like_type: ["standard"],
+				liked_content: { __weights: { photo: 50, prompt: 40, voice_prompt: 10 } },
+			},
+		},
+		{
+			event: "profile passed",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				view_source: { __weights: { discover: 75, likes_you: 15, standouts: 10 } },
+			},
+		},
+		{
+			event: "match created",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				match_id: ["unassigned"],
+				match_source: ["like"],
+			},
+		},
+		{
+			event: "conversation started",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				match_id: ["unassigned"],
+				hours_since_match: [0],
+				opener_type: { __weights: { text: 55, prompt_reply: 35, voice_note: 10 } },
+			},
+		},
+		{
+			event: "message sent",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				match_id: ["unassigned"],
+				message_type: { __weights: { text: 82, photo: 7, voice_note: 6, gif: 5 } },
+			},
+		},
+		{
+			event: "date planned",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				match_id: ["unassigned"],
+				venue_type: { __weights: { drinks: 38, coffee: 26, dinner: 16, activity: 14, video_call: 6 } },
+				days_until_date: [1],
+			},
+		},
+		{
+			event: "date feedback submitted",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				match_id: ["unassigned"],
+				rating: [3],
+				would_meet_again: [false],
+			},
+		},
+		{
+			event: "paywall viewed",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				paywall_trigger: { __weights: { out_of_likes: 40, likes_you: 30, spark: 15, boost: 10, profile_tab: 5 } },
+			},
+		},
+		{
+			event: "subscription started",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				plan: ["plus"],
+				billing_period: ["1_month"],
+			},
+		},
+		{
+			event: "subscription cancelled",
+			weight: 1,
+			properties: {
+				cancel_reason: { __weights: { too_expensive: 30, not_enough_matches: 28, taking_a_break: 22, bad_experience: 10, met_someone: 10 } },
+			},
+		},
+		{
+			event: "selfie verified",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				verification_method: ["video_selfie"],
+				attempts: [1, 1, 1, 1, 2, 2, 3],
+			},
+		},
+		{
+			event: "profile reported",
+			weight: 2,
+			properties: {
+				report_reason: { __weights: { fake_profile: 28, scam: 17, harassment: 20, inappropriate_photos: 15, spam: 12, offline_behavior: 8 } },
 			},
 		},
 		{
 			event: "boost activated",
 			weight: 2,
 			properties: {
-				boost_type: ["standard", "super"],
-				boost_duration_mins: [15, 30, 30, 60],
+				boost_source: { __weights: { purchased: 60, included_in_plan: 40 } },
+				boost_minutes: [30, 30, 60],
 			},
 		},
 		{
-			event: "report user",
+			event: "filters updated",
+			weight: 2,
+			properties: {
+				filter_changed: ["age_range", "distance", "distance", "height", "religion", "family_plans", "drinking"],
+			},
+		},
+		{
+			event: "prompt edited",
+			weight: 2,
+			properties: {
+				prompt_category: ["about_me", "my_type", "getting_personal", "date_vibes", "self_care"],
+			},
+		},
+		{
+			event: "$experiment_started",
 			weight: 1,
 			isStrictEvent: true,
 			properties: {
-				report_reason: ["fake_profile", "inappropriate_photos", "harassment", "spam", "underage"],
-			},
-		},
-		{
-			event: "app opened",
-			weight: 8,
-			isStrictEvent: false,
-			properties: {
-				session_duration_mins: u.weighNumRange(1, 120, 0.3, 8),
+				"Experiment name": [ICEBREAKERS_EXPERIMENT],
+				"Variant name": ["Control", ICEBREAKERS_VARIANT],
 			},
 		},
 	],
@@ -786,752 +931,539 @@ const config = {
 	funnels: [
 		{
 			name: "Onboarding",
-			sequence: ["profile created", "photo uploaded", "swipe right"],
-			conversionRate: 75,
-			order: "sequential",
+			sequence: ["account created", "photos uploaded", "profile completed"],
 			isFirstFunnel: true,
+			conditions: { acquisition_channel: { neq: "tiktok_ads" } },
+			conversionRate: ONBOARD_CONV,
+			timeToConvert: ONBOARD_TTC_H,
+			order: "sequential",
+			weight: 1,
+		},
+		{
+			name: "Onboarding",
+			sequence: ["account created", "photos uploaded", "profile completed"],
+			isFirstFunnel: true,
+			conditions: { acquisition_channel: "tiktok_ads" },
+			conversionRate: Math.round(ONBOARD_CONV * TIKTOK_ONBOARD_MULT),
+			timeToConvert: ONBOARD_TTC_H,
+			order: "sequential",
+			weight: 1,
+		},
+		{
+			// a swiping session: open the app, like and pass on profiles
+			name: "Discover",
+			// (selfie verified rides along as a template; the hook keeps at most one per member)
+			sequence: ["app opened", "selfie verified", "like sent", "profile passed", "like sent", "profile viewed", "profile passed"],
+			conversionRate: 55,
+			timeToConvert: 0.4,
+			order: "first-fixed",
+			weight: 10,
+		},
+		{
+			// a chat session: open the app, reply in open conversations
+			name: "Chat",
+			sequence: ["app opened", "message sent", "message sent", "message sent", "message sent", "message sent", "message sent"],
+			conversionRate: 60,
+			timeToConvert: 0.6,
+			order: "first-fixed",
+			weight: 10,
+		},
+		{
+			name: "Conversation",
+			sequence: UNIT_STEPS,
+			conversionRate: 100,
 			timeToConvert: 1,
+			order: "sequential",
 			weight: 3,
+			props: {
+				match_id: () => `m_${chance.hash({ length: 12 })}`,
+			},
+			experiment: {
+				name: ICEBREAKERS_EXPERIMENT,
+				startDaysBeforeEnd: (ms(DATASET_END) - ms(ICEBREAKERS_START)) / DAY_MS,
+				variants: [{ name: "Control" }, { name: ICEBREAKERS_VARIANT }],
+			},
 		},
 		{
-			name: "Match Flow",
-			sequence: ["swipe right", "match received", "message sent"],
-			conversionRate: 50,
+			name: "Upgrade",
+			sequence: ["paywall viewed", "subscription started"],
+			conditions: { subscription_plan: "free" },
+			conversionRate: UPGRADE_CONV,
+			timeToConvert: 0.5,
 			order: "sequential",
-			timeToConvert: 24,
-			weight: 6,
-			reentry: true,
-		},
-		{
-			name: "Date Funnel",
-			sequence: ["message sent", "phone number exchanged", "date scheduled"],
-			conversionRate: 25,
-			order: "sequential",
-			timeToConvert: 72,
-			weight: 3,
-			reentry: true,
-		},
-		{
-			name: "Monetization",
-			sequence: ["app opened", "boost activated", "premium upgrade"],
-			conversionRate: 20,
-			order: "sequential",
-			timeToConvert: 48,
 			weight: 2,
+			props: {
+				plan: { __weights: { plus: 72, premier: 28 } },
+				billing_period: { __weights: { "1_month": 58, "3_month": 27, "6_month": 15 } },
+			},
+		},
+	],
+
+	warehouseMetrics: [
+		{
+			name: "paid_acquisition_daily",
+			type: "additive",
+			grain: "day",
+			source: {
+				event: "account created",
+				measure: "count",
+				where: (e) => PAID_CHANNELS.includes(e.acquisition_channel),
+				groupBy: "acquisition_channel",
+			},
+			timeColumn: "date",
+			valueColumn: "spend_usd",
+			columns: {
+				installs_reported: (ctx) => Math.round(paidSpend(dayKey(ctx.time), ctx.seriesKey) * PLATFORM_INSTALL_INFLATION / CPI_USD[ctx.seriesKey] * jitter(`inst|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.2)),
+				clicks: (ctx) => Math.round(paidSpend(dayKey(ctx.time), ctx.seriesKey) / (CPC_USD[ctx.seriesKey] * jitter(`cpc|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.15))),
+				impressions: (ctx) => Math.round(ctx.row.clicks / (CTR[ctx.seriesKey] * jitter(`ctr|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.15))),
+			},
+		},
+		{
+			name: "chat_delivery_daily",
+			type: "additive",
+			grain: "day",
+			source: {
+				event: "message sent",
+				measure: "count",
+				groupBy: "platform",
+			},
+			timeColumn: "date",
+			valueColumn: "messages_delivered",
+			columns: {
+				messages_attempted: 0,
+				delivery_failure_rate: (ctx) => {
+					const hit = ctx.row.platform === "android" && inChatIncident(ctx.time);
+					const j = hashFloat(`fail|${dayKey(ctx.time)}|${ctx.seriesKey}`);
+					return hit ? round2(CHAT_FAIL + (j - 0.5) * 0.04) : Math.round((0.002 + j * 0.008) * 10000) / 10000;
+				},
+				p95_send_latency_ms: (ctx) => {
+					const hit = ctx.row.platform === "android" && inChatIncident(ctx.time);
+					const j = hashFloat(`lat|${dayKey(ctx.time)}|${ctx.seriesKey}`);
+					return hit ? Math.round(9000 + j * 6000) : Math.round(380 + j * 260);
+				},
+				service_status: (ctx) => (ctx.row.platform === "android" && inChatIncident(ctx.time) ? "major_outage" : "operational"),
+			},
+		},
+		{
+			name: "subscription_bookings_daily",
+			type: "additive",
+			grain: "day",
+			source: {
+				event: "subscription started",
+				measure: "count",
+				groupBy: ["plan", "billing_period"],
+			},
+			timeColumn: "date",
+			valueColumn: "new_subscriptions",
+			columns: {
+				list_price_usd: (ctx) => price(ctx.row.plan, ctx.row.billing_period, ctx.time),
+				gross_bookings_usd: (ctx) => round2(ctx.value * price(ctx.row.plan, ctx.row.billing_period, ctx.time)),
+			},
 		},
 	],
 
 	superProps: {
-		subscription: ["Free", "Free", "Free", "Premium", "Elite"],
-		Platform: ["ios", "ios", "android"],
+		subscription_plan: ["free"],
+		platform: ["ios"],
+		market: ["New York"],
 	},
 
 	userProps: {
-		subscription: ["Free", "Free", "Free", "Premium", "Elite"],
-		age_range: ["18-24", "25-29", "30-34", "35-39", "40+"],
-		gender: ["Male", "Male", "Female", "Female", "Non-binary"],
-		looking_for: ["Men", "Women", "Everyone"],
-		photo_count: u.weighNumRange(0, 8, 0.4, 3),
-		total_matches: u.weighNumRange(0, 200, 0.3, 15),
-		total_messages_sent: u.weighNumRange(0, 500, 0.3, 30),
-		profile_completeness: ["incomplete", "incomplete", "basic", "basic", "complete"],
-		Platform: ["ios", "ios", "android"],
+		market: weighted(MARKETS),
+		age_band: { __weights: { "18-24": 22, "25-29": 30, "30-34": 24, "35-39": 13, "40-49": 9, "50+": 2 } },
+		gender: { __weights: { man: 54, woman: 43, nonbinary: 3 } },
+		seeking: ["women"],
+		relationship_goal: weighted(GOAL_WEIGHTS),
+		photo_count: weighted(PHOTO_WEIGHTS),
+		subscription_plan: ["free"],
+		acquisition_channel: weighted(CHANNEL_WEIGHTS),
+		member_since: ["2025-01-01"],
+		verified: [false],
 	},
 
-	scdProps: {
-		subscription_tier: {
-			values: ["Free", "Premium", "Elite"],
-			frequency: "month",
-			timing: "fuzzy",
-			max: 6,
-		},
-	},
+	personas: [
+		{ name: "serial_swiper", weight: 25, eventMultiplier: 1.8 },
+		{ name: "intentional_dater", weight: 45, eventMultiplier: 1.0 },
+		{ name: "casual_browser", weight: 30, eventMultiplier: 0.5 },
+	],
 
-	groupKeys: [],
-	groupProps: {},
-	mirrorProps: {},
-	lookupTables: [],
+	retentionCurve: { type: "logarithmic", day1: 0.65, day7: 0.45, day30: 0.3 },
 
 	hook(record, type, meta) {
-		if (type === "funnel-pre") return handleFunnelPreHooks(record, meta);
-		if (type === "funnel-post") return handleFunnelPostHooks(record, meta);
-		if (type === "everything") return handleEverythingHooks(record, meta);
+		if (type === "user") return handleUserHook(record, meta);
+		if (type === "everything") return handleEverything(record, meta);
+		if (type === "warehouse") return handleWarehouse(record, meta);
 		return record;
 	},
 };
 
-// ── STORIES (v1.6 machine-checkable contract — one story per numbered hook) ──
-// Generate:  node scripts/verify-runner.mjs dungeons/vertical/dating/dating.js verify-dating
-// Evaluate:  node scripts/verify-stories.mjs dungeons/vertical/dating/dating.js --data-prefix verify-dating
-//
-// Measurement doctrine for this dungeon:
-// - Deletions-only logic (H5 ghosting, H8 off-app drop, the silent future-time
-//   guard) means every hook-time cohort classification is only ONE-SIDED
-//   recoverable from output counts: hook-time count >= output count. Cohort
-//   definitions below are chosen so output-side membership IMPLIES hook-time
-//   membership (e.g. an output-visible timely match→message pair proves the
-//   user was never ghosted); the reverse-direction contamination lands in the
-//   control arm and biases every ratio TOWARD null, never away from it.
-// - Photo count / super-like count / prompt count correlate with total user
-//   activity, so raw cohort-vs-cohort comparisons of clone-lifted events are
-//   activity-confounded BY CONSTRUCTION. Count-lift assertions therefore use
-//   activity-normalized double ratios (matches-per-swipe, dates-per-message)
-//   where the proxy event is untouched by the hook under test.
+// ── STORIES ──────────────────────────────────────────────────────────────
+// Machine-checkable contract for hooks H1-H10. Evaluate with:
+//   node dungeons/vertical/dating/dating.verify.mjs
 
-const EV = `read_json_auto('{{PREFIX}}-EVENTS*.json', sample_size=-1, union_by_name=true)`;
-const US = `read_json_auto('{{PREFIX}}-USERS*.json', sample_size=-1, union_by_name=true)`;
-// identity prelude: avgDevicePerUser 2 + profile created is isAuthEvent+isFirstEvent,
-// so born users auth on their first event; the device-pool resolve is
-// belt-and-braces for any device-only edge. ::VARCHAR casts — user_id sniffs
-// as UUID, device_id as VARCHAR; DuckDB refuses to coalesce mixed types.
-const ID_CTE = `
-us AS (SELECT * FROM ${US}),
-dm AS (SELECT unnest("anonymousIds") AS device_id, distinct_id FROM us),
-ev AS (
-  SELECT coalesce(m.distinct_id::VARCHAR, e.user_id::VARCHAR, e.device_id::VARCHAR) AS uid,
-         e.time::TIMESTAMP AS t, e.*
-  FROM ${EV} e
-  LEFT JOIN dm m ON e.device_id = m.device_id
-)`;
+const EV = `read_json_auto('{{PREFIX}}-EVENTS*.json*', sample_size=-1, union_by_name=true)`;
+const US = `read_json_auto('{{PREFIX}}-USERS*.json*', sample_size=-1, union_by_name=true)`;
+const WH = (table) => `read_json_auto('{{PREFIX}}-WAREHOUSE-${table}.json*', sample_size=-1, union_by_name=true)`;
 
-// per-user counts used by H1/H3 (photos/matches/swipes/super-likes)
-const PU_CTE = `
-pu AS (
-  SELECT e.uid,
-    count(*) FILTER (WHERE e.event = 'photo uploaded') AS photos,
-    count(*) FILTER (WHERE e.event = 'match received') AS matches,
-    count(*) FILTER (WHERE e.event = 'swipe right') AS swipes,
-    count(*) FILTER (WHERE e.event = 'swipe right' AND e.is_super_like = true) AS sls
-  FROM ev e GROUP BY 1
-)`;
+// Identity prelude: a device resolves to the member seen with it on any event
+// that carries both ids (emitted stitch evidence). Every Kindred event carries
+// user_id, so the device map only matters for completeness.
+const ID_CTE = `dmap AS (SELECT device_id, min(user_id::VARCHAR) AS mapped FROM ${EV}
+  WHERE user_id IS NOT NULL AND device_id IS NOT NULL GROUP BY 1),
+ev AS (SELECT coalesce(e.user_id::VARCHAR, m.mapped) AS uid, e.time::TIMESTAMP AS t, e.*
+  FROM ${EV} e LEFT JOIN dmap m ON e.device_id = m.device_id)`;
 
-// output-visible timely pair (match → message within the ghosting window)
-// proves the user was NOT ghosted at hook time: H5 deletes but never adds,
-// so a surviving pair must have existed when H5 evaluated it.
-const TP_CTE = `
-tp AS (
-  SELECT DISTINCT a.uid FROM ev a
-  JOIN ev b ON b.uid = a.uid AND b.event = 'message sent'
-  WHERE a.event = 'match received'
-    AND b.t > a.t AND b.t < a.t + INTERVAL ${GHOSTING_WINDOW_HOURS} HOUR
-)`;
+const TS = (iso) => dayjs.utc(iso).format("YYYY-MM-DD HH:mm:ss");
+const D = (iso) => iso.slice(0, 10);
+const band = (k) => [Math.round(k * 0.9 * 1000) / 1000, Math.round(k * 1.1 * 1000) / 1000];
+const SQL_LIST = (xs) => xs.map((x) => `'${x}'`).join(", ");
+const VERIFY_RAMPED = TS(dayjs.utc(VERIFY_LAUNCH).add(VERIFY_RAMP_DAYS, "day").toISOString());
+const EXP_WINDOW_DAYS = 7;           // H4 read: Funnels conversion window match → opener
+const EXP_READ_END = TS(dayjs.utc(DATASET_END).subtract(EXP_WINDOW_DAYS, "day").toISOString()); // matches with a full window
+const DATE_WINDOW_DAYS = 30;         // H9/H10 read: Funnels conversion window opener → date (Mixpanel default)
+const DATE_READ_END = "2026-09-01 00:00:00"; // conversations through Aug 31 have their full window
+const RET_FROM = 14, RET_TO = 28;    // H5 read: app opened on day 14-27 after the first date feedback
+const RET_BIRTH_END = TS(dayjs.utc(DATASET_END).subtract(RET_TO, "day").toISOString());
+const INC_BASE_DAYS = 14;           // H7 read: baseline days either side of the incident
+const INC_BASE_FROM = TS(dayjs.utc(CHAT_INCIDENT_START).subtract(INC_BASE_DAYS, "day").toISOString());
+const INC_BASE_TO = TS(dayjs.utc(CHAT_INCIDENT_END).add(INC_BASE_DAYS, "day").toISOString());
+const PLUS_PRICE_RATIO = PRICES.plus["1_month"][1] / PRICES.plus["1_month"][0];
+const BASE_GOALS = ["long_term_open", "figuring_it_out"];
+const photoBand = (col) => `CASE WHEN ${col} <= 2 THEN '1-2' WHEN ${col} = 3 THEN '3' WHEN ${col} <= 6 THEN '4-6' ELSE '7-9' END`;
 
-// output-visible early milestone (phone/date within the first
-// MILESTONE_WINDOW_DAYS of the user's first event) proves hook-time milestone
-// status: H6 clones dates only FORWARD from existing dates (+1-72h), so a
-// clone inside the early window implies its source was too.
-const MS_CTE = `
-fe AS (SELECT uid, min(t) AS f FROM ev GROUP BY 1),
-ms AS (
-  SELECT DISTINCT e.uid FROM ev e JOIN fe ON fe.uid = e.uid
-  WHERE e.event IN ('phone number exchanged', 'date scheduled')
-    AND e.t < fe.f + INTERVAL ${MILESTONE_WINDOW_DAYS} DAY
-)`;
+const H1_SQL = `WITH ${ID_CTE},
+w AS (SELECT CASE WHEN t < TIMESTAMP '${TS(VERIFY_LAUNCH)}' THEN 'before' WHEN t >= TIMESTAMP '${VERIFY_RAMPED}' THEN 'after' END AS per, event, report_reason, uid FROM ev
+  WHERE event IN ('profile reported', 'like sent', 'profile passed')),
+g AS (SELECT per, count(DISTINCT uid) AS users,
+  1000.0 * count(*) FILTER (WHERE event = 'profile reported' AND report_reason IN (${SQL_LIST(FAKE_REASONS)})) / count(*) FILTER (WHERE event <> 'profile reported') AS fake_rate,
+  1000.0 * count(*) FILTER (WHERE event = 'profile reported' AND report_reason NOT IN (${SQL_LIST(FAKE_REASONS)})) / count(*) FILTER (WHERE event <> 'profile reported') AS other_rate
+  FROM w WHERE per IS NOT NULL GROUP BY 1)
+SELECT 'all' AS grp, min(users) AS user_count,
+ max(fake_rate) FILTER (WHERE per = 'after') / max(fake_rate) FILTER (WHERE per = 'before') AS fake_ratio,
+ max(other_rate) FILTER (WHERE per = 'after') / max(other_rate) FILTER (WHERE per = 'before') AS other_ratio
+FROM g`;
 
-// knob-derived timestamps (dataset starts ${DATASET_START})
-const DS = dayjs.utc(DATASET_START);
-const TS = (d) => d.format("YYYY-MM-DD HH:mm:ss");
-const VDAY_START_TS = TS(DS.add(VDAY_WINDOW_START_DAY, "day"));
-const VDAY_END_TS = TS(DS.add(VDAY_WINDOW_END_DAY, "day"));
-const VDAY_DAYS = VDAY_WINDOW_END_DAY - VDAY_WINDOW_START_DAY;
-// flanking baseline: 14 days before the window + 14 days after, with the
-// post-window flank starting +3 days after window end so the 48h clone
-// spill (V-Day clones are stamped source+1..48h) cannot inflate the baseline
-const VDAY_BASE_PRE_TS = TS(DS.add(VDAY_WINDOW_START_DAY - 14, "day"));
-const VDAY_BASE_POST_START_TS = TS(DS.add(VDAY_WINDOW_END_DAY + 3, "day"));
-const VDAY_BASE_POST_END_TS = TS(DS.add(VDAY_WINDOW_END_DAY + 3 + 14, "day"));
-// H8 clean-cohort birth cutoff: retention clones land at day30 + U[1,60] days,
-// so only users born before day RETENTION_CUTOFF_DAYS have their entire clone
-// support inside the 121-day window (30 + 30 + 60 < 121) — later-born
-// milestone users lose clones to the silent future-time guard.
-const H8_EARLYBORN_TS = TS(DS.add(RETENTION_CUTOFF_DAYS, "day"));
+const H2_SQL = `WITH ${ID_CTE},
+u AS (SELECT distinct_id::VARCHAR AS uid, photo_count FROM ${US})
+SELECT ${photoBand("u.photo_count")} AS grp, count(DISTINCT ev.uid) AS user_count,
+ count(*) FILTER (WHERE event = 'match created')::DOUBLE / count(*) FILTER (WHERE event = 'like sent') AS match_rate
+FROM ev JOIN u ON u.uid = ev.uid WHERE event IN ('match created', 'like sent') GROUP BY 1`;
 
-const cellsOf = (rows, key) => Object.fromEntries((rows || []).map((r) => [r[key], r]));
+const H4_SQL = `WITH ${ID_CTE},
+v AS (SELECT distinct_id::VARCHAR AS uid, "${EXP_KEY}" AS variant FROM ${US} WHERE "${EXP_KEY}" IS NOT NULL),
+m AS (SELECT uid, match_id, t AS t0 FROM ev WHERE event = 'match created' AND t >= TIMESTAMP '${TS(ICEBREAKERS_START)}' AND t < TIMESTAMP '${EXP_READ_END}'),
+c AS (SELECT match_id, min(t) AS t1, any_value(hours_since_match) AS h FROM ev WHERE event = 'conversation started' GROUP BY 1)
+SELECT v.variant AS grp, count(DISTINCT m.uid) AS user_count, count(*) AS matches,
+ avg(coalesce(c.t1 >= m.t0 AND c.t1 < m.t0 + INTERVAL ${EXP_WINDOW_DAYS} DAY, false)::INT) AS conv,
+ median(c.h) FILTER (WHERE c.t1 >= m.t0 AND c.t1 < m.t0 + INTERVAL ${EXP_WINDOW_DAYS} DAY) AS med_hours
+FROM m JOIN v ON v.uid = m.uid LEFT JOIN c ON c.match_id = m.match_id GROUP BY 1`;
 
+const H6_SQL = `WITH ${ID_CTE},
+s AS (SELECT uid, t AS t0, acquisition_channel AS ch FROM ev WHERE event = 'account created'),
+c AS (SELECT s.uid FROM s JOIN ev e ON e.uid = s.uid AND e.event = 'profile completed' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 7 DAY GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM ${WH("paid_acquisition_daily")} GROUP BY 1),
+g AS (SELECT s.ch, count(*) AS signups, count(c.uid) AS completed FROM s LEFT JOIN c ON c.uid = s.uid GROUP BY 1)
+SELECT g.ch AS grp, g.signups AS user_count, g.completed::DOUBLE / g.signups AS completion,
+ sp.spend / g.signups AS spend_per_signup, sp.spend / g.completed AS spend_per_completed
+FROM g LEFT JOIN sp ON sp.ch = g.ch
+UNION ALL
+SELECT 'non_tiktok' AS grp, sum(signups)::BIGINT AS user_count, sum(completed)::DOUBLE / sum(signups) AS completion, NULL, NULL FROM g WHERE ch <> 'tiktok_ads'`;
+
+const H8_SQL = `WITH ${ID_CTE},
+p AS (SELECT DISTINCT date::DATE AS d, plan, billing_period, list_price_usd FROM ${WH("subscription_bookings_daily")}),
+w AS (SELECT CASE WHEN t >= TIMESTAMP '${TS(PLUS_PRICE_CHANGE)}' THEN 'after' ELSE 'before' END AS per, ev.event, ev.plan, ev.uid, p.list_price_usd
+  FROM ev LEFT JOIN p ON ev.event = 'subscription started' AND p.d = ev.t::DATE AND p.plan = ev.plan AND p.billing_period = ev.billing_period
+  WHERE ev.event IN ('paywall viewed', 'subscription started'))
+SELECT per AS grp, count(DISTINCT uid) AS user_count, count(*) FILTER (WHERE event = 'paywall viewed') AS paywall_views,
+ count(*) FILTER (WHERE event = 'subscription started' AND plan = 'plus')::DOUBLE / count(*) FILTER (WHERE event = 'paywall viewed') AS plus_rate,
+ count(*) FILTER (WHERE event = 'subscription started' AND plan = 'premier')::DOUBLE / count(*) FILTER (WHERE event = 'paywall viewed') AS premier_rate,
+ sum(list_price_usd) FILTER (WHERE event = 'subscription started' AND plan = 'plus') / count(*) FILTER (WHERE event = 'paywall viewed') AS plus_bookings_per_view
+FROM w GROUP BY 1`;
+
+const H9_SQL = `WITH ${ID_CTE},
+c AS (SELECT match_id, any_value(uid) AS uid, min(t) AS t1 FROM ev WHERE event = 'conversation started' AND t < TIMESTAMP '${DATE_READ_END}' GROUP BY 1),
+d AS (SELECT match_id, min(t) AS t2 FROM ev WHERE event = 'date planned' GROUP BY 1),
+x AS (SELECT u.relationship_goal AS goal, c.uid, date_diff('second', c.t1, d.t2) / 3600.0 AS hours
+  FROM c JOIN d ON d.match_id = c.match_id JOIN ${US} u ON u.distinct_id::VARCHAR = c.uid
+  WHERE d.t2 >= c.t1 AND d.t2 < c.t1 + INTERVAL ${DATE_WINDOW_DAYS} DAY)
+SELECT goal AS grp, count(DISTINCT uid) AS user_count, count(*) AS dates, median(hours) AS med_hours FROM x GROUP BY 1
+UNION ALL
+SELECT 'baseline' AS grp, count(DISTINCT uid) AS user_count, count(*) AS dates, median(hours) AS med_hours FROM x WHERE goal IN (${SQL_LIST(BASE_GOALS)})`;
+
+/** @type {import("../../../types").DungeonStory[]} */
 export const stories = [
 	{
-		id: "H1-photo-magic-number",
+		id: "H1-verified-profiles-launch",
 		hook: "H1",
-		archetype: "frequency-sweet-spot",
-		narrative:
-			"Sweet-spot uploaders (2-5 photos at hook time) get 2-4 cloned matches per existing match " +
-			"(expected multiplier 1+E[U{2..4}] = 4x); heavy uploaders (6+) keep their match volume but every " +
-			"match_score is cut to 0.65x at the END of the everything hook, so the cut also covers H3/H4-injected " +
-			"matches. Score assertion compares 6+ vs 0-1 uploaders (NOT vs sweet — sweet users' H1 clones redraw " +
-			"score from U[60,98], a different pool than organic, which would confound the read): both arms carry " +
-			"organic+H3/H4 score mixtures, so the ratio reads the 0.65 knob within composition tolerance " +
-			"[0.60, 0.73]. The count assertion is an activity-normalized double ratio (matches-per-user over " +
-			"swipes-per-user, sweet vs 0-1) restricted to Free-tier users (removes the H4 tier multiplier) with " +
-			"H3's additive term subtracted arithmetically (adjusted matches = matches - 3*super_likes; " +
-			"conditioning on super_likes = 0 instead would select the near-inactive tail, P(no SL) ~ 0.9^swipes, " +
-			"and starve the sweet cell). Hook-time DD = 1+E[U{2..4}] = 4, band [2.8, 5.2] (±30% for H5/H8 " +
-			"dilution and one-sided photo-count contamination in both directions).",
+		archetype: "temporal-inflection",
+		narrative: `Verified Profiles (a video-selfie check) launches ${D(VERIFY_LAUNCH)}. ${VERIFY_ADOPT_SHARE * 100}% of members are adopters and verify in their next app session after a salted moment (existing members within ${VERIFY_RAMP_DAYS} days of launch, members who join later within ${VERIFY_NEW_MEMBER_HOURS} hours of signup), so about half of the members active after launch verify. As verification spreads, reports with reason fake_profile or scam fall on a ${VERIFY_RAMP_DAYS}-day ramp to ${FAKE_REPORT_KEEP}x their pre-launch rate per profile decision (like sent + profile passed); harassment, inappropriate photos, spam, and offline-behavior reports do not change. Read: fake/scam reports per 1,000 decisions after the ramp (from ${VERIFY_RAMPED.slice(0, 10)}) vs before launch; the other reasons are the control. No selfie verified event exists before launch.`,
+		mixpanelReport: { type: "Insights", events: ["profile reported (report_reason in fake_profile, scam)", "like sent", "profile passed"], formula: "1000 * A / (B + C)", chart: "weekly line; before Jul 14 vs from Aug 4" },
 		assertions: [
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-ph AS (SELECT uid, count(*) FILTER (WHERE event = 'photo uploaded') AS photos FROM ev GROUP BY 1),
-coh AS (SELECT uid, CASE WHEN photos >= ${PHOTO_OVER_THRESHOLD} THEN 'over' WHEN photos <= 1 THEN 'low' END AS grp FROM ph)
-SELECT c.grp, count(DISTINCT c.uid)::BIGINT AS user_count, avg(e.match_score) AS avg_score
-FROM coh c JOIN ev e ON e.uid = c.uid AND e.event = 'match received'
-WHERE c.grp IS NOT NULL GROUP BY 1`,
-				},
-				select: {
-					over: { where: { grp: "over" } },
-					low: { where: { grp: "low" } },
-				},
-				expect: { metric: "over.avg_score / low.avg_score", op: "between", target: [0.6, 0.73] },
-				minCohort: 250,
+				breakdown: { type: "duckdb", sql: H1_SQL },
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.fake_ratio", op: "between", target: band(FAKE_REPORT_KEEP) },
+				minCohort: 2000,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H1_SQL },
+				select: { a: { where: { grp: "all" } } },
+				// control: report reasons verification does not address
+				expect: { metric: "a.other_ratio", op: "between", target: band(1) },
+				minCohort: 2000,
 			},
 			{
 				breakdown: {
 					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-${PU_CTE},
-j AS (
-  SELECT p.*, CASE WHEN p.photos BETWEEN ${PHOTO_SWEET_MIN} AND ${PHOTO_SWEET_MAX} THEN 'sweet'
-                   WHEN p.photos <= 1 THEN 'low' END AS arm
-  FROM pu p JOIN us u ON u.distinct_id::VARCHAR = p.uid
-  WHERE u.subscription = 'Free'
-)
-SELECT arm, count(*)::BIGINT AS user_count,
-  avg(matches - ${SUPER_LIKE_MATCH_CLONES} * sls) AS avg_adj_m, avg(swipes) AS avg_s
-FROM j WHERE arm IS NOT NULL AND swipes > 0 GROUP BY 1`,
+					sql: `WITH ${ID_CTE}
+SELECT 'all' AS grp, count(DISTINCT uid) AS user_count, count(*) FILTER (WHERE t < TIMESTAMP '${TS(VERIFY_LAUNCH)}') AS early FROM ev WHERE event = 'selfie verified'`,
 				},
-				assert: (rows) => {
-					const by = cellsOf(rows, "arm");
-					const s = by.sweet, l = by.low;
-					if (!s || !l || Number(s.user_count) < 150 || Number(l.user_count) < 150) {
-						return { verdict: "WEAK", detail: `cohort too small: sweet=${s?.user_count ?? 0} low=${l?.user_count ?? 0}` };
-					}
-					if (!(l.avg_adj_m > 0 && l.avg_s > 0 && s.avg_s > 0)) {
-						return { verdict: "NONE", detail: "degenerate baseline (zero adjusted matches or swipes in an arm)" };
-					}
-					const dd = (s.avg_adj_m / l.avg_adj_m) / (s.avg_s / l.avg_s);
-					const detail = `DD=${dd.toFixed(3)} (adj-match ratio ${(s.avg_adj_m / l.avg_adj_m).toFixed(2)} ÷ swipe ratio ${(s.avg_s / l.avg_s).toFixed(2)}; knob 1+E[2..4]=4; sweet n=${s.user_count}, low n=${l.user_count})`;
-					if (dd >= 2.8 && dd <= 5.2) return { verdict: "NAILED", detail };
-					if (dd >= 2.3 && dd <= 6.0) return { verdict: "STRONG", detail };
-					return { verdict: dd > 1 ? "WEAK" : "INVERSE", detail };
-				},
+				select: { a: { where: { grp: "all" } } },
+				// exact: a verification before the launch is a bug
+				expect: { metric: "a.early", op: "between", target: [0, 0] },
 			},
 		],
 	},
 	{
-		id: "H2-sunday-swipe-surge",
+		id: "H2-photo-count-sweet-spot",
 		hook: "H2",
-		archetype: "temporal-inflection",
-		narrative:
-			"Every Sunday swipe-right is cloned in place: evening swipes (18-23 UTC) get " +
-			`${SUNDAY_EVENING_CLONES} clones (x${SUNDAY_EVENING_CLONES + 1}), the rest get ${SUNDAY_DAYTIME_CLONES} ` +
-			`(x${SUNDAY_DAYTIME_CLONES + 1}), so the Sunday multiplier is a soup-hour-weighted mix in ` +
-			"[3, 6] on top of an unknown-but-bounded soup DOW baseline (growth soup keeps per-DOW weights within " +
-			"roughly [0.6, 1.2] of the mean, and the hook exists precisely because Sunday sits at the bottom of " +
-			"that range). Assertion: Sunday must be the strict per-DOW maximum AND Sunday/mean(other six days) " +
-			"must land in [2.0, 6.0] (NAILED) / [1.5, 7.0] (STRONG). H8's retention clones re-stamp swipes onto " +
-			"uniform-random days, diluting the ratio slightly toward 1 — covered by the band floor.",
+		archetype: "frequency-sweet-spot",
+		narrative: `Profiles with 4-6 photos get the most matches per like. The share of would-be matches kept by profile photo_count: 1-2 photos ${PHOTO_MATCH_KEEP[1]}, 3 photos ${PHOTO_MATCH_KEEP[3]}, 4-6 photos 1.0, 7-9 photos ${PHOTO_MATCH_KEEP[7]} (too many photos reads as over-curated). photo_count is drawn independently of activity, plan, and Sparks, so matches per like by photo band reads the keep share directly.`,
+		mixpanelReport: { type: "Insights", events: ["match created", "like sent"], formula: "A / B", breakdown: "user property photo_count" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H2_SQL },
+				select: { lo: { where: { grp: "1-2" } }, s: { where: { grp: "4-6" } } },
+				expect: { metric: "lo.match_rate / s.match_rate", op: "between", target: band(PHOTO_MATCH_KEEP[1]) },
+				minCohort: 800,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H2_SQL },
+				select: { hi: { where: { grp: "7-9" } }, s: { where: { grp: "4-6" } } },
+				expect: { metric: "hi.match_rate / s.match_rate", op: "between", target: band(PHOTO_MATCH_KEEP[7]) },
+				minCohort: 800,
+			},
+		],
+	},
+	{
+		id: "H3-sparks-match-rate",
+		hook: "H3",
+		archetype: "cohort-prop-scale",
+		narrative: `A Spark (a premium like with a note; like_type = spark) becomes a match ${SPARK_MATCH_MULT}x as often as a standard like. Members get Sparks by plan (about ${SPARK_SHARE.free * 100}% of a Free member's likes, ${SPARK_SHARE.plus * 100}% on Kindred+, ${SPARK_SHARE.premier * 100}% on Premier); the match carries match_source = spark when the like was a Spark. Read: matches from Sparks per Spark sent over matches from standard likes per standard like.`,
+		mixpanelReport: { type: "Insights", events: ["match created (match_source = spark)", "like sent (like_type = spark)", "match created (match_source = like)", "like sent (like_type = standard)"], formula: "(A / B) / (C / D)" },
 		assertions: [
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE}
-SELECT dayofweek(t) AS dow, count(*)::BIGINT AS swipes
-FROM ev WHERE event = 'swipe right' GROUP BY 1 ORDER BY 1`,
+SELECT 'all' AS grp, count(DISTINCT uid) FILTER (WHERE event = 'like sent' AND like_type = 'spark') AS user_count,
+ count(*) FILTER (WHERE event = 'match created' AND match_source = 'spark')::DOUBLE / count(*) FILTER (WHERE event = 'like sent' AND like_type = 'spark') AS spark_rate,
+ count(*) FILTER (WHERE event = 'match created' AND match_source = 'like')::DOUBLE / count(*) FILTER (WHERE event = 'like sent' AND like_type = 'standard') AS standard_rate
+FROM ev WHERE event IN ('match created', 'like sent')`,
 				},
-				assert: (rows) => {
-					if (!rows || rows.length < 7) return { verdict: "NONE", detail: `expected 7 DOW rows, got ${rows?.length ?? 0}` };
-					const sunday = rows.find((r) => Number(r.dow) === 0);
-					const others = rows.filter((r) => Number(r.dow) !== 0).map((r) => Number(r.swipes));
-					if (!sunday || !others.length) return { verdict: "NONE", detail: "missing DOW rows" };
-					const sun = Number(sunday.swipes);
-					const otherMean = others.reduce((a, b) => a + b, 0) / others.length;
-					const ratio = sun / otherMean;
-					const isMax = others.every((o) => sun > o);
-					const detail = `Sunday=${sun}, other-day mean=${otherMean.toFixed(0)}, ratio=${ratio.toFixed(3)}, strict max=${isMax}`;
-					if (isMax && ratio >= 2.0 && ratio <= 6.0) return { verdict: "NAILED", detail };
-					if (isMax && ratio >= 1.5 && ratio <= 7.0) return { verdict: "STRONG", detail };
-					return { verdict: ratio > 1.15 ? "WEAK" : "INVERSE", detail };
-				},
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.spark_rate / a.standard_rate", op: "between", target: band(SPARK_MATCH_MULT) },
+				minCohort: 1500,
 			},
 		],
 	},
 	{
-		id: "H3-super-like-effect",
-		hook: "H3",
-		archetype: "cohort-count-scale",
-		narrative:
-			`Each super-like swipe injects exactly ${SUPER_LIKE_MATCH_CLONES} cloned matches, an ADDITIVE effect ` +
-			"(hook-time matches = organic + 3*SL), so the expected lift depends on the organic match baseline and " +
-			"cannot be a fixed ratio. The assertion is self-calibrating: within Free-tier users outside the H1 " +
-			"sweet range (output photos NOT IN 2-5 — one-sided-safe since output>=6 implies hook>=6, and 0-1 " +
-			"contamination lands in both arms), it activity-scales the SL=0 arm's match average by the swipe " +
-			"ratio to estimate the SL arm's organic baseline, predicts lift = (organic + 3*avg_SL)/organic from " +
-			"the knob, and requires measured/predicted in [0.75, 1.25] (NAILED) / [0.6, 1.45] (STRONG). H5 " +
-			"ghosting drops post-match events multiplicatively in both arms, which the ratio-of-ratios absorbs.",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-${PU_CTE},
-j AS (
-  SELECT p.*, CASE WHEN p.sls >= 1 THEN 'sl' ELSE 'none' END AS arm
-  FROM pu p JOIN us u ON u.distinct_id::VARCHAR = p.uid
-  WHERE u.subscription = 'Free' AND p.photos NOT BETWEEN ${PHOTO_SWEET_MIN} AND ${PHOTO_SWEET_MAX}
-)
-SELECT arm, count(*)::BIGINT AS user_count, avg(matches) AS avg_m, avg(swipes) AS avg_s, avg(sls) AS avg_sl
-FROM j WHERE swipes > 0 GROUP BY 1`,
-				},
-				assert: (rows) => {
-					const by = cellsOf(rows, "arm");
-					const t = by.sl, c = by.none;
-					if (!t || !c || Number(t.user_count) < 100 || Number(c.user_count) < 100) {
-						return { verdict: "WEAK", detail: `cohort too small: sl=${t?.user_count ?? 0} none=${c?.user_count ?? 0}` };
-					}
-					if (!(c.avg_m > 0 && c.avg_s > 0 && t.avg_s > 0)) {
-						return { verdict: "NONE", detail: "degenerate baseline (zero matches or swipes in an arm)" };
-					}
-					const organicT = c.avg_m * (t.avg_s / c.avg_s);
-					const predicted = (organicT + SUPER_LIKE_MATCH_CLONES * t.avg_sl) / organicT;
-					const measured = t.avg_m / organicT;
-					const r = measured / predicted;
-					const detail = `measured lift ${measured.toFixed(3)} vs predicted ${predicted.toFixed(3)} (ratio ${r.toFixed(3)}; avg SL ${Number(t.avg_sl).toFixed(2)}, scaled organic ${organicT.toFixed(2)}; sl n=${t.user_count}, none n=${c.user_count})`;
-					if (r >= 0.75 && r <= 1.25) return { verdict: "NAILED", detail };
-					if (r >= 0.6 && r <= 1.45) return { verdict: "STRONG", detail };
-					return { verdict: measured > 1 ? "WEAK" : "INVERSE", detail };
-				},
-			},
-		],
-	},
-	{
-		id: "H4-premium-match-boost",
+		id: "H4-icebreakers-experiment",
 		hook: "H4",
-		archetype: "cohort-count-scale",
-		narrative:
-			"H4 runs AFTER H5's ghosting churn and multiplies each Premium/Elite user's SURVIVING match count to " +
-			`exactly base*${PREMIUM_MATCH_MULT} / base*${ELITE_MATCH_MULT} (toAdd = base*mult - base is ` +
-			"deterministic). Tier is drawn independently of activity, so the cross-tier avg-matches ratio reads " +
-			"the multiplier directly; the only dilution is users with zero hook-time organic matches (H4's gate) " +
-			"who sit in every tier equally. Bands: Elite/Free [3.2, 4.6], Premium/Free [1.6, 2.4]. The third " +
-			"assertion is the structural signature: for Elite users who are provably non-ghosted (output-visible " +
-			"timely pair) AND provably milestone (early phone/date, so H8 adds instead of drops), no later hook " +
-			"touches match counts, hence output matches ≡ 0 (mod 4) except for the ~1-2% future-guard tail " +
-			"(clones stamped source+10..240min past datasetEnd are silently dropped). Free users are the placebo " +
-			"(uniform-ish counts give mod-4 share near 0.25).",
+		archetype: "experiment-lift",
+		narrative: `The "${ICEBREAKERS_EXPERIMENT}" test starts ${D(ICEBREAKERS_START)}: members who get a match are split 50/50 (sticky per member; exposure $experiment_started 1 s before each new match). In the "${ICEBREAKERS_VARIANT}" arm the new-match chat suggests openers: the share of matches where the member sends an opener rises ${ICEBREAKER_CONV_MULT}x (from ${CONV_BASE * 100}%), the time from match to opener is ${ICEBREAKER_DELAY_MULT}x, and about ${ICEBREAKER_OPENER_SHARE * 100}% of variant openers use a suggestion (opener_type = icebreaker, which never appears in Control or before the test). Read: per-match conversion match created → conversation started within ${EXP_WINDOW_DAYS} days (matches ${D(ICEBREAKERS_START)} to ${EXP_READ_END.slice(0, 10)}, so every match has its full window), and median hours_since_match on the opener.`,
+		mixpanelReport: { type: "Funnels", steps: ["match created", "conversation started"], counting: "totals", holdPropertyConstant: "match_id", window: `${EXP_WINDOW_DAYS} days`, breakdown: `user property "${EXP_KEY}"`, measure: "conversion and median time to convert" },
 		assertions: [
 			{
+				breakdown: { type: "duckdb", sql: H4_SQL },
+				select: { v: { where: { grp: ICEBREAKERS_VARIANT } }, c: { where: { grp: "Control" } } },
+				expect: { metric: "v.conv / c.conv", op: "between", target: band(ICEBREAKER_CONV_MULT) },
+				minCohort: 1500,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H4_SQL },
+				select: { v: { where: { grp: ICEBREAKERS_VARIANT } }, c: { where: { grp: "Control" } } },
+				expect: { metric: "v.med_hours / c.med_hours", op: "between", target: band(ICEBREAKER_DELAY_MULT) },
+				minCohort: 1500,
+			},
+			{
 				breakdown: {
 					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-mc AS (SELECT uid, count(*) FILTER (WHERE event = 'match received') AS matches FROM ev GROUP BY 1)
-SELECT u.subscription AS tier, count(*)::BIGINT AS user_count, avg(coalesce(mc.matches, 0)) AS avg_m
-FROM us u LEFT JOIN mc ON mc.uid = u.distinct_id::VARCHAR
-GROUP BY 1`,
+					sql: `WITH ${ID_CTE}
+SELECT 'all' AS grp, count(DISTINCT uid) AS user_count,
+ count(DISTINCT uid) FILTER (WHERE "Variant name" = '${ICEBREAKERS_VARIANT}')::DOUBLE / count(DISTINCT uid) AS variant_share
+FROM ev WHERE event = '$experiment_started'`,
 				},
-				select: {
-					el: { where: { tier: "Elite" } },
-					fr: { where: { tier: "Free" } },
-				},
-				expect: { metric: "el.avg_m / fr.avg_m", op: "between", target: [3.2, 4.6] },
-				minCohort: 1000,
+				select: { a: { where: { grp: "all" } } },
+				// equal-weight 2-arm hash → 0.5
+				expect: { metric: "a.variant_share", op: "between", target: band(0.5) },
+				minCohort: 2000,
 			},
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE},
-mc AS (SELECT uid, count(*) FILTER (WHERE event = 'match received') AS matches FROM ev GROUP BY 1)
-SELECT u.subscription AS tier, count(*)::BIGINT AS user_count, avg(coalesce(mc.matches, 0)) AS avg_m
-FROM us u LEFT JOIN mc ON mc.uid = u.distinct_id::VARCHAR
-GROUP BY 1`,
+v AS (SELECT distinct_id::VARCHAR AS uid, "${EXP_KEY}" AS variant FROM ${US})
+SELECT 'all' AS grp, count(DISTINCT ev.uid) AS user_count,
+ count(*) FILTER (WHERE opener_type = 'icebreaker' AND (t < TIMESTAMP '${TS(ICEBREAKERS_START)}' OR v.variant IS DISTINCT FROM '${ICEBREAKERS_VARIANT}')) AS impure
+FROM ev LEFT JOIN v ON v.uid = ev.uid WHERE event = 'conversation started'`,
 				},
-				select: {
-					pr: { where: { tier: "Premium" } },
-					fr: { where: { tier: "Free" } },
-				},
-				expect: { metric: "pr.avg_m / fr.avg_m", op: "between", target: [1.6, 2.4] },
-				minCohort: 1000,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-${TP_CTE},
-${MS_CTE},
-mc AS (SELECT uid, count(*) FILTER (WHERE event = 'match received') AS matches FROM ev GROUP BY 1),
-j AS (
-  SELECT u.subscription AS tier, mc.matches
-  FROM us u
-  JOIN mc ON mc.uid = u.distinct_id::VARCHAR
-  JOIN tp ON tp.uid = mc.uid
-  JOIN ms ON ms.uid = mc.uid
-  WHERE mc.matches >= ${ELITE_MATCH_MULT}
-)
-SELECT tier, count(*)::BIGINT AS user_count,
-  count(*) FILTER (WHERE matches % ${ELITE_MATCH_MULT} = 0)::DOUBLE / count(*) AS mod_share
-FROM j WHERE tier IN ('Elite', 'Free') GROUP BY 1`,
-				},
-				assert: (rows) => {
-					const by = cellsOf(rows, "tier");
-					const e = by.Elite, f = by.Free;
-					if (!e || !f || Number(e.user_count) < 150 || Number(f.user_count) < 150) {
-						return { verdict: "WEAK", detail: `cohort too small: Elite=${e?.user_count ?? 0} Free=${f?.user_count ?? 0}` };
-					}
-					const detail = `Elite mod-${ELITE_MATCH_MULT} share ${Number(e.mod_share).toFixed(4)} (n=${e.user_count}) vs Free placebo ${Number(f.mod_share).toFixed(4)} (n=${f.user_count})`;
-					if (e.mod_share >= 0.9 && f.mod_share <= 0.4) return { verdict: "NAILED", detail };
-					if (e.mod_share >= 0.75 && f.mod_share <= 0.5) return { verdict: "STRONG", detail };
-					return { verdict: e.mod_share > f.mod_share ? "WEAK" : "INVERSE", detail };
-				},
+				select: { a: { where: { grp: "all" } } },
+				// exact: suggested openers exist only in the variant after the start
+				expect: { metric: "a.impure", op: "between", target: [0, 0] },
 			},
 		],
 	},
 	{
-		id: "H5-ghosting-churn",
+		id: "H5-success-churn",
 		hook: "H5",
 		archetype: "retention-divergence",
-		narrative:
-			`Matched users with no message inside the ${GHOSTING_WINDOW_HOURS}h ghosting window lose ` +
-			`${GHOSTING_DROP_LIKELIHOOD}% of post-first-match events (keep rate ${(1 - GHOSTING_DROP_LIKELIHOOD / 100).toFixed(2)}). ` +
-			"Arms split on the output-visible timely pair (deletions-only ⇒ visible pair proves non-ghosted; " +
-			"hook-timely users whose pair was later dropped land in the ghosted arm and dilute toward null). " +
-			"Estimator is the within-user volume-normalized ρ = Σpost-first-match / Σpre-first-match per arm; " +
-			"both arms are restricted to non-milestone users so H8's post-day-30 drop applies to BOTH and cancels " +
-			"in the ratio (milestone users get H8 clone ADDS, which would inflate the timely arm only). " +
-			"The raw ρ_ghosted/ρ_timely ratio is confounded DOWNWARD by activity selection — the ghosted arm is " +
-			"the least-engaged matched tail, on an organically flatter trajectory — so the assertion " +
-			"self-calibrates: the same ρ computed over each arm's PRE-first-match half-split (H5 never touches " +
-			"pre-match events) estimates the organic trajectory ratio, and the selection-corrected keep estimate " +
-			"(raw ratio / pre-trajectory ratio) must land within [0.6, 1.4] of the 0.2 knob.",
+		narrative: `Kindred's best outcome looks like churn: after each date rated ${POSITIVE_RATING}-5 stars in "date feedback submitted", the member leaves the app with probability ${SUCCESS_CHURN_SHARE} (met someone), ${SUCCESS_CHURN_DAY_MIN}-${SUCCESS_CHURN_DAY_MAX} days later; a paid member cancels with reason met_someone. Read: members grouped by the rating on their FIRST date feedback (in the window, on or before ${RET_BIRTH_END.slice(0, 10)} so the return bracket is complete); retained = any "app opened" on day ${RET_FROM}-${RET_TO - 1} after it. Later dates can take either group off the app the same way, so the ratio of retention (4-5 stars over 1-3 stars) reads 1 - ${SUCCESS_CHURN_SHARE}.`,
+		mixpanelReport: { type: "Retention", birth: "date feedback submitted (first time)", return: "app opened", breakdown: "birth-event property rating (4-5 vs 1-3)", brackets: `custom: day ${RET_FROM}-${RET_TO - 1}`, dateRange: `births ${D0} to ${RET_BIRTH_END.slice(0, 10)}` },
 		assertions: [
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE},
-${TP_CTE},
-${MS_CTE},
-fm AS (SELECT uid, min(t) AS first_match FROM ev WHERE event = 'match received' GROUP BY 1),
-per AS (
-  SELECT fm.uid,
-    count(*) FILTER (WHERE e.t <= fm.first_match) AS pre,
-    count(*) FILTER (WHERE e.t > fm.first_match) AS post,
-    count(*) FILTER (WHERE e.t <= to_timestamp((epoch(fe.f) + epoch(fm.first_match)) / 2)) AS pre_a,
-    count(*) FILTER (WHERE e.t > to_timestamp((epoch(fe.f) + epoch(fm.first_match)) / 2) AND e.t <= fm.first_match) AS pre_b
-  FROM fm JOIN fe ON fe.uid = fm.uid JOIN ev e ON e.uid = fm.uid
-  GROUP BY 1
-),
-j AS (
-  SELECT p.*, CASE WHEN tp.uid IS NOT NULL THEN 'timely' ELSE 'ghosted' END AS arm
-  FROM per p
-  LEFT JOIN tp ON tp.uid = p.uid
-  WHERE p.uid NOT IN (SELECT uid FROM ms)
-)
-SELECT arm, count(*)::BIGINT AS user_count,
-  sum(post)::DOUBLE / nullif(sum(pre), 0) AS rho,
-  sum(pre_b)::DOUBLE / nullif(sum(pre_a), 0) AS rho_pre
-FROM j GROUP BY 1`,
+f AS (SELECT uid, t AS f0, rating, row_number() OVER (PARTITION BY uid ORDER BY t, insert_id) AS rn FROM ev WHERE event = 'date feedback submitted'),
+f1 AS (SELECT * FROM f WHERE rn = 1 AND f0 <= TIMESTAMP '${RET_BIRTH_END}'),
+r AS (SELECT f1.uid, bool_or(e.event = 'app opened' AND e.t >= f1.f0 + INTERVAL ${RET_FROM} DAY AND e.t < f1.f0 + INTERVAL ${RET_TO} DAY) AS ret
+  FROM f1 LEFT JOIN ev e ON e.uid = f1.uid GROUP BY 1)
+SELECT CASE WHEN f1.rating >= ${POSITIVE_RATING} THEN 'positive' ELSE 'negative' END AS grp, count(*) AS user_count, avg(coalesce(r.ret, false)::INT) AS retention
+FROM f1 JOIN r ON r.uid = f1.uid GROUP BY 1`,
 				},
-				assert: (rows) => {
-					const by = cellsOf(rows, "arm");
-					const g = by.ghosted, t = by.timely;
-					if (!g || !t || Number(g.user_count) < 300 || Number(t.user_count) < 300) {
-						return { verdict: "WEAK", detail: `cohort too small: ghosted=${g?.user_count ?? 0} timely=${t?.user_count ?? 0}` };
-					}
-					if (!(g.rho > 0 && t.rho > 0 && g.rho_pre > 0 && t.rho_pre > 0)) {
-						return { verdict: "NONE", detail: "degenerate rho (zero pre or post volume in an arm)" };
-					}
-					const raw = g.rho / t.rho;
-					const keep = 1 - GHOSTING_DROP_LIKELIHOOD / 100;
-					const adj = raw / (g.rho_pre / t.rho_pre);
-					const r = adj / keep;
-					const detail = `raw rho ratio ${raw.toFixed(4)}, pre-trajectory ratio ${(g.rho_pre / t.rho_pre).toFixed(4)}, corrected keep ${adj.toFixed(4)} vs knob ${keep} (r=${r.toFixed(3)}; ghosted n=${g.user_count}, timely n=${t.user_count})`;
-					if (raw >= 1) return { verdict: "INVERSE", detail };
-					if (r >= 0.6 && r <= 1.4) return { verdict: "NAILED", detail };
-					if (r >= 0.45 && r <= 1.75) return { verdict: "STRONG", detail };
-					return { verdict: "WEAK", detail };
-				},
+				select: { p: { where: { grp: "positive" } }, n: { where: { grp: "negative" } } },
+				expect: { metric: "p.retention / n.retention", op: "between", target: band(1 - SUCCESS_CHURN_SHARE) },
+				minCohort: 400,
 			},
 		],
 	},
 	{
-		id: "H6-bio-prompt-power-users",
+		id: "H6-paid-channel-economics",
 		hook: "H6",
-		archetype: "cohort-count-scale",
-		narrative:
-			`Users with a bio update AND >=${BIO_PROMPT_THRESHOLD} prompt answers at hook time get ` +
-			`${BIO_PROMPT_DATE_CLONE_MULT} cloned dates per existing date (x${BIO_PROMPT_DATE_CLONE_MULT + 1} exact ` +
-			"at hook time). At this dungeon's event density (~190 events/user) the power cohort is ~80% of users " +
-			"and the rest arm is the low-activity tail whose messages come disproportionately from Date Funnel " +
-			"instances (which co-emit dates), so the rest arm's ORGANIC dates-per-message rate runs ~2x the power " +
-			"arm's — the population-level rate ratio is a composite: 4x mechanism times a 0.4-0.85 composition " +
-			"factor (per-user event density is scale-invariant, so the factor is stable across run sizes), giving " +
-			"band [1.5, 3.4]. The mechanism itself is asserted exactly by the second check: for power users who " +
-			"are provably non-ghosted (output-visible timely pair) AND milestone (H8 add-branch — clones app " +
-			"opens/swipes only), no hook after H6 deletes dates, so output date counts are ≡ 0 (mod 4) except the " +
-			"future-guard tail (clones stamped source+1..72h past datasetEnd are silently dropped, ~9%); the same " +
-			"clean cohort's REST arm is the placebo at the ~0.25 random baseline.",
+		archetype: "attribution-bias",
+		narrative: `TikTok is Kindred's cheapest paid channel per signup and its weakest at onboarding. Warehouse paid_acquisition_daily bills a paced daily budget per channel (cost per signup x expected signups per day, a weekday shape above a ${SPEND_FLAT_SHARE * 100}% flat floor, seeded ±${SPEND_NOISE * 100}% day noise): $${CPI_USD.tiktok_ads} TikTok, $${CPI_USD.meta_ads} Meta, $${CPI_USD.apple_search_ads} Apple Search Ads per Mixpanel signup over the window. TikTok signups finish their profile (account created → photos uploaded → profile completed, 7 days) at ${TIKTOK_ONBOARD_MULT}x the rate of every other channel (${Math.round(ONBOARD_CONV * TIKTOK_ONBOARD_MULT)}% vs ${ONBOARD_CONV}%; two declared first funnels with acquisition_channel conditions). Spend per completed profile therefore comes out level between TikTok and Meta: (${CPI_USD.tiktok_ads} / ${TIKTOK_ONBOARD_MULT}) / ${CPI_USD.meta_ads} = ${(CPI_USD.tiktok_ads / TIKTOK_ONBOARD_MULT / CPI_USD.meta_ads).toFixed(2)}.`,
+		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "paid_acquisition_daily.spend_usd", funnel: "account created → photos uploaded → profile completed, 7-day window, breakdown acquisition_channel" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H6_SQL },
+				select: { t: { where: { grp: "tiktok_ads" } }, a: { where: { grp: "apple_search_ads" } } },
+				expect: { metric: "t.spend_per_signup / a.spend_per_signup", op: "between", target: band(CPI_USD.tiktok_ads / CPI_USD.apple_search_ads) },
+				minCohort: 400,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H6_SQL },
+				select: { t: { where: { grp: "tiktok_ads" } }, o: { where: { grp: "non_tiktok" } } },
+				expect: { metric: "t.completion / o.completion", op: "between", target: band(Math.round(ONBOARD_CONV * TIKTOK_ONBOARD_MULT) / ONBOARD_CONV) },
+				minCohort: 400,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H6_SQL },
+				select: { t: { where: { grp: "tiktok_ads" } }, m: { where: { grp: "meta_ads" } } },
+				expect: { metric: "t.spend_per_completed / m.spend_per_completed", op: "between", target: band(Math.round(CPI_USD.tiktok_ads / TIKTOK_ONBOARD_MULT / CPI_USD.meta_ads * 1000) / 1000) },
+				minCohort: 400,
+			},
+		],
+	},
+	{
+		id: "H7-android-chat-incident",
+		hook: "H7",
+		archetype: "bespoke",
+		narrative: `From ${D(CHAT_INCIDENT_START)} to ${D(CHAT_INCIDENT_END)} (exclusive) a fault in the Android app makes ${CHAT_FAIL * 100}% of Android message sends in open conversations fail; a failed send never fires "message sent". Openers (conversation started) and iOS are untouched. The incident days and platform come from warehouse chat_delivery_daily (service_status = 'major_outage', delivery_failure_rate ≈ ${CHAT_FAIL}). Event read: Android/iOS ratio of "message sent" on incident days vs the ${INC_BASE_DAYS} days either side (cancels weekday mix and the trend) reads 1 - ${CHAT_FAIL}.`,
+		mixpanelReport: { type: "Insights", event: "message sent", measure: "total", breakdown: "platform", chart: "daily line", join: "warehouse chat_delivery_daily.service_status" },
 		assertions: [
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE},
-pw AS (
-  SELECT uid,
-    count(*) FILTER (WHERE event = 'bio updated') AS bios,
-    count(*) FILTER (WHERE event = 'prompt answered') AS prompts,
-    count(*) FILTER (WHERE event = 'date scheduled') AS dates,
-    count(*) FILTER (WHERE event = 'message sent') AS msgs
-  FROM ev GROUP BY 1
-),
-j AS (
-  SELECT CASE WHEN bios >= 1 AND prompts >= ${BIO_PROMPT_THRESHOLD} THEN 'power' ELSE 'rest' END AS arm, dates, msgs
-  FROM pw WHERE msgs > 0
-)
-SELECT arm, count(*)::BIGINT AS user_count, sum(dates)::DOUBLE / sum(msgs) AS date_rate
-FROM j GROUP BY 1`,
+o AS (SELECT DISTINCT date::DATE AS d, platform FROM ${WH("chat_delivery_daily")} WHERE service_status = 'major_outage'),
+od AS (SELECT DISTINCT d FROM o), op AS (SELECT DISTINCT platform FROM o),
+w AS (SELECT t::DATE AS d, uid, (platform IN (SELECT platform FROM op)) AS hit FROM ev
+  WHERE event = 'message sent' AND t >= TIMESTAMP '${INC_BASE_FROM}' AND t < TIMESTAMP '${INC_BASE_TO}'),
+g AS (SELECT (d IN (SELECT d FROM od)) AS outage, count(*) FILTER (WHERE hit)::DOUBLE / count(*) FILTER (WHERE NOT hit) AS rel, count(DISTINCT uid) AS users FROM w GROUP BY 1)
+SELECT 'all' AS grp, (SELECT count(*) FROM od) AS outage_days, min(users) AS user_count,
+ max(rel) FILTER (WHERE outage) / max(rel) FILTER (WHERE NOT outage) AS did
+FROM g`,
 				},
-				select: {
-					p: { where: { arm: "power" } },
-					r: { where: { arm: "rest" } },
-				},
-				expect: { metric: "p.date_rate / r.date_rate", op: "between", target: [1.5, 3.4] },
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.did", op: "between", target: band(1 - CHAT_FAIL) },
 				minCohort: 300,
 			},
 			{
 				breakdown: {
 					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-${TP_CTE},
-${MS_CTE},
-pw AS (
-  SELECT uid,
-    count(*) FILTER (WHERE event = 'bio updated') AS bios,
-    count(*) FILTER (WHERE event = 'prompt answered') AS prompts,
-    count(*) FILTER (WHERE event = 'date scheduled') AS dates
-  FROM ev GROUP BY 1
-),
-j AS (
-  SELECT CASE WHEN p.bios >= 1 AND p.prompts >= ${BIO_PROMPT_THRESHOLD} THEN 'power' ELSE 'rest' END AS arm, p.dates
-  FROM pw p JOIN tp ON tp.uid = p.uid JOIN ms ON ms.uid = p.uid
-  WHERE p.dates >= ${BIO_PROMPT_DATE_CLONE_MULT + 1}
-)
-SELECT arm, count(*)::BIGINT AS user_count,
-  count(*) FILTER (WHERE dates % ${BIO_PROMPT_DATE_CLONE_MULT + 1} = 0)::DOUBLE / count(*) AS mod_share
-FROM j GROUP BY 1`,
+					sql: `SELECT 'all' AS grp, count(*) FILTER (WHERE service_status = 'major_outage') AS outage_rows,
+ avg(delivery_failure_rate) FILTER (WHERE service_status = 'major_outage') AS outage_fail
+FROM ${WH("chat_delivery_daily")}`,
 				},
-				assert: (rows) => {
-					const by = cellsOf(rows, "arm");
-					const p = by.power, r = by.rest;
-					if (!p || !r || Number(p.user_count) < 300 || Number(r.user_count) < 100) {
-						return { verdict: "WEAK", detail: `cohort too small: power=${p?.user_count ?? 0} rest=${r?.user_count ?? 0}` };
-					}
-					const detail = `power mod-${BIO_PROMPT_DATE_CLONE_MULT + 1} share ${Number(p.mod_share).toFixed(4)} (n=${p.user_count}) vs rest placebo ${Number(r.mod_share).toFixed(4)} (n=${r.user_count})`;
-					if (p.mod_share >= 0.9 && r.mod_share <= 0.4) return { verdict: "NAILED", detail };
-					if (p.mod_share >= 0.8 && r.mod_share <= 0.5) return { verdict: "STRONG", detail };
-					return { verdict: p.mod_share > r.mod_share ? "WEAK" : "INVERSE", detail };
-				},
+				select: { a: { where: { grp: "all" } } },
+				// warehouse failure rate during the incident = the failure knob
+				expect: { metric: "a.outage_fail", op: "between", target: band(CHAT_FAIL) },
 			},
 		],
 	},
 	{
-		id: "H7-vday-spike",
-		hook: "H7",
-		archetype: "temporal-inflection",
-		narrative:
-			`Inside the V-Day window (days ${VDAY_WINDOW_START_DAY}-${VDAY_WINDOW_END_DAY}: ${VDAY_START_TS} → ` +
-			`${VDAY_END_TS}), signups are cloned x${VDAY_SIGNUP_CLONES} extra and premium upgrades ` +
-			`x${VDAY_UPGRADE_CLONES} extra. Clones are stamped source+U[1,48]h (signups) / +U[1,24]h (upgrades), ` +
-			"so a computable share leaks past the window edge: E[leak] = (48/2)/120h = 20% of signup clones and " +
-			"(24/2)/120h = 10% of upgrade clones, giving in-window daily multipliers of 1+2*0.8 = 2.6 and " +
-			"1+4*0.9 = 4.6. Baseline = symmetric 14-day flanks, with the post flank starting +3 days after window " +
-			"end so leaked clones cannot inflate it; symmetric flanks cancel the growth-soup trend to first order " +
-			"(convexity bias ~1% at this window size). Bands: signups [2.0, 3.3], upgrades [3.5, 5.6].",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT 'all' AS tag,
-  count(*) FILTER (WHERE t >= TIMESTAMP '${VDAY_START_TS}' AND t < TIMESTAMP '${VDAY_END_TS}')::BIGINT AS user_count,
-  count(*) FILTER (WHERE t >= TIMESTAMP '${VDAY_START_TS}' AND t < TIMESTAMP '${VDAY_END_TS}') / ${VDAY_DAYS}.0 AS w_daily,
-  count(*) FILTER (WHERE (t >= TIMESTAMP '${VDAY_BASE_PRE_TS}' AND t < TIMESTAMP '${VDAY_START_TS}')
-                OR (t >= TIMESTAMP '${VDAY_BASE_POST_START_TS}' AND t < TIMESTAMP '${VDAY_BASE_POST_END_TS}')) / 28.0 AS b_daily
-FROM ev WHERE event = 'profile created'`,
-				},
-				select: { r: { where: { tag: "all" } } },
-				expect: { metric: "r.w_daily / r.b_daily", op: "between", target: [2.0, 3.3] },
-				minCohort: 100,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT 'all' AS tag,
-  count(*) FILTER (WHERE t >= TIMESTAMP '${VDAY_START_TS}' AND t < TIMESTAMP '${VDAY_END_TS}')::BIGINT AS user_count,
-  count(*) FILTER (WHERE t >= TIMESTAMP '${VDAY_START_TS}' AND t < TIMESTAMP '${VDAY_END_TS}') / ${VDAY_DAYS}.0 AS w_daily,
-  count(*) FILTER (WHERE (t >= TIMESTAMP '${VDAY_BASE_PRE_TS}' AND t < TIMESTAMP '${VDAY_START_TS}')
-                OR (t >= TIMESTAMP '${VDAY_BASE_POST_START_TS}' AND t < TIMESTAMP '${VDAY_BASE_POST_END_TS}')) / 28.0 AS b_daily
-FROM ev WHERE event = 'premium upgrade'`,
-				},
-				select: { r: { where: { tag: "all" } } },
-				expect: { metric: "r.w_daily / r.b_daily", op: "between", target: [3.5, 5.6] },
-				minCohort: 60,
-			},
-		],
-	},
-	{
-		id: "H8-offapp-retention",
+		id: "H8-plus-price-change",
 		hook: "H8",
-		archetype: "retention-divergence",
-		narrative:
-			`Non-milestone users lose ${OFFAPP_DROP_LIKELIHOOD}% of post-day-${RETENTION_CUTOFF_DAYS} events; ` +
-			"milestone users (early phone/date) instead get app-open/swipe clones topping post-30 volume toward " +
-			`${RETENTION_TARGET_PCT * 100}% of total — but for early-born users the organic post-30 share already ` +
-			"exceeds 30% (growth soup back-loads events), so the milestone arm is approximately organic and the " +
-			"measurable signal is the drop. Cohort: born before day 30 (retention clones land day30+U[1,60], so " +
-			"the whole clone support fits the window — later-born users lose clones to the future guard), AND " +
-			"provably non-ghosted (timely pair) or match-free, so H5's post-match drop cannot masquerade as H8. " +
-			"Self-calibrating check: with keep k=0.2 and milestone-arm share s as the organic estimate, predicted " +
-			"rest-arm share = k*s/(1-(1-k)*s); measured/predicted in [0.7, 1.35] (NAILED) / [0.55, 1.6] (STRONG).",
+		archetype: "temporal-inflection",
+		narrative: `On ${D(PLUS_PRICE_CHANGE)} Kindred+ list prices rise (1 month $${PRICES.plus["1_month"][0]} → $${PRICES.plus["1_month"][1]}; 3 and 6 months by the same ~${Math.round((PLUS_PRICE_RATIO - 1) * 100)}%); Premier prices do not change. Each free member's first would-be purchase decides: after the change, ${(1 - PLUS_KEEP_AFTER) * 100}% of would-be Kindred+ buyers decline and do not buy in the window, so Kindred+ purchases per paywall view fall to ${PLUS_KEEP_AFTER}x. Paywall traffic and Premier conversion per view have no engineered change. Prices exist only in warehouse subscription_bookings_daily, so Kindred+ bookings per paywall view need the join: ${PLUS_KEEP_AFTER} x ${PLUS_PRICE_RATIO.toFixed(3)} = ${(PLUS_KEEP_AFTER * PLUS_PRICE_RATIO).toFixed(3)} of before (the price rise does not pay for the lost buyers). Kindred+ purchases after the change number in the low hundreds, so the reads use the knob as target with a half-effect floor.`,
+		mixpanelReport: { type: "Insights + warehouse", events: ["subscription started (plan = plus)", "paywall viewed"], formula: "A / B", chart: "before vs after Aug 18", join: "subscription_bookings_daily.list_price_usd on date, plan, billing_period" },
 		assertions: [
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-${TP_CTE},
-${MS_CTE},
-mc AS (SELECT uid, count(*) FILTER (WHERE event = 'match received') AS matches FROM ev GROUP BY 1),
-per AS (
-  SELECT fe.uid,
-    count(*) FILTER (WHERE e.t > fe.f + INTERVAL ${RETENTION_CUTOFF_DAYS} DAY) AS post30,
-    count(*) AS total
-  FROM fe JOIN ev e ON e.uid = fe.uid
-  WHERE fe.f < TIMESTAMP '${H8_EARLYBORN_TS}'
-  GROUP BY 1
-),
-j AS (
-  SELECT p.*, CASE WHEN ms.uid IS NOT NULL THEN 'milestone' ELSE 'rest' END AS arm
-  FROM per p
-  LEFT JOIN ms ON ms.uid = p.uid
-  LEFT JOIN tp ON tp.uid = p.uid
-  LEFT JOIN mc ON mc.uid = p.uid
-  WHERE tp.uid IS NOT NULL OR coalesce(mc.matches, 0) = 0
-)
-SELECT arm, count(*)::BIGINT AS user_count, sum(post30)::DOUBLE / sum(total) AS post30_share
-FROM j GROUP BY 1`,
-				},
-				assert: (rows) => {
-					const by = cellsOf(rows, "arm");
-					const m = by.milestone, r = by.rest;
-					if (!m || !r || Number(m.user_count) < 200 || Number(r.user_count) < 200) {
-						return { verdict: "WEAK", detail: `cohort too small: milestone=${m?.user_count ?? 0} rest=${r?.user_count ?? 0}` };
-					}
-					const keep = 1 - OFFAPP_DROP_LIKELIHOOD / 100;
-					const sM = Number(m.post30_share), sR = Number(r.post30_share);
-					if (!(sM > 0 && sM < 1)) return { verdict: "NONE", detail: `degenerate milestone share ${sM}` };
-					const pred = (keep * sM) / (1 - (1 - keep) * sM);
-					const ratio = sR / pred;
-					const detail = `milestone share ${sM.toFixed(4)} (n=${m.user_count}), rest share ${sR.toFixed(4)} (n=${r.user_count}), predicted rest ${pred.toFixed(4)}, measured/predicted ${ratio.toFixed(3)}`;
-					if (!(sM > sR)) return { verdict: "INVERSE", detail };
-					if (ratio >= 0.7 && ratio <= 1.35) return { verdict: "NAILED", detail };
-					if (ratio >= 0.55 && ratio <= 1.6) return { verdict: "STRONG", detail };
-					return { verdict: "WEAK", detail };
-				},
+				breakdown: { type: "duckdb", sql: H8_SQL },
+				select: { a: { where: { grp: "after" } }, b: { where: { grp: "before" } } },
+				expect: { metric: "a.plus_rate / b.plus_rate", op: "<=", target: PLUS_KEEP_AFTER, floor: 1 - 0.5 * (1 - PLUS_KEEP_AFTER) },
+				minCohort: 1500,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H8_SQL },
+				select: { a: { where: { grp: "after" } }, b: { where: { grp: "before" } } },
+				expect: { metric: "a.plus_bookings_per_view / b.plus_bookings_per_view", op: "<=", target: Math.round(PLUS_KEEP_AFTER * PLUS_PRICE_RATIO * 1000) / 1000, floor: Math.round((1 - 0.5 * (1 - PLUS_KEEP_AFTER * PLUS_PRICE_RATIO)) * 1000) / 1000 },
+				minCohort: 1500,
 			},
 		],
 	},
 	{
-		id: "H9-match-flow-ttc",
+		id: "H9-date-speed-by-goal",
 		hook: "H9",
 		archetype: "funnel-ttc-by-segment",
-		narrative:
-			`funnel-post stretches Match Flow inter-step gaps by tier: Elite x${FUNNEL_TTC_ELITE}, Free ` +
-			`x${FUNNEL_TTC_FREE}, Premium untouched (the v1.6 hook is scoped to Match Flow only). Cross-event SQL ` +
-			"cannot see this (greedy single-pass pairing across the full history — the documented v1.5 " +
-			"limitation), so the assertion goes through the Mixpanel-aligned emulator's timeToConvert at a " +
-			`conversion window of 24h * ${FUNNEL_TTC_FREE} = 33.6h — the generative Match Flow window times the ` +
-			"max stretch factor, covering the stretched support so Free conversions are not right-censored (the " +
-			"ai-platform lesson: censoring inverts the measured direction). Median ratios vs the untouched " +
-			"Premium tier read the knobs, compressed toward 1 by cross-instance organic pairings — and this " +
-			"dungeon's clone traffic (H2 Sunday swipes at ~2.4x daily volume, H3/H4 match injections) makes the " +
-			"organic mixture heavier than ai-platform's. Compression is asymmetric: the Free stretch pushes " +
-			"true-instance completions LATER, so a competing organic pairing more often lands first and masks " +
-			"them (only ~25-30% of the 1.4 knob distance survives), while the Elite compression pulls completions " +
-			"EARLIER, which organic events can rarely preempt (~65% survives). Bands: Elite/Premium in " +
-			"[0.55, 0.92], Free/Premium in [1.05, 1.55].",
+		narrative: `How fast a conversation turns into a planned date depends on what the member is looking for (profile relationship_goal): the gap from "conversation started" to "date planned" is ${GOAL_TTC_MULT.long_term}x for long_term and ${GOAL_TTC_MULT.short_term_fun}x for short_term_fun, vs long_term_open and figuring_it_out (base median ${DATE_GAP_MEDIAN_H} h, log-normal). Every step of a match shares match_id. Read: median hours from opener to date plan, per match, within a ${DATE_WINDOW_DAYS}-day window, conversations through ${DATE_READ_END.slice(0, 10)} (complete windows).`,
+		mixpanelReport: { type: "Funnels", steps: ["conversation started", "date planned"], holdPropertyConstant: "match_id", window: `${DATE_WINDOW_DAYS} days`, measure: "median time to convert", breakdown: "user property relationship_goal" },
 		assertions: [
 			{
-				breakdown: {
-					type: "timeToConvert",
-					steps: ["swipe right", "match received", "message sent"],
-					breakdownByUserProperty: "subscription",
-					conversionWindowMs: Math.round(24 * FUNNEL_TTC_FREE * 3600 * 1000),
-				},
-				select: {
-					el: { where: { segment_value: "Elite" } },
-					pr: { where: { segment_value: "Premium" } },
-				},
-				expect: { metric: "el.median_ttc_ms / pr.median_ttc_ms", op: "between", target: [0.55, 0.92] },
+				breakdown: { type: "duckdb", sql: H9_SQL },
+				select: { l: { where: { grp: "long_term" } }, b: { where: { grp: "baseline" } } },
+				expect: { metric: "l.med_hours / b.med_hours", op: "between", target: band(GOAL_TTC_MULT.long_term) },
 				minCohort: 400,
 			},
 			{
-				breakdown: {
-					type: "timeToConvert",
-					steps: ["swipe right", "match received", "message sent"],
-					breakdownByUserProperty: "subscription",
-					conversionWindowMs: Math.round(24 * FUNNEL_TTC_FREE * 3600 * 1000),
-				},
-				select: {
-					fr: { where: { segment_value: "Free" } },
-					pr: { where: { segment_value: "Premium" } },
-				},
-				expect: { metric: "fr.median_ttc_ms / pr.median_ttc_ms", op: "between", target: [1.05, 1.55] },
-				minCohort: 400,
+				breakdown: { type: "duckdb", sql: H9_SQL },
+				select: { s: { where: { grp: "short_term_fun" } }, b: { where: { grp: "baseline" } } },
+				expect: { metric: "s.med_hours / b.med_hours", op: "between", target: band(GOAL_TTC_MULT.short_term_fun) },
+				minCohort: 200,
 			},
 		],
 	},
 	{
-		id: "H10-age-date-conversion",
+		id: "H10-fast-openers",
 		hook: "H10",
 		archetype: "funnel-conversion-by-segment",
-		narrative:
-			`funnel-pre scales Date Funnel completion probability by age: 25-29/30-34 x${AGE_CONV_BOOST} (capped ` +
-			`at 95), 40+ x${AGE_CONV_DROP}. Measured through the emulator's Date Funnel step counts per age_range ` +
-			"at the 72h generative window (H9 no longer stretches this funnel — it is Match Flow-scoped in v1.6). " +
-			"Organic weight-drawn phone/date events add age-independent conversions on top of the funnel-driven " +
-			"ones, compressing both ratios toward 1, so bands sit inside the knobs: boost/base in [1.05, 1.45], " +
-			"drop/base in [0.45, 0.88], where base pools 18-24 and 35-39 (the x1.0 segments) with attempt-weighted " +
-			"conversion.",
+		narrative: `Openers sent within ${FAST_OPENER_HOURS} hours of the match lead to a planned date twice as often: ${DATE_RATE_FAST * 100}% of fast conversations vs ${DATE_RATE_SLOW * 100}% of slower ones reach "date planned". The opener carries hours_since_match (hours from the match). Read: per conversation, date planned within ${DATE_WINDOW_DAYS} days, conversations through ${DATE_READ_END.slice(0, 10)}, slow (> ${FAST_OPENER_HOURS} h) over fast (≤ ${FAST_OPENER_HOURS} h).`,
+		mixpanelReport: { type: "Funnels", steps: ["conversation started", "date planned"], holdPropertyConstant: "match_id", window: `${DATE_WINDOW_DAYS} days`, breakdown: `hours_since_match (custom buckets ≤ ${FAST_OPENER_HOURS}, > ${FAST_OPENER_HOURS})` },
 		assertions: [
 			{
 				breakdown: {
-					type: "timeToConvert",
-					steps: ["message sent", "phone number exchanged", "date scheduled"],
-					breakdownByUserProperty: "age_range",
-					conversionWindowMs: 72 * 3600 * 1000,
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+c AS (SELECT match_id, any_value(uid) AS uid, min(t) AS t1, any_value(hours_since_match) AS h FROM ev WHERE event = 'conversation started' AND t < TIMESTAMP '${DATE_READ_END}' GROUP BY 1),
+d AS (SELECT match_id, min(t) AS t2 FROM ev WHERE event = 'date planned' GROUP BY 1)
+SELECT CASE WHEN c.h <= ${FAST_OPENER_HOURS} THEN 'fast' ELSE 'slow' END AS grp, count(DISTINCT c.uid) AS user_count, count(*) AS conversations,
+ avg(coalesce(d.t2 >= c.t1 AND d.t2 < c.t1 + INTERVAL ${DATE_WINDOW_DAYS} DAY, false)::INT) AS date_rate
+FROM c LEFT JOIN d ON d.match_id = c.match_id GROUP BY 1`,
 				},
-				assert: (rows) => {
-					const by = cellsOf(rows, "segment_value");
-					const cells = (names) => names.map((n) => by[n]).filter(Boolean);
-					const conv = (names) => {
-						const cs = cells(names);
-						const entered = cs.reduce((s, c) => s + (c.step_counts?.[0] ?? 0), 0);
-						const done = cs.reduce((s, c) => s + (c.step_counts?.[2] ?? 0), 0);
-						return entered > 0 ? { rate: done / entered, entered } : null;
-					};
-					const boost = conv(["25-29", "30-34"]);
-					const base = conv(["18-24", "35-39"]);
-					const drop = conv(["40+"]);
-					if (!boost || !base || !drop) return { verdict: "NONE", detail: "missing age segments in emulator rows" };
-					if (boost.entered < 500 || base.entered < 500 || drop.entered < 250) {
-						return { verdict: "WEAK", detail: `attempts too few: boost=${boost.entered} base=${base.entered} drop=${drop.entered}` };
-					}
-					const rb = boost.rate / base.rate;
-					const rd = drop.rate / base.rate;
-					const detail = `boost/base=${rb.toFixed(3)}, drop/base=${rd.toFixed(3)} (rates ${boost.rate.toFixed(4)}/${base.rate.toFixed(4)}/${drop.rate.toFixed(4)}; attempts ${boost.entered}/${base.entered}/${drop.entered})`;
-					if (rb >= 1.05 && rb <= 1.45 && rd >= 0.45 && rd <= 0.88) return { verdict: "NAILED", detail };
-					if (rb >= 1.02 && rd <= 0.94) return { verdict: "STRONG", detail };
-					if (rb > 1 && rd < 1) return { verdict: "WEAK", detail };
-					return { verdict: "INVERSE", detail };
-				},
+				select: { s: { where: { grp: "slow" } }, f: { where: { grp: "fast" } } },
+				expect: { metric: "s.date_rate / f.date_rate", op: "between", target: band(DATE_RATE_SLOW / DATE_RATE_FAST) },
+				minCohort: 600,
 			},
 		],
 	},
