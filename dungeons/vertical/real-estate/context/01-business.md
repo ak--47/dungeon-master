@@ -18,7 +18,7 @@ The company has about 270 people: about 190 licensed buyer agents (24 per market
 - **Listing pages.** Each listing page shows the MLS details (price, beds, baths, square feet, days on market, and whether the price has been cut) and, for many homes, a 3D walkthrough.
 - **Save homes and searches.** Shoppers save homes they like. They can also save a search; Keystead then sends a listing alert (a daily digest or an instant notice, by email or push) when new homes match it.
 - **Your agent.** Every shopper is assigned a Keystead buyer agent in their market at signup. Shoppers message their agent about a listing from the listing page (chat, a call-back request, or email). Agents work in teams and cover messages seven days a week.
-- **Tours.** A shopper can request a scheduled tour (the agent meets them at the home, usually two to three days later) or, from July 15, use **Tour It Now** to book a same-day or next-morning tour from the listing page. Agents also book tours for shoppers from the chat. The agent marks the tour completed in the agent app.
+- **Tours.** A shopper can request a scheduled tour (the agent meets them at the home, usually two to three days later) or, from July 15, use **Tour It Now** to book a same-day or next-morning tour from the listing page. When a shopper discusses a home with their agent in chat, the agent proposes a tour time and the shopper confirms the booking in the app. The agent marks the tour completed in the agent app.
 - **Pre-approval.** Shoppers apply for a pre-approval with Keystead Home Loans online. The lender reviews the application and issues a decision, usually about a day later, with an approved amount and a quoted rate for the day. A pre-approval letter is valid for 90 days and can be renewed. Shoppers may also use an outside lender; Keystead does not see those approvals.
 - **Offers.** After a tour, the agent writes and submits an offer if the shopper wants the home. The seller accepts it or rejects it (outbid, price too low, terms, or the seller withdrew). A shopper whose offer is accepted is "under contract" and usually stops shopping.
 
@@ -31,7 +31,8 @@ The company has about 270 people: about 190 licensed buyer agents (24 per market
 - **Home market** (`home_market`): the metro the shopper is searching in. Dallas is the largest; Raleigh is the smallest.
 - **Budget** (`budget_max_usd`): the maximum price the shopper set in their search preferences.
 - **Platforms:** about half of activity comes from laptops and desktops on the website; the rest comes from phones and tablets (iOS and Android). Most shoppers use more than one device.
-- **Established vs new shoppers.** About 54% of the shoppers active in the window created their account before June 4. New accounts arrive steadily, about 260 a week.
+- **Intent.** Most account holders are early in their search. Many browse for weeks without saving a home or messaging their agent; a smaller group of active buyers does most of the saving, messaging, and touring.
+- **Established vs new shoppers.** About 53% of the shoppers active in the window created their account before June 4. New accounts arrive steadily, about 260 a week.
 
 ## Markets at a glance
 

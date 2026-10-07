@@ -17,7 +17,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             tours, launches 2026-07-15), get pre-approved with Keystead Home
  *             Loans, and make offers through their agent. Revenue: the buyer
  *             agent commission at closing plus mortgage origination.
- * SCALE:      10,000 shoppers (4,443 sign up inside the window; 9,747 have
+ * SCALE:      10,000 shoppers (4,480 sign up inside the window; 9,747 have
  *             events), ~1.13M events, 120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  home search → listing viewed → listing saved → tour requested →
  *             tour completed → offer submitted → offer accepted
@@ -64,10 +64,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * Client events also carry device_id; server-side events (agent responded,
  * tour completed, pre-approval completed, offer accepted / rejected, listing
  * alert sent) carry user_id only. Shoppers who joined before June 4 have no
- * anonymous events in the window. Two anonymous events at the very end of the
- * window belong to a visitor whose signup falls after the cutoff. Visitors who
- * never sign up are not in the dataset (the guides describe it as an export of
- * account holders).
+ * anonymous events in the window. Every anonymous event links to a signup.
+ * Visitors who never sign up are not in the dataset (the guides describe it
+ * as an export of account holders).
  *
  * DESIGN NOTES:
  * - Listings: a seeded table of about 100k MLS listings (8 markets) built at
@@ -81,26 +80,35 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * - Saves, agent chats, tours, offers, and outcomes are built per listing:
  *   a save is a decision on a view of an unsaved listing (H10); an agent chat
  *   gets a reply after response_minutes and may lead to a tour (H5); a saved
- *   listing without a chat may get a listing-page tour request (H2); 80% of
- *   scheduled and 88% of Tour It Now tours complete in daytime; a completed
- *   tour may get an offer (H1, H3, H9), accepted (30%) or rejected 6-72 h
- *   later. One tour per listing per shopper.
+ *   listing the shopper has not discussed with the agent before booking may
+ *   get a listing-page tour request (H2); the earliest request wins (one tour
+ *   per listing per shopper); 80% of scheduled and 88% of Tour It Now tours
+ *   complete in daytime; a completed tour may get an offer (H1, H3, H9),
+ *   accepted (30%) or rejected 6-72 h later. booking_type and contact_method
+ *   are hash-assigned per shopper and listing (stable across RNG changes).
+ * - Shopper intent (realism): a per-shopper log-normal multiplier (sigma 1.5,
+ *   capped at 8, mean 1) scales the save and agent-chat chances, independent
+ *   of every story cohort. Most account holders rarely save or message an
+ *   agent; about 45% of active shoppers complete a tour in the window, 56%
+ *   message an agent, 16% make an offer.
  * - A shopper whose offer is accepted is under contract: tour requests stop,
  *   tours still scheduled are cancelled, and 85% of their browsing from two
  *   days later is gone. An offer already decided on an earlier tour still
  *   goes in (rarely a second acceptance, a backup offer).
  * - Pre-approval (Keystead Home Loans): only "serious" buyers apply (share by
- *   acquisition channel, H6). A letter is valid 90 days. 60% of established
- *   serious shoppers got one in the 150 days before June 4 (36% still valid
- *   on June 4) and can renew once it lapses. Others become ready at a salted time (37% already on June 4, the
+ *   acquisition channel, H6). A letter is valid 90 days. 68% of established
+ *   serious shoppers got one in the 150 days before June 4 (41% still valid
+ *   on June 4, so the pre-approved share of tours is flat from week 1) and
+ *   can renew once it lapses. Others become ready at a salted time (37% already on June 4, the
  *   rest at a steady pace; new shoppers at signup), then start an application
- *   on a browsing day with a 10% chance (x1.4 in the Payment Estimate variant
+ *   on a browsing day with a 10% chance (x1.5 in the Payment Estimate variant
  *   after exposure, H8); 72% are approved about a day later (server-side) at
  *   the day's rate-sheet rate.
  * - Saved searches: new shoppers who adopt (salted, 45%) save a search in
  *   their first week (60% right after signup); 55% of established shoppers
  *   already have one. Holders get a digest "listing alert sent" on about 25%
- *   of days (server-side, also while they are inactive). An alert is tapped
+ *   of days (server-side, also while they are inactive) until 30 days pass
+ *   without a visit (alerts pause; a visit turns them back on). An alert is tapped
  *   through ("listing alert opened") only on a day the shopper browses (80% of
  *   alerts followed by a view within 12 h); the next view then has
  *   view_source = listing_alert.
@@ -118,7 +126,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   add visitors who block analytics and crawler traffic from server logs.
  * - retentionCurve shapes new shoppers' activity; established shoppers'
  *   activity is flat across the window (DOW weights). Daily listing views grow
- *   about 10% from June to September as new-shopper cohorts accumulate.
+ *   about 16% from June to September as new-shopper cohorts accumulate.
  * - Engine device fields (os, model, browser) come from the engine's sticky
  *   per-device pools; session_id is diagnostic and sits only on events sent
  *   from a device (server-side events drop it with the other device fields).
@@ -174,8 +182,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   independent of activity). Half of the others stop browsing for good 8-27
  *   days after signup.
  * MIXPANEL: Retention, birth account created (Jun 4-Aug 6), return listing
- *   viewed, custom bracket day 28-55, breakdown cohort "saved search created
- *   within 7 days of signup".
+ *   viewed, custom bracket day 28-55, breakdown user property
+ *   saved_search_count > 0 (for new shoppers it matches exactly the shoppers
+ *   with a saved search in week one), or a cohort saved from the converters of
+ *   the Funnel account created → saved search created (7-day window).
  * REAL WORLD: a saved search turns a one-time browse into a standing habit.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -223,7 +233,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * PATTERN: from 2026-07-29, shoppers without a current pre-approval who have
  *   not applied in the window are split 50/50 at their first listing view
  *   ($experiment_started). The variant shows a monthly payment estimate on
- *   listing pages: the daily chance of starting a pre-approval is 1.4x after
+ *   listing pages: the daily chance of starting a pre-approval is 1.5x after
  *   exposure; 45% of variant starts have entry_point = payment_estimate
  *   (never in Control).
  * MIXPANEL: Funnels, $experiment_started → pre-approval started, 14-day
@@ -251,42 +261,46 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-real-estate, 2026-10-07, full
- * fidelity, 10,000 shoppers, 1,128,340 events)
+ * fidelity, 10,000 shoppers, 1,130,420 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                           | Derivation                 | Expected | Measured
  * -----|--------------------------------------------------|----------------------------|----------|---------
- * H1   | offers per completed tour, high-rate / base days | RATE_PEAK_OFFER_KEEP       | 0.70     | 0.657 (std; 19.0% → 12.9% raw)
- * H1   | listing-page tours per save, high / base (control)| unchanged                 | 1.00     | 0.986 (0.255 vs 0.259)
- * H2   | listing-page tour requests per save, after/before| TIN_LIFT                   | 1.50     | 1.494 (0.173 → 0.258)
+ * H1   | offers per completed tour, high-rate / base days | RATE_PEAK_OFFER_KEEP       | 0.70     | 0.759 (std; 18.1% → 14.0% raw)
+ * H1   | listing-page tours per save, high / base (control)| unchanged                 | 1.00     | 1.036 (0.239 vs 0.230)
+ * H2   | listing-page tour requests per save, after/before| TIN_LIFT                   | 1.50     | 1.551 (0.154 → 0.238)
  * H2   | tour_it_now requests before launch               | exact purity               | 0        | 0 (55% of listing-page requests after)
- * H3   | offer rate per tour, pre-approved / not          | PREAPPROVED_OFFER_MULT     | 2.50     | 2.609 (31.8% vs 12.2%, band-std)
- * H4   | D28-55 retention, non-savers / savers            | 1 - NON_SAVER_CHURN        | 0.50     | 0.473 (27.0% vs 57.1%)
- * H5   | tour within 7 d per reply, > 60 min / ≤ 10 min   | LEAD_RATE_SLOW / FAST      | 0.40     | 0.410 (12.7% vs 31.0%)
- * H6   | spend per signup, paid social / paid search      | 15 / 38                    | 0.395    | 0.406 ($15.06 vs $37.13)
- * H6   | pre-approval start in 30 d, social / other       | SOCIAL_SERIOUS_MULT (≤, floor 0.7) | 0.40 | 0.387 (7.6% vs 19.7%)
- * H6   | spend per pre-approval start, social / search    | (15 / 0.4) / 38 (≥, floor 0.691) | 0.987 | 1.081 ($197 vs $183)
- * H7   | Austin / other views, stale days / ±14 d         | 1 - OUTAGE_VIEW_DROP       | 0.45     | 0.438 (0.070 vs 0.160)
+ * H3   | offer rate per tour, pre-approved / not          | PREAPPROVED_OFFER_MULT     | 2.50     | 2.521 (30.3% vs 12.0%, band-std)
+ * H4   | D28-55 retention, non-savers / savers            | 1 - NON_SAVER_CHURN        | 0.50     | 0.466 (26.6% vs 57.2%)
+ * H5   | tour within 7 d per reply, > 60 min / ≤ 10 min   | LEAD_RATE_SLOW / FAST      | 0.40     | 0.399 (12.0% vs 29.9%)
+ * H6   | spend per signup, paid social / paid search      | 15 / 38                    | 0.395    | 0.384 ($14.86 vs $38.69)
+ * H6   | pre-approval start in 30 d, social / other       | SOCIAL_SERIOUS_MULT (≤, floor 0.7) | 0.40 | 0.377 (7.4% vs 19.7%)
+ * H6   | spend per pre-approval start, social / search    | (15 / 0.4) / 38 (≥, floor 0.691) | 0.987 | 0.927 ($200 vs $216)
+ * H7   | Austin / other views, stale days / ±14 d         | 1 - OUTAGE_VIEW_DROP       | 0.45     | 0.463 (0.079 vs 0.171)
  * H7   | new Austin listings + Austin alerts while stale  | exact purity               | 0        | 0
- * H8   | pre-approval start in 14 d, variant / Control    | PAYMENT_EST_MULT (≥, floor 1.2) | 1.40 | 1.286 (11.3% vs 8.8%)
- * H8   | variant share of exposed shoppers                | equal 2-arm hash           | 0.50     | 0.500
+ * H8   | pre-approval start in 14 d, variant / Control    | PAYMENT_EST_MULT (≥, floor 1.25) | 1.50 | 1.514 (13.4% vs 8.9%)
+ * H8   | variant share of exposed shoppers                | equal 2-arm hash           | 0.50     | 0.507
  * H8   | payment_estimate starts in Control or pre-test   | exact purity               | 0        | 0
- * H9   | median tour → offer hours, first_time / move_up  | BUYER_TTC_MULT.first_time  | 1.75     | 1.827 (85.7 h vs 46.9 h)
- * H9   | median tour → offer hours, investor / move_up    | BUYER_TTC_MULT.investor    | 0.50     | 0.521 (24.5 h)
- * H10  | saves per view, price_reduced / original         | REDUCED_SAVE_MULT          | 1.80     | 1.769 (13.5% vs 7.6%)
+ * H9   | median tour → offer hours, first_time / move_up  | BUYER_TTC_MULT.first_time  | 1.75     | 1.813 (87.5 h vs 48.3 h)
+ * H9   | median tour → offer hours, investor / move_up    | BUYER_TTC_MULT.investor    | 0.50     | 0.490 (23.6 h)
+ * H10  | saves per view, price_reduced / original         | REDUCED_SAVE_MULT          | 1.80     | 1.764 (12.2% vs 6.9%)
  * ═════════════════════════════════════════════════════════════════════════
  *
- * Noise notes: H6 rests on about 240 serious paid-social signups, so its
+ * Noise notes: H6 rests on about 245 serious paid-social signups, so its
  * start-rate and spend-per-start reads use the knob as target with a
  * half-effect bound. H8 reads a cumulative 14-day start share from a daily
  * hazard multiplier, so it saturates a little under the knob (knob target,
- * half-effect floor). H9's investor arm has about 550 offers (relative SE of
- * the median ratio about 4%). H3 is
- * read inside rate bands because H1 scales both groups on any given day and
- * the pre-approved share drifts. Not engineered (null checks in the SQL):
- * Tour It Now vs scheduled tours make offers at the same rate (15.4% vs 16.0%,
- * z = -0.7; agent chats do not depend on how serious the shopper is, so
- * agent-chat tours, all scheduled, carry the same buyer mix), and
- * contact_method does not change tour conversion (chi2 = 0.1, 7-day window).
+ * half-effect floor); about 290 Control starts. H1 compares about 520 offers
+ * on high-rate days with 1,170 on baseline days (SE of the ratio about 0.04).
+ * H9's investor arm has about 440 offers (relative SE of the median ratio
+ * about 5%). H3 is read inside rate bands because H1 scales both groups on
+ * any given day and the pre-approved share drifts. Not engineered (null
+ * checks in the SQL): Tour It Now vs scheduled tours make offers at the same
+ * rate (15.3% vs 15.5%, z = -0.2; buyer_type sub-splits |z| ≤ 0.6; one of 8
+ * markets, Denver, reaches z = 2.0, which is chance across 11 sub-splits;
+ * agent chats and saves share the same intent multiplier and do not depend
+ * on how serious the shopper is, so agent-chat tours, all scheduled, carry the
+ * same buyer mix), and contact_method does not change tour conversion
+ * (chi2 = 2.2 on 2 df, p = 0.33; largest market chi2 4.3, p = 0.12; 7-day window).
  */
 
 // ── SCALE ──
@@ -424,11 +438,11 @@ const EXPERIMENT_NAME = "Payment Estimate";
 const EXPERIMENT_VARIANT = "Payment Estimate";
 const EXP_KEY = `Experiment: ${EXPERIMENT_NAME}`;
 const PREAPP_DAILY_RATE = 0.1;      // chance a ready serious shopper starts an application on a browsing day
-const PAYMENT_EST_MULT = 1.4;       // variant multiplier on that daily chance after exposure
+const PAYMENT_EST_MULT = 1.5;       // variant multiplier on that daily chance after exposure
 const PAYMENT_EST_ENTRY_SHARE = 0.45;
 const PREAPP_COMPLETE = 0.72;
-const PRIOR_APPROVAL_SHARE = 0.6;   // established serious shoppers with a pre-approval issued in the 150 days before June 4
-const PRIOR_APPROVAL_SPAN_DAYS = 150; // (so 0.6 x 90/150 = 36% hold a valid letter on June 4; the rest of them can renew)
+const PRIOR_APPROVAL_SHARE = 0.68;   // established serious shoppers with a pre-approval issued in the 150 days before June 4
+const PRIOR_APPROVAL_SPAN_DAYS = 150; // (so 0.68 x 90/150 = 41% hold a valid letter on June 4; the rest of them can renew)
 const PREAPPROVAL_VALID_DAYS = 90;  // a pre-approval letter lapses after 90 days
 const READY_AT_START = 0.37;        // established shoppers already in the market on June 4; the rest become ready at a steady pace through the window
 
@@ -442,6 +456,29 @@ const SAVE_BASE = 0.08;
 const REDUCED_SAVE_MULT = 1.8;
 const REVISIT_SHARE = 0.2;
 const PRE_SIGNUP_EXTRA_VIEWS = { 0: 45, 1: 20, 2: 15, 3: 10, 4: 6, 6: 4 }; // extra anonymous views before signup (weights)
+
+// shopper intent (realism, not a story): most account holders are early-stage
+// and rarely save or message an agent; a minority does most of it. Per-shopper
+// log-normal multiplier on the save and agent-chat chances (mean 1, capped),
+// independent of every story cohort, so per-view, per-save, per-reply and
+// per-tour rates are unchanged.
+const INTENT_SIGMA = 1.5;
+const INTENT_CAP = 8;
+const INTENT_NORM = (() => {
+	let n = 0, s = 0;
+	const N = 4000;
+	for (let i = 0; i < N; i++) {
+		const z = -6 + 12 * (i + 0.5) / N;
+		const w = Math.exp(-z * z / 2);
+		n += w; s += w * Math.min(INTENT_CAP, Math.exp(INTENT_SIGMA * z));
+	}
+	return s / n;
+})();
+const shopperIntent = (uid) => Math.min(INTENT_CAP, Math.exp(INTENT_SIGMA * hashNormal(`${uid}|intent`))) / INTENT_NORM;
+
+// listing alerts pause after a holder has not visited for this many days
+// (Keystead's alert policy); a visit turns them back on
+const ALERT_PAUSE_DAYS = 30;
 
 // warm start
 const PREWINDOW_DAYS = 28;
@@ -824,14 +861,15 @@ function handleEverything(input, meta) {
 	}
 
 	// ── H10 saves and H5 agent chats, per view ──
-	const habit = 0.6 + 0.8 * salt(uid, "save-habit");
+	const intent = shopperIntent(uid);
+	const habit = (0.6 + 0.8 * salt(uid, "save-habit")) * intent;
 	const units = []; // pipeline roots: { kind, t, L, root, pre }
 	const saved = new Set();
 	const chatted = new Set();
 	for (const v of postViews) {
 		const L = v._L;
 		const t = T(v);
-		if (!chatted.has(L.id) && chance.bool({ likelihood: CONTACT_RATE * 100 })) {
+		if (!chatted.has(L.id) && chance.bool({ likelihood: CONTACT_RATE * intent * 100 })) {
 			chatted.add(L.id);
 			units.push({ kind: "chat", t: t + chance.integer({ min: 60, max: 900 }) * 1000, L, root: v });
 		}
@@ -858,28 +896,38 @@ function handleEverything(input, meta) {
 	units.sort((a, b) => a.t - b.t);
 
 	// ── tours: agent chats (H5) and listing-page requests on saved homes (H2) ──
-	const tours = [];
+	// One tour per listing: the earliest request wins. A saved home the shopper
+	// already discussed with the agent before booking is left to the agent chat.
+	const cands = [];
 	const toured = new Set();
 	const tourFactor = serious ? 1 : NONSERIOUS_TOUR_MULT;
+	const chatAt = new Map();
+	for (const x of units) if (x.kind === "chat") chatAt.set(x.L.id, x.t);
 	for (const x of units) {
 		if (x.kind !== "chat") continue;
 		const minutes = Math.max(1, Math.round(Math.min(RESPONSE_MAX_MIN, logNormal(RESPONSE_MEDIAN_MIN, RESPONSE_SIGMA))));
 		x.respT = x.t + minutes * MIN_MS;
 		x.minutes = minutes;
-		if (!toured.has(x.L.id) && chance.bool({ likelihood: leadRate(minutes) * tourFactor * 100 })) {
-			toured.add(x.L.id);
+		if (chance.bool({ likelihood: leadRate(minutes) * tourFactor * 100 })) {
 			const tr = x.respT + Math.floor(Math.min(6 * DAY_MS, logNormal(20, 1.0) * HOUR_MS));
-			tours.push({ unit: x, tr, source: "agent_chat", booking: "scheduled" });
+			cands.push({ unit: x, tr, source: "agent_chat", booking: "scheduled" });
 		}
 	}
 	for (const x of units) {
-		if (x.kind !== "save" || chatted.has(x.L.id) || toured.has(x.L.id)) continue;
+		if (x.kind !== "save") continue;
 		const tr = x.t + Math.floor(Math.min(10 * DAY_MS, logNormal(18, 1.0) * HOUR_MS));
+		if (chatAt.has(x.L.id) && chatAt.get(x.L.id) < tr) continue;
 		const ramp = tinRamp(tr);
 		if (!chance.bool({ likelihood: Math.min(95, TOUR_PER_SAVE * tourFactor * (1 + (TIN_LIFT - 1) * ramp) * 100) })) continue;
-		toured.add(x.L.id);
-		const booking = ramp > 0 && chance.bool({ likelihood: TIN_SHARE * ramp * 100 }) ? "tour_it_now" : "scheduled";
-		tours.push({ unit: x, tr, source: "listing_page", booking });
+		const booking = ramp > 0 && hashFloat(`tin|${uid}|${x.L.id}`) < TIN_SHARE * ramp ? "tour_it_now" : "scheduled";
+		cands.push({ unit: x, tr, source: "listing_page", booking });
+	}
+	cands.sort((a, b) => a.tr - b.tr);
+	const tours = [];
+	for (const c of cands) {
+		if (toured.has(c.unit.L.id)) continue;
+		toured.add(c.unit.L.id);
+		tours.push(c);
 	}
 	tours.sort((a, b) => a.tr - b.tr);
 	for (const tour of tours) {
@@ -927,7 +975,7 @@ function handleEverything(input, meta) {
 		if (x.kind === "save") {
 			derived.push(makeEvent(src, "listing saved", x.t, listingFacts(x.L, x.t)));
 		} else {
-			derived.push(makeEvent(src, "agent contacted", x.t, { listing_id: x.L.id, market: x.L.market, list_price_usd: listPrice(x.L, x.t), contact_method: pickWeighted({ chat: 70, call_request: 18, email: 12 }, chance.floating({ min: 0, max: 1 })) }));
+			derived.push(makeEvent(src, "agent contacted", x.t, { listing_id: x.L.id, market: x.L.market, list_price_usd: listPrice(x.L, x.t), contact_method: pickWeighted({ chat: 70, call_request: 18, email: 12 }, hashFloat(`contact|${uid}|${x.L.id}`)) }));
 			derived.push(makeEvent(serverSrc, "agent responded", x.respT, { listing_id: x.L.id, market: x.L.market, agent_id: agentId, response_minutes: x.minutes }, true));
 		}
 	}
@@ -984,11 +1032,17 @@ function finish(events, derived, profile, s) {
 	if (s.holder && s.serverSrc) {
 		const from = Math.max(BEGIN, s.saverT ?? BEGIN);
 		const viewsAfter = out.filter((e) => e.event === "listing viewed" && e.user_id).sort(byT);
+		// alerts pause after ALERT_PAUSE_DAYS without a visit (established holders last visited in the 30 days before June 4)
+		const visits = out.filter((e) => (e.event === "listing viewed" || e.event === "home search") && e.user_id && !e._contractDrop).map(T).sort((a, b) => a - b);
+		let lastVisit = s.saverT === -Infinity ? BEGIN - salt(s.uid, "last-visit") * ALERT_PAUSE_DAYS * DAY_MS : s.saverT;
+		let vi = 0;
 		const alertChannel = salt(s.uid, "alert-ch") < 0.7 ? "email" : "push";
 		for (let d = dayStart(from); d <= END; d += DAY_MS) {
 			if (!chance.bool({ likelihood: ALERT_DAY_P * 100 })) continue;
 			const t = d + Math.floor((12 + chance.floating({ min: 0, max: 3 })) * HOUR_MS);
 			if (t < from || t > END) continue;
+			while (vi < visits.length && visits[vi] < t) lastVisit = Math.max(lastVisit, visits[vi++]);
+			if (t - lastVisit > ALERT_PAUSE_DAYS * DAY_MS) continue;
 			if (s.market === OUTAGE_MARKET && inOutage(t)) continue;
 			out.push(makeEvent(s.serverSrc, "listing alert sent", t, { market: s.market, new_matches: chance.integer({ min: 1, max: 9 }), alert_channel: alertChannel }, true));
 			const next = viewsAfter.find((v) => T(v) > t && T(v) < t + 12 * HOUR_MS);
@@ -1594,7 +1648,7 @@ export const stories = [
 		hook: "H4",
 		archetype: "retention-divergence",
 		narrative: `A saved search in week one keeps new shoppers coming back. ${SAVED_SEARCH_ADOPT * 100}% of new shoppers save a search within 7 days of "account created" (most right after signup; adoption is salted per shopper, independent of how active they are). ${NON_SAVER_CHURN * 100}% of the others stop browsing for good ${CHURN_DAY_MIN}-${CHURN_DAY_MAX} days after signup. Separately, ${NEW_SHOPPER_CHURN * 100}% of all new shoppers stop within 3-27 days whatever they do (realism; it scales both groups equally). Read: new shoppers who signed up by ${RET_BIRTH_END.slice(0, 10)} (so the bracket is complete); retained = any "listing viewed" on day ${RET_FROM}-${RET_TO - 1} after signup; non-savers over savers reads 1 - ${NON_SAVER_CHURN}.`,
-		mixpanelReport: { type: "Retention", birth: "account created", return: "listing viewed", brackets: `custom: day ${RET_FROM}-${RET_TO - 1}`, breakdown: "cohort: did saved search created within 7 days of signup", dateRange: `births ${D(DATASET_START)} to ${RET_BIRTH_END.slice(0, 10)}` },
+		mixpanelReport: { type: "Retention", birth: "account created", return: "listing viewed", brackets: `custom: day ${RET_FROM}-${RET_TO - 1}`, breakdown: "user property saved_search_count > 0 (identical to the week-one savers for new shoppers), or a cohort from the converters of Funnels account created → saved search created, 7-day window", dateRange: `births ${D(DATASET_START)} to ${RET_BIRTH_END.slice(0, 10)}` },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H4_SQL },

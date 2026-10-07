@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Keystead Homes**, a home-search
 
 - **Product:** the Keystead Homes website and iOS and Android apps: home search, listing pages, saved homes and saved searches, listing alerts, chat with a Keystead buyer agent, tour booking, mortgage pre-approval with Keystead Home Loans, and offers written through the agent.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early summer through the end of September and the first day of October.
-- **Scale:** 10,000 shopper accounts; 9,747 of them have activity in the window. About 4,400 created their account during the window; the rest joined before June 4. The project holds about 1.13 million events.
+- **Scale:** 10,000 shopper accounts; 9,747 of them have activity in the window. About 4,500 created their account during the window; the rest joined before June 4. The project holds about 1.13 million events.
 - **Population:** this project is an export of account holders. It includes each new shopper's anonymous browsing before signup on the device they signed up on, but visitors who browse without ever creating an account are not in the export. Their page views show up only in the server-log traffic in `market_inventory_daily`.
 - **Markets:** eight metro areas: Dallas, Austin, Phoenix, Denver, Nashville, Charlotte, Tampa, and Raleigh.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. Shoppers live in US Central, Eastern, and Mountain time, so a US evening falls after midnight UTC.
@@ -29,7 +29,7 @@ This folder is the internal analytics wiki for **Keystead Homes**, a home-search
 ## Identity notes
 
 - Shoppers who join during the window usually browse a few listings before they create an account. That browsing is anonymous: the events carry a `device_id` and no `user_id`.
-- `account created` is the moment a new shopper is identified. It carries both the shopper's `user_id` and the `device_id` they signed up on, and Mixpanel links the earlier anonymous events on that device to the shopper. Two anonymous events at the very end of the window never link: that visitor had not created an account by the cutoff.
+- `account created` is the moment a new shopper is identified. It carries both the shopper's `user_id` and the `device_id` they signed up on, and Mixpanel links the earlier anonymous events on that device to the shopper. Every anonymous event in this export links to an account.
 - Every event after signup carries `user_id`. Events sent from the shopper's device also carry `device_id`. Events sent by Keystead's servers carry `user_id` only: `agent responded`, `tour completed`, `pre-approval completed`, `offer accepted`, `offer rejected`, and `listing alert sent`.
 - Shoppers use about two devices on average (a phone and a laptop or tablet). Device fields (`os`, `model`, `browser`, screen size) describe the device that sent the event.
 - Shoppers who joined before June 4 have no `account created` event and no anonymous events in this window.

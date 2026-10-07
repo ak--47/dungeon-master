@@ -11,7 +11,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 | `device_id` | The device that sent the event. Present on events sent from the website or apps; absent on server-side events (see each section). |
 | `insert_id` | Unique event ID used for de-duplication. |
 | `session_id` | Diagnostic session tag from the tracking pipeline, on events sent from a device (server-side events have none). Mixpanel computes its own sessions; do not use this for session analysis. |
-| `os`, `model`, `browser`, `screen_height`, `screen_width`, `carrier`, `radio` | Device details from the SDK, on events sent from a device. `os` is `Windows`, `macOS`, `Linux` (and other desktop Linux names), `iOS`, `iPadOS`, or `Android`. |
+| `os`, `model`, `browser`, `screen_height`, `screen_width`, `carrier`, `radio` | Device details from the SDK, on events sent from a device. `os` is `Windows`, `macOS`, `Linux`, `iOS`, `iPadOS`, or `Android`. |
 
 ## Listing facts
 
@@ -50,7 +50,7 @@ Not every listing event carries every fact; see the tables below.
 
 | Event | Meaning | Properties |
 |---|---|---|
-| `listing alert sent` | Keystead sends a listing alert for a saved search because new homes match. Sent whether or not the shopper is still active. | `market`; `new_matches`: matching new listings in the alert; `alert_channel` (`email`, `push`). |
+| `listing alert sent` | Keystead sends a listing alert for a saved search because new homes match. Alerts keep going to shoppers who stopped browsing until 30 days pass without a visit (a listing view or a search); then Keystead pauses them, and the next visit turns them back on. | `market`; `new_matches`: matching new listings in the alert; `alert_channel` (`email`, `push`). |
 
 ## Agent chat
 
@@ -67,7 +67,7 @@ One tour per shopper per listing. The request, the completed tour, the offer, an
 
 | Event | Meaning | Properties |
 |---|---|---|
-| `tour requested` | A tour is booked. Sent from the device. | Listing facts; `request_source`: `listing_page` (the shopper booked from the listing page) or `agent_chat` (the agent booked it from the conversation); `booking_type`: `scheduled` or `tour_it_now` (from July 15; see 02-timeline.md). |
+| `tour requested` | A tour is booked. Sent from the device. | Listing facts; `request_source`: `listing_page` (the shopper booked from the listing page) or `agent_chat` (the agent proposed the tour in the conversation and the shopper confirmed it in the app); `booking_type`: `scheduled` or `tour_it_now` (from July 15; see 02-timeline.md). |
 | `tour completed` | The agent marks the tour done in the agent app. Server-side (`user_id` only). Not every requested tour happens. | `listing_id`, `market`, `list_price_usd`; `booking_type`; `buyer_preapproved`: `true` if the shopper held a valid Keystead Home Loans pre-approval at the time of the tour; `agent_id`. |
 | `offer submitted` | The agent submits the shopper's offer on a home they toured. Sent from the device (the shopper signs in the app). | `listing_id`, `market`, `list_price_usd`; `offer_price_usd`; `buyer_preapproved` (as on the tour). |
 | `offer accepted` | The seller accepts the offer. Server-side. The shopper is now under contract; closing happens later and is not tracked here. | `listing_id`, `market`; `final_price_usd`. |

@@ -110,6 +110,10 @@ SELECT b.uid,
   bool_or(e.event = 'listing viewed' AND e.t >= b.t0 + INTERVAL 28 DAY AND e.t < b.t0 + INTERVAL 56 DAY) AS ret
 FROM b JOIN ev e ON e.uid = b.uid GROUP BY 1;
 SELECT 'H4' AS story, saver, count(*) AS shoppers, avg(ret::INT) AS retention_d28_55 FROM h4 GROUP BY 2 ORDER BY 2;
+-- H4 recipe check: the profile breakdown saved_search_count > 0 picks the same new shoppers
+SELECT 'H4 profile split' AS story, (u.saved_search_count > 0) AS has_saved_search, count(*) AS shoppers,
+  count(*) FILTER (WHERE (u.saved_search_count > 0) <> h4.saver) AS mismatches, avg(h4.ret::INT) AS retention_d28_55
+FROM h4 JOIN users u ON u.distinct_id::VARCHAR = h4.uid GROUP BY 2 ORDER BY 2;
 
 -- ═════════════════════════════════════════════════════════════════════════
 -- STORY H5-speed-to-lead: tour requested (same listing) within 7 days of the
@@ -157,7 +161,7 @@ FROM wh_inventory i WHERE i.feed_status = 'stale';
 
 -- ═════════════════════════════════════════════════════════════════════════
 -- STORY H8-payment-estimate-experiment: pre-approval started within 14 days
--- of exposure (exposures through Sep 17), variant / Control (knob 1.4)
+-- of exposure (exposures through Sep 17), variant / Control (knob 1.5)
 CREATE OR REPLACE TEMP TABLE h8 AS
 WITH x AS (SELECT uid, t AS t0, "Variant name" AS v FROM ev WHERE event = '$experiment_started' AND t < TIMESTAMP '2026-09-17 23:59:59'),
 p AS (SELECT uid, min(t) AS t1 FROM ev WHERE event = 'pre-approval started' GROUP BY 1)
@@ -263,6 +267,18 @@ GROUP BY GROUPING SETS ((booking_type), (pa, booking_type));
 SELECT 'Q12' AS q, a.seg AS buyer_preapproved, a.n AS tour_it_now_tours, a.r AS tour_it_now_offer_rate, b.n AS scheduled_tours, b.r AS scheduled_offer_rate,
   (a.r - b.r) / sqrt(((a.r * a.n + b.r * b.n) / (a.n + b.n)) * (1 - (a.r * a.n + b.r * b.n) / (a.n + b.n)) * (1.0 / a.n + 1.0 / b.n)) AS z
 FROM q12 a JOIN q12 b ON a.seg = b.seg AND a.booking_type = 'tour_it_now' AND b.booking_type = 'scheduled' ORDER BY 2;
+-- Q12 sub-splits an analyst may try: market and buyer_type (8 + 3 comparisons)
+CREATE OR REPLACE TEMP TABLE q12s AS
+SELECT 'market' AS split, o.market AS seg, o.booking_type, count(*) AS n, avg(o.conv::INT) AS r
+FROM (SELECT t.*, e.market FROM tour_offers t JOIN (SELECT DISTINCT uid, listing_id, market FROM ev WHERE event = 'tour completed') e USING (uid, listing_id)) o
+WHERE o.t0 >= TIMESTAMP '2026-07-22' AND o.t0 < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 1, 2, 3
+UNION ALL
+SELECT 'buyer_type', u.buyer_type, o.booking_type, count(*), avg(o.conv::INT)
+FROM tour_offers o JOIN users u ON u.distinct_id::VARCHAR = o.uid
+WHERE o.t0 >= TIMESTAMP '2026-07-22' AND o.t0 < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 1, 2, 3;
+SELECT 'Q12 sub-splits' AS q, a.split, a.seg, a.n AS tour_it_now_tours, a.r AS tour_it_now_offer_rate, b.n AS scheduled_tours, b.r AS scheduled_offer_rate,
+  (a.r - b.r) / sqrt(((a.r * a.n + b.r * b.n) / (a.n + b.n)) * (1 - (a.r * a.n + b.r * b.n) / (a.n + b.n)) * (1.0 / a.n + 1.0 / b.n)) AS z
+FROM q12s a JOIN q12s b ON a.split = b.split AND a.seg = b.seg AND a.booking_type = 'tour_it_now' AND b.booking_type = 'scheduled' ORDER BY 2, 3;
 
 -- offer acceptance per submitted offer (used in Q18)
 CREATE OR REPLACE TEMP TABLE offer_outcomes AS

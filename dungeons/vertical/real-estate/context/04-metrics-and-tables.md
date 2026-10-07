@@ -28,7 +28,7 @@ All KPIs use UTC days and count people by unique `user_id` (after Mixpanel links
 
 Three tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). Days with no activity have a row with zeros. They join to events on the UTC date of the event and on the named dimension.
 
-In the warehouse, numeric columns are loaded as FLOAT64 (shown as FLOAT below). Count columns always hold whole numbers, and raw file exports show them as integers.
+In the warehouse, counts and whole-dollar prices are INT64 (shown as INTEGER below); spend, rates, and points are FLOAT64 (shown as FLOAT).
 
 ### `marketing_spend_daily`
 
@@ -39,9 +39,9 @@ Daily paid acquisition cost by channel, from the ad platforms' billing exports. 
 | `date` | DATE | UTC day | Spend day. |
 | `acquisition_channel` | STRING | — | `paid_search`, `paid_social`, or `youtube_ads`. Matches `acquisition_channel` on `account created`. |
 | `spend_usd` | FLOAT | USD | Media spend billed for the day. |
-| `leads_reported` | FLOAT | count | Sign-ups the ad platform claims for the day, using its own attribution. Platforms usually claim more than Mixpanel records. |
-| `clicks` | FLOAT | count | Ad clicks reported by the platform. |
-| `impressions` | FLOAT | count | Ad impressions reported by the platform. |
+| `leads_reported` | INTEGER | count | Sign-ups the ad platform claims for the day, using its own attribution. Platforms usually claim more than Mixpanel records. |
+| `clicks` | INTEGER | count | Ad clicks reported by the platform. |
+| `impressions` | INTEGER | count | Ad impressions reported by the platform. |
 
 Caveats: organic and referral have no media spend and are not in this table. Use Mixpanel signups, not `leads_reported`, for CAC.
 
@@ -53,11 +53,11 @@ The Keystead Home Loans daily rate sheet and application count by loan type, fro
 |---|---|---|---|
 | `date` | DATE | UTC day | Rate-sheet day. |
 | `loan_type` | STRING | — | `conventional` (30-year fixed), `fha`, `va`, or `jumbo`. Matches `loan_type` on the pre-approval events. |
-| `applications` | FLOAT | count | Pre-approval applications received that day, from every source: the website and apps, phone, and branch partners. |
+| `applications` | INTEGER | count | Pre-approval applications received that day, from every source: the website and apps, phone, and branch partners. |
 | `note_rate_pct` | FLOAT | percent | The day's base note rate for a 30-year fixed loan of this type, before borrower adjustments. |
 | `apr_pct` | FLOAT | percent | The matching annual percentage rate. |
 | `discount_points` | FLOAT | points | Points priced into the base rate. |
-| `rate_locks` | FLOAT | count | Rate locks taken that day. |
+| `rate_locks` | INTEGER | count | Rate locks taken that day. |
 
 Caveats: `applications` runs higher than the Mixpanel count of `pre-approval started` and does not track it exactly day to day, because phone and partner applications never reach Mixpanel. The rate a shopper is quoted (`rate_quoted_pct` on `pre-approval completed`) is the day's note rate adjusted for the borrower, rounded to 1/8 point.
 
@@ -69,12 +69,12 @@ Daily MLS inventory and listing-page traffic by market, from the listings data t
 |---|---|---|---|
 | `date` | DATE | UTC day | Day. |
 | `market` | STRING | — | One of the eight markets. Matches `market` on listing events. |
-| `listing_page_views` | FLOAT | count | Listing pages served that day from the server logs, including visitors who block analytics and crawler traffic. |
-| `new_listings` | FLOAT | count | Listings that became visible in Keystead search that day. |
-| `active_listings` | FLOAT | count | Listings visible in search at 12:00 UTC. |
-| `price_reductions` | FLOAT | count | Listings whose price was cut that day. |
-| `closed_sales` | FLOAT | count | MLS closings in the market that day, all brokerages. |
-| `median_list_price_usd` | FLOAT | USD | Median list price of active listings at 12:00 UTC. |
+| `listing_page_views` | INTEGER | count | Listing pages served that day from the server logs, including visitors who block analytics and crawler traffic. |
+| `new_listings` | INTEGER | count | Listings that became visible in Keystead search that day. |
+| `active_listings` | INTEGER | count | Listings visible in search at 12:00 UTC. |
+| `price_reductions` | INTEGER | count | Listings whose price was cut that day. |
+| `closed_sales` | INTEGER | count | MLS closings in the market that day, all brokerages. |
+| `median_list_price_usd` | INTEGER | USD | Median list price of active listings at 12:00 UTC. |
 | `feed_status` | STRING | — | `healthy` or `stale` (the MLS import failed; listings visible in search are not being updated). |
 
 Caveats: `listing_page_views` runs well above the Mixpanel count of `listing viewed` and does not track it exactly day to day. Market figures (`closed_sales`, inventory) cover the whole MLS, not only Keystead buyers.
