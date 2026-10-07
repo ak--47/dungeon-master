@@ -2,7 +2,7 @@
 
 ## Who we are
 
-Forgebench is a developer platform. One product covers the path from a code change to production: pull requests and code review, CI builds on hosted runners, a preview deployment for every push, and production deploys. The company has about 45 employees and serves about 500 customer organizations, from small startups with a handful of developers to enterprises with up to about 300 developers on the platform. Most developers on the platform are in the United States (about six in ten). The rest are spread across Europe, Asia, Latin America, and Africa, so some activity happens in every hour of the UTC day.
+Forgebench is a developer platform. One product covers the path from a code change to production: pull requests and code review, CI builds on hosted runners, a preview deployment for every push, and production deploys. The company has about 45 employees and serves about 500 customer organizations, from small startups with a handful of developers to enterprises with up to about 300 developers on the platform. Most developers on the platform are in the United States (about six in ten). The rest are spread across Europe, Asia, Latin America, and Africa.
 
 ## What developers do in the product
 
@@ -48,7 +48,7 @@ New developers arrive through one of six acquisition channels, recorded at signu
 - **paid_social** — sponsored posts on developer social platforms.
 - **newsletter** — sponsored placements in developer newsletters.
 
-The three paid channels bid to a target cost per signup that marketing sets for each channel. Daily spend by paid channel is in the warehouse table `marketing_spend_daily`.
+Marketing sets a target cost per signup for each paid channel and a weekly budget for each channel; campaigns bid toward the target within that week's budget. The growth team moves budget between the paid channels from week to week. Daily spend by paid channel is in the warehouse table `marketing_spend_daily`.
 
 ## Goals for the period (Q3 2026)
 

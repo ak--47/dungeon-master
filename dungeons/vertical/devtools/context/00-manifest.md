@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Forgebench**, a developer platf
 
 - **Product:** the Forgebench web app, CLI, and hosted CI service: repository import, pull requests and code review, CI builds on hosted runners, preview deployments for every push, and production deploys. Paid plans are Pro, Team, and Enterprise.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early June through the first day of Q4.
-- **Scale:** about 10,000 developers at 500 customer organizations were active in the window. About 4,500 of them signed up during the window; the rest were already using Forgebench before June 4. The project holds about 970,000 events.
+- **Scale:** about 10,000 developers at 500 customer organizations were active in the window. About 4,500 of them signed up during the window; the rest were already using Forgebench before June 4. The project holds about 980,000 events.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC.
 
 ## The other files

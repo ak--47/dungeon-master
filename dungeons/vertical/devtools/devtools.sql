@@ -169,6 +169,15 @@ f AS (SELECT s.uid, count(*) FILTER (WHERE e.event = 'preview deployed' AND e.t 
 SELECT CASE WHEN previews >= 3 THEN 'habit (3+)' WHEN previews >= 1 THEN 'light (1-2)' ELSE 'none (not onboarded)' END AS preview_group,
  count(*) AS developers, round(avg((buys > 0)::INT), 4) AS paid_rate
 FROM f GROUP BY 1 ORDER BY 1;
+-- STORY H10 (controlled read): purchases per upgrade-page visit in the first 42 days, same cohorts (knob 2.5)
+WITH s AS (SELECT uid, t0 FROM signups WHERE signup_plan = 'free' AND t0 < TIMESTAMP '2026-08-20 23:59:59'),
+f AS (SELECT s.uid, count(*) FILTER (WHERE e.event = 'preview deployed' AND e.t < s.t0 + INTERVAL 14 DAY) AS previews,
+  count(*) FILTER (WHERE e.event = 'upgrade page viewed' AND e.t < s.t0 + INTERVAL 42 DAY) AS visits,
+  count(*) FILTER (WHERE e.event = 'subscription started' AND e.t < s.t0 + INTERVAL 42 DAY) AS buys
+  FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
+SELECT CASE WHEN previews >= 3 THEN 'habit (3+)' WHEN previews >= 1 THEN 'light (1-2)' ELSE 'none (not onboarded)' END AS preview_group,
+ count(*) FILTER (WHERE visits > 0) AS visitors, sum(visits) AS visits, sum(buys) AS buys, round(sum(buys)::DOUBLE / sum(visits), 4) AS buys_per_visit
+FROM f GROUP BY 1 ORDER BY 1;
 
 -- ═════════════════════════════════════════════════════════════════════════
 -- EVAL (Q1-Q20) — every number in eval/devtools.eval.md comes from these
@@ -231,6 +240,10 @@ FROM g JOIN g s ON s.plan = g.plan AND s.org_size = 'startup' WHERE g.org_size =
 SELECT CASE WHEN lines <= 100 THEN 'a: <=100' WHEN lines < 400 THEN 'b: 101-399' WHEN lines < 1000 THEN 'c: 400-999' ELSE 'd: 1000+' END AS pr_size,
  count(*) AS prs, round(count(*) * 100.0 / sum(count(*)) OVER (), 1) AS pct_of_prs, round(median(date_diff('second', t_open, t_review)) / 3600.0, 2) AS median_wait_h
 FROM prs WHERE t_open IS NOT NULL AND t_review IS NOT NULL GROUP BY 1 ORDER BY 1;
+-- the same read from review_wait_hours on review submitted (Insights median by lines_changed)
+SELECT CASE WHEN lines_changed <= 100 THEN 'a: <=100' WHEN lines_changed < 1000 THEN 'b: 101-999' ELSE 'c: 1000+' END AS pr_size,
+ count(*) AS reviews, median(review_wait_hours) AS median_review_wait_hours
+FROM ev WHERE event = 'review submitted' GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q8 — first CI build and retention (first build within 14 days; signups at least 37 days before the end)
 WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 37 DAY),
@@ -348,6 +361,17 @@ f AS (SELECT s.uid, count(*) FILTER (WHERE e.event = 'preview deployed' AND e.t 
   FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
 SELECT CASE WHEN previews >= 3 THEN 'habit (3+)' WHEN previews >= 1 THEN 'light (1-2)' ELSE 'none (not onboarded)' END AS preview_group,
  count(*) AS developers, sum((buys > 0)::INT) AS buyers, round(avg((buys > 0)::INT), 4) AS paid_rate FROM f GROUP BY 1 ORDER BY 1;
+-- reach and purchases per visit: upgrade-page visits in the first 42 days, and over the whole window (the Insights formula B/A)
+WITH s AS (SELECT uid, t0 FROM signups WHERE signup_plan = 'free' AND t0 < TIMESTAMP '2026-08-20 23:59:59'),
+f AS (SELECT s.uid, count(*) FILTER (WHERE e.event = 'preview deployed' AND e.t < s.t0 + INTERVAL 14 DAY) AS previews,
+  count(*) FILTER (WHERE e.event = 'upgrade page viewed' AND e.t < s.t0 + INTERVAL 42 DAY) AS visits_42d,
+  count(*) FILTER (WHERE e.event = 'upgrade page viewed') AS visits_all,
+  count(*) FILTER (WHERE e.event = 'subscription started') AS buys
+  FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
+SELECT CASE WHEN previews >= 3 THEN 'habit (3+)' WHEN previews >= 1 THEN 'light (1-2)' ELSE 'none (not onboarded)' END AS preview_group,
+ count(*) AS developers, round(avg((visits_42d > 0)::INT), 4) AS reached_upgrade_page_42d, sum(buys) AS buys,
+ round(sum(buys)::DOUBLE / sum(visits_42d), 4) AS buys_per_visit_42d, round(sum(buys)::DOUBLE / sum(visits_all), 4) AS buys_per_visit_all
+FROM f GROUP BY 1 ORDER BY 1;
 -- the same split without the Free filter (all signups through Aug 20)
 WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-08-20 23:59:59'),
 f AS (SELECT s.uid, count(*) FILTER (WHERE e.event = 'preview deployed' AND e.t < s.t0 + INTERVAL 14 DAY) AS previews,
