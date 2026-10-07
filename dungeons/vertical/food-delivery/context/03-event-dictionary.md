@@ -54,7 +54,7 @@ Every checkout gets an `order_id`. The checkout, a failed payment, the order, tr
 
 | Event | Meaning | Properties |
 |---|---|---|
-| `pass trial ended` | A free trial reaches its 14th day. Sent by billing whether or not the customer still uses the app. | `outcome` (`converted` = became a paid member, `not_converted`); `orders_during_trial`: orders the customer placed in the 14 days of the trial. |
+| `pass trial ended` | A free trial reaches its 14th day. Sent by billing whether or not the customer still uses the app. | `outcome` (`converted` = became a paid member, `not_converted`); `orders_during_trial`: orders the customer placed in the 14 days of the trial, as billing counts them. For trials that began before 2026-06-04, the count includes the trial days before June 4, which are not in this dataset, so it can be higher than the orders you see in Mixpanel. |
 | `pass cancelled` | A paid member cancels. | `cancel_reason` (`not_ordering_enough`, `too_expensive`, `switching_apps`, `moving`, `other`); `months_subscribed`. |
 
 ## User profile properties
@@ -80,7 +80,8 @@ Every checkout gets an `order_id`. The checkout, a failed payment, the order, tr
 | Funnel | Steps | Notes |
 |---|---|---|
 | Signup | `account created` → `address saved` | New customers only. |
-| Ordering visit | `app opened` → `restaurant viewed` (or `reorder tapped`) → `item added to cart` → `checkout started` → `order placed` | One visit; use a short conversion window (about an hour). Order Again visits skip the restaurant page and the cart steps. |
+| Ordering visit | `app opened` → `restaurant viewed` → `item added to cart` → `checkout started` → `order placed` | One visit; 1-hour conversion window, Totals counting. Order Again visits never send `restaurant viewed` or `item added to cart`, so this funnel counts them as stopping after `app opened`; the team reports them with the Order Again funnel below. |
+| Order Again visit | `reorder tapped` → `checkout started` → `order placed` | From 2026-07-07. 1-hour conversion window, Totals counting. |
 | Checkout | `checkout started` → `order placed` | Per checkout: hold `order_id` constant (Totals counting). |
 | Order lifecycle | `order placed` → `order delivered` → `order rated` | Hold `order_id` constant. |
 | Pass trial | `pass trial started` → `pass trial ended` (outcome = converted) | 14-day trials; only trials that started at least 14 days before the window end have an outcome. |

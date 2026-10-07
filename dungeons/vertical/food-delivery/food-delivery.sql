@@ -367,18 +367,40 @@ SELECT date_trunc('week', t0)::DATE AS week, count(*) AS signups FROM signups GR
 SELECT ch, count(*) AS signups, round(count(*)::DOUBLE / (SELECT count(*) FROM signups), 4) AS share FROM signups GROUP BY 1 ORDER BY 2 DESC;
 SELECT round(avg((f.uid IS NOT NULL)::INT), 4) AS first_order_rate FROM signups s LEFT JOIN (SELECT DISTINCT uid FROM orders) f ON f.uid = s.uid WHERE s.t0 < TIMESTAMP '2026-09-01';
 
--- EVAL Q18: the ordering funnel per session (menu or Order Again -> cart -> checkout -> order)
+-- EVAL Q18: the ordering funnel as Mixpanel builds it: Funnels app opened -> restaurant viewed ->
+-- item added to cart -> checkout started -> order placed, Totals, 1-hour window, steps in order.
+-- Order Again visits have no restaurant viewed or item added to cart, so this funnel counts them
+-- as drop-offs at step 2; the second query splits them out and the third gives their own funnel.
+-- (Cross-checked against the Mixpanel funnel emulator, Totals with re-entry: stage rates agree
+-- within 0.1 point; Mixpanel shows slightly fewer step-1 entries because an app opened inside a
+-- live 1-hour attempt does not start a new one.)
+CREATE OR REPLACE TEMP TABLE q18_visits AS
 WITH o AS (SELECT uid, t, lead(t) OVER (PARTITION BY uid ORDER BY t) AS nt FROM ev WHERE event = 'app opened'),
-s AS (SELECT o.uid, o.t,
-  bool_or(e.event IN ('restaurant viewed', 'reorder tapped')) AS viewed,
-  bool_or(e.event IN ('item added to cart', 'reorder tapped')) AS carted,
-  bool_or(e.event = 'checkout started') AS checkout,
-  bool_or(e.event = 'order placed') AS ordered
-  FROM o LEFT JOIN ev e ON e.uid = o.uid AND e.t > o.t AND e.t < o.t + INTERVAL 90 MINUTE AND (o.nt IS NULL OR e.t < o.nt)
-  AND e.event IN ('restaurant viewed', 'reorder tapped', 'item added to cart', 'checkout started', 'order placed') GROUP BY 1, 2)
-SELECT count(*) AS sessions, round(avg(coalesce(viewed, false)::INT), 4) AS viewed_or_reorder, round(avg(coalesce(carted, false)::INT), 4) AS cart,
- round(avg(coalesce(checkout, false)::INT), 4) AS checkout, round(avg(coalesce(ordered, false)::INT), 4) AS ordered
-FROM s;
+s1 AS (SELECT o.uid, o.t, o.nt, min(e.t) AS t1 FROM o LEFT JOIN ev e ON e.uid = o.uid AND e.event = 'restaurant viewed'
+  AND e.t > o.t AND e.t < o.t + INTERVAL 60 MINUTE GROUP BY 1, 2, 3),
+s2 AS (SELECT s1.uid, s1.t, s1.nt, s1.t1, min(e.t) AS t2 FROM s1 LEFT JOIN ev e ON e.uid = s1.uid AND e.event = 'item added to cart'
+  AND e.t >= s1.t1 AND e.t < s1.t + INTERVAL 60 MINUTE GROUP BY 1, 2, 3, 4),
+s3 AS (SELECT s2.uid, s2.t, s2.nt, s2.t1, s2.t2, min(e.t) AS t3 FROM s2 LEFT JOIN ev e ON e.uid = s2.uid AND e.event = 'checkout started'
+  AND e.t >= s2.t2 AND e.t < s2.t + INTERVAL 60 MINUTE GROUP BY 1, 2, 3, 4, 5),
+s4 AS (SELECT s3.uid, s3.t, s3.nt, s3.t1, s3.t2, s3.t3, min(e.t) AS t4 FROM s3 LEFT JOIN ev e ON e.uid = s3.uid AND e.event = 'order placed'
+  AND e.t >= s3.t3 AND e.t < s3.t + INTERVAL 60 MINUTE GROUP BY 1, 2, 3, 4, 5, 6)
+SELECT s4.*, EXISTS (SELECT 1 FROM ev r WHERE r.uid = s4.uid AND r.event = 'reorder tapped' AND r.t > s4.t
+  AND r.t < s4.t + INTERVAL 60 MINUTE AND (s4.nt IS NULL OR r.t < s4.nt)) AS order_again_visit
+FROM s4;
+SELECT count(*) AS visits, round(avg((t1 IS NOT NULL)::INT), 4) AS restaurant_viewed, round(avg((t2 IS NOT NULL)::INT), 4) AS item_added,
+ round(avg((t3 IS NOT NULL)::INT), 4) AS checkout_started, round(avg((t4 IS NOT NULL)::INT), 4) AS order_placed
+FROM q18_visits;
+SELECT CASE WHEN order_again_visit THEN 'order_again' ELSE 'browse' END AS visit_type, count(*) AS visits,
+ round(count(*)::DOUBLE / (SELECT count(*) FROM q18_visits), 4) AS share_of_visits,
+ round(avg((t1 IS NOT NULL)::INT), 4) AS restaurant_viewed, round(avg((t2 IS NOT NULL)::INT), 4) AS item_added,
+ round(avg((t3 IS NOT NULL)::INT), 4) AS checkout_started, round(avg((t4 IS NOT NULL)::INT), 4) AS order_placed
+FROM q18_visits GROUP BY 1 ORDER BY 1;
+-- Order Again funnel (from 2026-07-07): reorder tapped -> checkout started -> order placed, Totals, 1-hour window
+WITH r AS (SELECT uid, t FROM ev WHERE event = 'reorder tapped'),
+c AS (SELECT r.uid, r.t, min(e.t) AS tc FROM r LEFT JOIN ev e ON e.uid = r.uid AND e.event = 'checkout started' AND e.t >= r.t AND e.t < r.t + INTERVAL 60 MINUTE GROUP BY 1, 2),
+p AS (SELECT c.uid, c.t, c.tc, min(e.t) AS tp FROM c LEFT JOIN ev e ON e.uid = c.uid AND e.event = 'order placed' AND e.t >= c.tc AND e.t < c.t + INTERVAL 60 MINUTE GROUP BY 1, 2, 3)
+SELECT count(*) AS reorder_taps, round(avg((tc IS NOT NULL)::INT), 4) AS checkout_started, round(avg((tp IS NOT NULL)::INT), 4) AS order_placed FROM p;
+-- checkout -> order and payment failures
 SELECT round(avg(placed::INT), 4) AS checkout_to_order, (SELECT count(*) FROM ev WHERE event = 'payment failed') AS payment_failures,
  (SELECT round(count(*) FILTER (WHERE event = 'payment failed')::DOUBLE / count(*) FILTER (WHERE event IN ('payment failed', 'order placed')), 4) FROM ev
   WHERE NOT (t::DATE BETWEEN DATE '2026-08-25' AND DATE '2026-08-28')) AS everyday_payment_failure_rate

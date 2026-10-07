@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Forkfly**, a food delivery app 
 
 - **Product:** the Forkfly iOS and Android apps: browsing and searching restaurants, building a cart, checkout, payment, delivery tracking, ratings, support contacts, the Order Again shortcut, and the Forkfly Pass membership.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early June through the end of September and the first day of October.
-- **Scale:** about 10,000 customers were active in the window. About 4,200 of them signed up during the window; the rest were already customers on June 4. The project holds about 900,000 events, including about 47,500 orders.
+- **Scale:** about 10,000 customers were active in the window. About 4,200 of them signed up during the window; the rest were already customers on June 4. The project holds about 810,000 events, including about 42,400 orders.
 - **Markets:** New York, Chicago, Atlanta, Miami, Boston, Austin, Denver, and Seattle.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. Customers are in US time zones, so a US dinner order often falls after midnight UTC, on the next UTC date.
 
