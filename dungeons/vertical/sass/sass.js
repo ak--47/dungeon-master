@@ -17,7 +17,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             month from 2026-08-03) and Business ($45 per seat); Enterprise
  *             is sales-led. Root Cause Assist (AI incident help) is a Business
  *             and Enterprise feature from 2026-07-22.
- * SCALE:      10,000 users (≈4,500 sign up inside the window), ~0.92M events,
+ * SCALE:      10,000 users (≈4,500 sign up inside the window), ~0.92M events
+ *             (EVENTS_PER_DAY 1.2 as the standard sets; hook thinning of
+ *             invites and integrations, new-user lapse and dark cuts, and
+ *             holiday skips remove about a third of the ~1.4M budget),
  *             120 days (2026-06-04 → 2026-10-01, UTC), ≈3,700 companies: ≈300
  *             long-standing customers (2-100 users each) and ≈3,400 workspaces
  *             started in or just before the window (mostly 1-3 users). About
@@ -178,8 +181,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * - Collaboration volume: new users keep every "teammate invited" in their
  *   first 7 days; a rotation per user keeps 12% of their other invites. "integration configured" comes only
  *   from a role-dependent share of users (the engineers who own alert routing;
- *   higher in accounts still setting up). Accounts set up before the window
- *   (customer_since before 2026-05-14) hold their tools in
+ *   higher in accounts still setting up). Accounts set up before mid-May
+ *   (customer_since before 2026-05-14, three weeks before the window) hold
+ *   their tools in
  *   connected_integrations (chat: slack or microsoft_teams; paging: pagerduty
  *   or opsgenie; github / jira / terraform) and their in-window events are one
  *   reconfiguration per connected tool, spread over the window. Newer accounts
@@ -229,7 +233,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   user. So both the number of inviters and invites per inviter rise. The
  *   discount also fills open seats: 7% of new signups during the promotion
  *   join a paid company as new hires inside its contracted seats (no seats
- *   are added). Free workspaces have no seats to discount and do not change.
+ *   are added); at this scale that is a small, not significant rise in
+ *   joiners (112 vs 98 in Sep 1-15, z about 1), so the eval treats invites,
+ *   not joiners, as the finding. Free workspaces have no seats to discount
+ *   and do not change.
  *   Dashboard views are untouched.
  * MIXPANEL: Insights, teammate invited and dashboard viewed, daily, formula
  *   A/B, breakdown plan_tier; Sep 16-30 vs the 30 days before (Aug 17 -
@@ -272,12 +279,16 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: once both the Slack and PagerDuty integrations are live, alerts are
  *   acknowledged in 0.4x the time. Acknowledge → resolve is unchanged. Accounts
- *   set up before the window (customer_since before 2026-05-14) connected their
+ *   set up before mid-May (customer_since before 2026-05-14) connected their
  *   tools before June 4; when profile connected_integrations holds both, every
  *   in-window alert is faster (their in-window "integration configured" events
- *   only reconfigure tools they already have). Newer accounts: alerts
- *   triggered after the later of their first slack and first pagerduty
- *   "integration configured".
+ *   only reconfigure tools they already have). Newer accounts (from
+ *   2026-05-14, including the warm-start accounts of the three weeks before
+ *   June 4): alerts triggered after the later of their first slack and first
+ *   pagerduty "integration configured". The guides (03 connected_integrations)
+ *   state the mid-May split. An analyst who filters customer_since before
+ *   June 4 instead reads 14.61 vs 25.82 minutes (0.57x): the May 14 - Jun 3
+ *   accounts connect the pair inside the window, which dilutes the ratio.
  * MIXPANEL: read 1 (buildable): Insights, alert acknowledged, average
  *   response_time_mins, filter user property customer_since before
  *   2026-05-14, breakdown by a cohort "user property connected_integrations
@@ -2142,7 +2153,7 @@ FROM ev WHERE event = 'alert resolved' AND t >= TIMESTAMP '${RCA_RAMPED}' AND pl
 		id: "H4-slack-pagerduty-response",
 		hook: "H4",
 		archetype: "cohort-prop-scale",
-		narrative: `Once a user has both the Slack and PagerDuty integrations connected, they acknowledge alerts in ${INTEGRATED_RESPONSE_MULT}x the time: the page reaches the on-call engineer where they already are. Only trigger → acknowledge is affected; acknowledge → resolve is not. The speed-up starts when the pair is live. Accounts set up before the window (customer_since before ${RECENT_FROM}) connected their tools before June 4 and list them in the profile property connected_integrations; when it holds both, every in-window alert is faster (their in-window "integration configured" events only reconfigure tools they have). Newer accounts: alerts triggered after the later of their first slack and first pagerduty configuration. Read 1: accounts set up before the window, profile cohort "connected_integrations contains slack AND pagerduty" vs the rest (company size, severity, and fatigue are independent of the cohort, so the ratio of averages reads the knob). Read 2 (a raw-data / SQL check; Mixpanel has no report that splits each user's alerts at their own connection date): within-user before/after for new signups who connect both in the window; fewer acknowledgements and per-user mix noise, so the knob is the target with a knob-derived floor.`,
+		narrative: `Once a user has both the Slack and PagerDuty integrations connected, they acknowledge alerts in ${INTEGRATED_RESPONSE_MULT}x the time: the page reaches the on-call engineer where they already are. Only trigger → acknowledge is affected; acknowledge → resolve is not. The speed-up starts when the pair is live. Accounts set up before mid-May (customer_since before ${RECENT_FROM}) connected their tools before June 4 and list them in the profile property connected_integrations; when it holds both, every in-window alert is faster (their in-window "integration configured" events only reconfigure tools they have). Newer accounts: alerts triggered after the later of their first slack and first pagerduty configuration. Read 1: accounts set up before mid-May, profile cohort "connected_integrations contains slack AND pagerduty" vs the rest (company size, severity, and fatigue are independent of the cohort, so the ratio of averages reads the knob). Read 2 (a raw-data / SQL check; Mixpanel has no report that splits each user's alerts at their own connection date): within-user before/after for new signups who connect both in the window; fewer acknowledgements and per-user mix noise, so the knob is the target with a knob-derived floor.`,
 		mixpanelReport: { type: "Insights", event: "alert acknowledged", measure: "average response_time_mins", breakdown: "cohort: user property connected_integrations contains slack AND contains pagerduty", filter: `user property customer_since before ${RECENT_FROM} (read 1; read 2 is a raw-data / SQL check)` },
 		assertions: [
 			{
@@ -2310,7 +2321,7 @@ SELECT 'all' AS grp, outage_rows, misplaced, misplaced + abs(outage_rows - ${day
 	{
 		id: "H8-paid-channel-economics",
 		hook: "H8",
-		archetype: "attribution-bias",
+		archetype: "external-join",
 		narrative: `LinkedIn Ads signups cost ${CPL_USD.linkedin_ads / CPL_USD.paid_search}x as much as paid search signups over the window (warehouse paid_marketing_daily bills a paced daily budget per channel = cost per signup × expected signups per day, with a weekday shape that follows the weekday signup rhythm above a ${SPEND_FLAT_SHARE * 100}% flat floor and seeded ±${SPEND_NOISE * 100}% day noise, never zero: $${CPL_USD.linkedin_ads} vs $${CPL_USD.paid_search} per signup at the window level; day-level cost per signup moves with the day's signups), but they buy a paid plan ${PURCHASE_KEEP.linkedin_ads / PURCHASE_KEEP.paid_search}x as often (a channel's buyers are ${SIGNUP_BUY_RATE * 100}% × its keep share of its signups: ${PURCHASE_KEEP.linkedin_ads} vs ${PURCHASE_KEEP.paid_search}; new signups' channels are an exact rotation, independent of company size, persona, and owner status). Spend per signup needs the warehouse join. The purchase-rate read is the Mixpanel funnel account created → subscription started with the default ${PAID_FUNNEL_WINDOW_DAYS}-day conversion window, for signups ${D(DATASET_START)} through ${PAID_COHORT_LAST} (every signup has its full window inside the data). A running quota per channel keeps an owner's buying moment while the channel's buyers are below its share of the channel's signups so far (not a coin flip per owner), so the remaining noise is which signups' purchases land inside the 30-day window and the Jun 4 - Aug 31 cohort.`,
 		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "paid_marketing_daily.spend_usd", funnel: `account created → subscription started, ${PAID_FUNNEL_WINDOW_DAYS}-day window (Mixpanel default), signups ${D(DATASET_START)} to ${PAID_COHORT_LAST}, breakdown acquisition_channel` },
 		assertions: [

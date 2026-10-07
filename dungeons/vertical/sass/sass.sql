@@ -45,7 +45,8 @@ SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-subscript
 
 -- profile attributes keyed by the resolved user id; slack_and_pagerduty = both
 -- tools in the profile's connected_integrations (current integrations; for
--- accounts set up before the window they were connected before June 4)
+-- accounts set up before mid-May (customer_since before 2026-05-14) they were
+-- connected before June 4)
 CREATE OR REPLACE TEMP TABLE prof AS
 SELECT distinct_id::VARCHAR AS uid, company_size, cloud_provider, acquisition_channel, plan_tier AS current_plan,
  "Experiment: Smart Test Selection" AS variant, created, customer_since,
@@ -190,7 +191,7 @@ FROM onboarding GROUP BY 1 ORDER BY 1;
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H4-slack-pagerduty-response — ack time ×0.4 once Slack + PagerDuty are both live
 -- ─────────────────────────────────────────────────────────────────────────
--- read 1: accounts set up before the window (customer_since before 2026-05-14),
+-- read 1: accounts set up before mid-May (customer_since before 2026-05-14),
 -- profile connected_integrations has slack AND pagerduty vs the rest
 SELECT CASE WHEN p.slack_and_pagerduty THEN 'slack_and_pagerduty' ELSE 'rest' END AS grp,
  count(DISTINCT a.uid) AS users, count(*) AS acks, round(avg(a.response_time_mins), 2) AS avg_response_mins
@@ -420,11 +421,17 @@ WITH r AS (SELECT DISTINCT uid FROM alerts WHERE t_trig IS NOT NULL)
 SELECT count(*) AS alert_recipients, count(*) FILTER (WHERE p.slack_and_pagerduty) AS recipients_with_both,
  round(avg(p.slack_and_pagerduty::INT), 4) AS share_with_both
 FROM r JOIN prof p ON p.uid = r.uid;
--- accounts set up before the window (customer_since before 2026-05-14) and new signups before/after both were live
+-- accounts set up before mid-May (customer_since before 2026-05-14) and new signups before/after both were live
 SELECT CASE WHEN p.slack_and_pagerduty THEN 'slack_and_pagerduty' ELSE 'rest' END AS grp, count(DISTINCT a.uid) AS users,
  round(avg(a.response_time_mins), 2) AS avg_response_mins
 FROM alerts a JOIN prof p ON p.uid = a.uid
 WHERE a.t_ack IS NOT NULL AND p.customer_since < '2026-05-14' GROUP BY 1 ORDER BY 1;
+-- the same read with the window start as the cutoff (customer_since before 2026-06-04):
+-- diluted by the May 14 - Jun 3 accounts, which connect their tools inside the window
+SELECT CASE WHEN p.slack_and_pagerduty THEN 'slack_and_pagerduty' ELSE 'rest' END AS grp, count(DISTINCT a.uid) AS users,
+ round(avg(a.response_time_mins), 2) AS avg_response_mins
+FROM alerts a JOIN prof p ON p.uid = a.uid
+WHERE a.t_ack IS NOT NULL AND p.customer_since < '2026-06-04' GROUP BY 1 ORDER BY 1;
 SELECT CASE WHEN a.t_trig >= i.ready THEN 'after' ELSE 'before' END AS grp, count(DISTINCT a.uid) AS users, count(*) AS acks,
  round(avg(a.response_time_mins), 2) AS avg_response_mins
 FROM alerts a JOIN integrated i ON i.uid = a.uid JOIN signups s ON s.uid = a.uid
@@ -453,6 +460,12 @@ SELECT CASE WHEN alerts <= 6 THEN '01: 1-6' WHEN alerts <= 12 THEN '02: 7-12' WH
 FROM alert_load GROUP BY 1 ORDER BY 1;
 SELECT count(*) FILTER (WHERE alerts >= 30) AS users_30_plus, round(avg((alerts >= 30)::INT), 4) AS share_30_plus,
  round(sum(alerts) FILTER (WHERE alerts >= 30)::DOUBLE / sum(alerts), 4) AS share_of_alerts_30_plus FROM alert_load;
+-- by role (primary_role): the role gap is alert load; inside one load band roles acknowledge alike
+SELECT u.primary_role, count(*) AS users, round(sum(l.alerts)::DOUBLE / count(*), 1) AS alerts_per_user,
+ round(sum(l.acks)::DOUBLE / sum(l.alerts), 4) AS ack_rate,
+ round(sum(l.acks) FILTER (WHERE l.alerts <= 12)::DOUBLE / sum(l.alerts) FILTER (WHERE l.alerts <= 12), 4) AS ack_rate_1_12_alerts,
+ round(sum(l.acks) FILTER (WHERE l.alerts BETWEEN 13 AND 29)::DOUBLE / sum(l.alerts) FILTER (WHERE l.alerts BETWEEN 13 AND 29), 4) AS ack_rate_13_29_alerts
+FROM alert_load l JOIN users u ON u.distinct_id::VARCHAR = l.uid GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q9 — first-week invites and retention
 SELECT least(early_invites, 4) AS first_week_invites, count(*) AS users, round(avg(d7::INT), 4) AS d7_retention, round(avg(d30::INT), 4) AS d30_retention
