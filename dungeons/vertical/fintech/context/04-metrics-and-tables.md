@@ -59,7 +59,7 @@ Daily card authorization health by payment channel, from the card processor's re
 | `processor_status` | STRING | — | Daily status for the channel's processing path: `operational` or `major_outage`, as posted on the processor's status page. |
 | `p95_auth_latency_ms` | FLOAT | milliseconds | 95th-percentile authorization response time. |
 
-Caveats: the processor sees authorizations the app never logs (incremental authorizations at gas pumps and hotels, stand-in authorizations, recurring merchant-initiated charges), so `auth_attempts` runs higher than the Mixpanel count of `card transaction` and does not track it exactly day to day. The processor's approval rate is computed on its own count.
+Caveats: the processor counts authorizations that never reach the `card transaction` feed (incremental authorizations at gas pumps and hotels, stand-in authorizations, recurring merchant-initiated charges), so `auth_attempts` runs higher than the Mixpanel count of `card transaction` and does not track it exactly day to day. The processor's approval rate is computed on its own count.
 
 ### `pocket_savings_daily`
 

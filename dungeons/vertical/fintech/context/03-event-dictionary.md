@@ -2,7 +2,7 @@
 
 Event names are lowercase, as tracked. Properties are flat on each event. Times are UTC.
 
-**Who sends the event.** "App" events are sent by the iOS or Android app when the member does something and carry `user_id`, `device_id`, and device details. "Server" events are sent by Penny Harbor's back end when money posts or a back-office step completes; they carry `user_id` only and no device fields, and they keep arriving even when a member has stopped opening the app.
+**Who sends the event.** "App" events are sent by the iOS or Android app when the member does something and carry `user_id`, `device_id`, `session_id`, and device details. "Server" events are sent by Penny Harbor's back end when money posts, a back-office step completes, or the card processor reports an authorization; they carry `user_id` only and no device or session fields. Server events for paychecks, AutoPay, Round-Up sweeps, Float repayments, and support keep arriving even when a member has stopped opening the app.
 
 ## Properties on every event
 
@@ -12,7 +12,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 | `user_id` | The member's ID. Present on every event. |
 | `device_id` | The device the event came from. App events only. Members use about two devices on average. |
 | `insert_id` | Unique event ID used for de-duplication. |
-| `session_id` | Pipeline field grouping events close in time (diagnostic; Mixpanel computes its own sessions). Present on every event, including server events. |
+| `session_id` | Pipeline field grouping app events close in time (diagnostic; Mixpanel computes its own sessions). App events only. |
 | `plan_tier` | The member's plan **at the moment of the event**: `free`, `plus`, or `premium`. It changes at the moment a member upgrades. |
 | `country`, `country_code`, `region`, `city` | Member location (United States; one location per member). |
 | `os`, `model`, `screen_height`, `screen_width`, `carrier`, `radio` | Device details (`os` is `iOS`, `iPadOS`, or `Android`). App events only; fixed per device. |
@@ -24,7 +24,7 @@ New members go through these three steps once, when they join. The steps happen 
 | Event | Sender | Meaning | Properties |
 |---|---|---|---|
 | `account opened` | App | The applicant submits the account application. First event of every new member and the moment their device is linked to their `user_id`. | `signup_method` (`email`, `apple`, `google`); `acquisition_channel`: how the member found us (`organic`, `referral`, `paid_social`, `search_ads`, `app_store_ads`, `comparison_sites`), same value as the profile property. |
-| `identity verified` | Server | Identity verification passed (KYC). | `kyc_method`: `instant_match` (verified automatically against credit bureau and identity databases) or `document_scan` (the applicant uploaded a photo ID and selfie, which the operations team reviewed). |
+| `identity verified` | Server | Identity verification passed (KYC). | `kyc_method`: `instant_match` (verified automatically against identity databases) or `document_scan` (the applicant uploaded a photo ID and selfie, which the operations team reviewed). |
 | `account funded` | Server | The first money arrived in the account. Onboarding ends here. | `funding_method` (`bank_link`, `debit_card`, `p2p_in`, `cash_load`); `amount` (USD). |
 
 ## Everyday banking
@@ -33,7 +33,7 @@ New members go through these three steps once, when they join. The steps happen 
 |---|---|---|---|
 | `app opened` | App | The member opens the app. This is the event Penny Harbor uses for "active". | `entry_point` (`icon`, `widget`, `notification`, `deeplink`). |
 | `balance checked` | App | The member views a balance screen. | `available_balance_usd`: the available balance shown (0 for accounts that were never funded); `account_view` (`overview`, `checking`, `pockets`). |
-| `card transaction` | App (card feed) | A debit card authorization: a purchase or an ATM withdrawal, approved or declined. | `transaction_type` (`purchase`, `atm_withdrawal`); `amount` (USD); `merchant_category` (`grocery`, `dining`, `gas`, `retail`, `online_shopping`, `subscriptions`, `travel`, `entertainment`, `health`, or `cash` for ATMs); `merchant_name`; `payment_channel` (`chip`, `contactless_wallet` for Apple Pay / Google Pay, `online`, `atm`); `authorization_status` (`approved`, `declined`); `decline_reason` on declines only (`insufficient_funds`, `suspected_fraud`, `incorrect_pin`, `merchant_blocked`, `card_locked`, `technical_error`). |
+| `card transaction` | Server (card processor feed) | A debit card authorization: a purchase or an ATM withdrawal, approved or declined. | `transaction_type` (`purchase`, `atm_withdrawal`); `amount` (USD); `merchant_category` (`grocery`, `dining`, `gas`, `retail`, `online_shopping`, `subscriptions`, `travel`, `entertainment`, `health`, or `cash` for ATMs); `merchant_name`; `payment_channel` (`chip`, `contactless_wallet` for Apple Pay / Google Pay, `online`, `atm`); `authorization_status` (`approved`, `declined`); `decline_reason` on declines only (`insufficient_funds`, `suspected_fraud`, `incorrect_pin`, `merchant_blocked`, `card_locked`, `technical_error`). |
 | `card locked` | App | The member locks their card. | `reason` (`misplaced`, `lost`, `suspicious_activity`, `travel`). |
 | `transfer sent` | App | The member sends money. | `transfer_type` (`p2p`, `external_bank`); `speed` (`standard`, `instant`); `amount` (USD); `instant_fee_usd` (0 for standard); `recipient_type` (`friend`, `family`, `landlord`, `self`, `business`). |
 
@@ -94,7 +94,6 @@ A ticket's two events share a `ticket_id`.
 | `distinct_id` | The member's ID (same as `user_id` on events). |
 | `name`, `email`, `avatar` | Contact details. |
 | `customer_segment` | `everyday`, `tight_budget`, `saver`, `gig_worker`, `student` (see 01-business.md). |
-| `_persona` | Legacy copy of `customer_segment` from an older CRM sync. |
 | `credit_history` | `established` or `thin_file`. |
 | `acquisition_channel` | Channel at signup (for members who joined before June 4, the channel they originally came from). |
 | `plan_tier` | Current plan: `free`, `plus`, `premium`. |
@@ -113,7 +112,7 @@ A ticket's two events share a `ticket_id`.
 | Funnel | Steps | Notes |
 |---|---|---|
 | Onboarding | `account opened` → `identity verified` → `account funded` | New members only. Read with a 7-day conversion window. |
-| Direct deposit switch | `account opened` → `direct deposit set up` | New members. The growth team reads it with a 14-day window. |
+| Direct deposit switch | `account opened` → `direct deposit set up` | New members. |
 | Money check | `app opened` → `balance checked` | Daily habit. |
 | Send money | `app opened` → `transfer sent` | |
 | Save | `app opened` → `savings deposit` (source = manual) | |

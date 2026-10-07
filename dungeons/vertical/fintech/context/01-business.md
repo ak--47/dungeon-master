@@ -64,8 +64,8 @@ The four paid channels run on automated bidding that the growth team manages. Da
 
 Leadership set these goals for the quarter:
 
-1. **Become the primary account.** Grow the number of members with direct deposit. The growth team believes the first weeks after signup decide whether a new account becomes someone's main bank account.
-2. **Spend acquisition money where it pays back.** The CFO asked which paid channels bring members who become primary-account customers, not just installs.
+1. **Become the primary account.** Grow the number of members with direct deposit.
+2. **Spend acquisition money where it pays back.** The CFO asked which paid channels bring members who become primary-account customers.
 3. **Grow savings.** Launch Round-Ups, and run the Summer Saver Boost for paid-plan members. Finance asked what the boost cost and what it brought in.
 4. **Fewer late bills.** Late bill payments cost members late fees and generate support contacts. Product is testing whether AutoPay should be the default.
 5. **Make onboarding work for everyone.** Too many applicants start an account and never fund it.

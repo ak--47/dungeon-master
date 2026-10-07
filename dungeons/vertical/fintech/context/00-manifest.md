@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Penny Harbor**, a US mobile ban
 
 - **Product:** the Penny Harbor app for iOS and Android: checking with a Visa debit card, direct deposit, Pockets (savings), Round-Ups, Send (transfers), Bill Pay with AutoPay, Float (cash advances), Harbor Invest, and budgets. Plans are Free, Plus, and Premium.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early June through the end of Q3 and the first day of Q4.
-- **Scale:** about 10,000 members. About 4,100 of them opened their account during the window; the rest were already members before June 4. The project holds about 1.16 million events.
+- **Scale:** about 10,000 members. About 4,000 of them opened their account during the window; the rest were already members before June 4. A small number of members (under 1%) have no events in the window. The project holds about 1.1 million events.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. Members are in the United States, so a US evening falls after midnight UTC.
 
 ## The other files
@@ -26,7 +26,7 @@ This folder is the internal analytics wiki for **Penny Harbor**, a US mobile ban
 ## Identity notes
 
 - A new member is identified when they open an account. `account opened` is each new member's first event and carries both the member's `user_id` and the `device_id`. There is no anonymous pre-signup activity in the data.
-- Every event carries `user_id`. Events the member triggers in the app also carry `device_id` and device details. Events sent by Penny Harbor's servers carry `user_id` only, with no device fields: `identity verified`, `account funded`, `direct deposit received`, `float advance repaid`, `support ticket resolved`, `bill paid` when it was paid by AutoPay, and `savings deposit` when it is a Round-Up sweep. The event dictionary marks these.
+- Every event carries `user_id`. Events the member triggers in the app also carry `device_id`, `session_id`, and device details. Events sent by Penny Harbor's servers or received from the card processor carry `user_id` only, with no device or session fields: `identity verified`, `account funded`, `card transaction` (the card processor's authorization feed), `direct deposit received`, `float advance repaid`, `support ticket resolved`, `bill paid` when it was paid by AutoPay, and `savings deposit` when it is a Round-Up sweep. The event dictionary marks these.
 - Members use about two devices on average (a phone and a tablet, or an old and a new phone). `device_id` changes between devices; `user_id` does not.
 - Members who joined before June 4 have no `account opened` event in this window. Their `customer_since` profile date is before the window. For members who joined in the window, `customer_since` is the date they opened their account.
 - Count people with unique `user_id` (Mixpanel "Uniques"), not with `device_id`.

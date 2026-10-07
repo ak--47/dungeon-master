@@ -40,4 +40,4 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 - How often do members pay bills late?
 - What happened on August 20-21, and how many members did it touch?
 - Why do so many applicants never fund their account?
-- Is Premium support actually faster?
+- Is Premium support faster?

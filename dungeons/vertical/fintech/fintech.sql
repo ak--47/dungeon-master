@@ -302,9 +302,12 @@ SELECT t::DATE AS day, dayname(t) AS weekday, count(*) FILTER (WHERE event = 'di
 FROM ev WHERE t::DATE BETWEEN DATE '2026-06-17' AND DATE '2026-06-22' OR t::DATE BETWEEN DATE '2026-07-01' AND DATE '2026-07-06' OR t::DATE BETWEEN DATE '2026-09-03' AND DATE '2026-09-08'
 GROUP BY 1, 2 ORDER BY 1;
 
--- EVAL Q19: did members hit by the wallet outage use their card less afterwards? card transactions per member, 14 days before Aug 20 vs 14 days after Aug 21, outage-declined members vs other wallet users (overall and by plan)
+-- EVAL Q19: did members hit by the wallet outage use their card less afterwards? card transactions per member, 14 days before Aug 20 vs 14 days after Aug 21,
+-- among wallet users (wallet payment Aug 6-19) who used their card on Aug 20-21: outage-declined members vs the rest (overall and by plan).
+-- Requiring card use on Aug 20-21 for both groups removes the survivor bias of comparing hit members (active on those days by definition) with members who may have gone quiet.
 WITH hit AS (SELECT DISTINCT uid FROM ev WHERE event = 'card transaction' AND decline_reason = 'technical_error' AND payment_channel = 'contactless_wallet' AND t >= TIMESTAMP '2026-08-20' AND t < TIMESTAMP '2026-08-22'),
-wal AS (SELECT DISTINCT uid FROM ev WHERE event = 'card transaction' AND payment_channel = 'contactless_wallet' AND t >= TIMESTAMP '2026-08-06' AND t < TIMESTAMP '2026-08-20'),
+act AS (SELECT DISTINCT uid FROM ev WHERE event = 'card transaction' AND t >= TIMESTAMP '2026-08-20' AND t < TIMESTAMP '2026-08-22'),
+wal AS (SELECT DISTINCT uid FROM ev WHERE event = 'card transaction' AND payment_channel = 'contactless_wallet' AND t >= TIMESTAMP '2026-08-06' AND t < TIMESTAMP '2026-08-20' AND uid IN (SELECT uid FROM act)),
 m AS (SELECT w.uid, w.uid IN (SELECT uid FROM hit) AS hit, CASE WHEN p.current_plan = 'free' THEN 'free' ELSE 'plus_premium' END AS grp,
   count(e.uid) FILTER (WHERE e.t >= TIMESTAMP '2026-08-06' AND e.t < TIMESTAMP '2026-08-20') AS before_14d,
   count(e.uid) FILTER (WHERE e.t >= TIMESTAMP '2026-08-22' AND e.t < TIMESTAMP '2026-09-05') AS after_14d
