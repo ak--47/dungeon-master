@@ -203,6 +203,17 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   partial (signup at a soup time of day). Output shift: born users in active-day
   modes have fewer active days (`avgActiveDaysPerUser`) or more events
   (`retentionCurve`); run totals rise slightly in `retentionCurve` mode.
+- Run usage funnels for a born user who reached the `isAuthEvent` stitch and
+  dropped at a later first-funnel step. Any first-funnel drop-off used to leave
+  the user with only one-at-a-time standalone events for life, although the
+  stitch made them an identified user with a kept profile. With the auth step
+  first (social, support-desk), every drop-off was such a user: born members
+  fired ~4x the standalone events per post view of established members (199 vs
+  51 `post shared` per 1k views in a 3,000-user repro), and all-member event
+  shares drifted as the new-member share grew. Now 50 vs 49. A born user who
+  dropped before the stitch is unchanged: anonymous, device-only standalone
+  events, profile `_drop`. Output shift: dungeons whose first funnel has steps
+  after the auth step.
 
 ### Added
 

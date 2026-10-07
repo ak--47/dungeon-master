@@ -1196,6 +1196,12 @@ export interface EventConfig {
      * `isAuthEvent`: every event in those failed attempts is `device_id` only (pre-auth,
      * never stitched). If their final attempt also fails, they remain pre-auth forever.
      *
+     * After the first funnel (1.9.0): a born user who reached the stitch runs usage
+     * funnels and standalone events like any identified user, even when they dropped
+     * at a later first-funnel step. A born user who never reached the stitch runs no
+     * usage funnels: only `device_id`-only standalone events, and the profile
+     * carries `_drop`.
+     *
      * @see Dungeon.avgDevicePerUser
      * @see Funnel.isFirstFunnel
      * @see Funnel.attempts
