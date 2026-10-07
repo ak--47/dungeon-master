@@ -241,6 +241,17 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   apply to every step from the index on, the `isAuthEvent` step included (README:
   "constant props on all funnel events"); `$experiment_started` never carries
   them. Output shift: funnels with `bindPropsIndex`.
+- Identify born users from their first event when the config declares no
+  `isAuthEvent`. With no stitch step every born profile was marked `_drop`
+  (never sent to /engage) although the events carried `user_id`; with a device
+  pool the first-funnel, standalone, and usage events were also stripped to
+  `device_id` only. Repro, 200 born users: 200 profiles dropped at
+  `avgDevicePerUser` 0, 1, and 2, and at 1 every event was device-only; now 0
+  dropped and every event carries `user_id`. Hook `meta.authTime` is the first
+  event's time. Configs with an `isAuthEvent` are byte-identical (social,
+  support-desk, and a synthetic attempts config hashed before and after).
+  Output shift: born users in configs without `isAuthEvent` (21 technical
+  fixtures, no vertical).
 
 ### Added
 
