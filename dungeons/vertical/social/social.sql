@@ -363,6 +363,12 @@ SELECT 'joined in window', round(avg(pv) FILTER (WHERE NOT after_change AND NOT 
 SELECT date_trunc('week', a.t)::DATE AS week, round(count(*) FILTER (WHERE a.event = 'post viewed')::DOUBLE / count(DISTINCT a.uid || a.t::DATE::VARCHAR), 3) AS views_per_member_day
 FROM active_ev a JOIN prof p ON p.uid = a.uid WHERE p.joined_date < '2026-06-04' AND a.t >= TIMESTAMP '2026-06-08' AND a.t < TIMESTAMP '2026-09-28' GROUP BY 1 ORDER BY 1;
 
+-- Stories ad load per story viewed before vs after (Stories slots did not change)
+SELECT CASE WHEN t >= TIMESTAMP '2026-09-09' THEN '2 after' ELSE '1 before' END AS period,
+ count(*) FILTER (WHERE event = 'ad viewed' AND ad_placement = 'stories') AS stories_ads, count(*) FILTER (WHERE event = 'story viewed') AS story_views,
+ round(count(*) FILTER (WHERE event = 'ad viewed' AND ad_placement = 'stories')::DOUBLE / count(*) FILTER (WHERE event = 'story viewed'), 4) AS stories_ads_per_story_view
+FROM ev WHERE event IN ('ad viewed', 'story viewed') AND t >= TIMESTAMP '2026-08-12' GROUP BY 1 ORDER BY 1;
+
 -- ad clicks per impression before vs after (not part of the change)
 SELECT CASE WHEN t >= TIMESTAMP '2026-09-09' THEN '2 after' ELSE '1 before' END AS period,
  round(count(*) FILTER (WHERE event = 'ad clicked')::DOUBLE / count(*) FILTER (WHERE event = 'ad viewed'), 4) AS ctr

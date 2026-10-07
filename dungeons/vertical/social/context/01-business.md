@@ -2,7 +2,7 @@
 
 ## Who we are
 
-Murmur is a social app for sharing everyday moments with friends and with the creators people love. It launched in 2024 and raised a Series A in early 2026. The company has about 25 employees: product and engineering (feed, Clips, messaging, and creator teams), a ranking team, growth marketing, creator partnerships, trust and safety, and ad sales. Murmur is early in monetization: revenue is small next to marketing spend, and leadership's 2026 plan is to grow the member base and prove that ads and Circles can pay for growth.
+Murmur is a social app for sharing everyday moments with friends and with the creators people love. It launched in 2024 and raised a seed round in early 2026. The team is 8 people: five engineers (feed and ranking, Clips, messaging, creator tools), a product lead who also runs growth marketing, a creator partnerships lead, and a community and trust and safety manager. Murmur is very early in monetization. Revenue is tiny next to marketing spend: ads and Circles are small tests that prove the model before the next round. Leadership's 2026 plan is to grow the member base and show that ads and Circles can pay for growth at scale.
 
 ## How Murmur works
 
@@ -27,7 +27,7 @@ Murmur is a social app for sharing everyday moments with friends and with the cr
 
 ### Ads
 
-Murmur sells ads in three placements (`ad_placement`): in the **feed** between posts, between **Stories**, and between **Clips** (from the Clips launch). Ads are sold on a cost-per-thousand-impressions basis (eCPM) through Murmur's ad server and a few ad networks. Ad impressions are tracked in Mixpanel (`ad viewed`), but prices and revenue live only in the warehouse table `ad_revenue_daily`.
+Murmur sells ads in three placements (`ad_placement`): in the **feed** between posts, between **Stories**, and between **Clips** (from the Clips launch). Murmur has no ad sales team. One ad network partner fills every slot and pays Murmur per thousand impressions (eCPM); Murmur's own ad server decides where slots go and counts impressions. Ad impressions are tracked in Mixpanel (`ad viewed`), but prices and revenue live only in the warehouse table `ad_revenue_daily`.
 
 ### Circles (creator subscriptions)
 
@@ -53,7 +53,7 @@ New members arrive through one of five acquisition channels, recorded at signup 
 - **tiktok_ads** — paid in-feed video ads on TikTok.
 - **creator_partnerships** — Murmur pays creators on other platforms to invite their audience to Murmur with a referral link.
 
-The three paid channels are billed daily. Daily spend by paid channel is in the warehouse table `marketing_spend_daily`. Creator partnerships are the newest paid channel; marketing leadership asked whether they are worth it.
+The three paid channels are billed daily. Daily spend by paid channel is in the warehouse table `marketing_spend_daily`. Creator partnerships are the newest paid channel; the founders asked whether they are worth it.
 
 ## Members
 
@@ -65,10 +65,10 @@ The three paid channels are billed daily. Daily spend by paid channel is in the 
 
 ## Goals for the period (Q3 2026)
 
-1. **Grow and keep new members.** New-member retention is the top growth metric. The growth team believes a new member's first week, and how full their feed is, decides whether they stay.
-2. **Make Clips a habit.** Clips launched in July; the product team wants to know how fast it is being adopted, by viewers and by posters.
-3. **Fewer, better notifications.** The notifications team is testing a daily digest (the Smart Digest experiment) and wants a ship decision.
-4. **Efficient acquisition.** Finance asked which paid channel is worth its cost, counting members who stay, not just signups.
-5. **A healthy creator economy.** The creator team cut the Circles fee in August to bring creators' earnings closer to other platforms. Leadership asked what it cost Murmur and whether creators responded.
-6. **Grow ad revenue without hurting the feed.** Ad sales raised ad load in September and wants to know whether it paid off.
+1. **Grow and keep new members.** New-member retention is the top growth metric. The product lead believes a new member's first week decides whether they stay.
+2. **Make Clips a habit.** Clips launched in July; the team wants to know how fast it is being adopted, by viewers and by posters.
+3. **Fewer, better notifications.** The messaging engineer is testing a daily digest (the Smart Digest experiment) and wants a ship decision.
+4. **Efficient acquisition.** The founders and the board asked which paid channel is worth its cost, counting members who stay, not just signups.
+5. **A healthy creator economy.** Murmur cut the Circles fee in August to bring creators' earnings closer to other platforms. Leadership asked what it cost Murmur and whether creators responded.
+6. **Grow ad revenue without hurting the feed.** The team raised ad load in September and wants to know whether it paid off.
 7. **Reliability.** Engineering wants a clear account of the August Android incident and its impact.

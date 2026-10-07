@@ -17,7 +17,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 | Pushes per member | `push notification sent` events per member over the period. |
 | Paywall conversion | `circle subscription started` / `circle paywall viewed`, by `paywall_trigger` when the entry point matters. |
 | Circle bookings (first month) | New Circle subscriptions x the tier's monthly price (01-business.md). Murmur's take is the platform fee in force on the subscription date (20% before 2026-08-12, 10% from that day). Renewals are not in Mixpanel. |
-| CAC (paid) | Spend for a paid channel (`marketing_spend_daily`) divided by new members Mixpanel recorded from that channel (`account created` with that `acquisition_channel`) over the same days. Finance uses Mixpanel signups, not the installs the networks report. |
+| CAC (paid) | Spend for a paid channel (`marketing_spend_daily`) divided by new members Mixpanel recorded from that channel (`account created` with that `acquisition_channel`) over the same days. Murmur uses Mixpanel signups, not the installs the networks report. |
 | Cost per retained member | CAC divided by that channel's new-member retention (day 14-27). |
 | Ad load | `ad viewed` events per `post viewed` event, by `ad_placement`. Feed and Clips ad load is measured per post viewed; Stories ad load per `story viewed`. |
 | eCPM | Ad revenue per 1,000 impressions served, from `ad_revenue_daily`. |

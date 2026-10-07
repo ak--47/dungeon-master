@@ -55,7 +55,7 @@ New members go through onboarding once, right after they sign up.
 |---|---|---|
 | `push notification sent` | The notification service sends a push to the member's phone. **Server-side**: it is sent whether or not the member is using the app, and it is not member activity. | `notification_id`; `notification_type` (`like`, `comment`, `new_follower`, `mention`, `dm`, `trending`, and `daily_digest` for the Smart Digest summary push, see 02-timeline.md). |
 | `push notification opened` | The member taps a push and the app opens. At most one per push. | `notification_id` (same as on the send); `notification_type` (same as on the send). |
-| `$experiment_started` | Mixpanel experiment exposure, sent once per member at their first push after 2026-08-05. **Server-side**, not member activity. | `Experiment name` = `Smart Digest`; `Variant name` = `Control` or `Digest`. |
+| `$experiment_started` | Mixpanel experiment exposure, sent once per member when the notification system first assigns them: at the first push they qualify for after 2026-08-05 (in the Digest arm that push can be held back, so a few Digest members have an exposure and no push after it). **Server-side**, not member activity. | `Experiment name` = `Smart Digest`; `Variant name` = `Control` or `Digest`. |
 
 ## Ads
 

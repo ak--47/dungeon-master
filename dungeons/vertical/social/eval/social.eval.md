@@ -13,7 +13,7 @@
 - **Type:** trend
 - **Answer:** Clips went from nothing to about **35% of post views** in three weeks and then held there. Weekly clip share of `post viewed`: 0% before July 8, 3.1% in the launch week (Jul 6-12, launch on the 8th), 14.6% (week of Jul 13), 26.2% (Jul 20), 34.4% (Jul 27), then 34.6%-35.1% every week through September. From July 29 on, 34.9% of views are Clips. Clips took share from photos (50.5% → 32.4% of views) and text (38.0% → 24.8%); total views kept growing with the member base. Accept 32%-38% after the ramp and a three-week ramp.
 - **Evidence:** H1-clips-launch; Insights, `post viewed`, breakdown `post_type`, weekly, % of total; `-- STORY H1` and `-- EVAL Q1`.
-- **Context needed:** 02-timeline.md (launch date, three-week ramp into feeds).
+- **Context needed:** 02-timeline.md (launch date; Clips were ramped into feeds gradually).
 - **Grading:** must give the plateau share and the ramp timing. Wrong: reading raw clip view counts as growth that keeps going (the share is flat from late July); claiming Clips added views on top (the mix shifted).
 
 ### Q2 — Are members making Clips, or just watching?
@@ -30,12 +30,12 @@
 - **Answer:** Yes: **how many accounts a new member follows on the suggested-accounts screen.** Day 14-27 retention (any member-initiated event; signups Jun 4-Sep 3) by onboarding follows: 0 → 27.4%, 1 → 28.7%, 2 → 31.2%, 3 → 42.6%, 4 → 54.7%, 5 → 64.7%, 6 → 72.6%, 7 → 78.0%, 8 → 75.7%, 9 → 70.5%, 10+ → 76.0%. Grouped: **0-2 follows 28.5%, 3-6 follows 58.7%, 7+ follows 75.6%** (0-2 is 0.38x of 7+). Retention climbs steeply from 3 to 6 follows and flattens at about 7. 21.2% of new members follow nobody there; the average is 4.3. Overall new-member retention is 52.2%. Accept a threshold around 5-7 follows and 0-2 at 0.33x-0.45x of 7+.
 - **Evidence:** H2-onboarding-follows; Retention, birth `account created`, return any event except `push notification sent` / `$experiment_started`, custom bracket day 14-27, cohorts by count of `user followed` where `discovery_source = onboarding_suggestions`; `-- STORY H2` and `-- EVAL Q3`.
 - **Context needed:** 01-business.md (onboarding flow), 03-event-dictionary.md (`discovery_source`), 04-metrics-and-tables.md (retention definition).
-- **Grading:** must use onboarding follows (not lifetime follows, which grow with retention itself) and member-initiated activity. Wrong: counting `push notification sent` as a return (pushes keep arriving after members leave); using all follows over the window as the cohort (leaks the outcome).
+- **Grading:** must use onboarding follows (not lifetime follows, which grow with retention itself) and member-initiated activity. Wrong: counting `push notification sent` or `$experiment_started` as a return (both are server-side and keep arriving after members leave; excluding only `push notification sent` reads 0-2 35.4%, 3-6 64.9%, 7+ 79.1%, which blurs the gap to 0.45x); using all follows over the window as the cohort (leaks the outcome).
 
 ### Q4 — Should we ship Smart Digest?
-- **Prompt:** "The notifications team wants to ship Smart Digest. What did the test show? Should we roll it out?"
+- **Prompt:** "We want to ship Smart Digest. What did the test show? Should we roll it out?"
 - **Type:** funnel
-- **Answer:** Digest members got **0.59x the pushes** (3.40 vs 5.76 per exposed member from Aug 5) and opened each one **1.61x as often** (11.6% vs 7.2% open rate, z ≈ 14). Net, opens per member are about the same, slightly lower (0.396 vs 0.417, 0.95x). App activity did not change: post views per member after the start 25.11 vs 25.14, and the change in active days from before to after the start is similar (+0.65 vs +0.74 days). The split is balanced (4,217 Digest vs 4,302 Control). Recommendation: ship if the goal is fewer interruptions at the same engagement; it will not grow engagement. Accept an open-rate ratio of 1.45-1.75 and sends at 0.55-0.65.
+- **Answer:** Digest members got **0.59x the pushes** (3.40 vs 5.76 per exposed member from Aug 5) and opened each one **1.61x as often** (11.6% vs 7.2% open rate, z ≈ 14). Net, opens per member are about the same, slightly lower (0.396 vs 0.417, 0.95x). App activity did not change: post views per member after the start 25.11 vs 25.14, and the change in active days from before to after the start is similar (+0.65 vs +0.74 days). The split is balanced (4,217 Digest vs 4,302 Control). Recommendation: ship if the goal is fewer interruptions at the same engagement; it will not grow engagement. Accept an open-rate ratio of 1.45-1.75 and sends at 0.55-0.65. Sends per member use exposed members as the denominator (Uniques of `$experiment_started`, or members with the profile property). 292 Digest members (7%) were exposed but had every post-start push held back, so dividing by Uniques of `push notification sent` gives 3.65 vs 5.76 (0.63x); accept that read if the analyst names the denominator.
 - **Evidence:** H3-smart-digest-experiment; Insights, `push notification opened` / `push notification sent` and sends per member, breakdown `Experiment: Smart Digest`, Aug 5 - Oct 1; `-- STORY H3`, `-- EVAL Q4`, and the arm activity table under `-- EVAL Q5`.
 - **Context needed:** 02-timeline.md (test design), 03-event-dictionary.md (`notification_id`, `daily_digest`), 04-metrics-and-tables.md (push open rate, server-side events).
 - **Grading:** must report both the open rate and the send volume and conclude on opens or engagement per member. Wrong: "Digest is a huge win" from open rate alone; counting pushes as activity.
@@ -51,7 +51,7 @@
 ### Q6 — What happened to the Android feed in late August?
 - **Prompt:** "Android scrolling looked off at the end of August. What happened and how big was it?"
 - **Type:** external-join
-- **Answer:** The **Android For You incident, August 26-29** (timeline; `for_you_feed_health_daily` shows `service_status = major_outage` for android on those four days, `error_rate` ≈ 0.60 vs about 0.006 normally, p95 latency 7-12 s). In Mixpanel, Android For You views per Following-feed view fell to **0.40x** (0.74 vs 1.85 in the 14 days either side); iOS did not move (1.94 vs 1.88). Android For You views went from about 1,000 a day to 300-450; the Following feed on Android was normal. At the baseline ratio, about **2,300 Android For You views** were lost over the four days (the feed service logged 467 failed page requests; a page holds several posts). Back to normal on August 30. Accept 0.35x-0.45x and naming Android and the For You feed.
+- **Answer:** The **Android For You incident, August 26-29** (timeline; `for_you_feed_health_daily` shows `service_status = major_outage` for android on those four days, `error_rate` ≈ 0.60 vs about 0.006 normally, p95 latency 7-12 s). In Mixpanel, Android For You views per Following-feed view fell to **0.40x** (0.74 vs 1.85 in the 14 days either side); iOS did not move (1.94 vs 1.88). Android For You views went from about 1,000 a day to 300-450; the Following feed on Android was normal. At the baseline ratio, about **2,300 Android For You views** were lost over the four days (the feed service logged 468 failed page requests; a page holds several posts). Back to normal on August 30. Accept 0.35x-0.45x and naming Android and the For You feed.
 - **Evidence:** H4-android-for-you-incident; Insights, `post viewed` filtered `feed` in (for_you, following), breakdown `platform` and `feed`, daily, joined to `for_you_feed_health_daily`; `-- STORY H4` and `-- EVAL Q6`.
 - **Context needed:** 02-timeline.md (incident), 04-metrics-and-tables.md (`for_you_feed_health_daily`).
 - **Grading:** must name platform, feed, and dates and use a control (iOS or the Following feed). Wrong: "Android members lost interest"; reading total views without the split; comparing to the ad change (Sep 9).
@@ -97,9 +97,9 @@
 - **Grading:** must separate creation from audience size. Wrong: "the awards grew the audience"; attributing it to the ad change (Sep 9).
 
 ### Q12 — Did raising ad load pay off?
-- **Prompt:** "Ad sales raised ad load on September 9. Did it pay off?"
+- **Prompt:** "We raised ad load on September 9. Did it pay off?"
 - **Type:** external-join
-- **Answer:** Yes, but each slot earns less. Feed and Clips ads per post view rose **1.61x** (0.0756 → 0.1215; Aug 12-Sep 8 vs Sep 9-Oct 1). eCPM fell to **0.85x** (feed + Clips $5.41 → $4.62; every placement about −14%, Stories included), so ad revenue per 1,000 post views rose **1.36x** ($0.434 → $0.589). Stories ad load did not change (0.0287 → 0.0284 per post view). Click-through held (1.03% → 1.06%). No sign that it hurt viewing: members who joined before June post views per active day went 3.49 → 3.54. The all-member figure slipped 3.21 → 3.14 because new members (who view less per day) grew from 34.5% to 38.4% of active member-days. Accept ads per view 1.45x-1.75x and revenue per view 1.2x-1.5x.
+- **Answer:** Yes, but each slot earns less. Feed and Clips ads per post view rose **1.61x** (0.0756 → 0.1215; Aug 12-Sep 8 vs Sep 9-Oct 1). eCPM fell to **0.85x** (feed + Clips $5.41 → $4.62; every placement about −14%, Stories included), so ad revenue per 1,000 post views rose **1.36x** ($0.434 → $0.589). Stories ad load did not change (0.1288 → 0.1295 Stories ads per `story viewed`, Aug 12-Sep 8 vs Sep 9-Oct 1). Click-through held (1.03% → 1.06%). No sign that it hurt viewing: members who joined before June post views per active day went 3.49 → 3.54. The all-member figure slipped 3.21 → 3.14 because new members (who view less per day) grew from 34.5% to 38.4% of active member-days. Accept ads per view 1.45x-1.75x and revenue per view 1.2x-1.5x.
 - **Evidence:** H8-ad-load-increase; Insights `ad viewed` (feed, clips) / `post viewed`, joined to `ad_revenue_daily`; `-- STORY H8` and `-- EVAL Q12`.
 - **Context needed:** 02-timeline.md (ad change), 04-metrics-and-tables.md (ad load, eCPM, `ad_revenue_daily`).
 - **Grading:** must bring in eCPM from the warehouse and normalize by views. Wrong: "revenue rose 60%" (ignores eCPM); "ad load cut engagement" from the all-member per-DAU slip.
@@ -108,7 +108,7 @@
 - **Prompt:** "Do our US members stick around better than international members?"
 - **Type:** null-hypothesis
 - **Answer:** **No.** Day 14-27 new-member retention is 51.7% for US members and 53.0% for international members (z ≈ −0.8). The same holds on each platform (Android 51.7% vs 53.5%, iOS 51.6% vs 52.6%). By country it ranges from 49.9% (GB) to 57.2% (BR) on small samples, with no meaningful pattern. Accept "no meaningful difference".
-- **Evidence:** `-- EVAL Q13`; Retention, birth `account created`, return any member-initiated event, day 14-27, breakdown user property `country`.
+- **Evidence:** `-- EVAL Q13`; Retention, birth `account created`, return any event except `push notification sent` and `$experiment_started`, day 14-27, breakdown user property `country`.
 - **Context needed:** 01-business.md (countries), 04-metrics-and-tables.md (retention).
 - **Grading:** must report a rate comparison and call it a null. Wrong: ranking countries on samples of 200-400 members as if they differ.
 
@@ -132,7 +132,7 @@
 - **Prompt:** "Do iPhone users retain better than Android users?"
 - **Type:** null-hypothesis
 - **Answer:** **No.** Day 14-27 new-member retention is 52.0% on iOS and 52.5% on Android (z ≈ −0.3). It holds within channel groups (referred 59.8% vs 63.4%, others 47.8% vs 46.7%) and within signup months (largest gap August, 47.2% vs 51.8%, z ≈ −1.7, not significant). Accept "no meaningful difference".
-- **Evidence:** `-- EVAL Q16`; Retention, birth `account created`, return any member-initiated event, day 14-27, breakdown `platform`.
+- **Evidence:** `-- EVAL Q16`; Retention, birth `account created`, return any event except `push notification sent` and `$experiment_started`, day 14-27, breakdown `platform`.
 - **Context needed:** 00-manifest.md (one device per member), 04-metrics-and-tables.md (retention).
 - **Grading:** must call it a null. Wrong: reporting a single month's gap as a platform effect.
 
@@ -159,7 +159,7 @@
   1. **New-member retention hinges on onboarding follows.** Only 52% of new members are active on day 14-27. The 36% who follow 0-2 suggested accounts retain at 28.5% vs 75.6% at 7+ (Q3). Improving the suggestions screen is the biggest lever.
   2. **TikTok signups are low-intent.** Only 64% follow any suggestion (Q8), though TikTok is still the cheapest per retained member (Q7). Creator partnerships cost 1.33x Meta per signup but about the same per retained member.
   3. **Android release quality.** A four-day Android For You outage (Aug 26-29) cut Android For You viewing to 0.40x with a 60% error rate (Q6).
-  4. **Ad yield.** More ad slots raised revenue per post view 36% but eCPM fell about 14% on every placement (Q12, Q18); ad revenue is small next to marketing spend ($79 in September vs about $3,200 a month of paid acquisition).
+  4. **Ad yield.** More ad slots raised revenue per post view 36% but eCPM fell about 14% on every placement (Q12, Q18); ad revenue is a small network-partner test next to marketing spend ($79 in September vs about $3,200 a month of paid acquisition; 01-business.md).
   5. **Circles economics.** The fee cut lowered Murmur's Circles take per day by about a third (Q10) without lifting fan conversion (Q5); creators with a Circle did post 1.31x more (Q9).
   6. **Notifications.** Smart Digest lifts open rate 1.61x but opens per member are flat to slightly down (Q4).
 - **Evidence:** Q3, Q4, Q5, Q6, Q7, Q8, Q10, Q12, Q18; `-- EVAL Q19` (retention by signup month: June 53.9%, July 52.8%, August 49.4%; weekly active members grew from about 3,700 in June to about 5,275 in late September).

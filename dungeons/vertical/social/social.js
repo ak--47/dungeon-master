@@ -116,8 +116,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   sets the chance they leave 3.5-8 days after signup: 0 → 0.70, 1 → 0.66,
  *   2 → 0.60, 3 → 0.50, 4 → 0.38, 5 → 0.26, 6 → 0.17, 7+ → 0.10.
  * MIXPANEL: Retention, birth account created, return any event except push
- *   notification sent, custom bracket day 14-27, cohorts by onboarding follows
- *   0-2 / 3-6 / 7+.
+ *   notification sent and $experiment_started (both server-side), custom bracket
+ *   day 14-27, cohorts by onboarding follows 0-2 / 3-6 / 7+.
  * REAL WORLD: a new member with an empty feed has nothing to come back to.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -126,8 +126,12 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * PATTERN: from 2026-08-05 members who get pushes split 50/50. Digest sends
  *   0.6x the pushes (about half as daily_digest) and each push is opened 1.6x as
  *   often (Control about 8% before members leave).
- * MIXPANEL: Insights, push notification opened / push notification sent and
- *   sends per member, breakdown "Experiment: Smart Digest", Aug 5 - Oct 1.
+ * MIXPANEL: Insights, breakdown "Experiment: Smart Digest", Aug 5 - Oct 1:
+ *   push notification opened / push notification sent (totals), and sends per
+ *   exposed member = push notification sent (totals) / $experiment_started
+ *   (uniques). The denominator is exposed members: about 7% of Digest members
+ *   have their only post-start pushes held back, so uniques of push sent
+ *   undercounts Digest members (that read gives about 0.63x).
  * REAL WORLD: fewer, better notifications get opened more.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -243,7 +247,12 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * about 490 profile-button subscriptions. Per-active-day engagement is lower for
  * members who joined in the window (about 2.5-2.7 post views per active day vs
  * about 3.5 for established members), so all-member per-DAU metrics drift down
- * as the new-member share grows; no hook targets that.
+ * as the new-member share grows; no hook targets that. The same engine split
+ * gives members who joined in the window about 2.5-3x the non-funnel events per
+ * post view (Sep: shares 69 vs 20 per 1k views, stories posted 47 vs 16, content
+ * reported, profile updated, community joined, user unfollowed similar), so the
+ * all-member rate of those events per post view rises over the window. No hook
+ * targets that either; 04-metrics' new-vs-established tip covers it.
  */
 
 // ── SCALE ──
@@ -633,7 +642,7 @@ function handleWarehouse(row, meta) {
 	}
 	if (meta.metricName === "for_you_feed_health_daily") {
 		const k = `${row.date}|${row.platform}`;
-		const served = row.feed_requests * FEED_REQUESTS_PER_VIEW * (1 + UNTRACKED_VIEW_SHARE * jitter(`untracked|${k}`, 1)) * jitter(`prefetch|${k}`, 0.08);
+		const served = row.feed_requests * FEED_REQUESTS_PER_VIEW * (1 + UNTRACKED_VIEW_SHARE * jitter(`untracked|${k}`, 0.4)) * jitter(`prefetch|${k}`, 0.02);
 		row.feed_requests = Math.round(served / (1 - row.error_rate));
 		row.failed_requests = Math.round(row.feed_requests * row.error_rate);
 		return row;
@@ -1303,7 +1312,7 @@ FROM ev WHERE event IN ('post viewed', 'post created', 'post liked')`,
 		hook: "H2",
 		archetype: "retention-divergence",
 		narrative: `New members who follow more accounts on the onboarding "suggested accounts" screen (user followed with discovery_source = onboarding_suggestions) stay. The chance a new member leaves the app 3.5-8 days after signup falls with that count: ${CHURN_BY_K.map((p, i) => `${i}${i === CHURN_BY_K.length - 1 ? "+" : ""}: ${p}`).join(", ")}; members who quit before the screen count as 0. Server-side pushes keep arriving after a member leaves, so retention counts member-initiated events only. Read: retained = any event other than push notification sent / $experiment_started on day ${RET_FROM}-${RET_TO - 1} after signup, signups through ${RET_BIRTH_END.slice(0, 10)}; buckets 0-2, 3-6, 7+ follows. Expected retention ratios from the knobs and the follow-count mix (organic return cancels): 0-2 / 7+ = ${r3(RET_0_2 / RET_7P)}, 3-6 / 7+ = ${r3(RET_3_6 / RET_7P)}.`,
-		mixpanelReport: { type: "Retention", birth: "account created", return: "any event except push notification sent", cohorts: "did user followed (discovery_source = onboarding_suggestions) 0-2 / 3-6 / 7+ times", brackets: `custom: day ${RET_FROM}-${RET_TO - 1}`, dateRange: `signups ${D(DATASET_START)} to ${RET_BIRTH_END.slice(0, 10)}` },
+		mixpanelReport: { type: "Retention", birth: "account created", return: "any event except push notification sent and $experiment_started", cohorts: "did user followed (discovery_source = onboarding_suggestions) 0-2 / 3-6 / 7+ times", brackets: `custom: day ${RET_FROM}-${RET_TO - 1}`, dateRange: `signups ${D(DATASET_START)} to ${RET_BIRTH_END.slice(0, 10)}` },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H2_SQL },
@@ -1323,8 +1332,8 @@ FROM ev WHERE event IN ('post viewed', 'post created', 'post liked')`,
 		id: "H3-smart-digest-experiment",
 		hook: "H3",
 		archetype: "experiment-lift",
-		narrative: `The "${DIGEST_EXPERIMENT}" test starts ${D(DIGEST_START)}: members who receive pushes are split 50/50 (sticky per member; one $experiment_started at the first push after the start). The "${DIGEST_VARIANT}" arm batches notifications, so it sends ${DIGEST_SEND_KEEP}x the pushes Control gets (about half as a daily_digest notification) and each push is opened ${DIGEST_OPEN_MULT}x as often (Control ${PUSH_OPEN_RATE * 100}% before members leave). Read: per arm after the start, pushes sent per exposed member and opens per push sent (push notification opened shares notification_id with its send).`,
-		mixpanelReport: { type: "Insights", events: ["push notification opened", "push notification sent"], formula: "A / B", breakdown: `user property "${EXP_KEY}"`, dateRange: `${D(DIGEST_START)} to ${D(DATASET_END)}` },
+		narrative: `The "${DIGEST_EXPERIMENT}" test starts ${D(DIGEST_START)}: members who receive pushes are split 50/50 (sticky per member; one $experiment_started at the first push the member qualifies for after the start, which in the Digest arm may be held back). The "${DIGEST_VARIANT}" arm batches notifications, so it sends ${DIGEST_SEND_KEEP}x the pushes Control gets (about half as a daily_digest notification) and each push is opened ${DIGEST_OPEN_MULT}x as often (Control ${PUSH_OPEN_RATE * 100}% before members leave). Read: per arm after the start, pushes sent per exposed member (denominator: members with the profile property, the same as uniques of $experiment_started; not uniques of push sent) and opens per push sent (push notification opened shares notification_id with its send).`,
+		mixpanelReport: { type: "Insights", events: ["push notification opened (totals)", "push notification sent (totals)", "$experiment_started (uniques)"], formula: "open rate A / B; sends per exposed member B / C", breakdown: `user property "${EXP_KEY}"`, dateRange: `${D(DIGEST_START)} to ${D(DATASET_END)}` },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H3_SQL },
@@ -1405,7 +1414,7 @@ FROM ${WH("for_you_feed_health_daily")}`,
 		hook: "H5",
 		archetype: "external-join",
 		narrative: `Creator partnerships are Murmur's most expensive paid channel per signup, but their members retain better, so per retained member they cost about what Meta does. Warehouse marketing_spend_daily bills each paid channel: half a paced daily budget (cost per signup x expected signups, weekday shape) and half the bid x that day's delivered signups, with ±${SPEND_NOISE * 100}% day noise: $${CPI_USD.creator_partnerships} creator partnerships, $${CPI_USD.meta_ads} Meta, $${CPI_USD.tiktok_ads} TikTok per Mixpanel signup over the window. Members referred by a creator (or invited by a friend) follow more suggested accounts at onboarding, so through H2 they retain better; TikTok signups also finish onboarding less often (${TIKTOK_ONBOARD_CONV}% vs ${ONBOARD_CONV}%) yet stay cheapest per retained member. Expected from the knobs: spend per signup creator/Meta = ${r3(CPI_USD.creator_partnerships / CPI_USD.meta_ads)}; day ${RET_FROM}-${RET_TO - 1} retention creator/Meta = ${r3(RET_CREATOR / RET_META)}; spend per retained member creator/Meta = ${r3(CPI_USD.creator_partnerships / CPI_USD.meta_ads / (RET_CREATOR / RET_META))}.`,
-		mixpanelReport: { type: "Insights + Retention + warehouse", event: "account created", breakdown: "acquisition_channel", join: "marketing_spend_daily.spend_usd by acquisition_channel", retention: `birth account created, return any member-initiated event, day ${RET_FROM}-${RET_TO - 1}, breakdown acquisition_channel` },
+		mixpanelReport: { type: "Insights + Retention + warehouse", event: "account created", breakdown: "acquisition_channel", join: "marketing_spend_daily.spend_usd by acquisition_channel", retention: `birth account created, return any event except push notification sent and $experiment_started, day ${RET_FROM}-${RET_TO - 1}, breakdown acquisition_channel` },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H5_SQL },
@@ -1447,7 +1456,7 @@ FROM ${WH("for_you_feed_health_daily")}`,
 		hook: "H7",
 		archetype: "bespoke",
 		narrative: `On Saturday ${D(AWARDS_DAY)} Murmur streams the Murmur Sound Awards. For that UTC day, posting, commenting, sharing, and story posting run at ${AWARDS_MULT}x (worldEvents volumeMultiplier, clones re-draw their properties); feed views are not part of the effect. Read: those four events per daily active member (any member-initiated event) on ${D(AWARDS_DAY)} over the mean of the Saturdays ${AWARDS_CONTROL_DAYS.join(", ")} = ${AWARDS_MULT}; "post viewed" per active member on the same days is the control (1.0).`,
-		mixpanelReport: { type: "Insights", events: ["post created + comment posted + post shared + story posted", "any member-initiated event (uniques)"], formula: "A / B", chart: "daily line, August 15 - October 1" },
+		mixpanelReport: { type: "Insights", events: ["post created + comment posted + post shared + story posted", "any event except push notification sent and $experiment_started (uniques)"], formula: "A / B", chart: "daily line, August 15 - October 1" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H7_SQL },
