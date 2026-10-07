@@ -38,7 +38,7 @@ The grant ends after 2026, so subscription revenue has to grow. The newsroom and
 - **Reading habits.** Readership ranges from people who read several times a week to people who come by a few times a month; very few read every day. Frequent readers are more likely to subscribe; most occasional readers stay on a free account.
 - **Region** (`region`): US Northeast, South, West, and Midwest, Canada, the UK, and other international readers. The US coasts are the largest groups.
 - **Age bands** (`age_band`): `18-24`, `25-34`, `35-44`, `45-54`, `55-64`, `65+`. Most readers are 25-54.
-- **Established vs new readers.** About 55% of the readers active in the window had an account before June 4. New visitors arrive steadily, about 250 a week.
+- **Established vs new readers.** About 55% of the readers active in the window had an account before June 4. New visitors arrive steadily, about 260 a week.
 
 ## How readers find us
 

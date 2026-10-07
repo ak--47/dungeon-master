@@ -13,7 +13,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 | `reader_tier` | The reader's access tier **at the moment of the event**: `anonymous` (no account yet), `registered` (free account), `digital` (Lantern Digital), or `all_access` (Lantern All Access). It changes when a reader registers, subscribes, or cancels. On `subscription started` it is the new plan; on `subscription cancelled` it is the plan being cancelled. |
 | `platform` | `web` (any browser, desktop or phone), `ios_app` (iPhone or iPad app), or `android_app`. Fixed per device. |
 | `acquisition_channel` | The channel that first brought the reader to The Lantern (see 01-business.md): `organic_search`, `google_ads`, `meta_ads`, `social`, `podcast_ads`, `direct`. Fixed per reader, recorded at the first visit, like an initial UTM source. Also on the profile. |
-| `os`, `model`, `screen_height`, `screen_width` | Device details. `os` is `Windows`, `macOS`, `Linux` (and Linux variants), `iOS`, `iPadOS`, or `Android`. |
+| `os`, `model`, `screen_height`, `screen_width` | Device details. `os` is `Windows`, `macOS`, `Linux`, `iOS`, `iPadOS`, or `Android`. |
 | `carrier`, `radio` | Mobile network details, on phones and tablets only. |
 
 ## Reading

@@ -37,6 +37,15 @@ CREATE OR REPLACE TEMP TABLE users AS
 SELECT * FROM read_json_auto(getvariable('data_prefix') || '-USERS*.json*', sample_size=-1, union_by_name=true)
 WHERE distinct_id::VARCHAR IN (SELECT DISTINCT user_id::VARCHAR FROM raw_events WHERE user_id IS NOT NULL);
 
+-- reader time zone (UTC offset, summer time all window) from the profile region; a visitor's
+-- anonymous device id maps to the region through anonymousIds (unknown → US Eastern)
+CREATE OR REPLACE TEMP TABLE reader_offset AS
+WITH p AS (SELECT distinct_id::VARCHAR AS id, region FROM read_json_auto(getvariable('data_prefix') || '-USERS*.json*', sample_size=-1, union_by_name=true)
+  UNION ALL SELECT unnest(anonymousIds)::VARCHAR AS id, region FROM read_json_auto(getvariable('data_prefix') || '-USERS*.json*', sample_size=-1, union_by_name=true))
+SELECT id, CASE any_value(region) WHEN 'us_northeast' THEN -4 WHEN 'us_south' THEN -5 WHEN 'us_midwest' THEN -5 WHEN 'us_west' THEN -7
+  WHEN 'canada' THEN -4 WHEN 'uk' THEN 1 WHEN 'other_international' THEN 1 ELSE -4 END AS utc_offset_h
+FROM p GROUP BY 1;
+
 CREATE OR REPLACE TEMP TABLE wh_spend AS
 SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-marketing_spend_daily.json*', sample_size=-1, union_by_name=true);
 CREATE OR REPLACE TEMP TABLE wh_platform AS
@@ -132,7 +141,7 @@ SELECT CASE WHEN referrer = 'newsletter' THEN 'newsletter' ELSE 'other' END AS s
 FROM ev WHERE event IN ('paywall shown', 'subscription started') GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- STORY H7-labor-day-sale — conversion x2 and first-period bookings per view x0.8, 2026-09-03..09 (warehouse join)
+-- STORY H7-labor-day-sale — conversion x2 and first-period bookings per view x0.5 (75% off), 2026-09-03..09 (warehouse join)
 -- ─────────────────────────────────────────────────────────────────────────
 WITH p AS (SELECT DISTINCT date::DATE AS d, plan, billing_period, first_period_price_usd FROM wh_billing),
 w AS (SELECT CASE WHEN t >= TIMESTAMP '2026-09-03' AND t < TIMESTAMP '2026-09-10' THEN 'sale'
@@ -170,12 +179,19 @@ SELECT CASE WHEN reading_days < 4 THEN 'under 4 days' ELSE '4+ days' END AS prio
 FROM sub_months GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- STORY H10-weekend-long-reads — read time x1.35 on Saturday and Sunday (UTC)
+-- STORY H10-weekend-long-reads — read time x1.35 on the reader's local Saturday and Sunday
 -- ─────────────────────────────────────────────────────────────────────────
-SELECT round(avg(read_time_sec) FILTER (WHERE dayofweek(t) IN (0, 6)), 1) AS weekend_avg_read_sec,
- round(avg(read_time_sec) FILTER (WHERE dayofweek(t) NOT IN (0, 6)), 1) AS weekday_avg_read_sec,
- round(avg(read_time_sec) FILTER (WHERE dayofweek(t) IN (0, 6)) / avg(read_time_sec) FILTER (WHERE dayofweek(t) NOT IN (0, 6)), 4) AS weekend_ratio
-FROM ev WHERE event = 'article viewed';
+-- local day from the reader's region (story read); UTC day-of-week (what a UTC Mixpanel breakdown shows)
+CREATE OR REPLACE TEMP TABLE reads_local AS
+SELECT ev.uid, ev.t, ev.read_time_sec, ev.scroll_depth_pct, ev.content_type,
+ dayofweek(ev.t + to_hours(CAST(coalesce(o.utc_offset_h, -4) AS BIGINT))) AS local_dow, dayofweek(ev.t) AS utc_dow
+FROM ev LEFT JOIN reader_offset o ON o.id = ev.uid WHERE ev.event = 'article viewed';
+
+SELECT round(avg(read_time_sec) FILTER (WHERE local_dow IN (0, 6)), 1) AS weekend_avg_read_sec_local,
+ round(avg(read_time_sec) FILTER (WHERE local_dow NOT IN (0, 6)), 1) AS weekday_avg_read_sec_local,
+ round(avg(read_time_sec) FILTER (WHERE local_dow IN (0, 6)) / avg(read_time_sec) FILTER (WHERE local_dow NOT IN (0, 6)), 4) AS weekend_ratio_local,
+ round(avg(read_time_sec) FILTER (WHERE utc_dow IN (0, 6)) / avg(read_time_sec) FILTER (WHERE utc_dow NOT IN (0, 6)), 4) AS weekend_ratio_utc
+FROM reads_local;
 
 -- ═════════════════════════════════════════════════════════════════════════
 -- EVAL QUERIES (eval/media.eval.md)
@@ -338,14 +354,42 @@ SELECT CASE WHEN reading_days = 0 THEN '0' WHEN reading_days <= 3 THEN '1-3' WHE
  count(*) AS subscriber_months, count(*) FILTER (WHERE cancelled) AS cancels, round(avg(cancelled::INT), 4) AS cancel_rate
 FROM sub_months GROUP BY 1 ORDER BY min(reading_days);
 
+-- EVAL Q12 (the buildable Mixpanel cohort: subscriber article views on 1-3 vs 4+ distinct days in M-1,
+-- no subscription started or cancelled in M-1; cancel rate in month M)
+WITH m AS (SELECT * FROM (VALUES (DATE '2026-07-01', DATE '2026-06-01'), (DATE '2026-08-01', DATE '2026-07-01'), (DATE '2026-09-01', DATE '2026-08-01')) x(ms, pms)),
+um AS (SELECT m.ms, ev.uid, count(DISTINCT ev.t::DATE) FILTER (WHERE ev.event = 'article viewed' AND ev.reader_tier IN ('digital', 'all_access')) AS days,
+  bool_or(ev.event IN ('subscription started', 'subscription cancelled')) AS changed
+  FROM ev JOIN m ON ev.t >= m.pms AND ev.t < m.ms WHERE ev.user_id IS NOT NULL GROUP BY 1, 2),
+c AS (SELECT DISTINCT m.ms, ev.uid FROM ev JOIN m ON ev.t >= m.ms AND ev.t < m.ms + INTERVAL 1 MONTH WHERE ev.event = 'subscription cancelled')
+SELECT CASE WHEN days < 4 THEN '1-3 days' ELSE '4+ days' END AS cohort, count(*) AS subscriber_months, count(c.uid) AS cancels, round(count(c.uid)::DOUBLE / count(*), 4) AS cancel_rate
+FROM um LEFT JOIN c ON c.ms = um.ms AND c.uid = um.uid WHERE days >= 1 AND NOT changed GROUP BY 1 ORDER BY 1;
+
 -- EVAL Q12 (stated cancellation reasons, whole window)
 SELECT cancel_reason, count(*) AS cancellations, round(count(*)::DOUBLE / sum(count(*)) OVER (), 4) AS share
 FROM ev WHERE event = 'subscription cancelled' GROUP BY 1 ORDER BY 2 DESC;
 
--- EVAL Q13 — weekend reading: read time and scroll depth by day of week
+-- EVAL Q13 — weekend reading: read time and scroll depth by day of week (UTC, as a Mixpanel breakdown shows it)
 SELECT dayname(t) AS day, count(*) AS reads, round(avg(read_time_sec), 1) AS avg_read_sec, round(avg(scroll_depth_pct), 1) AS avg_scroll_pct,
  round(avg((content_type IN ('feature', 'analysis'))::INT), 4) AS long_form_share
 FROM ev WHERE event = 'article viewed' GROUP BY 1, dayofweek(t) ORDER BY dayofweek(t);
+
+-- EVAL Q13 (weekend vs weekday: UTC days and the reader's local days; scroll depth and long-form share)
+SELECT 'utc' AS day_basis, round(avg(read_time_sec) FILTER (WHERE utc_dow IN (0, 6)), 1) AS weekend_read_sec, round(avg(read_time_sec) FILTER (WHERE utc_dow NOT IN (0, 6)), 1) AS weekday_read_sec,
+ round(avg(read_time_sec) FILTER (WHERE utc_dow IN (0, 6)) / avg(read_time_sec) FILTER (WHERE utc_dow NOT IN (0, 6)), 3) AS ratio,
+ round(avg(scroll_depth_pct) FILTER (WHERE utc_dow IN (0, 6)), 1) AS weekend_scroll, round(avg(scroll_depth_pct) FILTER (WHERE utc_dow NOT IN (0, 6)), 1) AS weekday_scroll,
+ round(avg((content_type IN ('feature', 'analysis'))::INT) FILTER (WHERE utc_dow IN (0, 6)), 4) AS weekend_long_form, round(avg((content_type IN ('feature', 'analysis'))::INT) FILTER (WHERE utc_dow NOT IN (0, 6)), 4) AS weekday_long_form
+FROM reads_local
+UNION ALL
+SELECT 'reader local', round(avg(read_time_sec) FILTER (WHERE local_dow IN (0, 6)), 1), round(avg(read_time_sec) FILTER (WHERE local_dow NOT IN (0, 6)), 1),
+ round(avg(read_time_sec) FILTER (WHERE local_dow IN (0, 6)) / avg(read_time_sec) FILTER (WHERE local_dow NOT IN (0, 6)), 3),
+ round(avg(scroll_depth_pct) FILTER (WHERE local_dow IN (0, 6)), 1), round(avg(scroll_depth_pct) FILTER (WHERE local_dow NOT IN (0, 6)), 1),
+ round(avg((content_type IN ('feature', 'analysis'))::INT) FILTER (WHERE local_dow IN (0, 6)), 4), round(avg((content_type IN ('feature', 'analysis'))::INT) FILTER (WHERE local_dow NOT IN (0, 6)), 4)
+FROM reads_local;
+
+-- EVAL Q13 (mean read time by UTC hour across the weekend boundaries: no step at UTC midnight)
+SELECT dayname(t) AS day, hour(t) AS utc_hour, count(*) AS reads, round(avg(read_time_sec), 0) AS avg_read_sec
+FROM ev WHERE event = 'article viewed' AND ((dayofweek(t) = 0 AND hour(t) >= 21) OR (dayofweek(t) = 1 AND hour(t) <= 8))
+GROUP BY 1, 2, dayofweek(t) ORDER BY dayofweek(t) = 1, 2;
 
 -- EVAL Q14 — plan and billing mix of new subscriptions, outside vs during the Labor Day sale
 SELECT CASE WHEN offer = 'labor_day_sale' THEN 'sale week' ELSE 'rest of window' END AS period, count(*) AS subscriptions,
@@ -366,23 +410,17 @@ FROM p;
 SELECT plan, billing_period, count(*) AS subscriptions, round(count(*)::DOUBLE / sum(count(*)) OVER (), 4) AS share
 FROM ev WHERE event = 'subscription started' GROUP BY 1, 2 ORDER BY 1, 2;
 
--- EVAL Q15 — registrations and new visitors per day: World Cup vs the rest of the window (null check)
-WITH d AS (SELECT t::DATE AS day, count(*) FILTER (WHERE event = 'account registered') AS regs FROM ev GROUP BY 1),
+-- EVAL Q15 — new visitors per day: World Cup vs the rest of the window (null check)
+WITH d AS (SELECT DISTINCT t::DATE AS day FROM ev),
 v AS (SELECT t0::DATE AS day, count(*) AS visitors FROM visitors GROUP BY 1),
-j AS (SELECT d.day, d.regs, coalesce(v.visitors, 0) AS visitors, (d.day >= DATE '2026-06-11' AND d.day < DATE '2026-07-20') AS wc FROM d LEFT JOIN v ON v.day = d.day
+j AS (SELECT d.day, coalesce(v.visitors, 0) AS visitors, (d.day >= DATE '2026-06-11' AND d.day < DATE '2026-07-20') AS wc FROM d LEFT JOIN v ON v.day = d.day
   WHERE d.day > DATE '2026-06-04' AND d.day < DATE '2026-10-01')
-SELECT wc, count(*) AS days, round(avg(regs), 2) AS registrations_per_day, round(stddev_samp(regs), 2) AS sd_regs, round(avg(visitors), 2) AS visitors_per_day,
- round(stddev_samp(visitors), 2) AS sd_visitors
+SELECT wc, count(*) AS days, round(avg(visitors), 2) AS visitors_per_day, round(stddev_samp(visitors), 2) AS sd_visitors
 FROM j GROUP BY 1 ORDER BY 1;
 
--- EVAL Q15 (Welch t for registrations per day; sports share of new visitors' first reads)
-WITH d AS (SELECT t::DATE AS day, count(*) FILTER (WHERE event = 'account registered') AS regs FROM ev GROUP BY 1),
-j AS (SELECT regs, (day >= DATE '2026-06-11' AND day < DATE '2026-07-20') AS wc FROM d WHERE day > DATE '2026-06-04' AND day < DATE '2026-10-01'),
-s AS (SELECT wc, avg(regs) AS m, var_samp(regs) AS v, count(*) AS n FROM j GROUP BY 1)
-SELECT round((max(m) FILTER (WHERE wc) - max(m) FILTER (WHERE NOT wc)) / sqrt(max(v / n) FILTER (WHERE wc) + max(v / n) FILTER (WHERE NOT wc)), 3) AS welch_t_registrations,
- (SELECT round(avg((e.section = 'sports')::INT), 4) FROM visitors v JOIN ev e ON e.uid = v.uid AND e.event = 'article viewed' AND e.reader_tier = 'anonymous' WHERE v.t0 >= TIMESTAMP '2026-06-11' AND v.t0 < TIMESTAMP '2026-07-20') AS sports_share_first_reads_wc,
- (SELECT round(avg((e.section = 'sports')::INT), 4) FROM visitors v JOIN ev e ON e.uid = v.uid AND e.event = 'article viewed' AND e.reader_tier = 'anonymous' WHERE NOT (v.t0 >= TIMESTAMP '2026-06-11' AND v.t0 < TIMESTAMP '2026-07-20')) AS sports_share_first_reads_other
-FROM s;
+-- EVAL Q15 (sports share of new visitors' first reads, during vs outside the tournament)
+SELECT (SELECT round(avg((e.section = 'sports')::INT), 4) FROM visitors v JOIN ev e ON e.uid = v.uid AND e.event = 'article viewed' AND e.reader_tier = 'anonymous' WHERE v.t0 >= TIMESTAMP '2026-06-11' AND v.t0 < TIMESTAMP '2026-07-20') AS sports_share_first_reads_wc,
+ (SELECT round(avg((e.section = 'sports')::INT), 4) FROM visitors v JOIN ev e ON e.uid = v.uid AND e.event = 'article viewed' AND e.reader_tier = 'anonymous' WHERE NOT (v.t0 >= TIMESTAMP '2026-06-11' AND v.t0 < TIMESTAMP '2026-07-20')) AS sports_share_first_reads_other;
 
 -- EVAL Q15 (Welch t for new visitors per day; 7-day registration rate of visitors who arrived during vs outside the tournament)
 WITH v AS (SELECT t0::DATE AS day, count(*) AS visitors FROM visitors GROUP BY 1),
