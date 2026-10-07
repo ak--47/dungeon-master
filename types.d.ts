@@ -1817,8 +1817,17 @@ export interface WorldEvent {
      * and a 50% second) — each with a fresh `insert_id` and a timestamp spread
      * uniformly across the window (never past the dataset end). Measured 3.06x for
      * an asked 3x; before 1.7.0 values above 1 were a silent no-op (measured 1.08x).
-     * Clones exist before `engagementDecay` and every hook, so they are visible to
-     * `everything`. The same rule applies to `aftermath.volumeMultiplier`.
+     * Clones exist before `engagementDecay` and the `everything` hook, so they are
+     * visible to `everything`. The same rule applies to `aftermath.volumeMultiplier`.
+     *
+     * A clone is a fresh event of its type, not a verbatim copy. It keeps the
+     * source's identity and context fields (`user_id`, `device_id`, super props,
+     * `stickyEventProps`, group keys, funnel `props`, UTM fields, default
+     * location/device/browser) and re-draws the event's declared `properties`
+     * from its config, in declaration order, with `(ctx) => value` functions
+     * seeing the clone and its time. `injectProps` active at the clone's time are
+     * re-applied. The `event` hook does not run on clones (shape them in
+     * `everything`). Seeded: same seed, same clones.
      */
     volumeMultiplier?: number;
     /** Conversion rate modifier during this event. */
