@@ -9,6 +9,12 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
 
 ### Fixed
 
+- Resolve `streamJSON` / `streamCSV` writes after the file is flushed. With
+  `gzip: true` the promise resolved on the gzip transform's `finish`, before the
+  compressed bytes reached disk, so a reader that opened the file right after
+  `generate()` returned could hit a truncated gzip member ("unexpected end of
+  file"). Seen on a 966k-event export. No output change; only the timing of the
+  returned promise.
 - Apply the default soup day-of-week curve in active-day modes
   (`avgActiveDaysPerUser`, `retentionCurve`) when the dungeon sets no `soup`.
   The plan ignored it, so these modes showed almost no weekly rhythm (1.11x
