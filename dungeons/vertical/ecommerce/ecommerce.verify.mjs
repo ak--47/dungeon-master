@@ -1,70 +1,27 @@
 #!/usr/bin/env node
 /**
- * ecommerce.verify.mjs — thin wrapper around the story runner.
+ * ecommerce.verify.mjs — runs the story checks in ./ecommerce.js against generated data.
  *
- * All verification logic lives in the `stories` export of ./ecommerce.js;
- * this script just streams the shards and delegates. It is equivalent to:
- *
- *   node scripts/verify-stories.mjs dungeons/vertical/ecommerce/ecommerce.js --data-prefix verify-ecommerce
- *
- * Generate first:
+ * Generate full-fidelity data first (repo root):
  *   node scripts/verify-runner.mjs dungeons/vertical/ecommerce/ecommerce.js verify-ecommerce
- * Run:
- *   node dungeons/vertical/ecommerce/ecommerce.verify.mjs [prefix]   # default verify-ecommerce
+ * Run (default prefix data/verify-ecommerce):
+ *   node dungeons/vertical/ecommerce/ecommerce.verify.mjs [--data-prefix <path-prefix>] [--json]
+ *
+ * --data-prefix accepts a bare name under ./data or a path prefix, e.g.
+ * ~/Desktop/dungeons/ecommerce/data/ecommerce for the gzipped export.
+ * This wrapper delegates to the package's scripts/verify-stories.mjs, so
+ * the verdicts match `node scripts/verify-stories.mjs <dungeon> --data-prefix <prefix>`.
  */
-import fs from 'node:fs';
 import path from 'node:path';
-import readline from 'node:readline';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { buildIdentityMap, evaluateStories, validateDungeonConfig, VERDICT_RANK } from '@ak--47/dungeon-master/verify';
-import config, { stories } from './ecommerce.js';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const PREFIX = process.argv[2] || 'verify-ecommerce';
-const prefixPath = path.join('data', PREFIX);
+const dungeon = fileURLToPath(new URL('./ecommerce.js', import.meta.url));
+const pkgRoot = path.dirname(fileURLToPath(import.meta.resolve('@ak--47/dungeon-master')));
+const cli = path.join(pkgRoot, 'scripts', 'verify-stories.mjs');
 
-async function loadShards(suffix) {
-	// streaming load: full-fidelity EVENTS shards exceed the readFileSync cap
-	const dir = path.dirname(prefixPath), base = path.basename(prefixPath);
-	const out = [];
-	if (!fs.existsSync(dir)) return out;
-	for (const f of fs.readdirSync(dir).filter(f => f.startsWith(`${base}-${suffix}`) && f.endsWith('.json')).sort()) {
-		const rl = readline.createInterface({ input: fs.createReadStream(path.join(dir, f)), crlfDelay: Infinity });
-		for await (const line of rl) {
-			if (line.trim()) out.push(JSON.parse(line));
-		}
-	}
-	return out;
-}
+const args = process.argv.slice(2);
+if (!args.includes('--data-prefix')) args.push('--data-prefix', 'verify-ecommerce');
 
-const events = await loadShards('EVENTS');
-const profiles = await loadShards('USERS');
-if (!events.length) {
-	console.error(`no shards at ${prefixPath}-EVENTS*.json — run: node scripts/verify-runner.mjs dungeons/vertical/ecommerce/ecommerce.js ${PREFIX}`);
-	process.exit(1);
-}
-console.log(`ecommerce — events=${events.length} users=${profiles.length} (${prefixPath})`);
-
-const execFileP = promisify(execFile);
-const runSql = async (sql) => {
-	const { stdout } = await execFileP('duckdb', ['-json', '-c', sql.replaceAll('{{PREFIX}}', prefixPath)], { maxBuffer: 64 * 1024 * 1024 });
-	return stdout.trim() ? JSON.parse(stdout) : [];
-};
-
-const results = await evaluateStories(stories, events, {
-	profiles,
-	// funnel defaults (conversionWindowDays, order) resolve on the VALIDATED
-	// config — the dungeon was not run in this process, so validate here.
-	funnels: validateDungeonConfig({ ...config, token: '' }).funnels,
-	identityMap: buildIdentityMap(profiles),
-	runSql,
-});
-
-let worst = 'NAILED';
-for (const r of results) {
-	console.log(`${r.verdict.padEnd(7)} ${r.id}`);
-	for (const a of r.assertions) console.log(`        ${a.verdict.padEnd(7)} ${a.detail}`);
-	if (VERDICT_RANK[r.verdict] < VERDICT_RANK[worst]) worst = r.verdict;
-}
-console.log(`\nworst verdict: ${worst}`);
-process.exit(VERDICT_RANK[worst] >= VERDICT_RANK.STRONG ? 0 : 1);
+const run = spawnSync(process.execPath, [cli, dungeon, ...args], { stdio: 'inherit' });
+process.exit(run.status ?? 1);
