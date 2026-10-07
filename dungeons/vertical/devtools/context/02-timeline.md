@@ -32,5 +32,4 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 - Why do some new signups never finish setup?
 - What drives change failure rate?
 - What did the August mirror incident cost our customers?
-- Is paid social worth it?
 - Did overage billing change how Team customers use CI, and what did it bring in?

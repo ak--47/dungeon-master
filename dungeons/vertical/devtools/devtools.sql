@@ -51,7 +51,7 @@ FROM users;
 
 -- new-developer signups (one per developer who joined in the window)
 CREATE OR REPLACE TEMP TABLE signups AS
-SELECT uid, t AS t0, acquisition_channel AS ch, signup_method, primary_stack FROM ev WHERE event = 'account created';
+SELECT uid, t AS t0, acquisition_channel AS ch, signup_method, primary_stack, plan_tier AS signup_plan FROM ev WHERE event = 'account created';
 
 -- onboarding: the first step times after signup, in order, within 7 days (the Mixpanel funnel)
 CREATE OR REPLACE TEMP TABLE onboarding AS
@@ -157,8 +157,8 @@ SELECT CASE WHEN test_coverage_pct <= 30 THEN 'a: <=30%' WHEN test_coverage_pct 
 FROM ev WHERE event = 'production deployed' GROUP BY 1 ORDER BY 1;
 
 -- STORY H10-preview-habit-converts: paid within 42 days by preview deploys in the first 14 days
--- (signups through 2026-08-20); keep-ratio floor 2.5
-WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-08-20 23:59:59'),
+-- (Free signups through 2026-08-20; developers who join a Team or Enterprise workspace have nothing to buy); keep-ratio floor 2.5
+WITH s AS (SELECT uid, t0 FROM signups WHERE signup_plan = 'free' AND t0 < TIMESTAMP '2026-08-20 23:59:59'),
 f AS (SELECT s.uid, count(*) FILTER (WHERE e.event = 'preview deployed' AND e.t < s.t0 + INTERVAL 14 DAY) AS previews,
   count(*) FILTER (WHERE e.event = 'subscription started' AND e.t < s.t0 + INTERVAL 42 DAY) AS buys
   FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
@@ -233,6 +233,13 @@ SELECT count(*) AS new_devs_with_first_build_in_14d, round(avg((first_status = '
  round(avg((first_stage = 'configuration')::INT) FILTER (WHERE first_status = 'failed'), 4) AS configuration_share_of_failures
 FROM fb WHERE tb < t0 + INTERVAL 14 DAY;
 SELECT round(avg((build_status = 'failed')::INT), 4) AS all_build_fail_rate FROM builds WHERE build_status IS NOT NULL;
+-- all new signups (through Aug 25): day-1, day 7-13, and day 30-36 activity
+WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 37 DAY),
+f AS (SELECT s.uid, count(e.t) FILTER (WHERE e.t >= s.t0 + INTERVAL 1 DAY AND e.t < s.t0 + INTERVAL 2 DAY) AS r1,
+  count(e.t) FILTER (WHERE e.t >= s.t0 + INTERVAL 7 DAY AND e.t < s.t0 + INTERVAL 14 DAY) AS r7,
+  count(e.t) FILTER (WHERE e.t >= s.t0 + INTERVAL 30 DAY AND e.t < s.t0 + INTERVAL 37 DAY) AS r30
+  FROM s LEFT JOIN ev e ON e.uid = s.uid GROUP BY 1)
+SELECT count(*) AS signups, round(avg((r1 > 0)::INT), 4) AS d1_active, round(avg((r7 > 0)::INT), 4) AS d7_13_active, round(avg((r30 > 0)::INT), 4) AS d30_36_active FROM f;
 
 -- EVAL Q9 — mid-August build failures: daily success by ecosystem, lost builds, warehouse status
 SELECT t_finish::DATE AS d, ecosystem = 'npm' AS npm, count(*) AS builds, round(avg((build_status = 'success')::INT), 4) AS success_rate,
@@ -247,15 +254,22 @@ FROM w;
 SELECT date, ecosystem, registry_mirror_status, dependency_fetch_error_rate FROM wh_fleet WHERE registry_mirror_status = 'degraded' ORDER BY 1;
 SELECT max(dependency_fetch_error_rate) FILTER (WHERE registry_mirror_status = 'operational') AS max_normal_error_rate FROM wh_fleet;
 
--- EVAL Q10 — did other ecosystems suffer during the incident? (null outside npm)
-WITH w AS (SELECT (t_finish >= TIMESTAMP '2026-08-19' AND t_finish < TIMESTAMP '2026-08-21') AS inc, ecosystem, build_status = 'success' AS ok
+-- EVAL Q10 — did other ecosystems fail on dependency downloads during the incident? (null outside npm)
+WITH w AS (SELECT (t_finish >= TIMESTAMP '2026-08-19' AND t_finish < TIMESTAMP '2026-08-21') AS inc, ecosystem, build_status = 'success' AS ok,
+  failure_stage = 'dependency_install' AS dep, failure_stage IN ('test', 'compile') AS code_fail
   FROM builds WHERE t_finish >= TIMESTAMP '2026-08-12' AND t_finish < TIMESTAMP '2026-08-28')
 SELECT ecosystem, count(*) FILTER (WHERE inc) AS incident_builds, round(avg(ok::INT) FILTER (WHERE inc), 4) AS incident_success,
- round(avg(ok::INT) FILTER (WHERE NOT inc), 4) AS surrounding_success FROM w GROUP BY 1 ORDER BY 1;
-WITH w AS (SELECT (t_finish >= TIMESTAMP '2026-08-19' AND t_finish < TIMESTAMP '2026-08-21') AS inc, build_status = 'success' AS ok
+ round(avg(ok::INT) FILTER (WHERE NOT inc), 4) AS surrounding_success,
+ round(avg(dep::INT) FILTER (WHERE inc), 4) AS incident_dependency_fail, round(avg(dep::INT) FILTER (WHERE NOT inc), 4) AS surrounding_dependency_fail,
+ round(avg(code_fail::INT) FILTER (WHERE inc), 4) AS incident_test_compile_fail, round(avg(code_fail::INT) FILTER (WHERE NOT inc), 4) AS surrounding_test_compile_fail
+FROM w GROUP BY 1 ORDER BY 1;
+WITH w AS (SELECT (t_finish >= TIMESTAMP '2026-08-19' AND t_finish < TIMESTAMP '2026-08-21') AS inc, build_status = 'success' AS ok, failure_stage = 'dependency_install' AS dep
   FROM builds WHERE ecosystem <> 'npm' AND t_finish >= TIMESTAMP '2026-08-12' AND t_finish < TIMESTAMP '2026-08-28')
 SELECT count(*) FILTER (WHERE inc) AS incident_builds, round(avg(ok::INT) FILTER (WHERE inc), 4) AS incident_success,
- count(*) FILTER (WHERE NOT inc) AS surrounding_builds, round(avg(ok::INT) FILTER (WHERE NOT inc), 4) AS surrounding_success FROM w;
+ count(*) FILTER (WHERE NOT inc) AS surrounding_builds, round(avg(ok::INT) FILTER (WHERE NOT inc), 4) AS surrounding_success,
+ round(avg(dep::INT) FILTER (WHERE inc), 4) AS incident_dependency_fail, round(avg(dep::INT) FILTER (WHERE NOT inc), 4) AS surrounding_dependency_fail FROM w;
+SELECT ecosystem, max(dependency_fetch_error_rate) AS max_error_rate, string_agg(DISTINCT registry_mirror_status, ',') AS statuses
+FROM wh_fleet WHERE date >= DATE '2026-08-19' AND date < DATE '2026-08-21' GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q11 — spend per Mixpanel signup by paid channel
 WITH s AS (SELECT ch, count(*) AS signups FROM signups GROUP BY 1),
@@ -298,18 +312,25 @@ SELECT CASE WHEN test_coverage_pct <= 30 THEN 'a: <=30%' WHEN test_coverage_pct 
 FROM ev WHERE event = 'production deployed' GROUP BY 1 ORDER BY 1;
 SELECT count(*) AS deploys, round(avg((deploy_outcome = 'rolled_back')::INT), 4) AS overall_rollback_rate FROM ev WHERE event = 'production deployed';
 
--- EVAL Q16 — what predicts buying a paid seat: preview deploys in the first 14 days (signups through Aug 20, purchase within 42 days)
-WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-08-20 23:59:59'),
+-- EVAL Q16 — what predicts buying a paid seat: preview deploys in the first 14 days (Free signups through Aug 20, purchase within 42 days)
+WITH s AS (SELECT uid, t0 FROM signups WHERE signup_plan = 'free' AND t0 < TIMESTAMP '2026-08-20 23:59:59'),
 f AS (SELECT s.uid, count(*) FILTER (WHERE e.event = 'preview deployed' AND e.t < s.t0 + INTERVAL 14 DAY) AS previews,
   count(*) FILTER (WHERE e.event = 'subscription started' AND e.t < s.t0 + INTERVAL 42 DAY) AS buys
   FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
 SELECT least(previews, 5) AS previews_first_14d, count(*) AS developers, round(avg((buys > 0)::INT), 4) AS paid_rate FROM f GROUP BY 1 ORDER BY 1;
-WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-08-20 23:59:59'),
+WITH s AS (SELECT uid, t0 FROM signups WHERE signup_plan = 'free' AND t0 < TIMESTAMP '2026-08-20 23:59:59'),
 f AS (SELECT s.uid, count(*) FILTER (WHERE e.event = 'preview deployed' AND e.t < s.t0 + INTERVAL 14 DAY) AS previews,
   count(*) FILTER (WHERE e.event = 'subscription started' AND e.t < s.t0 + INTERVAL 42 DAY) AS buys
   FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
 SELECT CASE WHEN previews >= 3 THEN 'habit (3+)' WHEN previews >= 1 THEN 'light (1-2)' ELSE 'none (not onboarded)' END AS preview_group,
  count(*) AS developers, sum((buys > 0)::INT) AS buyers, round(avg((buys > 0)::INT), 4) AS paid_rate FROM f GROUP BY 1 ORDER BY 1;
+-- the same split without the Free filter (all signups through Aug 20)
+WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-08-20 23:59:59'),
+f AS (SELECT s.uid, count(*) FILTER (WHERE e.event = 'preview deployed' AND e.t < s.t0 + INTERVAL 14 DAY) AS previews,
+  count(*) FILTER (WHERE e.event = 'subscription started' AND e.t < s.t0 + INTERVAL 42 DAY) AS buys
+  FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
+SELECT CASE WHEN previews >= 3 THEN 'habit (3+)' WHEN previews >= 1 THEN 'light (1-2)' ELSE 'none (not onboarded)' END AS preview_group,
+ count(*) AS developers, round(avg((buys > 0)::INT), 4) AS paid_rate FROM f GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q17 — the Labor Day dip: builds and active developers, Mondays around Sep 7 (and July 3 vs other Fridays)
 SELECT t::DATE AS d, dayname(t::DATE) AS dow, count(*) FILTER (WHERE event = 'build started') AS builds_started, count(DISTINCT uid) AS active_developers

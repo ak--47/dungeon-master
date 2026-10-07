@@ -17,7 +17,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 | Build success rate | Share of `build finished` events with `build_status = success`. |
 | Build time | `build_duration_sec` on `build finished`. Compare passed builds: a failed build stops early at its failing stage. |
 | Change failure rate | Share of `production deployed` events with `deploy_outcome = rolled_back`. |
-| Paid conversion | Share of new signups who start a subscription within 42 days of `account created`. Count only signups with a full 42 days of data (signups through August 20). |
+| Paid conversion | Share of new signups on Free (`plan_tier = free` on `account created`) who start a subscription within 42 days of `account created`. Developers who join a company already on Team or Enterprise have nothing to buy and are left out. Count only signups with a full 42 days of data (signups through August 20). |
 | New paid subscriptions | Count of `subscription started`, split by `plan`. |
 | New MRR | Seats on new subscriptions × list price per seat (Pro $12, Team $29). |
 | CAC (paid) | Spend for a paid channel divided by new signups Mixpanel recorded from that channel (`account created` with that `acquisition_channel`) over the same days. Finance uses Mixpanel signups, not the signups the ad platforms report. |

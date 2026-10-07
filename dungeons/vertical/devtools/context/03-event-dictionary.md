@@ -84,7 +84,7 @@ There are no server-side notification or system events in this project. Every ev
 | `org_id`, `org_name`, `org_size`, `industry` | The developer's organization and its size and industry (see 01-business.md). |
 | `role` | `developer`, `tech_lead`, `platform_engineer`, `engineering_manager`. |
 | `primary_stack` | As on events. |
-| `plan_tier` | The developer's current plan (at the end of the window). |
+| `plan_tier` | The developer's current plan (at the end of the window). It is the organization's plan, except for developers with a personal Pro seat or a Team workspace bought in the window (see 01-business.md). |
 | `customer_since` | The date the developer joined Forgebench (signup date for developers who joined in the window). |
 | `acquisition_channel` | How the developer found us. |
 | `Experiment: Remote Build Cache` | `Control` or `Remote Cache` for developers enrolled in the test; empty for developers never exposed. |

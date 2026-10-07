@@ -23,6 +23,8 @@ Forgebench is a developer platform. One product covers the path from a code chan
 | Team | $29 per seat per month | Shared organization workspace, pooled build minutes, larger runners, Forge Assist (from Jul 29); runner minutes above the pooled allowance are billed at $0.015 per minute from 2026-09-01 |
 | Enterprise | Custom contract | Everything in Team, SSO, audit logs, committed runner capacity, dedicated support |
 
+- **Plans belong to organizations.** A company is on Free, Team, or Enterprise, and its developers use that plan. Pro is a personal plan: a developer at a Free company can pay for their own Pro seat. A developer who joins a company that is already on Team or Enterprise is added to that workspace when they sign up.
+- **A company can run more than one workspace.** When a developer at a Free company buys Team, Forgebench opens a Team workspace for that developer's group. Their colleagues stay on the Free workspace until they are invited in, so one company can have Free, Pro, and Team developers at the same time while it grows.
 - **How people upgrade.** Free developers see an upgrade page when they hit a build-minute limit, a private-repository limit, a preview limit, or a gated feature, or when they open billing settings. From there they buy Pro (one seat) or Team (several seats).
 - **Enterprise** is sold by the sales team on annual contracts and does not go through the self-serve upgrade page.
 - The Mixpanel project records each subscription start, its plan, and its seat count, not the price. Overage and runner-minute billing live in the warehouse table `usage_billing_daily`.
@@ -53,7 +55,7 @@ The three paid channels bid to a target cost per signup that marketing sets for 
 Leadership set these goals for the quarter:
 
 1. **Activate new developers.** Raise the share of signups who finish setup and keep using Forgebench after their first month. The developer experience team wants to know why some signups never finish setup.
-2. **Make paid acquisition efficient.** Marketing moved budget into paid social earlier this year. Finance asked which paid channels are worth their cost once you look past the signup.
+2. **Make paid acquisition efficient.** Finance asked which paid channels are worth their cost.
 3. **Ship Forge Assist.** Launch AI code review to paid plans and measure what it changes in code review.
 4. **Faster CI.** Cut build times; the Remote Build Cache experiment is the main bet.
 5. **Grow paid seats and revenue.** Convert more free developers to paid seats. The growth team suspects early hands-on use predicts who buys. Team overage billing started in September; product asked whether it changed how Team customers use CI.

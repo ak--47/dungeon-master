@@ -15,9 +15,11 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  *             and merge pull requests, ship to production. Free plus Pro ($12
  *             per developer), Team ($29 per seat; runner-minute overage billed
  *             from 2026-09-01), and sales-led Enterprise. Forge Assist (AI code
- *             review) is a Pro/Team/Enterprise feature from 2026-07-29.
- * SCALE:      10,000 developers (9,991 with events; 4,517 sign up inside the
- *             window), ~0.93M events, 120 days (2026-06-04 → 2026-10-01, UTC),
+ *             review) is a Pro/Team/Enterprise feature from 2026-07-29. The plan
+ *             belongs to the organization (Free, Team, or Enterprise); at Free
+ *             organizations some developers pay for their own Pro seat.
+ * SCALE:      10,000 developers (9,994 with events; 4,506 sign up inside the
+ *             window), ~0.98M events, 120 days (2026-06-04 → 2026-10-01, UTC),
  *             500 customer organizations
  * CORE LOOP:  commit pushed → preview deployed; build started → build finished;
  *             pull request opened → review submitted → pull request merged →
@@ -43,9 +45,9 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  *   - CI Build: build started → build finished (94%, build_id per build; A/B
  *       "Remote Build Cache" from 2026-07-08, assignment + exposure only)
  *   - Preview: commit pushed → preview deployed (72%, commit_sha per push)
- *   - Upgrade (new signups, customer_since ≥ window start): upgrade page viewed →
- *       subscription started (34%); Upgrade (established free developers): same
- *       steps (15%, then a 34% base keep in the hook)
+ *   - Upgrade (Free new signups, customer_since ≥ window start): upgrade page
+ *       viewed → subscription started (34%); Upgrade (established Free
+ *       developers): same steps (15%, then a 34% base keep in the hook)
  *
  * USER PROPS:  org_id, org_name, org_size, industry, role, primary_stack,
  *              plan_tier, customer_since, acquisition_channel,
@@ -73,7 +75,13 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  *   not reshuffle the engine's population, funnels, or timing.
  * - Organizations come from one seeded table of 500; developers map to an org
  *   by a hash weighted toward larger orgs. The group hook writes the same table
- *   onto the org group profiles.
+ *   onto the org group profiles. Each org has one plan (hash by size: startups
+ *   mostly Free, enterprises mostly Enterprise). Established developers take
+ *   the org's plan; 35% of developers at Free orgs pay for their own Pro seat.
+ *   New signups land at Free orgs 8x as often per developer weight (self-serve
+ *   evaluators); a new signup at a Team or Enterprise org joins that plan and
+ *   has nothing to buy. A Team purchase at a Free org opens a Team workspace
+ *   for that developer's group; teammates stay on Free (01-business says so).
  * - Builds: the hook decides status and failure stage per build (14% fail; a
  *   new developer's first build 40%), and sets build_duration_sec as the real
  *   start → finish gap: log-normal (median 7 min, σ 0.55) × runner size
@@ -91,13 +99,19 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  *   days. Window start: established free developers buy at a steady base rate,
  *   plus (in June) developers who signed up in the six weeks before June 4 and
  *   are still in their buying window (their customer_since is moved into that
- *   span), so weekly purchases are flat from week 1 (~26 a week).
+ *   span), so weekly purchases are flat from week 1 (~20 a week).
  * - New developers who never finish onboarding: 60% stop on day 1-4; the rest
- *   keep a salted 25-60% of their activity (exploring docs and public code).
+ *   keep a salted 25-60% of their work units (whole builds, PRs, pushes; the
+ *   first build always stays), exploring docs and public code.
+ * - Evaluation churn: 45% of new developers stop on a salted day 3-28 after
+ *   signup (never before their last setup step), whatever happened in setup.
+ *   New-signup activity in days 30-36 lands near 30% (day 1: 78%, days 7-13:
+ *   54%). The draw is independent of the first build, so H5's ratio holds.
  * - Collaboration volume: new developers keep every teammate invite in their
  *   first 14 days; other invites are thinned to 25% (≈10 per org in 120 days).
- * - Experiment exposure: the engine emits $experiment_started on every CI Build
- *   run after the start; the hook keeps the first per developer.
+ * - Experiment exposure: the engine sends one $experiment_started per developer,
+ *   1 s before their first CI build in the test; the hook drops the profile's
+ *   assignment only when an activity cut removed that exposure.
  * - Holidays (Jul 3, Sep 7): 35% of work units (whole PRs, builds, previews,
  *   standalone events) that would start that day do not happen.
  * - Warehouse drift: build_fleet_daily adds seeded API-triggered jobs (corr ≈
@@ -105,9 +119,7 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  *   across parallel jobs (×2-14 by plan), shifts 30% of a UTC day to the next
  *   billing day, and adds retries and API minutes (corr ≈ 0.93);
  *   marketing_spend_daily paces spend to the trailing 7-day signups × target
- *   cost per signup × weekday schedule × seeded noise (corr ≈ 0.90).
- * - Engine note: the default browser list is not tied to the OS (for example
- *   Safari or Chrome iOS on Windows); this is engine-wide and left as is.
+ *   cost per signup × weekday schedule × seeded noise (corr ≈ 0.92).
  */
 
 // ── HOOK STORIES ──
@@ -236,7 +248,7 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  *   also reach the upgrade page more often).
  * MIXPANEL: Funnels account created → preview deployed ×3 (14-day window) to
  *   build the cohorts; Funnels account created → subscription started (42-day
- *   window), breakdown by cohort.
+ *   window), filter account created plan_tier = free, breakdown by cohort.
  * REAL WORLD: developers who use previews in their review loop have adopted
  *   the product and buy it.
  *
@@ -246,33 +258,32 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  * Hook | Metric                                         | Derivation                | Expected | Measured
  * -----|------------------------------------------------|---------------------------|----------|---------
  * H1   | assisted rows pre-launch or on Free            | exact purity              | 0        | 0
- * H1   | median review → merge, assisted / standard     | ASSIST_MERGE_MULT         | 0.60     | 0.598 (3.61 vs 6.03 h)
- * H1   | assisted share of eligible PRs after the ramp  | 0.5 × 0.8                 | 0.40     | 0.412 (weekly 1.7% → 42%)
- * H2   | median passed build time, Remote Cache/Control | CACHE_TTC_MULT            | 0.60     | 0.604 (235 vs 389 s)
- * H2   | build success rate, Remote Cache/Control       | unchanged                 | 1.00     | 1.005 (85.1% vs 84.7%)
+ * H1   | median review → merge, assisted / standard     | ASSIST_MERGE_MULT         | 0.60     | 0.589 (3.59 vs 6.09 h)
+ * H1   | assisted share of eligible PRs after the ramp  | 0.5 × 0.8                 | 0.40     | 0.394 (weekly 1.8% → 40%)
+ * H2   | median passed build time, Remote Cache/Control | CACHE_TTC_MULT            | 0.60     | 0.599 (235 vs 392 s)
+ * H2   | build success rate, Remote Cache/Control       | unchanged                 | 1.00     | 0.999 (85.2% vs 85.3%)
  * H2   | Remote Cache share of exposed developers       | equal 2-arm hash          | 0.50     | 0.498
- * H3   | 7-day onboarding, Java+.NET / other stacks     | SLOW_STACK_MULT           | 0.55     | 0.559 (33.8% vs 60.6%)
- * H4   | median open → review, 1,000+ / ≤100 lines      | LARGE_PR_WAIT_MULT        | 2.50     | 2.498 (7.84 vs 3.14 h)
- * H5   | D30 retention, first build passed / failed     | 1/(1 − RED_DARK_SHARE)    | 2.00     | 1.891 (87.9% vs 46.5%)
- * H6   | npm/other success, incident vs ±7 days         | 1 − INCIDENT_FAIL         | 0.40     | 0.415
+ * H3   | 7-day onboarding, Java+.NET / other stacks     | SLOW_STACK_MULT           | 0.55     | 0.555 (33.4% vs 60.2%)
+ * H4   | median open → review, 1,000+ / ≤100 lines      | LARGE_PR_WAIT_MULT        | 2.50     | 2.510 (8.15 vs 3.25 h)
+ * H5   | D30 retention, first build passed / failed     | 1/(1 − RED_DARK_SHARE)    | 2.00     | 1.885 (49.9% vs 26.5%)
+ * H6   | npm/other success, incident vs ±7 days         | 1 − INCIDENT_FAIL         | 0.40     | 0.416
  * H6   | warehouse dependency_fetch_error_rate, degraded| INCIDENT_FAIL             | 0.60     | 0.615
- * H7   | spend per signup, paid social / paid search    | 55 / 85                   | 0.647    | 0.653 ($55.04 vs $84.34)
- * H7   | 7-day onboarding, paid social / other channels | SOCIAL_ONBOARD_MULT       | 0.60     | 0.645 (36.5% vs 56.6%)
- * H8   | Team scheduled per push, Sep 15-30 / August    | 1 − SCHEDULED_CUT_MEAN    | 0.50     | 0.490 (0.127 vs 0.259)
- * H8   | other plans scheduled per push (control)       | unchanged                 | 1.00     | 0.972
- * H8   | overage rows off Team or before Sep 1 / missing| exact                     | 0 / 0    | 0 / 0 ($2,980 in September)
- * H9   | rollback rate, ≤30% / ≥75% coverage            | 0.20 / 0.05               | 4.00     | 4.166 (19.8% vs 4.75%)
- * H10  | 42-day paid rate, 3+ / 1-2 previews (14 days)  | ≥ 1.0 / 0.4 (floor)       | ≥ 2.50   | 3.888 (28.3% vs 7.3%, STRONG)
+ * H7   | spend per signup, paid social / paid search    | 55 / 85                   | 0.647    | 0.660 ($55.42 vs $83.96)
+ * H7   | 7-day onboarding, paid social / other channels | SOCIAL_ONBOARD_MULT       | 0.60     | 0.597 (33.5% vs 56.2%)
+ * H8   | Team scheduled per push, Sep 15-30 / August    | 1 − SCHEDULED_CUT_MEAN    | 0.50     | 0.480 (0.120 vs 0.250)
+ * H8   | other plans scheduled per push (control)       | unchanged                 | 1.00     | 0.966
+ * H8   | overage rows off Team or before Sep 1 / missing| exact                     | 0 / 0    | 0 / 0 ($4,791 in September)
+ * H9   | rollback rate, ≤30% / ≥75% coverage            | 0.20 / 0.05               | 4.00     | 4.123 (20.0% vs 4.85%)
+ * H10  | 42-day paid rate, 3+ / 1-2 previews (14 days)  | ≥ 1.0 / 0.4 (floor)       | ≥ 2.50   | 3.599 (23.4% vs 6.5%, STRONG)
  * ═════════════════════════════════════════════════════════════════════════
  *
  * H10 is a knob floor: developers with 3+ early previews are also heavier
- * users who reach the upgrade page more often (62-76% vs 38-53% within 42
- * days), so the realized ratio sits above the keep ratio. H5 (1.891) sits near
- * the low edge of its band: 557 developers had a failed first build (relative
- * SE of their D30 rate about 5%). H7's onboarding ratio (0.645) is binomial
- * noise on 721 paid social signups (relative SE about 5%) around the rounded
- * funnel knobs (38/64 = 0.594, 21/35 = 0.600). H3 and H7 come from engine
- * funnel draws; H8 and H9 use low-discrepancy draws and sit close to the knobs.
+ * users who reach the upgrade page more often, so the realized ratio sits
+ * above the keep ratio. Its cohort is Free signups only (380 habit, 799
+ * light). H5 (1.885) sits below the knob within noise: 548 developers had a
+ * failed first build and 26.5% of them were active in days 30-36 (relative
+ * SE of the ratio about 8%). H3 and H7 come from engine funnel draws; H8 and
+ * H9 use low-discrepancy draws and sit close to the knobs.
  */
 
 // ── SCALE ──
@@ -416,6 +427,9 @@ const UPGRADE_CONV = 34;           // new signups, per upgrade-page visit
 const UPGRADE_CONV_ESTABLISHED = 15; // per upgrade-page visit, before the base keep below
 const BUY_WINDOW_DAYS = 42;        // self-serve purchases land in a developer's first six weeks
 const EST_BASE_KEEP = 0.34;        // established free users' steady purchase rate (share of would-be purchases)
+const EVAL_CHURN_SHARE = 0.45;     // new users who stop on a salted day in their first four weeks (any setup outcome)
+const EVAL_CHURN_MIN_D = 3;
+const EVAL_CHURN_MAX_D = 28;
 const EXPLORER_KEEP_MIN = 0.25;    // non-onboarded new users who stay: share of activity kept
 const EXPLORER_KEEP_MAX = 0.6;
 
@@ -435,6 +449,15 @@ const ORG_SUFFIX = ["Labs", "Systems", "Software", "Cloud", "Works", "Digital", 
 const INDUSTRIES = ["saas", "fintech", "ecommerce", "healthtech", "media", "gaming", "logistics", "agency"];
 const STACK_WEIGHTS = { node: 32, python: 20, go: 9, ruby: 5, java: 17, dotnet: 11, rust: 6 };
 const ECOSYSTEM = { node: "npm", python: "pypi", go: "go_modules", ruby: "rubygems", java: "maven", dotnet: "nuget", rust: "cargo" };
+// organization plan by size (Pro is an individual plan, so no organization is "on Pro")
+const ORG_PLAN_MIX = {
+	startup: { free: 62, team: 38, enterprise: 0 },
+	smb: { free: 40, team: 54, enterprise: 6 },
+	mid_market: { free: 16, team: 58, enterprise: 26 },
+	enterprise: { free: 4, team: 30, enterprise: 66 },
+};
+const INDIVIDUAL_PRO_SHARE = 0.35;   // developers at Free organizations who pay for their own Pro seat
+const NEW_SIGNUP_FREE_ORG_BOOST = 8; // new signups land at Free organizations 8x as often (per developer weight)
 const FRAMEWORK = { node: "nextjs", python: "django", go: "go_http", ruby: "rails", java: "spring", dotnet: "aspnet", rust: "axum" };
 
 const pickWeighted = (weights, r) => {
@@ -458,15 +481,21 @@ const ORGS = Array.from({ length: ORG_COUNT }, (_, i) => {
 		employees: chance.pickone(EMPLOYEE_BAND[size]),
 	};
 });
-const ORG_CUM = (() => {
-	const w = ORGS.map((o) => USERS_PER_ORG_WEIGHT[o.size]);
+// one plan per organization (hash per org, so the chance stream is untouched)
+for (const o of ORGS) o.plan = pickWeighted(ORG_PLAN_MIX[o.size], hashFloat(`${o.id}|org-plan`));
+const orgCum = (weightOf) => {
+	const w = ORGS.map(weightOf);
 	const total = w.reduce((a, b) => a + b, 0);
 	let acc = 0;
 	return w.map((x) => (acc += x / total));
-})();
-const orgFor = (uid) => {
+};
+const ORG_CUM = orgCum((o) => USERS_PER_ORG_WEIGHT[o.size]);
+// self-serve signups come mostly from companies that are not paying customers yet
+const ORG_CUM_NEW = orgCum((o) => USERS_PER_ORG_WEIGHT[o.size] * (o.plan === "free" ? NEW_SIGNUP_FREE_ORG_BOOST : 1));
+const orgFor = (uid, isNew) => {
 	const r = hashFloat(`${uid}|org`);
-	const i = ORG_CUM.findIndex((c) => r < c);
+	const cum = isNew ? ORG_CUM_NEW : ORG_CUM;
+	const i = cum.findIndex((c) => r < c);
 	return ORGS[i < 0 ? ORGS.length - 1 : i];
 };
 
@@ -502,26 +531,24 @@ const PR_STEPS = ["pull request opened", "review submitted", "pull request merge
 
 function handleUserHook(profile, meta) {
 	const uid = profile.distinct_id;
-	const org = orgFor(uid);
+	const isNew = Boolean(meta.userIsBornInDataset);
+	const org = orgFor(uid, isNew);
 	profile.org_id = org.id;
 	profile.org_name = org.name;
 	profile.org_size = org.size;
 	profile.industry = org.industry;
-	if (meta.userIsBornInDataset) {
-		profile.plan_tier = "free";
+	// the plan comes from the organization: Team and Enterprise organizations put every
+	// developer on their plan; at Free organizations some developers buy their own Pro seat
+	// (new signups start on Free, or join their company's Team / Enterprise workspace)
+	if (isNew) {
+		profile.plan_tier = org.plan;
 		profile.customer_since = dayKey(ms(profile.created ?? meta.user.created));
 		return profile;
 	}
 	// established developers joined between 2022-03 and the window start
 	const tenureDays = Math.floor(salt(uid, "tenure") * (dayjs.utc(DATASET_START).diff(dayjs.utc("2022-03-01T00:00:00Z"), "day")));
 	profile.customer_since = dayjs.utc("2022-03-01T00:00:00Z").add(tenureDays, "day").format("YYYY-MM-DD");
-	const mix = {
-		startup: [50, 30, 20, 0],
-		smb: [30, 25, 40, 5],
-		mid_market: [18, 17, 45, 20],
-		enterprise: [8, 7, 25, 60],
-	}[org.size];
-	profile.plan_tier = pickWeighted({ free: mix[0], pro: mix[1], team: mix[2], enterprise: mix[3] }, salt(uid, "plan"));
+	profile.plan_tier = org.plan === "free" && salt(uid, "plan") < INDIVIDUAL_PRO_SHARE ? "pro" : org.plan;
 	return profile;
 }
 
@@ -535,6 +562,8 @@ function handleEverything(events, meta) {
 	const ecosystem = ECOSYSTEM[profile.primary_stack] || "npm";
 	const repos = reposFor(uid);
 
+	// a work unit: one build, one pull request, or one push and its preview
+	const unitKey = (e) => e.build_id || (PR_STEPS.includes(e.event) ? e.pr_id : null) || ((e.event === "commit pushed" || e.event === "preview deployed") && e.commit_sha !== "onboarding" ? e.commit_sha : null);
 	// every event carries the developer's own org (the engine stamps group keys at random)
 	for (const e of events) e.org_id = profile.org_id;
 
@@ -585,23 +614,36 @@ function handleEverything(events, meta) {
 		if (startT !== null) fin.time = iso(Math.min(startT + durMs, END));
 	}
 
-	// ── H5 + setup abandonment (new users): one activity cut ──
+	// ── H5 + setup abandonment + evaluation churn (new users): one activity cut ──
 	let cut = Infinity;
+	let abandoned = false;
+	const isOnboardingPreview = (e) => e.event === "preview deployed" && e.commit_sha === "onboarding";
+	const onboarded = Boolean(signup) && events.some(isOnboardingPreview);
 	if (signup) {
-		const onboarded = events.some((e) => e.event === "preview deployed" && e.commit_sha === "onboarding");
 		if (!onboarded && salt(uid, "abandon") < SETUP_ABANDON_SHARE) {
+			abandoned = true;
 			cut = Math.min(cut, birthMs + (SETUP_ABANDON_MIN_D + salt(uid, "abandon-day") * (SETUP_ABANDON_MAX_D - SETUP_ABANDON_MIN_D)) * DAY_MS);
 		}
 		if (firstBuild && firstBuild["build finished"].build_status === "failed" && salt(uid, "red-dark") < RED_DARK_SHARE) {
 			cut = Math.min(cut, T(firstBuild["build finished"]) + (RED_DARK_MIN_D + salt(uid, "red-dark-day") * (RED_DARK_MAX_D - RED_DARK_MIN_D)) * DAY_MS);
 		}
+		// most evaluators leave during their first month whatever happened in setup; the stop
+		// day never lands before the developer's last setup step
+		if (salt(uid, "eval-churn") < EVAL_CHURN_SHARE) {
+			const lastSetup = Math.max(birthMs, ...events.filter((e) => e.event === "repository imported" || e.event === "pipeline configured" || isOnboardingPreview(e)).map(T));
+			const stopAt = birthMs + (EVAL_CHURN_MIN_D + salt(uid, "eval-churn-day") * (EVAL_CHURN_MAX_D - EVAL_CHURN_MIN_D)) * DAY_MS;
+			cut = Math.min(cut, Math.max(stopAt, lastSetup + DAY_MS));
+		}
 	}
 	if (cut < Infinity) events = events.filter((e) => T(e) < cut);
 	// new users who never finish onboarding and do not abandon keep exploring at a low rate
-	// (public repos, docs, the CLI): a salted 25-60% of their activity
-	if (signup && cut === Infinity && !events.some((e) => e.event === "preview deployed" && e.commit_sha === "onboarding")) {
+	// (public repos, docs, the CLI): a salted 25-60% of their activity, thinned by whole
+	// work unit (a build, a PR, a push and its preview); the first build always stays
+	if (signup && !onboarded && !abandoned) {
 		const keepShare = EXPLORER_KEEP_MIN + salt(uid, "explorer-keep") * (EXPLORER_KEEP_MAX - EXPLORER_KEEP_MIN);
-		events = events.filter((e) => e === signup || e.event === "repository imported" || e.event === "pipeline configured" || salt(e.insert_id, "explorer") < keepShare);
+		const firstBuildId = firstBuild ? firstBuild["build finished"].build_id : null;
+		events = events.filter((e) => e === signup || e.event === "repository imported" || e.event === "pipeline configured"
+			|| (firstBuildId && e.build_id === firstBuildId) || salt(unitKey(e) || e.insert_id, "explorer") < keepShare);
 	}
 
 	// ── purchases: one per user; H10 preview habit decides which would-be purchases happen ──
@@ -750,7 +792,6 @@ function handleEverything(events, meta) {
 	});
 
 	// ── holidays: a share of work units that would have started that day do not happen ──
-	const unitKey = (e) => e.build_id || (PR_STEPS.includes(e.event) ? e.pr_id : null) || ((e.event === "commit pushed" || e.event === "preview deployed") && e.commit_sha !== "onboarding" ? e.commit_sha : null);
 	const unitStart = new Map();
 	for (const e of events) {
 		const k = unitKey(e);
@@ -772,15 +813,9 @@ function handleEverything(events, meta) {
 	for (const e of events) e.plan_tier = planAt(T(e));
 	if (purchase && events.includes(purchase)) profile.plan_tier = purchase.plan;
 
-	// experiment exposure: the CI service logs a developer's assignment once, at their first
-	// build in the test (the engine emits a marker on every run); the assignment stays on the
-	// profile only for users with an exposure left
-	const exposures = events.filter((e) => e.event === "$experiment_started").sort((a, b) => T(a) - T(b));
-	if (exposures.length > 1) {
-		const extra = new Set(exposures.slice(1));
-		events = events.filter((e) => !extra.has(e));
-	}
-	if (profile[EXP_KEY] !== undefined && !exposures.length) delete profile[EXP_KEY];
+	// the assignment stays on the profile only for developers whose exposure survived the
+	// activity cuts above
+	if (profile[EXP_KEY] !== undefined && !events.some((e) => e.event === "$experiment_started")) delete profile[EXP_KEY];
 
 	return events;
 }
@@ -1277,7 +1312,7 @@ const config = {
 	},
 
 	// retention shape (also pins each new user's signup to their creation day)
-	retentionCurve: { type: "logarithmic", day1: 0.75, day7: 0.6, day30: 0.5 },
+	retentionCurve: { type: "logarithmic", day1: 0.55, day7: 0.4, day30: 0.3 },
 
 	hook(record, type, meta) {
 		if (type === "user") return handleUserHook(record, meta);
@@ -1384,7 +1419,7 @@ SELECT CASE WHEN test_coverage_pct <= ${COVERAGE_LOW} THEN 'low' WHEN test_cover
 FROM ev WHERE event = 'production deployed' GROUP BY 1`;
 
 const H10_SQL = `WITH ${ID_CTE},
-s AS (SELECT uid, t AS t0 FROM ev WHERE event = 'account created' AND t < TIMESTAMP '${PQL_COHORT_END}'),
+s AS (SELECT uid, t AS t0 FROM ev WHERE event = 'account created' AND plan_tier = 'free' AND t < TIMESTAMP '${PQL_COHORT_END}'),
 f AS (SELECT s.uid,
     count(*) FILTER (WHERE e.event = 'preview deployed' AND e.t < s.t0 + INTERVAL ${PQL_DAYS} DAY) AS previews,
     count(*) FILTER (WHERE e.event = 'subscription started' AND e.t < s.t0 + INTERVAL ${BUY_WINDOW_DAYS} DAY) AS buys
@@ -1438,7 +1473,7 @@ FROM ev WHERE event = 'pull request opened' AND t >= TIMESTAMP '${ASSIST_RAMPED}
 		id: "H2-remote-build-cache-experiment",
 		hook: "H2",
 		archetype: "experiment-lift",
-		narrative: `The "${CACHE_EXPERIMENT}" CI test starts ${D(REMOTE_CACHE_START)} and splits developers 50/50 (sticky hash, exposure logged once at a developer's first build in the test). "${CACHE_VARIANT}" builds take ${CACHE_TTC_MULT}x as long as Control builds (declarative ttcMultiplier on the CI Build funnel; build_duration_sec is the real start → finish gap). Pass/fail does not change: failures come from the code, not the cache, so the success rate is the same in both arms (control assertion).`,
+		narrative: `The "${CACHE_EXPERIMENT}" CI test starts ${D(REMOTE_CACHE_START)} and splits developers 50/50 (sticky hash, exposure logged once at a developer's first build in the test). "${CACHE_VARIANT}" builds take ${CACHE_TTC_MULT}x as long as Control builds (the experiment config only assigns arms; the hook applies CACHE_TTC_MULT to build_duration_sec and to the start → finish gap). Pass/fail does not change: failures come from the code, not the cache, so the success rate is the same in both arms (control assertion).`,
 		mixpanelReport: { type: "Insights", event: "build finished", measure: "median build_duration_sec", filter: "build_status = success, on or after 2026-07-08", breakdown: `user property "${EXP_KEY}"` },
 		assertions: [
 			{
@@ -1527,7 +1562,7 @@ FROM ev WHERE event = '$experiment_started'`,
 	{
 		id: "H6-npm-registry-incident",
 		hook: "H6",
-		archetype: "bespoke",
+		archetype: "external-join",
 		narrative: `Forgebench's npm registry mirror degrades from ${D(REGISTRY_INCIDENT_START)} to ${D(REGISTRY_INCIDENT_END)} (exclusive): ${INCIDENT_FAIL * 100}% of npm-ecosystem builds that would have passed fail at dependency_install. The incident days and ecosystem come from the warehouse table build_fleet_daily (registry_mirror_status = 'degraded'); events carry no incident flag. The event-side read is a ratio of ratios (npm success rate / other ecosystems, incident days vs the 7 days either side), which reads the 1 − ${INCIDENT_FAIL} keep rate while cancelling weekday volume and the experiment mix.`,
 		mixpanelReport: { type: "Insights", event: "build finished", measure: "share with build_status = success", breakdown: "ecosystem", chart: "daily line", join: "warehouse build_fleet_daily.registry_mirror_status" },
 		assertions: [
@@ -1651,7 +1686,7 @@ FROM ${WH("usage_billing_daily")}`,
 		id: "H10-preview-habit-converts",
 		hook: "H10",
 		archetype: "cohort-count-scale",
-		narrative: `New developers who ship ${PQL_MIN_PREVIEWS}+ preview deploys in their first ${PQL_DAYS} days (the onboarding preview counts) buy a paid seat far more often: every would-be purchase of a habit user happens, while only ${NON_PQL_KEEP * 100}% of everyone else's do. Read: share of signups (through ${PQL_COHORT_END.slice(0, 10)}, so each has a full ${BUY_WINDOW_DAYS}-day purchase window) who start a subscription within ${BUY_WINDOW_DAYS} days, habit (${PQL_MIN_PREVIEWS}+ previews) vs light (1-2 previews; users with no preview never finished onboarding and are excluded). The keep ratio ${PQL_KEEP}/${NON_PQL_KEEP} is a floor: habit users are also heavier users who reach the upgrade page more often, so the realized ratio sits above it (STRONG by design). Mixpanel: Funnels account created → preview deployed → preview deployed → preview deployed, ${PQL_DAYS}-day window; completed = habit, dropped after step 2 or 3 = light; save as cohorts; then Funnels account created → subscription started, ${BUY_WINDOW_DAYS}-day window, breakdown by those cohorts.`,
+		narrative: `New developers who ship ${PQL_MIN_PREVIEWS}+ preview deploys in their first ${PQL_DAYS} days (the onboarding preview counts) buy a paid seat far more often: every would-be purchase of a habit user happens, while only ${NON_PQL_KEEP * 100}% of everyone else's do. Read: share of Free signups (plan_tier = free on account created; developers who join their company's Team or Enterprise workspace have nothing to buy) through ${PQL_COHORT_END.slice(0, 10)}, so each has a full ${BUY_WINDOW_DAYS}-day purchase window, who start a subscription within ${BUY_WINDOW_DAYS} days, habit (${PQL_MIN_PREVIEWS}+ previews) vs light (1-2 previews; users with no preview never finished onboarding and are excluded). The keep ratio ${PQL_KEEP}/${NON_PQL_KEEP} is a floor: habit users are also heavier users who reach the upgrade page more often, so the realized ratio sits above it (STRONG by design). Mixpanel: Funnels account created → preview deployed → preview deployed → preview deployed, ${PQL_DAYS}-day window; completed = habit, dropped after step 2 or 3 = light; save as cohorts; then Funnels account created → subscription started, ${BUY_WINDOW_DAYS}-day window, breakdown by those cohorts.`,
 		mixpanelReport: { type: "Funnels → cohorts → Funnels", cohortFunnel: `account created → preview deployed ×3, ${PQL_DAYS}-day window`, funnel: `account created → subscription started, ${BUY_WINDOW_DAYS}-day window`, breakdown: "habit / light cohorts" },
 		assertions: [
 			{
