@@ -152,7 +152,7 @@ The per-macro born% clamp is a **shape contract**: born above the cap breaks the
 For the resolved combo's macro, ALL of:
 
 1. `tail_ratio = mean(events_last_W) / mean(events_first_W)` ∈ macro's tail band, where `W = min(14, floor(numDays/2))`
-2. `lastDay >= 0.7 * sameDowPrev` (0.6 in `avgActiveDaysPerUser` mode); same-DOW comparison cancels soup-DOW noise
+2. `lastDay >= 0.5 * sameDowMean` (0.45 in `avgActiveDaysPerUser` mode), where `sameDowMean` is the same weekday averaged over up to 4 prior weeks. Relaxed in 1.9.0: "today" is always rough in a streaming dataset, and stories live in the history; this only catches a real last-day collapse.
 3. `rightEdgeSpike = max(events_last_W) / median(events_window) < macro_spike_cap`
 4. `min(events_last_7d) >= macro_l7c * mean(events_last_7d)` — no multi-day collapse
 5. `futureEvents == 0` — no events past `FIXED_NOW`

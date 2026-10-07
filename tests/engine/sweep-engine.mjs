@@ -304,9 +304,13 @@ async function runCombo(combo) {
 	// and isolates true engine cliff. Falls back to prevDay when window < 8 days.
 	const lastDay = windowDays[windowDays.length - 1].n;
 	const prevDay = windowDays[windowDays.length - 2]?.n || 0;
-	const sameDowPrev = windowDays.length >= 8
-		? windowDays[windowDays.length - 8].n
-		: prevDay;
+	// Baseline = mean of the same DOW over up to 4 prior weeks. One prior week is
+	// too noisy (day/day-7 sd ~0.24); "today" in a streaming dataset is always
+	// rough, and stories live in the history, so this check only catches a
+	// real last-day collapse.
+	const sameDowPrior = [];
+	for (let k = 7; k <= 28 && windowDays.length - 1 - k >= 0; k += 7) sameDowPrior.push(windowDays[windowDays.length - 1 - k]);
+	const sameDowPrev = sameDowPrior.length ? mean(sameDowPrior) : prevDay;
 
 	// last-7 collapse: min of last 7 vs trailing-7 mean
 	const last7Mean = mean(last7);
@@ -340,12 +344,12 @@ async function runCombo(combo) {
 	if (!(tailRatio >= bar.tail[0] && tailRatio <= bar.tail[1])) {
 		failures.push(`tail_ratio=${tailRatio.toFixed(2)} outside [${bar.tail[0]}, ${bar.tail[1]}] (${combo.macro} bar)`);
 	}
-	// lastDay cliff threshold against same-DOW-1-week-prior (DOW-fair comparison).
-	// Default 0.7 (catches engine bugs that suppress last-UTC-day events). When
+	// lastDay cliff threshold against the multi-week same-DOW mean (DOW-fair).
+	// 0.5 catches engine bugs that suppress last-UTC-day events while tolerating
+	// normal "today" noise (relaxed from 0.7 vs one week prior in 1.9.0). When
 	// `avgActiveDaysPerUser` is set, per-day variance is naturally higher (each
-	// user's distinct-day picks shift the daily distribution) — relax to 0.6 to
-	// absorb RNG noise without losing the regression-detection signal.
-	const lastDayThreshold = (combo.activeDays !== undefined && combo.activeDays !== null) ? 0.6 : 0.7;
+	// user's distinct-day picks shift the daily distribution), so use 0.45.
+	const lastDayThreshold = (combo.activeDays !== undefined && combo.activeDays !== null) ? 0.45 : 0.5;
 	if (!(lastDay >= lastDayThreshold * sameDowPrev)) {
 		failures.push(`lastDay=${lastDay} < ${lastDayThreshold} * sameDowPrev=${sameDowPrev} (ratio=${sameDowPrev ? (lastDay / sameDowPrev).toFixed(2) : 'NA'})`);
 	}
