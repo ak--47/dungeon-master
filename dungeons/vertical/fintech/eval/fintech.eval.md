@@ -132,7 +132,7 @@
 - **Prompt:** "Premium promises priority support. Do Premium members actually get their tickets resolved faster?"
 - **Type:** funnel
 - **Answer:** Yes. Median time from ticket opened to resolved is **6.7 hours for Premium** (412 tickets) vs **16.7 hours for Free** (2,584) and **17.0 hours for Plus** (957), about **0.40x**. Means: 10.6 vs 25.5 and 26.3 hours. Plus gets no speed-up. Accept a Premium median ratio of 0.36-0.44 using the plan at ticket time.
-- **Evidence:** H9-premium-priority-support; Funnels `support ticket opened` → `support ticket resolved`, hold `ticket_id` constant, median time to convert, breakdown `plan_tier`; `-- EVAL Q16`.
+- **Evidence:** H9-premium-priority-support; Funnels `support ticket opened` → `support ticket resolved`, hold `ticket_id` constant, median time to convert, 30-day window (Mixpanel default), breakdown `plan_tier`; `-- EVAL Q16`.
 - **Context needed:** 01-business.md (plans), 04-metrics-and-tables.md (time to resolve).
 - **Grading:** must measure per ticket. Wrong: unique-member funnel time that pairs one member's tickets across each other.
 

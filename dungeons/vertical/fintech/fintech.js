@@ -234,7 +234,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * PATTERN: time from ticket opened to resolved is 0.4x for Premium members
  *   (plan when the ticket was opened) vs Free and Plus.
  * MIXPANEL: Funnels, support ticket opened → support ticket resolved, hold
- *   ticket_id constant, median time to convert, breakdown plan_tier.
+ *   ticket_id constant, median time to convert, breakdown plan_tier, 30-day
+ *   window (the Mixpanel default).
  * REAL WORLD: a dedicated queue with more agents per ticket.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -1711,7 +1712,7 @@ FROM ev WHERE event = '$experiment_started'`,
 		hook: "H9",
 		archetype: "funnel-ttc-by-segment",
 		narrative: `Premium includes priority support: time from "support ticket opened" to "support ticket resolved" is ${SUPPORT_PLAN_MULT.premium}x for members on Premium when they open the ticket, vs Free and Plus. A ticket's two events share a ticket_id, so a funnel holding ticket_id constant measures each ticket on its own; contact channel speed is independent of plan, so the median ratio reads the knob.`,
-		mixpanelReport: { type: "Funnels", steps: ["support ticket opened", "support ticket resolved"], measure: "median time to convert", holdPropertyConstant: "ticket_id", breakdown: "plan_tier" },
+		mixpanelReport: { type: "Funnels", steps: ["support ticket opened", "support ticket resolved"], measure: "median time to convert", holdPropertyConstant: "ticket_id", breakdown: "plan_tier", window: "30 days (Mixpanel default)" },
 		assertions: [
 			{
 				breakdown: {
