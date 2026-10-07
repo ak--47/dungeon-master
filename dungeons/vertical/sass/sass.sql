@@ -241,6 +241,8 @@ g AS (SELECT (d IN (SELECT d FROM o)) AS outage, avg(ok::INT) FILTER (WHERE hit)
 SELECT outage, round(hit_success, 4) AS affected_region_success, round(other_success, 4) AS other_region_success,
  round(hit_success / other_success, 4) AS relative_success FROM g ORDER BY outage;
 
+-- placement check (the outage rows sit on the incident days in us-east only); the
+-- error rate is the status page's reported value, not an effect measurement
 SELECT runner_region, count(*) FILTER (WHERE runner_status = 'major_outage') AS outage_days,
  round(avg(infra_error_rate) FILTER (WHERE runner_status = 'major_outage'), 4) AS outage_error_rate,
  round(avg(queue_p95_seconds) FILTER (WHERE runner_status = 'major_outage'), 0) AS outage_queue_p95_s
@@ -340,6 +342,19 @@ WITH u AS (SELECT uid, plan_tier, company_size, avg(r) FILTER (WHERE post) - avg
 s AS (SELECT 'all' AS split, d FROM u UNION ALL SELECT 'plan=' || plan_tier, d FROM u UNION ALL SELECT 'size=' || company_size, d FROM u)
 SELECT split, count(*) AS users_on_both_sides, round(avg(d), 2) AS within_user_change_mins, round(avg(d) / (stddev(d) / sqrt(count(*))), 2) AS z_paired
 FROM s GROUP BY 1 ORDER BY 1;
+-- by company size against the Free/Team control (no Root Cause Assist): the change
+-- on Business/Enterprise minus the change on Free/Team over the same dates (z on the
+-- difference of the two before/after differences). Newer accounts connect chat and
+-- paging tools during the window, so smaller companies get faster on every plan.
+WITH a AS (SELECT e.e_plan IN ('business', 'enterprise') AS rca_plan, e.post, e.r, p.company_size FROM
+  (SELECT uid, plan_tier AS e_plan, t >= TIMESTAMP '2026-07-22' AS post, response_time_mins AS r FROM ev WHERE event = 'alert acknowledged') e
+  JOIN prof p ON p.uid = e.uid),
+g AS (SELECT company_size, rca_plan, post, count(*) AS n, avg(r) AS m, var_samp(r) AS v FROM a GROUP BY 1, 2, 3),
+d AS (SELECT company_size, rca_plan, max(m) FILTER (WHERE post) - max(m) FILTER (WHERE NOT post) AS chg, sum(v / n) AS var_chg FROM g GROUP BY 1, 2)
+SELECT company_size, round(max(chg) FILTER (WHERE rca_plan), 2) AS biz_ent_change_mins, round(max(chg) FILTER (WHERE NOT rca_plan), 2) AS free_team_change_mins,
+ round(max(chg) FILTER (WHERE rca_plan) - max(chg) FILTER (WHERE NOT rca_plan), 2) AS did_mins,
+ round((max(chg) FILTER (WHERE rca_plan) - max(chg) FILTER (WHERE NOT rca_plan)) / sqrt(sum(var_chg)), 2) AS z_did
+FROM d GROUP BY 1 ORDER BY 1;
 -- reference: resolution time (where Root Cause Assist acts), same plans, before vs after
 SELECT (t >= TIMESTAMP '2026-07-22') AS after_launch, count(*) AS resolutions, round(avg(resolution_time_mins), 1) AS avg_resolution_mins
 FROM ev WHERE event = 'alert resolved' AND plan_tier IN ('business', 'enterprise') GROUP BY 1 ORDER BY 1;
