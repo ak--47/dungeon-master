@@ -72,6 +72,16 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   only users whose first event came after the start entered the experiment.
   `sticky: false` experiments keep one exposure per run (each run re-rolls the
   variant). Output shift: experiment dungeons change; others are unchanged.
+- Draw `browser` from a pool valid for the device's `os`. It came from one
+  mixed list, so Windows and macOS devices carried "Mobile Safari", "Chrome
+  iOS", or "Samsung Internet", and iOS devices carried desktop browsers (about
+  1 in 4 events in a mixed-device run). iOS and iPadOS use Mobile Safari,
+  Chrome iOS, Firefox iOS, DuckDuckGo Mobile, and Brave Mobile; Android uses
+  Chrome Mobile, Samsung Internet, Firefox Mobile, and others; Windows, macOS,
+  and Linux use desktop browsers. The browser stays a seeded hash of the device
+  key. Without a device switch the mixed list stays. Output shift: `browser`
+  values change when a device switch and `hasBrowser` are on; no RNG draws
+  change.
 
 ### Added
 

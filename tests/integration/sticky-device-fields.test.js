@@ -116,4 +116,33 @@ describe.sequential('sticky device fields', () => {
 		expect(workouts.length).toBeGreaterThan(100);
 		expect(workouts.every(e => e.os === 'HookOS')).toBe(true);
 	}, 120_000);
+	// 1.9.0: the browser comes from a pool valid for the device's OS. Before, it
+	// was drawn from one mixed list (Mobile Safari on Windows, Edge on iOS).
+	test('the browser is valid for the device OS', async () => {
+		const MOBILE_IOS = ['Mobile Safari', 'Chrome iOS', 'Firefox iOS', 'Microsoft Edge iOS', 'DuckDuckGo Mobile', 'Brave Mobile', 'Opera Mini'];
+		const ANDROID = ['Chrome Mobile', 'Samsung Internet', 'Firefox Mobile', 'Microsoft Edge Mobile', 'Opera Mobile', 'DuckDuckGo Mobile', 'Brave Mobile', 'UC Browser', 'Opera Mini'];
+		const DESKTOP_COMMON = ['Chrome', 'Firefox', 'Microsoft Edge', 'Opera', 'Brave', 'Vivaldi'];
+		const ALLOWED = {
+			iOS: MOBILE_IOS,
+			iPadOS: MOBILE_IOS,
+			Android: ANDROID,
+			Windows: [...DESKTOP_COMMON, 'Opera GX'],
+			macOS: [...DESKTOP_COMMON, 'Safari', 'Arc'],
+			Linux: DESKTOP_COMMON,
+			'Pop!_OS': DESKTOP_COMMON,
+			PureOS: DESKTOP_COMMON,
+		};
+		const r = await DUNGEON_MASTER(config({ worldEvents: [], dataQuality: undefined }));
+		const events = Array.from(r.eventData);
+		const seen = new Map();
+		for (const e of events) {
+			expect(ALLOWED[e.os], `unknown os ${e.os}`).toBeDefined();
+			expect(ALLOWED[e.os], `${e.os} with ${e.browser}`).toContain(e.browser);
+			if (!seen.has(e.os)) seen.set(e.os, new Set());
+			seen.get(e.os).add(e.browser);
+		}
+		for (const os of ['iOS', 'Android', 'Windows', 'macOS']) {
+			expect(seen.get(os)?.size ?? 0, os).toBeGreaterThan(1);
+		}
+	}, 120_000);
 });

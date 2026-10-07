@@ -307,7 +307,7 @@ export interface Dungeon {
     hasAndroidDevices?: boolean;
     /** If true, device pool includes desktop devices. */
     hasDesktopDevices?: boolean;
-    /** If true, events include a `browser` property, sticky per device_id (see `hasIOSDevices`). */
+    /** If true, events include a `browser` property, sticky per device_id (see `hasIOSDevices`), drawn from a pool valid for the device's `os` (iOS: Mobile Safari, Chrome iOS...; Android: Chrome Mobile, Samsung Internet...; Windows: Chrome, Microsoft Edge...; macOS: Safari, Chrome...). Without a device switch the browser comes from one mixed list. */
     hasBrowser?: boolean;
     /** If true, writes output files to ./data/. Can also be a directory path string or gs:// URI. Default: `false` — data is returned in memory only. */
     writeToDisk?: boolean | string;
@@ -1049,6 +1049,8 @@ export interface Defaults {
     desktopDevices: () => Record<string, ValueValid>[];
     /** Browser/UA pool. */
     browsers: () => Record<string, ValueValid>[];
+    /** Browser pools per device `os` (repeats are weights); a device's browser comes from its OS pool. */
+    browsersByOs: Record<string, string[]>;
     /** UTM campaign pool used when `hasCampaigns: true`. */
     campaigns: () => Record<string, ValueValid>[];
     /** Pre-built per-platform device arrays selected once at context creation. */
