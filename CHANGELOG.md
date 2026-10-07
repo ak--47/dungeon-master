@@ -112,6 +112,16 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   (hour peak/trough 1.37x and weekday 1.30x against 3.57x and 2.5x configured;
   now 3.68x and 2.58x). Output shift: dungeons with an amplifying world event
   change clone times and the RNG stream after them.
+- Stop an experiment variant's extra conversions from taking events away from
+  the user's other funnels. The user loop runs funnels until the event budget
+  is spent, so a variant that converted more spent the budget faster (repro
+  with a 2.5x variant: deposits per user 16.6 against 21.3 for control, all
+  other events lower too). An experiment run is now charged at its expected
+  step count under the pre-experiment rate, so both arms run the same number of
+  funnels: deposits per user 20.3 against 20.4. Variant users who convert more
+  now emit more events in total, so `numEvents` overshoots a little when a
+  variant lifts conversion (and undershoots when it lowers it). Output shift:
+  experiment dungeons change.
 
 ### Added
 

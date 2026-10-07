@@ -484,3 +484,44 @@ describe('Experiment exposure: once per user', () => {
 		})));
 	}, 60000);
 });
+
+// 1.9.0: a variant's extra conversions used to come out of the user's fixed
+// event budget, so variant users ran every other funnel less (crypto vertical:
+// deposits per enrolled user z = -1.7 lower in the variant).
+describe('Experiment variant does not starve other funnels', () => {
+	test('a 9x conversion variant keeps the other funnel volume per user', async () => {
+		const steps = ['k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8'];
+		const result = await DUNGEON_MASTER(baseConfig({
+			seed: 'exp-budget',
+			numUsers: 300,
+			avgEventsPerUserPerDay: 5,
+			datasetStart: FIXED_NOW - 60 * 86400,
+			percentUsersBornInDataset: 0,
+			events: [...steps.map(event => ({ event })), { event: 'deposit' }],
+			funnels: [
+				{
+					name: 'Trade', sequence: steps, conversionRate: 10, timeToConvert: 1, weight: 5,
+					experiment: { name: 'E', variants: [{ name: 'Control' }, { name: 'T', conversionMultiplier: 9 }] },
+				},
+				{ name: 'Deposit', sequence: ['deposit'], conversionRate: 100, timeToConvert: 1, weight: 3 },
+			],
+		}));
+		const variant = new Map(Array.from(result.userProfilesData).map(p => [p.distinct_id, p['Experiment: E']]));
+		const per = { Control: { users: 0, deposit: 0, k8: 0 }, T: { users: 0, deposit: 0, k8: 0 } };
+		for (const v of variant.values()) if (v) per[v].users++;
+		for (const e of result.eventData) {
+			const v = variant.get(e.user_id);
+			if (!v || per[v][e.event] === undefined) continue;
+			per[v][e.event]++;
+		}
+		const rate = (v, key) => per[v][key] / per[v].users;
+		expect(per.Control.users).toBeGreaterThan(100);
+		expect(per.T.users).toBeGreaterThan(100);
+		// The variant converts more...
+		expect(rate('T', 'k8') / rate('Control', 'k8')).toBeGreaterThan(4);
+		// ...without taking volume from the unrelated funnel (before 1.9.0: ~0.6).
+		const depositRatio = rate('T', 'deposit') / rate('Control', 'deposit');
+		expect(depositRatio).toBeGreaterThan(0.85);
+		expect(depositRatio).toBeLessThan(1.15);
+	}, 60000);
+});
