@@ -320,41 +320,49 @@ SELECT round(avg((resolution_method = 'ai_assist')::INT), 4) AS ai_share_overall
 FROM ev WHERE event = 'alert resolved' AND t >= TIMESTAMP '2026-07-22' AND plan_tier IN ('business', 'enterprise');
 
 -- EVAL Q3 — null: since Root Cause Assist launched (2026-07-22), do Business and
--- Enterprise users acknowledge pages any faster? Acknowledgements on those plans
--- (plan_tier on the event), before vs after launch, with sub-splits by plan and
--- company size, and the within-user change for users with acknowledgements on both sides.
+-- Enterprise teams acknowledge a larger share of their pages? Per alert (the
+-- Mixpanel totals funnel alert triggered → alert acknowledged, alert_id held
+-- constant, 30-day window), plan_tier on the trigger, before vs after launch, with
+-- sub-splits by plan, company size, and severity (two-proportion z), the
+-- within-user change for users with alerts on both sides, and the Free/Team
+-- comparison over the same dates (all accounts, and accounts set up before June 4).
 CREATE OR REPLACE TEMP TABLE q3 AS
-SELECT e.uid, e.t >= TIMESTAMP '2026-07-22' AS post, e.response_time_mins AS r, e.plan_tier, p.company_size
-FROM ev e JOIN prof p ON p.uid = e.uid
-WHERE e.event = 'alert acknowledged' AND e.plan_tier IN ('business', 'enterprise');
-WITH s AS (SELECT 'all' AS split, post, r FROM q3
-  UNION ALL SELECT 'plan=' || plan_tier, post, r FROM q3
-  UNION ALL SELECT 'size=' || company_size, post, r FROM q3),
-g AS (SELECT split, post, count(*) AS n, avg(r) AS m, var_samp(r) AS v, median(r) AS med, avg(ln(r + 0.1)) AS lm, var_samp(ln(r + 0.1)) AS lv FROM s GROUP BY 1, 2)
-SELECT split, max(n) FILTER (WHERE NOT post) AS acks_before, max(n) FILTER (WHERE post) AS acks_after,
- round(max(m) FILTER (WHERE NOT post), 2) AS avg_before, round(max(m) FILTER (WHERE post), 2) AS avg_after,
- round(max(med) FILTER (WHERE NOT post), 2) AS median_before, round(max(med) FILTER (WHERE post), 2) AS median_after,
- round((max(m) FILTER (WHERE post) - max(m) FILTER (WHERE NOT post)) / sqrt(sum(v / n)), 2) AS z_mean,
- round((max(lm) FILTER (WHERE post) - max(lm) FILTER (WHERE NOT post)) / sqrt(sum(lv / n)), 2) AS z_log
-FROM g GROUP BY 1 ORDER BY 1;
-WITH u AS (SELECT uid, plan_tier, company_size, avg(r) FILTER (WHERE post) - avg(r) FILTER (WHERE NOT post) AS d FROM q3
-  GROUP BY 1, 2, 3 HAVING bool_or(post) AND bool_or(NOT post)),
+SELECT a.uid, a.t_trig >= TIMESTAMP '2026-07-22' AS post,
+ (a.t_ack IS NOT NULL AND a.t_ack < a.t_trig + INTERVAL 30 DAY) AS acked,
+ e.plan_tier, e.severity, p.company_size, p.customer_since < '2026-06-04' AS pre_window
+FROM alerts a JOIN (SELECT alert_id, plan_tier, severity FROM ev WHERE event = 'alert triggered') e USING (alert_id)
+JOIN prof p ON p.uid = a.uid WHERE a.t_trig IS NOT NULL;
+WITH b AS (SELECT * FROM q3 WHERE plan_tier IN ('business', 'enterprise')),
+s AS (SELECT 'all' AS split, post, acked FROM b
+  UNION ALL SELECT 'plan=' || plan_tier, post, acked FROM b
+  UNION ALL SELECT 'size=' || company_size, post, acked FROM b
+  UNION ALL SELECT 'severity=' || severity, post, acked FROM b),
+x AS (SELECT split, count(*) FILTER (WHERE NOT post) AS n0, avg(acked::INT) FILTER (WHERE NOT post) AS p0,
+  count(*) FILTER (WHERE post) AS n1, avg(acked::INT) FILTER (WHERE post) AS p1, avg(acked::INT) AS p FROM s GROUP BY 1)
+SELECT split, n0 AS alerts_before, round(p0, 4) AS ack_share_before, n1 AS alerts_after, round(p1, 4) AS ack_share_after,
+ round((p1 - p0) / sqrt(p * (1 - p) * (1.0 / n0 + 1.0 / n1)), 2) AS z
+FROM x ORDER BY 1;
+WITH u AS (SELECT uid, plan_tier, company_size, avg(acked::INT) FILTER (WHERE post) - avg(acked::INT) FILTER (WHERE NOT post) AS d
+  FROM q3 WHERE plan_tier IN ('business', 'enterprise') GROUP BY 1, 2, 3 HAVING bool_or(post) AND bool_or(NOT post)),
 s AS (SELECT 'all' AS split, d FROM u UNION ALL SELECT 'plan=' || plan_tier, d FROM u UNION ALL SELECT 'size=' || company_size, d FROM u)
-SELECT split, count(*) AS users_on_both_sides, round(avg(d), 2) AS within_user_change_mins, round(avg(d) / (stddev(d) / sqrt(count(*))), 2) AS z_paired
+SELECT split, count(*) AS users_on_both_sides, round(avg(d), 4) AS within_user_change, round(avg(d) / (stddev(d) / sqrt(count(*))), 2) AS z_paired
 FROM s GROUP BY 1 ORDER BY 1;
--- by company size against the Free/Team control (no Root Cause Assist): the change
--- on Business/Enterprise minus the change on Free/Team over the same dates (z on the
--- difference of the two before/after differences). Newer accounts connect chat and
--- paging tools during the window, so smaller companies get faster on every plan.
-WITH a AS (SELECT e.e_plan IN ('business', 'enterprise') AS rca_plan, e.post, e.r, p.company_size FROM
-  (SELECT uid, plan_tier AS e_plan, t >= TIMESTAMP '2026-07-22' AS post, response_time_mins AS r FROM ev WHERE event = 'alert acknowledged') e
-  JOIN prof p ON p.uid = e.uid),
-g AS (SELECT company_size, rca_plan, post, count(*) AS n, avg(r) AS m, var_samp(r) AS v FROM a GROUP BY 1, 2, 3),
-d AS (SELECT company_size, rca_plan, max(m) FILTER (WHERE post) - max(m) FILTER (WHERE NOT post) AS chg, sum(v / n) AS var_chg FROM g GROUP BY 1, 2)
-SELECT company_size, round(max(chg) FILTER (WHERE rca_plan), 2) AS biz_ent_change_mins, round(max(chg) FILTER (WHERE NOT rca_plan), 2) AS free_team_change_mins,
- round(max(chg) FILTER (WHERE rca_plan) - max(chg) FILTER (WHERE NOT rca_plan), 2) AS did_mins,
- round((max(chg) FILTER (WHERE rca_plan) - max(chg) FILTER (WHERE NOT rca_plan)) / sqrt(sum(var_chg)), 2) AS z_did
-FROM d GROUP BY 1 ORDER BY 1;
+-- Free/Team over the same dates (no Root Cause Assist): all accounts, then accounts
+-- set up before June 4 (new signups get fewer pages, so they acknowledge a larger
+-- share, and they make up a growing part of Free/Team alerts)
+WITH f AS (SELECT * FROM q3 WHERE plan_tier IN ('free', 'team')),
+s AS (SELECT 'free_team_all' AS split, post, acked FROM f UNION ALL SELECT 'free_team_pre_window', post, acked FROM f WHERE pre_window
+  UNION ALL SELECT 'free_team_new_signups', post, acked FROM f WHERE NOT pre_window),
+x AS (SELECT split, count(*) FILTER (WHERE NOT post) AS n0, avg(acked::INT) FILTER (WHERE NOT post) AS p0,
+  count(*) FILTER (WHERE post) AS n1, avg(acked::INT) FILTER (WHERE post) AS p1, avg(acked::INT) AS p FROM s GROUP BY 1)
+SELECT split, n0 AS alerts_before, round(p0, 4) AS ack_share_before, n1 AS alerts_after, round(p1, 4) AS ack_share_after,
+ round((p1 - p0) / sqrt(p * (1 - p) * (1.0 / n0 + 1.0 / n1)), 2) AS z
+FROM x ORDER BY 1;
+-- difference-in-differences, accounts set up before June 4: Business/Enterprise change minus Free/Team change
+WITH g AS (SELECT plan_tier IN ('business', 'enterprise') AS rca_plan, post, count(*) AS n, avg(acked::INT) AS m FROM q3 WHERE pre_window GROUP BY 1, 2),
+d AS (SELECT rca_plan, max(m) FILTER (WHERE post) - max(m) FILTER (WHERE NOT post) AS chg, sum(m * (1 - m) / n) AS v FROM g GROUP BY 1)
+SELECT round(max(chg) FILTER (WHERE rca_plan), 4) AS biz_ent_change, round(max(chg) FILTER (WHERE NOT rca_plan), 4) AS free_team_change,
+ round((max(chg) FILTER (WHERE rca_plan) - max(chg) FILTER (WHERE NOT rca_plan)) / sqrt(sum(v)), 2) AS z_did FROM d;
 -- reference: resolution time (where Root Cause Assist acts), same plans, before vs after
 SELECT (t >= TIMESTAMP '2026-07-22') AS after_launch, count(*) AS resolutions, round(avg(resolution_time_mins), 1) AS avg_resolution_mins
 FROM ev WHERE event = 'alert resolved' AND plan_tier IN ('business', 'enterprise') GROUP BY 1 ORDER BY 1;
@@ -369,22 +377,23 @@ WITH g AS (SELECT CASE WHEN cloud_provider = 'azure' THEN 'azure' ELSE 'aws_gcp_
 SELECT grp, n AS signups, round(c / n, 4) AS step_connect, round(i / c, 4) AS step_install, round(d / i, 4) AS step_dashboard,
  round(d / n, 4) AS overall FROM g ORDER BY 1;
 
--- EVAL Q5 — null: do LinkedIn Ads signups finish onboarding less often than other signups?
--- 7-day onboarding conversion, LinkedIn vs every other channel, with sub-splits by cloud
--- group (Azure vs the rest) and signup method (two-proportion z)
-WITH o AS (SELECT o.*, CASE WHEN cloud_provider = 'azure' THEN 'azure' ELSE 'aws_gcp_multi' END AS cloud_group FROM onboarding o),
-s AS (SELECT 'all' AS split, ch, converted FROM o
-  UNION ALL SELECT 'cloud=' || cloud_group, ch, converted FROM o
-  UNION ALL SELECT 'method=' || signup_method, ch, converted FROM o),
-x AS (SELECT split, count(*) FILTER (WHERE ch = 'linkedin_ads') AS n1, avg(converted::INT) FILTER (WHERE ch = 'linkedin_ads') AS p1,
-  count(*) FILTER (WHERE ch <> 'linkedin_ads') AS n2, avg(converted::INT) FILTER (WHERE ch <> 'linkedin_ads') AS p2, avg(converted::INT) AS p FROM s GROUP BY 1)
-SELECT split, n1 AS linkedin_signups, round(p1, 4) AS linkedin_conversion, n2 AS other_signups, round(p2, 4) AS other_conversion,
+-- EVAL Q5 — null: do SSO signups finish onboarding more or less often than self-serve
+-- signups (Google, GitHub, email)? 7-day onboarding conversion, SSO vs the rest, with
+-- sub-splits by cloud provider, company size, and acquisition channel (two-proportion z)
+WITH o AS (SELECT o.*, p.company_size FROM onboarding o JOIN prof p ON p.uid = o.uid),
+s AS (SELECT 'all' AS split, signup_method, converted FROM o
+  UNION ALL SELECT 'cloud=' || cloud_provider, signup_method, converted FROM o
+  UNION ALL SELECT 'size=' || company_size, signup_method, converted FROM o
+  UNION ALL SELECT 'channel=' || ch, signup_method, converted FROM o),
+x AS (SELECT split, count(*) FILTER (WHERE signup_method = 'sso') AS n1, avg(converted::INT) FILTER (WHERE signup_method = 'sso') AS p1,
+  count(*) FILTER (WHERE signup_method <> 'sso') AS n2, avg(converted::INT) FILTER (WHERE signup_method <> 'sso') AS p2, avg(converted::INT) AS p FROM s GROUP BY 1)
+SELECT split, n1 AS sso_signups, round(p1, 4) AS sso_conversion, n2 AS self_serve_signups, round(p2, 4) AS self_serve_conversion,
  round((p1 - p2) / sqrt(p * (1 - p) * (1.0 / n1 + 1.0 / n2)), 2) AS z FROM x ORDER BY 1;
--- every channel vs the rest (reference)
+-- every signup method vs the rest (reference)
 WITH t AS (SELECT count(*) AS n, avg(converted::INT) AS p FROM onboarding),
-g AS (SELECT ch, count(*) AS n1, avg(converted::INT) AS p1 FROM onboarding GROUP BY 1),
-x AS (SELECT g.ch, g.n1, g.p1, t.n - g.n1 AS n2, (t.p * t.n - g.p1 * g.n1) / (t.n - g.n1) AS p2, t.p FROM g, t)
-SELECT ch AS acquisition_channel, n1 AS signups, round(p1, 4) AS conversion, round(p2, 4) AS rest_conversion,
+g AS (SELECT signup_method, count(*) AS n1, avg(converted::INT) AS p1 FROM onboarding GROUP BY 1),
+x AS (SELECT g.signup_method, g.n1, g.p1, t.n - g.n1 AS n2, (t.p * t.n - g.p1 * g.n1) / (t.n - g.n1) AS p2, t.p FROM g, t)
+SELECT signup_method, n1 AS signups, round(p1, 4) AS conversion, round(p2, 4) AS rest_conversion,
  round((p1 - p2) / sqrt(p * (1 - p) * (1.0 / n1 + 1.0 / n2)), 2) AS z_vs_rest FROM x ORDER BY 1;
 
 -- EVAL Q6 — Slack + PagerDuty: acknowledgement and resolution time (profile connected_integrations)
@@ -474,7 +483,9 @@ FROM wh_runner WHERE date::DATE BETWEEN DATE '2026-08-24' AND DATE '2026-08-28' 
 WITH w AS (SELECT (t_run >= TIMESTAMP '2026-08-25' AND t_run < TIMESTAMP '2026-08-28') AS incident, runner_region, pipeline_status = 'success' AS ok
   FROM runs WHERE t_run >= TIMESTAMP '2026-08-18' AND t_run < TIMESTAMP '2026-09-04')
 SELECT runner_region, count(*) FILTER (WHERE incident) AS incident_runs, round(avg(ok::INT) FILTER (WHERE incident), 4) AS incident_success,
- round(avg(ok::INT) FILTER (WHERE NOT incident), 4) AS surrounding_success
+ count(*) FILTER (WHERE NOT incident) AS surrounding_runs, round(avg(ok::INT) FILTER (WHERE NOT incident), 4) AS surrounding_success,
+ round((avg(ok::INT) FILTER (WHERE incident) - avg(ok::INT) FILTER (WHERE NOT incident))
+   / sqrt(avg(ok::INT) * (1 - avg(ok::INT)) * (1.0 / count(*) FILTER (WHERE incident) + 1.0 / count(*) FILTER (WHERE NOT incident))), 2) AS z
 FROM w GROUP BY 1 ORDER BY 1;
 -- the three other regions pooled, with a two-proportion z (incident vs surrounding days)
 WITH w AS (SELECT (t_run >= TIMESTAMP '2026-08-25' AND t_run < TIMESTAMP '2026-08-28') AS incident, pipeline_status = 'success' AS ok
@@ -483,12 +494,15 @@ x AS (SELECT count(*) FILTER (WHERE incident) AS n1, avg(ok::INT) FILTER (WHERE 
   count(*) FILTER (WHERE NOT incident) AS n2, avg(ok::INT) FILTER (WHERE NOT incident) AS p2, avg(ok::INT) AS p FROM w)
 SELECT n1 AS incident_runs, round(p1, 4) AS incident_success, round(p2, 4) AS surrounding_success,
  round((p1 - p2) / sqrt(p * (1 - p) * (1.0 / n1 + 1.0 / n2)), 2) AS z FROM x;
--- ap-south has few runs: its success rate over every Tuesday-Thursday span in the window (normal range)
-WITH r AS (SELECT t_run::DATE AS d, pipeline_status = 'success' AS ok FROM runs WHERE runner_region = 'ap-south'),
-w AS (SELECT d0.d AS start, count(*) AS n, avg(ok::INT) AS s FROM (SELECT DISTINCT d FROM r WHERE dayofweek(d) = 2) d0
-  JOIN r ON r.d >= d0.d AND r.d < d0.d + 3 GROUP BY 1)
-SELECT count(*) AS tue_thu_spans, round(min(s), 4) AS min_success, round(quantile_cont(s, 0.1), 4) AS p10_success,
- round(median(s), 4) AS median_success, round(max(s), 4) AS max_success, round(avg(n), 0) AS avg_runs FROM w;
+-- normal range: each other region's success rate over every Tuesday-Thursday span in the window
+WITH r AS (SELECT runner_region, t_run::DATE AS d, pipeline_status = 'success' AS ok FROM runs WHERE runner_region <> 'us-east'),
+w AS (SELECT r.runner_region, d0.d AS start, count(*) AS n, avg(ok::INT) AS s FROM (SELECT DISTINCT d FROM r WHERE dayofweek(d) = 2) d0
+  JOIN r ON r.d >= d0.d AND r.d < d0.d + 3 GROUP BY 1, 2)
+SELECT runner_region, count(*) AS tue_thu_spans, round(min(s), 4) AS min_success, round(quantile_cont(s, 0.1), 4) AS p10_success,
+ round(median(s), 4) AS median_success, round(max(s), 4) AS max_success, round(avg(n), 0) AS avg_runs,
+ round(max(s) FILTER (WHERE start = DATE '2026-08-25'), 4) AS incident_span_success,
+ count(*) FILTER (WHERE s < (SELECT s FROM w w2 WHERE w2.runner_region = w.runner_region AND w2.start = DATE '2026-08-25')) AS spans_below_incident
+FROM w GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q13 — spend per signup by paid channel (warehouse join)
 WITH s AS (SELECT ch, count(*) AS n FROM signups GROUP BY 1),
