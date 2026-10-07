@@ -359,13 +359,16 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   workout 1-2 h later, the progress check after it), so the Workout Loop
  *   keeps its shape: the share of planned workouts followed by a completed
  *   workout within 4 h is the same in the program as in the two weeks before
- *   (79.2% vs 78.3%), and progress checks per workout stay at 0.64-0.65. Each
+ *   (pairing each plan with its next completion: 79.2% vs 78.3%; the Mixpanel
+ *   totals funnel, which keeps the first plan's clock when a member plans twice,
+ *   reads 78.2% vs 77.2%), and progress checks per workout stay at 0.64-0.65. Each
  *   extra session gets its own workout details (re-drawn at its time), so
  *   program workouts do not repeat earlier ones.
  * MIXPANEL: Insights, workout completed, app opened, meal logged, daily;
  *   formula workouts / app opens rises ≈ 1.22x and app opens / meals ≈ 1.19x
  *   during the program. Funnels, workout planned → workout completed, totals,
- *   4-hour window (the Workout Loop's), Sep 8-21 vs Aug 25 - Sep 7: equal.
+ *   4-hour window (the Workout Loop's), Sep 8-21 vs Aug 25 - Sep 7: equal
+ *   (78.2% vs 77.2%).
  * REAL WORLD: a back-to-routine program after Labor Day brings members back
  *   a bit more often and makes each visit a training session.
  *
@@ -410,7 +413,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H9   | completed per app open, program/before      | 1.5 / 1.2               | 1.25      | 1.220
  * H9   | planned per app open, program/before        | 1.5 / 1.2               | 1.25      | 1.205
  * H9   | app opens per meal logged, program/before   | FALL_RESET_OPEN_MULT    | 1.20      | 1.190
- * H9   | plan → workout within 4 h, program/before   | whole linked units      | 1.00      | 1.011 (79.2% vs 78.3%; 1 day: 86.0% vs 84.7%)
+ * H9   | plan → workout within 4 h, program/before   | whole linked units      | 1.00      | 1.011 (79.2% vs 78.3%; 1 day: 86.0% vs 84.7%; funnel 78.2% vs 77.2%)
  * H9   | program workouts duplicating another exactly | re-draw per copy       | ≈ 0       | 0 of 25,205 (10 of 123,742 outside)
  * --   | progress checks per completed workout       | whole linked units      | flat      | 0.648 → 0.640
  * --   | signups == profile created; SCD before signup | engine placement      | all / 0   | 4,001 / 0 of 13,871

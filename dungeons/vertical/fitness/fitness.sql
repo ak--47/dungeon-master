@@ -382,6 +382,51 @@ SELECT coaching_mode, count(*) AS workouts, round(avg(avg_heart_rate), 1) AS avg
 FROM ev WHERE event = 'workout completed' AND subscription_tier <> 'free' AND t >= TIMESTAMP '2026-08-12'
 GROUP BY 1 ORDER BY 1;
 
+-- significance, three tests per metric: workout level (each workout one
+-- observation, Welch); member level, unpaired (each member's average per mode);
+-- member level, paired (members with both modes: their own ai_coach minus
+-- self_guided average). The perceived-effort null is clean in all three; heart
+-- rate and calories per minute each cross p < 0.05 in one test, in opposite
+-- directions, with gaps under 0.5% in the workout averages (chance, not a mechanism).
+-- p two-sided via the Abramowitz-Stegun 7.1.26 erf approximation.
+CREATE OR REPLACE TEMP TABLE q5_workouts AS
+SELECT e.uid, e.coaching_mode AS mode, e.subscription_tier AS tier, e.Platform AS platform,
+ e.avg_heart_rate::DOUBLE AS heart_rate, e.perceived_effort::DOUBLE AS effort, e.calories_burned::DOUBLE / e.duration_minutes AS kcal_per_min
+FROM ev e WHERE e.event = 'workout completed' AND e.subscription_tier <> 'free' AND e.t >= TIMESTAMP '2026-08-12';
+WITH m AS (UNPIVOT q5_workouts ON heart_rate, effort, kcal_per_min INTO NAME metric VALUE val),
+ev_s AS (SELECT metric, mode, count(*) AS n, avg(val) AS mu, var_samp(val) AS v FROM m GROUP BY ALL),
+ev_z AS (SELECT a.metric, (a.mu - b.mu) / sqrt(a.v / a.n + b.v / b.n) AS z_event FROM ev_s a JOIN ev_s b ON a.metric = b.metric AND a.mode = 'ai_coach' AND b.mode = 'self_guided'),
+mm AS (SELECT uid, mode, metric, avg(val) AS val FROM m GROUP BY ALL),
+mm_s AS (SELECT metric, mode, count(*) AS n, avg(val) AS mu, var_samp(val) AS v FROM mm GROUP BY ALL),
+mm_z AS (SELECT a.metric, (a.mu - b.mu) / sqrt(a.v / a.n + b.v / b.n) AS z_member FROM mm_s a JOIN mm_s b ON a.metric = b.metric AND a.mode = 'ai_coach' AND b.mode = 'self_guided'),
+pr AS (SELECT a.metric, a.val - b.val AS d FROM mm a JOIN mm b ON a.uid = b.uid AND a.metric = b.metric AND a.mode = 'ai_coach' AND b.mode = 'self_guided'),
+pr_z AS (SELECT metric, count(*) AS paired_members, avg(d) / sqrt(var_samp(d) / count(*)) AS z_paired FROM pr GROUP BY 1),
+z AS (UNPIVOT (SELECT * FROM ev_z JOIN mm_z USING (metric) JOIN pr_z USING (metric)) ON z_event, z_member, z_paired INTO NAME test VALUE z),
+e AS (SELECT *, abs(z) / sqrt(2) AS x, 1 / (1 + 0.3275911 * abs(z) / sqrt(2)) AS t FROM z)
+SELECT metric, test, paired_members, round(z, 2) AS z,
+ round(1 - (1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * exp(-x * x)), 3) AS p_two_sided
+FROM e ORDER BY metric, test;
+-- workouts by the same member are nearly independent: variance of member means
+-- (members with 10+ workouts) x workouts per member / workout variance ≈ 1.1, so
+-- the workout-level test is fair and the member-level tests have less power
+WITH w AS (SELECT * FROM q5_workouts),
+tot AS (SELECT var_samp(heart_rate) AS vh, var_samp(effort) AS ve, var_samp(kcal_per_min) AS vk FROM w),
+m AS (SELECT uid, count(*) AS n, avg(heart_rate) AS mh, avg(effort) AS me, avg(kcal_per_min) AS mk FROM w GROUP BY 1 HAVING count(*) >= 10)
+SELECT count(*) AS members, round(avg(n), 1) AS workouts_per_member,
+ round(var_samp(mh) * avg(n) / (SELECT vh FROM tot), 2) AS design_effect_heart_rate,
+ round(var_samp(me) * avg(n) / (SELECT ve FROM tot), 2) AS design_effect_effort,
+ round(var_samp(mk) * avg(n) / (SELECT vk FROM tot), 2) AS design_effect_kcal_per_min FROM m;
+-- paired member-level test within each plan (tier at the time) and Platform
+WITH m AS (UNPIVOT q5_workouts ON heart_rate, effort, kcal_per_min INTO NAME metric VALUE val),
+mm AS (SELECT uid, mode, tier, platform, metric, avg(val) AS val FROM m GROUP BY ALL),
+pr AS (SELECT a.metric, a.tier, a.platform, a.val - b.val AS d FROM mm a JOIN mm b ON a.uid = b.uid AND a.tier = b.tier AND a.metric = b.metric AND a.mode = 'ai_coach' AND b.mode = 'self_guided'),
+sp AS (SELECT 'plan' AS split, tier AS value, metric, d FROM pr UNION ALL SELECT 'Platform', platform, metric, d FROM pr),
+s AS (SELECT split, value, metric, count(*) AS members, avg(d) AS mean_diff, avg(d) / sqrt(var_samp(d) / count(*)) AS z FROM sp GROUP BY ALL),
+e AS (SELECT *, abs(z) / sqrt(2) AS x, 1 / (1 + 0.3275911 * abs(z) / sqrt(2)) AS t FROM s)
+SELECT split, value, metric, members, round(mean_diff, 3) AS ai_minus_self, round(z, 2) AS z_paired,
+ round(1 - (1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * exp(-x * x)), 3) AS p_two_sided
+FROM e ORDER BY split, value, metric;
+
 -- EVAL Q6 — daily workouts by tracking source around the August incident, with warehouse error rate
 WITH d AS (SELECT t::DATE AS day,
   count(*) FILTER (WHERE tracking_source = 'wearable' AND wearable_type IN ('smartwatch', 'fitness_band')) AS watch_band,
@@ -587,7 +632,14 @@ SELECT prog, completed, opens, meals, round(completed::DOUBLE / opens, 4) AS com
  round((completed::DOUBLE / opens) / (SELECT completed::DOUBLE / opens FROM g WHERE NOT prog), 4) AS per_open_vs_before,
  round((completed::DOUBLE / meals) / (SELECT completed::DOUBLE / meals FROM g WHERE NOT prog), 4) AS workouts_per_meal_vs_before,
  round((opens::DOUBLE / meals) / (SELECT opens::DOUBLE / meals FROM g WHERE NOT prog), 4) AS opens_per_meal_vs_before FROM g ORDER BY prog;
--- plan follow-through (Workout Loop, 4-hour window, and 1 day): program vs before
+-- plan follow-through (Workout Loop, 4-hour window, and 1 day): program vs before.
+-- This pairs each plan with the member's next completion. The Mixpanel funnel
+-- (workout planned -> workout completed, totals, 4-hour window) counts attempts,
+-- not plans: a plan made while an earlier attempt is still open does not start its
+-- own attempt, and the open attempt keeps the first plan's 4-hour clock. It reads
+-- about 1 point lower: 77.2% of 19,903 attempts before vs 78.2% of 30,162 during
+-- (repo funnel engine, lib/verify/funnel-engine.js evaluateFunnel, countMode
+-- totals, reentry, anchorRange per period). The ratio is the same.
 SELECT prog, count(*) AS planned, round(avg(done_4h::INT), 4) AS follow_through_4h, round(avg(done_1d::INT), 4) AS follow_through_1d
 FROM follow_through GROUP BY 1 ORDER BY 1;
 
@@ -607,46 +659,65 @@ SELECT scope, round(pa, 4) AS android, round(pi, 4) AS ios, round(z, 2) AS z,
  round(1 - (1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * exp(-x * x)), 3) AS p_two_sided
 FROM e ORDER BY scope;
 
--- EVAL Q18 — meal logging per app open during the sync outage vs the surrounding week
-WITH w AS (SELECT (t >= TIMESTAMP '2026-08-20' AND t < TIMESTAMP '2026-08-23') AS outage, event FROM ev
-  WHERE event IN ('meal logged', 'app opened') AND t >= TIMESTAMP '2026-08-13' AND t < TIMESTAMP '2026-08-30'),
-g AS (SELECT outage, count(*) FILTER (WHERE event = 'meal logged') AS meals, count(*) FILTER (WHERE event = 'app opened') AS opens FROM w GROUP BY 1)
-SELECT outage, meals, opens, round(meals::DOUBLE / opens, 4) AS meals_per_open,
- round((meals::DOUBLE / opens) / (SELECT meals::DOUBLE / opens FROM g WHERE NOT outage), 4) AS vs_baseline FROM g ORDER BY outage;
--- all members, per day: outage vs the same weekdays (Thu-Sat) one week before and after
-WITH w AS (SELECT CASE WHEN t::DATE BETWEEN DATE '2026-08-20' AND DATE '2026-08-22' THEN 'outage Aug 20-22'
-    ELSE 'same weekdays Aug 13-15 + 27-29' END AS period, event, t::DATE AS d
-  FROM ev WHERE event IN ('meal logged', 'app opened') AND (t::DATE BETWEEN DATE '2026-08-13' AND DATE '2026-08-15'
-    OR t::DATE BETWEEN DATE '2026-08-20' AND DATE '2026-08-22' OR t::DATE BETWEEN DATE '2026-08-27' AND DATE '2026-08-29'))
-SELECT period, round(count(*) FILTER (WHERE event = 'app opened')::DOUBLE / count(DISTINCT d), 1) AS opens_per_day,
- round(count(*) FILTER (WHERE event = 'meal logged')::DOUBLE / count(DISTINCT d), 1) AS meals_per_day FROM w GROUP BY 1 ORDER BY 1;
--- Thu-Sat app opens in every full week outside Fall Reset (the week-to-week range)
-WITH d AS (SELECT t::DATE AS d, count(*) AS opens FROM ev WHERE event = 'app opened' AND dayofweek(t) IN (4, 5, 6)
-  AND t >= TIMESTAMP '2026-06-11' AND t < TIMESTAMP '2026-09-27' AND NOT (t >= TIMESTAMP '2026-09-08' AND t < TIMESTAMP '2026-09-22') GROUP BY 1),
-wk AS (SELECT date_trunc('week', d) AS wk, sum(opens) AS opens FROM d GROUP BY 1)
-SELECT count(*) FILTER (WHERE wk <> DATE '2026-08-17') AS other_weeks, min(opens) FILTER (WHERE wk <> DATE '2026-08-17') AS min_other,
- max(opens) FILTER (WHERE wk <> DATE '2026-08-17') AS max_other, max(opens) FILTER (WHERE wk = DATE '2026-08-17') AS outage_week FROM wk;
--- did members whose watch or band workouts stopped syncing use the app less than other members?
--- Each member active Aug 13-29 is one observation: their daily rate during the
--- outage (3 days) minus their daily rate on the 14 surrounding days. Welch test,
--- smartwatch / fitness-band owners vs everyone else (a member-level test: heavy
--- users make event counts overdispersed, so a Poisson test on totals overstates
--- significance). p two-sided via the Abramowitz-Stegun 7.1.26 erf approximation.
-WITH m AS (SELECT distinct_id::VARCHAR AS uid, wearable_type IN ('smartwatch', 'fitness_band') AS aff FROM users),
-a AS (SELECT DISTINCT uid FROM ev WHERE t >= TIMESTAMP '2026-08-13' AND t < TIMESTAMP '2026-08-30'),
-x AS (SELECT a.uid, m.aff, k.event,
-  count(e.t) FILTER (WHERE e.t >= TIMESTAMP '2026-08-20' AND e.t < TIMESTAMP '2026-08-23') / 3.0 AS o,
-  count(e.t) FILTER (WHERE NOT (e.t >= TIMESTAMP '2026-08-20' AND e.t < TIMESTAMP '2026-08-23')) / 14.0 AS b
-  FROM a JOIN m USING (uid) CROSS JOIN (VALUES ('app opened'), ('meal logged')) k(event)
-  LEFT JOIN ev e ON e.uid = a.uid AND e.event = k.event AND e.t >= TIMESTAMP '2026-08-13' AND e.t < TIMESTAMP '2026-08-30'
-  GROUP BY ALL),
-s AS (SELECT event, aff, count(*) AS n, avg(o - b) AS d, var_samp(o - b) AS v, sum(o) AS so, sum(b) AS sb FROM x GROUP BY ALL),
-w AS (SELECT a.event, a.n AS affected_members, u.n AS other_members, (a.so / a.sb) / (u.so / u.sb) AS did,
-  (a.d - u.d) / sqrt(a.v / a.n + u.v / u.n) AS z FROM s a JOIN s u ON a.event = u.event AND a.aff AND NOT u.aff),
-e AS (SELECT *, abs(z) / sqrt(2) AS x, 1 / (1 + 0.3275911 * abs(z) / sqrt(2)) AS t FROM w)
-SELECT event, affected_members, other_members, round(did, 4) AS affected_vs_other_members, round(z, 2) AS z,
+-- EVAL Q18 — did Stride Coach take sessions from human coaching? (null)
+-- Four weeks before the 2026-08-12 launch (Jul 15 - Aug 11) vs four weeks after
+-- (Aug 12 - Sep 8). Insights read: coach sessions per active member, split by
+-- whether the member had Plus features (subscription_tier monthly, annual, trial)
+-- at the time; free members (paid sessions only) are the control.
+WITH e AS (SELECT uid, event, CASE WHEN subscription_tier = 'free' THEN 'free' ELSE 'plus features' END AS grp,
+   CASE WHEN t < TIMESTAMP '2026-08-12' THEN '1 before (Jul 15 - Aug 11)' ELSE '2 after (Aug 12 - Sep 8)' END AS period
+  FROM ev WHERE t >= TIMESTAMP '2026-07-15' AND t < TIMESTAMP '2026-09-09' AND event NOT IN ('notification received', 'account deactivated'))
+SELECT grp, period, count(*) FILTER (WHERE event = 'coach session') AS coach_sessions, count(DISTINCT uid) AS active_members,
+ round(count(*) FILTER (WHERE event = 'coach session')::DOUBLE / count(DISTINCT uid), 4) AS sessions_per_active_member
+FROM e GROUP BY ALL ORDER BY grp, period;
+-- Member-level test. Members on Monthly or Annual on every member-initiated event
+-- from Jul 15 to Sep 8 (the same people on both sides); each member's sessions
+-- after minus before is one observation (paired z). Splits: plan, Platform,
+-- wearable_type, segment, whether the member joined in the window, and whether
+-- the member used Stride Coach (any ai_coach workout). Stride Coach users vs
+-- non-users is a Welch z on the same per-member differences.
+-- p two-sided via the Abramowitz-Stegun 7.1.26 erf approximation.
+CREATE OR REPLACE TEMP TABLE coach_members AS
+WITH w AS (SELECT uid, min(subscription_tier) AS mn, max(subscription_tier) AS mx FROM ev
+  WHERE t >= TIMESTAMP '2026-07-15' AND t < TIMESTAMP '2026-09-09' AND event NOT IN ('notification received', 'account deactivated') GROUP BY 1),
+ai AS (SELECT DISTINCT uid FROM ev WHERE event = 'workout completed' AND coaching_mode = 'ai_coach'),
+c AS (SELECT uid, count(*) FILTER (WHERE t < TIMESTAMP '2026-08-12') AS b, count(*) FILTER (WHERE t >= TIMESTAMP '2026-08-12') AS a
+  FROM ev WHERE event = 'coach session' AND t >= TIMESTAMP '2026-07-15' AND t < TIMESTAMP '2026-09-09' GROUP BY 1)
+SELECT w.uid, w.mx AS plan, u.Platform AS platform, u.wearable_type, u.segment,
+ CASE WHEN w.uid IN (SELECT uid FROM signups) THEN 'joined in window' ELSE 'joined before Jun 4' END AS tenure,
+ CASE WHEN w.uid IN (SELECT uid FROM ai) THEN 'Stride Coach user' ELSE 'not a Stride Coach user' END AS coach_use,
+ coalesce(c.b, 0) AS b, coalesce(c.a, 0) AS a
+FROM w JOIN users u ON u.distinct_id::VARCHAR = w.uid LEFT JOIN c USING (uid)
+WHERE w.mn = w.mx AND w.mx IN ('monthly', 'annual');
+WITH sp AS (SELECT 'all' AS split, 'all' AS value, * FROM coach_members
+  UNION ALL SELECT 'plan', plan, * FROM coach_members UNION ALL SELECT 'Platform', platform, * FROM coach_members
+  UNION ALL SELECT 'wearable_type', wearable_type, * FROM coach_members UNION ALL SELECT 'segment', segment, * FROM coach_members
+  UNION ALL SELECT 'tenure', tenure, * FROM coach_members UNION ALL SELECT 'Stride Coach use', coach_use, * FROM coach_members),
+s AS (SELECT split, value, count(*) AS members, sum(b) AS before_4w, sum(a) AS after_4w, avg(a - b) / sqrt(var_samp(a - b) / count(*)) AS z FROM sp GROUP BY ALL),
+e AS (SELECT *, abs(z) / sqrt(2) AS x, 1 / (1 + 0.3275911 * abs(z) / sqrt(2)) AS t FROM s)
+SELECT split, value, members, before_4w, after_4w, round(after_4w::DOUBLE / before_4w, 3) AS after_vs_before, round(z, 2) AS z_paired,
  round(1 - (1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * exp(-x * x)), 3) AS p_two_sided
-FROM e ORDER BY event;
+FROM e ORDER BY split = 'all' DESC, split, value;
+-- Stride Coach users vs non-users (Welch on per-member after - before), all members and members who joined before Jun 4
+WITH sp AS (SELECT 'all members' AS scope, * FROM coach_members UNION ALL SELECT 'joined before Jun 4', * FROM coach_members WHERE tenure = 'joined before Jun 4'),
+s AS (SELECT scope, coach_use, count(*) AS n, sum(a)::DOUBLE / sum(b) AS r, avg(a - b) AS d, var_samp(a - b) AS v FROM sp GROUP BY ALL),
+w AS (SELECT y.scope, y.n AS users_n, n.n AS non_users_n, y.r AS users_after_vs_before, n.r AS non_users_after_vs_before,
+  y.r / n.r AS ratio, (y.d - n.d) / sqrt(y.v / y.n + n.v / n.n) AS z
+  FROM s y JOIN s n ON y.scope = n.scope AND y.coach_use = 'Stride Coach user' AND n.coach_use = 'not a Stride Coach user'),
+e AS (SELECT *, abs(z) / sqrt(2) AS x, 1 / (1 + 0.3275911 * abs(z) / sqrt(2)) AS t FROM w)
+SELECT scope, users_n, non_users_n, round(users_after_vs_before, 3) AS users_after_vs_before, round(non_users_after_vs_before, 3) AS non_users_after_vs_before,
+ round(ratio, 3) AS users_vs_non_users, round(z, 2) AS z,
+ round(1 - (1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * exp(-x * x)), 3) AS p_two_sided
+FROM e ORDER BY scope;
+-- members who joined in the window: their other member-initiated events fall with
+-- their coach sessions (they stop using the app), by Stride Coach use
+WITH o AS (SELECT m.uid, count(e.t) FILTER (WHERE e.t < TIMESTAMP '2026-08-12') AS ob, count(e.t) FILTER (WHERE e.t >= TIMESTAMP '2026-08-12') AS oa
+  FROM coach_members m LEFT JOIN ev e ON e.uid = m.uid AND e.t >= TIMESTAMP '2026-07-15' AND e.t < TIMESTAMP '2026-09-09'
+   AND e.event NOT IN ('notification received', 'account deactivated', 'coach session')
+  WHERE m.tenure = 'joined in window' GROUP BY 1)
+SELECT m.coach_use, count(*) AS members, sum(m.b) AS coach_before, sum(m.a) AS coach_after, sum(o.ob) AS other_events_before, sum(o.oa) AS other_events_after,
+ round(sum(o.oa)::DOUBLE / sum(o.ob), 3) AS other_after_vs_before
+FROM coach_members m JOIN o USING (uid) GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q19 — subscription bookings by month (warehouse)
 SELECT strftime(date::DATE, '%Y-%m') AS month, sum(new_subscriptions) AS new_subscriptions,
@@ -704,3 +775,17 @@ SELECT 'long-time free members (trial used) who bought Plus in the window (share
  (WITH lt AS (SELECT distinct_id::VARCHAR AS uid FROM users WHERE NOT trial_eligible),
   pf AS (SELECT DISTINCT uid FROM ev WHERE uid IN (SELECT uid FROM lt) AND subscription_tier = 'free')
   SELECT round(count(DISTINCT e.uid)::DOUBLE / (SELECT count(*) FROM pf), 4) FROM ev e WHERE e.event = 'subscription purchased' AND e.uid IN (SELECT uid FROM pf));
+-- activity level by week (Monday weeks; Jun 1 and Sep 28 weeks are partial): weekly
+-- active members (Active action) and per-day workouts and app opens, split by
+-- members who joined before Jun 4 and members who joined in the window. The June
+-- rise comes from members who joined in the window building up from zero on Jun 4;
+-- members who joined before Jun 4 hold level from the first full week.
+WITH a AS (SELECT e.uid, e.t, e.event, e.uid IN (SELECT uid FROM signups) AS new_member FROM ev e
+  WHERE e.event NOT IN ('notification received', 'account deactivated'))
+SELECT date_trunc('week', t)::DATE AS week, count(DISTINCT t::DATE) AS days,
+ count(DISTINCT uid) AS weekly_active, count(DISTINCT uid) FILTER (WHERE NOT new_member) AS active_joined_before_jun4,
+ count(DISTINCT uid) FILTER (WHERE new_member) AS active_joined_in_window,
+ round(count(*) FILTER (WHERE event = 'workout completed') / count(DISTINCT t::DATE), 0) AS workouts_per_day,
+ round(count(*) FILTER (WHERE event = 'workout completed' AND NOT new_member) / count(DISTINCT t::DATE), 0) AS workouts_per_day_joined_before_jun4,
+ round(count(*) FILTER (WHERE event = 'app opened') / count(DISTINCT t::DATE), 0) AS app_opens_per_day
+FROM a GROUP BY 1 ORDER BY 1;

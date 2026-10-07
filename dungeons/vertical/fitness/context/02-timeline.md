@@ -32,3 +32,4 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 - Did the September price change hurt Plus sign-ups, and did it pay off in bookings?
 - What did the August sync incident cost us, and was it only wearables?
 - Are we sending too many notifications?
+- Will Stride Coach take demand away from human coach sessions? The coaching lead plans contract coach hours for Q4.
