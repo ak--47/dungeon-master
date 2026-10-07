@@ -17,15 +17,16 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             month from 2026-08-17) and Business ($45 per seat); Enterprise
  *             is sales-led. Root Cause Assist (AI incident help) is a Business
  *             and Enterprise feature from 2026-07-22.
- * SCALE:      10,000 users (≈4,460 sign up inside the window), ~1.08M events,
+ * SCALE:      10,000 users (≈4,520 sign up inside the window), ~0.98M events,
  *             120 days (2026-06-04 → 2026-10-01, UTC), 300 customer companies
  * CORE LOOP:  dashboard viewed → query executed; alert triggered → alert
  *             acknowledged → alert resolved; deployment pipeline run → service deployed
  * VALUE MOMENT: alert acknowledged (the platform got a human to a problem)
  *
  * EVENTS (23):
- *   dashboard viewed (10) > query executed (8) > api call (6) > teammate invited (3)
- *   > documentation viewed (3) > integration configured (2) > cost report generated (2)
+ *   dashboard viewed (10) > query executed (8) > api call (6) > teammate invited (3,
+ *   thinned in the hook) > documentation viewed (3) > integration configured (2.5,
+ *   thinned and deduplicated in the hook) > cost report generated (2)
  *   > infrastructure scaled (2) > security scan (2) > feature flag toggled (2)
  *   > runbook executed (1) > funnel-only: account created, cloud account connected,
  *   agent installed, dashboard created, alert triggered / acknowledged / resolved,
@@ -57,10 +58,13 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *              ci_runner_health_daily (hosted CI runner health by region),
  *              subscription_bookings_daily (new seats, list price, new MRR by plan)
  * LOOKUPS:     none — every attribute is denormalized onto events/profiles
+ * SOUP:        weekday-heavy dayOfWeekWeights, working-hours hourOfDayWeights (UTC)
  *
  * IDENTITY: new users are identified at "account created" (isAuthEvent, first
  * event, carries user_id + device_id); 2 devices per user on average. Every
- * event carries user_id; there is no anonymous pre-signup activity.
+ * event carries user_id; there is no anonymous pre-signup activity. The three
+ * post-auth onboarding steps carry user_id only; every other event also
+ * carries device_id.
  *
  * DESIGN NOTES:
  * - Company attributes (size, industry, cloud, ACV, contracted seats, CSM) come
@@ -72,15 +76,19 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   knobs, and response_time_mins / resolution_time_mins are the real gaps.
  * - Pipeline status is coherent with the funnel: a run is "success" exactly
  *   when its deploy (same deploy_id) happened.
- * - retentionCurve (not engagementDecay) shapes activity and pins each new
- *   user's signup to their creation day. ENGINE WORKAROUND: the engine's
- *   `created` is a local-midnight date (lib/utils/utils.js person()), so every
- *   pinned signup sat at the machine's local midnight (04:00 UTC on a
- *   US-Eastern machine). The everything hook moves each signup to a seeded
- *   time of day on the same UTC day (hour curve truncated so the signup still
- *   precedes the user's next event) and rewrites profile created and
- *   customer_since to match. Event output still depends on the machine time
- *   zone until the engine builds `created` in UTC.
+ * - retentionCurve (not engagementDecay) shapes new users' activity. The
+ *   engine pins each new user's signup to profile `created`, a UTC instant
+ *   whose hour follows the soup's working-hours curve; customer_since is that
+ *   instant's UTC date.
+ * - Weekly and daily rhythm (soup): weekday-heavy (weekends about a quarter
+ *   of a weekday) with Americas and EMEA working hours dominating in UTC.
+ *   Signups are flat by weekday: the engine draws born days uniformly and
+ *   applies only the hour weights to them (reported engine gap).
+ * - Collaboration volume: new users keep every "teammate invited" in their
+ *   first 14 days; other invites are thinned to 20% (about 1.3 invites per
+ *   user, 44 per company in 120 days). "integration configured" comes only
+ *   from a role-dependent share of users (the engineers who own alert routing;
+ *   higher in new workspaces), once per integration type.
  * - Warehouse drift: ci_runner_health_daily.jobs_started adds seeded scheduled
  *   and API-triggered jobs that never send a product event;
  *   subscription_bookings_daily adds seeded pre-invoice seat edits and a few
@@ -89,12 +97,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   expected signups per day, weekday shape, seeded noise, never zero); leads,
  *   clicks, and impressions follow spend. The CPL knob holds at window level.
  * - account_health uses fuzzy SCD timing: rows are about a week apart and can
- *   repeat the prior value; a few start the day before the window. timing:
- *   "fixed" was tried and rejected (local-time month starts, rows past the end).
- *   Fuzzy rows also start at local midnight (same engine root cause), so the
- *   scd-pre hook re-times each row to the nightly scoring job (05:00-05:45
- *   UTC) on the same UTC day; a new account is first scored the night after
- *   it signs up.
+ *   repeat the prior value. A new account's first row is at its signup.
+ *   Established accounts' histories start at an in-window instant (engine
+ *   behavior, reported), so they have no row before their first review.
  */
 
 // ── HOOK STORIES ──
@@ -167,12 +172,12 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   levels). Onboarded users: D30 2+ / 0 invites ≥ 1/(1-0.6) = 2.5 (floor;
  *   engagement adds). All new users: activated / not activated ≥ 1/(1-0.4)
  *   (floor; abandonment adds).
- * MIXPANEL: Retention, account created → any event, custom brackets (day
- *   30-36 for D30, day 7-13 for D7; the standard day buckets do not express
- *   a 7-day bracket), breakdown by a behavioral cohort "did teammate invited
- *   ≥2 times within 7 days of account created" (relative window per user; or
- *   a computed user property holding the first-week invite count),
- *   optionally filtered to "did dashboard created".
+ * MIXPANEL: build the groups in Funnels: account created → teammate invited
+ *   → teammate invited, 7-day conversion window, uniques. Completed = 2+
+ *   first-week invites, dropped after step 2 = one, dropped after step 1 =
+ *   none; save each as a cohort from the funnel. Then Retention, account
+ *   created → any event, custom bracket day 30-36 (day 7-13 for D7),
+ *   breakdown by those cohorts, optionally filtered to "did dashboard created".
  * REAL WORLD: a tool one engineer uses alone is easy to abandon; a team tool
  *   is not.
  *
@@ -210,7 +215,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   paid search 0.5, so LinkedIn signups buy at 2x the paid-search rate.
  * MIXPANEL: Insights, account created by acquisition_channel joined to
  *   paid_marketing_daily.spend_usd; Funnels account created → subscription
- *   started by acquisition_channel.
+ *   started, 30-day conversion window (the Mixpanel default), signups Jun 4 -
+ *   Aug 31 (each has its full window in the data), breakdown acquisition_channel.
  * REAL WORLD: account-based LinkedIn targeting reaches buyers, at a price.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -243,47 +249,46 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * REAL WORLD: noisy alerting trains people to ignore pages.
  *
  * ═════════════════════════════════════════════════════════════════════════
- * EXPECTED METRICS SUMMARY (measured: data/verify-sass, 2026-10-06)
+ * EXPECTED METRICS SUMMARY (measured: data/verify-sass, 2026-10-06, engine-rebase fix round)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                       | Derivation               | Expected | Measured
  * -----|----------------------------------------------|--------------------------|----------|---------
- * H1   | paid invites per dashboard view, promo/before| QUARTER_CLOSE_INVITE_MULT| 1.50     | 1.546
- * H1   | Free invites per dashboard view (control)    | unchanged                | 1.00     | 1.018
+ * H1   | paid invites per dashboard view, promo/before| QUARTER_CLOSE_INVITE_MULT| 1.50     | 1.419
+ * H1   | Free invites per dashboard view (control)    | unchanged                | 1.00     | 1.027
  * H2   | ai_assist rows pre-launch or Free/Team       | exact purity             | 0        | 0
- * H2   | ai/other resolution time, Biz+Ent post-launch| RCA_RESOLVE_MULT         | 0.55     | 0.556 (71.8 vs 129.1 min)
- * H2   | ai share of eligible resolutions after ramp  | 0.5 × 0.8                | 0.40     | 0.404 (weekly 3% → 40%)
- * H3   | onboarding conversion Azure/others           | 34/62                    | 0.548    | 0.551 (33.9% vs 61.7%)
- * H4   | avg response Slack+PD / rest, established    | INTEGRATED_RESPONSE_MULT | 0.40     | 0.404 (10.97 vs 27.15 min)
- * H4   | new signups: after / before pair is live     | INTEGRATED_RESPONSE_MULT | 0.40     | 0.401 (11.08 vs 27.66 min)
- * H5   | D30 activated/not activated, all new users   | ≥ 1/(1 − 0.4) (floor)    | ≥ 1.67   | 2.475 (54.5% vs 22.0%, STRONG)
- * H5   | D30 2+ / 0 invites, onboarded new users      | ≥ 1/(1 − 0.6) (floor)    | ≥ 2.50   | 2.407 (67.7% vs 28.1%, within ±10%)
- * H6   | per-run deploy rate Smart/Control            | SMART_TEST_CONV_MULT     | 1.20     | 1.201 (81.1% vs 67.5%)
- * H6   | median run → deploy time Smart/Control       | SMART_TEST_TTC_MULT      | 0.75     | 0.746 (22.4 vs 30.1 min)
- * H6   | Smart Selection share of enrolled users      | equal 2-arm hash         | 0.50     | 0.498
- * H7   | us-east / other success, incident vs ±7 days | 1 − RUNNER_INCIDENT_FAIL | 0.40     | 0.414
- * H7   | warehouse infra_error_rate during incident   | RUNNER_INCIDENT_FAIL     | 0.60     | 0.610
- * H8   | spend per signup LinkedIn / paid search      | 420 / 140                | 3.00     | 2.904 ($425.84 vs $146.64)
- * H8   | same-week paid rate LinkedIn / paid search   | 1.0 / 0.5 (floor 1.5)    | 2.00     | 1.545 (STRONG)
- * H9   | avg seats Team post/pre                      | TEAM_SEAT_MULT           | 0.70     | 0.672 (8.34 vs 12.42)
- * H9   | avg seats Business post/pre (control)        | unchanged                | 1.00     | 0.990
- * H9   | new MRR per Team subscription post/pre       | 0.7 × 25/20              | 0.875    | 0.839
- * H10  | median trigger → ack, enterprise / SMB+mid   | RESPONSE_SIZE_MULT       | 0.60     | 0.591
- * H10  | median trigger → ack, startup / SMB+mid      | RESPONSE_SIZE_MULT       | 1.50     | 1.504
- * H11  | ack rate 30+ alerts / ≤12 alerts             | 1 − FATIGUE_FLIP         | 0.50     | 0.494
+ * H2   | ai/other resolution time, Biz+Ent post-launch| RCA_RESOLVE_MULT         | 0.55     | 0.556 (71.6 vs 128.7 min)
+ * H2   | ai share of eligible resolutions after ramp  | 0.5 × 0.8                | 0.40     | 0.406 (weekly 3% → 41%)
+ * H3   | onboarding conversion Azure/others           | 34/62                    | 0.548    | 0.538 (33.3% vs 61.8%)
+ * H4   | avg response Slack+PD / rest, established    | INTEGRATED_RESPONSE_MULT | 0.40     | 0.394 (10.76 vs 27.32 min)
+ * H4   | new signups: after / before pair is live     | INTEGRATED_RESPONSE_MULT | 0.40     | 0.405 (10.84 vs 26.76 min)
+ * H5   | D30 activated/not activated, all new users   | ≥ 1/(1 − 0.4) (floor)    | ≥ 1.67   | 2.890 (57.8% vs 20.0%, STRONG)
+ * H5   | D30 2+ / 0 invites, onboarded new users      | ≥ 1/(1 − 0.6) (floor)    | ≥ 2.50   | 2.567 (64.5% vs 25.1%, within ±10%)
+ * H6   | per-run deploy rate Smart/Control            | SMART_TEST_CONV_MULT     | 1.20     | 1.206 (81.2% vs 67.4%)
+ * H6   | median run → deploy time Smart/Control       | SMART_TEST_TTC_MULT      | 0.75     | 0.750 (22.6 vs 30.1 min)
+ * H6   | Smart Selection share of enrolled users      | equal 2-arm hash         | 0.50     | 0.494
+ * H7   | us-east / other success, incident vs ±7 days | 1 − RUNNER_INCIDENT_FAIL | 0.40     | 0.416
+ * H7   | warehouse infra_error_rate during incident   | RUNNER_INCIDENT_FAIL     | 0.60     | 0.603
+ * H8   | spend per signup LinkedIn / paid search      | 420 / 140                | 3.00     | 2.936 ($410.37 vs $139.78)
+ * H8   | 30-day paid rate LinkedIn / paid search      | 1.0 / 0.5 (floor 1.5)    | 2.00     | 1.585 (19.0% vs 12.0%, STRONG)
+ * H9   | avg seats Team post/pre                      | TEAM_SEAT_MULT           | 0.70     | 0.698 (8.45 vs 12.11)
+ * H9   | avg seats Business post/pre (control)        | unchanged                | 1.00     | 0.921
+ * H9   | new MRR per Team subscription post/pre       | 0.7 × 25/20              | 0.875    | 0.872
+ * H10  | median trigger → ack, enterprise / SMB+mid   | RESPONSE_SIZE_MULT       | 0.60     | 0.603
+ * H10  | median trigger → ack, startup / SMB+mid      | RESPONSE_SIZE_MULT       | 1.50     | 1.544
+ * H11  | ack rate 30+ alerts / ≤12 alerts             | 1 − FATIGUE_FLIP         | 0.50     | 0.497
  * ═════════════════════════════════════════════════════════════════════════
  *
  * H5's two reads are knob floors. Setup abandoners rarely invite, so the
  * all-user activated/not-activated gap exceeds the dark-share floor. The
  * onboarded-only dose read removes abandonment but not engagement: among
- * users the dark cut never touches, 2+ inviters still retain about 1.1-1.2x
- * better, and raw retention keeps rising past 2 invites while the knob treats
- * every 2+ user alike. H8's spend
- * ratio sits below 3.0 because realized LinkedIn and search signups differ
- * from the expected counts the budgets were paced on. H8's purchase-rate read
- * rests on about 180 LinkedIn and 120 paid-search buyers (relative SE about
- * 12%), so it usually grades STRONG against its floor. H3 is noise-limited
- * too: the ratio's relative SE is about 4%, so the ±10% band is about 2.4 SE;
- * one intermediate run in the 2026-10-06 fix round read 0.486 (WEAK).
+ * users the dark cut never touches, 2+ inviters still retain somewhat better,
+ * and raw retention keeps rising past 2 invites while the knob treats every
+ * 2+ user alike. H8's purchase-rate read rests on about 130 LinkedIn and 90
+ * paid-search buyers inside the 30-day window (relative SE about 13%), so it
+ * grades STRONG against its floor; the whole-window rates (19.5% vs 10.9%,
+ * 1.79x) agree. H1 is noise-limited after the invite thinning (about 1,000
+ * paid invites per half-month; relative SE about 5%). The H9 Business control
+ * (0.921) rests on about 120 post-change subscriptions.
  */
 
 // ── SCALE ──
@@ -310,6 +315,14 @@ const dayIndex = (iso) => Math.round((ms(iso) - ms(DATASET_START)) / 86_400_000)
 const DAY_MS = 86_400_000;
 const D0 = DATASET_START.slice(0, 10);
 const MIN_MS = 60_000;
+
+// ── WEEKLY AND DAILY RHYTHM (soup) ──
+// Sun..Sat. Weekends carry on-call work and a few side projects only.
+const DOW_WEIGHTS = [0.28, 1.0, 1.0, 0.98, 0.95, 0.82, 0.24];
+// UTC hours: EMEA working hours (07-16 UTC) overlap the Americas (13-01 UTC);
+// the quietest hours are the APAC-only overnight.
+const HOUR_WEIGHTS = [0.4, 0.32, 0.25, 0.2, 0.18, 0.2, 0.3, 0.48, 0.66, 0.76, 0.8, 0.8,
+	0.85, 0.95, 1.0, 1.0, 0.98, 0.92, 0.85, 0.75, 0.66, 0.58, 0.5, 0.45];
 
 // ── KNOBS ──
 // H1 quarter-close seat push: paid workspaces invite more teammates (Free has no seats to discount)
@@ -338,6 +351,17 @@ const ONBOARD_TTC_H = 30;
 const INTEGRATION_PAIR = ["slack", "pagerduty"];
 const INTEGRATED_RESPONSE_MULT = 0.4;
 
+// Collaboration and integration volume (realism, not a story): a new
+// workspace invites its team in its first two weeks; after that, and for
+// established users, invites are occasional (new hires, contractors).
+// Integrations are set up per team by the engineers who own alert routing:
+// a role-dependent share of users ever configure one, and each configures a
+// given integration once.
+const INVITE_EARLY_DAYS = 14;      // new users keep every invite in their first two weeks
+const INVITE_KEEP_LATE = 0.2;      // share of other invites kept
+const INTEGRATOR_SHARE = { sre: 0.6, platform_engineer: 0.45, engineering_manager: 0.3, developer: 0.12 };
+const INTEGRATOR_NEW_BOOST = 0.35; // new workspaces: the first engineers set up alert routing themselves
+
 // H5 first-week activation → retention (new signups only)
 const ACTIVATION_EVENT = "teammate invited";
 const ACTIVATION_DAYS = 7;
@@ -365,9 +389,10 @@ const RUNNER_REGIONS = { "us-east": 40, "us-west": 25, "eu-west": 25, "ap-south"
 const RUNNER_INCIDENT_REGION = "us-east";
 const RUNNER_INCIDENT_FAIL = 0.6;  // share of would-be successful us-east runs that fail during the incident
 // warehouse realism: scheduled / API-triggered runner jobs that Mixpanel never sees
-const SCHEDULED_JOBS_PER_DAY = { "us-east": 60, "us-west": 38, "eu-west": 38, "ap-south": 14 };
+// (they run every day, weekends included, so they flatten the weekday swing)
+const SCHEDULED_JOBS_PER_DAY = { "us-east": 90, "us-west": 57, "eu-west": 57, "ap-south": 21 };
 const SCHEDULED_JOBS_SPREAD = 0.6;  // ± day-level variation per region (seeded)
-const SCHEDULED_JOBS_DAY_SPREAD = 0.25; // ± fleet-wide day-level variation (seeded)
+const SCHEDULED_JOBS_DAY_SPREAD = 0.6; // ± fleet-wide day-level variation (seeded)
 
 // H8 paid channel economics (warehouse paid_marketing_daily)
 const PAID_CHANNELS = ["paid_search", "linkedin_ads", "g2_reviews"];
@@ -388,6 +413,10 @@ const CPC_USD = { paid_search: 8, linkedin_ads: 14, g2_reviews: 12 };
 const CTR = { paid_search: 0.025, linkedin_ads: 0.006, g2_reviews: 0.025 };
 // share of would-be paid subscriptions that happen, by acquisition channel
 const PURCHASE_KEEP = { linkedin_ads: 1.0, outbound_sales: 0.9, referral: 0.8, g2_reviews: 0.7, organic: 0.65, paid_search: 0.5 };
+// read: Mixpanel Funnels default 30-day conversion window, signups through
+// Aug 31 so every signup has its full window inside the data
+const PAID_FUNNEL_WINDOW_DAYS = 30;
+const PAID_COHORT_END = "2026-09-01T00:00:00Z"; // exclusive
 
 // H9 Team plan price change (warehouse subscription_bookings_daily)
 const TEAM_PRICE_OLD = 20;
@@ -477,39 +506,6 @@ const teamPrice = (t) => (t >= ms(TEAM_PRICE_CHANGE) ? TEAM_PRICE_NEW : TEAM_PRI
 // seeded log-normal multiplier with median 1 (sigma in log space)
 const logNormal = (sigma) => Math.exp(chance.normal({ mean: 0, dev: sigma }));
 const jitter = (key, spread) => 1 + (hashFloat(key) - 0.5) * 2 * spread;
-// Engine workaround (lib/utils/utils.js person()): a born user's profile
-// `created` is a local-midnight date and the retentionCurve path pins the
-// signup at that exact instant, so every signup lands at the machine's local
-// midnight (04:00 UTC on a US-Eastern machine). These helpers recover the
-// intended UTC calendar day and give each signup a seeded time of day.
-const utcDayStart = (t) => Math.round(t / DAY_MS) * DAY_MS; // nearest UTC midnight (|tz offset| < 12h)
-// signups by UTC hour: Americas and EMEA working hours dominate (weights, not shares)
-const SIGNUP_HOUR_WEIGHTS = [2, 1, 1, 1, 1, 2, 3, 5, 7, 8, 9, 9, 10, 11, 12, 12, 11, 10, 8, 6, 5, 4, 3, 2];
-const SIGNUP_HOUR_TOTAL = SIGNUP_HOUR_WEIGHTS.reduce((a, b) => a + b, 0);
-// continuous CDF over hours [0, 24] (uniform inside each hour) and its inverse
-const signupHourCdf = (x) => {
-	const h = Math.min(23, Math.floor(x));
-	let acc = 0;
-	for (let i = 0; i < h; i++) acc += SIGNUP_HOUR_WEIGHTS[i];
-	return Math.min(1, (acc + (x - h) * SIGNUP_HOUR_WEIGHTS[h]) / SIGNUP_HOUR_TOTAL);
-};
-const signupHourInv = (p) => {
-	let acc = 0;
-	for (let h = 0; h < 24; h++) {
-		const w = SIGNUP_HOUR_WEIGHTS[h] / SIGNUP_HOUR_TOTAL;
-		if (p < acc + w) return h + (p - acc) / w;
-		acc += w;
-	}
-	return 24;
-};
-// seeded signup time (ms after UTC midnight), drawn from the hour curve truncated
-// at `limitMs` so the signup always precedes the user's next event
-const signupTimeOfDay = (uid, limitMs) => {
-	const limitH = Math.max(0, Math.min(24, limitMs / 3_600_000));
-	return signupHourInv(hashFloat(`${uid}|signup-hour`) * signupHourCdf(limitH)) * 3_600_000;
-};
-// account_health reviews run in the customer success team's nightly scoring job (~05:00 UTC)
-const HEALTH_JOB_HOUR = 5;
 // H8: paid media spend for one channel-day (paced budget, never zero)
 const paidSpend = (date, ch) => round2(DAILY_BUDGET_USD[ch] * SPEND_WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()] * jitter(`spend|${date}|${ch}`, SPEND_NOISE));
 
@@ -526,10 +522,8 @@ function handleUserHook(profile, meta) {
 	profile.customer_success_manager = co.csm;
 	if (meta.userIsBornInDataset) {
 		profile.plan_tier = "free";
-		// UTC calendar day of the local-midnight `created`, never before the window
-		// (a few users get a created date the day before the window; their signup
-		// event is clamped to the window start)
-		profile.customer_since = dayKey(Math.max(ms(DATASET_START), utcDayStart(ms(meta.user.created))));
+		// the engine pins each new user's "account created" to `created` (UTC)
+		profile.customer_since = dayKey(ms(profile.created ?? meta.user.created));
 		return profile;
 	}
 	// established users joined between 2023-01 and the window start
@@ -551,23 +545,31 @@ function handleEverything(events, meta) {
 	const uid = profile.distinct_id;
 	const END = ms(DATASET_END);
 	const signup = events.find((e) => e.event === "account created");
-	// ── signup time of day (engine workaround, see utcDayStart): move each new
-	// user's signup from local midnight to a seeded time on the same UTC day,
-	// always before the user's next event, and keep profile created in step ──
-	if (signup) {
-		const t0 = T(signup);
-		const firstOther = events.reduce((m, e) => (e === signup ? m : Math.min(m, T(e))), Infinity);
-		const dayStart = utcDayStart(t0);
-		const lo = Math.max(ms(DATASET_START), Math.min(dayStart, t0));
-		const target = Math.max(lo, Math.min(firstOther - 1, dayStart + signupTimeOfDay(uid, firstOther - MIN_MS - dayStart)));
-		signup.time = new Date(target).toISOString();
-		profile.created = signup.time;
-		profile.customer_since = dayKey(target);
-	}
 	const birthMs = signup ? T(signup) : null;
 
 	// ── company pin: every event carries the user's own company (engine stamps group keys at random) ──
 	for (const e of events) e.company_id = profile.company_id;
+
+	// ── collaboration volume (see knob note): invites cluster in a new
+	// workspace's first two weeks; integrations come from the engineers who own
+	// alert routing, once per integration ──
+	const integrator = salt(uid, "integrator") < (INTEGRATOR_SHARE[profile.primary_role] ?? 0.2) + (signup ? INTEGRATOR_NEW_BOOST : 0);
+	const firstIntegration = new Map(); // integration_type → earliest event
+	for (const e of events) {
+		if (e.event !== "integration configured") continue;
+		const f = firstIntegration.get(e.integration_type);
+		if (!f || T(e) < T(f)) firstIntegration.set(e.integration_type, e);
+	}
+	events = events.filter((e) => {
+		if (e.event === "teammate invited") {
+			if (signup && T(e) < birthMs + INVITE_EARLY_DAYS * DAY_MS) return true;
+			return chance.bool({ likelihood: INVITE_KEEP_LATE * 100 });
+		}
+		if (e.event === "integration configured") {
+			return integrator && firstIntegration.get(e.integration_type) === e;
+		}
+		return true;
+	});
 
 	// ── purchase hygiene: one paid subscription per user; later upgrade passes vanish ──
 	const firstBuy = events.filter((e) => e.event === "subscription started").sort((a, b) => T(a) - T(b))[0];
@@ -771,28 +773,6 @@ function handleWarehouse(row, meta) {
 	return row;
 }
 
-// account_health rows: the engine writes fuzzy SCD rows at local midnight
-// (same root cause as signups). Re-time each row to the nightly scoring job on
-// the same UTC day, keeping row order and the insert lag.
-function handleSCD(rows, meta) {
-	if (!Array.isArray(rows)) return rows;
-	const uid = meta?.profile?.distinct_id ?? rows[0]?.distinct_id;
-	// a new account is first scored by the job the night after it signs up
-	const created = meta?.profile?.created;
-	const firstJobDay = created ? Math.max(utcDayStart(ms(created)), ms(DATASET_START)) + DAY_MS : -Infinity;
-	let prev = -Infinity;
-	return rows.map((r, i) => {
-		if (!r.startTime) return r;
-		const s0 = ms(r.startTime);
-		const lag = r.insertTime ? ms(r.insertTime) - s0 : 0;
-		let s1 = Math.max(utcDayStart(s0), firstJobDay) + (HEALTH_JOB_HOUR + hashFloat(`${uid}|health|${i}`) * 0.75) * 3_600_000;
-		if (s1 <= prev) s1 = prev + MIN_MS;
-		prev = s1;
-		const iso = new Date(s1).toISOString();
-		return { ...r, startTime: iso, time: iso, insertTime: new Date(s1 + lag).toISOString() };
-	}).filter((r) => !r.startTime || ms(r.startTime) <= ms(DATASET_END));
-}
-
 function handleGroup(record) {
 	const co = COMPANIES[Number(record.company_id) - 1];
 	if (!co) return record;
@@ -820,6 +800,8 @@ const config = {
 	concurrency: 1,
 	writeToDisk: false,
 	macro: { percentUsersBornInDataset: BORN_PCT, bornRecentBias: 0, preExistingSpread: "uniform" },
+	// B2B engineering tool: weekday-heavy, Americas and EMEA working hours (UTC)
+	soup: { dayOfWeekWeights: DOW_WEIGHTS, hourOfDayWeights: HOUR_WEIGHTS },
 	credentials: { token },
 	switches: {
 		hasSessionIds: true,
@@ -998,10 +980,10 @@ const config = {
 		},
 		{
 			event: "integration configured",
-			weight: 2,
+			weight: 2.5,
 			isStrictEvent: false,
 			properties: {
-				integration_type: { __weights: { slack: 28, github: 20, jira: 16, pagerduty: 14, terraform: 9, opsgenie: 7, microsoft_teams: 6 } },
+				integration_type: { __weights: { slack: 34, pagerduty: 24, github: 15, jira: 10, terraform: 7, opsgenie: 5, microsoft_teams: 5 } },
 			},
 		},
 		{
@@ -1293,7 +1275,6 @@ const config = {
 	hook(record, type, meta) {
 		if (type === "user") return handleUserHook(record, meta);
 		if (type === "everything") return handleEverything(record, meta);
-		if (type === "scd-pre") return handleSCD(record, meta);
 		if (type === "warehouse") return handleWarehouse(record, meta);
 		if (type === "group") return handleGroup(record);
 		return record;
@@ -1325,6 +1306,7 @@ const INC_BASE_FROM = TS(dayjs.utc(RUNNER_INCIDENT_START).subtract(7, "day"));
 const INC_BASE_TO = TS(dayjs.utc(RUNNER_INCIDENT_END).add(7, "day"));
 const RETENTION_DAY = 30;
 const RCA_RAMPED = TS(dayjs.utc(RCA_LAUNCH).add(RCA_RAMP_DAYS, "day"));
+const PAID_COHORT_LAST = dayjs.utc(PAID_COHORT_END).subtract(1, "day").format("YYYY-MM-DD");
 const SQL_LIST = (xs) => xs.map((x) => `'${x}'`).join(", ");
 // H5 dose read: onboarded new users, D30 retention by first-week invites
 const H5_DOSE_SQL = `WITH ${ID_CTE},
@@ -1498,8 +1480,8 @@ FROM a JOIN c ON c.uid = a.uid JOIN s ON s.uid = a.uid WHERE a.resp IS NOT NULL 
 		id: "H5-first-week-team-activation",
 		hook: "H5",
 		archetype: "retention-divergence",
-		narrative: `New users who invite fewer than ${ACTIVATION_MIN} teammates in their first ${ACTIVATION_DAYS} days are at risk, on a ramp: ${DARK_SHARE_BY_INVITES[0] * 100}% of users with no first-week invite and ${DARK_SHARE_BY_INVITES[1] * 100}% with one go dark after day ${DARK_AFTER_DAYS}. Classification uses first-week activity only. Every new user also faces organic lapse (${LAPSE_SHARE * 100}% stop on a uniform day ${LAPSE_DAY_MIN}-${LAPSE_DAY_MAX}), and ${SETUP_ABANDON_SHARE * 100}% of users who never finish onboarding stop on day ${SETUP_ABANDON_DAY_MIN}-${SETUP_ABANDON_DAY_MAX}. Day-${RETENTION_DAY} retention (any event in days ${RETENTION_DAY}-${RETENTION_DAY + 6} after signup, signups at least ${RETENTION_DAY + 7} days before the window end). Both reads are knob floors: among users who finished onboarding (no setup abandonment), 2+ invites vs none is at least 1/(1−${DARK_SHARE_BY_INVITES[0]}), and engagement adds to it (heavier users invite more and are likelier to show any event in the day-${RETENTION_DAY} week even without the dark cut; the one-invite group is too small at this scale to grade on its own); across all new users, activated vs not activated is at least 1/(1−${DARK_SHARE_BY_INVITES[1]}), and setup abandoners (who rarely invite) push it higher. Mixpanel: Retention with custom brackets (day ${RETENTION_DAY}-${RETENTION_DAY + 6}); the first-week invite count is relative to each user's signup, so build it as a behavioral cohort (did teammate invited at least ${ACTIVATION_MIN} times within ${ACTIVATION_DAYS} days of account created) or as a computed user property.`,
-		mixpanelReport: { type: "Retention", birth: "account created", return: "any event", brackets: `custom: day ${RETENTION_DAY}-${RETENTION_DAY + 6}`, breakdown: `cohort: ≥${ACTIVATION_MIN} teammate invited within ${ACTIVATION_DAYS} days of account created` },
+		narrative: `New users who invite fewer than ${ACTIVATION_MIN} teammates in their first ${ACTIVATION_DAYS} days are at risk, on a ramp: ${DARK_SHARE_BY_INVITES[0] * 100}% of users with no first-week invite and ${DARK_SHARE_BY_INVITES[1] * 100}% with one go dark after day ${DARK_AFTER_DAYS}. Classification uses first-week activity only. Every new user also faces organic lapse (${LAPSE_SHARE * 100}% stop on a uniform day ${LAPSE_DAY_MIN}-${LAPSE_DAY_MAX}), and ${SETUP_ABANDON_SHARE * 100}% of users who never finish onboarding stop on day ${SETUP_ABANDON_DAY_MIN}-${SETUP_ABANDON_DAY_MAX}. Day-${RETENTION_DAY} retention (any event in days ${RETENTION_DAY}-${RETENTION_DAY + 6} after signup, signups at least ${RETENTION_DAY + 7} days before the window end). Both reads are knob floors: among users who finished onboarding (no setup abandonment), 2+ invites vs none is at least 1/(1−${DARK_SHARE_BY_INVITES[0]}), and engagement adds to it (heavier users invite more and are likelier to show any event in the day-${RETENTION_DAY} week even without the dark cut; the one-invite group is too small at this scale to grade on its own); across all new users, activated vs not activated is at least 1/(1−${DARK_SHARE_BY_INVITES[1]}), and setup abandoners (who rarely invite) push it higher. Mixpanel: the first-week invite count is relative to each user's signup, so build the groups in Funnels first: account created → teammate invited → teammate invited, ${ACTIVATION_DAYS}-day conversion window, uniques; users who complete all three steps are the 2+ group, users who stop after step 2 the one-invite group, users who stop after step 1 the zero group. Save each as a cohort from the funnel, then run Retention (account created → any event, custom bracket day ${RETENTION_DAY}-${RETENTION_DAY + 6}) broken down by those cohorts, optionally filtered to users who did dashboard created.`,
+		mixpanelReport: { type: "Funnels → cohorts → Retention", cohortFunnel: `account created → teammate invited → teammate invited, ${ACTIVATION_DAYS}-day window; save completed / dropped-at-step-2 / dropped-at-step-1 users as cohorts`, birth: "account created", return: "any event", brackets: `custom: day ${RETENTION_DAY}-${RETENTION_DAY + 6}`, breakdown: "those cohorts" },
 		assertions: [
 			{
 				breakdown: {
@@ -1627,8 +1609,8 @@ FROM ${WH("ci_runner_health_daily")}`,
 		id: "H8-paid-channel-economics",
 		hook: "H8",
 		archetype: "attribution-bias",
-		narrative: `LinkedIn Ads signups cost ${CPL_USD.linkedin_ads / CPL_USD.paid_search}x as much as paid search signups over the window (warehouse paid_marketing_daily bills a paced daily budget per channel = cost per signup × expected signups per day, with a weekday shape and seeded ±${SPEND_NOISE * 100}% day noise, never zero: $${CPL_USD.linkedin_ads} vs $${CPL_USD.paid_search} per signup at the window level; day-level cost per signup moves with the day's signups), but they buy a paid plan ${PURCHASE_KEEP.linkedin_ads / PURCHASE_KEEP.paid_search}x as often (share of would-be purchases kept: ${PURCHASE_KEEP.linkedin_ads} vs ${PURCHASE_KEEP.paid_search}; channel is drawn independently of company size and persona). Spend per signup needs the warehouse join; the purchase-rate read compares signups from the same weeks so later signups' shorter time to buy cancels. Paid-subscription counts per channel are a few hundred, so the purchase-rate ratio uses the knob as target with a knob-derived floor.`,
-		mixpanelReport: { type: "Insights + warehouse", event: "account created", breakdown: "acquisition_channel", join: "paid_marketing_daily.spend_usd", funnel: "account created → subscription started by acquisition_channel" },
+		narrative: `LinkedIn Ads signups cost ${CPL_USD.linkedin_ads / CPL_USD.paid_search}x as much as paid search signups over the window (warehouse paid_marketing_daily bills a paced daily budget per channel = cost per signup × expected signups per day, with a weekday shape and seeded ±${SPEND_NOISE * 100}% day noise, never zero: $${CPL_USD.linkedin_ads} vs $${CPL_USD.paid_search} per signup at the window level; day-level cost per signup moves with the day's signups), but they buy a paid plan ${PURCHASE_KEEP.linkedin_ads / PURCHASE_KEEP.paid_search}x as often (share of would-be purchases kept: ${PURCHASE_KEEP.linkedin_ads} vs ${PURCHASE_KEEP.paid_search}; channel is drawn independently of company size and persona). Spend per signup needs the warehouse join. The purchase-rate read is the Mixpanel funnel account created → subscription started with the default ${PAID_FUNNEL_WINDOW_DAYS}-day conversion window, for signups ${D(DATASET_START)} through ${PAID_COHORT_LAST} (every signup has its full window inside the data). Paid-subscription counts per channel are about a hundred, so the ratio uses the knob as target with a knob-derived floor.`,
+		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "paid_marketing_daily.spend_usd", funnel: `account created → subscription started, ${PAID_FUNNEL_WINDOW_DAYS}-day window (Mixpanel default), signups ${D(DATASET_START)} to ${PAID_COHORT_LAST}, breakdown acquisition_channel` },
 		assertions: [
 			{
 				breakdown: {
@@ -1646,18 +1628,13 @@ SELECT s.ch AS grp, s.users AS user_count, sp.spend / s.signups AS spend_per_sig
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE},
-s AS (SELECT uid, date_trunc('week', t) AS wk, acquisition_channel AS ch FROM ev WHERE event = 'account created'),
-b AS (SELECT DISTINCT s.uid FROM s JOIN ev e ON e.uid = s.uid AND e.event = 'subscription started'),
-w AS (SELECT wk,
-  count(*) FILTER (WHERE ch = 'linkedin_ads') AS ln, count(b.uid) FILTER (WHERE ch = 'linkedin_ads') AS lb,
-  count(*) FILTER (WHERE ch = 'paid_search') AS pn, count(b.uid) FILTER (WHERE ch = 'paid_search') AS pb
-  FROM s LEFT JOIN b ON b.uid = s.uid GROUP BY 1)
-SELECT 'all' AS grp, LEAST(sum(ln), sum(pn))::BIGINT AS user_count,
- sum(lb)::DOUBLE / sum(ln * pb::DOUBLE / nullif(pn, 0)) AS std_ratio
-FROM w WHERE pn > 0`,
+s AS (SELECT uid, t AS t0, acquisition_channel AS ch FROM ev WHERE event = 'account created' AND t < TIMESTAMP '${TS(PAID_COHORT_END)}'),
+b AS (SELECT DISTINCT s.uid FROM s JOIN ev e ON e.uid = s.uid AND e.event = 'subscription started'
+  AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL ${PAID_FUNNEL_WINDOW_DAYS} DAY)
+SELECT s.ch AS grp, count(*) AS user_count, count(b.uid)::DOUBLE / count(*) AS paid_rate FROM s LEFT JOIN b ON b.uid = s.uid GROUP BY 1`,
 				},
-				select: { a: { where: { grp: "all" } } },
-				expect: { metric: "a.std_ratio", op: ">=", target: PURCHASE_KEEP.linkedin_ads / PURCHASE_KEEP.paid_search, floor: 1 + 0.5 * (PURCHASE_KEEP.linkedin_ads / PURCHASE_KEEP.paid_search - 1) },
+				select: { l: { where: { grp: "linkedin_ads" } }, p: { where: { grp: "paid_search" } } },
+				expect: { metric: "l.paid_rate / p.paid_rate", op: ">=", target: PURCHASE_KEEP.linkedin_ads / PURCHASE_KEEP.paid_search, floor: 1 + 0.5 * (PURCHASE_KEEP.linkedin_ads / PURCHASE_KEEP.paid_search - 1) },
 				minCohort: 500,
 			},
 		],

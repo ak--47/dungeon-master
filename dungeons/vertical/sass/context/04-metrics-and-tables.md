@@ -17,19 +17,19 @@ All KPIs use UTC days and count people by unique `user_id`.
 | Root Cause Assist adoption | Share of Business and Enterprise resolutions (by `plan_tier` on the event, since 2026-07-22) with `resolution_method = ai_assist`. |
 | Pipeline success rate | Share of `deployment pipeline run` events with `pipeline_status = success`. Equivalent to a deploy funnel holding `deploy_id` constant. |
 | Time to deploy | Per run, time from `deployment pipeline run` to `service deployed` (same `deploy_id`), successful runs only. |
-| Paid conversion | Share of new signups with `subscription started`. Compare signups from the same weeks; later signups have had less time to buy. |
+| Paid conversion | Share of new signups who start a subscription within 30 days of `account created` (the Mixpanel Funnels default conversion window). Count only signups with a full 30 days of data (signups through August 31). |
 | New paid subscriptions | Count of `subscription started`, split by `plan`. |
 | Seats per new subscription | Average `seats` on `subscription started`. |
 | New MRR | Seats on new subscriptions × list price per seat on the start date, from `subscription_bookings_daily`. New ARR = new MRR × 12. |
 | CAC (paid) | Spend for a paid channel divided by new signups Mixpanel recorded from that channel (`account created` with that `acquisition_channel`) over the same days. Finance uses Mixpanel signups, not the leads the ad platforms report. |
-| Cost per paying customer | Spend for a paid channel divided by signups from that channel who started a subscription. |
-| Seat expansion | Seats added at existing paid customers. Seat changes on existing subscriptions are billed outside the self-serve flow and are not in Mixpanel or `subscription_bookings_daily`; teams watch collaboration activity as a leading indicator. |
+| Cost per paying customer | Spend for a paid channel over a signup period divided by that period's signups from the channel who started a subscription within 30 days. |
+| Seat expansion | Seats added at existing paid customers. Seat changes on existing subscriptions are billed outside the self-serve flow and are not in Mixpanel or `subscription_bookings_daily`. |
 
 ## Warehouse tables
 
 Three tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). Days with no activity have a row with zeros. They join to events on the UTC date of the event and on the named dimension.
 
-Numeric columns are stored as FLOAT64 (shown as FLOAT below). Count columns (leads, clicks, impressions, jobs, seats, subscriptions) always hold whole numbers.
+In the warehouse, numeric columns are loaded as FLOAT64 (shown as FLOAT below). Count columns (leads, clicks, impressions, jobs, seats, subscriptions) and `list_price_per_seat_usd` always hold whole numbers, and raw file exports show them as integers.
 
 ### `paid_marketing_daily`
 
@@ -81,5 +81,6 @@ Caveats: the table covers new self-serve subscriptions only, not renewals, seat 
 ## Analysis tips
 
 - For a before/after question around a dated change, consider seasonality, weekday mix, the overall trend, and mix shifts before you attribute a change to the event.
+- Activity is weekday-heavy: engineers work Monday to Friday, and weekends carry mostly on-call work. Compare matching weekdays or whole weeks, not a few weekdays against a span that includes weekends.
 - New-user funnels, conversion, and retention depend on signup date: users who joined late in the window have had less time to act. Compare cohorts that joined in the same weeks.
 - Users receive many alerts and run many pipelines. Per-alert and per-run questions need `alert_id` or `deploy_id` held constant; unique-user funnels hide most of the difference between users.

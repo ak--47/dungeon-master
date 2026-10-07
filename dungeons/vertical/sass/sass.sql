@@ -146,6 +146,9 @@ WHERE a.t_ack IS NOT NULL AND a.t_trig IS NOT NULL GROUP BY 1 ORDER BY 1;
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H5-first-week-team-activation — 2+ invites in week 1 → D30 retention
 -- ─────────────────────────────────────────────────────────────────────────
+-- early_invites >= 2 equals completing the Mixpanel funnel account created →
+-- teammate invited → teammate invited with a 7-day conversion window; = 1 is
+-- dropping after step 2, = 0 dropping after step 1 (the cohorts the recipe saves).
 CREATE OR REPLACE TEMP TABLE activation AS
 WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 37 DAY)
 SELECT s.uid,
@@ -198,14 +201,16 @@ sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM wh_marketi
 SELECT s.ch, s.n AS signups, round(sp.spend, 0) AS spend_usd, round(sp.spend / s.n, 2) AS spend_per_signup
 FROM s JOIN sp ON sp.ch = s.ch ORDER BY 1;
 
--- same-week standardized paid-plan rate, LinkedIn vs paid search
-WITH s AS (SELECT uid, date_trunc('week', t0) AS wk, ch FROM signups),
-b AS (SELECT DISTINCT uid FROM ev WHERE event = 'subscription started'),
-w AS (SELECT wk,
-  count(*) FILTER (WHERE ch = 'linkedin_ads') AS ln, count(b.uid) FILTER (WHERE ch = 'linkedin_ads') AS lb,
-  count(*) FILTER (WHERE ch = 'paid_search') AS pn, count(b.uid) FILTER (WHERE ch = 'paid_search') AS pb
-  FROM s LEFT JOIN b ON b.uid = s.uid GROUP BY 1)
-SELECT round(sum(lb)::DOUBLE / sum(ln * pb::DOUBLE / nullif(pn, 0)), 4) AS linkedin_vs_search_buy_ratio FROM w WHERE pn > 0;
+-- paid-plan rate: Mixpanel funnel account created → subscription started,
+-- 30-day conversion window (Mixpanel default), signups 2026-06-04 to 2026-08-31
+CREATE OR REPLACE TEMP TABLE paid_funnel AS
+WITH s AS (SELECT uid, t0, ch FROM signups WHERE t0 < TIMESTAMP '2026-09-01'),
+b AS (SELECT DISTINCT s.uid FROM s JOIN ev e ON e.uid = s.uid AND e.event = 'subscription started'
+  AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 30 DAY)
+SELECT s.uid, s.ch, (b.uid IS NOT NULL) AS bought FROM s LEFT JOIN b ON b.uid = s.uid;
+
+SELECT round(avg(bought::INT) FILTER (WHERE ch = 'linkedin_ads') / avg(bought::INT) FILTER (WHERE ch = 'paid_search'), 4) AS linkedin_vs_search_paid_rate
+FROM paid_funnel;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H9-team-price-change — Team $20 → $25 per seat on 2026-08-17 (warehouse join)
@@ -269,13 +274,9 @@ SELECT cloud_provider, count(*) AS signups, round(avg(connected::INT), 4) AS con
  round(avg(installed::INT), 4) AS installed_agent, round(avg(converted::INT), 4) AS created_dashboard
 FROM onboarding GROUP BY 1 ORDER BY 1;
 
--- EVAL Q5 — null: onboarding conversion by signup method
+-- EVAL Q5 — null: do SSO signups finish onboarding less often? (onboarding conversion by signup method)
 SELECT signup_method, count(*) AS signups, round(avg(converted::INT), 4) AS onboarding_conversion
 FROM onboarding GROUP BY 1 ORDER BY 1;
--- two-proportion z for github vs google
-WITH g AS (SELECT signup_method AS m, count(*) AS n, avg(converted::INT) AS p FROM onboarding WHERE signup_method IN ('github', 'google') GROUP BY 1),
-x AS (SELECT max(n) FILTER (WHERE m = 'github') AS n1, max(p) FILTER (WHERE m = 'github') AS p1, max(n) FILTER (WHERE m = 'google') AS n2, max(p) FILTER (WHERE m = 'google') AS p2 FROM g)
-SELECT round(p1 - p2, 4) AS diff, round((p1 - p2) / sqrt(((p1 * n1 + p2 * n2) / (n1 + n2)) * (1 - (p1 * n1 + p2 * n2) / (n1 + n2)) * (1.0 / n1 + 1.0 / n2)), 2) AS z FROM x;
 -- each method vs all other signups (two-proportion z)
 WITH t AS (SELECT count(*) AS n, avg(converted::INT) AS p FROM onboarding),
 g AS (SELECT signup_method AS m, count(*) AS n1, avg(converted::INT) AS p1 FROM onboarding GROUP BY 1),
@@ -382,13 +383,17 @@ SELECT d.ch, round(min(spend_usd), 0) AS min_daily_spend, round(avg(spend_usd), 
  round(avg(spend_usd) FILTER (WHERE dayofweek(d.d) IN (0, 6)), 0) AS avg_weekend_spend
 FROM d LEFT JOIN n ON n.d = d.d AND n.ch = d.ch GROUP BY 1 ORDER BY 1;
 
--- EVAL Q14 — paid-plan rate and cost per paying customer by channel
-WITH b AS (SELECT DISTINCT uid FROM ev WHERE event = 'subscription started'),
-s AS (SELECT s.ch, count(*) AS signups, count(b.uid) AS buyers FROM signups s LEFT JOIN b ON b.uid = s.uid GROUP BY 1),
-sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM wh_marketing GROUP BY 1)
-SELECT s.ch, s.signups, s.buyers, round(s.buyers::DOUBLE / s.signups, 4) AS paid_rate,
- round(sp.spend / nullif(s.buyers, 0), 0) AS spend_per_paying_customer
-FROM s LEFT JOIN sp ON sp.ch = s.ch ORDER BY paid_rate DESC;
+-- EVAL Q14 — paid-plan rate (30-day funnel window, signups Jun 4 - Aug 31) and cost per paying customer by channel
+WITH s AS (SELECT ch, count(*) AS signups, count(*) FILTER (WHERE bought) AS buyers FROM paid_funnel GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM wh_marketing WHERE date::DATE < DATE '2026-09-01' GROUP BY 1)
+SELECT s.ch, s.signups, s.buyers, round(s.buyers::DOUBLE / s.signups, 4) AS paid_rate_30d,
+ round(sp.spend, 0) AS spend_jun4_aug31, round(sp.spend / nullif(s.buyers, 0), 0) AS spend_per_paying_customer
+FROM s LEFT JOIN sp ON sp.ch = s.ch ORDER BY paid_rate_30d DESC;
+-- two-proportion z, LinkedIn vs paid search
+WITH x AS (SELECT count(*) FILTER (WHERE ch = 'linkedin_ads') AS n1, avg(bought::INT) FILTER (WHERE ch = 'linkedin_ads') AS p1,
+  count(*) FILTER (WHERE ch = 'paid_search') AS n2, avg(bought::INT) FILTER (WHERE ch = 'paid_search') AS p2,
+  avg(bought::INT) FILTER (WHERE ch IN ('linkedin_ads', 'paid_search')) AS p FROM paid_funnel)
+SELECT round(p1 / p2, 4) AS ratio, round((p1 - p2) / sqrt(p * (1 - p) * (1.0 / n1 + 1.0 / n2)), 2) AS z FROM x;
 
 -- EVAL Q15 — Team price change: did new Team subscriptions fall?
 SELECT (t >= TIMESTAMP '2026-08-17') AS post, count(*) FILTER (WHERE plan = 'team') AS team, count(*) FILTER (WHERE plan = 'business') AS business,
@@ -435,18 +440,19 @@ FROM wh_bookings GROUP BY 1, 2 ORDER BY 1, 2;
 SELECT strftime(date::DATE, '%Y-%m') AS month, sum(new_subscriptions) AS subscriptions, round(sum(new_mrr_usd), 0) AS new_mrr_usd FROM wh_bookings GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q19 — null: did the runner incident change alert acknowledgement or dashboard use?
-SELECT (t >= TIMESTAMP '2026-08-25' AND t < TIMESTAMP '2026-08-28') AS incident,
- round(avg(response_time_mins) FILTER (WHERE event = 'alert acknowledged'), 2) AS avg_response_mins,
- round(count(*) FILTER (WHERE event = 'dashboard viewed')::DOUBLE / count(DISTINCT t::DATE), 1) AS dashboard_views_per_day,
- round(count(*) FILTER (WHERE event = 'alert triggered')::DOUBLE / count(DISTINCT t::DATE), 1) AS alerts_per_day
-FROM ev WHERE t >= TIMESTAMP '2026-08-18' AND t < TIMESTAMP '2026-09-04' GROUP BY 1 ORDER BY 1;
--- day-to-day range on the 14 surrounding days vs the incident days
+-- Usage is weekday-heavy, so compare the incident days (Tue Aug 25 - Thu Aug 27)
+-- with the same weekdays one week before (Aug 18-20) and one week after (Sep 1-3).
 WITH d AS (SELECT t::DATE AS day, (t >= TIMESTAMP '2026-08-25' AND t < TIMESTAMP '2026-08-28') AS incident,
   avg(response_time_mins) FILTER (WHERE event = 'alert acknowledged') AS resp,
+  count(*) FILTER (WHERE event = 'alert acknowledged') AS acks,
   count(*) FILTER (WHERE event = 'dashboard viewed') AS views, count(*) FILTER (WHERE event = 'alert triggered') AS alerts
-  FROM ev WHERE t >= TIMESTAMP '2026-08-18' AND t < TIMESTAMP '2026-09-04' GROUP BY 1, 2)
-SELECT incident, count(*) AS days, round(min(resp), 2) AS min_daily_response, round(max(resp), 2) AS max_daily_response,
- min(views) AS min_daily_views, max(views) AS max_daily_views, min(alerts) AS min_daily_alerts, max(alerts) AS max_daily_alerts
+  FROM ev WHERE (t >= TIMESTAMP '2026-08-18' AND t < TIMESTAMP '2026-08-21')
+     OR (t >= TIMESTAMP '2026-08-25' AND t < TIMESTAMP '2026-08-28')
+     OR (t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-09-04') GROUP BY 1, 2)
+SELECT incident, count(*) AS days, round(sum(resp * acks) / sum(acks), 2) AS avg_response_mins,
+ round(avg(views), 1) AS dashboard_views_per_day, round(avg(alerts), 1) AS alerts_per_day,
+ round(min(resp), 2) AS min_daily_response, round(max(resp), 2) AS max_daily_response,
+ min(views) AS min_daily_views, max(views) AS max_daily_views
 FROM d GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q20 — headline numbers for the Q4 risk review

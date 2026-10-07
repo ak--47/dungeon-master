@@ -2,13 +2,13 @@
 
 Event names are lowercase, as tracked. Properties are flat on each event. Times are UTC.
 
-## Properties on every event
+## Properties on events
 
 | Property | Meaning |
 |---|---|
 | `time` | When the event happened (UTC). |
 | `user_id` | The user's ID. Present on every event. |
-| `device_id` | The device the event came from. A user has about two devices. |
+| `device_id` | The device the event came from. A user has about two devices. Present on every event except `cloud account connected`, `agent installed`, and `dashboard created`, which are sent server-side with `user_id` only. |
 | `insert_id` | Unique event ID used for de-duplication. |
 | `session_id` | The app session the event belongs to (diagnostic; Mixpanel computes its own sessions). |
 | `company_id` | The user's company (Mixpanel group key). See "Company (group) properties". |
@@ -66,7 +66,7 @@ Every alert has an `alert_id`. The trigger, the acknowledgement, and the resolut
 | Event | Meaning | Properties |
 |---|---|---|
 | `teammate invited` | The user invites a colleague to the workspace. | `invitee_role` (`member`, `admin`, `viewer`); `invite_method` (`email`, `sso`, `slack`). |
-| `integration configured` | The user connects or reconfigures an integration. | `integration_type` (`slack`, `microsoft_teams`, `pagerduty`, `opsgenie`, `github`, `jira`, `terraform`). |
+| `integration configured` | The user connects or reconfigures an integration. Integrations are set up per team by the engineers who own its alert routing and workflow tools, so many users never configure one; a user configures a given integration once. | `integration_type` (`slack`, `microsoft_teams`, `pagerduty`, `opsgenie`, `github`, `jira`, `terraform`). |
 | `documentation viewed` | The user reads a docs page. | `doc_section`; `time_on_page_sec`. |
 | `runbook executed` | The user runs a saved runbook. | `runbook_id`; `runbook_trigger` (`manual`, `scheduled`); `succeeded`. |
 | `cost report generated` | The user generates a cloud cost report. | `report_period`; `total_cost_usd`; `cost_change_percent` vs the prior period. |
@@ -109,7 +109,7 @@ Every alert has an `alert_id`. The trigger, the acknowledgement, and the resolut
 
 ## Account health history (slowly changing dimension)
 
-One row per health rating: `distinct_id`, `account_health` (`healthy`, `neutral`, `at_risk`), and `startTime` (when that rating began). Ratings are written by customer success's nightly scoring job, so `startTime` falls in the early morning (about 05:00-05:45 UTC). A new account gets its first rating the night after it signs up. Customer success reviews each account often: consecutive rows are typically about a week apart, sometimes three weeks or more. A new row is written at every review, even when the rating stays the same, so about a third of rows repeat the previous rating. A few accounts have a first row dated June 3, the day before the window. Use it to read an account's rating as of an event's date.
+One row per health rating: `distinct_id`, `account_health` (`healthy`, `neutral`, `at_risk`), and `startTime` (UTC, when that rating took effect). A new account gets its first rating at the moment it signs up. Customer success reviews each account often: consecutive rows are typically about a week apart, sometimes three weeks or more, and sometimes only a day apart. A new row is written at every review, even when the rating stays the same, so about a third of rows repeat the previous rating. The export starts each established account's history at its first review inside the window, so an established account has no row before that review. Use it to read an account's rating as of an event's time.
 
 ## Funnels the business tracks
 
