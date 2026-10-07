@@ -4,621 +4,896 @@ import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "@ak--47/dungeon-master/utils";
-import * as v from "ak-tools";
-import { findFirstSequence, scaleFunnelTTC } from "@ak--47/dungeon-master/hook-helpers";
+import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
 /** @typedef  {import("../../../types").Dungeon} Config */
 
 // ── OVERVIEW ──
 /*
- * NAME:       MedConnect
- * APP:        Telehealth platform connecting doctors, nurses, and patients
- *             through virtual consultations, prescriptions, and secure
- *             messaging. Multi-role system; subscription tiers (free/basic/
- *             premium); feature rollouts for video consultation and AI
- *             symptom checker; geo-aware (US/EU/LATAM).
- * SCALE:      10,000 users, ~1.2M events, 121 days (2026-01-01 → 2026-05-01)
- * CORE LOOP:  sign up → symptom search → book appointment → consultation → prescription → follow-up
+ * NAME:       Clearwell Health
+ * APP:        Virtual care app for adults in the US (iOS, Android). On-demand
+ *             urgent care (symptom check → visit request → virtual waiting room
+ *             → video or phone visit), scheduled primary care appointments,
+ *             therapy with a licensed therapist, and remote monitoring programs
+ *             for hypertension and diabetes with a connected blood-pressure cuff
+ *             or glucometer. Prescriptions go to the patient's pharmacy. Patients
+ *             pay $0 (employer benefit), an insurance copay, or a self-pay price
+ *             ($79 per urgent visit → $59 from 2026-08-31). Clearwell Async (a
+ *             questionnaire visit for minor conditions) launches 2026-07-15.
+ * SCALE:      10,000 patients (≈3,500 sign up inside the window), ~1.04M events,
+ *             120 days (2026-06-04 → 2026-10-01, UTC)
+ * CORE LOOP:  symptom check completed → visit requested → visit started →
+ *             visit completed → prescription sent → prescription picked up
+ * VALUE MOMENT: visit completed
  *
- * EVENTS (18):
- *   app session (8) > symptom search (7) > appointment booked (6) > notification received (6)
- *   > consultation completed (5) > message sent (5) > prescription issued (4)
- *   > health record accessed (4) > prescription refill (3) > follow up scheduled (3)
- *   > lab results viewed (3) > payment processed (3) > insurance verified (2)
- *   > provider rated (2) > profile updated (2) > account created (1)
- *   > support ticket created (1) > account deactivated (1)
+ * EVENTS (23):
+ *   health record viewed > app opened > lab results viewed > message sent
+ *   > reading logged > symptom check completed > visit completed > visit started
+ *   > visit requested > appointment booked > prescription sent > reminder sent
+ *   > visit rated > prescription picked up > therapy session booked
+ *   > therapy session completed > $experiment_started > waiting room left
+ *   > account created > coverage added > appointment missed
+ *   > therapy intake completed > program enrolled
  *
- * FUNNELS (5):
- *   - Onboarding Flow:          account created → insurance verified → symptom search → appointment booked (45%)
- *   - Booking to Consultation:  symptom search → appointment booked → consultation completed (40%)
- *   - Full Care Journey:        appointment booked → consultation completed → prescription issued → follow up scheduled (30%)
- *   - Prescription Lifecycle:   prescription issued → prescription refill → payment processed (55%)
- *   - Patient Satisfaction:     consultation completed → provider rated → follow up scheduled (25%)
+ * FUNNELS (7 declared; every event is a funnel step, so there is no catch-all):
+ *   - Onboarding (first funnel, two copies by chronic_program): account created
+ *       → coverage added (→ program enrolled for remote-monitoring patients)
+ *   - Check-in (session, weight 12): app opened → health record viewed / lab
+ *       results viewed / message sent (first-fixed, 50%)
+ *   - Urgent Care (weight 2): a template unit (symptom check → request → waiting
+ *       room left → visit started → visit completed → prescription sent →
+ *       picked up → reminder sent → visit rated; engine 100%, visit_id per run).
+ *       The everything hook rebuilds each visit and decides every step and gap.
+ *       Carries the Pickup Reminders experiment (multipliers 1.0; the hook
+ *       applies the effect).
+ *   - Primary Care (weight 1): template unit (appointment booked → reminder →
+ *       missed / visit started → completed → prescription → pickup → rating),
+ *       rebuilt by the hook.
+ *   - Readings (remote-monitoring patients only, weight 45): reading logged.
+ *   - Therapy (therapy clients only, weight 3): template unit (intake → session
+ *       booked → session completed), rebuilt by the hook as a weekly course.
  *
- * USER PROPS:  role, specialty, years_experience, preferred_language, has_chronic_condition, age_range, subscription_tier, Platform
- * SUPER PROPS: subscription_tier, Platform
- * SCD PROPS:   care_plan (preventive/routine/chronic/acute, monthly fuzzy, max 8)
+ * USER PROPS:  coverage_type, age_band, gender, preferred_language, state,
+ *              chronic_program, device_connectivity, therapy_client,
+ *              therapist_preference, acquisition_channel, member_since,
+ *              "Experiment: Pickup Reminders" (patients in the test), _persona
+ * SUPER PROPS: coverage_type, preferred_language (stickyEventProps: on every event)
+ * SCD PROPS:   none
  * GROUPS:      none
+ * WAREHOUSE:   clinician_staffing_daily (clinician hours by service line, incl.
+ *              agency and Spanish-speaking hours), visit_revenue_daily (billed
+ *              visits, patient and payer revenue by service line and coverage)
+ * LOOKUPS:     none — every attribute is denormalized onto events/profiles
+ * SOUP:        Monday-heavy dayOfWeekWeights; US daytime/evening hourOfDayWeights
+ *              (UTC). Primary care appointments run Monday-Saturday on US clinic
+ *              hours; therapy sessions on US afternoons and evenings.
+ *
+ * IDENTITY: a new patient is identified at "account created" (isAuthEvent, first
+ * event, user_id + device_id). One phone per patient (avgDevicePerUser 1). Every
+ * event carries user_id; there is no anonymous pre-signup activity. Server-side
+ * events (reminder sent, appointment missed) carry user_id only (the hook
+ * removes the device fields). The two onboarding steps after signup (coverage
+ * added, program enrolled) carry user_id only (engine post-auth stamping). All
+ * other events also carry device_id and the engine's sticky device fields.
+ *
+ * DESIGN NOTES:
+ * - Visits are rebuilt in the everything hook from the engine's Urgent Care and
+ *   Primary Care runs (each run gives a slot: its start time and visit_id;
+ *   templates are cloned when more steps are needed). All gaps are real: the
+ *   request 2-12 min after the symptom check, a waiting room of
+ *   estimated_wait_min (log-normal, longer at busy hours; the actual wait
+ *   scatters around it), a video or phone visit of 4-40 min, a prescription
+ *   minutes after the visit, a pickup hours to days later. Symptom checks that
+ *   triage to self_care or in_person never lead to a request.
+ * - Primary care appointments are booked lead_days ahead onto US clinic hours.
+ *   The scheduler only offers open days (Monday-Saturday; closed on the Jul 3
+ *   and Sep 7 US holidays), so closed days carry no appointments and no pile-up.
+ * - Warm start: established patients have urgent and primary visits in the 21
+ *   days before June 4 (same weekday and hour as a random in-window visit,
+ *   shifted back whole weeks); only their in-window steps remain, so early-June
+ *   pickups and appointments do not ramp from zero. Therapy is at steady state:
+ *   ongoing clients' remaining sessions follow the equilibrium residual of the
+ *   course length (6-16 weekly sessions), and new clients start through the
+ *   window, so weekly sessions stay level.
+ * - New patients: 55% start their first urgent-care symptom check 5-40 minutes
+ *   after signing up (they joined because they were sick). retentionCurve shapes
+ *   new patients' activity; established patients are flat across the window.
+ * - Remote monitoring: readings come only from program patients; reading_type
+ *   follows the program and sync_method follows device_connectivity. 15% of
+ *   program patients on either device stop logging at a random time.
+ * - Therapy clients with no therapy activity in the window are reset to
+ *   therapy_client = false (the flag means "in therapy with Clearwell").
+ * - Warehouse drift: visit_revenue_daily counts claims by posting day (about 18%
+ *   of a day's visits post the next day), adds nurse-line encounters that never
+ *   reach the app (≈4% ± by day), and nets out voided visits (≈2%);
+ *   clinician_staffing_daily hours follow the day's demand with ±10% seeded
+ *   noise plus a fixed floor (primary care is 0 on closed days).
+ * - ENGINE WORKAROUND: in legacy (no active-day plan) mode a funnel experiment
+ *   activates on the user's usage anchor (their first possible event time), not
+ *   the run's real time (lib/generators/funnels.js makeFunnel, `isActive` uses
+ *   `firstEventTime`), so established users never enter an experiment that starts
+ *   mid-window. retentionCurve puts the engine in active-day mode, where the
+ *   anchor is the picked day.
  */
 
 // ── HOOK STORIES ──
 /*
- * NOTE: Cohort effects are HIDDEN — discoverable via raw-prop breakdowns
- * (HOD, day, tier) or behavioral cohorts. One exception: H6 stamps
- * no_show=true on flagged bookings (a realistic appointment-status
- * property, and the only selection-free way to verify per-event thinning
- * on an activity-selected cohort).
+ * All effects are hidden: no flag properties. Dates live in the TIMELINE
+ * constants and are shared by hooks, stories, SQL, warehouse columns, and the
+ * timeline guide.
  *
- * ───────────────────────────────────────────────────────────────
- * 1. AFTER-HOURS SURGE PRICING (event hook)
- * ───────────────────────────────────────────────────────────────
+ * ─────────────────────────────────────────────────────────────────────────
+ * H1. CLEARWELL ASYNC LAUNCH (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: from 2026-07-15 urgent-care requests for minor conditions (urinary,
+ *   skin_rash, pink_eye, allergy) can be async: a questionnaire a clinician
+ *   reviews, no waiting room. Adoption ramps over 14 days to 50% of minor
+ *   requests (per request); no async visit exists before launch or for other
+ *   reasons. Async visits complete about 2.5 h after the request and never
+ *   abandon.
+ * MIXPANEL: Insights, visit requested, filter reason_category in the four minor
+ *   reasons, breakdown visit_type, weekly; % async from Jul 29.
+ * REAL WORLD: async visits take low-acuity demand out of the live queue.
  *
- * PATTERN: Consultations between 7PM-7AM (after-hours) have 1.5x
- * higher consultation_fee. Simulates urgent care premium pricing.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H2. THE TEN-MINUTE WAITING ROOM (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: the chance a live request reaches "visit started" depends on the
+ *   estimated wait shown at request: 93% up to 10 minutes, falling linearly to
+ *   62% at 20 minutes, flat at 62% beyond. Patients who give up fire "waiting
+ *   room left" (minutes_waited).
+ * MIXPANEL: Funnels, visit requested → visit started, Totals, hold visit_id
+ *   constant, 1-day window, filter visit_type ≠ async, breakdown
+ *   estimated_wait_min custom buckets (≤10, 11-19, ≥20).
+ * REAL WORLD: on-demand patients tolerate about ten minutes, then leave.
  *
- * HOW TO FIND IT IN MIXPANEL:
+ * ─────────────────────────────────────────────────────────────────────────
+ * H3. URGENT-CARE STAFFING GAP (everything + warehouse clinician_staffing_daily;
+ *     external-table join)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: 2026-08-10 to 2026-08-23 the locum agency contract lapsed: urgent
+ *   care agency_clinician_hours are 0, so clinician_hours are 0.6x of plan.
+ *   Urgent estimated waits are 2.2x on those days, so more patients leave (H2).
+ * MIXPANEL: Insights, visit requested (visit_type ≠ async), average
+ *   estimated_wait_min, daily; join clinician_staffing_daily on date.
+ * REAL WORLD: a contract renewal slipping shows up as a queue, not a headline.
  *
- *   Report 1: After-Hours Fee Premium
- *   • Report type: Insights
- *   • Event: "consultation completed"
- *   • Measure: Average of "consultation_fee"
- *   • Breakdown: hour of day
- *   • Expected: hours 19-06 UTC ~ 1.5x avg fee vs hours 07-18
- *     (after-hours ≈ $112, business ≈ $75)
+ * ─────────────────────────────────────────────────────────────────────────
+ * H4. PICKUP REMINDERS EXPERIMENT (Urgent Care funnel experiment + everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: from 2026-07-28 urgent-care prescriptions are in the test, split
+ *   50/50 by patient. "Text Reminders" patients get an SMS 20 h after the
+ *   prescription if it is not picked up yet ("reminder sent", reminder_type
+ *   rx_pickup). Pickup is 1.25x control (64% → 80%) and the time to pickup is
+ *   0.7x. Exposure ($experiment_started) fires 1 s after each prescription in
+ *   the test.
+ * MIXPANEL: Funnels, prescription sent → prescription picked up, Totals, hold
+ *   visit_id constant, 7-day window, filter service_line = urgent_care, Jul 28 -
+ *   Sep 24, breakdown "Experiment: Pickup Reminders"; median time to convert.
+ * REAL WORLD: a large share of acute prescriptions are never picked up.
  *
- * REAL-WORLD ANALOGUE: Telehealth platforms charge premiums for
- * after-hours urgent consultations, a key revenue driver.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H5. BLUETOOTH DEVICES LAPSE (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: 40% of remote-monitoring patients with a bluetooth device stop
+ *   logging readings for good at a salted moment between 14 days after their
+ *   first in-window reading and 2026-09-02. Cellular devices never lapse this
+ *   way (both lose 15% to ordinary dropout).
+ * MIXPANEL: cohort "did reading logged Jun 4-17"; Insights uniques of reading
+ *   logged Sep 3 - Oct 1 / cohort size, breakdown device_connectivity.
+ * REAL WORLD: a device that needs the phone nearby to sync quietly drops out.
  *
- * ───────────────────────────────────────────────────────────────
- * 2. FLU SEASON SPIKE (event hook)
- * ───────────────────────────────────────────────────────────────
+ * ─────────────────────────────────────────────────────────────────────────
+ * H6. NO-SHOWS RISE WITH LEAD TIME (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: a primary care appointment is missed with probability
+ *   0.05 + 0.012 x lead_days (5% same day, 22% at two weeks).
+ * MIXPANEL: Funnels, appointment booked → appointment missed, Totals, hold
+ *   visit_id constant, 30-day window, bookings Jun 4 - Aug 31, breakdown
+ *   lead_days (or buckets 0-1, 2-7, 8+).
+ * REAL WORLD: the further out the slot, the likelier life gets in the way.
  *
- * PATTERN: During days 50-70 (flu season window), appointments
- * with condition_type "respiratory" get 2x the wait_time and the
- * condition is forced to "respiratory" 60% of the time.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H7. THERAPIST CHOICE SLOWS THE FIRST SESSION (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: time from therapy intake to the first session is log-normal (median
+ *   96 h) for clients who take the first available therapist and 2.5x for
+ *   clients who ask for a specific therapist.
+ * MIXPANEL: Funnels, therapy intake completed → therapy session completed,
+ *   30-day window, intakes Jun 4 - Aug 31, median time to convert, breakdown
+ *   therapist_preference.
+ * REAL WORLD: choice is good for fit and bad for access.
  *
- * HOW TO FIND IT IN MIXPANEL:
+ * ─────────────────────────────────────────────────────────────────────────
+ * H8. SELF-PAY PRICE CUT (everything + warehouse visit_revenue_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: on 2026-08-31 the self-pay urgent visit price drops $79 → $59.
+ *   Self-pay patients request a visit after a virtual-visit triage 1.35x as
+ *   often (42% → 57%); insured patients do not change (72%). Revenue per
+ *   self-pay symptom check is about flat: 1.35 x 59/79 = 1.01.
+ * MIXPANEL: Insights, visit requested / symptom check completed, breakdown
+ *   coverage_type, before vs after Aug 31; revenue from visit_revenue_daily.
+ * REAL WORLD: a price cut that buys volume, not revenue.
  *
- *   Report 1: Flu Season Volume
- *   • Report type: Insights
- *   • Event: "appointment booked"
- *   • Measure: Total
- *   • Filter: condition_type = "respiratory"
- *   • Line chart by week
- *   • Expected: Clear spike during flu season window (days 50-70)
+ * ─────────────────────────────────────────────────────────────────────────
+ * H9. RESPIRATORY SEASON STARTS (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: from 2026-09-14 respiratory symptom checks ramp up; from 2026-09-21
+ *   they run at 2.5x their summer rate relative to all other reasons (extra
+ *   respiratory visits, each a full visit flow, for patients active that day).
+ * MIXPANEL: Insights, symptom check completed, breakdown reason_category,
+ *   weekly; respiratory / non-respiratory, Sep 21 - Oct 1 vs Jun 4 - Sep 13.
+ * REAL WORLD: school starts, and the respiratory season follows.
  *
- *   Report 2: Wait Time During Flu Season
- *   • Report type: Insights
- *   • Event: "appointment booked"
- *   • Measure: Average of "wait_time_hours"
- *   • Breakdown: "condition_type"
- *   • Filter: time within flu season
- *   • Expected: respiratory ~2x wait vs other conditions
+ * ─────────────────────────────────────────────────────────────────────────
+ * H10. SPANISH-SPEAKING PATIENTS WAIT LONGER (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: patients with preferred_language = es go to the Spanish-speaking
+ *   clinician pool (about 8% of urgent clinician hours for about 16% of
+ *   patients); their urgent-care estimated waits are 1.6x, so they abandon
+ *   more (H2).
+ * MIXPANEL: Insights, visit requested (visit_type ≠ async), average
+ *   estimated_wait_min, breakdown preferred_language.
+ * REAL WORLD: a language-concordant pool that is too small is an access gap.
  *
- * REAL-WORLD ANALOGUE: Seasonal illness creates predictable surges
- * in appointment demand and wait times.
+ * ═════════════════════════════════════════════════════════════════════════
+ * EXPECTED METRICS SUMMARY (measured: data/verify-healthcare, 2026-10-07, full fidelity,
+ * 10,000 patients, 1,037,112 events)
+ * ═════════════════════════════════════════════════════════════════════════
+ * Hook | Metric                                         | Derivation               | Expected | Measured
+ * -----|------------------------------------------------|--------------------------|----------|---------
+ * H1   | async share of minor-reason requests, Jul 29+  | ASYNC_SHARE              | 0.50     | 0.503 (1,779 of 3,540)
+ * H1   | async requests before launch / other reasons   | exact purity             | 0 / 0    | 0 / 0
+ * H2   | start rate, est wait ≥20 / ≤10 min             | 0.62 / 0.93              | 0.667    | 0.671 (62.6% vs 93.3%)
+ * H2   | start rate, est wait ≤10 min                   | START_RATE_SHORT         | 0.93     | 0.933
+ * H3   | avg est wait, gap days / ±14 days              | GAP_WAIT_MULT            | 2.20     | 2.149 (23.4 vs 10.9 min)
+ * H3   | urgent clinician hours per request, gap / base | 1 − agency share 0.4     | 0.60     | 0.632
+ * H4   | pickup within 7 d, Text Reminders / Control    | REMINDER_PICKUP_MULT     | 1.25     | 1.305 (79.8% vs 61.1%)
+ * H4   | median hours to pickup, variant / control      | REMINDER_DELAY_MULT      | 0.70     | 0.674 (13.1 vs 19.4 h)
+ * H4   | variant share of exposed patients              | equal 2-arm hash         | 0.50     | 0.496
+ * H4   | rx_pickup reminders in Control or pre-test     | exact purity             | 0        | 0
+ * H5   | still logging Sep 3+, bluetooth / cellular     | 1 − BT_LAPSE_SHARE       | 0.60     | 0.593 (52.2% vs 88.0%)
+ * H6   | no-show slope per lead day                     | NOSHOW_PER_DAY           | 0.012    | 0.0128
+ * H6   | no-show rate, lead 8+ days                     | LEAD_WEIGHTS mix of line | 0.2013   | 0.2104
+ * H7   | median hours to 1st session, specific / first  | SPECIFIC_THERAPIST_MULT  | 2.50     | 2.506 (231 vs 92 h)
+ * H7   | median hours to 1st session, first_available   | THERAPY_FIRST_MEDIAN_H   | 96       | 92.3
+ * H8   | self-pay requests per check, after / before    | SELF_PAY_LIFT            | 1.35     | 1.296 (47.4% vs 36.6%)
+ * H8   | insured requests per check, after / before     | unchanged                | 1.00     | 0.996
+ * H8   | self-pay urgent revenue per check (warehouse)  | 1.35 × 59/79             | 1.008    | 0.947 ($24.68 vs $26.06)
+ * H9   | respiratory / other checks, Sep 21+ vs summer  | RESP_WAVE_MULT           | 2.50     | 2.487
+ * H10  | avg est wait, es / en                          | SPANISH_WAIT_MULT        | 1.60     | 1.572 (17.5 vs 11.2 min)
+ * ═════════════════════════════════════════════════════════════════════════
  *
- * ───────────────────────────────────────────────────────────────
- * 3. EXPERIENCED DOCTOR SATISFACTION (everything hook)
- * ───────────────────────────────────────────────────────────────
- *
- * PATTERN: Users who had >12 consultation events get ALL their
- * satisfaction_scores redrawn uniform 4.0-5.0 (avg 4.5) vs the declared
- * baseline weighNumRange(1,5,mode 3) ≈ 3.0. Simulates experienced
- * doctors earning better reviews.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Satisfaction by Consultation Volume
- *   • Report type: Insights
- *   • Event: "consultation completed"
- *   • Measure: Average of "satisfaction_score"
- *   • Breakdown: behavioral cohort (>12 consultations vs fewer)
- *   • Expected: heavy consulters ~4.5 avg vs ~3.0 baseline; every one
- *     of their scores sits in [4.0, 5.0]
- *
- * REAL-WORLD ANALOGUE: Experienced providers develop better bedside
- * manner and patient communication skills over time.
- *
- * ───────────────────────────────────────────────────────────────
- * 4. VIDEO CONSULTATION FOLLOW-UP LIFT (everything hook)
- * ───────────────────────────────────────────────────────────────
- *
- * PATTERN: Each video-mode consultation has a 60% chance to inject one
- * cloned "follow up scheduled" event 1-7 days later (stamped
- * consultation_mode="video", fresh days_until_followup 3-14). Users
- * without an existing follow-up to clone from are skipped.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Follow-Up Rate by Consultation Mode
- *   • Report type: Insights
- *   • Event: "follow up scheduled"
- *   • Measure: Total per user
- *   • Breakdown: "consultation_mode" (from consultation completed)
- *   • Expected: video-consult users carry ~+0.6 extra follow-ups per
- *     video consultation vs phone-only users
- *
- * REAL-WORLD ANALOGUE: Face-to-face (video) consultations build
- * stronger patient-doctor rapport, increasing follow-up compliance.
- *
- * ───────────────────────────────────────────────────────────────
- * 5. CHRONIC CONDITION REFILL CHAIN (everything hook)
- * ───────────────────────────────────────────────────────────────
- *
- * PATTERN: Patients with condition_type "chronic" on any prescription
- * event get additional cloned prescription_refill events injected
- * every ~30 days after the original. Creates periodic refill cadence.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Refill Volume by Condition
- *   • Report type: Insights
- *   • Event: "prescription refill"
- *   • Measure: Total
- *   • Breakdown: "condition_type"
- *   • Expected: "chronic" should have ~3-4x more refills than others
- *
- * REAL-WORLD ANALOGUE: Chronic conditions (diabetes, hypertension)
- * require ongoing prescriptions creating predictable refill revenue.
- *
- * ───────────────────────────────────────────────────────────────
- * 6. OCCASIONAL PATIENT NO-SHOWS (everything hook)
- * ───────────────────────────────────────────────────────────────
- *
- * PATTERN: Low-activity users (<15 events — overwhelmingly occasional/
- * churner patients; providers generate far more) lose 25% of their
- * "consultation completed" events and get no_show=true stamped on 25%
- * of their "appointment booked" events. Simulates occasional patients
- * who book but don't show up.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: No-Show Rate
- *   • Report type: Insights
- *   • Event: "appointment booked"
- *   • Measure: Total, filtered no_show = true, vs Total overall
- *   • Expected: no-shows concentrate entirely on low-activity users
- *     (~25% of their bookings); zero no-shows on active users
- *
- *   Report 2: Appointment-to-Consultation Ratio
- *   • Report type: Funnels
- *   • Steps: "appointment booked" → "consultation completed"
- *   • Expected: low-activity users convert visibly worse (engineered
- *     25% thinning compounded by their organically lower conversion)
- *
- * REAL-WORLD ANALOGUE: Infrequent patients have higher no-show rates,
- * a major operational cost for healthcare providers.
- *
- * ───────────────────────────────────────────────────────────────
- * 7. DOCTOR PROFILE SPECIALIZATION (user hook)
- * ───────────────────────────────────────────────────────────────
- *
- * PATTERN: Users with role "doctor" get specialty set to a specific
- * value (from the existing array) and years_experience boosted to
- * senior range (15-30). Nurses get years_experience in mid range.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Experience Distribution by Role
- *   • Report type: Insights
- *   • Event: "consultation completed"
- *   • Measure: Average of user property "years_experience"
- *   • Breakdown: user property "role"
- *   • Expected: doctors ≈ 22 years, nurses ≈ 8, patients ≈ 0
- *
- * REAL-WORLD ANALOGUE: Provider profiles have specialized expertise
- * and experience levels that affect patient matching.
- *
- * ───────────────────────────────────────────────────────────────
- * 8. FREE-TIER CONVERSION DROP (everything hook)
- * ───────────────────────────────────────────────────────────────
- *
- * PATTERN: 30% of free-tier users (per-user coin flip) lose ALL their
- * "consultation completed" events — a per-user cliff, not per-event
- * thinning. Surviving free users are statistically identical to paid
- * users, which makes the effect cleanly measurable: the excess
- * zero-consultation share among free users reads the 30% knob directly.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Booking Conversion by Tier
- *   • Report type: Funnels
- *   • Steps: "symptom search" → "appointment booked" → "consultation completed"
- *   • Breakdown: "subscription_tier"
- *   • Expected: free ≈ 28% vs basic/premium ≈ 40% conversion
- *
- * REAL-WORLD ANALOGUE: Free-tier patients face longer wait times
- * and limited scheduling, reducing completed consultations.
- *
- * ───────────────────────────────────────────────────────────────
- * 9. BOOKING FUNNEL TTC BY TIER (everything hook — property scaling)
- *
- * PATTERN: Premium users get shorter wait times and consultation
- * durations (0.67x); Free users get longer (1.4x); Basic at 1.0x.
- * Scales `wait_time_hours` on "appointment booked" and
- * `duration_minutes` on "consultation completed".
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Wait Time by Subscription Tier
- *   - Insights > "appointment booked"
- *   - Measure: Average of "wait_time_hours"
- *   - Breakdown: subscription_tier
- *   - Expected: premium ~ 0.67x baseline; free ~ 1.4x baseline
- *
- *   Report 2: Consultation Duration by Tier
- *   - Insights > "consultation completed"
- *   - Measure: Average of "duration_minutes"
- *   - Breakdown: subscription_tier
- *   - Expected: premium ~ 0.67x baseline; free ~ 1.4x baseline
- *
- * ───────────────────────────────────────────────────────────────
- * 10. CONSULTATION-COUNT MAGIC NUMBER (everything)
- *
- * PATTERN: Sweet 3-6 consultations → +25% on consultation_fee.
- * Over 7+ → days_until_followup multiplied by 1.5 (over-consulted
- * patients wait 50% longer for next visit). No flag.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Avg Consultation Fee by Consult-Count Bucket
- *   - Cohort A: users with 3-6 "consultation completed"
- *   - Cohort B: users with 0-2
- *   - Event: "consultation completed"
- *   - Measure: Average of "consultation_fee"
- *   - Expected: A ~ 1.25x B
- *
- *   Report 2: Follow-Up Wait Time on Heavy Consulters
- *   - Cohort C: users with >= 7 consultations
- *   - Cohort A: users with 3-6
- *   - Event: "follow up scheduled"
- *   - Measure: Average of "days_until_followup"
- *   - Expected: C ~ 1.5x A (longer gap before next visit)
- *
- * REAL-WORLD ANALOGUE: Engaged patients pay more; over-engaged
- * patients hit care-fatigue and stretch the gap to next visit.
- *
- * ═══════════════════════════════════════════════════════════════
- * EXPECTED METRICS SUMMARY
- * ═══════════════════════════════════════════════════════════════
- *
- * Hook                        | Metric                        | Expected        | Measured (full fidelity)
- * ----------------------------|-------------------------------|-----------------|-------------------------
- * H1 After-Hours Pricing      | fee after-hours / business    | 1.5x            | 1.494 (avg = median)
- * H2 Flu Season Spike         | respiratory share in-window   | 0.65 (vs 0.125) | 0.654 (out: 0.125)
- * H2 Flu Season Spike         | resp/other wait in-window     | 2x              | 1.996
- * H3 Experienced Doctor Sat.  | satisfaction >12-consult users| avg+median 4.5  | 4.499 / 4.500 (0 impure)
- * H4 Video Follow-Up Lift     | extra follow-ups per video    | +0.6 within 7d  | +0.588
- *                             |   consult (within-7d diff)    |                 |
- * H5 Chronic Refill Chain     | surviving clones / model      | ~1.0            | 1.001 (placebo 0.048)
- *                             |   expectation (survival-adj)  |                 |
- * H6 Occasional No-Shows      | no_show rate, <15-event users | 0.25 (0 on rest)| 0.248 (0 impure)
- * H7 Doctor Specialization    | years_experience by role      | 22.5 / 9 / 0    | 22.46 / 9.00 / 0 exact
- * H8 Free-Tier Cliff          | excess zero-consult share     | 0.30            | 0.313 (survivors 0.986)
- *                             |   (z_free−z_paid)/(1−z_paid)  |                 |
- * H9 Wait/Duration by Tier    | free/basic, premium/basic     | 1.4x / 0.67x    | 1.40/0.671, 1.40/0.670
- * H9 Funnel TTC by Tier       | median TTC free/basic (emu)   | >1 (diluted 1.4)| 1.157 (prem/basic 0.827)
- * H10 Magic Number            | sweet fee / low fee (median)  | 1.25x           | 1.219
- * H10 Magic Number            | over/sweet days_until_fu      | 1.5x (phone fu) | 1.500
+ * Noise notes: H8's after period has about 1,700 self-pay symptom checks
+ * (relative SE of the request-rate ratio about 4%); its revenue read also moves
+ * with completion (the staffing gap falls in the before period, Async ramps in
+ * it) and with claim posting lag at the Aug 31 boundary. H7 rests on about 215
+ * specific-therapist first sessions (relative SE of the median ratio about 5%).
+ * H6's 8+ day rate (n ≈ 3,900, SE ≈ 0.0065) sits 1.4 SE above the line's mix. Warehouse audits: clinician_staffing_daily
+ * corr 0.958, visit_revenue_daily corr 0.960. Null checks (eval Q14, Q15): Async
+ * vs live ratings z = −1.2; insured requests per check before/after z = −0.4.
  */
 
 // ── SCALE ──
 const SEED = "dm4-healthcare";
 const NUM_USERS = 10_000;
-const DATASET_START = "2026-01-01T00:00:00Z";
-const DATASET_END = "2026-05-01T23:59:59Z";
+const DATASET_START = "2026-06-04T00:00:00Z";
+const DATASET_END = "2026-10-01T23:59:59Z"; // 120 days
 const EVENTS_PER_DAY = 1.2;
 const token = process.env.MP_TOKEN || "your-mixpanel-token";
 
 const chance = u.initChance(SEED);
 
-// ── KNOBS (tweak these to reshape stories) ──
-const AFTER_HOURS_START = 19;
-const AFTER_HOURS_END = 7;
-const AFTER_HOURS_FEE_MULT = 1.5;
+// ── TIMELINE (shared by hooks, stories, SQL, warehouse columns, guides) ──
+const ASYNC_LAUNCH = "2026-07-15T00:00:00Z";          // Clearwell Async launches for minor conditions
+const PICKUP_TEST_START = "2026-07-28T00:00:00Z";     // "Pickup Reminders" A/B test starts
+const STAFFING_GAP_START = "2026-08-10T00:00:00Z";    // locum agency contract lapses (urgent care)
+const STAFFING_GAP_END = "2026-08-24T00:00:00Z";      // exclusive: new agency live Aug 24
+const SELF_PAY_PRICE_CHANGE = "2026-08-31T00:00:00Z"; // self-pay urgent visit $79 → $59
+const RESP_WAVE_START = "2026-09-14T00:00:00Z";       // respiratory season ramp begins
+const RESP_WAVE_PEAK = "2026-09-21T00:00:00Z";        // respiratory demand at full level
+const CLINIC_HOLIDAYS = ["2026-07-03", "2026-09-07"]; // primary care closed (US holidays)
 
-const FLU_START_DAY = 50;
-const FLU_END_DAY = 70;
-const FLU_RESPIRATORY_LIKELIHOOD = 60;
-const FLU_WAIT_MULT = 2;
+const ms = (iso) => dayjs.utc(iso).valueOf();
+const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
+const MIN_MS = 60_000;
+const WINDOW_DAYS = 120;
 
-const EXPERIENCED_CONSULT_THRESHOLD = 12;
-const EXPERIENCED_SATISFACTION_MIN = 4.0;
-const EXPERIENCED_SATISFACTION_MAX = 5.0;
+// ── WEEKLY AND DAILY RHYTHM (soup) ──
+// Sun..Sat. Monday is the busiest care day (weekend symptoms plus offices
+// reopening); Saturday is the quietest.
+const DOW_WEIGHTS = [0.92, 1.22, 1.08, 1.02, 1.0, 0.94, 0.82];
+// UTC hours. Patients are in US time zones: 7am-11pm local is about 11-07 UTC.
+const HOUR_WEIGHTS = [0.85, 0.72, 0.58, 0.42, 0.28, 0.18, 0.13, 0.11, 0.11, 0.15, 0.26, 0.45,
+	0.66, 0.86, 1.0, 1.0, 0.97, 0.94, 0.92, 0.9, 0.9, 0.92, 0.95, 0.92];
+const HOUR_MAX = Math.max(...HOUR_WEIGHTS);
+// primary care appointment start hours (UTC), US clinic day
+const APPT_HOURS = { 13: 6, 14: 9, 15: 10, 16: 10, 17: 9, 18: 9, 19: 9, 20: 9, 21: 8, 22: 6, 23: 4 };
+// therapy session start hours (UTC), US afternoons and evenings
+const THERAPY_HOURS = { 14: 4, 15: 6, 16: 7, 17: 7, 18: 7, 19: 7, 20: 7, 21: 8, 22: 9, 23: 10, 0: 10, 1: 8, 2: 5 };
 
-const VIDEO_FOLLOWUP_LIKELIHOOD = 60;
+// ── KNOBS ──
+// H1 Clearwell Async
+const ASYNC_SHARE = 0.5;             // share of minor-condition requests that go async once adoption is ramped
+const ASYNC_RAMP_DAYS = 14;
+const MINOR_REASONS = ["urinary", "skin_rash", "pink_eye", "allergy"];
+const ASYNC_REVIEW_MEDIAN_H = 2.5;   // request → async visit completed
 
-const CHRONIC_REFILL_MIN = 2;
-const CHRONIC_REFILL_MAX = 4;
-const CHRONIC_REFILL_INTERVAL_DAYS = 30;
+// H2 waiting-room threshold: start rate by estimated wait (piecewise linear)
+const PATIENT_WAIT_MIN = 10;         // up to here patients wait
+const GIVE_UP_WAIT_MIN = 20;         // from here the start rate is flat at the low level
+const START_RATE_SHORT = 0.93;
+const START_RATE_LONG = 0.62;
+const WAIT_MEDIAN_MIN = 7;           // urgent-care estimated wait median at an average hour
+const WAIT_SIGMA = 0.6;
 
-const NO_SHOW_EVENT_THRESHOLD = 15;
-const NO_SHOW_DROP_LIKELIHOOD = 25;
+// H3 staffing gap
+const GAP_WAIT_MULT = 2.2;
+const AGENCY_HOURS_SHARE = { urgent_care: 0.4, primary_care: 0.1, behavioral_health: 0 };
 
-const DOCTOR_EXPERIENCE_MIN = 15;
-const DOCTOR_EXPERIENCE_MAX = 30;
-const NURSE_EXPERIENCE_MIN = 3;
-const NURSE_EXPERIENCE_MAX = 15;
+// H4 Pickup Reminders experiment
+const PICKUP_EXPERIMENT = "Pickup Reminders";
+const PICKUP_VARIANT = "Text Reminders";
+const EXP_KEY = `Experiment: ${PICKUP_EXPERIMENT}`;
+const PICKUP_BASE = 0.64;            // share of prescriptions picked up (control)
+const REMINDER_PICKUP_MULT = 1.25;
+const REMINDER_DELAY_MULT = 0.7;     // prescription → pickup time
+const PICKUP_MEDIAN_H = 20;
+const PICKUP_SIGMA = 0.9;
+const PICKUP_MAX_H = 240;
+const REMINDER_AFTER_H = 20;
 
-const FREE_TIER_DROP_LIKELIHOOD = 30;
+// H5 bluetooth lapse
+const BT_LAPSE_SHARE = 0.4;
+const LAPSE_FROM_DAYS = 14;
+const LAPSE_LAST = "2026-09-02T00:00:00Z";
+const CELLULAR_SHARE = 0.45;         // of monitoring-program patients
+const PROGRAM_DROPOUT_SHARE = 0.15;  // realism: any device, members who stop logging during the window
 
-const TTC_PREMIUM_FACTOR = 0.67;
-const TTC_FREE_FACTOR = 1.4;
+// H6 no-shows by lead time
+const NOSHOW_BASE = 0.05;
+const NOSHOW_PER_DAY = 0.012;
+const LEAD_WEIGHTS = [6, 12, 12, 10, 9, 8, 7, 7, 5, 4, 4, 3, 3, 3, 4, 2, 2, 2, 1, 1, 1, 1]; // lead_days 0..21
 
-const CONSULT_SWEET_MIN = 3;
-const CONSULT_SWEET_MAX = 6;
-const CONSULT_OVER_THRESHOLD = 7;
-const CONSULT_FEE_BOOST = 1.25;
-const CONSULT_FOLLOWUP_STRETCH = 1.5;
+// H7 therapy first session
+const THERAPY_FIRST_MEDIAN_H = 96;
+const THERAPY_FIRST_SIGMA = 0.45;
+const SPECIFIC_THERAPIST_MULT = 2.5;
+const THERAPY_CLIENT_SHARE = 0.18;
+const SPECIFIC_THERAPIST_SHARE = 0.35;
+const THERAPY_NEW_SHARE = 0.5;        // established therapy clients who start therapy in the window (steady state: ongoing = weekly starts x mean course)
+const THERAPY_COURSE_MIN = 6;
+const THERAPY_COURSE_MAX = 16;
+const THERAPY_FIRST_NOSHOW = 0.08;
+const THERAPY_ATTEND = 0.9;
 
-// ── DATA ARRAYS ──
-// Generate consistent doctor/clinic IDs at module level
-const doctorIds = v.range(1, 120).map(() => `DR_${v.uid(6)}`);
-const clinicIds = v.range(1, 25).map(() => `CLINIC_${v.uid(4)}`);
+// H8 self-pay price cut
+const SELF_PAY_PRICE = [79, 59];     // urgent visit, before / from the change
+const REQUEST_RATE_INSURED = 0.72;   // visit requests per symptom check routed to a virtual visit
+const REQUEST_RATE_SELF_PAY = 0.42;
+const SELF_PAY_LIFT = 1.35;
 
-// ── HELPER FUNCTIONS ──
-function handleUserHooks(record) {
-	// H7: DOCTOR PROFILE SPECIALIZATION — doctors get a real specialty and
-	// senior years_experience. Nurses get mid-range experience. Patients
-	// stay at defaults.
-	if (record.role === "doctor") {
-		record.specialty = chance.pickone(["cardiology", "dermatology", "pediatrics", "psychiatry", "general_practice", "pulmonology", "endocrinology"]);
-		record.years_experience = chance.integer({ min: DOCTOR_EXPERIENCE_MIN, max: DOCTOR_EXPERIENCE_MAX });
-	} else if (record.role === "nurse") {
-		record.specialty = chance.pickone(["general_practice", "pediatrics", "emergency"]);
-		record.years_experience = chance.integer({ min: NURSE_EXPERIENCE_MIN, max: NURSE_EXPERIENCE_MAX });
-	} else {
-		record.years_experience = 0;
+// H9 respiratory season
+const REASON_WEIGHTS = { respiratory: 20, urinary: 10, skin_rash: 11, pink_eye: 4, allergy: 8, stomach: 11, minor_injury: 7, headache: 10, back_pain: 9, other: 10 };
+const S_RESP = REASON_WEIGHTS.respiratory / Object.values(REASON_WEIGHTS).reduce((a, b) => a + b, 0);
+const RESP_WAVE_MULT = 2.5;
+
+// H10 Spanish-language routing
+const SPANISH_WAIT_MULT = 1.6;
+const SPANISH_SHARE = 0.16;
+const SPANISH_HOURS_SHARE = { urgent_care: 0.08, primary_care: 0.12, behavioral_health: 0.1 };
+
+// realism (not stories)
+const TRIAGE_WEIGHTS = { virtual_visit: 86, self_care: 9, in_person: 5 };
+const RX_RATE = { respiratory: 0.45, urinary: 0.88, skin_rash: 0.6, pink_eye: 0.8, allergy: 0.55, stomach: 0.4, minor_injury: 0.3, headache: 0.35, back_pain: 0.45, other: 0.3 };
+const PRIMARY_RX_RATE = 0.4;
+const MEDS = {
+	respiratory: ["antibiotic", "antiviral", "inhaler", "cough_suppressant"],
+	urinary: ["antibiotic"],
+	skin_rash: ["topical_steroid", "antifungal", "antihistamine"],
+	pink_eye: ["antibiotic_eye_drops"],
+	allergy: ["antihistamine", "nasal_steroid"],
+	stomach: ["antiemetic", "acid_reducer"],
+	minor_injury: ["nsaid", "muscle_relaxant"],
+	headache: ["nsaid", "triptan"],
+	back_pain: ["nsaid", "muscle_relaxant"],
+	other: ["nsaid", "antihistamine"],
+	primary: ["blood_pressure", "diabetes", "cholesterol", "thyroid", "antidepressant", "other_refill"],
+};
+const RATING_WEIGHTS = { 1: 4, 2: 6, 3: 14, 4: 32, 5: 44 };
+const PHARMACY_WEIGHTS = { chain: 65, grocery: 20, independent: 15 };
+const PREWINDOW_DAYS = 21;
+const BORN_FIRST_VISIT_SHARE = 0.55;
+const BORN_PCT = 35;
+
+// warehouse economics
+const HOURS_PER_DEMAND = { urgent_care: 0.55, primary_care: 0.8, behavioral_health: 1.05 }; // clinician hours per unit of demand (incl. charting, idle)
+const HOURS_NOISE = 0.1;
+const NURSE_LINE_SHARE = 0.04;       // billed encounters from the nurse phone line (not in the app)
+const VOID_SHARE = 0.02;
+const POSTING_LAG_SHARE = 0.18;     // mean share of a day's visits whose claims post the next day
+const billingCarry = new Map();      // per series: visits carried to the next posting day
+const PAYER_RATE = { // contracted payer reimbursement per visit, USD
+	urgent_care: { employer: 0, commercial: 68, medicare: 52, medicaid: 38, self_pay: 0 },
+	primary_care: { employer: 0, commercial: 105, medicare: 88, medicaid: 62, self_pay: 0 },
+	behavioral_health: { employer: 0, commercial: 95, medicare: 80, medicaid: 60, self_pay: 0 },
+};
+const SELF_PAY_LIST = { primary_care: 99, behavioral_health: 120 };
+const COPAY_BY_PLAN = { commercial: [0, 10, 25, 40], medicare: [0, 0, 15], medicaid: [0], employer: [0] };
+
+// ── DATA ──
+const STATES_EN = { CA: 14, TX: 10, FL: 9, NY: 8, IL: 6, PA: 6, OH: 5, GA: 5, NC: 5, MI: 4, WA: 4, AZ: 4, CO: 4, MA: 4, VA: 4, NJ: 4, TN: 4 };
+const STATES_ES = { CA: 26, TX: 24, FL: 16, NY: 8, AZ: 7, IL: 6, NJ: 5, CO: 4, GA: 2, NC: 2 };
+
+// ── HELPERS ──
+const salt = (uid, tag) => hashFloat(`${uid}|${tag}`);
+const T = (e) => dayjs.utc(e.time).valueOf();
+const iso = (t) => new Date(Math.round(t)).toISOString();
+const dayKey = (t) => new Date(t).toISOString().slice(0, 10);
+const dayStart = (t) => Math.floor(t / DAY_MS) * DAY_MS;
+const round2 = (n) => Math.round(n * 100) / 100;
+const logNormal = (sigma) => Math.exp(chance.normal({ mean: 0, dev: sigma }));
+const jitter = (key, spread) => 1 + (hashFloat(key) - 0.5) * 2 * spread;
+const rand = () => chance.floating({ min: 0, max: 1 });
+const pickWeighted = (obj, r) => {
+	const entries = Object.entries(obj);
+	const total = entries.reduce((s, [, w]) => s + w, 0);
+	let acc = 0;
+	for (const [k, w] of entries) {
+		acc += w / total;
+		if (r < acc) return k;
 	}
-	return record;
+	return entries[entries.length - 1][0];
+};
+const inGap = (t) => t >= ms(STAFFING_GAP_START) && t < ms(STAFFING_GAP_END);
+const selfPayPrice = (t) => SELF_PAY_PRICE[t >= ms(SELF_PAY_PRICE_CHANGE) ? 1 : 0];
+const startRate = (w) => (w <= PATIENT_WAIT_MIN ? START_RATE_SHORT
+	: w >= GIVE_UP_WAIT_MIN ? START_RATE_LONG
+		: START_RATE_SHORT + (START_RATE_LONG - START_RATE_SHORT) * (w - PATIENT_WAIT_MIN) / (GIVE_UP_WAIT_MIN - PATIENT_WAIT_MIN));
+const asyncShare = (t) => (t < ms(ASYNC_LAUNCH) ? 0 : ASYNC_SHARE * Math.min(1, (t - ms(ASYNC_LAUNCH)) / (ASYNC_RAMP_DAYS * DAY_MS)));
+const waveRamp = (t) => (t < ms(RESP_WAVE_START) ? 0 : Math.min(1, (t - ms(RESP_WAVE_START)) / (ms(RESP_WAVE_PEAK) - ms(RESP_WAVE_START))));
+const noShowRate = (lead) => NOSHOW_BASE + NOSHOW_PER_DAY * lead;
+const isClinicClosed = (t) => CLINIC_HOLIDAYS.includes(dayKey(t)) || new Date(t).getUTCDay() === 0;
+const LEAD_TABLE = Object.fromEntries(LEAD_WEIGHTS.map((w, i) => [i, w]));
+// sessions left for a client mid-course: P(left = j) ∝ P(course ≥ j) (equilibrium residual)
+const RESIDUAL_WEIGHTS = Object.fromEntries(Array.from({ length: THERAPY_COURSE_MAX }, (_, i) => {
+	const j = i + 1;
+	return [j, Math.round(1000 * Math.min(1, (THERAPY_COURSE_MAX + 1 - j) / (THERAPY_COURSE_MAX - THERAPY_COURSE_MIN + 1)))];
+}));
+// a time at one of the allowed UTC hours, on the same UTC day as t (quarter-hour starts)
+const atHour = (t, hoursObj) => dayStart(t) + Number(pickWeighted(hoursObj, rand())) * HOUR_MS + chance.integer({ min: 0, max: 3 }) * 15 * MIN_MS;
+// the allowed half-hour start nearest to t (keeps the gap it was given within a few hours)
+const nearestHour = (t, hoursObj) => {
+	const allowed = Object.keys(hoursObj).map(Number);
+	let best = t, bestD = Infinity;
+	for (let d = -1; d <= 1; d++) {
+		for (const h of allowed) {
+			for (const m of [0, 30]) {
+				const c = dayStart(t) + d * DAY_MS + h * HOUR_MS + m * MIN_MS;
+				const dist = Math.abs(c - t);
+				if (dist < bestD) { bestD = dist; best = c; }
+			}
+		}
+	}
+	return best;
+};
+
+const URGENT_STEPS = ["symptom check completed", "visit requested", "waiting room left", "visit started", "visit completed", "prescription sent", "prescription picked up", "reminder sent", "visit rated"];
+const PRIMARY_STEPS = ["appointment booked", "reminder sent", "appointment missed", "visit started", "visit completed", "prescription sent", "prescription picked up", "visit rated"];
+const UNIT_EVENTS = new Set([...URGENT_STEPS, ...PRIMARY_STEPS]);
+const THERAPY_STEPS = new Set(["therapy intake completed", "therapy session booked", "therapy session completed"]);
+const DEVICE_KEYS = ["device_id", "os", "model", "screen_height", "screen_width", "carrier", "radio", "wifi", "manufacturer", "brand", "app_version_string"];
+const stripDevice = (e) => { if (e) for (const k of DEVICE_KEYS) delete e[k]; };
+
+function handleUserHook(profile, meta) {
+	const uid = profile.distinct_id;
+	const chronic = profile.chronic_program && profile.chronic_program !== "none";
+	// monitoring-program patients skew older
+	if (chronic) profile.age_band = pickWeighted({ "26-35": 6, "36-45": 14, "46-55": 26, "56-64": 28, "65+": 26 }, salt(uid, "age"));
+	profile.coverage_type = profile.age_band === "65+"
+		? pickWeighted({ medicare: 82, commercial: 8, self_pay: 6, medicaid: 4 }, salt(uid, "coverage"))
+		: pickWeighted({ employer: 40, commercial: 30, medicaid: 12, self_pay: 18 }, salt(uid, "coverage"));
+	profile.preferred_language = salt(uid, "language") < SPANISH_SHARE ? "es" : "en";
+	profile.state = pickWeighted(profile.preferred_language === "es" ? STATES_ES : STATES_EN, salt(uid, "state"));
+	profile.device_connectivity = chronic ? (salt(uid, "device") < CELLULAR_SHARE ? "cellular" : "bluetooth") : "none";
+	profile.therapy_client = salt(uid, "therapy") < THERAPY_CLIENT_SHARE;
+	profile.therapist_preference = profile.therapy_client
+		? (salt(uid, "therapist") < SPECIFIC_THERAPIST_SHARE ? "specific_therapist" : "first_available")
+		: "none";
+	profile.acquisition_channel = profile.coverage_type === "employer"
+		? pickWeighted({ employer_benefit: 70, organic: 15, google_search: 10, meta_ads: 5 }, salt(uid, "channel"))
+		: pickWeighted({ organic: 30, google_search: 30, meta_ads: 18, insurer_referral: 14, clinician_referral: 8 }, salt(uid, "channel"));
+	if (meta.userIsBornInDataset) {
+		profile.member_since = dayKey(dayjs.utc(profile.created ?? meta.user.created).valueOf());
+	} else {
+		const tenureDays = Math.floor(salt(uid, "tenure") * (ms("2026-05-01T00:00:00Z") - ms("2023-03-01T00:00:00Z")) / DAY_MS);
+		profile.member_since = dayjs.utc("2023-03-01T00:00:00Z").add(tenureDays, "day").format("YYYY-MM-DD");
+	}
+	return profile;
 }
 
-function handleEverythingHooks(record, meta) {
-	if (!record.length) return record;
+function estimatedWait(t, profile) {
+	const h = new Date(t).getUTCHours();
+	const hourFactor = 0.7 + 0.6 * HOUR_WEIGHTS[h] / HOUR_MAX;
+	let w = WAIT_MEDIAN_MIN * logNormal(WAIT_SIGMA) * hourFactor;
+	if (inGap(t)) w *= GAP_WAIT_MULT;
+	if (profile.preferred_language === "es") w *= SPANISH_WAIT_MULT;
+	return Math.max(1, Math.min(180, Math.round(w)));
+}
+
+function patientCost(profile, serviceLine, t) {
+	const cov = profile.coverage_type;
+	if (cov === "self_pay") return serviceLine === "urgent_care" ? selfPayPrice(t) : SELF_PAY_LIST[serviceLine];
+	const plans = COPAY_BY_PLAN[cov] || [0];
+	return plans[Math.floor(salt(profile.distinct_id, "copay") * plans.length)];
+}
+
+function handleEverything(events, meta) {
+	if (!events.length) return events;
 	const profile = meta.profile;
-	const datasetStart = dayjs.unix(meta.datasetStart).utc();
-	const FLU_START = datasetStart.add(FLU_START_DAY, "days");
-	const FLU_END = datasetStart.add(FLU_END_DAY, "days");
+	const uid = profile.distinct_id;
+	const BEGIN = ms(DATASET_START), END = ms(DATASET_END);
+	const signup = events.find((e) => e.event === "account created");
+	const birthMs = signup ? T(signup) : null;
+	const variant = profile[EXP_KEY] !== undefined ? profile[EXP_KEY] : null;
 
-	// ── SUPER-PROP STAMPING ──────────────────────────
-	// Stamp superProps from profile so they are consistent per-user.
-	if (profile) {
-		const tier = profile.subscription_tier;
-		const plat = profile.Platform;
-		record.forEach(e => {
-			if (tier) e.subscription_tier = tier;
-			if (plat) e.Platform = plat;
-		});
+	// ── templates and engine units ──
+	const templates = {};
+	const units = new Map(); // visit_id → { kind, src: {event: ev} }
+	const exposures = [];
+	const therapyRuns = [];
+	const readings = [];
+	const keep = [];
+	for (const e of events) {
+		if (!templates[e.event]) templates[e.event] = { ...e };
+		if (e.event === "$experiment_started") { exposures.push(e); continue; }
+		if (UNIT_EVENTS.has(e.event) && e.visit_id) {
+			if (!units.has(e.visit_id)) units.set(e.visit_id, { src: {} });
+			const un = units.get(e.visit_id);
+			if (!un.src[e.event]) un.src[e.event] = e;
+			if (e.event === "symptom check completed") un.kind = "urgent";
+			if (e.event === "appointment booked") un.kind = "primary";
+			continue;
+		}
+		if (THERAPY_STEPS.has(e.event)) { if (e.event === "therapy intake completed" && T(e) >= BEGIN) therapyRuns.push(T(e)); continue; }
+		if (e.event === "reading logged") { readings.push(e); continue; }
+		keep.push(e);
 	}
 
-	// HOOK 9: BOOKING FUNNEL TTC BY TIER (property scaling)
-	// Premium users get shorter wait_time_hours (0.67x) and duration_minutes (0.67x).
-	// Free users get longer wait_time_hours (1.4x) and duration_minutes (1.4x).
-	// Basic users stay at baseline. SQL-measurable via AVG(wait_time_hours) broken by tier.
-	if (profile) {
-		const userTier = profile.subscription_tier;
-		const ttcFactor = userTier === "premium" ? TTC_PREMIUM_FACTOR : userTier === "free" ? TTC_FREE_FACTOR : 1.0;
-		if (ttcFactor !== 1.0) {
-			// Timestamp shift: affects Mixpanel funnel TTC
-			const bookingSeq = findFirstSequence(
-				record,
-				["appointment booked", "consultation completed", "follow up scheduled"],
-				60 * 24 * 30
-			);
-			if (bookingSeq) scaleFunnelTTC(bookingSeq, ttcFactor);
-			// Property scale: affects Insights AVG reports
-			record.forEach(e => {
-				if (e.event === "appointment booked" && typeof e.wait_time_hours === "number") {
-					e.wait_time_hours = Math.round(e.wait_time_hours * ttcFactor * 10) / 10;
-				}
-				if (e.event === "consultation completed" && typeof e.duration_minutes === "number") {
-					e.duration_minutes = Math.round(e.duration_minutes * ttcFactor);
-				}
+	// ── slots: one per visit ──
+	const slots = [];
+	for (const [id, un] of units) {
+		if (!un.kind) continue;
+		const first = un.kind === "urgent" ? un.src["symptom check completed"] : un.src["appointment booked"];
+		slots.push({ kind: un.kind, t0: T(first), id, src: un.src, reason: un.kind === "urgent" ? first.reason_category : null });
+	}
+	slots.sort((a, b) => a.t0 - b.t0);
+	const urgentIn = slots.filter((s) => s.kind === "urgent");
+	const primaryIn = slots.filter((s) => s.kind === "primary");
+
+	// new patients: many start their first symptom check right after signing up
+	if (birthMs && urgentIn.length && salt(uid, "first-visit") < BORN_FIRST_VISIT_SHARE) {
+		urgentIn[0].t0 = birthMs + chance.integer({ min: 5, max: 40 }) * MIN_MS;
+	}
+
+	// warm start: established patients have visits in the 3 weeks before June 4
+	if (!signup) {
+		for (const [list, kind] of [[urgentIn, "urgent"], [primaryIn, "primary"]]) {
+			if (!list.length) continue;
+			const x = list.length * PREWINDOW_DAYS / WINDOW_DAYS;
+			const n = Math.floor(x) + (rand() < x % 1 ? 1 : 0);
+			for (let i = 0; i < n; i++) {
+				const ref = list[chance.integer({ min: 0, max: list.length - 1 })];
+				const weeks = Math.floor((ref.t0 - BEGIN) / (7 * DAY_MS)) + chance.integer({ min: 1, max: 3 });
+				const t0 = ref.t0 - weeks * 7 * DAY_MS;
+				slots.push({ kind, t0, id: null, src: null, reason: kind === "urgent" ? pickWeighted(REASON_WEIGHTS, rand()) : null, pre: true });
+			}
+		}
+	}
+
+	// H9: respiratory season — extra respiratory urgent visits in proportion to activity
+	for (const s of urgentIn) {
+		const r = waveRamp(s.t0);
+		if (r <= 0) continue;
+		const x = (RESP_WAVE_MULT - 1) * S_RESP * r;
+		const n = Math.floor(x) + (rand() < x % 1 ? 1 : 0);
+		for (let i = 0; i < n; i++) {
+			const t0 = Math.min(END - 2 * HOUR_MS, s.t0 + chance.integer({ min: 0, max: 12 * 60 }) * MIN_MS);
+			slots.push({ kind: "urgent", t0: Math.max(s.t0, t0), id: null, src: null, reason: "respiratory", extra: true });
+		}
+	}
+
+	// ── materialize visits ──
+	const out = [];
+	const usedExposures = [];
+	let exposureIdx = 0;
+
+	function afterVisit(put, serviceLine, tDone, reason, tReq) {
+		const rxP = serviceLine === "urgent_care" ? RX_RATE[reason] ?? 0.3 : PRIMARY_RX_RATE;
+		if (rand() < 0.35) {
+			put("visit rated", tDone + chance.integer({ min: 2, max: 90 }) * MIN_MS, {
+				service_line: serviceLine,
+				rating: Number(pickWeighted(RATING_WEIGHTS, rand())),
+				would_recommend: rand() < 0.82,
 			});
 		}
-	}
-
-	// HOOK 1: AFTER-HOURS SURGE PRICING — consultations 7PM-7AM
-	// UTC get consultation_fee 1.5x. No flag — discover via HOD chart.
-	// Only "consultation completed" declares consultation_fee ("appointment
-	// booked" was a dead branch — its guard on e.consultation_fee never held).
-	// Runs after H9's timestamp shift, so the hour check sees final times.
-	record.forEach(e => {
-		if (e.event === "consultation completed") {
-			const hour = new Date(e.time).getUTCHours();
-			if ((hour >= AFTER_HOURS_START || hour < AFTER_HOURS_END) && e.consultation_fee) {
-				e.consultation_fee = Math.floor(e.consultation_fee * AFTER_HOURS_FEE_MULT);
-			}
+		if (rand() >= rxP) return;
+		const tRx = tDone + chance.integer({ min: 3, max: 25 }) * MIN_MS;
+		const meds = MEDS[serviceLine === "urgent_care" ? reason : "primary"] || MEDS.other;
+		const pharmacy = pickWeighted(PHARMACY_WEIGHTS, rand());
+		put("prescription sent", tRx, { service_line: serviceLine, medication_class: meds[chance.integer({ min: 0, max: meds.length - 1 })], pharmacy_type: pharmacy });
+		// H4: urgent-care prescriptions from requests on or after the test start are in the test
+		const inTest = serviceLine === "urgent_care" && variant !== null && tReq >= ms(PICKUP_TEST_START) && exposures.length > 0;
+		const isReminder = inTest && variant === PICKUP_VARIANT;
+		if (inTest && tRx + 1000 <= END) {
+			const ex = exposures[exposureIdx++] || cloneEvent(exposures[0], { time: iso(tRx + 1000) });
+			ex.time = iso(tRx + 1000);
+			usedExposures.push(ex);
 		}
-	});
-
-	// HOOK 2: FLU SEASON SPIKE — d50-70 respiratory dominates, wait_time doubles.
-	// UTC parses throughout — a machine-local dayjs() here would move the
-	// window boundaries by the generating machine's TZ offset, breaking the
-	// same-seed-same-output determinism promise across machines.
-	record.forEach(e => {
-		if (e.event !== "appointment booked") return;
-		const t = dayjs.utc(e.time);
-		if (t.isAfter(FLU_START) && t.isBefore(FLU_END)) {
-			if (chance.bool({ likelihood: FLU_RESPIRATORY_LIKELIHOOD })) e.condition_type = "respiratory";
-			if (e.condition_type === "respiratory") {
-				e.wait_time_hours = Math.floor((e.wait_time_hours || 12) * FLU_WAIT_MULT);
-			}
+		const picked = rand() < PICKUP_BASE * (isReminder ? REMINDER_PICKUP_MULT : 1);
+		const delayH = Math.min(PICKUP_MAX_H, PICKUP_MEDIAN_H * logNormal(PICKUP_SIGMA) * (isReminder ? REMINDER_DELAY_MULT : 1));
+		if (isReminder && (!picked || delayH > REMINDER_AFTER_H)) {
+			stripDevice(put("reminder sent", tRx + REMINDER_AFTER_H * HOUR_MS, { reminder_type: "rx_pickup", channel: "sms" }));
 		}
-	});
-
-	// ── HOOK 8: FREE-TIER CONVERSION DROP ────────────
-	// Free-tier users lose ~30% of "consultation completed" events
-	// (last step of Booking to Consultation funnel), simulating
-	// lower conversion for non-paying patients.
-	if (profile && profile.subscription_tier === "free" && chance.bool({ likelihood: FREE_TIER_DROP_LIKELIHOOD })) {
-		record = record.filter(e => e.event !== "consultation completed");
+		if (picked) put("prescription picked up", tRx + delayH * HOUR_MS, { service_line: serviceLine, pharmacy_type: pharmacy });
 	}
 
-	// ── HOOK 3: EXPERIENCED DOCTOR SATISFACTION ──────
-	// Users with >12 consultation events get boosted satisfaction scores.
-	let consultCount = 0;
-	record.forEach(e => {
-		if (e.event === "consultation completed") consultCount++;
-	});
-
-	if (consultCount > EXPERIENCED_CONSULT_THRESHOLD) {
-		record.forEach(e => {
-			if (e.event === "consultation completed") {
-				e.satisfaction_score = chance.floating({ min: EXPERIENCED_SATISFACTION_MIN, max: EXPERIENCED_SATISFACTION_MAX, fixed: 1 });
+	function buildUrgent(s, put) {
+		const reason = s.reason || "other";
+		const triage = pickWeighted(TRIAGE_WEIGHTS, rand());
+		put("symptom check completed", s.t0, { reason_category: reason, triage_result: triage });
+		if (triage !== "virtual_visit") return;
+		const selfPay = profile.coverage_type === "self_pay";
+		const pReq = selfPay ? REQUEST_RATE_SELF_PAY * (s.t0 >= ms(SELF_PAY_PRICE_CHANGE) ? SELF_PAY_LIFT : 1) : REQUEST_RATE_INSURED;
+		if (rand() >= pReq) return;
+		const tReq = s.t0 + chance.integer({ min: 2, max: 12 }) * MIN_MS;
+		const isAsync = MINOR_REASONS.includes(reason) && rand() < asyncShare(tReq);
+		const visitType = isAsync ? "async" : (rand() < 0.72 ? "video" : "phone");
+		const base = { service_line: "urgent_care", visit_type: visitType, reason_category: reason };
+		let tDone;
+		if (isAsync) {
+			put("visit requested", tReq, { ...base, estimated_wait_min: 0, patient_cost_usd: patientCost(profile, "urgent_care", tReq) });
+			tDone = tReq + Math.min(20, Math.max(0.5, ASYNC_REVIEW_MEDIAN_H * logNormal(0.6))) * HOUR_MS;
+			put("visit completed", tDone, { ...base, duration_min: chance.integer({ min: 3, max: 9 }), clinician_type: pickWeighted({ nurse_practitioner: 70, physician_assistant: 20, physician: 10 }, rand()) });
+		} else {
+			const est = estimatedWait(tReq, profile);
+			put("visit requested", tReq, { ...base, estimated_wait_min: est, patient_cost_usd: patientCost(profile, "urgent_care", tReq) });
+			// H2: the start rate depends on the estimated wait
+			if (rand() >= startRate(est)) {
+				const waited = Math.max(1, Math.round(est * chance.floating({ min: 0.3, max: 1.2 })));
+				put("waiting room left", tReq + waited * MIN_MS + chance.integer({ min: 0, max: 59 }) * 1000, { service_line: "urgent_care", minutes_waited: waited });
+				return;
 			}
-		});
+			const actual = Math.max(1, Math.round(est * logNormal(0.25)));
+			const tStart = tReq + actual * MIN_MS + chance.integer({ min: 0, max: 59 }) * 1000;
+			put("visit started", tStart, { service_line: "urgent_care", visit_type: visitType, wait_min: actual });
+			const dur = Math.max(4, Math.min(40, Math.round((visitType === "video" ? 11 : 8) * logNormal(0.35))));
+			tDone = tStart + dur * MIN_MS;
+			put("visit completed", tDone, { ...base, duration_min: dur, clinician_type: pickWeighted({ nurse_practitioner: 45, physician: 35, physician_assistant: 20 }, rand()) });
+		}
+		afterVisit(put, "urgent_care", tDone, reason, tReq);
 	}
 
-	// ── HOOK 4: VIDEO CONSULTATION FOLLOW-UP LIFT ────
-	// Patients with video consultations get 2x follow-up events.
-	const hasVideoConsult = record.some(e =>
-		e.event === "consultation completed" && e.consultation_mode === "video"
-	);
-	if (hasVideoConsult) {
-		const templateFollowUp = record.find(e => e.event === "follow up scheduled");
-		if (templateFollowUp) {
-			const videoConsults = record.filter(e =>
-				e.event === "consultation completed" && e.consultation_mode === "video"
-			);
-			videoConsults.forEach(vc => {
-				if (chance.bool({ likelihood: VIDEO_FOLLOWUP_LIKELIHOOD })) {
-					record.push({
-						...templateFollowUp,
-						time: dayjs(vc.time).add(chance.integer({ min: 1, max: 7 }), "days").toISOString(),
-						user_id: vc.user_id,
-						consultation_mode: "video",
-						days_until_followup: chance.integer({ min: 3, max: 14 }),
-						// fresh insert_id: the engine stamps insert_id at generation
-						// (lib/generators/events.js), so a bare spread copies the
-						// template's id and Mixpanel's $insert_id dedupe would
-						// silently drop every clone after the first
-						insert_id: chance.guid(),
-					});
-				}
-			});
+	function buildPrimary(s, put) {
+		// the scheduler offers open days only (closed Sundays and US holidays):
+		// a closed day is never chosen, so the patient picks another lead time
+		const pickSlot = () => {
+			const l = Number(pickWeighted(LEAD_TABLE, rand()));
+			return l === 0
+				? Math.ceil((s.t0 + chance.integer({ min: 60, max: 240 }) * MIN_MS) / (15 * MIN_MS)) * 15 * MIN_MS
+				: atHour(dayStart(s.t0) + l * DAY_MS, APPT_HOURS);
+		};
+		let apptT = pickSlot();
+		for (let tries = 0; tries < 20 && isClinicClosed(apptT); tries++) apptT = pickSlot();
+		while (isClinicClosed(apptT)) apptT += DAY_MS;
+		const lead = Math.round((dayStart(apptT) - dayStart(s.t0)) / DAY_MS);
+		const visitType = rand() < 0.8 ? "video" : "phone";
+		const reason = pickWeighted({ annual_checkup: 22, chronic_followup: 26, medication_review: 20, new_concern: 22, lab_review: 10 }, rand());
+		put("appointment booked", s.t0, { service_line: "primary_care", appointment_reason: reason, visit_type: visitType, lead_days: lead, patient_cost_usd: patientCost(profile, "primary_care", s.t0) });
+		if (lead >= 1 && apptT - DAY_MS > s.t0) {
+			stripDevice(put("reminder sent", apptT - DAY_MS, { reminder_type: "appointment", channel: rand() < 0.6 ? "sms" : "push" }));
+		}
+		// H6: the no-show chance rises with lead time
+		if (rand() < noShowRate(lead)) {
+			stripDevice(put("appointment missed", apptT + 15 * MIN_MS, { service_line: "primary_care", lead_days: lead }));
+			return;
+		}
+		const wait = chance.integer({ min: 0, max: 8 });
+		const tStart = apptT + wait * MIN_MS + chance.integer({ min: 0, max: 59 }) * 1000;
+		put("visit started", tStart, { service_line: "primary_care", visit_type: visitType, wait_min: wait });
+		const dur = Math.max(8, Math.min(45, Math.round(18 * logNormal(0.3))));
+		const tDone = tStart + dur * MIN_MS;
+		put("visit completed", tDone, { service_line: "primary_care", visit_type: visitType, reason_category: reason, duration_min: dur, clinician_type: pickWeighted({ physician: 60, nurse_practitioner: 40 }, rand()) });
+		afterVisit(put, "primary_care", tDone, null, s.t0);
+	}
+
+	for (const s of slots) {
+		const id = s.id || `v_${chance.hash({ length: 12 })}`;
+		const put = (step, t, set) => {
+			if (t > END) return null;
+			let ev = s.src && s.src[step];
+			if (ev) s.src[step] = null; // each engine event is used once
+			if (!ev) {
+				if (!templates[step]) return null;
+				ev = cloneEvent(templates[step], { time: iso(t) });
+			}
+			ev.time = iso(t);
+			ev.visit_id = id;
+			Object.assign(ev, set);
+			out.push(ev);
+			return ev;
+		};
+		if (s.kind === "urgent") buildUrgent(s, put);
+		else buildPrimary(s, put);
+	}
+
+	// ── therapy: intake, first session, weekly course ──
+	const therapyOut = [];
+	if (profile.therapy_client && !templates["therapy session completed"]) {
+		// no therapy activity in the window at all: not a therapy client
+		profile.therapy_client = false;
+		profile.therapist_preference = "none";
+	} else if (profile.therapy_client) {
+		const tput = (step, t, set) => {
+			if (t > END || !templates[step]) return;
+			const ev = cloneEvent(templates[step], { time: iso(t) });
+			ev.time = iso(t);
+			Object.assign(ev, { service_line: "behavioral_health" }, set);
+			therapyOut.push(ev);
+		};
+		const course = THERAPY_COURSE_MIN + Math.floor(salt(uid, "course") * (THERAPY_COURSE_MAX - THERAPY_COURSE_MIN + 1));
+		const pref = profile.therapist_preference;
+		const starter = Boolean(signup) || salt(uid, "therapy-new") < THERAPY_NEW_SHARE;
+		let tNext = null;
+		let k = 1;
+		if (starter && therapyRuns.length) {
+			// born clients start at their first therapy visit; established clients at a random one
+			const tIntake = signup ? Math.min(...therapyRuns) : therapyRuns[Math.floor(salt(uid, "therapy-start") * therapyRuns.length)];
+			tput("therapy intake completed", tIntake, { therapist_preference: pref, primary_concern: pickWeighted({ anxiety: 34, depression: 26, stress: 18, relationships: 10, sleep: 7, grief: 5 }, rand()) });
+			// H7: time to the first session depends on therapist choice
+			const dH = Math.min(45 * 24, THERAPY_FIRST_MEDIAN_H * logNormal(THERAPY_FIRST_SIGMA) * (pref === "specific_therapist" ? SPECIFIC_THERAPIST_MULT : 1));
+			let tFirst = nearestHour(tIntake + dH * HOUR_MS, THERAPY_HOURS);
+			if (tFirst < tIntake + 2 * HOUR_MS) tFirst += DAY_MS;
+			const tBooked = tIntake + chance.integer({ min: 10, max: 180 }) * MIN_MS;
+			tput("therapy session booked", tBooked, { session_number: 1, days_until_session: Math.max(0, Math.round((tFirst - tBooked) / DAY_MS)) });
+			if (rand() >= THERAPY_FIRST_NOSHOW) tNext = tFirst;
+		} else if (starter) {
+			// a would-be starter with no therapy visit in the window is not a therapy client
+			profile.therapy_client = false;
+			profile.therapist_preference = "none";
+		} else {
+			// ongoing course at the window start: sessions left follow the steady-state
+			// residual of the course length, so weekly sessions stay level
+			tNext = atHour(BEGIN + Math.floor(salt(uid, "therapy-phase") * 7) * DAY_MS, THERAPY_HOURS);
+			const left = Number(pickWeighted(RESIDUAL_WEIGHTS, salt(uid, "therapy-left")));
+			k = Math.max(1, course - left + 1);
+			if (k === 1) k = 2; // an ongoing client is past the first session
+		}
+		while (tNext !== null && tNext <= END && k <= course) {
+			if (k === 1 || rand() < THERAPY_ATTEND) tput("therapy session completed", tNext, { session_number: k, duration_min: chance.integer({ min: 45, max: 55 }) });
+			const nextT = atHour(dayStart(tNext) + chance.integer({ min: 6, max: 8 }) * DAY_MS, THERAPY_HOURS);
+			const tBook = tNext + chance.integer({ min: 50, max: 70 }) * MIN_MS;
+			k++;
+			if (k <= course) tput("therapy session booked", tBook, { session_number: k, days_until_session: Math.round((nextT - tBook) / DAY_MS) });
+			tNext = nextT;
 		}
 	}
 
-	// ── HOOK 5: CHRONIC CONDITION REFILL CHAIN ───────
-	// Patients with chronic prescriptions get refills every ~30 days.
-	const chronicRxs = record.filter(e =>
-		e.event === "prescription issued" && e.condition_type === "chronic"
-	);
-	if (chronicRxs.length > 0) {
-		const templateRefill = record.find(e => e.event === "prescription refill");
-		if (templateRefill) {
-			chronicRxs.forEach(rx => {
-				const rxTime = dayjs(rx.time);
-				const refillsToAdd = chance.integer({ min: CHRONIC_REFILL_MIN, max: CHRONIC_REFILL_MAX });
-				for (let i = 1; i <= refillsToAdd; i++) {
-					record.push({
-						...templateRefill,
-						// clones past datasetEnd are dropped by the engine's
-						// unconditional future-time guard — late-window chronic
-						// prescriptions keep fewer of their refills by design
-						time: rxTime.add(CHRONIC_REFILL_INTERVAL_DAYS * i + chance.integer({ min: -3, max: 3 }), "days").toISOString(),
-						user_id: rx.user_id,
-						condition_type: "chronic",
-						medication_type: "chronic_maintenance",
-						refill_count: i,
-						// fresh insert_id — same $insert_id dedupe rationale as H4
-						insert_id: chance.guid(),
-					});
-				}
-			});
+	// a client whose only remaining session was missed has no therapy activity in the window
+	if (profile.therapy_client && !therapyOut.length) {
+		profile.therapy_client = false;
+		profile.therapist_preference = "none";
+	}
+
+	// ── H5: readings, bluetooth lapse ──
+	let readOut = readings;
+	if (readings.length) {
+		const program = profile.chronic_program;
+		const conn = profile.device_connectivity;
+		const inWin = readings.map(T).filter((t) => t >= BEGIN);
+		const firstR = inWin.length ? Math.min(...inWin) : Infinity;
+		let lapseT = Infinity;
+		if (conn === "bluetooth" && salt(uid, "lapse") < BT_LAPSE_SHARE && Number.isFinite(firstR)) {
+			const from = firstR + LAPSE_FROM_DAYS * DAY_MS;
+			if (from < ms(LAPSE_LAST)) lapseT = from + salt(uid, "lapse-day") * (ms(LAPSE_LAST) - from);
+		}
+		// realism: some members of either device stop logging at any time in the window
+		if (salt(uid, "dropout") < PROGRAM_DROPOUT_SHARE && Number.isFinite(firstR)) {
+			lapseT = Math.min(lapseT, firstR + salt(uid, "dropout-day") * (END - firstR));
+		}
+		readOut = readings.filter((e) => T(e) < lapseT);
+		for (const e of readOut) {
+			e.reading_type = program === "diabetes" ? "glucose" : "blood_pressure";
+			e.in_range = rand() < (program === "diabetes" ? 0.58 : 0.64);
+			e.sync_method = conn;
 		}
 	}
 
-	// HOOK 6: OCCASIONAL PATIENT NO-SHOWS — low-activity users (< 15 events
-	// at this point in the pipeline, clones included) lose 25% of their
-	// consultations and get no_show=true stamped on 25% of their bookings
-	// (they booked but didn't show). no_show is DECLARED [false] on
-	// "appointment booked" (schema-first rule), so flipped rows are the only
-	// true values in the dataset. Because the flag is decided before any
-	// later deletion and every subsequent step only shrinks a user's stream,
-	// users with >= 15 output events provably carry zero no_show=true rows.
-	if (record.length < NO_SHOW_EVENT_THRESHOLD) {
-		for (let i = record.length - 1; i >= 0; i--) {
-			if (record[i].event === "consultation completed" && chance.bool({ likelihood: NO_SHOW_DROP_LIKELIHOOD })) {
-				record.splice(i, 1);
-			}
-		}
-		record.forEach(e => {
-			if (e.event === "appointment booked" && chance.bool({ likelihood: NO_SHOW_DROP_LIKELIHOOD })) {
-				e.no_show = true;
-			}
-		});
-	}
+	if (!usedExposures.length && profile[EXP_KEY] !== undefined) delete profile[EXP_KEY];
 
-	// HOOK 10: CONSULTATION-COUNT MAGIC NUMBER (no flags)
-	// Sweet 3-6 consultations → +25% on consultation_fee. Over 7+ →
-	// days_until_followup stretched 1.5x (over-consulted patients wait
-	// longer for the next visit). Counts run AFTER all filters (H8/H6)
-	// and nothing drops consultations later, so output-side consult
-	// counts rebuild these cohorts exactly.
-	const consultCt = record.filter(e => e.event === "consultation completed").length;
-	if (consultCt >= CONSULT_SWEET_MIN && consultCt <= CONSULT_SWEET_MAX) {
-		record.forEach(e => {
-			if (e.event === "consultation completed" && typeof e.consultation_fee === "number") {
-				e.consultation_fee = Math.round(e.consultation_fee * CONSULT_FEE_BOOST);
-			}
-		});
-	} else if (consultCt >= CONSULT_OVER_THRESHOLD) {
-		record.forEach(e => {
-			if (e.event === "follow up scheduled" && typeof e.days_until_followup === "number") {
-				e.days_until_followup = Math.round(e.days_until_followup * CONSULT_FOLLOWUP_STRETCH);
-			}
-		});
-	}
+	return keep.concat(out, usedExposures, therapyOut, readOut).filter((e) => T(e) >= BEGIN && T(e) <= END);
+}
 
-	return record;
+// warehouse rows: exogenous business facts layered on event-derived volumes
+function handleWarehouse(row, meta) {
+	if (meta.isBackfill) return row;
+	if (meta.metricName === "clinician_staffing_daily") {
+		// the source count (the day's care demand for the service line) becomes the
+		// staffing plan; agency hours lapse during the urgent-care staffing gap
+		const sl = row.service_line;
+		const k = `${row.date}|${sl}`;
+		const t = dayjs.utc(row.date).valueOf();
+		const closed = sl === "primary_care" && isClinicClosed(t);
+		const plan = closed ? 0 : row.clinician_hours * (HOURS_PER_DEMAND[sl] ?? 0.8) * jitter(`plan|${k}`, HOURS_NOISE) + 6 * jitter(`floor|${k}`, 0.3);
+		const agencyShare = AGENCY_HOURS_SHARE[sl] ?? 0;
+		const employed = plan * (1 - agencyShare);
+		const agency = sl === "urgent_care" && inGap(t) ? 0 : plan * agencyShare;
+		row.employed_clinician_hours = round2(employed);
+		row.agency_clinician_hours = round2(agency);
+		row.clinician_hours = round2(employed + agency);
+		row.spanish_speaking_clinician_hours = round2((employed + agency) * (SPANISH_HOURS_SHARE[sl] ?? 0.1) * jitter(`es|${k}`, 0.15));
+		row.clinicians_on_shift = Math.round((employed + agency) / 7.5);
+		return row;
+	}
+	if (meta.metricName === "visit_revenue_daily") {
+		const k = `${row.date}|${row.service_line}|${row.coverage_type}`;
+		// claims post on the day billing closes them: a share of each day's visits
+		// posts the next day (rows arrive in date order within a series)
+		if (meta.bucketIndex === 0 || !billingCarry.has(meta.seriesKey)) billingCarry.set(meta.seriesKey, 0);
+		const app = row.visits_billed;
+		const lagged = Math.round(app * POSTING_LAG_SHARE * jitter(`lag|${k}`, 0.8));
+		const posted = app - lagged + billingCarry.get(meta.seriesKey);
+		billingCarry.set(meta.seriesKey, lagged);
+		const nurseLine = Math.round(app * NURSE_LINE_SHARE * jitter(`nurse|${k}`, 1) + (hashFloat(`nl|${k}`) < 0.3 ? 1 : 0));
+		const voided = Math.round(app * VOID_SHARE * jitter(`void|${k}`, 1));
+		const billed = Math.max(0, posted + nurseLine - voided);
+		row.visits_billed = billed;
+		row.patient_revenue_usd = round2(billed * row.avg_patient_charge_usd);
+		row.payer_revenue_usd = round2(billed * row.payer_rate_usd);
+		row.total_revenue_usd = round2(row.patient_revenue_usd + row.payer_revenue_usd);
+		return row;
+	}
+	return row;
+}
+
+// average patient charge per visit for a service line and coverage type on a day
+function avgPatientCharge(serviceLine, coverage, t) {
+	if (coverage === "self_pay") return serviceLine === "urgent_care" ? selfPayPrice(t) : SELF_PAY_LIST[serviceLine];
+	const plans = COPAY_BY_PLAN[coverage] || [0];
+	return round2(plans.reduce((a, b) => a + b, 0) / plans.length);
 }
 
 // ── CONFIG ──
 /** @type {Config} */
 const config = {
-	version: 2,
 	seed: SEED,
 	datasetStart: DATASET_START,
 	datasetEnd: DATASET_END,
-	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	numUsers: NUM_USERS,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	format: "json",
 	gzip: true,
-	credentials: {
-		token,
-	},
+	concurrency: 1,
+	writeToDisk: false,
+	macro: { percentUsersBornInDataset: BORN_PCT, bornRecentBias: 0, preExistingSpread: "uniform" },
+	soup: { dayOfWeekWeights: DOW_WEIGHTS, hourOfDayWeights: HOUR_WEIGHTS },
+	credentials: { token },
 	switches: {
 		hasSessionIds: true,
 		alsoInferFunnels: false,
-		hasLocation: true,
+		hasLocation: false,
 		hasAndroidDevices: true,
 		hasIOSDevices: true,
-		hasDesktopDevices: true,
+		hasDesktopDevices: false,
 		hasBrowser: false,
 		hasCampaigns: false,
 		isAnonymous: false,
 		hasAdSpend: false,
 		hasAvatar: true,
 	},
-	identity: {
-		avgDevicePerUser: 2,
-	},
-	concurrency: 1,
-	writeToDisk: false,
-	scdProps: {
-		care_plan: {
-			values: ["preventive", "routine", "chronic", "acute"],
-			frequency: "month",
-			timing: "fuzzy",
-			max: 8
-		}
-	},
-	mirrorProps: {},
-	lookupTables: [],
+	identity: { avgDevicePerUser: 1 },
+	stickyEventProps: ["coverage_type", "preferred_language"],
 
-	// ── Events (18) ──────────────────────────────────────────
 	events: [
 		{
 			event: "account created",
@@ -626,860 +901,753 @@ const config = {
 			isFirstEvent: true,
 			isAuthEvent: true,
 			properties: {
-				referral_source: ["organic", "doctor_referral", "insurance_partner", "social_media", "search"],
+				signup_method: { __weights: { email: 45, apple: 35, google: 20 } },
+				acquisition_channel: (ctx) => ctx.profile.acquisition_channel,
 			},
 		},
 		{
-			event: "symptom search",
-			weight: 7,
+			event: "coverage added",
+			weight: 1,
+			isStrictEvent: true,
 			properties: {
-				search_term: ["headache", "fever", "cough", "back pain", "fatigue", "anxiety", "rash", "nausea", "chest pain", "joint pain"],
-				results_count: u.weighNumRange(0, 25, 0.5),
+				coverage_type: (ctx) => ctx.profile.coverage_type,
+				verification_status: (ctx) => (ctx.profile.coverage_type === "self_pay" ? "not_applicable" : hashFloat(`${ctx.profile.distinct_id}|verify`) < 0.9 ? "verified" : "manual_review"),
 			},
 		},
 		{
-			event: "appointment booked",
-			weight: 6,
-			isStrictEvent: false,
+			event: "program enrolled",
+			weight: 1,
+			isStrictEvent: true,
 			properties: {
-				doctor_id: chance.pickone.bind(chance, doctorIds),
-				clinic_id: chance.pickone.bind(chance, clinicIds),
-				condition_type: ["general", "general", "general", "respiratory", "dermatology", "mental_health", "chronic", "pediatric"],
-				wait_time_hours: u.weighNumRange(1, 72, 0.4),
-				appointment_type: ["new_patient", "follow_up", "follow_up", "urgent", "routine", "routine"],
-				// declared false; H6 flips to true on 25% of low-activity users' bookings
-				no_show: [false],
+				program: (ctx) => ctx.profile.chronic_program,
+				device_connectivity: (ctx) => ctx.profile.device_connectivity,
 			},
 		},
 		{
-			event: "consultation completed",
-			weight: 5,
-			isStrictEvent: false,
+			event: "app opened",
+			weight: 1,
+			isStrictEvent: true,
 			properties: {
-				doctor_id: chance.pickone.bind(chance, doctorIds),
-				consultation_mode: ["phone", "phone", "video"],
-				duration_minutes: u.weighNumRange(5, 60, 0.6, 15),
-				consultation_fee: u.weighNumRange(25, 200, 0.4, 75),
-				satisfaction_score: u.weighNumRange(1, 5, 0.8, 3),
-				condition_type: ["general", "general", "respiratory", "dermatology", "mental_health", "chronic", "pediatric"],
+				open_source: { __weights: { organic: 52, push_notification: 28, sms_link: 12, email_link: 8 } },
 			},
 		},
 		{
-			event: "prescription issued",
-			weight: 4,
-			isStrictEvent: false,
+			event: "health record viewed",
+			weight: 1,
+			isStrictEvent: true,
 			properties: {
-				medication_type: ["antibiotic", "antiviral", "painkiller", "anti_inflammatory", "antidepressant", "inhaler", "topical", "chronic_maintenance"],
-				quantity: u.weighNumRange(1, 90, 0.3, 30),
-				condition_type: ["general", "respiratory", "dermatology", "mental_health", "chronic", "chronic", "pediatric"],
-				refill_count: u.weighNumRange(0, 3),
-			},
-		},
-		{
-			event: "prescription refill",
-			weight: 3,
-			isStrictEvent: false,
-			properties: {
-				medication_type: ["antibiotic", "antiviral", "painkiller", "anti_inflammatory", "antidepressant", "inhaler", "topical", "chronic_maintenance"],
-				quantity: u.weighNumRange(1, 90, 0.3, 30),
-				condition_type: ["general", "respiratory", "dermatology", "mental_health", "chronic", "chronic", "pediatric"],
-				refill_count: u.weighNumRange(1, 6),
-			},
-		},
-		{
-			event: "follow up scheduled",
-			weight: 3,
-			isStrictEvent: false,
-			properties: {
-				doctor_id: chance.pickone.bind(chance, doctorIds),
-				days_until_followup: u.weighNumRange(3, 30, 0.5, 7),
-				condition_type: ["general", "respiratory", "dermatology", "mental_health", "chronic", "pediatric"],
-				consultation_mode: ["phone", "phone", "video"],
-			},
-		},
-		{
-			event: "message sent",
-			weight: 5,
-			properties: {
-				message_type: ["question", "question", "update", "result_inquiry", "prescription_question", "scheduling"],
-				recipient_role: ["doctor", "doctor", "nurse", "support"],
-				response_time_hours: u.weighNumRange(0.1, 48, 0.3, 4),
+				record_type: { __weights: { visit_summary: 30, medications: 22, care_plan: 18, immunizations: 12, billing: 18 } },
 			},
 		},
 		{
 			event: "lab results viewed",
-			weight: 3,
-			properties: {
-				test_type: ["blood_panel", "urinalysis", "imaging", "allergy_test", "metabolic_panel", "thyroid"],
-				result_status: ["normal", "normal", "normal", "abnormal", "pending"],
-			},
-		},
-		{
-			event: "health record accessed",
-			weight: 4,
-			properties: {
-				record_type: ["visit_summary", "lab_results", "prescriptions", "immunizations", "billing"],
-				access_method: ["app", "app", "web_portal"],
-			},
-		},
-		{
-			event: "insurance verified",
-			weight: 2,
-			properties: {
-				insurance_type: ["private", "private", "employer", "medicare", "medicaid", "self_pay"],
-				verification_status: ["approved", "approved", "approved", "pending", "denied"],
-				copay_amount: u.weighNumRange(0, 75, 0.5, 20),
-			},
-		},
-		{
-			event: "payment processed",
-			weight: 3,
-			properties: {
-				amount: u.weighNumRange(10, 500, 0.3, 75),
-				payment_method: ["credit_card", "credit_card", "insurance_claim", "hsa_fsa", "debit"],
-				payment_status: ["success", "success", "success", "success", "failed"],
-			},
-		},
-		{
-			event: "notification received",
-			weight: 6,
-			properties: {
-				notification_type: ["appointment_reminder", "appointment_reminder", "lab_ready", "prescription_ready", "message_received", "billing"],
-				channel: ["push", "push", "email", "sms"],
-				opened: [true, true, true, false],
-			},
-		},
-		{
-			event: "provider rated",
-			weight: 2,
-			properties: {
-				doctor_id: chance.pickone.bind(chance, doctorIds),
-				rating: u.weighNumRange(1, 5, 0.7, 4),
-				would_recommend: [true, true, true, true, false],
-			},
-		},
-		{
-			event: "support ticket created",
 			weight: 1,
-			properties: {
-				category: ["billing", "technical", "scheduling", "prescription", "insurance", "other"],
-				priority: ["low", "low", "medium", "medium", "high"],
-				resolution_hours: u.weighNumRange(1, 96, 0.4, 24),
-			},
-		},
-		{
-			event: "profile updated",
-			weight: 2,
-			properties: {
-				field_updated: ["insurance", "address", "phone", "emergency_contact", "allergies", "medications"],
-			},
-		},
-		{
-			event: "app session",
-			weight: 8,
-			properties: {
-				session_duration_sec: u.weighNumRange(10, 1800, 0.4, 120),
-				pages_viewed: u.weighNumRange(1, 15, 0.5, 3),
-			},
-		},
-		{
-			event: "account deactivated",
-			weight: 1,
-			isChurnEvent: true,
-			returnLikelihood: 0.15,
 			isStrictEvent: true,
 			properties: {
-				reason: ["switched_provider", "cost", "no_longer_needed", "poor_experience", "insurance_change"],
+				test_type: { __weights: { basic_metabolic_panel: 24, lipid_panel: 20, a1c: 18, cbc: 16, thyroid_panel: 10, urinalysis: 12 } },
+				result_flag: { __weights: { normal: 78, abnormal: 22 } },
+			},
+		},
+		{
+			event: "message sent",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				message_topic: { __weights: { question_for_clinician: 34, medication_question: 22, scheduling: 18, billing: 12, test_results: 14 } },
+			},
+		},
+		{
+			event: "symptom check completed",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				visit_id: ["unassigned"],
+				reason_category: { __weights: REASON_WEIGHTS },
+				triage_result: ["virtual_visit"],
+			},
+		},
+		{
+			event: "visit requested",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				visit_id: ["unassigned"],
+				service_line: ["urgent_care"],
+				visit_type: ["video"],
+				reason_category: ["other"],
+				estimated_wait_min: [0],
+				patient_cost_usd: [0],
+			},
+		},
+		{
+			event: "waiting room left",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				visit_id: ["unassigned"],
+				service_line: ["urgent_care"],
+				minutes_waited: [0],
+			},
+		},
+		{
+			event: "appointment booked",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				visit_id: ["unassigned"],
+				service_line: ["primary_care"],
+				appointment_reason: ["annual_checkup"],
+				visit_type: ["video"],
+				lead_days: [0],
+				patient_cost_usd: [0],
+			},
+		},
+		{
+			event: "appointment missed",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				visit_id: ["unassigned"],
+				service_line: ["primary_care"],
+				lead_days: [0],
+			},
+		},
+		{
+			event: "reminder sent",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				visit_id: ["unassigned"],
+				reminder_type: ["appointment"],
+				channel: ["sms"],
+			},
+		},
+		{
+			event: "visit started",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				visit_id: ["unassigned"],
+				service_line: ["urgent_care"],
+				visit_type: ["video"],
+				wait_min: [0],
+			},
+		},
+		{
+			event: "visit completed",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				visit_id: ["unassigned"],
+				service_line: ["urgent_care"],
+				visit_type: ["video"],
+				reason_category: ["other"],
+				duration_min: [10],
+				clinician_type: ["physician"],
+			},
+		},
+		{
+			event: "prescription sent",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				visit_id: ["unassigned"],
+				service_line: ["urgent_care"],
+				medication_class: ["antibiotic"],
+				pharmacy_type: ["chain"],
+			},
+		},
+		{
+			event: "prescription picked up",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				visit_id: ["unassigned"],
+				service_line: ["urgent_care"],
+				pharmacy_type: ["chain"],
+			},
+		},
+		{
+			event: "visit rated",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				visit_id: ["unassigned"],
+				service_line: ["urgent_care"],
+				rating: [5],
+				would_recommend: [true],
+			},
+		},
+		{
+			event: "reading logged",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				reading_type: ["blood_pressure"],
+				in_range: [true],
+				sync_method: ["cellular"],
+			},
+		},
+		{
+			event: "therapy intake completed",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				service_line: ["behavioral_health"],
+				therapist_preference: ["first_available"],
+				primary_concern: ["anxiety"],
+			},
+		},
+		{
+			event: "therapy session booked",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				service_line: ["behavioral_health"],
+				session_number: [1],
+				days_until_session: [7],
+			},
+		},
+		{
+			event: "therapy session completed",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				service_line: ["behavioral_health"],
+				session_number: [1],
+				duration_min: [50],
+			},
+		},
+		{
+			event: "$experiment_started",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				"Experiment name": [PICKUP_EXPERIMENT],
+				"Variant name": ["Control", PICKUP_VARIANT],
 			},
 		},
 	],
 
-	// ── Funnels (5) ──────────────────────────────────────────
 	funnels: [
 		{
-			name: "Onboarding Flow",
-			sequence: ["account created", "insurance verified", "symptom search", "appointment booked"],
-			conversionRate: 45,
-			order: "sequential",
+			name: "Onboarding",
+			sequence: ["account created", "coverage added"],
 			isFirstFunnel: true,
-			timeToConvert: 72,
-			weight: 3,
+			conditions: { chronic_program: "none" },
+			conversionRate: 100,
+			timeToConvert: 0.2,
+			order: "sequential",
+			weight: 1,
 		},
 		{
-			name: "Booking to Consultation",
-			sequence: ["symptom search", "appointment booked", "consultation completed"],
-			conversionRate: 40,
+			name: "Onboarding",
+			sequence: ["account created", "coverage added", "program enrolled"],
+			isFirstFunnel: true,
+			conditions: { chronic_program: { neq: "none" } },
+			conversionRate: 100,
+			timeToConvert: 0.3,
 			order: "sequential",
-			timeToConvert: 48,
-			weight: 5,
+			weight: 1,
 		},
 		{
-			name: "Full Care Journey",
-			sequence: ["appointment booked", "consultation completed", "prescription issued", "follow up scheduled"],
-			conversionRate: 30,
-			order: "sequential",
-			timeToConvert: 168,
-			weight: 3,
+			name: "Check-in",
+			sequence: ["app opened", "health record viewed", "lab results viewed", "message sent", "health record viewed"],
+			conversionRate: 50,
+			timeToConvert: 0.3,
+			order: "first-fixed",
+			weight: 12,
 		},
 		{
-			name: "Prescription Lifecycle",
-			sequence: ["prescription issued", "prescription refill", "payment processed"],
-			conversionRate: 55,
+			name: "Urgent Care",
+			sequence: URGENT_STEPS,
+			conversionRate: 100,
+			timeToConvert: 1,
 			order: "sequential",
-			timeToConvert: 720,
 			weight: 2,
+			props: {
+				visit_id: () => `v_${chance.hash({ length: 12 })}`,
+			},
+			experiment: {
+				name: PICKUP_EXPERIMENT,
+				startDaysBeforeEnd: (ms(DATASET_END) - ms(PICKUP_TEST_START)) / DAY_MS,
+				variants: [{ name: "Control" }, { name: PICKUP_VARIANT }],
+			},
 		},
 		{
-			name: "Patient Satisfaction",
-			sequence: ["consultation completed", "provider rated", "follow up scheduled"],
-			conversionRate: 25,
+			name: "Primary Care",
+			sequence: PRIMARY_STEPS,
+			conversionRate: 100,
+			timeToConvert: 1,
 			order: "sequential",
-			timeToConvert: 72,
-			weight: 2,
+			weight: 1,
+			props: {
+				visit_id: () => `v_${chance.hash({ length: 12 })}`,
+			},
+		},
+		{
+			name: "Readings",
+			sequence: ["reading logged"],
+			conditions: { chronic_program: { neq: "none" } },
+			conversionRate: 100,
+			timeToConvert: 0.1,
+			order: "sequential",
+			weight: 45,
+		},
+		{
+			name: "Therapy",
+			sequence: ["therapy intake completed", "therapy session booked", "therapy session completed"],
+			conditions: { therapy_client: true },
+			conversionRate: 100,
+			timeToConvert: 1,
+			order: "sequential",
+			weight: 3,
 		},
 	],
 
-	// ── SuperProps ──────────────────────────────────────────
+	warehouseMetrics: [
+		{
+			name: "clinician_staffing_daily",
+			type: "additive",
+			grain: "day",
+			source: {
+				// the day's care demand by service line: urgent requests, primary care
+				// appointments that day (attended or missed), therapy sessions held
+				event: ["visit requested", "visit started", "appointment missed", "therapy session completed"],
+				measure: "count",
+				where: (e) => e.event !== "visit started" || e.service_line === "primary_care",
+				groupBy: "service_line",
+			},
+			timeColumn: "date",
+			valueColumn: "clinician_hours",
+			columns: {
+				// set by the warehouse hook from the day's staffing plan
+				employed_clinician_hours: 0,
+				agency_clinician_hours: 0,
+				spanish_speaking_clinician_hours: 0,
+				clinicians_on_shift: 0,
+			},
+		},
+		{
+			name: "visit_revenue_daily",
+			type: "additive",
+			grain: "day",
+			source: {
+				event: ["visit completed", "therapy session completed"],
+				measure: "count",
+				groupBy: ["service_line", "coverage_type"],
+			},
+			timeColumn: "date",
+			valueColumn: "visits_billed",
+			columns: {
+				avg_patient_charge_usd: (ctx) => avgPatientCharge(ctx.row.service_line, ctx.row.coverage_type, ctx.time),
+				payer_rate_usd: (ctx) => PAYER_RATE[ctx.row.service_line]?.[ctx.row.coverage_type] ?? 0,
+				patient_revenue_usd: 0,
+				payer_revenue_usd: 0,
+				total_revenue_usd: 0,
+			},
+		},
+	],
+
 	superProps: {
-		subscription_tier: ["free", "free", "free", "basic", "basic", "premium"],
-		Platform: ["ios", "android", "web"],
+		coverage_type: ["employer"],
+		preferred_language: ["en"],
 	},
 
-	// ── UserProps ──────────────────────────────────────────
 	userProps: {
-		role: ["patient", "patient", "patient", "patient", "patient", "patient", "patient", "patient", "nurse", "doctor"],
-		specialty: ["none"],
-		years_experience: u.weighNumRange(0, 5, 0.5),
-		preferred_language: ["en", "en", "en", "en", "es", "pt", "de", "fr"],
-		has_chronic_condition: [false, false, false, true],
-		age_range: ["18-25", "26-35", "26-35", "36-45", "36-45", "46-55", "56-65", "65+"],
-		subscription_tier: ["free", "free", "free", "basic", "basic", "premium"],
-		Platform: ["ios", "android", "web"],
+		coverage_type: ["employer"],
+		age_band: { __weights: { "18-25": 14, "26-35": 26, "36-45": 22, "46-55": 16, "56-64": 12, "65+": 10 } },
+		gender: { __weights: { female: 57, male: 41, nonbinary: 2 } },
+		preferred_language: ["en"],
+		state: ["CA"],
+		chronic_program: ["none"],
+		device_connectivity: ["none"],
+		therapy_client: [false],
+		therapist_preference: ["none"],
+		acquisition_channel: ["organic"],
+		member_since: ["2025-01-01"],
 	},
 
-	// ── Personas ──────────────────────────────────
 	personas: [
-		{
-			name: "doctor",
-			weight: 5,
-			eventMultiplier: 5.0,
-			conversionModifier: 1.8,
-			churnRate: 0.01,
-			properties: {
-				role: "doctor",
-				segment: "provider",
-			},
-		},
-		{
-			name: "nurse",
-			weight: 10,
-			eventMultiplier: 3.0,
-			conversionModifier: 1.5,
-			churnRate: 0.03,
-			properties: {
-				role: "nurse",
-				segment: "provider",
-			},
-		},
-		{
-			name: "patient_active",
-			weight: 40,
-			eventMultiplier: 1.0,
-			conversionModifier: 1.0,
-			churnRate: 0.05,
-			properties: {
-				role: "patient",
-				segment: "active_patient",
-			},
-		},
-		{
-			name: "patient_occasional",
-			weight: 30,
-			eventMultiplier: 0.5,
-			conversionModifier: 0.7,
-			churnRate: 0.12,
-			properties: {
-				role: "patient",
-				segment: "occasional_patient",
-			},
-		},
-		{
-			name: "patient_churner",
-			weight: 15,
-			eventMultiplier: 0.3,
-			conversionModifier: 0.3,
-			churnRate: 0.4,
-			properties: {
-				role: "patient",
-				segment: "churner",
-			},
-			activeWindow: { maxDays: 21 },
-		},
+		{ name: "monitoring_member", weight: 18, eventMultiplier: 2.0, properties: { chronic_program: ["hypertension", "hypertension", "diabetes"] } },
+		{ name: "frequent_patient", weight: 16, eventMultiplier: 1.5, properties: { chronic_program: "none" } },
+		{ name: "regular_patient", weight: 41, eventMultiplier: 1.0, properties: { chronic_program: "none" } },
+		{ name: "occasional_patient", weight: 25, eventMultiplier: 0.45, properties: { chronic_program: "none" } },
 	],
+
+	retentionCurve: { type: "logarithmic", day1: 0.55, day7: 0.38, day30: 0.26 },
 
 	hook(record, type, meta) {
-		if (type === "user") return handleUserHooks(record);
-		if (type === "everything") return handleEverythingHooks(record, meta);
+		if (type === "user") return handleUserHook(record, meta);
+		if (type === "everything") return handleEverything(record, meta);
+		if (type === "warehouse") return handleWarehouse(record, meta);
 		return record;
 	},
 };
 
 // ── STORIES ──────────────────────────────────────────────────────────────
-// Machine-checkable contract for the 10 numbered hooks. Evaluate with:
-//   node scripts/verify-stories.mjs dungeons/vertical/healthcare/healthcare.js --data-prefix verify-healthcare
+// Machine-checkable contract for hooks H1-H10. Evaluate with:
+//   node dungeons/vertical/healthcare/healthcare.verify.mjs
 
-const EV = `read_json_auto('{{PREFIX}}-EVENTS*.json', sample_size=-1, union_by_name=true)`;
-const US = `read_json_auto('{{PREFIX}}-USERS*.json', sample_size=-1, union_by_name=true)`;
+const EV = `read_json_auto('{{PREFIX}}-EVENTS*.json*', sample_size=-1, union_by_name=true)`;
+const US = `read_json_auto('{{PREFIX}}-USERS*.json*', sample_size=-1, union_by_name=true)`;
+const WH = (table) => `read_json_auto('{{PREFIX}}-WAREHOUSE-${table}.json*', sample_size=-1, union_by_name=true)`;
 
-// Identity prelude. account created is both isAuthEvent and isFirstEvent, so
-// born users auth on their very first event and user_id should be present on
-// every record; the prelude still resolves through the device pool
-// (avgDevicePerUser: 2, "anonymousIds" is the legacy USERS-shard key) as
-// belt-and-braces for any device-only edge.
-const ID_CTE = `dmap AS (SELECT unnest("anonymousIds") AS device_id, distinct_id FROM ${US}),
-ev AS (SELECT coalesce(m.distinct_id::VARCHAR, e.user_id::VARCHAR, e.device_id::VARCHAR) AS uid,
-  e.time::TIMESTAMP AS t, e.* FROM ${EV} e LEFT JOIN dmap m ON e.device_id = m.device_id)`;
+// Identity prelude: a device resolves to the patient seen with it on any event
+// that carries both ids (emitted stitch evidence). Every Clearwell event carries
+// user_id, so the device map only matters for completeness.
+const ID_CTE = `dmap AS (SELECT device_id, min(user_id::VARCHAR) AS mapped FROM ${EV}
+  WHERE user_id IS NOT NULL AND device_id IS NOT NULL GROUP BY 1),
+ev AS (SELECT coalesce(e.user_id::VARCHAR, m.mapped) AS uid, e.time::TIMESTAMP AS t, e.*
+  FROM ${EV} e LEFT JOIN dmap m ON e.device_id = m.device_id)`;
 
-// Temporal boundaries computed from the same knobs the hooks use (the hook
-// parses in UTC, so these UTC timestamps are exact window edges)
-const FLU_IN_START_TS = dayjs.utc(DATASET_START).add(FLU_START_DAY, "day").format("YYYY-MM-DD HH:mm:ss");
-const FLU_IN_END_TS = dayjs.utc(DATASET_START).add(FLU_END_DAY, "day").format("YYYY-MM-DD HH:mm:ss");
-const END_TS = dayjs.utc(DATASET_END).format("YYYY-MM-DD HH:mm:ss");
-// H4 window guard: consultations in the last 7 days can't be credited with a
-// clone that would land past datasetEnd (future-time guard drops it)
-const END_MINUS_7_TS = dayjs.utc(DATASET_END).subtract(7, "day").format("YYYY-MM-DD HH:mm:ss");
+const TS = (isoStr) => dayjs.utc(isoStr).format("YYYY-MM-DD HH:mm:ss");
+const D = (isoStr) => isoStr.slice(0, 10);
+const addDays = (isoStr, n) => dayjs.utc(isoStr).add(n, "day").toISOString();
+const band = (k) => [Math.round(k * 0.9 * 1000) / 1000, Math.round(k * 1.1 * 1000) / 1000];
+const SQL_LIST = (xs) => xs.map((x) => `'${x}'`).join(", ");
+const D0 = D(DATASET_START);
 
-// Per-user consultation counts. H10 (and H3) classify on counts taken AFTER
-// all filters (H8 free-tier cliff, H6 no-show thinning) and nothing drops
-// consultations later, so output-side counts rebuild the hook cohorts exactly.
-const CONSULT_CTE = `cc AS (SELECT uid, count(*) AS ct FROM ev WHERE event = 'consultation completed' GROUP BY 1)`;
+const ASYNC_RAMPED = addDays(ASYNC_LAUNCH, ASYNC_RAMP_DAYS);           // adoption at full level
+const PICKUP_WINDOW_DAYS = 7;                                           // H4 read: Funnels conversion window
+const PICKUP_READ_END = addDays(DATASET_END, -PICKUP_WINDOW_DAYS);      // prescriptions with a full window
+const GAP_BASE_DAYS = 14;                                               // H3 read: baseline days either side
+const EARLY_END = addDays(DATASET_START, 14);                           // H5 cohort: readings Jun 4-17
+const LATE_START = addDays(LAPSE_LAST, 1);                              // H5 return: readings Sep 3 - Oct 1
+const BOOKING_READ_END = "2026-09-01T00:00:00Z";                        // H6/H7 read: full 30-day windows
+const FUNNEL_WINDOW_DAYS = 30;
+const LEAD_LONG_FROM = 8;
+// H6: expected no-show rate of appointments booked 8+ days out (lead mix from LEAD_WEIGHTS)
+const NOSHOW_LONG = (() => {
+	let w = 0, s = 0;
+	LEAD_WEIGHTS.forEach((x, l) => { if (l >= LEAD_LONG_FROM) { w += x; s += x * noShowRate(l); } });
+	return Math.round(s / w * 10000) / 10000;
+})();
+const PRICE_RATIO = SELF_PAY_PRICE[1] / SELF_PAY_PRICE[0];
+
+const H1_SQL = `WITH ${ID_CTE}
+SELECT CASE WHEN t < TIMESTAMP '${TS(ASYNC_LAUNCH)}' THEN 'before' WHEN t >= TIMESTAMP '${TS(ASYNC_RAMPED)}' THEN 'after' ELSE 'ramp' END AS grp,
+ count(DISTINCT uid) AS user_count, count(*) AS requests,
+ avg((visit_type = 'async')::INT) AS async_share, count(*) FILTER (WHERE visit_type = 'async') AS async_requests
+FROM ev WHERE event = 'visit requested' AND reason_category IN (${SQL_LIST(MINOR_REASONS)}) GROUP BY 1
+UNION ALL
+SELECT 'not_minor' AS grp, count(DISTINCT uid), count(*), avg((visit_type = 'async')::INT), count(*) FILTER (WHERE visit_type = 'async')
+FROM ev WHERE event = 'visit requested' AND reason_category NOT IN (${SQL_LIST(MINOR_REASONS)})`;
+
+const H2_SQL = `WITH ${ID_CTE},
+r AS (SELECT visit_id, any_value(uid) AS uid, min(t) AS t0, any_value(estimated_wait_min) AS w FROM ev
+  WHERE event = 'visit requested' AND visit_type <> 'async' GROUP BY 1),
+s AS (SELECT visit_id, min(t) AS t1 FROM ev WHERE event = 'visit started' GROUP BY 1)
+SELECT CASE WHEN r.w <= ${PATIENT_WAIT_MIN} THEN 'short' WHEN r.w >= ${GIVE_UP_WAIT_MIN} THEN 'long' ELSE 'middle' END AS grp,
+ count(DISTINCT r.uid) AS user_count, count(*) AS requests,
+ avg(coalesce(s.t1 >= r.t0 AND s.t1 < r.t0 + INTERVAL 1 DAY, false)::INT) AS start_rate
+FROM r LEFT JOIN s ON s.visit_id = r.visit_id GROUP BY 1`;
+
+const H3_SQL = `WITH ${ID_CTE},
+g AS (SELECT DISTINCT date::DATE AS d FROM ${WH("clinician_staffing_daily")} WHERE service_line = 'urgent_care' AND agency_clinician_hours = 0),
+w AS (SELECT t::DATE AS d, uid, estimated_wait_min FROM ev WHERE event = 'visit requested' AND visit_type <> 'async'
+  AND t >= TIMESTAMP '${TS(addDays(STAFFING_GAP_START, -GAP_BASE_DAYS))}' AND t < TIMESTAMP '${TS(addDays(STAFFING_GAP_END, GAP_BASE_DAYS))}')
+SELECT CASE WHEN d IN (SELECT d FROM g) THEN 'gap' ELSE 'baseline' END AS grp, count(DISTINCT d) AS days,
+ count(DISTINCT uid) AS user_count, count(*) AS requests, avg(estimated_wait_min) AS avg_wait
+FROM w GROUP BY 1`;
+
+const H3_WH_SQL = `WITH ${ID_CTE},
+s AS (SELECT date::DATE AS d, clinician_hours, agency_clinician_hours FROM ${WH("clinician_staffing_daily")} WHERE service_line = 'urgent_care'),
+r AS (SELECT t::DATE AS d, count(*) AS requests FROM ev WHERE event = 'visit requested' GROUP BY 1)
+SELECT CASE WHEN s.agency_clinician_hours = 0 THEN 'gap' ELSE 'baseline' END AS grp, count(*) AS days,
+ sum(s.clinician_hours) / sum(r.requests) AS hours_per_request
+FROM s JOIN r ON r.d = s.d
+WHERE s.d >= DATE '${D(addDays(STAFFING_GAP_START, -GAP_BASE_DAYS))}' AND s.d < DATE '${D(addDays(STAFFING_GAP_END, GAP_BASE_DAYS))}' GROUP BY 1`;
+
+const H4_SQL = `WITH ${ID_CTE},
+v AS (SELECT distinct_id::VARCHAR AS uid, "${EXP_KEY}" AS variant FROM ${US} WHERE "${EXP_KEY}" IS NOT NULL),
+rx AS (SELECT visit_id, any_value(uid) AS uid, min(t) AS t0 FROM ev WHERE event = 'prescription sent' AND service_line = 'urgent_care'
+  AND t >= TIMESTAMP '${TS(PICKUP_TEST_START)}' AND t < TIMESTAMP '${TS(PICKUP_READ_END)}' GROUP BY 1),
+p AS (SELECT visit_id, min(t) AS t1 FROM ev WHERE event = 'prescription picked up' GROUP BY 1)
+SELECT v.variant AS grp, count(DISTINCT rx.uid) AS user_count, count(*) AS prescriptions,
+ avg(coalesce(p.t1 >= rx.t0 AND p.t1 < rx.t0 + INTERVAL ${PICKUP_WINDOW_DAYS} DAY, false)::INT) AS pickup_rate,
+ median(date_diff('second', rx.t0, p.t1) / 3600.0) FILTER (WHERE p.t1 >= rx.t0 AND p.t1 < rx.t0 + INTERVAL ${PICKUP_WINDOW_DAYS} DAY) AS med_hours
+FROM rx JOIN v ON v.uid = rx.uid LEFT JOIN p ON p.visit_id = rx.visit_id GROUP BY 1`;
+
+const H5_SQL = `WITH ${ID_CTE},
+p AS (SELECT distinct_id::VARCHAR AS uid, device_connectivity FROM ${US}),
+early AS (SELECT DISTINCT uid FROM ev WHERE event = 'reading logged' AND t < TIMESTAMP '${TS(EARLY_END)}'),
+late AS (SELECT DISTINCT uid FROM ev WHERE event = 'reading logged' AND t >= TIMESTAMP '${TS(LATE_START)}')
+SELECT p.device_connectivity AS grp, count(*) AS user_count, avg((late.uid IS NOT NULL)::INT) AS retained
+FROM early JOIN p ON p.uid = early.uid LEFT JOIN late ON late.uid = early.uid GROUP BY 1`;
+
+const H6_SQL = `WITH ${ID_CTE},
+b AS (SELECT visit_id, any_value(uid) AS uid, any_value(lead_days) AS lead FROM ev WHERE event = 'appointment booked' AND t < TIMESTAMP '${TS(BOOKING_READ_END)}' GROUP BY 1),
+m AS (SELECT DISTINCT visit_id FROM ev WHERE event = 'appointment missed'),
+x AS (SELECT b.uid, b.lead, (m.visit_id IS NOT NULL)::INT AS missed FROM b LEFT JOIN m ON m.visit_id = b.visit_id)
+SELECT 'all' AS grp, count(DISTINCT uid) AS user_count, count(*) AS appointments,
+ regr_slope(missed, lead) AS slope, regr_intercept(missed, lead) AS intercept,
+ avg(missed) FILTER (WHERE lead >= ${LEAD_LONG_FROM}) AS noshow_long, avg(missed) FILTER (WHERE lead <= 1) AS noshow_short
+FROM x`;
+
+const H7_SQL = `WITH ${ID_CTE},
+i AS (SELECT uid, min(t) AS t0, arg_min(therapist_preference, t) AS pref FROM ev WHERE event = 'therapy intake completed' GROUP BY 1),
+s AS (SELECT i.uid, i.pref, min(e.t) AS t1 FROM i JOIN ev e ON e.uid = i.uid AND e.event = 'therapy session completed'
+  AND e.t > i.t0 AND e.t < i.t0 + INTERVAL ${FUNNEL_WINDOW_DAYS} DAY
+  WHERE i.t0 < TIMESTAMP '${TS(BOOKING_READ_END)}' GROUP BY 1, 2)
+SELECT s.pref AS grp, count(*) AS user_count, median(date_diff('second', i.t0, s.t1) / 3600.0) AS med_hours
+FROM s JOIN i ON i.uid = s.uid GROUP BY 1`;
+
+const H8_SQL = `WITH ${ID_CTE},
+w AS (SELECT CASE WHEN t >= TIMESTAMP '${TS(SELF_PAY_PRICE_CHANGE)}' THEN 'after' ELSE 'before' END AS per,
+  CASE WHEN coverage_type = 'self_pay' THEN 'self_pay' ELSE 'insured' END AS cov, event, uid
+  FROM ev WHERE event IN ('symptom check completed', 'visit requested'))
+SELECT per || '_' || cov AS grp, count(DISTINCT uid) AS user_count,
+ count(*) FILTER (WHERE event = 'symptom check completed') AS checks,
+ count(*) FILTER (WHERE event = 'visit requested')::DOUBLE / count(*) FILTER (WHERE event = 'symptom check completed') AS request_rate
+FROM w GROUP BY 1, per, cov`;
+
+const H8_REV_SQL = `WITH ${ID_CTE},
+c AS (SELECT CASE WHEN t >= TIMESTAMP '${TS(SELF_PAY_PRICE_CHANGE)}' THEN 'after' ELSE 'before' END AS grp, count(*) AS checks, count(DISTINCT uid) AS user_count
+  FROM ev WHERE event = 'symptom check completed' AND coverage_type = 'self_pay' GROUP BY 1),
+r AS (SELECT CASE WHEN date::DATE >= DATE '${D(SELF_PAY_PRICE_CHANGE)}' THEN 'after' ELSE 'before' END AS grp, sum(patient_revenue_usd) AS revenue
+  FROM ${WH("visit_revenue_daily")} WHERE service_line = 'urgent_care' AND coverage_type = 'self_pay' GROUP BY 1)
+SELECT c.grp, c.user_count, c.checks, r.revenue, r.revenue / c.checks AS revenue_per_check FROM c JOIN r ON r.grp = c.grp`;
+
+const H9_SQL = `WITH ${ID_CTE}
+SELECT CASE WHEN t >= TIMESTAMP '${TS(RESP_WAVE_PEAK)}' THEN 'peak' WHEN t < TIMESTAMP '${TS(RESP_WAVE_START)}' THEN 'baseline' ELSE 'ramp' END AS grp,
+ count(DISTINCT uid) AS user_count, count(*) AS checks,
+ count(*) FILTER (WHERE reason_category = 'respiratory')::DOUBLE / count(*) FILTER (WHERE reason_category <> 'respiratory') AS resp_per_other
+FROM ev WHERE event = 'symptom check completed' GROUP BY 1`;
+
+const H10_SQL = `WITH ${ID_CTE}
+SELECT preferred_language AS grp, count(DISTINCT uid) AS user_count, count(*) AS requests, avg(estimated_wait_min) AS avg_wait
+FROM ev WHERE event = 'visit requested' AND visit_type <> 'async' GROUP BY 1`;
 
 /** @type {import("../../../types").DungeonStory[]} */
 export const stories = [
 	{
-		id: "H1-after-hours-pricing",
+		id: "H1-async-launch",
 		hook: "H1",
 		archetype: "temporal-inflection",
-		narrative: `consultations between ${AFTER_HOURS_START}:00 and ${AFTER_HOURS_END}:00 UTC carry consultation_fee × ${AFTER_HOURS_FEE_MULT}. H10's sweet-spot fee boost rides both HOD bins equally (consult-count cohorts are hour-independent), so both the avg and median ratios read the ${AFTER_HOURS_FEE_MULT} knob directly (Math.floor bias < 1%)`,
+		narrative: `Clearwell Async launches ${D(ASYNC_LAUNCH)}: urgent-care requests for minor conditions (${MINOR_REASONS.join(", ")}) can be submitted as a questionnaire a clinician reviews, with no waiting room (visit_type = async, estimated_wait_min = 0). Adoption ramps over ${ASYNC_RAMP_DAYS} days to ${ASYNC_SHARE * 100}% of minor-condition requests (per request, each patient's share drawn independently); async visits complete about ${ASYNC_REVIEW_MEDIAN_H} h after the request and never abandon. No async visit exists before launch or for other reasons. Read: async share of minor-condition visit requests from ${D(ASYNC_RAMPED)}.`,
+		mixpanelReport: { type: "Insights", event: "visit requested", filter: `reason_category in ${MINOR_REASONS.join(", ")}`, breakdown: "visit_type", measure: "total, % of total", chart: `weekly; from ${D(ASYNC_RAMPED)}` },
 		assertions: [
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT CASE WHEN extract(hour FROM t) >= ${AFTER_HOURS_START} OR extract(hour FROM t) < ${AFTER_HOURS_END} THEN 'after' ELSE 'business' END AS grp,
- count(*) AS event_count, count(DISTINCT uid) AS user_count,
- avg(consultation_fee) AS avg_fee, median(consultation_fee) AS med_fee
-FROM ev WHERE event = 'consultation completed' GROUP BY 1`,
-				},
-				select: { a: { where: { grp: "after" } }, b: { where: { grp: "business" } } },
-				expect: { metric: "a.avg_fee / b.avg_fee", op: "between", target: [1.35, 1.65] },
-				minCohort: 400,
+				breakdown: { type: "duckdb", sql: H1_SQL },
+				select: { a: { where: { grp: "after" } } },
+				expect: { metric: "a.async_share", op: "between", target: band(ASYNC_SHARE) },
+				minCohort: 1500,
 			},
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT CASE WHEN extract(hour FROM t) >= ${AFTER_HOURS_START} OR extract(hour FROM t) < ${AFTER_HOURS_END} THEN 'after' ELSE 'business' END AS grp,
- count(*) AS event_count, count(DISTINCT uid) AS user_count,
- avg(consultation_fee) AS avg_fee, median(consultation_fee) AS med_fee
-FROM ev WHERE event = 'consultation completed' GROUP BY 1`,
-				},
-				select: { a: { where: { grp: "after" } }, b: { where: { grp: "business" } } },
-				// scaling a whole bin scales every quantile: median ratio = knob too
-				expect: { metric: "a.med_fee / b.med_fee", op: "between", target: [1.35, 1.65] },
-				minCohort: 400,
+				breakdown: { type: "duckdb", sql: H1_SQL },
+				select: { b: { where: { grp: "before" } } },
+				// exact: an async visit before launch is a bug
+				expect: { metric: "b.async_requests", op: "between", target: [0, 0] },
+			},
+			{
+				breakdown: { type: "duckdb", sql: H1_SQL },
+				select: { n: { where: { grp: "not_minor" } } },
+				// exact: async is offered only for the minor conditions
+				expect: { metric: "n.async_requests", op: "between", target: [0, 0] },
 			},
 		],
 	},
 	{
-		id: "H2-flu-season",
+		id: "H2-waiting-room-threshold",
 		hook: "H2",
-		archetype: "temporal-inflection",
-		narrative: `days ${FLU_START_DAY}-${FLU_END_DAY}: bookings are forced respiratory at ${FLU_RESPIRATORY_LIKELIHOOD}%, and every in-window respiratory booking gets wait_time_hours × ${FLU_WAIT_MULT}. Expected in-window respiratory share = 0.60 + 0.40 × 1/8 = 0.65 (declared mix is 1-in-8 respiratory); out-window share stays at the declared 0.125. H9's tier scaling rides all conditions equally, so the in-window resp/other wait ratio reads the ×${FLU_WAIT_MULT} knob`,
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT CASE WHEN t > TIMESTAMP '${FLU_IN_START_TS}' AND t < TIMESTAMP '${FLU_IN_END_TS}' THEN 'in' ELSE 'out' END AS grp,
- count(*) AS event_count, count(DISTINCT uid) AS user_count,
- count(*) FILTER (WHERE condition_type = 'respiratory')::DOUBLE / count(*) AS resp_share,
- avg(wait_time_hours) FILTER (WHERE condition_type = 'respiratory') AS resp_wait,
- avg(wait_time_hours) FILTER (WHERE condition_type <> 'respiratory') AS other_wait
-FROM ev WHERE event = 'appointment booked' GROUP BY 1`,
-				},
-				select: { i: { where: { grp: "in" } } },
-				expect: { metric: "i.resp_share", op: "between", target: [0.58, 0.72] },
-				minCohort: 200,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT CASE WHEN t > TIMESTAMP '${FLU_IN_START_TS}' AND t < TIMESTAMP '${FLU_IN_END_TS}' THEN 'in' ELSE 'out' END AS grp,
- count(*) AS event_count, count(DISTINCT uid) AS user_count,
- count(*) FILTER (WHERE condition_type = 'respiratory')::DOUBLE / count(*) AS resp_share
-FROM ev WHERE event = 'appointment booked' GROUP BY 1`,
-				},
-				select: { o: { where: { grp: "out" } } },
-				// purity: forcing happens only inside the window
-				expect: { metric: "o.resp_share", op: "between", target: [0.09, 0.16] },
-				minCohort: 200,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT CASE WHEN t > TIMESTAMP '${FLU_IN_START_TS}' AND t < TIMESTAMP '${FLU_IN_END_TS}' THEN 'in' ELSE 'out' END AS grp,
- count(*) AS event_count, count(DISTINCT uid) AS user_count,
- avg(wait_time_hours) FILTER (WHERE condition_type = 'respiratory') AS resp_wait,
- avg(wait_time_hours) FILTER (WHERE condition_type <> 'respiratory') AS other_wait
-FROM ev WHERE event = 'appointment booked' GROUP BY 1`,
-				},
-				select: { i: { where: { grp: "in" } } },
-				expect: { metric: "i.resp_wait / i.other_wait", op: "between", target: [1.7, 2.35] },
-				minCohort: 200,
-			},
-		],
-	},
-	{
-		id: "H3-experienced-doctor-satisfaction",
-		hook: "H3",
-		archetype: "cohort-prop-scale",
-		narrative: `users with >${EXPERIENCED_CONSULT_THRESHOLD} consultations get every satisfaction_score redrawn uniform [${EXPERIENCED_SATISFACTION_MIN}, ${EXPERIENCED_SATISFACTION_MAX}] (avg AND median 4.5 — both quantile reads of the uniform). Purity is exact: later hooks only DELETE consultations, so any user still >${EXPERIENCED_CONSULT_THRESHOLD} in the output was boosted — all surviving scores sit in the redrawn range. No ratio-vs-baseline assertion: the declared weighNumRange(1, 5, 0.8, 3) baseline is a 3-value seeded pool (the 4th arg is POOL SIZE, not mode), so the organic mean is not derivable from the schema`,
-		assertions: [
-			{
-				// deterministic purity — a single sub-4.0 score on an
-				// output->12-consult user is a hook bug, not sampling noise
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${CONSULT_CTE}
-SELECT count(*) FILTER (WHERE e.satisfaction_score < ${EXPERIENCED_SATISFACTION_MIN}) AS below_min,
- count(*) AS scores, count(DISTINCT c.uid) AS exp_users
-FROM cc c JOIN ev e ON e.uid = c.uid AND e.event = 'consultation completed'
-WHERE c.ct > ${EXPERIENCED_CONSULT_THRESHOLD}`,
-				},
-				assert: (rows) => {
-					const r = (rows || [])[0];
-					if (!r || Number(r.exp_users) === 0) return { pass: false, verdict: "NONE", detail: "no >12-consult users" };
-					const clean = Number(r.below_min) === 0;
-					return {
-						pass: clean,
-						verdict: clean ? "NAILED" : "INVERSE",
-						detail: `below-4.0 scores=${r.below_min} of ${r.scores} across ${r.exp_users} experienced users (must be 0)`,
-					};
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${CONSULT_CTE},
-lab AS (SELECT uid, CASE WHEN ct > ${EXPERIENCED_CONSULT_THRESHOLD} THEN 'exp' WHEN ct <= 9 THEN 'base' ELSE 'mid' END AS grp FROM cc)
-SELECT l.grp, count(DISTINCT l.uid) AS user_count, count(*) AS event_count, avg(e.satisfaction_score) AS avg_sat
-FROM lab l JOIN ev e ON e.uid = l.uid AND e.event = 'consultation completed' GROUP BY 1`,
-				},
-				select: { x: { where: { grp: "exp" } } },
-				// uniform [4.0, 5.0] → 4.5
-				expect: { metric: "x.avg_sat", op: "between", target: [4.35, 4.65] },
-				minCohort: 30,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${CONSULT_CTE}
-SELECT 'exp' AS grp, count(DISTINCT c.uid) AS user_count, count(*) AS event_count, median(e.satisfaction_score) AS med_sat
-FROM cc c JOIN ev e ON e.uid = c.uid AND e.event = 'consultation completed'
-WHERE c.ct > ${EXPERIENCED_CONSULT_THRESHOLD}`,
-				},
-				select: { x: { where: { grp: "exp" } } },
-				// median of uniform [4.0, 5.0] = 4.5 — independent quantile read
-				expect: { metric: "x.med_sat", op: "between", target: [4.35, 4.65] },
-				minCohort: 30,
-			},
-		],
-	},
-	{
-		id: "H4-video-followup-lift",
-		hook: "H4",
-		archetype: "cohort-count-scale",
-		narrative: `each video consultation has a ${VIDEO_FOLLOWUP_LIKELIHOOD}% chance to inject one cloned follow-up 1-7 days later. Per-consultation attribution: counting follow-ups within 7d after each consultation, video minus phone reads the 0.6 knob with per-EVENT attribution that cancels user-level activity selection (organic near-rates are mode-blind: a consultation's mode is an iid per-event draw, so both bins sample the same users' timelines). Attenuation: a clone can also land within 7d of a neighboring phone consultation of the same user, inflating the phone bin — hence the band floor below 0.6. Cohort restricted to users with ≥1 follow-up (clone requires an organic template) and consultations ≥7d before datasetEnd (clones past the end are future-guard dropped). Deliberately single-assertion: user-level composites (video-users vs phone-only fu-per-consult) were tested and rejected — conditioning on fus>0 inflates the low-activity phone-only group, and tier/persona sampling coupling plus the video_consultation feature's launch-gated mode mix make any user-level band underivable from knobs`,
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-fu_users AS (SELECT DISTINCT uid FROM ev WHERE event = 'follow up scheduled'),
-cons AS (SELECT e.uid, e.t, e.consultation_mode AS mode
-  FROM ev e JOIN fu_users f ON f.uid = e.uid
-  WHERE e.event = 'consultation completed' AND e.t <= TIMESTAMP '${END_MINUS_7_TS}'),
-cnt AS (SELECT c.uid, c.mode, c.t, count(fu.uid) AS fu7
-  FROM cons c LEFT JOIN ev fu ON fu.uid = c.uid AND fu.event = 'follow up scheduled'
-    AND fu.t > c.t AND fu.t <= c.t + INTERVAL 7 DAY
-  GROUP BY 1, 2, 3)
-SELECT mode AS grp, count(*) AS consults, count(DISTINCT uid) AS user_count, avg(fu7) AS avg_fu7
-FROM cnt GROUP BY 1`,
-				},
-				select: { v: { where: { grp: "video" } }, p: { where: { grp: "phone" } } },
-				expect: { metric: "v.avg_fu7 - p.avg_fu7", op: "between", target: [0.33, 0.78] },
-				minCohort: 150,
-			},
-		],
-	},
-	{
-		id: "H5-chronic-refill-chain",
-		hook: "H5",
-		archetype: "cohort-count-scale",
-		narrative: `each chronic prescription spawns ${CHRONIC_REFILL_MIN}-${CHRONIC_REFILL_MAX} cloned refills at ~${CHRONIC_REFILL_INTERVAL_DAYS}d intervals (condition_type=chronic, medication_type=chronic_maintenance, refill_count=i); clones past datasetEnd are future-guard dropped. The assertion rebuilds the survival model per prescription from its actual date (attempt i at +${CHRONIC_REFILL_INTERVAL_DAYS}·i days; P(n≥3)=2/3, P(n≥4)=1/3 from the uniform 2-4 draw), subtracts the organic chronic∧chronic_maintenance baseline measured on non-chronic-rx users (declared mix: 2/7 × 1/8 ≈ 0.036), and checks measured clones ÷ model expectation ≈ 1. Cohort restricted to chronic-rx users with ≥1 refill (the hook needs an organic template)`,
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-refill_users AS (SELECT DISTINCT uid FROM ev WHERE event = 'prescription refill'),
-crx AS (SELECT e.uid, e.t FROM ev e JOIN refill_users ru ON ru.uid = e.uid
-  WHERE e.event = 'prescription issued' AND e.condition_type = 'chronic'),
-cohort AS (SELECT uid FROM crx GROUP BY 1),
-exp_calc AS (SELECT sum(
-   CASE WHEN t + INTERVAL 30 DAY <= TIMESTAMP '${END_TS}' THEN 1.0 ELSE 0 END
- + CASE WHEN t + INTERVAL 60 DAY <= TIMESTAMP '${END_TS}' THEN 1.0 ELSE 0 END
- + (2.0/3) * (CASE WHEN t + INTERVAL 90 DAY <= TIMESTAMP '${END_TS}' THEN 1.0 ELSE 0 END)
- + (1.0/3) * (CASE WHEN t + INTERVAL 120 DAY <= TIMESTAMP '${END_TS}' THEN 1.0 ELSE 0 END)) AS expected_clones
-  FROM crx),
-r AS (SELECT e.uid, (e.condition_type = 'chronic' AND e.medication_type = 'chronic_maintenance') AS is_cm,
-  (c.uid IS NOT NULL) AS in_cohort
-  FROM ev e LEFT JOIN cohort c ON c.uid = e.uid WHERE e.event = 'prescription refill'),
-agg AS (SELECT count(*) FILTER (WHERE in_cohort) AS t_coh,
-  count(*) FILTER (WHERE in_cohort AND is_cm) AS cm_coh,
-  count(*) FILTER (WHERE NOT in_cohort) AS t_non,
-  count(*) FILTER (WHERE NOT in_cohort AND is_cm) AS cm_non FROM r)
-SELECT 'all' AS grp, (SELECT count(*) FROM cohort) AS user_count,
- a.cm_non::DOUBLE / nullif(a.t_non, 0) AS organic_cm_rate,
- ((a.cm_coh - (a.cm_non::DOUBLE / nullif(a.t_non, 0)) * a.t_coh)
-   / (1 - (a.cm_non::DOUBLE / nullif(a.t_non, 0)))) / nullif(x.expected_clones, 0) AS clone_yield
-FROM agg a, exp_calc x`,
-				},
-				select: { all: { where: { grp: "all" } } },
-				// ±3d jitter and boundary effects keep this near but not at 1.0
-				expect: { metric: "all.clone_yield", op: "between", target: [0.7, 1.35] },
-				minCohort: 80,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-refill_users AS (SELECT DISTINCT uid FROM ev WHERE event = 'prescription refill'),
-crx AS (SELECT e.uid, e.t FROM ev e JOIN refill_users ru ON ru.uid = e.uid
-  WHERE e.event = 'prescription issued' AND e.condition_type = 'chronic'),
-cohort AS (SELECT uid FROM crx GROUP BY 1)
-SELECT 'all' AS grp, count(*) AS event_count, count(DISTINCT e.uid) AS user_count,
- count(*) FILTER (WHERE e.condition_type = 'chronic' AND e.medication_type = 'chronic_maintenance')::DOUBLE / count(*) AS cm_rate
-FROM ev e LEFT JOIN cohort c ON c.uid = e.uid
-WHERE e.event = 'prescription refill' AND c.uid IS NULL`,
-				},
-				select: { all: { where: { grp: "all" } } },
-				// placebo: non-chronic-rx users' refills carry only the declared
-				// organic chronic∧chronic_maintenance mix (2/7 × 1/8 ≈ 0.036)
-				expect: { metric: "all.cm_rate", op: "between", target: [0.015, 0.06] },
-				minCohort: 200,
-			},
-		],
-	},
-	{
-		id: "H6-occasional-no-shows",
-		hook: "H6",
-		archetype: "cohort-count-scale",
-		narrative: `users with <${NO_SHOW_EVENT_THRESHOLD} events (at hook time, clones included) lose ${NO_SHOW_DROP_LIKELIHOOD}% of consultations and get no_show=true on ${NO_SHOW_DROP_LIKELIHOOD}% of bookings. The flag gives selection-free verification of a per-event effect on an activity-selected cohort: flagged ⇒ hook-count ≤ 14 ⇒ output count ≤ 14 (everything after only deletes), so users with ≥15 output events provably carry ZERO no_show=true rows (exact purity), and the no_show rate among ≤14-event users reads the knob (diluted slightly by unflagged users who slipped under 15 when future-dated clones were guard-dropped). The consultation-drop side is asserted as a direction-only composite: the flagged cohort is dominated by occasional/churner personas whose conversionModifier (0.7/0.3) organically lowers consult-per-booking, and H8's free-tier cliff skews zero-consult users into the small bin — the engineered 25% thinning is inseparable from that selection, which is exactly why the no_show flag exists`,
-		assertions: [
-			{
-				// deterministic purity
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-tot AS (SELECT uid, count(*) AS ct FROM ev GROUP BY 1)
-SELECT count(*) FILTER (WHERE e.no_show = true AND t2.ct >= ${NO_SHOW_EVENT_THRESHOLD}) AS big_noshows,
- count(*) FILTER (WHERE e.no_show = true) AS all_noshows,
- count(DISTINCT t2.uid) FILTER (WHERE t2.ct < ${NO_SHOW_EVENT_THRESHOLD}) AS small_users
-FROM ev e JOIN tot t2 ON t2.uid = e.uid WHERE e.event = 'appointment booked'`,
-				},
-				assert: (rows) => {
-					const r = (rows || [])[0];
-					if (!r || Number(r.all_noshows) === 0) return { pass: false, verdict: "NONE", detail: "no no_show=true bookings at all" };
-					const clean = Number(r.big_noshows) === 0;
-					return {
-						pass: clean,
-						verdict: clean ? "NAILED" : "INVERSE",
-						detail: `no_show=true on ≥15-event users: ${r.big_noshows} of ${r.all_noshows} total (must be 0; small-bin users=${r.small_users})`,
-					};
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-tot AS (SELECT uid, count(*) AS ct FROM ev GROUP BY 1),
-bk AS (SELECT e.uid, count(*) AS bookings, count(*) FILTER (WHERE e.no_show = true) AS noshows
-  FROM ev e JOIN tot t2 ON t2.uid = e.uid
-  WHERE e.event = 'appointment booked' AND t2.ct < ${NO_SHOW_EVENT_THRESHOLD} GROUP BY 1)
-SELECT 'small' AS grp, count(*) AS user_count,
- sum(noshows)::DOUBLE / nullif(sum(bookings), 0) AS ns_rate
-FROM bk`,
-				},
-				select: { s: { where: { grp: "small" } } },
-				expect: { metric: "s.ns_rate", op: "between", target: [0.15, 0.3] },
-				minCohort: 150,
-			},
-			{
-				// composite direction check (selection + engineered thinning)
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-tot AS (SELECT uid, count(*) AS ct FROM ev GROUP BY 1),
-per AS (SELECT t2.uid, (t2.ct >= ${NO_SHOW_EVENT_THRESHOLD}) AS big,
-  count(*) FILTER (WHERE e.event = 'appointment booked') AS bk,
-  count(*) FILTER (WHERE e.event = 'consultation completed') AS cons
-  FROM tot t2 JOIN ev e ON e.uid = t2.uid GROUP BY 1, 2)
-SELECT CASE WHEN big THEN 'big' ELSE 'small' END AS grp, count(*) AS user_count,
- sum(cons)::DOUBLE / nullif(sum(bk), 0) AS cons_per_bk
-FROM per WHERE bk > 0 GROUP BY 1`,
-				},
-				select: { s: { where: { grp: "small" } }, b: { where: { grp: "big" } } },
-				expect: { metric: "s.cons_per_bk / b.cons_per_bk", op: "between", target: [0.2, 0.85] },
-				minCohort: 150,
-			},
-		],
-	},
-	{
-		id: "H7-doctor-specialization",
-		hook: "H7",
-		archetype: "cohort-prop-scale",
-		narrative: `user hook: doctors get specialty from a real list and years_experience uniform [${DOCTOR_EXPERIENCE_MIN}, ${DOCTOR_EXPERIENCE_MAX}] (avg 22.5); nurses uniform [${NURSE_EXPERIENCE_MIN}, ${NURSE_EXPERIENCE_MAX}] (avg 9); patients pinned to 0. Deterministic per-role ranges — range violations are hook bugs, not noise`,
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `SELECT role AS grp, count(*) AS user_count,
- avg(years_experience) AS avg_yx, min(years_experience) AS min_yx, max(years_experience) AS max_yx,
- count(*) FILTER (WHERE specialty = 'none') AS none_ct
-FROM ${US} GROUP BY 1`,
-				},
-				assert: (rows) => {
-					const by = Object.fromEntries((rows || []).map(r => [r.grp, r]));
-					const d = by.doctor, n = by.nurse, p = by.patient;
-					if (!d || !n || !p) return { pass: false, verdict: "NONE", detail: `missing role rows (${(rows || []).map(r => r.grp).join(",")})` };
-					const bad = [];
-					if (Number(d.min_yx) < DOCTOR_EXPERIENCE_MIN || Number(d.max_yx) > DOCTOR_EXPERIENCE_MAX) bad.push(`doctor yx [${d.min_yx}, ${d.max_yx}] outside [${DOCTOR_EXPERIENCE_MIN}, ${DOCTOR_EXPERIENCE_MAX}]`);
-					if (Number(d.none_ct) !== 0) bad.push(`${d.none_ct} doctors with specialty='none'`);
-					if (Number(n.min_yx) < NURSE_EXPERIENCE_MIN || Number(n.max_yx) > NURSE_EXPERIENCE_MAX) bad.push(`nurse yx [${n.min_yx}, ${n.max_yx}] outside [${NURSE_EXPERIENCE_MIN}, ${NURSE_EXPERIENCE_MAX}]`);
-					if (Number(p.min_yx) !== 0 || Number(p.max_yx) !== 0) bad.push(`patient yx [${p.min_yx}, ${p.max_yx}] not pinned to 0`);
-					return {
-						pass: bad.length === 0,
-						verdict: bad.length === 0 ? "NAILED" : "INVERSE",
-						detail: bad.length ? bad.join("; ") : `ranges exact: doctor [${d.min_yx}, ${d.max_yx}], nurse [${n.min_yx}, ${n.max_yx}], patient pinned 0 (${d.user_count}/${n.user_count}/${p.user_count} users)`,
-					};
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `SELECT role AS grp, count(*) AS user_count, avg(years_experience) AS avg_yx FROM ${US} GROUP BY 1`,
-				},
-				select: { d: { where: { grp: "doctor" } } },
-				expect: { metric: "d.avg_yx", op: "between", target: [21, 24] },
-				minCohort: 40,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `SELECT role AS grp, count(*) AS user_count, avg(years_experience) AS avg_yx FROM ${US} GROUP BY 1`,
-				},
-				select: { n: { where: { grp: "nurse" } } },
-				expect: { metric: "n.avg_yx", op: "between", target: [8, 10] },
-				minCohort: 80,
-			},
-		],
-	},
-	{
-		id: "H8-free-tier-cliff",
-		hook: "H8",
 		archetype: "funnel-conversion-by-segment",
-		narrative: `${FREE_TIER_DROP_LIKELIHOOD}% of free-tier users lose ALL consultations (per-user cliff). Estimator: (z_free − z_paid) / (1 − z_paid) where z = zero-consultation user share — the natural-zero baseline z cancels, and tier-blind processes (H6 thinning) cancel too, so the statistic reads the 0.30 knob directly. Sharp discriminator vs per-event thinning: SURVIVING free users are untouched, so their consult counts must match basic users (ratio ≈ 1.0); thinning would read ~0.7. The survivor comparison is SEGMENT-STANDARDIZED: tier and persona are sampled from the same seeded stream and come out measurably correlated (free skews occasional, premium skews provider), and persona eventModifier drives volume — raw cross-tier count comparisons are confounded by composition, standardizing on the persona-stamped segment removes it (thinning would still read ~0.7 within every segment)`,
+		narrative: `On-demand patients tolerate about ${PATIENT_WAIT_MIN} minutes. The chance a live (video or phone) request reaches "visit started" depends on the estimated wait shown at request: ${START_RATE_SHORT * 100}% up to ${PATIENT_WAIT_MIN} minutes, falling linearly to ${START_RATE_LONG * 100}% at ${GIVE_UP_WAIT_MIN} minutes, and flat at ${START_RATE_LONG * 100}% beyond. Patients who give up fire "waiting room left". Read: per request (hold visit_id constant), visit started within 1 day, by estimated_wait_min bucket: ≥ ${GIVE_UP_WAIT_MIN} over ≤ ${PATIENT_WAIT_MIN} reads ${START_RATE_LONG} / ${START_RATE_SHORT}.`,
+		mixpanelReport: { type: "Funnels", steps: ["visit requested", "visit started"], counting: "totals", holdPropertyConstant: "visit_id", window: "1 day", filter: "visit_type ≠ async", breakdown: `estimated_wait_min (custom buckets ≤${PATIENT_WAIT_MIN}, ${PATIENT_WAIT_MIN + 1}-${GIVE_UP_WAIT_MIN - 1}, ≥${GIVE_UP_WAIT_MIN})` },
 		assertions: [
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-per AS (SELECT u.distinct_id::VARCHAR AS uid, u.subscription_tier AS tier FROM ${US} u),
-cons AS (SELECT uid, count(*) AS ct FROM ev WHERE event = 'consultation completed' GROUP BY 1),
-j AS (SELECT p.tier, coalesce(c.ct, 0) AS ct FROM per p LEFT JOIN cons c ON c.uid = p.uid),
-z AS (SELECT count(*) AS user_count,
- count(*) FILTER (WHERE tier = 'free' AND ct = 0)::DOUBLE / nullif(count(*) FILTER (WHERE tier = 'free'), 0) AS z_free,
- count(*) FILTER (WHERE tier <> 'free' AND ct = 0)::DOUBLE / nullif(count(*) FILTER (WHERE tier <> 'free'), 0) AS z_paid
- FROM j)
-SELECT 'all' AS grp, user_count, z_free, z_paid,
- (z_free - z_paid) / nullif(1 - z_paid, 0) AS cliff_share FROM z`,
-				},
-				select: { all: { where: { grp: "all" } } },
-				expect: { metric: "all.cliff_share", op: "between", target: [0.24, 0.36] },
-				minCohort: 500,
+				breakdown: { type: "duckdb", sql: H2_SQL },
+				select: { l: { where: { grp: "long" } }, s: { where: { grp: "short" } } },
+				expect: { metric: "l.start_rate / s.start_rate", op: "between", target: band(START_RATE_LONG / START_RATE_SHORT) },
+				minCohort: 1000,
 			},
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-cons AS (SELECT uid, count(*) AS ct FROM ev WHERE event = 'consultation completed' GROUP BY 1),
-surv AS (SELECT u.subscription_tier AS tier, u.segment AS seg, c.ct
-  FROM ${US} u JOIN cons c ON c.uid = u.distinct_id::VARCHAR),
-seg AS (SELECT seg,
-  avg(ct) FILTER (WHERE tier = 'free') AS f_avg, count(*) FILTER (WHERE tier = 'free') AS f_n,
-  avg(ct) FILTER (WHERE tier = 'basic') AS b_avg, count(*) FILTER (WHERE tier = 'basic') AS b_n
-  FROM surv GROUP BY 1)
-SELECT 'all' AS grp, sum(f_n + b_n)::BIGINT AS user_count,
- sum(f_n * f_avg / b_avg) / sum(f_n) AS std_ratio
-FROM seg WHERE f_avg IS NOT NULL AND b_avg IS NOT NULL AND b_n >= 10`,
-				},
-				select: { all: { where: { grp: "all" } } },
-				// per-user cliff, not thinning: survivors untouched → ratio ≈ 1.0
-				// (b_n >= 10 is a stability guard against tiny-segment blowup)
-				expect: { metric: "all.std_ratio", op: "between", target: [0.9, 1.1] },
-				minCohort: 500,
-			},
-			{
-				// the documented Mixpanel funnel report, through the emulator.
-				// Window = funnel's 48h × H9's max stretch 1.4 (the free-tier
-				// timestamp scaling rides this funnel's booked→consult gap).
-				// Composite: the cliff (×0.7) compounds with H9 window censoring
-				// on free — band sits below the pure-cliff 0.70
-				breakdown: {
-					type: "timeToConvert",
-					steps: ["symptom search", "appointment booked", "consultation completed"],
-					breakdownByUserProperty: "subscription_tier",
-					conversionWindowMs: Math.round(48 * TTC_FREE_FACTOR * 3600 * 1000),
-				},
-				assert: (rows) => {
-					const by = Object.fromEntries((rows || []).map(r => [r.segment_value, r]));
-					const f = by.free, b = by.basic;
-					if (!f || !b) return { pass: false, verdict: "NONE", detail: `missing tier rows (${(rows || []).map(r => r.segment_value).join(",")})` };
-					const cf = f.step_counts[2] / f.step_counts[0];
-					const cb = b.step_counts[2] / b.step_counts[0];
-					const ratio = cf / cb;
-					const pass = ratio >= 0.55 && ratio <= 0.8;
-					return {
-						pass,
-						verdict: pass ? (Math.abs(ratio - 0.7) <= 0.07 ? "NAILED" : "STRONG") : (ratio < 1 ? "WEAK" : "INVERSE"),
-						detail: `funnel conversion free=${cf.toFixed(4)} basic=${cb.toFixed(4)} ratio=${ratio.toFixed(3)} (expect ~0.70, band [0.55, 0.80]; entered free=${f.step_counts[0]} basic=${b.step_counts[0]})`,
-					};
-				},
+				breakdown: { type: "duckdb", sql: H2_SQL },
+				select: { s: { where: { grp: "short" } } },
+				expect: { metric: "s.start_rate", op: "between", target: band(START_RATE_SHORT) },
+				minCohort: 1000,
 			},
 		],
 	},
 	{
-		id: "H9-ttc-by-tier",
-		hook: "H9",
+		id: "H3-urgent-care-staffing-gap",
+		hook: "H3",
+		archetype: "temporal-inflection",
+		narrative: `From ${D(STAFFING_GAP_START)} to ${D(STAFFING_GAP_END)} (exclusive) the locum agency contract for urgent care lapsed. Warehouse clinician_staffing_daily shows agency_clinician_hours = 0 for urgent_care on those days, so clinician_hours fall to ${1 - AGENCY_HOURS_SHARE.urgent_care} of plan (agency is normally ${AGENCY_HOURS_SHARE.urgent_care * 100}% of urgent hours). Estimated waits for live urgent-care requests are ${GAP_WAIT_MULT}x on those days, so more patients leave the waiting room (H2). The gap days are read from the warehouse (agency hours = 0); event read: average estimated_wait_min on gap days vs the ${GAP_BASE_DAYS} days either side (same weekday mix, same language mix) reads ${GAP_WAIT_MULT}. Warehouse read: urgent clinician hours per visit request, gap / baseline, reads ${1 - AGENCY_HOURS_SHARE.urgent_care}.`,
+		mixpanelReport: { type: "Insights + warehouse", event: "visit requested", filter: "visit_type ≠ async", measure: "average estimated_wait_min", chart: "daily line", join: "clinician_staffing_daily (service_line = urgent_care) on date" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H3_SQL },
+				select: { g: { where: { grp: "gap" } }, b: { where: { grp: "baseline" } } },
+				expect: { metric: "g.avg_wait / b.avg_wait", op: "between", target: band(GAP_WAIT_MULT) },
+				minCohort: 1000,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H3_WH_SQL },
+				select: { g: { where: { grp: "gap" } }, b: { where: { grp: "baseline" } } },
+				expect: { metric: "g.hours_per_request / b.hours_per_request", op: "between", target: band(1 - AGENCY_HOURS_SHARE.urgent_care) },
+			},
+		],
+	},
+	{
+		id: "H4-pickup-reminders-experiment",
+		hook: "H4",
+		archetype: "experiment-lift",
+		narrative: `The "${PICKUP_EXPERIMENT}" test starts ${D(PICKUP_TEST_START)}: urgent-care prescriptions from requests on or after that date are in the test, split 50/50 by patient (sticky; exposure $experiment_started 1 s after each prescription in the test). In the "${PICKUP_VARIANT}" arm the patient gets an SMS ("reminder sent", reminder_type rx_pickup) ${REMINDER_AFTER_H} h after the prescription if it is not picked up yet. Pickup rises ${REMINDER_PICKUP_MULT}x (from ${PICKUP_BASE * 100}%) and the time from prescription to pickup is ${REMINDER_DELAY_MULT}x (log-normal, control median ${PICKUP_MEDIAN_H} h). Primary care prescriptions are not in the test. Read: per prescription (hold visit_id constant), picked up within ${PICKUP_WINDOW_DAYS} days, prescriptions ${D(PICKUP_TEST_START)} to ${D(PICKUP_READ_END)}; median hours to pickup.`,
+		mixpanelReport: { type: "Funnels", steps: ["prescription sent", "prescription picked up"], counting: "totals", holdPropertyConstant: "visit_id", window: `${PICKUP_WINDOW_DAYS} days`, filter: "service_line = urgent_care", dateRange: `${D(PICKUP_TEST_START)} to ${D(PICKUP_READ_END)}`, breakdown: `user property "${EXP_KEY}"`, measure: "conversion and median time to convert" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H4_SQL },
+				select: { v: { where: { grp: PICKUP_VARIANT } }, c: { where: { grp: "Control" } } },
+				expect: { metric: "v.pickup_rate / c.pickup_rate", op: "between", target: band(REMINDER_PICKUP_MULT) },
+				minCohort: 1500,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H4_SQL },
+				select: { v: { where: { grp: PICKUP_VARIANT } }, c: { where: { grp: "Control" } } },
+				expect: { metric: "v.med_hours / c.med_hours", op: "between", target: band(REMINDER_DELAY_MULT) },
+				minCohort: 1500,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT 'all' AS grp, count(DISTINCT uid) AS user_count,
+ count(DISTINCT uid) FILTER (WHERE "Variant name" = '${PICKUP_VARIANT}')::DOUBLE / count(DISTINCT uid) AS variant_share
+FROM ev WHERE event = '$experiment_started'`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				// equal-weight 2-arm hash → 0.5
+				expect: { metric: "a.variant_share", op: "between", target: band(0.5) },
+				minCohort: 2000,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+v AS (SELECT distinct_id::VARCHAR AS uid, "${EXP_KEY}" AS variant FROM ${US})
+SELECT 'all' AS grp, count(DISTINCT ev.uid) AS user_count,
+ count(*) FILTER (WHERE t < TIMESTAMP '${TS(PICKUP_TEST_START)}' OR v.variant IS DISTINCT FROM '${PICKUP_VARIANT}') AS impure
+FROM ev LEFT JOIN v ON v.uid = ev.uid WHERE event = 'reminder sent' AND reminder_type = 'rx_pickup'`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				// exact: pickup reminders exist only in the variant after the start
+				expect: { metric: "a.impure", op: "between", target: [0, 0] },
+			},
+		],
+	},
+	{
+		id: "H5-bluetooth-cuff-lapse",
+		hook: "H5",
+		archetype: "retention-divergence",
+		narrative: `Remote monitoring patients log readings from a connected device (device_connectivity cellular or bluetooth). ${BT_LAPSE_SHARE * 100}% of bluetooth patients stop logging for good at a salted moment between ${LAPSE_FROM_DAYS} days after their first in-window reading and ${D(LAPSE_LAST)}; cellular devices never lapse this way. Separately, ${PROGRAM_DROPOUT_SHARE * 100}% of patients on either device stop at a random time (realism), which scales both groups alike. Read: patients with a reading in ${D0} to ${D(addDays(EARLY_END, -1))}; retained = any reading ${D(LATE_START)} to ${D(DATASET_END)}; bluetooth / cellular reads 1 - ${BT_LAPSE_SHARE}.`,
+		mixpanelReport: { type: "Insights (cohort)", cohort: `did reading logged ${D0} to ${D(addDays(EARLY_END, -1))}`, event: "reading logged", measure: `uniques ${D(LATE_START)} to ${D(DATASET_END)} / cohort size`, breakdown: "user property device_connectivity" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H5_SQL },
+				select: { b: { where: { grp: "bluetooth" } }, c: { where: { grp: "cellular" } } },
+				expect: { metric: "b.retained / c.retained", op: "between", target: band(1 - BT_LAPSE_SHARE) },
+				minCohort: 400,
+			},
+		],
+	},
+	{
+		id: "H6-no-shows-by-lead-time",
+		hook: "H6",
+		archetype: "funnel-conversion-by-segment",
+		narrative: `Primary care appointments booked further ahead are missed more often: P(missed) = ${NOSHOW_BASE} + ${NOSHOW_PER_DAY} x lead_days (${NOSHOW_BASE * 100}% same day, ${Math.round(noShowRate(14) * 1000) / 10}% at two weeks). lead_days is on "appointment booked"; a missed appointment fires "appointment missed" (server-side) 15 minutes after the slot. Read: per appointment (hold visit_id constant), bookings ${D0} to ${D(addDays(BOOKING_READ_END, -1))}: the linear slope of the no-show rate on lead_days reads ${NOSHOW_PER_DAY}, and the rate for ${LEAD_LONG_FROM}+ days reads ${NOSHOW_LONG} (the LEAD_WEIGHTS mix of the line).`,
+		mixpanelReport: { type: "Funnels", steps: ["appointment booked", "appointment missed"], counting: "totals", holdPropertyConstant: "visit_id", window: `${FUNNEL_WINDOW_DAYS} days`, dateRange: `${D0} to ${D(addDays(BOOKING_READ_END, -1))}`, breakdown: "lead_days" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H6_SQL },
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.slope", op: "between", target: band(NOSHOW_PER_DAY) },
+				minCohort: 3000,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H6_SQL },
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.noshow_long", op: "between", target: band(NOSHOW_LONG) },
+				minCohort: 3000,
+			},
+		],
+	},
+	{
+		id: "H7-therapist-choice-wait",
+		hook: "H7",
 		archetype: "funnel-ttc-by-segment",
-		narrative: `premium × ${TTC_PREMIUM_FACTOR} / free × ${TTC_FREE_FACTOR} on (a) wait_time_hours and duration_minutes (iid property scale — avg ratios read the knobs exactly; H2's flu doubling is tier-blind and cancels) and (b) the first booked→consult→follow-up sequence's timestamps (scaleFunnelTTC). The TTC assertions run through the Mixpanel-aligned emulator at a 2016h conversion window = max stretch ${TTC_FREE_FACTOR} × (2 gaps × 30d per-gap cap in findFirstSequence) — the window must cover the stretched support or censoring dilutes the free tier (the ai-platform H9 lesson). Only each user's FIRST sequence is scaled and the emulator's greedy first-conversion aligns with findFirstSequence's greedy scan, but organic re-conversions still dilute the measured ratio toward 1 — bands assume ≥25% of the full effect survives`,
+		narrative: `New therapy clients pick a therapist at intake (therapist_preference on "therapy intake completed"): first_available or specific_therapist. Time from intake to the first session is log-normal (median ${THERAPY_FIRST_MEDIAN_H} h) for first_available and ${SPECIFIC_THERAPIST_MULT}x for specific_therapist; sessions start on US afternoon/evening hours. Read: per client, first "therapy session completed" within ${FUNNEL_WINDOW_DAYS} days of the intake, intakes before ${D(BOOKING_READ_END)}; median hours, specific / first_available reads ${SPECIFIC_THERAPIST_MULT}.`,
+		mixpanelReport: { type: "Funnels", steps: ["therapy intake completed", "therapy session completed"], counting: "uniques", window: `${FUNNEL_WINDOW_DAYS} days`, dateRange: `${D0} to ${D(addDays(BOOKING_READ_END, -1))}`, measure: "median time to convert", breakdown: "therapist_preference" },
 		assertions: [
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT subscription_tier AS grp, count(*) AS event_count, count(DISTINCT uid) AS user_count, avg(wait_time_hours) AS avg_wait
-FROM ev WHERE event = 'appointment booked' GROUP BY 1`,
-				},
-				select: { f: { where: { grp: "free" } }, b: { where: { grp: "basic" } } },
-				expect: { metric: "f.avg_wait / b.avg_wait", op: "between", target: [1.26, 1.54] },
+				breakdown: { type: "duckdb", sql: H7_SQL },
+				select: { s: { where: { grp: "specific_therapist" } }, f: { where: { grp: "first_available" } } },
+				expect: { metric: "s.med_hours / f.med_hours", op: "between", target: band(SPECIFIC_THERAPIST_MULT) },
+				minCohort: 200,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H7_SQL },
+				select: { f: { where: { grp: "first_available" } } },
+				expect: { metric: "f.med_hours", op: "between", target: band(THERAPY_FIRST_MEDIAN_H) },
 				minCohort: 300,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT subscription_tier AS grp, count(*) AS event_count, count(DISTINCT uid) AS user_count, avg(wait_time_hours) AS avg_wait
-FROM ev WHERE event = 'appointment booked' GROUP BY 1`,
-				},
-				select: { p: { where: { grp: "premium" } }, b: { where: { grp: "basic" } } },
-				expect: { metric: "p.avg_wait / b.avg_wait", op: "between", target: [0.6, 0.74] },
-				minCohort: 300,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT subscription_tier AS grp, count(*) AS event_count, count(DISTINCT uid) AS user_count, avg(duration_minutes) AS avg_dur
-FROM ev WHERE event = 'consultation completed' GROUP BY 1`,
-				},
-				select: { f: { where: { grp: "free" } }, b: { where: { grp: "basic" } } },
-				expect: { metric: "f.avg_dur / b.avg_dur", op: "between", target: [1.26, 1.54] },
-				minCohort: 300,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT subscription_tier AS grp, count(*) AS event_count, count(DISTINCT uid) AS user_count, avg(duration_minutes) AS avg_dur
-FROM ev WHERE event = 'consultation completed' GROUP BY 1`,
-				},
-				select: { p: { where: { grp: "premium" } }, b: { where: { grp: "basic" } } },
-				expect: { metric: "p.avg_dur / b.avg_dur", op: "between", target: [0.6, 0.74] },
-				minCohort: 300,
-			},
-			{
-				breakdown: {
-					type: "timeToConvert",
-					steps: ["appointment booked", "consultation completed", "follow up scheduled"],
-					breakdownByUserProperty: "subscription_tier",
-					// 2016h = 1.4 × 2 gaps × 30d per-gap cap (covers stretched support)
-					conversionWindowMs: 2016 * 60 * 60 * 1000,
-				},
-				select: { f: { where: { segment_value: "free" } }, b: { where: { segment_value: "basic" } } },
-				expect: { metric: "f.median_ttc_ms / b.median_ttc_ms", op: "between", target: [1.04, 1.44] },
-				minCohort: 150,
-			},
-			{
-				breakdown: {
-					type: "timeToConvert",
-					steps: ["appointment booked", "consultation completed", "follow up scheduled"],
-					breakdownByUserProperty: "subscription_tier",
-					conversionWindowMs: 2016 * 60 * 60 * 1000,
-				},
-				select: { p: { where: { segment_value: "premium" } }, b: { where: { segment_value: "basic" } } },
-				expect: { metric: "p.median_ttc_ms / b.median_ttc_ms", op: "between", target: [0.6, 0.97] },
-				minCohort: 150,
 			},
 		],
 	},
 	{
-		id: "H10-consult-count-magic-number",
-		hook: "H10",
-		archetype: "frequency-sweet-spot",
-		narrative: `sweet ${CONSULT_SWEET_MIN}-${CONSULT_SWEET_MAX} consultations → consultation_fee × ${CONSULT_FEE_BOOST}; over ${CONSULT_OVER_THRESHOLD}+ → days_until_followup × ${CONSULT_FOLLOWUP_STRETCH}. Both are property-only mutations on cohorts the output rebuilds exactly (counts run after all filters). Median ratios are selection-free: scaling a whole cohort's iid draws scales every quantile by the knob. H1's after-hours boost rides all count-cohorts equally (hours are count-independent). The days assertion filters to consultation_mode='phone' follow-ups — H4's injected clones are always video with a different days distribution, and the over-cohort receives more clones`,
+		id: "H8-self-pay-price-cut",
+		hook: "H8",
+		archetype: "temporal-inflection",
+		narrative: `On ${D(SELF_PAY_PRICE_CHANGE)} the self-pay urgent visit price drops $${SELF_PAY_PRICE[0]} → $${SELF_PAY_PRICE[1]} (patient_cost_usd on "visit requested"; list price and revenue in warehouse visit_revenue_daily). After a symptom check routed to a virtual visit, self-pay patients request a visit ${REQUEST_RATE_SELF_PAY * 100}% of the time before and ${SELF_PAY_LIFT}x after (${Math.round(REQUEST_RATE_SELF_PAY * SELF_PAY_LIFT * 100)}%); insured patients stay at ${REQUEST_RATE_INSURED * 100}%. Read: visit requests per symptom check, after / before, by coverage. Revenue needs the warehouse: self-pay urgent patient revenue per self-pay symptom check reads ${SELF_PAY_LIFT} x ${SELF_PAY_PRICE[1]}/${SELF_PAY_PRICE[0]} = ${(SELF_PAY_LIFT * PRICE_RATIO).toFixed(3)} (the cut buys volume, not revenue).`,
+		mixpanelReport: { type: "Insights + warehouse", events: ["visit requested", "symptom check completed"], formula: "A / B", breakdown: "coverage_type", chart: `before vs after ${D(SELF_PAY_PRICE_CHANGE)}`, join: "visit_revenue_daily (urgent_care, self_pay).patient_revenue_usd on date" },
 		assertions: [
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${CONSULT_CTE},
-coh AS (SELECT uid, CASE WHEN ct BETWEEN ${CONSULT_SWEET_MIN} AND ${CONSULT_SWEET_MAX} THEN 'sweet'
-  WHEN ct >= ${CONSULT_OVER_THRESHOLD} THEN 'over' ELSE 'low' END AS grp FROM cc)
-SELECT c.grp, count(DISTINCT c.uid) AS user_count, count(*) AS event_count, median(e.consultation_fee) AS med_fee
-FROM coh c JOIN ev e ON e.uid = c.uid AND e.event = 'consultation completed' GROUP BY 1`,
-				},
-				select: { s: { where: { grp: "sweet" } }, l: { where: { grp: "low" } } },
-				expect: { metric: "s.med_fee / l.med_fee", op: "between", target: [1.12, 1.4] },
-				minCohort: 60,
+				breakdown: { type: "duckdb", sql: H8_SQL },
+				select: { a: { where: { grp: "after_self_pay" } }, b: { where: { grp: "before_self_pay" } } },
+				expect: { metric: "a.request_rate / b.request_rate", op: "between", target: band(SELF_PAY_LIFT) },
+				minCohort: 500,
 			},
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${CONSULT_CTE},
-coh AS (SELECT uid, CASE WHEN ct BETWEEN ${CONSULT_SWEET_MIN} AND ${CONSULT_SWEET_MAX} THEN 'sweet'
-  WHEN ct >= ${CONSULT_OVER_THRESHOLD} THEN 'over' ELSE 'low' END AS grp FROM cc)
-SELECT c.grp, count(DISTINCT c.uid) AS user_count, count(*) AS event_count, median(e.days_until_followup) AS med_days
-FROM coh c JOIN ev e ON e.uid = c.uid AND e.event = 'follow up scheduled' AND e.consultation_mode = 'phone'
-GROUP BY 1`,
-				},
-				select: { o: { where: { grp: "over" } }, s: { where: { grp: "sweet" } } },
-				// Math.round on small integer days adds up to ~5% bias
-				expect: { metric: "o.med_days / s.med_days", op: "between", target: [1.3, 1.75] },
-				minCohort: 60,
+				breakdown: { type: "duckdb", sql: H8_SQL },
+				select: { a: { where: { grp: "after_insured" } }, b: { where: { grp: "before_insured" } } },
+				// control: insured patients' prices did not change
+				expect: { metric: "a.request_rate / b.request_rate", op: "between", target: band(1) },
+				minCohort: 2000,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H8_REV_SQL },
+				select: { a: { where: { grp: "after" } }, b: { where: { grp: "before" } } },
+				expect: { metric: "a.revenue_per_check / b.revenue_per_check", op: "between", target: band(Math.round(SELF_PAY_LIFT * PRICE_RATIO * 1000) / 1000) },
+				minCohort: 500,
+			},
+		],
+	},
+	{
+		id: "H9-respiratory-season",
+		hook: "H9",
+		archetype: "bespoke",
+		narrative: `Respiratory season starts mid-September: from ${D(RESP_WAVE_START)} respiratory symptom checks ramp up, and from ${D(RESP_WAVE_PEAK)} they run at ${RESP_WAVE_MULT}x their summer rate relative to every other reason. Each extra check is a full visit flow (request, waiting room, visit, prescription) for a patient already active that day, so the other reasons are untouched. Read: respiratory / non-respiratory symptom checks, ${D(RESP_WAVE_PEAK)} to ${D(DATASET_END)} vs ${D0} to ${D(addDays(RESP_WAVE_START, -1))}, reads ${RESP_WAVE_MULT} (the ratio cancels the growth of the patient base).`,
+		mixpanelReport: { type: "Insights", event: "symptom check completed", breakdown: "reason_category", chart: "weekly line; respiratory / all other reasons" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H9_SQL },
+				select: { p: { where: { grp: "peak" } }, b: { where: { grp: "baseline" } } },
+				expect: { metric: "p.resp_per_other / b.resp_per_other", op: "between", target: band(RESP_WAVE_MULT) },
+				minCohort: 2000,
+			},
+		],
+	},
+	{
+		id: "H10-spanish-wait-gap",
+		hook: "H10",
+		archetype: "cohort-prop-scale",
+		narrative: `Patients whose preferred_language is es are routed to the Spanish-speaking clinician pool (about ${SPANISH_HOURS_SHARE.urgent_care * 100}% of urgent clinician hours in clinician_staffing_daily, while about ${SPANISH_SHARE * 100}% of patients prefer Spanish). Their estimated waits for live urgent-care visits are ${SPANISH_WAIT_MULT}x, so they leave the waiting room more often (H2). The staffing gap (H3) and busy hours scale both languages alike. Read: average estimated_wait_min, es / en, live requests.`,
+		mixpanelReport: { type: "Insights", event: "visit requested", filter: "visit_type ≠ async", measure: "average estimated_wait_min", breakdown: "preferred_language" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H10_SQL },
+				select: { s: { where: { grp: "es" } }, e: { where: { grp: "en" } } },
+				expect: { metric: "s.avg_wait / e.avg_wait", op: "between", target: band(SPANISH_WAIT_MULT) },
+				minCohort: 800,
 			},
 		],
 	},
