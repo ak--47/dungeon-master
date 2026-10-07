@@ -150,10 +150,10 @@ SELECT g.ch, g.signups, round(g.completed::DOUBLE / g.signups, 4) AS completion_
 FROM g LEFT JOIN sp ON sp.ch = g.ch ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- STORY H7-android-chat-incident — 60% of Android sends fail 2026-08-24..28 (warehouse join)
+-- STORY H7-android-chat-incident — 60% of Android sends fail 2026-08-24..30 (warehouse join)
 -- ─────────────────────────────────────────────────────────────────────────
 WITH o AS (SELECT DISTINCT date::DATE AS d FROM wh_chat WHERE service_status = 'major_outage'),
-w AS (SELECT t::DATE AS d, platform FROM ev WHERE event = 'message sent' AND t >= TIMESTAMP '2026-08-10' AND t < TIMESTAMP '2026-09-12'),
+w AS (SELECT t::DATE AS d, platform FROM ev WHERE event = 'message sent' AND t >= TIMESTAMP '2026-08-10' AND t < TIMESTAMP '2026-09-14'),
 g AS (SELECT (d IN (SELECT d FROM o)) AS incident_days, count(*) FILTER (WHERE platform = 'android') AS android, count(*) FILTER (WHERE platform = 'ios') AS ios FROM w GROUP BY 1)
 SELECT incident_days, android, ios, round(android::DOUBLE / ios, 4) AS android_per_ios FROM g ORDER BY 1;
 
@@ -294,12 +294,12 @@ SELECT count(*) AS signups, round(avg(completed::INT), 4) AS overall_completion 
 -- ─────────────────────────────────────────────────────────────────────────
 SELECT e.d, e.android, e.ios, round(e.android::DOUBLE / e.ios, 3) AS android_per_ios, w.service_status, w.delivery_failure_rate
 FROM (SELECT t::DATE AS d, count(*) FILTER (WHERE platform = 'android') AS android, count(*) FILTER (WHERE platform = 'ios') AS ios
-  FROM ev WHERE event = 'message sent' AND t >= TIMESTAMP '2026-08-17' AND t < TIMESTAMP '2026-09-05' GROUP BY 1) e
+  FROM ev WHERE event = 'message sent' AND t >= TIMESTAMP '2026-08-17' AND t < TIMESTAMP '2026-09-07' GROUP BY 1) e
 LEFT JOIN wh_chat w ON w.date::DATE = e.d AND w.platform = 'android' ORDER BY 1;
 
 -- lost Android messages: expected (baseline Android/iOS ratio x incident iOS) minus observed
 WITH o AS (SELECT DISTINCT date::DATE AS d FROM wh_chat WHERE service_status = 'major_outage'),
-w AS (SELECT t::DATE AS d, platform FROM ev WHERE event = 'message sent' AND t >= TIMESTAMP '2026-08-10' AND t < TIMESTAMP '2026-09-12'),
+w AS (SELECT t::DATE AS d, platform FROM ev WHERE event = 'message sent' AND t >= TIMESTAMP '2026-08-10' AND t < TIMESTAMP '2026-09-14'),
 g AS (SELECT (d IN (SELECT d FROM o)) AS inc, count(*) FILTER (WHERE platform = 'android') AS a, count(*) FILTER (WHERE platform = 'ios') AS i FROM w GROUP BY 1)
 SELECT round(max(a::DOUBLE / i) FILTER (WHERE inc) / max(a::DOUBLE / i) FILTER (WHERE NOT inc), 4) AS relative_android_volume,
  round(max(a::DOUBLE / i) FILTER (WHERE NOT inc) * max(i) FILTER (WHERE inc) - max(a) FILTER (WHERE inc), 0) AS android_messages_lost_in_mixpanel,
@@ -319,6 +319,14 @@ SELECT max(pr::DOUBLE / v) FILTER (WHERE period = 'before') AS premier_before, m
  round((max(pr::DOUBLE / v) FILTER (WHERE period = 'after') - max(pr::DOUBLE / v) FILTER (WHERE period = 'before'))
   / sqrt(max(pr::DOUBLE / v * (1 - pr::DOUBLE / v) / v) FILTER (WHERE period = 'after') + max(pr::DOUBLE / v * (1 - pr::DOUBLE / v) / v) FILTER (WHERE period = 'before')), 2) AS z_premier
 FROM g;
+
+-- paywall traffic: views per day by month and in the four weeks either side of Aug 18 (a slow drift, no step)
+SELECT period, round(views / days, 1) AS paywall_views_per_day FROM (
+ SELECT '1 June' AS period, count(*) FILTER (WHERE t < TIMESTAMP '2026-07-01') AS views, 27.0 AS days FROM ev WHERE event = 'paywall viewed'
+ UNION ALL SELECT '2 Jul 21 - Aug 17', count(*) FILTER (WHERE t >= TIMESTAMP '2026-07-21' AND t < TIMESTAMP '2026-08-18'), 28.0 FROM ev WHERE event = 'paywall viewed'
+ UNION ALL SELECT '3 Aug 18 - Sep 14', count(*) FILTER (WHERE t >= TIMESTAMP '2026-08-18' AND t < TIMESTAMP '2026-09-15'), 28.0 FROM ev WHERE event = 'paywall viewed'
+ UNION ALL SELECT '4 September', count(*) FILTER (WHERE t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-10-01'), 30.0 FROM ev WHERE event = 'paywall viewed')
+ORDER BY 1;
 
 -- warehouse bookings per day, Kindred+ vs Premier, before vs after
 SELECT plan, CASE WHEN date::DATE >= DATE '2026-08-18' THEN 'after' ELSE 'before' END AS period,
@@ -366,23 +374,20 @@ FROM matches m JOIN prof p ON p.uid = m.uid
 WHERE m.t_match >= TIMESTAMP '2026-07-22' AND m.t_match < TIMESTAMP '2026-09-01' AND p.variant IS NOT NULL GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- EVAL Q14 — verified vs unverified members: matches per like after the ramp (null)
+-- EVAL Q14 — Premier conversion per paywall view across the Kindred+ price change (null), overall and by platform
 -- ─────────────────────────────────────────────────────────────────────────
-WITH x AS (SELECT p.verified, e.platform, count(*) FILTER (WHERE event = 'like sent') AS likes, count(*) FILTER (WHERE event = 'match created') AS m
-  FROM ev e JOIN prof p ON p.uid = e.uid WHERE e.t >= TIMESTAMP '2026-08-04' AND event IN ('like sent', 'match created') GROUP BY ROLLUP (1, 2))
-SELECT coalesce(platform, 'all') AS platform, coalesce(verified::VARCHAR, 'all') AS verified, likes, m AS matches, round(m::DOUBLE / likes, 4) AS matches_per_like
-FROM x ORDER BY 1, 2;
-
-WITH x AS (SELECT p.verified, count(*) FILTER (WHERE event = 'like sent') AS n, count(*) FILTER (WHERE event = 'match created')::DOUBLE / count(*) FILTER (WHERE event = 'like sent') AS r
-  FROM ev e JOIN prof p ON p.uid = e.uid WHERE e.t >= TIMESTAMP '2026-08-04' AND event IN ('like sent', 'match created') GROUP BY 1)
-SELECT round((max(r) FILTER (WHERE verified) - max(r) FILTER (WHERE NOT verified)) / sqrt(max(r * (1 - r) / n) FILTER (WHERE verified) + max(r * (1 - r) / n) FILTER (WHERE NOT verified)), 2) AS z_like_level
-FROM x;
-
--- activity trap: verified members like more, so they collect more matches per member
-SELECT p.verified, count(DISTINCT e.uid) AS members,
- round(count(*) FILTER (WHERE event = 'like sent')::DOUBLE / count(DISTINCT e.uid), 1) AS likes_per_member,
- round(count(*) FILTER (WHERE event = 'match created')::DOUBLE / count(DISTINCT e.uid), 2) AS matches_per_member
-FROM ev e JOIN prof p ON p.uid = e.uid WHERE e.t >= TIMESTAMP '2026-08-04' GROUP BY 1 ORDER BY 1;
+WITH x AS (SELECT CASE WHEN t >= TIMESTAMP '2026-08-18' THEN 'after' ELSE 'before' END AS period, platform,
+  count(*) FILTER (WHERE event = 'paywall viewed') AS views, count(*) FILTER (WHERE event = 'subscription started' AND plan = 'premier') AS premier
+  FROM ev WHERE event IN ('paywall viewed', 'subscription started') GROUP BY GROUPING SETS ((1), (1, 2)))
+SELECT coalesce(platform, 'all') AS platform,
+ max(views) FILTER (WHERE period = 'before') AS views_before, max(premier) FILTER (WHERE period = 'before') AS premier_before,
+ max(views) FILTER (WHERE period = 'after') AS views_after, max(premier) FILTER (WHERE period = 'after') AS premier_after,
+ round(max(premier::DOUBLE / views) FILTER (WHERE period = 'before'), 4) AS rate_before,
+ round(max(premier::DOUBLE / views) FILTER (WHERE period = 'after'), 4) AS rate_after,
+ round((max(premier::DOUBLE / views) FILTER (WHERE period = 'after') - max(premier::DOUBLE / views) FILTER (WHERE period = 'before'))
+  / sqrt(max(premier::DOUBLE / views * (1 - premier::DOUBLE / views) / views) FILTER (WHERE period = 'after')
+   + max(premier::DOUBLE / views * (1 - premier::DOUBLE / views) / views) FILTER (WHERE period = 'before')), 2) AS z
+FROM x GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q15 — onboarding completion, Android vs iOS (null), overall and by channel group
@@ -436,6 +441,22 @@ SELECT date_trunc('month', t)::DATE AS month, count(DISTINCT uid) FILTER (WHERE 
  count(*) FILTER (WHERE event = 'account created') AS signups, count(*) FILTER (WHERE event = 'match created') AS matches,
  count(*) FILTER (WHERE event = 'date planned') AS dates_planned, count(*) FILTER (WHERE event = 'subscription started') AS new_subscriptions
 FROM ev GROUP BY 1 ORDER BY 1;
+
+-- cancellations by month vs the paid base: a member is paid from June 4 (plan on
+-- their first event in the window is paid) or from their subscription start, until
+-- their cancellation. Weekly cancellation rate = cancellations / paid member-weeks.
+WITH firstplan AS (SELECT uid, arg_min(subscription_plan, t) AS fp FROM ev GROUP BY 1),
+buy AS (SELECT uid, min(t) AS bt FROM ev WHERE event = 'subscription started' GROUP BY 1),
+canc AS (SELECT uid, min(t) AS ct FROM ev WHERE event = 'subscription cancelled' GROUP BY 1),
+iv AS (SELECT f.uid, CASE WHEN f.fp <> 'free' THEN TIMESTAMP '2026-06-04' ELSE b.bt END AS ps, coalesce(c.ct, TIMESTAMP '2026-10-02') AS pe
+  FROM firstplan f LEFT JOIN buy b ON b.uid = f.uid LEFT JOIN canc c ON c.uid = f.uid WHERE f.fp <> 'free' OR b.bt IS NOT NULL),
+m AS (SELECT * FROM (VALUES (DATE '2026-06-04', DATE '2026-07-01'), (DATE '2026-07-01', DATE '2026-08-01'), (DATE '2026-08-01', DATE '2026-09-01'), (DATE '2026-09-01', DATE '2026-10-01')) v(ms, me)),
+pd AS (SELECT m.ms, sum(date_diff('second', greatest(iv.ps, m.ms::TIMESTAMP), least(iv.pe, m.me::TIMESTAMP)) / 86400.0) AS paid_days
+  FROM m JOIN iv ON iv.ps < m.me::TIMESTAMP AND iv.pe > m.ms::TIMESTAMP GROUP BY 1),
+cm AS (SELECT m.ms, count(c.uid) AS cancellations FROM m LEFT JOIN canc c ON c.ct >= m.ms AND c.ct < m.me GROUP BY 1)
+SELECT m.ms AS month_start, round(pd.paid_days / date_diff('day', m.ms, m.me), 0) AS avg_paid_members, cm.cancellations,
+ round(100.0 * 7 * cm.cancellations / pd.paid_days, 2) AS weekly_cancel_pct
+FROM m JOIN pd ON pd.ms = m.ms JOIN cm ON cm.ms = m.ms ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q20 — budget inputs: see EVAL Q7 (spend per signup / completed profile / subscriber)

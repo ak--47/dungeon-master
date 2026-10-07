@@ -51,7 +51,7 @@ Every match has a `match_id`. The match, the opener, every later message, the da
 | `message sent` | The member sends a later message in an open conversation. | `match_id`; `message_type` (`text`, `photo`, `voice_note`, `gif`). |
 | `date planned` | The member and their match agree a date with Date Plan. | `match_id`; `venue_type` (`drinks`, `coffee`, `dinner`, `activity`, `video_call`); `days_until_date` (1-7): days from planning to the date itself. |
 | `date feedback submitted` | The member rates the date after it happened. Sent the day after the date or later. | `match_id`; `rating` (1-5 stars); `would_meet_again` (true or false). |
-| `$experiment_started` | Mixpanel experiment exposure, sent one second before each new match for members in the Icebreakers test (from 2026-07-22). | `Experiment name` = `Icebreakers`; `Variant name` = `Control` or `Icebreakers`. |
+| `$experiment_started` | Mixpanel experiment exposure, sent once per member in the Icebreakers test, one second before their first match from 2026-07-22. | `Experiment name` = `Icebreakers`; `Variant name` = `Control` or `Icebreakers`. |
 
 ## Billing
 
@@ -59,7 +59,7 @@ Every match has a `match_id`. The match, the opener, every later message, the da
 |---|---|---|
 | `paywall viewed` | A free member sees the plans paywall. | `paywall_trigger` (`out_of_likes`, `likes_you`, `spark`, `boost`, `profile_tab`). |
 | `subscription started` | The member starts a paid plan. At most one per member in the window. Price is **not** tracked here; see `subscription_bookings_daily`. | `plan` (`plus` or `premier`); `billing_period` (`1_month`, `3_month`, `6_month`). |
-| `subscription cancelled` | The member cancels their paid plan. The event carries the plan being cancelled in `subscription_plan`; the member's later events carry `free`. At most one per member in the window. | `cancel_reason` (`met_someone`, `too_expensive`, `not_enough_matches`, `taking_a_break`, `bad_experience`). |
+| `subscription cancelled` | The member cancels their paid plan, in Kindred settings or in the app store. Store cancellations reach Kindred from the store, so the event can arrive on a day the member did not open the app. The event carries the plan being cancelled in `subscription_plan`; the member's later events carry `free`. At most one per member in the window. | `cancel_reason` (`met_someone`, `too_expensive`, `not_enough_matches`, `taking_a_break`, `bad_experience`). |
 
 ## User profile properties
 
@@ -79,7 +79,6 @@ Every match has a `match_id`. The match, the opener, every later message, the da
 | `verified` | `true` if the member has completed Verified Profiles. |
 | `Experiment: Icebreakers` | `Control` or `Icebreakers` for members in the test; empty for everyone else. |
 | `created` | Signup time for members who joined in the window (the time of their `account created` event); empty for established members. |
-| `_persona` | Engagement segment from the CRM's lifecycle model (`serial_swiper`, `intentional_dater`, `casual_browser`). |
 | `anonymousIds`, `sessionIds` | Devices and sessions seen for the member (pipeline metadata). |
 
 ## Funnels the business tracks

@@ -18,6 +18,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 | Fake-account report rate | `profile reported` events with `report_reason` in (`fake_profile`, `scam`) per 1,000 profile decisions (`like sent` + `profile passed`). Trust & Safety uses decisions as the exposure base because report volume grows with browsing. |
 | Verification rate | Share of active members (`app opened` since 2026-07-14) with `verified = true`. |
 | Paywall conversion | `subscription started` events per `paywall viewed` event, by `plan`. |
+| Weekly cancellation rate | `subscription cancelled` events divided by paid member-weeks in the period (members on `plus` or `premier`). Finance tracks the rate, not the raw count, because the paid base changes size. |
 | New subscriptions | Count of `subscription started`, split by `plan` and `billing_period`. |
 | Bookings | New subscriptions × list price on the start date, from `subscription_bookings_daily`. Finance reports bookings at list price for the whole billing period. |
 | CAC (paid) | Spend for a paid channel divided by new members Mixpanel recorded from that channel (`account created` with that `acquisition_channel`) over the same days. Finance uses Mixpanel signups, not the installs the ad networks report. |
@@ -82,4 +83,4 @@ Caveats: the table covers new subscriptions only, not renewals. Promotional and 
 - Activity follows a weekly rhythm. Compare whole weeks or matching weekdays, not a few days against a span with a different mix of weekdays.
 - New members keep arriving through the window, so totals tend to grow over time. Use rates (per like, per match, per paywall view, per decision) when you compare periods.
 - New-member funnels, conversion, and retention depend on signup date: members who joined late in the window have had less time to act. Compare cohorts that joined in the same weeks, and only count brackets that end inside the data.
-- Members have many likes, matches, and conversations. Per-match questions need `match_id` held constant; unique-member funnels hide most of the difference between matches.
+- Per-match questions need `match_id` held constant.

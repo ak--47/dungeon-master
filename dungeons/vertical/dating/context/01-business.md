@@ -2,7 +2,7 @@
 
 ## Who we are
 
-Kindred is a dating app for adults who want a real relationship, not endless swiping. It launched in 2024 in New York and now serves ten US cities plus London and Toronto. The company has about 12 employees: product and engineering, a two-person Trust & Safety team, growth marketing, and member support. Revenue comes from subscriptions (renewals included, about $70,000 a month in the summer of 2026) and a small amount of in-app purchases (extra Boosts); there is no advertising in the app.
+Kindred is a dating app for adults who want a real relationship, not endless swiping. It launched in 2024 in New York and now serves ten US cities plus London and Toronto. The company is venture-backed and has about 12 employees: product and engineering, a two-person Trust & Safety team, growth marketing, and member support. Revenue comes from subscriptions (renewals included, about $55,000 a month in the summer of 2026) and a small amount of in-app purchases (extra Boosts); there is no advertising in the app.
 
 The product team's north star is dates: Kindred measures itself by how many members meet someone in person, not by time spent in the app.
 
@@ -21,7 +21,7 @@ The product team's north star is dates: Kindred measures itself by how many memb
 
 | Plan | List price | What you get |
 |---|---|---|
-| Free | $0 | Daily like limit, a small Spark allowance, basic filters |
+| Free | $0 | A cap on likes per day, a small Spark allowance, basic filters |
 | Kindred+ (`plus`) | 1 month $29.99, 3 months $74.99, 6 months $119.99 until 2026-08-17; 1 month $34.99, 3 months $86.99, 6 months $139.99 for new subscriptions from 2026-08-18 | Unlimited likes, see everyone in Likes You, a larger Spark allowance, advanced filters |
 | Kindred Premier (`premier`) | 1 month $49.99, 3 months $119.99, 6 months $179.99 (unchanged) | Everything in Kindred+, the largest Spark allowance, a weekly Boost, priority placement in Discover |
 
@@ -40,7 +40,7 @@ The product team's north star is dates: Kindred measures itself by how many memb
   - `figuring_it_out` — not sure yet.
   - `short_term_fun` — short-term, open to long.
 - **Markets** (`market`): New York, Los Angeles, Chicago, Washington DC, San Francisco, Austin, Boston, Miami, Seattle, Denver, London, Toronto. New York is the largest.
-- **Platforms:** members use the iOS app (iPhone or iPad) or the Android app, roughly half each.
+- **Platforms:** members use the iOS app (iPhone or iPad) or the Android app; a little over half are on Android.
 - **Established vs new members.** About 55% of members active in the window joined before June 4. New members arrive steadily, about 260 a week.
 
 ## How members find us
@@ -53,7 +53,7 @@ New members arrive through one of five acquisition channels, recorded at signup:
 - **tiktok_ads** — paid in-feed video ads on TikTok.
 - **apple_search_ads** — paid placements in App Store search results.
 
-The three paid channels bill for impressions and clicks on daily budgets. Daily spend by paid channel is in the warehouse table `paid_acquisition_daily`. Marketing added TikTok to the mix in the spring to reach younger daters.
+The three paid channels bill for impressions and clicks on daily budgets. Daily spend by paid channel is in the warehouse table `paid_acquisition_daily`.
 
 ## Goals for the period (Q3 2026)
 
@@ -62,6 +62,6 @@ Leadership set these goals for the quarter:
 1. **More first dates.** Grow the number of planned dates per active member. The product team is testing ways to help matched members start talking (the Icebreakers experiment). The chat team believes momentum right after a match matters.
 2. **A safer app.** Trust & Safety launched Verified Profiles in July to fight fake accounts and romance scams, and asked for a read on whether it is working.
 3. **Grow subscription revenue.** The pricing team raised Kindred+ prices in August; leadership asked whether it hurt sales and whether it paid off.
-4. **Efficient acquisition.** Finance asked which paid channel is worth its cost, including the newest one, TikTok.
-5. **Activate new members.** Too many signups never finish their profile. The growth team wants to know where they drop and whether it differs by segment.
+4. **Efficient acquisition.** Finance asked which paid channel is worth its cost.
+5. **Activate new members.** Too many signups never finish their profile. The growth team wants to know where they drop.
 6. **Understand churn.** Member support and finance want to know why members leave.

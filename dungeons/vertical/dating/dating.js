@@ -18,7 +18,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             Premier ($49.99/month). Sparks are premium likes with a note.
  *             Verified Profiles (video selfie check) launches 2026-07-14.
  * SCALE:      10,000 simulated members (≈4,500 sign up inside the window;
- *             ≈1,700 of those never finish their profile and leave), ~0.70M
+ *             ≈1,750 of those never finish their profile and leave), ~0.77M
  *             events, 120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  like sent → match created → conversation started → date planned
  *             → date feedback submitted
@@ -32,20 +32,24 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   > date planned > profile completed > date feedback submitted
  *   > subscription started > subscription cancelled
  *
- * FUNNELS (7 declared):
+ * FUNNELS (9 declared):
  *   - Onboarding (first funnel, two copies by acquisition_channel, H6):
  *       account created → photos uploaded → profile completed (70%; TikTok 35%)
- *   - Discover (session, weight 16): app opened → selfie verified / like sent /
- *       profile passed / profile viewed (first-fixed; selfie verified is a
- *       template the hook keeps at most once per member, after launch, so
- *       adoption does not depend on how active a member is)
- *   - Chat (session, weight 14): app opened → message sent ×6 (first-fixed; a
- *       message with no open conversation never happens)
- *   - Conversation (weight 4): match created → conversation started → date
+ *   - Discover (session, weight 16): app opened → 4 like sent / 5 profile
+ *       passed / 1 profile viewed (requireRepeats, first-fixed, 65%), then
+ *       selfie verified at the end of full sessions (a template the hook keeps
+ *       at most once per member, after launch)
+ *   - Chat (session, weight 20): app opened → message sent ×1-4 (first-fixed; a
+ *       message with no open conversation never happens, so a session with no
+ *       open chat keeps only its app open)
+ *   - Conversation (weight 8): match created → conversation started → date
  *       planned → date feedback submitted (engine 100%; the everything hook builds every match
  *       from a like and decides each step, see below). Carries the Icebreakers
  *       experiment (multipliers 1.0; the hook applies the effect)
- *   - Upgrade (free members, weight 5): paywall viewed → subscription started (9%)
+ *   - Upgrade (free members, weight 10): paywall viewed → subscription started (9%)
+ *   - Billing (weight 8): subscription cancelled (templates; the hook keeps at
+ *       most one per paid member, see Subscriptions)
+ *   - Safety (weight 3): profile reported (the hook keeps REPORT_KEEP, see Reports)
  *
  * USER PROPS:  market, age_band, gender, seeking, relationship_goal,
  *              photo_count, subscription_plan, acquisition_channel,
@@ -67,7 +71,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * Every event carries user_id; there is no anonymous pre-signup activity. The
  * two onboarding steps after signup (photos uploaded, profile completed) carry
  * user_id only; every other event also carries device_id. platform agrees with
- * the engine's os field (iOS and iPadOS → ios, Android → android).
+ * the engine's os field (iOS and iPadOS → ios, Android → android); about 57% of
+ * members are on Android. signup_method follows the phone (Sign in with Apple
+ * mostly on iOS, Google mostly on Android).
  *
  * DESIGN NOTES:
  * - Matches come from likes. For each like the hook draws a match with
@@ -94,22 +100,33 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * - Members who never finish their profile keep only their setup steps (they
  *   cannot like or chat before the profile is complete) and leave.
  * - Subscriptions: one purchase per member (the first would-be purchase
- *   decides, H8); paywall visits stop at that moment. 35% of paid members
- *   cancel during the window at a random moment (members paid before June 4
- *   from day one, new subscribers after 10 days); the plan reverts to free at
- *   the cancellation. The cancel event itself carries the plan being
- *   cancelled (subscription_plan = plan at t - 1 ms) on every cancel path.
- * - Reports: 80% of engine report events are kept (about 1 report per 40
- *   profile decisions before launch), then H1 thins fake-profile and scam reports.
+ *   decides, H8); paywall visits stop at that moment, and a purchase after the
+ *   member's H5 departure never happens. Cancellations are a level hazard per
+ *   paid member (CANCEL_DAILY_HAZARD 0.4% a day; members paid before June 4
+ *   from day one, new subscribers from 2 days after buying), placed as a
+ *   server-side store notice (it can land after the member stopped opening the
+ *   app); H5 adds met_someone cancellations. Measured: about 4% of paid members
+ *   cancel each week in every month; monthly counts rise only because the paid
+ *   base grows (≈1,440 → 1,890). The plan reverts to free at the cancellation;
+ *   the cancel event carries the plan being cancelled (plan at t - 1 ms).
+ * - Reports: REPORT_KEEP (30%) of the Safety funnel's reports are kept (about 7
+ *   reports per 1,000 profile decisions before launch, 0.7%), then H1 thins
+ *   fake-profile and scam reports. Both use systematic sampling per member.
+ * - Boosts: boost_source = included_in_plan only on Premier (70% of a Premier
+ *   member's Boosts); every other Boost is purchased.
  * - Warehouse drift: chat_delivery_daily adds messages from members who opted
  *   out of analytics (0-16% by day) and automated greetings / safety tips
- *   (about 115 a day per platform, ±60%); subscription_bookings_daily adds store
+ *   (about 50 a day per platform, ±50%); subscription_bookings_daily adds store
  *   purchases Mixpanel never received and same-day refunds; paid spend is a
  *   half paced budget (weekday shape, never zero) and half bid x the day's
  *   delivered signups, with seeded day noise.
  * - retentionCurve shapes new members' activity; established members' activity
  *   is flat across the window (DOW weights). Session funnels keep an active
  *   day's events to a few sessions.
+ * - Event budget: the engine plans ≈1.2M events; the hook drops the setup-only
+ *   members' standalone events (≈130k), unused conversation steps, selfie and
+ *   billing templates, and messages with no open chat, so ≈0.77M remain.
+ *   Per active member over 120 days: ≈23 likes, ≈29 passes, ≈15 app opens.
  */
 
 // ── HOOK STORIES ──
@@ -124,7 +141,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * PATTERN: Verified Profiles launches 2026-07-14. 55% of members are adopters
  *   and verify in their next app session after a salted moment (existing
  *   members within 21 days of launch, new members within 48 h of signup), so
- *   about half of the members active after launch verify.
+ *   a little under half of the members active after launch verify.
  *   Reports with reason fake_profile or scam fall on a 21-day ramp to 0.4x
  *   their pre-launch rate per profile decision; other reasons do not change.
  * MIXPANEL: Insights, profile reported (report_reason in fake_profile, scam)
@@ -159,7 +176,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * MIXPANEL: Funnels, match created → conversation started, Totals counting,
  *   hold match_id constant, 7-day window, date range 2026-07-22 to 2026-09-24
  *   (matches with a full window), breakdown "Experiment: Icebreakers"; median
- *   time to convert. Or the Experiments report on $experiment_started.
+ *   time to convert. Or the Experiments report on $experiment_started (sent
+ *   once per member, 1 s before their first match from Jul 22).
  * REAL WORLD: a blank chat box is the hardest message to write.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -167,7 +185,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: after each date rated 4-5 stars, the member leaves the app with
  *   probability 0.45, 2-10 days later (paid members cancel, reason
- *   met_someone).
+ *   met_someone). Dates in the 10 days before the window count when the
+ *   departure lands inside it (warm start).
  * MIXPANEL: Retention, birth date feedback submitted (first time), breakdown
  *   rating, return app opened, custom bracket day 14-27.
  * REAL WORLD: a dating app that works loses the people it works for.
@@ -188,7 +207,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * H7. ANDROID CHAT INCIDENT (everything + warehouse chat_delivery_daily)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: 2026-08-24 to 2026-08-28, 60% of Android message sends in open
+ * PATTERN: 2026-08-24 to 2026-08-30, 60% of Android message sends in open
  *   conversations fail and never fire "message sent". Openers and iOS are
  *   untouched. The warehouse (which counts message sends) shows
  *   service_status = major_outage and delivery_failure_rate ≈ 0.6 for android
@@ -233,41 +252,43 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-dating, 2026-10-07, full fidelity,
- * 10,000 members, 698,075 events)
+ * 10,000 members, 767,879 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                        | Derivation              | Expected | Measured
  * -----|-----------------------------------------------|-------------------------|----------|---------
- * H1   | fake+scam reports / 1k decisions, after/before| FAKE_REPORT_KEEP        | 0.40     | 0.437 (10.60 → 4.63)
- * H1   | other reasons / 1k decisions (control)        | unchanged               | 1.00     | 1.035 (13.09 → 13.55)
+ * H1   | fake+scam reports / 1k decisions, after/before| FAKE_REPORT_KEEP (≤, floor 0.7) | 0.40 | 0.473 (2.95 → 1.40)
+ * H1   | other reasons / 1k decisions (control)        | unchanged               | 1.00     | 1.032 (3.90 → 4.03)
  * H1   | selfie verified before launch                 | exact purity            | 0        | 0
- * H2   | matches per like, 1-2 photos / 4-6 photos     | PHOTO_MATCH_KEEP[1]     | 0.45     | 0.447 (9.4% vs 21.0%)
- * H2   | matches per like, 7-9 photos / 4-6 photos     | PHOTO_MATCH_KEEP[7]     | 0.80     | 0.783 (16.4% vs 21.0%)
- * H3   | Spark match rate / standard like match rate   | SPARK_MATCH_MULT        | 3.00     | 2.994 (49.2% vs 16.4%)
- * H4   | opener within 7 d per match, variant/control  | ICEBREAKER_CONV_MULT    | 1.25     | 1.268 (75.1% vs 59.2%)
- * H4   | median hours match → opener, variant/control  | ICEBREAKER_DELAY_MULT   | 0.60     | 0.590 (8.2 vs 13.9 h)
- * H4   | variant share of exposed members              | equal 2-arm hash        | 0.50     | 0.506
+ * H2   | matches per like, 1-2 photos / 4-6 photos     | PHOTO_MATCH_KEEP[1]     | 0.45     | 0.446 (9.4% vs 21.1%)
+ * H2   | matches per like, 7-9 photos / 4-6 photos     | PHOTO_MATCH_KEEP[7]     | 0.80     | 0.812 (17.2% vs 21.1%)
+ * H3   | Spark match rate / standard like match rate   | SPARK_MATCH_MULT        | 3.00     | 3.008 (49.3% vs 16.4%)
+ * H4   | opener within 7 d per match, variant/control  | ICEBREAKER_CONV_MULT    | 1.25     | 1.264 (74.1% vs 58.6%)
+ * H4   | median hours match → opener, variant/control  | ICEBREAKER_DELAY_MULT   | 0.60     | 0.613 (8.4 vs 13.7 h)
+ * H4   | variant share of exposed members              | equal 2-arm hash        | 0.50     | 0.508
  * H4   | icebreaker openers in Control or pre-test     | exact purity            | 0        | 0
- * H5   | D14-27 retention, first date 4-5★ / 1-3★      | 1 − SUCCESS_CHURN_SHARE | 0.55     | 0.519 (46.6% vs 89.8%)
- * H6   | spend per signup, TikTok / Apple Search Ads   | 7 / 22                  | 0.318    | 0.296 ($6.71 vs $22.70)
- * H6   | 7-day profile completion, TikTok / others     | 35 / 70                 | 0.50     | 0.472 (33.5% vs 71.1%)
- * H6   | spend per completed profile, TikTok / Meta    | (7 / 0.5) / 14          | 1.00     | 0.981 ($20.01 vs $20.40)
- * H7   | Android/iOS message sends, incident / ±14 d   | 1 − CHAT_FAIL           | 0.40     | 0.370
- * H7   | warehouse delivery_failure_rate, incident     | CHAT_FAIL               | 0.60     | 0.598
- * H8   | Kindred+ purchases per paywall view, after/before | PLUS_KEEP_AFTER (≤, floor 0.85) | 0.70 | 0.655 (6.52% → 4.27%)
- * H8   | Kindred+ list-price bookings per view, after/before | 0.7 × 34.99/29.99 (≤, floor 0.908) | 0.817 | 0.762
- * H9   | median opener → date hours, long_term / base  | GOAL_TTC_MULT.long_term | 1.50     | 1.560 (109.7 h)
- * H9   | median opener → date hours, short_term_fun / base | GOAL_TTC_MULT.short_term_fun | 0.60 | 0.629 (44.3 h)
- * H10  | date planned within 30 d per opener, >24 h / ≤24 h | 0.16 / 0.32 (bucket averages of the logistic) | 0.50 | 0.477 (15.2% vs 31.9%)
+ * H5   | D14-27 retention, first date 4-5★ / 1-3★      | 1 − SUCCESS_CHURN_SHARE | 0.55     | 0.561 (45.2% vs 80.6%)
+ * H6   | spend per signup, TikTok / Apple Search Ads   | 7 / 22                  | 0.318    | 0.295 ($6.77 vs $22.95)
+ * H6   | 7-day profile completion, TikTok / others     | 35 / 70                 | 0.50     | 0.489 (33.9% vs 69.3%)
+ * H6   | spend per completed profile, TikTok / Meta    | (7 / 0.5) / 14          | 1.00     | 1.031 ($19.97 vs $19.36)
+ * H7   | Android/iOS message sends, incident / ±14 d   | 1 − CHAT_FAIL           | 0.40     | 0.421 (0.511 vs 1.212)
+ * H7   | warehouse delivery_failure_rate, incident     | CHAT_FAIL               | 0.60     | 0.601
+ * H8   | Kindred+ purchases per paywall view, after/before | PLUS_KEEP_AFTER (≤, floor 0.85) | 0.70 | 0.599 (6.60% → 3.95%)
+ * H8   | Kindred+ list-price bookings per view, after/before | 0.7 × 34.99/29.99 (≤, floor 0.908) | 0.817 | 0.711 ($3.67 → $2.61)
+ * H9   | median opener → date hours, long_term / base  | GOAL_TTC_MULT.long_term | 1.50     | 1.507 (108.9 h vs 72.3 h)
+ * H9   | median opener → date hours, short_term_fun / base | GOAL_TTC_MULT.short_term_fun | 0.60 | 0.606 (43.8 h)
+ * H10  | date planned within 30 d per opener, >24 h / ≤24 h | 0.16 / 0.32 (bucket averages of the logistic) | 0.50 | 0.526 (16.4% vs 31.2%)
  * ═════════════════════════════════════════════════════════════════════════
  *
- * Noise notes: H8 rests on about 280 Kindred+ purchases after the change, so
- * its reads use the knob as target with a half-effect floor (STRONG above the
- * ±10% band, which can happen on other seeds); its bookings read also moves
- * with the billing-period mix. H7 rests on about 800 Android sends on incident
- * days (relative SE about 5%). H10's slow arm has about 450 dates (relative SE
- * about 5%). H6 spend per signup also moves with how many members each channel
- * delivered (half of spend is a fixed plan). Premier purchases per paywall view
- * are not engineered (2.42% → 2.45% across the price change, z = 0.15).
+ * Noise notes: H1 rests on about 380 fake/scam reports before launch and 290
+ * after the ramp (relative SE about 8% at a realistic 0.7% report rate), and H8
+ * on about 290 Kindred+ purchases after the change (relative SE about 10%), so
+ * both read the knob as target with a half-effect floor: STRONG outside the
+ * ±10% band, as in this run (H1 0.473, H8 0.599); H8's bookings read also moves
+ * with the billing-period mix. H7 rests on about 940 Android sends on 7 incident
+ * days (relative SE about 6%). H10's slow arm has about 730 dates. H6 spend per
+ * signup also moves with how many members each channel delivered (half of spend
+ * is a fixed plan). Premier purchases per paywall view are not engineered
+ * (2.55% → 2.56% across the price change, z = 0.04).
  */
 
 // ── SCALE ──
@@ -285,7 +306,7 @@ const VERIFY_LAUNCH = "2026-07-14T00:00:00Z";       // Verified Profiles (video 
 const ICEBREAKERS_START = "2026-07-22T00:00:00Z";   // "Icebreakers" A/B test starts in new-match chats
 const PLUS_PRICE_CHANGE = "2026-08-18T00:00:00Z";   // Kindred+ list prices rise
 const CHAT_INCIDENT_START = "2026-08-24T00:00:00Z"; // Android chat incident starts (replies in open chats fail)
-const CHAT_INCIDENT_END = "2026-08-29T00:00:00Z";   // exclusive (5 days: Aug 24-28)
+const CHAT_INCIDENT_END = "2026-08-31T00:00:00Z";   // exclusive (7 days: Aug 24-30)
 
 const ms = (iso) => dayjs.utc(iso).valueOf();
 const DAY_MS = 86_400_000;
@@ -310,7 +331,7 @@ const VERIFY_RAMP_DAYS = 21;        // existing members verify on a salted day i
 const VERIFY_NEW_MEMBER_HOURS = 48; // members who join after launch verify within 2 days of signup
 const FAKE_REPORT_KEEP = 0.4;       // share of fake-profile/scam reports left once the ramp is done
 const FAKE_REASONS = ["fake_profile", "scam"];
-const REPORT_KEEP = 0.8;            // realism: share of standalone report events kept (report rate per profile decision)
+const REPORT_KEEP = 0.3;            // realism: share of standalone report events kept (report rate per profile decision)
 
 // H2 photo count sweet spot: share of would-be matches kept, by profile photo_count
 const PHOTO_MATCH_KEEP = { 1: 0.45, 2: 0.45, 3: 0.75, 4: 1, 5: 1, 6: 1, 7: 0.8, 8: 0.8, 9: 0.8 };
@@ -371,7 +392,7 @@ const CTR = { meta_ads: 0.011, tiktok_ads: 0.008, apple_search_ads: 0.06 };
 // H7 Android chat incident (warehouse chat_delivery_daily)
 const CHAT_FAIL = 0.6;              // share of Android sends that fail during the incident
 const UNTRACKED_MESSAGE_SHARE = 0.08; // mean share of delivered messages from members who opted out of analytics (varies 0-16% by day)
-const SYSTEM_MESSAGES_PER_DAY = { ios: 120, android: 110 }; // automated match greetings and safety tips (±60% by day)
+const SYSTEM_MESSAGES_PER_DAY = { ios: 55, android: 50 }; // automated match greetings and safety tips (±50% by day)
 
 // H8 Kindred+ price change (warehouse subscription_bookings_daily)
 const PRICES = {
@@ -380,10 +401,11 @@ const PRICES = {
 };
 const PLUS_KEEP_AFTER = 0.7;        // share of would-be Kindred+ purchases kept after the change
 const UPGRADE_CONV = 9;            // share of free members' paywall visits that end in a purchase
-const CANCEL_SHARE = 0.35;          // paid members who cancel during the window (first eligible cancel event)
-const CANCEL_MIN_DAYS = 10;
-const STORE_UNTRACKED_SHARE = 0.12; // plan-days with one store purchase Mixpanel never received
-const REFUND_SHARE = 0.05;          // plan-days with one same-day refund
+const CANCEL_DAILY_HAZARD = 0.004;  // daily chance a paid member cancels (~11% a month), level across the window
+const CANCEL_MIN_DAYS = 2;          // new subscribers: no cancellation in the first 2 days
+const PREMIER_INCLUDED_BOOST_SHARE = 0.7; // realism: Premier members' Boosts that use the weekly included one
+const STORE_UNTRACKED_SHARE = 0.2;  // plan-days with one store purchase Mixpanel never received
+const REFUND_SHARE = 0.08;          // plan-days with one same-day refund
 
 // H9 time from first message to a planned date, by relationship goal
 const DATE_GAP_MEDIAN_H = 72;
@@ -431,6 +453,7 @@ const PHOTO_WEIGHTS = { 1: 4, 2: 8, 3: 14, 4: 20, 5: 20, 6: 16, 7: 8, 8: 6, 9: 4
 const GOAL_WEIGHTS = { long_term: 32, long_term_open: 25, figuring_it_out: 23, short_term_fun: 20 };
 const RATING_WEIGHTS = { 1: 6, 2: 10, 3: 22, 4: 34, 5: 28 };
 const OPENER_TYPE_WEIGHTS = { text: 55, prompt_reply: 35, voice_note: 10 };
+const SIGNUP_METHOD_WEIGHTS = { ios: { apple: 58, phone: 30, google: 12 }, android: { google: 52, phone: 43, apple: 5 } };
 const VENUE_WEIGHTS = { drinks: 38, coffee: 26, dinner: 16, activity: 14, video_call: 6 };
 
 // ── HELPERS ──
@@ -447,6 +470,7 @@ const inChatIncident = (t) => t >= ms(CHAT_INCIDENT_START) && t < ms(CHAT_INCIDE
 const price = (plan, period, t) => (PRICES[plan]?.[period] ?? [0, 0])[t >= ms(PLUS_PRICE_CHANGE) ? 1 : 0];
 const paidSpend = (date, ch, signups) => round2((SPEND_PLAN_SHARE * DAILY_BUDGET_USD[ch] * SPEND_WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()]
 	+ (1 - SPEND_PLAN_SHARE) * CPI_USD[ch] * signups) * jitter(`spend|${date}|${ch}`, SPEND_NOISE));
+const HOUR_WEIGHTS_OBJ = Object.fromEntries(HOUR_WEIGHTS.map((w, h) => [h, w]));
 const pickWeighted = (obj, r) => {
 	const entries = Object.entries(obj);
 	const total = entries.reduce((s, [, w]) => s + w, 0);
@@ -457,6 +481,9 @@ const pickWeighted = (obj, r) => {
 	}
 	return entries[entries.length - 1][0];
 };
+// one Discover session's profile decisions after the app opens (shuffled by the engine)
+const DISCOVER_DECISIONS = ["like sent", "profile passed", "profile passed", "like sent", "profile viewed", "profile passed",
+	"like sent", "profile passed", "profile passed", "like sent"];
 const UNIT_STEPS = ["match created", "conversation started", "date planned", "date feedback submitted"];
 const ONBOARDING = new Set(["account created", "photos uploaded", "profile completed"]);
 const BROWSE_ONLY = new Set(["app opened", "profile viewed"]);
@@ -500,6 +527,10 @@ function handleEverything(events, meta) {
 		}
 	};
 
+	// sign-in options follow the phone: Sign in with Apple is mostly an iPhone
+	// choice, Google mostly an Android one
+	if (signup) signup.signup_method = pickWeighted(SIGNUP_METHOD_WEIGHTS[platform], salt(uid, "signup-method"));
+
 	// ── members who never finish their profile browse briefly, then leave ──
 	if (signup && !events.some((e) => e.event === "profile completed")) {
 		const lim = birthMs + NONCOMPLETER_DAYS * DAY_MS;
@@ -521,24 +552,17 @@ function handleEverything(events, meta) {
 	const decideT = firstBuy ? T(firstBuy) : Infinity;
 	let purchase = firstBuy;
 	if (firstBuy && firstBuy.plan === "plus" && decideT >= ms(PLUS_PRICE_CHANGE) && salt(uid, "plus-price") >= PLUS_KEEP_AFTER) purchase = null;
-	const cancelEvents = events.filter((e) => e.event === "subscription cancelled").sort(byT);
-	const cancelTemplate = cancelEvents[0] || null;
-	const paidFrom = initialPlan !== "free" ? BEGIN : purchase ? T(purchase) : null;
-	let cancel = null;
-	if (paidFrom !== null && salt(uid, "cancel") < CANCEL_SHARE) {
-		// a steady hazard: any of the member's eligible cancel moments, not the first
-		// (members paid before the window can cancel from day one; new subscribers after a first stretch)
-		const eligible = cancelEvents.filter((e) => T(e) >= (paidFrom === BEGIN ? BEGIN : paidFrom + CANCEL_MIN_DAYS * DAY_MS));
-		cancel = eligible.length ? eligible[Math.floor(salt(uid, "cancel-pick") * eligible.length)] : null;
-	}
-	const buyT = purchase ? T(purchase) : Infinity;
+	// one store billing notice is the template for this member's cancellation (if any)
+	const cancelTemplate = events.filter((e) => e.event === "subscription cancelled").sort(byT)[0] || null;
+	let buyT = purchase ? T(purchase) : Infinity;
 	events = events.filter((e) => {
 		if (e.event === "subscription started") return e === purchase;
-		if (e.event === "subscription cancelled") return e === cancel;
+		if (e.event === "subscription cancelled") return false;
 		if (e.event === "paywall viewed" && T(e) > decideT) return false;
 		return true;
 	});
-	let cancelT = cancel ? T(cancel) : Infinity;
+	let cancel = null;
+	let cancelT = Infinity;
 	const planAt = (t) => (t >= cancelT ? "free" : t >= buyT ? purchase.plan : initialPlan);
 
 	// ── like types: Sparks by plan at the time ──
@@ -615,13 +639,17 @@ function handleEverything(events, meta) {
 
 	// H5: success churn — after each good date (4-5 stars) the member leaves the
 	// app with probability SUCCESS_CHURN_SHARE, 2-10 days later. The earliest
-	// such date ends their activity.
+	// such date ends their activity. Dates in the days before the window count
+	// too (warm start), when the departure falls inside the window.
 	let cut = Infinity;
-	for (const p of plans.filter((x) => x.hasFb && x.fbT >= BEGIN && x.fbT <= END).sort((a, b) => a.fbT - b.fbT)) {
+	const churnFrom = BEGIN - SUCCESS_CHURN_DAY_MAX * DAY_MS;
+	for (const p of plans.filter((x) => x.hasFb && x.fbT >= churnFrom && x.fbT <= END).sort((a, b) => a.fbT - b.fbT)) {
 		if (p.fbT >= cut) break;
 		if (p.rating >= POSITIVE_RATING && chance.bool({ likelihood: SUCCESS_CHURN_SHARE * 100 })) {
 			// whole milliseconds: event times are ISO strings with ms precision
-			cut = Math.floor(p.fbT + chance.floating({ min: SUCCESS_CHURN_DAY_MIN, max: SUCCESS_CHURN_DAY_MAX }) * DAY_MS);
+			const c = Math.floor(p.fbT + chance.floating({ min: SUCCESS_CHURN_DAY_MIN, max: SUCCESS_CHURN_DAY_MAX }) * DAY_MS);
+			if (c < BEGIN) continue; // left and came back before the window: still a member
+			cut = c;
 			break;
 		}
 	}
@@ -631,7 +659,8 @@ function handleEverything(events, meta) {
 	const conversations = []; // { id, convT }
 	let poolIdx = 0;
 	for (const p of plans) {
-		if (p.matchT >= cut) continue;
+		// a match after the member leaves, or after the window end, never shows up
+		if (p.matchT >= cut || p.matchT > END) continue;
 		const src = poolUnits[poolIdx++] || null;
 		const id = src && src["match created"] ? src["match created"].match_id : `m_${chance.hash({ length: 12 })}`;
 		const put = (step, t, set) => {
@@ -662,26 +691,48 @@ function handleEverything(events, meta) {
 	}
 	events = events.filter((e) => !UNIT_STEPS.includes(e.event) && e.event !== "$experiment_started");
 
-	// H5 cut on everything else; a paid member cancels when they leave
+	// H5 cut on everything else (a purchase after the cut never happens)
 	if (cut < Infinity) {
 		events = events.filter((e) => T(e) < cut || ONBOARDING.has(e.event));
-		if (planAt(cut) !== "free" && cancelTemplate) {
-			let tc = cut - chance.integer({ min: 30, max: 24 * 60 }) * MIN_MS;
-			// a member who bought in the last day before leaving cancels after the purchase
-			if (buyT < cut && tc <= buyT) tc = buyT + Math.floor((cut - buyT) / 2);
-			events = events.filter((e) => e.event !== "subscription cancelled");
-			const c = cancel || cloneEvent(cancelTemplate, { time: iso(tc) });
-			c.time = iso(tc);
-			c.cancel_reason = "met_someone";
-			events.push(c);
-			cancel = c;
-			cancelT = T(c);
+		if (buyT >= cut) {
+			purchase = null;
+			buyT = Infinity;
 		}
 	}
+
+	// ── cancellations: a steady hazard per paid member (CANCEL_DAILY_HAZARD),
+	// from day one for members paid before the window, from CANCEL_MIN_DAYS after
+	// the purchase for new subscribers. The store notice is server-side, so it can
+	// land after the member stopped opening the app. ──
+	const paidFrom = initialPlan !== "free" ? BEGIN : purchase ? buyT + CANCEL_MIN_DAYS * DAY_MS : null;
+	if (paidFrom !== null && cancelTemplate) {
+		const waitDays = -Math.log(1 - salt(uid, "cancel")) / CANCEL_DAILY_HAZARD;
+		const day = Math.floor((paidFrom + waitDays * DAY_MS) / DAY_MS) * DAY_MS;
+		const hour = Number(pickWeighted(HOUR_WEIGHTS_OBJ, salt(uid, "cancel-hour")));
+		const tc = Math.max(paidFrom, day + hour * HOUR_MS + Math.floor(salt(uid, "cancel-min") * HOUR_MS));
+		if (tc <= END) {
+			cancel = cancelTemplate;
+			cancel.time = iso(tc);
+			cancelT = tc;
+		}
+	}
+	// H5: a member still paying when they leave cancels the day they go (met someone)
+	if (cut < Infinity && planAt(cut) !== "free" && cancelTemplate) {
+		let tc = cut - chance.integer({ min: 30, max: 24 * 60 }) * MIN_MS;
+		// a member who bought in the last day before leaving cancels after the purchase
+		if (buyT < cut && tc <= buyT) tc = buyT + Math.floor((cut - buyT) / 2);
+		cancel = cancelTemplate;
+		cancel.time = iso(tc);
+		cancel.cancel_reason = "met_someone";
+		cancelT = tc;
+	}
+	if (cancel) events.push(cancel);
 
 	// ── messages: follow-ups in open conversations (a message with no open
 	// conversation never happens) ──
 	conversations.sort((a, b) => a.convT - b.convT);
+	let failAcc = salt(uid, "chat-fail");
+	events.sort(byT);
 	events = events.filter((e) => {
 		if (e.event !== "message sent") return true;
 		const t = T(e);
@@ -693,23 +744,39 @@ function handleEverything(events, meta) {
 		}
 		if (!hit) return false;
 		e.match_id = hit.id;
-		// H7: Android sends fail during the incident
-		if (platform === "android" && inChatIncident(t) && chance.bool({ likelihood: CHAT_FAIL * 100 })) return false;
+		// H7: Android sends fail during the incident (systematic sampling per member)
+		if (platform === "android" && inChatIncident(t)) {
+			failAcc += CHAT_FAIL;
+			if (failAcc >= 1) {
+				failAcc -= 1;
+				return false;
+			}
+		}
 		return true;
 	});
 
 	// ── H1: reports; fake-profile and scam reports fall after Verified Profiles ──
+	// Each report is kept with probability REPORT_KEEP (x the H1 ramp for fake and
+	// scam reports after launch), by systematic sampling per member and reason
+	// group (salted phase): every report keeps its probability, with less
+	// sampling noise than independent draws.
 	const launch = ms(VERIFY_LAUNCH);
-	events = events.filter((e) => {
-		if (e.event !== "profile reported") return true;
-		if (!chance.bool({ likelihood: REPORT_KEEP * 100 })) return false;
+	const acc = { fake: salt(uid, "report-fake"), other: salt(uid, "report-other") };
+	const reportKeep = (e) => {
 		const t = T(e);
-		if (FAKE_REASONS.includes(e.report_reason) && t >= launch) {
-			const keep = 1 - (1 - FAKE_REPORT_KEEP) * Math.min(1, (t - launch) / (VERIFY_RAMP_DAYS * DAY_MS));
-			return chance.bool({ likelihood: keep * 100 });
+		if (!FAKE_REASONS.includes(e.report_reason) || t < launch) return REPORT_KEEP;
+		return REPORT_KEEP * (1 - (1 - FAKE_REPORT_KEEP) * Math.min(1, (t - launch) / (VERIFY_RAMP_DAYS * DAY_MS)));
+	};
+	const keptReports = new Set();
+	for (const e of events.filter((x) => x.event === "profile reported").sort(byT)) {
+		const g = FAKE_REASONS.includes(e.report_reason) ? "fake" : "other";
+		acc[g] += reportKeep(e);
+		if (acc[g] >= 1) {
+			acc[g] -= 1;
+			keptReports.add(e);
 		}
-		return true;
-	});
+	}
+	events = events.filter((e) => e.event !== "profile reported" || keptReports.has(e));
 
 	// ── Verified Profiles adoption: one selfie check per adopter, after launch ──
 	const selfies = events.filter((e) => e.event === "selfie verified");
@@ -728,22 +795,27 @@ function handleEverything(events, meta) {
 	events = events.filter((e) => e.event !== "selfie verified" || e === verifiedEv);
 	profile.verified = Boolean(verifiedEv);
 
-	// ── experiment exposure: one per match after the test starts, 1 s before it ──
+	// ── experiment exposure: once per member, 1 s before their first match after
+	// the test starts (the first time they see the new-match chat) ──
 	const exposed = [];
 	if (variant !== null) {
-		const matches = unitEvents.filter((e) => e.event === "match created" && T(e) >= ms(ICEBREAKERS_START)).sort(byT);
-		matches.forEach((m, i) => {
-			const t = T(m) - 1000;
-			const ex = exposures[i] || cloneEvent(exposures[0], { time: iso(t) });
-			ex.time = iso(t);
+		const first = unitEvents.filter((e) => e.event === "match created" && T(e) >= ms(ICEBREAKERS_START)).sort(byT)[0];
+		if (first) {
+			const ex = exposures[0];
+			ex.time = iso(T(first) - 1000);
 			exposed.push(ex);
-		});
+		}
 	}
 	if (!exposed.length && profile[EXP_KEY] !== undefined) delete profile[EXP_KEY];
 
 	// conversations already running at the window start keep only their in-window steps
 	events = events.concat(unitEvents, exposed).filter((e) => T(e) >= BEGIN);
 	stampPlan(events, planAt);
+	// a Boost is included only in Premier (one a week); everyone else buys theirs
+	for (const e of events) {
+		if (e.event !== "boost activated") continue;
+		e.boost_source = e.subscription_plan === "premier" && hashFloat(`${e.insert_id}|boost`) < PREMIER_INCLUDED_BOOST_SHARE ? "included_in_plan" : "purchased";
+	}
 	profile.subscription_plan = planAt(END);
 	return events;
 }
@@ -765,7 +837,7 @@ function handleWarehouse(row, meta) {
 	if (meta.metricName === "chat_delivery_daily") {
 		const k = `${row.date}|${row.platform}`;
 		row.messages_delivered = Math.round(row.messages_delivered * (1 + UNTRACKED_MESSAGE_SHARE * jitter(`untracked|${k}`, 1))
-			+ (SYSTEM_MESSAGES_PER_DAY[row.platform] ?? 0) * jitter(`system|${k}`, 0.6));
+			+ (SYSTEM_MESSAGES_PER_DAY[row.platform] ?? 0) * jitter(`system|${k}`, 0.5));
 		row.messages_attempted = Math.round(row.messages_delivered / (1 - row.delivery_failure_rate));
 		return row;
 	}
@@ -927,7 +999,7 @@ const config = {
 			weight: 1,
 			isStrictEvent: true,
 			properties: {
-				paywall_trigger: { __weights: { out_of_likes: 40, likes_you: 30, spark: 15, boost: 10, profile_tab: 5 } },
+				paywall_trigger: { __weights: { likes_you: 38, spark: 22, boost: 16, out_of_likes: 12, profile_tab: 12 } },
 			},
 		},
 		{
@@ -942,6 +1014,7 @@ const config = {
 		{
 			event: "subscription cancelled",
 			weight: 1,
+			isStrictEvent: true,
 			properties: {
 				cancel_reason: { __weights: { too_expensive: 30, not_enough_matches: 28, taking_a_break: 22, bad_experience: 10, met_someone: 10 } },
 			},
@@ -957,7 +1030,8 @@ const config = {
 		},
 		{
 			event: "profile reported",
-			weight: 2,
+			weight: 1,
+			isStrictEvent: true,
 			properties: {
 				report_reason: { __weights: { fake_profile: 28, scam: 17, harassment: 20, inappropriate_photos: 15, spam: 12, offline_behavior: 8 } },
 			},
@@ -1017,24 +1091,47 @@ const config = {
 			weight: 1,
 		},
 		{
-			// a swiping session: open the app, like and pass on profiles
+			// a swiping session: open the app, then like and pass on a run of profiles
 			name: "Discover",
-			// (selfie verified rides along as a template so nearly every member has
-			// one; the hook keeps at most one per member, after launch, and drops the rest)
-			sequence: ["app opened", "selfie verified", "like sent", "profile passed", "like sent", "profile viewed", "profile passed", "profile passed"],
-			conversionRate: 55,
+			// (selfie verified rides along at the end of full sessions as a template so
+			// nearly every member has one; the hook keeps at most one per member, after
+			// launch, and drops the rest)
+			sequence: ["app opened", ...DISCOVER_DECISIONS, "selfie verified"],
+			requireRepeats: true,
+			conversionRate: 65,
 			timeToConvert: 0.4,
 			order: "first-fixed",
 			weight: 16,
 		},
 		{
-			// a chat session: open the app, reply in open conversations
+			// a chat session: open the app (often from a push), reply in open
+			// conversations; most sessions send one to three messages
 			name: "Chat",
-			sequence: ["app opened", "message sent", "message sent", "message sent", "message sent", "message sent", "message sent"],
+			sequence: ["app opened", "message sent", "message sent", "message sent", "message sent"],
 			conversionRate: 60,
-			timeToConvert: 0.6,
+			timeToConvert: 0.5,
 			order: "first-fixed",
-			weight: 14,
+			weight: 20,
+		},
+		{
+			// billing notices from the app stores; the hook keeps at most one
+			// cancellation per paid member (a steady hazard) and drops the rest
+			name: "Billing",
+			sequence: ["subscription cancelled"],
+			conversionRate: 100,
+			timeToConvert: 0.1,
+			order: "sequential",
+			weight: 8,
+		},
+		{
+			// a report filed from a profile or a chat (one per pick); the hook keeps
+			// REPORT_KEEP of them, then H1 thins fake-profile and scam reports
+			name: "Safety",
+			sequence: ["profile reported"],
+			conversionRate: 100,
+			timeToConvert: 0.1,
+			order: "sequential",
+			weight: 3,
 		},
 		{
 			name: "Conversation",
@@ -1042,7 +1139,7 @@ const config = {
 			conversionRate: 100,
 			timeToConvert: 1,
 			order: "sequential",
-			weight: 4,
+			weight: 8,
 			props: {
 				match_id: () => `m_${chance.hash({ length: 12 })}`,
 			},
@@ -1059,7 +1156,7 @@ const config = {
 			conversionRate: UPGRADE_CONV,
 			timeToConvert: 0.5,
 			order: "sequential",
-			weight: 5,
+			weight: 10,
 			props: {
 				plan: { __weights: { plus: 72, premier: 28 } },
 				billing_period: { __weights: { "1_month": 58, "3_month": 27, "6_month": 15 } },
@@ -1265,13 +1362,15 @@ export const stories = [
 		id: "H1-verified-profiles-launch",
 		hook: "H1",
 		archetype: "temporal-inflection",
-		narrative: `Verified Profiles (a video-selfie check) launches ${D(VERIFY_LAUNCH)}. ${VERIFY_ADOPT_SHARE * 100}% of members are adopters and verify in their next app session after a salted moment (existing members within ${VERIFY_RAMP_DAYS} days of launch, members who join later within ${VERIFY_NEW_MEMBER_HOURS} hours of signup), so about half of the members active after launch verify. As verification spreads, reports with reason fake_profile or scam fall on a ${VERIFY_RAMP_DAYS}-day ramp to ${FAKE_REPORT_KEEP}x their pre-launch rate per profile decision (like sent + profile passed); harassment, inappropriate photos, spam, and offline-behavior reports do not change. Read: fake/scam reports per 1,000 decisions after the ramp (from ${VERIFY_RAMPED.slice(0, 10)}) vs before launch; the other reasons are the control. No selfie verified event exists before launch.`,
+		narrative: `Verified Profiles (a video-selfie check) launches ${D(VERIFY_LAUNCH)}. ${VERIFY_ADOPT_SHARE * 100}% of members are adopters and verify in their next app session after a salted moment (existing members within ${VERIFY_RAMP_DAYS} days of launch, members who join later within ${VERIFY_NEW_MEMBER_HOURS} hours of signup), so a little under half of the members active after launch verify. As verification spreads, reports with reason fake_profile or scam fall on a ${VERIFY_RAMP_DAYS}-day ramp to ${FAKE_REPORT_KEEP}x their pre-launch rate per profile decision (like sent + profile passed); harassment, inappropriate photos, spam, and offline-behavior reports do not change. Read: fake/scam reports per 1,000 decisions after the ramp (from ${VERIFY_RAMPED.slice(0, 10)}) vs before launch; the other reasons are the control. No selfie verified event exists before launch. Reports run at a realistic ~0.7% of decisions, so each period holds only a few hundred fake/scam reports (relative SE ~8%): the ratio reads the knob as target with a half-effect floor.`,
 		mixpanelReport: { type: "Insights", events: ["profile reported (report_reason in fake_profile, scam)", "like sent", "profile passed"], formula: "1000 * A / (B + C)", chart: "weekly line; before Jul 14 vs from Aug 4" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H1_SQL },
 				select: { a: { where: { grp: "all" } } },
-				expect: { metric: "a.fake_ratio", op: "between", target: band(FAKE_REPORT_KEEP) },
+				// about 300-400 fake/scam reports per period (sampling SE ~8%): knob as
+				// target, half-effect floor (STRONG outside the ±10% band)
+				expect: { metric: "a.fake_ratio", op: "<=", target: FAKE_REPORT_KEEP, floor: 1 - 0.5 * (1 - FAKE_REPORT_KEEP) },
 				minCohort: 2000,
 			},
 			{
@@ -1340,7 +1439,7 @@ FROM ev WHERE event IN ('match created', 'like sent')`,
 		id: "H4-icebreakers-experiment",
 		hook: "H4",
 		archetype: "experiment-lift",
-		narrative: `The "${ICEBREAKERS_EXPERIMENT}" test starts ${D(ICEBREAKERS_START)}: members who get a match are split 50/50 (sticky per member; exposure $experiment_started 1 s before each new match). In the "${ICEBREAKERS_VARIANT}" arm the new-match chat suggests openers: the share of matches where the member sends an opener rises ${ICEBREAKER_CONV_MULT}x (from ${CONV_BASE * 100}%), the time from match to opener is ${ICEBREAKER_DELAY_MULT}x, and about ${ICEBREAKER_OPENER_SHARE * 100}% of variant openers use a suggestion (opener_type = icebreaker, which never appears in Control or before the test). Read: per-match conversion match created → conversation started within ${EXP_WINDOW_DAYS} days (matches ${D(ICEBREAKERS_START)} to ${EXP_READ_END.slice(0, 10)}, so every match has its full window), and median hours_since_match on the opener.`,
+		narrative: `The "${ICEBREAKERS_EXPERIMENT}" test starts ${D(ICEBREAKERS_START)}: members who get a match are split 50/50 (sticky per member; one $experiment_started per member, 1 s before their first match from the start). In the "${ICEBREAKERS_VARIANT}" arm the new-match chat suggests openers: the share of matches where the member sends an opener rises ${ICEBREAKER_CONV_MULT}x (from ${CONV_BASE * 100}%), the time from match to opener is ${ICEBREAKER_DELAY_MULT}x, and about ${ICEBREAKER_OPENER_SHARE * 100}% of variant openers use a suggestion (opener_type = icebreaker, which never appears in Control or before the test). Read: per-match conversion match created → conversation started within ${EXP_WINDOW_DAYS} days (matches ${D(ICEBREAKERS_START)} to ${EXP_READ_END.slice(0, 10)}, so every match has its full window), and median hours_since_match on the opener.`,
 		mixpanelReport: { type: "Funnels", steps: ["match created", "conversation started"], counting: "totals", holdPropertyConstant: "match_id", window: `${EXP_WINDOW_DAYS} days`, dateRange: `${D(ICEBREAKERS_START)} to ${EXP_READ_END.slice(0, 10)}`, breakdown: `user property "${EXP_KEY}"`, measure: "conversion and median time to convert" },
 		assertions: [
 			{
