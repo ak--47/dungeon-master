@@ -86,6 +86,13 @@ FROM a LEFT JOIN s USING (uid);
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H2-premiere-tourists
 -- ─────────────────────────────────────────────────────────────────────────
+-- Signup lift: accounts created per day Jul 17 - Aug 6 vs the other 99 days
+-- (target 1.559), and accounts created by week.
+SELECT round(count(*) FILTER (WHERE t >= '2026-07-17' AND t < '2026-08-07') / 21.0, 2) AS signups_per_day_premiere,
+ round(count(*) FILTER (WHERE t < '2026-07-17' OR t >= '2026-08-07') / 99.0, 2) AS signups_per_day_other,
+ round((count(*) FILTER (WHERE t >= '2026-07-17' AND t < '2026-08-07') / 21.0) / (count(*) FILTER (WHERE t < '2026-07-17' OR t >= '2026-08-07') / 99.0), 4) AS lift
+FROM ev WHERE event = 'account created';
+SELECT date_trunc('week', t)::DATE AS week, count(*) AS accounts_created FROM ev WHERE event = 'account created' GROUP BY 1 ORDER BY 1;
 -- Trial conversion (8-day window), trials Jul 8 - Sep 23: accounts created
 -- Jul 17 - Aug 6 vs every other account (target ratio 0.60).
 WITH g AS (SELECT CASE WHEN signup_t >= '2026-07-17' AND signup_t < '2026-08-07' THEN 'premiere' ELSE 'other' END AS grp,
@@ -224,6 +231,10 @@ SELECT per, count(*) AS plays, round(count(*) / 14.0, 1) AS plays_per_day, count
  count(*) FILTER (WHERE title_name = 'Saltmarsh' AND season_number = 2) AS season2_plays,
  round(count(*) FILTER (WHERE title_name = 'Saltmarsh' AND season_number = 2)::DOUBLE / count(*), 4) AS season2_share
 FROM d WHERE per IS NOT NULL GROUP BY 1 ORDER BY 1;
+-- viewing households Jul 17-30 split by whether the account was created on or after Jul 17
+WITH v AS (SELECT ev.uid, count(*) AS plays, any_value(p.member_since >= '2026-07-17') AS new_household FROM ev JOIN prof p USING (uid)
+  WHERE event = 'playback started' AND t >= '2026-07-17' AND t < '2026-07-31' GROUP BY 1)
+SELECT new_household, count(*) AS households, sum(plays) AS plays FROM v GROUP BY 1 ORDER BY 1;
 SELECT count(*) FILTER (WHERE event = 'notification received') AS new_season_pushes, count(*) FILTER (WHERE event = 'notification opened') AS opens,
  round(count(*) FILTER (WHERE event = 'notification opened')::DOUBLE / count(*) FILTER (WHERE event = 'notification received'), 4) AS open_rate
 FROM ev WHERE campaign_type = 'new_season';
@@ -284,7 +295,8 @@ FROM i, b;
 SELECT CASE WHEN t >= '2026-08-11' THEN '2 after (Aug 11-Oct 1)' ELSE '1 before (Jun 4-Aug 10)' END AS per, plan, count(*) AS selections,
  round(count(*)::DOUBLE / sum(count(*)) OVER (PARTITION BY per), 4) AS share
 FROM ev WHERE event = 'plan selected' GROUP BY 1, 2 ORDER BY 1, 2;
-SELECT CASE WHEN t >= '2026-08-11' THEN '2 after' ELSE '1 before' END AS per, round(count(*) / count(DISTINCT t::DATE), 2) AS plan_selections_per_day
+SELECT CASE WHEN t >= '2026-08-11' THEN '3 after' WHEN t >= '2026-07-17' AND t < '2026-08-07' THEN '2 before: premiere weeks Jul 17-Aug 6' ELSE '1 before: other days' END AS per,
+ round(count(*) / count(DISTINCT t::DATE), 2) AS plan_selections_per_day
 FROM ev WHERE event = 'plan selected' GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q10 — revenue per new paid subscription before vs after (warehouse list prices)

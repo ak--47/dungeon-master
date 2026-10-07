@@ -2,7 +2,7 @@
 
 ## Who we are
 
-Reelhouse is a subscription streaming service for independent film and prestige TV. It launched in 2021 in Portland, Oregon, and serves households in the United States and Canada. The company has about 20 employees: content and curation, product and engineering (TV, mobile, and web apps, plus a small streaming infrastructure team), growth marketing, and member support. Playback is delivered through a commercial CDN provider.
+Reelhouse is a subscription streaming service for independent film and prestige TV. It launched in 2021 in Portland, Oregon, and serves households in the United States and Canada. It is venture-backed: a Series A in 2024 funds the team while subscription revenue grows, and the company does not yet cover its costs from subscriptions. It has about 20 employees: content and curation, product and engineering (TV, mobile, and web apps, plus a small streaming infrastructure team), growth marketing, and member support. Playback is delivered through a commercial CDN provider.
 
 Revenue comes from monthly subscriptions, about $75,000 a month in the summer of 2026 from roughly 6,000 paying households. The Basic with Ads plan also earns a small amount of advertising revenue through an ad partner; ad revenue is not in this data.
 
@@ -32,7 +32,7 @@ Reelhouse measures itself by paying households and by how much of what they star
 
 ## The catalog
 
-- **Reelhouse Originals** are series and films that Reelhouse commissions or acquires exclusively from independent producers. The current Originals are *Saltmarsh* (thriller series, two seasons), *The Quiet Acre* (drama series), *Northbound* (sci-fi series, two seasons), *Copperline* (crime series), *Small Hours* (comedy series, two seasons), *Low Tide Diaries* (documentary series), *Paper Lanterns* and *The Glass Orchard* (films), and the kids series *Pip & the Lighthouse*.
+- **Reelhouse Originals** are series and films that Reelhouse licenses exclusively from independent producers: it buys exclusive North American streaming rights to finished seasons and films at festival and market prices, and it co-finances later seasons of the series that do well with a small minimum guarantee. Reelhouse does not run its own productions. The current Originals are *Saltmarsh* (thriller series, two seasons), *The Quiet Acre* (drama series), *Northbound* (sci-fi series, two seasons), *Copperline* (crime series), *Small Hours* (comedy series, two seasons), *Low Tide Diaries* (documentary series), *Paper Lanterns* and *The Glass Orchard* (films), and the kids series *Pip & the Lighthouse*.
 - **Licensed titles** are series and films Reelhouse licenses from studios and distributors, for example *Harbor Lights*, *Second Shift*, *The Assessor*, *Fieldwork*, *Ironwood*, *Kitchen Table*, *Night Desk*, *Marrow Creek*, and films such as *Signal Fires*, *Ember Road*, and *Pale Signal*, plus a small kids library.
 - *Saltmarsh* is Reelhouse's best-known Original. Season 1 has been on the service since 2025. Season 2 is the big release of the summer (see 02-timeline.md).
 - There are 34 titles in the catalog through the window; no licensed title was added or removed.
@@ -43,7 +43,7 @@ Reelhouse measures itself by paying households and by how much of what they star
 - **Viewer profiles** (`profile_count`, 1-5): the number of viewer profiles on the account. About a third of households have a single profile.
 - **Kids profile** (`has_kids_profile`): whether the account has a kids profile.
 - **Engagement segment** (`_persona`): a label from the CRM's lifecycle model: `binge_watcher`, `regular_viewer`, or `light_viewer`.
-- **Established vs new households.** About 56% of households active in the window joined before June 4. New households arrive steadily, a little over 250 accounts a week.
+- **Established vs new households.** About half of the households active in the window joined before June 4. In a typical week a little over 250 households create an account.
 
 ## How households find us
 
@@ -77,4 +77,4 @@ Leadership set these goals for the quarter:
 4. **Efficient acquisition.** Finance asked which paid channel is worth its cost.
 5. **Reliable streaming.** The streaming infrastructure team reports playback quality every week and wants to understand what the August TV incident cost.
 6. **Reduce churn.** Member support and finance want to know which households cancel and why.
-7. **Better discovery.** The TV team asked how search works on TV compared with other screens; the CRM team wants to know which pushes are worth sending.
+7. **Better discovery.** The TV team asked how search works across screens; the CRM team wants to know which pushes are worth sending.
