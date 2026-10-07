@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { makeFixture, runFixture, SEEDS } from './fixtures.mjs';
+import { makeFixture, runFixture, SEEDS, WINDOW } from './fixtures.mjs';
 import { extractFlows } from '../../lib/verify/flows.js';
 import { applyAggregateByBin, applyFrequencyByFrequency, applyAttributedBySource } from '../../lib/hook-patterns/index.js';
 import { scaleEventCount, scalePropertyValue, injectOnNewDays, applySessionShape,
@@ -265,10 +265,21 @@ describe.sequential('generated attribution and identity proofs', () => {
         config.funnels[0].conversionRate = 70;
         config.funnels[0].attempts = { min: attempts, max: attempts, conversionRate: 70 };
         const owners = new Map();
+        const createdBy = new Map();
         config.hook = (records, type, meta) => {
-          if (type === 'everything') for (const event of records) owners.set(event.insert_id, meta.profile.distinct_id);
+          if (type === 'everything') {
+            createdBy.set(meta.profile.distinct_id, meta.profile.created);
+            for (const event of records) owners.set(event.insert_id, meta.profile.distinct_id);
+          }
           return records;
         };
+        // Right-edge contract (docs/alignment/counting-contracts.md): a user born
+        // less than the attempt chain's span before the window end has not had
+        // time for every configured attempt; the future-time guard truncates the
+        // chain. Span per attempt = First funnel timeToConvert (1h) + the engine's
+        // retry gap (<= 30 min).
+        const chainSpanMs = (attempts + 1) * (config.funnels[0].timeToConvert * 3600000 + 30 * 60000);
+        const fitsBeforeEnd = (owner) => Date.parse(createdBy.get(owner)) + chainSpanMs <= Date.parse(WINDOW.datasetEnd);
         const sample = await runFixture(config);
         integrity(sample.events);
         const emitted = new Map();
@@ -299,7 +310,8 @@ describe.sequential('generated attribution and identity proofs', () => {
             expect(events.every(event => event.user_id === owner)).toBe(true);
             continue;
           }
-          if (count(events, 'First Entry') !== attempts + 1) attemptMismatches++;
+          const entries = count(events, 'First Entry');
+          if (fitsBeforeEnd(owner) ? entries !== attempts + 1 : entries > attempts + 1) attemptMismatches++;
           expect(auth.length).toBeLessThanOrEqual(1);
           if (auth.length) {
             stitched++;
