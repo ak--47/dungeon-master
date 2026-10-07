@@ -19,7 +19,7 @@ how to point a model at the context, and how to run the eval.
 | Companies | 22, one per vertical (table at the end) |
 | Window | 2026-06-04 00:00:00 to 2026-10-01 23:59:59, UTC, 120 days |
 | Users | 10,000 profiles per company: ~half existed before the window, ~half sign up inside it |
-| Events | 0.66M-1.55M per company (~1.2 per user per day) |
+| Events | 0.66M-1.55M per company |
 | Time zone | Every timestamp is UTC (ISO 8601 with `Z`) |
 | Determinism | Same engine version + same file = byte-identical data on any machine |
 | Generator | `@ak--47/dungeon-master` 1.9.0 (unreleased at build time) |
@@ -98,16 +98,17 @@ yourself before you count unique users or build funnels from anonymous steps:
 
 ```sql
 -- DuckDB. Any event that carries both ids links that device to that user.
+-- ::VARCHAR casts: DuckDB reads user_id as UUID and device_id as VARCHAR.
 CREATE OR REPLACE VIEW device_map AS
-SELECT device_id, min(user_id) AS user_id
+SELECT device_id::VARCHAR AS device_id, min(user_id::VARCHAR) AS user_id
 FROM events
 WHERE user_id IS NOT NULL AND device_id IS NOT NULL
-GROUP BY device_id;
+GROUP BY 1;
 
 CREATE OR REPLACE VIEW events_resolved AS
-SELECT coalesce(e.user_id, m.user_id, e.device_id) AS distinct_id, e.*
+SELECT coalesce(e.user_id::VARCHAR, m.user_id, e.device_id::VARCHAR) AS distinct_id, e.*
 FROM events e
-LEFT JOIN device_map m USING (device_id);
+LEFT JOIN device_map m ON e.device_id::VARCHAR = m.device_id;
 ```
 
 The profile file gives the same link: unnest `anonymousIds` against
@@ -242,4 +243,29 @@ data, so re-measure the eval numbers after an upgrade.
 
 ## The companies
 
-COMPANY_TABLE
+| Folder | Brand | Business | Stories (verdict on the delivered data) | Warehouse tables | Events |
+| --- | --- | --- | --- | --- | --- |
+| `ai-platform` | Cortexa | Cortexa builds large language models and sells access to them through an API. | 10: 8 NAILED, 2 STRONG | `inference_fleet_daily`, `model_billing_daily`, `developer_marketing_daily` | 819,187 |
+| `community` | Hearthside | Hearthside is a fan community platform: a home for people who love a game, a show, a book series, a tabletop system, or a band to read and write wikis together and talk about them. | 10: 8 NAILED, 2 STRONG | `paid_marketing_daily`, `trust_safety_daily`, `ad_revenue_daily` | 966,434 |
+| `crypto` | Ledgerline | Ledgerline is a crypto exchange and wallet app for everyday investors. | 10: 10 NAILED | `market_prices_daily`, `chain_network_daily`, `paid_marketing_daily` | 1,351,820 |
+| `dating` | Kindred | Kindred is a dating app for adults who want a real relationship, not endless swiping. | 10: 1 STRONG, 9 NAILED | `paid_acquisition_daily`, `chat_delivery_daily`, `subscription_bookings_daily` | 957,663 |
+| `devtools` | Forgebench | Forgebench is a developer platform. | 10: 9 NAILED, 1 STRONG | `marketing_spend_daily`, `build_fleet_daily`, `usage_billing_daily` | 969,210 |
+| `ecommerce` | Marlowe & Pine | Marlowe & Pine is a direct-to-consumer home goods brand founded in 2019 and based in Portland, Oregon. | 10: 8 NAILED, 2 STRONG | `marketing_spend_daily`, `carrier_performance_daily`, `inventory_daily` | 1,223,028 |
+| `education` | Brightpath Academy | Brightpath Academy is an online school for professional skills. | 10: 8 NAILED, 2 STRONG | `paid_marketing_daily`, `app_stability_daily`, `subscription_billing_daily` | 658,412 |
+| `fintech` | Penny Harbor | Penny Harbor is a mobile bank for everyday Americans, launched in March 2023. | 10: 10 NAILED | `paid_acquisition_daily`, `card_authorizations_daily`, `pocket_savings_daily` | 1,112,233 |
+| `fitness` | Stridewell | Stridewell is a consumer fitness app for people who want to train consistently without a gym membership or a personal trainer. | 9: 7 NAILED, 2 STRONG | `paid_acquisition_daily`, `wearable_sync_daily`, `subscription_billing_daily` | 1,034,677 |
+| `food-delivery` | Forkfly | Forkfly is a food delivery app for people who want good local food, not a thousand chains. | 10: 1 STRONG, 9 NAILED | `marketing_spend_daily`, `payment_gateway_daily`, `market_ops_daily` | 973,401 |
+| `gaming` | Emberfall | Cinderlight Games is an independent game studio of nine people in Portland, Oregon. | 10: 10 NAILED | `ua_spend_daily`, `server_health_daily`, `store_revenue_daily` | 1,018,469 |
+| `healthcare` | Clearwell Health | Clearwell Health is a virtual care company for adults in the United States. | 10: 10 NAILED | `clinician_staffing_daily`, `visit_revenue_daily` | 1,213,081 |
+| `insurance-application` | Shieldstone Insurance | Shieldstone Insurance is a digital personal-lines insurance company founded in 2019 and headquartered in Austin, Texas. | 10: 9 NAILED, 1 STRONG | `marketing_spend_daily`, `claims_operations_daily`, `written_premium_daily` | 757,612 |
+| `logistics` | Routewise Freight | Routewise Freight is a digital truckload broker founded in 2019 and based in Chicago. | 9: 9 NAILED | `spot_market_rates_daily`, `load_margin_daily`, `paid_marketing_daily` | 823,990 |
+| `marketplace` | Tradepost | Tradepost is a peer-to-peer resale marketplace for secondhand goods: electronics, clothing, sneakers, home decor, collectibles, toys and games, and sports and outdoor gear. | 10: 10 NAILED | `marketing_spend_daily`, `payment_processing_daily`, `marketplace_ledger_daily` | 817,949 |
+| `media` | The Lantern | The Lantern is an independent national digital news publication founded in 2022 by a group of former metro-desk reporters. | 10: 7 NAILED, 3 STRONG | `marketing_spend_daily`, `platform_reliability_daily`, `subscription_billing_daily` | 892,791 |
+| `real-estate` | Keystead Homes | Keystead Homes is a home-search app and buyer brokerage. | 10: 8 NAILED, 2 STRONG | `marketing_spend_daily`, `mortgage_rate_sheet_daily`, `market_inventory_daily` | 1,144,859 |
+| `sass` | Tallyboard | Tallyboard is a cloud operations platform for engineering teams. | 11: 10 NAILED, 1 STRONG | `paid_marketing_daily`, `ci_runner_health_daily`, `subscription_bookings_daily` | 920,429 |
+| `social` | Murmur | Murmur is a social app for sharing everyday moments with friends and with the creators people love. | 10: 10 NAILED | `marketing_spend_daily`, `for_you_feed_health_daily`, `ad_revenue_daily` | 1,160,268 |
+| `streaming` | Reelhouse | Reelhouse is a subscription streaming service for independent film and prestige TV. | 10: 10 NAILED | `marketing_spend_daily`, `playback_qos_daily`, `subscription_billing_daily` | 1,017,547 |
+| `support-desk` | Ticketloop | Ticketloop makes help desk software for small and mid-size support teams: online stores, software companies, schools and online-learning companies, fintech and healthcare startups, travel companies, and game studios. | 10: 10 NAILED | `paid_marketing_daily`, `inbound_channel_daily`, `subscription_billing_daily` | 846,326 |
+| `travel` | Driftway Travel | Driftway Travel is an online travel company that sells hotel and vacation-rental stays through an iOS app, an Android app, and a website. | 10: 7 NAILED, 3 STRONG | `marketing_spend_daily`, `payment_gateway_daily`, `destination_supply_daily` | 1,551,549 |
+
+Every story on every delivered dataset grades NAILED or STRONG, every hook is covered, every warehouse audit passes, and every `verify/<v>.sql` runs clean against the gzipped files (checked 2026-10-07).
