@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Murmur**, a mobile social app. 
 
 - **Product:** the Murmur iOS and Android apps: a Following feed and a ranked For You feed of posts, Stories, direct messages, communities, Clips (short vertical video, from July 8), creator Circles (paid fan subscriptions), push notifications, and ads in the feed, in Stories, and in Clips.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early summer through the end of September and the first day of October.
-- **Scale:** about 10,000 members were active in the window. About 4,950 of them signed up during the window; the rest joined before June 4. The project holds about 1.1 million events.
+- **Scale:** about 10,000 members were active in the window. About 5,000 of them signed up during the window; the rest joined before June 4. The project holds about 1.2 million events.
 - **Markets:** members live mostly in the US, with smaller groups in the UK, Canada, Brazil, India, Germany, and Australia.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. Most members are in US time zones, so a US evening falls after midnight UTC.
 

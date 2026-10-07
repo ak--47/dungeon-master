@@ -18,7 +18,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             2026-07-08. Revenue: ads in the feed, Stories, and Clips plus the
  *             Circles fee. Paid acquisition on Meta, TikTok, and creator
  *             partnerships.
- * SCALE:      10,000 members (≈4,950 sign up inside the window), ~1.12M events,
+ * SCALE:      10,000 members (≈5,000 sign up inside the window), ~1.16M events,
  *             120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  app opened → post viewed → post liked / comment posted; post
  *             created; story viewed → dm sent
@@ -32,11 +32,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   interests selected > community joined > user unfollowed > content reported
  *   > profile updated > circle subscription started > ad clicked
  *
- * FUNNELS (12 declared):
- *   - Onboarding (first funnel, engine 100%): account created → interests
- *       selected → user followed (suggested accounts screen); the hook decides
- *       who finishes: 90%, TikTok signups 72% (non-finishers still get usage
- *       funnels, which a non-converting engine first funnel would deny them)
+ * FUNNELS (13 declared):
+ *   - Onboarding (first funnel, two copies by acquisition_channel conditions):
+ *       account created → interests selected → user followed (suggested
+ *       accounts screen); 90% finish, TikTok signups 72%. Members who leave at
+ *       the interests or suggestions screen still use the app (usage funnels)
  *   - Feed session (weight 14): app opened → post viewed ×11 with likes, an ad
  *       slot, a comment (65%)
  *   - Stories session (6): app opened → story viewed ×7, an ad slot → dm sent (60%)
@@ -47,8 +47,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   - Discover (4): search performed → post viewed → user followed (40%)
  *   - Push (30): push notification sent → push notification opened (engine
  *       100%; the hook decides opens) — carries the Smart Digest experiment
- *   - Circle join (locked post 4 / profile button 6): circle paywall viewed →
- *       circle subscription started (9% / 3%), paywall_trigger via funnel props
+ *   - Circle join (locked post 3 / profile button 4): circle paywall viewed →
+ *       circle subscription started (12% / 4%), paywall_trigger via funnel props
  *
  * USER PROPS:  account_type (personal / creator / business, from persona),
  *              circle_enabled (creators who run a paid Circle), acquisition_channel,
@@ -91,8 +91,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   prefetch noise and opted-out members) and include failed requests; paid spend
  *   is half a paced weekday budget (never zero) and half bid x delivered signups.
  * - retentionCurve shapes new members' activity; established members are flat
- *   across the window. With ≈4,950 signups the active base grows through the
- *   window (weekly active members ≈3,800 in early June → ≈5,500 in late September).
+ *   across the window. With ≈5,000 signups the active base grows through the
+ *   window (weekly active members ≈3,760 in early June → ≈5,500 in late September).
  * - Personas: heavy scroller 22, regular 40, lurker 21 (personal accounts),
  *   creator 14, business 3; half of creators run a paid Circle.
  */
@@ -133,9 +133,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * MIXPANEL: Insights, breakdown "Experiment: Smart Digest", Aug 5 - Oct 1:
  *   push notification opened / push notification sent (totals), and sends per
  *   exposed member = push notification sent (totals) / $experiment_started
- *   (uniques). The denominator is exposed members: about 7.4% of Digest members
+ *   (uniques). The denominator is exposed members: about 8% of Digest members
  *   have their only post-start pushes held back, so uniques of push sent
- *   undercounts Digest members (that read gives about 0.66x).
+ *   undercounts Digest members (that read gives about 0.65x).
  * REAL WORLD: fewer, better notifications get opened more.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -209,7 +209,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * H10. CIRCLE PAYWALL BY TRIGGER (two declared funnels)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: a Circle paywall opened from a locked post converts 9% vs 3% from
+ * PATTERN: a Circle paywall opened from a locked post converts 12% vs 4% from
  *   the profile Join button (3x); the subscription carries paywall_trigger.
  * MIXPANEL: Insights, circle subscription started / circle paywall viewed,
  *   breakdown paywall_trigger.
@@ -217,44 +217,44 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-social, 2026-10-07, full fidelity,
- * 10,000 members, 1,116,196 events)
+ * 10,000 members, 1,157,719 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation                 | Expected | Measured
  * -----|------------------------------------------------|----------------------------|----------|---------
- * H1   | clip share of post views, from Jul 29          | CLIP_VIEW_SHARE            | 0.35     | 0.351
- * H1   | clip share of new posts, from Jul 29           | CLIP_POST_SHARE            | 0.20     | 0.194
+ * H1   | clip share of post views, from Jul 29          | CLIP_VIEW_SHARE            | 0.35     | 0.349
+ * H1   | clip share of new posts, from Jul 29           | CLIP_POST_SHARE            | 0.20     | 0.201
  * H1   | clips before launch                            | exact purity               | 0        | 0
- * H2   | D14-27 retention, 0-2 / 7+ onboarding follows  | CHURN_BY_K x follow mix    | 0.367    | 0.363 (28.8% vs 79.6%)
- * H2   | D14-27 retention, 3-6 / 7+ onboarding follows  | CHURN_BY_K x follow mix    | 0.744    | 0.761 (60.5% vs 79.6%)
- * H3   | push open rate, Digest / Control               | DIGEST_OPEN_MULT           | 1.60     | 1.592 (10.8% vs 6.8%)
- * H3   | pushes sent per exposed member, Digest / Control | DIGEST_SEND_KEEP         | 0.60     | 0.611 (3.25 vs 5.31)
- * H3   | Digest share of exposed members                | equal 2-arm hash           | 0.50     | 0.497
+ * H2   | D14-27 retention, 0-2 / 7+ onboarding follows  | CHURN_BY_K x follow mix    | 0.367    | 0.389 (31.1% vs 80.0%)
+ * H2   | D14-27 retention, 3-6 / 7+ onboarding follows  | CHURN_BY_K x follow mix    | 0.744    | 0.735 (58.8% vs 80.0%)
+ * H3   | push open rate, Digest / Control               | DIGEST_OPEN_MULT           | 1.60     | 1.627 (10.9% vs 6.7%)
+ * H3   | pushes sent per exposed member, Digest / Control | DIGEST_SEND_KEEP         | 0.60     | 0.596 (3.41 vs 5.73)
+ * H3   | Digest share of exposed members                | equal 2-arm hash           | 0.50     | 0.494
  * H3   | daily_digest pushes in Control or pre-test     | exact purity               | 0        | 0
- * H4   | Android For You per Following view, outage / ±14 d | 1 − FEED_FAIL          | 0.40     | 0.404 (0.76 vs 1.88)
- * H4   | iOS For You per Following view, outage / ±14 d | control                    | 1.00     | 1.040 (1.89 vs 1.82)
+ * H4   | Android For You per Following view, outage / ±14 d | 1 − FEED_FAIL          | 0.40     | 0.425 (0.79 vs 1.85)
+ * H4   | iOS For You per Following view, outage / ±14 d | control                    | 1.00     | 0.998 (1.90 vs 1.90)
  * H4   | warehouse error_rate, android outage days      | FEED_FAIL                  | 0.60     | 0.603
- * H5   | spend per signup, creator partnerships / Meta  | 5.00 / 3.80                | 1.316    | 1.373 ($5.10 vs $3.72)
- * H5   | D14-27 retention, creator partnerships / Meta  | 1 − churn by follow mix    | 1.249    | 1.311 (63.2% vs 48.2%)
- * H5   | spend per retained member, creator / Meta      | 1.316 / 1.249              | 1.053    | 1.047 ($8.07 vs $7.71)
- * H6   | posts per creator-day after/before, Circle / no Circle | CIRCLE_POST_LIFT   | 1.35     | 1.330 (1.424 vs 1.071)
- * H7   | award-type events per DAU, Sep 12 / Saturdays  | AWARDS_MULT                | 2.50     | 2.509
- * H7   | post views per DAU, Sep 12 / Saturdays         | control                    | 1.00     | 0.997
- * H8   | feed + Clips ads per post view, after / before | AD_LOAD_MULT               | 1.60     | 1.611 (0.070 → 0.113)
- * H8   | ad revenue per 1k post views, after / before   | 1.6 x ECPM_AFTER_MULT      | 1.36     | 1.371 ($0.402 → $0.551)
- * H9   | median hours to first post, creator / personal | FIRST_POST_FACTOR.creator  | 0.35     | 0.357 (7.0 vs 19.6 h)
- * H10  | Circle conversion, locked post / profile button | 9 / 3                     | 3.00     | 3.011 (9.02% vs 2.99%)
+ * H5   | spend per signup, creator partnerships / Meta  | 5.00 / 3.80                | 1.316    | 1.301 ($4.97 vs $3.82)
+ * H5   | D14-27 retention, creator partnerships / Meta  | 1 − churn by follow mix    | 1.249    | 1.200 (63.9% vs 53.2%)
+ * H5   | spend per retained member, creator / Meta      | 1.316 / 1.249              | 1.053    | 1.084 ($7.77 vs $7.17)
+ * H6   | posts per creator-day after/before, Circle / no Circle | CIRCLE_POST_LIFT   | 1.35     | 1.339 (1.393 vs 1.040)
+ * H7   | award-type events per DAU, Sep 12 / Saturdays  | AWARDS_MULT                | 2.50     | 2.452
+ * H7   | post views per DAU, Sep 12 / Saturdays         | control                    | 1.00     | 0.983
+ * H8   | feed + Clips ads per post view, after / before | AD_LOAD_MULT               | 1.60     | 1.615 (0.0707 → 0.1141)
+ * H8   | ad revenue per 1k post views, after / before   | 1.6 x ECPM_AFTER_MULT      | 1.36     | 1.377 ($0.403 → $0.555)
+ * H9   | median hours to first post, creator / personal | FIRST_POST_FACTOR.creator  | 0.35     | 0.349 (6.9 vs 19.7 h)
+ * H10  | Circle conversion, locked post / profile button | 12 / 4                    | 3.00     | 2.779 (11.65% vs 4.19%)
  * ═════════════════════════════════════════════════════════════════════════
  *
- * Noise notes: H5 rests on about 810 creator-partnership and 1,040 Meta
+ * Noise notes: H5 rests on about 870 creator-partnership and 980 Meta
  * signups with a full day 14-27 window (retention ratio relative SE about 5%).
- * H6 rests on about 330 Circle and 375 other established creators. H10 rests on
- * about 470 profile-button subscriptions (ratio relative SE about 5.5%). Per
- * active day, members who joined in the window view fewer posts than
- * established members (about 2.75-2.9 vs 3.35), so all-member per-DAU view
- * metrics drift down a little as the new-member share grows; no hook targets
- * that, and 04-metrics' new-vs-established tip covers it. The rest of the event
- * mix per post view is the same for both groups (Sep: shares 19.5 vs 18.6 per
- * 1k views, unfollows 4.8 vs 4.8).
+ * H6 rests on about 310 Circle and 350 other established creators. H10 rests on
+ * about 460 profile-button subscriptions (ratio relative SE about 5.5%). Per
+ * active day, members who joined in the window view a few fewer posts than
+ * established members (about 3.15-3.3 vs 3.46), so all-member per-DAU view
+ * metrics move a little with the new-member share; no hook targets that, and
+ * 04-metrics' new-vs-established tip covers it. The rest of the event mix per
+ * post view is the same for both groups (Sep: shares 19.2 vs 18.2 per 1k views,
+ * unfollows 4.6 vs 4.9, likes 201 vs 202).
  */
 
 // ── SCALE ──
@@ -358,8 +358,8 @@ const FIRST_POST_MAX_H = 72;
 const FIRST_POST_FACTOR = { personal: 1, creator: 0.35, business: 0.6 };
 
 // H10 Circle paywall conversion by trigger (two declared funnels)
-const LOCKED_POST_CONV = 9;
-const PROFILE_BUTTON_CONV = 3;
+const LOCKED_POST_CONV = 12;
+const PROFILE_BUTTON_CONV = 4;
 
 // For You feed API (warehouse)
 const FEED_REQUESTS_PER_VIEW = 0.19; // one feed page holds ~5 posts; prefetches add requests
@@ -464,13 +464,7 @@ function handleEverything(events, meta) {
 	let k = 0;
 	if (signup) {
 		const ob = events.find((e) => e.event === "user followed" && !e.device_id && T(e) - birthMs < 2 * HOUR_MS);
-		const completes = salt(uid, "onboard") < (profile.acquisition_channel === "tiktok_ads" ? TIKTOK_ONBOARD_CONV : ONBOARD_CONV) / 100;
-		if (ob && !completes) {
-			// skipped onboarding: half leave at the interests screen, half at the suggestions screen
-			const interests = events.find((e) => e.event === "interests selected" && T(e) - birthMs < 2 * HOUR_MS);
-			const skipInterests = salt(uid, "onboard-step") < 0.5;
-			events = events.filter((e) => e !== ob && !(skipInterests && e === interests));
-		} else if (ob) {
+		if (ob) {
 			ob.discovery_source = "onboarding_suggestions";
 			k = Number(pickWeighted(WARM_CHANNELS.includes(profile.acquisition_channel) ? WARM_K : COLD_K, salt(uid, "ob-follows")));
 			if (k === 0) events = events.filter((e) => e !== ob);
@@ -907,13 +901,22 @@ const config = {
 
 	funnels: [
 		{
-			// every signup reaches the suggestions screen in the engine; the hook
-			// decides who finishes onboarding (ONBOARD_CONV / TIKTOK_ONBOARD_CONV),
-			// so members who skip it still get feed, Stories, and chat sessions
+			// TikTok signups finish onboarding less often; members who leave at the
+			// interests or suggestions screen still use the app (usage funnels)
+			name: "Onboarding (TikTok)",
+			sequence: ["account created", "interests selected", "user followed"],
+			conditions: { acquisition_channel: "tiktok_ads" },
+			isFirstFunnel: true,
+			conversionRate: TIKTOK_ONBOARD_CONV,
+			timeToConvert: 0.15,
+			order: "sequential",
+		},
+		{
 			name: "Onboarding",
 			sequence: ["account created", "interests selected", "user followed"],
+			conditions: { acquisition_channel: { neq: "tiktok_ads" } },
 			isFirstFunnel: true,
-			conversionRate: 100,
+			conversionRate: ONBOARD_CONV,
 			timeToConvert: 0.15,
 			order: "sequential",
 		},
@@ -1014,7 +1017,7 @@ const config = {
 			conversionRate: LOCKED_POST_CONV,
 			timeToConvert: 0.3,
 			order: "sequential",
-			weight: 4,
+			weight: 3,
 			props: { paywall_trigger: "locked_post" },
 		},
 		{
@@ -1023,7 +1026,7 @@ const config = {
 			conversionRate: PROFILE_BUTTON_CONV,
 			timeToConvert: 0.3,
 			order: "sequential",
-			weight: 6,
+			weight: 4,
 			props: { paywall_trigger: "profile_button" },
 		},
 	],
@@ -1471,7 +1474,7 @@ FROM ${WH("for_you_feed_health_daily")}`,
 	{
 		id: "H7-sound-awards-livestream",
 		hook: "H7",
-		archetype: "bespoke",
+		archetype: "temporal-inflection",
 		narrative: `On Saturday ${D(AWARDS_DAY)} Murmur streams the Murmur Sound Awards. For that UTC day, posting, commenting, sharing, and story posting run at ${AWARDS_MULT}x (worldEvents volumeMultiplier, clones re-draw their properties); feed views are not part of the effect. Read: those four events per daily active member (any member-initiated event) on ${D(AWARDS_DAY)} over the mean of the Saturdays ${AWARDS_CONTROL_DAYS.join(", ")} = ${AWARDS_MULT}; "post viewed" per active member on the same days is the control (1.0).`,
 		mixpanelReport: { type: "Insights", events: ["post created + comment posted + post shared + story posted", "any event except push notification sent and $experiment_started (uniques)"], formula: "A / B", chart: "daily line, August 15 - October 1" },
 		assertions: [

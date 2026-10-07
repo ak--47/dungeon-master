@@ -109,4 +109,4 @@ One row per community (240). Events that happen in a community carry its `commun
 | Onboarding | `account created` → `interests selected` → `user followed` (`discovery_source = onboarding_suggestions`) | New members only. Read with a 1-day conversion window. |
 | First post | `account created` → `post created` | New members only. Read with a 7-day conversion window. |
 | Push | `push notification sent` → `push notification opened` | Hold `notification_id` constant (Totals counting) to follow each push. |
-| Circle join | `circle paywall viewed` → `circle subscription started` | Use a 1-hour window, or compare counts by `paywall_trigger` (the subscription carries the trigger that led to it). |
+| Circle join | `circle paywall viewed` → `circle subscription started` | Read with a 1-hour conversion window. |

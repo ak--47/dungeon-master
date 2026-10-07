@@ -182,7 +182,7 @@ SELECT account_type, count(*) AS signups, count(t1) AS posted_within_7d, round(c
 FROM first_post GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- STORY H10-circle-paywall-trigger — locked post 9% vs profile button 3%
+-- STORY H10-circle-paywall-trigger — locked post 12% vs profile button 4%
 -- ─────────────────────────────────────────────────────────────────────────
 SELECT paywall_trigger, count(*) FILTER (WHERE event = 'circle paywall viewed') AS paywall_views,
  count(*) FILTER (WHERE event = 'circle subscription started') AS subscriptions,
@@ -200,6 +200,11 @@ SELECT date_trunc('week', t)::DATE AS week, count(*) AS post_views,
  round(avg((post_type = 'clip')::INT), 4) AS clip_share, round(avg((post_type = 'photo')::INT), 4) AS photo_share,
  round(avg((post_type = 'text')::INT), 4) AS text_share
 FROM ev WHERE event = 'post viewed' GROUP BY 1 ORDER BY 1;
+
+-- post type mix of views before launch vs from Jul 29
+SELECT CASE WHEN t < TIMESTAMP '2026-07-08' THEN '1 before launch' WHEN t >= TIMESTAMP '2026-07-29' THEN '2 from Jul 29' END AS period,
+ round(avg((post_type = 'clip')::INT), 4) AS clip_share, round(avg((post_type = 'photo')::INT), 4) AS photo_share, round(avg((post_type = 'text')::INT), 4) AS text_share
+FROM ev WHERE event = 'post viewed' AND (t < TIMESTAMP '2026-07-08' OR t >= TIMESTAMP '2026-07-29') GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q2 — Clips creation from Jul 29, by account type; who makes Clips
@@ -222,6 +227,13 @@ SELECT count(*) AS mature_new_members, round(avg(retained_d14_27::INT), 4) AS re
  round(avg((NOT followed_any_suggestion)::INT), 4) AS share_followed_none
 FROM signups WHERE retained_d14_27 IS NOT NULL;
 
+-- common mistake: excluding only push notification sent (keeps $experiment_started as a return)
+WITH r AS (SELECT s.uid, bool_or(e.t >= s.t0 + INTERVAL 14 DAY AND e.t < s.t0 + INTERVAL 28 DAY) AS ret
+  FROM signups s JOIN ev e ON e.uid = s.uid AND e.event <> 'push notification sent' WHERE s.retained_d14_27 IS NOT NULL GROUP BY 1)
+SELECT CASE WHEN s.onboarding_follows <= 2 THEN '0-2' WHEN s.onboarding_follows <= 6 THEN '3-6' ELSE '7+' END AS follows_bucket,
+ round(avg(coalesce(r.ret, false)::INT), 4) AS retention_keeping_experiment_started
+FROM signups s LEFT JOIN r ON r.uid = s.uid WHERE s.retained_d14_27 IS NOT NULL GROUP BY 1 ORDER BY 1;
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q4 — Smart Digest: open rate significance (see STORY H3 for sends and opens per member)
 -- ─────────────────────────────────────────────────────────────────────────
@@ -231,6 +243,12 @@ SELECT max(r) FILTER (WHERE variant = 'Digest') AS digest_open_rate, max(r) FILT
  round((max(r) FILTER (WHERE variant = 'Digest') - max(r) FILTER (WHERE variant = 'Control'))
   / sqrt(max(r * (1 - r) / n) FILTER (WHERE variant = 'Digest') + max(r * (1 - r) / n) FILTER (WHERE variant = 'Control')), 1) AS z
 FROM g;
+
+-- denominators: exposed members vs Uniques of push notification sent from Aug 5
+SELECT variant, count(DISTINCT uid) AS exposed_members, count(DISTINCT uid) FILTER (WHERE notification_id IS NOT NULL) AS members_with_a_push,
+ count(DISTINCT uid) FILTER (WHERE notification_id IS NULL) AS exposed_without_a_push,
+ round(count(notification_id)::DOUBLE / count(DISTINCT uid) FILTER (WHERE notification_id IS NOT NULL), 3) AS sends_per_member_with_a_push
+FROM push_after GROUP BY 1 ORDER BY 1;
 
 -- weekly pushes sent, by arm (the drop starts Aug 5)
 SELECT date_trunc('week', e.t)::DATE AS week, p.variant, count(*) AS pushes_sent
@@ -285,6 +303,11 @@ SELECT x.observed AS android_for_you_outage, round(x.following * b.base_ratio) A
  round(x.following * b.base_ratio) - x.observed AS missing_views, round(x.observed / (x.following * b.base_ratio), 3) AS observed_over_expected,
  (SELECT sum(failed_requests) FROM wh_feed WHERE service_status = 'major_outage') AS warehouse_failed_requests
 FROM x, b;
+
+-- warehouse: android outage-day latency and Android For You daily views outside the outage (Aug 12 - Sep 12)
+SELECT min(p95_latency_ms) AS outage_p95_min, max(p95_latency_ms) AS outage_p95_max FROM wh_feed WHERE service_status = 'major_outage';
+WITH d AS (SELECT t::DATE AS d, count(*) AS v FROM ev WHERE event = 'post viewed' AND platform = 'android' AND feed = 'for_you' AND t >= TIMESTAMP '2026-08-12' AND t < TIMESTAMP '2026-09-13' GROUP BY 1)
+SELECT (d BETWEEN DATE '2026-08-26' AND DATE '2026-08-29') AS outage_day, min(v) AS min_daily_views, max(v) AS max_daily_views FROM d GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q7 — paid channel economics (see STORY H5); network-claimed installs
@@ -371,29 +394,39 @@ FROM ev WHERE event IN ('ad viewed', 'story viewed') AND t >= TIMESTAMP '2026-08
 
 -- ad clicks per impression before vs after (not part of the change)
 SELECT CASE WHEN t >= TIMESTAMP '2026-09-09' THEN '2 after' ELSE '1 before' END AS period,
+ count(*) FILTER (WHERE event = 'ad clicked') AS ad_clicks,
  round(count(*) FILTER (WHERE event = 'ad clicked')::DOUBLE / count(*) FILTER (WHERE event = 'ad viewed'), 4) AS ctr
 FROM ev WHERE event IN ('ad viewed', 'ad clicked') AND t >= TIMESTAMP '2026-08-12' GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- EVAL Q13 — age null: new-member day 14-27 retention, under 35 vs 35 and over; sub-splits by platform, channel group, signup month
+-- EVAL Q13 — interests null: new-member day 14-27 retention, 5+ interests vs 3-4 (members who picked interests); sub-splits
 -- ─────────────────────────────────────────────────────────────────────────
-CREATE OR REPLACE TEMP TABLE age_ret AS
-SELECT s.uid, s.platform, p.age_band, CASE WHEN p.age_band IN ('18-24', '25-34') THEN 'under_35' ELSE '35_plus' END AS age_group,
+CREATE OR REPLACE TEMP TABLE int_ret AS
+SELECT s.uid, s.platform, i.interest_count, CASE WHEN i.interest_count >= 5 THEN '5_plus' ELSE '3_4' END AS interest_group,
  CASE WHEN s.ch IN ('friend_invite', 'creator_partnerships') THEN 'invite_or_creator' ELSE 'other_channels' END AS channel_group,
  CASE WHEN s.t0 < TIMESTAMP '2026-07-01' THEN 'signup_jun' WHEN s.t0 < TIMESTAMP '2026-08-01' THEN 'signup_jul' ELSE 'signup_aug_to_sep3' END AS signup_period,
  s.retained_d14_27
-FROM signups s JOIN prof p ON p.uid = s.uid WHERE s.retained_d14_27 IS NOT NULL;
+FROM signups s JOIN (SELECT uid, max(interest_count) AS interest_count FROM ev WHERE event = 'interests selected' GROUP BY 1) i ON i.uid = s.uid
+WHERE s.retained_d14_27 IS NOT NULL;
 
-SELECT age_band, count(*) AS new_members, round(avg(retained_d14_27::INT), 4) AS retention_d14_27 FROM age_ret GROUP BY 1 ORDER BY 1;
+SELECT interest_count, count(*) AS new_members, round(avg(retained_d14_27::INT), 4) AS retention_d14_27 FROM int_ret GROUP BY 1 ORDER BY 1;
 
-WITH x AS (SELECT 'all' AS grp, age_group, retained_d14_27 FROM age_ret
-  UNION ALL SELECT platform, age_group, retained_d14_27 FROM age_ret
-  UNION ALL SELECT channel_group, age_group, retained_d14_27 FROM age_ret
-  UNION ALL SELECT signup_period, age_group, retained_d14_27 FROM age_ret),
-g AS (SELECT grp, age_group, count(*) AS n, avg(retained_d14_27::INT) AS r FROM x GROUP BY 1, 2)
-SELECT a.grp, a.n AS under_35_members, round(a.r, 4) AS under_35_retention, b.n AS members_35_plus, round(b.r, 4) AS retention_35_plus,
+WITH x AS (SELECT 'all' AS grp, interest_group, retained_d14_27 FROM int_ret
+  UNION ALL SELECT platform, interest_group, retained_d14_27 FROM int_ret
+  UNION ALL SELECT channel_group, interest_group, retained_d14_27 FROM int_ret
+  UNION ALL SELECT signup_period, interest_group, retained_d14_27 FROM int_ret),
+g AS (SELECT grp, interest_group, count(*) AS n, avg(retained_d14_27::INT) AS r FROM x GROUP BY 1, 2)
+SELECT a.grp, a.n AS members_5_plus, round(a.r, 4) AS retention_5_plus, b.n AS members_3_4, round(b.r, 4) AS retention_3_4,
  round((a.r - b.r) / sqrt(a.r * (1 - a.r) / a.n + b.r * (1 - b.r) / b.n), 2) AS z
-FROM g a JOIN g b ON a.grp = b.grp AND a.age_group = 'under_35' AND b.age_group = '35_plus' ORDER BY 1;
+FROM g a JOIN g b ON a.grp = b.grp AND a.interest_group = '5_plus' AND b.interest_group = '3_4' ORDER BY 1;
+
+-- interaction check: does the interests gap differ between Android and iOS? (difference of the two gaps, z)
+WITH g AS (SELECT platform, interest_group, count(*) AS n, avg(retained_d14_27::INT) AS r FROM int_ret GROUP BY 1, 2),
+d AS (SELECT a.platform, a.r - b.r AS gap, a.r * (1 - a.r) / a.n + b.r * (1 - b.r) / b.n AS var
+  FROM g a JOIN g b ON a.platform = b.platform AND a.interest_group = '5_plus' AND b.interest_group = '3_4')
+SELECT round(max(gap) FILTER (WHERE platform = 'android'), 4) AS android_gap, round(max(gap) FILTER (WHERE platform = 'ios'), 4) AS ios_gap,
+ round((max(gap) FILTER (WHERE platform = 'android') - max(gap) FILTER (WHERE platform = 'ios')) / sqrt(sum(var)), 2) AS z_interaction
+FROM d;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q14 — time to first post by account type (see STORY H9); finer buckets
@@ -436,6 +469,16 @@ SELECT c.grp, c.n AS control_members, x.n AS digest_members,
  round(c.m_days, 3) AS control_active_days, round(x.m_days, 3) AS digest_active_days, round((x.m_days - c.m_days) / sqrt(x.v_days / x.n + c.v_days / c.n), 2) AS z_active_days,
  round(c.m_opens, 3) AS control_app_opens, round(x.m_opens, 3) AS digest_app_opens, round((x.m_opens - c.m_opens) / sqrt(x.v_opens / x.n + c.v_opens / c.n), 2) AS z_app_opens
 FROM g c JOIN g x ON x.grp = c.grp AND c.variant = 'Control' AND x.variant = 'Digest' ORDER BY 1;
+
+-- interaction check: does the Digest - Control gap in active days differ between Android and iOS? (z)
+WITH a AS (SELECT p.variant, p.uid, any_value(x.platform) AS platform,
+  count(DISTINCT x.t::DATE) FILTER (WHERE x.t >= TIMESTAMP '2026-08-05') AS active_days_after
+  FROM prof p LEFT JOIN active_ev x ON x.uid = p.uid WHERE p.variant IS NOT NULL GROUP BY 1, 2),
+g AS (SELECT platform, variant, count(*) AS n, avg(active_days_after) AS m, var_samp(active_days_after) AS v FROM a GROUP BY 1, 2),
+d AS (SELECT x.platform, x.m - c.m AS gap, x.v / x.n + c.v / c.n AS var FROM g x JOIN g c ON c.platform = x.platform AND x.variant = 'Digest' AND c.variant = 'Control')
+SELECT round(max(gap) FILTER (WHERE platform = 'android'), 3) AS android_gap, round(max(gap) FILTER (WHERE platform = 'ios'), 3) AS ios_gap,
+ round((max(gap) FILTER (WHERE platform = 'android') - max(gap) FILTER (WHERE platform = 'ios')) / sqrt(sum(var)), 2) AS z_interaction
+FROM d;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q17 — pushes sent per day before vs after Aug 5
@@ -489,6 +532,17 @@ SELECT members, period, sum(wau) AS member_weeks,
  round(1000.0 * sum(cj) / sum(wau), 1) AS community_joins_per_1k_wau, round(1000.0 * sum(pu) / sum(wau), 1) AS profile_updates_per_1k_wau,
  round(1000.0 * sum(rep) / sum(wau), 1) AS reports_per_1k_wau
 FROM k GROUP BY 1, 2 ORDER BY 1, 2;
+
+-- members who joined before Jun 4: unfollow counts in the two periods (equal member-weeks), Poisson z
+WITH w AS (SELECT a.t FROM active_ev a JOIN prof p ON p.uid = a.uid
+  WHERE a.event = 'user unfollowed' AND p.joined_date < '2026-06-04'
+  AND ((a.t >= TIMESTAMP '2026-06-08' AND a.t < TIMESTAMP '2026-07-06') OR (a.t >= TIMESTAMP '2026-08-31' AND a.t < TIMESTAMP '2026-09-28'))),
+c AS (SELECT count(*) FILTER (WHERE t < TIMESTAMP '2026-07-06') AS early, count(*) FILTER (WHERE t >= TIMESTAMP '2026-08-31') AS late FROM w)
+SELECT early AS unfollows_jun8_jul5, late AS unfollows_aug31_sep27, round((late - early) / sqrt(late + early), 2) AS z FROM c;
+
+-- September (Sep 1-30): ad revenue vs paid acquisition spend
+SELECT (SELECT round(sum(ad_revenue_usd), 2) FROM wh_ads WHERE date::DATE BETWEEN DATE '2026-09-01' AND DATE '2026-09-30') AS ad_revenue_usd,
+ (SELECT round(sum(spend_usd), 2) FROM wh_spend WHERE date::DATE BETWEEN DATE '2026-09-01' AND DATE '2026-09-30') AS paid_spend_usd;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q20 — why channels retain differently: retention standardized by onboarding follows
