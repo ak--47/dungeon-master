@@ -12,7 +12,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 | `insert_id` | Unique event ID used for de-duplication. |
 | `platform` | `web` (computer browser), `ios` (iPhone or iPad app), `android` (Android app), or `server` (back-office systems: policy administration, billing, claims). |
 | `state` | The customer's state (two-letter code), from their address. Fixed per person. |
-| `os`, `model`, `screen_height`, `screen_width`, `carrier`, `radio` | Device details from the SDK, on events that carry a `device_id`. `os` is `iOS`, `iPadOS`, `Android`, `Windows`, `macOS`, or a Linux variant. |
+| `os`, `model`, `screen_height`, `screen_width`, `carrier`, `radio` | Device details from the SDK, on events that carry a `device_id` (`carrier` and `radio` on phones and tablets only). Fixed per device. `os` is `iOS`, `iPadOS`, `Android`, `Windows`, `macOS`, or a Linux variant. |
 
 ## Shopping: quote and purchase (new customers)
 
@@ -21,7 +21,7 @@ A shopper goes through these once. The first two events (and the experiment expo
 | Event | Meaning | Properties |
 |---|---|---|
 | `quote started` | A shopper starts a quote. Anonymous (device only). | `product_line` (`auto`, `home`, `renters`); `acquisition_channel` (`search_ads`, `comparison_site`, `social_ads`, `organic`, `referral`); `quote_flow` (`standard` or `express`, see 02-timeline.md). |
-| `$experiment_started` | Mixpanel experiment exposure for the Express Quote test, sent one second before `quote started` for shoppers who started on or after 2026-07-08. | `Experiment name` = `Express Quote`; `Variant name` = `Control` or `Express Quote`. |
+| `$experiment_started` | Mixpanel experiment exposure for the Express Quote test, sent one second before `quote started` for shoppers who started on or after 2026-07-08. Carries the shopper's `device_id`; for shoppers who later created an account it also carries their `user_id`. | `Experiment name` = `Express Quote`; `Variant name` = `Control` or `Express Quote`. |
 | `quote completed` | The shopper answers every question and sees a price. Anonymous (device only). | `product_line`; `acquisition_channel`; `quote_flow`; `coverage_tier` (`basic`, `standard`, `premium`); `quoted_premium_monthly` (USD per month); `shopping_reason` (`switching`, `life_change`, `first_policy`). |
 | `account created` | The shopper creates an account, to save the quote or to buy it. This is the moment the device is linked to the new `user_id`. Comes a few minutes after `quote completed`. | `signup_method` (`email`, `google`, `apple`); `acquisition_channel`; `product_line`. |
 | `policy purchased` | A new policy is issued (sent by the policy administration system; `platform = server`). | `policy_id`; `product_line`; `coverage_tier`; `premium_monthly`; `term_months` (6 for auto, 12 for homeowners and renters); `term_premium_usd` (premium for the whole term); `payment_plan` (`monthly`, `paid_in_full`); `autopay` (true/false); `transaction_type` = `new_business`; `acquisition_channel`; `shopping_reason`. |
@@ -86,7 +86,6 @@ Profiles exist for identified people only (customers and shoppers who created an
 | `acquisition_channel` | How the person first found Shieldstone (same values as on quote events). |
 | `shopping_reason` | The reason given in the quote flow (`switching`, `life_change`, `first_policy`). |
 | `Experiment: Express Quote` | `Control` or `Express Quote` for identified shoppers in the test; empty for everyone else. |
-| `_persona` | Engagement segment from the CRM (`app_regular`, `typical`, `set_and_forget`). |
 | `anonymousIds` | Devices seen for the person (pipeline metadata). |
 
 ## Funnels the business tracks

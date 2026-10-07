@@ -160,8 +160,13 @@ SELECT is_bundled, count(*) AS offers, avg(left_at_renewal::INT) AS nonrenewal
 FROM renewals WHERE t_offer < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- STORY H7-renewal-price-shock: non-renewal 4x at +15% or more vs no increase
+-- STORY H7-renewal-price-shock: non-renewal rises with the renewal increase (dose-response)
 -- ─────────────────────────────────────────────────────────────────────────
+-- Single-line policies (bundle effect held constant): >= 15% vs no increase reads 4.0x;
+-- 0-15% vs no increase reads 2.40x (the linear curve averaged over the price-change draw).
+SELECT CASE WHEN chg <= 0 THEN '1: <= 0%' WHEN chg < 15 THEN '2: 0-15%' ELSE '3: >= 15%' END AS change_bucket,
+ count(*) AS offers, avg(left_at_renewal::INT) AS nonrenewal
+FROM renewals WHERE t_offer < TIMESTAMP '2026-09-01' AND NOT is_bundled GROUP BY 1 ORDER BY 1;
 SELECT CASE WHEN chg <= 0 THEN '1: <= 0%' WHEN chg < 5 THEN '2: 0-5%' WHEN chg < 10 THEN '3: 5-10%' WHEN chg < 15 THEN '4: 10-15%' ELSE '5: >= 15%' END AS change_band,
  count(*) AS offers, avg(left_at_renewal::INT) AS nonrenewal
 FROM renewals WHERE t_offer < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
@@ -282,6 +287,10 @@ SELECT CASE WHEN chg <= 0 THEN '1: <= 0%' WHEN chg < 5 THEN '2: 0-5%' WHEN chg <
  round(avg(left_at_renewal::INT) FILTER (WHERE NOT is_bundled), 4) AS nonrenewal_single_line,
  round(avg(chg), 2) AS avg_change
 FROM renewals WHERE t_offer < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
+-- the top of the curve in finer buckets (thin)
+SELECT CASE WHEN chg >= 20 THEN '2: >= 20%' ELSE '1: 15-20%' END AS top_band, count(*) AS offers, round(avg(left_at_renewal::INT), 4) AS nonrenewal,
+ count(*) FILTER (WHERE NOT is_bundled) AS offers_single_line, round(avg(left_at_renewal::INT) FILTER (WHERE NOT is_bundled), 4) AS nonrenewal_single_line
+FROM renewals WHERE t_offer < TIMESTAMP '2026-09-01' AND chg >= 15 GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q8: fall social campaign — quote starts per day, spend per day, incremental cost per quote, purchases
 WITH qd AS (SELECT count(*) FILTER (WHERE t_start < TIMESTAMP '2026-09-08') / 96.0 AS q_before,
@@ -324,6 +333,12 @@ cx AS (SELECT DISTINCT policy_id FROM ev WHERE event = 'policy cancelled' AND ca
 SELECT CASE WHEN pm LIKE 'autopay%' THEN 'autopay' ELSE 'manual' END AS method, count(*) AS policies_billed,
  count(cx.policy_id) AS nonpayment_cancellations, round(count(cx.policy_id)::DOUBLE / count(*), 4) AS nonpayment_cancel_share
 FROM pol LEFT JOIN cx USING (policy_id) GROUP BY 1 ORDER BY 1;
+-- every nonpayment cancellation in the window: how many have no payment event in the window, and the split by the profile property autopay
+WITH cx AS (SELECT policy_id, any_value(uid) AS uid FROM ev WHERE event = 'policy cancelled' AND cancel_reason = 'nonpayment' GROUP BY 1),
+paid AS (SELECT DISTINCT policy_id FROM ev WHERE event IN ('payment made', 'payment failed'))
+SELECT count(*) AS nonpayment_cancellations, count(*) FILTER (WHERE policy_id NOT IN (SELECT policy_id FROM paid)) AS no_payment_event_in_window,
+ count(*) FILTER (WHERE p.autopay) AS profile_autopay, count(*) FILTER (WHERE NOT p.autopay) AS profile_manual
+FROM cx LEFT JOIN prof p USING (uid);
 
 -- EVAL Q11: book of business at the end of the window (identified customers)
 SELECT customer_status, count(*) AS customers FROM prof GROUP BY 1 ORDER BY 1;

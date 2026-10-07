@@ -40,7 +40,6 @@ Daily spend by paid channel is in the warehouse table `marketing_spend_daily`.
 - **Existing customers** (about 6,000 on June 4) joined between 2021 and spring 2026. About 40% hold auto only, about a third hold a bundle, and the rest hold homeowners or renters only.
 - **Age.** Most customers are 25-54; about 10% are under 25.
 - **Regions.** Claims operations are organized in five regions: `gulf_coast` (Florida, Louisiana), `south` (Texas, Georgia, North Carolina, Tennessee), `midwest` (Ohio, Illinois, Michigan), `west` (Arizona, Colorado), and `northeast` (Pennsylvania). Texas and Florida are the largest states.
-- **Engagement segments.** The CRM groups customers by how often they use the app: `app_regular`, `typical`, and `set_and_forget`.
 
 ## Goals for the period (Q3 2026)
 

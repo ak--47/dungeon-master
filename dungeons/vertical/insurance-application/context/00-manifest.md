@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Shieldstone Insurance**, a dire
 
 - **Product:** the Shieldstone website and the iOS and Android apps. People get a quote for auto, homeowners, or renters insurance, create an account, buy a policy, and then manage it online: ID cards, policy documents, bills and payments, coverage changes, roadside assistance, and claims. Back-office systems (billing, policy administration, claims) also send events: autopay payments, renewal notices, renewals, cancellations, policy issue, and claim settlements.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early summer through the end of September and the first day of October.
-- **Scale:** about 10,000 people. About 6,000 were already Shieldstone customers on June 4. About 3,800 new shoppers started a quote during the window; about 2,500 of them never created an account and appear only as anonymous devices. The project holds about 760,000 events.
+- **Scale:** about 10,000 people. About 6,000 were already Shieldstone customers on June 4. About 3,700 new shoppers started a quote during the window; about 2,450 of them never created an account and appear only as anonymous devices. The project holds about 760,000 events.
 - **Where customers live:** twelve US states (Texas, Florida, Pennsylvania, Illinois, Arizona, Georgia, Ohio, North Carolina, Colorado, Michigan, Louisiana, Tennessee), grouped into five claims regions.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. Customers are in US time zones, so a US afternoon is UTC evening and a US evening runs past midnight UTC.
 
@@ -22,7 +22,7 @@ This folder is the internal analytics wiki for **Shieldstone Insurance**, a dire
 - **Events** (the Mixpanel event stream) record what people do on the website and in the apps, plus a few back-office events. Each event has a timestamp, an identity, and flat properties. The customer's state and the platform are on every event (`state`, `platform`).
 - **Policies** tie events together. Every policy event (purchase, payments, renewal notice, renewal, cancellation) carries the same `policy_id`. A customer with two policies (a bundle) has two `policy_id` values.
 - **Claims** tie events together too: every claim event carries `claim_id`.
-- **User profiles** hold one row per identified person with their current attributes: state, region, age band, the product lines they hold, bundle and autopay status, customer status, customer-since date, acquisition channel, shopping reason, and experiment enrollment.
+- **User profiles** hold one row per identified person with events in the window, with their current attributes: state, region, age band, the product lines they hold, bundle and autopay status, customer status, customer-since date, acquisition channel, shopping reason, and experiment enrollment.
 - **Warehouse tables** are daily business facts that are not in the event stream: marketing spend by paid channel, claims operations by region (claims reported, closed, open, adjuster hours, catastrophe codes), and written premium by product line and transaction type. They join to events on the UTC date and a shared dimension (`acquisition_channel`, `region`, or `product_line` + `transaction_type`).
 - There are no group profiles, no slowly changing dimension tables, and no lookup tables in this project.
 
