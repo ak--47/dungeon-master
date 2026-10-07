@@ -17,8 +17,8 @@ All KPIs use UTC days and count people by unique `user_id`.
 | Root Cause Assist adoption | Share of Business and Enterprise resolutions (by `plan_tier` on the event, since 2026-07-22) with `resolution_method = ai_assist`. |
 | Pipeline success rate | Share of `deployment pipeline run` events with `pipeline_status = success`. Equivalent to a deploy funnel holding `deploy_id` constant. |
 | Time to deploy | Per run, time from `deployment pipeline run` to `service deployed` (same `deploy_id`), successful runs only. |
-| Paid conversion | Share of new signups who start a subscription within 30 days of `account created` (the Mixpanel Funnels default conversion window). Count only signups with a full 30 days of data (signups through August 31). |
-| New paid subscriptions | Count of `subscription started`, split by `plan`. |
+| Paid conversion | Share of new signups who start a subscription within 30 days of `account created` (the Mixpanel Funnels default conversion window). Count only signups with a full 30 days of data (signups through August 31). Only a workspace owner can start a subscription, so signups who joined a colleague's workspace never convert themselves; the per-signup rate is lower than the share of new workspaces that pay. |
+| New paid subscriptions | Count of `subscription started`, split by `plan`. One per company at most: each is a company moving from Free to a paid plan. |
 | Seats per new subscription | Average `seats` on `subscription started`. |
 | New MRR | Seats on new subscriptions × list price per seat on the start date, from `subscription_bookings_daily`. New ARR = new MRR × 12. |
 | CAC (paid) | Spend for a paid channel divided by new signups Mixpanel recorded from that channel (`account created` with that `acquisition_channel`) over the same days. Finance uses Mixpanel signups, not the leads the ad platforms report. |
@@ -81,6 +81,6 @@ Caveats: the table covers new self-serve subscriptions only, not renewals, seat 
 ## Analysis tips
 
 - For a before/after question around a dated change, consider seasonality, weekday mix, the overall trend, and mix shifts before you attribute a change to the event.
-- Activity is weekday-heavy: engineers work Monday to Friday, and weekends carry mostly on-call work. Compare matching weekdays or whole weeks, not a few weekdays against a span that includes weekends.
+- Product use is weekday-heavy: engineers work Monday to Friday. Production alerts arrive every day of the week, so on weekends a larger share of activity is on-call work. Compare matching weekdays or whole weeks, not a few weekdays against a span that includes weekends.
 - New-user funnels, conversion, and retention depend on signup date: users who joined late in the window have had less time to act. Compare cohorts that joined in the same weeks.
 - Users receive many alerts and run many pipelines. Per-alert and per-run questions need `alert_id` or `deploy_id` held constant; unique-user funnels hide most of the difference between users.

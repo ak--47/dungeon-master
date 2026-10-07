@@ -103,14 +103,40 @@ SELECT u.customer_success_manager, count(DISTINCT u.distinct_id) AS users, count
 FROM users u LEFT JOIN read_json_auto(getvariable('data_prefix') || '-account_health-SCD*.json*', sample_size=-1, union_by_name=true) s
   ON s.distinct_id = u.distinct_id GROUP BY 1 ORDER BY 1;
 
+-- company coherence: one plan per company at every moment, at most one self-serve
+-- subscription per company, contracted seats cover the users on paid plans, and the
+-- headcount band is never below the users or seats
+SELECT (SELECT count(*) FROM companies) AS companies,
+ (SELECT count(DISTINCT company_id) FROM users) AS companies_with_users,
+ (SELECT count(*) FROM (SELECT company_id, t FROM ev GROUP BY 1, 2 HAVING count(DISTINCT plan_tier) > 1)) AS mixed_plan_moments,
+ (SELECT count(*) FROM (SELECT company_id FROM ev WHERE event = 'subscription started' GROUP BY 1 HAVING count(*) > 1)) AS companies_with_2plus_subscriptions,
+ (SELECT count(*) FROM companies c JOIN (SELECT company_id, count(*) AS m FROM users GROUP BY 1) x USING (company_id)
+   WHERE c.plan_tier <> 'free' AND c.contracted_seats < x.m) AS paid_companies_short_of_seats,
+ (SELECT count(*) FROM companies c JOIN (SELECT company_id, count(*) AS m FROM users GROUP BY 1) x USING (company_id)
+   WHERE (c.employee_count = '1-10' AND greatest(x.m, c.contracted_seats) > 10) OR (c.employee_count = '11-50' AND greatest(x.m, c.contracted_seats) > 50)) AS bands_below_users;
+-- users per company by size and headcount band, with contracted seats
+SELECT c.company_size, c.employee_count, count(*) AS companies, round(avg(x.m), 1) AS avg_users, max(x.m) AS max_users,
+ round(avg(c.contracted_seats), 1) AS avg_contracted_seats
+FROM companies c JOIN (SELECT company_id, count(*) AS m FROM users GROUP BY 1) x USING (company_id) GROUP BY 1, 2 ORDER BY 1, 2;
+-- companies and users by current plan; new workspaces (customer since 2026-05-14) vs long-standing customers
+SELECT c.plan_tier, (x.first_since >= '2026-05-14') AS new_workspace, count(*) AS companies, sum(x.m) AS users, round(avg(x.m), 2) AS avg_users
+FROM companies c JOIN (SELECT company_id, count(*) AS m, min(customer_since) AS first_since FROM users GROUP BY 1) x USING (company_id)
+GROUP BY 1, 2 ORDER BY 2, 1;
+
+-- weekly rhythm: alerts (production pages) vs dashboard views by weekday
+SELECT dayofweek(t) AS dow, dayname(t) AS weekday, count(*) FILTER (WHERE event = 'alert triggered') AS alerts,
+ count(*) FILTER (WHERE event = 'dashboard viewed') AS dashboard_views
+FROM ev GROUP BY 1, 2 ORDER BY 1;
+
 -- ─────────────────────────────────────────────────────────────────────────
--- STORY H1-quarter-close-seat-push — paid-plan invites ×1.5, 2026-09-16..09-30; Free unchanged
+-- STORY H1-quarter-close-seat-push — paid-plan invites ×1.5, 2026-09-16..09-30 vs the 30 days before; Free unchanged
 -- ─────────────────────────────────────────────────────────────────────────
 WITH w AS (SELECT CASE WHEN plan_tier IN ('team', 'business', 'enterprise') THEN 'paid' ELSE 'free' END AS plan_group,
   (t >= TIMESTAMP '2026-09-16') AS promo, event FROM ev
-  WHERE event IN ('teammate invited', 'dashboard viewed') AND t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-10-01'),
+  WHERE event IN ('teammate invited', 'dashboard viewed') AND t >= TIMESTAMP '2026-08-17' AND t < TIMESTAMP '2026-10-01'),
 g AS (SELECT plan_group, promo, count(*) FILTER (WHERE event = 'teammate invited') AS invites, count(*) FILTER (WHERE event = 'dashboard viewed') AS views FROM w GROUP BY 1, 2)
-SELECT plan_group, promo, invites, views, round(invites::DOUBLE / views, 4) AS invites_per_view FROM g ORDER BY 1, 2;
+SELECT plan_group, promo, invites, views, round(invites::DOUBLE / views, 4) AS invites_per_view,
+ round((invites::DOUBLE / views) / lag(invites::DOUBLE / views) OVER (PARTITION BY plan_group ORDER BY promo), 4) AS lift FROM g ORDER BY 1, 2;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H2-root-cause-assist-launch — AI resolution for Business/Enterprise from 2026-07-22
@@ -155,7 +181,8 @@ SELECT CASE WHEN p.slack_and_pagerduty THEN 'slack_and_pagerduty' ELSE 'rest' EN
  count(DISTINCT a.uid) AS users, count(*) AS acks, round(avg(a.response_time_mins), 2) AS avg_response_mins
 FROM alerts a JOIN prof p ON p.uid = a.uid
 WHERE a.t_ack IS NOT NULL AND p.customer_since < '2026-05-14' GROUP BY 1 ORDER BY 1;
--- read 2: new signups in the cohort, alerts triggered before vs after both integrations were live
+-- read 2 (raw-data / SQL check; no direct Mixpanel report): new signups in the cohort,
+-- alerts triggered before vs after both integrations were live
 SELECT CASE WHEN a.t_trig >= i.ready THEN 'after' ELSE 'before' END AS grp,
  count(DISTINCT a.uid) AS users, count(*) AS acks, round(avg(a.response_time_mins), 2) AS avg_response_mins
 FROM alerts a JOIN integrated i ON i.uid = a.uid JOIN signups s ON s.uid = a.uid
@@ -351,6 +378,14 @@ SELECT CASE WHEN a.t_trig >= i.ready THEN 'after' ELSE 'before' END AS grp, coun
  round(avg(a.response_time_mins), 2) AS avg_response_mins
 FROM alerts a JOIN integrated i ON i.uid = a.uid JOIN signups s ON s.uid = a.uid
 WHERE a.t_ack IS NOT NULL AND a.t_trig IS NOT NULL GROUP BY 1 ORDER BY 1;
+-- buildable Mixpanel approximation of read 2: new signups (customer_since from 2026-06-04),
+-- profile cohort slack AND pagerduty vs the rest, average response by week (diluted:
+-- the cohort's early weeks include alerts from before each member connected the pair)
+SELECT date_trunc('week', a.t_ack)::DATE AS week, round(avg(a.response_time_mins) FILTER (WHERE p.slack_and_pagerduty), 2) AS cohort_avg_response,
+ round(avg(a.response_time_mins) FILTER (WHERE NOT p.slack_and_pagerduty), 2) AS rest_avg_response, count(*) FILTER (WHERE p.slack_and_pagerduty) AS cohort_acks
+FROM alerts a JOIN prof p ON p.uid = a.uid WHERE a.t_ack IS NOT NULL AND p.customer_since >= '2026-06-04' GROUP BY 1 ORDER BY 1;
+SELECT p.slack_and_pagerduty, count(DISTINCT a.uid) AS users, count(*) AS acks, round(avg(a.response_time_mins), 2) AS avg_response_mins
+FROM alerts a JOIN prof p ON p.uid = a.uid WHERE a.t_ack IS NOT NULL AND p.customer_since >= '2026-06-04' GROUP BY 1 ORDER BY 1;
 -- new signups who never configured both (reference)
 SELECT count(DISTINCT a.uid) AS users, round(avg(a.response_time_mins), 2) AS avg_response_mins
 FROM alerts a JOIN signups s ON s.uid = a.uid WHERE a.t_ack IS NOT NULL AND a.uid NOT IN (SELECT uid FROM integrated);
@@ -479,16 +514,23 @@ SELECT plan, (date::DATE >= DATE '2026-08-17') AS post, count(*) AS days, sum(ne
 FROM wh_bookings GROUP BY 1, 2 ORDER BY 1, 2;
 
 -- EVAL Q17 — quarter-close promotion and invites, paid plans vs Free
+-- baseline: the 30 days before the promotion (Aug 17 - Sep 15); also Sep 1-15 alone
 SELECT CASE WHEN plan_tier IN ('team', 'business', 'enterprise') THEN 'paid' ELSE 'free' END AS plan_group,
- CASE WHEN t < TIMESTAMP '2026-09-16' THEN '1: Sep 1-15' ELSE '2: Sep 16-30' END AS period,
+ CASE WHEN t < TIMESTAMP '2026-09-01' THEN '1: Aug 17-31' WHEN t < TIMESTAMP '2026-09-16' THEN '2: Sep 1-15' ELSE '3: Sep 16-30' END AS period,
  count(*) FILTER (WHERE event = 'teammate invited') AS invites, count(*) FILTER (WHERE event = 'dashboard viewed') AS dashboard_views,
  count(DISTINCT uid) FILTER (WHERE event = 'teammate invited') AS inviting_users,
  round(count(*) FILTER (WHERE event = 'teammate invited')::DOUBLE / count(*) FILTER (WHERE event = 'dashboard viewed'), 4) AS invites_per_view
-FROM ev WHERE t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-10-01' GROUP BY 1, 2 ORDER BY 1, 2;
-SELECT CASE WHEN plan_tier IN ('team', 'business', 'enterprise') THEN 'paid' ELSE 'free' END AS plan_group, round(
- (count(*) FILTER (WHERE event = 'teammate invited' AND t >= TIMESTAMP '2026-09-16')::DOUBLE / count(*) FILTER (WHERE event = 'dashboard viewed' AND t >= TIMESTAMP '2026-09-16'))
- / (count(*) FILTER (WHERE event = 'teammate invited' AND t < TIMESTAMP '2026-09-16')::DOUBLE / count(*) FILTER (WHERE event = 'dashboard viewed' AND t < TIMESTAMP '2026-09-16')), 4) AS lift
-FROM ev WHERE t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-10-01' GROUP BY 1 ORDER BY 1;
+FROM ev WHERE t >= TIMESTAMP '2026-08-17' AND t < TIMESTAMP '2026-10-01' GROUP BY 1, 2 ORDER BY 1, 2;
+WITH r AS (SELECT CASE WHEN plan_tier IN ('team', 'business', 'enterprise') THEN 'paid' ELSE 'free' END AS plan_group,
+  count(*) FILTER (WHERE event = 'teammate invited' AND t >= TIMESTAMP '2026-09-16')::DOUBLE / count(*) FILTER (WHERE event = 'dashboard viewed' AND t >= TIMESTAMP '2026-09-16') AS promo,
+  count(*) FILTER (WHERE event = 'teammate invited' AND t < TIMESTAMP '2026-09-16')::DOUBLE / count(*) FILTER (WHERE event = 'dashboard viewed' AND t < TIMESTAMP '2026-09-16') AS base30,
+  count(*) FILTER (WHERE event = 'teammate invited' AND t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-09-16')::DOUBLE
+   / count(*) FILTER (WHERE event = 'dashboard viewed' AND t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-09-16') AS base15
+  FROM ev WHERE t >= TIMESTAMP '2026-08-17' AND t < TIMESTAMP '2026-10-01' GROUP BY 1)
+SELECT plan_group, round(promo / base30, 4) AS lift_vs_30_days_before, round(promo / base15, 4) AS lift_vs_sep_1_15 FROM r ORDER BY 1;
+-- inviting users and invites per inviting user, paid plans, Sep 16-30 vs the 15 days before (equal lengths)
+SELECT t >= TIMESTAMP '2026-09-16' AS promo, count(DISTINCT uid) AS inviting_users, count(*) AS invites, round(count(*)::DOUBLE / count(DISTINCT uid), 2) AS invites_per_inviter
+FROM ev WHERE event = 'teammate invited' AND plan_tier IN ('team', 'business', 'enterprise') AND t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-10-01' GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q18 — new bookings by month and plan (warehouse)
 SELECT strftime(date::DATE, '%Y-%m') AS month, plan, sum(new_subscriptions) AS subscriptions, sum(new_seats) AS seats,

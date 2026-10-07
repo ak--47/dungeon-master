@@ -17,8 +17,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             month from 2026-08-17) and Business ($45 per seat); Enterprise
  *             is sales-led. Root Cause Assist (AI incident help) is a Business
  *             and Enterprise feature from 2026-07-22.
- * SCALE:      10,000 users (≈4,510 sign up inside the window), ~0.96M events,
- *             120 days (2026-06-04 → 2026-10-01, UTC), 300 customer companies
+ * SCALE:      10,000 users (≈4,530 sign up inside the window), ~0.97M events,
+ *             120 days (2026-06-04 → 2026-10-01, UTC), ≈3,700 companies: ≈300
+ *             long-standing customers (2-110 users each) and ≈3,400 workspaces
+ *             started in or just before the window (mostly 1-3 users)
  * CORE LOOP:  dashboard viewed → query executed; alert triggered → alert
  *             acknowledged → alert resolved; deployment pipeline run → service deployed
  * VALUE MOMENT: alert acknowledged (the platform got a human to a problem)
@@ -44,21 +46,26 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *       deploy_id per run, runner_region per run, A/B "Smart Test Selection"
  *       from 2026-07-15)
  *   - Upgrade (recent signups, customer_since ≥ 2026-05-14): upgrade page viewed →
- *       subscription started (35%); Upgrade (older free accounts): same steps (4%)
+ *       subscription started (55% per pass; only a workspace owner's purchase
+ *       stands); Upgrade (older free accounts): same steps (4%, never stands:
+ *       long-standing customers change plans through sales)
  *   - Team Invites: teammate invited (single step; invitations are one-off
  *       actions, not a burst inside the catch-all funnel)
  *   - Cost Review: cost report generated → infrastructure scaled (45%)
  *   - Runbooks: documentation viewed → runbook executed (35%)
  *
  * USER PROPS:  company_id, company_name, company_size, industry, primary_role,
- *              plan_tier, customer_since, cloud_provider, acquisition_channel,
- *              seat_count, annual_contract_value, customer_success_manager,
+ *              plan_tier (company plan), customer_since, cloud_provider,
+ *              acquisition_channel, seat_count (company contracted seats, 0 on
+ *              Free), annual_contract_value, customer_success_manager,
  *              connected_integrations (list), "Experiment: Smart Test
  *              Selection" (enrolled users)
- * SUPER PROPS: plan_tier (plan at event time), cloud_provider (sticky per user)
+ * SUPER PROPS: plan_tier (company plan at event time), cloud_provider (sticky per user)
  * SCD PROPS:   account_health (healthy/neutral/at_risk, fuzzy timing, max 4;
- *              CSM-covered accounts only)
- * GROUPS:      company_id (300 companies; every event carries the user's own company)
+ *              CSM-covered accounts only = companies on an Enterprise contract)
+ * GROUPS:      company_id (≈3,700 companies; every event carries the user's own
+ *              company; group profile: size, headcount band, plan, contracted
+ *              seats, ACV, CSM; ids without users emit no profile)
  * WAREHOUSE:   paid_marketing_daily (spend by paid channel),
  *              ci_runner_health_daily (hosted CI runner health by region),
  *              subscription_bookings_daily (new seats, list price, new MRR by plan)
@@ -73,10 +80,21 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * device_id (engine); the dungeon has no Platform-style property.
  *
  * DESIGN NOTES:
- * - Company attributes (size, industry, cloud, ACV, contracted seats, CSM) come
- *   from one seeded table of 300 companies; users map to companies by a hash
- *   weighted toward larger companies. The group hook writes the same table onto
- *   the company group profiles, so profiles, events, and groups agree.
+ * - One company = one workspace = one plan. Long-standing customers come from
+ *   a seeded table (size → planned users 2-7 / 4-14 / 10-35 / 25-110, plan mix
+ *   by size, contracted seats = users × 1.1-2.5 on paid plans, ACV from seats
+ *   and price); established users and ~10% of new signups (new hires) fill
+ *   their planned seats in a seeded order. Other new signups either start a
+ *   new workspace (owner) or, 30% of the time, join a teammate's workspace
+ *   started 1 hour to 30 days earlier (weighted by open room, the owner's
+ *   invitations, and 3x when it already pays). Users are processed one at a
+ *   time (concurrency 1), so a company's first user is its owner and every
+ *   later member reads the owner's decisions. Only a new workspace's owner
+ *   can start a subscription (one per company); the purchase sets the plan
+ *   for every member from that moment, the contracted seats (a paid workspace
+ *   adds members only up to its seats), and the ACV. The group hook writes
+ *   each company's final state; the headcount band is the size's band that
+ *   holds max(users, seats). Run state resets when a new run's config arrives.
  * - Alert timing is rebuilt per alert in the everything hook: trigger → ack and
  *   ack → resolve gaps are seeded log-normals scaled by severity and the story
  *   knobs, and response_time_mins / resolution_time_mins are the real gaps.
@@ -89,21 +107,31 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   a born user's events per active day scale with remaining days / expected
  *   active days, so late-September signups were 30-45% less intense in their
  *   first week than June signups; the everything hook clones born users'
- *   hands-on free-standing events up to the June intensity (funnel-linked
- *   flows untouched). Remove once the engine fixes it.
+ *   hands-on free-standing events up to the June intensity. Each clone
+ *   re-draws its event properties and lands within 3 hours of its source.
+ *   Funnel-linked flows (alerts, pipeline runs) are untouched, so first-week
+ *   alerts per new user still fall from 0.50 (June signups) to 0.32 (September)
+ *   and pipeline runs from 0.62 to 0.43. Remove once the engine fixes it.
  * - Weekly and daily rhythm (soup): weekday-heavy (weekends about a quarter
  *   of a weekday) with Americas and EMEA working hours dominating in UTC.
- *   New users' signup days and hours follow the same weights.
+ *   New users' signup days and hours follow the same weights. Pages follow
+ *   production, not office hours: a seeded share of weekday "alert triggered"
+ *   events move to the nearest Saturday or Sunday (same time of day), so a
+ *   weekend day carries about 70% of a weekday's pages (measured).
  * - US holidays (Jul 3 observed, Sep 7): US-based users (about 59%) skip 75%
  *   of their hands-on events (dashboards, queries, docs, pipelines, invites,
  *   integrations); a skipped pipeline run takes its experiment exposure along.
  *   Pages still fire and are answered. Total volume on those days is about 30%
  *   below the same weekday a week before and after.
  * - Warm start: a target 14.3% of established users (in-window signup pace ×
- *   21 days; 852 users measured) joined in the 21 days before June 4. They start on Free and buy only inside their
- *   first 21 days; the older the account on June 4, the likelier its purchase
- *   already happened (it then starts the window on that paid plan). Weekly new
- *   subscriptions are flat from week 1.
+ *   21 days) joined in the 21 days before June 4; they start or join new
+ *   workspaces exactly as in-window signups do. A pre-window owner's purchase
+ *   stands with probability 0.45 (the buy rate of in-window workspaces; these
+ *   accounts face no lapse cut). It draws a buying delay from the new-workspace
+ *   delay curve (days after signup): a delay shorter than its age on June 4
+ *   means it already bought (the workspace starts the window paid); otherwise
+ *   the purchasing pass moves to signup + delay. Weekly new subscriptions are
+ *   flat from week 1.
  * - Collaboration volume: new users keep every "teammate invited" in their
  *   first 7 days; other invites are thinned to 12% (about 1.25 invites per
  *   user, 42 per company in 120 days). "integration configured" comes only
@@ -124,8 +152,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   with a 25% flat floor, seeded noise, never zero); leads, clicks, and
  *   impressions follow spend. The CPL knob holds at window level.
  * - account_health exists only for accounts whose company has a customer
- *   success manager (enterprise and about 30% of mid-market companies; ~41%
- *   of users). Fuzzy SCD timing: rows can repeat the prior value. A new
+ *   success manager (companies on an Enterprise contract; ~9% of users).
+ *   Fuzzy SCD timing: rows can repeat the prior value. A new
  *   account's first row is at its signup and later rows are about a week
  *   apart. Older accounts' histories start in the month before the window
  *   (rows about three weeks apart), so each has a value in force on June 4;
@@ -143,12 +171,13 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: 2026-09-16 through 2026-09-30, the quarter-close seat promotion
  *   (20% off added seats) makes paid workspaces (plan_tier at event time:
- *   team, business, enterprise) send 1.5x the "teammate invited" events (each
- *   in-window invite gets a cloned follow-up invite with probability 0.5).
- *   Free workspaces have no seats to discount and do not change. Dashboard
- *   views are untouched.
+ *   team, business, enterprise) send 1.5x the "teammate invited" events
+ *   (every other eligible invite per user, seeded phase, gets a follow-up
+ *   invite with re-drawn role and method). Free workspaces have no seats to
+ *   discount and do not change. Dashboard views are untouched.
  * MIXPANEL: Insights, teammate invited and dashboard viewed, daily, formula
- *   A/B, breakdown plan_tier; Sep 16-30 vs Sep 1-15.
+ *   A/B, breakdown plan_tier; Sep 16-30 vs the 30 days before (Aug 17 -
+ *   Sep 15).
  * REAL WORLD: discounts on added seats at quarter close pull expansion forward.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -188,11 +217,17 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   only reconfigure tools they already have). Newer accounts: alerts
  *   triggered after the later of their first slack and first pagerduty
  *   "integration configured".
- * MIXPANEL: Insights, alert acknowledged, average response_time_mins, filter
- *   user property customer_since before 2026-05-14, breakdown by a cohort
- *   "user property connected_integrations contains slack AND contains
- *   pagerduty" (read 1); for new signups compare alerts triggered before vs
- *   after the user's second integration (read 2).
+ * MIXPANEL: read 1 (buildable): Insights, alert acknowledged, average
+ *   response_time_mins, filter user property customer_since before
+ *   2026-05-14, breakdown by a cohort "user property connected_integrations
+ *   contains slack AND contains pagerduty". Read 2 (new signups, alerts
+ *   triggered before vs after the user's own second integration) has no
+ *   direct Mixpanel report: it is a raw-data / SQL check. The closest
+ *   Mixpanel view is Insights, alert acknowledged, average response_time_mins,
+ *   filter user property customer_since on or after 2026-06-04, breakdown by
+ *   the profile cohort above, by week: the cohort's weekly average falls as
+ *   members connect the pair, diluted by alerts from before each member's
+ *   connection date.
  * REAL WORLD: the page reaches the on-call where they already are.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -231,7 +266,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H7. CI RUNNER INCIDENT (everything + warehouse ci_runner_health_daily)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: 2026-08-25 to 2026-08-27, hosted runners in us-east degrade: 60%
- *   of would-be successful us-east runs fail and their deploys never happen.
+ *   of would-be successful us-east runs fail and their deploys never happen
+ *   (per user, in time order, on a 3-in-5 cycle with a seeded phase).
  *   The warehouse shows runner_status = "major_outage" and infra_error_rate ≈
  *   0.6 for us-east on those days. Events carry no failure reason.
  * MIXPANEL: Insights, deployment pipeline run, share pipeline_status =
@@ -285,51 +321,49 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * REAL WORLD: noisy alerting trains people to ignore pages.
  *
  * ═════════════════════════════════════════════════════════════════════════
- * EXPECTED METRICS SUMMARY (measured: data/verify-sass, 2026-10-07, engine round 7 rebase)
+ * EXPECTED METRICS SUMMARY (measured: data/verify-sass, 2026-10-07, company-level plans)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                       | Derivation               | Expected | Measured
  * -----|----------------------------------------------|--------------------------|----------|---------
- * H1   | paid invites per dashboard view, promo/before| QUARTER_CLOSE_INVITE_MULT| 1.50     | 1.443 (0.1314 vs 0.0910)
- * H1   | Free invites per dashboard view (control)    | unchanged                | 1.00     | 0.959
+ * H1   | paid invites per dashboard view, promo/30d before | QUARTER_CLOSE_INVITE_MULT | 1.50 | 1.417 (0.1376 vs 0.0971)
+ * H1   | Free invites per dashboard view (control)    | unchanged                | 1.00     | 0.948
  * H2   | ai_assist rows pre-launch or Free/Team       | exact purity             | 0        | 0
- * H2   | ai/other resolution time, Biz+Ent post-launch| RCA_RESOLVE_MULT         | 0.55     | 0.560 (72.6 vs 129.6 min)
- * H2   | ai share of eligible resolutions after ramp  | 0.5 × 0.8                | 0.40     | 0.415 (weekly 2.5% → 41%)
- * H3   | onboarding conversion Azure/others           | 34/62                    | 0.548    | 0.547 (33.7% vs 61.7%)
- * H4   | avg response Slack+PD / rest, set up pre-window | INTEGRATED_RESPONSE_MULT | 0.40  | 0.411 (11.08 vs 26.95 min)
- * H4   | new signups: after / before pair is live     | ≤ 0.40 (floor 0.70)      | 0.40     | 0.439 (11.66 vs 26.56 min)
- * H5   | D30 activated/not activated, all new users   | ≥ 1/(1 − 0.4) (floor)    | ≥ 1.67   | 2.663 (56.1% vs 21.1%, STRONG)
- * H5   | D30 2+ / 0 invites, onboarded new users      | ≥ 1/(1 − 0.6) (floor)    | ≥ 2.50   | 2.906 (67.2% vs 23.1%, STRONG)
- * H6   | per-run deploy rate Smart/Control            | SMART_TEST_CONV_MULT     | 1.20     | 1.196 (80.6% vs 67.4%)
- * H6   | median run → deploy time Smart/Control       | SMART_TEST_TTC_MULT      | 0.75     | 0.751 (22.5 vs 30.0 min)
- * H6   | Smart Selection share of enrolled users      | equal 2-arm hash         | 0.50     | 0.498
- * H7   | us-east / other success, incident vs ±7 days | 1 − RUNNER_INCIDENT_FAIL | 0.40     | 0.385 (29.1% vs 74.9% in us-east)
+ * H2   | ai/other resolution time, Biz+Ent post-launch| RCA_RESOLVE_MULT         | 0.55     | 0.564 (72.0 vs 127.6 min)
+ * H2   | ai share of eligible resolutions after ramp  | 0.5 × 0.8                | 0.40     | 0.427 (weekly 3.9% → 43%)
+ * H3   | onboarding conversion Azure/others           | 34/62                    | 0.548    | 0.584 (34.8% vs 59.5%)
+ * H4   | avg response Slack+PD / rest, set up pre-window | INTEGRATED_RESPONSE_MULT | 0.40  | 0.399 (9.90 vs 24.81 min)
+ * H4   | new signups: after / before pair is live (SQL) | ≤ 0.40 (floor 0.70)    | 0.40     | 0.415 (13.92 vs 33.58 min)
+ * H5   | D30 activated/not activated, all new users   | ≥ 1/(1 − 0.4) (floor)    | ≥ 1.67   | 2.516 (55.9% vs 22.2%, STRONG)
+ * H5   | D30 2+ / 0 invites, onboarded new users      | ≥ 1/(1 − 0.6) (floor)    | ≥ 2.50   | 2.884 (69.2% vs 24.0%, STRONG)
+ * H6   | per-run deploy rate Smart/Control            | SMART_TEST_CONV_MULT     | 1.20     | 1.201 (80.7% vs 67.2%)
+ * H6   | median run → deploy time Smart/Control       | SMART_TEST_TTC_MULT      | 0.75     | 0.748 (22.5 vs 30.1 min)
+ * H6   | Smart Selection share of enrolled users      | equal 2-arm hash         | 0.50     | 0.497
+ * H7   | us-east / other success, incident vs ±7 days | 1 − RUNNER_INCIDENT_FAIL | 0.40     | 0.403 (30.0% vs 74.8% in us-east)
  * H7   | warehouse infra_error_rate during incident   | RUNNER_INCIDENT_FAIL     | 0.60     | 0.603
- * H8   | spend per signup LinkedIn / paid search      | 420 / 140                | 3.00     | 3.024 ($419.35 vs $138.66)
- * H8   | 30-day paid rate LinkedIn / paid search      | 1.0 / 0.5 (floor 1.5)    | 2.00     | 2.014 (17.7% vs 8.8%)
- * H9   | avg seats Team post/pre                      | TEAM_SEAT_MULT           | 0.70     | 0.686 (8.51 vs 12.39)
- * H9   | avg seats Business post/pre (control)        | unchanged                | 1.00     | 1.061
- * H9   | new MRR per Team subscription post/pre       | 0.7 × 25/20              | 0.875    | 0.858
- * H10  | median trigger → ack, enterprise / SMB+mid   | RESPONSE_SIZE_MULT       | 0.60     | 0.599
- * H10  | median trigger → ack, startup / SMB+mid      | RESPONSE_SIZE_MULT       | 1.50     | 1.491
- * H11  | ack rate 30+ alerts / ≤12 alerts             | 1 − FATIGUE_FLIP         | 0.50     | 0.496 (42.8% vs 86.2%)
+ * H8   | spend per signup LinkedIn / paid search      | 420 / 140                | 3.00     | 3.016 ($424.99 vs $140.93)
+ * H8   | 30-day paid rate LinkedIn / paid search      | 1.0 / 0.5 (floor 1.5)    | 2.00     | 2.180 (23.2% vs 10.7%)
+ * H9   | avg seats Team post/pre                      | TEAM_SEAT_MULT           | 0.70     | 0.658 (8.03 vs 12.20)
+ * H9   | avg seats Business post/pre (control)        | unchanged                | 1.00     | 1.031
+ * H9   | new MRR per Team subscription post/pre       | 0.7 × 25/20              | 0.875    | 0.822
+ * H10  | median trigger → ack, enterprise / SMB+mid   | RESPONSE_SIZE_MULT       | 0.60     | 0.606
+ * H10  | median trigger → ack, startup / SMB+mid      | RESPONSE_SIZE_MULT       | 1.50     | 1.445
+ * H11  | ack rate 30+ alerts / ≤12 alerts             | 1 − FATIGUE_FLIP         | 0.50     | 0.499 (43.0% vs 86.2%)
  * ═════════════════════════════════════════════════════════════════════════
  *
  * Verdicts: 10 NAILED, 1 STRONG (H5; both reads are knob floors). H5: setup
  * abandoners rarely invite, so the all-user activated/not-activated gap
  * exceeds the dark-share floor. The onboarded-only dose read removes
  * abandonment but not engagement: heavier users invite more and are likelier
- * to show any event in the day-30 week even without the dark cut, so raw D30
- * retention still edges up past 2 invites (2: 54.3%, 3: 57.0%, 4+: 61.6% on
- * 86 users, all new users) while the knob treats every 2+ user alike. H8's
- * purchase-rate read rests on 119 LinkedIn and 65 paid-search buyers inside
- * the 30-day window (relative SE about 15%); the whole-window rates (18.7% vs
- * 10.1%, 1.86x) agree. H1 is noise-limited (about 800-1,250 paid invites per
- * half-month; the adjacent half-month ratio has an SD of about 6% for paid
- * and 5% for Free outside the promotion). The H9 Business control (1.061)
- * rests on 104 post-change subscriptions. H7's ratio of ratios rests on 1,591
- * us-east incident runs (relative SE about 5%). H4 read 2 compares 1,001 vs
- * 1,046 acknowledgements from about 230 new users and is graded against the
- * knob with a knob-derived floor.
+ * to show any event in the day-30 week even without the dark cut, while the
+ * knob treats every 2+ user alike (2: 56.5%, 3: 57.1%, 4+: 52.4% on 105
+ * users, all new users). H8's purchase-rate read rests on 147 LinkedIn and 75
+ * paid-search buyers inside the 30-day window. H1 is noise-limited (about
+ * 1,000-1,500 paid invites per half-month; the paid ratio of adjacent
+ * half-months outside the promotion moves by about 4%). The H9 Business
+ * control rests on 121 post-change subscriptions. H3's Azure arm has 1,082
+ * signups (relative SE about 4%). H4 read 2 compares 897 vs 758
+ * acknowledgements from about 200 new users and is graded against the knob
+ * with a knob-derived floor.
  */
 
 // ── SCALE ──
@@ -417,6 +451,17 @@ const PRE_WINDOW_OTHER = { github: 0.6, jira: 0.4, terraform: 0.25 };
 // on-call pages still fire and get answered.
 const US_HOLIDAYS = ["2026-07-03", "2026-09-07"]; // Independence Day (observed), Labor Day
 const HOLIDAY_SKIP = 0.75;         // share of a US user's hands-on events that do not happen on a holiday
+// Pages follow production, not office hours. The move formula targets a weekend
+// day at 0.85 of a weekday; moves that would land before signup or after the
+// window end are skipped, so the measured ratio is about 0.7 (DOW_WEIGHTS gives
+// the product's other activity about 0.26).
+const ALERT_WEEKEND_RATIO = 0.85;
+const ALERT_WEEKEND_MOVE = (() => {
+	const wk = DOW_WEIGHTS.slice(1, 6).reduce((a, b) => a + b, 0), we = DOW_WEIGHTS[0] + DOW_WEIGHTS[6];
+	// move x of the weekday mass so that (we + x) / 2 = ratio × (wk − x) / 5
+	const x = (ALERT_WEEKEND_RATIO * wk / 5 - we / 2) / (0.5 + ALERT_WEEKEND_RATIO / 5);
+	return x / wk;
+})();
 const HOLIDAY_EVENTS = new Set(["dashboard viewed", "query executed", "api call", "documentation viewed", "runbook executed",
 	"cost report generated", "infrastructure scaled", "security scan", "feature flag toggled", "teammate invited",
 	"integration configured", "deployment pipeline run"]);
@@ -447,6 +492,7 @@ const DEPLOY_TTC_H = 1;
 const RUNNER_REGIONS = { "us-east": 40, "us-west": 25, "eu-west": 25, "ap-south": 10 };
 const RUNNER_INCIDENT_REGION = "us-east";
 const RUNNER_INCIDENT_FAIL = 0.6;  // share of would-be successful us-east runs that fail during the incident
+const INCIDENT_CYCLE = 5;          // failures follow a 3-in-5 cycle per user (no coin-flip noise)
 // warehouse realism: scheduled / API-triggered runner jobs that Mixpanel never sees
 // (they run every day, weekends included, so they flatten the weekday swing)
 const SCHEDULED_JOBS_PER_DAY = { "us-east": 150, "us-west": 95, "eu-west": 95, "ap-south": 35 };
@@ -489,8 +535,8 @@ const TEAM_PRICE_OLD = 20;
 const TEAM_PRICE_NEW = 25;
 const BUSINESS_PRICE = 45;
 const TEAM_SEAT_MULT = 0.7;        // seats per new Team subscription after the change
-const UPGRADE_CONV = 35;           // recent signups (joined in the window or the 3 weeks before), per upgrade-page visit
-const UPGRADE_CONV_ESTABLISHED = 4; // long-time free users rarely convert
+const UPGRADE_CONV = 55;           // recent signups (joined in the window or the 3 weeks before), per upgrade-page visit
+const UPGRADE_CONV_ESTABLISHED = 4; // long-time free accounts: these purchases never stand (long-standing customers change plans through sales)
 // warm start: accounts that signed up in the 3 weeks before June 4 are still
 // on Free and inside their self-serve buying window (new accounts buy in their
 // first weeks), so June does not start with no new buyers
@@ -498,6 +544,20 @@ const RECENT_SIGNUP_DAYS = 21;
 // share of established users who joined in those 3 weeks: in-window signups per
 // day × 21 days ÷ established users (≈ 4,500 / 120 × 21 / 5,500)
 const RECENT_SHARE = Math.round((NUM_USERS * BORN_PCT / 100) / WINDOW_DAYS * RECENT_SIGNUP_DAYS / (NUM_USERS * (1 - BORN_PCT / 100)) * 1000) / 1000;
+// these accounts face no lapse cut on their upgrade passes, so only this share
+// of their would-be purchases happen: it matches the buy rate of workspaces
+// started inside the window
+const RECENT_BUY_KEEP = 0.45;
+// days from signup to a new workspace's purchase (relative weights by day,
+// the shape in-window workspaces show): most buy in their first two weeks
+const BUY_DELAY_WEIGHTS = [50, 43, 35, 30, 27, 27, 27, 26, 23, 21, 19, 18, 16, 13, 10, 7, 5, 4, 4, 4, 4, 4, 4,
+	3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2];
+const buyDelayDay = (r) => {
+	const total = BUY_DELAY_WEIGHTS.reduce((a, b) => a + b, 0);
+	let acc = 0;
+	for (let d = 0; d < BUY_DELAY_WEIGHTS.length; d++) if (r < (acc += BUY_DELAY_WEIGHTS[d] / total)) return d;
+	return BUY_DELAY_WEIGHTS.length - 1;
+};
 const RECENT_FROM = dayjs.utc(DATASET_START).subtract(RECENT_SIGNUP_DAYS, "day").format("YYYY-MM-DD");
 // warehouse realism: billing vs the product event
 const BILLING_SEAT_EDIT_SHARE = 0.5;     // plan-days where seat counts were edited before the first invoice (−4..+6 seats)
@@ -515,13 +575,32 @@ const FATIGUE_FULL = 30;           // ≈ p85
 const FATIGUE_FLIP = 0.5;          // share of would-be acks lost once fully fatigued
 const fatigueFlip = (n) => FATIGUE_FLIP * Math.min(1, Math.max(0, (n - FATIGUE_START) / (FATIGUE_FULL - FATIGUE_START)));
 
-// ── DATA ARRAYS (seeded) ──
-const COMPANY_COUNT = 300;
-const SIZE_WEIGHTS = { startup: 35, smb: 30, mid_market: 22, enterprise: 13 };       // share of companies
-const USERS_PER_COMPANY_WEIGHT = { startup: 1, smb: 1.5, mid_market: 2.5, enterprise: 4 };
-const EMPLOYEE_BAND = { startup: ["1-10", "11-50"], smb: ["11-50", "51-200"], mid_market: ["201-1000"], enterprise: ["1001-5000", "5000+"] };
-const ACV_RANGE = { startup: [0, 6000], smb: [6000, 24000], mid_market: [24000, 90000], enterprise: [90000, 600000] };
-const SEAT_RANGE = { startup: [2, 10], smb: [8, 30], mid_market: [25, 120], enterprise: [100, 900] };
+// ── COMPANIES AND WORKSPACES (seeded) ──
+// One company = one Tallyboard workspace = one plan. Every user at a company
+// shares its plan at every moment; a company starts at most one self-serve
+// subscription (bought by its owner, the first user the company has here).
+// Established customers are a fixed seeded table with planned member counts.
+// New companies are created as new signups start workspaces; later signups
+// join a teammate's workspace or an established customer (new hires).
+const EST_SIZE_WEIGHTS = { startup: 30, smb: 32, mid_market: 24, enterprise: 14 };  // established customers
+const NEW_SIZE_WEIGHTS = { startup: 55, smb: 28, mid_market: 12, enterprise: 5 };   // new self-serve workspaces
+const EST_MEMBERS = { startup: [2, 7], smb: [4, 14], mid_market: [10, 35], enterprise: [25, 110] };
+const NEW_TEAM_MAX = { startup: [1, 5], smb: [1, 6], mid_market: [1, 8], enterprise: [1, 8] }; // most users a new workspace reaches in the window
+const EST_PLAN_MIX = {
+	startup: { free: 50, team: 40, business: 10, enterprise: 0 },
+	smb: { free: 30, team: 42, business: 25, enterprise: 3 },
+	mid_market: { free: 10, team: 30, business: 45, enterprise: 15 },
+	enterprise: { free: 0, team: 5, business: 30, enterprise: 65 },
+};
+// contracted seats on an established paid plan = members × headroom (seeded)
+const EST_SEAT_HEADROOM = { team: [1.1, 1.6], business: [1.1, 1.6], enterprise: [1.4, 2.5] };
+const CONTRACT_PRICE = { team: 20, business: 45, enterprise: 70 }; // per seat per month on existing contracts
+const EMPLOYEE_BANDS = { startup: [["1-10", 10], ["11-50", 50]], smb: [["51-200", 200]], mid_market: [["201-1000", 1000]], enterprise: [["1001-5000", 5000], ["5000+", Infinity]] };
+const NEW_HIRE_SHARE = 0.1;        // new signups who join an established customer
+const JOIN_SHARE = 0.3;            // new signups who join a teammate's new workspace (when one is open)
+const JOIN_LAG_DAYS = [0.05, 30];  // a teammate joins 1 hour to 30 days after the workspace owner
+const PAID_JOIN_PULL = 3;          // paid new workspaces add teammates 3x as readily (and more invites, more joiners)
+const COMPANY_ID_CAP = 6000;       // group key cardinality; ids without users emit no group profile
 const NAME_SUFFIX = ["Systems", "Labs", "Cloud", "Digital", "Networks", "Logistics", "Health", "Financial", "Media", "Retail"];
 const INDUSTRIES = ["software", "fintech", "healthcare", "retail", "media", "logistics", "gaming", "manufacturing"];
 const CLOUD_WEIGHTS = { aws: 45, gcp: 21, azure: 24, multi_cloud: 10 };
@@ -536,34 +615,83 @@ const pickWeighted = (weights, r) => {
 	}
 	return entries[entries.length - 1][0];
 };
+const hashInt = (key, lo, hi) => lo + Math.floor(hashFloat(key) * (hi - lo + 1));
+const hashRange = (key, lo, hi) => lo + hashFloat(key) * (hi - lo);
 
-const COMPANIES = Array.from({ length: COMPANY_COUNT }, (_, i) => {
-	const size = pickWeighted(SIZE_WEIGHTS, chance.floating({ min: 0, max: 1 }));
-	const [acvLo, acvHi] = ACV_RANGE[size];
-	const [seatLo, seatHi] = SEAT_RANGE[size];
-	return {
-		id: String(i + 1),
-		name: `${chance.word({ syllables: 2, capitalize: true })} ${chance.pickone(NAME_SUFFIX)}`,
-		size,
-		industry: chance.pickone(INDUSTRIES),
-		employees: chance.pickone(EMPLOYEE_BAND[size]),
-		cloud: pickWeighted(CLOUD_WEIGHTS, chance.floating({ min: 0, max: 1 })),
-		acv: Math.round(chance.integer({ min: acvLo, max: acvHi }) / 100) * 100,
-		seats: chance.integer({ min: seatLo, max: seatHi }),
-		csm: size === "enterprise" || (size === "mid_market" && chance.bool({ likelihood: 30 })),
-	};
+const NAME_POOL = Array.from({ length: COMPANY_ID_CAP }, () => chance.word({ syllables: 2, capitalize: true }));
+/** company attributes drawn from the company id (deterministic, independent of generation order) */
+const companyBase = (id, size) => ({
+	id: String(id),
+	name: `${NAME_POOL[id - 1]} ${NAME_SUFFIX[hashInt(`co|${id}|suffix`, 0, NAME_SUFFIX.length - 1)]}`,
+	size,
+	industry: INDUSTRIES[hashInt(`co|${id}|industry`, 0, INDUSTRIES.length - 1)],
+	cloud: pickWeighted(CLOUD_WEIGHTS, hashFloat(`co|${id}|cloud`)),
 });
-const COMPANY_CUM = (() => {
-	const w = COMPANIES.map((c) => USERS_PER_COMPANY_WEIGHT[c.size]);
-	const total = w.reduce((a, b) => a + b, 0);
-	let acc = 0;
-	return w.map((x) => (acc += x / total));
-})();
-const companyFor = (uid) => {
-	const r = hashFloat(`${uid}|company`);
-	const i = COMPANY_CUM.findIndex((c) => r < c);
-	return COMPANIES[i < 0 ? COMPANIES.length - 1 : i];
+
+// established customers: enough planned seats for the expected established
+// users plus new hires (+5%); the slot list is shuffled once (seeded)
+const EXPECTED_EST_USERS = NUM_USERS * (1 - BORN_PCT / 100) * (1 - RECENT_SHARE) + NUM_USERS * BORN_PCT / 100 * NEW_HIRE_SHARE;
+const ESTABLISHED = [];
+const EST_SLOTS = [];
+while (EST_SLOTS.length < EXPECTED_EST_USERS * 1.05) {
+	const id = ESTABLISHED.length + 1;
+	const size = pickWeighted(EST_SIZE_WEIGHTS, hashFloat(`co|${id}|size`));
+	const [lo, hi] = EST_MEMBERS[size];
+	const planned = hashInt(`co|${id}|members`, lo, hi);
+	const plan = pickWeighted(EST_PLAN_MIX[size], hashFloat(`co|${id}|plan`));
+	const seats = plan === "free" ? 0 : Math.ceil(planned * hashRange(`co|${id}|seats`, ...EST_SEAT_HEADROOM[plan]));
+	const acv = plan === "free" ? 0 : Math.round(seats * CONTRACT_PRICE[plan] * 12 * hashRange(`co|${id}|discount`, 0.85, 1) / 100) * 100;
+	ESTABLISHED.push({ ...companyBase(id, size), kind: "established", planned, initialPlan: plan, seats, acv });
+	for (let k = 0; k < planned; k++) EST_SLOTS.push(String(id));
+}
+const EST_SLOT_ORDER = chance.shuffle(EST_SLOTS);
+
+// run state (reset when a new run starts): members, owners, purchases, new companies
+const RUN = { cfg: null, slot: 0, companies: new Map(), open: [] };
+const resetRun = (cfg) => {
+	RUN.cfg = cfg;
+	RUN.slot = 0;
+	RUN.companies = new Map(ESTABLISHED.map((c) => [c.id, { ...c, members: 0, owner: null, purchase: null }]));
+	RUN.open = [];
 };
+const companyOf = (id) => RUN.companies.get(String(id));
+const planOf = (co, t) => (co.purchase && t >= co.purchase.ms ? co.purchase.plan : co.initialPlan);
+
+/** assign a user to a company at their user hook (sequential, deterministic with concurrency 1) */
+function assignCompany(uid, kind, birthMs) {
+	const takeSlot = () => {
+		const id = RUN.slot < EST_SLOT_ORDER.length
+			? EST_SLOT_ORDER[RUN.slot++]
+			: String(1 + Math.floor(hashFloat(`${uid}|overflow`) * ESTABLISHED.length));
+		return companyOf(id);
+	};
+	let co = null;
+	if (kind === "old" || (kind === "born" && salt(uid, "new-hire") < NEW_HIRE_SHARE)) {
+		co = takeSlot();
+	} else {
+		if (salt(uid, "join") < JOIN_SHARE) {
+			const lo = birthMs - JOIN_LAG_DAYS[1] * DAY_MS, hi = birthMs - JOIN_LAG_DAYS[0] * DAY_MS;
+			const cands = RUN.open.filter((c) => c.founded >= lo && c.founded <= hi && c.members < c.cap);
+			if (cands.length) {
+				const w = cands.map((c) => (c.cap - c.members) * (c.purchase ? PAID_JOIN_PULL : 1) * (0.5 + c.invites));
+				let r = salt(uid, "join-pick") * w.reduce((a, b) => a + b, 0);
+				co = cands.find((c, i) => (r -= w[i]) < 0) || cands[cands.length - 1];
+			}
+		}
+		if (!co) {
+			const id = ESTABLISHED.length + 1 + RUN.open.length;
+			if (id > COMPANY_ID_CAP) throw new Error(`sass: more than ${COMPANY_ID_CAP} companies; raise COMPANY_ID_CAP`);
+			const size = pickWeighted(NEW_SIZE_WEIGHTS, hashFloat(`co|${id}|size`));
+			const [lo, hi] = NEW_TEAM_MAX[size];
+			co = { ...companyBase(id, size), kind: "new", founded: birthMs, cap: hashInt(`co|${id}|team`, lo, hi), initialPlan: "free", seats: 0, acv: 0, members: 0, owner: null, purchase: null, invites: 0 };
+			RUN.companies.set(co.id, co);
+			RUN.open.push(co);
+		}
+	}
+	co.members += 1;
+	if (!co.owner) co.owner = uid;
+	return co;
+}
 
 // established integrators' tools connected before the window (seeded per user)
 const preWindowIntegrations = (uid, role) => {
@@ -599,6 +727,8 @@ const curveWeight = (d) => {
 const expectedActive = (days) => { let s = 0; for (let d = 0; d < Math.floor(days); d++) s += curveWeight(d); return Math.max(1, s); };
 const bornIntensity = (remainingDays) => remainingDays / expectedActive(Math.ceil(remainingDays));
 const BORN_REF_INTENSITY = bornIntensity(WINDOW_DAYS);
+// event properties by event name, for re-drawing workaround clones (filled after config)
+const EVENT_PROPS = {};
 const INTENSITY_EVENTS = new Set(["dashboard viewed", "query executed", "api call", "documentation viewed", "runbook executed",
 	"cost report generated", "infrastructure scaled", "security scan", "feature flag toggled", "teammate invited"]);
 
@@ -616,41 +746,45 @@ const jitter = (key, spread) => 1 + (hashFloat(key) - 0.5) * 2 * spread;
 // H8: paid media spend for one channel-day (paced budget, never zero)
 const paidSpend = (date, ch) => round2(DAILY_BUDGET_USD[ch] * SPEND_WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()] * jitter(`spend|${date}|${ch}`, SPEND_NOISE));
 
-function handleUserHook(profile, meta) {
-	const uid = profile.distinct_id;
-	const co = companyFor(uid);
+// company facts on the profile (current values; set again after the user's events)
+const stampCompany = (profile, co, t) => {
 	profile.company_id = co.id;
 	profile.company_name = co.name;
 	profile.company_size = co.size;
 	profile.industry = co.industry;
 	profile.cloud_provider = co.cloud;
+	profile.plan_tier = planOf(co, t);
 	profile.seat_count = co.seats;
 	profile.annual_contract_value = co.acv;
-	profile.customer_success_manager = co.csm;
+	profile.customer_success_manager = co.initialPlan === "enterprise";
+};
+
+function handleUserHook(profile, meta) {
+	if (meta.config !== RUN.cfg) resetRun(meta.config);
+	const uid = profile.distinct_id;
+	let kind, birthMs;
 	if (meta.userIsBornInDataset) {
-		profile.plan_tier = "free";
 		// the engine pins each new user's "account created" to `created` (UTC)
-		profile.customer_since = dayKey(ms(profile.created ?? meta.user.created));
-		return profile;
+		birthMs = ms(profile.created ?? meta.user.created);
+		profile.customer_since = dayKey(birthMs);
+		kind = "born";
+	} else {
+		// established users joined between 2023-01 and the window start; signups ran
+		// at the in-window pace in the weeks just before June 4, so RECENT_SHARE of
+		// established users joined in the RECENT_SIGNUP_DAYS before the window
+		const span = dayIndex(DATASET_START) - dayIndex("2023-01-01T00:00:00Z");
+		const r = salt(uid, "tenure");
+		const daysBefore = r < RECENT_SHARE
+			? 1 + Math.floor((r / RECENT_SHARE) * RECENT_SIGNUP_DAYS)
+			: RECENT_SIGNUP_DAYS + 1 + Math.floor(((r - RECENT_SHARE) / (1 - RECENT_SHARE)) * (span - RECENT_SIGNUP_DAYS - 1));
+		profile.customer_since = dayjs.utc(DATASET_START).subtract(daysBefore, "day").format("YYYY-MM-DD");
+		birthMs = ms(`${profile.customer_since}T12:00:00Z`);
+		// accounts a few weeks old are new workspaces, still inside their buying window
+		kind = profile.customer_since >= RECENT_FROM ? "recent" : "old";
 	}
-	// established users joined between 2023-01 and the window start; signups ran
-	// at the in-window pace in the weeks just before June 4, so RECENT_SHARE of
-	// established users joined in the RECENT_SIGNUP_DAYS before the window
-	const span = dayIndex(DATASET_START) - dayIndex("2023-01-01T00:00:00Z");
-	const r = salt(uid, "tenure");
-	const daysBefore = r < RECENT_SHARE
-		? 1 + Math.floor((r / RECENT_SHARE) * RECENT_SIGNUP_DAYS)
-		: RECENT_SIGNUP_DAYS + 1 + Math.floor(((r - RECENT_SHARE) / (1 - RECENT_SHARE)) * (span - RECENT_SIGNUP_DAYS - 1));
-	profile.customer_since = dayjs.utc(DATASET_START).subtract(daysBefore, "day").format("YYYY-MM-DD");
-	const mix = {
-		startup: [55, 35, 10, 0],
-		smb: [35, 40, 22, 3],
-		mid_market: [15, 30, 45, 10],
-		enterprise: [5, 10, 35, 50],
-	}[co.size];
-	profile.plan_tier = chance.weighted(["free", "team", "business", "enterprise"], mix);
-	// accounts a few weeks old are still on Free (self-serve buyers decide in their first weeks)
-	if (profile.customer_since >= RECENT_FROM) profile.plan_tier = "free";
+	const co = assignCompany(uid, kind, birthMs);
+	// plan as of the user's first moment in the window (drives the Upgrade funnels)
+	stampCompany(profile, co, Math.max(birthMs, ms(DATASET_START)));
 	return profile;
 }
 
@@ -663,9 +797,13 @@ function handleEverything(events, meta) {
 	const birthMs = signup ? T(signup) : null;
 
 	// ── company pin: every event carries the user's own company (engine stamps group keys at random) ──
-	for (const e of events) e.company_id = profile.company_id;
+	const co = companyOf(profile.company_id);
+	const isOwner = co.owner === uid;
+	for (const e of events) e.company_id = co.id;
 
-	// ── ENGINE WORKAROUND (see note above): even out born users' intensity ──
+	// ── ENGINE WORKAROUND (see note above): even out born users' intensity.
+	// Each clone re-draws its event properties and lands within 3 hours of its
+	// source, so it reads as another action, not a duplicate ──
 	if (signup) {
 		const extra = BORN_REF_INTENSITY / bornIntensity(Math.max(1, (END - birthMs) / DAY_MS)) - 1;
 		if (extra > 0) {
@@ -674,8 +812,10 @@ function handleEverything(events, meta) {
 				if (!INTENSITY_EVENTS.has(e.event)) continue;
 				const n = Math.floor(extra) + (chance.bool({ likelihood: (extra % 1) * 100 }) ? 1 : 0);
 				for (let k = 0; k < n; k++) {
-					const tc = Math.min(END, T(e) + chance.integer({ min: 1, max: 40 }) * MIN_MS);
-					clones.push(cloneEvent(e, { time: new Date(tc).toISOString() }));
+					const tc = Math.min(END, Math.max(birthMs + MIN_MS, T(e) + chance.integer({ min: -180, max: 180 }) * MIN_MS));
+					const c = cloneEvent(e, { time: new Date(tc).toISOString() });
+					for (const [key, v] of Object.entries(EVENT_PROPS[e.event] || {})) c[key] = u.choose(v);
+					clones.push(c);
 				}
 			}
 			if (clones.length) events = events.concat(clones).sort((a, b) => T(a) - T(b));
@@ -725,10 +865,33 @@ function handleEverything(events, meta) {
 		events = events.filter((e) => !skipped.has(e) && !(e.event === "$experiment_started" && skippedRunMs.has(T(e))));
 	}
 
-	// ── purchase hygiene: one paid subscription per user; later upgrade passes vanish ──
-	const firstBuy = events.filter((e) => e.event === "subscription started").sort((a, b) => T(a) - T(b))[0];
-	if (firstBuy) {
-		const t0 = T(firstBuy);
+	// ── production incidents happen every day: a share of weekday pages move to
+	// the nearest weekend day (same time of day), so weekend paging runs at
+	// about ALERT_WEEKEND_RATIO of a weekday instead of following office hours ──
+	{
+		const lo = Math.max(ms(DATASET_START), signup ? birthMs + 3600_000 : -Infinity);
+		for (const e of events) {
+			if (e.event !== "alert triggered") continue;
+			const t = T(e), dow = new Date(t).getUTCDay();
+			if (dow === 0 || dow === 6 || !chance.bool({ likelihood: ALERT_WEEKEND_MOVE * 100 })) continue;
+			const sat = 6 - dow <= 3 ? 6 - dow : -1 - dow;
+			const sun = dow <= 3 ? -dow : 7 - dow;
+			const tm = t + (chance.bool() ? sat : sun) * DAY_MS;
+			if (tm >= lo && tm <= END) e.time = new Date(tm).toISOString();
+		}
+	}
+
+	// ── self-serve purchase: one per company, started by its owner (the
+	// company's first user here). Teammates never buy; once the company pays,
+	// nobody there sees the upgrade page again ──
+	const firstBuy = isOwner && co.kind === "new" && co.initialPlan === "free"
+		? events.filter((e) => e.event === "subscription started").sort((a, b) => T(a) - T(b))[0]
+		: undefined;
+	if (!isOwner && co.purchase) {
+		const t0 = co.purchase.ms;
+		events = events.filter((e) => e.event !== "subscription started" && !(e.event === "upgrade page viewed" && T(e) >= t0));
+	} else {
+		const t0 = firstBuy ? T(firstBuy) : Infinity;
 		events = events.filter((e) => {
 			if (e === firstBuy) return true;
 			if (e.event === "subscription started") return false;
@@ -745,19 +908,39 @@ function handleEverything(events, meta) {
 		purchase = null;
 	}
 
-	// ── warm start: a pre-window signup buys only inside its first weeks. The
-	// older the account on June 4, the likelier its purchase already happened
-	// before the window (it starts the window on that paid plan) ──
+	// ── warm start: a workspace started in the 3 weeks before June 4. Each
+	// draws its buying delay from the new-workspace delay curve (days after
+	// signup). A delay shorter than its age on June 4 means it already bought
+	// (it starts the window on that plan); otherwise it buys that many days
+	// after signup, so June's buyers ramp in as in-window signups ramp up and
+	// weekly new subscriptions are flat from week 1 ──
 	if (!signup && purchase && profile.customer_since >= RECENT_FROM) {
 		const joinedMs = ms(`${profile.customer_since}T00:00:00Z`);
-		const ageDays = (ms(DATASET_START) - joinedMs) / DAY_MS;
-		if (salt(uid, "recent-buy") < ageDays / RECENT_SIGNUP_DAYS) {
-			profile.plan_tier = purchase.plan;
-			events = events.filter((e) => e !== purchase && e.event !== "upgrade page viewed");
-			purchase = null;
-		} else if (T(purchase) >= joinedMs + RECENT_SIGNUP_DAYS * DAY_MS) {
+		const ageDays = Math.round((ms(DATASET_START) - joinedMs) / DAY_MS);
+		const delay = buyDelayDay(salt(uid, "recent-delay"));
+		if (salt(uid, "recent-keep") >= RECENT_BUY_KEEP) {
 			events = events.filter((e) => e !== purchase);
 			purchase = null;
+		} else if (delay < ageDays) {
+			co.initialPlan = purchase.plan;
+			co.seats = purchase.seats;
+			co.acv = purchase.seats * (purchase.plan === "business" ? BUSINESS_PRICE : TEAM_PRICE_OLD) * 12;
+			co.cap = Math.min(co.cap, co.seats);
+			events = events.filter((e) => e !== purchase && e.event !== "upgrade page viewed");
+			purchase = null;
+		} else {
+			// move the purchasing pass (its upgrade page view and the subscription)
+			const tp = T(purchase);
+			let day = delay - ageDays;
+			const dow = new Date(ms(DATASET_START) + day * DAY_MS).getUTCDay();
+			if ((dow === 0 || dow === 6) && salt(uid, "recent-weekday") < 0.74) day += dow === 6 ? 2 : 1;
+			const tNew = ms(DATASET_START) + day * DAY_MS + (tp % DAY_MS);
+			const view = events.filter((e) => e.event === "upgrade page viewed" && T(e) <= tp).sort((a, b) => T(b) - T(a))[0];
+			const delta = tNew - tp;
+			purchase.time = new Date(tNew).toISOString();
+			if (view && T(view) + delta >= ms(DATASET_START)) view.time = new Date(T(view) + delta).toISOString();
+			else if (view) events = events.filter((e) => e !== view);
+			events = events.filter((e) => !(e.event === "upgrade page viewed" && e !== view && T(e) > tNew));
 		}
 	}
 
@@ -783,10 +966,21 @@ function handleEverything(events, meta) {
 		purchase.seats = Math.max(1, Math.round(purchase.seats * TEAM_SEAT_MULT));
 	}
 
-	// plan at a moment in time: the starting plan until the user buys, then the purchased plan
-	const initialPlan = profile.plan_tier;
-	const buyMs = purchase ? T(purchase) : Infinity;
-	const planAt = (t) => (t >= buyMs ? purchase.plan : initialPlan);
+	// invited teammates are the ones who join: a new workspace draws later
+	// signups in proportion to its owner's invitations
+	if (isOwner && co.kind === "new") co.invites = events.filter((e) => e.event === "teammate invited").length;
+
+	// the owner's purchase becomes the company's plan change; teammates processed
+	// later read it (and a paid workspace adds teammates only up to its seats)
+	if (purchase) {
+		co.purchase = { ms: T(purchase), plan: purchase.plan };
+		co.seats = purchase.seats;
+		co.acv = purchase.seats * (purchase.plan === "business" ? BUSINESS_PRICE : teamPrice(T(purchase))) * 12;
+		if (co.kind === "new") co.cap = Math.max(1, Math.min(co.cap, co.seats));
+	}
+
+	// plan at a moment in time: the company's plan
+	const planAt = (t) => planOf(co, t);
 
 	// ── incident response timing (H4, H10, H11, H2) ──
 	const byAlert = new Map();
@@ -866,6 +1060,14 @@ function handleEverything(events, meta) {
 		deploys.get(e.deploy_id)[e.event] = e;
 	}
 	const dropDeploy = new Set();
+	// H7: the user's would-be successful runs in the incident region and days,
+	// in time order, fail on a fixed 3-in-5 cycle (seeded phase), so exactly
+	// RUNNER_INCIDENT_FAIL of them fail without per-run coin-flip noise
+	const incidentRuns = [...deploys.values()]
+		.filter((d) => d["deployment pipeline run"] && d["service deployed"] && d["deployment pipeline run"].runner_region === RUNNER_INCIDENT_REGION && inRunnerIncident(T(d["deployment pipeline run"])))
+		.map((d) => d["deployment pipeline run"]).sort((a, b) => T(a) - T(b));
+	const incidentPhase = Math.floor(salt(uid, "incident-phase") * INCIDENT_CYCLE);
+	const incidentFail = new Set(incidentRuns.filter((r, k) => (k + incidentPhase) % INCIDENT_CYCLE < RUNNER_INCIDENT_FAIL * INCIDENT_CYCLE));
 	for (const d of deploys.values()) {
 		const run = d["deployment pipeline run"], dep = d["service deployed"];
 		if (!run) {
@@ -873,7 +1075,7 @@ function handleEverything(events, meta) {
 			continue;
 		}
 		let ok = Boolean(dep);
-		if (ok && run.runner_region === RUNNER_INCIDENT_REGION && inRunnerIncident(T(run)) && chance.bool({ likelihood: RUNNER_INCIDENT_FAIL * 100 })) {
+		if (ok && incidentFail.has(run)) {
 			ok = false;
 			dropDeploy.add(dep);
 		}
@@ -888,22 +1090,26 @@ function handleEverything(events, meta) {
 
 	// ── H1: quarter-close seat promotion — paid workspaces invite more teammates ──
 	const qcStart = ms(QUARTER_CLOSE_START), qcEnd = qcStart + QUARTER_CLOSE_DAYS * DAY_MS;
-	const lastMs = events.reduce((m, e) => Math.max(m, T(e)), 0);
+	// every other eligible invite (seeded phase, time order) gets a follow-up
+	// invite with re-drawn role and method, so paid invites run at exactly 1.5x
 	const promoClones = [];
-	for (const e of events) {
-		if (e.event !== "teammate invited") continue;
-		const t = T(e);
-		if (t < qcStart || t >= qcEnd || !PAID_PLANS.includes(planAt(t))) continue;
-		if (!chance.bool({ likelihood: (QUARTER_CLOSE_INVITE_MULT - 1) * 100 })) continue;
-		const tc = t + chance.integer({ min: 2, max: 180 }) * MIN_MS;
-		if (tc >= qcEnd || tc > END || tc > lastMs) continue;
-		promoClones.push(cloneEvent(e, { time: new Date(tc).toISOString() }));
-	}
+	const eligible = events.filter((e) => e.event === "teammate invited" && T(e) >= qcStart && T(e) < qcEnd && PAID_PLANS.includes(planAt(T(e))))
+		.sort((a, b) => T(a) - T(b));
+	const promoPhase = salt(uid, "promo-phase") < 0.5 ? 0 : 1;
+	const promoEvery = Math.round(1 / (QUARTER_CLOSE_INVITE_MULT - 1));
+	eligible.forEach((e, k) => {
+		if ((k + promoPhase) % promoEvery !== 0) return;
+		const tc = T(e) + chance.integer({ min: 2, max: 180 }) * MIN_MS;
+		if (tc >= qcEnd || tc > END) return;
+		const c = cloneEvent(e, { time: new Date(tc).toISOString() });
+		for (const [key, v] of Object.entries(EVENT_PROPS[e.event] || {})) c[key] = u.choose(v);
+		promoClones.push(c);
+	});
 	if (promoClones.length) events = events.concat(promoClones);
 
 	// ── plan at event time (superProp plan_tier) + final profile plan ──
 	for (const e of events) e.plan_tier = planAt(T(e));
-	if (purchase) profile.plan_tier = purchase.plan;
+	stampCompany(profile, co, Infinity);
 
 	// experiment assignment lives on the profile only for users with an exposure
 	// event left (H5 cuts can remove a new user's only pipeline runs)
@@ -950,17 +1156,26 @@ function handleWarehouse(row, meta) {
 	return row;
 }
 
+// company group profile: the company's final state in the window. Company
+// ids without a user here (the group key's spare capacity) emit no profile.
 function handleGroup(record) {
-	const co = COMPANIES[Number(record.company_id) - 1];
-	if (!co) return record;
+	const co = companyOf(record.company_id);
+	if (!co || co.members === 0) return null;
+	const final = planOf(co, Infinity);
+	// headcount band: the size's bands, never below the users here or the seats bought
+	const need = Math.max(co.members, co.seats);
+	const bands = EMPLOYEE_BANDS[co.size];
+	const fit = bands.filter(([, max]) => max >= need);
+	const pick = fit.length > 1 && hashFloat(`co|${co.id}|band`) < 0.5 ? fit[1] : (fit[0] || bands[bands.length - 1]);
 	record.name = co.name;
 	record.company_size = co.size;
 	record.industry = co.industry;
-	record.employee_count = co.employees;
+	record.employee_count = pick[0];
 	record.cloud_provider = co.cloud;
+	record.plan_tier = final;
 	record.annual_contract_value = co.acv;
 	record.contracted_seats = co.seats;
-	record.customer_success_manager = co.csm;
+	record.customer_success_manager = co.initialPlan === "enterprise";
 	return record;
 }
 
@@ -1300,9 +1515,9 @@ const config = {
 			conversionRate: UPGRADE_CONV,
 			timeToConvert: 24,
 			order: "sequential",
-			weight: 2,
+			weight: 5,
 			props: {
-				plan: ["team", "team", "business"],
+				plan: ["team", "team", "team", "business", "business"],
 				seats: u.weighNumRange(3, 25, 1, 40),
 			},
 		},
@@ -1429,7 +1644,7 @@ const config = {
 		customer_since: ["2025-01-01"],
 		cloud_provider: ["aws"],
 		acquisition_channel: { __weights: CHANNEL_WEIGHTS },
-		seat_count: [1],
+		seat_count: [0],
 		annual_contract_value: [0],
 		customer_success_manager: [false],
 		connected_integrations: [[]],
@@ -1442,7 +1657,7 @@ const config = {
 		{ name: "eng_manager", weight: 15, eventMultiplier: 0.5, properties: { primary_role: "engineering_manager" } },
 	],
 
-	groupKeys: [["company_id", COMPANY_COUNT, []]],
+	groupKeys: [["company_id", COMPANY_ID_CAP, []]],
 	groupProps: {
 		company_id: {
 			name: ["unknown"],
@@ -1450,6 +1665,7 @@ const config = {
 			industry: ["software"],
 			employee_count: ["11-50"],
 			cloud_provider: ["aws"],
+			plan_tier: ["free"],
 			annual_contract_value: [0],
 			contracted_seats: [1],
 			customer_success_manager: [false],
@@ -1495,7 +1711,8 @@ const TS = (iso) => dayjs.utc(iso).format("YYYY-MM-DD HH:mm:ss");
 const D = (iso) => iso.slice(0, 10);
 const band = (k) => [Math.round(k * 0.9 * 1000) / 1000, Math.round(k * 1.1 * 1000) / 1000];
 const ONBOARDING_STEPS = ["account created", "cloud account connected", "agent installed", "dashboard created"];
-const QC_BASE_FROM = TS(dayjs.utc(QUARTER_CLOSE_START).subtract(QUARTER_CLOSE_DAYS, "day"));
+const QC_BASELINE_DAYS = 30; // baseline: the 30 days before the promotion (Aug 17 - Sep 15)
+const QC_BASE_FROM = TS(dayjs.utc(QUARTER_CLOSE_START).subtract(QC_BASELINE_DAYS, "day"));
 const QC_END = TS(dayjs.utc(QUARTER_CLOSE_START).add(QUARTER_CLOSE_DAYS, "day"));
 const INC_BASE_FROM = TS(dayjs.utc(RUNNER_INCIDENT_START).subtract(7, "day"));
 const INC_BASE_TO = TS(dayjs.utc(RUNNER_INCIDENT_END).add(7, "day"));
@@ -1530,7 +1747,7 @@ export const stories = [
 		id: "H1-quarter-close-seat-push",
 		hook: "H1",
 		archetype: "temporal-inflection",
-		narrative: `The Q3 quarter-close seat promotion (${D(QUARTER_CLOSE_START)} for ${QUARTER_CLOSE_DAYS} days, through Sep 30) discounts added seats, so workspaces on a paid plan (plan_tier at event time: ${PAID_PLANS.join(", ")}) send ${QUARTER_CLOSE_INVITE_MULT}x as many teammate invitations; Free workspaces have no seats to discount and do not change. Dashboard views are untouched, so invites per dashboard view during the promotion vs the ${QUARTER_CLOSE_DAYS} days before reads the multiplier for paid plans and 1.0 for Free, cancelling weekday mix and the overall trend.`,
+		narrative: `The Q3 quarter-close seat promotion (${D(QUARTER_CLOSE_START)} for ${QUARTER_CLOSE_DAYS} days, through Sep 30) discounts added seats, so workspaces on a paid plan (plan_tier at event time: ${PAID_PLANS.join(", ")}) send ${QUARTER_CLOSE_INVITE_MULT}x as many teammate invitations; Free workspaces have no seats to discount and do not change. Dashboard views are untouched, so invites per dashboard view during the promotion vs the ${QC_BASELINE_DAYS} days before reads the multiplier for paid plans and 1.0 for Free, cancelling weekday mix and the overall trend.`,
 		mixpanelReport: { type: "Insights", events: ["teammate invited", "dashboard viewed"], measure: "total", breakdown: "plan_tier", chart: "daily line, formula A/B" },
 		assertions: [
 			{
@@ -1635,8 +1852,8 @@ FROM ev WHERE event = 'alert resolved' AND t >= TIMESTAMP '${RCA_RAMPED}' AND pl
 		id: "H4-slack-pagerduty-response",
 		hook: "H4",
 		archetype: "cohort-prop-scale",
-		narrative: `Once a user has both the Slack and PagerDuty integrations connected, they acknowledge alerts in ${INTEGRATED_RESPONSE_MULT}x the time: the page reaches the on-call engineer where they already are. Only trigger → acknowledge is affected; acknowledge → resolve is not. The speed-up starts when the pair is live. Accounts set up before the window (customer_since before ${RECENT_FROM}) connected their tools before June 4 and list them in the profile property connected_integrations; when it holds both, every in-window alert is faster (their in-window "integration configured" events only reconfigure tools they have). Newer accounts: alerts triggered after the later of their first slack and first pagerduty configuration. Read 1: accounts set up before the window, profile cohort "connected_integrations contains slack AND pagerduty" vs the rest (company size, severity, and fatigue are independent of the cohort, so the ratio of averages reads the knob). Read 2: within-user before/after for new signups who connect both in the window; fewer acknowledgements and per-user mix noise, so the knob is the target with a knob-derived floor.`,
-		mixpanelReport: { type: "Insights", event: "alert acknowledged", measure: "average response_time_mins", breakdown: "cohort: user property connected_integrations contains slack AND contains pagerduty", filter: `user property customer_since before ${RECENT_FROM} (read 1)` },
+		narrative: `Once a user has both the Slack and PagerDuty integrations connected, they acknowledge alerts in ${INTEGRATED_RESPONSE_MULT}x the time: the page reaches the on-call engineer where they already are. Only trigger → acknowledge is affected; acknowledge → resolve is not. The speed-up starts when the pair is live. Accounts set up before the window (customer_since before ${RECENT_FROM}) connected their tools before June 4 and list them in the profile property connected_integrations; when it holds both, every in-window alert is faster (their in-window "integration configured" events only reconfigure tools they have). Newer accounts: alerts triggered after the later of their first slack and first pagerduty configuration. Read 1: accounts set up before the window, profile cohort "connected_integrations contains slack AND pagerduty" vs the rest (company size, severity, and fatigue are independent of the cohort, so the ratio of averages reads the knob). Read 2 (a raw-data / SQL check; Mixpanel has no report that splits each user's alerts at their own connection date): within-user before/after for new signups who connect both in the window; fewer acknowledgements and per-user mix noise, so the knob is the target with a knob-derived floor.`,
+		mixpanelReport: { type: "Insights", event: "alert acknowledged", measure: "average response_time_mins", breakdown: "cohort: user property connected_integrations contains slack AND contains pagerduty", filter: `user property customer_since before ${RECENT_FROM} (read 1; read 2 is a raw-data / SQL check)` },
 		assertions: [
 			{
 				breakdown: {
@@ -1942,5 +2159,7 @@ FROM n GROUP BY 1`,
 		],
 	},
 ];
+
+for (const e of config.events) EVENT_PROPS[e.event] = e.properties || {};
 
 export default config;

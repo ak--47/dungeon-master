@@ -12,7 +12,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 | `insert_id` | Unique event ID used for de-duplication. |
 | `session_id` | The app session the event belongs to (diagnostic; Mixpanel computes its own sessions). |
 | `company_id` | The user's company (Mixpanel group key). See "Company (group) properties". |
-| `plan_tier` | The user's plan **at the moment of the event**: `free`, `team`, `business`, or `enterprise`. It changes from `free` to the purchased plan at the moment a user starts a subscription. |
+| `plan_tier` | The plan of the user's company **at the moment of the event**: `free`, `team`, `business`, or `enterprise`. Every user at a company has the same value at any moment. It changes from `free` to the purchased plan for the whole company at the moment the workspace owner starts a subscription. |
 | `cloud_provider` | The company's primary cloud: `aws`, `gcp`, `azure`, or `multi_cloud`. Fixed per user. |
 | `country`, `country_code`, `region`, `city` | User location (one location per user). |
 | `browser`, `os`, `model`, `screen_height`, `screen_width` | Device details from the web SDK. |
@@ -24,7 +24,7 @@ New users go through setup once, right after they sign up. These four events hap
 | Event | Meaning | Properties |
 |---|---|---|
 | `account created` | The user creates an account. First event of every new user and the moment their device is linked to their `user_id`. | `signup_method` (`google`, `github`, `email`, `sso`); `acquisition_channel`: how the user found us (`organic`, `referral`, `outbound_sales`, `paid_search`, `linkedin_ads`, `g2_reviews`); same value as the profile property. |
-| `cloud account connected` | The user connects the company's cloud account to Tallyboard. | `regions_connected` (1-4): cloud regions included. |
+| `cloud account connected` | The user connects a cloud account (the account, project, or subscription their team runs on) to Tallyboard. | `regions_connected` (1-4): cloud regions included. |
 | `agent installed` | The Tallyboard agent starts reporting from the user's hosts or clusters. | `install_method` (`helm`, `docker`, `package`, `terraform`); `hosts_reporting`. |
 | `dashboard created` | The user creates their first dashboard. This ends setup. | `template` (`service_overview`, `kubernetes`, `cost_explorer`, `slo_tracker`, `blank`). |
 
@@ -58,8 +58,8 @@ Every alert has an `alert_id`. The trigger, the acknowledgement, and the resolut
 
 | Event | Meaning | Properties |
 |---|---|---|
-| `upgrade page viewed` | A free user opens the upgrade page. | `upgrade_trigger` (`usage_limit`, `feature_gate`, `billing_settings`, `seat_limit`). |
-| `subscription started` | The user starts a paid self-serve subscription. At most one per user. Price is **not** tracked here; see `subscription_bookings_daily`. | `plan` (`team` or `business`); `seats`: seats purchased; `billing_cycle` (`monthly`, `annual`). |
+| `upgrade page viewed` | A user at a company on the Free plan opens the upgrade page. | `upgrade_trigger` (`usage_limit`, `feature_gate`, `billing_settings`, `seat_limit`). |
+| `subscription started` | The workspace owner starts a paid self-serve subscription for the whole company. At most one per company. Price is **not** tracked here; see `subscription_bookings_daily`. | `plan` (`team` or `business`); `seats`: seats purchased; `billing_cycle` (`monthly`, `annual`). |
 
 ## Team, integrations, and operations
 
@@ -85,11 +85,11 @@ Every alert has an `alert_id`. The trigger, the acknowledgement, and the resolut
 | `industry` | The company's industry. |
 | `primary_role` | `sre`, `platform_engineer`, `developer`, `engineering_manager`. |
 | `_persona` | Legacy copy of `primary_role` from an older CRM sync. |
-| `plan_tier` | Current plan: `free`, `team`, `business`, `enterprise`. |
+| `plan_tier` | The company's current plan: `free`, `team`, `business`, `enterprise`. |
 | `customer_since` | Date the user first signed up (YYYY-MM-DD). Before 2026-06-04 for established users. |
 | `cloud_provider` | The company's primary cloud. |
 | `acquisition_channel` | Channel at signup (for established users, the channel they originally came from). |
-| `seat_count`, `annual_contract_value`, `customer_success_manager` | The company's contracted seats, annual contract value (USD), and whether it has a CSM. |
+| `seat_count`, `annual_contract_value`, `customer_success_manager` | The company's contracted seats (0 on Free), annual contract value (USD, 0 on Free), and whether it has a CSM. |
 | `connected_integrations` | List of integrations currently connected for the user (`slack`, `microsoft_teams`, `pagerduty`, `opsgenie`, `github`, `jira`, `terraform`); empty when none. For accounts set up before the window it includes tools connected before June 4, even when the user has no `integration configured` event in the period. A profile property holds the current value only; it does not say when a tool was connected. |
 | `Experiment: Smart Test Selection` | `Control` or `Smart Selection` for users enrolled in the pipeline test; empty for everyone else. |
 | `created` | Signup time for users who joined in the window (the time of their `account created` event); empty for established users. |
@@ -100,12 +100,13 @@ Every alert has an `alert_id`. The trigger, the acknowledgement, and the resolut
 
 | Property | Meaning |
 |---|---|
-| `company_id` | Group key, `1` to `300`. |
+| `company_id` | Group key (a numeric ID). Long-standing customers have the lowest IDs; workspaces started more recently have higher ones. |
 | `name` | Company name. |
 | `company_size`, `industry`, `cloud_provider` | As on user profiles. |
-| `employee_count` | Headcount band. |
+| `employee_count` | Headcount band: `1-10` or `11-50` (startup), `51-200` (smb), `201-1000` (mid_market), `1001-5000` or `5000+` (enterprise). |
+| `plan_tier` | The company's current plan (same as `plan_tier` on its users' profiles). |
 | `annual_contract_value` | Current annual contract value (USD). |
-| `contracted_seats` | Seats under contract. |
+| `contracted_seats` | Seats under contract on a paid plan (0 on Free). Covers every Tallyboard user at the company. |
 | `customer_success_manager` | Whether the company has a dedicated CSM. |
 
 ## Account health history (slowly changing dimension)
@@ -120,6 +121,6 @@ One row per health rating: `distinct_id`, `account_health` (`healthy`, `neutral`
 | Monitoring | `dashboard viewed` → `query executed` | Daily habit loop. |
 | Incident response | `alert triggered` → `alert acknowledged` → `alert resolved` | Users get many alerts; hold `alert_id` constant to measure each alert on its own. |
 | Deploy | `deployment pipeline run` → `service deployed` | Users run many pipelines; hold `deploy_id` constant to measure each run. A run is `success` exactly when its deploy happened. |
-| Upgrade | `upgrade page viewed` → `subscription started` | Free users. |
+| Upgrade | `upgrade page viewed` → `subscription started` | Users at Free companies. Only the workspace owner can complete it, so per-user conversion understates per-company conversion. |
 | Cost review | `cost report generated` → `infrastructure scaled` | |
 | Runbooks | `documentation viewed` → `runbook executed` | |
