@@ -73,7 +73,6 @@ Every checkout gets an `order_id`. The checkout, a failed payment, the order, tr
 | `pass_status` | Current Pass status: `none`, `trial`, `member`. |
 | `Experiment: Smart Add-ons` | `Control` or `Smart Add-ons` for customers in the test; empty for everyone else. |
 | `created` | Signup time for customers who joined in the window; empty for established customers. |
-| `_persona` | Ordering-frequency segment from the CRM's lifecycle model (`power_orderer`, `regular`, `occasional`). |
 | `anonymousIds`, `sessionIds` | Devices and sessions seen for the customer (pipeline metadata). |
 
 ## Funnels the business tracks

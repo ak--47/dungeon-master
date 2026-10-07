@@ -4,7 +4,7 @@
 
 Forkfly is a food delivery app for people who want good local food, not a thousand chains. It launched in Austin in 2023 and now runs in eight US cities: New York, Chicago, Atlanta, Miami, Boston, Austin, Denver, and Seattle. In each city Forkfly works with a curated set of about 24 independent restaurants (about 190 in total), chosen by the local market manager.
 
-The company has about 30 employees: product and engineering, a market operations team (one market manager per city plus courier scheduling), growth marketing, a small customer support team (chat and phone), and finance. In summer 2026 Forkfly handles roughly 300-400 orders a day across all cities, and the average order total is about $34.
+The company has about 30 employees: product and engineering, a market operations team (one market manager per city plus courier scheduling), growth marketing, a small customer support team (chat and phone), and finance. In summer 2026 Forkfly handles roughly 300-450 orders a day across all cities, and the average order total is about $34.
 
 Couriers are independent contractors who sign up for delivery shifts in their city. Forkfly's dispatch system assigns each order to a courier and estimates the delivery time.
 
@@ -39,7 +39,7 @@ Couriers are independent contractors who sign up for delivery shifts in their ci
 - **Favorite cuisine** (`favorite_cuisine`), from the same survey.
 - **Platforms:** about two thirds of customers use the iOS app (iPhone or iPad) and one third the Android app.
 - **Established vs new customers.** About 58% of customers active in the window were already customers on June 4. New customers arrive steadily, about 240 a week.
-- **Pass members.** Roughly 1,000 to 1,700 customers held a Pass (trial or paid) at any point in the summer.
+- **Pass members.** Roughly 1,150 to 1,850 customers held a Pass (trial or paid) at any point in the summer.
 
 ## How customers find us
 

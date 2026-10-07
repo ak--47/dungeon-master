@@ -202,8 +202,12 @@ SELECT CASE WHEN entry_point = 'reorder' THEN 'reorder' ELSE 'browse' END AS pat
  round(median(date_diff('second', t, tp)) / 60.0, 2) AS median_minutes
 FROM sessions WHERE t >= TIMESTAMP '2026-07-07' AND tp IS NOT NULL GROUP BY 1 ORDER BY 1;
 
-SELECT CASE WHEN reorder THEN 'reorder' ELSE 'browse' END AS path, count(*) AS sessions, round(avg((tp IS NOT NULL)::INT), 4) AS order_rate
-FROM sessions WHERE t >= TIMESTAMP '2026-07-07' AND uid IN (SELECT uid FROM ev WHERE event = 'reorder tapped') GROUP BY 1 ORDER BY 1;
+-- session order rate as an Insights formula (cohort: did reorder tapped; one reorder tapped per Order Again visit)
+WITH x AS (SELECT * FROM ev WHERE t >= TIMESTAMP '2026-07-07' AND uid IN (SELECT uid FROM ev WHERE event = 'reorder tapped')),
+k AS (SELECT count(*) FILTER (WHERE event = 'order placed' AND entry_point = 'reorder') AS a, count(*) FILTER (WHERE event = 'reorder tapped') AS b,
+  count(*) FILTER (WHERE event = 'order placed' AND entry_point <> 'reorder') AS c, count(*) FILTER (WHERE event = 'app opened') AS d FROM x)
+SELECT a AS reorder_orders, b AS reorder_taps, c AS browse_orders, d - b AS browse_visits,
+ round(a / b, 4) AS reorder_order_rate, round(c / (d - b), 4) AS browse_order_rate, round((a / b) / (c / (d - b)), 4) AS ratio FROM k;
 
 -- ═════════════════════════════════════════════════════════════════════════
 -- EVAL QUERIES (eval/food-delivery.eval.md)
@@ -228,6 +232,10 @@ FROM checkouts c JOIN wh_ops w ON w.city = c.city AND w.d = c.d GROUP BY 1 ORDER
 SELECT w.rainy, count(*) AS orders, round(avg(o.late_min), 2) AS avg_minutes_late, round(avg((o.late_min >= 15)::INT), 4) AS late_15_share
 FROM orders o JOIN wh_ops w ON w.city = o.city AND w.d = o.d WHERE o.late_min IS NOT NULL GROUP BY 1 ORDER BY 1;
 SELECT rainy, round(sum(orders_dispatched) / sum(active_couriers), 3) AS orders_per_courier FROM wh_ops GROUP BY 1 ORDER BY 1;
+-- within each city: rainy-day couriers and dispatched orders vs the city's dry-day average
+WITH c AS (SELECT city, avg(active_couriers) FILTER (WHERE NOT rainy) AS dry_couriers, avg(orders_dispatched) FILTER (WHERE NOT rainy) AS dry_dispatched FROM wh_ops GROUP BY 1)
+SELECT round(sum(w.active_couriers) / sum(c.dry_couriers), 4) AS rainy_courier_lift, round(sum(w.orders_dispatched) / sum(c.dry_dispatched), 4) AS rainy_dispatch_lift
+FROM wh_ops w JOIN c ON c.city = w.city WHERE w.rainy;
 WITH x AS (SELECT o.order_id, o.late_min, w.rainy, (s.order_id IS NOT NULL) AS contacted FROM orders o JOIN wh_ops w ON w.city = o.city AND w.d = o.d
   LEFT JOIN (SELECT DISTINCT order_id FROM ev WHERE event = 'support contacted') s ON s.order_id = o.order_id WHERE o.late_min IS NOT NULL)
 SELECT rainy, round(avg(contacted::INT), 4) AS support_contact_rate FROM x GROUP BY 1 ORDER BY 1;
@@ -261,6 +269,9 @@ SELECT round(max(ia) FILTER (WHERE arm = 'Smart Add-ons') - max(ia) FILTER (WHER
 FROM g;
 SELECT "Variant name" AS arm, count(DISTINCT uid) AS exposed_customers FROM ev WHERE event = '$experiment_started' GROUP BY 1 ORDER BY 1;
 SELECT count(*) AS addon_items, round(avg(item_price_usd), 2) AS avg_addon_price FROM ev WHERE event = 'item added to cart' AND added_from = 'addon_suggestion';
+-- arm balance: household mix of enrolled customers (items per order follow household size)
+SELECT arm, count(*) AS customers, round(avg((household_type = 'single')::INT), 4) AS single_share, round(avg((household_type = 'family')::INT), 4) AS family_share
+FROM prof WHERE arm IS NOT NULL GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q7: Smart Add-ons and checkout conversion (null), overall and by platform / Pass
 WITH x AS (SELECT p.arm, c.platform, c.pass, c.placed FROM checkouts c JOIN prof p ON p.uid = c.uid WHERE p.arm IS NOT NULL AND c.t >= TIMESTAMP '2026-07-28'),
@@ -283,6 +294,9 @@ FROM s LEFT JOIN sp ON sp.ch = s.ch ORDER BY s.ch;
 SELECT ch, count(*) AS first_orders, round(avg(repeat30::INT), 4) AS repeat_rate_30d
 FROM first_delivery WHERE t < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
 SELECT ch = 'coupon_affiliates' AS coupon, count(*) AS first_orders, round(avg(repeat30::INT), 4) AS repeat_rate_30d FROM first_delivery WHERE t < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
+-- first-order rate by channel (signups through Aug 31)
+SELECT s.ch, count(*) AS signups, round(avg((f.uid IS NOT NULL)::INT), 4) AS first_order_rate
+FROM signups s LEFT JOIN (SELECT DISTINCT uid FROM orders) f ON f.uid = s.uid WHERE s.t0 < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q10: Pass trial conversion by orders during the trial
 WITH s AS (SELECT uid, min(t) AS ts FROM ev WHERE event = 'pass trial started' GROUP BY 1),
@@ -315,8 +329,12 @@ FROM c GROUP BY 1 ORDER BY 1;
 SELECT CASE WHEN entry_point = 'reorder' THEN 'reorder' ELSE 'browse' END AS path, count(*) AS orders,
  round(median(date_diff('second', t, tp)) / 60.0, 2) AS median_minutes
 FROM sessions WHERE t >= TIMESTAMP '2026-07-07' AND tp IS NOT NULL GROUP BY 1 ORDER BY 1;
-SELECT CASE WHEN reorder THEN 'reorder' ELSE 'browse' END AS path, count(*) AS sessions, round(avg((tp IS NOT NULL)::INT), 4) AS order_rate
-FROM sessions WHERE t >= TIMESTAMP '2026-07-07' AND uid IN (SELECT uid FROM ev WHERE event = 'reorder tapped') GROUP BY 1 ORDER BY 1;
+-- session order rate as an Insights formula (cohort: did reorder tapped; one reorder tapped per Order Again visit)
+WITH x AS (SELECT * FROM ev WHERE t >= TIMESTAMP '2026-07-07' AND uid IN (SELECT uid FROM ev WHERE event = 'reorder tapped')),
+k AS (SELECT count(*) FILTER (WHERE event = 'order placed' AND entry_point = 'reorder') AS a, count(*) FILTER (WHERE event = 'reorder tapped') AS b,
+  count(*) FILTER (WHERE event = 'order placed' AND entry_point <> 'reorder') AS c, count(*) FILTER (WHERE event = 'app opened') AS d FROM x)
+SELECT a AS reorder_orders, b AS reorder_taps, c AS browse_orders, d - b AS browse_visits,
+ round(a / b, 4) AS reorder_order_rate, round(c / (d - b), 4) AS browse_order_rate, round((a / b) / (c / (d - b)), 4) AS ratio FROM k;
 
 -- EVAL Q14: Order Again share of orders by week, and customers who used it
 SELECT date_trunc('week', t)::DATE AS week, count(*) AS orders, round(avg((entry_point = 'reorder')::INT), 4) AS reorder_share
