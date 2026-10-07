@@ -16,8 +16,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             a commission on each stay. Members collect Driftway Rewards
  *             (member / silver / gold). Flex Pay (book now, pay in four
  *             installments) launches 2026-07-14.
- * SCALE:      10,000 members (about 5,000 join inside the window), ~1.48M
- *             events, ~21K bookings, 120 days (2026-06-04 → 2026-10-01, UTC)
+ * SCALE:      10,000 members (about 5,000 join inside the window), ~1.54M
+ *             events, ~13K bookings, 120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  destination searched → property viewed (1-12) → checkout started
  *             → booking completed → (booking cancelled | check in completed →
  *             review submitted)
@@ -25,15 +25,15 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * EVENTS (16):
  *   property viewed > destination searched > notification received
- *   > filters applied > map viewed > checkout started > wishlist saved
+ *   > filters applied > map viewed > wishlist saved > checkout started
  *   > price alert set > booking completed > check in completed
- *   > $experiment_started > review submitted > support contacted
+ *   > $experiment_started > support contacted > review submitted
  *   > account created > booking cancelled > payment failed
  *
  * FUNNELS (2 declared; the hook shapes every search session):
  *   - Signup (first funnel, born members): destination searched → property
  *     viewed ×2 → account created (anonymous browse, then sign up; 100%)
- *   - Trip search (weight 10): destination searched → property viewed →
+ *   - Trip search (weight 7): destination searched → property viewed →
  *     checkout started → booking completed, all sharing one search_id. Engine
  *     conversion is 100%; the everything hook decides the number of views
  *     (1-12), whether the session reaches checkout, and whether the checkout
@@ -71,13 +71,23 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   then: P(checkout) = BASE_CHECKOUT x member propensity (log-normal, mean 1)
  *   x review-count factor of the last property viewed (H8) x sale (H10) x
  *   All-in variant (H5) x hurricane (H9) x (a small member-specific factor,
- *   mean 0.08, for low-intent TikTok signups, H3); P(book | checkout) = BASE_BOOK x Flex Pay (H1) x All-in variant (H5),
- *   and web checkouts fail during the gateway incident (H2). A failed checkout
- *   sometimes logs "payment failed" (gateway_timeout during the incident).
+ *   mean 0.08, for low-intent TikTok signups, H3); P(book | checkout) =
+ *   BASE_BOOK x Flex Pay (H1) x All-in variant (H5), and web checkouts fail
+ *   during the gateway incident (H2). A failed checkout sometimes logs
+ *   "payment failed" (gateway_timeout during the incident). The traveler picks
+ *   the rate type at checkout: non-refundable is 10% below the free-
+ *   cancellation rate.
+ * - Catalog: 28 destinations x 24 properties (property_id prefix = a unique
+ *   destination code; names unique within a destination). 30% of listings go
+ *   live between 40 days before and 110 days into the window with no reviews;
+ *   review_count is the page's count on the day of the event and grows at a
+ *   per-listing pace (faster at busy destinations, always ahead of Driftway's
+ *   own reviews of that listing).
  * - Booking lifecycle: cancellation by lead time and rate type (H4), Caribbean
  *   weather cancellations (H9), a trip reminder the day before check-in (push,
  *   or email for members who turned push off),
- *   check-in on the stay's first day, a review 12 h-6 days after checkout for
+ *   check-in on the stay's first day (18:00-23:55 UTC, on check_in_date), a
+ *   review 12 h-6 days after checkout for
  *   55% of stays. Support contacts follow cancellations (30%) and failed
  *   payments (20%), plus a trickle of other questions.
  * - Window start: members who joined before June 4 hold stays booked in the
@@ -86,6 +96,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   sessions they began in the 10 days before June 4 still check out and book
  *   on the first days, so June 4 checkouts are not light. A new traveler whose
  *   signup would fall past the window end has no account and no events.
+ * - Wishlists and price alerts follow the destination the member searched
+ *   most recently. member_since is the UTC date of "account created" (the
+ *   profile's created time is the first anonymous visit, minutes earlier).
  * - Server-side messages: a weekly deals email (Thursdays) to members on the
  *   marketing list, sale emails/pushes, and trip reminders keep arriving for
  *   members who stopped using the app.
@@ -109,8 +122,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * H1. FLEX PAY LAUNCH (everything)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: from 2026-07-14, checkout → booking conversion is 1.2x (55% →
- *   66%); 35% of bookings pay with payment_method = flex_pay.
+ * PATTERN: from 2026-07-14, checkout → booking conversion is 1.2x (50% →
+ *   60%); 35% of bookings pay with payment_method = flex_pay.
  * MIXPANEL: Insights, booking completed / checkout started, weekly;
  *   Jun 4-Jul 13 vs Jul 14-Aug 17; breakdown payment_method.
  * REAL WORLD: installments lower the pain of a big up-front payment.
@@ -158,8 +171,13 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: from 2026-08-25 members split 50/50; the variant shows taxes and
  *   fees up front. Search → checkout is 0.85x, checkout → booking is 1.3x;
- *   net bookings per search ≈ 1.1x. One exposure per member, 1 s before the
- *   member's first search on or after the start.
+ *   net bookings per search ≈ 1.1x by design. Arms are hashed per member, so
+ *   per-session rates also carry each arm's member mix (members differ a lot
+ *   in how often they book); compare with the same arms before the start.
+ *   One exposure per member: the engine places it 1 s before the member's
+ *   first search on or after the start; the hook moves it to the first
+ *   search that still happens when H9 removes that search, and drops it for
+ *   a member who left (H7) before any.
  * MIXPANEL: Funnels, destination searched → checkout started → booking
  *   completed, Totals, hold search_id constant, 7-day window, Aug 25-Sep 23,
  *   breakdown "Experiment: All-in Pricing" (or the Experiments report).
@@ -190,9 +208,13 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * H8. REVIEW-COUNT THRESHOLD (everything)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: a session reaches checkout for the last property viewed with a
- *   factor by that property's review_count: 0-9 reviews 0.4, 10-49 0.75,
- *   50+ 1.0.
+ * PATTERN: a session reaches checkout with a factor by the review_count the
+ *   last property viewed showed on that day. The factor ramps smoothly
+ *   (logistic in ln reviews) around 10 and 50 reviews; its plateaus are
+ *   solved at load so the bucket averages over property views are 0-9
+ *   reviews 0.4, 10-49 0.75, 50+ 1.0 (the knobs). New listings keep the
+ *   low bucket supplied all window, so the pooled read is not confounded
+ *   with the sale (June) or the All-in test (September).
  * MIXPANEL: Insights, checkout started / property viewed, breakdown
  *   review_count (custom buckets 0-9, 10-49, 50+).
  * REAL WORLD: nobody wants to be a listing's first guest.
@@ -201,7 +223,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H9. HURRICANE DELIA (everything + warehouse destination_supply_daily)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: 2026-09-09 to 2026-09-13 (weather_advisory = hurricane_warning for
- *   caribbean; rooms_listed x0.6): Caribbean searches 0.5x, Caribbean
+ *   the caribbean region as the storm tracks west; rooms_listed x0.6): Caribbean searches 0.5x, Caribbean
  *   checkouts per search 0.25x, and 70% of Caribbean stays checking in during
  *   the warnings (booked before Sep 7) cancel Sep 7-9 with reason weather.
  * MIXPANEL: Insights, destination searched and checkout started by region,
@@ -223,45 +245,55 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-travel, 2026-10-07, full fidelity,
- * 10,000 members, 1,478,087 events)
+ * 10,000 members, 1,541,845 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                            | Derivation                 | Expected | Measured
  * -----|---------------------------------------------------|----------------------------|----------|---------
- * H1   | booking per checkout, after/before Jul 14         | FLEX_LIFT                  | 1.20     | 1.191 (54.8% → 65.2%)
- * H1   | Flex Pay share of bookings after launch           | FLEX_SHARE                 | 0.35     | 0.347
- * H2   | web/app booking per checkout, incident / ±14 d    | 1 − WEB_FAIL (≤, ceil 0.725)| 0.45    | 0.513
+ * H1   | booking per checkout, after/before Jul 14         | FLEX_LIFT                  | 1.20     | 1.200 (49.7% → 59.6%)
+ * H1   | Flex Pay share of bookings after launch           | FLEX_SHARE                 | 0.35     | 0.366
+ * H2   | web/app booking per checkout, incident / ±14 d    | 1 − WEB_FAIL (≤, ceil 0.725)| 0.45    | 0.511
  * H2   | web approval_rate, degraded / operational (wh)    | 1 − WEB_FAIL               | 0.45     | 0.452 (0.416 vs 0.921)
- * H3   | spend per signup, TikTok / Meta                   | 10 / 14                    | 0.714    | 0.694 ($9.63 vs $13.89)
- * H3   | 30-day booker rate, TikTok / other channels       | TIKTOK_BOOKER_RATIO (≤, ceil 0.75) | 0.50 | 0.490 (26.8% vs 54.6%)
- * H3   | spend per booker, TikTok / Meta                   | (10 / 0.5) / 14 (≥, floor 1.21) | 1.429 | 1.336 ($36.00 vs $26.94)
- * H4   | 30-day cancel rate, 60+ / 7-29 days lead          | 0.40 / 0.15 (≥, floor 1.83)| 2.667    | 2.905
- * H4   | 30-day cancel rate, 30-59 / 7-29 days lead        | 0.27 / 0.15 (≥, floor 1.4) | 1.80     | 1.855
- * H4   | 30-day cancel rate, non-refundable / refundable   | 0.25 (≤, ceil 0.625)       | 0.25     | 0.223
- * H5   | search → checkout (7 d), variant / control        | ALLIN_CHECKOUT_MULT        | 0.85     | 0.809
- * H5   | checkout → booking (7 d), variant / control       | ALLIN_BOOK_MULT            | 1.30     | 1.296
- * H5   | variant share of exposed members                  | equal 2-arm hash           | 0.50     | 0.497
- * H6   | median search → booking, business / couple+solo   | SEGMENT_GAP_MULT.business  | 0.50     | 0.481 (1.96 h)
- * H6   | median search → booking, family / couple+solo     | SEGMENT_GAP_MULT.family    | 1.80     | 1.679 (6.85 h)
- * H7   | day 7-29 return, first review 1-2★ / 3-5★         | 1 − BAD_STAY_CHURN (≤, ceil 0.75) | 0.50 | 0.471 (44.5% vs 94.4%)
- * H8   | checkout per view, 0-9 / 50+ reviews              | REVIEW_CHECKOUT_K["0-9"]   | 0.40     | 0.412
- * H8   | checkout per view, 10-49 / 50+ reviews            | REVIEW_CHECKOUT_K["10-49"] | 0.75     | 0.755
- * H9   | Caribbean / other searches, warning / ±14 d       | HURRICANE_SEARCH_KEEP (≤, ceil 0.75) | 0.50 | 0.462
- * H9   | Caribbean / other checkout per search, warning / ±14 d | HURRICANE_CHECKOUT_K (≤, ceil 0.625) | 0.25 | 0.237
+ * H3   | spend per signup, TikTok / Meta                   | 10 / 14                    | 0.714    | 0.717 ($9.81 vs $13.69)
+ * H3   | 30-day booker rate, TikTok / other channels       | TIKTOK_BOOKER_RATIO (≤, ceil 0.75) | 0.50 | 0.451 (18.4% vs 40.7%)
+ * H3   | spend per booker, TikTok / Meta                   | (10 / 0.5) / 14 (≥, floor 1.21) | 1.429 | 1.626 ($53.45 vs $32.87)
+ * H4   | 30-day cancel rate, 60+ / 7-29 days lead          | 0.40 / 0.15 (≥, floor 1.83)| 2.667    | 2.975
+ * H4   | 30-day cancel rate, 30-59 / 7-29 days lead        | 0.27 / 0.15 (≥, floor 1.4) | 1.80     | 1.905
+ * H4   | 30-day cancel rate, non-refundable / refundable   | 0.25 (≤, ceil 0.625)       | 0.25     | 0.245
+ * H5   | search → checkout (7 d), variant / control        | ALLIN_CHECKOUT_MULT        | 0.85     | 0.816
+ * H5   | checkout → booking (7 d), variant / control       | ALLIN_BOOK_MULT            | 1.30     | 1.300
+ * H5   | variant share of exposed members                  | equal 2-arm hash           | 0.50     | 0.498
+ * H6   | median search → booking, business / couple+solo   | SEGMENT_GAP_MULT.business  | 0.50     | 0.502 (2.04 h)
+ * H6   | median search → booking, family / couple+solo     | SEGMENT_GAP_MULT.family    | 1.80     | 1.626 (6.60 h)
+ * H7   | day 7-29 return, first review 1-2★ / 3-5★         | 1 − BAD_STAY_CHURN (≤, ceil 0.75) | 0.50 | 0.476 (45.0% vs 94.4%)
+ * H8   | checkout per view, 0-9 / 50+ reviews              | REVIEW_CHECKOUT_K["0-9"]   | 0.40     | 0.424
+ * H8   | checkout per view, 10-49 / 50+ reviews            | REVIEW_CHECKOUT_K["10-49"] | 0.75     | 0.770
+ * H9   | Caribbean / other searches, warning / ±14 d       | HURRICANE_SEARCH_KEEP (≤, ceil 0.75) | 0.50 | 0.532
+ * H9   | Caribbean / other checkout per search, warning / ±14 d | HURRICANE_CHECKOUT_K (≤, ceil 0.625) | 0.25 | 0.229
  * H9   | warehouse rooms_listed, warning / normal Caribbean | HURRICANE_ROOMS_K         | 0.60     | 0.604
- * H10  | checkout per search, sale / ±14 d                 | SALE_CHECKOUT_LIFT         | 1.40     | 1.363 (15.5% → 21.1%)
- * H10  | average booked nightly_rate, sale / ±14 d         | 1 − SALE_DISCOUNT          | 0.85     | 0.836 ($213 vs $255)
+ * H10  | checkout per search, sale / ±14 d                 | SALE_CHECKOUT_LIFT         | 1.40     | 1.292 (10.8% → 14.0%)
+ * H10  | average booked nightly_rate, sale / ±14 d         | 1 − SALE_DISCOUNT          | 0.85     | 0.866 ($210 vs $243)
  * ═════════════════════════════════════════════════════════════════════════
  *
  * Noise notes: the reads marked ≤ / ≥ rest on a few hundred events or fewer
- * (about 190 web bookings on 4 incident days; about 180 non-refundable
- * cancellations; about 770 TikTok signups; about 560 members whose first
- * review was bad; about 580 Caribbean searches and 18 Caribbean checkouts on
- * warning days), so they use the knob as target with a half-effect floor or
- * ceiling: NAILED inside knob ±10%, STRONG beyond. 70% of storm-window
- * Caribbean stays cancelled for weather is not asserted (65 of 87 eligible
- * stays, 0.75). Checkout → booking splits by any user-level attribute
+ * (about 130 web bookings from 465 web checkouts on 4 incident days, where the
+ * app control is itself noisy: app checkouts booked at 0.89x their ±14-day
+ * rate and 0.94x the week before, which lifts the H2 ratio; about 120
+ * non-refundable cancellations; about 740 TikTok signups; about 360 members
+ * whose first review was bad; about 670 Caribbean searches and 15 Caribbean
+ * checkouts on warning days), so they use the knob as target with a
+ * half-effect floor or ceiling: NAILED inside knob ±10%, STRONG beyond. 70%
+ * of storm-window Caribbean stays cancelled for weather is not asserted (39 of
+ * 49 eligible stays, 0.80). H5 arms are hashed per member and members differ
+ * a lot in booking appetite, so arm-level session rates carry member mix (here
+ * the arms matched before the test: 0.97x net bookings per search Jul 14-Aug
+ * 17; 1.06x during it). Checkout → booking splits by any user-level attribute
  * (platform, market) after Aug 25 inherit the All-in Pricing arm mix of that
  * subgroup; they are not engineered and are not independent per checkout.
+ *
+ * Activity levels (owner decision, moved toward browsing in this round):
+ * 21.4 searches per active member in 120 days, 6.1% of search sessions end
+ * in a booking, 52% of active members booked, 36% of new members book within
+ * 30 days.
  */
 
 // ── SCALE ──
@@ -303,9 +335,9 @@ const HOUR_WEIGHTS = [0.95, 0.92, 0.85, 0.72, 0.55, 0.38, 0.26, 0.2, 0.22, 0.3, 
 
 // ── KNOBS ──
 // Trip-search funnel base rates (per search session)
-const BASE_CHECKOUT = 0.22;         // search session → checkout started (before the review-count factor)
-const BASE_BOOK = 0.55;             // checkout started → booking completed
-const PROPENSITY_SIGMA = 0.8;       // per-member booking propensity (log-normal, mean 1) scales the checkout chance
+const BASE_CHECKOUT = 0.16;         // search session → checkout started (before the review-count factor)
+const BASE_BOOK = 0.5;              // checkout started → booking completed
+const PROPENSITY_SIGMA = 1.0;       // per-member booking propensity (log-normal, mean 1) scales the checkout chance
 const SEARCH_TO_BOOK_MEDIAN_H = 4;  // log-normal time from search to booking (couple / solo travelers)
 const SEARCH_TO_BOOK_SIGMA = 1.5;
 const SEARCH_TO_BOOK_MAX_H = 240;
@@ -364,10 +396,14 @@ const CHURN_DAY_MAX = 3;
 const REVIEW_RATE = 0.55;
 const RATING_WEIGHTS = { 1: 7, 2: 10, 3: 18, 4: 33, 5: 32 };
 
-// H8 review-count threshold: checkout chance by the property's review count
+// H8 review-count threshold: checkout chance by the property's review count when viewed.
+// The knob is each bucket's AVERAGE factor; the factor itself ramps smoothly
+// (logistic in log review count) around 10 and 50 reviews (see reviewFactor below).
 const REVIEW_BUCKETS = ["0-9", "10-49", "50+"];
 const reviewBucket = (n) => (n <= 9 ? "0-9" : n <= 49 ? "10-49" : "50+");
 const REVIEW_CHECKOUT_K = { "0-9": 0.4, "10-49": 0.75, "50+": 1 };
+const REVIEW_RAMP_WIDTH = 0.18;
+const NEW_LISTING_SHARE = 0.3;      // catalog share listed during (or just before) the window, starting with no reviews     // logistic width in ln(reviews): the factor moves over roughly 7-15 and 35-75 reviews
 
 // H9 Hurricane Delia (warehouse destination_supply_daily)
 const HURRICANE_REGION = "caribbean";
@@ -397,7 +433,7 @@ const REGIONS = {
 	us_cities: { weight: 28, dest: { "New York": 260, Chicago: 190, "San Francisco": 240, "Las Vegas": 150, Nashville: 210, "New Orleans": 180 } },
 	us_beaches: { weight: 22, dest: { "Miami Beach": 230, "San Diego": 220, "Myrtle Beach": 150, Honolulu: 290, "Outer Banks": 200 } },
 	mountains: { weight: 14, dest: { Denver: 170, Asheville: 180, "Lake Tahoe": 240, "Park City": 250, Banff: 260 } },
-	caribbean: { weight: 16, dest: { Cancun: 210, "Punta Cana": 190, "Montego Bay": 200, Nassau: 240, "San Juan": 180, Aruba: 260 } },
+	caribbean: { weight: 16, dest: { Cancun: 210, "Punta Cana": 190, "Montego Bay": 200, Nassau: 240, "San Juan": 180, "Turks and Caicos": 260 } },
 	europe: { weight: 20, dest: { London: 230, Paris: 240, Barcelona: 190, Lisbon: 160, Rome: 200, Amsterdam: 210 } },
 };
 const SEGMENT_REGION_MULT = {
@@ -424,33 +460,97 @@ const pickWeightedR = (obj, r) => {
 	}
 	return entries[entries.length - 1][0];
 };
+// property_id prefix: one unique code per destination (airport or city code)
+const DEST_CODE = {
+	"New York": "NYC", Chicago: "CHI", "San Francisco": "SFO", "Las Vegas": "LAS", Nashville: "BNA", "New Orleans": "MSY",
+	"Miami Beach": "MIA", "San Diego": "SAN", "Myrtle Beach": "MYR", Honolulu: "HNL", "Outer Banks": "OBX",
+	Denver: "DEN", Asheville: "AVL", "Lake Tahoe": "TVL", "Park City": "PKC", Banff: "BNF",
+	Cancun: "CUN", "Punta Cana": "PUJ", "Montego Bay": "MBJ", Nassau: "NAS", "San Juan": "SJU", "Turks and Caicos": "PLS",
+	London: "LON", Paris: "PAR", Barcelona: "BCN", Lisbon: "LIS", Rome: "ROM", Amsterdam: "AMS",
+};
+// traffic share of a destination relative to the average destination (region weight
+// spread over its destinations): busier destinations collect reviews faster
+const DEST_TRAFFIC = Object.fromEntries(DESTINATIONS.map((d) => [d, (REGIONS[DEST_REGION[d]].weight / Object.keys(REGIONS[DEST_REGION[d]].dest).length) / (Object.values(REGIONS).reduce((a, r) => a + r.weight, 0) / DESTINATIONS.length)]));
 const PROPERTIES_BY_DEST = {};
 for (const d of DESTINATIONS) {
 	const list = [];
+	const names = new Set();
 	for (let i = 0; i < 24; i++) {
 		const k = `prop|${d}|${i}`;
 		const type = pickWeightedR(DEST_REGION[d] === "caribbean" ? { ...PROPERTY_TYPES, resort: 40 } : PROPERTY_TYPES, hashFloat(`${k}|type`));
-		// review counts: log-normal around 42 (about 20% under 10, 30% 10-49, 50% 50+)
+		// partners keep adding listings: NEW_LISTING_SHARE of the catalog goes live on a
+		// date between 40 days before and 110 days into the window with no reviews; the
+		// rest were listed long ago (review count on June 4 log-normal around 45). Every
+		// listing gains reviews from Driftway guests and every other booking channel,
+		// faster at busier destinations.
+		const isNew = hashFloat(`${k}|new`) < NEW_LISTING_SHARE;
+		const listedMs = isNew ? Date.parse(DATASET_START) + Math.floor(-40 + 150 * hashFloat(`${k}|listed`)) * DAY_MS : -Infinity;
 		const z = Math.sqrt(-2 * Math.log(Math.max(1e-9, hashFloat(`${k}|rc1`)))) * Math.cos(2 * Math.PI * hashFloat(`${k}|rc2`));
-		const reviews = Math.max(0, Math.round(Math.exp(Math.log(42) + 1.6 * z)));
+		const reviews0 = isNew ? 0 : Math.max(0, Math.round(Math.exp(Math.log(45) + 1.0 * z)));
+		const reviewsPerDay = DEST_TRAFFIC[d] * (0.15 + 0.2 * hashFloat(`${k}|rpd`));
 		const stars = type === "vacation_rental" ? 0 : type === "resort" ? 4 + Math.round(hashFloat(`${k}|st`)) : 2 + Math.floor(hashFloat(`${k}|st`) * 3.2);
 		const rate = Math.round(DEST_BASE_RATE[d] * TYPE_RATE_MULT[type] * (0.75 + 0.5 * hashFloat(`${k}|rate`)) * (stars >= 4 ? 1.2 : 1));
-		const nameA = NAME_A[Math.floor(hashFloat(`${k}|na`) * NAME_A.length)];
-		const nameB = NAME_B[type][Math.floor(hashFloat(`${k}|nb`) * NAME_B[type].length)];
+		// names are unique within a destination
+		let name = null;
+		for (let tries = 0; !name || names.has(name); tries++) {
+			const nameA = NAME_A[Math.floor(hashFloat(`${k}|na|${tries}`) * NAME_A.length)];
+			const nameB = NAME_B[type][Math.floor(hashFloat(`${k}|nb|${tries}`) * NAME_B[type].length)];
+			name = `${nameA} ${nameB} ${d}`;
+		}
+		names.add(name);
 		list.push({
-			property_id: `DW-${d.replace(/\s/g, "").slice(0, 3).toUpperCase()}-${1000 + i * 37 + Math.floor(hashFloat(`${k}|id`) * 30)}`,
-			property_name: `${nameA} ${nameB} ${d}`,
+			property_id: `DW-${DEST_CODE[d]}-${1000 + i * 37 + Math.floor(hashFloat(`${k}|id`) * 30)}`,
+			property_name: name,
 			property_type: type,
 			destination: d,
 			region: DEST_REGION[d],
 			star_rating: stars,
-			review_count: reviews,
-			guest_rating: reviews === 0 ? 0 : Math.round((3.6 + 1.3 * hashFloat(`${k}|gr`)) * 10) / 10,
+			listedMs,
+			reviews0,
+			reviewsPerDay,
+			guest_rating: Math.round((3.6 + 1.3 * hashFloat(`${k}|gr`)) * 10) / 10,
 			base_rate: rate,
 		});
 	}
 	PROPERTIES_BY_DEST[d] = list;
 }
+// review count shown on the property page at time t (a daily snapshot, counted from
+// June 4 or from the listing date)
+const reviewsAt = (p, t) => p.reviews0 + Math.floor(p.reviewsPerDay * Math.max(0, Math.floor((t - Math.max(p.listedMs, Date.parse(DATASET_START))) / DAY_MS)));
+// properties a traveler can find at time t (listed by then)
+const listedAt = (d, t) => PROPERTIES_BY_DEST[d].filter((p) => p.listedMs <= t);
+const guestRatingAt = (p, t) => (reviewsAt(p, t) === 0 ? 0 : p.guest_rating);
+
+// H8 factor: two logistic steps in ln(reviews + 1) at 10 and 50 reviews, with plateau
+// levels solved so each bucket's average factor over property views (every property
+// and day of the window, weighted by destination traffic) equals REVIEW_CHECKOUT_K.
+const reviewSteps = (n) => {
+	const x = Math.log(n + 1);
+	const s1 = 1 / (1 + Math.exp(-(x - Math.log(10.5)) / REVIEW_RAMP_WIDTH));
+	const s2 = 1 / (1 + Math.exp(-(x - Math.log(50.5)) / REVIEW_RAMP_WIDTH));
+	return [1 - s1, s1 - s2, s2]; // basis weights on the low, middle, and high plateaus
+};
+const REVIEW_PLATEAUS = (() => {
+	const M = Object.fromEntries(REVIEW_BUCKETS.map((b) => [b, [0, 0, 0, 0]]));
+	for (const [r, { weight, dest }] of Object.entries(REGIONS)) {
+		const w = weight / Object.keys(dest).length;
+		for (const d of Object.keys(dest)) for (const p of PROPERTIES_BY_DEST[d]) for (let day = 0; day < WINDOW_DAYS; day++) {
+			const t = Date.parse(DATASET_START) + day * DAY_MS;
+			if (p.listedMs > t) continue;
+			const n = reviewsAt(p, t);
+			const m = M[reviewBucket(n)];
+			reviewSteps(n).forEach((v, i) => { m[i] += w * v; });
+			m[3] += w;
+		}
+	}
+	// solve A x = K (3x3, Cramer's rule); row b = bucket b's mean basis weights
+	const A = REVIEW_BUCKETS.map((b) => M[b].slice(0, 3).map((v) => v / M[b][3]));
+	const K = REVIEW_BUCKETS.map((b) => REVIEW_CHECKOUT_K[b]);
+	const det3 = (m) => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+	const D0 = det3(A);
+	return [0, 1, 2].map((j) => det3(A.map((row, i) => row.map((v, c) => (c === j ? K[i] : v)))) / D0);
+})();
+const reviewFactor = (n) => reviewSteps(n).reduce((s, v, i) => s + v * REVIEW_PLATEAUS[i], 0);
 
 // ── SEGMENTS ──
 const SEGMENTS = ["business", "family", "couple", "solo"];
@@ -458,6 +558,7 @@ const LEAD = { business: [6, 0.8, 60], family: [50, 0.7, 180], couple: [24, 0.9,
 const NIGHTS = { business: [1, 3], family: [4, 8], couple: [2, 5], solo: [2, 6] };
 const GUESTS = { business: [1, 1], family: [3, 5], couple: [2, 2], solo: [1, 1] };
 const REFUNDABLE_SHARE = 0.7;       // share of bookings on a free-cancellation rate (same for every traveler)
+const NONREFUNDABLE_DISCOUNT = 0.1; // the non-refundable rate is 10% below the free-cancellation rate
 const VIEW_COUNT_WEIGHTS = { 1: 18, 2: 18, 3: 16, 4: 13, 5: 10, 6: 8, 7: 6, 8: 4, 9: 3, 10: 2, 11: 1, 12: 1 };
 
 // ── HELPERS ──
@@ -474,15 +575,16 @@ const inSale = (t) => t >= ms(SALE_START) && t < ms(SALE_END);
 const inIncident = (t) => t >= ms(PAYMENT_INCIDENT_START) && t < ms(PAYMENT_INCIDENT_END);
 const inHurricane = (t) => t >= ms(HURRICANE_START) && t < ms(HURRICANE_END);
 const platformOf = (os) => (os === "iOS" || os === "iPadOS" ? "ios" : os === "Android" ? "android" : "web");
-// check-in day starts at 20:00 UTC (mid-afternoon in the US); the guest arrives 18:00-01:00 UTC
+// check-in day starts at 20:00 UTC (mid-afternoon in the US); the guest arrives 18:00-23:55 UTC, on the check-in date
 const checkInAfter = (day0Ms, minMs) => {
 	let c = dayStart(day0Ms) + 20 * HOUR_MS;
 	while (c < minMs) c += DAY_MS;
 	return c;
 };
-const nightlyRate = (p, checkInMs, t) => {
+// the free-cancellation rate is the listed price; the non-refundable rate is NONREFUNDABLE_DISCOUNT cheaper
+const nightlyRate = (p, checkInMs, t, refundable = true) => {
 	const r = p.base_rate * jitter(`ndr|${p.property_id}|${dayKey(checkInMs)}`, 0.08);
-	return Math.round(r * (inSale(t) ? 1 - SALE_DISCOUNT : 1));
+	return Math.round(r * (inSale(t) ? 1 - SALE_DISCOUNT : 1) * (refundable ? 1 : 1 - NONREFUNDABLE_DISCOUNT));
 };
 const DAILY_BUDGET_USD = Object.fromEntries(PAID_CHANNELS.map((ch) => {
 	const totalW = Object.values(CHANNEL_WEIGHTS).reduce((a, b) => a + b, 0);
@@ -554,13 +656,9 @@ function handleEverything(events, meta) {
 	const seg = SEGMENTS.includes(profile.traveler_segment) ? profile.traveler_segment : "couple";
 	const BEGIN = ms(DATASET_START), END = ms(DATASET_END);
 	const signup = events.find((e) => e.event === "account created");
-	// a new traveler whose signup falls past the window end never got an account:
-	// no profile in Mixpanel and nothing to send them
-	if (meta.userIsBornInDataset && !signup) {
-		profile._drop = true;
-		return [];
-	}
 	const authT = signup ? T(signup) : -Infinity;
+	// member_since is the UTC date of the account created event
+	if (signup) profile.member_since = dayKey(authT);
 	// H3: a share of TikTok signups are browsers with a small, member-specific checkout propensity
 	const lowIntent = profile.acquisition_channel === "tiktok_ads" && salt(uid, "intent") < TIKTOK_LOW_INTENT_SHARE;
 	const lowIntentK = (() => {
@@ -690,7 +788,7 @@ function handleEverything(events, meta) {
 		for (const v of views) {
 			vt += chance.integer({ min: Math.min(40, maxStep - 1), max: maxStep }) * 1000;
 			v.time = iso(vt);
-			viewProps.push(chance.pickone(PROPERTIES_BY_DEST[dest]));
+			viewProps.push(chance.pickone(listedAt(dest, vt)));
 		}
 		// H6: search → booking time (log-normal, scaled by traveler segment); checkout opens minutes before
 		const gapH = Math.min(SEARCH_TO_BOOK_MAX_H, SEARCH_TO_BOOK_MEDIAN_H * logNormal(SEARCH_TO_BOOK_SIGMA) * SEGMENT_GAP_MULT[seg]);
@@ -706,7 +804,7 @@ function handleEverything(events, meta) {
 			const p = viewProps[i];
 			Object.assign(v, {
 				search_id: un.id, property_id: p.property_id, property_name: p.property_name, property_type: p.property_type,
-				destination: dest, region, star_rating: p.star_rating, review_count: p.review_count, guest_rating: p.guest_rating,
+				destination: dest, region, star_rating: p.star_rating, review_count: reviewsAt(p, T(v)), guest_rating: guestRatingAt(p, T(v)),
 				nightly_rate: nightlyRate(p, checkInMs, T(v)),
 			});
 		});
@@ -715,7 +813,7 @@ function handleEverything(events, meta) {
 		// H8 + H10 + H5 + H9 + H3: does the session reach checkout? (last property viewed)
 		const p = viewProps[viewProps.length - 1];
 		const treated = variant === ALLIN_VARIANT && t0 >= exposureT;
-		let pCk = BASE_CHECKOUT * propensity * REVIEW_CHECKOUT_K[reviewBucket(p.review_count)];
+		let pCk = BASE_CHECKOUT * propensity * reviewFactor(views[views.length - 1].review_count);
 		if (inSale(ckT)) pCk *= SALE_CHECKOUT_LIFT;
 		if (treated) pCk *= ALLIN_CHECKOUT_MULT;
 		if (region === HURRICANE_REGION && inHurricane(ckT)) pCk *= HURRICANE_CHECKOUT_K;
@@ -723,12 +821,14 @@ function handleEverything(events, meta) {
 		if (!chance.bool({ likelihood: Math.min(100, pCk * 100) }) || ckT > END) continue;
 		const ckSrc = un.checkout || signup;
 		if (!ckSrc) continue;
-		const rate = nightlyRate(p, checkInMs, ckT);
+		// the traveler picks the rate type at checkout (independent of who they are)
+		const refundable = chance.bool({ likelihood: REFUNDABLE_SHARE * 100 });
+		const rate = nightlyRate(p, checkInMs, ckT, refundable);
 		const total = round2(rate * nights * (1 + TAX_FEE_RATE));
 		const ck = un.checkout || morph(signup, "checkout started", ckT, {});
 		Object.assign(ck, {
 			time: iso(ckT), search_id: un.id, property_id: p.property_id, property_name: p.property_name, property_type: p.property_type,
-			destination: dest, region, star_rating: p.star_rating, review_count: p.review_count, nightly_rate: rate, nights, guests,
+			destination: dest, region, star_rating: p.star_rating, review_count: reviewsAt(p, ckT), nightly_rate: rate, nights, guests,
 			total_price: total, check_in_date: checkInDate, lead_time_days: Math.floor((dayStart(checkInMs) - dayStart(ckT)) / DAY_MS),
 		});
 		out.push(ck);
@@ -753,14 +853,13 @@ function handleEverything(events, meta) {
 			}
 			continue;
 		}
-		const refundable = chance.bool({ likelihood: REFUNDABLE_SHARE * 100 });
 		const flex = bkT >= ms(FLEX_PAY_LAUNCH) && chance.bool({ likelihood: FLEX_SHARE * 100 });
 		const bk = un.booking || morph(ck, "booking completed", bkT, {});
 		const leadDays2 = Math.floor((dayStart(checkInMs) - dayStart(bkT)) / DAY_MS);
 		Object.assign(bk, {
 			time: iso(bkT), booking_id: `BK-${un.id.slice(2, 12).toUpperCase()}`, search_id: un.id,
 			property_id: p.property_id, property_name: p.property_name, property_type: p.property_type,
-			destination: dest, region, star_rating: p.star_rating, review_count: p.review_count, nightly_rate: rate, nights, guests,
+			destination: dest, region, star_rating: p.star_rating, review_count: reviewsAt(p, bkT), nightly_rate: rate, nights, guests,
 			total_price: total, check_in_date: checkInDate, lead_time_days: leadDays2,
 			refundable, payment_method: flex ? "flex_pay" : pickW(PAY_METHODS[ck.platform] || PAY_METHODS.web),
 			promo_code: inSale(bkT) ? PROMO_CODE : "none",
@@ -782,11 +881,11 @@ function handleEverything(events, meta) {
 			if (checkInMs + (nights + 7) * DAY_MS < BEGIN) continue; // the stay and its review are over before the window
 			const region = pickW(regionW);
 			const dest = chance.pickone(Object.keys(REGIONS[region].dest));
-			const p = chance.pickone(PROPERTIES_BY_DEST[dest]);
-			const rate = nightlyRate(p, checkInMs, bkT);
+			const p = chance.pickone(listedAt(dest, bkT));
+			const refundable = chance.bool({ likelihood: REFUNDABLE_SHARE * 100 });
+			const rate = nightlyRate(p, checkInMs, bkT, refundable);
 			bookings.push({
-				id: `BK-${chance.hash({ length: 10 }).toUpperCase()}`, prop: p, checkInMs, nights,
-				refundable: chance.bool({ likelihood: REFUNDABLE_SHARE * 100 }),
+				id: `BK-${chance.hash({ length: 10 }).toUpperCase()}`, prop: p, checkInMs, nights, refundable,
 				leadDays: Math.floor((dayStart(checkInMs) - dayStart(bkT)) / DAY_MS), bookingT: bkT,
 				total: round2(rate * nights * (1 + TAX_FEE_RATE)), src: anchor,
 			});
@@ -833,7 +932,7 @@ function handleEverything(events, meta) {
 		}
 		if (b.checkInMs > END) continue;
 		if (b.checkInMs >= BEGIN) {
-			b.life.push(morph(b.src, "check in completed", b.checkInMs + chance.integer({ min: -120, max: 300 }) * MIN_MS, {
+			b.life.push(morph(b.src, "check in completed", b.checkInMs + chance.integer({ min: -120, max: 235 }) * MIN_MS, {
 				...base, property_type: b.prop.property_type, nights: b.nights,
 				check_in_method: pickW(b.prop.property_type === "vacation_rental" ? { self_check_in: 85, front_desk: 15 } : { front_desk: 55, mobile_key: 35, self_check_in: 10 }),
 			}));
@@ -870,22 +969,31 @@ function handleEverything(events, meta) {
 		all = all.filter((e) => T(e) < cut || keepAfterCut.has(e.event));
 	}
 
-	// standalone browsing events carry real catalog values; app alerts reach members
-	// who turned push off by email instead
+	// standalone browsing events carry real catalog values: wishlists and price alerts
+	// follow the destination the member searched most recently (their first search if
+	// none yet); app alerts reach members who turned push off by email instead
+	const searchLog = out.filter((e) => e.event === "destination searched").map((e) => ({ t: T(e), dest: e.destination })).sort((a, b) => a.t - b.t);
+	const recentDest = (t) => {
+		if (!searchLog.length) return chance.pickone(Object.keys(REGIONS[pickW(regionW)].dest));
+		let d = searchLog[0].dest;
+		for (const x of searchLog) { if (x.t > t) break; d = x.dest; }
+		return d;
+	};
 	for (const e of all) {
 		if (e.event === "notification received" && e.channel === "push" && !profile.push_enabled) e.channel = "email";
 		else if (e.event === "wishlist saved") {
-			const d = chance.pickone(DESTINATIONS);
-			const p = chance.pickone(PROPERTIES_BY_DEST[d]);
+			const d = recentDest(T(e));
+			const p = chance.pickone(listedAt(d, T(e)));
 			Object.assign(e, { property_id: p.property_id, property_name: p.property_name, destination: d, region: DEST_REGION[d] });
 		} else if (e.event === "price alert set") {
-			const d = chance.pickone(DESTINATIONS);
+			const d = recentDest(T(e));
 			Object.assign(e, { destination: d, region: DEST_REGION[d], target_price: Math.round(DEST_BASE_RATE[d] * chance.floating({ min: 0.6, max: 0.95 })) });
 		}
 	}
 
-	// the exposure sits 1 s before the member's first post-start search that happened;
-	// a member who left before it was never exposed
+	// the engine put the exposure 1 s before the member's first post-start search; when
+	// H9 removed that search, it moves to the first one that still happened (a no-op
+	// otherwise), and a member who left (H7) before any search was never exposed
 	if (exposure && firstExposedSearchT < cut) {
 		exposure.time = iso(firstExposedSearchT - 1000);
 		all.push(exposure);
@@ -1101,14 +1209,14 @@ const config = {
 		},
 		{
 			event: "filters applied",
-			weight: 4,
+			weight: 6,
 			properties: {
 				filter_type: { __weights: { price: 34, guest_rating: 18, free_cancellation: 16, property_type: 12, amenities: 12, neighborhood: 8 } },
 			},
 		},
 		{
 			event: "map viewed",
-			weight: 3,
+			weight: 5,
 			properties: {
 				zoom_level: [11, 12, 12, 13, 13, 14, 15],
 			},
@@ -1182,7 +1290,7 @@ const config = {
 			conversionRate: 100,
 			timeToConvert: 0.4,
 			order: "sequential",
-			weight: 10,
+			weight: 7,
 			props: {
 				search_id: () => `S-${chance.hash({ length: 14 })}`,
 			},
@@ -1564,7 +1672,7 @@ FROM ${WH("payment_gateway_daily")}`,
 		id: "H5-all-in-pricing-experiment",
 		hook: "H5",
 		archetype: "experiment-lift",
-		narrative: `The "${ALLIN_EXPERIMENT}" test starts ${D(ALLIN_START)}: members are split 50/50 (sticky per member; one $experiment_started exposure 1 s before their first destination searched on or after the start, profile property "${EXP_KEY}"). The variant shows the full price with taxes and fees on search results and property pages. Two effects pull in opposite directions: search sessions reach checkout ${ALLIN_CHECKOUT_MULT}x as often (sticker shock moves earlier), and checkouts become bookings ${ALLIN_BOOK_MULT}x as often (no surprise at payment). Net bookings per search ≈ ${r3(ALLIN_CHECKOUT_MULT * ALLIN_BOOK_MULT)}x. Read: per search_id, searches ${D(ALLIN_START)} to ${D(addDays(EXP_READ_END, -1))} with a full ${EXP_WINDOW_DAYS}-day window, by arm.`,
+		narrative: `The "${ALLIN_EXPERIMENT}" test starts ${D(ALLIN_START)}: members are split 50/50 (sticky per member; one $experiment_started exposure 1 s before their first destination searched on or after the start, profile property "${EXP_KEY}"). The variant shows the full price with taxes and fees on search results and property pages. Two effects pull in opposite directions: search sessions reach checkout ${ALLIN_CHECKOUT_MULT}x as often (sticker shock moves earlier), and checkouts become bookings ${ALLIN_BOOK_MULT}x as often (no surprise at payment). Net bookings per search ≈ ${r3(ALLIN_CHECKOUT_MULT * ALLIN_BOOK_MULT)}x by design; arms are hashed per member, so a raw net read also carries the arms' member mix (compare each arm with itself before the start). Read: per search_id, searches ${D(ALLIN_START)} to ${D(addDays(EXP_READ_END, -1))} with a full ${EXP_WINDOW_DAYS}-day window, by arm.`,
 		mixpanelReport: { type: "Funnels", steps: ["destination searched", "checkout started", "booking completed"], counting: "totals", holdPropertyConstant: "search_id", window: `${EXP_WINDOW_DAYS} days`, dateRange: `${D(ALLIN_START)} to ${D(addDays(EXP_READ_END, -1))}`, breakdown: `user property "${EXP_KEY}"`, alt: "Experiments report on $experiment_started" },
 		assertions: [
 			{
@@ -1647,7 +1755,7 @@ FROM ev WHERE event = '$experiment_started'`,
 		id: "H8-review-count-threshold",
 		hook: "H8",
 		archetype: "cohort-prop-scale",
-		narrative: `Travelers do not book places nobody has reviewed. A search session reaches checkout for the last property viewed with a chance scaled by that property's review_count: ${REVIEW_BUCKETS.map((b) => `${b} reviews ${REVIEW_CHECKOUT_K[b]}`).join(", ")}. Review counts are a fixed property attribute, drawn independently of the traveler and of the property's position in the session, so checkouts per property view by review bucket read the factors directly.`,
+		narrative: `Travelers do not book places nobody has reviewed. A search session reaches checkout with a chance scaled by the review_count the last property viewed showed that day. The factor ramps smoothly around 10 and 50 reviews (logistic in ln reviews); its average over property views in each bucket is ${REVIEW_BUCKETS.map((b) => `${b} reviews ${REVIEW_CHECKOUT_K[b]}`).join(", ")}. review_count is a daily snapshot that grows with each listing's reviews, and ${NEW_LISTING_SHARE * 100}% of listings go live during the window with none, so every bucket has views all window. Properties are drawn independently of the traveler and of their position in the session, so checkouts per property view by review bucket read the bucket averages.`,
 		mixpanelReport: { type: "Insights", events: ["property viewed", "checkout started"], formula: "B / A", breakdown: "review_count (custom buckets 0-9, 10-49, 50+)" },
 		assertions: [
 			{

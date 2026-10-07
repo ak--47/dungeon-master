@@ -2,9 +2,9 @@
 
 ## Who we are
 
-Driftway Travel is an online travel company that sells hotel and vacation-rental stays through an iOS app, an Android app, and a website. It started in 2021 with city hotels for US travelers and now lists about 670 properties in 28 destinations across the US, the Caribbean, Canada, and Europe. The company has about 60 employees: product and engineering, a supply team that signs and manages property partners, growth marketing, payments, and a member support team.
+Driftway Travel is an online travel company that sells hotel and vacation-rental stays through an iOS app, an Android app, and a website. It started in 2021 with city hotels for US travelers and now lists about 670 properties in 28 destinations across the US, the Caribbean, Canada, and Europe. Partners keep adding new listings through the year. The company has about 60 employees: product and engineering, a supply team that signs and manages property partners, growth marketing, payments, and a member support team.
 
-Driftway earns a commission (about 15% of the stay price) from the property on every completed stay. Travelers pay the nightly rate plus taxes and fees; Driftway charges travelers no booking fee. In summer 2026 members booked about $5.7 million of stays a month through Driftway (before cancellations).
+Driftway earns a commission (about 15% of the stay price) from the property on every completed stay. Travelers pay the nightly rate plus taxes and fees; Driftway charges travelers no booking fee. In summer 2026 members booked about $3.5 million of stays a month through Driftway (before cancellations).
 
 ## How booking on Driftway works
 
@@ -13,13 +13,13 @@ Driftway earns a commission (about 15% of the stay price) from the property on e
 - **Checkout.** From a property page the traveler starts checkout: they confirm dates and guests, choose a rate, and pay. Checkout needs an account; a new traveler creates one when they want to save a property or check out.
 - **Book.** A successful payment creates the booking. Driftway sends a confirmation and, the day before check-in, a trip reminder.
 - **Stay.** On the first day of the stay the guest checks in (front desk, mobile key, or self check-in). After the stay Driftway asks for a review (1-5 stars and a short text).
-- **Cancel.** Travelers can cancel in the app or on the website. On a **free-cancellation rate** they get a full refund; on a **non-refundable rate** (cheaper, about 30% of bookings) they get nothing back. Driftway asks for a reason when someone cancels.
+- **Cancel.** Travelers can cancel in the app or on the website. On a **free-cancellation rate** they get a full refund; on a **non-refundable rate** (10% below the free-cancellation rate, about 30% of bookings) they get nothing back. Travelers choose the rate type at checkout. Driftway asks for a reason when someone cancels.
 - **Support.** Members reach support by chat, phone, or email about date changes, cancellations, refunds, payments, and problems at the property.
 
 ## Products and payments
 
 - **Property types:** hotels, boutique hotels, resorts (many of the Caribbean listings), and vacation rentals (houses and apartments, which use self check-in).
-- **Guest reviews.** Every property page shows its number of guest reviews (`review_count`) and its average guest rating. New listings start with no reviews; vacation rentals show no star rating.
+- **Guest reviews.** Every property page shows its number of guest reviews (`review_count`, verified reviews from Driftway guests and partner booking channels) and its average guest rating. The count grows as stays are reviewed. New listings go live with no reviews; vacation rentals show no star rating.
 - **Payment methods:** credit or debit card, PayPal, Apple Pay (Apple devices and Safari), Google Pay (Android and Chrome), and, from July 14, **Flex Pay**: book now and pay in four installments, with no interest for the traveler.
 - **Driftway Rewards.** Every member is in Rewards. Tiers are `member` (everyone starts here), `silver`, and `gold`, earned by stays in the previous calendar year. Members who joined in 2026 are all `member`.
 - **Messages.** Members on the marketing list get a weekly deals email every Thursday. The app also sends price-drop alerts, reminders about searches a member did not finish, trip reminders, and occasional campaign emails and pushes. About 62% of members allow push notifications; members who turn push off get app alerts and trip reminders by email instead.

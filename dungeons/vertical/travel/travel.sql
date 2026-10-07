@@ -23,10 +23,8 @@ SET VARIABLE data_prefix = COALESCE(getvariable('data_prefix'), 'data/verify-tra
 CREATE OR REPLACE TEMP TABLE raw_events AS
 SELECT * FROM read_json_auto(getvariable('data_prefix') || '-EVENTS*.json*', sample_size=-1, union_by_name=true);
 
--- profiles flagged _drop (a traveler who never finished signing up) never reach Mixpanel
 CREATE OR REPLACE TEMP TABLE users AS
-SELECT * FROM read_json_auto(getvariable('data_prefix') || '-USERS*.json*', sample_size=-1, union_by_name=true) u
-WHERE coalesce(json_extract_string(to_json(u), '$._drop'), 'false') <> 'true';
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-USERS*.json*', sample_size=-1, union_by_name=true);
 
 CREATE OR REPLACE TEMP TABLE device_map AS
 SELECT device_id, min(user_id::VARCHAR) AS mapped
@@ -246,8 +244,8 @@ FROM bookings;
 WITH x AS (SELECT *, coalesce(reason <> 'weather' AND tc < t0 + INTERVAL 30 DAY, false) AS cancelled FROM bookings WHERE t0 < TIMESTAMP '2026-09-01')
 SELECT lead_bucket, refundable, count(*) AS bookings, round(avg(cancelled::INT), 4) AS cancel_rate FROM x GROUP BY 1, 2 ORDER BY 2, 1;
 
--- EVAL Q5: non-refundable vs refundable — see STORY H4 (refundable rows); cancellations and refunds paid
-SELECT refundable, count(*) AS bookings, count(*) FILTER (WHERE tc IS NOT NULL) AS cancellations, round(sum(refund), 0) AS refunds_usd FROM bookings GROUP BY 1 ORDER BY 1;
+-- EVAL Q5: non-refundable vs refundable — see STORY H4 (refundable rows); cancellations, refunds paid, average nightly rate
+SELECT refundable, count(*) AS bookings, round(avg(nightly_rate), 2) AS avg_nightly_rate, count(*) FILTER (WHERE tc IS NOT NULL) AS cancellations, round(sum(refund), 0) AS refunds_usd FROM bookings GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q6: All-in Pricing — see STORY H5; plus booked value per search and exposed members by arm
 WITH x AS (SELECT p.variant, s.search_id, s.booking_id, s.tb, s.t0 FROM sessions s JOIN prof p ON p.uid = s.uid
@@ -255,6 +253,17 @@ WITH x AS (SELECT p.variant, s.search_id, s.booking_id, s.tb, s.t0 FROM sessions
 SELECT x.variant, count(*) AS searches, round(coalesce(sum(b.total_price) FILTER (WHERE x.tb < x.t0 + INTERVAL 7 DAY), 0) / count(*), 2) AS booked_value_per_search
 FROM x LEFT JOIN bookings b ON b.booking_id = x.booking_id GROUP BY 1 ORDER BY 1;
 SELECT "Variant name" AS variant, count(DISTINCT uid) AS exposed_members FROM ev WHERE event = '$experiment_started' GROUP BY 1 ORDER BY 1;
+-- EVAL Q6 (cont.): the same members before the test (searches Jul 14-Aug 17: after Flex Pay, before the payment
+-- incident) vs during it (Aug 25-Sep 23), per search session with a 7-day window. Arms are assigned per member, so
+-- the pre-test gap is the arms' member mix; the test effect is the change from it.
+WITH x AS (SELECT p.variant, CASE WHEN s.t0 >= TIMESTAMP '2026-08-25' THEN '2 test Aug 25-Sep 23' ELSE '1 pre Jul 14-Aug 17' END AS period,
+  coalesce(s.tc < s.t0 + INTERVAL 7 DAY, false) AS ck, coalesce(s.tc < s.t0 + INTERVAL 7 DAY AND s.tb < s.t0 + INTERVAL 7 DAY, false) AS bk
+  FROM sessions s JOIN prof p ON p.uid = s.uid
+  WHERE p.variant IS NOT NULL AND ((s.t0 >= TIMESTAMP '2026-07-14' AND s.t0 < TIMESTAMP '2026-08-18') OR (s.t0 >= TIMESTAMP '2026-08-25' AND s.t0 < TIMESTAMP '2026-09-24'))),
+g AS (SELECT period, variant, count(*) AS searches, avg(ck::INT) AS ck_rate, sum(bk::INT)::DOUBLE / sum(ck::INT) AS bk_rate, avg(bk::INT) AS bps FROM x GROUP BY 1, 2)
+SELECT a.period, round(a.ck_rate, 4) AS variant_checkout_rate, round(c.ck_rate, 4) AS control_checkout_rate, round(a.ck_rate / c.ck_rate, 3) AS checkout_ratio,
+ round(a.bk_rate / c.bk_rate, 3) AS booking_ratio, round(a.bps, 4) AS variant_bookings_per_search, round(c.bps, 4) AS control_bookings_per_search, round(a.bps / c.bps, 3) AS net_ratio
+FROM g a JOIN g c ON a.period = c.period AND a.variant = 'All-in Pricing' AND c.variant = 'Control' ORDER BY 1;
 -- EVAL Q6 (cont.): unique-member funnel (Mixpanel Uniques, no hold-property), destination searched → checkout
 -- started → booking completed, 7-day window, searches Aug 25-Sep 23, breakdown by the profile arm. A member's
 -- attempt starts at their first search in the range; it converts if a checkout and then a booking follow inside
@@ -289,9 +298,10 @@ r AS (SELECT f1.uid, bool_or(e.event = 'destination searched' AND e.t >= f1.f0 +
 SELECT f1.rating, count(*) AS members, round(avg(coalesce(r.ret, false)::INT), 4) AS retained FROM f1 JOIN r ON r.uid = f1.uid GROUP BY 1 ORDER BY 1;
 SELECT rating, count(*) AS reviews, round(count(*)::DOUBLE / sum(count(*)) OVER (), 4) AS share FROM ev WHERE event = 'review submitted' GROUP BY 1 ORDER BY 1;
 
--- EVAL Q9: review-count threshold — see STORY H8; plus finer review buckets
-SELECT CASE WHEN review_count = 0 THEN '0' WHEN review_count <= 4 THEN '1-4' WHEN review_count <= 9 THEN '5-9' WHEN review_count <= 24 THEN '10-24'
-  WHEN review_count <= 49 THEN '25-49' WHEN review_count <= 99 THEN '50-99' ELSE '100+' END AS reviews,
+-- EVAL Q9: review-count threshold — see STORY H8; plus finer review buckets (review_count is the page's count on the day of the view)
+SELECT CASE WHEN review_count <= 4 THEN '0-4' WHEN review_count <= 7 THEN '5-7' WHEN review_count <= 9 THEN '8-9' WHEN review_count <= 12 THEN '10-12'
+  WHEN review_count <= 24 THEN '13-24' WHEN review_count <= 39 THEN '25-39' WHEN review_count <= 49 THEN '40-49' WHEN review_count <= 64 THEN '50-64'
+  WHEN review_count <= 99 THEN '65-99' ELSE '100+' END AS reviews,
  min(review_count) AS lo,
  count(*) FILTER (WHERE event = 'property viewed') AS views,
  round(count(*) FILTER (WHERE event = 'checkout started')::DOUBLE / count(*) FILTER (WHERE event = 'property viewed'), 5) AS checkout_per_view,

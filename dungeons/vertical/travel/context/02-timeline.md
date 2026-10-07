@@ -16,7 +16,7 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 | 2026-08-31 (Mon) | Holiday | UK summer bank holiday. Driftway ran no promotion and does not plan around it; app and website activity on the day usually looks like an ordinary Monday. |
 | 2026-09-07 (Mon) | Holiday | US Labor Day. Driftway ran no promotion; as with July 4, Labor Day stays are booked weeks ahead, and app and website activity on the day usually looks like an ordinary Monday. |
 | 2026-09-07 (Mon) | Policy | As forecasts for **Hurricane Delia** firm up, Driftway waives cancellation fees for Caribbean stays checking in from September 9 to 13, including non-refundable rates. Cancellations for this reason carry `cancellation_reason = weather`. |
-| 2026-09-09 (Wed) to 2026-09-13 (Sun) | Weather | **Hurricane Delia** passes through the Caribbean. Hurricane warnings cover Cancun, Punta Cana, Montego Bay, Nassau, San Juan, and Aruba. Partners may close inventory while warnings are in effect. The daily advisory and rooms listed are in `destination_supply_daily` (`weather_advisory = hurricane_warning`). |
+| 2026-09-09 (Wed) to 2026-09-13 (Sun) | Weather | **Hurricane Delia** tracks west through the Caribbean. Hurricane warnings are in effect for the Caribbean region. Partners may close inventory while warnings are in effect. The daily advisory and rooms listed are in `destination_supply_daily` (`weather_advisory = hurricane_warning`). |
 | 2026-09-30 (Wed) | Fiscal | End of Q3. |
 | 2026-10-01 (Thu) | — | End of the analysis window (data runs through 23:59 UTC). Q4 starts. |
 
@@ -24,7 +24,7 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 
 - No change to commission rates, the free-cancellation and non-refundable rate rules (apart from the hurricane waiver), Rewards tiers, or taxes and fees.
 - No change to how search results rank properties.
-- No new destinations, regions, or property partners went live; the property catalog was stable.
+- No new destinations or regions went live. Existing partners kept adding listings at their usual pace.
 - Paid channel budgets were steady through the window; no channel was added or paused.
 - The weekly Thursday deals email went out every week as usual.
 

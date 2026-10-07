@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Driftway Travel**, an app and w
 
 - **Product:** the Driftway iOS app, Android app, and website: destination search, property pages, checkout, bookings, cancellations, check-in, guest reviews, wishlists, price alerts, notifications, and member support.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, the whole summer travel season through the end of September and the first day of October.
-- **Scale:** about 10,000 members were active in the window. About 5,000 of them created their account during the window; the rest joined before June 4. The project holds about 1.5 million events and about 21,000 bookings.
+- **Scale:** about 10,000 members were active in the window. About 5,000 of them created their account during the window; the rest joined before June 4. The project holds about 1.5 million events and about 13,000 bookings.
 - **Travelers:** members live in US cities, Toronto, London, and Manchester. They book stays in 28 destinations in five regions (US cities, US beaches, mountains, the Caribbean, and Europe).
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. Most members are in US time zones, so a US evening falls after midnight UTC.
 
@@ -21,7 +21,7 @@ This folder is the internal analytics wiki for **Driftway Travel**, an app and w
 
 - **Events** (the Mixpanel event stream) record what members do in the app and on the website, plus the messages Driftway sends them. Each event has a timestamp, the member's identity, and flat properties. The device platform (`platform`: `ios`, `android`, or `web`) is on every event.
 - **Search sessions** tie the shopping events together. A `destination searched` event starts a search session; the property pages viewed for that search, the checkout, and the booking all carry the same `search_id`.
-- **Bookings** tie the stay events together. A booking and everything that follows from it (a cancellation, the check-in, the guest review) share one `booking_id`. Property details (name, type, destination, region, stars, review count, guest rating) are copied onto the events, so you never need a lookup table.
+- **Bookings** tie the stay events together. A booking and everything that follows from it (a cancellation, the check-in, the guest review) share one `booking_id`. Property details (name, type, destination, region, stars, review count, guest rating) are copied onto the events, so you never need a lookup table. The review count and guest rating are the values the property page showed on the day of the event.
 - **User profiles** hold one row per member with their current attributes: traveler segment, home market, age band, acquisition channel, Rewards tier, member-since date, push permission, and experiment enrollment.
 - **Warehouse tables** are daily business facts that are not in the event stream: paid marketing spend by channel, card payment authorizations by platform, and hotel supply and weather by region. They join to events on the UTC date and a shared dimension (`acquisition_channel`, `platform`, or `region`).
 - There are no group profiles and no slowly changing dimension tables in this project.
