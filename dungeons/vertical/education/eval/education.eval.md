@@ -1,6 +1,6 @@
 # Brightpath Academy (education) — 20-question eval
 
-- **Data:** `data/verify-education` (full fidelity: 10,000 learner profiles, 9,987 with events, 3,983 new signups, 821,079 events, 2026-06-04 → 2026-10-01 UTC)
+- **Data:** `data/verify-education` (full fidelity: 10,000 learner profiles, 9,987 with events, 3,983 new signups, 820,445 events, 2026-06-04 → 2026-10-01 UTC)
 - **Run date:** 2026-10-07
 - **Numbers:** every answer comes from the matching `-- EVAL Q<n>` query in `dungeons/vertical/education/education.sql` on that data.
 - **Stories:** ids refer to the `stories` export in `education.js` (H1-H10).
@@ -11,15 +11,15 @@
 ### Q1 — Does Ask Bright improve quiz scores?
 - **Prompt:** "We launched the Ask Bright tutor in July. Is it actually helping learners do better on quizzes? By how much?"
 - **Type:** trend
-- **Answer:** Yes. Learners who use Ask Bright score about **8 points higher after their first tutor question**: their average quiz score went from **69.9 before to 77.8 after** (+7.9), while Plus and Teams learners who never used it stayed flat (**70.2 before launch, 70.2 after**). Difference in differences: **+7.9 points**. Pass rate (70+) for adopters rose from 51.0% to 75.2%; non-adopters stayed at about 53%. Adopters scored the same as everyone else before they started using it, so this is not just stronger learners choosing the tutor. In a weekly Insights chart the two groups track at about 70 until launch; adopters then pull ahead as they start (72.1 in the week of Jul 27, 75.0 by Aug 3, 76.3-77.3 from Aug 24) while eligible non-adopters stay at 69-71. A simple post-launch comparison (adopters 75.8 vs non-adopters 70.2, +5.5) understates the effect because it mixes adopters' quizzes from before their first question in. Accept +5 to +9 points if the answer shows the groups were equal before launch (weekly chart or pre-launch averages); full credit for the before/after-first-question measure (+7 to +9).
-- **Evidence:** H1-ask-bright-ai-tutor; Insights, `quiz submitted`, average `score_pct`, weekly, breakdown cohort "did `ai tutor question asked`" (non-adopters filtered to `plan_tier` in plus, teams); the before/after-first-question read uses the raw export; `-- EVAL Q1`.
+- **Answer:** Yes. Learners who use Ask Bright score about **8 points higher after their first tutor question**: their average quiz score went from **69.9 before to 77.8 after** (+7.9), while Plus and Teams learners who never used it stayed flat (**70.2 before launch, 70.2 after**). Difference in differences: **+7.8 points**. Pass rate (70+) for adopters rose from 51.0% to 75.0%; non-adopters stayed at about 53%. Adopters scored the same as everyone else before they started using it, so this is not just stronger learners choosing the tutor. In a weekly Insights chart the two groups track at about 70 until launch; adopters then pull ahead as they start (72.1 in the week of Jul 27, 75.1 by Aug 3, 76.1-77.4 from Aug 24) while eligible non-adopters stay at 69-71. A simple post-launch comparison (adopters 75.8 vs non-adopters 70.2, +5.5) understates the effect because it mixes adopters' quizzes from before their first question in. Accept +5 to +9 points if the answer shows the groups were equal before launch (weekly chart or pre-launch averages); full credit for the before/after-first-question measure (+7 to +9).
+- **Evidence:** H1-ask-bright-ai-tutor; Insights, `quiz submitted`, average `score_pct`, weekly, report filter `plan_tier` in (plus, teams), breakdown cohort "did `ai tutor question asked`" (yes / no); the before/after-first-question read uses the raw export; `-- EVAL Q1`.
 - **Context needed:** 02-timeline.md (launch date, plans), 01-business.md (who gets Ask Bright).
 - **Grading:** must compare users vs non-users with a before/after control, or show that adopters were not better before. Wrong: "no effect" from comparing all learners before vs after launch across every plan; a raw adopter vs non-adopter gap with no check for selection.
 
 ### Q2 — Ask Bright adoption
 - **Prompt:** "How many learners are using Ask Bright, and is usage still growing?"
 - **Type:** segmentation
-- **Answer:** **1,263 learners** have asked at least one question, **34.9% of the 3,616 learners active on a Plus or Teams plan since launch**, with 13,692 questions (10.8 per user). Weekly questions ramped for about three weeks and then leveled off: 138 in the launch week (Jul 20-26, 35 askers), 591, 1,031, then 1,527 in the week of Aug 10, and between 1,485 and 1,720 every full week through Sep 21 (weekly askers about 300-350). New first-time askers peaked in the week of Aug 10 (207) and fell to 58 by the week of Sep 21. Usage is no longer growing. Accept an adoption share of 30-40% of eligible learners and a ramp-then-plateau description.
+- **Answer:** **1,182 learners** have asked at least one question, **35.8% of the 3,301 learners active on a Plus or Teams plan since launch**, with 12,919 questions (10.9 per user). Weekly questions ramped for about three weeks and then leveled off: 126 in the launch week (Jul 20-26, 32 askers), 571, 976, then 1,447 in the week of Aug 10, and between 1,425 and 1,591 every full week through Sep 21 (weekly askers about 280-330). New first-time askers peaked in the week of Aug 10 (190) and fell to 52 by the week of Sep 21. Usage is no longer growing. Accept an adoption share of 30-40% of eligible learners and a ramp-then-plateau description.
 - **Evidence:** H1-ask-bright-ai-tutor; Insights, `ai tutor question asked`, total and uniques, weekly; denominator: uniques with any event on `plan_tier` plus/teams since 2026-07-21; `-- EVAL Q2`.
 - **Context needed:** 02-timeline.md (launch, opt-in), 04-metrics-and-tables.md (adoption definition).
 - **Grading:** denominator must be eligible (Plus/Teams) learners, and the answer must describe the shape. Wrong: share of all learners (Free learners cannot use it); "still growing steadily".
@@ -51,7 +51,7 @@
 ### Q6 — Cohort vs self-paced completion
 - **Prompt:** "Should we build more cohort courses? How do they compare with self-paced courses on completion?"
 - **Type:** funnel
-- **Answer:** Cohort courses are finished far more often. For enrollments from Jun 4-30 (all with time to finish), **62.7% of cohort enrollments earned a certificate (746 of 1,189) vs 18.9% of self-paced enrollments (735 of 3,897), about 0.30x** for self-paced. Time to finish is similar (median 43 vs 40 days). Self-paced courses are 77% of enrollments, so they drive the low overall completion rate (29.1%). Accept a self-paced/cohort ratio of 0.25-0.35 and a recommendation that leans toward cohorts.
+- **Answer:** Cohort courses are finished far more often. For enrollments from Jun 4-30 (all with time to finish), **60.2% of cohort enrollments earned a certificate (716 of 1,189) vs 18.5% of self-paced enrollments (719 of 3,897), about 0.31x** for self-paced. Time to finish is similar (median 43 vs 40 days). Self-paced courses are 77% of enrollments, so they drive the low overall completion rate (28.2%). Accept a self-paced/cohort ratio of 0.25-0.35 and a recommendation that leans toward cohorts.
 - **Evidence:** H4-cohort-vs-self-paced-completion; Funnels, `course enrolled` → `certificate earned`, totals, hold `course_id` constant, 90-day window, breakdown `course_format`, enrollments in June; `-- EVAL Q6`.
 - **Context needed:** 01-business.md (formats), 04-metrics-and-tables.md (course completion, maturity rule).
 - **Grading:** must measure per enrollment with mature enrollments. Wrong: using all enrollments through September (late enrollments have not had time to finish, which pulls both rates down); counting certificates per learner without matching the course.
@@ -67,7 +67,7 @@
 ### Q8 — Did the August price change pay off?
 - **Prompt:** "We raised the Plus monthly price on August 10. Did it hurt sign-ups, and did it pay off?"
 - **Type:** external-join
-- **Answer:** It shifted buyers to annual billing and raised revenue per subscription, at the cost of fewer subscriptions. The **annual share of new subscriptions went from 29.8% before to 59.8% after**. Comparing the 53 days either side, new subscriptions fell from **6.8 to 4.8 per day (−29%)**: monthly fell from 4.7 to 1.9 per day while annual rose from 2.2 to 2.9. Joining `subscription_billing_daily` list prices, the **first payment per new subscription rose from $91.51 to $156.92 (+71%)**, and billed bookings rose from **$665 to $805 per day (+21%)**. Net: fewer subscribers but more bookings; most of the gain is annual prepayment. Accept annual share roughly doubling, a volume drop of 15-35%, and bookings per day up 10-30%.
+- **Answer:** It shifted buyers to annual billing and raised revenue per subscription, at the cost of fewer subscriptions. The **annual share of new subscriptions went from 31.6% before to 55.4% after**. Comparing the 53 days either side (Jun 18 - Aug 9 vs Aug 10 - Oct 1), new subscriptions fell from **4.2 to 3.0 per day (−29%)**: monthly fell from 2.8 to 1.3 per day while annual rose from 1.4 to 1.6. Volume is low (about 4 a day), so the size of the drop is uncertain by about ±10 points; weekly subscriptions were already lower in July (21-29) than in June (29-40, full weeks). Joining `subscription_billing_daily` list prices, the **first payment per new subscription rose from $95.43 to $148.04 (+55%)**, and billed bookings rose from **$456 to $497 per day (+9%)**. Net: fewer subscribers but slightly more bookings; the gain is annual prepayment. Accept an annual share up by 20-30 points, a volume drop of 15-35%, first payment up 45-75%, and bookings per day flat to up 20%. Credit an answer that flags the small daily counts.
 - **Evidence:** H6-plus-price-change; Insights, `subscription started`, breakdown `billing_interval`, weekly, % of total and totals; join `subscription_billing_daily` on date and `billing_interval`; `-- EVAL Q8`.
 - **Context needed:** 02-timeline.md (date, which price changed), 01-business.md (prices), 04-metrics-and-tables.md (bookings).
 - **Grading:** must look at the billing mix and use warehouse prices for revenue. Wrong: "no effect" from counting subscriptions only; "revenue fell" because subscriptions fell; computing revenue from Mixpanel without the price table.
@@ -75,7 +75,7 @@
 ### Q9 — Which paid channel is worth it?
 - **Prompt:** "Paid social gives us the cheapest signups. Is it our best paid channel?"
 - **Type:** external-join
-- **Answer:** No, not once you count paying learners. Joining `paid_marketing_daily` to Mixpanel signups: spend per signup is **$16.21 paid social, $27.79 YouTube, $39.66 paid search** (social is 0.41x search). But the 30-day Plus conversion of signups through Aug 31 is **8.9% for paid social vs 14.9% YouTube and 22.5% paid search** (0.39x). Spend per paying subscriber is about the same across channels: **$185 social, $198 YouTube, $175 search**. Paid social buys cheap signups that rarely pay. Ad platforms claim 27-29% more signups than Mixpanel records (paid social 816 vs 634, paid search 780 vs 614, YouTube 411 vs 318). Accept "cost per paying subscriber is similar (within about ±15%) across paid channels" and the conversion gap.
+- **Answer:** No, not once you count paying learners. Joining `paid_marketing_daily` to Mixpanel signups: spend per signup is **$16.21 paid social, $27.79 YouTube, $39.66 paid search** (social is 0.41x search). But the 30-day Plus conversion of signups through Aug 31 is **4.6% for paid social vs 7.7% YouTube and 13.6% paid search** (social 0.33x search; all new self-pay learners 9.3%). Per paying subscriber (spend through Aug 31 over 30-day buyers), **paid search is cheapest at $288, then paid social $361 and YouTube $385**. Buyer counts are small (63 search, 21 social, 17 YouTube), so treat the per-subscriber figures as about ±25%. Paid social buys cheap signups that rarely pay. Ad platforms claim 27-29% more signups than Mixpanel records (paid social 816 vs 634, paid search 780 vs 614, YouTube 411 vs 318). Accept "paid social is not the best once conversion is counted: its cost per paying subscriber is no better than paid search" with the conversion gap. Also accept "about the same cost per paying subscriber" if the answer notes the small buyer counts.
 - **Evidence:** H7-paid-channel-economics; Insights `account created` by `acquisition_channel` joined to `paid_marketing_daily.spend_usd`; Funnels `account created` → `subscription started`, 30-day window, signups Jun 4 - Aug 31, breakdown `acquisition_channel`; `-- EVAL Q9`.
 - **Context needed:** 04-metrics-and-tables.md (CAC uses Mixpanel signups, table caveats), 01-business.md (goal 5).
 - **Grading:** must combine spend with downstream conversion. Wrong: ranking by cost per signup alone; using `platform_reported_signups` for CAC.
@@ -83,7 +83,7 @@
 ### Q10 — The September dip
 - **Prompt:** "Lesson completions looked weak for a few days in mid-September. What happened?"
 - **Type:** external-join
-- **Answer:** A **video playback bug in the Android app**. From **Sep 9 to Sep 12**, only **36-41% of video lessons started on Android were completed (38.2% over the four days) vs about 83% on the days before and after**; web and iOS stayed at about 82%, and Android reading and lab lessons were unaffected (about 81%). `app_stability_daily` shows Android `playback_failure_rate` of 0.53-0.57 on exactly those days (vs about 0.01-0.02 otherwise), `app_version` 6.4.0, crash-free sessions down to 0.964, and 6.4.1 from Sep 13, when completion recovered. Accept identifying Android video and Sep 9-12 with the warehouse confirmation.
+- **Answer:** A **video playback bug in the Android app**. From **Sep 9 to Sep 12**, only **36-41% of video lessons started on Android were completed (38.2% over the four days) vs about 83% on the days before and after**; web and iOS stayed at about 82%, and Android reading and lab lessons were unaffected (about 81%). `app_stability_daily` shows Android `playback_failure_rate` of 0.53-0.57 on exactly those days (vs about 0.01-0.02 otherwise), `app_version` 6.4.0, crash-free sessions down to 0.964, and 6.4.1 from Sep 13, when completion recovered. The Insights formula (`lesson completed` / `lesson started`, totals, `content_type` = video, breakdown `platform`) reads the same: Android **38.3%** on Sep 9-12 vs 83.3% in the 7 days either side, web and iOS 82-83%. Accept identifying Android video and Sep 9-12 with the warehouse confirmation.
 - **Evidence:** H8-android-playback-incident; Insights, `lesson completed` / `lesson started` formula, filter `content_type` = video, breakdown `platform`, daily; join `app_stability_daily`; `-- EVAL Q10`.
 - **Context needed:** 02-timeline.md (incident dates), 04-metrics-and-tables.md (app_stability_daily, Mixpanel does not record player errors).
 - **Grading:** must name the platform and the content type and tie it to the warehouse table. Wrong: "a general dip" or blaming the fall term or weekday mix.
@@ -99,7 +99,7 @@
 ### Q12 — Does 2x playback hurt learning?
 - **Prompt:** "Lots of learners watch at double speed. Does it hurt how well they do?"
 - **Type:** segmentation
-- **Answer:** Yes, at 2x. Learners whose preferred playback speed is **2x average 64.9 on quizzes vs 71.8 at 1x (−6.9 points)** and pass 35.3% of quizzes vs 57.6%. 1.25x (71.6) and 1.5x (71.5) are no different from 1x. They do save time: a video lesson at 2x takes 9.0 minutes vs 16.0 at 1x. Accept a 2x gap of 6-8 points and "1.25x and 1.5x are fine".
+- **Answer:** Yes, at 2x. Learners whose preferred playback speed is **2x average 64.9 on quizzes vs 71.7 at 1x (−6.9 points)** and pass 35.2% of quizzes vs 57.5%. 1.25x (71.6) and 1.5x (71.5) are no different from 1x. They do save time: a video lesson at 2x takes 9.0 minutes vs 16.0 at 1x. Accept a 2x gap of 6-8 points and "1.25x and 1.5x are fine".
 - **Evidence:** H10-double-speed-quiz-scores; Insights, `quiz submitted`, average `score_pct`, breakdown user property `preferred_playback_speed`; `-- EVAL Q12`.
 - **Context needed:** 01-business.md (playback speeds), 03-event-dictionary.md (`preferred_playback_speed`, `playback_speed`).
 - **Grading:** must separate 2x from the moderate speeds. Wrong: "faster is worse" as a linear claim; "no effect".
@@ -107,7 +107,7 @@
 ### Q13 — Do Teams learners finish more courses? (null)
 - **Prompt:** "Employer-sponsored learners have their company behind them. Do they finish courses more often than self-pay learners?"
 - **Type:** null-hypothesis
-- **Answer:** **No meaningful difference.** Across all enrollments, **18.2% of employer-sponsored enrollments vs 17.5% of self-pay enrollments** earned a certificate (z ≈ 1.2, p ≈ 0.25). Within June enrollments by format: cohort 67.1% vs 61.8% (z ≈ 1.5), self-paced 20.8% vs 18.4% (z ≈ 1.5); neither is significant. Sponsored learners start faster (Q4), but once enrolled they finish at the same rate. Accept "no significant difference" (within about ±2 points overall).
+- **Answer:** **No meaningful difference.** Across all enrollments, **17.9% of employer-sponsored enrollments vs 17.5% of self-pay enrollments** earned a certificate (z ≈ 0.7, p ≈ 0.46). Within June enrollments by format: cohort 62.9% vs 59.6% (z ≈ 0.9), self-paced 20.5% vs 18.0% (z ≈ 1.6, p ≈ 0.12); neither is significant. Sponsored learners start faster (Q4), but once enrolled they finish at the same rate. Accept "no significant difference" (within about ±2 points overall).
 - **Evidence:** `-- EVAL Q13`; Funnels `course enrolled` → `certificate earned`, totals, hold `course_id`, breakdown `account_type`.
 - **Context needed:** 01-business.md (account types).
 - **Grading:** must check the data and call it not significant. Mentioning the small positive lean is fine. Wrong: "yes, sponsored learners complete more" from the onboarding gap.
@@ -123,7 +123,7 @@
 ### Q15 — Is the learner base growing?
 - **Prompt:** "How many learners are active each week, and is that growing?"
 - **Type:** trend
-- **Answer:** Yes, slowly. Weekly active learners (any event except certificates) grew from **5,180 in the week of Jun 8 to 6,057 in the week of Sep 21 (+17%)**. The growth is all new learners: learners who joined before June 4 held steady at about 4,750-4,900 a week, while active new learners rose from 327 to 1,187. (The first and last weeks are partial.) Accept +12-20% from June to late September, driven by new learners.
+- **Answer:** Yes, slowly. Weekly active learners (any event except certificates) grew from **5,175 in the week of Jun 8 to 6,056 in the week of Sep 21 (+17%)**. The growth is all new learners: learners who joined before June 4 held steady at about 4,750-4,900 a week, while active new learners rose from 327 to 1,187. (The first and last weeks are partial.) Accept +12-20% from June to late September, driven by new learners.
 - **Evidence:** `-- EVAL Q15`; Insights, any event (excluding `certificate earned`), uniques, weekly, breakdown by a cohort of learners who did `account created`.
 - **Context needed:** 00-manifest.md (scale, identity), 04-metrics-and-tables.md (weekly active learners).
 - **Grading:** must use full weeks and unique learners. Wrong: counting the partial first or last week; counting events instead of learners.
@@ -131,7 +131,7 @@
 ### Q16 — Which categories complete best?
 - **Prompt:** "Which course categories have the best completion rates? Should we steer learners toward them?"
 - **Type:** open-ended
-- **Answer:** By raw rate (June enrollments), **software_dev 40.6%** and **languages 35.1%** lead, then business 27.1%, data_science 25.8%, design 21.2%, marketing 19.2%. But the ranking follows the **share of cohort courses** in each category: software_dev 50% cohort enrollments, languages 40%, business 15%, data_science 15%, design 10%, marketing 0%. Completion depends on format (Q6), not topic, so steering by category would not help; adding cohort options would. Enrollments by category: software_dev 20.6%, business 19.1%, data_science 19.1%, design 15.0%, languages 14.7%, marketing 11.6%. Accept the raw ranking plus the format explanation.
+- **Answer:** By raw rate (June enrollments), **software_dev 39.4%** and **languages 33.7%** lead, then business 26.5%, data_science 24.6%, design 20.8%, marketing 18.8%. But the ranking follows the **share of cohort courses** in each category: software_dev 50% cohort enrollments, languages 41%, business 15%, data_science 15%, design 10%, marketing 0%. Completion depends on format (Q6), not topic, so steering by category would not help; adding cohort options would. Enrollments by category: software_dev 20.6%, business 19.1%, data_science 19.1%, design 15.0%, languages 14.7%, marketing 11.6%. Accept the raw ranking plus the format explanation.
 - **Evidence:** `-- EVAL Q16`; Funnels `course enrolled` → `certificate earned`, hold `course_id`, breakdown `course_category` and `course_format`.
 - **Context needed:** 01-business.md (catalog, formats).
 - **Grading:** full credit needs the format confounder. Wrong: "software courses are easier" without checking format.
@@ -139,7 +139,7 @@
 ### Q17 — Why doesn't billing match Mixpanel?
 - **Prompt:** "Finance says we sold more Plus subscriptions than Mixpanel shows. Who is right?"
 - **Type:** external-join
-- **Answer:** Both, for different things. Over the window the billing table has **746 new subscriptions (309 annual, 437 monthly) vs 723 `subscription started` events in Mixpanel (292 annual, 431 monthly)**. The two agree on 168 of 240 interval-days; billing is higher on 49 (app-store purchases that never reach Mixpanel) and lower on 23 (first payments that failed and were never booked). Daily correlation 0.96. Gross bookings for the window: **$87,202**. Use the billing table for revenue and Mixpanel for behavior and funnels. Accept the counts within ±1% and both reasons.
+- **Answer:** Both, for different things. Over the window the billing table has **488 new subscriptions (201 annual, 287 monthly) vs 451 `subscription started` events in Mixpanel (180 annual, 271 monthly)**. The two agree on 174 of 240 interval-days; billing is higher on 52 (app-store purchases that never reach Mixpanel) and lower on 14 (first payments that failed and were never booked). Daily correlation 0.94. Gross bookings for the window: **$56,860**. Use the billing table for revenue and Mixpanel for behavior and funnels. Accept the counts within ±2% and both reasons.
 - **Evidence:** `-- EVAL Q17`; `subscription_billing_daily` vs Insights `subscription started` by `billing_interval`.
 - **Context needed:** 04-metrics-and-tables.md (billing caveats).
 - **Grading:** must explain the direction of both differences. Wrong: "Mixpanel is missing data" as the only explanation; double-counting by adding the two sources.
@@ -156,10 +156,10 @@
 - **Prompt:** "Looking at the last four months, what should leadership worry about going into Q4?"
 - **Type:** open-ended
 - **Answer:** A strong answer names several of these, with numbers:
-  - **Self-paced completion is low**: 18.9% vs 62.7% for cohort courses, and self-paced is 77% of enrollments (Q6, Q16).
+  - **Self-paced completion is low**: 18.5% vs 60.2% for cohort courses, and self-paced is 77% of enrollments (Q6, Q16).
   - **Many new learners never start**: only 55.5% of new signups start a lesson, and self-pay onboarding is 50.6% vs 75.6% for Teams learners (Q4).
   - **The first week decides retention**: learners with fewer than 3 first-week lessons retain at half the rate (35.3% vs 71.2%) (Q7).
-  - **Paid social quality**: 40% of paid signups come from paid social, but they convert to Plus at 0.39x the search rate (Q9).
+  - **Paid social quality**: 40% of paid signups come from paid social, but they convert to Plus at 0.33x the search rate and cost more per paying subscriber (Q9).
   - **Price change trade-off**: fewer monthly subscribers after August 10, offset by annual prepayment (Q8).
   - **Mobile release quality**: the Android incident cost about 500 lesson completions in four days (Q10, Q18).
   - **2x playback** learners pass far fewer quizzes (Q12).

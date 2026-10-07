@@ -29,7 +29,7 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 - Is Ask Bright helping learners? Who uses it, and is use still growing?
 - Did Personalized Course Picks work, and should it ship to everyone?
 - Did the August price change pay off?
-- Why do so many new learners never start a lesson? Do any groups of new learners get started faster?
+- Why do so many new learners never start a lesson? How long does it take new learners to get started?
 - Should we build more cohort courses?
 - What should a new learner do in their first week?
 - Is paid social worth its cost compared with search?

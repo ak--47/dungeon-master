@@ -177,10 +177,10 @@ FROM q WHERE t1 IS NOT NULL OR plan_tier IN ('plus', 'teams') GROUP BY 1, 2 ORDE
 WITH q AS (SELECT ev.uid, ev.score_pct, f.t1 FROM ev LEFT JOIN tutor_first f ON f.uid = ev.uid
   WHERE ev.event = 'quiz submitted' AND ev.t >= TIMESTAMP '2026-07-21' AND ev.plan_tier IN ('plus', 'teams'))
 SELECT (t1 IS NOT NULL) AS adopter, count(*) AS quizzes, round(avg(score_pct), 2) AS avg_score FROM q GROUP BY 1 ORDER BY 1;
--- (c) weekly average score: adopters vs eligible (Plus/Teams) non-adopters
+-- (c) the Insights recipe: weekly average score, report filter plan_tier in (plus, teams), breakdown cohort "did ai tutor question asked"
 SELECT date_trunc('week', ev.t)::DATE AS week, round(avg(score_pct) FILTER (WHERE f.uid IS NOT NULL), 1) AS adopters,
- round(avg(score_pct) FILTER (WHERE f.uid IS NULL AND ev.plan_tier IN ('plus', 'teams')), 1) AS eligible_non_adopters
-FROM ev LEFT JOIN tutor_first f ON f.uid = ev.uid WHERE ev.event = 'quiz submitted' GROUP BY 1 ORDER BY 1;
+ round(avg(score_pct) FILTER (WHERE f.uid IS NULL), 1) AS eligible_non_adopters
+FROM ev LEFT JOIN tutor_first f ON f.uid = ev.uid WHERE ev.event = 'quiz submitted' AND ev.plan_tier IN ('plus', 'teams') GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q2 — Ask Bright adoption and its trend
 -- eligible learners = any event on a Plus or Teams plan since launch; adopters = at least one tutor question
@@ -262,6 +262,9 @@ FROM s GROUP BY 1 ORDER BY 1 DESC;
 SELECT CASE WHEN t >= TIMESTAMP '2026-08-10' THEN 'after' ELSE 'before' END AS period, count(*) AS subscriptions, round(count(*) / 53.0, 2) AS per_day,
  round(count(*) FILTER (WHERE billing_interval = 'monthly') / 53.0, 2) AS monthly_per_day, round(count(*) FILTER (WHERE billing_interval = 'annual') / 53.0, 2) AS annual_per_day
 FROM ev WHERE event = 'subscription started' AND t >= TIMESTAMP '2026-06-18' GROUP BY 1 ORDER BY 1 DESC;
+-- weekly new subscriptions (Monday weeks; the first and last weeks are partial)
+SELECT date_trunc('week', t)::DATE AS week, count(*) AS subscriptions, count(*) FILTER (WHERE billing_interval = 'annual') AS annual
+FROM ev WHERE event = 'subscription started' GROUP BY 1 ORDER BY 1;
 -- warehouse bookings before vs after
 SELECT CASE WHEN date::DATE >= DATE '2026-08-10' THEN 'after' ELSE 'before' END AS period, billing_interval,
  sum(new_subscriptions) AS billed_subscriptions, round(sum(gross_bookings_usd), 0) AS gross_bookings_usd, min(list_price_usd) AS min_price, max(list_price_usd) AS max_price
@@ -279,6 +282,12 @@ SELECT sg.ch, sg.signups, round(sp.spend, 0) AS spend_usd, round(sp.spend / sg.s
  c.cohort AS signups_to_aug31, c.buyers, round(c.buyers / c.cohort, 4) AS paid_rate_30d,
  round(sp.spend_to_aug / nullif(c.buyers, 0), 0) AS spend_per_paying_subscriber
 FROM sg JOIN sp ON sp.ch = sg.ch LEFT JOIN c ON c.ch = sg.ch ORDER BY 1;
+-- 30-day Plus conversion of all new self-pay learners (signups through Aug 31)
+SELECT count(*) AS self_pay_signups_to_aug31, count(*) FILTER (WHERE EXISTS (SELECT 1 FROM ev e WHERE e.uid = s.uid AND e.event = 'subscription started'
+  AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 30 DAY)) AS buyers,
+ round(count(*) FILTER (WHERE EXISTS (SELECT 1 FROM ev e WHERE e.uid = s.uid AND e.event = 'subscription started'
+  AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 30 DAY)) / count(*), 4) AS paid_rate_30d
+FROM signups s WHERE s.t0 < TIMESTAMP '2026-09-01' AND s.account_type = 'individual';
 -- platform-reported signups vs Mixpanel signups
 SELECT acquisition_channel, sum(platform_reported_signups) AS platform_reported, (SELECT count(*) FROM signups s WHERE s.ch = m.acquisition_channel) AS mixpanel_signups,
  round(sum(spend_usd) / sum(platform_reported_signups), 2) AS spend_per_platform_signup
@@ -288,6 +297,14 @@ FROM wh_marketing m GROUP BY 1 ORDER BY 1;
 SELECT t_start::DATE AS day, platform, count(*) AS video_starts, round(avg((t_done IS NOT NULL)::INT), 4) AS completion
 FROM lessons WHERE content_type = 'video' AND platform IS NOT NULL AND t_start >= TIMESTAMP '2026-09-06' AND t_start < TIMESTAMP '2026-09-16'
 GROUP BY 1, 2 ORDER BY 1, 2;
+-- the Insights recipe: lesson completed / lesson started (totals), content_type = video, breakdown platform (event property),
+-- incident days vs the 7 days either side (a completion carries its start's device, so this matches the per-lesson join)
+WITH x AS (SELECT platform, event, t FROM ev WHERE event IN ('lesson started', 'lesson completed') AND content_type = 'video'
+  AND platform IS NOT NULL AND t >= TIMESTAMP '2026-09-02' AND t < TIMESTAMP '2026-09-20')
+SELECT platform, (t >= TIMESTAMP '2026-09-09' AND t < TIMESTAMP '2026-09-13') AS incident,
+ count(*) FILTER (WHERE event = 'lesson started') AS started, count(*) FILTER (WHERE event = 'lesson completed') AS completed,
+ round(count(*) FILTER (WHERE event = 'lesson completed') / count(*) FILTER (WHERE event = 'lesson started'), 4) AS completed_per_started
+FROM x GROUP BY 1, 2 ORDER BY 1, 2;
 WITH w AS (SELECT platform, content_type, (t_done IS NOT NULL)::INT AS ok,
   (t_start >= TIMESTAMP '2026-09-09' AND t_start < TIMESTAMP '2026-09-13') AS incident
   FROM lessons WHERE platform IS NOT NULL AND t_start >= TIMESTAMP '2026-09-02' AND t_start < TIMESTAMP '2026-09-20')

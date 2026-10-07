@@ -77,6 +77,6 @@ Caveats: the table covers new Plus subscriptions only, not renewals, refunds aft
 
 - For a before/after question around a dated change, consider seasonality, weekday mix, the overall trend, and mix shifts before you attribute a change to the event.
 - Activity follows a weekly study rhythm: Sunday is the busiest study day and Friday and Saturday are the quietest. Compare whole weeks or matching weekdays.
-- Learners do many lessons, quizzes, and course page views. Per-lesson and per-page-view questions need `lesson_id` or `course_id` held constant; unique-learner funnels hide most of the difference between learners.
+- Learners do many lessons, quizzes, and course page views. Per-lesson and per-page-view questions need `lesson_id` or `course_id` held constant; a unique-learner funnel answers a different question (did the learner ever do it).
 - New-learner funnels, conversion, and retention depend on signup date: learners who joined late in the window have had less time to act. Compare cohorts that joined in the same weeks.
 - The learner base grows over the window as new learners join, so raw weekly totals rise for reasons unrelated to any one change.
