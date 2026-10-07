@@ -462,6 +462,8 @@ function morph(src, name, time, props = {}) {
 
 function handleUserHook(profile, meta) {
 	const uid = profile.distinct_id;
+	// engine workaround: the persona label is internal; keep it off the exported profile
+	delete profile._persona;
 	profile.main_class = CLASSES[profile.main_role][Math.floor(salt(uid, "class") * CLASSES[profile.main_role].length)];
 	if (meta.userIsBornInDataset) {
 		profile.member_since = dayKey(dayjs.utc(profile.created ?? meta.user?.created).valueOf());
