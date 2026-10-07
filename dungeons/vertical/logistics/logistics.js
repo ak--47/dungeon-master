@@ -105,6 +105,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   own quote flow with ±30% day noise plus a base; paid_marketing_daily is a
  *   half paced budget (weekday shape, never zero) and half bid x the day's
  *   delivered signups, with seeded day noise.
+ * - ENGINE WORKAROUND: the engine's browser pool is not tied to the device
+ *   type (Opera Mobile or Mobile Safari on a Windows desktop); the hook sets a
+ *   desktop browser that fits the OS, sticky per device_id.
  * - Legacy activity mode (no retentionCurve): each shipper's events spread
  *   evenly over their active window. ENGINE NOTE: in legacy mode the engine
  *   gates funnel experiments on the user's first activity time, not the run's
@@ -517,9 +520,17 @@ const UNIT_SET = new Set(UNIT_STEPS);
 // after a shipper goes quiet, and carry no device
 const SYSTEM_EVENTS = new Set(["carrier assigned", "pickup confirmed", "delivery exception", "load delivered", "accessorial charged", "invoice paid"]);
 const ONBOARDING = new Set(["account created", "credit application submitted", "credit approved"]);
+const BACK_OFFICE = new Set(["credit application submitted", "credit approved", "lane saved"]);
 const ONBOARDING_STEPS = ["account created", "lane saved", "credit application submitted", "credit approved"];
 const PORTAL = new Set(["dashboard viewed", "rate lookup", "document downloaded", "report exported", "lane saved"]);
 const DEVICE_KEYS = ["device_id", "session_id", "browser", "os", "model", "screen_height", "screen_width", "carrier", "radio", "wifi", "manufacturer", "brand"];
+
+const BROWSERS_BY_OS = {
+	macOS: { Chrome: 52, Safari: 36, "Microsoft Edge": 6, Firefox: 6 },
+	Windows: { Chrome: 64, "Microsoft Edge": 29, Firefox: 7 },
+	Linux: { Chrome: 58, Firefox: 42 },
+};
+const desktopBrowser = (deviceId, os) => pickWeighted(BROWSERS_BY_OS[os] ?? BROWSERS_BY_OS.Linux, hashFloat(`${deviceId}|browser`));
 
 // lane and rate-lookup properties follow the shipper's own network
 function setLaneProps(e, profile) {
@@ -562,6 +573,14 @@ function handleEverything(events, meta) {
 	const approvalT0 = approval ? T(approval) : null;
 
 	const stripDevice = (e) => { for (const k of DEVICE_KEYS) if (k in e) delete e[k]; };
+	// back-office events carry no device; portal events get a desktop browser
+	const finalize = (evs) => {
+		for (const e of evs) {
+			if (SYSTEM_EVENTS.has(e.event) || BACK_OFFICE.has(e.event)) stripDevice(e);
+			else if (e.device_id && e.browser !== undefined) e.browser = desktopBrowser(e.device_id, e.os);
+		}
+		return evs;
+	};
 
 	// onboarding wizard: the first lane and the credit application are minutes
 	// after signup; the credit decision comes later (engine timing)
@@ -583,7 +602,7 @@ function handleEverything(events, meta) {
 		profile.saved_lanes = onboardLane ? 1 : 0;
 		if (onboardLane) { setLaneProps(onboardLane, profile); stripDevice(onboardLane); }
 		if (profile[EXP_KEY] !== undefined) delete profile[EXP_KEY];
-		return events;
+		return finalize(events);
 	}
 
 	const isHoliday = (t) => HOLIDAYS.includes(dayKey(t));
@@ -827,7 +846,10 @@ function handleEverything(events, meta) {
 	if (!exposed.length && profile[EXP_KEY] !== undefined) delete profile[EXP_KEY];
 
 	const rest = other.filter((e) => T(e) < cut || ONBOARDING.has(e.event));
-	return rest.concat(kept, unitEvents, exposed).filter((e) => T(e) >= BEGIN && T(e) <= END);
+	// ENGINE WORKAROUND (in finalize): the engine's browser pool ignores the device
+	// type (mobile browsers on desktop computers); pick a desktop browser that fits
+	// the OS, sticky per device_id
+	return finalize(rest.concat(kept, unitEvents, exposed).filter((e) => T(e) >= BEGIN && T(e) <= END));
 }
 
 // warehouse rows: exogenous business facts layered on event-derived volumes
