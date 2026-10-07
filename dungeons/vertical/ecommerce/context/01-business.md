@@ -38,7 +38,7 @@ Marlowe & Pine is a direct-to-consumer home goods brand founded in 2019 and base
 - **Shopper segments** (`shopper_segment`), from the CRM's survey-based model:
   - `home_refresher` — updates a room or two a year; the largest segment.
   - `deal_seeker` — buys during promotions and watches prices.
-  - `new_mover` — recently moved and furnishing a new home; the most active shoppers.
+  - `new_mover` — recently moved and furnishing a new home.
   - `casual_gifter` — buys a few items a year, often as gifts.
 - **Membership** (`membership`): `pine_plus` or `standard`.
 

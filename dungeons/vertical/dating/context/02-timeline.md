@@ -32,4 +32,4 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 - Which paid channel deserves more budget?
 - Why do so many new signups never finish a profile?
 - What happened to messaging in late August, and how big was it?
-- What happens to members after a good date?
+- Why do members leave, and does it differ by what happened to them on Kindred?

@@ -1,154 +1,245 @@
-# Vertical Dungeons — Proof of Story-in-Data
+# Vertical datasets — 22 fictional businesses for analytics evals
 
-One folder per vertical dungeon (v1.6 layout). Each
-`dungeons/vertical/<name>/` holds three sibling files:
+Each folder is one fictional company with four months of product analytics data
+(events, user profiles, and sometimes group profiles and slowly changing
+dimensions), two or three warehouse tables of business facts that are not in the
+event stream, five context guides written like an internal wiki, and a
+20-question eval with an answer key. The data hides 8-12 engineered business
+stories per company. An analyst (human or LLM) with the guides and the data
+should be able to find them.
 
-- **`<name>.js`** — the dungeon, exporting `stories` alongside the default
-  config. Stories are the machine-checkable contract for every numbered
-  hook; evaluate them with
-  `node scripts/verify-stories.mjs dungeons/vertical/<name>/<name>.js`.
-- **`<name>.verify.mjs`** — Node script using `@ak--47/dungeon-master/verify`
-  primitives (`emulateBreakdown`, `evaluateFunnel`, `buildIdentityMap`,
-  `resolveUserId`). Emulator-backed where Mixpanel-equivalent semantics
-  matter; per-user JS aggregation where bespoke. Each `check()` call asserts
-  one engineered hook produces measurable signal in the generated data.
-- **`<name>.sql`** — DuckDB queries for human-eyeball inspection of the
-  same hooks. Run after generation to inspect raw outputs the way an
-  analyst would in Mixpanel.
+This README is written for an agent that has access to every folder. Read it
+first. It tells you what each file is, who may read it, how to load the data,
+how to point a model at the context, and how to run the eval.
 
-These files are the **proof** that the engineered story patterns documented
-in each dungeon's top-level comment block actually appear in the generated
-data — at full fidelity, not at smoke-test scale.
+## The shared setup
 
-## Coverage
+| Property | Value |
+| --- | --- |
+| Companies | 22, one per vertical (table at the end) |
+| Window | 2026-06-04 00:00:00 to 2026-10-01 23:59:59, UTC, 120 days |
+| Users | 10,000 profiles per company: ~half existed before the window, ~half sign up inside it |
+| Events | 0.66M-1.55M per company (~1.2 per user per day) |
+| Time zone | Every timestamp is UTC (ISO 8601 with `Z`) |
+| Determinism | Same engine version + same file = byte-identical data on any machine |
+| Generator | `@ak--47/dungeon-master` 1.9.0 (unreleased at build time) |
 
-All 22 vertical dungeons. Every documented hook has a story-backed
-verification check — no documented hook is unverified. (Aggregate hook
-counts are rebuilt at each release; see the per-dungeon stories exports
-for the authoritative contract.)
+All companies, people, and numbers are fictional. The guides never say so; they
+are written from inside the company, on purpose.
 
-Score column regenerated 2026-07-04 from the fix-round sweep: every
-dungeon regenerated at full fidelity (its shipped `numUsers`) under the
-post-review verifier and scored by `scripts/verify-stories.mjs` — the
-score is the worst story verdict the runner printed, not an editorial
-judgment. 15 NAILED / 7 STRONG, 22/22 at STRONG or better. This is
-lower than the 2026-07-03 headline (20/2) **by design**: the fix-round
-band policy below re-derived NAILED bands from hook knobs, and verdicts
-that previously leaned on measurement-anchored bands now grade STRONG
-honestly. No hook regressed — the data is unchanged; the grading got
-stricter.
+## Folder layout
 
-| # | Dungeon | Score | Hooks | Iter |
-|---|---------|-------|-------|------|
-| 1 | fitness | NAILED | 10/10 | 2 |
-| 2 | dating | NAILED | 10/10 | 2 |
-| 3 | community | NAILED | 10/10 | 3 |
-| 4 | travel | NAILED | 10/10 | 2 |
-| 5 | logistics | NAILED | 10/10 | 3 |
-| 6 | education | STRONG | 10/10 | 3 |
-| 7 | real-estate | NAILED | 10/10 | 2 |
-| 8 | insurance-application | STRONG | 10/10 | 3 |
-| 9 | food-delivery | STRONG | 10/10 | 2 |
-| 10 | devtools | NAILED | 10/10 | 1 |
-| 11 | healthcare | NAILED | 10/10 | 2 |
-| 12 | fintech | NAILED | 10/10 | 2 |
-| 13 | ai-platform | NAILED | 10/10 | 3 |
-| 14 | marketplace | NAILED | 10/10 | 2 |
-| 15 | media | NAILED | 10/10 | 2 |
-| 16 | ecommerce | NAILED | 10/10 | 3 |
-| 17 | sass | STRONG | 11/11 | 2 |
-| 18 | gaming | STRONG | 13/13 | 2 |
-| 19 | social | STRONG | 10/10 | 2 |
-| 20 | crypto | NAILED | 11/11 | 2 |
-| 21 | streaming | NAILED | 4/4 | 2 |
-| 22 | support-desk | STRONG | 3/3 | 1 |
+Two copies exist with the same files.
 
-**Score legend.** Grading is mechanical (the runner reports where the
-measured value landed), but the bands themselves are author-declared —
-band *selection* is an editorial act, and the score is only as honest
-as the band derivation. The fix-round band policy (2026-07-04):
-- A NAILED band must be derived from the hook's knob (knob ±10%),
-  never from a measurement of the dungeon's own output — a band
-  centered on a measurement passes by construction.
-- Where the realized magnitude is confounded (selection effects,
-  mixtures, budget attenuation), the assertion uses a knob-derived
-  floor or ceiling instead, which grades STRONG by design. STRONG is
-  not a blemish: it is the honest verdict for a real effect whose
-  exact magnitude is not knob-derivable.
-- **NAILED** — every assertion in every story landed inside its
-  knob-derived NAILED band at full fidelity.
-- **STRONG** — every assertion passed, but at least one landed in the
-  STRONG band outside the NAILED band (or is a floor/ceiling check).
-  Each such case documents why in its story's derivation notes.
+**Delivery copy** (`~/Desktop/dungeons/`), one folder per company:
 
-## Running
-
-```bash
-# 1. Generate fresh data (full fidelity — uses dungeon's shipped numUsers)
-node scripts/verify-runner.mjs dungeons/vertical/${NAME}/${NAME}.js verify-${NAME}
-
-# 2. Evaluate the dungeon's stories (five-tier verdict table)
-node scripts/verify-stories.mjs dungeons/vertical/${NAME}/${NAME}.js --data-prefix verify-${NAME}
-
-# 3. Run the .mjs verifier (CI gate)
-node --max-old-space-size=4096 dungeons/vertical/${NAME}/${NAME}.verify.mjs
-
-# 4. (Optional) Run the SQL for human inspection
-duckdb -c ".read dungeons/vertical/${NAME}/${NAME}.sql"
-
-# 5. Cleanup
-rm -f data/verify-${NAME}-*
+```
+<v>/
+  context/   00-manifest.md 01-business.md 02-timeline.md 03-event-dictionary.md 04-metrics-and-tables.md
+  data/      <v>-EVENTS.json.gz  <v>-USERS.json.gz  [<v>-<key>-GROUPS.json.gz]  [<v>-<prop>-SCD.json.gz]
+             <v>-WAREHOUSE-<table>.json.gz (2-3)  <v>-WAREHOUSE-MANIFEST.json
+  eval/      <v>.eval.md        20 questions + answer key
+  source/    <v>.js             the generator config: every story, knob, and hook
+  verify/    <v>.sql            DuckDB queries, one per story and one per eval question
+             <v>.verify.mjs     machine-checked story verdicts
 ```
 
-## Verify-script anatomy
+**Repo copy** (`dungeons/vertical/<v>/` in the dungeon-master repo): the same
+`context/`, `eval/`, `<v>.js`, `<v>.sql`, and `<v>.verify.mjs`, with no `data/`.
+Data is not committed; rebuild it as shown in "Rebuilding the data".
 
-Every `<name>.verify.mjs` follows the same template (see
-[HOOKS.md §9.9](../../HOOKS.md#99-per-dungeon-verify-script-template)):
+### Who may read what
 
-1. Stream-load shards (`readline.createInterface`) — handles dungeons up to
-   ~1M events without `readFileSync`'s 512MB cap.
-2. Build identity map (`buildIdentityMap(profiles)`) and per-user event
-   bucket (`resolveUserId`).
-3. One `check(name, pass, detail)` per documented hook.
-4. Exit non-zero if any check fails.
+| Folder | Analyst being evaluated | Grader / builder |
+| --- | --- | --- |
+| `context/` | yes | yes |
+| `data/` | yes | yes |
+| `eval/` | **no** (answer key) | yes |
+| `source/` | **no** (states every story and its size) | yes |
+| `verify/` | **no** (every query names a story) | yes |
 
-## Reading the SQL
+The guides describe the business, the timeline, the events, and the metrics.
+They hint at where to look but never state an engineered effect. The answers
+live only in `eval/`, `source/`, and `verify/`.
 
-SQL files are human-readable Mixpanel inspection queries. They name each
-hook the same way as the `.verify.mjs` file and the dungeon's docstring.
-Numbering is consistent across all three artifacts:
+## The data files
 
-- Dungeon comment: `* 1. WHALE WALLETS (everything)`
-- `<name>.verify.mjs`: `check('H1 whale 5x+ trade amount', ...)`
-- `<name>.sql`: `-- Hook 1: WHALE WALLETS — top 2% drive most volume`
+All data files are newline-delimited JSON, gzipped: one record per line.
 
-## Known limitations (historical — list now empty)
+| File | One row is | Key columns |
+| --- | --- | --- |
+| `<v>-EVENTS.json.gz` | one event | `event`, `time`, `user_id`, `device_id`, `insert_id`, event properties (flat, not nested), super properties |
+| `<v>-USERS.json.gz` | one user profile | `distinct_id` (= `user_id`), profile properties, `created` (born users only), `anonymousIds` (the user's device ids) |
+| `<v>-<key>-GROUPS.json.gz` | one group profile (company, org, community) | the group key (`company_id`, `org_id`, `community_id`) |
+| `<v>-<prop>-SCD.json.gz` | one value change of a slowly changing user property | `distinct_id`, the property, `startTime` |
+| `<v>-WAREHOUSE-<table>.json.gz` | one row of a business table (usually one day, sometimes one day per dimension) | see the manifest |
+| `<v>-WAREHOUSE-MANIFEST.json` | table list with grain, time column, dimensions, and BigQuery column types | `tables[].columns[].bqType` (DATE, STRING, INT64, FLOAT64, BOOL) |
 
-Several engineered hooks intentionally use `funnel-post` to compress
-time-to-convert within a single funnel-instance. The verifier's
-`evaluateFunnel` is a greedy single-pass over the user's full event
-history — it picks the first matching event for each step regardless of
-which funnel-instance the hook touched. Through v1.5 this forced some
-dungeons to check TTC hooks for population presence only. As of v1.6
-every affected dungeon (ai-platform, dating, community, travel,
-logistics, education, real-estate, devtools, marketplace, crypto) has
-graduated: their TTC stories assert the TTC delta itself through
-`emulateBreakdown`'s `timeToConvert` at conversion windows covering the
-stretched support (see each story narrative for the censoring
-analysis). Three graduation lessons generalize: pick the conversion
-window where each cohort's TTC distribution is unimodal (media — at
-multi-day windows the median sits on a bimodal mode boundary and flips
-on sampling noise); restrict funnel-post scaling to the target
-funnel when another funnel shares a step prefix (marketplace — scaling
-everything let the greedy evaluator assemble chains across unscaled
-instances, collapsing the read); and anchor the scaled funnel on a
-unique first step (crypto — `wallet connected` is `isFirstEvent` +
-`isAuthEvent`, so it occurs exactly once per user and the greedy
-evaluator has no earlier instance to latch onto, making the read
-stable across 1h–24h windows).
+Groups exist for community, devtools, sass, social, and support-desk. SCD files
+exist for fitness (`fitness_level`) and sass (`account_health`). The
+`04-metrics-and-tables.md` guide of each company documents its warehouse tables.
 
-See
-[`research/1.5.0-vertical-eval.md`](../../research/1.5.0-vertical-eval.md)
-for the aggregate evaluation methodology and pattern catalog, and
-[HOOKS.md §9](../../HOOKS.md#9-verification-patterns-from-the-v150-vertical-eval)
-for the verification recipe encyclopedia.
+### Identity: read this before you count users
+
+The data follows Mixpanel's identity model.
+
+- A user who existed before the window has `user_id` on every event.
+- A user born in the window browses anonymously first. Events before their
+  signup (the `isAuthEvent` step, for example `account created`) carry only
+  `device_id`. This includes a pre-signup `$experiment_started` exposure.
+- The signup event carries both `user_id` and `device_id`. Mixpanel uses it to
+  merge the device's earlier anonymous events into the user. Events after
+  signup carry `user_id` (and, in some companies, `device_id`).
+- A born user who never signs up stays anonymous: `device_id` only on every
+  event. Their profile is flagged and is not imported to Mixpanel.
+
+Mixpanel does this join for you. **A warehouse does not.** Resolve identity
+yourself before you count unique users or build funnels from anonymous steps:
+
+```sql
+-- DuckDB. Any event that carries both ids links that device to that user.
+CREATE OR REPLACE VIEW device_map AS
+SELECT device_id, min(user_id) AS user_id
+FROM events
+WHERE user_id IS NOT NULL AND device_id IS NOT NULL
+GROUP BY device_id;
+
+CREATE OR REPLACE VIEW events_resolved AS
+SELECT coalesce(e.user_id, m.user_id, e.device_id) AS distinct_id, e.*
+FROM events e
+LEFT JOIN device_map m USING (device_id);
+```
+
+The profile file gives the same link: unnest `anonymousIds` against
+`distinct_id`. Each `verify/<v>.sql` starts with the exact identity prelude for
+that company.
+
+## Load the data
+
+### DuckDB (fastest; no schema work)
+
+From inside one company folder:
+
+```sql
+-- duckdb
+CREATE VIEW events   AS SELECT * FROM read_json_auto('data/*-EVENTS.json.gz',   sample_size=-1, union_by_name=true);
+CREATE VIEW profiles AS SELECT * FROM read_json_auto('data/*-USERS.json.gz',    sample_size=-1, union_by_name=true);
+-- one view per warehouse table, for example:
+CREATE VIEW paid_acquisition_daily AS
+  SELECT * FROM read_json_auto('data/*-WAREHOUSE-paid_acquisition_daily.json.gz');
+SELECT event, count(*) FROM events GROUP BY 1 ORDER BY 2 DESC;
+```
+
+Cast `time` with `time::TIMESTAMP` (it is UTC). DuckDB reads `.gz` directly.
+
+### BigQuery
+
+```sh
+V=fitness; DS=my_project:$V
+bq mk --dataset "$DS"
+bq load --source_format=NEWLINE_DELIMITED_JSON --autodetect "$DS.events"   data/$V-EVENTS.json.gz
+bq load --source_format=NEWLINE_DELIMITED_JSON --autodetect "$DS.profiles" data/$V-USERS.json.gz
+# warehouse tables: use the manifest's column types instead of autodetect
+for T in $(jq -r '.tables[].table' data/$V-WAREHOUSE-MANIFEST.json); do
+  SCHEMA=$(jq -r --arg t "$T" '.tables[] | select(.table==$t) | [.columns[] | "\(.name):\(.bqType)"] | join(",")' data/$V-WAREHOUSE-MANIFEST.json)
+  bq load --source_format=NEWLINE_DELIMITED_JSON "$DS.$T" "data/$V-WAREHOUSE-$T.json.gz" "$SCHEMA"
+done
+```
+
+Events have many sparse property columns. If autodetect fails on a column, load
+with `--ignore_unknown_values` and a schema built from a DuckDB `DESCRIBE`, or
+load into one JSON column and extract fields in SQL.
+
+### Mixpanel
+
+The events and profiles import as they are (`time` in UTC, `insert_id` is a
+valid, deterministic dedupe id). Re-importing the same file into the same
+project dedupes instead of doubling. Warehouse tables do not go to Mixpanel's
+event store; connect them as warehouse metrics or keep them in the warehouse.
+
+## Point a model at the context
+
+Give the analyst model, in this order:
+
+1. `context/00-manifest.md` — the map of the other four files and of the data.
+2. `context/01-business.md` through `context/04-metrics-and-tables.md`.
+3. Access to the data: a DuckDB or BigQuery connection with the views above, or
+   a Mixpanel project with the data imported.
+
+Do not give it `eval/`, `source/`, or `verify/`. Tell it the dataset window and
+that time is UTC; the manifest says the same.
+
+## Run the eval
+
+Each `eval/<v>.eval.md` has a header and 20 questions. Every question has:
+
+- **Prompt** — the text to send to the analyst model, as written.
+- **Type** — trend, funnel, retention, segmentation, attribution,
+  external-join (needs a warehouse table), context (needs the guides),
+  null-hypothesis (the honest answer is "no meaningful effect"), or open-ended.
+- **Answer** — the correct answer with exact numbers and an accepted tolerance.
+- **Evidence** — the story id, a Mixpanel report recipe, and the
+  `-- EVAL Q<n>` query in `verify/<v>.sql` that produced each number.
+- **Context needed** — which guide files an analyst needs.
+- **Grading** — what a correct answer must contain and the common wrong answers.
+
+Procedure:
+
+1. Start the analyst with only the context and data access (section above).
+2. Send the 20 prompts one at a time, each in a fresh turn or session, so one
+   answer does not leak into the next.
+3. Grade each answer against **Answer** and **Grading**. Numbers inside the
+   stated tolerance count as correct. A null-hypothesis question is correct only
+   when the analyst says there is no meaningful effect. Score 1 (correct),
+   0.5 (right direction or partial), or 0.
+4. To check an answer key yourself, run the matching `-- EVAL Q<n>` query.
+
+The eval header names the data prefix the numbers were measured on
+(`data/verify-<v>` in the repo). The delivery copy's `data/<v>-*` files are the
+same bytes under a different file name.
+
+## Verify the stories yourself
+
+SQL only (needs DuckDB, nothing else). From the company folder in the delivery
+copy:
+
+```sh
+duckdb -c "SET VARIABLE data_prefix='data/<v>'" -c ".read verify/<v>.sql"
+```
+
+Every query is labeled `-- STORY H<n>-...` or `-- EVAL Q<n>`.
+
+Machine verdicts (needs a dungeon-master checkout or the installed package): from
+the repo root,
+
+```sh
+node dungeons/vertical/<v>/<v>.verify.mjs --data-prefix ~/Desktop/dungeons/<v>/data/<v>
+```
+
+It prints one verdict per story and fails unless every story is NAILED or
+STRONG, every hook is covered, and every warehouse audit passes:
+
+| Verdict | Meaning |
+| --- | --- |
+| NAILED | The measured effect sits inside a band derived from the story's knob (knob ±10%) |
+| STRONG | The effect passes a knob-derived floor or ceiling; its exact size is confounded or noisy |
+| WEAK | The effect points the right way but misses the floor |
+| NONE / INVERSE | No effect, or the opposite effect |
+
+## Rebuilding the data
+
+From the dungeon-master repo root, on the engine version that built it:
+
+```sh
+node scripts/verify-runner.mjs dungeons/vertical/<v>/<v>.js verify-<v>   # plain JSON in ./data
+node dungeons/vertical/<v>/<v>.verify.mjs                                 # verdicts
+duckdb -c ".read dungeons/vertical/<v>/<v>.sql"                           # SQL checks
+```
+
+The gzipped delivery copy comes from `plans/verticals-reeval/export-desktop.mjs`
+(local tooling, not in the package). Any engine change can shift the generated
+data, so re-measure the eval numbers after an upgrade.
+
+## The companies
+
+COMPANY_TABLE

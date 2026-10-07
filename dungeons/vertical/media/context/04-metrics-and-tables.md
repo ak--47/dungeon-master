@@ -77,7 +77,7 @@ Caveats: the table covers new subscriptions only, not renewals or cancellations.
 
 - For a before/after question around a dated change, consider the weekly rhythm, the overall trend, and mix shifts before you attribute a change to the event.
 - Readership follows a weekly rhythm. Compare whole weeks or matching weekdays, not a few days against a span with a different mix of weekdays.
-- New readers keep arriving and free readers keep converting, so totals and tier mixes drift over the window. Use rates (per paywall view, per home view, per attempted read, per visitor) when you compare periods or groups.
+- New readers keep arriving and free readers keep converting, so totals and tier mixes drift over the window. Compare rates, not totals, when you compare periods or groups.
 - The meter caps free readers' article views. Questions about free readers' reading usually need attempted reads, not article views alone.
 - New-visitor funnels and retention depend on arrival date: readers who arrived late in the window have had less time to act. Only count windows that end inside the data.
 - Anonymous visitors exist only as devices. Uniques that include them count devices for visitors who never registered.

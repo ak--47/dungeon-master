@@ -20,7 +20,7 @@ Players choose a home server region (NA, EU, or APAC) at signup. Each region has
 ## Platforms
 
 - **PC:** Windows, macOS, and Linux, through the Emberfall launcher. In-game purchases on PC go through Cinderlight's own webshop and its payment processor.
-- **Mobile:** iPhone and iPad (App Store) and Android (Google Play). In-game purchases use the store's billing, and the store keeps a commission. Cinderlight earns well under $1 million a year from the stores, so it is enrolled in Apple's App Store Small Business Program and Google Play's reduced service-fee tier: both stores keep 15% instead of the standard 30%. The PC webshop's payment processor charges about 5%.
+- **Mobile:** iPhone and iPad (App Store) and Android (Google Play). In-game purchases use the store's billing, and the store keeps a commission. Cinderlight earns well under $1 million a year from the stores, so it is enrolled in Apple's App Store Small Business Program and Google Play's reduced service-fee tier. The PC webshop pays a payment processor fee. The fees each store and the processor keep are in `store_revenue_daily`.
 
 One account works on every device; progress and purchases carry over.
 
