@@ -4,6 +4,9 @@ Read this first when changing the simulation engine, authoring a dungeon, or
 asking an AI to build a product analytics story. The counting contracts below
 retain the published **1.8.2** evidence. **1.8.3** repairs generation-time windows
 and endpoint sampling; see its [upgrade guide](../guides/1.8.3-upgrade-guide.md).
+**1.9.0** changes engine output (identity timing, activity shape, devices); see its
+[upgrade guide](../guides/1.9.0-upgrade-guide.md). No live Mixpanel import was run
+for 1.9.0; its evidence is offline.
 You do not need the analytics checkout or a fresh test run to read these contracts.
 
 The core loop is simple: choose a population, generate actual event histories,

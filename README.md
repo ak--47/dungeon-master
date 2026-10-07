@@ -20,9 +20,11 @@ i built this because i needed it. and after using it across hundreds of customer
 npm install @ak--47/dungeon-master
 ```
 
-1.8.3 makes rolling windows end at generation start and fixes timestamp piles
-at dataset boundaries. It retains the 1.8.2 counting contracts. See the
-[upgrade guide](docs/guides/1.8.3-upgrade-guide.md) for migration and tested limits.
+1.9.0 makes generated output independent of the machine time zone and fixes
+identity, activity-shape, device, experiment, and world-event behavior found while
+rebuilding the 22 vertical datasets. Output changes for a fixed seed. See the
+[upgrade guide](docs/guides/1.9.0-upgrade-guide.md) for migration and the
+workarounds to remove.
 
 ## quick start
 
