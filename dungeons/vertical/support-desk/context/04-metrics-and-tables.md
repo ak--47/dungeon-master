@@ -54,7 +54,7 @@ Daily health of ticket intake by channel, from the intake pipeline's logs and th
 | `tickets_auto_closed` | FLOAT | count | Of those, tickets closed automatically (spam, out-of-office replies, notifications) and never assigned to an agent. |
 | `tickets_merged` | FLOAT | count | Of those, tickets merged into an existing ticket and never assigned on their own. |
 | `tickets_delayed_over_1h` | FLOAT | count | Messages received that day that waited more than one hour before they became tickets. Counted on the day they were received. |
-| `p95_ingest_latency_sec` | FLOAT | seconds | 95th-percentile time from receiving a message to creating its ticket. |
+| `p95_ingest_latency_sec` | FLOAT | seconds | 95th-percentile time from receiving a message to creating its ticket, over the messages received that day. |
 | `ingestion_status` | STRING | — | Daily status for the channel: `operational` or `degraded`, as posted on the status page. |
 
 Caveats: `tickets_ingested` runs higher than the Mixpanel count of `ticket assigned` and does not track it exactly day to day, because auto-closed and merged tickets are only in this table. Intake and routing also disagree a little each day: agents log some tickets by hand (phone calls, imports) that never pass through intake, and delete a few ingested tickets before they are routed. A message that is delayed is counted in `tickets_ingested` (and assigned in Mixpanel) on the day it is finally processed.
@@ -72,7 +72,7 @@ Daily new subscriptions, seats, and new MRR by plan, from Ticketloop's billing s
 | `list_price_per_seat_usd` | FLOAT | USD per seat per month | List price for a new subscription of this plan on this day. |
 | `new_mrr_usd` | FLOAT | USD per month | `seats_purchased` × `list_price_per_seat_usd`. |
 
-Caveats: the table covers new self-serve subscriptions only, not renewals, expansions, or Enterprise contracts. Annual plans are shown at their monthly list price; discounts are not applied. Billing and Mixpanel differ a little day to day: a few subscriptions bought on invoice never reach Mixpanel, and seat counts can be edited before the first invoice. Use this table, not Mixpanel, for prices and MRR.
+Caveats: the table covers new self-serve subscriptions only, not renewals, expansions, or Enterprise contracts. Annual plans are shown at their monthly list price; discounts are not applied. Billing and Mixpanel differ a little day to day: a few subscriptions bought on invoice never reach Mixpanel, seat counts can be edited before the first invoice, and a subscription cancelled on its first day is voided in billing but stays in Mixpanel. Use this table, not Mixpanel, for prices and MRR.
 
 ## Analysis tips
 

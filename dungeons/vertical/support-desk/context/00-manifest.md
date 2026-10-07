@@ -30,7 +30,7 @@ This folder is the internal analytics wiki for **Ticketloop**, a help desk produ
 
 - A trial signup is identified when they create an account. `account created` is each new user's first event and carries both the user's `user_id` and the `device_id` of their browser. There is no anonymous pre-signup activity in the data.
 - Every event carries `user_id`. Most events also carry `device_id` and browser details (`os`, `browser`, `model`, screen size). The exceptions have `user_id` only: `inbox connected` (sent by the mail integration service) and the server-side events `ticket assigned`, `ticket reopened`, `csat received`, and `subscription started`.
-- Users work from one or two browsers (for example a work laptop and a home computer); a user can have more than one `device_id`.
+- Most users work from one or two browsers (for example a work laptop and a home computer), and some from three or more; a user can have more than one `device_id`.
 - Users who joined before June 4 have no `account created` event in this window. Their `customer_since` is before the window.
 - Count people with unique `user_id` (Mixpanel "Uniques"), not with `device_id`. Count companies with `company_id`.
 
