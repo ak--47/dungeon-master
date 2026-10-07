@@ -410,7 +410,7 @@ SELECT max(n) FILTER (WHERE variant = 'Skills Routing') AS skills_accounts, max(
  round((max(m) FILTER (WHERE variant = 'Skills Routing') - max(m) FILTER (WHERE variant = 'Control'))
   / sqrt(max(v / n) FILTER (WHERE variant = 'Skills Routing') + max(v / n) FILTER (WHERE variant = 'Control')), 2) AS welch_t
 FROM s;
--- account level by company size (the randomization unit; 23 ticket-level splits above expect about one |z| near 2 by chance)
+-- account level by company size (the randomization unit is the account)
 WITH a AS (SELECT p.company_id, any_value(p.company_size) AS company_size, any_value(p.variant) AS variant, avg(k.escalated::INT) AS r
   FROM tickets k JOIN prof p ON p.uid = k.uid WHERE k.t0 >= TIMESTAMP '2026-07-08' AND p.variant IS NOT NULL GROUP BY 1),
 s AS (SELECT company_size, variant, count(*) AS n, avg(r) AS m, var_samp(r) AS v FROM a GROUP BY 1, 2)

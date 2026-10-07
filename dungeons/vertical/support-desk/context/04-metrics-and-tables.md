@@ -8,7 +8,7 @@ All KPIs use UTC days. Count people by unique `user_id` and companies by `compan
 |---|---|
 | Tickets | Count of `ticket assigned`. A ticket that never reached an agent (spam, auto-closed, merged) is not a ticket in Mixpanel; see `inbound_channel_daily`. |
 | First response time (FRT) | Per ticket, time from `ticket assigned` to the first `reply sent` (hold `ticket_id` constant). Report the median, in minutes. `first_response_mins` on `ticket resolved` and `csat received` holds the same value in whole minutes. |
-| Resolution time | Per ticket, time from `ticket assigned` to the first `ticket resolved`. Report the median, in hours, within a 14-day window. `resolution_mins` on `ticket resolved` holds the same value. |
+| Resolution time | Per ticket, time from `ticket assigned` to the first `ticket resolved`. Report the median, in hours, within a 14-day window. `resolution_mins` on the first `ticket resolved` of a ticket holds the same value. A reopened ticket is resolved a second time, and that second `ticket resolved` carries the minutes to the later resolution. |
 | Reopen rate | Share of resolved tickets that later have a `ticket reopened` (per ticket). Count only tickets whose reopen window has passed (customers can reopen a ticket days after it is resolved), so leave out tickets assigned in the last few weeks of the data. Counting events (total `ticket reopened` ÷ total `ticket resolved`) gives a lower number, because a reopened ticket is resolved twice. |
 | Escalation rate | Share of tickets with a `ticket escalated`. |
 | CSAT (positive share) | Share of `csat received` answers with `score` 4 or 5. Ticketloop also reports the average score. |
