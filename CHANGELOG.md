@@ -202,7 +202,8 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   curve); now 1.06 and 0.97. Legacy mode already matched. The birth day stays
   partial (signup at a soup time of day). Output shift: born users in active-day
   modes have fewer active days (`avgActiveDaysPerUser`) or more events
-  (`retentionCurve`); run totals rise slightly in `retentionCurve` mode.
+  (`retentionCurve`). In `retentionCurve` mode run totals rise with a steeply
+  decaying curve and barely move with a flat one.
 - Run usage funnels for a born user who reached the `isAuthEvent` stitch and
   dropped at a later first-funnel step. Any first-funnel drop-off used to leave
   the user with only one-at-a-time standalone events for life, although the
