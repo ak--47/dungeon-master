@@ -39,7 +39,7 @@ Events that involve a title carry its attributes so viewing can be broken down w
 | `plan selected` | The household picks a plan on the plans page during signup. Recorded by the billing service (no `device_id`). | `plan` (`basic_ads`, `standard`, `premium`). |
 | `trial started` | The household adds a payment method and starts its 7-day free trial. Recorded by the billing service (no `device_id`). Some households pick a plan but never start the trial; they leave without watching. | `plan`; `trial_days` (always 7); `payment_method` (`credit_card`, `paypal`, `apple_pay`, `gift_card`). |
 | `profile created` | The household adds a viewer profile. The account owner's profile exists from signup and is not tracked, so a household with N profiles has N - 1 of these events (only households that joined in the window; a household that started its trial in the last two days may not have added all of them by October 1). | `profile_type` (`adult`, `kids`). |
-| `$experiment_started` | The household was assigned to an experiment arm (see 02-timeline.md). Sent a few seconds after `trial started` for households that created their account on or after 2026-07-08. | `Experiment name` (`Smart Start`); `Variant name` (`Control`, `Smart Start`). |
+| `$experiment_started` | The household was assigned to an experiment arm (see 02-timeline.md). Sent by the app a few seconds after `trial started` for households that created their account on or after 2026-07-08, when the household is already signed in: it carries `user_id` and the signup device's `device_id`. | `Experiment name` (`Smart Start`); `Variant name` (`Control`, `Smart Start`). |
 
 ## Subscription and billing
 

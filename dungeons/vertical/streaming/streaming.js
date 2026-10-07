@@ -18,7 +18,7 @@ import Chance from "chance";
  *             plans: Basic with Ads ($6.99/month), Standard ($11.99 → $13.99
  *             for new subscriptions from 2026-08-11), Premium ($17.99).
  * SCALE:      10,000 simulated households (≈5,000 create an account inside the
- *             window), ~0.98M events, 120 days (2026-06-04 → 2026-10-01, UTC)
+ *             window), ~0.97M events, 120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  app opened → browse / search → title details viewed → playback
  *             started → playback completed → (rating, watchlist, next episode)
  * VALUE MOMENT: playback completed
@@ -104,20 +104,24 @@ import Chance from "chance";
  *   drawn independently, so each story's ratio reads its own knob.
  * - Designed rates use low-discrepancy draws (seqDraw: a golden-ratio
  *   sequence per cell, one step per household in generation order) instead of
- *   independent coin flips: trial conversion (cell = k, paid_social, tourist,
- *   arm, country), the early-completion count k (cell = arm), plan choice
- *   (cell = price period), and playback failure and completion.
+ *   independent coin flips: trial conversion (cell = k, channel, tourist,
+ *   arm, country), the early-completion count k (cell = arm and signup
+ *   platform), plan choice (cell = price period), and playback failure and
+ *   completion.
  *   A cell's realized rate tracks its probability, so a story's ratio reads
- *   its knob instead of binomial noise, and null splits (country, arm by
- *   platform) stay null. Per-event draws add the household's occurrence index
- *   to the cell, so no household walks consecutive steps of one sequence.
+ *   its knob instead of binomial noise, and null splits (country, channels
+ *   other than paid_social, arm by platform) stay null. Per-event draws add
+ *   the household's occurrence index to the cell, so no household walks
+ *   consecutive steps of one sequence.
  *   Renewal-time cancellation (H8), Saltmarsh reach (H1), and push opens (H9,
  *   salted on the notification's insert_id) keep coin flips, so monthly
  *   churn, reach, and open rates carry ordinary sampling noise.
  * - The hook moves $experiment_started to 3-20 s after trial started. This is
  *   the product design, not an engine workaround: the taste picker opens after
  *   the trial starts, and the engine's spot (1 s before account created) would
- *   expose households that never start a trial.
+ *   expose households that never start a trial. The engine's copy is pre-auth
+ *   and device-only; the moved exposure is signed in, so the hook stamps
+ *   user_id with the signup device.
  * - A season 2 sitting that starts from the home screen (source home_row)
  *   gets a "title details viewed" for Saltmarsh 6-18 s before the play, as
  *   organic home_row plays do.
@@ -291,33 +295,33 @@ import Chance from "chance";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-streaming, 2026-10-07, full
- * fidelity, 10,000 households, 975,185 events)
+ * fidelity, 10,000 households, 969,730 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation               | Expected | Measured
  * -----|------------------------------------------------|--------------------------|----------|---------
- * H1   | S2 viewers / active members, Jul 17-30         | SALTMARSH_REACH          | 0.35     | 0.354 (1,593 / 4,507)
+ * H1   | S2 viewers / active members, Jul 17-30         | SALTMARSH_REACH          | 0.35     | 0.351 (1,574 / 4,484)
  * H1   | season 2 plays before the premiere             | exact purity             | 0        | 0
  * H2   | accounts/day, Jul 17 - Aug 6 / other days      | PREMIERE_LIFT            | 1.559    | 1.582 (60.1 vs 38.0)
- * H2   | premiere trials (Jul 8 - Sep 23) with an S2 start < 24 h after trial start (EVAL Q3 SQL) | TOURIST_S2_SHARE (not asserted) | 0.80 | 0.788
- * H2   | trial conversion, premiere signups / other     | TOURIST_CONV_MULT        | 0.60     | 0.608 (30.2% vs 49.6%)
- * H3   | trial conversion, Smart Start / Control        | SMART_START_CONV_MULT    | 1.20     | 1.177 (45.8% vs 38.9%)
+ * H2   | premiere trials (Jul 8 - Sep 23) with an S2 start < 24 h after trial start (EVAL Q3 SQL) | TOURIST_S2_SHARE (not asserted) | 0.80 | 0.785
+ * H2   | trial conversion, premiere signups / other     | TOURIST_CONV_MULT        | 0.60     | 0.608 (30.1% vs 49.4%)
+ * H3   | trial conversion, Smart Start / Control        | SMART_START_CONV_MULT    | 1.20     | 1.174 (45.6% vs 38.8%)
  * H3   | variant share of exposed households            | equal 2-arm hash         | 0.50     | 0.517
  * H3   | exposures before the test start                | exact purity             | 0        | 0
- * H3   | early completions, Smart Start / Control       | not engineered           | 1.00     | 1.001 (2.840 vs 2.837)
- * H4   | conversion, 3+ early completions / 0-2         | k-weighted CONV_BY_EARLY | 1.804    | 1.812 (56.9% vs 31.4%)
- * H4   | conversion, 5+ / 3-4 early completions         | plateau                  | 1.017    | 1.010 (57.2% vs 56.6%)
- * H5   | TV/other completion per start, incident / ±14 d| (1-0.5)/(1-0.02)         | 0.510    | 0.516 (TV 39.9% vs 75.6%)
+ * H3   | early completions, Smart Start / Control       | not engineered           | 1.00     | 1.000 (2.850 vs 2.849)
+ * H4   | conversion, 3+ early completions / 0-2         | k-weighted CONV_BY_EARLY | 1.804    | 1.848 (56.8% vs 30.7%)
+ * H4   | conversion, 5+ / 3-4 early completions         | plateau                  | 1.017    | 0.982 (56.3% vs 57.3%)
+ * H5   | TV/other completion per start, incident / ±14 d| (1-0.5)/(1-0.02)         | 0.510    | 0.524 (TV 40.4% vs 75.9%)
  * H5   | warehouse tv failure rate on degraded days     | INCIDENT_FAIL            | 0.50     | 0.497
  * H6   | Standard share of plan selections, after/before| 1 - PRICE_SWITCH_SHARE   | 0.65     | 0.629 (50.7% → 31.9%)
  * H6   | Basic with Ads share, after/before             | (30 + 0.35 x 50) / 30    | 1.583    | 1.597 (29.7% → 47.4%)
  * H6   | Premium share, after/before                    | not engineered           | 1.00     | 1.056 (19.6% → 20.7%)
  * H7   | spend per signup, paid_social / paid_search    | 21 / 32                  | 0.656    | 0.633 ($20.60 vs $32.54)
- * H7   | trial conversion, paid_social / other channels | SOCIAL_CONV_MULT         | 0.55     | 0.564 (27.7% vs 49.1%)
- * H7   | spend per paid sub, paid_social / paid_search  | (21 / 0.55) / 32 (not asserted) | 1.193 | 1.120 ($96.76 vs $86.40)
- * H8   | renewal-time churn, 2+ profiles / 1 profile    | MULTI_PROFILE_HAZARD_MULT (≤, floor 0.75) | 0.50 | 0.465 (2.80% vs 6.03%)
- * H9   | open rate, new_episode / trending_now          | 0.146 / 0.049            | 2.980    | 3.025 (14.82% vs 4.90%)
- * H9   | open rate, because_you_watched / trending_now  | 0.087 / 0.049            | 1.776    | 1.795 (8.79% vs 4.90%)
- * H10  | median search → play, tv / other               | TV_SEARCH_TTC_MULT       | 2.20     | 2.192 (164.8 s vs 75.2 s)
+ * H7   | trial conversion, paid_social / other channels | SOCIAL_CONV_MULT         | 0.55     | 0.550 (26.9% vs 48.9%)
+ * H7   | spend per paid sub, paid_social / paid_search  | (21 / 0.55) / 32 (not asserted) | 1.193 | 1.142 ($99.92 vs $87.51)
+ * H8   | renewal-time churn, 2+ profiles / 1 profile    | MULTI_PROFILE_HAZARD_MULT (≤, floor 0.75) | 0.50 | 0.470 (2.74% vs 5.84%)
+ * H9   | open rate, new_episode / trending_now          | 0.146 / 0.049            | 2.980    | 2.903 (14.22% vs 4.90%)
+ * H9   | open rate, because_you_watched / trending_now  | 0.087 / 0.049            | 1.776    | 1.853 (9.08% vs 4.90%)
+ * H10  | median search → play, tv / other               | TV_SEARCH_TTC_MULT       | 2.20     | 2.227 (165.4 s vs 74.3 s)
  * ═════════════════════════════════════════════════════════════════════════
  *
  * Noise notes: the low-discrepancy draws (DESIGN NOTES) remove binomial
@@ -330,7 +334,7 @@ import Chance from "chance";
  * reads above the knob: 1,262 accounts in those 21 days vs 798 at the other
  * days' rate is about 465 extra against 440 designed premiere joiners (the
  * engine's own signups in those days drew a little high). H9 opens are coin
- * flips on about 15,000-19,000 pushes per campaign type (ratio SE about 4%).
+ * flips on about 15,000-18,000 pushes per campaign type (ratio SE about 4%).
  * H8 keeps salted coin flips (about 400 paid cancellations per group, ratio
  * SE about 7%), so it uses the knob as target with a half-effect floor.
  * Premium's share of plan selections is not engineered; its +1 point move
@@ -541,9 +545,9 @@ const salt = (uid, tag) => hashFloat(`${uid}|${tag}`);
 // (Weyl) sequence from a seeded offset, one step per household in generation
 // order, so a cell's realized rate tracks its designed probability without
 // binomial noise. Used for trial conversion (cell = every factor of p, plus
-// country), the early-completion count (cell = test arm), plan choice (cell =
-// price period), and playback failure and completion (cell = platform, title
-// type, chained, incident days). Per-event
+// channel and country), the early-completion count (cell = test arm and signup platform),
+// plan choice (cell = price period), and playback failure and completion
+// (cell = platform, title type, chained, incident days). Per-event
 // draws add the household's occurrence index to the cell, so one household
 // never takes consecutive steps of a sequence. Any subset chosen independently of
 // generation order (a date range, a country) still varies like a sample.
@@ -830,9 +834,9 @@ function handleEverything(events, meta) {
 	} else if (salt(uid, "trialing") < P_TRIALING) {
 		trialStartT = BEGIN_MS - Math.floor(salt(uid, "trial-start") * TRIAL_DAYS * DAY_MS);
 	}
-	// H4: playback completed count in the trial's first 72 h (drawn per arm, so
-	// both arms get the same early-viewing mix)
-	const k = trialStartT !== null ? Number(pickWeighted(EARLY_K_WEIGHTS, seqDraw(`early-k|${variant}`))) : 0;
+	// H4: playback completed count in the trial's first 72 h (drawn per arm and
+	// signup platform, so both arms get the same early-viewing mix on every platform)
+	const k = trialStartT !== null ? Number(pickWeighted(EARLY_K_WEIGHTS, seqDraw(`early-k|${variant}|${platformOf(signupDevice)}`))) : 0;
 	// per-household occurrence index, so each household adds at most one draw to
 	// a sequence cell (no serial pattern inside a household)
 	const nth = {};
@@ -877,7 +881,7 @@ function handleEverything(events, meta) {
 		if (tourist) p *= TOURIST_CONV_MULT;
 		if (variant === SMART_START_VARIANT) p *= SMART_START_CONV_MULT;
 		const trialEnd = trialStartT + TRIAL_DAYS * DAY_MS;
-		const cell = `convert|${k}|${profile.acquisition_channel === "paid_social"}|${tourist}|${variant}|${profile.country}`;
+		const cell = `convert|${k}|${profile.acquisition_channel}|${tourist}|${variant}|${profile.country}`;
 		if (seqDraw(cell) < p) {
 			lifecycle.push({ name: "trial converted", t: trialEnd });
 			scheduleRenewals(trialEnd + 30 * DAY_MS);
@@ -1309,7 +1313,11 @@ function handleEverything(events, meta) {
 			events.push(pe);
 		}
 		if (variant !== null) {
+			// the taste picker opens after trial started, when the household is
+			// signed in: the exposure carries user_id and the signup device (the
+			// engine's pre-auth copy is device-only)
 			exposure.time = iso(trialStartT + (3 + rnd() * 17) * 1000);
+			exposure.user_id = uid;
 			exposure.device_id = signupDevice;
 			events.push(exposure);
 		} else if (profile[EXP_KEY] !== undefined) {
