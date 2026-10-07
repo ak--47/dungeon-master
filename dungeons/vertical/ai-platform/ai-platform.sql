@@ -323,28 +323,32 @@ FROM requests WHERE status_code = 200;
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q10 — null: did the August outage cost us customers?
 -- ─────────────────────────────────────────────────────────────────────────
--- Accounts with API traffic in the two weeks before the incident (Aug 12-25):
--- share still sending traffic in the two weeks after (Aug 28 - Sep 10), us-east
--- vs the other regions, by plan at the last request before the incident. The
--- same comparison one month earlier (traffic Jul 15-28, still sending Jul 31 -
--- Aug 13) gives the usual regional gap; the difference in differences is the
--- incident's effect (z treats the two periods as independent).
+-- Accounts with API traffic in the three weeks before the incident (Aug 5-25):
+-- share still sending traffic in the three weeks after (Aug 28 - Sep 17), us-east
+-- vs the other regions, by plan at the last request before the incident. Three
+-- weeks, because api request is sampled 1 in 1,000 and a low-volume account can
+-- go two weeks without a sampled request. The same comparison one month earlier
+-- (traffic Jul 8-28, still sending Jul 31 - Aug 20) gives the usual regional
+-- gap; the difference in differences is the incident's effect (z treats the two
+-- periods as independent). The two-week version (window_days = 14) is shown too.
 WITH per AS (SELECT * FROM (VALUES ('incident', TIMESTAMP '2026-08-26'), ('month_before', TIMESTAMP '2026-07-29')) v(period, d0)),
-a AS (SELECT period, r.uid, r.inference_region = 'us-east' AS ue, arg_max(r.plan_tier, r.t) FILTER (WHERE r.t < d0) AS plan_tier,
-  count(*) FILTER (WHERE r.t >= d0 - INTERVAL 14 DAY AND r.t < d0) AS pre,
-  count(*) FILTER (WHERE r.t >= d0 + INTERVAL 2 DAY AND r.t < d0 + INTERVAL 16 DAY) AS post
-  FROM requests r CROSS JOIN per GROUP BY 1, 2, 3),
-g AS (SELECT period, coalesce(plan_tier, 'all plans') AS plan_tier,
+win AS (SELECT * FROM (VALUES (21), (14)) w(window_days)),
+a AS (SELECT window_days, period, r.uid, r.inference_region = 'us-east' AS ue, arg_max(r.plan_tier, r.t) FILTER (WHERE r.t < d0) AS plan_tier,
+  count(*) FILTER (WHERE r.t >= d0 - to_days(window_days) AND r.t < d0) AS pre,
+  count(*) FILTER (WHERE r.t >= d0 + INTERVAL 2 DAY AND r.t < d0 + INTERVAL 2 DAY + to_days(window_days)) AS post
+  FROM requests r CROSS JOIN per CROSS JOIN win GROUP BY 1, 2, 3, 4),
+g AS (SELECT window_days, period, coalesce(plan_tier, 'all plans') AS plan_tier,
   count(*) FILTER (WHERE pre > 0 AND ue) AS n1, avg((post > 0)::INT) FILTER (WHERE pre > 0 AND ue) AS p1,
   count(*) FILTER (WHERE pre > 0 AND NOT ue) AS n0, avg((post > 0)::INT) FILTER (WHERE pre > 0 AND NOT ue) AS p0,
   sum(post) FILTER (WHERE ue)::DOUBLE / sum(pre) FILTER (WHERE ue) AS v1, sum(post) FILTER (WHERE NOT ue)::DOUBLE / sum(pre) FILTER (WHERE NOT ue) AS v0
-  FROM a GROUP BY period, ROLLUP (plan_tier)),
+  FROM a GROUP BY window_days, period, ROLLUP (plan_tier)),
 h AS (SELECT *, p1 - p0 AS gap, p1 * (1 - p1) / n1 + p0 * (1 - p0) / n0 AS var FROM g WHERE n1 > 0)
-SELECT i.plan_tier, i.n1 AS us_east_accounts, round(i.p1, 4) AS us_east_still_active, i.n0 AS other_accounts, round(i.p0, 4) AS other_still_active,
+SELECT i.window_days, i.plan_tier, i.n1 AS us_east_accounts, round(i.p1, 4) AS us_east_still_active, i.n0 AS other_accounts, round(i.p0, 4) AS other_still_active,
  round(i.gap / sqrt(i.var), 2) AS z_raw, round(b.p1, 4) AS us_east_month_before, round(b.p0, 4) AS other_month_before,
  round(100 * (i.gap - b.gap), 2) AS did_points, round((i.gap - b.gap) / sqrt(i.var + b.var), 2) AS z_did,
  round(i.v1, 4) AS us_east_volume_after_before, round(i.v0, 4) AS other_volume_after_before
-FROM h i JOIN h b ON b.plan_tier = i.plan_tier AND b.period = 'month_before' WHERE i.period = 'incident' ORDER BY 1;
+FROM h i JOIN h b ON b.plan_tier = i.plan_tier AND b.window_days = i.window_days AND b.period = 'month_before' WHERE i.period = 'incident'
+ORDER BY i.window_days DESC, i.plan_tier;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q11 — model mix after the swift-2 price cut

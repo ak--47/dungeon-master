@@ -59,7 +59,6 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 | `use_case` | What the account builds: `chat_assistant`, `coding`, `document_processing`, `agents`, `content_generation`. |
 | `sdk_language` | Main client library: `python`, `typescript`, `java`, `go`, `rest`. |
 | `primary_role` | `ml_engineer`, `backend_developer`, `data_scientist`, `founder`. |
-| `_persona` | Legacy copy of `primary_role` from an older CRM sync. |
 | `acquisition_channel` | Channel at signup (for established accounts, the channel they originally came from). |
 | `inference_region` | The region that serves the account's API traffic. |
 | `customer_since` | Date the account was created (YYYY-MM-DD). Before 2026-06-04 for established accounts. |
@@ -71,7 +70,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 
 | Funnel | Steps | Notes |
 |---|---|---|
-| Onboarding | `account created` → `api key created` → `api request` | New accounts only. Read with a 7-day conversion window. Completing it means the account made its first successful integration call. |
+| Onboarding | `account created` → `api key created` → `api request` | New accounts only. Read with a 7-day conversion window. Completing it means the account made its first integration call. |
 | Batch | `batch job submitted` → `batch job completed` | Accounts run many jobs; hold `batch_id` constant to measure each job on its own. |
 | Evals | `eval run started` → `eval run completed` | Hold `eval_id` constant. |
 | Upgrade | `billing page viewed` → `plan upgraded` | Free accounts. |

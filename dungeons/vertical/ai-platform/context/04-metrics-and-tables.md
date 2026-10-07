@@ -14,7 +14,7 @@ All KPIs use UTC days and count accounts by unique `user_id`. Remember that each
 | Weekly active accounts | Unique active accounts in a calendar week (Monday start). |
 | Request volume | Count of `api request` events × 1,000. |
 | Success rate / error rate | Share of `api request` events with `status_code = 200` / with any other status. Server-side error rate counts `500` and `529` only. |
-| Latency | Average or median `latency_ms` of successful requests (`status_code = 200`). Failed requests return early, and models differ in speed, so compare like with like. `time_to_first_token_ms` is the part before the answer starts streaming; the rest is generation time, which grows with the length of the answer. |
+| Latency | Average or median `latency_ms` of successful requests (`status_code = 200`). Failed requests return early, and models differ in speed, so compare like with like. `time_to_first_token_ms` is the part before the answer starts streaming; the rest is generation time. |
 | Cache hit rate | Share of `api request` events with `cache_hit = true`. |
 | Model mix | Share of `api request` events by `model`. "Flagship mix" compares atlas-3 with atlas-2 only. |
 | Rate-limit rate | `rate limit hit` events per 1,000 `api request` events (that is, rate-limit episodes per million requests). |

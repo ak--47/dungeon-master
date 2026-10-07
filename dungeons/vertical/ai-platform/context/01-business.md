@@ -8,7 +8,7 @@ Cortexa builds large language models and sells access to them through an API. De
 
 - **Messages API.** The core product. An application sends a prompt (input tokens) and receives a response (output tokens). Requests can stream the response, and can include tool definitions so the model can call the customer's tools (function calling).
 - **Batch API.** Customers submit a file of many requests as one batch job and collect the results when the job finishes. Batch jobs are for work that does not need an immediate answer. A job that does not finish within 24 hours expires.
-- **Prompt caching** (generally available from July 8). Customers mark the stable start of a prompt (for example a long system prompt or a reference document) as cacheable. When a later request starts with the same prefix, Cortexa reads that prefix from cache instead of processing it again.
+- **Prompt caching** (generally available from July 8). Customers mark the stable start of a prompt (for example a long system prompt or a reference document) as cacheable. When a later request starts with the same prefix, Cortexa serves that prefix from its prompt cache, and the cached part is billed at a lower input price.
 - **Console.** The web app where developers manage API keys, try prompts in the **playground**, run **evaluations** (test a prompt or model against a set of test cases), watch **usage dashboards** (usage, costs, logs, limits), read the **docs**, invite teammates, and manage **billing**.
 
 ## Models and list prices
@@ -60,7 +60,7 @@ The three paid channels have media or sponsorship spend. Daily spend by paid cha
 ## Goals for the period (Q3 2026)
 
 1. **Grow paid usage.** Revenue is metered, so it moves with traffic, model mix, prices, and discounts. Finance wants to understand what drove revenue per day after the summer launches.
-2. **Activate new accounts.** A signup is only valuable once it makes its first successful API request. The growth team ran the Interactive Quickstart test to speed that up, and believes a team's first two weeks decide whether it builds on Cortexa.
+2. **Activate new accounts.** A signup is only valuable once it makes its first API request. The growth team ran the Interactive Quickstart test to speed that up, and believes early habits decide whether a team builds on Cortexa.
 3. **Move customers to atlas-3.** Product wants to know how quickly customers adopt the new flagship and what it does to usage.
 4. **Make the API fast and reliable.** Latency and error rate are the platform team's headline metrics. Prompt caching is the main latency bet. The August capacity incident is under review.
 5. **Spend developer-marketing money well.** Hackathon sponsorships grew this year. Finance asked which paid channels are worth their cost.
