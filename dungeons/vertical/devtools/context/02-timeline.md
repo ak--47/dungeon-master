@@ -13,7 +13,7 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 | 2026-08-18 (Tue) | Billing | Team customers are emailed that **runner-minute overage billing** starts on September 1. No product change on this date. |
 | 2026-08-19 (Wed) to 2026-08-20 (Thu) | Incident | **Package registry mirror incident.** One of Forgebench's package registry mirrors served errors and timeouts. The status page reported the mirror as degraded for two days; it recovered early on August 21. No customer action was needed. Daily mirror status by package ecosystem is in `build_fleet_daily`. |
 | 2026-09-01 (Tue) | Billing | **Team overage billing starts.** Team runner minutes above the organization's pooled monthly allowance are billed at $0.015 per minute. Free, Pro, and Enterprise are not metered this way. Overage appears in `usage_billing_daily`. |
-| 2026-09-07 (Mon) | Holiday | US Labor Day. Many US-based customer teams take the day off. |
+| 2026-09-07 (Mon) | Holiday | US Labor Day. Many US-based customer teams take the day off; teams elsewhere work as usual. |
 | 2026-09-30 (Wed) | Fiscal | End of Q3. |
 | 2026-10-01 (Thu) | — | End of the analysis window (data runs through 23:59 UTC). Q4 starts. |
 

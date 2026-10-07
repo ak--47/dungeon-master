@@ -19,7 +19,7 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  *             belongs to the organization (Free, Team, or Enterprise); at Free
  *             organizations some developers pay for their own Pro seat.
  * SCALE:      10,000 developers (9,993 with events; 4,484 sign up inside the
- *             window), ~0.97M events, 120 days (2026-06-04 → 2026-10-01, UTC),
+ *             window), ~0.97M events (967,797), 120 days (2026-06-04 → 2026-10-01, UTC),
  *             500 customer organizations (1-10 to 284 developers each)
  * CORE LOOP:  commit pushed → preview deployed; build started → build finished;
  *             pull request opened → review submitted → pull request merged →
@@ -59,8 +59,9 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  *              build_fleet_daily (fleet and registry mirror health by ecosystem),
  *              usage_billing_daily (billed runner minutes and overage by plan)
  * LOOKUPS:     none — every attribute is denormalized onto events/profiles
- * SOUP:        weekday-heavy dayOfWeekWeights (Friday lighter), India + Europe +
- *              Americas working hours (UTC)
+ * SOUP:        weekday-heavy dayOfWeekWeights (Friday lighter), Americas + Europe +
+ *              Asia working hours overlapping in UTC (profiles use the engine's
+ *              location mix: about 60% US; 01-business says so)
  *
  * IDENTITY: new developers are identified at "account created" (isAuthEvent,
  * first event, carries user_id + device_id); 2 devices per developer on
@@ -111,10 +112,24 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  *   developer) place rollbacks (H9) and scheduled-build cuts (H8), so realized
  *   rates follow the knobs without binomial noise.
  * - Purchases: one per developer. New developers buy only in their first 42
- *   days. Window start: established free developers buy at a steady base rate,
- *   plus (in June) developers who signed up in the six weeks before June 4 and
- *   are still in their buying window (their customer_since is moved into that
- *   span), so weekly purchases are flat from week 1 (~20 a week).
+ *   days. Window start: established free developers buy at a steady base rate
+ *   (34% of would-be purchases), plus (in June) developers who signed up in the
+ *   six weeks before June 4 and are still in their buying window (their
+ *   customer_since is moved into that span; the extra share fades as
+ *   0.5 × 0.66 × (1 − d/42)²), so weekly purchases are flat from week 1 (about
+ *   10 a week; monthly 38 in the partial June, then 44, 52, 42).
+ * - Upgrade page warm start: established Free developers' upgrade visits taper
+ *   linearly from all of them on June 4 to 50% at the window end (the visit
+ *   before a purchase stays), so weekly visits hold near 100 while in-window
+ *   signups' visits pile up.
+ * - ENGINE WORKAROUND (retentionCurve budget per active day): new developers
+ *   who sign up fewer than ~40 days before the window end get ~25% fewer
+ *   usage events and about half the upgrade visits in their first weeks from
+ *   the engine. Upgrade visits of earlier signups (and the purchase that
+ *   follows a thinned visit) are kept at 55%, ramping to 100% between 42 and
+ *   34 days left, so purchases per Free signup are flat by signup date and
+ *   September revenue does not fall away. Set DENSITY_KEEP_EARLY = 1 when the
+ *   engine fix lands.
  * - New developers who never finish onboarding: 60% stop on a salted day
  *   0.2-3 (at least 1 h after the last setup step they reached); the rest keep
  *   a salted 25-60% of their work units (whole builds, PRs, pushes; the first
@@ -129,8 +144,10 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  * - Experiment exposure: the engine sends one $experiment_started per developer,
  *   1 s before their first CI build in the test; the hook drops the profile's
  *   assignment only when an activity cut removed that exposure.
- * - Holidays (Jul 3, Sep 7): 35% of work units (whole PRs, builds, previews,
- *   standalone events) that would start that day do not happen.
+ * - US holidays (Jul 3, Sep 7): for US-based developers (country_code US,
+ *   about 60% of profiles), 55% of work units (whole PRs, builds, previews,
+ *   standalone events) that would start that day do not happen; developers in
+ *   other countries work as usual.
  * - Warehouse drift: build_fleet_daily adds seeded API-triggered jobs (corr ≈
  *   0.98 with the event count); usage_billing_daily meters runner minutes
  *   across parallel jobs (×2-14 by plan), shifts 30% of a UTC day to the next
@@ -279,30 +296,31 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  * Hook | Metric                                         | Derivation                | Expected | Measured
  * -----|------------------------------------------------|---------------------------|----------|---------
  * H1   | assisted rows pre-launch or on Free            | exact purity              | 0        | 0
- * H1   | median review → merge, assisted / standard     | ASSIST_MERGE_MULT         | 0.60     | 0.599 (3.67 vs 6.12 h)
- * H1   | assisted share of eligible PRs after the ramp  | 0.5 × 0.8                 | 0.40     | 0.392 (weekly 2.0% → 39%)
+ * H1   | median review → merge, assisted / standard     | ASSIST_MERGE_MULT         | 0.60     | 0.599 (3.66 vs 6.12 h)
+ * H1   | assisted share of eligible PRs after the ramp  | 0.5 × 0.8                 | 0.40     | 0.393 (weekly 2.0% → 39%)
  * H2   | median passed build time, Remote Cache/Control | CACHE_TTC_MULT            | 0.60     | 0.594 (233 vs 392 s)
  * H2   | build success rate, Remote Cache/Control       | unchanged                 | 1.00     | 0.998 (85.3% vs 85.5%)
  * H2   | Remote Cache share of exposed developers       | equal 2-arm hash          | 0.50     | 0.489
  * H3   | 7-day onboarding, Java+.NET / other stacks     | SLOW_STACK_MULT           | 0.55     | 0.555 (32.1% vs 57.7%)
- * H4   | median open → review, 1,000+ / ≤100 lines      | LARGE_PR_WAIT_MULT        | 2.50     | 2.462 (7.92 vs 3.21 h)
- * H5   | D30 retention, first build passed / failed     | 1/(1 − RED_DARK_SHARE)    | 2.00     | 2.150 (57.2% vs 26.6%)
+ * H4   | median open → review, 1,000+ / ≤100 lines      | LARGE_PR_WAIT_MULT        | 2.50     | 2.463 (7.92 vs 3.21 h)
+ * H5   | D30 retention, first build passed / failed     | 1/(1 − RED_DARK_SHARE)    | 2.00     | 2.141 (57.1% vs 26.7%)
  * H6   | npm/other success, incident vs ±7 days         | 1 − INCIDENT_FAIL         | 0.40     | 0.413
  * H6   | warehouse dependency_fetch_error_rate, degraded| INCIDENT_FAIL             | 0.60     | 0.615
  * H7   | spend per signup, paid social / paid search    | 55 / 85                   | 0.647    | 0.654 ($55.11 vs $84.25)
  * H7   | 7-day onboarding, paid social / other channels | SOCIAL_ONBOARD_MULT       | 0.60     | 0.547 (30.0% vs 54.8%)
  * H8   | Team scheduled per push, Sep 15-30 / August    | 1 − SCHEDULED_CUT_MEAN    | 0.50     | 0.504 (0.130 vs 0.257)
  * H8   | other plans scheduled per push (control)       | unchanged                 | 1.00     | 1.044
- * H8   | overage rows off Team or before Sep 1 / missing| exact                     | 0 / 0    | 0 / 0 ($4,708 in September)
- * H9   | rollback rate, ≤30% / ≥75% coverage            | 0.20 / 0.05               | 4.00     | 3.878 (20.0% vs 5.15%)
- * H10  | 42-day paid rate, 3+ / 1-2 previews (14 days)  | ≥ 1.0 / 0.4 (floor)       | ≥ 2.50   | 4.045 (27.0% vs 6.7%, STRONG)
+ * H8   | overage rows off Team or before Sep 1 / missing| exact                     | 0 / 0    | 0 / 0 ($4,682 in September)
+ * H9   | rollback rate, ≤30% / ≥75% coverage            | 0.20 / 0.05               | 4.00     | 3.879 (20.0% vs 5.15%)
+ * H10  | 42-day paid rate, 3+ / 1-2 previews (14 days)  | ≥ 1.0 / 0.4 (floor)       | ≥ 2.50   | 3.988 (15.7% vs 3.9%, STRONG)
  * ═════════════════════════════════════════════════════════════════════════
  *
  * H10 is a knob floor: developers with 3+ early previews are also heavier
- * users who reach the upgrade page more often, so the realized ratio sits
- * above the keep ratio. Its cohort is Free signups only (337 habit, 764
- * light). H5 (2.150) sits above the knob within noise: 500 developers had a
- * failed first build and 26.6% of them were active in days 30-36 (relative
+ * users who reach the upgrade page more often (38.5% vs 21.4% visit it within
+ * 42 days, 1.8x), so the expected ratio is about 2.5 × 1.8 ≈ 4.5 before
+ * noise; realized 3.99 on 53 + 30 buyers. Its cohort is Free signups only
+ * (338 habit, 763 light). H5 (2.141) sits above the knob within noise: 502 developers had a
+ * failed first build and 26.7% of them were active in days 30-36 (relative
  * SE of the ratio about 8%). H3 and H7 come from engine funnel draws (H7's
  * 0.547 is noise on 761 paid social signups); H8 and H9 use low-discrepancy
  * draws and sit close to the knobs.
@@ -454,11 +472,32 @@ const UPGRADE_CONV = 34;           // new signups, per upgrade-page visit
 const UPGRADE_CONV_ESTABLISHED = 15; // per upgrade-page visit, before the base keep below
 const BUY_WINDOW_DAYS = 42;        // self-serve purchases land in a developer's first six weeks
 const EST_BASE_KEEP = 0.34;        // established free users' steady purchase rate (share of would-be purchases)
+// window start: established developers who joined in the six weeks before June 4 are still
+// evaluating in June; they add a share of would-be purchases that fades over 42 days
+const EST_EXTRA_AMP = 0.5;
+const EST_EXTRA_POW = 2;
+// established Free developers' upgrade visits taper from all of them on June 4 to this share
+// at the window end, as the June evaluators settle and in-window signups take over
+const EST_VIEW_KEEP_END = 0.5;
 const EVAL_CHURN_SHARE = 0.45;     // new users who stop on a salted day in their first four weeks (any setup outcome)
 const EVAL_CHURN_MIN_D = 1;
 const EVAL_CHURN_SKEW = 2;         // stop day = MIN + (MAX − MIN) · u^2: most evaluators who leave do so early
 const EVAL_CHURN_MAX_D = 28;
 const EVAL_CHURN_AFTER_SETUP_H = 12; // an evaluator who leaves stays at least 12 h past their last setup step
+// Engine workaround (retentionCurve budget per active day): a new developer who signs up
+// fewer than ~40 days before the window end gets fewer events per active day from the
+// engine (~25% fewer usage events and about half the upgrade-page visits in their first
+// weeks). Without a fix, self-serve purchases by late signups fall away and September
+// new MRR drops for no business reason. Upgrade visits (and the purchase that follows a
+// visit) of developers who sign up earlier are kept at the late-signup rate, ramping
+// from DENSITY_KEEP_EARLY at ≥ DENSITY_RAMP_HI days left to 1 at ≤ DENSITY_RAMP_LO.
+// Set DENSITY_KEEP_EARLY = 1 once the engine fix lands.
+const DENSITY_KEEP_EARLY = 0.55;
+const DENSITY_RAMP_LO = 34;
+const DENSITY_RAMP_HI = 42;
+const densityKeep = (daysLeft) => daysLeft <= DENSITY_RAMP_LO ? 1
+	: daysLeft >= DENSITY_RAMP_HI ? DENSITY_KEEP_EARLY
+	: 1 - (1 - DENSITY_KEEP_EARLY) * (daysLeft - DENSITY_RAMP_LO) / (DENSITY_RAMP_HI - DENSITY_RAMP_LO);
 const EXPLORER_KEEP_MIN = 0.25;    // non-onboarded new users who stay: share of activity kept
 const EXPLORER_KEEP_MAX = 0.6;
 
@@ -466,8 +505,10 @@ const EXPLORER_KEEP_MAX = 0.6;
 const INVITE_EARLY_DAYS = 14;
 const INVITE_KEEP_LATE = 0.25;
 
-// holidays: share of user-initiated work units that do not happen
-const HOLIDAY_DROP = 0.35;
+// holidays (US public holidays): share of a US-based developer's user-initiated work
+// units that do not happen; developers outside the US work as usual
+const HOLIDAY_COUNTRY = "US";
+const HOLIDAY_DROP = 0.55;
 
 // ── DATA ARRAYS (seeded) ──
 const ORG_COUNT = 500;
@@ -724,6 +765,26 @@ function handleEverything(events, meta) {
 			|| (firstBuildId && e.build_id === firstBuildId) || salt(unitKey(e) || e.insert_id, "explorer") < keepShare);
 	}
 
+	// ── engine workaround: new developers' upgrade visits at the late-signup rate ──
+	// (see DENSITY_KEEP_EARLY). A thinned visit takes the purchase that follows it along.
+	if (signup) {
+		const keep = densityKeep((END - birthMs) / DAY_MS);
+		if (keep < 1) {
+			const drop = new Set();
+			let dropping = false;
+			for (const e of events.filter((x) => x.event === "upgrade page viewed" || x.event === "subscription started").sort((a, b) => T(a) - T(b))) {
+				if (e.event === "upgrade page viewed") {
+					dropping = salt(e.insert_id, "density-keep") >= keep;
+					if (dropping) drop.add(e);
+				} else if (dropping) {
+					drop.add(e);
+					dropping = false;
+				}
+			}
+			if (drop.size) events = events.filter((e) => !drop.has(e));
+		}
+	}
+
 	// ── purchases: one per user; H10 preview habit decides which would-be purchases happen ──
 	const firstBuy = events.filter((e) => e.event === "subscription started").sort((a, b) => T(a) - T(b))[0];
 	if (firstBuy) {
@@ -745,7 +806,7 @@ function handleEverything(events, meta) {
 	// signed up in the weeks before June 4 and are still inside their first six weeks
 	if (purchase && !signup) {
 		const d = (T(purchase) - ms(DATASET_START)) / DAY_MS;
-		const extra = (1 - EST_BASE_KEEP) * Math.pow(Math.max(0, 1 - d / BUY_WINDOW_DAYS), 1.5);
+		const extra = EST_EXTRA_AMP * (1 - EST_BASE_KEEP) * Math.pow(Math.max(0, 1 - d / BUY_WINDOW_DAYS), EST_EXTRA_POW);
 		const r = salt(uid, "est-keep");
 		if (r >= EST_BASE_KEEP + extra) {
 			events = events.filter((e) => e !== purchase);
@@ -765,6 +826,18 @@ function handleEverything(events, meta) {
 		}
 	}
 	if (purchase && purchase.plan === "pro") purchase.seats = 1;
+	// established Free developers' upgrade visits taper over the window (EST_VIEW_KEEP_END);
+	// the visit that leads to a purchase stays
+	if (!signup) {
+		const buyAt = purchase ? T(purchase) : Infinity;
+		const leadView = purchase ? events.filter((e) => e.event === "upgrade page viewed" && T(e) <= buyAt).sort((a, b) => T(b) - T(a))[0] : null;
+		const span = END - ms(DATASET_START);
+		events = events.filter((e) => {
+			if (e.event !== "upgrade page viewed" || e === leadView) return true;
+			const keep = 1 - (1 - EST_VIEW_KEEP_END) * Math.max(0, T(e) - ms(DATASET_START)) / span;
+			return salt(e.insert_id, "est-view") < keep;
+		});
+	}
 
 	const initialPlan = profile.plan_tier;
 	const buyMs = purchase ? T(purchase) : Infinity;
@@ -870,7 +943,8 @@ function handleEverything(events, meta) {
 		return salt(e.insert_id, "invite-keep") < INVITE_KEEP_LATE;
 	});
 
-	// ── holidays: a share of work units that would have started that day do not happen ──
+	// ── US holidays: a share of a US-based developer's work units that would have started
+	// that day do not happen; everyone else works as usual ──
 	const unitStart = new Map();
 	for (const e of events) {
 		const k = unitKey(e);
@@ -885,7 +959,7 @@ function handleEverything(events, meta) {
 		if (e.build_id && e.trigger === "schedule") return true; // cron builds run on holidays too
 		const k = unitKey(e);
 		const t0 = k ? unitStart.get(k) : T(e);
-		if (!HOLIDAYS.includes(dayKey(t0))) return true;
+		if (profile.country_code !== HOLIDAY_COUNTRY || !HOLIDAYS.includes(dayKey(t0))) return true;
 		return salt(k || e.insert_id, "holiday") >= HOLIDAY_DROP;
 	});
 
@@ -1687,7 +1761,7 @@ FROM ${WH("build_fleet_daily")}`,
 	{
 		id: "H7-paid-channel-economics",
 		hook: "H7",
-		archetype: "attribution-bias",
+		archetype: "funnel-conversion-by-segment",
 		narrative: `Paid social looks cheapest per signup: over the window marketing_spend_daily bills $${CPL_USD.paid_social} per Mixpanel signup on paid social vs $${CPL_USD.paid_search} on paid search and $${CPL_USD.newsletter} on newsletter sponsorships (campaigns bid to a target cost per signup, so daily spend follows the trailing 7-day signup volume, paced on the weekday schedule with seeded noise, never zero). But paid social signups finish onboarding at ${SOCIAL_ONBOARD_MULT}x the rate of every other channel (declared onboarding funnel copies with an acquisition_channel condition), so per onboarded developer paid search is cheaper. Spend per signup needs the warehouse join; the onboarding read is the Mixpanel funnel broken down by acquisition_channel.`,
 		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "marketing_spend_daily.spend_usd", funnel: "onboarding steps, 7-day window, breakdown user property acquisition_channel" },
 		assertions: [

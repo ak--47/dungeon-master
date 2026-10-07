@@ -2,7 +2,7 @@
 
 ## Who we are
 
-Forgebench is a developer platform. One product covers the path from a code change to production: pull requests and code review, CI builds on hosted runners, a preview deployment for every push, and production deploys. The company has about 45 employees and serves about 500 customer organizations, from small startups with a handful of developers to enterprises with up to about 300 developers on the platform. The active base is global: developers in India, Europe, and the Americas together cover most working hours of the UTC day.
+Forgebench is a developer platform. One product covers the path from a code change to production: pull requests and code review, CI builds on hosted runners, a preview deployment for every push, and production deploys. The company has about 45 employees and serves about 500 customer organizations, from small startups with a handful of developers to enterprises with up to about 300 developers on the platform. Most developers on the platform are in the United States (about six in ten). The rest are spread across Europe, Asia, Latin America, and Africa, so some activity happens in every hour of the UTC day.
 
 ## What developers do in the product
 

@@ -1,6 +1,6 @@
 # Forgebench (devtools) — 20-question eval
 
-- **Data:** `data/verify-devtools` (full fidelity: 10,000 developers, 9,993 with events, 4,484 new signups, 500 organizations, 968,156 events, 2026-06-04 → 2026-10-01 UTC)
+- **Data:** `data/verify-devtools` (full fidelity: 10,000 developers, 9,993 with events, 4,484 new signups, 500 organizations, 967,797 events, 2026-06-04 → 2026-10-01 UTC)
 - **Run date:** 2026-10-07
 - **Numbers:** every answer comes from the matching `-- EVAL Q<n>` query in `dungeons/vertical/devtools/devtools.sql` on that data.
 - **Stories:** ids refer to the `stories` export in `devtools.js` (H1-H10).
@@ -11,15 +11,15 @@
 ### Q1 — Does Forge Assist speed up merges?
 - **Prompt:** "We launched Forge Assist at the end of July. Is it actually getting pull requests merged faster? By how much?"
 - **Type:** trend
-- **Answer:** Yes, after review. Since the 2026-07-29 launch, Pro/Team/Enterprise pull requests reviewed by Forge Assist (`review_mode = forge_assist`) went from review to merge in a **median 3.67 hours vs 6.12 hours** for standard pull requests on the same plans, about **0.60x** (average 5.83 vs 10.09 hours). Blended over all eligible pull requests, the median review → merge time fell from 6.05 hours before launch to 5.24 after (−13%), while Free pull requests (no access) stayed flat (6.17 → 5.97). Accept 0.54x-0.66x.
+- **Answer:** Yes, after review. Since the 2026-07-29 launch, Pro/Team/Enterprise pull requests reviewed by Forge Assist (`review_mode = forge_assist`) went from review to merge in a **median 3.66 hours vs 6.12 hours** for standard pull requests on the same plans, about **0.60x** (average 5.83 vs 10.10 hours). Blended over all eligible pull requests, the median review → merge time fell from 6.05 hours before launch to 5.24 after (−13%), while Free pull requests (no access) stayed flat (6.18 → 5.98). Accept 0.54x-0.66x.
 - **Evidence:** H1-forge-assist-launch; Funnels, `review submitted` → `pull request merged`, hold `pr_id` constant, median time to convert, breakdown `review_mode`, filter `plan_tier` in (pro, team, enterprise), from 2026-07-29; `-- EVAL Q1`.
 - **Context needed:** 02-timeline.md (launch date, plan scope), 03-event-dictionary.md (`review_mode`, `pr_id`).
 - **Grading:** must compare assisted to standard pull requests on eligible plans (or use Free as a control for a before/after). Wrong: measuring open → review wait (it does not change; see Q6 and story notes); comparing all pull requests before vs after launch across every plan without noting the dilution.
 
 ### Q2 — Forge Assist adoption
 - **Prompt:** "How many pull requests go through Forge Assist now? Is usage still growing?"
-- **Type:** segmentation
-- **Answer:** Adoption **ramped for about four weeks and then leveled off at about 39-40%** of eligible pull requests. Weekly share of Pro/Team/Enterprise pull requests opened with `review_mode = forge_assist` (Monday weeks): 2.0% (week of Jul 27; launch on Wednesday Jul 29), 11.8% (Aug 3), 20.9% (Aug 10), 30.0% (Aug 17), 39.3% (Aug 24), then 38.7%-39.7% every week through September (39.7% in the last partial week). From Aug 26 on, 39.2% of eligible pull requests use it. 2,560 of 5,407 eligible authors (47%) have used it. It is no longer growing. Accept a ramp through late August and a plateau of 36%-44%.
+- **Type:** trend
+- **Answer:** Adoption **ramped for about four weeks and then leveled off at about 39-40%** of eligible pull requests. Weekly share of Pro/Team/Enterprise pull requests opened with `review_mode = forge_assist` (Monday weeks): 2.0% (week of Jul 27; launch on Wednesday Jul 29), 11.7% (Aug 3), 20.9% (Aug 10), 29.9% (Aug 17), 39.4% (Aug 24), then 38.9%-39.7% every week through September (39.7% in the last partial week). From Aug 26 on, 39.3% of eligible pull requests use it. 2,533 of 5,353 eligible authors (47%) have used it. It is no longer growing. Accept a ramp through late August and a plateau of 36%-44%.
 - **Evidence:** H1-forge-assist-launch; Insights, `pull request opened`, filter `plan_tier` in (pro, team, enterprise), breakdown `review_mode`, weekly, % of total; `-- EVAL Q2`.
 - **Context needed:** 02-timeline.md (launch, opt-in per developer), 04-metrics-and-tables.md (adoption definition).
 - **Grading:** denominator is eligible pull requests, and the answer must describe the shape (ramp, then plateau). Wrong: share of all pull requests including Free (much lower); "still growing"; quoting only an all-period average.
@@ -27,7 +27,7 @@
 ### Q3 — Are Forge Assist pull requests safer to ship? (null)
 - **Prompt:** "Do pull requests reviewed by Forge Assist get rolled back less often in production?"
 - **Type:** null-hypothesis
-- **Answer:** **No.** Of eligible pull requests opened since launch that reached production, **12.89% of Forge Assist deploys rolled back vs 13.04%** of standard ones (883 of 6,848 vs 1,992 of 15,276; z ≈ −0.3, p ≈ 0.8). By plan: Enterprise 12.73% vs 13.18%, Pro 12.85% vs 11.31%, Team 13.00% vs 13.18% (no plan reaches p < 0.2; Pro, the smallest, is z ≈ +0.9). Forge Assist shortens the review-to-merge step; it does not change the change failure rate. Accept "no meaningful difference".
+- **Answer:** **No.** Of eligible pull requests opened since launch that reached production, **12.91% of Forge Assist deploys rolled back vs 13.07%** of standard ones (877 of 6,794 vs 1,981 of 15,152; z ≈ −0.3, p ≈ 0.7). By plan: Enterprise 12.66% vs 13.18%, Pro 12.27% vs 11.69%, Team 13.14% vs 13.18% (no plan reaches p < 0.2; the largest gap is Enterprise, z ≈ −0.6). Forge Assist shortens the review-to-merge step; it does not change the change failure rate. Accept "no meaningful difference".
 - **Evidence:** `-- EVAL Q3`; Insights, `production deployed`, share `deploy_outcome = rolled_back`, breakdown `review_mode`, filter plan and date.
 - **Context needed:** 03-event-dictionary.md (`deploy_outcome`, `review_mode`), 04-metrics-and-tables.md (change failure rate).
 - **Grading:** must check rollbacks directly and treat the gap as noise. Wrong: "yes, AI review makes deploys safer"; citing merge speed as evidence of quality.
@@ -51,7 +51,7 @@
 ### Q6 — Do bigger organizations wait longer for reviews? (null)
 - **Prompt:** "Enterprise teams have more process. Do their pull requests wait longer for a first review than startups'?"
 - **Type:** null-hypothesis
-- **Answer:** **No.** Median open → first review wait is **4.25 hours at enterprise organizations, 4.34 mid-market, 4.30 SMB, and 4.29 startups**; averages are 9.25, 9.38, 9.41, and 9.67 hours (on log wait time, enterprise vs startup z ≈ −1.2, p ≈ 0.23; mid-market and SMB vs startup |z| ≤ 0.2). Pull request size is the same across sizes (median 120-124 lines). Organization size does not matter; pull request size does (Q7). Accept "no meaningful difference".
+- **Answer:** **No.** Median open → first review wait is **4.25 hours at enterprise organizations, 4.34 mid-market, 4.30 SMB, and 4.29 startups**; averages are 9.25, 9.37, 9.42, and 9.67 hours (on log wait time, enterprise vs startup z ≈ −1.2, p ≈ 0.24; mid-market and SMB vs startup |z| ≤ 0.2). The null holds inside each plan: enterprise vs startup z = +0.8 (Free), −0.7 (Pro), −1.2 (Team). Pull request size is the same across sizes (median 120-124 lines). Organization size does not matter; pull request size does (Q7). Accept "no meaningful difference".
 - **Evidence:** `-- EVAL Q6`; Funnels, `pull request opened` → `review submitted`, hold `pr_id`, median time to convert, breakdown user property `org_size`.
 - **Context needed:** 01-business.md (organization sizes), 04-metrics-and-tables.md (review wait).
 - **Grading:** must check the data and report no difference. Wrong: "enterprise is slower" from intuition.
@@ -67,7 +67,7 @@
 ### Q8 — What predicts whether a new developer sticks around?
 - **Prompt:** "Is there anything in a new developer's first days that predicts whether they're still using Forgebench a month later?"
 - **Type:** retention
-- **Answer:** **Their first CI build.** For new developers whose first build came within 14 days of signup (signups through Aug 25), day-30 retention (any activity in days 30-36) is **57.2% when the first build passed vs 26.6% when it failed (about 2.15x)**; days 7-13 activity is 84.3% vs 49.2%. The first build fails often: 40.2% of new developers' first builds fail (vs 14.5% for builds overall), and 57% of those failures are configuration errors. For scale, of all new signups through Aug 25, 70.4% are active on day 1, 44.1% in days 7-13, and 28.8% in days 30-36. Accept 1.8x-2.4x on D30 and mention of the high first-build failure rate.
+- **Answer:** **Their first CI build.** For new developers whose first build came within 14 days of signup (signups through Aug 25), day-30 retention (any activity in days 30-36) is **57.1% when the first build passed vs 26.7% when it failed (about 2.14x)**; days 7-13 activity is 84.1% vs 49.4%. The first build fails often: 40.2% of new developers' first builds fail (vs 14.5% for builds overall), and 57% of those failures are configuration errors. For scale, of all new signups through Aug 25, 70.4% are active on day 1, 44.1% in days 7-13, and 28.8% in days 30-36. Accept 1.8x-2.4x on D30 and mention of the high first-build failure rate.
 - **Evidence:** H5-first-build-red-churn; build the cohorts in **Funnels**: `account created` → `build finished`, 14-day window, breakdown `build_status` of step 2 (the first build); save `success` and `failed` as cohorts; then **Retention**, `account created` → any event, custom bracket day 30-36, breakdown by those cohorts; `-- EVAL Q8`.
 - **Context needed:** 04-metrics-and-tables.md (retention definition), 03-event-dictionary.md (`build_status`, `failure_stage`), 01-business.md (activation goal).
 - **Grading:** must classify by the first build (not all builds) and compare retention. Wrong: "developers with more builds retain better" (circular); using a whole-window build count.
@@ -107,7 +107,7 @@
 ### Q13 — Did overage billing change how Team customers use CI?
 - **Prompt:** "Team overage billing started September 1. Did Team customers change how they use CI?"
 - **Type:** trend
-- **Answer:** Yes: **Team customers switched off about half of their scheduled (cron) builds** over the first two weeks of September, and nothing else changed. Scheduled builds per push build on Team went from **0.257 in August to 0.130 on Sep 15-30 (0.50x)**; weekly it was 0.24-0.26 through August, then 0.218 (week of Aug 31), 0.185 (Sep 7), 0.131, 0.121, 0.134 (partial week). Other plans stayed flat (0.257 → 0.268, 1.04x). Team push builds did not fall (317.1 → 353.0 per day), so developers did not build less; they cut cron jobs. Accept 0.43x-0.57x and "push builds unchanged".
+- **Answer:** Yes: **Team customers switched off about half of their scheduled (cron) builds** over the first two weeks of September, and nothing else changed. Scheduled builds per push build on Team went from **0.257 in August to 0.130 on Sep 15-30 (0.50x)**; weekly it was 0.24-0.26 through August, then 0.218 (week of Aug 31), 0.185 (Sep 7), 0.130, 0.121, 0.133 (partial week). Other plans stayed flat (0.257 → 0.268, 1.04x). Team push builds did not fall (315.1 → 351.1 per day), so developers did not build less; they cut cron jobs. Accept 0.43x-0.57x and "push builds unchanged".
 - **Evidence:** H8-team-overage-billing; Insights, `build started`, breakdown `trigger` and `plan_tier`, weekly, formula schedule / push; `-- EVAL Q13`.
 - **Context needed:** 02-timeline.md (billing dates), 01-business.md (Team plan), 03-event-dictionary.md (`trigger`).
 - **Grading:** must look at build triggers on Team with a control or a ratio. Wrong: "no change" from total build counts (they rose with growth); "Team customers stopped building".
@@ -115,7 +115,7 @@
 ### Q14 — What did overage billing bring in?
 - **Prompt:** "How much overage revenue did Team billing bring in for September?"
 - **Type:** external-join
-- **Answer:** **$4,708.30 in September** (313,883 overage minutes at $0.015), from `usage_billing_daily`. There was no overage before September 1, none on other plans, and none on October 1 (allowances reset on the 1st). Within September it builds up as organizations use up their monthly allowances: nothing on Sep 1-3, $18.96 on Sep 4-6, then $483 (week of Sep 7), $1,065, $1,735, and $1,406 for Sep 28-30, ending above $500 a day. Team billed runner minutes were 1,164,773 in August and 1,162,499 in September (flat even with growth, after the cron cuts). September overage is about $4.05 per 1,000 Team runner minutes. Accept within ±1%.
+- **Answer:** **$4,681.70 in September** (312,110 overage minutes at $0.015), from `usage_billing_daily`. There was no overage before September 1, none on other plans, and none on October 1 (allowances reset on the 1st). Within September it builds up as organizations use up their monthly allowances: nothing on Sep 1-3, $18.35 on Sep 4-6, then $480 (week of Sep 7), $1,057, $1,727, and $1,400 for Sep 28-30, ending above $500 a day. Team billed runner minutes were 1,157,750 in August and 1,155,382 in September (flat even with growth, after the cron cuts). September overage is about $4.05 per 1,000 Team runner minutes. Accept within ±1%.
 - **Evidence:** H8-team-overage-billing; warehouse `usage_billing_daily`; `-- EVAL Q14`.
 - **Context needed:** 04-metrics-and-tables.md (billing table and caveats), 02-timeline.md.
 - **Grading:** must use the warehouse (overage is not in Mixpanel) and keep September to Sep 1-30. Credit answers that note the month-start reset and the climb through the month. Wrong: estimating from `build_duration_sec` × price (billing meters parallel jobs; the table is the source of truth); reading the low first week as customers avoiding overage (allowances were not used up yet).
@@ -123,39 +123,39 @@
 ### Q15 — What drives change failure rate?
 - **Prompt:** "Our rollback rate is around 12%. What's driving it?"
 - **Type:** segmentation
-- **Answer:** **Repository test coverage.** Rollback rate of production deploys by the repository's `test_coverage_pct`: **≤30% coverage 20.0%**, 31-49% 17.0%, 50-74% 9.4%, **≥75% 5.15%**, about **3.9x** from the lowest to the highest band, falling steadily. Overall: 12.75% of 47,139 deploys. Pull request size and Forge Assist do not matter (Q3, Q19). Accept a ratio of 3.4x-4.4x for ≤30% vs ≥75% and a monotonic decline.
+- **Answer:** **Repository test coverage.** Rollback rate of production deploys by the repository's `test_coverage_pct`: **≤30% coverage 20.0%**, 31-49% 17.1%, 50-74% 9.4%, **≥75% 5.15%**, about **3.9x** from the lowest to the highest band, falling steadily. Overall: 12.74% of 47,156 deploys. Pull request size and Forge Assist do not matter (Q3, Q19). Accept a ratio of 3.4x-4.4x for ≤30% vs ≥75% and a monotonic decline.
 - **Evidence:** H9-test-coverage-rollbacks; Insights, `production deployed`, share `deploy_outcome = rolled_back`, breakdown `test_coverage_pct` (custom buckets); `-- EVAL Q15`.
 - **Context needed:** 03-event-dictionary.md (`test_coverage_pct`, `deploy_outcome`), 01-business.md (reliability goal).
 - **Grading:** must break down by coverage and show the gradient. Wrong: "big pull requests" (no effect); "a cliff at one threshold".
 
 ### Q16 — Who buys a paid seat?
 - **Prompt:** "Is there something new developers do early that predicts they'll pay?"
-- **Type:** retention
-- **Answer:** **Using previews.** Of new developers who signed up on Free through Aug 20 (2,136), **27.0% of those with 3+ preview deploys in their first 14 days bought a paid seat within 42 days vs 6.7%** of those with 1-2 previews (about **4.0x**); developers who never finished setup (no preview) never bought. By preview count: 1 preview 4.5%, 2 previews 10.5%, 3 20.5%, 4 28.2%, 5+ 41.2%. The 3+ group is 31% of onboarded Free signups but 91 of 142 buyers (64%). Part of the gap is engagement (heavy users reach the upgrade page more often), so "predicts" is right and "causes the whole 4x" overstates it. Accept 3x-5.5x and a jump at 3 previews.
+- **Type:** funnel
+- **Answer:** **Using previews.** Of new developers who signed up on Free through Aug 20 (2,136), **15.7% of those with 3+ preview deploys in their first 14 days bought a paid seat within 42 days vs 3.9%** of those with 1-2 previews (about **4.0x**); developers who never finished setup (no preview) never bought. By preview count: 1 preview 2.7%, 2 previews 6.2%, 3 13.3%, 4 11.5%, 5+ 27.9%. The 3+ group is 31% of onboarded Free signups but 53 of 83 buyers (64%). Part of the gap is engagement (heavy users reach the upgrade page more often), so "predicts" is right and "causes the whole 4x" overstates it. Accept 3x-5.5x and a clear step up from 1-2 to 3+ previews.
 - **Evidence:** H10-preview-habit-converts; Funnels `account created` → `preview deployed` → `preview deployed` → `preview deployed`, 14-day window (completed = 3+, dropped after step 2 or 3 = 1-2); save cohorts; Funnels `account created` → `subscription started`, 42-day window, filter `account created` `plan_tier = free`, breakdown by cohort; `-- EVAL Q16`.
 - **Context needed:** 04-metrics-and-tables.md (paid conversion definition), 01-business.md (growth goal).
-- **Grading:** must define the behavior from the first 14 days only and compare purchase rates. Without the Free filter the rates drop (developers who joined a Team or Enterprise workspace cannot buy) but the ratio stays close (19.3% vs 4.8%, 4.0x); accept it if the answer says so. Wrong: counting previews over the whole window (leaks the outcome); including developers whose 42-day window is incomplete.
+- **Grading:** must define the behavior from the first 14 days only and compare purchase rates. Without the Free filter the rates drop (developers who joined a Team or Enterprise workspace cannot buy) but the ratio stays close (11.2% vs 2.9%, 3.9x); accept it if the answer says so. Wrong: counting previews over the whole window (leaks the outcome); including developers whose 42-day window is incomplete.
 
 ### Q17 — Why did activity drop on two days?
 - **Prompt:** "Our daily build chart has a sharp dip on a Monday in early September and on a Friday in early July. Was something broken?"
 - **Type:** context
-- **Answer:** **No; US holidays.** Monday **Sep 7 (Labor Day)** had 1,221 builds started vs 1,682, 1,734, and 1,586 on the surrounding Mondays (about −27%); active developers 2,346 vs 2,573-2,655. Friday **Jul 3 (Independence Day observed)** had 901 builds vs 1,316-1,365 on the surrounding Fridays (about −33%). No incident is logged on either day; the timeline lists both as US holidays when many US-based teams are off, and the drop is partial because the base is global (teams elsewhere work as usual) and scheduled builds run every day. Accept naming both holidays.
-- **Evidence:** `-- EVAL Q17`; Insights, `build started`, daily; timeline.
-- **Context needed:** 02-timeline.md, 01-business.md (global base).
-- **Grading:** must connect the dips to the holidays. Wrong: "an outage" (the only incident was Aug 19-20 and hit npm builds, not volume).
+- **Answer:** **No; US holidays.** Monday **Sep 7 (Labor Day)** had 1,228 builds started vs 1,682, 1,734, and 1,586 on the surrounding Mondays (about −26%); active developers 2,274 vs 2,573-2,654. Friday **Jul 3 (Independence Day observed)** had 910 builds vs 1,316-1,365 on the surrounding Fridays (about −32%). The dip is all US developers: their hands-on work (pushes, pull requests opened, non-scheduled builds) fell 56% on Jul 3 and 50% on Sep 7 against the same weekday a week either side, while developers outside the US worked as usual (−1.5% and +2.7%). About 60% of developers are in the US, and scheduled builds run every day, so the total dip is partial. No incident is logged on either day. Accept naming both holidays; full credit for showing the dip is US-only.
+- **Evidence:** `-- EVAL Q17`; Insights, `build started`, daily; breakdown `country_code` (US vs the rest); timeline.
+- **Context needed:** 02-timeline.md, 01-business.md (where developers are).
+- **Grading:** must connect the dips to the holidays. Wrong: "an outage" (the only incident was Aug 19-20 and hit npm builds, not volume); "everyone took the day off" (non-US activity did not change).
 
 ### Q18 — New self-serve revenue by month
 - **Prompt:** "How much new MRR did self-serve upgrades add each month this summer?"
 - **Type:** context
-- **Answer:** At list price (Pro $12 per developer, Team $29 per seat): **June $7,941** (59 subscriptions; the window starts June 4), **July $9,181** (59), **August $9,186** (83), **September $5,271** (45); October 1 adds $302. Team drives most of it: about 10 seats per Team subscription vs 1 for Pro (August: Team 28 subscriptions, 294 seats, $8,526; Pro 55 subscriptions, $660; September: Team 19 subscriptions, 171 seats, $4,959; Pro 26, $312). September is the low month: both Pro and Team purchases fell, while upgrade-page traffic stayed at its August level. Accept within ±2%.
+- **Answer:** At list price (Pro $12 per developer, Team $29 per seat): **June $4,643** (38 subscriptions; the window starts June 4), **July $6,110** (44), **August $6,532** (52), **September $5,235** (42); October 1 adds $290. Team drives most of it: about 10 seats per Team subscription vs 1 for Pro (August: Team 20 subscriptions, 212 seats, $6,148; Pro 32 subscriptions, $384; September: Team 19 subscriptions, 171 seats, $4,959; Pro 23, $276). New MRR is roughly flat at $5-6.5k a month from July: monthly counts this small (42-52 subscriptions) move by ±15% on their own, so August is not a peak and September is not a decline. Accept within ±2%.
 - **Evidence:** `-- EVAL Q18`; Insights, `subscription started`, sum of `seats` by `plan`, monthly, × list price.
 - **Context needed:** 01-business.md (prices), 04-metrics-and-tables.md (new MRR definition).
-- **Grading:** must multiply seats by the plan's list price. Monthly purchase counts are small (45-83), and the September dip has no cause in the timeline: it hits Pro and Team alike and comes from fewer purchases among developers who signed up late in the window. Credit an answer that reports the dip and says no dated event explains it (or that it needs another month to confirm). Wrong: counting subscriptions without seats; adding Enterprise (not self-serve); multiplying by $29 for Pro; blaming Team overage billing (it meters existing Team organizations, and Pro purchases fell just as much).
+- **Grading:** must multiply seats by the plan's list price. Credit an answer that calls the monthly totals flat (or within normal variation) and notes June is a partial month. Wrong: counting subscriptions without seats; adding Enterprise (not self-serve); multiplying by $29 for Pro; reading the Aug-to-Sep change as a trend or blaming Team overage billing for it.
 
 ### Q19 — Do big pull requests break production more? (null)
 - **Prompt:** "Engineering leadership wants a cap on pull request size because big PRs break production. Does the data back that up?"
 - **Type:** null-hypothesis
-- **Answer:** **No.** Rollback rate is **12.75% for ≤100-line pull requests, 12.79% for 101-999 lines, and 12.42% for 1,000+ lines** (21,027 / 23,084 / 3,028 deploys; 1,000+ vs ≤100 z ≈ −0.5, p ≈ 0.6). Coverage is the same across sizes (about 52%). Big pull requests do wait longer for review (Q7), but they do not roll back more; test coverage is what predicts rollbacks (Q15). Accept "no meaningful difference".
+- **Answer:** **No.** Rollback rate is **12.73% for ≤100-line pull requests, 12.79% for 101-999 lines, and 12.44% for 1,000+ lines** (21,043 / 23,082 / 3,031 deploys; 1,000+ vs ≤100 z ≈ −0.5, p ≈ 0.7). Coverage is the same across sizes (about 52%). Big pull requests do wait longer for review (Q7), but they do not roll back more; test coverage is what predicts rollbacks (Q15). Accept "no meaningful difference".
 - **Evidence:** `-- EVAL Q19`; Insights, `production deployed`, share `deploy_outcome = rolled_back`, breakdown `lines_changed` (custom buckets).
 - **Context needed:** 03-event-dictionary.md, 04-metrics-and-tables.md (change failure rate).
 - **Grading:** must check the data and report no difference. Wrong: "yes, big PRs roll back more" from intuition or from review-wait data.
@@ -165,13 +165,13 @@
 - **Type:** open-ended
 - **Answer:** A strong answer names most of these, with numbers:
   1. **Java/.NET setup**: 32.1% finish setup vs 57.7% for other stacks; Java/.NET is 28% of signups (Q5). Fix import and pipeline setup for JVM and .NET.
-  2. **First-build failures**: 40.2% of new developers' first builds fail (57% configuration errors), and those developers are active in days 30-36 at 26.6% vs 57.2% (Q8). Better starter pipelines and error help. Only 29% of all new signups are still active a month in.
+  2. **First-build failures**: 40.2% of new developers' first builds fail (57% configuration errors), and those developers are active in days 30-36 at 26.7% vs 57.1% (Q8). Better starter pipelines and error help. Only 29% of all new signups are still active a month in.
   3. **Rollbacks in low-coverage repositories**: 20.0% rollback rate at ≤30% coverage vs 5.15% at ≥75% (Q15); coverage, not pull request size, is the lever.
   4. **Paid social quality**: cheapest per signup ($55) but only 30.0% finish setup, so it costs more per onboarded developer than paid search ($184 vs $158); newsletter is the most expensive ($212) (Q11-Q12).
   5. **Registry mirror reliability**: the Aug 19-20 npm mirror incident cut npm build success to 35% for two days, about 522 lost builds (Q9).
   6. **Team overage reaction**: Team customers cut cron builds about in half within two weeks; overage brought in about $4.7k in September and was still climbing at month end (Q13-Q14). Watch Team satisfaction and churn.
   7. **Large pull requests** wait 2.5x as long for a first review (Q7).
-  8. **Self-serve new MRR** fell to $5.3k in September from about $9.2k in July and August (Q18); no dated cause, so watch October before acting.
+  8. **Self-serve revenue is not growing**: new MRR stayed at about $5-6.5k a month from July to September (Q18) while weekly active developers grew about 22%; conversion of Free developers is the lever (Q16).
   Positive signals: Forge Assist cuts review-to-merge time to 0.60x and settled at about 39% of eligible pull requests (Q1-Q2); Remote Build Cache cuts build time to 0.59x with no change in pass rate (ship it, Q4); Free signups with 3+ previews in their first two weeks buy at 4x the rate (Q16); weekly active developers grew from about 5,100 to 6,200 over the summer.
 - **Evidence:** H1-H10; `-- EVAL Q20` (headline numbers).
 - **Context needed:** all guides.

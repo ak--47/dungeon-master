@@ -221,6 +221,11 @@ FROM prs JOIN prof p ON p.uid = prs.uid WHERE t_open IS NOT NULL AND t_review IS
 WITH w AS (SELECT p.org_size, ln(date_diff('second', t_open, t_review) / 3600.0) AS lw FROM prs JOIN prof p ON p.uid = prs.uid WHERE t_open IS NOT NULL AND t_review IS NOT NULL),
 g AS (SELECT org_size, avg(lw) AS m, var_samp(lw) AS v, count(*) AS n FROM w GROUP BY 1)
 SELECT g.org_size, round(g.m, 4) AS mean_log_wait, round((g.m - s.m) / sqrt(g.v / g.n + s.v / s.n), 2) AS z_vs_startup FROM g, g s WHERE s.org_size = 'startup' ORDER BY 1;
+-- the same check inside each plan (plan at the PR's open): enterprise vs startup log wait
+WITH w AS (SELECT prs.plan_open AS plan, p.org_size, ln(date_diff('second', t_open, t_review) / 3600.0) AS lw FROM prs JOIN prof p ON p.uid = prs.uid WHERE t_open IS NOT NULL AND t_review IS NOT NULL),
+g AS (SELECT plan, org_size, avg(lw) AS m, var_samp(lw) AS v, count(*) AS n FROM w GROUP BY 1, 2)
+SELECT g.plan, g.n AS enterprise_prs, s.n AS startup_prs, round((g.m - s.m) / sqrt(g.v / g.n + s.v / s.n), 2) AS z_enterprise_vs_startup
+FROM g JOIN g s ON s.plan = g.plan AND s.org_size = 'startup' WHERE g.org_size = 'enterprise' ORDER BY 1;
 
 -- EVAL Q7 — review wait by PR size
 SELECT CASE WHEN lines <= 100 THEN 'a: <=100' WHEN lines < 400 THEN 'b: 101-399' WHEN lines < 1000 THEN 'c: 400-999' ELSE 'd: 1000+' END AS pr_size,
@@ -354,6 +359,14 @@ SELECT CASE WHEN previews >= 3 THEN 'habit (3+)' WHEN previews >= 1 THEN 'light 
 -- EVAL Q17 — the Labor Day dip: builds and active developers, Mondays around Sep 7 (and July 3 vs other Fridays)
 SELECT t::DATE AS d, dayname(t::DATE) AS dow, count(*) FILTER (WHERE event = 'build started') AS builds_started, count(DISTINCT uid) AS active_developers
 FROM ev WHERE t::DATE IN ('2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21', '2026-06-26', '2026-07-03', '2026-07-10', '2026-07-17') GROUP BY 1, 2 ORDER BY 1;
+-- user-initiated work (pushes, PRs opened, non-scheduled builds) by developer location: each holiday vs the same weekday one week either side
+WITH w AS (SELECT t::DATE AS d, (country_code = 'US') AS us FROM ev WHERE event IN ('commit pushed', 'pull request opened') OR (event = 'build started' AND trigger <> 'schedule')),
+h AS (SELECT * FROM (VALUES (DATE '2026-07-03', 'Jul 3 Independence Day (observed)'), (DATE '2026-09-07', 'Sep 7 Labor Day')) v(hd, holiday))
+SELECT holiday, CASE WHEN us THEN 'US' ELSE 'outside US' END AS location, count(*) FILTER (WHERE d = hd) AS on_holiday,
+ round(count(*) FILTER (WHERE d IN (hd - 7, hd + 7)) / 2.0, 1) AS same_weekday_avg,
+ round(count(*) FILTER (WHERE d = hd) / (count(*) FILTER (WHERE d IN (hd - 7, hd + 7)) / 2.0) - 1, 3) AS change
+FROM w, h GROUP BY ALL ORDER BY 1, 2;
+SELECT round(avg((country_code = 'US')::INT), 3) AS us_share_of_developers FROM users;
 
 -- EVAL Q18 — new self-serve subscriptions and new MRR by month (list prices from 01-business.md: Pro $12, Team $29 per seat per month)
 SELECT date_trunc('month', t)::DATE AS month, plan, count(*) AS subscriptions, sum(seats) AS seats,

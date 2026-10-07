@@ -75,7 +75,7 @@ Every pull request has a `pr_id`. Its four steps share the `pr_id`, the reposito
 | `teammate invited` | The developer invites someone to the organization. | `invite_role` (`developer`, `admin`, `viewer`). |
 | `environment variable updated` | The developer changes an environment variable. | `environment` (`production`, `preview`, `development`). |
 
-There are no server-side notification or system events in this project. Every event is an action by the developer or a step of their build, pull request, or deploy.
+There are no server-side notification or email events in this project. Almost every event is an action by the developer or a step of their build, pull request, or deploy. Two are automatic: scheduled builds (`build started` / `build finished` with `trigger = schedule`) run on the repository's cron schedule without anyone at the keyboard, and `$experiment_started` is logged by the CI test itself at a developer's first build in the test. A developer's cron jobs stop when their account goes quiet.
 
 ## User profile properties
 
