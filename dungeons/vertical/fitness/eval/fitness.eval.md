@@ -1,7 +1,7 @@
 # Stridewell (fitness) — 20-question eval
 
 - **Data:** `data/verify-fitness` (full fidelity: 9,056 members with events, 4,081 new-member signups, 1,034,677 events, 2026-06-04 → 2026-10-01 UTC). The USERS file holds 9,068 profiles: 12 pre-existing members have a profile but no events in the window. Member counts in the answers use members with events.
-- **Run date:** 2026-10-07 (final pass on engine a1efd11: onboarding drop-off is now declarative and members who stop onboarding early get the normal usage funnels, Summer Shred takes an exact share of each signup stream, the challenge rates are also read without members who stopped using the app, and every number is re-measured).
+- **Run date:** 2026-10-07 (re-run on engine 72928e7: a new member's pre-signup `$experiment_started` now carries `device_id` only and Mixpanel joins it at `account created`; only that identity field and session ids changed, and every number below was re-checked against the `-- EVAL Q<n>` queries on this run).
 - **Period labels:** "August" and "September" always mean calendar months (Aug 1-31, Sep 1-30). "Before / after the price change" means before Sep 1 / Sep 1 through Oct 1.
 - **Active:** "active", "retained", and "returned" mean a member-initiated event: every event except `notification received` and `account deactivated` (the Active action custom event in 04-metrics-and-tables.md).
 - **Numbers:** every answer comes from the matching `-- EVAL Q<n>` query in `dungeons/vertical/fitness/fitness.sql` on that data.

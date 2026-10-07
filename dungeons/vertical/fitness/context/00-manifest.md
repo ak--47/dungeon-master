@@ -28,11 +28,11 @@ This folder is the internal analytics wiki for **Stridewell**, a consumer fitnes
 
 ## Identity notes
 
-- The app tracks nothing before a member creates an account, so there is no anonymous (device-only) activity in the project. The `account created` event carries both the member's `user_id` and the `device_id`.
-- Every event carries `user_id`, including the onboarding experiment's `$experiment_started` exposure, which is logged one second before `account created`.
+- The app tracks one thing before a member creates an account: the onboarding experiment's `$experiment_started` exposure, logged one second before `account created`. It carries only the `device_id` (the member has no `user_id` yet). The `account created` event carries both the member's `user_id` and the `device_id`, and Mixpanel joins the earlier exposure to the member at that point, so in Mixpanel reports the exposure belongs to the member.
+- Every other event carries `user_id`. In a raw export or a warehouse copy of the events, the exposure has no `user_id`: map its `device_id` to the `user_id` seen with the same `device_id` on `account created` before you count exposed members.
 - `device_id` is on every event except the three onboarding steps after signup (`goal quiz completed`, `plan generated`, `starter workout completed`), which the onboarding service sends server-side with `user_id` only. Each member uses Stridewell on one phone or tablet, so a member has one `device_id`, and the device fields (`model`, `os`, `carrier`) and `Platform` stay the same on all of a member's events.
 - Members who joined before June 4 have no `account created` event in this window. Their profile `created` field is empty. For members who joined in the window, `created` is their signup time.
-- Count people with unique `user_id` (Mixpanel "Uniques"), not with `device_id`.
+- Count people as Mixpanel "Uniques" (the member after the device is joined to the `user_id`), not with `device_id`.
 - `notification received` is sent by our messaging service, not by the member. It keeps arriving while an account is open, also for members who have stopped using the app, so it does not show that a member is active. The same holds for `account deactivated`. See the active-member definitions in `04-metrics-and-tables.md`.
 
 ## Conventions

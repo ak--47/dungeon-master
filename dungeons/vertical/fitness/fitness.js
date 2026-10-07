@@ -68,13 +68,14 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * and the first real event of every new member; one phone (one device_id)
  * per member, so model / os / carrier are fixed per member (the engine keeps
  * device fields sticky per device_id). A new member's signup time is their profile `created` (UTC; the
- * engine draws the hour from the soup's hour-of-day weights). Every event
- * carries user_id: there is no anonymous pre-signup
- * activity. An enrolled member's $experiment_started sits 1 s before
- * "account created" (engine placement) and also carries user_id. The three
+ * engine draws the hour from the soup's hour-of-day weights). The only
+ * anonymous event is an enrolled member's $experiment_started: it sits 1 s
+ * before "account created" (engine placement) with device_id only, and
+ * Mixpanel joins it to the member at the stitch (the SQL and story reads
+ * resolve it through device_id). Every other event carries user_id. The three
  * onboarding steps after the auth event (goal quiz completed, plan
  * generated, starter workout completed) carry user_id only (no device_id);
- * every other event carries both.
+ * the rest carry both.
  *
  * DESIGN NOTES:
  * - retentionCurve shapes new members' activity; pre-existing members'

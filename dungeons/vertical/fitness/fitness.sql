@@ -16,10 +16,10 @@ SET VARIABLE data_prefix = COALESCE(getvariable('data_prefix'), 'data/verify-fit
 -- ─────────────────────────────────────────────────────────────────────────
 -- Identity: new members sign up with "account created" (the auth event, which
 -- carries both user_id and device_id). A device resolves to the user seen with
--- it on any event that carries both ids, the way Mixpanel stitches. In this
--- data every event already carries user_id (there is no anonymous pre-signup
--- activity; an enrolled member's $experiment_started fires 1 s before
--- "account created" and already carries user_id), so the stitch is a no-op.
+-- it on any event that carries both ids, the way Mixpanel stitches. The only
+-- anonymous event is an enrolled member's $experiment_started: it fires 1 s
+-- before "account created" with device_id only (no user_id), and the stitch
+-- joins it to the member through the device. Every other event carries user_id.
 -- device_id is on every event except the three onboarding steps after signup
 -- (goal quiz completed, plan generated, starter workout completed), which
 -- carry user_id only. Each member uses one phone (one device_id); Platform

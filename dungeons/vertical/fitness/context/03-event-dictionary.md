@@ -7,7 +7,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 | Property | Meaning |
 |---|---|
 | `time` | When the event happened (UTC). |
-| `user_id` | The member's ID. Present on every event after signup. |
+| `user_id` | The member's ID. Present on every event from `account created` on; not on `$experiment_started`, which is logged before the account exists. |
 | `device_id` | The member's phone or tablet. Each member uses one device. Not present on `goal quiz completed`, `plan generated`, and `starter workout completed`, which the onboarding service sends with `user_id` only. |
 | `insert_id` | Unique event ID used for de-duplication. |
 | `session_id` | The app session the event belongs to (diagnostic; Mixpanel computes its own sessions). |
@@ -26,7 +26,7 @@ New members go through onboarding once, right after they install. These four eve
 | `goal quiz completed` | The member answers the goals survey. | `primary_goal` (same as profile); `days_per_week_target` (2-5): how many days a week they want to train. |
 | `plan generated` | The app builds the member's first training plan. | `plan_length_weeks` (4, 6, 8, 12); `workout_category`: the plan's main focus. |
 | `starter workout completed` | The member finishes the short guided starter session that ends onboarding. | `duration_minutes` (8-15). |
-| `$experiment_started` | Mixpanel experiment exposure, sent when a new member enters the Guided First Week test (from 2026-07-01). It is logged one second before the member's `account created` and already carries their `user_id`. | `Experiment name` = `Guided First Week`; `Variant name` = `Control` or `Guided Plan`. |
+| `$experiment_started` | Mixpanel experiment exposure, sent when a new member enters the Guided First Week test (from 2026-07-01). It is logged one second before the member's `account created`, so it carries only the `device_id`; Mixpanel joins it to the member when `account created` links that device to the `user_id`. Outside Mixpanel, join it to the member through `device_id`. | `Experiment name` = `Guided First Week`; `Variant name` = `Control` or `Guided Plan`. |
 
 ## Training
 
