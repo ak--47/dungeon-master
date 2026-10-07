@@ -1254,9 +1254,11 @@ export interface Funnel {
      */
     isFirstFunnel?: boolean;
     /**
-     * If true, the funnel will require the user to repeat the sequence of events in order to convert
-     * If false, the user does not need to repeat the sequence of events in order to convert
-     * ^ when false, users who repeat the repetitive steps are more likely to convert
+     * If true, every repeated step in `sequence` is emitted.
+     * If false (default), each later occurrence of an event already in the sequence is
+     * skipped on a 50% draw (the last step is always kept). Skipping never changes the
+     * conversion: `conversionRate` is the share of runs that reach the last step, and the
+     * drop-off point is drawn over the full configured sequence (1.9.0).
      */
     requireRepeats?: boolean;
     /**

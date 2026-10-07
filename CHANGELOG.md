@@ -150,6 +150,18 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   `meta.persona` on `user`, `funnel-pre`, `funnel-post`, and `everything`, as
   documented. To segment by persona in reports, declare a persona `properties`
   key. Output shift: profiles lose `_persona`; no RNG draws change.
+- Make a funnel with a repeated step reach its `conversionRate`. With
+  `requireRepeats: false`, each skipped repeat multiplied the rate by 0.70 (and
+  each kept one by 1.35), and the drop-off point was drawn over the configured
+  length but applied to the shortened list, so a non-converter could finish the
+  funnel. A `conversionRate: 100` first funnel with a repeat before its
+  `isAuthEvent` left 6.4% of born users without the auth event (marketplace:
+  128 of 3,000 profiles dropped as anonymous; now 0). Repeats are still skipped
+  on a 50% draw, but the completion draw and the drop-off point use the full
+  sequence, and the last step is never skipped. Repro at `conversionRate: 50`:
+  66.7% reached the last step before, now within 2 points of the same funnel
+  without repeats. Output shift: dungeons with repeated funnel steps change
+  their step counts and later seeded values; others are unchanged.
 
 ### Added
 
@@ -179,6 +191,7 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   (0.45 in `avgActiveDaysPerUser` mode). It used to compare with one prior week
   at 0.7, whose day-to-day noise (sd about 0.24) failed decline runs by chance.
   "Today" is always rough in a streaming dataset; stories live in the history.
+
 
 
 ## 1.8.5 - 2026-09-27

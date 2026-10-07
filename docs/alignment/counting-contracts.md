@@ -8,8 +8,10 @@ the familiar name of a chart is not enough to select its counting algorithm.
 
 `conversionRate: 35` is a percent probability for a generated funnel pass. The
 generator makes a completion draw; nonconverters receive a partial prefix. It
-does not multiply 35% independently at each step. Repeated step names and configured
-modifiers can alter the resolved probability before generation.
+does not multiply 35% independently at each step. Configured modifiers can alter
+the resolved probability before generation. Repeated step names do not: with
+`requireRepeats: false` a repeat may be skipped, but the completion draw and the
+drop-off point use the full configured sequence (1.9.0).
 
 For a hypothetical independent attempt probability $p$ and $n$ opportunities,
 the probability of at least one success is $1-(1-p)^n$. At $p=0.5$, four
