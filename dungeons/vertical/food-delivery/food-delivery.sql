@@ -1,183 +1,378 @@
--- ============================================================
--- food-delivery.js — v1.6.0 hook verification queries (human eyeball)
--- Machine contract lives in the `stories` export of food-delivery.js;
--- run ./food-delivery.verify.mjs for verdicts. These queries mirror the
--- story reads for interactive inspection.
+-- Forkfly (food-delivery vertical) — story-keyed and eval-keyed DuckDB queries.
 --
--- Generate first:
+-- Generate first (repo root):
 --   node scripts/verify-runner.mjs dungeons/vertical/food-delivery/food-delivery.js verify-food-delivery
+-- Run:
+--   duckdb -c ".read dungeons/vertical/food-delivery/food-delivery.sql"
+-- Against a gzipped export:
+--   duckdb -c "SET VARIABLE data_prefix='<dir>/food-delivery'" -c ".read food-delivery.sql"
 --
--- Key derivation notes (full math in HOOK STORIES block of food-delivery.js):
--- - H1/H7 read delivered-per-PLACED ratios: 'order placed' shares the soup
---   HOD/hash distribution but is untouched by either drop, so it cancels
---   the confound. Raw delivered HOD volume does NOT show a clean 0.70.
--- - H6 zero-post share lands near 0.25 (not the 0.60 knob): the deletion
---   removes late 'subscription started' events themselves, so churned
---   users with a late trial start vanish from the visible cohort.
--- - H8 buckets by HOOK-TIME order count; output counts are contaminated by
---   H4 duplication and H6 deletion, so the clean read excludes rainy-window
---   orderers and users with zero post-day-14 activity.
--- - H10 reads reorders-per-DELIVERED: last funnel step fires only on
---   conversion (determineConversion, lib/generators/funnels.js), so the
---   ratio recovers the conversionRate scaling exactly (1.40 / 0.70).
--- ============================================================
+-- All times are UTC. Window: 2026-06-04 00:00 to 2026-10-01 23:59:59.
+-- Timeline: Order Again 2026-07-07, Smart Add-ons test 2026-07-28, non-Pass
+-- service fee 10% -> 15% 2026-08-11, card processor incident 2026-08-25 to 2026-08-28.
 
+SET VARIABLE data_prefix = COALESCE(getvariable('data_prefix'), 'data/verify-food-delivery');
 
--- H1: RUSH-HOUR KEEP RATE — delivered-per-placed off/rush ≈ 0.70
-WITH ev AS (
-  SELECT event, hour(time::TIMESTAMP) AS hr
-  FROM read_json_auto('data/verify-food-delivery-EVENTS*.json', sample_size=-1, union_by_name=true)
-  WHERE event IN ('order delivered','order placed')
-), agg AS (
-  SELECT (hr BETWEEN 11 AND 13) OR (hr BETWEEN 17 AND 20) AS rush,
-    count(*) FILTER (WHERE event='order delivered') AS del,
-    count(*) FILTER (WHERE event='order placed') AS placed
-  FROM ev GROUP BY 1
-)
-SELECT rush, del, placed, round(del::DOUBLE/placed, 3) AS del_per_placed FROM agg ORDER BY rush;
+-- ─────────────────────────────────────────────────────────────────────────
+-- PRELUDE: raw files, identity resolution, warehouse tables
+-- ─────────────────────────────────────────────────────────────────────────
+-- Identity: a new customer signs up with "account created" (the auth event,
+-- which carries user_id and device_id). A device resolves to the customer seen
+-- with it on any event that carries both ids, the way Mixpanel stitches.
+-- Every Forkfly event carries user_id, so uid = user_id in practice.
 
+CREATE OR REPLACE TEMP TABLE raw_events AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-EVENTS*.json*', sample_size=-1, union_by_name=true);
 
--- H2: COUPON INJECTION — coupons-per-checkout diff ≈ +0.30 (Free − QB+); cpu ratio ≈ 2.2
-WITH pu AS (
-  SELECT user_id::VARCHAR AS uid, any_value(subscription_tier) AS tier,
-    count(*) FILTER (WHERE event='coupon applied') AS coupons,
-    count(*) FILTER (WHERE event='checkout started') AS checkouts
-  FROM read_json_auto('data/verify-food-delivery-EVENTS*.json', sample_size=-1, union_by_name=true)
-  WHERE event IN ('coupon applied','checkout started') GROUP BY 1
-)
-SELECT tier, count(*) AS users,
-  round(sum(coupons)::DOUBLE/count(*), 2) AS coupons_per_user,
-  round(sum(coupons)::DOUBLE/nullif(sum(checkouts),0), 3) AS coupons_per_checkout
-FROM pu GROUP BY tier ORDER BY tier;
+CREATE OR REPLACE TEMP TABLE users AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-USERS*.json*', sample_size=-1, union_by_name=true);
 
+CREATE OR REPLACE TEMP TABLE device_map AS
+SELECT device_id, min(user_id::VARCHAR) AS mapped
+FROM raw_events WHERE user_id IS NOT NULL AND device_id IS NOT NULL GROUP BY 1;
 
--- H3: LATE-NIGHT MUNCHIES — flip inversion (late−off)/(1−off) ≈ 0.70; price ratio ≈ 1.30
-WITH ev AS (
-  SELECT event, cuisine_type, TRY_CAST(item_price AS DOUBLE) AS price,
-    hour(time::TIMESTAMP) AS hr
-  FROM read_json_auto('data/verify-food-delivery-EVENTS*.json', sample_size=-1, union_by_name=true)
-  WHERE event IN ('restaurant viewed','restaurant browsed','item added to cart')
-)
-SELECT
-  round(avg((cuisine_type='American')::INT) FILTER (WHERE event='restaurant viewed' AND (hr>=22 OR hr<=2)), 3) AS amer_late,
-  round(avg((cuisine_type='American')::INT) FILTER (WHERE event='restaurant viewed' AND hr BETWEEN 6 AND 18), 3) AS amer_off,
-  round(avg((cuisine_type='American')::INT) FILTER (WHERE event='restaurant browsed'), 3) AS amer_organic_ctrl,
-  round(avg(price) FILTER (WHERE event='item added to cart' AND (hr>=22 OR hr<=2)) /
-        avg(price) FILTER (WHERE event='item added to cart' AND hr BETWEEN 6 AND 18), 3) AS price_ratio
+CREATE OR REPLACE TEMP TABLE ev AS
+SELECT coalesce(e.user_id::VARCHAR, m.mapped) AS uid, e.time::TIMESTAMP AS t, e.*
+FROM raw_events e LEFT JOIN device_map m ON e.device_id = m.device_id;
+
+CREATE OR REPLACE TEMP TABLE wh_mkt AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-marketing_spend_daily.json*', sample_size=-1, union_by_name=true);
+CREATE OR REPLACE TEMP TABLE wh_pay AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-payment_gateway_daily.json*', sample_size=-1, union_by_name=true);
+CREATE OR REPLACE TEMP TABLE wh_ops AS
+SELECT *, date::DATE AS d, precipitation_mm >= 4 AS rainy
+FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-market_ops_daily.json*', sample_size=-1, union_by_name=true);
+
+-- profile attributes keyed by the resolved customer id
+CREATE OR REPLACE TEMP TABLE prof AS
+SELECT distinct_id::VARCHAR AS uid, city, household_type, acquisition_channel, customer_since, platform, default_payment,
+ pass_status AS current_pass, "Experiment: Smart Add-ons" AS arm
+FROM users;
+
+-- one row per checkout (order_id), with the order if it was placed within an hour
+CREATE OR REPLACE TEMP TABLE checkouts AS
+SELECT c.order_id, c.uid, c.t, c.t::DATE AS d, c.city, c.platform, c.payment_method, c.pass_status <> 'none' AS pass,
+ c.quoted_eta_mins AS eta, c.entry_point, c.subtotal_usd AS cart_subtotal,
+ p.t AS tp, (p.t IS NOT NULL AND p.t < c.t + INTERVAL 1 HOUR) AS placed
+FROM ev c LEFT JOIN (SELECT order_id, min(t) AS t FROM ev WHERE event = 'order placed' GROUP BY 1) p ON p.order_id = c.order_id
+WHERE c.event = 'checkout started';
+
+CREATE OR REPLACE TEMP TABLE orders AS
+SELECT o.*, o.t::DATE AS d, o.pass_status <> 'none' AS pass, dl.minutes_late::INT AS late_min, dl.delivery_minutes AS delivery_min, dl.t AS t_delivered
+FROM ev o LEFT JOIN ev dl ON dl.order_id = o.order_id AND dl.event = 'order delivered'
+WHERE o.event = 'order placed';
+
+-- new customers (signed up in the window) and their first delivered order
+CREATE OR REPLACE TEMP TABLE signups AS
+SELECT uid, t AS t0, acquisition_channel AS ch, signup_method FROM ev WHERE event = 'account created';
+
+CREATE OR REPLACE TEMP TABLE first_delivery AS
+WITH d AS (SELECT ev.uid, ev.t, ev.minutes_late::INT AS late,
+  row_number() OVER (PARTITION BY ev.uid ORDER BY ev.t, ev.insert_id) AS rn
+  FROM ev JOIN signups s ON s.uid = ev.uid WHERE ev.event = 'order delivered')
+SELECT d.uid, d.t, d.late, s.ch, s.t0,
+ coalesce(bool_or(o.t > d.t AND o.t < d.t + INTERVAL 30 DAY), false) AS repeat30
+FROM d JOIN signups s ON s.uid = d.uid LEFT JOIN ev o ON o.uid = d.uid AND o.event = 'order placed'
+WHERE d.rn = 1 GROUP BY 1, 2, 3, 4, 5;
+
+-- one row per app session (app opened until the next app opened, at most 60 minutes)
+CREATE OR REPLACE TEMP TABLE sessions AS
+WITH o AS (SELECT uid, t, lead(t) OVER (PARTITION BY uid ORDER BY t) AS nt FROM ev WHERE event = 'app opened')
+SELECT o.uid, o.t,
+ coalesce(bool_or(e.event = 'reorder tapped'), false) AS reorder,
+ min(e.t) FILTER (WHERE e.event = 'order placed') AS tp,
+ arg_min(e.entry_point, e.t) FILTER (WHERE e.event = 'order placed') AS entry_point
+FROM o LEFT JOIN ev e ON e.uid = o.uid AND e.event IN ('reorder tapped', 'order placed') AND e.t > o.t
+ AND e.t < o.t + INTERVAL 60 MINUTE AND (o.nt IS NULL OR e.t < o.nt)
+GROUP BY 1, 2;
+
+-- dataset overview
+SELECT count(*) AS events, count(DISTINCT uid) AS customers_with_events, (SELECT count(*) FROM users) AS profiles,
+ (SELECT count(*) FROM signups) AS new_signups, (SELECT count(*) FROM orders) AS orders,
+ min(t) AS first_event, max(t) AS last_event FROM ev;
+
+-- identity and device checks: every event resolves; platform agrees with the device OS; wallets match the OS
+SELECT count(*) FILTER (WHERE uid IS NULL) AS unresolved_events,
+ count(*) FILTER (WHERE (platform = 'ios' AND os NOT IN ('iOS', 'iPadOS')) OR (platform = 'android' AND os <> 'Android')) AS platform_os_mismatch,
+ count(*) FILTER (WHERE (payment_method = 'apple_pay' AND platform <> 'ios') OR (payment_method = 'google_pay' AND platform <> 'android')) AS wallet_mismatch,
+ count(*) FILTER (WHERE device_id IS NULL) AS events_without_device
 FROM ev;
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H1-late-first-order: 30-day repeat rate after a late (15+ min) first delivery
+-- ─────────────────────────────────────────────────────────────────────────
+WITH g AS (SELECT late >= 15 AS is_late, count(*) AS n, avg(repeat30::INT) AS r FROM first_delivery WHERE t < TIMESTAMP '2026-09-01' GROUP BY 1)
+SELECT max(n) FILTER (WHERE is_late) AS late_first_orders, round(max(r) FILTER (WHERE is_late), 4) AS late_repeat_30d,
+ max(n) FILTER (WHERE NOT is_late) AS on_time_first_orders, round(max(r) FILTER (WHERE NOT is_late), 4) AS on_time_repeat_30d,
+ round(max(r) FILTER (WHERE is_late) / max(r) FILTER (WHERE NOT is_late), 4) AS ratio
+FROM g;
 
--- H4: RAINY WEEK (day_idx 20-27) — dup share ≈ 0.40, fee ratio ≈ 2.0, vol RoR vs checkout ≈ 1.4
-WITH ev AS (
-  SELECT user_id::VARCHAR AS uid, event, order_id, TRY_CAST(delivery_fee AS DOUBLE) AS fee,
-    date_diff('day', TIMESTAMP '2026-01-01 00:00:00', time::TIMESTAMP) AS day_idx
-  FROM read_json_auto('data/verify-food-delivery-EVENTS*.json', sample_size=-1, union_by_name=true)
-  WHERE event IN ('order placed','checkout started')
-)
-SELECT
-  round((count(*) FILTER (WHERE event='order placed' AND day_idx BETWEEN 20 AND 27)
-       - count(DISTINCT uid || '|' || order_id) FILTER (WHERE event='order placed' AND day_idx BETWEEN 20 AND 27))::DOUBLE
-       / count(DISTINCT uid || '|' || order_id) FILTER (WHERE event='order placed' AND day_idx BETWEEN 20 AND 27), 3) AS dup_share,
-  round(avg(fee) FILTER (WHERE event='order placed' AND day_idx BETWEEN 20 AND 27) /
-        avg(fee) FILTER (WHERE event='order placed' AND (day_idx BETWEEN 10 AND 19 OR day_idx BETWEEN 28 AND 37)), 3) AS fee_ratio,
-  round((count(*) FILTER (WHERE event='order placed' AND day_idx BETWEEN 20 AND 27)::DOUBLE /
-         count(*) FILTER (WHERE event='order placed' AND (day_idx BETWEEN 10 AND 19 OR day_idx BETWEEN 28 AND 37))) /
-        (count(*) FILTER (WHERE event='checkout started' AND day_idx BETWEEN 20 AND 27)::DOUBLE /
-         count(*) FILTER (WHERE event='checkout started' AND (day_idx BETWEEN 10 AND 19 OR day_idx BETWEEN 28 AND 37))), 3) AS vol_ror
-FROM ev;
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H2-rainy-days: orders per city-day on rainy vs dry days; lateness on rainy days
+-- ─────────────────────────────────────────────────────────────────────────
+WITH o AS (SELECT city, d, count(*) AS n FROM orders GROUP BY 1, 2),
+j AS (SELECT w.city, w.d, w.rainy, coalesce(o.n, 0) AS n FROM wh_ops w LEFT JOIN o ON o.city = w.city AND o.d = w.d),
+c AS (SELECT city, avg(n) FILTER (WHERE NOT rainy) AS dry_mean FROM j GROUP BY 1)
+SELECT count(*) FILTER (WHERE j.rainy) AS rainy_city_days,
+ round(sum(j.n) FILTER (WHERE j.rainy) / sum(c.dry_mean) FILTER (WHERE j.rainy), 4) AS rain_lift
+FROM j JOIN c ON c.city = j.city;
 
+SELECT round(avg(o.late_min) FILTER (WHERE w.rainy) - avg(o.late_min) FILTER (WHERE NOT w.rainy), 2) AS extra_minutes_late_rainy,
+ round(avg(o.late_min) FILTER (WHERE NOT w.rainy), 2) AS dry_minutes_late, round(avg(o.late_min) FILTER (WHERE w.rainy), 2) AS rainy_minutes_late
+FROM orders o JOIN wh_ops w ON w.city = o.city AND w.d = o.d WHERE o.late_min IS NOT NULL;
 
--- H5: REFERRAL POWER USERS (born-in only) — reorders/user ratio ≈ 1.4; ratings 4.4 vs 2.8
-WITH ev AS (
-  SELECT user_id::VARCHAR AS uid, event, referral_code, TRY_CAST(food_rating AS DOUBLE) AS rating
-  FROM read_json_auto('data/verify-food-delivery-EVENTS*.json', sample_size=-1, union_by_name=true)
-  WHERE event IN ('account created','reorder initiated','order rated')
-), born AS (
-  SELECT uid, bool_or(referral_code = true) AS referred
-  FROM ev WHERE event='account created' GROUP BY 1
-), pu AS (
-  SELECT b.uid, b.referred,
-    count(*) FILTER (WHERE e.event='reorder initiated') AS reorders,
-    avg(e.rating) FILTER (WHERE e.event='order rated') AS user_rating
-  FROM born b LEFT JOIN ev e ON e.uid=b.uid GROUP BY 1,2
-)
-SELECT referred, count(*) AS users,
-  round(sum(reorders)::DOUBLE/count(*), 2) AS reorders_per_user,
-  round(avg(user_rating), 2) AS mean_user_rating
-FROM pu GROUP BY referred ORDER BY referred;
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H3-quoted-eta-threshold: checkout -> order by quoted ETA (<= 45 vs > 45 min)
+-- ─────────────────────────────────────────────────────────────────────────
+WITH g AS (SELECT eta <= 45 AS quick, count(*) AS n, avg(placed::INT) AS conv FROM checkouts GROUP BY 1)
+SELECT max(n) FILTER (WHERE quick) AS quick_checkouts, round(max(conv) FILTER (WHERE quick), 4) AS quick_conv,
+ max(n) FILTER (WHERE NOT quick) AS slow_checkouts, round(max(conv) FILTER (WHERE NOT quick), 4) AS slow_conv,
+ round(max(conv) FILTER (WHERE NOT quick) / max(conv) FILTER (WHERE quick), 4) AS ratio
+FROM g;
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H4-card-processor-incident: card vs other methods, incident days vs 14 days either side
+-- ─────────────────────────────────────────────────────────────────────────
+WITH g AS (SELECT payment_method = 'card' AS card, d BETWEEN DATE '2026-08-25' AND DATE '2026-08-28' AS outage, count(*) AS n, avg(placed::INT) AS conv
+  FROM checkouts WHERE t >= TIMESTAMP '2026-08-11' AND t < TIMESTAMP '2026-09-12' GROUP BY 1, 2)
+SELECT round(max(conv) FILTER (WHERE card AND outage), 4) AS card_incident, round(max(conv) FILTER (WHERE card AND NOT outage), 4) AS card_baseline,
+ round(max(conv) FILTER (WHERE NOT card AND outage), 4) AS other_incident, round(max(conv) FILTER (WHERE NOT card AND NOT outage), 4) AS other_baseline,
+ round((max(conv) FILTER (WHERE card AND outage) / max(conv) FILTER (WHERE card AND NOT outage))
+ / (max(conv) FILTER (WHERE NOT card AND outage) / max(conv) FILTER (WHERE NOT card AND NOT outage)), 4) AS did
+FROM g;
 
--- H6: TRIAL CHURN (survivor-biased view) — zero-post share ~0.25 nonactivated vs ~0.04 activated
-WITH ev AS (
-  SELECT user_id::VARCHAR AS uid, time::TIMESTAMP AS t, event, trial
-  FROM read_json_auto('data/verify-food-delivery-EVENTS*.json', sample_size=-1, union_by_name=true)
-), fu AS (SELECT uid, min(t) AS first_t FROM ev GROUP BY 1),
-trial AS (SELECT uid FROM ev WHERE event='subscription started' AND trial = true GROUP BY 1),
-pux AS (
-  SELECT f.uid,
-    count(*) FILTER (WHERE e.event='order placed' AND e.t <= f.first_t + INTERVAL '14 days') AS early_orders,
-    count(*) FILTER (WHERE e.t > f.first_t + INTERVAL '14 days') AS post_n
-  FROM fu f JOIN trial tr ON tr.uid=f.uid JOIN ev e ON e.uid=f.uid GROUP BY 1
-)
-SELECT (early_orders >= 3) AS activated, count(*) AS users,
-  round(avg(CASE WHEN post_n = 0 THEN 1.0 ELSE 0 END), 3) AS zero_post_share
-FROM pux GROUP BY 1 ORDER BY 1;
+SELECT date, payment_method, auth_attempts, auth_declines, decline_rate, gateway_status
+FROM wh_pay WHERE gateway_status = 'major_outage' ORDER BY date;
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H5-smart-addons-experiment: items per order by arm (pre-period adjusted), conversion by arm
+-- ─────────────────────────────────────────────────────────────────────────
+WITH o AS (SELECT p.arm, o.items_count, o.subtotal_usd, o.t >= TIMESTAMP '2026-07-28' AS post FROM orders o JOIN prof p ON p.uid = o.uid WHERE p.arm IS NOT NULL)
+SELECT arm, round(avg(items_count) FILTER (WHERE post), 4) AS items_after, round(avg(items_count) FILTER (WHERE NOT post), 4) AS items_before,
+ round(avg(subtotal_usd) FILTER (WHERE post), 2) AS subtotal_after, round(avg(subtotal_usd) FILTER (WHERE NOT post), 2) AS subtotal_before
+FROM o GROUP BY 1 ORDER BY 1;
 
--- H7: HASH-BUCKET DROP — delivered-per-placed odd/even ≈ 0.70
-WITH pu AS (
-  SELECT user_id::VARCHAR AS uid, (ascii(substr(user_id::VARCHAR,1,1)) % 2 = 0) AS even_bucket,
-    count(*) FILTER (WHERE event='order placed') AS placed,
-    count(*) FILTER (WHERE event='order delivered') AS delivered
-  FROM read_json_auto('data/verify-food-delivery-EVENTS*.json', sample_size=-1, union_by_name=true)
-  WHERE event IN ('order placed','order delivered') GROUP BY 1,2
-)
-SELECT even_bucket, count(*) AS users,
-  round(sum(delivered)::DOUBLE/nullif(sum(placed),0), 3) AS del_per_placed
-FROM pu GROUP BY even_bucket ORDER BY even_bucket;
+SELECT p.arm, count(*) AS checkouts, round(avg(c.placed::INT), 4) AS conversion
+FROM checkouts c JOIN prof p ON p.uid = c.uid WHERE p.arm IS NOT NULL AND c.t >= TIMESTAMP '2026-07-28' GROUP BY 1 ORDER BY 1;
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H6-channel-economics: spend per signup, 30-day repeat rate, spend per repeat customer
+-- ─────────────────────────────────────────────────────────────────────────
+WITH g AS (SELECT s.ch, count(*) AS signups,
+  count(*) FILTER (WHERE f.repeat30 AND f.t < TIMESTAMP '2026-09-01' AND s.t0 < TIMESTAMP '2026-09-01') AS repeaters,
+  avg(f.repeat30::INT) FILTER (WHERE f.t < TIMESTAMP '2026-09-01') AS repeat_rate
+  FROM signups s LEFT JOIN first_delivery f ON f.uid = s.uid GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend, sum(spend_usd) FILTER (WHERE date::DATE < DATE '2026-09-01') AS spend_read FROM wh_mkt GROUP BY 1)
+SELECT g.ch, g.signups, round(sp.spend, 0) AS spend_usd, round(sp.spend / g.signups, 2) AS spend_per_signup,
+ round(g.repeat_rate, 4) AS repeat_rate_30d, g.repeaters, round(sp.spend_read / g.repeaters, 2) AS spend_per_repeat_customer
+FROM g LEFT JOIN sp ON sp.ch = g.ch ORDER BY 1;
 
--- H8: ORDER-COUNT MAGIC NUMBER (clean population) — sweet/base ≈ 1.40, over/sweet ≈ 0.46
-WITH raw AS (
-  SELECT user_id::VARCHAR AS uid, time::TIMESTAMP AS t, event,
-    TRY_CAST(order_total AS DOUBLE) AS ot,
-    date_diff('day', TIMESTAMP '2026-01-01 00:00:00', time::TIMESTAMP) AS day_idx
-  FROM read_json_auto('data/verify-food-delivery-EVENTS*.json', sample_size=-1, union_by_name=true)
-), fu AS (SELECT uid, min(t) AS first_t FROM raw GROUP BY 1),
-flags AS (
-  SELECT r.uid,
-    max(CASE WHEN r.event='order placed' AND r.day_idx BETWEEN 20 AND 27 THEN 1 ELSE 0 END) AS rainy,
-    max(CASE WHEN r.t > f.first_t + INTERVAL '14 days' THEN 1 ELSE 0 END) AS alive,
-    count(*) FILTER (WHERE r.event='order placed') AS orders,
-    sum(r.ot) FILTER (WHERE r.event='order placed') AS spend
-  FROM raw r JOIN fu f USING(uid) GROUP BY 1
-)
-SELECT CASE WHEN orders BETWEEN 4 AND 8 THEN 'sweet' WHEN orders >= 9 THEN 'over' ELSE 'base' END AS bucket,
-  count(*) AS users, round(sum(spend)/nullif(sum(orders),0), 1) AS avg_order_total
-FROM flags WHERE rainy = 0 AND alive = 1 AND orders > 0
-GROUP BY 1 ORDER BY 1;
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H7-pass-trial-two-orders: trial -> paid by orders during the trial
+-- ─────────────────────────────────────────────────────────────────────────
+WITH s AS (SELECT uid, min(t) AS ts FROM ev WHERE event = 'pass trial started' GROUP BY 1),
+e AS (SELECT uid, outcome, orders_during_trial AS n FROM ev WHERE event = 'pass trial ended')
+SELECT CASE WHEN e.n >= 2 THEN '2+ orders' ELSE '0-1 orders' END AS trial_usage, count(*) AS trials,
+ round(avg((e.outcome = 'converted')::INT), 4) AS converted
+FROM e JOIN s ON s.uid = e.uid WHERE s.ts < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 1 ORDER BY 1;
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H8-pass-free-delivery-minimum: among $10-19.99 orders, the share under $15
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT CASE WHEN pass THEN 'pass' ELSE 'no_pass' END AS grp, count(DISTINCT uid) AS customers, count(*) AS orders,
+ round(count(*) FILTER (WHERE subtotal_usd >= 10 AND subtotal_usd < 15)::DOUBLE / count(*) FILTER (WHERE subtotal_usd >= 10 AND subtotal_usd < 20), 4) AS share_10_15_of_10_20,
+ round(avg((subtotal_usd >= 10 AND subtotal_usd < 15)::INT), 4) AS share_10_15_of_all
+FROM orders GROUP BY 1 ORDER BY 1;
 
--- H9: TIER DELIVERY SPEED — QB+/Free property ratio ≈ 0.479 (= 0.67/1.4) on both props
-SELECT
-  round(avg(TRY_CAST(actual_delivery_mins AS DOUBLE)) FILTER (WHERE subscription_tier='QuickBite+' AND event='order delivered') /
-        avg(TRY_CAST(actual_delivery_mins AS DOUBLE)) FILTER (WHERE subscription_tier='Free' AND event='order delivered'), 3) AS adm_ratio,
-  round(avg(TRY_CAST(eta_mins AS DOUBLE)) FILTER (WHERE subscription_tier='QuickBite+' AND event='order tracked') /
-        avg(TRY_CAST(eta_mins AS DOUBLE)) FILTER (WHERE subscription_tier='Free' AND event='order tracked'), 3) AS eta_ratio
-FROM read_json_auto('data/verify-food-delivery-EVENTS*.json', sample_size=-1, union_by_name=true)
-WHERE event IN ('order delivered','order tracked');
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H9-service-fee-change: non-Pass vs Pass checkout -> order, before vs after 2026-08-11 (incident days out)
+-- ─────────────────────────────────────────────────────────────────────────
+WITH g AS (SELECT pass, t >= TIMESTAMP '2026-08-11' AS post, count(*) AS n, avg(placed::INT) AS conv FROM checkouts
+  WHERE NOT (d BETWEEN DATE '2026-08-25' AND DATE '2026-08-28') GROUP BY 1, 2)
+SELECT round(max(conv) FILTER (WHERE NOT pass AND NOT post), 4) AS non_pass_before, round(max(conv) FILTER (WHERE NOT pass AND post), 4) AS non_pass_after,
+ round(max(conv) FILTER (WHERE pass AND NOT post), 4) AS pass_before, round(max(conv) FILTER (WHERE pass AND post), 4) AS pass_after,
+ round((max(conv) FILTER (WHERE NOT pass AND post) / max(conv) FILTER (WHERE NOT pass AND NOT post))
+  / (max(conv) FILTER (WHERE pass AND post) / max(conv) FILTER (WHERE pass AND NOT post)), 4) AS did
+FROM g;
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H10-order-again-launch: app opened -> order placed median minutes; session order rate
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT CASE WHEN entry_point = 'reorder' THEN 'reorder' ELSE 'browse' END AS path, count(*) AS orders,
+ round(median(date_diff('second', t, tp)) / 60.0, 2) AS median_minutes
+FROM sessions WHERE t >= TIMESTAMP '2026-07-07' AND tp IS NOT NULL GROUP BY 1 ORDER BY 1;
 
--- H10: CITY DENSITY — reorders-per-delivered dense/base ≈ 1.40, sprawl/base ≈ 0.70
-WITH pu AS (
-  SELECT user_id::VARCHAR AS uid, any_value(city) AS city,
-    count(*) FILTER (WHERE event='order delivered') AS delivered,
-    count(*) FILTER (WHERE event='reorder initiated') AS reorders
-  FROM read_json_auto('data/verify-food-delivery-EVENTS*.json', sample_size=-1, union_by_name=true)
-  WHERE event IN ('order delivered','reorder initiated') GROUP BY 1
-)
-SELECT CASE WHEN city IN ('San Francisco','New York') THEN 'dense'
-  WHEN city IN ('Houston','Phoenix') THEN 'sprawl' ELSE 'base' END AS grp,
-  count(*) AS users,
-  round(sum(reorders)::DOUBLE/nullif(sum(delivered),0), 4) AS reorders_per_delivered
-FROM pu GROUP BY 1 ORDER BY 1;
+SELECT CASE WHEN reorder THEN 'reorder' ELSE 'browse' END AS path, count(*) AS sessions, round(avg((tp IS NOT NULL)::INT), 4) AS order_rate
+FROM sessions WHERE t >= TIMESTAMP '2026-07-07' AND uid IN (SELECT uid FROM ev WHERE event = 'reorder tapped') GROUP BY 1 ORDER BY 1;
+
+-- ═════════════════════════════════════════════════════════════════════════
+-- EVAL QUERIES (eval/food-delivery.eval.md)
+-- ═════════════════════════════════════════════════════════════════════════
+
+-- EVAL Q1: late first delivery vs 30-day repeat (by lateness bucket)
+SELECT CASE WHEN late < 0 THEN 'a: early' WHEN late < 10 THEN 'b: 0-9 late' WHEN late < 15 THEN 'c: 10-14 late' WHEN late < 25 THEN 'd: 15-24 late' ELSE 'e: 25+ late' END AS bucket,
+ count(*) AS new_customers, round(avg(repeat30::INT), 4) AS repeat_rate_30d
+FROM first_delivery WHERE t < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
+SELECT round(avg((late >= 15)::INT), 4) AS late_first_delivery_share, count(*) AS first_deliveries FROM first_delivery WHERE t < TIMESTAMP '2026-09-01';
+
+-- EVAL Q2: orders on rainy vs dry days, by city
+WITH o AS (SELECT city, d, count(*) AS n FROM orders GROUP BY 1, 2),
+j AS (SELECT w.city, w.d, w.rainy, coalesce(o.n, 0) AS n FROM wh_ops w LEFT JOIN o ON o.city = w.city AND o.d = w.d)
+SELECT city, count(*) FILTER (WHERE rainy) AS rainy_days, round(avg(n) FILTER (WHERE rainy), 1) AS orders_rainy_day,
+ round(avg(n) FILTER (WHERE NOT rainy), 1) AS orders_dry_day, round(avg(n) FILTER (WHERE rainy) / avg(n) FILTER (WHERE NOT rainy), 3) AS ratio
+FROM j GROUP BY 1 ORDER BY rainy_days DESC, city;
+SELECT w.rainy, count(*) AS checkouts, round(avg(c.placed::INT), 4) AS checkout_conversion
+FROM checkouts c JOIN wh_ops w ON w.city = c.city AND w.d = c.d GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q3: lateness and couriers per order, rainy vs dry
+SELECT w.rainy, count(*) AS orders, round(avg(o.late_min), 2) AS avg_minutes_late, round(avg((o.late_min >= 15)::INT), 4) AS late_15_share
+FROM orders o JOIN wh_ops w ON w.city = o.city AND w.d = o.d WHERE o.late_min IS NOT NULL GROUP BY 1 ORDER BY 1;
+SELECT rainy, round(sum(orders_dispatched) / sum(active_couriers), 3) AS orders_per_courier FROM wh_ops GROUP BY 1 ORDER BY 1;
+WITH x AS (SELECT o.order_id, o.late_min, w.rainy, (s.order_id IS NOT NULL) AS contacted FROM orders o JOIN wh_ops w ON w.city = o.city AND w.d = o.d
+  LEFT JOIN (SELECT DISTINCT order_id FROM ev WHERE event = 'support contacted') s ON s.order_id = o.order_id WHERE o.late_min IS NOT NULL)
+SELECT rainy, round(avg(contacted::INT), 4) AS support_contact_rate FROM x GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q4: checkout -> order by quoted ETA band
+SELECT CASE WHEN eta < 30 THEN 'a: < 30' WHEN eta < 40 THEN 'b: 30-39' WHEN eta <= 45 THEN 'c: 40-45' WHEN eta <= 50 THEN 'd: 46-50' WHEN eta <= 60 THEN 'e: 51-60' ELSE 'f: > 60' END AS quote_band,
+ count(*) AS checkouts, round(avg(placed::INT), 4) AS conversion
+FROM checkouts GROUP BY 1 ORDER BY 1;
+SELECT round(avg((eta > 45)::INT), 4) AS share_of_checkouts_quoted_over_45 FROM checkouts;
+
+-- EVAL Q5: the late-August dip — card vs other methods by day, and lost orders
+SELECT d, round(avg(placed::INT) FILTER (WHERE payment_method = 'card'), 4) AS card_conv, round(avg(placed::INT) FILTER (WHERE payment_method <> 'card'), 4) AS other_conv,
+ count(*) FILTER (WHERE payment_method = 'card') AS card_checkouts
+FROM checkouts WHERE d BETWEEN DATE '2026-08-20' AND DATE '2026-09-02' GROUP BY 1 ORDER BY 1;
+WITH base AS (SELECT avg(placed::INT) FILTER (WHERE payment_method = 'card') AS card_base FROM checkouts
+  WHERE t >= TIMESTAMP '2026-08-11' AND t < TIMESTAMP '2026-09-12' AND NOT (d BETWEEN DATE '2026-08-25' AND DATE '2026-08-28')),
+inc AS (SELECT count(*) AS card_checkouts, sum(placed::INT) AS card_orders FROM checkouts WHERE payment_method = 'card' AND d BETWEEN DATE '2026-08-25' AND DATE '2026-08-28')
+SELECT inc.card_checkouts, inc.card_orders, round(base.card_base, 4) AS card_base_conv, round(inc.card_checkouts * base.card_base - inc.card_orders, 0) AS lost_card_orders,
+ (SELECT count(*) FROM ev WHERE event = 'payment failed' AND decline_code = 'processor_unavailable') AS processor_failures,
+ (SELECT round(avg(order_total_usd), 2) FROM orders WHERE payment_method = 'card' AND t >= TIMESTAMP '2026-08-11' AND t < TIMESTAMP '2026-09-12') AS card_avg_order_total
+FROM inc, base;
+
+-- EVAL Q6: Smart Add-ons readout (raw arm difference, pre-adjusted lift, subtotal, exposed customers)
+WITH o AS (SELECT p.arm, o.items_count, o.subtotal_usd, o.t >= TIMESTAMP '2026-07-28' AS post FROM orders o JOIN prof p ON p.uid = o.uid WHERE p.arm IS NOT NULL),
+g AS (SELECT arm, avg(items_count) FILTER (WHERE post) AS ia, avg(items_count) FILTER (WHERE NOT post) AS ib,
+  avg(subtotal_usd) FILTER (WHERE post) AS sa, avg(subtotal_usd) FILTER (WHERE NOT post) AS sb FROM o GROUP BY 1)
+SELECT round(max(ia) FILTER (WHERE arm = 'Smart Add-ons') - max(ia) FILTER (WHERE arm = 'Control'), 4) AS raw_items_diff,
+ round((max(ia) FILTER (WHERE arm = 'Smart Add-ons') - max(ib) FILTER (WHERE arm = 'Smart Add-ons')) - (max(ia) FILTER (WHERE arm = 'Control') - max(ib) FILTER (WHERE arm = 'Control')), 4) AS adjusted_items_lift,
+ round(max(sa) FILTER (WHERE arm = 'Smart Add-ons') - max(sa) FILTER (WHERE arm = 'Control'), 2) AS raw_subtotal_diff,
+ round((max(sa) FILTER (WHERE arm = 'Smart Add-ons') - max(sb) FILTER (WHERE arm = 'Smart Add-ons')) - (max(sa) FILTER (WHERE arm = 'Control') - max(sb) FILTER (WHERE arm = 'Control')), 2) AS adjusted_subtotal_lift
+FROM g;
+SELECT "Variant name" AS arm, count(DISTINCT uid) AS exposed_customers FROM ev WHERE event = '$experiment_started' GROUP BY 1 ORDER BY 1;
+SELECT count(*) AS addon_items, round(avg(item_price_usd), 2) AS avg_addon_price FROM ev WHERE event = 'item added to cart' AND added_from = 'addon_suggestion';
+
+-- EVAL Q7: Smart Add-ons and checkout conversion (null), overall and by platform / Pass
+WITH x AS (SELECT p.arm, c.platform, c.pass, c.placed FROM checkouts c JOIN prof p ON p.uid = c.uid WHERE p.arm IS NOT NULL AND c.t >= TIMESTAMP '2026-07-28'),
+g AS (SELECT 'all' AS split, arm, count(*) AS n, avg(placed::INT) AS conv FROM x GROUP BY 2
+  UNION ALL SELECT 'platform=' || platform, arm, count(*), avg(placed::INT) FROM x GROUP BY 1, 2
+  UNION ALL SELECT 'pass=' || pass::VARCHAR, arm, count(*), avg(placed::INT) FROM x GROUP BY 1, 2),
+w AS (SELECT split, max(n) FILTER (WHERE arm = 'Control') AS n_c, max(conv) FILTER (WHERE arm = 'Control') AS c,
+  max(n) FILTER (WHERE arm = 'Smart Add-ons') AS n_v, max(conv) FILTER (WHERE arm = 'Smart Add-ons') AS v FROM g GROUP BY 1)
+SELECT split, n_c, round(c, 4) AS control_conv, n_v, round(v, 4) AS variant_conv,
+ round((v - c) / sqrt(((c * n_c + v * n_v) / (n_c + n_v)) * (1 - (c * n_c + v * n_v) / (n_c + n_v)) * (1.0 / n_c + 1.0 / n_v)), 2) AS z
+FROM w ORDER BY split;
+
+-- EVAL Q8: paid channel CAC (spend / Mixpanel signups) and network-reported signups
+WITH s AS (SELECT ch, count(*) AS signups FROM signups GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend, sum(network_reported_signups) AS network_signups FROM wh_mkt GROUP BY 1)
+SELECT s.ch, s.signups, round(sp.spend, 0) AS spend_usd, round(sp.spend / s.signups, 2) AS cac, sp.network_signups, round(sp.spend / sp.network_signups, 2) AS cost_per_network_signup
+FROM s LEFT JOIN sp ON sp.ch = s.ch ORDER BY s.ch;
+
+-- EVAL Q9: 30-day repeat rate by acquisition channel (new customers, first deliveries through Aug 31)
+SELECT ch, count(*) AS first_orders, round(avg(repeat30::INT), 4) AS repeat_rate_30d
+FROM first_delivery WHERE t < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
+SELECT ch = 'coupon_affiliates' AS coupon, count(*) AS first_orders, round(avg(repeat30::INT), 4) AS repeat_rate_30d FROM first_delivery WHERE t < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q10: Pass trial conversion by orders during the trial
+WITH s AS (SELECT uid, min(t) AS ts FROM ev WHERE event = 'pass trial started' GROUP BY 1),
+e AS (SELECT uid, outcome, orders_during_trial AS n FROM ev WHERE event = 'pass trial ended')
+SELECT least(e.n, 4) AS orders_during_trial_capped, count(*) AS trials, round(avg((e.outcome = 'converted')::INT), 4) AS converted
+FROM e JOIN s ON s.uid = e.uid WHERE s.ts < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 1 ORDER BY 1;
+WITH s AS (SELECT uid, min(t) AS ts FROM ev WHERE event = 'pass trial started' GROUP BY 1),
+e AS (SELECT uid, outcome, orders_during_trial AS n FROM ev WHERE event = 'pass trial ended')
+SELECT count(*) AS completed_trials, round(avg((outcome = 'converted')::INT), 4) AS overall_conversion, round(avg((n >= 2)::INT), 4) AS share_with_2plus
+FROM e JOIN s ON s.uid = e.uid WHERE s.ts < TIMESTAMP '2026-09-17 23:59:59';
+
+-- EVAL Q11: subtotal distribution near the $15 free-delivery minimum, Pass vs non-Pass orders
+SELECT CASE WHEN subtotal_usd < 10 THEN 'a: < 10' WHEN subtotal_usd < 15 THEN 'b: 10-14.99' WHEN subtotal_usd < 20 THEN 'c: 15-19.99' WHEN subtotal_usd < 30 THEN 'd: 20-29.99' ELSE 'e: 30+' END AS band,
+ round(count(*) FILTER (WHERE pass)::DOUBLE / (SELECT count(*) FROM orders WHERE pass), 4) AS pass_share,
+ round(count(*) FILTER (WHERE NOT pass)::DOUBLE / (SELECT count(*) FROM orders WHERE NOT pass), 4) AS non_pass_share
+FROM orders GROUP BY 1 ORDER BY 1;
+SELECT pass, round(avg((delivery_fee_usd = 0)::INT), 4) AS free_delivery_share, round(avg(subtotal_usd), 2) AS avg_subtotal FROM orders GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q12: service fee change — conversion and service-fee revenue per non-Pass checkout
+WITH g AS (SELECT pass, t >= TIMESTAMP '2026-08-11' AS post, count(*) AS n, avg(placed::INT) AS conv FROM checkouts
+  WHERE NOT (d BETWEEN DATE '2026-08-25' AND DATE '2026-08-28') GROUP BY 1, 2)
+SELECT pass, post, n AS checkouts, round(conv, 4) AS conversion FROM g ORDER BY 1, 2;
+WITH c AS (SELECT c.t >= TIMESTAMP '2026-08-11' AS post, o.service_fee_usd, o.order_total_usd FROM checkouts c LEFT JOIN orders o ON o.order_id = c.order_id
+  WHERE NOT c.pass AND NOT (c.d BETWEEN DATE '2026-08-25' AND DATE '2026-08-28'))
+SELECT post, count(*) AS non_pass_checkouts, round(sum(coalesce(service_fee_usd, 0)) / count(*), 3) AS service_fee_per_checkout,
+ round(avg(service_fee_usd), 3) AS service_fee_per_order, round(sum(coalesce(order_total_usd, 0)) / count(*), 2) AS order_total_per_checkout
+FROM c GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q13: Order Again — speed and session order rate
+SELECT CASE WHEN entry_point = 'reorder' THEN 'reorder' ELSE 'browse' END AS path, count(*) AS orders,
+ round(median(date_diff('second', t, tp)) / 60.0, 2) AS median_minutes
+FROM sessions WHERE t >= TIMESTAMP '2026-07-07' AND tp IS NOT NULL GROUP BY 1 ORDER BY 1;
+SELECT CASE WHEN reorder THEN 'reorder' ELSE 'browse' END AS path, count(*) AS sessions, round(avg((tp IS NOT NULL)::INT), 4) AS order_rate
+FROM sessions WHERE t >= TIMESTAMP '2026-07-07' AND uid IN (SELECT uid FROM ev WHERE event = 'reorder tapped') GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q14: Order Again share of orders by week, and customers who used it
+SELECT date_trunc('week', t)::DATE AS week, count(*) AS orders, round(avg((entry_point = 'reorder')::INT), 4) AS reorder_share
+FROM orders GROUP BY 1 ORDER BY 1;
+SELECT count(DISTINCT uid) AS customers_used_order_again,
+ round(count(DISTINCT uid)::DOUBLE / (SELECT count(DISTINCT uid) FROM orders WHERE t >= TIMESTAMP '2026-07-07'), 4) AS share_of_ordering_customers
+FROM ev WHERE event = 'reorder tapped';
+SELECT round(avg((entry_point = 'reorder')::INT), 4) AS september_reorder_share FROM orders WHERE t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-10-01';
+
+-- EVAL Q15: iOS vs Android checkout conversion (null), overall and by Pass / period
+WITH g AS (SELECT 'all' AS split, platform, count(*) AS n, avg(placed::INT) AS conv FROM checkouts GROUP BY 2
+  UNION ALL SELECT 'pass=' || pass::VARCHAR, platform, count(*), avg(placed::INT) FROM checkouts GROUP BY 1, 2
+  UNION ALL SELECT 'after_fee_change=' || (t >= TIMESTAMP '2026-08-11')::VARCHAR, platform, count(*), avg(placed::INT) FROM checkouts GROUP BY 1, 2),
+w AS (SELECT split, max(n) FILTER (WHERE platform = 'ios') AS n_i, max(conv) FILTER (WHERE platform = 'ios') AS i,
+  max(n) FILTER (WHERE platform = 'android') AS n_a, max(conv) FILTER (WHERE platform = 'android') AS a FROM g GROUP BY 1)
+SELECT split, n_i, round(i, 4) AS ios_conv, n_a, round(a, 4) AS android_conv,
+ round((a - i) / sqrt(((i * n_i + a * n_a) / (n_i + n_a)) * (1 - (i * n_i + a * n_a) / (n_i + n_a)) * (1.0 / n_i + 1.0 / n_a)), 2) AS z
+FROM w ORDER BY split;
+
+-- EVAL Q16: Forkfly Pass footprint — members, share of orders, trials, cancellations
+SELECT current_pass, count(*) AS customers FROM prof GROUP BY 1 ORDER BY 1;
+SELECT round(avg(pass::INT), 4) AS pass_order_share_window,
+ round(avg(pass::INT) FILTER (WHERE t < TIMESTAMP '2026-07-01'), 4) AS pass_share_june,
+ round(avg(pass::INT) FILTER (WHERE t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-10-01'), 4) AS pass_share_september
+FROM orders;
+SELECT event, count(*) AS n FROM ev WHERE event IN ('pass offer viewed', 'pass trial started', 'pass trial ended', 'pass cancelled') GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q17: new customers per week and by channel, first-order rate
+SELECT date_trunc('week', t0)::DATE AS week, count(*) AS signups FROM signups GROUP BY 1 ORDER BY 1;
+SELECT ch, count(*) AS signups, round(count(*)::DOUBLE / (SELECT count(*) FROM signups), 4) AS share FROM signups GROUP BY 1 ORDER BY 2 DESC;
+SELECT round(avg((f.uid IS NOT NULL)::INT), 4) AS first_order_rate FROM signups s LEFT JOIN (SELECT DISTINCT uid FROM orders) f ON f.uid = s.uid WHERE s.t0 < TIMESTAMP '2026-09-01';
+
+-- EVAL Q18: the ordering funnel per session (menu or Order Again -> cart -> checkout -> order)
+WITH o AS (SELECT uid, t, lead(t) OVER (PARTITION BY uid ORDER BY t) AS nt FROM ev WHERE event = 'app opened'),
+s AS (SELECT o.uid, o.t,
+  bool_or(e.event IN ('restaurant viewed', 'reorder tapped')) AS viewed,
+  bool_or(e.event IN ('item added to cart', 'reorder tapped')) AS carted,
+  bool_or(e.event = 'checkout started') AS checkout,
+  bool_or(e.event = 'order placed') AS ordered
+  FROM o LEFT JOIN ev e ON e.uid = o.uid AND e.t > o.t AND e.t < o.t + INTERVAL 90 MINUTE AND (o.nt IS NULL OR e.t < o.nt)
+  AND e.event IN ('restaurant viewed', 'reorder tapped', 'item added to cart', 'checkout started', 'order placed') GROUP BY 1, 2)
+SELECT count(*) AS sessions, round(avg(coalesce(viewed, false)::INT), 4) AS viewed_or_reorder, round(avg(coalesce(carted, false)::INT), 4) AS cart,
+ round(avg(coalesce(checkout, false)::INT), 4) AS checkout, round(avg(coalesce(ordered, false)::INT), 4) AS ordered
+FROM s;
+SELECT round(avg(placed::INT), 4) AS checkout_to_order, (SELECT count(*) FROM ev WHERE event = 'payment failed') AS payment_failures,
+ (SELECT round(count(*) FILTER (WHERE event = 'payment failed')::DOUBLE / count(*) FILTER (WHERE event IN ('payment failed', 'order placed')), 4) FROM ev
+  WHERE NOT (t::DATE BETWEEN DATE '2026-08-25' AND DATE '2026-08-28')) AS everyday_payment_failure_rate
+FROM checkouts;
+
+-- EVAL Q19: open-ended — quarter health snapshot by month
+SELECT date_trunc('month', t)::DATE AS month, count(*) AS orders, count(DISTINCT uid) AS ordering_customers,
+ round(avg((late_min >= 15)::INT), 4) AS late_15_share, round(avg(order_total_usd), 2) AS avg_order_total
+FROM orders GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q20: late deliveries by city and rainy-day share
+WITH x AS (SELECT o.city, o.late_min, w.rainy FROM orders o JOIN wh_ops w ON w.city = o.city AND w.d = o.d WHERE o.late_min IS NOT NULL)
+SELECT city, count(*) AS delivered, round(avg((late_min >= 15)::INT), 4) AS late_15_share, round(avg(rainy::INT), 4) AS share_on_rainy_days,
+ round(avg((late_min >= 15)::INT) FILTER (WHERE NOT rainy), 4) AS late_share_dry_days
+FROM x GROUP BY 1 ORDER BY late_15_share DESC, city;

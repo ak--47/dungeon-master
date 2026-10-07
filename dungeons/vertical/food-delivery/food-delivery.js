@@ -4,789 +4,988 @@ import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "@ak--47/dungeon-master/utils";
-import * as v from "ak-tools";
-import { findFirstSequence, scaleFunnelTTC } from "@ak--47/dungeon-master/hook-helpers";
+import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
 /** @typedef  {import("../../../types").Dungeon} Config */
 
 // ── OVERVIEW ──
 /*
- * NAME:       QuickBite
- * APP:        Food delivery platform (DoorDash/Uber Eats style). Users browse
- *             restaurants, build carts, place orders, track deliveries, and
- *             rate their experiences. Monetization via delivery fees,
- *             QuickBite+ subscription, and promotional coupons.
- * SCALE:      10,000 users, ~1.0M events, 121 days (2026-01-01 → 2026-05-01)
- * CORE LOOP:  sign up → browse/search → add to cart → checkout → order placed → track → rate → reorder
+ * NAME:       Forkfly
+ * APP:        Food delivery app (iOS, Android) that works with a curated set of
+ *             about 24 local restaurants in each of 8 US cities (New York,
+ *             Chicago, Atlanta, Miami, Boston, Austin, Denver, Seattle).
+ *             Customers browse or search, add items, check out, track the
+ *             courier, and rate the order. Revenue: delivery fee ($1.99-4.99),
+ *             a service fee (10% of subtotal; 15% for non-Pass orders from
+ *             2026-08-11), tips pass through to couriers. Forkfly Pass
+ *             ($9.99/month, 14-day free trial) waives the delivery fee on orders
+ *             of $15+ and cuts the service fee to 5%.
+ * SCALE:      10,000 customers (≈4,160 sign up inside the window), ~0.82M
+ *             events, ~43,000 orders, 120 days (2026-06-04 → 2026-10-01, UTC)
+ * CORE LOOP:  app opened → restaurant viewed → item added to cart → checkout
+ *             started → order placed → order delivered → order rated
+ * VALUE MOMENT: order delivered
  *
- * EVENTS (17):
- *   restaurant browsed (18) > restaurant viewed (15) > item added to cart (14)
- *   > order tracked (13) > checkout started (12) > search performed (11)
- *   > order placed (10) > order delivered (9) > promotion viewed (8)
- *   > order rated (7) > reorder initiated (6) > item removed from cart (5)
- *   > coupon applied (4) > support ticket (3) > subscription started (2)
- *   > subscription cancelled (1) > account created (1)
+ * EVENTS (19):
+ *   restaurant viewed > item added to cart > app opened > order tracking viewed
+ *   > checkout started > order placed > order delivered > search performed
+ *   > pass offer viewed > reorder tapped > order rated > $experiment_started
+ *   > account created > support contacted > address saved > pass trial started
+ *   > pass trial ended > payment failed > pass cancelled
  *
- * FUNNELS (8):
- *   - Onboarding:         account created → restaurant browsed → restaurant viewed (80%)
- *   - Browse Discovery:   restaurant browsed → restaurant viewed → item added to cart (55%)
- *   - Search Ordering:    search performed → restaurant viewed → item added to cart → checkout started (45%)
- *   - Order Lifecycle:    checkout started → order placed → order tracked → order delivered (65%)
- *   - Reorder Loop:       order delivered → order rated → reorder initiated (40%)
- *   - Promo Flow:         promotion viewed → coupon applied → checkout started (50%)
- *   - Support Flow:       support ticket → order rated (45%)
- *   - Subscription Mgmt:  subscription started → order placed → subscription cancelled (20%)
+ * FUNNELS (2 declared):
+ *   - Signup (first funnel): account created → address saved (88%)
+ *   - Session (weight 1, 100%): app opened → restaurant viewed → item added to
+ *     cart → checkout started → order placed → order delivered. A template: the
+ *     everything hook decides how far each session goes, re-times every step,
+ *     and builds the delivery, tracking, rating, support, Pass, and payment
+ *     events by cloning the user's own events. Carries the Smart Add-ons
+ *     experiment (multipliers 1.0; the hook applies the effect).
  *
- * USER PROPS:  preferred_cuisine, avg_order_value, orders_per_month, favorite_restaurant_count, Platform, subscription_tier, city
- * SUPER PROPS: Platform, subscription_tier, city
- * SCD PROPS:   subscription_tier (free/trial/monthly/annual, monthly fuzzy, max 6),
- *              restaurant_tier (new/verified/featured/premium, monthly fixed, max 6, type=restaurant_id)
- * GROUPS:      restaurant_id (200 restaurants; restaurant viewed / order placed / order rated)
+ * USER PROPS:  city, platform, household_type, favorite_cuisine,
+ *              acquisition_channel, customer_since, default_payment,
+ *              pass_status, "Experiment: Smart Add-ons"
+ * SUPER PROPS: city (sticky per customer), platform (ios/android, from the
+ *              phone's OS), pass_status (none / trial / member at event time)
+ * SCD PROPS:   none
+ * GROUPS:      none
+ * WAREHOUSE:   marketing_spend_daily (spend by paid channel),
+ *              payment_gateway_daily (authorizations and declines by payment
+ *              method), market_ops_daily (orders dispatched, weather, couriers
+ *              by city)
+ * LOOKUPS:     none — the restaurant catalog (id, name, cuisine, price tier,
+ *              rating) is denormalized onto events
+ * SOUP:        Friday-Sunday heavy dayOfWeekWeights; lunch (15-19 UTC) and
+ *              dinner (22-03 UTC) peaks for US time zones
+ *
+ * IDENTITY: a new customer is identified at "account created" (isAuthEvent,
+ * first event, user_id + device_id). One device per customer. Every event
+ * carries user_id; there is no anonymous browsing in the data. "address saved"
+ * (the post-auth signup step) carries user_id only; every other event also
+ * carries device_id. platform agrees with the engine's os field; Apple Pay only
+ * appears on iOS and Google Pay only on Android.
+ *
+ * DESIGN NOTES:
+ * - Sessions: each engine "app opened" is a session start (the soup gives meal
+ *   peaks). A session that opens while the previous one is still running is
+ *   dropped. Browse sessions: optional search, 1-4 restaurant views, a cart
+ *   (58%), checkout (78% of carts). Order Again sessions (H10) skip browsing.
+ *   Time from app opened to order placed is log-normal (median 16 min browse).
+ * - Checkout: quoted ETA (log-normal, median 36 min), fees from Pass status and
+ *   date, payment method (the customer's default 90% of the time). Conversion =
+ *   ETA curve (H3) x fee factor (H9); then 2% everyday payment failures and the
+ *   card incident (H4). A placed order is delivered quoted ETA + minutes_late
+ *   later; minutes_late ~ normal(3, 10) + 12 on rainy days (H2).
+ * - Restaurants: 24 per city, deterministic from hashFloat (name, cuisine,
+ *   price tier, rating, popularity). Customers return to 3 favorites 45% of
+ *   the time. Items per cart follow household_type; item prices follow tier.
+ * - Pass: 18% of established customers are members on June 4 (20% cancel over
+ *   the window); never-trialed non-members see the free-trial offer on 50% of
+ *   checkouts and 8% of offers start a trial (one trial per customer). 4% of
+ *   established non-members are mid-trial on June 4 (trial ends from June 4),
+ *   so trial endings are flat from week 1. "pass trial ended" fires
+ *   server-side whether or not the customer still uses the app.
+ * - New customers' first order carries a welcome promo (WELCOME8, or DEAL15 for
+ *   coupon affiliates); later orders carry FORK5 4% of the time.
+ * - Support: 3% of orders, rising to about 28% for very late ones.
+ * - Ratings: 42% of orders; delivery_rating falls with minutes_late.
+ * - Warehouse drift: orders_dispatched adds phone and partner-site orders (0-16%
+ *   plus 0-14 a day per city) and nets cancellations; auth_attempts adds web
+ *   orders and retries; spend is part paced budget, part per-signup, with
+ *   seeded day noise. Audit correlations 0.91-0.99.
+ * - Growth: new customers arrive steadily (~240 a week), so weekly sessions
+ *   and orders grow through the window; Order Again lifts orders from July.
  */
 
 // ── HOOK STORIES ──
 /*
- * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable only via
- * behavioral cohorts or raw-prop breakdowns (HOD, day, segment).
- *
- * ───────────────────────────────────────────────────────────────────────────────
- * H1. LUNCH/DINNER RUSH (everything)
- * ───────────────────────────────────────────────────────────────────────────────
- *
- * PATTERN: 30% of "order delivered" events that fall outside meal-hour
- * windows (11-13 UTC and 17-20 UTC) are dropped, depressing non-meal-time
- * completion. Mutation: event drop. Discover via order delivered HOD chart.
- *
- * MEASURABLE SIGNATURE: raw HOD volume is soup-confounded (the engine's hour
- * distribution is not flat), so the clean read is a ratio-of-ratios:
- * delivered-per-placed off-hours ÷ delivered-per-placed rush-hours ≈ 0.70
- * (the keep rate). "order placed" shares the soup HOD and is untouched by
- * H1; H7's drop is hour-independent so it cancels too.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Order Delivered Volume by Hour of Day
- *   - Report type: Insights
- *   - Event: "order delivered"
- *   - Measure: Total
- *   - Breakdown: Hour of day
- *   - Expected: 11-13 and 17-20 stand ~1.4x above neighboring hours
- *
- * REAL-WORLD ANALOGUE: Meal-hour orders convert at higher rates.
- *
- * ───────────────────────────────────────────────────────────────────────────────
- * H2. COUPON INJECTION (everything)
- * ───────────────────────────────────────────────────────────────────────────────
- *
- * PATTERN: Free-tier users get extra "coupon applied" events cloned into the
- * stream near checkout (30% chance per checkout). Cloned with unique offset
- * timestamps. No flag.
- *
- * MEASURABLE SIGNATURE: coupons-per-checkout(Free) − coupons-per-checkout(QB+)
- * ≈ +0.30 — the injection likelihood recovered directly. Organic coupons/user
- * is tier-independent (~3.1); Free users average ~13 checkouts, so total
- * coupons/user lands near 7.0 for Free vs 3.1 for QB+ — a ~2.0-2.5x ratio
- * (NOT the ~1.3x an additive-percentage intuition suggests: 30% of 13
- * checkouts more than doubles the organic coupon count).
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Coupons per User by Tier
- *   - Report type: Insights
- *   - Event: "coupon applied"
- *   - Measure: Total per user
- *   - Breakdown: "subscription_tier"
- *   - Expected: Free ~ 2.0-2.5x QuickBite+
- *
- * REAL-WORLD ANALOGUE: Free-tier users are the target of coupon promos.
- *
- * ───────────────────────────────────────────────────────────────────────────────
- * H3. LATE NIGHT MUNCHIES (everything)
- * ───────────────────────────────────────────────────────────────────────────────
- *
- * PATTERN: 10PM-2AM UTC: 70% of "restaurant viewed" / "item added to cart"
- * events get cuisine_type flipped to American, item_price bumped 1.3x
- * (price bump is unconditional in the window; the flip is the 70% coin).
- * Mutates existing props. No flag — discover via HOD breakdown.
- *
- * MEASURABLE SIGNATURE: organic American share is ~0.16 (engine's pick is
- * not uniform over the 8 cuisines), hour-independent — "restaurant browsed"
- * (never flipped) confirms it at any hour. Late-night viewed share
- * = 0.70 + 0.30 × organic ≈ 0.75. Inverting recovers the knob exactly:
- * (late_share − off_share) / (1 − off_share) ≈ 0.70. Late-night
- * item_price ≈ 1.3x off-hours item_price.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Cuisine Distribution by Hour of Day
- *   - Report type: Insights
- *   - Event: "restaurant viewed"
- *   - Measure: Total
- *   - Breakdown: "cuisine_type"
- *   - Filter: hour 22-02
- *   - Expected: American share ~75% vs ~16% off-hours
- *
- *   Report 2: Avg item_price by Hour of Day
- *   - Report type: Insights
- *   - Event: "item added to cart"
- *   - Measure: Average of "item_price"
- *   - Breakdown: Hour of day
- *   - Expected: 22-02 hours show ~ 1.3x baseline price
- *
- * REAL-WORLD ANALOGUE: Late-night ordering skews to fast food and impulse buys.
- *
- * ───────────────────────────────────────────────────────────────────────────────
- * H4. RAINY WEEK SURGE (everything)
- * ───────────────────────────────────────────────────────────────────────────────
- *
- * PATTERN: Days 20-27 (Jan 21-28, inclusive), "order placed" delivery_fee
- * doubled and 40% of in-window order-placed events get a duplicate cloned
- * event with a 5-60 min offset. No flag — discover via line chart by day on
- * order placed volume + delivery_fee average.
- *
- * MEASURABLE SIGNATURE: the cleanest read is the duplicate share itself —
- * in-window (uid, order_id) pairs appearing twice ÷ distinct orders ≈ 0.40
- * (duplicates are byte-identical clones except a 5-60 min time offset).
- * Volume: raw daily counts drift with the soup, so use a ratio-of-ratios
- * against "checkout started" (same soup, untouched by H4):
- * (placed_win/placed_base) ÷ (checkout_win/checkout_base) ≈ 1.40, diluted a
- * few percent by H6-churned users whose window orders were deleted. Fee:
- * window avg ≈ 2.0x baseline avg (±5% wobble from the window's organic fee
- * draw; the `(fee || 5)` fallback is inert in practice — the fee pool
- * bottoms out at 1, never 0). Duplicates share the doubled fee (cloned
- * after the fee pass).
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Order Volume Over Time
- *   - Report type: Insights
- *   - Event: "order placed"
- *   - Measure: Total
- *   - Line chart by day
- *   - Expected: visible ~1.4x spike days 20-27
- *
- *   Report 2: Avg delivery_fee Over Time
- *   - Report type: Insights
- *   - Event: "order placed"
- *   - Measure: Average of "delivery_fee"
- *   - Line chart by day
- *   - Expected: ~ 2x days 20-27
- *
- * REAL-WORLD ANALOGUE: Weather-driven demand surge with surge pricing.
- *
- * ───────────────────────────────────────────────────────────────────────────────
- * H5. REFERRAL POWER USERS (everything)
- * ───────────────────────────────────────────────────────────────────────────────
- *
- * PATTERN: Users with referral_code=true on account-created event (~1/3 of
- * born-in users) get food_rating boosted to 4-5 and ~50% of their reorder
- * events cloned with a 1-7 day offset. Mutates existing prop, no flag.
- *
- * MEASURABLE SIGNATURE: cohort is only identifiable among born-in-dataset
- * users (pre-existing users have no account-created event) — compare within
- * born-ins. Reorders/user referred ÷ non-referred ≈ 1.4 (50% clone chance
- * per visited reorder; clones spliced at idx+1 are re-visited and can
- * re-clone, but tail events shifted past the original loop range are
- * skipped, so the net multiplier sits below a naive 1.5; the referred
- * cohort is ~1/3 of born-ins, so expect ±0.1 sampling wobble). Same range
- * truncation leaves some "order rated" events unboosted: referred avg
- * food_rating ≈ 4.4 (not a full 4.5) vs organic ≈ 2.8.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Reorders per User by Referral Cohort
- *   - Report type: Insights (with cohort)
- *   - Cohort A: users with account-created.referral_code=true
- *   - Cohort B: users with account-created.referral_code=false
- *   - Event: "reorder initiated"
- *   - Measure: Total per user
- *   - Expected: A ~ 1.4-1.5x B
- *
- * REAL-WORLD ANALOGUE: Referred users tend to be more loyal.
- *
- * ───────────────────────────────────────────────────────────────────────────────
- * H6. TRIAL CONVERSION (everything)
- * ───────────────────────────────────────────────────────────────────────────────
- *
- * PATTERN: Users with subscription-started.trial=true who place <3 orders in
- * their first 14 days: 60% of those users (per-user coin, all-or-nothing)
- * have ALL events after day 14 deleted. No flag.
- *
- * MEASURABLE SIGNATURE: the deletion removes the subscription-started event
- * itself whenever it fired after day 14, so churned users with a late trial
- * start VANISH from the visible trial cohort (survivor bias). The honest
- * observable: among visible trial users, share with zero post-day-14
- * activity ≈ 0.25 for non-activated (<3 early orders) vs ≈ 0.04 for
- * activated — a ~5-7x retention divergence. Do NOT read per-user post/pre
- * event ratios: activation (≥3 early orders) selects for front-loaded
- * activity and confounds the comparison.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Retention by Trial Order Count
- *   - Report type: Retention
- *   - Cohort A: trial users with >= 3 orders in first 14 days
- *   - Cohort B: trial users with < 3
- *   - Expected: B shows a sharp cliff after day 14; A retains normally
- *
- * REAL-WORLD ANALOGUE: Trial users who fail to activate churn fast.
- *
- * ───────────────────────────────────────────────────────────────────────────────
- * H7. FIRST ORDER BONUS (everything)
- * ───────────────────────────────────────────────────────────────────────────────
- *
- * PATTERN: ~50% of users (deterministic: first char of user_id has odd
- * char code → "returning") have 30% of their "order delivered" events
- * dropped. No flag — analyst sees segment-level completion gap via cohort
- * builder by hash bucket.
- *
- * MEASURABLE SIGNATURE: delivered-per-placed (odd bucket) ÷
- * delivered-per-placed (even bucket) ≈ 0.70 — the keep rate recovered.
- * "order placed" is untouched by H7 and normalizes engagement; H1's drop is
- * hash-independent and cancels in the ratio.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Order Delivered Conversion by First-Letter-Hash
- *   - Report type: Funnels
- *   - Steps: "checkout started" -> "order placed" -> "order delivered"
- *   - Breakdown: derived hash bucket on distinct_id
- *   - Expected: odd bucket ~ 30% lower conversion on final step
- *
- * REAL-WORLD ANALOGUE: First-order promos lift new-user conversion.
- *
- * ───────────────────────────────────────────────────────────────────────────────
- * H8. ORDER-COUNT MAGIC NUMBER (everything)
- * ───────────────────────────────────────────────────────────────────────────────
- *
- * PATTERN: Users in the 4-8 order-placed sweet spot get +40% on order_total.
- * Users with 9+ orders are over-engaged; their order_total is reduced to
- * 0.65x (basket fatigue). No flag — discover by binning users on order count.
- *
- * MEASURABLE SIGNATURE: the hook buckets on the order count at hook time,
- * BEFORE H4 duplication and H6 deletion — output-count bucketing is
- * contaminated at the edges (an H6-churned 9+ user lands in the 0-3 output
- * bucket carrying 0.65x totals; an H4-duplicated 8-order user lands in 9+
- * carrying 1.4x). Clean read restricts to users unaffected by both: alive
- * past day 14 AND zero rainy-window orders. On that population:
- * sweet/base avg order_total ≈ 1.4, over/sweet ≈ 0.46 (= 0.65/1.4).
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Avg Order Total by Order-Count Bucket
- *   - Report type: Insights (with cohort)
- *   - Cohort A: users with 4-8 "order placed"
- *   - Cohort B: users with 0-3
- *   - Event: "order placed"
- *   - Measure: Average of "order_total"
- *   - Expected: A ~ 1.4x B
- *
- *   Report 2: Avg Order Total on Heavy Orderers
- *   - Report type: Insights (with cohort)
- *   - Cohort C: users with >= 9 "order placed"
- *   - Cohort A: users with 4-8
- *   - Event: "order placed"
- *   - Measure: Average of "order_total"
- *   - Expected: C ~ 0.46x order_total vs A (0.65x cut on a 1.4x-boosted
- *     comparison group)
- *
- * REAL-WORLD ANALOGUE: Engaged orderers lift basket size; over-orderers
- * hit fatigue and slow down.
- *
- * ───────────────────────────────────────────────────────────────────────────────
- * H9. ORDER LIFECYCLE TTC (everything)
- * ───────────────────────────────────────────────────────────────────────────────
- *
- * PATTERN: QuickBite+ users get delivery timing properties scaled 0.67x
- * (faster), Free users get 1.4x (slower). Affects actual_delivery_mins,
- * eta_mins, delivery_time_est_mins on every event carrying them, plus a
- * timestamp compression on the user's FIRST checkout→placed→tracked→delivered
- * sequence (visible in Mixpanel's per-instance funnel TTC).
- *
- * MEASURABLE SIGNATURE: property ratio QB+/Free ≈ 0.48 (= 0.67/1.4) on
- * avg actual_delivery_mins and avg eta_mins. The timestamp shift touches
- * only one funnel instance among a user's ~13 checkouts, so cross-event
- * SQL/JS TTC aggregations CANNOT see it — do not assert wall-clock TTC
- * outside Mixpanel's per-instance funnel report.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Avg Delivery Time by Subscription Tier
- *   - Report type: Insights
- *   - Event: "order delivered"
- *   - Measure: Average of "actual_delivery_mins"
- *   - Breakdown: "subscription_tier"
- *   - Expected: QuickBite+ ~ 0.48x Free
- *
- *   Report 2: Avg ETA by Subscription Tier
- *   - Report type: Insights
- *   - Event: "order tracked"
- *   - Measure: Average of "eta_mins"
- *   - Breakdown: "subscription_tier"
- *   - Expected: QuickBite+ ~ 0.48x Free
- *
- * REAL-WORLD ANALOGUE: Premium subscribers get priority dispatch and faster
- * delivery routing.
- *
- * ───────────────────────────────────────────────────────────────────────────────
- * H10. CITY DENSITY REORDER BOOST (funnel-pre)
- * ───────────────────────────────────────────────────────────────────────────────
- *
- * PATTERN: On the reorder funnel (order delivered → order rated → reorder
- * initiated), dense cities (SF, NYC) get conversionRate 40 → 56; sprawl
- * cities (Houston, Phoenix) 40 → 28. Scoped to the funnel containing
- * "reorder initiated".
- *
- * MEASURABLE SIGNATURE: non-converted instances take u.integer(1, steps−1)
- * steps (determineConversion, lib/generators/funnels.js) — the LAST step
- * fires only on conversion, so P(reorder per instance) = conversionRate
- * exactly. Delivered-per-user is city-flat (H1/H7 drops are
- * city-independent), so reorders-per-DELIVERED recovers the knobs exactly:
- * dense/base = 1.40, sprawl/base = 0.70. Plain reorders-per-user shows the
- * same direction but carries per-city engagement noise. H5's referral
- * cloning is city-independent and scales all cities equally.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Reorder Funnel Conversion by City
- *   - Report type: Funnels
- *   - Steps: "order delivered" → "order rated" → "reorder initiated"
- *   - Breakdown: "city"
- *   - Expected: SF / NYC above baseline; Houston / Phoenix below
- *
- * REAL-WORLD ANALOGUE: Dense cities have more restaurant choice and
- * faster delivery, driving higher repeat ordering behavior.
- *
- * ───────────────────────────────────────────────────────────────────────────────
- * EXPECTED METRICS SUMMARY
- * ───────────────────────────────────────────────────────────────────────────────
- *
- * Hook | Metric                                    | Mechanism | Measured (10K)
- * ─────|-------------------------------------------|-----------|---------------
- * H1   | delivered-per-placed off/rush RoR         | 0.70      | 0.701
- * H2   | coupons-per-checkout diff (Free − QB+)    | +0.30     | +0.293
- * H2   | coupons/user Free ÷ QB+                   | ~2.0-2.5  | 2.155
- * H3   | flip-rate inversion (late−off)/(1−off)    | 0.70      | 0.704
- * H3   | late/off item_price ratio                 | 1.30      | 1.290
- * H4   | in-window duplicate share                 | 0.40      | 0.397
- * H4   | placed vol RoR vs checkout (win/base)     | ~1.40     | 1.391
- * H4   | delivery_fee window/baseline avg          | ~2.0      | 1.976
- * H5   | born-in reorders/user ref ÷ non-ref       | ~1.4      | 1.647 (STRONG; 2K iters read 1.34/1.45 — clone-cascade truncation is user-mix-sensitive, cohort n=379)
- * H5   | referred avg food_rating (vs organic ~2.8)| ~4.4      | 4.47 / 2.72
- * H6   | zero-post-day-14 share nonact vs act      | ~0.25/0.04| 0.238 / 0.050 (STRONG; divergence 4.7x — act share is the organic quiet rate, not a knob)
- * H7   | delivered-per-placed odd ÷ even           | 0.70      | 0.703
- * H8   | clean-pop sweet/base order_total          | 1.40      | 1.402
- * H8   | clean-pop over/sweet order_total          | 0.46      | 0.465
- * H9   | actual_delivery_mins QB+ ÷ Free           | 0.48      | 0.479
- * H9   | eta_mins QB+ ÷ Free                       | 0.48      | 0.476
- * H10  | reorders-per-delivered dense ÷ base       | 1.40      | 1.369
- * H10  | reorders-per-delivered sprawl ÷ base      | 0.70      | 0.716
+ * All effects are hidden: no flag properties. Dates live in the TIMELINE
+ * constants and are shared by hooks, stories, SQL, warehouse columns, and the
+ * timeline guide.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * H1. LATE FIRST ORDER (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: after a new customer's first delivered order, they leave Forkfly
+ *   with a chance that rises with minutes_late (logistic centered at 15 min,
+ *   softness 2.5 min, plateau 0.45). Integrated over the lateness distribution
+ *   (rain included), the 30-day repeat rate after a 15+ minute late first
+ *   delivery is 0.647x the on-time rate.
+ * MIXPANEL: Funnels, order delivered → order placed, 30-day window, cohort
+ *   "did account created" in the window, date range Jun 4 - Aug 31, breakdown
+ *   step 1 minutes_late (custom buckets < 15, >= 15).
+ * REAL WORLD: a cold, late first meal is the end of a new relationship.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * H2. RAINY DAYS (everything + warehouse market_ops_daily; external join)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: on rainy days (4+ mm in market_ops_daily.precipitation_mm, by city
+ *   and UTC date) customers open the app 1.4x as often (dry-day sessions kept
+ *   at 1/1.4), so orders per city-day are 1.4x the city's dry-day mean.
+ *   Deliveries on rainy days run 12 minutes later against the quote (couriers
+ *   are scarce; the warehouse shows more orders per active courier). Checkout
+ *   conversion does not change.
+ * MIXPANEL: Insights, order placed, daily, breakdown city, joined to
+ *   market_ops_daily on date + city; order delivered average minutes_late,
+ *   rainy vs dry days.
+ * REAL WORLD: rain is the best and worst day for a delivery business.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * H3. QUOTED ETA THRESHOLD (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: the checkout → order rate falls smoothly with quoted_eta_mins
+ *   (logistic centered at 45 min, softness 3 min); plateaus are solved so
+ *   quotes <= 45 min convert 80% and longer quotes 48% on average (0.6x).
+ * MIXPANEL: Funnels, checkout started → order placed, Totals, hold order_id
+ *   constant, 1-hour window, breakdown step 1 quoted_eta_mins (custom buckets
+ *   <= 45, > 45).
+ * REAL WORLD: past 45 minutes, people cook or call the pizza place.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * H4. CARD PROCESSOR INCIDENT (everything + warehouse payment_gateway_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: 2026-08-25 to 2026-08-28, 60% of card payments that would have
+ *   gone through fail (payment failed, decline_code processor_unavailable)
+ *   and the order is lost. Apple Pay, Google Pay, and PayPal are untouched.
+ *   The warehouse marks card major_outage with decline_rate ≈ 0.61.
+ * MIXPANEL: Funnels, checkout started → order placed, Totals, hold order_id,
+ *   1-hour window, breakdown payment_method, daily; join
+ *   payment_gateway_daily.gateway_status.
+ * REAL WORLD: a payment outage looks like "demand fell" until you split by method.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * H5. SMART ADD-ONS EXPERIMENT (Session funnel experiment + everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: from 2026-07-28 customers split 50/50 (exposure 1 s before their
+ *   first checkout on or after the start). The variant checkout screen
+ *   suggests a dessert, drink, or side; 40% of variant orders add one, so
+ *   items per order rise by 0.4 (pre-period adjusted) and the basket by
+ *   about $1.60-2.10; checkout → order conversion is unchanged.
+ * MIXPANEL: Insights (or Experiments), order placed, average items_count and
+ *   subtotal_usd, breakdown "Experiment: Smart Add-ons", Jul 28 - Oct 1 vs
+ *   Jun 4 - Jul 27; Funnels checkout started → order placed by arm.
+ * REAL WORLD: "complete your meal" prompts raise basket size at no conversion cost.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * H6. CHANNEL ECONOMICS (everything + warehouse marketing_spend_daily;
+ *     external join)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: spend per Mixpanel signup $9 coupon affiliates, $18 paid social,
+ *   $26 paid search. Half of coupon-affiliate customers leave after their
+ *   discounted first order, so their 30-day repeat rate is 0.5x the other
+ *   channels' and spend per repeat customer is level with paid social (1.0).
+ * MIXPANEL: Insights, account created by acquisition_channel joined to
+ *   marketing_spend_daily.spend_usd; Funnels order delivered → order placed,
+ *   30-day window, new customers, breakdown acquisition_channel.
+ * REAL WORLD: deal-site customers come for the coupon, not the restaurant.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * H7. PASS TRIAL TWO-ORDER RULE (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: a 14-day Forkfly Pass trial converts to paid 65% of the time with
+ *   2+ orders during the trial and 30% with 0-1. "pass trial ended" carries
+ *   outcome and orders_during_trial.
+ * MIXPANEL: Insights, pass trial ended, share outcome = converted, breakdown
+ *   orders_during_trial (0-1, 2+), customers who did pass trial started in
+ *   the window.
+ * REAL WORLD: members who feel the free delivery twice keep paying for it.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * H8. PASS FREE-DELIVERY MINIMUM (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: 60% of Pass orders (trial or member) with a $10-14.99 subtotal add
+ *   an item that lifts them to $15.50-19.50, so among $10-19.99 orders the
+ *   share under $15 is 0.4x for Pass vs non-Pass orders.
+ * MIXPANEL: Insights, order placed, filter subtotal_usd 10-20, breakdown
+ *   pass_status and subtotal_usd (custom buckets 10-15, 15-20).
+ * REAL WORLD: a free-delivery minimum pulls baskets up to the line.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * H9. SERVICE FEE CHANGE (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: 2026-08-11 the non-Pass service fee rises from 10% to 15% of the
+ *   subtotal; non-Pass checkouts convert at 0.85x their earlier rate, Pass
+ *   checkouts do not change.
+ * MIXPANEL: Funnels, checkout started → order placed, Totals, hold order_id,
+ *   1-hour window, breakdown pass_status, before vs after Aug 11.
+ * REAL WORLD: fee increases show up at the last step, as abandoned checkouts.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * H10. ORDER AGAIN LAUNCH (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: from 2026-07-07 customers with a past delivery can reorder in one
+ *   tap; adoption ramps over 21 days to about 30% of eligible sessions
+ *   (habit x0.4-1.6 per customer). An Order Again session reaches order
+ *   placed 0.35x as fast (median 5.6 vs 16 min) and ends in an order 1.99x as
+ *   often as a browsing session.
+ * MIXPANEL: Funnels, app opened → order placed, Totals, 60-minute window,
+ *   median time to convert, breakdown step 2 entry_point; Jul 7 - Oct 1.
+ * REAL WORLD: most food orders are repeats; removing the browse step pays.
+ *
+ * ═════════════════════════════════════════════════════════════════════════
+ * EXPECTED METRICS SUMMARY (measured: data/verify-food-delivery, 2026-10-07,
+ * full fidelity, 10,000 customers, 821,016 events, 43,240 orders)
+ * ═════════════════════════════════════════════════════════════════════════
+ * Hook | Metric                                          | Derivation                  | Expected | Measured
+ * -----|-------------------------------------------------|-----------------------------|----------|---------
+ * H1   | 30-day repeat, late (15+) / on-time first order | logistic churn, integrated  | 0.647    | 0.607 (39.2% vs 64.5%)
+ * H2   | orders per city-day, rainy / dry mean           | RAIN_DEMAND_MULT            | 1.40     | 1.379
+ * H2   | minutes_late, rainy − dry                       | RAIN_LATE_MIN               | 12.0     | 12.00
+ * H3   | checkout → order, quote > 45 / <= 45 min        | PLACE_SLOW / PLACE_FAST     | 0.60     | 0.609 (44.6% vs 73.2%)
+ * H4   | card conversion DiD, incident / ±14 days        | 1 − INCIDENT_FAIL           | 0.40     | 0.433
+ * H4   | warehouse card decline_rate, incident days      | 1 − 0.98 × 0.4              | 0.608    | 0.610
+ * H5   | items per order lift, pre-period adjusted       | ADDON_TAKE                  | 0.40     | 0.370 (raw arm diff 0.426)
+ * H5   | checkout → order, variant / control             | no effect                   | 1.00     | 0.998
+ * H5   | addon_suggestion items outside the variant      | exact purity                | 0        | 0
+ * H6   | spend per signup, coupon / paid search          | 9 / 26                      | 0.346    | 0.343 ($9.07 vs $26.45)
+ * H6   | 30-day repeat, coupon / other channels          | 1 − COUPON_CHURN            | 0.50     | 0.502 (33.1% vs 65.9%)
+ * H6   | spend per repeat customer, coupon / paid social | (9 / 0.5) / 18              | 1.00     | 0.978 ($47.30 vs $48.38)
+ * H7   | trial → paid, 2+ orders during trial            | TRIAL_CONV_HIGH             | 0.65     | 0.646
+ * H7   | trial → paid, 0-1 orders during trial           | TRIAL_CONV_LOW              | 0.30     | 0.293
+ * H7   | orders_during_trial vs orders placed            | exact                       | 0        | 0
+ * H8   | share < $15 of $10-19.99 orders, Pass / non-Pass | 1 − BUMP_SHARE             | 0.40     | 0.394 (15.3% vs 38.9%)
+ * H9   | non-Pass conversion DiD, after / before Aug 11  | FEE_KEEP                    | 0.85     | 0.841
+ * H10  | median app opened → order, reorder / browse     | REORDER_TTC_MULT            | 0.35     | 0.350 (5.6 vs 16.0 min)
+ * H10  | session order rate, reorder / browse            | 0.9 / (0.58 × 0.78)         | 1.99     | 1.914 (59.1% vs 30.9%)
+ * H10  | reorder tapped before Jul 7                     | exact purity                | 0        | 0
+ * ═════════════════════════════════════════════════════════════════════════
+ *
+ * Noise notes: H1 rests on about 400 late first orders and H6's repeat read
+ * on about 390 coupon first orders (relative SE about 6%), so both use the
+ * knob as target with a half-effect ceiling. H4 rests on about 1,250 card
+ * checkouts in the incident (half-effect ceiling). H5's lift is pre-period
+ * adjusted because items per order follow household size and the arms differ
+ * a little in household mix (raw arm difference 0.43); it keeps a half-effect
+ * floor. H8 clusters on about 2,400 Pass customers (half-effect ceiling).
+ * Unengineered: iOS vs Android checkout conversion (67.1% vs 66.7%, z = -1.05)
+ * and Smart Add-ons conversion by arm (64.2% vs 64.1%, z = -0.22).
  */
 
 // ── SCALE ──
 const SEED = "harness-food";
 const NUM_USERS = 10_000;
-const DATASET_START = "2026-01-01T00:00:00Z";
-const DATASET_END = "2026-05-01T23:59:59Z";
+const DATASET_START = "2026-06-04T00:00:00Z";
+const DATASET_END = "2026-10-01T23:59:59Z"; // 120 days
 const EVENTS_PER_DAY = 1.2;
 const token = process.env.MP_TOKEN || "your-mixpanel-token";
 
 const chance = u.initChance(SEED);
 
-// ── KNOBS (tweak these to reshape stories) ──
-const RUSH_DROP_LIKELIHOOD = 30;
-const RUSH_LUNCH_START = 11;
-const RUSH_LUNCH_END = 13;
-const RUSH_DINNER_START = 17;
-const RUSH_DINNER_END = 20;
+// ── TIMELINE (shared by hooks, stories, SQL, warehouse columns, guides) ──
+const REORDER_LAUNCH = "2026-07-07T00:00:00Z";      // "Order Again" button ships on iOS and Android
+const ADDONS_START = "2026-07-28T00:00:00Z";        // "Smart Add-ons" A/B test starts on the checkout screen
+const FEE_CHANGE = "2026-08-11T00:00:00Z";          // service fee for non-Pass orders 10% → 15%
+const PAY_INCIDENT_START = "2026-08-25T00:00:00Z";  // card processor incident starts
+const PAY_INCIDENT_END = "2026-08-29T00:00:00Z";    // exclusive (4 days: Aug 25-28)
 
-const COUPON_INJECT_LIKELIHOOD = 30;
+const ms = (iso) => dayjs.utc(iso).valueOf();
+const DAY_MS = 86_400_000;
+const MIN_MS = 60_000;
+const SEC_MS = 1000;
+const WINDOW_DAYS = 120;
 
-const LATE_NIGHT_START = 22;
-const LATE_NIGHT_END = 2;
-const LATE_NIGHT_FLIP_LIKELIHOOD = 70;
-const LATE_NIGHT_PRICE_MULT = 1.3;
+// ── WEEKLY AND DAILY RHYTHM (soup) ──
+// Sun..Sat. Friday to Sunday dinners are the busiest; Monday-Tuesday the quietest.
+const DOW_WEIGHTS = [1.0, 0.8, 0.78, 0.82, 0.88, 0.98, 0.95];
+// UTC hours. Customers are in US time zones (ET 56%, CT 25%, MT 9%, PT 10%):
+// lunch (11:30-13:30 local) lands at 15-19 UTC, dinner (18-21 local) at 22-03 UTC.
+const HOUR_WEIGHTS = [0.9, 0.7, 0.5, 0.32, 0.2, 0.12, 0.08, 0.06, 0.06, 0.07, 0.09, 0.13,
+	0.2, 0.28, 0.4, 0.6, 0.78, 0.74, 0.58, 0.52, 0.56, 0.72, 0.92, 1.0];
 
-const RAINY_START_DAY = 20;
-const RAINY_END_DAY = 27;
-const RAINY_FEE_MULT = 2;
-const RAINY_DUP_LIKELIHOOD = 40;
+// ── MARKETS ──
+// share of customers, summer chance of a rainy day, typical high (°F)
+const CITIES = {
+	"New York": { code: "nyc", w: 22, rain: 0.2, temp: 84 },
+	"Chicago": { code: "chi", w: 15, rain: 0.2, temp: 82 },
+	"Boston": { code: "bos", w: 11, rain: 0.19, temp: 80 },
+	"Atlanta": { code: "atl", w: 12, rain: 0.27, temp: 89 },
+	"Miami": { code: "mia", w: 11, rain: 0.34, temp: 90 },
+	"Austin": { code: "aus", w: 10, rain: 0.12, temp: 95 },
+	"Denver": { code: "den", w: 9, rain: 0.15, temp: 87 },
+	"Seattle": { code: "sea", w: 10, rain: 0.1, temp: 76 },
+};
+const CITY_NAMES = Object.keys(CITIES);
 
-const REFERRAL_CLONE_LIKELIHOOD = 50;
-const REFERRAL_RATING_MIN = 4;
-const REFERRAL_RATING_MAX = 5;
+// ── KNOBS ──
+// H1 late first order: a new customer whose first delivery is late may not come back
+const LATE_MEAN_MIN = 3;            // minutes_late ~ normal(mean, sd) (+ rain), rounded
+const LATE_SD_MIN = 10;
+const LATE_THRESHOLD_MIN = 15;      // "late" = 15+ minutes past the promised time
+const LATE_SOFT_MIN = 2.5;          // logistic softness of the churn response
+const LATE_CHURN = 0.45;            // churn chance after a very late first order (logistic plateau)
 
-const TRIAL_EARLY_DAYS = 14;
-const TRIAL_MIN_ORDERS = 3;
-const TRIAL_DROP_LIKELIHOOD = 60;
+// H2 rain: rainy days bring more orders, and couriers run late
+const RAIN_DAY_MM = 4;              // rainy day = 4+ mm of precipitation (every rainy draw is >= 4 mm)
+const RAIN_DEMAND_MULT = 1.4;       // app sessions (and so orders) per customer on rainy days vs dry days
+const RAIN_LATE_MIN = 12;           // extra minutes late on rainy days (the ETA model ignores weather)
 
-const FIRST_ORDER_DROP_LIKELIHOOD = 30;
+// H3 quoted ETA: customers abandon checkout when the promised time is long
+const ETA_MEDIAN_MIN = 36;
+const ETA_SIGMA = 0.3;
+const ETA_MIN = 15;
+const ETA_MAX = 90;
+const ETA_THRESHOLD_MIN = 45;
+const ETA_SOFT_MIN = 3;
+const PLACE_FAST = 0.8;             // average checkout → order rate for quotes <= 45 min
+const PLACE_SLOW = 0.48;            // average checkout → order rate for quotes > 45 min (ratio 0.6)
 
-const ORDER_SWEET_MIN = 4;
-const ORDER_SWEET_MAX = 8;
-const ORDER_OVER_THRESHOLD = 9;
-const ORDER_SWEET_BOOST = 1.4;
-const ORDER_OVER_FACTOR = 0.65;
+// H4 card processor incident (warehouse payment_gateway_daily)
+const BASE_PAY_FAIL = 0.02;         // everyday payment failures, every method
+const INCIDENT_FAIL = 0.6;          // extra share of card payments that fail during the incident
 
-const TTC_QB_PLUS_FACTOR = 0.67;
-const TTC_FREE_FACTOR = 1.4;
+// H5 Smart Add-ons experiment (checkout screen suggests a dessert, drink, or side)
+const ADDONS_EXPERIMENT = "Smart Add-ons";
+const ADDONS_VARIANT = "Smart Add-ons";
+const EXP_KEY = `Experiment: ${ADDONS_EXPERIMENT}`;
+const ADDON_TAKE = 0.4;             // share of variant orders that add one suggested item
 
-const CITY_DENSE_MULT = 1.4;
-const CITY_SPRAWL_MULT = 0.7;
+// H6 acquisition channels (warehouse marketing_spend_daily)
+const PAID_CHANNELS = ["paid_search", "paid_social", "coupon_affiliates"];
+const CHANNEL_WEIGHTS = { organic: 28, referral: 10, paid_search: 18, paid_social: 22, coupon_affiliates: 22 };
+const CPA_USD = { paid_search: 26, paid_social: 18, coupon_affiliates: 9 }; // window spend per Mixpanel signup
+const COUPON_CHURN = 0.5;           // deal-site signups who leave after their discounted first order
+const SPEND_PLAN_SHARE = { paid_search: 0.5, paid_social: 0.5, coupon_affiliates: 0.2 }; // paced budget share (rest is per-signup)
+const SPEND_FLAT_SHARE = 0.4;
+const SPEND_NOISE = 0.12;
+const CPC_USD = { paid_search: 2.4, paid_social: 1.1, coupon_affiliates: 0.55 };
+const CTR = { paid_search: 0.045, paid_social: 0.009, coupon_affiliates: 0.02 };
+const NETWORK_SIGNUP_INFLATION = 1.15;
 
-// ── DATA ARRAYS ──
-const restaurantIds = v.range(1, 201).map(n => `rest_${v.uid(6)}`);
-const itemIds = v.range(1, 301).map(n => `item_${v.uid(7)}`);
-const orderIds = v.range(1, 5001).map(n => `order_${v.uid(8)}`);
-const couponCodes = v.range(1, 51).map(n => `QUICK${v.uid(5).toUpperCase()}`);
+// H7 Forkfly Pass trial: conversion to paid depends on orders during the trial
+const TRIAL_DAYS = 14;
+const TRIAL_MAGIC_ORDERS = 2;
+const TRIAL_CONV_LOW = 0.3;         // 0-1 orders during the trial
+const TRIAL_CONV_HIGH = 0.65;       // 2+ orders during the trial
+const PASS_OFFER_SHARE = 0.5;       // non-Pass checkouts that show the free-trial offer (never-trialed customers)
+const TRIAL_ACCEPT = 0.08;          // offers that start a trial
+const PREEXIST_PASS_SHARE = 0.18;   // established customers who are Pass members on June 4
+const WARM_TRIAL_SHARE = 0.04;      // established non-members whose trial started in the 14 days before June 4
+const PASS_CANCEL_SHARE = 0.2;      // members who cancel during a full 120-day window
+const PASS_PRICE_USD = 9.99;
 
-// ── HELPER FUNCTIONS ──
-function handleFunnelPreHooks(record, meta) {
-	// H10: CITY DENSITY REORDER BOOST — dense cities 1.4x; sprawl 0.7x
-	// on the reorder funnel.
-	const isReorderFunnel = meta.funnel?.sequence?.includes("reorder initiated");
-	if (isReorderFunnel) {
-		const city = meta.profile?.city;
-		if (city === "San Francisco" || city === "New York") {
-			record.conversionRate = Math.min(95, Math.round(record.conversionRate * CITY_DENSE_MULT));
-		} else if (city === "Houston" || city === "Phoenix") {
-			record.conversionRate = Math.round(record.conversionRate * CITY_SPRAWL_MULT);
-		}
+// H8 Pass free-delivery minimum: Pass members top up small baskets
+const PASS_FREE_DELIVERY_MIN = 15;
+const BUMP_FROM = 10;
+const BUMP_SHARE = 0.6;             // Pass baskets of $10-14.99 topped up past $15
+
+// H9 service fee change for non-Pass orders
+const FEE_RATE_BEFORE = 0.1;
+const FEE_RATE_AFTER = 0.15;
+const PASS_FEE_RATE = 0.05;
+const FEE_KEEP = 0.85;              // non-Pass checkout → order after the change, relative to before
+
+// H10 "Order Again" launch: reorder sessions reach the order faster
+const TTC_MEDIAN_MIN = 16;          // app opened → order placed, browsing sessions (log-normal median)
+const TTC_SIGMA = 0.45;
+const REORDER_TTC_MULT = 0.35;
+const REORDER_SHARE = 0.3;          // mean share of eligible sessions that use Order Again once adoption ramps
+const REORDER_RAMP_DAYS = 21;
+
+// session shape (realism)
+const P_SEARCH = 0.4;
+const P_CART = 0.58;
+const P_CHECKOUT = 0.78;
+const P_REORDER_CHECKOUT = 0.9;
+const P_RATE = 0.42;
+const NO_ADDRESS_DAYS = 5;          // signups without a saved address browse a few days, then leave
+const BORN_PCT = 42;
+
+// ── DATA ──
+const CUISINE_WEIGHTS = { american: 18, pizza: 16, mexican: 13, chinese: 11, japanese: 9, indian: 8, thai: 7, mediterranean: 7, italian: 6, healthy: 5 };
+const TIER_WEIGHTS = { "$": 30, "$$": 45, "$$$": 20, "$$$$": 5 };
+const ENTREE_PRICE = { "$": 10, "$$": 15, "$$$": 23, "$$$$": 34 };
+const CATEGORY_PRICE_MULT = { entree: 1, side: 0.4, drink: 0.25, appetizer: 0.55, dessert: 0.4 };
+const EXTRA_ITEM_WEIGHTS = { side: 30, drink: 25, appetizer: 20, dessert: 15, entree: 10 };
+const ADDON_WEIGHTS = { dessert: 40, drink: 35, side: 25 };
+const HOUSEHOLD_WEIGHTS = { single: 42, couple: 33, family: 25 };
+const ITEMS_BY_HOUSEHOLD = {
+	single: { 1: 45, 2: 40, 3: 15 },
+	couple: { 2: 55, 3: 35, 4: 10 },
+	family: { 2: 20, 3: 40, 4: 30, 5: 10 },
+};
+const NAME_PREFIX = ["Golden", "Corner", "Lucky", "Maple", "Blue Door", "Little", "Union", "Harbor", "Fifth Street", "Copper", "Red Lantern", "Old Town", "Sunset", "Green Leaf", "Iron", "Northside", "Velvet", "Half Moon", "Juniper", "Brick Lane"];
+const NAME_SUFFIX = {
+	american: ["Burger Bar", "Smokehouse", "Diner", "Grill", "Chicken Shack"],
+	pizza: ["Pizzeria", "Slice Shop", "Pie Co.", "Pizza Kitchen"],
+	mexican: ["Taqueria", "Cantina", "Burrito Co.", "Tacos"],
+	chinese: ["Dumpling House", "Wok", "Noodle Bar", "Kitchen"],
+	japanese: ["Sushi", "Ramen", "Izakaya", "Bento"],
+	indian: ["Curry House", "Tandoor", "Masala", "Biryani"],
+	thai: ["Thai Kitchen", "Noodle House", "Basil", "Thai Street"],
+	mediterranean: ["Grill", "Falafel", "Kebab House", "Mezze"],
+	italian: ["Trattoria", "Pasta Bar", "Osteria", "Cucina"],
+	healthy: ["Salad Co.", "Bowls", "Greens", "Juice Bar"],
+};
+const SEARCH_TERMS = {
+	american: ["burger", "fried chicken", "wings", "mac and cheese"], pizza: ["pizza", "pepperoni", "calzone"],
+	mexican: ["tacos", "burrito", "quesadilla"], chinese: ["dumplings", "lo mein", "orange chicken"],
+	japanese: ["sushi", "ramen", "poke"], indian: ["tikka masala", "biryani", "curry"],
+	thai: ["pad thai", "green curry"], mediterranean: ["falafel", "shawarma", "gyro"],
+	italian: ["pasta", "lasagna"], healthy: ["salad", "grain bowl", "smoothie"],
+};
+const RESTAURANTS_PER_CITY = 24;
+const PAYMENT_BY_PLATFORM = {
+	ios: { apple_pay: 45, card: 45, paypal: 10 },
+	android: { google_pay: 30, card: 60, paypal: 10 },
+};
+const DECLINE_CODES = { insufficient_funds: 40, card_declined: 35, expired_card: 15, authentication_failed: 10 };
+const SUPPORT_ISSUES = { missing_item: 45, wrong_item: 25, food_quality: 20, refund_request: 10 };
+const CANCEL_REASONS = { not_ordering_enough: 35, too_expensive: 30, switching_apps: 15, moving: 5, other: 15 };
+
+// ── HELPERS ──
+const salt = (uid, tag) => hashFloat(`${uid}|${tag}`);
+const round1 = (n) => Math.round(n * 10) / 10;
+const round2 = (n) => Math.round(n * 100) / 100;
+const T = (e) => dayjs.utc(e.time).valueOf();
+const iso = (t) => new Date(t).toISOString();
+const dayKey = (t) => new Date(t).toISOString().slice(0, 10);
+const byT = (a, b) => T(a) - T(b);
+const coin = (p) => chance.bool({ likelihood: Math.max(0, Math.min(1, p)) * 100 });
+const unif = (a, b) => a + (b - a) * chance.floating({ min: 0, max: 1, fixed: 8 });
+const normal = () => chance.normal({ mean: 0, dev: 1 });
+const logistic = (x) => 1 / (1 + Math.exp(-x));
+const jitter = (key, spread) => 1 + (hashFloat(key) - 0.5) * 2 * spread;
+const pickWeighted = (obj, r) => {
+	const entries = Object.entries(obj);
+	const total = entries.reduce((s, [, w]) => s + w, 0);
+	let acc = 0;
+	for (const [k, w] of entries) {
+		acc += w / total;
+		if (r < acc) return k;
 	}
-	return record;
+	return entries[entries.length - 1][0];
+};
+const pick = (obj) => pickWeighted(obj, chance.floating({ min: 0, max: 1, fixed: 8 }));
+const weighted = (obj) => Object.entries(obj).flatMap(([k, w]) => Array(w).fill(k));
+// deterministic standard normal from a key (Box-Muller on two hash draws)
+const hashNormal = (key) => {
+	const a = Math.max(1e-9, hashFloat(`${key}|a`));
+	const b = hashFloat(`${key}|b`);
+	return Math.sqrt(-2 * Math.log(a)) * Math.cos(2 * Math.PI * b);
+};
+const erf = (x) => {
+	const s = Math.sign(x);
+	const z = Math.abs(x);
+	const t = 1 / (1 + 0.3275911 * z);
+	const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z);
+	return s * y;
+};
+const Phi = (z) => 0.5 * (1 + erf(z / Math.SQRT2));
+
+// ── WEATHER (shared by the hook, the warehouse table, and the stories) ──
+const precipitationMm = (date, city) => {
+	const c = CITIES[city];
+	if (!c) return 0;
+	if (hashFloat(`rain|${date}|${city}`) < c.rain) {
+		return round1(Math.min(60, RAIN_DAY_MM + 8 * Math.exp(0.9 * hashNormal(`rainmm|${date}|${city}`))));
+	}
+	const trace = hashFloat(`trace|${date}|${city}`);
+	return trace < 0.3 ? round1(0.1 + trace * 6) : 0; // 0.1-1.9 mm drizzle on some dry days
+};
+const isRainy = (date, city) => precipitationMm(date, city) >= RAIN_DAY_MM;
+const weatherCondition = (date, city) => {
+	const mm = precipitationMm(date, city);
+	if (mm >= 25) return "thunderstorm";
+	if (mm >= RAIN_DAY_MM) return "rain";
+	if (mm > 0) return "drizzle";
+	return hashFloat(`cloud|${date}|${city}`) < 0.35 ? "cloudy" : "clear";
+};
+const tempHighF = (date, city) => Math.round((CITIES[city]?.temp ?? 80) + 5 * hashNormal(`temp|${date}|${city}`) - (isRainy(date, city) ? 6 : 0));
+const WINDOW_DATES = Array.from({ length: WINDOW_DAYS }, (_, i) => dayjs.utc(DATASET_START).add(i, "day").format("YYYY-MM-DD"));
+
+// ── RESTAURANT CATALOG (deterministic; denormalized onto events) ──
+const RESTAURANTS = Object.fromEntries(CITY_NAMES.map((city) => {
+	const list = Array.from({ length: RESTAURANTS_PER_CITY }, (_, i) => {
+		const k = `rest|${city}|${i}`;
+		const cuisine = pickWeighted(CUISINE_WEIGHTS, hashFloat(`${k}|cuisine`));
+		const suffixes = NAME_SUFFIX[cuisine];
+		return {
+			restaurant_id: `rst_${CITIES[city].code}_${String(i + 1).padStart(2, "0")}`,
+			restaurant_name: `${NAME_PREFIX[Math.floor(hashFloat(`${k}|pre`) * NAME_PREFIX.length)]} ${suffixes[Math.floor(hashFloat(`${k}|suf`) * suffixes.length)]}`,
+			cuisine,
+			price_tier: pickWeighted(TIER_WEIGHTS, hashFloat(`${k}|tier`)),
+			restaurant_rating: round1(3.7 + 1.2 * hashFloat(`${k}|rating`)),
+			popularity: 1 / Math.pow(i + 1, 0.7),
+		};
+	});
+	return [city, list];
+}));
+
+// ── KNOB-DERIVED READS (exact math over the configured distributions) ──
+// H3: solve the logistic plateaus so the bucket averages of the checkout → order
+// rate are PLACE_FAST (quote <= 45 min) and PLACE_SLOW (quote > 45 min).
+const ETA_PMF = (() => {
+	const out = [];
+	const mu = Math.log(ETA_MEDIAN_MIN);
+	for (let m = ETA_MIN; m <= ETA_MAX; m++) {
+		const lo = m === ETA_MIN ? -Infinity : (Math.log(m - 0.5) - mu) / ETA_SIGMA;
+		const hi = m === ETA_MAX ? Infinity : (Math.log(m + 0.5) - mu) / ETA_SIGMA;
+		out.push([m, Phi(hi) - Phi(lo)]);
+	}
+	return out;
+})();
+const etaShape = (m) => logistic((ETA_THRESHOLD_MIN - m) / ETA_SOFT_MIN);
+const [PLACE_EARLY, PLACE_LATE] = (() => {
+	let nF = 0, sF = 0, nS = 0, sS = 0;
+	for (const [m, p] of ETA_PMF) {
+		if (m <= ETA_THRESHOLD_MIN) { nF += p; sF += p * etaShape(m); } else { nS += p; sS += p * etaShape(m); }
+	}
+	const span = (PLACE_FAST - PLACE_SLOW) / (sF / nF - sS / nS);
+	const late = PLACE_SLOW - span * (sS / nS);
+	return [late + span, late];
+})();
+const placeProb = (eta) => PLACE_LATE + (PLACE_EARLY - PLACE_LATE) * etaShape(eta);
+
+// H1: share of first orders on rainy days (realized rain calendar x the rain
+// demand lift), then the 30-day repeat ratio late (15+ min) vs on time.
+const RAIN_SESSION_SHARE = (() => {
+	let wSum = 0, acc = 0;
+	for (const city of CITY_NAMES) {
+		const r = WINDOW_DATES.filter((d) => isRainy(d, city)).length / WINDOW_DAYS;
+		acc += CITIES[city].w * (r * RAIN_DEMAND_MULT) / (r * RAIN_DEMAND_MULT + (1 - r));
+		wSum += CITIES[city].w;
+	}
+	return acc / wSum;
+})();
+const lateChurn = (m) => LATE_CHURN * logistic((m - LATE_THRESHOLD_MIN) / LATE_SOFT_MIN);
+const LATE_REPEAT_RATIO = (() => {
+	let nL = 0, sL = 0, nO = 0, sO = 0;
+	for (let m = -50; m <= 80; m++) {
+		const pm = (mu) => Phi((m + 0.5 - mu) / LATE_SD_MIN) - Phi((m - 0.5 - mu) / LATE_SD_MIN);
+		const p = (1 - RAIN_SESSION_SHARE) * pm(LATE_MEAN_MIN) + RAIN_SESSION_SHARE * pm(LATE_MEAN_MIN + RAIN_LATE_MIN);
+		if (m >= LATE_THRESHOLD_MIN) { nL += p; sL += p * lateChurn(m); } else { nO += p; sO += p * lateChurn(m); }
+	}
+	return (1 - sL / nL) / (1 - sO / nO);
+})();
+
+// ── DERIVED HELPERS ──
+const inPayIncident = (t) => t >= ms(PAY_INCIDENT_START) && t < ms(PAY_INCIDENT_END);
+const serviceRate = (passActive, t) => (passActive ? PASS_FEE_RATE : t >= ms(FEE_CHANGE) ? FEE_RATE_AFTER : FEE_RATE_BEFORE);
+const BORN_EXPECTED = NUM_USERS * BORN_PCT / 100;
+const CHANNEL_TOTAL_W = Object.values(CHANNEL_WEIGHTS).reduce((a, b) => a + b, 0);
+const DAILY_BUDGET_USD = Object.fromEntries(PAID_CHANNELS.map((ch) => [ch, CPA_USD[ch] * BORN_EXPECTED * (CHANNEL_WEIGHTS[ch] / CHANNEL_TOTAL_W) / WINDOW_DAYS]));
+const SPEND_WEEKDAY = (() => {
+	const m = DOW_WEIGHTS.reduce((a, b) => a + b, 0) / DOW_WEIGHTS.length;
+	return DOW_WEIGHTS.map((w) => SPEND_FLAT_SHARE + (1 - SPEND_FLAT_SHARE) * w / m);
+})();
+const paidSpend = (date, ch, signups) => {
+	const plan = SPEND_PLAN_SHARE[ch];
+	return round2((plan * DAILY_BUDGET_USD[ch] * SPEND_WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()]
+		+ (1 - plan) * CPA_USD[ch] * signups) * jitter(`spend|${date}|${ch}`, SPEND_NOISE));
+};
+
+// ── EVENT SCHEMA (declared properties per event; hooks only fill these) ──
+const EVENT_PROPS = {
+	"account created": ["signup_method", "acquisition_channel"],
+	"address saved": ["address_type"],
+	"app opened": ["open_source"],
+	"search performed": ["search_term", "results_count"],
+	"restaurant viewed": ["restaurant_id", "restaurant_name", "cuisine", "price_tier", "restaurant_rating"],
+	"item added to cart": ["restaurant_id", "item_category", "item_price_usd", "added_from"],
+	"reorder tapped": ["restaurant_id", "restaurant_name", "cuisine", "days_since_last_order"],
+	"checkout started": ["order_id", "restaurant_id", "restaurant_name", "cuisine", "items_count", "subtotal_usd", "delivery_fee_usd", "service_fee_usd", "quoted_eta_mins", "payment_method", "entry_point"],
+	"pass offer viewed": ["order_id", "offer_type"],
+	"pass trial started": ["plan", "price_after_trial_usd"],
+	"payment failed": ["order_id", "payment_method", "decline_code"],
+	"order placed": ["order_id", "restaurant_id", "restaurant_name", "cuisine", "price_tier", "items_count", "subtotal_usd", "delivery_fee_usd", "service_fee_usd", "tip_usd", "discount_usd", "promo_code", "order_total_usd", "quoted_eta_mins", "payment_method", "entry_point"],
+	"order tracking viewed": ["order_id", "order_status"],
+	"order delivered": ["order_id", "restaurant_id", "delivery_minutes", "minutes_late"],
+	"order rated": ["order_id", "restaurant_id", "food_rating", "delivery_rating"],
+	"support contacted": ["order_id", "issue_type", "contact_channel"],
+	"pass trial ended": ["outcome", "orders_during_trial"],
+	"pass cancelled": ["cancel_reason", "months_subscribed"],
+	"$experiment_started": ["Experiment name", "Variant name"],
+};
+
+// ── HOOKS ──
+function handleUserHook(profile, meta) {
+	const uid = profile.distinct_id;
+	profile.city = pickWeighted(Object.fromEntries(CITY_NAMES.map((c) => [c, CITIES[c].w])), salt(uid, "city"));
+	profile.household_type = pickWeighted(HOUSEHOLD_WEIGHTS, salt(uid, "household"));
+	profile.favorite_cuisine = pickWeighted(CUISINE_WEIGHTS, salt(uid, "fav-cuisine"));
+	if (meta.userIsBornInDataset) {
+		profile.acquisition_channel = pickWeighted(CHANNEL_WEIGHTS, salt(uid, "channel"));
+		profile.customer_since = dayKey(dayjs.utc(profile.created ?? meta.user?.created).valueOf());
+		profile.pass_status = "none";
+		return profile;
+	}
+	profile.acquisition_channel = pickWeighted({ organic: 40, referral: 14, paid_search: 18, paid_social: 18, coupon_affiliates: 10 }, salt(uid, "channel"));
+	const tenureDays = Math.floor(salt(uid, "tenure") * (ms(DATASET_START) - ms("2024-03-01T00:00:00Z")) / DAY_MS);
+	profile.customer_since = dayjs.utc("2024-03-01T00:00:00Z").add(tenureDays, "day").format("YYYY-MM-DD");
+	profile.pass_status = salt(uid, "pass") < PREEXIST_PASS_SHARE ? "member" : "none";
+	return profile;
 }
 
-function handleEverythingHooks(record, meta) {
-	// UTC mode is load-bearing: dayjs.unix() returns a LOCAL-mode instance, and
-	// local .add(N, "days") does calendar-day arithmetic — it slips 1h across the
-	// March-8-2026 DST spring-forward and makes every derived boundary (rainy
-	// window, trial day-14 cutoff) depend on the host timezone, breaking the
-	// seeded-determinism contract. Same fix as real-estate / insurance.
-	const datasetStart = dayjs.unix(meta.datasetStart).utc();
-	const RAINY_WEEK_START = datasetStart.add(RAINY_START_DAY, 'days');
-	// END_DAY + 1 because the gate below is `isBefore(end)`: with end at the
-	// START of day 27, day 27's events fell outside the window and the doc's
-	// "days 20-27" only covered 20-26. End at start-of-day-28 makes day 27
-	// (the last rainy day) inclusive.
-	const RAINY_WEEK_END = datasetStart.add(RAINY_END_DAY + 1, 'days');
-	const userEvents = record;
+function handleEverything(events, meta) {
+	if (!events.length) return events;
 	const profile = meta.profile;
+	const uid = profile.distinct_id;
+	const BEGIN = ms(DATASET_START), END = ms(DATASET_END);
+	const city = profile.city;
+	const signup = events.find((e) => e.event === "account created") || null;
+	const address = events.find((e) => e.event === "address saved") || null;
+	const signupT = signup ? T(signup) : null;
 
-	// Stamp superProps from profile so they stay consistent per user
-	if (profile) {
-		userEvents.forEach((event) => {
-			if (profile.Platform !== undefined) event.Platform = profile.Platform;
-			if (profile.subscription_tier !== undefined) event.subscription_tier = profile.subscription_tier;
-			if (profile.city !== undefined) event.city = profile.city;
-		});
+	// platform and wallet follow the customer's phone (one device per customer)
+	const osEv = events.find((e) => e.os);
+	const platform = osEv && osEv.os === "Android" ? "android" : "ios";
+	profile.platform = platform;
+	const wallet = PAYMENT_BY_PLATFORM[platform];
+	const defaultPay = pickWeighted(wallet, salt(uid, "pay"));
+	profile.default_payment = defaultPay;
+
+	// templates: the first engine event of each name; every built event is a clone
+	const tpl = {};
+	for (const e of events) if (!tpl[e.event]) tpl[e.event] = { ...e };
+	const fallback = tpl["app opened"] || tpl["account created"] || { ...events[0] };
+	const make = (name, t, props) => {
+		const src = tpl[name] || fallback;
+		const ev = cloneEvent(src, { time: iso(t) });
+		for (const k of EVENT_PROPS[src.event] || []) delete ev[k];
+		ev.event = name;
+		Object.assign(ev, props);
+		return ev;
+	};
+
+	const exposures = events.filter((e) => e.event === "$experiment_started");
+	const variant = exposures.length && profile[EXP_KEY] !== undefined ? profile[EXP_KEY] : null;
+
+	// ── sessions: one engine "app opened" per session ──
+	// H2: rainy days bring more sessions. Dry-day sessions survive at 1 / RAIN_DEMAND_MULT.
+	const opens = events.filter((e) => e.event === "app opened").sort(byT)
+		.filter((o) => isRainy(dayKey(T(o)), city) || coin(1 / RAIN_DEMAND_MULT));
+
+	// ── Forkfly Pass state ──
+	const passChanges = [{ t: -Infinity, s: profile.pass_status === "member" ? "member" : "none" }];
+	const statusAt = (t) => {
+		let s = passChanges[0].s;
+		for (const c of passChanges) if (c.t <= t) s = c.s;
+		return s;
+	};
+	const passActive = (t) => statusAt(t) !== "none";
+	const passEvents = [];
+	const orders = []; // { t, orderId, rest, items, deliveredT, late }
+	let trial = null;  // { start, end, preDays }
+	let trialed = false;
+	let memberSince = null;
+	let cancelT = Infinity;
+	const scheduleCancel = (from, share) => {
+		if (!coin(share)) return Infinity;
+		return Math.floor(from + unif(0, 1) * (END - from));
+	};
+	if (passChanges[0].s === "member") {
+		memberSince = BEGIN - Math.floor(salt(uid, "member-since") * 300) * DAY_MS;
+		cancelT = scheduleCancel(BEGIN, PASS_CANCEL_SHARE);
+	} else if (!signup && salt(uid, "warm-trial") < WARM_TRIAL_SHARE) {
+		// established non-member whose free trial began in the two weeks before June 4
+		const start = BEGIN - Math.floor(salt(uid, "warm-trial-day") * TRIAL_DAYS * DAY_MS);
+		trial = { start, end: start + TRIAL_DAYS * DAY_MS, preDays: (BEGIN - start) / DAY_MS };
+		trialed = true;
+		passChanges[0].s = "trial";
 	}
+	const advance = (t) => {
+		for (;;) {
+			const s = statusAt(Math.min(t, END));
+			if (trial && s === "trial" && trial.end <= t && trial.end <= END) {
+				const inTrial = orders.filter((o) => o.t >= trial.start && o.t < trial.end).length;
+				// warm-start trials began before June 4: count those days at the customer's in-window pace
+				const pre = trial.preDays ? orders.filter((o) => o.t >= BEGIN && o.t < BEGIN + trial.preDays * DAY_MS).length : 0;
+				const n = inTrial + pre;
+				const converted = coin(n >= TRIAL_MAGIC_ORDERS ? TRIAL_CONV_HIGH : TRIAL_CONV_LOW);
+				passEvents.push(make("pass trial ended", trial.end, { outcome: converted ? "converted" : "not_converted", orders_during_trial: n }));
+				passChanges.push({ t: trial.end, s: converted ? "member" : "none" });
+				if (converted) {
+					memberSince = trial.end;
+					cancelT = scheduleCancel(trial.end + 7 * DAY_MS, PASS_CANCEL_SHARE * (END - trial.end) / (WINDOW_DAYS * DAY_MS));
+				}
+				trial = null;
+				continue;
+			}
+			if (s === "member" && cancelT <= t && cancelT <= END) {
+				const months = Math.max(1, Math.round((cancelT - memberSince) / (30 * DAY_MS)));
+				passEvents.push(make("pass cancelled", cancelT, { cancel_reason: pick(CANCEL_REASONS), months_subscribed: months }));
+				passChanges.push({ t: cancelT, s: "none" });
+				cancelT = Infinity;
+				continue;
+			}
+			break;
+		}
+	};
 
-	// H9: ORDER LIFECYCLE TTC — QuickBite+ 0.67x, Free 1.4x on delivery
-	// timing properties + funnel timestamp shift.
-	if (profile) {
-		const tier = profile.subscription_tier;
-		const ttcFactor = (
-			tier === "QuickBite+" ? TTC_QB_PLUS_FACTOR :
-			tier === "Free" ? TTC_FREE_FACTOR :
-			1.0
-		);
-		if (ttcFactor !== 1.0) {
-			// Timestamp shift: affects Mixpanel funnel TTC
-			const orderSeq = findFirstSequence(
-				userEvents,
-				["checkout started", "order placed", "order tracked", "order delivered"],
-				60 * 24 * 7
-			);
-			if (orderSeq) scaleFunnelTTC(orderSeq, ttcFactor);
-			// Property scale: affects Insights AVG reports
-			userEvents.forEach(e => {
-				if (typeof e.actual_delivery_mins === "number") {
-					e.actual_delivery_mins = Math.round(e.actual_delivery_mins * ttcFactor);
+	// ── experiment: exposure at the first checkout on/after the start ──
+	let exposureT = null;
+
+	// ── per-session simulation (chronological) ──
+	const sessionEvents = [];
+	let cut = Infinity; // H1/H6: a churned new customer stops using the app
+	const favorites = [0, 1, 2].map((i) => Math.floor(salt(uid, `fav${i}`) * RESTAURANTS_PER_CITY));
+	const cityRest = RESTAURANTS[city] || RESTAURANTS["New York"];
+	const popTotal = cityRest.reduce((s, r) => s + r.popularity, 0);
+	const popularPick = () => {
+		let r = unif(0, popTotal);
+		for (const x of cityRest) { r -= x.popularity; if (r <= 0) return x; }
+		return cityRest[cityRest.length - 1];
+	};
+	const pickRestaurant = () => (coin(0.45) ? cityRest[favorites[chance.integer({ min: 0, max: 2 })]] : popularPick());
+	const reorderHabit = 0.4 + 1.2 * salt(uid, "reorder-habit");
+	const household = profile.household_type || "single";
+	const itemPrice = (rest, cat) => round2(ENTREE_PRICE[rest.price_tier] * CATEGORY_PRICE_MULT[cat] * unif(0.75, 1.25));
+	const deliveryBase = (rest) => [1.99, 2.99, 3.99, 4.99][Math.floor(hashFloat(`dfee|${uid}|${rest.restaurant_id}`) * 4)];
+
+	let busyUntil = -Infinity; // a session that opens while the previous one is still running is the same visit
+	for (const open of opens) {
+		const T0 = T(open);
+		if (T0 >= cut || T0 > END || T0 < busyUntil) continue;
+		advance(T0);
+		const evs = [open];
+		const browseOnly = signup && !address;
+		if (browseOnly && T0 > signupT + NO_ADDRESS_DAYS * DAY_MS) continue;
+
+		// path: Order Again (H10) or browse
+		const lastDelivered = [...orders].reverse().find((o) => o.deliveredT && o.deliveredT < T0) || null;
+		const ramp = Math.min(1, Math.max(0, (T0 - ms(REORDER_LAUNCH)) / (REORDER_RAMP_DAYS * DAY_MS)));
+		const reorder = !browseOnly && lastDelivered && T0 >= ms(REORDER_LAUNCH) && coin(REORDER_SHARE * reorderHabit * ramp);
+		const ttcMin = Math.min(75, Math.max(reorder ? 1.5 : 3, TTC_MEDIAN_MIN * Math.exp(TTC_SIGMA * normal()) * (reorder ? REORDER_TTC_MULT : 1)));
+		const orderT = T0 + Math.round(ttcMin * MIN_MS);
+		const dwell = Math.round(Math.min(unif(20, 90) * SEC_MS, 0.4 * ttcMin * MIN_MS));
+		let rest, items = 0, subtotal = 0, entry;
+		let goCheckout = false;
+		const browse = []; // [name, props] laid out between open and checkout
+
+		if (reorder) {
+			const recent = orders.slice(-3);
+			const prev = recent[chance.integer({ min: 0, max: recent.length - 1 })];
+			rest = prev.rest;
+			entry = "reorder";
+			browse.push(["reorder tapped", { restaurant_id: rest.restaurant_id, restaurant_name: rest.restaurant_name, cuisine: rest.cuisine, days_since_last_order: Math.max(0, Math.floor((T0 - prev.t) / DAY_MS)) }]);
+			items = Number(pick(ITEMS_BY_HOUSEHOLD[household]));
+			subtotal = itemPrice(rest, "entree");
+			for (let i = 1; i < items; i++) subtotal += itemPrice(rest, pick(EXTRA_ITEM_WEIGHTS));
+			goCheckout = coin(P_REORDER_CHECKOUT);
+		} else {
+			rest = pickRestaurant();
+			const searched = coin(P_SEARCH);
+			entry = searched ? "search" : "home_feed";
+			if (searched) {
+				const terms = SEARCH_TERMS[rest.cuisine];
+				browse.push(["search performed", { search_term: terms[chance.integer({ min: 0, max: terms.length - 1 })], results_count: coin(0.04) ? 0 : chance.integer({ min: 3, max: 40 }) }]);
+			}
+			const nViews = Number(pick({ 1: 45, 2: 30, 3: 17, 4: 8 }));
+			for (let i = 0; i < nViews; i++) {
+				const r = i === nViews - 1 ? rest : popularPick();
+				browse.push(["restaurant viewed", { restaurant_id: r.restaurant_id, restaurant_name: r.restaurant_name, cuisine: r.cuisine, price_tier: r.price_tier, restaurant_rating: r.restaurant_rating }]);
+			}
+			if (coin(P_CART)) {
+				items = Number(pick(ITEMS_BY_HOUSEHOLD[household]));
+				for (let i = 0; i < items; i++) {
+					const cat = i === 0 ? "entree" : pick(EXTRA_ITEM_WEIGHTS);
+					const price = itemPrice(rest, cat);
+					subtotal += price;
+					browse.push(["item added to cart", { restaurant_id: rest.restaurant_id, item_category: cat, item_price_usd: price, added_from: "menu" }]);
 				}
-				if (typeof e.eta_mins === "number") {
-					e.eta_mins = Math.round(e.eta_mins * ttcFactor);
-				}
-				if (typeof e.delivery_time_est_mins === "number") {
-					e.delivery_time_est_mins = Math.round(e.delivery_time_est_mins * ttcFactor);
-				}
+				goCheckout = !browseOnly && coin(P_CHECKOUT);
+			}
+		}
+		subtotal = round2(subtotal);
+		const checkoutT = orderT - dwell;
+		const browseEnd = goCheckout ? checkoutT - 5 * SEC_MS : orderT;
+		busyUntil = orderT + 2 * MIN_MS;
+		browse.forEach(([name, props], i) => {
+			const frac = (i + unif(0.2, 0.8)) / browse.length;
+			evs.push(make(name, T0 + 5 * SEC_MS + Math.floor(frac * Math.max(SEC_MS, browseEnd - T0 - 5 * SEC_MS)), props));
+		});
+
+		if (goCheckout) {
+			const orderId = `ord_${chance.hash({ length: 12 })}`;
+			const eta = Math.round(Math.min(ETA_MAX, Math.max(ETA_MIN, ETA_MEDIAN_MIN * Math.exp(ETA_SIGMA * normal()))));
+			const passAtCheckout = passActive(checkoutT);
+			const pay = coin(0.9) ? defaultPay : pickWeighted(wallet, chance.floating({ min: 0, max: 1, fixed: 8 }));
+			const dBase = deliveryBase(rest);
+			const fees = (sub, active, t) => ({
+				delivery_fee_usd: active && sub >= PASS_FREE_DELIVERY_MIN ? 0 : dBase,
+				service_fee_usd: round2(sub * serviceRate(active, t)),
 			});
-		}
-	}
-
-	// H3: LATE NIGHT MUNCHIES — 22-02 UTC: 70% flip to American, 1.3x price
-	userEvents.forEach(e => {
-		if (e.event === "restaurant viewed" || e.event === "item added to cart") {
-			const hour = new Date(e.time).getUTCHours();
-			const isLateNight = hour >= LATE_NIGHT_START || hour <= LATE_NIGHT_END;
-			if (isLateNight) {
-				if (e.cuisine_type !== undefined && chance.bool({ likelihood: LATE_NIGHT_FLIP_LIKELIHOOD })) {
-					e.cuisine_type = "American";
+			// experiment exposure: the first checkout on/after the start
+			if (variant && exposureT === null && checkoutT >= ms(ADDONS_START) && checkoutT <= END) exposureT = checkoutT - SEC_MS;
+			evs.push(make("checkout started", checkoutT, {
+				order_id: orderId, restaurant_id: rest.restaurant_id, restaurant_name: rest.restaurant_name, cuisine: rest.cuisine,
+				items_count: items, subtotal_usd: subtotal, ...fees(subtotal, passAtCheckout, checkoutT),
+				quoted_eta_mins: eta, payment_method: pay, entry_point: entry,
+			}));
+			// Forkfly Pass free-trial offer on the checkout screen (never-trialed non-members)
+			if (!passAtCheckout && !trialed && coin(PASS_OFFER_SHARE)) {
+				const offerT = checkoutT + Math.round(unif(2, 6) * SEC_MS);
+				evs.push(make("pass offer viewed", offerT, { order_id: orderId, offer_type: "free_trial_14_days" }));
+				if (coin(TRIAL_ACCEPT) && offerT + 25 * SEC_MS < orderT) {
+					const start = offerT + Math.round(unif(5, 20) * SEC_MS);
+					evs.push(make("pass trial started", start, { plan: "monthly", price_after_trial_usd: PASS_PRICE_USD }));
+					trial = { start, end: start + TRIAL_DAYS * DAY_MS, preDays: 0 };
+					trialed = true;
+					passChanges.push({ t: start, s: "trial" });
 				}
-				if (e.item_price !== undefined) {
-					e.item_price = Math.round(e.item_price * LATE_NIGHT_PRICE_MULT * 100) / 100;
-				}
 			}
-		}
-	});
-
-	// H2: COUPON INJECTION — Free-tier users get coupon-applied events
-	// spliced near checkout. Cloned from existing template with unique offset.
-	if (profile && profile.subscription_tier === "Free") {
-		for (let i = userEvents.length - 1; i >= 1; i--) {
-			const evt = userEvents[i];
-			if (evt.event === "checkout started" && chance.bool({ likelihood: COUPON_INJECT_LIKELIHOOD })) {
-				const prevEvent = userEvents[i - 1];
-				const midTime = dayjs(prevEvent.time).add(
-					dayjs(evt.time).diff(dayjs(prevEvent.time)) / 2,
-					'milliseconds'
-				).toISOString();
-
-				const couponTemplate = userEvents.find(e => e.event === "coupon applied");
-				const couponEvent = {
-					...(couponTemplate || evt),
-					event: "coupon applied",
-					time: midTime,
-					user_id: evt.user_id,
-					subscription_tier: profile.subscription_tier,
-					Platform: profile.Platform,
-					city: profile.city,
-					coupon_code: chance.pickone(couponCodes),
-					discount_type: chance.pickone(["percent", "flat", "free_delivery"]),
-					discount_value: chance.integer({ min: 10, max: 30 }),
-				};
-				// The checkout-event fallback template carries checkout-only props;
-				// strip them so injected coupons match the declared coupon schema.
-				delete couponEvent.cart_total;
-				delete couponEvent.items_count;
-				delete couponEvent.delivery_address_saved;
-				userEvents.splice(i, 0, couponEvent);
-			}
-		}
-	}
-
-	// H1: LUNCH/DINNER RUSH — drop 30% of order-delivered events outside
-	// meal windows (11-13 UTC and 17-20 UTC).
-	for (let i = userEvents.length - 1; i >= 0; i--) {
-		const event = userEvents[i];
-		if (event.event === "order delivered") {
-			const hour = new Date(event.time).getUTCHours();
-			const inRush = (hour >= RUSH_LUNCH_START && hour <= RUSH_LUNCH_END) || (hour >= RUSH_DINNER_START && hour <= RUSH_DINNER_END);
-			if (!inRush && chance.bool({ likelihood: RUSH_DROP_LIKELIHOOD })) {
-				userEvents.splice(i, 1);
-			}
-		}
-	}
-
-	// H7: FIRST ORDER BONUS — hash-based ~50% of users (returning) drop
-	// 30% of order delivered events. New users keep all.
-	const hashUser = userEvents[0] && userEvents[0].user_id;
-	const isNewUser = typeof hashUser === "string" && hashUser.charCodeAt(0) % 2 === 0;
-	if (!isNewUser) {
-		for (let i = userEvents.length - 1; i >= 0; i--) {
-			if (userEvents[i].event === "order delivered" && chance.bool({ likelihood: FIRST_ORDER_DROP_LIKELIHOOD })) {
-				userEvents.splice(i, 1);
-			}
-		}
-	}
-
-	// First pass: identify behavioral patterns (no flags written)
-	let isReferralUser = false;
-	let hasTrialSubscription = false;
-	let earlyOrderCount = 0;
-	let orderPlacedCount = 0;
-	const firstEventTime = userEvents.length > 0 ? dayjs.utc(userEvents[0].time) : null;
-
-	userEvents.forEach((event) => {
-		const eventTime = dayjs.utc(event.time);
-		const daysSinceStart = firstEventTime ? eventTime.diff(firstEventTime, 'days', true) : 0;
-		if (event.event === "account created" && event.referral_code === true) isReferralUser = true;
-		if (event.event === "subscription started" && event.trial === true) hasTrialSubscription = true;
-		if (event.event === "order placed") {
-			orderPlacedCount++;
-			if (daysSinceStart <= TRIAL_EARLY_DAYS) earlyOrderCount++;
-		}
-	});
-
-	// H5: REFERRAL POWER USERS — boost food rating to 4-5, clone reorders.
-	userEvents.forEach((event, idx) => {
-		if (isReferralUser && event.event === "order rated") {
-			event.food_rating = chance.integer({ min: REFERRAL_RATING_MIN, max: REFERRAL_RATING_MAX });
-		}
-		if (isReferralUser && event.event === "reorder initiated" && chance.bool({ likelihood: REFERRAL_CLONE_LIKELIHOOD })) {
-			const eventTime = dayjs.utc(event.time);
-			userEvents.splice(idx + 1, 0, {
-				...event,
-				time: eventTime.add(chance.integer({ min: 1, max: 7 }), 'days').toISOString(),
-				user_id: event.user_id,
-				order_id: chance.pickone(orderIds),
-				original_order_age_days: chance.integer({ min: 3, max: 30 }),
-			});
-		}
-	});
-
-	// H6: TRIAL CONVERSION — trial subs with <3 early orders drop 60% of
-	// post-day-14 events.
-	if (hasTrialSubscription && earlyOrderCount < TRIAL_MIN_ORDERS && chance.bool({ likelihood: TRIAL_DROP_LIKELIHOOD })) {
-		const trialCutoff = firstEventTime ? firstEventTime.add(TRIAL_EARLY_DAYS, 'days') : null;
-		if (trialCutoff) {
-			for (let i = userEvents.length - 1; i >= 0; i--) {
-				if (dayjs.utc(userEvents[i].time).isAfter(trialCutoff)) {
-					userEvents.splice(i, 1);
+			// H3 quoted ETA x H9 service fee (non-Pass after the change) → does the customer order?
+			const p = placeProb(eta) * (!passAtCheckout && checkoutT >= ms(FEE_CHANGE) ? FEE_KEEP : 1);
+			if (coin(p)) {
+				// H4: payment attempt (card processor incident)
+				const fail = coin(BASE_PAY_FAIL) ? pick(DECLINE_CODES)
+					: (pay === "card" && inPayIncident(orderT) && coin(INCIDENT_FAIL)) ? "processor_unavailable" : null;
+				if (fail) {
+					evs.push(make("payment failed", orderT, { order_id: orderId, payment_method: pay, decline_code: fail }));
+				} else {
+					const passAtOrder = passActive(orderT);
+					// H5: Smart Add-ons suggests a dessert, drink, or side on the checkout screen
+					if (variant === ADDONS_VARIANT && exposureT !== null && checkoutT >= ms(ADDONS_START) && coin(ADDON_TAKE)) {
+						const cat = pick(ADDON_WEIGHTS);
+						const price = itemPrice(rest, cat);
+						items += 1;
+						subtotal = round2(subtotal + price);
+						evs.push(make("item added to cart", checkoutT + Math.round(dwell * unif(0.3, 0.6)), { restaurant_id: rest.restaurant_id, item_category: cat, item_price_usd: price, added_from: "addon_suggestion" }));
+					}
+					// H8: Pass members top up a $10-14.99 basket past the $15 free-delivery minimum
+					if (passAtOrder && subtotal >= BUMP_FROM && subtotal < PASS_FREE_DELIVERY_MIN && coin(BUMP_SHARE)) {
+						const price = round2(PASS_FREE_DELIVERY_MIN - subtotal + unif(0.5, 4.5));
+						items += 1;
+						subtotal = round2(subtotal + price);
+						evs.push(make("item added to cart", checkoutT + Math.round(dwell * unif(0.65, 0.9)), { restaurant_id: rest.restaurant_id, item_category: pick({ side: 45, drink: 30, dessert: 25 }), item_price_usd: price, added_from: "menu" }));
+					}
+					const isFirst = Boolean(signup) && orders.length === 0;
+					const discount = isFirst ? (profile.acquisition_channel === "coupon_affiliates" ? 15 : 8) : coin(0.04) ? 5 : 0;
+					const promo = isFirst ? (profile.acquisition_channel === "coupon_affiliates" ? "DEAL15" : "WELCOME8") : discount ? "FORK5" : "none";
+					const f = fees(subtotal, passAtOrder, orderT);
+					const tip = coin(0.8) ? round2(subtotal * unif(0.1, 0.22)) : 0;
+					const disc = Math.min(discount, Math.max(0, subtotal - 1));
+					evs.push(make("order placed", orderT, {
+						order_id: orderId, restaurant_id: rest.restaurant_id, restaurant_name: rest.restaurant_name, cuisine: rest.cuisine, price_tier: rest.price_tier,
+						items_count: items, subtotal_usd: subtotal, ...f, tip_usd: tip, discount_usd: round2(disc), promo_code: promo,
+						order_total_usd: round2(subtotal + f.delivery_fee_usd + f.service_fee_usd + tip - disc),
+						quoted_eta_mins: eta, payment_method: pay, entry_point: entry,
+					}));
+					// delivery: H2 rain adds lateness (quoted ETAs ignore weather)
+					const late = Math.round(LATE_MEAN_MIN + LATE_SD_MIN * normal() + (isRainy(dayKey(orderT), city) ? RAIN_LATE_MIN : 0));
+					const deliveryMin = Math.max(10, eta + late);
+					const deliveredT = orderT + deliveryMin * MIN_MS;
+					const nTrack = 1 + (coin(0.5) ? 1 : 0) + (late >= 10 ? 1 + (coin(0.5) ? 1 : 0) : 0);
+					for (let i = 0; i < nTrack; i++) {
+						const frac = (i + unif(0.15, 0.85)) / nTrack;
+						const st = frac < 0.3 ? "preparing" : frac < 0.55 ? "picked_up" : late >= 10 && frac > 0.75 ? "running_late" : "on_the_way";
+						evs.push(make("order tracking viewed", orderT + 60 * SEC_MS + Math.floor(frac * (deliveredT - orderT - 90 * SEC_MS)), { order_id: orderId, order_status: st }));
+					}
+					evs.push(make("order delivered", deliveredT, { order_id: orderId, restaurant_id: rest.restaurant_id, delivery_minutes: deliveryMin, minutes_late: late }));
+					let tailT = deliveredT;
+					const pSupport = 0.03 + 0.25 * logistic((late - LATE_THRESHOLD_MIN) / 3);
+					if (coin(pSupport)) {
+						const st = deliveredT + Math.round(unif(5, 90) * MIN_MS);
+						evs.push(make("support contacted", st, { order_id: orderId, issue_type: late >= 10 ? "late_delivery" : pick(SUPPORT_ISSUES), contact_channel: coin(0.8) ? "chat" : "phone" }));
+						tailT = Math.max(tailT, st);
+					}
+					if (coin(P_RATE)) {
+						const rt = deliveredT + Math.round(unif(20, 600) * MIN_MS);
+						const food = Math.max(1, Math.min(5, Math.round(rest.restaurant_rating + 0.9 * normal())));
+						const dScore = 4.7 - 0.07 * Math.max(0, late) + 0.8 * normal();
+						evs.push(make("order rated", rt, { order_id: orderId, restaurant_id: rest.restaurant_id, food_rating: food, delivery_rating: Math.max(1, Math.min(5, Math.round(dScore))) }));
+						tailT = Math.max(tailT, rt);
+					}
+					orders.push({ t: orderT, orderId, rest, items, deliveredT, late });
+					// H1 + H6: a new customer's first delivery decides whether they come back
+					if (isFirst) {
+						const churnLate = coin(lateChurn(late));
+						const churnDeal = profile.acquisition_channel === "coupon_affiliates" && coin(COUPON_CHURN);
+						if (churnLate || churnDeal) cut = tailT + MIN_MS;
+					}
 				}
 			}
 		}
+		sessionEvents.push(...evs);
+	}
+	advance(END);
+
+	// experiment exposure (both arms) at the first checkout on/after the start
+	let exposure = null;
+	if (variant && exposureT !== null) {
+		exposure = exposures[0];
+		exposure.time = iso(exposureT);
+	} else if (profile[EXP_KEY] !== undefined) {
+		delete profile[EXP_KEY];
 	}
 
-	// H4: RAINY WEEK SURGE — days 20-27, double delivery_fee on order-placed.
-	userEvents.forEach(e => {
-		if (e.event === "order placed") {
-			const t = dayjs.utc(e.time);
-			if (t.isAfter(RAINY_WEEK_START) && t.isBefore(RAINY_WEEK_END)) {
-				e.delivery_fee = (e.delivery_fee || 5) * RAINY_FEE_MULT;
-			}
-		}
+	const keep = [signup, address, exposure].filter(Boolean);
+	const out = keep.concat(sessionEvents, passEvents).filter((e) => {
+		const t = T(e);
+		return t >= BEGIN && t <= END;
 	});
-
-	// H4 (cont): RAINY WEEK SURGE — duplicate 40% of order-placed events
-	// in the rainy window. Cloned with unique offset.
-	const rainyDuplicates = [];
-	userEvents.forEach((event) => {
-		if (event.event === "order placed") {
-			const t = dayjs.utc(event.time);
-			if (t.isAfter(RAINY_WEEK_START) && t.isBefore(RAINY_WEEK_END) && chance.bool({ likelihood: RAINY_DUP_LIKELIHOOD })) {
-				const dup = JSON.parse(JSON.stringify(event));
-				dup.time = t.add(chance.integer({ min: 5, max: 60 }), 'minutes').toISOString();
-				rainyDuplicates.push(dup);
-			}
-		}
-	});
-	if (rainyDuplicates.length > 0) userEvents.push(...rainyDuplicates);
-
-	// H8: ORDER-COUNT MAGIC NUMBER — sweet 4-8 → +40% on order_total;
-	// over 9+ → 0.65x order_total (basket fatigue). No flag.
-	if (orderPlacedCount >= ORDER_SWEET_MIN && orderPlacedCount <= ORDER_SWEET_MAX) {
-		userEvents.forEach(e => {
-			if (e.event === "order placed" && typeof e.order_total === "number") {
-				e.order_total = Math.round(e.order_total * ORDER_SWEET_BOOST);
-			}
-		});
-	} else if (orderPlacedCount >= ORDER_OVER_THRESHOLD) {
-		userEvents.forEach(e => {
-			if (e.event === "order placed" && typeof e.order_total === "number") {
-				e.order_total = Math.round(e.order_total * ORDER_OVER_FACTOR);
-			}
-		});
+	for (const e of out) {
+		e.platform = platform;
+		const t = T(e);
+		e.pass_status = statusAt(e.event === "pass trial ended" || e.event === "pass cancelled" ? t - 1 : t);
 	}
+	profile.pass_status = statusAt(END);
+	return out;
+}
 
-	return userEvents;
+// warehouse rows: exogenous business facts layered on event-derived volumes
+function handleWarehouse(row, meta) {
+	if (meta.isBackfill) return row;
+	if (meta.metricName === "marketing_spend_daily") {
+		const ch = row.acquisition_channel;
+		const k = `${row.date}|${ch}`;
+		const spend = paidSpend(row.date, ch, row.spend_usd);
+		row.spend_usd = spend;
+		row.clicks = Math.round(spend / (CPC_USD[ch] * jitter(`cpc|${k}`, 0.15)));
+		row.impressions = Math.round(row.clicks / (CTR[ch] * jitter(`ctr|${k}`, 0.15)));
+		row.network_reported_signups = Math.round(spend * NETWORK_SIGNUP_INFLATION / CPA_USD[ch] * jitter(`net|${k}`, 0.2));
+		return row;
+	}
+	if (meta.metricName === "payment_gateway_daily") {
+		const k = `${row.date}|${row.payment_method}`;
+		// the gateway also sees web and phone orders and retries Mixpanel never receives
+		row.auth_attempts = Math.round(row.auth_attempts * (1 + 0.14 * hashFloat(`untracked|${k}`)) + 16 * hashFloat(`web|${k}`));
+		row.auth_declines = Math.round(row.auth_attempts * row.decline_rate);
+		return row;
+	}
+	if (meta.metricName === "market_ops_daily") {
+		const k = `${row.date}|${row.city}`;
+		const rainy = isRainy(row.date, row.city);
+		// dispatch also counts phone and partner-site orders; cancelled orders drop out
+		row.orders_dispatched = Math.max(0, Math.round(row.orders_dispatched * (1 + 0.16 * hashFloat(`phone|${k}`)) + 14 * hashFloat(`partner|${k}`) - 2 * hashFloat(`cancel|${k}`)));
+		row.active_couriers = Math.max(3, Math.round(row.orders_dispatched / ((rainy ? 3.1 : 2.4) * jitter(`cap|${k}`, 0.12))));
+		row.courier_hours = round1(row.active_couriers * (3.2 + 1.6 * hashFloat(`hrs|${k}`)));
+		return row;
+	}
+	return row;
 }
 
 // ── CONFIG ──
+const SESSION_STEPS = ["app opened", "restaurant viewed", "item added to cart", "checkout started", "order placed", "order delivered"];
+
 /** @type {Config} */
 const config = {
-	version: 2,
 	seed: SEED,
 	datasetStart: DATASET_START,
 	datasetEnd: DATASET_END,
-	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	numUsers: NUM_USERS,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	format: "json",
 	gzip: true,
-	credentials: {
-		token,
-	},
+	concurrency: 1,
+	writeToDisk: false,
+	macro: { percentUsersBornInDataset: BORN_PCT, bornRecentBias: 0, preExistingSpread: "uniform" },
+	soup: { dayOfWeekWeights: DOW_WEIGHTS, hourOfDayWeights: HOUR_WEIGHTS },
+	credentials: { token },
 	switches: {
 		hasSessionIds: true,
 		alsoInferFunnels: false,
-		hasLocation: true,
+		hasLocation: false,
 		hasAndroidDevices: true,
 		hasIOSDevices: true,
-		hasDesktopDevices: true,
+		hasDesktopDevices: false,
 		hasBrowser: false,
 		hasCampaigns: false,
 		isAnonymous: false,
 		hasAdSpend: false,
 		hasAvatar: true,
 	},
-	identity: {
-		avgDevicePerUser: 2,
-	},
-	concurrency: 1,
-	writeToDisk: false,
-	scdProps: {
-		subscription_tier: {
-			values: ["free", "trial", "monthly", "annual"],
-			frequency: "month",
-			timing: "fuzzy",
-			max: 6
-		},
-		restaurant_tier: {
-			values: ["new", "verified", "featured", "premium"],
-			frequency: "month",
-			timing: "fixed",
-			max: 6,
-			type: "restaurant_id"
-		}
-	},
-
-	funnels: [
-		{
-			sequence: ["account created", "restaurant browsed", "restaurant viewed"],
-			isFirstFunnel: true,
-			conversionRate: 80,
-			timeToConvert: 0.5,
-		},
-		{
-			// Browse and discover: most common action on food delivery apps
-			sequence: ["restaurant browsed", "restaurant viewed", "item added to cart"],
-			conversionRate: 55,
-			timeToConvert: 1,
-			weight: 5,
-			props: { "restaurant_id": restaurantIds },
-		},
-		{
-			// Search-driven ordering
-			sequence: ["search performed", "restaurant viewed", "item added to cart", "checkout started"],
-			conversionRate: 45,
-			timeToConvert: 2,
-			weight: 3,
-		},
-		{
-			// Full order lifecycle: checkout to delivery
-			sequence: ["checkout started", "order placed", "order tracked", "order delivered"],
-			conversionRate: 65,
-			timeToConvert: 2,
-			weight: 4,
-			props: { "order_id": orderIds },
-		},
-		{
-			// Post-order: rate and reorder
-			sequence: ["order delivered", "order rated", "reorder initiated"],
-			conversionRate: 40,
-			timeToConvert: 24,
-			weight: 2,
-		},
-		{
-			// Browsing promos and coupons
-			sequence: ["promotion viewed", "coupon applied", "checkout started"],
-			conversionRate: 50,
-			timeToConvert: 1,
-			weight: 2,
-		},
-		{
-			// Support flow
-			sequence: ["support ticket", "order rated"],
-			conversionRate: 45,
-			timeToConvert: 6,
-			weight: 1,
-		},
-		{
-			// Subscription management
-			sequence: ["subscription started", "order placed", "subscription cancelled"],
-			conversionRate: 20,
-			timeToConvert: 48,
-			weight: 1,
-		},
-	],
+	identity: { avgDevicePerUser: 1 },
+	stickyEventProps: ["city"],
 
 	events: [
 		{
@@ -795,847 +994,557 @@ const config = {
 			isFirstEvent: true,
 			isAuthEvent: true,
 			properties: {
-				"signup_method": ["email", "google", "apple", "facebook"],
-				"referral_code": [false, false, true],
-			}
+				signup_method: { __weights: { apple: 38, google: 34, email: 28 } },
+				acquisition_channel: (ctx) => ctx.profile.acquisition_channel,
+			},
 		},
+		{ event: "address saved", weight: 1, isStrictEvent: true, properties: { address_type: { __weights: { home: 72, work: 22, other: 6 } } } },
+		{ event: "app opened", weight: 1, isStrictEvent: true, properties: { open_source: { __weights: { organic: 62, push_notification: 28, deep_link: 10 } } } },
+		{ event: "search performed", weight: 1, isStrictEvent: true, properties: { search_term: ["pizza"], results_count: [10] } },
+		{ event: "restaurant viewed", weight: 1, isStrictEvent: true, properties: { restaurant_id: ["rst_nyc_01"], restaurant_name: ["Golden Pizzeria"], cuisine: ["pizza"], price_tier: ["$$"], restaurant_rating: [4.3] } },
+		{ event: "item added to cart", weight: 1, isStrictEvent: true, properties: { restaurant_id: ["rst_nyc_01"], item_category: ["entree"], item_price_usd: [14], added_from: ["menu"] } },
+		{ event: "reorder tapped", weight: 1, isStrictEvent: true, properties: { restaurant_id: ["rst_nyc_01"], restaurant_name: ["Golden Pizzeria"], cuisine: ["pizza"], days_since_last_order: [7] } },
 		{
-			event: "restaurant browsed",
-			weight: 18,
-			properties: {
-				"cuisine_type": [
-					"American",
-					"Italian",
-					"Chinese",
-					"Japanese",
-					"Mexican",
-					"Indian",
-					"Thai",
-					"Mediterranean"
-				],
-				"sort_by": ["recommended", "distance", "rating", "price"],
-				"filter_applied": [false, false, false, true, true],
-			}
+			event: "checkout started", weight: 1, isStrictEvent: true,
+			properties: { order_id: ["unassigned"], restaurant_id: ["rst_nyc_01"], restaurant_name: ["Golden Pizzeria"], cuisine: ["pizza"], items_count: [2], subtotal_usd: [28], delivery_fee_usd: [2.99], service_fee_usd: [2.8], quoted_eta_mins: [35], payment_method: ["card"], entry_point: ["home_feed"] },
 		},
+		{ event: "pass offer viewed", weight: 1, isStrictEvent: true, properties: { order_id: ["unassigned"], offer_type: ["free_trial_14_days"] } },
+		{ event: "pass trial started", weight: 1, isStrictEvent: true, properties: { plan: ["monthly"], price_after_trial_usd: [PASS_PRICE_USD] } },
+		{ event: "payment failed", weight: 1, isStrictEvent: true, properties: { order_id: ["unassigned"], payment_method: ["card"], decline_code: ["card_declined"] } },
 		{
-			event: "restaurant viewed",
-			weight: 15,
-			isStrictEvent: false,
-			properties: {
-				"restaurant_id": restaurantIds,
-				"cuisine_type": [
-					"American",
-					"Italian",
-					"Chinese",
-					"Japanese",
-					"Mexican",
-					"Indian",
-					"Thai",
-					"Mediterranean"
-				],
-				"avg_rating": u.weighNumRange(1, 5, 0.8, 30),
-				"delivery_time_est_mins": u.weighNumRange(15, 90, 1.2, 40),
-				"price_tier": ["$", "$$", "$$$", "$$$$"],
-			}
+			event: "order placed", weight: 1, isStrictEvent: true,
+			properties: { order_id: ["unassigned"], restaurant_id: ["rst_nyc_01"], restaurant_name: ["Golden Pizzeria"], cuisine: ["pizza"], price_tier: ["$$"], items_count: [2], subtotal_usd: [28], delivery_fee_usd: [2.99], service_fee_usd: [2.8], tip_usd: [4], discount_usd: [0], promo_code: ["none"], order_total_usd: [37.79], quoted_eta_mins: [35], payment_method: ["card"], entry_point: ["home_feed"] },
 		},
+		{ event: "order tracking viewed", weight: 1, isStrictEvent: true, properties: { order_id: ["unassigned"], order_status: ["on_the_way"] } },
+		{ event: "order delivered", weight: 1, isStrictEvent: true, properties: { order_id: ["unassigned"], restaurant_id: ["rst_nyc_01"], delivery_minutes: [38], minutes_late: [0] } },
+		{ event: "order rated", weight: 1, isStrictEvent: true, properties: { order_id: ["unassigned"], restaurant_id: ["rst_nyc_01"], food_rating: [4], delivery_rating: [4] } },
+		{ event: "support contacted", weight: 1, isStrictEvent: true, properties: { order_id: ["unassigned"], issue_type: ["missing_item"], contact_channel: ["chat"] } },
+		{ event: "pass trial ended", weight: 1, isStrictEvent: true, properties: { outcome: ["not_converted"], orders_during_trial: [0] } },
+		{ event: "pass cancelled", weight: 1, isStrictEvent: true, properties: { cancel_reason: ["other"], months_subscribed: [1] } },
 		{
-			event: "item added to cart",
-			weight: 14,
-			isStrictEvent: false,
-			properties: {
-				"item_id": itemIds,
-				"item_category": ["entree", "appetizer", "drink", "dessert", "side"],
-				"item_price": u.weighNumRange(3, 65, 1.0, 40),
-				"customization_count": u.weighNumRange(0, 5, 1.5, 20),
-			}
-		},
-		{
-			event: "item removed from cart",
-			weight: 5,
-			properties: {
-				"item_id": itemIds,
-				"removal_reason": ["changed_mind", "too_expensive", "substitution"],
-			}
-		},
-		{
-			event: "coupon applied",
-			weight: 4,
-			isStrictEvent: false,
-			properties: {
-				"coupon_code": couponCodes,
-				"discount_type": ["percent", "flat", "free_delivery"],
-				"discount_value": u.weighNumRange(5, 50, 1.2, 20),
-			}
-		},
-		{
-			event: "checkout started",
-			weight: 12,
-			isStrictEvent: false,
-			properties: {
-				"cart_total": u.weighNumRange(8, 150, 0.8, 40),
-				"items_count": u.weighNumRange(1, 8, 1.2, 20),
-				"delivery_address_saved": [false, false, false, true, true, true, true, true, true, true],
-			}
-		},
-		{
-			event: "order placed",
-			weight: 10,
-			isStrictEvent: false,
-			properties: {
-				"order_id": orderIds,
-				"payment_method": ["credit_card", "apple_pay", "google_pay", "paypal", "cash"],
-				"order_total": u.weighNumRange(10, 200, 0.8, 40),
-				"tip_amount": u.weighNumRange(0, 30, 1.5, 20),
-				"delivery_fee": u.weighNumRange(0, 12, 1.0, 20),
-			}
-		},
-		{
-			event: "order tracked",
-			weight: 13,
-			properties: {
-				"order_id": orderIds,
-				"order_status": ["confirmed", "preparing", "picked_up", "en_route", "delivered"],
-				"eta_mins": u.weighNumRange(5, 60, 1.0, 30),
-			}
-		},
-		{
-			event: "order delivered",
-			weight: 9,
-			isStrictEvent: false,
-			properties: {
-				"order_id": orderIds,
-				"actual_delivery_mins": u.weighNumRange(12, 90, 1.0, 40),
-				"on_time": [false, false, false, true, true, true, true, true, true, true],
-			}
-		},
-		{
-			event: "order rated",
-			weight: 7,
-			isStrictEvent: false,
-			properties: {
-				"order_id": orderIds,
-				"food_rating": u.weighNumRange(1, 5, 0.8, 30),
-				"delivery_rating": u.weighNumRange(1, 5, 0.8, 30),
-				"would_reorder": [false, true, true],
-			}
-		},
-		{
-			event: "search performed",
-			weight: 11,
-			properties: {
-				"search_query": () => chance.pickone([
-					"pizza", "sushi", "burger", "tacos", "pad thai",
-					"chicken", "salad", "ramen", "pasta", "sandwich",
-					"wings", "curry", "pho", "burritos", "steak"
-				]),
-				"results_count": u.weighNumRange(0, 50, 0.8, 30),
-				"search_type": ["restaurant", "cuisine", "dish"],
-			}
-		},
-		{
-			event: "promotion viewed",
-			weight: 8,
-			properties: {
-				"promo_id": () => `promo_${v.uid(5)}`,
-				"promo_type": ["banner", "push", "in_feed"],
-				"promo_value": ["10%", "15%", "20%", "25%", "30%", "40%", "50%"],
-			}
-		},
-		{
-			event: "subscription started",
-			weight: 2,
-			isStrictEvent: false,
-			properties: {
-				"plan": ["quickbite_plus_monthly", "quickbite_plus_monthly", "quickbite_plus_annual"],
-				"price": [9.99, 9.99, 79.99],
-				"trial": [true, false],
-			}
-		},
-		{
-			event: "subscription cancelled",
+			event: "$experiment_started",
 			weight: 1,
-			properties: {
-				"reason": ["too_expensive", "not_ordering_enough", "found_alternative", "bad_experience"],
-				"months_subscribed": u.weighNumRange(1, 24, 1.5, 15),
-			}
+			isStrictEvent: true,
+			properties: { "Experiment name": [ADDONS_EXPERIMENT], "Variant name": ["Control", ADDONS_VARIANT] },
+		},
+	],
+
+	funnels: [
+		{
+			name: "Signup",
+			sequence: ["account created", "address saved"],
+			isFirstFunnel: true,
+			conversionRate: 88,
+			timeToConvert: 0.15,
+			order: "sequential",
+			weight: 1,
 		},
 		{
-			event: "support ticket",
-			weight: 3,
-			properties: {
-				"issue_type": ["missing_item", "wrong_order", "late_delivery", "quality_issue", "refund_request"],
-				"order_id": orderIds,
-			}
+			// one app session (the hook decides how far each session goes)
+			name: "Session",
+			sequence: SESSION_STEPS,
+			conversionRate: 100,
+			timeToConvert: 0.5,
+			order: "sequential",
+			weight: 1,
+			experiment: {
+				name: ADDONS_EXPERIMENT,
+				startDaysBeforeEnd: (ms(DATASET_END) - ms(ADDONS_START)) / DAY_MS,
+				variants: [{ name: "Control" }, { name: ADDONS_VARIANT }],
+			},
+		},
+	],
+
+	warehouseMetrics: [
+		{
+			name: "marketing_spend_daily",
+			type: "additive",
+			grain: "day",
+			source: {
+				event: "account created",
+				measure: "count",
+				where: (e) => PAID_CHANNELS.includes(e.acquisition_channel),
+				groupBy: "acquisition_channel",
+			},
+			timeColumn: "date",
+			valueColumn: "spend_usd",
+			columns: {
+				impressions: 0,
+				clicks: 0,
+				network_reported_signups: 0,
+			},
 		},
 		{
-			event: "reorder initiated",
-			weight: 6,
-			isStrictEvent: false,
-			properties: {
-				"order_id": orderIds,
-				"original_order_age_days": u.weighNumRange(1, 60, 1.5, 30),
-			}
+			name: "payment_gateway_daily",
+			type: "additive",
+			grain: "day",
+			source: {
+				event: ["order placed", "payment failed"],
+				measure: "count",
+				groupBy: "payment_method",
+			},
+			timeColumn: "date",
+			valueColumn: "auth_attempts",
+			columns: {
+				auth_declines: 0,
+				decline_rate: (ctx) => {
+					const j = hashFloat(`decl|${dayKey(ctx.time)}|${ctx.seriesKey}`);
+					const hit = ctx.row.payment_method === "card" && inPayIncident(ctx.time);
+					const rate = hit ? 1 - (1 - BASE_PAY_FAIL) * (1 - INCIDENT_FAIL) : BASE_PAY_FAIL;
+					return Math.round((rate + (j - 0.5) * (hit ? 0.03 : 0.012)) * 10000) / 10000;
+				},
+				p95_auth_latency_ms: (ctx) => {
+					const j = hashFloat(`lat|${dayKey(ctx.time)}|${ctx.seriesKey}`);
+					const hit = ctx.row.payment_method === "card" && inPayIncident(ctx.time);
+					return hit ? Math.round(6500 + j * 5000) : Math.round(620 + j * 380);
+				},
+				gateway_status: (ctx) => (ctx.row.payment_method === "card" && inPayIncident(ctx.time) ? "major_outage" : "operational"),
+			},
+		},
+		{
+			name: "market_ops_daily",
+			type: "additive",
+			grain: "day",
+			source: {
+				event: "order placed",
+				measure: "count",
+				groupBy: "city",
+			},
+			timeColumn: "date",
+			valueColumn: "orders_dispatched",
+			columns: {
+				precipitation_mm: (ctx) => precipitationMm(dayKey(ctx.time), ctx.row.city),
+				weather_condition: (ctx) => weatherCondition(dayKey(ctx.time), ctx.row.city),
+				temp_high_f: (ctx) => tempHighF(dayKey(ctx.time), ctx.row.city),
+				active_couriers: 0,
+				courier_hours: 0,
+			},
 		},
 	],
 
 	superProps: {
-		Platform: ["iOS", "Android", "Web"],
-		subscription_tier: ["Free", "Free", "Free", "Free", "QuickBite+"],
-		city: ["New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "San Francisco"],
+		city: ["New York"],
+		platform: ["ios"],
+		pass_status: ["none"],
 	},
 
 	userProps: {
-		"preferred_cuisine": [
-			"American",
-			"Italian",
-			"Chinese",
-			"Japanese",
-			"Mexican",
-			"Indian",
-			"Thai",
-			"Mediterranean"
-		],
-		"avg_order_value": u.weighNumRange(15, 80, 0.8, 40),
-		"orders_per_month": u.weighNumRange(1, 20, 1.5, 10),
-		"favorite_restaurant_count": u.weighNumRange(1, 10),
-		"Platform": ["iOS", "Android", "Web"],
-		"subscription_tier": ["Free", "Free", "Free", "Free", "QuickBite+"],
-		"city": ["New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "San Francisco"],
+		city: weighted(Object.fromEntries(CITY_NAMES.map((c) => [c, CITIES[c].w]))),
+		platform: ["ios"],
+		household_type: weighted(HOUSEHOLD_WEIGHTS),
+		favorite_cuisine: weighted(CUISINE_WEIGHTS),
+		acquisition_channel: weighted(CHANNEL_WEIGHTS),
+		customer_since: ["2025-01-01"],
+		default_payment: ["card"],
+		pass_status: ["none"],
 	},
 
-	groupKeys: [
-		["restaurant_id", 200, ["restaurant viewed", "order placed", "order rated"]],
+	personas: [
+		{ name: "regular", weight: 45, eventMultiplier: 1.0 },
+		{ name: "power_orderer", weight: 20, eventMultiplier: 2.0 },
+		{ name: "occasional", weight: 35, eventMultiplier: 0.45 },
 	],
 
-	groupProps: {
-		restaurant_id: {
-			"name": () => `${chance.pickone(["The", "Big", "Lucky", "Golden", "Fresh", "Urban"])} ${chance.pickone(["Kitchen", "Grill", "Bowl", "Wok", "Bistro", "Plate", "Table", "Fork"])}`,
-			"cuisine": [
-				"American",
-				"Italian",
-				"Chinese",
-				"Japanese",
-				"Mexican",
-				"Indian",
-				"Thai",
-				"Mediterranean"
-			],
-			"avg_rating": u.weighNumRange(1, 5, 0.8, 30),
-			"delivery_radius_mi": u.weighNumRange(1, 15, 1.0, 10),
-		}
-	},
-
-	lookupTables: [],
+	retentionCurve: { type: "logarithmic", day1: 0.55, day7: 0.38, day30: 0.25 },
 
 	hook(record, type, meta) {
-		if (type === "funnel-pre") return handleFunnelPreHooks(record, meta);
-		if (type === "everything") return handleEverythingHooks(record, meta);
+		if (type === "user") return handleUserHook(record, meta);
+		if (type === "everything") return handleEverything(record, meta);
+		if (type === "warehouse") return handleWarehouse(record, meta);
 		return record;
-	}
+	},
 };
 
-export default config;
+// ── STORIES ──────────────────────────────────────────────────────────────
+// Machine-checkable contract for hooks H1-H10. Evaluate with:
+//   node dungeons/vertical/food-delivery/food-delivery.verify.mjs
 
-// ── STORIES ──
-// Machine-checkable contract for the 10 numbered hooks above. Evaluated by
-// ./food-delivery.verify.mjs (thin wrapper) or scripts/verify-stories.mjs.
-// All breakdowns are DuckDB: every read here is a ratio-of-ratios or a
-// behavioral-cohort aggregation that the emulator's breakdown types don't
-// model. Bands center on MECHANISM numbers derived in each hook's
-// MEASURABLE SIGNATURE block; scale guards return WEAK below full fidelity.
+const EV = `read_json_auto('{{PREFIX}}-EVENTS*.json*', sample_size=-1, union_by_name=true)`;
+const US = `read_json_auto('{{PREFIX}}-USERS*.json*', sample_size=-1, union_by_name=true)`;
+const WH = (table) => `read_json_auto('{{PREFIX}}-WAREHOUSE-${table}.json*', sample_size=-1, union_by_name=true)`;
 
-const EV_CTE = `
-ev AS (SELECT e.user_id::VARCHAR AS uid, e.time::TIMESTAMP AS t,
-       hour(e.time::TIMESTAMP) AS hr,
-       date_diff('day', TIMESTAMP '2026-01-01 00:00:00', e.time::TIMESTAMP) AS day_idx, e.*
-FROM read_json_auto('{{PREFIX}}-EVENTS*.json', sample_size=-1, union_by_name=true) e)`;
+// Identity prelude: a device resolves to the customer seen with it on any event
+// that carries both ids (emitted stitch evidence). Every Forkfly event carries
+// user_id, so the device map only matters for completeness.
+const ID_CTE = `dmap AS (SELECT device_id, min(user_id::VARCHAR) AS mapped FROM ${EV}
+  WHERE user_id IS NOT NULL AND device_id IS NOT NULL GROUP BY 1),
+ev AS (SELECT coalesce(e.user_id::VARCHAR, m.mapped) AS uid, e.time::TIMESTAMP AS t, e.*
+  FROM ${EV} e LEFT JOIN dmap m ON e.device_id = m.device_id)`;
 
-/**
- * Band verdict helper: NAILED inside the tight band, STRONG inside the wide
- * band, INVERSE when the caller's inversion predicate fires, else WEAK.
- * @param {number} x
- * @param {[number, number]} nailed
- * @param {[number, number]} strong
- * @param {string} detail
- * @param {boolean} [inverse]
- */
-function bandVerdict(x, nailed, strong, detail, inverse = false) {
-	if (Number.isFinite(x) && x >= nailed[0] && x <= nailed[1]) return { verdict: "NAILED", detail };
-	if (Number.isFinite(x) && x >= strong[0] && x <= strong[1]) return { verdict: "STRONG", detail };
-	if (inverse) return { verdict: "INVERSE", detail };
-	return { verdict: "WEAK", detail };
-}
+const TS = (isoStr) => dayjs.utc(isoStr).format("YYYY-MM-DD HH:mm:ss");
+const D = (isoStr) => isoStr.slice(0, 10);
+const r3 = (n) => Math.round(n * 1000) / 1000;
+const band = (k) => [r3(k * 0.9), r3(k * 1.1)];
+const halfToward = (k, neutral) => r3(neutral + 0.5 * (k - neutral)); // half-effect floor / ceiling
+const REPEAT_DAYS = 30;                 // H1/H6 read: next order within 30 days of the first delivery
+const REPEAT_READ_END = "2026-09-01 00:00:00"; // first deliveries through Aug 31 have a full 30 days
+const INC_BASE_DAYS = 14;               // H4 read: baseline days either side of the incident
+const INC_BASE_FROM = TS(dayjs.utc(PAY_INCIDENT_START).subtract(INC_BASE_DAYS, "day").toISOString());
+const INC_BASE_TO = TS(dayjs.utc(PAY_INCIDENT_END).add(INC_BASE_DAYS, "day").toISOString());
+const TTC_WINDOW_MIN = 60;              // H10 read: app opened → order placed within one hour, same session
+const REORDER_CONV_RATIO = P_REORDER_CHECKOUT / (P_CART * P_CHECKOUT);
+const TRIAL_READ_END = TS(dayjs.utc(DATASET_END).subtract(TRIAL_DAYS, "day").toISOString());
 
+const H1_SQL = `WITH ${ID_CTE},
+s AS (SELECT uid, acquisition_channel AS ch FROM ev WHERE event = 'account created'),
+d AS (SELECT ev.uid, ev.t, ev.minutes_late::INT AS late, row_number() OVER (PARTITION BY ev.uid ORDER BY ev.t, ev.insert_id) AS rn
+  FROM ev JOIN s ON s.uid = ev.uid WHERE ev.event = 'order delivered'),
+f AS (SELECT * FROM d WHERE rn = 1 AND t < TIMESTAMP '${REPEAT_READ_END}'),
+r AS (SELECT f.uid, f.late, s.ch, coalesce(bool_or(o.t > f.t AND o.t < f.t + INTERVAL ${REPEAT_DAYS} DAY), false) AS rep
+  FROM f JOIN s ON s.uid = f.uid LEFT JOIN ev o ON o.uid = f.uid AND o.event = 'order placed' GROUP BY 1, 2, 3)
+SELECT CASE WHEN late >= ${LATE_THRESHOLD_MIN} THEN 'late' ELSE 'on_time' END AS grp, count(*) AS user_count, avg(rep::INT) AS repeat_rate FROM r GROUP BY 1
+UNION ALL
+SELECT CASE WHEN ch = 'coupon_affiliates' THEN 'coupon' ELSE 'other_channels' END AS grp, count(*) AS user_count, avg(rep::INT) AS repeat_rate FROM r GROUP BY 1`;
+
+const H2_SQL = `WITH ${ID_CTE},
+w AS (SELECT date::DATE AS d, city, precipitation_mm >= ${RAIN_DAY_MM} AS rainy FROM ${WH("market_ops_daily")}),
+o AS (SELECT city, t::DATE AS d, count(*) AS n, count(DISTINCT uid) AS users FROM ev WHERE event = 'order placed' GROUP BY 1, 2),
+j AS (SELECT w.city, w.d, w.rainy, coalesce(o.n, 0) AS n FROM w LEFT JOIN o ON o.city = w.city AND o.d = w.d),
+c AS (SELECT city, avg(n) FILTER (WHERE NOT rainy) AS dry_mean FROM j GROUP BY 1),
+lt AS (SELECT dl.minutes_late::DOUBLE AS late, w.rainy FROM ev dl
+  JOIN ev p ON p.order_id = dl.order_id AND p.event = 'order placed'
+  JOIN w ON w.city = p.city AND w.d = p.t::DATE WHERE dl.event = 'order delivered')
+SELECT 'all' AS grp, (SELECT count(DISTINCT uid) FROM ev WHERE event = 'order placed') AS user_count,
+ count(*) FILTER (WHERE j.rainy) AS rainy_city_days,
+ sum(j.n) FILTER (WHERE j.rainy) / sum(c.dry_mean) FILTER (WHERE j.rainy) AS rain_lift,
+ (SELECT avg(late) FILTER (WHERE rainy) - avg(late) FILTER (WHERE NOT rainy) FROM lt) AS late_diff
+FROM j JOIN c ON c.city = j.city`;
+
+const H3_SQL = `WITH ${ID_CTE},
+c AS (SELECT order_id, uid, quoted_eta_mins AS eta, t FROM ev WHERE event = 'checkout started'),
+p AS (SELECT order_id, min(t) AS tp FROM ev WHERE event = 'order placed' GROUP BY 1)
+SELECT CASE WHEN c.eta <= ${ETA_THRESHOLD_MIN} THEN 'quick' ELSE 'slow' END AS grp, count(DISTINCT c.uid) AS user_count, count(*) AS checkouts,
+ avg(coalesce(p.tp >= c.t AND p.tp < c.t + INTERVAL 1 HOUR, false)::INT) AS conv
+FROM c LEFT JOIN p ON p.order_id = c.order_id GROUP BY 1`;
+
+const H4_SQL = `WITH ${ID_CTE},
+o AS (SELECT DISTINCT date::DATE AS d, payment_method FROM ${WH("payment_gateway_daily")} WHERE gateway_status = 'major_outage'),
+od AS (SELECT DISTINCT d FROM o), om AS (SELECT DISTINCT payment_method FROM o),
+c AS (SELECT order_id, uid, t, payment_method IN (SELECT payment_method FROM om) AS hit, t::DATE IN (SELECT d FROM od) AS outage
+  FROM ev WHERE event = 'checkout started' AND t >= TIMESTAMP '${INC_BASE_FROM}' AND t < TIMESTAMP '${INC_BASE_TO}'),
+p AS (SELECT DISTINCT order_id FROM ev WHERE event = 'order placed'),
+g AS (SELECT hit, outage, count(DISTINCT uid) AS users, avg((p.order_id IS NOT NULL)::INT) AS conv FROM c LEFT JOIN p ON p.order_id = c.order_id GROUP BY 1, 2)
+SELECT 'all' AS grp, (SELECT count(*) FROM od) AS outage_days, min(users) AS user_count,
+ (max(conv) FILTER (WHERE hit AND outage) / max(conv) FILTER (WHERE hit AND NOT outage))
+ / (max(conv) FILTER (WHERE NOT hit AND outage) / max(conv) FILTER (WHERE NOT hit AND NOT outage)) AS did
+FROM g`;
+
+const H5_ARMS = `v AS (SELECT distinct_id::VARCHAR AS uid, "${EXP_KEY}" AS arm FROM ${US} WHERE "${EXP_KEY}" IS NOT NULL)`;
+const H5_SQL = `WITH ${ID_CTE}, ${H5_ARMS},
+c AS (SELECT order_id, uid FROM ev WHERE event = 'checkout started' AND t >= TIMESTAMP '${TS(ADDONS_START)}'),
+p AS (SELECT order_id, any_value(items_count) AS items, any_value(subtotal_usd) AS subtotal FROM ev WHERE event = 'order placed' AND t >= TIMESTAMP '${TS(ADDONS_START)}' GROUP BY 1)
+SELECT v.arm AS grp, count(DISTINCT c.uid) AS user_count, count(*) AS checkouts, avg((p.order_id IS NOT NULL)::INT) AS conv,
+ avg(p.items) AS items_per_order, avg(p.subtotal) AS subtotal_per_order
+FROM c JOIN v ON v.uid = c.uid LEFT JOIN p ON p.order_id = c.order_id GROUP BY 1`;
+
+// pre-period adjusted lift: (variant post - pre) - (control post - pre) in items per order
+const H5_DID_SQL = `WITH ${ID_CTE}, ${H5_ARMS},
+o AS (SELECT v.arm, ev.uid, ev.items_count, ev.t >= TIMESTAMP '${TS(ADDONS_START)}' AS post FROM ev JOIN v ON v.uid = ev.uid WHERE ev.event = 'order placed'),
+g AS (SELECT arm, avg(items_count) FILTER (WHERE post) AS post_items, avg(items_count) FILTER (WHERE NOT post) AS pre_items, count(DISTINCT uid) AS users FROM o GROUP BY 1)
+SELECT 'all' AS grp, min(users) AS user_count,
+ (max(post_items) FILTER (WHERE arm = '${ADDONS_VARIANT}') - max(pre_items) FILTER (WHERE arm = '${ADDONS_VARIANT}'))
+ - (max(post_items) FILTER (WHERE arm = 'Control') - max(pre_items) FILTER (WHERE arm = 'Control')) AS did,
+ max(post_items) FILTER (WHERE arm = '${ADDONS_VARIANT}') - max(post_items) FILTER (WHERE arm = 'Control') AS raw_diff
+FROM g`;
+
+const H6_SQL = `WITH ${ID_CTE},
+s AS (SELECT uid, t AS t0, acquisition_channel AS ch FROM ev WHERE event = 'account created'),
+d AS (SELECT ev.uid, ev.t, row_number() OVER (PARTITION BY ev.uid ORDER BY ev.t, ev.insert_id) AS rn FROM ev JOIN s ON s.uid = ev.uid WHERE ev.event = 'order delivered'),
+f AS (SELECT * FROM d WHERE rn = 1 AND t < TIMESTAMP '${REPEAT_READ_END}'),
+r AS (SELECT f.uid, coalesce(bool_or(o.t > f.t AND o.t < f.t + INTERVAL ${REPEAT_DAYS} DAY), false) AS rep
+  FROM f LEFT JOIN ev o ON o.uid = f.uid AND o.event = 'order placed' GROUP BY 1),
+g AS (SELECT s.ch, count(*) AS signups, count(*) FILTER (WHERE s.t0 < TIMESTAMP '${REPEAT_READ_END}') AS signups_read,
+  count(*) FILTER (WHERE r.rep AND s.t0 < TIMESTAMP '${REPEAT_READ_END}') AS repeaters, avg(r.rep::INT) AS repeat_rate
+  FROM s LEFT JOIN r ON r.uid = s.uid GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend, sum(spend_usd) FILTER (WHERE date::DATE < DATE '${REPEAT_READ_END.slice(0, 10)}') AS spend_read
+  FROM ${WH("marketing_spend_daily")} GROUP BY 1)
+SELECT g.ch AS grp, g.signups AS user_count, g.repeat_rate, sp.spend / g.signups AS spend_per_signup, sp.spend_read / g.repeaters AS spend_per_repeat
+FROM g LEFT JOIN sp ON sp.ch = g.ch`;
+
+const H7_SQL = `WITH ${ID_CTE},
+s AS (SELECT uid, min(t) AS ts FROM ev WHERE event = 'pass trial started' GROUP BY 1),
+e AS (SELECT uid, outcome, orders_during_trial AS n FROM ev WHERE event = 'pass trial ended')
+SELECT CASE WHEN e.n >= ${TRIAL_MAGIC_ORDERS} THEN 'two_plus' ELSE 'zero_one' END AS grp, count(*) AS user_count,
+ avg((e.outcome = 'converted')::INT) AS conv
+FROM e JOIN s ON s.uid = e.uid WHERE s.ts < TIMESTAMP '${TRIAL_READ_END}' GROUP BY 1`;
+
+// among $10-19.99 orders, the share under $15 (topped-up baskets land at $15.50-19.50)
+const H8_SQL = `WITH ${ID_CTE}
+SELECT CASE WHEN pass_status = 'none' THEN 'no_pass' ELSE 'pass' END AS grp, count(DISTINCT uid) AS user_count, count(*) AS orders,
+ count(*) FILTER (WHERE subtotal_usd >= ${BUMP_FROM} AND subtotal_usd < ${PASS_FREE_DELIVERY_MIN})::DOUBLE
+  / count(*) FILTER (WHERE subtotal_usd >= ${BUMP_FROM} AND subtotal_usd < ${PASS_FREE_DELIVERY_MIN + 5}) AS small_basket_share
+FROM ev WHERE event = 'order placed' GROUP BY 1`;
+
+const H9_SQL = `WITH ${ID_CTE},
+c AS (SELECT order_id, uid, pass_status <> 'none' AS pass, t >= TIMESTAMP '${TS(FEE_CHANGE)}' AS post FROM ev
+  WHERE event = 'checkout started' AND NOT (t >= TIMESTAMP '${TS(PAY_INCIDENT_START)}' AND t < TIMESTAMP '${TS(PAY_INCIDENT_END)}')),
+p AS (SELECT DISTINCT order_id FROM ev WHERE event = 'order placed'),
+g AS (SELECT pass, post, count(DISTINCT uid) AS users, avg((p.order_id IS NOT NULL)::INT) AS conv FROM c LEFT JOIN p ON p.order_id = c.order_id GROUP BY 1, 2)
+SELECT 'all' AS grp, min(users) AS user_count,
+ (max(conv) FILTER (WHERE NOT pass AND post) / max(conv) FILTER (WHERE NOT pass AND NOT post))
+ / (max(conv) FILTER (WHERE pass AND post) / max(conv) FILTER (WHERE pass AND NOT post)) AS did
+FROM g`;
+
+const H10_SQL = `WITH ${ID_CTE},
+o AS (SELECT uid, t, lead(t) OVER (PARTITION BY uid ORDER BY t) AS nt FROM ev WHERE event = 'app opened'),
+p AS (SELECT uid, t, entry_point FROM ev WHERE event = 'order placed'),
+x AS (SELECT o.uid, o.t, min(p.t) AS tp, arg_min(p.entry_point, p.t) AS ep FROM o JOIN p ON p.uid = o.uid AND p.t > o.t
+  AND p.t < o.t + INTERVAL ${TTC_WINDOW_MIN} MINUTE AND (o.nt IS NULL OR p.t < o.nt)
+  WHERE o.t >= TIMESTAMP '${TS(REORDER_LAUNCH)}' GROUP BY 1, 2)
+SELECT CASE WHEN ep = 'reorder' THEN 'reorder' ELSE 'browse' END AS grp, count(DISTINCT uid) AS user_count, count(*) AS orders,
+ median(date_diff('second', t, tp)) / 60.0 AS med_minutes
+FROM x GROUP BY 1`;
+
+const H10_CONV_SQL = `WITH ${ID_CTE},
+o AS (SELECT uid, t, lead(t) OVER (PARTITION BY uid ORDER BY t) AS nt FROM ev WHERE event = 'app opened'),
+el AS (SELECT DISTINCT uid FROM ev WHERE event = 'reorder tapped'),
+x AS (SELECT o.uid, o.t, coalesce(bool_or(e.event = 'reorder tapped'), false) AS reo, coalesce(bool_or(e.event = 'order placed'), false) AS ordered
+  FROM o JOIN el ON el.uid = o.uid
+  LEFT JOIN ev e ON e.uid = o.uid AND e.event IN ('reorder tapped', 'order placed') AND e.t > o.t
+   AND e.t < o.t + INTERVAL ${TTC_WINDOW_MIN} MINUTE AND (o.nt IS NULL OR e.t < o.nt)
+  WHERE o.t >= TIMESTAMP '${TS(REORDER_LAUNCH)}' GROUP BY 1, 2)
+SELECT CASE WHEN reo THEN 'reorder' ELSE 'browse' END AS grp, count(DISTINCT uid) AS user_count, count(*) AS sessions,
+ avg(ordered::INT) AS order_rate
+FROM x GROUP BY 1`;
+
+/** @type {import("../../../types").DungeonStory[]} */
 export const stories = [
 	{
-		id: "H1-rush-keep-rate",
+		id: "H1-late-first-order",
 		hook: "H1",
-		archetype: "bespoke",
-		narrative:
-			"30% of order-delivered events outside 11-13/17-20 UTC are dropped. Raw HOD volume is " +
-			"soup-confounded, so the read is delivered-per-placed off-hours ÷ delivered-per-placed " +
-			"rush-hours ≈ 0.70 — 'order placed' shares the soup HOD and is untouched by H1, and " +
-			"H7's drop is hour-independent, so both cancel. Measured 0.699 at 2K.",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${EV_CTE},
-agg AS (SELECT (hr BETWEEN 11 AND 13) OR (hr BETWEEN 17 AND 20) AS rush,
-  count(*) FILTER (WHERE event='order delivered')::BIGINT AS del,
-  count(*) FILTER (WHERE event='order placed')::BIGINT AS placed
-FROM ev WHERE event IN ('order delivered','order placed') GROUP BY 1)
-SELECT max(CASE WHEN NOT rush THEN del::DOUBLE/placed END) /
-       max(CASE WHEN rush THEN del::DOUBLE/placed END) AS ror,
-  max(CASE WHEN rush THEN del END)::BIGINT AS del_rush,
-  max(CASE WHEN NOT rush THEN del END)::BIGINT AS del_off
-FROM agg`,
-				},
-				assert: (rows) => {
-					const r = rows?.[0];
-					if (!r || Number(r.del_rush) < 10000 || Number(r.del_off) < 20000) {
-						return { verdict: "WEAK", detail: `volume too small: del_rush=${r?.del_rush ?? 0} del_off=${r?.del_off ?? 0}` };
-					}
-					const x = Number(r.ror);
-					return bandVerdict(x, [0.65, 0.75], [0.60, 0.80],
-						`delivered-per-placed off/rush RoR=${x.toFixed(3)} (mech 0.70; del_rush=${r.del_rush} del_off=${r.del_off})`,
-						x > 1.0);
-				},
-			},
-		],
-	},
-	{
-		id: "H2-coupon-injection",
-		hook: "H2",
-		archetype: "cohort-count-scale",
-		narrative:
-			"Free-tier users get a coupon-applied clone spliced before 30% of checkouts. Exact " +
-			"knob recovery: coupons-per-checkout(Free) − coupons-per-checkout(QB+) ≈ +0.30. " +
-			"Organic coupons/user is tier-independent (~3.1) and Free users average ~13 checkouts, " +
-			"so total coupons/user ratio lands at ~2.2 (NOT 1.3x — 30% of 13 checkouts more than " +
-			"doubles the organic count). Measured diff 0.296, ratio 2.19 at 2K.",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${EV_CTE},
-pu AS (SELECT uid, any_value(subscription_tier) AS tier,
-  count(*) FILTER (WHERE event='coupon applied') AS coupons,
-  count(*) FILTER (WHERE event='checkout started') AS checkouts
-FROM ev WHERE event IN ('coupon applied','checkout started') GROUP BY 1)
-SELECT tier, count(*)::BIGINT AS users,
-  sum(coupons)::DOUBLE/count(*) AS cpu,
-  sum(coupons)::DOUBLE/nullif(sum(checkouts),0) AS cpc
-FROM pu GROUP BY tier ORDER BY tier`,
-				},
-				assert: (rows) => {
-					const free = rows?.find(r => r.tier === "Free");
-					const plus = rows?.find(r => r.tier === "QuickBite+");
-					if (!free || !plus || Number(free.users) < 4000 || Number(plus.users) < 900) {
-						return { verdict: "WEAK", detail: `cohorts too small: free=${free?.users ?? 0} plus=${plus?.users ?? 0}` };
-					}
-					const diff = Number(free.cpc) - Number(plus.cpc);
-					return bandVerdict(diff, [0.26, 0.34], [0.22, 0.38],
-						`coupons-per-checkout diff=${diff.toFixed(3)} (mech +0.30; Free=${Number(free.cpc).toFixed(3)} QB+=${Number(plus.cpc).toFixed(3)})`,
-						diff < 0);
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${EV_CTE},
-pu AS (SELECT uid, any_value(subscription_tier) AS tier,
-  count(*) FILTER (WHERE event='coupon applied') AS coupons
-FROM ev WHERE event IN ('coupon applied','checkout started') GROUP BY 1)
-SELECT tier, count(*)::BIGINT AS users, sum(coupons)::DOUBLE/count(*) AS cpu
-FROM pu GROUP BY tier ORDER BY tier`,
-				},
-				assert: (rows) => {
-					const free = rows?.find(r => r.tier === "Free");
-					const plus = rows?.find(r => r.tier === "QuickBite+");
-					if (!free || !plus || Number(free.users) < 4000 || Number(plus.users) < 900) {
-						return { verdict: "WEAK", detail: `cohorts too small: free=${free?.users ?? 0} plus=${plus?.users ?? 0}` };
-					}
-					const ratio = Number(free.cpu) / Number(plus.cpu);
-					return bandVerdict(ratio, [1.9, 2.6], [1.7, 2.9],
-						`coupons/user Free÷QB+=${ratio.toFixed(3)} (mech ~2.2; Free=${Number(free.cpu).toFixed(2)} QB+=${Number(plus.cpu).toFixed(2)})`,
-						ratio < 1.0);
-				},
-			},
-		],
-	},
-	{
-		id: "H3-late-night-flip",
-		hook: "H3",
-		archetype: "composition-drift",
-		narrative:
-			"22:00-02:59 UTC: 70% of restaurant-viewed/cart events flip cuisine_type to American; " +
-			"item_price bumped 1.3x unconditionally in the window. Organic American share is ~0.16 " +
-			"(engine's pick is non-uniform), hour-independent — 'restaurant browsed' (never " +
-			"flipped) is the control. Inverting the mix equation recovers the knob: " +
-			"(late_share − off_share)/(1 − off_share) ≈ 0.70. Measured 0.705 and price 1.281 at 2K.",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${EV_CTE}
-SELECT avg((cuisine_type='American')::INT) FILTER (WHERE event='restaurant viewed' AND (hr>=22 OR hr<=2)) AS late_share,
-  avg((cuisine_type='American')::INT) FILTER (WHERE event='restaurant viewed' AND hr BETWEEN 6 AND 18) AS off_share,
-  avg((cuisine_type='American')::INT) FILTER (WHERE event='restaurant browsed') AS organic_share,
-  count(*) FILTER (WHERE event='restaurant viewed' AND (hr>=22 OR hr<=2))::BIGINT AS n_late
-FROM ev WHERE event IN ('restaurant viewed','restaurant browsed')`,
-				},
-				assert: (rows) => {
-					const r = rows?.[0];
-					if (!r || Number(r.n_late) < 10000) {
-						return { verdict: "WEAK", detail: `late-night views too few: n_late=${r?.n_late ?? 0}` };
-					}
-					const off = Number(r.off_share);
-					const organic = Number(r.organic_share);
-					if (organic < 0.10 || organic > 0.22) {
-						return { verdict: "WEAK", detail: `organic American share ${organic.toFixed(3)} outside expected [0.10,0.22] — derivation baseline broken` };
-					}
-					const flip = (Number(r.late_share) - off) / (1 - off);
-					return bandVerdict(flip, [0.65, 0.75], [0.60, 0.80],
-						`flip-rate inversion=${flip.toFixed(3)} (mech 0.70; late=${Number(r.late_share).toFixed(3)} off=${off.toFixed(3)} organic=${organic.toFixed(3)})`,
-						flip < 0);
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${EV_CTE}
-SELECT avg(TRY_CAST(item_price AS DOUBLE)) FILTER (WHERE hr>=22 OR hr<=2) /
-       avg(TRY_CAST(item_price AS DOUBLE)) FILTER (WHERE hr BETWEEN 6 AND 18) AS price_ratio,
-  count(*) FILTER (WHERE hr>=22 OR hr<=2)::BIGINT AS n_late
-FROM ev WHERE event='item added to cart'`,
-				},
-				assert: (rows) => {
-					const r = rows?.[0];
-					if (!r || Number(r.n_late) < 10000) {
-						return { verdict: "WEAK", detail: `late-night carts too few: n_late=${r?.n_late ?? 0}` };
-					}
-					const x = Number(r.price_ratio);
-					return bandVerdict(x, [1.24, 1.36], [1.18, 1.42],
-						`late/off item_price ratio=${x.toFixed(3)} (mech 1.30; n_late=${r.n_late})`,
-						x < 1.0);
-				},
-			},
-		],
-	},
-	{
-		id: "H4-rainy-week",
-		hook: "H4",
-		archetype: "temporal-inflection",
-		narrative:
-			"Days 20-27: delivery_fee doubled on order-placed, 40% duplicated with 5-60 min offset. " +
-			"Duplicate share (in-window (uid, order_id) twins ÷ distinct orders) recovers the 0.40 " +
-			"knob directly. Fee window/baseline ≈ 2.0 (fee pool bottoms at 1, the (fee||5) fallback " +
-			"is inert). Volume RoR vs checkout ≈ 1.40 diluted a few percent by H6-churned users. " +
-			"Measured dup 0.367, fee 1.937, RoR 1.343 at 2K.",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${EV_CTE}
-SELECT count(*)::BIGINT AS total_win,
-  count(DISTINCT uid || '|' || order_id)::BIGINT AS distinct_orders,
-  (count(*) - count(DISTINCT uid || '|' || order_id))::DOUBLE /
-  count(DISTINCT uid || '|' || order_id) AS dup_share
-FROM ev WHERE event='order placed' AND day_idx BETWEEN 20 AND 27`,
-				},
-				assert: (rows) => {
-					const r = rows?.[0];
-					if (!r || Number(r.distinct_orders) < 2500) {
-						return { verdict: "WEAK", detail: `window orders too few: distinct=${r?.distinct_orders ?? 0}` };
-					}
-					const x = Number(r.dup_share);
-					return bandVerdict(x, [0.33, 0.47], [0.28, 0.52],
-						`in-window duplicate share=${x.toFixed(3)} (mech 0.40; ${r.total_win} events over ${r.distinct_orders} orders)`,
-						x < 0.02);
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${EV_CTE}
-SELECT avg(TRY_CAST(delivery_fee AS DOUBLE)) FILTER (WHERE day_idx BETWEEN 20 AND 27) /
-       avg(TRY_CAST(delivery_fee AS DOUBLE)) FILTER (WHERE day_idx BETWEEN 10 AND 19 OR day_idx BETWEEN 28 AND 37) AS fee_ratio,
-  count(*) FILTER (WHERE day_idx BETWEEN 20 AND 27)::BIGINT AS n_win
-FROM ev WHERE event='order placed'`,
-				},
-				assert: (rows) => {
-					const r = rows?.[0];
-					if (!r || Number(r.n_win) < 3000) {
-						return { verdict: "WEAK", detail: `window orders too few: n_win=${r?.n_win ?? 0}` };
-					}
-					const x = Number(r.fee_ratio);
-					return bandVerdict(x, [1.85, 2.15], [1.70, 2.30],
-						`delivery_fee window/baseline=${x.toFixed(3)} (mech 2.0; n_win=${r.n_win})`,
-						x < 1.0);
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${EV_CTE},
-agg AS (SELECT CASE WHEN day_idx BETWEEN 20 AND 27 THEN 'win'
-  WHEN day_idx BETWEEN 10 AND 19 OR day_idx BETWEEN 28 AND 37 THEN 'base' END AS zone,
-  count(*) FILTER (WHERE event='order placed')::BIGINT AS placed,
-  count(*) FILTER (WHERE event='checkout started')::BIGINT AS chk
-FROM ev WHERE event IN ('order placed','checkout started') AND day_idx BETWEEN 10 AND 37 GROUP BY 1)
-SELECT (max(CASE WHEN zone='win' THEN placed END)::DOUBLE / max(CASE WHEN zone='base' THEN placed END)) /
-       (max(CASE WHEN zone='win' THEN chk END)::DOUBLE / max(CASE WHEN zone='base' THEN chk END)) AS vol_ror,
-  max(CASE WHEN zone='win' THEN placed END)::BIGINT AS placed_win
-FROM agg`,
-				},
-				assert: (rows) => {
-					const r = rows?.[0];
-					if (!r || Number(r.placed_win) < 3000) {
-						return { verdict: "WEAK", detail: `window orders too few: placed_win=${r?.placed_win ?? 0}` };
-					}
-					const x = Number(r.vol_ror);
-					return bandVerdict(x, [1.25, 1.55], [1.15, 1.70],
-						`placed vol RoR vs checkout=${x.toFixed(3)} (mech ~1.40 minus churn dilution; placed_win=${r.placed_win})`,
-						x < 1.0);
-				},
-			},
-		],
-	},
-	{
-		id: "H5-referral-power",
-		hook: "H5",
-		archetype: "cohort-count-scale",
-		narrative:
-			"Born-in users with referral_code=true on account-created (~1/3 of born-ins) get " +
-			"food_rating rerolled to 4-5 and ~50% of visited reorders cloned. Cohort only exists " +
-			"among born-ins (pre-existing users have no account-created). Reorders/user ratio ≈ 1.4 " +
-			"(clones re-visited at idx+1 can re-clone; tail events pushed past the fixed forEach " +
-			"range are skipped, so net sits below naive 1.5). Ratings: referred user-mean ≈ 4.4 " +
-			"(same truncation leaves some rated events unboosted) vs organic ≈ 2.8. Measured " +
-			"1.45/1.34 across 2K iterations; ratings 4.45 vs 2.78.",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${EV_CTE},
-born AS (SELECT uid, bool_or(referral_code = true) AS referred
-  FROM ev WHERE event='account created' GROUP BY 1),
-pu AS (SELECT b.uid, b.referred,
-  count(*) FILTER (WHERE e.event='reorder initiated') AS reorders,
-  avg(TRY_CAST(e.food_rating AS DOUBLE)) FILTER (WHERE e.event='order rated') AS user_rating
-FROM born b LEFT JOIN ev e ON e.uid=b.uid GROUP BY 1,2)
-SELECT referred, count(*)::BIGINT AS users,
-  sum(reorders)::DOUBLE/count(*) AS reorders_pu,
-  avg(user_rating) AS mean_rating
-FROM pu GROUP BY referred ORDER BY referred`,
-				},
-				assert: (rows) => {
-					const ref = rows?.find(r => r.referred === true);
-					const non = rows?.find(r => r.referred === false);
-					if (!ref || !non || Number(ref.users) < 250 || Number(non.users) < 500) {
-						return { verdict: "WEAK", detail: `born-in cohorts too small: ref=${ref?.users ?? 0} nonref=${non?.users ?? 0}` };
-					}
-					const ratio = Number(ref.reorders_pu) / Number(non.reorders_pu);
-					return bandVerdict(ratio, [1.25, 1.60], [1.12, 1.75],
-						`born-in reorders/user ref÷nonref=${ratio.toFixed(3)} (mech ~1.4; ref=${Number(ref.reorders_pu).toFixed(2)} n=${ref.users}, nonref=${Number(non.reorders_pu).toFixed(2)} n=${non.users})`,
-						ratio < 1.0);
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${EV_CTE},
-born AS (SELECT uid, bool_or(referral_code = true) AS referred
-  FROM ev WHERE event='account created' GROUP BY 1),
-pu AS (SELECT b.uid, b.referred,
-  avg(TRY_CAST(e.food_rating AS DOUBLE)) FILTER (WHERE e.event='order rated') AS user_rating
-FROM born b LEFT JOIN ev e ON e.uid=b.uid GROUP BY 1,2)
-SELECT referred, count(*) FILTER (WHERE user_rating IS NOT NULL)::BIGINT AS raters,
-  avg(user_rating) AS mean_rating
-FROM pu GROUP BY referred ORDER BY referred`,
-				},
-				assert: (rows) => {
-					const ref = rows?.find(r => r.referred === true);
-					const non = rows?.find(r => r.referred === false);
-					if (!ref || !non || Number(ref.raters) < 200 || Number(non.raters) < 400) {
-						return { verdict: "WEAK", detail: `rater cohorts too small: ref=${ref?.raters ?? 0} nonref=${non?.raters ?? 0}` };
-					}
-					const rr = Number(ref.mean_rating), nr = Number(non.mean_rating);
-					const detail = `referred mean rating=${rr.toFixed(2)} vs organic=${nr.toFixed(2)} (mech ~4.4 vs ~2.8)`;
-					if (rr >= 4.3 && rr <= 4.55 && nr >= 2.6 && nr <= 3.0) return { verdict: "NAILED", detail };
-					if (rr >= 4.15 && rr <= 4.65 && nr >= 2.45 && nr <= 3.15) return { verdict: "STRONG", detail };
-					if (rr < nr) return { verdict: "INVERSE", detail };
-					return { verdict: "WEAK", detail };
-				},
-			},
-		],
-	},
-	{
-		id: "H6-trial-churn",
-		hook: "H6",
 		archetype: "retention-divergence",
-		narrative:
-			"Trial subscribers with <3 orders in their first 14 days: 60% (per-user coin) lose ALL " +
-			"post-day-14 events. The deletion removes late subscription-started events themselves, " +
-			"so churned users with a late trial start vanish from the visible cohort (survivor " +
-			"bias) — the visible zero-post share lands near 0.25, not 0.60. Honest observable: " +
-			"zero-post-day-14 share non-activated ≈ 0.25 vs activated ≈ 0.04, a 5-7x divergence. " +
-			"Per-user post/pre ratios are composition-confounded (activation selects front-loaded " +
-			"activity) — deliberately not asserted. Measured 0.245/0.036 at 2K.",
+		narrative: `A new customer's first delivery decides whether they come back. After the first delivered order, a new customer leaves Forkfly with a chance that rises with minutes_late (logistic centered at ${LATE_THRESHOLD_MIN} min, softness ${LATE_SOFT_MIN} min, plateau ${LATE_CHURN}). Lateness is independent of the customer (normal mean ${LATE_MEAN_MIN} min, sd ${LATE_SD_MIN} min, +${RAIN_LATE_MIN} min on rainy days), so the 30-day repeat rate (another order within ${REPEAT_DAYS} days of the first delivery, first deliveries through Aug 31) for first deliveries ${LATE_THRESHOLD_MIN}+ minutes late over on-time ones is ${r3(LATE_REPEAT_RATIO)} (integrated over the lateness distribution and the realized rain calendar). Rests on about 400 late first orders, so the read uses the knob as target with a half-effect ceiling.`,
+		mixpanelReport: { type: "Funnels", steps: ["order delivered", "order placed"], window: `${REPEAT_DAYS} days`, cohort: "customers who did account created in the window", dateRange: `${D(DATASET_START)} to 2026-08-31`, breakdown: `step 1 minutes_late (custom buckets < ${LATE_THRESHOLD_MIN}, >= ${LATE_THRESHOLD_MIN})` },
 		assertions: [
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${EV_CTE},
-fu AS (SELECT uid, min(t) AS first_t FROM ev GROUP BY 1),
-trial AS (SELECT uid FROM ev WHERE event='subscription started' AND trial = true GROUP BY 1),
-pux AS (SELECT f.uid,
-  count(*) FILTER (WHERE e.event='order placed' AND e.t <= f.first_t + INTERVAL '14 days') AS early_orders,
-  count(*) FILTER (WHERE e.t > f.first_t + INTERVAL '14 days') AS post_n
-FROM fu f JOIN trial tr ON tr.uid=f.uid JOIN ev e ON e.uid=f.uid GROUP BY 1)
-SELECT (early_orders >= 3) AS activated, count(*)::BIGINT AS users,
-  avg(CASE WHEN post_n = 0 THEN 1.0 ELSE 0 END) AS zero_post_share
-FROM pux GROUP BY (early_orders >= 3) ORDER BY 1`,
-				},
-				assert: (rows) => {
-					const non = rows?.find(r => r.activated === false);
-					const act = rows?.find(r => r.activated === true);
-					if (!non || !act || Number(non.users) < 1200 || Number(act.users) < 1000) {
-						return { verdict: "WEAK", detail: `trial cohorts too small: nonact=${non?.users ?? 0} act=${act?.users ?? 0}` };
-					}
-					const ns = Number(non.zero_post_share), as = Number(act.zero_post_share);
-					const ratio = as > 0 ? ns / as : Infinity;
-					const detail = `zero-post share nonact=${ns.toFixed(3)} vs act=${as.toFixed(3)} (ratio ${ratio === Infinity ? "inf" : ratio.toFixed(1)}x; survivor-biased vs 0.60 knob by construction)`;
-					if (ns >= 0.15 && ns <= 0.35 && as <= 0.06 && ratio >= 5) return { verdict: "NAILED", detail };
-					if (ns >= 0.12 && ns <= 0.40 && as <= 0.10 && ratio >= 3) return { verdict: "STRONG", detail };
-					if (ns < as) return { verdict: "INVERSE", detail };
-					return { verdict: "WEAK", detail };
-				},
+				breakdown: { type: "duckdb", sql: H1_SQL },
+				select: { l: { where: { grp: "late" } }, o: { where: { grp: "on_time" } } },
+				expect: { metric: "l.repeat_rate / o.repeat_rate", op: "<=", target: r3(LATE_REPEAT_RATIO), floor: halfToward(LATE_REPEAT_RATIO, 1) },
+				minCohort: 300,
 			},
 		],
 	},
 	{
-		id: "H7-hash-bucket-drop",
+		id: "H2-rainy-days",
+		hook: "H2",
+		archetype: "bespoke",
+		narrative: `Rain sends people to delivery apps and slows couriers. Warehouse market_ops_daily records precipitation by city and UTC day; on rainy days (${RAIN_DAY_MM}+ mm) customers in that city open the app ${RAIN_DEMAND_MULT}x as often, so orders per city-day are ${RAIN_DEMAND_MULT}x the city's dry-day average. Quoted ETAs ignore the weather, so deliveries on rainy days run ${RAIN_LATE_MIN} minutes later against the promise (minutes_late), while checkout conversion is unchanged. Read: event orders joined to the warehouse weather by city and date.`,
+		mixpanelReport: { type: "Insights + warehouse", event: "order placed", measure: "total", breakdown: "city", chart: "daily", join: "market_ops_daily.precipitation_mm on date + city", second: "order delivered, average minutes_late, rainy vs dry days" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H2_SQL },
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.rain_lift", op: "between", target: band(RAIN_DEMAND_MULT) },
+				minCohort: 3000,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H2_SQL },
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.late_diff", op: "between", target: band(RAIN_LATE_MIN) },
+				minCohort: 3000,
+			},
+		],
+	},
+	{
+		id: "H3-quoted-eta-threshold",
+		hook: "H3",
+		archetype: "funnel-conversion-by-segment",
+		narrative: `Customers abandon checkout when the promised delivery time is long. The chance a checkout becomes an order falls smoothly with quoted_eta_mins (logistic centered at ${ETA_THRESHOLD_MIN} min, softness ${ETA_SOFT_MIN} min). Plateaus are solved from the quote distribution (log-normal, median ${ETA_MEDIAN_MIN} min) so that checkouts quoted ${ETA_THRESHOLD_MIN} min or less convert ${PLACE_FAST * 100}% of the time on average and longer quotes ${PLACE_SLOW * 100}% (${r3(PLACE_SLOW / PLACE_FAST)}x). Fees, payment failures, and the experiment act on both buckets alike. Read: per checkout (order_id), order placed within 1 hour.`,
+		mixpanelReport: { type: "Funnels", steps: ["checkout started", "order placed"], counting: "totals", holdPropertyConstant: "order_id", window: "1 hour", breakdown: `step 1 quoted_eta_mins (custom buckets <= ${ETA_THRESHOLD_MIN}, > ${ETA_THRESHOLD_MIN})` },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H3_SQL },
+				select: { s: { where: { grp: "slow" } }, q: { where: { grp: "quick" } } },
+				expect: { metric: "s.conv / q.conv", op: "between", target: band(PLACE_SLOW / PLACE_FAST) },
+				minCohort: 2000,
+			},
+		],
+	},
+	{
+		id: "H4-card-processor-incident",
+		hook: "H4",
+		archetype: "bespoke",
+		narrative: `From ${D(PAY_INCIDENT_START)} to ${D(PAY_INCIDENT_END)} (exclusive) Forkfly's card processor degrades: ${INCIDENT_FAIL * 100}% of card payments that would have gone through fail ("payment failed", decline_code processor_unavailable) and the order is lost. Apple Pay, Google Pay, and PayPal are untouched. Warehouse payment_gateway_daily marks card as major_outage on those days with decline_rate ≈ ${r3(1 - (1 - BASE_PAY_FAIL) * (1 - INCIDENT_FAIL))}. Read: per-checkout conversion for card vs other methods, incident days vs the ${INC_BASE_DAYS} days either side (difference in differences) = 1 - ${INCIDENT_FAIL}. About 1,200 card checkouts fall in the incident, so the read uses the knob as target with a half-effect ceiling.`,
+		mixpanelReport: { type: "Funnels + warehouse", steps: ["checkout started", "order placed"], counting: "totals", holdPropertyConstant: "order_id", window: "1 hour", breakdown: "payment_method", chart: "daily", join: "payment_gateway_daily.gateway_status on date + payment_method" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H4_SQL },
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.did", op: "<=", target: 1 - INCIDENT_FAIL, floor: halfToward(1 - INCIDENT_FAIL, 1) },
+				minCohort: 500,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `SELECT 'all' AS grp, count(*) FILTER (WHERE gateway_status = 'major_outage') AS outage_rows,
+ avg(decline_rate) FILTER (WHERE gateway_status = 'major_outage') AS outage_decline
+FROM ${WH("payment_gateway_daily")}`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.outage_decline", op: "between", target: band(1 - (1 - BASE_PAY_FAIL) * (1 - INCIDENT_FAIL)) },
+			},
+		],
+	},
+	{
+		id: "H5-smart-addons-experiment",
+		hook: "H5",
+		archetype: "experiment-lift",
+		narrative: `The "${ADDONS_EXPERIMENT}" test starts ${D(ADDONS_START)}: customers are split 50/50 (sticky; exposure $experiment_started 1 s before their first checkout on or after the start). In the "${ADDONS_VARIANT}" arm the checkout screen suggests a dessert, drink, or side; ${ADDON_TAKE * 100}% of variant orders add one (item added to cart with added_from = addon_suggestion), so items per order rise by ${ADDON_TAKE} and the basket grows, while checkout → order conversion is unchanged. Items per order also depend on household size, and the arms can differ a little in household mix, so the lift is read pre-period adjusted: (variant after − before) − (control after − before) items per order, with the knob as target and a half-effect floor.`,
+		mixpanelReport: { type: "Insights (or Experiments)", event: "order placed", measure: "average items_count and average subtotal_usd", breakdown: `user property "${EXP_KEY}"`, dateRange: `${D(ADDONS_START)} to ${D(DATASET_END)}`, second: "Funnels checkout started → order placed, hold order_id, by arm" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H5_DID_SQL },
+				select: { a: { where: { grp: "all" } } },
+				// pre-period means differ by which customers ordered when (SE about 0.02 items), so a half-effect floor
+				expect: { metric: "a.did", op: ">=", target: ADDON_TAKE, floor: ADDON_TAKE / 2 },
+				minCohort: 2000,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H5_SQL },
+				select: { v: { where: { grp: ADDONS_VARIANT } }, c: { where: { grp: "Control" } } },
+				// no engineered conversion effect: the arms convert alike
+				expect: { metric: "v.conv / c.conv", op: "between", target: band(1) },
+				minCohort: 2000,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}, ${H5_ARMS}
+SELECT 'all' AS grp, count(DISTINCT ev.uid) AS user_count,
+ count(*) FILTER (WHERE added_from = 'addon_suggestion' AND (t < TIMESTAMP '${TS(ADDONS_START)}' OR v.arm IS DISTINCT FROM '${ADDONS_VARIANT}')) AS impure
+FROM ev LEFT JOIN v ON v.uid = ev.uid WHERE event = 'item added to cart'`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				// exact: suggestions exist only in the variant after the start
+				expect: { metric: "a.impure", op: "between", target: [0, 0] },
+			},
+		],
+	},
+	{
+		id: "H6-channel-economics",
+		hook: "H6",
+		archetype: "funnel-conversion-by-segment",
+		narrative: `Coupon affiliates (deal sites) are Forkfly's cheapest paid channel per signup and its worst at keeping customers. Warehouse marketing_spend_daily bills each paid channel as a paced daily budget plus a per-signup component (coupon affiliates are mostly per-signup), with seeded day noise: $${CPA_USD.coupon_affiliates} coupon affiliates, $${CPA_USD.paid_social} paid social, $${CPA_USD.paid_search} paid search per Mixpanel signup over the window. ${COUPON_CHURN * 100}% of coupon-affiliate customers leave after their discounted first order (DEAL15), so their 30-day repeat rate is ${1 - COUPON_CHURN}x every other channel's, and spend per repeat customer comes out level with paid social: (${CPA_USD.coupon_affiliates} / ${1 - COUPON_CHURN}) / ${CPA_USD.paid_social} = ${r3(CPA_USD.coupon_affiliates / (1 - COUPON_CHURN) / CPA_USD.paid_social)}. About 400 coupon first orders back the repeat read, so it uses the knob as target with a half-effect ceiling; spend per repeat customer uses a floor (the claim is that the channel is not cheaper per kept customer).`,
+		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "marketing_spend_daily.spend_usd", funnel: `order delivered → order placed, ${REPEAT_DAYS}-day window, new customers, breakdown user property acquisition_channel` },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H6_SQL },
+				select: { c: { where: { grp: "coupon_affiliates" } }, s: { where: { grp: "paid_search" } } },
+				expect: { metric: "c.spend_per_signup / s.spend_per_signup", op: "between", target: band(CPA_USD.coupon_affiliates / CPA_USD.paid_search) },
+				minCohort: 500,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H1_SQL },
+				select: { c: { where: { grp: "coupon" } }, o: { where: { grp: "other_channels" } } },
+				expect: { metric: "c.repeat_rate / o.repeat_rate", op: "<=", target: 1 - COUPON_CHURN, floor: halfToward(1 - COUPON_CHURN, 1) },
+				minCohort: 300,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H6_SQL },
+				select: { c: { where: { grp: "coupon_affiliates" } }, s: { where: { grp: "paid_social" } } },
+				expect: { metric: "c.spend_per_repeat / s.spend_per_repeat", op: ">=", target: r3(CPA_USD.coupon_affiliates / (1 - COUPON_CHURN) / CPA_USD.paid_social), floor: 0.75 },
+				minCohort: 500,
+			},
+		],
+	},
+	{
+		id: "H7-pass-trial-two-orders",
 		hook: "H7",
 		archetype: "funnel-conversion-by-segment",
-		narrative:
-			"Users whose user_id first char has an ODD char code lose 30% of order-delivered " +
-			"events. delivered-per-placed(odd) ÷ delivered-per-placed(even) ≈ 0.70 — placed " +
-			"normalizes engagement and H1's drop is hash-independent, so both cancel. " +
-			"Measured 0.716 at 2K.",
+		narrative: `Forkfly Pass free trials (${TRIAL_DAYS} days, $${PASS_PRICE_USD}/month after) convert on usage: a trial with ${TRIAL_MAGIC_ORDERS}+ orders during the trial converts to paid ${TRIAL_CONV_HIGH * 100}% of the time, one with 0-1 orders ${TRIAL_CONV_LOW * 100}%. "pass trial ended" carries outcome and orders_during_trial (orders placed in the 14 days from the trial start). Read: trials started in the window through ${TRIAL_READ_END.slice(0, 10)} (complete trials), conversion by orders during the trial.`,
+		mixpanelReport: { type: "Insights", event: "pass trial ended", measure: "share with outcome = converted", breakdown: `orders_during_trial (custom buckets 0-1, ${TRIAL_MAGIC_ORDERS}+)`, filter: "customers who did pass trial started in the window" },
 		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H7_SQL },
+				select: { h: { where: { grp: "two_plus" } } },
+				expect: { metric: "h.conv", op: "between", target: band(TRIAL_CONV_HIGH) },
+				minCohort: 400,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H7_SQL },
+				select: { l: { where: { grp: "zero_one" } } },
+				expect: { metric: "l.conv", op: "between", target: band(TRIAL_CONV_LOW) },
+				minCohort: 400,
+			},
 			{
 				breakdown: {
 					type: "duckdb",
-					sql: `WITH ${EV_CTE},
-pu AS (SELECT uid, (ascii(substr(uid,1,1)) % 2 = 0) AS even_bucket,
-  count(*) FILTER (WHERE event='order placed') AS placed,
-  count(*) FILTER (WHERE event='order delivered') AS delivered
-FROM ev WHERE event IN ('order placed','order delivered') GROUP BY 1,2)
-SELECT even_bucket, count(*)::BIGINT AS users,
-  sum(delivered)::DOUBLE/nullif(sum(placed),0) AS dpp
-FROM pu GROUP BY even_bucket ORDER BY even_bucket`,
+					sql: `WITH ${ID_CTE},
+s AS (SELECT uid, min(t) AS ts FROM ev WHERE event = 'pass trial started' GROUP BY 1),
+e AS (SELECT uid, orders_during_trial AS n FROM ev WHERE event = 'pass trial ended'),
+c AS (SELECT s.uid, count(o.uid) AS placed FROM s LEFT JOIN ev o ON o.uid = s.uid AND o.event = 'order placed' AND o.t >= s.ts AND o.t < s.ts + INTERVAL ${TRIAL_DAYS} DAY GROUP BY 1)
+SELECT 'all' AS grp, count(*) AS user_count, count(*) FILTER (WHERE e.n <> c.placed) AS mismatched
+FROM e JOIN c ON c.uid = e.uid`,
 				},
-				assert: (rows) => {
-					const odd = rows?.find(r => r.even_bucket === false);
-					const even = rows?.find(r => r.even_bucket === true);
-					if (!odd || !even || Number(odd.users) < 2500 || Number(even.users) < 2500) {
-						return { verdict: "WEAK", detail: `hash buckets too small: odd=${odd?.users ?? 0} even=${even?.users ?? 0}` };
-					}
-					const ratio = Number(odd.dpp) / Number(even.dpp);
-					return bandVerdict(ratio, [0.65, 0.75], [0.60, 0.80],
-						`delivered-per-placed odd÷even=${ratio.toFixed(3)} (mech 0.70; odd=${Number(odd.dpp).toFixed(3)} even=${Number(even.dpp).toFixed(3)})`,
-						ratio > 1.0);
-				},
+				select: { a: { where: { grp: "all" } } },
+				// exact: orders_during_trial equals the orders placed in the trial
+				expect: { metric: "a.mismatched", op: "between", target: [0, 0] },
 			},
 		],
 	},
 	{
-		id: "H8-order-count-magic",
+		id: "H8-pass-free-delivery-minimum",
 		hook: "H8",
-		archetype: "frequency-sweet-spot",
-		narrative:
-			"order_total scaled by hook-time order count: 4-8 orders → 1.4x, 9+ → 0.65x. The hook " +
-			"buckets BEFORE H4 duplication and H6 deletion, so output-count bucketing is edge-" +
-			"contaminated; the clean population excludes rainy-window orderers and H6-churn " +
-			"candidates (users with no post-day-14 activity). On it: sweet/base ≈ 1.40, " +
-			"over/sweet ≈ 0.46 (= 0.65/1.4). Measured 1.405 and 0.456 at 2K.",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${EV_CTE},
-fu AS (SELECT uid, min(t) AS first_t FROM ev GROUP BY 1),
-flags AS (SELECT r.uid,
-  max(CASE WHEN r.event='order placed' AND r.day_idx BETWEEN 20 AND 27 THEN 1 ELSE 0 END) AS rainy,
-  max(CASE WHEN r.t > f.first_t + INTERVAL '14 days' THEN 1 ELSE 0 END) AS alive,
-  count(*) FILTER (WHERE r.event='order placed') AS orders,
-  sum(TRY_CAST(r.order_total AS DOUBLE)) FILTER (WHERE r.event='order placed') AS spend
-FROM ev r JOIN fu f USING(uid) GROUP BY 1)
-SELECT CASE WHEN orders BETWEEN 4 AND 8 THEN 'sweet' WHEN orders >= 9 THEN 'over' ELSE 'base' END AS bucket,
-  count(*)::BIGINT AS users, sum(spend)/nullif(sum(orders),0) AS aot
-FROM flags WHERE rainy = 0 AND alive = 1 AND orders > 0 GROUP BY 1 ORDER BY 1`,
-				},
-				assert: (rows) => {
-					const base = rows?.find(r => r.bucket === "base");
-					const sweet = rows?.find(r => r.bucket === "sweet");
-					if (!base || !sweet || Number(base.users) < 130 || Number(sweet.users) < 450) {
-						return { verdict: "WEAK", detail: `clean-pop buckets too small: base=${base?.users ?? 0} sweet=${sweet?.users ?? 0}` };
-					}
-					const ratio = Number(sweet.aot) / Number(base.aot);
-					return bandVerdict(ratio, [1.25, 1.55], [1.15, 1.70],
-						`clean-pop sweet/base order_total=${ratio.toFixed(3)} (mech 1.40; sweet=${Number(sweet.aot).toFixed(1)} n=${sweet.users}, base=${Number(base.aot).toFixed(1)} n=${base.users})`,
-						ratio < 1.0);
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${EV_CTE},
-fu AS (SELECT uid, min(t) AS first_t FROM ev GROUP BY 1),
-flags AS (SELECT r.uid,
-  max(CASE WHEN r.event='order placed' AND r.day_idx BETWEEN 20 AND 27 THEN 1 ELSE 0 END) AS rainy,
-  max(CASE WHEN r.t > f.first_t + INTERVAL '14 days' THEN 1 ELSE 0 END) AS alive,
-  count(*) FILTER (WHERE r.event='order placed') AS orders,
-  sum(TRY_CAST(r.order_total AS DOUBLE)) FILTER (WHERE r.event='order placed') AS spend
-FROM ev r JOIN fu f USING(uid) GROUP BY 1)
-SELECT CASE WHEN orders BETWEEN 4 AND 8 THEN 'sweet' WHEN orders >= 9 THEN 'over' ELSE 'base' END AS bucket,
-  count(*)::BIGINT AS users, sum(spend)/nullif(sum(orders),0) AS aot
-FROM flags WHERE rainy = 0 AND alive = 1 AND orders > 0 GROUP BY 1 ORDER BY 1`,
-				},
-				assert: (rows) => {
-					const sweet = rows?.find(r => r.bucket === "sweet");
-					const over = rows?.find(r => r.bucket === "over");
-					if (!sweet || !over || Number(sweet.users) < 450 || Number(over.users) < 1000) {
-						return { verdict: "WEAK", detail: `clean-pop buckets too small: sweet=${sweet?.users ?? 0} over=${over?.users ?? 0}` };
-					}
-					const ratio = Number(over.aot) / Number(sweet.aot);
-					return bandVerdict(ratio, [0.40, 0.53], [0.35, 0.58],
-						`clean-pop over/sweet order_total=${ratio.toFixed(3)} (mech 0.464 = 0.65/1.4; over=${Number(over.aot).toFixed(1)} n=${over.users})`,
-						ratio > 1.0);
-				},
-			},
-		],
-	},
-	{
-		id: "H9-tier-delivery-speed",
-		hook: "H9",
 		archetype: "cohort-prop-scale",
-		narrative:
-			"Delivery timing properties scaled by tier: QuickBite+ 0.67x, Free 1.4x → QB+/Free " +
-			"property ratio 0.479 on actual_delivery_mins and eta_mins. The companion funnel-" +
-			"timestamp compression touches only the FIRST checkout→delivered sequence per user " +
-			"(~1 of 13 checkouts) — invisible to cross-event aggregation, so wall-clock TTC is " +
-			"deliberately NOT asserted (visible only in Mixpanel's per-instance funnel report). " +
-			"Measured 0.476/0.481 at 2K.",
+		narrative: `Forkfly Pass waives the delivery fee on orders of $${PASS_FREE_DELIVERY_MIN} or more, and members top up small baskets to reach it: ${BUMP_SHARE * 100}% of Pass orders (trial or member at order time) with a $${BUMP_FROM}-${PASS_FREE_DELIVERY_MIN - 0.01} subtotal add an item that lifts them past $${PASS_FREE_DELIVERY_MIN}. Topped-up baskets land at $${PASS_FREE_DELIVERY_MIN + 0.5}-${PASS_FREE_DELIVERY_MIN + 4.5}, so among $${BUMP_FROM}-${PASS_FREE_DELIVERY_MIN + 4.99} orders the share under $${PASS_FREE_DELIVERY_MIN} is ${r3(1 - BUMP_SHARE)}x for Pass orders vs non-Pass orders (conditioning on the $${BUMP_FROM}-${PASS_FREE_DELIVERY_MIN + 4.99} range keeps household basket-size mix out of the read). Pass orders cluster on about 2,400 customers, so the read uses the knob as target with a half-effect ceiling.`,
+		mixpanelReport: { type: "Insights", event: "order placed", measure: "total", breakdown: ["pass_status", `subtotal_usd (custom buckets 10-15, 15-20)`], formula: "share of orders in the $10-15 bucket" },
 		assertions: [
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${EV_CTE}
-SELECT avg(TRY_CAST(actual_delivery_mins AS DOUBLE)) FILTER (WHERE subscription_tier='QuickBite+') /
-       avg(TRY_CAST(actual_delivery_mins AS DOUBLE)) FILTER (WHERE subscription_tier='Free') AS adm_ratio,
-  count(*) FILTER (WHERE subscription_tier='QuickBite+')::BIGINT AS n_plus
-FROM ev WHERE event='order delivered'`,
-				},
-				assert: (rows) => {
-					const r = rows?.[0];
-					if (!r || Number(r.n_plus) < 5000) {
-						return { verdict: "WEAK", detail: `QB+ delivered too few: n_plus=${r?.n_plus ?? 0}` };
-					}
-					const x = Number(r.adm_ratio);
-					return bandVerdict(x, [0.44, 0.52], [0.41, 0.56],
-						`actual_delivery_mins QB+÷Free=${x.toFixed(3)} (mech 0.479 = 0.67/1.4; n_plus=${r.n_plus})`,
-						x > 1.0);
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${EV_CTE}
-SELECT avg(TRY_CAST(eta_mins AS DOUBLE)) FILTER (WHERE subscription_tier='QuickBite+') /
-       avg(TRY_CAST(eta_mins AS DOUBLE)) FILTER (WHERE subscription_tier='Free') AS eta_ratio,
-  count(*) FILTER (WHERE subscription_tier='QuickBite+')::BIGINT AS n_plus
-FROM ev WHERE event='order tracked'`,
-				},
-				assert: (rows) => {
-					const r = rows?.[0];
-					if (!r || Number(r.n_plus) < 5000) {
-						return { verdict: "WEAK", detail: `QB+ tracked too few: n_plus=${r?.n_plus ?? 0}` };
-					}
-					const x = Number(r.eta_ratio);
-					return bandVerdict(x, [0.44, 0.52], [0.41, 0.56],
-						`eta_mins QB+÷Free=${x.toFixed(3)} (mech 0.479; n_plus=${r.n_plus})`,
-						x > 1.0);
-				},
+				breakdown: { type: "duckdb", sql: H8_SQL },
+				select: { p: { where: { grp: "pass" } }, n: { where: { grp: "no_pass" } } },
+				// Pass orders cluster on about 2,500 customers (relative SE about 5%), so a half-effect ceiling
+				expect: { metric: "p.small_basket_share / n.small_basket_share", op: "<=", target: r3(1 - BUMP_SHARE), floor: halfToward(1 - BUMP_SHARE, 1) },
+				minCohort: 1000,
 			},
 		],
 	},
 	{
-		id: "H10-city-density",
-		hook: "H10",
-		archetype: "funnel-conversion-by-segment",
-		narrative:
-			"Reorder-funnel conversionRate scaled per city in funnel-pre: SF/NY 40→56, HOU/PHX " +
-			"40→28. Non-converted instances take u.integer(1, steps−1) steps (determineConversion, " +
-			"lib/generators/funnels.js) — the LAST step fires only on conversion, so P(reorder per " +
-			"instance) = conversionRate exactly. Delivered-per-user is city-flat, so reorders-per-" +
-			"DELIVERED recovers the knobs: dense/base = 56/40 = 1.40, sprawl/base = 28/40 = 0.70. " +
-			"Measured 1.404 and 0.696 at 2K.",
+		id: "H9-service-fee-change",
+		hook: "H9",
+		archetype: "temporal-inflection",
+		narrative: `On ${D(FEE_CHANGE)} the service fee on non-Pass orders rises from ${FEE_RATE_BEFORE * 100}% to ${FEE_RATE_AFTER * 100}% of the subtotal (Pass stays at ${PASS_FEE_RATE * 100}%). Non-Pass checkouts convert to orders at ${FEE_KEEP}x their earlier rate; Pass checkouts do not change. Read: per-checkout conversion, non-Pass after/before over Pass after/before (difference in differences), card-incident days excluded.`,
+		mixpanelReport: { type: "Funnels", steps: ["checkout started", "order placed"], counting: "totals", holdPropertyConstant: "order_id", window: "1 hour", breakdown: "pass_status", chart: `before vs after ${D(FEE_CHANGE)}` },
 		assertions: [
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${EV_CTE},
-pu AS (SELECT uid, any_value(city) AS city,
-  count(*) FILTER (WHERE event='order delivered') AS delivered,
-  count(*) FILTER (WHERE event='reorder initiated') AS reorders
-FROM ev WHERE event IN ('order delivered','reorder initiated') GROUP BY 1),
-grp AS (SELECT CASE WHEN city IN ('San Francisco','New York') THEN 'dense'
-  WHEN city IN ('Houston','Phoenix') THEN 'sprawl' ELSE 'base' END AS g,
-  count(*)::BIGINT AS users, sum(reorders)::DOUBLE/nullif(sum(delivered),0) AS rpd
-FROM pu GROUP BY 1)
-SELECT g, users, rpd FROM grp ORDER BY g`,
-				},
-				assert: (rows) => {
-					const dense = rows?.find(r => r.g === "dense");
-					const base = rows?.find(r => r.g === "base");
-					if (!dense || !base || Number(dense.users) < 1800 || Number(base.users) < 1800) {
-						return { verdict: "WEAK", detail: `city groups too small: dense=${dense?.users ?? 0} base=${base?.users ?? 0}` };
-					}
-					const ratio = Number(dense.rpd) / Number(base.rpd);
-					return bandVerdict(ratio, [1.30, 1.50], [1.20, 1.60],
-						`reorders-per-delivered dense÷base=${ratio.toFixed(3)} (mech 1.40; dense=${Number(dense.rpd).toFixed(3)} base=${Number(base.rpd).toFixed(3)})`,
-						ratio < 1.0);
-				},
+				breakdown: { type: "duckdb", sql: H9_SQL },
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.did", op: "between", target: band(FEE_KEEP) },
+				minCohort: 1000,
+			},
+		],
+	},
+	{
+		id: "H10-order-again-launch",
+		hook: "H10",
+		archetype: "funnel-ttc-by-segment",
+		narrative: `"Order Again" ships ${D(REORDER_LAUNCH)}: customers with a past delivery can reorder from a recent restaurant in one tap. Adoption ramps over ${REORDER_RAMP_DAYS} days to about ${REORDER_SHARE * 100}% of eligible sessions (each customer's habit scatters around that). An Order Again session reaches "order placed" ${REORDER_TTC_MULT}x as fast as a browsing session (median ${TTC_MEDIAN_MIN} min from app opened) and reaches checkout far more often, so sessions that use it end in an order ${r3(REORDER_CONV_RATIO)}x as often as browsing sessions of the same customers. No reorder tapped exists before the launch.`,
+		mixpanelReport: { type: "Funnels", steps: ["app opened", "order placed"], counting: "totals", window: `${TTC_WINDOW_MIN} minutes`, measure: "median time to convert", breakdown: "step 2 entry_point (reorder vs others)", dateRange: `${D(REORDER_LAUNCH)} to ${D(DATASET_END)}` },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H10_SQL },
+				select: { r: { where: { grp: "reorder" } }, b: { where: { grp: "browse" } } },
+				expect: { metric: "r.med_minutes / b.med_minutes", op: "between", target: band(REORDER_TTC_MULT) },
+				minCohort: 2000,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H10_CONV_SQL },
+				select: { r: { where: { grp: "reorder" } }, b: { where: { grp: "browse" } } },
+				expect: { metric: "r.order_rate / b.order_rate", op: "between", target: band(REORDER_CONV_RATIO) },
+				minCohort: 2000,
 			},
 			{
 				breakdown: {
 					type: "duckdb",
-					sql: `WITH ${EV_CTE},
-pu AS (SELECT uid, any_value(city) AS city,
-  count(*) FILTER (WHERE event='order delivered') AS delivered,
-  count(*) FILTER (WHERE event='reorder initiated') AS reorders
-FROM ev WHERE event IN ('order delivered','reorder initiated') GROUP BY 1),
-grp AS (SELECT CASE WHEN city IN ('San Francisco','New York') THEN 'dense'
-  WHEN city IN ('Houston','Phoenix') THEN 'sprawl' ELSE 'base' END AS g,
-  count(*)::BIGINT AS users, sum(reorders)::DOUBLE/nullif(sum(delivered),0) AS rpd
-FROM pu GROUP BY 1)
-SELECT g, users, rpd FROM grp ORDER BY g`,
+					sql: `WITH ${ID_CTE}
+SELECT 'all' AS grp, count(DISTINCT uid) AS user_count, count(*) FILTER (WHERE t < TIMESTAMP '${TS(REORDER_LAUNCH)}') AS early FROM ev WHERE event = 'reorder tapped'`,
 				},
-				assert: (rows) => {
-					const sprawl = rows?.find(r => r.g === "sprawl");
-					const base = rows?.find(r => r.g === "base");
-					if (!sprawl || !base || Number(sprawl.users) < 1800 || Number(base.users) < 1800) {
-						return { verdict: "WEAK", detail: `city groups too small: sprawl=${sprawl?.users ?? 0} base=${base?.users ?? 0}` };
-					}
-					const ratio = Number(sprawl.rpd) / Number(base.rpd);
-					return bandVerdict(ratio, [0.63, 0.77], [0.56, 0.84],
-						`reorders-per-delivered sprawl÷base=${ratio.toFixed(3)} (mech 0.70; sprawl=${Number(sprawl.rpd).toFixed(3)} base=${Number(base.rpd).toFixed(3)})`,
-						ratio > 1.0);
-				},
+				select: { a: { where: { grp: "all" } } },
+				// exact: Order Again does not exist before the launch
+				expect: { metric: "a.early", op: "between", target: [0, 0] },
 			},
 		],
 	},
 ];
+
+export default config;
+export { LATE_REPEAT_RATIO, RAIN_SESSION_SHARE, PLACE_EARLY, PLACE_LATE };
