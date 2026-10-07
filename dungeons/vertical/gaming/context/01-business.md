@@ -53,7 +53,7 @@ Paid campaigns are optimized for installs. Daily spend by channel comes from the
 ## Players the team talks about
 
 - **New players vs veterans.** New players created their account in the window. Veterans joined before June 4; some play every week, and some drift away between seasons.
-- **Core, regular, and casual players.** Core players log in most days and run heroic and mythic dungeons; regular players play a few times a week; casual players drop in now and then, often on weekends. Most revenue comes from a small share of players.
+- **Core, regular, and casual players.** Core players log in most days and run more heroic and mythic dungeons than anyone else; regular players play a few times a week; casual players drop in now and then and mostly play on normal difficulty. Most revenue comes from a small share of players.
 - **Payers.** A minority of players ever buy anything; the team tracks payers separately from everyone else.
 - **Roles and regions.** Most players main a damage role. North America is the largest region, then Europe, then Asia-Pacific.
 

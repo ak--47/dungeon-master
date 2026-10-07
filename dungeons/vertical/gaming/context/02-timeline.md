@@ -33,7 +33,7 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 - Should the Guided tutorial ship to every new player?
 - Did the Ashen Warden rebalance work, and did patch 4.0.2 change anything else?
 - Do guilds really keep new players around?
-- Which paid channel deserves more budget? Is TikTok worth its share of the budget?
+- Which paid channel deserves more budget?
 - Did Season 4 bring players back, and how did the new Ember Pass sell?
 - Was the Double XP weekend worth running again?
 - What happened to EU dungeon activity in mid-September, and how big was it?

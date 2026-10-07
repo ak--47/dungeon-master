@@ -50,7 +50,7 @@ FROM users;
 CREATE OR REPLACE TEMP TABLE signups AS
 SELECT uid, t AS t0, acquisition_channel AS ch, server_region FROM ev WHERE event = 'account created';
 
--- onboarding steps within 7 days of signup (each step happens once per player)
+-- onboarding steps within 7 days of signup (a player-level flag; tutorial started can repeat on a later visit)
 CREATE OR REPLACE TEMP TABLE onboarding AS
 SELECT s.uid, s.t0, s.ch, s.server_region, p.variant,
  coalesce(bool_or(e.event = 'character created' AND e.t < s.t0 + INTERVAL 7 DAY), false) AS made_character,
@@ -253,6 +253,16 @@ SELECT '24h' AS window, guild_24h AS early_guild, count(*) AS players, round(avg
 UNION ALL
 SELECT '7d', guild_7d, count(*), round(avg(ret_14_27::INT), 4) FROM g GROUP BY 2 ORDER BY 1, 2;
 
+-- the plain recipe without the finisher filter: ALL new players (signup ≤ Sep 3), guild joined within 72 h
+WITH s AS (SELECT uid, t0, completed FROM onboarding WHERE t0 <= TIMESTAMP '2026-09-03 23:59:59'),
+g AS (SELECT s.uid, any_value(s.completed) AS completed,
+  coalesce(bool_or(e.event = 'guild joined' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 72 HOUR), false) AS early_guild,
+  coalesce(bool_or(e.event = 'game launched' AND e.t >= s.t0 + INTERVAL 14 DAY AND e.t < s.t0 + INTERVAL 28 DAY), false) AS ret_14_27
+  FROM s LEFT JOIN ev e ON e.uid = s.uid GROUP BY 1),
+r AS (SELECT early_guild, count(*) AS players, round(avg(completed::INT), 4) AS finished_tutorial, avg(ret_14_27::INT) AS ret FROM g GROUP BY 1)
+SELECT early_guild, players, finished_tutorial, round(ret, 4) AS ret_day_14_27,
+ round(ret / (SELECT ret FROM r WHERE early_guild), 3) AS ratio_vs_guild FROM r ORDER BY 1;
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q3 — Ashen Warden weekly win rate (see STORY H3 for before/after by boss)
 -- ─────────────────────────────────────────────────────────────────────────
@@ -275,6 +285,12 @@ q AS (SELECT count(*) AS eu_queues, count(*) FILTER (WHERE t_start IS NOT NULL) 
 SELECT o.eu AS eu_starts_outage, round(base.rel * o.other) AS eu_starts_expected, round(base.rel * o.other - o.eu) AS eu_starts_missing,
  round(o.eu / (base.rel * o.other), 3) AS eu_relative, q.eu_queues, round(q.eu_queues_started::DOUBLE / q.eu_queues, 3) AS eu_queue_start_rate
 FROM o, base, q;
+
+-- matchmade queue wait (dungeon queued → dungeon started, same run_id) by region, outage days vs Aug 29 - Sep 28 otherwise
+SELECT server_region, (t_queue >= TIMESTAMP '2026-09-12' AND t_queue < TIMESTAMP '2026-09-15') AS outage, count(*) AS started_runs,
+ median(date_diff('second', t_queue, t_start)) AS median_wait_s, round(avg(date_diff('second', t_queue, t_start)), 1) AS avg_wait_s
+FROM runs WHERE t_queue IS NOT NULL AND t_start IS NOT NULL AND t_queue >= TIMESTAMP '2026-08-29' AND t_queue < TIMESTAMP '2026-09-29'
+GROUP BY 1, 2 ORDER BY 1, 2;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q5 — paid channel CAC (see STORY H5); per-channel payer counts for context
