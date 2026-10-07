@@ -108,4 +108,29 @@ describe.sequential('P2.1 session re-derivation after everything hook', () => {
 		});
 		expect(rows[0].stampedDivergence).toBe(0);
 	}, timeout);
+
+	test('a session_id the everything hook removed stays removed; other events keep the derived ids', async () => {
+		const baseline = await generate({ ...baseConfig });
+		const serverEvent = baseline.eventData[0].event;
+		const isServerSide = (e) => e.event === serverEvent;
+		let stripped = 0;
+		const results = await generate({
+			...baseConfig,
+			hook: (record, type) => {
+				if (type !== 'everything' || !Array.isArray(record)) return record;
+				for (const e of record) if (isServerSide(e)) { delete e.session_id; stripped++; }
+				return record;
+			},
+		});
+		expect(stripped).toBeGreaterThan(0);
+		const server = results.eventData.filter(isServerSide);
+		expect(server.length).toBe(stripped);
+		for (const e of server) expect(e).not.toHaveProperty('session_id');
+		// Sessions still derive from the full stream, so every other event keeps
+		// the id it gets without the hook.
+		const before = new Map(baseline.eventData.map(e => [e.insert_id, e.session_id]));
+		const others = results.eventData.filter(e => !isServerSide(e));
+		expect(others.length).toBeGreaterThan(0);
+		for (const e of others) expect(e.session_id).toBe(before.get(e.insert_id));
+	}, timeout);
 });

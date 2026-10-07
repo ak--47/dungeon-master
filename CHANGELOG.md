@@ -186,6 +186,16 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   a `userProps` + `stickyEventProps` key threw although every event carried
   it. A group key scoped to other events, or a `userProps` key that is not
   sticky, still throws. Output shift: none; configs that threw now run.
+- Keep a `session_id` that the `everything` hook removed. The engine re-stamps
+  session ids on the final stream after `everything` (1.6 contract, so
+  time-shifted events match Mixpanel's derived sessions), and that pass put a
+  `session_id` back on server-side events whose hook deleted it. Every event
+  enters `everything` stamped, so an absent id is now treated as the hook's
+  choice; the event still shapes the other events' sessions. Real-estate
+  vertical, 1,000 users: 15,413 server-side events (`listing alert sent`,
+  `agent responded`, ...) carried a `session_id`; now 0, and no other event's
+  id changes. Output shift: only dungeons whose `everything` hook deletes
+  `session_id`.
 
 ### Added
 
@@ -215,6 +225,7 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   (0.45 in `avgActiveDaysPerUser` mode). It used to compare with one prior week
   at 0.7, whose day-to-day noise (sd about 0.24) failed decline runs by chance.
   "Today" is always rough in a streaming dataset; stories live in the history.
+
 
 
 

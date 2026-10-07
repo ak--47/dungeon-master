@@ -455,6 +455,11 @@ the four computed props. `sessionMetrics` defaults to `source: 'derived'`;
 the generator's pre-stamped `session_id` (from `assignSessionIds`) is a
 generator artifact Mixpanel never sees, kept available via
 `source: 'stamped'` and audited by the per-row `stampedDivergence` count.
+The engine re-stamps `session_id` on the final stream after `everything`, so
+time-shifted events get the label Mixpanel would derive. An event the
+`everything` hook stripped of `session_id` (a server-side event) stays
+stripped (1.9.0); it still shapes the other events' sessions, as every event
+does in Mixpanel's query-time sessionization.
 `eventBreakdown` and `uniques` accept `countType: 'sessions'` (count once
 per (user, session, segment) / distinct (user, session) pairs per bucket —
 `normal_query.cpp:1318-1352`). Sessions always derive from the FULL event
