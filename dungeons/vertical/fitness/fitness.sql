@@ -290,6 +290,14 @@ g AS (SELECT (d IN (SELECT d FROM od)) AS outage, count(DISTINCT d) AS days, cou
 SELECT outage, days, round(aff::DOUBLE / days, 1) AS watch_band_per_day, round(ctl::DOUBLE / days, 1) AS unaffected_per_day,
  round(aff::DOUBLE / ctl, 4) AS watch_band_per_unaffected,
  round((aff::DOUBLE / ctl) / (SELECT aff::DOUBLE / ctl FROM g WHERE NOT outage), 4) AS vs_baseline FROM g ORDER BY outage;
+-- same weekdays (Thu-Sat) one week before and after, so the Friday-Saturday dip cancels
+WITH w AS (SELECT CASE WHEN t::DATE BETWEEN DATE '2026-08-20' AND DATE '2026-08-22' THEN 'outage Aug 20-22'
+    ELSE 'same weekdays Aug 13-15 + 27-29' END AS period,
+  CASE WHEN tracking_source = 'wearable' AND wearable_type IN ('smartwatch', 'fitness_band') THEN 'aff' ELSE 'ctl' END AS arm, t::DATE AS d
+  FROM ev WHERE event = 'workout completed' AND (t::DATE BETWEEN DATE '2026-08-13' AND DATE '2026-08-15'
+    OR t::DATE BETWEEN DATE '2026-08-20' AND DATE '2026-08-22' OR t::DATE BETWEEN DATE '2026-08-27' AND DATE '2026-08-29'))
+SELECT period, count(DISTINCT d) AS days, round(count(*) FILTER (WHERE arm = 'aff')::DOUBLE / count(DISTINCT d), 1) AS watch_band_per_day,
+ round(count(*) FILTER (WHERE arm = 'ctl')::DOUBLE / count(DISTINCT d), 1) AS unaffected_per_day FROM w GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q7 — which devices were hit: per-device workouts per phone workout, outage vs the surrounding week
 WITH od AS (SELECT DISTINCT date::DATE AS d FROM wh_sync WHERE sync_error_rate > 0.2),
@@ -375,6 +383,12 @@ w AS (SELECT date_trunc('week', s.t0) AS wk,
   count(*) FILTER (WHERE ch <> 'paid_social') AS onn, count(b.uid) FILTER (WHERE ch <> 'paid_social') AS ob
   FROM signups s LEFT JOIN b ON b.uid = s.uid GROUP BY 1)
 SELECT round(sum(sb)::DOUBLE / sum(sn * ob::DOUBLE / nullif(onn, 0)), 4) AS paid_social_vs_other_same_week FROM w WHERE onn > 0;
+-- the same funnel with a 30-day conversion window (Mixpanel's default): purchase within 30 days of signup
+WITH b AS (SELECT s.uid, min(e.t) AS tb FROM signups s JOIN ev e ON e.uid = s.uid AND e.event = 'subscription purchased' AND e.t >= s.t0 GROUP BY 1)
+SELECT CASE WHEN s.ch = 'paid_social' THEN 'paid_social' ELSE 'other channels' END AS grp, count(*) AS signups,
+ round(avg((b.tb IS NOT NULL AND b.tb <= s.t0 + INTERVAL 30 DAY)::INT), 4) AS buy_rate_30d,
+ round(avg((b.tb IS NOT NULL)::INT), 4) AS buy_rate_whole_window
+FROM signups s LEFT JOIN b ON b.uid = s.uid GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q13 — Week-4 retention by first-week workout count (members who signed up by 2026-08-27)
 SELECT least(early_workouts, 6) AS first_week_workouts_capped, count(*) AS members, round(avg((w4_events > 0)::INT), 4) AS week4_retention
@@ -439,6 +453,32 @@ WITH w AS (SELECT (t >= TIMESTAMP '2026-08-20' AND t < TIMESTAMP '2026-08-23') A
 g AS (SELECT outage, count(*) FILTER (WHERE event = 'meal logged') AS meals, count(*) FILTER (WHERE event = 'app opened') AS opens FROM w GROUP BY 1)
 SELECT outage, meals, opens, round(meals::DOUBLE / opens, 4) AS meals_per_open,
  round((meals::DOUBLE / opens) / (SELECT meals::DOUBLE / opens FROM g WHERE NOT outage), 4) AS vs_baseline FROM g ORDER BY outage;
+-- all members, per day: outage vs the same weekdays (Thu-Sat) one week before and after
+WITH w AS (SELECT CASE WHEN t::DATE BETWEEN DATE '2026-08-20' AND DATE '2026-08-22' THEN 'outage Aug 20-22'
+    ELSE 'same weekdays Aug 13-15 + 27-29' END AS period, event, t::DATE AS d
+  FROM ev WHERE event IN ('meal logged', 'app opened') AND (t::DATE BETWEEN DATE '2026-08-13' AND DATE '2026-08-15'
+    OR t::DATE BETWEEN DATE '2026-08-20' AND DATE '2026-08-22' OR t::DATE BETWEEN DATE '2026-08-27' AND DATE '2026-08-29'))
+SELECT period, round(count(*) FILTER (WHERE event = 'app opened')::DOUBLE / count(DISTINCT d), 1) AS opens_per_day,
+ round(count(*) FILTER (WHERE event = 'meal logged')::DOUBLE / count(DISTINCT d), 1) AS meals_per_day FROM w GROUP BY 1 ORDER BY 1;
+-- Thu-Sat app opens in every full week outside Fall Reset (the week-to-week range)
+WITH d AS (SELECT t::DATE AS d, count(*) AS opens FROM ev WHERE event = 'app opened' AND dayofweek(t) IN (4, 5, 6)
+  AND t >= TIMESTAMP '2026-06-11' AND t < TIMESTAMP '2026-09-27' AND NOT (t >= TIMESTAMP '2026-09-08' AND t < TIMESTAMP '2026-09-22') GROUP BY 1),
+wk AS (SELECT date_trunc('week', d) AS wk, sum(opens) AS opens FROM d GROUP BY 1)
+SELECT count(*) FILTER (WHERE wk <> DATE '2026-08-17') AS other_weeks, min(opens) FILTER (WHERE wk <> DATE '2026-08-17') AS min_other,
+ max(opens) FILTER (WHERE wk <> DATE '2026-08-17') AS max_other, max(opens) FILTER (WHERE wk = DATE '2026-08-17') AS outage_week FROM wk;
+-- did members whose watch or band workouts stopped syncing use the app less than other members?
+-- (affected / unaffected members, outage vs the 7 days either side; z from Poisson counts,
+-- p two-sided via the Abramowitz-Stegun 7.1.26 erf approximation)
+WITH m AS (SELECT distinct_id AS uid, wearable_type IN ('smartwatch', 'fitness_band') AS aff FROM users),
+g AS (SELECT e.event, (e.t >= TIMESTAMP '2026-08-20' AND e.t < TIMESTAMP '2026-08-23') AS outage, m.aff, count(*)::DOUBLE AS n
+  FROM ev e JOIN m ON m.uid = e.uid WHERE e.event IN ('meal logged', 'app opened') AND e.t >= TIMESTAMP '2026-08-13' AND e.t < TIMESTAMP '2026-08-30' GROUP BY ALL),
+r AS (SELECT event, max(n) FILTER (WHERE outage AND aff) AS ao, max(n) FILTER (WHERE outage AND NOT aff) AS uo,
+  max(n) FILTER (WHERE NOT outage AND aff) AS ab, max(n) FILTER (WHERE NOT outage AND NOT aff) AS ub FROM g GROUP BY 1),
+z AS (SELECT event, (ao / uo) / (ab / ub) AS did, ln((ao / uo) / (ab / ub)) / sqrt(1 / ao + 1 / uo + 1 / ab + 1 / ub) AS z FROM r),
+e AS (SELECT *, abs(z) / sqrt(2) AS x, 1 / (1 + 0.3275911 * abs(z) / sqrt(2)) AS t FROM z)
+SELECT event, round(did, 4) AS affected_vs_other_members, round(z, 2) AS z,
+ round(1 - (1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * exp(-x * x)), 3) AS p_two_sided
+FROM e ORDER BY event;
 
 -- EVAL Q19 — subscription bookings by month (warehouse)
 SELECT strftime(date::DATE, '%Y-%m') AS month, sum(new_subscriptions) AS new_subscriptions,
