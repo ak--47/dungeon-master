@@ -9,7 +9,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 | Active member | A member with at least one member-initiated event in the period: any event except `push notification sent` and `$experiment_started` (both are server-side). DAU, WAU, and MAU use this definition. |
 | New members | Unique members with `account created` in the period. |
 | Onboarding completion | Share of new members with an onboarding `user followed` (`discovery_source = onboarding_suggestions`) within 1 day of `account created`. Members who skip the suggestions screen do not complete. |
-| New-member retention | Of new members who signed up on day 0, the share with any member-initiated event on day 14-27 after signup. Count only members whose bracket ends inside the data (signups through 2026-09-03). In Mixpanel Retention this needs a custom bracket and a return event of "any event" with the two server-side events excluded. |
+| New-member retention | Of new members who signed up on day 0, the share with any member-initiated event on day 14-27 after signup. Count only members whose bracket ends inside the data (signups through 2026-09-03). In Mixpanel Retention this needs a custom bracket and a return event that is a custom event combining every member-initiated event (all events except `push notification sent` and `$experiment_started`). "Any event" alone counts the server-side events. |
 | Time to first post | Hours from `account created` to the first `post created`. Report the median; read with a 7-day window and signups through 2026-09-24. |
 | Clips share | Share of `post viewed` (or `post created`) events with `post_type = clip`. |
 | Push open rate | `push notification opened` / `push notification sent` over the same pushes (match on `notification_id`, or compare totals over the same days and members). |
@@ -27,7 +27,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 
 Three tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). Days with no activity have a row with zeros. They join to events on the UTC date of the event and on the named dimension.
 
-Count columns (impressions, clicks, installs, requests, latency in milliseconds) hold whole numbers and are INTEGER in the raw file exports. The warehouse loader stores every numeric column as FLOAT64, so in BigQuery the INTEGER columns below appear as FLOAT64 with whole-number values.
+Count columns (impressions, clicks, installs, requests, latency in milliseconds) hold whole numbers. They are INTEGER in the raw file exports and INT64 in BigQuery. Money and rate columns are FLOAT (FLOAT64 in BigQuery).
 
 ### `marketing_spend_daily`
 
@@ -58,7 +58,7 @@ Daily health of the For You feed service by app platform, from the feed API's re
 | `p95_latency_ms` | INTEGER | milliseconds | 95th-percentile response time. |
 | `service_status` | STRING | — | Daily status for the platform: `operational` or `major_outage`, as posted on the status page. |
 
-Caveats: requests are pages, not posts, so `feed_requests` is much smaller than the Mixpanel count of For You `post viewed` and does not track it exactly day to day. A failed feed load shows no posts, so it fires no `post viewed`.
+Caveats: requests are pages, not posts, so `feed_requests` is much smaller than the Mixpanel count of For You `post viewed` and does not track it exactly day to day. Failed requests are not visible in Mixpanel.
 
 ### `ad_revenue_daily`
 

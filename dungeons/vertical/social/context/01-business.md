@@ -41,7 +41,7 @@ A creator can open a **Circle**: fans pay monthly for subscriber-only posts, Sto
 
 Murmur keeps a platform fee on each Circle payment and pays the rest to the creator. The fee was 20% until 2026-08-11 and 10% from 2026-08-12 (see 02-timeline.md). Mixpanel records a new subscription (`circle subscription started`, with tier) but not renewals or payments.
 
-Fans meet a Circle paywall in two places (`paywall_trigger`): when they tap a **locked post** (subscriber-only content) in a feed, or when they tap the **Join** button on a creator's profile. Locked posts show in feeds as blurred previews, and the ranking service puts them in For You for members who do not follow the creator, so many members who have never subscribed to anything still meet a paywall from time to time.
+Fans meet a Circle paywall in two places (`paywall_trigger`): when they tap a **locked post** (subscriber-only content) in a feed, or when they tap the **Join** button on a creator's profile. Locked posts show in feeds as blurred previews, and the ranking service puts them in For You for members who do not follow the creator, so many members who have never subscribed to anything still meet a paywall from time to time. Most of those views end without a purchase: in a typical quarter about 7% of members start a paid Circle, usually one Circle each at the Supporter price.
 
 ## How members find us
 

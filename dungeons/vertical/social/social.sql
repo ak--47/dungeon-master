@@ -182,7 +182,7 @@ SELECT account_type, count(*) AS signups, count(t1) AS posted_within_7d, round(c
 FROM first_post GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- STORY H10-circle-paywall-trigger — locked post 12% vs profile button 4%
+-- STORY H10-circle-paywall-trigger — locked post 6% vs profile button 2%
 -- ─────────────────────────────────────────────────────────────────────────
 SELECT paywall_trigger, count(*) FILTER (WHERE event = 'circle paywall viewed') AS paywall_views,
  count(*) FILTER (WHERE event = 'circle subscription started') AS subscriptions,
@@ -256,7 +256,7 @@ FROM ev e JOIN prof p ON p.uid = e.uid WHERE e.event = 'push notification sent' 
 GROUP BY 1, 2 ORDER BY 1, 2;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- EVAL Q5 — fee cut null: Circle subscriptions per paywall view before vs after 2026-08-12, overall and by trigger
+-- EVAL Q5 — fee cut and fan conversion: Circle subscriptions per paywall view before vs after 2026-08-12, overall and by trigger
 -- ─────────────────────────────────────────────────────────────────────────
 WITH g AS (SELECT 'all' AS grp, CASE WHEN t >= TIMESTAMP '2026-08-12' THEN 'after' ELSE 'before' END AS per,
   count(*) FILTER (WHERE event = 'circle paywall viewed') AS n, count(*) FILTER (WHERE event = 'circle subscription started') AS subs
@@ -274,6 +274,14 @@ SELECT grp, max(n) FILTER (WHERE per = 'before') AS views_before, max(n) FILTER 
  round((max(subs::DOUBLE / n) FILTER (WHERE per = 'after') - max(subs::DOUBLE / n) FILTER (WHERE per = 'before'))
   / sqrt(max((subs::DOUBLE / n) * (1 - subs::DOUBLE / n) / n) FILTER (WHERE per = 'after') + max((subs::DOUBLE / n) * (1 - subs::DOUBLE / n) / n) FILTER (WHERE per = 'before')), 2) AS z
 FROM g GROUP BY 1 ORDER BY 1;
+
+-- paywall mix (locked-post share of paywall views) before vs after the cut, and monthly conversion by trigger
+SELECT CASE WHEN t >= TIMESTAMP '2026-08-12' THEN '2 after' ELSE '1 before' END AS period,
+ round(count(*) FILTER (WHERE paywall_trigger = 'locked_post')::DOUBLE / count(*), 4) AS locked_post_share_of_views
+FROM ev WHERE event = 'circle paywall viewed' GROUP BY 1 ORDER BY 1;
+SELECT strftime(t, '%Y-%m') AS month, paywall_trigger, count(*) FILTER (WHERE event = 'circle paywall viewed') AS views,
+ round(count(*) FILTER (WHERE event = 'circle subscription started')::DOUBLE / count(*) FILTER (WHERE event = 'circle paywall viewed'), 4) AS conversion
+FROM ev WHERE event IN ('circle paywall viewed', 'circle subscription started') AND t < TIMESTAMP '2026-10-01' GROUP BY 1, 2 ORDER BY 2, 1;
 
 -- Smart Digest arms: member-initiated activity per exposed member before and after the start (context for Q4)
 WITH a AS (SELECT p.variant, p.uid,
