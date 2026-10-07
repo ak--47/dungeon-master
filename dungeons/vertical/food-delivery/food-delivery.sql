@@ -197,18 +197,27 @@ SELECT round(max(conv) FILTER (WHERE NOT pass AND NOT post), 4) AS non_pass_befo
 FROM g;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- STORY H10-order-again-launch: app opened -> order placed median minutes; session order rate
+-- STORY H10-order-again-launch: app opened -> order placed median minutes; incremental checkouts
+-- per visit (established customers, Jun 4 - Jul 6 vs Jul 28 - Oct 1); Order Again visits that reach checkout
 -- ─────────────────────────────────────────────────────────────────────────
 SELECT CASE WHEN entry_point = 'reorder' THEN 'reorder' ELSE 'browse' END AS path, count(*) AS orders,
  round(median(date_diff('second', t, tp)) / 60.0, 2) AS median_minutes
 FROM sessions WHERE t >= TIMESTAMP '2026-07-07' AND tp IS NOT NULL GROUP BY 1 ORDER BY 1;
 
--- session order rate as an Insights formula (cohort: did reorder tapped; one reorder tapped per Order Again visit)
-WITH x AS (SELECT * FROM ev WHERE t >= TIMESTAMP '2026-07-07' AND uid IN (SELECT uid FROM ev WHERE event = 'reorder tapped')),
-k AS (SELECT count(*) FILTER (WHERE event = 'order placed' AND entry_point = 'reorder') AS a, count(*) FILTER (WHERE event = 'reorder tapped') AS b,
-  count(*) FILTER (WHERE event = 'order placed' AND entry_point <> 'reorder') AS c, count(*) FILTER (WHERE event = 'app opened') AS d FROM x)
-SELECT a AS reorder_orders, b AS reorder_taps, c AS browse_orders, d - b AS browse_visits,
- round(a / b, 4) AS reorder_order_rate, round(c / (d - b), 4) AS browse_order_rate, round((a / b) / (c / (d - b)), 4) AS ratio FROM k;
+-- incremental checkouts per visit: Insights formula checkout started / app opened, cohort
+-- "did not do account created" in the window (established customers; each has a past order)
+WITH nw AS (SELECT DISTINCT uid FROM signups),
+x AS (SELECT ev.event, ev.t >= TIMESTAMP '2026-07-28' AS post FROM ev LEFT JOIN nw ON nw.uid = ev.uid
+  WHERE nw.uid IS NULL AND ev.event IN ('app opened', 'checkout started') AND (ev.t < TIMESTAMP '2026-07-07' OR ev.t >= TIMESTAMP '2026-07-28')),
+k AS (SELECT count(*) FILTER (WHERE event = 'checkout started' AND NOT post)::DOUBLE / count(*) FILTER (WHERE event = 'app opened' AND NOT post) AS pre_rate,
+  count(*) FILTER (WHERE event = 'checkout started' AND post)::DOUBLE / count(*) FILTER (WHERE event = 'app opened' AND post) AS post_rate FROM x)
+SELECT round(pre_rate, 4) AS checkouts_per_visit_jun4_jul6, round(post_rate, 4) AS checkouts_per_visit_jul28_oct1, round(post_rate / pre_rate - 1, 4) AS lift FROM k;
+
+-- Order Again visits that reach checkout: Funnels reorder tapped -> checkout started, Totals, 1-hour window
+WITH r AS (SELECT uid, t FROM ev WHERE event = 'reorder tapped'),
+c AS (SELECT r.uid, r.t, bool_or(e.t IS NOT NULL) AS reached FROM r LEFT JOIN ev e ON e.uid = r.uid AND e.event = 'checkout started'
+  AND e.t >= r.t AND e.t < r.t + INTERVAL 60 MINUTE GROUP BY 1, 2)
+SELECT count(*) AS reorder_taps, round(avg(reached::INT), 4) AS checkout_rate FROM c;
 
 -- ═════════════════════════════════════════════════════════════════════════
 -- EVAL QUERIES (eval/food-delivery.eval.md)
@@ -262,6 +271,9 @@ FROM wh_ops w JOIN c ON c.city = w.city WHERE w.rainy;
 WITH x AS (SELECT o.order_id, o.late_min, w.rainy, (s.order_id IS NOT NULL) AS contacted FROM orders o JOIN wh_ops w ON w.city = o.city AND w.d = o.d
   LEFT JOIN (SELECT DISTINCT order_id FROM ev WHERE event = 'support contacted') s ON s.order_id = o.order_id WHERE o.late_min IS NOT NULL)
 SELECT rainy, round(avg(contacted::INT), 4) AS support_contact_rate FROM x GROUP BY 1 ORDER BY 1;
+-- quoted ETAs at checkout, rainy vs dry city-days
+SELECT w.rainy, count(*) AS checkouts, round(avg(c.eta), 2) AS avg_quoted_eta_mins
+FROM checkouts c JOIN wh_ops w ON w.city = c.city AND w.d = c.d GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q4: checkout -> order by quoted ETA band
 SELECT CASE WHEN eta < 30 THEN 'a: < 30' WHEN eta < 40 THEN 'b: 30-39' WHEN eta <= 45 THEN 'c: 40-45' WHEN eta <= 50 THEN 'd: 46-50' WHEN eta <= 60 THEN 'e: 51-60' ELSE 'f: > 60' END AS quote_band,
@@ -306,6 +318,13 @@ w AS (SELECT split, max(n) FILTER (WHERE arm = 'Control') AS n_c, max(conv) FILT
 SELECT split, n_c, round(c, 4) AS control_conv, n_v, round(v, 4) AS variant_conv,
  round((v - c) / sqrt(((c * n_c + v * n_v) / (n_c + n_v)) * (1 - (c * n_c + v * n_v) / (n_c + n_v)) * (1.0 / n_c + 1.0 / n_v)), 2) AS z
 FROM w ORDER BY split;
+-- does the arm difference depend on platform? (interaction: Android arm gap minus iOS arm gap)
+WITH x AS (SELECT p.arm, c.platform, c.placed FROM checkouts c JOIN prof p ON p.uid = c.uid WHERE p.arm IS NOT NULL AND c.t >= TIMESTAMP '2026-07-28'),
+g AS (SELECT platform, arm, count(*) AS n, avg(placed::INT) AS r FROM x GROUP BY 1, 2),
+d AS (SELECT platform, max(r) FILTER (WHERE arm = 'Smart Add-ons') - max(r) FILTER (WHERE arm = 'Control') AS diff,
+  max(r * (1 - r) / n) FILTER (WHERE arm = 'Smart Add-ons') + max(r * (1 - r) / n) FILTER (WHERE arm = 'Control') AS var FROM g GROUP BY 1)
+SELECT round(max(diff) FILTER (WHERE platform = 'android'), 4) AS android_gap, round(max(diff) FILTER (WHERE platform = 'ios'), 4) AS ios_gap,
+ round((max(diff) FILTER (WHERE platform = 'android') - max(diff) FILTER (WHERE platform = 'ios')) / sqrt(sum(var)), 2) AS interaction_z FROM d;
 
 -- EVAL Q8: paid channel CAC (spend / Mixpanel signups) and network-reported signups
 WITH s AS (SELECT ch, count(*) AS signups FROM signups GROUP BY 1),
@@ -348,11 +367,29 @@ SELECT post, count(*) AS non_pass_checkouts, round(sum(coalesce(service_fee_usd,
  round(avg(service_fee_usd), 3) AS service_fee_per_order, round(sum(coalesce(order_total_usd, 0)) / count(*), 2) AS order_total_per_checkout
 FROM c GROUP BY 1 ORDER BY 1;
 
--- EVAL Q13: Order Again — speed and session order rate
+-- EVAL Q13: Order Again — speed, Order Again visits that reach checkout, incremental checkouts
+-- per visit, orders per weekly active customer, and the visit order rate comparison (a selection read)
 SELECT CASE WHEN entry_point = 'reorder' THEN 'reorder' ELSE 'browse' END AS path, count(*) AS orders,
  round(median(date_diff('second', t, tp)) / 60.0, 2) AS median_minutes
 FROM sessions WHERE t >= TIMESTAMP '2026-07-07' AND tp IS NOT NULL GROUP BY 1 ORDER BY 1;
--- session order rate as an Insights formula (cohort: did reorder tapped; one reorder tapped per Order Again visit)
+WITH r AS (SELECT uid, t FROM ev WHERE event = 'reorder tapped'),
+c AS (SELECT r.uid, r.t, bool_or(e.t IS NOT NULL) AS reached FROM r LEFT JOIN ev e ON e.uid = r.uid AND e.event = 'checkout started'
+  AND e.t >= r.t AND e.t < r.t + INTERVAL 60 MINUTE GROUP BY 1, 2)
+SELECT count(*) AS reorder_taps, round(avg(reached::INT), 4) AS checkout_rate FROM c;
+WITH nw AS (SELECT DISTINCT uid FROM signups),
+x AS (SELECT ev.event, ev.t >= TIMESTAMP '2026-07-28' AS post FROM ev LEFT JOIN nw ON nw.uid = ev.uid
+  WHERE nw.uid IS NULL AND ev.event IN ('app opened', 'checkout started', 'order placed') AND (ev.t < TIMESTAMP '2026-07-07' OR ev.t >= TIMESTAMP '2026-07-28')),
+k AS (SELECT count(*) FILTER (WHERE event = 'checkout started' AND NOT post)::DOUBLE / count(*) FILTER (WHERE event = 'app opened' AND NOT post) AS pre_rate,
+  count(*) FILTER (WHERE event = 'checkout started' AND post)::DOUBLE / count(*) FILTER (WHERE event = 'app opened' AND post) AS post_rate FROM x)
+SELECT round(pre_rate, 4) AS checkouts_per_visit_jun4_jul6, round(post_rate, 4) AS checkouts_per_visit_jul28_oct1, round(post_rate / pre_rate - 1, 4) AS lift FROM k;
+-- orders per weekly active customer (active = opened the app that week), full weeks
+SELECT date_trunc('week', t)::DATE AS week, count(*) FILTER (WHERE event = 'order placed') AS orders,
+ count(DISTINCT uid) FILTER (WHERE event = 'app opened') AS active_customers,
+ round(count(*) FILTER (WHERE event = 'order placed')::DOUBLE / count(DISTINCT uid) FILTER (WHERE event = 'app opened'), 3) AS orders_per_active,
+ round(count(*) FILTER (WHERE event = 'app opened')::DOUBLE / count(DISTINCT uid) FILTER (WHERE event = 'app opened'), 2) AS opens_per_active
+FROM ev WHERE t >= TIMESTAMP '2026-06-08' AND t < TIMESTAMP '2026-09-28' GROUP BY 1 ORDER BY 1;
+-- the selection read: visit order rate, Order Again visits vs other visits of customers who used it
+-- (Insights, cohort "did reorder tapped", Jul 7 - Oct 1: (A / B) / (C / (D - B)))
 WITH x AS (SELECT * FROM ev WHERE t >= TIMESTAMP '2026-07-07' AND uid IN (SELECT uid FROM ev WHERE event = 'reorder tapped')),
 k AS (SELECT count(*) FILTER (WHERE event = 'order placed' AND entry_point = 'reorder') AS a, count(*) FILTER (WHERE event = 'reorder tapped') AS b,
   count(*) FILTER (WHERE event = 'order placed' AND entry_point <> 'reorder') AS c, count(*) FILTER (WHERE event = 'app opened') AS d FROM x)
@@ -368,18 +405,24 @@ FROM ev WHERE event = 'reorder tapped';
 SELECT round(avg((entry_point = 'reorder')::INT), 4) AS september_reorder_share FROM orders WHERE t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-10-01';
 
 -- EVAL Q15: first-order rate by signup method (null), overall and by platform / signup month /
--- channel. New customers who signed up through Aug 31; z compares each method with the other two.
+-- channel. New customers who signed up through Aug 31. Rates per method, then one omnibus test per
+-- split (chi-square across the three methods, 2 df: p = exp(-chi2 / 2)).
+CREATE OR REPLACE TEMP TABLE q15 AS
 WITH f AS (SELECT s.signup_method AS m, s.ch, p.platform, date_trunc('month', s.t0)::DATE AS mon, (o.uid IS NOT NULL)::INT AS y
   FROM signups s LEFT JOIN (SELECT DISTINCT uid FROM orders) o ON o.uid = s.uid LEFT JOIN prof p ON p.uid = s.uid
-  WHERE s.t0 < TIMESTAMP '2026-09-01'),
-g AS (SELECT 'all' AS split, m, count(*) AS n, avg(y) AS r FROM f GROUP BY 1, 2
-  UNION ALL SELECT 'platform=' || platform, m, count(*), avg(y) FROM f GROUP BY 1, 2
-  UNION ALL SELECT 'month=' || strftime(mon, '%Y-%m'), m, count(*), avg(y) FROM f GROUP BY 1, 2
-  UNION ALL SELECT 'channel=' || ch, m, count(*), avg(y) FROM f GROUP BY 1, 2),
-t AS (SELECT split, sum(n) AS nn, sum(n * r) / sum(n) AS pr FROM g GROUP BY 1)
-SELECT g.split, g.m AS signup_method, g.n AS signups, round(g.r, 4) AS first_order_rate,
- round((g.r - (t.pr * t.nn - g.r * g.n) / (t.nn - g.n)) / sqrt(t.pr * (1 - t.pr) * (1.0 / g.n + 1.0 / (t.nn - g.n))), 2) AS z_vs_other_methods
-FROM g JOIN t ON t.split = g.split ORDER BY 1, 2;
+  WHERE s.t0 < TIMESTAMP '2026-09-01')
+SELECT 'all' AS split, m, count(*) AS n, sum(y) AS k FROM f GROUP BY 1, 2
+UNION ALL SELECT 'platform=' || platform, m, count(*), sum(y) FROM f GROUP BY 1, 2
+UNION ALL SELECT 'month=' || strftime(mon, '%Y-%m'), m, count(*), sum(y) FROM f GROUP BY 1, 2
+UNION ALL SELECT 'channel=' || ch, m, count(*), sum(y) FROM f GROUP BY 1, 2;
+SELECT split, max(n) FILTER (WHERE m = 'apple') AS apple_n, round(max(k::DOUBLE / n) FILTER (WHERE m = 'apple'), 4) AS apple_rate,
+ max(n) FILTER (WHERE m = 'email') AS email_n, round(max(k::DOUBLE / n) FILTER (WHERE m = 'email'), 4) AS email_rate,
+ max(n) FILTER (WHERE m = 'google') AS google_n, round(max(k::DOUBLE / n) FILTER (WHERE m = 'google'), 4) AS google_rate
+FROM q15 GROUP BY 1 ORDER BY 1;
+WITH t AS (SELECT split, sum(k)::DOUBLE / sum(n) AS pr FROM q15 GROUP BY 1),
+c AS (SELECT q.split, sum(power(q.k - q.n * t.pr, 2) / (q.n * t.pr) + power((q.n - q.k) - q.n * (1 - t.pr), 2) / (q.n * (1 - t.pr))) AS chi2
+  FROM q15 q JOIN t ON t.split = q.split GROUP BY 1)
+SELECT split, round(chi2, 2) AS chi2_df2, round(exp(-chi2 / 2), 3) AS p_value FROM c ORDER BY 1;
 -- context: iOS vs Android checkout conversion (not engineered; see the dungeon JSDoc noise notes)
 SELECT platform, count(*) AS checkouts, round(avg(placed::INT), 4) AS conversion FROM checkouts GROUP BY 1 ORDER BY 1;
 

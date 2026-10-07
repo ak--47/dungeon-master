@@ -80,7 +80,7 @@ Every checkout gets an `order_id`. The checkout, a failed payment, the order, tr
 | Funnel | Steps | Notes |
 |---|---|---|
 | Signup | `account created` → `address saved` | New customers only. |
-| Ordering visit | `app opened` → `restaurant viewed` → `item added to cart` → `checkout started` → `order placed` | One visit; 1-hour conversion window, Totals counting. Order Again visits never send `restaurant viewed` or `item added to cart`, so this funnel counts them as stopping after `app opened`; the team reports them with the Order Again funnel below. |
+| Ordering visit | `app opened` → `restaurant viewed` → `item added to cart` → `checkout started` → `order placed` | One visit; 1-hour conversion window, Totals counting. Order Again visits skip the restaurant page and the menu: they send no `restaurant viewed`, and their only `item added to cart` events come from the checkout screen after `checkout started`. So this funnel counts them as stopping after `app opened`; the team reports them with the Order Again funnel below. |
 | Order Again visit | `reorder tapped` → `checkout started` → `order placed` | From 2026-07-07. 1-hour conversion window, Totals counting. |
 | Checkout | `checkout started` → `order placed` | Per checkout: hold `order_id` constant (Totals counting). |
 | Order lifecycle | `order placed` → `order delivered` → `order rated` | Hold `order_id` constant. |
