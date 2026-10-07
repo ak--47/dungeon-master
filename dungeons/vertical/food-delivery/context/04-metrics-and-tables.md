@@ -27,7 +27,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 
 Three tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). They join to events on the UTC date of the event and on the named dimension.
 
-In the warehouse, numeric columns are loaded as FLOAT64 (shown as FLOAT below). Count columns (impressions, clicks, signups, attempts, declines, orders, couriers) and latency always hold whole numbers, and raw file exports show them as integers.
+Types below are the warehouse types: INTEGER (INT64) for whole-number columns (counts, latency in milliseconds, whole-degree temperatures) and FLOAT (FLOAT64) for money, rates, precipitation, and hours.
 
 ### `marketing_spend_daily`
 
@@ -38,9 +38,9 @@ Daily paid acquisition cost by channel, from the ad networks' and affiliate part
 | `date` | DATE | UTC day | Spend day. |
 | `acquisition_channel` | STRING | — | `paid_search`, `paid_social`, or `coupon_affiliates`. Matches `acquisition_channel` on `account created`. |
 | `spend_usd` | FLOAT | USD | Spend billed for the day (media spend or affiliate fees). |
-| `impressions` | FLOAT | count | Ad impressions (or deal listing views) reported by the network or partner. |
-| `clicks` | FLOAT | count | Clicks reported by the network or partner. |
-| `network_reported_signups` | FLOAT | count | Signups the network or partner claims for the day, under its own attribution rules. Usually higher than Mixpanel's count. |
+| `impressions` | INTEGER | count | Ad impressions (or deal listing views) reported by the network or partner. |
+| `clicks` | INTEGER | count | Clicks reported by the network or partner. |
+| `network_reported_signups` | INTEGER | count | Signups the network or partner claims for the day, under its own attribution rules. Usually higher than Mixpanel's count. |
 
 Caveats: organic and referral have no spend and are not in this table. The `DEAL15` discount itself is a promotion cost, not marketing spend, and is not in `spend_usd` (it appears as `discount_usd` on the first order). Use Mixpanel signups, not `network_reported_signups`, for CAC.
 
@@ -52,10 +52,10 @@ Daily payment authorizations by payment method, from the payment gateway's settl
 |---|---|---|---|
 | `date` | DATE | UTC day | Day. |
 | `payment_method` | STRING | — | `card`, `apple_pay`, `google_pay`, or `paypal`. Matches `payment_method` on events. |
-| `auth_attempts` | FLOAT | count | Payment authorizations attempted (approved plus declined). |
-| `auth_declines` | FLOAT | count | Authorizations declined. |
+| `auth_attempts` | INTEGER | count | Payment authorizations attempted (approved plus declined). |
+| `auth_declines` | INTEGER | count | Authorizations declined. |
 | `decline_rate` | FLOAT | share 0-1 | `auth_declines` / `auth_attempts`. |
-| `p95_auth_latency_ms` | FLOAT | milliseconds | 95th-percentile authorization time. |
+| `p95_auth_latency_ms` | INTEGER | milliseconds | 95th-percentile authorization time. |
 | `gateway_status` | STRING | — | Daily status for the method's provider: `operational` or `major_outage`. |
 
 Caveats: the gateway also processes web and phone orders and automatic payment retries that never reach Mixpanel, so `auth_attempts` runs higher than the Mixpanel count of `order placed` + `payment failed` and does not track it exactly day to day.
@@ -68,14 +68,14 @@ Daily dispatch volume, weather, and courier supply by city, from the dispatch sy
 |---|---|---|---|
 | `date` | DATE | UTC day | Day. |
 | `city` | STRING | — | One of the eight markets. Matches `city` on events. |
-| `orders_dispatched` | FLOAT | count | Orders sent to couriers that day, including phone and partner-site orders, net of cancellations. |
+| `orders_dispatched` | INTEGER | count | Orders sent to couriers that day, including phone and partner-site orders, net of cancellations. |
 | `precipitation_mm` | FLOAT | millimeters | Total precipitation for the UTC day. |
-| `weather_condition` | STRING | — | `clear`, `cloudy`, `drizzle` (a trace of rain, under 2 mm), `rain` (4 mm or more), `thunderstorm` (25 mm or more). |
-| `temp_high_f` | FLOAT | °F | Daily high temperature. |
-| `active_couriers` | FLOAT | count | Couriers who worked at least one delivery shift that day. |
+| `weather_condition` | STRING | — | `clear`, `cloudy`, `drizzle` (a trace of rain), `rain` (a day of real rain), `thunderstorm` (heavy rain, 25 mm or more). Ops calls a city-day with `rain` or `thunderstorm` a rainy day. |
+| `temp_high_f` | INTEGER | °F | Daily high temperature. |
+| `active_couriers` | INTEGER | count | Couriers who worked at least one delivery shift that day. |
 | `courier_hours` | FLOAT | hours | Total courier shift hours. |
 
-Caveats: `orders_dispatched` runs a little higher than the Mixpanel count of `order placed` for the city and day (phone and partner-site orders are only in this table). Forkfly calls a day "rainy" in a city when `precipitation_mm` is 4 or more.
+Caveats: `orders_dispatched` runs a little higher than the Mixpanel count of `order placed` for the city and day (phone and partner-site orders are only in this table).
 
 ## Analysis tips
 

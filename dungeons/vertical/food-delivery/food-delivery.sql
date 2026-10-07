@@ -40,7 +40,7 @@ SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-marketing
 CREATE OR REPLACE TEMP TABLE wh_pay AS
 SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-payment_gateway_daily.json*', sample_size=-1, union_by_name=true);
 CREATE OR REPLACE TEMP TABLE wh_ops AS
-SELECT *, date::DATE AS d, precipitation_mm >= 4 AS rainy
+SELECT *, date::DATE AS d, weather_condition IN ('rain', 'thunderstorm') AS rainy
 FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-market_ops_daily.json*', sample_size=-1, union_by_name=true);
 
 -- profile attributes keyed by the resolved customer id

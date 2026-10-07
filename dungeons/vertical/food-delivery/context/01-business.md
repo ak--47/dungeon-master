@@ -39,7 +39,7 @@ Couriers are independent contractors who sign up for delivery shifts in their ci
 - **Favorite cuisine** (`favorite_cuisine`), from the same survey.
 - **Platforms:** about two thirds of customers use the iOS app (iPhone or iPad) and one third the Android app.
 - **Established vs new customers.** About 58% of customers active in the window were already customers on June 4. New customers arrive steadily, about 240 a week.
-- **Pass members.** Roughly 1,150 to 1,850 customers held a Pass (trial or paid) at any point in the summer.
+- **Pass members.** Roughly 1,200 to 2,050 customers held a Pass (trial or paid) at any one time in the summer.
 
 ## How customers find us
 

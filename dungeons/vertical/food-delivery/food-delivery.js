@@ -19,8 +19,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             2026-08-11), tips pass through to couriers. Forkfly Pass
  *             ($9.99/month, 14-day free trial) waives the delivery fee on orders
  *             of $15+ and cuts the service fee to 5%.
- * SCALE:      10,000 customers (≈4,160 sign up inside the window), ~0.81M
- *             events, ~42,400 orders, 120 days (2026-06-04 → 2026-10-01, UTC)
+ * SCALE:      10,000 customers (≈4,220 sign up inside the window), ~1.13M
+ *             events, ~60,400 orders, 120 days (2026-06-04 → 2026-10-01, UTC).
+ *             The engine budget (1.2 events per customer per day) seeds the
+ *             app opens; the hook builds each visit from its open, so the
+ *             realized volume is about 0.8x the nominal 1.4M.
  * CORE LOOP:  app opened → restaurant viewed → item added to cart → checkout
  *             started → order placed → order delivered → order rated
  * VALUE MOMENT: order delivered
@@ -66,8 +69,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * DESIGN NOTES:
  * - Sessions: each engine "app opened" is a session start (the soup gives meal
- *   peaks). A session that opens while the previous one is still running is
- *   dropped. Browse sessions: 15% stop on the home feed (app opened only);
+ *   peaks). Rain adds visits (H2): each open on a rainy day adds a cloned
+ *   open the same UTC day with chance 0.4, at a meal-weighted hour. A
+ *   session that opens while the previous one is still running is dropped. Browse sessions: 15% stop on the home feed (app opened only);
  *   the rest have an optional search, 1-4 restaurant views, a cart (58%),
  *   checkout (78% of carts). Order Again sessions (H10) skip browsing and
  *   refill the cart the customer built on one of their last three orders
@@ -95,10 +99,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   coupon affiliates); later orders carry FORK5 4% of the time.
  * - Support: 3% of orders, rising to about 28% for very late ones.
  * - Ratings: 42% of orders; delivery_rating falls with minutes_late.
- * - Warehouse drift: orders_dispatched adds phone and partner-site orders (0-16%
- *   plus 0-14 a day per city) and nets cancellations; auth_attempts adds web
- *   orders and retries; spend is part paced budget, part per-signup, with
- *   seeded day noise. Audit correlations 0.93-0.99.
+ * - Warehouse drift: orders_dispatched adds phone and partner-site orders (0-25%
+ *   per city, x0.9-1.1 a day company-wide, plus 0-14 a day per city) and nets
+ *   cancellations; auth_attempts adds web orders and retries (0-25% per
+ *   method, x0.92-1.08 a day, plus 0-16); spend is part paced budget, part
+ *   per-signup, with seeded day noise. Audit correlations 0.90-0.97.
  * - Growth: new customers arrive steadily (~240 a week), so weekly sessions
  *   and orders grow through the window; Order Again lifts orders from July.
  */
@@ -123,7 +128,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   breakdown step 1 minutes_late (custom buckets < 15, >= 15). The
  *   first-time filter matters: a breakdown on a step-1 property runs one
  *   funnel per bucket, so without it a kept customer's later late
- *   deliveries enter the late bucket and the ratio reads about 0.9.
+ *   deliveries enter the late bucket and the ratio reads 0.94-1.02.
  *   A churned customer opens no session after the first delivery; that
  *   order's rating and support contact still arrive.
  * REAL WORLD: a cold, late first meal is the end of a new relationship.
@@ -131,9 +136,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * H2. RAINY DAYS (everything + warehouse market_ops_daily; external join)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: on rainy days (4+ mm in market_ops_daily.precipitation_mm, by city
- *   and UTC date) customers open the app 1.4x as often (dry-day sessions kept
- *   at 1/1.4), so orders per city-day are 1.4x the city's dry-day mean.
+ * PATTERN: on rainy days (4+ mm in market_ops_daily.precipitation_mm, i.e.
+ *   weather_condition rain or thunderstorm, by city and UTC date) customers
+ *   open the app 1.4x as often (each rainy-day open adds a cloned open with
+ *   chance 0.4), so orders per city-day are 1.4x the city's dry-day mean.
  *   Deliveries on rainy days run 12 minutes later against the quote (couriers
  *   are scarce; the warehouse shows more orders per active courier). Checkout
  *   conversion does not change.
@@ -242,46 +248,44 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-food-delivery, 2026-10-07,
- * full fidelity, 10,000 customers, 808,750 events, 42,431 orders)
+ * full fidelity, 10,000 customers, 1,132,922 events, 60,417 orders)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                          | Derivation                  | Expected | Measured
  * -----|-------------------------------------------------|-----------------------------|----------|---------
- * H1   | 30-day repeat, late (15+) / on-time first order | logistic churn, integrated  | 0.647    | 0.635 (40.4% vs 63.6%)
- * H2   | orders per city-day, rainy / dry mean           | RAIN_DEMAND_MULT            | 1.40     | 1.345
- * H2   | minutes_late, rainy − dry                       | RAIN_LATE_MIN               | 12.0     | 12.11
- * H3   | checkout → order, quote > 45 / <= 45 min        | PLACE_SLOW / PLACE_FAST     | 0.60     | 0.600 (43.7% vs 72.9%)
- * H4   | card conversion DiD, incident / ±14 days        | 1 − INCIDENT_FAIL           | 0.40     | 0.415
+ * H1   | 30-day repeat, late (15+) / on-time first order | logistic churn, integrated  | 0.648    | 0.640 (46.8% vs 73.1%)
+ * H2   | orders per city-day, rainy / dry mean           | RAIN_DEMAND_MULT            | 1.40     | 1.337
+ * H2   | minutes_late, rainy − dry                       | RAIN_LATE_MIN               | 12.0     | 11.79
+ * H3   | checkout → order, quote > 45 / <= 45 min        | PLACE_SLOW / PLACE_FAST     | 0.60     | 0.604 (44.0% vs 72.9%)
+ * H4   | card conversion DiD, incident / ±14 days        | 1 − INCIDENT_FAIL           | 0.40     | 0.414
  * H4   | warehouse card decline_rate, incident days      | 1 − 0.98 × 0.4              | 0.608    | 0.610
- * H5   | items per order lift, pre-period adjusted       | ADDON_TAKE                  | 0.40     | 0.388 (raw arm diff 0.404)
- * H5   | checkout → order, variant / control             | no effect                   | 1.00     | 1.006
+ * H5   | items per order lift, pre-period adjusted       | ADDON_TAKE                  | 0.40     | 0.394 (raw arm diff 0.384)
+ * H5   | checkout → order, variant / control             | no effect                   | 1.00     | 1.000
  * H5   | addon_suggestion items outside the variant      | exact purity                | 0        | 0
- * H6   | spend per signup, coupon / paid search          | 9 / 26                      | 0.346    | 0.343 ($8.92 vs $25.99)
- * H6   | 30-day repeat, coupon / other channels          | 1 − COUPON_CHURN            | 0.50     | 0.475 (31.4% vs 66.1%)
- * H6   | spend per repeat customer, coupon / paid social | (9 / 0.5) / 18              | 1.00     | 1.001 ($48.61 vs $48.56)
- * H7   | trial → paid, 2+ orders during trial            | TRIAL_CONV_HIGH             | 0.65     | 0.696
- * H7   | trial → paid, 0-1 orders during trial           | TRIAL_CONV_LOW              | 0.30     | 0.301
+ * H6   | spend per signup, coupon / paid search          | 9 / 26                      | 0.346    | 0.341 ($9.01 vs $26.38)
+ * H6   | 30-day repeat, coupon / other channels          | 1 − COUPON_CHURN            | 0.50     | 0.540 (40.9% vs 75.6%)
+ * H6   | spend per repeat customer, coupon / paid social | (9 / 0.5) / 18              | 1.00     | 0.954 ($33.35 vs $34.97)
+ * H7   | trial → paid, 2+ orders during trial            | TRIAL_CONV_HIGH             | 0.65     | 0.648
+ * H7   | trial → paid, 0-1 orders during trial           | TRIAL_CONV_LOW              | 0.30     | 0.308
  * H7   | orders_during_trial vs orders placed            | exact                       | 0        | 0
- * H8   | share < $15 of $10-19.99 orders, Pass / non-Pass | 1 − BUMP_SHARE             | 0.40     | 0.381 (14.6% vs 38.4%)
- * H9   | non-Pass conversion DiD, after / before Aug 11  | FEE_KEEP                    | 0.85     | 0.843
+ * H8   | share < $15 of $10-19.99 orders, Pass / non-Pass | 1 − BUMP_SHARE             | 0.40     | 0.427 (16.4% vs 38.4%)
+ * H9   | non-Pass conversion DiD, after / before Aug 11  | FEE_KEEP                    | 0.85     | 0.836
  * H10  | median app opened → order, reorder / browse     | REORDER_TTC_MULT            | 0.35     | 0.348 (5.6 vs 16.1 min)
- * H10  | visit order rate, reorder / browse (Insights)   | 0.9 / (0.85 × 0.58 × 0.78)  | 2.34     | 2.200 (58.4% vs 26.6%)
+ * H10  | visit order rate, reorder / browse (Insights)   | 0.9 / (0.85 × 0.58 × 0.78)  | 2.34     | 2.247 (58.5% vs 26.1%)
  * H10  | reorder tapped before Jul 7                     | exact purity                | 0        | 0
  * ═════════════════════════════════════════════════════════════════════════
  *
- * Noise notes: H1 rests on about 440 late first orders and H6's repeat read
- * on about 420 coupon first orders (relative SE about 7-8%), so both use the
- * knob as target with a half-effect ceiling. H4 rests on about 1,250 card
+ * Noise notes: H1 rests on about 420 late first orders and H6's repeat read
+ * on about 470 coupon first orders (relative SE about 7-8%), so both use the
+ * knob as target with a half-effect ceiling. H4 rests on about 1,890 card
  * checkouts in the incident (half-effect ceiling). H5's lift is pre-period
  * adjusted because items per order follow household size and the arms can
- * differ in household mix; in this run the arms match (single 42.9% vs
- * 42.3%) and the raw difference (0.404) agrees with the adjusted lift. It
- * keeps a half-effect floor. H8 clusters on about 2,450 Pass customers
+ * differ in household mix; in this run the arms match (single 42.2% vs
+ * 42.4%) and the raw difference (0.384) agrees with the adjusted lift. It
+ * keeps a half-effect floor. H8 clusters on about 2,970 Pass customers
  * (half-effect ceiling). Unengineered: Smart Add-ons conversion by arm
- * (63.9% vs 63.5%, z = 0.80) and first-order rate by signup method (71.4-
- * 72.2%, every |z| < 0.5). iOS vs Android checkout conversion (66.8% vs
- * 65.9%, z = -2.3) has no engineered cause: about 0.2 points come from the
- * card incident (Android customers pay by card more often) and the rest is
- * this run's draw, so the eval does not use platform as a null question.
+ * (64.34% vs 64.34%, z = -0.01), first-order rate by signup method (79.3-
+ * 80.5%, every |z| < 0.6), and iOS vs Android checkout conversion (66.7% vs
+ * 66.5%, z = 0.5).
  */
 
 // ── SCALE ──
@@ -322,7 +326,7 @@ const CITIES = {
 	"Chicago": { code: "chi", w: 15, rain: 0.2, temp: 82 },
 	"Boston": { code: "bos", w: 11, rain: 0.19, temp: 80 },
 	"Atlanta": { code: "atl", w: 12, rain: 0.27, temp: 89 },
-	"Miami": { code: "mia", w: 11, rain: 0.34, temp: 90 },
+	"Miami": { code: "mia", w: 11, rain: 0.28, temp: 90 },
 	"Austin": { code: "aus", w: 10, rain: 0.12, temp: 95 },
 	"Denver": { code: "den", w: 9, rain: 0.15, temp: 87 },
 	"Seattle": { code: "sea", w: 10, rain: 0.1, temp: 76 },
@@ -339,7 +343,7 @@ const LATE_CHURN = 0.45;            // churn chance after a very late first orde
 
 // H2 rain: rainy days bring more orders, and couriers run late
 const RAIN_DAY_MM = 4;              // rainy day = 4+ mm of precipitation (every rainy draw is >= 4 mm)
-const RAIN_DEMAND_MULT = 1.4;       // app sessions (and so orders) per customer on rainy days vs dry days
+const RAIN_DEMAND_MULT = 1.4;       // app sessions (and so orders) per customer on rainy days vs dry days (rain adds visits)
 const RAIN_LATE_MIN = 12;           // extra minutes late on rainy days (the ETA model ignores weather)
 
 // H3 quoted ETA: customers abandon checkout when the promised time is long
@@ -515,6 +519,7 @@ const weatherCondition = (date, city) => {
 	return hashFloat(`cloud|${date}|${city}`) < 0.35 ? "cloudy" : "clear";
 };
 const tempHighF = (date, city) => Math.round((CITIES[city]?.temp ?? 80) + 5 * hashNormal(`temp|${date}|${city}`) - (isRainy(date, city) ? 6 : 0));
+const HOUR_PMF = Object.fromEntries(HOUR_WEIGHTS.map((w, h) => [h, w]));
 const WINDOW_DATES = Array.from({ length: WINDOW_DAYS }, (_, i) => dayjs.utc(DATASET_START).add(i, "day").format("YYYY-MM-DD"));
 
 // ── RESTAURANT CATALOG (deterministic; denormalized onto events) ──
@@ -679,9 +684,20 @@ function handleEverything(events, meta) {
 	const variant = exposures.length && profile[EXP_KEY] !== undefined ? profile[EXP_KEY] : null;
 
 	// ── sessions: one engine "app opened" per session ──
-	// H2: rainy days bring more sessions. Dry-day sessions survive at 1 / RAIN_DEMAND_MULT.
-	const opens = events.filter((e) => e.event === "app opened").sort(byT)
-		.filter((o) => isRainy(dayKey(T(o)), city) || coin(1 / RAIN_DEMAND_MULT));
+	// H2: rain brings extra visits. Each visit on a rainy day adds another visit the same
+	// UTC day with chance RAIN_DEMAND_MULT - 1, at a meal-weighted hour (after signup).
+	const engineOpens = events.filter((e) => e.event === "app opened").sort(byT);
+	const firstAllowed = address ? T(address) : signupT ?? -Infinity;
+	const rainOpens = [];
+	for (const o of engineOpens) {
+		const day = dayKey(T(o));
+		if (!isRainy(day, city) || !coin(RAIN_DEMAND_MULT - 1)) continue;
+		const hour = Number(pickWeighted(HOUR_PMF, unif(0, 1)));
+		const t = ms(`${day}T00:00:00Z`) + hour * 3_600_000 + Math.floor(unif(0, 3600)) * SEC_MS;
+		if (t < BEGIN || t > END || t <= firstAllowed) continue;
+		rainOpens.push(cloneEvent(o, { time: iso(t) }));
+	}
+	const opens = engineOpens.concat(rainOpens).sort(byT);
 
 	// ── Forkfly Pass state ──
 	const passChanges = [{ t: -Infinity, s: profile.pass_status === "member" ? "member" : "none" }];
@@ -978,16 +994,18 @@ function handleWarehouse(row, meta) {
 	}
 	if (meta.metricName === "payment_gateway_daily") {
 		const k = `${row.date}|${row.payment_method}`;
-		// the gateway also sees web and phone orders and retries Mixpanel never receives
-		row.auth_attempts = Math.round(row.auth_attempts * (1 + 0.14 * hashFloat(`untracked|${k}`)) + 16 * hashFloat(`web|${k}`));
+		// the gateway also sees web and phone orders and retries Mixpanel never receives;
+		// retry volume swings day to day with network conditions (shared by every method)
+		row.auth_attempts = Math.round(row.auth_attempts * (1 + 0.25 * hashFloat(`untracked|${k}`)) * jitter(`gateway-day|${row.date}`, 0.08) + 16 * hashFloat(`web|${k}`));
 		row.auth_declines = Math.round(row.auth_attempts * row.decline_rate);
 		return row;
 	}
 	if (meta.metricName === "market_ops_daily") {
 		const k = `${row.date}|${row.city}`;
 		const rainy = isRainy(row.date, row.city);
-		// dispatch also counts phone and partner-site orders; cancelled orders drop out
-		row.orders_dispatched = Math.max(0, Math.round(row.orders_dispatched * (1 + 0.16 * hashFloat(`phone|${k}`)) + 14 * hashFloat(`partner|${k}`) - 2 * hashFloat(`cancel|${k}`)));
+		// dispatch also counts phone and partner-site orders (partner promotions move them
+		// day to day in every city); cancelled orders drop out
+		row.orders_dispatched = Math.max(0, Math.round(row.orders_dispatched * (1 + 0.25 * hashFloat(`phone|${k}`)) * jitter(`dispatch-day|${row.date}`, 0.1) + 14 * hashFloat(`partner|${k}`) - 2 * hashFloat(`cancel|${k}`)));
 		row.active_couriers = Math.max(3, Math.round(row.orders_dispatched / ((rainy ? 3.1 : 2.4) * jitter(`cap|${k}`, 0.12))));
 		row.courier_hours = round1(row.active_couriers * (3.2 + 1.6 * hashFloat(`hrs|${k}`)));
 		return row;
@@ -1357,8 +1375,8 @@ export const stories = [
 		id: "H1-late-first-order",
 		hook: "H1",
 		archetype: "retention-divergence",
-		narrative: `A new customer's first delivery decides whether they come back. After the first delivered order, a new customer leaves Forkfly with a chance that rises with minutes_late (logistic centered at ${LATE_THRESHOLD_MIN} min, softness ${LATE_SOFT_MIN} min, plateau ${LATE_CHURN}). Lateness is independent of the customer (normal mean ${LATE_MEAN_MIN} min, sd ${LATE_SD_MIN} min, +${RAIN_LATE_MIN} min on rainy days), so the 30-day repeat rate (another order within ${REPEAT_DAYS} days of the first delivery, first deliveries through Aug 31) for first deliveries ${LATE_THRESHOLD_MIN}+ minutes late over on-time ones is ${r3(LATE_REPEAT_RATIO)} (integrated over the lateness distribution and the realized rain calendar). Rests on about 400 late first orders, so the read uses the knob as target with a half-effect ceiling.`,
-		mixpanelReport: { type: "Funnels", steps: ["order delivered (filter: first time ever)", "order placed"], window: `${REPEAT_DAYS} days`, cohort: "customers who did account created in the window", dateRange: `${D(DATASET_START)} to 2026-08-31`, breakdown: `step 1 minutes_late (custom buckets < ${LATE_THRESHOLD_MIN}, >= ${LATE_THRESHOLD_MIN})`, note: "without the first-time-ever filter each minutes_late bucket runs its own funnel, kept customers' later late deliveries enter the late bucket, and the ratio reads about 0.9" },
+		narrative: `A new customer's first delivery decides whether they come back. After the first delivered order, a new customer leaves Forkfly with a chance that rises with minutes_late (logistic centered at ${LATE_THRESHOLD_MIN} min, softness ${LATE_SOFT_MIN} min, plateau ${LATE_CHURN}). Lateness is independent of the customer (normal mean ${LATE_MEAN_MIN} min, sd ${LATE_SD_MIN} min, +${RAIN_LATE_MIN} min on rainy days), so the 30-day repeat rate (another order within ${REPEAT_DAYS} days of the first delivery, first deliveries through Aug 31) for first deliveries ${LATE_THRESHOLD_MIN}+ minutes late over on-time ones is ${r3(LATE_REPEAT_RATIO)} (integrated over the lateness distribution and the realized rain calendar). Rests on about 420 late first orders, so the read uses the knob as target with a half-effect ceiling.`,
+		mixpanelReport: { type: "Funnels", steps: ["order delivered (filter: first time ever)", "order placed"], window: `${REPEAT_DAYS} days`, cohort: "customers who did account created in the window", dateRange: `${D(DATASET_START)} to 2026-08-31`, breakdown: `step 1 minutes_late (custom buckets < ${LATE_THRESHOLD_MIN}, >= ${LATE_THRESHOLD_MIN})`, note: "without the first-time-ever filter each minutes_late bucket runs its own funnel, kept customers' later late deliveries enter the late bucket, and the ratio reads 0.94-1.02" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H1_SQL },
@@ -1408,7 +1426,7 @@ export const stories = [
 		id: "H4-card-processor-incident",
 		hook: "H4",
 		archetype: "bespoke",
-		narrative: `From ${D(PAY_INCIDENT_START)} to ${D(PAY_INCIDENT_END)} (exclusive) Forkfly's card processor degrades: ${INCIDENT_FAIL * 100}% of card payments that would have gone through fail ("payment failed", decline_code processor_unavailable) and the order is lost. Apple Pay, Google Pay, and PayPal are untouched. Warehouse payment_gateway_daily marks card as major_outage on those days with decline_rate ≈ ${r3(1 - (1 - BASE_PAY_FAIL) * (1 - INCIDENT_FAIL))}. Read: per-checkout conversion for card vs other methods, incident days vs the ${INC_BASE_DAYS} days either side (difference in differences) = 1 - ${INCIDENT_FAIL}. About 1,170 card checkouts fall in the incident, so the read uses the knob as target with a half-effect ceiling.`,
+		narrative: `From ${D(PAY_INCIDENT_START)} to ${D(PAY_INCIDENT_END)} (exclusive) Forkfly's card processor degrades: ${INCIDENT_FAIL * 100}% of card payments that would have gone through fail ("payment failed", decline_code processor_unavailable) and the order is lost. Apple Pay, Google Pay, and PayPal are untouched. Warehouse payment_gateway_daily marks card as major_outage on those days with decline_rate ≈ ${r3(1 - (1 - BASE_PAY_FAIL) * (1 - INCIDENT_FAIL))}. Read: per-checkout conversion for card vs other methods, incident days vs the ${INC_BASE_DAYS} days either side (difference in differences) = 1 - ${INCIDENT_FAIL}. About 1,890 card checkouts fall in the incident, so the read uses the knob as target with a half-effect ceiling.`,
 		mixpanelReport: { type: "Funnels + warehouse", steps: ["checkout started", "order placed"], counting: "totals", holdPropertyConstant: "order_id", window: "1 hour", breakdown: "payment_method", chart: "daily", join: "payment_gateway_daily.gateway_status on date + payment_method" },
 		assertions: [
 			{
@@ -1468,7 +1486,7 @@ FROM ev LEFT JOIN v ON v.uid = ev.uid WHERE event = 'item added to cart'`,
 		id: "H6-channel-economics",
 		hook: "H6",
 		archetype: "external-join",
-		narrative: `Coupon affiliates (deal sites) are Forkfly's cheapest paid channel per signup and its worst at keeping customers. Warehouse marketing_spend_daily bills each paid channel as a paced daily budget plus a per-signup component (coupon affiliates are mostly per-signup), with seeded day noise: $${CPA_USD.coupon_affiliates} coupon affiliates, $${CPA_USD.paid_social} paid social, $${CPA_USD.paid_search} paid search per Mixpanel signup over the window. ${COUPON_CHURN * 100}% of coupon-affiliate customers leave after their discounted first order (DEAL15), so their 30-day repeat rate is ${1 - COUPON_CHURN}x every other channel's, and spend per repeat customer comes out level with paid social: (${CPA_USD.coupon_affiliates} / ${1 - COUPON_CHURN}) / ${CPA_USD.paid_social} = ${r3(CPA_USD.coupon_affiliates / (1 - COUPON_CHURN) / CPA_USD.paid_social)}. About 420 coupon first orders back the repeat read, so it uses the knob as target with a half-effect ceiling; spend per repeat customer uses a floor (the claim is that the channel is not cheaper per kept customer).`,
+		narrative: `Coupon affiliates (deal sites) are Forkfly's cheapest paid channel per signup and its worst at keeping customers. Warehouse marketing_spend_daily bills each paid channel as a paced daily budget plus a per-signup component (coupon affiliates are mostly per-signup), with seeded day noise: $${CPA_USD.coupon_affiliates} coupon affiliates, $${CPA_USD.paid_social} paid social, $${CPA_USD.paid_search} paid search per Mixpanel signup over the window. ${COUPON_CHURN * 100}% of coupon-affiliate customers leave after their discounted first order (DEAL15), so their 30-day repeat rate is ${1 - COUPON_CHURN}x every other channel's, and spend per repeat customer comes out level with paid social: (${CPA_USD.coupon_affiliates} / ${1 - COUPON_CHURN}) / ${CPA_USD.paid_social} = ${r3(CPA_USD.coupon_affiliates / (1 - COUPON_CHURN) / CPA_USD.paid_social)}. About 470 coupon first orders back the repeat read, so it uses the knob as target with a half-effect ceiling; spend per repeat customer uses a floor (the claim is that the channel is not cheaper per kept customer).`,
 		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "marketing_spend_daily.spend_usd", funnel: `order delivered → order placed, ${REPEAT_DAYS}-day window, cohort customers who did account created in the window, date range ${D(DATASET_START)} to 2026-08-31, breakdown user property acquisition_channel` },
 		assertions: [
 			{
@@ -1531,13 +1549,13 @@ FROM e JOIN c ON c.uid = e.uid`,
 		hook: "H8",
 		// magic-number threshold: baskets bunch just above the $15 line (the enum has no threshold archetype)
 		archetype: "bespoke",
-		narrative: `Forkfly Pass waives the delivery fee on orders of $${PASS_FREE_DELIVERY_MIN} or more, and members top up small baskets to reach it: ${BUMP_SHARE * 100}% of Pass orders (trial or member at order time) with a $${BUMP_FROM}-${PASS_FREE_DELIVERY_MIN - 0.01} subtotal add an item that lifts them past $${PASS_FREE_DELIVERY_MIN}. Topped-up baskets land at $${PASS_FREE_DELIVERY_MIN + 0.5}-${PASS_FREE_DELIVERY_MIN + 4.5}, so among $${BUMP_FROM}-${PASS_FREE_DELIVERY_MIN + 4.99} orders the share under $${PASS_FREE_DELIVERY_MIN} is ${r3(1 - BUMP_SHARE)}x for Pass orders vs non-Pass orders (conditioning on the $${BUMP_FROM}-${PASS_FREE_DELIVERY_MIN + 4.99} range keeps household basket-size mix out of the read). Pass orders cluster on about 2,360 customers, so the read uses the knob as target with a half-effect ceiling.`,
+		narrative: `Forkfly Pass waives the delivery fee on orders of $${PASS_FREE_DELIVERY_MIN} or more, and members top up small baskets to reach it: ${BUMP_SHARE * 100}% of Pass orders (trial or member at order time) with a $${BUMP_FROM}-${PASS_FREE_DELIVERY_MIN - 0.01} subtotal add an item that lifts them past $${PASS_FREE_DELIVERY_MIN}. Topped-up baskets land at $${PASS_FREE_DELIVERY_MIN + 0.5}-${PASS_FREE_DELIVERY_MIN + 4.5}, so among $${BUMP_FROM}-${PASS_FREE_DELIVERY_MIN + 4.99} orders the share under $${PASS_FREE_DELIVERY_MIN} is ${r3(1 - BUMP_SHARE)}x for Pass orders vs non-Pass orders (conditioning on the $${BUMP_FROM}-${PASS_FREE_DELIVERY_MIN + 4.99} range keeps household basket-size mix out of the read). Pass orders cluster on about 2,970 customers, so the read uses the knob as target with a half-effect ceiling.`,
 		mixpanelReport: { type: "Insights", event: "order placed", measure: "total", breakdown: ["pass_status", `subtotal_usd (custom buckets 10-15, 15-20)`], formula: "share of orders in the $10-15 bucket" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H8_SQL },
 				select: { p: { where: { grp: "pass" } }, n: { where: { grp: "no_pass" } } },
-				// Pass orders cluster on about 2,360 customers (relative SE about 5%), so a half-effect ceiling
+				// Pass orders cluster on about 2,970 customers (relative SE about 5%), so a half-effect ceiling
 				expect: { metric: "p.small_basket_share / n.small_basket_share", op: "<=", target: r3(1 - BUMP_SHARE), floor: halfToward(1 - BUMP_SHARE, 1) },
 				minCohort: 1000,
 			},
