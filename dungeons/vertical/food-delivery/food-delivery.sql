@@ -308,7 +308,8 @@ SELECT count(*) AS addon_items, round(avg(item_price_usd), 2) AS avg_addon_price
 SELECT arm, count(*) AS customers, round(avg((household_type = 'single')::INT), 4) AS single_share, round(avg((household_type = 'family')::INT), 4) AS family_share
 FROM prof WHERE arm IS NOT NULL GROUP BY 1 ORDER BY 1;
 
--- EVAL Q7: Smart Add-ons and checkout conversion (null), overall and by platform / Pass
+-- EVAL Q6 (continued): Smart Add-ons and checkout conversion by arm after Jul 28, overall and by
+-- platform / Pass (the H5 no-effect check; z is a two-proportion test per split)
 WITH x AS (SELECT p.arm, c.platform, c.pass, c.placed FROM checkouts c JOIN prof p ON p.uid = c.uid WHERE p.arm IS NOT NULL AND c.t >= TIMESTAMP '2026-07-28'),
 g AS (SELECT 'all' AS split, arm, count(*) AS n, avg(placed::INT) AS conv FROM x GROUP BY 2
   UNION ALL SELECT 'platform=' || platform, arm, count(*), avg(placed::INT) FROM x GROUP BY 1, 2
@@ -318,13 +319,35 @@ w AS (SELECT split, max(n) FILTER (WHERE arm = 'Control') AS n_c, max(conv) FILT
 SELECT split, n_c, round(c, 4) AS control_conv, n_v, round(v, 4) AS variant_conv,
  round((v - c) / sqrt(((c * n_c + v * n_v) / (n_c + n_v)) * (1 - (c * n_c + v * n_v) / (n_c + n_v)) * (1.0 / n_c + 1.0 / n_v)), 2) AS z
 FROM w ORDER BY split;
--- does the arm difference depend on platform? (interaction: Android arm gap minus iOS arm gap)
-WITH x AS (SELECT p.arm, c.platform, c.placed FROM checkouts c JOIN prof p ON p.uid = c.uid WHERE p.arm IS NOT NULL AND c.t >= TIMESTAMP '2026-07-28'),
-g AS (SELECT platform, arm, count(*) AS n, avg(placed::INT) AS r FROM x GROUP BY 1, 2),
-d AS (SELECT platform, max(r) FILTER (WHERE arm = 'Smart Add-ons') - max(r) FILTER (WHERE arm = 'Control') AS diff,
-  max(r * (1 - r) / n) FILTER (WHERE arm = 'Smart Add-ons') + max(r * (1 - r) / n) FILTER (WHERE arm = 'Control') AS var FROM g GROUP BY 1)
-SELECT round(max(diff) FILTER (WHERE platform = 'android'), 4) AS android_gap, round(max(diff) FILTER (WHERE platform = 'ios'), 4) AS ios_gap,
- round((max(diff) FILTER (WHERE platform = 'android') - max(diff) FILTER (WHERE platform = 'ios')) / sqrt(sum(var)), 2) AS interaction_z FROM d;
+
+-- EVAL Q7: checkout conversion, search vs home feed (null). Funnels checkout started -> order placed,
+-- Totals, hold order_id, 1-hour window, breakdown step 1 entry_point (Order Again checkouts reported
+-- separately). Overall and by platform / Pass / experiment arm / month, with a two-proportion z per
+-- split (two-sided p from the normal tail), then the interaction of the gap with each split.
+CREATE OR REPLACE TEMP TABLE q7 AS
+WITH x AS (SELECT c.entry_point AS g, c.placed::INT AS y, c.platform, c.pass::VARCHAR AS pass, coalesce(p.arm, 'not_enrolled') AS arm,
+  strftime(c.t, '%Y-%m') AS mon FROM checkouts c JOIN prof p ON p.uid = c.uid WHERE c.entry_point IN ('search', 'home_feed'))
+SELECT 'all' AS split, g, count(*) AS n, sum(y) AS k FROM x GROUP BY ALL
+UNION ALL SELECT 'platform=' || platform, g, count(*), sum(y) FROM x GROUP BY ALL
+UNION ALL SELECT 'pass=' || pass, g, count(*), sum(y) FROM x GROUP BY ALL
+UNION ALL SELECT 'arm=' || arm, g, count(*), sum(y) FROM x GROUP BY ALL
+UNION ALL SELECT 'month=' || mon, g, count(*), sum(y) FROM x GROUP BY ALL;
+CREATE OR REPLACE TEMP TABLE q7w AS
+SELECT split, max(n) FILTER (WHERE g = 'search') AS n_s, max(k::DOUBLE / n) FILTER (WHERE g = 'search') AS s,
+ max(n) FILTER (WHERE g = 'home_feed') AS n_h, max(k::DOUBLE / n) FILTER (WHERE g = 'home_feed') AS h FROM q7 GROUP BY 1;
+WITH z AS (SELECT *, (s - h) / sqrt(((s * n_s + h * n_h) / (n_s + n_h)) * (1 - (s * n_s + h * n_h) / (n_s + n_h)) * (1.0 / n_s + 1.0 / n_h)) AS z FROM q7w)
+SELECT split, n_s AS search_checkouts, round(s, 4) AS search_conv, n_h AS home_feed_checkouts, round(h, 4) AS home_feed_conv,
+ round(z, 2) AS z, round(2 * (exp(-power(abs(z), 2) / 2) / sqrt(2 * pi()) * (1 / (1 + 0.2316419 * abs(z))) * (0.319381530 + (1 / (1 + 0.2316419 * abs(z))) * (-0.356563782 + (1 / (1 + 0.2316419 * abs(z))) * (1.781477937 + (1 / (1 + 0.2316419 * abs(z))) * (-1.821255978 + (1 / (1 + 0.2316419 * abs(z))) * 1.330274429))))), 3) AS p_value FROM z ORDER BY split;
+-- interaction: does the search - home feed gap differ across a split's levels? (Wald heterogeneity
+-- of the per-level gaps; df = levels - 1; p from the chi-square tail: normal tail for 1 df, closed form for 2 and 4 df)
+WITH d AS (SELECT split_part(split, '=', 1) AS dim, s - h AS gap, s * (1 - s) / n_s + h * (1 - h) / n_h AS var FROM q7w WHERE split <> 'all'),
+w AS (SELECT dim, gap, var, sum(gap / var) OVER (PARTITION BY dim) / sum(1 / var) OVER (PARTITION BY dim) AS pooled FROM d)
+SELECT dim, count(*) - 1 AS df, round(sum(power(gap - pooled, 2) / var), 2) AS q, round(CASE WHEN count(*) - 1 = 1 THEN 2 * (exp(-power(sqrt(sum(power(gap - pooled, 2) / var)), 2) / 2) / sqrt(2 * pi()) * (1 / (1 + 0.2316419 * sqrt(sum(power(gap - pooled, 2) / var)))) * (0.319381530 + (1 / (1 + 0.2316419 * sqrt(sum(power(gap - pooled, 2) / var)))) * (-0.356563782 + (1 / (1 + 0.2316419 * sqrt(sum(power(gap - pooled, 2) / var)))) * (1.781477937 + (1 / (1 + 0.2316419 * sqrt(sum(power(gap - pooled, 2) / var)))) * (-1.821255978 + (1 / (1 + 0.2316419 * sqrt(sum(power(gap - pooled, 2) / var)))) * 1.330274429))))) ELSE exp(-sum(power(gap - pooled, 2) / var) / 2) * (CASE WHEN count(*) - 1 = 2 THEN 1 WHEN count(*) - 1 = 4 THEN 1 + sum(power(gap - pooled, 2) / var) / 2 END) END, 3) AS p_value FROM w GROUP BY 1 ORDER BY 1;
+-- context: Order Again checkouts exist only from Jul 7 (lower conversion months; fee change Aug 11):
+-- conversion by entry_point, Jul 7 - Aug 10 and Aug 11 - Oct 1 (Pass and non-Pass together)
+SELECT CASE WHEN t < TIMESTAMP '2026-08-11' THEN 'a: Jul 7 - Aug 10' ELSE 'b: Aug 11 - Oct 1' END AS period, entry_point,
+ count(*) AS checkouts, round(avg(placed::INT), 4) AS conversion
+FROM checkouts WHERE t >= TIMESTAMP '2026-07-07' GROUP BY 1, 2 ORDER BY 1, 2;
 
 -- EVAL Q8: paid channel CAC (spend / Mixpanel signups) and network-reported signups
 WITH s AS (SELECT ch, count(*) AS signups FROM signups GROUP BY 1),
@@ -349,6 +372,13 @@ WITH s AS (SELECT uid, min(t) AS ts FROM ev WHERE event = 'pass trial started' G
 e AS (SELECT uid, outcome, orders_during_trial AS n FROM ev WHERE event = 'pass trial ended')
 SELECT count(*) AS completed_trials, round(avg((outcome = 'converted')::INT), 4) AS overall_conversion, round(avg((n >= 2)::INT), 4) AS share_with_2plus
 FROM e JOIN s ON s.uid = e.uid WHERE s.ts < TIMESTAMP '2026-09-17 23:59:59';
+
+-- including the trials that began before June 4 (a pass trial ended with no pass trial started in the data)
+WITH s AS (SELECT DISTINCT uid FROM ev WHERE event = 'pass trial started'),
+e AS (SELECT e.uid, e.outcome, e.orders_during_trial AS n, s.uid IS NULL AS warm FROM ev e LEFT JOIN s ON s.uid = e.uid WHERE e.event = 'pass trial ended')
+SELECT count(*) FILTER (WHERE warm) AS trials_begun_before_jun4, count(*) AS all_ended_trials,
+ round(avg((outcome = 'converted')::INT) FILTER (WHERE n < 2), 4) AS conv_0_1_all, round(avg((outcome = 'converted')::INT) FILTER (WHERE n >= 2), 4) AS conv_2plus_all
+FROM e;
 
 -- EVAL Q11: subtotal distribution near the $15 free-delivery minimum, Pass vs non-Pass orders
 SELECT CASE WHEN subtotal_usd < 10 THEN 'a: < 10' WHEN subtotal_usd < 15 THEN 'b: 10-14.99' WHEN subtotal_usd < 20 THEN 'c: 15-19.99' WHEN subtotal_usd < 30 THEN 'd: 20-29.99' ELSE 'e: 30+' END AS band,
@@ -404,27 +434,40 @@ SELECT count(DISTINCT uid) AS customers_used_order_again,
 FROM ev WHERE event = 'reorder tapped';
 SELECT round(avg((entry_point = 'reorder')::INT), 4) AS september_reorder_share FROM orders WHERE t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-10-01';
 
--- EVAL Q15: first-order rate by signup method (null), overall and by platform / signup month /
--- channel. New customers who signed up through Aug 31. Rates per method, then one omnibus test per
--- split (chi-square across the three methods, 2 df: p = exp(-chi2 / 2)).
+-- EVAL Q15: visit conversion by how the visit started (null). Visit conversion KPI: app opened ->
+-- order placed within an hour, before the next app opened; breakdown open_source on app opened.
+-- Overall and by platform / Pass at the visit / experiment arm / month; one chi-square across the
+-- three sources per split (2 df: p = exp(-chi2 / 2)), plus push vs organic as a two-proportion z.
 CREATE OR REPLACE TEMP TABLE q15 AS
-WITH f AS (SELECT s.signup_method AS m, s.ch, p.platform, date_trunc('month', s.t0)::DATE AS mon, (o.uid IS NOT NULL)::INT AS y
-  FROM signups s LEFT JOIN (SELECT DISTINCT uid FROM orders) o ON o.uid = s.uid LEFT JOIN prof p ON p.uid = s.uid
-  WHERE s.t0 < TIMESTAMP '2026-09-01')
-SELECT 'all' AS split, m, count(*) AS n, sum(y) AS k FROM f GROUP BY 1, 2
-UNION ALL SELECT 'platform=' || platform, m, count(*), sum(y) FROM f GROUP BY 1, 2
-UNION ALL SELECT 'month=' || strftime(mon, '%Y-%m'), m, count(*), sum(y) FROM f GROUP BY 1, 2
-UNION ALL SELECT 'channel=' || ch, m, count(*), sum(y) FROM f GROUP BY 1, 2;
-SELECT split, max(n) FILTER (WHERE m = 'apple') AS apple_n, round(max(k::DOUBLE / n) FILTER (WHERE m = 'apple'), 4) AS apple_rate,
- max(n) FILTER (WHERE m = 'email') AS email_n, round(max(k::DOUBLE / n) FILTER (WHERE m = 'email'), 4) AS email_rate,
- max(n) FILTER (WHERE m = 'google') AS google_n, round(max(k::DOUBLE / n) FILTER (WHERE m = 'google'), 4) AS google_rate
-FROM q15 GROUP BY 1 ORDER BY 1;
+WITH v AS (SELECT o.open_source AS g, (s.tp IS NOT NULL)::INT AS y, o.platform, (o.pass_status <> 'none')::VARCHAR AS pass,
+  coalesce(p.arm, 'not_enrolled') AS arm, strftime(s.t, '%Y-%m') AS mon
+  FROM sessions s JOIN ev o ON o.uid = s.uid AND o.t = s.t AND o.event = 'app opened' JOIN prof p ON p.uid = s.uid)
+SELECT 'all' AS split, g AS m, count(*) AS n, sum(y) AS k FROM v GROUP BY ALL
+UNION ALL SELECT 'platform=' || platform, g, count(*), sum(y) FROM v GROUP BY ALL
+UNION ALL SELECT 'pass=' || pass, g, count(*), sum(y) FROM v GROUP BY ALL
+UNION ALL SELECT 'arm=' || arm, g, count(*), sum(y) FROM v GROUP BY ALL
+UNION ALL SELECT 'month=' || mon, g, count(*), sum(y) FROM v GROUP BY ALL;
 WITH t AS (SELECT split, sum(k)::DOUBLE / sum(n) AS pr FROM q15 GROUP BY 1),
 c AS (SELECT q.split, sum(power(q.k - q.n * t.pr, 2) / (q.n * t.pr) + power((q.n - q.k) - q.n * (1 - t.pr), 2) / (q.n * (1 - t.pr))) AS chi2
-  FROM q15 q JOIN t ON t.split = q.split GROUP BY 1)
-SELECT split, round(chi2, 2) AS chi2_df2, round(exp(-chi2 / 2), 3) AS p_value FROM c ORDER BY 1;
--- context: iOS vs Android checkout conversion (not engineered; see the dungeon JSDoc noise notes)
-SELECT platform, count(*) AS checkouts, round(avg(placed::INT), 4) AS conversion FROM checkouts GROUP BY 1 ORDER BY 1;
+  FROM q15 q JOIN t ON t.split = q.split GROUP BY 1),
+r AS (SELECT split, max(n) FILTER (WHERE m = 'organic') AS n_o, max(k::DOUBLE / n) FILTER (WHERE m = 'organic') AS o,
+  max(n) FILTER (WHERE m = 'push_notification') AS n_p, max(k::DOUBLE / n) FILTER (WHERE m = 'push_notification') AS pu,
+  max(n) FILTER (WHERE m = 'deep_link') AS n_d, max(k::DOUBLE / n) FILTER (WHERE m = 'deep_link') AS dl FROM q15 GROUP BY 1)
+SELECT r.split, r.n_o AS organic_visits, round(r.o, 4) AS organic_conv, r.n_p AS push_visits, round(r.pu, 4) AS push_conv,
+ r.n_d AS deep_link_visits, round(r.dl, 4) AS deep_link_conv, round(c.chi2, 2) AS chi2_df2, round(exp(-c.chi2 / 2), 3) AS p_value,
+ round((r.pu - r.o) / sqrt(((r.pu * r.n_p + r.o * r.n_o) / (r.n_p + r.n_o)) * (1 - (r.pu * r.n_p + r.o * r.n_o) / (r.n_p + r.n_o)) * (1.0 / r.n_p + 1.0 / r.n_o)), 2) AS z_push_vs_organic
+FROM r JOIN c ON c.split = r.split ORDER BY 1;
+-- interaction: does the push - organic gap differ across a split's levels? (Wald heterogeneity, 1 df per extra level)
+WITH r AS (SELECT split, max(n) FILTER (WHERE m = 'organic') AS n_o, max(k::DOUBLE / n) FILTER (WHERE m = 'organic') AS o,
+  max(n) FILTER (WHERE m = 'push_notification') AS n_p, max(k::DOUBLE / n) FILTER (WHERE m = 'push_notification') AS pu FROM q15 WHERE split <> 'all' GROUP BY 1),
+d AS (SELECT split_part(split, '=', 1) AS dim, pu - o AS gap, pu * (1 - pu) / n_p + o * (1 - o) / n_o AS var FROM r),
+w AS (SELECT dim, gap, var, sum(gap / var) OVER (PARTITION BY dim) / sum(1 / var) OVER (PARTITION BY dim) AS pooled FROM d)
+SELECT dim, count(*) - 1 AS df, round(sum(power(gap - pooled, 2) / var), 2) AS q, round(CASE WHEN count(*) - 1 = 1 THEN 2 * (exp(-power(sqrt(sum(power(gap - pooled, 2) / var)), 2) / 2) / sqrt(2 * pi()) * (1 / (1 + 0.2316419 * sqrt(sum(power(gap - pooled, 2) / var)))) * (0.319381530 + (1 / (1 + 0.2316419 * sqrt(sum(power(gap - pooled, 2) / var)))) * (-0.356563782 + (1 / (1 + 0.2316419 * sqrt(sum(power(gap - pooled, 2) / var)))) * (1.781477937 + (1 / (1 + 0.2316419 * sqrt(sum(power(gap - pooled, 2) / var)))) * (-1.821255978 + (1 / (1 + 0.2316419 * sqrt(sum(power(gap - pooled, 2) / var)))) * 1.330274429))))) ELSE exp(-sum(power(gap - pooled, 2) / var) / 2) * (CASE WHEN count(*) - 1 = 2 THEN 1 WHEN count(*) - 1 = 4 THEN 1 + sum(power(gap - pooled, 2) / var) / 2 END) END, 3) AS p_value FROM w GROUP BY 1 ORDER BY 1;
+-- context: iOS vs Android checkout conversion (not engineered), whole window and without the card incident days
+SELECT platform, count(*) AS checkouts, round(avg(placed::INT), 4) AS conversion,
+ round(avg(placed::INT) FILTER (WHERE NOT (d BETWEEN DATE '2026-08-25' AND DATE '2026-08-28')), 4) AS conversion_excl_incident,
+ round(avg((payment_method = 'card')::INT), 4) AS card_share
+FROM checkouts GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q16: Forkfly Pass footprint — members, share of orders, trials, cancellations
 SELECT current_pass, count(*) AS customers FROM prof GROUP BY 1 ORDER BY 1;

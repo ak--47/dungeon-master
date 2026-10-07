@@ -4,7 +4,7 @@
 
 Forkfly is a food delivery app for people who want good local food, not a thousand chains. It launched in Austin in 2023 and now runs in eight US cities: New York, Chicago, Atlanta, Miami, Boston, Austin, Denver, and Seattle. In each city Forkfly works with a curated set of about 24 independent restaurants (about 190 in total), chosen by the local market manager.
 
-The company has about 30 employees: product and engineering, a market operations team (one market manager per city plus courier scheduling), growth marketing, a small customer support team (chat and phone), and finance. In summer 2026 Forkfly handles about 400 app orders a day across all cities. Weekly averages grew from about 350 orders a day in June to about 445 a day in September; single days ranged from about 275 to 550. The average order total is about $34.
+The company has about 30 employees: product and engineering, a market operations team (one market manager per city plus courier scheduling), growth marketing, a small customer support team (chat and phone), and finance. In summer 2026 Forkfly handles a few hundred app orders a day across all cities. The average order total is about $34.
 
 Couriers are independent contractors who sign up for delivery shifts in their city. Forkfly's dispatch system assigns each order to a courier and estimates the delivery time.
 
@@ -38,7 +38,7 @@ Couriers are independent contractors who sign up for delivery shifts in their ci
 - **Household type** (`household_type`), from the signup survey question "Who do you usually order for?": `single` (just me), `couple`, `family`. Families order more items per order.
 - **Favorite cuisine** (`favorite_cuisine`), from the same survey.
 - **Platforms:** a little over half of customers use the iOS app (iPhone or iPad); the rest use the Android app.
-- **Established vs new customers.** About 58% of customers active in the window were already customers on June 4. New customers arrive steadily, about 240 a week.
+- **Established vs new customers.** About 58% of customers active in the window were already customers on June 4. The rest signed up during the window.
 - **Pass members.** Roughly 1,200 to 1,700 customers held a Pass (trial or paid) at any one time in the summer.
 
 ## How customers find us
