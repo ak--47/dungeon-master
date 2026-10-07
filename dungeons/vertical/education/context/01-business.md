@@ -2,7 +2,7 @@
 
 ## Who we are
 
-Brightpath Academy is an online school for professional skills. Adults use it to change careers, grow in their current role, earn credit for a university course, or learn for its own sake. The company is remote-first with about 35 employees, plus about 20 contract instructors and cohort facilitators. Learners study on the web and in the iOS and Android apps.
+Brightpath Academy is an online school for professional skills. Adults use it to change careers, grow in their current role, earn credit for a university course, or learn for its own sake. The company is small, remote-first, and venture-funded, with about 12 employees. Course instructors and cohort facilitators are contractors paid per course run. Learners study on the web and in the iOS and Android apps.
 
 ## The catalog
 

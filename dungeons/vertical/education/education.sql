@@ -122,10 +122,9 @@ SELECT 'attendees_per_live_session', median(n), round(avg(n), 2), count(*) FROM 
   count(DISTINCT uid) AS n FROM ev WHERE event = 'live session attended' GROUP BY 1, 2);
 
 -- STORY H5-first-week-lessons — retention (learner-initiated events) on or after day 30 by first-week completed lessons
--- (new learners who started a lesson; signups at least 37 days before the window end)
+-- (all new learners with signups at least 37 days before the window end)
 -- graded read: exactly 3 vs exactly 2 first-week lessons (knob 0.85 / 0.55 = 1.545); 3+ vs fewer is context
-WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 37 DAY
-  AND uid IN (SELECT uid FROM ev WHERE event = 'lesson started')),
+WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 37 DAY),
 f AS (SELECT s.uid, count(*) FILTER (WHERE e.event = 'lesson completed' AND e.t < s.t0 + INTERVAL 7 DAY) AS first_week,
   count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 30 DAY AND e.event NOT IN ('certificate earned', 'subscription started')) AS ret_unbounded,
   count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 30 DAY AND e.t < s.t0 + INTERVAL 37 DAY AND e.event NOT IN ('certificate earned', 'subscription started')) AS ret_d30_week
@@ -226,6 +225,14 @@ SELECT p.variant, count(DISTINCT x.uid) AS learners, round(count(en.uid) / count
 FROM x JOIN prof p ON p.uid = x.uid LEFT JOIN ev en ON en.uid = x.uid AND en.event = 'course enrolled' AND en.t >= x.t_exp
 GROUP BY 1 ORDER BY 1;
 
+-- the common wrong answer: unique-learner funnels from each learner's first in-test course page view
+-- (a) any enrollment within the 30-day default window; (b) an enrollment in that same course within 1 day
+WITH f AS (SELECT uid, min(t) AS t0, arg_min(course_id, t) AS c0 FROM ev WHERE event = 'course page viewed' AND t >= TIMESTAMP '2026-07-08' GROUP BY 1)
+SELECT p.variant, count(*) AS learners,
+ round(avg((EXISTS (SELECT 1 FROM ev e WHERE e.uid = f.uid AND e.event = 'course enrolled' AND e.t >= f.t0 AND e.t < f.t0 + INTERVAL 30 DAY))::INT), 4) AS any_enrollment_30d,
+ round(avg((EXISTS (SELECT 1 FROM ev e WHERE e.uid = f.uid AND e.event = 'course enrolled' AND e.course_id = f.c0 AND e.t >= f.t0 AND e.t < f.t0 + INTERVAL 1 DAY))::INT), 4) AS first_view_same_course_1d
+FROM f JOIN prof p ON p.uid = f.uid GROUP BY 1 ORDER BY 1;
+
 -- EVAL Q4 — Onboarding completion by account type (7-day window)
 WITH f AS (SELECT s.uid, s.account_type, s.t0,
   (SELECT min(t) FROM ev e WHERE e.uid = s.uid AND e.event = 'learning goals set' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 7 DAY) AS t1 FROM signups s),
@@ -249,9 +256,8 @@ SELECT coalesce(course_format, 'all') AS course_format, count(*) AS enrollments,
  round(avg((t_cert IS NOT NULL)::INT), 4) AS completion, round(median(date_diff('day', t_enroll, t_cert)), 1) AS median_days_to_certificate
 FROM enrollments WHERE t_enroll < TIMESTAMP '2026-07-01' GROUP BY ROLLUP (course_format) ORDER BY 1;
 
--- EVAL Q7 — First-week lessons and retention (new learners who started a lesson, signups through Aug 25)
-WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 37 DAY
-  AND uid IN (SELECT uid FROM ev WHERE event = 'lesson started')),
+-- EVAL Q7 — First-week lessons and retention (all new learners, signups through Aug 25)
+WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 37 DAY),
 f AS (SELECT s.uid, count(*) FILTER (WHERE e.event = 'lesson completed' AND e.t < s.t0 + INTERVAL 7 DAY) AS first_week,
   count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 30 DAY AND e.event NOT IN ('certificate earned', 'subscription started')) AS ret_unbounded,
   count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 30 DAY AND e.t < s.t0 + INTERVAL 37 DAY AND e.event NOT IN ('certificate earned', 'subscription started')) AS ret_d30_week
@@ -259,8 +265,7 @@ f AS (SELECT s.uid, count(*) FILTER (WHERE e.event = 'lesson completed' AND e.t 
 SELECT least(first_week, 5) AS first_week_lessons_capped_5, count(*) AS learners,
  round(avg((ret_unbounded > 0)::INT), 4) AS retained_day30_or_later, round(avg((ret_d30_week > 0)::INT), 4) AS retained_day30_36
 FROM f GROUP BY 1 ORDER BY 1;
-WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 37 DAY
-  AND uid IN (SELECT uid FROM ev WHERE event = 'lesson started')),
+WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 37 DAY),
 f AS (SELECT s.uid, count(*) FILTER (WHERE e.event = 'lesson completed' AND e.t < s.t0 + INTERVAL 7 DAY) AS first_week,
   count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 30 DAY AND e.event NOT IN ('certificate earned', 'subscription started')) AS ret_unbounded,
   count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 30 DAY AND e.t < s.t0 + INTERVAL 37 DAY AND e.event NOT IN ('certificate earned', 'subscription started')) AS ret_d30_week
@@ -374,19 +379,20 @@ SELECT cut, round(r1 - r0, 4) AS diff, round((r1 - r0) / sqrt(((r1 * n1 + r0 * n
 FROM w ORDER BY 1;
 
 -- EVAL Q14 — null: do learners score lower on quizzes taken in the Android app than in the iOS app?
--- quiz score by platform (event property), overall, by month, and by plan at quiz time; Welch z (Android minus iOS)
-WITH q AS (SELECT platform, score_pct, passed::INT AS passed, strftime(t, '%Y-%m') AS month, plan_tier FROM ev
+-- quiz score by platform (event property), overall, by month, and by plan at quiz time. z (Android minus iOS) uses a
+-- learner-clustered standard error: one learner's quizzes share learner-level traits, so quizzes are not independent
+WITH q AS (SELECT uid, platform, score_pct, passed::INT AS passed, strftime(t, '%Y-%m') AS month, plan_tier FROM ev
   WHERE event = 'quiz submitted' AND platform IN ('android', 'ios')),
-c AS (SELECT 'all' AS cut, platform, score_pct, passed FROM q
-  UNION ALL SELECT 'month_' || month, platform, score_pct, passed FROM q WHERE month < '2026-10'
-  UNION ALL SELECT 'plan_' || plan_tier, platform, score_pct, passed FROM q),
-g AS (SELECT cut, count(*) FILTER (WHERE platform = 'android') AS n1, avg(score_pct) FILTER (WHERE platform = 'android') AS m1, var_samp(score_pct) FILTER (WHERE platform = 'android') AS v1,
-  avg(passed) FILTER (WHERE platform = 'android') AS p1,
-  count(*) FILTER (WHERE platform = 'ios') AS n0, avg(score_pct) FILTER (WHERE platform = 'ios') AS m0, var_samp(score_pct) FILTER (WHERE platform = 'ios') AS v0,
-  avg(passed) FILTER (WHERE platform = 'ios') AS p0 FROM c GROUP BY 1)
-SELECT cut, n1 AS android_quizzes, round(m1, 2) AS android_score, round(p1, 4) AS android_pass, n0 AS ios_quizzes, round(m0, 2) AS ios_score, round(p0, 4) AS ios_pass,
- round((m1 - m0) / sqrt(v1 / n1 + v0 / n0), 2) AS z
-FROM g ORDER BY 1;
+c AS (SELECT 'all' AS cut, uid, platform, score_pct, passed FROM q
+  UNION ALL SELECT 'month_' || month, uid, platform, score_pct, passed FROM q WHERE month < '2026-10'
+  UNION ALL SELECT 'plan_' || plan_tier, uid, platform, score_pct, passed FROM q),
+m AS (SELECT cut, platform, count(*) AS n, avg(score_pct) AS mu, avg(passed) AS pass FROM c GROUP BY 1, 2),
+s AS (SELECT c.cut, c.uid, sum(CASE WHEN c.platform = 'android' THEN (c.score_pct - m.mu) / m.n ELSE -(c.score_pct - m.mu) / m.n END) AS contrib
+  FROM c JOIN m ON m.cut = c.cut AND m.platform = c.platform GROUP BY 1, 2)
+SELECT a.cut, a.n AS android_quizzes, round(a.mu, 2) AS android_score, round(a.pass, 4) AS android_pass,
+ i.n AS ios_quizzes, round(i.mu, 2) AS ios_score, round(i.pass, 4) AS ios_pass,
+ round((a.mu - i.mu) / (SELECT sqrt(sum(contrib ^ 2)) FROM s WHERE s.cut = a.cut), 2) AS z_clustered
+FROM m a JOIN m i ON i.cut = a.cut AND i.platform = 'ios' WHERE a.platform = 'android' ORDER BY 1;
 -- secondary: lesson completion per start outside the Sep 9-12 incident (starts on Sep 9-12 excluded on both platforms), overall, by content type, and by month
 WITH w AS (SELECT platform, content_type, strftime(t_start, '%Y-%m') AS month, (t_done IS NOT NULL)::INT AS ok
   FROM lessons WHERE platform IN ('android', 'ios')

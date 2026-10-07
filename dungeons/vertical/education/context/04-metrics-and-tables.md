@@ -27,7 +27,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 
 Three tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). Days with no activity have a row with zeros. They join to events on the UTC date of the event and on the named dimension.
 
-In the warehouse, numeric columns are loaded as FLOAT64 (shown as FLOAT below). Count columns (signups, clicks, impressions, video starts, subscriptions) and `list_price_usd` always hold whole numbers, and raw file exports show them as integers.
+Count columns (signups, clicks, impressions, video starts, subscriptions) and the whole-dollar columns `list_price_usd` and `gross_bookings_usd` are INTEGER (INT64 in the warehouse). Spend and rates are FLOAT (FLOAT64).
 
 ### `paid_marketing_daily`
 
@@ -38,9 +38,9 @@ Daily paid marketing cost by channel, from the ad platforms' billing exports. Ea
 | `date` | DATE | UTC day | Spend day. |
 | `acquisition_channel` | STRING | — | `paid_search`, `paid_social`, or `youtube_ads`. Matches `acquisition_channel` on `account created`. |
 | `spend_usd` | FLOAT | USD | Media spend billed for the day. |
-| `platform_reported_signups` | FLOAT | count | Signups the ad platform claims for the day. Platforms use their own attribution and usually claim more than Mixpanel records. |
-| `clicks` | FLOAT | count | Ad clicks reported by the platform. |
-| `impressions` | FLOAT | count | Ad impressions reported by the platform. |
+| `platform_reported_signups` | INTEGER | count | Signups the ad platform claims for the day. Platforms use their own attribution and usually claim more than Mixpanel records. |
+| `clicks` | INTEGER | count | Ad clicks reported by the platform. |
+| `impressions` | INTEGER | count | Ad impressions reported by the platform. |
 
 Caveats: organic search, referral, university partnership, and employer signups have no media spend and are not in this table. Use Mixpanel signups, not `platform_reported_signups`, for CAC.
 
@@ -52,7 +52,7 @@ Daily video playback and app health by platform, from the video player's quality
 |---|---|---|---|
 | `date` | DATE | UTC day | Day. |
 | `platform` | STRING | — | `web`, `ios`, or `android`. Matches `platform` on events. |
-| `video_starts` | FLOAT | count | Videos the player started that day: lesson videos plus course trailers and previews on course pages. |
+| `video_starts` | INTEGER | count | Videos the player started that day: lesson videos plus course trailers and previews on course pages. |
 | `playback_failure_rate` | FLOAT | share 0-1 | Share of video starts that hit a player error (failed to load, stalled, or crashed the player). |
 | `crash_free_session_rate` | FLOAT | share 0-1 | Share of app sessions without a crash. Web reports browser-side errors that end a session. |
 | `app_version` | STRING | — | The app version most learners on the platform used that day. `web` for the web app, which deploys continuously. |
@@ -67,9 +67,9 @@ Daily new Plus subscriptions, list prices, and bookings by billing interval, fro
 |---|---|---|---|
 | `date` | DATE | UTC day | Subscription start day. |
 | `billing_interval` | STRING | — | `monthly` or `annual`. Matches `billing_interval` on `subscription started`. |
-| `new_subscriptions` | FLOAT | count | New Plus subscriptions billed that day. |
-| `list_price_usd` | FLOAT | USD | List price of a new subscription of this interval on this day (per month for monthly, per year for annual). |
-| `gross_bookings_usd` | FLOAT | USD | `new_subscriptions` × `list_price_usd`: the first payment of the day's new subscriptions. |
+| `new_subscriptions` | INTEGER | count | New Plus subscriptions billed that day. |
+| `list_price_usd` | INTEGER | USD | List price of a new subscription of this interval on this day (per month for monthly, per year for annual). |
+| `gross_bookings_usd` | INTEGER | USD | `new_subscriptions` × `list_price_usd`: the first payment of the day's new subscriptions. |
 
 Caveats: the table covers new Plus subscriptions only, not renewals, refunds after the first payment, or Teams contracts. Billing and Mixpanel differ a little day to day: a first payment that fails is never booked, and some purchases made through the app stores never reach Mixpanel. Use this table, not Mixpanel, for booked subscriptions and revenue.
 
@@ -79,4 +79,4 @@ Caveats: the table covers new Plus subscriptions only, not renewals, refunds aft
 - Activity follows a weekly study rhythm: Sunday is the busiest study day and Friday and Saturday are the quietest. Compare whole weeks or matching weekdays.
 - Learners do many lessons, quizzes, and course page views. Per-lesson and per-page-view questions need `lesson_id` or `course_id` held constant; a unique-learner funnel answers a different question (did the learner ever do it).
 - New-learner funnels, conversion, and retention depend on signup date: learners who joined late in the window have had less time to act. Compare cohorts that joined in the same weeks.
-- New learners join every day while some earlier learners stop studying, so the mix of new and established learners shifts across the window. Raw weekly totals can move for reasons unrelated to any one change.
+- New learners join every day, so the mix of new and established learners shifts across the window. Raw weekly totals can move for reasons unrelated to any one change.
