@@ -229,6 +229,16 @@ SELECT a.*, (SELECT (g.p - c.p) / sqrt(((g.p * g.n + c.p * c.n) / (g.n + c.n)) *
   FROM a g, a c WHERE g.variant = 'Guided' AND c.variant = 'Control') AS z_completion
 FROM a ORDER BY variant;
 
+-- tutorial length by arm: tutorial_minutes on "tutorial completed" and the real gap from the last
+-- "tutorial started" before it (test players who finished within 7 days)
+WITH c AS (SELECT o.uid, o.variant, e.t AS tc, e.tutorial_minutes AS m FROM onboarding o
+  JOIN ev e ON e.uid = o.uid AND e.event = 'tutorial completed' AND e.t < o.t0 + INTERVAL 7 DAY WHERE o.variant IS NOT NULL),
+g AS (SELECT c.uid, c.variant, c.m, date_diff('millisecond', max(s.t), c.tc) / 60000.0 AS gap_min FROM c
+  JOIN ev s ON s.uid = c.uid AND s.event = 'tutorial started' AND s.t <= c.tc GROUP BY 1, 2, 3, c.tc)
+SELECT variant, count(*) AS finishers, round(avg(m), 2) AS avg_tutorial_minutes, round(median(m), 2) AS median_tutorial_minutes,
+ round(median(gap_min), 2) AS median_real_gap_min, round(corr(m, gap_min), 4) AS corr_minutes_vs_gap
+FROM g GROUP BY 1 ORDER BY 1;
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q2 — early guild and retention (tutorial finishers, signup ≤ Sep 3), plus share who join early
 -- ─────────────────────────────────────────────────────────────────────────

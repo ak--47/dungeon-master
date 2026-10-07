@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Emberfall**, the free-to-play f
 
 - **Product:** Emberfall on PC (Windows, macOS, and Linux through the Emberfall launcher) and on mobile (iPhone, iPad, and Android). One account plays on every device, with cross-play between PC and mobile.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early June through the end of September and the first day of October.
-- **Scale:** about 9,800 players played in the window. About 4,500 of them created their account during the window; the rest are veterans who joined before June 4. The project holds about 713,000 events.
+- **Scale:** about 9,800 players have events in the window, and about 7,800 of them launched the game (`game launched`). About 4,500 of the 9,800 created their account during the window; the rest are veterans who joined before June 4. The project holds about 713,000 events.
 - **Servers:** players pick a home server region when they create their account: North America (`NA`), Europe (`EU`), or Asia-Pacific (`APAC`).
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. North American evenings fall after midnight UTC.
 

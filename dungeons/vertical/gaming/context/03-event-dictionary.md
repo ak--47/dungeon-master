@@ -19,7 +19,7 @@ Every event below is tracked in Mixpanel. Property names are exact. All events c
 | `$experiment_started` | Right after `account created`, for players who joined from 2026-07-08 (the "First Flame Tutorial" test). Once per player. | `Experiment name`: `First Flame Tutorial`. `Variant name`: `Control` or `Guided`. |
 | `character created` | The player finishes making their first hero. | `class_name`: the hero's class. `role`: `tank`, `healer`, or `dps`. |
 | `tutorial started` | The tutorial begins. It fires again if a player who left the tutorial restarts it on a later visit. | — |
-| `tutorial completed` | The player finishes the tutorial. A player who never finishes it cannot queue for dungeons or join the arena. | `tutorial_version`: `classic` or `guided`. `tutorial_minutes`: minutes spent in the tutorial. |
+| `tutorial completed` | The player finishes the tutorial. A player who never finishes it cannot queue for dungeons or join the arena. | `tutorial_version`: `classic` or `guided`. `tutorial_minutes`: minutes from the start of the tutorial (the last `tutorial started`) to its completion. |
 
 ## Sessions
 
