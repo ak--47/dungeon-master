@@ -156,6 +156,13 @@ WHERE k.t0 >= TIMESTAMP '2026-07-08' AND p.variant IS NOT NULL GROUP BY 1 ORDER 
 
 SELECT "Variant name" AS variant, count(DISTINCT uid) AS exposed_users, min(t) AS first_exposure FROM ev WHERE event = '$experiment_started' GROUP BY 1 ORDER BY 1;
 
+-- the arm belongs to the customer account: one arm per company_id, and single-agent workspaces are not in the test
+WITH c AS (SELECT company_id, count(*) AS members, count(variant) AS exposed, count(DISTINCT variant) AS arms FROM prof GROUP BY 1)
+SELECT CASE WHEN members = 1 THEN 'single-agent workspaces' ELSE 'accounts with 2+ agents' END AS workspace_type, count(*) AS companies,
+ sum(members) AS users, sum(exposed) AS exposed_users, max(arms) AS max_arms_per_company,
+ count(*) FILTER (WHERE arms = 1) AS companies_in_test
+FROM c GROUP BY 1 ORDER BY 1;
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H6-email-ingestion-incident — 70% of email tickets stuck 2026-08-26..27 (warehouse join)
 -- ─────────────────────────────────────────────────────────────────────────
@@ -191,7 +198,7 @@ SELECT education, round(season_per_week, 1) AS season_per_week, round(before_per
 FROM g ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- STORY H9-macros-first-two-weeks — under 3 macros in 14 days: day 28-41 retention ×0.5
+-- STORY H9-macros-first-two-weeks — go-dark chance falls smoothly with macros saved in 14 days; under 3 vs 3+ day 28-41 retention ×0.435
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE TEMP TABLE macro_cohort AS
 SELECT s.uid, s.t0,
@@ -322,7 +329,7 @@ FROM w WHERE per IS NOT NULL GROUP BY 1 ORDER BY 4 DESC;
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q10 — early behavior that predicts new workspaces staying (macros in the first 14 days)
 -- ─────────────────────────────────────────────────────────────────────────
-SELECT least(macros_14d, 6) AS macros_first_14d, count(*) AS workspaces, round(avg(retained_d28_41::INT), 4) AS retention_d28_41
+SELECT least(macros_14d, 8) AS macros_first_14d, count(*) AS workspaces, round(avg(retained_d28_41::INT), 4) AS retention_d28_41
 FROM macro_cohort GROUP BY 1 ORDER BY 1;
 SELECT CASE WHEN macros_14d >= 3 THEN '3+ macros' ELSE 'under 3' END AS cohort, count(*) AS workspaces, round(avg(retained_d28_41::INT), 4) AS retention_d28_41
 FROM macro_cohort GROUP BY 1 ORDER BY 1;
@@ -445,6 +452,13 @@ FROM tickets WHERE t2 IS NOT NULL AND t0 < TIMESTAMP '2026-09-10 23:59:59';
 SELECT CASE WHEN k.t0 < TIMESTAMP '2026-07-08' THEN '1 before test' ELSE '2 test period' END AS period, coalesce(p.variant, 'not exposed') AS arm,
  count(*) AS resolved_tickets, round(avg(k.reopened::INT), 4) AS reopen_rate
 FROM tickets k JOIN prof p ON p.uid = k.uid WHERE k.t2 IS NOT NULL AND k.t0 < TIMESTAMP '2026-09-10 23:59:59' GROUP BY 1, 2 ORDER BY 1, 2;
+-- the quick Insights recipe: total ticket reopened / total ticket resolved over the window (a reopened
+-- ticket's second resolution sits in the denominator, so this reads lower than the per-ticket rate)
+SELECT 'all' AS grp, count(*) FILTER (WHERE event = 'ticket reopened') AS reopened_events, count(*) FILTER (WHERE event = 'ticket resolved') AS resolved_events,
+ round(reopened_events::DOUBLE / resolved_events, 4) AS totals_ratio FROM ev;
+SELECT coalesce(p.variant, 'not exposed') AS arm, count(*) FILTER (WHERE event = 'ticket reopened') AS reopened_events, count(*) FILTER (WHERE event = 'ticket resolved') AS resolved_events,
+ round(reopened_events::DOUBLE / resolved_events, 4) AS totals_ratio
+FROM ev JOIN prof p ON p.uid = ev.uid WHERE ev.t >= TIMESTAMP '2026-07-08' GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q19 — quarter review inputs (open-ended): headline KPIs by month

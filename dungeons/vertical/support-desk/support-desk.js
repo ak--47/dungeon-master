@@ -20,9 +20,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             subscriptions from 2026-08-18), Enterprise ($89, sales-led). New
  *             workspaces start a 14-day trial. Reply Assist (AI reply drafts)
  *             launches 2026-07-21 for Growth and Enterprise.
- * SCALE:      10,000 users (≈4,570 trial signups inside the window), ~0.87M
- *             events, 120 days (2026-06-04 → 2026-10-01, UTC); ≈350 customer
- *             companies with several agents (2-60 each, ≈4,500 users) plus
+ * SCALE:      10,000 users (≈4,570 trial signups inside the window), ~0.86M
+ *             events, 120 days (2026-06-04 → 2026-10-01, UTC); ≈370 customer
+ *             companies with several agents (2-60 each, ≈4,550 users) plus
  *             single-agent workspaces: Free (≈1,000 before the window), trials
  *             in flight on June 4 (≈300), and one new workspace per trial signup
  * CORE LOOP:  ticket assigned → reply sent → ticket resolved (→ csat received)
@@ -44,8 +44,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   - Ticket (weight 3): ticket assigned → reply sent → ticket escalated → reply
  *       sent → ticket resolved → ticket reopened → csat received. Engine 100%;
  *       the everything hook rebuilds every ticket from its arrival (see below).
- *       Carries the Skills Routing experiment (multipliers 1.0; the hook applies
- *       the effect).
+ *       Carries the Skills Routing experiment (multipliers 1.0; the hook sets
+ *       the arm per customer account and applies the effect).
  *   - Trial purchase (plan_tier = trial, weight 1): pricing page viewed →
  *       subscription started (templates; the hook decides the one purchase)
  *
@@ -79,7 +79,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * - Companies: established customers come from a seeded table (size → planned
  *   agents 2-8 / 8-25 / 25-60, plan mix by size, seats = agents x 1.0-1.3,
  *   industry, region, email provider, acquisition channel). Customer agents
- *   are spread over the table by a salted hash. Established single-agent
+ *   fill the planned seats in processing order (every account's first two
+ *   seats first, then the rest, each list shuffled by a salt), so every
+ *   customer account has at least two agents. Established single-agent
  *   workspaces are on the Free plan (10% of established users) or own a trial
  *   that started in the 14 days before June 4 (5.5%, the in-window pace of
  *   trial signups who connect an inbox), so trials are in flight on day 1.
@@ -103,9 +105,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   probability BUY_MAX x a channel keep share, 1-21 days after signup
  *   (skewed to the trial end), one purchase per workspace: Growth or Starter,
  *   1-4 seats, monthly or annual. After the trial the workspace is on Free
- *   unless it bought. In-window plan choice and the post-change downgrade
- *   follow even cycles (processing order), so plan shares carry no coin-flip
- *   noise. A buyer with no engine template clones the run's first purchase
+ *   unless it bought. Plan choice and the post-change downgrade are salted
+ *   per buyer. A buyer with no engine template clones the run's first purchase
  *   event (identity and company re-stamped); macros and the widget do the same
  *   with device fields from the user's own signup. Trial signups who never
  *   connect an inbox browse for up to 3 days and leave.
@@ -121,7 +122,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   and tickets merged into another; subscription_billing_daily adds a few
  *   invoice purchases Mixpanel never received and pre-invoice seat edits;
  *   paid spend is half a paced budget (weekday shape, never zero) and half
- *   bid x the day's delivered signups, with seeded day noise.
+ *   bid x the day's delivered signups, with seeded day noise. During the
+ *   email incident the stuck share of spam/auto-replies is processed with the
+ *   backlog on Aug 28 (tickets_auto_closed dips, then spikes).
+ * - Per-ticket and per-user draws are salted (hashFloat) or seeded; no even
+ *   cycles, so reads carry honest sampling noise around the knobs.
  */
 
 // ── HOOK STORIES ──
@@ -183,24 +188,31 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * H5. SKILLS ROUTING EXPERIMENT (Ticket funnel experiment + everything)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: from 2026-07-08 users with tickets split 50/50. "Skills Routing"
- *   (tickets routed by agent skill instead of round robin) makes the first
- *   reply take 0.7x the time and multiplies the reopen rate by 0.6 (12% →
- *   7.2%). Escalations do not change (honest null).
+ * PATTERN: from 2026-07-08 customer accounts (2+ agents) split 50/50. The
+ *   routing method is a workspace setting, so the arm is assigned per
+ *   company_id: within each plan, accounts are paired by size and one of each
+ *   pair (salted) gets the variant; all its agents share the arm. Single-agent
+ *   workspaces (Free, trials, self-serve buyers) are not in the test.
+ *   "Skills Routing" (tickets routed by agent skill instead of round robin)
+ *   makes the first reply take 0.7x the time and multiplies the reopen rate
+ *   by 0.6 (12% → 7.2%). Escalations do not change (honest null).
  * MIXPANEL: Funnels, ticket assigned → reply sent, Totals, hold ticket_id
  *   constant, 7-day window, date range Jul 8 - Sep 24, breakdown
- *   "Experiment: Skills Routing", median time to convert; Insights, ticket
- *   reopened / ticket resolved by the same breakdown.
+ *   "Experiment: Skills Routing", median time to convert; reopens per ticket
+ *   (ticket resolved → ticket reopened, hold ticket_id constant), or Insights
+ *   ticket reopened / ticket resolved by the same breakdown (reads lower,
+ *   because second resolutions sit in the denominator).
  * REAL WORLD: the right agent answers faster and right the first time.
  *
  * ─────────────────────────────────────────────────────────────────────────
  * H6. EMAIL INGESTION INCIDENT (everything + warehouse inbound_channel_daily;
  *     external-table join)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: 2026-08-26 to 2026-08-27, 70% of email tickets (an even cycle) are
- *   stuck in the ingestion queue and reach agents only after the fix (Aug 28,
- *   00:00-10:00 UTC). Other channels are untouched. The warehouse shows
- *   ingestion_status = degraded for email on those days.
+ * PATTERN: 2026-08-26 to 2026-08-27, 70% of email tickets (salted per
+ *   ticket) are stuck in the ingestion queue and reach agents only after the
+ *   fix (Aug 28, 00:00-10:00 UTC). Other channels are untouched. The warehouse
+ *   shows ingestion_status = degraded for email on those days, and the stuck
+ *   spam/auto-replies are auto-closed with the backlog on Aug 28.
  * MIXPANEL: Insights, ticket assigned, daily, breakdown channel; email/other
  *   ratio on the degraded days vs the 14 days either side (Aug 28 excluded).
  * REAL WORLD: a stuck mail queue looks like a quiet inbox, then a flood.
@@ -230,10 +242,14 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * H9. MACROS IN THE FIRST TWO WEEKS (everything; magic number)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: 40% of trial signups who connect an inbox save 3-6 macros in
- *   their first 14 days; the rest save at most 2. Half of those with fewer
- *   than 3 (an even cycle) go dark 21-24 days after signup. Day 28-41
- *   retention (queue viewed) is 0.5x for fewer than 3 macros; day 7-13
+ * PATTERN: every trial signup who connects an inbox saves a salted
+ *   negative-binomial number of macros in the first 14 days (mean 2.6, size
+ *   2: 0 → 19%, 1 → 21%, 2 → 18%, 3 → 14%, then a falling tail), independent
+ *   of activity. The chance to go dark 21-24 days after signup is a logistic
+ *   in that count: 0.75 / (1 + e^(1.2 x (macros - 2.5))), i.e. 0.71 at 0,
+ *   0.48 at 2, 0.27 at 3, 0.04 at 5. Day 28-41 retention (queue viewed)
+ *   rises smoothly with macros, steepest between 2 and 3; fewer than 3 vs 3+
+ *   reads 0.435x (implied by the count distribution and the curve). Day 7-13
  *   retention is the same in both groups.
  * MIXPANEL: Funnels, account created → macro created → macro created → macro
  *   created, 14-day window; save completers / non-completers as cohorts.
@@ -246,47 +262,49 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: on 2026-08-18 Growth rises from $39 to $49 per agent per month
  *   for new subscriptions. Purchases do not fall, but 40% of would-be Growth
- *   buyers pick Starter, so Growth's share of new subscriptions is 0.6x
- *   (65% → 39%), and new MRR per new subscription does not rise.
+ *   buyers (salted) pick Starter, so Growth's share of new subscriptions is
+ *   0.6x by design (65% → 39%), and new MRR per new subscription does not rise.
  * MIXPANEL: Insights, subscription started, breakdown plan, before vs after
  *   Aug 18; new MRR needs warehouse list_price_per_seat_usd.
  * REAL WORLD: a price rise on the middle tier pushes buyers down a tier.
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-support-desk, 2026-10-07, full
- * fidelity, 10,000 users, 872,191 events, 100,548 tickets assigned)
+ * fidelity, 10,000 users, 855,954 events, 98,745 tickets assigned)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                           | Derivation              | Expected | Measured
  * -----|--------------------------------------------------|-------------------------|----------|---------
- * H1   | median FRT, AI draft / other, Growth+Ent post-launch | AI_FRT_MULT          | 0.50     | 0.499 (53.1 vs 106.4 min)
- * H1   | AI share of eligible first replies after the ramp | 0.5 x mean use 0.8      | 0.40     | 0.401
+ * H1   | median FRT, AI draft / other, Growth+Ent post-launch | AI_FRT_MULT          | 0.50     | 0.520 (54.9 vs 105.7 min)
+ * H1   | AI share of eligible first replies after the ramp | 0.5 x mean use 0.8      | 0.40     | 0.405
  * H1   | AI drafts before launch or off Growth/Enterprise | exact purity            | 0        | 0
- * H2   | median assigned → resolved, urgent / normal      | PRIORITY_MULT.urgent    | 0.30     | 0.303 (6.2 vs 20.3 h)
- * H2   | median assigned → resolved, low / normal         | PRIORITY_MULT.low       | 1.50     | 1.479 (30.0 vs 20.3 h)
+ * H2   | median assigned → resolved, urgent / normal      | PRIORITY_MULT.urgent    | 0.30     | 0.299 (6.0 vs 20.1 h)
+ * H2   | median assigned → resolved, low / normal         | PRIORITY_MULT.low       | 1.50     | 1.485 (29.9 vs 20.1 h)
  * H3   | 7-day setup completion, Microsoft 365 / others   | 47 / 86                 | 0.547    | 0.554 (38.2% vs 69.0%)
  * H3   | 7-day inbox connected, Microsoft 365 / others    | 47 / 86                 | 0.547    | 0.570 (48.9% vs 85.8%)
  * H4   | spend per signup, Capterra / Google Ads          | 40 / 80                 | 0.50     | 0.497 ($40.06 vs $80.54)
  * H4   | 30-day paid rate, Capterra / LinkedIn            | BUY_KEEP 0.4 / 1.0      | 0.40     | 0.376 (16.3% vs 43.3%)
- * H5   | median FRT, Skills Routing / Control             | ROUTING_FRT_MULT        | 0.70     | 0.700 (80.4 vs 114.9 min)
- * H5   | reopen rate, Skills Routing / Control            | ROUTING_REOPEN_MULT     | 0.60     | 0.603 (7.3% vs 12.0%)
- * H5   | Skills Routing share of exposed users            | equal 2-arm hash        | 0.50     | 0.497
- * H6   | email/other tickets, degraded days / ±14 days    | 1 − INCIDENT_DELAY_SHARE| 0.30     | 0.294 (0.242 vs 0.824)
+ * H5   | median FRT, Skills Routing / Control             | ROUTING_FRT_MULT        | 0.70     | 0.677 (74.3 vs 109.7 min)
+ * H5   | reopen rate, Skills Routing / Control            | ROUTING_REOPEN_MULT     | 0.60     | 0.574 (6.8% vs 11.8%)
+ * H5   | Skills Routing share of exposed users            | size-paired accounts    | 0.50     | 0.498 (187 vs 187 accounts)
+ * H6   | email/other tickets, degraded days / ±14 days    | 1 − INCIDENT_DELAY_SHARE| 0.30     | 0.261 (0.217 vs 0.829), STRONG (floor 0.65)
  * H6   | warehouse email rows with ingestion degraded     | exact                   | 2        | 2
- * H7   | positive CSAT, FRT > 8 h / FRT ≤ 60 min          | 0.60 / 0.92             | 0.652    | 0.657 (60.4% vs 91.9%)
- * H8   | education vs other tickets, season / 8 wks before| BTS_MULT (mean)         | 1.80     | 1.833
- * H9   | D28-41 retention, under 3 / 3+ macros            | 1 − DARK_SHARE          | 0.50     | 0.465 (35.3% vs 76.0%)
- * H10  | Growth share of new subscriptions, after / before| 1 − GROWTH_DOWNGRADE_AFTER | 0.60  | 0.600 (65.0% → 39.0%)
+ * H7   | positive CSAT, FRT > 8 h / FRT ≤ 60 min          | 0.60 / 0.92             | 0.652    | 0.660 (60.8% vs 92.2%)
+ * H8   | education vs other tickets, season / 8 wks before| BTS_MULT (mean)         | 1.80     | 1.757
+ * H9   | D28-41 retention, under 3 / 3+ macros            | NB counts x logistic    | 0.435    | 0.436 (27.5% vs 63.1%)
+ * H10  | Growth share of new subscriptions, after / before| 1 − GROWTH_DOWNGRADE_AFTER | 0.60  | 0.691 (63.5% → 43.9%), STRONG (floor 0.8)
  * ═════════════════════════════════════════════════════════════════════════
  *
- * Verdicts: 10 NAILED. Noise notes: H8 rests on about 40 education companies
+ * Verdicts: 8 NAILED, 2 STRONG (H6, H10: salted draws on about 1,100 stuck
+ * email tickets and about 490 post-change buyers; knob target with a
+ * half-effect floor). Noise notes: H8 rests on about 40 education companies
  * (the weekly education/other ratio moves about ±7% outside the season). H9
- * compares 866 vs 1,294 workspaces (ratio SE about 4%); the dark half is an
- * even cycle, so the remaining noise is the groups' own retention. H6 rests on
- * about 320 email tickets on the two degraded days. H4's paid-rate read rests
- * on about 120 Capterra and 210 LinkedIn buyers. H10's plan choice is an even
- * cycle per period, so it reads the knob almost exactly. Honest nulls (eval):
- * escalation rate by Skills Routing arm (7.39% vs 7.47%, z = -0.42) and 30-day
- * paid conversion of Microsoft 365 vs other workspaces after setup (37.4% vs
+ * compares 1,279 vs 881 workspaces (ratio SE about 5%); non-dark retention is
+ * flat across macro counts (about 0.70-0.77), so the read is the dark curve.
+ * H5 clusters by account (374 accounts), so its ratios move a few percent
+ * between draws. H4's paid-rate read rests on about 120 Capterra and 210
+ * LinkedIn buyers. Honest nulls (eval): escalation rate by Skills Routing arm
+ * (7.40% vs 7.23%, z = 0.69; every priority split |z| < 1) and 30-day paid
+ * conversion of Microsoft 365 vs other workspaces after setup (37.4% vs
  * 38.7%, z = -0.55). Not engineered: weekend arrivals wait about 1.8x longer
  * for a first reply (WEEKEND_FRT_MULT, realism), and chat replies are faster.
  */
@@ -407,6 +425,8 @@ const INCIDENT_CHANNEL = "email";
 const INCIDENT_DELAY_SHARE = 0.7;   // share of email tickets stuck until the fix
 const BACKLOG_FLUSH_H = 10;         // stuck tickets reach agents in the first 10 hours of Aug 28
 const AUTO_TICKETS_PER_DAY = { email: 180, chat: 30, web_form: 50, api: 50 }; // spam / auto-closed tickets never assigned (±60% by day)
+const INCIDENT_DAYS = Array.from({ length: Math.round((ms(EMAIL_INCIDENT_END) - ms(EMAIL_INCIDENT_START)) / DAY_MS) }, (_, i) => dayjs.utc(EMAIL_INCIDENT_START).add(i, "day").format("YYYY-MM-DD"));
+const BACKLOG_DAY = EMAIL_INCIDENT_END.slice(0, 10);
 const INTAKE_DRIFT = 0.04;          // ± day-level gap between routed tickets and intake (manual tickets, deletions)
 const MERGED_SHARE = 0.07;          // mean share of ingested tickets merged into another ticket (0-14% by day)
 
@@ -421,13 +441,33 @@ const BTS_INDUSTRY = "education";
 const BTS_MULT = 1.8;
 
 // H9 macros in the first two weeks
-const MACRO_ADOPTER_SHARE = 0.4;
 const MACRO_DAYS = 14;
-const MACRO_MIN = 3;
-const MACRO_ADOPTER_COUNT = [3, 6];
-const DARK_SHARE = 0.5;             // share of fewer-than-3 users who go dark
+const MACRO_MIN = 3;                // the threshold the read splits on
+const MACRO_MEAN = 2.6;             // macros saved in the first 14 days: negative binomial (salted per user)
+const MACRO_DISPERSION = 2;         // NB size r (smaller = more skewed)
+const MACRO_CAP = 12;
+const DARK_MAX = 0.75;              // chance to go dark for a workspace with no macros (logistic upper level)
+const DARK_MID = 2.5;               // macro count where the chance falls through half of DARK_MAX
+const DARK_SLOPE = 1.2;             // logistic steepness per macro
 const DARK_AFTER_DAYS = 21;
 const DARK_SPREAD_DAYS = 3;
+// NB pmf over 0..MACRO_CAP (tail mass folded into the cap)
+const MACRO_PMF = (() => {
+	const r = MACRO_DISPERSION, q = MACRO_MEAN / (r + MACRO_MEAN);
+	const pmf = [Math.pow(1 - q, r)];
+	for (let k = 1; k < MACRO_CAP; k++) pmf.push(pmf[k - 1] * q * (k - 1 + r) / k);
+	pmf.push(1 - pmf.reduce((a, b) => a + b, 0));
+	return pmf;
+})();
+const darkProb = (m) => DARK_MAX / (1 + Math.exp(DARK_SLOPE * (m - DARK_MID)));
+const macroCount = (u) => { let acc = 0; for (let k = 0; k < MACRO_PMF.length; k++) { acc += MACRO_PMF[k]; if (u < acc) return k; } return MACRO_CAP; };
+// expected read (knob-derived): stay share below the threshold over stay share at or above it
+const H9_KEEP = (lo, hi) => {
+	let w = 0, keep = 0;
+	for (let k = lo; k <= hi; k++) { w += MACRO_PMF[k]; keep += MACRO_PMF[k] * (1 - darkProb(k)); }
+	return keep / w;
+};
+const H9_EXPECTED = H9_KEEP(0, MACRO_MIN - 1) / H9_KEEP(MACRO_MIN, MACRO_CAP);
 
 // H10 Growth price change (warehouse subscription_billing_daily)
 const PRICE_PER_SEAT = { starter: [19, 19], growth: [39, 49], enterprise: [89, 89] };
@@ -530,30 +570,51 @@ const CUSTOMERS = [];
 		planned += agents;
 	}
 }
+// customer seats filled in processing order: every company's first two seats
+// come first (shuffled), then the rest (shuffled), so every customer account
+// has at least two agents in the data; beyond the planned seats, a salted pick
 const CUSTOMER_CUM = (() => {
 	const total = CUSTOMERS.reduce((s, c) => s + c.planned, 0);
 	let acc = 0;
 	return CUSTOMERS.map((c) => (acc += c.planned / total));
 })();
+const CUSTOMER_SLOTS = (() => {
+	const first = [], rest = [];
+	for (const c of CUSTOMERS) for (let j = 0; j < c.planned; j++) (j < 2 ? first : rest).push({ id: c.id, k: hashFloat(`slot|${c.id}|${j}`) });
+	const byK = (a, b) => a.k - b.k;
+	return first.sort(byK).concat(rest.sort(byK)).map((x) => x.id);
+})();
+
+// H5: the routing method is a workspace setting, so the test randomizes
+// customer accounts: within each plan, accounts are paired by size and one of
+// each pair (salted) gets Skills Routing. Single-agent workspaces (Free,
+// trials, self-serve buyers) have no one to route between and are not in the test.
+const COMPANY_ARM = (() => {
+	const arm = new Map();
+	for (const plan of Object.keys(PLAN_MIX.small)) {
+		const cs = CUSTOMERS.filter((c) => c.plan === plan).sort((a, b) => b.planned - a.planned || Number(a.id) - Number(b.id));
+		for (let i = 0; i < cs.length; i += 2) {
+			const flip = hashFloat(`arm|${plan}|${i}`) < 0.5;
+			arm.set(cs[i].id, flip ? ROUTING_VARIANT : "Control");
+			if (cs[i + 1]) arm.set(cs[i + 1].id, flip ? "Control" : ROUTING_VARIANT);
+		}
+	}
+	return arm;
+})();
 
 // run state (reset when a new run's config arrives): single-agent workspaces
-const RUN = { cfg: null, companies: new Map(), next: CUSTOMERS.length + 1, buyTemplate: null, macroTemplate: null, widgetTemplate: null, buyersBefore: 0, buyersAfter: 0, lateGrowth: 0, incidentEmail: 0, dark: 0 };
+const RUN = { cfg: null, companies: new Map(), next: CUSTOMERS.length + 1, slot: 0, buyTemplate: null, macroTemplate: null, widgetTemplate: null, expTemplate: null };
 const resetRun = (cfg) => {
 	RUN.cfg = cfg;
-	RUN.dark = 0;
-	RUN.incidentEmail = 0;
-	RUN.buyersBefore = 0;
-	RUN.buyersAfter = 0;
-	RUN.lateGrowth = 0;
+	RUN.slot = 0;
 	RUN.buyTemplate = null;
 	RUN.macroTemplate = null;
 	RUN.widgetTemplate = null;
+	RUN.expTemplate = null;
 	RUN.companies = new Map(CUSTOMERS.map((c) => [c.id, { ...c, members: 0, finalPlan: c.plan }]));
 	RUN.next = CUSTOMERS.length + 1;
 };
 const companyOf = (id) => RUN.companies.get(String(id));
-// even cycle over calls in processing order: true for exactly `share` of calls (no coin-flip noise)
-const cycle = (key, share) => { const k = RUN[key]++; return Math.floor((k + 1) * share) > Math.floor(k * share); };
 
 /** a new single-agent workspace (Free, recent trial, or in-window trial) */
 function newWorkspace(uid, kind, sinceDay) {
@@ -600,6 +661,8 @@ function handleUserHook(profile, meta) {
 		} else if (r < RECENT_TRIAL_SHARE + FREE_SHARE) {
 			co = newWorkspace(uid, "free", dayjs.utc(DATASET_START).subtract(hashInt(`${uid}|free-since`, 30, 900), "day").format("YYYY-MM-DD"));
 			profile.role = "admin";
+		} else if (RUN.slot < CUSTOMER_SLOTS.length) {
+			co = companyOf(CUSTOMER_SLOTS[RUN.slot++]);
 		} else {
 			const x = salt(uid, "company");
 			const idx = CUSTOMER_CUM.findIndex((c) => x < c);
@@ -683,16 +746,11 @@ function handleEverything(events, meta) {
 		const r = salt(uid, "buy-delay");
 		const d = r < 0.8 ? 1 + (TRIAL_DAYS - 1) * Math.sqrt(r / 0.8) : TRIAL_DAYS + BUY_GRACE_DAYS * (r - 0.8) / 0.2;
 		const t = Math.floor(trialStart + d * DAY_MS);
-		// in-window purchases: plan choice and the post-change downgrade follow even
-		// cycles over buyers in processing order, kept separately before and after the
-		// change (no coin-flip noise; processing order is unrelated to time). Purchases
-		// made before the window draw the plan from a salt.
+		// plan choice (salted per buyer); after the price change some would-be
+		// Growth buyers pick Starter (a second, independent salt)
 		const after = t >= ms(GROWTH_PRICE_CHANGE);
-		let plan = salt(uid, "plan") < GROWTH_CHOICE ? "growth" : "starter";
-		if (t >= BEGIN && t < END) {
-			const wantsGrowth = cycle(after ? "buyersAfter" : "buyersBefore", GROWTH_CHOICE);
-			plan = wantsGrowth && !(after && cycle("lateGrowth", GROWTH_DOWNGRADE_AFTER)) ? "growth" : "starter";
-		}
+		const wantsGrowth = salt(uid, "plan") < GROWTH_CHOICE;
+		const plan = wantsGrowth && !(after && salt(uid, "plan-down") < GROWTH_DOWNGRADE_AFTER) ? "growth" : "starter";
 		purchase = {
 			t, plan,
 			seats: Number(pickWeighted(SEAT_WEIGHTS, salt(uid, "seats"))),
@@ -707,8 +765,10 @@ function handleEverything(events, meta) {
 		return t < trialEnd ? "trial" : "free";
 	};
 
-	// ── H9: macros in the first two weeks; fewer than 3 → half go dark after day 21 ──
+	// ── H9: macros in the first two weeks; the chance to go dark after day 21
+	// falls smoothly with the number saved (logistic around 2.5 macros) ──
 	let cut = Infinity;
+	const keepMacros = new Set(); // first-14-day macros: exempt from the holiday thinning below
 	if (signup) {
 		const macroEnd = birthMs + MACRO_DAYS * DAY_MS;
 		const early = events.filter((e) => e.event === "macro created" && T(e) < macroEnd).sort(byT);
@@ -719,29 +779,25 @@ function handleEverything(events, meta) {
 			template = cloneEvent(RUN.macroTemplate, { time: signup.time, user_id: uid });
 			for (const k of DEVICE_FIELDS) { if (k in signup) template[k] = signup[k]; else delete template[k]; }
 		}
-		const adopter = salt(uid, "macro") < MACRO_ADOPTER_SHARE && Boolean(template);
-		if (adopter) {
-			const want = hashInt(`${uid}|macro-n`, MACRO_ADOPTER_COUNT[0], MACRO_ADOPTER_COUNT[1]);
-			// place extra macros on the user's own active moments in the first 14 days
-			const anchors = events.filter((e) => AGENT_ACTIONS.has(e.event) && T(e) >= birthMs && T(e) < macroEnd);
-			for (let k = early.length; k < want; k++) {
-				const a = anchors.length ? anchors[chance.integer({ min: 0, max: anchors.length - 1 })] : signup;
-				const t = Math.min(macroEnd - MIN_MS, T(a) + chance.integer({ min: 1, max: 40 }) * MIN_MS);
-				const c = cloneEvent(template, { time: iso(t) });
-				c.macro_category = draw({ greeting: 15, refund: 18, shipping_status: 16, password_reset: 18, troubleshooting: 20, closing: 13 });
-				events.push(c);
-			}
-			if (early.length > want) {
-				const drop = new Set(early.slice(want));
-				events = events.filter((e) => !drop.has(e));
-			}
-		} else {
-			// at most 2 in the first 14 days
-			const drop = new Set(early.slice(hashInt(`${uid}|macro-few`, 0, MACRO_MIN - 1)));
-			events = events.filter((e) => !drop.has(e));
-			// exactly DARK_SHARE of them (even cycle in processing order) go dark
-			if (cycle("dark", DARK_SHARE)) cut = Math.floor(birthMs + (DARK_AFTER_DAYS + salt(uid, "dark-day") * DARK_SPREAD_DAYS) * DAY_MS);
+		// one skewed count for every new workspace (salted, independent of activity)
+		const want = template ? macroCount(salt(uid, "macro-n")) : 0;
+		const kept = early.slice(0, want);
+		for (const e of kept) keepMacros.add(e);
+		// extra macros sit on the user's own active moments in the first 14 days
+		const anchors = events.filter((e) => AGENT_ACTIONS.has(e.event) && T(e) >= birthMs && T(e) < macroEnd);
+		for (let k = kept.length; k < want; k++) {
+			const a = anchors.length ? anchors[chance.integer({ min: 0, max: anchors.length - 1 })] : signup;
+			const t = Math.min(macroEnd - MIN_MS, T(a) + chance.integer({ min: 1, max: 40 }) * MIN_MS);
+			const c = cloneEvent(template, { time: iso(t) });
+			c.macro_category = draw({ greeting: 15, refund: 18, shipping_status: 16, password_reset: 18, troubleshooting: 20, closing: 13 });
+			events.push(c);
+			keepMacros.add(c);
 		}
+		if (early.length > want) {
+			const drop = new Set(early.slice(want));
+			events = events.filter((e) => !drop.has(e));
+		}
+		if (salt(uid, "dark") < darkProb(want)) cut = Math.floor(birthMs + (DARK_AFTER_DAYS + salt(uid, "dark-day") * DARK_SPREAD_DAYS) * DAY_MS);
 	} else {
 		// established agents save macros now and then; owners of trials that started
 		// just before the window are still building theirs in their first 14 days
@@ -756,7 +812,7 @@ function handleEverything(events, meta) {
 	const templates = {};
 	let exposure = null;
 	for (const e of events) {
-		if (e.event === "$experiment_started") { exposure = exposure || e; continue; }
+		if (e.event === "$experiment_started") { exposure = exposure || e; if (!RUN.expTemplate) RUN.expTemplate = { ...e }; continue; }
 		if (!UNIT_STEPS.includes(e.event)) continue;
 		if (!templates[e.event]) templates[e.event] = { ...e };
 		if (!byId.has(e.ticket_id)) { const unit = { id: e.ticket_id, steps: {} }; byId.set(e.ticket_id, unit); pool.push(unit); }
@@ -764,7 +820,8 @@ function handleEverything(events, meta) {
 		(unit.steps[e.event] = unit.steps[e.event] || []).push(e);
 	}
 	const haveTemplates = UNIT_STEPS.every((s) => templates[s]);
-	const variant = profile[EXP_KEY] ?? null;
+	// H5: the arm belongs to the customer account (single-agent workspaces are not in the test)
+	const variant = co.kind === "customer" ? COMPANY_ARM.get(co.id) ?? null : null;
 	const aiAdopter = salt(uid, "ai") < AI_ADOPTER_SHARE;
 	const aiStart = ms(AI_LAUNCH) + salt(uid, "ai-day") * AI_RAMP_DAYS * DAY_MS;
 	const aiUse = AI_USE_MIN + (AI_USE_MAX - AI_USE_MIN) * salt(uid, "ai-use");
@@ -812,14 +869,13 @@ function handleEverything(events, meta) {
 	for (const s of slots) {
 		// US holidays: Americas companies get fewer tickets
 		if (americas && isUsHoliday(s.t0) && chance.bool({ likelihood: HOLIDAY_TICKET_DROP * 100 })) continue;
-		// H6: stuck email tickets reach agents after the fix
-		// (an even cycle over the incident's email tickets in processing order: exactly 7 in 10)
-		if (s.channel === INCIDENT_CHANNEL && inIncident(s.t0) && cycle("incidentEmail", INCIDENT_DELAY_SHARE)) {
+		const src = s.unit;
+		const id = src ? src.id : `tk_${chance.hash({ length: 12 })}`;
+		// H6: stuck email tickets (salted per ticket) reach agents after the fix
+		if (s.channel === INCIDENT_CHANNEL && inIncident(s.t0) && hashFloat(`${id}|stuck`) < INCIDENT_DELAY_SHARE) {
 			s.t0 = ms(EMAIL_INCIDENT_END) + Math.floor(chance.floating({ min: 0, max: BACKLOG_FLUSH_H }) * HOUR_MS);
 		}
 		if (s.t0 >= cut || s.t0 > END) continue;
-		const src = s.unit;
-		const id = src ? src.id : `tk_${chance.hash({ length: 12 })}`;
 		usedIds.add(id);
 		const used = {};
 		const put = (step, t, set) => {
@@ -847,7 +903,7 @@ function handleEverything(events, meta) {
 		const gap = Math.min(RESOLVE_MAX_H, RESOLVE_GAP_MED_H * pm * logNormal(RESOLVE_SIGMA)) * HOUR_MS;
 		const t2 = t1 + gap;
 		const resolved = chance.bool({ likelihood: RESOLVE_SHARE * 100 });
-		const escalated = chance.bool({ likelihood: (ESCALATE_SHARE[s.priority] ?? 0.05) * 100 });
+		const escalated = hashFloat(`${id}|escalate`) < (ESCALATE_SHARE[s.priority] ?? 0.05); // salted per ticket
 		const followups = Number(draw(FOLLOWUP_WEIGHTS));
 		const reopened = resolved && chance.bool({ likelihood: REOPEN_BASE * (variantOn ? ROUTING_REOPEN_MULT : 1) * 100 });
 		const csat = resolved && chance.bool({ likelihood: CSAT_RESPONSE * 100 });
@@ -885,8 +941,15 @@ function handleEverything(events, meta) {
 
 	// ── experiment exposure: 1 s before the first ticket after the test starts ──
 	const firstAfter = unitEvents.filter((e) => e.event === "ticket assigned" && T(e) >= ms(ROUTING_START)).sort(byT)[0];
-	if (exposure && variant !== null && firstAfter) {
+	if (variant !== null && firstAfter && (exposure || RUN.expTemplate)) {
+		if (!exposure) {
+			exposure = cloneEvent(RUN.expTemplate, { time: iso(T(firstAfter) - 1000), user_id: uid });
+			const own = events.find((e) => e.device_id) || {};
+			for (const k of DEVICE_FIELDS) { if (k in own) exposure[k] = own[k]; else delete exposure[k]; }
+		}
 		exposure.time = iso(T(firstAfter) - 1000);
+		exposure["Variant name"] = variant;
+		profile[EXP_KEY] = variant;
 		events.push(exposure);
 	} else if (profile[EXP_KEY] !== undefined) {
 		delete profile[EXP_KEY];
@@ -925,6 +988,7 @@ function handleEverything(events, meta) {
 		const t = T(e);
 		if (t >= cut && !ONBOARDING.has(e.event)) return false;
 		if (!AGENT_ACTIONS.has(e.event)) return true;
+		if (keepMacros.has(e)) return true;
 		if (americas && isUsHoliday(t) && chance.bool({ likelihood: HOLIDAY_ACTION_DROP * 100 })) return false;
 		// workspace setup belongs to admins; new workspaces connect each tool once,
 		// established customers only now and then (their tools are already connected)
@@ -971,7 +1035,13 @@ function handleWarehouse(row, meta) {
 	if (meta.metricName === "inbound_channel_daily") {
 		const k = `${row.date}|${row.channel}`;
 		const merged = Math.round(row.tickets_ingested * MERGED_SHARE * jitter(`merged|${k}`, 1));
-		const auto = Math.round((AUTO_TICKETS_PER_DAY[row.channel] ?? 0) * jitter(`auto|${k}`, 0.6));
+		// spam and notifications arrive every day; during the email incident the
+		// stuck share of them is processed with the backlog on the fix day
+		const autoArrived = (date) => Math.round((AUTO_TICKETS_PER_DAY[row.channel] ?? 0) * jitter(`auto|${date}|${row.channel}`, 0.6));
+		const autoStuck = (date) => Math.round(autoArrived(date) * INCIDENT_DELAY_SHARE * jitter(`auto-stuck|${date}`, 0.1));
+		let auto = autoArrived(row.date);
+		if (row.channel === INCIDENT_CHANNEL && INCIDENT_DAYS.includes(row.date)) auto -= autoStuck(row.date);
+		if (row.channel === INCIDENT_CHANNEL && row.date === BACKLOG_DAY) for (const d of INCIDENT_DAYS) auto += autoStuck(d);
 		const assigned = row.tickets_ingested;
 		// intake and routing disagree a little every day: agents log some tickets by
 		// hand (phone calls, imports) that never pass intake, and delete a few ingested
@@ -981,7 +1051,7 @@ function handleWarehouse(row, meta) {
 		row.tickets_merged = merged;
 		if (row.ingestion_status === "degraded") {
 			// stuck tickets are logged when they were received; most of the day's mail
-			row.tickets_delayed_over_1h = Math.round(assigned * INCIDENT_DELAY_SHARE / (1 - INCIDENT_DELAY_SHARE) * jitter(`delay|${k}`, 0.08));
+			row.tickets_delayed_over_1h = Math.round(assigned * INCIDENT_DELAY_SHARE / (1 - INCIDENT_DELAY_SHARE) * jitter(`delay|${k}`, 0.08)) + autoStuck(row.date);
 		}
 		return row;
 	}
@@ -1628,7 +1698,7 @@ FROM ev WHERE event = 'reply sent'`,
 		id: "H5-skills-routing-experiment",
 		hook: "H5",
 		archetype: "experiment-lift",
-		narrative: `The "${ROUTING_EXPERIMENT}" test starts ${D(ROUTING_START)}: users who handle tickets are split 50/50 (sticky per user; exposure $experiment_started 1 s before their first ticket after the start). In the "${ROUTING_VARIANT}" arm tickets are routed by agent skill instead of round robin: first replies take ${ROUTING_FRT_MULT}x the time and the reopen rate is ${ROUTING_REOPEN_MULT}x (${REOPEN_BASE * 100}% → ${Math.round(REOPEN_BASE * ROUTING_REOPEN_MULT * 1000) / 10}%). Reply Assist adoption is independent of the arm. Read: per ticket assigned after the start, median minutes to the first reply (7-day window) and the share of resolved tickets later reopened, by profile "${EXP_KEY}".`,
+		narrative: `The "${ROUTING_EXPERIMENT}" test starts ${D(ROUTING_START)}. Routing is a workspace setting, so customer accounts (2+ agents) are randomized: within each plan, accounts are paired by size and one of each pair gets the variant; every agent in the account shares the arm (profile "${EXP_KEY}", exposure $experiment_started 1 s before the agent's first ticket after the start). Single-agent workspaces (Free, trials, self-serve buyers) have no one to route between and are not in the test. In the "${ROUTING_VARIANT}" arm tickets are routed by agent skill instead of round robin: first replies take ${ROUTING_FRT_MULT}x the time and the reopen rate is ${ROUTING_REOPEN_MULT}x (${REOPEN_BASE * 100}% → ${Math.round(REOPEN_BASE * ROUTING_REOPEN_MULT * 1000) / 10}%). Reply Assist adoption is independent of the arm. Read: per ticket assigned after the start, median minutes to the first reply (7-day window) and the share of resolved tickets later reopened, by profile "${EXP_KEY}".`,
 		mixpanelReport: { type: "Funnels + Insights", steps: ["ticket assigned", "reply sent"], counting: "totals", holdPropertyConstant: "ticket_id", window: `${FRT_WINDOW_DAYS} days`, dateRange: `from ${D(ROUTING_START)}`, breakdown: `user property "${EXP_KEY}"`, measure: "median time to convert; Insights ticket reopened / ticket resolved by the same breakdown" },
 		assertions: [
 			{
@@ -1653,7 +1723,7 @@ SELECT 'all' AS grp, count(DISTINCT uid) AS user_count,
 FROM ev WHERE event = '$experiment_started'`,
 				},
 				select: { a: { where: { grp: "all" } } },
-				// equal-weight 2-arm hash → 0.5
+				// size-matched account pairs, one arm each → about 0.5 of exposed agents
 				expect: { metric: "a.variant_share", op: "between", target: band(0.5) },
 				minCohort: 2000,
 			},
@@ -1663,7 +1733,7 @@ FROM ev WHERE event = '$experiment_started'`,
 		id: "H6-email-ingestion-incident",
 		hook: "H6",
 		archetype: "external-join",
-		narrative: `From ${D(EMAIL_INCIDENT_START)} to ${D(EMAIL_INCIDENT_END)} (exclusive) a fault in the email ingestion pipeline leaves ${INCIDENT_DELAY_SHARE * 100}% of incoming email tickets stuck; they reach agents only after the fix, in the first ${BACKLOG_FLUSH_H} hours of ${INC_BACKLOG_DAY}. Chat, web form, and API tickets are untouched. The incident days come from warehouse inbound_channel_daily (ingestion_status = 'degraded' for email). Event read: email/other ratio of "ticket assigned" on the degraded days vs the ${INC_BASE_DAYS} days either side (the backlog day excluded) reads 1 - ${INCIDENT_DELAY_SHARE}.`,
+		narrative: `From ${D(EMAIL_INCIDENT_START)} to ${D(EMAIL_INCIDENT_END)} (exclusive) a fault in the email ingestion pipeline leaves ${INCIDENT_DELAY_SHARE * 100}% of incoming email tickets stuck (a salted draw per ticket); the stuck share of spam and auto-replies is processed with the backlog too (warehouse tickets_auto_closed); they reach agents only after the fix, in the first ${BACKLOG_FLUSH_H} hours of ${INC_BACKLOG_DAY}. Chat, web form, and API tickets are untouched. The incident days come from warehouse inbound_channel_daily (ingestion_status = 'degraded' for email). Event read: email/other ratio of "ticket assigned" on the degraded days vs the ${INC_BASE_DAYS} days either side (the backlog day excluded) reads 1 - ${INCIDENT_DELAY_SHARE} (knob target; a half-effect floor absorbs the per-ticket draw noise).`,
 		mixpanelReport: { type: "Insights", event: "ticket assigned", measure: "total", breakdown: "channel", chart: "daily line", join: "warehouse inbound_channel_daily.ingestion_status" },
 		assertions: [
 			{
@@ -1680,7 +1750,9 @@ SELECT 'all' AS grp, (SELECT count(*) FROM od) AS outage_days, min(users) AS use
 FROM g`,
 				},
 				select: { a: { where: { grp: "all" } } },
-				expect: { metric: "a.did", op: "between", target: band(1 - INCIDENT_DELAY_SHARE) },
+				// the stuck share is a salted draw per ticket over about 1,100 email tickets, and the
+				// day counts carry their own noise (ratio SE about 6%): knob target, half-effect floor
+				expect: { metric: "a.did", op: "<=", target: 1 - INCIDENT_DELAY_SHARE, floor: 1 - 0.5 * INCIDENT_DELAY_SHARE },
 				minCohort: 500,
 			},
 			{
@@ -1736,13 +1808,13 @@ FROM ev WHERE event = 'csat received' GROUP BY 1`,
 		id: "H9-macros-first-two-weeks",
 		hook: "H9",
 		archetype: "retention-divergence",
-		narrative: `New workspaces that save ${MACRO_MIN}+ macros (canned replies) in their first ${MACRO_DAYS} days stay. ${MACRO_ADOPTER_SHARE * 100}% of trial owners who connect an inbox save ${MACRO_ADOPTER_COUNT[0]}-${MACRO_ADOPTER_COUNT[1]} macros in that window (salted per user, independent of activity); the rest save at most ${MACRO_MIN - 1}, and ${DARK_SHARE * 100}% of them go dark ${DARK_AFTER_DAYS}-${DARK_AFTER_DAYS + DARK_SPREAD_DAYS} days after signup. Read: among trial owners who connected an inbox and signed up by ${daysBeforeEnd(RET_TO).slice(0, 10)}, share with queue viewed on day ${RET_FROM}-${RET_TO - 1}; fewer than ${MACRO_MIN} over ${MACRO_MIN}+ reads 1 - ${DARK_SHARE}.`,
+		narrative: `New workspaces that save about ${MACRO_MIN}+ macros (canned replies) in their first ${MACRO_DAYS} days stay. Every trial owner who connects an inbox saves a salted negative-binomial number of macros in that window (mean ${MACRO_MEAN}, size ${MACRO_DISPERSION}, independent of activity), so the count histogram falls smoothly from 0. The chance to go dark ${DARK_AFTER_DAYS}-${DARK_AFTER_DAYS + DARK_SPREAD_DAYS} days after signup is a logistic in the count: ${DARK_MAX} x 1/(1 + e^(${DARK_SLOPE} x (macros - ${DARK_MID}))), i.e. ${darkProb(0).toFixed(2)} at 0, ${darkProb(2).toFixed(2)} at 2, ${darkProb(3).toFixed(2)} at 3, ${darkProb(5).toFixed(2)} at 5 (salted per user). Read: among trial owners who connected an inbox and signed up by ${daysBeforeEnd(RET_TO).slice(0, 10)}, share with queue viewed on day ${RET_FROM}-${RET_TO - 1}; fewer than ${MACRO_MIN} over ${MACRO_MIN}+ reads the stay-share ratio implied by the count distribution and the curve: ${H9_EXPECTED.toFixed(3)}.`,
 		mixpanelReport: { type: "Funnels → cohorts → Retention", cohortFunnel: `account created → macro created → macro created → macro created, ${MACRO_DAYS}-day window (completers vs not)`, retention: `account created → queue viewed, custom bracket day ${RET_FROM}-${RET_TO - 1}`, filter: "did inbox connected" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H9_SQL },
 				select: { lo: { where: { grp: "under_3" } }, hi: { where: { grp: "macros_3plus" } } },
-				expect: { metric: "lo.retention / hi.retention", op: "between", target: band(1 - DARK_SHARE) },
+				expect: { metric: "lo.retention / hi.retention", op: "between", target: band(H9_EXPECTED) },
 				minCohort: 500,
 			},
 		],

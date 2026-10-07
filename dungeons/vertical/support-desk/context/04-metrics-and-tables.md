@@ -9,11 +9,11 @@ All KPIs use UTC days. Count people by unique `user_id` and companies by `compan
 | Tickets | Count of `ticket assigned`. A ticket that never reached an agent (spam, auto-closed, merged) is not a ticket in Mixpanel; see `inbound_channel_daily`. |
 | First response time (FRT) | Per ticket, time from `ticket assigned` to the first `reply sent` (hold `ticket_id` constant). Report the median, in minutes. `first_response_mins` on `ticket resolved` and `csat received` holds the same value in whole minutes. |
 | Resolution time | Per ticket, time from `ticket assigned` to the first `ticket resolved`. Report the median, in hours, within a 14-day window. `resolution_mins` on `ticket resolved` holds the same value. |
-| Reopen rate | Share of resolved tickets that later have a `ticket reopened` (per ticket). Count only tickets with at least 3 weeks of data after assignment. |
+| Reopen rate | Share of resolved tickets that later have a `ticket reopened` (per ticket). Count only tickets whose reopen window has passed (customers can reopen a ticket days after it is resolved), so leave out tickets assigned in the last few weeks of the data. Counting events (total `ticket reopened` ÷ total `ticket resolved`) gives a lower number, because a reopened ticket is resolved twice. |
 | Escalation rate | Share of tickets with a `ticket escalated`. |
 | CSAT (positive share) | Share of `csat received` answers with `score` 4 or 5. Ticketloop also reports the average score. |
 | Active user | A user with `queue viewed` in the period. Server-side events (`ticket assigned`, `ticket reopened`, `csat received`, `subscription started`) and `inbox connected` are not user activity. |
-| Retention (new workspaces) | Of trial signups, the share with `queue viewed` in a later bracket after `account created` (for example day 28-41). Count only signups whose bracket ends inside the data. In Mixpanel Retention this needs custom brackets. |
+| Retention (new workspaces) | Of trial signups, the share with `queue viewed` in a later bracket after `account created` (for example day 30, or week 5). Count only signups whose bracket ends inside the data. In Mixpanel Retention this needs custom brackets. |
 | Setup completion | Share of trial signups who reach `widget installed` (after `inbox connected`) within 7 days of `account created`. |
 | Trial-to-paid conversion | Share of trial signups with `subscription started` within 30 days of `account created`. Count only signups with 30 days of data (signups through September 1). |
 | Reply Assist adoption | Share of first replies on Growth and Enterprise tickets that have `reply_method = ai_draft`. |
@@ -29,7 +29,7 @@ In the warehouse, numeric columns are loaded as FLOAT64 (shown as FLOAT below). 
 
 ### `paid_marketing_daily`
 
-Daily paid marketing cost by channel, from the ad platforms' billing exports. Part of each day's spend is a daily budget that the platform paces through the week, with a floor on quieter days; the rest is bid-based and rises and falls with the sign-ups the platform delivers that day.
+Daily paid marketing cost by channel, from the ad platforms' billing exports, as each platform billed it.
 
 | Column | Type | Unit | Meaning |
 |---|---|---|---|

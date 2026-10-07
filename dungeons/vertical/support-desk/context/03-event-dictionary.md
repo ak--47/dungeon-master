@@ -36,7 +36,7 @@ Every ticket has a `ticket_id`. The assignment, every reply, the escalation, the
 | `ticket resolved` | The agent marks the ticket solved. A reopened ticket is resolved again later. | `ticket_id`; `channel`; `priority`; `first_response_mins`: whole minutes from assignment to the first reply; `resolution_mins`: minutes from assignment to this resolution; `replies_count`: agent replies so far. |
 | `ticket reopened` | The ticket opens again after a resolution, usually because the customer wrote back. Sent by the routing service. | `ticket_id`; `reopen_source` (`customer_reply`, `agent`). |
 | `csat received` | The customer answered the satisfaction survey sent after the ticket was resolved. Sent by the survey service; attributed to the ticket's agent. | `ticket_id`; `score` (1-5 stars; 4-5 counts as positive); `first_response_mins` (as on `ticket resolved`); `comment_left` (`true` if the customer wrote a comment). |
-| `$experiment_started` | Mixpanel experiment exposure, sent once per user just before their first ticket after 2026-07-08. | `Experiment name` = `Skills Routing`; `Variant name` = `Control` or `Skills Routing`. |
+| `$experiment_started` | Mixpanel experiment exposure, sent once per agent in a test account just before their first ticket after 2026-07-08. | `Experiment name` = `Skills Routing`; `Variant name` = `Control` or `Skills Routing`. |
 
 ## Working in Ticketloop
 
@@ -79,7 +79,7 @@ Enterprise contracts and changes to existing customers' subscriptions (renewals,
 | `acquisition_channel` | How the company found us (for trial signups, the channel on `account created`). |
 | `customer_since` | Date the company became a Ticketloop customer or started its trial (YYYY-MM-DD). Before 2026-06-04 for established users. |
 | `agent_seats` | Seats the company pays for (1 for Free and trial workspaces). |
-| `Experiment: Skills Routing` | `Control` or `Skills Routing` for users in the test; empty for everyone else. |
+| `Experiment: Skills Routing` | `Control` or `Skills Routing` for agents in accounts in the test (the same value for every agent of an account); empty for everyone else. |
 | `_persona` | Usage segment from the lifecycle-marketing tool (`frontline_agent`, `occasional_agent`, `team_lead`, `support_admin`), set at signup from expected workload. It is not the same as `role`. |
 | `anonymousIds` | Browsers seen for the user (pipeline metadata). |
 
