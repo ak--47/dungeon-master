@@ -223,30 +223,36 @@ SELECT count(*) AS team_challenges, round(avg(participants), 2) AS avg_participa
 -- recent = the member's other notifications in the 30 days up to this one.
 -- Members who joined before June 4 also got notifications before the export,
 -- so the look-back is only complete from 2026-07-04 (raw-export read).
--- Notifications keep reaching new members after they stop using the app
--- (unopened), so the fatigue reads use members who joined before June 4
--- (pre_window = true), who do not lapse in the window.
+-- Notifications keep reaching members after they stop using the app
+-- (unopened), so the fatigue reads use members who joined before June 4 and
+-- are still active in the last 14 days of the window (an active event from
+-- 2026-09-18; pre_window = true). In Mixpanel: a cohort of members who did not
+-- do account created in the window and did the Active action from Sep 18.
+CREATE OR REPLACE TEMP TABLE still_active_pre AS
+SELECT uid FROM ev GROUP BY 1
+HAVING count(*) FILTER (WHERE event = 'account created') = 0
+ AND count(*) FILTER (WHERE t >= TIMESTAMP '2026-09-18' AND event NOT IN ('notification received', 'account deactivated')) > 0;
 CREATE OR REPLACE TEMP TABLE push_seq AS
-SELECT uid, t, opened, uid NOT IN (SELECT uid FROM signups) AS pre_window,
+SELECT uid, t, opened, uid IN (SELECT uid FROM still_active_pre) AS pre_window,
  count(*) OVER (PARTITION BY uid ORDER BY t RANGE BETWEEN INTERVAL 30 DAY PRECEDING AND CURRENT ROW) - 1 AS recent
 FROM ev WHERE event = 'notification received';
 CREATE OR REPLACE TEMP TABLE push AS
 SELECT uid, pre_window, count(*) AS n, sum(opened::INT) AS opens FROM push_seq GROUP BY 1, 2;
 
--- 12+ recent vs 4 or fewer, from 2026-07-04 (members who joined before June 4)
+-- 10+ recent vs 4 or fewer, from 2026-07-04 (pre_window members)
 SELECT round(avg(opened::INT) FILTER (WHERE recent <= 4), 4) AS open_rate_4_or_fewer,
- round(avg(opened::INT) FILTER (WHERE recent >= 12), 4) AS open_rate_12_plus,
- round(avg(opened::INT) FILTER (WHERE recent >= 12) / avg(opened::INT) FILTER (WHERE recent <= 4), 4) AS full_vs_fresh
+ round(avg(opened::INT) FILTER (WHERE recent >= 10), 4) AS open_rate_10_plus,
+ round(avg(opened::INT) FILTER (WHERE recent >= 10) / avg(opened::INT) FILTER (WHERE recent <= 4), 4) AS full_vs_fresh
 FROM push_seq WHERE t >= TIMESTAMP '2026-07-04' AND pre_window;
 
--- Mixpanel recipe: cohorts on notification count in the window (members who joined before June 4)
-SELECT CASE WHEN n < 12 THEN '1 <12' WHEN n < 24 THEN '2 12-23' WHEN n < 36 THEN '3 24-35' ELSE '4 36+' END AS cohort,
+-- Mixpanel recipe: cohorts on notification count in the window (pre_window members)
+SELECT CASE WHEN n < 10 THEN '1 <10' WHEN n < 20 THEN '2 10-19' WHEN n < 30 THEN '3 20-29' ELSE '4 30+' END AS cohort,
  count(*) AS members, round(sum(opens)::DOUBLE / sum(n), 4) AS open_rate
 FROM push WHERE pre_window GROUP BY 1 ORDER BY 1;
 
--- no calendar trend: pre-window members' open rate by month
+-- no calendar trend: pre_window members' open rate by month
 SELECT strftime(p.t, '%Y-%m') AS month, count(*) AS notifications, round(avg(p.opened::INT), 4) AS open_rate
-FROM push_seq p WHERE p.uid NOT IN (SELECT uid FROM signups) GROUP BY 1 ORDER BY 1;
+FROM push_seq p WHERE p.pre_window GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H9-fall-reset-program — 2026-09-08 for 14 days
@@ -385,9 +391,8 @@ GROUP BY 1 ORDER BY 1;
 -- significance, three tests per metric: workout level (each workout one
 -- observation, Welch); member level, unpaired (each member's average per mode);
 -- member level, paired (members with both modes: their own ai_coach minus
--- self_guided average). The perceived-effort null is clean in all three; heart
--- rate and calories per minute each cross p < 0.05 in one test, in opposite
--- directions, with gaps under 0.5% in the workout averages (chance, not a mechanism).
+-- self_guided average). Perceived effort, heart rate, and calories per minute
+-- are clean nulls in all three tests (and in every plan and Platform split).
 -- p two-sided via the Abramowitz-Stegun 7.1.26 erf approximation.
 CREATE OR REPLACE TEMP TABLE q5_workouts AS
 SELECT e.uid, e.coaching_mode AS mode, e.subscription_tier AS tier, e.Platform AS platform,
@@ -407,7 +412,7 @@ SELECT metric, test, paired_members, round(z, 2) AS z,
  round(1 - (1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * exp(-x * x)), 3) AS p_two_sided
 FROM e ORDER BY metric, test;
 -- workouts by the same member are nearly independent: variance of member means
--- (members with 10+ workouts) x workouts per member / workout variance ≈ 1.1, so
+-- (members with 10+ workouts) x workouts per member / workout variance ≈ 1.2, so
 -- the workout-level test is fair and the member-level tests have less power
 WITH w AS (SELECT * FROM q5_workouts),
 tot AS (SELECT var_samp(heart_rate) AS vh, var_samp(effort) AS ve, var_samp(kcal_per_min) AS vk FROM w),
@@ -600,28 +605,28 @@ SELECT date_trunc('week', t)::DATE AS week, count(DISTINCT t::DATE) AS days,
 FROM ev WHERE event IN ('challenge joined', 'challenge completed') GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q15 — notification open rate by members' notification volume, by recent volume, and over time
--- members who joined before June 4 (they do not lapse in the window), by notification count in the window
-SELECT CASE WHEN n < 12 THEN '1 01-11' WHEN n < 24 THEN '2 12-23' WHEN n < 36 THEN '3 24-35' WHEN n < 48 THEN '4 36-47' ELSE '5 48+' END AS notifications_received,
+-- members who joined before June 4 and are still active from Sep 18, by notification count in the window
+SELECT CASE WHEN n < 10 THEN '1 01-09' WHEN n < 20 THEN '2 10-19' WHEN n < 30 THEN '3 20-29' WHEN n < 40 THEN '4 30-39' ELSE '5 40+' END AS notifications_received,
  count(*) AS members, round(sum(opens)::DOUBLE / sum(n), 4) AS open_rate
 FROM push WHERE pre_window GROUP BY 1 ORDER BY 1;
--- every member (new members who stopped using the app still receive notifications, unopened)
-SELECT CASE WHEN n < 12 THEN '1 01-11' WHEN n < 24 THEN '2 12-23' WHEN n < 36 THEN '3 24-35' WHEN n < 48 THEN '4 36-47' ELSE '5 48+' END AS notifications_received,
+-- every member (members who stopped using the app still receive notifications, unopened)
+SELECT CASE WHEN n < 10 THEN '1 01-09' WHEN n < 20 THEN '2 10-19' WHEN n < 30 THEN '3 20-29' WHEN n < 40 THEN '4 30-39' ELSE '5 40+' END AS notifications_received,
  count(*) AS members, round(sum(opens)::DOUBLE / sum(n), 4) AS open_rate
 FROM push GROUP BY 1 ORDER BY 1;
--- new members: notifications while still active vs after their last member-initiated event
+-- every member: notifications while still active vs after their last member-initiated event
 WITH la AS (SELECT uid, max(t) AS last_active FROM ev WHERE event NOT IN ('notification received', 'account deactivated') GROUP BY 1)
 SELECT (p.t > la.last_active) AS after_last_activity, count(*) AS notifications, round(avg(p.opened::INT), 4) AS open_rate
-FROM push_seq p JOIN la USING (uid) WHERE NOT p.pre_window GROUP BY 1 ORDER BY 1;
--- by notifications the member received in the previous 30 days (from 2026-07-04, when the look-back is complete; members who joined before June 4)
-SELECT CASE WHEN recent <= 4 THEN '1 0-4' WHEN recent <= 7 THEN '2 5-7' WHEN recent <= 11 THEN '3 8-11' WHEN recent <= 15 THEN '4 12-15' ELSE '5 16+' END AS recent_30d,
+FROM push_seq p JOIN la USING (uid) GROUP BY 1 ORDER BY 1;
+-- by notifications the member received in the previous 30 days (from 2026-07-04, when the look-back is complete; pre_window members)
+SELECT CASE WHEN recent <= 4 THEN '1 0-4' WHEN recent <= 6 THEN '2 5-6' WHEN recent <= 9 THEN '3 7-9' WHEN recent <= 13 THEN '4 10-13' ELSE '5 14+' END AS recent_30d,
  count(*) AS notifications, round(count(*)::DOUBLE / sum(count(*)) OVER (), 4) AS share_of_notifications, round(avg(opened::INT), 4) AS open_rate
 FROM push_seq WHERE t >= TIMESTAMP '2026-07-04' AND pre_window GROUP BY 1 ORDER BY 1;
--- members who joined before June 4, by calendar month (no trend); and every member
+-- pre_window members by calendar month (no trend); and every member
 SELECT strftime(t, '%Y-%m') AS month, count(*) FILTER (WHERE pre_window) AS notifications_pre_window, round(avg(opened::INT) FILTER (WHERE pre_window), 4) AS open_rate_pre_window,
  count(*) AS notifications_all, round(avg(opened::INT), 4) AS open_rate_all FROM push_seq GROUP BY 1 ORDER BY 1;
--- members who ever had 12+ notifications in 30 days (from 2026-07-04; members who joined before June 4)
-SELECT count(DISTINCT uid) AS members_12_plus_recent, round(count(DISTINCT uid)::DOUBLE / (SELECT count(*) FROM push WHERE pre_window), 4) AS share_of_pre_window_members_with_notifications
-FROM push_seq WHERE t >= TIMESTAMP '2026-07-04' AND recent >= 12 AND pre_window;
+-- members who ever had 10+ notifications in 30 days (from 2026-07-04; pre_window members)
+SELECT count(DISTINCT uid) AS members_10_plus_recent, round(count(DISTINCT uid)::DOUBLE / (SELECT count(*) FROM push WHERE pre_window), 4) AS share_of_pre_window_members_with_notifications
+FROM push_seq WHERE t >= TIMESTAMP '2026-07-04' AND recent >= 10 AND pre_window;
 
 -- EVAL Q16 — Fall Reset (Sep 8-21) vs the two weeks before: workouts, app opens, meals (untouched control)
 WITH w AS (SELECT (t >= TIMESTAMP '2026-09-08') AS prog, event FROM ev
@@ -637,7 +642,7 @@ SELECT prog, completed, opens, meals, round(completed::DOUBLE / opens, 4) AS com
 -- (workout planned -> workout completed, totals, 4-hour window) counts attempts,
 -- not plans: a plan made while an earlier attempt is still open does not start its
 -- own attempt, and the open attempt keeps the first plan's 4-hour clock. It reads
--- about 1 point lower: 77.2% of 19,903 attempts before vs 78.2% of 30,162 during
+-- about 1 point lower: 77.8% of 18,160 attempts before vs 77.5% of 26,961 during
 -- (repo funnel engine, lib/verify/funnel-engine.js evaluateFunnel, countMode
 -- totals, reentry, anchorRange per period). The ratio is the same.
 SELECT prog, count(*) AS planned, round(avg(done_4h::INT), 4) AS follow_through_4h, round(avg(done_1d::INT), 4) AS follow_through_1d
@@ -671,14 +676,16 @@ SELECT grp, period, count(*) FILTER (WHERE event = 'coach session') AS coach_ses
  round(count(*) FILTER (WHERE event = 'coach session')::DOUBLE / count(DISTINCT uid), 4) AS sessions_per_active_member
 FROM e GROUP BY ALL ORDER BY grp, period;
 -- Member-level test. Members on Monthly or Annual on every member-initiated event
--- from Jul 15 to Sep 8 (the same people on both sides); each member's sessions
+-- from Jul 15 to Sep 8 and active (an Active action) in each of those eight weeks
+-- (the same people on both sides, all still using the app); each member's sessions
 -- after minus before is one observation (paired z). Splits: plan, Platform,
 -- wearable_type, segment, whether the member joined in the window, and whether
 -- the member used Stride Coach (any ai_coach workout). Stride Coach users vs
 -- non-users is a Welch z on the same per-member differences.
 -- p two-sided via the Abramowitz-Stegun 7.1.26 erf approximation.
 CREATE OR REPLACE TEMP TABLE coach_members AS
-WITH w AS (SELECT uid, min(subscription_tier) AS mn, max(subscription_tier) AS mx FROM ev
+WITH w AS (SELECT uid, min(subscription_tier) AS mn, max(subscription_tier) AS mx,
+  count(DISTINCT date_diff('day', DATE '2026-07-15', t::DATE) // 7) AS active_weeks FROM ev
   WHERE t >= TIMESTAMP '2026-07-15' AND t < TIMESTAMP '2026-09-09' AND event NOT IN ('notification received', 'account deactivated') GROUP BY 1),
 ai AS (SELECT DISTINCT uid FROM ev WHERE event = 'workout completed' AND coaching_mode = 'ai_coach'),
 c AS (SELECT uid, count(*) FILTER (WHERE t < TIMESTAMP '2026-08-12') AS b, count(*) FILTER (WHERE t >= TIMESTAMP '2026-08-12') AS a
@@ -688,11 +695,15 @@ SELECT w.uid, w.mx AS plan, u.Platform AS platform, u.wearable_type, u.segment,
  CASE WHEN w.uid IN (SELECT uid FROM ai) THEN 'Stride Coach user' ELSE 'not a Stride Coach user' END AS coach_use,
  coalesce(c.b, 0) AS b, coalesce(c.a, 0) AS a
 FROM w JOIN users u ON u.distinct_id::VARCHAR = w.uid LEFT JOIN c USING (uid)
-WHERE w.mn = w.mx AND w.mx IN ('monthly', 'annual');
-WITH sp AS (SELECT 'all' AS split, 'all' AS value, * FROM coach_members
-  UNION ALL SELECT 'plan', plan, * FROM coach_members UNION ALL SELECT 'Platform', platform, * FROM coach_members
-  UNION ALL SELECT 'wearable_type', wearable_type, * FROM coach_members UNION ALL SELECT 'segment', segment, * FROM coach_members
-  UNION ALL SELECT 'tenure', tenure, * FROM coach_members UNION ALL SELECT 'Stride Coach use', coach_use, * FROM coach_members),
+WHERE w.mn = w.mx AND w.mx IN ('monthly', 'annual') AND w.active_weeks = 8;
+-- The member-level null and its splits use established members (joined before
+-- Jun 4): new members book most of their coach sessions in their first month,
+-- so their sessions fall with tenure whatever Stride Coach does (see below).
+CREATE OR REPLACE TEMP TABLE coach_established AS SELECT * FROM coach_members WHERE tenure = 'joined before Jun 4';
+WITH sp AS (SELECT 'all' AS split, 'all' AS value, * FROM coach_established
+  UNION ALL SELECT 'plan', plan, * FROM coach_established UNION ALL SELECT 'Platform', platform, * FROM coach_established
+  UNION ALL SELECT 'wearable_type', wearable_type, * FROM coach_established UNION ALL SELECT 'segment', segment, * FROM coach_established
+  UNION ALL SELECT 'Stride Coach use', coach_use, * FROM coach_established),
 s AS (SELECT split, value, count(*) AS members, sum(b) AS before_4w, sum(a) AS after_4w, avg(a - b) / sqrt(var_samp(a - b) / count(*)) AS z FROM sp GROUP BY ALL),
 e AS (SELECT *, abs(z) / sqrt(2) AS x, 1 / (1 + 0.3275911 * abs(z) / sqrt(2)) AS t FROM s)
 SELECT split, value, members, before_4w, after_4w, round(after_4w::DOUBLE / before_4w, 3) AS after_vs_before, round(z, 2) AS z_paired,
@@ -709,15 +720,18 @@ SELECT scope, users_n, non_users_n, round(users_after_vs_before, 3) AS users_aft
  round(ratio, 3) AS users_vs_non_users, round(z, 2) AS z,
  round(1 - (1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * exp(-x * x)), 3) AS p_two_sided
 FROM e ORDER BY scope;
--- members who joined in the window: their other member-initiated events fall with
--- their coach sessions (they stop using the app), by Stride Coach use
-WITH o AS (SELECT m.uid, count(e.t) FILTER (WHERE e.t < TIMESTAMP '2026-08-12') AS ob, count(e.t) FILTER (WHERE e.t >= TIMESTAMP '2026-08-12') AS oa
-  FROM coach_members m LEFT JOIN ev e ON e.uid = m.uid AND e.t >= TIMESTAMP '2026-07-15' AND e.t < TIMESTAMP '2026-09-09'
-   AND e.event NOT IN ('notification received', 'account deactivated', 'coach session')
-  WHERE m.tenure = 'joined in window' GROUP BY 1)
-SELECT m.coach_use, count(*) AS members, sum(m.b) AS coach_before, sum(m.a) AS coach_after, sum(o.ob) AS other_events_before, sum(o.oa) AS other_events_after,
- round(sum(o.oa)::DOUBLE / sum(o.ob), 3) AS other_after_vs_before
-FROM coach_members m JOIN o USING (uid) GROUP BY 1 ORDER BY 1;
+-- members who joined in the window: coach sessions fall with tenure for Stride Coach
+-- users and non-users alike (members on Monthly or Annual and active every week), and
+-- coach sessions per paid member-week by weeks since signup (all new members)
+SELECT coach_use, count(*) AS members, sum(b) AS coach_before, sum(a) AS coach_after
+FROM coach_members WHERE tenure = 'joined in window' GROUP BY 1 ORDER BY 1;
+WITH s AS (SELECT uid, t0 FROM signups)
+SELECT CASE WHEN date_diff('day', s.t0, e.t) < 35 THEN '1 weeks 0-4 after signup' ELSE '2 week 5 on' END AS tenure,
+ count(*) FILTER (WHERE e.event = 'coach session') AS coach_sessions,
+ count(DISTINCT e.uid || '|' || (date_diff('day', s.t0, e.t) // 7)::VARCHAR) AS paid_member_weeks,
+ round(count(*) FILTER (WHERE e.event = 'coach session')::DOUBLE / count(DISTINCT e.uid || '|' || (date_diff('day', s.t0, e.t) // 7)::VARCHAR), 3) AS coach_per_member_week,
+ round(count(*) FILTER (WHERE e.event NOT IN ('coach session', 'notification received', 'account deactivated'))::DOUBLE / count(DISTINCT e.uid || '|' || (date_diff('day', s.t0, e.t) // 7)::VARCHAR), 2) AS other_active_events_per_member_week
+FROM ev e JOIN s USING (uid) WHERE e.subscription_tier IN ('monthly', 'annual') GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q19 — subscription bookings by month (warehouse)
 SELECT strftime(date::DATE, '%Y-%m') AS month, sum(new_subscriptions) AS new_subscriptions,
@@ -757,9 +771,9 @@ SELECT 'monthly/annual purchase mix, after vs before Sep 1',
 UNION ALL
 SELECT 'open rate, notifications with 0-4 others in the previous 30 days (from Jul 4, pre-window members)', (SELECT round(avg(opened::INT), 4) FROM push_seq WHERE recent <= 4 AND t >= TIMESTAMP '2026-07-04' AND pre_window)
 UNION ALL
-SELECT 'open rate, notifications with 12+ others in the previous 30 days (from Jul 4, pre-window members)', (SELECT round(avg(opened::INT), 4) FROM push_seq WHERE recent >= 12 AND t >= TIMESTAMP '2026-07-04' AND pre_window)
+SELECT 'open rate, notifications with 10+ others in the previous 30 days (from Jul 4, pre-window members)', (SELECT round(avg(opened::INT), 4) FROM push_seq WHERE recent >= 10 AND t >= TIMESTAMP '2026-07-04' AND pre_window)
 UNION ALL
-SELECT 'share of notifications sent with 12+ others in the previous 30 days (from Jul 4, pre-window members)', (SELECT round(avg((recent >= 12)::INT), 4) FROM push_seq WHERE t >= TIMESTAMP '2026-07-04' AND pre_window)
+SELECT 'share of notifications sent with 10+ others in the previous 30 days (from Jul 4, pre-window members)', (SELECT round(avg((recent >= 10)::INT), 4) FROM push_seq WHERE t >= TIMESTAMP '2026-07-04' AND pre_window)
 UNION ALL
 SELECT 'onboarding non-finishers who bought Plus (share)', (SELECT round(avg(b::INT), 4) FROM (SELECT o.uid, o.uid IN (SELECT uid FROM ev WHERE event = 'subscription purchased') AS b FROM onboarding o WHERE NOT o.converted))
 UNION ALL
@@ -779,7 +793,8 @@ SELECT 'long-time free members (trial used) who bought Plus in the window (share
 -- active members (Active action) and per-day workouts and app opens, split by
 -- members who joined before Jun 4 and members who joined in the window. The June
 -- rise comes from members who joined in the window building up from zero on Jun 4;
--- members who joined before Jun 4 hold level from the first full week.
+-- members who joined before Jun 4 decline slowly (some stop using the app without
+-- deactivating).
 WITH a AS (SELECT e.uid, e.t, e.event, e.uid IN (SELECT uid FROM signups) AS new_member FROM ev e
   WHERE e.event NOT IN ('notification received', 'account deactivated'))
 SELECT date_trunc('week', t)::DATE AS week, count(DISTINCT t::DATE) AS days,

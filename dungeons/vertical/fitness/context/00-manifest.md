@@ -6,7 +6,8 @@ This folder is the internal analytics wiki for **Stridewell**, a consumer fitnes
 
 - **Product:** the Stridewell mobile app (iOS and Android) and its paid tier, Stridewell Plus.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, early summer through the end of Q3.
-- **Scale:** about 9,000 members have events in the window, and about 6,400 use the app in a typical month. About 4,000 of them joined during the window; the rest were members before June 4. The project holds about 1.06 million events.
+- **Scale:** about 9,000 members have events in the window, and about 5,900 to 6,400 use the app in a typical month. About 4,100 of them joined during the window; the rest were members before June 4. The project holds about 0.99 million events.
+- **Member base.** Members who joined before June 4 are Stridewell's active member base at the start of the window: accounts with app activity in the weeks before June 4. Accounts that had already gone dormant before then are not in the project. Any member can stop using the app without deactivating; the account stays open and keeps receiving notifications.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC.
 - **Window start.** The export starts at 00:00 UTC on June 4. Some multi-step activity that began before then appears only with its later events: a challenge completed in June may have been joined in May, and a few trials and trial conversions in early June belong to members who saw the paywall before June 4.
 

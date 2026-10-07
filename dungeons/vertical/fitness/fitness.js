@@ -18,10 +18,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             Plus feature from 2026-08-12. Plus includes one human coach
  *             session per billing month; extra sessions are $24.
  *             Company: seed-stage, ≈ 12 employees, ≈ 15 part-time contract
- *             coaches, ≈ 6,400 monthly active members, ≈ 1,850 Plus members by Oct 1.
- * SCALE:      10,000 simulated users → 8,985 member profiles (4,001 join
- *             inside the window; 1,015 would-be joiners are removed by the
- *             Summer Shred baseline thinning, see H5), 1.06M events,
+ *             coaches, ≈ 5,900-6,400 monthly active members, ≈ 1,880 Plus members by Oct 1.
+ * SCALE:      10,000 simulated users → 9,073 member profiles (4,085 join
+ *             inside the window; 927 would-be joiners are removed by the
+ *             Summer Shred baseline thinning, see H5), 0.99M events,
  *             120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  workout planned → workout completed → progress checked
  * VALUE MOMENT: workout completed
@@ -97,7 +97,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   by its workout 1-2 h later and program workouts do not repeat earlier ones.
  * - App opens: every plan, progress check, meal log, and challenge starts in
  *   the app, so app opened (weight APP_OPEN_WEIGHT = 20) is the most common
- *   event: ≈ 240k app opens vs ≈ 197k workouts planned and ≈ 149k completed.
+ *   event: ≈ 222k app opens vs ≈ 186k workouts planned and ≈ 141k completed.
  * - Platform: derived per event from the engine's device os (platformOf:
  *   iOS and iPadOS → ios, Android → android) and set on the profile from the
  *   member's first event, so Platform never disagrees with os.
@@ -105,7 +105,16 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   the lapse cuts member-initiated events only; post-lapse notifications are
  *   unopened and stop at account deactivation. Retention returns and "active"
  *   definitions exclude the passive events (notification received, account
- *   deactivated); H8 reads use members who joined before June 4.
+ *   deactivated); H8 reads use members who joined before June 4 and are still
+ *   active in the last 14 days of the window.
+ * - Tenured silent lapse: long-time members also drift away. A salted 22% of
+ *   pre-window free members and 8% of pre-window paying members (not the
+ *   window-start deactivators below, not members with a pending trial) stop
+ *   using the app on a uniform day in the window and never deactivate; their
+ *   notifications keep arriving, unopened. Weekly active long-time members fall
+ *   from ≈ 4,600 in the week of Jun 8 to ≈ 3,750 in the week of Sep 21.
+ *   Pre-existing members' per-member activity is otherwise flat (engine), so
+ *   members still active are active nearly every week (WAU/MAU ≈ 0.82).
  * - Segments: the engine scales every event by the persona's eventMultiplier,
  *   so shapeSocial keeps a per-segment share of challenge units, friend adds,
  *   and leaderboard views (social 100%, casual and beginner 75%, athlete and
@@ -148,7 +157,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   and adds 4% store-page purchases with no app event. Audit corr vs the
  *   event count: ≈0.97 (sync) and ≈0.93 (billing), not 1.000.
  * - Window start: pre-window members have a short engine lead-in, so June 4-7
- *   holds 97.6% of June 11-14's events (the member base grows ≈ 5% a week in June). Challenges:
+ *   holds 97.9% of June 11-14's events (the member base grows in June). Challenges:
  *   the engine lead-in covers only joins in the last few days before June 4,
  *   so scheduleChallenges drops its orphan completions and
  *   seedPreWindowChallenges draws each pre-window member's joins in the 30
@@ -166,16 +175,18 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   (no pending trial, no purchase) lapse on a day in the first 40 days
  *   (density falling linearly to zero) and deactivate the same way; one who
  *   lapses before their first in-window event shows only the deactivation.
- *   Deactivations run ≈ 7-11 a day every week from June 4 to October 1.
+ *   Deactivations run ≈ 7-11 a day every week from June 4 to October 1
+ *   (highest in late July and early August, when Summer Shred members lapse).
  * - Human coaching: Plus (and trial) includes PLUS_INCLUDED_SESSIONS (1) a
  *   30-day billing month, renewing on each member's own (salted) billing day;
  *   extra sessions and free members' sessions are paid ($24) and only
  *   PAID_COACH_KEEP (4%) of those would-be sessions happen. Window start: a
  *   pre-window member may have used the current cycle's session before June 4
- *   (probability = share of the cycle already gone). Result: ≈ 4,800 sessions
- *   (≈ 2,240 coach-hours, ≈ 130 a week: ≈ 15 part-time coaches), 84% by Plus or
- *   trial members; weekly sessions per Plus member are flat (≈ 0.2).
- * - The challenge seeding and shaping, the window-start lapse, the
+ *   (probability = share of the cycle already gone). Result: ≈ 4,700 sessions
+ *   (≈ 2,200 coach-hours, ≈ 128 a week: ≈ 15 part-time coaches), 85% by Plus or
+ *   trial members. New Plus members book most of their sessions in their first
+ *   month (≈ 0.14 per paid member-week in weeks 0-4 after signup vs ≈ 0.10 later).
+ * - The challenge seeding and shaping, the window-start and tenured lapses, the
  *   deactivation time, the outage rotation, and the coach allowance use per-member salts only (no shared chance draws), so they leave the other
  *   members' random streams unchanged.
  * - paid_acquisition_daily follows a media plan (expected Mixpanel signups per
@@ -197,11 +208,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   onboarding conversion × 1.3 (abandonOnboarding: Control and not-enrolled
  *   members finish at 45%) and onboarding time × 0.7 (declarative
  *   ttcMultiplier). Members who stop early engage less and buy Plus about half
- *   as often as finishers (10.5% vs 21.3%), never zero.
+ *   as often as finishers (10.4% vs 22.7%), never zero.
  * MIXPANEL: Funnels, account created → goal quiz completed → plan generated →
  *   starter workout completed, 7-day window, breakdown user property
- *   "Experiment: Guided First Week". Guided ≈ 61% vs Control ≈ 47%; median
- *   time to finish ≈ 12.6 h vs 17.8 h.
+ *   "Experiment: Guided First Week". Guided ≈ 58% vs Control ≈ 44%; median
+ *   time to finish ≈ 12.5 h vs 18.0 h.
  * REAL WORLD: a guided first-week plan reduces choice paralysis for new users.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -214,11 +225,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   own full-use rate drawn from Beta(3, 1) (mean 75%, so use is spread, not
  *   all-or-nothing). Adopters' use ramps from 40% of their full rate on launch
  *   day to 100% after 21 days, so the Plus-workout share climbs from ≈20% in
- *   launch week to 0.6 × 0.75 = 45% from 2026-09-02 (43.8% measured). Coached sessions last
+ *   launch week to 0.6 × 0.75 = 45% from 2026-09-02 (45.8% measured). Coached sessions last
  *   1.2x longer (calories scale with the longer session). Free and
  *   pre-launch workouts stay self_guided.
  *   Heart rate, perceived effort, and calories per minute are untouched (an
- *   honest null: longer, not harder).
+ *   honest null: longer, not harder; every test p > 0.2).
  * MIXPANEL: Insights, workout completed, average duration_minutes, breakdown
  *   coaching_mode, filter subscription_tier != free, after 2026-08-12; weekly
  *   share of ai_coach for the ramp.
@@ -246,11 +257,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: on 2026-09-01 Plus Monthly goes from $12.99 to $14.99. 35% of
  *   would-be monthly purchases after that date never happen; Annual is
- *   untouched. Prices exist only in the warehouse table. Only ≈200 members
+ *   untouched. Prices exist only in the warehouse table. Only ≈190 members
  *   buy after the change, so the plan-mix DiD is noisy (sd ≈ 0.1, from the
- *   Poisson noise of ≈90 Annual purchases): in the final run the pre-change
- *   mix is 549:270 = 2.03 (declared pool 2:1) and the post-change would-be
- *   mix is 112 / 0.65 : 88 = 1.96, so the DiD reads 0.63 (NAILED). A
+ *   Poisson noise of ≈80 Annual purchases): in the final run the pre-change
+ *   mix is 585:276 = 2.12 (declared pool 2:1) and the post-change would-be
+ *   mix is 106 / 0.65 : 81 = 2.01, so the DiD reads 0.62 (NAILED). A
  *   knob-derived floor (1 − 0.35/2) backs the band.
  * MIXPANEL: Insights, subscription purchased, weekly, breakdown plan; the
  *   monthly/annual ratio drops after Sep 1. Bookings need the warehouse
@@ -271,11 +282,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   or weekly; join paid_acquisition_daily.spend_usd for spend per signup and
  *   cost per extra member; Funnels account created → subscription purchased,
  *   uniques, breakdown acquisition_channel, conversion window 120 days (the
- *   whole dataset; the default 30-day window reads 9.8% vs 15.6% instead of
- *   11.4% vs 17.5%). The buy-rate read rests on ≈110 paid-social buyers
+ *   whole dataset; the default 30-day window reads 9.6% vs 16.6% instead of
+ *   10.8% vs 18.4%). The buy-rate read rests on ≈110 paid-social buyers
  *   (sampling sd of the ratio ≈ 0.06), so it can land on either side of the
- *   0.5 knob; the knob-derived floor (0.75) backs the NAILED ceiling (0.61
- *   in the final run: STRONG).
+ *   0.5 knob; the knob-derived floor (0.75) backs the NAILED ceiling (0.52
+ *   in the final run: NAILED).
  * REAL WORLD: a performance push buys real extra volume, at a higher CPI,
  *   from a lower-intent audience.
  *
@@ -297,15 +308,15 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   created falls in week W and who did workout completed N+ times between
  *   the start of W and 7 days after its end (an approximation of each
  *   member's first 7 days; the exact per-member window needs the raw export).
- *   Raw-export values (each member's own first 7 days): Week 4 ≈ 14% for 0
- *   early workouts, ≈ 23% for 1-2, ≈ 40% for 3-4, ≈ 57% for 5+. The
+ *   Raw-export values (each member's own first 7 days): Week 4 ≈ 18% for 0
+ *   early workouts, ≈ 27% for 1-2, ≈ 48% for 3-4, ≈ 56% for 5+. The
  *   per-signup-week cohort approximation a Mixpanel user can build (workouts
- *   from the start of the signup week to 7 days after its end) reads ≈ 14%,
- *   20%, 32%, 48%. The knob sets a floor of 2.5x for 5+/0; busier members
+ *   from the start of the signup week to 7 days after its end) reads ≈ 17%,
+ *   26%, 37%, 51%. The knob sets a floor of 2.5x for 5+/0; busier members
  *   (and non-finishers' thinned usage, see H1) retain better anyway, so the
- *   ratio sits above it (4.11 in the final run: STRONG, above the NAILED
- *   band). Counting notifications as a return inflates every bucket (25% for
- *   0 early workouts) and shrinks the ratio to 2.68.
+ *   ratio sits above it (3.03 in the final run: STRONG, above the NAILED
+ *   band). Counting notifications as a return inflates every bucket (37% for
+ *   0 early workouts) and shrinks the ratio to 1.77.
  * REAL WORLD: the first week sets the habit; most fitness churn is early.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -333,21 +344,25 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: fatigue follows recent volume. A notification opens at the organic
  *   20% (declared pool, 1 in 5, typical for fitness-app push) while the member
- *   got at most 4 others in the previous 30 days. From there the chance a
- *   would-be open goes unopened ramps linearly to 60% at 12 recent
- *   notifications (open rate ≈ 8%). Pre-window members carry seeded
- *   pre-June-4 notifications at their own rate, so fatigue is steady from day
- *   1 and the open rate has no calendar trend (≈ 16% every month).
- *   Notifications are server-side and keep reaching new members after they
- *   lapse (H6), unopened; that is a lapse effect, not fatigue, so the reads
- *   use members who joined before June 4 (they do not lapse in the window).
+ *   got at most 4 others in the previous 30 days (≈ the median). From there
+ *   the chance a would-be open goes unopened ramps linearly to 60% at 10
+ *   recent notifications (≈ p90; open rate ≈ 8%). Pre-window members carry
+ *   seeded pre-June-4 notifications at their own rate, so fatigue is steady
+ *   from day 1 and the open rate has no calendar trend (≈ 16-17% every month).
+ *   Notifications are server-side and keep reaching members after they stop
+ *   using the app (H6 lapse, tenured silent lapse), unopened; that is a lapse
+ *   effect, not fatigue, so the reads use members who joined before June 4
+ *   and are still active from Sep 18 (the last 14 days). A few long-time free
+ *   members deactivate early in the window; their notifications stop at
+ *   deactivation and they drop out of that cohort.
  * MIXPANEL: Insights, notification received, share with opened = true,
- *   filter cohort "did not do account created in the window", breakdown by
- *   cohorts on notification count in the window (<12, 12-23, 24-35, 36+):
- *   ≈ 19.6% → 18.0% → 14.2% → 11.8%. The exact 30-day look-back read (≈ 20%
- *   at 0-4 recent vs ≈ 8% at 12+) needs the raw export. Over all members the
- *   monthly open rate drifts down (16.5% → 14.6%) only because lapsed new
- *   members keep receiving notifications they never open.
+ *   filter cohort "did not do account created in the window AND did Active
+ *   action on or after Sep 18", breakdown by cohorts on notification count in
+ *   the window (<10, 10-19, 20-29, 30+): ≈ 20.5% → 19.0% → 16.1% → 11.6%. The
+ *   exact 30-day look-back read (≈ 19.9% at 0-4 recent vs ≈ 8.1% at 10+)
+ *   needs the raw export. Over all members the monthly open rate drifts down
+ *   (16.7% → 12.1%) only because members who stopped using the app keep
+ *   receiving notifications they never open.
  * REAL WORLD: notification overload trains people to ignore the app.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -359,78 +374,81 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   workout 1-2 h later, the progress check after it), so the Workout Loop
  *   keeps its shape: the share of planned workouts followed by a completed
  *   workout within 4 h is the same in the program as in the two weeks before
- *   (pairing each plan with its next completion: 79.2% vs 78.3%; the Mixpanel
+ *   (pairing each plan with its next completion: 78.5% vs 79.0%; the Mixpanel
  *   totals funnel, which keeps the first plan's clock when a member plans twice,
- *   reads 78.2% vs 77.2%), and progress checks per workout stay at 0.64-0.65. Each
+ *   reads 77.5% vs 77.8%), and progress checks per workout stay at 0.64-0.65. Each
  *   extra session gets its own workout details (re-drawn at its time), so
  *   program workouts do not repeat earlier ones.
  * MIXPANEL: Insights, workout completed, app opened, meal logged, daily;
- *   formula workouts / app opens rises ≈ 1.22x and app opens / meals ≈ 1.19x
+ *   formula workouts / app opens rises ≈ 1.27x and app opens / meals ≈ 1.13x
  *   during the program. Funnels, workout planned → workout completed, totals,
  *   4-hour window (the Workout Loop's), Sep 8-21 vs Aug 25 - Sep 7: equal
- *   (78.2% vs 77.2%).
+ *   (77.5% vs 77.8%).
  * REAL WORLD: a back-to-routine program after Labor Day brings members back
  *   a bit more often and makes each visit a training session.
  *
  * ═════════════════════════════════════════════════════════════════════════
- * EXPECTED METRICS SUMMARY (measured: data/verify-fitness, 2026-10-07, engine 352f463, fix round 4)
+ * EXPECTED METRICS SUMMARY (measured: data/verify-fitness, 2026-10-07, engine e6712ec, final pass)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                      | Derivation              | Expected  | Measured
  * -----|---------------------------------------------|-------------------------|-----------|---------
- * H1   | onboarding conversion Guided/Control        | GUIDED_CONV_MULT        | 1.30      | 1.297 (60.6% vs 46.8%)
- * H1   | median onboarding TTC Guided/Control        | GUIDED_TTC_MULT         | 0.70      | 0.709
- * H1   | Guided share of enrolled                    | equal 2-arm hash        | 0.50      | 0.509
- * H1   | Plus buy rate, non-finishers / finishers    | NONFINISH_NO_BUY + thin | ≈ 0.5     | 0.49 (10.5% vs 21.3%)
+ * H1   | onboarding conversion Guided/Control        | GUIDED_CONV_MULT        | 1.30      | 1.325 (58.1% vs 43.9%)
+ * H1   | median onboarding TTC Guided/Control        | GUIDED_TTC_MULT         | 0.70      | 0.696
+ * H1   | Guided share of enrolled                    | equal 2-arm hash        | 0.50      | 0.487
+ * H1   | Plus buy rate, non-finishers / finishers    | NONFINISH_NO_BUY + thin | ≈ 0.5     | 0.46 (10.4% vs 22.7%)
  * H2   | ai_coach rows pre-launch or free tier       | exact purity            | 0         | 0
- * H2   | post-launch Plus duration ai/self           | AI_DURATION_MULT        | 1.20      | 1.202
- * H2   | Plus ai_coach share after the 21-day ramp   | ADOPTER_SHARE × USE     | 0.45      | 0.438
- * H2   | Plus members (10+ workouts) using it 25-74% | Beta(3,1) use rate      | spread    | 23.4% (40.8% never)
- * H2   | plan → workout pairs with different modes   | shared per linked unit  | 0         | 0 of 64,475
- * H2   | trial workouts run with Stride Coach        | trial has Plus features | > 0       | 284
- * H3   | watch+band synced per owner plan, outage vs ±7 days | OUTAGE_KEEP     | 0.25      | 0.264
- * H3   | same, vs all unaffected workouts            | OUTAGE_KEEP             | 0.25      | 0.250
+ * H2   | post-launch Plus duration ai/self           | AI_DURATION_MULT        | 1.20      | 1.204
+ * H2   | Plus ai_coach share after the 21-day ramp   | ADOPTER_SHARE × USE     | 0.45      | 0.458
+ * H2   | Plus members (10+ workouts) using it 25-74% | Beta(3,1) use rate      | spread    | 24.2% (37.5% never)
+ * H2   | plan → workout pairs with different modes   | shared per linked unit  | 0         | 0 of 58,673
+ * H2   | trial workouts run with Stride Coach        | trial has Plus features | > 0       | 265
+ * H2   | intensity null: effort / heart rate / kcal per min | untouched        | p > 0.2   | min p 0.22 (9 tests)
+ * H3   | watch+band synced per owner plan, outage vs ±7 days | OUTAGE_KEEP     | 0.25      | 0.257
+ * H3   | same, vs all unaffected workouts            | OUTAGE_KEEP             | 0.25      | 0.265
  * H3   | warehouse sync_error_rate during outage     | 1 − OUTAGE_KEEP         | 0.75      | 0.752
- * H4   | monthly/annual purchases, after vs before   | 1 − MONTHLY_LOSS        | ≤ 0.65    | 0.626 (floor 0.825)
- * H4   | monthly/annual bookings, after vs before    | 0.65 × 14.99/12.99      | ≤ 0.75    | 0.722 (floor 0.952)
- * H4   | long-time free members buying in window     | DIRECT_CONV (realism)   | 3-8%      | 7.6%
- * H5   | paid-social spend per signup, Shred/rest    | SHRED_CPI_MULT          | 2.00      | 2.033
- * H5   | daily signups, Shred/rest (all channels)    | 1/(1 − SHRED_INCREMENTAL)| 1.33     | 1.329
- * H5   | daily signups, Shred/rest (non-paid-social) | control                 | 1.00      | 0.992
- * H5   | paid-social buy rate vs same-week others    | 1 − PAID_SOCIAL_NO_BUY  | ≤ 0.50    | 0.609 (floor 0.75)
+ * H4   | monthly/annual purchases, after vs before   | 1 − MONTHLY_LOSS        | ≤ 0.65    | 0.617 (floor 0.825)
+ * H4   | monthly/annual bookings, after vs before    | 0.65 × 14.99/12.99      | ≤ 0.75    | 0.713 (floor 0.952)
+ * H4   | long-time free members buying in window     | DIRECT_CONV (realism)   | 3-8%      | 7.0%
+ * H5   | paid-social spend per signup, Shred/rest    | SHRED_CPI_MULT          | 2.00      | 2.164
+ * H5   | daily signups, Shred/rest (all channels)    | 1/(1 − SHRED_INCREMENTAL)| 1.33     | 1.343
+ * H5   | daily signups, Shred/rest (non-paid-social) | control                 | 1.00      | 1.031
+ * H5   | paid-social buy rate vs same-week others    | 1 − PAID_SOCIAL_NO_BUY  | ≤ 0.50    | 0.521 (floor 0.75)
  * H5   | paid channel-days with zero spend           | media plan              | 0         | 0 of 360
- * H6   | Week-4 retention, 5+ vs 0 early workouts    | ≥ 1/(1 − 0.6) (floor)   | ≥ 2.5     | 4.114 (56.8% vs 13.8%)
+ * H6   | Week-4 retention, 5+ vs 0 early workouts    | ≥ 1/(1 − 0.6) (floor)   | ≥ 2.5     | 3.032 (55.6% vs 18.4%)
  * H6   | retention rises across 0 / 1-2 / 3-4 / 5+   | monotone churn share    | 3 steps   | 3
- * H7   | per-challenge completion, team (joins ≤ Aug 31) | TEAM_CONV           | 0.60      | 0.566
- * H7   | per-challenge completion, solo (joins ≤ Aug 31) | SOLO_CONV           | 0.30      | 0.279
- * H7   | team / solo completion                      | TEAM_CONV / SOLO_CONV   | 2.00      | 2.030
+ * H7   | per-challenge completion, team (joins ≤ Aug 31) | TEAM_CONV           | 0.60      | 0.547
+ * H7   | per-challenge completion, solo (joins ≤ Aug 31) | SOLO_CONV           | 0.30      | 0.276
+ * H7   | team / solo completion                      | TEAM_CONV / SOLO_CONV   | 2.00      | 1.984
  * H7   | completions outside the last 20% of the challenge | duration_days      | 0         | 0
- * H7   | median days to complete, 7/14/21/30-day     | ≈ 0.9 × duration        | rising    | 6.0 / 12.5 / 18.5 / 26.4
- * H7   | participants per team challenge_id          | TEAM_SLOTS              | several   | 5.9 avg (7.6% single)
- * H8   | open rate 12+ / 0-4 recent (30 d), from Jul 4 | 1 − PUSH_FATIGUE_FLIP | 0.40      | 0.388
- * H8   | open rate, 0-4 recent notifications         | declared pool 1 of 5    | 0.20      | 0.200
+ * H7   | median days to complete, 7/14/21/30-day     | ≈ 0.9 × duration        | rising    | 6.0 / 12.5 / 18.4 / 26.4
+ * H7   | participants per team challenge_id          | TEAM_SLOTS              | several   | 5.7 avg (8.1% single)
+ * H8   | open rate 10+ / 0-4 recent (30 d), from Jul 4 | 1 − PUSH_FATIGUE_FLIP | 0.40      | 0.407
+ * H8   | open rate, 0-4 recent notifications         | declared pool 1 of 5    | 0.20      | 0.199
  * H8   | open rate falls across 4 count cohorts      | monotone fatigue        | 3 steps   | 3
- * H8   | pre-window members' open rate, Sep / Jun    | steady-state fatigue    | 1.00      | 1.041
- * H9   | completed per app open, program/before      | 1.5 / 1.2               | 1.25      | 1.220
- * H9   | planned per app open, program/before        | 1.5 / 1.2               | 1.25      | 1.205
- * H9   | app opens per meal logged, program/before   | FALL_RESET_OPEN_MULT    | 1.20      | 1.190
- * H9   | plan → workout within 4 h, program/before   | whole linked units      | 1.00      | 1.011 (79.2% vs 78.3%; 1 day: 86.0% vs 84.7%; funnel 78.2% vs 77.2%)
- * H9   | program workouts duplicating another exactly | re-draw per copy       | ≈ 0       | 0 of 25,205 (10 of 123,742 outside)
- * --   | progress checks per completed workout       | whole linked units      | flat      | 0.648 → 0.640
- * --   | signups == profile created; SCD before signup | engine placement      | all / 0   | 4,001 / 0 of 13,871
- * --   | workouts Mon / Sat (soup DOW)               | DOW_WEIGHTS 1.0 / 0.7   | > 1.3     | 1.60 (24,977 / 15,644)
- * --   | Jun 4-7 events / Jun 11-14 events           | pre-window lead-in      | ≈ 1       | 0.976 (27,546 / 28,233)
- * --   | pre-window members on Plus at window start  | segment plan mix        | 10-20%    | 17.0%
- * --   | June new subscriptions per day, by week     | trial pipeline seeding  | no ramp   | 8.8-11.1 (Jul-Aug 7.7-10.1)
- * --   | challenge completions per join, by week     | pre-window seeding      | flat      | 0.39-0.46 every week (Jun 4-7: 0.46)
- * --   | account deactivated per day, by week        | lapse-day deactivation  | flat to Oct 1 | 6.9-11.1 every week (Jun 4-7: 8.8; Sep 28-Oct 1: 7.3)
- * --   | account deactivated per day, Jun-Aug / Sep  | lapse-day deactivation  | ≈ 1       | 9.4 / 8.7
- * --   | challenge joins per member: social / athlete / trainer | SOCIAL_KEEP  | social top | 6.7 / 5.1 / 4.4 (friends 5.1 / 3.5 / 3.0)
+ * H8   | still-active pre-window open rate, Sep / Jun | steady-state fatigue   | 1.00      | 0.952
+ * H9   | completed per app open, program/before      | 1.5 / 1.2               | 1.25      | 1.271
+ * H9   | planned per app open, program/before        | 1.5 / 1.2               | 1.25      | 1.280
+ * H9   | app opens per meal logged, program/before   | FALL_RESET_OPEN_MULT    | 1.20      | 1.131
+ * H9   | plan → workout within 4 h, program/before   | whole linked units      | 1.00      | 0.994 (78.5% vs 79.0%; 1 day: 85.9% vs 85.4%; funnel 77.5% vs 77.8%)
+ * H9   | program workouts duplicating another exactly | re-draw per copy       | ≈ 0       | 2 rows of 22,405 (2 of 118,246 outside)
+ * --   | progress checks per completed workout       | whole linked units      | flat      | 0.643 → 0.647
+ * --   | signups == profile created; SCD before signup | engine placement      | all / 0   | 4,085 / 0 of 14,226
+ * --   | workouts Mon / Sat, full weeks Jun 7 - Sep 5 | DOW_WEIGHTS 1.0 / 0.7  | ≈ 1.43    | 1.31 (16,161 / 12,379)
+ * --   | Jun 4-7 events / Jun 11-14 events           | pre-window lead-in      | ≈ 1       | 0.979 (29,618 / 30,256)
+ * --   | pre-window members on Plus at window start  | segment plan mix        | 10-20%    | 17.1%
+ * --   | June new subscriptions per day, by week     | trial pipeline seeding  | no ramp   | 8.9-11.8 (Jul-Aug 8.3-11.0)
+ * --   | challenge completions per join, by week     | pre-window seeding      | flat      | 0.39-0.44 every week (Jun 4-7: 0.39)
+ * --   | account deactivated per day, by week        | lapse-day deactivation  | flat to Oct 1 | 6.7-10.7 every week (Jun 4-7: 9.5; Sep 28-Oct 1: 7.8)
+ * --   | account deactivated per day, Jun-Aug / Sep  | lapse-day deactivation  | ≈ 1       | 9.0 / 7.4 (late-Jul peak: Summer Shred members lapsing)
+ * --   | weekly active long-time members, Jun 8 / Sep 21 week | tenured silent lapse | falling | 4,597 / 3,751
+ * --   | WAU / MAU (August)                          | flat pre-window activity | n/a      | 0.82 (4,919 / 5,985)
+ * --   | challenge joins per member: social / athlete / trainer | SOCIAL_KEEP  | social top | 6.4 / 5.1 / 4.0 (friends 4.5 / 3.3 / 2.6)
  * --   | most running challenges at a free member's join | FREE_CHALLENGE_LIMIT | ≤ 3      | 3
- * --   | coach sessions; share by Plus / trial members | included session + 4% paid | ≈ 80% | 4,831 (84%; 2,244 coach-hours, ≈ 131 a week)
- * --   | app opens > workouts planned > completed    | APP_OPEN_WEIGHT         | ordered   | 240,450 > 196,719 > 148,947
+ * --   | coach sessions; share by Plus / trial members | included session + 4% paid | ≈ 80% | 4,694 (85%; 2,198 coach-hours, ≈ 128 a week)
+ * --   | app opens > workouts planned > completed    | APP_OPEN_WEIGHT         | ordered   | 222,166 > 186,024 > 140,651
  * --   | events with Platform ≠ device os; members with 2 Platforms | platformOf | 0 / 0   | 0 / 0
- * --   | notifications > 7 d after last activity (opened) / after deactivation | lapseAt | > 0 / 0 | 6,896 (0 opened) / 0
- * --   | warehouse corr vs events: sync / billing / paid | drift knobs / plan  | 0.9-0.98  | 0.964 / 0.918 / 0.738 (paid follows the media plan)
+ * --   | notifications > 7 d after last activity (opened) / after deactivation | lapseAt | > 0 / 0 | 10,743 (2 opened) / 0
+ * --   | warehouse corr vs events: sync / billing / paid | drift knobs / plan  | 0.9-0.98  | 0.953 / 0.914 / 0.728 (paid follows the media plan)
  * ═════════════════════════════════════════════════════════════════════════
  */
 
@@ -604,7 +622,7 @@ const PUSH_OPEN_POOL = [true, false, false, false, false]; // declared `opened` 
 const PUSH_OPEN_RATE = PUSH_OPEN_POOL.filter(Boolean).length / PUSH_OPEN_POOL.length; // 0.2, industry-typical
 const PUSH_FATIGUE_WINDOW_DAYS = 30;
 const PUSH_FATIGUE_START = 4;      // ≈ the median notification's trailing-30-day count
-const PUSH_FATIGUE_FULL = 12;      // ≈ p90
+const PUSH_FATIGUE_FULL = 10;      // ≈ p90
 const PUSH_FATIGUE_FLIP = 0.6;     // share of would-be opens lost once fully fatigued
 const pushFlip = (k) => PUSH_FATIGUE_FLIP * Math.min(1, Math.max(0, (k - PUSH_FATIGUE_START) / (PUSH_FATIGUE_FULL - PUSH_FATIGUE_START)));
 
@@ -646,6 +664,12 @@ const workoutKcal = (category, minutes, effort) => {
 const PRE_LAPSE_SHARE = 0.09;
 const PRE_LAPSE_SEGMENTS = ["casual", "beginner"];
 const PRE_LAPSE_DAYS = 40;
+// tenured silent lapse: long-time members also drift away during the window
+// without deactivating (they just stop opening the app; notifications keep
+// arriving, unopened). Each lapsing member stops on a uniform day in the window;
+// paying members lapse less often than free members.
+const TENURED_LAPSE_FREE = 0.22;
+const TENURED_LAPSE_PAID = 0.08;
 
 // human coaching: Plus includes one coach session per billing month (trial
 // members get the same allowance); further sessions, and every free member's
@@ -896,12 +920,13 @@ function scheduleChallenges(events, uid) {
  * is a clone of one of the member's challenge events; its time of day comes
  * from one of the member's own events.
  */
-function seedPreWindowChallenges(events, uid) {
-	const START = ms(DATASET_START), END = ms(DATASET_END);
+function seedPreWindowChallenges(events, uid, cut = Infinity) {
+	const START = ms(DATASET_START);
+	const END = Math.min(ms(DATASET_END), cut); // a member who lapsed completes nothing after the lapse
 	const joins = events.filter((e) => e.event === "challenge joined");
-	if (!joins.length) return events;
+	if (!joins.length || END <= START) return events;
 	const template = events.find((e) => e.event === "challenge completed") || joins[0];
-	const rate = joins.length / ((END - START) / DAY);
+	const rate = joins.length / ((END - START) / DAY); // joins per active day
 	const n = Math.floor(rate * PRE_CHALLENGE_DAYS + salt(uid, "ch-seed-n"));
 	const added = [];
 	const used = new Set();
@@ -1157,6 +1182,18 @@ function handleEverything(events, meta) {
 		}
 	}
 
+	// ── tenured silent lapse: a share of long-time members stop using the app on a
+	// uniform day in the window and never deactivate (window-start deactivators and
+	// members with a pending trial are handled elsewhere) ──
+	const preLapseCandidate = PRE_LAPSE_SEGMENTS.includes(profile.segment) && salt(uid, "pre-lapse") < PRE_LAPSE_SHARE;
+	let tenuredCut = Infinity;
+	if (!signup && !PENDING_TRIAL.has(uid) && !preLapseCandidate
+		&& salt(uid, "tenured-lapse") < (profile.subscription_tier === "free" ? TENURED_LAPSE_FREE : TENURED_LAPSE_PAID)) {
+		tenuredCut = START + salt(uid, "tenured-lapse-day") * (END - START);
+		events = lapseAt(events, tenuredCut);
+		if (purchase && T(purchase) >= tenuredCut) purchase = null;
+	}
+
 	// ── H3: partner health-API outage — most smartwatch / band workouts never sync ──
 	// The partner fails sync requests in rotation: a member's k-th affected workout
 	// syncs when floor((k + 1) · KEEP + o) > floor(k · KEEP + o), o salted per member,
@@ -1185,7 +1222,7 @@ function handleEverything(events, meta) {
 	events = shapeSocial(events, profile, uid, tierAt);
 	// ── window-start challenge pipeline (pre-window members), at the shaped join rate ──
 	if (!signup) {
-		events = seedPreWindowChallenges(events, uid);
+		events = seedPreWindowChallenges(events, uid, tenuredCut);
 		for (const e of events) if (e.event === "challenge completed") e.subscription_tier = tierAt(T(e));
 	}
 
@@ -1277,8 +1314,7 @@ function handleEverything(events, meta) {
 	// ── window-start lapse: some long-time free members were already drifting away
 	// on June 4. They stop on a day early in the window (density falling to zero at
 	// PRE_LAPSE_DAYS, mirroring how new members' lapses build up) and deactivate.
-	if (!signup && !PENDING_TRIAL.has(uid) && initialTier === "free" && !purchase && deacts.length
-		&& PRE_LAPSE_SEGMENTS.includes(profile.segment) && salt(uid, "pre-lapse") < PRE_LAPSE_SHARE) {
+	if (!signup && !PENDING_TRIAL.has(uid) && initialTier === "free" && !purchase && deacts.length && preLapseCandidate) {
 		const lapseDays = PRE_LAPSE_DAYS * (1 - Math.sqrt(1 - salt(uid, "pre-lapse-day")));
 		const cut = START + lapseDays * DAY;
 		const kept = events.filter((e) => T(e) < cut && !isPassive(e));
@@ -1830,7 +1866,7 @@ const OUTAGE_LIST = OUTAGE_TYPES.map((x) => `'${x}'`).join(", ");
 const FATIGUE_OBSERVABLE = dayjs.utc(DATASET_START).add(PUSH_FATIGUE_WINDOW_DAYS, "day").toISOString();
 // H8 Mixpanel recipe: cohorts on notification count in the window
 const PUSH_COHORTS = (() => {
-	const cuts = [12, 24, 36];
+	const cuts = [10, 20, 30];
 	const label = `<${cuts[0]}, ${cuts.slice(0, -1).map((c, i) => `${c}-${cuts[i + 1] - 1}`).join(", ")}, ${cuts[cuts.length - 1]}+`;
 	const sqlCase = `CASE ${cuts.map((c, i) => `WHEN c < ${c} THEN ${i}`).join(" ")} ELSE ${cuts.length} END`;
 	return { cuts, label, sqlCase };
@@ -1839,10 +1875,14 @@ const PUSH_COHORTS = (() => {
 // the app, so they never count as activity (retention returns, "active")
 const PASSIVE_EVENTS = ["notification received", "account deactivated"];
 const PASSIVE_LIST = PASSIVE_EVENTS.map((x) => `'${x}'`).join(", ");
-// members who joined before June 4 (no account created in the window): they do
-// not lapse in the window, so their notifications read fatigue without the
-// unopened notifications that keep reaching lapsed new members
-const PRE_CTE = `pre AS (SELECT uid FROM ev GROUP BY 1 HAVING count(*) FILTER (WHERE event = 'account created') = 0)`;
+// members who joined before June 4 (no account created in the window) and are
+// still active in the last 14 days of the window (an active event from
+// STILL_ACTIVE_FROM): their notifications read fatigue without the unopened
+// notifications that keep reaching members who stopped using the app
+const STILL_ACTIVE_DAYS = 14;
+const STILL_ACTIVE_FROM = TS(dayjs.utc(DATASET_END).add(1, "second").subtract(STILL_ACTIVE_DAYS, "day"));
+const PRE_CTE = `pre AS (SELECT uid FROM ev GROUP BY 1 HAVING count(*) FILTER (WHERE event = 'account created') = 0
+  AND count(*) FILTER (WHERE t >= TIMESTAMP '${STILL_ACTIVE_FROM}' AND event NOT IN (${PASSIVE_LIST})) > 0)`;
 // one month of post-change purchases at ≈50 a week (see the H4 narrative)
 const H4_MIN_BUYERS = 150;
 const band = (k) => [Math.round(k * 0.9 * 1000) / 1000, Math.round(k * 1.1 * 1000) / 1000];
@@ -1948,7 +1988,7 @@ FROM ev WHERE event = 'workout completed' AND t >= TIMESTAMP '${AI_RAMP_END}' AN
 	{
 		id: "H3-wearable-sync-outage",
 		hook: "H3",
-		archetype: "bespoke",
+		archetype: "external-join",
 		narrative: `A partner health-API outage (${SYNC_OUTAGE_START.slice(0, 10)} to ${SYNC_OUTAGE_END.slice(0, 10)}, exclusive) stops most smartwatch and fitness-band workouts from syncing: only ${OUTAGE_KEEP * 100}% arrive. Chest-strap, phone-tracked, and manual workouts are untouched. The partner fails requests in rotation, so each watch or band owner keeps ${OUTAGE_KEEP * 100}% of their affected workouts (a member's k-th affected workout syncs when floor((k + 1) × ${OUTAGE_KEEP} + o) passes an integer, o salted per member), not a coin flip per workout. The outage days come from the warehouse table wearable_sync_daily (sync_error_rate > 0.2); the event-side read is a ratio of ratios: smartwatch and fitness-band owners' wearable-tracked workouts per planned workout (planning happens in the app and is untouched), outage days vs the 7 days either side. The same members on the same days in numerator and denominator cancel their busy and quiet days, so the read is the keep rate.`,
 		mixpanelReport: { type: "Insights", events: ["workout completed (tracking_source = wearable, wearable_type in smartwatch, fitness_band)", "workout planned (user wearable_type in smartwatch, fitness_band)"], measure: "total, formula A / B", chart: "daily line", join: "warehouse wearable_sync_daily.sync_error_rate" },
 		assertions: [
@@ -1995,7 +2035,7 @@ FROM ${WH("wearable_sync_daily")}`,
 		id: "H4-monthly-price-change",
 		hook: "H4",
 		archetype: "temporal-inflection",
-		narrative: `On ${PRICE_CHANGE.slice(0, 10)} Plus Monthly rises from $${PRICE_MONTHLY_OLD} to $${PRICE_MONTHLY_NEW}; Annual stays $${PRICE_ANNUAL}. ${MONTHLY_LOSS * 100}% of would-be monthly purchases after the change never happen. Annual is the control: the monthly/annual purchase ratio after vs before reads the ${1 - MONTHLY_LOSS} keep rate. The prices live only in the warehouse table subscription_billing_daily, so the bookings read needs the join: monthly bookings fall to ${(1 - MONTHLY_LOSS).toFixed(2)} × ${PRICE_MONTHLY_NEW}/${PRICE_MONTHLY_OLD} of trend. Purchases run at ≈30-80 a week (long-time free members rarely buy straight from the paywall), so the post-change month holds ≈200 buyers: the evidence gate is 150 buyers per side. The DiD rests on the realized plan mix on each side, which is a draw from the declared 2:1 pool (sd of the DiD ≈ 0.1, from the Poisson noise of ≈90 post-change Annual purchases): in the final run the pre-change mix is 549:270 = 2.03 and the post-change would-be mix is 112/${1 - MONTHLY_LOSS} : 88 = 1.96, so the DiD reads 0.63. Because the plan draw can move it, a knob-derived floor (1 − ${MONTHLY_LOSS}/2) backs the NAILED band and the story grades STRONG when the draw lands outside the band.`,
+		narrative: `On ${PRICE_CHANGE.slice(0, 10)} Plus Monthly rises from $${PRICE_MONTHLY_OLD} to $${PRICE_MONTHLY_NEW}; Annual stays $${PRICE_ANNUAL}. ${MONTHLY_LOSS * 100}% of would-be monthly purchases after the change never happen. Annual is the control: the monthly/annual purchase ratio after vs before reads the ${1 - MONTHLY_LOSS} keep rate. The prices live only in the warehouse table subscription_billing_daily, so the bookings read needs the join: monthly bookings fall to ${(1 - MONTHLY_LOSS).toFixed(2)} × ${PRICE_MONTHLY_NEW}/${PRICE_MONTHLY_OLD} of trend. Purchases run at ≈30-80 a week (long-time free members rarely buy straight from the paywall), so the post-change month holds ≈190 buyers: the evidence gate is 150 buyers per side. The DiD rests on the realized plan mix on each side, which is a draw from the declared 2:1 pool (sd of the DiD ≈ 0.1, from the Poisson noise of ≈80 post-change Annual purchases): in the final run the pre-change mix is 585:276 = 2.12 and the post-change would-be mix is 106/${1 - MONTHLY_LOSS} : 81 = 2.01, so the DiD reads 0.62. Because the plan draw can move it, a knob-derived floor (1 − ${MONTHLY_LOSS}/2) backs the NAILED band and the story grades STRONG when the draw lands outside the band.`,
 		mixpanelReport: { type: "Insights", event: "subscription purchased", measure: "total", breakdown: "plan", chart: "weekly line" },
 		assertions: [
 			{
@@ -2231,8 +2271,8 @@ FROM j LEFT JOIN c USING (uid, challenge_id)`,
 		id: "H8-push-fatigue",
 		hook: "H8",
 		archetype: "cohort-prop-scale",
-		narrative: `Notification fatigue follows recent volume. A notification opens at the organic ${PUSH_OPEN_RATE * 100}% rate (the declared pool, typical for fitness-app push) while the member received at most ${PUSH_FATIGUE_START} others in the previous ${PUSH_FATIGUE_WINDOW_DAYS} days. Past that, the chance a would-be open goes unopened ramps linearly to ${PUSH_FATIGUE_FLIP * 100}% at ${PUSH_FATIGUE_FULL} recent notifications and stays there. Pre-window members carry seeded pre-June-4 notifications at their own rate, so fatigue is already steady on June 4 and the open rate has no time trend. Notifications are server-side: they keep reaching new members after they lapse (H6), unopened, until the account is deactivated. Those unopened notifications are a lapse effect, not fatigue, so every read uses members who joined before June 4 (no account created in the window; they do not lapse in the window). Raw-export read (exact knob): their notifications sent from ${TS(FATIGUE_OBSERVABLE).slice(0, 10)} (when the whole ${PUSH_FATIGUE_WINDOW_DAYS}-day look-back is inside the data) with ${PUSH_FATIGUE_FULL}+ recent notifications open at 1 − ${PUSH_FATIGUE_FLIP} = ${(1 - PUSH_FATIGUE_FLIP).toFixed(1)} of the rate of those with ${PUSH_FATIGUE_START} or fewer. Mixpanel read: those members bucketed by notification count in the window (${PUSH_COHORTS.label}) show an open rate that falls with every bucket. Time check: pre-window members' open rate in September equals June's.`,
-		mixpanelReport: { type: "Insights", event: "notification received", measure: "share with opened = true", filter: "cohort: members who did not do account created in the window", breakdown: `cohorts on notification received count in the window (${PUSH_COHORTS.label})` },
+		narrative: `Notification fatigue follows recent volume. A notification opens at the organic ${PUSH_OPEN_RATE * 100}% rate (the declared pool, typical for fitness-app push) while the member received at most ${PUSH_FATIGUE_START} others in the previous ${PUSH_FATIGUE_WINDOW_DAYS} days. Past that, the chance a would-be open goes unopened ramps linearly to ${PUSH_FATIGUE_FLIP * 100}% at ${PUSH_FATIGUE_FULL} recent notifications and stays there. Pre-window members carry seeded pre-June-4 notifications at their own rate, so fatigue is already steady on June 4 and the open rate has no time trend. Notifications are server-side: they keep reaching members after they stop using the app (new members' H6 and organic lapse, long-time members' silent lapse), unopened, until the account is deactivated. Those unopened notifications are a lapse effect, not fatigue, so every read uses members who joined before June 4 (no account created in the window) and are still active in the last ${STILL_ACTIVE_DAYS} days (an active event from ${STILL_ACTIVE_FROM.slice(0, 10)}). A few long-time free members deactivate early in the window; their notifications stop at deactivation and they are not in that cohort. Raw-export read (exact knob): their notifications sent from ${TS(FATIGUE_OBSERVABLE).slice(0, 10)} (when the whole ${PUSH_FATIGUE_WINDOW_DAYS}-day look-back is inside the data) with ${PUSH_FATIGUE_FULL}+ recent notifications open at 1 − ${PUSH_FATIGUE_FLIP} = ${(1 - PUSH_FATIGUE_FLIP).toFixed(1)} of the rate of those with ${PUSH_FATIGUE_START} or fewer. Mixpanel read: those members bucketed by notification count in the window (${PUSH_COHORTS.label}) show an open rate that falls with every bucket. Time check: pre-window members' open rate in September equals June's.`,
+		mixpanelReport: { type: "Insights", event: "notification received", measure: "share with opened = true", filter: `cohort: members who did not do account created in the window and did the Active action on or after ${STILL_ACTIVE_FROM.slice(0, 10)}`, breakdown: `cohorts on notification received count in the window (${PUSH_COHORTS.label})` },
 		assertions: [
 			{
 				breakdown: {

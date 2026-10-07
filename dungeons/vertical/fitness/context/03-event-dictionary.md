@@ -53,7 +53,7 @@ New members go through onboarding once, right after they install. These four eve
 | Event | Meaning | Properties |
 |---|---|---|
 | `paywall viewed` | A free member, or a member in their 7-day trial, sees the Plus paywall (for a trial member it is the prompt to pick a plan before the trial ends). | `paywall_trigger` (`workout_library`, `advanced_plans`, `coach_teaser` (the Stride Coach teaser, shown from 2026-08-12), `challenge_limit`, `settings`); `plan`: the plan highlighted on the paywall. |
-| `trial started` | A trial-eligible member starts their one 7-day Plus trial. | `plan` (`monthly` or `annual`): the plan the trial converts to; `trial_days` (7). |
+| `trial started` | A trial-eligible member starts their one 7-day Plus trial. | `plan` (`monthly` or `annual`): the plan the member selected at trial start (the member can pick a different plan at purchase); `trial_days` (7). |
 | `subscription purchased` | The member buys Plus. One per member. Price is **not** tracked here; see `subscription_billing_daily`. | `plan` (`monthly` or `annual`); `payment_method` (`apple_pay`, `google_pay`, `card`). |
 
 ## Engagement and lifecycle
@@ -72,7 +72,6 @@ New members go through onboarding once, right after they install. These four eve
 | `distinct_id` | The member's ID (same as `user_id` on events). |
 | `name`, `email`, `avatar` | Contact details. |
 | `segment` | Lifestyle segment: `casual`, `beginner`, `social`, `athlete`, `trainer` (see 01-business.md). |
-| `_persona` | Legacy copy of `segment` from an older CRM sync. |
 | `fitness_level` | Latest self-reported level: `beginner`, `intermediate`, `advanced`, `elite`. History is in the `fitness_level` history table. |
 | `primary_goal` | `lose_weight`, `build_strength`, `improve_endurance`, `stay_active`, `reduce_stress`. |
 | `acquisition_channel` | Channel at signup (for members who joined before the window, the channel they originally came from). |
