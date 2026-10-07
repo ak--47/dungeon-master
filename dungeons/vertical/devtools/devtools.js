@@ -4,627 +4,863 @@ import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "@ak--47/dungeon-master/utils";
-import * as v from "ak-tools";
-/** @typedef {import("../../../types").Dungeon} Config */
+import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
+/** @typedef  {import("../../../types").Dungeon} Config */
 
 // ── OVERVIEW ──
 /*
- * NAME:       CodeForge
- * APP:        Developer platform for builds, deploys, monitoring, code review,
- *             and team collaboration. Think GitHub + Vercel + PagerDuty in a
- *             unified CI/CD experience. Multi-role devs ship code through a
- *             connect-repo → configure-pipeline → build → deploy → monitor loop.
- * SCALE:      10,000 users, ~2.2M events, 121 days (2026-01-01 → 2026-05-01)
- * CORE LOOP:  connect repo → configure pipeline → build → deploy → monitor
+ * NAME:       Forgebench
+ * APP:        Developer platform: import a repository, push branches that build
+ *             a preview deployment each, run CI builds on hosted runners, review
+ *             and merge pull requests, ship to production. Free plus Pro ($12
+ *             per developer), Team ($29 per seat; runner-minute overage billed
+ *             from 2026-09-01), and sales-led Enterprise. Forge Assist (AI code
+ *             review) is a Pro/Team/Enterprise feature from 2026-07-29.
+ * SCALE:      10,000 developers (9,991 with events; 4,517 sign up inside the
+ *             window), ~0.93M events, 120 days (2026-06-04 → 2026-10-01, UTC),
+ *             500 customer organizations
+ * CORE LOOP:  commit pushed → preview deployed; build started → build finished;
+ *             pull request opened → review submitted → pull request merged →
+ *             production deployed
+ * VALUE MOMENT: preview deployed (the first one ends setup)
  *
- * EVENTS (18):
- *   build completed (8) > app session (8) > pull request created (6)
- *   > notification received (6) > deployment completed (5)
- *   > code review completed (5) > monitoring dashboard viewed (5)
- *   > alert triggered (4) > log searched (4) > incident created (2)
- *   > incident resolved (2) > repository connected (2) > pipeline configured (2)
- *   > collaboration invited (2) > environment created (2) > account created (1)
- *   > billing updated (1) > account deactivated (1)
+ * EVENTS (21):
+ *   build started / build finished (CI Build funnel, weight 8) > code browsed (9,
+ *   catch-all) > pull request opened → review submitted → pull request merged →
+ *   production deployed (Pull Request funnel, weight 4) > commit pushed →
+ *   preview deployed (Preview funnel, weight 5) > cli command run (4) > docs
+ *   viewed (3) > logs viewed (3) > issue created (2) > environment variable
+ *   updated (1) > teammate invited (1, thinned in the hook) > funnel-only:
+ *   account created, repository imported, pipeline configured, upgrade page
+ *   viewed, subscription started, $experiment_started
  *
- * FUNNELS (5):
- *   - Onboarding:            account created → repository connected → pipeline configured → build completed (45%)
- *   - Build-Deploy Pipeline: build completed → deployment completed → monitoring dashboard viewed (40%)
- *   - PR Review Flow:        pull request created → code review completed → build completed → deployment completed (35%)
- *   - Incident Response:     alert triggered → incident created → incident resolved (50%)
- *   - Upgrade Path:          app session → billing updated → collaboration invited (20%)
+ * FUNNELS (9):
+ *   - Onboarding (first funnel, four copies by stack group × paid social, H3/H7):
+ *       account created → repository imported → pipeline configured → preview deployed
+ *       (64% Node/Python/Go/Ruby/Rust, 35% Java/.NET; × 0.6 for paid social: 38% / 21%)
+ *   - Pull Request: opened → review submitted → merged → production deployed
+ *       (62%, pr_id per PR; the hook rebuilds the PR clock)
+ *   - CI Build: build started → build finished (94%, build_id per build; A/B
+ *       "Remote Build Cache" from 2026-07-08, assignment + exposure only)
+ *   - Preview: commit pushed → preview deployed (72%, commit_sha per push)
+ *   - Upgrade (new signups, customer_since ≥ window start): upgrade page viewed →
+ *       subscription started (34%); Upgrade (established free developers): same
+ *       steps (15%, then a 34% base keep in the hook)
  *
- * USER PROPS:  dev_role, segment, team_size, repos_connected, org_name, experience_level, subscription_tier, Platform, language
- * SUPER PROPS: subscription_tier, Platform, language
- * SCD PROPS:   subscription_tier (free/pro/enterprise, monthly fuzzy, max 6)
- * GROUPS:      none
+ * USER PROPS:  org_id, org_name, org_size, industry, role, primary_stack,
+ *              plan_tier, customer_since, acquisition_channel,
+ *              "Experiment: Remote Build Cache" (enrolled developers)
+ * SUPER PROPS: plan_tier (plan at event time), primary_stack (sticky per developer)
+ * SCD PROPS:   none
+ * GROUPS:      org_id (500 organizations; every event carries the developer's own org)
+ * WAREHOUSE:   marketing_spend_daily (spend by paid channel),
+ *              build_fleet_daily (fleet and registry mirror health by ecosystem),
+ *              usage_billing_daily (billed runner minutes and overage by plan)
+ * LOOKUPS:     none — every attribute is denormalized onto events/profiles
+ * SOUP:        weekday-heavy dayOfWeekWeights (Friday lighter), India + Europe +
+ *              Americas working hours (UTC)
+ *
+ * IDENTITY: new developers are identified at "account created" (isAuthEvent,
+ * first event, carries user_id + device_id); 2 devices per developer on
+ * average. Every event carries user_id; there is no anonymous pre-signup
+ * activity. The post-auth onboarding steps (repository imported, pipeline
+ * configured, the onboarding preview deployed) carry user_id only; every other
+ * event also carries device_id.
+ *
+ * DESIGN NOTES:
+ * - Hooks draw randomness only from hashFloat salts (per developer, PR, build,
+ *   org, or insert_id), never from the shared chance stream, so hook edits do
+ *   not reshuffle the engine's population, funnels, or timing.
+ * - Organizations come from one seeded table of 500; developers map to an org
+ *   by a hash weighted toward larger orgs. The group hook writes the same table
+ *   onto the org group profiles.
+ * - Builds: the hook decides status and failure stage per build (14% fail; a
+ *   new developer's first build 40%), and sets build_duration_sec as the real
+ *   start → finish gap: log-normal (median 7 min, σ 0.55) × runner size
+ *   (large 0.8, xlarge 0.65) × the H2 arm; a failed build stops at its stage.
+ * - Pull requests: lines_changed is log-normal (median 120); each developer
+ *   works in 1-3 repositories whose test coverage (10-95%) comes from a hash.
+ *   The hook rebuilds each PR's clock from the open: review wait (H4), review →
+ *   merge (H1), merge → deploy. 80% of developers pause reviews and merges over
+ *   the weekend (a step landing Saturday 06:00 - Monday 00:00 UTC moves 48 h
+ *   later) and ship production deploys that would land on the weekend on Monday.
+ * - Low-discrepancy draws (frac(offset + n·φ), per developer-repository and per
+ *   developer) place rollbacks (H9) and scheduled-build cuts (H8), so realized
+ *   rates follow the knobs without binomial noise.
+ * - Purchases: one per developer. New developers buy only in their first 42
+ *   days. Window start: established free developers buy at a steady base rate,
+ *   plus (in June) developers who signed up in the six weeks before June 4 and
+ *   are still in their buying window (their customer_since is moved into that
+ *   span), so weekly purchases are flat from week 1 (~26 a week).
+ * - New developers who never finish onboarding: 60% stop on day 1-4; the rest
+ *   keep a salted 25-60% of their activity (exploring docs and public code).
+ * - Collaboration volume: new developers keep every teammate invite in their
+ *   first 14 days; other invites are thinned to 25% (≈10 per org in 120 days).
+ * - Experiment exposure: the engine emits $experiment_started on every CI Build
+ *   run after the start; the hook keeps the first per developer.
+ * - Holidays (Jul 3, Sep 7): 35% of work units (whole PRs, builds, previews,
+ *   standalone events) that would start that day do not happen.
+ * - Warehouse drift: build_fleet_daily adds seeded API-triggered jobs (corr ≈
+ *   0.98 with the event count); usage_billing_daily meters runner minutes
+ *   across parallel jobs (×2-14 by plan), shifts 30% of a UTC day to the next
+ *   billing day, and adds retries and API minutes (corr ≈ 0.93);
+ *   marketing_spend_daily paces spend to the trailing 7-day signups × target
+ *   cost per signup × weekday schedule × seeded noise (corr ≈ 0.90).
+ * - Engine note: the default browser list is not tied to the OS (for example
+ *   Safari or Chrome iOS on Windows); this is engine-wide and left as is.
  */
 
 // ── HOOK STORIES ──
 /*
- * NOTE: All cohort effects are HIDDEN — discoverable only via behavioral
- * cohorts or raw-prop breakdowns. No cohort flag is stamped on events.
+ * All effects are hidden: no flag properties. Each is found by a breakdown, a
+ * date comparison, or a cohort. Dates live in the TIMELINE constants and are
+ * shared by hooks, stories, SQL, warehouse columns, and the timeline guide.
  *
- * ---------------------------------------------------------------
- * 1. BUILD FAILURE CASCADE (event hook)
- * ---------------------------------------------------------------
+ * ─────────────────────────────────────────────────────────────────────────
+ * H1. FORGE ASSIST LAUNCH (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: from 2026-07-29, 50% of developers on Pro, Team, or Enterprise
+ *   (plan at the PR's open) turn on Forge Assist, each on a salted day in the
+ *   28 days after launch, and use it on a salted 60-100% of their PRs (mean
+ *   80%), so the assisted share of eligible PRs ramps for four weeks and then
+ *   holds at 40% (review_mode = "forge_assist" on all four PR steps). Assisted
+ *   PRs go from review to merge in 0.6x the time. Review wait and rollbacks
+ *   are untouched (honest nulls).
+ * MIXPANEL: Funnels, review submitted → pull request merged, hold pr_id
+ *   constant, median time to convert, breakdown review_mode, filter plan_tier
+ *   in (pro, team, enterprise), from 2026-07-29; weekly share of review_mode on
+ *   pull request opened shows the ramp.
+ * REAL WORLD: an AI first pass catches the obvious problems, so the human
+ *   approval round is shorter.
  *
- * PATTERN: Builds with status "failed" get 2x build_duration_sec.
- * Failed builds take longer because the full test suite runs before
- * failing, and retries compound the duration.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H2. REMOTE BUILD CACHE EXPERIMENT (declarative assignment + everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: from 2026-07-08 developers split 50/50 at their first build in the
+ *   test (one $experiment_started each); "Remote Cache" builds take 0.6x as
+ *   long (build_duration_sec and the start → finish gap). Pass/fail does not
+ *   change.
+ * MIXPANEL: Insights, build finished, median build_duration_sec, filter
+ *   build_status = success, breakdown user property "Experiment: Remote Build
+ *   Cache"; success share by arm for the control.
+ * REAL WORLD: restoring dependencies and build outputs from a shared cache
+ *   skips most of the work on unchanged code.
  *
- * HOW TO FIND IT IN MIXPANEL:
+ * ─────────────────────────────────────────────────────────────────────────
+ * H3. JAVA / .NET ONBOARDING FRICTION (declarative first funnels)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: new developers whose primary stack is Java or .NET finish setup at
+ *   0.55x the rate of the other stacks (35% vs 64%; 21% vs 38% for paid
+ *   social). Losses spread over the import, pipeline, and preview steps.
+ * MIXPANEL: Funnels, account created → repository imported → pipeline
+ *   configured → preview deployed, 7-day window, breakdown primary_stack.
+ * REAL WORLD: JVM and .NET builds need more configuration (build tool,
+ *   runtime version, private package feeds) before the first green deploy.
  *
- *   Report 1: Build Duration by Status
- *   - Report type: Insights
- *   - Event: "build completed"
- *   - Measure: Average of "build_duration_sec"
- *   - Breakdown: "build_status"
- *   - Expected: failed ~ 2x longer than success (median ~400s vs
- *     ~200s; cancelled tracks success — the hook only touches failed).
- *     Use median, not average: the extreme-value anomaly (10x
- *     build_duration_sec at 0.3% frequency) fattens the mean tail.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H4. LARGE PULL REQUESTS WAIT FOR REVIEW (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: open → first review wait is a log-normal (median 3 h) × a size
+ *   multiplier: 1 up to 100 lines changed, rising log-linearly to 2.5 at
+ *   1,000+ lines. Organization size has no effect (honest null).
+ * MIXPANEL: Funnels, pull request opened → review submitted, hold pr_id
+ *   constant, median time to convert, breakdown lines_changed (custom buckets).
+ * REAL WORLD: reviewers put off big diffs.
  *
- * REAL-WORLD ANALOGUE: Failed CI builds run full test suites,
- * timeout, and trigger retry cascades that inflate build times.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H5. RED FIRST BUILD → CHURN (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: a new developer's first build fails 40% of the time (mostly
+ *   configuration). 50% of developers whose first build fails stop 1-4 days
+ *   after it. D30 retention passed / failed (first build within 14 days of
+ *   signup) = 1/(1 − 0.5) = 2.0.
+ * MIXPANEL: Funnels, account created → build finished (14-day window),
+ *   breakdown build_status of step 2; save cohorts; Retention account created →
+ *   any event, custom bracket day 30-36, breakdown by those cohorts.
+ * REAL WORLD: a red first run before anything works is where evaluators give up.
  *
- * ---------------------------------------------------------------
- * 2. NIGHT DEPLOY RISK (everything hook)
- * ---------------------------------------------------------------
+ * ─────────────────────────────────────────────────────────────────────────
+ * H6. NPM REGISTRY MIRROR INCIDENT (everything + warehouse build_fleet_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: 2026-08-19 to 2026-08-20, 60% of npm builds that would have passed
+ *   fail at dependency_install. The warehouse shows registry_mirror_status =
+ *   "degraded" and dependency_fetch_error_rate ≈ 0.6 for npm on those days.
+ *   Events carry no incident flag.
+ * MIXPANEL: Insights, build finished, share build_status = success, daily,
+ *   breakdown ecosystem; join the warehouse status.
+ * REAL WORLD: a flaky package mirror looks like "our builds broke" until
+ *   someone checks the status page.
  *
- * PATTERN: Deployments between 10PM-6AM UTC get deploy_status forced
- * to "failed" 40% of the time. No flag — analyst breaks down by
- * hour-of-day on deployment-completed events to discover the risk window.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H7. PAID CHANNEL ECONOMICS (declarative funnel copies + warehouse marketing_spend_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: window spend per Mixpanel signup is $55 paid social, $85 paid
+ *   search, $120 newsletter (target cost per signup; spend follows the trailing
+ *   7-day signups, weekday schedule, seeded ±12% noise, never zero). Paid social
+ *   signups finish onboarding at 0.6x, so per onboarded developer paid search
+ *   is cheaper than paid social.
+ * MIXPANEL: Insights, account created by acquisition_channel joined to
+ *   marketing_spend_daily.spend_usd; Funnels onboarding steps, 7-day window,
+ *   breakdown acquisition_channel.
+ * REAL WORLD: social clicks are cheap and low intent.
  *
- * HOW TO FIND IT IN MIXPANEL:
+ * ─────────────────────────────────────────────────────────────────────────
+ * H8. TEAM OVERAGE BILLING (everything + warehouse usage_billing_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: from 2026-09-01 Team pays $0.015 per runner minute above its pooled
+ *   allowance. Each Team org acts on a salted day in Sep 1-14 and turns off a
+ *   salted 30-70% (mean 50%) of its scheduled builds (whole build units).
+ *   Scheduled per push builds, Team, Sep 15-30 vs August = 0.5; other plans
+ *   1.0. Overage revenue exists only in the warehouse (zero before Sep 1 and on
+ *   other plans).
+ * MIXPANEL: Insights, build started, breakdown trigger and plan_tier, weekly,
+ *   formula schedule / push; join usage_billing_daily.overage_revenue_usd.
+ * REAL WORLD: metering makes customers switch off nightly builds nobody reads.
  *
- *   Report 1: Deploy Failure Rate by Hour of Day
- *   - Report type: Insights
- *   - Event: "deployment completed"
- *   - Measure: Total
- *   - Filter: deploy_status = "failed"
- *   - Breakdown: hour of day
- *   - Expected: 22:00-05:59 UTC hours show ~52% failure vs ~21% day
- *     baseline. Mechanism: organic failed share is 1/5 = 20% (pool
- *     ["success","success","success","failed","rolled_back"]); the
- *     hook forces "failed" on 40% of night deploys, so night share =
- *     0.4 + 0.6*0.2 = 0.52. Exclude days 43-49 when measuring: H6
- *     recovery clones (success/rolled_back only, never failed) dilute
- *     the failure share inside the recovery window.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H9. TEST COVERAGE AND ROLLBACKS (everything, dose-response)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: production deploys roll back at 20% from repositories at ≤30% test
+ *   coverage, falling linearly to 5% at ≥75%. PR size and Forge Assist do not
+ *   change rollbacks (honest nulls).
+ * MIXPANEL: Insights, production deployed, share deploy_outcome = rolled_back,
+ *   breakdown test_coverage_pct (custom buckets).
+ * REAL WORLD: tests catch regressions before users do.
  *
- * REAL-WORLD ANALOGUE: Night deploys fail more due to skeleton crews
- * and delayed incident response.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H10. PREVIEW HABIT → PAID SEAT (everything, threshold)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: new developers with 3+ preview deploys in their first 14 days keep
+ *   every would-be purchase; everyone else keeps 40%. Paid rate within 42 days,
+ *   habit vs light (1-2 previews) ≥ 1.0/0.4 = 2.5 (a floor: habit developers
+ *   also reach the upgrade page more often).
+ * MIXPANEL: Funnels account created → preview deployed ×3 (14-day window) to
+ *   build the cohorts; Funnels account created → subscription started (42-day
+ *   window), breakdown by cohort.
+ * REAL WORLD: developers who use previews in their review loop have adopted
+ *   the product and buy it.
  *
- * ---------------------------------------------------------------
- * 3. COPILOT ADOPTION -> PR VELOCITY (everything hook)
- * ---------------------------------------------------------------
+ * ═════════════════════════════════════════════════════════════════════════
+ * EXPECTED METRICS SUMMARY (measured: data/verify-devtools, 2026-10-07)
+ * ═════════════════════════════════════════════════════════════════════════
+ * Hook | Metric                                         | Derivation                | Expected | Measured
+ * -----|------------------------------------------------|---------------------------|----------|---------
+ * H1   | assisted rows pre-launch or on Free            | exact purity              | 0        | 0
+ * H1   | median review → merge, assisted / standard     | ASSIST_MERGE_MULT         | 0.60     | 0.598 (3.61 vs 6.03 h)
+ * H1   | assisted share of eligible PRs after the ramp  | 0.5 × 0.8                 | 0.40     | 0.412 (weekly 1.7% → 42%)
+ * H2   | median passed build time, Remote Cache/Control | CACHE_TTC_MULT            | 0.60     | 0.604 (235 vs 389 s)
+ * H2   | build success rate, Remote Cache/Control       | unchanged                 | 1.00     | 1.005 (85.1% vs 84.7%)
+ * H2   | Remote Cache share of exposed developers       | equal 2-arm hash          | 0.50     | 0.498
+ * H3   | 7-day onboarding, Java+.NET / other stacks     | SLOW_STACK_MULT           | 0.55     | 0.559 (33.8% vs 60.6%)
+ * H4   | median open → review, 1,000+ / ≤100 lines      | LARGE_PR_WAIT_MULT        | 2.50     | 2.498 (7.84 vs 3.14 h)
+ * H5   | D30 retention, first build passed / failed     | 1/(1 − RED_DARK_SHARE)    | 2.00     | 1.891 (87.9% vs 46.5%)
+ * H6   | npm/other success, incident vs ±7 days         | 1 − INCIDENT_FAIL         | 0.40     | 0.415
+ * H6   | warehouse dependency_fetch_error_rate, degraded| INCIDENT_FAIL             | 0.60     | 0.615
+ * H7   | spend per signup, paid social / paid search    | 55 / 85                   | 0.647    | 0.653 ($55.04 vs $84.34)
+ * H7   | 7-day onboarding, paid social / other channels | SOCIAL_ONBOARD_MULT       | 0.60     | 0.645 (36.5% vs 56.6%)
+ * H8   | Team scheduled per push, Sep 15-30 / August    | 1 − SCHEDULED_CUT_MEAN    | 0.50     | 0.490 (0.127 vs 0.259)
+ * H8   | other plans scheduled per push (control)       | unchanged                 | 1.00     | 0.972
+ * H8   | overage rows off Team or before Sep 1 / missing| exact                     | 0 / 0    | 0 / 0 ($2,980 in September)
+ * H9   | rollback rate, ≤30% / ≥75% coverage            | 0.20 / 0.05               | 4.00     | 4.166 (19.8% vs 4.75%)
+ * H10  | 42-day paid rate, 3+ / 1-2 previews (14 days)  | ≥ 1.0 / 0.4 (floor)       | ≥ 2.50   | 3.888 (28.3% vs 7.3%, STRONG)
+ * ═════════════════════════════════════════════════════════════════════════
  *
- * PATTERN: A hash-based cohort (~37.5% of users — GUID first char in
- * {2,3,4,d,e,f}, i.e. charCodeAt(0) % 10 < 3) are copilot adopters:
- * they get ai_assist="copilot" stamped on PR/review events and
- * floor(PRs * 0.5) extra pull-request events cloned into their
- * stream (~1.5x PR volume).
- *
- * MEASUREMENT CAVEAT: the copilot_integration feature (launchDay 30,
- * fast adoption) ALSO flips ai_assist to "copilot" on PR/review
- * events for feature adopters regardless of cohort — so a raw
- * ai_assist breakdown mixes the two populations. The clean read is
- * behavioral: bin users by per-user PR volume, or reproduce the hash
- * cohort (first char of user_id) in a cohort definition.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: PR Volume by AI Assist Mode
- *   - Report type: Insights
- *   - Event: "pull request created"
- *   - Measure: Total per user (average)
- *   - Breakdown: "ai_assist"
- *   - Expected: copilot-heavy users ~1.5x more PRs than manual users
- *     (directional only — see measurement caveat above)
- *
- * REAL-WORLD ANALOGUE: AI coding assistants measurably increase
- * developer throughput, particularly for boilerplate and tests.
- *
- * ---------------------------------------------------------------
- * 4. ON-CALL ROTATION FATIGUE (everything hook)
- * ---------------------------------------------------------------
- *
- * PATTERN: Users with >20 alert_triggered events get increasing
- * response_time_minutes on incident events. Alert fatigue causes
- * slower response as on-call rotations grind engineers down.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Response Time vs Alert Volume
- *   - Report type: Insights
- *   - Event: "incident resolved"
- *   - Measure: Average of "response_time_minutes"
- *   - Filter: users with high alert counts
- *   - Expected: fatigued users (>20 alerts, ~31% of incident users)
- *     show ~2.6x mean response time (~138min vs ~53min). The
- *     multiplier is 1 + min(alerts/20, 3), so the fatigued-cohort
- *     mean multiplier lands ~2.67; measured ratio tracks it.
- *
- * REAL-WORLD ANALOGUE: On-call burnout is a top cause of attrition
- * in SRE/DevOps. Alert fatigue degrades response quality over time.
- *
- * ---------------------------------------------------------------
- * 5. OPEN SOURCE POWER USAGE (everything hook)
- * ---------------------------------------------------------------
- *
- * PATTERN: OSS-segment users with >15 events get extra cloned build
- * + deploy events in their later activity (representing power usage).
- * Cloned events use unique offset timestamps. No flag — discover via
- * cohort by segment + event count, observing per-user build/deploy volume.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Build Share — Active OSS Users vs Active Non-OSS
- *   - Report type: Insights (with cohort)
- *   - Cohort A: segment = "oss_user" AND events > 15
- *   - Cohort B: segment != "oss_user" AND events > 15
- *   - Event: "build completed"
- *   - Measure: share of each cohort's total events
- *   - Expected: A's build share ~1.3x B's (~0.25 vs ~0.19). Note:
- *     nearly all surviving oss users clear the >15 threshold (121
- *     days x 1.2/day x 0.5 multiplier ≈ 72 events), so the
- *     within-oss A-vs-B comparison mostly captures churn, not the
- *     hook — compare against active non-oss users instead. The
- *     deploy share also rises (~1.65x) but is coupled with H9
- *     (oss builds land in the 15-30 sweet spot; heavy non-oss
- *     builders lose deploys), so the build share is the clean read.
- *
- * REAL-WORLD ANALOGUE: Power OSS users hit free-tier limits via
- * heavy build/deploy volume.
- *
- * ---------------------------------------------------------------
- * 6. POST-OUTAGE RECOVERY (everything hook)
- * ---------------------------------------------------------------
- *
- * PATTERN: After the major outage ends (day 42.25), deployment
- * events get a frequency boost -- extra cloned deployment events
- * represent the flurry of hotfixes and rollback-then-redeploy cycles.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Deployment Spike Post-Outage
- *   - Report type: Insights
- *   - Event: "deployment completed"
- *   - Measure: Total
- *   - Line chart by day
- *   - Expected: ~3.7x deploy volume on days 44-47 vs surrounding
- *     baseline, normalized against builds (ratio-of-ratios cancels
- *     the growth ramp). Mechanism: 3 clones per window deploy = 4x,
- *     minus ~5% of clones spilling past the window edge (offsets are
- *     +1-8h, so late-day-47 sources push clones into day 48). Clones
- *     carry status success/rolled_back only — never "failed" — which
- *     is why H2's failure-share read excludes this window.
- *
- * REAL-WORLD ANALOGUE: After a major outage, teams push a burst
- * of hotfixes, rollbacks, and emergency deploys to stabilize.
- *
- * ---------------------------------------------------------------
- * 7. DEVOPS LEAD PROFILE ENRICHMENT (user hook)
- * ---------------------------------------------------------------
- *
- * PATTERN: Users in the "devops" segment get team_size boosted
- * to 10-50 and repos_connected boosted to 5-20. DevOps leads
- * manage larger teams and more infrastructure.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Team Size by Segment
- *   - Report type: Insights
- *   - Event: any event
- *   - Measure: Average of user property "team_size"
- *   - Breakdown: user property "segment"
- *   - Expected: devops ~30 avg (uniform 10-50), platform_eng ~15,
- *     junior ~4.5. CAVEAT: full_stack/oss keep the DEFAULT pool
- *     u.weighNumRange(1, 50, 0.4, 5), whose mean is ~24 — NOT ~10 —
- *     so the clean team_size contrast is devops vs junior.
- *     repos_connected is the crisper signal: defaults to [0], so
- *     devops ~12.5, platform_eng ~9, junior ~1.5, full_stack/oss
- *     exactly 0.
- *
- * REAL-WORLD ANALOGUE: DevOps leads oversee platform teams and
- * manage organization-wide CI/CD infrastructure.
- *
- * ---------------------------------------------------------------
- * 8. ENTERPRISE BUILD-DEPLOY FUNNEL LIFT (everything hook)
- * ---------------------------------------------------------------
- *
- * PATTERN: Non-paid users (free AND team tier — everyone except
- * enterprise/business) drop 35% of final funnel step events
- * ("monitoring dashboard viewed"), creating a visible conversion
- * gap. Enterprise/business users keep all their events.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Build-Deploy Conversion by Tier
- *   - Report type: Funnels
- *   - Steps: "build completed" -> "deployment completed" -> "monitoring dashboard viewed"
- *   - Breakdown: "subscription_tier" (superProp)
- *   - Expected: free/team step-3 conversion ~0.65x of
- *     enterprise/business. Normalized read: monitoring-views per
- *     deployment — free/team ~0.63x paid (the 0.65 keep-rate minus
- *     small drift; deploy-count hooks H6/H9 hit all tiers evenly
- *     and cancel in the ratio).
- *
- * REAL-WORLD ANALOGUE: Enterprise CI/CD customers get priority
- * runners, dedicated support, and SLA-backed uptime guarantees.
- *
- * ---------------------------------------------------------------
- * 9. BUILD-COUNT MAGIC NUMBER (everything hook)
- * ---------------------------------------------------------------
- *
- * PATTERN: Users with 15-30 "build completed" events sit in the
- * healthy CI sweet spot — +50% deploy events are cloned (unique
- * timestamps, offsets 5-360min). Users with 31+ builds suffer
- * flaky-CI burnout: 40% of their deploy events drop. No flag —
- * discover by binning users on build-count and comparing
- * deploys-per-build.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Deploys per Build by Build Bucket
- *   - Report type: Insights (with cohort)
- *   - Cohort A: users with 15-30 "build completed" (sweet)
- *   - Cohort B: users with 1-14 (base)
- *   - Cohort C: users with >= 31 (over)
- *   - Event: "deployment completed" / "build completed"
- *   - Measure: ratio of totals per cohort
- *   - Expected: C/A ~ 0.40 (the clean read: 0.6/1.5 — organic
- *     deploys-per-build cancels between two high-activity buckets).
- *     A/B ~ 1.35 (1.5x minus a base-bucket organic offset: low-build
- *     users run slightly deploy-richer mixes, ~0.70 vs ~0.63
- *     organic). Segment to full_stack to hold persona constant and
- *     exclude recovery-window (days 43-49) deploys to decouple H6.
- *
- * REAL-WORLD ANALOGUE: Healthy CI cadence drives reliable deploys;
- * runaway builds signal a flaky pipeline that scares teams off ships.
- *
- * ---------------------------------------------------------------
- * 10. BUILD-DEPLOY TIME-TO-CONVERT (funnel-post)
- * ---------------------------------------------------------------
- *
- * PATTERN: Enterprise and business tier users complete the Build-Deploy
- * Pipeline funnel (build completed -> deployment completed -> monitoring
- * dashboard viewed) 1.5x faster (factor 0.67). Free-tier users complete
- * it 1.33x slower (factor 1.33). The hook intercepts funnel-post arrays,
- * computes the time gap between consecutive steps, and scales each gap
- * by the tier-specific factor before rewriting the step timestamps.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Build-Deploy Pipeline Median TTC by Tier
- *   - Report type: Funnels
- *   - Steps: "build completed" -> "deployment completed" -> "monitoring dashboard viewed"
- *   - Measure: Median time to convert
- *   - Breakdown: "subscription_tier" (superProp)
- *   - Expected: enterprise/business ~ 0.67x baseline; free ~ 1.33x
- *     baseline; team = 1.0 control. Fully engineered enterprise/free
- *     ratio = 0.67/1.33 ≈ 0.50, but the OBSERVED funnel-report ratio
- *     lands ~0.60-0.70: greedy min-gap step picks plus clone
- *     pollution (H9 sweet-spot deploy clones at +5-360min, H6
- *     recovery clones at +1-8h) compress observed gaps for every
- *     tier, and free-tier stretched conversions censor past the
- *     window — both pull the ratio toward 1.
- *
- *   NOTE (funnel-post measurement): visible only via funnel-instance
- *   reads (Mixpanel funnels, or emulateBreakdown timeToConvert).
- *   Cross-event MIN→MIN SQL queries on raw events do NOT show this —
- *   funnel-post adjusts gaps within funnel instances, not across the
- *   user's full event history.
- *
- * REAL-WORLD ANALOGUE: Enterprise CI/CD customers get priority build
- * runners and dedicated deploy infrastructure, yielding faster
- * end-to-end pipeline throughput.
- *
- * ===============================================================
- * EXPECTED METRICS SUMMARY
- * ===============================================================
- *
- * Bands were mechanism-derived and confirmed at reduced scale (2K
- * users, same seed) BEFORE the full run; "Measured" is the
- * full-fidelity 10K read (2,198,972 events). All 10 stories NAILED.
- *
- * Hook                        | Metric                        | Baseline | Effect     | Measured @10K
- * ----------------------------|-------------------------------|----------|------------|--------------
- * Build Failure Cascade       | median build_duration_sec     | ~200s    | 2.0x       | 2.000
- * Night Deploy Risk           | deploy failure share          | ~21% day | 0.52 night | 0.503 / 0.208
- * Copilot PR Velocity         | PRs/user (hash cohort)        | ~23      | ~1.5x      | 1.437
- * On-Call Fatigue             | mean response_time_min        | ~53min   | ~2.6x      | 2.599
- * OSS Power Usage             | build share of events (active)| ~0.19    | ~1.28x     | 1.280
- * Post-Outage Recovery        | deploys d44-47, RoR vs builds | 1x       | ~3.7x      | 3.774
- * DevOps Lead Profiles        | repos_connected               | 0 (dflt) | ~12.5      | 12.4
- * Enterprise Funnel Lift      | monitoring views per deploy   | paid 1x  | keep 0.65  | 0.632
- * Build-Count Magic Number    | deploys/build sweet vs base   | 1x       | ~1.35x     | 1.452
- * Build-Count Magic Number    | deploys/build over vs sweet   | 1x       | 0.40x      | 0.406
- * Build-Deploy TTC            | median TTC vs free (emulator) | 1x       | ~0.6-0.7x  | ent 0.642 / biz 0.607 / team 0.795
+ * H10 is a knob floor: developers with 3+ early previews are also heavier
+ * users who reach the upgrade page more often (62-76% vs 38-53% within 42
+ * days), so the realized ratio sits above the keep ratio. H5 (1.891) sits near
+ * the low edge of its band: 557 developers had a failed first build (relative
+ * SE of their D30 rate about 5%). H7's onboarding ratio (0.645) is binomial
+ * noise on 721 paid social signups (relative SE about 5%) around the rounded
+ * funnel knobs (38/64 = 0.594, 21/35 = 0.600). H3 and H7 come from engine
+ * funnel draws; H8 and H9 use low-discrepancy draws and sit close to the knobs.
  */
 
 // ── SCALE ──
 const SEED = "dm4-devtools";
 const NUM_USERS = 10_000;
-const DATASET_START = "2026-01-01T00:00:00Z";
-const DATASET_END = "2026-05-01T23:59:59Z";
+const DATASET_START = "2026-06-04T00:00:00Z";
+const DATASET_END = "2026-10-01T23:59:59Z"; // 120 days
 const EVENTS_PER_DAY = 1.2;
 const token = process.env.MP_TOKEN || "your-mixpanel-token";
 
 const chance = u.initChance(SEED);
 
-// ── KNOBS (tweak these to reshape stories) ──
-const BUILD_FAILURE_DURATION_MULT = 2;
+// ── TIMELINE (shared by hooks, stories, SQL, warehouse columns, guides) ──
+const REMOTE_CACHE_START = "2026-07-08T00:00:00Z";      // "Remote Build Cache" CI experiment starts
+const ASSIST_LAUNCH = "2026-07-29T00:00:00Z";           // Forge Assist (AI code review) for Pro, Team, Enterprise
+const REGISTRY_INCIDENT_START = "2026-08-19T00:00:00Z"; // npm registry mirror degraded
+const REGISTRY_INCIDENT_END = "2026-08-21T00:00:00Z";   // exclusive (2 days)
+const METERED_START = "2026-09-01T00:00:00Z";           // Team plan build-minute overage billing starts
+const HOLIDAYS = ["2026-07-03", "2026-09-07"];          // US Independence Day (observed), Labor Day
 
-const NIGHT_DEPLOY_HOUR_START = 22;
-const NIGHT_DEPLOY_HOUR_END = 6;
-const NIGHT_DEPLOY_FAIL_LIKELIHOOD = 40;
+const ms = (iso) => dayjs.utc(iso).valueOf();
+const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
+const MIN_MS = 60_000;
+const D0 = DATASET_START.slice(0, 10);
 
-const COPILOT_USER_HASH_MOD = 10;
-const COPILOT_USER_HASH_THRESHOLD = 3;
-const COPILOT_PR_CLONE_RATE = 0.5;
+// ── WEEKLY AND DAILY RHYTHM (soup) ──
+// Sun..Sat. Engineers ship on weekdays; Friday is lighter, weekends are side projects.
+const DOW_WEIGHTS = [0.22, 1.0, 1.02, 1.0, 0.95, 0.78, 0.2];
+// UTC hours: India (03-12 UTC), Europe (07-16 UTC), and the Americas (13-01 UTC) overlap.
+const HOUR_WEIGHTS = [0.42, 0.34, 0.3, 0.36, 0.44, 0.52, 0.6, 0.7, 0.8, 0.86, 0.88, 0.86,
+	0.88, 0.96, 1.0, 1.0, 0.97, 0.9, 0.82, 0.72, 0.64, 0.58, 0.52, 0.47];
 
-const ONCALL_ALERT_THRESHOLD = 20;
-const ONCALL_FATIGUE_DIVISOR = 20;
-const ONCALL_FATIGUE_CAP = 3;
+// ── KNOBS ──
+// H1 Forge Assist (AI code review): review → merge time for assisted PRs
+const ASSIST_PLANS = ["pro", "team", "enterprise"];
+const ASSIST_ADOPTER_SHARE = 0.5;  // share of eligible developers who turn it on (salted per user)
+const ASSIST_USE = 0.8;            // mean share of an adopter's PRs that get an assisted review (per adopter: ±0.2)
+const ASSIST_USE_SPREAD = 0.2;
+const ASSIST_RAMP_DAYS = 28;       // each adopter starts on a salted day in the 4 weeks after launch
+const ASSIST_SHARE = ASSIST_ADOPTER_SHARE * ASSIST_USE; // 0.40 of eligible PRs once ramped
+const ASSIST_MERGE_MULT = 0.6;     // review → merge time with Forge Assist
 
-const OSS_EVENT_THRESHOLD = 15;
-const OSS_CONVERSION_POINT_PCT = 0.7;
-const OSS_BUILD_CLONE_LIKELIHOOD = 30;
-const OSS_DEPLOY_CLONE_LIKELIHOOD = 20;
+// H2 Remote Build Cache experiment (declarative funnel experiment on CI Build)
+const CACHE_EXPERIMENT = "Remote Build Cache";
+const CACHE_VARIANT = "Remote Cache";
+const EXP_KEY = `Experiment: ${CACHE_EXPERIMENT}`; // profile key the engine stamps
+const CACHE_TTC_MULT = 0.6;        // build duration with the remote cache
+const BUILD_MEDIAN_SEC = 420;      // median pipeline time on a standard runner
+const BUILD_DURATION_SIGMA = 0.55;
+const RUNNER_SPEED = { standard: 1, large: 0.8, xlarge: 0.65 };
+const BUILD_CONV = 94;             // share of started builds that finish (the rest are cancelled)
+const BUILD_TTC_H = 0.3;
 
-const RECOVERY_START_DAY = 44;
-const RECOVERY_END_DAY = 48;
-const RECOVERY_CLONES_PER_EVENT = 3;
+// H3 onboarding by stack (declarative first funnels)
+const ONBOARD_CONV = 64;
+const SLOW_STACKS = ["java", "dotnet"];
+const SLOW_STACK_MULT = 0.55;
+const ONBOARD_TTC_H = 36;
 
-const ENTERPRISE_DROP_LIKELIHOOD = 35;
+// H4 review wait by PR size (log-linear between 100 and 1,000 lines changed)
+const REVIEW_WAIT_MEDIAN_H = 3;
+const SMALL_PR_LINES = 100;
+const LARGE_PR_LINES = 1000;
+const LARGE_PR_WAIT_MULT = 2.5;
+const reviewWaitMult = (lines) => {
+	if (lines <= SMALL_PR_LINES) return 1;
+	if (lines >= LARGE_PR_LINES) return LARGE_PR_WAIT_MULT;
+	return 1 + (LARGE_PR_WAIT_MULT - 1) * Math.log10(lines / SMALL_PR_LINES);
+};
+const MERGE_GAP_MEDIAN_H = 6;
+const WEEKENDS_OFF_SHARE = 0.8;    // developers who pause reviews, merges, and production deploys on weekends
+const DEPLOY_GAP_MEDIAN_MIN = 30;
 
-const BUILD_SWEET_MIN = 15;
-const BUILD_SWEET_MAX = 30;
-const BUILD_OVER_THRESHOLD = 31;
-const BUILD_SWEET_CLONE_RATE = 0.5;
-const BUILD_OVER_DROP_LIKELIHOOD = 40;
+// H5 first build red → new developers go quiet
+const FIRST_BUILD_FAIL = 0.4;      // a new developer's first CI build (config mistakes)
+const BASE_BUILD_FAIL = 0.14;      // every other build
+const RED_DARK_SHARE = 0.5;        // share of red-first new users who stop 1-4 days after that build
+const RED_DARK_MIN_D = 1;
+const RED_DARK_MAX_D = 4;
+const FIRST_BUILD_DAYS = 14;       // story cohort: first build within 14 days of signup
+const SETUP_ABANDON_SHARE = 0.6;   // new users who never finish onboarding: share who stop on day 1-4
+const SETUP_ABANDON_MIN_D = 1;
+const SETUP_ABANDON_MAX_D = 4;
 
-const TTC_FAST_FACTOR = 0.67;
-const TTC_SLOW_FACTOR = 1.33;
+// H6 npm registry mirror incident (warehouse build_fleet_daily)
+const INCIDENT_ECOSYSTEM = "npm";
+const INCIDENT_FAIL = 0.6;         // share of would-be successful npm builds that fail during the incident
 
-// ── DATA ARRAYS ──
-// Generate consistent pipeline/repo IDs at module level
-const pipelineIds = v.range(1, 80).map(() => `PIPE_${v.uid(6)}`);
-const repoIds = v.range(1, 150).map(() => `REPO_${v.uid(6)}`);
+// H7 paid channel economics (warehouse marketing_spend_daily)
+const PAID_CHANNELS = ["paid_search", "paid_social", "newsletter"];
+const CPL_USD = { paid_search: 85, paid_social: 55, newsletter: 120 }; // window spend per Mixpanel signup
+const CHANNEL_WEIGHTS = { organic: 28, referral: 14, community: 10, paid_search: 20, paid_social: 16, newsletter: 12 };
+const SOCIAL_ONBOARD_MULT = 0.6;   // paid social signups finish onboarding at 0.6x
+const BORN_PCT = 45;               // percentUsersBornInDataset
+const WINDOW_DAYS = 120;
+// expected Mixpanel signups per day by channel (the media plan before the window)
+const EXPECTED_DAILY_SIGNUPS = Object.fromEntries(PAID_CHANNELS.map((ch) => {
+	const totalW = Object.values(CHANNEL_WEIGHTS).reduce((a, b) => a + b, 0);
+	return [ch, (NUM_USERS * BORN_PCT / 100) * (CHANNEL_WEIGHTS[ch] / totalW) / WINDOW_DAYS];
+}));
+const spendTrail = new Map(); // warehouse hook state: trailing daily signups per channel (reset at bucket 0)
+const billingCarry = new Map(); // warehouse hook state: previous UTC day's build minutes per plan (reset at bucket 0)
+const BILLING_DAY_SHIFT = 0.3;  // share of a UTC day's minutes that bill on the next billing day
+const SPEND_FLAT_SHARE = 0.3;
+const SPEND_WEEKDAY = (() => {
+	const m = DOW_WEIGHTS.reduce((a, b) => a + b, 0) / DOW_WEIGHTS.length;
+	return DOW_WEIGHTS.map((w) => SPEND_FLAT_SHARE + (1 - SPEND_FLAT_SHARE) * w / m);
+})();
+const SPEND_NOISE = 0.12;
+const PLATFORM_CLICK_CPC = { paid_search: 4.2, paid_social: 1.6, newsletter: 6.5 };
+const PLATFORM_CTR = { paid_search: 0.035, paid_social: 0.009, newsletter: 0.012 };
+const PLATFORM_SIGNUP_INFLATION = 1.2; // ad platforms claim ~20% more signups than Mixpanel records
 
-// ── HELPER FUNCTIONS ──
-function handleFunnelPostHooks(record, meta) {
-	// H10: BUILD-DEPLOY TIME-TO-CONVERT
-	// Enterprise tier completes Build-Deploy Pipeline funnel 1.5x faster
-	// (factor 0.67); free tier 1.33x slower (factor 1.33).
-	const segment = meta?.profile?.subscription_tier;
-	if (Array.isArray(record) && record.length > 1) {
-		const factor = (
-			segment === "enterprise" || segment === "business" ? TTC_FAST_FACTOR :
-			segment === "free" ? TTC_SLOW_FACTOR :
-			1.0
-		);
-		if (factor !== 1.0) {
-			for (let i = 1; i < record.length; i++) {
-				const prev = dayjs(record[i - 1].time);
-				const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-				record[i].time = prev.add(newGap, "milliseconds").toISOString();
-			}
+// H8 Team plan metered overage (warehouse usage_billing_daily)
+const METERED_PLAN = "team";
+const SCHEDULED_CUT_MEAN = 0.5;    // per org: share of scheduled builds switched off (uniform ±0.2)
+const SCHEDULED_CUT_SPREAD = 0.2;
+const SCHEDULED_CUT_RAMP_DAYS = 14; // each Team org acts on a salted day in Sep 1-14
+const OVERAGE_PRICE_PER_MIN = 0.015;
+const OVERAGE_SHARE_TEAM = 0.3;    // share of Team runner minutes billed above the pooled allowance
+const PARALLEL_JOBS = { free: 2, pro: 4, team: 10, enterprise: 14 }; // parallel jobs per pipeline (billing)
+
+// H9 rollback rate by repository test coverage (linear between 30% and 75%)
+const COVERAGE_LOW = 30;
+const COVERAGE_HIGH = 75;
+const ROLLBACK_HIGH_COV = 0.05;
+const ROLLBACK_LOW_COV = 0.2;
+const rollbackRate = (cov) => {
+	if (cov >= COVERAGE_HIGH) return ROLLBACK_HIGH_COV;
+	if (cov <= COVERAGE_LOW) return ROLLBACK_LOW_COV;
+	return ROLLBACK_LOW_COV - (ROLLBACK_LOW_COV - ROLLBACK_HIGH_COV) * (cov - COVERAGE_LOW) / (COVERAGE_HIGH - COVERAGE_LOW);
+};
+
+// H10 preview habit → paid conversion (new signups)
+const PQL_DAYS = 14;
+const PQL_MIN_PREVIEWS = 3;        // preview deploys in the first 14 days (the onboarding preview counts)
+const PQL_KEEP = 1.0;              // share of would-be purchases kept with 3+ previews in the first 14 days
+const NON_PQL_KEEP = 0.4;          // everyone else
+const UPGRADE_CONV = 34;           // new signups, per upgrade-page visit
+const UPGRADE_CONV_ESTABLISHED = 15; // per upgrade-page visit, before the base keep below
+const BUY_WINDOW_DAYS = 42;        // self-serve purchases land in a developer's first six weeks
+const EST_BASE_KEEP = 0.34;        // established free users' steady purchase rate (share of would-be purchases)
+const EXPLORER_KEEP_MIN = 0.25;    // non-onboarded new users who stay: share of activity kept
+const EXPLORER_KEEP_MAX = 0.6;
+
+// collaboration volume (realism, not a story)
+const INVITE_EARLY_DAYS = 14;
+const INVITE_KEEP_LATE = 0.25;
+
+// holidays: share of user-initiated work units that do not happen
+const HOLIDAY_DROP = 0.35;
+
+// ── DATA ARRAYS (seeded) ──
+const ORG_COUNT = 500;
+const SIZE_WEIGHTS = { startup: 40, smb: 30, mid_market: 20, enterprise: 10 };
+const USERS_PER_ORG_WEIGHT = { startup: 1, smb: 1.6, mid_market: 2.6, enterprise: 4.5 };
+const EMPLOYEE_BAND = { startup: ["1-10", "11-50"], smb: ["51-200"], mid_market: ["201-1000"], enterprise: ["1001-5000", "5000+"] };
+const ORG_SUFFIX = ["Labs", "Systems", "Software", "Cloud", "Works", "Digital", "Health", "Pay", "Logistics", "Games"];
+const INDUSTRIES = ["saas", "fintech", "ecommerce", "healthtech", "media", "gaming", "logistics", "agency"];
+const STACK_WEIGHTS = { node: 32, python: 20, go: 9, ruby: 5, java: 17, dotnet: 11, rust: 6 };
+const ECOSYSTEM = { node: "npm", python: "pypi", go: "go_modules", ruby: "rubygems", java: "maven", dotnet: "nuget", rust: "cargo" };
+const FRAMEWORK = { node: "nextjs", python: "django", go: "go_http", ruby: "rails", java: "spring", dotnet: "aspnet", rust: "axum" };
+
+const pickWeighted = (weights, r) => {
+	const entries = Object.entries(weights);
+	const total = entries.reduce((s, [, w]) => s + w, 0);
+	let acc = 0;
+	for (const [k, w] of entries) {
+		acc += w / total;
+		if (r < acc) return k;
+	}
+	return entries[entries.length - 1][0];
+};
+
+const ORGS = Array.from({ length: ORG_COUNT }, (_, i) => {
+	const size = pickWeighted(SIZE_WEIGHTS, chance.floating({ min: 0, max: 1 }));
+	return {
+		id: String(i + 1),
+		name: `${chance.word({ syllables: 2, capitalize: true })} ${chance.pickone(ORG_SUFFIX)}`,
+		size,
+		industry: chance.pickone(INDUSTRIES),
+		employees: chance.pickone(EMPLOYEE_BAND[size]),
+	};
+});
+const ORG_CUM = (() => {
+	const w = ORGS.map((o) => USERS_PER_ORG_WEIGHT[o.size]);
+	const total = w.reduce((a, b) => a + b, 0);
+	let acc = 0;
+	return w.map((x) => (acc += x / total));
+})();
+const orgFor = (uid) => {
+	const r = hashFloat(`${uid}|org`);
+	const i = ORG_CUM.findIndex((c) => r < c);
+	return ORGS[i < 0 ? ORGS.length - 1 : i];
+};
+
+// ── HELPERS ──
+const salt = (key, tag) => hashFloat(`${key}|${tag}`);
+const round1 = (n) => Math.round(n * 10) / 10;
+const round2 = (n) => Math.round(n * 100) / 100;
+const T = (e) => dayjs.utc(e.time).valueOf();
+const iso = (t) => new Date(t).toISOString();
+const dayKey = (t) => new Date(t).toISOString().slice(0, 10);
+const jitter = (key, spread) => 1 + (hashFloat(key) - 0.5) * 2 * spread;
+// seeded log-normal (median 1) from a salt key, so one unit's timing never shifts other draws
+const logNormalAt = (key, sigma) => {
+	const u1 = Math.max(1e-9, hashFloat(`${key}|n1`));
+	const u2 = hashFloat(`${key}|n2`);
+	return Math.exp(sigma * Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2));
+};
+// low-discrepancy draw for the n-th item of a stream: frac(offset + n * golden ratio).
+// Rates over a repository's or an org's items stay close to the knob instead of
+// carrying binomial noise.
+const PHI = 0.6180339887498949;
+const weyl = (key, n) => (salt(key, "weyl-offset") + n * PHI) % 1;
+const inIncident = (t) => t >= ms(REGISTRY_INCIDENT_START) && t < ms(REGISTRY_INCIDENT_END);
+// a developer's repositories (1-3) and each repository's test coverage (10-95%)
+const reposFor = (uid) => {
+	const n = 1 + Math.floor(salt(uid, "repo-count") * 3);
+	return Array.from({ length: n }, (_, i) => `repo_${Math.floor(salt(uid, `repo-${i}`) * 0xffffffff).toString(16).padStart(8, "0")}`);
+};
+const coverageFor = (repo) => Math.round(10 + salt(repo, "coverage") * 85);
+// PR size: log-normal lines changed, median 120
+const prLines = (prId) => Math.max(1, Math.min(6000, Math.round(120 * logNormalAt(`${prId}|lines`, 1.4))));
+const PR_STEPS = ["pull request opened", "review submitted", "pull request merged", "production deployed"];
+
+function handleUserHook(profile, meta) {
+	const uid = profile.distinct_id;
+	const org = orgFor(uid);
+	profile.org_id = org.id;
+	profile.org_name = org.name;
+	profile.org_size = org.size;
+	profile.industry = org.industry;
+	if (meta.userIsBornInDataset) {
+		profile.plan_tier = "free";
+		profile.customer_since = dayKey(ms(profile.created ?? meta.user.created));
+		return profile;
+	}
+	// established developers joined between 2022-03 and the window start
+	const tenureDays = Math.floor(salt(uid, "tenure") * (dayjs.utc(DATASET_START).diff(dayjs.utc("2022-03-01T00:00:00Z"), "day")));
+	profile.customer_since = dayjs.utc("2022-03-01T00:00:00Z").add(tenureDays, "day").format("YYYY-MM-DD");
+	const mix = {
+		startup: [50, 30, 20, 0],
+		smb: [30, 25, 40, 5],
+		mid_market: [18, 17, 45, 20],
+		enterprise: [8, 7, 25, 60],
+	}[org.size];
+	profile.plan_tier = pickWeighted({ free: mix[0], pro: mix[1], team: mix[2], enterprise: mix[3] }, salt(uid, "plan"));
+	return profile;
+}
+
+function handleEverything(events, meta) {
+	if (!events.length) return events;
+	const profile = meta.profile;
+	const uid = profile.distinct_id;
+	const END = ms(DATASET_END);
+	const signup = events.find((e) => e.event === "account created");
+	const birthMs = signup ? T(signup) : null;
+	const ecosystem = ECOSYSTEM[profile.primary_stack] || "npm";
+	const repos = reposFor(uid);
+
+	// every event carries the developer's own org (the engine stamps group keys at random)
+	for (const e of events) e.org_id = profile.org_id;
+
+	// ── CI builds: status, failure stage, real duration (H5 first build, H6 incident) ──
+	const builds = new Map();
+	for (const e of events) {
+		if (e.event !== "build started" && e.event !== "build finished") continue;
+		if (!builds.has(e.build_id)) builds.set(e.build_id, {});
+		builds.get(e.build_id)[e.event] = e;
+	}
+	// H2: a developer's arm applies to builds from their first exposure (the engine logs it
+	// just before their first build in the test)
+	const cacheVariant = profile[EXP_KEY];
+	const exposureMs = Math.min(...events.filter((e) => e.event === "$experiment_started").map(T));
+	const buildList = [...builds.values()].sort((a, b) => T(a["build started"] || a["build finished"]) - T(b["build started"] || b["build finished"]));
+	let firstBuild = null;
+	for (const b of buildList) {
+		const st = b["build started"], fin = b["build finished"];
+		const any = st || fin;
+		const repo = repos[Math.floor(salt(any.build_id, "repo") * repos.length)];
+		for (const e of [st, fin]) if (e) { e.repo_id = repo; e.ecosystem = ecosystem; }
+		if (!fin) continue; // cancelled before it finished
+		const isFirst = Boolean(signup && !firstBuild && st);
+		if (isFirst) firstBuild = b;
+		const bid = fin.build_id;
+		let failed = salt(bid, "fail") < (isFirst ? FIRST_BUILD_FAIL : BASE_BUILD_FAIL);
+		let stage = "none";
+		if (failed) {
+			stage = isFirst
+				? pickWeighted({ configuration: 55, dependency_install: 10, compile: 15, test: 20 }, salt(bid, "stage"))
+				: pickWeighted({ test: 58, compile: 22, dependency_install: 10, timeout: 10 }, salt(bid, "stage"));
+		}
+		const startT = st ? T(st) : null;
+		if (!failed && ecosystem === INCIDENT_ECOSYSTEM && startT !== null && inIncident(startT) && salt(bid, "incident") < INCIDENT_FAIL) {
+			failed = true;
+			stage = "dependency_install";
+		}
+		fin.build_status = failed ? "failed" : "success";
+		fin.failure_stage = stage;
+		// duration: log-normal pipeline time × runner size × H2 cache arm; a failed build
+		// stops at its failing stage
+		const runner = (st || fin).runner_size || "standard";
+		const inTest = cacheVariant && startT !== null && startT >= exposureMs;
+		const armMult = inTest && cacheVariant === CACHE_VARIANT ? CACHE_TTC_MULT : 1;
+		const frac = !failed ? 1 : { configuration: 0.08, dependency_install: 0.15, compile: 0.35, timeout: 1.6, test: 0.6 }[stage];
+		const durMs = Math.max(15_000, BUILD_MEDIAN_SEC * 1000 * logNormalAt(`${bid}|dur`, BUILD_DURATION_SIGMA) * (RUNNER_SPEED[runner] ?? 1) * armMult * frac);
+		fin.build_duration_sec = Math.round(durMs / 1000);
+		if (startT !== null) fin.time = iso(Math.min(startT + durMs, END));
+	}
+
+	// ── H5 + setup abandonment (new users): one activity cut ──
+	let cut = Infinity;
+	if (signup) {
+		const onboarded = events.some((e) => e.event === "preview deployed" && e.commit_sha === "onboarding");
+		if (!onboarded && salt(uid, "abandon") < SETUP_ABANDON_SHARE) {
+			cut = Math.min(cut, birthMs + (SETUP_ABANDON_MIN_D + salt(uid, "abandon-day") * (SETUP_ABANDON_MAX_D - SETUP_ABANDON_MIN_D)) * DAY_MS);
+		}
+		if (firstBuild && firstBuild["build finished"].build_status === "failed" && salt(uid, "red-dark") < RED_DARK_SHARE) {
+			cut = Math.min(cut, T(firstBuild["build finished"]) + (RED_DARK_MIN_D + salt(uid, "red-dark-day") * (RED_DARK_MAX_D - RED_DARK_MIN_D)) * DAY_MS);
 		}
 	}
-	return record;
-}
-
-function handleUserHooks(record) {
-	// H7: DEVOPS LEAD PROFILE ENRICHMENT
-	// DevOps leads get team_size 10-50 and repos_connected 5-20.
-	// Platform engineers get moderate boosts. Others stay at defaults.
-	if (record.segment === "devops") {
-		record.team_size = chance.integer({ min: 10, max: 50 });
-		record.repos_connected = chance.integer({ min: 5, max: 20 });
-		record.experience_level = "senior";
-	} else if (record.segment === "platform_eng") {
-		record.team_size = chance.integer({ min: 5, max: 25 });
-		record.repos_connected = chance.integer({ min: 3, max: 15 });
-		record.experience_level = chance.pickone(["mid", "senior"]);
-	} else if (record.segment === "junior") {
-		record.team_size = chance.integer({ min: 1, max: 8 });
-		record.repos_connected = chance.integer({ min: 0, max: 3 });
-		record.experience_level = "junior";
+	if (cut < Infinity) events = events.filter((e) => T(e) < cut);
+	// new users who never finish onboarding and do not abandon keep exploring at a low rate
+	// (public repos, docs, the CLI): a salted 25-60% of their activity
+	if (signup && cut === Infinity && !events.some((e) => e.event === "preview deployed" && e.commit_sha === "onboarding")) {
+		const keepShare = EXPLORER_KEEP_MIN + salt(uid, "explorer-keep") * (EXPLORER_KEEP_MAX - EXPLORER_KEEP_MIN);
+		events = events.filter((e) => e === signup || e.event === "repository imported" || e.event === "pipeline configured" || salt(e.insert_id, "explorer") < keepShare);
 	}
-	return record;
-}
 
-function handleEventHooks(record) {
-	// H1: BUILD FAILURE CASCADE
-	// Failed builds get 2x duration (retries take longer).
-	if (record.event === "build completed" && record.build_status === "failed") {
-		record.build_duration_sec = Math.floor((record.build_duration_sec || 240) * BUILD_FAILURE_DURATION_MULT);
-	}
-	// (HOOK 2: NIGHT DEPLOY RISK moved to everything hook — hour checks
-	// must run after bunchIntoSessions redistributes timestamps)
-	return record;
-}
-
-function handleEverythingHooks(record, meta) {
-	const datasetStart = dayjs.unix(meta.datasetStart);
-	let events = record;
-	if (!events.length) return record;
-	const profile = meta && meta.profile ? meta.profile : {};
-
-	// SUPERPROP STAMPING
-	// Stamp superProp values from profile onto every event so they stay
-	// consistent per-user instead of randomizing per-event.
-	events.forEach(e => {
-		if (profile.subscription_tier) e.subscription_tier = profile.subscription_tier;
-		if (profile.Platform) e.Platform = profile.Platform;
-		if (profile.language) e.language = profile.language;
-	});
-
-	// H2: NIGHT DEPLOY RISK
-	// Deployments between 10PM-6AM get deploy_status forced to "failed"
-	// 40% of the time. No flag — analyst breaks down by hour-of-day.
-	events.forEach(e => {
-		if (e.event === "deployment completed") {
-			const hour = new Date(e.time).getUTCHours();
-			if ((hour >= NIGHT_DEPLOY_HOUR_START || hour < NIGHT_DEPLOY_HOUR_END) && chance.bool({ likelihood: NIGHT_DEPLOY_FAIL_LIKELIHOOD })) {
-				e.deploy_status = "failed";
-			}
-		}
-	});
-
-	// H8: ENTERPRISE BUILD-DEPLOY FUNNEL LIFT
-	// Free-tier users drop 35% of final funnel step events to create
-	// visible conversion gap vs paid subscribers.
-	if (profile.subscription_tier !== "enterprise" && profile.subscription_tier !== "business") {
-		events = events.filter(e => {
-			if (e.event === "monitoring dashboard viewed" && chance.bool({ likelihood: ENTERPRISE_DROP_LIKELIHOOD })) return false;
+	// ── purchases: one per user; H10 preview habit decides which would-be purchases happen ──
+	const firstBuy = events.filter((e) => e.event === "subscription started").sort((a, b) => T(a) - T(b))[0];
+	if (firstBuy) {
+		const t0 = T(firstBuy);
+		events = events.filter((e) => {
+			if (e === firstBuy) return true;
+			if (e.event === "subscription started") return false;
+			if (e.event === "upgrade page viewed" && T(e) > t0) return false;
 			return true;
 		});
 	}
-
-	// H3: COPILOT PR VELOCITY
-	// ~30% of users are copilot adopters (hash-based cohort).
-	// Copilot users get ai_assist="copilot" stamped and 1.5x more PRs.
-	const uid = events[0]?.user_id || "";
-	const isCopilotUser = (typeof uid === "string" ? uid.charCodeAt(0) : uid) % COPILOT_USER_HASH_MOD < COPILOT_USER_HASH_THRESHOLD;
-	if (isCopilotUser) {
-		events.forEach(e => {
-			if (e.event === "pull request created" || e.event === "code review completed") {
-				e.ai_assist = "copilot";
-			}
-		});
-		const prEvents = events.filter(e => e.event === "pull request created");
-		const extraCount = Math.floor(prEvents.length * COPILOT_PR_CLONE_RATE);
-		for (let i = 0; i < extraCount; i++) {
-			const templateEvent = prEvents[i % prEvents.length];
-			if (templateEvent) {
-				events.push({
-					...templateEvent,
-					time: dayjs(templateEvent.time).add(chance.integer({ min: 1, max: 12 }), "hours").toISOString(),
-					user_id: templateEvent.user_id,
-					ai_assist: "copilot",
-					files_changed: chance.integer({ min: 1, max: 30 }),
-					lines_added: chance.integer({ min: 10, max: 800 }),
-				});
-			}
+	let purchase = firstBuy || null;
+	// self-serve purchases happen in a developer's first six weeks
+	if (purchase && signup && T(purchase) >= birthMs + BUY_WINDOW_DAYS * DAY_MS) {
+		events = events.filter((e) => e !== purchase);
+		purchase = null;
+	}
+	// established free users: a steady base rate, plus (early in the window) developers who
+	// signed up in the weeks before June 4 and are still inside their first six weeks
+	if (purchase && !signup) {
+		const d = (T(purchase) - ms(DATASET_START)) / DAY_MS;
+		const extra = (1 - EST_BASE_KEEP) * Math.pow(Math.max(0, 1 - d / BUY_WINDOW_DAYS), 1.5);
+		const r = salt(uid, "est-keep");
+		if (r >= EST_BASE_KEEP + extra) {
+			events = events.filter((e) => e !== purchase);
+			purchase = null;
+		} else if (r >= EST_BASE_KEEP) {
+			const hi = ms(DATASET_START) - DAY_MS;
+			const lo = Math.min(hi, T(purchase) - BUY_WINDOW_DAYS * DAY_MS);
+			profile.customer_since = dayKey(lo + salt(uid, "recent-since") * (hi - lo));
 		}
 	}
-
-	// H4: ON-CALL ROTATION FATIGUE
-	// Users with >20 alerts get increasing response_time_minutes.
-	const alertCount = events.filter(e => e.event === "alert triggered").length;
-	if (alertCount > ONCALL_ALERT_THRESHOLD) {
-		const fatigueMultiplier = 1 + Math.min(alertCount / ONCALL_FATIGUE_DIVISOR, ONCALL_FATIGUE_CAP);
-		events.forEach(e => {
-			if (e.event === "incident resolved" && e.response_time_minutes) {
-				e.response_time_minutes = Math.floor(e.response_time_minutes * fatigueMultiplier);
-			}
-			if (e.event === "incident created" && e.response_time_minutes) {
-				e.response_time_minutes = Math.floor(e.response_time_minutes * fatigueMultiplier);
-			}
-		});
+	if (purchase && signup) {
+		const previews = events.filter((e) => e.event === "preview deployed" && T(e) >= birthMs && T(e) < birthMs + PQL_DAYS * DAY_MS).length;
+		const keep = previews >= PQL_MIN_PREVIEWS ? PQL_KEEP : NON_PQL_KEEP;
+		if (salt(uid, "pql-keep") >= keep) {
+			events = events.filter((e) => e !== purchase);
+			purchase = null;
+		}
 	}
+	if (purchase && purchase.plan === "pro") purchase.seats = 1;
 
-	// H5: OPEN SOURCE POWER USAGE
-	// OSS users with >15 events get extra cloned build + deploy events
-	// in their later activity (representing power usage that pushes them
-	// toward limits). No flag — discover via cohort by segment + event count.
-	if (profile.segment === "oss_user" && events.length > OSS_EVENT_THRESHOLD) {
-		const buildTemplate = events.find(e => e.event === "build completed");
-		const deployTemplate = events.find(e => e.event === "deployment completed");
-		if (buildTemplate || deployTemplate) {
-			const conversionPoint = Math.floor(events.length * OSS_CONVERSION_POINT_PCT);
-			const tail = events.slice(conversionPoint);
-			tail.forEach(e => {
-				const tBase = dayjs(e.time);
-				if (buildTemplate && chance.bool({ likelihood: OSS_BUILD_CLONE_LIKELIHOOD })) {
-					events.push({
-						...buildTemplate,
-						time: tBase.add(chance.integer({ min: 5, max: 240 }), "minutes").toISOString(),
-						user_id: e.user_id,
-					});
+	const initialPlan = profile.plan_tier;
+	const buyMs = purchase ? T(purchase) : Infinity;
+	const planAt = (t) => (t >= buyMs ? purchase.plan : initialPlan);
+
+	// ── pull requests: timing (H4, H1), Forge Assist (H1), rollback (H9) ──
+	const prs = new Map();
+	for (const e of events) {
+		if (!PR_STEPS.includes(e.event)) continue;
+		if (!prs.has(e.pr_id)) prs.set(e.pr_id, {});
+		prs.get(e.pr_id)[e.event] = e;
+	}
+	const assistAdopter = salt(uid, "assist-adopter") < ASSIST_ADOPTER_SHARE;
+	const assistStart = ms(ASSIST_LAUNCH) + salt(uid, "assist-start") * ASSIST_RAMP_DAYS * DAY_MS;
+	const assistUse = ASSIST_USE + (salt(uid, "assist-use") - 0.5) * 2 * ASSIST_USE_SPREAD;
+	const dropPr = new Set();
+	// most developers pause review work over the weekend: a review or merge that would land
+	// between Saturday 06:00 and Monday 00:00 UTC lands 48 hours later (the clock pauses)
+	const weekendsOff = salt(uid, "weekends-off") < WEEKENDS_OFF_SHARE;
+	const skipWeekend = (t) => {
+		if (!weekendsOff) return t;
+		const d = new Date(t), wd = d.getUTCDay(), hr = d.getUTCHours();
+		return (wd === 6 && hr >= 6) || wd === 0 ? t + 2 * DAY_MS : t;
+	};
+	for (const [prId, p] of prs) {
+		const steps = PR_STEPS.map((n) => p[n]).filter(Boolean);
+		const lines = prLines(prId);
+		const repo = repos[Math.floor(salt(prId, "repo") * repos.length)];
+		const cov = coverageFor(repo);
+		const files = Math.max(1, Math.round(lines / 35 * jitter(`${prId}|files`, 0.5)));
+		for (const e of steps) {
+			e.lines_changed = lines;
+			e.files_changed = files;
+			e.repo_id = repo;
+			e.test_coverage_pct = cov;
+			e.review_mode = "standard";
+		}
+		const open = p["pull request opened"], rev = p["review submitted"], mer = p["pull request merged"], dep = p["production deployed"];
+		const waitH = REVIEW_WAIT_MEDIAN_H * logNormalAt(`${prId}|wait`, 0.8) * reviewWaitMult(lines);
+		if (rev) rev.review_wait_hours = round1(waitH);
+		if (open) {
+			// rebuild the PR's clock from the open: review wait (H4), review → merge (H1), merge → deploy
+			let t = T(open);
+			if (rev) {
+				t = skipWeekend(t + waitH * HOUR_MS);
+				rev.time = iso(t);
+				if (t > END) dropPr.add(rev);
+			}
+			// H1: Forge Assist reviews the PR when its author has turned it on and is on an eligible plan
+			const assisted = assistAdopter && T(open) >= assistStart && ASSIST_PLANS.includes(planAt(T(open))) && salt(prId, "assist-use") < assistUse;
+			if (assisted) for (const e of steps) e.review_mode = "forge_assist";
+			if (rev && mer) {
+				const g = MERGE_GAP_MEDIAN_H * HOUR_MS * logNormalAt(`${prId}|merge`, 0.8) * (assisted ? ASSIST_MERGE_MULT : 1);
+				t = skipWeekend(t + g);
+				mer.time = iso(t);
+				if (t > END) dropPr.add(mer);
+			}
+			if (rev && mer && dep) {
+				t += DEPLOY_GAP_MEDIAN_MIN * MIN_MS * logNormalAt(`${prId}|deploy`, 0.5);
+				// weekend freeze: a merge that would ship between Saturday 06:00 and Monday
+				// 00:00 UTC ships Monday morning (UTC) instead
+				const wd = new Date(t).getUTCDay(), hr = new Date(t).getUTCHours();
+				if (weekendsOff && ((wd === 6 && hr >= 6) || wd === 0)) {
+					const monday = dayjs.utc(t).startOf("day").add(wd === 6 ? 2 : 1, "day").valueOf();
+					t = monday + (7 + salt(prId, "monday") * 4) * HOUR_MS;
 				}
-				if (deployTemplate && chance.bool({ likelihood: OSS_DEPLOY_CLONE_LIKELIHOOD })) {
-					events.push({
-						...deployTemplate,
-						time: tBase.add(chance.integer({ min: 10, max: 240 }), "minutes").toISOString(),
-						user_id: e.user_id,
-					});
-				}
-			});
-		}
-	}
-
-	// H9: BUILD-COUNT MAGIC NUMBER (no flags)
-	// Sweet 15-30 builds → +50% deploys (clone with unique offset).
-	// Over 31+ → drop 40% of deploys (flaky CI burnout).
-	const buildCount = events.filter(e => e.event === "build completed").length;
-	if (buildCount >= BUILD_SWEET_MIN && buildCount <= BUILD_SWEET_MAX) {
-		const deploys = events.filter(e => e.event === "deployment completed");
-		const extras = Math.max(Math.floor(deploys.length * BUILD_SWEET_CLONE_RATE), 1);
-		for (let k = 0; k < extras; k++) {
-			const tpl = deploys[k % deploys.length];
-			if (tpl) {
-				events.push({
-					...tpl,
-					time: dayjs(tpl.time).add(chance.integer({ min: 5, max: 360 }), "minutes").toISOString(),
-					user_id: tpl.user_id,
-				});
-			}
-		}
-	} else if (buildCount >= BUILD_OVER_THRESHOLD) {
-		for (let i = events.length - 1; i >= 0; i--) {
-			if (events[i].event === "deployment completed" && chance.bool({ likelihood: BUILD_OVER_DROP_LIKELIHOOD })) {
-				events.splice(i, 1);
+				dep.time = iso(t);
+				if (t > END) dropPr.add(dep);
 			}
 		}
 	}
+	// H9: a repository's production deploys roll back at the rate its test coverage implies
+	const deploysByRepo = new Map();
+	for (const p of prs.values()) {
+		const dep = p["production deployed"];
+		if (!dep) continue;
+		if (!deploysByRepo.has(dep.repo_id)) deploysByRepo.set(dep.repo_id, []);
+		deploysByRepo.get(dep.repo_id).push(dep);
+	}
+	for (const [repo, deps] of deploysByRepo) {
+		deps.sort((a, b) => T(a) - T(b));
+		const rate = rollbackRate(coverageFor(repo));
+		deps.forEach((dep, n) => { dep.deploy_outcome = weyl(`${uid}|${repo}|rollback`, n) < rate ? "rolled_back" : "healthy"; });
+	}
+	if (dropPr.size) events = events.filter((e) => !dropPr.has(e));
+	if (cut < Infinity) events = events.filter((e) => T(e) < cut);
 
-	// H6: POST-OUTAGE RECOVERY
-	// After the outage volume rebound (days 44-47: window [start+44d,
-	// start+48d)), deployment events get aggressively cloned to
-	// produce a visible spike above baseline.
-	// Shifted later than outage end (d42.25) so natural volume has
-	// recovered from the 0.05x suppression before cloning kicks in.
-	const RECOVERY_START = datasetStart.add(RECOVERY_START_DAY, "days");
-	const RECOVERY_END = datasetStart.add(RECOVERY_END_DAY, "days");
-	const deployEvents = events.filter(e => {
-		if (e.event !== "deployment completed") return false;
-		const t = dayjs(e.time);
-		return t.isAfter(RECOVERY_START) && t.isBefore(RECOVERY_END);
+	// ── H8: Team orgs switch off part of their scheduled builds once overage billing starts ──
+	const cutDay = ms(METERED_START) + salt(profile.org_id, "metered-day") * SCHEDULED_CUT_RAMP_DAYS * DAY_MS;
+	const cutShare = SCHEDULED_CUT_MEAN + (salt(profile.org_id, "metered-share") - 0.5) * 2 * SCHEDULED_CUT_SPREAD;
+	const dropBuild = new Set();
+	const scheduled = [...builds.entries()]
+		.filter(([, b]) => b["build started"] && b["build started"].trigger === "schedule" && T(b["build started"]) >= cutDay && planAt(T(b["build started"])) === METERED_PLAN)
+		.sort((a, b) => T(a[1]["build started"]) - T(b[1]["build started"]));
+	scheduled.forEach(([bid], n) => { if (weyl(`${uid}|metered`, n) < cutShare) dropBuild.add(bid); });
+
+	// ── collaboration volume: a new workspace invites its team in its first two weeks;
+	// after that (and for established developers) invites are occasional ──
+	events = events.filter((e) => {
+		if (e.event !== "teammate invited") return true;
+		if (signup && T(e) < birthMs + INVITE_EARLY_DAYS * DAY_MS) return true;
+		return salt(e.insert_id, "invite-keep") < INVITE_KEEP_LATE;
 	});
-	deployEvents.forEach(dep => {
-		// 100% clone rate with 3 copies per event to clearly
-		// exceed baseline deploy volume (d35-41)
-		for (let c = 0; c < RECOVERY_CLONES_PER_EVENT; c++) {
-			events.push({
-				...dep,
-				time: dayjs(dep.time).add(chance.integer({ min: 1, max: 8 }), "hours").toISOString(),
-				user_id: dep.user_id,
-				deploy_status: chance.pickone(["success", "success", "rolled_back"]),
-				environment: "production",
-			});
-		}
+
+	// ── holidays: a share of work units that would have started that day do not happen ──
+	const unitKey = (e) => e.build_id || (PR_STEPS.includes(e.event) ? e.pr_id : null) || ((e.event === "commit pushed" || e.event === "preview deployed") && e.commit_sha !== "onboarding" ? e.commit_sha : null);
+	const unitStart = new Map();
+	for (const e of events) {
+		const k = unitKey(e);
+		if (!k) continue;
+		const t = T(e);
+		if (!unitStart.has(k) || t < unitStart.get(k)) unitStart.set(k, t);
+	}
+	const STRUCTURAL = new Set(["account created", "repository imported", "pipeline configured", "upgrade page viewed", "subscription started", "$experiment_started"]);
+	events = events.filter((e) => {
+		if (e.build_id && dropBuild.has(e.build_id)) return false;
+		if (STRUCTURAL.has(e.event) || (e.event === "preview deployed" && e.commit_sha === "onboarding")) return true;
+		const k = unitKey(e);
+		const t0 = k ? unitStart.get(k) : T(e);
+		if (!HOLIDAYS.includes(dayKey(t0))) return true;
+		return salt(k || e.insert_id, "holiday") >= HOLIDAY_DROP;
 	});
+
+	// ── plan at event time (superProp plan_tier) + final profile plan ──
+	for (const e of events) e.plan_tier = planAt(T(e));
+	if (purchase && events.includes(purchase)) profile.plan_tier = purchase.plan;
+
+	// experiment exposure: the CI service logs a developer's assignment once, at their first
+	// build in the test (the engine emits a marker on every run); the assignment stays on the
+	// profile only for users with an exposure left
+	const exposures = events.filter((e) => e.event === "$experiment_started").sort((a, b) => T(a) - T(b));
+	if (exposures.length > 1) {
+		const extra = new Set(exposures.slice(1));
+		events = events.filter((e) => !extra.has(e));
+	}
+	if (profile[EXP_KEY] !== undefined && !exposures.length) delete profile[EXP_KEY];
 
 	return events;
+}
+
+// warehouse rows: exogenous business facts layered on the event-derived volumes
+function handleWarehouse(row, meta) {
+	if (meta.isBackfill) return row;
+	if (meta.metricName === "marketing_spend_daily") {
+		// the source counts the day's Mixpanel signups (row.spend_usd before this hook).
+		// Campaigns bid to a target cost per signup, so billed spend follows the
+		// platform's trailing 7-day conversion volume (seeded with the plan's expected
+		// volume before June 4), paced on the weekday schedule with day-level noise.
+		const ch = row.acquisition_channel;
+		if (meta.bucketIndex === 0 || !spendTrail.has(ch)) spendTrail.set(ch, Array(6).fill(EXPECTED_DAILY_SIGNUPS[ch]));
+		const trail = spendTrail.get(ch);
+		trail.push(row.spend_usd);
+		const recent = trail.slice(-7);
+		const pace = recent.reduce((a, b) => a + b, 0) / recent.length;
+		const date = row.date;
+		const spend = round2(Math.max(0.15 * EXPECTED_DAILY_SIGNUPS[ch], pace) * CPL_USD[ch] * SPEND_WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()] * jitter(`spend|${date}|${ch}`, SPEND_NOISE));
+		row.spend_usd = spend;
+		row.clicks = Math.round(spend / (PLATFORM_CLICK_CPC[ch] * jitter(`cpc|${date}|${ch}`, 0.15)));
+		row.impressions = Math.round(row.clicks / (PLATFORM_CTR[ch] * jitter(`ctr|${date}|${ch}`, 0.15)));
+		row.platform_reported_signups = Math.round(spend * PLATFORM_SIGNUP_INFLATION / CPL_USD[ch] * jitter(`lead|${date}|${ch}`, 0.25));
+		return row;
+	}
+	if (meta.metricName === "build_fleet_daily") {
+		// the fleet also runs API-triggered and partner jobs that never send a product event
+		const k = `${row.date}|${row.ecosystem}`;
+		const base = { npm: 160, pypi: 100, go_modules: 45, rubygems: 28, maven: 65, nuget: 36, cargo: 28 }[row.ecosystem] || 30;
+		row.builds_started = Math.round(row.builds_started + base * jitter(`api|${k}`, 0.6) * jitter(`api|${row.date}`, 0.4));
+		return row;
+	}
+	if (meta.metricName === "usage_billing_daily") {
+		// billing meters every runner minute: API-triggered jobs and retries that send no product event
+		// The billing day closes at 07:00 UTC, so about 30% of a UTC day's minutes bill on the
+		// next billing day; retries add 3-13% and API-triggered jobs up to ~3,000 runner minutes a day.
+		const k = `${row.date}|${row.plan_tier}`;
+		const today = row.billable_runner_minutes;
+		const prev = meta.bucketIndex === 0 || !billingCarry.has(row.plan_tier) ? today : billingCarry.get(row.plan_tier);
+		billingCarry.set(row.plan_tier, today);
+		const shifted = (1 - BILLING_DAY_SHIFT) * today + BILLING_DAY_SHIFT * prev;
+		// a pipeline fans out into parallel jobs (matrix builds, test shards); billing meters
+		// runner minutes across every job
+		const jobs = PARALLEL_JOBS[row.plan_tier] * jitter(`jobs|${k}`, 0.15);
+		row.billable_runner_minutes = Math.round(shifted * jobs * (1.08 + 0.1 * (hashFloat(`retry|${k}`) - 0.5)) + 3000 * hashFloat(`api-min|${k}`) * jitter(`api-day|${row.date}`, 0.5));
+		const metered = row.plan_tier === METERED_PLAN && dayjs.utc(row.date).valueOf() >= ms(METERED_START);
+		row.overage_minutes = metered ? Math.round(row.billable_runner_minutes * OVERAGE_SHARE_TEAM * jitter(`over|${k}`, 0.35)) : 0;
+		row.overage_revenue_usd = round2(row.overage_minutes * row.overage_price_per_minute_usd);
+		return row;
+	}
+	return row;
+}
+
+function handleGroup(record) {
+	const org = ORGS[Number(record.org_id) - 1];
+	if (!org) return record;
+	record.name = org.name;
+	record.org_size = org.size;
+	record.industry = org.industry;
+	record.employee_count = org.employees;
+	return record;
 }
 
 // ── CONFIG ──
 /** @type {Config} */
 const config = {
-	version: 2,
 	seed: SEED,
 	datasetStart: DATASET_START,
 	datasetEnd: DATASET_END,
-	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	numUsers: NUM_USERS,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	format: "json",
 	gzip: true,
-	credentials: {
-		token,
-	},
+	concurrency: 1,
+	writeToDisk: false,
+	macro: { percentUsersBornInDataset: BORN_PCT, bornRecentBias: 0, preExistingSpread: "uniform" },
+	// B2B developer tool: weekday-heavy, India + Europe + Americas working hours (UTC)
+	soup: { dayOfWeekWeights: DOW_WEIGHTS, hourOfDayWeights: HOUR_WEIGHTS },
+	credentials: { token },
 	switches: {
 		hasSessionIds: true,
 		alsoInferFunnels: false,
@@ -638,23 +874,9 @@ const config = {
 		hasAdSpend: false,
 		hasAvatar: true,
 	},
-	identity: {
-		avgDevicePerUser: 2,
-	},
-	concurrency: 1,
-	writeToDisk: false,
-	scdProps: {
-		subscription_tier: {
-			values: ["free", "pro", "enterprise"],
-			frequency: "month",
-			timing: "fuzzy",
-			max: 6
-		}
-	},
-	mirrorProps: {},
-	lookupTables: [],
+	identity: { avgDevicePerUser: 2 },
+	stickyEventProps: ["primary_stack"],
 
-	// -- Events (18) ------------------------------------------
 	events: [
 		{
 			event: "account created",
@@ -662,863 +884,785 @@ const config = {
 			isFirstEvent: true,
 			isAuthEvent: true,
 			properties: {
-				referral_source: ["organic", "github", "conference", "blog_post", "colleague", "search"],
+				signup_method: { __weights: { github: 46, google: 24, gitlab: 12, email: 18 } },
+				acquisition_channel: (ctx) => ctx.profile.acquisition_channel,
 			},
 		},
 		{
-			event: "build completed",
-			weight: 8,
-			isStrictEvent: false,
+			event: "repository imported",
+			weight: 1,
+			isStrictEvent: true,
 			properties: {
-				pipeline_id: chance.pickone.bind(chance, pipelineIds),
-				repo_id: chance.pickone.bind(chance, repoIds),
-				build_status: ["success", "success", "success", "success", "failed", "cancelled"],
-				build_duration_sec: u.weighNumRange(10, 600, 0.4, 240),
-				branch: ["main", "main", "develop", "feature", "feature", "hotfix"],
-				test_count: u.weighNumRange(10, 500, 0.5, 100),
-				test_pass_rate: u.weighNumRange(70, 100, 0.8, 95),
-			},
-		},
-		{
-			event: "deployment completed",
-			weight: 5,
-			isStrictEvent: false,
-			properties: {
-				pipeline_id: chance.pickone.bind(chance, pipelineIds),
-				repo_id: chance.pickone.bind(chance, repoIds),
-				deploy_status: ["success", "success", "success", "failed", "rolled_back"],
-				environment: ["production", "production", "staging", "staging", "dev", "preview"],
-				deploy_duration_sec: u.weighNumRange(15, 300, 0.4, 90),
-				preview_enabled: [false],
-			},
-		},
-		{
-			event: "pull request created",
-			weight: 6,
-			isStrictEvent: false,
-			properties: {
-				repo_id: chance.pickone.bind(chance, repoIds),
-				pr_size: ["small", "small", "medium", "medium", "large", "xlarge"],
-				files_changed: u.weighNumRange(1, 50, 0.4, 8),
-				lines_added: u.weighNumRange(1, 2000, 0.3, 150),
-				lines_removed: u.weighNumRange(0, 500, 0.3, 40),
-				ai_assist: ["manual"],
-			},
-		},
-		{
-			event: "code review completed",
-			weight: 5,
-			isStrictEvent: false,
-			properties: {
-				repo_id: chance.pickone.bind(chance, repoIds),
-				review_result: ["approved", "approved", "approved", "changes_requested", "commented"],
-				review_duration_hours: u.weighNumRange(0.5, 72, 0.3, 8),
-				comments_count: u.weighNumRange(0, 20, 0.5, 3),
-				ai_assist: ["manual"],
-			},
-		},
-		{
-			event: "alert triggered",
-			weight: 4,
-			isStrictEvent: false,
-			properties: {
-				alert_type: ["error_rate", "latency", "cpu", "memory", "disk", "custom_metric"],
-				severity: ["info", "warning", "warning", "critical", "critical"],
-				service: ["api", "web", "worker", "database", "cdn", "auth"],
-				acknowledged: [true, true, true, false],
-			},
-		},
-		{
-			event: "incident created",
-			weight: 2,
-			isStrictEvent: false,
-			properties: {
-				severity: ["sev1", "sev2", "sev2", "sev3", "sev3", "sev3"],
-				service: ["api", "web", "worker", "database", "cdn", "auth"],
-				response_time_minutes: u.weighNumRange(1, 120, 0.3, 30),
-				root_cause: ["deploy", "config_change", "dependency", "traffic_spike", "hardware", "unknown"],
-			},
-		},
-		{
-			event: "incident resolved",
-			weight: 2,
-			isStrictEvent: false,
-			properties: {
-				severity: ["sev1", "sev2", "sev2", "sev3", "sev3", "sev3"],
-				resolution_time_minutes: u.weighNumRange(5, 480, 0.3, 60),
-				response_time_minutes: u.weighNumRange(1, 120, 0.3, 30),
-				resolution_type: ["hotfix", "rollback", "config_change", "scaling", "restart", "manual"],
-			},
-		},
-		{
-			event: "repository connected",
-			weight: 2,
-			properties: {
-				provider: ["github", "github", "github", "gitlab", "bitbucket"],
-				repo_visibility: ["private", "private", "private", "public"],
-				language: ["javascript", "python", "go", "rust", "java", "typescript"],
+				repo_source: { __weights: { github: 52, gitlab: 16, bitbucket: 7, template: 15, empty: 10 } },
+				monorepo: { __weights: { false: 82, true: 18 } },
 			},
 		},
 		{
 			event: "pipeline configured",
-			weight: 2,
-			properties: {
-				pipeline_id: chance.pickone.bind(chance, pipelineIds),
-				pipeline_type: ["build_test", "build_test_deploy", "deploy_only", "lint_test"],
-				trigger: ["push", "push", "pull_request", "schedule", "manual"],
-				runtime: ["docker", "docker", "node", "python", "go"],
-			},
-		},
-		{
-			event: "collaboration invited",
-			weight: 2,
-			properties: {
-				invite_role: ["developer", "developer", "admin", "viewer"],
-				invite_method: ["email", "email", "link", "github_team"],
-			},
-		},
-		{
-			event: "monitoring dashboard viewed",
-			weight: 5,
-			isStrictEvent: false,
-			properties: {
-				dashboard_type: ["overview", "performance", "errors", "deploys", "custom"],
-				time_range: ["1h", "6h", "24h", "7d", "30d"],
-				widgets_count: u.weighNumRange(1, 12, 0.5, 4),
-			},
-		},
-		{
-			event: "log searched",
-			weight: 4,
-			properties: {
-				query_type: ["full_text", "structured", "regex"],
-				time_range: ["15m", "1h", "6h", "24h", "7d"],
-				results_count: u.weighNumRange(0, 500, 0.3, 50),
-				service: ["api", "web", "worker", "database", "auth"],
-			},
-		},
-		{
-			event: "notification received",
-			weight: 6,
-			properties: {
-				notification_type: ["build_failed", "deploy_completed", "pr_review_requested", "alert_fired", "mention", "billing"],
-				channel: ["in_app", "in_app", "email", "slack", "webhook"],
-				opened: [true, true, true, false],
-			},
-		},
-		{
-			event: "billing updated",
 			weight: 1,
-			properties: {
-				change_type: ["plan_upgrade", "plan_downgrade", "payment_method", "add_seats", "remove_seats"],
-				payment_method: ["credit_card", "credit_card", "invoice", "paypal"],
-			},
-		},
-		{
-			event: "app session",
-			weight: 8,
-			properties: {
-				session_duration_sec: u.weighNumRange(10, 3600, 0.4, 180),
-				pages_viewed: u.weighNumRange(1, 20, 0.5, 4),
-			},
-		},
-		{
-			event: "environment created",
-			weight: 2,
-			properties: {
-				env_type: ["production", "staging", "dev", "preview", "test"],
-				cloud_provider: ["aws", "aws", "gcp", "azure", "self_hosted"],
-				region: ["us-east-1", "us-west-2", "eu-west-1", "ap-south-1"],
-			},
-		},
-		{
-			event: "account deactivated",
-			weight: 1,
-			isChurnEvent: true,
-			returnLikelihood: 0.15,
 			isStrictEvent: true,
 			properties: {
-				reason: ["switched_provider", "cost", "no_longer_needed", "poor_experience", "team_dissolved", "acquired"],
+				config_mode: { __weights: { auto_detected: 58, starter_template: 24, custom_yaml: 18 } },
 			},
 		},
-	],
-
-	// -- Funnels (5) ------------------------------------------
-	funnels: [
 		{
-			name: "Onboarding",
-			sequence: ["account created", "repository connected", "pipeline configured", "build completed"],
-			conversionRate: 45,
-			order: "sequential",
-			isFirstFunnel: true,
-			timeToConvert: 72,
+			event: "preview deployed",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				commit_sha: ["unassigned"],
+				preview_build_sec: u.weighNumRange(20, 600, 0.5, 40),
+				framework: (ctx) => FRAMEWORK[ctx.profile?.primary_stack] || "other",
+			},
+		},
+		{
+			event: "commit pushed",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				commit_sha: ["unassigned"],
+				branch_type: { __weights: { feature: 62, main: 18, fix: 15, release: 5 } },
+				commits_in_push: u.weighNumRange(1, 12, 0.3, 30),
+			},
+		},
+		{
+			event: "build started",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				build_id: ["unassigned"],
+				trigger: ["push"],
+				repo_id: ["unassigned"],
+				ecosystem: ["npm"],
+				runner_size: { __weights: { standard: 72, large: 22, xlarge: 6 } },
+			},
+		},
+		{
+			event: "build finished",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				build_id: ["unassigned"],
+				trigger: ["push"],
+				repo_id: ["unassigned"],
+				ecosystem: ["npm"],
+				build_status: ["success"],
+				failure_stage: ["none"],
+				build_duration_sec: [0],
+				tests_run: u.weighNumRange(20, 4000, 0.3, 40),
+			},
+		},
+		{
+			event: "pull request opened",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				pr_id: ["unassigned"],
+				repo_id: ["unassigned"],
+				lines_changed: [0],
+				files_changed: [0],
+				test_coverage_pct: [0],
+				review_mode: ["standard"],
+			},
+		},
+		{
+			event: "review submitted",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				pr_id: ["unassigned"],
+				repo_id: ["unassigned"],
+				lines_changed: [0],
+				files_changed: [0],
+				test_coverage_pct: [0],
+				review_mode: ["standard"],
+				review_decision: { __weights: { approved: 68, changes_requested: 24, commented: 8 } },
+				review_wait_hours: [0],
+			},
+		},
+		{
+			event: "pull request merged",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				pr_id: ["unassigned"],
+				repo_id: ["unassigned"],
+				lines_changed: [0],
+				files_changed: [0],
+				test_coverage_pct: [0],
+				review_mode: ["standard"],
+				merge_method: { __weights: { squash: 64, merge_commit: 24, rebase: 12 } },
+			},
+		},
+		{
+			event: "production deployed",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				pr_id: ["unassigned"],
+				repo_id: ["unassigned"],
+				lines_changed: [0],
+				files_changed: [0],
+				test_coverage_pct: [0],
+				review_mode: ["standard"],
+				deploy_outcome: ["healthy"],
+				deploy_region: { __weights: { "us-east": 42, "eu-west": 30, "us-west": 16, "ap-south": 12 } },
+			},
+		},
+		{
+			event: "upgrade page viewed",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				upgrade_trigger: { __weights: { build_minutes_limit: 34, private_repo_limit: 22, preview_limit: 18, feature_gate: 16, billing_settings: 10 } },
+			},
+		},
+		{
+			event: "subscription started",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				plan: ["pro"],
+				seats: [1],
+				billing_cycle: { __weights: { monthly: 70, annual: 30 } },
+			},
+		},
+		{
+			event: "code browsed",
+			weight: 9,
+			properties: {
+				view_type: { __weights: { file: 46, commits: 18, blame: 8, branches: 10, compare: 18 } },
+			},
+		},
+		{
+			event: "docs viewed",
 			weight: 3,
+			properties: {
+				doc_section: { __weights: { getting_started: 20, ci_configuration: 24, preview_environments: 14, cli: 12, api: 14, billing: 6, troubleshooting: 10 } },
+				time_on_page_sec: u.weighNumRange(5, 600, 0.4, 40),
+			},
 		},
 		{
-			name: "Build-Deploy Pipeline",
-			sequence: ["build completed", "deployment completed", "monitoring dashboard viewed"],
-			conversionRate: 40,
-			order: "sequential",
-			timeToConvert: 48,
-			weight: 5,
-			reentry: true,
-		},
-		{
-			name: "PR Review Flow",
-			sequence: ["pull request created", "code review completed", "build completed", "deployment completed"],
-			conversionRate: 35,
-			order: "sequential",
-			timeToConvert: 72,
+			event: "cli command run",
 			weight: 4,
+			properties: {
+				command: { __weights: { "forge logs": 30, "forge deploy": 18, "forge env pull": 20, "forge run": 22, "forge login": 10 } },
+				cli_version: { __weights: { "3.4.1": 30, "3.5.0": 45, "3.5.2": 25 } },
+			},
 		},
 		{
-			name: "Incident Response",
-			sequence: ["alert triggered", "incident created", "incident resolved"],
-			conversionRate: 50,
-			order: "sequential",
-			timeToConvert: 24,
+			event: "logs viewed",
 			weight: 3,
-			reentry: true,
+			properties: {
+				log_source: { __weights: { build: 44, runtime: 40, edge: 16 } },
+				time_range: { __weights: { "15m": 30, "1h": 34, "24h": 26, "7d": 10 } },
+			},
 		},
 		{
-			name: "Upgrade Path",
-			sequence: ["app session", "billing updated", "collaboration invited"],
-			conversionRate: 20,
-			order: "sequential",
-			timeToConvert: 168,
+			event: "issue created",
 			weight: 2,
+			properties: {
+				issue_type: { __weights: { bug: 46, feature: 30, chore: 16, security: 8 } },
+				labels_count: [0, 1, 1, 2, 2, 3],
+			},
+		},
+		{
+			event: "teammate invited",
+			weight: 1,
+			properties: {
+				invite_role: { __weights: { developer: 70, admin: 12, viewer: 18 } },
+			},
+		},
+		{
+			event: "environment variable updated",
+			weight: 1,
+			properties: {
+				environment: { __weights: { production: 40, preview: 35, development: 25 } },
+			},
+		},
+		{
+			event: "$experiment_started",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				"Experiment name": [CACHE_EXPERIMENT],
+				"Variant name": ["Control", CACHE_VARIANT],
+			},
 		},
 	],
 
-	// -- SuperProps --------------------------------------------
+	funnels: [
+		// H3 + H7: four declared copies of onboarding, one per (stack group × paid social) cell
+		...[
+			{ cond: { primary_stack: { nin: SLOW_STACKS }, acquisition_channel: { neq: "paid_social" } }, mult: 1 },
+			{ cond: { primary_stack: { in: SLOW_STACKS }, acquisition_channel: { neq: "paid_social" } }, mult: SLOW_STACK_MULT },
+			{ cond: { primary_stack: { nin: SLOW_STACKS }, acquisition_channel: "paid_social" }, mult: SOCIAL_ONBOARD_MULT },
+			{ cond: { primary_stack: { in: SLOW_STACKS }, acquisition_channel: "paid_social" }, mult: SLOW_STACK_MULT * SOCIAL_ONBOARD_MULT },
+		].map(({ cond, mult }) => ({
+			name: "Onboarding",
+			sequence: ["account created", "repository imported", "pipeline configured", "preview deployed"],
+			isFirstFunnel: true,
+			conditions: cond,
+			conversionRate: Math.round(ONBOARD_CONV * mult),
+			timeToConvert: ONBOARD_TTC_H,
+			order: "sequential",
+			weight: 1,
+			props: { commit_sha: ["onboarding"] },
+		})),
+		{
+			name: "Pull Request",
+			sequence: PR_STEPS,
+			conversionRate: 62,
+			timeToConvert: 24,
+			order: "sequential",
+			weight: 4,
+			props: {
+				pr_id: (ctx) => `pr_${chance.hash({ length: 12 })}`,
+			},
+		},
+		{
+			name: "CI Build",
+			sequence: ["build started", "build finished"],
+			conversionRate: BUILD_CONV,
+			timeToConvert: BUILD_TTC_H,
+			order: "sequential",
+			weight: 8,
+			props: {
+				build_id: (ctx) => `bld_${chance.hash({ length: 12 })}`,
+				trigger: { __weights: { push: 52, pull_request: 32, schedule: 13, manual: 3 } },
+			},
+			experiment: {
+				name: CACHE_EXPERIMENT,
+				startDaysBeforeEnd: (ms(DATASET_END) - ms(REMOTE_CACHE_START)) / DAY_MS,
+				// assignment + exposure only; the hook applies CACHE_TTC_MULT to build durations
+				variants: [
+					{ name: "Control" },
+					{ name: CACHE_VARIANT },
+				],
+			},
+		},
+		{
+			name: "Preview",
+			sequence: ["commit pushed", "preview deployed"],
+			conversionRate: 72,
+			timeToConvert: 0.5,
+			order: "sequential",
+			weight: 5,
+			props: {
+				commit_sha: (ctx) => chance.hash({ length: 10 }),
+			},
+		},
+		{
+			name: "Upgrade",
+			sequence: ["upgrade page viewed", "subscription started"],
+			conditions: { plan_tier: "free", customer_since: { gte: D0 } },
+			conversionRate: UPGRADE_CONV,
+			timeToConvert: 24,
+			order: "sequential",
+			weight: 1,
+			props: {
+				plan: { __weights: { pro: 62, team: 38 } },
+				seats: u.weighNumRange(3, 20, 1, 40),
+			},
+		},
+		{
+			name: "Upgrade",
+			sequence: ["upgrade page viewed", "subscription started"],
+			conditions: { plan_tier: "free", customer_since: { lt: D0 } },
+			conversionRate: UPGRADE_CONV_ESTABLISHED,
+			timeToConvert: 24,
+			order: "sequential",
+			weight: 1,
+			props: {
+				plan: { __weights: { pro: 62, team: 38 } },
+				seats: u.weighNumRange(3, 20, 1, 40),
+			},
+		},
+	],
+
+	warehouseMetrics: [
+		{
+			name: "marketing_spend_daily",
+			type: "additive",
+			grain: "day",
+			source: {
+				event: "account created",
+				measure: "count",
+				where: (e) => PAID_CHANNELS.includes(e.acquisition_channel),
+				groupBy: "acquisition_channel",
+			},
+			timeColumn: "date",
+			valueColumn: "spend_usd",
+			columns: {
+				// set in the warehouse hook: platform metrics follow the day's spend
+				clicks: 0,
+				impressions: 0,
+				platform_reported_signups: 0,
+			},
+		},
+		{
+			name: "build_fleet_daily",
+			type: "additive",
+			grain: "day",
+			source: {
+				event: "build started",
+				measure: "count",
+				groupBy: "ecosystem",
+			},
+			timeColumn: "date",
+			valueColumn: "builds_started",
+			columns: {
+				dependency_fetch_error_rate: (ctx) => {
+					const hit = ctx.row.ecosystem === INCIDENT_ECOSYSTEM && inIncident(ctx.time);
+					const j = hashFloat(`dep-err|${dayKey(ctx.time)}|${ctx.seriesKey}`);
+					return hit ? round2(INCIDENT_FAIL + (j - 0.5) * 0.04) : Math.round((0.002 + j * 0.008) * 10000) / 10000;
+				},
+				registry_mirror_status: (ctx) => (ctx.row.ecosystem === INCIDENT_ECOSYSTEM && inIncident(ctx.time) ? "degraded" : "operational"),
+				queue_p95_seconds: (ctx) => Math.round(18 + hashFloat(`queue|${dayKey(ctx.time)}|${ctx.seriesKey}`) * 30),
+				remote_cache_hit_rate: (ctx) => (ctx.time >= ms(REMOTE_CACHE_START) ? round2(0.64 + (hashFloat(`cache|${dayKey(ctx.time)}|${ctx.seriesKey}`) - 0.5) * 0.12) : 0),
+			},
+		},
+		{
+			name: "usage_billing_daily",
+			type: "additive",
+			grain: "day",
+			source: {
+				event: "build finished",
+				measure: "sum",
+				property: "build_duration_sec",
+				groupBy: "plan_tier",
+			},
+			scale: 1 / 60,
+			timeColumn: "date",
+			valueColumn: "billable_runner_minutes",
+			columns: {
+				overage_price_per_minute_usd: (ctx) => (ctx.row.plan_tier === METERED_PLAN && ctx.time >= ms(METERED_START) ? OVERAGE_PRICE_PER_MIN : 0),
+				overage_minutes: 0,
+				overage_revenue_usd: 0,
+			},
+		},
+	],
+
 	superProps: {
-		subscription_tier: ["free", "free", "free", "team", "team", "business", "enterprise"],
-		Platform: ["web", "web", "desktop_app", "cli"],
-		language: ["javascript", "python", "go", "rust", "java", "typescript"],
+		plan_tier: ["free"],
 	},
 
-	// -- UserProps ---------------------------------------------
 	userProps: {
-		dev_role: ["full_stack"],
-		segment: ["full_stack"],
-		team_size: u.weighNumRange(1, 50, 0.4, 5),
-		repos_connected: [0],
-		org_name: ["personal"],
-		experience_level: ["junior", "junior", "mid", "mid", "mid", "senior", "senior"],
-		subscription_tier: ["free", "free", "free", "team", "team", "business", "enterprise"],
-		Platform: ["web", "web", "desktop_app", "cli"],
-		language: ["javascript", "python", "go", "rust", "java", "typescript"],
+		org_id: ["1"],
+		org_name: ["unknown"],
+		org_size: ["smb"],
+		industry: ["saas"],
+		role: ["developer"],
+		primary_stack: { __weights: STACK_WEIGHTS },
+		plan_tier: ["free"],
+		customer_since: ["2025-01-01"],
+		acquisition_channel: { __weights: CHANNEL_WEIGHTS },
 	},
 
-	// -- Phase 2: Personas ------------------------------------
 	personas: [
-		{
-			name: "platform_engineer",
-			weight: 15,
-			eventMultiplier: 4.0,
-			conversionModifier: 1.5,
-			churnRate: 0.01,
-			properties: {
-				dev_role: "platform_engineer",
-				segment: "platform_eng",
-			},
-		},
-		{
-			name: "full_stack_dev",
-			weight: 35,
-			eventMultiplier: 1.5,
-			conversionModifier: 1.0,
-			churnRate: 0.05,
-			properties: {
-				dev_role: "full_stack",
-				segment: "full_stack",
-			},
-		},
-		{
-			name: "junior_dev",
-			weight: 30,
-			eventMultiplier: 0.8,
-			conversionModifier: 0.6,
-			churnRate: 0.12,
-			properties: {
-				dev_role: "junior",
-				segment: "junior",
-			},
-		},
-		{
-			name: "devops_lead",
-			weight: 10,
-			eventMultiplier: 2.0,
-			conversionModifier: 1.3,
-			churnRate: 0.02,
-			properties: {
-				dev_role: "devops_lead",
-				segment: "devops",
-			},
-		},
-		{
-			name: "open_source_user",
-			weight: 10,
-			eventMultiplier: 0.5,
-			conversionModifier: 0.3,
-			churnRate: 0.15,
-			properties: {
-				dev_role: "open_source",
-				segment: "oss_user",
-			},
-		},
+		{ name: "developer", weight: 55, eventMultiplier: 1.0, properties: { role: "developer" } },
+		{ name: "tech_lead", weight: 20, eventMultiplier: 1.25, properties: { role: "tech_lead" } },
+		{ name: "platform_engineer", weight: 15, eventMultiplier: 1.5, properties: { role: "platform_engineer" } },
+		{ name: "engineering_manager", weight: 10, eventMultiplier: 0.45, properties: { role: "engineering_manager" } },
 	],
 
-	// -- Phase 2: World Events --------------------------------
-	worldEvents: [
-		{
-			name: "major_outage",
-			startDay: 42,
-			duration: 0.25,
-			volumeMultiplier: 0.05,
-			affectsEvents: ["deployment completed", "build completed"],
-			injectProps: { outage_window: true },
+	groupKeys: [["org_id", ORG_COUNT, []]],
+	groupProps: {
+		org_id: {
+			name: ["unknown"],
+			org_size: ["smb"],
+			industry: ["saas"],
+			employee_count: ["11-50"],
 		},
-		{
-			name: "conference_launch",
-			startDay: 60,
-			duration: 3,
-			volumeMultiplier: 2.0,
-			affectsEvents: ["account created"],
-			injectProps: { promo: "devcon2024" },
-		},
-	],
-
-	// -- Phase 2: Data Quality --------------------------------
-	dataQuality: {
-		lateArrivingRate: 0.01,
-		duplicateRate: 0.005,
-		botUsers: 2,
-		botEventsPerUser: 300,
 	},
+
+	// retention shape (also pins each new user's signup to their creation day)
+	retentionCurve: { type: "logarithmic", day1: 0.75, day7: 0.6, day30: 0.5 },
 
 	hook(record, type, meta) {
-		if (type === "funnel-post") return handleFunnelPostHooks(record, meta);
-		if (type === "user") return handleUserHooks(record);
-		if (type === "event") return handleEventHooks(record);
-		if (type === "everything") return handleEverythingHooks(record, meta);
+		if (type === "user") return handleUserHook(record, meta);
+		if (type === "everything") return handleEverything(record, meta);
+		if (type === "warehouse") return handleWarehouse(record, meta);
+		if (type === "group") return handleGroup(record);
 		return record;
 	},
 };
 
-export default config;
+// ── STORIES ──────────────────────────────────────────────────────────────
+// Machine-checkable contract for hooks H1-H10. Evaluate with:
+//   node dungeons/vertical/devtools/devtools.verify.mjs
 
-// ── STORIES (v1.6 machine-checkable contract) ──────────────────────
-// One story per numbered hook. Bands are mechanism-derived (see each
-// narrative) and confirmed at reduced scale (2K users, same seed)
-// BEFORE the full-fidelity run — never fit to full output post-hoc.
-// Scale guards are sized at ~50% of the expected full-fidelity (10K)
-// population so reduced-scale runs intentionally read WEAK.
+const EV = `read_json_auto('{{PREFIX}}-EVENTS*.json*', sample_size=-1, union_by_name=true)`;
+const US = `read_json_auto('{{PREFIX}}-USERS*.json*', sample_size=-1, union_by_name=true)`;
+const WH = (table) => `read_json_auto('{{PREFIX}}-WAREHOUSE-${table}.json*', sample_size=-1, union_by_name=true)`;
 
-const EV_CTE = `WITH ev AS (
-  SELECT e.user_id::VARCHAR AS uid, e.time::TIMESTAMP AS t,
-    hour(e.time::TIMESTAMP) AS hr,
-    date_diff('day', TIMESTAMP '2026-01-01 00:00:00', e.time::TIMESTAMP) AS day_idx,
-    e.*
-  FROM read_json_auto('{{PREFIX}}-EVENTS*.json', sample_size=-1, union_by_name=true) e
-)`;
+// Identity prelude: a device resolves to the user who appears with it on any
+// event carrying both ids (emitted stitch evidence, not the profile pool).
+// Every Forgebench event carries user_id, so uid = user_id in practice.
+const ID_CTE = `dmap AS (SELECT device_id, min(user_id::VARCHAR) AS mapped FROM ${EV}
+  WHERE user_id IS NOT NULL AND device_id IS NOT NULL GROUP BY 1),
+ev AS (SELECT coalesce(e.user_id::VARCHAR, m.mapped) AS uid, e.time::TIMESTAMP AS t, e.*
+  FROM ${EV} e LEFT JOIN dmap m ON e.device_id = m.device_id)`;
 
-const US_CTE = `us AS (
-  SELECT distinct_id::VARCHAR AS uid, segment
-  FROM read_json_auto('{{PREFIX}}-USERS*.json', sample_size=-1, union_by_name=true)
-)`;
+const TS = (iso) => dayjs.utc(iso).format("YYYY-MM-DD HH:mm:ss");
+const D = (iso) => iso.slice(0, 10);
+const band = (k) => [Math.round(k * 0.9 * 1000) / 1000, Math.round(k * 1.1 * 1000) / 1000];
+const SQL_LIST = (xs) => xs.map((x) => `'${x}'`).join(", ");
+const ONBOARDING_STEPS = ["account created", "repository imported", "pipeline configured", "preview deployed"];
+const ASSIST_RAMPED = TS(dayjs.utc(ASSIST_LAUNCH).add(ASSIST_RAMP_DAYS, "day"));
+const INC_BASE_FROM = TS(dayjs.utc(REGISTRY_INCIDENT_START).subtract(7, "day"));
+const INC_BASE_TO = TS(dayjs.utc(REGISTRY_INCIDENT_END).add(7, "day"));
+const METERED_PRE_FROM = "2026-08-01 00:00:00";   // August: a full month before overage billing
+const METERED_POST_FROM = TS(dayjs.utc(METERED_START).add(SCHEDULED_CUT_RAMP_DAYS, "day")); // every Team org has acted
+const METERED_POST_TO = "2026-10-01 00:00:00";
+const RETENTION_DAY = 30;
+const PQL_COHORT_END = TS(dayjs.utc(DATASET_END).subtract(BUY_WINDOW_DAYS, "day")); // full six-week purchase window
 
-/**
- * @param {number|null|undefined} x measured value
- * @param {[number, number]} nailed tight mechanism band
- * @param {[number, number]} strong wide band
- * @param {string} detail
- * @param {(x: number) => boolean} [inverse] effect-reversed predicate
- */
-const bandVerdict = (x, nailed, strong, detail, inverse = () => false) => {
-	if (x == null || Number.isNaN(Number(x))) return { verdict: "NONE", detail: `${detail} — metric missing` };
-	const v = Number(x);
-	if (inverse(v)) return { verdict: "INVERSE", detail };
-	if (v >= nailed[0] && v <= nailed[1]) return { verdict: "NAILED", detail };
-	if (v >= strong[0] && v <= strong[1]) return { verdict: "STRONG", detail };
-	return { verdict: "WEAK", detail };
+/** step_counts conversion for a set of segments from a timeToConvert breakdown. */
+const convOf = (rows, segs) => {
+	const rs = (rows || []).filter((x) => segs.includes(x.segment_value) && Array.isArray(x.step_counts) && x.step_counts[0]);
+	if (!rs.length) return null;
+	const entered = rs.reduce((a, r) => a + r.step_counts[0], 0);
+	const converted = rs.reduce((a, r) => a + r.step_counts[r.step_counts.length - 1], 0);
+	return { entered, converted, rate: converted / entered };
 };
 
+// H1 per-PR clock: review → merge for PRs that reached both steps, eligible plans, after launch
+const H1_SQL = `WITH ${ID_CTE},
+p AS (SELECT pr_id, any_value(uid) AS uid, any_value(review_mode) AS mode,
+    min(t) FILTER (WHERE event = 'review submitted') AS t1, min(t) FILTER (WHERE event = 'pull request merged') AS t2,
+    any_value(plan_tier) FILTER (WHERE event = 'review submitted') AS plan
+  FROM ev WHERE event IN ('review submitted', 'pull request merged') GROUP BY 1)
+SELECT mode AS grp, count(DISTINCT uid) AS user_count, count(*) AS prs, median(date_diff('second', t1, t2)) / 3600.0 AS med_merge_h
+FROM p WHERE t1 IS NOT NULL AND t2 IS NOT NULL AND t1 >= TIMESTAMP '${TS(ASSIST_LAUNCH)}' AND plan IN (${SQL_LIST(ASSIST_PLANS)}) GROUP BY 1`;
+
+const H2_SQL = `WITH ${ID_CTE},
+v AS (SELECT distinct_id::VARCHAR AS uid, "${EXP_KEY}" AS variant FROM ${US} WHERE "${EXP_KEY}" IS NOT NULL)
+SELECT v.variant AS grp, count(DISTINCT ev.uid) AS user_count, count(*) AS builds,
+  avg((build_status = 'success')::INT) AS success_rate,
+  median(build_duration_sec) FILTER (WHERE build_status = 'success') AS med_success_sec
+FROM ev JOIN v ON v.uid = ev.uid WHERE ev.event = 'build finished' AND ev.t >= TIMESTAMP '${TS(REMOTE_CACHE_START)}' GROUP BY 1`;
+
+const H4_SQL = `WITH ${ID_CTE},
+p AS (SELECT pr_id, any_value(uid) AS uid, any_value(lines_changed) AS lines,
+    min(t) FILTER (WHERE event = 'pull request opened') AS t0, min(t) FILTER (WHERE event = 'review submitted') AS t1
+  FROM ev WHERE event IN ('pull request opened', 'review submitted') GROUP BY 1)
+SELECT CASE WHEN lines <= ${SMALL_PR_LINES} THEN 'small' WHEN lines >= ${LARGE_PR_LINES} THEN 'large' ELSE 'medium' END AS grp,
+  count(DISTINCT uid) AS user_count, count(*) AS prs, median(date_diff('second', t0, t1)) / 3600.0 AS med_wait_h
+FROM p WHERE t0 IS NOT NULL AND t1 IS NOT NULL GROUP BY 1`;
+
+const H5_SQL = `WITH ${ID_CTE},
+s AS (SELECT uid, t AS t0 FROM ev WHERE event = 'account created' AND t < TIMESTAMP '${TS(DATASET_END)}' - INTERVAL ${RETENTION_DAY + 7} DAY),
+fb AS (SELECT s.uid, arg_min(e.build_status, e.t) AS first_status, min(e.t) AS tb
+  FROM s JOIN ev e ON e.uid = s.uid AND e.event = 'build finished' AND e.t >= s.t0 GROUP BY 1),
+f AS (SELECT s.uid, fb.first_status,
+    count(e.t) FILTER (WHERE e.t >= s.t0 + INTERVAL ${RETENTION_DAY} DAY AND e.t < s.t0 + INTERVAL ${RETENTION_DAY + 7} DAY) AS ret
+  FROM s JOIN fb ON fb.uid = s.uid AND fb.tb < s.t0 + INTERVAL ${FIRST_BUILD_DAYS} DAY
+  JOIN ev e ON e.uid = s.uid GROUP BY 1, 2)
+SELECT first_status AS grp, count(*) AS user_count, avg((ret > 0)::INT) AS retention FROM f GROUP BY 1`;
+
+const H6_SQL = `WITH ${ID_CTE},
+o AS (SELECT DISTINCT date::DATE AS d, ecosystem FROM ${WH("build_fleet_daily")} WHERE registry_mirror_status = 'degraded'),
+od AS (SELECT DISTINCT d FROM o), oe AS (SELECT DISTINCT ecosystem FROM o),
+w AS (SELECT t::DATE AS d, uid, (ecosystem IN (SELECT ecosystem FROM oe)) AS hit, (build_status = 'success') AS ok
+  FROM ev WHERE event = 'build finished' AND t >= TIMESTAMP '${INC_BASE_FROM}' AND t < TIMESTAMP '${INC_BASE_TO}'),
+g AS (SELECT (d IN (SELECT d FROM od)) AS incident, avg(ok::INT) FILTER (WHERE hit) / avg(ok::INT) FILTER (WHERE NOT hit) AS rel, count(DISTINCT uid) AS users FROM w GROUP BY 1)
+SELECT 'all' AS grp, (SELECT count(*) FROM od) AS incident_days, min(users) AS user_count,
+  max(rel) FILTER (WHERE incident) / max(rel) FILTER (WHERE NOT incident) AS did
+FROM g`;
+
+const H8_SQL = `WITH ${ID_CTE},
+b AS (SELECT uid, CASE WHEN plan_tier = '${METERED_PLAN}' THEN 'team' ELSE 'other_plans' END AS grp,
+    (t >= TIMESTAMP '${METERED_POST_FROM}') AS post, trigger
+  FROM ev WHERE event = 'build started' AND ((t >= TIMESTAMP '${METERED_PRE_FROM}' AND t < TIMESTAMP '${TS(METERED_START)}') OR (t >= TIMESTAMP '${METERED_POST_FROM}' AND t < TIMESTAMP '${METERED_POST_TO}'))),
+r AS (SELECT grp, post, count(*) FILTER (WHERE trigger = 'schedule')::DOUBLE / count(*) FILTER (WHERE trigger = 'push') AS sched_per_push, count(DISTINCT uid) AS users FROM b GROUP BY 1, 2)
+SELECT grp, min(users) AS user_count, max(sched_per_push) FILTER (WHERE post) / max(sched_per_push) FILTER (WHERE NOT post) AS did FROM r GROUP BY 1`;
+
+const H9_SQL = `WITH ${ID_CTE}
+SELECT CASE WHEN test_coverage_pct <= ${COVERAGE_LOW} THEN 'low' WHEN test_coverage_pct >= ${COVERAGE_HIGH} THEN 'high' ELSE 'middle' END AS grp,
+  count(DISTINCT uid) AS user_count, count(*) AS deploys, avg((deploy_outcome = 'rolled_back')::INT) AS rollback_rate
+FROM ev WHERE event = 'production deployed' GROUP BY 1`;
+
+const H10_SQL = `WITH ${ID_CTE},
+s AS (SELECT uid, t AS t0 FROM ev WHERE event = 'account created' AND t < TIMESTAMP '${PQL_COHORT_END}'),
+f AS (SELECT s.uid,
+    count(*) FILTER (WHERE e.event = 'preview deployed' AND e.t < s.t0 + INTERVAL ${PQL_DAYS} DAY) AS previews,
+    count(*) FILTER (WHERE e.event = 'subscription started' AND e.t < s.t0 + INTERVAL ${BUY_WINDOW_DAYS} DAY) AS buys
+  FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
+SELECT CASE WHEN previews >= ${PQL_MIN_PREVIEWS} THEN 'habit' WHEN previews >= 1 THEN 'light' ELSE 'none' END AS grp,
+  count(*) AS user_count, avg((buys > 0)::INT) AS paid_rate
+FROM f GROUP BY 1`;
+
+/** @type {import("../../../types").DungeonStory[]} */
 export const stories = [
 	{
-		id: "devtools-h1-failed-build-duration",
+		id: "H1-forge-assist-launch",
 		hook: "H1",
-		archetype: "cohort-prop-scale",
-		narrative:
-			"Failed builds run 2x longer than successful ones (BUILD_FAILURE_DURATION_MULT=2, " +
-			"event hook multiplies build_duration_sec in place). Median is the clean read: the " +
-			"extreme-value anomaly (10x duration at 0.3%) fattens means but not medians, and " +
-			"cancelled builds are untouched (they track success). Mechanism ratio is exactly 2.0 " +
-			"(both cohorts draw from the same weighNumRange(10,600,0.4,240) pool). Measured 2.000 " +
-			"at 2K. Bot events carry null build_status and fall out of the status groups.",
+		archetype: "temporal-inflection",
+		narrative: `Forge Assist (AI code review) launches ${D(ASSIST_LAUNCH)} for Pro, Team, and Enterprise seats. ${ASSIST_ADOPTER_SHARE * 100}% of eligible developers turn it on, each on a day in the ${ASSIST_RAMP_DAYS} days after launch, and use it on ${(ASSIST_USE - ASSIST_USE_SPREAD) * 100}-${(ASSIST_USE + ASSIST_USE_SPREAD) * 100}% of their pull requests (mean ${ASSIST_USE * 100}%), so the share of eligible PRs with review_mode = 'forge_assist' ramps for four weeks and then holds at ${ASSIST_SHARE * 100}%. An assisted PR goes from review to merge in ${ASSIST_MERGE_MULT}x the time. The wait for the first review is untouched (honest null), and so is the rollback rate. Free seats and pre-launch PRs never get it, so purity is exact. plan_tier on each event is the seat plan at that moment.`,
+		mixpanelReport: { type: "Funnels", steps: ["review submitted", "pull request merged"], measure: "median time to convert", holdPropertyConstant: "pr_id", breakdown: "review_mode", filter: "plan_tier in (pro, team, enterprise), on or after 2026-07-29" },
 		assertions: [
 			{
 				breakdown: {
 					type: "duckdb",
-					sql: `${EV_CTE}
-SELECT
-  median(TRY_CAST(build_duration_sec AS DOUBLE)) FILTER (WHERE build_status='failed')
-    / median(TRY_CAST(build_duration_sec AS DOUBLE)) FILTER (WHERE build_status='success') AS med_ratio,
-  count(*) FILTER (WHERE build_status='failed') AS n_failed
-FROM ev WHERE event='build completed';`,
+					sql: `WITH ${ID_CTE}
+SELECT 'all' AS grp, count(DISTINCT uid) AS user_count,
+ count(*) FILTER (WHERE review_mode = 'forge_assist' AND (t < TIMESTAMP '${TS(ASSIST_LAUNCH)}' OR plan_tier NOT IN (${SQL_LIST(ASSIST_PLANS)}))) AS impure_rows
+FROM ev WHERE event IN (${SQL_LIST(PR_STEPS)})`,
 				},
-				assert: (rows) => {
-					const r = rows?.[0] || {};
-					const detail = `median failed/success duration ratio ${Number(r.med_ratio).toFixed(3)} (n_failed=${r.n_failed}; mechanism 2.0)`;
-					if (Number(r.n_failed) < 35000) return { verdict: "WEAK", detail: `${detail} — scale guard: n_failed < 35000 (expect ~70K at 10K users)` };
-					return bandVerdict(r.med_ratio, [1.9, 2.1], [1.7, 2.4], detail, (x) => x <= 1.1);
+				select: { a: { where: { grp: "all" } } },
+				// exact: an assisted PR before launch or on a Free seat is a bug
+				expect: { metric: "a.impure_rows", op: "between", target: [0, 0] },
+			},
+			{
+				breakdown: { type: "duckdb", sql: H1_SQL },
+				select: { a: { where: { grp: "forge_assist" } }, s: { where: { grp: "standard" } } },
+				expect: { metric: "a.med_merge_h / s.med_merge_h", op: "between", target: band(ASSIST_MERGE_MULT) },
+				minCohort: 500,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT 'eligible' AS grp, count(DISTINCT uid) AS user_count, count(*) FILTER (WHERE review_mode = 'forge_assist')::DOUBLE / count(*) AS assist_share
+FROM ev WHERE event = 'pull request opened' AND t >= TIMESTAMP '${ASSIST_RAMPED}' AND plan_tier IN (${SQL_LIST(ASSIST_PLANS)})`,
 				},
+				select: { e: { where: { grp: "eligible" } } },
+				// after the ramp every adopter has started
+				expect: { metric: "e.assist_share", op: "between", target: band(ASSIST_SHARE) },
+				minCohort: 500,
 			},
 		],
 	},
 	{
-		id: "devtools-h2-night-deploy-risk",
+		id: "H2-remote-build-cache-experiment",
 		hook: "H2",
-		archetype: "temporal-inflection",
-		narrative:
-			"Deploys at 22:00-05:59 UTC are forced to failed 40% of the time. Organic failed " +
-			"share is 1/5=0.20 (status pool), so night share = 0.4 + 0.6*0.2 = 0.52; day stays " +
-			"~0.20 plus a small smear from H9 sweet-spot clones of night deploys landing in " +
-			"daytime (+5-360min offsets). Days 43-49 are excluded: H6 recovery clones carry " +
-			"success/rolled_back only and dilute the share. Measured 0.506 night / 0.213 day at 2K.",
+		archetype: "experiment-lift",
+		narrative: `The "${CACHE_EXPERIMENT}" CI test starts ${D(REMOTE_CACHE_START)} and splits developers 50/50 (sticky hash, exposure logged once at a developer's first build in the test). "${CACHE_VARIANT}" builds take ${CACHE_TTC_MULT}x as long as Control builds (declarative ttcMultiplier on the CI Build funnel; build_duration_sec is the real start → finish gap). Pass/fail does not change: failures come from the code, not the cache, so the success rate is the same in both arms (control assertion).`,
+		mixpanelReport: { type: "Insights", event: "build finished", measure: "median build_duration_sec", filter: "build_status = success, on or after 2026-07-08", breakdown: `user property "${EXP_KEY}"` },
 		assertions: [
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `${EV_CTE}
-SELECT
-  avg((deploy_status='failed')::INT) FILTER (WHERE (hr>=22 OR hr<6) AND day_idx NOT BETWEEN 43 AND 49) AS night_fail,
-  avg((deploy_status='failed')::INT) FILTER (WHERE hr BETWEEN 6 AND 21 AND day_idx NOT BETWEEN 43 AND 49) AS day_fail,
-  count(*) FILTER (WHERE (hr>=22 OR hr<6) AND day_idx NOT BETWEEN 43 AND 49) AS n_night
-FROM ev WHERE event='deployment completed';`,
-				},
-				assert: (rows) => {
-					const r = rows?.[0] || {};
-					const night = Number(r.night_fail), day = Number(r.day_fail);
-					const detail = `night failure share ${night.toFixed(4)} vs day ${day.toFixed(4)} excl. recovery window (n_night=${r.n_night}; mechanism 0.52 vs ~0.21)`;
-					if (Number(r.n_night) < 35000) return { verdict: "WEAK", detail: `${detail} — scale guard: n_night < 35000 (expect ~70K at 10K users)` };
-					return bandVerdict(night, [0.46, 0.56], [0.42, 0.62], detail, (x) => x <= day + 0.05);
-				},
+				breakdown: { type: "duckdb", sql: H2_SQL },
+				select: { r: { where: { grp: CACHE_VARIANT } }, c: { where: { grp: "Control" } } },
+				expect: { metric: "r.med_success_sec / c.med_success_sec", op: "between", target: band(CACHE_TTC_MULT) },
+				minCohort: 1000,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H2_SQL },
+				select: { r: { where: { grp: CACHE_VARIANT } }, c: { where: { grp: "Control" } } },
+				// control: the cache does not change whether a build passes
+				expect: { metric: "r.success_rate / c.success_rate", op: "between", target: band(1) },
+				minCohort: 1000,
 			},
 			{
 				breakdown: {
 					type: "duckdb",
-					sql: `${EV_CTE}
-SELECT avg((deploy_status='failed')::INT) AS day_fail
-FROM ev WHERE event='deployment completed' AND hr BETWEEN 6 AND 21 AND day_idx NOT BETWEEN 43 AND 49;`,
+					sql: `WITH ${ID_CTE}
+SELECT 'all' AS grp, count(DISTINCT uid) AS user_count,
+ count(DISTINCT uid) FILTER (WHERE "Variant name" = '${CACHE_VARIANT}')::DOUBLE / count(DISTINCT uid) AS variant_share
+FROM ev WHERE event = '$experiment_started'`,
 				},
-				assert: (rows) => {
-					const day = Number(rows?.[0]?.day_fail);
-					const detail = `daytime failure share ${day.toFixed(4)} — organic control (pool 0.20 + H9 clone smear)`;
-					return bandVerdict(day, [0.18, 0.26], [0.15, 0.3], detail, (x) => x >= 0.4);
-				},
+				select: { a: { where: { grp: "all" } } },
+				// equal-weight 2-arm hash → 0.5
+				expect: { metric: "a.variant_share", op: "between", target: band(0.5) },
+				minCohort: 2000,
 			},
 		],
 	},
 	{
-		id: "devtools-h3-copilot-pr-velocity",
+		id: "H3-jvm-dotnet-onboarding-friction",
 		hook: "H3",
-		archetype: "cohort-count-scale",
-		narrative:
-			"Hash cohort (user_id charCodeAt(0) % 10 < 3 — GUID first char in {2,3,4,d,e,f}, " +
-			"6/16 hex = 37.5% of users) gets floor(PRs*0.5) cloned PR events → ~1.5x PR volume. " +
-			"The ai_assist prop is NOT the cohort key: the copilot_integration feature (launchDay " +
-			"30) also flips it for feature adopters. Floor drag is negligible at ~23 organic " +
-			"PRs/user. Measured ratio 1.491, cohort share 0.386 at 2K.",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `${EV_CTE}, pu AS (
-  SELECT uid, (ascii(substr(uid,1,1)) % 10 < 3) AS copilot,
-    count(*) FILTER (WHERE event='pull request created') AS prs
-  FROM ev GROUP BY 1, 2
-)
-SELECT
-  (sum(prs) FILTER (WHERE copilot))::DOUBLE / count(*) FILTER (WHERE copilot) AS prs_cop,
-  (sum(prs) FILTER (WHERE NOT copilot))::DOUBLE / count(*) FILTER (WHERE NOT copilot) AS prs_manual,
-  count(*) FILTER (WHERE copilot) AS n_cop,
-  (count(*) FILTER (WHERE copilot))::DOUBLE / count(*) AS cohort_share
-FROM pu;`,
-				},
-				assert: (rows) => {
-					const r = rows?.[0] || {};
-					const ratio = Number(r.prs_cop) / Number(r.prs_manual);
-					const detail = `PRs/user copilot ${Number(r.prs_cop).toFixed(2)} vs manual ${Number(r.prs_manual).toFixed(2)} → ratio ${ratio.toFixed(3)} (mechanism 1.5 minus floor drag)`;
-					if (Number(r.n_cop) < 1900) return { verdict: "WEAK", detail: `${detail} — scale guard: cohort users < 1900 (expect ~3860 at 10K)` };
-					return bandVerdict(ratio, [1.4, 1.6], [1.25, 1.75], detail, (x) => x <= 1.05);
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `${EV_CTE}, pu AS (SELECT uid, (ascii(substr(uid,1,1)) % 10 < 3) AS copilot FROM ev GROUP BY 1, 2)
-SELECT (count(*) FILTER (WHERE copilot))::DOUBLE / count(*) AS cohort_share FROM pu;`,
-				},
-				assert: (rows) => {
-					const share = Number(rows?.[0]?.cohort_share);
-					const detail = `hash cohort share ${share.toFixed(4)} (mechanism 6/16 = 0.375 of hex-GUID first chars)`;
-					return bandVerdict(share, [0.35, 0.41], [0.32, 0.45], detail);
-				},
-			},
-		],
-	},
-	{
-		id: "devtools-h4-oncall-fatigue",
-		hook: "H4",
-		archetype: "cohort-prop-scale",
-		narrative:
-			"Users with >20 alert-triggered events get response_time_minutes scaled by " +
-			"1 + min(alerts/20, 3) on incident created/resolved. The fatigued cohort's mean " +
-			"multiplier measured 2.67 at 2K, and the fatigued/normal mean-response ratio tracks " +
-			"it: 137.9 vs 53.4 min = 2.58. Cohort is behavioral (alert volume), no flag stamped.",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `${EV_CTE}, pu AS (
-  SELECT uid,
-    count(*) FILTER (WHERE event='alert triggered') AS alerts,
-    avg(TRY_CAST(response_time_minutes AS DOUBLE)) FILTER (WHERE event IN ('incident created','incident resolved')) AS rt,
-    count(*) FILTER (WHERE event IN ('incident created','incident resolved')) AS incidents
-  FROM ev GROUP BY 1
-)
-SELECT
-  avg(rt) FILTER (WHERE alerts > 20) / avg(rt) FILTER (WHERE alerts <= 20) AS rt_ratio,
-  count(*) FILTER (WHERE alerts > 20) AS n_fatigued,
-  (count(*) FILTER (WHERE alerts > 20))::DOUBLE / count(*) AS fatigued_share
-FROM pu WHERE incidents > 0;`,
-				},
-				assert: (rows) => {
-					const r = rows?.[0] || {};
-					const detail = `fatigued/normal mean response-time ratio ${Number(r.rt_ratio).toFixed(3)} (fatigued share ${Number(r.fatigued_share).toFixed(3)} of incident users; mechanism ~2.6)`;
-					if (Number(r.n_fatigued) < 1500) return { verdict: "WEAK", detail: `${detail} — scale guard: fatigued users < 1500 (expect ~3000 at 10K)` };
-					return bandVerdict(r.rt_ratio, [2.3, 2.9], [2.0, 3.3], detail, (x) => x <= 1.15);
-				},
-			},
-		],
-	},
-	{
-		id: "devtools-h5-oss-power-usage",
-		hook: "H5",
-		archetype: "cohort-count-scale",
-		narrative:
-			"OSS users with >15 events get tail-of-lifetime build clones (30% chance per tail " +
-			"event) and deploy clones (20%). Nearly all surviving oss users clear the threshold " +
-			"(~72 organic events), so the read is oss-active vs non-oss-active BUILD SHARE of " +
-			"events: mechanism (0.19 + 0.3*0.3) / (1.15 * 0.19) ≈ 1.28, measured 1.305 at 2K. " +
-			"Deploy share also rises (measured 1.66x) but couples with H9 (oss builds land in " +
-			"the sweet spot → +50% deploys; heavy non-oss builders lose 40%), so it gets a wider " +
-			"band. Per-event shares cancel the 0.5x persona event multiplier.",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `${EV_CTE}, ${US_CTE}, pu AS (
-  SELECT ev.uid, count(*) AS n_ev,
-    count(*) FILTER (WHERE event='build completed') AS builds,
-    count(*) FILTER (WHERE event='deployment completed') AS deploys
-  FROM ev GROUP BY 1
-)
-SELECT
-  (sum(builds) FILTER (WHERE u.segment='oss_user' AND n_ev > 25))::DOUBLE / sum(n_ev) FILTER (WHERE u.segment='oss_user' AND n_ev > 25) AS oss_build_share,
-  (sum(builds) FILTER (WHERE u.segment != 'oss_user' AND n_ev > 25))::DOUBLE / sum(n_ev) FILTER (WHERE u.segment != 'oss_user' AND n_ev > 25) AS ctl_build_share,
-  (sum(deploys) FILTER (WHERE u.segment='oss_user' AND n_ev > 25))::DOUBLE / sum(n_ev) FILTER (WHERE u.segment='oss_user' AND n_ev > 25) AS oss_deploy_share,
-  (sum(deploys) FILTER (WHERE u.segment != 'oss_user' AND n_ev > 25))::DOUBLE / sum(n_ev) FILTER (WHERE u.segment != 'oss_user' AND n_ev > 25) AS ctl_deploy_share,
-  count(*) FILTER (WHERE u.segment='oss_user' AND n_ev > 25) AS n_oss_hi
-FROM pu p JOIN us u ON p.uid = u.uid;`,
-				},
-				assert: (rows) => {
-					const r = rows?.[0] || {};
-					const ratio = Number(r.oss_build_share) / Number(r.ctl_build_share);
-					const detail = `active-oss build share ${Number(r.oss_build_share).toFixed(4)} vs active-non-oss ${Number(r.ctl_build_share).toFixed(4)} → ratio ${ratio.toFixed(3)} (mechanism ~1.28)`;
-					if (Number(r.n_oss_hi) < 480) return { verdict: "WEAK", detail: `${detail} — scale guard: active oss users < 480 (expect ~985 at 10K)` };
-					return bandVerdict(ratio, [1.2, 1.42], [1.1, 1.55], detail, (x) => x <= 1.02);
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `${EV_CTE}, ${US_CTE}, pu AS (
-  SELECT ev.uid, count(*) AS n_ev,
-    count(*) FILTER (WHERE event='deployment completed') AS deploys
-  FROM ev GROUP BY 1
-)
-SELECT
-  (sum(deploys) FILTER (WHERE u.segment='oss_user' AND n_ev > 25))::DOUBLE / sum(n_ev) FILTER (WHERE u.segment='oss_user' AND n_ev > 25) AS oss_deploy_share,
-  (sum(deploys) FILTER (WHERE u.segment != 'oss_user' AND n_ev > 25))::DOUBLE / sum(n_ev) FILTER (WHERE u.segment != 'oss_user' AND n_ev > 25) AS ctl_deploy_share
-FROM pu p JOIN us u ON p.uid = u.uid;`,
-				},
-				assert: (rows) => {
-					const r = rows?.[0] || {};
-					const ratio = Number(r.oss_deploy_share) / Number(r.ctl_deploy_share);
-					const detail = `active-oss deploy share ratio ${ratio.toFixed(3)} (H5 clones + H9 coupling: oss sweet-spot boost vs non-oss over-threshold drop)`;
-					return bandVerdict(ratio, [1.4, 1.95], [1.2, 2.2], detail, (x) => x <= 1.0);
-				},
-			},
-		],
-	},
-	{
-		id: "devtools-h6-post-outage-recovery",
-		hook: "H6",
-		archetype: "temporal-inflection",
-		narrative:
-			"Every deploy in days 44-47 gets 3 clones (+1-8h offsets, status success/rolled_back). " +
-			"Read is ratio-of-ratios vs builds (win/base deploys over win/base builds) to cancel " +
-			"the growth ramp and soup DOW. Mechanism: 4x minus clone spill — offsets average +4.5h, " +
-			"so ~4.7% of clones exit the 96h window (4x → 3.86) and land in the baseline zone " +
-			"(day 49), deflating the ratio to ~3.71. Measured 3.705 at 2K; re-measured with a " +
-			"spill-free baseline (excluding days 48-49) at 3.703 — the two effects nearly cancel.",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `${EV_CTE}, agg AS (
-  SELECT CASE WHEN day_idx BETWEEN 44 AND 47 THEN 'win'
-    WHEN day_idx BETWEEN 35 AND 41 OR day_idx BETWEEN 49 AND 55 THEN 'base' END AS zone,
-    count(*) FILTER (WHERE event='deployment completed') AS deploys,
-    count(*) FILTER (WHERE event='build completed') AS builds
-  FROM ev WHERE event IN ('deployment completed','build completed') AND day_idx BETWEEN 35 AND 55
-  GROUP BY 1
-)
-SELECT
-  ((max(CASE WHEN zone='win' THEN deploys END)::DOUBLE / max(CASE WHEN zone='base' THEN deploys END))
-   / (max(CASE WHEN zone='win' THEN builds END)::DOUBLE / max(CASE WHEN zone='base' THEN builds END))) AS ror,
-  max(CASE WHEN zone='win' THEN deploys END) AS deploys_win
-FROM agg;`,
-				},
-				assert: (rows) => {
-					const r = rows?.[0] || {};
-					const detail = `recovery-window deploy ratio-of-ratios vs builds ${Number(r.ror).toFixed(3)} (deploys_win=${r.deploys_win}; mechanism 4x − spill ≈ 3.7)`;
-					if (Number(r.deploys_win) < 12000) return { verdict: "WEAK", detail: `${detail} — scale guard: window deploys < 12000 (expect ~25K at 10K)` };
-					return bandVerdict(r.ror, [3.45, 3.95], [3.0, 4.4], detail, (x) => x <= 1.5);
-				},
-			},
-		],
-	},
-	{
-		id: "devtools-h7-devops-profile-enrichment",
-		hook: "H7",
-		archetype: "cohort-prop-scale",
-		narrative:
-			"User hook rewrites profile props by segment: devops → team_size U(10,50) (mean 30), " +
-			"repos_connected U(5,20) (mean 12.5), experience senior; platform_eng → U(5,25)/U(3,15); " +
-			"junior → U(1,8)/U(0,3). full_stack and oss_user keep DEFAULTS: repos [0] exactly, and " +
-			"team_size from weighNumRange(1,50,0.4,5) whose mean is ~24 — so the team-size contrast " +
-			"is devops-vs-junior, and repos_connected (default 0) is the crisp cross-segment signal.",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `SELECT segment, count(*) AS users,
-  avg(TRY_CAST(team_size AS DOUBLE)) AS avg_team,
-  avg(TRY_CAST(repos_connected AS DOUBLE)) AS avg_repos,
-  mode(experience_level) AS mode_exp
-FROM read_json_auto('{{PREFIX}}-USERS*.json', sample_size=-1, union_by_name=true)
-GROUP BY segment;`,
-				},
-				assert: (rows) => {
-					const seg = Object.fromEntries((rows || []).map((r) => [r.segment, r]));
-					const d = seg.devops || {};
-					const detail = `devops team_size ${Number(d.avg_team).toFixed(1)} (mean-30 target), repos ${Number(d.avg_repos).toFixed(1)} (mean-12.5 target), mode exp ${d.mode_exp} (n=${d.users})`;
-					if (Number(d.users || 0) < 480) return { verdict: "WEAK", detail: `${detail} — scale guard: devops users < 480 (expect ~1000 at 10K)` };
-					if (d.mode_exp !== "senior") return { verdict: "INVERSE", detail };
-					const team = bandVerdict(d.avg_team, [28.5, 31.5], [27, 33], detail, (x) => x <= 8);
-					const repos = bandVerdict(d.avg_repos, [11.8, 13.2], [11, 14], detail, (x) => x <= 1);
-					const worst = ["INVERSE", "NONE", "WEAK", "STRONG", "NAILED"].find((v) => v === team.verdict || v === repos.verdict);
-					return { verdict: worst, detail };
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `SELECT segment, count(*) AS users,
-  avg(TRY_CAST(team_size AS DOUBLE)) AS avg_team,
-  avg(TRY_CAST(repos_connected AS DOUBLE)) AS avg_repos
-FROM read_json_auto('{{PREFIX}}-USERS*.json', sample_size=-1, union_by_name=true)
-GROUP BY segment;`,
-				},
-				assert: (rows) => {
-					const seg = Object.fromEntries((rows || []).map((r) => [r.segment, r]));
-					const jr = Number(seg.junior?.avg_team), pe = Number(seg.platform_eng?.avg_repos), fs = Number(seg.full_stack?.avg_repos);
-					const detail = `junior team_size ${jr.toFixed(2)} (mean-4.5 target), platform_eng repos ${pe.toFixed(2)} (mean-9 target), full_stack repos ${fs.toFixed(3)} (default [0])`;
-					if (fs > 0.01) return { verdict: "INVERSE", detail: `${detail} — full_stack repos nonzero: default pool violated` };
-					const jrV = bandVerdict(jr, [4.2, 4.9], [3.8, 5.4], detail, (x) => x >= 20);
-					const peV = bandVerdict(pe, [8.4, 9.8], [8.0, 10.5], detail);
-					const worst = ["INVERSE", "NONE", "WEAK", "STRONG", "NAILED"].find((v) => v === jrV.verdict || v === peV.verdict);
-					return { verdict: worst, detail };
-				},
-			},
-		],
-	},
-	{
-		id: "devtools-h8-enterprise-funnel-lift",
-		hook: "H8",
 		archetype: "funnel-conversion-by-segment",
-		narrative:
-			"Free/team users (everyone except enterprise/business) drop 35% of monitoring-dashboard-" +
-			"viewed events (keep rate 0.65). Read is monitoring views PER DEPLOYMENT by tier group — " +
-			"the per-deploy normalization cancels H6/H9 deploy inflation (both hit all tiers evenly). " +
-			"Mechanism 0.65; measured 0.626 at 2K (small drift from tier/activity covariance).",
+		narrative: `New developers whose primary stack is Java or .NET finish onboarding (account created → repository imported → pipeline configured → preview deployed) at ${SLOW_STACK_MULT}x the rate of Node, Python, Go, Ruby, and Rust developers (${Math.round(ONBOARD_CONV * SLOW_STACK_MULT)}% vs ${ONBOARD_CONV}% for non-paid-social signups; the paid social cells carry H7's multiplier on top, so the pooled ratio is the same). Declared first funnels with primary_stack conditions; every step but the last is onboarding-only, and the first preview after the pipeline step is the onboarding preview.`,
+		mixpanelReport: { type: "Funnels", steps: ONBOARDING_STEPS, breakdown: "user property primary_stack", window: "7 days" },
 		assertions: [
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `${EV_CTE}, pu AS (
-  SELECT uid, any_value(subscription_tier) AS tier,
-    count(*) FILTER (WHERE event='monitoring dashboard viewed') AS mv,
-    count(*) FILTER (WHERE event='deployment completed') AS dep
-  FROM ev WHERE event IN ('monitoring dashboard viewed','deployment completed')
-  GROUP BY 1
-)
-SELECT
-  (sum(mv) FILTER (WHERE tier IN ('free','team')))::DOUBLE / nullif(sum(dep) FILTER (WHERE tier IN ('free','team')), 0) AS ft_mv_per_dep,
-  (sum(mv) FILTER (WHERE tier IN ('enterprise','business')))::DOUBLE / nullif(sum(dep) FILTER (WHERE tier IN ('enterprise','business')), 0) AS paid_mv_per_dep,
-  count(*) FILTER (WHERE tier IN ('free','team')) AS n_ft,
-  count(*) FILTER (WHERE tier IN ('enterprise','business')) AS n_paid
-FROM pu WHERE tier IS NOT NULL;`,
-				},
+				breakdown: { type: "timeToConvert", steps: ONBOARDING_STEPS, breakdownByUserProperty: "primary_stack", conversionWindowMs: 7 * DAY_MS },
+				// custom assert: conversion lives in each segment row's step_counts ARRAY and
+				// both sides pool several segments; the expect grammar cannot index arrays
+				// or sum value-like rows
 				assert: (rows) => {
-					const r = rows?.[0] || {};
-					const keep = Number(r.ft_mv_per_dep) / Number(r.paid_mv_per_dep);
-					const detail = `free/team mv-per-deploy ${Number(r.ft_mv_per_dep).toFixed(4)} vs paid ${Number(r.paid_mv_per_dep).toFixed(4)} → keep ratio ${keep.toFixed(3)} (knob 0.65)`;
-					if (Number(r.n_ft) < 3400 || Number(r.n_paid) < 1400) return { verdict: "WEAK", detail: `${detail} — scale guard: free/team < 3400 or paid < 1400 users (expect ~7000/~3000 at 10K)` };
-					return bandVerdict(keep, [0.58, 0.7], [0.52, 0.78], detail, (x) => x >= 0.92);
+					const slow = convOf(rows, SLOW_STACKS), rest = convOf(rows, Object.keys(STACK_WEIGHTS).filter((k) => !SLOW_STACKS.includes(k)));
+					if (!slow || !rest) return { verdict: "NONE", detail: "missing segment rows" };
+					if (slow.entered < 600 || rest.entered < 1500) return { verdict: "WEAK", detail: `small segments ${slow.entered}/${rest.entered}` };
+					const ratio = slow.rate / rest.rate;
+					const [lo, hi] = band(SLOW_STACK_MULT);
+					const detail = `onboarding conversion java+dotnet ${slow.converted}/${slow.entered}=${slow.rate.toFixed(4)} vs others ${rest.converted}/${rest.entered}=${rest.rate.toFixed(4)}; ratio ${ratio.toFixed(4)} (knob ${SLOW_STACK_MULT}, band [${lo}, ${hi}])`;
+					if (ratio >= lo && ratio <= hi) return { verdict: "NAILED", detail };
+					return { verdict: ratio < 1 ? "WEAK" : "INVERSE", detail };
 				},
 			},
 		],
 	},
 	{
-		id: "devtools-h9-build-count-magic-number",
-		hook: "H9",
-		archetype: "frequency-sweet-spot",
-		narrative:
-			"Users with 15-30 builds get +50% deploy clones; 31+ builds drop 40% of deploys. Read " +
-			"is deploys-per-build within full_stack only (holds persona constant) excluding " +
-			"recovery-window deploys (decouples H6). The clean pair is over/sweet = 0.6/1.5 = 0.40 " +
-			"exactly — organic deploys-per-build cancels between two high-activity buckets; " +
-			"measured 0.403 at 2K. sweet/base carries a base-bucket organic offset (low-build " +
-			"users run deploy-richer organic mixes, ~0.70 vs ~0.63): mechanism 1.5x lands ~1.35 " +
-			"observed; measured 1.347 at 2K.",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `${EV_CTE}, ${US_CTE}, pu AS (
-  SELECT ev.uid,
-    count(*) FILTER (WHERE event='build completed') AS builds,
-    count(*) FILTER (WHERE event='deployment completed' AND day_idx NOT BETWEEN 43 AND 49) AS deploys
-  FROM ev GROUP BY 1
-), b AS (
-  SELECT CASE WHEN builds BETWEEN 15 AND 30 THEN 'sweet' WHEN builds >= 31 THEN 'over' ELSE 'base' END AS bucket,
-    count(*) AS users, sum(deploys)::DOUBLE / sum(builds) AS dpb
-  FROM pu p JOIN us u ON p.uid = u.uid
-  WHERE u.segment = 'full_stack' AND builds >= 1
-  GROUP BY 1
-)
-SELECT
-  max(CASE WHEN bucket='over' THEN dpb END) / max(CASE WHEN bucket='sweet' THEN dpb END) AS over_sweet,
-  max(CASE WHEN bucket='sweet' THEN users END) AS n_sweet,
-  max(CASE WHEN bucket='over' THEN users END) AS n_over
-FROM b;`,
-				},
-				assert: (rows) => {
-					const r = rows?.[0] || {};
-					const detail = `deploys-per-build over/sweet ${Number(r.over_sweet).toFixed(3)} (mechanism 0.6/1.5 = 0.40 exact; n_sweet=${r.n_sweet}, n_over=${r.n_over})`;
-					if (Number(r.n_sweet) < 350 || Number(r.n_over) < 1200) return { verdict: "WEAK", detail: `${detail} — scale guard: sweet < 350 or over < 1200 full_stack users (expect ~710/~2500 at 10K)` };
-					return bandVerdict(r.over_sweet, [0.36, 0.44], [0.3, 0.5], detail, (x) => x >= 0.85);
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `${EV_CTE}, ${US_CTE}, pu AS (
-  SELECT ev.uid,
-    count(*) FILTER (WHERE event='build completed') AS builds,
-    count(*) FILTER (WHERE event='deployment completed' AND day_idx NOT BETWEEN 43 AND 49) AS deploys
-  FROM ev GROUP BY 1
-), b AS (
-  SELECT CASE WHEN builds BETWEEN 15 AND 30 THEN 'sweet' WHEN builds >= 31 THEN 'over' ELSE 'base' END AS bucket,
-    count(*) AS users, sum(deploys)::DOUBLE / sum(builds) AS dpb
-  FROM pu p JOIN us u ON p.uid = u.uid
-  WHERE u.segment = 'full_stack' AND builds >= 1
-  GROUP BY 1
-)
-SELECT
-  max(CASE WHEN bucket='sweet' THEN dpb END) / max(CASE WHEN bucket='base' THEN dpb END) AS sweet_base,
-  max(CASE WHEN bucket='base' THEN users END) AS n_base
-FROM b;`,
-				},
-				assert: (rows) => {
-					const r = rows?.[0] || {};
-					const detail = `deploys-per-build sweet/base ${Number(r.sweet_base).toFixed(3)} (mechanism 1.5x minus base-bucket organic offset ≈ 1.35; n_base=${r.n_base})`;
-					if (Number(r.n_base) < 130) return { verdict: "WEAK", detail: `${detail} — scale guard: base bucket < 130 full_stack users (expect ~275 at 10K)` };
-					return bandVerdict(r.sweet_base, [1.2, 1.55], [1.05, 1.75], detail, (x) => x <= 1.0);
-				},
-			},
-		],
-	},
-	{
-		id: "devtools-h10-build-deploy-ttc-by-tier",
-		hook: "H10",
+		id: "H4-large-pr-review-wait",
+		hook: "H4",
 		archetype: "funnel-ttc-by-segment",
-		narrative:
-			"funnel-post scales Build-Deploy Pipeline step gaps by tier: enterprise/business x0.67, " +
-			"free x1.33, team 1.0 control. Engineered ent/free ratio = 0.504, but the observed " +
-			"2-step (build→deploy) median-TTC ratio lands ~0.6-0.7: greedy min-gap picks plus H9/H6 " +
-			"deploy-clone pollution compress gaps for every tier, and free's stretched conversions " +
-			"censor past the window — both attenuate toward 1. Window 96h = 2x the funnel's 48h " +
-			"timeToConvert, covering the 1.33x-stretched support. Measured at 2K (96h window): " +
-			"ent/free 0.683, biz/free 0.604, team/free 0.798. Second assertion pins the identity " +
-			"model: auth-on-first means every event carries user_id; device_id and tier stamps " +
-			"miss only the 2 bot users (~0.13% of events).",
+		narrative: `The wait from "pull request opened" to the first "review submitted" grows with PR size: flat up to ${SMALL_PR_LINES} lines changed, rising log-linearly to ${LARGE_PR_WAIT_MULT}x at ${LARGE_PR_LINES}+ lines (base median ${REVIEW_WAIT_MEDIAN_H} h, log-normal). Every PR's steps share a pr_id, so a funnel holding pr_id constant measures each PR on its own; the median for ${LARGE_PR_LINES}+ line PRs over the median for PRs of ${SMALL_PR_LINES} lines or fewer reads the knob. Forge Assist (H1) acts after the review and does not change the wait.`,
+		mixpanelReport: { type: "Funnels", steps: ["pull request opened", "review submitted"], measure: "median time to convert", holdPropertyConstant: "pr_id", breakdown: "lines_changed (custom buckets: ≤100, 101-999, ≥1000)" },
 		assertions: [
 			{
-				breakdown: {
-					type: "timeToConvert",
-					steps: ["build completed", "deployment completed"],
-					breakdownByUserProperty: "subscription_tier",
-					conversionWindowMs: 96 * 3600 * 1000,
-				},
-				assert: (rows) => {
-					const cells = Object.fromEntries((rows || []).map((r) => [r.segment_value, r]));
-					const med = (t) => (cells[t] ? cells[t].median_ttc_ms : null);
-					const free = med("free"), ent = med("enterprise"), biz = med("business"), team = med("team");
-					if (!free || !ent || !biz || !team) return { verdict: "NONE", detail: "missing tier cell in timeToConvert breakdown" };
-					const entR = ent / free, bizR = biz / free, teamR = team / free;
-					const detail = `median TTC ratios vs free — enterprise ${entR.toFixed(3)}, business ${bizR.toFixed(3)}, team ${teamR.toFixed(3)} (engineered 0.504/0.504/0.752, attenuation documented; free n=${cells.free.user_count})`;
-					if (Number(cells.free.user_count) < 1200) return { verdict: "WEAK", detail: `${detail} — scale guard: free converters < 1200 (expect ~2780 at 10K)` };
-					if (Math.min(entR, bizR) >= 0.95) return { verdict: "INVERSE", detail };
-					if (entR >= 0.5 && entR <= 0.8 && bizR >= 0.5 && bizR <= 0.8 && teamR >= 0.68 && teamR <= 0.9) return { verdict: "NAILED", detail };
-					if (entR >= 0.42 && entR <= 0.9 && bizR >= 0.42 && bizR <= 0.9 && teamR >= 0.6 && teamR <= 0.98) return { verdict: "STRONG", detail };
-					return { verdict: "WEAK", detail };
-				},
+				breakdown: { type: "duckdb", sql: H4_SQL },
+				select: { l: { where: { grp: "large" } }, s: { where: { grp: "small" } } },
+				expect: { metric: "l.med_wait_h / s.med_wait_h", op: "between", target: band(LARGE_PR_WAIT_MULT) },
+				minCohort: 800,
+			},
+		],
+	},
+	{
+		id: "H5-first-build-red-churn",
+		hook: "H5",
+		archetype: "retention-divergence",
+		narrative: `A new developer's first CI build fails ${FIRST_BUILD_FAIL * 100}% of the time (mostly configuration mistakes) vs ${BASE_BUILD_FAIL * 100}% for later builds. ${RED_DARK_SHARE * 100}% of developers whose first build fails stop using Forgebench ${RED_DARK_MIN_D}-${RED_DARK_MAX_D} days after it; the rest behave like developers whose first build passed. Day-${RETENTION_DAY} retention (any event in days ${RETENTION_DAY}-${RETENTION_DAY + 6} after signup; signups at least ${RETENTION_DAY + 7} days before the window end) of developers whose first build in their first ${FIRST_BUILD_DAYS} days passed vs failed reads 1/(1 − ${RED_DARK_SHARE}). First-build status is drawn independently of engagement, so the ratio is not confounded. Mixpanel: Funnels account created → build finished (${FIRST_BUILD_DAYS}-day window), breakdown build_status on step 2 (the first build), save each status as a cohort, then Retention account created → any event, custom bracket day ${RETENTION_DAY}-${RETENTION_DAY + 6}, breakdown by those cohorts.`,
+		mixpanelReport: { type: "Funnels → cohorts → Retention", cohortFunnel: `account created → build finished, ${FIRST_BUILD_DAYS}-day window, breakdown build_status of step 2; save success / failed as cohorts`, birth: "account created", return: "any event", brackets: `custom: day ${RETENTION_DAY}-${RETENTION_DAY + 6}` },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H5_SQL },
+				select: { g: { where: { grp: "success" } }, r: { where: { grp: "failed" } } },
+				expect: { metric: "g.retention / r.retention", op: "between", target: band(1 / (1 - RED_DARK_SHARE)) },
+				minCohort: 400,
+			},
+		],
+	},
+	{
+		id: "H6-npm-registry-incident",
+		hook: "H6",
+		archetype: "bespoke",
+		narrative: `Forgebench's npm registry mirror degrades from ${D(REGISTRY_INCIDENT_START)} to ${D(REGISTRY_INCIDENT_END)} (exclusive): ${INCIDENT_FAIL * 100}% of npm-ecosystem builds that would have passed fail at dependency_install. The incident days and ecosystem come from the warehouse table build_fleet_daily (registry_mirror_status = 'degraded'); events carry no incident flag. The event-side read is a ratio of ratios (npm success rate / other ecosystems, incident days vs the 7 days either side), which reads the 1 − ${INCIDENT_FAIL} keep rate while cancelling weekday volume and the experiment mix.`,
+		mixpanelReport: { type: "Insights", event: "build finished", measure: "share with build_status = success", breakdown: "ecosystem", chart: "daily line", join: "warehouse build_fleet_daily.registry_mirror_status" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H6_SQL },
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.did", op: "between", target: band(1 - INCIDENT_FAIL) },
+				minCohort: 1000,
 			},
 			{
 				breakdown: {
 					type: "duckdb",
-					sql: `${EV_CTE}
-SELECT
-  avg((uid IS NOT NULL)::INT) AS uid_share,
-  avg((device_id IS NOT NULL)::INT) AS dev_share,
-  avg((subscription_tier IS NOT NULL)::INT) AS tier_share
-FROM ev;`,
+					sql: `SELECT 'all' AS grp,
+ count(*) FILTER (WHERE registry_mirror_status = 'degraded') AS degraded_rows,
+ avg(dependency_fetch_error_rate) FILTER (WHERE registry_mirror_status = 'degraded') AS degraded_err,
+ count(*) FILTER (WHERE registry_mirror_status = 'degraded' AND (date::DATE < DATE '${D(REGISTRY_INCIDENT_START)}' OR date::DATE >= DATE '${D(REGISTRY_INCIDENT_END)}' OR ecosystem <> '${INCIDENT_ECOSYSTEM}')) AS misplaced
+FROM ${WH("build_fleet_daily")}`,
 				},
+				select: { a: { where: { grp: "all" } } },
+				// warehouse dependency fetch error rate during the incident = the failure knob
+				expect: { metric: "a.degraded_err", op: "between", target: band(INCIDENT_FAIL) },
+			},
+		],
+	},
+	{
+		id: "H7-paid-channel-economics",
+		hook: "H7",
+		archetype: "attribution-bias",
+		narrative: `Paid social looks cheapest per signup: over the window marketing_spend_daily bills $${CPL_USD.paid_social} per Mixpanel signup on paid social vs $${CPL_USD.paid_search} on paid search and $${CPL_USD.newsletter} on newsletter sponsorships (campaigns bid to a target cost per signup, so daily spend follows the trailing 7-day signup volume, paced on the weekday schedule with seeded noise, never zero). But paid social signups finish onboarding at ${SOCIAL_ONBOARD_MULT}x the rate of every other channel (declared onboarding funnel copies with an acquisition_channel condition), so per onboarded developer paid search is cheaper. Spend per signup needs the warehouse join; the onboarding read is the Mixpanel funnel broken down by acquisition_channel.`,
+		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "marketing_spend_daily.spend_usd", funnel: "onboarding steps, 7-day window, breakdown user property acquisition_channel" },
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+s AS (SELECT acquisition_channel AS ch, count(*) AS signups, count(DISTINCT uid) AS users FROM ev WHERE event = 'account created' GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM ${WH("marketing_spend_daily")} GROUP BY 1)
+SELECT s.ch AS grp, s.users AS user_count, sp.spend / s.signups AS spend_per_signup FROM s JOIN sp ON sp.ch = s.ch`,
+				},
+				select: { so: { where: { grp: "paid_social" } }, se: { where: { grp: "paid_search" } } },
+				expect: { metric: "so.spend_per_signup / se.spend_per_signup", op: "between", target: band(CPL_USD.paid_social / CPL_USD.paid_search) },
+				minCohort: 500,
+			},
+			{
+				breakdown: { type: "timeToConvert", steps: ONBOARDING_STEPS, breakdownByUserProperty: "acquisition_channel", conversionWindowMs: 7 * DAY_MS },
+				// custom assert: conversion lives in each segment row's step_counts ARRAY and
+				// the control pools five channels; the expect grammar cannot express it
 				assert: (rows) => {
-					const r = rows?.[0] || {};
-					const uid = Number(r.uid_share), dev = Number(r.dev_share), tier = Number(r.tier_share);
-					const detail = `identity invariants — user_id share ${uid.toFixed(4)}, device_id share ${dev.toFixed(4)}, tier stamp share ${tier.toFixed(4)} (auth-on-first: 1.0 / ~0.999 / ~0.999; bots lack device+tier)`;
-					if (uid === 1 && dev >= 0.995 && tier >= 0.995) return { verdict: "NAILED", detail };
-					if (uid >= 0.999 && dev >= 0.99 && tier >= 0.99) return { verdict: "STRONG", detail };
-					if (uid < 0.9) return { verdict: "INVERSE", detail };
-					return { verdict: "WEAK", detail };
+					const soc = convOf(rows, ["paid_social"]), rest = convOf(rows, Object.keys(CHANNEL_WEIGHTS).filter((k) => k !== "paid_social"));
+					if (!soc || !rest) return { verdict: "NONE", detail: "missing segment rows" };
+					if (soc.entered < 400 || rest.entered < 1500) return { verdict: "WEAK", detail: `small segments ${soc.entered}/${rest.entered}` };
+					const ratio = soc.rate / rest.rate;
+					const [lo, hi] = band(SOCIAL_ONBOARD_MULT);
+					const detail = `onboarding conversion paid_social ${soc.converted}/${soc.entered}=${soc.rate.toFixed(4)} vs other channels ${rest.converted}/${rest.entered}=${rest.rate.toFixed(4)}; ratio ${ratio.toFixed(4)} (knob ${SOCIAL_ONBOARD_MULT}, band [${lo}, ${hi}])`;
+					if (ratio >= lo && ratio <= hi) return { verdict: "NAILED", detail };
+					return { verdict: ratio < 1 ? "WEAK" : "INVERSE", detail };
 				},
+			},
+		],
+	},
+	{
+		id: "H8-team-overage-billing",
+		hook: "H8",
+		archetype: "temporal-inflection",
+		narrative: `From ${D(METERED_START)} Team seats pay $${OVERAGE_PRICE_PER_MIN} per build minute above the included allowance (announced two weeks earlier). Each Team org reacts on a day in the ${SCHEDULED_CUT_RAMP_DAYS} days after the switch by turning off ${(SCHEDULED_CUT_MEAN - SCHEDULED_CUT_SPREAD) * 100}-${(SCHEDULED_CUT_MEAN + SCHEDULED_CUT_SPREAD) * 100}% of its scheduled (cron) builds (mean ${SCHEDULED_CUT_MEAN * 100}%); push and pull-request builds do not change. Scheduled builds per push build for Team seats (plan_tier at event time), ${METERED_POST_FROM.slice(0, 10)} to Sep 30 vs August, reads 1 − ${SCHEDULED_CUT_MEAN}; Free, Pro, and Enterprise are unmetered and stay at 1.0. The overage itself exists only in the warehouse table usage_billing_daily (zero before the switch and on every other plan).`,
+		mixpanelReport: { type: "Insights", event: "build started", measure: "total, formula schedule / push", breakdown: "trigger, plan_tier", chart: "weekly line", join: "usage_billing_daily.overage_revenue_usd" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H8_SQL },
+				select: { t: { where: { grp: "team" } } },
+				expect: { metric: "t.did", op: "between", target: band(1 - SCHEDULED_CUT_MEAN) },
+				minCohort: 800,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H8_SQL },
+				select: { o: { where: { grp: "other_plans" } } },
+				// control: unmetered plans keep their scheduled builds
+				expect: { metric: "o.did", op: "between", target: band(1) },
+				minCohort: 2000,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `SELECT 'all' AS grp,
+ count(*) FILTER (WHERE overage_revenue_usd > 0 AND (plan_tier <> '${METERED_PLAN}' OR date::DATE < DATE '${D(METERED_START)}')) AS misplaced_rows
+FROM ${WH("usage_billing_daily")}`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				// exact: overage is billed only to Team, only from the switch
+				expect: { metric: "a.misplaced_rows", op: "between", target: [0, 0] },
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `SELECT 'all' AS grp,
+ count(*) FILTER (WHERE plan_tier = '${METERED_PLAN}' AND date::DATE >= DATE '${D(METERED_START)}' AND overage_revenue_usd <= 0) AS missing_rows
+FROM ${WH("usage_billing_daily")}`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				// exact: every Team day from the switch bills some overage
+				expect: { metric: "a.missing_rows", op: "between", target: [0, 0] },
+			},
+		],
+	},
+	{
+		id: "H9-test-coverage-rollbacks",
+		hook: "H9",
+		archetype: "cohort-prop-scale",
+		narrative: `Production deploys from repositories with low test coverage roll back more often: ${ROLLBACK_LOW_COV * 100}% at ${COVERAGE_LOW}% coverage or less, falling linearly to ${ROLLBACK_HIGH_COV * 100}% at ${COVERAGE_HIGH}% or more (each repository's deploys follow its rate through a low-discrepancy sequence, so per-repository rates sit close to the curve). test_coverage_pct is a property of the repository, carried on every PR step. Rollback rate for deploys at ≤${COVERAGE_LOW}% coverage over ≥${COVERAGE_HIGH}% reads ${ROLLBACK_LOW_COV}/${ROLLBACK_HIGH_COV}. Forge Assist and PR size do not change rollbacks.`,
+		mixpanelReport: { type: "Insights", event: "production deployed", measure: "share with deploy_outcome = rolled_back", breakdown: "test_coverage_pct (custom buckets: ≤30, 31-74, ≥75)" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H9_SQL },
+				select: { l: { where: { grp: "low" } }, h: { where: { grp: "high" } } },
+				expect: { metric: "l.rollback_rate / h.rollback_rate", op: "between", target: band(ROLLBACK_LOW_COV / ROLLBACK_HIGH_COV) },
+				minCohort: 800,
+			},
+		],
+	},
+	{
+		id: "H10-preview-habit-converts",
+		hook: "H10",
+		archetype: "cohort-count-scale",
+		narrative: `New developers who ship ${PQL_MIN_PREVIEWS}+ preview deploys in their first ${PQL_DAYS} days (the onboarding preview counts) buy a paid seat far more often: every would-be purchase of a habit user happens, while only ${NON_PQL_KEEP * 100}% of everyone else's do. Read: share of signups (through ${PQL_COHORT_END.slice(0, 10)}, so each has a full ${BUY_WINDOW_DAYS}-day purchase window) who start a subscription within ${BUY_WINDOW_DAYS} days, habit (${PQL_MIN_PREVIEWS}+ previews) vs light (1-2 previews; users with no preview never finished onboarding and are excluded). The keep ratio ${PQL_KEEP}/${NON_PQL_KEEP} is a floor: habit users are also heavier users who reach the upgrade page more often, so the realized ratio sits above it (STRONG by design). Mixpanel: Funnels account created → preview deployed → preview deployed → preview deployed, ${PQL_DAYS}-day window; completed = habit, dropped after step 2 or 3 = light; save as cohorts; then Funnels account created → subscription started, ${BUY_WINDOW_DAYS}-day window, breakdown by those cohorts.`,
+		mixpanelReport: { type: "Funnels → cohorts → Funnels", cohortFunnel: `account created → preview deployed ×3, ${PQL_DAYS}-day window`, funnel: `account created → subscription started, ${BUY_WINDOW_DAYS}-day window`, breakdown: "habit / light cohorts" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H10_SQL },
+				select: { h: { where: { grp: "habit" } }, l: { where: { grp: "light" } } },
+				// engagement adds to the keep ratio: knob-derived floor, STRONG above +10%
+				expect: { metric: "h.paid_rate / l.paid_rate", op: ">=", target: PQL_KEEP / NON_PQL_KEEP, floor: 0.9 * PQL_KEEP / NON_PQL_KEEP },
+				minCohort: 300,
 			},
 		],
 	},
 ];
+
+export default config;

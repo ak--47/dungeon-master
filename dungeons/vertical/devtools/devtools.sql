@@ -1,161 +1,333 @@
--- ============================================================
--- devtools.sql — human-eyeball inspection queries (v1.6)
--- ============================================================
--- Mirrors the story reads in devtools.js `stories`. Run after:
---   node scripts/verify-runner.mjs dungeons/vertical/devtools/devtools.js verify-devtools
+-- Forgebench (devtools vertical) — story-keyed and eval-keyed DuckDB queries.
 --
--- Derivation notes:
--- - H1 uses MEDIAN: the extreme-value anomaly (10x build_duration_sec
---   at 0.3%) fattens means; medians isolate the clean 2x mechanism.
---   Bot events carry null build_status and fall out of status groups.
--- - H2/H9 exclude days 43-49: H6 recovery clones carry status
---   success/rolled_back only (never failed) and inflate deploy counts,
---   polluting both the failure-share and deploys-per-build reads.
--- - H3's cohort is the user_id hash (first GUID char in {2,3,4,d,e,f}),
---   NOT ai_assist — the copilot_integration feature (launchDay 30)
---   also flips ai_assist for feature adopters.
--- - H5/H9 normalize per-event / per-build: shares cancel persona event
---   multipliers, and the over/sweet pair cancels organic deploys-per-
---   build entirely (0.6/1.5 = 0.40 exact).
--- - H10 is NOT visible here: funnel-post scales gaps within funnel
---   instances; cross-event MIN→MIN SQL flattens it. See the emulator
---   timeToConvert assertion in devtools.js stories.
+-- Generate first (repo root):
+--   node scripts/verify-runner.mjs dungeons/vertical/devtools/devtools.js verify-devtools
+-- Run:
+--   duckdb -c ".read dungeons/vertical/devtools/devtools.sql"
+-- Against a gzipped export:
+--   duckdb -c "SET VARIABLE data_prefix='<dir>/devtools'" -c ".read devtools.sql"
+--
+-- All times are UTC. Window: 2026-06-04 00:00 to 2026-10-01 23:59:59.
 
--- Hook 1: BUILD FAILURE CASCADE — failed builds 2x duration (median)
-SELECT build_status, COUNT(*) AS n,
-  ROUND(MEDIAN(TRY_CAST(build_duration_sec AS DOUBLE)), 0) AS med_dur,
-  ROUND(AVG(TRY_CAST(build_duration_sec AS DOUBLE)), 0) AS avg_dur
-FROM read_json_auto('data/verify-devtools-EVENTS*.json', sample_size=-1, union_by_name=true)
-WHERE event = 'build completed'
-GROUP BY build_status ORDER BY med_dur DESC;
+SET VARIABLE data_prefix = COALESCE(getvariable('data_prefix'), 'data/verify-devtools');
 
--- Hook 2: NIGHT DEPLOY RISK — ~52% night vs ~21% day failure share
--- (recovery window days 43-49 excluded; H6 clones dilute it)
-WITH ev AS (
-  SELECT deploy_status, hour(time::TIMESTAMP) AS hr,
-    date_diff('day', TIMESTAMP '2026-01-01 00:00:00', time::TIMESTAMP) AS day_idx
-  FROM read_json_auto('data/verify-devtools-EVENTS*.json', sample_size=-1, union_by_name=true)
-  WHERE event = 'deployment completed'
-)
-SELECT CASE WHEN hr >= 22 OR hr < 6 THEN 'night' ELSE 'day' END AS bucket,
-  COUNT(*) AS deploys,
-  ROUND(AVG((deploy_status = 'failed')::INT), 4) AS failure_share
-FROM ev WHERE day_idx NOT BETWEEN 43 AND 49
-GROUP BY (CASE WHEN hr >= 22 OR hr < 6 THEN 'night' ELSE 'day' END);
+-- ─────────────────────────────────────────────────────────────────────────
+-- PRELUDE: raw files, identity resolution, warehouse tables
+-- ─────────────────────────────────────────────────────────────────────────
+-- Identity: new developers sign up with "account created" (the auth event,
+-- which carries user_id and device_id). A device resolves to the user seen
+-- with it on any event that carries both ids, the way Mixpanel stitches.
+-- Every event already carries user_id, so uid = user_id in practice.
 
--- Hook 3: COPILOT PR VELOCITY — hash cohort ~1.5x PRs/user
-WITH pu AS (
-  SELECT user_id::VARCHAR AS uid,
-    (ascii(substr(user_id::VARCHAR, 1, 1)) % 10 < 3) AS copilot,
-    COUNT(*) FILTER (WHERE event = 'pull request created') AS prs
-  FROM read_json_auto('data/verify-devtools-EVENTS*.json', sample_size=-1, union_by_name=true)
-  GROUP BY 1, 2
-)
-SELECT copilot, COUNT(*) AS users,
-  ROUND(SUM(prs)::DOUBLE / COUNT(*), 2) AS prs_per_user
-FROM pu GROUP BY copilot ORDER BY copilot;
+CREATE OR REPLACE TEMP TABLE raw_events AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-EVENTS*.json*', sample_size=-1, union_by_name=true);
 
--- Hook 4: ON-CALL FATIGUE — >20 alerts → ~2.6x mean response time
-WITH pu AS (
-  SELECT user_id::VARCHAR AS uid,
-    COUNT(*) FILTER (WHERE event = 'alert triggered') AS alerts,
-    AVG(TRY_CAST(response_time_minutes AS DOUBLE)) FILTER (WHERE event IN ('incident created', 'incident resolved')) AS rt,
-    COUNT(*) FILTER (WHERE event IN ('incident created', 'incident resolved')) AS incidents
-  FROM read_json_auto('data/verify-devtools-EVENTS*.json', sample_size=-1, union_by_name=true)
-  GROUP BY 1
-)
-SELECT (alerts > 20) AS fatigued, COUNT(*) AS users,
-  ROUND(AVG(rt), 1) AS mean_response_min,
-  ROUND(AVG(1 + LEAST(alerts / 20.0, 3)) FILTER (WHERE alerts > 20), 2) AS mean_engineered_mult
-FROM pu WHERE incidents > 0 GROUP BY (alerts > 20) ORDER BY 1;
+CREATE OR REPLACE TEMP TABLE users AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-USERS*.json*', sample_size=-1, union_by_name=true);
 
--- Hook 5: OSS POWER USAGE — active oss build share ~1.3x active non-oss
-WITH us AS (
-  SELECT distinct_id::VARCHAR AS uid, segment
-  FROM read_json_auto('data/verify-devtools-USERS*.json', sample_size=-1, union_by_name=true)
-), pu AS (
-  SELECT user_id::VARCHAR AS uid, COUNT(*) AS n_ev,
-    COUNT(*) FILTER (WHERE event = 'build completed') AS builds,
-    COUNT(*) FILTER (WHERE event = 'deployment completed') AS deploys
-  FROM read_json_auto('data/verify-devtools-EVENTS*.json', sample_size=-1, union_by_name=true)
-  GROUP BY 1
-)
-SELECT (u.segment = 'oss_user') AS is_oss, COUNT(*) AS users,
-  ROUND(SUM(builds)::DOUBLE / SUM(n_ev), 4) AS build_share,
-  ROUND(SUM(deploys)::DOUBLE / SUM(n_ev), 4) AS deploy_share
-FROM pu p JOIN us u USING (uid)
-WHERE n_ev > 25
-GROUP BY (u.segment = 'oss_user') ORDER BY is_oss;
+CREATE OR REPLACE TEMP TABLE orgs AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-org_id-GROUPS*.json*', sample_size=-1, union_by_name=true);
 
--- Hook 6: POST-OUTAGE RECOVERY — deploys ~3.7x on days 44-47
--- (ratio-of-ratios vs builds cancels the growth ramp)
-WITH ev AS (
-  SELECT event, date_diff('day', TIMESTAMP '2026-01-01 00:00:00', time::TIMESTAMP) AS day_idx
-  FROM read_json_auto('data/verify-devtools-EVENTS*.json', sample_size=-1, union_by_name=true)
-  WHERE event IN ('deployment completed', 'build completed')
-)
-SELECT CASE WHEN day_idx BETWEEN 44 AND 47 THEN 'recovery' ELSE 'baseline' END AS zone,
-  COUNT(*) FILTER (WHERE event = 'deployment completed') AS deploys,
-  COUNT(*) FILTER (WHERE event = 'build completed') AS builds,
-  ROUND(COUNT(*) FILTER (WHERE event = 'deployment completed')::DOUBLE
-    / COUNT(*) FILTER (WHERE event = 'build completed'), 3) AS deploys_per_build
-FROM ev
-WHERE day_idx BETWEEN 35 AND 41 OR day_idx BETWEEN 44 AND 47 OR day_idx BETWEEN 49 AND 55
-GROUP BY (CASE WHEN day_idx BETWEEN 44 AND 47 THEN 'recovery' ELSE 'baseline' END);
+CREATE OR REPLACE TEMP TABLE device_map AS
+SELECT device_id, min(user_id::VARCHAR) AS mapped
+FROM raw_events WHERE user_id IS NOT NULL AND device_id IS NOT NULL GROUP BY 1;
 
--- Hook 7: DEVOPS PROFILE ENRICHMENT — repos_connected is the crisp
--- signal (default [0]); team_size contrast is devops vs junior
--- (full_stack/oss default pool mean is ~24, NOT ~10)
-SELECT segment, COUNT(*) AS users,
-  ROUND(AVG(TRY_CAST(team_size AS DOUBLE)), 1) AS avg_team,
-  ROUND(AVG(TRY_CAST(repos_connected AS DOUBLE)), 1) AS avg_repos,
-  MODE(experience_level) AS mode_exp
-FROM read_json_auto('data/verify-devtools-USERS*.json', sample_size=-1, union_by_name=true)
-GROUP BY segment ORDER BY avg_repos DESC;
+CREATE OR REPLACE TEMP TABLE ev AS
+SELECT coalesce(e.user_id::VARCHAR, m.mapped) AS uid, e.time::TIMESTAMP AS t, e.*
+FROM raw_events e LEFT JOIN device_map m ON e.device_id = m.device_id;
 
--- Hook 8: ENTERPRISE FUNNEL LIFT — free/team mv-per-deploy ~0.63x paid
--- (per-deploy normalization cancels H6/H9 deploy inflation)
-WITH pu AS (
-  SELECT user_id::VARCHAR AS uid, ANY_VALUE(subscription_tier) AS tier,
-    COUNT(*) FILTER (WHERE event = 'monitoring dashboard viewed') AS mv,
-    COUNT(*) FILTER (WHERE event = 'deployment completed') AS dep
-  FROM read_json_auto('data/verify-devtools-EVENTS*.json', sample_size=-1, union_by_name=true)
-  WHERE event IN ('monitoring dashboard viewed', 'deployment completed')
-  GROUP BY 1
-)
-SELECT CASE WHEN tier IN ('enterprise', 'business') THEN 'paid' ELSE 'free_team' END AS grp,
-  COUNT(*) AS users,
-  ROUND(SUM(mv)::DOUBLE / NULLIF(SUM(dep), 0), 4) AS mv_per_deploy
-FROM pu WHERE tier IS NOT NULL
-GROUP BY (CASE WHEN tier IN ('enterprise', 'business') THEN 'paid' ELSE 'free_team' END);
+CREATE OR REPLACE TEMP TABLE wh_marketing AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-marketing_spend_daily.json*', sample_size=-1, union_by_name=true);
+CREATE OR REPLACE TEMP TABLE wh_fleet AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-build_fleet_daily.json*', sample_size=-1, union_by_name=true);
+CREATE OR REPLACE TEMP TABLE wh_billing AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-usage_billing_daily.json*', sample_size=-1, union_by_name=true);
 
--- Hook 9: BUILD-COUNT MAGIC NUMBER — deploys-per-build by bucket
--- (full_stack only; recovery-window deploys excluded; over/sweet ≈ 0.40)
-WITH us AS (
-  SELECT distinct_id::VARCHAR AS uid, segment
-  FROM read_json_auto('data/verify-devtools-USERS*.json', sample_size=-1, union_by_name=true)
-), pu AS (
-  SELECT user_id::VARCHAR AS uid,
-    COUNT(*) FILTER (WHERE event = 'build completed') AS builds,
-    COUNT(*) FILTER (WHERE event = 'deployment completed'
-      AND date_diff('day', TIMESTAMP '2026-01-01 00:00:00', time::TIMESTAMP) NOT BETWEEN 43 AND 49) AS deploys
-  FROM read_json_auto('data/verify-devtools-EVENTS*.json', sample_size=-1, union_by_name=true)
-  GROUP BY 1
-)
-SELECT CASE WHEN builds BETWEEN 15 AND 30 THEN 'sweet'
-  WHEN builds >= 31 THEN 'over' ELSE 'base' END AS bucket,
-  COUNT(*) AS users,
-  ROUND(SUM(deploys)::DOUBLE / SUM(builds), 4) AS deploys_per_build
-FROM pu p JOIN us u USING (uid)
-WHERE u.segment = 'full_stack' AND builds >= 1
-GROUP BY (CASE WHEN builds BETWEEN 15 AND 30 THEN 'sweet' WHEN builds >= 31 THEN 'over' ELSE 'base' END)
-ORDER BY bucket;
+-- profile attributes keyed by the resolved user id
+CREATE OR REPLACE TEMP TABLE prof AS
+SELECT distinct_id::VARCHAR AS uid, org_size, primary_stack, acquisition_channel, role, plan_tier AS current_plan,
+ customer_since, "Experiment: Remote Build Cache" AS variant
+FROM users;
 
--- Hook 10: BUILD-DEPLOY TTC BY TIER — not visible in cross-event SQL.
--- funnel-post rewrites step timestamps within funnel instances; the
--- emulator's timeToConvert (see devtools.js stories) is the honest
--- read. This query only confirms the tier populations exist.
-SELECT subscription_tier, COUNT(DISTINCT user_id) AS users
-FROM read_json_auto('data/verify-devtools-EVENTS*.json', sample_size=-1, union_by_name=true)
-WHERE event IN ('build completed', 'deployment completed') AND subscription_tier IS NOT NULL
-GROUP BY subscription_tier ORDER BY users DESC;
+-- new-developer signups (one per developer who joined in the window)
+CREATE OR REPLACE TEMP TABLE signups AS
+SELECT uid, t AS t0, acquisition_channel AS ch, signup_method, primary_stack FROM ev WHERE event = 'account created';
+
+-- onboarding: the first step times after signup, in order, within 7 days (the Mixpanel funnel)
+CREATE OR REPLACE TEMP TABLE onboarding AS
+WITH r AS (SELECT s.uid, min(e.t) AS t1 FROM signups s JOIN ev e ON e.uid = s.uid AND e.event = 'repository imported' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 7 DAY GROUP BY 1),
+p AS (SELECT r.uid, min(e.t) AS t2 FROM r JOIN signups s USING (uid) JOIN ev e ON e.uid = r.uid AND e.event = 'pipeline configured' AND e.t >= r.t1 AND e.t < s.t0 + INTERVAL 7 DAY GROUP BY 1),
+v AS (SELECT p.uid, min(e.t) AS t3 FROM p JOIN signups s USING (uid) JOIN ev e ON e.uid = p.uid AND e.event = 'preview deployed' AND e.t >= p.t2 AND e.t < s.t0 + INTERVAL 7 DAY GROUP BY 1)
+SELECT s.uid, s.t0, s.ch, s.signup_method, s.primary_stack, r.t1 IS NOT NULL AS imported, p.t2 IS NOT NULL AS configured, v.t3 IS NOT NULL AS onboarded
+FROM signups s LEFT JOIN r USING (uid) LEFT JOIN p USING (uid) LEFT JOIN v USING (uid);
+
+-- one row per pull request (pr_id is shared by its four steps)
+CREATE OR REPLACE TEMP TABLE prs AS
+SELECT pr_id, any_value(uid) AS uid, any_value(lines_changed) AS lines, any_value(test_coverage_pct) AS coverage,
+ any_value(review_mode) AS review_mode,
+ min(t) FILTER (WHERE event = 'pull request opened') AS t_open,
+ min(t) FILTER (WHERE event = 'review submitted') AS t_review,
+ min(t) FILTER (WHERE event = 'pull request merged') AS t_merge,
+ min(t) FILTER (WHERE event = 'production deployed') AS t_deploy,
+ any_value(plan_tier) FILTER (WHERE event = 'pull request opened') AS plan_open,
+ any_value(plan_tier) FILTER (WHERE event = 'review submitted') AS plan_review,
+ any_value(deploy_outcome) FILTER (WHERE event = 'production deployed') AS deploy_outcome
+FROM ev WHERE event IN ('pull request opened', 'review submitted', 'pull request merged', 'production deployed') GROUP BY 1;
+
+-- one row per build (build_id is shared by start and finish)
+CREATE OR REPLACE TEMP TABLE builds AS
+SELECT build_id, any_value(uid) AS uid, any_value(ecosystem) AS ecosystem, any_value(trigger) AS trigger,
+ min(t) FILTER (WHERE event = 'build started') AS t_start,
+ min(t) FILTER (WHERE event = 'build finished') AS t_finish,
+ any_value(build_status) FILTER (WHERE event = 'build finished') AS build_status,
+ any_value(failure_stage) FILTER (WHERE event = 'build finished') AS failure_stage,
+ any_value(build_duration_sec) FILTER (WHERE event = 'build finished') AS duration_sec,
+ any_value(plan_tier) FILTER (WHERE event = 'build started') AS plan_start
+FROM ev WHERE event IN ('build started', 'build finished') GROUP BY 1;
+
+-- ═════════════════════════════════════════════════════════════════════════
+-- STORIES (H1-H10)
+-- ═════════════════════════════════════════════════════════════════════════
+
+-- STORY H1-forge-assist-launch: review → merge time, Forge Assist vs standard
+-- (Pro/Team/Enterprise, reviews on or after 2026-07-29); knob 0.6
+SELECT review_mode, count(*) AS prs, round(median(date_diff('second', t_review, t_merge)) / 3600.0, 2) AS median_merge_h,
+ round(avg(date_diff('second', t_review, t_merge)) / 3600.0, 2) AS avg_merge_h
+FROM prs WHERE t_review IS NOT NULL AND t_merge IS NOT NULL AND t_review >= TIMESTAMP '2026-07-29' AND plan_review IN ('pro', 'team', 'enterprise')
+GROUP BY 1 ORDER BY 1;
+-- STORY H1 (purity + plateau): assisted rows before launch or on Free (0); assisted share of eligible PRs opened from 2026-08-26 (knob 0.40)
+SELECT count(*) FILTER (WHERE review_mode = 'forge_assist' AND (t < TIMESTAMP '2026-07-29' OR plan_tier = 'free')) AS impure_rows FROM ev
+WHERE event IN ('pull request opened', 'review submitted', 'pull request merged', 'production deployed');
+SELECT round(avg((review_mode = 'forge_assist')::INT), 4) AS assist_share, count(*) AS prs
+FROM ev WHERE event = 'pull request opened' AND t >= TIMESTAMP '2026-08-26' AND plan_tier IN ('pro', 'team', 'enterprise');
+
+-- STORY H2-remote-build-cache-experiment: median successful build time and success rate by arm (knob 0.6; success unchanged)
+SELECT p.variant, count(DISTINCT b.uid) AS developers, count(*) AS builds, round(avg((b.build_status = 'success')::INT), 4) AS success_rate,
+ median(b.duration_sec) FILTER (WHERE b.build_status = 'success') AS median_success_sec
+FROM builds b JOIN prof p ON p.uid = b.uid
+WHERE b.t_finish IS NOT NULL AND b.t_finish >= TIMESTAMP '2026-07-08' AND p.variant IS NOT NULL GROUP BY 1 ORDER BY 1;
+
+-- STORY H3-jvm-dotnet-onboarding-friction: 7-day onboarding completion, Java/.NET vs other stacks (knob 0.55)
+SELECT CASE WHEN primary_stack IN ('java', 'dotnet') THEN 'java_dotnet' ELSE 'other_stacks' END AS stack_group,
+ count(*) AS signups, round(avg(onboarded::INT), 4) AS onboarding_rate
+FROM onboarding GROUP BY 1 ORDER BY 1;
+
+-- STORY H4-large-pr-review-wait: median open → first review, by PR size (knob 2.5 for 1,000+ vs ≤100 lines)
+SELECT CASE WHEN lines <= 100 THEN 'a: <=100' WHEN lines >= 1000 THEN 'c: 1000+' ELSE 'b: 101-999' END AS pr_size,
+ count(*) AS prs, round(median(date_diff('second', t_open, t_review)) / 3600.0, 2) AS median_wait_h
+FROM prs WHERE t_open IS NOT NULL AND t_review IS NOT NULL GROUP BY 1 ORDER BY 1;
+
+-- STORY H5-first-build-red-churn: D30 retention by first-build status (first build within 14 days of signup;
+-- signups at least 37 days before the end); knob passed/failed = 2.0
+WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 37 DAY),
+fb AS (SELECT s.uid, arg_min(b.build_status, b.t_finish) AS first_status, min(b.t_finish) AS tb
+  FROM s JOIN builds b ON b.uid = s.uid AND b.t_finish >= s.t0 GROUP BY 1),
+f AS (SELECT s.uid, fb.first_status, count(e.t) FILTER (WHERE e.t >= s.t0 + INTERVAL 30 DAY AND e.t < s.t0 + INTERVAL 37 DAY) AS ret
+  FROM s JOIN fb ON fb.uid = s.uid AND fb.tb < s.t0 + INTERVAL 14 DAY JOIN ev e ON e.uid = s.uid GROUP BY 1, 2)
+SELECT first_status, count(*) AS developers, round(avg((ret > 0)::INT), 4) AS d30_retention FROM f GROUP BY 1 ORDER BY 1;
+
+-- STORY H6-npm-registry-incident: npm vs other ecosystems' build success, degraded days vs the 7 days either side (knob 0.40)
+WITH o AS (SELECT DISTINCT date::DATE AS d FROM wh_fleet WHERE registry_mirror_status = 'degraded'),
+w AS (SELECT t_finish::DATE AS d, ecosystem = 'npm' AS npm, build_status = 'success' AS ok FROM builds
+  WHERE t_finish >= TIMESTAMP '2026-08-12' AND t_finish < TIMESTAMP '2026-08-28'),
+g AS (SELECT d IN (SELECT d FROM o) AS degraded, avg(ok::INT) FILTER (WHERE npm) AS npm_success, avg(ok::INT) FILTER (WHERE NOT npm) AS other_success FROM w GROUP BY 1)
+SELECT degraded, round(npm_success, 4) AS npm_success, round(other_success, 4) AS other_success, round(npm_success / other_success, 4) AS relative FROM g ORDER BY 1;
+SELECT date, ecosystem, registry_mirror_status, dependency_fetch_error_rate FROM wh_fleet WHERE registry_mirror_status = 'degraded' ORDER BY 1, 2;
+
+-- STORY H7-paid-channel-economics: spend per Mixpanel signup (knob social/search = 55/85) and onboarding by channel (knob 0.6)
+WITH s AS (SELECT ch, count(*) AS signups, avg(onboarded::INT) AS onboarding_rate FROM onboarding GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM wh_marketing GROUP BY 1)
+SELECT s.ch, s.signups, round(s.onboarding_rate, 4) AS onboarding_rate, round(sp.spend, 2) AS spend_usd,
+ round(sp.spend / s.signups, 2) AS spend_per_signup, round(sp.spend / (s.signups * s.onboarding_rate), 2) AS spend_per_onboarded
+FROM s LEFT JOIN sp USING (ch) ORDER BY spend_per_signup NULLS LAST, s.ch;
+
+-- STORY H8-team-overage-billing: scheduled builds per push build, Sep 15-30 vs August, Team vs other plans (knob 0.5; control 1.0)
+WITH b AS (SELECT CASE WHEN plan_tier = 'team' THEN 'team' ELSE 'other_plans' END AS grp, t >= TIMESTAMP '2026-09-15' AS post, trigger
+  FROM ev WHERE event = 'build started' AND ((t >= TIMESTAMP '2026-08-01' AND t < TIMESTAMP '2026-09-01') OR (t >= TIMESTAMP '2026-09-15' AND t < TIMESTAMP '2026-10-01'))),
+r AS (SELECT grp, post, count(*) FILTER (WHERE trigger = 'schedule')::DOUBLE / count(*) FILTER (WHERE trigger = 'push') AS sched_per_push FROM b GROUP BY 1, 2)
+SELECT grp, round(max(sched_per_push) FILTER (WHERE NOT post), 4) AS august, round(max(sched_per_push) FILTER (WHERE post), 4) AS sep_15_30,
+ round(max(sched_per_push) FILTER (WHERE post) / max(sched_per_push) FILTER (WHERE NOT post), 4) AS ratio
+FROM r GROUP BY 1 ORDER BY 1;
+SELECT plan_tier, count(*) FILTER (WHERE overage_revenue_usd > 0) AS days_with_overage, min(date) FILTER (WHERE overage_revenue_usd > 0) AS first_day,
+ round(sum(overage_revenue_usd), 2) AS overage_revenue_usd FROM wh_billing GROUP BY 1 ORDER BY 1;
+
+-- STORY H9-test-coverage-rollbacks: rollback rate by repository coverage (knob ≤30% / ≥75% = 4.0)
+SELECT CASE WHEN test_coverage_pct <= 30 THEN 'a: <=30%' WHEN test_coverage_pct >= 75 THEN 'c: >=75%' ELSE 'b: 31-74%' END AS coverage,
+ count(*) AS deploys, round(avg((deploy_outcome = 'rolled_back')::INT), 4) AS rollback_rate
+FROM ev WHERE event = 'production deployed' GROUP BY 1 ORDER BY 1;
+
+-- STORY H10-preview-habit-converts: paid within 42 days by preview deploys in the first 14 days
+-- (signups through 2026-08-20); keep-ratio floor 2.5
+WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-08-20 23:59:59'),
+f AS (SELECT s.uid, count(*) FILTER (WHERE e.event = 'preview deployed' AND e.t < s.t0 + INTERVAL 14 DAY) AS previews,
+  count(*) FILTER (WHERE e.event = 'subscription started' AND e.t < s.t0 + INTERVAL 42 DAY) AS buys
+  FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
+SELECT CASE WHEN previews >= 3 THEN 'habit (3+)' WHEN previews >= 1 THEN 'light (1-2)' ELSE 'none (not onboarded)' END AS preview_group,
+ count(*) AS developers, round(avg((buys > 0)::INT), 4) AS paid_rate
+FROM f GROUP BY 1 ORDER BY 1;
+
+-- ═════════════════════════════════════════════════════════════════════════
+-- EVAL (Q1-Q20) — every number in eval/devtools.eval.md comes from these
+-- ═════════════════════════════════════════════════════════════════════════
+
+-- EVAL Q1 — Forge Assist and merge speed: review → merge by mode (eligible plans, reviews from launch),
+-- then blended eligible vs Free before/after launch
+SELECT review_mode, count(*) AS prs, round(median(date_diff('second', t_review, t_merge)) / 3600.0, 2) AS median_h,
+ round(avg(date_diff('second', t_review, t_merge)) / 3600.0, 2) AS avg_h
+FROM prs WHERE t_review IS NOT NULL AND t_merge IS NOT NULL AND t_review >= TIMESTAMP '2026-07-29' AND plan_review IN ('pro', 'team', 'enterprise')
+GROUP BY 1 ORDER BY 1;
+SELECT CASE WHEN plan_review = 'free' THEN 'free' ELSE 'pro_team_enterprise' END AS plan_group, t_review >= TIMESTAMP '2026-07-29' AS after_launch, count(*) AS prs,
+ round(median(date_diff('second', t_review, t_merge)) / 3600.0, 2) AS median_h, round(avg(date_diff('second', t_review, t_merge)) / 3600.0, 2) AS avg_h
+FROM prs WHERE t_review IS NOT NULL AND t_merge IS NOT NULL GROUP BY 1, 2 ORDER BY 1, 2;
+
+-- EVAL Q2 — Forge Assist adoption: weekly share of eligible PRs opened with review_mode = forge_assist
+SELECT date_trunc('week', t)::DATE AS week, count(*) AS eligible_prs, round(avg((review_mode = 'forge_assist')::INT), 4) AS assist_share
+FROM ev WHERE event = 'pull request opened' AND t >= TIMESTAMP '2026-07-27' AND plan_tier IN ('pro', 'team', 'enterprise') GROUP BY 1 ORDER BY 1;
+SELECT count(DISTINCT uid) FILTER (WHERE review_mode = 'forge_assist') AS assist_authors, count(DISTINCT uid) AS eligible_authors,
+ round(avg((review_mode = 'forge_assist')::INT) FILTER (WHERE t >= TIMESTAMP '2026-08-26'), 4) AS share_from_aug_26
+FROM ev WHERE event = 'pull request opened' AND t >= TIMESTAMP '2026-07-29' AND plan_tier IN ('pro', 'team', 'enterprise');
+
+-- EVAL Q3 — do Forge Assist PRs roll back less? (null) PRs opened from launch on eligible plans that deployed
+SELECT review_mode, count(*) AS deploys, sum((deploy_outcome = 'rolled_back')::INT) AS rollbacks, round(avg((deploy_outcome = 'rolled_back')::INT), 4) AS rollback_rate
+FROM prs WHERE t_deploy IS NOT NULL AND t_open >= TIMESTAMP '2026-07-29' AND plan_open IN ('pro', 'team', 'enterprise') GROUP BY 1 ORDER BY 1;
+SELECT plan_open, review_mode, count(*) AS deploys, round(avg((deploy_outcome = 'rolled_back')::INT), 4) AS rollback_rate
+FROM prs WHERE t_deploy IS NOT NULL AND t_open >= TIMESTAMP '2026-07-29' AND plan_open IN ('pro', 'team', 'enterprise') GROUP BY 1, 2 ORDER BY 1, 2;
+
+-- EVAL Q4 — Remote Build Cache experiment: build time, success rate, volume per developer, split
+SELECT p.variant, count(DISTINCT b.uid) AS developers, count(*) AS builds, round(avg((b.build_status = 'success')::INT), 4) AS success_rate,
+ median(b.duration_sec) FILTER (WHERE b.build_status = 'success') AS median_success_sec,
+ round(avg(b.duration_sec) FILTER (WHERE b.build_status = 'success'), 1) AS avg_success_sec,
+ round(count(*)::DOUBLE / count(DISTINCT b.uid), 2) AS builds_per_developer
+FROM builds b JOIN prof p ON p.uid = b.uid WHERE b.t_finish >= TIMESTAMP '2026-07-08' AND p.variant IS NOT NULL GROUP BY 1 ORDER BY 1;
+SELECT "Variant name" AS variant, count(DISTINCT uid) AS exposed_developers FROM ev WHERE event = '$experiment_started' GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q5 — where new signups stall: 7-day onboarding by stack, step by step
+SELECT primary_stack, count(*) AS signups, round(avg(imported::INT), 4) AS imported, round(avg(configured::INT), 4) AS configured, round(avg(onboarded::INT), 4) AS onboarded
+FROM onboarding GROUP BY 1 ORDER BY onboarded;
+SELECT CASE WHEN primary_stack IN ('java', 'dotnet') THEN 'java_dotnet' ELSE 'other_stacks' END AS stack_group, count(*) AS signups,
+ round(avg(imported::INT), 4) AS imported, round(avg(configured::INT), 4) AS configured, round(avg(onboarded::INT), 4) AS onboarded
+FROM onboarding GROUP BY 1 ORDER BY 1;
+SELECT count(*) AS signups, round(avg(onboarded::INT), 4) AS overall_onboarding FROM onboarding;
+
+-- EVAL Q6 — do enterprise orgs wait longer for code review? (null)
+SELECT p.org_size, count(*) AS prs, round(median(date_diff('second', t_open, t_review)) / 3600.0, 2) AS median_wait_h,
+ round(avg(date_diff('second', t_open, t_review)) / 3600.0, 2) AS avg_wait_h, median(lines) AS median_lines
+FROM prs JOIN prof p ON p.uid = prs.uid WHERE t_open IS NOT NULL AND t_review IS NOT NULL GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q7 — review wait by PR size
+SELECT CASE WHEN lines <= 100 THEN 'a: <=100' WHEN lines < 400 THEN 'b: 101-399' WHEN lines < 1000 THEN 'c: 400-999' ELSE 'd: 1000+' END AS pr_size,
+ count(*) AS prs, round(count(*) * 100.0 / sum(count(*)) OVER (), 1) AS pct_of_prs, round(median(date_diff('second', t_open, t_review)) / 3600.0, 2) AS median_wait_h
+FROM prs WHERE t_open IS NOT NULL AND t_review IS NOT NULL GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q8 — first CI build and retention (first build within 14 days; signups at least 37 days before the end)
+WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 37 DAY),
+fb AS (SELECT s.uid, arg_min(b.build_status, b.t_finish) AS first_status, min(b.t_finish) AS tb FROM s JOIN builds b ON b.uid = s.uid AND b.t_finish >= s.t0 GROUP BY 1),
+f AS (SELECT s.uid, fb.first_status,
+  count(e.t) FILTER (WHERE e.t >= s.t0 + INTERVAL 7 DAY AND e.t < s.t0 + INTERVAL 14 DAY) AS ret7,
+  count(e.t) FILTER (WHERE e.t >= s.t0 + INTERVAL 30 DAY AND e.t < s.t0 + INTERVAL 37 DAY) AS ret30
+  FROM s JOIN fb ON fb.uid = s.uid AND fb.tb < s.t0 + INTERVAL 14 DAY JOIN ev e ON e.uid = s.uid GROUP BY 1, 2)
+SELECT first_status, count(*) AS developers, round(avg((ret7 > 0)::INT), 4) AS d7_retention, round(avg((ret30 > 0)::INT), 4) AS d30_retention FROM f GROUP BY 1 ORDER BY 1;
+WITH fb AS (SELECT s.uid, s.t0, arg_min(b.build_status, b.t_finish) AS first_status, arg_min(b.failure_stage, b.t_finish) AS first_stage, min(b.t_finish) AS tb
+  FROM signups s JOIN builds b ON b.uid = s.uid AND b.t_finish >= s.t0 GROUP BY 1, 2)
+SELECT count(*) AS new_devs_with_first_build_in_14d, round(avg((first_status = 'failed')::INT), 4) AS first_build_fail_rate,
+ round(avg((first_stage = 'configuration')::INT) FILTER (WHERE first_status = 'failed'), 4) AS configuration_share_of_failures
+FROM fb WHERE tb < t0 + INTERVAL 14 DAY;
+SELECT round(avg((build_status = 'failed')::INT), 4) AS all_build_fail_rate FROM builds WHERE build_status IS NOT NULL;
+
+-- EVAL Q9 — mid-August build failures: daily success by ecosystem, lost builds, warehouse status
+SELECT t_finish::DATE AS d, ecosystem = 'npm' AS npm, count(*) AS builds, round(avg((build_status = 'success')::INT), 4) AS success_rate,
+ round(avg((failure_stage = 'dependency_install')::INT), 4) AS dependency_install_failures
+FROM builds WHERE t_finish >= TIMESTAMP '2026-08-17' AND t_finish < TIMESTAMP '2026-08-22' GROUP BY 1, 2 ORDER BY 1, 2;
+WITH w AS (SELECT (t_finish >= TIMESTAMP '2026-08-19' AND t_finish < TIMESTAMP '2026-08-21') AS inc, ecosystem = 'npm' AS npm, build_status = 'success' AS ok
+  FROM builds WHERE t_finish >= TIMESTAMP '2026-08-12' AND t_finish < TIMESTAMP '2026-08-28')
+SELECT count(*) FILTER (WHERE inc AND npm) AS npm_incident_builds, round(avg(ok::INT) FILTER (WHERE inc AND npm), 4) AS npm_incident_success,
+ round(avg(ok::INT) FILTER (WHERE NOT inc AND npm), 4) AS npm_surrounding_success,
+ round(count(*) FILTER (WHERE inc AND npm) * (avg(ok::INT) FILTER (WHERE NOT inc AND npm) - avg(ok::INT) FILTER (WHERE inc AND npm))) AS lost_successful_builds
+FROM w;
+SELECT date, ecosystem, registry_mirror_status, dependency_fetch_error_rate FROM wh_fleet WHERE registry_mirror_status = 'degraded' ORDER BY 1;
+SELECT max(dependency_fetch_error_rate) FILTER (WHERE registry_mirror_status = 'operational') AS max_normal_error_rate FROM wh_fleet;
+
+-- EVAL Q10 — did other ecosystems suffer during the incident? (null outside npm)
+WITH w AS (SELECT (t_finish >= TIMESTAMP '2026-08-19' AND t_finish < TIMESTAMP '2026-08-21') AS inc, ecosystem, build_status = 'success' AS ok
+  FROM builds WHERE t_finish >= TIMESTAMP '2026-08-12' AND t_finish < TIMESTAMP '2026-08-28')
+SELECT ecosystem, count(*) FILTER (WHERE inc) AS incident_builds, round(avg(ok::INT) FILTER (WHERE inc), 4) AS incident_success,
+ round(avg(ok::INT) FILTER (WHERE NOT inc), 4) AS surrounding_success FROM w GROUP BY 1 ORDER BY 1;
+WITH w AS (SELECT (t_finish >= TIMESTAMP '2026-08-19' AND t_finish < TIMESTAMP '2026-08-21') AS inc, build_status = 'success' AS ok
+  FROM builds WHERE ecosystem <> 'npm' AND t_finish >= TIMESTAMP '2026-08-12' AND t_finish < TIMESTAMP '2026-08-28')
+SELECT count(*) FILTER (WHERE inc) AS incident_builds, round(avg(ok::INT) FILTER (WHERE inc), 4) AS incident_success,
+ count(*) FILTER (WHERE NOT inc) AS surrounding_builds, round(avg(ok::INT) FILTER (WHERE NOT inc), 4) AS surrounding_success FROM w;
+
+-- EVAL Q11 — spend per Mixpanel signup by paid channel
+WITH s AS (SELECT ch, count(*) AS signups FROM signups GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend, sum(platform_reported_signups) AS platform_signups,
+  min(spend_usd) AS min_daily_spend, max(spend_usd) AS max_daily_spend FROM wh_marketing GROUP BY 1)
+SELECT sp.ch, s.signups, round(sp.spend, 2) AS spend_usd, round(sp.spend / s.signups, 2) AS spend_per_signup, sp.platform_signups,
+ round(min_daily_spend, 2) AS min_daily_spend, round(max_daily_spend, 2) AS max_daily_spend
+FROM sp JOIN s USING (ch) ORDER BY spend_per_signup;
+SELECT round(sum(spend_usd), 2) AS total_paid_spend FROM wh_marketing;
+
+-- EVAL Q12 — cost per onboarded developer by paid channel
+WITH s AS (SELECT ch, count(*) AS signups, sum(onboarded::INT) AS onboarded FROM onboarding GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM wh_marketing GROUP BY 1)
+SELECT s.ch, s.signups, s.onboarded, round(s.onboarded::DOUBLE / s.signups, 4) AS onboarding_rate,
+ round(sp.spend / s.signups, 2) AS spend_per_signup, round(sp.spend / s.onboarded, 2) AS spend_per_onboarded
+FROM s LEFT JOIN sp USING (ch) ORDER BY spend_per_onboarded NULLS LAST, s.ch;
+
+-- EVAL Q13 — Team overage billing: scheduled builds per push build, weekly, Team vs other plans
+WITH b AS (SELECT plan_tier = 'team' AS team, date_trunc('week', t)::DATE AS week, trigger FROM ev WHERE event = 'build started' AND t >= TIMESTAMP '2026-08-03')
+SELECT week, round(count(*) FILTER (WHERE team AND trigger = 'schedule')::DOUBLE / count(*) FILTER (WHERE team AND trigger = 'push'), 4) AS team_sched_per_push,
+ round(count(*) FILTER (WHERE NOT team AND trigger = 'schedule')::DOUBLE / count(*) FILTER (WHERE NOT team AND trigger = 'push'), 4) AS other_sched_per_push,
+ count(*) FILTER (WHERE team AND trigger = 'schedule') AS team_scheduled_builds
+FROM b GROUP BY 1 ORDER BY 1;
+WITH b AS (SELECT plan_tier, t >= TIMESTAMP '2026-09-15' AS post, trigger FROM ev WHERE event = 'build started'
+  AND ((t >= TIMESTAMP '2026-08-01' AND t < TIMESTAMP '2026-09-01') OR (t >= TIMESTAMP '2026-09-15' AND t < TIMESTAMP '2026-10-01')))
+SELECT plan_tier, round(count(*) FILTER (WHERE NOT post AND trigger = 'schedule')::DOUBLE / count(*) FILTER (WHERE NOT post AND trigger = 'push'), 4) AS august,
+ round(count(*) FILTER (WHERE post AND trigger = 'schedule')::DOUBLE / count(*) FILTER (WHERE post AND trigger = 'push'), 4) AS sep_15_30,
+ round(count(*) FILTER (WHERE NOT post AND trigger = 'push') / 31.0, 1) AS august_push_per_day, round(count(*) FILTER (WHERE post AND trigger = 'push') / 16.0, 1) AS sep_15_30_push_per_day
+FROM b GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q14 — Team overage revenue and runner minutes by month (warehouse)
+SELECT date_trunc('month', date)::DATE AS month, round(sum(billable_runner_minutes)) AS runner_minutes, round(sum(overage_minutes)) AS overage_minutes,
+ round(sum(overage_revenue_usd), 2) AS overage_revenue_usd
+FROM wh_billing WHERE plan_tier = 'team' GROUP BY 1 ORDER BY 1;
+SELECT round(sum(overage_revenue_usd) / sum(billable_runner_minutes) * 1000, 3) AS overage_usd_per_1000_minutes_sep FROM wh_billing WHERE plan_tier = 'team' AND date >= '2026-09-01' AND date < '2026-10-01';
+
+-- EVAL Q15 — rollbacks by repository test coverage
+SELECT CASE WHEN test_coverage_pct <= 30 THEN 'a: <=30%' WHEN test_coverage_pct < 50 THEN 'b: 31-49%' WHEN test_coverage_pct < 75 THEN 'c: 50-74%' ELSE 'd: >=75%' END AS coverage,
+ count(*) AS deploys, sum((deploy_outcome = 'rolled_back')::INT) AS rollbacks, round(avg((deploy_outcome = 'rolled_back')::INT), 4) AS rollback_rate
+FROM ev WHERE event = 'production deployed' GROUP BY 1 ORDER BY 1;
+SELECT count(*) AS deploys, round(avg((deploy_outcome = 'rolled_back')::INT), 4) AS overall_rollback_rate FROM ev WHERE event = 'production deployed';
+
+-- EVAL Q16 — what predicts buying a paid seat: preview deploys in the first 14 days (signups through Aug 20, purchase within 42 days)
+WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-08-20 23:59:59'),
+f AS (SELECT s.uid, count(*) FILTER (WHERE e.event = 'preview deployed' AND e.t < s.t0 + INTERVAL 14 DAY) AS previews,
+  count(*) FILTER (WHERE e.event = 'subscription started' AND e.t < s.t0 + INTERVAL 42 DAY) AS buys
+  FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
+SELECT least(previews, 5) AS previews_first_14d, count(*) AS developers, round(avg((buys > 0)::INT), 4) AS paid_rate FROM f GROUP BY 1 ORDER BY 1;
+WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-08-20 23:59:59'),
+f AS (SELECT s.uid, count(*) FILTER (WHERE e.event = 'preview deployed' AND e.t < s.t0 + INTERVAL 14 DAY) AS previews,
+  count(*) FILTER (WHERE e.event = 'subscription started' AND e.t < s.t0 + INTERVAL 42 DAY) AS buys
+  FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
+SELECT CASE WHEN previews >= 3 THEN 'habit (3+)' WHEN previews >= 1 THEN 'light (1-2)' ELSE 'none (not onboarded)' END AS preview_group,
+ count(*) AS developers, sum((buys > 0)::INT) AS buyers, round(avg((buys > 0)::INT), 4) AS paid_rate FROM f GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q17 — the Labor Day dip: builds and active developers, Mondays around Sep 7 (and July 3 vs other Fridays)
+SELECT t::DATE AS d, dayname(t::DATE) AS dow, count(*) FILTER (WHERE event = 'build started') AS builds_started, count(DISTINCT uid) AS active_developers
+FROM ev WHERE t::DATE IN ('2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21', '2026-06-26', '2026-07-03', '2026-07-10', '2026-07-17') GROUP BY 1, 2 ORDER BY 1;
+
+-- EVAL Q18 — new self-serve subscriptions and new MRR by month (list prices from 01-business.md: Pro $12, Team $29 per seat per month)
+SELECT date_trunc('month', t)::DATE AS month, plan, count(*) AS subscriptions, sum(seats) AS seats,
+ sum(seats * CASE plan WHEN 'pro' THEN 12 WHEN 'team' THEN 29 END) AS new_mrr_usd
+FROM ev WHERE event = 'subscription started' GROUP BY 1, 2 ORDER BY 1, 2;
+SELECT date_trunc('month', t)::DATE AS month, count(*) AS subscriptions, sum(seats * CASE plan WHEN 'pro' THEN 12 WHEN 'team' THEN 29 END) AS new_mrr_usd,
+ count(*) FILTER (WHERE uid IN (SELECT uid FROM signups)) AS from_window_signups
+FROM ev WHERE event = 'subscription started' GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q19 — do larger PRs roll back more? (null)
+SELECT CASE WHEN lines_changed <= 100 THEN 'a: <=100' WHEN lines_changed < 1000 THEN 'b: 101-999' ELSE 'c: 1000+' END AS pr_size,
+ count(*) AS deploys, round(avg((deploy_outcome = 'rolled_back')::INT), 4) AS rollback_rate, round(avg(test_coverage_pct), 1) AS avg_coverage
+FROM ev WHERE event = 'production deployed' GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q20 — headline numbers for the quarter review
+SELECT count(DISTINCT uid) AS developers_with_events, (SELECT count(*) FROM signups) AS new_signups, (SELECT count(*) FROM raw_events) AS events FROM ev;
+SELECT date_trunc('week', t)::DATE AS week, count(DISTINCT uid) AS weekly_active_developers FROM ev WHERE t >= TIMESTAMP '2026-06-08' AND t < TIMESTAMP '2026-09-28' GROUP BY 1 ORDER BY 1;
