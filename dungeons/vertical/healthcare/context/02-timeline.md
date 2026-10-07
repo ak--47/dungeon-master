@@ -23,7 +23,6 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 
 - No change to primary care, therapy, or remote monitoring pricing, or to any insured copay.
 - No change to the symptom checker, the triage rules, or how the estimated wait is calculated.
-- The Spanish-speaking clinician roster and the language options did not change.
 - The remote monitoring device models and vendors did not change; no device recalls.
 - No marketing campaigns ran; acquisition channel budgets were steady.
 - No app outages or incidents were recorded. The urgent-care staffing change above is the only operational event.

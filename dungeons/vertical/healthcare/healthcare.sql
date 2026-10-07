@@ -117,11 +117,14 @@ FROM wh_staff s JOIN r ON r.d = s.date::DATE
 WHERE s.service_line = 'urgent_care' AND s.date >= DATE '2026-07-27' AND s.date < DATE '2026-09-07' GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- STORY H4-pickup-reminders-experiment — pickup ×1.25, time to pickup ×0.7 from 2026-07-28
+-- STORY H4-pickup-reminders-experiment — 7-day pickup ×1.25 from 2026-07-28; no difference
+-- before the 20 h text (×1.0); pickup within 24 h ×1.509 (derived from the knobs)
 -- ─────────────────────────────────────────────────────────────────────────
--- per prescription (hold visit_id constant), picked up within 7 days; urgent-care prescriptions Jul 28 - Sep 24
+-- per prescription (hold visit_id constant); urgent-care prescriptions Jul 28 - Sep 24
 SELECT p.variant, count(DISTINCT v.uid) AS patients, count(*) AS prescriptions,
  round(avg(coalesce(v.t_pick < v.t_rx + INTERVAL 7 DAY, false)::INT), 4) AS pickup_rate_7d,
+ round(avg(coalesce(v.t_pick < v.t_rx + INTERVAL 20 HOUR, false)::INT), 4) AS pickup_rate_20h,
+ round(avg(coalesce(v.t_pick < v.t_rx + INTERVAL 24 HOUR, false)::INT), 4) AS pickup_rate_24h,
  round(median(date_diff('second', v.t_rx, v.t_pick) / 3600.0) FILTER (WHERE v.t_pick < v.t_rx + INTERVAL 7 DAY), 2) AS median_hours_to_pickup
 FROM visits v JOIN prof p ON p.uid = v.uid
 WHERE v.service_line = 'urgent_care' AND v.t_rx >= TIMESTAMP '2026-07-28' AND v.t_rx < TIMESTAMP '2026-09-24 23:59:59' AND p.variant IS NOT NULL
@@ -265,6 +268,9 @@ FROM wh_staff WHERE service_line = 'urgent_care' AND agency_clinician_hours = 0;
 -- ─────────────────────────────────────────────────────────────────────────
 SELECT p.variant, count(*) AS prescriptions,
  round(avg(coalesce(v.t_pick < v.t_rx + INTERVAL 7 DAY, false)::INT), 4) AS pickup_rate_7d,
+ round(avg(coalesce(v.t_pick < v.t_rx + INTERVAL 20 HOUR, false)::INT), 4) AS pickup_rate_20h,
+ round(avg(coalesce(v.t_pick < v.t_rx + INTERVAL 24 HOUR, false)::INT), 4) AS pickup_rate_24h,
+ round(avg(coalesce(v.t_pick >= v.t_rx + INTERVAL 20 HOUR AND v.t_pick < v.t_rx + INTERVAL 7 DAY, false)::INT), 4) AS pickup_rate_20h_to_7d,
  round(median(date_diff('second', v.t_rx, v.t_pick) / 3600.0) FILTER (WHERE v.t_pick < v.t_rx + INTERVAL 7 DAY), 2) AS median_hours_to_pickup
 FROM visits v JOIN prof p ON p.uid = v.uid
 WHERE v.service_line = 'urgent_care' AND v.t_rx >= TIMESTAMP '2026-07-28' AND v.t_rx < TIMESTAMP '2026-09-24 23:59:59' AND p.variant IS NOT NULL
