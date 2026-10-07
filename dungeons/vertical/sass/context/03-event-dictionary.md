@@ -52,7 +52,7 @@ Every alert has an `alert_id`. The trigger, the acknowledgement, and the resolut
 |---|---|---|
 | `deployment pipeline run` | A CI/CD pipeline run on Tallyboard's hosted runners. | `deploy_id`: the run's ID; `pipeline_status` (`success`, `failed`, `cancelled`); `runner_region` (`us-east`, `us-west`, `eu-west`, `ap-south`): where the job ran; `duration_sec`; `commit_count`; `service_id`. |
 | `service deployed` | The service from a successful run is deployed. Same `deploy_id` as its run. | `deploy_id`; `environment` (`production`, `staging`); `service_type`. |
-| `$experiment_started` | Mixpanel experiment exposure, sent when a user starts a pipeline run while the Smart Test Selection test is live (from 2026-07-15). | `Experiment name` = `Smart Test Selection`; `Variant name` = `Control` or `Smart Selection`. |
+| `$experiment_started` | Mixpanel experiment exposure for the Smart Test Selection test. Sent once per user, one second before the user's first pipeline run on or after 2026-07-15, when the user is assigned to an arm. | `Experiment name` = `Smart Test Selection`; `Variant name` = `Control` or `Smart Selection`. |
 
 ## Billing
 
@@ -84,7 +84,6 @@ Every alert has an `alert_id`. The trigger, the acknowledgement, and the resolut
 | `company_size` | `startup`, `smb`, `mid_market`, `enterprise` (see 01-business.md). Same as the company's group property. |
 | `industry` | The company's industry. |
 | `primary_role` | `sre`, `platform_engineer`, `developer`, `engineering_manager`. |
-| `_persona` | Legacy copy of `primary_role` from an older CRM sync. |
 | `plan_tier` | The company's current plan: `free`, `team`, `business`, `enterprise`. |
 | `customer_since` | Date the user first signed up (YYYY-MM-DD). Before 2026-06-04 for established users. |
 | `cloud_provider` | The company's primary cloud. |
@@ -111,7 +110,7 @@ Every alert has an `alert_id`. The trigger, the acknowledgement, and the resolut
 
 ## Account health history (slowly changing dimension)
 
-One row per health rating: `distinct_id`, `account_health` (`healthy`, `neutral`, `at_risk`), and `startTime` (UTC, when that rating took effect). Only accounts at companies with a customer success manager (`customer_success_manager` = true) are rated; other accounts have no rows. A new account gets its first rating when it signs up, and customer success reviews it often during onboarding: consecutive rows are typically about a week apart, sometimes three weeks or more, and sometimes only a day apart. An established account's history starts with its last rating from the month before June 4 (May 5 to June 3), so it has a rating in force from the first day of the window (an account that joined in the last weeks before June 4 has no rating until its first review); later reviews are less frequent (typically about three weeks apart), and some established accounts have no new review in the window. An account has at most four rows in the export. A new row is written at every review, even when the rating stays the same, so about a third of rows repeat the previous rating. Use it to read an account's rating as of an event's time.
+One row per health rating: `distinct_id`, `account_health` (`healthy`, `neutral`, `at_risk`), and `startTime` (UTC, when that rating took effect). Only accounts at companies with a customer success manager (`customer_success_manager` = true) are rated; other accounts have no rows. A new account gets its first rating when it signs up, and customer success reviews it often during onboarding: consecutive rows are typically about a week apart, sometimes three weeks or more, and sometimes only a day apart. An established account's history starts with its last rating from the month before June 4 (May 5 to June 3), so it has a rating in force from the first day of the window (an account that joined in the last weeks before June 4 has no rating until its first review); later reviews are less frequent (typically about three weeks apart), and some established accounts have no new review in the window. An account has at most four rows in the export. A new row is written at every review, even when the rating stays the same, so roughly two in five rows after an account's first repeat the previous rating. Use it to read an account's rating as of an event's time.
 
 ## Funnels the business tracks
 

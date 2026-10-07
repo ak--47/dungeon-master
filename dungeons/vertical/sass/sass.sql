@@ -123,6 +123,14 @@ SELECT c.plan_tier, (x.first_since >= '2026-05-14') AS new_workspace, count(*) A
 FROM companies c JOIN (SELECT company_id, count(*) AS m, min(customer_since) AS first_since FROM users GROUP BY 1) x USING (company_id)
 GROUP BY 1, 2 ORDER BY 2, 1;
 
+-- self-serve conversion: share of new workspaces (first user joined from 2026-05-14) that start
+-- a subscription inside the window, and signups (Jun 4 - Aug 31) who start one within 30 days
+WITH c AS (SELECT company_id, min(customer_since) AS first_since FROM users GROUP BY 1),
+b AS (SELECT DISTINCT company_id FROM ev WHERE event = 'subscription started')
+SELECT first_since >= '2026-06-04' AS started_in_window, count(*) AS new_workspaces, count(b.company_id) AS paid_in_window,
+ round(count(b.company_id)::DOUBLE / count(*), 4) AS paid_share
+FROM c LEFT JOIN b USING (company_id) WHERE first_since >= '2026-05-14' GROUP BY 1 ORDER BY 1;
+
 -- weekly rhythm: alerts (production pages) vs dashboard views by weekday
 SELECT dayofweek(t) AS dow, dayname(t) AS weekday, count(*) FILTER (WHERE event = 'alert triggered') AS alerts,
  count(*) FILTER (WHERE event = 'dashboard viewed') AS dashboard_views
@@ -258,14 +266,14 @@ SELECT round(avg(bought::INT) FILTER (WHERE ch = 'linkedin_ads') / avg(bought::I
 FROM paid_funnel;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- STORY H9-team-price-change — Team $20 → $25 per seat on 2026-08-17 (warehouse join)
+-- STORY H9-team-price-change — Team $20 → $25 per seat on 2026-08-03 (warehouse join)
 -- ─────────────────────────────────────────────────────────────────────────
-SELECT plan, (t >= TIMESTAMP '2026-08-17') AS post, count(*) AS subscriptions, round(avg(seats), 2) AS avg_seats
+SELECT plan, (t >= TIMESTAMP '2026-08-03') AS post, count(*) AS subscriptions, round(avg(seats), 2) AS avg_seats
 FROM ev WHERE event = 'subscription started' GROUP BY 1, 2 ORDER BY 1, 2;
 
 WITH p AS (SELECT t::DATE AS d, plan, seats FROM ev WHERE event = 'subscription started'),
 j AS (SELECT p.*, p.seats * b.list_price_per_seat_usd AS mrr FROM p JOIN wh_bookings b ON b.date::DATE = p.d AND b.plan = p.plan)
-SELECT plan, (d >= DATE '2026-08-17') AS post, count(*) AS subscriptions, round(avg(mrr), 2) AS new_mrr_per_subscription
+SELECT plan, (d >= DATE '2026-08-03') AS post, count(*) AS subscriptions, round(avg(mrr), 2) AS new_mrr_per_subscription
 FROM j GROUP BY 1, 2 ORDER BY 1, 2;
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -309,53 +317,59 @@ SELECT round(avg((resolution_method = 'ai_assist')::INT), 4) AS ai_share_overall
  round(avg((resolution_method = 'ai_assist')::INT) FILTER (WHERE t >= TIMESTAMP '2026-08-19'), 4) AS ai_share_from_aug_19
 FROM ev WHERE event = 'alert resolved' AND t >= TIMESTAMP '2026-07-22' AND plan_tier IN ('business', 'enterprise');
 
--- EVAL Q3 — null: do alerts handled with Root Cause Assist also get acknowledged faster?
--- Alert level (alert_id holds trigger, acknowledgement, resolution), Business/Enterprise
--- resolutions since adoption leveled off (2026-08-19): acknowledgement time of alerts
--- resolved with ai_assist vs the other resolutions, with sub-splits by plan and company size.
+-- EVAL Q3 — null: since Root Cause Assist launched (2026-07-22), do Business and
+-- Enterprise users acknowledge pages any faster? Acknowledgements on those plans
+-- (plan_tier on the event), before vs after launch, with sub-splits by plan and
+-- company size, and the within-user change for users with acknowledgements on both sides.
 CREATE OR REPLACE TEMP TABLE q3 AS
-SELECT a.alert_id, a.response_time_mins AS r, a.resolution_method = 'ai_assist' AS ai, a.res_plan, p.company_size
-FROM alerts a JOIN prof p ON p.uid = a.uid
-WHERE a.t_res >= TIMESTAMP '2026-08-19' AND a.res_plan IN ('business', 'enterprise') AND a.response_time_mins IS NOT NULL;
-WITH s AS (SELECT 'all' AS split, ai, r FROM q3
-  UNION ALL SELECT 'plan=' || res_plan, ai, r FROM q3
-  UNION ALL SELECT 'size=' || company_size, ai, r FROM q3),
-g AS (SELECT split, ai, count(*) AS n, avg(r) AS m, var_samp(r) AS v, median(r) AS med, avg(ln(r + 0.1)) AS lm, var_samp(ln(r + 0.1)) AS lv FROM s GROUP BY 1, 2)
-SELECT split, max(n) FILTER (WHERE ai) AS n_ai, max(n) FILTER (WHERE NOT ai) AS n_other,
- round(max(m) FILTER (WHERE ai), 2) AS avg_ack_ai, round(max(m) FILTER (WHERE NOT ai), 2) AS avg_ack_other,
- round(max(med) FILTER (WHERE ai), 2) AS median_ack_ai, round(max(med) FILTER (WHERE NOT ai), 2) AS median_ack_other,
- round((max(m) FILTER (WHERE ai) - max(m) FILTER (WHERE NOT ai)) / sqrt(sum(v / n)), 2) AS z_mean,
- round((max(lm) FILTER (WHERE ai) - max(lm) FILTER (WHERE NOT ai)) / sqrt(sum(lv / n)), 2) AS z_log
+SELECT e.uid, e.t >= TIMESTAMP '2026-07-22' AS post, e.response_time_mins AS r, e.plan_tier, p.company_size
+FROM ev e JOIN prof p ON p.uid = e.uid
+WHERE e.event = 'alert acknowledged' AND e.plan_tier IN ('business', 'enterprise');
+WITH s AS (SELECT 'all' AS split, post, r FROM q3
+  UNION ALL SELECT 'plan=' || plan_tier, post, r FROM q3
+  UNION ALL SELECT 'size=' || company_size, post, r FROM q3),
+g AS (SELECT split, post, count(*) AS n, avg(r) AS m, var_samp(r) AS v, median(r) AS med, avg(ln(r + 0.1)) AS lm, var_samp(ln(r + 0.1)) AS lv FROM s GROUP BY 1, 2)
+SELECT split, max(n) FILTER (WHERE NOT post) AS acks_before, max(n) FILTER (WHERE post) AS acks_after,
+ round(max(m) FILTER (WHERE NOT post), 2) AS avg_before, round(max(m) FILTER (WHERE post), 2) AS avg_after,
+ round(max(med) FILTER (WHERE NOT post), 2) AS median_before, round(max(med) FILTER (WHERE post), 2) AS median_after,
+ round((max(m) FILTER (WHERE post) - max(m) FILTER (WHERE NOT post)) / sqrt(sum(v / n)), 2) AS z_mean,
+ round((max(lm) FILTER (WHERE post) - max(lm) FILTER (WHERE NOT post)) / sqrt(sum(lv / n)), 2) AS z_log
 FROM g GROUP BY 1 ORDER BY 1;
--- context: the plain before/after read on Business/Enterprise acknowledgements (whole window)
-SELECT (t >= TIMESTAMP '2026-07-22') AS after_launch, count(*) AS acks, round(avg(response_time_mins), 2) AS avg_response_mins,
- round(median(response_time_mins), 2) AS median_response_mins
-FROM ev WHERE event = 'alert acknowledged' AND plan_tier IN ('business', 'enterprise') GROUP BY 1 ORDER BY 1;
-WITH g AS (SELECT (t >= TIMESTAMP '2026-07-22') AS post, count(*) AS n, avg(response_time_mins) AS m, var_samp(response_time_mins) AS v,
-  avg(ln(response_time_mins + 0.1)) AS lm, var_samp(ln(response_time_mins + 0.1)) AS lv
-  FROM ev WHERE event = 'alert acknowledged' AND plan_tier IN ('business', 'enterprise') GROUP BY 1),
-x AS (SELECT max(m) FILTER (WHERE post) - max(m) FILTER (WHERE NOT post) AS dm, sqrt(sum(v / n)) AS se,
-  max(lm) FILTER (WHERE post) - max(lm) FILTER (WHERE NOT post) AS dl, sqrt(sum(lv / n)) AS lse FROM g)
-SELECT round(dm / se, 2) AS z_mean, round(dl / lse, 2) AS z_log FROM x;
--- the same before/after for accounts whose plan did not change in the window vs accounts that upgraded during it
-WITH fp AS (SELECT uid, arg_min(plan_tier, t) AS first_plan FROM ev GROUP BY 1)
-SELECT fp.first_plan IN ('business', 'enterprise') AS on_plan_all_window, (e.t >= TIMESTAMP '2026-07-22') AS after_launch,
- count(*) AS acks, round(avg(e.response_time_mins), 2) AS avg_response_mins
-FROM ev e JOIN fp ON fp.uid = e.uid WHERE e.event = 'alert acknowledged' AND e.plan_tier IN ('business', 'enterprise') GROUP BY 1, 2 ORDER BY 1, 2;
+WITH u AS (SELECT uid, plan_tier, company_size, avg(r) FILTER (WHERE post) - avg(r) FILTER (WHERE NOT post) AS d FROM q3
+  GROUP BY 1, 2, 3 HAVING bool_or(post) AND bool_or(NOT post)),
+s AS (SELECT 'all' AS split, d FROM u UNION ALL SELECT 'plan=' || plan_tier, d FROM u UNION ALL SELECT 'size=' || company_size, d FROM u)
+SELECT split, count(*) AS users_on_both_sides, round(avg(d), 2) AS within_user_change_mins, round(avg(d) / (stddev(d) / sqrt(count(*))), 2) AS z_paired
+FROM s GROUP BY 1 ORDER BY 1;
+-- reference: resolution time (where Root Cause Assist acts), same plans, before vs after
+SELECT (t >= TIMESTAMP '2026-07-22') AS after_launch, count(*) AS resolutions, round(avg(resolution_time_mins), 1) AS avg_resolution_mins
+FROM ev WHERE event = 'alert resolved' AND plan_tier IN ('business', 'enterprise') GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q4 — onboarding conversion by cloud provider (with step detail)
 SELECT cloud_provider, count(*) AS signups, round(avg(connected::INT), 4) AS connected_cloud,
  round(avg(installed::INT), 4) AS installed_agent, round(avg(converted::INT), 4) AS created_dashboard
 FROM onboarding GROUP BY 1 ORDER BY 1;
+-- step conversion given the prior step (Mixpanel funnel step %), Azure vs the other clouds
+WITH g AS (SELECT CASE WHEN cloud_provider = 'azure' THEN 'azure' ELSE 'aws_gcp_multi' END AS grp, count(*) AS n,
+  sum(connected::INT) AS c, sum(installed::INT) AS i, sum(converted::INT) AS d FROM onboarding GROUP BY 1)
+SELECT grp, n AS signups, round(c / n, 4) AS step_connect, round(i / c, 4) AS step_install, round(d / i, 4) AS step_dashboard,
+ round(d / n, 4) AS overall FROM g ORDER BY 1;
 
--- EVAL Q5 — null: do SSO signups finish onboarding less often? (onboarding conversion by signup method)
-SELECT signup_method, count(*) AS signups, round(avg(converted::INT), 4) AS onboarding_conversion
-FROM onboarding GROUP BY 1 ORDER BY 1;
--- each method vs all other signups (two-proportion z)
+-- EVAL Q5 — null: do LinkedIn Ads signups finish onboarding less often than other signups?
+-- 7-day onboarding conversion, LinkedIn vs every other channel, with sub-splits by cloud
+-- group (Azure vs the rest) and signup method (two-proportion z)
+WITH o AS (SELECT o.*, CASE WHEN cloud_provider = 'azure' THEN 'azure' ELSE 'aws_gcp_multi' END AS cloud_group FROM onboarding o),
+s AS (SELECT 'all' AS split, ch, converted FROM o
+  UNION ALL SELECT 'cloud=' || cloud_group, ch, converted FROM o
+  UNION ALL SELECT 'method=' || signup_method, ch, converted FROM o),
+x AS (SELECT split, count(*) FILTER (WHERE ch = 'linkedin_ads') AS n1, avg(converted::INT) FILTER (WHERE ch = 'linkedin_ads') AS p1,
+  count(*) FILTER (WHERE ch <> 'linkedin_ads') AS n2, avg(converted::INT) FILTER (WHERE ch <> 'linkedin_ads') AS p2, avg(converted::INT) AS p FROM s GROUP BY 1)
+SELECT split, n1 AS linkedin_signups, round(p1, 4) AS linkedin_conversion, n2 AS other_signups, round(p2, 4) AS other_conversion,
+ round((p1 - p2) / sqrt(p * (1 - p) * (1.0 / n1 + 1.0 / n2)), 2) AS z FROM x ORDER BY 1;
+-- every channel vs the rest (reference)
 WITH t AS (SELECT count(*) AS n, avg(converted::INT) AS p FROM onboarding),
-g AS (SELECT signup_method AS m, count(*) AS n1, avg(converted::INT) AS p1 FROM onboarding GROUP BY 1),
-x AS (SELECT g.m, g.n1, g.p1, t.n - g.n1 AS n2, (t.p * t.n - g.p1 * g.n1) / (t.n - g.n1) AS p2, t.p FROM g, t)
-SELECT m AS signup_method, round(p1, 4) AS conversion, round(p2, 4) AS rest_conversion,
+g AS (SELECT ch, count(*) AS n1, avg(converted::INT) AS p1 FROM onboarding GROUP BY 1),
+x AS (SELECT g.ch, g.n1, g.p1, t.n - g.n1 AS n2, (t.p * t.n - g.p1 * g.n1) / (t.n - g.n1) AS p2, t.p FROM g, t)
+SELECT ch AS acquisition_channel, n1 AS signups, round(p1, 4) AS conversion, round(p2, 4) AS rest_conversion,
  round((p1 - p2) / sqrt(p * (1 - p) * (1.0 / n1 + 1.0 / n2)), 2) AS z_vs_rest FROM x ORDER BY 1;
 
 -- EVAL Q6 — Slack + PagerDuty: acknowledgement and resolution time (profile connected_integrations)
@@ -488,19 +502,19 @@ WITH x AS (SELECT count(*) FILTER (WHERE ch = 'linkedin_ads') AS n1, avg(bought:
 SELECT round(p1 / p2, 4) AS ratio, round((p1 - p2) / sqrt(p * (1 - p) * (1.0 / n1 + 1.0 / n2)), 2) AS z FROM x;
 
 -- EVAL Q15 — Team price change: did new Team subscriptions fall?
-SELECT (t >= TIMESTAMP '2026-08-17') AS post, count(*) FILTER (WHERE plan = 'team') AS team, count(*) FILTER (WHERE plan = 'business') AS business,
+SELECT (t >= TIMESTAMP '2026-08-03') AS post, count(*) FILTER (WHERE plan = 'team') AS team, count(*) FILTER (WHERE plan = 'business') AS business,
  round(count(*) FILTER (WHERE plan = 'team')::DOUBLE / count(*), 4) AS team_share,
  round(count(*) FILTER (WHERE plan = 'team')::DOUBLE / count(*) FILTER (WHERE plan = 'business'), 4) AS team_per_business,
  round(avg(seats) FILTER (WHERE plan = 'team'), 2) AS team_avg_seats, round(avg(seats) FILTER (WHERE plan = 'business'), 2) AS business_avg_seats
 FROM ev WHERE event = 'subscription started' GROUP BY 1 ORDER BY 1;
 -- two-proportion z for Team share of new subscriptions, before vs after
-WITH g AS (SELECT (t >= TIMESTAMP '2026-08-17') AS post, count(*) AS n, avg((plan = 'team')::INT) AS p FROM ev WHERE event = 'subscription started' GROUP BY 1),
+WITH g AS (SELECT (t >= TIMESTAMP '2026-08-03') AS post, count(*) AS n, avg((plan = 'team')::INT) AS p FROM ev WHERE event = 'subscription started' GROUP BY 1),
 x AS (SELECT max(n) FILTER (WHERE post) AS n1, max(p) FILTER (WHERE post) AS p1, max(n) FILTER (WHERE NOT post) AS n2, max(p) FILTER (WHERE NOT post) AS p2 FROM g)
 SELECT round(p1 - p2, 4) AS team_share_diff, round((p1 - p2) / sqrt(((p1 * n1 + p2 * n2) / (n1 + n2)) * (1 - (p1 * n1 + p2 * n2) / (n1 + n2)) * (1.0 / n1 + 1.0 / n2)), 2) AS z FROM x;
 -- equal 6-week windows either side of the change
-SELECT (t >= TIMESTAMP '2026-08-17') AS post, count(*) FILTER (WHERE plan = 'team') AS team, count(*) FILTER (WHERE plan = 'business') AS business,
+SELECT (t >= TIMESTAMP '2026-08-03') AS post, count(*) FILTER (WHERE plan = 'team') AS team, count(*) FILTER (WHERE plan = 'business') AS business,
  round(avg(seats) FILTER (WHERE plan = 'team'), 2) AS team_avg_seats
-FROM ev WHERE event = 'subscription started' AND t >= TIMESTAMP '2026-07-06' AND t < TIMESTAMP '2026-09-28' GROUP BY 1 ORDER BY 1;
+FROM ev WHERE event = 'subscription started' AND t >= TIMESTAMP '2026-06-22' AND t < TIMESTAMP '2026-09-14' GROUP BY 1 ORDER BY 1;
 
 -- new subscriptions by month and plan (events), for the overall trend behind Q15 and Q18
 SELECT strftime(t, '%Y-%m') AS month, count(*) FILTER (WHERE plan = 'team') AS team, count(*) FILTER (WHERE plan = 'business') AS business,
@@ -508,7 +522,7 @@ SELECT strftime(t, '%Y-%m') AS month, count(*) FILTER (WHERE plan = 'team') AS t
 FROM ev WHERE event = 'subscription started' GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q16 — Team new MRR before vs after the price change (warehouse)
-SELECT plan, (date::DATE >= DATE '2026-08-17') AS post, count(*) AS days, sum(new_subscriptions) AS subscriptions, sum(new_seats) AS seats,
+SELECT plan, (date::DATE >= DATE '2026-08-03') AS post, count(*) AS days, sum(new_subscriptions) AS subscriptions, sum(new_seats) AS seats,
  round(sum(new_mrr_usd), 0) AS new_mrr_usd, round(sum(new_mrr_usd) / count(*), 1) AS new_mrr_per_day,
  round(sum(new_mrr_usd) / nullif(sum(new_subscriptions), 0), 2) AS new_mrr_per_subscription
 FROM wh_bookings GROUP BY 1, 2 ORDER BY 1, 2;
@@ -587,5 +601,5 @@ UNION ALL SELECT 'alert_recipients_without_slack_and_pagerduty', round(avg((NOT 
 UNION ALL SELECT 'linkedin_share_of_paid_spend', round((SELECT sum(spend_usd) FROM wh_marketing WHERE acquisition_channel = 'linkedin_ads') / (SELECT sum(spend_usd) FROM wh_marketing), 4)
 UNION ALL SELECT 'total_paid_spend_usd', round((SELECT sum(spend_usd) FROM wh_marketing), 0)
 UNION ALL SELECT 'team_mrr_per_sub_post_vs_pre', round(
-  (SELECT sum(new_mrr_usd) / sum(new_subscriptions) FROM wh_bookings WHERE plan = 'team' AND date::DATE >= DATE '2026-08-17')
-  / (SELECT sum(new_mrr_usd) / sum(new_subscriptions) FROM wh_bookings WHERE plan = 'team' AND date::DATE < DATE '2026-08-17'), 4);
+  (SELECT sum(new_mrr_usd) / sum(new_subscriptions) FROM wh_bookings WHERE plan = 'team' AND date::DATE >= DATE '2026-08-03')
+  / (SELECT sum(new_mrr_usd) / sum(new_subscriptions) FROM wh_bookings WHERE plan = 'team' AND date::DATE < DATE '2026-08-03'), 4);

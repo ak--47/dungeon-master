@@ -14,13 +14,15 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             cloud account, install the agent, watch service dashboards, get
  *             paged on alerts, ship through hosted CI pipelines, and review
  *             cloud cost. Free plan plus paid Team ($20 → $25 per seat per
- *             month from 2026-08-17) and Business ($45 per seat); Enterprise
+ *             month from 2026-08-03) and Business ($45 per seat); Enterprise
  *             is sales-led. Root Cause Assist (AI incident help) is a Business
  *             and Enterprise feature from 2026-07-22.
- * SCALE:      10,000 users (≈4,530 sign up inside the window), ~0.97M events,
- *             120 days (2026-06-04 → 2026-10-01, UTC), ≈3,700 companies: ≈300
- *             long-standing customers (2-110 users each) and ≈3,400 workspaces
- *             started in or just before the window (mostly 1-3 users)
+ * SCALE:      10,000 users (≈4,460 sign up inside the window), ~0.96M events,
+ *             120 days (2026-06-04 → 2026-10-01, UTC), ≈3,670 companies: ≈300
+ *             long-standing customers (2-100 users each) and ≈3,360 workspaces
+ *             started in or just before the window (mostly 1-3 users). About
+ *             19% of workspaces started in the window pay by Oct 1; 13% of
+ *             signups start a subscription within 30 days
  * CORE LOOP:  dashboard viewed → query executed; alert triggered → alert
  *             acknowledged → alert resolved; deployment pipeline run → service deployed
  * VALUE MOMENT: alert acknowledged (the platform got a human to a problem)
@@ -46,8 +48,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *       deploy_id per run, runner_region per run, A/B "Smart Test Selection"
  *       from 2026-07-15)
  *   - Upgrade (recent signups, customer_since ≥ 2026-05-14): upgrade page viewed →
- *       subscription started (55% per pass; only a workspace owner's purchase
- *       stands); Upgrade (older free accounts): same steps (4%, never stands:
+ *       subscription started (55% would-be purchase per pass; only a workspace
+ *       owner's first one can stand, and a seeded 70% × the channel share of
+ *       those do); Upgrade (older free accounts): same steps (4%, never stands:
  *       long-standing customers change plans through sales)
  *   - Team Invites: teammate invited (single step; invitations are one-off
  *       actions, not a burst inside the catch-all funnel)
@@ -103,15 +106,17 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * - retentionCurve (not engagementDecay) shapes new users' activity. The
  *   engine pins each new user's signup to profile `created`, a UTC instant
  *   whose hour follows the soup's working-hours curve; customer_since is that
- *   instant's UTC date. ENGINE WORKAROUND: in active-day mode the engine makes
- *   a born user's events per active day scale with remaining days / expected
- *   active days, so late-September signups were 30-45% less intense in their
- *   first week than June signups; the everything hook clones born users'
- *   hands-on free-standing events up to the June intensity. Each clone
+ *   instant's UTC date. ENGINE WORKAROUND (still needed on the 2026-10-07
+ *   engine): in active-day mode a born user's event budget is rate × remaining
+ *   days but spreads over the curve's expected active days, so late signups
+ *   are less intense in their first week. Measured without the workaround,
+ *   hands-on free-standing events per new user in week one were 4.74 (June
+ *   signups) vs 3.91 (September). The everything hook clones born users'
+ *   hands-on free-standing events up to the June intensity; each clone
  *   re-draws its event properties and lands within 3 hours of its source.
- *   Funnel-linked flows (alerts, pipeline runs) are untouched, so first-week
- *   alerts per new user still fall from 0.50 (June signups) to 0.32 (September)
- *   and pipeline runs from 0.62 to 0.43. Remove once the engine fixes it.
+ *   Funnel-linked flows are untouched, so first-week alerts per new user
+ *   still fall from 0.60 (June signups) to 0.46 (September) and pipeline runs
+ *   from 0.69 to 0.56. Remove once the engine fixes it.
  * - Weekly and daily rhythm (soup): weekday-heavy (weekends about a quarter
  *   of a weekday) with Americas and EMEA working hours dominating in UTC.
  *   New users' signup days and hours follow the same weights. Pages follow
@@ -120,21 +125,27 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   weekend day carries about 70% of a weekday's pages (measured).
  * - US holidays (Jul 3 observed, Sep 7): US-based users (about 59%) skip 75%
  *   of their hands-on events (dashboards, queries, docs, pipelines, invites,
- *   integrations); a skipped pipeline run takes its experiment exposure along.
- *   Pages still fire and are answered. Total volume on those days is about 30%
- *   below the same weekday a week before and after.
+ *   integrations), except the pipeline run that carries their one experiment
+ *   exposure. Pages still fire and are answered. Total volume on those days is
+ *   about 33% below the same weekday a week before and after.
+ * - Self-serve conversion: an owner's would-be purchase (the first
+ *   converting Upgrade pass) stands for a seeded 70% of owners times the H8
+ *   channel share, independent of how often the owner opens the upgrade page,
+ *   so the paid rate does not drift with per-user activity. Measured: 19.1%
+ *   of workspaces started in the window pay by Oct 1, and 13.1% of signups
+ *   (through Aug 31) start a subscription within 30 days.
  * - Warm start: a target 14.3% of established users (in-window signup pace ×
  *   21 days) joined in the 21 days before June 4; they start or join new
  *   workspaces exactly as in-window signups do. A pre-window owner's purchase
- *   stands with probability 0.45 (the buy rate of in-window workspaces; these
- *   accounts face no lapse cut). It draws a buying delay from the new-workspace
- *   delay curve (days after signup): a delay shorter than its age on June 4
- *   means it already bought (the workspace starts the window paid); otherwise
- *   the purchasing pass moves to signup + delay. Weekly new subscriptions are
- *   flat from week 1.
+ *   stands with probability 0.45 on top of the shares above (these accounts
+ *   face no lapse cut). It draws a buying delay from the new-workspace delay
+ *   curve (days after signup, measured on in-window owners): a delay shorter
+ *   than its age on June 4 means it already bought (the workspace starts the
+ *   window paid); otherwise the purchasing pass moves to signup + delay.
+ *   Weekly new subscriptions start at the in-window level in week 1.
  * - Collaboration volume: new users keep every "teammate invited" in their
- *   first 7 days; other invites are thinned to 12% (about 1.25 invites per
- *   user, 42 per company in 120 days). "integration configured" comes only
+ *   first 7 days; other invites are thinned to 12% (about 1.36 invites per
+ *   user, 3.7 per company in 120 days). "integration configured" comes only
  *   from a role-dependent share of users (the engineers who own alert routing;
  *   higher in accounts still setting up). Accounts set up before the window
  *   (customer_since before 2026-05-14) hold their tools in
@@ -155,7 +166,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   success manager (companies on an Enterprise contract; ~9% of users).
  *   Fuzzy SCD timing: rows can repeat the prior value. A new
  *   account's first row is at its signup and later rows are about a week
- *   apart. Older accounts' histories start in the month before the window
+ *   apart (engine). Older accounts' histories start in the month before the window
  *   (rows about three weeks apart), so each has a value in force on June 4;
  *   no row predates an account's customer_since.
  */
@@ -200,8 +211,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H3. AZURE ONBOARDING FRICTION (declarative duplicate first funnels)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: new accounts at Azure companies finish onboarding at 34% vs 62%
- *   for AWS, GCP, and multi-cloud (0.55x). Losses spread over the connect and
- *   install steps.
+ *   for AWS, GCP, and multi-cloud (0.55x). Azure trails at every step; the
+ *   engine spreads the extra drop-off over the three steps after signup, and
+ *   the widest step gap is the last one (measured step conversion, Azure vs
+ *   others: connect 75.9% vs 86.4%, install 70.3% vs 86.1%, first dashboard
+ *   60.5% vs 82.8%).
  * MIXPANEL: Funnels, account created → cloud account connected → agent
  *   installed → dashboard created, 7-day window, breakdown cloud_provider.
  * REAL WORLD: a newer cloud integration with more setup steps leaks signups.
@@ -235,9 +249,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: new users go dark after day 14 on a ramp by first-week "teammate
  *   invited" count: 60% with none, 40% with one, none with 2+. Separately,
- *   70% of all new users lapse on a uniform day 4-75 (organic), and 55% of new
- *   users who never finish onboarding abandon on day 1.5-5 (keeps D7 at B2B
- *   levels). Onboarded users: D30 2+ / 0 invites ≥ 1/(1-0.6) = 2.5 (floor;
+ *   70% of all new users lapse on a uniform day 4-75 (organic), and new users
+ *   who never finish onboarding stop: 55% on day 1.5-5, the rest on day 5-45
+ *   (no agent, nothing to monitor; keeps D7 at B2B levels and stops
+ *   never-onboarded accounts from piling up in the Free base). Onboarded users: D30 2+ / 0 invites ≥ 1/(1-0.6) = 2.5 (floor;
  *   engagement adds). All new users: activated / not activated ≥ 1/(1-0.4)
  *   (floor; abandonment adds).
  * MIXPANEL: build the groups in Funnels: account created → teammate invited
@@ -282,9 +297,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   $140 paid search: each channel bills a paced daily budget (CPL x expected
  *   signups per day, weekday shape that follows the signup rhythm, seeded
  *   ±12% noise, never zero), so daily cost per signup moves with the day's
- *   signups. Share of would-be paid subscriptions kept by channel: LinkedIn
- *   1.0, outbound 0.9, referral 0.8, G2 0.7, organic 0.65, paid search 0.5,
- *   so LinkedIn signups buy at 2x the paid-search rate.
+ *   signups. Share of would-be paid subscriptions kept by channel (on top of
+ *   the 70% workspace share): LinkedIn 1.0, outbound 0.9, referral 0.8, G2
+ *   0.7, organic 0.65, paid search 0.5, so LinkedIn signups buy at 2x the
+ *   paid-search rate.
  * MIXPANEL: Insights, account created by acquisition_channel joined to
  *   paid_marketing_daily.spend_usd; Funnels account created → subscription
  *   started, 30-day conversion window (the Mixpanel default), signups Jun 4 -
@@ -294,7 +310,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * H9. TEAM PLAN PRICE CHANGE (everything + warehouse subscription_bookings_daily)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: on 2026-08-17 Team rises from $20 to $25 per seat per month.
+ * PATTERN: on 2026-08-03 Team rises from $20 to $25 per seat per month.
  *   New Team subscriptions keep their volume but start with 0.7x the seats;
  *   Business is unchanged. Prices exist only in the warehouse.
  * MIXPANEL: Insights, subscription started, average seats, breakdown plan,
@@ -306,8 +322,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: trigger → ack time is 0.6x at enterprise companies and 1.5x at
  *   startups, vs SMB and mid-market.
- * MIXPANEL: Funnels, alert triggered → alert acknowledged, hold alert_id
- *   constant, median time to convert, breakdown company_size.
+ * MIXPANEL: Funnels, alert triggered → alert acknowledged, counting: totals,
+ *   hold alert_id constant, median time to convert, breakdown company_size.
  * REAL WORLD: dedicated on-call rotations vs part-time ownership.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -321,49 +337,52 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * REAL WORLD: noisy alerting trains people to ignore pages.
  *
  * ═════════════════════════════════════════════════════════════════════════
- * EXPECTED METRICS SUMMARY (measured: data/verify-sass, 2026-10-07, company-level plans)
+ * EXPECTED METRICS SUMMARY (measured: data/verify-sass, 2026-10-07, final engine)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                       | Derivation               | Expected | Measured
  * -----|----------------------------------------------|--------------------------|----------|---------
- * H1   | paid invites per dashboard view, promo/30d before | QUARTER_CLOSE_INVITE_MULT | 1.50 | 1.417 (0.1376 vs 0.0971)
- * H1   | Free invites per dashboard view (control)    | unchanged                | 1.00     | 0.948
+ * H1   | paid invites per dashboard view, promo/30d before | QUARTER_CLOSE_INVITE_MULT | 1.50 | 1.463 (0.1470 vs 0.1005)
+ * H1   | Free invites per dashboard view (control)    | unchanged                | 1.00     | 0.936 (0.1520 vs 0.1624)
  * H2   | ai_assist rows pre-launch or Free/Team       | exact purity             | 0        | 0
- * H2   | ai/other resolution time, Biz+Ent post-launch| RCA_RESOLVE_MULT         | 0.55     | 0.564 (72.0 vs 127.6 min)
- * H2   | ai share of eligible resolutions after ramp  | 0.5 × 0.8                | 0.40     | 0.427 (weekly 3.9% → 43%)
- * H3   | onboarding conversion Azure/others           | 34/62                    | 0.548    | 0.584 (34.8% vs 59.5%)
- * H4   | avg response Slack+PD / rest, set up pre-window | INTEGRATED_RESPONSE_MULT | 0.40  | 0.399 (9.90 vs 24.81 min)
- * H4   | new signups: after / before pair is live (SQL) | ≤ 0.40 (floor 0.70)    | 0.40     | 0.415 (13.92 vs 33.58 min)
- * H5   | D30 activated/not activated, all new users   | ≥ 1/(1 − 0.4) (floor)    | ≥ 1.67   | 2.516 (55.9% vs 22.2%, STRONG)
- * H5   | D30 2+ / 0 invites, onboarded new users      | ≥ 1/(1 − 0.6) (floor)    | ≥ 2.50   | 2.884 (69.2% vs 24.0%, STRONG)
- * H6   | per-run deploy rate Smart/Control            | SMART_TEST_CONV_MULT     | 1.20     | 1.201 (80.7% vs 67.2%)
+ * H2   | ai/other resolution time, Biz+Ent post-launch| RCA_RESOLVE_MULT         | 0.55     | 0.552 (72.1 vs 130.7 min)
+ * H2   | ai share of eligible resolutions after ramp  | 0.5 × 0.8                | 0.40     | 0.398 (weekly 3.7% → 40%)
+ * H3   | onboarding conversion Azure/others           | 34/62                    | 0.548    | 0.524 (32.3% vs 61.6%)
+ * H4   | avg response Slack+PD / rest, set up pre-window | INTEGRATED_RESPONSE_MULT | 0.40  | 0.407 (10.05 vs 24.70 min)
+ * H4   | new signups: after / before pair is live (SQL) | ≤ 0.40 (floor 0.70)    | 0.40     | 0.420 (13.77 vs 32.81 min)
+ * H5   | D30 activated/not activated, all new users   | ≥ 1/(1 − 0.4) (floor)    | ≥ 1.67   | 2.511 (47.3% vs 18.9%, STRONG)
+ * H5   | D30 2+ / 0 invites, onboarded new users      | ≥ 1/(1 − 0.6) (floor)    | ≥ 2.50   | 2.720 (70.8% vs 26.1%)
+ * H6   | per-run deploy rate Smart/Control            | SMART_TEST_CONV_MULT     | 1.20     | 1.197 (80.9% vs 67.6%)
  * H6   | median run → deploy time Smart/Control       | SMART_TEST_TTC_MULT      | 0.75     | 0.748 (22.5 vs 30.1 min)
  * H6   | Smart Selection share of enrolled users      | equal 2-arm hash         | 0.50     | 0.497
- * H7   | us-east / other success, incident vs ±7 days | 1 − RUNNER_INCIDENT_FAIL | 0.40     | 0.403 (30.0% vs 74.8% in us-east)
+ * H7   | us-east / other success, incident vs ±7 days | 1 − RUNNER_INCIDENT_FAIL | 0.40     | 0.408 (30.5% vs 75.4% in us-east)
  * H7   | warehouse infra_error_rate during incident   | RUNNER_INCIDENT_FAIL     | 0.60     | 0.603
- * H8   | spend per signup LinkedIn / paid search      | 420 / 140                | 3.00     | 3.016 ($424.99 vs $140.93)
- * H8   | 30-day paid rate LinkedIn / paid search      | 1.0 / 0.5 (floor 1.5)    | 2.00     | 2.180 (23.2% vs 10.7%)
- * H9   | avg seats Team post/pre                      | TEAM_SEAT_MULT           | 0.70     | 0.658 (8.03 vs 12.20)
- * H9   | avg seats Business post/pre (control)        | unchanged                | 1.00     | 1.031
- * H9   | new MRR per Team subscription post/pre       | 0.7 × 25/20              | 0.875    | 0.822
- * H10  | median trigger → ack, enterprise / SMB+mid   | RESPONSE_SIZE_MULT       | 0.60     | 0.606
- * H10  | median trigger → ack, startup / SMB+mid      | RESPONSE_SIZE_MULT       | 1.50     | 1.445
- * H11  | ack rate 30+ alerts / ≤12 alerts             | 1 − FATIGUE_FLIP         | 0.50     | 0.499 (43.0% vs 86.2%)
+ * H8   | spend per signup LinkedIn / paid search      | 420 / 140                | 3.00     | 2.940 ($427.86 vs $145.55)
+ * H8   | 30-day paid rate LinkedIn / paid search      | 1.0 / 0.5 (floor 1.5)    | 2.00     | 2.405 (19.7% vs 8.2%, STRONG)
+ * H9   | avg seats Team post/pre                      | TEAM_SEAT_MULT           | 0.70     | 0.718 (8.46 vs 11.78)
+ * H9   | avg seats Business post/pre (control)        | unchanged                | 1.00     | 0.974 (11.10 vs 11.40)
+ * H9   | new MRR per Team subscription post/pre       | 0.7 × 25/20              | 0.875    | 0.898 ($211.55 vs $235.57)
+ * H10  | median trigger → ack, enterprise / SMB+mid   | RESPONSE_SIZE_MULT       | 0.60     | 0.612
+ * H10  | median trigger → ack, startup / SMB+mid      | RESPONSE_SIZE_MULT       | 1.50     | 1.477
+ * H11  | ack rate 30+ alerts / ≤12 alerts             | 1 − FATIGUE_FLIP         | 0.50     | 0.498 (42.9% vs 86.2%)
  * ═════════════════════════════════════════════════════════════════════════
  *
- * Verdicts: 10 NAILED, 1 STRONG (H5; both reads are knob floors). H5: setup
- * abandoners rarely invite, so the all-user activated/not-activated gap
- * exceeds the dark-share floor. The onboarded-only dose read removes
- * abandonment but not engagement: heavier users invite more and are likelier
- * to show any event in the day-30 week even without the dark cut, while the
- * knob treats every 2+ user alike (2: 56.5%, 3: 57.1%, 4+: 52.4% on 105
- * users, all new users). H8's purchase-rate read rests on 147 LinkedIn and 75
- * paid-search buyers inside the 30-day window. H1 is noise-limited (about
- * 1,000-1,500 paid invites per half-month; the paid ratio of adjacent
- * half-months outside the promotion moves by about 4%). The H9 Business
- * control rests on 121 post-change subscriptions. H3's Azure arm has 1,082
- * signups (relative SE about 4%). H4 read 2 compares 897 vs 758
+ * Verdicts: 9 NAILED, 2 STRONG (H5 and H8; both grade against knob floors).
+ * H5: setup abandoners rarely invite, so the all-user activated/not-activated
+ * gap exceeds the dark-share floor. The onboarded-only dose read removes
+ * abandonment but not engagement (heavier users invite more and are likelier
+ * to show any event in the day-30 week), so the knob is a floor. H8's
+ * purchase-rate read rests on 126 LinkedIn and 56 paid-search buyers inside
+ * the 30-day window (relative SE about 16%); this run lands above the
+ * target's ±10%. H1 is noise-limited (about 1,000-1,600 paid and 650 Free
+ * invites per half-month; the Free control's SE is about 5%). H9 rests on
+ * 184/185 Team and 88/136 Business subscriptions after/before the change;
+ * seats per subscription have a CV of about 0.31. H3's Azure arm has 1,072
+ * signups (relative SE about 4%). H4 read 2 compares 987 vs 1,068
  * acknowledgements from about 200 new users and is graded against the knob
- * with a knob-derived floor.
+ * with a knob-derived floor. Business new subscriptions fall from 67 a month
+ * (June, July) to 36 in September in this run; no hook touches the plan mix
+ * (a second seed shows flat Business volume), so it is sampling noise that
+ * the eval reports as unexplained.
  */
 
 // ── SCALE ──
@@ -379,7 +398,7 @@ const chance = u.initChance(SEED);
 // ── TIMELINE (shared by hooks, stories, SQL, warehouse columns, guides) ──
 const SMART_TEST_START = "2026-07-15T00:00:00Z";      // "Smart Test Selection" pipeline A/B starts
 const RCA_LAUNCH = "2026-07-22T00:00:00Z";            // Root Cause Assist (AI) for Business + Enterprise
-const TEAM_PRICE_CHANGE = "2026-08-17T00:00:00Z";     // Team plan $20 → $25 per seat per month
+const TEAM_PRICE_CHANGE = "2026-08-03T00:00:00Z";     // Team plan $20 → $25 per seat per month
 const RUNNER_INCIDENT_START = "2026-08-25T00:00:00Z"; // hosted CI runner incident, us-east
 const RUNNER_INCIDENT_END = "2026-08-28T00:00:00Z";   // exclusive (3 days)
 const QUARTER_CLOSE_START = "2026-09-16T00:00:00Z";   // Q3 quarter-close seat promotion
@@ -475,6 +494,7 @@ const DARK_AFTER_DAYS = 14;
 const SETUP_ABANDON_SHARE = 0.55;  // new users who never finish onboarding: share who stop on day 1.5-5
 const SETUP_ABANDON_DAY_MIN = 1.5;
 const SETUP_ABANDON_DAY_MAX = 5;
+const SETUP_STALL_DAY_MAX = 45;    // the other users who never finish onboarding stop on day 5-45 (no agent, nothing to monitor)
 const LAPSE_SHARE = 0.7;           // organic lapse, every new user, independent of activation
 const LAPSE_DAY_MIN = 4;
 const LAPSE_DAY_MAX = 75;
@@ -535,7 +555,8 @@ const TEAM_PRICE_OLD = 20;
 const TEAM_PRICE_NEW = 25;
 const BUSINESS_PRICE = 45;
 const TEAM_SEAT_MULT = 0.7;        // seats per new Team subscription after the change
-const UPGRADE_CONV = 55;           // recent signups (joined in the window or the 3 weeks before), per upgrade-page visit
+const UPGRADE_CONV = 55;           // recent signups (joined in the window or the 3 weeks before): would-be purchase per upgrade-page visit
+const WORKSPACE_BUY_KEEP = 0.7;    // share of would-be workspace purchases that happen (seeded per owner; × PURCHASE_KEEP by channel)
 const UPGRADE_CONV_ESTABLISHED = 4; // long-time free accounts: these purchases never stand (long-standing customers change plans through sales)
 // warm start: accounts that signed up in the 3 weeks before June 4 are still
 // on Free and inside their self-serve buying window (new accounts buy in their
@@ -550,8 +571,8 @@ const RECENT_SHARE = Math.round((NUM_USERS * BORN_PCT / 100) / WINDOW_DAYS * REC
 const RECENT_BUY_KEEP = 0.45;
 // days from signup to a new workspace's purchase (relative weights by day,
 // the shape in-window workspaces show): most buy in their first two weeks
-const BUY_DELAY_WEIGHTS = [50, 43, 35, 30, 27, 27, 27, 26, 23, 21, 19, 18, 16, 13, 10, 7, 5, 4, 4, 4, 4, 4, 4,
-	3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2];
+const BUY_DELAY_WEIGHTS = [0, 45, 32, 22, 20, 18, 15, 15, 14, 12, 9, 8, 9, 7, 5, 3, 2, 2, 2, 2.5, 2.5, 2.5, 2.5, 2, 2, 1.5,
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
 const buyDelayDay = (r) => {
 	const total = BUY_DELAY_WEIGHTS.reduce((a, b) => a + b, 0);
 	let acc = 0;
@@ -856,13 +877,15 @@ function handleEverything(events, meta) {
 
 	// ── US holidays: US-based users skip most hands-on work (pages still fire) ──
 	if (profile.country_code === "US") {
+		// the user's one experiment exposure sits 1s before their first pipeline
+		// run in the test; that run always happens, so the exposure keeps its run
+		const exposedRunMs = new Set(events.filter((e) => e.event === "$experiment_started").map((e) => T(e) + 1000));
 		const skipped = new Set();
 		for (const e of events) {
+			if (e.event === "deployment pipeline run" && exposedRunMs.has(T(e))) continue;
 			if (HOLIDAY_EVENTS.has(e.event) && US_HOLIDAYS.includes(e.time.slice(0, 10)) && chance.bool({ likelihood: HOLIDAY_SKIP * 100 })) skipped.add(e);
 		}
-		// a skipped pipeline run takes its experiment exposure (sent 1s before it) along
-		const skippedRunMs = new Set([...skipped].filter((e) => e.event === "deployment pipeline run").map((e) => T(e) - 1000));
-		events = events.filter((e) => !skipped.has(e) && !(e.event === "$experiment_started" && skippedRunMs.has(T(e))));
+		events = events.filter((e) => !skipped.has(e));
 	}
 
 	// ── production incidents happen every day: a share of weekday pages move to
@@ -884,9 +907,14 @@ function handleEverything(events, meta) {
 	// ── self-serve purchase: one per company, started by its owner (the
 	// company's first user here). Teammates never buy; once the company pays,
 	// nobody there sees the upgrade page again ──
-	const firstBuy = isOwner && co.kind === "new" && co.initialPlan === "free"
+	let firstBuy = isOwner && co.kind === "new" && co.initialPlan === "free"
 		? events.filter((e) => e.event === "subscription started").sort((a, b) => T(a) - T(b))[0]
 		: undefined;
+	// only a share of workspaces that reach a buying moment pay (seeded per
+	// owner, so the paid rate does not depend on how often the owner visits the
+	// upgrade page); H8: that share also depends on the acquisition channel
+	const keep = WORKSPACE_BUY_KEEP * (PURCHASE_KEEP[profile.acquisition_channel] ?? 1);
+	if (firstBuy && salt(uid, "channel-keep") >= keep) firstBuy = undefined;
 	if (!isOwner && co.purchase) {
 		const t0 = co.purchase.ms;
 		events = events.filter((e) => e.event !== "subscription started" && !(e.event === "upgrade page viewed" && T(e) >= t0));
@@ -900,13 +928,6 @@ function handleEverything(events, meta) {
 		});
 	}
 	let purchase = firstBuy || null;
-
-	// ── H8: channel quality — only a share of would-be buyers from each channel buy ──
-	const keep = PURCHASE_KEEP[profile.acquisition_channel] ?? 1;
-	if (purchase && salt(uid, "channel-keep") >= keep) {
-		events = events.filter((e) => e !== purchase);
-		purchase = null;
-	}
 
 	// ── warm start: a workspace started in the 3 weeks before June 4. Each
 	// draws its buying delay from the new-workspace delay curve (days after
@@ -952,7 +973,10 @@ function handleEverything(events, meta) {
 		const cuts = [];
 		const dark = early < ACTIVATION_MIN ? DARK_SHARE_BY_INVITES[early] : 0;
 		if (salt(uid, "dark") < dark) cuts.push(birthMs + DARK_AFTER_DAYS * DAY_MS);
-		if (!onboarded && salt(uid, "abandon") < SETUP_ABANDON_SHARE) cuts.push(birthMs + (SETUP_ABANDON_DAY_MIN + salt(uid, "abandon-day") * (SETUP_ABANDON_DAY_MAX - SETUP_ABANDON_DAY_MIN)) * DAY_MS);
+		if (!onboarded) {
+			const [lo, hi] = salt(uid, "abandon") < SETUP_ABANDON_SHARE ? [SETUP_ABANDON_DAY_MIN, SETUP_ABANDON_DAY_MAX] : [SETUP_ABANDON_DAY_MAX, SETUP_STALL_DAY_MAX];
+			cuts.push(birthMs + (lo + salt(uid, "abandon-day") * (hi - lo)) * DAY_MS);
+		}
 		if (salt(uid, "lapse") < LAPSE_SHARE) cuts.push(birthMs + (LAPSE_DAY_MIN + salt(uid, "lapse-day") * (LAPSE_DAY_MAX - LAPSE_DAY_MIN)) * DAY_MS);
 		if (cuts.length) {
 			const cut = Math.min(...cuts);
@@ -1892,7 +1916,7 @@ FROM a JOIN c ON c.uid = a.uid JOIN s ON s.uid = a.uid WHERE a.resp IS NOT NULL 
 		id: "H5-first-week-team-activation",
 		hook: "H5",
 		archetype: "retention-divergence",
-		narrative: `New users who invite fewer than ${ACTIVATION_MIN} teammates in their first ${ACTIVATION_DAYS} days are at risk, on a ramp: ${DARK_SHARE_BY_INVITES[0] * 100}% of users with no first-week invite and ${DARK_SHARE_BY_INVITES[1] * 100}% with one go dark after day ${DARK_AFTER_DAYS}. Classification uses first-week activity only. Every new user also faces organic lapse (${LAPSE_SHARE * 100}% stop on a uniform day ${LAPSE_DAY_MIN}-${LAPSE_DAY_MAX}), and ${SETUP_ABANDON_SHARE * 100}% of users who never finish onboarding stop on day ${SETUP_ABANDON_DAY_MIN}-${SETUP_ABANDON_DAY_MAX}. Day-${RETENTION_DAY} retention (any event in days ${RETENTION_DAY}-${RETENTION_DAY + 6} after signup, signups at least ${RETENTION_DAY + 7} days before the window end). Both reads are knob floors: among users who finished onboarding (no setup abandonment), 2+ invites vs none is at least 1/(1−${DARK_SHARE_BY_INVITES[0]}), and engagement adds to it (heavier users invite more and are likelier to show any event in the day-${RETENTION_DAY} week even without the dark cut; the one-invite group is too small at this scale to grade on its own); across all new users, activated vs not activated is at least 1/(1−${DARK_SHARE_BY_INVITES[1]}), and setup abandoners (who rarely invite) push it higher. Mixpanel: the first-week invite count is relative to each user's signup, so build the groups in Funnels first: account created → teammate invited → teammate invited, ${ACTIVATION_DAYS}-day conversion window, uniques; users who complete all three steps are the 2+ group, users who stop after step 2 the one-invite group, users who stop after step 1 the zero group. Save each as a cohort from the funnel, then run Retention (account created → any event, custom bracket day ${RETENTION_DAY}-${RETENTION_DAY + 6}) broken down by those cohorts, optionally filtered to users who did dashboard created.`,
+		narrative: `New users who invite fewer than ${ACTIVATION_MIN} teammates in their first ${ACTIVATION_DAYS} days are at risk, on a ramp: ${DARK_SHARE_BY_INVITES[0] * 100}% of users with no first-week invite and ${DARK_SHARE_BY_INVITES[1] * 100}% with one go dark after day ${DARK_AFTER_DAYS}. Classification uses first-week activity only. Every new user also faces organic lapse (${LAPSE_SHARE * 100}% stop on a uniform day ${LAPSE_DAY_MIN}-${LAPSE_DAY_MAX}), and users who never finish onboarding stop: ${SETUP_ABANDON_SHARE * 100}% on day ${SETUP_ABANDON_DAY_MIN}-${SETUP_ABANDON_DAY_MAX}, the rest on day ${SETUP_ABANDON_DAY_MAX}-${SETUP_STALL_DAY_MAX}. Day-${RETENTION_DAY} retention (any event in days ${RETENTION_DAY}-${RETENTION_DAY + 6} after signup, signups at least ${RETENTION_DAY + 7} days before the window end). Both reads are knob floors: among users who finished onboarding (no setup abandonment), 2+ invites vs none is at least 1/(1−${DARK_SHARE_BY_INVITES[0]}), and engagement adds to it (heavier users invite more and are likelier to show any event in the day-${RETENTION_DAY} week even without the dark cut; the one-invite group is too small at this scale to grade on its own); across all new users, activated vs not activated is at least 1/(1−${DARK_SHARE_BY_INVITES[1]}), and setup abandoners (who rarely invite) push it higher. Mixpanel: the first-week invite count is relative to each user's signup, so build the groups in Funnels first: account created → teammate invited → teammate invited, ${ACTIVATION_DAYS}-day conversion window, uniques; users who complete all three steps are the 2+ group, users who stop after step 2 the one-invite group, users who stop after step 1 the zero group. Save each as a cohort from the funnel, then run Retention (account created → any event, custom bracket day ${RETENTION_DAY}-${RETENTION_DAY + 6}) broken down by those cohorts, optionally filtered to users who did dashboard created.`,
 		mixpanelReport: { type: "Funnels → cohorts → Retention", cohortFunnel: `account created → teammate invited → teammate invited, ${ACTIVATION_DAYS}-day window; save completed / dropped-at-step-2 / dropped-at-step-1 users as cohorts`, birth: "account created", return: "any event", brackets: `custom: day ${RETENTION_DAY}-${RETENTION_DAY + 6}`, breakdown: "those cohorts" },
 		assertions: [
 			{
@@ -2021,7 +2045,7 @@ FROM ${WH("ci_runner_health_daily")}`,
 		id: "H8-paid-channel-economics",
 		hook: "H8",
 		archetype: "attribution-bias",
-		narrative: `LinkedIn Ads signups cost ${CPL_USD.linkedin_ads / CPL_USD.paid_search}x as much as paid search signups over the window (warehouse paid_marketing_daily bills a paced daily budget per channel = cost per signup × expected signups per day, with a weekday shape that follows the weekday signup rhythm above a ${SPEND_FLAT_SHARE * 100}% flat floor and seeded ±${SPEND_NOISE * 100}% day noise, never zero: $${CPL_USD.linkedin_ads} vs $${CPL_USD.paid_search} per signup at the window level; day-level cost per signup moves with the day's signups), but they buy a paid plan ${PURCHASE_KEEP.linkedin_ads / PURCHASE_KEEP.paid_search}x as often (share of would-be purchases kept: ${PURCHASE_KEEP.linkedin_ads} vs ${PURCHASE_KEEP.paid_search}; channel is drawn independently of company size and persona). Spend per signup needs the warehouse join. The purchase-rate read is the Mixpanel funnel account created → subscription started with the default ${PAID_FUNNEL_WINDOW_DAYS}-day conversion window, for signups ${D(DATASET_START)} through ${PAID_COHORT_LAST} (every signup has its full window inside the data). Paid-subscription counts per channel are about a hundred, so the ratio uses the knob as target with a knob-derived floor.`,
+		narrative: `LinkedIn Ads signups cost ${CPL_USD.linkedin_ads / CPL_USD.paid_search}x as much as paid search signups over the window (warehouse paid_marketing_daily bills a paced daily budget per channel = cost per signup × expected signups per day, with a weekday shape that follows the weekday signup rhythm above a ${SPEND_FLAT_SHARE * 100}% flat floor and seeded ±${SPEND_NOISE * 100}% day noise, never zero: $${CPL_USD.linkedin_ads} vs $${CPL_USD.paid_search} per signup at the window level; day-level cost per signup moves with the day's signups), but they buy a paid plan ${PURCHASE_KEEP.linkedin_ads / PURCHASE_KEEP.paid_search}x as often (share of would-be purchases kept, on top of the ${WORKSPACE_BUY_KEEP * 100}% workspace share: ${PURCHASE_KEEP.linkedin_ads} vs ${PURCHASE_KEEP.paid_search}; channel is drawn independently of company size and persona). Spend per signup needs the warehouse join. The purchase-rate read is the Mixpanel funnel account created → subscription started with the default ${PAID_FUNNEL_WINDOW_DAYS}-day conversion window, for signups ${D(DATASET_START)} through ${PAID_COHORT_LAST} (every signup has its full window inside the data). Paid subscriptions inside the window number about 50-130 per channel, so the ratio uses the knob as target with a knob-derived floor.`,
 		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "paid_marketing_daily.spend_usd", funnel: `account created → subscription started, ${PAID_FUNNEL_WINDOW_DAYS}-day window (Mixpanel default), signups ${D(DATASET_START)} to ${PAID_COHORT_LAST}, breakdown acquisition_channel` },
 		assertions: [
 			{
@@ -2077,9 +2101,11 @@ SELECT plan || CASE WHEN t >= TIMESTAMP '${TS(TEAM_PRICE_CHANGE)}' THEN '_post' 
 FROM ev WHERE event = 'subscription started' GROUP BY 1`,
 				},
 				select: { a: { where: { grp: "business_post" } }, b: { where: { grp: "business_pre" } } },
-				// control: Business seats per new subscription unchanged
+				// control: Business seats per new subscription unchanged. Seats per
+				// subscription have a CV of about 0.31, so 80+ subscriptions per side
+				// keep the ratio's standard error near 4%, under half the band
 				expect: { metric: "a.avg_seats / b.avg_seats", op: "between", target: band(1) },
-				minCohort: 100,
+				minCohort: 80,
 			},
 			{
 				breakdown: {
@@ -2101,7 +2127,7 @@ FROM j GROUP BY 1`,
 		hook: "H10",
 		archetype: "funnel-ttc-by-segment",
 		narrative: `Time from "alert triggered" to "alert acknowledged" scales with company size: enterprise ${RESPONSE_SIZE_MULT.enterprise}x, startup ${RESPONSE_SIZE_MULT.startup}x the SMB and mid-market time (dedicated on-call rotations vs part-time ownership). Every alert's three events share an alert_id, so a funnel holding alert_id constant measures each alert on its own; integrations (H4) and severity are independent of company size, so the median ratio reads the knob.`,
-		mixpanelReport: { type: "Funnels", steps: ["alert triggered", "alert acknowledged"], measure: "median time to convert", holdPropertyConstant: "alert_id", breakdown: "user property company_size" },
+		mixpanelReport: { type: "Funnels", steps: ["alert triggered", "alert acknowledged"], counting: "totals", measure: "median time to convert", holdPropertyConstant: "alert_id", breakdown: "user property company_size" },
 		assertions: [
 			{
 				breakdown: {
