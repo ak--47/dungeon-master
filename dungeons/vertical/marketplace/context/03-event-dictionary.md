@@ -8,7 +8,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 |---|---|
 | `time` | When the event happened (UTC). |
 | `user_id` | The member's ID. Missing on guest browsing before signup (see 00-manifest.md, Identity notes). |
-| `device_id` | The member's phone. Present on app events. Missing on server-side events (`offer accepted`, `offer declined`, `order shipped`, `order delivered`, `item sold`) and often on the search and listing view right after signup. |
+| `device_id` | The member's phone. Present on app events. Missing on server-side events (`offer accepted`, `offer declined`, `order shipped`, `order delivered`, `item sold`) and on the search and listing view right after signup. |
 | `insert_id` | Unique event ID used for de-duplication. |
 | `platform` | `ios` (iPhone or iPad) or `android`. Fixed per member. |
 | `region` | The member's region (`south`, `west`, `midwest`, `northeast`). Fixed per member. |
@@ -16,13 +16,13 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 
 ## Listing attributes
 
-Buyer events about a listing carry the listing's attributes, so you can break down any buyer event without a lookup:
+`listing viewed` carries every listing attribute below; `offer made` carries all of them except `condition` and `photo_count`. Other buyer events carry a subset; each event's row below lists exactly which.
 
 | Property | Meaning |
 |---|---|
 | `listing_id` | The listing. All events about one item in one shopping visit share it (view, offer, checkout, purchase, shipping, delivery, review, dispute). |
 | `category` | `electronics`, `fashion`, `sneakers`, `home_decor`, `collectibles`, `toys_games`, `sports_outdoors`. |
-| `item_price` | On `listing viewed`: the asking price. On `checkout started`, `purchase completed`, and `dispute opened`: the price the buyer pays for the item (the offer amount when an offer was accepted). Whole US dollars. |
+| `item_price` | On `listing viewed`: the asking price. On `checkout started`, `purchase completed`, and `dispute opened`: the price the buyer pays for the item (the offer amount when an offer was accepted). Whole US dollars. (`offer made` carries `asking_price` instead.) |
 | `condition` | `new_with_tags`, `like_new`, `good`, `fair`. |
 | `photo_count` | Photos on the listing (1-12). |
 | `seller_type` | Who listed it: `casual` (a casual seller) or `pro` (a Tradepost Pro seller). |
@@ -56,9 +56,9 @@ An offer has exactly one answer within 48 hours. Offers made in the last two day
 
 | Event | Meaning | Properties |
 |---|---|---|
-| `$experiment_started` | The member is shown their Express Checkout arm. Fires one second before each `checkout started` from 2026-07-22 for members in the test. | `Experiment name` (`Express Checkout`); `Variant name` (`Control` or `Express Checkout`). |
-| `checkout started` | The buyer starts checkout for one item. | `order_id` (shared by every event of the order from here on); listing attributes; `payment_method` (`card`, `apple_pay`, `google_pay`, `paypal`); `purchase_type` (`buy_now` or `offer`). |
-| `purchase completed` | Payment is approved and the order is placed. | `order_id`; listing attributes; `item_price`; `shipping_fee` (0, 5.49, or 8.49); `order_total` = item price + shipping fee; `payment_method`; `purchase_type`. |
+| `$experiment_started` | The member is shown their Express Checkout arm. Fires once per member, one second before their first `checkout started` from 2026-07-22. | `Experiment name` (`Express Checkout`); `Variant name` (`Control` or `Express Checkout`). |
+| `checkout started` | The buyer starts checkout for one item. | `order_id` (shared by every event of the order from here on); `listing_id`; `category`; `item_price`; `seller_type`; `payment_method` (`card`, `apple_pay`, `google_pay`, `paypal`); `purchase_type` (`buy_now` or `offer`). |
+| `purchase completed` | Payment is approved and the order is placed. | `order_id`; `listing_id`; `category`; `item_price`; `seller_type`; `shipping_fee` (0, 5.49, or 8.49); `order_total` = item price + shipping fee; `payment_method`; `purchase_type`. |
 | `order shipped` | The carrier scans the package. Sent by the server. | `order_id`, `listing_id`, `category`; `shipping_carrier` (`usps`, `ups`, `fedex`); `days_to_ship`: days from purchase to the first carrier scan. |
 | `order delivered` | The carrier marks the package delivered. Sent by the server. | `order_id`, `listing_id`, `category`, `shipping_carrier`; `delivery_days`: days from purchase to delivery (one decimal). |
 | `review submitted` | The buyer reviews the order. | `order_id`, `listing_id`, `category`; `rating` (1-5 stars); `has_photo`. |
@@ -87,9 +87,9 @@ Listings created before June 4 can sell in the window: their `item sold` and `sh
 | `age_band` | `18-24`, `25-34`, `35-44`, `45-54`, `55+`. |
 | `member_since` | Signup date (YYYY-MM-DD). Before 2026-06-04 for established members. |
 | `Experiment: Express Checkout` | The member's arm (`Control` or `Express Checkout`), set when they are first exposed. Missing for members never exposed. |
-| `name`, `email`, `avatar`, `created` | Contact details and the profile creation time. |
-| `_persona` | Engagement segment from the CRM's lifecycle model (`browser`, `regular_buyer`, `casual_seller`, `pro_seller`). Raw export only. |
-| `_drop` | `true` on records of guests who never finished signing up. These records are not loaded into Mixpanel. Raw export only. |
+| `name`, `email`, `avatar` | Contact details. |
+| `created` | Account creation time (UTC). Present for members who joined in the window; it matches their `account created` event. |
+| `anonymousIds` | The device ids linked to the member (their phone). Raw export only. |
 
 ## Funnels the business tracks
 

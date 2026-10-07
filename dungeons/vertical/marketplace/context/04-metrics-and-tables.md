@@ -82,4 +82,4 @@ Caveats: the ledger counts orders from every client, including ones that never r
 - Activity follows a weekly rhythm (Sunday is the busiest day, Friday the quietest). Compare whole weeks or matching weekdays.
 - New members keep arriving through the window, so totals tend to grow over time. Use rates (per checkout, per offer, per listing, per seller) when you compare periods.
 - Funnels, conversion, and retention depend on start date: members who joined, listings created, and orders placed late in the window have had less time to finish. Count only starts with a full window inside the data.
-- Members check out, make offers, and list many times. Per-order, per-offer, and per-listing questions need the id held constant; unique-member funnels hide most of the differences.
+- Members check out, make offers, and list many times. Per-order, per-offer, and per-listing questions need the id held constant.

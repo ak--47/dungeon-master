@@ -2,9 +2,9 @@
 
 ## Who we are
 
-Tradepost is a peer-to-peer resale marketplace for secondhand goods: electronics, clothing, sneakers, home decor, collectibles, toys and games, and sports and outdoor gear. It launched in 2022 and serves buyers and sellers across the United States through its iOS and Android apps. The company has about 40 employees: product and engineering, trust and safety, payments, seller success, growth marketing, and member support.
+Tradepost is a peer-to-peer resale marketplace for secondhand goods: electronics, clothing, sneakers, home decor, collectibles, toys and games, and sports and outdoor gear. It launched in 2022 and serves buyers and sellers across the United States through its iOS and Android apps. The company has about 14 employees: product and engineering, trust and safety, payments, seller success, growth marketing, and member support. Tradepost is venture-funded and not yet profitable; the plan is to grow GMV and reach break-even on fee and subscription revenue.
 
-Tradepost makes money from **selling fees** (a percentage of each sale's item price, also called the take rate) and from the **Tradepost Pro** subscription. Buyers do not pay a fee; they pay the item price plus shipping. Over the summer of 2026 the marketplace moved roughly $0.5-0.8 million of goods a month (gross merchandise value, GMV).
+Tradepost makes money from **selling fees** (a percentage of each sale's item price, also called the take rate) and from the **Tradepost Pro** subscription. Buyers do not pay a fee; they pay the item price plus shipping. Over the summer of 2026 the marketplace moved roughly $0.5-0.9 million of goods a month (gross merchandise value, GMV).
 
 ## How buying works
 
@@ -35,8 +35,7 @@ Pro is for frequent sellers: small resale shops, sneaker resellers, vintage deal
 - **Region** (`region`): `south`, `west`, `midwest`, or `northeast`, from the member's shipping address. The South is the largest region.
 - **Age band** (`age_band`): `18-24`, `25-34`, `35-44`, `45-54`, `55+`.
 - **Platforms:** members use the iOS app (iPhone or iPad) or the Android app. A little over half are on iOS.
-- **Established vs new members.** About half of the members active in the window joined before June 4. New members arrive steadily, about 270 a week.
-- The CRM's lifecycle model tags each person with an engagement segment (`_persona` in the raw export): `browser`, `regular_buyer`, `casual_seller`, or `pro_seller`.
+- **Established vs new members.** About half of the members active in the window joined before June 4. New members arrive steadily, about 300 a week.
 
 ## Categories
 
@@ -62,13 +61,13 @@ New members arrive through one of five acquisition channels, recorded at signup:
 - **meta_ads** — paid ads on Instagram and Facebook.
 - **tiktok_ads** — paid in-feed video ads on TikTok.
 
-The three paid channels run on daily budgets plus automated bidding toward app installs. Daily spend by channel is in the warehouse table `marketing_spend_daily`. The growth team added TikTok in the spring to reach younger shoppers; finance has asked whether it pays off.
+The three paid channels run on daily budgets plus automated bidding toward app installs. Daily spend by channel is in the warehouse table `marketing_spend_daily`. The growth team added TikTok in March 2026 to reach younger shoppers, so no member who joined before then came through TikTok. Finance has asked whether it pays off.
 
 ## Goals for the period (Q3 2026)
 
 1. **Healthy supply.** Keep listings growing while the fee schedule changes. Seller success asked how sellers responded to the July fee change and whether it paid off.
 2. **Convert more checkouts.** The payments team is testing a faster checkout (the Express Checkout experiment) and launched the Tradepost Guarantee to give buyers confidence.
-3. **Efficient acquisition.** Finance wants cost per new buyer by paid channel, not just cost per signup.
+3. **Efficient acquisition.** Finance wants to know which paid channel brings new buyers most efficiently.
 4. **Better offers.** The marketplace team wants guidance for buyers on what offers sellers accept.
 5. **Faster selling.** Seller success wants to know what makes listings sell, and how fast each category moves.
 6. **Delivery and trust.** Member support wants to understand how delivery speed affects buyers.

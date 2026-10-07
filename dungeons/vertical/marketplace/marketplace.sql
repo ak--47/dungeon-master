@@ -20,9 +20,9 @@ SET VARIABLE data_prefix = COALESCE(getvariable('data_prefix'), 'data/verify-mar
 -- Identity: guests browse before they sign up (device_id only). "account
 -- created" carries user_id and device_id, so a device resolves to the member
 -- seen with it on any event that carries both ids, the way Mixpanel stitches.
--- Guests who never finished signing up stay anonymous: they resolve to their
--- device. Server-side events (offer answers, order shipped/delivered, item
--- sold) carry user_id only.
+-- A device never seen with a user_id would resolve to itself (the identity
+-- check below counts them; there are none). Server-side events (offer answers,
+-- order shipped/delivered, item sold) carry user_id only.
 
 CREATE OR REPLACE TEMP TABLE raw_events AS
 SELECT * FROM read_json_auto(getvariable('data_prefix') || '-EVENTS*.json*', sample_size=-1, union_by_name=true);
@@ -156,7 +156,7 @@ WHERE c.t0 >= TIMESTAMP '2026-07-22' AND p.variant IS NOT NULL GROUP BY 1 ORDER 
 
 SELECT "Variant name" AS variant, count(DISTINCT uid) AS exposed_members, count(*) AS exposures,
  count(*) FILTER (WHERE t < TIMESTAMP '2026-07-22') AS before_start
-FROM ev WHERE event = '$experiment_started' GROUP BY 1;
+FROM ev WHERE event = '$experiment_started' GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H3-offer-price-threshold: acceptance by offer % of asking price
@@ -363,17 +363,21 @@ ORDER BY 1, 2;
 SELECT dispute_reason, count(*) FILTER (WHERE t < TIMESTAMP '2026-08-26') AS before, count(*) FILTER (WHERE t >= TIMESTAMP '2026-08-26') AS after
 FROM ev WHERE event = 'dispute opened' GROUP BY 1 ORDER BY 2 DESC;
 
--- EVAL Q13 — null: checkout conversion by buyer region (overall and by platform)
-SELECT p.region, count(*) AS checkouts, round(avg(c.done::INT), 4) AS conversion
-FROM checkouts c JOIN prof p ON p.uid = c.uid GROUP BY 1 ORDER BY 1;
-WITH g AS (SELECT p.region = 'south' AS south, count(*) AS n, avg(c.done::INT) AS r FROM checkouts c JOIN prof p ON p.uid = c.uid GROUP BY 1),
+-- EVAL Q13 — null: offer acceptance and offer level by buyer region (overall and by platform)
+SELECT p.region, count(*) AS offers, round(avg(o.accepted::INT), 4) AS accept_rate, round(avg(o.pct), 1) AS avg_offer_pct
+FROM offers o JOIN prof p ON p.uid = o.uid GROUP BY 1 ORDER BY 1;
+WITH g AS (SELECT p.region = 'south' AS south, count(*) AS n, avg(o.accepted::INT) AS r FROM offers o JOIN prof p ON p.uid = o.uid GROUP BY 1),
 x AS (SELECT max(r) FILTER (WHERE south) AS r1, max(n) FILTER (WHERE south) AS n1, max(r) FILTER (WHERE NOT south) AS r0, max(n) FILTER (WHERE NOT south) AS n0 FROM g)
-SELECT round((r1 - r0) / sqrt(((r1 * n1 + r0 * n0) / (n1 + n0)) * (1 - (r1 * n1 + r0 * n0) / (n1 + n0)) * (1.0 / n1 + 1.0 / n0)), 2) AS z_south_vs_rest FROM x;
-SELECT c.platform, p.region = 'south' AS south, count(*) AS checkouts, round(avg(c.done::INT), 4) AS conversion
-FROM checkouts c JOIN prof p ON p.uid = c.uid GROUP BY 1, 2 ORDER BY 1, 2;
--- purchases per buyer by region
-SELECT p.region, count(DISTINCT o.uid) AS buyers, round(count(*)::DOUBLE / count(DISTINCT o.uid), 3) AS purchases_per_buyer
-FROM orders o JOIN prof p ON p.uid = o.uid WHERE o.t_purchase IS NOT NULL GROUP BY 1 ORDER BY 1;
+SELECT round(r1, 4) AS south_rate, round(r0, 4) AS rest_rate,
+ round((r1 - r0) / sqrt(((r1 * n1 + r0 * n0) / (n1 + n0)) * (1 - (r1 * n1 + r0 * n0) / (n1 + n0)) * (1.0 / n1 + 1.0 / n0)), 2) AS z_south_vs_rest FROM x;
+WITH g AS (SELECT o.platform, p.region = 'south' AS south, count(*) AS n, avg(o.accepted::INT) AS r FROM offers o JOIN prof p ON p.uid = o.uid GROUP BY 1, 2),
+x AS (SELECT platform, max(r) FILTER (WHERE south) AS r1, max(n) FILTER (WHERE south) AS n1, max(r) FILTER (WHERE NOT south) AS r0, max(n) FILTER (WHERE NOT south) AS n0 FROM g GROUP BY 1)
+SELECT platform, round(r1, 4) AS south_rate, round(r0, 4) AS rest_rate, n1 AS south_offers, n0 AS rest_offers,
+ round((r1 - r0) / sqrt(((r1 * n1 + r0 * n0) / (n1 + n0)) * (1 - (r1 * n1 + r0 * n0) / (n1 + n0)) * (1.0 / n1 + 1.0 / n0)), 2) AS z
+FROM x ORDER BY 1;
+-- offer acceptance at matched offer levels (80%+ vs below), South vs rest
+SELECT pct >= 80 AS at_80_plus, round(avg(o.accepted::INT) FILTER (WHERE p.region = 'south'), 4) AS south_rate, round(avg(o.accepted::INT) FILTER (WHERE p.region <> 'south'), 4) AS rest_rate
+FROM offers o JOIN prof p ON p.uid = o.uid GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q14 — September GMV, orders, take rate, and refunds (warehouse ledger) vs Mixpanel
 SELECT round(sum(gmv_usd), 0) AS gmv_usd, sum(orders)::BIGINT AS orders, round(sum(fee_revenue_usd), 0) AS fee_revenue_usd,

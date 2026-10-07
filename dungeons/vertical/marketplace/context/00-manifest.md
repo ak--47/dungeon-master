@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Tradepost**, a peer-to-peer res
 
 - **Product:** the Tradepost iOS and Android apps. Buyers browse and search listings, save items, buy now or make an offer, check out, and receive the item by mail; afterwards they can leave a review or open a dispute. Sellers list items, drop prices, sell, and print a prepaid shipping label.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early June through the end of September and the first day of October.
-- **Scale:** about 10,000 people have activity in the window. About 4,640 of them signed up during the window and about 5,000 joined before June 4. The remaining 330 or so started signing up but never finished (see Identity notes); they are part of the 10,000. The project holds about 750,000 events. About 70% of members only buy; about 2,150 are casual sellers and about 770 are Tradepost Pro sellers.
+- **Scale:** about 10,000 members. About 5,070 of them signed up during the window and about 4,930 joined before June 4; a handful of established members had no activity in the window. The project holds about 780,000 events. About 70% of members only buy; about 2,200 are casual sellers and about 830 are Tradepost Pro sellers.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. Members are in the United States, so a US evening falls after midnight UTC.
 
 ## The other files
@@ -19,7 +19,7 @@ This folder is the internal analytics wiki for **Tradepost**, a peer-to-peer res
 ## How the data fits together
 
 - **Events** (the Mixpanel event stream) record what members do in the app and what Tradepost's servers send about their orders. Each event has a timestamp, the member's identity, and flat properties. The member's phone platform and region are copied onto every event (`platform`, `region`).
-- **Listings and orders tie events together.** On the buyer side, the events about one item share a `listing_id`; everything from checkout onward also shares an `order_id`, and an offer's events share an `offer_id`. On the seller side, a listing and everything that follows from it (price drops, the sale, the shipping label) share a `listing_id`. Listing attributes (category, price, condition, photo count, seller type) are copied onto the events, so you never need a lookup table.
+- **Listings and orders tie events together.** On the buyer side, the events about one item share a `listing_id`; everything from checkout onward also shares an `order_id`, and an offer's events share an `offer_id`. On the seller side, a listing and everything that follows from it (price drops, the sale, the shipping label) share a `listing_id`. Listing attributes are copied onto the events that need them (03-event-dictionary.md lists exactly which ones), so there is no lookup table. Later order events (`order shipped`, `order delivered`, `review submitted`) carry the `order_id` but not the price or seller type; join them to the order's `purchase completed` on `order_id`.
 - **Buyers and sellers are different streams.** A seller's `item sold` and a buyer's `purchase completed` are tracked by different services for different people; this export does not link a buyer's order to a seller's listing.
 - **User profiles** hold one row per person with their current attributes: account type, acquisition channel, region, age band, member-since date, and experiment enrollment.
 - **Warehouse tables** are daily business facts that are not in the event stream: paid marketing spend by channel, card and wallet payment processing by payment method, and the marketplace ledger (GMV, orders, take rate, fee revenue, refunds) by seller type. They join to events on the UTC date and a shared dimension (`acquisition_channel`, `payment_method`, or `seller_type`).
@@ -27,13 +27,12 @@ This folder is the internal analytics wiki for **Tradepost**, a peer-to-peer res
 
 ## Identity notes
 
-- Guests can browse Tradepost before they sign up. Guest events (`home feed viewed`, `listing viewed`, `search performed`) carry only the `device_id` of the phone.
-- `account created` is each new member's signup. It carries both `user_id` and `device_id`, so Mixpanel links the guest browsing on that phone to the new member.
-- The search and listing view right after signup often carry `user_id` only. Server-side events (`offer accepted`, `offer declined`, `order shipped`, `order delivered`, `item sold`) also carry `user_id` only. Every other member event carries both ids.
+- New members browse Tradepost as guests before they sign up. Guest events (`home feed viewed` and one or two `listing viewed`) carry only the `device_id` of the phone.
+- `account created` is each new member's signup. It carries both `user_id` and `device_id`, so Mixpanel links the guest browsing on that phone to the new member. Every guest in this window finished signing up, so no events stay anonymous after identity merge.
+- The search and listing view right after signup carry `user_id` only. Server-side events (`offer accepted`, `offer declined`, `order shipped`, `order delivered`, `item sold`) also carry `user_id` only. Every other member event carries both ids.
 - Each member uses one phone: an iPhone, an iPad, or an Android phone. `platform` is `ios` for iPhone and iPad (`os` = `iOS` or `iPadOS`) and `android` for Android phones.
-- About 330 people started signing up but never finished. Their few days of guest browsing stay anonymous (device id only). Their records in the raw user export carry `_drop: true` and are not loaded into Mixpanel as profiles.
 - Members who joined before June 4 have no `account created` event in this window; their `member_since` profile date is before the window. For members who joined in the window, `member_since` is their signup date.
-- Count people with unique `user_id` (Mixpanel "Uniques" after identity merge). Unique counts on guest-heavy events also include the anonymous guests.
+- Count people with unique `user_id` (Mixpanel "Uniques" after identity merge).
 
 ## Conventions
 

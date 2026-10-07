@@ -19,9 +19,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             Tradepost Pro sellers pay a monthly subscription and a 9.5% fee.
  *             Tradepost earns the selling fee (take rate) on gross
  *             merchandise value (GMV).
- * SCALE:      10,000 simulated people (≈4,640 sign up inside the window; ≈330
- *             start signing up but never finish and stay anonymous guests),
- *             ~0.75M events, 120 days (2026-06-04 → 2026-10-01, UTC)
+ * SCALE:      10,000 simulated people (≈5,070 sign up inside the window, ≈4,930
+ *             joined before it), ~0.78M events, 120 days (2026-06-04 →
+ *             2026-10-01, UTC)
  * CORE LOOP:  buyer: listing viewed → (offer made → offer accepted) → checkout
  *             started → purchase completed → order shipped → order delivered
  *             → review submitted; seller: listing created → (listing price
@@ -38,21 +38,23 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * FUNNELS (6 declared; every unit is rebuilt by the everything hook):
  *   - Signup (first funnel): home feed viewed → listing viewed ×2 → account
  *       created (auth) → search performed → listing viewed. Guest steps before
- *       signup carry device_id only.
+ *       signup carry device_id only; the steps after it carry user_id only.
  *   - Browse (weight 12): home feed viewed → search performed → listing viewed
  *       ×4 / item saved (first-fixed)
  *   - Buy Now (weight 6): listing viewed → checkout started → purchase
  *       completed → order shipped → order delivered → review submitted →
  *       dispute opened (engine 100%; the hook decides each step). Carries the
- *       Express Checkout experiment (multipliers 1.0; the hook applies it).
+ *       Express Checkout experiment (no engine multipliers; the hook applies
+ *       the effect).
  *   - Offer (weight 4): listing viewed → offer made → offer accepted / offer
  *       declined → checkout started → … (as Buy Now)
  *   - Listing (casual, weight 10; Pro, weight 75; conditions on account_type):
  *       listing created → listing price dropped → item sold → shipping label
  *       printed
  *
- * USER PROPS:  account_type (buyer / seller / pro_seller), acquisition_channel,
- *              region, age_band, member_since, "Experiment: Express Checkout"
+ * USER PROPS:  account_type (buyer / seller / pro_seller), acquisition_channel
+ *              (no tiktok_ads before 2026-03-02), region, age_band (younger
+ *              for tiktok_ads), member_since, "Experiment: Express Checkout"
  * SUPER PROPS: platform (ios/android, from the device), region (sticky)
  * SCD PROPS:   none
  * GROUPS:      none
@@ -66,17 +68,16 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * SOUP:        Sunday-heavy dayOfWeekWeights, Friday lowest; US lunch and
  *              evening hourOfDayWeights (UTC)
  *
- * IDENTITY: guests browse before they sign up; those steps carry device_id
- * only. "account created" (isAuthEvent) carries user_id and device_id, so
- * Mixpanel stitches the guest steps to the member. One phone per member
- * (avgDevicePerUser 1). The Signup steps after account created often carry
- * user_id only (the engine drops a repeated Signup listing view half the
- * time); server-side events (offer accepted / declined, order shipped,
- * order delivered, item sold) carry user_id only; every other event carries
- * both. About 330 people never finish signing up: they keep up to 3 days of
- * anonymous browsing (device_id only) and their profiles have no identified
- * events. platform agrees with the engine os field (iOS, iPadOS → ios;
- * Android → android).
+ * IDENTITY: guests browse before they sign up; those Signup steps (home
+ * feed viewed, one or two listing views) carry device_id only. "account
+ * created" (isAuthEvent) carries user_id and device_id, so Mixpanel
+ * stitches the guest steps to the member. One phone per member
+ * (avgDevicePerUser 1). The two Signup steps after account created (search
+ * performed, listing viewed) carry user_id only; server-side events (offer
+ * accepted / declined, order shipped, order delivered, item sold) carry
+ * user_id only; every other event carries both. Every new member finishes
+ * signing up, so no events stay anonymous. platform agrees with the engine
+ * os field (iOS, iPadOS → ios; Android → android).
  *
  * DESIGN NOTES:
  * - Units: every engine Buy Now / Offer / Listing instance has its own
@@ -127,10 +128,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: from 2026-07-22 members split 50/50 at checkout. The variant
  *   completes 1.15x as many checkouts (64% base) and halves checkout time
- *   (median 4 → 2 min). Exposure 1 s before each checkout. Members the
- *   engine exposed through Buy Now keep the engine arm; members whose
- *   checkouts all come from accepted offers get a salted 50/50 arm, so every
- *   member who checks out after the start is in the test.
+ *   (median 4 → 2 min). One $experiment_started per member, 1 s before
+ *   their first checkout from the start. Members the engine exposed through
+ *   Buy Now keep the engine arm; members whose checkouts all come from
+ *   accepted offers get a salted 50/50 arm, so every member who checks out
+ *   after the start is in the test.
  * MIXPANEL: Funnels, checkout started → purchase completed, Totals, hold
  *   order_id constant, 1-day window, Jul 22-Sep 30, breakdown
  *   "Experiment: Express Checkout"; median time to convert. Or Experiments.
@@ -190,9 +192,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   0.9 Google, 0.65 Meta, 0.4 TikTok, 0.8 organic, 0.85 referral; activated
  *   members' first buy-now visit in those days completes. Google costs 2x
  *   TikTok per signup but 0.89x per activated buyer.
- * MIXPANEL: Funnels, account created → purchase completed, 14-day window,
- *   breakdown acquisition_channel, signups Jun 4-Sep 17; spend from
- *   marketing_spend_daily by acquisition_channel.
+ * MIXPANEL: Funnels, account created → purchase completed, Uniques, 14-day
+ *   window, breakdown acquisition_channel, signups Jun 4-Sep 17; spend from
+ *   marketing_spend_daily by acquisition_channel (window total / signups).
  * REAL WORLD: shopping-intent clicks cost more and buy sooner.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -229,42 +231,43 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-marketplace, 2026-10-07,
- * full fidelity, 10,000 people, 754,353 events)
+ * full fidelity, 10,000 people, 781,780 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation            | Expected | Measured
  * -----|------------------------------------------------|-----------------------|----------|---------
- * H1   | listings/day, established casual vs Pro (DiD)  | CASUAL_LISTING_KEEP   | 0.75     | 0.750 (casual 72.3 → 53.9/day; Pro 217.0 → 215.6)
- * H1   | casual:Pro odds of listings viewed, after/before | CASUAL_LISTING_KEEP | 0.75     | 0.736 (0.335 → 0.247)
+ * H1   | listings/day, established casual vs Pro (DiD)  | CASUAL_LISTING_KEEP   | 0.75     | 0.748 (casual 71.4 → 52.8/day; Pro 212.8 → 210.6)
+ * H1   | casual:Pro odds of listings viewed, after/before | CASUAL_LISTING_KEEP | 0.75     | 0.754 (0.334 → 0.251)
  * H1   | ledger take_rate casual, after/before          | 12.9 / 10             | 1.29     | 1.290
- * H2   | checkout conversion, variant/control           | EXPRESS_CONV_MULT     | 1.15     | 1.148 (72.5% vs 63.1%)
- * H2   | median checkout minutes, variant/control       | EXPRESS_TIME_MULT     | 0.50     | 0.515 (2.05 vs 3.98 min)
- * H2   | variant share of exposed members               | equal 2-arm hash      | 0.50     | 0.497
+ * H2   | checkout conversion, variant/control           | EXPRESS_CONV_MULT     | 1.15     | 1.142 (72.3% vs 63.3%)
+ * H2   | median checkout minutes, variant/control       | EXPRESS_TIME_MULT     | 0.50     | 0.494 (1.98 vs 4.02 min)
+ * H2   | variant share of exposed members               | equal 2-arm hash      | 0.50     | 0.502
  * H2   | exposures before start or off-arm              | exact purity          | 0        | 0
- * H3   | acceptance, offers 80%+ / below 80%            | logistic x offer mix  | 3.03     | 3.096 (63.2% vs 20.4%)
- * H4   | 30-day sell-through, 1-2 photos / 5+           | PHOTO_SELL_KEEP(1)    | 0.50     | 0.496 (24.7% vs 49.9%)
- * H4   | 30-day sell-through, 3-4 photos / 5+           | PHOTO_SELL_KEEP(3)    | 0.80     | 0.787 (39.2% vs 49.9%)
- * H5   | 30-day repurchase, late / on-time first delivery | 1 − TRUST_LOSS      | 0.55     | 0.537 (31.5% vs 58.6%)
- * H6   | card / other conversion, incident / ±14 d      | 1 − CARD_FAIL         | 0.60     | 0.614 (card 43.4% vs 70.2%)
+ * H3   | acceptance, offers 80%+ / below 80%            | logistic x offer mix  | 3.03     | 3.056 (63.0% vs 20.6%)
+ * H4   | 30-day sell-through, 1-2 photos / 5+           | PHOTO_SELL_KEEP(1)    | 0.50     | 0.523 (26.1% vs 49.8%)
+ * H4   | 30-day sell-through, 3-4 photos / 5+           | PHOTO_SELL_KEEP(3)    | 0.80     | 0.797 (39.7% vs 49.8%)
+ * H5   | 30-day repurchase, late / on-time first delivery | 1 − TRUST_LOSS      | 0.55     | 0.532 (31.7% vs 59.6%)
+ * H6   | card / other conversion, incident / ±14 d      | 1 − CARD_FAIL         | 0.60     | 0.636 (card 43.7% vs 69.0%)
  * H6   | warehouse card approval_rate, degraded/normal  | 1 − CARD_FAIL         | 0.60     | 0.599
- * H7   | spend per signup, Google / TikTok              | 12 / 6                | 2.00     | 2.021 ($12.41 vs $6.14)
- * H7   | 14-day activation, Google / TikTok             | 0.9 / 0.4             | 2.25     | 2.177 (69.7% vs 32.0%)
- * H7   | spend per activated buyer, Google / TikTok     | 2.0 / 2.25            | 0.889    | 0.928 ($17.80 vs $19.18)
- * H8   | high/low-ticket conversion, after/before (DiD) | GUARANTEE_MULT        | 1.25     | 1.275 (54.9% → 70.1% vs 67.6% → 67.8%)
- * H9   | median days to sell, electronics / base        | CAT_SELL_TTC          | 0.50     | 0.493 (2.95 vs 5.98 d)
- * H9   | median days to sell, collectibles / base       | CAT_SELL_TTC          | 1.60     | 1.572 (9.39 d)
- * H10  | electronics share of listing views, BTS/before | 2w / (2w + 1 − w) / w | 1.695    | 1.692 (18.0% → 30.4%)
- * H10  | electronics share, after / before (control)    | unchanged             | 1.00     | 0.998
+ * H7   | spend per signup, Google / TikTok              | 12 / 6                | 2.00     | 2.013 ($11.88 vs $5.90)
+ * H7   | 14-day activation, Google / TikTok             | 0.9 / 0.4             | 2.25     | 2.242 (73.1% vs 32.6%)
+ * H7   | spend per activated buyer, Google / TikTok     | 2.0 / 2.25            | 0.889    | 0.898 ($16.24 vs $18.08)
+ * H8   | high/low-ticket conversion, after/before (DiD) | GUARANTEE_MULT        | 1.25     | 1.205 (56.4% → 68.0% vs 67.8% → 67.8%)
+ * H9   | median days to sell, electronics / base        | CAT_SELL_TTC          | 0.50     | 0.508 (3.01 vs 5.93 d)
+ * H9   | median days to sell, collectibles / base       | CAT_SELL_TTC          | 1.60     | 1.592 (9.44 d)
+ * H10  | electronics share of listing views, BTS/before | 2w / (2w + 1 − w) / w | 1.695    | 1.690 (18.0% → 30.5%)
+ * H10  | electronics share, after / before (control)    | unchanged             | 1.00     | 0.978
  * ═════════════════════════════════════════════════════════════════════════
  *
  * Noise notes: H1's listing read rests on about 1,000 established casual
  * sellers whose engine listing timing moves each period a few percent, so it
  * uses the knob as target with a half-effect floor. H5's late group is about
- * 750 buyers (relative SE about 5%). H6 rests on about 940 card checkouts on
- * incident days (relative SE about 4%). H7's TikTok activation rests on about
- * 920 signups (relative SE about 4%); its spend-per-activated read compounds
- * that with spend noise. Activated buyers whose first 14 days had no
- * completed buy-now visit get one forced (about 1,150 checkouts, under 3% of
- * all), which pulls the H2/H6/H8 ratios toward 1 by about 1%.
+ * 780 buyers (relative SE about 5%). H6 rests on about 1,010 card checkouts
+ * on incident days (relative SE about 4%). H7's TikTok activation rests on
+ * about 980 signups with a full 14 days (relative SE about 4%); its
+ * spend-per-activated read compounds that with spend noise. Activated buyers
+ * whose first 14 days had no completed buy-now visit get one forced (1,339
+ * checkouts, 3% of all), which pulls the H2/H6/H8 ratios toward 1 by about
+ * 1%.
  */
 
 // ── SCALE ──
@@ -285,6 +288,8 @@ const BTS_END = "2026-09-08T00:00:00Z";             // exclusive (Aug 10 - Sep 7
 const GUARANTEE_LAUNCH = "2026-08-26T00:00:00Z";    // Tradepost Guarantee (buyer protection) launches
 const CARD_INCIDENT_START = "2026-09-14T00:00:00Z"; // card processor incident starts
 const CARD_INCIDENT_END = "2026-09-19T00:00:00Z";   // exclusive (5 days: Mon Sep 14 - Fri Sep 18)
+const TRADEPOST_LAUNCH = "2022-03-01T00:00:00Z";    // first members (pre-window member_since spread)
+const TIKTOK_START = "2026-03-02T00:00:00Z";        // TikTok ads added (no tiktok_ads members before this)
 
 const ms = (iso) => dayjs.utc(iso).valueOf();
 const DAY_MS = 86_400_000;
@@ -351,6 +356,9 @@ const CPI_USD = { google_shopping: 12, meta_ads: 9, tiktok_ads: 6 }; // window s
 const ACTIVATE = { organic: 0.8, referral: 0.85, google_shopping: 0.9, meta_ads: 0.65, tiktok_ads: 0.4 };
 const ACTIVATION_DAYS = 14;
 const BORN_PCT = 50;
+const AGE_WEIGHTS = { "18-24": 20, "25-34": 34, "35-44": 24, "45-54": 13, "55+": 9 };
+const TIKTOK_AGE_WEIGHTS = { "18-24": 33, "25-34": 37, "35-44": 18, "45-54": 8, "55+": 4 };
+const PRE_TIKTOK_CHANNEL_WEIGHTS = Object.fromEntries(Object.entries(CHANNEL_WEIGHTS).filter(([ch]) => ch !== "tiktok_ads"));
 const DAILY_BUDGET_USD = Object.fromEntries(PAID_CHANNELS.map((ch) => {
 	const totalW = Object.values(CHANNEL_WEIGHTS).reduce((a, b) => a + b, 0);
 	return [ch, CPI_USD[ch] * (NUM_USERS * BORN_PCT / 100) * (CHANNEL_WEIGHTS[ch] / totalW) / WINDOW_DAYS];
@@ -433,18 +441,23 @@ const BUY_STEPS = ["listing viewed", "checkout started", "purchase completed", "
 const OFFER_STEPS = ["listing viewed", "offer made", "offer accepted", "offer declined", "checkout started", "purchase completed", "order shipped", "order delivered", "review submitted", "dispute opened"];
 const LIST_STEPS = ["listing created", "listing price dropped", "item sold", "shipping label printed"];
 const UNIT_EVENTS = new Set([...OFFER_STEPS, ...LIST_STEPS]);
-const GUEST_EVENTS = new Set(["home feed viewed", "listing viewed", "search performed"]);
-const GUEST_DAYS = 3;
 const SERVER_EVENTS = new Set(["offer accepted", "offer declined", "order shipped", "order delivered", "item sold"]);
 
 function handleUserHook(profile, meta) {
 	const uid = profile.distinct_id;
 	if (meta.userIsBornInDataset) {
+		// provisional; the everything hook sets the signup date
 		profile.member_since = dayKey(dayjs.utc(profile.created ?? meta.user?.created).valueOf());
-		return profile;
+	} else {
+		const tenureDays = Math.floor(salt(uid, "tenure") * (ms(DATASET_START) - ms(TRADEPOST_LAUNCH)) / DAY_MS);
+		profile.member_since = dayjs.utc(TRADEPOST_LAUNCH).add(tenureDays, "day").format("YYYY-MM-DD");
+		// TikTok ads started in spring 2026: members who joined earlier came through another channel
+		if (profile.acquisition_channel === "tiktok_ads" && profile.member_since < TIKTOK_START.slice(0, 10)) {
+			profile.acquisition_channel = pickWeighted(PRE_TIKTOK_CHANNEL_WEIGHTS, salt(uid, "pre-tiktok-channel"));
+		}
 	}
-	const tenureDays = Math.floor(salt(uid, "tenure") * (ms(DATASET_START) - ms("2022-03-01T00:00:00Z")) / DAY_MS);
-	profile.member_since = dayjs.utc("2022-03-01T00:00:00Z").add(tenureDays, "day").format("YYYY-MM-DD");
+	// TikTok's in-feed audience skews younger than the other channels
+	if (profile.acquisition_channel === "tiktok_ads") profile.age_band = pickWeighted(TIKTOK_AGE_WEIGHTS, salt(uid, "tiktok-age"));
 	return profile;
 }
 
@@ -455,6 +468,8 @@ function handleEverything(events, meta) {
 	const BEGIN = ms(DATASET_START), END = ms(DATASET_END);
 	const signup = events.find((e) => e.event === "account created");
 	const birthMs = signup ? T(signup) : null;
+	// member_since is the signup date (created is the first guest visit, minutes earlier)
+	if (signup) profile.member_since = dayKey(birthMs);
 	const accountType = profile.account_type;
 	const sellerType = accountType === "pro_seller" ? "pro" : "casual";
 
@@ -463,31 +478,6 @@ function handleEverything(events, meta) {
 	const os = osEv?.os;
 	const platform = os === "Android" ? "android" : "ios";
 
-	// guests who started signing up but never finished: anonymous browsing only, a few days
-	if (meta.userIsBornInDataset && !signup) {
-		const t0 = Math.min(...events.map(T));
-		const kept = events.filter((e) => GUEST_EVENTS.has(e.event) && T(e) < t0 + GUEST_DAYS * DAY_MS);
-		for (const e of kept) {
-			e.platform = platform;
-			// guest listing attributes from hashed draws (keeps the seeded stream of members unchanged)
-			const h = (tag) => hashFloat(`${e.insert_id}|${tag}`);
-			const t = T(e);
-			if (e.event === "listing viewed") {
-				const cat = pickWeighted(inBts(t) ? { ...CATEGORY_WEIGHTS, electronics: CATEGORY_WEIGHTS.electronics * BTS_ELECTRONICS_MULT } : CATEGORY_WEIGHTS, h("cat"));
-				const z = Math.sqrt(-2 * Math.log(Math.max(1e-9, h("p1")))) * Math.cos(2 * Math.PI * h("p2"));
-				const c = SUPPLY_CASUAL_SHARE * casualSupplyMult(t);
-				e.listing_id = `l_${String(e.insert_id).replace(/-/g, "").slice(0, 10)}`;
-				e.category = cat;
-				e.item_price = Math.max(5, Math.round(PRICE_MEDIAN[cat] * Math.exp(PRICE_SIGMA * z)));
-				e.seller_type = h("st") < c / (c + (1 - SUPPLY_CASUAL_SHARE)) ? "casual" : "pro";
-			} else if (e.event === "search performed") {
-				e.search_category = pickWeighted(inBts(t) ? { ...CATEGORY_WEIGHTS, electronics: CATEGORY_WEIGHTS.electronics * BTS_ELECTRONICS_MULT } : CATEGORY_WEIGHTS, h("cat"));
-			} else if (e.event === "home feed viewed") {
-				e.feed_section = inBts(t) && h("bts") < BTS_FEED_SHARE ? "back_to_campus" : pickWeighted({ for_you: 70, following: 20, deals: 10 }, h("feed"));
-			}
-		}
-		return kept;
-	}
 	const payHabit = pickWeighted(PAY_WEIGHTS[platform], salt(uid, "pay"));
 	const payMethod = () => (rnd() < 0.8 ? payHabit : pickWeighted(PAY_WEIGHTS[platform], rnd()));
 	const offerHabit = OFFER_HABIT_MEAN + OFFER_HABIT_SD * 2 * (salt(uid, "offer-habit") - 0.5) * 1.73;
@@ -607,7 +597,7 @@ function handleEverything(events, meta) {
 		...offerUnits.map((by) => planPurchase(T(by["listing viewed"] || by["offer made"]), "offer", by)),
 	];
 	// orders in flight at the window start (members who joined before June 4)
-	if (!signup && purchasePlans.length) {
+	if (!meta.userIsBornInDataset && purchasePlans.length) {
 		const nIn = purchasePlans.length;
 		const x = nIn * PREWINDOW_BUY_DAYS / WINDOW_DAYS;
 		const n = Math.floor(x) + (rnd() < x % 1 ? 1 : 0);
@@ -693,7 +683,7 @@ function handleEverything(events, meta) {
 			listPlans.push(planListing(anchor, by));
 		}
 		// listings already live at the window start
-		if (!signup && listUnits.length) {
+		if (!meta.userIsBornInDataset && listUnits.length) {
 			const x = listUnits.length * PREWINDOW_LIST_DAYS / WINDOW_DAYS;
 			const n = Math.floor(x) + (rnd() < x % 1 ? 1 : 0);
 			for (let i = 0; i < n; i++) {
@@ -748,7 +738,7 @@ function handleEverything(events, meta) {
 		put(p.src, "shipping label printed", p.labelT, { ...base, shipping_carrier: p.carrier, days_to_ship: p.shipDays });
 	}
 
-	// ── experiment exposure: one per checkout after the test starts, 1 s before it ──
+	// ── experiment exposure: once per member, 1 s before their first checkout after the test starts ──
 	// Offer-only members have no engine exposure to reuse: their exposure is a clone
 	// of the checkout it precedes, stripped to the exposure's own columns.
 	const exposureFromCheckout = (c, t) => {
@@ -758,14 +748,15 @@ function handleEverything(events, meta) {
 		return ex;
 	};
 	const exposed = [];
-	checkouts.sort(byT).forEach((c, i) => {
-		const t = T(c) - 1000;
-		const ex = exposures[i] || (exposures.length ? cloneEvent(exposures[0], { time: iso(t) }) : exposureFromCheckout(c, t));
+	const firstCheckout = checkouts.sort(byT)[0];
+	if (firstCheckout) {
+		const t = T(firstCheckout) - 1000;
+		const ex = exposures[0] || exposureFromCheckout(firstCheckout, t);
 		ex.time = iso(t);
 		ex["Experiment name"] = EXPRESS_EXPERIMENT;
 		ex["Variant name"] = variant;
 		exposed.push(ex);
-	});
+	}
 	if (exposed.length) profile[EXP_KEY] = variant;
 	else if (profile[EXP_KEY] !== undefined) delete profile[EXP_KEY];
 
@@ -1119,7 +1110,7 @@ const config = {
 		account_type: ["buyer"],
 		acquisition_channel: { __weights: CHANNEL_WEIGHTS },
 		region: { __weights: { south: 36, west: 24, midwest: 20, northeast: 20 } },
-		age_band: { __weights: { "18-24": 20, "25-34": 34, "35-44": 24, "45-54": 13, "55+": 9 } },
+		age_band: { __weights: AGE_WEIGHTS },
 		member_since: ["2025-01-01"],
 	},
 
@@ -1150,8 +1141,8 @@ const WH = (table) => `read_json_auto('{{PREFIX}}-WAREHOUSE-${table}.json*', sam
 
 // Identity prelude: guests browse before signing up (device_id only); "account
 // created" carries both ids, so every device resolves to its member the way
-// Mixpanel stitches. Guests who never finished signing up stay anonymous
-// (resolved to their device). Server-side events carry user_id only.
+// Mixpanel stitches. A device seen with no user_id would resolve to itself
+// (none in this dungeon). Server-side events carry user_id only.
 const ID_CTE = `dmap AS (SELECT device_id, min(user_id::VARCHAR) AS mapped FROM ${EV}
   WHERE user_id IS NOT NULL AND device_id IS NOT NULL GROUP BY 1),
 ev AS (SELECT coalesce(e.user_id::VARCHAR, m.mapped, '$device:' || e.device_id) AS uid, e.time::TIMESTAMP AS t, e.*
@@ -1318,7 +1309,7 @@ FROM ${WH("marketplace_ledger_daily")}`,
 		id: "H2-express-checkout-experiment",
 		hook: "H2",
 		archetype: "experiment-lift",
-		narrative: `The "${EXPRESS_EXPERIMENT}" test starts ${D(EXPRESS_START)}: members who start a checkout are split 50/50 (sticky per member; $experiment_started 1 s before each checkout). The variant (saved payment and address, one confirm tap) completes ${EXPRESS_CONV_MULT}x as many checkouts and halves the time from "checkout started" to "purchase completed" (${EXPRESS_TIME_MULT}x, base median ${CHECKOUT_MEDIAN_MIN} min). Read: per checkout (order_id), purchase within ${CHECKOUT_WINDOW_DAYS} day, checkouts ${D(EXPRESS_START)} to ${CHECKOUT_READ_END.slice(0, 10)}, by the profile's experiment arm. The arms share every other factor (Guarantee, card incident, price mix), so the ratio reads the knob.`,
+		narrative: `The "${EXPRESS_EXPERIMENT}" test starts ${D(EXPRESS_START)}: members who start a checkout are split 50/50 (sticky per member; one $experiment_started per member, 1 s before their first checkout from the start). The variant (saved payment and address, one confirm tap) completes ${EXPRESS_CONV_MULT}x as many checkouts and halves the time from "checkout started" to "purchase completed" (${EXPRESS_TIME_MULT}x, base median ${CHECKOUT_MEDIAN_MIN} min). Read: per checkout (order_id), purchase within ${CHECKOUT_WINDOW_DAYS} day, checkouts ${D(EXPRESS_START)} to ${CHECKOUT_READ_END.slice(0, 10)}, by the profile's experiment arm. The arms share every other factor (Guarantee, card incident, price mix), so the ratio reads the knob.`,
 		mixpanelReport: { type: "Funnels", steps: ["checkout started", "purchase completed"], counting: "totals", holdPropertyConstant: "order_id", window: `${CHECKOUT_WINDOW_DAYS} day`, dateRange: `${D(EXPRESS_START)} to ${CHECKOUT_READ_END.slice(0, 10)}`, breakdown: `user property "${EXP_KEY}"`, measure: "conversion and median time to convert" },
 		assertions: [
 			{
@@ -1459,7 +1450,7 @@ FROM ${WH("payment_processing_daily")}`,
 	{
 		id: "H7-paid-channel-activation",
 		hook: "H7",
-		archetype: "funnel-conversion-by-segment",
+		archetype: "external-join",
 		narrative: `Paid channels differ in what a new member is worth. Warehouse marketing_spend_daily bills each channel half as a paced daily budget and half as a bid on the signups it delivered that day, with seeded day noise: about $${CPI_USD.google_shopping} Google Shopping, $${CPI_USD.meta_ads} Meta, $${CPI_USD.tiktok_ads} TikTok per Mixpanel signup. New buyers activate (first purchase within ${ACTIVATION_DAYS} days of "account created") by channel: a share of ${ACTIVATE.google_shopping} Google Shopping, ${ACTIVATE.meta_ads} Meta, ${ACTIVATE.tiktok_ads} TikTok, ${ACTIVATE.organic} organic, ${ACTIVATE.referral} referral can activate; the rest buy nothing in their first ${ACTIVATION_DAYS} days. Activation needs a buy-now visit, which about three in four new members have, the same in every channel, so the activation ratio Google/TikTok reads ${ACTIVATION_RATIO}. Google costs ${SPEND_PER_SIGNUP_RATIO}x TikTok per signup but ${SPEND_PER_ACTIVATED_RATIO}x per activated buyer. Read: signups through ${ACT_READ_END.slice(0, 10)} (full ${ACTIVATION_DAYS} days) for activation; window spend over window signups for cost per signup.`,
 		mixpanelReport: { type: "Funnels + warehouse", steps: ["account created", "purchase completed"], window: `${ACTIVATION_DAYS} days`, breakdown: "acquisition_channel", dateRange: `${D0} to ${ACT_READ_END.slice(0, 10)}`, join: "marketing_spend_daily.spend_usd by acquisition_channel" },
 		assertions: [
