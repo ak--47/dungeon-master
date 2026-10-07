@@ -4,603 +4,773 @@ import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "@ak--47/dungeon-master/utils";
-import * as v from "ak-tools";
+import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
 /** @typedef  {import("../../../types").Dungeon} Config */
 
 // ── OVERVIEW ──
 /*
- * NAME:       FanVerse
- * APP:        Fan wiki and community discussion platform where users create
- *             articles, discuss topics, moderate content, and build collaborative
- *             knowledge bases across fandoms. Core loop: sign up → search → read
- *             articles → contribute → discuss. Revenue: free / supporter ($4.99,
- *             ad-free) / pro ($12.99, analytics + badges).
- * SCALE:      10,000 users, ~617K events, 121 days (2026-01-01 → 2026-05-01)
- * CORE LOOP:  account created → search performed → article viewed → article published → comment posted
+ * NAME:       Hearthside
+ * APP:        Fan community platform: members join hobby communities in six
+ *             hubs (gaming, anime, movies & TV, books, tabletop, music), read
+ *             and edit community wikis, start and reply to discussion threads,
+ *             upvote, upload fan art, and report bad content to volunteer
+ *             moderators. Free with ads; Hearthside Plus ($4.99/month or
+ *             $49.99/year) removes ads and adds flair, badges, and larger uploads.
+ * SCALE:      10,000 members (≈4,500 join inside the window), ~0.84M events,
+ *             120 days (2026-06-04 → 2026-10-01, UTC), 48 communities
+ * CORE LOOP:  article viewed / search performed → discussion viewed → comment posted
+ * VALUE MOMENT: comment posted (a member takes part, not only reads)
  *
- * EVENTS (18):
- *   article viewed (9) > app session (8) > upvote given (7) > comment posted (6)
- *   > search performed (6) > notification received (6) > discussion posted (5)
- *   > article edited (4) > article published (3) > user followed (3)
- *   > wiki page created (2) > media uploaded (2) > moderation action (2)
- *   > profile updated (2) > account created (1) > support ticket created (1)
- *   > report submitted (1) > account deactivated (1)
+ * EVENTS (21):
+ *   article viewed (24) > notification received (7) > upvote given (7)
+ *   > search performed (5) > article edited (3) > user followed (1)
+ *   > community joined (1) > article published (1) > media uploaded (1)
+ *   > discussion posted (1, half kept) > moderation action (1, moderators only)
+ *   > funnel-only: account created, interests selected, intro posted,
+ *   discussion viewed, comment posted, report submitted, report resolved,
+ *   plus page viewed, plus subscribed, $experiment_started
  *
- * FUNNELS (5):
- *   - Onboarding Flow:     account created → search performed → article viewed → discussion posted (40%)
- *   - Content Creation:    article viewed → article published → comment posted (35%)
- *   - Engagement Loop:     article viewed → upvote given → comment posted → discussion posted (30%)
- *   - Creator to Supporter: article published → profile updated → notification received (45%)
- *   - Moderation Pipeline: report submitted → moderation action (60%)
+ * FUNNELS (4):
+ *   - Onboarding (first funnel): account created → interests selected → intro posted
+ *       (engine 100%; the everything hook decides who finishes by acquisition channel, H2)
+ *   - Thread Reply: discussion viewed → comment posted (40%, 30 min; thread_id,
+ *       content_hub, community per thread; A/B "Reply Nudges" from 2026-07-08, H3)
+ *   - Report: report submitted → report resolved (85%; report_id, report_type,
+ *       content_hub per report; resolution timing rebuilt in the hook, H4)
+ *   - Upgrade to Plus (free members): plus page viewed → plus subscribed (8%, 2 h)
  *
- * USER PROPS:  role, contributor_level, articles_created, reputation_score, preferred_hub, subscription_tier, Platform, content_hub
- * SUPER PROPS: subscription_tier, Platform, content_hub
- * SCD PROPS:   contributor_level (newcomer/regular/trusted/admin, monthly fuzzy, max 8)
- * GROUPS:      none
+ * USER PROPS:  role (lurker/reader/contributor/creator/moderator), home_hub,
+ *              membership, member_since, acquisition_channel, karma,
+ *              "Experiment: Reply Nudges" (enrolled members)
+ * SUPER PROPS: membership (free / plus at event time)
+ * SCD PROPS:   none
+ * GROUPS:      community_id (48 communities, 8 per hub; events with a hub carry
+ *              a community in that hub)
+ * WAREHOUSE:   paid_marketing_daily (spend by paid channel),
+ *              trust_safety_daily (reports, spam removals, raid alerts by hub),
+ *              ad_revenue_daily (ad impressions, eCPM, revenue by hub)
+ * LOOKUPS:     none — every attribute is denormalized onto events/profiles/groups
+ * SOUP:        weekend-heavy dayOfWeekWeights, evening hourOfDayWeights for the
+ *              Americas and Europe (UTC)
+ *
+ * IDENTITY: "account created" is the auth event and each new member's first
+ * event (user_id + device_id); 2 devices per member on average. Every event
+ * carries user_id: there is no anonymous pre-signup activity. The two
+ * onboarding steps after signup (interests selected, intro posted) carry
+ * user_id only; every other event also carries device_id.
+ *
+ * DESIGN NOTES:
+ * - retentionCurve shapes new members' activity and pins each signup to the
+ *   profile `created` instant (UTC, hour from the soup). member_since is that
+ *   date for new members and a 2021-03..2026-06 date for established ones.
+ * - Roles: personas scale each member's whole event budget, so the hook keeps
+ *   only 20% of a reader's and 5% of a lurker's contributions (articles,
+ *   edits, threads, comments, uploads); only moderators take moderation
+ *   actions; half of all "discussion posted" are kept (starting a thread is
+ *   rarer than replying). Reporting and upgrade browsing come from a minority
+ *   of members (35% and 30%, whole funnel units).
+ * - Hubs: 55% of a member's activity is in their home hub. Wiki pages and
+ *   communities are hub-consistent (a page id and a community id always belong
+ *   to the event's hub); a thread's view and reply share one community.
+ * - Experiment exposure: the engine logs $experiment_started before every
+ *   enrolled thread view; the hook keeps the first per member, which is how
+ *   the client SDK logs exposure.
+ * - New members' fate is decided in one pass: onboarding (H2), first reply
+ *   (H6), setup abandonment (50% of non-finishers stop on day 0.5-4), and an
+ *   organic lapse (60% stop on a uniform day 5-75). A cut stops what the
+ *   member does; notifications keep arriving at 35% of the rate and report
+ *   resolutions still post.
+ * - Reports: resolution time is a seeded log-normal (median 16 h) scaled by
+ *   type and by Hearth Guard (H4); resolution_hours is the real gap. Reports
+ *   filed in the engine's 3-day lead-in before June 4 keep their resolution
+ *   when its implied filing time is before the window, so June starts with a
+ *   queue in flight.
+ * - Warehouse drift: trust_safety_daily.reports_received adds email and
+ *   logged-out reports (~20%, seeded per hub-day) to the Mixpanel count;
+ *   ad_revenue_daily counts every ad-serving page view (logged-in free members
+ *   × ~15 for logged-out search readers, ±12% per hub-day) × ad slots × fill
+ *   rate; paid_marketing_daily spend is a paced budget, never derived from the
+ *   day's signups.
  */
 
 // ── HOOK STORIES ──
 /*
- * -------------------------------------------------------------------
- * 1. WEEKEND CONTENT SURGE (event hook)
- * -------------------------------------------------------------------
+ * All effects are hidden: no flag properties. Each is found by a breakdown, a
+ * date comparison, a cohort, or a warehouse join. Dates live in the TIMELINE
+ * constants and are shared by hooks, stories, SQL, warehouse columns, and the
+ * timeline guide.
  *
- * PATTERN: Articles published on weekends (Sat/Sun) have 1.5x
- * word_count. Creators have more time on weekends to write longer,
- * more detailed wiki articles.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H1. STARFALL LAUNCH SURGE (everything, clones)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: 2026-08-06 to 2026-08-19, gaming-hub article views and searches run
+ *   2.6x normal on release day, decaying evenly to 1.4x (mean 2.0x). Clones are
+ *   new page views (fresh wiki page, community, time on page) 2-240 min after
+ *   the source. Other hubs are untouched.
+ * MIXPANEL: Insights, article viewed (and search performed), total, breakdown
+ *   content_hub, daily; Aug 6-19 vs Jul 23-Aug 5.
+ * REAL WORLD: a big game release sends players to the wiki for walkthroughs.
  *
- * HOW TO FIND IT IN MIXPANEL:
+ * ─────────────────────────────────────────────────────────────────────────
+ * H2. ONBOARDING BY ACQUISITION CHANNEL (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: share of signups who post their intro: friend_invite 72%, reddit
+ *   55%, organic 52%, app_store 50%, youtube_creators 50%, tiktok_ads 25%.
+ *   40% of non-finishers also skip the interests step.
+ * MIXPANEL: Funnels, account created → interests selected → intro posted,
+ *   7-day window, breakdown acquisition_channel.
+ * REAL WORLD: invited members arrive with a friend already inside; short-video
+ *   ad clicks are curious, not committed.
  *
- *   Report 1: Weekend vs Weekday Word Count
- *   - Report type: Insights
- *   - Event: "article published"
- *   - Measure: Average of "word_count"
- *   - Breakdown: Day of Week
- *   - Expected: Sat/Sun ~ 1.5x avg word_count vs weekdays
- *     (weekend ~ 3325, weekday ~ 2218)
+ * ─────────────────────────────────────────────────────────────────────────
+ * H3. REPLY NUDGES EXPERIMENT (declarative funnel experiment)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: from 2026-07-08 members split 50/50; "Nudges On" multiplies the share
+ *   of thread views that lead to a comment by 1.2 and view → comment time by 0.8.
+ * MIXPANEL: Funnels, discussion viewed → comment posted, totals, hold thread_id
+ *   constant, 1-day window, breakdown "Experiment: Reply Nudges".
+ * REAL WORLD: a reply prompt under the thread lowers the effort to answer.
  *
- * REAL-WORLD ANALOGUE: Community wikis see longer, more thoughtful
- * contributions on weekends when creators have uninterrupted time.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H4. HEARTH GUARD REPORT TRIAGE (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: from 2026-07-22, community by community over 10 days, spam,
+ *   harassment, and vandalism reports resolve in 0.35x the time; misinformation,
+ *   copyright, and other reports do not change.
+ * MIXPANEL: Funnels, report submitted → report resolved, hold report_id
+ *   constant, median time to convert, breakdown report_type, before Jul 22 vs
+ *   from Aug 1 (or Insights average resolution_hours).
+ * REAL WORLD: AI triage clears clear-cut abuse; judgment calls still wait for
+ *   a volunteer.
  *
- * -------------------------------------------------------------------
- * 2. TRENDING TOPIC WINDOW (event hook)
- * -------------------------------------------------------------------
+ * ─────────────────────────────────────────────────────────────────────────
+ * H5. ANIME SPAM RAID (everything + warehouse trust_safety_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: 2026-08-19 to 2026-08-21, 45% of would-be anime comments, threads,
+ *   upvotes, and uploads never happen; 25% of reporting members active in anime
+ *   file a spam report. Warehouse: raid_alert_level = raid, spam_accounts_removed
+ *   ~14x, automod and volunteer hours up, for anime on those days only.
+ * MIXPANEL: Insights, comment posted / discussion posted / upvote given / media
+ *   uploaded, breakdown content_hub, daily; join the warehouse raid days.
+ * REAL WORLD: a bot raid buries real threads and members wait it out.
  *
- * PATTERN: During days 35-50, articles in the "gaming" hub get 2x
- * view_count. Simulates a major game release driving traffic to
- * gaming wiki pages.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H6. FIRST REPLY WITHIN 24 HOURS (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: 55% of new members' intros get a reply notification within 24 h
+ *   (member hash). Of the others, 50% go quiet 7 days after the intro.
+ * MIXPANEL: Funnels intro posted → notification received (notification_type =
+ *   reply), 24-hour window, save converters as a cohort; Retention account
+ *   created → custom event "member action" (every event except notification
+ *   received and report resolved), on or after day 30, filter did intro
+ *   posted, breakdown that cohort.
+ * REAL WORLD: a newcomer who is greeted comes back; one who posts into silence
+ *   often does not.
  *
- * HOW TO FIND IT IN MIXPANEL:
+ * ─────────────────────────────────────────────────────────────────────────
+ * H7. REVERTED FIRST EDIT (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: 35% of new members' first wiki edits are reverted (edit_reverted
+ *   notification 1-30 h later); 60% of those never edit again.
+ * MIXPANEL: Funnels article edited → notification received (edit_reverted),
+ *   2-day window, cohort; Funnels article edited → article edited, 30-day
+ *   window, new members, breakdown that cohort.
+ * REAL WORLD: the classic wiki newcomer problem: a revert reads as rejection.
  *
- *   Report 1: Gaming Hub View Spike
- *   - Report type: Insights
- *   - Event: "article viewed"
- *   - Measure: Average of "view_count"
- *   - Filter: content_hub = "gaming"
- *   - Line chart by week
- *   - Expected: Clear spike during days 35-50 (~2x normal)
+ * ─────────────────────────────────────────────────────────────────────────
+ * H8. AD LOAD CHANGE (everything + warehouse ad_revenue_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: from 2026-09-02 free pages carry 2.4 ad slots per page view instead
+ *   of 1.5 (1.6x impressions per page view); free members read 0.9x as many
+ *   articles per search; Plus checkout conversion per upgrade-page visit
+ *   doubles, ramping in over 7 days.
+ * MIXPANEL: Insights formula article viewed / search performed, breakdown
+ *   membership, before vs after; Funnels plus page viewed → plus subscribed,
+ *   totals, 1-day window, before vs after; warehouse impressions per free view.
+ * REAL WORLD: more ads earn more per page, cost some reading, and push the
+ *   most annoyed readers to pay for ad-free.
  *
- *   Report 2: Hub Comparison During Trend Window
- *   - Report type: Insights
- *   - Event: "article viewed"
- *   - Measure: Average of "view_count"
- *   - Breakdown: "content_hub"
- *   - Filter: time within trend window
- *   - Expected: gaming ~2x vs other hubs
+ * ─────────────────────────────────────────────────────────────────────────
+ * H9. PAID CHANNEL ECONOMICS (everything + warehouse paid_marketing_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: window spend per Mixpanel signup $5 TikTok, $8 Reddit, $12 YouTube
+ *   creators (paced daily budgets, weekday shape, ±12% noise, never zero).
+ *   With H2's onboarding rates, TikTok is 0.625x Reddit per signup but 1.375x
+ *   per onboarded member.
+ * MIXPANEL: account created by acquisition_channel joined to spend_usd; the
+ *   onboarding funnel by acquisition_channel.
+ * REAL WORLD: cheap clicks are not cheap members.
  *
- * REAL-WORLD ANALOGUE: Major franchise releases (game launches,
- * movie premieres) drive massive traffic spikes to related wikis.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H10. FANDOM FEST (declarative worldEvents)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: 2026-09-17 to 2026-09-20, comments, new threads, upvotes, and
+ *   uploads run 1.6x (engine clones, fresh insert_ids). Reading is unchanged.
+ * MIXPANEL: Insights, those four events, daily; fest Thu-Sun vs the same days a
+ *   week before and after.
+ * REAL WORLD: a themed community event lifts participation, not traffic.
  *
- * -------------------------------------------------------------------
- * 3. POWER CREATOR ENGAGEMENT LIFT (everything hook)
- * -------------------------------------------------------------------
+ * ═════════════════════════════════════════════════════════════════════════
+ * EXPECTED METRICS SUMMARY (measured: data/verify-community, 2026-10-07, 825,919 events)
+ * ═════════════════════════════════════════════════════════════════════════
+ * Hook | Metric                                         | Derivation                 | Expected | Measured
+ * -----|------------------------------------------------|----------------------------|----------|---------
+ * H1   | gaming/other reading+search, launch / before   | mean of 2.6 → 1.4 ramp     | 2.00     | 2.023
+ * H1   | other hubs, launch fortnight / fortnight before| untouched                  | 1.00     | 1.035
+ * H2   | onboarding friend_invite / organic             | 0.72 / 0.52                | 1.385    | 1.327 (68.4% vs 51.5%)
+ * H3   | reply rate per thread view, Nudges / Control   | NUDGE_CONV_MULT            | 1.20     | 1.216 (31.8% vs 26.1%)
+ * H3   | median view → reply time, Nudges / Control     | NUDGE_TTC_MULT             | 0.80     | 0.800 (12.0 vs 15.0 min)
+ * H3   | Nudges share of exposed members                | equal 2-arm hash           | 0.50     | 0.497
+ * H4   | median resolve time DiD, triaged / other types | GUARD_RESOLVE_MULT         | 0.35     | 0.327 (12.2 → 4.0 h vs 25.4 → 25.6 h)
+ * H4   | other types, after / before (control)          | untouched                  | 1.00     | 1.006
+ * H5   | anime share of participation, raid / base      | RAID_KEEP                  | 0.55     | 0.596
+ * H5   | other hubs' participation, raid / base         | untouched                  | 1.00     | 0.997
+ * H6   | D30 on-or-after, replied / not replied         | 1/(1 − 0.5), floor 1.333   | 2.00     | 2.035 (65.6% vs 32.2%)
+ * H6   | intros with a reply within 24 h                | FAST_REPLY_SHARE           | 0.55     | 0.563
+ * H7   | edited again in 30 d, reverted / kept          | 1 − 0.6, ceiling 0.7       | 0.40     | 0.384 (25.2% vs 65.6%)
+ * H7   | first edits reverted                           | REVERT_SHARE               | 0.35     | 0.351
+ * H8   | impressions per free article view, after/before| 2.4 / 1.5 slots            | 1.60     | 1.610 (19.3 → 31.1)
+ * H8   | views per search, free DiD vs Plus             | AD_READING_KEEP            | 0.90     | 0.901
+ * H8   | Plus conversion per visit, after / before      | UPGRADE_LIFT, floor 1.5    | 2.00     | 1.900 (8.4% vs 4.4%)
+ * H9   | spend per signup, TikTok / Reddit              | 5 / 8                      | 0.625    | 0.601 ($5.07 vs $8.45)
+ * H9   | spend per onboarded member, TikTok / Reddit    | 0.625 × 0.55/0.25          | 1.375    | 1.300 ($20.86 vs $16.05)
+ * H10  | participation, fest / neighbor Thu-Sun         | FEST_MULT                  | 1.60     | 1.612
+ * H10  | article reading, fest / neighbor Thu-Sun       | untouched                  | 1.00     | 1.007
+ * ═════════════════════════════════════════════════════════════════════════
  *
- * PATTERN: Users who published >20 articles get 3x avg upvote_count
- * on their content events. Prolific creators earn community trust
- * and visibility, amplifying their engagement metrics.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Upvote Count by Creator Volume
- *   - Report type: Insights (with cohorts)
- *   - Cohort A: users who did "article published" 21+ times
- *   - Cohort B: users who did "article published" 0-1 times
- *   - Event: "upvote given"
- *   - Measure: Average of "upvote_count"
- *   - Expected: cohort A ~3x avg upvote_count (~15 vs ~5). Because the
- *     multiplier is an exact integer x3 on integer draws, every treated
- *     upvote_count is divisible by 3 — a structural signature.
- *
- * REAL-WORLD ANALOGUE: Power contributors on platforms like Fandom
- * and Wikipedia earn disproportionate engagement due to reputation
- * and content quality.
- *
- * -------------------------------------------------------------------
- * 4. DISCUSSION DEPTH BY CONTRIBUTOR TYPE (everything hook)
- * -------------------------------------------------------------------
- *
- * PATTERN: Active contributors (segment "active_contributor") get
- * cloned comment_posted events to simulate deeper discussion threads.
- * Each existing comment has a 50% chance of spawning a follow-up.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Comments Per User by Segment
- *   - Report type: Insights
- *   - Event: "comment posted"
- *   - Measure: Total per user
- *   - Breakdown: user property "role" (contributor = active_contributor)
- *   - Expected: ~1.5x comments ACTIVITY-NORMALIZED (comments per app
- *     session) vs readers — the raw per-user ratio is dominated by the
- *     persona event multipliers (1.5x vs 0.3x/0.1x), not the clones.
- *     Secondary signature: contributor is_reply share ~0.78 vs the
- *     organic ~0.67 (clones are always replies).
- *
- * REAL-WORLD ANALOGUE: Engaged contributors create deeper discussion
- * threads, replying to comments and fostering community dialogue.
- *
- * -------------------------------------------------------------------
- * 5. EDIT WAR DETECTION (everything hook)
- * -------------------------------------------------------------------
- *
- * PATTERN: Users with >5 rapid article_edited events within a short
- * window get reduced edit_quality score (set to 1-2 range vs normal
- * 1-5). Simulates contentious edits degrading quality.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Edit Quality by Volume
- *   - Report type: Insights
- *   - Event: "article edited"
- *   - Measure: Average of "edit_quality"
- *   - Breakdown: user property "segment"
- *   - Expected: Users with many edits show lower avg quality
- *     (high-edit users ~ 1.5 vs normal ~ 3.0)
- *
- * REAL-WORLD ANALOGUE: Wiki edit wars (e.g., Wikipedia) degrade
- * content quality as users repeatedly override each other's changes.
- *
- * -------------------------------------------------------------------
- * 6. LURKER CHURN (everything hook)
- * -------------------------------------------------------------------
- *
- * PATTERN: Users with <5 total events lose 60% of events after
- * day 10 of their activity. Simulates lurkers quickly losing
- * interest and churning out.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Event Volume by Segment Over Time
- *   - Report type: Insights
- *   - Event: Any event
- *   - Measure: Total per user
- *   - Breakdown: user property "segment"
- *   - Line chart by week
- *   - Expected: lurker segment drops off sharply after first 10 days
- *
- * REAL-WORLD ANALOGUE: Most community platforms see >60% of new
- * signups become inactive within the first 2-3 weeks.
- *
- * -------------------------------------------------------------------
- * 7. CREATOR PROFILES (user hook)
- * -------------------------------------------------------------------
- *
- * PATTERN: Users with role "creator" get articles_created set to
- * 50-200 range and reputation_score to 80-100. Moderators get
- * mid-range reputation. Readers/lurkers stay at defaults.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Reputation Distribution by Role
- *   - Report type: Insights
- *   - Event: any event
- *   - Measure: Average of user property "reputation_score"
- *   - Breakdown: user property "role"
- *   - Expected: creator ~ 90, moderator ~ 55, reader ~ 25
- *
- *   Report 2: Articles Created by Role
- *   - Report type: Insights
- *   - Measure: Average of user property "articles_created"
- *   - Breakdown: user property "role"
- *   - Expected: creator ~ 125, others ~ 0
- *
- * REAL-WORLD ANALOGUE: Top wiki contributors have hundreds of
- * articles and high community reputation scores.
- *
- * -------------------------------------------------------------------
- * 8. PRO SUBSCRIBER CONTENT CREATION LIFT (everything hook)
- * -------------------------------------------------------------------
- *
- * PATTERN: Free-tier users drop 65% of ALL "comment posted" events
- * (not just funnel-final instances), creating a visible conversion gap
- * between paid and free users. Pro/supporter users keep all their
- * events. Comments-per-session for free users therefore reads ~0.35x
- * of paid — the exact keep rate.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Content Creation Conversion by Tier
- *   - Report type: Funnels
- *   - Steps: "article viewed" -> "article published" -> "comment posted"
- *   - Breakdown: "subscription_tier" (superProp)
- *   - Expected: pro/supporter ~1.5-2.5x the free published→comment
- *     step conversion (nonlinear in the 0.35 keep rate — depends on
- *     per-window comment density)
- *
- * REAL-WORLD ANALOGUE: Premium wiki tools (analytics dashboards,
- * badge systems) incentivize more content creation from subscribers.
- *
- * -------------------------------------------------------------------
- * 9. CONTENT CREATION TIME-TO-CONVERT (funnel-post hook)
- * -------------------------------------------------------------------
- *
- * PATTERN: Pro/supporter subscribers complete the Content Creation
- * funnel 1.3x faster (time gaps scaled by 0.77). Free-tier users
- * complete it 1.25x slower (gaps scaled by 1.25). The hook iterates
- * over the funnel-post event array, compresses or stretches the
- * inter-step time gaps based on the user's subscription_tier from
- * meta.profile, then rewrites each event's timestamp. v1.6: scoped to
- * the Content Creation funnel only — the v1.5 hook stretched every
- * funnel's gaps, which this block never claimed.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Content Creation TTC by Subscription Tier
- *   - Report type: Funnels
- *   - Steps: "article viewed" -> "article published" -> "comment posted"
- *   - Breakdown: "subscription_tier" (superProp)
- *   - Metric: Median time to convert
- *   - Expected: pro/supporter median TTC below free-tier TTC. The raw
- *     knob distance is 0.77/1.25 = 0.62; organic cross-instance
- *     pairings mask part of it, so the visible ratio reads ~0.7-0.9.
- *
- *   NOTE (funnel-post measurement): visible via Mixpanel funnel median
- *   TTC and via emulateBreakdown's timeToConvert (the H9 story asserts
- *   the delta itself at a 60h conversion window = 48h generative
- *   window x 1.25 max stretch). Cross-event MIN->MIN SQL queries on
- *   raw events do NOT show this — funnel-post adjusts gaps within
- *   funnel instances, not across the user's full event history.
- *
- * REAL-WORLD ANALOGUE: Premium wiki contributors with analytics
- * dashboards and streamlined tools move from reading to publishing
- * faster; free users hesitate longer without feedback loops.
- *
- * -------------------------------------------------------------------
- * 10. ARTICLE-PUBLISHED MAGIC NUMBER (everything hook)
- * -------------------------------------------------------------------
- *
- * PATTERN: Users who published 2-5 articles sit in a "sweet spot" --
- * all their upvote_count values on "upvote given" events are boosted
- * by +35% (factor 1.35). Users who published 6+ articles hit creator
- * burnout: from day 60 (ARTICLE_FATIGUE_START_DAY), 40% of their
- * "upvote given" events are dropped. No flag is stamped --
- * discoverable only by binning users on article-published COUNT.
- *
- * WHY THE DROP IS CALENDAR-SCOPED: publish count is intrinsically
- * coupled to activity level (E[pubs] grows with total events), so a
- * uniform drop cannot be recovered from output -- every cross-arm
- * rate comparison (per session, per discussion, per non-publish
- * event) is confounded by activity composition; measured organic
- * upvotes-per-session differs 23-58% across publish bands and
- * activity-band matching leaves the arms with materially different
- * event mixes. The calendar edge turns recovery into a
- * difference-in-differences: each arm's own before/after
- * upvotes-per-session ratio cancels its activity composition
- * (measured arm-invariant to ~0.1% on untreated data), so
- * (over after/before) / (sweet after/before) reads the 0.60 keep
- * rate directly.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Upvote Count by Article Volume Cohort
- *   - Report type: Insights (with cohorts)
- *   - Cohort A: users who did "article published" 2-5 times
- *   - Cohort B: users who did "article published" 0-1 times
- *   - Event: "upvote given"
- *   - Measure: Average of "upvote_count"
- *   - Compare cohort A vs cohort B
- *   - Expected: cohort A ~ 1.35x higher avg upvote_count
- *
- *   Report 2: Upvote Volume Collapse After Day 60 (2026-03-02)
- *   - Report type: Insights (with cohorts), line chart over time
- *   - Cohort C: users who did "article published" 6+ times
- *   - Cohort A: users who did "article published" 2-5 times
- *   - Event: "upvote given", Measure: Total events, weekly buckets
- *   - Expected: cohort C's upvote volume drops ~40% relative to its
- *     own pre-March trend at 2026-03-02; cohort A shows no break.
- *     (Levels differ across cohorts for organic activity reasons --
- *     compare each cohort to its own history, not to each other.)
- *
- * REAL-WORLD ANALOGUE: Creators who publish a handful of quality
- * articles earn outsized community engagement; prolific publishers
- * burn out mid-quarter and disengage from curating others' work.
- *
- * =====================================================================================
- * EXPECTED METRICS SUMMARY (Measured = full fidelity, 10K users / 616,718 events)
- * =====================================================================================
- *
- * Story id                      | Metric                              | Expected      | Measured
- * ------------------------------|-------------------------------------|---------------|---------
- * H1-weekend-word-count[0]      | published weekend/weekday word_count| [1.40, 1.60]  | 1.491
- * H1-weekend-word-count[1]      | wiki placebo weekend/weekday        | [0.92, 1.08]  | 0.999
- * H2-trending-gaming-window[0]  | gaming in/out-window view_count     | [1.80, 2.20]  | 1.985
- * H2-trending-gaming-window[1]  | other-hub placebo in/out            | [0.92, 1.08]  | 0.998
- * H3-power-creator-upvotes[0]   | power/low avg upvote_count          | [2.70, 3.30]  | 3.028
- * H3-power-creator-upvotes[1]   | power mod-3 share (low placebo)     | ≥0.995 (≤0.9) | 1.000 (0.620)
- * H4-discussion-depth[0]        | bracket: corrected DD ≤ 1.5 ≤ raw DD| [1.10,1.60]/[1.50,2.80] | 1.285 / 2.057
- * H4-discussion-depth[1]        | contributor reply share (reader)    | [0.75, 0.81]  | 0.780 (0.672)
- * H5-edit-war[0]                | war avg edit_quality; calm gap      | [1.40,1.60]; ≥0.4 | 1.501; 0.840
- * H6-lurker-churn[0]            | pre-calibrated keep r (corrected/0.4)| [0.60, 1.40] | 1.104
- * H7-creator-profiles[0]        | role ranges exact; creator avg rep  | 0 violations; [88,92] | exact; 90.26
- * H8-pro-content-lift[0]        | free/paid comments-per-session      | [0.30, 0.40]  | 0.346
- * H8-pro-content-lift[1]        | paid/free published→comment conv    | [1.35, 2.60]  | 2.458
- * H9-content-ttc[0]             | pro/free median TTC (emulator)      | [0.65, 0.92]  | 0.765
- * H9-content-ttc[1]             | supporter/pro median TTC (placebo)  | [0.85, 1.15]  | 0.995
- * H10-article-magic-number[0]   | sweet/low avg upvote_count          | [1.25, 1.50]  | 1.377
- * H10-article-magic-number[1]   | day-60 DiD upvotes-per-session      | [0.50, 0.70]  | 0.579
+ * All 10 stories grade NAILED. H6, H7, and H8's upgrade read are
+ * noise-limited (a few hundred retained members, about 300 reverted editors,
+ * about 100 post-change subscriptions; relative SE 6-11%), so they carry a
+ * knob target plus a knob-derived floor or ceiling (half the effect) and
+ * would grade STRONG rather than fail if a reseed moved them outside ±10%.
+ * H4 excludes reports filed during the H5 raid (spam floods the triaged mix)
+ * and requires a week of resolution time (censoring). H9's onboarded-member
+ * read inherits H2's binomial noise (224 TikTok onboarded members).
  */
 
 // ── SCALE ──
 const SEED = "dm4-community";
 const NUM_USERS = 10_000;
-const DATASET_START = "2026-01-01T00:00:00Z";
-const DATASET_END = "2026-05-01T23:59:59Z";
+const DATASET_START = "2026-06-04T00:00:00Z";
+const DATASET_END = "2026-10-01T23:59:59Z"; // 120 days
 const EVENTS_PER_DAY = 1.2;
 const token = process.env.MP_TOKEN || "your-mixpanel-token";
 
 const chance = u.initChance(SEED);
 
-// ── KNOBS (tweak these to reshape stories) ──
-const WEEKEND_WORD_COUNT_MULT = 1.5;
+// ── TIMELINE (shared by hooks, stories, SQL, warehouse columns, guides) ──
+const REPLY_NUDGES_START = "2026-07-08T00:00:00Z"; // "Reply Nudges" thread A/B starts
+const GUARD_LAUNCH = "2026-07-22T00:00:00Z";       // Hearth Guard (AI report triage) rollout starts
+const GUARD_ROLLOUT_DAYS = 10;                     // communities switched on over 10 days (through Jul 31)
+const STARFALL_RELEASE = "2026-08-06T00:00:00Z";   // Starfall (open-world game) releases
+const STARFALL_DAYS = 14;                          // launch fortnight, Aug 6-19
+const RAID_START = "2026-08-19T00:00:00Z";         // coordinated spam raid on the anime hub
+const RAID_END = "2026-08-22T00:00:00Z";           // exclusive (3 days, Aug 19-21)
+const AD_LOAD_CHANGE = "2026-09-02T00:00:00Z";     // more ad slots per page for free members
+const FEST_START = "2026-09-17T00:00:00Z";         // Hearthside Fandom Fest (Thu-Sun)
+const FEST_DAYS = 4;
 
-const TREND_START_DAY = 35;
-const TREND_END_DAY = 50;
-const TREND_VIEW_MULT = 2;
+const ms = (iso) => dayjs.utc(iso).valueOf();
+const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
+const MIN_MS = 60_000;
+const dayIndex = (iso) => Math.round((ms(iso) - ms(DATASET_START)) / DAY_MS);
+const WINDOW_DAYS = 120;
 
-const POWER_CREATOR_PUBLISH_THRESHOLD = 20;
-const POWER_CREATOR_UPVOTE_MULT = 3;
+// ── WEEKLY AND DAILY RHYTHM (soup) ──
+// Sun..Sat: a hobby community is busiest on weekends and quietest midweek.
+const DOW_WEIGHTS = [1.0, 0.84, 0.8, 0.8, 0.83, 0.9, 0.98];
+// UTC hours: North American evenings (00-04 UTC) and European evenings
+// (17-22 UTC) peak; the quietest hours are the European early morning.
+const HOUR_WEIGHTS = [0.95, 0.95, 0.9, 0.8, 0.65, 0.5, 0.38, 0.3, 0.28, 0.3, 0.36, 0.42,
+	0.5, 0.56, 0.62, 0.68, 0.74, 0.82, 0.9, 0.95, 1.0, 1.0, 0.98, 0.96];
 
-const DISCUSSION_CLONE_LIKELIHOOD = 50;
+// ── KNOBS ──
+const HUBS = ["gaming", "anime", "movies_tv", "books", "tabletop", "music"];
+const HUB_WEIGHTS = { gaming: 26, anime: 18, movies_tv: 20, books: 12, tabletop: 10, music: 14 };
+const HOME_HUB_SHARE = 55; // % of a member's activity in their home hub
 
-const EDIT_WAR_THRESHOLD = 5;
-const EDIT_WAR_QUALITY_MIN = 1.0;
-const EDIT_WAR_QUALITY_MAX = 2.0;
+// Contribution volume by role (realism, not a story): readers and lurkers
+// mostly read; only moderators take moderation actions.
+const CONTRIBUTION_EVENTS = ["article published", "article edited", "discussion posted", "comment posted", "media uploaded"];
+const CONTRIB_KEEP = { lurker: 0.05, reader: 0.2, contributor: 1, creator: 1, moderator: 1 };
+const NEW_THREAD_KEEP = 0.5;        // starting a thread is rarer than replying (applies to everyone)
 
-const LURKER_EVENT_THRESHOLD = 5;
-const LURKER_CHURN_CUTOFF_DAYS = 10;
-const LURKER_DROP_LIKELIHOOD = 60;
+// H2 onboarding by acquisition channel (share of signups who post their intro)
+const CHANNEL_WEIGHTS = { organic: 28, friend_invite: 13, reddit_ads: 18, tiktok_ads: 21, youtube_creators: 10, app_store: 10 };
+const ONBOARD_FINISH = { friend_invite: 0.72, organic: 0.52, app_store: 0.5, reddit_ads: 0.55, youtube_creators: 0.5, tiktok_ads: 0.25 };
+const ONBOARD_EARLY_DROP = 0.4;     // non-finishers who stop before picking interests
+const ONBOARD_WINDOW_DAYS = 7;
+const SETUP_ABANDON_SHARE = 0.5;    // non-finishers who stop all activity on day 0.5-4
+const SETUP_ABANDON_DAY_MIN = 0.5;
+const SETUP_ABANDON_DAY_MAX = 4;
 
-const PRO_LIFT_FREE_DROP_LIKELIHOOD = 65;
+// H6 first reply within 24 h of the intro post (new members who posted an intro)
+const FAST_REPLY_SHARE = 0.55;
+const FAST_REPLY_HOURS = 24;
+const DARK_SHARE_NO_REPLY = 0.5;    // intro without a reply in 24 h: share who go dark after day 7
+const DARK_AFTER_DAYS = 7;
+const RETENTION_DAY = 30;
+const LAPSE_SHARE = 0.6;            // organic lapse, every new member, independent of everything else
+const LAPSE_DAY_MIN = 5;
+const LAPSE_DAY_MAX = 75;
+const LAPSED_NOTIFICATION_KEEP = 0.35; // notifications a member keeps receiving after going quiet
 
-const TTC_PRO_FACTOR = 0.77;
-const TTC_FREE_FACTOR = 1.25;
+// H7 newcomer's first wiki edit reverted
+const REVERT_SHARE = 0.35;          // new members whose first edit is reverted
+const QUIT_AFTER_REVERT = 0.6;      // reverted newcomers who never edit again
+const REVERT_FOLLOWUP_DAYS = 30;
 
-const ARTICLE_SWEET_MIN = 2;
-const ARTICLE_SWEET_MAX = 5;
-const ARTICLE_OVER_THRESHOLD = 6;
-const ARTICLE_UPVOTE_BOOST = 1.35;
-// creator-burnout drop is calendar-scoped: publish count is intrinsically
-// coupled to activity level, so a uniform drop is unrecoverable from output
-// (any cross-arm rate comparison is confounded by activity composition —
-// measured organic upvotes-per-session differs 23-58% across publish bands).
-// A calendar edge makes it a difference-in-differences: each arm's own
-// before/after upvotes-per-session ratio cancels its activity composition
-// (measured arm-invariant to 0.1% on untreated data).
-const ARTICLE_FATIGUE_START_DAY = 60;
-const ARTICLE_UPVOTE_DROP_LIKELIHOOD = 40;
+// H3 Reply Nudges experiment on the thread funnel
+const NUDGE_EXPERIMENT = "Reply Nudges";
+const NUDGE_VARIANT = "Nudges On";
+const EXP_KEY = `Experiment: ${NUDGE_EXPERIMENT}`;
+const NUDGE_CONV_MULT = 1.2;
+const NUDGE_TTC_MULT = 0.8;
+const THREAD_CONV = 40;
+const THREAD_TTC_H = 0.5;
 
-// ── DATA ARRAYS ──
-// Generate consistent wiki/article IDs at module level
-const wikiIds = v.range(1, 500).map(() => `WIKI_${v.uid(6)}`);
-const communityIds = v.range(1, 30).map(() => `COMM_${v.uid(4)}`);
+// H4 Hearth Guard report triage
+const REPORT_TYPES = { spam: 34, harassment: 20, vandalism: 14, misinformation: 14, copyright: 8, other: 10 };
+const TRIAGED_TYPES = ["spam", "harassment", "vandalism"];
+const GUARD_RESOLVE_MULT = 0.35;    // report → resolution time for triaged types once the community has Guard
+const REPORT_MEDIAN_H = 16;
+const TYPE_SPEED = { spam: 0.6, harassment: 1.0, vandalism: 0.8, misinformation: 1.6, copyright: 2.2, other: 1.2 };
+const REPORT_TTC_H = 72;
 
-// ── HELPER FUNCTIONS ──
-function handleUserHooks(record) {
-	// H7: CREATOR PROFILES — creators get high articles_created and reputation.
-	// Moderators get mid-range reputation. Readers/lurkers stay at defaults.
-	if (record.role === "creator") {
-		record.articles_created = chance.integer({ min: 50, max: 200 });
-		record.reputation_score = chance.integer({ min: 80, max: 100 });
-		record.contributor_level = "admin";
-	} else if (record.role === "moderator") {
-		record.articles_created = chance.integer({ min: 10, max: 50 });
-		record.reputation_score = chance.integer({ min: 40, max: 70 });
-		record.contributor_level = "trusted";
-	} else if (record.role === "contributor") {
-		record.articles_created = chance.integer({ min: 1, max: 15 });
-		record.reputation_score = chance.integer({ min: 15, max: 50 });
-		record.contributor_level = "regular";
-	} else {
-		record.articles_created = 0;
-		record.reputation_score = chance.integer({ min: 0, max: 20 });
-		record.contributor_level = "newcomer";
+// Who reports and who considers Plus (realism, not a story): reporting and
+// upgrade browsing come from a minority of members (whole funnel units).
+const REPORTER_SHARE = 0.35;
+const UPGRADE_CURIOUS_SHARE = 0.3;
+
+// H5 anime spam raid
+const RAID_HUB = "anime";
+const RAID_KEEP = 0.55;             // share of would-be anime participation (comments, threads, upvotes, uploads) during the raid
+const PARTICIPATION_EVENTS = ["comment posted", "discussion posted", "upvote given", "media uploaded"];
+const RAID_REPORTER_SHARE = 0.25;   // members active in anime during the raid who file one extra spam report
+const SPAM_REMOVED_PER_DAY = { gaming: 9, anime: 7, movies_tv: 7, books: 3, tabletop: 3, music: 4 };
+const RAID_SPAM_MULT = 14;
+
+// H1 Starfall launch fortnight: gaming reading and search volume, decaying from 2.6x to 1.4x (mean 2.0x)
+const STARFALL_MULT_START = 2.6;
+const STARFALL_MULT_END = 1.4;
+const STARFALL_MULT = (STARFALL_MULT_START + STARFALL_MULT_END) / 2;
+const starfallMult = (t) => {
+	const d = (t - ms(STARFALL_RELEASE)) / DAY_MS;
+	if (d < 0 || d >= STARFALL_DAYS) return 1;
+	return STARFALL_MULT_START + (STARFALL_MULT_END - STARFALL_MULT_START) * (Math.floor(d) / (STARFALL_DAYS - 1));
+};
+
+// H8 ad load change for free members
+const AD_SLOTS_OLD = 1.5;           // ad slots per page view before (one in-feed slot every other screen)
+const AD_SLOTS_NEW = 2.4;           // after
+const AD_IMPRESSION_MULT = AD_SLOTS_NEW / AD_SLOTS_OLD;
+const AD_READING_KEEP = 0.9;        // free members read 10% fewer articles after the change
+const UPGRADE_LIFT = 2.0;           // Plus checkout conversion per upgrade-page visit, after vs before
+const UPGRADE_RAMP_DAYS = 7;
+const UPGRADE_CONV = 8;
+const ESTABLISHED_PLUS_SHARE = 0.08;
+const UNTRACKED_REPORT_SHARE = 0.2;  // reports by email / logged-out readers on top of Mixpanel's count (average)
+const LOGGED_OUT_FACTOR = 15;       // ad-serving page views per logged-in free page view (logged-out search readers dominate wiki traffic)
+const ECPM_USD = { gaming: 3.4, anime: 2.6, movies_tv: 3.9, books: 2.2, tabletop: 2.8, music: 2.4 };
+
+// H9 paid channel economics
+const PAID_CHANNELS = ["reddit_ads", "tiktok_ads", "youtube_creators"];
+const CPL_USD = { reddit_ads: 8, tiktok_ads: 5, youtube_creators: 12 }; // window cost per Mixpanel signup
+const BORN_PCT = 45;
+const DAILY_BUDGET_USD = Object.fromEntries(PAID_CHANNELS.map((ch) => {
+	const totalW = Object.values(CHANNEL_WEIGHTS).reduce((a, b) => a + b, 0);
+	return [ch, CPL_USD[ch] * (NUM_USERS * BORN_PCT / 100) * (CHANNEL_WEIGHTS[ch] / totalW) / WINDOW_DAYS];
+}));
+const SPEND_FLAT_SHARE = 0.4;
+const SPEND_WEEKDAY = (() => {
+	const m = DOW_WEIGHTS.reduce((a, b) => a + b, 0) / DOW_WEIGHTS.length;
+	return DOW_WEIGHTS.map((w) => SPEND_FLAT_SHARE + (1 - SPEND_FLAT_SHARE) * w / m);
+})();
+const SPEND_NOISE = 0.12;
+const PLATFORM_SIGNUP_INFLATION = 1.25;
+const CPC_USD = { reddit_ads: 0.9, tiktok_ads: 0.45, youtube_creators: 1.6 };
+const CTR = { reddit_ads: 0.008, tiktok_ads: 0.011, youtube_creators: 0.014 };
+
+// H10 Fandom Fest: themed threads and a fan-art contest
+const FEST_MULT = 1.6;
+const FEST_EVENTS = ["media uploaded", "discussion posted", "comment posted", "upvote given"];
+
+// ── DATA ARRAYS (seeded) ──
+const COMMUNITY_SUFFIX = ["Guild", "Archive", "Commons", "Den", "Circle", "Hall", "Lounge", "Society"];
+const HUB_TOPICS = {
+	gaming: ["Starfall", "Ironvale", "Pixel Dynasty", "Neon Drift", "Hollow Crown", "Ashen Tide", "Kart League", "Deepcore"],
+	anime: ["Moonblade", "Sakura Station", "Mecha Vanguard", "Spirit Ledger", "Tide Runner", "Ember Academy", "Paper Lanterns", "Star Courier"],
+	movies_tv: ["Northwind Saga", "The Long Watch", "Harbor Lights", "Crimson Bureau", "Orbit Nine", "Glass City", "Old Roads", "Quiet Planet"],
+	books: ["Fable Keepers", "Ink and Ember", "The Ninth Shelf", "Mystery Hour", "Starward Novels", "Poetry Nook", "Saga Readers", "Grim Chapters"],
+	tabletop: ["Dice Tavern", "Hexcrawl", "Meeple Market", "Dungeon Scribes", "Card Table", "Miniature Forge", "Campaign Notes", "Rules Lawyers"],
+	music: ["Synth Garden", "Vinyl Vault", "Chiptune Union", "Indie Signal", "Choir Loft", "Bassline", "Lo-Fi Porch", "Score Club"],
+};
+const COMMUNITIES = HUBS.flatMap((hub, hi) => HUB_TOPICS[hub].map((topic, i) => ({
+	id: String(hi * 8 + i + 1),
+	hub,
+	name: `${topic} ${COMMUNITY_SUFFIX[(hi + i) % COMMUNITY_SUFFIX.length]}`,
+	// popularity falls with index inside the hub
+	members: Math.round((2600 / (1 + i * 0.9)) * (HUB_WEIGHTS[hub] / 20) * (0.8 + chance.floating({ min: 0, max: 0.4 }))),
+	founded: chance.integer({ min: 2017, max: 2025 }),
+	official: i === 0 || chance.bool({ likelihood: 20 }),
+})));
+const COMMUNITIES_BY_HUB = Object.fromEntries(HUBS.map((h) => [h, COMMUNITIES.filter((c) => c.hub === h)]));
+const WIKI_PAGES_PER_HUB = 600;
+const THREADS_PER_COMMUNITY = 1200;
+const HUB_CODE = { gaming: "gm", anime: "an", movies_tv: "tv", books: "bk", tabletop: "tt", music: "mu" };
+
+// ── HELPERS ──
+const salt = (uid, tag) => hashFloat(`${uid}|${tag}`);
+const round1 = (n) => Math.round(n * 10) / 10;
+const round2 = (n) => Math.round(n * 100) / 100;
+const T = (e) => dayjs.utc(e.time).valueOf();
+const iso = (t) => new Date(t).toISOString();
+const dayKey = (t) => new Date(t).toISOString().slice(0, 10);
+const jitter = (key, spread) => 1 + (hashFloat(key) - 0.5) * 2 * spread;
+const logNormal = (sigma) => Math.exp(chance.normal({ mean: 0, dev: sigma }));
+const pickWeighted = (weights, r) => {
+	const entries = Object.entries(weights);
+	const total = entries.reduce((s, [, w]) => s + w, 0);
+	let acc = 0;
+	for (const [k, w] of entries) {
+		acc += w / total;
+		if (r < acc) return k;
 	}
-	return record;
+	return entries[entries.length - 1][0];
+};
+const hubForMember = (ctx) => (chance.bool({ likelihood: HOME_HUB_SHARE }) && ctx?.profile?.home_hub
+	? ctx.profile.home_hub
+	: chance.weighted(HUBS, HUBS.map((h) => HUB_WEIGHTS[h])));
+const communityFor = (hub, key) => {
+	const list = COMMUNITIES_BY_HUB[hub] || COMMUNITIES_BY_HUB.gaming;
+	return list[Math.min(list.length - 1, Math.floor(list.length * Math.pow(hashFloat(`${key}|community`), 1.7)))].id;
+};
+const wikiFor = (hub, key) => `wk_${HUB_CODE[hub] || "gm"}_${String(Math.floor(WIKI_PAGES_PER_HUB * Math.pow(hashFloat(`${key}|wiki`), 1.8))).padStart(4, "0")}`;
+const inRaid = (t) => t >= ms(RAID_START) && t < ms(RAID_END);
+const guardOnFor = (communityId) => ms(GUARD_LAUNCH) + hashFloat(`guard|${communityId}`) * GUARD_ROLLOUT_DAYS * DAY_MS;
+const adSlots = (t) => (t >= ms(AD_LOAD_CHANGE) ? AD_SLOTS_NEW : AD_SLOTS_OLD);
+const PASSIVE = new Set(["notification received", "report resolved"]);
+// clone a user's event as another declared event type: identity, device, and
+// location context stay; the source event's own properties are removed
+const OWN_PROPS = ["signup_method", "acquisition_channel", "hubs_selected", "word_count", "content_hub", "wiki_id", "article_type",
+	"time_on_page_sec", "search_term", "results_count", "content_type", "thread_id", "topic_type", "reply_count", "comment_length",
+	"is_reply", "edit_type", "chars_changed", "category", "media_type", "file_size_kb", "join_source", "follow_source",
+	"notification_type", "channel", "opened", "report_id", "report_type", "outcome", "resolution_hours", "action_type", "severity",
+	"upgrade_trigger", "plan", "community_id", "Experiment name", "Variant name"];
+const asEvent = (template, event, props) => {
+	const c = cloneEvent(template, { event });
+	for (const k of OWN_PROPS) delete c[k];
+	return Object.assign(c, props);
+};
+// H9: paid media spend for one channel-day (paced budget, never zero)
+const paidSpend = (date, ch) => round2(DAILY_BUDGET_USD[ch] * SPEND_WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()] * jitter(`spend|${date}|${ch}`, SPEND_NOISE));
+// report resolution gap (ms) for a report submitted at t
+const reportGap = (type, t, communityId) => {
+	const base = REPORT_MEDIAN_H * HOUR_MS * logNormal(0.75) * (TYPE_SPEED[type] ?? 1);
+	return TRIAGED_TYPES.includes(type) && t >= guardOnFor(communityId) ? base * GUARD_RESOLVE_MULT : base;
+};
+
+function handleUserHook(profile, meta) {
+	const uid = profile.distinct_id;
+	profile.home_hub = pickWeighted(HUB_WEIGHTS, salt(uid, "home-hub"));
+	const role = profile.role;
+	const karmaRange = { lurker: [0, 25], reader: [5, 180], contributor: [120, 2600], creator: [2400, 22000], moderator: [1500, 14000] }[role] || [0, 50];
+	profile.karma = Math.round(karmaRange[0] + Math.pow(salt(uid, "karma"), 1.6) * (karmaRange[1] - karmaRange[0]));
+	if (meta.userIsBornInDataset) {
+		profile.membership = "free";
+		profile.member_since = dayKey(ms(profile.created ?? meta.user.created));
+		return profile;
+	}
+	// established members joined between 2021-03 and the window start
+	const span = dayIndex(DATASET_START) - dayIndex("2021-03-01T00:00:00Z");
+	profile.member_since = dayjs.utc("2021-03-01T00:00:00Z").add(Math.floor(salt(uid, "tenure") * span), "day").format("YYYY-MM-DD");
+	const plusShare = ESTABLISHED_PLUS_SHARE * ({ creator: 2.2, moderator: 1.8, contributor: 1.3, reader: 0.8, lurker: 0.3 }[role] ?? 1);
+	profile.membership = salt(uid, "plus") < plusShare ? "plus" : "free";
+	return profile;
 }
 
-function handleFunnelPostHooks(record, meta) {
-	// H9: CONTENT CREATION TIME-TO-CONVERT — Pro/supporter complete 1.3x
-	// faster (factor 0.77); Free 1.25x slower (factor 1.25).
-	// v1.6: scoped to the Content Creation funnel only — the v1.5 hook
-	// stretched EVERY funnel's gaps (Onboarding, Engagement Loop, Creator
-	// to Supporter, Moderation), which the doc block never claimed.
-	if (meta?.funnel?.name !== "Content Creation") return record;
-	const segment = meta?.profile?.subscription_tier;
-	if (Array.isArray(record) && record.length > 1) {
-		const factor = (
-			segment === "pro" || segment === "supporter" ? TTC_PRO_FACTOR :
-			segment === "free" ? TTC_FREE_FACTOR :
-			1.0
-		);
-		if (factor !== 1.0) {
-			for (let i = 1; i < record.length; i++) {
-				const prev = dayjs(record[i - 1].time);
-				const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-				record[i].time = prev.add(newGap, "milliseconds").toISOString();
+function handleEverything(events, meta) {
+	if (!events.length) return events;
+	const profile = meta.profile;
+	const uid = profile.distinct_id;
+	const END = ms(DATASET_END);
+	const role = profile.role;
+
+	// ── hub-consistent wiki pages and communities ──
+	for (const e of events) {
+		if (!e.content_hub) continue;
+		if (e.wiki_id !== undefined) e.wiki_id = wikiFor(e.content_hub, `${e.wiki_id}|${e.insert_id}`);
+		if (e.community_id !== undefined) e.community_id = communityFor(e.content_hub, e.thread_id || e.report_id || e.insert_id);
+	}
+	// article published creates a page: its id is new, not a popular page
+	for (const e of events) {
+		if (e.event === "article published") e.wiki_id = `wk_${HUB_CODE[e.content_hub]}_${String(WIKI_PAGES_PER_HUB + Math.floor(hashFloat(`${e.insert_id}|new`) * 9000)).padStart(4, "0")}`;
+	}
+	// threads are shared: a thread view and its reply land on one thread from the
+	// community's pool (popular threads get most views); a new thread gets a new id
+	for (const e of events) {
+		if (e.event === "discussion viewed" || e.event === "comment posted") {
+			const n = Math.floor(THREADS_PER_COMMUNITY * Math.pow(hashFloat(`${e.thread_id}|thread`), 1.6));
+			const tid = `thr_${e.community_id}_${String(n).padStart(4, "0")}`;
+			if (e.event === "discussion viewed") {
+				const pop = Math.pow(1 - n / THREADS_PER_COMMUNITY, 4);
+				const day = (T(e) - ms(DATASET_START)) / DAY_MS;
+				e.reply_count = Math.round((3 + 300 * pop) * (0.8 + 0.4 * hashFloat(`${tid}|replies`)) + (0.05 + 2 * pop) * day);
 			}
+			e.thread_id = tid;
+		} else if (e.event === "discussion posted") {
+			e.thread_id = `thr_${e.community_id}_${String(THREADS_PER_COMMUNITY + Math.floor(hashFloat(`${e.insert_id}|new-thread`) * 90000)).padStart(5, "0")}`;
 		}
 	}
-	return record;
-}
 
-function handleEverythingHooks(record, meta) {
-	const datasetStart = dayjs.unix(meta.datasetStart);
-	let events = record;
-	if (!events.length) return record;
-	const profile = meta && meta.profile ? meta.profile : {};
-
-	// -- SUPERPROP STAMPING -----------------------------------
-	// Stamp superProp values from profile onto every event so
-	// they stay consistent per-user instead of randomizing per-event.
-	events.forEach(e => {
-		if (profile.subscription_tier) e.subscription_tier = profile.subscription_tier;
-		if (profile.Platform) e.Platform = profile.Platform;
-		if (profile.content_hub) e.content_hub = profile.content_hub;
+	// ── contribution volume by role (readers mostly read; only moderators moderate) ──
+	const keepShare = CONTRIB_KEEP[role] ?? 1;
+	events = events.filter((e) => {
+		if (e.event === "moderation action") return role === "moderator";
+		if (e.event === "discussion posted" && !chance.bool({ likelihood: NEW_THREAD_KEEP * 100 })) return false;
+		if (keepShare < 1 && CONTRIBUTION_EVENTS.includes(e.event)) return chance.bool({ likelihood: keepShare * 100 });
+		return true;
 	});
 
-	// HOOK 1: WEEKEND CONTENT SURGE — articles on Sat/Sun get
-	// word_count 1.5x. Mutates raw prop. No flag. Only 'article published'
-	// carries word_count among touched events; 'wiki page created' also has
-	// word_count but is deliberately untouched — it is the placebo arm the
-	// H1 story uses to cancel any weekend-composition drift.
-	for (const e of events) {
-		if (e.event === 'article published') {
-			const dow = new Date(e.time).getUTCDay();
-			if ((dow === 0 || dow === 6) && e.word_count) {
-				e.word_count = Math.floor(e.word_count * WEEKEND_WORD_COUNT_MULT);
-			}
-		}
-	}
+	// ── reporting and upgrade browsing come from a minority of members ──
+	const reporter = salt(uid, "reporter") < REPORTER_SHARE;
+	const curious = salt(uid, "upgrade-curious") < UPGRADE_CURIOUS_SHARE;
+	const firstExposure = events.filter((e) => e.event === "$experiment_started").sort((x, y) => T(x) - T(y))[0];
+	events = events.filter((e) => {
+		if (e.event === "report submitted" || e.event === "report resolved") return reporter;
+		if (e.event === "plus page viewed" || e.event === "plus subscribed") return curious;
+		// the experiment SDK logs one exposure per member (their first enrolled thread view)
+		if (e.event === "$experiment_started") return e === firstExposure;
+		return true;
+	});
 
-	// -- HOOK 2: TRENDING TOPIC WINDOW -------------------------
-	// Days 35-50: gaming hub articles get 2x view_count.
-	// Runs after superProp stamping so content_hub is the
-	// profile's consistent value, not the random event-level one.
-	const TREND_START = datasetStart.add(TREND_START_DAY, "days");
-	const TREND_END = datasetStart.add(TREND_END_DAY, "days");
-	if (profile.content_hub === "gaming") {
-		events.forEach(e => {
-			if (e.event === "article viewed") {
-				const eventTime = dayjs(e.time);
-				if (eventTime.isAfter(TREND_START) && eventTime.isBefore(TREND_END)) {
-					e.view_count = Math.floor((e.view_count || 50) * TREND_VIEW_MULT);
-				}
-			}
-		});
-	}
+	// ── H8: before the ad load change fewer upgrade-page visits convert (ramps up over a week) ──
+	const upgradeKeep = (t) => {
+		const pos = (t - ms(AD_LOAD_CHANGE)) / (UPGRADE_RAMP_DAYS * DAY_MS);
+		return pos < 0 ? 1 / UPGRADE_LIFT : pos >= 1 ? 1 : 1 / UPGRADE_LIFT + (1 - 1 / UPGRADE_LIFT) * pos;
+	};
+	events = events.filter((e) => e.event !== "plus subscribed" || chance.bool({ likelihood: upgradeKeep(T(e)) * 100 }));
 
-	// -- HOOK 8: PRO SUBSCRIBER CONTENT CREATION LIFT ---------
-	// Free-tier users drop 65% of comment events to widen the funnel
-	// conversion gap to ~2x vs paid subscribers.
-	if (profile.subscription_tier !== "pro" && profile.subscription_tier !== "supporter") {
-		events = events.filter(e => {
-			if (e.event === "comment posted" && chance.bool({ likelihood: PRO_LIFT_FREE_DROP_LIKELIHOOD })) return false;
+	// ── purchase hygiene: one Plus subscription per member; later upgrade visits vanish ──
+	const firstBuy = events.filter((e) => e.event === "plus subscribed").sort((a, b) => T(a) - T(b))[0];
+	if (firstBuy) {
+		const t0 = T(firstBuy);
+		events = events.filter((e) => {
+			if (e === firstBuy) return true;
+			if (e.event === "plus subscribed") return false;
+			if (e.event === "plus page viewed" && T(e) > t0) return false;
 			return true;
 		});
 	}
+	let purchase = firstBuy || null;
 
-	// -- HOOK 3: POWER CREATOR ENGAGEMENT LIFT ----------------
-	// Users with >20 article_published events get 3x upvote_count.
-	let publishCount = 0;
-	events.forEach(e => {
-		if (e.event === "article published") publishCount++;
-	});
-
-	if (publishCount > POWER_CREATOR_PUBLISH_THRESHOLD) {
-		events.forEach(e => {
-			if (e.event === "upvote given" && e.upvote_count) {
-				e.upvote_count = Math.floor(e.upvote_count * POWER_CREATOR_UPVOTE_MULT);
+	// ── new members: onboarding (H2), first reply (H6), abandonment and lapse ──
+	const signup = events.find((e) => e.event === "account created");
+	if (signup) {
+		const birthMs = T(signup);
+		const finish = salt(uid, "onboard") < (ONBOARD_FINISH[profile.acquisition_channel] ?? 0.5);
+		const intro = events.find((e) => e.event === "intro posted");
+		const cuts = [];
+		if (!finish) {
+			const early = salt(uid, "onboard-early") < ONBOARD_EARLY_DROP;
+			events = events.filter((e) => e.event !== "intro posted" && !(early && e.event === "interests selected"));
+			if (salt(uid, "abandon") < SETUP_ABANDON_SHARE) {
+				cuts.push(birthMs + (SETUP_ABANDON_DAY_MIN + salt(uid, "abandon-day") * (SETUP_ABANDON_DAY_MAX - SETUP_ABANDON_DAY_MIN)) * DAY_MS);
 			}
-		});
-	}
-
-	// -- HOOK 4: DISCUSSION DEPTH BY CONTRIBUTOR TYPE ---------
-	// Active contributors get cloned comment_posted events.
-	if (profile.segment === "active_contributor") {
-		const templateComment = events.find(e => e.event === "comment posted");
-		if (templateComment) {
-			const existingComments = events.filter(e => e.event === "comment posted");
-			existingComments.forEach(c => {
-				if (chance.bool({ likelihood: DISCUSSION_CLONE_LIKELIHOOD })) {
-					events.push({
-						...templateComment,
-						time: dayjs(c.time).add(chance.integer({ min: 1, max: 120 }), "minutes").toISOString(),
-						user_id: c.user_id,
-						is_reply: true,
-						comment_length: chance.integer({ min: 20, max: 300 }),
-						// engine stamps insert_id at generation — clones need fresh
-						// ids or Mixpanel's $insert_id dedupe silently eats them
-						insert_id: chance.guid(),
-					});
+		} else if (intro) {
+			// H6: did anyone reply to the intro within 24 h?
+			const ti = T(intro);
+			const replyEnd = ti + FAST_REPLY_HOURS * HOUR_MS;
+			const fast = salt(uid, "fast-reply") < FAST_REPLY_SHARE;
+			// organic reply notifications inside the first 24 h belong to the replied-to intro only
+			events = events.filter((e) => !(e.event === "notification received" && e.notification_type === "reply" && T(e) > ti && T(e) <= replyEnd));
+			if (fast) {
+				const tr = ti + (0.2 + salt(uid, "reply-at") * (FAST_REPLY_HOURS - 1)) * HOUR_MS;
+				if (tr <= END) {
+					events.push(asEvent(signup, "notification received", {
+						time: iso(tr),
+						notification_type: "reply",
+						channel: salt(uid, "reply-ch") < 0.6 ? "push" : "in_app",
+						opened: salt(uid, "reply-open") < 0.35,
+					}));
 				}
-			});
+			} else if (salt(uid, "dark") < DARK_SHARE_NO_REPLY) {
+				cuts.push(ti + DARK_AFTER_DAYS * DAY_MS);
+			}
 		}
-	}
+		if (salt(uid, "lapse") < LAPSE_SHARE) cuts.push(birthMs + (LAPSE_DAY_MIN + salt(uid, "lapse-day") * (LAPSE_DAY_MAX - LAPSE_DAY_MIN)) * DAY_MS);
+		if (cuts.length) {
+			const cut = Math.min(...cuts);
+			// churn stops what the member does; server-side messages keep arriving,
+			// though a quiet member gets fewer of them (digests, no replies to their posts)
+			events = events.filter((e) => T(e) < cut || e.event === "report resolved"
+				|| (e.event === "notification received" && chance.bool({ likelihood: LAPSED_NOTIFICATION_KEEP * 100 })));
+			if (purchase && T(purchase) >= cut) purchase = null;
+		}
 
-	// -- HOOK 5: EDIT WAR DETECTION ---------------------------
-	// Users with >5 article_edited events get reduced edit_quality.
-	const editEvents = events.filter(e => e.event === "article edited");
-	if (editEvents.length > EDIT_WAR_THRESHOLD) {
-		editEvents.forEach(e => {
-			e.edit_quality = chance.floating({ min: EDIT_WAR_QUALITY_MIN, max: EDIT_WAR_QUALITY_MAX, fixed: 1 });
-		});
-	}
-
-	// HOOK 6: LURKER CHURN — users with <5 events lose 60% after
-	// day 10. No flag.
-	if (events.length < LURKER_EVENT_THRESHOLD && events.length > 0) {
-		const firstEventTime = dayjs(events[0].time);
-		const cutoff = firstEventTime.add(LURKER_CHURN_CUTOFF_DAYS, "days");
-		for (let i = events.length - 1; i >= 0; i--) {
-			if (dayjs(events[i].time).isAfter(cutoff) && chance.bool({ likelihood: LURKER_DROP_LIKELIHOOD })) {
-				events.splice(i, 1);
+		// ── H7: a newcomer's first wiki edit gets reverted ──
+		const edits = events.filter((e) => e.event === "article edited").sort((a, b) => T(a) - T(b));
+		if (edits.length && salt(uid, "revert") < REVERT_SHARE) {
+			const t1 = T(edits[0]);
+			const tr = t1 + (1 + salt(uid, "revert-at") * 29) * HOUR_MS;
+			if (tr <= END) {
+				events.push(asEvent(edits[0], "notification received", {
+					time: iso(tr),
+					notification_type: "edit_reverted",
+					channel: "in_app",
+					opened: salt(uid, "revert-open") < 0.45,
+				}));
+				if (salt(uid, "quit-editing") < QUIT_AFTER_REVERT) {
+					const later = new Set(edits.slice(1));
+					events = events.filter((e) => !later.has(e));
+				}
 			}
 		}
 	}
 
-	// HOOK 10: ARTICLE-PUBLISHED MAGIC NUMBER (no flags)
-	// Sweet 2-5 articles published → +35% on upvote_count for
-	// upvote-given events. Over 6+ → creator burnout: from day 60,
-	// 40% of their upvote-given events are dropped. The calendar edge
-	// (see ARTICLE_FATIGUE_START_DAY) is what makes the drop
-	// recoverable from output. No flag.
-	const articleCount = events.filter(e => e.event === "article published").length;
-	if (articleCount >= ARTICLE_SWEET_MIN && articleCount <= ARTICLE_SWEET_MAX) {
-		events.forEach(e => {
-			if (e.event === "upvote given" && typeof e.upvote_count === "number") {
-				e.upvote_count = Math.round(e.upvote_count * ARTICLE_UPVOTE_BOOST);
-			}
-		});
-	} else if (articleCount >= ARTICLE_OVER_THRESHOLD) {
-		const fatigueCutoff = datasetStart.add(ARTICLE_FATIGUE_START_DAY, "days");
-		for (let i = events.length - 1; i >= 0; i--) {
-			if (
-				events[i].event === "upvote given" &&
-				dayjs(events[i].time).isAfter(fatigueCutoff) &&
-				chance.bool({ likelihood: ARTICLE_UPVOTE_DROP_LIKELIHOOD })
-			) {
-				events.splice(i, 1);
-			}
+	// ── H5: anime spam raid — members post less, and some report the spam ──
+	const raidActivity = events.filter((e) => e.content_hub === RAID_HUB && inRaid(T(e)) && !PASSIVE.has(e.event));
+	events = events.filter((e) => !(PARTICIPATION_EVENTS.includes(e.event) && e.content_hub === RAID_HUB && inRaid(T(e)) && !chance.bool({ likelihood: RAID_KEEP * 100 })));
+	const repTemplate = events.find((e) => e.event === "report submitted");
+	const resTemplate = events.find((e) => e.event === "report resolved");
+	if (raidActivity.length && repTemplate && resTemplate && salt(uid, "raid-report") < RAID_REPORTER_SHARE) {
+		const anchor = raidActivity[Math.floor(salt(uid, "raid-anchor") * raidActivity.length)];
+		const tr = Math.min(T(anchor) + (1 + salt(uid, "raid-gap") * 29) * MIN_MS, ms(RAID_END) - MIN_MS);
+		if (tr <= END) {
+			const rid = `rep_${Math.floor(hashFloat(`${uid}|raid-rid`) * 1e12).toString(36)}`;
+			const community = communityFor(RAID_HUB, rid);
+			events.push(cloneEvent(repTemplate, { time: iso(tr), report_id: rid, report_type: "spam", content_hub: RAID_HUB, community_id: community }));
+			events.push(cloneEvent(resTemplate, { time: iso(tr + HOUR_MS), report_id: rid, report_type: "spam", content_hub: RAID_HUB, community_id: community }));
 		}
 	}
+
+	// ── H4: report resolution timing (Hearth Guard triage) ──
+	const reports = new Map();
+	for (const e of events) {
+		if (e.event !== "report submitted" && e.event !== "report resolved") continue;
+		if (!reports.has(e.report_id)) reports.set(e.report_id, {});
+		reports.get(e.report_id)[e.event] = e;
+	}
+	const dropReport = new Set();
+	for (const r of reports.values()) {
+		const sub = r["report submitted"], res = r["report resolved"];
+		if (!res) continue;
+		if (!sub) {
+			// submitted before June 4 (engine lead-in): keep the resolution only if
+			// its implied submission falls before the window
+			const gap = reportGap(res.report_type, ms(DATASET_START) - DAY_MS, res.community_id);
+			if (T(res) - gap < ms(DATASET_START)) res.resolution_hours = round1(gap / HOUR_MS);
+			else dropReport.add(res);
+			continue;
+		}
+		const gap = reportGap(sub.report_type, T(sub), sub.community_id);
+		const tr = T(sub) + gap;
+		res.time = iso(tr);
+		res.resolution_hours = round1(gap / HOUR_MS);
+		if (tr > END) dropReport.add(res);
+	}
+	if (dropReport.size) events = events.filter((e) => !dropReport.has(e));
+
+	// ── H1: Starfall launch fortnight — more gaming reading and search ──
+	const lastMs = events.reduce((m, e) => (PASSIVE.has(e.event) ? m : Math.max(m, T(e))), 0);
+	const starfallClones = [];
+	for (const e of events) {
+		if ((e.event !== "article viewed" && e.event !== "search performed") || e.content_hub !== "gaming") continue;
+		const t = T(e);
+		const m = starfallMult(t);
+		if (m <= 1) continue;
+		const extra = Math.floor(m - 1) + (chance.bool({ likelihood: ((m - 1) % 1) * 100 }) ? 1 : 0);
+		for (let k = 0; k < extra; k++) {
+			const tc = t + chance.integer({ min: 2, max: 240 }) * MIN_MS;
+			if (tc > END || tc > lastMs || starfallMult(tc) <= 1) continue;
+			const over = { time: iso(tc) };
+			if (e.event === "article viewed") {
+				over.wiki_id = wikiFor("gaming", `${e.insert_id}|sf${k}`);
+				over.community_id = communityFor("gaming", `${e.insert_id}|sf${k}`);
+				over.time_on_page_sec = Math.max(5, Math.round(e.time_on_page_sec * (0.5 + chance.floating({ min: 0, max: 1 }))));
+			} else {
+				over.results_count = chance.integer({ min: 0, max: 60 });
+			}
+			starfallClones.push(cloneEvent(e, over));
+		}
+	}
+	if (starfallClones.length) events = events.concat(starfallClones);
+
+	// ── membership at event time (superProp) + final profile membership ──
+	const initial = profile.membership;
+	const buyMs = purchase ? T(purchase) : Infinity;
+	const planAt = (t) => (t >= buyMs ? "plus" : initial);
+	for (const e of events) e.membership = planAt(T(e));
+	if (purchase) profile.membership = "plus";
+
+	// ── H8: free members read fewer articles once pages carry more ads ──
+	events = events.filter((e) => !(e.event === "article viewed" && e.membership === "free" && T(e) >= ms(AD_LOAD_CHANGE) && !chance.bool({ likelihood: AD_READING_KEEP * 100 })));
+
+	// experiment assignment lives on the profile only for members with an exposure left
+	if (profile[EXP_KEY] !== undefined && !events.some((e) => e.event === "$experiment_started")) delete profile[EXP_KEY];
 
 	return events;
 }
 
+// warehouse rows: exogenous business facts layered on event-derived volumes
+function handleWarehouse(row, meta) {
+	if (meta.isBackfill) return row;
+	if (meta.metricName === "paid_marketing_daily") {
+		row.spend_usd = paidSpend(row.date, row.acquisition_channel);
+		return row;
+	}
+	if (meta.metricName === "trust_safety_daily") {
+		// reports also arrive by email and from logged-out readers, which Mixpanel never sees
+		const k = `${row.date}|${row.content_hub}`;
+		row.reports_received = Math.round(row.reports_received * (1 + UNTRACKED_REPORT_SHARE * jitter(`untracked|${k}`, 0.9)) + (hashFloat(`untracked-n|${k}`) < 0.5 ? 1 : 0));
+		return row;
+	}
+	if (meta.metricName === "ad_revenue_daily") {
+		// the ad server counts every page view that served ads: logged-in free
+		// members (the Mixpanel count) plus logged-out readers, times the ad slots
+		// per page in force that day and the fill rate
+		const k = `${row.date}|${row.content_hub}`;
+		const pageViews = row.ad_impressions * LOGGED_OUT_FACTOR * jitter(`logged-out|${k}`, 0.12);
+		row.ad_impressions = Math.round(pageViews * adSlots(ms(`${row.date}T00:00:00Z`)) * row.fill_rate);
+		row.ad_revenue_usd = round2(row.ad_impressions / 1000 * row.ecpm_usd);
+		return row;
+	}
+	return row;
+}
+
+function handleGroup(record) {
+	const c = COMMUNITIES[Number(record.community_id) - 1];
+	if (!c) return record;
+	record.name = c.name;
+	record.content_hub = c.hub;
+	record.member_count = c.members;
+	record.founded_year = c.founded;
+	record.is_official = c.official;
+	return record;
+}
+
+const HUB_PROP = (ctx) => hubForMember(ctx);
+const COMMUNITY_EVENTS = ["intro posted", "article viewed", "upvote given", "discussion posted", "discussion viewed", "comment posted",
+	"article edited", "article published", "media uploaded", "community joined", "report submitted", "report resolved", "moderation action"];
+
 // ── CONFIG ──
 /** @type {Config} */
 const config = {
-	version: 2,
 	seed: SEED,
 	datasetStart: DATASET_START,
 	datasetEnd: DATASET_END,
-	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	numUsers: NUM_USERS,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	format: "json",
 	gzip: true,
-	credentials: {
-		token,
-	},
+	concurrency: 1,
+	writeToDisk: false,
+	autoPowerLaw: false,
+	macro: { percentUsersBornInDataset: BORN_PCT, bornRecentBias: 0, preExistingSpread: "uniform" },
+	// consumer hobby community: weekend-heavy, evening peaks in the Americas and Europe (UTC)
+	soup: { dayOfWeekWeights: DOW_WEIGHTS, hourOfDayWeights: HOUR_WEIGHTS },
+	credentials: { token },
 	switches: {
 		hasSessionIds: true,
 		alsoInferFunnels: false,
@@ -608,29 +778,14 @@ const config = {
 		hasAndroidDevices: true,
 		hasIOSDevices: true,
 		hasDesktopDevices: true,
-		hasBrowser: false,
+		hasBrowser: true,
 		hasCampaigns: false,
 		isAnonymous: false,
 		hasAdSpend: false,
 		hasAvatar: true,
 	},
-	identity: {
-		avgDevicePerUser: 2,
-	},
-	concurrency: 1,
-	writeToDisk: false,
-	scdProps: {
-		contributor_level: {
-			values: ["newcomer", "regular", "trusted", "admin"],
-			frequency: "month",
-			timing: "fuzzy",
-			max: 8
-		}
-	},
-	mirrorProps: {},
-	lookupTables: [],
+	identity: { avgDevicePerUser: 2 },
 
-	// -- Events (18) --------------------------------------------------
 	events: [
 		{
 			event: "account created",
@@ -638,949 +793,797 @@ const config = {
 			isFirstEvent: true,
 			isAuthEvent: true,
 			properties: {
-				referral_source: ["organic", "google_search", "reddit_referral", "youtube_link", "friend_invite"],
+				signup_method: { __weights: { google: 38, apple: 24, email: 26, discord: 12 } },
+				acquisition_channel: (ctx) => ctx.profile.acquisition_channel,
+			},
+		},
+		{
+			event: "interests selected",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				hubs_selected: { __weights: { 1: 14, 2: 26, 3: 28, 4: 18, 5: 9, 6: 5 } },
+			},
+		},
+		{
+			event: "intro posted",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				content_hub: (ctx) => ctx.profile.home_hub,
+				word_count: u.weighNumRange(8, 400, 0.4, 40),
 			},
 		},
 		{
 			event: "article viewed",
-			weight: 9,
-			isStrictEvent: false,
+			weight: 24,
 			properties: {
-				wiki_id: chance.pickone.bind(chance, wikiIds),
-				content_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
-				view_count: u.weighNumRange(1, 100, 0.4, 50),
-				time_on_page_sec: u.weighNumRange(5, 600, 0.4, 45),
+				content_hub: HUB_PROP,
+				wiki_id: ["unassigned"],
+				article_type: { __weights: { character: 24, walkthrough: 16, episode_guide: 16, lore: 18, location: 10, review: 10, news: 6 } },
+				time_on_page_sec: u.weighNumRange(5, 900, 0.35, 60),
 			},
 		},
 		{
-			event: "article published",
-			weight: 3,
-			isStrictEvent: false,
-			properties: {
-				wiki_id: chance.pickone.bind(chance, wikiIds),
-				content_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
-				word_count: u.weighNumRange(200, 5000, 0.4, 1500),
-				has_images: [true, true, true, false],
-				category: ["lore", "character", "episode_guide", "review", "tutorial", "news"],
-			},
-		},
-		{
-			event: "article edited",
-			weight: 4,
-			properties: {
-				wiki_id: chance.pickone.bind(chance, wikiIds),
-				content_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
-				edit_type: ["content", "formatting", "grammar", "citation", "revert"],
-				edit_quality: u.weighNumRange(1, 5, 0.8, 3),
-				chars_changed: u.weighNumRange(5, 2000, 0.3, 150),
-			},
-		},
-		{
-			event: "discussion posted",
+			event: "search performed",
 			weight: 5,
-			isStrictEvent: false,
 			properties: {
-				community_id: chance.pickone.bind(chance, communityIds),
-				content_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
-				topic_type: ["theory", "question", "news", "review", "recommendation", "debate"],
-				reply_count: u.weighNumRange(0, 50, 0.3, 5),
-				discussion_mode: ["classic"],
-			},
-		},
-		{
-			event: "comment posted",
-			weight: 6,
-			isStrictEvent: false,
-			properties: {
-				community_id: chance.pickone.bind(chance, communityIds),
-				content_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
-				comment_length: u.weighNumRange(10, 500, 0.4, 80),
-				is_reply: [true, true, false],
-				discussion_mode: ["classic"],
+				content_hub: HUB_PROP,
+				search_term: { __weights: { "character list": 14, "ending explained": 12, "tier list": 12, "release date": 10, "walkthrough": 14, "lore timeline": 9, "best builds": 9, "fan theories": 8, "voice cast": 6, "soundtrack": 6 } },
+				results_count: u.weighNumRange(0, 60, 0.5, 40),
 			},
 		},
 		{
 			event: "upvote given",
 			weight: 7,
-			isStrictEvent: false,
 			properties: {
-				content_type: ["article", "article", "discussion", "comment"],
-				content_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
-				upvote_count: u.weighNumRange(1, 10, 0.5, 5),
+				content_hub: HUB_PROP,
+				content_type: { __weights: { article: 35, discussion: 30, comment: 35 } },
 			},
 		},
 		{
-			event: "search performed",
-			weight: 6,
-			properties: {
-				search_term: ["walkthrough", "character list", "ending explained", "tier list", "release date", "easter eggs", "best builds", "lore timeline", "voice actors", "soundtrack"],
-				results_count: u.weighNumRange(0, 50, 0.5, 12),
-				content_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
-			},
-		},
-		{
-			event: "wiki page created",
+			event: "discussion posted",
 			weight: 2,
 			properties: {
-				wiki_id: chance.pickone.bind(chance, wikiIds),
-				content_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
-				page_type: ["character", "location", "item", "episode", "concept", "organization"],
-				word_count: u.weighNumRange(100, 3000, 0.4, 500),
+				content_hub: HUB_PROP,
+				thread_id: (ctx) => `thr_${chance.hash({ length: 10 })}`,
+				topic_type: { __weights: { theory: 20, question: 26, news: 12, review: 14, recommendation: 16, debate: 12 } },
+			},
+		},
+		{
+			event: "discussion viewed",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				thread_id: ["unassigned"],
+				content_hub: ["gaming"],
+				reply_count: u.weighNumRange(0, 200, 0.3, 40),
+			},
+		},
+		{
+			event: "comment posted",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				thread_id: ["unassigned"],
+				content_hub: ["gaming"],
+				comment_length: u.weighNumRange(5, 900, 0.35, 40),
+				is_reply: { __weights: { true: 62, false: 38 } },
+			},
+		},
+		{
+			event: "article edited",
+			weight: 3,
+			properties: {
+				content_hub: HUB_PROP,
+				wiki_id: ["unassigned"],
+				edit_type: { __weights: { content: 40, formatting: 18, citation: 14, grammar: 18, image: 10 } },
+				chars_changed: u.weighNumRange(3, 3000, 0.3, 40),
+			},
+		},
+		{
+			event: "article published",
+			weight: 1,
+			properties: {
+				content_hub: HUB_PROP,
+				wiki_id: ["unassigned"],
+				category: { __weights: { character: 26, lore: 20, episode_guide: 18, walkthrough: 14, review: 12, news: 10 } },
+				word_count: u.weighNumRange(150, 6000, 0.4, 40),
 			},
 		},
 		{
 			event: "media uploaded",
-			weight: 2,
+			weight: 1,
 			properties: {
-				media_type: ["image", "image", "image", "gif", "video_clip", "screenshot"],
-				file_size_kb: u.weighNumRange(50, 5000, 0.3, 500),
-				content_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
+				content_hub: HUB_PROP,
+				media_type: { __weights: { fan_art: 34, screenshot: 30, gif: 20, video_clip: 16 } },
+				file_size_kb: u.weighNumRange(40, 20000, 0.3, 40),
 			},
 		},
 		{
-			event: "moderation action",
-			weight: 2,
+			event: "community joined",
+			weight: 1,
 			properties: {
-				action_type: ["warn", "edit_revert", "content_removal", "user_mute", "spam_flag", "lock_thread"],
-				severity: ["low", "low", "medium", "medium", "high"],
-				content_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
-				resolution_time_hours: u.weighNumRange(0.1, 48, 0.3, 2),
+				content_hub: HUB_PROP,
+				join_source: { __weights: { recommendation: 34, search: 22, browse: 26, invite: 18 } },
 			},
 		},
 		{
 			event: "user followed",
-			weight: 3,
+			weight: 1,
 			properties: {
-				follow_source: ["profile", "article", "discussion", "recommendation"],
+				follow_source: { __weights: { profile: 30, article: 20, discussion: 35, recommendation: 15 } },
 			},
 		},
 		{
 			event: "notification received",
-			weight: 6,
+			weight: 7,
 			properties: {
-				notification_type: ["reply", "reply", "mention", "upvote", "follow", "article_update", "moderation"],
-				channel: ["push", "push", "email", "in_app"],
-				opened: [true, true, true, false],
-			},
-		},
-		{
-			event: "support ticket created",
-			weight: 1,
-			properties: {
-				category: ["bug_report", "content_dispute", "account_issue", "feature_request", "abuse_report", "other"],
-				priority: ["low", "low", "medium", "medium", "high"],
-				resolution_hours: u.weighNumRange(1, 96, 0.4, 24),
-			},
-		},
-		{
-			event: "profile updated",
-			weight: 2,
-			properties: {
-				field_updated: ["avatar", "bio", "display_name", "preferred_hub", "notification_settings", "badges"],
-			},
-		},
-		{
-			event: "app session",
-			weight: 8,
-			properties: {
-				session_duration_sec: u.weighNumRange(10, 3600, 0.4, 180),
-				pages_viewed: u.weighNumRange(1, 30, 0.5, 5),
+				notification_type: { __weights: { reply: 26, mention: 12, upvote_digest: 22, new_follower: 10, weekly_digest: 22, community_update: 8 } },
+				channel: { __weights: { push: 50, email: 25, in_app: 25 } },
+				opened: { __weights: { true: 14, false: 86 } },
 			},
 		},
 		{
 			event: "report submitted",
 			weight: 1,
-			properties: {
-				report_type: ["spam", "harassment", "misinformation", "vandalism", "copyright", "other"],
-				content_type: ["article", "comment", "discussion", "media"],
-			},
-		},
-		{
-			event: "account deactivated",
-			weight: 1,
-			isChurnEvent: true,
-			returnLikelihood: 0.15,
 			isStrictEvent: true,
 			properties: {
-				reason: ["lost_interest", "toxicity", "no_time", "switched_platform", "privacy_concern"],
+				report_id: ["unassigned"],
+				report_type: ["other"],
+				content_hub: ["gaming"],
+			},
+		},
+		{
+			event: "report resolved",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				report_id: ["unassigned"],
+				report_type: ["other"],
+				content_hub: ["gaming"],
+				outcome: { __weights: { content_removed: 52, user_warned: 18, no_violation: 30 } },
+				resolution_hours: [0],
+			},
+		},
+		{
+			event: "moderation action",
+			weight: 1,
+			properties: {
+				content_hub: HUB_PROP,
+				action_type: { __weights: { remove_post: 30, warn_member: 20, lock_thread: 12, mute_member: 10, approve_post: 20, ban_member: 8 } },
+				severity: { __weights: { low: 45, medium: 38, high: 17 } },
+			},
+		},
+		{
+			event: "plus page viewed",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				upgrade_trigger: { __weights: { ad_free: 40, custom_flair: 20, profile_badges: 15, larger_uploads: 25 } },
+			},
+		},
+		{
+			event: "plus subscribed",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				plan: { __weights: { plus_monthly: 70, plus_annual: 30 } },
+			},
+		},
+		{
+			event: "$experiment_started",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				"Experiment name": [NUDGE_EXPERIMENT],
+				"Variant name": ["Control", NUDGE_VARIANT],
 			},
 		},
 	],
 
-	// -- Funnels (5) --------------------------------------------------
 	funnels: [
 		{
-			name: "Onboarding Flow",
-			sequence: ["account created", "search performed", "article viewed", "discussion posted"],
-			conversionRate: 40,
-			order: "sequential",
+			name: "Onboarding",
+			sequence: ["account created", "interests selected", "intro posted"],
 			isFirstFunnel: true,
-			timeToConvert: 72,
-			weight: 3,
+			conversionRate: 100, // the everything hook decides who finishes (H2)
+			timeToConvert: 6,
+			order: "sequential",
+			weight: 1,
 		},
 		{
-			name: "Content Creation",
-			sequence: ["article viewed", "article published", "comment posted"],
-			conversionRate: 35,
+			name: "Thread Reply",
+			sequence: ["discussion viewed", "comment posted"],
+			conversionRate: THREAD_CONV,
+			timeToConvert: THREAD_TTC_H,
 			order: "sequential",
-			timeToConvert: 48,
 			weight: 5,
+			props: {
+				thread_id: (ctx) => `thr_${chance.hash({ length: 10 })}`,
+				content_hub: HUB_PROP,
+				community_id: ["0"],
+			},
+			experiment: {
+				name: NUDGE_EXPERIMENT,
+				startDaysBeforeEnd: (ms(DATASET_END) - ms(REPLY_NUDGES_START)) / DAY_MS,
+				variants: [
+					{ name: "Control" },
+					{ name: NUDGE_VARIANT, conversionMultiplier: NUDGE_CONV_MULT, ttcMultiplier: NUDGE_TTC_MULT },
+				],
+			},
 		},
 		{
-			name: "Engagement Loop",
-			sequence: ["article viewed", "upvote given", "comment posted", "discussion posted"],
-			conversionRate: 30,
+			name: "Report",
+			sequence: ["report submitted", "report resolved"],
+			conversionRate: 85,
+			timeToConvert: REPORT_TTC_H,
 			order: "sequential",
-			timeToConvert: 96,
-			weight: 4,
-			reentry: true,
+			weight: 1,
+			props: {
+				report_id: (ctx) => `rep_${chance.hash({ length: 12 })}`,
+				report_type: { __weights: REPORT_TYPES },
+				content_hub: HUB_PROP,
+				community_id: ["0"],
+			},
 		},
 		{
-			name: "Creator to Supporter",
-			sequence: ["article published", "profile updated", "notification received"],
-			conversionRate: 45,
+			name: "Upgrade to Plus",
+			sequence: ["plus page viewed", "plus subscribed"],
+			conditions: { membership: "free" },
+			conversionRate: UPGRADE_CONV,
+			timeToConvert: 2,
 			order: "sequential",
-			timeToConvert: 168,
-			weight: 2,
-		},
-		{
-			name: "Moderation Pipeline",
-			sequence: ["report submitted", "moderation action"],
-			conversionRate: 60,
-			order: "sequential",
-			timeToConvert: 48,
-			weight: 2,
+			weight: 1,
 		},
 	],
 
-	// -- SuperProps ----------------------------------------------------
+	worldEvents: [
+		{
+			name: "fandom_fest",
+			type: "campaign",
+			startDay: dayIndex(FEST_START),
+			duration: FEST_DAYS,
+			volumeMultiplier: FEST_MULT,
+			affectsEvents: FEST_EVENTS,
+		},
+	],
+
+	warehouseMetrics: [
+		{
+			name: "paid_marketing_daily",
+			type: "additive",
+			grain: "day",
+			source: {
+				event: "account created",
+				measure: "count",
+				where: (e) => PAID_CHANNELS.includes(e.acquisition_channel),
+				groupBy: "acquisition_channel",
+			},
+			timeColumn: "date",
+			valueColumn: "spend_usd",
+			columns: {
+				platform_reported_signups: (ctx) => Math.round(paidSpend(dayKey(ctx.time), ctx.seriesKey) * PLATFORM_SIGNUP_INFLATION / CPL_USD[ctx.seriesKey] * jitter(`lead|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.25)),
+				clicks: (ctx) => Math.round(paidSpend(dayKey(ctx.time), ctx.seriesKey) / (CPC_USD[ctx.seriesKey] * jitter(`cpc|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.15))),
+				impressions: (ctx) => Math.round(ctx.row.clicks / (CTR[ctx.seriesKey] * jitter(`ctr|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.15))),
+			},
+		},
+		{
+			name: "trust_safety_daily",
+			type: "additive",
+			grain: "day",
+			source: {
+				event: "report submitted",
+				measure: "count",
+				groupBy: "content_hub",
+			},
+			timeColumn: "date",
+			valueColumn: "reports_received",
+			columns: {
+				spam_accounts_removed: (ctx) => {
+					const hub = ctx.seriesKey;
+					const base = SPAM_REMOVED_PER_DAY[hub] * jitter(`spam|${dayKey(ctx.time)}|${hub}`, 0.35);
+					return Math.round(hub === RAID_HUB && inRaid(ctx.time) ? base * RAID_SPAM_MULT : base);
+				},
+				automod_removals: (ctx) => {
+					const hub = ctx.seriesKey;
+					// Hearth Guard auto-removes clear-cut spam once a community has it
+					const share = COMMUNITIES_BY_HUB[hub].filter((c) => guardOnFor(c.id) <= ctx.time + DAY_MS).length / COMMUNITIES_BY_HUB[hub].length;
+					const base = SPAM_REMOVED_PER_DAY[hub] * (1.5 + 3 * share) * jitter(`automod|${dayKey(ctx.time)}|${hub}`, 0.3);
+					return Math.round(hub === RAID_HUB && inRaid(ctx.time) ? base * 6 : base);
+				},
+				raid_alert_level: (ctx) => (ctx.seriesKey === RAID_HUB && inRaid(ctx.time) ? "raid" : "normal"),
+				volunteer_mod_hours: (ctx) => round1(SPAM_REMOVED_PER_DAY[ctx.seriesKey] * 4 * jitter(`modh|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.25) * (ctx.seriesKey === RAID_HUB && inRaid(ctx.time) ? 3.2 : 1)),
+			},
+		},
+		{
+			name: "ad_revenue_daily",
+			type: "additive",
+			grain: "day",
+			source: {
+				event: "article viewed",
+				measure: "count",
+				where: (e) => e.membership === "free",
+				groupBy: "content_hub",
+			},
+			timeColumn: "date",
+			valueColumn: "ad_impressions",
+			columns: {
+				ecpm_usd: (ctx) => round2(ECPM_USD[ctx.seriesKey] * jitter(`ecpm|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.1)),
+				ad_revenue_usd: 0,
+				fill_rate: (ctx) => round2(0.86 + (hashFloat(`fill|${dayKey(ctx.time)}|${ctx.seriesKey}`) - 0.5) * 0.08),
+			},
+		},
+	],
+
 	superProps: {
-		subscription_tier: ["free", "free", "free", "free", "supporter", "pro"],
-		Platform: ["ios", "android", "web"],
-		content_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
+		membership: ["free"],
 	},
 
-	// -- UserProps -----------------------------------------------------
 	userProps: {
-		role: ["reader", "reader", "reader", "reader", "reader", "reader", "contributor", "contributor", "moderator", "creator"],
-		contributor_level: ["newcomer"],
-		articles_created: [0],
-		reputation_score: u.weighNumRange(0, 100, 0.3, 25),
-		preferred_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
-		subscription_tier: ["free", "free", "free", "free", "supporter", "pro"],
-		Platform: ["ios", "android", "web"],
-		content_hub: ["gaming", "anime", "movies", "tv", "comics", "music"],
+		role: ["reader"],
+		home_hub: ["gaming"],
+		membership: ["free"],
+		member_since: ["2025-01-01"],
+		acquisition_channel: { __weights: CHANNEL_WEIGHTS },
+		karma: [0],
 	},
 
-	// -- Phase 2: Personas --------------------------------------------
 	personas: [
-		{
-			name: "power_creator",
-			weight: 5,
-			eventMultiplier: 8.0,
-			conversionModifier: 2.0,
-			properties: {
-				role: "creator",
-				segment: "power_creator",
-			},
-		},
-		{
-			name: "moderator",
-			weight: 8,
-			eventMultiplier: 3.0,
-			conversionModifier: 1.5,
-			properties: {
-				role: "moderator",
-				segment: "moderator",
-			},
-		},
-		{
-			name: "active_contributor",
-			weight: 25,
-			eventMultiplier: 1.5,
-			conversionModifier: 1.0,
-			properties: {
-				role: "contributor",
-				segment: "active_contributor",
-			},
-		},
-		{
-			name: "reader",
-			weight: 45,
-			eventMultiplier: 0.3,
-			conversionModifier: 0.5,
-			properties: {
-				role: "reader",
-				segment: "reader",
-			},
-		},
-		{
-			name: "lurker",
-			weight: 17,
-			eventMultiplier: 0.1,
-			conversionModifier: 0.2,
-			properties: {
-				role: "reader",
-				segment: "lurker",
-			},
-		},
+		{ name: "lurker", weight: 25, eventMultiplier: 0.35, properties: { role: "lurker" } },
+		{ name: "reader", weight: 40, eventMultiplier: 0.8, properties: { role: "reader" } },
+		{ name: "contributor", weight: 24, eventMultiplier: 1.5, properties: { role: "contributor" } },
+		{ name: "creator", weight: 5, eventMultiplier: 2.4, properties: { role: "creator" } },
+		{ name: "moderator", weight: 6, eventMultiplier: 2.0, properties: { role: "moderator" } },
 	],
 
-	// -- Phase 2: Engagement Decay ------------------------------------
-	engagementDecay: {
-		model: "linear",
-		halfLife: 60,
-		floor: 0.15,
+	groupKeys: [["community_id", COMMUNITIES.length, COMMUNITY_EVENTS]],
+	groupProps: {
+		community_id: {
+			name: ["unknown"],
+			content_hub: ["gaming"],
+			member_count: [0],
+			founded_year: [2020],
+			is_official: [false],
+		},
 	},
+
+	retentionCurve: { type: "logarithmic", day1: 0.65, day7: 0.5, day30: 0.38 },
 
 	hook(record, type, meta) {
-		if (type === "user") return handleUserHooks(record);
-		if (type === "funnel-post") return handleFunnelPostHooks(record, meta);
-		if (type === "everything") return handleEverythingHooks(record, meta);
+		if (type === "user") return handleUserHook(record, meta);
+		if (type === "everything") return handleEverything(record, meta);
+		if (type === "warehouse") return handleWarehouse(record, meta);
+		if (type === "group") return handleGroup(record);
 		return record;
 	},
 };
 
-// ── STORIES (v1.6 machine-checkable contract — one story per numbered hook) ──
-// Generate:  node scripts/verify-runner.mjs dungeons/vertical/community/community.js verify-community
-// Evaluate:  node scripts/verify-stories.mjs dungeons/vertical/community/community.js --data-prefix verify-community
-//
-// Measurement doctrine for this dungeon:
-// - Deletions-only logic (H6 lurker churn, H8 free-tier comment drop, H10
-//   over-publisher upvote drop, the silent future-time guard) means hook-time
-//   cohort classification is only ONE-SIDED recoverable from output counts:
-//   hook-time count >= output count. Cohorts below are chosen so output-side
-//   membership IMPLIES hook-time membership (e.g. output publishes >= 21
-//   proves the H3 power-creator branch fired); reverse contamination lands in
-//   the control arm and biases toward null.
-// - Persona event multipliers (8x power creators ... 0.1x lurkers) make every
-//   count-per-user comparison activity-confounded BY CONSTRUCTION. Count
-//   assertions are activity-normalized (per app-session — untouched by all
-//   hooks) and, where the arms span personas with different funnel
-//   conversionModifiers, restricted to a single role stratum.
-// - Value mutations (word_count, view_count, upvote_count, edit_quality) are
-//   iid per-event draws, so cross-cohort VALUE ratios are clean without
-//   normalization; exact integer multipliers additionally leave structural
-//   signatures (x3 on integers => divisible by 3).
+// ── STORIES ──────────────────────────────────────────────────────────────
+// Machine-checkable contract for hooks H1-H10. Evaluate with:
+//   node dungeons/vertical/community/community.verify.mjs
 
-const EV = `read_json_auto('{{PREFIX}}-EVENTS*.json', sample_size=-1, union_by_name=true)`;
-const US = `read_json_auto('{{PREFIX}}-USERS*.json', sample_size=-1, union_by_name=true)`;
-// identity prelude: avgDevicePerUser 2 + account created is isAuthEvent+isFirstEvent,
-// so born users auth on their first event; the device-pool resolve is
-// belt-and-braces for any device-only edge. ::VARCHAR casts — user_id sniffs
-// as UUID, device_id as VARCHAR; DuckDB refuses to coalesce mixed types.
-const ID_CTE = `
-us AS (SELECT * FROM ${US}),
-dm AS (SELECT unnest("anonymousIds") AS device_id, distinct_id FROM us),
-ev AS (
-  SELECT coalesce(m.distinct_id::VARCHAR, e.user_id::VARCHAR, e.device_id::VARCHAR) AS uid,
-         e.time::TIMESTAMP AS t, e.*
-  FROM ${EV} e
-  LEFT JOIN dm m ON e.device_id = m.device_id
-)`;
+const EV = `read_json_auto('{{PREFIX}}-EVENTS*.json*', sample_size=-1, union_by_name=true)`;
+const US = `read_json_auto('{{PREFIX}}-USERS*.json*', sample_size=-1, union_by_name=true)`;
+const WH = (table) => `read_json_auto('{{PREFIX}}-WAREHOUSE-${table}.json*', sample_size=-1, union_by_name=true)`;
 
-// knob-derived timestamps (dataset starts ${DATASET_START})
-const DS = dayjs.utc(DATASET_START);
-const TS = (d) => d.format("YYYY-MM-DD HH:mm:ss");
-// H2 window bounds are EXCLUSIVE on both sides (the hook uses isAfter/isBefore)
-const TREND_START_TS = TS(DS.add(TREND_START_DAY, "day"));
-const TREND_END_TS = TS(DS.add(TREND_END_DAY, "day"));
-// H6 clean-birth cutoff: users born within ~16d of datasetEnd lack a full
-// post-cutoff observation window (10d cutoff + room for a post period)
-const H6_LATEBORN_TS = TS(dayjs.utc(DATASET_END).subtract(16, "day"));
-const FATIGUE_TS = TS(DS.add(ARTICLE_FATIGUE_START_DAY, "day"));
+// Identity prelude: a device resolves to the member seen with it on any event
+// that carries both ids (emitted stitch evidence, the way Mixpanel merges).
+// Every event in this dungeon carries user_id, so uid is user_id.
+const ID_CTE = `dmap AS (SELECT device_id, min(user_id::VARCHAR) AS mapped FROM ${EV}
+  WHERE user_id IS NOT NULL AND device_id IS NOT NULL GROUP BY 1),
+ev AS (SELECT coalesce(e.user_id::VARCHAR, m.mapped) AS uid, e.time::TIMESTAMP AS t, e.*
+  FROM ${EV} e LEFT JOIN dmap m ON e.device_id = m.device_id)`;
 
-const cellsOf = (rows, key) => Object.fromEntries((rows || []).map((r) => [r[key], r]));
+const TS = (isoStr) => dayjs.utc(isoStr).format("YYYY-MM-DD HH:mm:ss");
+const D = (isoStr) => isoStr.slice(0, 10);
+const plusDays = (isoStr, n) => dayjs.utc(isoStr).add(n, "day").toISOString();
+const band = (k) => [Math.round(k * 0.9 * 1000) / 1000, Math.round(k * 1.1 * 1000) / 1000];
+const SQL_LIST = (xs) => xs.map((x) => `'${x}'`).join(", ");
+const ONBOARDING_STEPS = ["account created", "interests selected", "intro posted"];
+const NON_ACTIVITY = SQL_LIST([...PASSIVE]);
+const SF_END = plusDays(STARFALL_RELEASE, STARFALL_DAYS);
+const SF_BASE_FROM = plusDays(STARFALL_RELEASE, -STARFALL_DAYS);
+const GUARD_DONE = plusDays(GUARD_LAUNCH, GUARD_ROLLOUT_DAYS);
+const REPORT_MATURE_END = plusDays(DATASET_END, -7).slice(0, 10) + "T00:00:00Z"; // reports with a full week to resolve
+// raid baseline: the same weekdays one week before and one week after
+const RAID_BASE_SQL = `((t >= TIMESTAMP '${TS(plusDays(RAID_START, -7))}' AND t < TIMESTAMP '${TS(plusDays(RAID_END, -7))}')
+    OR (t >= TIMESTAMP '${TS(plusDays(RAID_START, 7))}' AND t < TIMESTAMP '${TS(plusDays(RAID_END, 7))}'))`;
+const FEST_END = plusDays(FEST_START, FEST_DAYS);
+const UPGRADE_RAMPED = plusDays(AD_LOAD_CHANGE, UPGRADE_RAMP_DAYS);
+const RET_COHORT_END = plusDays(DATASET_END, -RETENTION_DAY).slice(0, 10) + "T00:00:00Z"; // signups with day 30 inside the data
+const REVERT_COHORT_END = plusDays(DATASET_END, -REVERT_FOLLOWUP_DAYS).slice(0, 10) + "T00:00:00Z";
+const ONBOARD_TARGET_FRIEND = ONBOARD_FINISH.friend_invite / ONBOARD_FINISH.organic;
+const CPS_TARGET = CPL_USD.tiktok_ads / CPL_USD.reddit_ads;
+const CPO_TARGET = CPS_TARGET * ONBOARD_FINISH.reddit_ads / ONBOARD_FINISH.tiktok_ads;
 
+/** step_counts conversion for a set of segments from a timeToConvert breakdown. */
+const convOf = (rows, segs) => {
+	const rs = (rows || []).filter((x) => segs.includes(x.segment_value) && Array.isArray(x.step_counts) && x.step_counts[0]);
+	if (!rs.length) return null;
+	const entered = rs.reduce((a, r) => a + r.step_counts[0], 0);
+	const converted = rs.reduce((a, r) => a + r.step_counts[r.step_counts.length - 1], 0);
+	return { entered, converted, rate: converted / entered };
+};
+
+// shared SQL
+const H3_SQL = `WITH ${ID_CTE},
+v AS (SELECT distinct_id::VARCHAR AS uid, "${EXP_KEY}" AS variant FROM ${US} WHERE "${EXP_KEY}" IS NOT NULL),
+r AS (SELECT uid, thread_id, t AS t0 FROM ev WHERE event = 'discussion viewed' AND t >= TIMESTAMP '${TS(REPLY_NUDGES_START)}'),
+c AS (SELECT uid, thread_id, t AS t1 FROM ev WHERE event = 'comment posted'),
+m AS (SELECT r.uid, r.thread_id, r.t0, min(c.t1) AS t1 FROM r LEFT JOIN c ON c.uid = r.uid AND c.thread_id = r.thread_id
+  AND c.t1 >= r.t0 AND c.t1 < r.t0 + INTERVAL 1 DAY GROUP BY 1, 2, 3),
+x AS (SELECT v.variant, m.uid, (m.t1 IS NOT NULL) AS ok, date_diff('second', m.t0, m.t1) AS ttc_s
+  FROM m JOIN v ON v.uid = m.uid)
+SELECT variant AS grp, count(DISTINCT uid) AS user_count, count(*) AS thread_views, avg(ok::INT) AS conv, median(ttc_s) AS med_ttc
+FROM x GROUP BY 1`;
+const H4_SQL = `WITH ${ID_CTE},
+s AS (SELECT report_id, uid, t AS t0, report_type FROM ev WHERE event = 'report submitted'),
+r AS (SELECT report_id, min(t) AS t1 FROM ev WHERE event = 'report resolved' GROUP BY 1),
+x AS (SELECT s.uid, CASE WHEN s.report_type IN (${SQL_LIST(TRIAGED_TYPES)}) THEN 'triaged' ELSE 'other' END AS kind,
+  CASE WHEN s.t0 < TIMESTAMP '${TS(GUARD_LAUNCH)}' THEN 'before' WHEN s.t0 >= TIMESTAMP '${TS(GUARD_DONE)}' AND s.t0 < TIMESTAMP '${TS(REPORT_MATURE_END)}' THEN 'after' END AS period,
+  date_diff('second', s.t0, r.t1) AS ttc_s
+  FROM s JOIN r ON r.report_id = s.report_id
+  WHERE NOT (s.t0 >= TIMESTAMP '${TS(RAID_START)}' AND s.t0 < TIMESTAMP '${TS(RAID_END)}'))
+SELECT kind AS grp, count(DISTINCT uid) AS user_count, count(*) AS reports,
+ median(ttc_s) FILTER (WHERE period = 'after') / median(ttc_s) FILTER (WHERE period = 'before') AS after_before
+FROM x WHERE period IS NOT NULL GROUP BY 1`;
+const H5_SQL = `WITH ${ID_CTE},
+o AS (SELECT DISTINCT date::DATE AS d, content_hub FROM ${WH("trust_safety_daily")} WHERE raid_alert_level = 'raid'),
+od AS (SELECT DISTINCT d FROM o), oh AS (SELECT DISTINCT content_hub FROM o),
+w AS (SELECT t::DATE AS d, uid, (content_hub IN (SELECT content_hub FROM oh)) AS hit FROM ev
+  WHERE event IN (${SQL_LIST(PARTICIPATION_EVENTS)}) AND ((t >= TIMESTAMP '${TS(RAID_START)}' AND t < TIMESTAMP '${TS(RAID_END)}') OR ${RAID_BASE_SQL})),
+g AS (SELECT (d IN (SELECT d FROM od)) AS raid, count(*) FILTER (WHERE hit)::DOUBLE / count(*) FILTER (WHERE NOT hit) AS share,
+  count(*) FILTER (WHERE NOT hit)::DOUBLE / count(DISTINCT d) AS other_per_day, count(DISTINCT uid) FILTER (WHERE hit) AS users FROM w GROUP BY 1)
+SELECT 'all' AS grp, (SELECT count(*) FROM od) AS raid_days, min(users) AS user_count,
+ max(share) FILTER (WHERE raid) / max(share) FILTER (WHERE NOT raid) AS did,
+ max(other_per_day) FILTER (WHERE raid) / max(other_per_day) FILTER (WHERE NOT raid) AS other_ratio
+FROM g`;
+const H6_SQL = `WITH ${ID_CTE},
+s AS (SELECT uid, t AS t0 FROM ev WHERE event = 'account created' AND t < TIMESTAMP '${TS(RET_COHORT_END)}'),
+i AS (SELECT uid, min(t) AS ti FROM ev WHERE event = 'intro posted' GROUP BY 1),
+f AS (SELECT i.uid, bool_or(e.event = 'notification received' AND e.notification_type = 'reply' AND e.t > i.ti AND e.t <= i.ti + INTERVAL ${FAST_REPLY_HOURS} HOUR) AS fast
+  FROM i JOIN ev e ON e.uid = i.uid GROUP BY 1),
+r AS (SELECT s.uid, bool_or(e.event NOT IN (${NON_ACTIVITY}) AND e.t >= s.t0 + INTERVAL ${RETENTION_DAY} DAY) AS ret FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
+SELECT CASE WHEN f.fast THEN 'replied' ELSE 'no_reply' END AS grp, count(*) AS user_count, avg(r.ret::INT) AS retention
+FROM s JOIN f ON f.uid = s.uid JOIN r ON r.uid = s.uid GROUP BY 1`;
+const H7_SQL = `WITH ${ID_CTE},
+s AS (SELECT DISTINCT uid FROM ev WHERE event = 'account created'),
+f AS (SELECT uid, min(t) AS t1 FROM ev WHERE event = 'article edited' GROUP BY 1),
+rv AS (SELECT DISTINCT e.uid FROM ev e JOIN f ON f.uid = e.uid WHERE e.event = 'notification received' AND e.notification_type = 'edit_reverted'
+  AND e.t >= f.t1 AND e.t < f.t1 + INTERVAL 2 DAY),
+a AS (SELECT f.uid, f.t1, count(e.uid) AS later FROM f LEFT JOIN ev e ON e.uid = f.uid AND e.event = 'article edited'
+  AND e.t > f.t1 AND e.t <= f.t1 + INTERVAL ${REVERT_FOLLOWUP_DAYS} DAY GROUP BY 1, 2)
+SELECT CASE WHEN rv.uid IS NOT NULL THEN 'reverted' ELSE 'kept' END AS grp, count(*) AS user_count, avg((later > 0)::INT) AS edited_again
+FROM a JOIN s ON s.uid = a.uid LEFT JOIN rv ON rv.uid = a.uid WHERE a.t1 < TIMESTAMP '${TS(REVERT_COHORT_END)}' GROUP BY 1`;
+const H9_SQL = `WITH ${ID_CTE},
+s AS (SELECT uid, t AS t0, acquisition_channel AS ch FROM ev WHERE event = 'account created'),
+i AS (SELECT uid, min(t) AS ti FROM ev WHERE event = 'intro posted' GROUP BY 1),
+x AS (SELECT s.ch, count(*) AS signups, count(DISTINCT s.uid) AS users,
+  sum(coalesce(i.ti >= s.t0 AND i.ti < s.t0 + INTERVAL ${ONBOARD_WINDOW_DAYS} DAY, false)::INT) AS onboarded
+  FROM s LEFT JOIN i ON i.uid = s.uid GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM ${WH("paid_marketing_daily")} GROUP BY 1)
+SELECT x.ch AS grp, x.users AS user_count, sp.spend / x.signups AS spend_per_signup, sp.spend / x.onboarded AS spend_per_onboarded
+FROM x JOIN sp ON sp.ch = x.ch`;
+
+/** @type {import("../../../types").DungeonStory[]} */
 export const stories = [
 	{
-		id: "H1-weekend-word-count",
+		id: "H1-starfall-launch-surge",
 		hook: "H1",
 		archetype: "temporal-inflection",
-		narrative:
-			`Sat/Sun 'article published' word_count is multiplied by ${WEEKEND_WORD_COUNT_MULT} (floored; draws are ` +
-			"large integers so floor bias is negligible). word_count is an iid per-event draw, so the weekend/weekday " +
-			"avg ratio reads the knob directly: band [1.40, 1.60]. 'wiki page created' also carries word_count but " +
-			"is deliberately untouched by the hook — it is the placebo arm, and its weekend/weekday ratio must sit " +
-			"at 1 within sampling noise [0.92, 1.08].",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT e.event || CASE WHEN dayofweek(e.t) IN (0, 6) THEN '|we' ELSE '|wd' END AS cell,
-  count(DISTINCT e.uid)::BIGINT AS user_count, count(*)::BIGINT AS n_events, avg(e.word_count) AS avg_wc
-FROM ev e WHERE e.event IN ('article published', 'wiki page created')
-GROUP BY 1`,
-				},
-				select: {
-					pwe: { where: { cell: "article published|we" } },
-					pwd: { where: { cell: "article published|wd" } },
-				},
-				expect: { metric: "pwe.avg_wc / pwd.avg_wc", op: "between", target: [1.4, 1.6] },
-				minCohort: 300,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT e.event || CASE WHEN dayofweek(e.t) IN (0, 6) THEN '|we' ELSE '|wd' END AS cell,
-  count(DISTINCT e.uid)::BIGINT AS user_count, count(*)::BIGINT AS n_events, avg(e.word_count) AS avg_wc
-FROM ev e WHERE e.event IN ('article published', 'wiki page created')
-GROUP BY 1`,
-				},
-				select: {
-					wwe: { where: { cell: "wiki page created|we" } },
-					wwd: { where: { cell: "wiki page created|wd" } },
-				},
-				expect: { metric: "wwe.avg_wc / wwd.avg_wc", op: "between", target: [0.92, 1.08] },
-				minCohort: 300,
-			},
-		],
-	},
-	{
-		id: "H2-trending-gaming-window",
-		hook: "H2",
-		archetype: "temporal-inflection",
-		narrative:
-			`Days ${TREND_START_DAY}-${TREND_END_DAY} (exclusive bounds — the hook uses isAfter/isBefore): users ` +
-			`whose profile content_hub is 'gaming' get view_count x${TREND_VIEW_MULT} on 'article viewed'. The hook ` +
-			"runs AFTER superProp stamping, so the event-level content_hub equals the profile value and selects " +
-			"exactly the treated users. view_count is an iid integer draw and the multiplier is exact, so " +
-			"in-window/out-of-window avg reads the knob: gaming band [1.80, 2.20], non-gaming placebo [0.92, 1.08].",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT CASE WHEN e.content_hub = 'gaming' THEN 'g' ELSE 'o' END ||
-  CASE WHEN e.t > TIMESTAMP '${TREND_START_TS}' AND e.t < TIMESTAMP '${TREND_END_TS}' THEN 'in' ELSE 'out' END AS cell,
-  count(DISTINCT e.uid)::BIGINT AS user_count, count(*)::BIGINT AS n_events, avg(e.view_count) AS avg_vc
-FROM ev e WHERE e.event = 'article viewed' GROUP BY 1`,
-				},
-				select: {
-					gin: { where: { cell: "gin" } },
-					gout: { where: { cell: "gout" } },
-				},
-				expect: { metric: "gin.avg_vc / gout.avg_vc", op: "between", target: [1.8, 2.2] },
-				minCohort: 400,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT CASE WHEN e.content_hub = 'gaming' THEN 'g' ELSE 'o' END ||
-  CASE WHEN e.t > TIMESTAMP '${TREND_START_TS}' AND e.t < TIMESTAMP '${TREND_END_TS}' THEN 'in' ELSE 'out' END AS cell,
-  count(DISTINCT e.uid)::BIGINT AS user_count, count(*)::BIGINT AS n_events, avg(e.view_count) AS avg_vc
-FROM ev e WHERE e.event = 'article viewed' GROUP BY 1`,
-				},
-				select: {
-					oin: { where: { cell: "oin" } },
-					oout: { where: { cell: "oout" } },
-				},
-				expect: { metric: "oin.avg_vc / oout.avg_vc", op: "between", target: [0.92, 1.08] },
-				minCohort: 400,
-			},
-		],
-	},
-	{
-		id: "H3-power-creator-upvotes",
-		hook: "H3",
-		archetype: "cohort-prop-scale",
-		narrative:
-			`Users with more than ${POWER_CREATOR_PUBLISH_THRESHOLD} 'article published' events get upvote_count ` +
-			`x${POWER_CREATOR_UPVOTE_MULT} on every 'upvote given'. Publishes are never deleted (only the future ` +
-			"guard trims the tail), so output publishes >= 21 IMPLIES the branch fired. upvote_count is an iid " +
-			"integer draw in [1,10]; floor(3w) = 3w exactly, so the power/low value ratio reads 3.0 [2.70, 3.30] " +
-			"AND every treated value is divisible by 3 (share ~1.0; H10's over-drop removes events but never " +
-			"changes surviving values). The 0-1-publish placebo arm's mod-3 share is the organic pool share — " +
-			"upvote_count draws uniformly from a 5-value weighNumRange pool, so the placebo share is whatever " +
-			"fraction of those 5 values happens to divide by 3 (measured ~0.63); the 0.9 cap still separates it " +
-			"cleanly from the exact-1.0 treated signature.",
+		narrative: `Starfall, an open-world game, releases ${D(STARFALL_RELEASE)}. For its launch fortnight (through ${D(plusDays(SF_END, -1))}) gaming-hub reading and search ("article viewed" and "search performed" with content_hub = gaming) run ${STARFALL_MULT_START}x the normal volume on release day, decaying evenly to ${STARFALL_MULT_END}x on day ${STARFALL_DAYS} (mean ${STARFALL_MULT}x). Other hubs are untouched. The gaming-vs-other ratio during the fortnight over the same ratio in the ${STARFALL_DAYS} days before reads the mean multiplier and cancels member growth and weekday mix; the other hubs' own volume is the control.`,
+		mixpanelReport: { type: "Insights", events: ["article viewed", "search performed"], measure: "total", breakdown: "content_hub", chart: "daily line", compare: `${D(STARFALL_RELEASE)} to ${D(plusDays(SF_END, -1))} vs the 14 days before` },
 		assertions: [
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE},
-pu AS (SELECT uid, count(*) FILTER (WHERE event = 'article published') AS pubs FROM ev GROUP BY 1),
-arms AS (SELECT uid, CASE WHEN pubs > ${POWER_CREATOR_PUBLISH_THRESHOLD} THEN 'pw' WHEN pubs <= 1 THEN 'lo' END AS arm FROM pu)
-SELECT a.arm, count(DISTINCT a.uid)::BIGINT AS user_count,
-  avg(e.upvote_count) AS avg_uc,
-  count(*) FILTER (WHERE e.upvote_count % 3 = 0)::DOUBLE / count(*) AS mod3_share
-FROM arms a JOIN ev e ON e.uid = a.uid AND e.event = 'upvote given'
-WHERE a.arm IS NOT NULL GROUP BY 1`,
+w AS (SELECT (content_hub = 'gaming') AS g, (t >= TIMESTAMP '${TS(STARFALL_RELEASE)}') AS launch, uid FROM ev
+  WHERE event IN ('article viewed', 'search performed') AND t >= TIMESTAMP '${TS(SF_BASE_FROM)}' AND t < TIMESTAMP '${TS(SF_END)}')
+SELECT 'all' AS grp, count(DISTINCT uid) FILTER (WHERE g AND launch) AS user_count,
+ (count(*) FILTER (WHERE g AND launch)::DOUBLE / count(*) FILTER (WHERE NOT g AND launch))
+   / (count(*) FILTER (WHERE g AND NOT launch)::DOUBLE / count(*) FILTER (WHERE NOT g AND NOT launch)) AS did,
+ count(*) FILTER (WHERE NOT g AND launch)::DOUBLE / count(*) FILTER (WHERE NOT g AND NOT launch) AS other_ratio
+FROM w`,
 				},
-				select: {
-					pw: { where: { arm: "pw" } },
-					lo: { where: { arm: "lo" } },
-				},
-				expect: { metric: "pw.avg_uc / lo.avg_uc", op: "between", target: [2.7, 3.3] },
-				minCohort: 200,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-pu AS (SELECT uid, count(*) FILTER (WHERE event = 'article published') AS pubs FROM ev GROUP BY 1),
-arms AS (SELECT uid, CASE WHEN pubs > ${POWER_CREATOR_PUBLISH_THRESHOLD} THEN 'pw' WHEN pubs <= 1 THEN 'lo' END AS arm FROM pu)
-SELECT a.arm, count(DISTINCT a.uid)::BIGINT AS user_count,
-  count(*) FILTER (WHERE e.upvote_count % 3 = 0)::DOUBLE / count(*) AS mod3_share
-FROM arms a JOIN ev e ON e.uid = a.uid AND e.event = 'upvote given'
-WHERE a.arm IS NOT NULL GROUP BY 1`,
-				},
-				// mod-3 structural signature needs a two-arm comparison with a
-				// placebo floor — not expressible as a single-metric band
-				assert: (rows) => {
-					const by = cellsOf(rows, "arm");
-					const p = by.pw, l = by.lo;
-					if (!p || !l || Number(p.user_count) < 150 || Number(l.user_count) < 150) {
-						return { verdict: "WEAK", detail: `cohort too small: power=${p?.user_count ?? 0} low=${l?.user_count ?? 0}` };
-					}
-					const ps = Number(p.mod3_share), ls = Number(l.mod3_share);
-					const detail = `power mod-3 share ${ps.toFixed(4)} (n=${p.user_count}) vs low placebo ${ls.toFixed(4)} (n=${l.user_count})`;
-					// placebo cap 0.9, not ~0.3: upvote_count's 5-value pool makes the
-					// organic divisible-by-3 share pool-dependent (see narrative); the
-					// signature is the treated arm's EXACT 1.0, placebo merely < 1
-					if (ps >= 0.995 && ls <= 0.9) return { verdict: "NAILED", detail };
-					if (ps >= 0.95 && ls <= 0.95) return { verdict: "STRONG", detail };
-					return { verdict: ps > ls ? "WEAK" : "INVERSE", detail };
-				},
-			},
-		],
-	},
-	{
-		id: "H4-discussion-depth",
-		hook: "H4",
-		archetype: "cohort-count-scale",
-		narrative:
-			`active_contributor users (role 'contributor' — the only persona with that role) spawn a clone for ` +
-			`${DISCUSSION_CLONE_LIKELIHOOD}% of their surviving comments, an exact x1.5 in expectation that is ` +
-			"MULTIPLICATIVE with H8's free-tier drop (clones run after the drop), so the effect survives the tier " +
-			"mixture. Raw comments-per-user is dominated by persona event multipliers (1.5x vs 0.3x/0.1x for " +
-			"readers), and per-session normalization alone is NOT enough: comments are conversion-gated funnel " +
-			"steps (Content Creation step 3, Engagement Loop step 3) and contributors' funnel conversionModifier " +
-			"is 1.0 vs readers' 0.5, so the raw comments-per-session DD runs ~2.1. Calibrating with 'discussion " +
-			"posted' — a conversion-gated funnel step NO hook touches — over-corrects, because discussions sit " +
-			"DEEPER in their funnel (Engagement Loop step 4 vs comment step 3) and deeper steps amplify the " +
-			"conversionModifier gap more. The two estimators therefore bracket the knob with sign-known biases: " +
-			"raw DD (no correction) is an over-estimate, discussion-corrected DD an under-estimate, and 1.5 must " +
-			"sit inside [corrected, raw] — asserted as corrected in [1.10, 1.60] AND raw in [1.50, 2.80] " +
-			"(NAILED). Secondary signature: clones are always is_reply=true, shifting the contributor reply " +
-			"share from the organic 2/3 to (2/3 + 0.5)/1.5 = 0.778.",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-pr AS (SELECT distinct_id::VARCHAR AS puid, role FROM us WHERE role IN ('contributor', 'reader'))
-SELECT pr.role, count(DISTINCT pr.puid)::BIGINT AS user_count,
-  count(*) FILTER (WHERE e.event = 'comment posted')::BIGINT AS comments,
-  count(*) FILTER (WHERE e.event = 'app session')::BIGINT AS sessions,
-  count(*) FILTER (WHERE e.event = 'discussion posted')::BIGINT AS discussions
-FROM pr JOIN ev e ON e.uid = pr.puid GROUP BY 1`,
-				},
-				// two-estimator bracket with sign-known biases (raw over-estimates,
-				// discussion-corrected under-estimates) — beyond the one-operator grammar
-				assert: (rows) => {
-					const by = cellsOf(rows, "role");
-					const c = by.contributor, r = by.reader;
-					if (!c || !r || Number(c.user_count) < 500 || Number(r.user_count) < 500) {
-						return { verdict: "WEAK", detail: `cohort too small: contributor=${c?.user_count ?? 0} reader=${r?.user_count ?? 0}` };
-					}
-					if (!(Number(c.sessions) > 0 && Number(r.sessions) > 0 && Number(r.comments) > 0 && Number(c.discussions) > 0 && Number(r.discussions) > 0)) {
-						return { verdict: "NONE", detail: "degenerate baseline (zero sessions, comments, or discussions in an arm)" };
-					}
-					const ddRaw = (Number(c.comments) / Number(c.sessions)) / (Number(r.comments) / Number(r.sessions));
-					const ddCal = (Number(c.discussions) / Number(c.sessions)) / (Number(r.discussions) / Number(r.sessions));
-					const dd = ddRaw / ddCal;
-					const detail = `bracket for knob 1.5: corrected DD=${dd.toFixed(3)} (under-estimate; discussion calib ${ddCal.toFixed(3)} over-corrects) <= 1.5 <= raw DD=${ddRaw.toFixed(3)} (over-estimate; conversionModifier composition) — contributor n=${c.user_count}, reader n=${r.user_count}`;
-					if (dd >= 1.1 && dd <= 1.6 && ddRaw >= 1.5 && ddRaw <= 2.8) return { verdict: "NAILED", detail };
-					if (dd >= 1.05 && ddRaw >= 1.35) return { verdict: "STRONG", detail };
-					return { verdict: dd > 1.0 ? "WEAK" : "INVERSE", detail };
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-pr AS (SELECT distinct_id::VARCHAR AS puid, role FROM us WHERE role IN ('contributor', 'reader'))
-SELECT pr.role, count(DISTINCT pr.puid)::BIGINT AS user_count,
-  count(*) FILTER (WHERE e.event = 'comment posted')::BIGINT AS comments,
-  count(*) FILTER (WHERE e.event = 'comment posted' AND e.is_reply = true)::BIGINT AS replies
-FROM pr JOIN ev e ON e.uid = pr.puid GROUP BY 1`,
-				},
-				// reply-share composition: two shares with a cross-arm gap floor —
-				// not a single-metric band
-				assert: (rows) => {
-					const by = cellsOf(rows, "role");
-					const c = by.contributor, r = by.reader;
-					if (!c || !r || Number(c.comments) < 500 || Number(r.comments) < 500) {
-						return { verdict: "WEAK", detail: `too few comments: contributor=${c?.comments ?? 0} reader=${r?.comments ?? 0}` };
-					}
-					const cs = Number(c.replies) / Number(c.comments);
-					const rs = Number(r.replies) / Number(r.comments);
-					const detail = `is_reply share: contributor ${cs.toFixed(4)} vs reader ${rs.toFixed(4)} (expected 0.778 vs 0.667)`;
-					if (cs >= 0.75 && cs <= 0.81 && rs >= 0.63 && rs <= 0.70) return { verdict: "NAILED", detail };
-					if (cs >= rs + 0.05) return { verdict: "STRONG", detail };
-					return { verdict: cs > rs ? "WEAK" : "INVERSE", detail };
-				},
-			},
-		],
-	},
-	{
-		id: "H5-edit-war",
-		hook: "H5",
-		archetype: "cohort-prop-scale",
-		narrative:
-			`Users with more than ${EDIT_WAR_THRESHOLD} 'article edited' events get EVERY edit_quality redrawn ` +
-			`U[${EDIT_WAR_QUALITY_MIN}, ${EDIT_WAR_QUALITY_MAX}] (1 decimal). Edits are never deleted, so output ` +
-			"edits >= 6 IMPLIES treatment — which makes the redraw EXACT on the war arm: avg = 1.5 [1.40, 1.60] and " +
-			`no surviving edit_quality above ${EDIT_WAR_QUALITY_MAX} (a zero-violation purity check). The 1-4-edit ` +
-			"calm arm keeps the organic edit_quality — a 3-value weighNumRange pool whose mean is pool-dependent " +
-			"(measured ~2.3), so separation is asserted as a calm-minus-war gap (>= 0.4), not an absolute calm " +
-			"floor.",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-eu AS (SELECT uid, count(*) AS edits FROM ev WHERE event = 'article edited' GROUP BY 1),
-arms AS (SELECT uid, CASE WHEN edits > ${EDIT_WAR_THRESHOLD} THEN 'war' WHEN edits BETWEEN 1 AND 4 THEN 'calm' END AS arm FROM eu)
-SELECT a.arm, count(DISTINCT a.uid)::BIGINT AS user_count,
-  avg(e.edit_quality) AS avg_q,
-  count(*) FILTER (WHERE e.edit_quality > ${EDIT_WAR_QUALITY_MAX})::BIGINT AS over_cap
-FROM arms a JOIN ev e ON e.uid = a.uid AND e.event = 'article edited'
-WHERE a.arm IS NOT NULL GROUP BY 1`,
-				},
-				// combines an exact redraw average, a zero-violation purity count,
-				// and a control-arm separation floor
-				assert: (rows) => {
-					const by = cellsOf(rows, "arm");
-					const w = by.war, c = by.calm;
-					if (!w || !c || Number(w.user_count) < 100 || Number(c.user_count) < 300) {
-						return { verdict: "WEAK", detail: `cohort too small: war=${w?.user_count ?? 0} calm=${c?.user_count ?? 0}` };
-					}
-					const wq = Number(w.avg_q), cq = Number(c.avg_q), oc = Number(w.over_cap);
-					const detail = `war avg_q=${wq.toFixed(3)} (redraw mean 1.5), over-cap violations=${oc}, calm avg_q=${cq.toFixed(3)} (war n=${w.user_count}, calm n=${c.user_count})`;
-					if (oc > 0) return { verdict: "WEAK", detail: `${detail} — purity violated: one-sided recovery derivation says war-arm quality cannot exceed ${EDIT_WAR_QUALITY_MAX}` };
-					// gap, not absolute calm floor: organic edit_quality is a 3-value
-					// pool whose mean varies with the pool draw (see narrative)
-					if (wq >= 1.4 && wq <= 1.6 && cq - wq >= 0.4) return { verdict: "NAILED", detail };
-					if (wq >= 1.3 && wq <= 1.7 && cq - wq >= 0.25) return { verdict: "STRONG", detail };
-					return { verdict: wq < cq ? "WEAK" : "INVERSE", detail };
-				},
-			},
-		],
-	},
-	{
-		id: "H6-lurker-churn",
-		hook: "H6",
-		archetype: "retention-divergence",
-		narrative:
-			`Users with fewer than ${LURKER_EVENT_THRESHOLD} events at hook time lose ` +
-			`${LURKER_DROP_LIKELIHOOD}% of events after day ${LURKER_CHURN_CUTOFF_DAYS} of their own activity ` +
-			"(keep 0.4). Deletions-only recovery: output n in [2,4] implies treatment (untreated output equals " +
-			"hook n >= 5), and output n in [5,8] implies NO treatment (treated hook n <= 4 can only shrink), " +
-			"giving a clean control arm. n=1 users are EXCLUDED from the treated arm: a single-event user has " +
-			"post=0 and days-5-10=0 by construction, so they carry no churn information while dragging both the " +
-			"raw ratio and the calibrator toward 0. The raw post/pre-day-10 ratio between arms is confounded by " +
-			"organic front-loading (tiny users have mechanically shorter activity spans), so the story " +
-			"self-calibrates on the PRE-cutoff half-split (days 0-5 vs 5-10 — H6 never touches pre-cutoff " +
-			"events): corrected DD = (rho_tiny/rho_small) / (rho_pre_tiny/rho_pre_small), and r = DD/0.4 must " +
-			"land in [0.6, 1.4] (NAILED) / [0.45, 1.75] (STRONG); INVERSE if the raw ratio is not even below 1. " +
-			"The control band [5,8] is ADJACENT to the treated band (not [6,10]) because calibration transfers " +
-			"better between closer activity levels — the estimator is sensitive to this choice (r moved 1.9 -> " +
-			"1.3 between [6,10] and [5,8] at reduced scale), which is honest evidence the residual " +
-			"self-similarity assumption carries real uncertainty; the STRONG band prices that in. Both arms are " +
-			"restricted to role 'reader' (the reader + lurker personas — where nearly all sub-5-event users " +
-			"live) so the control arm is not polluted by low-output contributors/moderators whose funnel " +
-			"conversionModifier gives them a different organic event-spacing shape. Users born within 16d of " +
-			"datasetEnd are excluded (no post-cutoff observation window).",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-rd AS (SELECT distinct_id::VARCHAR AS puid FROM us WHERE role = 'reader'),
-n AS (SELECT e.uid, count(*) AS n, min(e.t) AS f FROM ev e JOIN rd ON rd.puid = e.uid GROUP BY 1),
-arms AS (
-  SELECT uid, f, CASE WHEN n BETWEEN 2 AND 4 THEN 'tiny' WHEN n BETWEEN 5 AND 8 THEN 'small' END AS arm
-  FROM n WHERE f < TIMESTAMP '${H6_LATEBORN_TS}'
-)
-SELECT a.arm, count(DISTINCT a.uid)::BIGINT AS user_count,
-  count(*) FILTER (WHERE e.t <= a.f + INTERVAL ${LURKER_CHURN_CUTOFF_DAYS} DAY)::BIGINT AS pre,
-  count(*) FILTER (WHERE e.t > a.f + INTERVAL ${LURKER_CHURN_CUTOFF_DAYS} DAY)::BIGINT AS post,
-  count(*) FILTER (WHERE e.t <= a.f + INTERVAL ${LURKER_CHURN_CUTOFF_DAYS / 2} DAY)::BIGINT AS pre_a,
-  count(*) FILTER (WHERE e.t > a.f + INTERVAL ${LURKER_CHURN_CUTOFF_DAYS / 2} DAY AND e.t <= a.f + INTERVAL ${LURKER_CHURN_CUTOFF_DAYS} DAY)::BIGINT AS pre_b
-FROM arms a JOIN ev e ON e.uid = a.uid
-WHERE a.arm IS NOT NULL GROUP BY 1`,
-				},
-				// self-calibrated double ratio with an INVERSE guard on the raw
-				// direction — beyond the declarative grammar
-				assert: (rows) => {
-					const by = cellsOf(rows, "arm");
-					const t = by.tiny, c = by.small;
-					if (!t || !c || Number(t.user_count) < 100 || Number(c.user_count) < 100) {
-						return { verdict: "WEAK", detail: `cohort too small: tiny=${t?.user_count ?? 0} small=${c?.user_count ?? 0}` };
-					}
-					if (!(Number(t.pre) > 0 && Number(c.pre) > 0 && Number(c.post) > 0 && Number(t.pre_a) > 0 && Number(c.pre_a) > 0 && Number(c.pre_b) > 0)) {
-						return { verdict: "NONE", detail: "degenerate pooled counts (zero pre/post cell)" };
-					}
-					const keep = 1 - LURKER_DROP_LIKELIHOOD / 100;
-					const raw = (Number(t.post) / Number(t.pre)) / (Number(c.post) / Number(c.pre));
-					const calib = (Number(t.pre_b) / Number(t.pre_a)) / (Number(c.pre_b) / Number(c.pre_a));
-					const corrected = raw / calib;
-					const r = corrected / keep;
-					const detail = `raw ratio ${raw.toFixed(4)}, pre-trajectory calib ${calib.toFixed(4)}, corrected keep ${corrected.toFixed(4)} vs knob ${keep} (r=${r.toFixed(3)}; tiny n=${t.user_count}, small n=${c.user_count})`;
-					if (raw >= 1) return { verdict: "INVERSE", detail };
-					if (r >= 0.6 && r <= 1.4) return { verdict: "NAILED", detail };
-					if (r >= 0.45 && r <= 1.75) return { verdict: "STRONG", detail };
-					return { verdict: "WEAK", detail };
-				},
-			},
-		],
-	},
-	{
-		id: "H7-creator-profiles",
-		hook: "H7",
-		archetype: "cohort-prop-scale",
-		narrative:
-			"The user hook deterministically overwrites articles_created and reputation_score per role: creator " +
-			"art U[50,200] rep U[80,100], moderator art U[10,50] rep U[40,70], contributor art U[1,15] rep " +
-			"U[15,50], reader art 0 rep U[0,20]. Every profile hits exactly one branch and nothing else touches " +
-			"these props, so the ranges are EXACT (zero violations) and the creator average sits at the uniform " +
-			"midpoint 90 [88, 92] (~500 creators, se ~0.26).",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH us AS (SELECT * FROM ${US})
-SELECT role, count(*)::BIGINT AS user_count,
-  avg(reputation_score) AS avg_rep,
-  min(reputation_score) AS min_rep, max(reputation_score) AS max_rep,
-  min(articles_created) AS min_art, max(articles_created) AS max_art
-FROM us GROUP BY 1`,
-				},
-				// per-role exact range purity across four roles — a table of
-				// zero-violation checks, not a single metric
-				assert: (rows) => {
-					const by = cellsOf(rows, "role");
-					const RANGES = {
-						creator: { rep: [80, 100], art: [50, 200], minUsers: 200 },
-						moderator: { rep: [40, 70], art: [10, 50], minUsers: 300 },
-						contributor: { rep: [15, 50], art: [1, 15], minUsers: 300 },
-						reader: { rep: [0, 20], art: [0, 0], minUsers: 300 },
-					};
-					const problems = [];
-					for (const [role, spec] of Object.entries(RANGES)) {
-						const r = by[role];
-						if (!r) { problems.push(`${role}: missing`); continue; }
-						if (Number(r.user_count) < spec.minUsers) problems.push(`${role}: only ${r.user_count} users`);
-						if (Number(r.min_rep) < spec.rep[0] || Number(r.max_rep) > spec.rep[1]) {
-							problems.push(`${role}: rep [${r.min_rep}, ${r.max_rep}] outside [${spec.rep}]`);
-						}
-						if (Number(r.min_art) < spec.art[0] || Number(r.max_art) > spec.art[1]) {
-							problems.push(`${role}: articles [${r.min_art}, ${r.max_art}] outside [${spec.art}]`);
-						}
-					}
-					const cAvg = Number(by.creator?.avg_rep ?? 0);
-					const detail = problems.length
-						? `range violations: ${problems.join("; ")}`
-						: `all four role ranges exact; creator avg rep ${cAvg.toFixed(2)} (n=${by.creator.user_count})`;
-					if (problems.length) return { verdict: "WEAK", detail };
-					if (cAvg >= 88 && cAvg <= 92) return { verdict: "NAILED", detail };
-					if (cAvg >= 85 && cAvg <= 95) return { verdict: "STRONG", detail };
-					return { verdict: "WEAK", detail };
-				},
-			},
-		],
-	},
-	{
-		id: "H8-pro-content-lift",
-		hook: "H8",
-		archetype: "funnel-conversion-by-segment",
-		narrative:
-			`Non-pro/supporter users drop ${PRO_LIFT_FREE_DROP_LIKELIHOOD}% of ALL 'comment posted' events. ` +
-			"Mechanism read: comments-per-app-session free/paid = the exact keep rate 0.35 [0.30, 0.40] — H4's " +
-			"clone factor applies to active contributors in BOTH tiers (tier is independent of persona) and " +
-			"cancels in the pooled ratio. Mixpanel-visible read: the emulator's Content Creation published→comment " +
-			"step conversion, paid/free, at the 60h window (48h generative x 1.25 H9 free stretch so the free arm " +
-			"is not right-censored). The conversion lift is NONLINEAR in the keep rate (P(>=1 surviving comment in " +
-			"window)); bracketing the per-window comment density over [0.5, 3] gives paid/free in [1.35, 2.60].",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT CASE WHEN e.subscription_tier IN ('pro', 'supporter') THEN 'paid' ELSE 'fr' END AS arm,
-  count(DISTINCT e.uid)::BIGINT AS user_count,
-  count(*) FILTER (WHERE e.event = 'comment posted')::DOUBLE
-    / nullif(count(*) FILTER (WHERE e.event = 'app session'), 0) AS cps
-FROM ev e GROUP BY 1`,
-				},
-				select: {
-					fr: { where: { arm: "fr" } },
-					paid: { where: { arm: "paid" } },
-				},
-				expect: { metric: "fr.cps / paid.cps", op: "between", target: [0.30, 0.40] },
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.did", op: "between", target: band(STARFALL_MULT) },
 				minCohort: 1000,
 			},
 			{
 				breakdown: {
-					type: "timeToConvert",
-					steps: ["article viewed", "article published", "comment posted"],
-					breakdownByUserProperty: "subscription_tier",
-					conversionWindowMs: Math.round(48 * TTC_FREE_FACTOR * 3600 * 1000),
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+w AS (SELECT (content_hub = 'gaming') AS g, (t >= TIMESTAMP '${TS(STARFALL_RELEASE)}') AS launch, uid FROM ev
+  WHERE event IN ('article viewed', 'search performed') AND t >= TIMESTAMP '${TS(SF_BASE_FROM)}' AND t < TIMESTAMP '${TS(SF_END)}')
+SELECT 'all' AS grp, count(DISTINCT uid) FILTER (WHERE NOT g AND launch) AS user_count,
+ count(*) FILTER (WHERE NOT g AND launch)::DOUBLE / count(*) FILTER (WHERE NOT g AND NOT launch) AS other_ratio
+FROM w`,
 				},
-				// pools pro+supporter step_counts and takes a published→comment
-				// step-conversion double ratio — beyond a single-metric band
-				assert: (rows) => {
-					const by = cellsOf(rows, "segment_value");
-					const pooled = (names) => {
-						const cs = names.map((n) => by[n]).filter(Boolean);
-						const pub = cs.reduce((s, c) => s + (c.step_counts?.[1] ?? 0), 0);
-						const com = cs.reduce((s, c) => s + (c.step_counts?.[2] ?? 0), 0);
-						return pub > 0 ? { rate: com / pub, pub } : null;
-					};
-					const paid = pooled(["pro", "supporter"]);
-					const free = pooled(["free"]);
-					if (!paid || !free) return { verdict: "NONE", detail: "missing tier segments in emulator rows" };
-					if (paid.pub < 300 || free.pub < 300) {
-						return { verdict: "WEAK", detail: `too few published-step entries: paid=${paid.pub} free=${free.pub}` };
-					}
-					const r = paid.rate / free.rate;
-					const detail = `published→comment step conversion paid ${paid.rate.toFixed(4)} vs free ${free.rate.toFixed(4)} (ratio ${r.toFixed(3)}; entries ${paid.pub}/${free.pub})`;
-					if (r >= 1.35 && r <= 2.6) return { verdict: "NAILED", detail };
-					if (r >= 1.2) return { verdict: "STRONG", detail };
-					return { verdict: r > 1 ? "WEAK" : "INVERSE", detail };
-				},
+				select: { a: { where: { grp: "all" } } },
+				// control: other hubs' volume, launch fortnight vs the fortnight before (equal lengths)
+				expect: { metric: "a.other_ratio", op: "between", target: band(1) },
+				minCohort: 1000,
 			},
 		],
 	},
 	{
-		id: "H9-content-ttc",
-		hook: "H9",
-		archetype: "funnel-ttc-by-segment",
-		narrative:
-			`funnel-post scales Content Creation inter-step gaps by tier: pro/supporter x${TTC_PRO_FACTOR}, free ` +
-			`x${TTC_FREE_FACTOR} (v1.6: scoped to Content Creation only). Cross-event SQL cannot see this (greedy ` +
-			"single-pass pairing — the documented limitation), so the assertion goes through the emulator's " +
-			`timeToConvert at 48h x ${TTC_FREE_FACTOR} = 60h, covering the stretched support so the free arm is ` +
-			"not right-censored. There is NO untouched tier, so the primary read is the cross ratio pro/free " +
-			"(knob distance 0.77/1.25 = 0.62, masked asymmetrically by organic cross-instance pairings — " +
-			"compression survives ~45-85% of its log distance, stretch only ~15-50%, per the fitness/dating " +
-			"measurements — giving [0.65, 0.92]); the consistency read is supporter/pro, identically scaled " +
-			"tiers whose ratio must sit at 1 [0.85, 1.15].",
+		id: "H2-onboarding-by-channel",
+		hook: "H2",
+		archetype: "funnel-conversion-by-segment",
+		narrative: `New members who join through a friend's invite finish onboarding (account created → interests selected → intro posted, ${ONBOARD_WINDOW_DAYS}-day window) at ${ONBOARD_FINISH.friend_invite * 100}% vs ${ONBOARD_FINISH.organic * 100}% for organic signups (${ONBOARD_TARGET_FRIEND.toFixed(3)}x); TikTok ad signups finish at only ${ONBOARD_FINISH.tiktok_ads * 100}% (see H9). The everything hook decides per member, by acquisition channel, whether the intro is posted (${ONBOARD_EARLY_DROP * 100}% of non-finishers also skip the interests step). The three steps are onboarding-only events, so the unique-member funnel reads the knobs directly.`,
+		mixpanelReport: { type: "Funnels", steps: ONBOARDING_STEPS, breakdown: "user property acquisition_channel", window: `${ONBOARD_WINDOW_DAYS} days` },
 		assertions: [
 			{
-				breakdown: {
-					type: "timeToConvert",
-					steps: ["article viewed", "article published", "comment posted"],
-					breakdownByUserProperty: "subscription_tier",
-					conversionWindowMs: Math.round(48 * TTC_FREE_FACTOR * 3600 * 1000),
+				breakdown: { type: "timeToConvert", steps: ONBOARDING_STEPS, breakdownByUserProperty: "acquisition_channel", conversionWindowMs: ONBOARD_WINDOW_DAYS * DAY_MS },
+				// custom assert: conversion lives in each segment row's step_counts
+				// ARRAY; the expect grammar cannot index arrays
+				assert: (rows) => {
+					const fr = convOf(rows, ["friend_invite"]), org = convOf(rows, ["organic"]);
+					if (!fr || !org) return { verdict: "NONE", detail: "missing segment rows" };
+					if (fr.entered < 300 || org.entered < 600) return { verdict: "WEAK", detail: `small segments ${fr.entered}/${org.entered}` };
+					const ratio = fr.rate / org.rate;
+					const [lo, hi] = band(ONBOARD_TARGET_FRIEND);
+					const detail = `onboarding friend_invite ${fr.converted}/${fr.entered}=${fr.rate.toFixed(4)} vs organic ${org.converted}/${org.entered}=${org.rate.toFixed(4)}; ratio ${ratio.toFixed(4)} (knob ${ONBOARD_TARGET_FRIEND.toFixed(3)}, band [${lo}, ${hi}])`;
+					if (ratio >= lo && ratio <= hi) return { verdict: "NAILED", detail };
+					return { verdict: ratio > 1 ? "WEAK" : "INVERSE", detail };
 				},
-				select: {
-					pr: { where: { segment_value: "pro" } },
-					fr: { where: { segment_value: "free" } },
-				},
-				expect: { metric: "pr.median_ttc_ms / fr.median_ttc_ms", op: "between", target: [0.65, 0.92] },
-				// pro and supporter are each 1/6 of the tier draw (~1,667 of 10K
-				// users); ~250 pro converters expected at full fidelity, and a
-				// median over 200+ is statistically solid
-				minCohort: 200,
+			},
+		],
+	},
+	{
+		id: "H3-reply-nudges-experiment",
+		hook: "H3",
+		archetype: "experiment-lift",
+		narrative: `The "${NUDGE_EXPERIMENT}" thread test starts ${D(REPLY_NUDGES_START)} and splits members 50/50 (sticky hash). "${NUDGE_VARIANT}" shows a reply prompt under each thread: it multiplies the share of thread views that lead to a comment by ${NUDGE_CONV_MULT} and the view-to-comment time by ${NUDGE_TTC_MULT}. A thread view and the member's reply share a thread_id (threads are shared by many members), so a totals funnel holding thread_id constant measures each member's per-thread reply rate; exposure is logged once per member (their first enrolled thread view).`,
+		mixpanelReport: { type: "Funnels", steps: ["discussion viewed", "comment posted"], counting: "totals", holdPropertyConstant: "thread_id", breakdown: `user property "${EXP_KEY}"`, window: "1 day" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H3_SQL },
+				select: { n: { where: { grp: NUDGE_VARIANT } }, c: { where: { grp: "Control" } } },
+				expect: { metric: "n.conv / c.conv", op: "between", target: band(NUDGE_CONV_MULT) },
+				minCohort: 1500,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H3_SQL },
+				select: { n: { where: { grp: NUDGE_VARIANT } }, c: { where: { grp: "Control" } } },
+				expect: { metric: "n.med_ttc / c.med_ttc", op: "between", target: band(NUDGE_TTC_MULT) },
+				minCohort: 1500,
 			},
 			{
 				breakdown: {
-					type: "timeToConvert",
-					steps: ["article viewed", "article published", "comment posted"],
-					breakdownByUserProperty: "subscription_tier",
-					conversionWindowMs: Math.round(48 * TTC_FREE_FACTOR * 3600 * 1000),
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT 'all' AS grp, count(DISTINCT uid) AS user_count,
+ count(DISTINCT uid) FILTER (WHERE "Variant name" = '${NUDGE_VARIANT}')::DOUBLE / count(DISTINCT uid) AS variant_share
+FROM ev WHERE event = '$experiment_started'`,
 				},
-				select: {
-					sup: { where: { segment_value: "supporter" } },
-					pr: { where: { segment_value: "pro" } },
-				},
-				expect: { metric: "sup.median_ttc_ms / pr.median_ttc_ms", op: "between", target: [0.85, 1.15] },
+				select: { a: { where: { grp: "all" } } },
+				// equal-weight 2-arm hash → 0.5
+				expect: { metric: "a.variant_share", op: "between", target: band(0.5) },
+				minCohort: 3000,
+			},
+		],
+	},
+	{
+		id: "H4-hearth-guard-triage",
+		hook: "H4",
+		archetype: "funnel-ttc-by-segment",
+		narrative: `Hearth Guard, an AI triage for member reports, rolls out community by community from ${D(GUARD_LAUNCH)} over ${GUARD_ROLLOUT_DAYS} days. Once a community has it, spam, harassment, and vandalism reports are resolved in ${GUARD_RESOLVE_MULT}x the time (report submitted → report resolved, same report_id); misinformation, copyright, and other reports still need a human read and do not change. Read: median resolution time after the rollout completes (reports filed ${D(GUARD_DONE)} to ${D(plusDays(REPORT_MATURE_END, -1))}, each with a full week to resolve) over before launch, triaged types over the other types (difference in differences, cancelling queue load; reports filed during the H5 raid are left out because the raid floods one hub with spam reports); control: the other types alone stay at 1. resolution_hours on the resolution equals the real gap.`,
+		mixpanelReport: { type: "Funnels", steps: ["report submitted", "report resolved"], measure: "median time to convert", holdPropertyConstant: "report_id", breakdown: "report_type", compare: `before ${D(GUARD_LAUNCH)} vs from ${D(GUARD_DONE)}` },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H4_SQL },
+				select: { t: { where: { grp: "triaged" } }, o: { where: { grp: "other" } } },
+				expect: { metric: "t.after_before / o.after_before", op: "between", target: band(GUARD_RESOLVE_MULT) },
+				minCohort: 300,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H4_SQL },
+				select: { o: { where: { grp: "other" } } },
+				// control: types Hearth Guard does not triage keep their resolution time
+				expect: { metric: "o.after_before", op: "between", target: band(1) },
+				minCohort: 300,
+			},
+		],
+	},
+	{
+		id: "H5-anime-spam-raid",
+		hook: "H5",
+		archetype: "bespoke",
+		narrative: `A coordinated spam raid hits the ${RAID_HUB} hub from ${D(RAID_START)} to ${D(RAID_END)} (exclusive). Members there participate less: ${(1 - RAID_KEEP) * 100}% of would-be comments, new threads, upvotes, and uploads in ${RAID_HUB} never happen (keep ${RAID_KEEP}), and ${RAID_REPORTER_SHARE * 100}% of reporting members active in ${RAID_HUB} file a spam report. The raid days and hub come from the warehouse table trust_safety_daily (raid_alert_level = 'raid', with spam_accounts_removed ~${RAID_SPAM_MULT}x normal); the event-side read is the ${RAID_HUB} share of participation on raid days (Wed-Fri) over the same weekdays one week before and after, which reads the keep rate. Control: participation in the other hubs is unchanged.`,
+		mixpanelReport: { type: "Insights", events: PARTICIPATION_EVENTS, measure: "total", breakdown: "content_hub", chart: "daily line", join: "warehouse trust_safety_daily.raid_alert_level on date and content_hub" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H5_SQL },
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.did", op: "between", target: band(RAID_KEEP) },
+				minCohort: 200,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H5_SQL },
+				select: { a: { where: { grp: "all" } } },
+				// control: other hubs' participation per day, raid days vs the same weekdays a week before and after
+				expect: { metric: "a.other_ratio", op: "between", target: band(1) },
 				minCohort: 200,
 			},
 		],
 	},
 	{
-		id: "H10-article-magic-number",
-		hook: "H10",
-		archetype: "frequency-sweet-spot",
-		narrative:
-			`Sweet-spot publishers (${ARTICLE_SWEET_MIN}-${ARTICLE_SWEET_MAX} articles at hook time) get ` +
-			`upvote_count x${ARTICLE_UPVOTE_BOOST} (rounded); over-publishers (${ARTICLE_OVER_THRESHOLD}+) lose ` +
-			`${ARTICLE_UPVOTE_DROP_LIKELIHOOD}% of 'upvote given' events from day ${ARTICLE_FATIGUE_START_DAY} ` +
-			"(creator burnout — the drop is calendar-scoped BY DESIGN, see the knob comment). The VALUE read is " +
-			"clean across personas (iid draw): sweet/low avg upvote_count reads ~1.35 with integer-rounding " +
-			"drift [1.25, 1.50]. The VOLUME read cannot be a cross-arm level comparison: within contributors, " +
-			"publish count is intrinsically coupled to activity, and the organic upvote share of events varies " +
-			"23-58% across publish bands no matter the denominator (sessions scale sublinearly, discussions " +
-			"carry a once-per-user Onboarding component, activity-band matching leaves different event mixes). " +
-			"Instead the story runs a difference-in-differences at the day-60 edge: each arm's own after/before " +
-			"upvotes-per-session ratio cancels its activity composition (measured arm-invariant to ~0.1% on " +
-			"untreated data — over 1.1137 vs sweet 1.1126), so DiD = (over after/before) / (sweet after/before) " +
-			`reads the ${1 - ARTICLE_UPVOTE_DROP_LIKELIHOOD / 100} keep rate: [0.50, 0.70] NAILED, [0.42, 0.80] ` +
-			"STRONG. Arms are role 'contributor' only; sessions are untouched by every hook; H3's x3 (at 21+ " +
-			"publishes) changes values, never counts, so it cannot touch the volume read.",
+		id: "H6-first-reply-retention",
+		hook: "H6",
+		archetype: "retention-divergence",
+		narrative: `New members who post an intro and get a reply within ${FAST_REPLY_HOURS} hours stick around. ${FAST_REPLY_SHARE * 100}% of intros get a reply notification within ${FAST_REPLY_HOURS} h (assigned by member hash, independent of activity). Of the rest, ${DARK_SHARE_NO_REPLY * 100}% go quiet ${DARK_AFTER_DAYS} days after the intro. Everyone also faces the organic lapse (${LAPSE_SHARE * 100}% stop on a uniform day ${LAPSE_DAY_MIN}-${LAPSE_DAY_MAX}). Day-${RETENTION_DAY} unbounded retention (any member action on or after day ${RETENTION_DAY}; notifications and report resolutions are server-side and do not count), for signups before ${D(RET_COHORT_END)}: replied / not replied = 1/(1−${DARK_SHARE_NO_REPLY}) in expectation. The read is noise-limited (a few hundred retained members per group), so the knob is the target with a knob-derived floor (half the dark share).`,
+		mixpanelReport: { type: "Funnels → cohort → Retention", cohortFunnel: `intro posted → notification received (notification_type = reply), ${FAST_REPLY_HOURS}-hour window; save converters as a cohort`, birth: "account created", return: "custom event \"member action\" = every event except notification received and report resolved", mode: `on or after day ${RETENTION_DAY}`, filter: "did intro posted", breakdown: "that cohort" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H6_SQL },
+				select: { r: { where: { grp: "replied" } }, n: { where: { grp: "no_reply" } } },
+				expect: { metric: "r.retention / n.retention", op: ">=", target: 1 / (1 - DARK_SHARE_NO_REPLY), floor: 1 / (1 - DARK_SHARE_NO_REPLY / 2) },
+				minCohort: 400,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+i AS (SELECT uid, min(t) AS ti FROM ev WHERE event = 'intro posted' GROUP BY 1),
+f AS (SELECT i.uid, bool_or(e.event = 'notification received' AND e.notification_type = 'reply' AND e.t > i.ti AND e.t <= i.ti + INTERVAL ${FAST_REPLY_HOURS} HOUR) AS fast
+  FROM i JOIN ev e ON e.uid = i.uid WHERE i.ti < TIMESTAMP '${TS(plusDays(DATASET_END, -1))}' GROUP BY 1)
+SELECT 'all' AS grp, count(*) AS user_count, avg(fast::INT) AS replied_share FROM f`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.replied_share", op: "between", target: band(FAST_REPLY_SHARE) },
+				minCohort: 1000,
+			},
+		],
+	},
+	{
+		id: "H7-reverted-first-edit",
+		hook: "H7",
+		archetype: "retention-divergence",
+		narrative: `When a new member's first wiki edit is reverted, most stop editing. ${REVERT_SHARE * 100}% of new members' first edits are reverted (member hash; an "edit_reverted" notification 1-30 h after the edit), and ${QUIT_AFTER_REVERT * 100}% of those never edit again. Read: share of new editors (first edit before ${D(REVERT_COHORT_END)}) who edit again within ${REVERT_FOLLOWUP_DAYS} days, reverted / not reverted = 1 − ${QUIT_AFTER_REVERT}. Reverts are assigned independently of activity, so the ratio reads the knob; it rests on a few hundred reverted editors, so the target carries a knob-derived ceiling (half the effect).`,
+		mixpanelReport: { type: "Funnels → cohort → Funnels", cohortFunnel: "article edited → notification received (notification_type = edit_reverted), 2-day window; save converters as a cohort", funnel: `article edited → article edited, ${REVERT_FOLLOWUP_DAYS}-day window`, filter: "did account created (new members)", breakdown: "that cohort" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H7_SQL },
+				select: { r: { where: { grp: "reverted" } }, k: { where: { grp: "kept" } } },
+				expect: { metric: "r.edited_again / k.edited_again", op: "<=", target: 1 - QUIT_AFTER_REVERT, floor: 1 - QUIT_AFTER_REVERT / 2 },
+				minCohort: 200,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+s AS (SELECT DISTINCT uid FROM ev WHERE event = 'account created'),
+f AS (SELECT uid, min(t) AS t1 FROM ev WHERE event = 'article edited' GROUP BY 1),
+rv AS (SELECT DISTINCT e.uid FROM ev e JOIN f ON f.uid = e.uid WHERE e.event = 'notification received' AND e.notification_type = 'edit_reverted'
+  AND e.t >= f.t1 AND e.t < f.t1 + INTERVAL 2 DAY)
+SELECT 'all' AS grp, count(*) AS user_count, avg((rv.uid IS NOT NULL)::INT) AS reverted_share
+FROM f JOIN s ON s.uid = f.uid LEFT JOIN rv ON rv.uid = f.uid WHERE f.t1 < TIMESTAMP '${TS(plusDays(DATASET_END, -2))}'`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.reverted_share", op: "between", target: band(REVERT_SHARE) },
+				minCohort: 500,
+			},
+		],
+	},
+	{
+		id: "H8-ad-load-change",
+		hook: "H8",
+		archetype: "temporal-inflection",
+		narrative: `On ${D(AD_LOAD_CHANGE)} Hearthside raises the ad load on pages seen by free members and logged-out readers from ${AD_SLOTS_OLD} to ${AD_SLOTS_NEW} ad slots per page view. Three effects: (1) the ad server's impressions per page view rise ${AD_IMPRESSION_MULT}x — impressions live only in the warehouse table ad_revenue_daily, so impressions per Mixpanel free-member article view needs the join; (2) free members read ${AD_READING_KEEP}x as many articles per search (Plus members, who see no ads, are the control; searches are untouched); (3) Plus checkout conversion per upgrade-page visit doubles (${UPGRADE_LIFT}x), ramping in over ${UPGRADE_RAMP_DAYS} days. Upgrades are few (about a hundred after the ramp), so read 3 uses the knob as target with a knob-derived floor (half the lift).`,
+		mixpanelReport: { type: "Insights + Funnels + warehouse", reading: "Insights formula article viewed / search performed, breakdown membership, before vs after", upgrade: "Funnels plus page viewed → plus subscribed, totals, 1-day window, before vs after", join: "ad_revenue_daily.ad_impressions by date vs article viewed where membership = free" },
 		assertions: [
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE},
-pu AS (SELECT uid, count(*) FILTER (WHERE event = 'article published') AS pubs FROM ev GROUP BY 1),
-arms AS (SELECT uid, CASE WHEN pubs BETWEEN ${ARTICLE_SWEET_MIN} AND ${ARTICLE_SWEET_MAX} THEN 'sw' WHEN pubs <= 1 THEN 'lo' END AS arm FROM pu)
-SELECT a.arm, count(DISTINCT a.uid)::BIGINT AS user_count, avg(e.upvote_count) AS avg_uc
-FROM arms a JOIN ev e ON e.uid = a.uid AND e.event = 'upvote given'
-WHERE a.arm IS NOT NULL GROUP BY 1`,
+v AS (SELECT t::DATE AS d, count(*) AS page_views FROM ev WHERE event = 'article viewed' AND membership = 'free' GROUP BY 1),
+w AS (SELECT date::DATE AS d, sum(ad_impressions) AS imp FROM ${WH("ad_revenue_daily")} GROUP BY 1)
+SELECT 'all' AS grp, (SELECT count(DISTINCT uid) FROM ev WHERE event = 'article viewed' AND membership = 'free') AS user_count,
+ (sum(imp) FILTER (WHERE d >= DATE '${D(AD_LOAD_CHANGE)}') / sum(page_views) FILTER (WHERE d >= DATE '${D(AD_LOAD_CHANGE)}'))
+   / (sum(imp) FILTER (WHERE d < DATE '${D(AD_LOAD_CHANGE)}') / sum(page_views) FILTER (WHERE d < DATE '${D(AD_LOAD_CHANGE)}')) AS ratio
+FROM v JOIN w USING (d)`,
 				},
-				select: {
-					sw: { where: { arm: "sw" } },
-					lo: { where: { arm: "lo" } },
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.ratio", op: "between", target: band(AD_IMPRESSION_MULT) },
+				minCohort: 500,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+x AS (SELECT membership AS m, (t >= TIMESTAMP '${TS(AD_LOAD_CHANGE)}') AS post, event, uid FROM ev WHERE event IN ('article viewed', 'search performed')),
+g AS (SELECT m, post, count(*) FILTER (WHERE event = 'article viewed')::DOUBLE / count(*) FILTER (WHERE event = 'search performed') AS r, count(DISTINCT uid) AS users FROM x GROUP BY 1, 2)
+SELECT 'all' AS grp, min(users) AS user_count,
+ (max(r) FILTER (WHERE m = 'free' AND post) / max(r) FILTER (WHERE m = 'free' AND NOT post))
+   / (max(r) FILTER (WHERE m = 'plus' AND post) / max(r) FILTER (WHERE m = 'plus' AND NOT post)) AS did
+FROM g`,
 				},
-				expect: { metric: "sw.avg_uc / lo.avg_uc", op: "between", target: [1.25, 1.5] },
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.did", op: "between", target: band(AD_READING_KEEP) },
 				minCohort: 300,
 			},
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE},
-pr AS (SELECT distinct_id::VARCHAR AS puid FROM us WHERE role = 'contributor'),
-pu AS (SELECT uid, count(*) FILTER (WHERE event = 'article published') AS pubs FROM ev GROUP BY 1),
-arms AS (
-  SELECT pu.uid, CASE WHEN pubs BETWEEN ${ARTICLE_SWEET_MIN} AND ${ARTICLE_SWEET_MAX} THEN 'sw'
-                      WHEN pubs >= ${ARTICLE_OVER_THRESHOLD} THEN 'ov' END AS arm
-  FROM pu JOIN pr ON pr.puid = pu.uid
-)
-SELECT a.arm || '_' || CASE WHEN e.t >= TIMESTAMP '${FATIGUE_TS}' THEN 'after' ELSE 'before' END AS cell,
-  count(DISTINCT a.uid)::BIGINT AS user_count,
-  count(*) FILTER (WHERE e.event = 'upvote given')::BIGINT AS ups,
-  count(*) FILTER (WHERE e.event = 'app session')::BIGINT AS sessions
-FROM arms a JOIN ev e ON e.uid = a.uid
-WHERE a.arm IS NOT NULL GROUP BY 1`,
+p AS (SELECT uid, t AS t0 FROM ev WHERE event = 'plus page viewed'),
+b AS (SELECT uid, min(t) AS t1 FROM ev WHERE event = 'plus subscribed' GROUP BY 1),
+x AS (SELECT p.uid, p.t0, coalesce(b.t1 >= p.t0 AND b.t1 < p.t0 + INTERVAL 1 DAY, false) AS ok FROM p LEFT JOIN b ON b.uid = p.uid)
+SELECT CASE WHEN t0 < TIMESTAMP '${TS(AD_LOAD_CHANGE)}' THEN 'before' WHEN t0 >= TIMESTAMP '${TS(UPGRADE_RAMPED)}' THEN 'after' ELSE 'ramp' END AS grp,
+ count(DISTINCT uid) AS user_count, count(*) AS visits, avg(ok::INT) AS conv
+FROM x GROUP BY 1`,
 				},
-				// difference-in-differences across the day-60 fatigue edge — a
-				// four-cell double ratio the one-operator grammar can't express
-				assert: (rows) => {
-					const by = cellsOf(rows, "cell");
-					const ob = by.ov_before, oa = by.ov_after, sb = by.sw_before, sa = by.sw_after;
-					const cells = { ov_before: ob, ov_after: oa, sw_before: sb, sw_after: sa };
-					for (const [name, c] of Object.entries(cells)) {
-						if (!c || Number(c.ups) < 300 || Number(c.sessions) < 200) {
-							return { verdict: "WEAK", detail: `cell ${name} too small: ups=${c?.ups ?? 0} sessions=${c?.sessions ?? 0} (needs 300/200)` };
-						}
-					}
-					const keep = 1 - ARTICLE_UPVOTE_DROP_LIKELIHOOD / 100;
-					const rOv = (Number(oa.ups) / Number(oa.sessions)) / (Number(ob.ups) / Number(ob.sessions));
-					const rSw = (Number(sa.ups) / Number(sa.sessions)) / (Number(sb.ups) / Number(sb.sessions));
-					const did = rOv / rSw;
-					const detail = `upvotes-per-session after/before: over ${rOv.toFixed(4)}, sweet ${rSw.toFixed(4)}, DiD=${did.toFixed(4)} vs keep ${keep} (over n=${ob.user_count}/${oa.user_count}, sweet n=${sb.user_count}/${sa.user_count})`;
-					if (did >= 0.5 && did <= 0.7) return { verdict: "NAILED", detail };
-					if (did >= 0.42 && did <= 0.8) return { verdict: "STRONG", detail };
-					return { verdict: did < 1 ? "WEAK" : "INVERSE", detail };
+				select: { a: { where: { grp: "after" } }, b: { where: { grp: "before" } } },
+				expect: { metric: "a.conv / b.conv", op: ">=", target: UPGRADE_LIFT, floor: 1 + (UPGRADE_LIFT - 1) / 2 },
+				minCohort: 300,
+			},
+		],
+	},
+	{
+		id: "H9-paid-channel-economics",
+		hook: "H9",
+		archetype: "attribution-bias",
+		narrative: `TikTok ad signups are the cheapest paid signups but the most expensive onboarded members. Warehouse paid_marketing_daily bills a paced daily budget per channel (cost per signup × expected signups per day, a weekday shape that follows the signup rhythm above a ${SPEND_FLAT_SHARE * 100}% flat floor, seeded ±${SPEND_NOISE * 100}% day noise, never zero): $${CPL_USD.tiktok_ads} per TikTok signup vs $${CPL_USD.reddit_ads} per Reddit signup at the window level (${CPS_TARGET}x). But only ${ONBOARD_FINISH.tiktok_ads * 100}% of TikTok signups post an intro within ${ONBOARD_WINDOW_DAYS} days vs ${ONBOARD_FINISH.reddit_ads * 100}% from Reddit (H2's onboarding knobs), so spend per onboarded member is ${CPS_TARGET} × ${ONBOARD_FINISH.reddit_ads}/${ONBOARD_FINISH.tiktok_ads} = ${CPO_TARGET.toFixed(3)}x Reddit's. Both reads need the warehouse join.`,
+		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "paid_marketing_daily.spend_usd", funnel: `account created → interests selected → intro posted, ${ONBOARD_WINDOW_DAYS}-day window, breakdown acquisition_channel` },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H9_SQL },
+				select: { t: { where: { grp: "tiktok_ads" } }, r: { where: { grp: "reddit_ads" } } },
+				expect: { metric: "t.spend_per_signup / r.spend_per_signup", op: "between", target: band(CPS_TARGET) },
+				minCohort: 500,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H9_SQL },
+				select: { t: { where: { grp: "tiktok_ads" } }, r: { where: { grp: "reddit_ads" } } },
+				expect: { metric: "t.spend_per_onboarded / r.spend_per_onboarded", op: "between", target: band(Math.round(CPO_TARGET * 1000) / 1000) },
+				minCohort: 500,
+			},
+		],
+	},
+	{
+		id: "H10-fandom-fest",
+		hook: "H10",
+		archetype: "temporal-inflection",
+		narrative: `Hearthside Fandom Fest runs ${D(FEST_START)} (Thu) to ${D(plusDays(FEST_END, -1))} (Sun) with themed threads and a fan-art contest. Declarative world event: comments, new threads, upvotes, and uploads run ${FEST_MULT}x their normal volume (engine clones with fresh insert_ids, spread over the four days). Read: fest-days participation over the mean of the same Thursday-Sunday in the week before and the week after (cancels weekday mix and trend). Control: article reading is not part of the fest and stays at 1.`,
+		mixpanelReport: { type: "Insights", events: FEST_EVENTS, measure: "total", chart: "daily line", compare: "Thu-Sun of the fest vs the same days one week before and after" },
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+x AS (SELECT CASE WHEN event = 'article viewed' THEN 'reading' ELSE 'participation' END AS grp, uid,
+  CASE WHEN t >= TIMESTAMP '${TS(FEST_START)}' AND t < TIMESTAMP '${TS(FEST_END)}' THEN 'fest'
+       WHEN (t >= TIMESTAMP '${TS(plusDays(FEST_START, -7))}' AND t < TIMESTAMP '${TS(plusDays(FEST_END, -7))}')
+         OR (t >= TIMESTAMP '${TS(plusDays(FEST_START, 7))}' AND t < TIMESTAMP '${TS(plusDays(FEST_END, 7))}') THEN 'base' END AS p
+  FROM ev WHERE event IN (${SQL_LIST([...FEST_EVENTS, "article viewed"])}))
+SELECT grp, count(DISTINCT uid) FILTER (WHERE p = 'fest') AS user_count,
+ count(*) FILTER (WHERE p = 'fest')::DOUBLE / (count(*) FILTER (WHERE p = 'base') / 2.0) AS lift
+FROM x WHERE p IS NOT NULL GROUP BY 1`,
 				},
+				select: { p: { where: { grp: "participation" } } },
+				expect: { metric: "p.lift", op: "between", target: band(FEST_MULT) },
+				minCohort: 1000,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+x AS (SELECT uid,
+  CASE WHEN t >= TIMESTAMP '${TS(FEST_START)}' AND t < TIMESTAMP '${TS(FEST_END)}' THEN 'fest'
+       WHEN (t >= TIMESTAMP '${TS(plusDays(FEST_START, -7))}' AND t < TIMESTAMP '${TS(plusDays(FEST_END, -7))}')
+         OR (t >= TIMESTAMP '${TS(plusDays(FEST_START, 7))}' AND t < TIMESTAMP '${TS(plusDays(FEST_END, 7))}') THEN 'base' END AS p
+  FROM ev WHERE event = 'article viewed')
+SELECT 'reading' AS grp, count(DISTINCT uid) FILTER (WHERE p = 'fest') AS user_count,
+ count(*) FILTER (WHERE p = 'fest')::DOUBLE / (count(*) FILTER (WHERE p = 'base') / 2.0) AS lift
+FROM x WHERE p IS NOT NULL`,
+				},
+				select: { r: { where: { grp: "reading" } } },
+				// control: reading is not part of the fest
+				expect: { metric: "r.lift", op: "between", target: band(1) },
+				minCohort: 1000,
 			},
 		],
 	},
