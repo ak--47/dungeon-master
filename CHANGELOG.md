@@ -162,6 +162,14 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   66.7% reached the last step before, now within 2 points of the same funnel
   without repeats. Output shift: dungeons with repeated funnel steps change
   their step counts and later seeded values; others are unchanged.
+- Stamp `$experiment_started` on a born user's first funnel like the step it
+  precedes: device-only before the `isAuthEvent` stitch. It was forced to carry
+  both `user_id` and `device_id`, and the post-`everything` identity pass
+  skipped it, so users who never authenticated had a `user_id` on the exposure
+  alone. Repro, 1,000 born users with a 50% first funnel: 238 unauthed users
+  showed a `user_id` (on 238 exposures); now 0. Authed users' exposures merge
+  into the user at the stitch through ID merge. Output shift: identity on
+  first-funnel exposures for born users; no RNG draws change.
 
 ### Added
 
@@ -191,6 +199,7 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   (0.45 in `avgActiveDaysPerUser` mode). It used to compare with one prior week
   at 0.7, whose day-to-day noise (sd about 0.24) failed decline runs by chance.
   "Today" is always rough in a streaming dataset; stories live in the history.
+
 
 
 
