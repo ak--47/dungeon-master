@@ -92,4 +92,18 @@ describe.sequential('soup shape', () => {
 			expect(dowRatio).toBeLessThan(DOW_RATIO * 1.25);
 		}, 60000);
 	}
+	// Without `soup` config the default weekday curve (Sat 0.53 of Tue) applies in
+	// every mode. The active-day plan only read explicit weights, so active-day
+	// modes had no weekly rhythm with the default soup (1.11x against 1.89x).
+	const DEFAULT_DOW = [0.637, 1.0, 0.999, 0.998, 0.966, 0.802, 0.528];
+	for (const [mode, extra] of Object.entries(MODES)) {
+		test(`${mode}: the default weekday curve applies without soup config`, async () => {
+			const { days } = shape(await run({ ...extra, soup: undefined }), (e) => e.event !== 'signup');
+			const ratio = Math.max(...days) / Math.min(...days);
+			const defaultRatio = Math.max(...DEFAULT_DOW) / Math.min(...DEFAULT_DOW);
+			expect(corr(days, DEFAULT_DOW)).toBeGreaterThan(0.9);
+			expect(ratio).toBeGreaterThan(defaultRatio * 0.75);
+			expect(ratio).toBeLessThan(defaultRatio * 1.25);
+		}, 60000);
+	}
 });
