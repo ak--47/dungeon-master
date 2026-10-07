@@ -36,5 +36,5 @@ Summer weather varies by city; daily precipitation is in `market_ops_daily`. For
 - What happened to orders in late August, and how big was it?
 - Which paid channel deserves more budget? Are coupon-site customers worth it?
 - What makes a Pass trial convert?
-- Why are some days and cities so much worse for late deliveries?
+- Where and when do late deliveries happen, and why?
 - Do new customers come back after their first order?
