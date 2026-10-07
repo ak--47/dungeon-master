@@ -69,5 +69,5 @@ Leadership set these goals for the quarter:
 3. **Grow savings.** Launch Round-Ups, and run the Summer Saver Boost for paid-plan members. Finance asked what the boost cost and what it brought in.
 4. **Fewer late bills.** Late bill payments cost members late fees and generate support contacts. Product is testing whether AutoPay should be the default.
 5. **Make onboarding work for everyone.** Too many applicants start an account and never fund it.
-6. **Support that earns Premium.** Premium promises faster help; the support lead wants proof.
+6. **Support quality.** The support lead wants to know how resolution time varies across members.
 7. **Card reliability.** Card spending is the largest revenue line, so any processor problem is a priority.

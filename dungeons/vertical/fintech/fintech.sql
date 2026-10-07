@@ -295,6 +295,9 @@ FROM ev JOIN n ON n.uid = ev.uid WHERE ev.event = 'savings deposit' AND ev.sourc
 
 -- EVAL Q18: direct deposits posted around the Federal Reserve holidays
 SELECT t::DATE AS day, dayname(t) AS weekday, count(*) FILTER (WHERE event = 'direct deposit received') AS paychecks,
+ count(*) FILTER (WHERE event = 'direct deposit received' AND pay_frequency = 'weekly') AS weekly_paychecks,
+ count(*) FILTER (WHERE event = 'direct deposit received' AND pay_frequency = 'biweekly') AS biweekly_paychecks,
+ count(*) FILTER (WHERE event = 'direct deposit received' AND pay_frequency = 'semimonthly') AS semimonthly_paychecks,
  count(*) FILTER (WHERE event = 'bill paid' AND autopay) AS autopay_payments, count(*) FILTER (WHERE event = 'card transaction') AS card_txns
 FROM ev WHERE t::DATE BETWEEN DATE '2026-06-17' AND DATE '2026-06-22' OR t::DATE BETWEEN DATE '2026-07-01' AND DATE '2026-07-06' OR t::DATE BETWEEN DATE '2026-09-03' AND DATE '2026-09-08'
 GROUP BY 1, 2 ORDER BY 1;

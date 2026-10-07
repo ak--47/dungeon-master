@@ -132,7 +132,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: new applicants with a thin credit file (credit_history =
  *   thin_file) need document review, so they finish onboarding at 41% vs 74%
- *   for established files (0.55x), and take hours instead of minutes.
+ *   for established files (0.55x), and take about a day to fund instead of
+ *   about two hours (funnel time-to-convert knob 30 h vs 3 h).
  * MIXPANEL: Funnels, account opened → identity verified → account funded,
  *   7-day window, breakdown user property credit_history.
  * REAL WORLD: database identity checks clear established files instantly;
@@ -142,7 +143,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H2. DIRECT DEPOSIT IN THE FIRST TWO WEEKS (everything)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: funded new members who do not set up direct deposit within 14 days
- *   of opening: half of them go dark after day 21. Adoption is salted per
+ *   of opening: half of them go dark, each on a salted day between day 16 and
+ *   day 29 (a gradual slide, not a cliff). Adoption is salted per
  *   member (rate by acquisition channel), independent of how active the
  *   member is. Day-30 retention (app opened in days 30-36) of DD-in-14-days
  *   members is 1 / (1 − 0.5) = 2x the rest.
@@ -202,8 +204,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   pre-selects AutoPay and multiplies the share of new billers with AutoPay
  *   by 1.6 (35% → 56%). Biller adds per member do not change (honest null).
  * MIXPANEL: Funnels, biller added → autopay enabled, totals, hold biller_id
- *   constant, 1-day window, breakdown user property "Experiment: Autopay
- *   Default".
+ *   constant, 1-day window, date range 2026-07-21 to 2026-10-01 (billers
+ *   added before the test count in both arms otherwise), breakdown user
+ *   property "Experiment: Autopay Default".
  * REAL WORLD: defaults decide most settings.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -243,7 +246,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: members who create 3 or more budgets in the window put 1.6x as
  *   much into each manual Pocket deposit as members with 0-2 budgets (a step
- *   at 3, flat on either side).
+ *   at 3, flat on either side). It is a member trait (planners save more
+ *   across the window), not a change at the moment of the third budget.
  * MIXPANEL: Insights, savings deposit (source = manual), average amount,
  *   breakdown by cohorts on the count of budget created (0-1 / 2 / 3+).
  * REAL WORLD: members who plan their spending know what they can set aside.
@@ -257,19 +261,19 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H2   | D30 retention DD-in-14d / rest, funded new    | 1 / (1 − DARK_SHARE)    | 2.00     | 2.031 (82.5% vs 40.6%)
  * H3   | round_up deposits before launch               | exact purity            | 0        | 0
  * H3   | purchasers with a round_up deposit, post-ramp | ROUNDUP_ADOPT           | 0.35     | 0.345
- * H4   | wallet / other approval, outage vs ±7 days    | 1 − OUTAGE_FAIL         | 0.35     | 0.356 (33.8% vs 94.8% wallet)
+ * H4   | wallet / other approval, outage vs ±7 days    | 1 − OUTAGE_FAIL         | 0.35     | 0.355 (33.9% vs 94.3% wallet)
  * H4   | warehouse tokenization_error_rate, outage     | OUTAGE_FAIL             | 0.65     | 0.660
  * H5   | spend per signup comparison / paid social     | 115 / 38                | 3.03     | 3.087 ($116.12 vs $37.61)
  * H5   | DD-in-14d per signup comparison / paid social | 0.62 / 0.18 (floor 2.22)| 3.44     | 4.199 (43.4% vs 10.3%, STRONG)
  * H6   | per-biller AutoPay Autopay On / Control       | AUTOPAY_DEFAULT_MULT    | 1.60     | 1.651 (56.9% vs 34.5%)
  * H6   | Autopay On share of exposed members           | equal 2-arm hash        | 0.50     | 0.490
- * H7   | late share, paid by hand                      | LATE_SHARE.manual       | 0.18     | 0.169
+ * H7   | late share, paid by hand                      | LATE_SHARE.manual       | 0.18     | 0.171
  * H7   | late share, AutoPay                           | LATE_SHARE.autopay      | 0.03     | 0.029
- * H8   | manual deposits per visit Plus+Premium, boost | BOOST_DEPOSIT_MULT      | 1.50     | 1.491
- * H8   | same, Free (control)                          | unchanged               | 1.00     | 0.981
- * H9   | median resolution Premium / Free+Plus         | SUPPORT_PLAN_MULT       | 0.40     | 0.399 (6.7 h vs 16.8 h)
- * H10  | avg manual deposit 3+ budgets / 0-2           | BUDGET_SAVE_MULT        | 1.60     | 1.598 ($163.70 vs $102.44)
- * H10  | avg manual deposit 2 budgets / 0-1 (control)  | flat below threshold    | 1.00     | 0.989
+ * H8   | manual deposits per visit Plus+Premium, boost | BOOST_DEPOSIT_MULT      | 1.50     | 1.497
+ * H8   | same, Free (control)                          | unchanged               | 1.00     | 0.982
+ * H9   | median resolution Premium / Free+Plus         | SUPPORT_PLAN_MULT       | 0.40     | 0.396 (6.5 h vs 16.4 h)
+ * H10  | avg manual deposit 3+ budgets / 0-2           | BUDGET_SAVE_MULT        | 1.60     | 1.582 ($163.42 vs $103.30)
+ * H10  | avg manual deposit 2 budgets / 0-1 (control)  | flat below threshold    | 1.00     | 1.001
  * ═════════════════════════════════════════════════════════════════════════
  *
  * H5's direct-deposit read is a knob floor: paid social has about 80
@@ -279,7 +283,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * knob ±10% band. Honest nulls the eval checks: Round-Ups did not change
  * manual Pocket deposits (0.97x, z ≈ −1.0), card spending on the Federal
  * Reserve holidays matched the same weekdays (|z| < 1), and members hit by the
- * wallet outage did not cut card use afterwards (z ≈ +1.0).
+ * wallet outage did not cut card use afterwards (z ≈ +0.4).
  */
 
 // ── SCALE ──
@@ -341,8 +345,8 @@ const UNFUNDED_KEEP = [0.2, 0.5];
 
 // H2 direct deposit in the first 14 days → retention
 const DD_WINDOW_DAYS = 14;
-const DARK_SHARE = 0.5;            // funded new members without DD in 14 days who go dark after day 21
-const DARK_AFTER_DAYS = 21;
+const DARK_SHARE = 0.5;            // funded new members without DD in 14 days who go dark
+const DARK_DAYS = [16, 29.5];      // each dark member's last day: salted uniform, all before the day-30 bracket
 const LATE_DD_SHARE = 0.12;        // non-adopters who set up DD on day 15-60 (if still active)
 const LATE_DD_DAYS = [15, 60];
 const LAPSE_SHARE = 0.35;          // organic lapse, every funded new member
@@ -417,6 +421,8 @@ const SUPPORT_PLAN_MULT = { premium: 0.4, plus: 1, free: 1 };
 const RESOLVE_MEDIAN_H = 20;
 const CHANNEL_SPEED = { chat: 0.7, phone: 0.5, email: 1.6, in_app: 1.0 };
 const TICKET_KEEP = 0.7;           // share of engine support units kept (realistic contact rate)
+const CARRYOVER_TICKET_SHARE = 0.003; // established members with a ticket still open on June 4 (≈ open-ticket backlog)
+const CARRYOVER_ISSUES = ["card", "card", "transfer", "transfer", "account_access", "fees", "direct_deposit", "dispute"];
 
 // H10 budget magic number
 const BUDGET_MAGIC = 3;
@@ -735,7 +741,7 @@ function handleEverything(events, meta) {
 		}
 		const ddInWindow = ddMs !== null && ddMs < openMs + DD_WINDOW_DAYS * DAY_MS;
 		const cuts = [];
-		if (!ddInWindow && salt(uid, "dark") < DARK_SHARE) cuts.push(openMs + DARK_AFTER_DAYS * DAY_MS);
+		if (!ddInWindow && salt(uid, "dark") < DARK_SHARE) cuts.push(openMs + between(salt(uid, "dark-day"), DARK_DAYS) * DAY_MS);
 		if (salt(uid, "lapse") < LAPSE_SHARE) cuts.push(openMs + between(salt(uid, "lapse-day"), LAPSE_DAYS) * DAY_MS);
 		if (cuts.length) cut = Math.min(cut, ...cuts);
 		if (ddMs !== null && (ddMs >= cut || ddMs > END_MS)) ddMs = null;
@@ -982,6 +988,23 @@ function handleEverything(events, meta) {
 			if (rt > END_MS) drop.add(r);
 		}
 		if (drop.size) events = events.filter((e) => !drop.has(e));
+		// warm start: a ticket opened before June 4 and still open then resolves
+		// in the first days (salted, so the rest of the stream is unchanged)
+		if (!isNew && salt(uid, "carry-tkt") < CARRYOVER_TICKET_SHARE) {
+			const chs = Object.keys(CHANNEL_SPEED);
+			const ch = chs[Math.floor(salt(uid, "carry-ch") * chs.length)];
+			// ≈ standard normal; a ticket still open on a given day is length-biased: lognormal median × e^(σ²)
+			const z = (salt(uid, "carry-z1") + salt(uid, "carry-z2") - 1) * 2.45;
+			const gapMs = Math.max(HOUR_MS, RESOLVE_MEDIAN_H * HOUR_MS * Math.exp(0.81 + 0.9 * z) * CHANNEL_SPEED[ch] * (SUPPORT_PLAN_MULT[planAt(START_MS)] ?? 1));
+			const rt = START_MS + gapMs * (0.05 + 0.95 * salt(uid, "carry-left"));
+			if (rt <= END_MS) {
+				events.push(spawnEvent(anyTemplate, "support ticket resolved", rt, {
+					ticket_id: `tkt_${Math.floor(salt(uid, "carry-id") * 1e12).toString(36)}`,
+					issue_type: CARRYOVER_ISSUES[Math.floor(salt(uid, "carry-issue") * CARRYOVER_ISSUES.length)],
+					contact_channel: ch, resolution_hours: round1(gapMs / HOUR_MS),
+				}, true));
+			}
+		}
 	}
 
 	// ── H8: Summer Saver Boost — Plus/Premium add more manual Pocket deposits ──
@@ -1510,7 +1533,7 @@ export const stories = [
 		id: "H2-direct-deposit-retention",
 		hook: "H2",
 		archetype: "retention-divergence",
-		narrative: `Funded new members who do not set up direct deposit within ${DD_WINDOW_DAYS} days of opening their account: ${DARK_SHARE * 100}% of them go dark after day ${DARK_AFTER_DAYS}. Whether a member sets up direct deposit is drawn per member (rate by acquisition channel, H5), independently of how active the member is, and every new member also faces the same organic lapse (${LAPSE_SHARE * 100}% stop on a uniform day ${LAPSE_DAYS[0]}-${LAPSE_DAYS[1]}). Day-${RETENTION_DAY} retention (app opened in days ${RETENTION_DAY}-${RETENTION_DAY + 6} after account opened; members who opened at least ${RETENTION_DAY + 7} days before the window end) of direct-deposit-in-${DD_WINDOW_DAYS}-days members is therefore 1/(1−${DARK_SHARE}) = ${1 / (1 - DARK_SHARE)}x the rest. Mixpanel: Funnels account opened → direct deposit set up (${DD_WINDOW_DAYS}-day window) among members who did account funded; save converted and not-converted users as cohorts; Retention account opened → app opened, custom bracket day ${RETENTION_DAY}-${RETENTION_DAY + 6}, breakdown by those cohorts.`,
+		narrative: `Funded new members who do not set up direct deposit within ${DD_WINDOW_DAYS} days of opening their account: ${DARK_SHARE * 100}% of them go dark, each on a salted day spread uniformly from day ${DARK_DAYS[0]} to day ${Math.floor(DARK_DAYS[1])} (a gradual slide, all before the day-${RETENTION_DAY} bracket). Whether a member sets up direct deposit is drawn per member (rate by acquisition channel, H5), independently of how active the member is, and every new member also faces the same organic lapse (${LAPSE_SHARE * 100}% stop on a uniform day ${LAPSE_DAYS[0]}-${LAPSE_DAYS[1]}). Day-${RETENTION_DAY} retention (app opened in days ${RETENTION_DAY}-${RETENTION_DAY + 6} after account opened; members who opened at least ${RETENTION_DAY + 7} days before the window end) of direct-deposit-in-${DD_WINDOW_DAYS}-days members is therefore 1/(1−${DARK_SHARE}) = ${1 / (1 - DARK_SHARE)}x the rest. Mixpanel: Funnels account opened → direct deposit set up (${DD_WINDOW_DAYS}-day window) among members who did account funded; save converted and not-converted users as cohorts; Retention account opened → app opened, custom bracket day ${RETENTION_DAY}-${RETENTION_DAY + 6}, breakdown by those cohorts.`,
 		mixpanelReport: { type: "Funnels → cohorts → Retention", cohortFunnel: `account opened → direct deposit set up, ${DD_WINDOW_DAYS}-day window, filter did account funded`, birth: "account opened", return: "app opened", brackets: `custom: day ${RETENTION_DAY}-${RETENTION_DAY + 6}` },
 		assertions: [
 			{
@@ -1606,7 +1629,7 @@ FROM ${WH("card_authorizations_daily")}`,
 		id: "H5-paid-channel-economics",
 		hook: "H5",
 		archetype: "attribution-bias",
-		narrative: `Comparison-site signups cost ${(CPL_USD.comparison_sites / CPL_USD.paid_social).toFixed(2)}x as much as paid-social signups over the window (warehouse paid_acquisition_daily bills a paced daily budget per channel = cost per signup × expected signups per day, weekday shape above a ${SPEND_FLAT_SHARE * 100}% flat floor, seeded ±${SPEND_NOISE * 100}% noise, never zero: $${CPL_USD.comparison_sites} vs $${CPL_USD.paid_social} per signup at the window level), but funded comparison-site members set up direct deposit within ${DD_WINDOW_DAYS} days ${(DD_ADOPT.comparison_sites / DD_ADOPT.paid_social).toFixed(2)}x as often (${DD_ADOPT.comparison_sites} vs ${DD_ADOPT.paid_social}; channel is drawn independently of segment and credit file, so per signup the ratio is the same). Spend per signup needs the warehouse join. The direct-deposit read is the Mixpanel funnel account opened → direct deposit set up with a ${DD_WINDOW_DAYS}-day window for signups through ${D(DD_COHORT_END)}; paid-social direct-deposit counts are about a hundred, so it uses the knob as target with a knob-derived floor.`,
+		narrative: `Comparison-site signups cost ${(CPL_USD.comparison_sites / CPL_USD.paid_social).toFixed(2)}x as much as paid-social signups over the window (warehouse paid_acquisition_daily bills automated bidding against a cost-per-signup target: each channel-day's spend = target cost per signup × the channel's average daily signups over the previous ${SPEND_LOOKBACK_DAYS} days (the media plan fills the first week), weekday shape above a ${SPEND_FLAT_SHARE * 100}% flat floor, seeded ±${SPEND_NOISE * 100}% noise, never zero, so the window cost per signup holds at the target: $${CPL_USD.comparison_sites} vs $${CPL_USD.paid_social} per signup at the window level), but funded comparison-site members set up direct deposit within ${DD_WINDOW_DAYS} days ${(DD_ADOPT.comparison_sites / DD_ADOPT.paid_social).toFixed(2)}x as often (${DD_ADOPT.comparison_sites} vs ${DD_ADOPT.paid_social}; channel is drawn independently of segment and credit file, so per signup the ratio is the same). Spend per signup needs the warehouse join. The direct-deposit read is the Mixpanel funnel account opened → direct deposit set up with a ${DD_WINDOW_DAYS}-day window for signups through ${D(DD_COHORT_END)}; paid-social direct-deposit counts are about a hundred, so it uses the knob as target with a knob-derived floor.`,
 		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account opened", breakdown: "acquisition_channel", join: "paid_acquisition_daily.spend_usd", funnel: `account opened → direct deposit set up, ${DD_WINDOW_DAYS}-day window, breakdown acquisition_channel` },
 		assertions: [
 			{
@@ -1640,7 +1663,7 @@ FROM s LEFT JOIN d ON d.uid = s.uid GROUP BY 1`,
 		id: "H6-autopay-default-experiment",
 		hook: "H6",
 		archetype: "experiment-lift",
-		narrative: `The "${AUTOPAY_EXPERIMENT}" test starts ${D(AUTOPAY_TEST_START)} and splits members who add a biller 50/50 (sticky hash). "${AUTOPAY_VARIANT}" pre-selects AutoPay on the add-biller screen and multiplies the share of new billers that get AutoPay by ${AUTOPAY_DEFAULT_MULT} (${AUTOPAY_CONV}% → ${Math.round(AUTOPAY_CONV * AUTOPAY_DEFAULT_MULT)}%). A biller and its AutoPay event share a biller_id, so a totals funnel holding biller_id constant measures per-biller adoption.`,
+		narrative: `The "${AUTOPAY_EXPERIMENT}" test starts ${D(AUTOPAY_TEST_START)} and splits members who add a biller 50/50 (sticky hash). "${AUTOPAY_VARIANT}" pre-selects AutoPay on the add-biller screen and multiplies the share of new billers that get AutoPay by ${AUTOPAY_DEFAULT_MULT} (${AUTOPAY_CONV}% → ${Math.round(AUTOPAY_CONV * AUTOPAY_DEFAULT_MULT)}%). A biller and its AutoPay event share a biller_id, so a totals funnel holding biller_id constant measures per-biller adoption. Set the date range to ${D(AUTOPAY_TEST_START)} through ${D(DATASET_END)}: billers added before the test carry the member's later variant on the profile and dilute the read.`,
 		mixpanelReport: { type: "Funnels", steps: ["biller added", "autopay enabled"], counting: "totals", holdPropertyConstant: "biller_id", breakdown: `user property "${EXP_KEY}"`, window: "1 day" },
 		assertions: [
 			{
@@ -1734,7 +1757,7 @@ SELECT grp, count(DISTINCT uid) AS user_count, count(*) AS tickets, median(ttc) 
 		id: "H10-budget-magic-number",
 		hook: "H10",
 		archetype: "cohort-prop-scale",
-		narrative: `Members who create ${BUDGET_MAGIC} or more budgets in the window put ${BUDGET_SAVE_MULT}x as much into each manual Pocket deposit as members with fewer. It is a step at ${BUDGET_MAGIC}, flat on either side: members with ${BUDGET_MAGIC - 1} budgets deposit the same as members with 0-1. The base deposit size does not depend on segment or activity, so the ratio of average deposit amounts reads the knob even though heavier users create more budgets. Mixpanel: Insights, savings deposit filtered to source = manual, average amount, breakdown by cohort bins on the count of budget created in the window.`,
+		narrative: `Members who create ${BUDGET_MAGIC} or more budgets in the window put ${BUDGET_SAVE_MULT}x as much into each manual Pocket deposit as members with fewer. It is a step at ${BUDGET_MAGIC}, flat on either side: members with ${BUDGET_MAGIC - 1} budgets deposit the same as members with 0-1. The base deposit size does not depend on segment or activity, so the ratio of average deposit amounts reads the knob even though heavier users create more budgets. It is a member trait, not a change at the moment of the third budget: a planner deposits more across the whole window, including before the third budget, so a before/after read around the threshold shows no step. Mixpanel: Insights, savings deposit filtered to source = manual, average amount, breakdown by cohort bins on the count of budget created in the window.`,
 		mixpanelReport: { type: "Insights", event: "savings deposit (source = manual)", measure: "average amount", breakdown: "cohorts: did budget created ≥3 / exactly 2 / 0-1 times" },
 		assertions: [
 			{

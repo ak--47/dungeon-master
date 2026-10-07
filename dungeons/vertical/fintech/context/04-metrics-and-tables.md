@@ -12,7 +12,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 | Direct deposit adoption | Share of new accounts (or of funded new accounts; say which) with `direct deposit set up` within 14 days of `account opened`. Only count accounts opened at least 14 days before the end of the data. |
 | Primary-account members | Members with direct deposit active (profile `direct_deposit_active`), or members with a `direct deposit received` in the period. |
 | Active member | A member with at least one `app opened` in the period. Server events (deposits posting, AutoPay payments, Round-Up sweeps, repayments, ticket resolutions) do not make a member active. |
-| Day-N retention | Of new members who opened their account on day 0, the share with an `app opened` in days N to N+6 after opening. Only count members who opened at least N+7 days before the end of the data. In Mixpanel Retention this needs custom brackets (for example day 30-36). |
+| Day-N retention | Of new members who opened their account on day 0, the share with an `app opened` in days N to N+6 after opening. Only count members who opened at least N+7 days before the end of the data. In Mixpanel Retention this needs custom brackets (for example day 7-13). |
 | CAC (paid) | Spend for a paid channel divided by new accounts Mixpanel recorded from that channel (`account opened` with that `acquisition_channel`) over the same days. Finance uses Mixpanel accounts, not the installs the ad platforms report. |
 | Cost per direct-deposit customer | Spend for a paid channel over a signup period divided by that period's new accounts from the channel that set up direct deposit within 14 days. |
 | Card approval rate | Share of `card transaction` events with `authorization_status = approved`. |
@@ -84,5 +84,5 @@ Caveats: `deposits_usd` includes ACH pulls into Pockets that members set up from
 - Members are most active on Fridays and least active on Sundays, and active hours run from US morning to late US evening (roughly 11:00 to 04:00 UTC). Compare whole weeks or matching weekdays.
 - Server events follow the banking calendar: paychecks and AutoPay payments post on business days only, and Round-Up sweeps post the morning after the purchases. Count them by the day they posted.
 - New-member funnels, conversion, and retention depend on signup date: members who joined late in the window have had less time to act. Compare cohorts that joined in the same weeks and exclude cohorts too young for the window you measure.
-- Members add several billers and open several tickets. Per-biller and per-ticket questions need `biller_id` or `ticket_id` held constant; unique-member funnels hide most of the difference.
+- Members add several billers and open several tickets. Per-biller and per-ticket questions need `biller_id` or `ticket_id` held constant; unique-member funnels count members, not billers or tickets.
 - Use `plan_tier` on the event, not the profile's current plan, when a question depends on the plan at the time.
