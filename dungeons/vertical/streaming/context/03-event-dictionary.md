@@ -10,7 +10,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 | `user_id` | The household's account ID. Present on every event. |
 | `device_id` | The screen the event came from. Present on events sent by an app or browser. Absent on `plan selected` and `trial started` (billing service, during signup) and on `trial converted` and `subscription renewed` (server-side billing). |
 | `insert_id` | Unique event ID used for de-duplication. |
-| `session_id` | The app session the event belongs to (diagnostic; Mixpanel computes its own sessions). |
+| `session_id` | The app session the event belongs to. A session ends after 135 minutes without an event (the player sends nothing while a title plays, so the timeout is longer than a feature film) and at midnight UTC, so a play that ends after midnight UTC completes in the next session. Diagnostic; Mixpanel computes its own sessions from the project's session settings. |
 | `plan` | The household's plan **at the moment of the event**: `basic_ads`, `standard`, `premium`, or `none`. It is `none` on `account created` (no plan chosen yet) and after a household's access ends (trial ended without converting, or subscription ended). On `subscription cancelled` it is the plan being cancelled; on `plan changed` it is the plan before the change. |
 | `platform` | `tv` (smart TV or streaming box), `mobile` (phone), `tablet`, or `web` (browser), from the device. `server` on server-side billing events. Fixed per `device_id`. |
 | `device_family` | The kind of device: `Roku`, `Fire TV`, `Samsung TV`, `LG TV`, `Apple TV`, `Google TV` (tv); `iPhone`, `Android phone` (mobile); `iPad`, `Android tablet`, `Fire tablet` (tablet); `Chrome`, `Safari`, `Edge`, `Firefox` (web); `server` on server-side billing events. Fixed per `device_id`. |
@@ -91,7 +91,6 @@ Events that involve a title carry its attributes so viewing can be broken down w
 | `country` | `US` or `CA`. |
 | `member_since` | Date the account was created (YYYY-MM-DD). |
 | `Experiment: Smart Start` | The household's arm in the Smart Start test (`Control` or `Smart Start`). Only households that created their account on or after 2026-07-08 and started a trial have it. |
-| `_persona` | Engagement segment from the CRM's lifecycle model (`binge_watcher`, `regular_viewer`, `light_viewer`). |
 
 ## Funnels the business tracks
 

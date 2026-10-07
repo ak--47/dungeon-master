@@ -21,7 +21,7 @@ This folder is the internal analytics wiki for **Reelhouse**, a subscription str
 
 - **Events** (the Mixpanel event stream) record what households do in the apps, plus a few server-side billing events. Each event has a timestamp, the household's identity, and flat properties. The household's plan at the time, the platform, and the device family are on every event (`plan`, `platform`, `device_family`). Title attributes (name, type, genre, Original or licensed, rating, season, episode) are copied onto the events that involve a title, so you can break down viewing without a lookup table.
 - **Playback** is tracked as a start and, when the viewer reaches the end, a completion. Not every start completes. A start that fails sends a `playback error` instead.
-- **User profiles** hold one row per household with its current attributes: plan, subscription status, acquisition channel, number of viewer profiles, whether it has a kids profile, country, member-since date, experiment enrollment, and an engagement segment.
+- **User profiles** hold one row per household with its current attributes: plan, subscription status, acquisition channel, number of viewer profiles, whether it has a kids profile, country, member-since date, and experiment enrollment.
 - **Warehouse tables** are daily business facts that are not in the event stream: paid marketing spend by channel, streaming quality by platform, and new paid subscriptions, list prices, and bookings by plan. They join to events on the UTC date and a shared dimension (`acquisition_channel`, `platform`, or `plan`).
 - There are no group profiles and no slowly changing dimension tables in this project.
 

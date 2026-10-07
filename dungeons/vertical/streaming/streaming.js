@@ -5,6 +5,7 @@ dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "@ak--47/dungeon-master/utils";
 import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
+import Chance from "chance";
 /** @typedef  {import("../../../types").Dungeon} Config */
 
 // ── OVERVIEW ──
@@ -123,6 +124,15 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   session, playback follows the title the household opened; sittings
  *   continue a series episode by episode. Kids-profile households watch kids
  *   titles on about a quarter of sessions (profile_type = kids).
+ * - Sessions: identity.sessionTimeout is 135 minutes. The player sends no
+ *   events while a title plays, and the engine relabels session_id from
+ *   timestamps after the everything hook, so a 30-minute timeout split about
+ *   half of all plays from their own completion. 135 minutes covers the
+ *   longest title (127 min); sessions still end at midnight UTC, as in
+ *   Mixpanel.
+ * - Run state: seqDraw positions, plan choices, borrowed templates, and the
+ *   hook chance reset on the first user hook of each run (new meta.config),
+ *   so a second run in the same process gives the same data as a fresh one.
  * - Warehouse drift: playback_qos_daily adds plays from app versions that do
  *   not report to analytics (0-16% by day) plus preview autoplays and retries; subscription_billing_daily adds
  *   app-store purchases Mixpanel never received and same-day refunds;
@@ -145,9 +155,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   and watch 1-8 episodes in sittings of 1-4. Season 2 plays are added
  *   viewing (clones), so daily plays rise in late July. No season 2 play
  *   exists before the premiere.
- * MIXPANEL: Insights, playback started, Uniques, filter title_name =
- *   Saltmarsh and season_number = 2 / all playback started, Jul 17-30,
- *   excluding a cohort of households with account created on or after
+ * MIXPANEL: Insights, date range Jul 17-30, chart type Bar or Metric (so
+ *   Uniques counts each household once over the range; a daily line shows
+ *   daily uniques). A = playback started, Uniques, filter title_name =
+ *   Saltmarsh and season_number = 2; B = playback started, Uniques; formula
+ *   A / B; exclude a cohort of households with account created on or after
  *   2026-07-17 (equivalently member_since before 2026-07-17).
  * REAL WORLD: a flagship original drives a viewing spike among subscribers.
  *
@@ -266,11 +278,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-streaming, 2026-10-07, full
- * fidelity, 10,000 households, 986,315 events)
+ * fidelity, 10,000 households, 987,686 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation               | Expected | Measured
  * -----|------------------------------------------------|--------------------------|----------|---------
- * H1   | S2 viewers / active members, Jul 17-30         | SALTMARSH_REACH          | 0.35     | 0.351 (1,609 / 4,587)
+ * H1   | S2 viewers / active members, Jul 17-30         | SALTMARSH_REACH          | 0.35     | 0.351 (1,609 / 4,581)
  * H1   | season 2 plays before the premiere             | exact purity             | 0        | 0
  * H2   | accounts/day, Jul 17 - Aug 6 / other days      | PREMIERE_LIFT            | 1.559    | 1.610 (59.4 vs 36.9)
  * H2   | premiere trials with S2 start within a day     | TOURIST_S2_SHARE (not asserted) | 0.80 | 0.799
@@ -281,7 +293,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H3   | early completions, Smart Start / Control       | not engineered           | 1.00     | 0.997 (2.835 vs 2.844)
  * H4   | conversion, 3+ early completions / 0-2         | k-weighted CONV_BY_EARLY | 1.804    | 1.785 (56.6% vs 31.7%)
  * H4   | conversion, 5+ / 3-4 early completions         | plateau                  | 1.017    | 0.989 (56.3% vs 56.9%)
- * H5   | TV/other completion per start, incident / ±14 d| (1-0.5)/(1-0.02)         | 0.510    | 0.513 (TV 39.6% vs 75.3%)
+ * H5   | TV/other completion per start, incident / ±14 d| (1-0.5)/(1-0.02)         | 0.510    | 0.515 (TV 39.7% vs 75.5%)
  * H5   | warehouse tv failure rate on degraded days     | INCIDENT_FAIL            | 0.50     | 0.497
  * H6   | Standard share of plan selections, after/before| 1 - PRICE_SWITCH_SHARE   | 0.65     | 0.657 (49.8% → 32.7%)
  * H6   | Basic with Ads share, after/before             | (30 + 0.35 x 50) / 30    | 1.583    | 1.571 (29.9% → 47.0%)
@@ -291,8 +303,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H7   | spend per paid sub, paid_social / paid_search  | (21 / 0.55) / 32 (not asserted) | 1.193 | 1.168 ($100.41 vs $85.98)
  * H8   | renewal-time churn, 2+ profiles / 1 profile    | MULTI_PROFILE_HAZARD_MULT (≤, floor 0.75) | 0.50 | 0.530 (3.06% vs 5.78%)
  * H9   | open rate, new_episode / trending_now          | 0.146 / 0.049            | 2.980    | 2.974 (14.6% vs 4.91%)
- * H9   | open rate, because_you_watched / trending_now  | 0.087 / 0.049            | 1.776    | 1.775 (8.71% vs 4.91%)
- * H10  | median search → play, tv / other               | TV_SEARCH_TTC_MULT       | 2.20     | 2.202 (165.3 s vs 75.1 s)
+ * H9   | open rate, because_you_watched / trending_now  | 0.087 / 0.049            | 1.776    | 1.776 (8.71% vs 4.91%)
+ * H10  | median search → play, tv / other               | TV_SEARCH_TTC_MULT       | 2.20     | 2.196 (165.7 s vs 75.4 s)
  * ═════════════════════════════════════════════════════════════════════════
  *
  * Noise notes: the low-discrepancy draws (DESIGN NOTES) remove binomial
@@ -320,7 +332,9 @@ const DATASET_END = "2026-10-01T23:59:59Z"; // 120 days
 const EVENTS_PER_DAY = 1.2;
 const token = process.env.MP_TOKEN || "your-mixpanel-token";
 
-const chance = u.initChance(SEED);
+// Module chance for hook draws. resetRunState() replaces it with a fresh
+// seeded instance at the start of every run (see RUN STATE below).
+let chance = u.initChance(SEED);
 
 // ── TIMELINE (shared by hooks, stories, SQL, warehouse columns, guides) ──
 const SMART_START_LAUNCH = "2026-07-08T00:00:00Z";  // Smart Start onboarding test starts for new trials
@@ -339,6 +353,10 @@ const MIN_MS = 60_000;
 const BEGIN_MS = ms(DATASET_START);
 const END_MS = ms(DATASET_END);
 const WINDOW_DAYS = 120;
+// The player sends no events while a title plays, so a 30-minute inactivity
+// timeout would split a play from its own completion. 135 minutes covers the
+// longest title (127 min). Sessions still end at midnight UTC.
+const SESSION_TIMEOUT_MIN = 135;
 
 // ── WEEKLY AND DAILY RHYTHM (soup) ──
 // Sun..Sat. Streaming peaks on weekend nights.
@@ -622,7 +640,22 @@ function choosePlan(uid, t) {
 	return PLAN_CHOICE.get(uid);
 }
 
+// ── RUN STATE ──
+// SEQ_POS, PLAN_CHOICE, GLOBAL_TEMPLATES, and the hook chance change during a
+// run. The engine deep-clones the config for every run, so a new meta.config
+// on the first user hook marks a new run: reset the state there, and a second
+// run in the same process gives the same data as the first.
+let RUN_CONFIG = null;
+function resetRunState(runConfig) {
+	RUN_CONFIG = runConfig;
+	chance = new Chance(SEED);
+	SEQ_POS.clear();
+	PLAN_CHOICE.clear();
+	for (const key of Object.keys(GLOBAL_TEMPLATES)) delete GLOBAL_TEMPLATES[key];
+}
+
 function handleUserHook(profile, meta) {
+	if (meta.config !== RUN_CONFIG) resetRunState(meta.config);
 	const uid = profile.distinct_id;
 	profile.profile_count = Number(pickWeighted(PROFILE_COUNT_WEIGHTS, salt(uid, "profiles")));
 	profile.has_kids_profile = profile.profile_count >= 2 && salt(uid, "kids") < 0.45;
@@ -1291,7 +1324,7 @@ const config = {
 		hasAdSpend: false,
 		hasAvatar: false,
 	},
-	identity: { avgDevicePerUser: 2.2 },
+	identity: { avgDevicePerUser: 2.2, sessionTimeout: SESSION_TIMEOUT_MIN },
 
 	events: [
 		{
@@ -1732,7 +1765,7 @@ export const stories = [
 		hook: "H1",
 		archetype: "temporal-inflection",
 		narrative: `All ${S2_EPISODES} episodes of Saltmarsh season 2 (Reelhouse's flagship original) drop ${D(SALTMARSH_PREMIERE)}. ${SALTMARSH_REACH * 100}% of households that joined before the premiere and played anything ${D(SALTMARSH_PREMIERE)} to ${REACH_LAST} start season 2 in that fortnight (most in the first days), watching 1-${S2_EPISODES} episodes in sittings of 1-4; the plays are added viewing, so daily plays rise in late July. A new_season push goes out ${TS(SALTMARSH_PUSH)} UTC. Read: households with a season 2 play over households with any play, ${D(SALTMARSH_PREMIERE)} to ${REACH_LAST}, members who joined before the premiere. No season 2 play exists before the premiere.`,
-		mixpanelReport: { type: "Insights", event: "playback started", measure: "Uniques", filter: "title_name = Saltmarsh AND season_number = 2", denominator: "playback started (Uniques)", dateRange: `${D(SALTMARSH_PREMIERE)} to ${REACH_LAST}`, cohort: `exclude households with account created on or after ${D(SALTMARSH_PREMIERE)} (member_since before ${D(SALTMARSH_PREMIERE)})` },
+		mixpanelReport: { type: "Insights", event: "playback started", measure: "Uniques", chart: "Bar or Metric (Uniques over the whole date range, not daily uniques)", filter: "title_name = Saltmarsh AND season_number = 2", denominator: "playback started (Uniques)", formula: "A / B", dateRange: `${D(SALTMARSH_PREMIERE)} to ${REACH_LAST}`, cohort: `exclude households with account created on or after ${D(SALTMARSH_PREMIERE)} (member_since before ${D(SALTMARSH_PREMIERE)})` },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H1_SQL },
@@ -1812,7 +1845,7 @@ FROM ev WHERE event = '$experiment_started'`,
 	{
 		id: "H4-three-episodes-in-three-days",
 		hook: "H4",
-		archetype: "frequency-sweet-spot",
+		archetype: "bespoke", // magic-number threshold: a step at 3, flat above (the closed enum has no threshold shape)
 		narrative: `Trials that finish three episodes or films in their first ${EARLY_WINDOW_H} hours convert far more often. Each trial's playback completed count in the first ${EARLY_WINDOW_H} h after trial started follows a smooth distribution (0-10), and the conversion base by that count is ${CONV_BY_EARLY.map((c, i) => `${i}${i === CONV_BY_EARLY.length - 1 ? "+" : ""} → ${Math.round(c * 100)}%`).join(", ")}: a jump at 3, flat above it. Read: trial conversion within ${CONV_WINDOW_DAYS} days for 3+ vs 0-2 early completions (target ${H4_POOLED}, the k-weighted average of the base) and for 5+ vs 3-4 (plateau, target ${H4_PLATEAU}). Channel, premiere, and test multipliers are independent of the count, so they cancel in the ratios.`,
 		mixpanelReport: { type: "Funnels", steps: ["trial started", "playback completed", "playback completed", "playback completed"], window: `${EARLY_WINDOW_H / 24} days`, then: "create cohort from step 4; Funnels trial started → trial converted (8-day window) breakdown by that cohort" },
 		assertions: [
@@ -1918,7 +1951,7 @@ FROM ${WH("playback_qos_daily")}`,
 	{
 		id: "H9-personalized-pushes",
 		hook: "H9",
-		archetype: "cohort-prop-scale",
+		archetype: "funnel-conversion-by-segment", // segment difference: notification received → opened rate by campaign_type
 		narrative: `Push open rate depends on the campaign: new_episode (a new episode of a series the household is watching) ${OPEN_RATE.new_episode * 100}%, because_you_watched ${OPEN_RATE.because_you_watched * 100}%, trending_now ${OPEN_RATE.trending_now * 100}%; win_back pushes to lapsed households ${OPEN_RATE.win_back * 100}%, and the one-off new_season push for Saltmarsh on ${D(SALTMARSH_PUSH)} ${OPEN_RATE.new_season * 100}%. About half of the opens lead to a play of the pushed title. Read: notification opened / notification received (totals) by campaign_type, against trending_now.`,
 		mixpanelReport: { type: "Insights", events: ["notification opened", "notification received"], formula: "A / B", measure: "Totals", breakdown: "campaign_type" },
 		assertions: [

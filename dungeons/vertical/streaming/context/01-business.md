@@ -42,7 +42,6 @@ Reelhouse measures itself by paying households and by how much of what they star
 - **Country** (`country`): `US` or `CA`. About 84% of households are in the US.
 - **Viewer profiles** (`profile_count`, 1-5): the number of viewer profiles on the account. About a third of households have a single profile.
 - **Kids profile** (`has_kids_profile`): whether the account has a kids profile.
-- **Engagement segment** (`_persona`): a label from the CRM's lifecycle model: `binge_watcher`, `regular_viewer`, or `light_viewer`.
 - **Established vs new households.** About half of the households active in the window joined before June 4. In a typical week a little over 250 households create an account.
 
 ## How households find us
@@ -64,7 +63,7 @@ The CRM team sends push notifications to the Reelhouse app on phones and tablets
 - `new_episode` — a new or next episode of a series the household is watching.
 - `because_you_watched` — a recommendation based on what the household watched.
 - `trending_now` — a title that is popular on Reelhouse right now.
-- `win_back` — an invitation to come back, sent to households whose subscription has ended.
+- `win_back` — an invitation to come back, sent to households whose subscription has ended. In this period it is a content reminder only: a lapsed account cannot resubscribe in the app yet (the in-app resubscribe flow and win-back offers are planned for after September).
 - `new_season` — a one-off announcement of a major season launch.
 
 ## Goals for the period (Q3 2026)
