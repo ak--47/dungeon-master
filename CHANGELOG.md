@@ -292,7 +292,7 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   precedes: device-only before the `isAuthEvent` stitch. It was forced to carry
   both `user_id` and `device_id`, and the post-`everything` identity pass
   skipped it, so users who never authenticated had a `user_id` on the exposure
-  alone. Repro, 1,000 born users with a 50% first funnel: 238 unauthed users
+  alone. Contract change approved by the owner (reverses the 1.8.1 "both IDs on the synthetic experiment marker before auth" contract). Repro, 1,000 born users with a 50% first funnel: 238 unauthed users
   showed a `user_id` (on 238 exposures); now 0. Authed users' exposures merge
   into the user at the stitch through ID merge. Output shift: identity on
   first-funnel exposures for born users; no RNG draws change.
