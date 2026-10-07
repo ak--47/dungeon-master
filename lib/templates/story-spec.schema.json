@@ -193,7 +193,7 @@
 				},
 				"floor": {
 					"type": "number",
-					"description": "Optional STRONG bound — the minimum acceptable effect. Omitted → target doubles as the floor."
+					"description": "Optional STRONG bound — the minimum acceptable effect. Omitted → target doubles as the floor. With op 'between' the floor sits on the weak side of the band (omitted → the band edge on the weak side); a value past the far edge grades STRONG. On a single-ref metric the floor gives the effect direction."
 				}
 			}
 		}

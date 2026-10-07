@@ -2116,7 +2116,13 @@ export interface StoryExpect {
     op: ">=" | "<=" | ">" | "<" | "between";
     /** The designed value — derive from the same exported knob constants the hook uses. `[lo, hi]` only with op `'between'`. */
     target: number | [number, number];
-    /** Optional STRONG bound. Omitted → `target` doubles as the floor. */
+    /**
+     * Optional STRONG bound. Omitted → `target` doubles as the floor. With op
+     * `'between'` (1.9.0) the floor sits on the weak side of the band; omitted →
+     * the band edge on the weak side. A value past the band's far edge (a stronger
+     * effect than designed) passes it and grades STRONG. On a single-ref metric
+     * the floor gives the effect direction; without one, outside the band is NONE.
+     */
     floor?: number;
 }
 

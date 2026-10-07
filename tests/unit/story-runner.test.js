@@ -23,6 +23,7 @@ import {
 	validateStories,
 	storiesToChecks,
 	evaluateStories,
+	verdictFor,
 } from '../../lib/verify/story-runner.js';
 
 const ROOT = path.resolve(import.meta.dirname, '../..');
@@ -152,6 +153,32 @@ describe('evaluateAssertion — verdict bands (hand-computed)', () => {
 		expect(evaluateAssertion(ROWS, assertion({ metric: RATIO, op: 'between', target: [2.5, 3.5] })).verdict).toBe('NAILED');
 		expect(evaluateAssertion(ROWS, assertion({ metric: RATIO, op: 'between', target: [4, 5] })).verdict).toBe('WEAK');
 		expect(evaluateAssertion(ROWS, assertion({ metric: 'clean.avg_aggregate / fraud.avg_aggregate', op: 'between', target: [4, 5] })).verdict).toBe('INVERSE');
+	});
+	// 1.9.0: STRONG = passes floor (or target when no floor). For a band, the
+	// target-as-floor is the band edge nearer the weak side, so a value past the
+	// band's far edge (a stronger effect than designed) passes it.
+	test('between: past the far edge of the band (stronger effect) is STRONG', () => {
+		expect(verdictFor(0.267, { metric: 'x', op: 'between', target: [0.27, 0.33] }, 1).verdict).toBe('STRONG');
+		expect(evaluateAssertion(ROWS, assertion({ metric: RATIO, op: 'between', target: [1.5, 2.5] })).verdict).toBe('STRONG');
+		expect(verdictFor(0.36, { metric: 'x', op: 'between', target: [0.27, 0.33] }, 1).verdict).toBe('WEAK');
+		expect(verdictFor(1.2, { metric: 'x', op: 'between', target: [0.27, 0.33] }, 1).verdict).toBe('INVERSE');
+	});
+	test('between with floor: passing the floor on the effect side is STRONG', () => {
+		const band = { metric: 'x', op: 'between', target: [0.27, 0.33], floor: 0.4 };
+		expect(verdictFor(0.36, band, 1).verdict).toBe('STRONG');
+		expect(verdictFor(0.267, band, 1).verdict).toBe('STRONG');
+		expect(verdictFor(0.45, band, 1).verdict).toBe('WEAK');
+		expect(verdictFor(1.2, band, 1).verdict).toBe('INVERSE');
+	});
+	test('between on a single ref: the floor gives the direction; without one, outside is NONE', () => {
+		const band = { metric: 'x', op: 'between', target: [0.27, 0.33], floor: 0.4 };
+		expect(verdictFor(0.267, band, null).verdict).toBe('STRONG');
+		expect(verdictFor(0.36, band, null).verdict).toBe('STRONG');
+		expect(verdictFor(0.45, band, null).verdict).toBe('NONE');
+		expect(verdictFor(0.3, band, null).verdict).toBe('NAILED');
+		expect(verdictFor(0.267, { metric: 'x', op: 'between', target: [0.27, 0.33] }, null).verdict).toBe('NONE');
+		// Growth band, floor below it.
+		expect(verdictFor(2.6, { metric: 'x', op: 'between', target: [1.8, 2.2], floor: 1.5 }, null).verdict).toBe('STRONG');
 	});
 	test('difference metric: neutral 0; obs 20 vs target 20 → NAILED', () => {
 		const r = evaluateAssertion(ROWS, assertion({ metric: 'fraud.avg_aggregate - clean.avg_aggregate', op: '>=', target: 20 }));

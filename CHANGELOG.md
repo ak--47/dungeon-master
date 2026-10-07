@@ -222,6 +222,15 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   6% of extra devices still draw from the whole pool. Same repro: 1.3% (0.2%
   with desktops on, was 4.9%). Still a seeded hash, no RNG draw. Output shift:
   device fields of extra devices (`avgDevicePerUser > 1`).
+- Grade an `op: 'between'` story assertion STRONG when the observed value
+  passes its floor: the `floor`, else the band edge on the weak side. A value
+  past the far edge (a stronger effect than designed) used to grade WEAK on a
+  ratio or difference metric and NONE on a single ref, and a band never reached
+  STRONG, against the documented tiers. On a single ref the `floor` now gives
+  the effect direction; without a floor, outside the band stays NONE. Repro: a
+  designed drop to 0.30 with band [0.27, 0.33] observed at 0.267 was WEAK
+  (ratio) or NONE (single ref with `floor: 0.4`); now STRONG. Output shift:
+  verifier verdicts only.
 
 ### Added
 
