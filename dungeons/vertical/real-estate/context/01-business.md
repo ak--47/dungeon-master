@@ -4,7 +4,7 @@
 
 Keystead Homes is a home-search app and buyer brokerage. It started in Austin in 2021 and now serves eight fast-growing metros in the South and Mountain West: Dallas, Austin, Phoenix, Denver, Nashville, Charlotte, Tampa, and Raleigh. Shoppers search every MLS listing in their market for free; when they are ready to buy, a Keystead buyer agent tours homes with them and writes their offers. Keystead Home Loans, the company's mortgage arm, offers pre-approvals and loans.
 
-The company has about 270 people: about 190 licensed buyer agents (24 per market), a lending team, and product, engineering, marketing, and operations staff at headquarters.
+The company has about 110 people: 64 licensed buyer agents (8 per market), a lending team of about 15, and about 30 product, engineering, marketing, and operations staff at headquarters.
 
 ## How Keystead makes money
 
@@ -33,7 +33,7 @@ The company has about 270 people: about 190 licensed buyer agents (24 per market
 - **Platforms:** about half of activity comes from laptops and desktops on the website; the rest comes from phones and tablets (iOS and Android). Most shoppers use more than one device.
 - **Account base.** An account is needed to save, message an agent, or book a tour, and Keystead closes accounts after a year without activity, so the account base leans toward people who are actively looking.
 - **Intent.** Most account holders are early in their search. Many browse for weeks without saving a home or messaging their agent; a smaller group of active buyers does most of the saving, messaging, and touring.
-- **Established vs new shoppers.** About 53% of the shoppers active in the window created their account before June 4. New accounts arrive steadily, about 260 a week.
+- **Established vs new shoppers.** About 53% of the active shoppers in the window (shoppers who viewed a listing or ran a home search) created their account before June 4. New accounts arrive steadily, about 260 a week.
 
 ## Markets at a glance
 

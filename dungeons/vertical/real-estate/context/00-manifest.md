@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Keystead Homes**, a home-search
 
 - **Product:** the Keystead Homes website and iOS and Android apps: home search, listing pages, saved homes and saved searches, listing alerts, chat with a Keystead buyer agent, tour booking, mortgage pre-approval with Keystead Home Loans, and offers written through the agent.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early summer through the end of September and the first day of October.
-- **Scale:** 10,000 shopper accounts; 9,747 of them have activity in the window. About 4,500 created their account during the window; the rest joined before June 4. The project holds about 1.13 million events.
+- **Scale:** 10,000 shopper accounts. 9,748 of them have at least one event in the window, and 9,616 are active shoppers by the KPI definition in `04-metrics-and-tables.md` (they viewed a listing or ran a home search). About 4,500 created their account during the window; the rest joined before June 4. The project holds about 1.14 million events.
 - **Population:** this project is an export of account holders. It includes each new shopper's anonymous browsing before signup on the device they signed up on, but visitors who browse without ever creating an account are not in the export. Their page views show up only in the server-log traffic in `market_inventory_daily`.
 - **Markets:** eight metro areas: Dallas, Austin, Phoenix, Denver, Nashville, Charlotte, Tampa, and Raleigh.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. Shoppers live in US Central, Eastern, and Mountain time, so a US evening falls after midnight UTC.
