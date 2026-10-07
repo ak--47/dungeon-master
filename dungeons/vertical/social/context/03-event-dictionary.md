@@ -35,7 +35,7 @@ New members go through onboarding once, right after they sign up.
 | `post shared` | The member shares a post. | `share_destination` (`repost`, `dm`, `external_link`). |
 | `story viewed` | The member watches a Story. | `story_type` (`photo`, `video`, `text`); `completed` (true if watched to the end). |
 | `search performed` | The member searches. The next `post viewed` from the results has `feed = search`. | `search_type` (`people`, `topics`, `communities`). |
-| `user followed` | The member follows an account (outside onboarding). | `discovery_source` (`for_you`, `search`, `profile`, `suggested_for_you`; `onboarding_suggestions` for the onboarding screen). |
+| `user followed` | The member follows an account (outside onboarding). | `discovery_source`: where the member found the account (`for_you` = a post in the For You feed, `search` = search results, `profile` = the account's profile, `suggested_for_you` = a follow-suggestion card; `onboarding_suggestions` for the onboarding screen). |
 | `user unfollowed` | The member unfollows an account. | `reason` (`posts_too_often`, `lost_interest`, `offensive`, `other`). |
 | `community joined` | The member joins a community. | `join_source` (`search`, `for_you`, `invite`); `community_id`. |
 | `content reported` | The member reports a post, comment, or account. | `report_reason` (`spam`, `harassment`, `misinformation`, `nudity`, `hate_speech`, `other`). |
@@ -88,7 +88,6 @@ Prices and revenue are **not** tracked in Mixpanel; see `ad_revenue_daily` in 04
 | `follower_count`, `following_count` | Followers and accounts followed at the last profile sync. |
 | `Experiment: Smart Digest` | `Control` or `Digest` for members in the test; empty for everyone else. |
 | `created` | Signup time for members who joined in the window; empty for established members. |
-| `_persona` | Engagement segment from the CRM's model (`heavy_scroller`, `regular`, `lurker`, `creator`, `business`). |
 | `anonymousIds`, `sessionIds` | Devices and sessions seen for the member (pipeline metadata). |
 
 ## Group profile: `community_id`

@@ -57,11 +57,11 @@ The three paid channels are billed daily. Daily spend by paid channel is in the 
 
 ## Members
 
-- **Platforms:** members use the iOS app (iPhone or iPad, about 53% of members) or the Android app (about 47%).
+- **Platforms:** members use the iOS app (iPhone or iPad, about 54% of members) or the Android app (about 46%).
 - **Age bands** (`age_band`): `18-24`, `25-34`, `35-44`, `45-54`, `55+`. Most members are under 35.
 - **Countries** (`country`): `US` (most members), `GB`, `CA`, `BR`, `IN`, `DE`, `AU`.
 - **Established vs new members.** About half of members active in the window joined before June 4. New members arrive steadily, about 290 a week.
-- **Engagement segments.** The CRM groups personal members into heavy scrollers, regular members, and lurkers by how much they use the app; creators and businesses are their own segments (profile property `_persona`).
+- **Engagement segments.** The CRM groups personal members into heavy scrollers, regular members, and lurkers by how much they use the app; creators and businesses are their own segments. These segments live in the CRM, not in Mixpanel.
 
 ## Goals for the period (Q3 2026)
 

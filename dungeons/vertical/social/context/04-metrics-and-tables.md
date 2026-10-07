@@ -9,7 +9,6 @@ All KPIs use UTC days and count people by unique `user_id`.
 | Active member | A member with at least one member-initiated event in the period: any event except `push notification sent` and `$experiment_started` (both are server-side). DAU, WAU, and MAU use this definition. |
 | New members | Unique members with `account created` in the period. |
 | Onboarding completion | Share of new members with an onboarding `user followed` (`discovery_source = onboarding_suggestions`) within 1 day of `account created`. Members who skip the suggestions screen do not complete. |
-| Onboarding follows | Number of onboarding `user followed` events per new member (0 if they skipped the screen). |
 | New-member retention | Of new members who signed up on day 0, the share with any member-initiated event on day 14-27 after signup. Count only members whose bracket ends inside the data (signups through 2026-09-03). In Mixpanel Retention this needs a custom bracket and a return event of "any event" with the two server-side events excluded. |
 | Time to first post | Hours from `account created` to the first `post created`. Report the median; read with a 7-day window and signups through 2026-09-24. |
 | Clips share | Share of `post viewed` (or `post created`) events with `post_type = clip`. |
@@ -28,7 +27,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 
 Three tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). Days with no activity have a row with zeros. They join to events on the UTC date of the event and on the named dimension.
 
-In the warehouse, numeric columns are loaded as FLOAT64 (shown as FLOAT below). Count columns (impressions, clicks, installs, requests) always hold whole numbers, and raw file exports show them as integers.
+Count columns (impressions, clicks, installs, requests, latency in milliseconds) hold whole numbers and are INTEGER in the raw file exports. The warehouse loader stores every numeric column as FLOAT64, so in BigQuery the INTEGER columns below appear as FLOAT64 with whole-number values.
 
 ### `marketing_spend_daily`
 
@@ -39,9 +38,9 @@ Daily paid acquisition cost by channel, from the ad networks' billing exports an
 | `date` | DATE | UTC day | Spend day. |
 | `acquisition_channel` | STRING | — | `meta_ads`, `tiktok_ads`, or `creator_partnerships`. Matches `acquisition_channel` on `account created`. |
 | `spend_usd` | FLOAT | USD | Spend billed for the day. |
-| `impressions` | FLOAT | count | Ad or post impressions reported by the network or partner. |
-| `clicks` | FLOAT | count | Clicks or taps on the ad or referral link. |
-| `installs_reported` | FLOAT | count | App installs the network or partner claims for the day. Networks use their own attribution and usually claim more than Mixpanel records as signups. |
+| `impressions` | INTEGER | count | Ad or post impressions reported by the network or partner. |
+| `clicks` | INTEGER | count | Clicks or taps on the ad or referral link. |
+| `installs_reported` | INTEGER | count | App installs the network or partner claims for the day. Networks use their own attribution and usually claim more than Mixpanel records as signups. |
 
 Caveats: organic and friend invites have no media spend and are not in this table. Use Mixpanel signups, not `installs_reported`, for CAC.
 
@@ -53,10 +52,10 @@ Daily health of the For You feed service by app platform, from the feed API's re
 |---|---|---|---|
 | `date` | DATE | UTC day | Day. |
 | `platform` | STRING | — | `ios` or `android`. Matches `platform` on events. |
-| `feed_requests` | FLOAT | count | For You page requests from that platform's app, including failed requests and requests from members who opted out of analytics. |
-| `failed_requests` | FLOAT | count | Requests that returned an error. |
+| `feed_requests` | INTEGER | count | For You page requests from that platform's app, including failed requests and requests from members who opted out of analytics. |
+| `failed_requests` | INTEGER | count | Requests that returned an error. |
 | `error_rate` | FLOAT | share 0-1 | `failed_requests` / `feed_requests`. |
-| `p95_latency_ms` | FLOAT | milliseconds | 95th-percentile response time. |
+| `p95_latency_ms` | INTEGER | milliseconds | 95th-percentile response time. |
 | `service_status` | STRING | — | Daily status for the platform: `operational` or `major_outage`, as posted on the status page. |
 
 Caveats: requests are pages, not posts, so `feed_requests` is much smaller than the Mixpanel count of For You `post viewed` and does not track it exactly day to day. A failed feed load shows no posts, so it fires no `post viewed`.
@@ -69,7 +68,7 @@ Daily ad delivery and revenue by placement, from the ad server.
 |---|---|---|---|
 | `date` | DATE | UTC day | Day. |
 | `ad_placement` | STRING | — | `feed`, `stories`, or `clips`. Matches `ad_placement` on `ad viewed`. |
-| `impressions_served` | FLOAT | count | Impressions the ad server counted for the placement. |
+| `impressions_served` | INTEGER | count | Impressions the ad server counted for the placement. |
 | `ecpm_usd` | FLOAT | USD per 1,000 impressions | Average price per 1,000 impressions that day. 0 for Clips before Clips launched. |
 | `ad_revenue_usd` | FLOAT | USD | `impressions_served` x `ecpm_usd` / 1,000. |
 
