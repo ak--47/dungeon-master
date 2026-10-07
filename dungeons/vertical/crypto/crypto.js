@@ -17,7 +17,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             set up recurring buys, stake for rewards (Ledgerline keeps a
  *             commission: 15% → 25% from 2026-08-19), set price alerts, and
  *             withdraw to external wallets on five networks.
- * SCALE:      10,000 users (3,938 sign up inside the window), 1.35M events,
+ * SCALE:      10,000 users (4,010 sign up inside the window; 9,919 with events), 1.35M events,
  *             120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  app opened → asset viewed → trade executed / quick buy completed;
  *             deposit completed and withdrawal submitted → withdrawal confirmed move money
@@ -60,11 +60,12 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * IDENTITY: new users are identified at "account created" (isAuthEvent, first
  * event, carries user_id + device_id); about 2 devices per user (phones and
  * tablets, iOS / iPadOS / Android). Every event carries user_id; there is no
- * anonymous pre-signup activity. The three onboarding steps after signup are
- * sent server-side with user_id only (no device_id, device fields, or
- * session_id). Recurring-buy events cloned from a device-less first deposit (a
- * plan set up right after it) carry no device either; every other event carries
- * device_id, and os / model / carrier are fixed per device_id.
+ * anonymous pre-signup activity. The three onboarding steps after signup
+ * (verification started, verified, and the onboarding first deposit) are sent
+ * server-side with user_id only (no device_id, device fields, or session_id).
+ * Every other event carries device_id (a plan created right after the
+ * device-less first deposit takes the signup device; an app open needs a
+ * device), and os / model / carrier are fixed per device_id.
  *
  * DESIGN NOTES:
  * - Market model: one seeded BTC volatility series (smooth daily noise plus ten
@@ -72,7 +73,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   market plus seeded idiosyncratic moves). The same series writes
  *   market_prices_daily and prices every trade, Simple Buy, and recurring-buy
  *   execution (open → close through the UTC day, ±0.4% noise, clamped to the
- *   day's high/low). Price alerts fire more often on volatile days.
+ *   day's high/low). Price alerts fire more often on volatile days. Two more
+ *   high-volatility days (06-29, 09-17) are whipsaws the timeline guide does
+ *   not list, so the volatility split needs the warehouse join.
  * - Sessions: every session (30-minute gap between user-initiated events) starts
  *   with an "app opened" cloned from its first event (same device, session id,
  *   location; that event's own properties dropped). The signup session has none.
@@ -83,8 +86,18 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   an open adds an "asset viewed" of the alert's coin 1-15 minutes later
  *   (never after a new user has gone quiet). Push opens ≈ 15% of alerts.
  * - Money moves only after a new user is verified and funded: the hook drops any
- *   money event before the onboarding deposit (the engine gives unconverted users
- *   standalone events only, so this is a guard).
+ *   money event before the first deposit. The onboarding deposit is the
+ *   first-funnel step right after "identity verified" (a user who dropped at a
+ *   later onboarding step still runs usage funnels, Funding included, after the
+ *   onboarding run, so a later deposit is not onboarding).
+ * - Late funders: half of the verified non-funders who keep using the app
+ *   (salted) fund later. Each picks a salted, front-loaded day 8-45 (8-21 for
+ *   one who goes quiet after day 21) and funds at their next app deposit; their
+ *   money events start there. Every other unfunded user's money events drop.
+ * - Null attributes (id_document_type on verification, deposit_method on the
+ *   first deposit) are drawn along a golden-ratio sequence within outcome cells
+ *   (platform x channel x investor type x era x outcome), so breakdowns by them
+ *   read flat in every sub-split instead of carrying a random draw's gap.
  * - Onboarding warm start: a salted 3.9% of pre-existing users signed up in the
  *   7 days before June 4 (the in-window sign-up rate). Their remaining onboarding
  *   steps (old-vendor rates and timing, server-side, no account created in the
@@ -136,7 +149,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: each Advanced Trade fill on a UTC day gets extra fills in
  *   proportion to BTC realized volatility above 2.5% (0.3 extra per volatility
- *   point; new orders with their own side and size). Simple Buy does not react.
+ *   point; new orders with their own side and size), times seeded day noise
+ *   (12% sd; a factor below 1 drops fills). Simple Buy does not react. 12 days
+ *   reach 4.5%; two of them are not in the timeline guide.
  * MIXPANEL: Insights, trade executed total ÷ daily unique active users, daily;
  *   export and join market_prices_daily (asset BTC, realized_vol_pct); compare
  *   days ≥ 4.5% vs < 3.0%.
@@ -210,8 +225,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H8. STAKING COMMISSION CHANGE (everything)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: from 2026-08-19 the commission rises 15% → 25%, net APY on new stakes
- *   falls to 0.882x, new stakes run 0.75x, and unstake requests run 1.8x for 21
- *   days.
+ *   falls to 0.882x, new stakes run 0.75x, and unstake requests run 1.8x for 14
+ *   days, then fade linearly to 1x over 7 days (21-day mean 1.667x).
  * MIXPANEL: Insights, stake started and unstake requested totals, weekly, filter
  *   customer_since before 2026-06-04; average apy_pct on stake started by asset.
  * REAL WORLD: yield-sensitive holders move stake elsewhere after a fee rise.
@@ -222,7 +237,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * PATTERN: 2026-08-26 to 2026-08-28, 50% of Android Simple Buy orders that would
  *   have completed never do. iOS and iPadOS are untouched.
  * MIXPANEL: Funnels, quick buy started → quick buy completed, totals, hold
- *   order_id constant, breakdown os, daily.
+ *   order_id constant, 1-day window, breakdown os, daily; each platform's
+ *   incident-day rate vs its own 7 days either side (Apple is the control).
  * REAL WORLD: a release regression on one platform hides in the blended rate.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -239,38 +255,42 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation                 | Expected | Measured
  * -----|------------------------------------------------|----------------------------|----------|---------
- * H1   | trades per active user, volatile / calm days    | mean tradeMult high / calm | 1.857    | 1.819 (0.572 vs 0.315)
- * H1   | Simple Buy per active user, volatile / calm     | unchanged (control)        | 1.00     | 0.966
- * H2   | ethereum / other confirm rate, congested vs ±7d | 1 − CONGESTION_FAIL        | 0.40     | 0.406 (39.4% vs 97.0%)
+ * H1   | trades per active user, volatile / calm days    | mean daily factor high/calm| 1.787    | 1.778 (0.551 vs 0.310)
+ * H1   | Simple Buy per active user, volatile / calm     | unchanged (control)        | 1.00     | 0.995
+ * H2   | ethereum / other confirm rate, congested vs ±7d | 1 − CONGESTION_FAIL        | 0.40     | 0.407 (39.3% vs 97.2%)
  * H2   | warehouse failed_broadcast_rate, congested days | CONGESTION_FAIL            | 0.60     | 0.610
- * H3   | onboarding completion, from / before Jul 28     | 60 / 46                    | 1.304    | 1.283 (55.4% vs 43.2%)
- * H3   | median sign-up → first deposit, from / before   | 14 h / 40 h                | 0.35     | 0.352 (10.5 h vs 30.0 h)
- * H4   | D30 retention, recurring buy / none (funded)    | 1 / (1 − 0.55)             | 2.222    | 2.329 (81.2% vs 34.9%)
- * H4   | D7 retention, recurring buy / none (parity)     | unchanged before day 21    | 1.00     | 1.008
- * H5   | per-order completion, One-Tap / Control         | ONE_TAP_CONV_MULT          | 1.20     | 1.187 (71.0% vs 59.8%)
- * H5   | median start → complete, One-Tap / Control      | ONE_TAP_TTC_MULT           | 0.60     | 0.601 (271 s vs 450 s)
- * H5   | One-Tap share of exposed users                  | equal 2-arm hash           | 0.50     | 0.495
- * H6   | spend per signup, influencer / paid search      | 40 / 70                    | 0.571    | 0.572 ($39.77 vs $69.52)
- * H6   | 7-day funded rate, influencer / paid search     | LOW_QUALITY_MULT           | 0.50     | 0.525 (29.0% vs 55.2%)
- * H7   | sell share Sep 9-11 / prior 28 days, new        | 1 + 0.5 × 0.55 / 0.45      | 1.611    | 1.594 (71.4% vs 44.8%)
- * H7   | same, established                               | 1 + 0.1 × 0.55 / 0.45      | 1.122    | 1.125 (50.1% vs 44.5%)
- * H8   | established stakes, 21 d after / before         | STAKE_KEEP_AFTER           | 0.75     | 0.753 (1,801 vs 2,393)
- * H8   | established unstakes, 21 d after / before       | UNSTAKE_SURGE_MULT         | 1.80     | 1.816 (2,315 vs 1,275)
+ * H3   | onboarding completion, from / before Jul 28     | 60 / 46                    | 1.304    | 1.298 (54.2% vs 41.8%)
+ * H3   | median sign-up → first deposit, from / before   | 14 h / 40 h                | 0.35     | 0.349 (10.5 h vs 30.1 h)
+ * H4   | D30 retention, recurring buy / none (funded)    | 1 / (1 − 0.55)             | 2.222    | 2.247 (81.2% vs 36.1%)
+ * H4   | D7 retention, recurring buy / none (parity)     | unchanged before day 21    | 1.00     | 1.016
+ * H5   | per-order completion, One-Tap / Control         | ONE_TAP_CONV_MULT          | 1.20     | 1.208 (71.7% vs 59.4%)
+ * H5   | median start → complete, One-Tap / Control      | ONE_TAP_TTC_MULT           | 0.60     | 0.600 (269 s vs 449 s)
+ * H5   | One-Tap share of exposed users                  | equal 2-arm hash           | 0.50     | 0.494
+ * H6   | spend per signup, influencer / paid search      | 40 / 70                    | 0.571    | 0.573 ($39.86 vs $69.58)
+ * H6   | 7-day funded rate, influencer / paid search     | LOW_QUALITY_MULT           | 0.50     | 0.527 (28.4% vs 53.8%)
+ * H7   | sell share Sep 9-11 / prior 28 days, new        | 1 + 0.5 × 0.55 / 0.45      | 1.611    | 1.616 (73.1% vs 45.3%)
+ * H7   | same, established                               | 1 + 0.1 × 0.55 / 0.45      | 1.122    | 1.099 (49.2% vs 44.8%)
+ * H8   | established stakes, 21 d after / before         | STAKE_KEEP_AFTER           | 0.75     | 0.747 (1,758 vs 2,352)
+ * H8   | established unstakes, 21 d after / before       | 14 d at 1.8, 7 d fade to 1 | 1.667    | 1.635 (2,237 vs 1,368)
  * H8   | ETH net APY on new stakes, after / before       | 0.75 / 0.85                | 0.882    | 0.884 (2.71% vs 3.06%)
- * H9   | Android / Apple completion, Aug 26-28 vs ±7d    | 1 − ANDROID_FAIL           | 0.50     | 0.468 (31.5% vs 66.5%)
+ * H9   | Android completion, Aug 26-28 / ±7d             | 1 − ANDROID_FAIL           | 0.50     | 0.515 (34.1% vs 66.2%)
+ * H9   | iOS + iPadOS completion, Aug 26-28 / ±7d        | unchanged (control)        | 1.00     | 0.942 (63.8% vs 67.7%)
  * H10  | ONDO rows before the listing                    | exact                      | 0        | 0
- * H10  | ONDO share of trades after the ramp             | 0.4 × 0.2                  | 0.080    | 0.078
+ * H10  | ONDO share of trades after the ramp             | 0.4 × 0.2                  | 0.080    | 0.082
  * ═════════════════════════════════════════════════════════════════════════
  *
  * Every assertion lands inside its knob-derived NAILED band (10/10 stories
  * NAILED). H6's spend ratio reads the knob because each channel's budget is
  * re-paced to its own realized sign-ups. H2 and H9 drop a fixed share of the
  * affected would-be completions, so what remains is the engine's conversion
- * draw: H9 (0.468) rests on 1,072 Android orders in the three incident days,
- * of which 63% would have completed vs 66.5% in the days around (about 2
- * binomial SE), and the Apple denominator (1,152 orders) adds its own noise.
+ * draw. H9 reads each platform against its own days around the incident: the
+ * Android ratio rests on 1,056 incident orders (one binomial term, about 2.4%
+ * relative SE), and the Apple control (0.942) carries this seed's low Apple
+ * draw on the incident days (1,234 orders, nearly 3 binomial SE below its mean). The
+ * Android / Apple ratio of ratios reads 0.547: inside the band but it stacks
+ * both draws, which is why the story reads per platform.
  * H4 uses a knob target with a knob-derived floor (1.61) because the realized
- * dark share in a cohort of about 780 users moves the ratio by several percent.
+ * dark share in a cohort of about 790 users moves the ratio by several percent.
  */
 
 // ── SCALE ──
@@ -324,6 +344,7 @@ const VOL_TRADE_SENS = 0.3;         // extra trades per trade for each vol point
 const HIGH_VOL_PCT = 4.5;           // "high volatility" day: BTC realized_vol_pct ≥ 4.5
 const CALM_VOL_PCT = 3.0;           // "calm" day: BTC realized_vol_pct < 3.0
 const tradeMult = (vol) => 1 + VOL_TRADE_SENS * Math.max(0, vol - VOL_PIVOT);
+const TRADE_DAY_NOISE = 0.12;       // day-level noise on the trading response (news flow, app pushes, weekends)
 
 // H2 Ethereum congestion: withdrawals on the ethereum network fail and cost more
 const CONGESTION_NETWORK = "ethereum";
@@ -347,6 +368,9 @@ const LAPSE_SHARE = 0.4;            // organic lapse, every new user, independen
 const LAPSE_DAY_MIN = 10;
 const LAPSE_DAY_MAX = 90;
 const ABANDON_SHARE = 0.65;         // new users who never fund: share who stop on day 1-6
+const LATE_FUND_SHARE = 0.5;        // verified non-funders who keep using the app: share who fund later (salted)
+const LATE_FUND_DAY_MIN = 8;        // a late first deposit lands on day 8-45 after signup
+const LATE_FUND_DAY_MAX = 45;
 const LATE_PLAN_KEEP = 0.15;        // non-planners: chance a later recurring buy (after day 14) is kept
 const EST_PLANNER_SHARE = 0.33;     // established customers with a recurring buy that predates the window
 const PLAN_LIFE_DAYS = 180;         // mean plan lifetime before the customer cancels (exponential)
@@ -398,8 +422,18 @@ const CRASH_FLIP_EST = 0.1;         // established customers
 const COMMISSION_OLD = 0.15;
 const COMMISSION_NEW = 0.25;
 const STAKE_KEEP_AFTER = 0.75;      // share of would-be new stakes that still happen after the change
-const UNSTAKE_SURGE_MULT = 1.8;     // unstake requests in the 21 days after the change
-const UNSTAKE_SURGE_DAYS = 21;
+const UNSTAKE_SURGE_MULT = 1.8;     // unstake requests in the first 14 days after the change
+const UNSTAKE_SURGE_DAYS = 21;      // the surge lasts 21 days ...
+const UNSTAKE_TAPER_DAYS = 7;       // ... and fades linearly to 1.0 over its last 7 days
+// unstake multiplier at time t (1 outside the surge)
+const unstakeMultAt = (t) => {
+	const d = (t - ms(STAKING_COMMISSION_CHANGE)) / DAY_MS;
+	if (d < 0 || d >= UNSTAKE_SURGE_DAYS) return 1;
+	const fade = Math.min(1, (UNSTAKE_SURGE_DAYS - d) / UNSTAKE_TAPER_DAYS);
+	return 1 + (UNSTAKE_SURGE_MULT - 1) * fade;
+};
+// mean multiplier over the 21-day read: 14 days at 1.8, 7 days fading 1.8 → 1.0 (mean 1.4)
+const UNSTAKE_READ_MULT = Math.round((1 + (UNSTAKE_SURGE_MULT - 1) * ((UNSTAKE_SURGE_DAYS - UNSTAKE_TAPER_DAYS) + UNSTAKE_TAPER_DAYS / 2) / UNSTAKE_SURGE_DAYS) * 1000) / 1000;
 const GROSS_APY = { ETH: 3.6, SOL: 7.2, ADA: 3.4, AVAX: 8.1 };
 
 // H9 Android 5.12 Simple Buy bug
@@ -419,13 +453,16 @@ const ASSETS = {
 	AVAX: { p0: 30.4, beta: 1.7 }, LINK: { p0: 17.9, beta: 1.5 }, ONDO: { p0: 1.12, beta: 2.0 },
 };
 // market-moving days (BTC realized volatility, %) and their market return
+// (the market team's notes in 02-timeline flag ten of them; 06-29 and 09-17 were
+// intraday whipsaws with small closes that nobody flagged)
 const VOL_SHOCKS = {
-	"2026-06-18": 4.7, "2026-07-13": 6.1, "2026-07-14": 4.8, "2026-08-10": 5.6, "2026-08-11": 4.9,
-	"2026-08-12": 4.5, "2026-09-09": 8.3, "2026-09-10": 6.6, "2026-09-11": 4.7, "2026-09-24": 5.0,
+	"2026-06-18": 4.7, "2026-06-29": 4.6, "2026-07-13": 6.1, "2026-07-14": 4.8, "2026-08-10": 5.6, "2026-08-11": 4.9,
+	"2026-08-12": 4.5, "2026-09-09": 8.3, "2026-09-10": 6.6, "2026-09-11": 4.7, "2026-09-17": 4.9, "2026-09-24": 5.0,
 };
 const RETURN_SHOCKS = {
 	"2026-06-18": -0.046, "2026-07-13": 0.068, "2026-07-14": 0.031, "2026-08-10": 0.055, "2026-08-11": -0.028,
 	"2026-08-12": 0.024, "2026-09-09": -0.112, "2026-09-10": -0.041, "2026-09-11": 0.022, "2026-09-24": 0.049,
+	"2026-06-29": -0.009, "2026-09-17": 0.012,
 };
 const round2 = (n) => Math.round(n * 100) / 100;
 const round1 = (n) => Math.round(n * 10) / 10;
@@ -472,6 +509,9 @@ const priceAt = (asset, t) => {
 	return roundTo(Math.min(m.high, Math.max(m.low, p)), priceDigits(p));
 };
 const volOn = (t) => BTC_VOL[Math.min(NUM_DAYS - 1, Math.max(0, dayIdx(t)))];
+// H1 daily trading factor: the volatility response times seeded day noise (mean 1)
+const TRADE_FACTOR = BTC_VOL.map((v, i) => tradeMult(v) * (1 + TRADE_DAY_NOISE * Math.max(-2, Math.min(2, normalOf(`tnoise|${i}`)))));
+const tradeFactorOn = (t) => TRADE_FACTOR[Math.min(NUM_DAYS - 1, Math.max(0, dayIdx(t)))];
 
 // ── NETWORKS (withdrawals; shared by events and chain_network_daily) ──
 const NETWORKS = {
@@ -537,6 +577,17 @@ const takeShare = (st, key, f) => {
 	st[key] += f;
 	if (st[key] >= 1) { st[key] -= 1; return true; }
 	return false;
+};
+// balanced attribute draws for attributes with no effect: within each outcome
+// cell the values follow their weights along a golden-ratio sequence (low
+// discrepancy), so a breakdown by the attribute reads flat in every sub-split
+// instead of showing whatever gap one random draw leaves
+const PHI = 0.6180339887498949;
+const balancedPick = (st, cell, weights) => {
+	if (!st.seq) st.seq = new Map();
+	const k = st.seq.get(cell) ?? 0;
+	st.seq.set(cell, k + 1);
+	return pickWeighted(weights, (hashFloat(`seq|${cell}`) + k * PHI) % 1);
 };
 const pickWeighted = (weights, r) => {
 	const entries = Object.entries(weights);
@@ -643,10 +694,28 @@ function handleEverything(events, meta) {
 	if (born) {
 		started = events.find((e) => e.event === "identity verification started") || null;
 		verified = events.find((e) => e.event === "identity verified" && (!started || T(e) >= T(started))) || null;
-		firstDeposit = verified ? events.find((e) => e.event === "deposit completed" && T(e) >= T(verified)) || null : null;
+		// The onboarding deposit is the first-funnel step right after verification.
+		// A user who dropped at the deposit step still runs usage funnels (Funding
+		// included) after the onboarding run, so a later deposit is not onboarding.
+		const vi = verified ? events.indexOf(verified) : -1;
+		firstDeposit = vi >= 0 && events[vi + 1]?.event === "deposit completed" ? events[vi + 1] : null;
+		if (verified && !firstDeposit && salt(uid, "abandon") >= ABANDON_SHARE && salt(uid, "late-fund") < LATE_FUND_SHARE) {
+			// late funders: a share of verified customers who keep using the app fund on day 8-45
+			// (one who will go quiet after day 21 funds before then)
+			// each late funder decides on a salted day (front-loaded) and funds at their next deposit
+			const lastDay = salt(uid, "dark") < DARK_SHARE ? DARK_AFTER_DAYS : LATE_FUND_DAY_MAX;
+			const fromDay = LATE_FUND_DAY_MIN + (lastDay - LATE_FUND_DAY_MIN) * salt(uid, "late-fund-day") ** 1.5;
+			firstDeposit = events.find((e) => e.event === "deposit completed" && T(e) >= t0 + fromDay * DAY_MS && T(e) < t0 + lastDay * DAY_MS) || null;
+		}
 		tf = firstDeposit ? T(firstDeposit) : null;
 		funded = Boolean(firstDeposit);
 		profile.kyc_status = verified ? "verified" : started ? "pending" : "not_started";
+		// the ID document has no effect on approval: balanced within platform x channel x investor type x vendor era x outcome
+		if (started && signup) {
+			const ok7 = Boolean(verified) && T(verified) < t0 + FUNNEL_WINDOW_DAYS * DAY_MS;
+			const full = t0 < ms(ONBOARD_COHORT_END) && T(started) < t0 + FUNNEL_WINDOW_DAYS * DAY_MS;
+			started.id_document_type = balancedPick(run, `doc|${signup.os}|${signup.acquisition_channel}|${profile.investor_type}|${t0 >= ms(KYC_VENDOR_SWITCH)}|${full}|${ok7}`, ID_DOC_WEIGHTS);
+		}
 	} else if (inflight) {
 		// the steps they still had to take on June 4 (earlier ones happened before the window)
 		const plan = inflightPlan(uid, pre);
@@ -673,6 +742,9 @@ function handleEverything(events, meta) {
 	for (const e of events) {
 		if (!e.device_id && (ONBOARDING_SERVER_STEPS.has(e.event) || e === firstDeposit)) for (const k of DEVICE_KEYS) delete e[k];
 	}
+	// the customer's home device: the signup device (for a sign-up from before the
+	// window, the first device seen in the window)
+	const devHome = signup || events.find((e) => e.device_id) || null;
 	// Sign in with Apple is offered on the iOS apps only
 	if (signup && signup.os === "Android" && signup.signup_method === "apple") signup.signup_method = "google";
 	if (born || inflight) {
@@ -757,9 +829,15 @@ function handleEverything(events, meta) {
 	}
 	// ── H1: volatility drives trading — extra fills on volatile days ──
 	const tradeClones = [];
+	const tradeDrops = new Set();
 	for (const e of trades) {
 		const t = T(e);
-		const extra = tradeMult(volOn(t)) - 1;
+		const extra = tradeFactorOn(t) - 1;
+		if (extra < 0) {
+			// a quiet day: some fills never happen (the chart view stays)
+			if (chance.bool({ likelihood: -extra * 100 })) tradeDrops.add(e);
+			continue;
+		}
 		let n = Math.floor(extra) + (chance.bool({ likelihood: (extra - Math.floor(extra)) * 100 }) ? 1 : 0);
 		const dayStart = D0_MS + dayIdx(t) * DAY_MS;
 		while (n-- > 0) {
@@ -775,6 +853,7 @@ function handleEverything(events, meta) {
 			}));
 		}
 	}
+	if (tradeDrops.size) events = events.filter((e) => !tradeDrops.has(e));
 	if (tradeClones.length) events = events.concat(tradeClones);
 	for (const e of events) {
 		if (e.event !== "trade executed") continue;
@@ -801,7 +880,7 @@ function handleEverything(events, meta) {
 			// new customers can only unstake what they staked in the window
 			if ((born || inflight) && (!firstStake || T(firstStake) > T(e))) return false;
 			const t = T(e);
-			if (t >= changeMs && t < surgeEnd && chance.bool({ likelihood: (UNSTAKE_SURGE_MULT - 1) * 100 })) {
+			if (t >= changeMs && t < surgeEnd && chance.bool({ likelihood: (unstakeMultAt(t) - 1) * 100 })) {
 				const off = chance.integer({ min: 5, max: 360 }) * MIN_MS;
 				const tc = t + off < surgeEnd && t + off <= END_MS ? t + off : t - off;
 				if (tc >= changeMs) unstakeClones.push(cloneEvent(e, { time: iso(tc), amount_usd: Math.max(20, Math.round(logNormal(investor === "casual_investor" ? 250 : 900, 0.9))) }));
@@ -831,11 +910,12 @@ function handleEverything(events, meta) {
 			const cands = events.filter((e) => !SERVER_EVENTS.has(e.event) && T(e) > tf && T(e) < t0 + PLAN_EARLY_DAYS * DAY_MS);
 			const anchor = cands.length ? cands[Math.floor(salt(uid, "plan-session") * cands.length)] : firstDeposit;
 			const tc = anchor ? T(anchor) + chance.integer({ min: 1, max: 12 }) * MIN_MS : -Infinity;
-			if (tc >= D0_MS && tc < t0 + HABIT_WINDOW_DAYS * DAY_MS && tc <= END_MS) {
-				// cloned from the first deposit (the session anchor for a customer who funded
-				// before the window); device fields come from the session it happens in
+			// the plan is set up in the app: device fields come from the session it happens in,
+			// or from the home device when the anchor is the server-sent first deposit
+			const devSrc = anchor?.device_id ? anchor : devHome;
+			if (devSrc && tc >= D0_MS && tc < t0 + HABIT_WINDOW_DAYS * DAY_MS && tc <= END_MS) {
 				const dev = {};
-				for (const k of DEVICE_KEYS) if (anchor[k] !== undefined) dev[k] = anchor[k];
+				for (const k of DEVICE_KEYS) if (devSrc[k] !== undefined) dev[k] = devSrc[k];
 				const c = cloneEvent(firstDeposit || anchor, { event: "recurring buy created", ...dev, ...planFields(0), time: iso(tc) });
 				for (const k of Object.keys(c)) if (!SERVER_STEP_KEEP.has(k) && !DEVICE_KEYS.includes(k) && !PLAN_KEYS.has(k)) delete c[k];
 				plans.push({ tpl: c, first: tc + 5 * MIN_MS, frequency: c.frequency, start: tc });
@@ -961,7 +1041,6 @@ function handleEverything(events, meta) {
 	events = events.filter((e) => e.event !== "app opened");
 	events.sort(byTime);
 	const alerts = events.filter((e) => e.event === "price alert triggered").map(T);
-	const devHome = signup || events.find((e) => e.device_id);
 	const opens = [];
 	let last = -Infinity;
 	for (const e of events) {
@@ -975,7 +1054,8 @@ function handleEverything(events, meta) {
 			// server-side onboarding steps carry no device: the app open is on the signup device
 			// (for a sign-up from before the window, the first device seen in the window)
 			if (!e.device_id && devHome) for (const k of DEVICE_KEYS) if (devHome[k] !== undefined) open[k] = devHome[k];
-			opens.push(open);
+			// the app sends the open, so it needs a device (a customer seen on no device in the window sends none)
+			if (open.device_id) opens.push(open);
 		}
 		last = t;
 	}
@@ -986,6 +1066,13 @@ function handleEverything(events, meta) {
 	const qbStarts = new Set(events.filter((e) => e.event === "quick buy started").map(T));
 	events = events.filter((e) => e.event !== "$experiment_started" || qbStarts.has(T(e) + 1000));
 	if (profile[EXP_KEY] !== undefined && !events.some((e) => e.event === "$experiment_started")) delete profile[EXP_KEY];
+
+	// the first deposit's method has no effect on retention: balanced within platform x channel x investor type x day-30 outcome
+	if (born && signup && firstDeposit && events.includes(firstDeposit)) {
+		const d30 = events.some((e) => e.event === "app opened" && T(e) >= t0 + 30 * DAY_MS && T(e) < t0 + 37 * DAY_MS);
+		const full = t0 + 37 * DAY_MS <= END_MS;
+		firstDeposit.deposit_method = balancedPick(run, `dep|${signup.os}|${signup.acquisition_channel}|${profile.investor_type}|${full}|${d30}`, DEPOSIT_METHOD_WEIGHTS);
+	}
 	return events;
 }
 
@@ -1423,7 +1510,8 @@ const ONBOARDING_STEPS = ["account created", "identity verification started", "i
 // (same seeded BTC volatility series the hook and market_prices_daily use)
 const H1_HIGH = BTC_VOL.filter((v) => v >= HIGH_VOL_PCT);
 const H1_CALM = BTC_VOL.filter((v) => v < CALM_VOL_PCT);
-const H1_TARGET = Math.round((H1_HIGH.reduce((a, v) => a + tradeMult(v), 0) / H1_HIGH.length) / (H1_CALM.reduce((a, v) => a + tradeMult(v), 0) / H1_CALM.length) * 1000) / 1000;
+const meanOf = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
+const H1_TARGET = Math.round(meanOf(TRADE_FACTOR.filter((_, i) => BTC_VOL[i] >= HIGH_VOL_PCT)) / meanOf(TRADE_FACTOR.filter((_, i) => BTC_VOL[i] < CALM_VOL_PCT)) * 1000) / 1000;
 const H1_SQL = `WITH ${ID_CTE},
 v AS (SELECT date::DATE AS d, realized_vol_pct AS vol FROM ${WH("market_prices_daily")} WHERE asset = 'BTC'),
 dly AS (SELECT t::DATE AS d, count(*) FILTER (WHERE event = 'trade executed') AS trades, count(*) FILTER (WHERE event = 'quick buy started') AS buys,
@@ -1460,7 +1548,7 @@ export const stories = [
 		id: "H1-volatility-drives-trading",
 		hook: "H1",
 		archetype: "external-join",
-		narrative: `Advanced Trade activity follows the market. On each UTC day, every trade has extra fills in proportion to BTC realized volatility above ${VOL_PIVOT}% (${VOL_TRADE_SENS} extra trades per trade per volatility point). The volatility series lives only in the warehouse table market_prices_daily (asset = BTC, realized_vol_pct), so the read needs the join: trades per daily active user on high-volatility days (realized_vol_pct >= ${HIGH_VOL_PCT}, ${H1_HIGH.length} days) vs calm days (< ${CALM_VOL_PCT}, ${H1_CALM.length} days) is the mean multiplier ratio ${H1_TARGET}. Daily active users count people with any user-initiated event (server-side notifications, recurring-buy executions, and withdrawal confirmations excluded). Simple Buy per active user is the control: casual buyers do not react to volatility.`,
+		narrative: `Advanced Trade activity follows the market. On each UTC day, every trade has extra fills in proportion to BTC realized volatility above ${VOL_PIVOT}% (${VOL_TRADE_SENS} extra trades per trade per volatility point), times seeded day-level noise (±${TRADE_DAY_NOISE * 100}% sd, mean 1; a factor below 1 drops fills). Two of the high-volatility days are not in the timeline guide's market notes. The volatility series lives only in the warehouse table market_prices_daily (asset = BTC, realized_vol_pct), so the read needs the join: trades per daily active user on high-volatility days (realized_vol_pct >= ${HIGH_VOL_PCT}, ${H1_HIGH.length} days) vs calm days (< ${CALM_VOL_PCT}, ${H1_CALM.length} days) is the mean daily factor ratio ${H1_TARGET}. Daily active users count people with any user-initiated event (server-side notifications, recurring-buy executions, and withdrawal confirmations excluded). Simple Buy per active user is the control: casual buyers do not react to volatility.`,
 		mixpanelReport: { type: "Insights", events: ["trade executed", "any user event (uniques)"], measure: "total / daily uniques", chart: "daily line", join: "market_prices_daily.realized_vol_pct (asset = BTC)" },
 		assertions: [
 			{
@@ -1710,10 +1798,10 @@ FROM w GROUP BY 1`,
 		id: "H8-staking-commission-change",
 		hook: "H8",
 		archetype: "temporal-inflection",
-		narrative: `On ${D(STAKING_COMMISSION_CHANGE)} Ledgerline raises its staking commission from ${COMMISSION_OLD * 100}% to ${COMMISSION_NEW * 100}% of rewards, so the net APY shown on new stakes falls to ${((1 - COMMISSION_NEW) / (1 - COMMISSION_OLD)).toFixed(3)}x (ETH ${round2(GROSS_APY.ETH * (1 - COMMISSION_OLD))}% → ${round2(GROSS_APY.ETH * (1 - COMMISSION_NEW))}%). New stakes drop to ${STAKE_KEEP_AFTER}x and unstake requests run ${UNSTAKE_SURGE_MULT}x for ${UNSTAKE_SURGE_DAYS} days. Read on established customers (customer_since before ${D0}), whose population is fixed, as totals in the ${UNSTAKE_SURGE_DAYS} days after vs the ${UNSTAKE_SURGE_DAYS} days before (whole weeks both sides).`,
+		narrative: `On ${D(STAKING_COMMISSION_CHANGE)} Ledgerline raises its staking commission from ${COMMISSION_OLD * 100}% to ${COMMISSION_NEW * 100}% of rewards, so the net APY shown on new stakes falls to ${((1 - COMMISSION_NEW) / (1 - COMMISSION_OLD)).toFixed(3)}x (ETH ${round2(GROSS_APY.ETH * (1 - COMMISSION_OLD))}% → ${round2(GROSS_APY.ETH * (1 - COMMISSION_NEW))}%). New stakes drop to ${STAKE_KEEP_AFTER}x for good. Unstake requests run ${UNSTAKE_SURGE_MULT}x for ${UNSTAKE_SURGE_DAYS - UNSTAKE_TAPER_DAYS} days, then fade linearly back to 1x over the next ${UNSTAKE_TAPER_DAYS} days, so the ${UNSTAKE_SURGE_DAYS}-day mean is ${UNSTAKE_READ_MULT}x. Read on established customers (customer_since before ${D0}), whose population is fixed, as totals in the ${UNSTAKE_SURGE_DAYS} days after vs the ${UNSTAKE_SURGE_DAYS} days before (whole weeks both sides).`,
 		mixpanelReport: { type: "Insights", events: ["stake started", "unstake requested"], measure: "total", filter: `customer_since before ${D0}`, chart: "weekly line", compare: `${UNSTAKE_SURGE_DAYS} days after vs before ${D(STAKING_COMMISSION_CHANGE)}` },
 		assertions: [
-			...[["stake started", STAKE_KEEP_AFTER], ["unstake requested", UNSTAKE_SURGE_MULT]].map(([evName, k]) => ({
+			...[["stake started", STAKE_KEEP_AFTER], ["unstake requested", UNSTAKE_READ_MULT]].map(([evName, k]) => ({
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE},
@@ -1742,25 +1830,28 @@ FROM ev WHERE event = 'stake started' AND asset = 'ETH' GROUP BY 1`,
 		id: "H9-android-simple-buy-bug",
 		hook: "H9",
 		archetype: "funnel-conversion-by-segment",
-		narrative: `Android app 5.12 (released ${D(ANDROID_RELEASE)}, hotfixed ${D(ANDROID_HOTFIX)}) breaks the Simple Buy confirmation step: ${ANDROID_FAIL * 100}% of Android Simple Buy orders that would have completed never do. iOS and iPadOS are untouched. Ratio of ratios (Android completion / iOS + iPadOS, incident days vs the 7 days either side, order_id held constant) reads 1 - ${ANDROID_FAIL} and cancels the experiment mix (H5 hits both platforms alike).`,
-		mixpanelReport: { type: "Funnels", steps: ["quick buy started", "quick buy completed"], counting: "totals", holdPropertyConstant: "order_id", breakdown: "os", chart: "daily" },
+		narrative: `Android app 5.12 (released ${D(ANDROID_RELEASE)}, hotfixed ${D(ANDROID_HOTFIX)}) breaks the Simple Buy confirmation step: ${ANDROID_FAIL * 100}% of Android Simple Buy orders that would have completed never do. iOS and iPadOS are untouched. Read per platform, order_id held constant: Android completion on the incident days / Android completion in the 7 days either side reads 1 - ${ANDROID_FAIL}; the same ratio on iOS + iPadOS is the control (1.0). The One-Tap experiment (H5) is hashed 50/50 per user and fully running by then, so it does not shift either platform's rate between the incident and the days around it. (A ratio of ratios, Android over Apple, reads the same knob but stacks the binomial noise of two three-day samples.)`,
+		mixpanelReport: { type: "Funnels", steps: ["quick buy started", "quick buy completed"], counting: "totals", holdPropertyConstant: "order_id", breakdown: "os", chart: "daily", window: "1 day" },
 		assertions: [
-			{
+			...[["android", ANDROID_FAIL], ["apple", 0]].map(([grp, f]) => ({
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE},
 c AS (SELECT order_id, min(t) AS t1 FROM ev WHERE event = 'quick buy completed' GROUP BY 1),
-w AS (SELECT s.uid, (s.os = 'Android') AS hit, (s.t >= TIMESTAMP '${TS(ANDROID_RELEASE)}' AND s.t < TIMESTAMP '${TS(ANDROID_HOTFIX)}') AS inc,
+w AS (SELECT s.uid, CASE WHEN s.os = 'Android' THEN 'android' ELSE 'apple' END AS plat,
+  (s.t >= TIMESTAMP '${TS(ANDROID_RELEASE)}' AND s.t < TIMESTAMP '${TS(ANDROID_HOTFIX)}') AS inc,
   (c.t1 IS NOT NULL AND c.t1 < s.t + INTERVAL 1 DAY) AS ok
   FROM ev s LEFT JOIN c ON c.order_id = s.order_id
-  WHERE s.event = 'quick buy started' AND s.t >= TIMESTAMP '${AND_BASE_FROM}' AND s.t < TIMESTAMP '${AND_BASE_TO}'),
-g AS (SELECT inc, avg(ok::INT) FILTER (WHERE hit) / avg(ok::INT) FILTER (WHERE NOT hit) AS rel, count(DISTINCT uid) AS users FROM w GROUP BY 1)
-SELECT 'all' AS grp, min(users) AS user_count, max(rel) FILTER (WHERE inc) / max(rel) FILTER (WHERE NOT inc) AS did FROM g`,
+  WHERE s.event = 'quick buy started' AND s.t >= TIMESTAMP '${AND_BASE_FROM}' AND s.t < TIMESTAMP '${AND_BASE_TO}')
+SELECT plat AS grp, count(DISTINCT uid) FILTER (WHERE inc) AS user_count,
+ avg(ok::INT) FILTER (WHERE inc) AS conv_incident, avg(ok::INT) FILTER (WHERE NOT inc) AS conv_around,
+ avg(ok::INT) FILTER (WHERE inc) / avg(ok::INT) FILTER (WHERE NOT inc) AS rel
+FROM w GROUP BY 1`,
 				},
-				select: { a: { where: { grp: "all" } } },
-				expect: { metric: "a.did", op: "between", target: band(1 - ANDROID_FAIL) },
-				minCohort: 1000,
-			},
+				select: { a: { where: { grp } } },
+				expect: { metric: "a.rel", op: "between", target: band(1 - f) },
+				minCohort: 500,
+			})),
 		],
 	},
 	{

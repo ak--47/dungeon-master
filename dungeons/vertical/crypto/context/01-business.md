@@ -2,7 +2,7 @@
 
 ## Who we are
 
-Ledgerline is a crypto exchange and wallet app for everyday investors. The company was founded in 2022, is based in Denver, and has about 45 employees. Most customers live in the United States; the rest are spread across about 40 other countries. About 10,000 customers use the app in a typical quarter. Ledgerline is mobile-only: customers use the iOS app (iPhone and iPad) or the Android app.
+Ledgerline is a crypto exchange and wallet app for everyday investors. The company was founded in 2019, is based in Denver, and has about 45 employees. Most customers live in the United States; the rest are spread across about 40 other countries. About 10,000 customers use the app in a typical quarter. Ledgerline is mobile-only: customers use the iOS app (iPhone and iPad) or the Android app.
 
 ## What customers do in the app
 

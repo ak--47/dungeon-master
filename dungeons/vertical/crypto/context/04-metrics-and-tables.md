@@ -7,7 +7,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 | KPI | Definition |
 |---|---|
 | New sign-ups | Unique customers with `account created` in the period. |
-| Onboarding completion (funded rate) | Share of new sign-ups who reach `deposit completed` after `account created` → `identity verification started` → `identity verified`, in order, within 7 days of sign-up. Only count sign-ups with 7 full days of data (sign-ups through September 23). |
+| Onboarding completion (funded rate) | Share of new sign-ups who reach `deposit completed` after `account created` → `identity verification started` → `identity verified`, in order, within 7 days of sign-up. Only count sign-ups with 7 full days of data (sign-ups through September 23). A customer who first funds after day 7 is a funded account but does not count toward this KPI. |
 | Time to fund | Per new customer, time from `account created` to the first `deposit completed`. Report the median. |
 | Funded account | A customer with at least one `deposit completed`. |
 | Active customer | A customer with at least one customer-initiated event in the period. Server-side events (`price alert triggered`, `recurring buy executed`, `withdrawal confirmed`) do not make a customer active. |
@@ -26,7 +26,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 
 Three tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). They join to events on the UTC date of the event and on the named dimension.
 
-In the warehouse, numeric columns are loaded as FLOAT64 (shown as FLOAT below). Count columns (withdrawals, sign-ups, clicks, impressions, volume in millions) always hold whole numbers, and raw file exports show them as integers.
+In the warehouse, count columns (withdrawals, sign-ups, clicks, impressions, volume in millions) are INTEGER (INT64) and every other numeric column is FLOAT (FLOAT64).
 
 ### `market_prices_daily`
 
@@ -41,7 +41,7 @@ Daily market data for every coin Ledgerline lists, from the market data vendor's
 | `high_usd`, `low_usd` | FLOAT | USD per coin | Highest and lowest price of the day. |
 | `daily_return_pct` | FLOAT | percent | Close-to-close change. |
 | `realized_vol_pct` | FLOAT | percent | Realized volatility of the day from intraday returns, in daily percent terms. |
-| `global_spot_volume_usd_m` | FLOAT | USD millions | Spot trading volume for the coin across the major exchanges in the vendor's feed. |
+| `global_spot_volume_usd_m` | INTEGER | USD millions | Spot trading volume for the coin across the major exchanges in the vendor's feed. |
 
 Caveats: ONDO has market data for the whole window because it traded elsewhere before Ledgerline listed it on 2026-08-05. Ledgerline's own fill prices (`price_usd` on events) sit close to, but not exactly at, the vendor's prices.
 
@@ -53,7 +53,7 @@ Daily blockchain network conditions and Ledgerline's withdrawal broadcasts by ne
 |---|---|---|---|
 | `date` | DATE | UTC day | Day. |
 | `network` | STRING | — | `bitcoin`, `ethereum`, `solana`, `base`, `tron`. Matches `network` on withdrawal events. |
-| `withdrawals_broadcast` | FLOAT | count | Withdrawals Ledgerline processed for the network that day: app withdrawals plus institutional API withdrawals. |
+| `withdrawals_broadcast` | INTEGER | count | Withdrawals Ledgerline processed for the network that day: app withdrawals plus institutional API withdrawals. |
 | `avg_network_fee_usd` | FLOAT | USD | Average network fee for a standard transfer on the network that day. |
 | `median_confirmation_mins` | FLOAT | minutes | Median time for Ledgerline's broadcasts to confirm. |
 | `failed_broadcast_rate` | FLOAT | share 0-1 | Share of Ledgerline's broadcasts that did not confirm and were returned to the customer. |
@@ -70,9 +70,9 @@ Daily paid marketing cost by channel, from the ad platforms' and the affiliate n
 | `date` | DATE | UTC day | Spend day. |
 | `acquisition_channel` | STRING | — | `paid_search`, `paid_social`, `influencer_affiliate`, or `app_store_ads`. Matches `acquisition_channel` on `account created`. |
 | `spend_usd` | FLOAT | USD | Media spend (or creator and affiliate fees) billed for the day. |
-| `platform_reported_signups` | FLOAT | count | Sign-ups the platform claims for the day. Platforms use their own attribution and usually claim more than Mixpanel records. |
-| `clicks` | FLOAT | count | Clicks reported by the platform. |
-| `impressions` | FLOAT | count | Impressions reported by the platform. |
+| `platform_reported_signups` | INTEGER | count | Sign-ups the platform claims for the day. Platforms use their own attribution and usually claim more than Mixpanel records. |
+| `clicks` | INTEGER | count | Clicks reported by the platform. |
+| `impressions` | INTEGER | count | Impressions reported by the platform. |
 
 Caveats: organic and referral have no media spend and are not in this table. Use Mixpanel sign-ups, not `platform_reported_signups`, for CAC.
 

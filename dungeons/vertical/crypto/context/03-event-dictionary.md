@@ -8,7 +8,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 |---|---|
 | `time` | When the event happened (UTC). |
 | `user_id` | The customer's ID. Present on every event. |
-| `device_id` | The phone or tablet the event came from. A customer has about two devices. Missing on the onboarding steps after sign-up (sent server-side) and on a small share of recurring-buy events. |
+| `device_id` | The phone or tablet the event came from. A customer has about two devices. Missing only on the onboarding steps after sign-up (sent server-side): `identity verification started`, `identity verified`, and a first `deposit completed` made during onboarding in the first week. |
 | `insert_id` | Unique event ID used for de-duplication. |
 | `session_id` | The app session the event belongs to (diagnostic; Mixpanel computes its own sessions). Missing on events without a `device_id`. |
 | `os` | `iOS`, `iPadOS`, or `Android`. Fixed per device. Missing on events without a `device_id`. |
@@ -17,7 +17,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 
 ## Sign-up and onboarding
 
-New customers go through onboarding once, right after they sign up. Identity verification and the first deposit are sent by the onboarding service with `user_id` only. Customers who signed up in the days before June 4 finish their remaining steps early in the window; their `account created` is before the window.
+New customers go through onboarding once, right after they sign up. Identity verification and a first deposit made during onboarding (the first week) are sent by the onboarding service with `user_id` only. A verified customer who funds later makes that first deposit from the app like any other deposit. Customers who signed up in the days before June 4 finish their remaining steps early in the window; their `account created` is before the window.
 
 | Event | Meaning | Properties |
 |---|---|---|

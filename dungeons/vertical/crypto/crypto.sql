@@ -99,10 +99,14 @@ SELECT s.uid, s.t0, s.os, s.first_deposit_method,
 FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1, 2, 3, 4;
 
 -- dataset overview
-SELECT count(*) AS events, count(DISTINCT uid) AS users_with_events,
+SELECT count(*) AS events, count(DISTINCT uid) AS users_with_events, (SELECT count(*) FROM users) AS profiles,
  count(DISTINCT uid) FILTER (WHERE event = 'account created') AS new_signups,
  min(t) AS first_event, max(t) AS last_event
 FROM ev;
+
+-- profiles with no event in the window (by customer_since: late-May sign-ups vs older customers)
+SELECT customer_since >= DATE '2026-05-28' AS signed_up_last_week_of_may, kyc_status, count(*) AS profiles
+FROM prof WHERE uid NOT IN (SELECT uid FROM ev) GROUP BY 1, 2 ORDER BY 1, 2;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H1-volatility-drives-trading
@@ -200,7 +204,8 @@ FROM w GROUP BY 1 ORDER BY 1;
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H8-staking-commission-change
 -- established customers: stake started and unstake requested totals, 21 days
--- after vs before 2026-08-19; average ETH net APY before vs after
+-- after vs before 2026-08-19 (stakes 0.75; unstakes 1.667 = 14 days at 1.8 and
+-- a 7-day fade to 1.0); average ETH net APY before vs after
 -- ─────────────────────────────────────────────────────────────────────────
 WITH x AS (SELECT e.event, e.t >= TIMESTAMP '2026-08-19' AS post FROM ev e JOIN prof p ON p.uid = e.uid
  WHERE NOT p.is_new AND e.event IN ('stake started', 'unstake requested') AND e.t >= TIMESTAMP '2026-07-29' AND e.t < TIMESTAMP '2026-09-09')
@@ -212,17 +217,18 @@ FROM x GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H9-android-simple-buy-bug
--- ratio of ratios: Android / iOS+iPadOS Simple Buy completion, 2026-08-26..28
--- vs the 7 days either side
+-- per platform: Simple Buy completion on 2026-08-26..28 / completion in the
+-- 7 days either side (Android reads 1 - 0.5; iOS + iPadOS is the 1.0 control);
+-- the Android / Apple ratio of ratios for reference
 -- ─────────────────────────────────────────────────────────────────────────
-WITH w AS (SELECT (t0 >= TIMESTAMP '2026-08-26' AND t0 < TIMESTAMP '2026-08-29') AS inc, os = 'Android' AS android, ok
+WITH w AS (SELECT (t0 >= TIMESTAMP '2026-08-26' AND t0 < TIMESTAMP '2026-08-29') AS inc, CASE WHEN os = 'Android' THEN 'android' ELSE 'apple' END AS plat, ok
  FROM orders WHERE t0 >= TIMESTAMP '2026-08-19' AND t0 < TIMESTAMP '2026-09-05'),
-g AS (SELECT inc, avg(ok::INT) FILTER (WHERE android) AS android_rate, avg(ok::INT) FILTER (WHERE NOT android) AS apple_rate FROM w GROUP BY 1)
-SELECT round(max(android_rate) FILTER (WHERE inc), 4) AS android_incident, round(max(apple_rate) FILTER (WHERE inc), 4) AS apple_incident,
- round(max(android_rate) FILTER (WHERE NOT inc), 4) AS android_around, round(max(apple_rate) FILTER (WHERE NOT inc), 4) AS apple_around,
- round((max(android_rate) FILTER (WHERE inc) / max(apple_rate) FILTER (WHERE inc))
-  / (max(android_rate) FILTER (WHERE NOT inc) / max(apple_rate) FILTER (WHERE NOT inc)), 4) AS ratio_of_ratios
-FROM g;
+g AS (SELECT plat, avg(ok::INT) FILTER (WHERE inc) AS rate_incident, avg(ok::INT) FILTER (WHERE NOT inc) AS rate_around,
+  count(*) FILTER (WHERE inc) AS orders_incident FROM w GROUP BY 1)
+SELECT plat, orders_incident, round(rate_incident, 4) AS rate_incident, round(rate_around, 4) AS rate_around,
+ round(rate_incident / rate_around, 4) AS incident_vs_around,
+ round((SELECT rate_incident / rate_around FROM g WHERE plat = 'android') / (SELECT rate_incident / rate_around FROM g WHERE plat = 'apple'), 4) AS android_vs_apple_ratio_of_ratios
+FROM g ORDER BY plat;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H10-ondo-listing
@@ -331,6 +337,12 @@ SELECT CASE WHEN p.is_new THEN 'new' ELSE 'established' END AS seg, e.event,
  count(*) FILTER (WHERE e.t >= TIMESTAMP '2026-09-09' AND e.t < TIMESTAMP '2026-09-30') AS sep9_sep29
 FROM ev e JOIN prof p ON p.uid = e.uid WHERE e.event IN ('stake started', 'unstake requested') GROUP BY 1, 2 ORDER BY 1, 2;
 
+-- established customers' unstake requests by week relative to the change (week 0 = Aug 19-25)
+SELECT floor(date_diff('second', TIMESTAMP '2026-08-19', e.t) / 604800.0)::INT AS week_from_change, min(e.t)::DATE AS week_start, count(*) AS unstakes
+FROM ev e JOIN prof p ON p.uid = e.uid
+WHERE NOT p.is_new AND e.event = 'unstake requested' AND e.t >= TIMESTAMP '2026-07-29' AND e.t < TIMESTAMP '2026-09-30'
+GROUP BY 1 ORDER BY 1;
+
 SELECT asset, round(avg(apy_pct::DECIMAL(18,6)) FILTER (WHERE t < TIMESTAMP '2026-08-19'), 2) AS apy_before, round(avg(apy_pct::DECIMAL(18,6)) FILTER (WHERE t >= TIMESTAMP '2026-08-19'), 2) AS apy_after
 FROM ev WHERE event = 'stake started' GROUP BY 1 ORDER BY 1;
 
@@ -358,10 +370,10 @@ FROM ev WHERE event = 'trade executed' GROUP BY 1 ORDER BY 1;
 -- EVAL Q11 — does the ID document type change KYC approval? (null)
 -- sign-ups through 2026-09-23 who started verification within 7 days: share
 -- verified within 7 days of sign-up by id_document_type, and z vs driver's
--- license overall, within each platform, and within each KYC vendor era
+-- license overall and within each platform, KYC vendor era, channel, and investor type
 -- ─────────────────────────────────────────────────────────────────────────
-WITH x AS (SELECT *, unnest(['all', 'os: ' || os, CASE WHEN post THEN 'from jul28' ELSE 'before jul28' END]) AS grp
- FROM onboarding WHERE full_window AND s1),
+WITH x AS (SELECT o.*, unnest(['all', 'os: ' || o.os, CASE WHEN o.post THEN 'from jul28' ELSE 'before jul28' END, 'ch: ' || o.ch, 'inv: ' || p.investor_type]) AS grp
+ FROM onboarding o JOIN prof p ON p.uid = o.uid WHERE o.full_window AND o.s1),
 g AS (SELECT grp, doc, count(*) AS n, avg(s2::INT) AS p FROM x GROUP BY 1, 2)
 SELECT a.grp, b.doc, a.n AS n_drivers_license, b.n AS n_doc, round(a.p, 4) AS approved_drivers_license, round(b.p, 4) AS approved_doc,
  round((b.p - a.p) / sqrt(a.p * (1 - a.p) / a.n + b.p * (1 - b.p) / b.n), 2) AS z
@@ -371,12 +383,15 @@ FROM g a JOIN g b ON a.grp = b.grp AND a.doc = 'drivers_license' AND b.doc <> 'd
 -- EVAL Q12 — do bank-transfer funders retain better than card funders? (null)
 -- funded new users who signed up through 2026-08-25: day-30 retention (an app
 -- open in days 30-36) by the method of their first deposit; z for bank transfer
--- vs debit card and vs every other method, overall and within each platform
+-- vs debit card and vs every other method, overall and within each platform,
+-- investor type, channel, and sign-up era
 -- ─────────────────────────────────────────────────────────────────────────
 SELECT first_deposit_method, count(*) AS users, round(avg((opens_d30 > 0)::INT), 4) AS d30
 FROM new_funded WHERE t0 <= TIMESTAMP '2026-08-25 23:59:59' GROUP BY 1 ORDER BY 1;
 
-WITH x AS (SELECT *, unnest(['all', 'os: ' || os]) AS grp FROM new_funded WHERE t0 <= TIMESTAMP '2026-08-25 23:59:59'),
+WITH x AS (SELECT n.*, unnest(['all', 'os: ' || n.os, 'inv: ' || p.investor_type, 'ch: ' || p.acquisition_channel,
+  CASE WHEN n.t0 >= TIMESTAMP '2026-07-28' THEN 'from jul28' ELSE 'before jul28' END]) AS grp
+ FROM new_funded n JOIN prof p ON p.uid = n.uid WHERE n.t0 <= TIMESTAMP '2026-08-25 23:59:59'),
 g AS (SELECT grp, CASE WHEN first_deposit_method = 'bank_transfer' THEN 'bank' WHEN first_deposit_method = 'debit_card' THEN 'card' ELSE 'other' END AS m,
   count(*) AS n, avg((opens_d30 > 0)::INT) AS p FROM x GROUP BY 1, 2),
 h AS (SELECT grp, m = 'bank' AS bank, sum(n) AS n, sum(n * p) / sum(n) AS p FROM g GROUP BY 1, 2)
@@ -409,8 +424,14 @@ FROM p JOIN m ON m.ch = p.ch ORDER BY 1;
 -- EVAL Q15 — new signups and funding
 -- ─────────────────────────────────────────────────────────────────────────
 SELECT coalesce(strftime(t0, '%Y-%m'), 'total') AS month, count(*) AS signups, sum(done::INT) AS funded_7d, round(avg(done::INT), 4) AS funded_7d_rate,
- sum((t3 IS NOT NULL)::INT) AS funded_ever
+ sum((t3 IS NOT NULL)::INT) AS funded_ever, sum((t3 IS NOT NULL AND NOT done)::INT) AS funded_after_day_7
 FROM onboarding GROUP BY ROLLUP (strftime(t0, '%Y-%m')) ORDER BY 1;
+
+-- late funders (first deposit after day 7): count and days from sign-up
+SELECT count(*) AS late_funders, round(min(date_diff('second', t0, t3)) / 86400.0, 1) AS min_days,
+ round(median(date_diff('second', t0, t3)) / 86400.0, 1) AS median_days, round(max(date_diff('second', t0, t3)) / 86400.0, 1) AS max_days,
+ round(count(*)::DOUBLE / (SELECT count(*) FROM onboarding WHERE t3 IS NOT NULL), 4) AS share_of_funders
+FROM onboarding WHERE t3 IS NOT NULL AND NOT done;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q16 — how investor types differ (per user, whole window)
