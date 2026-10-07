@@ -181,7 +181,7 @@ HOOK STATE (module-level Maps/Sets used across users), and HELPER FUNCTIONS
 15–20 distinct event types covering the app's core loop. Each event:
 
 - `event` — name in **lowercase with spaces** (Mixpanel convention)
-- `weight` — relative frequency 1–10 (clamped)
+- `weight` — relative frequency, a whole number >= 1 (no upper cap)
 - `properties` — flat property map. Values can be arrays (random pick) or
   utility calls like `u.weighNumRange(1, 100, 0.5, 20)`
 

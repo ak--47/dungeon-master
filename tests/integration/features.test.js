@@ -98,7 +98,7 @@ describe('hook string conversion', () => {
 });
 
 describe('event weight clamping', () => {
-	test('clamps event weights to [1, 10]', () => {
+	test('floors event weights at 1 with a warning; no upper cap (1.9.0)', () => {
 		initChance('clamp-test');
 		const config = validateDungeonConfig({
 			numUsers: 10,
@@ -110,16 +110,14 @@ describe('event weight clamping', () => {
 			],
 			seed: 'clamp-test'
 		});
-		// The catch-all funnel sequence should have clamped weights
-		const catchAllFunnel = config.funnels.find(f => f.order === 'random' && !f.isFirstFunnel);
-		if (catchAllFunnel) {
-			const aCounts = catchAllFunnel.sequence.filter(e => e === 'a').length;
-			const bCounts = catchAllFunnel.sequence.filter(e => e === 'b').length;
-			const cCounts = catchAllFunnel.sequence.filter(e => e === 'c').length;
-			expect(aCounts).toBeGreaterThanOrEqual(1); // clamped from 0 to 1
-			expect(bCounts).toBeLessThanOrEqual(10); // clamped from 50 to 10
-			expect(cCounts).toBe(5); // unchanged
-		}
+		const catchAllFunnel = config.funnels.find(f => f._catchAll);
+		expect(catchAllFunnel).toBeTruthy();
+		const count = (name) => catchAllFunnel.sequence.filter(e => e === name).length;
+		expect(count('a')).toBe(1); // floored from 0 to 1
+		expect(count('b')).toBe(50); // no upper cap
+		expect(count('c')).toBe(5); // unchanged
+		expect(config._warnings.find(w => w.key === 'events[a].weight')).toMatchObject({ requested: 0, applied: 1, severity: 'clamp' });
+		expect(config._warnings.find(w => w.key === 'events[b].weight')).toBeUndefined();
 	});
 });
 

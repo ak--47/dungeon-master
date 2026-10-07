@@ -56,6 +56,12 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   without a `device_id` carry the user's primary device. `radio` stays per
   event. Output shift: device fields change, and each event takes fewer RNG
   draws, so later seeded values change for a fixed seed.
+- Stop capping event `weight` at 10. The standalone pool and the catch-all
+  funnel clamped every weight to [1, 10] without a warning, so weight 26 gave
+  the same output as 10. Weights are now whole numbers >= 1 with no upper cap.
+  A floored fraction or a weight below 1 lands in `result.warnings` as
+  `events[<name>].weight`. Output shift: dungeons with an event weight above 10
+  change their event mix (and the RNG stream after it); others are unchanged.
 
 ### Added
 

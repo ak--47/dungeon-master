@@ -1128,7 +1128,15 @@ export interface Context {
 export interface EventConfig {
     /** The event name (e.g., "page viewed", "purchase completed"). */
     event?: string;
-    /** Relative frequency weight (1-10, clamped by validator). Higher = more likely to be selected for standalone event generation. Does NOT control funnel event frequency — funnels generate their own events. 0 is clamped to 1. Default: 1 */
+    /**
+     * Relative frequency weight: a whole number >= 1, no upper cap (1.9.0; it was
+     * silently capped at 10 before). Higher = more likely to be selected for
+     * standalone event generation and repeated more often in the catch-all funnel.
+     * Does NOT control declared funnel event frequency — funnels generate their own
+     * events. Fractions are floored and values below 1 become 1; each change lands
+     * in `result.warnings` as `events[<name>].weight`. Use `isStrictEvent: true`
+     * to keep an event out of the standalone pool. Default: 1
+     */
     weight?: number;
     /** Properties to attach to this event type. Values can be arrays (random pick), functions, or primitives. */
     properties?: Record<string, ValueValid>;
