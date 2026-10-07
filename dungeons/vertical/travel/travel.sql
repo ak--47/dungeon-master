@@ -341,7 +341,7 @@ SELECT count(*) FILTER (WHERE promo_code = 'SUMMERKICKOFF') AS promo_bookings,
 FROM bookings;
 SELECT channel, count(*) AS sends, count(DISTINCT uid) AS members FROM ev WHERE event = 'notification received' AND campaign = 'summer_kickoff_sale' GROUP BY 1 ORDER BY 1;
 
--- EVAL Q13: card approval rate by platform and gateway status (warehouse only)
+-- EVAL Q13: payment approval rate by platform and gateway status (warehouse only)
 SELECT platform, gateway_status, count(*) AS days, round(avg(approval_rate), 4) AS avg_approval_rate,
  round(sum(authorizations_approved)::DOUBLE / sum(authorization_attempts), 4) AS weighted_approval_rate,
  round(avg(p95_auth_latency_ms), 0) AS avg_p95_latency_ms

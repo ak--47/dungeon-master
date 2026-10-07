@@ -16,8 +16,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             a commission on each stay. Members collect Driftway Rewards
  *             (member / silver / gold). Flex Pay (book now, pay in four
  *             installments) launches 2026-07-14.
- * SCALE:      10,000 members (about 5,000 join inside the window), ~1.54M
- *             events, ~13K bookings, 120 days (2026-06-04 → 2026-10-01, UTC)
+ * SCALE:      10,000 members (about 5,000 join inside the window), ~1.55M
+ *             events, ~14K bookings, 120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  destination searched → property viewed (1-12) → checkout started
  *             → booking completed → (booking cancelled | check in completed →
  *             review submitted)
@@ -47,7 +47,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * SCD PROPS:   none
  * GROUPS:      none
  * WAREHOUSE:   marketing_spend_daily (spend, clicks, impressions by paid
- *              channel), payment_gateway_daily (card authorizations and
+ *              channel), payment_gateway_daily (payment authorizations and
  *              gateway health by platform), destination_supply_daily (room
  *              nights booked across all channels, rooms listed, average daily
  *              rate, weather advisory by region)
@@ -68,12 +68,14 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   The hook draws destination (region weights by segment), lead time and
  *   nights (by segment), 1-12 property views a few minutes apart (properties
  *   from that destination's catalog), the search → booking time (H6), and
- *   then: P(checkout) = BASE_CHECKOUT x member propensity (log-normal, mean 1)
- *   x review-count factor of the last property viewed (H8) x sale (H10) x
+ *   then: P(checkout) = BASE_CHECKOUT x member propensity (log-normal, mean 1,
+ *   truncated at 3x so no session's checkout chance reaches 1 even with every
+ *   lift applied) x review-count factor of the last property viewed (H8) x sale (H10) x
  *   All-in variant (H5) x hurricane (H9) x (a small member-specific factor,
  *   mean 0.08, for low-intent TikTok signups, H3); P(book | checkout) =
  *   BASE_BOOK x Flex Pay (H1) x All-in variant (H5), and web checkouts fail
- *   during the gateway incident (H2). A failed checkout sometimes logs
+ *   during the payment gateway incident (H2; the gateway authorizes every web
+ *   payment method: cards, wallets, and PayPal). A failed checkout sometimes logs
  *   "payment failed" (gateway_timeout during the incident). The traveler picks
  *   the rate type at checkout: non-refundable is 10% below the free-
  *   cancellation rate.
@@ -131,10 +133,12 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * H2. WEB PAYMENT GATEWAY INCIDENT (everything + warehouse payment_gateway_daily)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: 2026-08-18 to 2026-08-21, 55% of web checkouts fail (most log
- *   payment failed / gateway_timeout); apps untouched. The warehouse shows
- *   gateway_status = degraded for web on those days, approval_rate 0.45x the
- *   web's normal rate (about 0.42 vs 0.92) on unchanged attempt volume.
+ * PATTERN: 2026-08-18 to 2026-08-21, 55% of web checkouts fail whatever the
+ *   payment method (most log payment failed / gateway_timeout); apps
+ *   untouched. The warehouse shows gateway_status = degraded for web on those
+ *   days, approval_rate 0.45x the web's normal rate (about 0.42 vs 0.92);
+ *   attempts derive from approvals / approval rate, so attempt volume stays
+ *   near normal.
  * MIXPANEL: Insights, booking completed / checkout started, daily, breakdown
  *   platform; web/app ratio on degraded days vs 14 days either side; join
  *   payment_gateway_daily.gateway_status.
@@ -245,55 +249,56 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-travel, 2026-10-07, full fidelity,
- * 10,000 members, 1,541,845 events)
+ * 10,000 members, 1,551,549 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                            | Derivation                 | Expected | Measured
  * -----|---------------------------------------------------|----------------------------|----------|---------
- * H1   | booking per checkout, after/before Jul 14         | FLEX_LIFT                  | 1.20     | 1.200 (49.7% → 59.6%)
- * H1   | Flex Pay share of bookings after launch           | FLEX_SHARE                 | 0.35     | 0.366
- * H2   | web/app booking per checkout, incident / ±14 d    | 1 − WEB_FAIL (≤, ceil 0.725)| 0.45    | 0.511
+ * H1   | booking per checkout, after/before Jul 14         | FLEX_LIFT                  | 1.20     | 1.211 (50.0% → 60.5%)
+ * H1   | Flex Pay share of bookings after launch           | FLEX_SHARE                 | 0.35     | 0.356
+ * H2   | web/app booking per checkout, incident / ±14 d    | 1 − WEB_FAIL (≤, ceil 0.725)| 0.45    | 0.391
  * H2   | web approval_rate, degraded / operational (wh)    | 1 − WEB_FAIL               | 0.45     | 0.452 (0.416 vs 0.921)
- * H3   | spend per signup, TikTok / Meta                   | 10 / 14                    | 0.714    | 0.717 ($9.81 vs $13.69)
- * H3   | 30-day booker rate, TikTok / other channels       | TIKTOK_BOOKER_RATIO (≤, ceil 0.75) | 0.50 | 0.451 (18.4% vs 40.7%)
- * H3   | spend per booker, TikTok / Meta                   | (10 / 0.5) / 14 (≥, floor 1.21) | 1.429 | 1.626 ($53.45 vs $32.87)
- * H4   | 30-day cancel rate, 60+ / 7-29 days lead          | 0.40 / 0.15 (≥, floor 1.83)| 2.667    | 2.975
- * H4   | 30-day cancel rate, 30-59 / 7-29 days lead        | 0.27 / 0.15 (≥, floor 1.4) | 1.80     | 1.905
- * H4   | 30-day cancel rate, non-refundable / refundable   | 0.25 (≤, ceil 0.625)       | 0.25     | 0.245
- * H5   | search → checkout (7 d), variant / control        | ALLIN_CHECKOUT_MULT        | 0.85     | 0.816
- * H5   | checkout → booking (7 d), variant / control       | ALLIN_BOOK_MULT            | 1.30     | 1.300
- * H5   | variant share of exposed members                  | equal 2-arm hash           | 0.50     | 0.498
- * H6   | median search → booking, business / couple+solo   | SEGMENT_GAP_MULT.business  | 0.50     | 0.502 (2.04 h)
- * H6   | median search → booking, family / couple+solo     | SEGMENT_GAP_MULT.family    | 1.80     | 1.626 (6.60 h)
- * H7   | day 7-29 return, first review 1-2★ / 3-5★         | 1 − BAD_STAY_CHURN (≤, ceil 0.75) | 0.50 | 0.476 (45.0% vs 94.4%)
- * H8   | checkout per view, 0-9 / 50+ reviews              | REVIEW_CHECKOUT_K["0-9"]   | 0.40     | 0.424
- * H8   | checkout per view, 10-49 / 50+ reviews            | REVIEW_CHECKOUT_K["10-49"] | 0.75     | 0.770
- * H9   | Caribbean / other searches, warning / ±14 d       | HURRICANE_SEARCH_KEEP (≤, ceil 0.75) | 0.50 | 0.532
- * H9   | Caribbean / other checkout per search, warning / ±14 d | HURRICANE_CHECKOUT_K (≤, ceil 0.625) | 0.25 | 0.229
+ * H3   | spend per signup, TikTok / Meta                   | 10 / 14                    | 0.714    | 0.719 ($9.90 vs $13.77)
+ * H3   | 30-day booker rate, TikTok / other channels       | TIKTOK_BOOKER_RATIO (≤, ceil 0.75) | 0.50 | 0.474 (22.4% vs 47.3%)
+ * H3   | spend per booker, TikTok / Meta                   | (10 / 0.5) / 14 (≥, floor 1.21) | 1.429 | 1.399 ($44.13 vs $31.55)
+ * H4   | 30-day cancel rate, 60+ / 7-29 days lead          | 0.40 / 0.15 (≥, floor 1.83)| 2.667    | 2.504
+ * H4   | 30-day cancel rate, 30-59 / 7-29 days lead        | 0.27 / 0.15 (≥, floor 1.4) | 1.80     | 1.781
+ * H4   | 30-day cancel rate, non-refundable / refundable   | 0.25 (≤, ceil 0.625)       | 0.25     | 0.212
+ * H5   | search → checkout (7 d), variant / control        | ALLIN_CHECKOUT_MULT        | 0.85     | 0.871
+ * H5   | checkout → booking (7 d), variant / control       | ALLIN_BOOK_MULT            | 1.30     | 1.284
+ * H5   | variant share of exposed members                  | equal 2-arm hash           | 0.50     | 0.496
+ * H6   | median search → booking, business / couple+solo   | SEGMENT_GAP_MULT.business  | 0.50     | 0.495 (1.99 h vs 4.02 h)
+ * H6   | median search → booking, family / couple+solo     | SEGMENT_GAP_MULT.family    | 1.80     | 1.851 (7.44 h)
+ * H7   | day 7-29 return, first review 1-2★ / 3-5★         | 1 − BAD_STAY_CHURN (≤, ceil 0.75) | 0.50 | 0.496 (47.0% vs 94.8%)
+ * H8   | checkout per view, 0-9 / 50+ reviews              | REVIEW_CHECKOUT_K["0-9"]   | 0.40     | 0.388
+ * H8   | checkout per view, 10-49 / 50+ reviews            | REVIEW_CHECKOUT_K["10-49"] | 0.75     | 0.746
+ * H9   | Caribbean / other searches, warning / ±14 d       | HURRICANE_SEARCH_KEEP (≤, ceil 0.75) | 0.50 | 0.482
+ * H9   | Caribbean / other checkout per search, warning / ±14 d | HURRICANE_CHECKOUT_K (≤, ceil 0.625) | 0.25 | 0.196
  * H9   | warehouse rooms_listed, warning / normal Caribbean | HURRICANE_ROOMS_K         | 0.60     | 0.604
- * H10  | checkout per search, sale / ±14 d                 | SALE_CHECKOUT_LIFT         | 1.40     | 1.292 (10.8% → 14.0%)
- * H10  | average booked nightly_rate, sale / ±14 d         | 1 − SALE_DISCOUNT          | 0.85     | 0.866 ($210 vs $243)
+ * H10  | checkout per search, sale / ±14 d                 | SALE_CHECKOUT_LIFT         | 1.40     | 1.399 (11.1% → 15.6%)
+ * H10  | average booked nightly_rate, sale / ±14 d         | 1 − SALE_DISCOUNT          | 0.85     | 0.839 ($209 vs $249)
  * ═════════════════════════════════════════════════════════════════════════
  *
  * Noise notes: the reads marked ≤ / ≥ rest on a few hundred events or fewer
- * (about 130 web bookings from 465 web checkouts on 4 incident days, where the
- * app control is itself noisy: app checkouts booked at 0.89x their ±14-day
- * rate and 0.94x the week before, which lifts the H2 ratio; about 120
- * non-refundable cancellations; about 740 TikTok signups; about 360 members
- * whose first review was bad; about 670 Caribbean searches and 15 Caribbean
- * checkouts on warning days), so they use the knob as target with a
- * half-effect floor or ceiling: NAILED inside knob ±10%, STRONG beyond. 70%
- * of storm-window Caribbean stays cancelled for weather is not asserted (39 of
- * 49 eligible stays, 0.80). H5 arms are hashed per member and members differ
- * a lot in booking appetite, so arm-level session rates carry member mix (here
- * the arms matched before the test: 0.97x net bookings per search Jul 14-Aug
- * 17; 1.06x during it). Checkout → booking splits by any user-level attribute
- * (platform, market) after Aug 25 inherit the All-in Pricing arm mix of that
- * subgroup; they are not engineered and are not independent per checkout.
+ * (113 web bookings from 467 web checkouts on 4 incident days, where the web
+ * baseline itself is 62% against the app's 64%; about 110 non-refundable
+ * cancellations; 727 TikTok signups; 402 members whose first review was bad;
+ * 642 Caribbean searches and 14 Caribbean checkouts on warning days), so they
+ * use the knob as target with a half-effect floor or ceiling: NAILED inside
+ * knob ±10%, STRONG beyond (H2 reads past the knob: 0.391). 70% of storm-window
+ * Caribbean stays cancelled for weather is not asserted (43 of 60 eligible
+ * stays, 0.72). H5 arms are hashed per member and members differ in booking
+ * appetite, so arm-level session rates carry member mix (here the arms matched
+ * before the test: 1.03x net bookings per search Jul 14-Aug 17; 1.12x during
+ * it). Checkout → booking splits by any user-level attribute (platform,
+ * market) after Aug 25 inherit the All-in Pricing arm mix of that subgroup;
+ * they are not engineered and are not independent per checkout.
  *
- * Activity levels (owner decision, moved toward browsing in this round):
- * 21.4 searches per active member in 120 days, 6.1% of search sessions end
- * in a booking, 52% of active members booked, 36% of new members book within
- * 30 days.
+ * Activity levels (owner decision; engagement sits above a typical hotel app):
+ * 21.6 searches per active member in 120 days, 6.6% of search sessions end
+ * in a booking, 59% of active members booked, 42% of new members book within
+ * 30 days, 94% of members searched on or after Aug 25. The keenest member
+ * checks out on at most 69% of their searches (propensity cap); the most
+ * bookings by one member is 26 (a business traveler).
  */
 
 // ── SCALE ──
@@ -311,7 +316,7 @@ const SALE_START = "2026-06-24T00:00:00Z";             // "Summer Kickoff Sale" 
 const SALE_END = "2026-06-29T00:00:00Z";               // exclusive (5 days: Jun 24-28)
 const SALE_PUSH_TIMES = ["2026-06-24T15:00:00Z", "2026-06-27T15:00:00Z"]; // launch + reminder (email, plus push to opted-in members)
 const FLEX_PAY_LAUNCH = "2026-07-14T00:00:00Z";        // Flex Pay (book now, pay in 4 installments) launches
-const PAYMENT_INCIDENT_START = "2026-08-18T00:00:00Z"; // web card-payment gateway incident starts
+const PAYMENT_INCIDENT_START = "2026-08-18T00:00:00Z"; // payment gateway incident (web checkouts) starts
 const PAYMENT_INCIDENT_END = "2026-08-22T00:00:00Z";   // exclusive (4 days: Aug 18-21)
 const ALLIN_START = "2026-08-25T00:00:00Z";            // "All-in Pricing" A/B test starts
 const HURRICANE_START = "2026-09-09T00:00:00Z";        // Hurricane Delia warnings for the Caribbean
@@ -337,7 +342,8 @@ const HOUR_WEIGHTS = [0.95, 0.92, 0.85, 0.72, 0.55, 0.38, 0.26, 0.2, 0.22, 0.3, 
 // Trip-search funnel base rates (per search session)
 const BASE_CHECKOUT = 0.16;         // search session → checkout started (before the review-count factor)
 const BASE_BOOK = 0.5;              // checkout started → booking completed
-const PROPENSITY_SIGMA = 1.0;       // per-member booking propensity (log-normal, mean 1) scales the checkout chance
+const PROPENSITY_SIGMA = 0.9;       // per-member booking propensity (log-normal, mean 1) scales the checkout chance
+const PROPENSITY_CAP = 3;           // the keenest member's propensity (x the mean): the checkout chance stays below 1 with every lift applied
 const SEARCH_TO_BOOK_MEDIAN_H = 4;  // log-normal time from search to booking (couple / solo travelers)
 const SEARCH_TO_BOOK_SIGMA = 1.5;
 const SEARCH_TO_BOOK_MAX_H = 240;
@@ -347,7 +353,7 @@ const FLEX_LIFT = 1.2;
 const FLEX_SHARE = 0.35;            // share of post-launch bookings paid with Flex Pay
 
 // H2 web payment incident (warehouse payment_gateway_daily)
-const WEB_FAIL = 0.55;              // share of web checkouts whose card payment fails during the incident
+const WEB_FAIL = 0.55;              // share of web checkouts whose payment fails during the incident (any payment method)
 const INCIDENT_ERROR_EVENT = 0.8;   // failed incident checkouts that log "payment failed"
 const BASE_ERROR_EVENT = 0.12;      // ordinary abandoned checkouts that log "payment failed"
 
@@ -552,6 +558,22 @@ const REVIEW_PLATEAUS = (() => {
 })();
 const reviewFactor = (n) => reviewSteps(n).reduce((s, v, i) => s + v * REVIEW_PLATEAUS[i], 0);
 
+// member propensity: a log-normal truncated at PROPENSITY_CAP x its mean. Solve the
+// truncation point a (in standard-normal z) and the truncated mean at load, so the
+// draw exp(sigma z) / mean has mean 1 and a ceiling of PROPENSITY_CAP.
+const PROPENSITY_TRUNC = (() => {
+	const meanExp = (a) => {
+		let num = 0, den = 0;
+		for (let z = -8; z <= a; z += 0.002) { const w = Math.exp(-z * z / 2); num += w * Math.exp(PROPENSITY_SIGMA * z); den += w; }
+		return num / den;
+	};
+	let lo = 0, hi = 6;
+	for (let i = 0; i < 40; i++) { const m = (lo + hi) / 2; if (Math.exp(PROPENSITY_SIGMA * m) / meanExp(m) > PROPENSITY_CAP) hi = m; else lo = m; }
+	return { a: lo, mean: meanExp(lo) };
+})();
+// highest checkout chance any session can have (propensity cap, top review plateau, sale lift)
+if (BASE_CHECKOUT * PROPENSITY_CAP * Math.max(...REVIEW_PLATEAUS) * SALE_CHECKOUT_LIFT >= 1) throw new Error("travel: checkout chance can reach 1; lower PROPENSITY_CAP");
+
 // ── SEGMENTS ──
 const SEGMENTS = ["business", "family", "couple", "solo"];
 const LEAD = { business: [6, 0.8, 60], family: [50, 0.7, 180], couple: [24, 0.9, 180], solo: [14, 1.0, 150] }; // median days, sigma, cap
@@ -656,6 +678,9 @@ function handleEverything(events, meta) {
 	const seg = SEGMENTS.includes(profile.traveler_segment) ? profile.traveler_segment : "couple";
 	const BEGIN = ms(DATASET_START), END = ms(DATASET_END);
 	const signup = events.find((e) => e.event === "account created");
+	// a new traveler whose account would be created after the window end has no
+	// account in the window: no anonymous browsing, no lists, no messages
+	if (meta.userIsBornInDataset && !signup) return [];
 	const authT = signup ? T(signup) : -Infinity;
 	// member_since is the UTC date of the account created event
 	if (signup) profile.member_since = dayKey(authT);
@@ -668,10 +693,14 @@ function handleEverything(events, meta) {
 	})();
 	const variant = profile[EXP_KEY] !== undefined ? profile[EXP_KEY] : null;
 	// each member's own appetite for booking (some mostly browse); mean 1
+	// (truncated log-normal: re-draw with a fresh salt above the cap)
 	const propensity = (() => {
-		const u1 = Math.max(1e-9, salt(uid, "prop1")), u2 = salt(uid, "prop2");
-		const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-		return Math.exp(PROPENSITY_SIGMA * z - PROPENSITY_SIGMA * PROPENSITY_SIGMA / 2);
+		for (let k = 0; ; k++) {
+			const tag = k ? `|${k}` : "";
+			const u1 = Math.max(1e-9, salt(uid, `prop1${tag}`)), u2 = salt(uid, `prop2${tag}`);
+			const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+			if (z <= PROPENSITY_TRUNC.a) return Math.exp(PROPENSITY_SIGMA * z) / PROPENSITY_TRUNC.mean;
+		}
 	})();
 
 	// platform follows the device the event came from
@@ -818,7 +847,7 @@ function handleEverything(events, meta) {
 		if (treated) pCk *= ALLIN_CHECKOUT_MULT;
 		if (region === HURRICANE_REGION && inHurricane(ckT)) pCk *= HURRICANE_CHECKOUT_K;
 		if (lowIntent) pCk *= lowIntentK;
-		if (!chance.bool({ likelihood: Math.min(100, pCk * 100) }) || ckT > END) continue;
+		if (!chance.bool({ likelihood: pCk * 100 }) || ckT > END) continue;
 		const ckSrc = un.checkout || signup;
 		if (!ckSrc) continue;
 		// the traveler picks the rate type at checkout (independent of who they are)
@@ -1585,7 +1614,7 @@ export const stories = [
 		id: "H2-web-payment-incident",
 		hook: "H2",
 		archetype: "external-join",
-		narrative: `From ${D(PAYMENT_INCIDENT_START)} to ${D(addDays(PAYMENT_INCIDENT_END, -1))} the card-payment gateway behind the website degrades: ${WEB_FAIL * 100}% of web checkouts fail and never become a booking (most log "payment failed" with error_code = gateway_timeout). The iOS and Android apps are untouched. The incident days and platform come from warehouse payment_gateway_daily (gateway_status = 'degraded'; approval_rate ${1 - WEB_FAIL}x the platform's operational days, on unchanged attempt volume). Event read: web/app ratio of booking completed per checkout started on degraded days vs the ${INC_BASE_DAYS} days either side reads 1 - ${WEB_FAIL}; the ratio cancels the All-in Pricing test (both platforms) and the weekly rhythm.`,
+		narrative: `From ${D(PAYMENT_INCIDENT_START)} to ${D(addDays(PAYMENT_INCIDENT_END, -1))} the payment gateway degrades for web checkouts: ${WEB_FAIL * 100}% of web checkouts fail whatever the payment method and never become a booking (most log "payment failed" with error_code = gateway_timeout). The iOS and Android apps are untouched. The incident days and platform come from warehouse payment_gateway_daily (gateway_status = 'degraded'; approval_rate ${1 - WEB_FAIL}x the platform's operational days, with attempt volume near normal). Event read: web/app ratio of booking completed per checkout started on degraded days vs the ${INC_BASE_DAYS} days either side reads 1 - ${WEB_FAIL}; the ratio cancels the All-in Pricing test (both platforms) and the weekly rhythm.`,
 		mixpanelReport: { type: "Insights + warehouse", events: ["checkout started", "booking completed"], formula: "B / A", breakdown: "platform", chart: "daily line", join: "payment_gateway_daily.gateway_status on date + platform" },
 		assertions: [
 			{
@@ -1626,7 +1655,7 @@ FROM ${WH("payment_gateway_daily")}`,
 			{
 				breakdown: { type: "duckdb", sql: H3_SQL },
 				select: { t: { where: { grp: "tiktok_ads" } }, o: { where: { grp: "non_tiktok" } } },
-				// about 750 TikTok signups: knob target, half-effect ceiling
+				// about 730 TikTok signups: knob target, half-effect ceiling
 				expect: { metric: "t.booker_rate / o.booker_rate", op: "<=", target: TIKTOK_BOOKER_RATIO, floor: 1 - 0.5 * (1 - TIKTOK_BOOKER_RATIO) },
 				minCohort: 300,
 			},
@@ -1662,7 +1691,7 @@ FROM ${WH("payment_gateway_daily")}`,
 			{
 				breakdown: { type: "duckdb", sql: H4_SQL },
 				select: { n: { where: { grp: "non_refundable" } }, r: { where: { grp: "refundable" } } },
-				// about 200 non-refundable cancellations: knob target, half-effect ceiling
+				// about 110 non-refundable cancellations: knob target, half-effect ceiling
 				expect: { metric: "n.cancel_rate / r.cancel_rate", op: "<=", target: NONREFUNDABLE_CANCEL_MULT, floor: 1 - 0.5 * (1 - NONREFUNDABLE_CANCEL_MULT) },
 				minCohort: 500,
 			},
@@ -1745,7 +1774,7 @@ FROM ev WHERE event = '$experiment_started'`,
 			{
 				breakdown: { type: "duckdb", sql: H7_SQL },
 				select: { b: { where: { grp: "bad" } }, o: { where: { grp: "ok" } } },
-				// about 700 members with a bad first review (ratio SE ≈ 5%): knob target, half-effect ceiling
+				// about 400 members with a bad first review (ratio SE ≈ 7%): knob target, half-effect ceiling
 				expect: { metric: "b.retention / o.retention", op: "<=", target: 1 - BAD_STAY_CHURN, floor: 1 - 0.5 * BAD_STAY_CHURN },
 				minCohort: 300,
 			},

@@ -21,14 +21,14 @@ All KPIs use UTC days and count people by unique resolved member (`user_id`, wit
 | New member activation | Share of new members (`account created`) with `booking completed` within 30 days. Compare only members with a full 30 days of data. |
 | CAC (paid) | Spend for a paid channel divided by new members Mixpanel recorded from that channel (`account created` with that `acquisition_channel`) over the same days. Finance uses Mixpanel signups, not the signups the ad networks report. |
 | Cost per booker | Spend for a paid channel divided by that channel's new members who booked within 30 days of signing up. |
-| Card approval rate | `authorizations_approved` / `authorization_attempts` in `payment_gateway_daily`. |
+| Payment approval rate | `authorizations_approved` / `authorization_attempts` in `payment_gateway_daily`. |
 | Review rating | Average `rating` on `review submitted`; share of 1-2 star reviews. |
 
 ## Warehouse tables
 
 Three tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). They join to events on the UTC date of the event and on the named dimension.
 
-In the warehouse, numeric columns are loaded as FLOAT64 (shown as FLOAT below). Count columns (clicks, impressions, signups, authorizations, rooms, room nights) and latency always hold whole numbers, and raw file exports show them as integers.
+In the warehouse, count columns (clicks, impressions, signups, authorizations, rooms, room nights) and latency are loaded as INT64 (shown as INTEGER below); money, rate, and share columns are FLOAT64 (shown as FLOAT).
 
 ### `marketing_spend_daily`
 
@@ -39,28 +39,28 @@ Daily paid acquisition cost by channel, from the ad networks' billing exports. P
 | `date` | DATE | UTC day | Spend day. |
 | `acquisition_channel` | STRING | — | `google_hotel_ads`, `meta_ads`, or `tiktok_ads`. Matches `acquisition_channel` on `account created`. |
 | `spend_usd` | FLOAT | USD | Media spend billed for the day. |
-| `impressions` | FLOAT | count | Ad impressions reported by the network. |
-| `clicks` | FLOAT | count | Ad clicks reported by the network. |
-| `signups_reported` | FLOAT | count | Signups the network attributes to itself for the day. Networks use their own attribution and usually claim more than Mixpanel records. |
+| `impressions` | INTEGER | count | Ad impressions reported by the network. |
+| `clicks` | INTEGER | count | Ad clicks reported by the network. |
+| `signups_reported` | INTEGER | count | Signups the network attributes to itself for the day. Networks use their own attribution and usually claim more than Mixpanel records. |
 
 Caveats: organic, referral, and email signups have no media spend and are not in this table. Use Mixpanel signups, not `signups_reported`, for CAC.
 
 ### `payment_gateway_daily`
 
-Daily card authorization health by platform, from the payments team's gateway logs and the gateway status page.
+Daily payment authorization health by platform (the gateway authorizes every checkout payment method), from the payments team's gateway logs and the gateway status page.
 
 | Column | Type | Unit | Meaning |
 |---|---|---|---|
 | `date` | DATE | UTC day | Day. |
 | `platform` | STRING | — | `ios`, `android`, or `web`. Matches `platform` on events. |
-| `authorization_attempts` | FLOAT | count | Payment authorizations the gateway received from that platform: approved, declined, and timed out, including card retries. |
+| `authorization_attempts` | INTEGER | count | Payment authorizations the gateway received from that platform: approved, declined, and timed out, including card retries. |
 | `approval_rate` | FLOAT | share 0-1 | Share of attempts the gateway approved (`authorizations_approved` / `authorization_attempts`, up to rounding). |
-| `authorizations_approved` | FLOAT | count | Authorizations the gateway approved. Each successful booking payment needs one. |
+| `authorizations_approved` | INTEGER | count | Authorizations the gateway approved. Each successful booking payment needs one. |
 | `gateway_timeout_rate` | FLOAT | share 0-1 | Share of attempts that timed out at the gateway. |
-| `p95_auth_latency_ms` | FLOAT | milliseconds | 95th-percentile time to answer an authorization. |
+| `p95_auth_latency_ms` | INTEGER | milliseconds | 95th-percentile time to answer an authorization. |
 | `gateway_status` | STRING | — | Daily status for the platform as posted on the status page: `operational` or `degraded`. |
 
-Caveats: approvals run a little above Mixpanel's `booking completed` count and do not track it exactly: a date change re-authorizes the card, members who opted out of analytics are only in this table, and a few booking events never reach Mixpanel. Only travelers who reach the payment step create attempts, so attempts stay below the `checkout started` count. Declines for ordinary reasons (insufficient funds, failed bank verification) are part of the normal approval rate.
+Caveats: approvals run a little above Mixpanel's `booking completed` count and do not track it exactly: a date change re-authorizes the card, members who opted out of analytics are only in this table, and a few booking events never reach Mixpanel. Only travelers who reach the payment step create attempts, so attempts usually run well below the `checkout started` count (card retries can push a quiet day close to it). Declines for ordinary reasons (insufficient funds, failed bank verification) are part of the normal approval rate.
 
 ### `destination_supply_daily`
 
@@ -70,8 +70,8 @@ Daily hotel supply and demand by region, from the supply team's partner feeds an
 |---|---|---|---|
 | `date` | DATE | UTC day | Day. |
 | `region` | STRING | — | `us_cities`, `us_beaches`, `mountains`, `caribbean`, or `europe`. Matches `region` on events. |
-| `room_nights_booked` | FLOAT | room nights | Room nights in bookings made that day across all of Driftway's sales channels for the region. |
-| `rooms_listed` | FLOAT | rooms | Rooms partners offered on Driftway in the region that day. |
+| `room_nights_booked` | INTEGER | room nights | Room nights in bookings made that day across all of Driftway's sales channels for the region. |
+| `rooms_listed` | INTEGER | rooms | Rooms partners offered on Driftway in the region that day. |
 | `avg_daily_rate_usd` | FLOAT | USD per night | The region's average daily room rate from partner feeds (market rate, not Driftway's booked rate). Higher on Friday and Saturday nights. |
 | `weather_advisory` | STRING | — | `none` or `hurricane_warning`, from the weather desk. |
 

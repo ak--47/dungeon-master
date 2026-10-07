@@ -4,7 +4,7 @@
 
 Driftway Travel is an online travel company that sells hotel and vacation-rental stays through an iOS app, an Android app, and a website. It started in 2021 with city hotels for US travelers and now lists about 670 properties in 28 destinations across the US, the Caribbean, Canada, and Europe. Partners keep adding new listings through the year. The company has about 60 employees: product and engineering, a supply team that signs and manages property partners, growth marketing, payments, and a member support team.
 
-Driftway earns a commission (about 15% of the stay price) from the property on every completed stay. Travelers pay the nightly rate plus taxes and fees; Driftway charges travelers no booking fee. In summer 2026 members booked about $3.5 million of stays a month through Driftway (before cancellations).
+Driftway earns a commission (about 15% of the stay price) from the property on every completed stay. Travelers pay the nightly rate plus taxes and fees; Driftway charges travelers no booking fee. In summer 2026 members booked about $3.7 million of stays a month through Driftway (before cancellations).
 
 ## How booking on Driftway works
 
