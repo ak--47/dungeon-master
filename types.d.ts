@@ -1332,7 +1332,9 @@ export interface Funnel {
 	 * Variant assignment is **sticky by default** — deterministic per user (hash of user_id +
 	 * experiment name), so the same user is in the same variant across all funnel runs. Set
 	 * `sticky: false` on the config object to re-randomize the variant on every funnel pass.
-	 * `$experiment_started` is prepended to the sequence for every post-start-date funnel run.
+	 * One `$experiment_started` per user (sticky), 1 second before the first step of the user's
+	 * first post-start-date funnel run; later runs keep the variant with no new exposure.
+	 * `sticky: false` sends one exposure per run.
 	 *
 	 * Hook meta (`meta.experiment`) exposes the resolved variant in `funnel-pre` and `funnel-post`
 	 * hooks, enabling variant-specific story injection.

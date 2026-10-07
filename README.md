@@ -605,7 +605,7 @@ the validator throws on shapes that can never match (a function, a bare array â€
 
 ### experiments
 
-experiments are a property of funnels. any funnel with `experiment` set fires a `$experiment_started` event (with `Experiment name` / `Variant name` properties) at the start of every qualifying pass, and the assigned variant's `conversionMultiplier` / `ttcMultiplier` modify that pass:
+experiments are a property of funnels. any funnel with `experiment` set sends one `$experiment_started` event per user (with `Experiment name` / `Variant name` properties), 1 second before the first step of the user's first pass after the start date, as the Mixpanel SDKs send the first exposure. the assigned variant's `conversionMultiplier` / `ttcMultiplier` modify every qualifying pass; later passes carry no new exposure. with `sticky: false` every pass re-rolls the variant and sends its own exposure:
 
 ```javascript
 experiment: true                    // shorthand: Variant A (worse) / Variant B (better) / Control

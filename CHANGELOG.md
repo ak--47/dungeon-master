@@ -62,6 +62,16 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   A floored fraction or a weight below 1 lands in `result.warnings` as
   `events[<name>].weight`. Output shift: dungeons with an event weight above 10
   change their event mix (and the RNG stream after it); others are unchanged.
+- Send `$experiment_started` once per user per sticky experiment, 1 second
+  before the first real step of the user's first funnel run after the start
+  (devtools vertical: 88,965 exposures for 7,425 users). Later runs keep the
+  variant and its multipliers but carry no exposure. The exposure no longer
+  counts against the user's event budget, `worldEvents` clones skip it, and
+  `engagementDecay` never drops it. The start-date gate now tests the run's
+  real first-step time: in legacy mode it tested the user's first event, so
+  only users whose first event came after the start entered the experiment.
+  `sticky: false` experiments keep one exposure per run (each run re-rolls the
+  variant). Output shift: experiment dungeons change; others are unchanged.
 
 ### Added
 

@@ -410,3 +410,77 @@ describe('Experiment API', () => {
 		expect(highStep2).toBeGreaterThan(lowStep2);
 	}, 30000);
 });
+
+// 1.9.0: Mixpanel SDKs send `$experiment_started` once per user per experiment
+// (the first exposure). The engine used to emit one on every funnel run after the
+// start date (devtools vertical: 88,965 exposures for 7,425 users).
+describe('Experiment exposure: once per user', () => {
+	const START_DAYS = 45;
+	const START = (FIXED_NOW - START_DAYS * 86400) * 1000;
+	const expConfig = (seed, extra = {}) => baseConfig({
+		seed,
+		numUsers: 200,
+		avgEventsPerUserPerDay: 3,
+		percentUsersBornInDataset: 50,
+		events: [
+			{ event: 'Signup', isFirstEvent: true, isStrictEvent: true },
+			{ event: 'Build Start', isStrictEvent: true },
+			{ event: 'Build End', isStrictEvent: true },
+			{ event: 'Browse', weight: 5 },
+		],
+		funnels: [
+			{ sequence: ['Signup'], conversionRate: 100, isFirstFunnel: true, timeToConvert: 1 },
+			{
+				sequence: ['Build Start', 'Build End'], conversionRate: 60, timeToConvert: 1, weight: 3,
+				experiment: {
+					name: 'Cache', startDaysBeforeEnd: START_DAYS,
+					variants: [{ name: 'Control' }, { name: 'Cache On', conversionMultiplier: 1.4 }],
+				},
+			},
+		],
+		...extra,
+	});
+
+	const check = (result) => {
+		const events = Array.from(result.eventData);
+		const byUser = new Map();
+		for (const e of events) {
+			if (!e.user_id) continue;
+			if (!byUser.has(e.user_id)) byUser.set(e.user_id, []);
+			byUser.get(e.user_id).push(e);
+		}
+		const profiles = new Map(Array.from(result.userProfilesData).map(p => [p.distinct_id, p]));
+		let usersWithPostStartBuild = 0;
+		let exposed = 0;
+		for (const [uid, list] of byUser) {
+			const exposures = list.filter(e => e.event === '$experiment_started');
+			expect(exposures.length, uid).toBeLessThanOrEqual(1);
+			const postStartBuilds = list
+				.filter(e => e.event === 'Build Start' && Date.parse(e.time) >= START)
+				.map(e => Date.parse(e.time));
+			if (postStartBuilds.length) usersWithPostStartBuild++;
+			if (!exposures.length) {
+				expect(postStartBuilds.length, `${uid} builds after start without an exposure`).toBe(0);
+				continue;
+			}
+			exposed++;
+			const exposureMs = Date.parse(exposures[0].time);
+			// 1s before the first real step of the user's first run after the start.
+			expect(Math.min(...postStartBuilds) - exposureMs, uid).toBe(1000);
+			// The variant stays sticky and lands on the profile.
+			expect(profiles.get(uid)?.['Experiment: Cache'], uid).toBe(exposures[0]['Variant name']);
+		}
+		expect(exposed).toBeGreaterThan(50);
+		expect(exposed).toBe(usersWithPostStartBuild);
+	};
+
+	test('legacy mode: one exposure per user, before the first post-start run', async () => {
+		check(await DUNGEON_MASTER(expConfig('exp-once-legacy')));
+	}, 60000);
+
+	test('retention-curve mode: one exposure per user, before the first post-start run', async () => {
+		check(await DUNGEON_MASTER(expConfig('exp-once-curve', {
+			retentionCurve: { day1: 0.6, day7: 0.4, day30: 0.25 },
+		})));
+	}, 60000);
+});
