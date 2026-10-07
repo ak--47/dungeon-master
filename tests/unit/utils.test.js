@@ -1097,7 +1097,7 @@ describe('generation', () => {
 		const counts = new Map();
 		const n = 20000;
 		for (let i = 0; i < n; i++) {
-			const u = generateUser('u', { numDays: 10, datasetEndUnix: end, datasetStartUnix: start, hourOfDayWeights: null });
+			const u = generateUser('u', { numDays: 10, datasetEndUnix: end, datasetStartUnix: start, hourOfDayWeights: null, dayOfWeekWeights: null });
 			const d = u.created.slice(0, 10);
 			counts.set(d, (counts.get(d) || 0) + 1);
 		}
