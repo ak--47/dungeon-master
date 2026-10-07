@@ -23,8 +23,10 @@ SET VARIABLE data_prefix = COALESCE(getvariable('data_prefix'), 'data/verify-tra
 CREATE OR REPLACE TEMP TABLE raw_events AS
 SELECT * FROM read_json_auto(getvariable('data_prefix') || '-EVENTS*.json*', sample_size=-1, union_by_name=true);
 
+-- profiles flagged _drop (a traveler who never finished signing up) never reach Mixpanel
 CREATE OR REPLACE TEMP TABLE users AS
-SELECT * FROM read_json_auto(getvariable('data_prefix') || '-USERS*.json*', sample_size=-1, union_by_name=true);
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-USERS*.json*', sample_size=-1, union_by_name=true) u
+WHERE coalesce(json_extract_string(to_json(u), '$._drop'), 'false') <> 'true';
 
 CREATE OR REPLACE TEMP TABLE device_map AS
 SELECT device_id, min(user_id::VARCHAR) AS mapped
@@ -201,6 +203,15 @@ SELECT inc.ck AS web_checkouts, inc.bk AS web_bookings, round(base.r, 3) AS base
  round(inc.ck * base.r - inc.bk, 0) AS lost_web_bookings, round((inc.ck * base.r - inc.bk) * avgp.p, 0) AS lost_booking_value_usd
 FROM inc, base, avgp;
 
+-- EVAL Q2 (cont.): app (iOS + Android) booking rate per checkout on the incident days vs the week before, and gateway errors by platform
+SELECT CASE WHEN t >= TIMESTAMP '2026-08-18' THEN 'incident Aug 18-21' ELSE 'week before Aug 11-17' END AS period,
+ count(*) FILTER (WHERE event = 'checkout started') AS app_checkouts,
+ round(count(*) FILTER (WHERE event = 'booking completed')::DOUBLE / count(*) FILTER (WHERE event = 'checkout started'), 4) AS app_book_rate,
+ count(*) FILTER (WHERE event = 'payment failed' AND error_code = 'gateway_timeout') AS app_gateway_timeouts
+FROM ev WHERE platform <> 'web' AND event IN ('checkout started', 'booking completed', 'payment failed') AND t >= TIMESTAMP '2026-08-11' AND t < TIMESTAMP '2026-08-22'
+GROUP BY 1 ORDER BY 1;
+SELECT platform, count(*) AS gateway_timeouts, min(t)::DATE AS first_day, max(t)::DATE AS last_day FROM ev WHERE event = 'payment failed' AND error_code = 'gateway_timeout' GROUP BY 1;
+
 -- EVAL Q3: paid channels — see STORY H3; plus Jul 1-Sep 30 spend and network-reported signups by channel
 SELECT acquisition_channel, round(sum(spend_usd), 0) AS spend, sum(clicks)::BIGINT AS clicks, sum(signups_reported)::BIGINT AS signups_reported
 FROM wh_spend WHERE date::DATE BETWEEN DATE '2026-07-01' AND DATE '2026-09-30' GROUP BY 1 ORDER BY 1;
@@ -211,6 +222,11 @@ sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM wh_spend G
 SELECT s.ch, count(*) AS signups, count(b.uid) AS bookers, round(count(b.uid)::DOUBLE / count(*), 4) AS booker_rate,
  round(sp.spend / count(*), 2) AS spend_per_signup, round(sp.spend / count(b.uid), 2) AS spend_per_booker
 FROM signups s LEFT JOIN b ON b.uid = s.uid JOIN sp ON sp.ch = s.ch GROUP BY s.ch, sp.spend ORDER BY s.ch;
+
+-- EVAL Q3 (cont.): searches per new member (members who joined in the window), TikTok vs every other channel
+SELECT p.acquisition_channel = 'tiktok_ads' AS tiktok, count(DISTINCT p.uid) AS new_members,
+ round(count(*) FILTER (WHERE e.event = 'destination searched')::DOUBLE / count(DISTINCT p.uid), 2) AS searches_per_member
+FROM prof p JOIN ev e ON e.uid = p.uid WHERE p.joined_in_window GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q4: cancellations by lead time — see STORY H4; plus overall cancellation share and the bucket x rate-type grid
 SELECT count(*) AS bookings, count(*) FILTER (WHERE tc IS NOT NULL) AS cancelled,
@@ -229,6 +245,25 @@ WITH x AS (SELECT p.variant, s.search_id, s.booking_id, s.tb, s.t0 FROM sessions
 SELECT x.variant, count(*) AS searches, round(coalesce(sum(b.total_price) FILTER (WHERE x.tb < x.t0 + INTERVAL 7 DAY), 0) / count(*), 2) AS booked_value_per_search
 FROM x LEFT JOIN bookings b ON b.booking_id = x.booking_id GROUP BY 1 ORDER BY 1;
 SELECT "Variant name" AS variant, count(DISTINCT uid) AS exposed_members FROM ev WHERE event = '$experiment_started' GROUP BY 1 ORDER BY 1;
+-- EVAL Q6 (cont.): unique-member funnel (Mixpanel Uniques, no hold-property), destination searched → checkout
+-- started → booking completed, 7-day window, searches Aug 25-Sep 23, breakdown by the profile arm. A member's
+-- attempt starts at their first search in the range; it converts if a checkout and then a booking follow inside
+-- 7 days; if the window expires first, the next attempt starts at the member's next search after the expiry.
+-- The member counts once, as converted if any attempt converts.
+WITH RECURSIVE s AS (SELECT e.uid, e.t FROM ev e JOIN prof p ON p.uid = e.uid
+  WHERE p.variant IS NOT NULL AND e.event = 'destination searched' AND e.t >= TIMESTAMP '2026-08-25' AND e.t < TIMESTAMP '2026-09-24'),
+cb AS (SELECT c.uid, c.t AS tc, min(b.t) AS tb FROM ev c LEFT JOIN ev b ON b.uid = c.uid AND b.event = 'booking completed' AND b.t > c.t
+  WHERE c.event = 'checkout started' AND c.uid IN (SELECT uid FROM s) GROUP BY 1, 2),
+att(uid, t0, ck, bk) AS (
+  SELECT uid, t0, false, false FROM (SELECT uid, min(t) AS t0 FROM s GROUP BY 1)
+  UNION ALL
+  SELECT a.uid, (SELECT min(t) FROM s WHERE s.uid = a.uid AND s.t >= a.t0 + INTERVAL 7 DAY), false, false
+  FROM att a WHERE NOT EXISTS (SELECT 1 FROM cb WHERE cb.uid = a.uid AND cb.tc > a.t0 AND cb.tb < a.t0 + INTERVAL 7 DAY)
+   AND EXISTS (SELECT 1 FROM s WHERE s.uid = a.uid AND s.t >= a.t0 + INTERVAL 7 DAY)),
+m AS (SELECT a.uid, bool_or(EXISTS (SELECT 1 FROM cb WHERE cb.uid = a.uid AND cb.tc > a.t0 AND cb.tc < a.t0 + INTERVAL 7 DAY)) AS ck,
+  bool_or(EXISTS (SELECT 1 FROM cb WHERE cb.uid = a.uid AND cb.tc > a.t0 AND cb.tb < a.t0 + INTERVAL 7 DAY)) AS bk FROM att a GROUP BY 1)
+SELECT p.variant, count(*) AS members, round(avg(m.ck::INT), 4) AS members_reaching_checkout, round(avg(m.bk::INT), 4) AS members_booked
+FROM m JOIN prof p USING (uid) GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q7: time to book by segment — see STORY H6; plus share within 1 hour and the 75th percentile
 SELECT p.seg, round(avg((date_diff('second', s.t0, s.tb) <= 3600)::INT), 3) AS share_within_1h,
@@ -301,17 +336,27 @@ WITH x AS (SELECT p.variant, b.nightly_rate AS r, CASE WHEN b.platform = 'web' T
 g AS (SELECT split, variant, count(*) AS n, avg(r) AS m, var_samp(r) AS v FROM x GROUP BY ALL)
 SELECT a.split, round(a.m - c.m, 2) AS diff_variant_minus_control, round((a.m - c.m) / sqrt(a.v / a.n + c.v / c.n), 3) AS z
 FROM g a JOIN g c ON a.split = c.split AND a.variant = 'All-in Pricing' AND c.variant = 'Control' ORDER BY 1;
+-- EVAL Q14 (cont.): the same nightly_rate split within each traveler segment, and booking value (total_price) per booking
+WITH x AS (SELECT p.variant, p.seg AS split, b.nightly_rate AS r FROM bookings b JOIN prof p ON p.uid = b.uid WHERE p.variant IS NOT NULL AND b.t0 >= TIMESTAMP '2026-08-25'
+  UNION ALL SELECT p.variant, 'total_price (all)', b.total_price FROM bookings b JOIN prof p ON p.uid = b.uid WHERE p.variant IS NOT NULL AND b.t0 >= TIMESTAMP '2026-08-25'),
+g AS (SELECT split, variant, count(*) AS n, avg(r) AS m, var_samp(r) AS v FROM x GROUP BY ALL)
+SELECT a.split, a.n AS variant_bookings, c.n AS control_bookings, round(a.m, 2) AS variant_mean, round(c.m, 2) AS control_mean,
+ round((a.m - c.m) / sqrt(a.v / a.n + c.v / c.n), 3) AS z
+FROM g a JOIN g c ON a.split = c.split AND a.variant = 'All-in Pricing' AND c.variant = 'Control' ORDER BY 1;
 
--- EVAL Q15 (null): 30-day cancellation rate (not weather) of app vs web bookings, bookings Jun 4-Aug 31,
--- overall and within each lead bucket and rate type
-WITH x AS (SELECT CASE WHEN platform = 'web' THEN 'web' ELSE 'app' END AS plat, lead_bucket, refundable,
-  coalesce(reason <> 'weather' AND tc < t0 + INTERVAL 30 DAY, false) AS c FROM bookings WHERE t0 < TIMESTAMP '2026-09-01'),
-y AS (SELECT plat, 'all' AS split, c FROM x UNION ALL SELECT plat, 'lead ' || lead_bucket, c FROM x
-  UNION ALL SELECT plat, CASE WHEN refundable THEN 'refundable' ELSE 'non_refundable' END, c FROM x),
-g AS (SELECT split, plat, count(*) AS n, avg(c::INT) AS p FROM y GROUP BY 1, 2),
-p AS (SELECT a.split, a.p AS pa, b.p AS pw, a.n AS na, b.n AS nw FROM g a JOIN g b ON a.split = b.split AND a.plat = 'app' AND b.plat = 'web')
-SELECT split, na AS app_bookings, nw AS web_bookings, round(pa, 4) AS app_rate, round(pw, 4) AS web_rate,
- round((pa - pw) / sqrt(((pa * na + pw * nw) / (na + nw)) * (1 - (pa * na + pw * nw) / (na + nw)) * (1.0 / na + 1.0 / nw)), 3) AS z
+-- EVAL Q15 (null): 30-day cancellation rate (not weather) of bookings by members based outside the US
+-- (home_market London, Manchester, Toronto) vs US-based members, bookings Jun 4-Aug 31,
+-- overall and within each lead bucket, rate type, and web/app
+WITH x AS (SELECT CASE WHEN p.home_market IN ('London', 'Manchester', 'Toronto') THEN 'intl' ELSE 'us' END AS mkt, b.lead_bucket, b.refundable,
+  CASE WHEN b.platform = 'web' THEN 'web' ELSE 'app' END AS plat,
+  coalesce(b.reason <> 'weather' AND b.tc < b.t0 + INTERVAL 30 DAY, false) AS c FROM bookings b JOIN prof p ON p.uid = b.uid WHERE b.t0 < TIMESTAMP '2026-09-01'),
+y AS (SELECT mkt, 'all' AS split, c FROM x UNION ALL SELECT mkt, 'lead ' || lead_bucket, c FROM x
+  UNION ALL SELECT mkt, CASE WHEN refundable THEN 'refundable' ELSE 'non_refundable' END, c FROM x
+  UNION ALL SELECT mkt, 'platform ' || plat, c FROM x),
+g AS (SELECT split, mkt, count(*) AS n, avg(c::INT) AS p FROM y GROUP BY 1, 2),
+p AS (SELECT a.split, a.p AS pi, b.p AS pu, a.n AS ni, b.n AS nu FROM g a JOIN g b ON a.split = b.split AND a.mkt = 'intl' AND b.mkt = 'us')
+SELECT split, ni AS intl_bookings, nu AS us_bookings, round(pi, 4) AS intl_rate, round(pu, 4) AS us_rate,
+ round((pi - pu) / sqrt(((pi * ni + pu * nu) / (ni + nu)) * (1 - (pi * ni + pu * nu) / (ni + nu)) * (1.0 / ni + 1.0 / nu)), 3) AS z
 FROM p ORDER BY 1;
 
 -- EVAL Q16: booking volume and value by region (whole window)

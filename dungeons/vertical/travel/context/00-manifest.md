@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Driftway Travel**, an app and w
 
 - **Product:** the Driftway iOS app, Android app, and website: destination search, property pages, checkout, bookings, cancellations, check-in, guest reviews, wishlists, price alerts, notifications, and member support.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, the whole summer travel season through the end of September and the first day of October.
-- **Scale:** about 10,000 members were active in the window. About 5,000 of them created their account during the window; the rest joined before June 4. The project holds about 1.5 million events and about 20,000 bookings.
+- **Scale:** about 10,000 members were active in the window. About 5,000 of them created their account during the window; the rest joined before June 4. The project holds about 1.5 million events and about 21,000 bookings.
 - **Travelers:** members live in US cities, Toronto, London, and Manchester. They book stays in 28 destinations in five regions (US cities, US beaches, mountains, the Caribbean, and Europe).
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. Most members are in US time zones, so a US evening falls after midnight UTC.
 

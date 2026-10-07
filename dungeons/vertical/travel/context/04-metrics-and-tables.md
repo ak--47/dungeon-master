@@ -17,7 +17,7 @@ All KPIs use UTC days and count people by unique resolved member (`user_id`, wit
 | Lead time | `lead_time_days` on the booking: days from booking to check-in. The revenue team buckets it as 0-6, 7-29, 30-59, and 60+ days. |
 | Cancellation rate | Per booking (`booking_id` held constant), the share cancelled within 30 days of the booking. Compare only bookings with a full 30 days of data. Report weather cancellations separately; they follow the hurricane waiver, not traveler choice. |
 | Active traveler | A member with `destination searched` in the period. Driftway does not count received notifications, check-ins, or experiment exposures as activity. |
-| Traveler retention | Of members who did a starting event on day 0, the share with `destination searched` in a later bracket (for example day 7-29). Count only members whose bracket ends inside the data. In Mixpanel Retention this needs custom brackets. |
+| Traveler retention | Of members who did a starting event on day 0, the share with `destination searched` in a later bracket. Count only members whose bracket ends inside the data. In Mixpanel Retention this needs custom brackets. |
 | New member activation | Share of new members (`account created`) with `booking completed` within 30 days. Compare only members with a full 30 days of data. |
 | CAC (paid) | Spend for a paid channel divided by new members Mixpanel recorded from that channel (`account created` with that `acquisition_channel`) over the same days. Finance uses Mixpanel signups, not the signups the ad networks report. |
 | Cost per booker | Spend for a paid channel divided by that channel's new members who booked within 30 days of signing up. |
@@ -82,6 +82,6 @@ Caveats: `room_nights_booked` includes bookings sold through corporate travel de
 - For a before/after question around a dated change, consider the weekly rhythm, the overall trend, and other changes in the window (see 02-timeline.md) before you attribute a change to the event. Pick comparison periods that do not overlap another change.
 - Activity follows a weekly rhythm (Sunday and Monday are the busiest planning days). Compare whole weeks or matching weekdays.
 - New members keep arriving through the window, so totals tend to grow over time. Use rates (per search, per checkout, per booking, per member) when you compare periods.
-- Per-session and per-booking questions need `search_id` or `booking_id` held constant; unique-member funnels hide most of the difference between sessions.
+- Per-session and per-booking questions need `search_id` or `booking_id` held constant; unique-member funnels answer a different question.
 - New-member and per-booking windows (activation, cancellations, retention) need complete windows: drop cohorts that started too late in the window to finish theirs.
 - Experiment arms are assigned per member. When you split an experiment-period metric by another member attribute, small differences in the arm mix of each group move the result.

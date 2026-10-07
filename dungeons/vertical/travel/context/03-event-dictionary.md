@@ -26,7 +26,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 |---|---|---|
 | `destination searched` | The traveler searches a destination and dates. Starts a search session. | `search_id`; `destination` (one of 28 destinations); `region` (`us_cities`, `us_beaches`, `mountains`, `caribbean`, `europe`); `check_in_date` (YYYY-MM-DD); `lead_time_days` (days from the search to check-in); `nights` (1-8); `guests` (1-5). |
 | `property viewed` | The traveler opens a property page from the results of that search. A session has one to about a dozen property views. | `search_id`; `property_id`; `property_name`; `property_type` (`hotel`, `boutique_hotel`, `resort`, `vacation_rental`); `destination`; `region`; `star_rating` (2-5; 0 for vacation rentals, which have no star rating); `review_count` (guest reviews the property has on Driftway); `guest_rating` (average guest rating out of 5; 0 when the property has no reviews); `nightly_rate` (USD per night before taxes and fees, as shown for the searched dates). |
-| `checkout started` | The traveler starts checkout for a property (the last property they looked at in that session). At most one per search session. | `search_id`; property fields as on `property viewed` (without `guest_rating`); `nightly_rate`; `nights`; `guests`; `total_price` (USD for the whole stay, including taxes and fees, which are about 16% of the room price); `check_in_date`; `lead_time_days` (days from checkout to check-in). |
+| `checkout started` | The traveler starts checkout for a property from that search. At most one per search session. | `search_id`; property fields as on `property viewed` (without `guest_rating`); `nightly_rate`; `nights`; `guests`; `total_price` (USD for the whole stay, including taxes and fees, which are about 16% of the room price); `check_in_date`; `lead_time_days` (days from checkout to check-in). |
 | `payment failed` | A payment attempt at checkout fails and the traveler sees an error. Not every abandoned checkout has one. | `search_id`; `property_id`; `error_code` (`card_declined`, `insufficient_funds`, `3ds_failed` for a failed bank verification, `gateway_timeout` when the payment gateway did not answer); `payment_method` the traveler tried. |
 | `booking completed` | Payment succeeds and the stay is booked. At most one per search session. | `booking_id`; `search_id`; property fields; `nightly_rate`; `nights`; `guests`; `total_price`; `check_in_date`; `lead_time_days` (days from the booking to check-in); `refundable` (`true` = free-cancellation rate, `false` = non-refundable rate); `payment_method` (`credit_card`, `paypal`, `apple_pay`, `google_pay`, `flex_pay`); `promo_code` (`none` or a campaign code such as `SUMMERKICKOFF`). |
 | `filters applied` | The traveler filters search results. | `filter_type` (`price`, `guest_rating`, `free_cancellation`, `property_type`, `amenities`, `neighborhood`). |
@@ -53,7 +53,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 
 | Event | Meaning | Properties |
 |---|---|---|
-| `$experiment_started` | The member is enrolled in an experiment. Fires once per member, the first time they open a property page after the test starts. | `Experiment name` (`All-in Pricing`); `Variant name` (`Control`, `All-in Pricing`). |
+| `$experiment_started` | The member is enrolled in an experiment. Fires once per member, just before their first search after the test starts. | `Experiment name` (`All-in Pricing`); `Variant name` (`Control`, `All-in Pricing`). |
 
 ## User profile properties
 
