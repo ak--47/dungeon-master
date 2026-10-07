@@ -323,6 +323,23 @@ WITH w AS (SELECT CASE WHEN t::DATE BETWEEN DATE '2026-08-20' AND DATE '2026-08-
 SELECT period, count(DISTINCT d) AS days, round(count(*) FILTER (WHERE arm = 'aff')::DOUBLE / count(DISTINCT d), 1) AS watch_band_per_day,
  round(count(*) FILTER (WHERE arm = 'ctl')::DOUBLE / count(DISTINCT d), 1) AS unaffected_per_day FROM w GROUP BY 1 ORDER BY 1;
 
+-- the wearable_type-only read (breakdown by the device a member owns, no tracking_source
+-- filter): owners of a watch or band also log some workouts with the phone, and those
+-- kept syncing, so this read is diluted. Owners' workouts vs everyone else's, outage
+-- days vs the 7 days on each side; and per device type against members with no wearable.
+WITH od AS (SELECT DISTINCT date::DATE AS d FROM wh_sync WHERE sync_error_rate > 0.2),
+w AS (SELECT t::DATE AS d, wearable_type AS wt
+  FROM ev WHERE event = 'workout completed' AND t >= TIMESTAMP '2026-08-13' AND t < TIMESTAMP '2026-08-30'),
+g AS (SELECT (d IN (SELECT d FROM od)) AS outage,
+  count(*) FILTER (WHERE wt IN ('smartwatch', 'fitness_band')) AS owners, count(*) FILTER (WHERE wt NOT IN ('smartwatch', 'fitness_band')) AS others,
+  count(*) FILTER (WHERE wt = 'smartwatch') AS smartwatch, count(*) FILTER (WHERE wt = 'fitness_band') AS fitness_band,
+  count(*) FILTER (WHERE wt = 'chest_strap') AS chest_strap, count(*) FILTER (WHERE wt = 'none') AS no_wearable FROM w GROUP BY 1)
+SELECT round((max(owners::DOUBLE / others) FILTER (WHERE outage)) / (max(owners::DOUBLE / others) FILTER (WHERE NOT outage)), 4) AS watch_band_owners_vs_others,
+ round((max(smartwatch::DOUBLE / no_wearable) FILTER (WHERE outage)) / (max(smartwatch::DOUBLE / no_wearable) FILTER (WHERE NOT outage)), 4) AS smartwatch_owners_vs_none,
+ round((max(fitness_band::DOUBLE / no_wearable) FILTER (WHERE outage)) / (max(fitness_band::DOUBLE / no_wearable) FILTER (WHERE NOT outage)), 4) AS fitness_band_owners_vs_none,
+ round((max(chest_strap::DOUBLE / no_wearable) FILTER (WHERE outage)) / (max(chest_strap::DOUBLE / no_wearable) FILTER (WHERE NOT outage)), 4) AS chest_strap_owners_vs_none
+FROM g;
+
 -- EVAL Q7 — which devices were hit: per-device workouts per phone workout, outage vs the surrounding week
 WITH od AS (SELECT DISTINCT date::DATE AS d FROM wh_sync WHERE sync_error_rate > 0.2),
 w AS (SELECT t::DATE AS d, CASE WHEN tracking_source = 'wearable' THEN wearable_type ELSE tracking_source END AS src
@@ -432,6 +449,13 @@ WITH j AS (SELECT uid, challenge_format AS f, min(tj) AS tj, max(completed::INT)
 SELECT f AS challenge_format, count(*) AS members, round(avg(any_done), 4) AS share_completing_any FROM j GROUP BY 1 ORDER BY 1;
 -- days from join to completion by challenge length
 SELECT duration_days, round(median(days_to_complete) FILTER (WHERE completed), 1) AS median_days_to_complete FROM challenges GROUP BY 1 ORDER BY 1;
+
+-- weekly trend (Monday weeks; the first and last are partial): completions per join are flat
+-- from the first week, because challenges joined before June 4 still complete in June
+SELECT date_trunc('week', t)::DATE AS week, count(DISTINCT t::DATE) AS days,
+ count(*) FILTER (WHERE event = 'challenge joined') AS joins, count(*) FILTER (WHERE event = 'challenge completed') AS completions,
+ round(count(*) FILTER (WHERE event = 'challenge completed')::DOUBLE / count(*) FILTER (WHERE event = 'challenge joined'), 3) AS completions_per_join
+FROM ev WHERE event IN ('challenge joined', 'challenge completed') GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q15 — notification open rate by members' notification volume, by recent volume, and over time
 SELECT CASE WHEN n < 12 THEN '1 01-11' WHEN n < 24 THEN '2 12-23' WHEN n < 36 THEN '3 24-35' WHEN n < 48 THEN '4 36-47' ELSE '5 48+' END AS notifications_received,

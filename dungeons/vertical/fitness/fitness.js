@@ -18,7 +18,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             Plus feature from 2026-08-12.
  * SCALE:      10,000 simulated users → 9,064 member profiles (4,063 join
  *             inside the window; 936 would-be joiners are removed by the
- *             Summer Shred baseline thinning, see H5), 1.13M events,
+ *             Summer Shred baseline thinning, see H5), 1.09M events,
  *             120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  workout planned → workout completed → progress checked
  * VALUE MOMENT: workout completed
@@ -120,10 +120,27 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   and adds 4% store-page purchases with no app event. Audit corr vs the
  *   event count: ≈0.97 (sync) and ≈0.93 (billing), not 1.000.
  * - Window start: pre-window members have a short engine lead-in, so June 4
- *   holds 94% of June 11's events (non-funnel events equal). A challenge
- *   completion whose join fell before June 4 is placed within that
- *   challenge's length (scheduleChallenges), so those completions spread over
- *   June instead of piling up on June 4-6.
+ *   holds 96% of June 11's events (non-funnel events equal). Challenges:
+ *   the engine lead-in covers only joins in the last few days before June 4,
+ *   so scheduleChallenges drops its orphan completions and
+ *   seedPreWindowChallenges draws each pre-window member's joins in the 30
+ *   days before June 4 (their own in-window join rate, same format split,
+ *   lengths, types, and 60/30 completion) and emits the completions that land
+ *   on or after June 4 (salted per member, cloned from the member's own
+ *   challenge event). Weekly completions per join are flat from week 1.
+ * - Window-start lapse: new members lapse (H6), but pre-window members are
+ *   active all window, so deactivations would ramp up from zero in June. A
+ *   salted 11.5% of long-time free casual and beginner members (no pending
+ *   trial, no purchase) stop on a day in the first 35 days (density falling
+ *   linearly to zero) and deactivate 20-180 min after their last event.
+ *   Weekly deactivations are flat from June 4 until the 21-day quiet rule
+ *   ends them in mid-September.
+ * - Human coaching is a Plus perk: free-tier coach sessions are kept at
+ *   FREE_COACH_KEEP (10%, pay-per-session), so ≈ 11,800 sessions (≈ 5,500
+ *   coach-hours) run in 120 days, ≈ 82% by Plus or trial members.
+ * - The challenge seeding, the window-start lapse, and the coach drop use
+ *   per-member salts only (no shared chance draws), so they leave the other
+ *   members' random streams unchanged.
  * - paid_acquisition_daily follows a media plan (expected Mixpanel signups per
  *   day: births × weekday weight × channel share, with the Summer Shred push),
  *   so spend and impressions are never zero on a low-signup day; spend =
@@ -238,12 +255,12 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   the start of W and 7 days after its end (an approximation of each
  *   member's first 7 days; the exact per-member window needs the raw export).
  *   Raw-export values (each member's own first 7 days): Week 4 ≈ 16% for 0
- *   early workouts, ≈ 25% for 1-2, ≈ 35% for 3-4, ≈ 56% for 5+. The
+ *   early workouts, ≈ 25% for 1-2, ≈ 34% for 3-4, ≈ 56% for 5+. The
  *   per-signup-week cohort approximation a Mixpanel user can build (workouts
  *   from the start of the signup week to 7 days after its end) reads ≈ 15%,
  *   21%, 30%, 48%. The knob sets a floor of 2.5x for 5+/0; busier members
  *   (and non-finishers' thinned usage, see H1) retain better anyway, so the
- *   ratio sits above it (3.53 in the final run: STRONG, above the NAILED
+ *   ratio sits above it (3.57 in the final run: STRONG, above the NAILED
  *   band).
  * REAL WORLD: the first week sets the habit; most fitness churn is early.
  *
@@ -257,7 +274,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   days after the join; completions past Oct 1 are dropped. Team challenges
  *   are shared: members joining a team challenge of the same type and length
  *   in the same week land on one of 16 teams (≈7 participants each).
- *   challenge_id identifies each challenge. New members who lapse (H6) before
+ *   challenge_id identifies each challenge. Challenges joined in the 30 days
+ *   before June 4 still complete inside the window (seedPreWindowChallenges),
+ *   so weekly completions do not ramp up in June. New members who lapse (H6) before
  *   a challenge ends never complete it, which trims both rates a little but
  *   not their 2x ratio.
  * MIXPANEL: Funnels, challenge joined → challenge completed, totals, hold
@@ -297,7 +316,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   a bit more often and makes each visit a training session.
  *
  * ═════════════════════════════════════════════════════════════════════════
- * EXPECTED METRICS SUMMARY (measured: data/verify-fitness, 2026-10-06, engine d15c80d)
+ * EXPECTED METRICS SUMMARY (measured: data/verify-fitness, 2026-10-06, engine d15c80d, fix round 2)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                      | Derivation              | Expected  | Measured
  * -----|---------------------------------------------|-------------------------|-----------|---------
@@ -309,9 +328,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H2   | post-launch Plus duration ai/self           | AI_DURATION_MULT        | 1.20      | 1.193
  * H2   | Plus ai_coach share after the 21-day ramp   | ADOPTER_SHARE × USE     | 0.45      | 0.451
  * H2   | Plus members (10+ workouts) using it 25-74% | Beta(3,1) use rate      | spread    | 24.1% (40.1% never)
- * H2   | plan → workout pairs with different modes   | shared per linked unit  | 0         | 0 of 65,454
+ * H2   | plan → workout pairs with different modes   | shared per linked unit  | 0         | 0 of 63,756
  * H2   | trial workouts run with Stride Coach        | trial has Plus features | > 0       | 311
- * H3   | watch+band / unaffected, outage vs ±7 days  | OUTAGE_KEEP             | 0.25      | 0.268
+ * H3   | watch+band / unaffected, outage vs ±7 days  | OUTAGE_KEEP             | 0.25      | 0.267
  * H3   | warehouse sync_error_rate during outage     | 1 − OUTAGE_KEEP         | 0.75      | 0.752
  * H4   | monthly/annual purchases, after vs before   | 1 − MONTHLY_LOSS        | ≤ 0.65    | 0.741 (floor 0.825)
  * H4   | monthly/annual bookings, after vs before    | 0.65 × 14.99/12.99      | ≤ 0.75    | 0.855 (floor 0.952)
@@ -321,29 +340,32 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H5   | daily signups, Shred/rest (non-paid-social) | control                 | 1.00      | 1.084
  * H5   | paid-social buy rate vs same-week others    | 1 − PAID_SOCIAL_NO_BUY  | ≤ 0.50    | 0.501
  * H5   | paid channel-days with zero spend           | media plan              | 0         | 0 of 360
- * H6   | Week-4 retention, 5+ vs 0 early workouts    | ≥ 1/(1 − 0.6) (floor)   | ≥ 2.5     | 3.526 (56.1% vs 15.9%)
+ * H6   | Week-4 retention, 5+ vs 0 early workouts    | ≥ 1/(1 − 0.6) (floor)   | ≥ 2.5     | 3.567 (56.1% vs 15.7%)
  * H6   | retention rises across 0 / 1-2 / 3-4 / 5+   | monotone churn share    | 3 steps   | 3
- * H7   | per-challenge completion, team (joins ≤ Aug 31) | TEAM_CONV           | 0.60      | 0.577
- * H7   | per-challenge completion, solo (joins ≤ Aug 31) | SOLO_CONV           | 0.30      | 0.285
- * H7   | team / solo completion                      | TEAM_CONV / SOLO_CONV   | 2.00      | 2.023
+ * H7   | per-challenge completion, team (joins ≤ Aug 31) | TEAM_CONV           | 0.60      | 0.574
+ * H7   | per-challenge completion, solo (joins ≤ Aug 31) | SOLO_CONV           | 0.30      | 0.283
+ * H7   | team / solo completion                      | TEAM_CONV / SOLO_CONV   | 2.00      | 2.027
  * H7   | completions outside the last 20% of the challenge | duration_days      | 0         | 0
  * H7   | median days to complete, 7/14/21/30-day     | ≈ 0.9 × duration        | rising    | 6.0 / 12.5 / 18.5 / 26.4
- * H7   | participants per team challenge_id          | TEAM_SLOTS              | several   | 7.0 avg (4.7% single)
- * H8   | open rate 12+ / 0-4 recent (30 d), from Jul 4 | 1 − PUSH_FATIGUE_FLIP | 0.40      | 0.376
- * H8   | open rate, 0-4 recent notifications         | declared pool 1 of 5    | 0.20      | 0.204
+ * H7   | participants per team challenge_id          | TEAM_SLOTS              | several   | 6.9 avg (5.1% single)
+ * H8   | open rate 12+ / 0-4 recent (30 d), from Jul 4 | 1 − PUSH_FATIGUE_FLIP | 0.40      | 0.377
+ * H8   | open rate, 0-4 recent notifications         | declared pool 1 of 5    | 0.20      | 0.203
  * H8   | open rate falls across 4 count cohorts      | monotone fatigue        | 3 steps   | 3
- * H8   | pre-window members' open rate, Sep / Jun    | steady-state fatigue    | 1.00      | 1.021
- * H9   | completed per app open, program/before      | 1.5 / 1.2               | 1.25      | 1.236
- * H9   | planned per app open, program/before        | 1.5 / 1.2               | 1.25      | 1.230
- * H9   | app opens per meal logged, program/before   | FALL_RESET_OPEN_MULT    | 1.20      | 1.217
- * H9   | program workouts duplicating another exactly | engine clone re-draw   | ≈ 0       | 0 of 29,054 (4 of 141,944 outside)
+ * H8   | pre-window members' open rate, Sep / Jun    | steady-state fatigue    | 1.00      | 1.014
+ * H9   | completed per app open, program/before      | 1.5 / 1.2               | 1.25      | 1.237
+ * H9   | planned per app open, program/before        | 1.5 / 1.2               | 1.25      | 1.232
+ * H9   | app opens per meal logged, program/before   | FALL_RESET_OPEN_MULT    | 1.20      | 1.222
+ * H9   | program workouts duplicating another exactly | engine clone re-draw   | ≈ 0       | 1 of 28,285 (5 of 138,866 outside)
  * --   | progress checks per completed workout       | Fall Reset 1.5x on both | flat      | 0.640 → 0.639
  * --   | signups == profile created; SCD before signup | engine placement      | all / 0   | 4,063 / 0 of 14,253
- * --   | workouts Mon / Sat (soup DOW)               | DOW_WEIGHTS 1.0 / 0.7   | > 1.3     | 1.60 (28,934 / 18,075)
- * --   | June 4 events / June 11 events              | pre-window lead-in      | ≈ 1       | 0.94 (8,122 / 8,621)
+ * --   | workouts Mon / Sat (soup DOW)               | DOW_WEIGHTS 1.0 / 0.7   | > 1.3     | 1.60 (28,303 / 17,660)
+ * --   | June 4 events / June 11 events              | pre-window lead-in      | ≈ 1       | 0.96 (8,174 / 8,538)
  * --   | pre-window members on Plus at window start  | segment plan mix        | 10-20%    | 16.3%
  * --   | June new subscriptions per day, by week     | trial pipeline seeding  | no ramp   | 10.4-12.3 (Jul-Aug 8.1-11.1)
- * --   | warehouse corr vs events: sync / billing / paid | drift knobs / plan  | 0.9-0.98  | 0.967 / 0.917 / 0.758
+ * --   | challenge completions per join, by week     | pre-window seeding      | flat      | 0.41-0.45 every full week (Jun 4-7: 221/day, later 209-224/day)
+ * --   | account deactivated per full week, Jun-Aug  | window-start lapse      | flat      | 68-95 (Jun 4-7: 50; was 0, 3, 22, 49)
+ * --   | coach sessions by Plus / trial members      | FREE_COACH_KEEP         | ≈ 80%     | 82% of 11,801 (≈ 5,530 coach-hours)
+ * --   | warehouse corr vs events: sync / billing / paid | drift knobs / plan  | 0.9-0.98  | 0.966 / 0.917 / 0.758
  * ═════════════════════════════════════════════════════════════════════════
  */
 
@@ -499,6 +521,10 @@ const CHALLENGE_TTC_H = 96;
 const CHALLENGE_EARLY_SHARE = 0.2; // a completion lands up to 20% of duration_days before the challenge ends
 const TEAM_SLOTS = 16;             // open teams per challenge type, length, and join week
 const CHALLENGE_DAYS = [7, 14, 21, 30]; // declared duration_days pool
+const CHALLENGE_TYPES = ["steps", "strength", "streak", "distance"]; // declared challenge_type pool
+// window-start pipeline: pre-window members' joins in the 30 days before June 4
+// (the longest challenge) still complete inside the window
+const PRE_CHALLENGE_DAYS = Math.max(...CHALLENGE_DAYS);
 // a 30-day challenge joined by this date ends inside the window (Mixpanel read: joins up to Aug 31)
 const CHALLENGE_READ_END = "2026-09-01T00:00:00Z";
 const CHALLENGE_WINDOW_DAYS = 31;  // funnel conversion window for the challenge read
@@ -546,6 +572,18 @@ const workoutKcal = (category, minutes, effort) => {
 
 // lifecycle hygiene
 const DEACTIVATION_QUIET_DAYS = 21;
+// window-start lapse: a share of long-time free casual and beginner members were
+// already drifting away on June 4 (the pre-window counterpart of the new-member
+// lapse); each stops on a day in [0, PRE_LAPSE_DAYS) with a density that falls
+// linearly to zero, so deactivations do not ramp up from an empty June
+const PRE_LAPSE_SHARE = 0.115;
+const PRE_LAPSE_SEGMENTS = ["casual", "beginner"];
+const PRE_LAPSE_DAYS = 35;
+
+// human coaching: Plus (and trial) members book coach sessions as part of the
+// plan; free members pay per session, so only this share of their would-be
+// sessions happen
+const FREE_COACH_KEEP = 0.1;
 
 // ── HELPERS ──
 // members the Summer Shred baseline thinning removes (see SHRED_INCREMENTAL);
@@ -752,24 +790,57 @@ function scheduleChallenges(events, uid) {
 			j.challenge_id = id;
 		}
 	});
-	// a completion with no join belongs to a challenge joined before June 4 (the
-	// join is outside the window): it finishes within that challenge's length
+	// a completion with no join is the engine's spill-in from a lead-in join
+	// (only the last few days before June 4): seedPreWindowChallenges replaces
+	// these with the full pre-window pipeline
 	const joined = new Set(joins.map((j) => j.challenge_id));
-	let n = 0;
-	for (const c of events) {
-		if (c.event !== "challenge completed" || joined.has(c.challenge_id)) continue;
-		const days = CHALLENGE_DAYS[Math.floor(salt(uid, `ch-pre-days|${n}`) * CHALLENGE_DAYS.length)];
-		const t = T(c) + Math.floor(salt(uid, `ch-pre-shift|${n}`) * days) * DAY;
-		n++;
-		if (t > END) { late.add(c); continue; }
-		c.time = new Date(t).toISOString();
-		if (c.challenge_format === "team") {
-			const week = Math.floor((t - days * DAY - ms(DATASET_START)) / (7 * DAY));
-			const slot = Math.floor(salt(uid, `team-pre|${n}`) * TEAM_SLOTS);
-			c.challenge_id = `ch_${u.hashInsertId(`team|${c.challenge_type}|${days}|${week}|${slot}`).replace(/-/g, "").slice(0, 12)}`;
-		}
-	}
+	for (const c of events) if (c.event === "challenge completed" && !joined.has(c.challenge_id)) late.add(c);
 	return late.size ? events.filter((e) => !late.has(e)) : events;
+}
+
+/**
+ * Window-start challenge pipeline (H7): a pre-window member was joining
+ * challenges before June 4 at the same rate as inside the window, and a
+ * challenge joined up to 30 days earlier still ends inside it. Draw those
+ * pre-June-4 joins (same team/solo split, types, lengths, and completion
+ * rates) and emit only the completions that land on or after June 4, so
+ * weekly completions per join are flat from the first week. The completion
+ * is a clone of one of the member's challenge events; its time of day comes
+ * from one of the member's own events.
+ */
+function seedPreWindowChallenges(events, uid) {
+	const START = ms(DATASET_START), END = ms(DATASET_END);
+	const joins = events.filter((e) => e.event === "challenge joined");
+	if (!joins.length) return events;
+	const template = events.find((e) => e.event === "challenge completed") || joins[0];
+	const rate = joins.length / ((END - START) / DAY);
+	const n = Math.floor(rate * PRE_CHALLENGE_DAYS + salt(uid, "ch-seed-n"));
+	const added = [];
+	const used = new Set();
+	for (let k = 0; k < n; k++) {
+		const format = salt(uid, `ch-seed-format|${k}`) < 0.5 ? "team" : "solo";
+		if (salt(uid, `ch-seed-done|${k}`) >= (format === "team" ? TEAM_CONV : SOLO_CONV) / 100) continue;
+		const days = CHALLENGE_DAYS[Math.floor(salt(uid, `ch-seed-days|${k}`) * CHALLENGE_DAYS.length)];
+		const type = CHALLENGE_TYPES[Math.floor(salt(uid, `ch-seed-type|${k}`) * CHALLENGE_TYPES.length)];
+		const joinDay = -1 - Math.floor(salt(uid, `ch-seed-age|${k}`) * PRE_CHALLENGE_DAYS); // day index, June 4 = 0
+		const early = Math.floor(salt(uid, `ch-seed-early|${k}`) * (Math.floor(CHALLENGE_EARLY_SHARE * days) + 1));
+		const doneDay = joinDay + days - early;
+		if (doneDay < 0) continue; // the challenge ended before June 4
+		const ref = events[Math.floor(salt(uid, `ch-seed-tod|${k}`) * events.length)];
+		const t = START + doneDay * DAY + (T(ref) % DAY);
+		if (t > END) continue;
+		const week = Math.floor(joinDay / 7);
+		const id = format === "team"
+			? `ch_${u.hashInsertId(`team|${type}|${days}|${week}|${Math.floor(salt(uid, `ch-seed-slot|${k}`) * TEAM_SLOTS)}`).replace(/-/g, "").slice(0, 12)}`
+			: `ch_${u.hashInsertId(`solo|${uid}|pre|${k}`).replace(/-/g, "").slice(0, 12)}`;
+		if (used.has(id)) continue; // one completion per team challenge for a member
+		used.add(id);
+		const c = cloneEvent(template, { event: "challenge completed", time: new Date(t).toISOString(), challenge_id: id, challenge_format: format, challenge_type: type });
+		delete c.duration_days;
+		if (c.final_rank === undefined) c.final_rank = 1 + Math.floor(59 * salt(uid, `ch-seed-rank|${k}`) ** 1.6);
+		added.push(c);
+	}
+	return added.length ? events.concat(added) : events;
 }
 
 /**
@@ -833,6 +904,7 @@ function handleEverything(events, meta) {
 
 	// ── H7: challenges end after their duration_days; team challenges are shared ──
 	events = scheduleChallenges(events, uid);
+	if (!signup) events = seedPreWindowChallenges(events, uid);
 
 	// ── trial hygiene: one free trial per member ──
 	const firstTrial = events.filter((e) => e.event === "trial started").sort((a, b) => T(a) - T(b))[0];
@@ -960,6 +1032,29 @@ function handleEverything(events, meta) {
 		const flip = pushFlip(recent);
 		if (flip > 0 && p.opened === true && chance.bool({ likelihood: flip * 100 })) p.opened = false;
 	});
+
+	// The steps below use per-member salts only (no shared chance draws), so they
+	// leave every other member's random stream unchanged.
+
+	// ── human coaching is a Plus perk: free members rarely pay for a single session ──
+	events = events.filter((e) => !(e.event === "coach session" && e.subscription_tier === "free"
+		&& salt(uid, `coach-free|${e.time}`) >= FREE_COACH_KEEP));
+
+	// ── window-start lapse: some long-time free members were already drifting away
+	// on June 4. They stop on a day early in the window (density falling to zero at
+	// PRE_LAPSE_DAYS, mirroring how new members' lapses build up) and deactivate.
+	if (!signup && !PENDING_TRIAL.has(uid) && initialTier === "free" && !purchase && deacts.length
+		&& PRE_LAPSE_SEGMENTS.includes(profile.segment) && salt(uid, "pre-lapse") < PRE_LAPSE_SHARE) {
+		const lapseDays = PRE_LAPSE_DAYS * (1 - Math.sqrt(1 - salt(uid, "pre-lapse-day")));
+		const kept = events.filter((e) => T(e) < START + lapseDays * DAY);
+		if (kept.length) {
+			const last = kept.reduce((m, e) => Math.max(m, T(e)), 0);
+			const when = last + (20 + Math.floor(salt(uid, "pre-lapse-gap") * 161)) * 60_000;
+			const d = cloneEvent(deacts[0], { time: new Date(when).toISOString() });
+			d.subscription_tier = "free";
+			events = kept.concat(d);
+		}
+	}
 
 	return events;
 }

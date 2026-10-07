@@ -36,7 +36,7 @@ New members go through onboarding once, right after they install. These four eve
 | `workout completed` | A finished workout reached Stridewell. This is the value moment. A workout tracked on a wearable is recorded only after it syncs. | `workout_category`; `duration_minutes`; `calories_burned`; `avg_heart_rate` (bpm); `perceived_effort` (1-10, self-rated); `coaching_mode` (`self_guided` or `ai_coach`; Stride Coach is a Plus and trial feature from 2026-08-12); `wearable_type`: the member's wearable (`smartwatch`, `fitness_band`, `chest_strap`, or `none`); `tracking_source`: what recorded this workout (`wearable`, `phone`, or `manual`). |
 | `progress checked` | The member opens a progress view. | `metric_viewed` (`weekly_minutes`, `workout_streak`, `body_weight`, `personal_records`, `heart_rate_trend`); `time_range` (`week`, `month`, `3_months`). |
 | `achievement unlocked` | The member earns a badge. | `achievement_type` (`streak_7`, `streak_30`, `personal_record`, `first_5k`, `challenge_badge`, `minutes_milestone`). |
-| `coach session` | The member has a session with a human coach. | `session_type` (`live_video`, `form_check`, `plan_review`, `chat`); `coach_speciality` (`strength`, `running`, `mobility`, `nutrition`); `session_minutes`; `satisfaction_score` (1-5). |
+| `coach session` | The member has a session with a human coach. Coaching is part of Plus (and the trial); free members can pay for a single session. | `session_type` (`live_video`, `form_check`, `plan_review`, `chat`); `coach_speciality` (`strength`, `running`, `mobility`, `nutrition`); `session_minutes`; `satisfaction_score` (1-5). |
 | `meal logged` | The member logs a meal. | `meal_type` (`breakfast`, `lunch`, `dinner`, `snack`); `calories`; `protein_g`. |
 
 ## Challenges and social
@@ -52,7 +52,7 @@ New members go through onboarding once, right after they install. These four eve
 
 | Event | Meaning | Properties |
 |---|---|---|
-| `paywall viewed` | A free member sees the Plus paywall. | `paywall_trigger` (`workout_library`, `advanced_plans`, `coach_teaser` (the Stride Coach teaser, shown from 2026-08-12), `challenge_limit`, `settings`); `plan`: the plan highlighted on the paywall. |
+| `paywall viewed` | A free member, or a member in their 7-day trial, sees the Plus paywall (for a trial member it is the prompt to pick a plan before the trial ends). | `paywall_trigger` (`workout_library`, `advanced_plans`, `coach_teaser` (the Stride Coach teaser, shown from 2026-08-12), `challenge_limit`, `settings`); `plan`: the plan highlighted on the paywall. |
 | `trial started` | A trial-eligible member starts their one 7-day Plus trial. | `plan` (`monthly` or `annual`): the plan the trial converts to; `trial_days` (7). |
 | `subscription purchased` | The member buys Plus. One per member. Price is **not** tracked here; see `subscription_billing_daily`. | `plan` (`monthly` or `annual`); `payment_method` (`apple_pay`, `google_pay`, `card`). |
 
@@ -61,7 +61,7 @@ New members go through onboarding once, right after they install. These four eve
 | Event | Meaning | Properties |
 |---|---|---|
 | `app opened` | The member opens the app. | `entry_point` (`home_screen`, `push`, `widget`, `watch_app`); `session_minutes`. |
-| `notification received` | Stridewell sends the member a notification. | `notification_type` (`workout_reminder`, `streak_at_risk`, `challenge_update`, `friend_activity`, `weekly_recap`); `channel` (`push` or `email`); `opened` (true/false): whether the member opened it. |
+| `notification received` | Stridewell sends the member a notification. Lifecycle messaging follows a sunset policy: reminders pause once a member stops using the app, and win-back outreach runs outside the app (it is not tracked here). So a member who goes inactive stops receiving this event too. | `notification_type` (`workout_reminder`, `streak_at_risk`, `challenge_update`, `friend_activity`, `weekly_recap`); `channel` (`push` or `email`); `opened` (true/false): whether the member opened it. |
 | `profile updated` | The member edits their profile or settings. | `field_updated` (`body_weight`, `goal`, `photo`, `units`, `notification_settings`, `connected_devices`). |
 | `account deactivated` | The member deactivates their account. Sent at most once, after a member stops using the app. | `reason` (`lost_motivation`, `switched_apps`, `injury`, `reached_goal`, `too_busy`); `subscription_tier` at deactivation. |
 

@@ -11,7 +11,7 @@ Stridewell is a consumer fitness app for people who want to train consistently w
 - **Progress.** Members check weekly minutes, streaks, body weight, personal records, and heart-rate trends.
 - **Challenges.** Members join time-boxed challenges (steps, strength, streak, or distance) that run for 7, 14, 21, or 30 days, either **solo** or as part of a **team** with other members. A member completes a challenge when it ends, if they met its goal. Each challenge has its own ID; everyone on a team shares the team challenge's ID.
 - **Social.** Members add friends and view leaderboards (friends, challenge, city, global).
-- **Coaching.** Members can book short sessions with certified human coaches (live video, form checks, plan reviews, chat).
+- **Coaching.** Members can book short sessions with certified human coaches (live video, form checks, plan reviews, chat). Coaching is part of Plus: Plus members and members in a trial book sessions as part of their plan. Free members can pay $24 for a single session. Sessions are delivered by a network of about 50 contract coaches, managed by a small in-house coaching team.
 - **Nutrition.** Members log meals with calories and protein.
 - **Stride Coach.** An AI coaching mode for Plus members (and members in a Plus trial) that guides a workout in real time (pacing, rest, and form cues). It launched in August (see the timeline).
 
@@ -19,12 +19,12 @@ Stridewell is a consumer fitness app for people who want to train consistently w
 
 | Plan | Price | What you get |
 |---|---|---|
-| Free | $0 | Workout planning and tracking, basic progress, challenges, friends |
-| Plus Monthly | $12.99/month until 2026-08-31; $14.99/month for new purchases from 2026-09-01 | Full workout library, advanced plans, Stride Coach (from Aug 12), unlimited challenges |
+| Free | $0 | Workout planning and tracking, basic progress, challenges, friends; single coach sessions at $24 each |
+| Plus Monthly | $12.99/month until 2026-08-31; $14.99/month for new purchases from 2026-09-01 | Full workout library, advanced plans, human coach sessions, Stride Coach (from Aug 12), unlimited challenges |
 | Plus Annual | $99.99/year (unchanged) | Same as Plus Monthly |
 
 - **Trials.** A member who joins gets one 7-day free trial of Plus, with every Plus feature. Most members who joined before the window have already used their trial and can only buy directly. Members who joined in the last few weeks before June 4 and had not started their trial yet (or were still in it) keep it, so some trials and trial conversions in early June come from them.
-- **How people upgrade.** A paywall appears when a free member opens a Plus feature (workout library, advanced plans, a Stride Coach teaser, the challenge limit, or settings). From there they start a trial or buy.
+- **How people upgrade.** A paywall appears when a free member opens a Plus feature (workout library, advanced plans, a Stride Coach teaser, the challenge limit, or settings). From there they start a trial or buy. Members in a trial also see the paywall, as the prompt to pick a plan before the trial ends.
 - **Billing.** Purchases go through the Apple and Google app stores. The stores keep a 15% fee on subscriptions. Finance reports bookings at list price (gross) and after store fees (net).
 - The Mixpanel project tracks the purchase event and the plan, but not the price. Prices and bookings live in the warehouse table `subscription_billing_daily`.
 
