@@ -114,5 +114,5 @@ Every report has a `report_id`. The report and its resolution share the same `re
 |---|---|---|
 | Onboarding | `account created` → `interests selected` → `intro posted` | New members only. Read with a 7-day conversion window. |
 | Thread reply | `discussion viewed` → `comment posted` | Members open many threads; hold `thread_id` constant to measure each thread view on its own. Read with a 1-day window. |
-| Report handling | `report submitted` → `report resolved` | Hold `report_id` constant. Time to convert is the resolution time. |
+| Report handling | `report submitted` → `report resolved` | Hold `report_id` constant. Time to convert is the resolution time. Read with a 30-day conversion window; some reports take several days to resolve. |
 | Upgrade to Plus | `plus page viewed` → `plus subscribed` | Free members. Read with a 1-day window. |

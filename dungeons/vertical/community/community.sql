@@ -54,10 +54,13 @@ SELECT s.uid, s.t AS t0, s.acquisition_channel AS ch, s.signup_method, i.ti,
 FROM (SELECT * FROM ev WHERE event = 'account created') s
 LEFT JOIN (SELECT uid, min(t) AS ti FROM ev WHERE event = 'intro posted' GROUP BY 1) i ON i.uid = s.uid;
 
--- one row per report: filed, resolved (report_id is shared by both)
+-- one row per report: filed, resolved (report_id is shared by both). res_30d: resolved
+-- inside a 30-day funnel conversion window (the window used to read resolution time;
+-- the Report funnel config's 72 hours would cut off slow misinformation and copyright reports)
 CREATE OR REPLACE TEMP TABLE reports AS
 SELECT s.report_id, s.uid, s.report_type, s.content_hub, s.t AS t_sub, r.t AS t_res, r.resolution_hours,
- s.report_type IN ('spam', 'harassment', 'vandalism') AS triaged
+ s.report_type IN ('spam', 'harassment', 'vandalism') AS triaged,
+ coalesce(r.t < s.t + INTERVAL 30 DAY, false) AS res_30d
 FROM (SELECT * FROM ev WHERE event = 'report submitted') s
 LEFT JOIN (SELECT report_id, min(t) AS t, any_value(resolution_hours) AS resolution_hours FROM ev WHERE event = 'report resolved' GROUP BY 1) r
   ON r.report_id = s.report_id;
@@ -126,11 +129,11 @@ GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H4-hearth-guard-triage — median hours to resolve, before 2026-07-22 vs 2026-08-01..09-23
--- (reports filed during the Aug 19-21 raid left out; every "after" report has a week to resolve)
+-- (30-day conversion window; reports filed during the Aug 19-21 raid left out; every "after" report has a week to resolve)
 -- ─────────────────────────────────────────────────────────────────────────
 WITH x AS (SELECT triaged, CASE WHEN t_sub < TIMESTAMP '2026-07-22' THEN 'before' WHEN t_sub >= TIMESTAMP '2026-08-01' AND t_sub < TIMESTAMP '2026-09-24' THEN 'after' END AS period,
   date_diff('second', t_sub, t_res) / 3600.0 AS h
-  FROM reports WHERE t_res IS NOT NULL AND NOT (t_sub >= TIMESTAMP '2026-08-19' AND t_sub < TIMESTAMP '2026-08-22'))
+  FROM reports WHERE res_30d AND NOT (t_sub >= TIMESTAMP '2026-08-19' AND t_sub < TIMESTAMP '2026-08-22'))
 SELECT CASE WHEN triaged THEN 'spam/harassment/vandalism' ELSE 'misinformation/copyright/other' END AS kind,
  round(median(h) FILTER (WHERE period = 'before'), 2) AS median_h_before, round(median(h) FILTER (WHERE period = 'after'), 2) AS median_h_after,
  round(median(h) FILTER (WHERE period = 'after') / median(h) FILTER (WHERE period = 'before'), 3) AS after_before
@@ -169,17 +172,19 @@ FROM intro_reply WHERE t0 < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
 SELECT round(avg(replied::INT), 4) AS share_of_intros_replied_24h FROM intro_reply WHERE ti < TIMESTAMP '2026-09-30 23:59:59';
 
 -- ─────────────────────────────────────────────────────────────────────────
--- STORY H7-reverted-first-edit — new editors: edited again within 30 days, by revert of the first edit
+-- STORY H7-reverted-first-edit — new editors: edited again on or after day 2 after the first edit, by revert of the first edit
+-- (day 2 starts after every revert notice, which arrives 1-30 h after the edit; first edits before Sep 1)
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE TEMP TABLE new_editors AS
 WITH f AS (SELECT e.uid, min(e.t) AS t1 FROM ev e JOIN signups s ON s.uid = e.uid WHERE e.event = 'article edited' GROUP BY 1)
 SELECT f.uid, f.t1,
  EXISTS (SELECT 1 FROM ev e WHERE e.uid = f.uid AND e.event = 'notification received' AND e.notification_type = 'edit_reverted' AND e.t >= f.t1 AND e.t < f.t1 + INTERVAL 2 DAY) AS reverted,
- EXISTS (SELECT 1 FROM ev e WHERE e.uid = f.uid AND e.event = 'article edited' AND e.t > f.t1 AND e.t <= f.t1 + INTERVAL 30 DAY) AS edited_again_30d
+ EXISTS (SELECT 1 FROM ev e WHERE e.uid = f.uid AND e.event = 'article edited' AND e.t > f.t1 AND e.t <= f.t1 + INTERVAL 30 DAY) AS edited_again_30d,
+ EXISTS (SELECT 1 FROM ev e WHERE e.uid = f.uid AND e.event = 'article edited' AND e.t >= f.t1 + INTERVAL 2 DAY) AS edited_again_d2
 FROM f;
 
 SELECT CASE WHEN reverted THEN 'first_edit_reverted' ELSE 'first_edit_kept' END AS grp, count(*) AS new_editors,
- round(avg(edited_again_30d::INT), 4) AS edited_again_within_30d
+ round(avg(edited_again_d2::INT), 4) AS edited_again_on_or_after_day2
 FROM new_editors WHERE t1 < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -271,24 +276,27 @@ UNION ALL SELECT 'ALL', count(*), sum(onboarded::INT), round(avg(onboarded::INT)
 ORDER BY 4 DESC;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- EVAL Q3 — onboarding by device at signup (null): mobile (iOS, iPadOS, Android) vs desktop, overall and by paid/unpaid channel
+-- EVAL Q3 — onboarding by signup day (null): weekend (Sat-Sun, UTC) vs weekday signups, overall, by paid/unpaid channel,
+-- and by device type; then by day of week with a chi-square
 -- ─────────────────────────────────────────────────────────────────────────
-CREATE OR REPLACE TEMP TABLE signup_device AS
-SELECT s.*, e.os, CASE WHEN e.os IN ('iOS', 'iPadOS', 'Android') THEN 'mobile' ELSE 'desktop' END AS device_type,
- CASE WHEN s.ch IN ('reddit_ads', 'tiktok_ads', 'youtube_creators') THEN 'paid' ELSE 'unpaid' END AS channel_group
+CREATE OR REPLACE TEMP TABLE signup_day AS
+SELECT s.*, e.os, CASE WHEN dayofweek(s.t0) IN (0, 6) THEN 'weekend' ELSE 'weekday' END AS day_type, dayname(s.t0) AS signup_dow, dayofweek(s.t0) AS dow_n,
+ CASE WHEN s.ch IN ('reddit_ads', 'tiktok_ads', 'youtube_creators') THEN 'paid' ELSE 'unpaid' END AS channel_group,
+ CASE WHEN e.os IN ('iOS', 'iPadOS', 'Android') THEN 'mobile' ELSE 'desktop' END AS device_type
 FROM signups s JOIN (SELECT uid, os FROM ev WHERE event = 'account created') e ON e.uid = s.uid;
-WITH g AS (SELECT 'all' AS split, device_type, count(*) AS n, avg(onboarded::INT) AS r FROM signup_device GROUP BY 2
-  UNION ALL SELECT channel_group, device_type, count(*), avg(onboarded::INT) FROM signup_device GROUP BY 1, 2)
-SELECT split, max(n) FILTER (WHERE device_type = 'mobile') AS mobile_n, round(max(r) FILTER (WHERE device_type = 'mobile'), 4) AS mobile_rate,
- max(n) FILTER (WHERE device_type = 'desktop') AS desktop_n, round(max(r) FILTER (WHERE device_type = 'desktop'), 4) AS desktop_rate,
- round((max(r) FILTER (WHERE device_type = 'mobile') - max(r) FILTER (WHERE device_type = 'desktop'))
-   / sqrt(avg(r) * (1 - avg(r)) * (1.0 / max(n) FILTER (WHERE device_type = 'mobile') + 1.0 / max(n) FILTER (WHERE device_type = 'desktop'))), 2) AS z
+WITH g AS (SELECT '1 all' AS split, day_type, count(*) AS n, avg(onboarded::INT) AS r FROM signup_day GROUP BY 2
+  UNION ALL SELECT '2 ' || channel_group, day_type, count(*), avg(onboarded::INT) FROM signup_day GROUP BY 1, 2
+  UNION ALL SELECT '3 ' || device_type, day_type, count(*), avg(onboarded::INT) FROM signup_day GROUP BY 1, 2)
+SELECT split, max(n) FILTER (WHERE day_type = 'weekend') AS weekend_n, round(max(r) FILTER (WHERE day_type = 'weekend'), 4) AS weekend_rate,
+ max(n) FILTER (WHERE day_type = 'weekday') AS weekday_n, round(max(r) FILTER (WHERE day_type = 'weekday'), 4) AS weekday_rate,
+ round((max(r) FILTER (WHERE day_type = 'weekend') - max(r) FILTER (WHERE day_type = 'weekday'))
+   / sqrt(avg(r) * (1 - avg(r)) * (1.0 / max(n) FILTER (WHERE day_type = 'weekend') + 1.0 / max(n) FILTER (WHERE day_type = 'weekday'))), 2) AS z
 FROM g GROUP BY 1 ORDER BY 1;
--- by operating system, with a chi-square across all systems
-WITH g AS (SELECT os, count(*) AS n, sum(onboarded::INT) AS k FROM signup_device GROUP BY 1), tot AS (SELECT sum(k)::DOUBLE / sum(n) AS p FROM g)
-SELECT os, n, round(k::DOUBLE / n, 4) AS rate,
+-- by signup day of week, with a chi-square across the seven days
+WITH g AS (SELECT dow_n, signup_dow, count(*) AS n, sum(onboarded::INT) AS k FROM signup_day GROUP BY 1, 2), tot AS (SELECT sum(k)::DOUBLE / sum(n) AS p FROM g)
+SELECT signup_dow, n, round(k::DOUBLE / n, 4) AS rate,
  round(sum(power(k - n * p, 2) / (n * p) + power((n - k) - n * (1 - p), 2) / (n * (1 - p))) OVER (), 2) AS chi2, count(*) OVER () - 1 AS df
-FROM g, tot ORDER BY n DESC;
+FROM g, tot ORDER BY dow_n;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q4 — Reply Nudges: per thread view reply rate and time, by variant; exposure split
@@ -306,7 +314,7 @@ SELECT "Variant name" AS variant, count(DISTINCT uid) AS exposed_members, min(t)
 -- ─────────────────────────────────────────────────────────────────────────
 WITH x AS (SELECT report_type, triaged, CASE WHEN t_sub < TIMESTAMP '2026-07-22' THEN 'before' WHEN t_sub >= TIMESTAMP '2026-08-01' AND t_sub < TIMESTAMP '2026-09-24' THEN 'after' END AS period,
   date_diff('second', t_sub, t_res) / 3600.0 AS h
-  FROM reports WHERE t_res IS NOT NULL AND NOT (t_sub >= TIMESTAMP '2026-08-19' AND t_sub < TIMESTAMP '2026-08-22'))
+  FROM reports WHERE res_30d AND NOT (t_sub >= TIMESTAMP '2026-08-19' AND t_sub < TIMESTAMP '2026-08-22'))
 SELECT report_type, count(*) FILTER (WHERE period = 'before') AS n_before, count(*) FILTER (WHERE period = 'after') AS n_after,
  round(median(h) FILTER (WHERE period = 'before'), 1) AS median_h_before, round(median(h) FILTER (WHERE period = 'after'), 1) AS median_h_after,
  round(median(h) FILTER (WHERE period = 'after') / median(h) FILTER (WHERE period = 'before'), 3) AS ratio
@@ -331,7 +339,7 @@ FROM reports WHERE t_res IS NOT NULL GROUP BY 1 ORDER BY 1;
 -- misinformation / copyright / other: geometric-mean ratio and log-hours Welch z, before Jul 22 vs Aug 1 - Sep 23
 WITH x AS (SELECT report_type, CASE WHEN t_sub < TIMESTAMP '2026-07-22' THEN 0 WHEN t_sub >= TIMESTAMP '2026-08-01' AND t_sub < TIMESTAMP '2026-09-24' THEN 1 END AS after,
   ln(date_diff('second', t_sub, t_res) / 3600.0) AS lh
-  FROM reports WHERE t_res IS NOT NULL AND report_type IN ('misinformation', 'copyright', 'other') AND NOT (t_sub >= TIMESTAMP '2026-08-19' AND t_sub < TIMESTAMP '2026-08-22')),
+  FROM reports WHERE res_30d AND report_type IN ('misinformation', 'copyright', 'other') AND NOT (t_sub >= TIMESTAMP '2026-08-19' AND t_sub < TIMESTAMP '2026-08-22')),
 g AS (SELECT report_type AS grp, after, lh FROM x WHERE after IS NOT NULL UNION ALL SELECT 'ALL THREE', after, lh FROM x WHERE after IS NOT NULL)
 SELECT grp, round(exp(avg(lh) FILTER (WHERE after = 1) - avg(lh) FILTER (WHERE after = 0)), 3) AS geo_mean_ratio,
  round((avg(lh) FILTER (WHERE after = 1) - avg(lh) FILTER (WHERE after = 0)) / sqrt(var_samp(lh) FILTER (WHERE after = 1) / count(*) FILTER (WHERE after = 1) + var_samp(lh) FILTER (WHERE after = 0) / count(*) FILTER (WHERE after = 0)), 2) AS welch_z_log_hours
@@ -407,10 +415,12 @@ SELECT d AS day_after_intro,
 FROM a WHERE d BETWEEN 1 AND 30 GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- EVAL Q9 — new editors whose first edit was reverted: edited again within 30 days
+-- EVAL Q9 — new editors whose first edit was reverted: edited again on or after day 2 (after the revert notice),
+-- and the plain 30-day funnel (article edited → article edited), which also counts edits made before the notice
 -- ─────────────────────────────────────────────────────────────────────────
 SELECT CASE WHEN reverted THEN 'first_edit_reverted' ELSE 'first_edit_kept' END AS grp, count(*) AS new_editors,
- sum(edited_again_30d::INT) AS edited_again, round(avg(edited_again_30d::INT), 4) AS edited_again_within_30d
+ sum(edited_again_d2::INT) AS edited_again_d2, round(avg(edited_again_d2::INT), 4) AS edited_again_on_or_after_day2,
+ sum(edited_again_30d::INT) AS edited_again_30d, round(avg(edited_again_30d::INT), 4) AS edited_again_within_30d
 FROM new_editors WHERE t1 < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
 SELECT round(avg(reverted::INT), 4) AS share_first_edits_reverted, count(*) AS new_editors FROM new_editors WHERE t1 < TIMESTAMP '2026-09-30';
 -- the same cohort with no follow-up limit (edited again at any time before Oct 2)
