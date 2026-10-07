@@ -168,6 +168,18 @@ r AS (SELECT s.uid, s.dd14,
   FROM s LEFT JOIN ev e ON e.uid = s.uid AND e.event = 'app opened' GROUP BY 1, 2)
 SELECT coalesce(dd14::VARCHAR, 'all') AS dd_in_14_days, count(*) AS members, round(avg((d7 > 0)::INT), 4) AS d7_retention, round(avg((d30 > 0)::INT), 4) AS d30_retention
 FROM r GROUP BY ROLLUP (dd14) ORDER BY 1;
+-- daily active share by day since opening (share of the same members with an app opened on day N), and the day 26-36 average
+WITH s AS (SELECT uid, t0, coalesce(t_dd < t0 + INTERVAL 14 DAY, false) AS dd14 FROM signups
+  WHERE t_funded IS NOT NULL AND t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 37 DAY),
+a AS (SELECT DISTINCT s.uid, s.dd14, floor(date_diff('second', s.t0, e.t) / 86400)::INT AS n FROM s JOIN ev e ON e.uid = s.uid AND e.event = 'app opened'
+  AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 37 DAY),
+c AS (SELECT dd14, count(*) AS members FROM s GROUP BY 1),
+d AS (SELECT a.dd14, a.n, count(*)::DOUBLE / any_value(c.members) AS share FROM a JOIN c ON c.dd14 = a.dd14 GROUP BY 1, 2)
+SELECT dd14 AS dd_in_14_days,
+ round(max(share) FILTER (WHERE n = 0), 4) AS day_0, round(max(share) FILTER (WHERE n = 7), 4) AS day_7,
+ round(max(share) FILTER (WHERE n = 14), 4) AS day_14, round(max(share) FILTER (WHERE n = 21), 4) AS day_21,
+ round(max(share) FILTER (WHERE n = 30), 4) AS day_30, round(avg(share) FILTER (WHERE n BETWEEN 26 AND 36), 4) AS avg_day_26_36
+FROM d GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q4: cost per signup by paid channel (warehouse spend / Mixpanel signups), and what the platforms claim
 WITH s AS (SELECT acquisition_channel AS ch, count(*) AS signups FROM ev WHERE event = 'account opened' GROUP BY 1),
@@ -190,6 +202,10 @@ r AS (SELECT date_trunc('week', t - INTERVAL 1 DAY) AS wk, uid FROM ev WHERE eve
 en AS (SELECT date_trunc('week', t) AS wk, count(*) AS turned_on FROM ev WHERE event = 'round-ups enabled' GROUP BY 1)
 SELECT p.wk::DATE AS week, count(*) AS purchasers, count(r.uid) AS with_round_up, round(count(r.uid) / count(*), 4) AS share, any_value(en.turned_on) AS turned_on
 FROM p LEFT JOIN r ON r.wk = p.wk AND r.uid = p.uid LEFT JOIN en ON en.wk = p.wk GROUP BY 1 ORDER BY 1;
+-- totals: members who turned Round-Ups on, and Round-Up sweeps posted
+SELECT count(DISTINCT uid) FILTER (WHERE event = 'round-ups enabled') AS members_turned_on,
+ count(*) FILTER (WHERE event = 'savings deposit' AND source = 'round_up') AS round_up_sweeps
+FROM ev WHERE event IN ('round-ups enabled', 'savings deposit');
 
 -- EVAL Q7: did Round-Ups replace manual Pocket deposits? manual deposits per app visit, adopters vs others, before launch vs after the ramp,
 -- overall and by plan group; did = adopters' change / others' change; z = log(did) / sqrt(sum of 1/deposits) (Poisson counts)
@@ -238,6 +254,10 @@ SELECT "Variant name" AS variant, count(DISTINCT uid) AS exposed_members FROM ev
 WITH m AS (SELECT b.uid, max(coalesce(b.t_autopay >= b.t_added AND b.t_autopay < b.t_added + INTERVAL 1 DAY, false)::INT) AS conv
   FROM billers b WHERE b.t_added >= TIMESTAMP '2026-07-21' GROUP BY 1)
 SELECT p.variant, count(*) AS members, round(avg(m.conv), 4) AS member_autopay_rate FROM m JOIN prof p ON p.uid = m.uid WHERE p.variant IS NOT NULL GROUP BY 1 ORDER BY 1;
+-- the same per-biller read over the full window (billers added before 2026-07-21 count in both arms)
+SELECT p.variant, count(*) AS billers,
+ round(avg(coalesce(b.t_autopay >= b.t_added AND b.t_autopay < b.t_added + INTERVAL 1 DAY, false)::INT), 4) AS autopay_rate_full_window
+FROM billers b JOIN prof p ON p.uid = b.uid WHERE p.variant IS NOT NULL GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q11: did the Federal Reserve holidays dent card spending? card transactions on each holiday vs the same weekday 1 and 2 weeks
 -- either side; z against the same ratio for every other day that has all four neighbors in the window
@@ -248,7 +268,13 @@ r AS (SELECT a.day, a.txns, (SELECT avg(b.txns) FROM d b WHERE b.day IN (a.day -
 base AS (SELECT avg(txns / neighbors) AS m, stddev_samp(txns / neighbors) AS sd FROM r WHERE n = 4 AND day NOT IN (DATE '2026-06-19', DATE '2026-07-03', DATE '2026-09-07'))
 SELECT r.day, dayname(r.day) AS weekday, r.txns, round(r.neighbors, 1) AS same_weekday_avg, round(r.txns / r.neighbors, 4) AS ratio,
  round((r.txns / r.neighbors - base.m) / base.sd, 3) AS z
-FROM r, base WHERE r.day IN (DATE '2026-06-19', DATE '2026-07-03', DATE '2026-09-07') ORDER BY 1;
+FROM r, base WHERE r.day IN (DATE '2026-06-19', DATE '2026-07-03', DATE '2026-09-07')
+UNION ALL
+-- pooled over the three holidays: mean ratio, z = mean z × sqrt(3)
+SELECT NULL, 'all three', sum(r.txns), round(sum(r.neighbors), 1), round(avg(r.txns / r.neighbors), 4),
+ round(avg((r.txns / r.neighbors - base.m) / base.sd) * sqrt(3), 3)
+FROM r, base WHERE r.day IN (DATE '2026-06-19', DATE '2026-07-03', DATE '2026-09-07')
+ORDER BY 1 NULLS LAST;
 
 -- EVAL Q12: late bill payments by payment method, and overall
 SELECT coalesce(CASE WHEN autopay THEN 'autopay' ELSE 'manual' END, 'all') AS method, count(*) AS payments,
@@ -285,13 +311,21 @@ FROM wh_pockets w JOIN base b ON b.plan_tier = w.plan_tier WHERE w.plan_tier IN 
 -- EVAL Q16: median and mean ticket resolution time by plan at the time the ticket was opened
 SELECT plan_at_open, count(*) AS tickets, round(median(date_diff('second', t_open, t_resolved)) / 3600, 2) AS median_hours,
  round(avg(date_diff('second', t_open, t_resolved)) / 3600, 2) AS mean_hours
-FROM tickets WHERE t_open IS NOT NULL AND t_resolved IS NOT NULL GROUP BY 1 ORDER BY 1;
+FROM tickets WHERE t_open IS NOT NULL AND t_resolved IS NOT NULL GROUP BY 1
+UNION ALL
+SELECT 'free_plus' AS plan_at_open, count(*), round(median(date_diff('second', t_open, t_resolved)) / 3600, 2), round(avg(date_diff('second', t_open, t_resolved)) / 3600, 2)
+FROM tickets WHERE t_open IS NOT NULL AND t_resolved IS NOT NULL AND plan_at_open <> 'premium'
+ORDER BY 1;
 
 -- EVAL Q17: average manual Pocket deposit by number of budgets created in the window
 WITH n AS (SELECT uid, count(*) FILTER (WHERE event = 'budget created') AS budgets FROM ev GROUP BY 1)
 SELECT CASE WHEN budgets >= 5 THEN '5+' ELSE budgets::VARCHAR END AS budgets_created, count(DISTINCT ev.uid) AS members,
  count(*) AS deposits, round(avg(amount), 2) AS avg_deposit, round(median(amount), 2) AS median_deposit
-FROM ev JOIN n ON n.uid = ev.uid WHERE ev.event = 'savings deposit' AND ev.source = 'manual' GROUP BY 1 ORDER BY 1;
+FROM ev JOIN n ON n.uid = ev.uid WHERE ev.event = 'savings deposit' AND ev.source = 'manual' GROUP BY 1
+UNION ALL
+SELECT CASE WHEN budgets >= 3 THEN 'group 3+' ELSE 'group 0-2' END, count(DISTINCT ev.uid), count(*), round(avg(amount), 2), round(median(amount), 2)
+FROM ev JOIN n ON n.uid = ev.uid WHERE ev.event = 'savings deposit' AND ev.source = 'manual' GROUP BY 1
+ORDER BY 1;
 
 -- EVAL Q18: direct deposits posted around the Federal Reserve holidays
 SELECT t::DATE AS day, dayname(t) AS weekday, count(*) FILTER (WHERE event = 'direct deposit received') AS paychecks,
@@ -302,20 +336,35 @@ SELECT t::DATE AS day, dayname(t) AS weekday, count(*) FILTER (WHERE event = 'di
 FROM ev WHERE t::DATE BETWEEN DATE '2026-06-17' AND DATE '2026-06-22' OR t::DATE BETWEEN DATE '2026-07-01' AND DATE '2026-07-06' OR t::DATE BETWEEN DATE '2026-09-03' AND DATE '2026-09-08'
 GROUP BY 1, 2 ORDER BY 1;
 
--- EVAL Q19: did members hit by the wallet outage use their card less afterwards? card transactions per member, 14 days before Aug 20 vs 14 days after Aug 21,
--- among wallet users (wallet payment Aug 6-19) who used their card on Aug 20-21: outage-declined members vs the rest (overall and by plan).
--- Requiring card use on Aug 20-21 for both groups removes the survivor bias of comparing hit members (active on those days by definition) with members who may have gone quiet.
-WITH hit AS (SELECT DISTINCT uid FROM ev WHERE event = 'card transaction' AND decline_reason = 'technical_error' AND payment_channel = 'contactless_wallet' AND t >= TIMESTAMP '2026-08-20' AND t < TIMESTAMP '2026-08-22'),
-act AS (SELECT DISTINCT uid FROM ev WHERE event = 'card transaction' AND t >= TIMESTAMP '2026-08-20' AND t < TIMESTAMP '2026-08-22'),
-wal AS (SELECT DISTINCT uid FROM ev WHERE event = 'card transaction' AND payment_channel = 'contactless_wallet' AND t >= TIMESTAMP '2026-08-06' AND t < TIMESTAMP '2026-08-20' AND uid IN (SELECT uid FROM act)),
-m AS (SELECT w.uid, w.uid IN (SELECT uid FROM hit) AS hit, CASE WHEN p.current_plan = 'free' THEN 'free' ELSE 'plus_premium' END AS grp,
+-- EVAL Q19: did members hit by the wallet outage use their card less afterwards? card transactions per member, 14 days before Aug 20 (Aug 6-19)
+-- vs 14 days after Aug 21 (Aug 22 - Sep 4); z = difference in mean change between groups / its standard error.
+-- (a) the cleanest comparison: members who made exactly one wallet payment on Aug 20-21; the processor declined some of those payments
+--     (technical_error) and approved others, so the two groups had the same outage-day usage (overall and by current plan)
+WITH od AS (SELECT uid, count(*) AS wallet_txns, max(coalesce(decline_reason = 'technical_error', false)::INT) AS hit, max((authorization_status = 'approved')::INT) AS approved
+  FROM ev WHERE event = 'card transaction' AND payment_channel = 'contactless_wallet' AND t >= TIMESTAMP '2026-08-20' AND t < TIMESTAMP '2026-08-22' GROUP BY 1),
+m AS (SELECT od.uid, od.hit = 1 AS hit, CASE WHEN p.current_plan = 'free' THEN 'free' ELSE 'plus_premium' END AS grp,
   count(e.uid) FILTER (WHERE e.t >= TIMESTAMP '2026-08-06' AND e.t < TIMESTAMP '2026-08-20') AS before_14d,
   count(e.uid) FILTER (WHERE e.t >= TIMESTAMP '2026-08-22' AND e.t < TIMESTAMP '2026-09-05') AS after_14d
-  FROM wal w JOIN prof p ON p.uid = w.uid LEFT JOIN ev e ON e.uid = w.uid AND e.event = 'card transaction' GROUP BY 1, 2, 3),
+  FROM od JOIN prof p ON p.uid = od.uid LEFT JOIN ev e ON e.uid = od.uid AND e.event = 'card transaction'
+  WHERE od.wallet_txns = 1 AND (od.hit = 1 OR od.approved = 1) GROUP BY 1, 2, 3),
 g AS (SELECT coalesce(grp, 'all') AS grp, hit, count(*) AS members, avg(before_14d) AS b, avg(after_14d) AS a, avg(after_14d - before_14d) AS d, var_samp(after_14d - before_14d) AS v
   FROM m GROUP BY GROUPING SETS ((hit), (grp, hit)))
-SELECT g.grp, g.hit, g.members, round(g.b, 3) AS txns_before, round(g.a, 3) AS txns_after, round(g.a / g.b, 4) AS after_over_before,
+SELECT 'one_wallet_payment' AS comparison, g.grp, g.hit, g.members, round(g.b, 3) AS txns_before, round(g.a, 3) AS txns_after, round(g.a / g.b, 4) AS after_over_before,
  round((SELECT (x.d - y.d) / sqrt(x.v / x.members + y.v / y.members) FROM g x, g y WHERE x.grp = g.grp AND y.grp = g.grp AND x.hit AND NOT y.hit), 3) AS z_diff_in_change
+FROM g ORDER BY 2, 3;
+-- (b) broader controls: outage-declined members vs other wallet users (wallet payment Aug 6-19) who used their card on Aug 20-21,
+--     and vs all other wallet users; hit members were active on the outage days by definition, so these controls favor the hit group
+WITH hit AS (SELECT DISTINCT uid FROM ev WHERE event = 'card transaction' AND decline_reason = 'technical_error' AND payment_channel = 'contactless_wallet' AND t >= TIMESTAMP '2026-08-20' AND t < TIMESTAMP '2026-08-22'),
+act AS (SELECT DISTINCT uid FROM ev WHERE event = 'card transaction' AND t >= TIMESTAMP '2026-08-20' AND t < TIMESTAMP '2026-08-22'),
+wal AS (SELECT DISTINCT uid FROM ev WHERE event = 'card transaction' AND payment_channel = 'contactless_wallet' AND t >= TIMESTAMP '2026-08-06' AND t < TIMESTAMP '2026-08-20'),
+m AS (SELECT w.uid, w.uid IN (SELECT uid FROM hit) AS hit, w.uid IN (SELECT uid FROM act) AS active_outage_days,
+  count(e.uid) FILTER (WHERE e.t >= TIMESTAMP '2026-08-06' AND e.t < TIMESTAMP '2026-08-20') AS before_14d,
+  count(e.uid) FILTER (WHERE e.t >= TIMESTAMP '2026-08-22' AND e.t < TIMESTAMP '2026-09-05') AS after_14d
+  FROM wal w LEFT JOIN ev e ON e.uid = w.uid AND e.event = 'card transaction' GROUP BY 1, 2, 3),
+c AS (SELECT 'card_users_on_outage_days' AS comparison, * FROM m WHERE active_outage_days UNION ALL SELECT 'all_wallet_users' AS comparison, * FROM m),
+g AS (SELECT comparison, hit, count(*) AS members, avg(before_14d) AS b, avg(after_14d) AS a, avg(after_14d - before_14d) AS d, var_samp(after_14d - before_14d) AS v FROM c GROUP BY 1, 2)
+SELECT g.comparison, g.hit, g.members, round(g.b, 3) AS txns_before, round(g.a, 3) AS txns_after, round(g.a / g.b, 4) AS after_over_before,
+ round((SELECT (x.d - y.d) / sqrt(x.v / x.members + y.v / y.members) FROM g x, g y WHERE x.comparison = g.comparison AND y.comparison = g.comparison AND x.hit AND NOT y.hit), 3) AS z_diff_in_change
 FROM g ORDER BY 1, 2;
 
 -- EVAL Q20: quarter summary for the open question

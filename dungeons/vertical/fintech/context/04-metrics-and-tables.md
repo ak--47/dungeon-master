@@ -28,7 +28,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 
 Three tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). They join to events on the UTC date of the event and on the named dimension.
 
-In the warehouse, numeric columns are loaded as FLOAT64 (shown as FLOAT below). Count columns (installs, clicks, impressions, authorization attempts) and latency always hold whole numbers, and raw file exports show them as integers.
+In the warehouse, count columns (installs, clicks, impressions, authorization attempts) and latency are loaded as INT64 (shown as INTEGER below); money, rates, and shares are FLOAT64 (shown as FLOAT).
 
 ### `paid_acquisition_daily`
 
@@ -39,9 +39,9 @@ Daily paid acquisition cost by channel, from the ad platforms' billing exports. 
 | `date` | DATE | UTC day | Spend day. |
 | `acquisition_channel` | STRING | — | `paid_social`, `search_ads`, `app_store_ads`, or `comparison_sites`. Matches `acquisition_channel` on `account opened`. |
 | `spend_usd` | FLOAT | USD | Media spend billed for the day. |
-| `platform_reported_installs` | FLOAT | count | Installs or sign-ups the ad platform claims for the day. Platforms use their own attribution and usually claim more than Mixpanel records. |
-| `clicks` | FLOAT | count | Ad clicks reported by the platform. |
-| `impressions` | FLOAT | count | Ad impressions reported by the platform. |
+| `platform_reported_installs` | INTEGER | count | Installs or sign-ups the ad platform claims for the day. Platforms use their own attribution and usually claim more than Mixpanel records. |
+| `clicks` | INTEGER | count | Ad clicks reported by the platform (taps on app store ads). |
+| `impressions` | INTEGER | count | Ad impressions reported by the platform. |
 
 Caveats: organic and referral have no media spend and are not in this table. Referral bonuses are paid from a separate budget and are not included. Use Mixpanel accounts, not `platform_reported_installs`, for CAC.
 
@@ -53,11 +53,11 @@ Daily card authorization health by payment channel, from the card processor's re
 |---|---|---|---|
 | `date` | DATE | UTC day | Day. |
 | `payment_channel` | STRING | — | `chip`, `contactless_wallet`, `online`, or `atm`. Matches `payment_channel` on `card transaction`. |
-| `auth_attempts` | FLOAT | count | Authorization requests the processor handled for Penny Harbor cards on that channel. |
+| `auth_attempts` | INTEGER | count | Authorization requests the processor handled for Penny Harbor cards on that channel. |
 | `approval_rate` | FLOAT | share 0-1 | Share of authorization requests approved, as reported by the processor. |
 | `tokenization_error_rate` | FLOAT | share 0-1 | Share of wallet authorizations that failed because the processor could not validate the device token. Always 0 for channels that do not use tokens. |
 | `processor_status` | STRING | — | Daily status for the channel's processing path: `operational` or `major_outage`, as posted on the processor's status page. |
-| `p95_auth_latency_ms` | FLOAT | milliseconds | 95th-percentile authorization response time. |
+| `p95_auth_latency_ms` | INTEGER | milliseconds | 95th-percentile authorization response time. |
 
 Caveats: the processor counts authorizations that never reach the `card transaction` feed (incremental authorizations at gas pumps and hotels, stand-in authorizations, recurring merchant-initiated charges), so `auth_attempts` runs higher than the Mixpanel count of `card transaction` and does not track it exactly day to day. The processor's approval rate is computed on its own count.
 

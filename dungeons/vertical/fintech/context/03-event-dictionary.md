@@ -69,7 +69,7 @@ Every biller has a `biller_id`. The biller's AutoPay event and every payment to 
 
 | Event | Sender | Meaning | Properties |
 |---|---|---|---|
-| `plan comparison viewed` | App | A Free member opens the plan comparison screen. | `trigger` (`float_limit`, `pockets_apy`, `settings`, `promo_banner`). |
+| `plan comparison viewed` | App | A Free member opens the plan comparison screen. | `trigger`: what led to the screen (`float_limit`: the Float limit upsell; `pockets_apy`: the Pockets rate comparison; `settings`: opened from settings; `promo_banner`: a promotion banner in the app). |
 | `plan upgraded` | App | The member upgrades from Free. At most once per member. | `new_plan` (`plus`, `premium`); `monthly_fee` (USD). |
 
 ## Support

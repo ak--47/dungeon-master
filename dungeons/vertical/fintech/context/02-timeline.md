@@ -11,7 +11,7 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 | 2026-07-06 (Mon) | Org | A new Head of Growth joins and takes over paid acquisition and the direct deposit program. |
 | 2026-07-14 (Tue) | Launch | **Round-Ups** launches for all members. A member turns it on in the app (with a 1x, 2x, or 3x multiplier); each morning Penny Harbor sweeps the previous day's spare change from approved card purchases into a Round-Ups Pocket. Announced in-app; members who join later can turn it on at any time. |
 | 2026-07-21 (Tue) | Experiment | **"Autopay Default" test** starts. Members who add a biller from this date are assigned 50/50 to **Control** (AutoPay off by default on the add-biller screen) or **Autopay On** (AutoPay pre-selected; the member can switch it off). Assignment is sticky per member and recorded with a `$experiment_started` event the first time the member adds a biller, and with the profile property `Experiment: Autopay Default`. |
-| 2026-08-03 (Mon) | Promotion | **Summer Saver Boost** starts: a limited-time higher APY on Pockets for members on Plus or Premium, announced in-app and by email. It runs through September 30. Free Pockets keep their usual rate. Daily rates by plan are in `pocket_savings_daily`. |
+| 2026-08-03 (Mon) | Promotion | **Summer Saver Boost** starts: a limited-time higher APY on Pockets for members on Plus or Premium, announced in-app (including a promotion banner on the plan comparison screen that Free members see) and by email. It runs through September 30. Free Pockets keep their usual rate. Daily rates by plan are in `pocket_savings_daily`. |
 | 2026-08-20 (Thu) to 2026-08-21 (Fri) | Incident | **Card processor incident.** Penny Harbor's card processor reported a major outage of one of its authorization services for two days; it was resolved by the morning of August 22. No member action was needed. Daily processor health by payment channel is in `card_authorizations_daily`. |
 | 2026-09-07 (Mon) | Bank holiday | Labor Day. Federal Reserve holiday, same ACH rules as above. |
 | 2026-09-30 (Wed) | Promotion / Fiscal | Last day of the Summer Saver Boost. End of Q3. |
@@ -40,4 +40,3 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 - How often do members pay bills late?
 - What happened on August 20-21, and how many members did it touch?
 - Why do so many applicants never fund their account?
-- Is Premium support faster?

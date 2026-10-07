@@ -49,7 +49,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   - Bill setup: biller added → autopay enabled (35%, biller_id per biller,
  *       A/B "Autopay Default" from 2026-07-21, H6)
  *   - Support: support ticket opened → support ticket resolved (90%, ticket_id;
- *       70% of engine tickets kept)
+ *       85% of engine tickets kept)
  *   - Upgrade (Free members): plan comparison viewed → plan upgraded (4%)
  *   - catch-all (engine): app opened, balance checked, card locked
  *
@@ -98,11 +98,13 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   rate instead of ramping up.
  * - Onboarding: each new member's time to fund is a salted lognormal (sigma
  *   0.9) around the credit-file median, truncated inside the 7-day window;
- *   no money moves before the account is funded. The engine gives usage
- *   funnels only to members who finish the first funnel. Members who never
- *   fund the account have no money to move: their card and budget events go,
- *   their balance is 0, 75% abandon in their first week, and the rest keep a
- *   salted 20-50% of their app visits.
+ *   no money moves before the account is funded. Members who never fund the
+ *   account have no card and no money to move: they keep only app visits,
+ *   balance checks (balance 0), plan comparison views, and support contacts;
+ *   75% abandon in their first week, and the rest keep a salted 20-50% of
+ *   their app visits. Member-initiated spawns (direct deposit setup, Float,
+ *   bills paid by hand, outage tickets) need an app event to clone, so a
+ *   member with no app events in the window makes none.
  * - New members: retentionCurve thins activity over the member's life; on top
  *   of it H2's dark cut hits members without direct deposit, and an organic
  *   lapse (55% of funded new members, truncated exponential day 1-100, scale
@@ -196,9 +198,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: window spend per Mixpanel signup is $38 paid social, $52 app store
  *   ads, $72 search ads, $115 comparison sites. Share of funded members who
- *   set up direct deposit within 14 days: comparison sites 0.62, referral
- *   0.55, organic 0.45, search 0.45, app store 0.32, paid social 0.18 — the
- *   cheapest signups are the most expensive direct-deposit customers.
+ *   set up direct deposit within 14 days: comparison sites 0.66, referral
+ *   0.55, organic 0.45, search 0.45, app store 0.32, paid social 0.16 — the
+ *   cheapest signups are the most expensive direct-deposit customers (knob
+ *   cost per direct-deposit customer: paid social 1.4x the next channel).
  * MIXPANEL: Insights, account opened by acquisition_channel joined to
  *   paid_acquisition_daily.spend_usd; Funnels account opened → direct deposit
  *   set up, 14-day window, date range 2026-06-04 to 2026-09-17 (every signup
@@ -234,7 +237,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * PATTERN: 2026-08-03 to 2026-09-30 Plus and Premium Pockets earn 5.00% APY
  *   (from 3.50% / 4.00%); Free stays 0.50%. Plus and Premium members (plan at
  *   event time) make 1.5x the manual Pocket deposits per app visit; Free is
- *   unchanged. The rates exist only in the warehouse.
+ *   unchanged. The rates exist only in the warehouse. The promotion also
+ *   shows on the Free plan comparison screen: during the boost more views
+ *   come from the promo banner and the Pockets APY row (trigger share about
+ *   0.45 → 0.62), and those views convert 1.5 points more often, a small
+ *   upgrade lift.
  * MIXPANEL: Insights, savings deposit (source = manual) and app opened,
  *   formula A/B, breakdown plan_tier, weekly; 8 boost weeks vs the 8 weeks
  *   before; join pocket_savings_daily.apy_pct.
@@ -244,7 +251,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H9. PREMIUM PRIORITY SUPPORT (everything)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: time from ticket opened to resolved is 0.4x for Premium members
- *   (plan when the ticket was opened) vs Free and Plus.
+ *   (plan when the ticket was opened) vs Free and Plus (lognormal per
+ *   ticket, median 20 h × contact-channel speed, sigma 0.7).
  * MIXPANEL: Funnels, support ticket opened → support ticket resolved, hold
  *   ticket_id constant, median time to convert, breakdown plan_tier, 30-day
  *   window (the Mixpanel default).
@@ -266,37 +274,39 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                        | Derivation              | Expected | Measured
  * -----|-----------------------------------------------|-------------------------|----------|---------
- * H1   | 7-day onboarding thin_file / established      | 41 / 74                 | 0.554    | 0.558 (40.8% vs 73.0%)
- * H1   | median time to fund thin_file / established   | ONBOARD_TTC_H 30 / 3    | 10.0     | 9.21 (27.5 h vs 3.0 h; p90 78.6 h vs 9.2 h)
- * H2   | D30 retention DD-in-14d / rest, funded new    | 1 / (1 − DARK_SHARE)    | 2.00     | 1.825 (47.5% vs 26.0%)
+ * H1   | 7-day onboarding thin_file / established      | 41 / 74                 | 0.554    | 0.530 (38.8% vs 73.1%)
+ * H1   | median time to fund thin_file / established   | ONBOARD_TTC_H 30 / 3    | 10.0     | 9.78 (29.5 h vs 3.0 h; p90 77.4 h vs 9.2 h)
+ * H2   | D30 retention DD-in-14d / rest, funded new    | 1 / (1 − DARK_SHARE)    | 2.00     | 1.977 (50.7% vs 25.6%)
  * H3   | round_up deposits before launch               | exact purity            | 0        | 0
- * H3   | purchasers with a round_up deposit, post-ramp | ROUNDUP_ADOPT           | 0.35     | 0.340
- * H4   | wallet / other approval, outage vs ±7 days    | 1 − OUTAGE_FAIL         | 0.35     | 0.339 (32.3% vs 94.5% wallet)
+ * H3   | purchasers with a round_up deposit, post-ramp | ROUNDUP_ADOPT           | 0.35     | 0.344
+ * H4   | wallet / other approval, outage vs ±7 days    | 1 − OUTAGE_FAIL         | 0.35     | 0.327 (31.4% vs 94.7% wallet)
  * H4   | warehouse tokenization_error_rate, outage     | OUTAGE_FAIL             | 0.65     | 0.660
- * H5   | spend per signup comparison / paid social     | 115 / 38                | 3.03     | 3.038 ($115.82 vs $38.13)
- * H5   | DD-in-14d per signup comparison / paid social | 0.62 / 0.18 (floor 2.22)| 3.44     | 3.626 (40.7% vs 11.2%)
- * H6   | per-biller AutoPay Autopay On / Control       | AUTOPAY_DEFAULT_MULT    | 1.60     | 1.571 (56.5% vs 36.0%)
- * H6   | Autopay On share of exposed members           | equal 2-arm hash        | 0.50     | 0.508
- * H7   | late share, paid by hand                      | LATE_SHARE.manual       | 0.18     | 0.174
- * H7   | late share, AutoPay                           | LATE_SHARE.autopay      | 0.03     | 0.028
- * H8   | manual deposits per visit Plus+Premium, boost | BOOST_DEPOSIT_MULT      | 1.50     | 1.485
- * H8   | same, Free (control)                          | unchanged               | 1.00     | 0.991
- * H9   | median resolution Premium / Free+Plus         | SUPPORT_PLAN_MULT       | 0.40     | 0.395 (6.6 h vs 16.8 h)
- * H10  | avg manual deposit 3+ budgets / 0-2           | BUDGET_SAVE_MULT        | 1.60     | 1.605 ($165.91 vs $103.36)
- * H10  | avg manual deposit 2 budgets / 0-1 (control)  | flat below threshold    | 1.00     | 0.996
+ * H5   | spend per signup comparison / paid social     | 115 / 38                | 3.03     | 3.065 ($116.41 vs $37.98)
+ * H5   | DD-in-14d per signup comparison / paid social | 0.66 / 0.16 (floor 2.56)| 4.13     | 3.817 (42.5% vs 11.1%)
+ * H6   | per-biller AutoPay Autopay On / Control       | AUTOPAY_DEFAULT_MULT    | 1.60     | 1.604 (56.5% vs 35.3%)
+ * H6   | Autopay On share of exposed members           | equal 2-arm hash        | 0.50     | 0.505
+ * H7   | late share, paid by hand                      | LATE_SHARE.manual       | 0.18     | 0.171
+ * H7   | late share, AutoPay                           | LATE_SHARE.autopay      | 0.03     | 0.029
+ * H8   | manual deposits per visit Plus+Premium, boost | BOOST_DEPOSIT_MULT      | 1.50     | 1.477
+ * H8   | same, Free (control)                          | unchanged               | 1.00     | 0.969
+ * H9   | median resolution Premium / Free+Plus         | SUPPORT_PLAN_MULT       | 0.40     | 0.398 (6.4 h vs 16.1 h)
+ * H10  | avg manual deposit 3+ budgets / 0-2           | BUDGET_SAVE_MULT        | 1.60     | 1.597 ($165.05 vs $103.37)
+ * H10  | avg manual deposit 2 budgets / 0-1 (control)  | flat below threshold    | 1.00     | 0.986
  * ═════════════════════════════════════════════════════════════════════════
  *
  * H5's direct-deposit read uses the knob ratio as target with a floor at
  * half the effect, because paid social has under 100 direct-deposit
- * customers in the 14-day cohort (88 here; relative SE about 12%); this run
+ * customers in the 14-day cohort (89 here; relative SE about 12%); this run
  * lands inside the ±10% band. H2's D30 ratio carries a relative SE of about
- * 6.5% (748 vs 1,042 members), so it reads low in this seed while staying
- * inside the band. Every other read is inside its knob ±10% band. Honest
- * nulls the eval checks: Round-Ups did not change manual Pocket deposits
- * (1.00x, z ≈ −0.1), card spending on the Federal Reserve holidays matched
- * the same weekdays (|z| ≤ 1.1), and members hit by the wallet outage did
- * not cut card use afterwards (z ≈ −0.2 against wallet users who also used
- * their card on the outage days).
+ * 6.4% (734 vs 1,073 members) and H9's median ratio about 5% (504 Premium
+ * tickets); both sit inside their bands here. Every other read is inside
+ * its knob ±10% band. Honest nulls the eval checks: Round-Ups did not change
+ * manual Pocket deposits (1.00x, z ≈ 0.1; within Free z ≈ −1.0, within
+ * Plus/Premium z ≈ +1.0), card spending on the Federal Reserve holidays
+ * matched the same weekdays (pooled z ≈ 0.4; each holiday |z| ≤ 1.5), and
+ * members whose single wallet payment on the outage days was declined did
+ * not cut card use afterwards against members whose single wallet payment
+ * was approved (z ≈ 0.8; within Plus/Premium z ≈ 1.7).
  */
 
 // ── SCALE ──
@@ -358,6 +368,7 @@ const ONBOARD_STEPS = ["account opened", "identity verified", "account funded"];
 const UNFUNDED_ABANDON_SHARE = 0.75;
 const UNFUNDED_ABANDON_DAYS = [0.5, 6];
 const UNFUNDED_KEEP = [0.2, 0.5];
+const UNFUNDED_EVENTS = new Set(["account opened", "identity verified", "app opened", "balance checked", "plan comparison viewed", "support ticket opened", "support ticket resolved"]);
 
 // H2 direct deposit in the first 14 days → retention
 const DD_WINDOW_DAYS = 14;
@@ -378,7 +389,7 @@ const RECENT_JOINER_DAYS = 30;     // (the in-window signup rate, so first-weeks
 // H5 paid channel economics (warehouse paid_acquisition_daily)
 const CHANNEL_WEIGHTS = { organic: 24, referral: 16, paid_social: 22, search_ads: 14, app_store_ads: 12, comparison_sites: 12 };
 const PAID_CHANNELS = ["paid_social", "search_ads", "app_store_ads", "comparison_sites"];
-const DD_ADOPT = { comparison_sites: 0.62, referral: 0.55, organic: 0.45, search_ads: 0.45, app_store_ads: 0.32, paid_social: 0.18 };
+const DD_ADOPT = { comparison_sites: 0.66, referral: 0.55, organic: 0.45, search_ads: 0.45, app_store_ads: 0.32, paid_social: 0.16 };
 const CPL_USD = { paid_social: 38, search_ads: 72, app_store_ads: 52, comparison_sites: 115 };
 const BORN_PCT = 40;
 const WINDOW_DAYS = 120;
@@ -400,8 +411,10 @@ const SPEND_NOISE = 0.14;
 // media plan fills the first week), weekday delivery shape, seeded noise
 const SPEND_LOOKBACK_DAYS = 7;
 const PLATFORM_INSTALL_INFLATION = 1.2;
-const CPC_USD = { paid_social: 1.1, search_ads: 3.4, app_store_ads: 1.6, comparison_sites: 6.5 };
-const CTR = { paid_social: 0.009, search_ads: 0.045, app_store_ads: 0.03, comparison_sites: 0.02 };
+// cost per click (app store ads: cost per tap; about half of taps install, and
+// about 1 in 6 installs opens an account)
+const CPC_USD = { paid_social: 1.1, search_ads: 3.4, app_store_ads: 4.6, comparison_sites: 6.5 };
+const CTR = { paid_social: 0.009, search_ads: 0.045, app_store_ads: 0.07, comparison_sites: 0.02 };
 
 // H3 Round-Ups
 const ROUNDUP_ADOPT = 0.35;
@@ -433,12 +446,17 @@ const APY_BASE = { free: 0.5, plus: 3.5, premium: 4.0 };
 const APY_BOOST = 5.0;
 const BOOST_DEPOSIT_MULT = 1.5;
 const BOOST_READ_DAYS = 56;        // story read: first 8 boost weeks vs the 8 weeks before
+// the boost on the Free plan comparison screen: more views come from the promo
+// banner and the Pockets APY row (base 30/25/25/20), and those views convert a little more
+const BOOST_TRIGGER_W = { float_limit: 22, pockets_apy: 36, settings: 16, promo_banner: 26 };
+const BOOST_UPGRADE_EXTRA = 0.015;
 
 // H9 support resolution by plan
 const SUPPORT_PLAN_MULT = { premium: 0.4, plus: 1, free: 1 };
 const RESOLVE_MEDIAN_H = 20;
 const CHANNEL_SPEED = { chat: 0.7, phone: 0.5, email: 1.6, in_app: 1.0 };
-const TICKET_KEEP = 0.7;           // share of engine support units kept (realistic contact rate)
+const TICKET_KEEP = 0.85;          // share of engine support units kept (realistic contact rate)
+const RESOLVE_SIGMA = 0.7;         // per-ticket lognormal spread of resolution time
 const CARRYOVER_TICKET_SHARE = 0.003; // established members with a ticket still open on June 4 (≈ open-ticket backlog)
 const CARRYOVER_ISSUES = ["card", "card", "transfer", "transfer", "account_access", "fees", "direct_deposit", "dispute"];
 
@@ -774,8 +792,10 @@ function handleEverything(events, meta) {
 
 	// ── onboarding: members who never fund the account ──
 	let cut = Infinity; // member-initiated events stop here
-	if (isNew && !fundedEv) {
-		events = events.filter((e) => !["card transaction", "card locked", "budget created"].includes(e.event));
+	const unfunded = isNew && !fundedEv;
+	if (unfunded) {
+		// an empty account: no card, no money movement, no billers, no plan change
+		events = events.filter((e) => UNFUNDED_EVENTS.has(e.event));
 		for (const e of events) if (e.event === "balance checked") e.available_balance_usd = 0;
 		if (salt(uid, "abandon") < UNFUNDED_ABANDON_SHARE) {
 			cut = birthMs + between(salt(uid, "abandon-day"), UNFUNDED_ABANDON_DAYS) * DAY_MS;
@@ -831,16 +851,34 @@ function handleEverything(events, meta) {
 	// server-side flows below still post paychecks, AutoPay bills, and repayments)
 	if (cut < Infinity) events = events.filter((e) => T(e) < cut || SERVER_ENGINE_EVENTS.has(e.event));
 	const lastMemberMs = Math.min(cut, END_MS);
+	// a member with no app events in the window cannot set anything up in the app
+	if (!withDevice.length && ddMs !== null && ddMs >= START_MS) { ddMs = null; ddActiveFrom = null; }
 	// template for spawned member-initiated events: the member's own app event
-	// nearest in time
+	// nearest in time (undefined when the member has no app events)
 	const memberTemplate = (t) => {
-		let best = withDevice[0] || anyTemplate, bestGap = Infinity;
+		let best = withDevice[0], bestGap = Infinity;
 		for (const e of withDevice) {
 			const g = Math.abs(T(e) - t);
 			if (g < bestGap) { best = e; bestGap = g; }
 		}
 		return best;
 	};
+
+	// ── Summer Saver Boost on the Free plan comparison screen (H8 trace) ──
+	{
+		let up = events.some((e) => e.event === "plan upgraded");
+		const views = events.filter((e) => e.event === "plan comparison viewed" && inBoost(T(e))).sort((a, b) => T(a) - T(b));
+		for (const e of views) {
+			e.trigger = pickWeighted(BOOST_TRIGGER_W, chance.floating({ min: 0, max: 1 }));
+			if (up || unfunded || (e.trigger !== "pockets_apy" && e.trigger !== "promo_banner")) continue;
+			if (!chance.bool({ likelihood: BOOST_UPGRADE_EXTRA * 100 })) continue;
+			const t = T(e) + chance.integer({ min: 2, max: 40 }) * MIN_MS;
+			if (t >= lastMemberMs) continue;
+			const plan = chance.pickone(["plus", "plus", "premium"]);
+			events.push(spawnEvent(e, "plan upgraded", t, { new_plan: plan, monthly_fee: PLAN_FEE[plan] }, false));
+			up = true;
+		}
+	}
 
 	// ── plan timeline: one upgrade per member; later upgrade steps vanish ──
 	const firstUp = events.filter((e) => e.event === "plan upgraded").sort((a, b) => T(a) - T(b))[0];
@@ -880,7 +918,7 @@ function handleEverything(events, meta) {
 				const takeMs = payMs - chance.floating({ min: 0.4, max: 3.5 }) * DAY_MS;
 				const plan = planAt(Math.max(takeMs, START_MS));
 				const amount = Math.max(20, Math.min(FLOAT_LIMIT[plan], 5 * Math.round(logNormal(70, 0.6) / 5)));
-				const takeOk = takeMs > prevPayMs + HOUR_MS && takeMs < lastMemberMs;
+				const takeOk = takeMs > prevPayMs + HOUR_MS && takeMs < lastMemberMs && withDevice.length > 0;
 				if (takeOk && takeMs >= START_MS) {
 					spawned.push(spawnEvent(memberTemplate(takeMs), "float advance taken", takeMs, { amount, float_limit_usd: FLOAT_LIMIT[plan] }, false));
 				}
@@ -960,7 +998,7 @@ function handleEverything(events, meta) {
 				} else {
 					const dd = late ? due + chance.integer({ min: 1, max: 10 }) * DAY_MS : due - chance.integer({ min: 0, max: 4 }) * DAY_MS;
 					t = memberTime(dd);
-					if (t >= lastMemberMs) continue; // a lapsed member stops paying by hand
+					if (t >= lastMemberMs || !withDevice.length) continue; // a lapsed member stops paying by hand
 				}
 				if (t < START_MS || t > END_MS) continue;
 				const amount = round2(base * (1 + (chance.floating({ min: -1, max: 1 })) * type.vary));
@@ -988,7 +1026,7 @@ function handleEverything(events, meta) {
 				delete r.decline_reason;
 				extra.push(r);
 			}
-			if (chance.bool({ likelihood: OUTAGE_TICKET * 100 })) {
+			if (chance.bool({ likelihood: OUTAGE_TICKET * 100 }) && withDevice.length) {
 				const tid = `tkt_${Math.floor(hashFloat(`${e.insert_id}|tkt`) * 1e12).toString(36)}`;
 				const open = t + chance.integer({ min: 5, max: 90 }) * MIN_MS;
 				const ch = chance.bool({ likelihood: 60 }) ? "chat" : "in_app";
@@ -1001,7 +1039,7 @@ function handleEverything(events, meta) {
 
 	// ── H3: Round-Ups ──
 	let roundUps = false;
-	if (salt(uid, "roundup") < ROUNDUP_ADOPT) {
+	if (!unfunded && salt(uid, "roundup") < ROUNDUP_ADOPT) {
 		const startMs = ms(ROUNDUPS_LAUNCH) + salt(uid, "roundup-day") * ROUNDUP_RAMP_DAYS * DAY_MS;
 		const visit = events.filter((e) => e.event === "app opened" && T(e) >= startMs).sort((a, b) => T(a) - T(b))[0];
 		if (visit) {
@@ -1048,7 +1086,7 @@ function handleEverything(events, meta) {
 				else r.resolution_hours = round1(Math.max(0.5, (T(r) - START_MS) / HOUR_MS + chance.floating({ min: 2, max: 30 })));
 				continue;
 			}
-			const gap = RESOLVE_MEDIAN_H * HOUR_MS * Math.exp(chance.normal({ mean: 0, dev: 0.9 }))
+			const gap = RESOLVE_MEDIAN_H * HOUR_MS * Math.exp(chance.normal({ mean: 0, dev: RESOLVE_SIGMA }))
 				* (CHANNEL_SPEED[o.contact_channel] ?? 1) * (SUPPORT_PLAN_MULT[planAt(T(o))] ?? 1);
 			const rt = T(o) + Math.max(10 * MIN_MS, gap);
 			r.time = iso(rt);
@@ -1063,7 +1101,7 @@ function handleEverything(events, meta) {
 			const ch = chs[Math.floor(salt(uid, "carry-ch") * chs.length)];
 			// ≈ standard normal; a ticket still open on a given day is length-biased: lognormal median × e^(σ²)
 			const z = (salt(uid, "carry-z1") + salt(uid, "carry-z2") - 1) * 2.45;
-			const gapMs = Math.max(HOUR_MS, RESOLVE_MEDIAN_H * HOUR_MS * Math.exp(0.81 + 0.9 * z) * CHANNEL_SPEED[ch] * (SUPPORT_PLAN_MULT[planAt(START_MS)] ?? 1));
+			const gapMs = Math.max(HOUR_MS, RESOLVE_MEDIAN_H * HOUR_MS * Math.exp(RESOLVE_SIGMA ** 2 + RESOLVE_SIGMA * z) * CHANNEL_SPEED[ch] * (SUPPORT_PLAN_MULT[planAt(START_MS)] ?? 1));
 			const rt = START_MS + gapMs * (0.05 + 0.95 * salt(uid, "carry-left"));
 			if (rt <= END_MS) {
 				events.push(spawnEvent(anyTemplate, "support ticket resolved", rt, {
@@ -1131,7 +1169,7 @@ function handleWarehouse(row, meta) {
 	if (meta.metricName === "card_authorizations_daily") {
 		// processor counts incremental and stand-in authorizations the app never logs
 		const k = `${row.date}|${row.payment_channel}`;
-		row.auth_attempts = Math.round(row.auth_attempts * (1.03 + hashFloat(`incr|${k}`) * 0.07) * jitter(`mit|${row.date}`, 0.08) + hashFloat(`standin|${k}`) * 25);
+		row.auth_attempts = Math.round(row.auth_attempts * (1.03 + hashFloat(`incr|${k}`) * 0.07) * jitter(`mit|${row.date}`, 0.04) + hashFloat(`standin|${k}`) * 25);
 		return row;
 	}
 	if (meta.metricName === "pocket_savings_daily") {
@@ -1372,7 +1410,7 @@ const config = {
 		{ name: "Money check", sequence: ["app opened", "balance checked"], conversionRate: 85, timeToConvert: 0.05, order: "sequential", weight: 30 },
 		{ name: "Card spend", sequence: ["card transaction"], conversionRate: 100, timeToConvert: 0.1, order: "sequential", weight: 60 },
 		{ name: "Send money", sequence: ["app opened", "transfer sent"], conversionRate: 60, timeToConvert: 0.1, order: "sequential", weight: 10 },
-		{ name: "Save", sequence: ["app opened", "savings deposit"], conversionRate: 55, timeToConvert: 0.1, order: "sequential", weight: 8 },
+		{ name: "Save", sequence: ["app opened", "savings deposit"], conversionRate: 55, timeToConvert: 0.1, order: "sequential", weight: 11 },
 		{ name: "Invest", sequence: ["app opened", "investment order placed"], conversionRate: 40, timeToConvert: 0.1, order: "sequential", weight: 4 },
 		{ name: "Budget", sequence: ["app opened", "budget created"], conversionRate: 40, timeToConvert: 0.1, order: "sequential", weight: 5 },
 		{
@@ -1705,7 +1743,7 @@ FROM ${WH("card_authorizations_daily")}`,
 	{
 		id: "H5-paid-channel-economics",
 		hook: "H5",
-		archetype: "attribution-bias",
+		archetype: "external-join",
 		narrative: `Comparison-site signups cost ${(CPL_USD.comparison_sites / CPL_USD.paid_social).toFixed(2)}x as much as paid-social signups over the window (warehouse paid_acquisition_daily bills automated bidding against a cost-per-signup target: each channel-day's spend = target cost per signup × the channel's average daily signups over the previous ${SPEND_LOOKBACK_DAYS} days (the media plan fills the first week), weekday shape above a ${SPEND_FLAT_SHARE * 100}% flat floor, seeded ±${SPEND_NOISE * 100}% noise, never zero, so the window cost per signup holds at the target: $${CPL_USD.comparison_sites} vs $${CPL_USD.paid_social} per signup at the window level), but funded comparison-site members set up direct deposit within ${DD_WINDOW_DAYS} days ${(DD_ADOPT.comparison_sites / DD_ADOPT.paid_social).toFixed(2)}x as often (${DD_ADOPT.comparison_sites} vs ${DD_ADOPT.paid_social}; channel is drawn independently of segment and credit file, so per signup the ratio is the same). Spend per signup needs the warehouse join. The direct-deposit read is the Mixpanel funnel account opened → direct deposit set up with a ${DD_WINDOW_DAYS}-day window, date range ${D(DATASET_START)} to ${D(DD_COHORT_END)} (every signup has its full window); paid-social direct-deposit counts are about a hundred, so it uses the knob as target with a knob-derived floor.`,
 		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account opened", breakdown: "acquisition_channel", join: "paid_acquisition_daily.spend_usd", funnel: `account opened → direct deposit set up, ${DD_WINDOW_DAYS}-day window, breakdown acquisition_channel` },
 		assertions: [
@@ -1767,7 +1805,7 @@ FROM ev WHERE event = '$experiment_started'`,
 	{
 		id: "H7-manual-payers-pay-late",
 		hook: "H7",
-		archetype: "cohort-prop-scale",
+		archetype: "bespoke",
 		narrative: `Every bill payment comes from a biller's monthly schedule (due day per biller; rent on the 1st). A payment the member makes by hand is late ${LATE_SHARE.manual * 100}% of the time; an AutoPay payment is late ${LATE_SHARE.autopay * 100}% of the time (insufficient funds, retried a few business days later). AutoPay applies from the moment it is turned on for that biller, so the autopay flag on bill paid is the payment method at payment time. Both shares are knob reads.`,
 		mixpanelReport: { type: "Insights", event: "bill paid", measure: "total", breakdown: ["autopay", "payment_status"] },
 		assertions: [

@@ -29,9 +29,9 @@ Penny Harbor is a mobile bank for everyday Americans, launched in March 2023. Th
 
 | Plan | Price | Pocket APY | Float limit | Support |
 |---|---|---|---|---|
-| Free | $0 | Base rate | $50 | Standard queue |
-| Plus | $4.99 per month | Higher rate | $150 | Standard queue |
-| Premium | $11.99 per month | Highest rate | $250 | Priority support queue |
+| Free | $0 | Base rate | $50 | Chat, in-app, phone, email |
+| Plus | $4.99 per month | Higher rate | $150 | Chat, in-app, phone, email |
+| Premium | $11.99 per month | Highest rate | $250 | Priority support |
 
 Current and historical Pocket rates by plan are in the warehouse table `pocket_savings_daily` (column `apy_pct`). New members start on Free. Members upgrade from the plan comparison screen.
 
@@ -68,6 +68,6 @@ Leadership set these goals for the quarter:
 2. **Spend acquisition money where it pays back.** The CFO asked which paid channels bring members who become primary-account customers.
 3. **Grow savings.** Launch Round-Ups, and run the Summer Saver Boost for paid-plan members. Finance asked what the boost cost and what it brought in.
 4. **Fewer late bills.** Late bill payments cost members late fees and generate support contacts. Product is testing whether AutoPay should be the default.
-5. **Make onboarding work for everyone.** Too many applicants start an account and never fund it.
+5. **Fund more new accounts.** Too many applicants start an account and never fund it.
 6. **Support quality.** The support lead wants to know how resolution time varies across members.
 7. **Card reliability.** Card spending is the largest revenue line, so any processor problem is a priority.
