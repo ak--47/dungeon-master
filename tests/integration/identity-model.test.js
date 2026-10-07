@@ -371,3 +371,32 @@ describe('pre-auth steps share the stitch device', () => {
 		}, 60000);
 	}
 });
+
+describe('experiment exposure on the first funnel follows the step identity', () => {
+	test('born users: the exposure is device-only before auth, so unauthed users carry no user_id', async () => {
+		const r = await DUNGEON_MASTER(pinWindow({
+			numUsers: 300, seed: 'exp-first-identity', avgEventsPerUserPerDay: 1,
+			percentUsersBornInDataset: 100, identity: { avgDevicePerUser: 2 },
+			events: [{ event: 'Landing' }, { event: 'Signup', isAuthEvent: true }, { event: 'Use' }],
+			funnels: [
+				{ name: 'Onboard', sequence: ['Landing', 'Signup', 'Use'], isFirstFunnel: true, conversionRate: 50, timeToConvert: 1, experiment: true },
+				{ name: 'Usage', sequence: ['Use', 'Use'], conversionRate: 50 },
+			],
+		}));
+		const events = r.eventData;
+		const stitchTime = new Map();
+		for (const e of events) {
+			if (e.event === 'Signup' && e.user_id && e.device_id) stitchTime.set(e.user_id, Math.min(stitchTime.get(e.user_id) ?? Infinity, Date.parse(e.time)));
+		}
+		const exposures = events.filter(e => e.event === '$experiment_started');
+		expect(exposures.length).toBeGreaterThan(250);
+		// Unauthed users exist in this config and carry no user_id on any event.
+		expect(stitchTime.size).toBeLessThan(290);
+		for (const e of events) if (e.user_id) expect(stitchTime.has(e.user_id), `${e.event} carries user_id for an unauthed user`).toBe(true);
+		// Every exposure precedes the stitch, so every exposure is device-only.
+		for (const e of exposures) {
+			expect(e.user_id).toBeUndefined();
+			expect(e.device_id).toBeTruthy();
+		}
+	});
+});

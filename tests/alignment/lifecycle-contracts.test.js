@@ -80,7 +80,7 @@ describe.sequential('lifecycle chronology contracts', () => {
     expect(warnings.some(warning => warning.key === 'lifecycle.firstFunnelClipped')).toBe(false);
   });
 
-  it('preserves both IDs on the synthetic experiment marker before auth', async () => {
+  it('stamps the synthetic experiment marker device-only before auth (it merges at the stitch)', async () => {
     const config = configFor();
     config.identity = { avgDevicePerUser: 1 };
     config.events[1].isAuthEvent = true;
@@ -89,7 +89,7 @@ describe.sequential('lifecycle chronology contracts', () => {
     const { events } = await runFixture(config);
     const markers = events.filter(event => event.event === '$experiment_started');
     expect(markers.length).toBeGreaterThan(0);
-    expect(markers.every(event => event.user_id && event.device_id)).toBe(true);
+    expect(markers.every(event => !event.user_id && event.device_id)).toBe(true);
   });
 
   for (const hookType of ['event', 'funnel-post', 'everything']) {
