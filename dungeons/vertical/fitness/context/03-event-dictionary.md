@@ -12,7 +12,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 | `insert_id` | Unique event ID used for de-duplication. |
 | `session_id` | The app session the event belongs to (diagnostic; Mixpanel computes its own sessions). |
 | `Platform` | `ios` or `android`. Fixed per member. |
-| `subscription_tier` | The member's plan **at the moment of the event**: `free`, `monthly`, or `annual`. It changes from `free` to a paid plan at the moment a member buys Plus. |
+| `subscription_tier` | The member's plan **at the moment of the event**: `free`, `trial` (during the member's 7-day Plus trial: Plus features, not yet paying), `monthly`, or `annual`. It changes to the paid plan at the moment a member buys Plus, and back to `free` when a trial ends without a purchase. |
 | `country`, `country_code`, `region`, `city` | Member location (one location per member). |
 | `model`, `os`, `carrier`, `radio`, `screen_height`, `screen_width` | Device details from the mobile SDK. |
 
@@ -32,8 +32,8 @@ New members go through onboarding once, right after they install. These four eve
 
 | Event | Meaning | Properties |
 |---|---|---|
-| `workout planned` | The member schedules a workout. | `planned_duration_minutes`; `workout_category` (`strength`, `running`, `hiit`, `yoga`, `cycling`, `walking`); `coaching_mode`: `self_guided`, or `ai_coach` when the member chose to do it with Stride Coach. |
-| `workout completed` | A finished workout reached Stridewell. This is the value moment. A workout tracked on a wearable is recorded only after it syncs. | `workout_category`; `duration_minutes`; `calories_burned`; `avg_heart_rate` (bpm); `perceived_effort` (1-10, self-rated); `coaching_mode` (`self_guided` or `ai_coach`; Stride Coach is a Plus feature from 2026-08-12); `wearable_type`: the member's wearable (`smartwatch`, `fitness_band`, `chest_strap`, or `none`); `tracking_source`: what recorded this workout (`wearable`, `phone`, or `manual`). |
+| `workout planned` | The member schedules a workout. | `planned_duration_minutes`; `workout_category` (`strength`, `running`, `hiit`, `yoga`, `cycling`, `walking`); `coaching_mode`: `self_guided`, or `ai_coach` when the member chose to do it with Stride Coach. The completed workout carries the same mode. |
+| `workout completed` | A finished workout reached Stridewell. This is the value moment. A workout tracked on a wearable is recorded only after it syncs. | `workout_category`; `duration_minutes`; `calories_burned`; `avg_heart_rate` (bpm); `perceived_effort` (1-10, self-rated); `coaching_mode` (`self_guided` or `ai_coach`; Stride Coach is a Plus and trial feature from 2026-08-12); `wearable_type`: the member's wearable (`smartwatch`, `fitness_band`, `chest_strap`, or `none`); `tracking_source`: what recorded this workout (`wearable`, `phone`, or `manual`). |
 | `progress checked` | The member opens a progress view. | `metric_viewed` (`weekly_minutes`, `workout_streak`, `body_weight`, `personal_records`, `heart_rate_trend`); `time_range` (`week`, `month`, `3_months`). |
 | `achievement unlocked` | The member earns a badge. | `achievement_type` (`streak_7`, `streak_30`, `personal_record`, `first_5k`, `challenge_badge`, `minutes_milestone`). |
 | `coach session` | The member has a session with a human coach. | `session_type` (`live_video`, `form_check`, `plan_review`, `chat`); `coach_speciality` (`strength`, `running`, `mobility`, `nutrition`); `session_minutes`; `satisfaction_score` (1-5). |
@@ -43,8 +43,8 @@ New members go through onboarding once, right after they install. These four eve
 
 | Event | Meaning | Properties |
 |---|---|---|
-| `challenge joined` | The member joins a challenge. | `challenge_id`: unique ID of the challenge; `challenge_format`: `solo` or `team`; `challenge_type` (`steps`, `strength`, `streak`, `distance`); `duration_days` (7-30). |
-| `challenge completed` | The member finishes a challenge they joined. Same `challenge_id` as the join. | `challenge_id`; `challenge_format`; `challenge_type`; `final_rank`. |
+| `challenge joined` | The member joins a challenge. | `challenge_id`: ID of the challenge (members of the same team challenge share it); `challenge_format`: `solo` or `team`; `challenge_type` (`steps`, `strength`, `streak`, `distance`); `duration_days` (7, 14, 21, or 30): how long the challenge runs. |
+| `challenge completed` | The member finishes a challenge they joined, in its final days. Same `challenge_id` as the join. Not sent for challenges still running on October 1. | `challenge_id`; `challenge_format`; `challenge_type`; `final_rank`. |
 | `friend added` | The member adds a friend. | `source` (`contacts`, `search`, `challenge`, `suggested`). |
 | `leaderboard viewed` | The member views a leaderboard. | `leaderboard_type` (`friends`, `challenge`, `city`, `global`). |
 
@@ -77,7 +77,7 @@ New members go through onboarding once, right after they install. These four eve
 | `primary_goal` | `lose_weight`, `build_strength`, `improve_endurance`, `stay_active`, `reduce_stress`. |
 | `acquisition_channel` | Channel at signup (for members who joined before the window, the channel they originally came from). |
 | `wearable_type` | `smartwatch`, `fitness_band`, `chest_strap`, or `none`. |
-| `subscription_tier` | Current plan: `free`, `monthly`, `annual`. |
+| `subscription_tier` | Current plan: `free`, `trial` (Plus trial still running on October 1), `monthly`, `annual`. |
 | `trial_eligible` | `true` for members whose one trial was still available or in progress on June 4: everyone who joined in the window, plus a small number who joined in the weeks just before it. `false` for earlier members, who already used their trial. |
 | `Platform` | `ios` or `android`. |
 | `Experiment: Guided First Week` | `Control` or `Guided Plan` for members enrolled in the onboarding test; empty for everyone else. |
@@ -97,5 +97,5 @@ One row per change in a member's self-reported fitness level: `distinct_id`, `fi
 | Workout loop | `workout planned` → `workout completed` → `progress checked` | The core habit loop. Members repeat it many times. |
 | Upgrade (trial) | `paywall viewed` → `trial started` → `subscription purchased` | Trial-eligible members (`trial_eligible = true`): mostly new members. |
 | Upgrade (direct) | `paywall viewed` → `subscription purchased` | Members who already used their trial (`trial_eligible = false`). |
-| Challenge completion | `challenge joined` → `challenge completed` | Members join many challenges. Each challenge has its own `challenge_id`. |
+| Challenge completion | `challenge joined` → `challenge completed` | Members join many challenges. Each challenge has its own `challenge_id`. A challenge completes when it ends, so the conversion window must cover the longest challenge (the business uses 31 days). |
 | Coaching | `coach session` → `workout planned` → `workout completed` | |

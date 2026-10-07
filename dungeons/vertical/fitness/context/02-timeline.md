@@ -10,7 +10,7 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 | 2026-07-04 (Sat) | Holiday | US Independence Day. No product or marketing changes. |
 | 2026-07-14 (Tue) | Campaign | **Summer Shred** ends (last day). |
 | 2026-07-20 (Mon) | Org | A new Head of Growth joins and takes over acquisition and lifecycle marketing. |
-| 2026-08-12 (Wed) | Launch | **Stride Coach** launches for all Plus members (Monthly and Annual). Free members see a teaser on the paywall. Workouts done with Stride Coach carry `coaching_mode = ai_coach`. |
+| 2026-08-12 (Wed) | Launch | **Stride Coach** launches for all Plus members (Monthly and Annual) and for members in a Plus trial. Free members see a teaser on the paywall. Workouts done with Stride Coach carry `coaching_mode = ai_coach`. |
 | 2026-08-20 (Thu) to 2026-08-22 (Sat) | Incident | **Wearable sync incident.** Our third-party health-data partner had an API incident. Their status page reported degraded sync for some device integrations for about three days. It was resolved early on August 23. Engineering did not change the app. The partner's daily status per device type is in `wearable_sync_daily`. |
 | 2026-09-01 (Tue) | Pricing | **Plus Monthly price change**: $12.99 → $14.99 per month for new purchases. Plus Annual stays $99.99. Existing subscribers keep their price until renewal. |
 | 2026-09-07 (Mon) | Holiday | US Labor Day. |

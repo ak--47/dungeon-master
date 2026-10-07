@@ -76,12 +76,21 @@ FROM onboarding GROUP BY 1 ORDER BY 1;
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H2-stride-coach-launch — AI coaching for Plus from 2026-08-12
 -- ─────────────────────────────────────────────────────────────────────────
+-- subscription_tier <> 'free' = members with Plus features (monthly, annual, or a
+-- running 7-day trial, tier 'trial').
 SELECT coaching_mode, count(*) AS workouts, round(avg(duration_minutes), 2) AS avg_minutes, round(avg(calories_burned), 1) AS avg_calories
 FROM ev WHERE event = 'workout completed' AND t >= TIMESTAMP '2026-08-12' AND subscription_tier <> 'free'
 GROUP BY 1 ORDER BY 1;
 
 SELECT count(*) FILTER (WHERE coaching_mode = 'ai_coach' AND (t < TIMESTAMP '2026-08-12' OR subscription_tier = 'free')) AS impure_rows
 FROM ev WHERE event IN ('workout completed', 'workout planned');
+
+-- a planned workout and the completion right after it (within 3 h) share coaching_mode
+WITH s AS (SELECT event, coaching_mode, t, lag(event) OVER w AS prev_event, lag(coaching_mode) OVER w AS prev_mode, lag(t) OVER w AS prev_t
+  FROM ev WHERE event IN ('workout planned', 'workout completed') WINDOW w AS (PARTITION BY uid ORDER BY t))
+SELECT count(*) AS plan_workout_pairs, count(*) FILTER (WHERE coaching_mode <> prev_mode) AS mode_mismatches,
+ (SELECT count(*) FROM ev WHERE event = 'workout completed' AND subscription_tier = 'trial' AND coaching_mode = 'ai_coach') AS trial_ai_coach_workouts
+FROM s WHERE event = 'workout completed' AND prev_event = 'workout planned' AND prev_t > t - INTERVAL 3 HOUR AND t >= TIMESTAMP '2026-08-12';
 
 -- steady-state Stride Coach share of Plus workouts, after the 21-day adoption ramp
 SELECT round(count(*) FILTER (WHERE coaching_mode = 'ai_coach')::DOUBLE / count(*), 4) AS ai_share_after_ramp
@@ -169,14 +178,29 @@ FROM a GROUP BY 1 ORDER BY 1;
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H7-team-vs-solo-challenges — per-challenge completion
 -- ─────────────────────────────────────────────────────────────────────────
--- challenge_id is held constant, so each challenge converts on its own completion
+-- challenge_id is held constant, so each challenge converts on its own completion.
+-- A challenge completes near the end of its duration_days, so the read takes joins
+-- up to 2026-08-31 (a 30-day challenge joined then ends inside the data) with a
+-- 31-day conversion window.
 CREATE OR REPLACE TEMP TABLE challenges AS
-WITH j AS (SELECT uid, challenge_id, challenge_format, min(t) AS tj FROM ev WHERE event = 'challenge joined' GROUP BY ALL),
+WITH j AS (SELECT uid, challenge_id, challenge_format, challenge_type, duration_days, min(t) AS tj FROM ev WHERE event = 'challenge joined' GROUP BY ALL),
 c AS (SELECT uid, challenge_id, min(t) AS tc FROM ev WHERE event = 'challenge completed' GROUP BY ALL)
-SELECT j.*, coalesce(c.tc >= j.tj AND c.tc < j.tj + INTERVAL 30 DAY, false) AS completed FROM j LEFT JOIN c USING (uid, challenge_id);
+SELECT j.*, c.tc, coalesce(c.tc > j.tj AND c.tc < j.tj + INTERVAL 31 DAY, false) AS completed,
+ date_diff('second', j.tj, c.tc) / 86400.0 AS days_to_complete
+FROM j LEFT JOIN c USING (uid, challenge_id);
 
 SELECT challenge_format, count(*) AS challenges, round(avg(completed::INT), 4) AS completion_rate
+FROM challenges WHERE tj < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
+SELECT round(avg(completed::INT) FILTER (WHERE challenge_format = 'team') / avg(completed::INT) FILTER (WHERE challenge_format = 'solo'), 4) AS team_vs_solo
+FROM challenges WHERE tj < TIMESTAMP '2026-09-01';
+-- completion timing follows duration_days: completions land in the last fifth of the challenge
+SELECT duration_days, count(*) FILTER (WHERE completed) AS completions, round(median(days_to_complete) FILTER (WHERE completed), 2) AS median_days_to_complete,
+ round(min(days_to_complete) FILTER (WHERE completed), 2) AS min_days, round(max(days_to_complete) FILTER (WHERE completed), 2) AS max_days
 FROM challenges GROUP BY 1 ORDER BY 1;
+-- team challenges are shared: participants per team challenge_id
+WITH p AS (SELECT challenge_id, count(DISTINCT uid) AS participants FROM ev WHERE event = 'challenge joined' AND challenge_format = 'team' GROUP BY 1)
+SELECT count(*) AS team_challenges, round(avg(participants), 2) AS avg_participants, median(participants) AS median_participants,
+ round(avg((participants = 1)::INT), 4) AS share_single_participant, max(participants) AS max_participants FROM p;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H8-push-fatigue — open rate falls with notifications in the last 30 days
@@ -396,16 +420,18 @@ FROM habit GROUP BY 1 ORDER BY 1;
 SELECT CASE WHEN early_workouts >= 3 THEN '3+' ELSE '0-2' END AS grp, count(*) AS members, round(avg((w4_events > 0)::INT), 4) AS week4_retention
 FROM habit GROUP BY 1 ORDER BY 1;
 
--- EVAL Q14 — per-challenge completion by format
+-- EVAL Q14 — per-challenge completion by format (joins Jun 4 - Aug 31, 31-day window)
 SELECT challenge_format, count(*) AS challenges, count(*) FILTER (WHERE completed) AS completed,
  round(avg(completed::INT), 4) AS completion_rate
+FROM challenges WHERE tj < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
+-- the same funnel over every join in the window: September joins have not had time to finish
+SELECT challenge_format, count(*) AS challenges, round(avg(completed::INT), 4) AS completion_rate_all_joins
 FROM challenges GROUP BY 1 ORDER BY 1;
-
--- member-level read (any completion per format): hides most of the gap
-WITH j AS (SELECT uid, challenge_format AS f, min(t) AS tj FROM ev WHERE event = 'challenge joined' GROUP BY ALL),
-c AS (SELECT uid, challenge_format AS f, max(t) AS tc FROM ev WHERE event = 'challenge completed' GROUP BY ALL)
-SELECT j.f AS challenge_format, count(*) AS members, round(avg(coalesce(c.tc >= j.tj, false)::INT), 4) AS share_completing_any
-FROM j LEFT JOIN c USING (uid, f) GROUP BY 1 ORDER BY 1;
+-- member-level read (any completion per format, joins Jun 4 - Aug 31): hides most of the gap
+WITH j AS (SELECT uid, challenge_format AS f, min(tj) AS tj, max(completed::INT) AS any_done FROM challenges WHERE tj < TIMESTAMP '2026-09-01' GROUP BY ALL)
+SELECT f AS challenge_format, count(*) AS members, round(avg(any_done), 4) AS share_completing_any FROM j GROUP BY 1 ORDER BY 1;
+-- days from join to completion by challenge length
+SELECT duration_days, round(median(days_to_complete) FILTER (WHERE completed), 1) AS median_days_to_complete FROM challenges GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q15 — notification open rate by members' notification volume, by recent volume, and over time
 SELECT CASE WHEN n < 12 THEN '1 01-11' WHEN n < 24 THEN '2 12-23' WHEN n < 36 THEN '3 24-35' WHEN n < 48 THEN '4 36-47' ELSE '5 48+' END AS notifications_received,
@@ -467,16 +493,24 @@ wk AS (SELECT date_trunc('week', d) AS wk, sum(opens) AS opens FROM d GROUP BY 1
 SELECT count(*) FILTER (WHERE wk <> DATE '2026-08-17') AS other_weeks, min(opens) FILTER (WHERE wk <> DATE '2026-08-17') AS min_other,
  max(opens) FILTER (WHERE wk <> DATE '2026-08-17') AS max_other, max(opens) FILTER (WHERE wk = DATE '2026-08-17') AS outage_week FROM wk;
 -- did members whose watch or band workouts stopped syncing use the app less than other members?
--- (affected / unaffected members, outage vs the 7 days either side; z from Poisson counts,
--- p two-sided via the Abramowitz-Stegun 7.1.26 erf approximation)
-WITH m AS (SELECT distinct_id AS uid, wearable_type IN ('smartwatch', 'fitness_band') AS aff FROM users),
-g AS (SELECT e.event, (e.t >= TIMESTAMP '2026-08-20' AND e.t < TIMESTAMP '2026-08-23') AS outage, m.aff, count(*)::DOUBLE AS n
-  FROM ev e JOIN m ON m.uid = e.uid WHERE e.event IN ('meal logged', 'app opened') AND e.t >= TIMESTAMP '2026-08-13' AND e.t < TIMESTAMP '2026-08-30' GROUP BY ALL),
-r AS (SELECT event, max(n) FILTER (WHERE outage AND aff) AS ao, max(n) FILTER (WHERE outage AND NOT aff) AS uo,
-  max(n) FILTER (WHERE NOT outage AND aff) AS ab, max(n) FILTER (WHERE NOT outage AND NOT aff) AS ub FROM g GROUP BY 1),
-z AS (SELECT event, (ao / uo) / (ab / ub) AS did, ln((ao / uo) / (ab / ub)) / sqrt(1 / ao + 1 / uo + 1 / ab + 1 / ub) AS z FROM r),
-e AS (SELECT *, abs(z) / sqrt(2) AS x, 1 / (1 + 0.3275911 * abs(z) / sqrt(2)) AS t FROM z)
-SELECT event, round(did, 4) AS affected_vs_other_members, round(z, 2) AS z,
+-- Each member active Aug 13-29 is one observation: their daily rate during the
+-- outage (3 days) minus their daily rate on the 14 surrounding days. Welch test,
+-- smartwatch / fitness-band owners vs everyone else (a member-level test: heavy
+-- users make event counts overdispersed, so a Poisson test on totals overstates
+-- significance). p two-sided via the Abramowitz-Stegun 7.1.26 erf approximation.
+WITH m AS (SELECT distinct_id::VARCHAR AS uid, wearable_type IN ('smartwatch', 'fitness_band') AS aff FROM users),
+a AS (SELECT DISTINCT uid FROM ev WHERE t >= TIMESTAMP '2026-08-13' AND t < TIMESTAMP '2026-08-30'),
+x AS (SELECT a.uid, m.aff, k.event,
+  count(e.t) FILTER (WHERE e.t >= TIMESTAMP '2026-08-20' AND e.t < TIMESTAMP '2026-08-23') / 3.0 AS o,
+  count(e.t) FILTER (WHERE NOT (e.t >= TIMESTAMP '2026-08-20' AND e.t < TIMESTAMP '2026-08-23')) / 14.0 AS b
+  FROM a JOIN m USING (uid) CROSS JOIN (VALUES ('app opened'), ('meal logged')) k(event)
+  LEFT JOIN ev e ON e.uid = a.uid AND e.event = k.event AND e.t >= TIMESTAMP '2026-08-13' AND e.t < TIMESTAMP '2026-08-30'
+  GROUP BY ALL),
+s AS (SELECT event, aff, count(*) AS n, avg(o - b) AS d, var_samp(o - b) AS v, sum(o) AS so, sum(b) AS sb FROM x GROUP BY ALL),
+w AS (SELECT a.event, a.n AS affected_members, u.n AS other_members, (a.so / a.sb) / (u.so / u.sb) AS did,
+  (a.d - u.d) / sqrt(a.v / a.n + u.v / u.n) AS z FROM s a JOIN s u ON a.event = u.event AND a.aff AND NOT u.aff),
+e AS (SELECT *, abs(z) / sqrt(2) AS x, 1 / (1 + 0.3275911 * abs(z) / sqrt(2)) AS t FROM w)
+SELECT event, affected_members, other_members, round(did, 4) AS affected_vs_other_members, round(z, 2) AS z,
  round(1 - (1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * exp(-x * x)), 3) AS p_two_sided
 FROM e ORDER BY event;
 

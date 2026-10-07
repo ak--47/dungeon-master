@@ -9,11 +9,11 @@ Stridewell is a consumer fitness app for people who want to train consistently w
 - **Plan and train.** A member picks a workout (strength, running, HIIT, yoga, cycling, or walking) and schedules it. When they finish, the app records the workout. The core habit loop is *plan → train → check progress*.
 - **Track.** A workout can be tracked by a connected wearable (smartwatch, fitness band, or chest strap), by the phone's sensors, or entered by hand. A wearable workout reaches Stridewell when the device syncs after the workout.
 - **Progress.** Members check weekly minutes, streaks, body weight, personal records, and heart-rate trends.
-- **Challenges.** Members join time-boxed challenges (steps, strength, streak, or distance), either **solo** or as part of a **team** with friends. Each challenge has its own ID.
+- **Challenges.** Members join time-boxed challenges (steps, strength, streak, or distance) that run for 7, 14, 21, or 30 days, either **solo** or as part of a **team** with other members. A member completes a challenge when it ends, if they met its goal. Each challenge has its own ID; everyone on a team shares the team challenge's ID.
 - **Social.** Members add friends and view leaderboards (friends, challenge, city, global).
 - **Coaching.** Members can book short sessions with certified human coaches (live video, form checks, plan reviews, chat).
 - **Nutrition.** Members log meals with calories and protein.
-- **Stride Coach.** An AI coaching mode for Plus members that guides a workout in real time (pacing, rest, and form cues). It launched in August (see the timeline).
+- **Stride Coach.** An AI coaching mode for Plus members (and members in a Plus trial) that guides a workout in real time (pacing, rest, and form cues). It launched in August (see the timeline).
 
 ## Plans and pricing
 
@@ -23,7 +23,7 @@ Stridewell is a consumer fitness app for people who want to train consistently w
 | Plus Monthly | $12.99/month until 2026-08-31; $14.99/month for new purchases from 2026-09-01 | Full workout library, advanced plans, Stride Coach (from Aug 12), unlimited challenges |
 | Plus Annual | $99.99/year (unchanged) | Same as Plus Monthly |
 
-- **Trials.** A member who joins gets one 7-day free trial of Plus. Most members who joined before the window have already used their trial and can only buy directly. Members who joined in the last few weeks before June 4 and had not started their trial yet (or were still in it) keep it, so some trials and trial conversions in early June come from them.
+- **Trials.** A member who joins gets one 7-day free trial of Plus, with every Plus feature. Most members who joined before the window have already used their trial and can only buy directly. Members who joined in the last few weeks before June 4 and had not started their trial yet (or were still in it) keep it, so some trials and trial conversions in early June come from them.
 - **How people upgrade.** A paywall appears when a free member opens a Plus feature (workout library, advanced plans, a Stride Coach teaser, the challenge limit, or settings). From there they start a trial or buy.
 - **Billing.** Purchases go through the Apple and Google app stores. The stores keep a 15% fee on subscriptions. Finance reports bookings at list price (gross) and after store fees (net).
 - The Mixpanel project tracks the purchase event and the plan, but not the price. Prices and bookings live in the warehouse table `subscription_billing_daily`.
@@ -38,7 +38,7 @@ New members arrive through one of five acquisition channels, recorded once at si
 - **paid_search** — search ads.
 - **app_store_ads** — paid placements inside the app stores.
 
-The three paid channels are bought on a cost-per-install basis. Daily spend by paid channel is in the warehouse table `paid_acquisition_daily`.
+The three paid channels are bought on a cost-per-install basis against a daily media plan that marketing sets ahead of time. Daily spend by paid channel is in the warehouse table `paid_acquisition_daily`.
 
 ## Member segments
 

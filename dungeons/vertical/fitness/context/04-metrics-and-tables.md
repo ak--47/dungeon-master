@@ -20,14 +20,14 @@ All KPIs use UTC days and count people by unique `user_id`.
 | Net bookings | Gross bookings minus app-store fees (15%). |
 | CAC (paid) | Paid-media spend for a channel divided by the new members Mixpanel recorded from that channel (`account created` with that `acquisition_channel`) over the same days. Finance uses Mixpanel signups, not the installs the ad platforms report. |
 | Cost per paying member | Paid-media spend for a channel divided by members from that channel who bought Plus. |
-| Challenge completion rate | Share of joined challenges that were completed. |
+| Challenge completion rate | Share of joined challenges that were completed. A challenge can only complete when it ends, so count joins that have had time to finish (a 30-day challenge joined in September may still be running on October 1). |
 | Notification open rate | Share of `notification received` events with `opened = true`. |
-| Stride Coach adoption | Share of Plus members' completed workouts with `coaching_mode = ai_coach` (since 2026-08-12). |
+| Stride Coach adoption | Share of completed workouts by members with Plus features (`subscription_tier` = `monthly`, `annual`, or `trial`) with `coaching_mode = ai_coach` (since 2026-08-12). |
 | Sync success rate | 1 − `sync_error_rate` in `wearable_sync_daily`. |
 
 ## Warehouse tables
 
-Three tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). Days with no activity have a row with zeros. They join to events on the UTC date of the event and on the named dimension.
+Three tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). A day with no activity still has a row (with zero counts). They join to events on the UTC date of the event and on the named dimension.
 
 ### `paid_acquisition_daily`
 
@@ -37,12 +37,12 @@ Daily paid-media cost by channel, from the ad platforms' billing exports.
 |---|---|---|---|
 | `date` | DATE | UTC day | Spend day. |
 | `acquisition_channel` | STRING | — | `paid_social`, `paid_search`, or `app_store_ads`. Matches `acquisition_channel` on `account created`. |
-| `spend_usd` | FLOAT | USD | Media spend billed for the day. All three channels are bought per install (CPI). |
-| `platform_reported_installs` | INTEGER | count | Installs the ad platform claims for the day. Platforms use their own attribution and usually claim more than Mixpanel records. |
+| `spend_usd` | FLOAT | USD | Media spend billed for the day. All three channels are bought per install (CPI): spend is the platform's reported installs times the day's CPI. |
+| `platform_reported_installs` | INTEGER | count | Installs the ad platform reports and bills for the day. Platforms use their own attribution and usually claim more than Mixpanel records. |
 | `clicks` | INTEGER | count | Ad clicks reported by the platform. |
 | `impressions` | INTEGER | count | Ad impressions reported by the platform. |
 
-Caveats: organic and referral channels have no spend and are not in this table. Use Mixpanel signups, not `platform_reported_installs`, for CAC.
+Caveats: organic and referral channels have no spend and are not in this table. Use Mixpanel signups, not `platform_reported_installs`, for CAC. Marketing books each channel's daily volume ahead of time from expected demand, and the platforms deliver against that plan, so daily spend does not move one-for-one with that day's Mixpanel signups; compare CAC over a week or longer.
 
 ### `wearable_sync_daily`
 
