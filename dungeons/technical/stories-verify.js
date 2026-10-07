@@ -111,7 +111,7 @@ export const stories = [
 		id: 'H2-free-purchase-drop',
 		hook: 'H2',
 		archetype: 'composition-drift',
-		narrative: 'every 2nd free purchase dropped — pro/free purchase count ratio approaches 2x (ceil-keep parity leaves it slightly under)',
+		narrative: 'every 2nd free purchase dropped — pro/free purchases per purchaser approach 2x (ceil-keep parity and purchasers left with zero purchases keep it a bit under)',
 		assertions: [
 			{
 				breakdown: { type: 'eventBreakdown', event: 'purchase', breakdownProperty: 'plan' },
@@ -119,7 +119,16 @@ export const stories = [
 					pro: { where: { value: 'pro' } },
 					free: { where: { value: 'free' } },
 				},
-				expect: { metric: 'pro.count / free.count', op: '>=', target: 2.0, floor: 1.5 },
+				// per-purchaser rates, so the hashCohort split size (≈50% at scale, but
+				// 40-60% at 200 users) does not leak into the H2 ratio
+				assert: (rows) => {
+					const pro = (rows || []).find(r => r.value === 'pro');
+					const free = (rows || []).find(r => r.value === 'free');
+					if (!pro || !free || !pro.total_users || !free.total_users) return { pass: false, verdict: 'NONE', detail: 'missing plan segment' };
+					const ratio = (pro.count / pro.total_users) / (free.count / free.total_users);
+					const verdict = ratio >= 1.8 ? 'NAILED' : ratio >= 1.5 ? 'STRONG' : ratio > 1 ? 'WEAK' : 'INVERSE';
+					return { pass: ratio >= 1.5, verdict, detail: `pro/free purchases per purchaser ${ratio.toFixed(3)} (target 2.0, floor 1.5)` };
+				},
 			},
 		],
 	},
@@ -132,16 +141,17 @@ export const stories = [
 			{
 				breakdown: {
 					type: 'duckdb',
-					sql: "SELECT plan, count(*) AS n FROM read_json_auto('{{PREFIX}}-EVENTS*.json*') WHERE event = 'purchase' GROUP BY plan",
+					sql: "SELECT plan, count(*) AS n, count(DISTINCT user_id) AS users FROM read_json_auto('{{PREFIX}}-EVENTS*.json*') WHERE event = 'purchase' GROUP BY plan",
 				},
 				assert: (rows) => {
-					const by = Object.fromEntries((rows || []).map(r => [r.plan, Number(r.n)]));
+					// per-purchaser rates: the 200-user hashCohort split is not exactly 50/50
+					const by = Object.fromEntries((rows || []).map(r => [r.plan, Number(r.n) / Number(r.users)]));
 					const ratio = by.pro / by.free;
 					const pass = Number.isFinite(ratio) && ratio >= 1.5;
 					return {
 						pass,
 						verdict: pass ? (ratio >= 1.8 ? 'NAILED' : 'STRONG') : 'NONE',
-						detail: `pro=${by.pro} free=${by.free} ratio=${Number.isFinite(ratio) ? ratio.toFixed(2) : 'n/a'}`,
+						detail: `pro=${by.pro?.toFixed(2)} free=${by.free?.toFixed(2)} per purchaser, ratio=${Number.isFinite(ratio) ? ratio.toFixed(2) : 'n/a'}`,
 					};
 				},
 			},
