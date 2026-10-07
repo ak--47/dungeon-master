@@ -419,8 +419,9 @@ Supported advanced features (still active in 1.5.x): `personas`,
 `worldEvents`, `engagementDecay`, `dataQuality`. When verifying:
 
 ```sql
--- Personas: check distribution matches configured weights
-SELECT _persona, count(*) as users FROM read_json_auto('./data/verify-dungeon-USERS.json') WHERE _persona IS NOT NULL GROUP BY 1;
+-- Personas: profiles carry no persona name (1.9.0). Check the distribution on a
+-- key the personas declare in `properties` (here `segment`); hooks see `meta.persona`.
+SELECT segment, count(*) as users FROM read_json_auto('./data/verify-dungeon-USERS.json') WHERE segment IS NOT NULL GROUP BY 1;
 
 -- World Events: check injected properties exist during event windows
 SELECT promo, count(*) FROM read_json_auto('./data/verify-dungeon-EVENTS.json') WHERE promo IS NOT NULL GROUP BY 1;

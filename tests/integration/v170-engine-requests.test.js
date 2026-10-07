@@ -27,6 +27,12 @@ const BASE = {
 	superProps: {},
 };
 const run = (seed, extra) => DUNGEON_MASTER({ ...BASE, ...extra, seed });
+// Personas reach hooks through meta.persona; profiles carry no internal `_persona` field.
+const capturePersonas = () => {
+	const map = new Map();
+	const hook = (record, type, meta) => { if (type === 'user') map.set(record.distinct_id, meta.persona ? meta.persona.name : null); return record; };
+	return { map, hook };
+};
 const byUser = (events) => {
 	const m = new Map();
 	for (const e of events) { if (!m.has(e.user_id)) m.set(e.user_id, []); m.get(e.user_id).push(e); }
@@ -145,10 +151,12 @@ describe.sequential('P1-2 stickyEventProps + stable location', () => {
 
 describe.sequential('P1-3 ttcModifier', () => {
 	test('fast persona converts in a quarter of the time', async () => {
+		const cap = capturePersonas();
 		const r = await run('v170-ttc', {
 			personas: [{ name: 'fast', weight: 50, ttcModifier: 0.25 }, { name: 'slow', weight: 50, ttcModifier: 1 }],
+			hook: cap.hook,
 		});
-		const persona = new Map(r.userProfilesData.map(u => [u.distinct_id, u._persona]));
+		const persona = cap.map;
 		const ttc = { fast: [], slow: [] };
 		for (const [uid, evs] of byUser(r.eventData)) {
 			evs.sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
@@ -165,12 +173,14 @@ describe.sequential('P1-3 ttcModifier', () => {
 
 describe.sequential('P1-4 campaignPerUser', () => {
 	test('one utm_source per user, equal to the profile; persona utm wins over the draw', async () => {
+		const cap = capturePersonas();
 		const r = await run('v170-camp', {
 			switches: { hasCampaigns: true, campaignPerUser: true },
 			personas: [
 				{ name: 'paid', weight: 50, properties: { utm_source: 'google', utm_medium: 'cpc' } },
 				{ name: 'organic-ish', weight: 50 },
 			],
+			hook: cap.hook,
 		});
 		const profiles = new Map(r.userProfilesData.map(u => [u.distinct_id, u]));
 		const sourcesPerUser = new Map();
@@ -184,7 +194,7 @@ describe.sequential('P1-4 campaignPerUser', () => {
 		for (const s of sourcesPerUser.values()) expect(s.size).toBe(1);
 		for (const u of r.userProfilesData) {
 			expect(u.utm_source).toBeDefined();
-			if (u._persona === 'paid') { expect(u.utm_source).toBe('google'); expect(u.utm_medium).toBe('cpc'); }
+			if (cap.map.get(u.distinct_id) === 'paid') { expect(u.utm_source).toBe('google'); expect(u.utm_medium).toBe('cpc'); }
 		}
 	});
 });
@@ -264,6 +274,7 @@ describe.sequential('P2-2 result.warnings', () => {
 
 describe.sequential('P1-5 eventMultiplier and churn', () => {
 	test('a 3x persona runs ~3x the funnel passes when every event is a funnel step', async () => {
+		const cap = capturePersonas();
 		const r = await run('v170-mult', {
 			events: [
 				{ event: 'Signed Up', weight: 2, isFirstEvent: true, properties: {} },
@@ -271,10 +282,11 @@ describe.sequential('P1-5 eventMultiplier and churn', () => {
 				{ event: 'Purchased', weight: 3, properties: {} },
 			],
 			personas: [{ name: 'power', weight: 50, eventMultiplier: 3 }, { name: 'casual', weight: 50, eventMultiplier: 1 }],
+			hook: cap.hook,
 		});
 		const counts = new Map();
 		for (const e of r.eventData) counts.set(e.user_id, (counts.get(e.user_id) || 0) + 1);
-		const avg = (name) => { const us = r.userProfilesData.filter(u => u._persona === name); return us.reduce((s, u) => s + (counts.get(u.distinct_id) || 0), 0) / us.length; };
+		const avg = (name) => { const us = r.userProfilesData.filter(u => cap.map.get(u.distinct_id) === name); return us.reduce((s, u) => s + (counts.get(u.distinct_id) || 0), 0) / us.length; };
 		const ratio = avg('power') / avg('casual');
 		expect(ratio).toBeGreaterThan(2.4);
 		expect(ratio).toBeLessThan(3.6);

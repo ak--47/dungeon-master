@@ -821,6 +821,8 @@ export interface HookMetaUser extends HookMetaTimeAnchors {
     config: Dungeon;
     /** True if the user's account creation falls inside the dataset window. */
     userIsBornInDataset: boolean;
+    /** The user's assigned persona (if `personas` is configured), or null. The profile carries no persona field. */
+    persona: Persona | null;
 }
 
 /** Meta passed to the "scd-pre" hook (fires per SCD prop, before insertion). */

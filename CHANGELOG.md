@@ -143,6 +143,13 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   Repro, 1,600 born users with 3 devices: 14 pre-auth events off the stitch
   device with session ids, 1,625 without; now 0. Output shift: `device_id`
   (and its device fields) on those pre-auth rows.
+- Stop writing an internal `_persona` field on every profile. A persona with
+  no `properties` still got `properties: {}` from the validator, so the guard
+  always passed, and the field exported and imported to Mixpanel as a visible
+  profile property (gaming: `hardcore` / `casual`). Hooks read the persona from
+  `meta.persona` on `user`, `funnel-pre`, `funnel-post`, and `everything`, as
+  documented. To segment by persona in reports, declare a persona `properties`
+  key. Output shift: profiles lose `_persona`; no RNG draws change.
 
 ### Added
 
@@ -172,6 +179,7 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   (0.45 in `avgActiveDaysPerUser` mode). It used to compare with one prior week
   at 0.7, whose day-to-day noise (sd about 0.24) failed decline runs by chance.
   "Today" is always rough in a streaming dataset; stories live in the history.
+
 
 ## 1.8.5 - 2026-09-27
 

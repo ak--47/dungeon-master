@@ -49,7 +49,9 @@ describe('Feature 1: Personas', () => {
 	});
 
 	test('assigns persona properties to user profiles', async () => {
+		const seen = new Map();
 		const result = await DUNGEON_MASTER({
+			hook: (record, type, meta) => { if (type === 'user') seen.set(record.distinct_id, meta.persona && meta.persona.name); return record; },
 			numUsers: 50,
 			numEvents: 500,
 			numDays: 30,
@@ -66,7 +68,9 @@ describe('Feature 1: Personas', () => {
 			if (user.is_bot) continue; // skip bots
 			expect(user.tier).toBe('vip');
 			expect(user.level).toBe('gold');
-			expect(user._persona).toBe('vip');
+			// The persona reaches hooks via meta.persona; no internal field leaks onto the profile.
+			expect(seen.get(user.distinct_id)).toBe('vip');
+			expect(user).not.toHaveProperty('_persona');
 		}
 	}, 30000);
 
@@ -445,7 +449,9 @@ describe('Advanced Features Integration', () => {
 		// Full run-to-run determinism isn't guaranteed because MAX_TIME = dayjs().unix()
 		// shifts between runs (pre-existing behavior). This test validates that
 		// persona assignment is consistent within a single seeded run.
+		const seen = new Map();
 		const result = await DUNGEON_MASTER({
+			hook: (record, type, meta) => { if (type === 'user') seen.set(record.distinct_id, meta.persona && meta.persona.name); return record; },
 			numUsers: 100,
 			numEvents: 2000,
 			numDays: 30,
@@ -457,8 +463,9 @@ describe('Advanced Features Integration', () => {
 			]
 		});
 		const users = Array.from(result.userProfilesData);
-		const alpha = users.filter(u => u._persona === 'alpha').length;
-		const beta = users.filter(u => u._persona === 'beta').length;
+		expect(users.every(u => !('_persona' in u))).toBe(true);
+		const alpha = users.filter(u => seen.get(u.distinct_id) === 'alpha').length;
+		const beta = users.filter(u => seen.get(u.distinct_id) === 'beta').length;
 		// With 70/30 weights over 100 users, alpha should be more common
 		expect(alpha).toBeGreaterThan(beta);
 		// Roughly 70% alpha (with some variance)
