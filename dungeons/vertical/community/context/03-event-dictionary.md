@@ -64,7 +64,7 @@ Threads are shared: many members view and reply to the same thread. A member's v
 
 ## Trust and safety
 
-Every report has a `report_id`. The report and its resolution share the same `report_id`, `report_type`, `content_hub`, and `community_id`. A few reports are still open at the end of the window.
+Every report has a `report_id`. The report and its resolution share the same `report_id`, `report_type`, `content_hub`, and `community_id`. A small share of reports never get a `report resolved`: duplicates and reports on content that is already gone are closed without a notice. Reports filed in the last days of the window may still be open.
 
 | Event | Meaning | Properties |
 |---|---|---|
@@ -86,7 +86,6 @@ Every report has a `report_id`. The report and its resolution share the same `re
 | `distinct_id` | The member's ID (same as `user_id` on events). |
 | `name`, `email`, `avatar` | Contact details. |
 | `role` | `lurker`, `reader`, `contributor`, `creator`, `moderator` (see 01-business.md). |
-| `_persona` | Legacy copy of `role` from an older CRM sync. |
 | `home_hub` | The hub where the member spends most of their time. |
 | `membership` | Current membership: `free` or `plus`. |
 | `member_since` | Date the member joined (YYYY-MM-DD). Before 2026-06-04 for established members. |
@@ -95,14 +94,15 @@ Every report has a `report_id`. The report and its resolution share the same `re
 | `Experiment: Reply Nudges` | `Control` or `Nudges On` for members enrolled in the thread test; empty for everyone else. |
 | `created` | Signup time for members who joined in the window (the time of their `account created` event); empty for established members. |
 | `country`, `country_code`, `region`, `city` | Location. |
-| `anonymousIds`, `sessionIds` | Devices and sessions seen for the member (pipeline metadata). |
+| `anonymousIds` | Device IDs seen for the member (pipeline metadata). |
+| `sessionIds` | Unused pipeline field; always empty. |
 
 ## Community (group) properties — `community_id`
 
 | Property | Meaning |
 |---|---|
 | `community_id` | Group key, `1` to `48`. |
-| `name` | Community name (e.g. "Starfall Guild"). |
+| `name` | Community name (e.g. "Dice Tavern Circle"). |
 | `content_hub` | The community's hub. |
 | `member_count` | Members who have joined the community (all time). |
 | `founded_year` | Year the community opened on Hearthside. |

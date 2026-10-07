@@ -77,7 +77,7 @@ SELECT count(*) AS events, count(DISTINCT uid) AS members_with_events, (SELECT c
 
 -- identity check: every event resolves to a member; device_id gaps are the two post-signup onboarding steps
 SELECT count(*) FILTER (WHERE uid IS NULL) AS unresolved_events,
- string_agg(DISTINCT event, ', ') FILTER (WHERE device_id IS NULL) AS events_without_device_id
+ string_agg(DISTINCT event, ', ' ORDER BY event) FILTER (WHERE device_id IS NULL) AS events_without_device_id
 FROM ev;
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -308,6 +308,9 @@ SELECT 'ALL TYPES', count(*) FILTER (WHERE period = 'before'), count(*) FILTER (
  round(median(h) FILTER (WHERE period = 'before'), 1), round(median(h) FILTER (WHERE period = 'after'), 1),
  round(median(h) FILTER (WHERE period = 'after') / median(h) FILTER (WHERE period = 'before'), 3)
 FROM x WHERE period IS NOT NULL ORDER BY 1;
+-- reports with no resolution event, by filing month (duplicates closed without notice, plus late reports still open)
+SELECT strftime(t_sub, '%Y-%m') AS filed_month, count(*) AS reports, round(avg((t_res IS NULL)::INT), 4) AS share_without_resolution
+FROM reports GROUP BY 1 ORDER BY 1;
 SELECT date_trunc('week', t_sub)::DATE AS week, count(*) AS resolved_reports, round(median(resolution_hours), 1) AS median_resolution_hours,
  round(median(resolution_hours) FILTER (WHERE triaged), 1) AS median_h_spam_harassment_vandalism
 FROM reports WHERE t_res IS NOT NULL GROUP BY 1 ORDER BY 1;
@@ -397,6 +400,10 @@ SELECT CASE WHEN reverted THEN 'first_edit_reverted' ELSE 'first_edit_kept' END 
  sum(edited_again_30d::INT) AS edited_again, round(avg(edited_again_30d::INT), 4) AS edited_again_within_30d
 FROM new_editors WHERE t1 < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
 SELECT round(avg(reverted::INT), 4) AS share_first_edits_reverted, count(*) AS new_editors FROM new_editors WHERE t1 < TIMESTAMP '2026-09-30';
+-- the same cohort with no follow-up limit (edited again at any time before Oct 2)
+SELECT CASE WHEN n.reverted THEN 'first_edit_reverted' ELSE 'first_edit_kept' END AS grp, count(*) AS new_editors,
+ round(avg(EXISTS (SELECT 1 FROM ev e WHERE e.uid = n.uid AND e.event = 'article edited' AND e.t > n.t1)::INT), 4) AS edited_again_ever
+FROM new_editors n WHERE n.t1 < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q10 — ad load change: impressions per free article view, revenue per day, before vs after Sep 2
@@ -506,6 +513,12 @@ SELECT 'PARTICIPATION (4 events)', count(*) FILTER (WHERE p = 'fest' AND event I
    / (count(*) FILTER (WHERE p = 'base' AND event IN ('media uploaded', 'discussion posted', 'comment posted', 'upvote given')) / 2.0), 3)
 FROM x WHERE p IS NOT NULL ORDER BY 1;
 SELECT media_type, count(*) FILTER (WHERE t >= TIMESTAMP '2026-09-17' AND t < TIMESTAMP '2026-09-21') AS fest_uploads FROM ev WHERE event = 'media uploaded' GROUP BY 1 ORDER BY 2 DESC;
+-- signups on every Thu-Sun block of the window (weeks start Thu Jun 4), to place the fest block in normal variation
+WITH b AS (SELECT (t::DATE - DATE '2026-06-04') // 7 AS wk, count(*) AS n FROM ev
+  WHERE event = 'account created' AND dayofweek(t) IN (0, 4, 5, 6) AND t < TIMESTAMP '2026-10-01' GROUP BY 1)
+SELECT count(*) AS thu_sun_blocks, round(avg(n), 1) AS mean_signups, round(stddev(n), 1) AS sd, min(n) AS min_signups, max(n) AS max_signups,
+ max(n) FILTER (WHERE wk = 15) AS fest_block_signups
+FROM b;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q16 — ad revenue by hub: revenue, share, eCPM, revenue per 1,000 free-member article views

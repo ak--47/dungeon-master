@@ -16,8 +16,13 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             upvote, upload fan art, and report bad content to volunteer
  *             moderators. Free with ads; Hearthside Plus ($4.99/month or
  *             $49.99/year) removes ads and adds flair, badges, and larger uploads.
- * SCALE:      10,000 members (≈4,500 join inside the window), ~0.83M events,
- *             120 days (2026-06-04 → 2026-10-01, UTC), 48 communities
+ * SCALE:      10,000 members (≈4,450 join inside the window), ~0.95M events,
+ *             120 days (2026-06-04 → 2026-10-01, UTC), 48 communities.
+ *             Volume sits about a third below the standard's ~1.4M on purpose:
+ *             the hooks keep 5-20% of lurkers' and readers' contributions, half
+ *             of new threads, and stop new members who abandon setup or lapse
+ *             (a hobby community's newcomer churn). The engine budget is the
+ *             standard 1.2 events per member-day.
  * CORE LOOP:  article viewed / search performed → discussion viewed → comment posted
  * VALUE MOMENT: comment posted (a member takes part, not only reads)
  *
@@ -35,9 +40,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *       (engine 100%; the everything hook decides who finishes by acquisition channel, H2)
  *   - Thread Reply: discussion viewed → comment posted (40%, 30 min; thread_id,
  *       content_hub, community per thread; A/B "Reply Nudges" from 2026-07-08, H3)
- *   - Report: report submitted → report resolved (85%; report_id, report_type,
- *       content_hub per report; resolution timing rebuilt in the hook, H4)
- *   - Upgrade to Plus (free members): plus page viewed → plus subscribed (8%, 2 h)
+ *   - Report: report submitted → report resolved (98%; report_id, report_type,
+ *       content_hub per report; resolution timing rebuilt in the hook, H4; the
+ *       other 2% close as duplicates with no resolution event)
+ *   - Upgrade to Plus (free members): plus page viewed → plus subscribed (12%
+ *       engine rate, 2 h; the hook keeps 45-100% by upgrade_trigger, H8)
  *
  * USER PROPS:  role (lurker/reader/contributor/creator/moderator), home_hub,
  *              membership, member_since, acquisition_channel, karma,
@@ -70,13 +77,12 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   rarer than replying). Moderators also act during their sessions: each
  *   moderator's rate is drawn per member (mean 0.3 actions per activity event,
  *   about 3 a week). Reporting and upgrade browsing come from a minority of
- *   members (35% and 30%, whole funnel units).
+ *   members (35% and 45%, whole funnel units).
  * - Hubs: 55% of a member's activity is in their home hub. Wiki pages and
  *   communities are hub-consistent (a page id and a community id always belong
  *   to the event's hub); a thread's view and reply share one community.
- * - Experiment exposure: the engine logs $experiment_started before every
- *   enrolled thread view; the hook keeps the first per member, which is how
- *   the client SDK logs exposure.
+ * - Experiment exposure: the engine logs one $experiment_started per member,
+ *   1 s before their first enrolled thread view.
  * - New members' fate is decided in one pass: onboarding (H2), first reply
  *   (H6), setup abandonment (50% of non-finishers stop on day 0.5-4), and an
  *   organic lapse (60% stop on a uniform day 5-75). A cut stops what the
@@ -190,8 +196,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * PATTERN: from 2026-09-02 free pages carry 2.4 ad slots per page view instead
  *   of 1.5 (1.6x impressions per page view); free members read 0.9x as many
  *   articles per search; the ad_free share of Plus page visits rises 40% → 55%
- *   and ad_free visits convert 4.5x better (other triggers unchanged), so Plus
- *   conversion per visit roughly doubles (2.0x); both ramp in over 7 days.
+ *   and ad_free visits convert 2x better (6.0% → 12.0% engine-side; before the
+ *   change "remove ads" converted about like the other pitches, 5.4%, because
+ *   pages carried one ad every other screen). Other triggers are unchanged, so
+ *   Plus conversion per visit rises 1.6x; both ramp in over 7 days.
  * MIXPANEL: Insights formula article viewed / search performed, breakdown
  *   membership, before vs after; Funnels plus page viewed → plus subscribed,
  *   totals, 1-day window, before vs after, breakdown upgrade_trigger;
@@ -200,7 +208,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   most annoyed readers to pay for ad-free.
  *
  * ─────────────────────────────────────────────────────────────────────────
- * H9. PAID CHANNEL ECONOMICS (external join / campaign CAC; warehouse paid_marketing_daily)
+ * H9. PAID CHANNEL ECONOMICS (external join, campaign CAC; warehouse paid_marketing_daily)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: window spend per Mixpanel signup $5 TikTok, $8 Reddit, $12 YouTube
  *   creators (paced daily budgets, weekday shape, ±12% noise, never zero).
@@ -220,44 +228,50 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * REAL WORLD: a themed community event lifts participation, not traffic.
  *
  * ═════════════════════════════════════════════════════════════════════════
- * EXPECTED METRICS SUMMARY (measured: data/verify-community, 2026-10-07, 826,394 events)
+ * EXPECTED METRICS SUMMARY (measured: data/verify-community, 2026-10-07, 947,195 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation                 | Expected | Measured
  * -----|------------------------------------------------|----------------------------|----------|---------
- * H1   | gaming/other reading+search, launch / before   | mean of 2.6 → 1.4 ramp     | 2.00     | 2.090
- * H1   | other hubs, launch fortnight / fortnight before| untouched                  | 1.00     | 1.013
- * H1   | Starfall Guild share of gaming article views   | (s + 0.75 + 0.25s) / 2     | 0.556    | 0.557 (0.293 before)
- * H2   | onboarding friend_invite / organic             | 0.72 / 0.52                | 1.385    | 1.432 (72.7% vs 50.7%)
- * H3   | reply rate per thread view, Nudges / Control   | NUDGE_CONV_MULT            | 1.20     | 1.179 (30.5% vs 25.8%)
- * H3   | median view → reply time, Nudges / Control     | NUDGE_TTC_MULT             | 0.80     | 0.798 (12.0 vs 15.0 min)
- * H3   | Nudges share of exposed members                | equal 2-arm hash           | 0.50     | 0.510
- * H4   | median resolve time DiD, triaged / other types | GUARD_RESOLVE_MULT         | 0.35     | 0.322 (12.3 → 4.2 h vs 24.6 → 26.2 h)
- * H4   | other types, after / before (control)          | untouched                  | 1.00     | 1.064
- * H5   | anime share of participation, raid / base      | RAID_KEEP, ceiling 0.775   | 0.55     | 0.474
- * H5   | other hubs' participation, raid / base         | untouched                  | 1.00     | 1.046
- * H6   | D30 on-or-after, replied / not replied         | 1/(1 − 0.5), floor 1.333   | 2.00     | 2.063 (66.4% vs 32.2%)
- * H6   | intros with a reply within 24 h                | FAST_REPLY_SHARE           | 0.55     | 0.538
- * H7   | edited again in 30 d, reverted / kept          | 1 − 0.6, ceiling 0.7       | 0.40     | 0.510 (31.6% vs 62.0%)
- * H7   | first edits reverted                           | REVERT_SHARE               | 0.35     | 0.349
- * H8   | impressions per free article view, after/before| 2.4 / 1.5 slots            | 1.60     | 1.611 (19.3 → 31.1)
- * H8   | views per search, free DiD vs Plus             | AD_READING_KEEP            | 0.90     | 0.909
- * H8   | Plus conversion per visit, after / before      | trigger mix × keep, floor  | 1.997    | 2.060 (8.85% vs 4.29%)
- * H8   | ad_free share of Plus visits, after the ramp   | AD_FREE_SHARE_AFTER        | 0.55     | 0.557 (0.398 before)
- * H8   | ad_free conversion per visit, after / before   | 1 / 0.22, floor 2.77       | 4.55     | 3.771 (10.1% vs 2.67%)
- * H9   | spend per signup, TikTok / Reddit              | 5 / 8                      | 0.625    | 0.620 ($4.89 vs $7.89)
- * H9   | spend per onboarded member, TikTok / Reddit    | 0.625 × 0.55/0.25          | 1.375    | 1.361 ($19.47 vs $14.31)
- * H10  | participation, fest / neighbor Thu-Sun         | FEST_MULT                  | 1.60     | 1.665
- * H10  | article reading, fest / neighbor Thu-Sun       | untouched                  | 1.00     | 1.050
+ * H1   | gaming/other reading+search, launch / before   | mean of 2.6 → 1.4 ramp     | 2.00     | 1.923
+ * H1   | other hubs, launch fortnight / fortnight before| untouched                  | 1.00     | 1.026
+ * H1   | Starfall Guild share of gaming article views   | (s + 0.75 + 0.25s) / 2     | 0.554    | 0.560 (0.286 before)
+ * H2   | onboarding friend_invite / organic             | 0.72 / 0.52                | 1.385    | 1.363 (70.4% vs 51.7%)
+ * H3   | reply rate per thread view, Nudges / Control   | NUDGE_CONV_MULT            | 1.20     | 1.207 (31.4% vs 26.0%)
+ * H3   | median view → reply time, Nudges / Control     | NUDGE_TTC_MULT             | 0.80     | 0.796 (12.0 vs 15.1 min)
+ * H3   | Nudges share of exposed members                | equal 2-arm hash           | 0.50     | 0.493
+ * H4   | median resolve time DiD, triaged / other types | GUARD_RESOLVE_MULT         | 0.35     | 0.373 (11.6 → 4.3 h vs 24.7 → 24.4 h)
+ * H4   | other types, after / before (control)          | untouched                  | 1.00     | 0.987
+ * H4   | reports with no resolution, Jun-Aug filings    | 1 − REPORT_CONV            | 0.02     | 0.021-0.024
+ * H5   | anime share of participation, raid / base      | RAID_KEEP, ceiling 0.775   | 0.55     | 0.553
+ * H5   | other hubs' participation, raid / base         | untouched                  | 1.00     | 0.999
+ * H6   | D30 on-or-after, replied / not replied         | 1/(1 − 0.5), floor 1.333   | 2.00     | 2.019 (74.0% vs 36.7%)
+ * H6   | intros with a reply within 24 h                | FAST_REPLY_SHARE           | 0.55     | 0.558
+ * H7   | edited again in 30 d, reverted / kept          | 1 − 0.6, ceiling 0.7       | 0.40     | 0.458 (26.8% vs 58.6%)
+ * H7   | first edits reverted                           | REVERT_SHARE               | 0.35     | 0.345
+ * H8   | impressions per free article view, after/before| 2.4 / 1.5 slots            | 1.60     | 1.612 (19.3 → 31.1)
+ * H8   | views per search, free DiD vs Plus             | AD_READING_KEEP            | 0.90     | 0.921
+ * H8   | Plus conversion per visit, after / before      | trigger mix × keep, floor  | 1.601    | 1.577 (9.28% vs 5.88%)
+ * H8   | ad_free share of Plus visits, after the ramp   | AD_FREE_SHARE_AFTER        | 0.55     | 0.545 (0.401 before)
+ * H8   | ad_free conversion per visit, after / before   | 1 / 0.5, floor 1.5         | 2.00     | 2.077 (11.8% vs 5.69%)
+ * H8   | other triggers' conversion, after / before     | untouched (not asserted)   | 1.00     | 1.037 (6.24% vs 6.02%)
+ * H9   | spend per signup, TikTok / Reddit              | 5 / 8                      | 0.625    | 0.630 ($5.05 vs $8.02)
+ * H9   | spend per onboarded member, TikTok / Reddit    | 0.625 × 0.55/0.25          | 1.375    | 1.414 ($20.05 vs $14.18)
+ * H10  | participation, fest / neighbor Thu-Sun         | FEST_MULT                  | 1.60     | 1.603
+ * H10  | article reading, fest / neighbor Thu-Sun       | untouched                  | 1.00     | 0.979
  * ═════════════════════════════════════════════════════════════════════════
  *
- * 7 stories grade NAILED; H5, H7, and H8 grade STRONG. Those three reads are
- * noise-limited (about 300 anime participation events over three raid days,
- * about 300 reverted editors, 50-110 Plus conversions per period; relative SE
- * 7-18%), so they carry a knob target plus a knob-derived floor or ceiling
- * (half the effect) and grade STRONG when the measurement lands outside ±10%.
- * H4 excludes reports filed during the H5 raid (spam floods the triaged mix)
- * and requires a week of resolution time (censoring). H9's onboarded-member
- * read inherits H2's binomial noise (240 TikTok onboarded members).
+ * 9 stories grade NAILED; H7 grades STRONG. Its read is noise-limited: 380
+ * reverted new editors, and the realized quit share among them is 0.557
+ * against the 0.6 knob (z ≈ −1.7), while reverted editors who did not quit
+ * edit again at the same rate as kept editors (0.607 vs 0.586). Relative SE
+ * of the ratio is about 9%, so it carries the knob target plus a knob-derived
+ * ceiling (half the effect). H5 and H8's conversion reads use the same
+ * target-plus-floor form (about 380 anime participation events over three
+ * raid days; 120-180 ad-free conversions per period) and land within ±10%
+ * of the knob in this run. H4 excludes reports filed during the H5 raid (spam
+ * floods the triaged mix) and requires a week of resolution time (censoring).
+ * H9's onboarded-member read inherits H2's binomial noise (233 TikTok
+ * onboarded members).
  */
 
 // ── SCALE ──
@@ -353,11 +367,12 @@ const GUARD_RESOLVE_MULT = 0.35;    // report → resolution time for triaged ty
 const REPORT_MEDIAN_H = 16;
 const TYPE_SPEED = { spam: 0.6, harassment: 1.0, vandalism: 0.8, misinformation: 1.6, copyright: 2.2, other: 1.2 };
 const REPORT_TTC_H = 72;
+const REPORT_CONV = 98;             // nearly every report gets a resolution; the rest close as duplicates with no notice
 
 // Who reports and who considers Plus (realism, not a story): reporting and
 // upgrade browsing come from a minority of members (whole funnel units).
 const REPORTER_SHARE = 0.35;
-const UPGRADE_CURIOUS_SHARE = 0.3;
+const UPGRADE_CURIOUS_SHARE = 0.45;
 
 // H5 anime spam raid
 const RAID_HUB = "anime";
@@ -392,13 +407,17 @@ const AD_READING_KEEP = 0.9;        // free members read 10% fewer articles afte
 // far better; flair, badges, and uploads visits convert the same all window.
 const AD_FREE_SHARE_BEFORE = 0.40;  // engine weight of upgrade_trigger = ad_free
 const AD_FREE_SHARE_AFTER = 0.55;   // after the change (other-trigger visits switch to the ad-free pitch)
-const AD_FREE_KEEP_BEFORE = 0.22;   // ad_free checkout conversion before the change, relative to after (4.5x lift)
-const OTHER_TRIGGER_KEEP = 0.5;     // other triggers' conversion relative to the engine rate, whole window
+// Before the change ad-free is the strongest pitch only by a little (6.0% vs 5.4% per
+// visit): pages carried one ad every other screen, so "remove ads" was a mild benefit.
+// After it, ad-free visitors are the readers the new ad load annoys most; they convert
+// twice as often.
+const AD_FREE_KEEP_BEFORE = 0.5;    // ad_free checkout conversion before the change, relative to after (2x lift)
+const OTHER_TRIGGER_KEEP = 0.45;    // other triggers' conversion relative to the engine rate, whole window
 const UPGRADE_LIFT = (AD_FREE_SHARE_AFTER + (1 - AD_FREE_SHARE_AFTER) * OTHER_TRIGGER_KEEP)
 	/ (AD_FREE_SHARE_BEFORE * AD_FREE_KEEP_BEFORE + (1 - AD_FREE_SHARE_BEFORE) * OTHER_TRIGGER_KEEP); // overall conversion per visit, after / before (≈2.0)
 const AD_FREE_LIFT = 1 / AD_FREE_KEEP_BEFORE;
 const UPGRADE_RAMP_DAYS = 7;
-const UPGRADE_CONV = 10;
+const UPGRADE_CONV = 12;
 const ESTABLISHED_PLUS_SHARE = 0.08;
 const UNTRACKED_REPORT_SHARE = 0.2;  // reports by email / logged-out readers on top of Mixpanel's count (average)
 const LOGGED_OUT_FACTOR = 15;       // ad-serving page views per logged-in free page view (logged-out search readers dominate wiki traffic)
@@ -586,12 +605,9 @@ function handleEverything(events, meta) {
 	// ── reporting and upgrade browsing come from a minority of members ──
 	const reporter = salt(uid, "reporter") < REPORTER_SHARE;
 	const curious = salt(uid, "upgrade-curious") < UPGRADE_CURIOUS_SHARE;
-	const firstExposure = events.filter((e) => e.event === "$experiment_started").sort((x, y) => T(x) - T(y))[0];
 	events = events.filter((e) => {
 		if (e.event === "report submitted" || e.event === "report resolved") return reporter;
 		if (e.event === "plus page viewed" || e.event === "plus subscribed") return curious;
-		// the experiment SDK logs one exposure per member (their first enrolled thread view)
-		if (e.event === "$experiment_started") return e === firstExposure;
 		return true;
 	});
 
@@ -1088,7 +1104,7 @@ const config = {
 		{
 			name: "Report",
 			sequence: ["report submitted", "report resolved"],
-			conversionRate: 85,
+			conversionRate: REPORT_CONV,
 			timeToConvert: REPORT_TTC_H,
 			order: "sequential",
 			weight: 1,
@@ -1481,13 +1497,13 @@ FROM ev WHERE event = '$experiment_started'`,
 		id: "H5-anime-spam-raid",
 		hook: "H5",
 		archetype: "bespoke",
-		narrative: `A coordinated spam raid hits the ${RAID_HUB} hub from ${D(RAID_START)} to ${D(RAID_END)} (exclusive). Members there participate less: ${(1 - RAID_KEEP) * 100}% of would-be comments, new threads, upvotes, and uploads in ${RAID_HUB} never happen (keep ${RAID_KEEP}), and ${RAID_REPORTER_SHARE * 100}% of reporting members active in ${RAID_HUB} file a spam report. The raid days and hub come from the warehouse table trust_safety_daily (raid_alert_level = 'raid', with spam_accounts_removed ~${RAID_SPAM_MULT}x normal); the event-side read is the ${RAID_HUB} share of participation on raid days (Wed-Fri) over the same weekdays one week before and after, which reads the keep rate. The raid read rests on about 300 anime participation events, so it carries the knob as target with a knob-derived ceiling (half the effect). Control: participation in the other hubs is unchanged.`,
+		narrative: `A coordinated spam raid hits the ${RAID_HUB} hub from ${D(RAID_START)} to ${D(RAID_END)} (exclusive). Members there participate less: ${(1 - RAID_KEEP) * 100}% of would-be comments, new threads, upvotes, and uploads in ${RAID_HUB} never happen (keep ${RAID_KEEP}), and ${RAID_REPORTER_SHARE * 100}% of reporting members active in ${RAID_HUB} file a spam report. The raid days and hub come from the warehouse table trust_safety_daily (raid_alert_level = 'raid', with spam_accounts_removed ~${RAID_SPAM_MULT}x normal); the event-side read is the ${RAID_HUB} share of participation on raid days (Wed-Fri) over the same weekdays one week before and after, which reads the keep rate. The raid read rests on about 380 anime participation events, so it carries the knob as target with a knob-derived ceiling (half the effect). Control: participation in the other hubs is unchanged.`,
 		mixpanelReport: { type: "Insights", events: PARTICIPATION_EVENTS, measure: "total", breakdown: "content_hub", chart: "daily line", join: "warehouse trust_safety_daily.raid_alert_level on date and content_hub" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H5_SQL },
 				select: { a: { where: { grp: "all" } } },
-				// noise-limited (about 300 anime participation events over the three raid
+				// noise-limited (about 380 anime participation events over the three raid
 				// days, clustered by member sessions; relative SE ~7%): knob target with a
 				// knob-derived ceiling (half the effect)
 				expect: { metric: "a.did", op: "<=", target: RAID_KEEP, floor: 1 - (1 - RAID_KEEP) / 2 },
@@ -1564,7 +1580,7 @@ FROM f JOIN s ON s.uid = f.uid LEFT JOIN rv ON rv.uid = f.uid WHERE f.t1 < TIMES
 		id: "H8-ad-load-change",
 		hook: "H8",
 		archetype: "temporal-inflection",
-		narrative: `On ${D(AD_LOAD_CHANGE)} Hearthside raises the ad load on pages seen by free members and logged-out readers from ${AD_SLOTS_OLD} to ${AD_SLOTS_NEW} ad slots per page view. Three effects: (1) the ad server's impressions per page view rise ${AD_IMPRESSION_MULT}x — impressions live only in the warehouse table ad_revenue_daily, so impressions per Mixpanel free-member article view needs the join; (2) free members read ${AD_READING_KEEP}x as many articles per search (Plus members, who see no ads, are the control; searches are untouched); (3) the extra ads push readers toward the ad-free pitch: the share of Plus page visits with upgrade_trigger = ad_free rises from ${AD_FREE_SHARE_BEFORE} to ${AD_FREE_SHARE_AFTER}, and ad_free visits convert ${AD_FREE_LIFT.toFixed(2)}x better, while flair, badges, and uploads visits convert the same all window; overall Plus checkout conversion per visit rises ${UPGRADE_LIFT.toFixed(3)}x (both ramp in over ${UPGRADE_RAMP_DAYS} days). Upgrades are few (about a hundred after the ramp), so the conversion reads use the knob as target with a knob-derived floor (half the lift).`,
+		narrative: `On ${D(AD_LOAD_CHANGE)} Hearthside raises the ad load on pages seen by free members and logged-out readers from ${AD_SLOTS_OLD} to ${AD_SLOTS_NEW} ad slots per page view. Three effects: (1) the ad server's impressions per page view rise ${AD_IMPRESSION_MULT}x — impressions live only in the warehouse table ad_revenue_daily, so impressions per Mixpanel free-member article view needs the join; (2) free members read ${AD_READING_KEEP}x as many articles per search (Plus members, who see no ads, are the control; searches are untouched); (3) the extra ads push readers toward the ad-free pitch: the share of Plus page visits with upgrade_trigger = ad_free rises from ${AD_FREE_SHARE_BEFORE} to ${AD_FREE_SHARE_AFTER}, and ad_free visits convert ${AD_FREE_LIFT.toFixed(2)}x better, while flair, badges, and uploads visits convert the same all window; overall Plus checkout conversion per visit rises ${UPGRADE_LIFT.toFixed(3)}x (both ramp in over ${UPGRADE_RAMP_DAYS} days). Upgrades are few (about 170 converted visits after the ramp, 120 of them from the ad-free pitch), so the conversion reads use the knob as target with a knob-derived floor (half the lift).`,
 		mixpanelReport: { type: "Insights + Funnels + warehouse", reading: "Insights formula article viewed / search performed, breakdown membership, before vs after", upgrade: "Funnels plus page viewed → plus subscribed, totals, 1-day window, before vs after", join: "ad_revenue_daily.ad_impressions by date vs article viewed where membership = free" },
 		assertions: [
 			{
@@ -1622,10 +1638,10 @@ FROM x GROUP BY 1`,
 			{
 				breakdown: { type: "duckdb", sql: H8_TRIGGER_SQL },
 				select: { a: { where: { grp: "all" } } },
-				// the conversion lift sits on ad_free visits (about 50-70 conversions per
-				// period, relative SE ~18%): knob target with a knob-derived floor (half the lift).
+				// the conversion lift sits on ad_free visits (about 120-180 conversions per
+				// period, relative SE ~12%): knob target with a knob-derived floor (half the lift).
 				// Other triggers carry no lift in the hook; their read (other_lift) is too
-				// small (about 40 post-change conversions) to assert a ±10% band.
+				// small (about 50 post-change conversions) to assert a ±10% band.
 				expect: { metric: "a.ad_free_lift", op: ">=", target: Math.round(AD_FREE_LIFT * 1000) / 1000, floor: Math.round((1 + (AD_FREE_LIFT - 1) / 2) * 1000) / 1000 },
 				minCohort: 300,
 			},
@@ -1634,9 +1650,8 @@ FROM x GROUP BY 1`,
 	{
 		id: "H9-paid-channel-economics",
 		hook: "H9",
-		// external join (campaign CAC): the closed archetype enum has no
-		// external-join entry, and no first/last-touch bias is involved
-		archetype: "bespoke",
+		// campaign CAC: spend lives only in the warehouse, so the read needs the join
+		archetype: "external-join",
 		narrative: `TikTok ad signups are the cheapest paid signups but the most expensive onboarded members. Warehouse paid_marketing_daily bills a paced daily budget per channel (cost per signup × expected signups per day, a weekday shape that follows the signup rhythm above a ${SPEND_FLAT_SHARE * 100}% flat floor, seeded ±${SPEND_NOISE * 100}% day noise, never zero): $${CPL_USD.tiktok_ads} per TikTok signup vs $${CPL_USD.reddit_ads} per Reddit signup at the window level (${CPS_TARGET}x). But only ${ONBOARD_FINISH.tiktok_ads * 100}% of TikTok signups post an intro within ${ONBOARD_WINDOW_DAYS} days vs ${ONBOARD_FINISH.reddit_ads * 100}% from Reddit (H2's onboarding knobs), so spend per onboarded member is ${CPS_TARGET} × ${ONBOARD_FINISH.reddit_ads}/${ONBOARD_FINISH.tiktok_ads} = ${CPO_TARGET.toFixed(3)}x Reddit's. Both reads need the warehouse join.`,
 		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "paid_marketing_daily.spend_usd", funnel: `account created → interests selected → intro posted, ${ONBOARD_WINDOW_DAYS}-day window, breakdown acquisition_channel` },
 		assertions: [

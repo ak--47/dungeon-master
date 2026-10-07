@@ -8,11 +8,11 @@ All KPIs use UTC days and count people by unique `user_id`. "Member actions" are
 |---|---|
 | New members | Unique members with `account created` in the period. |
 | Onboarding completion | Share of new members who reach `intro posted` after `account created` → `interests selected`, in order, within 7 days of signup. |
-| Intro reply rate | Share of intros that receive a reply notification (`notification received` with `notification_type = reply`) within 24 hours. |
+| Intro reply rate | Share of intros that receive at least one reply notification (`notification received` with `notification_type = reply`). |
 | Day-30 retention | Of new members who signed up on day 0, the share with any member action on or after day 30 ("on or after" / unbounded retention). Only count members who signed up at least 30 days before the end of the data (signups through August 31). The community team also reads a day 30-36 bracket (any member action in days 30 to 36); in Mixpanel Retention that needs a custom bracket. |
 | Weekly active members (WAM) | Unique members with any member action in a calendar week (Monday start). In Mixpanel the team keeps a custom event "member action" that combines every event except `notification received` and `report resolved`. |
 | Thread reply rate | Share of thread views (`discussion viewed`) followed by the same member's `comment posted` on the same `thread_id` within a day. In Mixpanel: Funnels, totals, hold `thread_id` constant, 1-day window. |
-| Editor return rate | Of members who made their first wiki edit in the period, the share who edit again within 30 days. |
+| Editor return rate | Of members who made their first wiki edit in the period, the share who edit again. |
 | Report resolution time | Per report, time from `report submitted` to `report resolved` (same `report_id`). Report the median; `resolution_hours` on the resolution holds the same value. Only count reports with enough time to resolve (filed at least a week before the end of the data). |
 | Plus conversion | Share of `plus page viewed` visits followed by `plus subscribed` within a day (Funnels, totals, 1-day window). |
 | Plus members | Members whose current `membership` is `plus`. |
