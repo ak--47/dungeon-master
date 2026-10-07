@@ -305,13 +305,21 @@ export interface Dungeon {
      * `radio` stays per event, from the device's radio list. Event or super
      * props of the same name, and `event`/`everything` hook edits, win. A hook
      * that changes an event's `device_id` owns the device fields on that event.
+     *
+     * Default shares (1.9.0, fixed record weights, for a North America / Europe
+     * consumer + B2B audience). Primary device with all three switches on: iOS
+     * 33%, Android 27%, desktop 40%, so mobile is ~55% iOS / ~45% Android. With
+     * one switch on, only that family is used; with two, the shares keep these
+     * ratios. iPads are ~5% of iOS primaries, so an iPad-only user is rare; as an
+     * extra device of an iOS user (mobile-only pool) an iPad is ~65%. Desktop:
+     * Windows 70%, macOS 26%, Linux 4% (`os: 'Linux'`).
      */
     hasIOSDevices?: boolean;
     /** If true, device pool includes Android devices. */
     hasAndroidDevices?: boolean;
     /** If true, device pool includes desktop devices. */
     hasDesktopDevices?: boolean;
-    /** If true, events include a `browser` property, sticky per device_id (see `hasIOSDevices`), drawn from a pool valid for the device's `os` (iOS: Mobile Safari, Chrome iOS...; Android: Chrome Mobile, Samsung Internet...; Windows: Chrome, Microsoft Edge...; macOS: Safari, Chrome...). Without a device switch the browser comes from one mixed list. */
+    /** If true, events include a `browser` property, sticky per device_id (see `hasIOSDevices`), drawn from a pool valid for the device's `os` with default shares (1.9.0): Windows: Chrome 65%, Microsoft Edge 20%, Firefox 8%, Opera 4%, Brave 3%; macOS: Safari 50%, Chrome 40%, Firefox 5%, Microsoft Edge 3%, Brave 1%, Arc 1%; iOS/iPadOS: Mobile Safari 85%, Chrome iOS 12%, Firefox iOS 2%, DuckDuckGo Mobile 1%; Android: Chrome Mobile 75%, Samsung Internet 20%, Firefox Mobile 3%, Opera Mobile 1%, Brave Mobile 1%; Linux: Chrome 50%, Firefox 45%, Brave 5%. Shares are per device (one browser per device_id). Without a device switch the browser comes from one mixed list. */
     hasBrowser?: boolean;
     /** If true, writes output files to ./data/. Can also be a directory path string or gs:// URI. Default: `false` — data is returned in memory only. */
     writeToDisk?: boolean | string;
@@ -1074,6 +1082,11 @@ export interface Defaults {
         android: Record<string, ValueValid>[];
         ios: Record<string, ValueValid>[];
         desktop: Record<string, ValueValid>[];
+        /** Extra-device candidates per mobile family, repeated by each record's `extraWeight` (1.9.0). */
+        extra?: {
+            android: Record<string, ValueValid>[];
+            ios: Record<string, ValueValid>[];
+        };
     };
     /** Flat union of every device in `devicePools` — used when no platform filter applies. */
     allDevices: Record<string, ValueValid>[];

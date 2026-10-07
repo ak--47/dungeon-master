@@ -262,6 +262,23 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   now `INT64` (`loads_booked`, `clicks`, `impressions`, `leads_reported`,
   `market_load_posts`, `market_truck_posts`). Output shift: manifest `bqType`
   only; rows are unchanged.
+- Give the default device and browser pools realistic, fixed shares. Pool
+  weights came from random `weighArray` copies, and the desktop pool carried
+  PureOS and Pop!_OS. Device records now carry integer weights: primary device
+  iOS 33%, Android 27%, desktop 40% (mobile ~55/45); iPads ~5% of iOS
+  primaries but ~65% of an iOS user's extra devices (mobile-only pool); desktop
+  Windows 70%, macOS 26%, Linux 4% (`os: 'Linux'`). Browsers per OS use
+  mainstream shares (Windows Chrome 65%, Edge 20%; macOS Safari 50%, Chrome
+  40%; iOS Mobile Safari 85%; Android Chrome Mobile 75%, Samsung Internet 20%);
+  Opera GX and Vivaldi are gone. Shares are documented on `hasIOSDevices` and
+  `hasBrowser` in types.d.ts. 2,000 users before/after: fitness Apple users
+  46.7% to 56.2% of mobile users, iPad-only Apple users 35.6% to 5.3%; media
+  desktop events Windows 65.4% to 71.3%, PureOS + Pop!_OS 7.8% to 0, Linux
+  3.7%; ecommerce Windows Opera GX 6.3% to 0, Chrome 44.7% to 65.0%. Output
+  shift: device and browser fields. The old `weighArray` draws are kept, so
+  configs with no device switch or desktops only are byte-identical. Configs
+  with iOS or Android devices shift their RNG stream: `radio` is a seeded draw
+  per mobile event, so a different mobile mix changes later seeded values.
 
 ### Added
 
