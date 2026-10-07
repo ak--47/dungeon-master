@@ -93,6 +93,19 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   per active day. Born-user retention now tracks the curve (day-1 activity 0.45
   against a configured 0.5, was 0.81). Legacy mode is unchanged. Output shift:
   active-day and `retentionCurve` dungeons with a catch-all funnel change.
+- Make emitted hour-of-day and day-of-week shapes track `soup` weights. In
+  legacy mode the catch-all funnel spread its steps linearly over the 24 hours
+  after step 0, so standalone events lost the hour shape (configured
+  peak/trough 3.6x, emitted 1.27x, correlation -0.09); its steps now draw
+  soup times inside step 0's UTC day (3.6x, correlation 0.999). In
+  `avgActiveDaysPerUser` and `retentionCurve` modes the weekday weights were
+  applied twice (day picks and per-day event allocation), so weekday volume
+  followed the weights squared (configured 2.5x, emitted 4.7-5.4x); they now
+  apply once, in the day picks, and born `retentionCurve` users' picks carry
+  them too (2.2-2.5x). Declared funnels already tracked the weights (hour
+  correlation 0.985 with a 2-hour `timeToConvert`). Output shift: event times
+  change in every mode with a catch-all funnel, and weekday volume changes in
+  active-day modes.
 
 ### Added
 
