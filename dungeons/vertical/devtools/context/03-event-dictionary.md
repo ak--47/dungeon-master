@@ -41,8 +41,8 @@ Every build has a `build_id`; its `build started` and `build finished` share it.
 
 | Event | Meaning | Properties |
 |---|---|---|
-| `build started` | A CI build starts on a hosted runner. | `build_id`; `trigger` (`push`, `pull_request`, `schedule`, `manual`); `repo_id`; `ecosystem`: the package ecosystem the build installs from (`npm`, `pypi`, `go_modules`, `rubygems`, `maven`, `nuget`, `cargo`); `runner_size` (`standard`, `large`, `xlarge`). |
-| `build finished` | The build ends. | `build_id`; `trigger`; `repo_id`; `ecosystem`; `build_status` (`success`, `failed`); `failure_stage` (`none` for a passed build; otherwise `configuration`, `dependency_install`, `compile`, `test`, `timeout`); `build_duration_sec`: seconds from start to finish; `tests_run`. |
+| `build started` | A CI build starts on a hosted runner. | `build_id`; `trigger` (`push`, `pull_request`, `schedule`, `manual`; scheduled builds are cron jobs that run overnight UTC on every day of the week, whatever the calendar); `repo_id`; `ecosystem`: the package ecosystem the build installs from (`npm`, `pypi`, `go_modules`, `rubygems`, `maven`, `nuget`, `cargo`); `runner_size` (`standard`, `large`, `xlarge`). |
+| `build finished` | The build ends. | `build_id`; `trigger`; `repo_id`; `ecosystem`; `build_status` (`success`, `failed`); `failure_stage` (`none` for a passed build; otherwise `configuration`, `dependency_install`, `compile`, `test`, `timeout`); `build_duration_sec`: seconds from start to finish; `tests_run`: tests executed before the build ended (0 when the build failed before its test stage; part of the suite when it failed in tests or timed out). |
 | `$experiment_started` | Mixpanel experiment exposure, sent once per developer at their first build after the Remote Build Cache test started (2026-07-08). | `Experiment name` = `Remote Build Cache`; `Variant name` = `Control` or `Remote Cache`. |
 
 ## Pull requests and deploys

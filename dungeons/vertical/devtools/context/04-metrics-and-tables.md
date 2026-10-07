@@ -11,7 +11,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 | Activation | The growth team's working definition of an activated developer is still under discussion; it is measured from early behavior after signup only. |
 | Day-N retention | Of developers who signed up on day 0, the share with any event in days N to N+6 after signup. Only count developers who signed up at least N+7 days before the end of the data. In Mixpanel Retention this needs custom brackets (for example day 30-36). Every event in this project is a developer action, so "any event" means "active". |
 | Weekly active developers | Unique developers with any event in a calendar week (Monday start). |
-| Review wait | Per pull request, time from `pull request opened` to `review submitted` (same `pr_id`). Report the median. `review_wait_hours` on the review holds the same value. |
+| Review wait | Per pull request, time from `pull request opened` to `review submitted` (same `pr_id`). Report the median. `review_wait_hours` on the review holds the same value, rounded to 0.1 hour. |
 | Merge time | Per pull request, time from `review submitted` to `pull request merged` (same `pr_id`). Report the median. |
 | Forge Assist adoption | Share of pull requests opened on Pro, Team, and Enterprise (by `plan_tier` on the event, since 2026-07-29) with `review_mode = forge_assist`. |
 | Build success rate | Share of `build finished` events with `build_status = success`. |
@@ -71,7 +71,7 @@ Daily metered runner usage and overage by plan, from the billing system.
 | `plan_tier` | STRING | — | `free`, `pro`, `team`, or `enterprise`. Matches `plan_tier` on build events. |
 | `billable_runner_minutes` | FLOAT | minutes | Runner minutes metered for the plan that day, across every parallel job of every build. |
 | `overage_price_per_minute_usd` | FLOAT | USD per minute | Overage price in force: $0.015 for Team from 2026-09-01, zero otherwise. |
-| `overage_minutes` | FLOAT | minutes | Minutes billed above organizations' pooled allowances. |
+| `overage_minutes` | FLOAT | minutes | Minutes billed above organizations' pooled monthly allowances. Each Team organization's allowance resets on the 1st of the month; once an organization uses it up, every further minute that month is overage. |
 | `overage_revenue_usd` | FLOAT | USD | `overage_minutes` × `overage_price_per_minute_usd`. |
 
 Caveats: a build fans out into several parallel jobs (matrix builds, test shards), and billing meters runner minutes for every job, so `billable_runner_minutes` is several times the sum of `build_duration_sec` for the same builds. The billing day closes at 07:00 UTC, so part of each UTC day's usage bills on the next day. Retries and API-triggered jobs that send no product event are billed too. Use this table, not Mixpanel, for billed minutes and overage.

@@ -2,7 +2,7 @@
 
 ## Who we are
 
-Forgebench is a developer platform. One product covers the path from a code change to production: pull requests and code review, CI builds on hosted runners, a preview deployment for every push, and production deploys. The company has about 45 employees and serves about 500 customer organizations, from two-person startups to enterprises with hundreds of engineers on the platform. The active base is global: developers in India, Europe, and the Americas together cover most working hours of the UTC day.
+Forgebench is a developer platform. One product covers the path from a code change to production: pull requests and code review, CI builds on hosted runners, a preview deployment for every push, and production deploys. The company has about 45 employees and serves about 500 customer organizations, from small startups with a handful of developers to enterprises with up to about 300 developers on the platform. The active base is global: developers in India, Europe, and the Americas together cover most working hours of the UTC day.
 
 ## What developers do in the product
 
@@ -23,7 +23,7 @@ Forgebench is a developer platform. One product covers the path from a code chan
 | Team | $29 per seat per month | Shared organization workspace, pooled build minutes, larger runners, Forge Assist (from Jul 29); runner minutes above the pooled allowance are billed at $0.015 per minute from 2026-09-01 |
 | Enterprise | Custom contract | Everything in Team, SSO, audit logs, committed runner capacity, dedicated support |
 
-- **Plans belong to organizations.** A company is on Free, Team, or Enterprise, and its developers use that plan. Pro is a personal plan: a developer at a Free company can pay for their own Pro seat. A developer who joins a company that is already on Team or Enterprise is added to that workspace when they sign up.
+- **Plans belong to organizations.** A company is on Free, Team, or Enterprise, and its developers use that plan. Free workspaces exist at companies of every size: teams at larger companies often try Forgebench on Free before anyone buys. Pro is a personal plan: a developer at a Free company can pay for their own Pro seat. A developer who joins a company that is already on Team or Enterprise is added to that workspace when they sign up.
 - **A company can run more than one workspace.** When a developer at a Free company buys Team, Forgebench opens a Team workspace for that developer's group. Their colleagues stay on the Free workspace until they are invited in, so one company can have Free, Pro, and Team developers at the same time while it grows.
 - **How people upgrade.** Free developers see an upgrade page when they hit a build-minute limit, a private-repository limit, a preview limit, or a gated feature, or when they open billing settings. From there they buy Pro (one seat) or Team (several seats).
 - **Enterprise** is sold by the sales team on annual contracts and does not go through the self-serve upgrade page.

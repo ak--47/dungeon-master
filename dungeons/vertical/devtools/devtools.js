@@ -18,9 +18,9 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  *             review) is a Pro/Team/Enterprise feature from 2026-07-29. The plan
  *             belongs to the organization (Free, Team, or Enterprise); at Free
  *             organizations some developers pay for their own Pro seat.
- * SCALE:      10,000 developers (9,994 with events; 4,506 sign up inside the
- *             window), ~0.98M events, 120 days (2026-06-04 → 2026-10-01, UTC),
- *             500 customer organizations
+ * SCALE:      10,000 developers (9,993 with events; 4,484 sign up inside the
+ *             window), ~0.97M events, 120 days (2026-06-04 → 2026-10-01, UTC),
+ *             500 customer organizations (1-10 to 284 developers each)
  * CORE LOOP:  commit pushed → preview deployed; build started → build finished;
  *             pull request opened → review submitted → pull request merged →
  *             production deployed
@@ -73,25 +73,40 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  * - Hooks draw randomness only from hashFloat salts (per developer, PR, build,
  *   org, or insert_id), never from the shared chance stream, so hook edits do
  *   not reshuffle the engine's population, funnels, or timing.
- * - Organizations come from one seeded table of 500; developers map to an org
- *   by a hash weighted toward larger orgs. The group hook writes the same table
- *   onto the org group profiles. Each org has one plan (hash by size: startups
- *   mostly Free, enterprises mostly Enterprise). Established developers take
- *   the org's plan; 35% of developers at Free orgs pay for their own Pro seat.
- *   New signups land at Free orgs 8x as often per developer weight (self-serve
- *   evaluators); a new signup at a Team or Enterprise org joins that plan and
- *   has nothing to buy. A Team purchase at a Free org opens a Team workspace
- *   for that developer's group; teammates stay on Free (01-business says so).
+ * - Organizations come from one seeded table of 500. Each org draws a size, a
+ *   plan (hash by size: startups mostly Free, enterprises mostly Enterprise,
+ *   with Free at every size for bottom-up adoption), and a developer target,
+ *   log-uniform inside its size's range (startup 3-14, smb 6-35, mid-market
+ *   15-75, enterprise 60-400; realized ≈ 0.8x). Free orgs fill 75% of their
+ *   seats with in-window signups (self-serve evaluators), paying orgs 20%, so
+ *   developers map to orgs through two hash cumulatives (established, new).
+ *   employee_count follows the expected developer count inside the size's
+ *   bands ('1-10' under 4 developers, '5000+' from 150), so headcount and
+ *   developers agree. The group hook writes the table onto the org profiles.
+ *   Established developers take the org's plan; 35% of developers at Free orgs
+ *   pay for their own Pro seat. A new signup at a Team or Enterprise org joins
+ *   that plan and has nothing to buy. A Team purchase at a Free org opens a
+ *   Team workspace for that developer's group; teammates stay on Free
+ *   (01-business says so).
  * - Builds: the hook decides status and failure stage per build (14% fail; a
  *   new developer's first build 40%), and sets build_duration_sec as the real
  *   start → finish gap: log-normal (median 7 min, σ 0.55) × runner size
  *   (large 0.8, xlarge 0.65) × the H2 arm; a failed build stops at its stage.
+ *   tests_run is 0 for configuration, dependency-install, and compile failures
+ *   and a salted 20-100% of the suite for test failures and timeouts.
+ * - Scheduled (cron) builds move to a hashed day of their own Monday-Sunday
+ *   week at the repository's nightly hour (01:00-05:59 UTC), so they run flat
+ *   across all seven days; the holiday drop skips them. They stay inside the
+ *   window and after signup; the H2 exposure moves with them (1 s before the
+ *   first build in the test). Activity cuts still remove them: churned
+ *   evaluators' cron jobs stop with their account.
  * - Pull requests: lines_changed is log-normal (median 120); each developer
  *   works in 1-3 repositories whose test coverage (10-95%) comes from a hash.
  *   The hook rebuilds each PR's clock from the open: review wait (H4), review →
  *   merge (H1), merge → deploy. 80% of developers pause reviews and merges over
  *   the weekend (a step landing Saturday 06:00 - Monday 00:00 UTC moves 48 h
  *   later) and ship production deploys that would land on the weekend on Monday.
+ *   review_wait_hours is the final open → review gap, weekend pause included.
  * - Low-discrepancy draws (frac(offset + n·φ), per developer-repository and per
  *   developer) place rollbacks (H9) and scheduled-build cuts (H8), so realized
  *   rates follow the knobs without binomial noise.
@@ -100,13 +115,15 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  *   plus (in June) developers who signed up in the six weeks before June 4 and
  *   are still in their buying window (their customer_since is moved into that
  *   span), so weekly purchases are flat from week 1 (~20 a week).
- * - New developers who never finish onboarding: 60% stop on day 1-4; the rest
- *   keep a salted 25-60% of their work units (whole builds, PRs, pushes; the
- *   first build always stays), exploring docs and public code.
- * - Evaluation churn: 45% of new developers stop on a salted day 3-28 after
- *   signup (never before their last setup step), whatever happened in setup.
- *   New-signup activity in days 30-36 lands near 30% (day 1: 78%, days 7-13:
- *   54%). The draw is independent of the first build, so H5's ratio holds.
+ * - New developers who never finish onboarding: 60% stop on a salted day
+ *   0.2-3 (at least 1 h after the last setup step they reached); the rest keep
+ *   a salted 25-60% of their work units (whole builds, PRs, pushes; the first
+ *   build always stays), exploring docs and public code.
+ * - Evaluation churn: 45% of new developers stop on day 1 + 27·u² after
+ *   signup (most leave early; at least 12 h after their last setup step),
+ *   whatever happened in setup. New-signup activity: day 1 70%, days 7-13 44%,
+ *   days 30-36 29%. The draw is independent of the first build, so H5's ratio
+ *   holds.
  * - Collaboration volume: new developers keep every teammate invite in their
  *   first 14 days; other invites are thinned to 25% (≈10 per org in 120 days).
  * - Experiment exposure: the engine sends one $experiment_started per developer,
@@ -117,7 +134,10 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  * - Warehouse drift: build_fleet_daily adds seeded API-triggered jobs (corr ≈
  *   0.98 with the event count); usage_billing_daily meters runner minutes
  *   across parallel jobs (×2-14 by plan), shifts 30% of a UTC day to the next
- *   billing day, and adds retries and API minutes (corr ≈ 0.93);
+ *   billing day, and adds retries and API minutes (corr ≈ 0.93); Team overage
+ *   follows pooled monthly allowances that reset on the 1st (allowances
+ *   uniform over 15-150% of an org's monthly usage), so overage is zero for
+ *   the first days of a month and grows as orgs run out;
  *   marketing_spend_daily paces spend to the trailing 7-day signups × target
  *   cost per signup × weekday schedule × seeded noise (corr ≈ 0.92).
  */
@@ -224,7 +244,8 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  *   salted 30-70% (mean 50%) of its scheduled builds (whole build units).
  *   Scheduled per push builds, Team, Sep 15-30 vs August = 0.5; other plans
  *   1.0. Overage revenue exists only in the warehouse (zero before Sep 1 and on
- *   other plans).
+ *   other plans); allowances reset monthly, so no overage on days 1-3 of a
+ *   month and some on every Team day from Sep 8.
  * MIXPANEL: Insights, build started, breakdown trigger and plan_tier, weekly,
  *   formula schedule / push; join usage_billing_daily.overage_revenue_usd.
  * REAL WORLD: metering makes customers switch off nightly builds nobody reads.
@@ -258,32 +279,33 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  * Hook | Metric                                         | Derivation                | Expected | Measured
  * -----|------------------------------------------------|---------------------------|----------|---------
  * H1   | assisted rows pre-launch or on Free            | exact purity              | 0        | 0
- * H1   | median review → merge, assisted / standard     | ASSIST_MERGE_MULT         | 0.60     | 0.589 (3.59 vs 6.09 h)
- * H1   | assisted share of eligible PRs after the ramp  | 0.5 × 0.8                 | 0.40     | 0.394 (weekly 1.8% → 40%)
- * H2   | median passed build time, Remote Cache/Control | CACHE_TTC_MULT            | 0.60     | 0.599 (235 vs 392 s)
- * H2   | build success rate, Remote Cache/Control       | unchanged                 | 1.00     | 0.999 (85.2% vs 85.3%)
- * H2   | Remote Cache share of exposed developers       | equal 2-arm hash          | 0.50     | 0.498
- * H3   | 7-day onboarding, Java+.NET / other stacks     | SLOW_STACK_MULT           | 0.55     | 0.555 (33.4% vs 60.2%)
- * H4   | median open → review, 1,000+ / ≤100 lines      | LARGE_PR_WAIT_MULT        | 2.50     | 2.510 (8.15 vs 3.25 h)
- * H5   | D30 retention, first build passed / failed     | 1/(1 − RED_DARK_SHARE)    | 2.00     | 1.885 (49.9% vs 26.5%)
- * H6   | npm/other success, incident vs ±7 days         | 1 − INCIDENT_FAIL         | 0.40     | 0.416
+ * H1   | median review → merge, assisted / standard     | ASSIST_MERGE_MULT         | 0.60     | 0.599 (3.67 vs 6.12 h)
+ * H1   | assisted share of eligible PRs after the ramp  | 0.5 × 0.8                 | 0.40     | 0.392 (weekly 2.0% → 39%)
+ * H2   | median passed build time, Remote Cache/Control | CACHE_TTC_MULT            | 0.60     | 0.594 (233 vs 392 s)
+ * H2   | build success rate, Remote Cache/Control       | unchanged                 | 1.00     | 0.998 (85.3% vs 85.5%)
+ * H2   | Remote Cache share of exposed developers       | equal 2-arm hash          | 0.50     | 0.489
+ * H3   | 7-day onboarding, Java+.NET / other stacks     | SLOW_STACK_MULT           | 0.55     | 0.555 (32.1% vs 57.7%)
+ * H4   | median open → review, 1,000+ / ≤100 lines      | LARGE_PR_WAIT_MULT        | 2.50     | 2.462 (7.92 vs 3.21 h)
+ * H5   | D30 retention, first build passed / failed     | 1/(1 − RED_DARK_SHARE)    | 2.00     | 2.150 (57.2% vs 26.6%)
+ * H6   | npm/other success, incident vs ±7 days         | 1 − INCIDENT_FAIL         | 0.40     | 0.413
  * H6   | warehouse dependency_fetch_error_rate, degraded| INCIDENT_FAIL             | 0.60     | 0.615
- * H7   | spend per signup, paid social / paid search    | 55 / 85                   | 0.647    | 0.660 ($55.42 vs $83.96)
- * H7   | 7-day onboarding, paid social / other channels | SOCIAL_ONBOARD_MULT       | 0.60     | 0.597 (33.5% vs 56.2%)
- * H8   | Team scheduled per push, Sep 15-30 / August    | 1 − SCHEDULED_CUT_MEAN    | 0.50     | 0.480 (0.120 vs 0.250)
- * H8   | other plans scheduled per push (control)       | unchanged                 | 1.00     | 0.966
- * H8   | overage rows off Team or before Sep 1 / missing| exact                     | 0 / 0    | 0 / 0 ($4,791 in September)
- * H9   | rollback rate, ≤30% / ≥75% coverage            | 0.20 / 0.05               | 4.00     | 4.123 (20.0% vs 4.85%)
- * H10  | 42-day paid rate, 3+ / 1-2 previews (14 days)  | ≥ 1.0 / 0.4 (floor)       | ≥ 2.50   | 3.599 (23.4% vs 6.5%, STRONG)
+ * H7   | spend per signup, paid social / paid search    | 55 / 85                   | 0.647    | 0.654 ($55.11 vs $84.25)
+ * H7   | 7-day onboarding, paid social / other channels | SOCIAL_ONBOARD_MULT       | 0.60     | 0.547 (30.0% vs 54.8%)
+ * H8   | Team scheduled per push, Sep 15-30 / August    | 1 − SCHEDULED_CUT_MEAN    | 0.50     | 0.504 (0.130 vs 0.257)
+ * H8   | other plans scheduled per push (control)       | unchanged                 | 1.00     | 1.044
+ * H8   | overage rows off Team or before Sep 1 / missing| exact                     | 0 / 0    | 0 / 0 ($4,708 in September)
+ * H9   | rollback rate, ≤30% / ≥75% coverage            | 0.20 / 0.05               | 4.00     | 3.878 (20.0% vs 5.15%)
+ * H10  | 42-day paid rate, 3+ / 1-2 previews (14 days)  | ≥ 1.0 / 0.4 (floor)       | ≥ 2.50   | 4.045 (27.0% vs 6.7%, STRONG)
  * ═════════════════════════════════════════════════════════════════════════
  *
  * H10 is a knob floor: developers with 3+ early previews are also heavier
  * users who reach the upgrade page more often, so the realized ratio sits
- * above the keep ratio. Its cohort is Free signups only (380 habit, 799
- * light). H5 (1.885) sits below the knob within noise: 548 developers had a
- * failed first build and 26.5% of them were active in days 30-36 (relative
- * SE of the ratio about 8%). H3 and H7 come from engine funnel draws; H8 and
- * H9 use low-discrepancy draws and sit close to the knobs.
+ * above the keep ratio. Its cohort is Free signups only (337 habit, 764
+ * light). H5 (2.150) sits above the knob within noise: 500 developers had a
+ * failed first build and 26.6% of them were active in days 30-36 (relative
+ * SE of the ratio about 8%). H3 and H7 come from engine funnel draws (H7's
+ * 0.547 is noise on 761 paid social signups); H8 and H9 use low-discrepancy
+ * draws and sit close to the knobs.
  */
 
 // ── SCALE ──
@@ -366,8 +388,8 @@ const RED_DARK_MIN_D = 1;
 const RED_DARK_MAX_D = 4;
 const FIRST_BUILD_DAYS = 14;       // story cohort: first build within 14 days of signup
 const SETUP_ABANDON_SHARE = 0.6;   // new users who never finish onboarding: share who stop on day 1-4
-const SETUP_ABANDON_MIN_D = 1;
-const SETUP_ABANDON_MAX_D = 4;
+const SETUP_ABANDON_MIN_D = 0.2;
+const SETUP_ABANDON_MAX_D = 3;
 
 // H6 npm registry mirror incident (warehouse build_fleet_daily)
 const INCIDENT_ECOSYSTEM = "npm";
@@ -404,7 +426,12 @@ const SCHEDULED_CUT_MEAN = 0.5;    // per org: share of scheduled builds switche
 const SCHEDULED_CUT_SPREAD = 0.2;
 const SCHEDULED_CUT_RAMP_DAYS = 14; // each Team org acts on a salted day in Sep 1-14
 const OVERAGE_PRICE_PER_MIN = 0.015;
-const OVERAGE_SHARE_TEAM = 0.3;    // share of Team runner minutes billed above the pooled allowance
+// Team orgs' pooled monthly allowances, as a share of each org's own monthly usage, spread
+// uniformly over [0.15, 1.5]: an org past its allowance bills every further minute that month
+const ALLOWANCE_LO = 0.15;
+const ALLOWANCE_HI = 1.5;
+const overageShareAt = (monthFrac) => Math.min(1, Math.max(0, (monthFrac - ALLOWANCE_LO) / (ALLOWANCE_HI - ALLOWANCE_LO)));
+const teamUsage = { trail: [], month: null, mtd: 0 }; // warehouse hook state (reset at bucket 0)
 const PARALLEL_JOBS = { free: 2, pro: 4, team: 10, enterprise: 14 }; // parallel jobs per pipeline (billing)
 
 // H9 rollback rate by repository test coverage (linear between 30% and 75%)
@@ -428,8 +455,10 @@ const UPGRADE_CONV_ESTABLISHED = 15; // per upgrade-page visit, before the base 
 const BUY_WINDOW_DAYS = 42;        // self-serve purchases land in a developer's first six weeks
 const EST_BASE_KEEP = 0.34;        // established free users' steady purchase rate (share of would-be purchases)
 const EVAL_CHURN_SHARE = 0.45;     // new users who stop on a salted day in their first four weeks (any setup outcome)
-const EVAL_CHURN_MIN_D = 3;
+const EVAL_CHURN_MIN_D = 1;
+const EVAL_CHURN_SKEW = 2;         // stop day = MIN + (MAX − MIN) · u^2: most evaluators who leave do so early
 const EVAL_CHURN_MAX_D = 28;
+const EVAL_CHURN_AFTER_SETUP_H = 12; // an evaluator who leaves stays at least 12 h past their last setup step
 const EXPLORER_KEEP_MIN = 0.25;    // non-onboarded new users who stay: share of activity kept
 const EXPLORER_KEEP_MAX = 0.6;
 
@@ -442,22 +471,26 @@ const HOLIDAY_DROP = 0.35;
 
 // ── DATA ARRAYS (seeded) ──
 const ORG_COUNT = 500;
-const SIZE_WEIGHTS = { startup: 40, smb: 30, mid_market: 20, enterprise: 10 };
-const USERS_PER_ORG_WEIGHT = { startup: 1, smb: 1.6, mid_market: 2.6, enterprise: 4.5 };
-const EMPLOYEE_BAND = { startup: ["1-10", "11-50"], smb: ["51-200"], mid_market: ["201-1000"], enterprise: ["1001-5000", "5000+"] };
+const SIZE_WEIGHTS = { startup: 50, smb: 28, mid_market: 15, enterprise: 7 };
+// developers on Forgebench per organization: log-uniform inside the size's range (hash per org);
+// realized counts land near 0.8x these targets
+const DEV_RANGE = { startup: [3, 14], smb: [6, 35], mid_market: [15, 75], enterprise: [60, 400] };
 const ORG_SUFFIX = ["Labs", "Systems", "Software", "Cloud", "Works", "Digital", "Health", "Pay", "Logistics", "Games"];
 const INDUSTRIES = ["saas", "fintech", "ecommerce", "healthtech", "media", "gaming", "logistics", "agency"];
 const STACK_WEIGHTS = { node: 32, python: 20, go: 9, ruby: 5, java: 17, dotnet: 11, rust: 6 };
 const ECOSYSTEM = { node: "npm", python: "pypi", go: "go_modules", ruby: "rubygems", java: "maven", dotnet: "nuget", rust: "cargo" };
-// organization plan by size (Pro is an individual plan, so no organization is "on Pro")
+// organization plan by size (Pro is an individual plan, so no organization is "on Pro");
+// larger companies also try Forgebench bottom-up on Free before anyone buys
 const ORG_PLAN_MIX = {
-	startup: { free: 62, team: 38, enterprise: 0 },
-	smb: { free: 40, team: 54, enterprise: 6 },
-	mid_market: { free: 16, team: 58, enterprise: 26 },
-	enterprise: { free: 4, team: 30, enterprise: 66 },
+	startup: { free: 65, team: 35, enterprise: 0 },
+	smb: { free: 50, team: 45, enterprise: 5 },
+	mid_market: { free: 45, team: 37, enterprise: 18 },
+	enterprise: { free: 35, team: 20, enterprise: 45 },
 };
 const INDIVIDUAL_PRO_SHARE = 0.35;   // developers at Free organizations who pay for their own Pro seat
-const NEW_SIGNUP_FREE_ORG_BOOST = 8; // new signups land at Free organizations 8x as often (per developer weight)
+// share of an org's developers who signed up inside the window: Free organizations are mostly
+// self-serve evaluators; paying organizations grow by onboarding colleagues
+const NEW_DEV_SHARE = { free: 0.75, paid: 0.2 };
 const FRAMEWORK = { node: "nextjs", python: "django", go: "go_http", ruby: "rails", java: "spring", dotnet: "aspnet", rust: "axum" };
 
 const pickWeighted = (weights, r) => {
@@ -478,20 +511,36 @@ const ORGS = Array.from({ length: ORG_COUNT }, (_, i) => {
 		name: `${chance.word({ syllables: 2, capitalize: true })} ${chance.pickone(ORG_SUFFIX)}`,
 		size,
 		industry: chance.pickone(INDUSTRIES),
-		employees: chance.pickone(EMPLOYEE_BAND[size]),
 	};
 });
-// one plan per organization (hash per org, so the chance stream is untouched)
-for (const o of ORGS) o.plan = pickWeighted(ORG_PLAN_MIX[o.size], hashFloat(`${o.id}|org-plan`));
+// one plan and one developer target per organization (hash per org, so the chance stream is untouched)
+for (const o of ORGS) {
+	o.plan = pickWeighted(ORG_PLAN_MIX[o.size], hashFloat(`${o.id}|org-plan`));
+	const [lo, hi] = DEV_RANGE[o.size];
+	o.devTarget = lo * Math.pow(hi / lo, hashFloat(`${o.id}|devs`));
+	o.newShare = o.plan === "free" ? NEW_DEV_SHARE.free : NEW_DEV_SHARE.paid;
+}
 const orgCum = (weightOf) => {
 	const w = ORGS.map(weightOf);
 	const total = w.reduce((a, b) => a + b, 0);
 	let acc = 0;
 	return w.map((x) => (acc += x / total));
 };
-const ORG_CUM = orgCum((o) => USERS_PER_ORG_WEIGHT[o.size]);
-// self-serve signups come mostly from companies that are not paying customers yet
-const ORG_CUM_NEW = orgCum((o) => USERS_PER_ORG_WEIGHT[o.size] * (o.plan === "free" ? NEW_SIGNUP_FREE_ORG_BOOST : 1));
+const ORG_CUM = orgCum((o) => o.devTarget * (1 - o.newShare));
+const ORG_CUM_NEW = orgCum((o) => o.devTarget * o.newShare);
+// employee band from the org's expected developer count, inside its size's band range
+{
+	const est = NUM_USERS * (1 - BORN_PCT / 100), born = NUM_USERS * BORN_PCT / 100;
+	const sumEst = ORGS.reduce((a, o) => a + o.devTarget * (1 - o.newShare), 0);
+	const sumNew = ORGS.reduce((a, o) => a + o.devTarget * o.newShare, 0);
+	for (const o of ORGS) {
+		o.expectedDevs = est * o.devTarget * (1 - o.newShare) / sumEst + born * o.devTarget * o.newShare / sumNew;
+		o.employees = o.size === "startup" ? (o.expectedDevs < 4 ? "1-10" : "11-50")
+			: o.size === "smb" ? "51-200"
+			: o.size === "mid_market" ? "201-1000"
+			: o.expectedDevs >= 150 ? "5000+" : "1001-5000";
+	}
+}
 const orgFor = (uid, isNew) => {
 	const r = hashFloat(`${uid}|org`);
 	const cum = isNew ? ORG_CUM_NEW : ORG_CUM;
@@ -574,10 +623,33 @@ function handleEverything(events, meta) {
 		if (!builds.has(e.build_id)) builds.set(e.build_id, {});
 		builds.get(e.build_id)[e.event] = e;
 	}
-	// H2: a developer's arm applies to builds from their first exposure (the engine logs it
-	// just before their first build in the test)
+	// scheduled (cron) builds run on the clock, not on the developer's working week: each one
+	// moves to a hashed day of its own Monday-Sunday week at the repository's nightly hour.
+	// The move stays inside the window and after signup; a developer outside the CI test never
+	// gets a build moved into it.
+	const testStart = ms(REMOTE_CACHE_START);
+	const exposure = events.find((e) => e.event === "$experiment_started");
+	for (const b of builds.values()) {
+		const st = b["build started"];
+		if (!st || st.trigger !== "schedule") continue;
+		const t0 = T(st);
+		const repo = repos[Math.floor(salt(st.build_id, "repo") * repos.length)];
+		const weekStart = dayjs.utc(t0).startOf("day").valueOf() - ((new Date(t0).getUTCDay() + 6) % 7) * DAY_MS;
+		const atHour = (1 + Math.floor(salt(repo, "cron-hour") * 5)) * HOUR_MS + Math.floor(salt(st.build_id, "cron-min") * 50) * MIN_MS;
+		let lo = Math.max(ms(DATASET_START), birthMs ?? -Infinity);
+		let hi = END - HOUR_MS;
+		if (!exposure) { if (t0 < testStart) hi = Math.min(hi, testStart - 1000); else lo = Math.max(lo, testStart); }
+		const valid = [0, 1, 2, 3, 4, 5, 6].map((d) => weekStart + d * DAY_MS + atHour).filter((t) => t >= lo && t <= hi);
+		if (valid.length) st.time = iso(valid[Math.floor(salt(st.build_id, "cron-day") * valid.length)]);
+	}
+	// H2: the engine logs the exposure just before a developer's first build in the test; keep it
+	// there after the cron moves. A developer's arm applies to builds from that exposure on.
+	if (exposure) {
+		const firstInTest = Math.min(...[...builds.values()].map((b) => b["build started"]).filter((st) => st && T(st) >= testStart).map(T));
+		if (firstInTest < Infinity) exposure.time = iso(firstInTest - 1000);
+	}
 	const cacheVariant = profile[EXP_KEY];
-	const exposureMs = Math.min(...events.filter((e) => e.event === "$experiment_started").map(T));
+	const exposureMs = exposure ? T(exposure) : Infinity;
 	const buildList = [...builds.values()].sort((a, b) => T(a["build started"] || a["build finished"]) - T(b["build started"] || b["build finished"]));
 	let firstBuild = null;
 	for (const b of buildList) {
@@ -611,6 +683,10 @@ function handleEverything(events, meta) {
 		const frac = !failed ? 1 : { configuration: 0.08, dependency_install: 0.15, compile: 0.35, timeout: 1.6, test: 0.6 }[stage];
 		const durMs = Math.max(15_000, BUILD_MEDIAN_SEC * 1000 * logNormalAt(`${bid}|dur`, BUILD_DURATION_SIGMA) * (RUNNER_SPEED[runner] ?? 1) * armMult * frac);
 		fin.build_duration_sec = Math.round(durMs / 1000);
+		// a build that fails before its test stage runs no tests; a test failure or a timeout
+		// stops part-way through the suite
+		if (stage === "configuration" || stage === "dependency_install" || stage === "compile") fin.tests_run = 0;
+		else if (stage === "test" || stage === "timeout") fin.tests_run = Math.round(fin.tests_run * (0.2 + 0.8 * salt(bid, "tests-frac")));
 		if (startT !== null) fin.time = iso(Math.min(startT + durMs, END));
 	}
 
@@ -620,9 +696,12 @@ function handleEverything(events, meta) {
 	const isOnboardingPreview = (e) => e.event === "preview deployed" && e.commit_sha === "onboarding";
 	const onboarded = Boolean(signup) && events.some(isOnboardingPreview);
 	if (signup) {
+		const lastSetup = Math.max(birthMs, ...events.filter((e) => e.event === "repository imported" || e.event === "pipeline configured" || isOnboardingPreview(e)).map(T));
 		if (!onboarded && salt(uid, "abandon") < SETUP_ABANDON_SHARE) {
+			// a developer who gives up on setup stops after the last setup step they reached
 			abandoned = true;
-			cut = Math.min(cut, birthMs + (SETUP_ABANDON_MIN_D + salt(uid, "abandon-day") * (SETUP_ABANDON_MAX_D - SETUP_ABANDON_MIN_D)) * DAY_MS);
+			const stopAt = birthMs + (SETUP_ABANDON_MIN_D + salt(uid, "abandon-day") * (SETUP_ABANDON_MAX_D - SETUP_ABANDON_MIN_D)) * DAY_MS;
+			cut = Math.min(cut, Math.max(stopAt, lastSetup + HOUR_MS));
 		}
 		if (firstBuild && firstBuild["build finished"].build_status === "failed" && salt(uid, "red-dark") < RED_DARK_SHARE) {
 			cut = Math.min(cut, T(firstBuild["build finished"]) + (RED_DARK_MIN_D + salt(uid, "red-dark-day") * (RED_DARK_MAX_D - RED_DARK_MIN_D)) * DAY_MS);
@@ -630,9 +709,8 @@ function handleEverything(events, meta) {
 		// most evaluators leave during their first month whatever happened in setup; the stop
 		// day never lands before the developer's last setup step
 		if (salt(uid, "eval-churn") < EVAL_CHURN_SHARE) {
-			const lastSetup = Math.max(birthMs, ...events.filter((e) => e.event === "repository imported" || e.event === "pipeline configured" || isOnboardingPreview(e)).map(T));
-			const stopAt = birthMs + (EVAL_CHURN_MIN_D + salt(uid, "eval-churn-day") * (EVAL_CHURN_MAX_D - EVAL_CHURN_MIN_D)) * DAY_MS;
-			cut = Math.min(cut, Math.max(stopAt, lastSetup + DAY_MS));
+			const stopAt = birthMs + (EVAL_CHURN_MIN_D + Math.pow(salt(uid, "eval-churn-day"), EVAL_CHURN_SKEW) * (EVAL_CHURN_MAX_D - EVAL_CHURN_MIN_D)) * DAY_MS;
+			cut = Math.min(cut, Math.max(stopAt, lastSetup + EVAL_CHURN_AFTER_SETUP_H * HOUR_MS));
 		}
 	}
 	if (cut < Infinity) events = events.filter((e) => T(e) < cut);
@@ -726,13 +804,14 @@ function handleEverything(events, meta) {
 		}
 		const open = p["pull request opened"], rev = p["review submitted"], mer = p["pull request merged"], dep = p["production deployed"];
 		const waitH = REVIEW_WAIT_MEDIAN_H * logNormalAt(`${prId}|wait`, 0.8) * reviewWaitMult(lines);
-		if (rev) rev.review_wait_hours = round1(waitH);
 		if (open) {
 			// rebuild the PR's clock from the open: review wait (H4), review → merge (H1), merge → deploy
 			let t = T(open);
 			if (rev) {
 				t = skipWeekend(t + waitH * HOUR_MS);
 				rev.time = iso(t);
+				// the wait as the reviewer saw it, weekend pause included (the open → review gap)
+				rev.review_wait_hours = round1((t - T(open)) / HOUR_MS);
 				if (t > END) dropPr.add(rev);
 			}
 			// H1: Forge Assist reviews the PR when its author has turned it on and is on an eligible plan
@@ -803,6 +882,7 @@ function handleEverything(events, meta) {
 	events = events.filter((e) => {
 		if (e.build_id && dropBuild.has(e.build_id)) return false;
 		if (STRUCTURAL.has(e.event) || (e.event === "preview deployed" && e.commit_sha === "onboarding")) return true;
+		if (e.build_id && e.trigger === "schedule") return true; // cron builds run on holidays too
 		const k = unitKey(e);
 		const t0 = k ? unitStart.get(k) : T(e);
 		if (!HOLIDAYS.includes(dayKey(t0))) return true;
@@ -863,7 +943,20 @@ function handleWarehouse(row, meta) {
 		const jobs = PARALLEL_JOBS[row.plan_tier] * jitter(`jobs|${k}`, 0.15);
 		row.billable_runner_minutes = Math.round(shifted * jobs * (1.08 + 0.1 * (hashFloat(`retry|${k}`) - 0.5)) + 3000 * hashFloat(`api-min|${k}`) * jitter(`api-day|${row.date}`, 0.5));
 		const metered = row.plan_tier === METERED_PLAN && dayjs.utc(row.date).valueOf() >= ms(METERED_START);
-		row.overage_minutes = metered ? Math.round(row.billable_runner_minutes * OVERAGE_SHARE_TEAM * jitter(`over|${k}`, 0.35)) : 0;
+		// pooled monthly allowances reset on the 1st: an org bills overage once its month-to-date
+		// minutes pass its allowance, so overage starts near zero each month and grows as orgs run out
+		row.overage_minutes = 0;
+		if (row.plan_tier === METERED_PLAN) {
+			if (meta.bucketIndex === 0) Object.assign(teamUsage, { trail: [], month: null, mtd: 0 });
+			const month = row.date.slice(0, 7);
+			if (teamUsage.month !== month) Object.assign(teamUsage, { month, mtd: 0 });
+			teamUsage.trail.push(row.billable_runner_minutes);
+			const recent = teamUsage.trail.slice(-28);
+			const expectedMonth = recent.reduce((a, b) => a + b, 0) / recent.length * dayjs.utc(row.date).daysInMonth();
+			const rMid = (teamUsage.mtd + row.billable_runner_minutes / 2) / expectedMonth;
+			teamUsage.mtd += row.billable_runner_minutes;
+			if (metered) row.overage_minutes = Math.round(row.billable_runner_minutes * overageShareAt(rMid) * jitter(`over|${k}`, 0.15));
+		}
 		row.overage_revenue_usd = round2(row.overage_minutes * row.overage_price_per_minute_usd);
 		return row;
 	}
@@ -1350,6 +1443,10 @@ const INC_BASE_TO = TS(dayjs.utc(REGISTRY_INCIDENT_END).add(7, "day"));
 const METERED_PRE_FROM = "2026-08-01 00:00:00";   // August: a full month before overage billing
 const METERED_POST_FROM = TS(dayjs.utc(METERED_START).add(SCHEDULED_CUT_RAMP_DAYS, "day")); // every Team org has acted
 const METERED_POST_TO = "2026-10-01 00:00:00";
+const METERED_MONTH_END = "2026-10-01";
+// allowances are at least 15% of an org's monthly usage, so no org runs out before about day 4.5
+const ALLOWANCE_RESET_DAYS = 3;
+const OVERAGE_FROM_DAY = 8;
 const RETENTION_DAY = 30;
 const PQL_COHORT_END = TS(dayjs.utc(DATASET_END).subtract(BUY_WINDOW_DAYS, "day")); // full six-week purchase window
 
@@ -1627,7 +1724,7 @@ SELECT s.ch AS grp, s.users AS user_count, sp.spend / s.signups AS spend_per_sig
 		id: "H8-team-overage-billing",
 		hook: "H8",
 		archetype: "temporal-inflection",
-		narrative: `From ${D(METERED_START)} Team seats pay $${OVERAGE_PRICE_PER_MIN} per build minute above the included allowance (announced two weeks earlier). Each Team org reacts on a day in the ${SCHEDULED_CUT_RAMP_DAYS} days after the switch by turning off ${(SCHEDULED_CUT_MEAN - SCHEDULED_CUT_SPREAD) * 100}-${(SCHEDULED_CUT_MEAN + SCHEDULED_CUT_SPREAD) * 100}% of its scheduled (cron) builds (mean ${SCHEDULED_CUT_MEAN * 100}%); push and pull-request builds do not change. Scheduled builds per push build for Team seats (plan_tier at event time), ${METERED_POST_FROM.slice(0, 10)} to Sep 30 vs August, reads 1 − ${SCHEDULED_CUT_MEAN}; Free, Pro, and Enterprise are unmetered and stay at 1.0. The overage itself exists only in the warehouse table usage_billing_daily (zero before the switch and on every other plan).`,
+		narrative: `From ${D(METERED_START)} Team seats pay $${OVERAGE_PRICE_PER_MIN} per build minute above the included allowance (announced two weeks earlier). Each Team org reacts on a day in the ${SCHEDULED_CUT_RAMP_DAYS} days after the switch by turning off ${(SCHEDULED_CUT_MEAN - SCHEDULED_CUT_SPREAD) * 100}-${(SCHEDULED_CUT_MEAN + SCHEDULED_CUT_SPREAD) * 100}% of its scheduled (cron) builds (mean ${SCHEDULED_CUT_MEAN * 100}%); push and pull-request builds do not change. Scheduled builds per push build for Team seats (plan_tier at event time), ${METERED_POST_FROM.slice(0, 10)} to Sep 30 vs August, reads 1 − ${SCHEDULED_CUT_MEAN}; Free, Pro, and Enterprise are unmetered and stay at 1.0. The overage itself exists only in the warehouse table usage_billing_daily (zero before the switch and on every other plan). Pooled allowances reset on the 1st, so overage is zero on days 1-${ALLOWANCE_RESET_DAYS} of a month and grows as orgs run out; every Team day from September ${OVERAGE_FROM_DAY} bills some.`,
 		mixpanelReport: { type: "Insights", event: "build started", measure: "total, formula schedule / push", breakdown: "trigger, plan_tier", chart: "weekly line", join: "usage_billing_daily.overage_revenue_usd" },
 		assertions: [
 			{
@@ -1658,11 +1755,14 @@ FROM ${WH("usage_billing_daily")}`,
 				breakdown: {
 					type: "duckdb",
 					sql: `SELECT 'all' AS grp,
- count(*) FILTER (WHERE plan_tier = '${METERED_PLAN}' AND date::DATE >= DATE '${D(METERED_START)}' AND overage_revenue_usd <= 0) AS missing_rows
+ count(*) FILTER (WHERE plan_tier = '${METERED_PLAN}' AND date::DATE >= DATE '${D(METERED_START)}' AND date::DATE < DATE '${METERED_MONTH_END}'
+   AND day(date::DATE) >= ${OVERAGE_FROM_DAY} AND overage_revenue_usd <= 0)
+ + count(*) FILTER (WHERE plan_tier = '${METERED_PLAN}' AND day(date::DATE) <= ${ALLOWANCE_RESET_DAYS} AND overage_revenue_usd > 0) AS missing_rows
 FROM ${WH("usage_billing_daily")}`,
 				},
 				select: { a: { where: { grp: "all" } } },
-				// exact: every Team day from the switch bills some overage
+				// exact: allowances reset on the 1st, so no Team day 1-3 of a month bills overage,
+				// and every Team day from September 8 to 30 bills some
 				expect: { metric: "a.missing_rows", op: "between", target: [0, 0] },
 			},
 		],

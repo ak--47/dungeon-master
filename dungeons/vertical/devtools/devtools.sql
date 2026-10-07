@@ -150,6 +150,10 @@ SELECT grp, round(max(sched_per_push) FILTER (WHERE NOT post), 4) AS august, rou
 FROM r GROUP BY 1 ORDER BY 1;
 SELECT plan_tier, count(*) FILTER (WHERE overage_revenue_usd > 0) AS days_with_overage, min(date) FILTER (WHERE overage_revenue_usd > 0) AS first_day,
  round(sum(overage_revenue_usd), 2) AS overage_revenue_usd FROM wh_billing GROUP BY 1 ORDER BY 1;
+-- allowances reset on the 1st: Team overage on days 1-3 of a month (0) and Team days Sep 8-30 without overage (0)
+SELECT count(*) FILTER (WHERE day(date) <= 3 AND overage_revenue_usd > 0) AS month_start_overage_days,
+ count(*) FILTER (WHERE date >= DATE '2026-09-08' AND date < DATE '2026-10-01' AND overage_revenue_usd <= 0) AS missing_overage_days
+FROM wh_billing WHERE plan_tier = 'team';
 
 -- STORY H9-test-coverage-rollbacks: rollback rate by repository coverage (knob ≤30% / ≥75% = 4.0)
 SELECT CASE WHEN test_coverage_pct <= 30 THEN 'a: <=30%' WHEN test_coverage_pct >= 75 THEN 'c: >=75%' ELSE 'b: 31-74%' END AS coverage,
@@ -213,6 +217,10 @@ SELECT count(*) AS signups, round(avg(onboarded::INT), 4) AS overall_onboarding 
 SELECT p.org_size, count(*) AS prs, round(median(date_diff('second', t_open, t_review)) / 3600.0, 2) AS median_wait_h,
  round(avg(date_diff('second', t_open, t_review)) / 3600.0, 2) AS avg_wait_h, median(lines) AS median_lines
 FROM prs JOIN prof p ON p.uid = prs.uid WHERE t_open IS NOT NULL AND t_review IS NOT NULL GROUP BY 1 ORDER BY 1;
+-- log wait time by org size (Welch z vs startups)
+WITH w AS (SELECT p.org_size, ln(date_diff('second', t_open, t_review) / 3600.0) AS lw FROM prs JOIN prof p ON p.uid = prs.uid WHERE t_open IS NOT NULL AND t_review IS NOT NULL),
+g AS (SELECT org_size, avg(lw) AS m, var_samp(lw) AS v, count(*) AS n FROM w GROUP BY 1)
+SELECT g.org_size, round(g.m, 4) AS mean_log_wait, round((g.m - s.m) / sqrt(g.v / g.n + s.v / s.n), 2) AS z_vs_startup FROM g, g s WHERE s.org_size = 'startup' ORDER BY 1;
 
 -- EVAL Q7 — review wait by PR size
 SELECT CASE WHEN lines <= 100 THEN 'a: <=100' WHEN lines < 400 THEN 'b: 101-399' WHEN lines < 1000 THEN 'c: 400-999' ELSE 'd: 1000+' END AS pr_size,
@@ -270,6 +278,14 @@ SELECT count(*) FILTER (WHERE inc) AS incident_builds, round(avg(ok::INT) FILTER
  round(avg(dep::INT) FILTER (WHERE inc), 4) AS incident_dependency_fail, round(avg(dep::INT) FILTER (WHERE NOT inc), 4) AS surrounding_dependency_fail FROM w;
 SELECT ecosystem, max(dependency_fetch_error_rate) AS max_error_rate, string_agg(DISTINCT registry_mirror_status, ',') AS statuses
 FROM wh_fleet WHERE date >= DATE '2026-08-19' AND date < DATE '2026-08-21' GROUP BY 1 ORDER BY 1;
+-- baseline over every other day of the window: dependency-install failure rate outside npm, incident days vs the rest
+WITH w AS (SELECT ecosystem, (t_finish >= TIMESTAMP '2026-08-19' AND t_finish < TIMESTAMP '2026-08-21') AS inc, failure_stage = 'dependency_install' AS dep
+  FROM builds WHERE ecosystem <> 'npm' AND build_status IS NOT NULL)
+SELECT coalesce(ecosystem, 'all non-npm') AS ecosystem, count(*) FILTER (WHERE inc) AS incident_builds, sum(dep::INT) FILTER (WHERE inc) AS incident_dependency_failures,
+ round(avg(dep::INT) FILTER (WHERE inc), 4) AS incident_dependency_fail, round(avg(dep::INT) FILTER (WHERE NOT inc), 4) AS window_dependency_fail,
+ round((avg(dep::INT) FILTER (WHERE inc) - avg(dep::INT) FILTER (WHERE NOT inc))
+   / sqrt(avg(dep::INT) FILTER (WHERE NOT inc) * (1 - avg(dep::INT) FILTER (WHERE NOT inc)) / count(*) FILTER (WHERE inc)), 2) AS z_vs_window
+FROM w GROUP BY ROLLUP (ecosystem) ORDER BY ecosystem NULLS FIRST;
 
 -- EVAL Q11 — spend per Mixpanel signup by paid channel
 WITH s AS (SELECT ch, count(*) AS signups FROM signups GROUP BY 1),
@@ -305,6 +321,9 @@ SELECT date_trunc('month', date)::DATE AS month, round(sum(billable_runner_minut
  round(sum(overage_revenue_usd), 2) AS overage_revenue_usd
 FROM wh_billing WHERE plan_tier = 'team' GROUP BY 1 ORDER BY 1;
 SELECT round(sum(overage_revenue_usd) / sum(billable_runner_minutes) * 1000, 3) AS overage_usd_per_1000_minutes_sep FROM wh_billing WHERE plan_tier = 'team' AND date >= '2026-09-01' AND date < '2026-10-01';
+-- the build-up through September (Monday weeks; the last row is Sep 28-30 plus Oct 1, which bills nothing)
+SELECT date_trunc('week', date)::DATE AS week, min(date) FILTER (WHERE overage_minutes > 0) AS first_overage_day, round(sum(overage_revenue_usd), 2) AS overage_revenue_usd
+FROM wh_billing WHERE plan_tier = 'team' AND date >= DATE '2026-08-31' GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q15 — rollbacks by repository test coverage
 SELECT CASE WHEN test_coverage_pct <= 30 THEN 'a: <=30%' WHEN test_coverage_pct < 50 THEN 'b: 31-49%' WHEN test_coverage_pct < 75 THEN 'c: 50-74%' ELSE 'd: >=75%' END AS coverage,
