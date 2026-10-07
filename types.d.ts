@@ -546,6 +546,8 @@ export interface Dungeon {
      * total event count is preserved (still `avgEventsPerUserPerDay × userActiveDays`),
      * but events cluster onto fewer days. Per-user count drawn from
      * `normal(mean=avgActiveDaysPerUser, sd=mean/3)`, clamped to `[1, userActiveDays]`.
+     * A born-in-dataset user's mean scales with the share of the window they are
+     * alive for (1.9.0), so born and established users have the same per-active-day rate.
      *
      * Default: undefined (legacy — every window-day potentially active, no concentration).
      *
@@ -597,6 +599,11 @@ export interface Dungeon {
      * get their active-day count from the curve, but their days are picked by
      * day-of-week weight, so their per-member activity stays flat across the
      * window. Build retention stories on born users.
+     *
+     * **The curve sets how many days, not how busy a day is (1.9.0).** A born
+     * user's event budget is the established per-active-day rate times the curve's
+     * expected active days over their lifetime, so an active day holds the same
+     * events for born and established users (the partial birth day aside).
      */
     retentionCurve?: {
         type?: 'logarithmic' | 'linear';

@@ -191,6 +191,18 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   `agent responded`, ...) carried a `session_id`; now 0, and no other event's
   id changes. Output shift: only dungeons whose `everything` hook deletes
   `session_id`.
+- Give born users the established per-active-day event rate in the active-day
+  modes. In `avgActiveDaysPerUser` mode a born user kept the full active-day
+  mean on a lifetime-pro-rated budget; the mean now scales with the share of the
+  window the user is alive for. In `retentionCurve` mode a born user's budget is
+  now the established per-active-day rate times the curve's expected active
+  days over their lifetime. The curve sets how many days, not how busy a day
+  is. Repro, 300 users, 61 days, 50% born, birth day excluded: born/established
+  events per active day 0.71 (`avgActiveDaysPerUser: 15`) and 0.78 (a decaying
+  curve); now 1.06 and 0.97. Legacy mode already matched. The birth day stays
+  partial (signup at a soup time of day). Output shift: born users in active-day
+  modes have fewer active days (`avgActiveDaysPerUser`) or more events
+  (`retentionCurve`); run totals rise slightly in `retentionCurve` mode.
 
 ### Added
 
