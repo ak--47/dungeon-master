@@ -44,14 +44,20 @@ SELECT date::DATE AS d, note_rate_pct AS rate,
 FROM wh_rates WHERE loan_type = 'conventional';
 
 -- completed tours with the first offer on the same listing within 14 days
--- (Funnels: tour completed → offer submitted, Totals, hold listing_id, 14-day window)
+-- (Funnels: tour completed → offer submitted, Totals, hold listing_id, 14-day window).
+-- tour completed, offer submitted, agent responded and tour requested are each unique
+-- per (shopper, listing_id) and every offer lands within 13 days of its tour, so this
+-- join equals the Funnels report (Totals, hold listing_id constant).
+-- app = the shopper has applied for Keystead financing (profile preapproval_status <> 'none')
 CREATE OR REPLACE TEMP TABLE tour_offers AS
 WITH tc AS (SELECT uid, listing_id, t AS t0, buyer_preapproved AS pa, booking_type FROM ev WHERE event = 'tour completed'),
 os AS (SELECT uid, listing_id, min(t) AS t1 FROM ev WHERE event = 'offer submitted' GROUP BY 1, 2)
 SELECT tc.*, r.rate, r.band, os.t1,
   coalesce(os.t1 >= tc.t0 AND os.t1 < tc.t0 + INTERVAL 14 DAY, false) AS conv,
-  date_diff('second', tc.t0, os.t1) / 3600.0 AS hours
+  date_diff('second', tc.t0, os.t1) / 3600.0 AS hours,
+  (u.preapproval_status <> 'none') AS app
 FROM tc JOIN conv_rate r ON r.d = tc.t0::DATE
+JOIN users u ON u.distinct_id::VARCHAR = tc.uid
 LEFT JOIN os ON os.uid = tc.uid AND os.listing_id = tc.listing_id;
 
 SELECT 'prelude' AS section, (SELECT count(*) FROM ev) AS events, (SELECT count(*) FROM users) AS profiles,
@@ -60,15 +66,18 @@ SELECT 'prelude' AS section, (SELECT count(*) FROM ev) AS events, (SELECT count(
 
 -- ═════════════════════════════════════════════════════════════════════════
 -- STORY H1-rate-spike-cools-offers: offers per completed tour, high-rate days
--- vs baseline days, standardized to the baseline buyer_preapproved mix (knob 0.70)
-SELECT 'H1' AS story, b.pa, b.tours AS base_tours, b.cr AS base_offer_rate, h.tours AS high_tours, h.cr AS high_offer_rate, h.cr / b.cr AS ratio
-FROM (SELECT pa, count(*) AS tours, avg(conv::INT) AS cr FROM tour_offers WHERE band = 'base' AND t0 < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 1) b
-JOIN (SELECT pa, count(*) AS tours, avg(conv::INT) AS cr FROM tour_offers WHERE band = 'high' AND t0 < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 1) h USING (pa)
-ORDER BY pa;
+-- vs baseline days, shoppers who applied for Keystead financing, standardized to
+-- the baseline buyer_preapproved mix (knob 0.70). all_shoppers rows = same read without the filter.
+SELECT 'H1' AS story, b.app AS applicants, b.pa, b.tours AS base_tours, b.cr AS base_offer_rate, h.tours AS high_tours, h.cr AS high_offer_rate, h.cr / b.cr AS ratio
+FROM (SELECT app, pa, count(*) AS tours, avg(conv::INT) AS cr FROM tour_offers WHERE band = 'base' AND t0 < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 1, 2) b
+JOIN (SELECT app, pa, count(*) AS tours, avg(conv::INT) AS cr FROM tour_offers WHERE band = 'high' AND t0 < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 1, 2) h USING (app, pa)
+ORDER BY 2, 3;
 
-WITH g AS (SELECT band, pa, count(*) AS tours, avg(conv::INT) AS cr FROM tour_offers WHERE t0 < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 1, 2)
-SELECT 'H1' AS story, sum(b.tours * h.cr) / sum(b.tours * b.cr) AS std_ratio_high_vs_base
-FROM g b JOIN g h ON h.pa = b.pa AND b.band = 'base' AND h.band = 'high';
+WITH g AS (SELECT band, pa, count(*) AS tours, avg(conv::INT) AS cr FROM tour_offers WHERE app AND t0 < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 1, 2),
+ga AS (SELECT band, pa, count(*) AS tours, avg(conv::INT) AS cr FROM tour_offers WHERE t0 < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 1, 2)
+SELECT 'H1' AS story,
+  (SELECT sum(b.tours * h.cr) / sum(b.tours * b.cr) FROM g b JOIN g h ON h.pa = b.pa AND b.band = 'base' AND h.band = 'high') AS std_ratio_applicants,
+  (SELECT sum(b.tours * h.cr) / sum(b.tours * b.cr) FROM ga b JOIN ga h ON h.pa = b.pa AND b.band = 'base' AND h.band = 'high') AS std_ratio_all_shoppers;
 
 -- H1 control: listing-page tour requests per saved listing do not move with the rate
 SELECT 'H1 control' AS story, per,
@@ -92,13 +101,17 @@ WHERE per IS NOT NULL GROUP BY 2 ORDER BY 2;
 
 -- ═════════════════════════════════════════════════════════════════════════
 -- STORY H3-preapproved-buyers-offer: offer rate per completed tour by
--- buyer_preapproved, inside rate bands, pooled by band tour count (knob 2.5)
-WITH g AS (SELECT band, pa, count(*) AS tours, avg(conv::INT) AS cr FROM tour_offers WHERE t0 < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 1, 2),
-w AS (SELECT band, sum(tours) AS nb FROM g GROUP BY 1),
-p AS (SELECT g.pa, sum(w.nb * g.cr) / sum(w.nb) AS std_rate FROM g JOIN w USING (band) GROUP BY 1)
-SELECT 'H3' AS story, max(std_rate) FILTER (WHERE pa) AS preapproved_rate, max(std_rate) FILTER (WHERE NOT pa) AS not_preapproved_rate,
+-- buyer_preapproved, inside rate bands, pooled by band tour count; shoppers who
+-- applied for Keystead financing (knob 2.5) and all shoppers (confounded, >= 2.5)
+WITH g AS (SELECT scope, band, pa, count(*) AS tours, avg(conv::INT) AS cr
+  FROM (SELECT 'applicants' AS scope, * FROM tour_offers WHERE app UNION ALL SELECT 'all_shoppers', * FROM tour_offers)
+  WHERE t0 < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 1, 2, 3),
+w AS (SELECT scope, band, sum(tours) AS nb FROM g GROUP BY 1, 2),
+p AS (SELECT g.scope, g.pa, sum(w.nb * g.cr) / sum(w.nb) AS std_rate, sum(g.tours) AS tours FROM g JOIN w USING (scope, band) GROUP BY 1, 2)
+SELECT 'H3' AS story, scope, max(tours) FILTER (WHERE pa) AS preapproved_tours, max(tours) FILTER (WHERE NOT pa) AS other_tours,
+  max(std_rate) FILTER (WHERE pa) AS preapproved_rate, max(std_rate) FILTER (WHERE NOT pa) AS not_preapproved_rate,
   max(std_rate) FILTER (WHERE pa) / max(std_rate) FILTER (WHERE NOT pa) AS ratio
-FROM p;
+FROM p GROUP BY 2 ORDER BY 2 DESC;
 
 -- ═════════════════════════════════════════════════════════════════════════
 -- STORY H4-saved-search-retention: new shoppers (signup by Aug 6), listing
@@ -128,21 +141,28 @@ SELECT 'H5' AS story, bucket, count(*) AS replies, avg(toured::INT) AS tour_rate
 FROM replies WHERE t0 < TIMESTAMP '2026-09-24 23:59:59' GROUP BY 2 ORDER BY 2;
 
 -- ═════════════════════════════════════════════════════════════════════════
--- STORY H6-paid-social-economics: spend per signup and per pre-approval start
--- (within 30 days of signup), signups and spend before Sep 2
+-- STORY H6-paid-social-economics: spend per signup, per pre-approval start
+-- (within 30 days of signup), and per offer (offers submitted after signup,
+-- through Oct 1); signups and spend Jun 4-Sep 1
 CREATE OR REPLACE TEMP TABLE h6 AS
 WITH s AS (SELECT uid, t AS t0, acquisition_channel AS ch FROM ev WHERE event = 'account created' AND t < TIMESTAMP '2026-09-01 23:59:59'),
 p AS (SELECT s.uid FROM s JOIN ev e ON e.uid = s.uid AND e.event = 'pre-approval started' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 30 DAY GROUP BY 1),
-sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM wh_spend WHERE date::DATE < DATE '2026-09-02' GROUP BY 1),
-g AS (SELECT s.ch, count(*) AS signups, count(p.uid) AS starts FROM s LEFT JOIN p ON p.uid = s.uid GROUP BY 1)
-SELECT g.ch, g.signups, g.starts, g.starts::DOUBLE / g.signups AS start_rate, sp.spend,
-  sp.spend / g.signups AS spend_per_signup, sp.spend / nullif(g.starts, 0) AS spend_per_start
+o AS (SELECT s.uid, count(*) FILTER (WHERE e.event = 'offer submitted') AS offers, count(*) FILTER (WHERE e.event = 'offer accepted') AS accepted
+      FROM s JOIN ev e ON e.uid = s.uid AND e.event IN ('offer submitted', 'offer accepted') AND e.t >= s.t0 GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM wh_spend WHERE date::DATE <= DATE '2026-09-01' GROUP BY 1),
+g AS (SELECT s.ch, count(*) AS signups, count(p.uid) AS starts, coalesce(sum(o.offers), 0) AS offers, coalesce(sum(o.accepted), 0) AS accepted
+      FROM s LEFT JOIN p ON p.uid = s.uid LEFT JOIN o ON o.uid = s.uid GROUP BY 1)
+SELECT g.ch, g.signups, g.starts, g.starts::DOUBLE / g.signups AS start_rate, g.offers, g.offers::DOUBLE / g.signups AS offers_per_signup, g.accepted, sp.spend,
+  sp.spend / g.signups AS spend_per_signup, sp.spend / nullif(g.starts, 0) AS spend_per_start,
+  sp.spend / nullif(g.offers, 0) AS spend_per_offer, sp.spend / nullif(g.accepted, 0) AS spend_per_accepted
 FROM g LEFT JOIN sp ON sp.ch = g.ch;
 SELECT 'H6' AS story, * FROM h6 ORDER BY ch;
 SELECT 'H6' AS story,
   (SELECT spend_per_signup FROM h6 WHERE ch = 'paid_social') / (SELECT spend_per_signup FROM h6 WHERE ch = 'paid_search') AS spend_per_signup_social_vs_search,
   (SELECT start_rate FROM h6 WHERE ch = 'paid_social') / (SELECT sum(starts)::DOUBLE / sum(signups) FROM h6 WHERE ch <> 'paid_social') AS start_rate_social_vs_rest,
-  (SELECT spend_per_start FROM h6 WHERE ch = 'paid_social') / (SELECT spend_per_start FROM h6 WHERE ch = 'paid_search') AS spend_per_start_social_vs_search;
+  (SELECT offers_per_signup FROM h6 WHERE ch = 'paid_social') / (SELECT sum(offers)::DOUBLE / sum(signups) FROM h6 WHERE ch <> 'paid_social') AS offers_per_signup_social_vs_rest,
+  (SELECT spend_per_start FROM h6 WHERE ch = 'paid_social') / (SELECT spend_per_start FROM h6 WHERE ch = 'paid_search') AS spend_per_start_social_vs_search,
+  (SELECT spend_per_offer FROM h6 WHERE ch = 'paid_social') / (SELECT spend_per_offer FROM h6 WHERE ch = 'paid_search') AS spend_per_offer_social_vs_search;
 
 -- ═════════════════════════════════════════════════════════════════════════
 -- STORY H7-austin-feed-outage: Austin / other listing views on stale days vs
@@ -208,10 +228,13 @@ FROM ev WHERE event IN ('tour requested', 'tour completed', 'listing saved') GRO
 SELECT 'Q2 completion' AS q, booking_type, count(*) FILTER (WHERE event = 'tour requested') AS requested, count(*) FILTER (WHERE event = 'tour completed') AS completed
 FROM ev WHERE event IN ('tour requested', 'tour completed') AND t >= TIMESTAMP '2026-07-22' GROUP BY 2 ORDER BY 2;
 
--- EVAL Q3: pre-approval and offers. Raw full-window rates and rates before the climb (H3 gives the band-standardized ratio)
-SELECT 'Q3' AS q, pa, count(*) AS tours, avg(conv::INT) AS offer_rate_all,
+-- EVAL Q3: pre-approval and offers. Raw full-window rates and rates before the climb,
+-- all shoppers and shoppers who applied for Keystead financing (H3 gives the band-standardized ratios)
+SELECT 'Q3' AS q, scope, pa, count(*) AS tours, avg(conv::INT) AS offer_rate_all,
   avg(conv::INT) FILTER (WHERE t0 < TIMESTAMP '2026-08-10') AS offer_rate_before_aug10
-FROM tour_offers WHERE t0 < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 2 ORDER BY 2;
+FROM (SELECT 'all_shoppers' AS scope, * FROM tour_offers UNION ALL SELECT 'applicants', * FROM tour_offers WHERE app)
+WHERE t0 < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 2, 3 ORDER BY 2, 3;
+SELECT 'Q3 profiles' AS q, (preapproval_status <> 'none') AS applied, count(*) AS shoppers FROM users GROUP BY 2 ORDER BY 2;
 
 -- EVAL Q4: saved search retention (H4 above) plus the early saved-search share
 SELECT 'Q4' AS q, count(*) AS new_shoppers, avg(saver::INT) AS saver_share,
@@ -321,6 +344,8 @@ SELECT 'Q15 totals' AS q, count(*) FILTER (WHERE event = 'pre-approval started')
   median(rate_quoted_pct) FILTER (WHERE event = 'pre-approval completed' AND t >= TIMESTAMP '2026-08-17' AND t < TIMESTAMP '2026-09-14') AS median_quoted_rate_aug17_sep13
 FROM ev WHERE event IN ('pre-approval started', 'pre-approval completed');
 SELECT 'Q15 status' AS q, preapproval_status, count(*) AS profiles FROM users GROUP BY 2 ORDER BY 3 DESC;
+SELECT 'Q15 loan mix' AS q, loan_type, count(*) AS starts, count(*)::DOUBLE / sum(count(*)) OVER () AS share
+FROM ev WHERE event = 'pre-approval started' GROUP BY 2 ORDER BY 3 DESC;
 
 -- EVAL Q16: growth. Monthly active shoppers (listing viewed or home search) and signups
 SELECT 'Q16 monthly' AS q, strftime(t, '%Y-%m') AS month, count(DISTINCT uid) FILTER (WHERE event IN ('listing viewed', 'home search')) AS active_shoppers,
@@ -343,6 +368,8 @@ SELECT 'Q18' AS q, market, count(*) AS offers, sum(acc) AS accepted, avg(acc) AS
 SELECT 'Q18 price' AS q, count(*) AS accepted, median(final_price_usd) AS median_final_price, count(DISTINCT uid) AS buyers
 FROM ev WHERE event = 'offer accepted';
 SELECT 'Q18 offer vs list' AS q, median(offer_price_usd::DOUBLE / list_price_usd) AS median_offer_to_list FROM ev WHERE event = 'offer submitted';
+SELECT 'Q18 rejections' AS q, rejection_reason, count(*) AS rejections, count(*)::DOUBLE / sum(count(*)) OVER () AS share
+FROM ev WHERE event = 'offer rejected' GROUP BY 2 ORDER BY 3 DESC;
 
 -- EVAL Q19: anonymous browsing before signup (identity stitching)
 WITH s AS (SELECT uid, device_id, t AS t0 FROM ev WHERE event = 'account created'),
@@ -353,7 +380,8 @@ SELECT 'Q19' AS q, count(*) AS new_shoppers, avg(n) AS avg_views_before_signup, 
   (SELECT count(*) FROM raw_events WHERE user_id IS NULL AND device_id IN (SELECT device_id FROM dmap)) AS anonymous_events_stitched
 FROM pre;
 
--- EVAL Q20 (open-ended): channel quality beyond pre-approval (tours within 30 days of signup)
+-- EVAL Q20 (open-ended): channel quality beyond pre-approval (tours and offers within 30 days of
+-- signup); full-window offers, acceptances, and spend per offer come from the H6 table above
 WITH s AS (SELECT uid, t AS t0, acquisition_channel AS ch FROM ev WHERE event = 'account created' AND t < TIMESTAMP '2026-09-01 23:59:59'),
 x AS (SELECT s.uid, s.ch, bool_or(e.event = 'tour completed' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 30 DAY) AS toured,
       bool_or(e.event = 'offer submitted' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 30 DAY) AS offered

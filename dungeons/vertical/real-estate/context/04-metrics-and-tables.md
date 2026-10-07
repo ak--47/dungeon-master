@@ -23,6 +23,7 @@ All KPIs use UTC days and count people by unique `user_id` (after Mixpanel links
 | Alert tap-through | `listing alert opened` divided by `listing alert sent`. |
 | CAC (paid) | Spend for a paid channel divided by new shoppers Mixpanel recorded from that channel (`account created` with that `acquisition_channel`) over the same days. Finance uses Mixpanel signups, not the leads the ad platforms report. |
 | Cost per pre-approval start | Spend for a paid channel divided by that channel's new shoppers who started a pre-approval within 30 days of signup. |
+| Cost per offer | Spend for a paid channel divided by the `offer submitted` events of that channel's new shoppers over the same signup days (offers counted through the end of the data). |
 
 ## Warehouse tables
 

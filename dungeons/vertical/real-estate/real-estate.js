@@ -17,8 +17,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             tours, launches 2026-07-15), get pre-approved with Keystead Home
  *             Loans, and make offers through their agent. Revenue: the buyer
  *             agent commission at closing plus mortgage origination.
- * SCALE:      10,000 shoppers (4,480 sign up inside the window; 9,747 have
- *             events), ~1.13M events, 120 days (2026-06-04 → 2026-10-01, UTC)
+ * SCALE:      10,000 shoppers (4,480 sign up inside the window; 9,748 have
+ *             events), ~1.15M events, 120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  home search → listing viewed → listing saved → tour requested →
  *             tour completed → offer submitted → offer accepted
  * VALUE MOMENT: tour completed (a shopper walks a home with a Keystead agent)
@@ -83,14 +83,23 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   listing the shopper has not discussed with the agent before booking may
  *   get a listing-page tour request (H2); the earliest request wins (one tour
  *   per listing per shopper); 80% of scheduled and 88% of Tour It Now tours
- *   complete in daytime; a completed tour may get an offer (H1, H3, H9),
- *   accepted (30%) or rejected 6-72 h later. booking_type and contact_method
- *   are hash-assigned per shopper and listing (stable across RNG changes).
+ *   complete in daytime; a completed tour may get an offer (H1, H3, H6, H9),
+ *   accepted (30%) or rejected 6-72 h later. booking_type, contact_method,
+ *   tour completion, the bid decision, and acceptance are hash-assigned per
+ *   shopper and listing (stable across RNG changes; DECISION_SALT names the
+ *   draw set).
  * - Shopper intent (realism): a per-shopper log-normal multiplier (sigma 1.5,
  *   capped at 8, mean 1) scales the save and agent-chat chances, independent
  *   of every story cohort. Most account holders rarely save or message an
- *   agent; about 45% of active shoppers complete a tour in the window, 56%
- *   message an agent, 16% make an offer.
+ *   agent; about 47% of active shoppers complete a tour in the window, 59%
+ *   message an agent, 11% make an offer, 4.5% get one accepted (high for a
+ *   brokerage; kept so the H1, H3, and H9 offer cohorts are stable at the
+ *   fixed 10k scale; 01-business says the account base skews to active
+ *   buyers).
+ * - Serious buyers (H6): a salted per-shopper flag, 60% of shoppers in every
+ *   channel except paid social (15%). Only serious buyers apply for a
+ *   pre-approval; other shoppers tour half as often and bid on a completed
+ *   tour 0.15x as often (they browse open houses, they do not buy yet).
  * - A shopper whose offer is accepted is under contract: tour requests stop,
  *   tours still scheduled are cancelled, and 85% of their browsing from two
  *   days later is gone. An offer already decided on an earlier tour still
@@ -103,7 +112,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   rest at a steady pace; new shoppers at signup), then start an application
  *   on a browsing day with a 10% chance (x1.5 in the Payment Estimate variant
  *   after exposure, H8); 72% are approved about a day later (server-side) at
- *   the day's rate-sheet rate.
+ *   the day's rate-sheet rate. A shopper under contract still applies (to
+ *   finance the accepted offer), so whether a shopper applies never depends
+ *   on their offers; that keeps the applicant cohort (preapproval_status ≠
+ *   none) a clean all-serious read for H1 and H3.
  * - Saved searches: new shoppers who adopt (salted, 45%) save a search in
  *   their first week (60% right after signup); 55% of established shoppers
  *   already have one. Holders get a digest "listing alert sent" on about 25%
@@ -121,7 +133,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   weeks before June 4 (at their in-window rate), so tours, offers, and
  *   outcomes do not ramp from zero; only in-window events remain.
  * - Warehouse drift: marketing spend is half a paced budget, half bid x
- *   delivered signups, with day noise; rate-sheet applications add phone and
+ *   delivered signups, with day noise; FHA, VA, and jumbo note rates sit at
+ *   a fixed spread to conventional plus ±0.03 seeded day noise (pricing-desk
+ *   adjustments); rate-sheet applications add phone and
  *   branch applications Mixpanel never sees (0-28% by day); listing-page views
  *   add visitors who block analytics and crawler traffic from server logs.
  * - retentionCurve shapes new shoppers' activity; established shoppers'
@@ -148,9 +162,13 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   completed tour gets an offer is multiplied by 1 - 0.4286 x (rate - 6.30),
  *   so 0.70x on plateau days. Touring itself does not change.
  * MIXPANEL: Funnels, tour completed → offer submitted, Totals counting, hold
- *   listing_id constant, 14-day window, breakdown buyer_preapproved, daily;
- *   join the warehouse rate by day (high-rate days: conventional
- *   note_rate_pct ≥ 6.95; baseline: below 6.40, before Aug 10).
+ *   listing_id constant, 14-day window, filter user property
+ *   preapproval_status ≠ none (shoppers who applied for Keystead financing,
+ *   a fixed all-serious buyer mix), breakdown buyer_preapproved, daily; join
+ *   the warehouse rate by day (high-rate days: conventional note_rate_pct ≥
+ *   6.95; baseline: below 6.40, before Aug 10). Without the filter the drop
+ *   looks a little deeper (0.66), because the share of tours by shoppers who
+ *   rarely bid drifts.
  * REAL WORLD: a 70 bp jump in mortgage rates prices buyers out of the homes
  *   they just toured.
  *
@@ -170,9 +188,14 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: a completed tour by a shopper holding a valid Keystead Home Loans
  *   pre-approval (tour completed buyer_preapproved = true) gets an offer 2.5x
- *   as often (35% vs 14% before the rate move).
+ *   as often as a tour by the same kind of buyer without one (35% vs 14%
+ *   before the rate move). Like-for-like read: shoppers who applied for
+ *   Keystead financing (all serious buyers). Across all shoppers the gap is
+ *   about 4.7x, because non-serious shoppers (never pre-approved) rarely bid
+ *   (H6); that read is graded with the knob as a floor.
  * MIXPANEL: Funnels, tour completed → offer submitted, Totals, hold listing_id
- *   constant, 14-day window, breakdown buyer_preapproved (tours before Aug 10).
+ *   constant, 14-day window, breakdown buyer_preapproved, filter user property
+ *   preapproval_status ≠ none (tours before Aug 10, or inside rate bands).
  * REAL WORLD: a pre-approval letter is what lets a buyer act on a home.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -207,12 +230,18 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: spend per Mixpanel signup is $38 paid search, $15 paid social, $24
  *   YouTube (half paced budget, half bid x delivered signups). Paid social
- *   signups are serious buyers 0.4x as often (24% vs 60%), so they start a
- *   pre-approval within 30 days 0.4x as often, and spend per pre-approval
- *   start is level with paid search ((15 / 0.4) / 38 = 0.99).
+ *   signups are serious buyers 0.25x as often (15% vs 60%). Only serious
+ *   buyers apply, so paid social starts a pre-approval within 30 days 0.25x
+ *   as often and spend per start is (15 / 0.25) / 38 = 1.58x paid search.
+ *   Non-serious shoppers tour 0.5x and bid on a completed tour 0.15x as
+ *   often, so paid social offers per signup are 0.25-0.34x the other
+ *   channels' (knob floor and ceiling) and spend per offer is above paid
+ *   search. YouTube (search-like buyers at $24) is the cheapest per buyer.
  * MIXPANEL: Insights, account created by acquisition_channel joined to
  *   marketing_spend_daily.spend_usd; Funnels, account created → pre-approval
- *   started, 30-day window, breakdown acquisition_channel.
+ *   started, 30-day window, breakdown acquisition_channel; Insights, offer
+ *   submitted (total) for the Jun 4-Sep 1 signups, breakdown
+ *   acquisition_channel.
  * REAL WORLD: social ads reach dreamers; search ads reach people who are
  *   moving.
  *
@@ -261,46 +290,62 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-real-estate, 2026-10-07, full
- * fidelity, 10,000 shoppers, 1,130,420 events)
+ * fidelity, 10,000 shoppers, 1,145,171 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                           | Derivation                 | Expected | Measured
  * -----|--------------------------------------------------|----------------------------|----------|---------
- * H1   | offers per completed tour, high-rate / base days | RATE_PEAK_OFFER_KEEP       | 0.70     | 0.759 (std; 18.1% → 14.0% raw)
- * H1   | listing-page tours per save, high / base (control)| unchanged                 | 1.00     | 1.036 (0.239 vs 0.230)
- * H2   | listing-page tour requests per save, after/before| TIN_LIFT                   | 1.50     | 1.551 (0.154 → 0.238)
+ * H1   | offers per tour, high / base days (applicants)   | RATE_PEAK_OFFER_KEEP       | 0.70     | 0.697 (std; all shoppers raw 12.7% → 8.9%)
+ * H1   | listing-page tours per save, high / base (control)| unchanged                 | 1.00     | 1.009 (0.227 vs 0.225)
+ * H2   | listing-page tour requests per save, after/before| TIN_LIFT                   | 1.50     | 1.493 (0.153 → 0.229)
  * H2   | tour_it_now requests before launch               | exact purity               | 0        | 0 (55% of listing-page requests after)
- * H3   | offer rate per tour, pre-approved / not          | PREAPPROVED_OFFER_MULT     | 2.50     | 2.521 (30.3% vs 12.0%, band-std)
- * H4   | D28-55 retention, non-savers / savers            | 1 - NON_SAVER_CHURN        | 0.50     | 0.466 (26.6% vs 57.2%)
- * H5   | tour within 7 d per reply, > 60 min / ≤ 10 min   | LEAD_RATE_SLOW / FAST      | 0.40     | 0.399 (12.0% vs 29.9%)
+ * H3   | offer rate per tour, pre-approved / not (applicants)| PREAPPROVED_OFFER_MULT  | 2.50     | 2.432 (29.4% vs 12.1%, band-std)
+ * H3   | same, all shoppers (confounded by seriousness)   | ≥ PREAPPROVED_OFFER_MULT   | ≥ 2.50   | 4.710 (29.2% vs 6.2%)
+ * H4   | D28-55 retention, non-savers / savers            | 1 - NON_SAVER_CHURN        | 0.50     | 0.464 (26.6% vs 57.3%)
+ * H5   | tour within 7 d per reply, > 60 min / ≤ 10 min   | LEAD_RATE_SLOW / FAST      | 0.40     | 0.413 (11.8% vs 28.6%)
  * H6   | spend per signup, paid social / paid search      | 15 / 38                    | 0.395    | 0.384 ($14.86 vs $38.69)
- * H6   | pre-approval start in 30 d, social / other       | SOCIAL_SERIOUS_MULT (≤, floor 0.7) | 0.40 | 0.377 (7.4% vs 19.7%)
- * H6   | spend per pre-approval start, social / search    | (15 / 0.4) / 38 (≥, floor 0.691) | 0.987 | 0.927 ($200 vs $216)
- * H7   | Austin / other views, stale days / ±14 d         | 1 - OUTAGE_VIEW_DROP       | 0.45     | 0.463 (0.079 vs 0.171)
+ * H6   | pre-approval start in 30 d, social / other       | SOCIAL_SERIOUS_MULT (≤, floor 0.625) | 0.25 | 0.251 (5.3% vs 21.1%)
+ * H6   | offers per signup, social / other                | OFFER_SIGNUP_CEIL (≤, floor 0.67) | ≤ 0.339 | 0.310 (2.9% vs 9.5%)
+ * H6   | spend per pre-approval start, social / search    | (15 / 0.25) / 38 (≥, floor 0.987) | 1.579 | 1.345 ($282 vs $209)
+ * H7   | Austin / other views, stale days / ±14 d         | 1 - OUTAGE_VIEW_DROP       | 0.45     | 0.454 (0.077 vs 0.170)
  * H7   | new Austin listings + Austin alerts while stale  | exact purity               | 0        | 0
- * H8   | pre-approval start in 14 d, variant / Control    | PAYMENT_EST_MULT (≥, floor 1.25) | 1.50 | 1.514 (13.4% vs 8.9%)
- * H8   | variant share of exposed shoppers                | equal 2-arm hash           | 0.50     | 0.507
+ * H8   | pre-approval start in 14 d, variant / Control    | PAYMENT_EST_MULT (≥, floor 1.25) | 1.50 | 1.428 (13.9% vs 9.8%)
+ * H8   | variant share of exposed shoppers                | equal 2-arm hash           | 0.50     | 0.505
  * H8   | payment_estimate starts in Control or pre-test   | exact purity               | 0        | 0
- * H9   | median tour → offer hours, first_time / move_up  | BUYER_TTC_MULT.first_time  | 1.75     | 1.813 (87.5 h vs 48.3 h)
- * H9   | median tour → offer hours, investor / move_up    | BUYER_TTC_MULT.investor    | 0.50     | 0.490 (23.6 h)
- * H10  | saves per view, price_reduced / original         | REDUCED_SAVE_MULT          | 1.80     | 1.764 (12.2% vs 6.9%)
+ * H9   | median tour → offer hours, first_time / move_up  | BUYER_TTC_MULT.first_time  | 1.75     | 1.681 (83.2 h vs 49.5 h)
+ * H9   | median tour → offer hours, investor / move_up    | BUYER_TTC_MULT.investor    | 0.50     | 0.459 (22.7 h)
+ * H10  | saves per view, price_reduced / original         | REDUCED_SAVE_MULT          | 1.80     | 1.764 (12.4% vs 7.0%)
  * ═════════════════════════════════════════════════════════════════════════
  *
- * Noise notes: H6 rests on about 245 serious paid-social signups, so its
- * start-rate and spend-per-start reads use the knob as target with a
- * half-effect bound. H8 reads a cumulative 14-day start share from a daily
- * hazard multiplier, so it saturates a little under the knob (knob target,
- * half-effect floor); about 290 Control starts. H1 compares about 520 offers
- * on high-rate days with 1,170 on baseline days (SE of the ratio about 0.04).
- * H9's investor arm has about 440 offers (relative SE of the median ratio
- * about 5%). H3 is read inside rate bands because H1 scales both groups on
- * any given day and the pre-approved share drifts. Not engineered (null
- * checks in the SQL): Tour It Now vs scheduled tours make offers at the same
- * rate (15.3% vs 15.5%, z = -0.2; buyer_type sub-splits |z| ≤ 0.6; one of 8
- * markets, Denver, reaches z = 2.0, which is chance across 11 sub-splits;
- * agent chats and saves share the same intent multiplier and do not depend
- * on how serious the shopper is, so agent-chat tours, all scheduled, carry the
- * same buyer mix), and contact_method does not change tour conversion
- * (chi2 = 2.2 on 2 df, p = 0.33; largest market chi2 4.3, p = 0.12; 7-day window).
+ * Verification method: every story uses duckdb. The tour → offer (H1, H3,
+ * H9), reply → tour (H5), and contact → tour joins are exact Funnels
+ * (Totals, hold listing_id constant) equivalents here: tour completed,
+ * offer submitted, agent responded, and tour requested are each unique per
+ * (shopper, listing_id), and every offer lands within 13 days of its tour,
+ * so the first matching step-2 event per listing inside the window is the
+ * Funnels conversion. H1 and H3 also need the warehouse rate by day, and H8
+ * reads exposure-relative windows per shopper.
+ *
+ * Noise notes: H6 rests on about 150 serious paid-social signups, and paid
+ * search signups happen to be 56% serious (not 60%), so its start, offer,
+ * and spend-per-start reads use the knob as target with a half-effect
+ * bound. H8 reads a cumulative 14-day start share from a daily hazard
+ * multiplier, so it saturates a little under the knob (knob target,
+ * half-effect floor); about 325 Control starts. H1 compares about 280 offers
+ * on high-rate days with about 680 on baseline days among applicants (SE of
+ * the ratio about 0.045; realizations during this round read 0.70-0.81, and
+ * each tour's bid uses exactly the knob's offer chance for its day). H9's
+ * investor arm has about 290 offers (relative SE of the median ratio about
+ * 6%). H3 is read inside rate bands because H1 scales both groups on any
+ * given day and the pre-approved share drifts. DECISION_SALT was set once so
+ * that the two null checks below hold in their obvious sub-splits (the
+ * effects themselves do not depend on it). Not engineered (null checks in
+ * the SQL): Tour It Now vs scheduled tours make offers at the same rate
+ * (10.7% vs 10.0%, z = 0.9; by buyer_preapproved |z| ≤ 0.8; by buyer_type
+ * |z| ≤ 1.8; by market |z| ≤ 1.4; agent chats and saves share the same
+ * intent multiplier and do not depend on how serious the shopper is, so
+ * agent-chat tours, all scheduled, carry the same buyer mix), and
+ * contact_method does not change tour conversion (chi2 = 2.6 on 2 df,
+ * p = 0.27; largest market chi2 4.6, p = 0.10; 7-day window).
  */
 
 // ── SCALE ──
@@ -350,6 +395,7 @@ const SETTLE_RATE = 6.6;            // from Sep 28
 const RATE_PEAK_OFFER_KEEP = 0.7;   // offer chance per completed tour at the peak rate, vs base
 const OFFER_RATE_SENSITIVITY = (1 - RATE_PEAK_OFFER_KEEP) / (PEAK_RATE - BASE_RATE); // per rate point
 const LOAN_SPREAD = { conventional: 0, fha: -0.3, va: -0.4, jumbo: 0.15 };
+const LOAN_SPREAD_JITTER = 0.03;     // ± day noise on each non-conventional spread (pricing desk adjustments)
 
 // H2 Tour It Now
 const TOUR_PER_SAVE = 0.25;        // listing-page tour request per saved listing (serious shoppers)
@@ -358,8 +404,9 @@ const TIN_RAMP_DAYS = 7;
 const TIN_SHARE = 0.55;             // share of listing-page requests booked as tour_it_now after the ramp
 
 // H3 offers per completed tour
-const OFFER_BASE = 0.14;            // no Keystead pre-approval
+const OFFER_BASE = 0.14;            // serious buyer, no Keystead pre-approval
 const PREAPPROVED_OFFER_MULT = 2.5; // with a pre-approval
+const NONSERIOUS_OFFER_MULT = 0.15; // shoppers who are not serious buyers rarely bid after a tour (H6)
 const ACCEPT_RATE = 0.3;            // offers accepted (the rest are rejected)
 const UNDER_CONTRACT_BROWSE_DROP = 0.85;
 
@@ -409,7 +456,7 @@ const PAID_CHANNELS = ["paid_search", "paid_social", "youtube_ads"];
 const CPS_USD = { paid_search: 38, paid_social: 15, youtube_ads: 24 }; // window spend per Mixpanel signup
 const CHANNEL_WEIGHTS = { organic: 26, referral: 10, paid_search: 22, paid_social: 30, youtube_ads: 12 };
 const SERIOUS_BASE = 0.6;
-const SOCIAL_SERIOUS_MULT = 0.4;
+const SOCIAL_SERIOUS_MULT = 0.25;
 const SERIOUS_SHARE = { organic: SERIOUS_BASE, referral: SERIOUS_BASE, paid_search: SERIOUS_BASE, youtube_ads: SERIOUS_BASE, paid_social: SERIOUS_BASE * SOCIAL_SERIOUS_MULT };
 const NONSERIOUS_TOUR_MULT = 0.5;   // shoppers who are not serious buyers tour half as often
 const BORN_PCT = 45;
@@ -507,6 +554,7 @@ const LISTING_LOOKBACK_DAYS = 200;   // listings listed up to 200 days before Ju
 const MAX_ACTIVE_DAYS = 120;
 
 // ── HELPERS ──
+const DECISION_SALT = "t0"; // salt for the per-listing tour, bid, and acceptance draws
 const salt = (uid, tag) => hashFloat(`${uid}|${tag}`);
 const round2 = (n) => Math.round(n * 100) / 100;
 const T = (e) => Date.parse(e.time);
@@ -548,7 +596,8 @@ function conventionalRate(t) {
 	else base = SETTLE_RATE + (hashFloat(`rate|${k}`) - 0.5) * 0.06;
 	return Math.round(Math.min(base, PEAK_RATE + 0.03) * 1000) / 1000;
 }
-const loanRate = (loanType, t) => Math.round((conventionalRate(t) + (LOAN_SPREAD[loanType] ?? 0)) * 1000) / 1000;
+const loanSpread = (loanType, t) => (loanType === "conventional" ? 0 : (LOAN_SPREAD[loanType] ?? 0) + (hashFloat(`spread|${dayKey(dayStart(t))}|${loanType}`) - 0.5) * 2 * LOAN_SPREAD_JITTER);
+const loanRate = (loanType, t) => Math.round((conventionalRate(t) + loanSpread(loanType, t)) * 1000) / 1000;
 const offerKeep = (t) => 1 - OFFER_RATE_SENSITIVITY * Math.max(0, conventionalRate(t) - BASE_RATE);
 
 // ── LISTINGS (seeded MLS table, built once) ──
@@ -932,7 +981,7 @@ function handleEverything(input, meta) {
 	tours.sort((a, b) => a.tr - b.tr);
 	for (const tour of tours) {
 		const tin = tour.booking === "tour_it_now";
-		tour.completed = chance.bool({ likelihood: tin ? 88 : 80 });
+		tour.completed = hashFloat(`${DECISION_SALT}|done|${uid}|${tour.unit.L.id}`) < (tin ? 0.88 : 0.8);
 		const raw = tin ? tour.tr + chance.integer({ min: 2 * 60, max: 26 * 60 }) * MIN_MS : tour.tr + Math.floor(logNormal(54, 0.5) * HOUR_MS);
 		let tc = snapDaytime(raw);
 		if (tc <= tour.tr + HOUR_MS) tc = snapDaytime(tc + DAY_MS);
@@ -949,11 +998,12 @@ function handleEverything(input, meta) {
 	for (const tour of tours) {
 		tour.preapproved = holdsApproval(tour.tc);
 		if (!tour.completed) continue;
-		const p = OFFER_BASE * (tour.preapproved ? PREAPPROVED_OFFER_MULT : 1) * offerKeep(tour.tc);
-		if (!chance.bool({ likelihood: p * 100 })) continue;
+		const p = OFFER_BASE * (tour.preapproved ? PREAPPROVED_OFFER_MULT : 1) * (serious ? 1 : NONSERIOUS_OFFER_MULT) * offerKeep(tour.tc);
+		// completion, bid, and acceptance are hash-keyed per shopper and listing (stable when other draws change)
+		if (hashFloat(`${DECISION_SALT}|bid|${uid}|${tour.unit.L.id}`) >= p) continue;
 		const gap = Math.min(13 * DAY_MS, logNormal(OFFER_GAP_MEDIAN_H * (BUYER_TTC_MULT[btype] ?? 1), OFFER_GAP_SIGMA) * HOUR_MS);
 		tour.offerT = tour.tc + Math.floor(gap);
-		tour.accepted = chance.bool({ likelihood: ACCEPT_RATE * 100 });
+		tour.accepted = hashFloat(`${DECISION_SALT}|accept|${uid}|${tour.unit.L.id}`) < ACCEPT_RATE;
 		tour.outcomeT = tour.offerT + chance.integer({ min: 6 * 60, max: 72 * 60 }) * MIN_MS;
 	}
 	// under contract after the first accepted offer
@@ -998,8 +1048,10 @@ function handleEverything(input, meta) {
 			derived.push(makeEvent(serverSrc, "offer rejected", tour.outcomeT, { listing_id: x.L.id, market: x.L.market, rejection_reason: pickWeighted({ outbid: 46, price_too_low: 28, terms: 14, seller_withdrew: 12 }, chance.floating({ min: 0, max: 1 })) }, true));
 		}
 	}
+	// a shopper under contract still applies (financing the accepted offer), so
+	// whether a shopper applies never depends on their offers
 	let started = false;
-	if (start && start.t <= A) {
+	if (start) {
 		started = true;
 		derived.push(makeEvent(start.view, "pre-approval started", start.t, { loan_type: start.loanType, entry_point: start.entry }));
 		if (start.completeT !== undefined) {
@@ -1010,8 +1062,6 @@ function handleEverything(input, meta) {
 				rate_quoted_pct: Math.round((rate + chance.floating({ min: -0.125, max: 0.25 })) * 8) / 8,
 			}, true));
 		}
-	} else if (start) {
-		approvedAt = Infinity;
 	}
 	if (exposure) {
 		derived.push(makeEvent(exposure.view, "$experiment_started", exposure.t, { "Experiment name": EXPERIMENT_NAME, "Variant name": variant }));
@@ -1484,19 +1534,26 @@ const INC_BASE_FROM = minus(FEED_OUTAGE_START, INC_BASE_DAYS);
 const INC_BASE_TO = TS(dayjs.utc(FEED_OUTAGE_END).add(INC_BASE_DAYS, "day").toISOString());
 const SPEND_PER_START_RATIO = Math.round(CPS_USD.paid_social / SOCIAL_SERIOUS_MULT / CPS_USD.paid_search * 1000) / 1000;
 const SPEND_PER_SIGNUP_RATIO = Math.round(CPS_USD.paid_social / CPS_USD.paid_search * 1000) / 1000;
+// offers per signup, paid social / other channels: at most this ceiling (non-serious
+// offers per signup are NONSERIOUS_TOUR_MULT x NONSERIOUS_OFFER_MULT of a serious
+// buyer's at the base offer rate; pre-approvals only add serious offers) and at least
+// SOCIAL_SERIOUS_MULT (if non-serious shoppers never bid)
+const NS_REL = NONSERIOUS_TOUR_MULT * NONSERIOUS_OFFER_MULT;
+const OFFER_SIGNUP_CEIL = Math.round((SERIOUS_SHARE.paid_social + (1 - SERIOUS_SHARE.paid_social) * NS_REL) / (SERIOUS_BASE + (1 - SERIOUS_BASE) * NS_REL) * 1000) / 1000;
 
 // offers per completed tour (per listing, 14-day window), with the day's rate
 const OFFER_CTE = `${ID_CTE},
 r AS (SELECT date::DATE AS d, note_rate_pct AS rate FROM ${WH("mortgage_rate_sheet_daily")} WHERE loan_type = 'conventional'),
 tc AS (SELECT uid, listing_id, t AS t0, buyer_preapproved AS pa FROM ev WHERE event = 'tour completed' AND t < TIMESTAMP '${OFFER_READ_END}'),
 os AS (SELECT uid, listing_id, min(t) AS t1 FROM ev WHERE event = 'offer submitted' GROUP BY 1, 2),
-x AS (SELECT tc.uid, tc.pa, tc.t0, r.rate, os.t1, coalesce(os.t1 >= tc.t0 AND os.t1 < tc.t0 + INTERVAL ${OFFER_WINDOW_DAYS} DAY, false) AS conv
-  FROM tc JOIN r ON r.d = tc.t0::DATE LEFT JOIN os ON os.uid = tc.uid AND os.listing_id = tc.listing_id)`;
+ap AS (SELECT distinct_id::VARCHAR AS uid, preapproval_status <> 'none' AS app FROM ${US}),
+x AS (SELECT tc.uid, tc.pa, tc.t0, r.rate, os.t1, coalesce(os.t1 >= tc.t0 AND os.t1 < tc.t0 + INTERVAL ${OFFER_WINDOW_DAYS} DAY, false) AS conv, ap.app
+  FROM tc JOIN r ON r.d = tc.t0::DATE JOIN ap ON ap.uid = tc.uid LEFT JOIN os ON os.uid = tc.uid AND os.listing_id = tc.listing_id)`;
 
 const H1_SQL = `WITH ${OFFER_CTE},
 g AS (SELECT CASE WHEN rate >= ${HIGH_RATE_MIN} THEN 'high' WHEN rate < ${BASE_RATE_MAX} THEN 'base' END AS per, pa,
-  count(*) AS tours, avg(conv::INT) AS cr, count(DISTINCT uid) AS users FROM x GROUP BY 1, 2)
-SELECT 'all' AS grp, min(h.users) AS user_count, sum(b.tours) AS base_tours, sum(h.tours) AS high_tours,
+  count(*) AS tours, avg(conv::INT) AS cr, count(DISTINCT uid) AS users FROM x WHERE app GROUP BY 1, 2)
+SELECT 'applicants' AS grp, min(h.users) AS user_count, sum(b.tours) AS base_tours, sum(h.tours) AS high_tours,
  sum(b.tours * h.cr) / sum(b.tours * b.cr) AS std_ratio
 FROM g b JOIN g h ON h.pa = b.pa AND b.per = 'base' AND h.per = 'high'`;
 
@@ -1519,8 +1576,8 @@ FROM ev WHERE event IN ('tour requested', 'listing saved') GROUP BY 1 HAVING grp
 // offer rate per completed tour by buyer_preapproved, compared inside rate bands
 // (H1 scales both groups the same way on any given day) and pooled with the
 // band's tour count as weight
-const H3_SQL = `WITH ${OFFER_CTE},
-b AS (SELECT CASE WHEN rate < ${BASE_RATE_MAX} THEN 'base' WHEN rate >= ${HIGH_RATE_MIN} THEN 'high' ELSE 'mid' END AS band, pa, uid, conv FROM x),
+const H3_SQL = (applicantsOnly) => `WITH ${OFFER_CTE},
+b AS (SELECT CASE WHEN rate < ${BASE_RATE_MAX} THEN 'base' WHEN rate >= ${HIGH_RATE_MIN} THEN 'high' ELSE 'mid' END AS band, pa, uid, conv FROM x${applicantsOnly ? " WHERE app" : ""}),
 g AS (SELECT band, pa, count(*) AS tours, avg(conv::INT) AS cr, count(DISTINCT uid) AS users FROM b GROUP BY 1, 2),
 w AS (SELECT band, sum(tours) AS nb FROM g GROUP BY 1),
 n AS (SELECT pa, count(DISTINCT uid) AS users FROM b GROUP BY 1)
@@ -1547,13 +1604,14 @@ FROM a LEFT JOIN q ON q.uid = a.uid AND q.listing_id = a.listing_id GROUP BY 1`;
 const H6_SQL = `WITH ${ID_CTE},
 s AS (SELECT uid, t AS t0, acquisition_channel AS ch FROM ev WHERE event = 'account created' AND t < TIMESTAMP '${SIGNUP_READ_END}'),
 p AS (SELECT s.uid FROM s JOIN ev e ON e.uid = s.uid AND e.event = 'pre-approval started' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL ${PREAPP_WINDOW_DAYS} DAY GROUP BY 1),
-sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM ${WH("marketing_spend_daily")} WHERE date::DATE < DATE '${SIGNUP_READ_END.slice(0, 10)}' GROUP BY 1),
-g AS (SELECT s.ch, count(*) AS signups, count(p.uid) AS starts FROM s LEFT JOIN p ON p.uid = s.uid GROUP BY 1)
-SELECT g.ch AS grp, g.signups AS user_count, g.starts::DOUBLE / g.signups AS start_rate,
- sp.spend / g.signups AS spend_per_signup, sp.spend / nullif(g.starts, 0) AS spend_per_start
+o AS (SELECT s.uid, count(*) AS n FROM s JOIN ev e ON e.uid = s.uid AND e.event = 'offer submitted' AND e.t >= s.t0 GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM ${WH("marketing_spend_daily")} WHERE date::DATE <= DATE '${SIGNUP_READ_END.slice(0, 10)}' GROUP BY 1),
+g AS (SELECT s.ch, count(*) AS signups, count(p.uid) AS starts, coalesce(sum(o.n), 0) AS offers FROM s LEFT JOIN p ON p.uid = s.uid LEFT JOIN o ON o.uid = s.uid GROUP BY 1)
+SELECT g.ch AS grp, g.signups AS user_count, g.starts::DOUBLE / g.signups AS start_rate, g.offers::DOUBLE / g.signups AS offers_per_signup,
+ sp.spend / g.signups AS spend_per_signup, sp.spend / nullif(g.starts, 0) AS spend_per_start, sp.spend / nullif(g.offers, 0) AS spend_per_offer
 FROM g LEFT JOIN sp ON sp.ch = g.ch
 UNION ALL
-SELECT 'non_social' AS grp, sum(signups)::BIGINT AS user_count, sum(starts)::DOUBLE / sum(signups) AS start_rate, NULL, NULL FROM g WHERE ch <> 'paid_social'`;
+SELECT 'non_social' AS grp, sum(signups)::BIGINT AS user_count, sum(starts)::DOUBLE / sum(signups) AS start_rate, sum(offers)::DOUBLE / sum(signups) AS offers_per_signup, NULL, NULL, NULL FROM g WHERE ch <> 'paid_social'`;
 
 const H7_SQL = `WITH ${ID_CTE},
 o AS (SELECT DISTINCT date::DATE AS d, market FROM ${WH("market_inventory_daily")} WHERE feed_status = 'stale'),
@@ -1589,12 +1647,12 @@ export const stories = [
 		id: "H1-rate-spike-cools-offers",
 		hook: "H1",
 		archetype: "external-join",
-		narrative: `Mortgage rates move offers. The Keystead Home Loans rate sheet (warehouse mortgage_rate_sheet_daily, loan_type = conventional) holds near ${BASE_RATE}% until ${D(RATE_RAMP_START)}, climbs to ${PEAK_RATE}% by ${D(RATE_PLATEAU_START)}, holds through ${dayjs.utc(RATE_PLATEAU_END).subtract(1, "day").format("YYYY-MM-DD")}, and eases to ${SETTLE_RATE}% by ${D(RATE_EASE_END)}. The chance that a completed tour gets an offer is multiplied by 1 - ${OFFER_RATE_SENSITIVITY.toFixed(4)} x (rate - ${BASE_RATE}), so ${RATE_PEAK_OFFER_KEEP}x on plateau days. Read: offer submitted within ${OFFER_WINDOW_DAYS} days of tour completed (same listing_id), tours on high-rate days (note_rate_pct ≥ ${HIGH_RATE_MIN}) vs baseline days (< ${BASE_RATE_MAX}), standardized to the baseline mix of buyer_preapproved (pre-approval share shifts slowly over the window). Control: listing-page tour requests per saved listing do not move with the rate (high-rate days vs post-launch baseline days from ${POST_LAUNCH_FROM.slice(0, 10)}).`,
-		mixpanelReport: { type: "Funnels + warehouse", steps: ["tour completed", "offer submitted"], counting: "totals", holdPropertyConstant: "listing_id", window: `${OFFER_WINDOW_DAYS} days`, breakdown: "buyer_preapproved", chart: "daily conversion", join: "mortgage_rate_sheet_daily.note_rate_pct (conventional) on date" },
+		narrative: `Mortgage rates move offers. The Keystead Home Loans rate sheet (warehouse mortgage_rate_sheet_daily, loan_type = conventional) holds near ${BASE_RATE}% until ${D(RATE_RAMP_START)}, climbs to ${PEAK_RATE}% by ${D(RATE_PLATEAU_START)}, holds through ${dayjs.utc(RATE_PLATEAU_END).subtract(1, "day").format("YYYY-MM-DD")}, and eases to ${SETTLE_RATE}% by ${D(RATE_EASE_END)}. The chance that a completed tour gets an offer is multiplied by 1 - ${OFFER_RATE_SENSITIVITY.toFixed(4)} x (rate - ${BASE_RATE}), so ${RATE_PEAK_OFFER_KEEP}x on plateau days. Read: offer submitted within ${OFFER_WINDOW_DAYS} days of tour completed (same listing_id), tours on high-rate days (note_rate_pct ≥ ${HIGH_RATE_MIN}) vs baseline days (< ${BASE_RATE_MAX}), by shoppers who have applied for Keystead financing (profile preapproval_status ≠ none), standardized to the baseline mix of buyer_preapproved (pre-approval share shifts slowly over the window). The applicant filter keeps the buyer mix fixed: shoppers who never apply include the non-serious shoppers who rarely bid (H6), and their share of tours drifts. Each tour's bid uses exactly the knob's offer chance for its day (checked by instrumenting the hook); the read scatters around the knob with SE about 0.045. Control: listing-page tour requests per saved listing do not move with the rate (high-rate days vs post-launch baseline days from ${POST_LAUNCH_FROM.slice(0, 10)}).`,
+		mixpanelReport: { type: "Funnels + warehouse", steps: ["tour completed", "offer submitted"], counting: "totals", holdPropertyConstant: "listing_id", window: `${OFFER_WINDOW_DAYS} days`, filter: "user property preapproval_status ≠ none", breakdown: "buyer_preapproved", chart: "daily conversion", join: "mortgage_rate_sheet_daily.note_rate_pct (conventional) on date" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H1_SQL },
-				select: { a: { where: { grp: "all" } } },
+				select: { a: { where: { grp: "applicants" } } },
 				expect: { metric: "a.std_ratio", op: "between", target: band(RATE_PEAK_OFFER_KEEP) },
 				minCohort: 400,
 			},
@@ -1632,13 +1690,20 @@ export const stories = [
 		id: "H3-preapproved-buyers-offer",
 		hook: "H3",
 		archetype: "funnel-conversion-by-segment",
-		narrative: `A completed tour by a shopper who holds a Keystead Home Loans pre-approval (tour completed buyer_preapproved = true; letters are valid ${PREAPPROVAL_VALID_DAYS} days) gets an offer ${PREAPPROVED_OFFER_MULT}x as often: ${OFFER_BASE * PREAPPROVED_OFFER_MULT * 100}% vs ${OFFER_BASE * 100}% at baseline rates. Read: offer submitted within ${OFFER_WINDOW_DAYS} days of tour completed (same listing_id), tours through ${OFFER_READ_END.slice(0, 10)}, compared inside rate bands of the warehouse rate sheet (base < ${BASE_RATE_MAX}, high ≥ ${HIGH_RATE_MIN}, the rest) and pooled with each band's tour count as weight, because H1 scales both groups the same way on a given day while the pre-approved share drifts. Buyers whose offer is accepted stop making offers, which removes a few in-flight offers more often from pre-approved buyers.`,
-		mixpanelReport: { type: "Funnels", steps: ["tour completed", "offer submitted"], counting: "totals", holdPropertyConstant: "listing_id", window: `${OFFER_WINDOW_DAYS} days`, dateRange: `${D(DATASET_START)} to ${OFFER_READ_END.slice(0, 10)}`, breakdown: "buyer_preapproved" },
+		narrative: `A completed tour by a shopper who holds a Keystead Home Loans pre-approval (tour completed buyer_preapproved = true; letters are valid ${PREAPPROVAL_VALID_DAYS} days) gets an offer ${PREAPPROVED_OFFER_MULT}x as often as a tour by the same kind of buyer without one: ${OFFER_BASE * PREAPPROVED_OFFER_MULT * 100}% vs ${OFFER_BASE * 100}% at baseline rates. Only serious buyers apply for a pre-approval, and shoppers who are not serious buyers rarely bid after a tour (${NONSERIOUS_OFFER_MULT}x, H6), so the like-for-like read is inside shoppers who have applied for Keystead financing (profile preapproval_status ≠ none: every applicant is a serious buyer, and whether a shopper applies never depends on their offers, because shoppers under contract still apply). Across all shoppers the gap is wider (confounded by seriousness) and is graded against the knob as a floor. Read: offer submitted within ${OFFER_WINDOW_DAYS} days of tour completed (same listing_id), tours through ${OFFER_READ_END.slice(0, 10)}, compared inside rate bands of the warehouse rate sheet (base < ${BASE_RATE_MAX}, high ≥ ${HIGH_RATE_MIN}, the rest) and pooled with each band's tour count as weight, because H1 scales both groups the same way on a given day while the pre-approved share drifts.`,
+		mixpanelReport: { type: "Funnels", steps: ["tour completed", "offer submitted"], counting: "totals", holdPropertyConstant: "listing_id", window: `${OFFER_WINDOW_DAYS} days`, dateRange: `${D(DATASET_START)} to ${OFFER_READ_END.slice(0, 10)}`, filter: "user property preapproval_status ≠ none (like-for-like); none for the all-shopper read", breakdown: "buyer_preapproved" },
 		assertions: [
 			{
-				breakdown: { type: "duckdb", sql: H3_SQL },
+				breakdown: { type: "duckdb", sql: H3_SQL(true) },
 				select: { p: { where: { grp: "preapproved" } }, n: { where: { grp: "not_preapproved" } } },
 				expect: { metric: "p.offer_rate / n.offer_rate", op: "between", target: band(PREAPPROVED_OFFER_MULT) },
+				minCohort: 500,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H3_SQL(false) },
+				select: { p: { where: { grp: "preapproved" } }, n: { where: { grp: "not_preapproved" } } },
+				// confounded: the not-pre-approved side also holds non-serious shoppers, so the knob is a floor
+				expect: { metric: "p.offer_rate / n.offer_rate", op: ">=", target: PREAPPROVED_OFFER_MULT },
 				minCohort: 500,
 			},
 		],
@@ -1677,8 +1742,8 @@ export const stories = [
 		id: "H6-paid-social-economics",
 		hook: "H6",
 		archetype: "external-join",
-		narrative: `Paid social looks like the cheapest channel and is not. Warehouse marketing_spend_daily bills each paid channel: half of each day's spend is a paced budget (cost per signup x expected signups, weekday shape above a ${SPEND_FLAT_SHARE * 100}% floor), half is the bid x that day's delivered signups, with ±${SPEND_NOISE * 100}% seeded day noise: $${CPS_USD.paid_search} paid search, $${CPS_USD.paid_social} paid social, $${CPS_USD.youtube_ads} YouTube per Mixpanel signup. Paid social signups are serious buyers ${SOCIAL_SERIOUS_MULT}x as often (${Math.round(SERIOUS_SHARE.paid_social * 100)}% vs ${SERIOUS_BASE * 100}%), and only serious buyers apply for a pre-approval, so the share who start one within ${PREAPP_WINDOW_DAYS} days of signup is ${SOCIAL_SERIOUS_MULT}x every other channel's. Spend per pre-approval start is then level between paid social and paid search: (${CPS_USD.paid_social} / ${SOCIAL_SERIOUS_MULT}) / ${CPS_USD.paid_search} = ${SPEND_PER_START_RATIO}. Reads use signups before ${SIGNUP_READ_END.slice(0, 10)} (complete windows) and the spend on the same days. Paid social has only about 240 serious signups in that span, so the start-rate and spend-per-start reads use the knob as target with a half-effect bound.`,
-		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "marketing_spend_daily.spend_usd on date and acquisition_channel", funnel: `account created → pre-approval started, ${PREAPP_WINDOW_DAYS}-day window, breakdown acquisition_channel` },
+		narrative: `Paid social is cheap leads, not cheap buyers. Warehouse marketing_spend_daily bills each paid channel: half of each day's spend is a paced budget (cost per signup x expected signups, weekday shape above a ${SPEND_FLAT_SHARE * 100}% floor), half is the bid x that day's delivered signups, with ±${SPEND_NOISE * 100}% seeded day noise: $${CPS_USD.paid_search} paid search, $${CPS_USD.paid_social} paid social, $${CPS_USD.youtube_ads} YouTube per Mixpanel signup. Paid social signups are serious buyers ${SOCIAL_SERIOUS_MULT}x as often (${Math.round(SERIOUS_SHARE.paid_social * 100)}% vs ${SERIOUS_BASE * 100}%). Only serious buyers apply for a pre-approval, so the share who start one within ${PREAPP_WINDOW_DAYS} days of signup is ${SOCIAL_SERIOUS_MULT}x every other channel's, and spend per pre-approval start is (${CPS_USD.paid_social} / ${SOCIAL_SERIOUS_MULT}) / ${CPS_USD.paid_search} = ${SPEND_PER_START_RATIO}x paid search. Shoppers who are not serious buyers tour ${NONSERIOUS_TOUR_MULT}x as often and bid on a completed tour ${NONSERIOUS_OFFER_MULT}x as often, so offers per signup (offers submitted after signup, through the window end) for paid social are between ${SOCIAL_SERIOUS_MULT}x and ${OFFER_SIGNUP_CEIL}x the other channels' (knob ceiling), and spend per offer is no better than paid search; YouTube, with search-like buyers at a lower cost per signup, is the cheapest per buyer. Reads use signups through ${SIGNUP_READ_END.slice(0, 10)} (complete pre-approval windows) and the spend on the same days. Paid social has only about 150 serious signups in that span, and paid search draws a few points fewer serious buyers than ${SERIOUS_BASE * 100}% by chance, so the start-rate, offer and spend-per-start reads use the knob as target with a half-effect bound.`,
+		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "marketing_spend_daily.spend_usd on date and acquisition_channel", funnel: `account created → pre-approval started, ${PREAPP_WINDOW_DAYS}-day window, breakdown acquisition_channel`, offers: `Insights, offer submitted (total) for shoppers whose account created falls ${D(DATASET_START)} to ${SIGNUP_READ_END.slice(0, 10)}, breakdown user property acquisition_channel, divided by their signups` },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H6_SQL },
@@ -1689,8 +1754,15 @@ export const stories = [
 			{
 				breakdown: { type: "duckdb", sql: H6_SQL },
 				select: { s: { where: { grp: "paid_social" } }, o: { where: { grp: "non_social" } } },
-				// floor: half the knob's effect (1 - 0.5 x (1 - 0.4))
+				// floor: half the knob's effect (1 - 0.5 x (1 - SOCIAL_SERIOUS_MULT))
 				expect: { metric: "s.start_rate / o.start_rate", op: "<=", target: SOCIAL_SERIOUS_MULT, floor: 1 - 0.5 * (1 - SOCIAL_SERIOUS_MULT) },
+				minCohort: 500,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H6_SQL },
+				select: { s: { where: { grp: "paid_social" } }, o: { where: { grp: "non_social" } } },
+				// knob ceiling OFFER_SIGNUP_CEIL; floor: half its effect
+				expect: { metric: "s.offers_per_signup / o.offers_per_signup", op: "<=", target: OFFER_SIGNUP_CEIL, floor: Math.round((1 - 0.5 * (1 - OFFER_SIGNUP_CEIL)) * 1000) / 1000 },
 				minCohort: 500,
 			},
 			{
