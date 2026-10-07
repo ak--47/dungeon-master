@@ -373,3 +373,35 @@ describe('active-day plan has no time trend', () => {
 		expect(last / first).toBeLessThan(1.1);
 	});
 });
+
+// 1.9.0: each usage-loop iteration pops one day-plan entry, and the catch-all
+// funnel emits ~0.75 x sum(standalone weights) events in one pick. A dungeon whose
+// events are mostly standalone put each user's events on a few days (median 10
+// active days against a plan of 31). Catch-all steps now take their own plan day.
+describe('active days with mostly standalone events', () => {
+	const weights = [15, 12, 10, 8, 7, 6, 5, 3, 2, 2];
+	const cfg = (extra) => ({
+		seed: 'standalone-active-days',
+		datasetStart: '2026-03-03T00:00:00Z',
+		datasetEnd: '2026-06-30T23:59:59Z',
+		numUsers: 200,
+		avgEventsPerUserPerDay: 1.2,
+		percentUsersBornInDataset: 0,
+		writeToDisk: false,
+		verbose: false,
+		concurrency: 1,
+		events: [
+			{ event: 'open' }, { event: 'action' },
+			...weights.map((w, i) => ({ event: `s${i}`, weight: w })),
+		],
+		funnels: [{ sequence: ['open', 'action'], conversionRate: 60, timeToConvert: 1 }],
+		...extra,
+	});
+
+	test('mean distinct-day count tracks avgActiveDaysPerUser', async () => {
+		const result = await DUNGEON_MASTER(cfg({ avgActiveDaysPerUser: 30 }));
+		const meanActive = mean(distinctDayCounts(Array.from(result.eventData)));
+		expect(meanActive).toBeGreaterThan(24);
+		expect(meanActive).toBeLessThan(36);
+	}, 60000);
+});

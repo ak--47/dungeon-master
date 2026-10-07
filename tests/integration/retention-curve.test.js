@@ -34,8 +34,11 @@ describe('v1.5.1 retentionCurve generator round-trip', () => {
 			numUsers: 500,
 			numDays: 30,
 			avgEventsPerUserPerDay: 4,
-			// Pin pre-existing-only so every user has the full 30-day window.
-			percentUsersBornInDataset: 0,
+			// Born users only: the curve shapes born users (1.9.0); pre-existing
+			// users stay flat. With 0% born this test passed on an artifact: the
+			// catch-all funnel put a user's events on a few days with 24h spillover
+			// onto the next day (day-1 activity 0.81 against the curve's 0.5).
+			percentUsersBornInDataset: 100,
 			retentionCurve: { day1: 0.5, day7: 0.25, day30: 0.05 },
 			events: [
 				{ event: 'signup', isFirstEvent: true, isStrictEvent: true },
@@ -93,9 +96,13 @@ describe('v1.5.1 retentionCurve generator round-trip', () => {
 			numUsers: 1000,
 			numDays: 30,
 			avgEventsPerUserPerDay: 4,
-			percentUsersBornInDataset: 0,
+			// The curve shapes born users only (1.9.0); pre-existing users stay flat.
+			// With 0% born this test passed on an artifact: the catch-all funnel put a
+			// user's events on a few days with 24h spillover (day1 0.77 vs 0.6 set).
+			percentUsersBornInDataset: 60,
 			retentionCurve: { day1: 0.6, day7: 0.3, day30: 0.1 },
 			events: [
+				{ event: 'signup', isFirstEvent: true },
 				{ event: 'visit', weight: 5 },
 			],
 		}));

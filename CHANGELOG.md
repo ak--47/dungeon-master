@@ -82,6 +82,17 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   key. Without a device switch the mixed list stays. Output shift: `browser`
   values change when a device switch and `hasBrowser` are on; no RNG draws
   change.
+- Keep a user's active-day count on the plan when most events are
+  standalone. Each usage-loop iteration took one day-plan entry, and the
+  catch-all funnel emits about 0.75 x (sum of standalone weights) events in one
+  pick, so those events landed on one day (10 standalone events with weights
+  summing to 70, `retentionCurve`, 120 days: median 10 active days against a
+  plan of 31, about 13 events per active day). In active-day and
+  `retentionCurve` modes each catch-all step after the first now takes its own
+  plan day, as a standalone event does: median 30 active days, about 4.7 events
+  per active day. Born-user retention now tracks the curve (day-1 activity 0.45
+  against a configured 0.5, was 0.81). Legacy mode is unchanged. Output shift:
+  active-day and `retentionCurve` dungeons with a catch-all funnel change.
 
 ### Added
 
