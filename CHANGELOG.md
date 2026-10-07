@@ -161,7 +161,10 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   sequence, and the last step is never skipped. Repro at `conversionRate: 50`:
   66.7% reached the last step before, now within 2 points of the same funnel
   without repeats. Output shift: dungeons with repeated funnel steps change
-  their step counts and later seeded values; others are unchanged.
+  their step counts and later seeded values. That includes the engine's
+  catch-all funnel, which repeats each unassigned event by its `weight`; on
+  `dungeons/technical/simplest.js` (2,000 users) events rose 1.8% (187,270 to
+  190,565) and the event mix moved by at most 0.2 points.
 - Count anonymous traffic in warehouse `users` and `dau` measures. Both keyed
   on `event.user_id`, so every device-only event fell into one `''` identity.
   They now count the identity Mixpanel ID merge counts: `user_id`, else the
