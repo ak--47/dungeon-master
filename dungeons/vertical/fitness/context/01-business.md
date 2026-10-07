@@ -2,7 +2,7 @@
 
 ## Who we are
 
-Stridewell is a consumer fitness app for people who want to train consistently without a gym membership or a personal trainer. Members plan workouts, do them with the phone or a connected wearable, see their progress, compete in challenges with friends, book short sessions with human coaches, and log meals. The company is a seed-stage startup with about 12 employees (product and engineering, a two-person growth team, and a coaching lead) and runs on its seed round while Plus revenue grows; recurring revenue is a few hundred thousand dollars a year. Most members are in North America and Western Europe.
+Stridewell is a consumer fitness app for people who want to train consistently without a gym membership or a personal trainer. Members plan workouts, do them with the phone or a connected wearable, see their progress, compete in challenges with friends, book short sessions with human coaches, and log meals. The company is a seed-stage startup with about 12 employees (product and engineering, a two-person growth team, and a coaching lead) and runs on its seed round while Plus revenue grows; recurring revenue is a few hundred thousand dollars a year. More than half of members are in the United States; the rest are spread across 18 other countries in Europe, the Middle East, Asia-Pacific, Latin America, and Africa, none with more than about 4% of members.
 
 ## What members do in the app
 

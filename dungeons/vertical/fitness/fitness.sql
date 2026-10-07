@@ -150,6 +150,17 @@ WITH g AS (SELECT (t0 >= TIMESTAMP '2026-06-15' AND t0 < TIMESTAMP '2026-07-15')
 SELECT round(max(per_day) FILTER (WHERE shred) / max(per_day) FILTER (WHERE NOT shred), 4) AS volume_lift,
  round(max(other_per_day) FILTER (WHERE shred) / max(other_per_day) FILTER (WHERE NOT shred), 4) AS other_channels_lift FROM g;
 
+-- Mixpanel read: Funnels account created -> subscription purchased, uniques,
+-- 120-day window (the whole dataset), paid social vs every other channel. Paid
+-- social is concentrated in the early Summer Shred weeks, so its members had
+-- longer to buy and this read sits above the 0.5 knob (story: knob-derived floor 0.75)
+WITH b AS (SELECT s.uid, min(e.t) AS tb FROM signups s JOIN ev e ON e.uid = s.uid AND e.event = 'subscription purchased' AND e.t >= s.t0 GROUP BY 1),
+g AS (SELECT s.ch = 'paid_social' AS ps, count(*) AS signups, count(b.uid) AS buyers FROM signups s LEFT JOIN b ON b.uid = s.uid GROUP BY 1)
+SELECT max(signups) FILTER (WHERE ps) AS paid_social_signups, max(buyers) FILTER (WHERE ps) AS paid_social_buyers,
+ max(signups) FILTER (WHERE NOT ps) AS other_signups, max(buyers) FILTER (WHERE NOT ps) AS other_buyers,
+ round(max(buyers::DOUBLE / signups) FILTER (WHERE ps) / max(buyers::DOUBLE / signups) FILTER (WHERE NOT ps), 4) AS paid_social_vs_other_funnel
+FROM g;
+-- supporting read: signup-week standardized (compare within each signup week)
 WITH b AS (SELECT DISTINCT uid FROM ev WHERE event = 'subscription purchased'),
 w AS (SELECT date_trunc('week', s.t0) AS wk,
   count(*) FILTER (WHERE ch = 'paid_social') AS sn, count(b.uid) FILTER (WHERE ch = 'paid_social') AS sb,
@@ -208,6 +219,20 @@ SELECT challenge_format, count(*) AS challenges, round(avg(completed::INT), 4) A
 FROM challenges WHERE tj < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
 SELECT round(avg(completed::INT) FILTER (WHERE challenge_format = 'team') / avg(completed::INT) FILTER (WHERE challenge_format = 'solo'), 4) AS team_vs_solo
 FROM challenges WHERE tj < TIMESTAMP '2026-09-01';
+-- absolute rates without the lapse confound: joins by members still active (a
+-- member-initiated event other than a challenge event) on or after the day the
+-- challenge ends. New members who lapse before the end cannot complete, so the
+-- plain read above is a little low for both formats.
+WITH la AS (SELECT uid, max(t) AS last_active FROM ev
+  WHERE event NOT IN ('notification received', 'account deactivated', 'challenge joined', 'challenge completed') GROUP BY 1)
+SELECT challenge_format, count(*) AS challenges, round(avg(completed::INT), 4) AS completion_rate_active_at_end
+FROM challenges JOIN la USING (uid)
+WHERE tj < TIMESTAMP '2026-09-01' AND la.last_active >= tj + duration_days * INTERVAL 1 DAY GROUP BY 1 ORDER BY 1;
+-- share of joins (Jun 4 - Aug 31) by members who stopped using the app before the challenge ended
+WITH la AS (SELECT uid, max(t) AS last_active FROM ev
+  WHERE event NOT IN ('notification received', 'account deactivated', 'challenge joined', 'challenge completed') GROUP BY 1)
+SELECT round(avg((la.last_active IS NULL OR la.last_active < tj + duration_days * INTERVAL 1 DAY)::INT), 4) AS share_joins_lapsed_before_end
+FROM challenges LEFT JOIN la USING (uid) WHERE tj < TIMESTAMP '2026-09-01';
 -- completion timing follows duration_days: completions land in the last fifth of the challenge
 SELECT duration_days, count(*) FILTER (WHERE completed) AS completions, round(median(days_to_complete) FILTER (WHERE completed), 2) AS median_days_to_complete,
  round(min(days_to_complete) FILTER (WHERE completed), 2) AS min_days, round(max(days_to_complete) FILTER (WHERE completed), 2) AS max_days
@@ -392,7 +417,8 @@ GROUP BY 1 ORDER BY 1;
 -- observation, Welch); member level, unpaired (each member's average per mode);
 -- member level, paired (members with both modes: their own ai_coach minus
 -- self_guided average). Perceived effort, heart rate, and calories per minute
--- are clean nulls in all three tests (and in every plan and Platform split).
+-- are clean nulls in all three tests (p > 0.2) and in every plan and Platform
+-- split at workout level (the Insights breakdown).
 -- p two-sided via the Abramowitz-Stegun 7.1.26 erf approximation.
 CREATE OR REPLACE TEMP TABLE q5_workouts AS
 SELECT e.uid, e.coaching_mode AS mode, e.subscription_tier AS tier, e.Platform AS platform,
@@ -421,7 +447,19 @@ SELECT count(*) AS members, round(avg(n), 1) AS workouts_per_member,
  round(var_samp(mh) * avg(n) / (SELECT vh FROM tot), 2) AS design_effect_heart_rate,
  round(var_samp(me) * avg(n) / (SELECT ve FROM tot), 2) AS design_effect_effort,
  round(var_samp(mk) * avg(n) / (SELECT vk FROM tot), 2) AS design_effect_kcal_per_min FROM m;
--- paired member-level test within each plan (tier at the time) and Platform
+-- workout-level test within each plan (tier at the time) and Platform: what an
+-- Insights breakdown by subscription_tier or Platform shows
+WITH m AS (UNPIVOT q5_workouts ON heart_rate, effort, kcal_per_min INTO NAME metric VALUE val),
+sp AS (SELECT 'plan' AS split, tier AS value, metric, mode, val FROM m UNION ALL SELECT 'Platform', platform, metric, mode, val FROM m),
+s AS (SELECT split, value, metric, mode, count(*) AS n, avg(val) AS mu, var_samp(val) AS v FROM sp GROUP BY ALL),
+z AS (SELECT a.split, a.value, a.metric, a.n AS ai_workouts, b.n AS self_workouts, a.mu - b.mu AS diff, (a.mu - b.mu) / sqrt(a.v / a.n + b.v / b.n) AS z
+  FROM s a JOIN s b ON a.split = b.split AND a.value = b.value AND a.metric = b.metric AND a.mode = 'ai_coach' AND b.mode = 'self_guided'),
+e AS (SELECT *, abs(z) / sqrt(2) AS x, 1 / (1 + 0.3275911 * abs(z) / sqrt(2)) AS t FROM z)
+SELECT split, value, metric, ai_workouts, self_workouts, round(diff, 3) AS ai_minus_self, round(z, 2) AS z_workout,
+ round(1 - (1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * exp(-x * x)), 3) AS p_two_sided
+FROM e ORDER BY split, value, metric;
+-- paired member-level test within each plan (tier at the time) and Platform: 15
+-- small sub-tests, so about one in 20 lands under p = 0.05 by chance alone
 WITH m AS (UNPIVOT q5_workouts ON heart_rate, effort, kcal_per_min INTO NAME metric VALUE val),
 mm AS (SELECT uid, mode, tier, platform, metric, avg(val) AS val FROM m GROUP BY ALL),
 pr AS (SELECT a.metric, a.tier, a.platform, a.val - b.val AS d FROM mm a JOIN mm b ON a.uid = b.uid AND a.tier = b.tier AND a.metric = b.metric AND a.mode = 'ai_coach' AND b.mode = 'self_guided'),
@@ -637,14 +675,36 @@ SELECT prog, completed, opens, meals, round(completed::DOUBLE / opens, 4) AS com
  round((completed::DOUBLE / opens) / (SELECT completed::DOUBLE / opens FROM g WHERE NOT prog), 4) AS per_open_vs_before,
  round((completed::DOUBLE / meals) / (SELECT completed::DOUBLE / meals FROM g WHERE NOT prog), 4) AS workouts_per_meal_vs_before,
  round((opens::DOUBLE / meals) / (SELECT opens::DOUBLE / meals FROM g WHERE NOT prog), 4) AS opens_per_meal_vs_before FROM g ORDER BY prog;
--- plan follow-through (Workout Loop, 4-hour window, and 1 day): program vs before.
--- This pairs each plan with the member's next completion. The Mixpanel funnel
--- (workout planned -> workout completed, totals, 4-hour window) counts attempts,
--- not plans: a plan made while an earlier attempt is still open does not start its
--- own attempt, and the open attempt keeps the first plan's 4-hour clock. It reads
--- about 1 point lower: 77.8% of 18,160 attempts before vs 77.5% of 26,961 during
--- (repo funnel engine, lib/verify/funnel-engine.js evaluateFunnel, countMode
--- totals, reentry, anchorRange per period). The ratio is the same.
+-- The Mixpanel funnel: workout planned -> workout completed, totals, 4-hour
+-- window (the Workout Loop's), attempts that start in each period. Totals count
+-- attempts, not plans: a plan made while an earlier attempt is still open does not
+-- start its own attempt, the open attempt keeps the first plan's 4-hour clock, and
+-- a plan after the window expires starts a new attempt (Mixpanel's totals re-entry;
+-- matches lib/verify/funnel-engine.js evaluateFunnel with countMode totals, reentry).
+CREATE OR REPLACE TEMP TABLE loop_seq AS
+SELECT uid, t, event = 'workout planned' AS is_plan, row_number() OVER (PARTITION BY uid ORDER BY t, event DESC) AS rn
+FROM ev WHERE event IN ('workout planned', 'workout completed')
+ AND t >= TIMESTAMP '2026-08-25' AND t <= TIMESTAMP '2026-09-22 04:00:00';
+CREATE OR REPLACE TEMP TABLE loop_attempts AS
+WITH RECURSIVE r(uid, rn, open_start, started_at, converted_from) AS (
+ SELECT uid, rn, CASE WHEN is_plan THEN t END, CASE WHEN is_plan THEN t END, NULL::TIMESTAMP FROM loop_seq WHERE rn = 1
+ UNION ALL
+ SELECT s.uid, s.rn,
+  CASE WHEN s.is_plan THEN (CASE WHEN r.open_start IS NULL OR s.t > r.open_start + INTERVAL 4 HOUR THEN s.t ELSE r.open_start END)
+       ELSE (CASE WHEN r.open_start IS NOT NULL AND s.t <= r.open_start + INTERVAL 4 HOUR THEN NULL ELSE r.open_start END) END,
+  CASE WHEN s.is_plan AND (r.open_start IS NULL OR s.t > r.open_start + INTERVAL 4 HOUR) THEN s.t END,
+  CASE WHEN NOT s.is_plan AND r.open_start IS NOT NULL AND s.t <= r.open_start + INTERVAL 4 HOUR THEN r.open_start END
+ FROM r JOIN loop_seq s ON s.uid = r.uid AND s.rn = r.rn + 1)
+SELECT * FROM r;
+WITH a AS (SELECT started_at AS t0, false AS conv FROM loop_attempts WHERE started_at IS NOT NULL
+  UNION ALL SELECT converted_from, true FROM loop_attempts WHERE converted_from IS NOT NULL)
+SELECT CASE WHEN t0 >= TIMESTAMP '2026-09-08' THEN '2 Fall Reset Sep 8-21' ELSE '1 before Aug 25 - Sep 7' END AS period,
+ count(*) FILTER (WHERE NOT conv) AS attempts, count(*) FILTER (WHERE conv) AS conversions,
+ round(count(*) FILTER (WHERE conv)::DOUBLE / count(*) FILTER (WHERE NOT conv), 4) AS funnel_conversion
+FROM a WHERE t0 < TIMESTAMP '2026-09-22' GROUP BY 1 ORDER BY 1;
+-- plan pairing (raw export): each plan with the member's next completion, within
+-- 4 h and within 1 day. It reads about 1 point higher than the funnel, because the
+-- funnel keeps the first plan's clock when a member plans twice.
 SELECT prog, count(*) AS planned, round(avg(done_4h::INT), 4) AS follow_through_4h, round(avg(done_1d::INT), 4) AS follow_through_1d
 FROM follow_through GROUP BY 1 ORDER BY 1;
 
@@ -789,6 +849,14 @@ SELECT 'long-time free members (trial used) who bought Plus in the window (share
  (WITH lt AS (SELECT distinct_id::VARCHAR AS uid FROM users WHERE NOT trial_eligible),
   pf AS (SELECT DISTINCT uid FROM ev WHERE uid IN (SELECT uid FROM lt) AND subscription_tier = 'free')
   SELECT round(count(DISTINCT e.uid)::DOUBLE / (SELECT count(*) FROM pf), 4) FROM ev e WHERE e.event = 'subscription purchased' AND e.uid IN (SELECT uid FROM pf));
+-- account deactivations: per day by period, and the busiest full week (deactivations
+-- are not the churn measure: most members who stop using the app never deactivate)
+SELECT CASE WHEN t < TIMESTAMP '2026-09-01' THEN '1 Jun 4 - Aug 31' ELSE '2 Sep 1 - Oct 1' END AS period,
+ count(*) AS deactivations, round(count(*)::DOUBLE / count(DISTINCT t::DATE), 2) AS per_day
+FROM ev WHERE event = 'account deactivated' GROUP BY 1 ORDER BY 1;
+SELECT date_trunc('week', t)::DATE AS week, count(*) AS deactivations, round(count(*) / 7.0, 2) AS per_day
+FROM ev WHERE event = 'account deactivated' AND t >= TIMESTAMP '2026-06-08' AND t < TIMESTAMP '2026-09-28'
+GROUP BY 1 ORDER BY deactivations DESC LIMIT 3;
 -- activity level by week (Monday weeks; Jun 1 and Sep 28 weeks are partial): weekly
 -- active members (Active action) and per-day workouts and app opens, split by
 -- members who joined before Jun 4 and members who joined in the window. The June
