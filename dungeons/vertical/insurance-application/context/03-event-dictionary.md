@@ -7,7 +7,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 | Property | Meaning |
 |---|---|
 | `time` | When the event happened (UTC). |
-| `user_id` | The customer's ID. Missing on anonymous quote events (see Identity in 00-manifest.md). |
+| `user_id` | The customer's ID. Missing on anonymous quote events and the experiment exposure (see Identity in 00-manifest.md). |
 | `device_id` | The device (browser or app install). Present on website and app events, including anonymous quote events. Missing on back-office events. |
 | `insert_id` | Unique event ID used for de-duplication. |
 | `platform` | `web` (computer browser), `ios` (iPhone or iPad app), `android` (Android app), or `server` (back-office systems: policy administration, billing, claims). |
@@ -21,7 +21,7 @@ A shopper goes through these once. The first two events (and the experiment expo
 | Event | Meaning | Properties |
 |---|---|---|
 | `quote started` | A shopper starts a quote. Anonymous (device only). | `product_line` (`auto`, `home`, `renters`); `acquisition_channel` (`search_ads`, `comparison_site`, `social_ads`, `organic`, `referral`); `quote_flow` (`standard` or `express`, see 02-timeline.md). |
-| `$experiment_started` | Mixpanel experiment exposure for the Express Quote test, sent one second before `quote started` for shoppers who started on or after 2026-07-08. Carries the shopper's `device_id`; for shoppers who later created an account it also carries their `user_id`. | `Experiment name` = `Express Quote`; `Variant name` = `Control` or `Express Quote`. |
+| `$experiment_started` | Mixpanel experiment exposure for the Express Quote test, sent one second before `quote started` for shoppers who started on or after 2026-07-08. Carries only the shopper's `device_id` (no `user_id`): Mixpanel attaches it to the customer when `account created` links the device; raw exports need that join done by hand. | `Experiment name` = `Express Quote`; `Variant name` = `Control` or `Express Quote`. |
 | `quote completed` | The shopper answers every question and sees a price. Anonymous (device only). | `product_line`; `acquisition_channel`; `quote_flow`; `coverage_tier` (`basic`, `standard`, `premium`); `quoted_premium_monthly` (USD per month); `shopping_reason` (`switching`, `life_change`, `first_policy`). |
 | `account created` | The shopper creates an account, to save the quote or to buy it. This is the moment the device is linked to the new `user_id`. Comes a few minutes after `quote completed`. | `signup_method` (`email`, `google`, `apple`); `acquisition_channel`; `product_line`. |
 | `policy purchased` | A new policy is issued (sent by the policy administration system; `platform = server`). | `policy_id`; `product_line`; `coverage_tier`; `premium_monthly`; `term_months` (6 for auto, 12 for homeowners and renters); `term_premium_usd` (premium for the whole term); `payment_plan` (`monthly`, `paid_in_full`); `autopay` (true/false); `transaction_type` = `new_business`; `acquisition_channel`; `shopping_reason`. |

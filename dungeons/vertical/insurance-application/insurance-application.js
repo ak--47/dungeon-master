@@ -62,11 +62,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * IDENTITY: shoppers are anonymous while they quote. quote started and quote
  * completed carry device_id only; account created (isAuthEvent) carries
  * user_id + device_id and stitches the quote device to the customer.
- * $experiment_started (exposed shoppers, 1 s before quote started) carries the
- * quote device_id, plus user_id for shoppers who later create an account (the
- * engine stamps it); for shoppers who never sign up the hook keeps it
- * device-only. A shopper who never creates an account (or whose account would
- * land after the window end) stays a device-only visitor and has no profile
+ * $experiment_started (exposed shoppers, 1 s before quote started) is
+ * pre-auth, so it carries the quote device_id only; Mixpanel joins it to the
+ * customer when account created stitches that device. A shopper who never
+ * creates an account (or whose account would land after the window end) stays
+ * a device-only visitor and has no profile
  * (_drop). Existing customers are identified throughout; a person with no
  * events in the window (policies cancelled before June 4, or no activity at
  * all) has no profile either, so profiles = identified people with events.
@@ -691,7 +691,6 @@ function handleEverything(events, meta) {
 		}
 		if (!saves) {
 			// anonymous shopper who never signs up: device-only quote events, no profile
-			if (ex) delete ex.user_id;
 			for (const e of shop) { e.platform = platformOf(e.os); }
 			return shop;
 		}

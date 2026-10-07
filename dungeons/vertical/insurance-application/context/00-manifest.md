@@ -29,7 +29,7 @@ This folder is the internal analytics wiki for **Shieldstone Insurance**, a dire
 ## Identity notes
 
 - **Shoppers are anonymous while they quote.** `quote started` and `quote completed` carry only the shopper's `device_id`. If the shopper creates an account, `account created` carries both the new `user_id` and that `device_id`, and Mixpanel merges the earlier quote events into the customer. A shopper who never creates an account stays an anonymous device in Mixpanel and has no user profile.
-- `$experiment_started` (the Express Quote test) carries the shopper's `device_id`; for shoppers who later created an account it also carries their `user_id`.
+- `$experiment_started` (the Express Quote test) is sent before the shopper has an account, so it carries only the shopper's `device_id`, never a `user_id`. Mixpanel joins the exposure to the customer when `account created` links that device. An outside warehouse or export that reads the raw events must join `device_id` to `user_id` itself (through the `account created` event) to attach exposures to customers.
 - Customers who joined before June 4 are identified on every event.
 - Website and app events carry `user_id` and `device_id`. Many customers use more than one device (often a computer and a phone). `platform` is `web` for computers (Windows, macOS, Linux), `ios` for iPhone and iPad, and `android` for Android devices.
 - Back-office events carry `user_id` only, with no device, and `platform = server`: `policy purchased`, `renewal offered`, `policy renewed`, `policy cancelled`, `claim settled`, payments and payment failures from autopay, and the first payment of a new policy (taken at purchase). Other payments a customer makes by hand come from the website or app and carry a device.
