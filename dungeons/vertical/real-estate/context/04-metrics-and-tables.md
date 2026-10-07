@@ -32,7 +32,7 @@ In the warehouse, numeric columns are loaded as FLOAT64 (shown as FLOAT below). 
 
 ### `marketing_spend_daily`
 
-Daily paid acquisition cost by channel, from the ad platforms' billing exports. Part of each day's spend is a daily budget the platform paces through the day, following the weekly rhythm of signups with a floor on quieter days; the rest is bid-based and rises and falls with the signups the platform delivers that day.
+Daily paid acquisition cost by channel, from the ad platforms' billing exports. Spend is billed daily against each channel's budget; daily amounts vary with delivery.
 
 | Column | Type | Unit | Meaning |
 |---|---|---|---|

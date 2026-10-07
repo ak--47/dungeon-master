@@ -31,7 +31,7 @@ The company has about 270 people: about 190 licensed buyer agents (24 per market
 - **Home market** (`home_market`): the metro the shopper is searching in. Dallas is the largest; Raleigh is the smallest.
 - **Budget** (`budget_max_usd`): the maximum price the shopper set in their search preferences.
 - **Platforms:** about half of activity comes from laptops and desktops on the website; the rest comes from phones and tablets (iOS and Android). Most shoppers use more than one device.
-- **Established vs new shoppers.** About 53% of the shoppers active in the window created their account before June 4. New accounts arrive steadily, about 265 a week.
+- **Established vs new shoppers.** About 54% of the shoppers active in the window created their account before June 4. New accounts arrive steadily, about 260 a week.
 
 ## Markets at a glance
 

@@ -10,7 +10,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 | `user_id` | The shopper's account ID. Present on every event after signup; absent on anonymous browsing before signup. |
 | `device_id` | The device that sent the event. Present on events sent from the website or apps; absent on server-side events (see each section). |
 | `insert_id` | Unique event ID used for de-duplication. |
-| `session_id` | Diagnostic session tag from the tracking pipeline. Mixpanel computes its own sessions; do not use this for session analysis. |
+| `session_id` | Diagnostic session tag from the tracking pipeline, on events sent from a device (server-side events have none). Mixpanel computes its own sessions; do not use this for session analysis. |
 | `os`, `model`, `browser`, `screen_height`, `screen_width`, `carrier`, `radio` | Device details from the SDK, on events sent from a device. `os` is `Windows`, `macOS`, `Linux` (and other desktop Linux names), `iOS`, `iPadOS`, or `Android`. |
 
 ## Listing facts

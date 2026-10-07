@@ -271,10 +271,11 @@ oc AS (SELECT uid, listing_id, max((event = 'offer accepted')::INT) AS acc FROM 
 SELECT o.*, oc.acc FROM o JOIN oc USING (uid, listing_id);
 
 -- EVAL Q13 (null): does the way a shopper contacts the agent change tour conversion?
+-- Per agent contact (same listing), tour requested within 7 days (the lead-response funnel window), contacts through Sep 23
 CREATE OR REPLACE TEMP TABLE chats AS
 WITH c AS (SELECT uid, listing_id, t AS t0, contact_method, market FROM ev WHERE event = 'agent contacted' AND t < TIMESTAMP '2026-09-23 23:59:59'),
 q AS (SELECT uid, listing_id, min(t) AS t1 FROM ev WHERE event = 'tour requested' GROUP BY 1, 2)
-SELECT c.*, coalesce(q.t1 >= c.t0 AND q.t1 < c.t0 + INTERVAL 8 DAY, false) AS toured
+SELECT c.*, coalesce(q.t1 >= c.t0 AND q.t1 < c.t0 + INTERVAL 7 DAY, false) AS toured
 FROM c LEFT JOIN q ON q.uid = c.uid AND q.listing_id = c.listing_id;
 WITH g AS (SELECT contact_method, count(*) AS n, sum(toured::INT) AS k FROM chats GROUP BY 1),
 tot AS (SELECT sum(k)::DOUBLE / sum(n) AS p FROM g)
