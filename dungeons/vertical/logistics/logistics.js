@@ -19,7 +19,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             Live ETA launches 2026-07-21; the "Instant Book" test (one-click
  *             booking at the quoted price for dry van) starts 2026-08-11;
  *             Hurricane Odessa hits the Gulf Coast 2026-09-14 to 09-18.
- * SCALE:      10,000 shipper users (≈4,400 sign up inside the window; ≈37% of
+ * SCALE:      10,000 shipper users (≈4,400 sign up inside the window; ≈38% of
  *             those are never approved for credit and leave), ~0.82M events,
  *             ≈52,000 loads booked, 120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  quote requested → load booked → carrier assigned → pickup
@@ -78,8 +78,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   time from the lane miles (≈520 mi/day; half of weekend delivery appointments
  *   move to Monday or Tuesday), lateness (H7), tracking views, tickets (H1), accessorials
  *   (H9), and an invoice paid on a business day by tier terms (median
- *   19/27/38 days). Shipper-side moments (tracking views, tickets) fall in US
- *   business hours when the load's timing allows. Engine unit events are reused; extra quotes and
+ *   19/27/38 days). Shipper-side moments (tracking views, tickets) follow the
+ *   weekly and daily soup when the load's timing allows; a negotiated booking
+ *   that would land overnight is mostly confirmed when the shipper's day
+ *   starts. Carrier coverage runs around the clock (night desk, carrier app),
+ *   so carrier assigned peaks in the US evening. Engine unit events are reused; extra quotes and
  *   steps are clones of the shipper's own unit templates. Unused unit events
  *   are dropped. Every step of a load shares shipment_id.
  * - Window start: established shippers have loads in flight. Each gets
@@ -103,9 +106,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   and billing events for loads already booked still arrive.
  * - Warehouse drift: load_margin_daily drops 0-8% of a day's loads as
  *   cancellations and moves billed revenue ±20% a day (rebills, fuel true-ups,
- *   short pays); spot_market_rates_daily posts follow the season of Routewise's
- *   own quote flow with ±30% day noise plus a base; paid_marketing_daily is a
- *   half paced budget (weekday shape, never zero) and half bid x the day's
+ *   short pays); spot_market_rates_daily posts are a national baseline
+ *   (load-board weekday shape, holidays, season, storm, ±8% day noise) that
+ *   does not scale with Routewise's volume; paid_marketing_daily is a
+ *   half a budget paced to the channel's target cost per signup over the
+ *   window (target-CPA bidding; weekday shape, never zero) and half bid x the day's
  *   delivered signups, with seeded day noise.
  * - Legacy activity mode (no retentionCurve): each shipper's events spread
  *   evenly over their active window.
@@ -140,8 +145,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *     spot_market_rates_daily; external-table join)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: quote price = spot benchmark x (1 + spread); booking probability
- *   falls smoothly with spread: 42% for quotes within 5% of market, 14% for
- *   quotes more than 15% over market (0.333x).
+ *   falls smoothly with spread: 42% for quotes at or below 5% over market
+ *   (below-market quotes included), 14% for quotes more than 15% over market
+ *   (0.333x).
  * MIXPANEL: Funnels, quote requested → load booked, Totals, hold shipment_id
  *   constant, 7-day window; spread needs quoted_rate_per_mile joined to
  *   spot_market_rates_daily.spot_rate_per_mile on date + equipment_type.
@@ -212,7 +218,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   independently of activity); those under 3 keep half their quote sessions,
  *   so they book 0.5x the loads; no further gain past 3 (5+ vs 3-4 = 1.0).
  * MIXPANEL: Insights, A = load booked (total), B = credit approved (uniques),
- *   formula A / B, filter customer_since ≥ 2026-06-04, breakdown company_tier
+ *   formula A / B, filter customer_since 2026-06-04 to 2026-09-17 (setup
+ *   window closed in the data), breakdown company_tier
  *   then saved_lanes (< 3, 3-4, 5+). Read the plateau within company_tier:
  *   the pooled 5+ vs 3-4 ratio carries tier-mix noise.
  * REAL WORLD: shippers who set up their recurring lanes have recurring freight.
@@ -228,32 +235,32 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-logistics, 2026-10-07, full
- * fidelity, 10,000 shippers, 822,398 events, 51,917 loads booked in window)
+ * fidelity, 10,000 shippers, 823,990 events, 51,852 loads booked in window)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                        | Derivation              | Expected | Measured
  * -----|-----------------------------------------------|-------------------------|----------|---------
- * H1   | tracking tickets / pickup, after/before       | LIVE_ETA_KEEP           | 0.40     | 0.400 (14.7% → 5.9%)
- * H1   | booking-change + billing tickets / load       | unchanged (control)     | 1.00     | 1.037
+ * H1   | tracking tickets / pickup, after/before       | LIVE_ETA_KEEP           | 0.40     | 0.390 (15.7% → 6.1%)
+ * H1   | booking-change + billing tickets / load       | unchanged (control)     | 1.00     | 0.999
  * H1   | eta_notification views before launch          | exact purity            | 0        | 0
- * H2   | 7-day booking, >15% over / within 5% of market| 0.14 / 0.42             | 0.333    | 0.333 (14.6% vs 43.7%)
- * H3   | dry van 7-day booking, variant / control      | INSTANT_BOOK_MULT       | 1.30     | 1.302 (39.6% vs 30.4%)
- * H3   | instant share of variant dry van bookings     | INSTANT_SHARE           | 0.80     | 0.797
+ * H2   | 7-day booking, >15% over / at or below 5% over| 0.14 / 0.42             | 0.333    | 0.328 (14.3% vs 43.6%)
+ * H3   | dry van 7-day booking, variant / control      | INSTANT_BOOK_MULT       | 1.30     | 1.293 (39.7% vs 30.7%)
+ * H3   | instant share of variant dry van bookings     | INSTANT_SHARE           | 0.80     | 0.804
  * H3   | instant bookings outside variant/dry van/test | exact purity            | 0        | 0
- * H3   | warehouse margin %, instant / negotiated      | 0.09 / 0.155            | 0.581    | 0.583 (8.6% vs 14.7%)
- * H3   | variant share of exposed shippers             | equal 2-arm hash        | 0.50     | 0.488 (3,315 of 6,799)
- * H4   | median hours to cover, reefer / dry van       | COVER_MULT.reefer       | 1.60     | 1.611 (4.79 vs 2.97 h)
- * H4   | median hours to cover, flatbed / dry van      | COVER_MULT.flatbed      | 2.20     | 2.254 (6.70 h)
- * H5   | retention ≥ d14, late first / on-time first   | 1 − LATE_FIRST_CHURN (≤, ceiling 0.75) | 0.50 | 0.422 (33.2% vs 78.8%)
- * H6   | spend per signup, Google / LinkedIn           | 55 / 110                | 0.50     | 0.509 ($56.20 vs $110.42)
- * H6   | 7-day credit approval, Google / others        | 36 / 72                 | 0.50     | 0.501 (36.0% vs 71.8%)
- * H6   | spend per approved shipper, Google / LinkedIn | (55 / 0.5) / 110        | 1.00     | 1.019 ($156.26 vs $153.32)
- * H7   | late share, Gulf lanes picked up Sep 14-18    | STORM_LATE_RATE         | 0.70     | 0.719
- * H7   | late share, every other load                  | BASE_LATE_RATE          | 0.18     | 0.186
+ * H3   | warehouse margin %, instant / negotiated      | 0.09 / 0.155            | 0.581    | 0.581 (8.6% vs 14.7%)
+ * H3   | variant share of exposed shippers             | equal 2-arm hash        | 0.50     | 0.505 (3,386 of 6,707)
+ * H4   | median hours to cover, reefer / dry van       | COVER_MULT.reefer       | 1.60     | 1.605 (4.79 vs 2.98 h)
+ * H4   | median hours to cover, flatbed / dry van      | COVER_MULT.flatbed      | 2.20     | 2.224 (6.63 h)
+ * H5   | retention ≥ d14, late first / on-time first   | 1 − LATE_FIRST_CHURN (≤, ceiling 0.75) | 0.50 | 0.480 (37.9% vs 78.9%)
+ * H6   | spend per signup, Google / LinkedIn           | 55 / 110                | 0.50     | 0.499 ($55.05 vs $110.36)
+ * H6   | 7-day credit approval, Google / others        | 36 / 72                 | 0.50     | 0.498 (35.8% vs 71.9%)
+ * H6   | spend per approved shipper, Google / LinkedIn | (55 / 0.5) / 110        | 1.00     | 1.001 ($153.65 vs $153.57)
+ * H7   | late share, Gulf lanes picked up Sep 14-18    | STORM_LATE_RATE         | 0.70     | 0.701
+ * H7   | late share, every other load                  | BASE_LATE_RATE          | 0.18     | 0.182
  * H7   | flatbed spot rate, storm days / 2 weeks before| 1 + STORM_RATE_BUMP     | 1.16     | 1.164
- * H8   | loads per approved new shipper, <3 / 3+ lanes (within tier) | LOW_LANE_KEEP | 0.50 | 0.504 (pooled 1.81 vs 3.69)
- * H8   | loads per approved new shipper, 5+ / 3-4 (within tier)      | plateau       | 1.00 | 0.971
- * H9   | detention share, appointment / none           | APPT_DETENTION_MULT     | 0.40     | 0.406 (8.8% vs 21.7%)
- * H9   | lumper share, appointment / none              | unchanged (control)     | 1.00     | 0.974
+ * H8   | loads per approved new shipper, <3 / 3+ lanes (within tier) | LOW_LANE_KEEP | 0.50 | 0.490 (pooled 2.00 vs 4.10)
+ * H8   | loads per approved new shipper, 5+ / 3-4 (within tier)      | plateau       | 1.00 | 0.967
+ * H9   | detention share, appointment / none           | APPT_DETENTION_MULT     | 0.40     | 0.402 (8.9% vs 22.2%)
+ * H9   | lumper share, appointment / none              | unchanged (control)     | 1.00     | 0.987
  * ═════════════════════════════════════════════════════════════════════════
  *
  * Noise and confounding notes: H5 rests on 256 new shippers whose first
@@ -262,15 +269,16 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * is less often the first to arrive when several loads move at once, so
  * late-first shippers lean toward single-load shippers, who return less
  * anyway). Its assertion uses the knob as target with a half-effect ceiling
- * and grades STRONG on this run (0.42). H8 takes both ratios within company
- * tier (tier drives volume, lane counts are independent of it); the pooled
- * ratios carry tier-mix noise (pooled <3 / 3+ = 0.489, 5+ / 3-4 = 1.013). The
- * exposed-shipper split is 48.8% Instant Book (sample-ratio z = −2.0): it
- * follows which shippers quoted dry van after Aug 11 (pre-test dry van booking
- * 30.7% Control vs 30.1% Instant Book), not the treatment. Quote-to-book by
- * company tier is not engineered (31.8% / 31.7% / 32.0%, |z| ≤ 0.8), nor is
- * reefer/flatbed booking by Instant Book arm (30.9% vs 31.0%, z = 0.2), nor
- * on-time delivery by dock appointment (79.1% vs 79.1%).
+ * (NAILED on this run at 0.48; STRONG when noise pushes it past ±10%). H8 takes
+ * both ratios within company tier (tier drives volume, lane counts are
+ * independent of it) for new shippers who signed up by Sep 17 (their 14-day
+ * lane setup ended in the data); the pooled ratios carry tier-mix noise
+ * (pooled <3 / 3+ = 0.487, 5+ / 3-4 = 0.961). The exposed-shipper split is
+ * 50.5% Instant Book (sample-ratio z = 0.8; pre-test dry van booking 30.4%
+ * Control vs 30.1% Instant Book). Quote-to-book by company tier is not
+ * engineered (31.7% / 31.9% / 31.7%, |z| ≤ 0.6), nor is reefer/flatbed booking
+ * by Instant Book arm (30.5% vs 30.4%, z = −0.2), nor on-time delivery by dock
+ * appointment (79.8% vs 79.3%, z = 1.4).
  */
 
 // ── SCALE ──
@@ -317,7 +325,7 @@ const SPREAD_MEAN = 0.08;
 const SPREAD_SD = 0.07;
 const SPREAD_MIN = -0.08;
 const SPREAD_MAX = 0.35;
-const COMPETITIVE_MAX = 0.05;       // spread ≤ 5% over market: "at market"
+const COMPETITIVE_MAX = 0.05;       // spread ≤ 5% over market (below market included): "at or below 5% over market"
 const EXPENSIVE_MIN = 0.15;         // spread > 15% over market: "expensive"
 const BOOK_RATE_COMPETITIVE = 0.42; // average booking rate of at-market quotes (the knob)
 const BOOK_RATE_EXPENSIVE = 0.14;   // average booking rate of expensive quotes (the knob)
@@ -371,10 +379,6 @@ const GOOGLE_APPROVAL_MULT = 0.5;
 const APPROVAL_TTC_H = 2;            // engine onboarding window (short so applications near the window end survive); the hook times the decision
 const APPROVAL_MEDIAN_H = 3;         // credit decision after the application (log-normal, 0.5-30 h)
 const BORN_PCT = 45;
-const DAILY_BUDGET_USD = Object.fromEntries(PAID_CHANNELS.map((ch) => {
-	const totalW = Object.values(CHANNEL_WEIGHTS).reduce((a, b) => a + b, 0);
-	return [ch, CPL_USD[ch] * (NUM_USERS * BORN_PCT / 100) * (CHANNEL_WEIGHTS[ch] / totalW) / WINDOW_DAYS];
-}));
 const SPEND_FLAT_SHARE = 0.3;
 const SPEND_WEEKDAY = (() => {
 	const m = DOW_WEIGHTS.reduce((a, b) => a + b, 0) / DOW_WEIGHTS.length;
@@ -482,20 +486,29 @@ const businessTime = (t, addDays) => {
 	return d0 + chance.integer({ min: 13 * 60, max: 22 * 60 }) * MIN_MS + chance.integer({ min: 0, max: 59 }) * 1000;
 };
 
-// US business hours in UTC (8 am ET to 6 pm PT), weekdays
-const isBusinessHour = (t) => {
+// a shipper-side moment between lo and hi, following the weekly and daily
+// rhythm (rejection sampling on the soup weights)
+const SOUP_PEAK = Math.max(...DOW_WEIGHTS) * Math.max(...HOUR_WEIGHTS);
+const soupWeight = (t) => {
 	const d = new Date(t);
-	const dow = d.getUTCDay(), h = d.getUTCHours();
-	return dow >= 1 && dow <= 5 && (h >= 13 || h === 0);
+	return DOW_WEIGHTS[d.getUTCDay()] * HOUR_WEIGHTS[d.getUTCHours()] / SOUP_PEAK;
 };
-// a shipper-side moment between lo and hi, preferring weekday business hours
 const shipperTime = (lo, hi) => {
 	let t = lo;
-	for (let i = 0; i < 8; i++) {
+	for (let i = 0; i < 12; i++) {
 		t = lo + Math.floor((hi - lo) * chance.floating({ min: 0, max: 1 }));
-		if (isBusinessHour(t)) return t;
+		if (chance.floating({ min: 0, max: 1 }) < soupWeight(t)) return t;
 	}
 	return t;
+};
+// a negotiated booking that would land overnight (01:00-12:59 UTC) stays there
+// only as often as the hour's soup weight (West Coast evenings, early starts);
+// the rest are confirmed when the shipper's day starts, later the same UTC day
+const confirmTime = (t) => {
+	const h = new Date(t).getUTCHours();
+	if (h < 1 || h > 12 || chance.floating({ min: 0, max: 1 }) < HOUR_WEIGHTS[h]) return t;
+	const d0 = ms(`${dayKey(t)}T00:00:00Z`);
+	return shipperTime(d0 + 13 * HOUR_MS, d0 + 24 * HOUR_MS - 1);
 };
 
 // spot market benchmark (third-party index) by day and equipment: drift, produce
@@ -508,10 +521,28 @@ function marketRate(key, equip) {
 	if (sd >= -1 && sd < 12) r *= 1 + STORM_RATE_BUMP[equip] * (sd < 5 ? 1 : (12 - sd) / 7) * (sd < 0 ? 0.4 : 1);
 	return round3(r * jitter(`mkt|${key}|${equip}`, 0.025));
 }
+// national load-board posts by day and equipment (third-party index)
+const NATIONAL_POSTS = { dry_van: 31_000, reefer: 12_500, flatbed: 9_800 }; // average weekday
+const POSTS_DOW = [0.34, 1.18, 1.08, 1.02, 0.98, 0.9, 0.3];               // load boards: Monday-heavy, quiet weekends
+const STORM_POSTS_BUMP = { dry_van: 0.1, reefer: 0.08, flatbed: 0.22 };   // relief and rebuild freight
+function nationalLoadPosts(key, equip) {
+	const d = dayIndex(key);
+	const dt = new Date(`${key}T00:00:00Z`);
+	let p = NATIONAL_POSTS[equip] * POSTS_DOW[dt.getUTCDay()];
+	if (HOLIDAYS.includes(key)) p *= 0.35;
+	if (equip === "reefer") p *= 1 + 0.12 * Math.max(0, 1 - d / 50);       // produce season into early summer
+	if (equip === "flatbed") p *= 1 - 0.1 * Math.min(1, Math.max(0, (d - 60) / 60)); // construction season tapers
+	if (dt.getUTCDate() >= 25 && dt.getUTCMonth() === 8) p *= 1.06;        // quarter-end push
+	const sd = (ms(`${key}T00:00:00Z`) - ms(STORM_START)) / DAY_MS;
+	if (sd >= 0 && sd < 12) p *= 1 + STORM_POSTS_BUMP[equip] * (sd < 5 ? 1 : (12 - sd) / 7);
+	return p;
+}
 const dieselPrice = (key) => round3((3.71 + 0.0028 * dayIndex(key)) * jitter(`diesel|${key}`, 0.006));
 const inStorm = (t) => t >= ms(STORM_START) && t < ms(STORM_END);
 const liveEtaKeep = (t) => (t < ms(LIVE_ETA_LAUNCH) ? 1 : 1 - (1 - LIVE_ETA_KEEP) * Math.min(1, (t - ms(LIVE_ETA_LAUNCH)) / (LIVE_ETA_RAMP_DAYS * DAY_MS)));
-const paidSpend = (date, ch, signups) => round2((SPEND_PLAN_SHARE * DAILY_BUDGET_USD[ch] * SPEND_WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()]
+// dailyBudget: the channel's paced budget (target cost per signup x the
+// signups it delivers over the window / days), shaped by weekday
+const paidSpend = (date, ch, signups, dailyBudget) => round2((SPEND_PLAN_SHARE * dailyBudget * SPEND_WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()]
 	+ (1 - SPEND_PLAN_SHARE) * CPL_USD[ch] * signups) * jitter(`spend|${date}|${ch}`, SPEND_NOISE));
 const drawSpread = () => {
 	for (let i = 0; i < 20; i++) {
@@ -685,9 +716,9 @@ function handleEverything(events, meta) {
 		// H2: booking probability from the spread over the spot market
 		const booked = chance.bool({ likelihood: Math.min(95, bookRate(spread) * (isVar ? INSTANT_BOOK_MULT : 1) * 100) });
 		const instant = isVar && chance.bool({ likelihood: INSTANT_SHARE * 100 });
-		const tb = t + (instant
-			? Math.max(20_000, Math.floor(INSTANT_MEDIAN_MIN * MIN_MS * logNormal(0.6)))
-			: Math.floor(Math.min(72, NEGOTIATE_MEDIAN_H * logNormal(1.0)) * HOUR_MS));
+		const tb = instant
+			? t + Math.max(20_000, Math.floor(INSTANT_MEDIAN_MIN * MIN_MS * logNormal(0.6)))
+			: confirmTime(t + Math.floor(Math.min(72, NEGOTIATE_MEDIAN_H * logNormal(1.0)) * HOUR_MS));
 		const appt = chance.bool({ likelihood: APPT_RATE[tier] * 100 });
 		// H4: coverage time by equipment
 		const coverH = COVER_MEDIAN_H * COVER_MULT[equip] * logNormal(COVER_SIGMA);
@@ -798,7 +829,7 @@ function handleEverything(events, meta) {
 	const laneEvents = portal.filter((e) => e.event === "lane saved");
 	if (born) {
 		const t0 = T(signup);
-		const winEnd = Math.min(t0 + LANE_SETUP_DAYS * DAY_MS, cut, END + 1);
+		const winEnd = Math.min(t0 + LANE_SETUP_DAYS * DAY_MS, cut);
 		const template = laneEvents.find((e) => e !== onboardLane) || onboardLane;
 		const inWin = laneEvents.filter((e) => T(e) >= t0 && T(e) < winEnd).sort((a, b) => T(a) - T(b));
 		const lanes = inWin.slice(0, laneTarget);
@@ -809,14 +840,18 @@ function handleEverything(events, meta) {
 				: t0 + Math.floor(chance.floating({ min: 0.02, max: 0.98 }) * (winEnd - t0));
 			lanes.push(cloneEvent(template, { time: iso(Math.min(t, winEnd - 1)) }));
 		}
-		kept = kept.concat(lanes);
-		profile.saved_lanes = lanes.length;
+		// the profile counts the lanes saved by the export (a shipper who joined
+		// in the last two weeks may still be saving lanes)
+		const inData = lanes.filter((e) => T(e) <= END);
+		kept = kept.concat(inData);
+		profile.saved_lanes = inData.length;
 	} else if (recentJoinT !== null) {
-		// joined just before the window: the first lanes, spread over their first 14 days
+		// joined just before the window: the onboarding lane at join (before the
+		// window), the rest spread over their first 14 days, as for new shippers
 		const template = laneEvents[0];
 		const lanes = [];
 		for (let i = 0; template && i < laneTarget; i++) {
-			const t = shipperTime(recentJoinT, recentJoinT + LANE_SETUP_DAYS * DAY_MS);
+			const t = i === 0 ? recentJoinT : shipperTime(recentJoinT, recentJoinT + LANE_SETUP_DAYS * DAY_MS);
 			if (t >= BEGIN && t < cut) lanes.push(cloneEvent(template, { time: iso(t) }));
 		}
 		kept = kept.concat(lanes);
@@ -868,10 +903,11 @@ function handleFunnelPre(funnel, meta) {
 function handleWarehouse(row, meta) {
 	if (meta.isBackfill) return row;
 	if (meta.metricName === "spot_market_rates_daily") {
-		// industry load-board posts follow the season of our own quote flow but run
-		// their own course; truck posts follow from the market's load-to-truck ratio
+		// national load-board posts: the industry's own weekday shape, holidays,
+		// season, and the storm, with day noise (independent of Routewise's volume);
+		// truck posts follow from the market's load-to-truck ratio
 		const k = `${row.date}|${row.equipment_type}`;
-		const posts = Math.round(row.market_load_posts * 38 * jitter(`posts|${k}`, 0.3) + 1500 * jitter(`posts0|${k}`, 0.8));
+		const posts = Math.round(nationalLoadPosts(row.date, row.equipment_type) * jitter(`posts|${k}`, 0.08));
 		const base = { dry_van: 3.1, reefer: 5.4, flatbed: 9.2 }[row.equipment_type] ?? 4;
 		const tight = row.spot_rate_per_mile / (BASE_RATE_PER_MILE[row.equipment_type] ?? 2.2);
 		const ratio = round2(base * Math.pow(tight, 3) * jitter(`ltr|${k}`, 0.08));
@@ -901,7 +937,13 @@ function handleWarehouse(row, meta) {
 	}
 	if (meta.metricName === "paid_marketing_daily") {
 		const k = `${row.date}|${row.acquisition_channel}`;
-		const spend = paidSpend(row.date, row.acquisition_channel, row.spend_usd);
+		// target-CPA bidding: the platform paces the channel's budget to its target
+		// cost per signup over the window (window signups per channel are tallied
+		// by the onboarding funnel-pre hook)
+		const tally = approvalTally.get(meta.config);
+		if (!tally) throw new Error("paid_marketing_daily: no signup tally for this run (funnel-pre hook did not run)");
+		const dailyBudget = CPL_USD[row.acquisition_channel] * (tally.get(row.acquisition_channel) ?? 0) / WINDOW_DAYS;
+		const spend = paidSpend(row.date, row.acquisition_channel, row.spend_usd, dailyBudget);
 		row.spend_usd = spend;
 		row.leads_reported = Math.round(spend * PLATFORM_LEAD_INFLATION / CPL_USD[row.acquisition_channel] * jitter(`lead|${k}`, 0.2));
 		row.clicks = Math.round(spend / (CPC_USD[row.acquisition_channel] * jitter(`cpc|${k}`, 0.15)));
@@ -1307,6 +1349,7 @@ const DETENTION_READ_END = "2026-09-15 00:00:00"; // H9: loads booked by Sep 14 
 const RET_FROM = 14;                 // H5 read: return on or after day 14 after the first delivery
 const RET_BIRTH_END = TS(dayjs.utc(DATASET_END).subtract(RET_FROM, "day").toISOString());
 const ACTIVE_EVENTS = ["quote requested", "load booked", "shipment tracked", "support ticket created", "dashboard viewed", "rate lookup", "document downloaded", "report exported", "lane saved"];
+const LANE_READ_END = TS(dayjs.utc(DATASET_END).subtract(LANE_SETUP_DAYS, "day").toISOString()); // H8: signups whose 14-day lane setup ends in the data
 const STORM_PRE_FROM = TS(dayjs.utc(STORM_START).subtract(14, "day").toISOString());
 
 const H1_SQL = `WITH ${ID_CTE},
@@ -1383,9 +1426,10 @@ FROM x GROUP BY 1`;
 // per-tier ratios by the tier's share of approved new shippers
 const H8_SQL = `WITH ${ID_CTE},
 a AS (SELECT DISTINCT uid FROM ev WHERE event = 'credit approved'),
+s AS (SELECT DISTINCT uid FROM ev WHERE event = 'account created' AND t < TIMESTAMP '${LANE_READ_END}'),
 n AS (SELECT a.uid, count(e.uid) AS loads FROM a LEFT JOIN ev e ON e.uid = a.uid AND e.event = 'load booked' GROUP BY 1),
 u AS (SELECT distinct_id::VARCHAR AS uid, saved_lanes, company_tier FROM ${US}),
-x AS (SELECT u.company_tier AS tier, u.saved_lanes AS k, n.loads FROM n JOIN u ON u.uid = n.uid),
+x AS (SELECT u.company_tier AS tier, u.saved_lanes AS k, n.loads FROM n JOIN u ON u.uid = n.uid WHERE n.uid IN (SELECT uid FROM s)),
 t AS (SELECT tier, count(*) AS users,
   avg(loads) FILTER (WHERE k < ${LANE_THRESHOLD}) AS m_lo, avg(loads) FILTER (WHERE k >= ${LANE_THRESHOLD}) AS m_hi,
   avg(loads) FILTER (WHERE k BETWEEN ${LANE_THRESHOLD} AND 4) AS m_mid, avg(loads) FILTER (WHERE k >= 5) AS m_top,
@@ -1441,8 +1485,8 @@ SELECT 'all' AS grp, count(DISTINCT uid) AS user_count, count(*) FILTER (WHERE v
 		id: "H2-price-vs-market",
 		hook: "H2",
 		archetype: "external-join",
-		narrative: `Shippers book quotes that are priced near the spot market. Each quote is the day's spot benchmark for its equipment (warehouse spot_market_rates_daily.spot_rate_per_mile) times (1 + spread), with spread drawn per quote (mean ${SPREAD_MEAN * 100}%, sd ${SPREAD_SD * 100}%, ${SPREAD_MIN * 100}% to ${SPREAD_MAX * 100}%). The chance a quote books falls smoothly with spread (logistic centered at ${BOOK_CURVE_CENTER * 100}%, scale ${BOOK_CURVE_SCALE * 100} points), solved so that quotes within ${COMPETITIVE_MAX * 100}% of market book ${BOOK_RATE_COMPETITIVE * 100}% of the time and quotes more than ${EXPENSIVE_MIN * 100}% over market book ${BOOK_RATE_EXPENSIVE * 100}% of the time (ratio ${(BOOK_RATE_EXPENSIVE / BOOK_RATE_COMPETITIVE).toFixed(3)}). The spread is not on the event: it needs the warehouse join on date and equipment. Read: per quote (shipment_id), booked within ${BOOK_WINDOW_DAYS} days, quotes through ${QUOTE_READ_END.slice(0, 10)}. Instant Book multiplies booking for some dry van quotes after ${D(INSTANT_BOOK_START)} at every spread, so the ratio holds.`,
-		mixpanelReport: { type: "Funnels + warehouse", steps: ["quote requested", "load booked"], counting: "totals", holdPropertyConstant: "shipment_id", window: `${BOOK_WINDOW_DAYS} days`, join: "spot_market_rates_daily.spot_rate_per_mile on date + equipment_type; spread = quoted_rate_per_mile / spot_rate_per_mile - 1", breakdown: "spread buckets ≤ 5%, 5-15%, > 15%" },
+		narrative: `Shippers book quotes that are priced near the spot market. Each quote is the day's spot benchmark for its equipment (warehouse spot_market_rates_daily.spot_rate_per_mile) times (1 + spread), with spread drawn per quote (mean ${SPREAD_MEAN * 100}%, sd ${SPREAD_SD * 100}%, ${SPREAD_MIN * 100}% to ${SPREAD_MAX * 100}%). The chance a quote books falls smoothly with spread (logistic centered at ${BOOK_CURVE_CENTER * 100}%, scale ${BOOK_CURVE_SCALE * 100} points), solved so that quotes at or below ${COMPETITIVE_MAX * 100}% over market (below-market quotes included) book ${BOOK_RATE_COMPETITIVE * 100}% of the time and quotes more than ${EXPENSIVE_MIN * 100}% over market book ${BOOK_RATE_EXPENSIVE * 100}% of the time (ratio ${(BOOK_RATE_EXPENSIVE / BOOK_RATE_COMPETITIVE).toFixed(3)}). The spread is not on the event: it needs the warehouse join on date and equipment. Read: per quote (shipment_id), booked within ${BOOK_WINDOW_DAYS} days, quotes through ${QUOTE_READ_END.slice(0, 10)}. Instant Book multiplies booking for some dry van quotes after ${D(INSTANT_BOOK_START)} at every spread, so the ratio holds.`,
+		mixpanelReport: { type: "Funnels + warehouse", steps: ["quote requested", "load booked"], counting: "totals", holdPropertyConstant: "shipment_id", window: `${BOOK_WINDOW_DAYS} days`, join: "spot_market_rates_daily.spot_rate_per_mile on date + equipment_type; spread = quoted_rate_per_mile / spot_rate_per_mile - 1", breakdown: "spread buckets: at or below 5% over market (spread ≤ 0.05, below market included), 5-15% over, more than 15% over" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H2_SQL },
@@ -1514,7 +1558,7 @@ FROM ev WHERE event = '$experiment_started'`,
 		hook: "H4",
 		archetype: "funnel-ttc-by-segment",
 		narrative: `Carrier coverage (load booked → carrier assigned) takes longer for specialized equipment: the gap is log-normal with median ${COVER_MEDIAN_H} h for dry van, ${COVER_MULT.reefer}x for reefer and ${COVER_MULT.flatbed}x for flatbed (sigma ${COVER_SIGMA}). Every step of a load shares shipment_id. Read: median hours from booking to carrier assigned per load, by the booking's equipment_type.`,
-		mixpanelReport: { type: "Funnels", steps: ["load booked", "carrier assigned"], counting: "totals", holdPropertyConstant: "shipment_id", window: "30 days (dungeon default)", measure: "median time to convert", breakdown: "equipment_type" },
+		mixpanelReport: { type: "Funnels", steps: ["load booked", "carrier assigned"], counting: "totals", holdPropertyConstant: "shipment_id", window: "30 days (Mixpanel default)", measure: "median time to convert", breakdown: "equipment_type" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H4_SQL },
@@ -1549,7 +1593,7 @@ FROM ev WHERE event = '$experiment_started'`,
 		id: "H6-paid-channel-economics",
 		hook: "H6",
 		archetype: "external-join",
-		narrative: `Google Ads is Routewise's cheapest paid channel per signup and its weakest at credit approval. Warehouse paid_marketing_daily: each day ${SPEND_PLAN_SHARE * 100}% of spend is a paced budget (cost per signup x expected signups per day, weekday shape above a ${SPEND_FLAT_SHARE * 100}% flat floor) and ${(1 - SPEND_PLAN_SHARE) * 100}% is bid x that day's delivered signups, with seeded ±${SPEND_NOISE * 100}% day noise: $${CPL_USD.google_ads} Google, $${CPL_USD.linkedin_ads} LinkedIn, $${CPL_USD.trade_media} trade media per Mixpanel signup over the window. Google signups are approved for credit (account created → credit approved within 7 days) at ${GOOGLE_APPROVAL_MULT}x the rate of every other channel (${Math.round(APPROVAL_CONV * GOOGLE_APPROVAL_MULT)}% vs ${APPROVAL_CONV}%; two declared first funnels with acquisition_channel conditions), so spend per approved shipper is level between Google and LinkedIn: (${CPL_USD.google_ads} / ${GOOGLE_APPROVAL_MULT}) / ${CPL_USD.linkedin_ads} = ${(CPL_USD.google_ads / GOOGLE_APPROVAL_MULT / CPL_USD.linkedin_ads).toFixed(2)}.`,
+		narrative: `Google Ads is Routewise's cheapest paid channel per signup and its weakest at credit approval. Warehouse paid_marketing_daily: each day ${SPEND_PLAN_SHARE * 100}% of spend is a budget paced to the channel's target cost per signup over the window (target-CPA bidding: cost per signup x the channel's window signups / days, weekday shape above a ${SPEND_FLAT_SHARE * 100}% flat floor) and ${(1 - SPEND_PLAN_SHARE) * 100}% is bid x that day's delivered signups, with seeded ±${SPEND_NOISE * 100}% day noise: $${CPL_USD.google_ads} Google, $${CPL_USD.linkedin_ads} LinkedIn, $${CPL_USD.trade_media} trade media per Mixpanel signup over the window. Google signups are approved for credit (account created → credit approved within 7 days) at ${GOOGLE_APPROVAL_MULT}x the rate of every other channel (${Math.round(APPROVAL_CONV * GOOGLE_APPROVAL_MULT)}% vs ${APPROVAL_CONV}%; two declared first funnels with acquisition_channel conditions), so spend per approved shipper is level between Google and LinkedIn: (${CPL_USD.google_ads} / ${GOOGLE_APPROVAL_MULT}) / ${CPL_USD.linkedin_ads} = ${(CPL_USD.google_ads / GOOGLE_APPROVAL_MULT / CPL_USD.linkedin_ads).toFixed(2)}.`,
 		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "paid_marketing_daily.spend_usd", funnel: "account created → credit approved, 7-day window, breakdown acquisition_channel" },
 		assertions: [
 			{
@@ -1608,8 +1652,8 @@ FROM ${WH("spot_market_rates_daily")} WHERE equipment_type = 'flatbed'`,
 		id: "H8-saved-lanes-threshold",
 		hook: "H8",
 		archetype: "cohort-count-scale",
-		narrative: `New shippers who save at least ${LANE_THRESHOLD} lanes in their first ${LANE_SETUP_DAYS} days (the onboarding lane included) ship twice as much. Each new shipper's lane count is drawn independently of activity (0-7, ${LANE_COUNT_WEIGHTS[0] + LANE_COUNT_WEIGHTS[1] + LANE_COUNT_WEIGHTS[2]}% under ${LANE_THRESHOLD}); shippers under ${LANE_THRESHOLD} keep ${LOW_LANE_KEEP * 100}% of their quote sessions (quotes and the loads behind them). There is no extra gain past ${LANE_THRESHOLD}. New shippers save lanes only in their first ${LANE_SETUP_DAYS} days, so the profile property saved_lanes equals that count. Read: loads booked per credit-approved new shipper by saved_lanes: under ${LANE_THRESHOLD} vs ${LANE_THRESHOLD}+ (${LOW_LANE_KEEP}), and 5+ vs 3-4 (1.0, the plateau). Company tier drives volume (enterprise users ship several times what small businesses do) while lane counts are independent of tier, so both ratios are taken within each tier and weighted by the tier's share of approved new shippers; the pooled ratios carry the tier-mix noise of buckets of 600-1,400 shippers.`,
-		mixpanelReport: { type: "Insights", events: ["load booked (total)", "credit approved (uniques)"], formula: "A / B", filter: "user property customer_since on or after 2026-06-04 (new shippers)", breakdown: "user property company_tier, then saved_lanes (buckets < 3, 3-4, 5+)" },
+		narrative: `New shippers who save at least ${LANE_THRESHOLD} lanes in their first ${LANE_SETUP_DAYS} days (the onboarding lane included) ship twice as much. Each new shipper's lane count is drawn independently of activity (0-7, ${LANE_COUNT_WEIGHTS[0] + LANE_COUNT_WEIGHTS[1] + LANE_COUNT_WEIGHTS[2]}% under ${LANE_THRESHOLD}); shippers under ${LANE_THRESHOLD} keep ${LOW_LANE_KEEP * 100}% of their quote sessions (quotes and the loads behind them). There is no extra gain past ${LANE_THRESHOLD}. New shippers save lanes only in their first ${LANE_SETUP_DAYS} days, so the profile property saved_lanes equals that count once the ${LANE_SETUP_DAYS} days are over (shippers who joined in the last ${LANE_SETUP_DAYS} days may still be saving lanes, so the read takes signups through ${LANE_READ_END.slice(0, 10)}). Read: loads booked per credit-approved new shipper by saved_lanes: under ${LANE_THRESHOLD} vs ${LANE_THRESHOLD}+ (${LOW_LANE_KEEP}), and 5+ vs 3-4 (1.0, the plateau). Company tier drives volume (enterprise users ship several times what small businesses do) while lane counts are independent of tier, so both ratios are taken within each tier and weighted by the tier's share of approved new shippers; the pooled ratios carry the tier-mix noise of buckets of 600-1,400 shippers.`,
+		mixpanelReport: { type: "Insights", events: ["load booked (total)", "credit approved (uniques)"], formula: "A / B", filter: `user property customer_since from ${D(DATASET_START)} through ${LANE_READ_END.slice(0, 10)} (new shippers whose ${LANE_SETUP_DAYS}-day lane setup ended in the data)`, breakdown: "user property company_tier, then saved_lanes (buckets < 3, 3-4, 5+)" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H8_SQL },
@@ -1631,7 +1675,7 @@ FROM ${WH("spot_market_rates_daily")} WHERE equipment_type = 'flatbed'`,
 		hook: "H9",
 		archetype: "cohort-prop-scale",
 		narrative: `Loads booked with a dock appointment (load booked appointment_scheduled = true) are charged detention ${APPT_DETENTION_MULT}x as often: ${DETENTION_RATE * 100}% of loads without an appointment get a detention charge (accessorial charged, charge_type = detention) vs ${Math.round(DETENTION_RATE * APPT_DETENTION_MULT * 1000) / 10}% with one. Appointment use varies by tier (enterprise ${APPT_RATE.enterprise * 100}%, mid-market ${APPT_RATE.mid_market * 100}%, small business ${APPT_RATE.small_business * 100}%), but detention depends only on the appointment, so the ratio holds in every tier. Lumper fees (${LUMPER_RATE * 100}% of loads) do not depend on appointments (control). Read: per load booked through ${DETENTION_READ_END.slice(0, 10)}, share with a detention charge, appointment vs not.`,
-		mixpanelReport: { type: "Funnels", steps: ["load booked", "accessorial charged (charge_type = detention)"], counting: "totals", holdPropertyConstant: "shipment_id", window: "30 days (dungeon default)", breakdown: "appointment_scheduled (step 1)" },
+		mixpanelReport: { type: "Funnels", steps: ["load booked", "accessorial charged (charge_type = detention)"], counting: "totals", holdPropertyConstant: "shipment_id", window: "30 days (Mixpanel default)", breakdown: "appointment_scheduled (step 1)" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H9_SQL },

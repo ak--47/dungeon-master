@@ -115,7 +115,7 @@ SELECT count(*) FILTER (WHERE view_source = 'eta_notification' AND t < TIMESTAMP
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H2-price-vs-market — booking rate by spread over the spot benchmark (warehouse join)
 -- ─────────────────────────────────────────────────────────────────────────
-SELECT CASE WHEN spread <= 0.05 THEN '1 within 5% of market' WHEN spread > 0.15 THEN '3 more than 15% over' ELSE '2 5-15% over' END AS spread_bucket,
+SELECT CASE WHEN spread <= 0.05 THEN '1 at or below 5% over market' WHEN spread > 0.15 THEN '3 more than 15% over' ELSE '2 5-15% over' END AS spread_bucket,
  count(*) AS quotes, round(avg(booked_7d::INT), 4) AS book_rate_7d
 FROM quotes WHERE t_quote < TIMESTAMP '2026-09-24 23:59:59' GROUP BY 1 ORDER BY 1;
 
@@ -189,9 +189,12 @@ FROM wh_market GROUP BY 1 ORDER BY 1;
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H8-saved-lanes-threshold — new shippers under 3 saved lanes book 0.5x the loads
 -- ─────────────────────────────────────────────────────────────────────────
+-- credit-approved new shippers who signed up by 2026-09-17, so their 14-day
+-- lane setup ended inside the data (saved_lanes is final)
 CREATE OR REPLACE TEMP TABLE approved_new AS
 SELECT a.uid, p.saved_lanes, count(e.uid) AS loads
 FROM (SELECT DISTINCT uid FROM ev WHERE event = 'credit approved') a JOIN prof p ON p.uid = a.uid
+JOIN signups s ON s.uid = a.uid AND s.t0 < TIMESTAMP '2026-09-17 23:59:59'
 LEFT JOIN ev e ON e.uid = a.uid AND e.event = 'load booked' GROUP BY 1, 2;
 
 SELECT CASE WHEN saved_lanes < 3 THEN '1 under 3' WHEN saved_lanes <= 4 THEN '2 3-4' ELSE '3 5+' END AS saved_lanes_bucket,

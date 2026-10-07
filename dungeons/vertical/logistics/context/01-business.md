@@ -4,13 +4,13 @@
 
 Routewise Freight is a digital truckload broker founded in 2019 and based in Chicago. Shippers come to Routewise to move full truckloads; Routewise does not own trucks. It matches each booked load with a carrier from a network of about 14,000 vetted trucking companies, tracks the load, and bills the shipper. The company has about 210 employees: carrier sales and operations, shipper account management, a pricing desk, customer support, engineering, and marketing.
 
-In the summer of 2026 Routewise moves roughly 11,000 to 15,000 loads a month, with gross billings of about $33-46 million a month. Routewise earns the difference between what the shipper pays and what the carrier is paid (gross margin). Historically that margin has been about 15% of billings.
+In the summer of 2026 Routewise moves roughly 11,000 to 15,000 loads a month, with gross billings of about $31-46 million a month. Routewise earns the difference between what the shipper pays and what the carrier is paid (gross margin). Historically that margin has been about 15% of billings.
 
 ## How a load moves through Routewise
 
 1. **Quote.** A shipper user enters a lane (origin and destination region), equipment, weight, and the desired pickup timing in the portal. Routewise returns a price for the whole load. The pricing desk sets quote prices from the day's spot market benchmark plus a margin, so quotes for the same lane can sit closer to or further from the market. Shippers often price several loads in one sitting.
 2. **Book.** If the shipper accepts, they book the load. Most bookings follow a short negotiation with the shipper's Routewise rep (by chat, email, or phone), so a booking can come minutes, hours, or a day or two after the quote. When booking, the shipper can schedule a dock appointment for pickup.
-3. **Cover.** Routewise's carrier sales team finds a carrier and assigns the load ("covering" it).
+3. **Cover.** Routewise's carrier sales team finds a carrier and assigns the load ("covering" it). Coverage does not stop at 5 pm: a night desk and carriers who accept loads in the Routewise Carrier app keep covering loads into the night.
 4. **Pick up.** The carrier picks up the load on a business day one to three days after booking.
 5. **In transit.** The shipper follows the load in the portal or from a tracking link. Carriers report exceptions (mechanical problems, weather, missed appointments, and others).
 6. **Deliver.** The carrier delivers the load. Routewise records whether it arrived on time against the delivery appointment.

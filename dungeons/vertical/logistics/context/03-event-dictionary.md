@@ -44,7 +44,7 @@ Every shipment has a `shipment_id`, created with the quote. Every later step of 
 |---|---|---|---|
 | `quote requested` | portal | The shipper prices a load. | `shipment_id`; `equipment_type` (`dry_van`, `reefer`, `flatbed`); `origin_region`; `destination_region`; `lane_miles`; `weight_lbs`; `quoted_rate_per_mile` (USD per mile); `quoted_total_usd` (the price for the load); `pickup_lead_days` (1-3: business days from booking to the requested pickup). |
 | `load booked` | portal | The shipper books the quoted load at the quoted price. | `shipment_id`; `equipment_type`; `origin_region`; `destination_region`; `lane_miles`; `customer_rate_usd` (the linehaul price the shipper pays, before accessorials); `booking_method` (`negotiated`: booked through the usual flow with a rep; `instant`: one-click Instant Book, see 02-timeline.md); `appointment_scheduled` (true when the shipper booked a pickup dock appointment). |
-| `carrier assigned` | back office | Routewise's carrier sales team covers the load with a carrier. | `shipment_id`; `equipment_type`; `carrier_tier` (`preferred`, `standard`, `new_partner`). |
+| `carrier assigned` | back office | Routewise's carrier sales team covers the load with a carrier. Coverage runs around the clock: the night desk and carriers accepting loads in the Routewise Carrier app keep covering loads after the US business day. | `shipment_id`; `equipment_type`; `carrier_tier` (`preferred`, `standard`, `new_partner`). |
 | `pickup confirmed` | back office | The carrier confirms pickup. | `shipment_id`; `equipment_type`; `origin_region`; `destination_region`. |
 | `shipment tracked` | portal | The shipper opens a load's tracking page while it is in transit. | `shipment_id`; `view_source` (`portal`: from the portal; `tracking_link`: from a shared link; `eta_notification`: from a Live ETA email or text, from 2026-07-21). |
 | `delivery exception` | back office | The carrier reports a problem in transit. | `shipment_id`; `exception_type` (`weather_delay`, `mechanical`, `missed_appointment`, `traffic`, `consignee_closed`, `damage`, `shortage`); `delay_hours` (expected delay; 0 for damage or shortage). |
@@ -82,8 +82,8 @@ Every shipment has a `shipment_id`, created with the quote. Every later step of 
 | `saved_lanes` | Number of lanes the user has saved. |
 | `Experiment: Instant Book` | `Control` or `Instant Book` for users exposed in the test; empty for everyone else. |
 | `created` | Signup time for users who joined in the window (the time of their `account created` event); empty for established customers. |
-| `_persona` | Account segment from the CRM (`enterprise_shipper`, `mid_market_shipper`, `small_business_shipper`). |
-| `anonymousIds`, `sessionIds` | Devices and sessions seen for the user (pipeline metadata). |
+| `anonymousIds` | The `device_id` values seen for the user (pipeline metadata). |
+| `sessionIds` | Pipeline metadata; empty on every profile. |
 
 ## Funnels the business tracks
 
