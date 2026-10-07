@@ -8,7 +8,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 |---|---|
 | `time` | When the event happened (UTC). |
 | `user_id` | The member's ID. Missing on guest browsing before signup (see 00-manifest.md, Identity notes). |
-| `device_id` | The member's phone. Present on app events. Missing on server-side events (`offer accepted`, `offer declined`, `order shipped`, `order delivered`, `item sold`) and on the first search and listing view right after signup. |
+| `device_id` | The member's phone. Present on app events. Missing on server-side events (`offer accepted`, `offer declined`, `order shipped`, `order delivered`, `item sold`) and often on the search and listing view right after signup. |
 | `insert_id` | Unique event ID used for de-duplication. |
 | `platform` | `ios` (iPhone or iPad) or `android`. Fixed per member. |
 | `region` | The member's region (`south`, `west`, `midwest`, `northeast`). Fixed per member. |
@@ -46,7 +46,7 @@ Buyer events about a listing carry the listing's attributes, so you can break do
 
 | Event | Meaning | Properties |
 |---|---|---|
-| `offer made` | The buyer sends an offer below the asking price. | `offer_id` (shared by the offer and its answer); `listing_id`; `category`; `asking_price`; `offer_amount` (US dollars); `offer_pct_of_ask`: the offer as a whole-number percentage of the asking price (for example 80 means 80% of the asking price); `seller_type`. |
+| `offer made` | The buyer sends an offer below the asking price. | `offer_id` (shared by the offer and its answer); `listing_id`; `category`; `asking_price`; `offer_amount` (US dollars); `offer_pct_of_ask`: the offer as a whole-number percentage of the asking price (for example 65 means 65% of the asking price); `seller_type`. |
 | `offer accepted` | The seller accepts the offer. Sent by the server to the buyer's stream. | `offer_id`, `listing_id`, `category`, `offer_amount`, `offer_pct_of_ask`; `hours_to_response`: hours from the offer to the answer. |
 | `offer declined` | The seller declines the offer (or it expires). Sent by the server. | Same as `offer accepted`. |
 

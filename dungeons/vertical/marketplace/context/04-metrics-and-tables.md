@@ -14,7 +14,7 @@ All KPIs use UTC days and count people by unique `user_id` after identity merge.
 | Sell-through | Per listing (hold `listing_id` constant), the share of `listing created` events followed by `item sold` within 30 days. Count only listings created at least 30 days before the end of the data. |
 | Time to sell | Per sold listing, days from `listing created` to `item sold` (`days_to_sell` on the sale). Report the median, for listings sold within 30 days. |
 | Listings per seller | `listing created` events per seller per day (or week), split by `account_type`. Compare the same group of sellers across periods; sellers who join mid-period add listings as they arrive. |
-| Delivery time | `delivery_days` on `order delivered`: days from purchase to delivery. An order is **late** when it took more than 7 days. |
+| Delivery time | `delivery_days` on `order delivered`: days from purchase to delivery. Report the median and the spread; sellers are asked to ship within 3 business days, and carrier transit adds a few days on top. |
 | Repeat purchase | Of buyers with a starting event on day 0 (for example their first purchase in the period), the share with another `purchase completed` within the next 30 days. Count only buyers whose 30 days end inside the data. In Mixpanel Retention this needs custom brackets. |
 | Dispute rate | `dispute opened` per `order delivered`. Allow a few days after delivery before reading recent weeks. |
 | Active buyer | A member with `listing viewed` or `search performed` in the period. Server-side order events do not count as activity. |

@@ -16,7 +16,7 @@ Tradepost makes money from **selling fees** (a percentage of each sale's item pr
 
 ## How selling works
 
-- **List.** A seller creates a listing with photos (1 to 12), a category, a condition, an asking price, and a package size (small, medium, or large) that sets the prepaid label. The app's listing tips suggest a full set of clear photos.
+- **List.** A seller creates a listing with photos (1 to 12), a category, a condition, an asking price, and a package size (small, medium, or large) that sets the prepaid label.
 - **Price drops.** Sellers can lower the price at any time.
 - **Sell and ship.** When an item sells, the seller prints the shipping label and ships it. The seller is paid when the buyer confirms delivery or three days after delivery.
 
@@ -71,5 +71,5 @@ The three paid channels run on daily budgets plus automated bidding toward app i
 3. **Efficient acquisition.** Finance wants cost per new buyer by paid channel, not just cost per signup.
 4. **Better offers.** The marketplace team wants guidance for buyers on what offers sellers accept.
 5. **Faster selling.** Seller success wants to know what makes listings sell, and how fast each category moves.
-6. **Delivery and trust.** Member support sees complaints about slow deliveries and wants to know what late orders cost the business.
+6. **Delivery and trust.** Member support wants to understand how delivery speed affects buyers.
 7. **Reliable payments.** After a rough week in September, the payments team wants to know what the processor problems cost.

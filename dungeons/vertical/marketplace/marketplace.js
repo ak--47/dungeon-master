@@ -69,8 +69,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * IDENTITY: guests browse before they sign up; those steps carry device_id
  * only. "account created" (isAuthEvent) carries user_id and device_id, so
  * Mixpanel stitches the guest steps to the member. One phone per member
- * (avgDevicePerUser 1). The two Signup steps after account created carry
- * user_id only; server-side events (offer accepted / declined, order shipped,
+ * (avgDevicePerUser 1). The Signup steps after account created often carry
+ * user_id only (the engine drops a repeated Signup listing view half the
+ * time); server-side events (offer accepted / declined, order shipped,
  * order delivered, item sold) carry user_id only; every other event carries
  * both. About 330 people never finish signing up: they keep up to 3 days of
  * anonymous browsing (device_id only) and their profiles have no identified
@@ -126,7 +127,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: from 2026-07-22 members split 50/50 at checkout. The variant
  *   completes 1.15x as many checkouts (64% base) and halves checkout time
- *   (median 4 → 2 min). Exposure 1 s before each checkout.
+ *   (median 4 → 2 min). Exposure 1 s before each checkout. Members the
+ *   engine exposed through Buy Now keep the engine arm; members whose
+ *   checkouts all come from accepted offers get a salted 50/50 arm, so every
+ *   member who checks out after the start is in the test.
  * MIXPANEL: Funnels, checkout started → purchase completed, Totals, hold
  *   order_id constant, 1-day window, Jul 22-Sep 30, breakdown
  *   "Experiment: Express Checkout"; median time to convert. Or Experiments.
@@ -225,27 +229,27 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-marketplace, 2026-10-07,
- * full fidelity, 10,000 people, 753,792 events)
+ * full fidelity, 10,000 people, 754,353 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation            | Expected | Measured
  * -----|------------------------------------------------|-----------------------|----------|---------
  * H1   | listings/day, established casual vs Pro (DiD)  | CASUAL_LISTING_KEEP   | 0.75     | 0.750 (casual 72.3 → 53.9/day; Pro 217.0 → 215.6)
  * H1   | casual:Pro odds of listings viewed, after/before | CASUAL_LISTING_KEEP | 0.75     | 0.736 (0.335 → 0.247)
  * H1   | ledger take_rate casual, after/before          | 12.9 / 10             | 1.29     | 1.290
- * H2   | checkout conversion, variant/control           | EXPRESS_CONV_MULT     | 1.15     | 1.149 (72.5% vs 63.1%)
- * H2   | median checkout minutes, variant/control       | EXPRESS_TIME_MULT     | 0.50     | 0.517 (2.05 vs 3.97 min)
- * H2   | variant share of exposed members               | equal 2-arm hash      | 0.50     | 0.498
+ * H2   | checkout conversion, variant/control           | EXPRESS_CONV_MULT     | 1.15     | 1.148 (72.5% vs 63.1%)
+ * H2   | median checkout minutes, variant/control       | EXPRESS_TIME_MULT     | 0.50     | 0.515 (2.05 vs 3.98 min)
+ * H2   | variant share of exposed members               | equal 2-arm hash      | 0.50     | 0.497
  * H2   | exposures before start or off-arm              | exact purity          | 0        | 0
  * H3   | acceptance, offers 80%+ / below 80%            | logistic x offer mix  | 3.03     | 3.096 (63.2% vs 20.4%)
  * H4   | 30-day sell-through, 1-2 photos / 5+           | PHOTO_SELL_KEEP(1)    | 0.50     | 0.496 (24.7% vs 49.9%)
  * H4   | 30-day sell-through, 3-4 photos / 5+           | PHOTO_SELL_KEEP(3)    | 0.80     | 0.787 (39.2% vs 49.9%)
  * H5   | 30-day repurchase, late / on-time first delivery | 1 − TRUST_LOSS      | 0.55     | 0.537 (31.5% vs 58.6%)
- * H6   | card / other conversion, incident / ±14 d      | 1 − CARD_FAIL         | 0.60     | 0.615 (card 43.4% vs 70.1%)
+ * H6   | card / other conversion, incident / ±14 d      | 1 − CARD_FAIL         | 0.60     | 0.614 (card 43.4% vs 70.2%)
  * H6   | warehouse card approval_rate, degraded/normal  | 1 − CARD_FAIL         | 0.60     | 0.599
  * H7   | spend per signup, Google / TikTok              | 12 / 6                | 2.00     | 2.021 ($12.41 vs $6.14)
- * H7   | 14-day activation, Google / TikTok             | 0.9 / 0.4             | 2.25     | 2.182 (69.6% vs 31.9%)
- * H7   | spend per activated buyer, Google / TikTok     | 2.0 / 2.25            | 0.889    | 0.926 ($17.83 vs $19.25)
- * H8   | high/low-ticket conversion, after/before (DiD) | GUARANTEE_MULT        | 1.25     | 1.276 (54.9% → 70.1% vs 67.6% → 67.7%)
+ * H7   | 14-day activation, Google / TikTok             | 0.9 / 0.4             | 2.25     | 2.177 (69.7% vs 32.0%)
+ * H7   | spend per activated buyer, Google / TikTok     | 2.0 / 2.25            | 0.889    | 0.928 ($17.80 vs $19.18)
+ * H8   | high/low-ticket conversion, after/before (DiD) | GUARANTEE_MULT        | 1.25     | 1.275 (54.9% → 70.1% vs 67.6% → 67.8%)
  * H9   | median days to sell, electronics / base        | CAT_SELL_TTC          | 0.50     | 0.493 (2.95 vs 5.98 d)
  * H9   | median days to sell, collectibles / base       | CAT_SELL_TTC          | 1.60     | 1.572 (9.39 d)
  * H10  | electronics share of listing views, BTS/before | 2w / (2w + 1 − w) / w | 1.695    | 1.692 (18.0% → 30.4%)
@@ -510,7 +514,12 @@ function handleEverything(events, meta) {
 		// a unit with no anchor step left: its listing views read as browsing; the rest is dropped
 		else for (const e of evs) if (e.event === "listing viewed" || e.event === "item saved") browseViews.push(e);
 	}
-	const variant = (exposures.length && profile[EXP_KEY] !== undefined) ? profile[EXP_KEY] : null;
+	// Express Checkout arm: the engine's arm for members it exposed through Buy Now;
+	// members whose checkouts all come from accepted offers get a salted 50/50 arm,
+	// so every member who checks out after the start is in the test
+	const variant = (exposures.length && profile[EXP_KEY] !== undefined)
+		? profile[EXP_KEY]
+		: (salt(uid, "express-arm") < 0.5 ? "Control" : EXPRESS_VARIANT);
 
 	// ── browsing: listing attributes follow the season and the supply mix ──
 	const browse = [...other, ...browseViews].sort(byT);
@@ -740,18 +749,25 @@ function handleEverything(events, meta) {
 	}
 
 	// ── experiment exposure: one per checkout after the test starts, 1 s before it ──
+	// Offer-only members have no engine exposure to reuse: their exposure is a clone
+	// of the checkout it precedes, stripped to the exposure's own columns.
+	const exposureFromCheckout = (c, t) => {
+		const ex = cloneEvent(c, { time: iso(t) });
+		for (const k of ["listing_id", "category", "order_id", "item_price", "seller_type", "payment_method", "purchase_type"]) delete ex[k];
+		ex.event = "$experiment_started";
+		return ex;
+	};
 	const exposed = [];
-	if (variant !== null && exposures.length) {
-		checkouts.sort(byT).forEach((c, i) => {
-			const t = T(c) - 1000;
-			const ex = exposures[i] || cloneEvent(exposures[0], { time: iso(t) });
-			ex.time = iso(t);
-			ex["Experiment name"] = EXPRESS_EXPERIMENT;
-			ex["Variant name"] = variant;
-			exposed.push(ex);
-		});
-	}
-	if (!exposed.length && profile[EXP_KEY] !== undefined) delete profile[EXP_KEY];
+	checkouts.sort(byT).forEach((c, i) => {
+		const t = T(c) - 1000;
+		const ex = exposures[i] || (exposures.length ? cloneEvent(exposures[0], { time: iso(t) }) : exposureFromCheckout(c, t));
+		ex.time = iso(t);
+		ex["Experiment name"] = EXPRESS_EXPERIMENT;
+		ex["Variant name"] = variant;
+		exposed.push(ex);
+	});
+	if (exposed.length) profile[EXP_KEY] = variant;
+	else if (profile[EXP_KEY] !== undefined) delete profile[EXP_KEY];
 
 	const final = browseOut.concat(out, exposed).filter((e) => T(e) >= BEGIN && T(e) <= END);
 	for (const e of final) {

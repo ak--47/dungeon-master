@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Tradepost**, a peer-to-peer res
 
 - **Product:** the Tradepost iOS and Android apps. Buyers browse and search listings, save items, buy now or make an offer, check out, and receive the item by mail; afterwards they can leave a review or open a dispute. Sellers list items, drop prices, sell, and print a prepaid shipping label.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early June through the end of September and the first day of October.
-- **Scale:** about 10,000 people have activity in the window. About 4,640 of them signed up during the window; the rest joined before June 4. About 330 more people started signing up but never finished (see Identity notes). The project holds about 750,000 events. About 70% of members only buy; about 2,150 are casual sellers and about 770 are Tradepost Pro sellers.
+- **Scale:** about 10,000 people have activity in the window. About 4,640 of them signed up during the window and about 5,000 joined before June 4. The remaining 330 or so started signing up but never finished (see Identity notes); they are part of the 10,000. The project holds about 750,000 events. About 70% of members only buy; about 2,150 are casual sellers and about 770 are Tradepost Pro sellers.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. Members are in the United States, so a US evening falls after midnight UTC.
 
 ## The other files
@@ -29,7 +29,7 @@ This folder is the internal analytics wiki for **Tradepost**, a peer-to-peer res
 
 - Guests can browse Tradepost before they sign up. Guest events (`home feed viewed`, `listing viewed`, `search performed`) carry only the `device_id` of the phone.
 - `account created` is each new member's signup. It carries both `user_id` and `device_id`, so Mixpanel links the guest browsing on that phone to the new member.
-- The two events right after signup (the first search and listing view) carry `user_id` only. Server-side events (`offer accepted`, `offer declined`, `order shipped`, `order delivered`, `item sold`) also carry `user_id` only. Every other member event carries both ids.
+- The search and listing view right after signup often carry `user_id` only. Server-side events (`offer accepted`, `offer declined`, `order shipped`, `order delivered`, `item sold`) also carry `user_id` only. Every other member event carries both ids.
 - Each member uses one phone: an iPhone, an iPad, or an Android phone. `platform` is `ios` for iPhone and iPad (`os` = `iOS` or `iPadOS`) and `android` for Android phones.
 - About 330 people started signing up but never finished. Their few days of guest browsing stay anonymous (device id only). Their records in the raw user export carry `_drop: true` and are not loaded into Mixpanel as profiles.
 - Members who joined before June 4 have no `account created` event in this window; their `member_since` profile date is before the window. For members who joined in the window, `member_since` is their signup date.
