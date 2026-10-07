@@ -65,4 +65,41 @@ describe.sequential('world-event clones re-draw event properties', () => {
 		// made ~1/3 of in-window rows exact copies of another row.
 		expect(duplicates / rows).toBeLessThan(0.1);
 	});
+	// 1.9.0: clone times follow the soup hour and weekday weights inside the
+	// window. They were uniform, so a 4x world event flattened the hour shape of
+	// the affected event inside its window.
+	test('clone times follow the soup weights', async () => {
+		const HW = [0.95, 0.95, 0.9, 0.8, 0.65, 0.5, 0.38, 0.3, 0.28, 0.3, 0.36, 0.42,
+			0.5, 0.56, 0.62, 0.68, 0.74, 0.82, 0.9, 0.95, 1.0, 1.0, 0.98, 0.96];
+		const DW = [1.0, 0.5, 0.4, 0.4, 0.45, 0.7, 0.95];
+		const r = await DUNGEON_MASTER({
+			...config(),
+			soup: { hourOfDayWeights: HW, dayOfWeekWeights: DW },
+			// 28-day window (4 whole weeks) from 2026-06-21.
+			worldEvents: [{ name: 'challenge', startDay: 20, duration: 28, volumeMultiplier: 4, affectsEvents: ['workout completed'] }],
+		});
+		const windowStart = Date.parse('2026-06-21T00:00:00Z');
+		const windowEnd = windowStart + 28 * 86400000;
+		const hours = new Array(24).fill(0);
+		const days = new Array(7).fill(0);
+		for (const e of r.eventData) {
+			if (e.event !== 'workout completed') continue;
+			const t = Date.parse(e.time);
+			if (t < windowStart || t >= windowEnd) continue;
+			hours[new Date(t).getUTCHours()]++;
+			days[new Date(t).getUTCDay()]++;
+		}
+		const corr = (a, b) => {
+			const ma = a.reduce((x, y) => x + y) / a.length;
+			const mb = b.reduce((x, y) => x + y) / b.length;
+			let n = 0, da = 0, db = 0;
+			for (let i = 0; i < a.length; i++) { n += (a[i] - ma) * (b[i] - mb); da += (a[i] - ma) ** 2; db += (b[i] - mb) ** 2; }
+			return n / Math.sqrt(da * db);
+		};
+		const ratio = (xs) => Math.max(...xs) / Math.min(...xs);
+		expect(corr(hours, HW)).toBeGreaterThan(0.9);
+		expect(ratio(hours)).toBeGreaterThan(3.57 * 0.75);
+		expect(corr(days, DW)).toBeGreaterThan(0.9);
+		expect(ratio(days)).toBeGreaterThan(2.5 * 0.75);
+	}, 120_000);
 });

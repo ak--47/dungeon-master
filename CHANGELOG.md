@@ -106,6 +106,12 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   correlation 0.985 with a 2-hour `timeToConvert`). Output shift: event times
   change in every mode with a catch-all funnel, and weekday volume changes in
   active-day modes.
+- Draw `worldEvents` `volumeMultiplier` clone times from the soup hour and
+  weekday weights inside the window and the user's lifetime. They were uniform,
+  so a 4x world event flattened the affected event's shape inside its window
+  (hour peak/trough 1.37x and weekday 1.30x against 3.57x and 2.5x configured;
+  now 3.68x and 2.58x). Output shift: dungeons with an amplifying world event
+  change clone times and the RNG stream after them.
 
 ### Added
 
