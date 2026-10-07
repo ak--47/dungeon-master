@@ -29,7 +29,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 
 Three tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). Days with no activity have a row with zeros. They join to events on the UTC date of the event and on the named dimension.
 
-In the warehouse, numeric columns are loaded as FLOAT64 (shown as FLOAT below). Count columns (leads, clicks, impressions, jobs, seats, subscriptions) and `list_price_per_seat_usd` always hold whole numbers, and raw file exports show them as integers.
+Whole-number columns (counts, seconds, vCPU, list prices, and the bookings dollar columns, which are whole dollars) are loaded as INTEGER (INT64); spend and rates are FLOAT (FLOAT64).
 
 ### `paid_marketing_daily`
 
@@ -40,9 +40,9 @@ Daily paid marketing cost by channel, from the ad platforms' billing exports. Ea
 | `date` | DATE | UTC day | Spend day. |
 | `acquisition_channel` | STRING | — | `paid_search`, `linkedin_ads`, or `g2_reviews`. Matches `acquisition_channel` on `account created`. |
 | `spend_usd` | FLOAT | USD | Media spend billed for the day. |
-| `platform_reported_leads` | FLOAT | count | Leads the ad platform claims for the day. Platforms use their own attribution and usually claim more than Mixpanel records. |
-| `clicks` | FLOAT | count | Ad clicks reported by the platform. |
-| `impressions` | FLOAT | count | Ad impressions reported by the platform. |
+| `platform_reported_leads` | INTEGER | count | Leads the ad platform claims for the day. Platforms use their own attribution and usually claim more than Mixpanel records. |
+| `clicks` | INTEGER | count | Ad clicks reported by the platform. |
+| `impressions` | INTEGER | count | Ad impressions reported by the platform. |
 
 Caveats: organic, referral, and outbound sales have no media spend and are not in this table (outbound is a sales cost). Use Mixpanel signups, not `platform_reported_leads`, for CAC.
 
@@ -54,11 +54,11 @@ Daily health of Tallyboard's hosted CI runners by region, from the infrastructur
 |---|---|---|---|
 | `date` | DATE | UTC day | Day. |
 | `runner_region` | STRING | — | `us-east`, `us-west`, `eu-west`, or `ap-south`. Matches `runner_region` on `deployment pipeline run`. |
-| `jobs_started` | FLOAT | count | All jobs started on the region's runners that day: customer pipeline runs plus scheduled and API-triggered jobs. |
+| `jobs_started` | INTEGER | count | All jobs started on the region's runners that day: customer pipeline runs plus scheduled and API-triggered jobs. |
 | `infra_error_rate` | FLOAT | share 0-1 | Share of jobs that hit a runner-side infrastructure error (not a test or build failure in the customer's code). |
-| `queue_p95_seconds` | FLOAT | seconds | 95th-percentile time a job waited for a runner. |
+| `queue_p95_seconds` | INTEGER | seconds | 95th-percentile time a job waited for a runner. |
 | `runner_status` | STRING | — | Daily status for the region: `operational` or `major_outage`, as posted on the status page. |
-| `runner_capacity_vcpu` | FLOAT | vCPU | Provisioned runner capacity in the region. |
+| `runner_capacity_vcpu` | INTEGER | vCPU | Provisioned runner capacity in the region. |
 
 Caveats: customer code failures do not count toward `infra_error_rate`. Mixpanel's `pipeline_status` does not say why a run failed. Scheduled and API-triggered jobs do not send a product event, so `jobs_started` runs higher than the Mixpanel count of `deployment pipeline run` and does not track it exactly day to day.
 
@@ -70,11 +70,11 @@ Daily new self-serve subscriptions, seats, and bookings by plan, from the billin
 |---|---|---|---|
 | `date` | DATE | UTC day | Subscription start day. |
 | `plan` | STRING | — | `team` or `business`. Matches `plan` on `subscription started`. |
-| `new_seats` | FLOAT | seats | Seats on new subscriptions that day. |
-| `new_subscriptions` | FLOAT | count | New subscriptions that day. |
-| `list_price_per_seat_usd` | FLOAT | USD per seat per month | List price for a new subscription of this plan on this day. |
-| `new_mrr_usd` | FLOAT | USD per month | `new_seats` × `list_price_per_seat_usd`. |
-| `new_arr_usd` | FLOAT | USD per year | `new_mrr_usd` × 12. |
+| `new_seats` | INTEGER | seats | Seats on new subscriptions that day. |
+| `new_subscriptions` | INTEGER | count | New subscriptions that day. |
+| `list_price_per_seat_usd` | INTEGER | USD per seat per month | List price for a new subscription of this plan on this day. |
+| `new_mrr_usd` | INTEGER | USD per month | `new_seats` × `list_price_per_seat_usd`. |
+| `new_arr_usd` | INTEGER | USD per year | `new_mrr_usd` × 12. |
 
 Caveats: the table covers new self-serve subscriptions only, not renewals, seat changes on existing subscriptions, or Enterprise contracts. Annual-billing discounts are not applied; finance reports bookings at list price. Billing and Mixpanel differ a little day to day: customers can edit the seat count before the first invoice, and a few checkouts never reach Mixpanel (blocked or dropped browser calls). Use this table, not Mixpanel, for booked seats and MRR.
 

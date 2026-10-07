@@ -15,7 +15,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 | `plan_tier` | The plan of the user's company **at the moment of the event**: `free`, `team`, `business`, or `enterprise`. Every user at a company has the same value at any moment. It changes from `free` to the purchased plan for the whole company at the moment the workspace owner starts a subscription. |
 | `cloud_provider` | The company's primary cloud: `aws`, `gcp`, `azure`, or `multi_cloud`. Fixed per user. |
 | `country`, `country_code`, `region`, `city` | User location (one location per user). |
-| `browser`, `os`, `model`, `screen_height`, `screen_width` | Device details from the web SDK. |
+| `browser`, `os`, `model`, `screen_height`, `screen_width` | Device details from the web SDK (desktop browsers). Fixed per `device_id`. |
 
 ## Signup and onboarding
 
@@ -23,7 +23,7 @@ New users go through setup once, right after they sign up. These four events hap
 
 | Event | Meaning | Properties |
 |---|---|---|
-| `account created` | The user creates an account. First event of every new user and the moment their device is linked to their `user_id`. | `signup_method` (`google`, `github`, `email`, `sso`); `acquisition_channel`: how the user found us (`organic`, `referral`, `outbound_sales`, `paid_search`, `linkedin_ads`, `g2_reviews`); same value as the profile property. |
+| `account created` | The user creates an account. First event of every new user and the moment their device is linked to their `user_id`. | `signup_method` (`google`, `github`, `email`, `sso`; `sso` is sign-in through the company's identity provider, available only to people joining a workspace on Business or Enterprise); `acquisition_channel`: how the user found us (`organic`, `referral`, `outbound_sales`, `paid_search`, `linkedin_ads`, `g2_reviews`); same value as the profile property. |
 | `cloud account connected` | The user connects a cloud account (the account, project, or subscription their team runs on) to Tallyboard. | `regions_connected` (1-4): cloud regions included. |
 | `agent installed` | The Tallyboard agent starts reporting from the user's hosts or clusters. | `install_method` (`helm`, `docker`, `package`, `terraform`); `hosts_reporting`. |
 | `dashboard created` | The user creates their first dashboard. This ends setup. | `template` (`service_overview`, `kubernetes`, `cost_explorer`, `slo_tracker`, `blank`). |

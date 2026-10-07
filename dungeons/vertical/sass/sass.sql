@@ -131,6 +131,13 @@ SELECT first_since >= '2026-06-04' AS started_in_window, count(*) AS new_workspa
  round(count(b.company_id)::DOUBLE / count(*), 4) AS paid_share
 FROM c LEFT JOIN b USING (company_id) WHERE first_since >= '2026-05-14' GROUP BY 1 ORDER BY 1;
 
+-- self-serve purchase pace: weekly new subscriptions (Monday weeks; the first and
+-- last weeks are partial) and the 30-day paid rate by signup month (Jun-Aug have full windows)
+SELECT date_trunc('week', t)::DATE AS week, count(*) AS new_subscriptions FROM ev WHERE event = 'subscription started' GROUP BY 1 ORDER BY 1;
+WITH b AS (SELECT DISTINCT s.uid FROM signups s JOIN ev e ON e.uid = s.uid AND e.event = 'subscription started' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 30 DAY)
+SELECT strftime(s.t0, '%Y-%m') AS signup_month, count(*) AS signups, count(b.uid) AS bought_within_30d, round(count(b.uid)::DOUBLE / count(*), 4) AS paid_rate_30d
+FROM signups s LEFT JOIN b ON b.uid = s.uid WHERE s.t0 < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
+
 -- weekly rhythm: alerts (production pages) vs dashboard views by weekday
 SELECT dayofweek(t) AS dow, dayname(t) AS weekday, count(*) FILTER (WHERE event = 'alert triggered') AS alerts,
  count(*) FILTER (WHERE event = 'dashboard viewed') AS dashboard_views
@@ -319,51 +326,52 @@ SELECT round(avg((resolution_method = 'ai_assist')::INT), 4) AS ai_share_overall
  round(avg((resolution_method = 'ai_assist')::INT) FILTER (WHERE t >= TIMESTAMP '2026-08-19'), 4) AS ai_share_from_aug_19
 FROM ev WHERE event = 'alert resolved' AND t >= TIMESTAMP '2026-07-22' AND plan_tier IN ('business', 'enterprise');
 
--- EVAL Q3 — null: since Root Cause Assist launched (2026-07-22), do Business and
--- Enterprise teams acknowledge a larger share of their pages? Per alert (the
--- Mixpanel totals funnel alert triggered → alert acknowledged, alert_id held
--- constant, 30-day window), plan_tier on the trigger, before vs after launch, with
--- sub-splits by plan, company size, and severity (two-proportion z), the
--- within-user change for users with alerts on both sides, and the Free/Team
--- comparison over the same dates (all accounts, and accounts set up before June 4).
+-- EVAL Q3 — null: since Root Cause Assist launched (2026-07-22), do existing
+-- Business and Enterprise customers (accounts set up before June 4) acknowledge a
+-- larger share of their pages? Per alert (the Mixpanel totals funnel alert
+-- triggered → alert acknowledged, alert_id held constant, 30-day window),
+-- plan_tier on the trigger, before vs after launch, with sub-splits by plan,
+-- severity, company size, and role (two-proportion z), the within-user change
+-- for users with alerts on both sides, the Free/Team change over the same dates
+-- (same accounts), and the all-accounts comparison (new signups join paid
+-- workspaces through the window and, with fewer pages, acknowledge more).
 CREATE OR REPLACE TEMP TABLE q3 AS
 SELECT a.uid, a.t_trig >= TIMESTAMP '2026-07-22' AS post,
  (a.t_ack IS NOT NULL AND a.t_ack < a.t_trig + INTERVAL 30 DAY) AS acked,
- e.plan_tier, e.severity, p.company_size, p.customer_since < '2026-06-04' AS pre_window
+ e.plan_tier, e.severity, p.company_size, u.primary_role, p.customer_since < '2026-06-04' AS pre_window
 FROM alerts a JOIN (SELECT alert_id, plan_tier, severity FROM ev WHERE event = 'alert triggered') e USING (alert_id)
-JOIN prof p ON p.uid = a.uid WHERE a.t_trig IS NOT NULL;
-WITH b AS (SELECT * FROM q3 WHERE plan_tier IN ('business', 'enterprise')),
+JOIN prof p ON p.uid = a.uid JOIN users u ON u.distinct_id::VARCHAR = a.uid WHERE a.t_trig IS NOT NULL;
+WITH b AS (SELECT * FROM q3 WHERE plan_tier IN ('business', 'enterprise') AND pre_window),
 s AS (SELECT 'all' AS split, post, acked FROM b
   UNION ALL SELECT 'plan=' || plan_tier, post, acked FROM b
+  UNION ALL SELECT 'severity=' || severity, post, acked FROM b
   UNION ALL SELECT 'size=' || company_size, post, acked FROM b
-  UNION ALL SELECT 'severity=' || severity, post, acked FROM b),
+  UNION ALL SELECT 'role=' || primary_role, post, acked FROM b),
 x AS (SELECT split, count(*) FILTER (WHERE NOT post) AS n0, avg(acked::INT) FILTER (WHERE NOT post) AS p0,
   count(*) FILTER (WHERE post) AS n1, avg(acked::INT) FILTER (WHERE post) AS p1, avg(acked::INT) AS p FROM s GROUP BY 1)
 SELECT split, n0 AS alerts_before, round(p0, 4) AS ack_share_before, n1 AS alerts_after, round(p1, 4) AS ack_share_after,
  round((p1 - p0) / sqrt(p * (1 - p) * (1.0 / n0 + 1.0 / n1)), 2) AS z
 FROM x ORDER BY 1;
 WITH u AS (SELECT uid, plan_tier, company_size, avg(acked::INT) FILTER (WHERE post) - avg(acked::INT) FILTER (WHERE NOT post) AS d
-  FROM q3 WHERE plan_tier IN ('business', 'enterprise') GROUP BY 1, 2, 3 HAVING bool_or(post) AND bool_or(NOT post)),
-s AS (SELECT 'all' AS split, d FROM u UNION ALL SELECT 'plan=' || plan_tier, d FROM u UNION ALL SELECT 'size=' || company_size, d FROM u)
+  FROM q3 WHERE plan_tier IN ('business', 'enterprise') AND pre_window GROUP BY 1, 2, 3 HAVING bool_or(post) AND bool_or(NOT post)),
+s AS (SELECT 'all' AS split, d FROM u UNION ALL SELECT 'plan=' || plan_tier, d FROM u)
 SELECT split, count(*) AS users_on_both_sides, round(avg(d), 4) AS within_user_change, round(avg(d) / (stddev(d) / sqrt(count(*))), 2) AS z_paired
 FROM s GROUP BY 1 ORDER BY 1;
--- Free/Team over the same dates (no Root Cause Assist): all accounts, then accounts
--- set up before June 4 (new signups get fewer pages, so they acknowledge a larger
--- share, and they make up a growing part of Free/Team alerts)
-WITH f AS (SELECT * FROM q3 WHERE plan_tier IN ('free', 'team')),
-s AS (SELECT 'free_team_all' AS split, post, acked FROM f UNION ALL SELECT 'free_team_pre_window', post, acked FROM f WHERE pre_window
-  UNION ALL SELECT 'free_team_new_signups', post, acked FROM f WHERE NOT pre_window),
+-- Free/Team over the same dates (no Root Cause Assist), same accounts (set up before June 4),
+-- difference-in-differences, and the all-accounts comparison for both plan groups
+WITH s AS (SELECT 'biz_ent_all_accounts' AS split, post, acked FROM q3 WHERE plan_tier IN ('business', 'enterprise')
+  UNION ALL SELECT 'free_team_pre_window', post, acked FROM q3 WHERE plan_tier IN ('free', 'team') AND pre_window
+  UNION ALL SELECT 'free_team_all_accounts', post, acked FROM q3 WHERE plan_tier IN ('free', 'team')),
 x AS (SELECT split, count(*) FILTER (WHERE NOT post) AS n0, avg(acked::INT) FILTER (WHERE NOT post) AS p0,
   count(*) FILTER (WHERE post) AS n1, avg(acked::INT) FILTER (WHERE post) AS p1, avg(acked::INT) AS p FROM s GROUP BY 1)
 SELECT split, n0 AS alerts_before, round(p0, 4) AS ack_share_before, n1 AS alerts_after, round(p1, 4) AS ack_share_after,
  round((p1 - p0) / sqrt(p * (1 - p) * (1.0 / n0 + 1.0 / n1)), 2) AS z
 FROM x ORDER BY 1;
--- difference-in-differences, accounts set up before June 4: Business/Enterprise change minus Free/Team change
 WITH g AS (SELECT plan_tier IN ('business', 'enterprise') AS rca_plan, post, count(*) AS n, avg(acked::INT) AS m FROM q3 WHERE pre_window GROUP BY 1, 2),
 d AS (SELECT rca_plan, max(m) FILTER (WHERE post) - max(m) FILTER (WHERE NOT post) AS chg, sum(m * (1 - m) / n) AS v FROM g GROUP BY 1)
 SELECT round(max(chg) FILTER (WHERE rca_plan), 4) AS biz_ent_change, round(max(chg) FILTER (WHERE NOT rca_plan), 4) AS free_team_change,
  round((max(chg) FILTER (WHERE rca_plan) - max(chg) FILTER (WHERE NOT rca_plan)) / sqrt(sum(v)), 2) AS z_did FROM d;
--- reference: resolution time (where Root Cause Assist acts), same plans, before vs after
+-- reference: resolution time (where Root Cause Assist acts), Business/Enterprise, before vs after
 SELECT (t >= TIMESTAMP '2026-07-22') AS after_launch, count(*) AS resolutions, round(avg(resolution_time_mins), 1) AS avg_resolution_mins
 FROM ev WHERE event = 'alert resolved' AND plan_tier IN ('business', 'enterprise') GROUP BY 1 ORDER BY 1;
 
@@ -389,6 +397,11 @@ x AS (SELECT split, count(*) FILTER (WHERE signup_method = 'sso') AS n1, avg(con
   count(*) FILTER (WHERE signup_method <> 'sso') AS n2, avg(converted::INT) FILTER (WHERE signup_method <> 'sso') AS p2, avg(converted::INT) AS p FROM s GROUP BY 1)
 SELECT split, n1 AS sso_signups, round(p1, 4) AS sso_conversion, n2 AS self_serve_signups, round(p2, 4) AS self_serve_conversion,
  round((p1 - p2) / sqrt(p * (1 - p) * (1.0 / n1 + 1.0 / n2)), 2) AS z FROM x ORDER BY 1;
+-- every signup method: conversion, and one chi-square test across the four methods (3 df)
+WITH t AS (SELECT count(*) AS n, avg(converted::INT) AS p FROM onboarding),
+g AS (SELECT signup_method, count(*) AS n1, sum(converted::INT) AS c1 FROM onboarding GROUP BY 1)
+SELECT round(sum(power(c1 - n1 * t.p, 2) / (n1 * t.p) + power((n1 - c1) - n1 * (1 - t.p), 2) / (n1 * (1 - t.p))), 2) AS chi_square_3df
+FROM g, t;
 -- every signup method vs the rest (reference)
 WITH t AS (SELECT count(*) AS n, avg(converted::INT) AS p FROM onboarding),
 g AS (SELECT signup_method, count(*) AS n1, avg(converted::INT) AS p1 FROM onboarding GROUP BY 1),
@@ -574,6 +587,11 @@ SELECT plan_group, round(promo / base30, 4) AS lift_vs_30_days_before, round(pro
 -- inviting users and invites per inviting user, paid plans, Sep 16-30 vs the 15 days before (equal lengths)
 SELECT t >= TIMESTAMP '2026-09-16' AS promo, count(DISTINCT uid) AS inviting_users, count(*) AS invites, round(count(*)::DOUBLE / count(DISTINCT uid), 2) AS invites_per_inviter
 FROM ev WHERE event = 'teammate invited' AND plan_tier IN ('team', 'business', 'enterprise') AND t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-10-01' GROUP BY 1 ORDER BY 1;
+
+-- new users who joined a company on a paid plan (plan_tier on their account created), by half-month
+SELECT CASE WHEN t < TIMESTAMP '2026-09-01' THEN '1: Aug 17-31' WHEN t < TIMESTAMP '2026-09-16' THEN '2: Sep 1-15' ELSE '3: Sep 16-30' END AS period,
+ count(*) AS signups, count(*) FILTER (WHERE plan_tier IN ('team', 'business', 'enterprise')) AS joined_paid_company
+FROM ev WHERE event = 'account created' AND t >= TIMESTAMP '2026-08-17' AND t < TIMESTAMP '2026-10-01' GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q18 — new bookings by month and plan (warehouse)
 SELECT strftime(date::DATE, '%Y-%m') AS month, plan, sum(new_subscriptions) AS subscriptions, sum(new_seats) AS seats,

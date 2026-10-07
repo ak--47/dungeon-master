@@ -20,11 +20,12 @@ Tallyboard is a cloud operations platform for engineering teams. One product cov
 |---|---|---|
 | Free | $0 | Dashboards, alerting, limited hosts and pipeline minutes |
 | Team | $20 per seat per month until 2026-08-02; $25 per seat per month for new subscriptions from 2026-08-03 | Higher limits, integrations, hosted pipelines |
-| Business | $45 per seat per month (unchanged) | Everything in Team, SSO, longer retention, Root Cause Assist (from Jul 22) |
+| Business | $45 per seat per month (unchanged) | Everything in Team, SAML single sign-on (SSO), longer retention, Root Cause Assist (from Jul 22) |
 | Enterprise | Custom contract | Everything in Business, dedicated support, customer success manager |
 
 - **Workspaces.** Each customer company has one Tallyboard workspace, and the plan belongs to the workspace: every user at a company is on the company's plan. The engineer who starts a workspace is its owner. Colleagues who sign up later with the same work email join that workspace instead of starting their own.
-- **How people upgrade.** Users at Free companies see an upgrade page when they hit a usage limit, a gated feature, a seat limit, or open billing settings. The workspace owner starts a Team or Business subscription for the whole company and chooses the number of seats; a company has at most one self-serve subscription start. Long-standing customers change plans and seats through their account manager, outside the self-serve flow.
+- **How people upgrade.** Users at Free companies see an upgrade page when they hit a usage limit, a gated feature, a seat limit, or open billing settings. The workspace owner starts a Team or Business subscription for the whole company and chooses the number of seats, usually for the colleagues they plan to bring on, so a new paid workspace often has a seat or two not yet in use; a company has at most one self-serve subscription start. A paid workspace adds members up to its contracted seats; more seats need a seat change through billing. Long-standing customers change plans and seats through their account manager, outside the self-serve flow.
+- **Single sign-on.** On Business and Enterprise, colleagues who join the workspace can sign in through the company's identity provider (SAML SSO). Owners who start a new workspace sign up with Google, GitHub, or email.
 - **Enterprise** is sold by the sales team on annual contracts and does not go through the self-serve upgrade page.
 - The Mixpanel project tracks the subscription start, the plan, and the number of seats, but not the price. Prices and new MRR live in the warehouse table `subscription_bookings_daily`.
 
