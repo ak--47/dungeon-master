@@ -319,6 +319,10 @@ SELECT CASE WHEN date::DATE < '2026-08-11' THEN '1 Jun 4-Aug 10' WHEN date::DATE
  round(sum(gross_bookings_usd) / sum(new_paid_subscriptions), 2) AS avg_list_price,
  round(sum(new_paid_subscriptions) FILTER (WHERE plan = 'standard') / sum(new_paid_subscriptions), 4) AS standard_share
 FROM wh_billing GROUP BY 1 ORDER BY 1;
+-- the plain before / after split at Aug 11 (the transition week counted as after)
+SELECT CASE WHEN date::DATE < '2026-08-11' THEN '1 before Aug 11' ELSE '2 from Aug 11' END AS per,
+ sum(new_paid_subscriptions)::BIGINT AS new_paid_subscriptions, round(sum(gross_bookings_usd) / sum(new_paid_subscriptions), 2) AS avg_list_price
+FROM wh_billing GROUP BY 1 ORDER BY 1;
 WITH p AS (SELECT DISTINCT date::DATE AS d, plan, list_price_usd FROM wh_billing)
 SELECT CASE WHEN ev.t < '2026-08-18' THEN '1 before Aug 18' ELSE '2 from Aug 18' END AS per, count(*) AS trial_conversions,
  round(avg(p.list_price_usd), 2) AS avg_list_price_mixpanel_join

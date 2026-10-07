@@ -74,6 +74,6 @@ Leadership set these goals for the quarter:
 2. **Make Saltmarsh season 2 a hit.** The content team wants to know how many households watched it and whether it brought in subscribers who stay.
 3. **Grow revenue per subscriber.** The pricing team raised the Standard price for new subscriptions in August; leadership asked whether it raised revenue.
 4. **Efficient acquisition.** Finance asked which paid channel is worth its cost.
-5. **Reliable streaming.** The streaming infrastructure team reports playback quality every week and wants to understand what the August TV incident cost.
+5. **Reliable streaming.** The streaming infrastructure team reports playback quality every week and wants to understand what the August streaming incident cost.
 6. **Reduce churn.** Member support and finance want to know which households cancel and why.
 7. **Better discovery.** The product team asked how search works across screens; the CRM team wants to know which pushes are worth sending.

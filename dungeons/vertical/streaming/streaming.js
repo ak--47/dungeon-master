@@ -17,8 +17,8 @@ import Chance from "chance";
  *             Every new account starts a 7-day free trial on one of three
  *             plans: Basic with Ads ($6.99/month), Standard ($11.99 → $13.99
  *             for new subscriptions from 2026-08-11), Premium ($17.99).
- * SCALE:      10,000 simulated households (≈4,900 create an account inside the
- *             window), ~0.99M events, 120 days (2026-06-04 → 2026-10-01, UTC)
+ * SCALE:      10,000 simulated households (≈5,000 create an account inside the
+ *             window), ~0.98M events, 120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  app opened → browse / search → title details viewed → playback
  *             started → playback completed → (rating, watchlist, next episode)
  * VALUE MOMENT: playback completed
@@ -76,7 +76,8 @@ import Chance from "chance";
  *   About 4% of them were mid-trial on June 4 (trial started May 28-Jun 3), so
  *   conversions and trial cancellations run from the first week. A cancellation
  *   lands 1 h to 6 days before the renewal it replaces; access ends at that
- *   renewal date. The first renewal after Oct 1 gets the same check, so
+ *   renewal date. A renewal due in early June whose cancellation fell before
+ *   June 4 has no cancellation event (access still ends at the renewal). The first renewal after Oct 1 gets the same check, so
  *   cancellations for renewals due Oct 2-7 land Sep 26 - Oct 1 (that renewal
  *   is not emitted, and the household stays active on Oct 1). Trials last exactly 7 days: "trial converted" fires at
  *   trial start + 7 d; a trial that does not convert has a "subscription
@@ -113,10 +114,13 @@ import Chance from "chance";
  *   Renewal-time cancellation (H8), Saltmarsh reach (H1), and push opens (H9,
  *   salted on the notification's insert_id) keep coin flips, so monthly
  *   churn, reach, and open rates carry ordinary sampling noise.
- * - The hook moves $experiment_started to 3-20 s after trial started (the
- *   taste picker opens after the trial starts); the engine's default spot is
- *   1 s before the Signup funnel's first step, which would expose households
- *   that never start a trial.
+ * - The hook moves $experiment_started to 3-20 s after trial started. This is
+ *   the product design, not an engine workaround: the taste picker opens after
+ *   the trial starts, and the engine's spot (1 s before account created) would
+ *   expose households that never start a trial.
+ * - A season 2 sitting that starts from the home screen (source home_row)
+ *   gets a "title details viewed" for Saltmarsh 6-18 s before the play, as
+ *   organic home_row plays do.
  * - Playback units are hook-owned: each "playback started" either fails (a
  *   "playback error" and no completion), completes ("playback completed" at
  *   start + 92-100% of the runtime), or stops part-way (no event). Episodes in
@@ -258,7 +262,7 @@ import Chance from "chance";
  *   probability 6% if the account has one viewer profile and 3% (0.5x) with
  *   2+ profiles; otherwise the renewal goes through. Renewal-time churn
  *   (cancellations / renewals due) is therefore 0.5x for shared households
- *   (about 420 cancellations per group: knob target with a half-effect floor).
+ *   (about 400 cancellations per group: knob target with a half-effect floor).
  *   profile_count is drawn independently of plan, channel, and activity.
  * MIXPANEL: Insights, A = subscription cancelled (during_trial = false),
  *   B = subscription renewed, formula A / (A + B), breakdown profile_count
@@ -287,33 +291,33 @@ import Chance from "chance";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-streaming, 2026-10-07, full
- * fidelity, 10,000 households, 994,255 events)
+ * fidelity, 10,000 households, 975,185 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation               | Expected | Measured
  * -----|------------------------------------------------|--------------------------|----------|---------
- * H1   | S2 viewers / active members, Jul 17-30         | SALTMARSH_REACH          | 0.35     | 0.351 (1,609 / 4,578)
+ * H1   | S2 viewers / active members, Jul 17-30         | SALTMARSH_REACH          | 0.35     | 0.354 (1,593 / 4,507)
  * H1   | season 2 plays before the premiere             | exact purity             | 0        | 0
- * H2   | accounts/day, Jul 17 - Aug 6 / other days      | PREMIERE_LIFT            | 1.559    | 1.610 (59.4 vs 36.9)
- * H2   | premiere trials with S2 start within a day     | TOURIST_S2_SHARE (not asserted) | 0.80 | 0.799
- * H2   | trial conversion, premiere signups / other     | TOURIST_CONV_MULT        | 0.60     | 0.606 (30.3% vs 50.0%)
- * H3   | trial conversion, Smart Start / Control        | SMART_START_CONV_MULT    | 1.20     | 1.198 (46.6% vs 38.9%)
- * H3   | variant share of exposed trials                | equal 2-arm hash         | 0.50     | 0.496
+ * H2   | accounts/day, Jul 17 - Aug 6 / other days      | PREMIERE_LIFT            | 1.559    | 1.582 (60.1 vs 38.0)
+ * H2   | premiere trials (Jul 8 - Sep 23) with an S2 start < 24 h after trial start (EVAL Q3 SQL) | TOURIST_S2_SHARE (not asserted) | 0.80 | 0.788
+ * H2   | trial conversion, premiere signups / other     | TOURIST_CONV_MULT        | 0.60     | 0.608 (30.2% vs 49.6%)
+ * H3   | trial conversion, Smart Start / Control        | SMART_START_CONV_MULT    | 1.20     | 1.177 (45.8% vs 38.9%)
+ * H3   | variant share of exposed households            | equal 2-arm hash         | 0.50     | 0.517
  * H3   | exposures before the test start                | exact purity             | 0        | 0
- * H3   | early completions, Smart Start / Control       | not engineered           | 1.00     | 0.997 (2.835 vs 2.844)
- * H4   | conversion, 3+ early completions / 0-2         | k-weighted CONV_BY_EARLY | 1.804    | 1.785 (56.6% vs 31.7%)
- * H4   | conversion, 5+ / 3-4 early completions         | plateau                  | 1.017    | 0.989 (56.3% vs 56.9%)
- * H5   | TV/other completion per start, incident / ±14 d| (1-0.5)/(1-0.02)         | 0.510    | 0.514 (TV 40.1% vs 76.0%)
+ * H3   | early completions, Smart Start / Control       | not engineered           | 1.00     | 1.001 (2.840 vs 2.837)
+ * H4   | conversion, 3+ early completions / 0-2         | k-weighted CONV_BY_EARLY | 1.804    | 1.812 (56.9% vs 31.4%)
+ * H4   | conversion, 5+ / 3-4 early completions         | plateau                  | 1.017    | 1.010 (57.2% vs 56.6%)
+ * H5   | TV/other completion per start, incident / ±14 d| (1-0.5)/(1-0.02)         | 0.510    | 0.516 (TV 39.9% vs 75.6%)
  * H5   | warehouse tv failure rate on degraded days     | INCIDENT_FAIL            | 0.50     | 0.497
- * H6   | Standard share of plan selections, after/before| 1 - PRICE_SWITCH_SHARE   | 0.65     | 0.657 (49.8% → 32.7%)
- * H6   | Basic with Ads share, after/before             | (30 + 0.35 x 50) / 30    | 1.583    | 1.571 (29.9% → 47.0%)
- * H6   | Premium share, after/before                    | not engineered           | 1.00     | 0.999 (20.3% → 20.3%)
- * H7   | spend per signup, paid_social / paid_search    | 21 / 32                  | 0.656    | 0.651 ($21.06 vs $32.35)
- * H7   | trial conversion, paid_social / other channels | SOCIAL_CONV_MULT         | 0.55     | 0.560 (27.4% vs 48.8%)
- * H7   | spend per paid sub, paid_social / paid_search  | (21 / 0.55) / 32 (not asserted) | 1.193 | 1.168 ($100.41 vs $85.98)
- * H8   | renewal-time churn, 2+ profiles / 1 profile    | MULTI_PROFILE_HAZARD_MULT (≤, floor 0.75) | 0.50 | 0.527 (3.12% vs 5.93%)
- * H9   | open rate, new_episode / trending_now          | 0.146 / 0.049            | 2.980    | 2.959 (14.67% vs 4.96%)
- * H9   | open rate, because_you_watched / trending_now  | 0.087 / 0.049            | 1.776    | 1.766 (8.75% vs 4.96%)
- * H10  | median search → play, tv / other               | TV_SEARCH_TTC_MULT       | 2.20     | 2.203 (164.8 s vs 74.8 s)
+ * H6   | Standard share of plan selections, after/before| 1 - PRICE_SWITCH_SHARE   | 0.65     | 0.629 (50.7% → 31.9%)
+ * H6   | Basic with Ads share, after/before             | (30 + 0.35 x 50) / 30    | 1.583    | 1.597 (29.7% → 47.4%)
+ * H6   | Premium share, after/before                    | not engineered           | 1.00     | 1.056 (19.6% → 20.7%)
+ * H7   | spend per signup, paid_social / paid_search    | 21 / 32                  | 0.656    | 0.633 ($20.60 vs $32.54)
+ * H7   | trial conversion, paid_social / other channels | SOCIAL_CONV_MULT         | 0.55     | 0.564 (27.7% vs 49.1%)
+ * H7   | spend per paid sub, paid_social / paid_search  | (21 / 0.55) / 32 (not asserted) | 1.193 | 1.120 ($96.76 vs $86.40)
+ * H8   | renewal-time churn, 2+ profiles / 1 profile    | MULTI_PROFILE_HAZARD_MULT (≤, floor 0.75) | 0.50 | 0.465 (2.80% vs 6.03%)
+ * H9   | open rate, new_episode / trending_now          | 0.146 / 0.049            | 2.980    | 3.025 (14.82% vs 4.90%)
+ * H9   | open rate, because_you_watched / trending_now  | 0.087 / 0.049            | 1.776    | 1.795 (8.79% vs 4.90%)
+ * H10  | median search → play, tv / other               | TV_SEARCH_TTC_MULT       | 2.20     | 2.192 (164.8 s vs 75.2 s)
  * ═════════════════════════════════════════════════════════════════════════
  *
  * Noise notes: the low-discrepancy draws (DESIGN NOTES) remove binomial
@@ -323,15 +327,16 @@ import Chance from "chance";
  * conversion ratio sat at the NAILED edge (0.542 vs a 0.540 lower bound) and
  * H3 drifted above its band after an engine change; both now sit near the
  * knob. Re-check H2 and H3 after any engine change anyway. H2's signup lift
- * reads above the knob: 1,247 accounts in those 21 days vs 774 at the other
- * days' rate is about 470 extra against 440 designed premiere joiners (the
+ * reads above the knob: 1,262 accounts in those 21 days vs 798 at the other
+ * days' rate is about 465 extra against 440 designed premiere joiners (the
  * engine's own signups in those days drew a little high). H9 opens are coin
- * flips on about 16,000-19,000 pushes per campaign type (ratio SE about 4%).
- * H8 keeps salted coin flips (about 430 paid cancellations per group, ratio
- * SE about 7%), so
- * it uses the knob as target with a half-effect floor. Premium's share of plan selections is not
- * engineered and is flat across the price change; the designed trade-down
- * moves the average list price per new subscription by about -2%. H7's spend
+ * flips on about 15,000-19,000 pushes per campaign type (ratio SE about 4%).
+ * H8 keeps salted coin flips (about 400 paid cancellations per group, ratio
+ * SE about 7%), so it uses the knob as target with a half-effect floor.
+ * Premium's share of plan selections is not engineered; its +1 point move
+ * across the price change is within one standard error. The designed
+ * trade-down moves the average list price per new subscription by about
+ * -2%. H7's spend
  * per paid subscriber compounds two ratios and is reported, not asserted.
  */
 
@@ -449,7 +454,7 @@ const CANCEL_HAZARD_SINGLE = 0.06;   // per monthly renewal, one viewer profile
 const MULTI_PROFILE_HAZARD_MULT = 0.5;
 const CANCEL_LEAD_MAX_DAYS = 6;      // a cancellation lands up to 6 days before the renewal it replaces
 const PLAN_SWITCH_PER_RENEWAL = 0.015; // realism: plan changes at a renewal (not a story)
-const P_TRIALING = 0.039;            // established households mid-trial on June 4
+const P_TRIALING = 0.042;            // established households mid-trial on June 4
 
 // H9 push notifications
 const OPEN_RATE = { new_episode: 0.146, because_you_watched: 0.087, trending_now: 0.049, new_season: 0.184, win_back: 0.032 };
@@ -838,11 +843,9 @@ function handleEverything(events, meta) {
 		for (; r <= END_MS; r += 30 * DAY_MS, j++) {
 			if (salt(uid, `cancel|${j}`) < hazard) {
 				const lead = HOUR_MS + salt(uid, `cancel-lead|${j}`) * (CANCEL_LEAD_MAX_DAYS * DAY_MS - HOUR_MS);
-				// a renewal early in June whose cancellation would land before the
-				// window: spread it over the part of the lead time inside the window
-				const tc = r - lead >= BEGIN_MS ? r - lead
-					: BEGIN_MS + salt(uid, `cancel-lead|${j}`) * Math.max(0, (r - HOUR_MS > BEGIN_MS ? r - HOUR_MS : r) - BEGIN_MS);
-				lifecycle.push({ name: "subscription cancelled", t: tc, duringTrial: false });
+				// a renewal early in June whose cancellation fell before the window:
+				// the cancellation is not in the data, and access still ends at the renewal
+				if (r - lead >= BEGIN_MS) lifecycle.push({ name: "subscription cancelled", t: r - lead, duringTrial: false });
 				accessEnd = r;
 				return;
 			}
@@ -1193,6 +1196,14 @@ function handleEverything(events, meta) {
 		s.profile_type = x.kids ? "kids" : "adult";
 		if (x.source !== "search") s.search_id = null;
 		setTitle(s, x.title, x.season, x.episode);
+		// a season 2 sitting picked from the home screen opens the title page first
+		if (x.origin === "s2" && x.source === "home_row") {
+			const dv = clone("title details viewed", x.startT - (6 + rnd() * 12) * 1000);
+			dv.device_id = x.device;
+			dv.search_id = null;
+			setTitle(dv, x.title);
+			built.push(dv);
+		}
 		if (x.failed) {
 			const nErr = rnd() < 0.3 ? 2 : 1;
 			for (let i = 0; i < nErr; i++) {
@@ -1986,13 +1997,13 @@ FROM ${WH("playback_qos_daily")}`,
 		id: "H8-shared-households-stay",
 		hook: "H8",
 		archetype: "retention-divergence",
-		narrative: `At each monthly renewal a paying subscriber cancels with probability ${CANCEL_HAZARD_SINGLE * 100}% when the account has one viewer profile and ${CANCEL_HAZARD_SINGLE * MULTI_PROFILE_HAZARD_MULT * 100}% (${MULTI_PROFILE_HAZARD_MULT}x) with two or more; otherwise the renewal goes through. A cancellation lands up to ${CANCEL_LEAD_MAX_DAYS} days before the renewal it replaces and access ends on the renewal date. Read: renewal-time churn = paid cancellations (during_trial = false) / (renewals + paid cancellations), shared (2+ profiles) over single-profile accounts. About 420 cancellations per group, so the ratio carries roughly ±7% sampling noise; the read uses the knob as target with a half-effect floor.`,
+		narrative: `At each monthly renewal a paying subscriber cancels with probability ${CANCEL_HAZARD_SINGLE * 100}% when the account has one viewer profile and ${CANCEL_HAZARD_SINGLE * MULTI_PROFILE_HAZARD_MULT * 100}% (${MULTI_PROFILE_HAZARD_MULT}x) with two or more; otherwise the renewal goes through. A cancellation lands up to ${CANCEL_LEAD_MAX_DAYS} days before the renewal it replaces and access ends on the renewal date. Read: renewal-time churn = paid cancellations (during_trial = false) / (renewals + paid cancellations), shared (2+ profiles) over single-profile accounts. About 400 cancellations per group, so the ratio carries roughly ±7% sampling noise; the read uses the knob as target with a half-effect floor.`,
 		mixpanelReport: { type: "Insights", events: ["subscription cancelled (during_trial = false)", "subscription renewed"], formula: "A / (A + B)", breakdown: "user property profile_count (1 vs 2+)" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H8_SQL },
 				select: { m: { where: { grp: "shared" } }, s: { where: { grp: "single" } } },
-				// about 420 cancellations per group: the ratio carries about ±7% sampling
+				// about 400 cancellations per group: the ratio carries about ±7% sampling
 				// noise, so the read uses the knob as target with a half-effect floor
 				expect: { metric: "m.churn_rate / s.churn_rate", op: "<=", target: MULTI_PROFILE_HAZARD_MULT, floor: Math.round((1 - 0.5 * (1 - MULTI_PROFILE_HAZARD_MULT)) * 1000) / 1000 },
 				minCohort: 1000,

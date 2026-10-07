@@ -15,7 +15,7 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 | 2026-07-28 (Tue) | Pricing | The Standard price change is announced on the Reelhouse blog and on the plans page. |
 | 2026-08-03 (Mon) | Holiday | Civic Holiday in most of Canada. |
 | 2026-08-11 (Tue) | Pricing | **Standard price change** for new subscriptions: $11.99 → $13.99 a month. The plans page shows the new price from this date. The price is set at the first charge, so households already in a trial on August 11 that kept Standard paid the new price when their trial ended. Existing paying subscribers keep $11.99. Basic with Ads ($6.99) and Premium ($17.99) do not change. |
-| 2026-08-20 (Thu) to 2026-08-22 (Sat) | Incident | **TV streaming incident.** A fault at one of Reelhouse's CDN edges affected streams to the TV apps. Traffic was moved to a backup CDN, and the fix was live at 00:00 UTC on August 23. Daily streaming quality by platform is in `playback_qos_daily`. |
+| 2026-08-20 (Thu) to 2026-08-22 (Sat) | Incident | **Streaming incident.** A fault at one of Reelhouse's CDN edges degraded some streams. Traffic was moved to a backup CDN, and the fix was live at 00:00 UTC on August 23. See `playback_qos_daily` for the platforms affected. |
 | 2026-09-07 (Mon) | Holiday | Labor Day (US) and Labour Day (Canada). |
 | 2026-09-30 (Wed) | Fiscal | End of Q3. |
 | 2026-10-01 (Thu) | — | End of the analysis window (data runs through 23:59 UTC). Q4 starts. |
@@ -36,7 +36,7 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 - Is the Smart Start test working, and should it ship to everyone?
 - What makes a trial convert?
 - Did the Standard price change raise revenue? What did it do to the plan mix?
-- What did the August TV incident cost us?
+- What did the August streaming incident cost us?
 - Which paid channel deserves more budget?
 - Who cancels, and why?
 - Which pushes are worth sending? How well does search work across screens?

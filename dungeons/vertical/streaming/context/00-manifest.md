@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Reelhouse**, a subscription str
 
 - **Product:** the Reelhouse apps on smart TVs and streaming boxes, phones, tablets, and the web: browsing and search, title pages, trailers, My List, playback, ratings, downloads, push notifications, the 7-day free trial, and the three paid plans (Basic with Ads, Standard, Premium).
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early June through the end of September and the first day of October.
-- **Scale:** about 10,000 households were active in the window. About 4,900 of them created their account during the window; the rest joined before June 4. The project holds about 990,000 events.
+- **Scale:** about 10,000 households were active in the window. About 5,000 of them created their account during the window; the rest joined before June 4. The project holds about 975,000 events.
 - **Markets:** households in the United States and Canada.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. Households watch in North American evenings, so the busiest hours fall between 23:00 and 06:00 UTC, and a US evening crosses midnight UTC.
 
