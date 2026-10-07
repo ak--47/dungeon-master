@@ -268,6 +268,13 @@ FROM ev WHERE event = 'alert resolved' AND t >= TIMESTAMP '2026-07-22' AND plan_
 SELECT (t >= TIMESTAMP '2026-07-22') AS after_launch, count(*) AS acks, round(avg(response_time_mins), 2) AS avg_response_mins,
  round(median(response_time_mins), 2) AS median_response_mins
 FROM ev WHERE event = 'alert acknowledged' AND plan_tier IN ('business', 'enterprise') GROUP BY 1 ORDER BY 1;
+-- Welch z, after minus before, on the mean and on log minutes (response times are skewed)
+WITH g AS (SELECT (t >= TIMESTAMP '2026-07-22') AS post, count(*) AS n, avg(response_time_mins) AS m, var_samp(response_time_mins) AS v,
+  avg(ln(response_time_mins + 0.1)) AS lm, var_samp(ln(response_time_mins + 0.1)) AS lv
+  FROM ev WHERE event = 'alert acknowledged' AND plan_tier IN ('business', 'enterprise') GROUP BY 1),
+x AS (SELECT max(m) FILTER (WHERE post) - max(m) FILTER (WHERE NOT post) AS dm, sqrt(sum(v / n)) AS se,
+  max(lm) FILTER (WHERE post) - max(lm) FILTER (WHERE NOT post) AS dl, sqrt(sum(lv / n)) AS lse FROM g)
+SELECT round(dm / se, 2) AS z_mean, round(dl / lse, 2) AS z_log FROM x;
 
 -- EVAL Q4 — onboarding conversion by cloud provider (with step detail)
 SELECT cloud_provider, count(*) AS signups, round(avg(connected::INT), 4) AS connected_cloud,
@@ -368,6 +375,12 @@ x AS (SELECT count(*) FILTER (WHERE incident) AS n1, avg(ok::INT) FILTER (WHERE 
   count(*) FILTER (WHERE NOT incident) AS n2, avg(ok::INT) FILTER (WHERE NOT incident) AS p2, avg(ok::INT) AS p FROM w)
 SELECT n1 AS incident_runs, round(p1, 4) AS incident_success, round(p2, 4) AS surrounding_success,
  round((p1 - p2) / sqrt(p * (1 - p) * (1.0 / n1 + 1.0 / n2)), 2) AS z FROM x;
+-- ap-south has few runs: its success rate over every Tuesday-Thursday span in the window (normal range)
+WITH r AS (SELECT t_run::DATE AS d, pipeline_status = 'success' AS ok FROM runs WHERE runner_region = 'ap-south'),
+w AS (SELECT d0.d AS start, count(*) AS n, avg(ok::INT) AS s FROM (SELECT DISTINCT d FROM r WHERE dayofweek(d) = 2) d0
+  JOIN r ON r.d >= d0.d AND r.d < d0.d + 3 GROUP BY 1)
+SELECT count(*) AS tue_thu_spans, round(min(s), 4) AS min_success, round(quantile_cont(s, 0.1), 4) AS p10_success,
+ round(median(s), 4) AS median_success, round(max(s), 4) AS max_success, round(avg(n), 0) AS avg_runs FROM w;
 
 -- EVAL Q13 — spend per signup by paid channel (warehouse join)
 WITH s AS (SELECT ch, count(*) AS n FROM signups GROUP BY 1),

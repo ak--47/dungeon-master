@@ -17,7 +17,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             month from 2026-08-17) and Business ($45 per seat); Enterprise
  *             is sales-led. Root Cause Assist (AI incident help) is a Business
  *             and Enterprise feature from 2026-07-22.
- * SCALE:      10,000 users (≈4,520 sign up inside the window), ~0.98M events,
+ * SCALE:      10,000 users (≈4,470 sign up inside the window), ~0.98M events,
  *             120 days (2026-06-04 → 2026-10-01, UTC), 300 customer companies
  * CORE LOOP:  dashboard viewed → query executed; alert triggered → alert
  *             acknowledged → alert resolved; deployment pipeline run → service deployed
@@ -82,8 +82,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   instant's UTC date.
  * - Weekly and daily rhythm (soup): weekday-heavy (weekends about a quarter
  *   of a weekday) with Americas and EMEA working hours dominating in UTC.
- *   Signups are flat by weekday: the engine draws born days uniformly and
- *   applies only the hour weights to them (reported engine gap).
+ *   New users' signup days and hours follow the same weights.
  * - Collaboration volume: new users keep every "teammate invited" in their
  *   first 14 days; other invites are thinned to 20% (about 1.3 invites per
  *   user, 44 per company in 120 days). "integration configured" comes only
@@ -94,12 +93,14 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   subscription_bookings_daily adds seeded pre-invoice seat edits and a few
  *   checkouts Mixpanel never received (new MRR/ARR recomputed from billed seats).
  * - paid_marketing_daily spend is a paced daily budget per channel (CPL x
- *   expected signups per day, weekday shape, seeded noise, never zero); leads,
- *   clicks, and impressions follow spend. The CPL knob holds at window level.
- * - account_health uses fuzzy SCD timing: rows are about a week apart and can
- *   repeat the prior value. A new account's first row is at its signup.
- *   Established accounts' histories start at an in-window instant (engine
- *   behavior, reported), so they have no row before their first review.
+ *   expected signups per day, a weekday shape that follows the signup rhythm
+ *   with a 25% flat floor, seeded noise, never zero); leads, clicks, and
+ *   impressions follow spend. The CPL knob holds at window level.
+ * - account_health uses fuzzy SCD timing: rows can repeat the prior value. A
+ *   new account's first row is at its signup and later rows are about a week
+ *   apart. Established accounts' histories start in the month before the
+ *   window (rows about three weeks apart), so each has a value in force on
+ *   June 4.
  */
 
 // ── HOOK STORIES ──
@@ -209,10 +210,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: window spend per Mixpanel signup is $420 LinkedIn Ads, $210 G2,
  *   $140 paid search: each channel bills a paced daily budget (CPL x expected
- *   signups per day, weekday shape, seeded ±12% noise, never zero), so daily
- *   cost per signup moves with the day's signups. Share of would-be paid subscriptions kept
- *   by channel: LinkedIn 1.0, outbound 0.9, referral 0.8, G2 0.7, organic 0.65,
- *   paid search 0.5, so LinkedIn signups buy at 2x the paid-search rate.
+ *   signups per day, weekday shape that follows the signup rhythm, seeded
+ *   ±12% noise, never zero), so daily cost per signup moves with the day's
+ *   signups. Share of would-be paid subscriptions kept by channel: LinkedIn
+ *   1.0, outbound 0.9, referral 0.8, G2 0.7, organic 0.65, paid search 0.5,
+ *   so LinkedIn signups buy at 2x the paid-search rate.
  * MIXPANEL: Insights, account created by acquisition_channel joined to
  *   paid_marketing_daily.spend_usd; Funnels account created → subscription
  *   started, 30-day conversion window (the Mixpanel default), signups Jun 4 -
@@ -249,33 +251,33 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * REAL WORLD: noisy alerting trains people to ignore pages.
  *
  * ═════════════════════════════════════════════════════════════════════════
- * EXPECTED METRICS SUMMARY (measured: data/verify-sass, 2026-10-06, engine-rebase fix round)
+ * EXPECTED METRICS SUMMARY (measured: data/verify-sass, 2026-10-06, engine fix round 2)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                       | Derivation               | Expected | Measured
  * -----|----------------------------------------------|--------------------------|----------|---------
- * H1   | paid invites per dashboard view, promo/before| QUARTER_CLOSE_INVITE_MULT| 1.50     | 1.419
- * H1   | Free invites per dashboard view (control)    | unchanged                | 1.00     | 1.027
+ * H1   | paid invites per dashboard view, promo/before| QUARTER_CLOSE_INVITE_MULT| 1.50     | 1.490
+ * H1   | Free invites per dashboard view (control)    | unchanged                | 1.00     | 1.029
  * H2   | ai_assist rows pre-launch or Free/Team       | exact purity             | 0        | 0
- * H2   | ai/other resolution time, Biz+Ent post-launch| RCA_RESOLVE_MULT         | 0.55     | 0.556 (71.6 vs 128.7 min)
- * H2   | ai share of eligible resolutions after ramp  | 0.5 × 0.8                | 0.40     | 0.406 (weekly 3% → 41%)
- * H3   | onboarding conversion Azure/others           | 34/62                    | 0.548    | 0.538 (33.3% vs 61.8%)
- * H4   | avg response Slack+PD / rest, established    | INTEGRATED_RESPONSE_MULT | 0.40     | 0.394 (10.76 vs 27.32 min)
- * H4   | new signups: after / before pair is live     | INTEGRATED_RESPONSE_MULT | 0.40     | 0.405 (10.84 vs 26.76 min)
- * H5   | D30 activated/not activated, all new users   | ≥ 1/(1 − 0.4) (floor)    | ≥ 1.67   | 2.890 (57.8% vs 20.0%, STRONG)
- * H5   | D30 2+ / 0 invites, onboarded new users      | ≥ 1/(1 − 0.6) (floor)    | ≥ 2.50   | 2.567 (64.5% vs 25.1%, within ±10%)
- * H6   | per-run deploy rate Smart/Control            | SMART_TEST_CONV_MULT     | 1.20     | 1.206 (81.2% vs 67.4%)
- * H6   | median run → deploy time Smart/Control       | SMART_TEST_TTC_MULT      | 0.75     | 0.750 (22.6 vs 30.1 min)
- * H6   | Smart Selection share of enrolled users      | equal 2-arm hash         | 0.50     | 0.494
- * H7   | us-east / other success, incident vs ±7 days | 1 − RUNNER_INCIDENT_FAIL | 0.40     | 0.416
+ * H2   | ai/other resolution time, Biz+Ent post-launch| RCA_RESOLVE_MULT         | 0.55     | 0.545 (70.8 vs 130.1 min)
+ * H2   | ai share of eligible resolutions after ramp  | 0.5 × 0.8                | 0.40     | 0.397 (weekly 2.5% → 40%)
+ * H3   | onboarding conversion Azure/others           | 34/62                    | 0.548    | 0.506 (31.9% vs 63.2%)
+ * H4   | avg response Slack+PD / rest, established    | INTEGRATED_RESPONSE_MULT | 0.40     | 0.396 (10.84 vs 27.38 min)
+ * H4   | new signups: after / before pair is live     | INTEGRATED_RESPONSE_MULT | 0.40     | 0.366 (10.40 vs 28.38 min)
+ * H5   | D30 activated/not activated, all new users   | ≥ 1/(1 − 0.4) (floor)    | ≥ 1.67   | 2.921 (59.7% vs 20.4%, STRONG)
+ * H5   | D30 2+ / 0 invites, onboarded new users      | ≥ 1/(1 − 0.6) (floor)    | ≥ 2.50   | 2.677 (65.6% vs 24.5%, within ±10%)
+ * H6   | per-run deploy rate Smart/Control            | SMART_TEST_CONV_MULT     | 1.20     | 1.205 (81.0% vs 67.3%)
+ * H6   | median run → deploy time Smart/Control       | SMART_TEST_TTC_MULT      | 0.75     | 0.752 (22.5 vs 30.0 min)
+ * H6   | Smart Selection share of enrolled users      | equal 2-arm hash         | 0.50     | 0.500
+ * H7   | us-east / other success, incident vs ±7 days | 1 − RUNNER_INCIDENT_FAIL | 0.40     | 0.404
  * H7   | warehouse infra_error_rate during incident   | RUNNER_INCIDENT_FAIL     | 0.60     | 0.603
- * H8   | spend per signup LinkedIn / paid search      | 420 / 140                | 3.00     | 2.936 ($410.37 vs $139.78)
- * H8   | 30-day paid rate LinkedIn / paid search      | 1.0 / 0.5 (floor 1.5)    | 2.00     | 1.585 (19.0% vs 12.0%, STRONG)
- * H9   | avg seats Team post/pre                      | TEAM_SEAT_MULT           | 0.70     | 0.698 (8.45 vs 12.11)
- * H9   | avg seats Business post/pre (control)        | unchanged                | 1.00     | 0.921
- * H9   | new MRR per Team subscription post/pre       | 0.7 × 25/20              | 0.875    | 0.872
- * H10  | median trigger → ack, enterprise / SMB+mid   | RESPONSE_SIZE_MULT       | 0.60     | 0.603
+ * H8   | spend per signup LinkedIn / paid search      | 420 / 140                | 3.00     | 2.988 ($420.28 vs $140.65)
+ * H8   | 30-day paid rate LinkedIn / paid search      | 1.0 / 0.5 (floor 1.5)    | 2.00     | 2.213 (18.9% vs 8.5%, STRONG)
+ * H9   | avg seats Team post/pre                      | TEAM_SEAT_MULT           | 0.70     | 0.695 (8.60 vs 12.39)
+ * H9   | avg seats Business post/pre (control)        | unchanged                | 1.00     | 1.042
+ * H9   | new MRR per Team subscription post/pre       | 0.7 × 25/20              | 0.875    | 0.868
+ * H10  | median trigger → ack, enterprise / SMB+mid   | RESPONSE_SIZE_MULT       | 0.60     | 0.582
  * H10  | median trigger → ack, startup / SMB+mid      | RESPONSE_SIZE_MULT       | 1.50     | 1.544
- * H11  | ack rate 30+ alerts / ≤12 alerts             | 1 − FATIGUE_FLIP         | 0.50     | 0.497
+ * H11  | ack rate 30+ alerts / ≤12 alerts             | 1 − FATIGUE_FLIP         | 0.50     | 0.498
  * ═════════════════════════════════════════════════════════════════════════
  *
  * H5's two reads are knob floors. Setup abandoners rarely invite, so the
@@ -283,12 +285,15 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * onboarded-only dose read removes abandonment but not engagement: among
  * users the dark cut never touches, 2+ inviters still retain somewhat better,
  * and raw retention keeps rising past 2 invites while the knob treats every
- * 2+ user alike. H8's purchase-rate read rests on about 130 LinkedIn and 90
- * paid-search buyers inside the 30-day window (relative SE about 13%), so it
- * grades STRONG against its floor; the whole-window rates (19.5% vs 10.9%,
- * 1.79x) agree. H1 is noise-limited after the invite thinning (about 1,000
- * paid invites per half-month; relative SE about 5%). The H9 Business control
- * (0.921) rests on about 120 post-change subscriptions.
+ * 2+ user alike. H8's purchase-rate read rests on 125 LinkedIn and 61
+ * paid-search buyers inside the 30-day window (relative SE about 15%); it
+ * lands above the knob's ±10% band, so it grades STRONG against its floor;
+ * the whole-window rates (19.3% vs 9.0%, 2.15x) agree. H1 is noise-limited
+ * after the invite thinning (about 1,000 paid invites per half-month;
+ * relative SE about 5%). The H9 Business control (1.042) rests on 131
+ * post-change subscriptions. H3 (0.506) sits near the low edge of its band:
+ * the Azure funnel uses the rounded conversion knob (34 of 62) and the
+ * Azure segment has about 1,300 signups (relative SE about 4%).
  */
 
 // ── SCALE ──
@@ -401,12 +406,19 @@ const CHANNEL_WEIGHTS = { organic: 25, paid_search: 22, linkedin_ads: 20, g2_rev
 const BORN_PCT = 45;               // percentUsersBornInDataset
 const WINDOW_DAYS = 120;
 // paced daily budget per paid channel: CPL × expected signups per day. Spend is
-// steady (weekday shape + seeded noise), never derived from the day's signups.
+// paced (weekday shape + seeded noise), never derived from the day's signups.
 const DAILY_BUDGET_USD = Object.fromEntries(PAID_CHANNELS.map((ch) => {
 	const totalW = Object.values(CHANNEL_WEIGHTS).reduce((a, b) => a + b, 0);
 	return [ch, CPL_USD[ch] * (NUM_USERS * BORN_PCT / 100) * (CHANNEL_WEIGHTS[ch] / totalW) / WINDOW_DAYS];
 }));
-const SPEND_WEEKDAY = [0.7, 1.12, 1.12, 1.12, 1.12, 1.12, 0.7]; // Sun..Sat, mean 1
+// Sun..Sat, mean 1: budgets pace with the weekday signup rhythm (bid
+// schedules cut weekend delivery), with a floor because platforms keep serving
+// on weekends at lower intent, so weekend cost per signup runs higher.
+const SPEND_FLAT_SHARE = 0.25;
+const SPEND_WEEKDAY = (() => {
+	const m = DOW_WEIGHTS.reduce((a, b) => a + b, 0) / DOW_WEIGHTS.length;
+	return DOW_WEIGHTS.map((w) => SPEND_FLAT_SHARE + (1 - SPEND_FLAT_SHARE) * w / m);
+})();
 const SPEND_NOISE = 0.12;          // ± day-level pacing variation per channel (seeded)
 const PLATFORM_LEAD_INFLATION = 1.15; // ad platforms claim ~15% more leads than Mixpanel signups
 const CPC_USD = { paid_search: 8, linkedin_ads: 14, g2_reviews: 12 };
@@ -1609,7 +1621,7 @@ FROM ${WH("ci_runner_health_daily")}`,
 		id: "H8-paid-channel-economics",
 		hook: "H8",
 		archetype: "attribution-bias",
-		narrative: `LinkedIn Ads signups cost ${CPL_USD.linkedin_ads / CPL_USD.paid_search}x as much as paid search signups over the window (warehouse paid_marketing_daily bills a paced daily budget per channel = cost per signup × expected signups per day, with a weekday shape and seeded ±${SPEND_NOISE * 100}% day noise, never zero: $${CPL_USD.linkedin_ads} vs $${CPL_USD.paid_search} per signup at the window level; day-level cost per signup moves with the day's signups), but they buy a paid plan ${PURCHASE_KEEP.linkedin_ads / PURCHASE_KEEP.paid_search}x as often (share of would-be purchases kept: ${PURCHASE_KEEP.linkedin_ads} vs ${PURCHASE_KEEP.paid_search}; channel is drawn independently of company size and persona). Spend per signup needs the warehouse join. The purchase-rate read is the Mixpanel funnel account created → subscription started with the default ${PAID_FUNNEL_WINDOW_DAYS}-day conversion window, for signups ${D(DATASET_START)} through ${PAID_COHORT_LAST} (every signup has its full window inside the data). Paid-subscription counts per channel are about a hundred, so the ratio uses the knob as target with a knob-derived floor.`,
+		narrative: `LinkedIn Ads signups cost ${CPL_USD.linkedin_ads / CPL_USD.paid_search}x as much as paid search signups over the window (warehouse paid_marketing_daily bills a paced daily budget per channel = cost per signup × expected signups per day, with a weekday shape that follows the weekday signup rhythm above a ${SPEND_FLAT_SHARE * 100}% flat floor and seeded ±${SPEND_NOISE * 100}% day noise, never zero: $${CPL_USD.linkedin_ads} vs $${CPL_USD.paid_search} per signup at the window level; day-level cost per signup moves with the day's signups), but they buy a paid plan ${PURCHASE_KEEP.linkedin_ads / PURCHASE_KEEP.paid_search}x as often (share of would-be purchases kept: ${PURCHASE_KEEP.linkedin_ads} vs ${PURCHASE_KEEP.paid_search}; channel is drawn independently of company size and persona). Spend per signup needs the warehouse join. The purchase-rate read is the Mixpanel funnel account created → subscription started with the default ${PAID_FUNNEL_WINDOW_DAYS}-day conversion window, for signups ${D(DATASET_START)} through ${PAID_COHORT_LAST} (every signup has its full window inside the data). Paid-subscription counts per channel are about a hundred, so the ratio uses the knob as target with a knob-derived floor.`,
 		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "paid_marketing_daily.spend_usd", funnel: `account created → subscription started, ${PAID_FUNNEL_WINDOW_DAYS}-day window (Mixpanel default), signups ${D(DATASET_START)} to ${PAID_COHORT_LAST}, breakdown acquisition_channel` },
 		assertions: [
 			{

@@ -33,7 +33,7 @@ In the warehouse, numeric columns are loaded as FLOAT64 (shown as FLOAT below). 
 
 ### `paid_marketing_daily`
 
-Daily paid marketing cost by channel, from the ad platforms' billing exports. Each channel runs on a daily budget that the ad platform paces through the day, so spend is billed every day, including weekends and days with few signups.
+Daily paid marketing cost by channel, from the ad platforms' billing exports. Each channel runs on a daily budget that the ad platform paces through the day. Budgets follow a weekday schedule (lower on Saturday and Sunday, when engineering buyers are offline), but ads keep serving on weekends, so spend is billed every day, including weekends and days with few signups.
 
 | Column | Type | Unit | Meaning |
 |---|---|---|---|
