@@ -186,8 +186,8 @@ FROM x GROUP BY 1 ORDER BY 1;
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H9-personalized-pushes
 -- ─────────────────────────────────────────────────────────────────────────
--- Open rate by campaign_type (new_episode / trending_now target 3.0,
--- because_you_watched / trending_now target 1.8).
+-- Open rate by campaign_type (new_episode / trending_now target 2.98,
+-- because_you_watched / trending_now target 1.78).
 SELECT campaign_type, count(*) FILTER (WHERE event = 'notification received') AS received,
  count(*) FILTER (WHERE event = 'notification opened') AS opened,
  round(count(*) FILTER (WHERE event = 'notification opened')::DOUBLE / count(*) FILTER (WHERE event = 'notification received'), 4) AS open_rate
@@ -256,6 +256,14 @@ SELECT c.n AS control_trials, round(c.p, 4) AS control_conv, v.n AS variant_tria
 FROM v, c;
 
 -- EVAL Q5 — null: early viewing (playback completed in the first 72 h) by arm, overall and by signup platform
+-- Funnel view (Mixpanel: trial started → playback completed ×3, 3-day window, breakdown arm):
+-- share of trials reaching 1, 2, and 3 completions within 72 h
+SELECT variant, count(*) AS trials, round(avg((k >= 1)::INT), 4) AS reach_1, round(avg((k >= 2)::INT), 4) AS reach_2, round(avg((k >= 3)::INT), 4) AS reach_3
+FROM trials WHERE full_window AND t0 >= '2026-07-08' AND variant IS NOT NULL GROUP BY 1 ORDER BY 1;
+WITH g AS (SELECT variant, count(*) AS n, avg((k >= 3)::INT) AS p FROM trials WHERE full_window AND t0 >= '2026-07-08' AND variant IS NOT NULL GROUP BY 1)
+SELECT round((max(p) FILTER (WHERE variant = 'Smart Start') - max(p) FILTER (WHERE variant = 'Control'))
+  / sqrt(max(p * (1 - p) / n) FILTER (WHERE variant = 'Smart Start') + max(p * (1 - p) / n) FILTER (WHERE variant = 'Control')), 2) AS z_reach_3
+FROM g;
 WITH g AS (SELECT variant, count(*) AS n, avg(k) AS m, var_samp(k) AS v FROM trials WHERE full_window AND t0 >= '2026-07-08' AND variant IS NOT NULL GROUP BY 1)
 SELECT round(max(m) FILTER (WHERE variant = 'Smart Start'), 3) AS variant_mean, round(max(m) FILTER (WHERE variant = 'Control'), 3) AS control_mean,
  round((max(m) FILTER (WHERE variant = 'Smart Start') - max(m) FILTER (WHERE variant = 'Control'))

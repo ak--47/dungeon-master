@@ -16,7 +16,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             Every new account starts a 7-day free trial on one of three
  *             plans: Basic with Ads ($6.99/month), Standard ($11.99 → $13.99
  *             for new subscriptions from 2026-08-11), Premium ($17.99).
- * SCALE:      10,000 simulated households (≈4,870 create an account inside the
+ * SCALE:      10,000 simulated households (≈4,900 create an account inside the
  *             window), ~0.99M events, 120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  app opened → browse / search → title details viewed → playback
  *             started → playback completed → (rating, watchlist, next episode)
@@ -87,14 +87,32 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   premiere). The hook drops their activity before the join and clones a
  *   signup at the join time from the other households' signup events
  *   (account created with user_id + device_id; plan selected and trial
- *   started with user_id only; the Smart Start exposure 5 s after trial
- *   started; 81.8% / 90.9% reach trial started / plan selected, the Signup
- *   funnel's measured mix). profile.created and member_since are the join
- *   time. Their acquisition_channel keeps the normal mix, so paid signups and
+ *   started with user_id only; the Smart Start exposure a few seconds after
+ *   trial started; 81.8% / 90.9% reach trial started / plan selected, the
+ *   Signup funnel's measured mix). profile.created and member_since are the
+ *   join time. This is a workaround for an engine gap (reported): replace it
+ *   with a window-signup knob when the engine has one. After joining, these
+ *   households keep the engine's established-member activity plan rather than
+ *   a born-user retention curve. Their acquisition_channel keeps the normal mix, so paid signups and
  *   the bid half of paid spend rise in those weeks.
  * - Trial conversion probability = early-binge base (H4) x channel (H7) x
  *   premiere-tourist (H2) x Smart Start variant (H3). The four factors are
  *   drawn independently, so each story's ratio reads its own knob.
+ * - Designed rates use low-discrepancy draws (seqDraw: a golden-ratio
+ *   sequence per cell, one step per household in generation order) instead of
+ *   independent coin flips: trial conversion (cell = k, paid_social, tourist,
+ *   arm, country), the early-completion count k (cell = arm), plan choice
+ *   (cell = price period), playback failure and completion, and push opens.
+ *   A cell's realized rate tracks its probability, so a story's ratio reads
+ *   its knob instead of binomial noise, and null splits (country, arm by
+ *   platform) stay null. Per-event draws add the household's occurrence index
+ *   to the cell, so no household walks consecutive steps of one sequence.
+ *   Renewal-time cancellation (H8) and Saltmarsh reach (H1) keep salted coin
+ *   flips, so monthly churn and reach carry ordinary sampling noise.
+ * - The hook moves $experiment_started to 3-20 s after trial started (the
+ *   taste picker opens after the trial starts); the engine's default spot is
+ *   1 s before the Signup funnel's first step, which would expose households
+ *   that never start a trial.
  * - Playback units are hook-owned: each "playback started" either fails (a
  *   "playback error" and no completion), completes ("playback completed" at
  *   start + 92-100% of the runtime), or stops part-way (no event). Episodes in
@@ -143,8 +161,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   start season 2 within a day; when the H4 72-hour count trims a trial's
  *   completions, the first season 2 start stays as a play stopped part-way)
  *   and convert their trial at 0.6x the rate of other accounts created from
- *   Jul 8 on (about 1,000 trials: the read is the knob target with a
- *   half-effect floor).
+ *   Jul 8 on (about 1,000 trials).
  * MIXPANEL: Insights, account created, Totals, daily; Funnels, trial started
  *   → trial converted, Uniques, 8-day window, trials Jul 8 - Sep 23,
  *   breakdown cohort account created Jul 17 - Aug 6 vs other.
@@ -220,7 +237,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   probability 6% if the account has one viewer profile and 3% (0.5x) with
  *   2+ profiles; otherwise the renewal goes through. Renewal-time churn
  *   (cancellations / renewals due) is therefore 0.5x for shared households
- *   (about 450 cancellations per group: knob target with a half-effect floor).
+ *   (about 420 cancellations per group: knob target with a half-effect floor).
  *   profile_count is drawn independently of plan, channel, and activity.
  * MIXPANEL: Insights, A = subscription cancelled (during_trial = false),
  *   B = subscription renewed, formula A / (A + B), breakdown profile_count
@@ -230,9 +247,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * H9. PERSONALIZED PUSHES GET OPENED (everything)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: push open rate by campaign_type: new_episode 15%,
- *   because_you_watched 9%, trending_now 5% (win_back 3%; the one-off
- *   new_season push for Saltmarsh on Jul 17 18%). An open is followed by a
+ * PATTERN: push open rate by campaign_type: new_episode 14.6%,
+ *   because_you_watched 8.7%, trending_now 4.9% (win_back 3.2%; the one-off
+ *   new_season push for Saltmarsh on Jul 17 18.4%). An open is followed by a
  *   play of the pushed title about half the time.
  * MIXPANEL: Insights, notification opened / notification received (Totals),
  *   breakdown campaign_type.
@@ -249,48 +266,50 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-streaming, 2026-10-07, full
- * fidelity, 10,000 households, 986,748 events)
+ * fidelity, 10,000 households, 986,315 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation               | Expected | Measured
  * -----|------------------------------------------------|--------------------------|----------|---------
- * H1   | S2 viewers / active members, Jul 17-30         | SALTMARSH_REACH          | 0.35     | 0.351 (1,625 / 4,632)
+ * H1   | S2 viewers / active members, Jul 17-30         | SALTMARSH_REACH          | 0.35     | 0.351 (1,609 / 4,587)
  * H1   | season 2 plays before the premiere             | exact purity             | 0        | 0
- * H2   | accounts/day, Jul 17 - Aug 6 / other days      | PREMIERE_LIFT            | 1.559    | 1.510 (56.2 vs 37.2)
- * H2   | premiere trials with S2 start within a day     | TOURIST_S2_SHARE (not asserted) | 0.80 | 0.795
- * H2   | trial conversion, premiere signups / other     | TOURIST_CONV_MULT (≤, floor 0.8) | 0.60 | 0.542 (27.6% vs 50.8%)
- * H3   | trial conversion, Smart Start / Control        | SMART_START_CONV_MULT    | 1.20     | 1.251 (47.3% vs 37.8%)
- * H3   | variant share of exposed trials                | equal 2-arm hash         | 0.50     | 0.486
+ * H2   | accounts/day, Jul 17 - Aug 6 / other days      | PREMIERE_LIFT            | 1.559    | 1.610 (59.4 vs 36.9)
+ * H2   | premiere trials with S2 start within a day     | TOURIST_S2_SHARE (not asserted) | 0.80 | 0.799
+ * H2   | trial conversion, premiere signups / other     | TOURIST_CONV_MULT        | 0.60     | 0.606 (30.3% vs 50.0%)
+ * H3   | trial conversion, Smart Start / Control        | SMART_START_CONV_MULT    | 1.20     | 1.198 (46.6% vs 38.9%)
+ * H3   | variant share of exposed trials                | equal 2-arm hash         | 0.50     | 0.496
  * H3   | exposures before the test start                | exact purity             | 0        | 0
- * H3   | early completions, Smart Start / Control       | not engineered           | 1.00     | 0.993 (2.85 vs 2.87)
- * H4   | conversion, 3+ early completions / 0-2         | k-weighted CONV_BY_EARLY | 1.804    | 1.832 (56.8% vs 31.0%)
- * H4   | conversion, 5+ / 3-4 early completions         | plateau                  | 1.017    | 1.023 (57.4% vs 56.1%)
- * H5   | TV/other completion per start, incident / ±14 d| (1-0.5)/(1-0.02)         | 0.510    | 0.490 (TV 38.4% vs 76.8%)
+ * H3   | early completions, Smart Start / Control       | not engineered           | 1.00     | 0.997 (2.835 vs 2.844)
+ * H4   | conversion, 3+ early completions / 0-2         | k-weighted CONV_BY_EARLY | 1.804    | 1.785 (56.6% vs 31.7%)
+ * H4   | conversion, 5+ / 3-4 early completions         | plateau                  | 1.017    | 0.989 (56.3% vs 56.9%)
+ * H5   | TV/other completion per start, incident / ±14 d| (1-0.5)/(1-0.02)         | 0.510    | 0.513 (TV 39.6% vs 75.3%)
  * H5   | warehouse tv failure rate on degraded days     | INCIDENT_FAIL            | 0.50     | 0.497
- * H6   | Standard share of plan selections, after/before| 1 - PRICE_SWITCH_SHARE   | 0.65     | 0.676 (49.4% → 33.4%)
- * H6   | Basic with Ads share, after/before             | (30 + 0.35 x 50) / 30    | 1.583    | 1.627 (30.1% → 49.0%)
- * H6   | Premium share, after/before                    | not engineered           | 1.00     | 0.859 (20.5% → 17.6%; sampling)
- * H7   | spend per signup, paid_social / paid_search    | 21 / 32                  | 0.656    | 0.677 ($21.35 vs $31.54)
- * H7   | trial conversion, paid_social / other channels | SOCIAL_CONV_MULT         | 0.55     | 0.554 (27.1% vs 48.9%)
- * H7   | spend per paid sub, paid_social / paid_search  | (21 / 0.55) / 32 (not asserted) | 1.193 | 1.288 ($102.42 vs $79.51)
- * H8   | renewal-time churn, 2+ profiles / 1 profile    | MULTI_PROFILE_HAZARD_MULT (≤, floor 0.75) | 0.50 | 0.534 (3.06% vs 5.74%)
- * H9   | open rate, new_episode / trending_now          | 0.15 / 0.05              | 3.00     | 3.171 (15.1% vs 4.77%)
- * H9   | open rate, because_you_watched / trending_now  | 0.09 / 0.05              | 1.80     | 1.936 (9.23% vs 4.77%)
- * H10  | median search → play, tv / other               | TV_SEARCH_TTC_MULT       | 2.20     | 2.159 (162.9 s vs 75.5 s)
+ * H6   | Standard share of plan selections, after/before| 1 - PRICE_SWITCH_SHARE   | 0.65     | 0.657 (49.8% → 32.7%)
+ * H6   | Basic with Ads share, after/before             | (30 + 0.35 x 50) / 30    | 1.583    | 1.571 (29.9% → 47.0%)
+ * H6   | Premium share, after/before                    | not engineered           | 1.00     | 0.999 (20.3% → 20.3%)
+ * H7   | spend per signup, paid_social / paid_search    | 21 / 32                  | 0.656    | 0.651 ($21.06 vs $32.35)
+ * H7   | trial conversion, paid_social / other channels | SOCIAL_CONV_MULT         | 0.55     | 0.560 (27.4% vs 48.8%)
+ * H7   | spend per paid sub, paid_social / paid_search  | (21 / 0.55) / 32 (not asserted) | 1.193 | 1.168 ($100.41 vs $85.98)
+ * H8   | renewal-time churn, 2+ profiles / 1 profile    | MULTI_PROFILE_HAZARD_MULT (≤, floor 0.75) | 0.50 | 0.530 (3.06% vs 5.78%)
+ * H9   | open rate, new_episode / trending_now          | 0.146 / 0.049            | 2.980    | 2.974 (14.6% vs 4.91%)
+ * H9   | open rate, because_you_watched / trending_now  | 0.087 / 0.049            | 1.776    | 1.775 (8.71% vs 4.91%)
+ * H10  | median search → play, tv / other               | TV_SEARCH_TTC_MULT       | 2.20     | 2.202 (165.3 s vs 75.1 s)
  * ═════════════════════════════════════════════════════════════════════════
  *
- * Noise notes: H2's conversion read rests on about 1,000 premiere trials
- * converting near 30% (ratio SE about 5%), so it uses the knob as target
- * with a half-effect floor. H2's signup lift reads a little under the knob:
- * about 431 households joined for the premiere (440 designed), and the
- * engine's own signups in those 21 days drew about 1 SD low (750 vs about
- * 780). H8 rests on about 450 paid
- * cancellations per group (ratio SE about 7%), so it uses the same target +
- * floor form. Premium's share of plan selections is not engineered; its drop
- * across the price change (z ≈ 2.4) is sampling in plan choice, not a design;
- * the designed trade-down alone moves the average list price per new
- * subscription by about -2%.
- * H7's spend per paid subscriber compounds two noisy ratios and is reported,
- * not asserted.
+ * Noise notes: the low-discrepancy draws (DESIGN NOTES) remove binomial
+ * noise from the designed rates, so H2, H3, H4, H5, H6, H7, and H9 read
+ * their knobs up to composition (each group's realized mix of the other
+ * factors). The previous build drew conversion with coin flips: H2's
+ * conversion ratio sat at the NAILED edge (0.542 vs a 0.540 lower bound) and
+ * H3 drifted above its band after an engine change; both now sit near the
+ * knob. Re-check H2 and H3 after any engine change anyway. H2's signup lift
+ * reads above the knob: 1,247 accounts in those 21 days vs 774 at the other
+ * days' rate is about 470 extra against 440 designed premiere joiners (the
+ * engine's own signups in those days drew a little high). H8 keeps salted
+ * coin flips (about 420 paid cancellations per group, ratio SE about 7%), so
+ * it uses the knob as target with a half-effect floor. Premium's share of plan selections is not
+ * engineered and is flat across the price change; the designed trade-down
+ * moves the average list price per new subscription by about -2%. H7's spend
+ * per paid subscriber compounds two ratios and is reported, not asserted.
  */
 
 // ── SCALE ──
@@ -399,7 +418,7 @@ const PLAN_SWITCH_PER_RENEWAL = 0.015; // realism: plan changes at a renewal (no
 const P_TRIALING = 0.039;            // established households mid-trial on June 4
 
 // H9 push notifications
-const OPEN_RATE = { new_episode: 0.15, because_you_watched: 0.09, trending_now: 0.05, new_season: 0.18, win_back: 0.03 };
+const OPEN_RATE = { new_episode: 0.146, because_you_watched: 0.087, trending_now: 0.049, new_season: 0.184, win_back: 0.032 };
 const PUSH_MIX = { new_episode: 35, because_you_watched: 35, trending_now: 30 };
 const PUSH_PLAY_SHARE = 0.5;         // opens followed by a play of the pushed title
 const LAPSED_PUSH_KEEP = 0.3;        // share of pushes still delivered after access ends (the rest uninstalled or muted)
@@ -479,6 +498,23 @@ const PROFILE_COUNT_WEIGHTS = { 1: 36, 2: 25, 3: 18, 4: 13, 5: 8 };
 
 // ── HELPERS ──
 const salt = (uid, tag) => hashFloat(`${uid}|${tag}`);
+// Low-discrepancy draws for designed rates: each cell walks a golden-ratio
+// (Weyl) sequence from a seeded offset, one step per household in generation
+// order, so a cell's realized rate tracks its designed probability without
+// binomial noise. Used for trial conversion (cell = every factor of p, plus
+// country), the early-completion count (cell = test arm), plan choice (cell =
+// price period), playback failure and completion (cell = platform, title type,
+// chained, incident days), and push opens (cell = campaign type). Per-event
+// draws add the household's occurrence index to the cell, so one household
+// never takes consecutive steps of a sequence. Any subset chosen independently of
+// generation order (a date range, a country) still varies like a sample.
+const PHI = (Math.sqrt(5) - 1) / 2;
+const SEQ_POS = new Map();
+const seqDraw = (cell) => {
+	const i = SEQ_POS.get(cell) ?? 0;
+	SEQ_POS.set(cell, i + 1);
+	return (hashFloat(`${SEED}|seq|${cell}`) + i * PHI) % 1;
+};
 const round1 = (n) => Math.round(n * 10) / 10;
 const round2 = (n) => Math.round(n * 100) / 100;
 const round4 = (n) => Math.round(n * 10000) / 10000;
@@ -536,6 +572,24 @@ const PLAN_SET_EVENTS = new Set(["plan selected", "trial started", "trial conver
 // templates seen so far (a household without its own copy borrows one; every
 // hook-built field is overwritten, so nothing personal carries over)
 const GLOBAL_TEMPLATES = {};
+// The first households in generation order can need an event no household has
+// produced yet. Then the template is a copy of one of the household's own
+// events, renamed, with only the identity / super-prop fields and the target
+// event's declared properties at their defaults (schema-first).
+const BASE_KEYS = new Set(["event", "time", "insert_id", "user_id", "device_id", "session_id", "plan", "platform", "device_family"]);
+function templateOf(name, local, source) {
+	const found = local?.[name] || GLOBAL_TEMPLATES[name];
+	if (found) return found;
+	const decl = config.events.find((e) => e.event === name)?.properties;
+	if (!decl || !source) throw new Error(`streaming: no template for "${name}"`);
+	const t = { ...source, event: name };
+	for (const key of Object.keys(t)) if (!BASE_KEYS.has(key) && !(key in decl)) delete t[key];
+	for (const [key, v] of Object.entries(decl)) {
+		if (!Array.isArray(v)) throw new Error(`streaming: "${name}.${key}" needs an array default for a fallback template`);
+		t[key] = v[0];
+	}
+	return t;
+}
 
 function setTitle(ev, title, season, episode) {
 	ev.title_id = title.id;
@@ -552,12 +606,20 @@ function setTitle(ev, title, season, episode) {
 	}
 }
 
-// plan choice at signup: after the Standard price change some would-be
-// Standard buyers pick Basic with Ads (H6)
+// plan choice at signup: after the Standard price change PRICE_SWITCH_SHARE
+// of would-be Standard buyers pick Basic with Ads (H6); Premium is unchanged
+const PLAN_WEIGHTS_AFTER = {
+	basic_ads: PLAN_WEIGHTS_NEW.basic_ads + PRICE_SWITCH_SHARE * PLAN_WEIGHTS_NEW.standard,
+	standard: (1 - PRICE_SWITCH_SHARE) * PLAN_WEIGHTS_NEW.standard,
+	premium: PLAN_WEIGHTS_NEW.premium,
+};
+const PLAN_CHOICE = new Map();
 function choosePlan(uid, t) {
-	let p = pickWeighted(PLAN_WEIGHTS_NEW, salt(uid, "new-plan"));
-	if (p === "standard" && t >= ms(PRICE_CHANGE) && salt(uid, "price-switch") < PRICE_SWITCH_SHARE) p = "basic_ads";
-	return p;
+	if (!PLAN_CHOICE.has(uid)) {
+		const after = t >= ms(PRICE_CHANGE);
+		PLAN_CHOICE.set(uid, pickWeighted(after ? PLAN_WEIGHTS_AFTER : PLAN_WEIGHTS_NEW, seqDraw(after ? "plan|after" : "plan|before")));
+	}
+	return PLAN_CHOICE.get(uid);
 }
 
 function handleUserHook(profile, meta) {
@@ -607,10 +669,8 @@ function stampSuper(events, planAt, signupDevice) {
 // households it generated as established members join in the premiere weeks
 // instead: their activity before the join is dropped and a signup (account
 // created → plan selected → trial started, plus the Smart Start exposure) is
-// cloned at the join time. Returns null when a template is not available yet.
-const SIGNUP_EVENTS = ["account created", "plan selected", "trial started", "$experiment_started"];
+// cloned at the join time. Returns null when the household has no device.
 function premiereJoin(events, profile, uid) {
-	if (SIGNUP_EVENTS.some((n) => !GLOBAL_TEMPLATES[n])) return null;
 	const day = Number(pickWeighted(PREMIERE_JOIN_DAY_WEIGHTS, salt(uid, "join-day")));
 	const day0 = ms(SALTMARSH_PREMIERE) + day * DAY_MS;
 	const y = eveningTime(day0, day0 + DAY_MS);
@@ -621,7 +681,7 @@ function premiereJoin(events, profile, uid) {
 	const after = events.filter((e) => T(e) > tTrial + MIN_MS);
 	const device = (after.find((e) => e.device_id) || events.find((e) => e.device_id) || {}).device_id;
 	if (!device) return null;
-	const mk = (name, t) => cloneEvent(GLOBAL_TEMPLATES[name], { time: iso(t), user_id: uid });
+	const mk = (name, t) => cloneEvent(templateOf(name, null, events[0]), { time: iso(t), user_id: uid });
 	const out = [];
 	const a = mk("account created", y);
 	a.device_id = device;
@@ -672,11 +732,7 @@ function handleEverything(events, meta) {
 	}
 	const signup = events.find((e) => e.event === "account created") || null;
 	const signupT = signup ? T(signup) : null;
-	const tmpl = (name) => tmplLocal[name] || GLOBAL_TEMPLATES[name] || null;
-	const clone = (name, t) => {
-		const tp = tmpl(name);
-		return tp ? cloneEvent(tp, { time: iso(t), user_id: uid }) : null;
-	};
+	const clone = (name, t) => cloneEvent(templateOf(name, tmplLocal, events[0]), { time: iso(t), user_id: uid });
 
 	// ── devices: each device_id is one screen with a fixed platform ──
 	const devices = [];
@@ -704,7 +760,6 @@ function handleEverything(events, meta) {
 
 	// ── subscription lifecycle ──
 	const hazard = CANCEL_HAZARD_SINGLE * (profile.profile_count >= 2 ? MULTI_PROFILE_HAZARD_MULT : 1);
-	const k = Number(pickWeighted(EARLY_K_WEIGHTS, salt(uid, "early-k")));
 	const lifecycle = []; // { name, t, ... }
 	const accessStart = born ? signupT : BEGIN_MS;
 	let accessEnd = Infinity;
@@ -721,6 +776,13 @@ function handleEverything(events, meta) {
 	} else if (salt(uid, "trialing") < P_TRIALING) {
 		trialStartT = BEGIN_MS - Math.floor(salt(uid, "trial-start") * TRIAL_DAYS * DAY_MS);
 	}
+	// H4: playback completed count in the trial's first 72 h (drawn per arm, so
+	// both arms get the same early-viewing mix)
+	const k = trialStartT !== null ? Number(pickWeighted(EARLY_K_WEIGHTS, seqDraw(`early-k|${variant}`))) : 0;
+	// per-household occurrence index, so each household adds at most one draw to
+	// a sequence cell (no serial pattern inside a household)
+	const nth = {};
+	const seqOnce = (cell) => { nth[cell] = (nth[cell] ?? -1) + 1; return seqDraw(`${cell}|${nth[cell]}`); };
 
 	const scheduleRenewals = (first) => {
 		for (let r = first, j = 0; r <= END_MS; r += 30 * DAY_MS, j++) {
@@ -753,7 +815,8 @@ function handleEverything(events, meta) {
 		if (tourist) p *= TOURIST_CONV_MULT;
 		if (variant === SMART_START_VARIANT) p *= SMART_START_CONV_MULT;
 		const trialEnd = trialStartT + TRIAL_DAYS * DAY_MS;
-		if (salt(uid, "convert") < p) {
+		const cell = `convert|${k}|${profile.acquisition_channel === "paid_social"}|${tourist}|${variant}|${profile.country}`;
+		if (seqDraw(cell) < p) {
 			lifecycle.push({ name: "trial converted", t: trialEnd });
 			scheduleRenewals(trialEnd + 30 * DAY_MS);
 		} else {
@@ -906,7 +969,7 @@ function handleEverything(events, meta) {
 				n.title_name = title.name;
 			}
 		}
-		if (rnd() >= OPEN_RATE[n.campaign_type]) continue;
+		if (seqOnce(`open|${n.campaign_type}`) >= OPEN_RATE[n.campaign_type]) continue;
 		const openT = t + Math.min(12 * HOUR_MS, 25 * MIN_MS * logNormal(1.1));
 		const o = clone("notification opened", openT);
 		if (!o) continue;
@@ -953,8 +1016,9 @@ function handleEverything(events, meta) {
 	const finishUnit = (x) => {
 		const plat = platformOf(x.device) || "tv";
 		x.platform = plat;
-		const f = plat === INCIDENT_PLATFORM && inIncident(x.startT) ? INCIDENT_FAIL : BASE_FAIL;
-		x.failed = rnd() < f;
+		const incidentDay = inIncident(x.startT);
+		const f = plat === INCIDENT_PLATFORM && incidentDay ? INCIDENT_FAIL : BASE_FAIL;
+		x.failed = seqOnce(`fail|${plat}|${incidentDay}`) < f;
 		x.completeT = null;
 		const runtime = x.title.runtime * MIN_MS;
 		if (x.failed) {
@@ -963,7 +1027,7 @@ function handleEverything(events, meta) {
 			return;
 		}
 		const pc = hasNext.has(x) ? 1 : (COMPLETE_BASE[x.title.type] ?? 0.65) * (COMPLETE_PLATFORM[plat] ?? 0.9);
-		if (rnd() < pc) {
+		if (seqOnce(`complete|${plat}|${x.title.type}|${hasNext.has(x)}|${incidentDay}`) < pc) {
 			x.watchMs = runtime * (0.92 + rnd() * 0.08);
 			x.completeT = x.startT + x.watchMs;
 		} else {
@@ -1545,9 +1609,13 @@ ev AS (SELECT coalesce(e.user_id::VARCHAR, m.mapped) AS uid, e.time::TIMESTAMP A
 
 const TS = (isoStr) => dayjs.utc(isoStr).format("YYYY-MM-DD HH:mm:ss");
 const D = (isoStr) => isoStr.slice(0, 10);
+const LAST = (exclusiveIso) => dayjs.utc(exclusiveIso).subtract(1, "day").format("YYYY-MM-DD"); // last day of a range with an exclusive end
+const REACH_LAST = LAST(REACH_END);      // 2026-07-30
+const TOURIST_LAST = LAST(TOURIST_END);  // 2026-08-06
 const band = (k) => [Math.round(k * 0.9 * 1000) / 1000, Math.round(k * 1.1 * 1000) / 1000];
 const CONV_WINDOW_DAYS = 8;          // trial started → trial converted (a trial converts at day 7)
-const TRIAL_READ_END = TS(dayjs.utc(DATASET_END).subtract(CONV_WINDOW_DAYS, "day").add(1, "second").toISOString()); // trials with a full window
+const TRIAL_READ_END = TS(dayjs.utc(DATASET_END).subtract(CONV_WINDOW_DAYS, "day").add(1, "second").toISOString()); // trials with a full window (exclusive)
+const TRIAL_READ_LAST = LAST(dayjs.utc(TRIAL_READ_END).toISOString()); // 2026-09-23
 const INC_BASE_DAYS = 14;
 const INC_BASE_FROM = TS(dayjs.utc(CDN_INCIDENT_START).subtract(INC_BASE_DAYS, "day").toISOString());
 const INC_BASE_TO = TS(dayjs.utc(CDN_INCIDENT_END).add(INC_BASE_DAYS, "day").toISOString());
@@ -1663,8 +1731,8 @@ export const stories = [
 		id: "H1-saltmarsh-season-2-premiere",
 		hook: "H1",
 		archetype: "temporal-inflection",
-		narrative: `All ${S2_EPISODES} episodes of Saltmarsh season 2 (Reelhouse's flagship original) drop ${D(SALTMARSH_PREMIERE)}. ${SALTMARSH_REACH * 100}% of households that joined before the premiere and played anything ${D(SALTMARSH_PREMIERE)} to 2026-07-30 start season 2 in that fortnight (most in the first days), watching 1-${S2_EPISODES} episodes in sittings of 1-4; the plays are added viewing, so daily plays rise in late July. A new_season push goes out ${TS(SALTMARSH_PUSH)} UTC. Read: households with a season 2 play over households with any play, Jul 17-30, members who joined before the premiere. No season 2 play exists before the premiere.`,
-		mixpanelReport: { type: "Insights", event: "playback started", measure: "Uniques", filter: "title_name = Saltmarsh AND season_number = 2", denominator: "playback started (Uniques)", dateRange: "2026-07-17 to 2026-07-30", cohort: "exclude households with account created on or after 2026-07-17 (member_since before 2026-07-17)" },
+		narrative: `All ${S2_EPISODES} episodes of Saltmarsh season 2 (Reelhouse's flagship original) drop ${D(SALTMARSH_PREMIERE)}. ${SALTMARSH_REACH * 100}% of households that joined before the premiere and played anything ${D(SALTMARSH_PREMIERE)} to ${REACH_LAST} start season 2 in that fortnight (most in the first days), watching 1-${S2_EPISODES} episodes in sittings of 1-4; the plays are added viewing, so daily plays rise in late July. A new_season push goes out ${TS(SALTMARSH_PUSH)} UTC. Read: households with a season 2 play over households with any play, ${D(SALTMARSH_PREMIERE)} to ${REACH_LAST}, members who joined before the premiere. No season 2 play exists before the premiere.`,
+		mixpanelReport: { type: "Insights", event: "playback started", measure: "Uniques", filter: "title_name = Saltmarsh AND season_number = 2", denominator: "playback started (Uniques)", dateRange: `${D(SALTMARSH_PREMIERE)} to ${REACH_LAST}`, cohort: `exclude households with account created on or after ${D(SALTMARSH_PREMIERE)} (member_since before ${D(SALTMARSH_PREMIERE)})` },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H1_SQL },
@@ -1684,8 +1752,8 @@ export const stories = [
 		id: "H2-premiere-tourists",
 		hook: "H2",
 		archetype: "funnel-conversion-by-segment",
-		narrative: `The premiere brings in new households: ${PREMIERE_JOIN_SHARE * 100}% of the households that would otherwise have been members already join in the three weeks after the Saltmarsh premiere (${D(SALTMARSH_PREMIERE)} to 2026-08-06) instead, most in the first week, so accounts created per day in those weeks run ${PREMIERE_LIFT}x the rest of the window. Households that create an account in those weeks come for one show: ${TOURIST_S2_SHARE * 100}% start season 2 within a day of starting their trial, and their trials convert at ${TOURIST_CONV_MULT}x the rate of other trials. Reads: account created per day, ${D(SALTMARSH_PREMIERE)} to 2026-08-06 vs the other ${WINDOW_DAYS - PREMIERE_JOIN_DAYS} days; trial started → trial converted within ${CONV_WINDOW_DAYS} days (trials convert at day 7), trials from ${D(SMART_START_LAUNCH)} (both groups had the Smart Start test) to ${TRIAL_READ_END.slice(0, 10)} (complete windows), premiere signups vs every other signup. About 1,000 premiere trials converting near 30%, so the conversion ratio carries roughly ±5% sampling noise; that read uses the knob as target with a half-effect floor.`,
-		mixpanelReport: { type: "Funnels", steps: ["trial started", "trial converted"], counting: "uniques", window: `${CONV_WINDOW_DAYS} days`, dateRange: `${D(SMART_START_LAUNCH)} to ${TRIAL_READ_END.slice(0, 10)}`, breakdown: "cohort: account created between 2026-07-17 and 2026-08-06", volume: "Insights, account created, Totals, daily or weekly" },
+		narrative: `The premiere brings in new households: ${PREMIERE_JOIN_SHARE * 100}% of the households that would otherwise have been members already join in the three weeks after the Saltmarsh premiere (${D(SALTMARSH_PREMIERE)} to ${TOURIST_LAST}) instead, most in the first week, so accounts created per day in those weeks run ${PREMIERE_LIFT}x the rest of the window. Households that create an account in those weeks come for one show: ${TOURIST_S2_SHARE * 100}% start season 2 within a day of starting their trial, and their trials convert at ${TOURIST_CONV_MULT}x the rate of other trials. Reads: account created per day, ${D(SALTMARSH_PREMIERE)} to ${TOURIST_LAST} vs the other ${WINDOW_DAYS - PREMIERE_JOIN_DAYS} days; trial started → trial converted within ${CONV_WINDOW_DAYS} days (trials convert at day 7), trials from ${D(SMART_START_LAUNCH)} (both groups had the Smart Start test) to ${TRIAL_READ_LAST} (complete windows), premiere signups vs every other signup. Conversion is drawn per cell of its factors from a low-discrepancy sequence, so the ratio reads the knob within composition noise.`,
+		mixpanelReport: { type: "Funnels", steps: ["trial started", "trial converted"], counting: "uniques", window: `${CONV_WINDOW_DAYS} days`, dateRange: `${D(SMART_START_LAUNCH)} to ${TRIAL_READ_LAST}`, breakdown: `cohort: account created between ${D(SALTMARSH_PREMIERE)} and ${TOURIST_LAST}`, volume: "Insights, account created, Totals, daily or weekly" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H2_LIFT_SQL },
@@ -1696,9 +1764,7 @@ export const stories = [
 			{
 				breakdown: { type: "duckdb", sql: H2_SQL },
 				select: { p: { where: { grp: "premiere" } }, o: { where: { grp: "other" } } },
-				// about 1,000 premiere trials converting near 30%: the ratio carries about ±5%
-				// sampling noise, so the read uses the knob as target with a half-effect floor
-				expect: { metric: "p.conv / o.conv", op: "<=", target: TOURIST_CONV_MULT, floor: Math.round((1 - 0.5 * (1 - TOURIST_CONV_MULT)) * 1000) / 1000 },
+				expect: { metric: "p.conv / o.conv", op: "between", target: band(TOURIST_CONV_MULT) },
 				minCohort: 400,
 			},
 		],
@@ -1707,8 +1773,8 @@ export const stories = [
 		id: "H3-smart-start-experiment",
 		hook: "H3",
 		archetype: "experiment-lift",
-		narrative: `The "${SMART_START_EXPERIMENT}" test starts ${D(SMART_START_LAUNCH)}: every new trial is split 50/50 (sticky per household; exposure $experiment_started a few seconds after trial started). The "${SMART_START_VARIANT}" arm opens with a taste picker and personalized first rows; it multiplies trial conversion by ${SMART_START_CONV_MULT}. Viewing in the first three days is not engineered by arm (the same early-completion mix in both). Read: trial started → trial converted within ${CONV_WINDOW_DAYS} days, trials ${D(SMART_START_LAUNCH)} to ${TRIAL_READ_END.slice(0, 10)}, by arm.`,
-		mixpanelReport: { type: "Funnels", steps: ["trial started", "trial converted"], counting: "uniques", window: `${CONV_WINDOW_DAYS} days`, dateRange: `${D(SMART_START_LAUNCH)} to ${TRIAL_READ_END.slice(0, 10)}`, breakdown: `user property "${EXP_KEY}"`, alt: "Experiments report on $experiment_started" },
+		narrative: `The "${SMART_START_EXPERIMENT}" test starts ${D(SMART_START_LAUNCH)}: every new trial is split 50/50 (sticky per household; exposure $experiment_started a few seconds after trial started). The "${SMART_START_VARIANT}" arm opens with a taste picker and personalized first rows; it multiplies trial conversion by ${SMART_START_CONV_MULT}. Viewing in the first three days is not engineered by arm (the same early-completion mix in both). Read: trial started → trial converted within ${CONV_WINDOW_DAYS} days, trials ${D(SMART_START_LAUNCH)} to ${TRIAL_READ_LAST}, by arm.`,
+		mixpanelReport: { type: "Funnels", steps: ["trial started", "trial converted"], counting: "uniques", window: `${CONV_WINDOW_DAYS} days`, dateRange: `${D(SMART_START_LAUNCH)} to ${TRIAL_READ_LAST}`, breakdown: `user property "${EXP_KEY}"`, alt: "Experiments report on $experiment_started" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H3_SQL },
@@ -1795,7 +1861,7 @@ FROM ${WH("playback_qos_daily")}`,
 		hook: "H6",
 		archetype: "composition-drift",
 		narrative: `On ${D(PRICE_CHANGE)} Standard rises from $${PRICES.standard[0]} to $${PRICES.standard[1]} a month for new subscriptions (existing subscribers keep their price; Basic with Ads and Premium do not change). ${PRICE_SWITCH_SHARE * 100}% of new households that would have picked Standard pick Basic with Ads instead, so Standard's share of plan selections falls to ${1 - PRICE_SWITCH_SHARE}x and Basic with Ads' share rises to (${PLAN_WEIGHTS_NEW.basic_ads} + ${PRICE_SWITCH_SHARE} x ${PLAN_WEIGHTS_NEW.standard}) / ${PLAN_WEIGHTS_NEW.basic_ads} = ${BASIC_RATIO}x. Signup volume does not change. Prices live only in warehouse subscription_billing_daily.`,
-		mixpanelReport: { type: "Insights", event: "plan selected", measure: "Totals, % of total", breakdown: "plan", chart: "before vs after 2026-08-11", join: "subscription_billing_daily.list_price_usd" },
+		mixpanelReport: { type: "Insights", event: "plan selected", measure: "Totals, % of total", breakdown: "plan", chart: `before vs after ${D(PRICE_CHANGE)}`, join: "subscription_billing_daily.list_price_usd" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H6_SQL },
@@ -1836,12 +1902,14 @@ FROM ${WH("playback_qos_daily")}`,
 		id: "H8-shared-households-stay",
 		hook: "H8",
 		archetype: "retention-divergence",
-		narrative: `At each monthly renewal a paying subscriber cancels with probability ${CANCEL_HAZARD_SINGLE * 100}% when the account has one viewer profile and ${CANCEL_HAZARD_SINGLE * MULTI_PROFILE_HAZARD_MULT * 100}% (${MULTI_PROFILE_HAZARD_MULT}x) with two or more; otherwise the renewal goes through. A cancellation lands up to ${CANCEL_LEAD_MAX_DAYS} days before the renewal it replaces and access ends on the renewal date. Read: renewal-time churn = paid cancellations (during_trial = false) / (renewals + paid cancellations), shared (2+ profiles) over single-profile accounts. About 400-500 cancellations per group, so the ratio carries roughly ±7% sampling noise.`,
+		narrative: `At each monthly renewal a paying subscriber cancels with probability ${CANCEL_HAZARD_SINGLE * 100}% when the account has one viewer profile and ${CANCEL_HAZARD_SINGLE * MULTI_PROFILE_HAZARD_MULT * 100}% (${MULTI_PROFILE_HAZARD_MULT}x) with two or more; otherwise the renewal goes through. A cancellation lands up to ${CANCEL_LEAD_MAX_DAYS} days before the renewal it replaces and access ends on the renewal date. Read: renewal-time churn = paid cancellations (during_trial = false) / (renewals + paid cancellations), shared (2+ profiles) over single-profile accounts. About 420 cancellations per group, so the ratio carries roughly ±7% sampling noise; the read uses the knob as target with a half-effect floor.`,
 		mixpanelReport: { type: "Insights", events: ["subscription cancelled (during_trial = false)", "subscription renewed"], formula: "A / (A + B)", breakdown: "user property profile_count (1 vs 2+)" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H8_SQL },
 				select: { m: { where: { grp: "shared" } }, s: { where: { grp: "single" } } },
+				// about 420 cancellations per group: the ratio carries about ±7% sampling
+				// noise, so the read uses the knob as target with a half-effect floor
 				expect: { metric: "m.churn_rate / s.churn_rate", op: "<=", target: MULTI_PROFILE_HAZARD_MULT, floor: Math.round((1 - 0.5 * (1 - MULTI_PROFILE_HAZARD_MULT)) * 1000) / 1000 },
 				minCohort: 1000,
 			},
