@@ -240,6 +240,47 @@ g AS (SELECT prog, count(*) FILTER (WHERE event = 'workout completed') AS comple
   count(*) FILTER (WHERE event = 'progress checked') AS progress FROM w GROUP BY 1)
 SELECT prog, completed, planned, opens, meals, progress, round(completed::DOUBLE / opens, 4) AS completed_per_open, round(planned::DOUBLE / opens, 4) AS planned_per_open,
  round(opens::DOUBLE / meals, 4) AS opens_per_meal, round(progress::DOUBLE / completed, 4) AS progress_per_completed FROM g ORDER BY prog;
+-- plan follow-through: share of planned workouts followed by a completed workout
+-- within 4 h (the Workout Loop window; a totals funnel workout planned → workout
+-- completed) and within 1 day, program vs the 14 days before
+CREATE OR REPLACE TEMP TABLE follow_through AS
+WITH p AS (SELECT uid, t FROM ev WHERE event = 'workout planned' AND t >= TIMESTAMP '2026-08-25' AND t < TIMESTAMP '2026-09-22'),
+c AS (SELECT uid, t FROM ev WHERE event = 'workout completed')
+SELECT p.uid, (p.t >= TIMESTAMP '2026-09-08') AS prog, c.t IS NOT NULL AND c.t <= p.t + INTERVAL 4 HOUR AS done_4h,
+ c.t IS NOT NULL AND c.t <= p.t + INTERVAL 1 DAY AS done_1d
+FROM p ASOF LEFT JOIN c ON p.uid = c.uid AND p.t < c.t;
+SELECT prog, count(*) AS planned, round(avg(done_4h::INT), 4) AS follow_through_4h, round(avg(done_1d::INT), 4) AS follow_through_1d
+FROM follow_through GROUP BY 1 ORDER BY 1;
+SELECT round(avg(done_4h::INT) FILTER (WHERE prog) / avg(done_4h::INT) FILTER (WHERE NOT prog), 4) AS follow_through_4h_ratio,
+ round(avg(done_1d::INT) FILTER (WHERE prog) / avg(done_1d::INT) FILTER (WHERE NOT prog), 4) AS follow_through_1d_ratio FROM follow_through;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- CHECKS — lifecycle and segment realism (not stories)
+-- ─────────────────────────────────────────────────────────────────────────
+-- account deactivated by week (Monday weeks; the first and last are partial):
+-- steady from June 4 to October 1, no ramp at the start and no cliff at the end
+SELECT date_trunc('week', t)::DATE AS week, count(DISTINCT t::DATE) AS days, count(*) AS deactivations,
+ round(count(*)::DOUBLE / count(DISTINCT t::DATE), 2) AS per_day
+FROM ev WHERE event = 'account deactivated' GROUP BY 1 ORDER BY 1;
+-- deactivations per day: Jun-Aug vs September
+SELECT CASE WHEN t < TIMESTAMP '2026-09-01' THEN '1 Jun 4 - Aug 31' ELSE '2 Sep 1 - Oct 1' END AS period,
+ count(*) AS deactivations, round(count(*)::DOUBLE / count(DISTINCT t::DATE), 2) AS per_day
+FROM ev WHERE event = 'account deactivated' GROUP BY 1 ORDER BY 1;
+-- challenges and social features per member by segment (members with events)
+WITH m AS (SELECT u.segment, e.uid, count(*) FILTER (WHERE e.event = 'challenge joined') AS joins,
+  count(*) FILTER (WHERE e.event = 'friend added') AS friends, count(*) FILTER (WHERE e.event = 'leaderboard viewed') AS leaderboards,
+  count(*) FILTER (WHERE e.event = 'workout completed') AS workouts
+  FROM ev e JOIN users u ON u.distinct_id::VARCHAR = e.uid GROUP BY ALL)
+SELECT segment, count(*) AS members, round(avg(joins), 1) AS challenge_joins, quantile_cont(joins, 0.9) AS joins_p90, max(joins) AS joins_max,
+ round(avg(friends), 1) AS friends_added, round(avg(leaderboards), 1) AS leaderboard_views, round(avg(workouts), 1) AS workouts
+FROM m GROUP BY 1 ORDER BY 1;
+-- most challenges a free member is in at once (Free plan limit: 3)
+WITH j AS (SELECT uid, t, t + duration_days * INTERVAL 1 DAY AS te, subscription_tier FROM ev WHERE event = 'challenge joined')
+SELECT max(n) AS max_running_at_a_free_join FROM (SELECT a.uid, a.t, count(*) AS n FROM j a JOIN j b ON a.uid = b.uid AND b.t <= a.t AND b.te > a.t
+ WHERE a.subscription_tier = 'free' GROUP BY ALL);
+-- app opens vs completed workouts (watch-tracked workouts sync without an app open)
+SELECT count(*) FILTER (WHERE event = 'app opened') AS app_opens, count(*) FILTER (WHERE event = 'workout completed') AS workouts_completed,
+ count(*) FILTER (WHERE event = 'workout completed' AND tracking_source = 'wearable') AS wearable_workouts FROM ev;
 
 -- ═════════════════════════════════════════════════════════════════════════
 -- EVAL QUERIES (one per question in eval/fitness.eval.md)
@@ -254,6 +295,12 @@ FROM onboarding WHERE variant IS NOT NULL GROUP BY 1 ORDER BY 1;
 WITH b AS (SELECT DISTINCT uid FROM ev WHERE event = 'subscription purchased')
 SELECT variant, count(*) AS enrolled_signups, count(b.uid) AS buyers, round(count(b.uid)::DOUBLE / count(*), 4) AS buy_rate
 FROM onboarding o LEFT JOIN b USING (uid) WHERE variant IS NOT NULL GROUP BY 1 ORDER BY 1;
+-- two-proportion z, Guided Plan vs Control buyers per enrolled signup
+WITH b AS (SELECT DISTINCT uid FROM ev WHERE event = 'subscription purchased'),
+g AS (SELECT variant, count(*) AS n, count(b.uid) AS x FROM onboarding o LEFT JOIN b USING (uid) WHERE variant IS NOT NULL GROUP BY 1),
+w AS (SELECT gp.x::DOUBLE / gp.n AS pg, c.x::DOUBLE / c.n AS pc, (gp.x + c.x)::DOUBLE / (gp.n + c.n) AS pp, gp.n AS ng, c.n AS nc
+  FROM g gp JOIN g c ON gp.variant = 'Guided Plan' AND c.variant = 'Control')
+SELECT round(pg / pc, 4) AS buy_rate_ratio, round((pg - pc) / sqrt(pp * (1 - pp) * (1.0 / ng + 1.0 / nc)), 2) AS z FROM w;
 -- all new members: those who finish onboarding vs those who do not (activity and Plus purchase)
 WITH a AS (SELECT o.uid, o.converted,
   count(*) FILTER (WHERE e.event = 'workout completed') AS workouts, count(*) FILTER (WHERE e.event = 'app opened') AS opens,
@@ -480,6 +527,9 @@ SELECT prog, completed, opens, meals, round(completed::DOUBLE / opens, 4) AS com
  round((completed::DOUBLE / opens) / (SELECT completed::DOUBLE / opens FROM g WHERE NOT prog), 4) AS per_open_vs_before,
  round((completed::DOUBLE / meals) / (SELECT completed::DOUBLE / meals FROM g WHERE NOT prog), 4) AS workouts_per_meal_vs_before,
  round((opens::DOUBLE / meals) / (SELECT opens::DOUBLE / meals FROM g WHERE NOT prog), 4) AS opens_per_meal_vs_before FROM g ORDER BY prog;
+-- plan follow-through (Workout Loop, 4-hour window, and 1 day): program vs before
+SELECT prog, count(*) AS planned, round(avg(done_4h::INT), 4) AS follow_through_4h, round(avg(done_1d::INT), 4) AS follow_through_1d
+FROM follow_through GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q17 — onboarding conversion by platform (all new members, 7-day window)
 SELECT platform, count(*) AS signups, round(avg(converted::INT), 4) AS onboarding_conversion FROM onboarding GROUP BY 1 ORDER BY 1;

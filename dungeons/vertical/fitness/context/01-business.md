@@ -9,7 +9,7 @@ Stridewell is a consumer fitness app for people who want to train consistently w
 - **Plan and train.** A member picks a workout (strength, running, HIIT, yoga, cycling, or walking) and schedules it. When they finish, the app records the workout. The core habit loop is *plan → train → check progress*.
 - **Track.** A workout can be tracked by a connected wearable (smartwatch, fitness band, or chest strap), by the phone's sensors, or entered by hand. A wearable workout reaches Stridewell when the device syncs after the workout.
 - **Progress.** Members check weekly minutes, streaks, body weight, personal records, and heart-rate trends.
-- **Challenges.** Members join time-boxed challenges (steps, strength, streak, or distance) that run for 7, 14, 21, or 30 days, either **solo** or as part of a **team** with other members. A member completes a challenge when it ends, if they met its goal. Each challenge has its own ID; everyone on a team shares the team challenge's ID.
+- **Challenges.** Members join time-boxed challenges (steps, strength, streak, or distance) that run for 7, 14, 21, or 30 days, either **solo** or as part of a **team** with other members. A member completes a challenge when their challenge period ends, if they met its goal. Each challenge has its own ID; everyone on a team shares the team challenge's ID. Team challenges are rolling: a team stays open to new members for a week, and each member's challenge period starts on the day they join, so teammates who join on different days finish on different days. Free members can be in up to 3 running challenges at a time; Plus members have no limit.
 - **Social.** Members add friends and view leaderboards (friends, challenge, city, global).
 - **Coaching.** Members can book short sessions with certified human coaches (live video, form checks, plan reviews, chat). Coaching is part of Plus: Plus members and members in a trial book sessions as part of their plan. Free members can pay $24 for a single session. Sessions are delivered by a network of about 50 contract coaches, managed by a small in-house coaching team.
 - **Nutrition.** Members log meals with calories and protein.
@@ -19,7 +19,7 @@ Stridewell is a consumer fitness app for people who want to train consistently w
 
 | Plan | Price | What you get |
 |---|---|---|
-| Free | $0 | Workout planning and tracking, basic progress, challenges, friends; single coach sessions at $24 each |
+| Free | $0 | Workout planning and tracking, basic progress, up to 3 running challenges at a time, friends; single coach sessions at $24 each |
 | Plus Monthly | $12.99/month until 2026-08-31; $14.99/month for new purchases from 2026-09-01 | Full workout library, advanced plans, human coach sessions, Stride Coach (from Aug 12), unlimited challenges |
 | Plus Annual | $99.99/year (unchanged) | Same as Plus Monthly |
 

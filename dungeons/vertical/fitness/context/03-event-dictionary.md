@@ -44,7 +44,7 @@ New members go through onboarding once, right after they install. These four eve
 | Event | Meaning | Properties |
 |---|---|---|
 | `challenge joined` | The member joins a challenge. | `challenge_id`: ID of the challenge (members of the same team challenge share it); `challenge_format`: `solo` or `team`; `challenge_type` (`steps`, `strength`, `streak`, `distance`); `duration_days` (7, 14, 21, or 30): how long the challenge runs. |
-| `challenge completed` | The member finishes a challenge they joined, in its final days. Same `challenge_id` as the join. Not sent for challenges still running on October 1. | `challenge_id`; `challenge_format`; `challenge_type`; `final_rank`. |
+| `challenge completed` | The member finishes a challenge they joined, in the final days of their challenge period (which starts on their join day, also for team challenges). Same `challenge_id` as the join. Not sent for challenges still running on October 1. | `challenge_id`; `challenge_format`; `challenge_type`; `final_rank`. |
 | `friend added` | The member adds a friend. | `source` (`contacts`, `search`, `challenge`, `suggested`). |
 | `leaderboard viewed` | The member views a leaderboard. | `leaderboard_type` (`friends`, `challenge`, `city`, `global`). |
 
@@ -60,10 +60,10 @@ New members go through onboarding once, right after they install. These four eve
 
 | Event | Meaning | Properties |
 |---|---|---|
-| `app opened` | The member opens the app. | `entry_point` (`home_screen`, `push`, `widget`, `watch_app`); `session_minutes`. |
+| `app opened` | The member opens the phone app. Workouts tracked on a watch or band sync in the background, so many completed workouts arrive without an app open. | `entry_point` (`home_screen`, `push`, `widget`, `watch_app`); `session_minutes`. |
 | `notification received` | Stridewell sends the member a notification. Lifecycle messaging follows a sunset policy: reminders pause once a member stops using the app, and win-back outreach runs outside the app (it is not tracked here). So a member who goes inactive stops receiving this event too. | `notification_type` (`workout_reminder`, `streak_at_risk`, `challenge_update`, `friend_activity`, `weekly_recap`); `channel` (`push` or `email`); `opened` (true/false): whether the member opened it. |
 | `profile updated` | The member edits their profile or settings. | `field_updated` (`body_weight`, `goal`, `photo`, `units`, `notification_settings`, `connected_devices`). |
-| `account deactivated` | The member deactivates their account. Sent at most once, after a member stops using the app. | `reason` (`lost_motivation`, `switched_apps`, `injury`, `reached_goal`, `too_busy`); `subscription_tier` at deactivation. |
+| `account deactivated` | The member deactivates their account. Sent at most once, when a member leaves; often a few days after their last workout. A member who had already stopped training before June 4 may show only this event in the window. | `reason` (`lost_motivation`, `switched_apps`, `injury`, `reached_goal`, `too_busy`); `subscription_tier` at deactivation. |
 
 ## User profile properties
 
