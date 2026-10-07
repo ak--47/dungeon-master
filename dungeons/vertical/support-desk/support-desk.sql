@@ -114,7 +114,7 @@ FROM (SELECT * FROM tickets WHERE t0 < TIMESTAMP '2026-09-17 23:59:59' AND t2 < 
 GROUP BY 1 ORDER BY 3;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- STORY H3-microsoft-365-onboarding — setup completion 37% vs 68%
+-- STORY H3-microsoft-365-onboarding — setup completion 38.9% vs 68.7% (7 days)
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE TEMP TABLE onboarding AS
 WITH ib AS (SELECT uid, min(t) AS t1 FROM ev WHERE event = 'inbox connected' GROUP BY 1),
@@ -333,6 +333,12 @@ WITH w AS (SELECT CASE WHEN k.t0 >= TIMESTAMP '2026-08-17' AND k.t0 < TIMESTAMP 
 SELECT region_group, industry, round(count(*) FILTER (WHERE per = 'season') / 4.0, 1) AS season_per_week, round(count(*) FILTER (WHERE per = 'before') / 8.0, 1) AS before_per_week,
  round(season_per_week / before_per_week, 3) AS ratio
 FROM w WHERE per IS NOT NULL GROUP BY 1, 2 ORDER BY 1, 5 DESC;
+-- education vs every other industry, all regions (workspaces that existed before the window)
+WITH w AS (SELECT CASE WHEN k.t0 >= TIMESTAMP '2026-08-17' AND k.t0 < TIMESTAMP '2026-09-14' THEN 'season'
+    WHEN k.t0 >= TIMESTAMP '2026-06-22' AND k.t0 < TIMESTAMP '2026-08-17' THEN 'before' END AS per, p.industry = 'education' AS education
+  FROM tickets k JOIN prof p ON p.uid = k.uid WHERE p.customer_since < DATE '2026-06-04'),
+g AS (SELECT education, (count(*) FILTER (WHERE per = 'season') / 4.0) / (count(*) FILTER (WHERE per = 'before') / 8.0) AS season_ratio FROM w GROUP BY 1)
+SELECT 'all regions' AS region_group, round(max(season_ratio) FILTER (WHERE education) / max(season_ratio) FILTER (WHERE NOT education), 4) AS education_vs_other_industries FROM g;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q10 — early behavior that predicts new workspaces staying (macros in the first 14 days)

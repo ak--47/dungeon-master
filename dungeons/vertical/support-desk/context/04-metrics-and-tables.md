@@ -25,7 +25,7 @@ All KPIs use UTC days. Count people by unique `user_id` and companies by `compan
 
 Three tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). Days with no activity have a row with zeros. They join to events on the UTC date of the event and on the named dimension.
 
-In the warehouse, numeric columns are loaded as FLOAT64 (shown as FLOAT below). Count columns always hold whole numbers, and raw file exports show them as integers.
+Column types are the warehouse load types: counts, seconds, list prices, and new MRR are whole numbers loaded as INT64 (shown as INTEGER below); spend is FLOAT64 (shown as FLOAT).
 
 ### `paid_marketing_daily`
 
@@ -36,9 +36,9 @@ Daily paid marketing cost by channel, from the ad platforms' billing exports, as
 | `date` | DATE | UTC day | Spend day. |
 | `acquisition_channel` | STRING | — | `google_ads`, `capterra`, or `linkedin_ads`. Matches `acquisition_channel` on `account created`. |
 | `spend_usd` | FLOAT | USD | Media spend billed for the day. |
-| `signups_reported` | FLOAT | count | Trial sign-ups the ad platform claims for the day. Platforms use their own attribution and usually claim more than Mixpanel records. |
-| `clicks` | FLOAT | count | Ad clicks reported by the platform. |
-| `impressions` | FLOAT | count | Ad impressions reported by the platform. |
+| `signups_reported` | INTEGER | count | Trial sign-ups the ad platform claims for the day. Platforms use their own attribution and usually claim more than Mixpanel records. |
+| `clicks` | INTEGER | count | Ad clicks reported by the platform. |
+| `impressions` | INTEGER | count | Ad impressions reported by the platform. |
 
 Caveats: organic, partner referral, and Shopify App Store have no media spend and are not in this table. Use Mixpanel signups, not `signups_reported`, for CAC.
 
@@ -50,11 +50,11 @@ Daily health of ticket intake by channel, from the intake pipeline's logs and th
 |---|---|---|---|
 | `date` | DATE | UTC day | Day the pipeline processed the messages. |
 | `channel` | STRING | — | `email`, `chat`, `web_form`, or `api`. Matches `channel` on `ticket assigned`. |
-| `tickets_ingested` | FLOAT | count | Messages that became tickets in the pipeline that day, including tickets later closed as spam or auto-replies, and tickets merged into an existing ticket. Counted on the day they were processed. |
-| `tickets_auto_closed` | FLOAT | count | Of those, tickets closed automatically (spam, out-of-office replies, notifications) and never assigned to an agent. |
-| `tickets_merged` | FLOAT | count | Of those, tickets merged into an existing ticket and never assigned on their own. |
-| `tickets_delayed_over_1h` | FLOAT | count | Messages received that day that waited more than one hour before they became tickets. Counted on the day they were received. |
-| `p95_ingest_latency_sec` | FLOAT | seconds | 95th-percentile time from receiving a message to creating its ticket, over the messages received that day. |
+| `tickets_ingested` | INTEGER | count | Messages that became tickets in the pipeline that day, including tickets later closed as spam or auto-replies, and tickets merged into an existing ticket. Counted on the day they were processed. |
+| `tickets_auto_closed` | INTEGER | count | Of those, tickets closed automatically (spam, out-of-office replies, notifications) and never assigned to an agent. |
+| `tickets_merged` | INTEGER | count | Of those, tickets merged into an existing ticket and never assigned on their own. |
+| `tickets_delayed_over_1h` | INTEGER | count | Messages received that day that waited more than one hour before they became tickets. Counted on the day they were received. |
+| `p95_ingest_latency_sec` | INTEGER | seconds | 95th-percentile time from receiving a message to creating its ticket, over the messages received that day. |
 | `ingestion_status` | STRING | — | Daily status for the channel: `operational` or `degraded`, as posted on the status page. |
 
 Caveats: `tickets_ingested` runs higher than the Mixpanel count of `ticket assigned` and does not track it exactly day to day, because auto-closed and merged tickets are only in this table. Intake and routing also disagree a little each day: agents log some tickets by hand (phone calls, imports) that never pass through intake, and delete a few ingested tickets before they are routed. A message that is delayed is counted in `tickets_ingested` (and assigned in Mixpanel) on the day it is finally processed.
@@ -67,10 +67,10 @@ Daily new subscriptions, seats, and new MRR by plan, from Ticketloop's billing s
 |---|---|---|---|
 | `date` | DATE | UTC day | Subscription start day. |
 | `plan` | STRING | — | `starter` or `growth`. Matches `plan` on `subscription started`. Enterprise contracts are booked by sales and are not in this table. |
-| `seats_purchased` | FLOAT | count | Seats on the new subscriptions that day. |
-| `new_subscriptions` | FLOAT | count | New subscriptions that day. |
-| `list_price_per_seat_usd` | FLOAT | USD per seat per month | List price for a new subscription of this plan on this day. |
-| `new_mrr_usd` | FLOAT | USD per month | `seats_purchased` × `list_price_per_seat_usd`. |
+| `seats_purchased` | INTEGER | count | Seats on the new subscriptions that day. |
+| `new_subscriptions` | INTEGER | count | New subscriptions that day. |
+| `list_price_per_seat_usd` | INTEGER | USD per seat per month | List price for a new subscription of this plan on this day. |
+| `new_mrr_usd` | INTEGER | USD per month | `seats_purchased` × `list_price_per_seat_usd`. |
 
 Caveats: the table covers new self-serve subscriptions only, not renewals, expansions, or Enterprise contracts. Annual plans are shown at their monthly list price; discounts are not applied. Billing and Mixpanel differ a little day to day: a few subscriptions bought on invoice never reach Mixpanel, seat counts can be edited before the first invoice, and a subscription cancelled on its first day is voided in billing but stays in Mixpanel. Use this table, not Mixpanel, for prices and MRR.
 
