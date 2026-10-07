@@ -42,7 +42,7 @@ WHERE distinct_id::VARCHAR IN (SELECT DISTINCT user_id::VARCHAR FROM raw_events 
 CREATE OR REPLACE TEMP TABLE reader_offset AS
 WITH p AS (SELECT distinct_id::VARCHAR AS id, region FROM read_json_auto(getvariable('data_prefix') || '-USERS*.json*', sample_size=-1, union_by_name=true)
   UNION ALL SELECT unnest(anonymousIds)::VARCHAR AS id, region FROM read_json_auto(getvariable('data_prefix') || '-USERS*.json*', sample_size=-1, union_by_name=true))
-SELECT id, CASE any_value(region) WHEN 'us_northeast' THEN -4 WHEN 'us_south' THEN -5 WHEN 'us_midwest' THEN -5 WHEN 'us_west' THEN -7
+SELECT id, CASE any_value(region) WHEN 'us_northeast' THEN -4 WHEN 'us_south' THEN -4 WHEN 'us_midwest' THEN -5 WHEN 'us_west' THEN -7
   WHEN 'canada' THEN -4 WHEN 'uk' THEN 1 WHEN 'other_international' THEN 1 ELSE -4 END AS utc_offset_h
 FROM p GROUP BY 1;
 
@@ -87,7 +87,7 @@ SELECT (count(*) FILTER (WHERE per = 'in' AND section = 'sports')::DOUBLE / coun
 FROM w WHERE per IS NOT NULL;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- STORY H2-for-you-feed-experiment — home_feed clicks per home view x1.5 in the For You arm
+-- STORY H2-for-you-feed-experiment — home_feed clicks per app home view x1.5 in the For You arm (one click per view at most)
 -- ─────────────────────────────────────────────────────────────────────────
 WITH x AS (SELECT uid, any_value("Variant name") AS variant, min(t) AS t0 FROM ev WHERE event = '$experiment_started' GROUP BY 1)
 SELECT x.variant, count(DISTINCT x.uid) AS exposed_readers,
@@ -95,6 +95,22 @@ SELECT x.variant, count(DISTINCT x.uid) AS exposed_readers,
  count(*) FILTER (WHERE event = 'front page viewed' AND page = 'home') AS home_views,
  round(count(*) FILTER (WHERE event = 'recommendation clicked' AND module = 'home_feed')::DOUBLE / count(*) FILTER (WHERE event = 'front page viewed' AND page = 'home'), 4) AS feed_ctr
 FROM ev JOIN x ON x.uid = ev.uid WHERE ev.t >= x.t0 AND ev.platform IN ('ios_app', 'android_app') GROUP BY 1 ORDER BY 1;
+
+-- STORY H2 (per home view: app home views since exposure followed by a home_feed click within 30 minutes,
+-- the Funnels report in Totals mode with a 30-minute window; and the Uniques version, which saturates)
+CREATE OR REPLACE TEMP TABLE h2_views AS
+WITH x AS (SELECT uid, any_value("Variant name") AS variant, min(t) AS t0 FROM ev WHERE event = '$experiment_started' GROUP BY 1),
+hv AS (SELECT ev.uid, x.variant, ev.t FROM ev JOIN x ON x.uid = ev.uid
+  WHERE ev.t >= x.t0 AND ev.event = 'front page viewed' AND ev.page = 'home' AND ev.platform IN ('ios_app', 'android_app')),
+hc AS (SELECT ev.uid, ev.t FROM ev JOIN x ON x.uid = ev.uid
+  WHERE ev.t >= x.t0 AND ev.event = 'recommendation clicked' AND ev.module = 'home_feed' AND ev.platform IN ('ios_app', 'android_app'))
+SELECT hv.*, EXISTS (SELECT 1 FROM hc WHERE hc.uid = hv.uid AND hc.t > hv.t AND hc.t <= hv.t + INTERVAL 30 MINUTE) AS converted FROM hv;
+WITH g AS (SELECT variant, count(*) AS home_views, avg(converted::INT) AS view_conv FROM h2_views GROUP BY 1),
+u AS (SELECT variant, count(*) AS readers, avg(c::INT) AS uniques_conv FROM (SELECT uid, variant, bool_or(converted) AS c FROM h2_views GROUP BY 1, 2) GROUP BY 1)
+SELECT g.variant, g.home_views, round(g.view_conv, 4) AS view_conv_30min, u.readers, round(u.uniques_conv, 4) AS uniques_conv_30min,
+ round(g.view_conv / max(g.view_conv) FILTER (WHERE g.variant = 'Control') OVER (), 3) AS view_conv_vs_control,
+ round(u.uniques_conv / max(u.uniques_conv) FILTER (WHERE u.variant = 'Control') OVER (), 3) AS uniques_conv_vs_control
+FROM g JOIN u USING (variant) ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H3-gift-articles-launch — subscriber shares per attempted read x1.6 after 2026-08-11
@@ -111,6 +127,19 @@ FROM g GROUP BY 1 ORDER BY 1;
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H4-web-meter-outage — 70% of blocked web reads went through free, 2026-08-25..27 (warehouse join)
 -- ─────────────────────────────────────────────────────────────────────────
+-- The story read: walled share of free readers' attempted reads, paywall shown / (paywall shown + article viewed
+-- with reader_tier = registered), web over apps, incident days over the 14 days either side
+WITH o AS (SELECT DISTINCT date::DATE AS d FROM wh_platform WHERE service_status = 'major_outage'),
+w AS (SELECT t::DATE AS d, platform = 'web' AS web, event = 'paywall shown' AS walled FROM ev
+  WHERE (event = 'paywall shown' OR (event = 'article viewed' AND reader_tier = 'registered')) AND t >= TIMESTAMP '2026-08-11' AND t < TIMESTAMP '2026-09-11'),
+g AS (SELECT (d IN (SELECT d FROM o)) AS outage, web, avg(walled::INT) AS walled_share FROM w GROUP BY 1, 2)
+SELECT round(max(walled_share) FILTER (WHERE outage AND web), 4) AS web_walled_outage, round(max(walled_share) FILTER (WHERE NOT outage AND web), 4) AS web_walled_baseline,
+ round(max(walled_share) FILTER (WHERE outage AND NOT web), 4) AS app_walled_outage, round(max(walled_share) FILTER (WHERE NOT outage AND NOT web), 4) AS app_walled_baseline,
+ round((max(walled_share) FILTER (WHERE outage AND web) / max(walled_share) FILTER (WHERE NOT outage AND web))
+  / (max(walled_share) FILTER (WHERE outage AND NOT web) / max(walled_share) FILTER (WHERE NOT outage AND NOT web)), 4) AS relative_web_walled_share
+FROM g;
+
+-- STORY H4 (raw counts: web/app ratio of paywall views, incident days vs the 14 days either side)
 WITH o AS (SELECT DISTINCT date::DATE AS d FROM wh_platform WHERE service_status = 'major_outage'),
 w AS (SELECT t::DATE AS d, platform = 'web' AS web FROM ev WHERE event = 'paywall shown' AND t >= TIMESTAMP '2026-08-11' AND t < TIMESTAMP '2026-09-11'),
 g AS (SELECT (d IN (SELECT d FROM o)) AS outage, count(*) FILTER (WHERE web)::DOUBLE / count(*) FILTER (WHERE NOT web) AS web_to_app FROM w GROUP BY 1)

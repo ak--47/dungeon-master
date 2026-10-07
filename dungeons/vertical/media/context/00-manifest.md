@@ -29,7 +29,7 @@ This folder is the internal analytics wiki for **The Lantern**, an independent n
 - A new visitor's first article is read anonymously: the event carries a `device_id` and no `user_id`, and its `reader_tier` is `anonymous`. The registration wall (`regwall shown`) follows on the same device.
 - A visitor who creates a free account fires `account registered`, which carries both the new `user_id` and the `device_id`. Mixpanel links the device to the account at that moment, so the visitor's earlier anonymous events count toward the same person.
 - Visitors who never register stay anonymous: their events carry only a `device_id`, and Mixpanel counts each such device as one user.
-- Every other event carries both `user_id` and `device_id`. Most readers use one to three devices (laptop, phone, tablet), a few use more; every device in an account is linked to that account.
+- Every other event carries both `user_id` and `device_id`. Most readers use one to three devices (laptop, phone, tablet), a few use more; every device in an account is linked to that account. A single visit stays on one device.
 - Readers who had an account before June 4 have no `account registered` event in this window. Their `member_since` profile date is before the window. For accounts created in the window, `member_since` is the registration date.
 - Count people with Mixpanel "Uniques" (resolved identity), not with raw `device_id`.
 

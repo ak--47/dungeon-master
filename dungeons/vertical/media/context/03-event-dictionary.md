@@ -54,7 +54,7 @@ The walls (`regwall shown`, `paywall shown`) copy the `section`, `article_id`, a
 | Property | Meaning |
 |---|---|
 | `acquisition_channel` | The channel that first brought the reader (same values as the event property). |
-| `region` | `us_northeast`, `us_south`, `us_west`, `us_midwest`, `canada`, `uk`, `other_international`. |
+| `region` | `us_northeast`, `us_south`, `us_west`, `us_midwest`, `canada`, `uk`, `other_international`. For reader local time the business uses one time zone per region: `us_northeast`, `us_south`, and `canada` → US Eastern (UTC-4 all window); `us_midwest` → Central (UTC-5); `us_west` → Pacific (UTC-7); `uk` and `other_international` → UTC+1. |
 | `age_band` | `18-24`, `25-34`, `35-44`, `45-54`, `55-64`, `65+`. |
 | `reader_tier` | The reader's current access tier (end of the window): `registered`, `digital`, or `all_access`. |
 | `member_since` | Date the account was created (YYYY-MM-DD). Before 2026-06-04 for readers who registered earlier. |

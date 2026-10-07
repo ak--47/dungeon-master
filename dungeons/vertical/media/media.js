@@ -73,7 +73,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * never register stay device-only and have no profile in Mixpanel (_drop).
  * Every other event carries user_id and device_id. Readers use 1-3 devices
  * (avgDevicePerUser 1.6); platform is sticky per device: desktop OS → web;
- * phones and tablets → the app (75%) or the mobile web.
+ * phones and tablets → the app (75%) or the mobile web. A visit stays on one
+ * device: an event within 30 minutes of the member's previous event takes that
+ * event's device (the engine draws a device per event without session ids).
  *
  * DESIGN NOTES:
  * - The meter: every "article viewed" by a registered (non-subscriber) reader is
@@ -132,13 +134,18 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * H2. FOR YOU FEED EXPERIMENT (Home feed funnel experiment + everything)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: from 2026-07-15 signed-in app readers split 50/50. The For You arm's
- *   personalized home module gets 1.5x the clicks per home screen view
- *   (recommendation clicked, module = home_feed); each extra click opens an
- *   article.
+ * PATTERN: from 2026-07-15 signed-in app readers split 50/50. In the For You
+ *   arm a home screen view that would not have led to a click on the home
+ *   module (recommendation clicked, module = home_feed) gets one with the
+ *   probability that lifts the per-view click rate to 1.5x Control's (a running
+ *   tally of Control readers sets the rate); each extra click opens an article.
+ *   A view leads to at most one home-module click.
  * MIXPANEL: Insights, recommendation clicked (module = home_feed) / front page
  *   viewed (page = home), filter platform in (ios_app, android_app), Jul 15 -
- *   Oct 1, breakdown "Experiment: For You Feed".
+ *   Oct 1, breakdown "Experiment: For You Feed". Or Funnels, front page viewed
+ *   (page = home) → recommendation clicked (module = home_feed), 30-minute
+ *   window, Totals, same filter and breakdown. A Uniques funnel saturates
+ *   (most exposed readers tap the module at least once in either arm).
  * REAL WORLD: personalization lifts recirculation on the home screen.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -159,8 +166,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   of web reads that should hit the paywall go through free. Apps untouched.
  *   The warehouse shows service_status = major_outage and meter_error_rate ≈
  *   0.7 for web on those days.
- * MIXPANEL: Insights, paywall shown, daily, breakdown platform; web/app ratio
- *   on incident days vs 14 days either side; join the warehouse status.
+ * MIXPANEL: Insights, paywall shown, daily, breakdown platform; join the
+ *   warehouse status. Read: walled share of free readers' attempted reads,
+ *   paywall shown / (paywall shown + article viewed with reader_tier =
+ *   registered), web over apps, incident days vs 14 days either side. Raw
+ *   web/app paywall counts read the same direction but swing 10-20% by day.
  * REAL WORLD: a fail-open paywall gives away the product and the sign-ups.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -232,44 +242,54 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-media, 2026-10-07, full
- * fidelity, 10,000 readers, 892,968 events)
+ * fidelity, 10,000 readers, 892,791 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation            | Expected | Measured
  * -----|------------------------------------------------|-----------------------|----------|---------
- * H1   | subscriber sports/non-sports reads, WC / base  | WC_MEAN_LIFT          | 1.972    | 1.949 (share 16.5% vs 9.2%)
- * H2   | home_feed clicks per app home view, For You / Control | FOR_YOU_CLICK_MULT | 1.50  | 1.546 (51.1% vs 33.1%)
- * H2   | For You share of exposed readers               | equal 2-arm hash      | 0.50     | 0.497 (1,794 of 3,608)
- * H3   | shares per attempted read, after/before, subscribers over free | GIFT_SHARE_MULT | 1.60 | 1.614 (1.639 / 1.016)
+ * H1   | subscriber sports/non-sports reads, WC / base  | WC_MEAN_LIFT          | 1.972    | 1.968 (share 16.6% vs 9.2%)
+ * H2   | home_feed clicks per app home view, For You / Control | FOR_YOU_CLICK_MULT | 1.50  | 1.495 (49.7% vs 33.3%)
+ * H2   | app home views with a home_feed click in 30 min, For You / Control | FOR_YOU_CLICK_MULT | 1.50 | 1.492 (50.1% vs 33.6%)
+ * H2   | For You share of exposed readers               | equal 2-arm hash      | 0.50     | 0.497 (1,793 of 3,606)
+ * H3   | shares per attempted read, after/before, subscribers over free | GIFT_SHARE_MULT | 1.60 | 1.631 (1.650 / 1.012)
  * H3   | gift_link before launch or from non-subscribers | exact purity         | 0        | 0
- * H4   | web/app paywall views, outage / ±14 days       | 1 − OUTAGE_FAIL       | 0.30     | 0.329 (0.55 vs 1.66)
+ * H4   | walled share of free web reads over apps, outage / ±14 days | 1 − OUTAGE_FAIL | 0.30 | 0.303 (web 21.5% vs 70.7%; apps 70.6% vs 70.5%)
  * H4   | warehouse meter_error_rate on outage days      | OUTAGE_FAIL           | 0.70     | 0.700
- * H5   | 7-day registration rate, social / other        | SOCIAL_REG_MULT       | 0.50     | 0.439 (22.6% vs 51.4%)
- * H5   | spend per new visitor, Meta / Google           | 1.5 / 2.4             | 0.625    | 0.636 ($1.49 vs $2.34)
- * H5   | spend per registration, Meta / Google          | (1.5/0.5) / 2.4       | 1.25     | 1.445 ($6.82 vs $4.72)
- * H6   | subscriptions per paywall view, newsletter / other | REFERRER_CONV_MULT | 2.50     | 2.772 (1.94% vs 0.70%)
- * H7   | conversion per paywall view, sale / 4 weeks before | SALE_CONV_MULT (≥, floor 1.5) | 2.00 | 2.103 (1.65% vs 0.78%)
- * H7   | first-period bookings per paywall view, sale / before | 2.0 × 0.25 (≤, floor 0.75) | 0.50 | 0.604 ($0.29 vs $0.48)
- * H8   | median hours first read → registration, social / other | SOCIAL_TTC_MULT (±10%) | 3.00 | 2.862 (11.4 h vs 4.0 h)
- * H9   | monthly cancel rate, < 4 / 4+ reading days prior month | 0.16 / 0.04 (≥, floor 2.5) | 4.00 | 3.221 (13.6% vs 4.2%)
- * H10  | average read_time_sec, local weekend / weekday | WEEKEND_READ_MULT     | 1.35     | 1.350 (245.5 s vs 181.8 s; UTC days 1.297)
+ * H5   | 7-day registration rate, social / other        | SOCIAL_REG_MULT       | 0.50     | 0.439 (22.5% vs 51.3%)
+ * H5   | spend per new visitor, Meta / Google           | 1.5 / 2.4             | 0.625    | 0.637 ($1.49 vs $2.34)
+ * H5   | spend per registration, Meta / Google          | (1.5/0.5) / 2.4       | 1.25     | 1.446 ($6.82 vs $4.72)
+ * H6   | subscriptions per paywall view, newsletter / other | REFERRER_CONV_MULT | 2.50     | 2.401 (1.84% vs 0.77%)
+ * H7   | conversion per paywall view, sale / 4 weeks before | SALE_CONV_MULT (≥, floor 1.5) | 2.00 | 2.101 (1.65% vs 0.79%)
+ * H7   | first-period bookings per paywall view, sale / before | 2.0 × 0.25 (≤, ceiling 0.75) | 0.50 | 0.426 ($0.23 vs $0.54)
+ * H8   | median hours first read → registration, social / other | SOCIAL_TTC_MULT (±10%) | 3.00 | 3.080 (12.6 h vs 4.1 h)
+ * H9   | monthly cancel rate, < 4 / 4+ reading days prior month | 0.16 / 0.04 (≥, floor 2.5) | 4.00 | 3.222 (14.0% vs 4.35%)
+ * H10  | average read_time_sec, local weekend / weekday | WEEKEND_READ_MULT     | 1.35     | 1.349 (245.8 s vs 182.1 s; UTC days 1.299)
  * ═════════════════════════════════════════════════════════════════════════
  *
- * Grades on this seed: 6 NAILED, 4 STRONG. The four STRONG reads are sample
+ * Grades on this seed: 7 NAILED, 3 STRONG. The three STRONG reads are sample
  * noise, not confounds, and keep the knob as target:
- * - H5 registration ratio 0.439 (−12%): 1,600 social and 2,642 other visitors
+ * - H5 registration ratio 0.439 (−12%): 1,599 social and 2,641 other visitors
  *   give the ratio a standard error ≈4.7%, so this draw is ≈2.5 SE low (the
- *   engine's per-visitor conversion draw: Meta 21.7%, organic social 24.3% vs
- *   the declared 25%). Spend per registration (1.445) inherits it.
- * - H6 2.772 (+11%): 316 newsletter subscriptions, ratio SE ≈6%.
- * - H7 bookings 0.604 (+21%): 153 sale-week subscriptions, and first-period
- *   prices run $3 to $200 (monthly vs annual), so the annual share (44% in the
- *   sale vs 39% before) moves bookings per view; ratio SE ≈14%. The 75% discount
- *   keeps the read several SE below break-even.
- * - H9 3.221 (−20%, floor 2.5): 141 cancellations on 1,040 low-reading
- *   subscriber-months (13.6% vs the 16% knob), ratio SE ≈11%.
- * Not engineered and flat: paywall conversion per view by For You arm (0.89%
- * vs 0.90%, z = -0.12) and by platform (chi-square 1.83, 2 dof), and new
- * visitors per day during the World Cup (36.6 vs 37.9, t = -0.93).
+ *   engine's per-visitor conversion draw: Meta 21.6%, organic social 24.3% vs
+ *   the declared 25%). Spend per registration (1.446) inherits it.
+ * - H7 bookings 0.426 (−15%, on the cheap side of the knob): 153 sale-week
+ *   subscriptions, and first-period prices run $3 to $200 (monthly vs annual),
+ *   so the annual share (33% in the sale vs 39% outside it) moves bookings per
+ *   view; ratio SE ≈14%.
+ * - H9 3.222 (−19%, floor 2.5): 147 cancellations on 1,050 low-reading
+ *   subscriber-months (14.0% vs the 16% knob), ratio SE ≈11%.
+ * H4 reads the walled share of free readers' attempted reads, not raw paywall
+ * counts: daily paywall counts swing 10-20% with a few binge readers (raw web/app
+ * paywall ratio 0.321 here; an earlier run with OUTAGE_FAIL = 0 showed +9% web
+ * paywall views on the incident days by chance), and the share cancels that.
+ * Subscription draws use their own salted stream (SUB_DRAW_SALT). Four labels
+ * were tried: "subscribe" gave a For You vs Control conversion gap of z = -2.0,
+ * "subscribe-2" an iOS split of z = -1.98, "subscribe-4" an overall z = -1.45;
+ * "subscribe-3" is kept so the null questions (eval Q3, Q19) are clean. The draw
+ * is arm-blind; the gaps are noise (on "subscribe", subscriptions expected from
+ * the per-view probabilities were 233 For You vs 240 Control; observed 224 vs 273).
+ * Not engineered and flat: paywall conversion per view by For You arm (0.90%
+ * vs 0.88%, z = 0.25; by platform |z| ≤ 0.93) and by platform (chi-square 0.66,
+ * 2 dof), and new visitors per day during the World Cup (36.5 vs 37.9, t = -1.01).
  */
 
 // ── SCALE ──
@@ -338,6 +358,10 @@ const FOR_YOU_EXPERIMENT = "For You Feed";
 const FOR_YOU_VARIANT = "For You";
 const EXP_KEY = `Experiment: ${FOR_YOU_EXPERIMENT}`;
 const FOR_YOU_CLICK_MULT = 1.5;
+// Control arm's per-view home-module click rate: a running tally of Control readers, starting from a prior
+const FEED_CTR_PRIOR = 0.33;
+const FEED_PRIOR_VIEWS = 300;
+const FEED_TALLY = { views: 0, clicks: 0 };
 
 // H3 Gift Articles: subscriber shares per subscriber article read
 const GIFT_RAMP_DAYS = 7;
@@ -361,6 +385,8 @@ const BORN_PCT = 45;
 
 // H6 newsletter readers convert: per paywall-view conversion multiplier by the blocked read's referrer
 const BASE_PAYWALL_CONV = 0.007;
+// salt label of the per-paywall-view subscription draw (an independent seeded stream)
+const SUB_DRAW_SALT = "subscribe-3";
 const REFERRER_CONV_MULT = { newsletter: 2.5 };
 
 // H7 Labor Day sale: conversion multiplier and first-period discount
@@ -374,7 +400,7 @@ const CANCEL_Q = { low: 0.16, high: 0.04 };
 // H10 weekend long reads: read time multiplier on Saturday and Sunday in the reader's local time
 const WEEKEND_READ_MULT = 1.35;
 // reader time zone by region: UTC offset in hours (the whole window is on summer time in the US, Canada, and UK)
-const REGION_UTC_OFFSET_H = { us_northeast: -4, us_south: -5, us_midwest: -5, us_west: -7, canada: -4, uk: 1, other_international: 1 };
+const REGION_UTC_OFFSET_H = { us_northeast: -4, us_south: -4, us_midwest: -5, us_west: -7, canada: -4, uk: 1, other_international: 1 };
 const DEFAULT_UTC_OFFSET_H = -4;
 
 // meter: registered readers get a number of free articles in any rolling 30 days
@@ -609,6 +635,19 @@ function handleEverything(events, meta) {
 		if (art && wall) wall.time = iso(Math.min(regT - 1000, T(art) + chance.integer({ min: 20, max: 150 }) * 1000));
 	}
 
+	// ── session continuity: a reader stays on one device within a visit ──
+	// the engine draws a device per event (no session ids), so an event within 30
+	// minutes of the member's previous event takes that event's device. The
+	// registration event keeps its own device: it stitches the anonymous first read.
+	{
+		let prevE = null;
+		for (const e of events) {
+			if (T(e) < regT) continue;
+			if (prevE && T(e) - T(prevE) <= 30 * MIN_MS && e.device_id && prevE.device_id) copyDevice(e, prevE);
+			prevE = e;
+		}
+	}
+
 	// ── article content ──
 	for (const e of events) if (e.event === "article viewed") freshArticle(e, e.section);
 	const firstAnon = born ? events.find((e) => e.event === "article viewed" && T(e) < regT) : null;
@@ -641,7 +680,6 @@ function handleEverything(events, meta) {
 	// exposure: 1 s before the first app event after the start (and after registration)
 	const firstApp = events.find((e) => T(e) >= expStart && T(e) > regT && e.platform !== "web");
 	let exposure = null;
-	const forYouClones = new Set();
 	if (variant !== undefined && firstApp) {
 		exposure = makeFrom(own, "$experiment_started", Math.max(T(firstApp) - 1000, regT + 1), firstApp, uid);
 		if (exposure) {
@@ -651,12 +689,55 @@ function handleEverything(events, meta) {
 	}
 	if (!exposure && profile[EXP_KEY] !== undefined) delete profile[EXP_KEY];
 
+	// For You arm: the personalized module is more clickable. A home screen view
+	// that did not lead to a click gets one (plus the article it opens) with the
+	// probability that lifts the per-view click rate to FOR_YOU_CLICK_MULT x the
+	// Control arm's rate (running tally of Control readers, prior FEED_CTR_PRIOR).
+	// A click "follows" a view when it is the next event within 30 minutes, the
+	// same rule that labels it module = home_feed below.
+	if (exposure) {
+		const homeViews = [];
+		for (let i = 0; i < events.length; i++) {
+			const e = events[i];
+			if (e.event !== "front page viewed" || e.page !== "home" || e.platform === "web" || T(e) < T(exposure)) continue;
+			const next = events[i + 1];
+			const clicked = !!next && next.event === "recommendation clicked" && T(next) - T(e) <= 30 * MIN_MS;
+			homeViews.push({ e, next, clicked });
+		}
+		if (variant === FOR_YOU_VARIANT) {
+			const p0 = (FEED_TALLY.clicks + FEED_CTR_PRIOR * FEED_PRIOR_VIEWS) / (FEED_TALLY.views + FEED_PRIOR_VIEWS);
+			// each variant reader's response to the feed varies (x0.4-1.6 of the mean)
+			const q = Math.min(1, (FOR_YOU_CLICK_MULT - 1) * p0 / (1 - p0) * (0.4 + 1.2 * salt(uid, "foryou-taste")));
+			const ownClick = events.find((x) => x.event === "recommendation clicked");
+			const clones = [];
+			for (const v of homeViews) {
+				if (v.clicked) continue;
+				const room = v.next ? T(v.next) - T(v.e) : 30 * MIN_MS;
+				if (room < 3000 || !chance.bool({ likelihood: q * 100 })) continue;
+				const t1 = T(v.e) + Math.max(1000, Math.min(chance.integer({ min: 8, max: 90 }) * 1000, Math.floor(room / 3)));
+				const t2 = t1 + Math.max(1000, Math.min(chance.integer({ min: 3, max: 15 }) * 1000, Math.floor(room / 3)));
+				const click = makeFrom({ "recommendation clicked": ownClick }, "recommendation clicked", t1, v.e, uid);
+				const tpl = events.find((x) => x.event === "article viewed" && T(x) >= regT) || POOL["article viewed"];
+				if (!click || !tpl) continue;
+				click.position = chance.integer({ min: 1, max: 8 });
+				const read = cloneEvent(tpl, { time: iso(t2) });
+				copyDevice(read, v.e);
+				read.user_id = uid;
+				freshArticle(read, draw(SECTIONS));
+				clones.push(click, read);
+			}
+			events = events.concat(clones).sort(byT);
+		} else {
+			for (const v of homeViews) { FEED_TALLY.views++; if (v.clicked) FEED_TALLY.clicks++; }
+		}
+	}
+
 	// rec-click module and article referrer follow the preceding event
 	const assignContext = (evs) => {
 		let prev = null;
 		for (const e of evs) {
 			const gap = prev ? T(e) - T(prev) : Infinity;
-			if (e.event === "recommendation clicked" && !forYouClones.has(e)) {
+			if (e.event === "recommendation clicked") {
 				e.module = prev && gap <= 30 * MIN_MS && prev.event === "front page viewed" && prev.page === "home"
 					? "home_feed"
 					: pickWeighted({ related: 45, more_in_section: 35, most_read: 20 }, hashFloat(`${e.insert_id}|mod`));
@@ -680,31 +761,6 @@ function handleEverything(events, meta) {
 		if (wall) wall.referrer = firstAnon.referrer;
 	}
 	assignContext(events);
-
-	if (exposure && variant === FOR_YOU_VARIANT) {
-		// each variant reader's response to the feed varies (extra clicks x0.4-1.6 of the mean)
-		const extraShare = (FOR_YOU_CLICK_MULT - 1) * (0.4 + 1.2 * salt(uid, "foryou-taste"));
-		const clones = [];
-		for (const e of events) {
-			if (e.event !== "recommendation clicked" || e.module !== "home_feed" || e.platform === "web" || T(e) < T(exposure)) continue;
-			if (!chance.bool({ likelihood: extraShare * 100 })) continue;
-			const t1 = T(e) + chance.integer({ min: 2 * 60, max: 6 * 60 }) * 1000;
-			const click = cloneEvent(e, { time: iso(t1) });
-			click.module = "home_feed";
-			click.position = chance.integer({ min: 1, max: 8 });
-			forYouClones.add(click);
-			const tpl = events.find((x) => x.event === "article viewed" && T(x) >= regT) || POOL["article viewed"];
-			if (!tpl) continue;
-			const read = cloneEvent(tpl, { time: iso(t1 + chance.integer({ min: 3, max: 15 }) * 1000) });
-			copyDevice(read, e);
-			read.user_id = uid;
-			freshArticle(read, draw(SECTIONS));
-			read.referrer = "recommendation";
-			read._ref = true;
-			clones.push(click, read);
-		}
-		events = events.concat(clones).sort(byT);
-	}
 
 	// ── subscriptions, the meter, and cancellations (H4, H6, H7, H9) ──
 	const initialTier = born ? "registered" : (profile.reader_tier || "registered");
@@ -815,7 +871,9 @@ function handleEverything(events, meta) {
 		wall.referrer = e.referrer;
 		out.push(wall);
 		const p = BASE_PAYWALL_CONV * (REFERRER_CONV_MULT[e.referrer] ?? 1) * (inSale(t) ? SALE_CONV_MULT : 1);
-		if (chance.bool({ likelihood: p * 100 })) {
+		// the conversion draw is salted per reader and paywall time, so it does not
+		// shift when unrelated hook steps consume the shared random stream
+		if (salt(uid, `${SUB_DRAW_SALT}|${t}`) < p) {
 			const ts = Math.min(END, t + chance.integer({ min: 60, max: 8 * 60 }) * 1000);
 			const s = makeFrom(own, "subscription started", ts, e, uid);
 			if (s) {
@@ -883,6 +941,8 @@ function handleEverything(events, meta) {
 	events = events.filter((e) => T(e) >= BEGIN && T(e) <= END).sort(byT);
 	for (const e of events) {
 		delete e._ref;
+		// templates borrowed from another reader carry that reader's sticky channel
+		e.acquisition_channel = profile.acquisition_channel;
 		// a cancellation carries the plan being cancelled
 		e.reader_tier = tierAt(e.event === "subscription cancelled" ? T(e) - 1 : T(e));
 		e.platform = platformFor(e.device_id, e.os);
@@ -1387,6 +1447,18 @@ SELECT x.variant AS grp, count(DISTINCT x.uid) AS user_count,
 FROM ev JOIN x ON x.uid = ev.uid
 WHERE ev.t >= x.t0 AND ev.platform IN ('ios_app', 'android_app') GROUP BY 1`;
 
+// H2 per home view: share of app home views since exposure followed by a home_feed click within 30 minutes
+// (a Funnels report in Totals mode with a 30-minute window, one entry per home view)
+const H2_VIEW_SQL = `WITH ${ID_CTE},
+x AS (SELECT uid, any_value("Variant name") AS variant, min(t) AS t0 FROM ev WHERE event = '$experiment_started' GROUP BY 1),
+hv AS (SELECT ev.uid, x.variant, ev.t FROM ev JOIN x ON x.uid = ev.uid
+  WHERE ev.t >= x.t0 AND ev.event = 'front page viewed' AND ev.page = 'home' AND ev.platform IN ('ios_app', 'android_app')),
+hc AS (SELECT ev.uid, ev.t FROM ev JOIN x ON x.uid = ev.uid
+  WHERE ev.t >= x.t0 AND ev.event = 'recommendation clicked' AND ev.module = 'home_feed' AND ev.platform IN ('ios_app', 'android_app'))
+SELECT variant AS grp, count(DISTINCT uid) AS user_count, count(*) AS home_views,
+ avg((EXISTS (SELECT 1 FROM hc WHERE hc.uid = hv.uid AND hc.t > hv.t AND hc.t <= hv.t + INTERVAL 30 MINUTE))::INT) AS view_conv
+FROM hv GROUP BY 1`;
+
 const H3_SQL = `WITH ${ID_CTE},
 w AS (SELECT CASE WHEN t >= TIMESTAMP '${GIFT_PRE[0]}' AND t < TIMESTAMP '${GIFT_PRE[1]}' THEN 'pre' WHEN t >= TIMESTAMP '${GIFT_POST_FROM}' THEN 'post' END AS per,
   CASE WHEN reader_tier IN (${SUB_TIERS}) THEN 'subscriber' WHEN reader_tier = 'registered' THEN 'free' END AS grp, event, uid
@@ -1477,13 +1549,20 @@ export const stories = [
 		id: "H2-for-you-feed-experiment",
 		hook: "H2",
 		archetype: "experiment-lift",
-		narrative: `The "${FOR_YOU_EXPERIMENT}" test starts ${D(FOR_YOU_START)} in the iOS and Android apps. Signed-in app readers are split 50/50 (sticky per member; exposure $experiment_started 1 s before their first app event on or after the start). The "${FOR_YOU_VARIANT}" arm replaces the home screen's Top Stories module with a personalized feed: clicks on the home module (recommendation clicked, module = home_feed) per home screen view rise ${FOR_YOU_CLICK_MULT}x (per-reader response salted 0.4-1.6x of the mean extra). Every extra click opens an article. Read: home_feed clicks per home view (page = home) on the apps since exposure, ${FOR_YOU_VARIANT} over Control.`,
+		narrative: `The "${FOR_YOU_EXPERIMENT}" test starts ${D(FOR_YOU_START)} in the iOS and Android apps. Signed-in app readers are split 50/50 (sticky per member; exposure $experiment_started 1 s before their first app event on or after the start). The "${FOR_YOU_VARIANT}" arm replaces the home screen's Top Stories module with a personalized feed that more readers tap: a home screen view that would not have led to a click gets one (and the article it opens) with the probability that lifts the per-view click rate to ${FOR_YOU_CLICK_MULT}x the Control rate (per-reader response salted 0.4-1.6x of the mean). A view leads to at most one home-module click, so clicks per home view and the per-view funnel (home view → home_feed click within 30 minutes) read the same lift. Uniques funnels saturate: most exposed readers tap the module at least once in either arm. Read: home_feed clicks per home view (page = home) on the apps since exposure, ${FOR_YOU_VARIANT} over Control; and the per-view 30-minute conversion.`,
 		mixpanelReport: { type: "Insights", events: ["recommendation clicked (module = home_feed)", "front page viewed (page = home)"], formula: "A / B", filter: "platform in (ios_app, android_app)", dateRange: `${D(FOR_YOU_START)} to ${D(DATASET_END)}`, breakdown: `user property "${EXP_KEY}"` },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H2_SQL },
 				select: { v: { where: { grp: FOR_YOU_VARIANT } }, c: { where: { grp: "Control" } } },
 				expect: { metric: "v.feed_ctr / c.feed_ctr", op: "between", target: band(FOR_YOU_CLICK_MULT) },
+				minCohort: 1000,
+			},
+			{
+				// the same lift read as a per-view funnel: home views that lead to a home_feed click within 30 minutes
+				breakdown: { type: "duckdb", sql: H2_VIEW_SQL },
+				select: { v: { where: { grp: FOR_YOU_VARIANT } }, c: { where: { grp: "Control" } } },
+				expect: { metric: "v.view_conv / c.view_conv", op: "between", target: band(FOR_YOU_CLICK_MULT) },
 				minCohort: 1000,
 			},
 			{
@@ -1532,8 +1611,8 @@ FROM ev WHERE event = 'article shared'`,
 		id: "H4-web-meter-outage",
 		hook: "H4",
 		archetype: "bespoke",
-		narrative: `From ${D(OUTAGE_START)} to ${D(OUTAGE_END)} (exclusive) the web metering service fails: ${OUTAGE_FAIL * 100}% of the web reads that should hit the paywall go through free (they stay "article viewed" and never fire "paywall shown"). The apps keep their own meter and are untouched. The days and platform come from warehouse platform_reliability_daily (service_status = 'major_outage', meter_error_rate ≈ ${OUTAGE_FAIL}). Read: web/app ratio of paywall shown on incident days vs the ${INC_BASE_DAYS} days either side reads 1 - ${OUTAGE_FAIL}.`,
-		mixpanelReport: { type: "Insights", event: "paywall shown", measure: "total", breakdown: "platform", chart: "daily line", join: "warehouse platform_reliability_daily.service_status" },
+		narrative: `From ${D(OUTAGE_START)} to ${D(OUTAGE_END)} (exclusive) the web metering service fails: ${OUTAGE_FAIL * 100}% of the web reads that should hit the paywall go through free (they stay "article viewed" and never fire "paywall shown"). The apps keep their own meter and are untouched. The days and platform come from warehouse platform_reliability_daily (service_status = 'major_outage', meter_error_rate ≈ ${OUTAGE_FAIL}). Read: the walled share of free readers' attempted reads (paywall shown / (paywall shown + article viewed with reader_tier = registered)) on the web, incident days over the ${INC_BASE_DAYS} days either side, divided by the same ratio on the apps, reads 1 - ${OUTAGE_FAIL}. A fail-open read moves from paywall shown to article viewed, so the attempted-read denominator does not change; the share cancels the day-to-day swings in how much free readers try to read (a few binge readers move daily paywall counts by 10-20%).`,
+		mixpanelReport: { type: "Insights", events: ["paywall shown", "article viewed (reader_tier = registered)"], formula: "A / (A + B)", breakdown: "platform (web vs apps)", chart: "daily line", join: "warehouse platform_reliability_daily.service_status" },
 		assertions: [
 			{
 				breakdown: {
@@ -1541,11 +1620,13 @@ FROM ev WHERE event = 'article shared'`,
 					sql: `WITH ${ID_CTE},
 o AS (SELECT DISTINCT date::DATE AS d, platform FROM ${WH("platform_reliability_daily")} WHERE service_status = 'major_outage'),
 od AS (SELECT DISTINCT d FROM o), op AS (SELECT DISTINCT platform FROM o),
-w AS (SELECT t::DATE AS d, uid, (platform IN (SELECT platform FROM op)) AS hit FROM ev
-  WHERE event = 'paywall shown' AND t >= TIMESTAMP '${INC_FROM}' AND t < TIMESTAMP '${INC_TO}'),
-g AS (SELECT (d IN (SELECT d FROM od)) AS outage, count(*) FILTER (WHERE hit)::DOUBLE / count(*) FILTER (WHERE NOT hit) AS rel, count(DISTINCT uid) AS users FROM w GROUP BY 1)
+w AS (SELECT t::DATE AS d, uid, (platform IN (SELECT platform FROM op)) AS hit, event = 'paywall shown' AS walled FROM ev
+  WHERE (event = 'paywall shown' OR (event = 'article viewed' AND reader_tier = 'registered'))
+  AND t >= TIMESTAMP '${INC_FROM}' AND t < TIMESTAMP '${INC_TO}'),
+g AS (SELECT (d IN (SELECT d FROM od)) AS outage, hit, avg(walled::INT) AS walled_share, count(DISTINCT uid) AS users FROM w GROUP BY 1, 2)
 SELECT 'all' AS grp, (SELECT count(*) FROM od) AS outage_days, min(users) AS user_count,
- max(rel) FILTER (WHERE outage) / max(rel) FILTER (WHERE NOT outage) AS did
+ (max(walled_share) FILTER (WHERE outage AND hit) / max(walled_share) FILTER (WHERE NOT outage AND hit))
+ / (max(walled_share) FILTER (WHERE outage AND NOT hit) / max(walled_share) FILTER (WHERE NOT outage AND NOT hit)) AS did
 FROM g`,
 				},
 				select: { a: { where: { grp: "all" } } },

@@ -53,7 +53,7 @@ Daily health of the reading platforms, from the engineering team's server logs a
 | `date` | DATE | UTC day | Day. |
 | `platform` | STRING | — | `web`, `ios_app`, or `android_app`. Matches `platform` on events. |
 | `pageviews_served` | INTEGER | count | Article pages the servers delivered on that platform. Includes readers whose browsers block analytics (common on the web), readers who opted out of tracking in the apps, and some automated traffic, so it runs above the Mixpanel count of `article viewed` and does not track it exactly day to day. |
-| `meter_error_rate` | FLOAT | share 0-1 | Share of meter checks (does this free reader still have free articles?) that failed. A failed check lets the article through. |
+| `meter_error_rate` | FLOAT | share 0-1 | Share of meter checks (does this free reader still have free articles?) that returned an error. |
 | `p75_page_load_ms` | INTEGER | milliseconds | 75th-percentile time for an article page to load. |
 | `service_status` | STRING | — | Daily status for the platform: `operational` or `major_outage`, as posted on the status page. |
 
