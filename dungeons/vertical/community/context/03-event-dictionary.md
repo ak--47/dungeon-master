@@ -116,4 +116,4 @@ Every report has a `report_id`. The report and its resolution share the same `re
 | Thread reply | `discussion viewed` → `comment posted` | Members open many threads; hold `thread_id` constant to measure each thread view on its own. Read with a 1-day window. |
 | Report handling | `report submitted` → `report resolved` | Hold `report_id` constant. Time to convert is the resolution time. |
 | Upgrade to Plus | `plus page viewed` → `plus subscribed` | Free members. Read with a 1-day window. |
-| Intro reply | `intro posted` → `notification received` (`notification_type` = `reply`) | The community team's "was the newcomer greeted" check. |
+| Intro reply | `intro posted` → `notification received` (`notification_type` = `reply`) | Welcome-thread responsiveness. |

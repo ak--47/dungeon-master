@@ -54,7 +54,7 @@ Daily trust and safety operations by hub, from the moderation back office.
 | `spam_accounts_removed` | FLOAT | count | Accounts banned as spam or bots. |
 | `automod_removals` | FLOAT | count | Posts removed automatically (keyword filters, and Hearth Guard once a community has it). |
 | `raid_alert_level` | STRING | — | `normal` or `raid` (a coordinated attack on the hub was declared that day). |
-| `volunteer_mod_hours` | FLOAT | hours | Hours volunteer moderators logged in the moderation tools for the hub. |
+| `volunteer_mod_hours` | FLOAT | hours | Hours volunteer moderators logged in the moderation tools for the hub. Most of this time is reading: working the report queue and reading flagged threads. Only some of it ends in a tracked `moderation action`. |
 
 Caveats: `reports_received` runs higher than the Mixpanel count of `report submitted` and does not track it exactly day to day, because email and logged-out reports never reach Mixpanel. Banned accounts' activity is filtered out of Mixpanel.
 
@@ -77,7 +77,7 @@ Caveats: most ad-serving page views come from logged-out readers, who are not in
 
 - For a before/after question around a dated change, consider seasonality, the weekly rhythm, the overall trend, other dated events nearby, and mix shifts before you attribute a change to the event.
 - Activity is busiest on weekends and in the evenings of the Americas and Europe (UTC). Compare matching weekdays or whole weeks, not a few weekdays against a span that includes a weekend.
-- The membership base is growing, so totals rise over the window. Use rates (per member, per search, per thread view) or a comparison group when you can.
+- The membership base is growing, so totals rise over the window. Use rates (per member, per thread view, per report) or a comparison group when you can.
 - New-member funnels and retention depend on signup date: members who joined late in the window have had less time to act. Compare cohorts that joined in the same weeks and with the full window observed.
-- Members open many threads and file several reports. Per-thread and per-report questions need `thread_id` or `report_id` held constant; unique-member funnels hide most of the difference.
+- Members open many threads and file several reports. Per-thread and per-report questions need `thread_id` or `report_id` held constant.
 - `membership` on an event is the membership at that moment; a member who subscribed during the window has free events before and Plus events after.

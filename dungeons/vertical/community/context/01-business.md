@@ -63,7 +63,7 @@ The three paid channels bill daily. Spend by paid channel is in the warehouse ta
 ## Goals for the period (June to September 2026)
 
 1. **Grow active membership.** More weekly active members, and more of them taking part (replying, posting, contributing) rather than only reading.
-2. **Turn signups into members.** Too many new accounts never finish onboarding or stop showing up soon after joining. The community team believes a newcomer's first days in the community decide whether they stay, and it is debating how strictly moderators should treat newcomers' first wiki edits.
+2. **Turn signups into members.** Too many new accounts never finish onboarding or stop showing up soon after joining. The community team wants to know what separates the newcomers who stay from the ones who leave. How strict volunteer moderators should be is a recurring debate in the moderator program.
 3. **Spend acquisition money well.** Growth spreads its budget across three paid channels. Finance asked what a signup costs on each channel, and what a signup that actually becomes a member costs.
 4. **Keep communities safe without burning out volunteers.** Report resolution time is the trust and safety team's headline metric. Hearth Guard (see the timeline) is the main bet.
 5. **Grow revenue.** Ad revenue and Plus subscriptions. The team changed the ad setup in September; leadership asked what it did to revenue, to reading, and to Plus.

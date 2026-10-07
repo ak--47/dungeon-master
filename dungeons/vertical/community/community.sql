@@ -183,6 +183,14 @@ SELECT CASE WHEN p.t0 < TIMESTAMP '2026-09-02' THEN '1_before' WHEN p.t0 >= TIME
  count(*) AS upgrade_page_visits, sum(coalesce(b.t1 >= p.t0 AND b.t1 < p.t0 + INTERVAL 1 DAY, false)::INT) AS converted_visits,
  round(avg(coalesce(b.t1 >= p.t0 AND b.t1 < p.t0 + INTERVAL 1 DAY, false)::INT), 4) AS conversion_per_visit
 FROM p LEFT JOIN b ON b.uid = p.uid GROUP BY 1 ORDER BY 1;
+-- by upgrade_trigger: ad_free share of visits and conversion, ad_free vs the other triggers
+WITH p AS (SELECT uid, t AS t0, upgrade_trigger = 'ad_free' AS ad_free FROM ev WHERE event = 'plus page viewed'),
+b AS (SELECT uid, min(t) AS t1 FROM ev WHERE event = 'plus subscribed' GROUP BY 1)
+SELECT CASE WHEN p.t0 < TIMESTAMP '2026-09-02' THEN '1_before' WHEN p.t0 >= TIMESTAMP '2026-09-09' THEN '3_after' ELSE '2_ramp' END AS period,
+ round(avg(ad_free::INT), 4) AS ad_free_share_of_visits,
+ round(avg(coalesce(b.t1 >= p.t0 AND b.t1 < p.t0 + INTERVAL 1 DAY, false)::INT) FILTER (WHERE ad_free), 4) AS ad_free_conversion,
+ round(avg(coalesce(b.t1 >= p.t0 AND b.t1 < p.t0 + INTERVAL 1 DAY, false)::INT) FILTER (WHERE NOT ad_free), 4) AS other_triggers_conversion
+FROM p LEFT JOIN b ON b.uid = p.uid GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H9-paid-channel-economics — spend per signup and per onboarded member, by paid channel
@@ -224,6 +232,19 @@ FROM d;
 -- gaming searches, same windows
 SELECT round(count(*) FILTER (WHERE t < TIMESTAMP '2026-08-06') / 14.0, 1) AS gaming_searches_per_day_before,
  round(count(*) FILTER (WHERE t >= TIMESTAMP '2026-08-06') / 14.0, 1) AS gaming_searches_per_day_launch
+FROM ev WHERE event = 'search performed' AND content_hub = 'gaming' AND t >= TIMESTAMP '2026-07-23' AND t < TIMESTAMP '2026-08-20';
+-- where the surge landed: gaming article views per day by community, before vs the launch fortnight
+SELECT c.name AS community, round(count(*) FILTER (WHERE e.t < TIMESTAMP '2026-08-06') / 14.0, 1) AS views_per_day_jul23_aug5,
+ round(count(*) FILTER (WHERE e.t >= TIMESTAMP '2026-08-06') / 14.0, 1) AS views_per_day_aug6_19,
+ round(count(*) FILTER (WHERE e.t >= TIMESTAMP '2026-08-06')::DOUBLE / count(*) FILTER (WHERE e.t < TIMESTAMP '2026-08-06'), 2) AS ratio,
+ round(count(*) FILTER (WHERE e.t < TIMESTAMP '2026-08-06')::DOUBLE / sum(count(*) FILTER (WHERE e.t < TIMESTAMP '2026-08-06')) OVER (), 3) AS share_before,
+ round(count(*) FILTER (WHERE e.t >= TIMESTAMP '2026-08-06')::DOUBLE / sum(count(*) FILTER (WHERE e.t >= TIMESTAMP '2026-08-06')) OVER (), 3) AS share_launch
+FROM ev e JOIN communities c ON c.community_id::VARCHAR = e.community_id::VARCHAR
+WHERE e.event = 'article viewed' AND e.content_hub = 'gaming' AND e.t >= TIMESTAMP '2026-07-23' AND e.t < TIMESTAMP '2026-08-20'
+GROUP BY 1 ORDER BY 3 DESC;
+-- gaming searches for walkthroughs, builds, and tier lists (share of gaming searches)
+SELECT round(avg((search_term IN ('walkthrough', 'best builds', 'tier list'))::INT) FILTER (WHERE t < TIMESTAMP '2026-08-06'), 3) AS build_search_share_before,
+ round(avg((search_term IN ('walkthrough', 'best builds', 'tier list'))::INT) FILTER (WHERE t >= TIMESTAMP '2026-08-06'), 3) AS build_search_share_launch
 FROM ev WHERE event = 'search performed' AND content_hub = 'gaming' AND t >= TIMESTAMP '2026-07-23' AND t < TIMESTAMP '2026-08-20';
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -291,23 +312,31 @@ SELECT date_trunc('week', t_sub)::DATE AS week, count(*) AS resolved_reports, ro
  round(median(resolution_hours) FILTER (WHERE triaged), 1) AS median_h_spam_harassment_vandalism
 FROM reports WHERE t_res IS NOT NULL GROUP BY 1 ORDER BY 1;
 
--- ─────────────────────────────────────────────────────────────────────────
--- EVAL Q6 — Hearth Guard and misinformation / copyright / other reports (null): per type, log-hours Welch z
--- ─────────────────────────────────────────────────────────────────────────
+-- misinformation / copyright / other: geometric-mean ratio and log-hours Welch z, before Jul 22 vs Aug 1 - Sep 23
 WITH x AS (SELECT report_type, CASE WHEN t_sub < TIMESTAMP '2026-07-22' THEN 0 WHEN t_sub >= TIMESTAMP '2026-08-01' AND t_sub < TIMESTAMP '2026-09-24' THEN 1 END AS after,
-  ln(date_diff('second', t_sub, t_res) / 3600.0) AS lh, date_diff('second', t_sub, t_res) / 3600.0 AS h
-  FROM reports WHERE t_res IS NOT NULL AND report_type IN ('misinformation', 'copyright', 'other') AND NOT (t_sub >= TIMESTAMP '2026-08-19' AND t_sub < TIMESTAMP '2026-08-22'))
-SELECT report_type, count(*) FILTER (WHERE after = 0) AS n_before, count(*) FILTER (WHERE after = 1) AS n_after,
- round(median(h) FILTER (WHERE after = 0), 1) AS median_h_before, round(median(h) FILTER (WHERE after = 1), 1) AS median_h_after,
- round(exp(avg(lh) FILTER (WHERE after = 1) - avg(lh) FILTER (WHERE after = 0)), 3) AS geo_mean_ratio,
+  ln(date_diff('second', t_sub, t_res) / 3600.0) AS lh
+  FROM reports WHERE t_res IS NOT NULL AND report_type IN ('misinformation', 'copyright', 'other') AND NOT (t_sub >= TIMESTAMP '2026-08-19' AND t_sub < TIMESTAMP '2026-08-22')),
+g AS (SELECT report_type AS grp, after, lh FROM x WHERE after IS NOT NULL UNION ALL SELECT 'ALL THREE', after, lh FROM x WHERE after IS NOT NULL)
+SELECT grp, round(exp(avg(lh) FILTER (WHERE after = 1) - avg(lh) FILTER (WHERE after = 0)), 3) AS geo_mean_ratio,
  round((avg(lh) FILTER (WHERE after = 1) - avg(lh) FILTER (WHERE after = 0)) / sqrt(var_samp(lh) FILTER (WHERE after = 1) / count(*) FILTER (WHERE after = 1) + var_samp(lh) FILTER (WHERE after = 0) / count(*) FILTER (WHERE after = 0)), 2) AS welch_z_log_hours
-FROM x WHERE after IS NOT NULL GROUP BY 1
-UNION ALL
-SELECT 'ALL THREE', count(*) FILTER (WHERE after = 0), count(*) FILTER (WHERE after = 1),
- round(median(h) FILTER (WHERE after = 0), 1), round(median(h) FILTER (WHERE after = 1), 1),
- round(exp(avg(lh) FILTER (WHERE after = 1) - avg(lh) FILTER (WHERE after = 0)), 3),
- round((avg(lh) FILTER (WHERE after = 1) - avg(lh) FILTER (WHERE after = 0)) / sqrt(var_samp(lh) FILTER (WHERE after = 1) / count(*) FILTER (WHERE after = 1) + var_samp(lh) FILTER (WHERE after = 0) / count(*) FILTER (WHERE after = 0)), 2)
-FROM x WHERE after IS NOT NULL ORDER BY 1;
+FROM g GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q6 — Hearth Guard and moderator decisions (null): share of resolved reports ending in content removal,
+-- before Jul 22 vs Aug 1 - Sep 23 (raid days left out), overall, by triaged group, and by report type; two-proportion z
+-- ─────────────────────────────────────────────────────────────────────────
+WITH r AS (SELECT report_type, triaged, CASE WHEN t_sub < TIMESTAMP '2026-07-22' THEN 0 WHEN t_sub >= TIMESTAMP '2026-08-01' AND t_sub < TIMESTAMP '2026-09-24' THEN 1 END AS after,
+  (o.outcome = 'content_removed') AS removed
+  FROM reports JOIN (SELECT report_id, any_value(outcome) AS outcome FROM ev WHERE event = 'report resolved' GROUP BY 1) o USING (report_id)
+  WHERE NOT (t_sub >= TIMESTAMP '2026-08-19' AND t_sub < TIMESTAMP '2026-08-22')),
+g AS (SELECT '1 ALL TYPES' AS split, after, removed FROM r WHERE after IS NOT NULL
+  UNION ALL SELECT CASE WHEN triaged THEN '2 group spam/harassment/vandalism' ELSE '2 group misinformation/copyright/other' END, after, removed FROM r WHERE after IS NOT NULL
+  UNION ALL SELECT '3 type ' || report_type, after, removed FROM r WHERE after IS NOT NULL),
+s AS (SELECT split, count(*) FILTER (WHERE after = 0) AS n0, avg(removed::INT) FILTER (WHERE after = 0) AS p0,
+  count(*) FILTER (WHERE after = 1) AS n1, avg(removed::INT) FILTER (WHERE after = 1) AS p1, avg(removed::INT) AS p FROM g GROUP BY 1)
+SELECT split, n0 AS n_before, round(p0, 4) AS removed_share_before, n1 AS n_after, round(p1, 4) AS removed_share_after,
+ round((p1 - p0) / sqrt(p * (1 - p) * (1.0 / n0 + 1.0 / n1)), 2) AS z
+FROM s ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q7 — anime raid: warehouse signals and participation, raid days vs the same weekdays a week before and after
@@ -335,6 +364,13 @@ SELECT round(count(*) FILTER (WHERE anime AND raid AND event <> 'report submitte
  round(count(*) FILTER (WHERE anime AND NOT raid AND event = 'report submitted') / 6.0, 1) AS anime_reports_per_base_day
 FROM w;
 
+-- anime reading during the raid: anime share of article views, raid days vs the same weekdays ±7 days
+WITH w AS (SELECT content_hub = 'anime' AS anime, (t >= TIMESTAMP '2026-08-19' AND t < TIMESTAMP '2026-08-22') AS raid FROM ev
+  WHERE event = 'article viewed' AND ((t >= TIMESTAMP '2026-08-19' AND t < TIMESTAMP '2026-08-22') OR (t >= TIMESTAMP '2026-08-12' AND t < TIMESTAMP '2026-08-15') OR (t >= TIMESTAMP '2026-08-26' AND t < TIMESTAMP '2026-08-29')))
+SELECT round((count(*) FILTER (WHERE anime AND raid)::DOUBLE / count(*) FILTER (WHERE NOT anime AND raid))
+   / (count(*) FILTER (WHERE anime AND NOT raid)::DOUBLE / count(*) FILTER (WHERE NOT anime AND NOT raid)), 3) AS anime_reading_share_ratio
+FROM w;
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q8 — new-member retention by a reply to the intro within 24 h (signups Jun 4 - Aug 31)
 -- ─────────────────────────────────────────────────────────────────────────
@@ -345,6 +381,14 @@ SELECT round(avg(replied::INT), 4) AS share_of_intros_replied_24h, count(*) AS i
 SELECT 'no_intro' AS grp, count(*) AS members,
  round(avg(EXISTS (SELECT 1 FROM actions a WHERE a.uid = s.uid AND a.t >= s.t0 + INTERVAL 30 DAY)::INT), 4) AS d30_on_or_after
 FROM signups s WHERE s.t0 < TIMESTAMP '2026-09-01' AND s.ti IS NULL;
+
+-- how the unanswered fade: share of each group with a member action on day d after the intro (intros before Aug 20)
+WITH g AS (SELECT uid, ti, replied FROM intro_reply WHERE ti < TIMESTAMP '2026-08-20'),
+a AS (SELECT g.replied, g.uid, floor(date_diff('second', g.ti, a.t) / 86400)::INT AS d FROM g JOIN actions a ON a.uid = g.uid WHERE a.t > g.ti)
+SELECT d AS day_after_intro,
+ round(count(DISTINCT uid) FILTER (WHERE NOT replied)::DOUBLE / (SELECT count(*) FROM g WHERE NOT replied), 3) AS active_share_no_reply,
+ round(count(DISTINCT uid) FILTER (WHERE replied)::DOUBLE / (SELECT count(*) FROM g WHERE replied), 3) AS active_share_replied
+FROM a WHERE d BETWEEN 1 AND 30 GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q9 — new editors whose first edit was reverted: edited again within 30 days
@@ -378,8 +422,8 @@ GROUP BY 1 ORDER BY 1;
 WITH wk AS (SELECT date_trunc('week', t)::DATE AS week, membership, count(*)::DOUBLE / count(DISTINCT uid) AS avg_per_viewer
   FROM ev WHERE event = 'article viewed' AND t >= TIMESTAMP '2026-06-08' AND t < TIMESTAMP '2026-09-28' GROUP BY 1, 2)
 SELECT membership,
- round(avg(avg_per_viewer) FILTER (WHERE week BETWEEN DATE '2026-06-08' AND DATE '2026-07-27'), 2) AS weekly_avg_jun8_aug2,
- round(avg(avg_per_viewer) FILTER (WHERE week BETWEEN DATE '2026-09-07' AND DATE '2026-09-21'), 2) AS weekly_avg_sep7_27,
+ round(avg(avg_per_viewer) FILTER (WHERE week BETWEEN DATE '2026-06-08' AND DATE '2026-07-27'), 2) AS weekly_avg_jun8_jul27,
+ round(avg(avg_per_viewer) FILTER (WHERE week BETWEEN DATE '2026-09-07' AND DATE '2026-09-21'), 2) AS weekly_avg_sep7_21,
  round(avg(avg_per_viewer) FILTER (WHERE week BETWEEN DATE '2026-09-07' AND DATE '2026-09-21') / avg(avg_per_viewer) FILTER (WHERE week BETWEEN DATE '2026-06-08' AND DATE '2026-07-27'), 3) AS ratio
 FROM wk GROUP BY 1 ORDER BY 1;
 WITH g AS (SELECT membership, (t >= TIMESTAMP '2026-09-02') AS post,
@@ -403,8 +447,24 @@ FROM p LEFT JOIN b ON b.uid = p.uid GROUP BY 1 ORDER BY 1;
 SELECT CASE WHEN t < TIMESTAMP '2026-09-02' THEN '1_jun4_sep1' WHEN t >= TIMESTAMP '2026-09-09' THEN '3_sep9_oct1' ELSE '2_sep2_8' END AS period,
  count(*) AS plus_subscriptions, round(count(*) * 7.0 / (max(t)::DATE - min(t)::DATE + 1), 1) AS per_week
 FROM ev WHERE event = 'plus subscribed' GROUP BY 1 ORDER BY 1;
-SELECT upgrade_trigger, count(*) FILTER (WHERE t < TIMESTAMP '2026-09-02') AS visits_before, count(*) FILTER (WHERE t >= TIMESTAMP '2026-09-09') AS visits_after
-FROM ev WHERE event = 'plus page viewed' GROUP BY 1 ORDER BY 1;
+WITH p AS (SELECT uid, t AS t0, upgrade_trigger FROM ev WHERE event = 'plus page viewed'),
+b AS (SELECT uid, min(t) AS t1 FROM ev WHERE event = 'plus subscribed' GROUP BY 1),
+x AS (SELECT p.*, coalesce(b.t1 >= p.t0 AND b.t1 < p.t0 + INTERVAL 1 DAY, false) AS ok FROM p LEFT JOIN b ON b.uid = p.uid)
+SELECT upgrade_trigger, count(*) FILTER (WHERE t0 < TIMESTAMP '2026-09-02') AS visits_before, count(*) FILTER (WHERE t0 >= TIMESTAMP '2026-09-09') AS visits_after,
+ round(count(*) FILTER (WHERE t0 < TIMESTAMP '2026-09-02')::DOUBLE / sum(count(*) FILTER (WHERE t0 < TIMESTAMP '2026-09-02')) OVER (), 3) AS visit_share_before,
+ round(count(*) FILTER (WHERE t0 >= TIMESTAMP '2026-09-09')::DOUBLE / sum(count(*) FILTER (WHERE t0 >= TIMESTAMP '2026-09-09')) OVER (), 3) AS visit_share_after,
+ sum(ok::INT) FILTER (WHERE t0 < TIMESTAMP '2026-09-02') AS conv_before, sum(ok::INT) FILTER (WHERE t0 >= TIMESTAMP '2026-09-09') AS conv_after,
+ round(avg(ok::INT) FILTER (WHERE t0 < TIMESTAMP '2026-09-02'), 4) AS conversion_before, round(avg(ok::INT) FILTER (WHERE t0 >= TIMESTAMP '2026-09-09'), 4) AS conversion_after
+FROM x GROUP BY 1 ORDER BY 1;
+-- ad_free vs the other three triggers combined
+WITH p AS (SELECT uid, t AS t0, upgrade_trigger = 'ad_free' AS ad_free FROM ev WHERE event = 'plus page viewed'),
+b AS (SELECT uid, min(t) AS t1 FROM ev WHERE event = 'plus subscribed' GROUP BY 1),
+x AS (SELECT p.*, coalesce(b.t1 >= p.t0 AND b.t1 < p.t0 + INTERVAL 1 DAY, false) AS ok FROM p LEFT JOIN b ON b.uid = p.uid)
+SELECT CASE WHEN ad_free THEN 'ad_free' ELSE 'other three triggers' END AS trigger_group,
+ round(avg(ok::INT) FILTER (WHERE t0 < TIMESTAMP '2026-09-02'), 4) AS conversion_before, round(avg(ok::INT) FILTER (WHERE t0 >= TIMESTAMP '2026-09-09'), 4) AS conversion_after,
+ sum(ok::INT) FILTER (WHERE t0 >= TIMESTAMP '2026-09-09') AS conversions_after,
+ round(avg(ok::INT) FILTER (WHERE t0 >= TIMESTAMP '2026-09-09') / avg(ok::INT) FILTER (WHERE t0 < TIMESTAMP '2026-09-02'), 3) AS lift
+FROM x GROUP BY 1 ORDER BY 1;
 SELECT count(*) FILTER (WHERE membership = 'plus') AS plus_members_now, count(*) AS profiles, round(avg((membership = 'plus')::INT), 4) AS plus_share FROM users;
 
 -- ─────────────────────────────────────────────────────────────────────────
