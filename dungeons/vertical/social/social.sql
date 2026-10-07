@@ -1,160 +1,472 @@
--- ============================================================
--- social.js — hook inspection queries (v1.6.0 stories rebuild)
+-- Murmur (social vertical) — story-keyed and eval-keyed DuckDB queries.
 --
--- The verification CONTRACT lives in the `stories` export of
--- social.js (run via social.verify.mjs). These queries are for
--- manual inspection of the same reads.
+-- Generate first (repo root):
+--   node scripts/verify-runner.mjs dungeons/vertical/social/social.js verify-social
+-- Run:
+--   duckdb -c ".read dungeons/vertical/social/social.sql"
+-- Against a gzipped export:
+--   duckdb -c "SET VARIABLE data_prefix='<dir>/social'" -c ".read social.sql"
 --
--- Derivation notes (measured at 2K reduced scale + organic
--- counterfactual run — same seed, identity hook):
---   - H1's old "10+ post created" cohort read is dead: 85% of
---     users clear 10 FINAL posts (clones inflate counts). The
---     live read is concentration: top-3% engagement share 0.62
---     vs organic 0.06.
---   - H2's 1.5x posts ratio decomposes into 1.24x activity
---     confound x 1.21x true hook increment.
---   - Organic DOW is FLAT (soup weights >= 1.0 accept-always);
---     H8's 1.25x weekend ratio is pure hook. The v1.5 "soup
---     baseline ~0.55" claim was wrong.
---   - H9 must be read by FINAL post counts (the analyst view) —
---     the hook buckets on pre-injection counts, so the final
---     3-7 bucket is dominated by boosted 0-2 dodgers: sweet
---     avg ~250, low ~200, over ~145.
---   - H10's funnel-post gap scaling is NOT visible to
---     MIN(step)-join SQL; use the emulator via social.verify.mjs.
---     The MIN-join below shows direction only.
---
--- Replace data/verify-social with your run prefix.
--- ============================================================
+-- All times are UTC. Window: 2026-06-04 00:00 to 2026-10-01 23:59:59.
 
--- H1: VIRAL CONTENT — top-3% of users' share of engagement events
--- Expected: ~0.62 (organic counterfactual 0.057)
-WITH pu AS (
-  SELECT user_id::VARCHAR AS uid,
-    COUNT(*) FILTER (WHERE event IN ('post viewed', 'post liked', 'post shared')) AS eng
-  FROM read_json_auto('data/verify-social-EVENTS*.json', sample_size=-1, union_by_name=true)
-  WHERE user_id IS NOT NULL GROUP BY 1
-), ranked AS (
-  SELECT eng, ROW_NUMBER() OVER (ORDER BY eng DESC) AS rn,
-    COUNT(*) OVER () AS n, SUM(eng) OVER () AS tot
-  FROM pu
-)
-SELECT ROUND(SUM(eng)::DOUBLE / MAX(tot), 4) AS top3_share, MAX(n) AS users
-FROM ranked WHERE rn <= CEIL(n * 0.03);
+SET VARIABLE data_prefix = COALESCE(getvariable('data_prefix'), 'data/verify-social');
 
--- H2: FOLLOW-BACK SNOWBALL — 5+ user-followed → more posts
--- Expected: big/small posts-per-user ~1.50 (42.3 vs 28.2 at 2K)
-WITH pu AS (
-  SELECT user_id::VARCHAR AS uid,
-    COUNT(*) FILTER (WHERE event = 'user followed') AS fc,
-    COUNT(*) FILTER (WHERE event = 'post created') AS pc
-  FROM read_json_auto('data/verify-social-EVENTS*.json', sample_size=-1, union_by_name=true)
-  WHERE user_id IS NOT NULL GROUP BY 1
-)
-SELECT (fc >= 5) AS big_followers, COUNT(*) AS users, ROUND(AVG(pc), 2) AS avg_posts
-FROM pu GROUP BY 1 ORDER BY 1;
+-- ─────────────────────────────────────────────────────────────────────────
+-- PRELUDE: raw files, identity resolution, warehouse tables
+-- ─────────────────────────────────────────────────────────────────────────
+-- Identity: a new member signs up with "account created" (the auth event,
+-- which carries user_id and device_id). A device resolves to the member seen
+-- with it on any event that carries both ids, the way Mixpanel stitches.
+-- Every Murmur event carries user_id, so uid = user_id in practice.
 
--- H3 + H5: SOURCE MIX by window (algorithm change @d45, notifications @d30)
--- Expected: pre_d30 feed ~0.78, notif ~0.03; d30_45 feed ~0.54, notif ~0.32;
---           post_d45 explore ~0.54, notif ~0.32, feed ~0.05
-SELECT
-  CASE WHEN time::TIMESTAMP < TIMESTAMP '2026-01-31 00:00:00' THEN 'pre_d30'
-       WHEN time::TIMESTAMP < TIMESTAMP '2026-02-15 00:00:00' THEN 'd30_45'
-       ELSE 'post_d45' END AS win,
-  COUNT(*) AS n,
-  ROUND(AVG((source = 'feed')::INT), 4) AS feed,
-  ROUND(AVG((source = 'explore')::INT), 4) AS explore,
-  ROUND(AVG((source = 'notification')::INT), 4) AS notif,
-  ROUND(AVG((source = 'profile')::INT), 4) AS prof
-FROM read_json_auto('data/verify-social-EVENTS*.json', sample_size=-1, union_by_name=true)
-WHERE event = 'post viewed'
-GROUP BY 1 ORDER BY 1;
+CREATE OR REPLACE TEMP TABLE raw_events AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-EVENTS*.json*', sample_size=-1, union_by_name=true);
 
--- H4: ENGAGEMENT BAIT — share of post-viewed events with crushed (<=5s) duration
--- Expected: ~0.20 (organic 0.000 — generator floors durations above 5s)
-SELECT COUNT(*) AS views,
-  ROUND(AVG((view_duration_sec <= 5)::INT), 4) AS crushed_share,
-  ROUND(AVG(view_duration_sec) FILTER (WHERE view_duration_sec <= 5), 2) AS avg_crushed_dur
-FROM read_json_auto('data/verify-social-EVENTS*.json', sample_size=-1, union_by_name=true)
-WHERE event = 'post viewed' AND view_duration_sec IS NOT NULL;
+CREATE OR REPLACE TEMP TABLE users AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-USERS*.json*', sample_size=-1, union_by_name=true);
 
--- H6: CREATOR MONETIZATION — subscribers (~78% of users) vs non
--- Expected: posts/user ratio ~3.32; stories/user ~3.82 (purer read —
--- H2 dupes lift non-sub posts but never stories)
-WITH pu AS (
-  SELECT user_id::VARCHAR AS uid,
-    BOOL_OR(event = 'creator subscription started') AS sub,
-    COUNT(*) FILTER (WHERE event = 'post created') AS pc,
-    COUNT(*) FILTER (WHERE event = 'story created') AS sc
-  FROM read_json_auto('data/verify-social-EVENTS*.json', sample_size=-1, union_by_name=true)
-  WHERE user_id IS NOT NULL GROUP BY 1
-)
-SELECT sub, COUNT(*) AS users, ROUND(AVG(pc), 2) AS avg_posts, ROUND(AVG(sc), 2) AS avg_stories
-FROM pu GROUP BY 1 ORDER BY 1;
+CREATE OR REPLACE TEMP TABLE device_map AS
+SELECT device_id, min(user_id::VARCHAR) AS mapped
+FROM raw_events WHERE user_id IS NOT NULL AND device_id IS NOT NULL GROUP BY 1;
 
--- H7: TOXICITY CHURN — per-user post/pre-d30 event ratio, reporters vs normal
--- Expected: reporters ~1.27 vs normal ~3.21 → contrast ~0.40 (60% drop knob;
--- growth shape makes the raw post/pre ~3.2 for everyone)
-WITH pu AS (
-  SELECT user_id::VARCHAR AS uid,
-    COUNT(*) FILTER (WHERE event = 'report submitted') AS rep,
-    COUNT(*) FILTER (WHERE time::TIMESTAMP <= TIMESTAMP '2026-01-31 00:00:00') AS pre,
-    COUNT(*) FILTER (WHERE time::TIMESTAMP > TIMESTAMP '2026-01-31 00:00:00') AS post
-  FROM read_json_auto('data/verify-social-EVENTS*.json', sample_size=-1, union_by_name=true)
-  WHERE user_id IS NOT NULL GROUP BY 1
-)
-SELECT (rep >= 2) AS reporter, COUNT(*) AS users, ROUND(AVG(post::DOUBLE / pre), 3) AS post_pre_ratio
-FROM pu WHERE pre > 0 GROUP BY 1 ORDER BY 1;
+CREATE OR REPLACE TEMP TABLE ev AS
+SELECT coalesce(e.user_id::VARCHAR, m.mapped) AS uid, e.time::TIMESTAMP AS t, e.*
+FROM raw_events e LEFT JOIN device_map m ON e.device_id = m.device_id;
 
--- H8: WEEKEND SURGE — weekend vs weekday daily creation rate
--- Expected: ~1.25x (organic counterfactual 0.98 — flat DOW baseline)
-WITH d AS (
-  SELECT time::DATE AS dt, COUNT(*) AS n
-  FROM read_json_auto('data/verify-social-EVENTS*.json', sample_size=-1, union_by_name=true)
-  WHERE event IN ('post created', 'story created') GROUP BY 1
-)
-SELECT
-  ROUND(AVG(n) FILTER (WHERE EXTRACT(DOW FROM dt) IN (0, 6)), 1) AS weekend_per_day,
-  ROUND(AVG(n) FILTER (WHERE EXTRACT(DOW FROM dt) NOT IN (0, 6)), 1) AS weekday_per_day,
-  ROUND(AVG(n) FILTER (WHERE EXTRACT(DOW FROM dt) IN (0, 6))
-      / AVG(n) FILTER (WHERE EXTRACT(DOW FROM dt) NOT IN (0, 6)), 3) AS ratio
-FROM d;
+CREATE OR REPLACE TEMP TABLE wh_spend AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-marketing_spend_daily.json*', sample_size=-1, union_by_name=true);
+CREATE OR REPLACE TEMP TABLE wh_feed AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-for_you_feed_health_daily.json*', sample_size=-1, union_by_name=true);
+CREATE OR REPLACE TEMP TABLE wh_ads AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-ad_revenue_daily.json*', sample_size=-1, union_by_name=true);
 
--- H9: MAGIC NUMBER — comment_length by FINAL post-count bucket
--- Expected: sweet(3-7) ~250, low(0-2) ~200, over(8+) ~145; sweet/over ~1.72
-WITH pu AS (
-  SELECT user_id::VARCHAR AS uid,
-    COUNT(*) FILTER (WHERE event = 'post created') AS pc
-  FROM read_json_auto('data/verify-social-EVENTS*.json', sample_size=-1, union_by_name=true)
-  WHERE user_id IS NOT NULL GROUP BY 1
-)
-SELECT CASE WHEN pu.pc >= 8 THEN 'over' WHEN pu.pc >= 3 THEN 'sweet' ELSE 'low' END AS bucket,
-  COUNT(DISTINCT pu.uid) AS users, COUNT(*) AS n_comments, ROUND(AVG(e.comment_length), 1) AS avg_len
-FROM read_json_auto('data/verify-social-EVENTS*.json', sample_size=-1, union_by_name=true) e
-JOIN pu ON e.user_id::VARCHAR = pu.uid
-WHERE e.event = 'comment posted' AND e.comment_length IS NOT NULL
-GROUP BY 1 ORDER BY 1;
+-- profile attributes keyed by the resolved member id
+CREATE OR REPLACE TEMP TABLE prof AS
+SELECT distinct_id::VARCHAR AS uid, account_type, circle_enabled, acquisition_channel, joined_date, age_band, country,
+ follower_count, "Experiment: Smart Digest" AS variant
+FROM users;
 
--- H10: ONBOARDING TTC by account_type — DIRECTION ONLY via MIN-join
--- (funnel-post gap scaling needs per-instance greedy matching; the story
--- asserts fast/personal ~0.71 through emulateBreakdown @6h window)
-SELECT u.account_type, COUNT(*) AS converters,
-  ROUND(MEDIAN(EXTRACT(EPOCH FROM (pc.t - ac.t)) / 60), 1) AS median_ttc_min
-FROM
-  (SELECT user_id, MIN(time::TIMESTAMP) AS t
-   FROM read_json_auto('data/verify-social-EVENTS*.json', sample_size=-1, union_by_name=true)
-   WHERE event = 'account created' GROUP BY user_id) ac
-  JOIN
-  (SELECT user_id, MIN(time::TIMESTAMP) AS t
-   FROM read_json_auto('data/verify-social-EVENTS*.json', sample_size=-1, union_by_name=true)
-   WHERE event = 'post created' GROUP BY user_id) pc USING (user_id)
-  JOIN read_json_auto('data/verify-social-USERS*.json', sample_size=-1, union_by_name=true) u
-   ON ac.user_id = u.distinct_id
-WHERE pc.t > ac.t
-GROUP BY u.account_type ORDER BY u.account_type;
+-- member-initiated activity (pushes and experiment assignment are server-side)
+CREATE OR REPLACE TEMP TABLE active_ev AS
+SELECT * FROM ev WHERE event NOT IN ('push notification sent', '$experiment_started');
 
--- Identity invariants — expected uid_share 1.0, device_share >= 0.99, devices/user ~2
-SELECT ROUND(AVG((user_id IS NOT NULL)::INT), 4) AS uid_share,
-  ROUND(AVG((device_id IS NOT NULL)::INT), 4) AS device_share,
-  ROUND(COUNT(DISTINCT device_id)::DOUBLE / COUNT(DISTINCT user_id), 2) AS devices_per_user
-FROM read_json_auto('data/verify-social-EVENTS*.json', sample_size=-1, union_by_name=true);
+-- new members: signup, onboarding follows (suggested-accounts screen), day 14-27 retention
+CREATE OR REPLACE TEMP TABLE signups AS
+WITH s AS (SELECT uid, t AS t0, acquisition_channel AS ch, platform FROM ev WHERE event = 'account created'),
+k AS (SELECT uid, count(*) AS k FROM ev WHERE event = 'user followed' AND discovery_source = 'onboarding_suggestions' GROUP BY 1),
+o AS (SELECT DISTINCT uid FROM ev WHERE event = 'interests selected'),
+r AS (SELECT s.uid, bool_or(a.t >= s.t0 + INTERVAL 14 DAY AND a.t < s.t0 + INTERVAL 28 DAY) AS ret
+  FROM s JOIN active_ev a ON a.uid = s.uid GROUP BY 1)
+SELECT s.uid, s.t0, s.ch, s.platform, coalesce(k.k, 0) AS onboarding_follows, (o.uid IS NOT NULL) AS picked_interests,
+ (k.uid IS NOT NULL) AS followed_any_suggestion,
+ CASE WHEN s.t0 <= TIMESTAMP '2026-09-03 23:59:59' THEN coalesce(r.ret, false) END AS retained_d14_27
+FROM s LEFT JOIN k ON k.uid = s.uid LEFT JOIN o ON o.uid = s.uid LEFT JOIN r ON r.uid = s.uid;
+
+-- dataset overview
+SELECT count(*) AS events, count(DISTINCT uid) AS members_with_events, (SELECT count(*) FROM users) AS profiles,
+ (SELECT count(*) FROM signups) AS new_signups, min(t) AS first_event, max(t) AS last_event FROM ev;
+
+-- identity check: every event resolves to a member; platform agrees with the device OS
+SELECT count(*) FILTER (WHERE uid IS NULL) AS unresolved_events,
+ count(*) FILTER (WHERE (platform = 'ios' AND os NOT IN ('iOS', 'iPadOS')) OR (platform = 'android' AND os <> 'Android')) AS platform_os_mismatch,
+ count(*) FILTER (WHERE device_id IS NULL) AS events_without_device
+FROM ev;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H1-clips-launch — Clips ramps to 35% of views, 20% of posts (launch 2026-07-08, 21-day ramp)
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT CASE WHEN t < TIMESTAMP '2026-07-08' THEN '1 before launch' WHEN t < TIMESTAMP '2026-07-29' THEN '2 ramp' ELSE '3 from Jul 29' END AS period,
+ count(*) FILTER (WHERE event = 'post viewed') AS post_views,
+ round(avg((post_type = 'clip')::INT) FILTER (WHERE event = 'post viewed'), 4) AS clip_share_of_views,
+ round(avg((post_type = 'clip')::INT) FILTER (WHERE event = 'post created'), 4) AS clip_share_of_posts
+FROM ev WHERE event IN ('post viewed', 'post created') GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H2-onboarding-follows — day 14-27 retention by accounts followed at onboarding
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT CASE WHEN onboarding_follows <= 2 THEN '0-2' WHEN onboarding_follows <= 6 THEN '3-6' ELSE '7+' END AS follows_bucket,
+ count(*) AS new_members, round(avg(retained_d14_27::INT), 4) AS retention_d14_27
+FROM signups WHERE retained_d14_27 IS NOT NULL GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H3-smart-digest-experiment — Digest: 0.6x sends, 1.6x open rate (from 2026-08-05)
+-- ─────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE TEMP TABLE push_after AS
+WITH s AS (SELECT uid, notification_id, notification_type FROM ev WHERE event = 'push notification sent' AND t >= TIMESTAMP '2026-08-05'),
+o AS (SELECT DISTINCT notification_id FROM ev WHERE event = 'push notification opened')
+SELECT p.variant, p.uid, s.notification_id, s.notification_type, (o.notification_id IS NOT NULL) AS opened
+FROM prof p LEFT JOIN s ON s.uid = p.uid LEFT JOIN o ON o.notification_id = s.notification_id WHERE p.variant IS NOT NULL;
+
+SELECT variant, count(DISTINCT uid) AS exposed_members, count(notification_id) AS pushes_sent,
+ round(count(notification_id)::DOUBLE / count(DISTINCT uid), 3) AS sends_per_member,
+ round(avg(opened::INT) FILTER (WHERE notification_id IS NOT NULL), 4) AS open_rate,
+ round(count(*) FILTER (WHERE opened)::DOUBLE / count(DISTINCT uid), 3) AS opens_per_member,
+ round(avg((notification_type = 'daily_digest')::INT) FILTER (WHERE notification_id IS NOT NULL), 4) AS digest_share
+FROM push_after GROUP BY 1 ORDER BY 1;
+
+SELECT "Variant name" AS variant, count(DISTINCT uid) AS exposed_members, count(*) AS exposures FROM ev WHERE event = '$experiment_started' GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H4-android-for-you-incident — 60% of Android For You loads fail 2026-08-26..29 (warehouse join)
+-- ─────────────────────────────────────────────────────────────────────────
+WITH o AS (SELECT DISTINCT date::DATE AS d FROM wh_feed WHERE service_status = 'major_outage'),
+w AS (SELECT t::DATE AS d, platform, feed FROM ev WHERE event = 'post viewed' AND feed IN ('for_you', 'following') AND t >= TIMESTAMP '2026-08-12' AND t < TIMESTAMP '2026-09-13'),
+g AS (SELECT platform, (d IN (SELECT d FROM o)) AS outage_days, count(*) FILTER (WHERE feed = 'for_you') AS for_you, count(*) FILTER (WHERE feed = 'following') AS following FROM w GROUP BY 1, 2)
+SELECT platform, outage_days, for_you, following, round(for_you::DOUBLE / following, 4) AS for_you_per_following FROM g ORDER BY 1, 2;
+
+SELECT platform, count(*) FILTER (WHERE service_status = 'major_outage') AS outage_days, min(date) FILTER (WHERE service_status = 'major_outage') AS first_day,
+ max(date) FILTER (WHERE service_status = 'major_outage') AS last_day,
+ round(avg(error_rate) FILTER (WHERE service_status = 'major_outage'), 4) AS outage_error_rate,
+ round(avg(error_rate) FILTER (WHERE service_status <> 'major_outage'), 4) AS normal_error_rate
+FROM wh_feed GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H5-paid-channel-economics — spend per signup, retention, spend per retained member (warehouse join)
+-- ─────────────────────────────────────────────────────────────────────────
+WITH g AS (SELECT ch, count(*) AS signups, count(retained_d14_27) AS mature, avg(retained_d14_27::INT) AS retention FROM signups GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM wh_spend GROUP BY 1)
+SELECT g.ch, g.signups, round(sp.spend, 0) AS spend_usd, round(sp.spend / g.signups, 2) AS spend_per_signup,
+ g.mature AS mature_signups, round(g.retention, 4) AS retention_d14_27, round(sp.spend / g.signups / g.retention, 2) AS spend_per_retained_member
+FROM g LEFT JOIN sp ON sp.ch = g.ch ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H6-creator-fair-share — Circle creators post 1.35x after the 2026-08-12 fee cut (10-day ramp)
+-- ─────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE TEMP TABLE fee_cut AS
+WITH c AS (SELECT uid, circle_enabled FROM prof WHERE account_type = 'creator' AND joined_date < '2026-06-04'),
+p AS (SELECT uid, CASE WHEN t < TIMESTAMP '2026-08-12' THEN 'before' WHEN t >= TIMESTAMP '2026-08-22' THEN 'after' END AS per FROM ev WHERE event = 'post created')
+SELECT CASE WHEN c.circle_enabled THEN 'circle' ELSE 'no_circle' END AS creator_group, count(DISTINCT c.uid) AS creators,
+ count(*) FILTER (WHERE per = 'before') / 69.0 AS posts_per_day_before, count(*) FILTER (WHERE per = 'after') / 41.0 AS posts_per_day_after
+FROM c LEFT JOIN p ON p.uid = c.uid GROUP BY 1;
+
+SELECT creator_group, creators, round(posts_per_day_before, 2) AS posts_per_day_before, round(posts_per_day_after, 2) AS posts_per_day_after,
+ round(posts_per_day_after / posts_per_day_before, 4) AS after_over_before,
+ round((posts_per_day_after / posts_per_day_before) / (SELECT posts_per_day_after / posts_per_day_before FROM fee_cut WHERE creator_group = 'no_circle'), 4) AS diff_in_diff
+FROM fee_cut ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H7-sound-awards-livestream — posts/comments/shares/stories 2.5x on 2026-09-12
+-- ─────────────────────────────────────────────────────────────────────────
+WITH d AS (SELECT t::DATE AS d,
+  count(*) FILTER (WHERE event IN ('post created', 'comment posted', 'post shared', 'story posted')) AS award_events,
+  count(*) FILTER (WHERE event = 'post viewed') AS post_views, count(DISTINCT uid) AS dau
+  FROM active_ev WHERE t::DATE IN (DATE '2026-08-22', DATE '2026-09-05', DATE '2026-09-12', DATE '2026-09-19', DATE '2026-09-26') GROUP BY 1)
+SELECT d, award_events, post_views, dau, round(award_events / dau, 3) AS award_events_per_dau, round(post_views / dau, 3) AS post_views_per_dau,
+ round((award_events / dau) / (SELECT avg(award_events / dau) FROM d WHERE d <> DATE '2026-09-12'), 3) AS lift_vs_saturdays
+FROM d ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H8-ad-load-increase — feed/Clips ads per view 1.6x, eCPM 0.85x from 2026-09-09 (warehouse join)
+-- ─────────────────────────────────────────────────────────────────────────
+WITH w AS (SELECT CASE WHEN t >= TIMESTAMP '2026-09-09' THEN '2 after' WHEN t >= TIMESTAMP '2026-08-12' THEN '1 before' END AS period, event, ad_placement FROM ev WHERE event IN ('ad viewed', 'post viewed')),
+r AS (SELECT CASE WHEN date::DATE >= DATE '2026-09-09' THEN '2 after' WHEN date::DATE >= DATE '2026-08-12' THEN '1 before' END AS period,
+  sum(ad_revenue_usd) AS revenue, sum(impressions_served) AS impressions FROM wh_ads WHERE ad_placement IN ('feed', 'clips') GROUP BY 1)
+SELECT w.period, count(*) FILTER (WHERE event = 'post viewed') AS post_views,
+ count(*) FILTER (WHERE event = 'ad viewed' AND ad_placement IN ('feed', 'clips')) AS feed_clips_ads,
+ round(feed_clips_ads::DOUBLE / post_views, 4) AS ads_per_post_view,
+ round(max(r.revenue), 2) AS feed_clips_revenue_usd, round(1000 * max(r.revenue) / max(r.impressions), 3) AS ecpm_usd,
+ round(1000.0 * max(r.revenue) / post_views, 4) AS revenue_per_1k_post_views
+FROM w JOIN r ON r.period = w.period WHERE w.period IS NOT NULL GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H9-creator-first-post — median hours signup → first post: creator 0.35x personal
+-- ─────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE TEMP TABLE first_post AS
+SELECT s.uid, s.t0, p.account_type,
+ min(e.t) FILTER (WHERE e.t > s.t0 AND e.t < s.t0 + INTERVAL 7 DAY) AS t1
+FROM signups s JOIN prof p ON p.uid = s.uid LEFT JOIN ev e ON e.uid = s.uid AND e.event = 'post created'
+WHERE s.t0 <= TIMESTAMP '2026-09-24 23:59:59' GROUP BY 1, 2, 3;
+
+SELECT account_type, count(*) AS signups, count(t1) AS posted_within_7d, round(count(t1)::DOUBLE / count(*), 4) AS conversion_7d,
+ round(median(date_diff('second', t0, t1) / 3600.0), 2) AS median_hours_to_first_post
+FROM first_post GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H10-circle-paywall-trigger — locked post 9% vs profile button 3%
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT paywall_trigger, count(*) FILTER (WHERE event = 'circle paywall viewed') AS paywall_views,
+ count(*) FILTER (WHERE event = 'circle subscription started') AS subscriptions,
+ round(subscriptions::DOUBLE / paywall_views, 4) AS conversion
+FROM ev WHERE event IN ('circle paywall viewed', 'circle subscription started') GROUP BY 1 ORDER BY 1;
+
+-- ═════════════════════════════════════════════════════════════════════════
+-- EVAL QUERIES (eval/social.eval.md)
+-- ═════════════════════════════════════════════════════════════════════════
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q1 — Clips share of post views, weekly
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT date_trunc('week', t)::DATE AS week, count(*) AS post_views,
+ round(avg((post_type = 'clip')::INT), 4) AS clip_share, round(avg((post_type = 'photo')::INT), 4) AS photo_share,
+ round(avg((post_type = 'text')::INT), 4) AS text_share
+FROM ev WHERE event = 'post viewed' GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q2 — Clips creation from Jul 29, by account type; who makes Clips
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT p.account_type, count(*) AS posts, round(avg((e.post_type = 'clip')::INT), 4) AS clip_share,
+ count(DISTINCT e.uid) FILTER (WHERE e.post_type = 'clip') AS members_posting_clips
+FROM ev e JOIN prof p ON p.uid = e.uid WHERE e.event = 'post created' AND e.t >= TIMESTAMP '2026-07-29' GROUP BY 1 ORDER BY 1;
+
+SELECT count(*) FILTER (WHERE post_type = 'clip') AS clip_posts_from_jul29, round(avg((post_type = 'clip')::INT), 4) AS clip_share_of_posts
+FROM ev WHERE event = 'post created' AND t >= TIMESTAMP '2026-07-29';
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q3 — retention by accounts followed at onboarding (each count)
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT least(onboarding_follows, 10) AS follows_capped_at_10, count(*) AS new_members, round(avg(retained_d14_27::INT), 4) AS retention_d14_27
+FROM signups WHERE retained_d14_27 IS NOT NULL GROUP BY 1 ORDER BY 1;
+
+SELECT count(*) AS mature_new_members, round(avg(retained_d14_27::INT), 4) AS retention_d14_27,
+ round(avg(onboarding_follows), 2) AS avg_onboarding_follows, round(avg((onboarding_follows >= 7)::INT), 4) AS share_7_plus,
+ round(avg((NOT followed_any_suggestion)::INT), 4) AS share_followed_none
+FROM signups WHERE retained_d14_27 IS NOT NULL;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q4 — Smart Digest: open rate significance (see STORY H3 for sends and opens per member)
+-- ─────────────────────────────────────────────────────────────────────────
+WITH g AS (SELECT variant, count(*) AS n, avg(opened::INT) AS r FROM push_after WHERE notification_id IS NOT NULL GROUP BY 1)
+SELECT max(r) FILTER (WHERE variant = 'Digest') AS digest_open_rate, max(r) FILTER (WHERE variant = 'Control') AS control_open_rate,
+ round(max(r) FILTER (WHERE variant = 'Digest') / max(r) FILTER (WHERE variant = 'Control'), 3) AS ratio,
+ round((max(r) FILTER (WHERE variant = 'Digest') - max(r) FILTER (WHERE variant = 'Control'))
+  / sqrt(max(r * (1 - r) / n) FILTER (WHERE variant = 'Digest') + max(r * (1 - r) / n) FILTER (WHERE variant = 'Control')), 1) AS z
+FROM g;
+
+-- weekly pushes sent, by arm (the drop starts Aug 5)
+SELECT date_trunc('week', e.t)::DATE AS week, p.variant, count(*) AS pushes_sent
+FROM ev e JOIN prof p ON p.uid = e.uid WHERE e.event = 'push notification sent' AND p.variant IS NOT NULL AND e.t >= TIMESTAMP '2026-07-13'
+GROUP BY 1, 2 ORDER BY 1, 2;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q5 — fee cut null: Circle subscriptions per paywall view before vs after 2026-08-12, overall and by trigger
+-- ─────────────────────────────────────────────────────────────────────────
+WITH g AS (SELECT 'all' AS grp, CASE WHEN t >= TIMESTAMP '2026-08-12' THEN 'after' ELSE 'before' END AS per,
+  count(*) FILTER (WHERE event = 'circle paywall viewed') AS n, count(*) FILTER (WHERE event = 'circle subscription started') AS subs
+  FROM ev WHERE event IN ('circle paywall viewed', 'circle subscription started') GROUP BY 1, 2
+  UNION ALL
+  SELECT paywall_trigger, CASE WHEN t >= TIMESTAMP '2026-08-12' THEN 'after' ELSE 'before' END,
+  count(*) FILTER (WHERE event = 'circle paywall viewed'), count(*) FILTER (WHERE event = 'circle subscription started')
+  FROM ev WHERE event IN ('circle paywall viewed', 'circle subscription started') GROUP BY 1, 2
+  UNION ALL
+  SELECT platform, CASE WHEN t >= TIMESTAMP '2026-08-12' THEN 'after' ELSE 'before' END,
+  count(*) FILTER (WHERE event = 'circle paywall viewed'), count(*) FILTER (WHERE event = 'circle subscription started')
+  FROM ev WHERE event IN ('circle paywall viewed', 'circle subscription started') GROUP BY 1, 2)
+SELECT grp, max(n) FILTER (WHERE per = 'before') AS views_before, max(n) FILTER (WHERE per = 'after') AS views_after,
+ round(max(subs::DOUBLE / n) FILTER (WHERE per = 'before'), 4) AS before_conv, round(max(subs::DOUBLE / n) FILTER (WHERE per = 'after'), 4) AS after_conv,
+ round((max(subs::DOUBLE / n) FILTER (WHERE per = 'after') - max(subs::DOUBLE / n) FILTER (WHERE per = 'before'))
+  / sqrt(max((subs::DOUBLE / n) * (1 - subs::DOUBLE / n) / n) FILTER (WHERE per = 'after') + max((subs::DOUBLE / n) * (1 - subs::DOUBLE / n) / n) FILTER (WHERE per = 'before')), 2) AS z
+FROM g GROUP BY 1 ORDER BY 1;
+
+-- Smart Digest arms: member-initiated activity per exposed member before and after the start (context for Q4)
+WITH a AS (SELECT p.variant, p.uid,
+  count(DISTINCT x.t::DATE) FILTER (WHERE x.t < TIMESTAMP '2026-08-05') AS active_days_before,
+  count(DISTINCT x.t::DATE) FILTER (WHERE x.t >= TIMESTAMP '2026-08-05') AS active_days_after,
+  count(*) FILTER (WHERE x.t >= TIMESTAMP '2026-08-05' AND x.event = 'post viewed') AS post_views_after
+  FROM prof p LEFT JOIN active_ev x ON x.uid = p.uid WHERE p.variant IS NOT NULL GROUP BY 1, 2)
+SELECT variant, count(*) AS members, round(avg(active_days_before), 3) AS active_days_before, round(avg(active_days_after), 3) AS active_days_after,
+ round(avg(active_days_after - active_days_before), 3) AS change_in_active_days, round(avg(post_views_after), 2) AS post_views_after
+FROM a GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q6 — Android For You incident: daily views by platform and feed; missing views (see STORY H4)
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT t::DATE AS day,
+ count(*) FILTER (WHERE platform = 'android' AND feed = 'for_you') AS android_for_you,
+ count(*) FILTER (WHERE platform = 'android' AND feed = 'following') AS android_following,
+ count(*) FILTER (WHERE platform = 'ios' AND feed = 'for_you') AS ios_for_you
+FROM ev WHERE event = 'post viewed' AND t >= TIMESTAMP '2026-08-22' AND t < TIMESTAMP '2026-09-03' GROUP BY 1 ORDER BY 1;
+
+-- expected Android For You views on outage days at the baseline For You / Following ratio, vs observed
+WITH w AS (SELECT t::DATE AS d, feed FROM ev WHERE event = 'post viewed' AND platform = 'android' AND feed IN ('for_you', 'following') AND t >= TIMESTAMP '2026-08-12' AND t < TIMESTAMP '2026-09-13'),
+o AS (SELECT DISTINCT date::DATE AS d FROM wh_feed WHERE service_status = 'major_outage'),
+b AS (SELECT count(*) FILTER (WHERE feed = 'for_you')::DOUBLE / count(*) FILTER (WHERE feed = 'following') AS base_ratio FROM w WHERE d NOT IN (SELECT d FROM o)),
+x AS (SELECT count(*) FILTER (WHERE feed = 'for_you') AS observed, count(*) FILTER (WHERE feed = 'following') AS following FROM w WHERE d IN (SELECT d FROM o))
+SELECT x.observed AS android_for_you_outage, round(x.following * b.base_ratio) AS expected_at_baseline,
+ round(x.following * b.base_ratio) - x.observed AS missing_views, round(x.observed / (x.following * b.base_ratio), 3) AS observed_over_expected,
+ (SELECT sum(failed_requests) FROM wh_feed WHERE service_status = 'major_outage') AS warehouse_failed_requests
+FROM x, b;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q7 — paid channel economics (see STORY H5); network-claimed installs
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT acquisition_channel, round(sum(spend_usd), 0) AS spend_usd, sum(installs_reported) AS installs_reported, sum(clicks) AS clicks, sum(impressions) AS impressions
+FROM wh_spend GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q8 — onboarding funnel by channel: interests, suggested accounts, follows
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT ch, count(*) AS signups, round(avg(picked_interests::INT), 4) AS picked_interests, round(avg(followed_any_suggestion::INT), 4) AS followed_any_suggestion,
+ round(avg(onboarding_follows), 2) AS avg_onboarding_follows, round(avg((onboarding_follows >= 7)::INT), 4) AS share_7_plus,
+ round(avg(retained_d14_27::INT), 4) AS retention_d14_27
+FROM signups GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q9 — fee cut: weekly posts per creator, Circle vs no Circle (see STORY H6 for the diff-in-diff)
+-- ─────────────────────────────────────────────────────────────────────────
+WITH c AS (SELECT uid, circle_enabled FROM prof WHERE account_type = 'creator' AND joined_date < '2026-06-04')
+SELECT date_trunc('week', e.t)::DATE AS week,
+ round(count(*) FILTER (WHERE c.circle_enabled)::DOUBLE / (SELECT count(*) FROM c WHERE circle_enabled), 3) AS posts_per_circle_creator,
+ round(count(*) FILTER (WHERE NOT c.circle_enabled)::DOUBLE / (SELECT count(*) FROM c WHERE NOT circle_enabled), 3) AS posts_per_other_creator
+FROM ev e JOIN c ON c.uid = e.uid WHERE e.event = 'post created' AND e.t >= TIMESTAMP '2026-06-08' AND e.t < TIMESTAMP '2026-09-28' GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q10 — Circles: subscriptions, first-month list-price bookings, and Murmur's fee before vs after the cut
+-- (tier prices from 01-business.md: supporter $2.99, insider $5.99, vip $11.99 per month)
+-- ─────────────────────────────────────────────────────────────────────────
+WITH s AS (SELECT CASE WHEN t >= TIMESTAMP '2026-08-12' THEN '2 after' ELSE '1 before' END AS period,
+  CASE circle_tier WHEN 'supporter' THEN 2.99 WHEN 'insider' THEN 5.99 WHEN 'vip' THEN 11.99 END AS price
+  FROM ev WHERE event = 'circle subscription started'),
+pw AS (SELECT CASE WHEN t >= TIMESTAMP '2026-08-12' THEN '2 after' ELSE '1 before' END AS period, count(*) AS paywall_views FROM ev WHERE event = 'circle paywall viewed' GROUP BY 1),
+g AS (SELECT period, count(*) AS subscriptions, sum(price) AS bookings, CASE WHEN period = '2 after' THEN 51.0 ELSE 69.0 END AS days,
+  CASE WHEN period = '2 after' THEN 0.10 ELSE 0.20 END AS fee FROM s GROUP BY 1)
+SELECT g.period, g.subscriptions, round(g.subscriptions / g.days, 2) AS subs_per_day, round(g.bookings, 2) AS first_month_bookings_usd,
+ round(g.bookings * g.fee, 2) AS murmur_fee_usd, round(g.bookings * g.fee / g.days, 2) AS murmur_fee_per_day,
+ round(g.bookings * (1 - g.fee) / g.days, 2) AS creator_share_per_day,
+ pw.paywall_views, round(g.subscriptions::DOUBLE / pw.paywall_views, 4) AS subs_per_paywall_view
+FROM g JOIN pw ON pw.period = g.period ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q11 — the September 12 spike (see STORY H7): daily counts around it
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT t::DATE AS day, dayname(t::DATE) AS weekday,
+ count(*) FILTER (WHERE event = 'post created') AS posts, count(*) FILTER (WHERE event = 'comment posted') AS comments_posted,
+ count(*) FILTER (WHERE event = 'post shared') AS shares, count(*) FILTER (WHERE event = 'story posted') AS stories_posted,
+ count(*) FILTER (WHERE event = 'post viewed') AS post_views, count(DISTINCT uid) AS dau
+FROM active_ev WHERE t >= TIMESTAMP '2026-09-09' AND t < TIMESTAMP '2026-09-16' GROUP BY 1, 2 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q12 — ad load increase (see STORY H8); by placement
+-- ─────────────────────────────────────────────────────────────────────────
+WITH a AS (SELECT CASE WHEN t >= TIMESTAMP '2026-09-09' THEN '2 after' WHEN t >= TIMESTAMP '2026-08-12' THEN '1 before' END AS period, ad_placement, count(*) AS ad_views
+  FROM ev WHERE event = 'ad viewed' GROUP BY 1, 2),
+v AS (SELECT CASE WHEN t >= TIMESTAMP '2026-09-09' THEN '2 after' WHEN t >= TIMESTAMP '2026-08-12' THEN '1 before' END AS period, count(*) AS post_views FROM ev WHERE event = 'post viewed' GROUP BY 1),
+r AS (SELECT CASE WHEN date::DATE >= DATE '2026-09-09' THEN '2 after' WHEN date::DATE >= DATE '2026-08-12' THEN '1 before' END AS period, ad_placement,
+  sum(ad_revenue_usd) AS revenue, sum(impressions_served) AS impressions FROM wh_ads GROUP BY 1, 2)
+SELECT a.period, a.ad_placement, a.ad_views, round(a.ad_views::DOUBLE / v.post_views, 4) AS ads_per_post_view,
+ round(r.revenue, 2) AS revenue_usd, round(1000 * r.revenue / r.impressions, 3) AS ecpm_usd, round(1000 * r.revenue / v.post_views, 4) AS revenue_per_1k_post_views
+FROM a JOIN v ON v.period = a.period JOIN r ON r.period = a.period AND r.ad_placement = a.ad_placement WHERE a.period IS NOT NULL ORDER BY 1, 2;
+
+-- post views per active member-day before vs after, all members vs members who joined before June 4
+-- (excludes the incident days Aug 26-29 and the awards day Sep 12)
+WITH d AS (SELECT a.t::DATE AS d, (a.t::DATE >= DATE '2026-09-09') AS after_change, (p.joined_date < '2026-06-04') AS established, a.uid,
+  count(*) FILTER (WHERE a.event = 'post viewed') AS pv
+  FROM active_ev a JOIN prof p ON p.uid = a.uid
+  WHERE a.t >= TIMESTAMP '2026-08-12' AND a.t::DATE NOT BETWEEN DATE '2026-08-26' AND DATE '2026-08-29' AND a.t::DATE <> DATE '2026-09-12' GROUP BY 1, 2, 3, 4)
+SELECT 'all members' AS members, round(avg(pv) FILTER (WHERE NOT after_change), 3) AS views_per_member_day_before, round(avg(pv) FILTER (WHERE after_change), 3) AS views_per_member_day_after,
+ round(avg((NOT established)::INT) FILTER (WHERE NOT after_change), 4) AS new_member_share_before, round(avg((NOT established)::INT) FILTER (WHERE after_change), 4) AS new_member_share_after FROM d
+UNION ALL
+SELECT 'joined before Jun 4', round(avg(pv) FILTER (WHERE NOT after_change AND established), 3), round(avg(pv) FILTER (WHERE after_change AND established), 3), NULL, NULL FROM d
+UNION ALL
+SELECT 'joined in window', round(avg(pv) FILTER (WHERE NOT after_change AND NOT established), 3), round(avg(pv) FILTER (WHERE after_change AND NOT established), 3), NULL, NULL FROM d;
+
+-- established members' post views per active member-day, weekly (the normal week-to-week range)
+SELECT date_trunc('week', a.t)::DATE AS week, round(count(*) FILTER (WHERE a.event = 'post viewed')::DOUBLE / count(DISTINCT a.uid || a.t::DATE::VARCHAR), 3) AS views_per_member_day
+FROM active_ev a JOIN prof p ON p.uid = a.uid WHERE p.joined_date < '2026-06-04' AND a.t >= TIMESTAMP '2026-06-08' AND a.t < TIMESTAMP '2026-09-28' GROUP BY 1 ORDER BY 1;
+
+-- ad clicks per impression before vs after (not part of the change)
+SELECT CASE WHEN t >= TIMESTAMP '2026-09-09' THEN '2 after' ELSE '1 before' END AS period,
+ round(count(*) FILTER (WHERE event = 'ad clicked')::DOUBLE / count(*) FILTER (WHERE event = 'ad viewed'), 4) AS ctr
+FROM ev WHERE event IN ('ad viewed', 'ad clicked') AND t >= TIMESTAMP '2026-08-12' GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q13 — country null: new-member day 14-27 retention, US vs international, overall and by platform
+-- ─────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE TEMP TABLE country_ret AS
+SELECT s.uid, s.platform, p.country, CASE WHEN p.country = 'US' THEN 'US' ELSE 'international' END AS market, s.retained_d14_27
+FROM signups s JOIN prof p ON p.uid = s.uid WHERE s.retained_d14_27 IS NOT NULL;
+
+SELECT country, count(*) AS new_members, round(avg(retained_d14_27::INT), 4) AS retention_d14_27 FROM country_ret GROUP BY 1 ORDER BY 2 DESC;
+
+WITH g AS (SELECT coalesce(platform, 'all') AS grp, market, count(*) AS n, avg(retained_d14_27::INT) AS r
+  FROM country_ret GROUP BY GROUPING SETS ((market), (platform, market)))
+SELECT a.grp, a.n AS us_members, round(a.r, 4) AS us_retention, b.n AS international_members, round(b.r, 4) AS international_retention,
+ round((a.r - b.r) / sqrt(a.r * (1 - a.r) / a.n + b.r * (1 - b.r) / b.n), 2) AS z
+FROM g a JOIN g b ON a.grp = b.grp AND a.market = 'US' AND b.market = 'international' ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q14 — time to first post by account type (see STORY H9); finer buckets
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT account_type,
+ round(avg((t1 < t0 + INTERVAL 6 HOUR)::INT) FILTER (WHERE t1 IS NOT NULL), 4) AS within_6h,
+ round(avg((t1 < t0 + INTERVAL 24 HOUR)::INT) FILTER (WHERE t1 IS NOT NULL), 4) AS within_24h,
+ round(avg((t1 < t0 + INTERVAL 72 HOUR)::INT) FILTER (WHERE t1 IS NOT NULL), 4) AS within_72h,
+ round(quantile_cont(date_diff('second', t0, t1) / 3600.0, 0.25), 2) AS p25_hours, round(quantile_cont(date_diff('second', t0, t1) / 3600.0, 0.75), 2) AS p75_hours
+FROM first_post GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q15 — Circle paywall conversion by trigger (see STORY H10); tier mix
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT paywall_trigger, circle_tier, count(*) AS subscriptions, round(count(*)::DOUBLE / sum(count(*)) OVER (PARTITION BY paywall_trigger), 4) AS tier_mix
+FROM ev WHERE event = 'circle subscription started' GROUP BY 1, 2 ORDER BY 1, 2;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q16 — iOS vs Android new-member retention (null); sub-splits by channel group and signup month
+-- ─────────────────────────────────────────────────────────────────────────
+WITH g AS (SELECT platform, count(*) AS n, avg(retained_d14_27::INT) AS r FROM signups WHERE retained_d14_27 IS NOT NULL GROUP BY 1)
+SELECT max(n) FILTER (WHERE platform = 'ios') AS ios_members, round(max(r) FILTER (WHERE platform = 'ios'), 4) AS ios_retention,
+ max(n) FILTER (WHERE platform = 'android') AS android_members, round(max(r) FILTER (WHERE platform = 'android'), 4) AS android_retention,
+ round((max(r) FILTER (WHERE platform = 'ios') - max(r) FILTER (WHERE platform = 'android'))
+  / sqrt(max(r * (1 - r) / n) FILTER (WHERE platform = 'ios') + max(r * (1 - r) / n) FILTER (WHERE platform = 'android')), 2) AS z
+FROM g;
+
+WITH x AS (SELECT CASE WHEN ch IN ('friend_invite', 'creator_partnerships') THEN 'invite_or_creator' ELSE 'other_channels' END AS grp, platform, retained_d14_27 FROM signups WHERE retained_d14_27 IS NOT NULL
+  UNION ALL SELECT 'signup_' || strftime(t0, '%Y-%m') AS grp, platform, retained_d14_27 FROM signups WHERE retained_d14_27 IS NOT NULL),
+g AS (SELECT grp, platform, count(*) AS n, avg(retained_d14_27::INT) AS r FROM x GROUP BY 1, 2)
+SELECT grp, round(max(r) FILTER (WHERE platform = 'ios'), 4) AS ios_retention, round(max(r) FILTER (WHERE platform = 'android'), 4) AS android_retention,
+ round((max(r) FILTER (WHERE platform = 'ios') - max(r) FILTER (WHERE platform = 'android'))
+  / sqrt(max(r * (1 - r) / n) FILTER (WHERE platform = 'ios') + max(r * (1 - r) / n) FILTER (WHERE platform = 'android')), 2) AS z
+FROM g GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q17 — pushes sent per day before vs after Aug 5
+-- ─────────────────────────────────────────────────────────────────────────
+WITH d AS (SELECT t::DATE AS d, count(*) AS pushes FROM ev WHERE event = 'push notification sent' AND t >= TIMESTAMP '2026-07-08' AND t < TIMESTAMP '2026-09-02' GROUP BY 1),
+m AS (SELECT t::DATE AS d, count(DISTINCT uid) AS dau FROM active_ev WHERE t >= TIMESTAMP '2026-07-08' AND t < TIMESTAMP '2026-09-02' GROUP BY 1)
+SELECT CASE WHEN d.d < DATE '2026-08-05' THEN '1 Jul 8 - Aug 4' ELSE '2 Aug 5 - Sep 1' END AS period, round(avg(pushes), 1) AS pushes_per_day,
+ round(sum(pushes)::DOUBLE / sum(dau), 3) AS pushes_per_active_member_day
+FROM d JOIN m ON m.d = d.d GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q18 — ad revenue and eCPM by placement, September (warehouse)
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT ad_placement, sum(impressions_served) AS impressions_served, round(sum(ad_revenue_usd), 2) AS revenue_usd,
+ round(1000 * sum(ad_revenue_usd) / sum(impressions_served), 3) AS ecpm_usd,
+ round(sum(ad_revenue_usd) / sum(sum(ad_revenue_usd)) OVER (), 4) AS revenue_share
+FROM wh_ads WHERE date::DATE >= DATE '2026-09-01' AND date::DATE <= DATE '2026-09-30' GROUP BY 1 ORDER BY 1;
+
+SELECT ad_placement,
+ round(1000 * sum(ad_revenue_usd) FILTER (WHERE date::DATE BETWEEN DATE '2026-09-01' AND DATE '2026-09-08') / sum(impressions_served) FILTER (WHERE date::DATE BETWEEN DATE '2026-09-01' AND DATE '2026-09-08'), 3) AS ecpm_sep_1_8,
+ round(1000 * sum(ad_revenue_usd) FILTER (WHERE date::DATE BETWEEN DATE '2026-09-09' AND DATE '2026-09-30') / sum(impressions_served) FILTER (WHERE date::DATE BETWEEN DATE '2026-09-09' AND DATE '2026-09-30'), 3) AS ecpm_sep_9_30
+FROM wh_ads GROUP BY 1 ORDER BY 1;
+
+-- Mixpanel ad viewed vs ad server impressions, September
+SELECT a.ad_placement, a.mixpanel_ad_views, w.impressions_served, round(w.impressions_served::DOUBLE / a.mixpanel_ad_views, 3) AS server_over_mixpanel
+FROM (SELECT ad_placement, count(*) AS mixpanel_ad_views FROM ev WHERE event = 'ad viewed' AND t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-10-01' GROUP BY 1) a
+JOIN (SELECT ad_placement, sum(impressions_served) AS impressions_served FROM wh_ads WHERE date::DATE BETWEEN DATE '2026-09-01' AND DATE '2026-09-30' GROUP BY 1) w ON w.ad_placement = a.ad_placement ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q19 — quarter review inputs: new-member retention by signup month, weekly active members
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT strftime(t0, '%Y-%m') AS signup_month, count(*) AS signups, round(avg(retained_d14_27::INT), 4) AS retention_d14_27,
+ round(avg((onboarding_follows <= 2)::INT), 4) AS share_0_2_follows
+FROM signups GROUP BY 1 ORDER BY 1;
+
+SELECT date_trunc('week', t)::DATE AS week, count(DISTINCT uid) AS weekly_active_members FROM active_ev GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q20 — why channels retain differently: retention standardized by onboarding follows
+-- ─────────────────────────────────────────────────────────────────────────
+WITH m AS (SELECT * FROM signups WHERE retained_d14_27 IS NOT NULL),
+pk AS (SELECT least(onboarding_follows, 7) AS k, avg(retained_d14_27::INT) AS rk FROM m GROUP BY 1)
+SELECT m.ch, count(*) AS mature_signups, round(avg(m.retained_d14_27::INT), 4) AS observed_retention,
+ round(avg(pk.rk), 4) AS expected_from_follows_alone, round(avg(m.onboarding_follows), 2) AS avg_onboarding_follows
+FROM m JOIN pk ON pk.k = least(m.onboarding_follows, 7) GROUP BY 1 ORDER BY 1;
+
+-- within the same follow bucket, channels retain alike
+SELECT CASE WHEN onboarding_follows <= 2 THEN '0-2' WHEN onboarding_follows <= 6 THEN '3-6' ELSE '7+' END AS follows_bucket,
+ round(avg(retained_d14_27::INT) FILTER (WHERE ch = 'creator_partnerships'), 4) AS creator_partnerships,
+ round(avg(retained_d14_27::INT) FILTER (WHERE ch = 'meta_ads'), 4) AS meta_ads,
+ round(avg(retained_d14_27::INT) FILTER (WHERE ch = 'tiktok_ads'), 4) AS tiktok_ads,
+ round(avg(retained_d14_27::INT) FILTER (WHERE ch = 'organic'), 4) AS organic,
+ round(avg(retained_d14_27::INT) FILTER (WHERE ch = 'friend_invite'), 4) AS friend_invite
+FROM signups WHERE retained_d14_27 IS NOT NULL GROUP BY 1 ORDER BY 1;
