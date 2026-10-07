@@ -19,8 +19,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             Tradepost Pro sellers pay a monthly subscription and a 9.5% fee.
  *             Tradepost earns the selling fee (take rate) on gross
  *             merchandise value (GMV).
- * SCALE:      10,000 simulated people (≈5,070 sign up inside the window, ≈4,930
- *             joined before it), ~0.78M events, 120 days (2026-06-04 →
+ * SCALE:      10,000 simulated people (≈4,980 sign up inside the window, ≈5,020
+ *             joined before it), ~0.82M events, 120 days (2026-06-04 →
  *             2026-10-01, UTC)
  * CORE LOOP:  buyer: listing viewed → (offer made → offer accepted) → checkout
  *             started → purchase completed → order shipped → order delivered
@@ -54,7 +54,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * USER PROPS:  account_type (buyer / seller / pro_seller), acquisition_channel
  *              (no tiktok_ads before 2026-03-02), region, age_band (younger
- *              for tiktok_ads), member_since, "Experiment: Express Checkout"
+ *              for tiktok_ads), member_since (established members skew to
+ *              recent signups), "Experiment: Express Checkout"
  * SUPER PROPS: platform (ios/android, from the device), region (sticky)
  * SCD PROPS:   none
  * GROUPS:      none
@@ -102,6 +103,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   signups, with seeded day noise.
  * - retentionCurve shapes new members' activity; established members' activity
  *   is flat across the window (DOW weights).
+ * - Established members' member_since follows a 1/(1 + age/124 d)² density cut
+ *   at the 2022 launch, so signups per week rise smoothly into the in-window
+ *   rate (≈290 a week) with no step at June 4.
  */
 
 // ── HOOK STORIES ──
@@ -231,41 +235,41 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-marketplace, 2026-10-07,
- * full fidelity, 10,000 people, 781,780 events)
+ * full fidelity, 10,000 people, 817,949 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation            | Expected | Measured
  * -----|------------------------------------------------|-----------------------|----------|---------
- * H1   | listings/day, established casual vs Pro (DiD)  | CASUAL_LISTING_KEEP   | 0.75     | 0.748 (casual 71.4 → 52.8/day; Pro 212.8 → 210.6)
- * H1   | casual:Pro odds of listings viewed, after/before | CASUAL_LISTING_KEEP | 0.75     | 0.754 (0.334 → 0.251)
+ * H1   | listings/day, established casual vs Pro (DiD)  | CASUAL_LISTING_KEEP   | 0.75     | 0.750 (casual 71.4 → 55.0/day; Pro 203.3 → 208.9)
+ * H1   | casual:Pro odds of listings viewed, after/before | CASUAL_LISTING_KEEP | 0.75     | 0.746 (0.336 → 0.251)
  * H1   | ledger take_rate casual, after/before          | 12.9 / 10             | 1.29     | 1.290
- * H2   | checkout conversion, variant/control           | EXPRESS_CONV_MULT     | 1.15     | 1.142 (72.3% vs 63.3%)
- * H2   | median checkout minutes, variant/control       | EXPRESS_TIME_MULT     | 0.50     | 0.494 (1.98 vs 4.02 min)
- * H2   | variant share of exposed members               | equal 2-arm hash      | 0.50     | 0.502
+ * H2   | checkout conversion, variant/control           | EXPRESS_CONV_MULT     | 1.15     | 1.131 (72.7% vs 64.3%)
+ * H2   | median checkout minutes, variant/control       | EXPRESS_TIME_MULT     | 0.50     | 0.502 (2.00 vs 3.98 min)
+ * H2   | variant share of exposed members               | equal 2-arm hash      | 0.50     | 0.499
  * H2   | exposures before start or off-arm              | exact purity          | 0        | 0
- * H3   | acceptance, offers 80%+ / below 80%            | logistic x offer mix  | 3.03     | 3.056 (63.0% vs 20.6%)
- * H4   | 30-day sell-through, 1-2 photos / 5+           | PHOTO_SELL_KEEP(1)    | 0.50     | 0.523 (26.1% vs 49.8%)
- * H4   | 30-day sell-through, 3-4 photos / 5+           | PHOTO_SELL_KEEP(3)    | 0.80     | 0.797 (39.7% vs 49.8%)
- * H5   | 30-day repurchase, late / on-time first delivery | 1 − TRUST_LOSS      | 0.55     | 0.532 (31.7% vs 59.6%)
- * H6   | card / other conversion, incident / ±14 d      | 1 − CARD_FAIL         | 0.60     | 0.636 (card 43.7% vs 69.0%)
+ * H3   | acceptance, offers 80%+ / below 80%            | logistic x offer mix  | 3.03     | 3.013 (63.6% vs 21.1%)
+ * H4   | 30-day sell-through, 1-2 photos / 5+           | PHOTO_SELL_KEEP(1)    | 0.50     | 0.487 (24.2% vs 49.8%)
+ * H4   | 30-day sell-through, 3-4 photos / 5+           | PHOTO_SELL_KEEP(3)    | 0.80     | 0.796 (39.6% vs 49.8%)
+ * H5   | 30-day repurchase, late / on-time first delivery | 1 − TRUST_LOSS      | 0.55     | 0.565 (34.1% vs 60.3%)
+ * H6   | card / other conversion, incident / ±14 d      | 1 − CARD_FAIL         | 0.60     | 0.637 (card 43.9% vs 70.4%)
  * H6   | warehouse card approval_rate, degraded/normal  | 1 − CARD_FAIL         | 0.60     | 0.599
- * H7   | spend per signup, Google / TikTok              | 12 / 6                | 2.00     | 2.013 ($11.88 vs $5.90)
- * H7   | 14-day activation, Google / TikTok             | 0.9 / 0.4             | 2.25     | 2.242 (73.1% vs 32.6%)
- * H7   | spend per activated buyer, Google / TikTok     | 2.0 / 2.25            | 0.889    | 0.898 ($16.24 vs $18.08)
- * H8   | high/low-ticket conversion, after/before (DiD) | GUARANTEE_MULT        | 1.25     | 1.205 (56.4% → 68.0% vs 67.8% → 67.8%)
- * H9   | median days to sell, electronics / base        | CAT_SELL_TTC          | 0.50     | 0.508 (3.01 vs 5.93 d)
- * H9   | median days to sell, collectibles / base       | CAT_SELL_TTC          | 1.60     | 1.592 (9.44 d)
- * H10  | electronics share of listing views, BTS/before | 2w / (2w + 1 − w) / w | 1.695    | 1.690 (18.0% → 30.5%)
- * H10  | electronics share, after / before (control)    | unchanged             | 1.00     | 0.978
+ * H7   | spend per signup, Google / TikTok              | 12 / 6                | 2.00     | 2.015 ($11.90 vs $5.90)
+ * H7   | 14-day activation, Google / TikTok             | 0.9 / 0.4             | 2.25     | 2.203 (79.8% vs 36.2%)
+ * H7   | spend per activated buyer, Google / TikTok     | 2.0 / 2.25            | 0.889    | 0.915 ($14.92 vs $16.31)
+ * H8   | high/low-ticket conversion, after/before (DiD) | GUARANTEE_MULT        | 1.25     | 1.285 (54.7% → 70.1% vs 68.4% → 68.3%)
+ * H9   | median days to sell, electronics / base        | CAT_SELL_TTC          | 0.50     | 0.497 (3.03 vs 6.09 d)
+ * H9   | median days to sell, collectibles / base       | CAT_SELL_TTC          | 1.60     | 1.512 (9.21 d)
+ * H10  | electronics share of listing views, BTS/before | 2w / (2w + 1 − w) / w | 1.695    | 1.711 (18.1% → 30.9%)
+ * H10  | electronics share, after / before (control)    | unchanged             | 1.00     | 1.002
  * ═════════════════════════════════════════════════════════════════════════
  *
  * Noise notes: H1's listing read rests on about 1,000 established casual
  * sellers whose engine listing timing moves each period a few percent, so it
  * uses the knob as target with a half-effect floor. H5's late group is about
- * 780 buyers (relative SE about 5%). H6 rests on about 1,010 card checkouts
+ * 750 buyers (relative SE about 5%). H6 rests on about 1,100 card checkouts
  * on incident days (relative SE about 4%). H7's TikTok activation rests on
- * about 980 signups with a full 14 days (relative SE about 4%); its
+ * about 970 signups with a full 14 days (relative SE about 4%); its
  * spend-per-activated read compounds that with spend noise. Activated buyers
- * whose first 14 days had no completed buy-now visit get one forced (1,339
+ * whose first 14 days had no completed buy-now visit get one forced (1,365
  * checkouts, 3% of all), which pulls the H2/H6/H8 ratios toward 1 by about
  * 1%.
  */
@@ -393,6 +397,16 @@ const REVIEW_RATE = 0.42;
 const PREWINDOW_BUY_DAYS = 21;        // orders in flight at the window start
 const PREWINDOW_LIST_DAYS = 45;       // listings live at the window start
 const UNTRACKED_ORDER_SHARE = 0.05;   // orders from clients that never reach Mixpanel (varies 0-10% by day)
+// established members still active in the window skew to recent signups: acquisition
+// grew and older cohorts went quiet. Age before June 4 has density ∝ 1/(1 + age/a)²,
+// cut at the 2022 launch; a = 124 days puts the weeks just before June 4 at about the
+// in-window signup rate (≈290 a week), so member_since has no step at the window start.
+const MEMBER_AGE_SCALE_DAYS = 124;
+const MEMBER_AGE_MAX_DAYS = (ms(DATASET_START) - ms(TRADEPOST_LAUNCH)) / DAY_MS;
+const memberAgeDays = (r) => {
+	const k = 1 - 1 / (1 + MEMBER_AGE_MAX_DAYS / MEMBER_AGE_SCALE_DAYS);
+	return Math.min(MEMBER_AGE_MAX_DAYS, 1 + Math.floor(MEMBER_AGE_SCALE_DAYS * (1 / (1 - r * k) - 1)));
+};
 
 // ── HELPERS ──
 const salt = (uid, tag) => hashFloat(`${uid}|${tag}`);
@@ -449,8 +463,7 @@ function handleUserHook(profile, meta) {
 		// provisional; the everything hook sets the signup date
 		profile.member_since = dayKey(dayjs.utc(profile.created ?? meta.user?.created).valueOf());
 	} else {
-		const tenureDays = Math.floor(salt(uid, "tenure") * (ms(DATASET_START) - ms(TRADEPOST_LAUNCH)) / DAY_MS);
-		profile.member_since = dayjs.utc(TRADEPOST_LAUNCH).add(tenureDays, "day").format("YYYY-MM-DD");
+		profile.member_since = dayjs.utc(DATASET_START).subtract(memberAgeDays(salt(uid, "tenure")), "day").format("YYYY-MM-DD");
 		// TikTok ads started in spring 2026: members who joined earlier came through another channel
 		if (profile.acquisition_channel === "tiktok_ads" && profile.member_since < TIKTOK_START.slice(0, 10)) {
 			profile.acquisition_channel = pickWeighted(PRE_TIKTOK_CHANNEL_WEIGHTS, salt(uid, "pre-tiktok-channel"));
@@ -633,7 +646,10 @@ function handleEverything(events, meta) {
 			if (i >= 0) {
 				const f = purchasePlans[i];
 				f.completed = true;
-				f.purchaseT = Math.min(f.purchaseT, actEnd - MIN_MS);
+				// a purchase past the activation window moves the whole visit earlier
+				// (view, checkout, purchase keep their gaps)
+				const late = f.purchaseT - (actEnd - MIN_MS);
+				if (late > 0) { f.anchor -= late; f.checkoutT -= late; f.purchaseT -= late; }
 				f.life = lifecycle(f.purchaseT, f.st);
 			}
 		}
@@ -760,7 +776,7 @@ function handleEverything(events, meta) {
 	if (exposed.length) profile[EXP_KEY] = variant;
 	else if (profile[EXP_KEY] !== undefined) delete profile[EXP_KEY];
 
-	const final = browseOut.concat(out, exposed).filter((e) => T(e) >= BEGIN && T(e) <= END);
+	const final = browseOut.concat(out, exposed);
 	for (const e of final) {
 		e.platform = platform;
 		if (SERVER_EVENTS.has(e.event)) delete e.device_id;

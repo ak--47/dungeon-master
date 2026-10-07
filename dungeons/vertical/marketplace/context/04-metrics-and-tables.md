@@ -13,7 +13,7 @@ All KPIs use UTC days and count people by unique `user_id` after identity merge.
 | Offer acceptance rate | Per offer (hold `offer_id` constant), the share of `offer made` events answered by `offer accepted` within 2 days. |
 | Sell-through | Per listing (hold `listing_id` constant), the share of `listing created` events followed by `item sold` within 30 days. Count only listings created at least 30 days before the end of the data. |
 | Time to sell | Per sold listing, days from `listing created` to `item sold` (`days_to_sell` on the sale). Report the median, for listings sold within 30 days. |
-| Listings per seller | `listing created` events per seller per day (or week), split by `account_type`. Compare the same group of sellers across periods; sellers who join mid-period add listings as they arrive. |
+| Listings per seller | `listing created` events per seller per day (or week), split by `account_type`. |
 | Delivery time | `delivery_days` on `order delivered`: days from purchase to delivery. Report the median and the spread; sellers are asked to ship within 3 business days, and carrier transit adds a few days on top. |
 | Repeat purchase | Of buyers with a starting event on day 0 (for example their first purchase in the period), the share with another `purchase completed` within the next 30 days. Count only buyers whose 30 days end inside the data. In Mixpanel Retention this needs custom brackets. |
 | Dispute rate | `dispute opened` per `order delivered`. Allow a few days after delivery before reading recent weeks. |
@@ -28,7 +28,7 @@ All KPIs use UTC days and count people by unique `user_id` after identity merge.
 
 Three tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). They join to events on the UTC date of the event and on the named dimension.
 
-In the warehouse, numeric columns are loaded as FLOAT64 (shown as FLOAT below). Count columns (clicks, impressions, authorizations, orders) and latency always hold whole numbers, and raw file exports show them as integers.
+In the warehouse, count columns (clicks, impressions, authorizations, orders) and latency are INTEGER (INT64). Money, rates, and shares are FLOAT (FLOAT64).
 
 ### `marketing_spend_daily`
 
@@ -39,8 +39,8 @@ Daily paid marketing cost by channel, from the ad platforms' billing exports. Pa
 | `date` | DATE | UTC day | Spend day. |
 | `acquisition_channel` | STRING | — | `google_shopping`, `meta_ads`, or `tiktok_ads`. Matches `acquisition_channel` on `account created`. |
 | `spend_usd` | FLOAT | USD | Media spend billed for the day. |
-| `clicks` | FLOAT | count | Ad clicks or taps reported by the platform. |
-| `impressions` | FLOAT | count | Ad impressions reported by the platform. |
+| `clicks` | INTEGER | count | Ad clicks or taps reported by the platform. |
+| `impressions` | INTEGER | count | Ad impressions reported by the platform. |
 
 Caveats: organic and referral have no media spend and are not in this table. Referral credits are not marketing spend.
 
@@ -52,10 +52,10 @@ Daily payment authorizations by payment method, from the payments team's process
 |---|---|---|---|
 | `date` | DATE | UTC day | Day. |
 | `payment_method` | STRING | — | `card`, `apple_pay`, `google_pay`, or `paypal`. Matches `payment_method` on checkout and purchase events. |
-| `authorizations_approved` | FLOAT | count | Payment authorizations approved (orders placed). |
-| `authorizations_attempted` | FLOAT | count | Payment authorizations requested: approved plus declined or timed out. |
+| `authorizations_approved` | INTEGER | count | Payment authorizations approved (orders placed). |
+| `authorizations_attempted` | INTEGER | count | Payment authorizations requested: approved plus declined or timed out. |
 | `approval_rate` | FLOAT | share 0-1 | Share of attempted authorizations approved. |
-| `p95_auth_latency_ms` | FLOAT | milliseconds | 95th-percentile time to answer an authorization. |
+| `p95_auth_latency_ms` | INTEGER | milliseconds | 95th-percentile time to answer an authorization. |
 | `processor_status` | STRING | — | Daily status for the method: `operational` or `degraded`, as posted by the processor. |
 
 Caveats: approvals run a little higher than the Mixpanel count of `purchase completed` and do not match it day to day: some orders come from older app versions that do not send analytics, and the processor settles across midnight differently from the app clock. A declined payment never fires `purchase completed`; the buyer's `checkout started` stays without a purchase. Attempts include retries.
@@ -69,7 +69,7 @@ Daily marketplace financials by seller type, from the finance ledger.
 | `date` | DATE | UTC day | Order day. |
 | `seller_type` | STRING | — | `casual` or `pro`. Matches `seller_type` on buyer events. |
 | `gmv_usd` | FLOAT | USD | Item prices of orders placed that day (excludes shipping fees). |
-| `orders` | FLOAT | count | Orders placed that day. |
+| `orders` | INTEGER | count | Orders placed that day. |
 | `take_rate` | FLOAT | share 0-1 | Selling fee rate in effect for the seller type that day. |
 | `fee_revenue_usd` | FLOAT | USD | Selling fees earned: `gmv_usd × take_rate`. |
 | `refunds_usd` | FLOAT | USD | Refunds issued that day (disputes, cancellations, and goodwill credits). |

@@ -50,7 +50,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 | `offer accepted` | The seller accepts the offer. Sent by the server to the buyer's stream. | `offer_id`, `listing_id`, `category`, `offer_amount`, `offer_pct_of_ask`; `hours_to_response`: hours from the offer to the answer. |
 | `offer declined` | The seller declines the offer (or it expires). Sent by the server. | Same as `offer accepted`. |
 
-An offer has exactly one answer within 48 hours. Offers made in the last two days of the window may not have their answer yet.
+An offer has exactly one answer within 48 hours. Offers made in the last two days of the window may not have their answer yet. Offers made just before June 4 can show their answer (`offer accepted` or `offer declined`) in the window without the `offer made` event.
 
 ## Checkout and orders (buyer side)
 
@@ -88,7 +88,7 @@ Listings created before June 4 can sell in the window: their `item sold` and `sh
 | `member_since` | Signup date (YYYY-MM-DD). Before 2026-06-04 for established members. |
 | `Experiment: Express Checkout` | The member's arm (`Control` or `Express Checkout`), set when they are first exposed. Missing for members never exposed. |
 | `name`, `email`, `avatar` | Contact details. |
-| `created` | Account creation time (UTC). Present for members who joined in the window; it matches their `account created` event. |
+| `created` | The member's first app visit as a guest (UTC), a few minutes before their `account created` event. Present for members who joined in the window. `member_since` is the signup date. |
 | `anonymousIds` | The device ids linked to the member (their phone). Raw export only. |
 
 ## Funnels the business tracks

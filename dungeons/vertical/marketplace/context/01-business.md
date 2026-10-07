@@ -4,7 +4,7 @@
 
 Tradepost is a peer-to-peer resale marketplace for secondhand goods: electronics, clothing, sneakers, home decor, collectibles, toys and games, and sports and outdoor gear. It launched in 2022 and serves buyers and sellers across the United States through its iOS and Android apps. The company has about 14 employees: product and engineering, trust and safety, payments, seller success, growth marketing, and member support. Tradepost is venture-funded and not yet profitable; the plan is to grow GMV and reach break-even on fee and subscription revenue.
 
-Tradepost makes money from **selling fees** (a percentage of each sale's item price, also called the take rate) and from the **Tradepost Pro** subscription. Buyers do not pay a fee; they pay the item price plus shipping. Over the summer of 2026 the marketplace moved roughly $0.5-0.9 million of goods a month (gross merchandise value, GMV).
+Tradepost makes money from **selling fees** (a percentage of each sale's item price, also called the take rate) and from the **Tradepost Pro** subscription. Buyers do not pay a fee; they pay the item price plus shipping. Over the summer of 2026 the members in the analytics sample (see 00-manifest.md) bought roughly $0.5-1.0 million of goods a month (gross merchandise value, GMV).
 
 ## How buying works
 
@@ -35,7 +35,7 @@ Pro is for frequent sellers: small resale shops, sneaker resellers, vintage deal
 - **Region** (`region`): `south`, `west`, `midwest`, or `northeast`, from the member's shipping address. The South is the largest region.
 - **Age band** (`age_band`): `18-24`, `25-34`, `35-44`, `45-54`, `55+`.
 - **Platforms:** members use the iOS app (iPhone or iPad) or the Android app. A little over half are on iOS.
-- **Established vs new members.** About half of the members active in the window joined before June 4. New members arrive steadily, about 300 a week.
+- **Established vs new members.** About half of the members active in the window joined before June 4. New members arrive steadily, about 290 a week. Established members skew toward recent sign-ups: acquisition grew through 2025 and spring 2026 (TikTok was added in March 2026), and many members from earlier years have gone quiet.
 
 ## Categories
 

@@ -376,8 +376,11 @@ SELECT platform, round(r1, 4) AS south_rate, round(r0, 4) AS rest_rate, n1 AS so
  round((r1 - r0) / sqrt(((r1 * n1 + r0 * n0) / (n1 + n0)) * (1 - (r1 * n1 + r0 * n0) / (n1 + n0)) * (1.0 / n1 + 1.0 / n0)), 2) AS z
 FROM x ORDER BY 1;
 -- offer acceptance at matched offer levels (80%+ vs below), South vs rest
-SELECT pct >= 80 AS at_80_plus, round(avg(o.accepted::INT) FILTER (WHERE p.region = 'south'), 4) AS south_rate, round(avg(o.accepted::INT) FILTER (WHERE p.region <> 'south'), 4) AS rest_rate
-FROM offers o JOIN prof p ON p.uid = o.uid GROUP BY 1 ORDER BY 1;
+WITH g AS (SELECT o.pct >= 80 AS at_80_plus, p.region = 'south' AS south, count(*) AS n, avg(o.accepted::INT) AS r FROM offers o JOIN prof p ON p.uid = o.uid GROUP BY 1, 2),
+x AS (SELECT at_80_plus, max(r) FILTER (WHERE south) AS r1, max(n) FILTER (WHERE south) AS n1, max(r) FILTER (WHERE NOT south) AS r0, max(n) FILTER (WHERE NOT south) AS n0 FROM g GROUP BY 1)
+SELECT at_80_plus, round(r1, 4) AS south_rate, round(r0, 4) AS rest_rate, n1 AS south_offers, n0 AS rest_offers,
+ round((r1 - r0) / sqrt(((r1 * n1 + r0 * n0) / (n1 + n0)) * (1 - (r1 * n1 + r0 * n0) / (n1 + n0)) * (1.0 / n1 + 1.0 / n0)), 2) AS z
+FROM x ORDER BY 1;
 
 -- EVAL Q14 — September GMV, orders, take rate, and refunds (warehouse ledger) vs Mixpanel
 SELECT round(sum(gmv_usd), 0) AS gmv_usd, sum(orders)::BIGINT AS orders, round(sum(fee_revenue_usd), 0) AS fee_revenue_usd,
