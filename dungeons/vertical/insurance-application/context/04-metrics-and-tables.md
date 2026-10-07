@@ -52,13 +52,13 @@ Daily claims operations by claims region, from the claims system and the adjuste
 |---|---|---|---|
 | `date` | DATE | UTC day | Day. |
 | `region` | STRING | — | `gulf_coast`, `south`, `midwest`, `west`, `northeast`. Matches `region` on claim events. |
-| `new_claims_reported` | FLOAT | count | Claims reported that day through every channel: app, website, phone, and agents. |
+| `new_claims_reported` | FLOAT | count | Claims reported that day through every channel: app, website, and phone (in-house service representatives). |
 | `claims_closed` | FLOAT | count | Claims closed (paid or denied) that day, every channel. |
 | `open_claims` | FLOAT | count | Claims open at the end of the day, every channel. |
 | `adjuster_hours` | FLOAT | hours | Adjuster hours worked on the region's claims that day: staff adjusters plus independent adjusters hired for catastrophes. |
 | `catastrophe_code` | STRING | — | Industry catastrophe code when the day falls in a declared catastrophe reporting period for that region (for example `PCS-2614`), otherwise `none`. |
 
-Caveats: phone and agent-reported claims are in this table but never in Mixpanel, so the counts run higher than Mixpanel claim events and do not match them day to day. A claim's region is the region of the customer's state.
+Caveats: phone-reported claims are in this table but never in Mixpanel, so the counts run higher than Mixpanel claim events and do not match them day to day. A claim's region is the region of the customer's state.
 
 ### `written_premium_daily`
 
@@ -73,7 +73,7 @@ Daily written premium by product line and transaction type, from the policy admi
 | `policies_written` | FLOAT | count | Policies written that day. |
 | `rate_level_index` | FLOAT | index | The rate plan in force for this product and transaction type, relative to the plan at the start of the window (1.00). |
 
-Caveats: billing includes a few policies sold or renewed by phone that are not in Mixpanel, nets out policies cancelled on their first day, and renewal premium includes mid-term adjustments made in billing. Use this table, not Mixpanel, for premium totals.
+Caveats: billing includes a few policies sold or renewed by the in-house phone sales team that are not in Mixpanel, nets out policies cancelled on their first day, and renewal premium includes mid-term adjustments made in billing. Use this table, not Mixpanel, for premium totals.
 
 ## Analysis tips
 

@@ -2,7 +2,7 @@
 
 ## Who we are
 
-Shieldstone Insurance is a digital personal-lines insurance company founded in 2019 and headquartered in Austin, Texas. It sells auto, homeowners, and renters insurance directly to consumers through its website and mobile apps, without agents, in twelve US states. Shieldstone has about 6,500 customer households and writes roughly $15 million of premium a year. It has about 90 employees: product and engineering, underwriting and pricing, a claims team of about ten staff adjusters plus independent adjusters it hires for catastrophes, a billing and customer care team, and growth marketing.
+Shieldstone Insurance is a digital personal-lines insurance company founded in 2019 and headquartered in Austin, Texas. It sells auto, homeowners, and renters insurance directly to consumers in twelve US states, through its website, its mobile apps, and an in-house team of phone sales and service representatives. It does not sell through independent agents or brokers. Shieldstone has about 6,500 customer households and writes roughly $15 million of premium a year. It has about 90 employees: product and engineering, underwriting and pricing, a claims team of about ten staff adjusters plus independent adjusters it hires for catastrophes, a billing and customer care team, and growth marketing.
 
 The company's pitch is "insurance you can handle from your phone": a quote in minutes, a policy the same day, and claims handled online.
 
@@ -19,7 +19,7 @@ The company's pitch is "insurance you can handle from your phone": a quote in mi
 - **Renewals.** Policies renew automatically at the end of each term. Thirty days before the term ends Shieldstone sends a renewal notice with the new premium. The renewal premium is re-priced for every policy, so it can go up or down; the change depends on the state's loss costs, repair and rebuilding cost inflation, and the vehicle or home. A customer who does not want to renew cancels before the term ends.
 - **Billing.** Customers pay monthly installments (most customers) or the whole term up front. Monthly installments are due on the policy's anniversary day each month. Customers can pay by **autopay** (card or bank account, drawn automatically on the due date) or pay each bill by hand on the website or app (card or bank transfer). The first payment is taken when the policy is bought.
 - **Missed payments.** If an autopay draw fails, billing retries it automatically three days later. If a manual payment fails, the customer is reminded and can pay within the grace period. A policy with an unpaid bill is cancelled for nonpayment when the grace period runs out.
-- **Claims.** Customers report a claim (first notice of loss) in the app or on the website, add photos, and submit it. A claims adjuster inspects the damage, agrees an estimate, and the claim is settled (paid or denied). Customers can check the claim status online. Since July 2026, eligible auto claims can use **Snap & Settle** (see 02-timeline.md). Some claims are also reported by phone; those never touch the app.
+- **Claims.** Customers report a claim (first notice of loss) in the app or on the website, add photos, and submit it. A claims adjuster inspects the damage, agrees an estimate, and the claim is settled (paid or denied). Customers can check the claim status online. Since July 2026, eligible auto claims can use **Snap & Settle** (see 02-timeline.md). Some claims are also reported by phone to the in-house service representatives; those never touch the app.
 
 ## How shoppers find us
 
@@ -46,9 +46,9 @@ Daily spend by paid channel is in the warehouse table `marketing_spend_daily`.
 
 Leadership set these goals for the quarter:
 
-1. **Grow new policies efficiently.** Lower the cost per policy sold. Finance wants to know which paid channel is worth its cost, including comparison sites, and whether the fall social campaign paid off.
+1. **Grow new policies efficiently.** Lower the cost per policy sold. Finance wants to know which paid channel is worth its cost and whether the fall social campaign paid off.
 2. **A better quote.** The product team is testing a shorter quote flow (Express Quote) and wants a ship-or-kill decision.
 3. **Faster claims.** The claims team launched Snap & Settle for auto claims and wants a read on whether it is working. Hurricane season (June to November) is the biggest operational risk; leadership wants to understand how the claims team held up.
 4. **Price adequacy.** Pricing filed a new auto rate plan to restore auto margins; leadership asked whether it cost too many sales.
-5. **Retention at renewal.** Keep more customers at renewal. The retention team is asking how much renewal price changes and bundling matter.
+5. **Retention at renewal.** Keep more customers at renewal. The retention team wants to know what drives customers to leave at renewal.
 6. **Fewer nonpayment cancellations.** Billing wants to know whether to push autopay harder.

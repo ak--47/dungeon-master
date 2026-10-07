@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Shieldstone Insurance**, a dire
 
 - **Product:** the Shieldstone website and the iOS and Android apps. People get a quote for auto, homeowners, or renters insurance, create an account, buy a policy, and then manage it online: ID cards, policy documents, bills and payments, coverage changes, roadside assistance, and claims. Back-office systems (billing, policy administration, claims) also send events: autopay payments, renewal notices, renewals, cancellations, policy issue, and claim settlements.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early summer through the end of September and the first day of October.
-- **Scale:** about 10,000 people. About 6,000 were already Shieldstone customers on June 4. About 3,750 new shoppers started a quote during the window; about 2,500 of them never created an account and appear only as anonymous devices. The project holds about 770,000 events.
+- **Scale:** about 10,000 people. About 6,000 were already Shieldstone customers on June 4. About 3,800 new shoppers started a quote during the window; about 2,500 of them never created an account and appear only as anonymous devices. The project holds about 760,000 events.
 - **Where customers live:** twelve US states (Texas, Florida, Pennsylvania, Illinois, Arizona, Georgia, Ohio, North Carolina, Colorado, Michigan, Louisiana, Tennessee), grouped into five claims regions.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. Customers are in US time zones, so a US afternoon is UTC evening and a US evening runs past midnight UTC.
 
@@ -31,7 +31,7 @@ This folder is the internal analytics wiki for **Shieldstone Insurance**, a dire
 - **Shoppers are anonymous while they quote.** `quote started` and `quote completed` carry only the shopper's `device_id`. If the shopper creates an account, `account created` carries both the new `user_id` and that `device_id`, and Mixpanel merges the earlier quote events into the customer. A shopper who never creates an account stays an anonymous device in Mixpanel and has no user profile.
 - `$experiment_started` (the Express Quote test) carries the shopper's `device_id`; for shoppers who later created an account it also carries their `user_id`.
 - Customers who joined before June 4 are identified on every event.
-- Website and app events carry `user_id` and `device_id`. Most customers use two devices (for example a computer and a phone). `platform` is `web` for computers (Windows, macOS, Linux), `ios` for iPhone and iPad, and `android` for Android devices.
+- Website and app events carry `user_id` and `device_id`. Many customers use more than one device (often a computer and a phone). `platform` is `web` for computers (Windows, macOS, Linux), `ios` for iPhone and iPad, and `android` for Android devices.
 - Back-office events carry `user_id` only, with no device, and `platform = server`: `policy purchased`, `renewal offered`, `policy renewed`, `policy cancelled`, `claim settled`, payments and payment failures from autopay, and the first payment of a new policy (taken at purchase). Other payments a customer makes by hand come from the website or app and carry a device.
 - Count people with Mixpanel "Uniques" on the merged identity. Funnels that start with a quote event work only with identity merging, because the quote steps happen before the account exists.
 

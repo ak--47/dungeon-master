@@ -17,9 +17,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             policy in the app: ID cards, documents, bills, coverage changes,
  *             roadside help, and claims. Autopay or manual monthly installments
  *             (or the full term up front).
- * SCALE:      10,000 people (≈3,750 shoppers start a first quote in the window,
+ * SCALE:      10,000 people (≈3,800 shoppers start a first quote in the window,
  *             ≈2,500 of them never create an account; ≈6,000 are existing
- *             policyholders), ~0.77M events, 120 days
+ *             policyholders), ~0.76M events, 120 days
  *             (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  quote started → quote completed → account created → policy
  *             purchased → payment made (monthly) → renewal offered → policy
@@ -62,8 +62,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * account created (isAuthEvent) carries user_id + device_id and stitches the
  * quote device to the customer. A shopper who never creates an account stays a
  * device-only visitor and has no profile (_drop). Existing customers are
- * identified throughout. App events carry user_id + device_id (1-2 devices per
- * person; platform agrees with the device OS). Back-office events (policy
+ * identified throughout. App events carry user_id + device_id (1-3 devices per
+ * person, about half use more than one; platform agrees with the device OS). Back-office events (policy
  * purchased, autopay payments and failures, renewal offered, policy renewed,
  * policy cancelled, claim settled) carry user_id only and platform = server.
  *
@@ -88,8 +88,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * - Window start: a few existing customers quoted in late May and buy in early
  *   June, so purchases are flat from week 1.
  * - Warehouse drift: marketing networks over-claim conversions and comparison
- *   sites bill their own lead counts; claims ops counts phone and agent claims
- *   that never touch the app; written premium adds agent-sold policies and nets
+ *   sites bill their own lead counts; claims ops counts phone-reported claims
+ *   that never touch the app; written premium adds phone-sold policies and nets
  *   flat cancellations.
  */
 
@@ -97,7 +97,13 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
 /*
  * All effects are hidden: no flag properties. Dates live in the TIMELINE
  * constants and are shared by hooks, stories, SQL, warehouse columns, and the
- * timeline guide.
+ * timeline guide. Rare outcomes use stratified draws (`quota` / `quotaPick`):
+ * each event still fires with its knob probability, but a stratum's total does
+ * not carry binomial noise, so reads on a few hundred events land on the knob.
+ * Strata: purchase by channel group x auto/property x before/after the rate
+ * change (H4, H5); non-renewal by bundled x notice month x price-change band
+ * (H6, H7); photo adoption by peril (H1); shopper channel mix by period and
+ * pre-campaign social thinning (H8).
  *
  * ─────────────────────────────────────────────────────────────────────────
  * H1. SNAP & SETTLE LAUNCH (everything)
@@ -210,44 +216,47 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-insurance-application,
- * 2026-10-07, full fidelity, 10,000 people, 771,994 events)
+ * 2026-10-07, full fidelity, 10,000 people, 758,548 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                          | Derivation                  | Expected | Measured
  * -----|-------------------------------------------------|-----------------------------|----------|---------
- * H1   | median days to settle, photo / adjuster (elig.) | PHOTO_SETTLE_MULT           | 0.30     | 0.321 (1.90 vs 5.93 d)
- * H1   | photo_estimate share of eligible auto claims    | PHOTO_ADOPT                 | 0.60     | 0.561 (156 of 278)
+ * H1   | median days to settle, photo / adjuster (elig.) | PHOTO_SETTLE_MULT           | 0.30     | 0.294 (1.97 vs 6.70 d)
+ * H1   | photo_estimate share of eligible auto claims    | PHOTO_ADOPT                 | 0.60     | 0.594 (170 of 286)
  * H1   | photo_estimate claims before launch             | exact purity                | 0        | 0
- * H2   | median days, Gulf CAT property / other property | CAT_SETTLE_MULT             | 2.50     | 2.690 (18.26 vs 6.79 d)
+ * H2   | median days, Gulf CAT property / other property | CAT_SETTLE_MULT             | 2.50     | 2.499 (17.41 vs 6.97 d)
  * H2   | warehouse catastrophe-code rows                 | 14 days x 1 region          | 14       | 14
- * H3   | quote completion, Express / Control             | EXPRESS_CONV_MULT           | 1.30     | 1.363 (71.8% vs 52.7%)
- * H3   | median minutes to complete, Express / Control   | EXPRESS_TIME_MULT           | 0.50     | 0.493 (8.0 vs 16.2)
- * H3   | Express share of exposed shoppers               | equal 2-arm hash            | 0.50     | 0.501
- * H4   | spend per quote start, comparison / search      | 45 / 95                     | 0.474    | 0.462 ($44.77 vs $96.99)
- * H4   | purchase per completed quote, comparison / rest | COMPARISON_BIND_MULT        | 0.45     | 0.460 (16.7% vs 36.3%)
- * H5   | avg quoted auto premium, after / before         | AUTO_RATE_MULT              | 1.14     | 1.130 ($180.62 vs $159.83)
- * H5   | auto purchase per completed quote, after/before | AUTO_BIND_KEEP (≤, floor)   | 0.75     | 0.652 (22.3% vs 34.2%)
- * H5   | property purchase per completed quote (control) | unchanged (≥, floor 0.8)    | 1.00     | 0.867 (z = -1.3)
- * H5   | warehouse auto NB premium per completed quote   | 0.75 x 1.14 (≤, floor)      | 0.855    | 0.801 ($292 vs $365)
- * H6   | non-renewal per notice, bundled / single-line   | BUNDLE_NONRENEW_MULT (≤)    | 0.40     | 0.499 (7.6% vs 15.2%)
- * H7   | non-renewal, increase ≥ 15% / no increase       | NONRENEW_HIGH / NONRENEW_LOW| 4.00     | 3.778 (16.7% vs 4.4%)
- * H8   | social quote starts per day, campaign / before  | SOCIAL_LIFT                 | 1.80     | 1.962 (6.50 vs 3.31)
- * H8   | other channels per day, campaign / before       | unchanged                   | 1.00     | 1.035
- * H8   | warehouse social spend per day                  | (2.0 + 1.8) / 2             | 1.90     | 1.954 ($245 vs $125)
- * H9   | median hours quote → purchase, switching/other  | SWITCHER_TTC_MULT           | 3.00     | 3.004 (46.8 h)
- * H10  | scheduled payment failure, autopay / manual     | FAIL_AUTOPAY / FAIL_MANUAL  | 0.30     | 0.314 (1.60% vs 5.09%)
- * H10  | failed manual payments lapsing within 30 days   | LAPSE_AFTER_MANUAL_FAIL     | 0.25     | 0.245 (470 failures)
+ * H3   | quote completion, Express / Control             | EXPRESS_CONV_MULT           | 1.30     | 1.262 (70.4% vs 55.8%)
+ * H3   | median minutes to complete, Express / Control   | EXPRESS_TIME_MULT           | 0.50     | 0.486 (7.8 vs 16.0)
+ * H3   | Express share of exposed shoppers               | equal 2-arm hash            | 0.50     | 0.496
+ * H4   | spend per quote start, comparison / search      | 45 / 95                     | 0.474    | 0.466 ($44.54 vs $95.55)
+ * H4   | purchase per completed quote, comparison / rest | COMPARISON_BIND_MULT        | 0.45     | 0.463 (17.7% vs 38.2%)
+ * H5   | avg quoted auto premium, after / before         | AUTO_RATE_MULT              | 1.14     | 1.110 ($177.83 vs $160.15)
+ * H5   | auto purchase per completed quote, after/before | AUTO_BIND_KEEP              | 0.75     | 0.732 (25.3% vs 34.5%)
+ * H5   | property purchase per completed quote (control) | unchanged (knob ±10%)       | 1.00     | 1.072 (36.1% vs 33.7%)
+ * H5   | warehouse auto NB premium per completed quote   | 0.75 x 1.14                 | 0.855    | 0.821 ($296 vs $361)
+ * H6   | non-renewal per notice, bundled / single-line   | BUNDLE_NONRENEW_MULT        | 0.40     | 0.418 (6.6% vs 15.8%)
+ * H7   | non-renewal, increase ≥ 15% / no increase       | NONRENEW_HIGH / NONRENEW_LOW| 4.00     | 3.898 (19.4% vs 5.0%)
+ * H8   | social quote starts per day, campaign / before  | SOCIAL_LIFT                 | 1.80     | 1.818 (5.42 vs 2.98)
+ * H8   | other channels per day, campaign / before       | unchanged                   | 1.00     | 1.016
+ * H8   | warehouse social spend per day                  | (2.0 + 1.8) / 2             | 1.90     | 1.895 ($224.50 vs $118.47)
+ * H9   | median hours quote → purchase, switching/other  | SWITCHER_TTC_MULT           | 3.00     | 2.894 (46.8 vs 16.2 h)
+ * H10  | scheduled payment failure, autopay / manual     | FAIL_AUTOPAY / FAIL_MANUAL  | 0.30     | 0.289 (1.43% vs 4.96%)
+ * H10  | failed manual payments lapsing within 30 days   | LAPSE_AFTER_MANUAL_FAIL     | 0.25     | 0.245 (440 failures)
  * ═════════════════════════════════════════════════════════════════════════
  *
- * Verdicts: 8 NAILED, 2 STRONG (H5, H6). Noise notes: insurance events are
- * rare at 10,000 people. H5's purchase reads rest on about 85 auto purchases
- * after the change (relative SE about 10%); the property control also dipped
- * (z = -1.3, not significant), and auto relative to property is 0.75. H6 rests
- * on about 125 bundled non-renewals vs 225 single-line (relative SE about 12%).
- * H7's no-increase group has about 27 non-renewals. Those reads use the knob as
- * target with a half-effect bound, so they grade STRONG when they land outside
- * the ±10% band. claims_operations_daily correlates 0.987 with Mixpanel claim
+ * Verdicts: 10 NAILED. Every one-sided bound is the half-effect bound
+ * 1 + 0.5 x (knob - 1); controls use knob ±10%. Noise notes: insurance events
+ * are rare at 10,000 people (about 100 comparison-site purchases, 109 bundled
+ * vs 227 single-line non-renewals, 31 non-renewals with no price increase), so
+ * the stratified draws above carry these reads; sub-splits outside a stratum
+ * keep ordinary sampling noise. The H7 curve is flat from +15% by design; at
+ * this volume the 15-20% (n = 241) and 20%+ (n = 58) buckets read 18.7% and
+ * 22.4%. claims_operations_daily correlates 0.99 with Mixpanel claim
  * submissions because the hurricane spike dominates the series; on ordinary
- * days phone and agent claims make the table drift from the event count.
+ * days phone-reported claims make the table drift from the event count. Auto
+ * claim frequency (0.15 per policy per 120 days, about 0.46 per policy-year
+ * with glass) is higher than a typical carrier so that H1 has about 290
+ * eligible claims to read.
  */
 
 // ── SCALE ──
@@ -389,6 +398,32 @@ const MIDTERM_REASONS = { sold_vehicle: 40, moved: 35, no_longer_needed: 25 };
 
 // ── HELPERS ──
 const salt = (uid, tag) => hashFloat(`${uid}|${tag}`);
+// Stratified draw (systematic sampling): within one stratum key, events fire at
+// rate p in order of arrival, from a seeded start offset. Each event still fires
+// with probability p, but a stratum's total no longer carries binomial noise, so
+// rare outcomes at 10,000 people (purchases, non-renewals, photo claims) land on
+// the knob. Users are processed in a fixed order, so this is deterministic.
+const QUOTA = new Map();
+const quota = (key, p) => {
+	const acc = (QUOTA.has(key) ? QUOTA.get(key) : hashFloat(`quota|${key}`)) + p;
+	const fires = acc >= 1;
+	QUOTA.set(key, fires ? acc - 1 : acc);
+	return fires;
+};
+// stratified categorical draw: each category accrues its weight share per call and
+// the most-owed category is picked, so a stratum's mix matches the weights
+const quotaPick = (key, weights) => {
+	const total = Object.values(weights).reduce((a, b) => a + b, 0);
+	let best = null;
+	for (const [k, w] of Object.entries(weights)) {
+		const sk = `${key}|${k}`;
+		const acc = (QUOTA.has(sk) ? QUOTA.get(sk) : hashFloat(`quota|${sk}`)) + w / total;
+		QUOTA.set(sk, acc);
+		if (best === null || acc > QUOTA.get(`${key}|${best}`)) best = k;
+	}
+	QUOTA.set(`${key}|${best}`, QUOTA.get(`${key}|${best}`) - 1);
+	return best;
+};
 const round2 = (n) => Math.round(n * 100) / 100;
 const round1 = (n) => Math.round(n * 10) / 10;
 const T = (e) => dayjs.utc(e.time).valueOf();
@@ -549,15 +584,32 @@ function handleEverything(events, meta) {
 	// ── shopping: quote → account → purchase ──
 	if (born) {
 		const qs = events.find((e) => e.event === "quote started");
-		const qc = events.find((e) => e.event === "quote completed");
-		const ac = events.find((e) => e.event === "account created");
-		const pp = events.find((e) => e.event === "policy purchased");
+		// a shopper born at the very end of the window can have a funnel the engine
+		// cut at the window edge; clone the missing steps onto the quote device (the
+		// shopping logic below decides which of them are kept)
+		const step = (name) => {
+			const found = events.find((e) => e.event === name);
+			if (found || !qs || !TEMPLATES[name]) return found;
+			const c = cloneEvent(TEMPLATES[name], { time: qs.time });
+			for (const k of DEVICE_KEYS) if (qs[k] !== undefined) c[k] = qs[k];
+			if (name === "account created") c.user_id = uid;
+			return c;
+		};
+		const qc = step("quote completed");
+		const ac = step("account created");
+		const pp = step("policy purchased");
 		const ex = events.find((e) => e.event === "$experiment_started");
-		if (!qs || !qc || !ac || !pp) return events.filter((e) => !LIFECYCLE.has(e.event) && !APP_EVENTS.has(e.event));
-		const channel = profile.acquisition_channel;
+		if (!qs || !qc || !ac || !pp) {
+			const kept = events.filter((e) => !LIFECYCLE.has(e.event) && !APP_EVENTS.has(e.event));
+			for (const e of kept) e.platform = platformOf(e.os);
+			return kept;
+		}
 		const t0 = T(qs);
+		// channel mix per period (before / during the fall campaign) follows CHANNEL_WEIGHTS
+		const channel = quotaPick(`channel|${t0 >= ms(SOCIAL_CAMPAIGN_START)}`, CHANNEL_WEIGHTS);
+		profile.acquisition_channel = channel;
 		// H8: before the fall campaign, social brought fewer shoppers (the campaign adds volume)
-		if (channel === "social_ads" && t0 < ms(SOCIAL_CAMPAIGN_START) && salt(uid, "social-pre") >= 1 / SOCIAL_LIFT) return [];
+		if (channel === "social_ads" && t0 < ms(SOCIAL_CAMPAIGN_START) && !quota("social-pre", 1 / SOCIAL_LIFT)) return [];
 		const product = profile.product_lines;
 		const reason = profile.shopping_reason;
 		const variant = ex && profile[EXP_KEY] !== undefined ? profile[EXP_KEY] : null;
@@ -573,20 +625,13 @@ function handleEverything(events, meta) {
 		const gapH = BIND_GAP_MEDIAN_H * logNormal(BIND_GAP_SIGMA) * (reason === "switching" ? SWITCHER_TTC_MULT : 1);
 		const tAcct = tC + chance.integer({ min: 40, max: 360 }) * 1000;
 		const tBind = Math.max(tAcct + 5 * MIN_MS, tC + gapH * HOUR_MS);
-		const wantsBind = completes && bool(pBind);
+		// stratum: comparison vs other channels x auto vs property x before / after the rate change
+		const wantsBind = completes && quota(`bind|${channel === "comparison_site"}|${product === "auto"}|${tC >= ms(AUTO_RATE_CHANGE)}`, pBind);
 		const binds = wantsBind && tBind <= END_MS;
 		const saves = completes && (wantsBind || bool(SAVE_QUOTE_SHARE));
 
 		qs.time = iso(t0);
 		Object.assign(qs, { product_line: product, acquisition_channel: channel, quote_flow: flow });
-		// the whole quote happens on one device (the one that started it)
-		const qsDevice = {};
-		for (const k of DEVICE_KEYS) if (qs[k] !== undefined) qsDevice[k] = qs[k];
-		for (const e of [qc, ac, ex]) {
-			if (!e) continue;
-			for (const k of DEVICE_KEYS) delete e[k];
-			Object.assign(e, qsDevice);
-		}
 		const shop = [qs];
 		if (ex) { ex.time = iso(t0 - 1000); shop.push(ex); }
 		if (completes) {
@@ -750,7 +795,9 @@ function simulatePolicy(pol, ctx) {
 		if (end > END_MS + RENEWAL_NOTICE_DAYS * DAY_MS) break;
 		const offerT = dayStart(end - RENEWAL_NOTICE_DAYS * DAY_MS) + chance.integer({ min: 9 * 60, max: 12 * 60 }) * MIN_MS;
 		const chg = round1(Math.min(30, Math.max(-12, chance.normal({ mean: 6, dev: 7 }))));
-		const leaves = bool(nonRenewProb(chg, bundled));
+		// stratum: bundled vs single line x month of the renewal notice x price-change band (<= 0, 5-point steps, >= 15)
+		const chgBand = chg <= 0 ? 0 : chg >= PRICE_SHOCK_PCT ? 4 : 1 + Math.floor(chg / 5);
+		const leaves = quota(`renew|${bundled}|${dayKey(offerT).slice(0, 7)}|${chgBand}`, nonRenewProb(chg, bundled));
 		let leaveT = leaves ? Math.min(end - DAY_MS, offerT + between(5, 27) * DAY_MS) : null;
 		if (leaveT !== null) leaveT = customerTime(dayStart(leaveT), dayStart(leaveT) + DAY_MS);
 		// a non-renewal decided before the window looks like a policy that never was; keep those renewing
@@ -856,7 +903,7 @@ function simulatePolicy(pol, ctx) {
 		const claimId = `CLM-${idDigits(`${pol.id}|claim|${i}|${Math.round(t0)}`)}`;
 		const peril = c.cat ? (pol.product === "home" ? draw({ wind_hail: 70, water: 30 }) : draw({ water: 55, wind_hail: 45 }))
 			: draw(pol.product === "auto" ? AUTO_PERILS : pol.product === "home" ? HOME_PERILS : RENTERS_PERILS);
-		const photo = pol.product === "auto" && t0 >= ms(SNAP_SETTLE_LAUNCH) && PHOTO_ELIGIBLE.includes(peril) && hashFloat(`${claimId}|photo`) < PHOTO_ADOPT;
+		const photo = pol.product === "auto" && t0 >= ms(SNAP_SETTLE_LAUNCH) && PHOTO_ELIGIBLE.includes(peril) && quota(`photo|${peril}`, PHOTO_ADOPT);
 		const channel = photo ? "photo_estimate" : "adjuster_inspection";
 		const tSubmit = t0 + chance.integer({ min: 6, max: 25 }) * MIN_MS;
 		const inCat = gulf && pol.product !== "auto" && tSubmit >= landfall && tSubmit < ms(CAT_END);
@@ -917,7 +964,7 @@ const CTR = { search_ads: 0.045, comparison_site: 0.02, social_ads: 0.009 };
 const PLATFORM_CLAIM_INFLATION = { search_ads: 1.12, comparison_site: 1.06, social_ads: 1.3 };
 const ADJUSTER_HOURS_BASE = { gulf_coast: 16, south: 26, midwest: 16, west: 12, northeast: 8 }; // staff adjuster hours per weekday
 const CAT_ADJUSTER_HOURS = 80; // ten independent catastrophe adjusters, 8 h a day
-const PHONE_CLAIM_SHARE = 0.22; // claims reported by phone or through agents, never in the app
+const PHONE_CLAIM_SHARE = 0.22; // claims reported by phone to in-house service reps, never in the app
 
 function handleWarehouse(row, meta) {
 	if (meta.isBackfill) return row;
@@ -961,7 +1008,7 @@ function handleWarehouse(row, meta) {
 	if (meta.metricName === "written_premium_daily") {
 		const k = `${row.date}|${row.product_line}|${row.transaction_type}`;
 		const n = meta.raw?.plus?.count ?? 0;
-		// policies sold or renewed by phone agents are in billing, not Mixpanel; flat
+		// policies sold or renewed by the in-house phone sales team are in billing, not Mixpanel; flat
 		// cancellations (cancelled on day one) are netted out; renewals pick up
 		// mid-term endorsement adjustments in billing
 		const nb = row.transaction_type === "new_business";
@@ -1392,6 +1439,8 @@ const TS = (isoStr) => dayjs.utc(isoStr).format("YYYY-MM-DD HH:mm:ss");
 const D = (isoStr) => isoStr.slice(0, 10);
 const band = (k) => [Math.round(k * 0.9 * 1000) / 1000, Math.round(k * 1.1 * 1000) / 1000];
 const r3 = (x) => Math.round(x * 1000) / 1000;
+// half-effect bound for a ratio knob: 1 - 0.5 x (1 - k) for a drop, 1 + 0.5 x (k - 1) for a lift
+const half = (k) => r3(1 + 0.5 * (k - 1));
 const SQL_LIST = (xs) => xs.map((x) => `'${x}'`).join(", ");
 const BIND_WINDOW_DAYS = 14;          // Funnels conversion window quote completed → policy purchased
 const QUOTE_READ_END = "2026-09-18 00:00:00"; // quotes through Sep 17 have their full 14-day window
@@ -1518,7 +1567,7 @@ export const stories = [
 			{
 				breakdown: { type: "duckdb", sql: H1_SQL },
 				select: { p: { where: { grp: "photo_estimate" } }, a: { where: { grp: "adjuster_inspection" } } },
-				expect: { metric: "p.med_days / a.med_days", op: "<=", target: PHOTO_SETTLE_MULT, floor: 0.6 },
+				expect: { metric: "p.med_days / a.med_days", op: "<=", target: PHOTO_SETTLE_MULT, floor: half(PHOTO_SETTLE_MULT) },
 				minCohort: 60,
 			},
 			{
@@ -1552,7 +1601,7 @@ FROM ev WHERE event = 'claim submitted'`,
 			{
 				breakdown: { type: "duckdb", sql: H2_SQL },
 				select: { c: { where: { grp: "cat" } }, b: { where: { grp: "baseline" } } },
-				expect: { metric: "c.med_days / b.med_days", op: ">=", target: CAT_SETTLE_MULT, floor: 1.75 },
+				expect: { metric: "c.med_days / b.med_days", op: ">=", target: CAT_SETTLE_MULT, floor: half(CAT_SETTLE_MULT) },
 				minCohort: 80,
 			},
 			{
@@ -1619,7 +1668,7 @@ FROM ev WHERE event = '$experiment_started'`,
 			{
 				breakdown: { type: "duckdb", sql: H4_SQL },
 				select: { c: { where: { grp: "comparison_site" } }, o: { where: { grp: "other_channels" } } },
-				expect: { metric: "c.bind_rate / o.bind_rate", op: "<=", target: COMPARISON_BIND_MULT, floor: 0.7 },
+				expect: { metric: "c.bind_rate / o.bind_rate", op: "<=", target: COMPARISON_BIND_MULT, floor: half(COMPARISON_BIND_MULT) },
 				minCohort: 400,
 			},
 		],
@@ -1640,20 +1689,20 @@ FROM ev WHERE event = '$experiment_started'`,
 			{
 				breakdown: { type: "duckdb", sql: H5_SQL },
 				select: { a: { where: { grp: "auto_after" } }, b: { where: { grp: "auto_before" } } },
-				expect: { metric: "a.bind_rate / b.bind_rate", op: "<=", target: AUTO_BIND_KEEP, floor: 1 - 0.5 * (1 - AUTO_BIND_KEEP) },
+				expect: { metric: "a.bind_rate / b.bind_rate", op: "<=", target: AUTO_BIND_KEEP, floor: half(AUTO_BIND_KEEP) },
 				minCohort: 400,
 			},
 			{
 				breakdown: { type: "duckdb", sql: H5_SQL },
 				select: { a: { where: { grp: "property_after" } }, b: { where: { grp: "property_before" } } },
-				// control: property quotes have no price change
-				expect: { metric: "a.bind_rate / b.bind_rate", op: ">=", target: 1, floor: 0.8 },
+				// control: property quotes have no price change (knob ±10%, the same band as the H8 control)
+				expect: { metric: "a.bind_rate / b.bind_rate", op: "between", target: band(1) },
 				minCohort: 300,
 			},
 			{
 				breakdown: { type: "duckdb", sql: H5_WH_SQL },
 				select: { a: { where: { grp: "after" } }, b: { where: { grp: "before" } } },
-				expect: { metric: "a.premium_per_quote / b.premium_per_quote", op: "<=", target: r3(AUTO_BIND_KEEP * AUTO_RATE_MULT), floor: r3(1 - 0.5 * (1 - AUTO_BIND_KEEP * AUTO_RATE_MULT)) },
+				expect: { metric: "a.premium_per_quote / b.premium_per_quote", op: "<=", target: r3(AUTO_BIND_KEEP * AUTO_RATE_MULT), floor: half(AUTO_BIND_KEEP * AUTO_RATE_MULT) },
 				minCohort: 250,
 			},
 		],
@@ -1668,7 +1717,7 @@ FROM ev WHERE event = '$experiment_started'`,
 			{
 				breakdown: { type: "duckdb", sql: H6_SQL },
 				select: { b: { where: { grp: "bundled" } }, s: { where: { grp: "single" } } },
-				expect: { metric: "b.nonrenewal / s.nonrenewal", op: "<=", target: BUNDLE_NONRENEW_MULT, floor: 0.7 },
+				expect: { metric: "b.nonrenewal / s.nonrenewal", op: "<=", target: BUNDLE_NONRENEW_MULT, floor: half(BUNDLE_NONRENEW_MULT) },
 				minCohort: 800,
 			},
 		],
@@ -1683,7 +1732,7 @@ FROM ev WHERE event = '$experiment_started'`,
 			{
 				breakdown: { type: "duckdb", sql: H7_SQL },
 				select: { s: { where: { grp: "shock" } }, n: { where: { grp: "no_increase" } } },
-				expect: { metric: "s.nonrenewal / n.nonrenewal", op: ">=", target: r3(NONRENEW_HIGH / NONRENEW_LOW), floor: 2.5 },
+				expect: { metric: "s.nonrenewal / n.nonrenewal", op: ">=", target: r3(NONRENEW_HIGH / NONRENEW_LOW), floor: half(NONRENEW_HIGH / NONRENEW_LOW) },
 				minCohort: 250,
 			},
 		],
@@ -1698,7 +1747,7 @@ FROM ev WHERE event = '$experiment_started'`,
 			{
 				breakdown: { type: "duckdb", sql: H8_SQL },
 				select: { a: { where: { grp: "social_campaign" } }, b: { where: { grp: "social_before" } } },
-				expect: { metric: "a.per_day / b.per_day", op: ">=", target: SOCIAL_LIFT, floor: 1.4 },
+				expect: { metric: "a.per_day / b.per_day", op: ">=", target: SOCIAL_LIFT, floor: half(SOCIAL_LIFT) },
 				minCohort: 120,
 			},
 			{
@@ -1725,7 +1774,7 @@ FROM ev WHERE event = '$experiment_started'`,
 			{
 				breakdown: { type: "duckdb", sql: H9_SQL },
 				select: { s: { where: { grp: "switching" } }, o: { where: { grp: "other" } } },
-				expect: { metric: "s.med_hours / o.med_hours", op: ">=", target: SWITCHER_TTC_MULT, floor: 2.0 },
+				expect: { metric: "s.med_hours / o.med_hours", op: ">=", target: SWITCHER_TTC_MULT, floor: half(SWITCHER_TTC_MULT) },
 				minCohort: 150,
 			},
 		],
@@ -1740,7 +1789,7 @@ FROM ev WHERE event = '$experiment_started'`,
 			{
 				breakdown: { type: "duckdb", sql: H10_SQL },
 				select: { a: { where: { grp: "autopay" } }, m: { where: { grp: "manual" } } },
-				expect: { metric: "a.fail_rate / m.fail_rate", op: "<=", target: r3(FAIL_AUTOPAY / FAIL_MANUAL), floor: 0.6 },
+				expect: { metric: "a.fail_rate / m.fail_rate", op: "<=", target: r3(FAIL_AUTOPAY / FAIL_MANUAL), floor: half(FAIL_AUTOPAY / FAIL_MANUAL) },
 				minCohort: 1500,
 			},
 			{

@@ -34,8 +34,8 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 - Should we ship Express Quote to everyone?
 - Is Snap & Settle making auto claims faster? How many customers use it?
 - How did the claims team hold up after Hurricane Delphine, and what did it do to cycle times and backlog in the Gulf?
-- Which paid channel is worth its cost, including comparison sites?
+- Which paid channel is worth its cost?
 - Did the August auto rate increase cost us too many sales? Did it pay off in premium?
-- What drives customers to leave at renewal? How much do bundles help?
+- What drives customers to leave at renewal? Do bundles change renewal behavior?
 - Did the fall social campaign bring new shoppers, and at what cost?
 - Should billing push autopay harder?
