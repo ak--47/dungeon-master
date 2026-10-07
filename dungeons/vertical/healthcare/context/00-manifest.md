@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Clearwell Health**, a virtual c
 
 - **Product:** the Clearwell iOS and Android apps: on-demand urgent care visits (symptom check, virtual waiting room, video or phone visit), Clearwell Async questionnaire visits, scheduled primary care appointments, therapy, remote monitoring for hypertension and diabetes, prescriptions sent to the patient's pharmacy, lab results, the health record, and secure messaging with the care team.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early June through the end of September and the first day of October.
-- **Scale:** about 10,000 patients were active in the window. About 3,500 of them signed up during the window; the rest joined before June 4. The project holds about 1.05 million events.
+- **Scale:** about 10,000 patients were active in the window. About 3,600 of them signed up during the window; the rest joined before June 4. The project holds about 1.1 million events.
 - **Geography:** patients live in the United States, mostly in California, Texas, Florida, and New York. The apps are available in English and Spanish.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. Patients are in US time zones, so a US evening falls after midnight UTC, and a US business day runs from about 13:00 to 03:00 UTC.
 

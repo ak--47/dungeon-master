@@ -48,7 +48,7 @@ Every step of one urgent-care visit shares one `visit_id`, from the symptom chec
 | `prescription sent` | The clinician sends a prescription to the patient's pharmacy (urgent care and primary care). At most one per visit. | `visit_id`; `service_line`; `medication_class` (for example `antibiotic`, `antiviral`, `inhaler`, `topical_steroid`, `antihistamine`, `nsaid`, `blood_pressure`, `diabetes`); `pharmacy_type` (`chain`, `grocery`, `independent`). |
 | `prescription picked up` | The pharmacy confirms the patient picked up the prescription. | `visit_id`; `service_line`; `pharmacy_type`. |
 | `visit rated` | The patient rates the visit after it ends (optional). | `visit_id`; `service_line`; `visit_type` (`video`, `phone`, or `async`); `rating` (1-5 stars); `would_recommend` (true or false). |
-| `$experiment_started` | Mixpanel experiment exposure for the Pickup Reminders test: sent once per patient, one second after the patient's first urgent-care prescription in the test (from 2026-07-28). | `Experiment name` = `Pickup Reminders`; `Variant name` = `Control` or `Text Reminders`. |
+| `$experiment_started` | Mixpanel experiment exposure for the Prescription Pickup Reminders test: sent once per patient, one second before the patient's first urgent-care prescription in the test (from 2026-07-28), so every prescription in the test follows the exposure. | `Experiment name` = `Prescription Pickup Reminders`; `Variant name` = `Control` or `Text Reminders`. |
 
 ## Primary care
 
@@ -57,7 +57,7 @@ Every step of one appointment shares one `visit_id`. A booked appointment ends e
 | Event | Meaning | Properties |
 |---|---|---|
 | `appointment booked` | The patient books a primary care appointment. | `visit_id`; `service_line` = `primary_care`; `appointment_reason` (`annual_checkup`, `chronic_followup`, `medication_review`, `new_concern`, `lab_review`); `visit_type` (`video`, `phone`); `lead_days`: days from booking to the appointment date (0 = same day); `patient_cost_usd`. |
-| `reminder sent` | Server-side. Clearwell texts or pushes a reminder. `reminder_type = appointment`: the day before a primary care appointment booked at least a day ahead. `reminder_type = rx_pickup`: the Pickup Reminders text (see 02-timeline.md). | `visit_id`; `reminder_type`; `channel` (`sms`, `push`). |
+| `reminder sent` | Server-side. Clearwell texts or pushes a reminder. `reminder_type = appointment`: the day before a primary care appointment booked at least a day ahead. `reminder_type = rx_pickup`: the Prescription Pickup Reminders text (see 02-timeline.md). | `visit_id`; `reminder_type`; `channel` (`sms`, `push`). |
 | `appointment missed` | Server-side. The patient did not join the appointment; sent 15 minutes after the start time. | `visit_id`; `service_line`; `lead_days`. |
 
 Primary care visits use `visit started`, `visit completed`, `prescription sent`, `prescription picked up`, and `visit rated` as above.
@@ -93,7 +93,7 @@ Primary care visits use `visit started`, `visit completed`, `prescription sent`,
 | `therapist_preference` | For therapy clients: `first_available` or `specific_therapist` (their choice at intake; for continuing clients, their choice when they started). `none` otherwise. |
 | `acquisition_channel` | Channel at signup (for patients who joined before June 4, the channel they originally came from). |
 | `member_since` | Date the patient first signed up (YYYY-MM-DD). Before 2026-06-04 for established patients. |
-| `Experiment: Pickup Reminders` | `Control` or `Text Reminders` for patients in the test; empty for everyone else. |
+| `Experiment: Prescription Pickup Reminders` | `Control` or `Text Reminders` for patients in the test; empty for everyone else. |
 | `created` | Signup time for patients who joined in the window; empty for established patients. |
 | `anonymousIds`, `sessionIds` | Devices and sessions seen for the patient (pipeline metadata). |
 

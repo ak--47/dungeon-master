@@ -28,7 +28,7 @@ All KPIs use UTC days and count people by unique `user_id`. Visit-level KPIs hol
 
 Two tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). Days with no activity have a row with zeros. They join to events on the UTC date of the event and on the named dimension.
 
-In the warehouse, numeric columns are loaded as FLOAT64 (shown as FLOAT below). Count columns (visits, clinicians) always hold whole numbers, and raw file exports show them as integers.
+In the warehouse, count columns and whole-dollar rates are INTEGER (INT64); hours and amounts with cents are FLOAT (FLOAT64).
 
 ### `clinician_staffing_daily`
 
@@ -42,7 +42,7 @@ Daily clinician hours by service line, from the scheduling and time-keeping syst
 | `employed_clinician_hours` | FLOAT | hours | Hours worked by Clearwell-employed clinicians. |
 | `agency_clinician_hours` | FLOAT | hours | Hours worked by clinicians from a staffing agency. |
 | `spanish_speaking_clinician_hours` | FLOAT | hours | Hours worked by clinicians who see patients in Spanish (included in `clinician_hours`). |
-| `clinicians_on_shift` | FLOAT | count | Clinicians who worked that day. Shift lengths vary; the average shift is about 7.5 hours. |
+| `clinicians_on_shift` | INTEGER | count | Clinicians who worked that day. Shift lengths vary; the average shift is about 7.5 hours. |
 
 Caveats: primary care has 0 hours on days the clinic is closed (Sundays and the July 3 and September 7 holidays). Hours include charting and time between visits, so hours per visit are higher than visit durations on events. Remote monitoring nurses are not in this table.
 
@@ -55,11 +55,11 @@ Daily billed visits and revenue by service line and coverage type, from the bill
 | `date` | DATE | UTC day | Day the claims posted in billing. |
 | `service_line` | STRING | — | `urgent_care`, `primary_care`, or `behavioral_health`. |
 | `coverage_type` | STRING | — | `employer`, `commercial`, `medicare`, `medicaid`, `self_pay`. Matches `coverage_type` on events. |
-| `visits_billed` | FLOAT | count | Visits (or therapy sessions) whose claims posted that day. |
+| `visits_billed` | INTEGER | count | Visits (or therapy sessions) whose claims posted that day. |
 | `avg_patient_charge_usd` | FLOAT | USD per visit | What the patient pays per visit: the self-pay list price on that day, or the average copay for the coverage type. |
-| `payer_rate_usd` | FLOAT | USD per visit | Contracted reimbursement per visit from the insurer. 0 for employer and self-pay. |
+| `payer_rate_usd` | INTEGER | USD per visit | Contracted reimbursement per visit from the insurer. 0 for employer and self-pay. |
 | `patient_revenue_usd` | FLOAT | USD | `visits_billed` × `avg_patient_charge_usd`. |
-| `payer_revenue_usd` | FLOAT | USD | `visits_billed` × `payer_rate_usd`. |
+| `payer_revenue_usd` | INTEGER | USD | `visits_billed` × `payer_rate_usd`. |
 | `total_revenue_usd` | FLOAT | USD | Patient revenue + payer revenue. |
 
 Caveats: billing and Mixpanel differ day to day. Claims post on the day billing closes them, so part of each day's visits posts the next day. Billing also includes visits from Clearwell's nurse phone line, which never reach the app, and nets out voided visits. Employer fees and remote monitoring fees are not in this table. Async visits bill as urgent-care visits.

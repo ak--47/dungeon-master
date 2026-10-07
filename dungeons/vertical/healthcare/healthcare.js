@@ -19,7 +19,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             pay $0 (employer benefit), an insurance copay, or a self-pay price
  *             ($79 per urgent visit → $59 from 2026-08-31). Clearwell Async (a
  *             questionnaire visit for minor conditions) launches 2026-07-15.
- * SCALE:      10,000 patients (≈3,500 sign up inside the window), ~1.05M events,
+ * SCALE:      10,000 patients (≈3,600 sign up inside the window), ~1.1M events,
  *             120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  symptom check completed → visit requested → visit started →
  *             visit completed → prescription sent → prescription picked up
@@ -43,7 +43,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *       room left → visit started → visit completed → prescription sent →
  *       picked up → reminder sent → visit rated; engine 100%, visit_id per run).
  *       The everything hook rebuilds each visit and decides every step and gap.
- *       Carries the Pickup Reminders experiment (multipliers 1.0; the hook
+ *       Carries the Prescription Pickup Reminders experiment (multipliers 1.0; the hook
  *       applies the effect).
  *   - Primary Care (weight 1): template unit (appointment booked → reminder →
  *       missed / visit started → completed → prescription → pickup → rating),
@@ -55,7 +55,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * USER PROPS:  coverage_type, age_band, gender, preferred_language, state,
  *              chronic_program, device_connectivity, therapy_client,
  *              therapist_preference, acquisition_channel, member_since,
- *              "Experiment: Pickup Reminders" (patients in the test)
+ *              "Experiment: Prescription Pickup Reminders" (patients in the test)
  * SUPER PROPS: coverage_type, preferred_language (stickyEventProps: on every event)
  * SCD PROPS:   none
  * GROUPS:      none
@@ -94,10 +94,18 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   pickups and appointments do not ramp from zero. Therapy is at steady state:
  *   ongoing clients' remaining sessions follow the equilibrium residual of the
  *   course length (6-16 weekly sessions), and new clients start through the
- *   window, so weekly sessions stay level.
+ *   window, so weekly sessions stay level. Established clients' intakes thin out
+ *   through the window (density 1 → 0.35) while new patients' intakes grow, so
+ *   weekly intakes and sessions stay level (±10%).
  * - New patients: 55% start their first urgent-care symptom check 5-40 minutes
  *   after signing up (they joined because they were sick). retentionCurve shapes
  *   new patients' activity; established patients are flat across the window.
+ * - Repeat visits: a second urgent visit (or primary care booking) within 24 h
+ *   of another moves to the patient's nearest active day (an app session with
+ *   no visit of that kind within 24 h); 10% of such repeats stay (a patient who
+ *   gets worse), so about 2% of symptom checks have another within 12 h.
+ * - Ratings are drawn per visit from a salted hash of visit_id (same 1-5 star
+ *   mix for every visit type), not from the shared random stream.
  * - Remote monitoring: readings come only from program patients; reading_type
  *   follows the program and sync_method follows device_connectivity. 15% of
  *   program patients on either device stop logging at a random time.
@@ -110,9 +118,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   noise plus a fixed floor (primary care is 0 on closed days); the agency
  *   share of hours varies ±12% by day around its average, and clinicians on
  *   shift divide hours by a shift length that varies ±12% around 7.5 h.
- * - Pickup Reminders exposure: the engine sends one $experiment_started per
- *   patient; the hook moves it to 1 s after the patient's first urgent-care
- *   prescription in the test (the moment the reminder treatment can apply).
+ * - Prescription Pickup Reminders exposure: the engine sends one $experiment_started per
+ *   patient; the hook moves it to 1 s before the patient's first urgent-care
+ *   prescription in the test, so the Experiments report counts every in-test
+ *   prescription after exposure.
  * - Primary care same-day slots (lead 0) start 1-4 h after booking on the next
  *   clinic-hours quarter hour (rolling to the next day when the clinic is shut).
  * - visit rated carries visit_type, so ratings break down by video / phone / async.
@@ -167,11 +176,13 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   50/50 by patient. "Text Reminders" patients get an SMS 20 h after the
  *   prescription if it is not picked up yet ("reminder sent", reminder_type
  *   rx_pickup). Pickup is 1.25x control (64% → 80%) and the time to pickup is
- *   0.7x. Exposure ($experiment_started) fires once per patient, 1 s after
+ *   0.7x. Exposure ($experiment_started) fires once per patient, 1 s before
  *   their first prescription in the test.
  * MIXPANEL: Funnels, prescription sent → prescription picked up, Totals, hold
  *   visit_id constant, 7-day window, filter service_line = urgent_care, Jul 28 -
- *   Sep 24, breakdown "Experiment: Pickup Reminders"; median time to convert.
+ *   Sep 24, breakdown "Experiment: Prescription Pickup Reminders"; median time to convert.
+ *   The Experiments report on $experiment_started reads the same prescriptions
+ *   (every in-test prescription follows the exposure).
  * REAL WORLD: a large share of acute prescriptions are never picked up.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -225,7 +236,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: from 2026-09-14 respiratory symptom checks ramp up; from 2026-09-21
  *   they run at 2.5x their summer rate relative to all other reasons (extra
- *   respiratory visits, each a full visit flow, for patients active that day).
+ *   respiratory visits, each a full visit flow, drawn in proportion to urgent
+ *   activity and placed on another active day of the same patient within 3
+ *   days, never within 24 h of another urgent visit).
  * MIXPANEL: Insights, symptom check completed, breakdown reason_category,
  *   weekly; respiratory / non-respiratory, Sep 21 - Oct 1 vs Jun 4 - Sep 13.
  * REAL WORLD: school starts, and the respiratory season follows.
@@ -243,43 +256,46 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-healthcare, 2026-10-07, full fidelity,
- * 10,000 patients, 1,049,527 events)
+ * 10,000 patients, 1,098,588 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation               | Expected | Measured
  * -----|------------------------------------------------|--------------------------|----------|---------
- * H1   | async share of minor-reason requests, Jul 29+  | ASYNC_SHARE              | 0.50     | 0.498 (1,684 of 3,383)
+ * H1   | async share of minor-reason requests, Jul 29+  | ASYNC_SHARE              | 0.50     | 0.511 (1,886 of 3,690)
  * H1   | async requests before launch / other reasons   | exact purity             | 0 / 0    | 0 / 0
- * H2   | start rate, est wait ≥20 / ≤10 min             | 0.62 / 0.93              | 0.667    | 0.650 (61.0% vs 93.8%)
- * H2   | start rate, est wait ≤10 min                   | START_RATE_SHORT         | 0.93     | 0.938
- * H3   | avg est wait, gap days / ±14 days              | GAP_WAIT_MULT            | 2.20     | 2.178 (24.1 vs 11.1 min)
- * H3   | urgent clinician hours per request, gap / base | 1 − agency share 0.4     | 0.60     | 0.631
- * H4   | pickup within 7 d, Text Reminders / Control    | REMINDER_PICKUP_MULT     | 1.25     | 1.231 (79.2% vs 64.3%)
- * H4   | median hours to pickup, variant / control      | REMINDER_DELAY_MULT      | 0.70     | 0.647 (13.4 vs 20.8 h)
- * H4   | variant share of exposed patients              | equal 2-arm hash         | 0.50     | 0.490 (1,764 of 3,604)
+ * H2   | start rate, est wait ≥20 / ≤10 min             | 0.62 / 0.93              | 0.667    | 0.663 (61.8% vs 93.3%)
+ * H2   | start rate, est wait ≤10 min                   | START_RATE_SHORT         | 0.93     | 0.933
+ * H3   | avg est wait, gap days / ±14 days              | GAP_WAIT_MULT            | 2.20     | 2.206 (23.9 vs 10.8 min)
+ * H3   | urgent clinician hours per request, gap / base | 1 − agency share 0.4     | 0.60     | 0.633
+ * H4   | pickup within 7 d, Text Reminders / Control    | REMINDER_PICKUP_MULT     | 1.25     | 1.250 (80.3% vs 64.3%)
+ * H4   | median hours to pickup, variant / control      | REMINDER_DELAY_MULT      | 0.70     | 0.695 (14.1 vs 20.3 h)
+ * H4   | variant share of exposed patients              | equal 2-arm hash         | 0.50     | 0.501 (1,875 of 3,741)
  * H4   | rx_pickup reminders in Control or pre-test     | exact purity             | 0        | 0
- * H5   | still logging Sep 3+, bluetooth / cellular     | 1 − BT_LAPSE_SHARE       | 0.60     | 0.619 (53.1% vs 85.9%)
- * H6   | no-show slope per lead day                     | NOSHOW_PER_DAY           | 0.012    | 0.0130
- * H6   | no-show rate, lead 8+ days                     | LEAD_WEIGHTS mix of line | 0.2013   | 0.2137
- * H7   | median hours to 1st session, specific / first  | SPECIFIC_THERAPIST_MULT  | 2.50     | 2.385 (237 vs 99 h)
- * H7   | median hours to 1st session, first_available   | THERAPY_FIRST_MEDIAN_H   | 96       | 99.4
- * H8   | self-pay requests per check, after / before    | SELF_PAY_LIFT            | 1.35     | 1.317 (48.8% vs 37.0%)
- * H8   | insured requests per check, after / before     | unchanged                | 1.00     | 0.990
- * H8   | self-pay urgent revenue per check (warehouse)  | 1.35 × 59/79, floor 0.857| 1.008    | 1.018 ($26.23 vs $25.77)
- * H9   | respiratory / other checks, Sep 21+ vs summer  | RESP_WAVE_MULT           | 2.50     | 2.500
- * H10  | avg est wait, es / en                          | SPANISH_WAIT_MULT        | 1.60     | 1.619 (18.0 vs 11.1 min)
+ * H5   | still logging Sep 3+, bluetooth / cellular     | 1 − BT_LAPSE_SHARE       | 0.60     | 0.613 (55.4% vs 90.4%)
+ * H6   | no-show slope per lead day                     | NOSHOW_PER_DAY           | 0.012    | 0.0121
+ * H6   | no-show rate, lead 8+ days                     | LEAD_WEIGHTS mix of line | 0.2013   | 0.2048
+ * H7   | median hours to 1st session, specific / first  | SPECIFIC_THERAPIST_MULT  | 2.50     | 2.581 (247 vs 96 h)
+ * H7   | median hours to 1st session, first_available   | THERAPY_FIRST_MEDIAN_H   | 96       | 95.8
+ * H8   | self-pay requests per check, after / before    | SELF_PAY_LIFT            | 1.35     | 1.400 (49.7% vs 35.5%)
+ * H8   | insured requests per check, after / before     | unchanged                | 1.00     | 1.010
+ * H8   | self-pay urgent revenue per check (warehouse)  | 1.35 × 59/79, floor 0.857| 1.008    | 1.078 ($26.85 vs $24.90)
+ * H9   | respiratory / other checks, Sep 21+ vs summer  | RESP_WAVE_MULT           | 2.50     | 2.455
+ * H10  | avg est wait, es / en                          | SPANISH_WAIT_MULT        | 1.60     | 1.572 (17.6 vs 11.2 min)
  * ═════════════════════════════════════════════════════════════════════════
  *
- * Noise notes: H8's after period has about 1,700 self-pay symptom checks
+ * Noise notes: H8's after period has about 1,900 self-pay symptom checks
  * (relative SE of the request-rate ratio about 4%); its revenue read also moves
  * with completion (the staffing gap falls in the before period, Async ramps in
  * it) and with claim posting lag at the Aug 31 boundary, hence the floor. H7
- * rests on about 250 specific-therapist first sessions (relative SE of the
- * median ratio about 5%). H4's median-time ratio rests on about 1,500 pickups
- * per arm (SE about 0.03). H6's 8+ day rate (n ≈ 3,700, SE ≈ 0.0067) sits 1.8
- * SE above the line's mix. Warehouse audits: clinician_staffing_daily corr
- * 0.953, visit_revenue_daily corr 0.958. Null checks (eval Q14, Q15): Async vs
- * live ratings z = 0.05 (sub-splits |z| ≤ 1.3); insured requests per check
- * before/after z = −0.9 (per coverage |z| ≤ 1.5).
+ * rests on about 230 specific-therapist first sessions (relative SE of the
+ * median ratio about 5%). H4's median-time ratio rests on about 1,400 control
+ * and 1,800 variant pickups (SE about 0.03). H6's slope has SE ≈ 0.0007 (the
+ * ±10% band is about ±1.7 SE), so its single-ref reads carry a knob-derived
+ * floor (0.8 x knob) and a read past the far edge grades STRONG. Repeat
+ * symptom checks within 12 h: 2.2% in every period (summer, ramp, peak).
+ * Warehouse audits: clinician_staffing_daily corr 0.963, visit_revenue_daily
+ * corr 0.963. Null checks (eval Q14, Q15): Async vs live ratings z = −0.67
+ * (sub-splits |z| ≤ 1.46); insured requests per check before/after z = 1.05
+ * (per coverage |z| ≤ 1.07).
  */
 
 // ── SCALE ──
@@ -294,7 +310,7 @@ const chance = u.initChance(SEED);
 
 // ── TIMELINE (shared by hooks, stories, SQL, warehouse columns, guides) ──
 const ASYNC_LAUNCH = "2026-07-15T00:00:00Z";          // Clearwell Async launches for minor conditions
-const PICKUP_TEST_START = "2026-07-28T00:00:00Z";     // "Pickup Reminders" A/B test starts
+const PICKUP_TEST_START = "2026-07-28T00:00:00Z";     // "Prescription Pickup Reminders" A/B test starts
 const STAFFING_GAP_START = "2026-08-10T00:00:00Z";    // locum agency contract lapses (urgent care)
 const STAFFING_GAP_END = "2026-08-24T00:00:00Z";      // exclusive: new agency live Aug 24
 const SELF_PAY_PRICE_CHANGE = "2026-08-31T00:00:00Z"; // self-pay urgent visit $79 → $59
@@ -340,8 +356,8 @@ const WAIT_SIGMA = 0.6;
 const GAP_WAIT_MULT = 2.2;
 const AGENCY_HOURS_SHARE = { urgent_care: 0.4, primary_care: 0.1, behavioral_health: 0 };
 
-// H4 Pickup Reminders experiment
-const PICKUP_EXPERIMENT = "Pickup Reminders";
+// H4 Prescription Pickup Reminders experiment
+const PICKUP_EXPERIMENT = "Prescription Pickup Reminders";
 const PICKUP_VARIANT = "Text Reminders";
 const EXP_KEY = `Experiment: ${PICKUP_EXPERIMENT}`;
 const PICKUP_BASE = 0.64;            // share of prescriptions picked up (control)
@@ -371,6 +387,7 @@ const SPECIFIC_THERAPIST_MULT = 2.5;
 const THERAPY_CLIENT_SHARE = 0.18;
 const SPECIFIC_THERAPIST_SHARE = 0.35;
 const THERAPY_NEW_SHARE = 0.5;        // established therapy clients who start therapy in the window (steady state: ongoing = weekly starts x mean course)
+const THERAPY_EST_DECLINE = 0.65;     // established clients' intake density falls from 1 to 0.35 across the window
 const THERAPY_COURSE_MIN = 6;
 const THERAPY_COURSE_MAX = 16;
 const THERAPY_FIRST_NOSHOW = 0.08;
@@ -386,6 +403,7 @@ const SELF_PAY_LIFT = 1.35;
 const REASON_WEIGHTS = { respiratory: 20, urinary: 10, skin_rash: 11, pink_eye: 4, allergy: 8, stomach: 11, minor_injury: 7, headache: 10, back_pain: 9, other: 10 };
 const S_RESP = REASON_WEIGHTS.respiratory / Object.values(REASON_WEIGHTS).reduce((a, b) => a + b, 0);
 const RESP_WAVE_MULT = 2.5;
+const RESP_SPREAD_DAYS = 3;         // an extra respiratory visit lands within this many days of the visit it is drawn from
 
 // H10 Spanish-language routing
 const SPANISH_WAIT_MULT = 1.6;
@@ -413,6 +431,7 @@ const RATING_WEIGHTS = { 1: 4, 2: 6, 3: 14, 4: 32, 5: 44 };
 const PHARMACY_WEIGHTS = { chain: 65, grocery: 20, independent: 15 };
 const PREWINDOW_DAYS = 21;
 const BORN_FIRST_VISIT_SHARE = 0.55;
+const REPEAT_KEEP = 0.1;             // share of second visits of a kind within 24 h that really happen (the rest move to another day)
 const BORN_PCT = 35;
 
 // warehouse economics
@@ -499,6 +518,7 @@ const nextApptStart = (t) => {
 const URGENT_STEPS = ["symptom check completed", "visit requested", "waiting room left", "visit started", "visit completed", "prescription sent", "prescription picked up", "reminder sent", "visit rated"];
 const PRIMARY_STEPS = ["appointment booked", "reminder sent", "appointment missed", "visit started", "visit completed", "prescription sent", "prescription picked up", "visit rated"];
 const UNIT_EVENTS = new Set([...URGENT_STEPS, ...PRIMARY_STEPS]);
+const ONBOARDING = new Set(["account created", "coverage added", "program enrolled"]);
 const THERAPY_STEPS = new Set(["therapy intake completed", "therapy session booked", "therapy session completed"]);
 const DEVICE_KEYS = ["device_id", "os", "model", "screen_height", "screen_width", "carrier", "radio", "wifi", "manufacturer", "brand", "app_version_string"];
 const stripDevice = (e) => { if (e) for (const k of DEVICE_KEYS) delete e[k]; };
@@ -594,9 +614,40 @@ function handleEverything(events, meta) {
 		urgentIn[0].t0 = birthMs + chance.integer({ min: 5, max: 40 }) * MIN_MS;
 	}
 
+	// realism: a patient rarely needs two urgent visits, or books two primary care
+	// appointments, within a day. A slot within 24 h of another of its kind moves to
+	// the nearest active day (an app session with no visit of that kind within
+	// 24 h); with no such day the visit does not happen.
+	const anchors = keep.filter((e) => !ONBOARDING.has(e.event)).map(T).filter((t) => t >= BEGIN && t <= END - 2 * HOUR_MS).sort((a, b) => a - b);
+	const isFree = (t, busy) => busy.every((b) => Math.abs(b - t) >= DAY_MS);
+	const nearestFree = (target, lo, hi, busy) => {
+		let best = null, bestD = Infinity;
+		for (const a of anchors) {
+			if (a < lo || a > hi) continue;
+			const d = Math.abs(a - target);
+			if (d < bestD && isFree(a, busy)) { best = a; bestD = d; }
+		}
+		return best === null ? null : best + chance.integer({ min: 1, max: 6 }) * MIN_MS;
+	};
+	const spreadOut = (list, busy) => {
+		const kept = [];
+		for (const s of list) {
+			if (s.t0 < BEGIN || isFree(s.t0, busy) || rand() < REPEAT_KEEP) { busy.push(s.t0); kept.push(s); continue; }
+			const t = nearestFree(s.t0, birthMs ?? BEGIN, END - 2 * HOUR_MS, busy);
+			if (t === null) { s.drop = true; continue; }
+			s.t0 = t;
+			busy.push(t);
+			kept.push(s);
+		}
+		return kept;
+	};
+	const urgentBusy = [];
+	const urgentKept = spreadOut(urgentIn, urgentBusy);
+	const primaryKept = spreadOut(primaryIn, []);
+
 	// warm start: established patients have visits in the 3 weeks before June 4
 	if (!signup) {
-		for (const [list, kind] of [[urgentIn, "urgent"], [primaryIn, "primary"]]) {
+		for (const [list, kind] of [[urgentKept, "urgent"], [primaryKept, "primary"]]) {
 			if (!list.length) continue;
 			const x = list.length * PREWINDOW_DAYS / WINDOW_DAYS;
 			const n = Math.floor(x) + (rand() < x % 1 ? 1 : 0);
@@ -609,15 +660,28 @@ function handleEverything(events, meta) {
 		}
 	}
 
-	// H9: respiratory season — extra respiratory urgent visits in proportion to activity
-	for (const s of urgentIn) {
+	// H9: respiratory season — extra respiratory urgent visits in proportion to
+	// urgent activity, each on another active day of the same patient (no urgent
+	// visit within 24 h), within a few days of the visit it is drawn from
+	for (const s of urgentKept) {
 		const r = waveRamp(s.t0);
 		if (r <= 0) continue;
 		const x = (RESP_WAVE_MULT - 1) * S_RESP * r;
 		const n = Math.floor(x) + (rand() < x % 1 ? 1 : 0);
 		for (let i = 0; i < n; i++) {
-			const t0 = Math.min(END - 2 * HOUR_MS, s.t0 + chance.integer({ min: 0, max: 12 * 60 }) * MIN_MS);
-			slots.push({ kind: "urgent", t0: Math.max(s.t0, t0), id: null, src: null, reason: "respiratory", extra: true });
+			const lo = Math.max(ms(RESP_WAVE_START), birthMs ?? BEGIN), hi = END - 2 * HOUR_MS;
+			const target = s.t0 + chance.floating({ min: -RESP_SPREAD_DAYS, max: RESP_SPREAD_DAYS }) * DAY_MS;
+			let t0 = nearestFree(target, lo, hi, urgentBusy);
+			if (t0 === null) {
+				// no app session on a free day: the patient opens the app to check symptoms
+				for (const d of chance.shuffle([-3, -2, -1, 1, 2, 3])) {
+					const c = s.t0 + d * DAY_MS;
+					if (c >= lo && c <= hi && isFree(c, urgentBusy)) { t0 = c; break; }
+				}
+			}
+			if (t0 === null) continue;
+			urgentBusy.push(t0);
+			slots.push({ kind: "urgent", t0, id: null, src: null, reason: "respiratory", extra: true });
 		}
 	}
 
@@ -625,25 +689,27 @@ function handleEverything(events, meta) {
 	const out = [];
 	let firstTestRx = Infinity; // H4: the patient's first prescription in the test
 
-	function afterVisit(put, serviceLine, visitType, tDone, reason, tReq) {
+	function afterVisit(put, vid, serviceLine, visitType, tDone, reason, tReq) {
 		const rxP = serviceLine === "urgent_care" ? RX_RATE[reason] ?? 0.3 : PRIMARY_RX_RATE;
-		if (rand() < 0.35) {
+		// ratings are the same for every visit type: salted per visit, so they do not
+		// ride on the shared random stream
+		if (hashFloat(`${vid}|rated`) < 0.35) {
 			put("visit rated", tDone + chance.integer({ min: 2, max: 90 }) * MIN_MS, {
 				service_line: serviceLine,
 				visit_type: visitType,
-				rating: Number(pickWeighted(RATING_WEIGHTS, rand())),
-				would_recommend: rand() < 0.82,
+				rating: Number(pickWeighted(RATING_WEIGHTS, hashFloat(`${vid}|stars`))),
+				would_recommend: hashFloat(`${vid}|recommend`) < 0.82,
 			});
 		}
 		if (rand() >= rxP) return;
 		const tRx = tDone + chance.integer({ min: 3, max: 25 }) * MIN_MS;
 		const meds = MEDS[serviceLine === "urgent_care" ? reason : "primary"] || MEDS.other;
 		const pharmacy = pickWeighted(PHARMACY_WEIGHTS, rand());
-		put("prescription sent", tRx, { service_line: serviceLine, medication_class: meds[chance.integer({ min: 0, max: meds.length - 1 })], pharmacy_type: pharmacy });
+		const rxEv = put("prescription sent", tRx, { service_line: serviceLine, medication_class: meds[chance.integer({ min: 0, max: meds.length - 1 })], pharmacy_type: pharmacy });
 		// H4: urgent-care prescriptions from requests on or after the test start are in the test
 		const inTest = serviceLine === "urgent_care" && variant !== null && tReq >= ms(PICKUP_TEST_START) && exposures.length > 0;
 		const isReminder = inTest && variant === PICKUP_VARIANT;
-		if (inTest) firstTestRx = Math.min(firstTestRx, tRx);
+		if (inTest && rxEv) firstTestRx = Math.min(firstTestRx, tRx);
 		const picked = rand() < PICKUP_BASE * (isReminder ? REMINDER_PICKUP_MULT : 1);
 		const delayH = Math.min(PICKUP_MAX_H, PICKUP_MEDIAN_H * logNormal(PICKUP_SIGMA) * (isReminder ? REMINDER_DELAY_MULT : 1));
 		if (isReminder && (!picked || delayH > REMINDER_AFTER_H)) {
@@ -685,7 +751,7 @@ function handleEverything(events, meta) {
 			tDone = tStart + dur * MIN_MS;
 			put("visit completed", tDone, { ...base, duration_min: dur, clinician_type: pickWeighted({ nurse_practitioner: 45, physician: 35, physician_assistant: 20 }, rand()) });
 		}
-		afterVisit(put, "urgent_care", visitType, tDone, reason, tReq);
+		afterVisit(put, s.vid, "urgent_care", visitType, tDone, reason, tReq);
 	}
 
 	function buildPrimary(s, put) {
@@ -718,11 +784,13 @@ function handleEverything(events, meta) {
 		const dur = Math.max(8, Math.min(45, Math.round(18 * logNormal(0.3))));
 		const tDone = tStart + dur * MIN_MS;
 		put("visit completed", tDone, { service_line: "primary_care", visit_type: visitType, reason_category: reason, duration_min: dur, clinician_type: pickWeighted({ physician: 60, nurse_practitioner: 40 }, rand()) });
-		afterVisit(put, "primary_care", visitType, tDone, null, s.t0);
+		afterVisit(put, s.vid, "primary_care", visitType, tDone, null, s.t0);
 	}
 
 	for (const s of slots) {
+		if (s.drop) continue;
 		const id = s.id || `v_${chance.hash({ length: 12 })}`;
+		s.vid = id;
 		const put = (step, t, set) => {
 			if (t > END) return null;
 			let ev = s.src && s.src[step];
@@ -762,7 +830,16 @@ function handleEverything(events, meta) {
 		let k = 1;
 		if (starter && therapyRuns.length) {
 			// born clients start at their first therapy visit; established clients at a random one
-			const tIntake = signup ? Math.min(...therapyRuns) : therapyRuns[Math.floor(salt(uid, "therapy-start") * therapyRuns.length)];
+			// established clients' starts thin out through the window while new patients'
+			// starts grow with the patient base, so total weekly intakes stay level
+			let tIntake;
+			if (signup) tIntake = Math.min(...therapyRuns);
+			else {
+				const a = THERAPY_EST_DECLINE, f = salt(uid, "therapy-start");
+				const u = (1 - Math.sqrt(1 - 2 * a * f * (1 - a / 2))) / a; // inverse CDF of density ∝ 1 - a·u
+				const target = BEGIN + u * (END - BEGIN);
+				tIntake = therapyRuns.reduce((best, t) => (Math.abs(t - target) < Math.abs(best - target) ? t : best), therapyRuns[0]);
+			}
 			tput("therapy intake completed", tIntake, { therapist_preference: pref, primary_concern: pickWeighted({ anxiety: 34, depression: 26, stress: 18, relationships: 10, sleep: 7, grief: 5 }, rand()) });
 			// H7: time to the first session depends on therapist choice
 			const dH = Math.min(45 * 24, THERAPY_FIRST_MEDIAN_H * logNormal(THERAPY_FIRST_SIGMA) * (pref === "specific_therapist" ? SPECIFIC_THERAPIST_MULT : 1));
@@ -823,10 +900,11 @@ function handleEverything(events, meta) {
 		}
 	}
 
-	// H4: one exposure per patient, 1 s after their first prescription in the test
+	// H4: one exposure per patient, 1 s before their first prescription in the
+	// test (the Experiments report counts metric events after exposure)
 	const usedExposures = [];
-	if (Number.isFinite(firstTestRx) && firstTestRx + 1000 <= END) {
-		exposures[0].time = iso(firstTestRx + 1000);
+	if (Number.isFinite(firstTestRx)) {
+		exposures[0].time = iso(firstTestRx - 1000);
 		usedExposures.push(exposures[0]);
 	} else if (profile[EXP_KEY] !== undefined) delete profile[EXP_KEY];
 
@@ -1337,6 +1415,7 @@ const LATE_START = addDays(LAPSE_LAST, 1);                              // H5 re
 const BOOKING_READ_END = "2026-09-01T00:00:00Z";                        // H6/H7 read: full 30-day windows
 const FUNNEL_WINDOW_DAYS = 30;
 const LEAD_LONG_FROM = 8;
+const NOSHOW_FLOOR_SHARE = 0.8;                                          // H6 single-ref reads: floor = 0.8 x knob
 // H6: expected no-show rate of appointments booked 8+ days out (lead mix from LEAD_WEIGHTS)
 const NOSHOW_LONG = (() => {
 	let w = 0, s = 0;
@@ -1494,7 +1573,7 @@ export const stories = [
 	{
 		id: "H3-urgent-care-staffing-gap",
 		hook: "H3",
-		archetype: "temporal-inflection",
+		archetype: "external-join",
 		narrative: `From ${D(STAFFING_GAP_START)} to ${D(STAFFING_GAP_END)} (exclusive) the locum agency contract for urgent care lapsed. Warehouse clinician_staffing_daily shows agency_clinician_hours = 0 for urgent_care on those days, so clinician_hours fall to ${1 - AGENCY_HOURS_SHARE.urgent_care} of plan (agency is normally ${AGENCY_HOURS_SHARE.urgent_care * 100}% of urgent hours). Estimated waits for live urgent-care requests are ${GAP_WAIT_MULT}x on those days, so more patients leave the waiting room (H2). The gap days are read from the warehouse (agency hours = 0); event read: average estimated_wait_min on gap days vs the ${GAP_BASE_DAYS} days either side (same weekday mix, same language mix) reads ${GAP_WAIT_MULT}. Warehouse read: urgent clinician hours per visit request, gap / baseline, reads ${1 - AGENCY_HOURS_SHARE.urgent_care}.`,
 		mixpanelReport: { type: "Insights + warehouse", event: "visit requested", filter: "visit_type ≠ async", measure: "average estimated_wait_min", chart: "daily line", join: "clinician_staffing_daily (service_line = urgent_care) on date" },
 		assertions: [
@@ -1515,7 +1594,7 @@ export const stories = [
 		id: "H4-pickup-reminders-experiment",
 		hook: "H4",
 		archetype: "experiment-lift",
-		narrative: `The "${PICKUP_EXPERIMENT}" test starts ${D(PICKUP_TEST_START)}: urgent-care prescriptions from requests on or after that date are in the test, split 50/50 by patient (sticky; one exposure $experiment_started per patient, 1 s after their first prescription in the test). In the "${PICKUP_VARIANT}" arm the patient gets an SMS ("reminder sent", reminder_type rx_pickup) ${REMINDER_AFTER_H} h after the prescription if it is not picked up yet. Pickup rises ${REMINDER_PICKUP_MULT}x (from ${PICKUP_BASE * 100}%) and the time from prescription to pickup is ${REMINDER_DELAY_MULT}x (log-normal, control median ${PICKUP_MEDIAN_H} h). Primary care prescriptions are not in the test. Read: per prescription (hold visit_id constant), picked up within ${PICKUP_WINDOW_DAYS} days, prescriptions ${D(PICKUP_TEST_START)} to ${D(PICKUP_READ_END)}; median hours to pickup.`,
+		narrative: `The "${PICKUP_EXPERIMENT}" test starts ${D(PICKUP_TEST_START)}: urgent-care prescriptions from requests on or after that date are in the test, split 50/50 by patient (sticky; one exposure $experiment_started per patient, 1 s before their first prescription in the test, so the Experiments report counts every in-test prescription). In the "${PICKUP_VARIANT}" arm the patient gets an SMS ("reminder sent", reminder_type rx_pickup) ${REMINDER_AFTER_H} h after the prescription if it is not picked up yet. Pickup rises ${REMINDER_PICKUP_MULT}x (from ${PICKUP_BASE * 100}%) and the time from prescription to pickup is ${REMINDER_DELAY_MULT}x (log-normal, control median ${PICKUP_MEDIAN_H} h). Primary care prescriptions are not in the test. Read: per prescription (hold visit_id constant), picked up within ${PICKUP_WINDOW_DAYS} days, prescriptions ${D(PICKUP_TEST_START)} to ${D(PICKUP_READ_END)}; median hours to pickup.`,
 		mixpanelReport: { type: "Funnels", steps: ["prescription sent", "prescription picked up"], counting: "totals", holdPropertyConstant: "visit_id", window: `${PICKUP_WINDOW_DAYS} days`, filter: "service_line = urgent_care", dateRange: `${D(PICKUP_TEST_START)} to ${D(PICKUP_READ_END)}`, breakdown: `user property "${EXP_KEY}"`, measure: "conversion and median time to convert" },
 		assertions: [
 			{
@@ -1583,13 +1662,15 @@ FROM ev LEFT JOIN v ON v.uid = ev.uid WHERE event = 'reminder sent' AND reminder
 			{
 				breakdown: { type: "duckdb", sql: H6_SQL },
 				select: { a: { where: { grp: "all" } } },
-				expect: { metric: "a.slope", op: "between", target: band(NOSHOW_PER_DAY) },
+				// single ref: the knob-derived floor (0.8 x knob) gives the effect side,
+				// so a slope past the far edge grades STRONG, not NONE
+				expect: { metric: "a.slope", op: "between", target: band(NOSHOW_PER_DAY), floor: Number((NOSHOW_PER_DAY * NOSHOW_FLOOR_SHARE).toPrecision(4)) },
 				minCohort: 3000,
 			},
 			{
 				breakdown: { type: "duckdb", sql: H6_SQL },
 				select: { a: { where: { grp: "all" } } },
-				expect: { metric: "a.noshow_long", op: "between", target: band(NOSHOW_LONG) },
+				expect: { metric: "a.noshow_long", op: "between", target: band(NOSHOW_LONG), floor: Number((NOSHOW_LONG * NOSHOW_FLOOR_SHARE).toPrecision(4)) },
 				minCohort: 3000,
 			},
 		],
@@ -1650,7 +1731,7 @@ FROM ev LEFT JOIN v ON v.uid = ev.uid WHERE event = 'reminder sent' AND reminder
 		id: "H9-respiratory-season",
 		hook: "H9",
 		archetype: "bespoke",
-		narrative: `Respiratory season starts mid-September: from ${D(RESP_WAVE_START)} respiratory symptom checks ramp up, and from ${D(RESP_WAVE_PEAK)} they run at ${RESP_WAVE_MULT}x their summer rate relative to every other reason. Each extra check is a full visit flow (request, waiting room, visit, prescription) for a patient already active that day, so the other reasons are untouched. Read: respiratory / non-respiratory symptom checks, ${D(RESP_WAVE_PEAK)} to ${D(DATASET_END)} vs ${D0} to ${D(addDays(RESP_WAVE_START, -1))}, reads ${RESP_WAVE_MULT} (the ratio cancels the growth of the patient base).`,
+		narrative: `Respiratory season starts mid-September: from ${D(RESP_WAVE_START)} respiratory symptom checks ramp up, and from ${D(RESP_WAVE_PEAK)} they run at ${RESP_WAVE_MULT}x their summer rate relative to every other reason. Each extra check is a full visit flow (request, waiting room, visit, prescription), drawn in proportion to urgent activity and placed on another active day of the same patient within a few days (never within 24 h of another urgent visit), so the other reasons are untouched and repeat visits stay rare. Read: respiratory / non-respiratory symptom checks, ${D(RESP_WAVE_PEAK)} to ${D(DATASET_END)} vs ${D0} to ${D(addDays(RESP_WAVE_START, -1))}, reads ${RESP_WAVE_MULT} (the ratio cancels the growth of the patient base).`,
 		mixpanelReport: { type: "Insights", event: "symptom check completed", breakdown: "reason_category", chart: "weekly line; respiratory / all other reasons" },
 		assertions: [
 			{

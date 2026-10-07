@@ -42,7 +42,7 @@ SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-visit_rev
 CREATE OR REPLACE TEMP TABLE prof AS
 SELECT distinct_id::VARCHAR AS uid, coverage_type, age_band, gender, preferred_language, state, chronic_program,
  device_connectivity, therapy_client, therapist_preference, acquisition_channel, member_since,
- "Experiment: Pickup Reminders" AS variant
+ "Experiment: Prescription Pickup Reminders" AS variant
 FROM users;
 
 -- one row per visit (visit_id is shared by every step of an urgent-care visit
@@ -192,6 +192,17 @@ SELECT CASE WHEN t >= TIMESTAMP '2026-09-21' THEN '3 Sep 21 - Oct 1' WHEN t >= T
  round(respiratory_checks::DOUBLE / other_checks, 4) AS respiratory_per_other
 FROM ev WHERE event = 'symptom check completed' GROUP BY 1 ORDER BY 1;
 
+-- uniques: patients with a respiratory check per day, and the share of checks
+-- followed or preceded by another check of the same patient within 12 hours
+WITH c AS (SELECT uid, t, reason_category, lag(t) OVER (PARTITION BY uid ORDER BY t) AS pt, lead(t) OVER (PARTITION BY uid ORDER BY t) AS nt
+  FROM ev WHERE event = 'symptom check completed')
+SELECT CASE WHEN t >= TIMESTAMP '2026-09-21' THEN '3 Sep 21 - Oct 1' WHEN t >= TIMESTAMP '2026-09-14' THEN '2 Sep 14-20' ELSE '1 Jun 4 - Sep 13' END AS period,
+ count(DISTINCT t::DATE) AS days,
+ round(count(DISTINCT (uid, t::DATE)) FILTER (WHERE reason_category = 'respiratory')::DOUBLE / count(DISTINCT t::DATE), 1) AS respiratory_patients_per_day,
+ count(DISTINCT uid) FILTER (WHERE reason_category = 'respiratory') AS respiratory_patients,
+ round(avg((t - pt < INTERVAL 12 HOUR OR nt - t < INTERVAL 12 HOUR)::INT), 4) AS share_with_repeat_within_12h
+FROM c GROUP BY 1 ORDER BY 1;
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H10-spanish-wait-gap — Spanish-preferring patients' estimated waits ×1.6
 -- ─────────────────────────────────────────────────────────────────────────
@@ -251,7 +262,7 @@ SELECT min(date) AS first_zero_agency_day, max(date) AS last_zero_agency_day, co
 FROM wh_staff WHERE service_line = 'urgent_care' AND agency_clinician_hours = 0;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- EVAL Q4 — Pickup Reminders: ship it?  (same read as STORY H4, plus reminders sent)
+-- EVAL Q4 — Prescription Pickup Reminders: ship it?  (same read as STORY H4, plus reminders sent)
 -- ─────────────────────────────────────────────────────────────────────────
 SELECT p.variant, count(*) AS prescriptions,
  round(avg(coalesce(v.t_pick < v.t_rx + INTERVAL 7 DAY, false)::INT), 4) AS pickup_rate_7d,
@@ -261,6 +272,14 @@ WHERE v.service_line = 'urgent_care' AND v.t_rx >= TIMESTAMP '2026-07-28' AND v.
 GROUP BY 1 ORDER BY 1;
 
 SELECT count(*) AS pickup_reminders_sent, count(DISTINCT uid) AS patients_reminded FROM ev WHERE event = 'reminder sent' AND reminder_type = 'rx_pickup';
+
+-- Experiments report check: exposure fires 1 s before the first in-test prescription,
+-- so every in-test urgent prescription of an exposed patient counts after exposure
+WITH x AS (SELECT uid, min(t) AS t_exposed FROM ev WHERE event = '$experiment_started' GROUP BY 1)
+SELECT count(*) AS in_test_prescriptions, count(*) FILTER (WHERE v.t_rx > x.t_exposed) AS after_exposure,
+ count(*) FILTER (WHERE v.t_rx - x.t_exposed = INTERVAL 1 SECOND) AS exposure_1s_before
+FROM visits v JOIN x ON x.uid = v.uid
+WHERE v.service_line = 'urgent_care' AND v.t_req >= TIMESTAMP '2026-07-28' AND v.t_rx IS NOT NULL;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q5 — remote monitoring engagement by device  (same read as STORY H5, plus program size)
@@ -430,6 +449,14 @@ s AS (SELECT period, count(*) FILTER (WHERE event = 'symptom check completed') A
   count(*) FILTER (WHERE event = 'visit requested')::DOUBLE / count(*) FILTER (WHERE event = 'symptom check completed') AS p FROM w GROUP BY 1)
 SELECT round((a.p - b.p) / sqrt(a.p * (1 - a.p) / a.n + b.p * (1 - b.p) / b.n), 2) AS z_after_vs_before
 FROM s a, s b WHERE a.period = 'after' AND b.period = 'before';
+
+-- the same z per insured coverage type (sub-split check for the null)
+WITH w AS (SELECT coverage_type, CASE WHEN t >= TIMESTAMP '2026-08-31' THEN 'after' ELSE 'before' END AS period, event
+  FROM ev WHERE event IN ('symptom check completed', 'visit requested') AND coverage_type <> 'self_pay'),
+s AS (SELECT coverage_type, period, count(*) FILTER (WHERE event = 'symptom check completed') AS n,
+  count(*) FILTER (WHERE event = 'visit requested')::DOUBLE / count(*) FILTER (WHERE event = 'symptom check completed') AS p FROM w GROUP BY 1, 2)
+SELECT a.coverage_type, round((a.p - b.p) / sqrt(a.p * (1 - a.p) / a.n + b.p * (1 - b.p) / b.n), 2) AS z_after_vs_before
+FROM s a JOIN s b ON a.coverage_type = b.coverage_type AND a.period = 'after' AND b.period = 'before' ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q16 — revenue per completed urgent-care visit by coverage (warehouse + business model)
