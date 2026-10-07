@@ -13,7 +13,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 | Visit conversion | Share of visits (`app opened`) that end in `order placed` within an hour, before the next `app opened`. |
 | Checkout conversion | Per checkout (hold `order_id` constant), the share of `checkout started` followed by `order placed` within 1 hour. |
 | Average order value (AOV) | Average `order_total_usd` on `order placed`. Basket size is average `subtotal_usd` or `items_count`. |
-| On-time delivery | Share of delivered orders with `minutes_late` below 15. An order 15 or more minutes past its quoted time counts as **late**. |
+| On-time delivery | Share of delivered orders with `minutes_late` below 20. An order 20 or more minutes past its quoted time counts as **late** (the threshold in courier and restaurant scorecards). |
 | Repeat rate (30-day) | Of new customers whose first order was delivered on day 0, the share who place another order within 30 days. Count only first deliveries with a full 30 days of data (through August 31). |
 | Payment failure rate | `payment failed` / (`payment failed` + `order placed`) for the same payment method and days. |
 | Support contact rate | Share of delivered orders with a `support contacted` event for the same `order_id`. |

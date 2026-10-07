@@ -100,6 +100,7 @@ FROM ev;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H1-late-first-order: 30-day repeat rate after a late (15+ min) first delivery
+-- (Mixpanel: Funnels order delivered with the first-time-ever filter -> order placed, 30 days)
 -- ─────────────────────────────────────────────────────────────────────────
 WITH g AS (SELECT late >= 15 AS is_late, count(*) AS n, avg(repeat30::INT) AS r FROM first_delivery WHERE t < TIMESTAMP '2026-09-01' GROUP BY 1)
 SELECT max(n) FILTER (WHERE is_late) AS late_first_orders, round(max(r) FILTER (WHERE is_late), 4) AS late_repeat_30d,
@@ -213,11 +214,33 @@ SELECT a AS reorder_orders, b AS reorder_taps, c AS browse_orders, d - b AS brow
 -- EVAL QUERIES (eval/food-delivery.eval.md)
 -- ═════════════════════════════════════════════════════════════════════════
 
--- EVAL Q1: late first delivery vs 30-day repeat (by lateness bucket)
-SELECT CASE WHEN late < 0 THEN 'a: early' WHEN late < 10 THEN 'b: 0-9 late' WHEN late < 15 THEN 'c: 10-14 late' WHEN late < 25 THEN 'd: 15-24 late' ELSE 'e: 25+ late' END AS bucket,
+-- EVAL Q1: late FIRST delivery vs 30-day repeat. Mixpanel recipe: Funnels order delivered
+-- (filter: first time ever) -> order placed, 30-day window, new customers, Jun 4 - Aug 31.
+-- first_delivery keeps each new customer's first delivery (rn = 1), which is what the
+-- first-time-ever filter selects.
+SELECT CASE WHEN late < 0 THEN 'a: early' WHEN late < 10 THEN 'b: 0-9 late' WHEN late < 15 THEN 'c: 10-14 late' WHEN late < 20 THEN 'd: 15-19 late' ELSE 'e: 20+ late' END AS bucket,
  count(*) AS new_customers, round(avg(repeat30::INT), 4) AS repeat_rate_30d
 FROM first_delivery WHERE t < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
-SELECT round(avg((late >= 15)::INT), 4) AS late_first_delivery_share, count(*) AS first_deliveries FROM first_delivery WHERE t < TIMESTAMP '2026-09-01';
+-- late vs on time at the 15-minute and the 20-minute (company KPI) cutoff
+SELECT cutoff, count(*) FILTER (WHERE late >= cutoff) AS late_first_orders, round(avg(repeat30::INT) FILTER (WHERE late >= cutoff), 4) AS late_repeat_30d,
+ count(*) FILTER (WHERE late < cutoff) AS on_time_first_orders, round(avg(repeat30::INT) FILTER (WHERE late < cutoff), 4) AS on_time_repeat_30d,
+ round(avg(repeat30::INT) FILTER (WHERE late >= cutoff) / avg(repeat30::INT) FILTER (WHERE late < cutoff), 4) AS ratio,
+ round(avg((late >= cutoff)::INT), 4) AS late_first_delivery_share, count(*) AS first_deliveries
+FROM first_delivery, (VALUES (15), (20)) v(cutoff) WHERE t < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
+-- the wrong recipe: the same funnel WITHOUT the first-time-ever filter. A breakdown on a step-1
+-- property runs one funnel per segment, so a customer enters every bucket they have a delivery in
+-- (Jun 4 - Aug 31) and converts there if any of those deliveries is followed by an order within
+-- 30 days. Later deliveries by kept customers fill the late bucket.
+WITH d AS (SELECT ev.uid, ev.t, ev.minutes_late::INT AS late FROM ev JOIN signups s ON s.uid = ev.uid
+  WHERE ev.event = 'order delivered' AND ev.t < TIMESTAMP '2026-09-01'),
+x AS (SELECT cutoff, d.uid, d.late >= cutoff AS is_late,
+  EXISTS (SELECT 1 FROM ev o WHERE o.uid = d.uid AND o.event = 'order placed' AND o.t > d.t AND o.t < d.t + INTERVAL 30 DAY) AS rep
+  FROM d, (VALUES (15), (20)) v(cutoff)),
+r AS (SELECT cutoff, uid, is_late, bool_or(rep) AS rep FROM x GROUP BY 1, 2, 3)
+SELECT cutoff, count(*) FILTER (WHERE is_late) AS late_entrants, round(avg(rep::INT) FILTER (WHERE is_late), 4) AS late_conv,
+ count(*) FILTER (WHERE NOT is_late) AS on_time_entrants, round(avg(rep::INT) FILTER (WHERE NOT is_late), 4) AS on_time_conv,
+ round(avg(rep::INT) FILTER (WHERE is_late) / avg(rep::INT) FILTER (WHERE NOT is_late), 4) AS ratio_without_first_time_filter
+FROM r GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q2: orders on rainy vs dry days, by city
 WITH o AS (SELECT city, d, count(*) AS n FROM orders GROUP BY 1, 2),
@@ -228,8 +251,8 @@ FROM j GROUP BY 1 ORDER BY rainy_days DESC, city;
 SELECT w.rainy, count(*) AS checkouts, round(avg(c.placed::INT), 4) AS checkout_conversion
 FROM checkouts c JOIN wh_ops w ON w.city = c.city AND w.d = c.d GROUP BY 1 ORDER BY 1;
 
--- EVAL Q3: lateness and couriers per order, rainy vs dry
-SELECT w.rainy, count(*) AS orders, round(avg(o.late_min), 2) AS avg_minutes_late, round(avg((o.late_min >= 15)::INT), 4) AS late_15_share
+-- EVAL Q3: lateness and couriers per order, rainy vs dry (late = 20+ minutes, the company KPI)
+SELECT w.rainy, count(*) AS orders, round(avg(o.late_min), 2) AS avg_minutes_late, round(avg((o.late_min >= 20)::INT), 4) AS late_20_share
 FROM orders o JOIN wh_ops w ON w.city = o.city AND w.d = o.d WHERE o.late_min IS NOT NULL GROUP BY 1 ORDER BY 1;
 SELECT rainy, round(sum(orders_dispatched) / sum(active_couriers), 3) AS orders_per_courier FROM wh_ops GROUP BY 1 ORDER BY 1;
 -- within each city: rainy-day couriers and dispatched orders vs the city's dry-day average
@@ -344,15 +367,21 @@ SELECT count(DISTINCT uid) AS customers_used_order_again,
 FROM ev WHERE event = 'reorder tapped';
 SELECT round(avg((entry_point = 'reorder')::INT), 4) AS september_reorder_share FROM orders WHERE t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-10-01';
 
--- EVAL Q15: iOS vs Android checkout conversion (null), overall and by Pass / period
-WITH g AS (SELECT 'all' AS split, platform, count(*) AS n, avg(placed::INT) AS conv FROM checkouts GROUP BY 2
-  UNION ALL SELECT 'pass=' || pass::VARCHAR, platform, count(*), avg(placed::INT) FROM checkouts GROUP BY 1, 2
-  UNION ALL SELECT 'after_fee_change=' || (t >= TIMESTAMP '2026-08-11')::VARCHAR, platform, count(*), avg(placed::INT) FROM checkouts GROUP BY 1, 2),
-w AS (SELECT split, max(n) FILTER (WHERE platform = 'ios') AS n_i, max(conv) FILTER (WHERE platform = 'ios') AS i,
-  max(n) FILTER (WHERE platform = 'android') AS n_a, max(conv) FILTER (WHERE platform = 'android') AS a FROM g GROUP BY 1)
-SELECT split, n_i, round(i, 4) AS ios_conv, n_a, round(a, 4) AS android_conv,
- round((a - i) / sqrt(((i * n_i + a * n_a) / (n_i + n_a)) * (1 - (i * n_i + a * n_a) / (n_i + n_a)) * (1.0 / n_i + 1.0 / n_a)), 2) AS z
-FROM w ORDER BY split;
+-- EVAL Q15: first-order rate by signup method (null), overall and by platform / signup month /
+-- channel. New customers who signed up through Aug 31; z compares each method with the other two.
+WITH f AS (SELECT s.signup_method AS m, s.ch, p.platform, date_trunc('month', s.t0)::DATE AS mon, (o.uid IS NOT NULL)::INT AS y
+  FROM signups s LEFT JOIN (SELECT DISTINCT uid FROM orders) o ON o.uid = s.uid LEFT JOIN prof p ON p.uid = s.uid
+  WHERE s.t0 < TIMESTAMP '2026-09-01'),
+g AS (SELECT 'all' AS split, m, count(*) AS n, avg(y) AS r FROM f GROUP BY 1, 2
+  UNION ALL SELECT 'platform=' || platform, m, count(*), avg(y) FROM f GROUP BY 1, 2
+  UNION ALL SELECT 'month=' || strftime(mon, '%Y-%m'), m, count(*), avg(y) FROM f GROUP BY 1, 2
+  UNION ALL SELECT 'channel=' || ch, m, count(*), avg(y) FROM f GROUP BY 1, 2),
+t AS (SELECT split, sum(n) AS nn, sum(n * r) / sum(n) AS pr FROM g GROUP BY 1)
+SELECT g.split, g.m AS signup_method, g.n AS signups, round(g.r, 4) AS first_order_rate,
+ round((g.r - (t.pr * t.nn - g.r * g.n) / (t.nn - g.n)) / sqrt(t.pr * (1 - t.pr) * (1.0 / g.n + 1.0 / (t.nn - g.n))), 2) AS z_vs_other_methods
+FROM g JOIN t ON t.split = g.split ORDER BY 1, 2;
+-- context: iOS vs Android checkout conversion (not engineered; see the dungeon JSDoc noise notes)
+SELECT platform, count(*) AS checkouts, round(avg(placed::INT), 4) AS conversion FROM checkouts GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q16: Forkfly Pass footprint — members, share of orders, trials, cancellations
 SELECT current_pass, count(*) AS customers FROM prof GROUP BY 1 ORDER BY 1;
@@ -408,11 +437,11 @@ FROM checkouts;
 
 -- EVAL Q19: open-ended — quarter health snapshot by month
 SELECT date_trunc('month', t)::DATE AS month, count(*) AS orders, count(DISTINCT uid) AS ordering_customers,
- round(avg((late_min >= 15)::INT), 4) AS late_15_share, round(avg(order_total_usd), 2) AS avg_order_total
+ round(avg((late_min >= 20)::INT), 4) AS late_20_share, round(avg(order_total_usd), 2) AS avg_order_total
 FROM orders GROUP BY 1 ORDER BY 1;
 
--- EVAL Q20: late deliveries by city and rainy-day share
+-- EVAL Q20: late deliveries (20+ minutes, the company KPI) by city and rainy-day share
 WITH x AS (SELECT o.city, o.late_min, w.rainy FROM orders o JOIN wh_ops w ON w.city = o.city AND w.d = o.d WHERE o.late_min IS NOT NULL)
-SELECT city, count(*) AS delivered, round(avg((late_min >= 15)::INT), 4) AS late_15_share, round(avg(rainy::INT), 4) AS share_on_rainy_days,
- round(avg((late_min >= 15)::INT) FILTER (WHERE NOT rainy), 4) AS late_share_dry_days
-FROM x GROUP BY 1 ORDER BY late_15_share DESC, city;
+SELECT city, count(*) AS delivered, round(avg((late_min >= 20)::INT), 4) AS late_20_share, round(avg(rainy::INT), 4) AS share_on_rainy_days,
+ round(avg((late_min >= 20)::INT) FILTER (WHERE NOT rainy), 4) AS late_share_dry_days
+FROM x GROUP BY 1 ORDER BY late_20_share DESC, city;

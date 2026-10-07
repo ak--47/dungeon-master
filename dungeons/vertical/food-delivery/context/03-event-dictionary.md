@@ -31,7 +31,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 | `search performed` | The customer searches for a dish or cuisine. | `search_term`; `results_count` (0 = no results). |
 | `restaurant viewed` | The customer opens a restaurant's page. | `restaurant_id`, `restaurant_name`, `cuisine` (`american`, `pizza`, `mexican`, `chinese`, `japanese`, `indian`, `thai`, `mediterranean`, `italian`, `healthy`), `price_tier` (`$` to `$$$$`), `restaurant_rating` (average stars, 3.7-4.9). |
 | `item added to cart` | The customer adds a menu item. | `restaurant_id`; `item_category` (`entree`, `side`, `drink`, `appetizer`, `dessert`); `item_price_usd`; `added_from`: `menu` (from the restaurant menu) or `addon_suggestion` (from a Smart Add-ons suggestion on the checkout screen; see 02-timeline.md). |
-| `reorder tapped` | The customer taps a restaurant in the Order Again row (from 2026-07-07). The cart is filled from a recent order, ready for checkout. | `restaurant_id`, `restaurant_name`, `cuisine`; `days_since_last_order`: whole days since the earlier order that is being repeated (one of the customer's three most recent orders). |
+| `reorder tapped` | The customer taps a restaurant in the Order Again row (from 2026-07-07). The cart is refilled with the items the customer chose on a recent order (at current menu prices; items added on the checkout screen are not copied), ready for checkout. | `restaurant_id`, `restaurant_name`, `cuisine`; `days_since_last_order`: whole days since the earlier order that is being repeated (one of the customer's three most recent orders). |
 
 ## Checkout, payment, and orders
 

@@ -13,7 +13,7 @@ Couriers are independent contractors who sign up for delivery shifts in their ci
 - **Sign up.** A new customer creates an account (Apple, Google, or email) and saves a delivery address. A customer needs a saved address to check out.
 - **Find food.** Customers browse the home feed or search by dish or cuisine, then open a restaurant's page (name, cuisine, price tier `$` to `$$$$`, and rating).
 - **Build a cart.** They add menu items to the cart.
-- **Order Again.** From 2026-07-07, customers who have had an order delivered see an Order Again row on the home screen with their recent restaurants. One tap fills the cart with a recent order, ready for checkout.
+- **Order Again.** From 2026-07-07, customers who have had an order delivered see an Order Again row on the home screen with their recent restaurants. One tap refills the cart with the items the customer chose on a recent order, at today's menu prices, ready for checkout. Items added on the checkout screen are not copied.
 - **Check out.** The checkout screen shows the subtotal, the delivery fee, the service fee, the quoted delivery time in minutes (from the dispatch system), and the payment method. The customer then places the order and pays.
 - **Pay.** Payment methods are card (credit or debit, processed by our card processor, Paylane), Apple Pay (iOS only), Google Pay (Android only), and PayPal. If a payment fails, the order is not placed.
 - **Track.** While the order is on its way, the customer can open the tracking screen (preparing, picked up, on the way, or running late).
