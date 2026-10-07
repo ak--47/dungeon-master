@@ -328,6 +328,19 @@ describe('warehouse verify stats', () => {
 		expect(toValues(computeWarehouseSourceRows(events, specs.where))).toEqual([30, 40, 0]);
 	});
 
+	test('computeWarehouseSourceRows resolves identities like the materializer (device-only rows count)', () => {
+		const events = [
+			{ event: 'view', time: '2024-01-01T01:00:00Z', device_id: 'd1' },
+			{ event: 'signup', time: '2024-01-01T01:05:00Z', user_id: 'a', device_id: 'd1' },
+			{ event: 'view', time: '2024-01-01T02:00:00Z', user_id: 'a' },
+			{ event: 'view', time: '2024-01-01T03:00:00Z', device_id: 'd2' },
+			{ event: 'view', time: '2024-01-01T04:00:00Z', device_id: 'd3' },
+		];
+		const toValues = (rows) => rows.map((row) => row.value);
+		expect(toValues(computeWarehouseSourceRows(events, { source: { event: ['view'], measure: 'users' }, grain: 'day' }))).toEqual([3]);
+		expect(toValues(computeWarehouseSourceRows(events, { source: { event: ['view'], measure: 'dau' }, grain: 'day' }))).toEqual([3]);
+	});
+
 	test('computeWarehouseStats measures additive shape, gaps, seam jump, and empty numeric cells independently of the materializer', () => {
 		const rows = [
 			{ date: '2024-01-01', bookings: 8 },
@@ -742,6 +755,29 @@ describe('WarehouseAccumulator', () => {
 		expect(Array.from(acc.getCell('dau_metric', '', week).userDays).sort()).toEqual(['a|2024-01-17', 'b|2024-01-18']);
 		expect(Array.from(acc.getCell('dau_metric', '', week).mUserDays).sort()).toEqual(['a|2024-01-18']);
 		expect(JSON.stringify(events)).toBe(before);
+	});
+
+	test('users and dau count resolved identities: user_id, else the stitched user of the device, else device_id', () => {
+		const specs = [
+			spec({ name: 'users_metric', grain: 'week', source: { event: ['view'], minus: [], measure: 'users', property: null, where: null, groupBy: [] } }),
+			spec({ name: 'dau_metric', grain: 'week', source: { event: ['view'], minus: [], measure: 'dau', property: null, where: null, groupBy: [] } }),
+		];
+		const acc = new WarehouseAccumulator(specs, { FIXED_BEGIN: fixedBegin, FIXED_NOW: fixedNow });
+		const anon = (event, time, device_id) => ({ event, time, device_id });
+		// User a: anonymous view on d1, then the stitch (user_id + d1), then an authed view.
+		acc.ingest([
+			anon('view', '2024-01-17T09:00:00Z', 'd1'),
+			{ event: 'signup', time: '2024-01-17T09:05:00Z', user_id: 'a', device_id: 'd1' },
+			{ event: 'view', time: '2024-01-18T10:00:00Z', user_id: 'a' },
+		]);
+		// Two anonymous visitors who never stitch.
+		acc.ingest([anon('view', '2024-01-17T10:00:00Z', 'd2'), anon('view', '2024-01-18T10:00:00Z', 'd2')]);
+		acc.ingest([anon('view', '2024-01-17T11:00:00Z', 'd3')]);
+
+		expect(Array.from(acc.getCell('users_metric', '', week).users).sort()).toEqual(['a', 'd2', 'd3']);
+		expect(Array.from(acc.getCell('dau_metric', '', week).userDays).sort()).toEqual([
+			'a|2024-01-17', 'a|2024-01-18', 'd2|2024-01-17', 'd2|2024-01-18', 'd3|2024-01-17',
+		]);
 	});
 
 	test('applies where filters and computes empty cells on demand', () => {

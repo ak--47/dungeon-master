@@ -170,6 +170,15 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   showed a `user_id` (on 238 exposures); now 0. Authed users' exposures merge
   into the user at the stitch through ID merge. Output shift: identity on
   first-funnel exposures for born users; no RNG draws change.
+- Count anonymous traffic in warehouse `users` and `dau` measures. Both keyed
+  on `event.user_id`, so every device-only event fell into one `''` identity.
+  They now count the identity Mixpanel ID merge counts: `user_id`, else the
+  user whose stitch event carried the `device_id`, else the `device_id`. The
+  offline verifier (`computeWarehouseSourceRows`) uses the same rule. Repro,
+  1,000 born users whose `Landing` events are all pre-auth: a monthly `users`
+  metric read 1 against 1,000 resolved identities, `dau` 0.97 against 32.26;
+  now 1,000 and 32.26. Output shift: `users` and `dau` warehouse tables whose
+  source events include device-only rows; events are unchanged.
 
 ### Added
 
@@ -199,6 +208,7 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   (0.45 in `avgActiveDaysPerUser` mode). It used to compare with one prior week
   at 0.7, whose day-to-day noise (sd about 0.24) failed decline runs by chance.
   "Today" is always rough in a streaming dataset; stories live in the history.
+
 
 
 

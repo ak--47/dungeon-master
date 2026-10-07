@@ -2537,7 +2537,14 @@ export interface WarehouseMetricSource {
     event: string | string[];
     /** Source event names whose bucketed measure is subtracted from the series. */
     minus?: string | string[];
-    /** Per-bucket measure. Default: `'count'`. */
+    /**
+     * Per-bucket measure. Default: `'count'`.
+     * `'users'` counts distinct identities per bucket; `'dau'` averages distinct
+     * identity-days per day of the bucket. The identity is resolved the way Mixpanel
+     * ID merge counts users: `user_id` when present, else the user whose stitch event
+     * (an event with both ids) carried the `device_id`, else the `device_id` itself, so
+     * anonymous visitors count once per device. Events with neither id share one `''` identity.
+     */
     measure?: 'count' | 'sum' | 'avg' | 'dau' | 'users';
     /** Required when `measure` is `'sum'` or `'avg'`. */
     property?: string;
