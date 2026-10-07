@@ -179,6 +179,13 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   metric read 1 against 1,000 resolved identities, `dau` 0.97 against 32.26;
   now 1,000 and 32.26. Output shift: `users` and `dau` warehouse tables whose
   source events include device-only rows; events are unchanged.
+- Accept a warehouse `source.groupBy` (or `source.property`) key that the
+  engine stamps on every source event: a `stickyEventProps` key, or a group
+  key with no `events` list (or one that lists every source event). The
+  validator only checked each source event's `properties` and `superProps`, so
+  a `userProps` + `stickyEventProps` key threw although every event carried
+  it. A group key scoped to other events, or a `userProps` key that is not
+  sticky, still throws. Output shift: none; configs that threw now run.
 
 ### Added
 
@@ -208,6 +215,7 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   (0.45 in `avgActiveDaysPerUser` mode). It used to compare with one prior week
   at 0.7, whose day-to-day noise (sd about 0.24) failed decline runs by chance.
   "Today" is always rough in a streaming dataset; stories live in the history.
+
 
 
 

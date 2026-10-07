@@ -797,9 +797,9 @@ and `groupBy` all change how many rows a table emits.
 | `source.event` | required | string or string[] of declared source events |
 | `source.minus` | `[]` | string or string[] of declared subtractive events |
 | `source.measure` | `'count'` | `'count'`, `'sum'`, `'avg'`, `'dau'`, `'users'`; point-in-time forbids `'avg'` and `'dau'` |
-| `source.property` | `null` | required for `'sum'` and `'avg'`; must be declared on every source event or in `superProps` |
+| `source.property` | `null` | required for `'sum'` and `'avg'`; must be declared on every source event, in `superProps`, in `stickyEventProps`, or be a group key stamped on every source event |
 | `source.where` | `null` | optional function over flat event rows |
-| `source.groupBy` | `[]` | up to 2 keys, each declared on every source event or in `superProps`; observed cardinality above 50 warns |
+| `source.groupBy` | `[]` | up to 2 keys, each declared on every source event, in `superProps`, in `stickyEventProps`, or a group key stamped on every source event; observed cardinality above 50 warns |
 | `timeColumn` | `'date'` | valid JS identifier; becomes the ordered time axis in rows and manifest |
 | `valueColumn` | `'value'` | valid JS identifier |
 | `baseline` | `0` | number `>= 0`; used only for point-in-time metrics, ignored on additive |

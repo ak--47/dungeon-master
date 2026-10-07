@@ -342,7 +342,8 @@ before dividing by `tickCount - 1`. Declare every property and dimension here.
 Warehouse sources reference only user `events[]`, including names in both
 `source.event` (plus) and optional `source.minus`. A `standaloneEvents` stream
 cannot be a warehouse source. Declare `source.property` and every `source.groupBy`
-key on every plus and minus event, or in `superProps`. `sum` and `avg` require
+key on every plus and minus event, in `superProps`, in `stickyEventProps`, or as a
+group key stamped on every source event. `sum` and `avg` require
 `source.property`; point-in-time disallows `avg` and `dau`. Use at most two group
 keys. `sparse: true` applies only to point-in-time metrics.
 

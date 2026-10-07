@@ -151,6 +151,36 @@ describe('validateWarehouseMetrics', () => {
 		expect(fromSuperProps.warehouseMetrics[0].source.groupBy).toEqual(['workspace_id']);
 	});
 
+	test('groupBy and property accept keys the engine stamps on every event: stickyEventProps and group keys', () => {
+		const sticky = validateWarehouseMetrics({
+			...baseConfig(),
+			userProps: { tier: ['gold', 'silver'] },
+			stickyEventProps: ['tier'],
+			warehouseMetrics: [metric({ source: { event: ['purchase', 'signup'], measure: 'users', groupBy: 'tier' } })],
+		});
+		expect(sticky.warehouseMetrics[0].source.groupBy).toEqual(['tier']);
+
+		const allEventsGroup = validateWarehouseMetrics({
+			...baseConfig(),
+			groupKeys: [['company_id', 10], { key: 'team_id', cardinality: 5, events: ['purchase', 'signup'] }],
+			warehouseMetrics: [metric({ source: { event: ['purchase', 'signup'], groupBy: ['company_id', 'team_id'] } })],
+		});
+		expect(allEventsGroup.warehouseMetrics[0].source.groupBy).toEqual(['company_id', 'team_id']);
+
+		// A group key scoped to other events is not guaranteed on the source events.
+		expect(() => validateWarehouseMetrics({
+			...baseConfig(),
+			groupKeys: [['team_id', 5, ['purchase']]],
+			warehouseMetrics: [metric({ source: { event: ['purchase', 'signup'], groupBy: 'team_id' } })],
+		})).toThrow(/groupBy "team_id"/);
+		// A userProps key that is not sticky is not on events.
+		expect(() => validateWarehouseMetrics({
+			...baseConfig(),
+			userProps: { tier: ['gold', 'silver'] },
+			warehouseMetrics: [metric({ source: { event: ['purchase'], groupBy: 'tier' } })],
+		})).toThrow(/groupBy "tier"/);
+	});
+
 	test('forbids point-in-time avg and dau measures', () => {
 		expect(() => validateWarehouseMetrics({
 			...baseConfig(),

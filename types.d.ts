@@ -2550,7 +2550,12 @@ export interface WarehouseMetricSource {
     property?: string;
     /** Optional row filter over flat event records. */
     where?: ((event: Record<string, any>) => boolean) | null;
-    /** Optional dimension columns copied from source event or super prop keys. */
+    /**
+     * Optional dimension columns (at most 2). Each key must be on every source event:
+     * declared in every source event's `properties`, in `superProps`, in
+     * `stickyEventProps`, or a group key with no `events` list (or one listing every
+     * source event). `property` follows the same rule.
+     */
     groupBy?: string | string[];
 }
 
