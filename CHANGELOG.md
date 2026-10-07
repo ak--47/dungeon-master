@@ -214,6 +214,14 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   dropped before the stitch is unchanged: anonymous, device-only standalone
   events, profile `_drop`. Output shift: dungeons whose first funnel has steps
   after the auth step.
+- Keep a user's devices in one platform family. With `avgDevicePerUser > 1`
+  each device drew its OS independently, so with iOS + Android devices and
+  `avgDevicePerUser: 1.5` 24.8% of users had both an iPhone and an Android
+  phone. An extra device is now a phone or tablet of the primary device's
+  mobile OS, or a desktop; a desktop primary gets one mobile OS per user. About
+  6% of extra devices still draw from the whole pool. Same repro: 1.3% (0.2%
+  with desktops on, was 4.9%). Still a seeded hash, no RNG draw. Output shift:
+  device fields of extra devices (`avgDevicePerUser > 1`).
 
 ### Added
 

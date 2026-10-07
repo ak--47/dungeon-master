@@ -298,6 +298,10 @@ export interface Dungeon {
      * are sticky per user. A user with several devices can show several models
      * (one per device). Values are a seeded hash of the device key (no RNG
      * draw), so the per-session device pass and engine clones stay consistent.
+     * A user's extra devices share the primary device's platform family: a phone
+     * or tablet of the primary's mobile OS, or a desktop (a desktop primary gets
+     * one mobile OS per user). About 6% of extra devices draw from the whole pool,
+     * so cross-OS mobile pairs are rare, not absent.
      * `radio` stays per event, from the device's radio list. Event or super
      * props of the same name, and `event`/`everything` hook edits, win. A hook
      * that changes an event's `device_id` owns the device fields on that event.
