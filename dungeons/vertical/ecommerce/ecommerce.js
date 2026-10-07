@@ -17,8 +17,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             year) with free US shipping on every order. Standard US orders
  *             ship free above a threshold ($75 until 2026-08-04, $50 from
  *             2026-08-05); Canada and the UK pay a flat $24.95.
- * SCALE:      10,000 users (3,994 create an account inside the window),
- *             1.18M events, 11,340 orders from 5,753 buyers, 120 days
+ * SCALE:      10,000 users (4,036 create an account inside the window),
+ *             1.22M events, 11,536 orders from 5,868 buyers, 120 days
  *             (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  category browsed → product viewed → product added to cart →
  *             cart viewed → checkout started → shipping info entered →
@@ -65,7 +65,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * Every later event carries user_id. Client events also carry device_id;
  * server-side events (order shipped, order delivered) carry user_id only.
  * Users who joined before June 4 have no account created event. Every
- * anonymous event resolves to a user through the device account created links.
+ * anonymous event resolves to a user through the device account created links,
+ * except a visit in the last minutes of Oct 1 whose signup falls after the
+ * window end (1 event in the final run).
  *
  * DESIGN NOTES:
  * - Products: one seeded catalog (126 products). The hook stamps product_id,
@@ -161,15 +163,16 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H5. CARRIER HUB DISRUPTION → FEWER REPEAT ORDERS
  *     (everything + warehouse carrier_performance_daily)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: Northline Parcel's hub disruption (2026-07-20 to 2026-08-09) adds
+ * PATTERN: Northline Parcel's hub disruption (2026-07-06 to 2026-08-09) adds
  *   5-8 days to every Northline parcel shipped in it. A US customer whose
- *   first parcel shipped on those days went with Northline starts no cart in
- *   the 45 days after it ships 45% of the time, so their 45-day repeat rate
+ *   first parcel shipped on those days went with Northline places no order in
+ *   the 45 days after it ships 45% of the time (carts that start, or would
+ *   complete, in those 45 days are dropped), so their 45-day repeat rate
  *   (an order completed within 45 days of that shipment) is 0.55x that of US
  *   customers whose first parcel on those days shipped with Bluejay or
  *   ParcelPost. The warehouse table marks Northline "disrupted" on those days.
  * MIXPANEL: Funnels, order shipped → order completed, Uniques, 45-day
- *   conversion window, date range Jul 20 - Aug 9 (the disrupted days in
+ *   conversion window, date range Jul 6 - Aug 9 (the disrupted days in
  *   carrier_performance_daily.service_status), user property ship_country =
  *   US, breakdown shipping_carrier (step 1). Each customer enters at their
  *   first order shipped in the range.
@@ -248,39 +251,45 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation          | Expected | Measured
  * -----|------------------------------------------------|---------------------|----------|---------
- * H1   | share just below bar, standard / Pine Plus     | 1 − BUMP_SHARE      | 0.40     | 0.419 (24.5% vs 58.5%)
+ * H1   | share just below bar, standard / Pine Plus     | 1 − BUMP_SHARE      | 0.40     | 0.395 (23.8% vs 60.3%)
  * H1   | US orders with wrong shipping charge           | exact               | 0        | 0
- * H2   | per-cart conversion One-Page / Control         | ONE_PAGE_CONV_MULT  | 1.20     | 1.209 (37.8% vs 31.3%)
- * H2   | median cart → order time One-Page / Control    | ONE_PAGE_TTC_MULT   | 0.80     | 0.799 (28.7 vs 35.9 min)
- * H2   | average order value One-Page / Control (null)  | unchanged           | 1.00     | 0.969
- * H3   | per-cart conversion CA+GB / US, before Sep 1   | 1 − INTL_LOSS       | 0.55     | 0.536 (18.0% vs 33.6%)
- * H3   | per-cart conversion CA / US, from Sep 1        | DDP pilot           | 1.00     | 1.082 (41.1% vs 38.0%)
- * H4   | median cart → order time Pine Plus / standard  | PLUS_TTC_MULT       | 0.50     | 0.501 (17.6 vs 35.1 min)
- * H4   | per-cart conversion Pine Plus / standard       | unchanged           | 1.00     | 1.029
- * H5   | 45-day repeat rate, Northline / other US       | 1 − REPEAT_LOSS     | 0.55     | 0.501 (24.8% vs 49.5%)
- * H5   | extra delivery days, disrupted Northline       | mean(5, 8)          | 6.5      | 6.50
- * H6   | spend per signup TikTok / Google Shopping      | 21 / 58             | 0.362    | 0.364 ($21.10 vs $57.99)
- * H6   | 30-day first-order rate TikTok / Google        | 0.3 / 1.0           | 0.30     | 0.263 (8.8% vs 33.5%, STRONG)
- * H7   | per-cart conversion sale / 14 days before (US) | LABOR_DAY_CONV_MULT | 1.50     | 1.480 (53.4% vs 36.1%)
- * H7   | category browses per day, sale / same weekdays | LABOR_DAY_TRAFFIC   | 1.30     | 1.298
+ * H2   | per-cart conversion One-Page / Control         | ONE_PAGE_CONV_MULT  | 1.20     | 1.194 (36.9% vs 30.9%)
+ * H2   | median cart → order time One-Page / Control    | ONE_PAGE_TTC_MULT   | 0.80     | 0.798 (28.8 vs 36.0 min)
+ * H2   | avg order subtotal One-Page / Control (null)   | unchanged           | 1.00     | 0.986
+ * H3   | per-cart conversion CA+GB / US, before Sep 1   | 1 − INTL_LOSS       | 0.55     | 0.549 (18.1% vs 33.1%)
+ * H3   | per-cart conversion CA / US, from Sep 1        | DDP pilot           | 1.00     | 0.982 (37.0% vs 37.7%)
+ * H4   | median cart → order time Pine Plus / standard  | PLUS_TTC_MULT       | 0.50     | 0.502 (17.7 vs 35.3 min)
+ * H4   | per-cart conversion Pine Plus / standard       | unchanged           | 1.00     | 1.030
+ * H5   | 45-day repeat rate, Northline / other US       | 1 − REPEAT_LOSS     | 0.55     | 0.542 (25.3% vs 46.7%)
+ * H5   | extra delivery days, disrupted Northline       | mean(5, 8)          | 6.5      | 6.51
+ * H6   | spend per signup TikTok / Google Shopping      | 21 / 58             | 0.362    | 0.349 ($20.08 vs $57.50)
+ * H6   | 30-day first-order rate TikTok / Google        | 0.3 / 1.0           | 0.30     | 0.240 (8.7% vs 36.2%, STRONG)
+ * H7   | per-cart conversion sale / 14 days before (US) | LABOR_DAY_CONV_MULT | 1.50     | 1.467 (51.9% vs 35.4%)
+ * H7   | category browses per day, sale / same weekdays | LABOR_DAY_TRAFFIC   | 1.30     | 1.306
  * H7   | orders with code mismatched to sale dates      | exact               | 0        | 0
- * H8   | day-45 retention, 3+ saves / none              | ≥ 1/(1 − 0.55)      | ≥ 2.22   | 2.603 (62.0% vs 23.8%, STRONG)
- * H9   | conversion with / without visualizer (US)      | VIZ_CONV_MULT       | 1.40     | 1.399 (41.7% vs 29.9%)
- * H9   | visualizer share of carts after the ramp       | 0.6 × 0.75          | 0.45     | 0.446
+ * H8   | day-45 retention, 3+ saves / none              | ≥ 1/(1 − 0.55)      | ≥ 2.22   | 2.475 (60.8% vs 24.6%, STRONG)
+ * H9   | conversion with / without visualizer (US)      | VIZ_CONV_MULT       | 1.40     | 1.346 (41.6% vs 30.9%)
+ * H9   | visualizer share of carts after the ramp       | 0.6 × 0.75          | 0.45     | 0.450
  * H9   | visualizer events before launch                | exact               | 0        | 0
- * H10  | bedding adds per view, ratio of ratios         | 1 − STOCKOUT_SHARE  | 0.60     | 0.593
+ * H10  | bedding adds per view, ratio of ratios         | 1 − STOCKOUT_SHARE  | 0.60     | 0.568
  * H10  | warehouse bedding in_stock_rate in stockout    | 1 − STOCKOUT_SHARE  | 0.60     | 0.602
  * ═════════════════════════════════════════════════════════════════════════
  *
  * H8 is a knob floor: heavier shoppers save more and are likelier to show any
  * shopper action in the day-45 week even without the dark cut, so the ratio
  * lands above 1/(1 − 0.55) and grades STRONG. An order in the first 14 days
- * is a weak signal (1.09x, z 1.3), far below the wishlist effect. H6's
- * first-order read rests on 42 TikTok buyers; its assertion uses the knob as
- * target with a knob-derived ceiling (half the effect). H5's read rests on
- * 847 affected and 715 control customers (ratio SE about 7%). Robustness: two
- * alternate seeds graded every read NAILED except H6's first-order read once
- * (STRONG, 0.255); H5 read 0.559 and 0.592 there.
+ * is no signal (1.02x, z 0.4), far below the wishlist effect. H6's
+ * first-order read rests on 43 TikTok buyers (ratio SE about 16%); its
+ * assertion uses the knob as target with a knob-derived ceiling (half the
+ * effect) and grades STRONG on this seed. H5's read rests on 1,203 affected
+ * and 1,016 control customers (the 35-day disruption window; ratio SE about
+ * 5%). Robustness: two alternate seeds graded every read NAILED except H3's
+ * Canada-after read once (STRONG, 0.896) and H8 once (STRONG, 2.90); H5 read
+ * 0.575 and 0.555 there, H6's first-order read 0.288 and 0.302.
+ * Realism caveat: repeat levels run high for home goods DTC (45-day repeat
+ * about 47% for unaffected US customers, 1.97 orders per buyer in 120 days);
+ * lowering them shrinks the H1, H5, H7, and H10 cohorts below their floors at
+ * 10,000 users.
  */
 
 // ── SCALE ──
@@ -296,8 +305,8 @@ const chance = u.initChance(SEED);
 // ── TIMELINE (shared by hooks, stories, SQL, warehouse columns, guides) ──
 const CHECKOUT_TEST_START = "2026-07-15T00:00:00Z";   // "One-Page Checkout" A/B starts
 const VISUALIZER_LAUNCH = "2026-07-22T00:00:00Z";     // Room Visualizer launch
-const CARRIER_DISRUPTION_START = "2026-07-20T00:00:00Z"; // Northline Parcel hub disruption
-const CARRIER_DISRUPTION_END = "2026-08-10T00:00:00Z";   // exclusive (21 days)
+const CARRIER_DISRUPTION_START = "2026-07-06T00:00:00Z"; // Northline Parcel hub disruption
+const CARRIER_DISRUPTION_END = "2026-08-10T00:00:00Z";   // exclusive (35 days)
 const FREE_SHIP_CHANGE = "2026-08-05T00:00:00Z";      // free-shipping threshold $75 → $50
 const BEDDING_STOCKOUT_START = "2026-08-10T00:00:00Z"; // linen bedding stockout
 const BEDDING_STOCKOUT_END = "2026-08-31T00:00:00Z";   // exclusive (21 days)
@@ -637,8 +646,6 @@ function handleEverything(events, meta) {
 
 	// ── device-consistent platform and browser; location matches the profile ──
 	for (const e of events) {
-		// a world-event clone of the anonymous first visit that lands after signup is a signed-in browse
-		if (birthMs !== null && !e.user_id && T(e) > birthMs) e.user_id = uid;
 		if (e.os) {
 			const app = e.os === "iOS" || e.os === "iPadOS" ? "ios_app" : e.os === "Android" ? "android_app" : "web";
 			e.platform = app;
@@ -888,8 +895,12 @@ function handleEverything(events, meta) {
 		if (ref.carrier === DISRUPTED_CARRIER && salt(uid, "repeat-loss") < REPEAT_LOSS) {
 			for (const unit of unitList) {
 				if (unit.dropped || unit === ref.unit) continue;
+				// no order lands in the 45 days after the shipment: drop carts that start
+				// in it and carts started before the shipment that would complete after it
 				const st = unitStart(unit);
-				if (st > ref.shipMs && st < ref.shipMs + REPEAT_WINDOW_DAYS * DAY_MS) dropUnit(unit, 0);
+				const o = unit.steps["order completed"];
+				const end = o ? T(o) : st;
+				if (end > ref.shipMs && st < ref.shipMs + REPEAT_WINDOW_DAYS * DAY_MS) dropUnit(unit, 0);
 			}
 		}
 	}
@@ -973,8 +984,13 @@ function handleWarehouse(row, meta) {
 		// carriers also move wholesale and marketplace parcels that never reach Mixpanel
 		const k = `${row.date}|${row.shipping_carrier}`;
 		const extra = (WHOLESALE_PARCELS[row.shipping_carrier] || 0) * jitter(`whp|${k}`, 0.45);
-		row.parcels_shipped = Math.round(row.parcels_shipped * jitter(`scan|${k}`, 0.06) + extra);
-		row.late_parcels = Math.round(row.parcels_shipped * (1 - row.on_time_rate));
+		row.parcels_shipped = Math.round(row.parcels_shipped * jitter(`scan|${k}`, 0.1) + extra);
+		// late count: the carrier's daily on-time rate applied to the day's parcels with
+		// seeded rounding of the remainder, so low-volume carriers show an occasional
+		// late parcel; the reported on-time share is then the day's actual share
+		const lateExact = row.parcels_shipped * (1 - row.on_time_rate);
+		row.late_parcels = Math.floor(lateExact) + (hashFloat(`late|${k}`) < lateExact - Math.floor(lateExact) ? 1 : 0);
+		row.on_time_rate = row.parcels_shipped > 0 ? Math.round((1 - row.late_parcels / row.parcels_shipped) * 1000) / 1000 : row.on_time_rate;
 		return row;
 	}
 	if (meta.metricName === "inventory_daily") {
@@ -1452,7 +1468,7 @@ SELECT membership AS grp, count(DISTINCT uid) AS user_count, count(*) AS carts, 
 FROM cc GROUP BY 1`;
 
 // H5: disrupted carrier-days come from the warehouse. Mixpanel Funnels, order
-// shipped (US, Jul 20 - Aug 9) → order completed, Uniques, 45-day window,
+// shipped (US, Jul 6 - Aug 9) → order completed, Uniques, 45-day window,
 // breakdown shipping_carrier of step 1: each customer enters at their first
 // order shipped on a disrupted day; affected = it shipped with the disrupted carrier.
 const H5_SQL = `WITH ${ID_CTE},
@@ -1650,7 +1666,7 @@ FROM ev WHERE event = 'order completed' AND ship_country = 'US'`,
 		id: "H5-carrier-disruption-repeat-orders",
 		hook: "H5",
 		archetype: "external-join",
-		narrative: `External-table join. Northline Parcel's hub disruption (${D(CARRIER_DISRUPTION_START)} to ${D(dayjs.utc(CARRIER_DISRUPTION_END).subtract(1, "day").toISOString())}) adds ${DISRUPTION_DELAY_DAYS[0]}-${DISRUPTION_DELAY_DAYS[1]} days to every Northline parcel shipped in it; the warehouse table carrier_performance_daily marks those carrier-days service_status = 'disrupted'. A US customer whose first parcel shipped on those days went with Northline starts no cart in the ${REPEAT_WINDOW_DAYS} days after it ships ${REPEAT_LOSS * 100}% of the time, so their ${REPEAT_WINDOW_DAYS}-day repeat-order rate (an order completed within ${REPEAT_WINDOW_DAYS} days of that shipment) is ${1 - REPEAT_LOSS} of US customers whose first parcel on those days shipped with another US carrier (Bluejay or ParcelPost; the carrier is assigned per order by hash, independent of the shopper; Northline ships US orders only, so the read stays within US customers). Read 2: disrupted Northline deliveries take ${(DISRUPTION_DELAY_DAYS[0] + DISRUPTION_DELAY_DAYS[1]) / 2} more days on average than other Northline deliveries.`,
+		narrative: `External-table join. Northline Parcel's hub disruption (${D(CARRIER_DISRUPTION_START)} to ${D(dayjs.utc(CARRIER_DISRUPTION_END).subtract(1, "day").toISOString())}) adds ${DISRUPTION_DELAY_DAYS[0]}-${DISRUPTION_DELAY_DAYS[1]} days to every Northline parcel shipped in it; the warehouse table carrier_performance_daily marks those carrier-days service_status = 'disrupted'. A US customer whose first parcel shipped on those days went with Northline places no order in the ${REPEAT_WINDOW_DAYS} days after it ships ${REPEAT_LOSS * 100}% of the time (carts that start, or would complete, in those days are dropped), so their ${REPEAT_WINDOW_DAYS}-day repeat-order rate (an order completed within ${REPEAT_WINDOW_DAYS} days of that shipment) is ${1 - REPEAT_LOSS} of US customers whose first parcel on those days shipped with another US carrier (Bluejay or ParcelPost; the carrier is assigned per order by hash, independent of the shopper; Northline ships US orders only, so the read stays within US customers). Read 2: disrupted Northline deliveries take ${(DISRUPTION_DELAY_DAYS[0] + DISRUPTION_DELAY_DAYS[1]) / 2} more days on average than other Northline deliveries.`,
 		mixpanelReport: { type: "Funnels + warehouse", steps: ["order shipped", "order completed"], counting: "uniques", window: `${REPEAT_WINDOW_DAYS} days`, dates: `${D(CARRIER_DISRUPTION_START)} → ${D(dayjs.utc(CARRIER_DISRUPTION_END).subtract(1, "day").toISOString())}`, filter: "user property ship_country = US", breakdown: "shipping_carrier (step 1)", join: "carrier_performance_daily.service_status" },
 		assertions: [
 			{
@@ -1724,7 +1740,7 @@ FROM ev WHERE event = 'order completed' AND ship_country = 'US'`,
 			{
 				breakdown: { type: "duckdb", sql: H8_SQL },
 				select: { a: { where: { grp: "three_plus" } }, z: { where: { grp: "none" } } },
-				expect: { metric: "a.retention / z.retention", op: ">=", target: 1 / (1 - DARK_SHARE_BY_SAVES[0]), floor: 0.9 / (1 - DARK_SHARE_BY_SAVES[0]) },
+				expect: { metric: "a.retention / z.retention", op: ">=", target: 1 / (1 - DARK_SHARE_BY_SAVES[0]), floor: 1 / (1 - DARK_SHARE_BY_SAVES[0]) },
 				minCohort: 200,
 			},
 		],

@@ -29,7 +29,7 @@ Marlowe & Pine is a direct-to-consumer home goods brand founded in 2019 and base
 
 - **US standard shipping** is free on orders whose subtotal is at or above the free-shipping threshold, and $7.95 below it. The threshold was $75 until August 4 and $50 from August 5 (see the timeline). The threshold applies to the merchandise subtotal before discounts.
 - **Pine Plus** is a paid membership: $49 a year for free US shipping on every order, early access to new collections, and 10% back in Pine points. About a quarter of active customers are members. Membership is recorded on the profile and on every event (`membership`); it did not change for anyone during the window.
-- **Canada and the UK** pay a flat $24.95 shipping fee on every order, members included. Duties and import taxes apply to international orders (see the timeline for how they were shown at checkout).
+- **Canada and the UK** pay a flat $24.95 shipping fee on every order, members included. Duties and import taxes apply to international orders.
 - **Carriers.** The fulfillment system picks the carrier for each US parcel by rate and capacity across three contracted carriers: **Northline Parcel** (regional ground, our largest contract), **Bluejay Express**, and **ParcelPost** (the national postal service). Canadian orders go by **Maple Courier** and UK orders by **Albion Parcel**. We promise delivery within 5 days of shipping in the US and 12 days for Canada and the UK.
 
 ## Customers

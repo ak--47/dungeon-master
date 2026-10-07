@@ -26,7 +26,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 
 Three tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). Days with no activity have a row with zeros. They join to events on the UTC date and the named dimension.
 
-In the warehouse, numeric columns are loaded as FLOAT64 (shown as FLOAT below). Count columns (clicks, impressions, purchases, parcels, units, SKUs) always hold whole numbers, and raw file exports show them as integers.
+In the warehouse, count columns (clicks, impressions, purchases, parcels, units, SKUs) are loaded as INT64 (shown as INTEGER below); money, rates, and averages are FLOAT64 (shown as FLOAT).
 
 ### `marketing_spend_daily`
 
@@ -37,9 +37,9 @@ Daily paid media cost by channel, from the ad platforms' billing exports. Each c
 | `date` | DATE | UTC day | Spend day. |
 | `acquisition_channel` | STRING | — | `meta_ads`, `google_shopping`, or `tiktok_ads`. Matches `acquisition_channel` on `account created` and on profiles. |
 | `spend_usd` | FLOAT | USD | Media spend billed for the day. |
-| `clicks` | FLOAT | count | Ad clicks reported by the platform. |
-| `impressions` | FLOAT | count | Ad impressions reported by the platform. |
-| `platform_attributed_purchases` | FLOAT | count | Purchases the ad platform credits to its ads that day, with its own attribution (including view-through). Platforms count differently from Mixpanel and from each other. |
+| `clicks` | INTEGER | count | Ad clicks reported by the platform. |
+| `impressions` | INTEGER | count | Ad impressions reported by the platform. |
+| `platform_attributed_purchases` | INTEGER | count | Purchases the ad platform credits to its ads that day, with its own attribution (including view-through). Platforms count differently from Mixpanel and from each other. |
 
 Caveats: organic search, direct, and email/referral have no media spend and are not in this table. Brand, creator fees outside the ad platforms, and wholesale marketing are booked elsewhere. Use Mixpanel signups and buyers, not `platform_attributed_purchases`, for CAC.
 
@@ -51,10 +51,10 @@ Daily service levels by parcel carrier, from the carriers' scan feeds and our we
 |---|---|---|---|
 | `date` | DATE | UTC day | Ship (hand-off) day. |
 | `shipping_carrier` | STRING | — | `northline`, `bluejay`, `parcelpost`, `maple_courier`, or `albion_parcel`. Matches `shipping_carrier` on `order shipped` and `order delivered`. |
-| `parcels_shipped` | FLOAT | count | Parcels handed to the carrier that day, including wholesale shipments to retail partners. |
-| `on_time_rate` | FLOAT | share 0-1 | Share of that day's parcels delivered within the carrier's service commitment, as the carrier reports it. |
+| `parcels_shipped` | INTEGER | count | Parcels handed to the carrier that day, including wholesale shipments to retail partners. |
+| `on_time_rate` | FLOAT | share 0-1 | Share of that day's parcels delivered within the carrier's service commitment, as the carrier reports it: 1 − `late_parcels` / `parcels_shipped`. On low-volume days (the international carriers hand over a few parcels a day) it moves in large steps. |
 | `avg_transit_days` | FLOAT | days | Average days from hand-off to delivery for that day's parcels, as the carrier reports it. |
-| `late_parcels` | FLOAT | count | `parcels_shipped` × (1 − `on_time_rate`), rounded. |
+| `late_parcels` | INTEGER | count | Parcels from that day that missed the carrier's service commitment, as the carrier reports it. |
 | `service_status` | STRING | — | The carrier's posted status for its network that day: `normal` or `disrupted`. |
 
 Caveats: wholesale parcels never appear in Mixpanel, so `parcels_shipped` runs higher than the count of `order shipped` and does not track it exactly day to day. Carriers measure their own commitment, which can differ from our customer promise (`on_time` on `order delivered`).
@@ -67,11 +67,11 @@ Daily stock position by product category, from the warehouse management system (
 |---|---|---|---|
 | `date` | DATE | UTC day | Snapshot day. |
 | `primary_category` | STRING | — | `bedding`, `bath`, `kitchen`, `dining`, `furniture`, `lighting`, `decor`, `outdoor`. Matches `primary_category` on `order completed` and `category` on product events. |
-| `units_shipped` | FLOAT | units | Units allocated to orders that day for this category: online orders (by order date) plus wholesale and retail-partner orders (partners place occasional bulk orders). |
-| `skus_active` | FLOAT | count | Sellable SKUs in the category (each product in each size and colorway). |
-| `skus_out_of_stock` | FLOAT | count | Active SKUs with zero sellable units at end of day. |
+| `units_shipped` | INTEGER | units | Units allocated to orders that day for this category: online orders (by order date) plus wholesale and retail-partner orders (partners place occasional bulk orders). |
+| `skus_active` | INTEGER | count | Sellable SKUs in the category (each product in each size and colorway). |
+| `skus_out_of_stock` | INTEGER | count | Active SKUs with zero sellable units at end of day. |
 | `in_stock_rate` | FLOAT | share 0-1 | 1 − `skus_out_of_stock` / `skus_active`. |
-| `units_on_hand` | FLOAT | units | Sellable units on hand at end of day. |
+| `units_on_hand` | INTEGER | units | Sellable units on hand at end of day. |
 
 Caveats: Mixpanel events carry no stock information; use this table for stock questions. `units_shipped` counts units by the order's first-item category, like `primary_category`.
 
