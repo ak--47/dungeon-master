@@ -1,167 +1,346 @@
--- ============================================================
--- real-estate.js — v1.6 human-inspection queries (DuckDB)
+-- Keystead Homes (real-estate vertical): story and eval queries
 --
--- Every query is keyed to a story id in real-estate.js's `stories` export;
--- the machine-checked verdicts come from:
---   node scripts/verify-stories.mjs dungeons/vertical/real-estate/real-estate.js --data-prefix verify-real-estate
--- Generate first:
+-- Generate first (repo root):
 --   node scripts/verify-runner.mjs dungeons/vertical/real-estate/real-estate.js verify-real-estate
--- Run this file:
+-- Run:
 --   duckdb -c ".read dungeons/vertical/real-estate/real-estate.sql"
+-- Against another export (plain or gzipped):
+--   duckdb -c "SET VARIABLE data_prefix='<dir>/real-estate'" -c ".read real-estate.sql"
 --
--- NOTE: this dungeon uses a LITERAL historical window (datasetStart
--- 2026-01-01 → datasetEnd 2026-05-01, no forward shift), so
--- day_idx = date_diff('day', DATE '2026-01-01', t::DATE) matches the
--- hook's day offsets exactly. H10's TTC-by-tier read is emulator-only
--- (timeToConvert in the stories) — greedy SQL pairing can't isolate the
--- funnel-instance the hook stretched, so there is no SQL twin here.
--- ============================================================
+-- Every timestamp is UTC. Sections: -- STORY H<n> (one per hook in real-estate.js)
+-- and -- EVAL Q<n> (one per question in eval/real-estate.eval.md).
 
--- ── identity-resolution prelude ─────────────────────────────
--- avgDevicePerUser: 2 + 'account created' is both isAuthEvent and
--- isFirstEvent, so every user auths on their very first event; the
--- device-pool resolve is belt-and-braces for any device-only edge.
-CREATE OR REPLACE VIEW users AS
-SELECT * FROM read_json_auto('data/verify-real-estate-USERS*.json', sample_size=-1, union_by_name=true);
+SET VARIABLE data_prefix = COALESCE(getvariable('data_prefix'), 'data/verify-real-estate');
 
-CREATE OR REPLACE VIEW device_map AS
--- profiles store the device pool under the legacy "anonymousIds" key
-SELECT unnest("anonymousIds") AS device_id, distinct_id FROM users;
+-- ── prelude: data, identity, warehouse ────────────────────────────────────
+CREATE OR REPLACE TEMP TABLE raw_events AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-EVENTS*.json*', sample_size=-1, union_by_name=true);
 
-CREATE OR REPLACE VIEW ev AS
--- ::VARCHAR casts — user_id sniffs as UUID, device_id as VARCHAR; DuckDB
--- refuses to coalesce mixed types
-SELECT coalesce(m.distinct_id::VARCHAR, e.user_id::VARCHAR, e.device_id::VARCHAR) AS uid,
-       e.time::TIMESTAMP AS t,
-       date_diff('day', DATE '2026-01-01', e.time::TIMESTAMP::DATE) AS day_idx,
-       e.*
-FROM read_json_auto('data/verify-real-estate-EVENTS*.json', sample_size=-1, union_by_name=true) e
-LEFT JOIN device_map m ON e.device_id = m.device_id;
+CREATE OR REPLACE TEMP TABLE users AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-USERS*.json*', sample_size=-1, union_by_name=true);
 
--- Per-user aggregates. Output-cohort classification is exact for the
--- behavioral cohorts below: H8 (cold lead) classifies after all first-14d
--- view/save mutations are in the array, H9's view count is untouched by
--- later hooks, and H3's first-7d saved-search events are never deleted.
-CREATE OR REPLACE VIEW pu AS
-SELECT e.uid, min(e.t) AS first_t, max(e.t) AS last_t,
-  count(*) AS total_ev,
-  count(*) FILTER (WHERE event = 'property viewed') AS views,
-  count(*) FILTER (WHERE event = 'offer submitted') AS offers,
-  count(*) FILTER (WHERE event = 'property listed') AS listings,
-  count(*) FILTER (WHERE event = 'property sold') AS solds,
-  count(*) FILTER (WHERE event = 'virtual tour') AS vtours,
-  count(*) FILTER (WHERE event = 'in-person tour') AS iptours,
-  count(*) FILTER (WHERE event = 'mortgage pre-approval') AS preapps
-FROM ev e GROUP BY 1;
+-- Identity: a device belongs to the shopper seen with it on any event that
+-- carries both ids ("account created" stitches the anonymous browsing before
+-- signup). Server-side events carry user_id only. uid = resolved shopper.
+CREATE OR REPLACE TEMP TABLE dmap AS
+SELECT device_id, min(user_id::VARCHAR) AS mapped
+FROM raw_events WHERE user_id IS NOT NULL AND device_id IS NOT NULL GROUP BY 1;
 
-CREATE OR REPLACE VIEW puu AS
-SELECT p.*, u.agent_tier, u.user_type, u.pre_approval_status,
-  EXISTS (SELECT 1 FROM ev s WHERE s.uid = p.uid AND s.event = 'saved search created'
-          AND s.t < p.first_t + INTERVAL '7 days') AS saver,
-  EXISTS (SELECT 1 FROM ev v WHERE v.uid = p.uid AND v.event = 'property viewed'
-          AND v.t < p.first_t + INTERVAL '14 days') AS viewed14,
-  EXISTS (SELECT 1 FROM ev sv WHERE sv.uid = p.uid AND sv.event = 'property saved'
-          AND sv.t < p.first_t + INTERVAL '14 days') AS saved14,
-  (p.vtours >= 1 AND p.iptours >= 1) AS dual_tour,
-  (p.preapps >= 1) AS preapproved
-FROM pu p JOIN users u ON p.uid = u.distinct_id::VARCHAR;
+CREATE OR REPLACE TEMP TABLE ev AS
+SELECT coalesce(e.user_id::VARCHAR, m.mapped) AS uid, e.time::TIMESTAMP AS t, e.*
+FROM raw_events e LEFT JOIN dmap m ON e.device_id = m.device_id;
 
+CREATE OR REPLACE TEMP TABLE wh_spend AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-marketing_spend_daily.json*', sample_size=-1, union_by_name=true);
+CREATE OR REPLACE TEMP TABLE wh_rates AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-mortgage_rate_sheet_daily.json*', sample_size=-1, union_by_name=true);
+CREATE OR REPLACE TEMP TABLE wh_inventory AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-market_inventory_daily.json*', sample_size=-1, union_by_name=true);
 
--- ── H1-spring-season: offer_price ×2.5 + tour duration ×3, days 30-60 ──
-SELECT 'H1 offer price spring vs outside (expect ~2.6x)' AS q;
-SELECT CASE WHEN day_idx BETWEEN 30 AND 59 THEN 'spring' ELSE 'outside' END AS zone,
-  count(*) AS n, round(avg(offer_price), 0) AS avg_price, round(median(offer_price), 0) AS med_price
-FROM ev WHERE event = 'offer submitted' GROUP BY 1;
+-- conventional 30-yr rate by day; rate bands used by H1/H3
+CREATE OR REPLACE TEMP TABLE conv_rate AS
+SELECT date::DATE AS d, note_rate_pct AS rate,
+  CASE WHEN note_rate_pct < 6.40 THEN 'base' WHEN note_rate_pct >= 6.95 THEN 'high' ELSE 'mid' END AS band
+FROM wh_rates WHERE loan_type = 'conventional';
 
-SELECT 'H1 tour duration spring vs outside (expect ~2.65x — H3 clone leak dilutes the 3x knob)' AS q;
-SELECT CASE WHEN day_idx BETWEEN 30 AND 59 THEN 'spring' ELSE 'outside' END AS zone,
-  count(*) AS n, round(avg(duration_mins), 2) AS avg_dur
-FROM ev WHERE event = 'tour scheduled' GROUP BY 1;
+-- completed tours with the first offer on the same listing within 14 days
+-- (Funnels: tour completed → offer submitted, Totals, hold listing_id, 14-day window)
+CREATE OR REPLACE TEMP TABLE tour_offers AS
+WITH tc AS (SELECT uid, listing_id, t AS t0, buyer_preapproved AS pa, booking_type FROM ev WHERE event = 'tour completed'),
+os AS (SELECT uid, listing_id, min(t) AS t1 FROM ev WHERE event = 'offer submitted' GROUP BY 1, 2)
+SELECT tc.*, r.rate, r.band, os.t1,
+  coalesce(os.t1 >= tc.t0 AND os.t1 < tc.t0 + INTERVAL 14 DAY, false) AS conv,
+  date_diff('second', tc.t0, os.t1) / 3600.0 AS hours
+FROM tc JOIN conv_rate r ON r.d = tc.t0::DATE
+LEFT JOIN os ON os.uid = tc.uid AND os.listing_id = tc.listing_id;
 
--- ── H2-rate-shock: mortgage_rate pinned 7.5 days 75-89; offers -45% post-75 ──
-SELECT 'H2 rate pin (shock min=max=7.5; outside ~6.35)' AS q;
-SELECT CASE WHEN day_idx BETWEEN 75 AND 88 THEN 'shock' ELSE 'outside' END AS zone,
-  count(*) AS n, round(avg(mortgage_rate), 4) AS avg_rate, min(mortgage_rate) AS mn, max(mortgage_rate) AS mx
-FROM ev WHERE event = 'mortgage pre-approval' GROUP BY 1;
+SELECT 'prelude' AS section, (SELECT count(*) FROM ev) AS events, (SELECT count(*) FROM users) AS profiles,
+  (SELECT count(*) FROM ev WHERE uid IS NULL) AS unresolved_events,
+  (SELECT count(DISTINCT uid) FROM ev) AS shoppers_with_events;
 
-SELECT 'H2 offer share-of-volume pre vs post d75 (expect ratio ~0.77 = 0.55 knob x clone drift)' AS q;
-SELECT (day_idx > 75) AS post,
-  count(*) FILTER (WHERE event = 'offer submitted') AS offers, count(*) AS all_ev,
-  round(count(*) FILTER (WHERE event = 'offer submitted')::DOUBLE / count(*), 5) AS offer_share
-FROM ev GROUP BY 1 ORDER BY 1;
+-- ═════════════════════════════════════════════════════════════════════════
+-- STORY H1-rate-spike-cools-offers: offers per completed tour, high-rate days
+-- vs baseline days, standardized to the baseline buyer_preapproved mix (knob 0.70)
+SELECT 'H1' AS story, b.pa, b.tours AS base_tours, b.cr AS base_offer_rate, h.tours AS high_tours, h.cr AS high_offer_rate, h.cr / b.cr AS ratio
+FROM (SELECT pa, count(*) AS tours, avg(conv::INT) AS cr FROM tour_offers WHERE band = 'base' AND t0 < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 1) b
+JOIN (SELECT pa, count(*) AS tours, avg(conv::INT) AS cr FROM tour_offers WHERE band = 'high' AND t0 < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 1) h USING (pa)
+ORDER BY pa;
 
--- ── H3-saved-search-retention: savers cloned forward, non-savers cut post-d30 ──
-SELECT 'H3 events/user post-day-30 by saver (expect ~6-7x)' AS q;
-SELECT saver, count(*) AS n_users,
-  round(avg((SELECT count(*) FROM ev e WHERE e.uid = puu.uid AND e.day_idx > 30)), 2) AS ev_post30_pu
-FROM puu GROUP BY 1;
+WITH g AS (SELECT band, pa, count(*) AS tours, avg(conv::INT) AS cr FROM tour_offers WHERE t0 < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 1, 2)
+SELECT 'H1' AS story, sum(b.tours * h.cr) / sum(b.tours * b.cr) AS std_ratio_high_vs_base
+FROM g b JOIN g h ON h.pa = b.pa AND b.band = 'base' AND h.band = 'high';
 
-SELECT 'H3 active-in-April, born pre-March (expect savers ~0.98 vs non ~0.55)' AS q;
-SELECT saver, count(*) AS n_users, round(avg((last_t >= TIMESTAMP '2026-04-01')::INT), 4) AS active_apr
-FROM puu WHERE first_t < TIMESTAMP '2026-03-01' GROUP BY 1;
+-- H1 control: listing-page tour requests per saved listing do not move with the rate
+SELECT 'H1 control' AS story, per,
+  count(*) FILTER (WHERE event = 'tour requested' AND request_source = 'listing_page')::DOUBLE / count(*) FILTER (WHERE event = 'listing saved') AS tours_per_save
+FROM (SELECT CASE WHEN r.band = 'high' THEN 'high' WHEN r.band = 'base' AND ev.t >= TIMESTAMP '2026-07-22' THEN 'base_post_launch' END AS per, ev.event, ev.request_source
+      FROM ev JOIN conv_rate r ON r.d = ev.t::DATE WHERE ev.event IN ('tour requested', 'listing saved'))
+WHERE per IS NOT NULL GROUP BY 2 ORDER BY 2;
 
--- ── H4-preapproval-conversion: 4-6 offer clones for pre-approved users ──
-SELECT 'H4 offers/user by pre-approval event cohort (expect ~4.5x)' AS q;
-SELECT preapproved, count(*) AS n_users, round(avg(offers), 3) AS offers_pu
-FROM puu GROUP BY 1;
+-- ═════════════════════════════════════════════════════════════════════════
+-- STORY H2-tour-it-now-launch: listing-page tour requests per saved listing,
+-- Jun 4-Jul 14 vs from Jul 22 (knob 1.5); no tour_it_now before launch
+SELECT 'H2' AS story, per,
+  count(*) FILTER (WHERE event = 'tour requested' AND request_source = 'listing_page') AS listing_page_requests,
+  count(*) FILTER (WHERE event = 'listing saved') AS saves,
+  count(*) FILTER (WHERE event = 'tour requested' AND request_source = 'listing_page')::DOUBLE / count(*) FILTER (WHERE event = 'listing saved') AS tours_per_save,
+  count(*) FILTER (WHERE event = 'tour requested' AND booking_type = 'tour_it_now') AS tour_it_now_requests,
+  count(*) FILTER (WHERE event = 'tour requested' AND booking_type = 'tour_it_now')::DOUBLE / count(*) FILTER (WHERE event = 'tour requested' AND request_source = 'listing_page') AS tour_it_now_share
+FROM (SELECT CASE WHEN t < TIMESTAMP '2026-07-15' THEN '1_before' WHEN t >= TIMESTAMP '2026-07-22' THEN '2_after' END AS per, event, request_source, booking_type
+      FROM ev WHERE event IN ('tour requested', 'listing saved'))
+WHERE per IS NOT NULL GROUP BY 2 ORDER BY 2;
 
-SELECT 'H4 profile flag superset check (expect flagged = 1.0 among event cohort)' AS q;
-SELECT round(avg((pre_approval_status = 'approved')::INT), 4) AS flagged, count(*) AS n
-FROM puu WHERE preapproved;
+-- ═════════════════════════════════════════════════════════════════════════
+-- STORY H3-preapproved-buyers-offer: offer rate per completed tour by
+-- buyer_preapproved, inside rate bands, pooled by band tour count (knob 2.5)
+WITH g AS (SELECT band, pa, count(*) AS tours, avg(conv::INT) AS cr FROM tour_offers WHERE t0 < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 1, 2),
+w AS (SELECT band, sum(tours) AS nb FROM g GROUP BY 1),
+p AS (SELECT g.pa, sum(w.nb * g.cr) / sum(w.nb) AS std_rate FROM g JOIN w USING (band) GROUP BY 1)
+SELECT 'H3' AS story, max(std_rate) FILTER (WHERE pa) AS preapproved_rate, max(std_rate) FILTER (WHERE NOT pa) AS not_preapproved_rate,
+  max(std_rate) FILTER (WHERE pa) / max(std_rate) FILTER (WHERE NOT pa) AS ratio
+FROM p;
 
--- ── H5-premier-agents: 3x listings / 2x sales for Premier tier ──
-SELECT 'H5 listings + sales per user by agent_tier (expect ~2.8x / ~1.9x)' AS q;
-SELECT agent_tier, count(*) AS n_users,
-  round(avg(listings), 4) AS listings_pu, round(avg(solds), 4) AS solds_pu
-FROM puu GROUP BY 1;
+-- ═════════════════════════════════════════════════════════════════════════
+-- STORY H4-saved-search-retention: new shoppers (signup by Aug 6), listing
+-- viewed on day 28-55, non-savers / savers (knob 0.5)
+CREATE OR REPLACE TEMP TABLE h4 AS
+WITH b AS (SELECT uid, t AS t0 FROM ev WHERE event = 'account created' AND t <= TIMESTAMP '2026-08-06 23:59:59')
+SELECT b.uid,
+  bool_or(e.event = 'saved search created' AND e.t >= b.t0 AND e.t < b.t0 + INTERVAL 7 DAY) AS saver,
+  bool_or(e.event = 'listing viewed' AND e.t >= b.t0 + INTERVAL 28 DAY AND e.t < b.t0 + INTERVAL 56 DAY) AS ret
+FROM b JOIN ev e ON e.uid = b.uid GROUP BY 1;
+SELECT 'H4' AS story, saver, count(*) AS shoppers, avg(ret::INT) AS retention_d28_55 FROM h4 GROUP BY 2 ORDER BY 2;
 
--- ── H6-dual-tour-buyers: 5-7 offer clones for virtual+in-person tour users ──
-SELECT 'H6 offers/user by dual-tour cohort (expect ~5x)' AS q;
-SELECT dual_tour, count(*) AS n_users, round(avg(offers), 3) AS offers_pu
-FROM puu GROUP BY 1;
+-- ═════════════════════════════════════════════════════════════════════════
+-- STORY H5-speed-to-lead: tour requested (same listing) within 7 days of the
+-- agent's reply, by response_minutes; slow (> 60) / fast (≤ 10) (knob 0.4)
+CREATE OR REPLACE TEMP TABLE replies AS
+WITH a AS (SELECT uid, listing_id, t AS t0, response_minutes AS m FROM ev WHERE event = 'agent responded'),
+q AS (SELECT uid, listing_id, min(t) AS t1 FROM ev WHERE event = 'tour requested' GROUP BY 1, 2)
+SELECT a.*, CASE WHEN m <= 10 THEN '1_fast' WHEN m > 60 THEN '3_slow' ELSE '2_mid' END AS bucket,
+  coalesce(q.t1 >= a.t0 AND q.t1 < a.t0 + INTERVAL 7 DAY, false) AS toured
+FROM a LEFT JOIN q ON q.uid = a.uid AND q.listing_id = a.listing_id;
+SELECT 'H5' AS story, bucket, count(*) AS replies, avg(toured::INT) AS tour_rate
+FROM replies WHERE t0 < TIMESTAMP '2026-09-24 23:59:59' GROUP BY 2 ORDER BY 2;
 
--- exclusion by PROFILE flag (exact hook-time cohort): the event-cohort
--- proxy under-excludes users whose pre-approval event H8 later deleted
--- but who kept their H4 clones, contaminating the baseline (~3.5x)
-SELECT 'H6 overlap decomposition: dual-only vs neither, profile-flag pre-approved excluded (expect ~4.8x)' AS q;
-SELECT dual_tour, count(*) AS n_users, round(avg(offers), 3) AS offers_pu
-FROM puu WHERE pre_approval_status != 'approved' GROUP BY 1;
+-- ═════════════════════════════════════════════════════════════════════════
+-- STORY H6-paid-social-economics: spend per signup and per pre-approval start
+-- (within 30 days of signup), signups and spend before Sep 2
+CREATE OR REPLACE TEMP TABLE h6 AS
+WITH s AS (SELECT uid, t AS t0, acquisition_channel AS ch FROM ev WHERE event = 'account created' AND t < TIMESTAMP '2026-09-01 23:59:59'),
+p AS (SELECT s.uid FROM s JOIN ev e ON e.uid = s.uid AND e.event = 'pre-approval started' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 30 DAY GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM wh_spend WHERE date::DATE < DATE '2026-09-02' GROUP BY 1),
+g AS (SELECT s.ch, count(*) AS signups, count(p.uid) AS starts FROM s LEFT JOIN p ON p.uid = s.uid GROUP BY 1)
+SELECT g.ch, g.signups, g.starts, g.starts::DOUBLE / g.signups AS start_rate, sp.spend,
+  sp.spend / g.signups AS spend_per_signup, sp.spend / nullif(g.starts, 0) AS spend_per_start
+FROM g LEFT JOIN sp ON sp.ch = g.ch;
+SELECT 'H6' AS story, * FROM h6 ORDER BY ch;
+SELECT 'H6' AS story,
+  (SELECT spend_per_signup FROM h6 WHERE ch = 'paid_social') / (SELECT spend_per_signup FROM h6 WHERE ch = 'paid_search') AS spend_per_signup_social_vs_search,
+  (SELECT start_rate FROM h6 WHERE ch = 'paid_social') / (SELECT sum(starts)::DOUBLE / sum(signups) FROM h6 WHERE ch <> 'paid_social') AS start_rate_social_vs_rest,
+  (SELECT spend_per_start FROM h6 WHERE ch = 'paid_social') / (SELECT spend_per_start FROM h6 WHERE ch = 'paid_search') AS spend_per_start_social_vs_search;
 
--- ── H7-luxury-release: $2M+ listings only after day 50; luxury-browser cohort ──
-SELECT 'H7 luxury listings by era (expect pre-d50 lux = 0; post share ~1.9% = 3% x 0.643 organic)' AS q;
-SELECT (day_idx >= 50) AS post50, count(*) AS n_listings,
-  count(*) FILTER (WHERE listing_price >= 2000000) AS lux_n,
-  round(count(*) FILTER (WHERE listing_price >= 2000000)::DOUBLE / count(*), 4) AS lux_share
-FROM ev WHERE event = 'property listed' GROUP BY 1 ORDER BY 1;
+-- ═════════════════════════════════════════════════════════════════════════
+-- STORY H7-austin-feed-outage: Austin / other listing views on stale days vs
+-- 14 days either side (knob 0.45); no new listings or alerts while stale
+WITH o AS (SELECT DISTINCT date::DATE AS d FROM wh_inventory WHERE feed_status = 'stale'),
+w AS (SELECT t::DATE AS d, market = 'Austin' AS aus FROM ev
+      WHERE event = 'listing viewed' AND t >= TIMESTAMP '2026-08-10' AND t < TIMESTAMP '2026-09-14'),
+g AS (SELECT d IN (SELECT d FROM o) AS stale, count(*) FILTER (WHERE aus)::DOUBLE / count(*) FILTER (WHERE NOT aus) AS rel FROM w GROUP BY 1)
+SELECT 'H7' AS story, (SELECT count(*) FROM o) AS stale_days,
+  max(rel) FILTER (WHERE stale) AS austin_rel_stale, max(rel) FILTER (WHERE NOT stale) AS austin_rel_around,
+  max(rel) FILTER (WHERE stale) / max(rel) FILTER (WHERE NOT stale) AS did
+FROM g;
+SELECT 'H7' AS story, sum(i.new_listings) AS stale_new_listings,
+  (SELECT count(*) FROM ev WHERE event = 'listing alert sent' AND market = 'Austin' AND t >= TIMESTAMP '2026-08-24' AND t < TIMESTAMP '2026-08-31') AS stale_austin_alerts
+FROM wh_inventory i WHERE i.feed_status = 'stale';
 
-SELECT 'H7 luxury ($5M+) views by browser cohort (uuid first char = c, 1/16 of users; non-browsers expect 0)' AS q;
-SELECT (left(puu.uid, 1) = 'c') AS browser, count(*) AS n_users,
-  round(avg((SELECT count(*) FROM ev e WHERE e.uid = puu.uid AND e.event = 'property viewed' AND e.listing_price >= 5000000)), 3) AS luxviews_pu
-FROM puu GROUP BY 1;
+-- ═════════════════════════════════════════════════════════════════════════
+-- STORY H8-payment-estimate-experiment: pre-approval started within 14 days
+-- of exposure (exposures through Sep 17), variant / Control (knob 1.4)
+CREATE OR REPLACE TEMP TABLE h8 AS
+WITH x AS (SELECT uid, t AS t0, "Variant name" AS v FROM ev WHERE event = '$experiment_started' AND t < TIMESTAMP '2026-09-17 23:59:59'),
+p AS (SELECT uid, min(t) AS t1 FROM ev WHERE event = 'pre-approval started' GROUP BY 1)
+SELECT x.v, count(*) AS exposed, sum(coalesce(p.t1 > x.t0 AND p.t1 < x.t0 + INTERVAL 14 DAY, false)::INT) AS starts_14d,
+  avg(coalesce(p.t1 > x.t0 AND p.t1 < x.t0 + INTERVAL 14 DAY, false)::INT) AS start_rate
+FROM x LEFT JOIN p ON p.uid = x.uid GROUP BY 1;
+SELECT 'H8' AS story, *, start_rate / (SELECT start_rate FROM h8 WHERE v = 'Control') AS vs_control FROM h8 ORDER BY v;
+SELECT 'H8 purity' AS story, count(*) FILTER (WHERE e.entry_point = 'payment_estimate' AND (e.t < TIMESTAMP '2026-07-29' OR u."Experiment: Payment Estimate" IS DISTINCT FROM 'Payment Estimate')) AS impure
+FROM ev e LEFT JOIN users u ON u.distinct_id::VARCHAR = e.uid WHERE e.event = 'pre-approval started';
 
--- ── H8-cold-lead-churn: viewed-but-never-saved in first 14d lose 90% after ──
-SELECT 'H8 events/user after first-14d, cold vs rest (expect ~0.13 absolute)' AS q;
-SELECT (viewed14 AND NOT saved14) AS cold, count(*) AS n_users,
-  round(avg((SELECT count(*) FROM ev e WHERE e.uid = puu.uid AND e.t > puu.first_t + INTERVAL '14 days')), 2) AS ev_post14_pu,
-  round(avg((SELECT count(*) FROM ev e WHERE e.uid = puu.uid AND e.t <= puu.first_t + INTERVAL '14 days')), 2) AS ev_pre14_pu
-FROM puu WHERE first_t < TIMESTAMP '2026-04-01' GROUP BY 1;
+-- ═════════════════════════════════════════════════════════════════════════
+-- STORY H9-time-to-offer-by-buyer-type: median hours tour completed → offer
+-- submitted (same listing, 14 days), vs move_up (knobs 1.75 and 0.5)
+CREATE OR REPLACE TEMP TABLE h9 AS
+SELECT u.buyer_type, count(*) AS offers, median(o.hours) AS med_hours, avg(o.hours) AS avg_hours
+FROM tour_offers o JOIN users u ON u.distinct_id::VARCHAR = o.uid
+WHERE o.conv AND o.t0 < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 1;
+SELECT 'H9' AS story, *, med_hours / (SELECT med_hours FROM h9 WHERE buyer_type = 'move_up') AS vs_move_up FROM h9 ORDER BY med_hours;
 
--- ── H9-view-magic-number: 6-12 views => +30% offer_price; 13+ => fewer offers ──
-SELECT 'H9 offer price by view bucket, non-spring (expect sweet/low ~1.35; over/low placebo ~1.0)' AS q;
-SELECT CASE WHEN p.views BETWEEN 6 AND 12 THEN 'sweet' WHEN p.views < 6 THEN 'low' ELSE 'over' END AS bucket,
-  count(*) AS n_offers, count(DISTINCT e.uid) AS n_users, round(avg(e.offer_price), 0) AS avg_price
-FROM puu p JOIN ev e ON e.uid = p.uid AND e.event = 'offer submitted'
-WHERE e.day_idx NOT BETWEEN 30 AND 59
-GROUP BY 1 ORDER BY 1;
+-- ═════════════════════════════════════════════════════════════════════════
+-- STORY H10-price-cuts-get-saved: listing saved / listing viewed by price_reduced (knob 1.8)
+CREATE OR REPLACE TEMP TABLE h10 AS
+SELECT price_reduced, count(*) FILTER (WHERE event = 'listing viewed') AS views, count(*) FILTER (WHERE event = 'listing saved') AS saves,
+  count(*) FILTER (WHERE event = 'listing saved')::DOUBLE / count(*) FILTER (WHERE event = 'listing viewed') AS save_rate
+FROM ev WHERE event IN ('listing saved', 'listing viewed') GROUP BY 1;
+SELECT 'H10' AS story, *, save_rate / (SELECT save_rate FROM h10 WHERE NOT price_reduced) AS vs_original FROM h10 ORDER BY price_reduced;
 
-SELECT 'H9 offers/user over vs sweet (expect ~0.65 — 60% knob nets the visible ~35% drop)' AS q;
-SELECT CASE WHEN views BETWEEN 6 AND 12 THEN 'sweet' WHEN views >= 13 THEN 'over' ELSE 'low' END AS bucket,
-  count(*) AS n_users, round(avg(offers), 3) AS offers_pu
-FROM puu GROUP BY 1 ORDER BY 1;
+-- ═════════════════════════════════════════════════════════════════════════
+-- EVAL Q1: rate spike and offers. Offer rate per completed tour by rate band
+-- (the H1 queries above give the standardized ratio)
+SELECT 'Q1' AS q, band, count(*) AS tours, sum(conv::INT) AS offers, avg(conv::INT) AS offer_rate,
+  min(t0)::DATE AS first_day, max(t0)::DATE AS last_day, avg(rate) AS avg_rate
+FROM tour_offers WHERE t0 < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 2 ORDER BY 2;
+SELECT 'Q1 weekly' AS q, date_trunc('week', t0)::DATE AS wk, count(*) AS tours, avg(conv::INT) AS offer_rate, avg(rate) AS avg_rate
+FROM tour_offers WHERE t0 < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 2 ORDER BY 2;
 
--- ── H10-tour-ttc-by-tier: emulator-only (see stories) — identity invariants here ──
-SELECT 'H10 identity invariants (expect uid_resolved = 1.0, stamp_agree = 1.0)' AS q;
-SELECT count(*) AS n,
-  round(avg((u.distinct_id IS NOT NULL)::INT), 6) AS uid_resolved,
-  round(avg(CASE WHEN u.distinct_id IS NOT NULL THEN (e.user_type = u.user_type)::INT END), 6) AS stamp_agree
-FROM ev e LEFT JOIN users u ON e.uid = u.distinct_id::VARCHAR;
+-- EVAL Q2: Tour It Now. Listing-page requests per save (H2 above) and weekly requests by booking type
+SELECT 'Q2 weekly' AS q, date_trunc('week', t)::DATE AS wk,
+  count(*) FILTER (WHERE event = 'tour requested' AND booking_type = 'scheduled') AS scheduled,
+  count(*) FILTER (WHERE event = 'tour requested' AND booking_type = 'tour_it_now') AS tour_it_now,
+  count(*) FILTER (WHERE event = 'tour completed') AS tours_completed,
+  count(*) FILTER (WHERE event = 'tour requested' AND request_source = 'listing_page')::DOUBLE / count(*) FILTER (WHERE event = 'listing saved') AS listing_page_per_save
+FROM ev WHERE event IN ('tour requested', 'tour completed', 'listing saved') GROUP BY 2 ORDER BY 2;
+SELECT 'Q2 completion' AS q, booking_type, count(*) FILTER (WHERE event = 'tour requested') AS requested, count(*) FILTER (WHERE event = 'tour completed') AS completed
+FROM ev WHERE event IN ('tour requested', 'tour completed') AND t >= TIMESTAMP '2026-07-22' GROUP BY 2 ORDER BY 2;
+
+-- EVAL Q3: pre-approval and offers. Raw full-window rates and rates before the climb (H3 gives the band-standardized ratio)
+SELECT 'Q3' AS q, pa, count(*) AS tours, avg(conv::INT) AS offer_rate_all,
+  avg(conv::INT) FILTER (WHERE t0 < TIMESTAMP '2026-08-10') AS offer_rate_before_aug10
+FROM tour_offers WHERE t0 < TIMESTAMP '2026-09-17 23:59:59' GROUP BY 2 ORDER BY 2;
+
+-- EVAL Q4: saved search retention (H4 above) plus the early saved-search share
+SELECT 'Q4' AS q, count(*) AS new_shoppers, avg(saver::INT) AS saver_share,
+  avg(ret::INT) FILTER (WHERE saver) AS saver_ret, avg(ret::INT) FILTER (WHERE NOT saver) AS non_saver_ret
+FROM h4;
+
+-- EVAL Q5: speed to lead. Buckets (H5 above), median response, share answered within 10 minutes
+SELECT 'Q5' AS q, count(*) AS replies, median(m) AS median_minutes, avg((m <= 10)::INT) AS within_10, avg((m > 60)::INT) AS over_60,
+  avg(toured::INT) AS overall_tour_rate
+FROM replies WHERE t0 < TIMESTAMP '2026-09-24 23:59:59';
+
+-- EVAL Q6: CAC by channel (H6 above) plus full-window spend and signups
+SELECT 'Q6 window' AS q, s.acquisition_channel, s.spend, c.signups, s.spend / c.signups AS spend_per_signup, s.leads_reported, s.spend / s.leads_reported AS cost_per_platform_lead
+FROM (SELECT acquisition_channel, sum(spend_usd) AS spend, sum(leads_reported) AS leads_reported FROM wh_spend GROUP BY 1) s
+JOIN (SELECT acquisition_channel, count(*) AS signups FROM ev WHERE event = 'account created' GROUP BY 1) c USING (acquisition_channel)
+ORDER BY 2;
+SELECT 'Q6 signups' AS q, acquisition_channel, count(*) AS signups FROM ev WHERE event = 'account created' GROUP BY 2 ORDER BY 3 DESC;
+
+-- EVAL Q7: Austin in late August. Daily Austin views and warehouse feed status
+SELECT 'Q7' AS q, i.date::DATE AS d, i.feed_status, i.new_listings, v.austin_views, v.other_views, v.austin_views::DOUBLE / v.other_views AS austin_rel
+FROM wh_inventory i
+JOIN (SELECT t::DATE AS d, count(*) FILTER (WHERE market = 'Austin') AS austin_views, count(*) FILTER (WHERE market <> 'Austin') AS other_views
+      FROM ev WHERE event = 'listing viewed' GROUP BY 1) v ON v.d = i.date::DATE
+WHERE i.market = 'Austin' AND i.date::DATE BETWEEN DATE '2026-08-17' AND DATE '2026-09-06' ORDER BY 2;
+
+-- EVAL Q8: Payment Estimate experiment (H8 above) plus entry points by arm
+SELECT 'Q8 entry' AS q, coalesce(u."Experiment: Payment Estimate", 'not in test') AS arm, e.entry_point, count(*) AS starts
+FROM ev e LEFT JOIN users u ON u.distinct_id::VARCHAR = e.uid
+WHERE e.event = 'pre-approval started' AND e.t >= TIMESTAMP '2026-07-29' GROUP BY 2, 3 ORDER BY 2, 3;
+
+-- EVAL Q9: time from tour to offer by buyer type (H9 above), overall median
+SELECT 'Q9' AS q, count(*) AS offers, median(hours) AS med_hours FROM tour_offers WHERE conv AND t0 < TIMESTAMP '2026-09-17 23:59:59';
+
+-- EVAL Q10: price cuts and saves (H10 above), share of views on reduced listings
+SELECT 'Q10' AS q, sum(views) FILTER (WHERE price_reduced)::DOUBLE / sum(views) AS reduced_view_share FROM h10;
+
+-- EVAL Q11: the rate sheet. Conventional rate path, other loan types, applications
+SELECT 'Q11' AS q, loan_type,
+  avg(note_rate_pct) FILTER (WHERE date::DATE < DATE '2026-08-10') AS avg_rate_before_aug10,
+  max(note_rate_pct) AS max_rate,
+  avg(note_rate_pct) FILTER (WHERE date::DATE BETWEEN DATE '2026-08-17' AND DATE '2026-09-13') AS avg_rate_aug17_sep13,
+  avg(note_rate_pct) FILTER (WHERE date::DATE >= DATE '2026-09-28') AS avg_rate_from_sep28,
+  sum(applications) AS applications
+FROM wh_rates GROUP BY 2 ORDER BY 2;
+SELECT 'Q11 high days' AS q, min(d) AS first_day_at_or_above_6_95, max(d) AS last_day_at_or_above_6_95, count(*) AS days FROM conv_rate WHERE rate >= 6.95;
+
+-- EVAL Q12 (null): are Tour It Now tours worse leads than scheduled tours?
+-- Offer within 14 days per completed tour (same listing), tours Jul 22-Sep 17
+CREATE OR REPLACE TEMP TABLE q12 AS
+SELECT coalesce(pa::VARCHAR, 'all') AS seg, booking_type, count(*) AS n, avg(conv::INT) AS r
+FROM tour_offers WHERE t0 >= TIMESTAMP '2026-07-22' AND t0 < TIMESTAMP '2026-09-17 23:59:59'
+GROUP BY GROUPING SETS ((booking_type), (pa, booking_type));
+SELECT 'Q12' AS q, a.seg AS buyer_preapproved, a.n AS tour_it_now_tours, a.r AS tour_it_now_offer_rate, b.n AS scheduled_tours, b.r AS scheduled_offer_rate,
+  (a.r - b.r) / sqrt(((a.r * a.n + b.r * b.n) / (a.n + b.n)) * (1 - (a.r * a.n + b.r * b.n) / (a.n + b.n)) * (1.0 / a.n + 1.0 / b.n)) AS z
+FROM q12 a JOIN q12 b ON a.seg = b.seg AND a.booking_type = 'tour_it_now' AND b.booking_type = 'scheduled' ORDER BY 2;
+
+-- offer acceptance per submitted offer (used in Q18)
+CREATE OR REPLACE TEMP TABLE offer_outcomes AS
+WITH o AS (SELECT uid, listing_id, t, buyer_preapproved AS pa, market FROM ev WHERE event = 'offer submitted'),
+oc AS (SELECT uid, listing_id, max((event = 'offer accepted')::INT) AS acc FROM ev WHERE event IN ('offer accepted', 'offer rejected') GROUP BY 1, 2)
+SELECT o.*, oc.acc FROM o JOIN oc USING (uid, listing_id);
+
+-- EVAL Q13 (null): does the way a shopper contacts the agent change tour conversion?
+CREATE OR REPLACE TEMP TABLE chats AS
+WITH c AS (SELECT uid, listing_id, t AS t0, contact_method, market FROM ev WHERE event = 'agent contacted' AND t < TIMESTAMP '2026-09-23 23:59:59'),
+q AS (SELECT uid, listing_id, min(t) AS t1 FROM ev WHERE event = 'tour requested' GROUP BY 1, 2)
+SELECT c.*, coalesce(q.t1 >= c.t0 AND q.t1 < c.t0 + INTERVAL 8 DAY, false) AS toured
+FROM c LEFT JOIN q ON q.uid = c.uid AND q.listing_id = c.listing_id;
+WITH g AS (SELECT contact_method, count(*) AS n, sum(toured::INT) AS k FROM chats GROUP BY 1),
+tot AS (SELECT sum(k)::DOUBLE / sum(n) AS p FROM g)
+SELECT 'Q13' AS q, g.contact_method, g.n AS chats, g.k::DOUBLE / g.n AS tour_rate,
+  sum((g.k - g.n * tot.p) ^ 2 / (g.n * tot.p * (1 - tot.p))) OVER () AS chi2_df2
+FROM g, tot ORDER BY 2;
+WITH g AS (SELECT market, contact_method, count(*) AS n, sum(toured::INT) AS k FROM chats GROUP BY 1, 2),
+tot AS (SELECT market, sum(k)::DOUBLE / sum(n) AS p FROM g GROUP BY 1)
+SELECT 'Q13 by market' AS q, g.market, sum((g.k - g.n * tot.p) ^ 2 / (g.n * tot.p * (1 - tot.p))) AS chi2_df2
+FROM g JOIN tot USING (market) GROUP BY 2 ORDER BY 2;
+
+-- EVAL Q14: Austin new listings around the feed outage (warehouse)
+SELECT 'Q14' AS q, date::DATE AS d, market, feed_status, new_listings, active_listings, price_reductions
+FROM wh_inventory WHERE market = 'Austin' AND date::DATE BETWEEN DATE '2026-08-20' AND DATE '2026-09-03' ORDER BY 2;
+SELECT 'Q14 typical' AS q, avg(new_listings) FILTER (WHERE date::DATE BETWEEN DATE '2026-08-03' AND DATE '2026-08-23') AS austin_avg_new_3wk_before,
+  max(new_listings) FILTER (WHERE date::DATE = DATE '2026-08-31') AS austin_new_aug31
+FROM wh_inventory WHERE market = 'Austin';
+
+-- EVAL Q15: pre-approvals. Weekly starts and completions, quoted rates, profile status
+SELECT 'Q15 weekly' AS q, date_trunc('week', t)::DATE AS wk,
+  count(*) FILTER (WHERE event = 'pre-approval started') AS started, count(*) FILTER (WHERE event = 'pre-approval completed') AS completed
+FROM ev WHERE event IN ('pre-approval started', 'pre-approval completed') GROUP BY 2 ORDER BY 2;
+SELECT 'Q15 totals' AS q, count(*) FILTER (WHERE event = 'pre-approval started') AS started, count(*) FILTER (WHERE event = 'pre-approval completed') AS completed,
+  count(*) FILTER (WHERE event = 'pre-approval started' AND t < TIMESTAMP '2026-07-29') / 55.0 * 7 AS starts_per_week_before_jul29,
+  count(*) FILTER (WHERE event = 'pre-approval started' AND t >= TIMESTAMP '2026-07-29') / 65.0 * 7 AS starts_per_week_from_jul29,
+  median(rate_quoted_pct) FILTER (WHERE event = 'pre-approval completed' AND t < TIMESTAMP '2026-08-10') AS median_quoted_rate_before_aug10,
+  median(rate_quoted_pct) FILTER (WHERE event = 'pre-approval completed' AND t >= TIMESTAMP '2026-08-17' AND t < TIMESTAMP '2026-09-14') AS median_quoted_rate_aug17_sep13
+FROM ev WHERE event IN ('pre-approval started', 'pre-approval completed');
+SELECT 'Q15 status' AS q, preapproval_status, count(*) AS profiles FROM users GROUP BY 2 ORDER BY 3 DESC;
+
+-- EVAL Q16: growth. Monthly active shoppers (listing viewed or home search) and signups
+SELECT 'Q16 monthly' AS q, strftime(t, '%Y-%m') AS month, count(DISTINCT uid) FILTER (WHERE event IN ('listing viewed', 'home search')) AS active_shoppers,
+  count(*) FILTER (WHERE event = 'account created') AS signups, count(*) FILTER (WHERE event = 'listing viewed') AS listing_views
+FROM ev GROUP BY 2 ORDER BY 2;
+SELECT 'Q16 weekly' AS q, date_trunc('week', t)::DATE AS wk, count(DISTINCT uid) FILTER (WHERE event IN ('listing viewed', 'home search')) AS weekly_active,
+  count(*) FILTER (WHERE event = 'account created') AS signups
+FROM ev GROUP BY 2 ORDER BY 2;
+
+-- EVAL Q17 (open-ended): headline numbers used in the answer
+SELECT 'Q17' AS q,
+  (SELECT count(*) FROM ev WHERE event = 'offer submitted') AS offers,
+  (SELECT count(*) FROM ev WHERE event = 'offer accepted') AS accepted,
+  (SELECT count(*) FROM ev WHERE event = 'offer submitted' AND t >= TIMESTAMP '2026-07-20' AND t < TIMESTAMP '2026-08-17') / 4.0 AS offers_per_week_jul20_aug16,
+  (SELECT count(*) FROM ev WHERE event = 'offer submitted' AND t >= TIMESTAMP '2026-08-17' AND t < TIMESTAMP '2026-09-14') / 4.0 AS offers_per_week_aug17_sep13,
+  (SELECT count(*) FROM ev WHERE event = 'offer submitted' AND t >= TIMESTAMP '2026-09-14' AND t < TIMESTAMP '2026-09-28') / 2.0 AS offers_per_week_sep14_27;
+
+-- EVAL Q18: offers, acceptance, homes under contract, by market
+SELECT 'Q18' AS q, market, count(*) AS offers, sum(acc) AS accepted, avg(acc) AS accept_rate FROM offer_outcomes GROUP BY ROLLUP(market) ORDER BY 2 NULLS LAST;
+SELECT 'Q18 price' AS q, count(*) AS accepted, median(final_price_usd) AS median_final_price, count(DISTINCT uid) AS buyers
+FROM ev WHERE event = 'offer accepted';
+SELECT 'Q18 offer vs list' AS q, median(offer_price_usd::DOUBLE / list_price_usd) AS median_offer_to_list FROM ev WHERE event = 'offer submitted';
+
+-- EVAL Q19: anonymous browsing before signup (identity stitching)
+WITH s AS (SELECT uid, device_id, t AS t0 FROM ev WHERE event = 'account created'),
+pre AS (SELECT s.uid, count(e.time) AS n FROM s LEFT JOIN raw_events e ON e.device_id = s.device_id AND e.user_id IS NULL AND e.event = 'listing viewed' AND e.time::TIMESTAMP < s.t0 GROUP BY 1)
+SELECT 'Q19' AS q, count(*) AS new_shoppers, avg(n) AS avg_views_before_signup, median(n) AS median_views, avg((n <= 1)::INT) AS share_one_or_none,
+  avg((n >= 4)::INT) AS share_four_plus,
+  (SELECT count(*) FROM raw_events WHERE user_id IS NULL) AS anonymous_events,
+  (SELECT count(*) FROM raw_events WHERE user_id IS NULL AND device_id IN (SELECT device_id FROM dmap)) AS anonymous_events_stitched
+FROM pre;
+
+-- EVAL Q20 (open-ended): channel quality beyond pre-approval (tours within 30 days of signup)
+WITH s AS (SELECT uid, t AS t0, acquisition_channel AS ch FROM ev WHERE event = 'account created' AND t < TIMESTAMP '2026-09-01 23:59:59'),
+x AS (SELECT s.uid, s.ch, bool_or(e.event = 'tour completed' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 30 DAY) AS toured,
+      bool_or(e.event = 'offer submitted' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 30 DAY) AS offered
+      FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1, 2)
+SELECT 'Q20' AS q, x.ch, count(*) AS signups, avg(toured::INT) AS tour_30d, avg(offered::INT) AS offer_30d,
+  any_value(h6.spend) / nullif(sum(toured::INT), 0) AS spend_per_touring_signup
+FROM x LEFT JOIN h6 ON h6.ch = x.ch GROUP BY 2 ORDER BY 2;
