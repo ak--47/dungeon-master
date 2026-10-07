@@ -153,6 +153,17 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   `STORY_ARCHETYPES`, and `StoryArchetype` now has 15 values.
   (`attribution-bias` already covers attribution stories.)
 
+### Known issues
+
+- `tests/engine/sweep-engine.mjs --tier all` passes 193 of 194 combos. #178
+  (steady/365d) fails the last-7-day signup sum floor with 0 signups against a
+  mean of 0.45 per day; ten seeds average 5.2 last-7 signups, so this is small-
+  sample noise. A bypass for small expected counts awaits owner approval.
+- With no `soup` config, active-day modes (`avgActiveDaysPerUser`,
+  `retentionCurve`) show almost no weekly rhythm (1.11x weekday ratio against
+  the default 1.89x). A fix exists but makes three steady combos miss the l7c
+  bar (0.496 against 0.5); it awaits owner approval to relax that bar.
+
 ### Changed
 
 - Relax the engine-shape last-day check (strict-bar condition 2) in
