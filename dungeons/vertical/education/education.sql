@@ -150,8 +150,10 @@ SELECT date, platform, video_starts, playback_failure_rate, crash_free_session_r
 WHERE date::DATE BETWEEN DATE '2026-09-07' AND DATE '2026-09-14' AND platform = 'android' ORDER BY date;
 
 -- STORY H9-fall-term-students — lesson completions per day, students vs other segments, summer vs fall term
-WITH x AS (SELECT CASE WHEN p.learner_segment = 'university_student' THEN 'student' ELSE 'other' END AS seg, ev.t >= TIMESTAMP '2026-08-24' AS fall, ev.t::DATE AS d
-  FROM ev JOIN prof p ON p.uid = ev.uid WHERE ev.event = 'lesson completed'),
+-- full-rate days only: summer = before Aug 17, fall = from Sep 8 (term starts are staggered Aug 17 - Sep 7)
+WITH x AS (SELECT CASE WHEN p.learner_segment = 'university_student' THEN 'student' ELSE 'other' END AS seg, ev.t >= TIMESTAMP '2026-09-08' AS fall, ev.t::DATE AS d
+  FROM ev JOIN prof p ON p.uid = ev.uid WHERE ev.event = 'lesson completed'
+  AND (ev.t < TIMESTAMP '2026-08-17' OR ev.t >= TIMESTAMP '2026-09-08')),
 g AS (SELECT seg, fall, count(*) / count(DISTINCT d) AS per_day FROM x GROUP BY 1, 2)
 SELECT seg, round(max(per_day) FILTER (WHERE NOT fall), 1) AS summer_per_day, round(max(per_day) FILTER (WHERE fall), 1) AS fall_per_day,
  round(max(per_day) FILTER (WHERE fall) / max(per_day) FILTER (WHERE NOT fall), 3) AS fall_over_summer
@@ -255,9 +257,10 @@ FROM f GROUP BY 1 ORDER BY 1;
 WITH s AS (SELECT ev.uid, ev.t, ev.billing_interval, b.list_price_usd FROM ev
   JOIN wh_billing b ON b.date::DATE = ev.t::DATE AND b.billing_interval = ev.billing_interval WHERE ev.event = 'subscription started')
 SELECT CASE WHEN t >= TIMESTAMP '2026-08-10' THEN 'after' ELSE 'before' END AS period, count(*) AS subscriptions,
- count(DISTINCT t::DATE) AS days, round(count(*) / count(DISTINCT t::DATE), 2) AS per_day,
+ CASE WHEN t >= TIMESTAMP '2026-08-10' THEN 53 ELSE 67 END AS calendar_days,
+ round(count(*) / CASE WHEN t >= TIMESTAMP '2026-08-10' THEN 53 ELSE 67 END, 2) AS per_day,
  round(avg((billing_interval = 'annual')::INT), 4) AS annual_share, round(avg(list_price_usd), 2) AS avg_first_payment_usd
-FROM s GROUP BY 1 ORDER BY 1 DESC;
+FROM s GROUP BY 1, 3 ORDER BY 1 DESC;
 -- per-day subscriptions, 53 days either side (Jun 18 - Aug 9 vs Aug 10 - Oct 1), by billing interval
 SELECT CASE WHEN t >= TIMESTAMP '2026-08-10' THEN 'after' ELSE 'before' END AS period, count(*) AS subscriptions, round(count(*) / 53.0, 2) AS per_day,
  round(count(*) FILTER (WHERE billing_interval = 'monthly') / 53.0, 2) AS monthly_per_day, round(count(*) FILTER (WHERE billing_interval = 'annual') / 53.0, 2) AS annual_per_day
@@ -314,12 +317,20 @@ FROM w GROUP BY 1, 2 ORDER BY 1, 2;
 
 -- EVAL Q11 — Why did learning activity jump in late August? (weekly lesson completions by segment)
 SELECT date_trunc('week', ev.t)::DATE AS week, p.learner_segment, count(*) AS lesson_completions
-FROM ev JOIN prof p ON p.uid = ev.uid WHERE ev.event = 'lesson completed' AND ev.t >= TIMESTAMP '2026-08-03' AND ev.t < TIMESTAMP '2026-09-14'
+FROM ev JOIN prof p ON p.uid = ev.uid WHERE ev.event = 'lesson completed' AND ev.t >= TIMESTAMP '2026-08-03' AND ev.t < TIMESTAMP '2026-09-21'
 GROUP BY 1, 2 ORDER BY 1, 2;
+-- the obvious split at Aug 24 (includes the staggered term starts on both sides)
 WITH x AS (SELECT p.learner_segment AS seg, ev.t >= TIMESTAMP '2026-08-24' AS fall, ev.t::DATE AS d
   FROM ev JOIN prof p ON p.uid = ev.uid WHERE ev.event = 'lesson completed'),
 g AS (SELECT seg, fall, count(*) / count(DISTINCT d) AS per_day FROM x GROUP BY 1, 2)
 SELECT seg, round(max(per_day) FILTER (WHERE NOT fall), 1) AS before_per_day, round(max(per_day) FILTER (WHERE fall), 1) AS from_aug24_per_day,
+ round(max(per_day) FILTER (WHERE fall) / max(per_day) FILTER (WHERE NOT fall), 3) AS ratio
+FROM g GROUP BY 1 ORDER BY 1;
+-- full-rate windows: before Aug 17 vs from Sep 8
+WITH x AS (SELECT p.learner_segment AS seg, ev.t >= TIMESTAMP '2026-09-08' AS fall, ev.t::DATE AS d
+  FROM ev JOIN prof p ON p.uid = ev.uid WHERE ev.event = 'lesson completed' AND (ev.t < TIMESTAMP '2026-08-17' OR ev.t >= TIMESTAMP '2026-09-08')),
+g AS (SELECT seg, fall, count(*) / count(DISTINCT d) AS per_day FROM x GROUP BY 1, 2)
+SELECT seg, round(max(per_day) FILTER (WHERE NOT fall), 1) AS before_aug17_per_day, round(max(per_day) FILTER (WHERE fall), 1) AS from_sep8_per_day,
  round(max(per_day) FILTER (WHERE fall) / max(per_day) FILTER (WHERE NOT fall), 3) AS ratio
 FROM g GROUP BY 1 ORDER BY 1;
 
@@ -346,8 +357,21 @@ w AS (SELECT cut, max(n) FILTER (WHERE account_type = 'employer_sponsored') AS n
 SELECT cut, round(r1 - r0, 4) AS diff, round((r1 - r0) / sqrt(((r1 * n1 + r0 * n0) / (n1 + n0)) * (1 - (r1 * n1 + r0 * n0) / (n1 + n0)) * (1.0 / n1 + 1.0 / n0)), 2) AS z
 FROM w ORDER BY 1;
 
--- EVAL Q14 — null: outside the Sep 9-12 Android incident, do Android learners complete fewer lessons than iOS learners?
--- (per lesson start; starts on Sep 9-12 excluded on both platforms, as a Mixpanel date range would), overall, by content type, and by month
+-- EVAL Q14 — null: do learners score lower on quizzes taken in the Android app than in the iOS app?
+-- quiz score by platform (event property), overall, by month, and by plan at quiz time; Welch z (Android minus iOS)
+WITH q AS (SELECT platform, score_pct, passed::INT AS passed, strftime(t, '%Y-%m') AS month, plan_tier FROM ev
+  WHERE event = 'quiz submitted' AND platform IN ('android', 'ios')),
+c AS (SELECT 'all' AS cut, platform, score_pct, passed FROM q
+  UNION ALL SELECT 'month_' || month, platform, score_pct, passed FROM q WHERE month < '2026-10'
+  UNION ALL SELECT 'plan_' || plan_tier, platform, score_pct, passed FROM q),
+g AS (SELECT cut, count(*) FILTER (WHERE platform = 'android') AS n1, avg(score_pct) FILTER (WHERE platform = 'android') AS m1, var_samp(score_pct) FILTER (WHERE platform = 'android') AS v1,
+  avg(passed) FILTER (WHERE platform = 'android') AS p1,
+  count(*) FILTER (WHERE platform = 'ios') AS n0, avg(score_pct) FILTER (WHERE platform = 'ios') AS m0, var_samp(score_pct) FILTER (WHERE platform = 'ios') AS v0,
+  avg(passed) FILTER (WHERE platform = 'ios') AS p0 FROM c GROUP BY 1)
+SELECT cut, n1 AS android_quizzes, round(m1, 2) AS android_score, round(p1, 4) AS android_pass, n0 AS ios_quizzes, round(m0, 2) AS ios_score, round(p0, 4) AS ios_pass,
+ round((m1 - m0) / sqrt(v1 / n1 + v0 / n0), 2) AS z
+FROM g ORDER BY 1;
+-- secondary: lesson completion per start outside the Sep 9-12 incident (starts on Sep 9-12 excluded on both platforms), overall, by content type, and by month
 WITH w AS (SELECT platform, content_type, strftime(t_start, '%Y-%m') AS month, (t_done IS NOT NULL)::INT AS ok
   FROM lessons WHERE platform IN ('android', 'ios')
   AND NOT (t_start >= TIMESTAMP '2026-09-09' AND t_start < TIMESTAMP '2026-09-13')),

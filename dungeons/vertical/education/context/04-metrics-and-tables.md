@@ -57,7 +57,7 @@ Daily video playback and app health by platform, from the video player's quality
 | `crash_free_session_rate` | FLOAT | share 0-1 | Share of app sessions without a crash. Web reports browser-side errors that end a session. |
 | `app_version` | STRING | — | The app version most learners on the platform used that day. `web` for the web app, which deploys continuously. |
 
-Caveats: course trailers and previews do not send a lesson event, so `video_starts` runs higher than the Mixpanel count of video `lesson started` and does not track it exactly day to day. Mixpanel does not record player errors; a lesson that failed to play shows up only as a `lesson started` with no `lesson completed`.
+Caveats: course trailers and previews do not send a lesson event, so `video_starts` runs higher than the Mixpanel count of video `lesson started` and does not track it exactly day to day. Mixpanel does not record player errors.
 
 ### `subscription_billing_daily`
 
@@ -79,4 +79,4 @@ Caveats: the table covers new Plus subscriptions only, not renewals, refunds aft
 - Activity follows a weekly study rhythm: Sunday is the busiest study day and Friday and Saturday are the quietest. Compare whole weeks or matching weekdays.
 - Learners do many lessons, quizzes, and course page views. Per-lesson and per-page-view questions need `lesson_id` or `course_id` held constant; a unique-learner funnel answers a different question (did the learner ever do it).
 - New-learner funnels, conversion, and retention depend on signup date: learners who joined late in the window have had less time to act. Compare cohorts that joined in the same weeks.
-- The learner base grows over the window as new learners join, so raw weekly totals rise for reasons unrelated to any one change.
+- New learners join every day while some earlier learners stop studying, so the mix of new and established learners shifts across the window. Raw weekly totals can move for reasons unrelated to any one change.
