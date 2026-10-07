@@ -2,7 +2,7 @@
 
 ## Who we are
 
-Kindred is a dating app for adults who want a real relationship, not endless swiping. It launched in 2024 in New York and now serves ten US cities plus London and Toronto. The company has about 30 employees: product and engineering, a small Trust & Safety team, growth marketing, and member support. Revenue comes from subscriptions and a small amount of in-app purchases (extra Boosts); there is no advertising in the app.
+Kindred is a dating app for adults who want a real relationship, not endless swiping. It launched in 2024 in New York and now serves ten US cities plus London and Toronto. The company has about 12 employees: product and engineering, a two-person Trust & Safety team, growth marketing, and member support. Revenue comes from subscriptions (renewals included, about $70,000 a month in the summer of 2026) and a small amount of in-app purchases (extra Boosts); there is no advertising in the app.
 
 The product team's north star is dates: Kindred measures itself by how many members meet someone in person, not by time spent in the app.
 

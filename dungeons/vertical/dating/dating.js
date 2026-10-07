@@ -18,8 +18,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             Premier ($49.99/month). Sparks are premium likes with a note.
  *             Verified Profiles (video selfie check) launches 2026-07-14.
  * SCALE:      10,000 simulated members (≈4,500 sign up inside the window;
- *             ≈1,750 of those never finish their profile and leave within
- *             days), ~0.65M events, 120 days (2026-06-04 → 2026-10-01, UTC)
+ *             ≈1,700 of those never finish their profile and leave), ~0.70M
+ *             events, 120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  like sent → match created → conversation started → date planned
  *             → date feedback submitted
  * VALUE MOMENT: date planned
@@ -35,16 +35,17 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * FUNNELS (7 declared):
  *   - Onboarding (first funnel, two copies by acquisition_channel, H6):
  *       account created → photos uploaded → profile completed (70%; TikTok 35%)
- *   - Discover (session): app opened → selfie verified / like sent / profile
- *       passed / profile viewed (first-fixed; selfie verified is a template the
- *       hook keeps at most once per member, after launch)
- *   - Chat (session): app opened → message sent ×6 (first-fixed; a message with
- *       no open conversation never happens)
- *   - Conversation: match created → conversation started → date planned → date
- *       feedback submitted (engine 100%; the everything hook builds every match
+ *   - Discover (session, weight 16): app opened → selfie verified / like sent /
+ *       profile passed / profile viewed (first-fixed; selfie verified is a
+ *       template the hook keeps at most once per member, after launch, so
+ *       adoption does not depend on how active a member is)
+ *   - Chat (session, weight 14): app opened → message sent ×6 (first-fixed; a
+ *       message with no open conversation never happens)
+ *   - Conversation (weight 4): match created → conversation started → date
+ *       planned → date feedback submitted (engine 100%; the everything hook builds every match
  *       from a like and decides each step, see below). Carries the Icebreakers
  *       experiment (multipliers 1.0; the hook applies the effect)
- *   - Upgrade (free members): paywall viewed → subscription started (9%)
+ *   - Upgrade (free members, weight 5): paywall viewed → subscription started (9%)
  *
  * USER PROPS:  market, age_band, gender, seeking, relationship_goal,
  *              photo_count, subscription_plan, acquisition_channel,
@@ -73,7 +74,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   p = BASE_MATCH_RATE x photo keep (H2) x Spark multiplier (H3); a match lands
  *   2-40 s after the like (25%, the other member had already liked you) or a
  *   log-normal gap (median 6 h). Each match takes an engine Conversation unit
- *   (or a clone) with its own match_id; unused units are dropped. The opener,
+ *   (or a clone whose opener_type / venue_type are re-drawn) with its own
+ *   match_id; unused units are dropped. The opener,
  *   the date plan, and the feedback are drawn per match (H4, H9, H10), with
  *   real gaps: opener after the match (hours_since_match), date plan days after
  *   the opener, feedback 1-7 days after the plan (days_until_date) plus 10-40 h.
@@ -85,23 +87,26 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   never happens. chat_delivery_daily counts "message sent" only (openers are
  *   not in it), which matches the H7 fault (openers were unaffected).
  * - Window start: established members have conversations already running.
- *   Each gets matches in the 28 days before June 4 at their in-window rate;
- *   only the in-window steps (openers, messages, date plans, feedback) remain,
- *   so June messages and dates do not ramp from zero.
- * - Members who never finish their profile keep their signup steps and a few
- *   days of browsing (app opened, profile viewed), then leave.
+ *   Each gets likes in the 28 days before June 4 at their in-window match
+ *   rate, matched with the same gap as in-window likes (so some matches land
+ *   on June 4-10); only the in-window steps remain, so June matches, openers,
+ *   messages, and dates do not ramp from zero.
+ * - Members who never finish their profile keep only their setup steps (they
+ *   cannot like or chat before the profile is complete) and leave.
  * - Subscriptions: one purchase per member (the first would-be purchase
  *   decides, H8); paywall visits stop at that moment. 35% of paid members
  *   cancel during the window at a random moment (members paid before June 4
  *   from day one, new subscribers after 10 days); the plan reverts to free at
- *   the cancellation.
- * - Reports: 40% of engine report events are kept (about 1 report per 45
+ *   the cancellation. The cancel event itself carries the plan being
+ *   cancelled (subscription_plan = plan at t - 1 ms) on every cancel path.
+ * - Reports: 80% of engine report events are kept (about 1 report per 40
  *   profile decisions before launch), then H1 thins fake-profile and scam reports.
  * - Warehouse drift: chat_delivery_daily adds messages from members who opted
  *   out of analytics (0-16% by day) and automated greetings / safety tips
  *   (about 115 a day per platform, ±60%); subscription_bookings_daily adds store
  *   purchases Mixpanel never received and same-day refunds; paid spend is a
- *   paced budget, never derived from the day's signups.
+ *   half paced budget (weekday shape, never zero) and half bid x the day's
+ *   delivered signups, with seeded day noise.
  * - retentionCurve shapes new members' activity; established members' activity
  *   is flat across the window (DOW weights). Session funnels keep an active
  *   day's events to a few sessions.
@@ -151,9 +156,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   openers) multiply the share of matches with an opener by 1.25 (60% →
  *   75%) and the match → opener time by 0.6; 45% of variant openers have
  *   opener_type = icebreaker.
- * MIXPANEL: Funnels, match created → conversation started, totals, hold
- *   match_id constant, 7-day window, breakdown "Experiment: Icebreakers";
- *   median time to convert. Or the Experiments report on $experiment_started.
+ * MIXPANEL: Funnels, match created → conversation started, Totals counting,
+ *   hold match_id constant, 7-day window, date range 2026-07-22 to 2026-09-24
+ *   (matches with a full window), breakdown "Experiment: Icebreakers"; median
+ *   time to convert. Or the Experiments report on $experiment_started.
  * REAL WORLD: a blank chat box is the hardest message to write.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -167,10 +173,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * REAL WORLD: a dating app that works loses the people it works for.
  *
  * ─────────────────────────────────────────────────────────────────────────
- * H6. PAID CHANNEL ECONOMICS (first funnels + warehouse paid_acquisition_daily)
+ * H6. PAID CHANNEL ECONOMICS (first funnels + warehouse paid_acquisition_daily;
+ *     external-table join)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: spend per Mixpanel signup $7 TikTok, $14 Meta, $22 Apple Search
- *   Ads (paced daily budgets); TikTok signups finish their profile at 0.5x the
+ *   Ads (half paced daily budget, half bid x delivered signups); TikTok signups finish their profile at 0.5x the
  *   rate of every other channel, so spend per completed profile is level
  *   between TikTok and Meta (1.0).
  * MIXPANEL: Insights, account created by acquisition_channel joined to
@@ -206,55 +213,61 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: opener → date plan time is 1.5x for long_term and 0.6x for
  *   short_term_fun, vs long_term_open and figuring_it_out (median 72 h).
- * MIXPANEL: Funnels, conversation started → date planned, hold match_id, 30-day
- *   window, median time to convert, breakdown relationship_goal.
+ * MIXPANEL: Funnels, conversation started → date planned, Totals counting,
+ *   hold match_id constant, 30-day window, date range 2026-06-04 to 2026-08-31,
+ *   median time to convert, breakdown relationship_goal.
  * REAL WORLD: people looking for a partner take longer to commit to a first date.
  *
  * ─────────────────────────────────────────────────────────────────────────
  * H10. FAST OPENERS PLAN MORE DATES (everything)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: an opener within 24 h of the match leads to a planned date 32% of
- *   the time vs 16% for slower openers (0.5x).
- * MIXPANEL: Funnels, conversation started → date planned, hold match_id, 30-day
- *   window, breakdown hours_since_match (≤ 24, > 24).
+ * PATTERN: the chance that an opener leads to a planned date declines
+ *   smoothly (logistic, centered at 24 h, scale 6 h) with hours_since_match:
+ *   about 34% for openers in the first hours, about 14% after two days.
+ *   Averaged over the opener-delay distribution, openers within 24 h plan a
+ *   date 32% of the time vs 16% for slower openers (0.5x).
+ * MIXPANEL: Funnels, conversation started → date planned, Totals counting,
+ *   hold match_id constant, 30-day window, date range 2026-06-04 to
+ *   2026-08-31, breakdown hours_since_match (custom buckets ≤ 24, > 24).
  * REAL WORLD: momentum matters; a match that waits goes cold.
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-dating, 2026-10-07, full fidelity,
- * 10,000 members, 652,879 events)
+ * 10,000 members, 698,075 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                        | Derivation              | Expected | Measured
  * -----|-----------------------------------------------|-------------------------|----------|---------
- * H1   | fake+scam reports / 1k decisions, after/before| FAKE_REPORT_KEEP        | 0.40     | 0.395 (10.23 → 4.04)
- * H1   | other reasons / 1k decisions (control)        | unchanged               | 1.00     | 1.018 (11.79 → 12.01)
+ * H1   | fake+scam reports / 1k decisions, after/before| FAKE_REPORT_KEEP        | 0.40     | 0.437 (10.60 → 4.63)
+ * H1   | other reasons / 1k decisions (control)        | unchanged               | 1.00     | 1.035 (13.09 → 13.55)
  * H1   | selfie verified before launch                 | exact purity            | 0        | 0
- * H2   | matches per like, 1-2 photos / 4-6 photos     | PHOTO_MATCH_KEEP[1]     | 0.45     | 0.483 (9.9% vs 20.5%)
- * H2   | matches per like, 7-9 photos / 4-6 photos     | PHOTO_MATCH_KEEP[7]     | 0.80     | 0.790 (16.2% vs 20.5%)
- * H3   | Spark match rate / standard like match rate   | SPARK_MATCH_MULT        | 3.00     | 3.045 (49.5% vs 16.3%)
- * H4   | opener within 7 d per match, variant/control  | ICEBREAKER_CONV_MULT    | 1.25     | 1.267 (74.2% vs 58.6%)
- * H4   | median hours match → opener, variant/control  | ICEBREAKER_DELAY_MULT   | 0.60     | 0.589 (8.3 vs 14.1 h)
- * H4   | variant share of exposed members              | equal 2-arm hash        | 0.50     | 0.507
+ * H2   | matches per like, 1-2 photos / 4-6 photos     | PHOTO_MATCH_KEEP[1]     | 0.45     | 0.447 (9.4% vs 21.0%)
+ * H2   | matches per like, 7-9 photos / 4-6 photos     | PHOTO_MATCH_KEEP[7]     | 0.80     | 0.783 (16.4% vs 21.0%)
+ * H3   | Spark match rate / standard like match rate   | SPARK_MATCH_MULT        | 3.00     | 2.994 (49.2% vs 16.4%)
+ * H4   | opener within 7 d per match, variant/control  | ICEBREAKER_CONV_MULT    | 1.25     | 1.268 (75.1% vs 59.2%)
+ * H4   | median hours match → opener, variant/control  | ICEBREAKER_DELAY_MULT   | 0.60     | 0.590 (8.2 vs 13.9 h)
+ * H4   | variant share of exposed members              | equal 2-arm hash        | 0.50     | 0.506
  * H4   | icebreaker openers in Control or pre-test     | exact purity            | 0        | 0
- * H5   | D14-27 retention, first date 4-5★ / 1-3★      | 1 − SUCCESS_CHURN_SHARE | 0.55     | 0.554 (48.1% vs 86.7%)
- * H6   | spend per signup, TikTok / Apple Search Ads   | 7 / 22                  | 0.318    | 0.297 ($6.81 vs $22.94)
- * H6   | 7-day profile completion, TikTok / others     | 35 / 70                 | 0.50     | 0.490 (33.9% vs 69.1%)
- * H6   | spend per completed profile, TikTok / Meta    | (7 / 0.5) / 14          | 1.00     | 0.988 ($20.10 vs $20.34)
- * H7   | Android/iOS message sends, incident / ±14 d   | 1 − CHAT_FAIL           | 0.40     | 0.411
+ * H5   | D14-27 retention, first date 4-5★ / 1-3★      | 1 − SUCCESS_CHURN_SHARE | 0.55     | 0.519 (46.6% vs 89.8%)
+ * H6   | spend per signup, TikTok / Apple Search Ads   | 7 / 22                  | 0.318    | 0.296 ($6.71 vs $22.70)
+ * H6   | 7-day profile completion, TikTok / others     | 35 / 70                 | 0.50     | 0.472 (33.5% vs 71.1%)
+ * H6   | spend per completed profile, TikTok / Meta    | (7 / 0.5) / 14          | 1.00     | 0.981 ($20.01 vs $20.40)
+ * H7   | Android/iOS message sends, incident / ±14 d   | 1 − CHAT_FAIL           | 0.40     | 0.370
  * H7   | warehouse delivery_failure_rate, incident     | CHAT_FAIL               | 0.60     | 0.598
- * H8   | Kindred+ purchases per paywall view, after/before | PLUS_KEEP_AFTER (≤, floor 0.85) | 0.70 | 0.680 (6.95% → 4.72%)
- * H8   | Kindred+ list-price bookings per view, after/before | 0.7 × 34.99/29.99 (≤, floor 0.908) | 0.817 | 0.744
- * H9   | median opener → date hours, long_term / base  | GOAL_TTC_MULT.long_term | 1.50     | 1.552 (109.6 h)
- * H9   | median opener → date hours, short_term_fun / base | GOAL_TTC_MULT.short_term_fun | 0.60 | 0.596 (42.1 h)
- * H10  | date planned within 30 d per opener, >24 h / ≤24 h | 0.16 / 0.32       | 0.50     | 0.483 (15.8% vs 32.7%)
+ * H8   | Kindred+ purchases per paywall view, after/before | PLUS_KEEP_AFTER (≤, floor 0.85) | 0.70 | 0.655 (6.52% → 4.27%)
+ * H8   | Kindred+ list-price bookings per view, after/before | 0.7 × 34.99/29.99 (≤, floor 0.908) | 0.817 | 0.762
+ * H9   | median opener → date hours, long_term / base  | GOAL_TTC_MULT.long_term | 1.50     | 1.560 (109.7 h)
+ * H9   | median opener → date hours, short_term_fun / base | GOAL_TTC_MULT.short_term_fun | 0.60 | 0.629 (44.3 h)
+ * H10  | date planned within 30 d per opener, >24 h / ≤24 h | 0.16 / 0.32 (bucket averages of the logistic) | 0.50 | 0.477 (15.2% vs 31.9%)
  * ═════════════════════════════════════════════════════════════════════════
  *
- * Noise notes: H8 rests on about 200 Kindred+ purchases after the change, so
+ * Noise notes: H8 rests on about 280 Kindred+ purchases after the change, so
  * its reads use the knob as target with a half-effect floor (STRONG above the
- * ±10% band, which happens on some seeds); its bookings read also moves with
- * the billing-period mix. H7 rests on about 900 Android sends on incident days
- * (relative SE about 5%). H10's slow arm has about 430 dates (relative SE
- * about 5%). Premier purchases per paywall view are not engineered (2.46% →
- * 2.67% across the price change, z = 0.7).
+ * ±10% band, which can happen on other seeds); its bookings read also moves
+ * with the billing-period mix. H7 rests on about 800 Android sends on incident
+ * days (relative SE about 5%). H10's slow arm has about 450 dates (relative SE
+ * about 5%). H6 spend per signup also moves with how many members each channel
+ * delivered (half of spend is a fixed plan). Premier purchases per paywall view
+ * are not engineered (2.42% → 2.45% across the price change, z = 0.15).
  */
 
 // ── SCALE ──
@@ -297,12 +310,12 @@ const VERIFY_RAMP_DAYS = 21;        // existing members verify on a salted day i
 const VERIFY_NEW_MEMBER_HOURS = 48; // members who join after launch verify within 2 days of signup
 const FAKE_REPORT_KEEP = 0.4;       // share of fake-profile/scam reports left once the ramp is done
 const FAKE_REASONS = ["fake_profile", "scam"];
-const REPORT_KEEP = 0.4;            // realism: share of standalone report events kept (report rate per view)
+const REPORT_KEEP = 0.8;            // realism: share of standalone report events kept (report rate per profile decision)
 
 // H2 photo count sweet spot: share of would-be matches kept, by profile photo_count
 const PHOTO_MATCH_KEEP = { 1: 0.45, 2: 0.45, 3: 0.75, 4: 1, 5: 1, 6: 1, 7: 0.8, 8: 0.8, 9: 0.8 };
 const BASE_MATCH_RATE = 0.2;       // chance a standard like becomes a match (4-6 photos)
-// realism (not a story): men like freely and match less per like; women like selectively and match more
+// realism (not a story): men's likes are returned less often than women's
 const GENDER_MATCH_MULT = { man: 0.7, woman: 1.45, nonbinary: 1.0 };
 
 // H3 Sparks (premium likes) match at 3x a standard like
@@ -348,6 +361,9 @@ const SPEND_WEEKDAY = (() => {
 	return DOW_WEIGHTS.map((w) => SPEND_FLAT_SHARE + (1 - SPEND_FLAT_SHARE) * w / m);
 })();
 const SPEND_NOISE = 0.12;
+// install-optimized campaigns: half of each day's spend is the paced plan, half
+// follows the installs the network delivered that day (bid x delivered signups)
+const SPEND_PLAN_SHARE = 0.5;
 const PLATFORM_INSTALL_INFLATION = 1.18; // ad networks claim more installs than Mixpanel signups
 const CPC_USD = { meta_ads: 1.6, tiktok_ads: 0.9, apple_search_ads: 2.4 };
 const CTR = { meta_ads: 0.011, tiktok_ads: 0.008, apple_search_ads: 0.06 };
@@ -374,10 +390,33 @@ const DATE_GAP_MEDIAN_H = 72;
 const DATE_GAP_SIGMA = 0.5;
 const GOAL_TTC_MULT = { long_term: 1.5, long_term_open: 1, figuring_it_out: 1, short_term_fun: 0.6 };
 
-// H10 fast openers plan more dates
+// H10 fast openers plan more dates: the date rate declines smoothly (logistic)
+// around FAST_OPENER_HOURS. DATE_RATE_FAST / DATE_RATE_SLOW are the average rates
+// of openers within / after FAST_OPENER_HOURS (the knob, ratio 0.5); the curve's
+// plateaus are solved from the opener-delay distribution so the bucket averages
+// land on them.
 const FAST_OPENER_HOURS = 24;
 const DATE_RATE_FAST = 0.32;
 const DATE_RATE_SLOW = 0.16;
+const DATE_RATE_SOFTNESS_H = 6;     // logistic scale: most of the decline happens between ~12 h and ~36 h
+const OPENER_MAX_H = 14 * 24;
+const dateCurveShape = (h) => 1 / (1 + Math.exp((h - FAST_OPENER_HOURS) / DATE_RATE_SOFTNESS_H));
+const [DATE_RATE_EARLY, DATE_RATE_LATE] = (() => {
+	// integrate the curve shape over the log-normal opener delay (Control arm; the
+	// Icebreakers arm's shorter delays move the plateaus by < 0.003)
+	let nF = 0, sF = 0, nS = 0, sS = 0;
+	const N = 4000;
+	for (let i = 0; i < N; i++) {
+		const z = -6 + 12 * (i + 0.5) / N;
+		const w = Math.exp(-z * z / 2);
+		const h = Math.min(OPENER_MAX_H, OPENER_MEDIAN_H * Math.exp(OPENER_SIGMA * z));
+		if (h <= FAST_OPENER_HOURS) { nF += w; sF += w * dateCurveShape(h); } else { nS += w; sS += w * dateCurveShape(h); }
+	}
+	const span = (DATE_RATE_FAST - DATE_RATE_SLOW) / (sF / nF - sS / nS);
+	const late = DATE_RATE_SLOW - span * (sS / nS);
+	return [late + span, late];
+})();
+const dateRate = (h) => DATE_RATE_LATE + (DATE_RATE_EARLY - DATE_RATE_LATE) * dateCurveShape(h);
 const FEEDBACK_RATE = 0.8;
 const CONV_OPEN_DAYS = 28;          // a conversation takes follow-up messages for 4 weeks
 
@@ -391,6 +430,8 @@ const MARKETS = { "New York": 20, "Los Angeles": 14, Chicago: 10, Austin: 7, "Sa
 const PHOTO_WEIGHTS = { 1: 4, 2: 8, 3: 14, 4: 20, 5: 20, 6: 16, 7: 8, 8: 6, 9: 4 };
 const GOAL_WEIGHTS = { long_term: 32, long_term_open: 25, figuring_it_out: 23, short_term_fun: 20 };
 const RATING_WEIGHTS = { 1: 6, 2: 10, 3: 22, 4: 34, 5: 28 };
+const OPENER_TYPE_WEIGHTS = { text: 55, prompt_reply: 35, voice_note: 10 };
+const VENUE_WEIGHTS = { drinks: 38, coffee: 26, dinner: 16, activity: 14, video_call: 6 };
 
 // ── HELPERS ──
 const salt = (uid, tag) => hashFloat(`${uid}|${tag}`);
@@ -404,7 +445,8 @@ const logNormal = (sigma) => Math.exp(chance.normal({ mean: 0, dev: sigma }));
 const jitter = (key, spread) => 1 + (hashFloat(key) - 0.5) * 2 * spread;
 const inChatIncident = (t) => t >= ms(CHAT_INCIDENT_START) && t < ms(CHAT_INCIDENT_END);
 const price = (plan, period, t) => (PRICES[plan]?.[period] ?? [0, 0])[t >= ms(PLUS_PRICE_CHANGE) ? 1 : 0];
-const paidSpend = (date, ch) => round2(DAILY_BUDGET_USD[ch] * SPEND_WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()] * jitter(`spend|${date}|${ch}`, SPEND_NOISE));
+const paidSpend = (date, ch, signups) => round2((SPEND_PLAN_SHARE * DAILY_BUDGET_USD[ch] * SPEND_WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()]
+	+ (1 - SPEND_PLAN_SHARE) * CPI_USD[ch] * signups) * jitter(`spend|${date}|${ch}`, SPEND_NOISE));
 const pickWeighted = (obj, r) => {
 	const entries = Object.entries(obj);
 	const total = entries.reduce((s, [, w]) => s + w, 0);
@@ -434,7 +476,7 @@ function handleUserHook(profile, meta) {
 	}
 	const tenureDays = Math.floor(salt(uid, "tenure") * (ms(DATASET_START) - ms("2024-01-01T00:00:00Z")) / DAY_MS);
 	profile.member_since = dayjs.utc("2024-01-01T00:00:00Z").add(tenureDays, "day").format("YYYY-MM-DD");
-	profile.subscription_plan = pickWeighted({ free: 72, plus: 20, premier: 8 }, salt(uid, "plan"));
+	profile.subscription_plan = pickWeighted({ free: 76, plus: 17, premier: 7 }, salt(uid, "plan"));
 	return profile;
 }
 
@@ -449,10 +491,12 @@ function handleEverything(events, meta) {
 	// ── platform: the member's phone (one device per member) ──
 	const osEv = events.find((e) => e.device_id && e.os) || events.find((e) => e.os);
 	const platform = osEv && osEv.os === "Android" ? "android" : "ios";
+	// a cancellation carries the plan being cancelled; events after it carry free
 	const stampPlan = (evs, planAt) => {
 		for (const e of evs) {
 			e.platform = platform;
-			e.subscription_plan = planAt(T(e));
+			const t = T(e);
+			e.subscription_plan = planAt(e.event === "subscription cancelled" ? t - 1 : t);
 		}
 	};
 
@@ -525,20 +569,27 @@ function handleEverything(events, meta) {
 	const genderMult = GENDER_MATCH_MULT[profile.gender] ?? 1;
 	const slots = [];
 	if (haveTemplates) {
+		const matchGap = () => (chance.bool({ likelihood: INSTANT_MATCH_SHARE * 100 })
+			? chance.integer({ min: 2, max: 40 }) * 1000
+			: Math.floor(Math.min(7 * DAY_MS, MATCH_GAP_MEDIAN_H * HOUR_MS * logNormal(1.0))));
 		for (const l of likes) {
 			const spark = l.like_type === "spark";
 			const p = Math.min(0.95, BASE_MATCH_RATE * genderMult * photoKeep * (spark ? SPARK_MATCH_MULT : 1));
 			if (!chance.bool({ likelihood: p * 100 })) continue;
-			const gap = chance.bool({ likelihood: INSTANT_MATCH_SHARE * 100 })
-				? chance.integer({ min: 2, max: 40 }) * 1000
-				: Math.min(7 * DAY_MS, MATCH_GAP_MEDIAN_H * HOUR_MS * logNormal(1.0));
-			slots.push({ matchT: T(l) + gap, source: spark ? "spark" : "like" });
+			slots.push({ matchT: T(l) + matchGap(), source: spark ? "spark" : "like" });
 		}
-		// established members: conversations already running at the window start
-		if (!signup) {
-			const x = slots.length * PREWINDOW_DAYS / WINDOW_DAYS;
+		// established members: likes sent in the 4 weeks before the window keep
+		// matching (some land in the first days of June), so matches and the
+		// conversations behind them are already running at the window start
+		if (!signup && slots.length) {
+			const nIn = slots.length;
+			const x = nIn * PREWINDOW_DAYS / WINDOW_DAYS;
 			const n = Math.floor(x) + (chance.bool({ likelihood: (x % 1) * 100 }) ? 1 : 0);
-			for (let i = 0; i < n; i++) slots.push({ matchT: BEGIN - chance.floating({ min: 0.01, max: PREWINDOW_DAYS }) * DAY_MS, source: "like", pre: true });
+			for (let i = 0; i < n; i++) {
+				const likeT = BEGIN - Math.floor(chance.floating({ min: 0, max: PREWINDOW_DAYS }) * DAY_MS);
+				const source = slots[chance.integer({ min: 0, max: nIn - 1 })].source;
+				slots.push({ matchT: likeT + matchGap(), source, pre: true });
+			}
 		}
 	}
 
@@ -547,11 +598,11 @@ function handleEverything(events, meta) {
 	const plans = slots.map((s) => {
 		const isIce = variant === ICEBREAKERS_VARIANT && s.matchT >= ms(ICEBREAKERS_START);
 		const enrolled = variant !== null && s.matchT >= ms(ICEBREAKERS_START);
-		const delayH = Math.min(14 * 24, OPENER_MEDIAN_H * logNormal(OPENER_SIGMA) * (isIce ? ICEBREAKER_DELAY_MULT : 1));
+		const delayH = Math.min(OPENER_MAX_H, OPENER_MEDIAN_H * logNormal(OPENER_SIGMA) * (isIce ? ICEBREAKER_DELAY_MULT : 1));
 		const convT = s.matchT + delayH * HOUR_MS;
 		const hasConv = chance.bool({ likelihood: CONV_BASE * (isIce ? ICEBREAKER_CONV_MULT : 1) * 100 });
 		const opener = isIce && chance.bool({ likelihood: ICEBREAKER_OPENER_SHARE * 100 }) ? "icebreaker" : null;
-		const hasDate = hasConv && chance.bool({ likelihood: (delayH <= FAST_OPENER_HOURS ? DATE_RATE_FAST : DATE_RATE_SLOW) * 100 });
+		const hasDate = hasConv && chance.bool({ likelihood: dateRate(delayH) * 100 });
 		const dateGapH = DATE_GAP_MEDIAN_H * logNormal(DATE_GAP_SIGMA) * goalMult;
 		const dateT = convT + dateGapH * HOUR_MS;
 		const daysUntil = chance.integer({ min: 1, max: 7 });
@@ -569,7 +620,8 @@ function handleEverything(events, meta) {
 	for (const p of plans.filter((x) => x.hasFb && x.fbT >= BEGIN && x.fbT <= END).sort((a, b) => a.fbT - b.fbT)) {
 		if (p.fbT >= cut) break;
 		if (p.rating >= POSITIVE_RATING && chance.bool({ likelihood: SUCCESS_CHURN_SHARE * 100 })) {
-			cut = p.fbT + chance.floating({ min: SUCCESS_CHURN_DAY_MIN, max: SUCCESS_CHURN_DAY_MAX }) * DAY_MS;
+			// whole milliseconds: event times are ISO strings with ms precision
+			cut = Math.floor(p.fbT + chance.floating({ min: SUCCESS_CHURN_DAY_MIN, max: SUCCESS_CHURN_DAY_MAX }) * DAY_MS);
 			break;
 		}
 	}
@@ -585,7 +637,13 @@ function handleEverything(events, meta) {
 		const put = (step, t, set) => {
 			if (t >= cut) return;
 			const base = src && src[step];
-			const ev = base || cloneEvent(templates[step], { time: iso(t) });
+			let ev = base;
+			if (!ev) {
+				// more matches than engine units: clone a template and re-draw its free-form props
+				ev = cloneEvent(templates[step], { time: iso(t) });
+				if (step === "conversation started") ev.opener_type = pickWeighted(OPENER_TYPE_WEIGHTS, chance.floating({ min: 0, max: 1 }));
+				if (step === "date planned") ev.venue_type = pickWeighted(VENUE_WEIGHTS, chance.floating({ min: 0, max: 1 }));
+			}
 			ev.time = iso(t);
 			ev.match_id = id;
 			Object.assign(ev, set);
@@ -608,14 +666,16 @@ function handleEverything(events, meta) {
 	if (cut < Infinity) {
 		events = events.filter((e) => T(e) < cut || ONBOARDING.has(e.event));
 		if (planAt(cut) !== "free" && cancelTemplate) {
-			const tc = cut - chance.integer({ min: 30, max: 24 * 60 }) * MIN_MS;
+			let tc = cut - chance.integer({ min: 30, max: 24 * 60 }) * MIN_MS;
+			// a member who bought in the last day before leaving cancels after the purchase
+			if (buyT < cut && tc <= buyT) tc = buyT + Math.floor((cut - buyT) / 2);
 			events = events.filter((e) => e.event !== "subscription cancelled");
 			const c = cancel || cloneEvent(cancelTemplate, { time: iso(tc) });
 			c.time = iso(tc);
 			c.cancel_reason = "met_someone";
 			events.push(c);
 			cancel = c;
-			cancelT = tc;
+			cancelT = T(c);
 		}
 	}
 
@@ -692,7 +752,14 @@ function handleEverything(events, meta) {
 function handleWarehouse(row, meta) {
 	if (meta.isBackfill) return row;
 	if (meta.metricName === "paid_acquisition_daily") {
-		row.spend_usd = paidSpend(row.date, row.acquisition_channel);
+		// the source count (Mixpanel paid signups that day) becomes spend; network
+		// clicks, impressions, and claimed installs follow the spend
+		const k = `${row.date}|${row.acquisition_channel}`;
+		const spend = paidSpend(row.date, row.acquisition_channel, row.spend_usd);
+		row.spend_usd = spend;
+		row.installs_reported = Math.round(spend * PLATFORM_INSTALL_INFLATION / CPI_USD[row.acquisition_channel] * jitter(`inst|${k}`, 0.2));
+		row.clicks = Math.round(spend / (CPC_USD[row.acquisition_channel] * jitter(`cpc|${k}`, 0.15)));
+		row.impressions = Math.round(row.clicks / (CTR[row.acquisition_channel] * jitter(`ctr|${k}`, 0.15)));
 		return row;
 	}
 	if (meta.metricName === "chat_delivery_daily") {
@@ -823,7 +890,7 @@ const config = {
 			properties: {
 				match_id: ["unassigned"],
 				hours_since_match: [0],
-				opener_type: { __weights: { text: 55, prompt_reply: 35, voice_note: 10 } },
+				opener_type: { __weights: OPENER_TYPE_WEIGHTS },
 			},
 		},
 		{
@@ -841,7 +908,7 @@ const config = {
 			isStrictEvent: true,
 			properties: {
 				match_id: ["unassigned"],
-				venue_type: { __weights: { drinks: 38, coffee: 26, dinner: 16, activity: 14, video_call: 6 } },
+				venue_type: { __weights: VENUE_WEIGHTS },
 				days_until_date: [1],
 			},
 		},
@@ -952,12 +1019,13 @@ const config = {
 		{
 			// a swiping session: open the app, like and pass on profiles
 			name: "Discover",
-			// (selfie verified rides along as a template; the hook keeps at most one per member)
-			sequence: ["app opened", "selfie verified", "like sent", "profile passed", "like sent", "profile viewed", "profile passed"],
+			// (selfie verified rides along as a template so nearly every member has
+			// one; the hook keeps at most one per member, after launch, and drops the rest)
+			sequence: ["app opened", "selfie verified", "like sent", "profile passed", "like sent", "profile viewed", "profile passed", "profile passed"],
 			conversionRate: 55,
 			timeToConvert: 0.4,
 			order: "first-fixed",
-			weight: 10,
+			weight: 16,
 		},
 		{
 			// a chat session: open the app, reply in open conversations
@@ -966,7 +1034,7 @@ const config = {
 			conversionRate: 60,
 			timeToConvert: 0.6,
 			order: "first-fixed",
-			weight: 10,
+			weight: 14,
 		},
 		{
 			name: "Conversation",
@@ -974,7 +1042,7 @@ const config = {
 			conversionRate: 100,
 			timeToConvert: 1,
 			order: "sequential",
-			weight: 3,
+			weight: 4,
 			props: {
 				match_id: () => `m_${chance.hash({ length: 12 })}`,
 			},
@@ -991,7 +1059,7 @@ const config = {
 			conversionRate: UPGRADE_CONV,
 			timeToConvert: 0.5,
 			order: "sequential",
-			weight: 2,
+			weight: 5,
 			props: {
 				plan: { __weights: { plus: 72, premier: 28 } },
 				billing_period: { __weights: { "1_month": 58, "3_month": 27, "6_month": 15 } },
@@ -1013,9 +1081,10 @@ const config = {
 			timeColumn: "date",
 			valueColumn: "spend_usd",
 			columns: {
-				installs_reported: (ctx) => Math.round(paidSpend(dayKey(ctx.time), ctx.seriesKey) * PLATFORM_INSTALL_INFLATION / CPI_USD[ctx.seriesKey] * jitter(`inst|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.2)),
-				clicks: (ctx) => Math.round(paidSpend(dayKey(ctx.time), ctx.seriesKey) / (CPC_USD[ctx.seriesKey] * jitter(`cpc|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.15))),
-				impressions: (ctx) => Math.round(ctx.row.clicks / (CTR[ctx.seriesKey] * jitter(`ctr|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.15))),
+				// set by the warehouse hook from the day's spend
+				installs_reported: 0,
+				clicks: 0,
+				impressions: 0,
 			},
 		},
 		{
@@ -1227,7 +1296,7 @@ SELECT 'all' AS grp, count(DISTINCT uid) AS user_count, count(*) FILTER (WHERE t
 	{
 		id: "H2-photo-count-sweet-spot",
 		hook: "H2",
-		archetype: "frequency-sweet-spot",
+		archetype: "cohort-prop-scale",
 		narrative: `Profiles with 4-6 photos get the most matches per like. The share of would-be matches kept by profile photo_count: 1-2 photos ${PHOTO_MATCH_KEEP[1]}, 3 photos ${PHOTO_MATCH_KEEP[3]}, 4-6 photos 1.0, 7-9 photos ${PHOTO_MATCH_KEEP[7]} (too many photos reads as over-curated). photo_count is drawn independently of activity, plan, and Sparks, so matches per like by photo band reads the keep share directly.`,
 		mixpanelReport: { type: "Insights", events: ["match created", "like sent"], formula: "A / B", breakdown: "user property photo_count" },
 		assertions: [
@@ -1272,7 +1341,7 @@ FROM ev WHERE event IN ('match created', 'like sent')`,
 		hook: "H4",
 		archetype: "experiment-lift",
 		narrative: `The "${ICEBREAKERS_EXPERIMENT}" test starts ${D(ICEBREAKERS_START)}: members who get a match are split 50/50 (sticky per member; exposure $experiment_started 1 s before each new match). In the "${ICEBREAKERS_VARIANT}" arm the new-match chat suggests openers: the share of matches where the member sends an opener rises ${ICEBREAKER_CONV_MULT}x (from ${CONV_BASE * 100}%), the time from match to opener is ${ICEBREAKER_DELAY_MULT}x, and about ${ICEBREAKER_OPENER_SHARE * 100}% of variant openers use a suggestion (opener_type = icebreaker, which never appears in Control or before the test). Read: per-match conversion match created → conversation started within ${EXP_WINDOW_DAYS} days (matches ${D(ICEBREAKERS_START)} to ${EXP_READ_END.slice(0, 10)}, so every match has its full window), and median hours_since_match on the opener.`,
-		mixpanelReport: { type: "Funnels", steps: ["match created", "conversation started"], counting: "totals", holdPropertyConstant: "match_id", window: `${EXP_WINDOW_DAYS} days`, breakdown: `user property "${EXP_KEY}"`, measure: "conversion and median time to convert" },
+		mixpanelReport: { type: "Funnels", steps: ["match created", "conversation started"], counting: "totals", holdPropertyConstant: "match_id", window: `${EXP_WINDOW_DAYS} days`, dateRange: `${D(ICEBREAKERS_START)} to ${EXP_READ_END.slice(0, 10)}`, breakdown: `user property "${EXP_KEY}"`, measure: "conversion and median time to convert" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H4_SQL },
@@ -1341,8 +1410,8 @@ FROM f1 JOIN r ON r.uid = f1.uid GROUP BY 1`,
 	{
 		id: "H6-paid-channel-economics",
 		hook: "H6",
-		archetype: "attribution-bias",
-		narrative: `TikTok is Kindred's cheapest paid channel per signup and its weakest at onboarding. Warehouse paid_acquisition_daily bills a paced daily budget per channel (cost per signup x expected signups per day, a weekday shape above a ${SPEND_FLAT_SHARE * 100}% flat floor, seeded ±${SPEND_NOISE * 100}% day noise): $${CPI_USD.tiktok_ads} TikTok, $${CPI_USD.meta_ads} Meta, $${CPI_USD.apple_search_ads} Apple Search Ads per Mixpanel signup over the window. TikTok signups finish their profile (account created → photos uploaded → profile completed, 7 days) at ${TIKTOK_ONBOARD_MULT}x the rate of every other channel (${Math.round(ONBOARD_CONV * TIKTOK_ONBOARD_MULT)}% vs ${ONBOARD_CONV}%; two declared first funnels with acquisition_channel conditions). Spend per completed profile therefore comes out level between TikTok and Meta: (${CPI_USD.tiktok_ads} / ${TIKTOK_ONBOARD_MULT}) / ${CPI_USD.meta_ads} = ${(CPI_USD.tiktok_ads / TIKTOK_ONBOARD_MULT / CPI_USD.meta_ads).toFixed(2)}.`,
+		archetype: "funnel-conversion-by-segment",
+		narrative: `TikTok is Kindred's cheapest paid channel per signup and its weakest at onboarding. Warehouse paid_acquisition_daily bills install-optimized campaigns: each day ${SPEND_PLAN_SHARE * 100}% of spend is a paced budget (cost per signup x expected signups per day, a weekday shape above a ${SPEND_FLAT_SHARE * 100}% flat floor) and ${(1 - SPEND_PLAN_SHARE) * 100}% is the bid x that day's delivered signups, with seeded ±${SPEND_NOISE * 100}% day noise: $${CPI_USD.tiktok_ads} TikTok, $${CPI_USD.meta_ads} Meta, $${CPI_USD.apple_search_ads} Apple Search Ads per Mixpanel signup over the window. TikTok signups finish their profile (account created → photos uploaded → profile completed, 7 days) at ${TIKTOK_ONBOARD_MULT}x the rate of every other channel (${Math.round(ONBOARD_CONV * TIKTOK_ONBOARD_MULT)}% vs ${ONBOARD_CONV}%; two declared first funnels with acquisition_channel conditions). Spend per completed profile therefore comes out level between TikTok and Meta: (${CPI_USD.tiktok_ads} / ${TIKTOK_ONBOARD_MULT}) / ${CPI_USD.meta_ads} = ${(CPI_USD.tiktok_ads / TIKTOK_ONBOARD_MULT / CPI_USD.meta_ads).toFixed(2)}.`,
 		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "paid_acquisition_daily.spend_usd", funnel: "account created → photos uploaded → profile completed, 7-day window, breakdown acquisition_channel" },
 		assertions: [
 			{
@@ -1428,7 +1497,7 @@ FROM ${WH("chat_delivery_daily")}`,
 		hook: "H9",
 		archetype: "funnel-ttc-by-segment",
 		narrative: `How fast a conversation turns into a planned date depends on what the member is looking for (profile relationship_goal): the gap from "conversation started" to "date planned" is ${GOAL_TTC_MULT.long_term}x for long_term and ${GOAL_TTC_MULT.short_term_fun}x for short_term_fun, vs long_term_open and figuring_it_out (base median ${DATE_GAP_MEDIAN_H} h, log-normal). Every step of a match shares match_id. Read: median hours from opener to date plan, per match, within a ${DATE_WINDOW_DAYS}-day window, conversations through ${DATE_READ_END.slice(0, 10)} (complete windows).`,
-		mixpanelReport: { type: "Funnels", steps: ["conversation started", "date planned"], holdPropertyConstant: "match_id", window: `${DATE_WINDOW_DAYS} days`, measure: "median time to convert", breakdown: "user property relationship_goal" },
+		mixpanelReport: { type: "Funnels", steps: ["conversation started", "date planned"], counting: "totals", holdPropertyConstant: "match_id", window: `${DATE_WINDOW_DAYS} days`, dateRange: `${D0} to 2026-08-31`, measure: "median time to convert", breakdown: "user property relationship_goal" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H9_SQL },
@@ -1448,8 +1517,8 @@ FROM ${WH("chat_delivery_daily")}`,
 		id: "H10-fast-openers",
 		hook: "H10",
 		archetype: "funnel-conversion-by-segment",
-		narrative: `Openers sent within ${FAST_OPENER_HOURS} hours of the match lead to a planned date twice as often: ${DATE_RATE_FAST * 100}% of fast conversations vs ${DATE_RATE_SLOW * 100}% of slower ones reach "date planned". The opener carries hours_since_match (hours from the match). Read: per conversation, date planned within ${DATE_WINDOW_DAYS} days, conversations through ${DATE_READ_END.slice(0, 10)}, slow (> ${FAST_OPENER_HOURS} h) over fast (≤ ${FAST_OPENER_HOURS} h).`,
-		mixpanelReport: { type: "Funnels", steps: ["conversation started", "date planned"], holdPropertyConstant: "match_id", window: `${DATE_WINDOW_DAYS} days`, breakdown: `hours_since_match (custom buckets ≤ ${FAST_OPENER_HOURS}, > ${FAST_OPENER_HOURS})` },
+		narrative: `Momentum matters: the chance that an opener leads to "date planned" declines smoothly with hours_since_match (logistic centered at ${FAST_OPENER_HOURS} h, scale ${DATE_RATE_SOFTNESS_H} h; about ${Math.round(DATE_RATE_EARLY * 100)}% for the fastest openers, about ${Math.round(DATE_RATE_LATE * 100)}% after two days). Averaged over the opener-delay distribution, ${DATE_RATE_FAST * 100}% of openers within ${FAST_OPENER_HOURS} h vs ${DATE_RATE_SLOW * 100}% of slower ones plan a date (0.5x). The opener carries hours_since_match (hours from the match). Read: per conversation, date planned within ${DATE_WINDOW_DAYS} days, conversations through ${DATE_READ_END.slice(0, 10)}, slow (> ${FAST_OPENER_HOURS} h) over fast (≤ ${FAST_OPENER_HOURS} h).`,
+		mixpanelReport: { type: "Funnels", steps: ["conversation started", "date planned"], counting: "totals", holdPropertyConstant: "match_id", window: `${DATE_WINDOW_DAYS} days`, dateRange: `${D0} to 2026-08-31`, breakdown: `hours_since_match (custom buckets ≤ ${FAST_OPENER_HOURS}, > ${FAST_OPENER_HOURS})` },
 		assertions: [
 			{
 				breakdown: {

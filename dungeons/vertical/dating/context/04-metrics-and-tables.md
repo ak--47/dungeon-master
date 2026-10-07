@@ -32,7 +32,7 @@ In the warehouse, numeric columns are loaded as FLOAT64 (shown as FLOAT below). 
 
 ### `paid_acquisition_daily`
 
-Daily paid acquisition cost by channel, from the ad networks' billing exports. Each channel runs on a daily budget that the network paces through the day, following the weekly rhythm of signups with a floor on quieter days.
+Daily paid acquisition cost by channel, from the ad networks' billing exports. The campaigns are install-optimized. Part of each day's spend is a daily budget that the network paces through the day, following the weekly rhythm of signups with a floor on quieter days. The rest is bid-based and rises and falls with the installs the network delivers that day.
 
 | Column | Type | Unit | Meaning |
 |---|---|---|---|

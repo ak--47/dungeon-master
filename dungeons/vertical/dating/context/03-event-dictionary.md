@@ -11,7 +11,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 | `device_id` | The member's device. Present on every event except `photos uploaded` and `profile completed`, which the profile service sends server-side with `user_id` only. |
 | `insert_id` | Unique event ID used for de-duplication. |
 | `session_id` | The app session the event belongs to (diagnostic; Mixpanel computes its own sessions). |
-| `subscription_plan` | The member's plan **at the moment of the event**: `free`, `plus`, or `premier`. It changes when a member starts a subscription, and goes back to `free` when they cancel. |
+| `subscription_plan` | The member's plan **at the moment of the event**: `free`, `plus`, or `premier`. It changes when a member starts a subscription, and goes back to `free` after they cancel. On `subscription cancelled` itself it is the plan being cancelled. |
 | `platform` | `ios` (iPhone or iPad) or `android`. Fixed per member. |
 | `market` | The member's city: one of the twelve markets in 01-business.md. Fixed per member. |
 | `os`, `model`, `screen_height`, `screen_width`, `carrier`, `radio` | Device details from the mobile SDK. `os` is `iOS`, `iPadOS`, or `Android`. |
@@ -59,7 +59,7 @@ Every match has a `match_id`. The match, the opener, every later message, the da
 |---|---|---|
 | `paywall viewed` | A free member sees the plans paywall. | `paywall_trigger` (`out_of_likes`, `likes_you`, `spark`, `boost`, `profile_tab`). |
 | `subscription started` | The member starts a paid plan. At most one per member in the window. Price is **not** tracked here; see `subscription_bookings_daily`. | `plan` (`plus` or `premier`); `billing_period` (`1_month`, `3_month`, `6_month`). |
-| `subscription cancelled` | The member cancels their paid plan; their plan goes back to Free. At most one per member in the window. | `cancel_reason` (`met_someone`, `too_expensive`, `not_enough_matches`, `taking_a_break`, `bad_experience`). |
+| `subscription cancelled` | The member cancels their paid plan. The event carries the plan being cancelled in `subscription_plan`; the member's later events carry `free`. At most one per member in the window. | `cancel_reason` (`met_someone`, `too_expensive`, `not_enough_matches`, `taking_a_break`, `bad_experience`). |
 
 ## User profile properties
 

@@ -249,12 +249,19 @@ SELECT max(r) FILTER (WHERE variant = 'Icebreakers') AS variant_rate, max(r) FIL
   / sqrt(max(r * (1 - r) / n) FILTER (WHERE variant = 'Icebreakers') + max(r * (1 - r) / n) FILTER (WHERE variant = 'Control')), 1) AS z
 FROM g;
 
+-- the same read with Uniques counting (a member converts if any of their matches gets an opener in 7 days)
+SELECT p.variant, count(DISTINCT m.uid) AS members,
+ round(count(DISTINCT m.uid) FILTER (WHERE m.t_conv < m.t_match + INTERVAL 7 DAY)::DOUBLE / count(DISTINCT m.uid), 4) AS member_opener_rate_uniques
+FROM matches m JOIN prof p ON p.uid = m.uid
+WHERE m.t_match >= TIMESTAMP '2026-07-22' AND m.t_match < TIMESTAMP '2026-09-24 23:59:59' AND p.variant IS NOT NULL GROUP BY 1 ORDER BY 1;
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q6 — retention after a member's first rated date (see STORY H5); cancellation reasons
 -- ─────────────────────────────────────────────────────────────────────────
 SELECT rating, count(*) AS members, round(avg(retained_d14_27::INT), 4) AS retention_d14_27 FROM first_feedback GROUP BY 1 ORDER BY 1;
 
-SELECT cancel_reason, count(*) AS cancellations, round(count(*)::DOUBLE / sum(count(*)) OVER (), 4) AS share
+SELECT cancel_reason, count(*) AS cancellations, round(count(*)::DOUBLE / sum(count(*)) OVER (), 4) AS share,
+ count(*) FILTER (WHERE subscription_plan = 'plus') AS plus, count(*) FILTER (WHERE subscription_plan = 'premier') AS premier
 FROM ev WHERE event = 'subscription cancelled' GROUP BY 1 ORDER BY 2 DESC;
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -329,16 +336,32 @@ FROM matches WHERE t_conv < TIMESTAMP '2026-09-01' AND t_date >= t_conv AND t_da
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q12 — opener speed and date rate, finer buckets (see STORY H10)
 -- ─────────────────────────────────────────────────────────────────────────
-SELECT CASE WHEN hours_since_match <= 6 THEN '0-6h' WHEN hours_since_match <= 12 THEN '6-12h' WHEN hours_since_match <= 24 THEN '12-24h'
-  WHEN hours_since_match <= 48 THEN '24-48h' ELSE '48h+' END AS opener_speed, count(*) AS conversations,
+-- Totals counting, hold match_id constant (one row per conversation)
+SELECT CASE WHEN hours_since_match <= 6 THEN '0-6h' WHEN hours_since_match <= 12 THEN '6-12h' WHEN hours_since_match <= 18 THEN '12-18h'
+  WHEN hours_since_match <= 24 THEN '18-24h' WHEN hours_since_match <= 36 THEN '24-36h' WHEN hours_since_match <= 48 THEN '36-48h'
+  ELSE '48h+' END AS opener_speed, count(*) AS conversations,
  round(avg(coalesce(t_date < t_conv + INTERVAL 30 DAY, false)::INT), 4) AS date_rate_30d
 FROM matches WHERE t_conv IS NOT NULL AND t_conv < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY min(hours_since_match);
+
+-- the same split read with Uniques counting (a member counts once per bucket and
+-- converts if any of their conversations in that bucket converts)
+WITH c AS (SELECT uid, CASE WHEN hours_since_match <= 24 THEN 'within 24h' ELSE 'after 24h' END AS opener_speed,
+  coalesce(t_date < t_conv + INTERVAL 30 DAY, false) AS ok
+  FROM matches WHERE t_conv IS NOT NULL AND t_conv < TIMESTAMP '2026-09-01'),
+u AS (SELECT uid, opener_speed, bool_or(ok) AS ok FROM c GROUP BY 1, 2)
+SELECT opener_speed, count(*) AS members, round(avg(ok::INT), 4) AS member_date_rate_uniques FROM u GROUP BY 1 ORDER BY 1 DESC;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q13 — Icebreakers downstream: date plans per match
 -- ─────────────────────────────────────────────────────────────────────────
 SELECT p.variant, count(*) AS matches,
  round(avg(coalesce(m.t_date < m.t_match + INTERVAL 30 DAY, false)::INT), 4) AS date_plan_rate_30d
+FROM matches m JOIN prof p ON p.uid = m.uid
+WHERE m.t_match >= TIMESTAMP '2026-07-22' AND m.t_match < TIMESTAMP '2026-09-01' AND p.variant IS NOT NULL GROUP BY 1 ORDER BY 1;
+
+-- the same read with Uniques counting (a member converts if any of their matches leads to a date in 30 days)
+SELECT p.variant, count(DISTINCT m.uid) AS members,
+ round(count(DISTINCT m.uid) FILTER (WHERE m.t_date < m.t_match + INTERVAL 30 DAY)::DOUBLE / count(DISTINCT m.uid), 4) AS member_date_rate_uniques
 FROM matches m JOIN prof p ON p.uid = m.uid
 WHERE m.t_match >= TIMESTAMP '2026-07-22' AND m.t_match < TIMESTAMP '2026-09-01' AND p.variant IS NOT NULL GROUP BY 1 ORDER BY 1;
 
