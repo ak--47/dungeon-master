@@ -8,13 +8,13 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 |---|---|
 | `time` | When the event happened (UTC). |
 | `user_id` | The member's ID. Present on every event after signup. |
-| `device_id` | The device the event came from. A member has about two devices. Not present on `goal quiz completed`, `plan generated`, and `starter workout completed`, which the onboarding service sends with `user_id` only. |
+| `device_id` | The member's phone or tablet. Each member uses one device. Not present on `goal quiz completed`, `plan generated`, and `starter workout completed`, which the onboarding service sends with `user_id` only. |
 | `insert_id` | Unique event ID used for de-duplication. |
 | `session_id` | The app session the event belongs to (diagnostic; Mixpanel computes its own sessions). |
-| `Platform` | `ios` or `android`. Fixed per member. |
+| `Platform` | `ios` or `android`: the operating system family of the member's device (`ios` covers iPhone and iPad). Always agrees with `os`. Fixed per member. |
 | `subscription_tier` | The member's plan **at the moment of the event**: `free`, `trial` (during the member's 7-day Plus trial: Plus features, not yet paying), `monthly`, or `annual`. It changes to the paid plan at the moment a member buys Plus, and back to `free` when a trial ends without a purchase. |
 | `country`, `country_code`, `region`, `city` | Member location (one location per member). |
-| `model`, `os`, `carrier`, `radio`, `screen_height`, `screen_width` | Device details from the mobile SDK. |
+| `model`, `os`, `carrier`, `radio`, `screen_height`, `screen_width` | Device details from the mobile SDK. `os` is `iOS`, `iPadOS`, or `Android`. All but `radio` (the network type at the moment of the event) are fixed for a device. |
 
 ## Signup and onboarding
 
@@ -36,7 +36,7 @@ New members go through onboarding once, right after they install. These four eve
 | `workout completed` | A finished workout reached Stridewell. This is the value moment. A workout tracked on a wearable is recorded only after it syncs. | `workout_category`; `duration_minutes`; `calories_burned`; `avg_heart_rate` (bpm); `perceived_effort` (1-10, self-rated); `coaching_mode` (`self_guided` or `ai_coach`; Stride Coach is a Plus and trial feature from 2026-08-12); `wearable_type`: the member's wearable (`smartwatch`, `fitness_band`, `chest_strap`, or `none`); `tracking_source`: what recorded this workout (`wearable`, `phone`, or `manual`). |
 | `progress checked` | The member opens a progress view. | `metric_viewed` (`weekly_minutes`, `workout_streak`, `body_weight`, `personal_records`, `heart_rate_trend`); `time_range` (`week`, `month`, `3_months`). |
 | `achievement unlocked` | The member earns a badge. | `achievement_type` (`streak_7`, `streak_30`, `personal_record`, `first_5k`, `challenge_badge`, `minutes_milestone`). |
-| `coach session` | The member has a session with a human coach. Coaching is part of Plus (and the trial); free members can pay for a single session. | `session_type` (`live_video`, `form_check`, `plan_review`, `chat`); `coach_speciality` (`strength`, `running`, `mobility`, `nutrition`); `session_minutes`; `satisfaction_score` (1-5). |
+| `coach session` | The member has a session with a human coach. Plus (and the trial) includes one session per billing month; extra sessions, and every session for a free member, cost $24. | `session_type` (`live_video`, `form_check`, `plan_review`, `chat`); `coach_speciality` (`strength`, `running`, `mobility`, `nutrition`); `session_minutes`; `satisfaction_score` (1-5). |
 | `meal logged` | The member logs a meal. | `meal_type` (`breakfast`, `lunch`, `dinner`, `snack`); `calories`; `protein_g`. |
 
 ## Challenges and social
@@ -60,10 +60,10 @@ New members go through onboarding once, right after they install. These four eve
 
 | Event | Meaning | Properties |
 |---|---|---|
-| `app opened` | The member opens the phone app. Workouts tracked on a watch or band sync in the background, so many completed workouts arrive without an app open. | `entry_point` (`home_screen`, `push`, `widget`, `watch_app`); `session_minutes`. |
-| `notification received` | Stridewell sends the member a notification. Lifecycle messaging follows a sunset policy: reminders pause once a member stops using the app, and win-back outreach runs outside the app (it is not tracked here). So a member who goes inactive stops receiving this event too. | `notification_type` (`workout_reminder`, `streak_at_risk`, `challenge_update`, `friend_activity`, `weekly_recap`); `channel` (`push` or `email`); `opened` (true/false): whether the member opened it. |
+| `app opened` | The member opens the app. | `entry_point` (`home_screen`, `push`, `widget`, `watch_app`); `session_minutes`. |
+| `notification received` | Stridewell's messaging service sends the member a notification. The event is logged server-side when the message goes out, not by the member's app. Messages keep going out while the account is open, including to members who have stopped using the app; they stop when the account is deactivated. | `notification_type` (`workout_reminder`, `streak_at_risk`, `challenge_update`, `friend_activity`, `weekly_recap`); `channel` (`push` or `email`); `opened` (true/false): whether the member opened it. |
 | `profile updated` | The member edits their profile or settings. | `field_updated` (`body_weight`, `goal`, `photo`, `units`, `notification_settings`, `connected_devices`). |
-| `account deactivated` | The member deactivates their account. Sent at most once, when a member leaves; often a few days after their last workout. A member who had already stopped training before June 4 may show only this event in the window. | `reason` (`lost_motivation`, `switched_apps`, `injury`, `reached_goal`, `too_busy`); `subscription_tier` at deactivation. |
+| `account deactivated` | The member deactivates their account. Sent at most once, when a member leaves; often a few days after their last workout. A member who had already stopped training before June 4 may show only notifications and this event in the window. | `reason` (`lost_motivation`, `switched_apps`, `injury`, `reached_goal`, `too_busy`); `subscription_tier` at deactivation. |
 
 ## User profile properties
 
@@ -79,11 +79,11 @@ New members go through onboarding once, right after they install. These four eve
 | `wearable_type` | `smartwatch`, `fitness_band`, `chest_strap`, or `none`. |
 | `subscription_tier` | Current plan: `free`, `trial` (Plus trial still running on October 1), `monthly`, `annual`. |
 | `trial_eligible` | `true` for members whose one trial was still available or in progress on June 4: everyone who joined in the window, plus a small number who joined in the weeks just before it. `false` for earlier members, who already used their trial. |
-| `Platform` | `ios` or `android`. |
+| `Platform` | `ios` or `android`: the platform of the member's device (same as on events). |
 | `Experiment: Guided First Week` | `Control` or `Guided Plan` for members enrolled in the onboarding test; empty for everyone else. |
 | `created` | Signup time for members who joined in the window; empty for earlier members. |
 | `country`, `country_code`, `region`, `city` | Location. |
-| `anonymousIds`, `sessionIds` | Devices and sessions seen for the member (pipeline metadata). |
+| `anonymousIds`, `sessionIds` | The member's device ID and sessions seen for the member (pipeline metadata). |
 
 ## `fitness_level` history (slowly changing dimension)
 

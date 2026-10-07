@@ -2,16 +2,16 @@
 
 ## KPI definitions
 
-All KPIs use UTC days and count people by unique `user_id`.
+All KPIs use UTC days and count people by unique `user_id`. "Active" always means a member-initiated event: every event except `notification received` (sent by our messaging service, also to members who stopped using the app) and `account deactivated`. In Mixpanel, build this as a custom event (we call it **Active action**) that combines every other event, and use it wherever a definition below says "active event".
 
 | KPI | Definition |
 |---|---|
 | New members | Unique members with `account created` in the period. |
 | Onboarding completion | Share of new members who reach `starter workout completed` after `account created` → `goal quiz completed` → `plan generated`, in order, within 7 days of signup. |
 | Time to onboard | Time from `account created` to `starter workout completed` for members who complete onboarding (median preferred). |
-| Weekly active members | Unique members with any event in a calendar week (Monday start). |
+| Weekly active members | Unique members with any active event in a calendar week (Monday start). |
 | Workout frequency | `workout completed` events per active member per week. |
-| Week-N retention | Of new members who signed up on day 0, the share with any event in days 7N to 7N+6 after signup (Mixpanel Retention, weekly unit, Week N bucket; Week 4 = days 28-34). Only count members who signed up at least 7N+7 days before the end of the data. |
+| Week-N retention | Of new members who signed up on day 0, the share with any active event in days 7N to 7N+6 after signup (Mixpanel Retention, birth event `account created`, return event Active action, weekly unit, Week N bucket; Week 4 = days 28-34). Notifications do not count as a return. Only count members who signed up at least 7N+7 days before the end of the data. |
 | Trial start rate | Share of new members with `trial started`. |
 | Trial-to-paid | Share of trial starters with `subscription purchased` (on any plan). |
 | New Plus subscriptions | Count of `subscription purchased`, split by `plan`. Each member buys at most once. |
@@ -21,7 +21,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 | CAC (paid) | Paid-media spend for a channel divided by the new members Mixpanel recorded from that channel (`account created` with that `acquisition_channel`) over the same days. Finance uses Mixpanel signups, not the installs the ad platforms report. |
 | Cost per paying member | Paid-media spend for a channel divided by members from that channel who bought Plus. |
 | Challenge completion rate | Share of joined challenges that were completed. A challenge can only complete when it ends, so count joins that have had time to finish (a 30-day challenge joined in September may still be running on October 1). |
-| Notification open rate | Share of `notification received` events with `opened = true`. |
+| Notification open rate | Share of `notification received` events with `opened = true`. It includes notifications sent to members who have stopped using the app. |
 | Stride Coach adoption | Share of completed workouts by members with Plus features (`subscription_tier` = `monthly`, `annual`, or `trial`) with `coaching_mode = ai_coach` (since 2026-08-12). |
 | Sync success rate | 1 − `sync_error_rate` in `wearable_sync_daily`. |
 

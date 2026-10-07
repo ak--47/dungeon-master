@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Stridewell**, a consumer fitnes
 
 - **Product:** the Stridewell mobile app (iOS and Android) and its paid tier, Stridewell Plus.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, early summer through the end of Q3.
-- **Scale:** about 9,100 members were active in the window. About 4,000 of them joined during the window; the rest were members before June 4. The project holds about 1.1 million events.
+- **Scale:** about 9,000 members have events in the window, and about 6,400 use the app in a typical month. About 4,000 of them joined during the window; the rest were members before June 4. The project holds about 1.06 million events.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC.
 - **Window start.** The export starts at 00:00 UTC on June 4. Some multi-step activity that began before then appears only with its later events: a challenge completed in June may have been joined in May, and a few trials and trial conversions in early June belong to members who saw the paywall before June 4.
 
@@ -19,7 +19,7 @@ This folder is the internal analytics wiki for **Stridewell**, a consumer fitnes
 
 ## How the data fits together
 
-- **Events** (the Mixpanel event stream) record what members do in the app. Each event has a timestamp, the member's identity, and flat properties. Properties that describe the member's plan or device are copied onto events (for example `subscription_tier`, `Platform`, `wearable_type`, `acquisition_channel`), so you can break down events without a lookup table.
+- **Events** (the Mixpanel event stream) record what members do in the app, plus the notifications our messaging service sends them. Each event has a timestamp, the member's identity, and flat properties. Properties that describe the member's plan or device are copied onto events (for example `subscription_tier`, `Platform`, `wearable_type`, `acquisition_channel`), so you can break down events without a lookup table.
 - **User profiles** hold one row per member with their current attributes: segment, goal, acquisition channel, wearable, current plan, and experiment enrollment.
 - **`fitness_level` history** is a slowly changing record: each row is the member's self-reported fitness level from a given date. The profile shows the latest level.
 - **Groups:** none. Stridewell has no team or company accounts.
@@ -29,9 +29,10 @@ This folder is the internal analytics wiki for **Stridewell**, a consumer fitnes
 
 - The app tracks nothing before a member creates an account, so there is no anonymous (device-only) activity in the project. The `account created` event carries both the member's `user_id` and the `device_id`.
 - Every event carries `user_id`, including the onboarding experiment's `$experiment_started` exposure, which is logged one second before `account created`.
-- `device_id` is on every event except the three onboarding steps after signup (`goal quiz completed`, `plan generated`, `starter workout completed`), which the onboarding service sends server-side with `user_id` only. Members use about two devices on average; `device_id` changes between devices but `user_id` does not.
+- `device_id` is on every event except the three onboarding steps after signup (`goal quiz completed`, `plan generated`, `starter workout completed`), which the onboarding service sends server-side with `user_id` only. Each member uses Stridewell on one phone or tablet, so a member has one `device_id`, and the device fields (`model`, `os`, `carrier`) and `Platform` stay the same on all of a member's events.
 - Members who joined before June 4 have no `account created` event in this window. Their profile `created` field is empty. For members who joined in the window, `created` is their signup time.
 - Count people with unique `user_id` (Mixpanel "Uniques"), not with `device_id`.
+- `notification received` is sent by our messaging service, not by the member. It keeps arriving while an account is open, also for members who have stopped using the app, so it does not show that a member is active. The same holds for `account deactivated`. See the active-member definitions in `04-metrics-and-tables.md`.
 
 ## Conventions
 
