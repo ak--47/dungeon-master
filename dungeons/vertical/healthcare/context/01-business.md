@@ -4,11 +4,11 @@
 
 Clearwell Health is a virtual care company for adults in the United States. Patients use the Clearwell app to see a licensed clinician by video or phone, get prescriptions sent to their pharmacy, book primary care, see a therapist, and manage a chronic condition from home. Clearwell started in 2023 in Colorado and is licensed in every state where its patients live; most patients are in California, Texas, Florida, and New York.
 
-The company has about 120 employees. It is venture-funded and not yet profitable: payroll and operating costs still run ahead of revenue while the patient base grows. About 50 full-time-equivalent clinicians see patients in a given week: physicians, nurse practitioners, physician assistants, and licensed therapists. A locum staffing agency supplies part of the urgent-care roster. The rest of the company is clinical operations (scheduling and staffing), product and engineering, pharmacy partnerships, revenue cycle (billing), employer sales, and patient support.
+The company has about 120 employees. It is venture-funded and not yet profitable: payroll and operating costs still run ahead of revenue while the patient base grows. About 40 full-time-equivalent clinicians see patients in a given week: physicians, nurse practitioners, physician assistants, and licensed therapists. A locum staffing agency supplies part of the urgent-care roster. The rest of the company is clinical operations (scheduling and staffing), product and engineering, pharmacy partnerships, revenue cycle (billing), employer sales, and patient support.
 
 Revenue comes from three sources:
 
-- **Visit billing** (about $560,000-690,000 a month from July to September 2026, growing with the patient base): insurance reimbursement for visits, plus what patients pay themselves (copays and self-pay prices). The warehouse table `visit_revenue_daily` holds it.
+- **Visit billing** (the largest source, growing with the patient base): insurance reimbursement for visits, plus what patients pay themselves (copays and self-pay prices). The warehouse table `visit_revenue_daily` holds it.
 - **Employer fees** (about $190,000 a month): employer clients pay a fixed fee per eligible employee per month. Their employees then pay nothing per visit. Finance books these fees monthly; they are not in the visit revenue table.
 - **Remote monitoring program fees** billed to health plans (small; not analyzed here).
 
@@ -43,11 +43,11 @@ Insurance plans reimburse Clearwell a contracted rate per visit on top of the co
 
 ## Patients
 
-- **Size:** about 10,000 patients used Clearwell in the window. About 3,600 signed up during the window, around 210 a week; the patient base grows through the period.
-- **Coverage mix:** about 35% employer, 27% commercial, 17% self-pay, 10% Medicare, 11% Medicaid.
+- **Size:** about 10,000 patients used Clearwell in the window. About 3,500 signed up during the window, around 200 a week; the patient base grows through the period.
+- **Coverage mix:** about 34% employer, 27% commercial, 17% self-pay, 11% Medicare, 12% Medicaid.
 - **Age:** most patients are 26-55; about 13% are 65 or older (about 80% of them on Medicare).
 - **Language:** about 16% of patients prefer Spanish (`preferred_language = es`); they are concentrated in California, Texas, and Florida.
-- **Remote monitoring:** about 1,900 patients are in a remote monitoring program (about two thirds hypertension, one third diabetes).
+- **Remote monitoring:** about 1,800 patients are in a remote monitoring program (about two thirds hypertension, one third diabetes).
 - **Therapy:** about 1,600 patients are in therapy with Clearwell in the window, some continuing a course that started before June and some starting new.
 
 ## How patients find us

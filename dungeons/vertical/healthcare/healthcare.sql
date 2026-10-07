@@ -139,16 +139,16 @@ SELECT p.device_connectivity, count(*) AS early_patients, count(late.uid) AS sti
 FROM early JOIN prof p ON p.uid = early.uid LEFT JOIN late ON late.uid = early.uid GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- STORY H6-no-shows-by-lead-time — P(missed) = 0.05 + 0.012 × lead_days
+-- STORY H6-no-shows-by-lead-time — P(missed) = 0.04 + 0.015 × lead_days
 -- ─────────────────────────────────────────────────────────────────────────
--- per appointment (hold visit_id constant), bookings Jun 4 - Aug 31
+-- per appointment (hold visit_id constant), bookings Jun 4 - Sep 9 (every slot, lead ≤ 21 days, falls in the window)
 SELECT CASE WHEN lead_days <= 1 THEN '1 0-1 days' WHEN lead_days <= 7 THEN '2 2-7 days' ELSE '3 8+ days' END AS lead_bucket,
  count(*) AS appointments, round(avg((t_missed IS NOT NULL)::INT), 4) AS no_show_rate
-FROM visits WHERE service_line = 'primary_care' AND t_booked < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
+FROM visits WHERE service_line = 'primary_care' AND t_booked < TIMESTAMP '2026-09-10' GROUP BY 1 ORDER BY 1;
 
 SELECT round(regr_slope((t_missed IS NOT NULL)::INT, lead_days), 5) AS no_show_slope_per_day,
  round(regr_intercept((t_missed IS NOT NULL)::INT, lead_days), 4) AS no_show_intercept
-FROM visits WHERE service_line = 'primary_care' AND t_booked < TIMESTAMP '2026-09-01';
+FROM visits WHERE service_line = 'primary_care' AND t_booked < TIMESTAMP '2026-09-10';
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H7-therapist-choice-wait — first session 2.5x later for specific_therapist (median 96 h otherwise)
@@ -192,15 +192,14 @@ SELECT CASE WHEN t >= TIMESTAMP '2026-09-21' THEN '3 Sep 21 - Oct 1' WHEN t >= T
  round(respiratory_checks::DOUBLE / other_checks, 4) AS respiratory_per_other
 FROM ev WHERE event = 'symptom check completed' GROUP BY 1 ORDER BY 1;
 
--- uniques: patients with a respiratory check per day, and the share of checks
--- followed or preceded by another check of the same patient within 12 hours
+-- new patients or repeat visits? Share of checks with another check by the same
+-- patient within 3 days (before or after), by period
 WITH c AS (SELECT uid, t, reason_category, lag(t) OVER (PARTITION BY uid ORDER BY t) AS pt, lead(t) OVER (PARTITION BY uid ORDER BY t) AS nt
   FROM ev WHERE event = 'symptom check completed')
 SELECT CASE WHEN t >= TIMESTAMP '2026-09-21' THEN '3 Sep 21 - Oct 1' WHEN t >= TIMESTAMP '2026-09-14' THEN '2 Sep 14-20' ELSE '1 Jun 4 - Sep 13' END AS period,
- count(DISTINCT t::DATE) AS days,
- round(count(DISTINCT (uid, t::DATE)) FILTER (WHERE reason_category = 'respiratory')::DOUBLE / count(DISTINCT t::DATE), 1) AS respiratory_patients_per_day,
- count(DISTINCT uid) FILTER (WHERE reason_category = 'respiratory') AS respiratory_patients,
- round(avg((t - pt < INTERVAL 12 HOUR OR nt - t < INTERVAL 12 HOUR)::INT), 4) AS share_with_repeat_within_12h
+ count(*) AS checks,
+ round(avg((coalesce(t - pt < INTERVAL 3 DAY, false) OR coalesce(nt - t < INTERVAL 3 DAY, false))::INT), 4) AS share_with_repeat_within_3d,
+ round(avg((coalesce(t - pt < INTERVAL 3 DAY, false) OR coalesce(nt - t < INTERVAL 3 DAY, false))::INT) FILTER (WHERE reason_category = 'respiratory'), 4) AS respiratory_share_with_repeat_within_3d
 FROM c GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -306,11 +305,11 @@ FROM ev e JOIN prof p ON p.uid = e.uid WHERE event = 'reading logged' GROUP BY 1
 -- ─────────────────────────────────────────────────────────────────────────
 SELECT CASE WHEN lead_days <= 1 THEN '1 0-1' WHEN lead_days <= 3 THEN '2 2-3' WHEN lead_days <= 7 THEN '3 4-7' WHEN lead_days <= 14 THEN '4 8-14' ELSE '5 15-21' END AS lead_days,
  count(*) AS appointments, round(avg((t_missed IS NOT NULL)::INT), 4) AS no_show_rate
-FROM visits WHERE service_line = 'primary_care' AND t_booked < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
+FROM visits WHERE service_line = 'primary_care' AND t_booked < TIMESTAMP '2026-09-10' GROUP BY 1 ORDER BY 1;
 
 SELECT count(*) AS appointments, round(avg((t_missed IS NOT NULL)::INT), 4) AS overall_no_show_rate,
  round(avg(lead_days), 2) AS avg_lead_days
-FROM visits WHERE service_line = 'primary_care' AND t_booked < TIMESTAMP '2026-09-01';
+FROM visits WHERE service_line = 'primary_care' AND t_booked < TIMESTAMP '2026-09-10';
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q7 — time to first therapy session  (same read as STORY H7, in days)
@@ -350,6 +349,20 @@ SELECT CASE WHEN t >= TIMESTAMP '2026-09-21' THEN '2 Sep 21 - Oct 1' ELSE '1 Jun
  round(count(*) FILTER (WHERE reason_category <> 'respiratory')::DOUBLE / count(DISTINCT t::DATE), 1) AS other_checks_per_day,
  round(count(*) FILTER (WHERE reason_category = 'respiratory')::DOUBLE / count(*), 4) AS respiratory_share
 FROM ev WHERE event = 'symptom check completed' AND (t < TIMESTAMP '2026-09-14' OR t >= TIMESTAMP '2026-09-21') GROUP BY 1 ORDER BY 1;
+
+-- weekly patients with a symptom check vs checks (Monday weeks; the Sep 28 week is partial)
+SELECT date_trunc('week', t)::DATE AS week_start, count(*) AS checks, count(DISTINCT uid) AS patients_with_a_check,
+ round(count(*)::DOUBLE / count(DISTINCT uid), 3) AS checks_per_patient,
+ count(DISTINCT uid) FILTER (WHERE reason_category = 'respiratory') AS patients_with_a_respiratory_check
+FROM ev WHERE event = 'symptom check completed' AND t >= TIMESTAMP '2026-08-03' GROUP BY 1 ORDER BY 1;
+
+-- full weeks: Aug 17 - Sep 13 (4 weeks before the season) vs the week of Sep 21
+WITH w AS (SELECT date_trunc('week', t)::DATE AS wk, uid FROM ev WHERE event = 'symptom check completed'
+  AND ((t >= TIMESTAMP '2026-08-17' AND t < TIMESTAMP '2026-09-14') OR (t >= TIMESTAMP '2026-09-21' AND t < TIMESTAMP '2026-09-28'))),
+k AS (SELECT wk, count(*) AS checks, count(DISTINCT uid) AS patients FROM w GROUP BY 1)
+SELECT CASE WHEN wk >= DATE '2026-09-21' THEN '2 week of Sep 21' ELSE '1 avg week Aug 17 - Sep 13' END AS period,
+ round(avg(checks), 1) AS checks_per_week, round(avg(patients), 1) AS patients_per_week, round(sum(checks)::DOUBLE / sum(patients), 3) AS checks_per_patient
+FROM k GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q10 — Spanish-speaking patients' urgent-care experience (warehouse join)

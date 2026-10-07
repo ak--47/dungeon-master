@@ -14,7 +14,8 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 | 2026-08-31 (Mon) | Pricing | **Self-pay urgent-care price cut:** the list price for a self-pay urgent-care visit drops from $79 to $59 (also applies to Async visits). Primary care and therapy self-pay prices and all insured copays do not change. The price a patient will pay is shown at request (`patient_cost_usd`). |
 | Mid-August to 2026-09-08 | Season | Schools reopen across the US; most states are back in session by September 8. |
 | 2026-09-07 (Mon) | Holiday | US Labor Day. The primary care clinic is closed; urgent care, therapy, and remote monitoring run as usual. |
-| Mid-September | Season | State public health departments begin their weekly respiratory-season reporting (flu, COVID-19, RSV). In the second half of September clinical operations moves urgent-care scheduling to its fall demand forecast. |
+| Mid-September | Season | State public health departments begin their weekly respiratory-season reporting (flu, COVID-19, RSV). |
+| September | Org | Clinical operations reviews the fall staffing forecast. |
 | 2026-09-30 (Wed) | Fiscal | End of Q3. |
 | 2026-10-01 (Thu) | — | End of the analysis window (data runs through 23:59 UTC). Q4 starts. |
 
