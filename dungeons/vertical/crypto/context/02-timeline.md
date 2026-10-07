@@ -38,7 +38,7 @@ Crypto prices move every day. These were the days the market team flagged in its
 - Simple Buy, Advanced Trade, and recurring-buy fees.
 - The list of deposit methods, withdrawal assets, and withdrawal networks.
 - The onboarding steps (only the verification vendor changed).
-- Paid channel budgets were set at the start of the quarter and held steady; no new channels were added.
+- Paid channel budgets followed the standing rule (each channel's daily budget is re-set from its sign-ups over the previous week); no new channels were added.
 - No outage of Ledgerline's own systems was declared in the window.
 
 ## Open questions leadership has asked

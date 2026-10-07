@@ -39,7 +39,7 @@ New customers arrive through one of six acquisition channels, recorded at sign-u
 - **referral** — invited by a friend's referral link.
 - **paid_search** — search ads.
 - **paid_social** — ads on social platforms.
-- **influencer_affiliate** — crypto creators and affiliate sites, paid with flat fees and sign-up bonuses.
+- **influencer_affiliate** — crypto creators and affiliate sites.
 - **app_store_ads** — search ads inside the app stores.
 
 The four paid channels bill every day. Daily spend by paid channel is in the warehouse table `paid_marketing_daily`.
@@ -49,8 +49,8 @@ The four paid channels bill every day. Daily spend by paid channel is in the war
 Leadership set these goals for the quarter:
 
 1. **Grow funded accounts.** Too many new sign-ups never finish identity verification or never deposit. The onboarding team moved identity verification to a new vendor in July.
-2. **Spend acquisition money well.** Marketing expanded influencer and affiliate partnerships because they bring sign-ups cheaply. Finance asked which paid channels are worth their cost.
-3. **Build habits early.** The growth team believes a new customer's first two weeks decide whether they stay. They are debating which early action to promote in onboarding messages.
+2. **Spend acquisition money well.** Marketing expanded influencer and affiliate partnerships this year. Finance asked which paid channels are worth their cost.
+3. **Build habits early.** The growth team wants to know which early actions go with new customers staying. They are debating which action to promote in onboarding messages.
 4. **Lift Simple Buy conversion.** Product is testing a shorter buy flow ("One-Tap Buy").
 5. **Grow staking revenue.** Finance raised the staking commission in August. Leadership asked whether customers reacted.
 6. **Run reliably.** Keep deposits, buys, and withdrawals working through market swings and network problems.

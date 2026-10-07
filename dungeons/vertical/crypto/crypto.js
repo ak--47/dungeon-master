@@ -17,7 +17,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             set up recurring buys, stake for rewards (Ledgerline keeps a
  *             commission: 15% → 25% from 2026-08-19), set price alerts, and
  *             withdraw to external wallets on five networks.
- * SCALE:      10,000 users (3,968 sign up inside the window), 1.26M events,
+ * SCALE:      10,000 users (3,938 sign up inside the window), 1.35M events,
  *             120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  app opened → asset viewed → trade executed / quick buy completed;
  *             deposit completed and withdrawal submitted → withdrawal confirmed move money
@@ -61,9 +61,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * event, carries user_id + device_id); about 2 devices per user (phones and
  * tablets, iOS / iPadOS / Android). Every event carries user_id; there is no
  * anonymous pre-signup activity. The three onboarding steps after signup are
- * sent server-side with user_id only. Recurring-buy events cloned from a
- * device-less first deposit (a plan set up right after it) carry no device_id
- * either; every other event carries device_id.
+ * sent server-side with user_id only (no device_id, device fields, or
+ * session_id). Recurring-buy events cloned from a device-less first deposit (a
+ * plan set up right after it) carry no device either; every other event carries
+ * device_id, and os / model / carrier are fixed per device_id.
  *
  * DESIGN NOTES:
  * - Market model: one seeded BTC volatility series (smooth daily noise plus ten
@@ -84,6 +85,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * - Money moves only after a new user is verified and funded: the hook drops any
  *   money event before the onboarding deposit (the engine gives unconverted users
  *   standalone events only, so this is a guard).
+ * - Onboarding warm start: a salted 3.9% of pre-existing users signed up in the
+ *   7 days before June 4 (the in-window sign-up rate). Their remaining onboarding
+ *   steps (old-vendor rates and timing, server-side, no account created in the
+ *   window) land in the first days, so verifications and first deposits do not
+ *   start at zero; their money events wait for the first deposit.
  * - Linked units: Simple Buy start/complete share order_id; withdrawal submit/
  *   confirm share withdrawal_id (confirmation time = network median × lognormal,
  *   confirmation_mins is the real gap); a relabeled ONDO trade takes its chart
@@ -95,20 +101,27 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   lifetime (exponential, mean 180 days) and ends with a "recurring buy
  *   cancelled" in-app; a customer who has gone quiet never cancels, so the plan
  *   keeps executing. Weekly executions are flat (±10%) across the window.
+ * - Incident failures (H2 ethereum withdrawals, H9 Android Simple Buy) are a fixed
+ *   share of the affected would-be completions: systematic sampling across the
+ *   run (per-run state keyed by the resolved config), not a coin flip each.
  * - Staking: new users can only unstake after staking in the window;
  *   established customers have pre-window stakes. Net APY = gross APY × (1 −
  *   commission at the stake time) × ±3% daily jitter.
  * - Warehouse drift: chain_network_daily.withdrawals_broadcast adds seeded
  *   institutional API withdrawals that never send a product event (audit corr ≈
- *   0.97 vs the Mixpanel count). paid_marketing_daily spend is a paced daily
- *   budget (CPL × expected signups per day, weekday shape, ±14% seeded noise,
- *   never zero); platform signups, clicks, and impressions follow spend.
+ *   0.97 vs the Mixpanel count). paid_marketing_daily spend re-paces each
+ *   channel's daily budget to its trailing 7-day Mixpanel sign-ups (CPL ×
+ *   trailing mean, weekday shape, ±14% seeded noise; days before the window
+ *   count at plan, so spend is never zero); platform signups, clicks, and
+ *   impressions follow spend.
  *   market_prices_daily is exogenous (corr ≈ 0 with Ledgerline's trade count).
  * - retentionCurve shapes new users' activity; the engine pins each new user's
  *   signup to profile `created` (UTC) and customer_since is that date.
  * - Low-frequency actions are thinned in the hook (referral link shared kept at
- *   25%, price alert created at 45%) because the engine's minimum event weight
- *   is 1; the experiment exposure is kept once per user (the SDK sends it once).
+ *   25%, price alert created at 45%) because event weights are whole numbers
+ *   >= 1. The engine sends one experiment exposure per user, 1 s before their
+ *   first Simple Buy after the start; the hook drops an exposure whose order it
+ *   dropped (and the profile assignment of a user left with none).
  */
 
 // ── HOOK STORIES ──
@@ -169,15 +182,17 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * PATTERN: from 2026-07-08 users split 50/50; "One-Tap" multiplies Simple Buy
  *   order completion by 1.2 and start → complete time by 0.6.
  * MIXPANEL: Funnels, quick buy started → quick buy completed, totals, hold
- *   order_id constant, breakdown user property "Experiment: One-Tap Buy".
+ *   order_id constant, 1-day conversion window, date range 2026-07-08 to
+ *   2026-10-01, breakdown user property "Experiment: One-Tap Buy".
  * REAL WORLD: removing the review screen cuts drop-off and time to buy.
  *
  * ─────────────────────────────────────────────────────────────────────────
  * H6. PAID CHANNEL QUALITY (declarative first funnels + warehouse paid_marketing_daily)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: spend per Mixpanel signup is $40 influencer_affiliate, $48 app store
- *   ads, $55 paid social, $70 paid search (paced daily budgets); influencer and
- *   affiliate signups finish onboarding at 0.5x the other channels.
+ *   ads, $55 paid social, $70 paid search (budgets re-paced daily to each
+ *   channel's trailing 7-day sign-ups); influencer and affiliate signups finish
+ *   onboarding at 0.5x the other channels.
  * MIXPANEL: Insights account created by acquisition_channel joined to
  *   paid_marketing_daily.spend_usd; Funnels onboarding by acquisition_channel.
  * REAL WORLD: creator-driven signups are cheap and curious, not committed.
@@ -224,42 +239,38 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation                 | Expected | Measured
  * -----|------------------------------------------------|----------------------------|----------|---------
- * H1   | trades per active user, volatile / calm days    | mean tradeMult high / calm | 1.857    | 1.845 (0.569 vs 0.309)
- * H1   | Simple Buy per active user, volatile / calm     | unchanged (control)        | 1.00     | 0.996
- * H2   | ethereum / other confirm rate, congested vs ±7d | 1 − CONGESTION_FAIL        | 0.40     | 0.422 (40.4% vs 97.7%)
+ * H1   | trades per active user, volatile / calm days    | mean tradeMult high / calm | 1.857    | 1.819 (0.572 vs 0.315)
+ * H1   | Simple Buy per active user, volatile / calm     | unchanged (control)        | 1.00     | 0.966
+ * H2   | ethereum / other confirm rate, congested vs ±7d | 1 − CONGESTION_FAIL        | 0.40     | 0.406 (39.4% vs 97.0%)
  * H2   | warehouse failed_broadcast_rate, congested days | CONGESTION_FAIL            | 0.60     | 0.610
- * H3   | onboarding completion, from / before Jul 28     | 60 / 46                    | 1.304    | 1.414 (56.8% vs 40.1%)
- * H3   | median sign-up → first deposit, from / before   | 14 h / 40 h                | 0.35     | 0.349 (10.4 h vs 29.9 h)
- * H4   | D30 retention, recurring buy / none (funded)    | 1 / (1 − 0.55)             | 2.222    | 2.299 (79.3% vs 34.5%)
- * H4   | D7 retention, recurring buy / none (parity)     | unchanged before day 21    | 1.00     | 0.997
- * H5   | per-order completion, One-Tap / Control         | ONE_TAP_CONV_MULT          | 1.20     | 1.212 (71.7% vs 59.2%)
- * H5   | median start → complete, One-Tap / Control      | ONE_TAP_TTC_MULT           | 0.60     | 0.600 (270 s vs 450 s)
- * H5   | One-Tap share of exposed users                  | equal 2-arm hash           | 0.50     | 0.506
- * H6   | spend per signup, influencer / paid search      | 40 / 70                    | 0.571    | 0.618 ($41.92 vs $67.84)
- * H6   | 7-day funded rate, influencer / paid search     | LOW_QUALITY_MULT           | 0.50     | 0.495 (27.1% vs 54.7%)
- * H7   | sell share Sep 9-11 / prior 28 days, new        | 1 + 0.5 × 0.55 / 0.45      | 1.611    | 1.582 (72.5% vs 45.8%)
- * H7   | same, established                               | 1 + 0.1 × 0.55 / 0.45      | 1.122    | 1.087 (49.2% vs 45.2%)
- * H8   | established stakes, 21 d after / before         | STAKE_KEEP_AFTER           | 0.75     | 0.757 (1,654 vs 2,184)
- * H8   | established unstakes, 21 d after / before       | UNSTAKE_SURGE_MULT         | 1.80     | 1.807 (2,251 vs 1,246)
+ * H3   | onboarding completion, from / before Jul 28     | 60 / 46                    | 1.304    | 1.283 (55.4% vs 43.2%)
+ * H3   | median sign-up → first deposit, from / before   | 14 h / 40 h                | 0.35     | 0.352 (10.5 h vs 30.0 h)
+ * H4   | D30 retention, recurring buy / none (funded)    | 1 / (1 − 0.55)             | 2.222    | 2.329 (81.2% vs 34.9%)
+ * H4   | D7 retention, recurring buy / none (parity)     | unchanged before day 21    | 1.00     | 1.008
+ * H5   | per-order completion, One-Tap / Control         | ONE_TAP_CONV_MULT          | 1.20     | 1.187 (71.0% vs 59.8%)
+ * H5   | median start → complete, One-Tap / Control      | ONE_TAP_TTC_MULT           | 0.60     | 0.601 (271 s vs 450 s)
+ * H5   | One-Tap share of exposed users                  | equal 2-arm hash           | 0.50     | 0.495
+ * H6   | spend per signup, influencer / paid search      | 40 / 70                    | 0.571    | 0.572 ($39.77 vs $69.52)
+ * H6   | 7-day funded rate, influencer / paid search     | LOW_QUALITY_MULT           | 0.50     | 0.525 (29.0% vs 55.2%)
+ * H7   | sell share Sep 9-11 / prior 28 days, new        | 1 + 0.5 × 0.55 / 0.45      | 1.611    | 1.594 (71.4% vs 44.8%)
+ * H7   | same, established                               | 1 + 0.1 × 0.55 / 0.45      | 1.122    | 1.125 (50.1% vs 44.5%)
+ * H8   | established stakes, 21 d after / before         | STAKE_KEEP_AFTER           | 0.75     | 0.753 (1,801 vs 2,393)
+ * H8   | established unstakes, 21 d after / before       | UNSTAKE_SURGE_MULT         | 1.80     | 1.816 (2,315 vs 1,275)
  * H8   | ETH net APY on new stakes, after / before       | 0.75 / 0.85                | 0.882    | 0.884 (2.71% vs 3.06%)
- * H9   | Android / Apple completion, Aug 26-28 vs ±7d    | 1 − ANDROID_FAIL           | 0.50     | 0.537 (34.2% vs 65.4%)
+ * H9   | Android / Apple completion, Aug 26-28 vs ±7d    | 1 − ANDROID_FAIL           | 0.50     | 0.468 (31.5% vs 66.5%)
  * H10  | ONDO rows before the listing                    | exact                      | 0        | 0
- * H10  | ONDO share of trades after the ramp             | 0.4 × 0.2                  | 0.080    | 0.075
+ * H10  | ONDO share of trades after the ramp             | 0.4 × 0.2                  | 0.080    | 0.078
  * ═════════════════════════════════════════════════════════════════════════
  *
  * Every assertion lands inside its knob-derived NAILED band (10/10 stories
- * NAILED). Four sit away from the knob for sampling reasons, not a confound:
- * H3's conversion ratio (1.414) rests on two binomial rates from about 1,800
- * sign-ups each (relative SE about 3% per arm): the pre-switch rate is 1.8
- * points under its knob mix (41.9%) and the post-switch rate 2.2 points over
- * (54.6%). H6's spend ratio (0.618) moves with the realized sign-up count
- * per channel, since the budget is paced to the expected count (686
- * influencer sign-ups vs 720 expected). H10's share (0.075) depends on which
- * heavy traders the salted adopter draw picked. H9's ratio (0.537) rests on
- * 1,047 Android orders in the three incident days (relative SE about 4%).
- * H4 uses a knob target with a
- * knob-derived floor (1.61) because the realized dark share in a cohort of
- * about 770 users moves the ratio by several percent.
+ * NAILED). H6's spend ratio reads the knob because each channel's budget is
+ * re-paced to its own realized sign-ups. H2 and H9 drop a fixed share of the
+ * affected would-be completions, so what remains is the engine's conversion
+ * draw: H9 (0.468) rests on 1,072 Android orders in the three incident days,
+ * of which 63% would have completed vs 66.5% in the days around (about 2
+ * binomial SE), and the Apple denominator (1,152 orders) adds its own noise.
+ * H4 uses a knob target with a knob-derived floor (1.61) because the realized
+ * dark share in a cohort of about 780 users moves the ratio by several percent.
  */
 
 // ── SCALE ──
@@ -340,6 +351,7 @@ const LATE_PLAN_KEEP = 0.15;        // non-planners: chance a later recurring bu
 const EST_PLANNER_SHARE = 0.33;     // established customers with a recurring buy that predates the window
 const PLAN_LIFE_DAYS = 180;         // mean plan lifetime before the customer cancels (exponential)
 const PLAN_EXTRA_KEYS = ["price_usd", "fee_usd"]; // execution-only fields
+const PLAN_KEYS = new Set(["plan_id", "asset", "frequency", "amount_usd"]);
 const EST_NEW_PLAN_KEEP = 0.1;      // established customers: chance an in-window plan creation is kept
 const PLAN_FREQ = { daily: 8, weekly: 55, biweekly: 17, monthly: 20 };
 const PLAN_PERIOD_DAYS = { daily: 1, weekly: 7, biweekly: 14, monthly: 30 };
@@ -352,7 +364,7 @@ const EXP_KEY = `Experiment: ${ONE_TAP_EXPERIMENT}`;
 const ONE_TAP_CONV_MULT = 1.2;
 const ONE_TAP_TTC_MULT = 0.6;
 const QUICK_BUY_CONV = 60;
-const QUICK_BUY_TTC_H = 0.25;      // the engine floors a funnel ttc at 0.1 h, so 0.25 × 0.6 stays above it
+const QUICK_BUY_TTC_H = 0.25;      // 15 minutes from start to fill (One-Tap: 9 minutes)
 
 // H6 paid channel economics (warehouse paid_marketing_daily) + onboarding quality
 const PAID_CHANNELS = ["paid_search", "paid_social", "influencer_affiliate", "app_store_ads"];
@@ -370,6 +382,7 @@ const SPEND_WEEKDAY = (() => {
 	return DOW_WEIGHTS.map((w) => w / m);
 })();
 const SPEND_NOISE = 0.14;
+const SPEND_PACE_DAYS = 7;          // the budget is re-paced daily to the channel's trailing 7-day Mixpanel sign-ups
 const PLATFORM_SIGNUP_INFLATION = { paid_search: 1.1, paid_social: 1.25, influencer_affiliate: 1.4, app_store_ads: 1.15 };
 const CPC_USD = { paid_search: 3.2, paid_social: 1.4, influencer_affiliate: 0.9, app_store_ads: 1.8 };
 const CTR = { paid_search: 0.04, paid_social: 0.009, influencer_affiliate: 0.015, app_store_ads: 0.03 };
@@ -481,10 +494,50 @@ const networkConfMins = (date, net) => {
 // institutional API withdrawals that never send a product event
 const API_WITHDRAWALS_PER_DAY = { bitcoin: 9, ethereum: 12, solana: 6, base: 4, tron: 5 };
 
-// H6: paid media spend for one channel-day (paced budget, never zero)
-const paidSpend = (date, ch) => round2(DAILY_BUDGET_USD[ch] * SPEND_WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()] * jitter(`spend|${date}|${ch}`, SPEND_NOISE));
+// H6: paid media spend for one channel-day. Marketing re-paces each channel's
+// daily budget to its trailing 7-day sign-ups (CPL × trailing mean), with the
+// weekday shape and seeded day noise, so window spend per sign-up tracks the CPL
+// knob whatever the realized channel share. Days before the window count at the
+// planned rate, so a channel never bills zero. Warehouse rows of one series are
+// built in date order; the trailing state resets on each series' first row.
+const paceState = new Map();        // channel -> { hist, idx }
+const spendByDay = new Map();       // `${date}|${channel}` -> spend_usd
+const pacedSpend = (ctx) => {
+	const ch = ctx.seriesKey;
+	const date = dayKey(ctx.time);
+	const plan = DAILY_BUDGET_USD[ch] / CPL_USD[ch]; // planned sign-ups per day
+	let st = paceState.get(ch);
+	if (!st || ctx.bucketIndex === 0) {
+		st = { hist: Array(SPEND_PACE_DAYS - 1).fill(plan), idx: -1 };
+		paceState.set(ch, st);
+	}
+	if (st.idx !== ctx.bucketIndex) {
+		st.hist.push(Number(ctx.value) || 0);
+		if (st.hist.length > SPEND_PACE_DAYS) st.hist.shift();
+		const trailing = st.hist.reduce((a, b) => a + b, 0) / st.hist.length;
+		const spend = CPL_USD[ch] * Math.max(0.3 * plan, trailing) * SPEND_WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()] * jitter(`spend|${date}|${ch}`, SPEND_NOISE);
+		spendByDay.set(`${date}|${ch}`, round2(spend));
+		st.idx = ctx.bucketIndex;
+	}
+	return spendByDay.get(`${date}|${ch}`);
+};
 
 // ── HELPERS ──
+// Per-run state keyed by the resolved config (one object per run; users run in a
+// fixed order at concurrency 1, so the state is deterministic and resets per run).
+const runState = new WeakMap();
+const runOf = (meta) => {
+	let st = runState.get(meta.config);
+	if (!st) { st = { congestion: 0, android: 0 }; runState.set(meta.config, st); }
+	return st;
+};
+// systematic sampling: true for exactly a share `f` of the calls, in call order
+// (incident failures are a fixed share of the affected orders, not a coin flip each)
+const takeShare = (st, key, f) => {
+	st[key] += f;
+	if (st[key] >= 1) { st[key] -= 1; return true; }
+	return false;
+};
 const pickWeighted = (weights, r) => {
 	const entries = Object.entries(weights);
 	const total = entries.reduce((s, [, w]) => s + w, 0);
@@ -504,15 +557,50 @@ const QUICK_BUY_ASSETS = { BTC: 45, ETH: 28, SOL: 12, DOGE: 8, XRP: 7 };
 const STAKE_ASSETS = { ETH: 50, SOL: 30, ADA: 12, AVAX: 8 };
 const WITHDRAW_ASSETS = { BTC: 30, ETH: 25, USDC: 25, SOL: 12, USDT: 8 };
 const NOTIONAL_MEDIAN = { casual_investor: 90, active_trader: 650, crypto_native: 380 };
+// withdrawal size medians: customers withdraw a little less than they deposit (net inflow of a few percent)
+const WITHDRAW_MEDIAN = { casual_investor: 180, active_trader: 730, crypto_native: 730 };
 const MONEY_EVENTS = new Set(["quick buy started", "quick buy completed", "trade executed", "stake started",
 	"unstake requested", "withdrawal submitted", "withdrawal confirmed", "recurring buy created",
 	"recurring buy executed", "deposit completed"]);
 const SESSION_GAP_MIN = 30;
+const ID_DOC_WEIGHTS = { drivers_license: 52, passport: 34, national_id: 14 };
+const DEPOSIT_METHOD_WEIGHTS = { bank_transfer: 55, debit_card: 25, crypto_transfer: 15, wire: 5 };
 const DEVICE_KEYS = ["device_id", "model", "screen_height", "screen_width", "os", "carrier", "radio", "session_id"];
 const ENTRY_POINTS = { direct: 83, widget: 11, email_link: 6 };
 const PUSH_OPEN_RATE = 0.14;        // mean share of price alerts that bring the customer into the app (per-customer 0-28%)
 // sent by Ledgerline's servers, not by the user: they keep firing after a user goes quiet
 const SERVER_EVENTS = new Set(["price alert triggered", "recurring buy executed", "withdrawal confirmed"]);
+
+// ── warm start: sign-ups from the week before the window still in onboarding ──
+// A salted share of pre-existing users signed up in the 7 days before June 4 at
+// the in-window sign-up rate. Their remaining onboarding steps (old vendor timing
+// and rates) land in the window, so the pipeline does not start empty on day 1.
+const INFLIGHT_DAYS = 7;
+const INFLIGHT_SHARE = (BORN_PCT / NUM_DAYS * INFLIGHT_DAYS) / (100 - BORN_PCT);
+const INFLIGHT_STEPS = [
+	// [event, chance of reaching it after the previous step, median hours after the previous step, log sigma]
+	["identity verification started", 0.81, 12, 0.35],
+	["identity verified", 0.77, 10.8, 0.2],
+	["deposit completed", 0.7, 10, 0.17],
+];
+const inflightSignup = (uid) => (salt(uid, "inflight") < INFLIGHT_SHARE
+	? D0_MS - (0.02 + 0.98 * salt(uid, "inflight-day")) * INFLIGHT_DAYS * DAY_MS
+	: null);
+// onboarding step times for an in-flight user (stops at the first step they never reach); early steps fall before the window
+const inflightPlan = (uid, pre) => {
+	const out = [];
+	let t = pre;
+	for (const [name, p, medH, sig] of INFLIGHT_STEPS) {
+		if (salt(uid, `inflight-p|${name}`) >= p) break;
+		t += medH * HOUR_MS * Math.exp(sig * normalOf(`${uid}|inflight-t|${name}`));
+		if (t >= pre + FUNNEL_WINDOW_DAYS * DAY_MS || t > END_MS) break;
+		out.push([name, t]);
+	}
+	return out;
+};
+// fields an onboarding step sent server-side keeps (no device, no session)
+const SERVER_STEP_KEEP = new Set(["event", "time", "insert_id", "user_id", "country", "country_code", "region", "city"]);
+const ONBOARDING_SERVER_STEPS = new Set(["identity verification started", "identity verified"]);
 
 function handleUserHook(profile, meta) {
 	const uid = profile.distinct_id;
@@ -520,6 +608,13 @@ function handleUserHook(profile, meta) {
 		// the engine pins each new user's "account created" to `created` (UTC)
 		profile.customer_since = dayKey(ms(profile.created ?? meta.user.created));
 		profile.kyc_status = "not_started";
+		return profile;
+	}
+	// a few customers signed up in the week before the window and are still onboarding
+	const pre = inflightSignup(uid);
+	if (pre !== null) {
+		profile.customer_since = dayKey(pre);
+		profile.kyc_status = "not_started"; // set from their onboarding steps in the everything hook
 		return profile;
 	}
 	// established customers joined between 2020-01 and the window start
@@ -535,21 +630,52 @@ function handleEverything(events, meta) {
 	const profile = meta.profile;
 	const uid = profile.distinct_id;
 	const born = meta.userIsBornInDataset;
+	const run = runOf(meta);
 	const byTime = (a, b) => T(a) - T(b);
 	events.sort(byTime);
 
-	// ── onboarding milestones (new users) ──
+	// ── onboarding milestones (new users, and sign-ups from the week before the window) ──
+	const pre = born ? null : inflightSignup(uid);
+	const inflight = pre !== null;
 	const signup = events.find((e) => e.event === "account created");
-	const t0 = signup ? T(signup) : null;
-	const started = events.find((e) => e.event === "identity verification started");
-	const verified = events.find((e) => e.event === "identity verified" && (!started || T(e) >= T(started)));
-	const firstDeposit = verified ? events.find((e) => e.event === "deposit completed" && T(e) >= T(verified)) : null;
-	const tf = firstDeposit ? T(firstDeposit) : null;
-	const funded = !born || Boolean(firstDeposit);
+	const t0 = signup ? T(signup) : pre;
+	let started = null, verified = null, firstDeposit = null, tf = null, funded = !born && !inflight;
+	if (born) {
+		started = events.find((e) => e.event === "identity verification started") || null;
+		verified = events.find((e) => e.event === "identity verified" && (!started || T(e) >= T(started))) || null;
+		firstDeposit = verified ? events.find((e) => e.event === "deposit completed" && T(e) >= T(verified)) || null : null;
+		tf = firstDeposit ? T(firstDeposit) : null;
+		funded = Boolean(firstDeposit);
+		profile.kyc_status = verified ? "verified" : started ? "pending" : "not_started";
+	} else if (inflight) {
+		// the steps they still had to take on June 4 (earlier ones happened before the window)
+		const plan = inflightPlan(uid, pre);
+		const tpl = events[0];
+		for (const [name, t] of plan) {
+			if (t < D0_MS) continue;
+			const c = cloneEvent(tpl, { event: name, time: iso(t) });
+			for (const k of Object.keys(c)) if (!SERVER_STEP_KEEP.has(k)) delete c[k];
+			if (name === "identity verification started") c.id_document_type = pickWeighted(ID_DOC_WEIGHTS, salt(uid, "inflight-doc"));
+			if (name === "deposit completed") {
+				c.deposit_method = pickWeighted(DEPOSIT_METHOD_WEIGHTS, salt(uid, "inflight-dep"));
+				c.amount_usd = 0;
+				firstDeposit = c;
+			}
+			events.push(c);
+		}
+		events.sort(byTime);
+		const reached = new Map(plan);
+		tf = reached.get("deposit completed") ?? null;
+		funded = tf !== null;
+		profile.kyc_status = reached.has("identity verified") ? "verified" : reached.has("identity verification started") ? "pending" : "not_started";
+	}
+	// onboarding steps sent server-side carry no device and no session
+	for (const e of events) {
+		if (!e.device_id && (ONBOARDING_SERVER_STEPS.has(e.event) || e === firstDeposit)) for (const k of DEVICE_KEYS) delete e[k];
+	}
 	// Sign in with Apple is offered on the iOS apps only
 	if (signup && signup.os === "Android" && signup.signup_method === "apple") signup.signup_method = "google";
-	if (born) {
-		profile.kyc_status = verified ? "verified" : started ? "pending" : "not_started";
+	if (born || inflight) {
 		// money moves only after the account is verified and funded
 		events = events.filter((e) => !MONEY_EVENTS.has(e.event) || (funded && (e === firstDeposit || T(e) > tf)));
 	}
@@ -576,6 +702,7 @@ function handleEverything(events, meta) {
 		}
 	}
 	const drop = new Set();
+	const androidHit = [];
 	for (const q of quickBuys.values()) {
 		const s = q["quick buy started"], c = q["quick buy completed"];
 		if (!s) { if (c) drop.add(c); continue; }
@@ -584,22 +711,23 @@ function handleEverything(events, meta) {
 		c.amount_usd = Math.max(10, Math.round(logNormal(investor === "casual_investor" ? 60 : 150, 0.8)));
 		c.fee_usd = round2(Math.max(0.99, c.amount_usd * 0.0149));
 		c.price_usd = priceAt(c.asset, T(c));
-		// H9: Android 5.12 breaks the Simple Buy confirmation for a share of orders
-		if (s.os === "Android" && T(s) >= ms(ANDROID_RELEASE) && T(s) < ms(ANDROID_HOTFIX) && chance.bool({ likelihood: ANDROID_FAIL * 100 })) {
-			drop.add(c);
-		}
+		if (s.os === "Android" && T(s) >= ms(ANDROID_RELEASE) && T(s) < ms(ANDROID_HOTFIX)) androidHit.push(c);
 	}
+	// H9: Android 5.12 breaks the Simple Buy confirmation for ANDROID_FAIL of the orders
+	// that would have completed (a fixed share across the incident, in time order per customer)
+	androidHit.sort((x, y) => T(x) - T(y));
+	for (const c of androidHit) if (takeShare(run, "android", ANDROID_FAIL)) drop.add(c);
 	for (const [wid, w] of withdrawals) {
 		const s = w["withdrawal submitted"], c = w["withdrawal confirmed"];
 		if (!s) { if (c) drop.add(c); continue; }
 		const net = pickWeighted(WITHDRAW_NETWORKS[s.asset] || { ethereum: 1 }, hashFloat(`net|${wid}`));
 		const date = dayKey(T(s));
 		s.network = net;
-		s.amount_usd = Math.max(20, Math.round(logNormal(investor === "casual_investor" ? 220 : 900, 1.0)));
+		s.amount_usd = Math.max(20, Math.round(logNormal(WITHDRAW_MEDIAN[investor] ?? 400, 1.0)));
 		s.network_fee_usd = roundTo(networkFee(date, net) * Math.exp(0.25 * chance.normal()), 4);
 		if (!c) continue;
 		// H2: during the congestion window a share of ethereum withdrawals never confirm
-		if (inCongestion(T(s), net) && chance.bool({ likelihood: CONGESTION_FAIL * 100 })) {
+		if (inCongestion(T(s), net) && takeShare(run, "congestion", CONGESTION_FAIL)) {
 			drop.add(c);
 			continue;
 		}
@@ -671,7 +799,7 @@ function handleEverything(events, meta) {
 		}
 		if (e.event === "unstake requested") {
 			// new customers can only unstake what they staked in the window
-			if (born && (!firstStake || T(firstStake) > T(e))) return false;
+			if ((born || inflight) && (!firstStake || T(firstStake) > T(e))) return false;
 			const t = T(e);
 			if (t >= changeMs && t < surgeEnd && chance.bool({ likelihood: (UNSTAKE_SURGE_MULT - 1) * 100 })) {
 				const off = chance.integer({ min: 5, max: 360 }) * MIN_MS;
@@ -696,20 +824,20 @@ function handleEverything(events, meta) {
 		amount_usd: Math.max(10, Math.round(25 * Math.exp(1.0 * normalOf(`${uid}|plan-amt|${tag}`)) / 5) * 5),
 	});
 	let planner = false;
-	if (born && funded && signup) {
+	if (((born && signup) || inflight) && funded) {
 		if (salt(uid, "planner") < PLANNER_SHARE) {
 			// the plan is set up inside one of the user's sessions in their first days
 			// (right after the first deposit when there is no other session)
 			const cands = events.filter((e) => !SERVER_EVENTS.has(e.event) && T(e) > tf && T(e) < t0 + PLAN_EARLY_DAYS * DAY_MS);
 			const anchor = cands.length ? cands[Math.floor(salt(uid, "plan-session") * cands.length)] : firstDeposit;
-			const tc = T(anchor) + chance.integer({ min: 1, max: 12 }) * MIN_MS;
-			if (tc < t0 + HABIT_WINDOW_DAYS * DAY_MS && tc <= END_MS) {
-				// cloned from the first deposit (every funded user has one); device fields
-				// come from the session it happens in
+			const tc = anchor ? T(anchor) + chance.integer({ min: 1, max: 12 }) * MIN_MS : -Infinity;
+			if (tc >= D0_MS && tc < t0 + HABIT_WINDOW_DAYS * DAY_MS && tc <= END_MS) {
+				// cloned from the first deposit (the session anchor for a customer who funded
+				// before the window); device fields come from the session it happens in
 				const dev = {};
 				for (const k of DEVICE_KEYS) if (anchor[k] !== undefined) dev[k] = anchor[k];
-				const c = cloneEvent(firstDeposit, { event: "recurring buy created", ...dev, ...planFields(0), time: iso(tc) });
-				delete c.deposit_method;
+				const c = cloneEvent(firstDeposit || anchor, { event: "recurring buy created", ...dev, ...planFields(0), time: iso(tc) });
+				for (const k of Object.keys(c)) if (!SERVER_STEP_KEEP.has(k) && !DEVICE_KEYS.includes(k) && !PLAN_KEYS.has(k)) delete c[k];
 				plans.push({ tpl: c, first: tc + 5 * MIN_MS, frequency: c.frequency, start: tc });
 				events.push(c);
 				planner = true;
@@ -724,7 +852,7 @@ function handleEverything(events, meta) {
 				events.push(late);
 			}
 		}
-	} else if (!born) {
+	} else if (!born && !inflight) {
 		const tpl = execTpl || created[0];
 		if (tpl && salt(uid, "est-planner") < EST_PLANNER_SHARE) {
 			const f = planFields("pre");
@@ -741,14 +869,16 @@ function handleEverything(events, meta) {
 
 	// ── H4: lifecycle cuts for new users (user-initiated events only) ──
 	let cut = Infinity;
-	if (born && signup) {
+	if ((born && signup) || inflight) {
 		const cuts = [];
 		if (!funded) {
-			if (salt(uid, "abandon") < ABANDON_SHARE) cuts.push(t0 + (1 + salt(uid, "abandon-day") * 5) * DAY_MS);
-		} else if (!planner && salt(uid, "dark") < DARK_SHARE) {
+			// a customer who gives up does so after their last onboarding step (kyc_status keeps its event)
+			const lastStep = Math.max(-Infinity, ...events.filter((e) => ONBOARDING_SERVER_STEPS.has(e.event)).map(T));
+			if (salt(uid, "abandon") < ABANDON_SHARE) cuts.push(Math.max(t0 + (1 + salt(uid, "abandon-day") * 5) * DAY_MS, lastStep + 1));
+		} else if (born && !planner && salt(uid, "dark") < DARK_SHARE) {
 			cuts.push(t0 + DARK_AFTER_DAYS * DAY_MS);
 		}
-		if (salt(uid, "lapse") < LAPSE_SHARE) cuts.push(t0 + (LAPSE_DAY_MIN + salt(uid, "lapse-day") * (LAPSE_DAY_MAX - LAPSE_DAY_MIN)) * DAY_MS);
+		if (born && salt(uid, "lapse") < LAPSE_SHARE) cuts.push(t0 + (LAPSE_DAY_MIN + salt(uid, "lapse-day") * (LAPSE_DAY_MAX - LAPSE_DAY_MIN)) * DAY_MS);
 		if (cuts.length) {
 			cut = Math.min(...cuts);
 			events = events.filter((e) => T(e) < cut || SERVER_EVENTS.has(e.event));
@@ -778,7 +908,7 @@ function handleEverything(events, meta) {
 			});
 			events.push(ex);
 		}
-		if (end <= END_MS && end > p.first) {
+		if (end <= END_MS && end > Math.max(p.start, D0_MS)) {
 			// cancelled in one of the customer's sessions (the plan's own template is the clone source)
 			const c = cloneEvent(p.tpl, { event: "recurring buy cancelled", time: iso(end), ...f });
 			for (const k of Object.keys(c)) if (PLAN_EXTRA_KEYS.includes(k)) delete c[k];
@@ -787,6 +917,7 @@ function handleEverything(events, meta) {
 	}
 
 	// low-frequency actions: most sessions do not share a referral link or set a new alert
+	// (event weights are whole numbers >= 1, and both sit in the catch-all funnel)
 	events = events.filter((e) => {
 		if (e.event === "referral link shared") return chance.bool({ likelihood: 25 });
 		if (e.event === "price alert created") return chance.bool({ likelihood: 45 });
@@ -794,7 +925,7 @@ function handleEverything(events, meta) {
 	});
 	// ── price alerts: notifications only reach users who have an alert set ──
 	const firstAlert = events.find((e) => e.event === "price alert created");
-	const preAlerts = !born && salt(uid, "pre-alerts") < 0.45;
+	const preAlerts = !born && !inflight && salt(uid, "pre-alerts") < 0.45;
 	events = events.filter((e) => {
 		if (e.event !== "price alert triggered") return true;
 		const t = T(e);
@@ -830,6 +961,7 @@ function handleEverything(events, meta) {
 	events = events.filter((e) => e.event !== "app opened");
 	events.sort(byTime);
 	const alerts = events.filter((e) => e.event === "price alert triggered").map(T);
+	const devHome = signup || events.find((e) => e.device_id);
 	const opens = [];
 	let last = -Infinity;
 	for (const e of events) {
@@ -841,22 +973,18 @@ function handleEverything(events, meta) {
 			const open = cloneEvent(e, { event: "app opened", time: iso(to), entry_point: fromPush ? "push_notification" : pickWeighted(ENTRY_POINTS, hashFloat(`${e.insert_id}|entry`)) });
 			for (const k of Object.keys(open)) if (!OPEN_KEEP_KEYS.has(k)) delete open[k];
 			// server-side onboarding steps carry no device: the app open is on the signup device
-			if (!e.device_id && signup) for (const k of DEVICE_KEYS) if (signup[k] !== undefined) open[k] = signup[k];
+			// (for a sign-up from before the window, the first device seen in the window)
+			if (!e.device_id && devHome) for (const k of DEVICE_KEYS) if (devHome[k] !== undefined) open[k] = devHome[k];
 			opens.push(open);
 		}
 		last = t;
 	}
 	events = events.concat(opens);
 
-	// the SDK sends the experiment exposure once per user (first Simple Buy after the start)
-	let exposed = false;
-	events = events.filter((e) => {
-		if (e.event !== "$experiment_started") return true;
-		if (exposed) return false;
-		exposed = true;
-		return true;
-	});
-	// experiment assignment lives on the profile only for users with an exposure left
+	// the exposure goes with the Simple Buy it announces (the engine sends it 1 s before
+	// the order starts); assignment lives on the profile only for users with an exposure left
+	const qbStarts = new Set(events.filter((e) => e.event === "quick buy started").map(T));
+	events = events.filter((e) => e.event !== "$experiment_started" || qbStarts.has(T(e) + 1000));
 	if (profile[EXP_KEY] !== undefined && !events.some((e) => e.event === "$experiment_started")) delete profile[EXP_KEY];
 	return events;
 }
@@ -876,7 +1004,9 @@ function handleWarehouse(row, meta) {
 		return row;
 	}
 	if (meta.metricName === "paid_marketing_daily") {
-		row.spend_usd = paidSpend(row.date, row.acquisition_channel);
+		const spend = spendByDay.get(`${row.date}|${row.acquisition_channel}`);
+		if (spend === undefined) throw new Error(`paid_marketing_daily: no paced spend for ${row.date} ${row.acquisition_channel}`);
+		row.spend_usd = spend;
 		return row;
 	}
 	return row;
@@ -884,7 +1014,7 @@ function handleWarehouse(row, meta) {
 
 // identity, device, session, and location fields an "app opened" keeps from its source event
 const OPEN_KEEP_KEYS = new Set(["event", "time", "insert_id", "user_id", "device_id", "entry_point", "model", "screen_height",
-	"screen_width", "os", "carrier", "radio", "session_id", "country", "country_code", "region", "city", "_persona"]);
+	"screen_width", "os", "carrier", "radio", "session_id", "country", "country_code", "region", "city"]);
 const mkt = (ctx) => MARKET[ctx.seriesKey]?.[dayIdx(ctx.time)];
 
 // ── CONFIG ──
@@ -934,7 +1064,7 @@ const config = {
 			weight: 1,
 			isStrictEvent: true,
 			properties: {
-				id_document_type: { __weights: { drivers_license: 52, passport: 34, national_id: 14 } },
+				id_document_type: { __weights: ID_DOC_WEIGHTS },
 			},
 		},
 		{ event: "identity verified", weight: 1, isStrictEvent: true, properties: {} },
@@ -943,7 +1073,7 @@ const config = {
 			weight: 1,
 			isStrictEvent: true,
 			properties: {
-				deposit_method: { __weights: { bank_transfer: 55, debit_card: 25, crypto_transfer: 15, wire: 5 } },
+				deposit_method: { __weights: DEPOSIT_METHOD_WEIGHTS },
 				amount_usd: [100],
 			},
 		},
@@ -1234,8 +1364,8 @@ const config = {
 			timeColumn: "date",
 			valueColumn: "spend_usd",
 			columns: {
-				platform_reported_signups: (ctx) => Math.round(paidSpend(dayKey(ctx.time), ctx.seriesKey) * PLATFORM_SIGNUP_INFLATION[ctx.seriesKey] / CPL_USD[ctx.seriesKey] * jitter(`lead|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.25)),
-				clicks: (ctx) => Math.round(paidSpend(dayKey(ctx.time), ctx.seriesKey) / (CPC_USD[ctx.seriesKey] * jitter(`cpc|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.15))),
+				platform_reported_signups: (ctx) => Math.round(pacedSpend(ctx) * PLATFORM_SIGNUP_INFLATION[ctx.seriesKey] / CPL_USD[ctx.seriesKey] * jitter(`lead|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.25)),
+				clicks: (ctx) => Math.round(pacedSpend(ctx) / (CPC_USD[ctx.seriesKey] * jitter(`cpc|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.15))),
 				impressions: (ctx) => Math.round(ctx.row.clicks / (CTR[ctx.seriesKey] * jitter(`ctr|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.15))),
 			},
 		},
@@ -1256,7 +1386,7 @@ const config = {
 		{ name: "crypto_native", weight: 20, eventMultiplier: 1.2, properties: { investor_type: "crypto_native" } },
 	],
 
-	// retention shape (also pins each new user's signup to their creation day)
+	// retention shape for new users (the engine keeps pre-existing users flat across the window)
 	retentionCurve: { type: "logarithmic", day1: 0.75, day7: 0.62, day30: 0.52 },
 
 	hook(record, type, meta) {
@@ -1329,7 +1459,7 @@ export const stories = [
 	{
 		id: "H1-volatility-drives-trading",
 		hook: "H1",
-		archetype: "bespoke",
+		archetype: "external-join",
 		narrative: `Advanced Trade activity follows the market. On each UTC day, every trade has extra fills in proportion to BTC realized volatility above ${VOL_PIVOT}% (${VOL_TRADE_SENS} extra trades per trade per volatility point). The volatility series lives only in the warehouse table market_prices_daily (asset = BTC, realized_vol_pct), so the read needs the join: trades per daily active user on high-volatility days (realized_vol_pct >= ${HIGH_VOL_PCT}, ${H1_HIGH.length} days) vs calm days (< ${CALM_VOL_PCT}, ${H1_CALM.length} days) is the mean multiplier ratio ${H1_TARGET}. Daily active users count people with any user-initiated event (server-side notifications, recurring-buy executions, and withdrawal confirmations excluded). Simple Buy per active user is the control: casual buyers do not react to volatility.`,
 		mixpanelReport: { type: "Insights", events: ["trade executed", "any user event (uniques)"], measure: "total / daily uniques", chart: "daily line", join: "market_prices_daily.realized_vol_pct (asset = BTC)" },
 		assertions: [
@@ -1351,7 +1481,7 @@ export const stories = [
 	{
 		id: "H2-ethereum-congestion-withdrawals",
 		hook: "H2",
-		archetype: "bespoke",
+		archetype: "external-join",
 		narrative: `Ethereum mainnet congestion from ${D(ETH_CONGESTION_START)} to ${D(ETH_CONGESTION_END)} (exclusive): ${CONGESTION_FAIL * 100}% of withdrawals on the ethereum network that would have confirmed never confirm, network fees on those withdrawals run ${CONGESTION_FEE_MULT}x, and the ones that confirm take ${CONGESTION_CONF_MULT}x longer. The congested days and network come from the warehouse table chain_network_daily (network_status = 'congested'); the event-side read is a ratio of ratios (ethereum confirmation rate / other networks, congested days vs the 7 days either side, withdrawal_id held constant), which reads the 1 - ${CONGESTION_FAIL} keep rate and cancels weekday and asset mix.`,
 		mixpanelReport: { type: "Funnels", steps: ["withdrawal submitted", "withdrawal confirmed"], counting: "totals", holdPropertyConstant: "withdrawal_id", breakdown: "network", chart: "daily", join: "chain_network_daily.network_status" },
 		assertions: [
@@ -1471,7 +1601,7 @@ FROM f GROUP BY 1`,
 		hook: "H5",
 		archetype: "experiment-lift",
 		narrative: `The "${ONE_TAP_EXPERIMENT}" test on Simple Buy starts ${D(ONE_TAP_START)} and splits users 50/50 (sticky hash). "${ONE_TAP_VARIANT}" multiplies the share of Simple Buy orders that complete by ${ONE_TAP_CONV_MULT} and the start-to-complete time by ${ONE_TAP_TTC_MULT}. Every order's two events share an order_id, so a totals funnel holding order_id constant measures per-order completion. The Android incident (H9) hits both arms alike. Exposure ($experiment_started) is sent once per user, at their first Simple Buy after the start.`,
-		mixpanelReport: { type: "Funnels", steps: ["quick buy started", "quick buy completed"], counting: "totals", holdPropertyConstant: "order_id", breakdown: `user property "${EXP_KEY}"`, window: "1 day" },
+		mixpanelReport: { type: "Funnels", steps: ["quick buy started", "quick buy completed"], counting: "totals", holdPropertyConstant: "order_id", breakdown: `user property "${EXP_KEY}"`, window: "1 day", dateRange: `${D(ONE_TAP_START)} to ${D(DATASET_END)}` },
 		assertions: [
 			{
 				breakdown: {
@@ -1524,7 +1654,7 @@ FROM ev WHERE event = '$experiment_started'`,
 		id: "H6-paid-channel-quality",
 		hook: "H6",
 		archetype: "attribution-bias",
-		narrative: `Influencer and affiliate signups are the cheapest paid signups but the least likely to finish onboarding. Warehouse paid_marketing_daily bills a paced daily budget per channel (cost per signup x expected signups per day, weekday shape, seeded ±${SPEND_NOISE * 100}% day noise, never zero), so spend per Mixpanel signup is $${CPL_USD.influencer_affiliate} for ${LOW_QUALITY_CHANNEL} vs $${CPL_USD.paid_search} for paid_search over the window (${(CPL_USD.influencer_affiliate / CPL_USD.paid_search).toFixed(3)}x). Their 7-day onboarding completion (through first deposit) is ${LOW_QUALITY_MULT}x the other channels' in both KYC eras (declarative first funnels: ${Math.round(ONBOARD_CONV_OLD * LOW_QUALITY_MULT)}% vs ${ONBOARD_CONV_OLD}%, then ${Math.round(ONBOARD_CONV_NEW * LOW_QUALITY_MULT)}% vs ${ONBOARD_CONV_NEW}%), so cost per funded account runs about ${((CPL_USD.influencer_affiliate / CPL_USD.paid_search) / LOW_QUALITY_MULT).toFixed(2)}x paid search: cheapest per signup, most expensive per funded customer.`,
+		narrative: `Influencer and affiliate signups are the cheapest paid signups but the least likely to finish onboarding. Warehouse paid_marketing_daily bills a daily budget per channel that marketing re-paces to the channel's trailing ${SPEND_PACE_DAYS}-day Mixpanel sign-ups (cost per signup x trailing mean, weekday shape, seeded ±${SPEND_NOISE * 100}% day noise, never zero), so spend per Mixpanel signup is $${CPL_USD.influencer_affiliate} for ${LOW_QUALITY_CHANNEL} vs $${CPL_USD.paid_search} for paid_search over the window (${(CPL_USD.influencer_affiliate / CPL_USD.paid_search).toFixed(3)}x). Their 7-day onboarding completion (through first deposit) is ${LOW_QUALITY_MULT}x the other channels' in both KYC eras (declarative first funnels: ${Math.round(ONBOARD_CONV_OLD * LOW_QUALITY_MULT)}% vs ${ONBOARD_CONV_OLD}%, then ${Math.round(ONBOARD_CONV_NEW * LOW_QUALITY_MULT)}% vs ${ONBOARD_CONV_NEW}%), so cost per funded account runs about ${((CPL_USD.influencer_affiliate / CPL_USD.paid_search) / LOW_QUALITY_MULT).toFixed(2)}x paid search: cheapest per signup, most expensive per funded customer.`,
 		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "paid_marketing_daily.spend_usd", funnel: `${ONBOARDING_STEPS.join(" → ")}, ${FUNNEL_WINDOW_DAYS}-day window, breakdown acquisition_channel` },
 		assertions: [
 			{

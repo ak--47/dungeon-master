@@ -10,14 +10,14 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 | `user_id` | The customer's ID. Present on every event. |
 | `device_id` | The phone or tablet the event came from. A customer has about two devices. Missing on the onboarding steps after sign-up (sent server-side) and on a small share of recurring-buy events. |
 | `insert_id` | Unique event ID used for de-duplication. |
-| `session_id` | The app session the event belongs to (diagnostic; Mixpanel computes its own sessions). |
-| `os` | `iOS`, `iPadOS`, or `Android`. Fixed per device. |
-| `model`, `carrier`, `radio`, `screen_height`, `screen_width` | Device details from the mobile SDK. |
+| `session_id` | The app session the event belongs to (diagnostic; Mixpanel computes its own sessions). Missing on events without a `device_id`. |
+| `os` | `iOS`, `iPadOS`, or `Android`. Fixed per device. Missing on events without a `device_id`. |
+| `model`, `carrier`, `radio`, `screen_height`, `screen_width` | Device details from the mobile SDK. Fixed per device; missing on events without a `device_id`. |
 | `country`, `country_code`, `region`, `city` | Customer location (one location per customer). |
 
 ## Sign-up and onboarding
 
-New customers go through onboarding once, right after they sign up. Identity verification and the first deposit are sent by the onboarding service with `user_id` only.
+New customers go through onboarding once, right after they sign up. Identity verification and the first deposit are sent by the onboarding service with `user_id` only. Customers who signed up in the days before June 4 finish their remaining steps early in the window; their `account created` is before the window.
 
 | Event | Meaning | Properties |
 |---|---|---|

@@ -65,9 +65,11 @@ FROM wh_market WHERE asset = 'BTC';
 -- onboarding funnel per new user: steps in order, 7-day completion window
 CREATE OR REPLACE TEMP TABLE onboarding AS
 WITH s AS (SELECT uid, t AS t0, acquisition_channel AS ch, signup_method, os FROM ev WHERE event = 'account created'),
-a AS (SELECT s.*, (SELECT min(t) FROM ev WHERE ev.uid = s.uid AND event = 'identity verification started' AND t >= s.t0) AS t1 FROM s),
+a AS (SELECT s.*, (SELECT min(t) FROM ev WHERE ev.uid = s.uid AND event = 'identity verification started' AND t >= s.t0) AS t1,
+  (SELECT arg_min(id_document_type, t) FROM ev WHERE ev.uid = s.uid AND event = 'identity verification started' AND t >= s.t0) AS doc FROM s),
 b AS (SELECT a.*, (SELECT min(t) FROM ev WHERE ev.uid = a.uid AND event = 'identity verified' AND t >= a.t1) AS t2 FROM a),
-c AS (SELECT b.*, (SELECT min(t) FROM ev WHERE ev.uid = b.uid AND event = 'deposit completed' AND t >= b.t2) AS t3 FROM b)
+c AS (SELECT b.*, (SELECT min(t) FROM ev WHERE ev.uid = b.uid AND event = 'deposit completed' AND t >= b.t2) AS t3,
+  (SELECT arg_min(deposit_method, t) FROM ev WHERE ev.uid = b.uid AND event = 'deposit completed' AND t >= b.t2) AS first_deposit_method FROM b)
 SELECT *, (t1 IS NOT NULL AND t1 < t0 + INTERVAL 7 DAY) AS s1, (t2 IS NOT NULL AND t2 < t0 + INTERVAL 7 DAY) AS s2,
  (t3 IS NOT NULL AND t3 < t0 + INTERVAL 7 DAY) AS done, t0 >= TIMESTAMP '2026-07-28' AS post,
  t0 < TIMESTAMP '2026-09-24' AS full_window
@@ -89,12 +91,12 @@ LEFT JOIN (SELECT withdrawal_id, min(t) AS tc, any_value(confirmation_mins) AS c
 
 -- funded new users and their day-7 / day-30 activity (app opened = a session start)
 CREATE OR REPLACE TEMP TABLE new_funded AS
-WITH s AS (SELECT uid, t0 FROM onboarding WHERE uid IN (SELECT uid FROM ev WHERE event = 'deposit completed'))
-SELECT s.uid, s.t0,
+WITH s AS (SELECT uid, t0, os, first_deposit_method FROM onboarding WHERE uid IN (SELECT uid FROM ev WHERE event = 'deposit completed'))
+SELECT s.uid, s.t0, s.os, s.first_deposit_method,
  count(*) FILTER (WHERE e.event = 'recurring buy created' AND e.t < s.t0 + INTERVAL 14 DAY) AS early_plans,
  count(*) FILTER (WHERE e.event = 'app opened' AND e.t >= s.t0 + INTERVAL 7 DAY AND e.t < s.t0 + INTERVAL 14 DAY) AS opens_d7,
  count(*) FILTER (WHERE e.event = 'app opened' AND e.t >= s.t0 + INTERVAL 30 DAY AND e.t < s.t0 + INTERVAL 37 DAY) AS opens_d30
-FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1, 2;
+FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1, 2, 3, 4;
 
 -- dataset overview
 SELECT count(*) AS events, count(DISTINCT uid) AS users_with_events,
@@ -172,7 +174,8 @@ FROM g ORDER BY variant;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H6-paid-channel-quality
--- whole-window spend per Mixpanel signup by paid channel; 7-day onboarding
+-- whole-window spend per Mixpanel signup by paid channel (budgets re-paced to
+-- each channel's trailing 7-day sign-ups); 7-day onboarding
 -- completion by channel (signups through 2026-09-23)
 -- ─────────────────────────────────────────────────────────────────────────
 WITH s AS (SELECT acquisition_channel AS ch, count(*) AS signups FROM ev WHERE event = 'account created' GROUP BY 1),
@@ -352,28 +355,38 @@ SELECT CASE WHEN t < TIMESTAMP '2026-08-05' THEN '1 before listing' WHEN t < TIM
 FROM ev WHERE event = 'trade executed' GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- EVAL Q11 — first deposit size before vs from the KYC switch (null)
+-- EVAL Q11 — does the ID document type change KYC approval? (null)
+-- sign-ups through 2026-09-23 who started verification within 7 days: share
+-- verified within 7 days of sign-up by id_document_type, and z vs driver's
+-- license overall, within each platform, and within each KYC vendor era
 -- ─────────────────────────────────────────────────────────────────────────
-WITH fd AS (SELECT o.uid, o.post, d.amount_usd AS amt
- FROM onboarding o JOIN LATERAL (SELECT amount_usd FROM ev WHERE ev.uid = o.uid AND event = 'deposit completed' ORDER BY t LIMIT 1) d ON TRUE),
-g AS (SELECT post, count(*) AS n, avg(amt) AS mean_usd, median(amt) AS median_usd, avg(ln(amt)) AS ml, var_samp(ln(amt)) AS vl FROM fd GROUP BY 1)
-SELECT a.n AS n_before, b.n AS n_after, round(a.mean_usd, 2) AS mean_before, round(b.mean_usd, 2) AS mean_after,
- a.median_usd AS median_before, b.median_usd AS median_after,
- round((b.ml - a.ml) / sqrt(a.vl / a.n + b.vl / b.n), 2) AS z_log_amount
-FROM g a JOIN g b ON NOT a.post AND b.post;
-
--- ─────────────────────────────────────────────────────────────────────────
--- EVAL Q12 — do Sign in with Apple signups finish onboarding less often? (null)
--- 7-day onboarding completion, signups through 2026-09-23; Apple sign-in exists on
--- iOS and iPadOS only, so the within-iOS split is the fair comparison
--- ─────────────────────────────────────────────────────────────────────────
-WITH x AS (SELECT *, unnest(['all', os, CASE WHEN post THEN 'from jul28' ELSE 'before jul28' END]) AS grp FROM onboarding WHERE full_window),
-g AS (SELECT grp, signup_method = 'apple' AS apple, count(*) AS n, avg(done::INT) AS p FROM x GROUP BY 1, 2)
-SELECT a.grp, a.n AS n_other, b.n AS n_apple, round(a.p, 4) AS completion_other, round(b.p, 4) AS completion_apple,
+WITH x AS (SELECT *, unnest(['all', 'os: ' || os, CASE WHEN post THEN 'from jul28' ELSE 'before jul28' END]) AS grp
+ FROM onboarding WHERE full_window AND s1),
+g AS (SELECT grp, doc, count(*) AS n, avg(s2::INT) AS p FROM x GROUP BY 1, 2)
+SELECT a.grp, b.doc, a.n AS n_drivers_license, b.n AS n_doc, round(a.p, 4) AS approved_drivers_license, round(b.p, 4) AS approved_doc,
  round((b.p - a.p) / sqrt(a.p * (1 - a.p) / a.n + b.p * (1 - b.p) / b.n), 2) AS z
-FROM g a JOIN g b ON a.grp = b.grp AND NOT a.apple AND b.apple ORDER BY 1;
+FROM g a JOIN g b ON a.grp = b.grp AND a.doc = 'drivers_license' AND b.doc <> 'drivers_license' ORDER BY 1, 2;
 
-SELECT signup_method, count(*) AS signups, round(avg(done::INT), 4) AS completion FROM onboarding WHERE full_window GROUP BY 1 ORDER BY 1;
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q12 — do bank-transfer funders retain better than card funders? (null)
+-- funded new users who signed up through 2026-08-25: day-30 retention (an app
+-- open in days 30-36) by the method of their first deposit; z for bank transfer
+-- vs debit card and vs every other method, overall and within each platform
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT first_deposit_method, count(*) AS users, round(avg((opens_d30 > 0)::INT), 4) AS d30
+FROM new_funded WHERE t0 <= TIMESTAMP '2026-08-25 23:59:59' GROUP BY 1 ORDER BY 1;
+
+WITH x AS (SELECT *, unnest(['all', 'os: ' || os]) AS grp FROM new_funded WHERE t0 <= TIMESTAMP '2026-08-25 23:59:59'),
+g AS (SELECT grp, CASE WHEN first_deposit_method = 'bank_transfer' THEN 'bank' WHEN first_deposit_method = 'debit_card' THEN 'card' ELSE 'other' END AS m,
+  count(*) AS n, avg((opens_d30 > 0)::INT) AS p FROM x GROUP BY 1, 2),
+h AS (SELECT grp, m = 'bank' AS bank, sum(n) AS n, sum(n * p) / sum(n) AS p FROM g GROUP BY 1, 2)
+SELECT a.grp, 'bank vs card' AS comparison, b.n AS n_bank, a.n AS n_other, round(b.p, 4) AS d30_bank, round(a.p, 4) AS d30_other,
+ round((b.p - a.p) / sqrt(a.p * (1 - a.p) / a.n + b.p * (1 - b.p) / b.n), 2) AS z
+FROM g a JOIN g b ON a.grp = b.grp AND a.m = 'card' AND b.m = 'bank'
+UNION ALL
+SELECT a.grp, 'bank vs all other', b.n, a.n, round(b.p, 4), round(a.p, 4),
+ round((b.p - a.p) / sqrt(a.p * (1 - a.p) / a.n + b.p * (1 - b.p) / b.n), 2)
+FROM h a JOIN h b ON a.grp = b.grp AND NOT a.bank AND b.bank ORDER BY 2, 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q13 — Q3 paid marketing spend (2026-07-01..09-30)

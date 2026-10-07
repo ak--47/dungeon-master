@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Ledgerline**, a retail crypto e
 
 - **Product:** the Ledgerline iOS and Android apps: sign-up and identity verification, deposits, Simple Buy, Advanced Trade, recurring buys, staking (Earn), price alerts, and withdrawals to external wallets.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days: the last weeks of Q2, all of Q3, and the first day of Q4.
-- **Scale:** about 10,000 customers used Ledgerline in the window. About 4,000 of them created their account during the window; the rest were already customers before June 4. The project holds about 1.25 million events.
+- **Scale:** about 10,000 customers used Ledgerline in the window. About 4,000 of them created their account during the window; the rest were already customers before June 4. The project holds about 1.35 million events.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC.
 
 ## The other files
@@ -26,8 +26,9 @@ This folder is the internal analytics wiki for **Ledgerline**, a retail crypto e
 ## Identity notes
 
 - A new customer is identified when they create an account. `account created` is each new customer's first event and carries both the customer's `user_id` and the `device_id`. There is no anonymous pre-signup activity in the data.
-- Every event carries `user_id`. Most events also carry `device_id`. The exceptions are the onboarding steps after sign-up (`identity verification started`, `identity verified`, and the customer's first `deposit completed`), which the onboarding service sends server-side with `user_id` only, and a small share of recurring-buy events. Customers use about two devices (phones and tablets); `device_id` changes between devices but `user_id` does not.
+- Every event carries `user_id`. Most events also carry `device_id`. The exceptions are the onboarding steps after sign-up (`identity verification started`, `identity verified`, and the customer's first `deposit completed`), which the onboarding service sends server-side with `user_id` only (no device fields and no `session_id`), and a small share of recurring-buy events. Customers use about two devices (phones and tablets); `device_id` changes between devices but `user_id` does not.
 - Customers who joined before June 4 have no `account created` event in this window. Their `customer_since` profile date is before the window. For customers who joined in the window, `customer_since` is their sign-up date.
+- Some customers signed up in the last days of May or on June 1-3 and were still in onboarding on June 4. Their remaining onboarding steps (`identity verification started`, `identity verified`, first `deposit completed`) appear in the first days of the window without an `account created` event.
 - Count people with unique `user_id` (Mixpanel "Uniques"), not with `device_id`.
 
 ## Server-side events and sessions

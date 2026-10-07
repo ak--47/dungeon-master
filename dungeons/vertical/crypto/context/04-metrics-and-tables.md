@@ -40,7 +40,7 @@ Daily market data for every coin Ledgerline lists, from the market data vendor's
 | `open_usd` | FLOAT | USD per coin | Price at 00:00 UTC (the previous day's close). |
 | `high_usd`, `low_usd` | FLOAT | USD per coin | Highest and lowest price of the day. |
 | `daily_return_pct` | FLOAT | percent | Close-to-close change. |
-| `realized_vol_pct` | FLOAT | percent | Realized volatility of the day from intraday returns, in daily percent terms. The market team calls a day with BTC above about 4.5 "volatile" and below 3 "calm". |
+| `realized_vol_pct` | FLOAT | percent | Realized volatility of the day from intraday returns, in daily percent terms. |
 | `global_spot_volume_usd_m` | FLOAT | USD millions | Spot trading volume for the coin across the major exchanges in the vendor's feed. |
 
 Caveats: ONDO has market data for the whole window because it traded elsewhere before Ledgerline listed it on 2026-08-05. Ledgerline's own fill prices (`price_usd` on events) sit close to, but not exactly at, the vendor's prices.
@@ -63,7 +63,7 @@ Caveats: institutional API withdrawals do not send a product event, so `withdraw
 
 ### `paid_marketing_daily`
 
-Daily paid marketing cost by channel, from the ad platforms' and the affiliate network's billing exports. Each channel runs on a daily budget that the platform paces through the day; budgets are a little lower on Saturdays and Sundays. Spend is billed every day.
+Daily paid marketing cost by channel, from the ad platforms' and the affiliate network's billing exports. Marketing re-sets each channel's daily budget every day from the sign-ups the channel drove over the previous week, and the platform paces it through the day; budgets are a little lower on Fridays and weekends. Spend is billed every day.
 
 | Column | Type | Unit | Meaning |
 |---|---|---|---|
@@ -79,6 +79,6 @@ Caveats: organic and referral have no media spend and are not in this table. Use
 ## Analysis tips
 
 - For a before/after question around a dated change, consider the market (prices and volatility move every day), weekday mix, the overall trend, and mix shifts before you attribute a change to the event.
-- New customers keep joining through the window, so totals drift up over time. Compare rates, or fix the population (for example, established customers only), when you compare periods.
+- New customers keep joining through the window, so totals drift up over time. Compare rates, or hold the population fixed, when you compare periods.
 - New-customer funnels, conversion, and retention depend on sign-up date: customers who joined late in the window have had less time to act. Compare cohorts that joined in the same weeks.
-- Customers place many orders and withdrawals. Per-order and per-withdrawal questions need `order_id` or `withdrawal_id` held constant; unique-customer funnels hide most of the difference between orders.
+- A Simple Buy order's start and completion share an `order_id`; a withdrawal's submission and confirmation share a `withdrawal_id`.
