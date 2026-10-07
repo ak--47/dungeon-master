@@ -62,11 +62,14 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * IDENTITY: a new player is identified at "account created" (isAuthEvent,
  * user_id + device_id); it is the first event except for test players, whose
- * $experiment_started sits 1 s earlier with the same user_id and device_id.
+ * $experiment_started sits 1 s earlier. That exposure is pre-auth: it carries
+ * the signup device_id only (no user_id), and Mixpanel joins it to the player
+ * at the stitch on "account created"; a warehouse must map device_id → user_id
+ * itself. There is no other anonymous pre-signup activity.
  * Players use 1-2 devices (avgDevicePerUser 1.3); every event in a play session
  * carries the device of the session's first device-bearing event, so each
- * Mixpanel session (session_id) has one device. Every event carries user_id;
- * there is no anonymous pre-signup activity. The three onboarding steps after
+ * Mixpanel session (session_id) has one device. Every event except
+ * $experiment_started carries user_id. The three onboarding steps after
  * signup carry user_id only; every other event also carries device_id (a client
  * event built from a device-less onboarding step takes the signup device).
  * platform agrees with the engine's os field (iOS/iPadOS → ios, Android →
@@ -246,7 +249,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-gaming, 2026-10-07, full
- * fidelity, 10,000 players, 1,018,299 events)
+ * fidelity, 10,000 players, 1,018,469 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation                    | Expected | Measured
  * -----|------------------------------------------------|-------------------------------|----------|---------
@@ -254,39 +257,38 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H1   | Guided share of exposed players                | equal 2-arm hash              | 0.50     | 0.511
  * H1   | guided completions in Control / early exposures| exact purity                  | 0        | 0
  * H1   | median tutorial_minutes, Guided / Control      | GUIDED_TTC_MULT               | 0.70     | 0.696 (5.5 vs 7.9 min)
- * H2   | day 14-27 return, no guild / guild (finishers) | 1 − NONJOINER_QUIT_SHARE (≤, floor 0.775) | 0.55 | 0.538 (24.2% vs 45.0%)
- * H3   | Ashen Warden win rate, after / before          | 0.50 / 0.30                   | 1.667    | 1.672 (29.9% → 50.0%)
+ * H2   | day 14-27 return, no guild / guild (finishers) | 1 − NONJOINER_QUIT_SHARE (≤, floor 0.775) | 0.55 | 0.536 (24.1% vs 45.0%)
+ * H3   | Ashen Warden win rate, after / before          | 0.50 / 0.30                   | 1.667    | 1.642 (30.3% → 49.7%)
  * H3   | other bosses' win rate, after / before         | unchanged                     | 1.00     | 0.997
- * H4   | EU / other dungeon starts, outage / ±14 d      | 1 − OUTAGE_FAIL (≤, floor 0.7)| 0.40     | 0.437 (per-queue start rate 0.41)
+ * H4   | EU / other dungeon starts, outage / ±14 d      | 1 − OUTAGE_FAIL (≤, floor 0.7)| 0.40     | 0.393 (per-queue start rate 0.39)
  * H4   | warehouse instance_launch_success_rate, outage | 1 − OUTAGE_FAIL               | 0.40     | 0.397
- * H4   | EU median queue wait, outage / normal days     | OUTAGE_QUEUE_MULT (not graded)| 4.5      | 4.99 (1,087 s vs 218 s)
+ * H4   | EU median queue wait, outage / normal days     | OUTAGE_QUEUE_MULT (not graded)| 4.5      | 4.76 (1,047 s vs 220 s)
  * H5   | spend per signup, TikTok / Google              | 2.5 / 5.5                     | 0.455    | 0.449 ($2.47 vs $5.51)
  * H5   | tutorial completion, TikTok / other channels   | 36 / 60                       | 0.60     | 0.613 (40.6% vs 66.3%)
  * H5   | spend per tutorial finisher, TikTok / Meta     | (2.5 / 0.6) / 4.5             | 0.926    | 0.923 ($6.08 vs $6.59)
- * H6   | median queue wait, healer / dps                | ROLE_QUEUE_MULT.healer        | 0.40     | 0.403 (120 s vs 298 s)
- * H6   | median queue wait, tank / dps                  | ROLE_QUEUE_MULT.tank          | 0.20     | 0.205 (61 s)
- * H7   | average Ember pack price, PC / mobile          | pack weights                  | 1.855    | 2.036 ($16.55 vs $8.13)
- * H7   | warehouse net per Mixpanel Ember purchase, PC / mobile | 1.855 × 0.95 / 0.85   | 2.073    | 2.283 ($16.72 vs $7.32)
- * H8   | veteran DAU, Aug 13 - Sep 9 / Jul 9 - Aug 5     | (1−L+L(R+(1−R)k)) / (1−L+Lk)  | 1.267    | 1.290 (520 → 671)
+ * H6   | median queue wait, healer / dps                | ROLE_QUEUE_MULT.healer        | 0.40     | 0.397 (120 s vs 302 s)
+ * H6   | median queue wait, tank / dps                  | ROLE_QUEUE_MULT.tank          | 0.20     | 0.199 (60 s)
+ * H7   | average Ember pack price, PC / mobile          | pack weights                  | 1.855    | 1.917 ($16.44 vs $8.57)
+ * H7   | warehouse net per Mixpanel Ember purchase, PC / mobile | 1.855 × 0.95 / 0.85   | 2.073    | 2.143 ($16.55 vs $7.72)
+ * H8   | veteran DAU, Aug 13 - Sep 9 / Jul 9 - Aug 5     | (1−L+L(R+(1−R)k)) / (1−L+Lk)  | 1.267    | 1.289 (520 → 670.5)
  * H8   | Frostspire Vault runs before Aug 6             | exact purity                  | 0        | 0
- * H9   | dungeon runs per active player, event / ±1 week| 1 + DOUBLE_XP_EXTRA           | 1.60     | 1.626 (1.96 vs 1.20)
- * H10  | clear rate, solo / full party                  | 0.40 / 0.70                   | 0.571    | 0.570 (39.8% vs 69.9%)
- * H10  | clear rate, duo / full party                   | 0.50 / 0.70                   | 0.714    | 0.712
- * H10  | clear rate, mythic / normal (not graded)       | 0.78 / 1.08                   | 0.722    | 0.719 (48.5% vs 67.4%)
+ * H9   | dungeon runs per active player, event / ±1 week| 1 + DOUBLE_XP_EXTRA           | 1.60     | 1.629 (1.96 vs 1.20)
+ * H10  | clear rate, solo / full party                  | 0.40 / 0.70                   | 0.571    | 0.575 (40.1% vs 69.8%)
+ * H10  | clear rate, duo / full party                   | 0.50 / 0.70                   | 0.714    | 0.718
+ * H10  | clear rate, mythic / normal (not graded)       | 0.78 / 1.08                   | 0.722    | 0.723 (48.9% vs 67.6%)
  * ═════════════════════════════════════════════════════════════════════════
  *
  * Noise notes: H2 rests on about 315 and 330 retained players (700 joiners,
  * 1,368 non-joiners; relative SE of the ratio about 8%), so it uses the knob
- * as target with a half-effect floor; it reads 0.538 (NAILED). H4's event read
- * rests on 457 EU starts on outage days (565 EU matchmade queues; per-queue
- * start rate 0.41 vs 0.40), so it uses the knob as target with a half-effect
- * floor. H7 rests on 2,354 mobile and 1,387 PC Ember purchases (477 and 308
- * buyers; ratio SE about 4.3%). Mobile drew few $99.99 packs (11 vs about 24
- * expected), so the mobile average sits about 2.4 SE low ($8.13 vs $8.77) and
- * both H7 reads land high: the pack ratio 2.036 is NAILED near the band top and
- * the net ratio 2.283 sits just past it (STRONG). Payers are 9.0% of active
- * players (veterans 11.5%, new players 4.0%). New-player day 1 / 7 / 30
- * retention is 30.1% / 11.2% / 3.4% (tutorial finishers 43.2% / 18.7% / 5.6%).
+ * as target with a half-effect floor; it reads 0.536 (NAILED). H4's event read
+ * rests on 411 EU starts on outage days (573 EU matchmade queues; per-queue
+ * start rate 0.39 vs 0.40), so it uses the knob as target with a half-effect
+ * floor. H7 rests on 2,372 mobile and 1,390 PC Ember purchases (481 and 306
+ * buyers; ratio SE about 4.3%); mobile drew 22 $99.99 packs (about 24
+ * expected), and both H7 reads land a little above the knob (pack ratio 1.917,
+ * net ratio 2.143; both NAILED). Payers are 9.0% of active players (veterans
+ * 11.5%, new players 4.0%). New-player day 1 / 7 / 30 retention is 30.1% /
+ * 11.2% / 3.4% (tutorial finishers 43.2% / 18.7% / 5.6%).
  * The hook thins events (non-finishers, lapsed veterans, H2 quits, lifespans)
  * and keeps one "game launched" per session, so the run has ~1.02M events
  * against the standard's approximate 1.4M at 1.2 events per player-day. The
@@ -294,9 +296,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * reshuffles later players. The Q13 / Q14 nulls rest on a weak clear-rate
  * balancing term (gain 0.008) on top of the design (clear rate has no
  * platform, region, or patch input). On this final data the overall reads are
- * |z| 0.01 (Q13) and 0.40 (Q14); the largest sub-split is Q13's 3-player split
- * (|z| 1.45, p ≈ 0.15; the balancing stratum uses the run's device before
- * sessions settle devices); every other split is |z| ≤ 0.70.
+ * |z| 0.36 (Q13) and 0.27 (Q14); the largest sub-split is Q14's 2-player split
+ * (|z| 1.21, p ≈ 0.23); every other split is |z| ≤ 0.75.
  */
 
 // ── SCALE ──
@@ -1524,7 +1525,7 @@ const WH = (table) => `read_json_auto('{{PREFIX}}-WAREHOUSE-${table}.json*', sam
 
 // Identity prelude: a device resolves to the player seen with it on any event
 // that carries both ids (the way Mixpanel stitches). Every Emberfall event
-// carries user_id, so uid = user_id in practice.
+// except the pre-auth $experiment_started (device_id only) carries user_id.
 const ID_CTE = `dmap AS (SELECT device_id, min(user_id::VARCHAR) AS mapped FROM ${EV}
   WHERE user_id IS NOT NULL AND device_id IS NOT NULL GROUP BY 1),
 ev AS (SELECT coalesce(e.user_id::VARCHAR, m.mapped) AS uid, e.time::TIMESTAMP AS t, e.*
@@ -1623,7 +1624,7 @@ export const stories = [
 		id: "H1-first-flame-tutorial-test",
 		hook: "H1",
 		archetype: "experiment-lift",
-		narrative: `The "${TUTORIAL_EXPERIMENT}" test starts ${D(TUTORIAL_TEST_START)}: every new player is assigned 50/50 at account creation (sticky; $experiment_started 1 s before "account created", carrying user_id and the signup device; profile property "${EXP_KEY}"). The "${TUTORIAL_VARIANT}" arm gets a shorter, guided tutorial (onboarding steps take ${GUIDED_TTC_MULT}x as long; tutorial_minutes on "tutorial completed" is the real time since "tutorial started"); its players finish the tutorial ${GUIDED_CONV_MULT}x as often as Control (${TUTORIAL_CONV}% → ${TUTORIAL_CONV * GUIDED_CONV_MULT}% for non-TikTok signups; TikTok signups move from ${Math.round(TUTORIAL_CONV * TIKTOK_TUTORIAL_MULT)}% by the same factor). The engine experiment knob on the two declared Onboarding first funnels applies it. tutorial_version = guided marks a guided completion and never appears in Control. Players who never finish the tutorial leave: ${NF_RETURN_SHARE * 100}% come back for a session or two on day 1-2, none later. Read: account created → tutorial completed within ${TUTORIAL_WINDOW_DAYS} days, by variant.`,
+		narrative: `The "${TUTORIAL_EXPERIMENT}" test starts ${D(TUTORIAL_TEST_START)}: every new player is assigned 50/50 at account creation (sticky; $experiment_started 1 s before "account created", carrying only the signup device_id and stitched to the player at "account created"; profile property "${EXP_KEY}"). The "${TUTORIAL_VARIANT}" arm gets a shorter, guided tutorial (onboarding steps take ${GUIDED_TTC_MULT}x as long; tutorial_minutes on "tutorial completed" is the real time since "tutorial started"); its players finish the tutorial ${GUIDED_CONV_MULT}x as often as Control (${TUTORIAL_CONV}% → ${TUTORIAL_CONV * GUIDED_CONV_MULT}% for non-TikTok signups; TikTok signups move from ${Math.round(TUTORIAL_CONV * TIKTOK_TUTORIAL_MULT)}% by the same factor). The engine experiment knob on the two declared Onboarding first funnels applies it. tutorial_version = guided marks a guided completion and never appears in Control. Players who never finish the tutorial leave: ${NF_RETURN_SHARE * 100}% come back for a session or two on day 1-2, none later. Read: account created → tutorial completed within ${TUTORIAL_WINDOW_DAYS} days, by variant.`,
 		mixpanelReport: { type: "Funnels", steps: ["account created", "tutorial completed"], window: `${TUTORIAL_WINDOW_DAYS} days`, dateRange: `${D(TUTORIAL_TEST_START)} to ${D(DATASET_END)}`, breakdown: `user property "${EXP_KEY}"`, alt: "Experiments report on $experiment_started" },
 		assertions: [
 			{

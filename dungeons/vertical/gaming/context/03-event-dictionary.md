@@ -1,6 +1,6 @@
 # Emberfall event dictionary
 
-Every event below is tracked in Mixpanel. Property names are exact. All events carry `user_id`; most also carry `device_id` (see the identity notes in `00-manifest.md`).
+Every event below is tracked in Mixpanel. Property names are exact. All events except `$experiment_started` carry `user_id`; most also carry `device_id` (see the identity notes in `00-manifest.md`).
 
 ## Properties on every event
 
@@ -16,7 +16,7 @@ Every event below is tracked in Mixpanel. Property names are exact. All events c
 | Event | When it fires | Properties |
 |---|---|---|
 | `account created` | A new player creates their Emberfall account. It starts the player's first session and is their first event, except for players in the "First Flame Tutorial" test, whose `$experiment_started` is logged one second earlier. | `signup_method`: `emberfall_id`, `google`, `apple`, `discord`. `acquisition_channel`: `organic`, `tiktok_ads`, `meta_ads`, `google_ads`, `youtube_creators` (how the player found the game). |
-| `$experiment_started` | One second before `account created` (assignment happens while the account is being created), for players who joined from 2026-07-08 (the "First Flame Tutorial" test). Once per player. Carries `user_id` and the signup device's `device_id`. | `Experiment name`: `First Flame Tutorial`. `Variant name`: `Control` or `Guided`. |
+| `$experiment_started` | One second before `account created` (assignment happens while the account is being created), for players who joined from 2026-07-08 (the "First Flame Tutorial" test). Once per player. Carries only the signup device's `device_id` (no `user_id`): Mixpanel attributes it to the player through `account created`, which carries both ids. Outside Mixpanel, join it to the player on `device_id`. | `Experiment name`: `First Flame Tutorial`. `Variant name`: `Control` or `Guided`. |
 | `character created` | The player finishes making their first hero. | `class_name`: the hero's class. `role`: `tank`, `healer`, or `dps`. |
 | `tutorial started` | The tutorial begins. It fires again if a player who left the tutorial restarts it on a later visit. | — |
 | `tutorial completed` | The player finishes the tutorial. A player who never finishes it cannot queue for dungeons or join the arena. | `tutorial_version`: `classic` or `guided`. `tutorial_minutes`: minutes from the start of the tutorial (the last `tutorial started`) to its completion. |

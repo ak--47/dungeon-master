@@ -17,7 +17,8 @@ SET VARIABLE data_prefix = COALESCE(getvariable('data_prefix'), 'data/verify-gam
 -- Identity: a new player is identified at "account created" (the auth event,
 -- which carries user_id and device_id). A device resolves to the player seen
 -- with it on any event that carries both ids, the way Mixpanel stitches.
--- Every Emberfall event carries user_id, so uid = user_id in practice.
+-- Every Emberfall event carries user_id except $experiment_started, which is
+-- logged pre-auth with the signup device_id only and resolves through device_map.
 
 CREATE OR REPLACE TEMP TABLE raw_events AS
 SELECT * FROM read_json_auto(getvariable('data_prefix') || '-EVENTS*.json*', sample_size=-1, union_by_name=true);
