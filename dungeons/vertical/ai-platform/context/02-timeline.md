@@ -15,7 +15,7 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 | 2026-08-18 (Tue) | Pricing | **swift-2 price cut**: list price halved, from $0.80 to $0.40 per million input tokens and from $4.00 to $2.00 per million output tokens. No other model price changes. |
 | 2026-08-26 (Wed) to 2026-08-27 (Thu) | Incident | **GPU capacity incident.** A hardware fault took part of one inference region's GPU fleet offline. The status page reported a major outage for that region for two days; capacity was restored early on August 28. Daily fleet health by region is in `inference_fleet_daily`. |
 | 2026-09-01 (Tue) | Platform | **Build rate limits raised**: higher requests-per-minute and tokens-per-minute limits for every Build account. Other plans' limits unchanged. |
-| 2026-09-07 (Mon) | Holiday | US Labor Day. No launches. |
+| 2026-09-07 (Mon) | Holiday | US Labor Day. No launches or marketing changes. Console and API activity are not affected: most customer teams worked a normal Monday, production API traffic runs through US holidays, and many customers are outside the US. |
 | 2026-09-08 (Tue) | Launch | **atlas-3 opens to Free accounts.** |
 | 2026-09-30 (Wed) | Fiscal | End of Q3. |
 | 2026-10-01 (Thu) | — | End of the analysis window (data runs through 23:59 UTC). Q4 starts. |

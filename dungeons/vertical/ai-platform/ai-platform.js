@@ -26,8 +26,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * EVENTS (14):
  *   api request (sampled request log, the bulk of events) > docs viewed >
- *   playground session > usage dashboard viewed > rate limit hit (thinned by
- *   plan) > member invited > api key rotated > funnel-only: account created,
+ *   playground session > usage dashboard viewed > rate limit hit (made from
+ *   the request stream by plan) > member invited > api key rotated > funnel-only: account created,
  *   api key created, batch job submitted / completed, eval run started /
  *   completed, billing page viewed, plan upgraded, $experiment_started
  *
@@ -94,8 +94,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   after signup, median 3 days), and moves one engine-generated "plan
  *   upgraded" (with its billing page view) to that moment; other upgrade
  *   passes are dropped. An upgrader with no pass of its own gets a clone of
- *   the first pass any account produced (identity and location re-stamped). Accounts that joined in the 30 days before June 4 use
- *   the same rule, so June upgrades do not start from an empty pipeline.
+ *   the first pass any account produced (identity and location re-stamped,
+ *   prepaid_credits_usd and billing_section redrawn from the declared
+ *   values). Accounts that joined in the 30 days before June 4 use the same
+ *   rule, so June upgrades do not start from an empty pipeline.
  * - Batch and eval usage come from a share of accounts (by company size and
  *   role) with a salted per-account intensity; whole linked units (same
  *   batch_id / eval_id) are kept or dropped together. Eval intensity follows
@@ -103,6 +105,14 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   the 35 days before June 4) keep every run in days 0-13, then fade linearly
  *   to the established rate by day 35. So weekly eval volume is flat from
  *   week 1 and a June joiner evaluates like an older account by its second month.
+ *   For new API accounts the number of runs started in days 0-13 is a salted
+ *   per-account draw (H5), realized by dropping or cloning whole eval units
+ *   on the account's own early activity. A completion lands duration_minutes
+ *   after its start.
+ * - Rate-limit episodes happen during traffic: each sampled request opens an
+ *   episode a few seconds later at a per-request rate by plan at the moment
+ *   (RL_PER_1K_REQ; H10). The engine's own episodes are reused as templates,
+ *   so every account's episodes track its own request volume.
  * - retentionCurve shapes new accounts' activity; established accounts are
  *   flat across the window. Batch and eval completions are platform-sent and
  *   survive a new account's lifecycle cut; retention reads exclude them.
@@ -176,10 +186,16 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: new accounts that made their first API request go dark after day
  *   21 on a ramp by eval runs started in their first 14 days: 55% with none,
- *   30% with one, none with 2+. 55% of new API accounts also lapse on a
- *   uniform day 7-90 (organic). Eval runs are concentrated in an account's
- *   first two weeks (see DESIGN NOTES). Reads are knob floors (engagement
- *   adds): D30 2+ / 0 ≥ 1/(1−0.55); 1 / 0 ≥ 0.7/0.45.
+ *   30% with one, none with 2+. The early run count is a salted per-account
+ *   draw (mixed Poisson, mean 1.1 for evaluating accounts) that does not
+ *   depend on how dense the engine made the account's activity, so it does
+ *   not select front-loaded, short-lived accounts. 55% of new API accounts
+ *   also lapse on a day spread evenly over 7-90 (organic), the same share in
+ *   every early-eval group. Dark and lapse shares are exact within each group
+ *   (systematic sampling), so retention for 2 runs and for 3+ runs is the
+ *   same. Reads are knob floors: accounts that never evaluate also send fewer
+ *   events later (no eval runs), which can only add to the gap.
+ *   D30 2+ / 0 ≥ 1/(1−0.55); 1 / 0 ≥ 0.7/0.45.
  * MIXPANEL: Funnels account created → eval run started → eval run started
  *   (14-day window) to build cohorts; Retention account created → custom event
  *   of every event except batch job completed / eval run completed (plain "any
@@ -238,8 +254,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * H10. BUILD RATE LIMITS RAISED (everything)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: from 2026-09-01 Build-tier rate-limit episodes per request fall to
- *   0.4x (plan at the episode); Free, Scale, Enterprise unchanged.
+ * PATTERN: rate-limit episodes open from the request stream at a per-request
+ *   rate by plan (Free 250, Build 27, Scale 3.8, Enterprise 1.3 per 1,000
+ *   sampled requests). From 2026-09-01 the Build rate falls to 0.4x (plan at
+ *   the request); Free, Scale, Enterprise unchanged. Because episodes track
+ *   each account's own requests, the Free control holds steady month to month.
  * MIXPANEL: Insights, rate limit hit and api request, formula A/B, breakdown
  *   plan_tier, September vs Jun 4 - Aug 31 (Build relative to Free).
  * REAL WORLD: higher limits stop throttling bursty production traffic.
@@ -250,34 +269,35 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * Hook | Metric                                        | Derivation                 | Expected | Measured
  * -----|-----------------------------------------------|----------------------------|----------|---------
  * H1   | cache hits before 2026-07-08                  | exact purity               | 0        | 0
- * H1   | time to first token hit / miss, plain, 200    | CACHE_TTFT_RATIO           | 0.561    | 0.561 (383 vs 683 ms)
- * H1   | cache-hit share of requests after ramp        | 0.5 × 0.7                  | 0.35     | 0.349
+ * H1   | time to first token hit / miss, plain, 200    | CACHE_TTFT_RATIO           | 0.561    | 0.559 (384 vs 686 ms)
+ * H1   | cache-hit share of requests after ramp        | 0.5 × 0.7                  | 0.35     | 0.347
  * H2   | atlas-3 before launch / on Free before Sep 8  | exact purity               | 0        | 0
- * H2   | atlas-3 share of paid flagship, ramped        | 0.6 × 0.65                 | 0.39     | 0.403
- * H2   | output tokens atlas-3 / atlas-2, paid         | ATLAS3_OUTPUT_MULT         | 1.30     | 1.307
- * H2   | atlas-3 share of Free flagship, from Sep 18   | 0.35 × 0.65                | 0.2275   | 0.235
+ * H2   | atlas-3 share of paid flagship, ramped        | 0.6 × 0.65                 | 0.39     | 0.402
+ * H2   | output tokens atlas-3 / atlas-2, paid         | ATLAS3_OUTPUT_MULT         | 1.30     | 1.302
+ * H2   | atlas-3 share of Free flagship, from Sep 18   | 0.35 × 0.65                | 0.2275   | 0.240
  * H3   | first-request rate variant / control (7 d)    | QUICKSTART_CONV_MULT       | 1.30     | 1.345 (64.9% vs 48.3%)
  * H3   | median time to first request variant / ctrl   | QUICKSTART_TTC_MULT        | 0.50     | 0.497 (2.0 vs 4.0 h)
  * H3   | variant share of exposed accounts             | equal 2-arm hash           | 0.50     | 0.496
- * H4   | median batch time Scale+Ent / Build           | BATCH_PLAN_MULT.scale      | 0.40     | 0.417 (1.66 vs 3.98 h)
- * H4   | median batch time Free / Build                | BATCH_PLAN_MULT.free       | 1.60     | 1.609
- * H5   | D30 retention 2+ / 0 early eval runs          | ≥ 1/(1 − 0.55) (floor)     | ≥ 2.22   | 2.282 (69.2% vs 30.3%, NAILED)
- * H5   | D30 retention 1 / 0 early eval runs           | ≥ 0.7/0.45 (floor)         | ≥ 1.56   | 1.701 (NAILED)
- * H6   | us-east / other success, incident vs ±7 days  | 1 − INCIDENT_FAIL          | 0.65     | 0.670
- * H6   | warehouse error_rate_5xx during the outage    | INCIDENT_FAIL (+1.3% base) | 0.35     | 0.335
- * H7   | Build swift-2 share Sep / before the cut      | SWIFT_SHIFT_MULT           | 1.60     | 1.587 (30.0% → 47.6%)
- * H7   | Free swift-2 share Sep / before (control)     | unchanged                  | 1.00     | 1.003
- * H8   | input tokens tool / plain                     | TOOL_INPUT_MULT            | 2.50     | 2.513 (11,508 vs 4,579)
- * H8   | tool share of agents requests                 | TOOL_SHARE.agents          | 0.60     | 0.598
+ * H4   | median batch time Scale+Ent / Build           | BATCH_PLAN_MULT.scale      | 0.40     | 0.399 (1.56 vs 3.92 h)
+ * H4   | median batch time Free / Build                | BATCH_PLAN_MULT.free       | 1.60     | 1.599
+ * H5   | D30 retention 2+ / 0 early eval runs          | ≥ 1/(1 − 0.55) (floor)     | ≥ 2.22   | 2.367 (68.1% vs 28.8%, NAILED)
+ * H5   | D30 retention 1 / 0 early eval runs           | ≥ 0.7/0.45 (floor)         | ≥ 1.56   | 1.710 (NAILED)
+ * H5   | D30 retention 3+ vs exactly 2 early runs      | no dark cut for either     | equal    | 69.7% vs 67.0% (z ≈ 0.5)
+ * H6   | us-east / other success, incident vs ±7 days  | 1 − INCIDENT_FAIL          | 0.65     | 0.645
+ * H6   | warehouse error_rate_5xx during the outage    | INCIDENT_FAIL (+1.3% base) | 0.35     | 0.357
+ * H7   | Build swift-2 share Sep / before the cut      | SWIFT_SHIFT_MULT           | 1.60     | 1.604 (30.0% → 48.0%)
+ * H7   | Free swift-2 share Sep / before (control)     | unchanged                  | 1.00     | 0.979
+ * H8   | input tokens tool / plain                     | TOOL_INPUT_MULT            | 2.50     | 2.500 (11,459 vs 4,584)
+ * H8   | tool share of agents requests                 | TOOL_SHARE.agents          | 0.60     | 0.603
  * H9   | spend per signup hackathons / search ads      | 140 / 85                   | 1.647    | 1.658 ($139.07 vs $83.86)
- * H9   | 30-day paid rate hackathons / search ads      | 0.35 / 1.0 (ceiling 0.496) | 0.35     | 0.390 (7.8% vs 20.0%, STRONG)
- * H10  | Build / Free rate-limit rate, Sep vs Jun 4-Aug 31 | RL_RAISE_MULT          | 0.40     | 0.363
+ * H9   | 30-day paid rate hackathons / search ads      | 0.35 / 1.0 (ceiling 0.496) | 0.35     | 0.393 (7.8% vs 19.8%, STRONG)
+ * H10  | Build / Free rate-limit rate, Sep vs Jun 4-Aug 31 | RL_RAISE_MULT          | 0.40     | 0.399 (Free 252.1 → 244.8 per 1k)
  * ═════════════════════════════════════════════════════════════════════════
  *
- * H5's reads are knob floors: busier teams both run more evals and are likelier
- * to be active in the day-30 week even without the dark cut, so engagement can
- * add to the gap; in this run both reads land within 10% of the floor. H9's
- * conversion read rests on 41 hackathon and 151 search-ads buyers inside the
+ * H5's reads are knob floors: the early run count is independent of activity
+ * density, but accounts that never evaluate also send fewer events later, so
+ * engagement can only add to the gap; in this run both reads land within 10% of
+ * the floor. H9's conversion read rests on 41 hackathon and 150 search-ads buyers inside the
  * 30-day window (relative SE of the ratio about 19%). Channel is not
  * confounded; the one-sided ceiling (knob + 2.25 SE, 0.496) exists only to
  * cover that sampling error. The read lands outside the knob's ±10% and
@@ -398,6 +418,8 @@ const EVAL_SHARE = { ml_engineer: 0.7, data_scientist: 0.6, backend_developer: 0
 const EVAL_SHARE_NEW_BOOST = 0.1;
 const EVAL_WEIGHT_NEW = 5;           // Evals funnel weight for young accounts (joined from EVAL_YOUNG_SINCE on)
 const EVAL_FADE_END_DAYS = 35;       // young accounts keep every eval run in days 0-13, fade to 1/EVAL_WEIGHT_NEW by day 35
+const EVAL_EARLY_MEAN = 1.1;         // new evaluating accounts: mean eval runs started in days 0-13 (mixed Poisson, salted per account)
+const EVAL_COMPLETE_PCT = 92;        // share of eval runs that complete (matches the Evals funnel)
 const EVAL_YOUNG_SINCE = dayjs.utc(DATASET_START).subtract(EVAL_FADE_END_DAYS, "day").format("YYYY-MM-DD"); // warm start: recent pre-window accounts too
 const LAPSE_SHARE = 0.55;           // organic lapse, every new API account
 const LAPSE_DAY_MIN = 7;
@@ -450,7 +472,8 @@ const PAID_FUNNEL_WINDOW_DAYS = 30;
 const PAID_COHORT_END = "2026-09-01T00:00:00Z"; // exclusive
 
 // H10 Build rate limits raised
-const RL_KEEP = { free: 1, build: 0.35, scale: 0.1, enterprise: 0.05 };
+// rate-limit episodes per 1,000 sampled requests, by plan at the request (episodes happen during traffic)
+const RL_PER_1K_REQ = { free: 250, build: 27, scale: 3.8, enterprise: 1.3 };
 const RL_RAISE_MULT = 0.4;          // Build rate-limit episodes per request after the raise
 
 // realism: collaboration and housekeeping volume
@@ -527,8 +550,31 @@ const routeRegion = (profile) => {
 // (keyed by account so a repeated generation in one process overwrites, never doubles)
 const USAGE_BY_USER = new Map();
 let usageAgg = null;
-const ONBOARD_REQ_IDS = new Set();
-const UPGRADE_BANK = { upgrade: null, view: null }; // first upgrade pass any account produced // insert_id of each onboarding funnel's first api request
+const ONBOARD_REQ_IDS = new Set(); // insert_id of each onboarding funnel's first api request
+const UPGRADE_BANK = { upgrade: null, view: null }; // first upgrade pass any account produced
+const TEMPLATE_BANK = { evalStart: null, evalDone: null, rateLimit: null }; // first engine-generated eval unit and rate-limit episode any account produced
+// H5 systematic sampling state: new API accounts seen so far by early eval runs
+const DARK_SEEN = [0, 0];            // 0 and 1 runs
+const LAPSE_SEEN = [0, 0, 0, 0];     // 0, 1, 2, 3+ runs
+const LAPSER_SEEN = [0, 0, 0, 0];    // lapsers among them
+const GOLDEN = (Math.sqrt(5) - 1) / 2;
+// true for an exact `share` of consecutive calls k = 0, 1, 2, ... (offset in [0, 1) sets the phase)
+const systematic = (k, share, offset) => Math.floor((k + 1) * share + offset) > Math.floor(k * share + offset);
+// declared property pools (clones redraw from the same distributions as engine events)
+const LIMIT_TYPE_WEIGHTS = { requests_per_minute: 55, input_tokens_per_minute: 30, output_tokens_per_minute: 15 };
+const RETRY_AFTER_SECONDS = [1, 2, 5, 10, 15, 20, 30, 60];
+const EVAL_TYPES = ["accuracy", "accuracy", "safety", "regression", "latency", "custom_rubric"];
+const BILLING_SECTIONS = ["plans", "plans", "credits", "payment_methods"];
+const declared = (event, prop) => {
+	const pool = config.events.find((e) => e.event === event).properties[prop];
+	if (!Array.isArray(pool)) throw new Error(`ai-platform: ${event}.${prop} is not a value array`);
+	return pool;
+};
+const poissonInv = (lambda, p) => {
+	let k = 0, term = Math.exp(-lambda), cdf = term;
+	while (p > cdf && k < 60) { k++; term *= lambda / k; cdf += term; }
+	return k;
+};
 
 function buildUsageAgg() {
 	const byModel = new Map();
@@ -583,6 +629,40 @@ function handleFunnelPost(record, meta) {
 	return record;
 }
 
+// H5: make exactly `target` eval units start in [fromMs, toMs): drop whole units (start + completion,
+// same eval_id) in a salted order, or clone units onto the account's own activity in that span
+function realizeEarlyEvals(events, target, uid, fromMs, toMs, startTpl, doneTpl, loc) {
+	const inSpan = (e) => { const t = T(e); return t >= fromMs && t < toMs; };
+	const early = events.filter((e) => e.event === "eval run started" && inSpan(e));
+	if (early.length > target) {
+		early.sort((a, b) => hashFloat(`${uid}|${a.eval_id}`) - hashFloat(`${uid}|${b.eval_id}`));
+		const drop = new Set(early.slice(target).map((e) => e.eval_id));
+		return events.filter((e) => !((e.event === "eval run started" || e.event === "eval run completed") && drop.has(e.eval_id)));
+	}
+	if (early.length === target) return events;
+	if (!startTpl || !doneTpl) return events; // only before the run's first engine eval unit exists; the caller reads the realized count
+	const anchors = events.filter((e) => inSpan(e) && !e.event.endsWith("completed") && e.event !== "$experiment_started");
+	for (let k = early.length; k < target; k++) {
+		const a = anchors[Math.floor(hashFloat(`${uid}|eval-anchor|${k}`) * anchors.length)];
+		const t = Math.max(fromMs + 1000, Math.min(toMs - 1000, T(a) + (2 + 38 * hashFloat(`${uid}|eval-gap|${k}`)) * MIN_MS));
+		const evalId = `eval_${chance.hash({ length: 12 })}`;
+		events.push(cloneEvent(startTpl, {
+			time: new Date(t).toISOString(), user_id: uid, ...loc, eval_id: evalId,
+			eval_type: chance.pickone(EVAL_TYPES),
+			test_cases: chance.pickone(declared("eval run started", "test_cases")),
+		}));
+		// the completion is re-timed from its start at the end of the hook (duration_minutes)
+		if (chance.bool({ likelihood: EVAL_COMPLETE_PCT })) {
+			events.push(cloneEvent(doneTpl, {
+				time: new Date(t).toISOString(), user_id: uid, ...loc, eval_id: evalId,
+				pass_rate: chance.pickone(declared("eval run completed", "pass_rate")),
+				duration_minutes: chance.pickone(declared("eval run completed", "duration_minutes")),
+			}));
+		}
+	}
+	return events;
+}
+
 function handleEverything(events, meta) {
 	if (!events.length) return events;
 	const profile = meta.profile;
@@ -590,6 +670,17 @@ function handleEverything(events, meta) {
 	const END = ms(DATASET_END);
 	const signup = events.find((e) => e.event === "account created");
 	const birthMs = signup ? T(signup) : null;
+
+	// clone templates: the account's own engine-generated eval unit and rate-limit episode, else the
+	// first ones any account produced (copied before any filter or mutation below)
+	const ownEvalStart = events.find((e) => e.event === "eval run started");
+	const ownEvalDone = ownEvalStart && events.find((e) => e.event === "eval run completed" && e.eval_id === ownEvalStart.eval_id);
+	const ownRateLimit = events.find((e) => e.event === "rate limit hit");
+	if (!TEMPLATE_BANK.evalStart && ownEvalStart && ownEvalDone) { TEMPLATE_BANK.evalStart = { ...ownEvalStart }; TEMPLATE_BANK.evalDone = { ...ownEvalDone }; }
+	if (!TEMPLATE_BANK.rateLimit && ownRateLimit) TEMPLATE_BANK.rateLimit = { ...ownRateLimit };
+	const evalStartTpl = ownEvalStart && ownEvalDone ? { ...ownEvalStart } : TEMPLATE_BANK.evalStart;
+	const evalDoneTpl = ownEvalStart && ownEvalDone ? { ...ownEvalDone } : TEMPLATE_BANK.evalDone;
+	const rateLimitTpl = ownRateLimit ? { ...ownRateLimit } : TEMPLATE_BANK.rateLimit;
 
 	// ── onboarding outcome: no first request → no working integration ──
 	const onboarded = !signup || events.some((e) => ONBOARD_REQ_IDS.has(e.insert_id));
@@ -653,11 +744,29 @@ function handleEverything(events, meta) {
 		if (!onboarded) {
 			if (salt(uid, "abandon") < NO_KEY_ABANDON_SHARE) cutMs = birthMs + (NO_KEY_ABANDON_MIN + salt(uid, "abandon-day") * (NO_KEY_ABANDON_MAX - NO_KEY_ABANDON_MIN)) * DAY_MS;
 		} else {
-			if (salt(uid, "lapse") < LAPSE_SHARE) cutMs = birthMs + (LAPSE_DAY_MIN + salt(uid, "lapse-day") * (LAPSE_DAY_MAX - LAPSE_DAY_MIN)) * DAY_MS;
-			const pre = events.filter((e) => T(e) < cutMs);
-			const early = pre.filter((e) => e.event === "eval run started" && T(e) < birthMs + EVAL_DAYS * DAY_MS).length;
-			const dark = early < EVAL_MIN ? DARK_SHARE_BY_EVALS[early] : 0;
-			if (salt(uid, "dark") < dark) cutMs = Math.min(cutMs, birthMs + DARK_AFTER_DAYS * DAY_MS);
+			// H5: the number of eval runs started in the first 14 days is a salted per-account draw (mixed
+			// Poisson, mean EVAL_EARLY_MEAN for evaluating accounts), independent of how dense the engine
+			// made the account's early activity, and its intensity salt is separate from the one that thins
+			// later runs (a heavy early evaluator is not also a heavy day-30 evaluator)
+			const early = evalUser ? poissonInv(EVAL_EARLY_MEAN * (0.3 + 0.7 * salt(uid, "eval-early-int")) / 0.65, salt(uid, "eval-early-n")) : 0;
+			// organic lapse: an exact LAPSE_SHARE of each early-eval group (0, 1, 2, 3+) lapses, on days spread
+			// evenly over LAPSE_DAY_MIN-LAPSE_DAY_MAX (systematic sampling + golden-ratio sequence in
+			// generation order), so organic lapse adds no group-to-group noise to the H5 read
+			const g = Math.min(early, LAPSE_SEEN.length - 1);
+			if (systematic(LAPSE_SEEN[g]++, LAPSE_SHARE, hashFloat(`${SEED}|lapse-offset|${g}`))) {
+				const spread = (hashFloat(`${SEED}|lapse-day-offset|${g}`) + LAPSER_SEEN[g]++ * GOLDEN) % 1;
+				cutMs = birthMs + (LAPSE_DAY_MIN + spread * (LAPSE_DAY_MAX - LAPSE_DAY_MIN)) * DAY_MS;
+			}
+			// the eval units are realized on the account's own activity before any lapse, by dropping or
+			// cloning whole eval units
+			const earlyEnd = Math.min(birthMs + EVAL_DAYS * DAY_MS, cutMs);
+			events = realizeEarlyEvals(events, early, uid, birthMs, earlyEnd, evalStartTpl, evalDoneTpl, loc);
+			const realized = events.filter((e) => e.event === "eval run started" && T(e) >= birthMs && T(e) < earlyEnd).length;
+			// the dark share is exact within each group (systematic sampling over the run's accounts in
+			// generation order), so the read carries no coin-flip noise on top of organic lapse
+			if (realized < EVAL_MIN) {
+				if (systematic(DARK_SEEN[realized]++, DARK_SHARE_BY_EVALS[realized], hashFloat(`${SEED}|dark-offset|${realized}`))) cutMs = Math.min(cutMs, birthMs + DARK_AFTER_DAYS * DAY_MS);
+			}
 		}
 		// completions are system-sent: a job or eval started before the account went quiet still finishes
 		if (cutMs < Infinity) events = events.filter((e) => T(e) < cutMs || e.event === "batch job completed" || e.event === "eval run completed");
@@ -681,7 +790,7 @@ function handleEverything(events, meta) {
 	}
 	if (upgradeMs < Infinity) {
 		if (!template) template = cloneEvent(UPGRADE_BANK.upgrade, { user_id: uid, ...loc, prepaid_credits_usd: chance.pickone([10, 25, 25, 50, 50, 100, 250, 500]) });
-		if (!templateView && UPGRADE_BANK.view) templateView = cloneEvent(UPGRADE_BANK.view, { user_id: uid, ...loc });
+		if (!templateView && UPGRADE_BANK.view) templateView = cloneEvent(UPGRADE_BANK.view, { user_id: uid, ...loc, billing_section: chance.pickone(BILLING_SECTIONS) });
 		template.time = new Date(upgradeMs).toISOString();
 		events.push(template);
 		if (templateView) {
@@ -713,6 +822,9 @@ function handleEverything(events, meta) {
 
 	// ── traffic volume by plan at the moment: Free accounts run small, throttled workloads;
 	// Scale and Enterprise accounts run production traffic at 2-3x a Build account's volume ──
+	// rate-limit episodes are re-made from the request stream below (H10); engine episodes become the template pool
+	const rlPool = events.filter((e) => e.event === "rate limit hit");
+	events = events.filter((e) => e.event !== "rate limit hit");
 	const sized = [];
 	for (const e of events) {
 		if (e.event !== "api request" || ONBOARD_REQ_IDS.has(e.insert_id)) { sized.push(e); continue; }
@@ -738,13 +850,8 @@ function handleEverything(events, meta) {
 		const t = T(e);
 		const plan = planAt(t);
 		e.plan_tier = plan;
-		if (e.event === "playground session" || e.event === "eval run started" || e.event === "batch job submitted" || e.event === "rate limit hit") {
+		if (e.event === "playground session" || e.event === "eval run started" || e.event === "batch job submitted") {
 			e.model = modelAt(t, plan);
-		}
-		if (e.event === "rate limit hit") {
-			// H10: rate-limit episodes by plan at the moment; Build limits raised on RATE_LIMIT_RAISE
-			const keep = (RL_KEEP[plan] ?? 1) * (plan === "build" && t >= ms(RATE_LIMIT_RAISE) ? RL_RAISE_MULT : 1);
-			if (!chance.bool({ likelihood: keep * 100 })) continue;
 		}
 		if (e.event === "batch job submitted") e.inference_region = region;
 		if (e.event === "api request") {
@@ -808,6 +915,33 @@ function handleEverything(events, meta) {
 				if (status >= 500) g.err5xx++;
 				usage.byRegion.set(rk, g);
 			}
+			kept.push(e);
+			// H10: rate-limit episodes happen during traffic, at a per-request rate by plan at the moment;
+			// Build limits raised on RATE_LIMIT_RAISE
+			const rlRate = RL_PER_1K_REQ[plan] / 1000 * (plan === "build" && t >= ms(RATE_LIMIT_RAISE) ? RL_RAISE_MULT : 1);
+			if (chance.random() < rlRate) {
+				const tr = t + chance.integer({ min: 1, max: 30 }) * 1000;
+				if (tr <= END) {
+					let rl = rlPool.pop();
+					// an account with no engine episode of its own clones the bank's; before the run's first
+					// engine episode exists (the first few accounts) there is nothing to clone and the episode is skipped
+					if (!rl && rateLimitTpl) {
+						rl = cloneEvent(rateLimitTpl, {
+							...loc,
+							limit_type: pickWeighted(LIMIT_TYPE_WEIGHTS, chance.random()),
+							retry_after_seconds: chance.pickone(RETRY_AFTER_SECONDS),
+						});
+					}
+					if (rl) {
+						rl.time = new Date(tr).toISOString();
+						rl.user_id = uid;
+						rl.model = model;
+						rl.plan_tier = planAt(tr);
+						kept.push(rl);
+					}
+				}
+			}
+			continue;
 		}
 		kept.push(e);
 	}
@@ -835,11 +969,21 @@ function handleEverything(events, meta) {
 	}
 	if (dropBatch.size) events = events.filter((e) => !dropBatch.has(e));
 
-	// eval runs: completion carries the run's model
 	const evStarts = new Map();
 	for (const e of events) if (e.event === "eval run started") evStarts.set(e.eval_id, e);
-	events = events.filter((e) => e.event !== "eval run completed" || evStarts.has(e.eval_id));
-	for (const e of events) if (e.event === "eval run completed") e.model = evStarts.get(e.eval_id).model;
+	// eval runs: a completion lands duration_minutes after its start and carries the run's model
+	const dropEval = new Set();
+	for (const e of events) {
+		if (e.event !== "eval run completed") continue;
+		const s = evStarts.get(e.eval_id);
+		if (!s) { dropEval.add(e); continue; }
+		const tc = T(s) + e.duration_minutes * MIN_MS;
+		e.time = new Date(tc).toISOString();
+		e.model = s.model;
+		e.plan_tier = planAt(tc);
+		if (tc > END) dropEval.add(e);
+	}
+	if (dropEval.size) events = events.filter((e) => !dropEval.has(e));
 
 	if (upgradeMs < Infinity) profile.plan_tier = "build";
 	USAGE_BY_USER.set(uid, usage);
@@ -849,6 +993,11 @@ function handleEverything(events, meta) {
 
 // warehouse rows: metered usage, fleet health, and media spend layered on event-derived volumes
 function handleWarehouse(row, meta) {
+	// every account is generated before the first warehouse row: reset per-run state so a second
+	// generation in the same process starts from scratch (usage stays: the rows below read it)
+	DARK_SEEN.fill(0); LAPSE_SEEN.fill(0); LAPSER_SEEN.fill(0);
+	UPGRADE_BANK.upgrade = UPGRADE_BANK.view = null;
+	TEMPLATE_BANK.evalStart = TEMPLATE_BANK.evalDone = TEMPLATE_BANK.rateLimit = null;
 	if (meta.isBackfill) return row;
 	if (!usageAgg) usageAgg = buildUsageAgg();
 	const date = row.date;
@@ -888,8 +1037,8 @@ function handleWarehouse(row, meta) {
 		const g = usageAgg.byRegion.get(`${date}|${reg}`) || { req: 0, err5xx: 0 };
 		const t = ms(`${date}T00:00:00Z`);
 		const hit = reg === INCIDENT_REGION && inIncident(t);
-		// first-party apps and internal eval pipelines run every day at a steady volume (no product event)
-		const internal = INTERNAL_REQS_PER_DAY[reg] * jitter(`internal|${date}|${reg}`, 0.5) * jitter(`internal|${date}`, 0.3);
+		// first-party apps and internal eval pipelines run every day at a steady volume (no product event): ±8% by region-day, ±5% fleet-wide
+		const internal = INTERNAL_REQS_PER_DAY[reg] * jitter(`internal|${date}|${reg}`, 0.08) * jitter(`internal|${date}`, 0.05);
 		row.requests_served = Math.round((API_SAMPLE_RATE * g.req + internal) * jitter(`served|${date}|${reg}`, 0.03));
 		const err = g.req ? g.err5xx / g.req : 0;
 		row.error_rate_5xx = Math.round((err * jitter(`err|${date}|${reg}`, 0.08)) * 10000) / 10000;
@@ -977,8 +1126,8 @@ const config = {
 			weight: 6,
 			isStrictEvent: false,
 			properties: {
-				limit_type: { __weights: { requests_per_minute: 55, input_tokens_per_minute: 30, output_tokens_per_minute: 15 } },
-				retry_after_seconds: [1, 2, 5, 10, 15, 20, 30, 60],
+				limit_type: { __weights: LIMIT_TYPE_WEIGHTS },
+				retry_after_seconds: RETRY_AFTER_SECONDS,
 				model: ["atlas-2"],
 			},
 		},
@@ -1055,7 +1204,7 @@ const config = {
 			isStrictEvent: true,
 			properties: {
 				eval_id: ["unassigned"],
-				eval_type: ["accuracy", "accuracy", "safety", "regression", "latency", "custom_rubric"],
+				eval_type: EVAL_TYPES,
 				test_cases: u.weighNumRange(20, 2000, 0.3, 300),
 				model: ["atlas-2"],
 			},
@@ -1076,7 +1225,7 @@ const config = {
 			weight: 1,
 			isStrictEvent: true,
 			properties: {
-				billing_section: ["plans", "plans", "credits", "payment_methods"],
+				billing_section: BILLING_SECTIONS,
 			},
 		},
 		{
@@ -1341,7 +1490,7 @@ b AS (SELECT DISTINCT s.uid FROM s JOIN ev e ON e.uid = s.uid AND e.event = 'pla
 SELECT s.ch AS grp, count(*) AS user_count, count(b.uid) AS buyers, count(b.uid)::DOUBLE / count(*) AS paid_rate
 FROM s LEFT JOIN b ON b.uid = s.uid GROUP BY 1`;
 
-// rate-limit episodes per sampled request, by plan, August vs September
+// rate-limit episodes per sampled request, by plan, Jun 4 - Aug 31 vs September
 const RL_SQL = `WITH ${ID_CTE},
 w AS (SELECT plan_tier, uid, event, (t >= TIMESTAMP '${TS(RATE_LIMIT_RAISE)}') AS post FROM ev
   WHERE event IN ('rate limit hit', 'api request') AND t >= TIMESTAMP '${RL_BASE_FROM}' AND t < TIMESTAMP '${RL_POST_TO}'),
@@ -1507,13 +1656,13 @@ FROM ev WHERE event = '$experiment_started'`,
 		id: "H5-early-evals-retention",
 		hook: "H5",
 		archetype: "retention-divergence",
-		narrative: `New accounts that got their integration working (made their first API request) and ran fewer than ${EVAL_MIN} evaluation runs in their first ${EVAL_DAYS} days are at risk, on a ramp: ${DARK_SHARE_BY_EVALS[0] * 100}% of accounts with no early eval run and ${DARK_SHARE_BY_EVALS[1] * 100}% with one go dark after day ${DARK_AFTER_DAYS}; ${EVAL_MIN}+ never do. Every new API account also faces organic lapse (${LAPSE_SHARE * 100}% stop on a uniform day ${LAPSE_DAY_MIN}-${LAPSE_DAY_MAX}). Day-${RETENTION_DAY} retention = any user activity in days ${RETENTION_DAY}-${RETENTION_DAY + 6} after signup (every event except the system-sent ${SYSTEM_EVENTS.join(" and ")}), signups at least ${RETENTION_DAY + 7} days before the window end. Both reads are knob floors: heavier users run more evals and are likelier to be active in the day-${RETENTION_DAY} week even without the dark cut, so engagement adds to the gap. 2+ vs none ≥ 1/(1−${DARK_SHARE_BY_EVALS[0]}); one vs none ≥ (1−${DARK_SHARE_BY_EVALS[1]})/(1−${DARK_SHARE_BY_EVALS[0]}). Mixpanel: build the groups in Funnels (account created → eval run started → eval run started, ${EVAL_DAYS}-day window, uniques; completed = 2+, dropped after step 2 = one, dropped after step 1 = none), save each as a cohort, filter to accounts that did api request, then Retention (account created → a custom event grouping every event except ${SYSTEM_EVENTS.join(" and ")}; plain \"any event\" gives the same numbers on this data; custom bracket day ${RETENTION_DAY}-${RETENTION_DAY + 6}) broken down by those cohorts.`,
+		narrative: `New accounts that got their integration working (made their first API request) and ran fewer than ${EVAL_MIN} evaluation runs in their first ${EVAL_DAYS} days are at risk, on a ramp: ${DARK_SHARE_BY_EVALS[0] * 100}% of accounts with no early eval run and ${DARK_SHARE_BY_EVALS[1] * 100}% with one go dark after day ${DARK_AFTER_DAYS}; ${EVAL_MIN}+ never do. The early run count is a salted per-account draw (mixed Poisson, mean ${EVAL_EARLY_MEAN} for evaluating accounts), realized by dropping or cloning whole eval units on the account's own early activity, so it does not depend on how dense the account's activity is and does not select front-loaded, short-lived accounts. Every new API account also faces organic lapse (${LAPSE_SHARE * 100}% of each early-eval group stop on a day spread evenly over ${LAPSE_DAY_MIN}-${LAPSE_DAY_MAX}); dark and lapse shares are exact within each group, so 2 runs and 3+ runs retain alike. Day-${RETENTION_DAY} retention = any user activity in days ${RETENTION_DAY}-${RETENTION_DAY + 6} after signup (every event except the system-sent ${SYSTEM_EVENTS.join(" and ")}), signups at least ${RETENTION_DAY + 7} days before the window end. Both reads are knob floors: accounts that never evaluate also send fewer events later (no eval runs in the day-${RETENTION_DAY} week), which can only add to the gap. 2+ vs none ≥ 1/(1−${DARK_SHARE_BY_EVALS[0]}); one vs none ≥ (1−${DARK_SHARE_BY_EVALS[1]})/(1−${DARK_SHARE_BY_EVALS[0]}). Mixpanel: build the groups in Funnels (account created → eval run started → eval run started, ${EVAL_DAYS}-day window, uniques; completed = 2+, dropped after step 2 = one, dropped after step 1 = none), save each as a cohort, filter to accounts that did api request, then Retention (account created → a custom event grouping every event except ${SYSTEM_EVENTS.join(" and ")}; plain \"any event\" gives the same numbers on this data; custom bracket day ${RETENTION_DAY}-${RETENTION_DAY + 6}) broken down by those cohorts.`,
 		mixpanelReport: { type: "Funnels → cohorts → Retention", cohortFunnel: `account created → eval run started → eval run started, ${EVAL_DAYS}-day window`, birth: "account created", return: `custom event: every event except ${SYSTEM_EVENTS.join(", ")}`, brackets: `custom: day ${RETENTION_DAY}-${RETENTION_DAY + 6}`, breakdown: "those cohorts", filter: "did api request" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: RETENTION_SQL },
 				select: { a: { where: { grp: "two_plus" } }, z: { where: { grp: "zero" } } },
-				// confounded by engagement: knob-derived floor, grades STRONG above +10%
+				// non-evaluators are a bit less active later: knob-derived floor, grades STRONG above +10%
 				expect: { metric: "a.retention / z.retention", op: ">=", target: 1 / (1 - DARK_SHARE_BY_EVALS[0]), floor: 0.9 / (1 - DARK_SHARE_BY_EVALS[0]) },
 				minCohort: 200,
 			},
@@ -1643,7 +1792,7 @@ FROM ev JOIN p ON p.uid = ev.uid WHERE ev.event = 'api request' GROUP BY 1`,
 		id: "H10-build-rate-limit-raise",
 		hook: "H10",
 		archetype: "temporal-inflection",
-		narrative: `On ${D(RATE_LIMIT_RAISE)} Cortexa raises Build-tier rate limits. Rate-limit episodes per sampled request on the Build plan (plan_tier at the moment of the episode) fall to ${RL_RAISE_MULT}x; Free, Scale, and Enterprise limits do not change. Read: rate limit hit per api request in September vs the whole pre-period (${D(DATASET_START)} to Aug 31) for Build, divided by the same ratio for Free (difference in differences cancels traffic mix and the weekday calendar; the three-month baseline keeps month-to-month noise in the Free control out of the read).`,
+		narrative: `Rate-limit episodes open from the request stream: each sampled request starts one a few seconds later at a per-request rate by plan at the moment (per 1,000 sampled requests: Free ${RL_PER_1K_REQ.free}, Build ${RL_PER_1K_REQ.build}, Scale ${RL_PER_1K_REQ.scale}, Enterprise ${RL_PER_1K_REQ.enterprise}), so every account's episodes track its own traffic. On ${D(RATE_LIMIT_RAISE)} Cortexa raises Build-tier rate limits: the Build rate falls to ${RL_RAISE_MULT}x; Free, Scale, and Enterprise limits do not change. Read: rate limit hit per api request in September vs the whole pre-period (${D(DATASET_START)} to Aug 31) for Build, divided by the same ratio for Free (difference in differences cancels traffic mix and the weekday calendar; the three-month baseline keeps month-to-month noise in the Free control out of the read).`,
 		mixpanelReport: { type: "Insights", events: ["rate limit hit", "api request"], measure: "total, formula A/B", breakdown: "plan_tier", chart: "monthly" },
 		assertions: [
 			{
