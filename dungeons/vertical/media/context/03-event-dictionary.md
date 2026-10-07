@@ -22,7 +22,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 |---|---|---|
 | `article viewed` | The reader opens an article and the article is shown (not blocked by a wall). | `section` (`politics`, `us_news`, `world`, `business`, `sports`, `climate`, `culture`, `opinion`, `technology`, `investigations`); `article_id`; `content_type` (`news`, `analysis`, `feature`, `explainer`, `live_blog`, `opinion`); `referrer` (see below); `read_time_sec`: seconds the article was in view; `scroll_depth_pct` (5-100): how far down the reader scrolled. |
 | `front page viewed` | The reader opens the home page / home screen or a section front. | `page` (`home`, or a section front: `politics`, `sports`, `business`, `world`, `culture`, `climate`). |
-| `recommendation clicked` | The reader taps an article in a recommendation module; the article it opens usually follows within seconds. | `module`: `home_feed` (the module on the home page / home screen, which is part of the For You test in the apps), `related` and `more_in_section` (at the end of an article), `most_read`; `position` (1-10): slot in the module. |
+| `recommendation clicked` | The reader taps an article in a recommendation module; the article it opens usually follows within a few minutes. | `module`: `home_feed` (the module on the home page / home screen, which is part of the For You test in the apps), `related` and `more_in_section` (at the end of an article), `most_read`; `position` (1-10): slot in the module. |
 | `search performed` | The reader searches the site. | `query_topic` (a section name, `people`, or `archive`); `results_count`. |
 | `podcast played` | The reader plays a podcast episode in the apps or on the web player. | `show` (`the_lantern_daily`, `inside_politics`, `the_long_read`); `listen_sec`: seconds listened. |
 | `push alert opened` | The reader opens a push alert (apps only). | `alert_type` (`breaking_news`, `daily_briefing`, `live_updates`, `sports`). |
@@ -60,7 +60,7 @@ The walls (`regwall shown`, `paywall shown`) copy the `section`, `article_id`, a
 | `member_since` | Date the account was created (YYYY-MM-DD). Before 2026-06-04 for readers who registered earlier. |
 | `Experiment: For You Feed` | `Control` or `For You` for readers in the For You test; absent for everyone else. |
 
-Profiles also carry the standard `name` and `email` fields. Only accounts have profiles; anonymous visitors do not.
+Profiles also carry the standard `name` and `email` fields. Accounts created in the window also carry `created`: the time of the reader's first (anonymous) visit, which comes before `account registered`. Accounts created before June 4 have no `created` value; use `member_since`. Only accounts have profiles; anonymous visitors do not.
 
 ## Funnels the business tracks
 

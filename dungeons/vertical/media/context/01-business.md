@@ -2,11 +2,11 @@
 
 ## Who we are
 
-The Lantern is an independent national digital news publication founded in 2022 by a group of former metro-desk reporters. It covers US politics and policy, national and world news, business, climate, culture, technology, sports, and opinion, and it runs a small investigations desk. The company has about 15 employees: a newsroom of 10 (editors, reporters, a two-person sports desk, and a podcast producer), two people in product and engineering, two in audience and marketing, and a part-time member-support lead.
+The Lantern is an independent national digital news publication founded in 2022 by a group of former metro-desk reporters. It covers US politics and policy, national and world news, business, climate, culture, technology, sports, and opinion, and it runs a small investigations desk. The company has eight full-time staff: a newsroom of five (an editor-in-chief, a deputy editor, two reporters, and a podcast producer who also covers sports), one product engineer, one audience lead, and a managing director who also runs member support. Freelance writers and an outside app agency fill the gaps.
 
-Revenue comes almost entirely from reader subscriptions (about $34,000 a month in recurring revenue in early summer 2026, with about 2,500 paying subscribers). Podcast sponsorships bring in a little more. The website and apps carry no display advertising.
+Reader subscriptions bring in about $34,000 a month in recurring revenue (early summer 2026, about 2,500 paying subscribers), a little over $400,000 a year. That covers just under half of the budget. A two-year operating grant from a journalism foundation (2025-2026) and reader donations cover most of the rest, and podcast sponsorships bring in a little more. The website and apps carry no display advertising.
 
-The business is reader-funded, so the newsroom and the audience team watch the same numbers: how many people read us, how many create a free account, how many subscribe, and how many stay.
+The grant ends after 2026, so subscription revenue has to grow. The newsroom and the audience team watch the same numbers: how many people read us, how many create a free account, how many subscribe, and how many stay.
 
 ## How reading on The Lantern works
 
@@ -35,7 +35,7 @@ The business is reader-funded, so the newsroom and the audience team watch the s
 ## Readers
 
 - **Access tier** (`reader_tier`): anonymous visitor, registered free reader, Digital subscriber, or All Access subscriber.
-- **Reading habits.** Readership ranges from daily readers to people who come by a few times a month. Most daily readers subscribe; most occasional readers stay on a free account.
+- **Reading habits.** Readership ranges from people who read several times a week to people who come by a few times a month; very few read every day. Frequent readers are more likely to subscribe; most occasional readers stay on a free account.
 - **Region** (`region`): US Northeast, South, West, and Midwest, Canada, the UK, and other international readers. The US coasts are the largest groups.
 - **Age bands** (`age_band`): `18-24`, `25-34`, `35-44`, `45-54`, `55-64`, `65+`. Most readers are 25-54.
 - **Established vs new readers.** About 55% of the readers active in the window had an account before June 4. New visitors arrive steadily, about 250 a week.
@@ -57,10 +57,10 @@ The three paid channels run on steady daily budgets and bill per visit; daily sp
 
 Leadership set these goals for the quarter:
 
-1. **Grow paying subscribers.** Net subscriber growth is the company's main number. The audience team sees the newsletters as the main habit builder on the way to a subscription.
+1. **Grow paying subscribers.** Net subscriber growth is the company's main number. The audience team wants to know which reader habits lead to a subscription.
 2. **Make the World Cup count.** The sports desk went all in on the 2026 World Cup. Leadership wants to know what the coverage did for readership.
 3. **Decide on the For You feed.** Product is testing a personalized home-screen module in the apps and needs a ship / no-ship call.
 4. **Turn subscribers into ambassadors.** Gift Articles launched in August. The team wants to know whether subscribers use it.
-5. **Spend marketing money well.** Finance asked which paid channel is worth its cost, and whether the cheapest clicks are really the cheapest readers.
+5. **Spend marketing money well.** Finance asked which paid channel is worth its cost.
 6. **Keep subscribers.** Member support wants to know which subscribers are likely to cancel, early enough to do something about it.
 7. **Learn from the Labor Day sale.** Was a deep first-period discount worth it?

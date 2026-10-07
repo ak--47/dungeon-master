@@ -11,7 +11,7 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 | 2026-07-03 (Fri) to 2026-07-04 (Sat) | Holiday | US Independence Day (observed Friday). The newsroom published on its normal schedule. |
 | 2026-07-15 (Wed) | Experiment | **"For You Feed" test** starts in the iOS and Android apps. Signed-in app readers are assigned 50/50 to **Control** (the home screen's module shows Top Stories, picked by editors) or **For You** (the same module shows a personalized feed based on the reader's history). Assignment is sticky per reader and recorded with a `$experiment_started` event at the reader's first app visit after the start and the profile property `Experiment: For You Feed`. The website is not part of the test. |
 | 2026-08-11 (Tue) | Launch | **Gift Articles** launches for subscribers on web and apps, rolled out over one week (all subscribers by August 18). A subscriber shares a gift link; anyone who opens it can read that article free. Gift shares are tracked as `article shared` with `share_method = gift_link`. |
-| 2026-08-25 (Tue) to 2026-08-27 (Thu) | Incident | **Web metering incident.** A faulty deploy to the website's metering service made many meter checks fail open: free readers on the website were often shown articles they should have hit the paywall for. Engineering rolled back the deploy; the fix was live at 00:00 UTC on August 28. The iOS and Android apps were not affected. Daily meter error rates and service status by platform are in `platform_reliability_daily`. |
+| 2026-08-25 (Tue) to 2026-08-27 (Thu) | Incident | **Web metering service degradation.** A faulty deploy degraded the website's metering service. Engineering rolled back the deploy; the fix was live at 00:00 UTC on August 28. Daily meter error rates and service status by platform are in `platform_reliability_daily`. |
 | 2026-09-03 (Thu) to 2026-09-09 (Wed) | Promotion | **Labor Day sale.** 60% off the first billing period of either plan, monthly or annual (Digital $4.80 for the first month or $48 for the first year; All Access $8 or $80). Shown on the paywall only. New subscriptions in the sale carry `offer = labor_day_sale`. Renewals are at list price. |
 | 2026-09-07 (Mon) | Holiday | US Labor Day. The newsroom published on its normal schedule. |
 | 2026-09-30 (Wed) | Fiscal | End of Q3. |
@@ -24,7 +24,6 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 - Paid marketing: budgets for Google, Meta, and podcast ads were steady through the window; no channel was added or paused. There was no paid promotion of the Labor Day sale.
 - The website's and apps' design outside the For You test.
 - Holidays: The Lantern ran no holiday promotions other than the Labor Day sale.
-- The apps had no incidents in the window.
 
 ## Open questions leadership has asked
 

@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **The Lantern**, an independent n
 
 - **Product:** The Lantern website and the iOS and Android apps: articles across ten sections, the home page and section fronts, search, recommendations, six email newsletters, three podcasts, push alerts, saved articles, comments, sharing, the free-account registration wall, the metered paywall, and the two paid plans (Lantern Digital and Lantern All Access).
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early June through the end of September and the first day of October.
-- **Scale:** about 10,000 readers were active in the window. About 7,300 of them have an account (registered free readers and subscribers); about 2,700 were visitors who read without ever registering. About 4,500 new visitors arrived during the window and about 1,800 of them registered. The project holds about 830,000 events.
+- **Scale:** about 10,000 readers were active in the window. About 7,400 of them have an account (registered free readers and subscribers); about 2,600 were visitors who read without ever registering. About 4,500 new visitors arrived during the window and about 1,900 of them registered. The project holds about 880,000 events.
 - **Readers:** mostly in the United States, with some in Canada, the UK, and elsewhere.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. Most readers are in US time zones, so a US evening falls after midnight UTC.
 

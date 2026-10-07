@@ -251,6 +251,13 @@ s AS (SELECT DISTINCT ev.uid FROM ev JOIN x ON x.uid = ev.uid WHERE ev.event = '
 SELECT x.variant, count(*) AS exposed, count(s.uid) AS subscribed_after_exposure, round(count(s.uid)::DOUBLE / count(*), 4) AS share
 FROM x LEFT JOIN s ON s.uid = x.uid GROUP BY 1 ORDER BY 1;
 
+-- EVAL Q3 (z for the share of exposed readers who subscribed, For You vs Control)
+WITH x AS (SELECT uid, any_value("Variant name") AS variant, min(t) AS t0 FROM ev WHERE event = '$experiment_started' GROUP BY 1),
+s AS (SELECT DISTINCT ev.uid FROM ev JOIN x ON x.uid = ev.uid WHERE ev.event = 'subscription started' AND ev.t >= x.t0),
+g AS (SELECT x.variant, count(*) AS n, count(s.uid) AS k FROM x LEFT JOIN s ON s.uid = x.uid GROUP BY 1),
+p AS (SELECT max(k) FILTER (WHERE variant = 'For You') AS k1, max(n) FILTER (WHERE variant = 'For You') AS n1, max(k) FILTER (WHERE variant = 'Control') AS k0, max(n) FILTER (WHERE variant = 'Control') AS n0 FROM g)
+SELECT round((k1::DOUBLE / n1 - k0::DOUBLE / n0) / sqrt(((k1 + k0)::DOUBLE / (n1 + n0)) * (1 - (k1 + k0)::DOUBLE / (n1 + n0)) * (1.0 / n1 + 1.0 / n0)), 2) AS z_subscribed_share FROM p;
+
 -- EVAL Q4 — Gift Articles: weekly shares by tier and gift links
 SELECT date_trunc('week', t)::DATE AS week_of,
  count(*) FILTER (WHERE event = 'article shared' AND reader_tier IN ('digital', 'all_access')) AS subscriber_shares,
@@ -331,6 +338,10 @@ SELECT CASE WHEN reading_days = 0 THEN '0' WHEN reading_days <= 3 THEN '1-3' WHE
  count(*) AS subscriber_months, count(*) FILTER (WHERE cancelled) AS cancels, round(avg(cancelled::INT), 4) AS cancel_rate
 FROM sub_months GROUP BY 1 ORDER BY min(reading_days);
 
+-- EVAL Q12 (stated cancellation reasons, whole window)
+SELECT cancel_reason, count(*) AS cancellations, round(count(*)::DOUBLE / sum(count(*)) OVER (), 4) AS share
+FROM ev WHERE event = 'subscription cancelled' GROUP BY 1 ORDER BY 2 DESC;
+
 -- EVAL Q13 — weekend reading: read time and scroll depth by day of week
 SELECT dayname(t) AS day, count(*) AS reads, round(avg(read_time_sec), 1) AS avg_read_sec, round(avg(scroll_depth_pct), 1) AS avg_scroll_pct,
  round(avg((content_type IN ('feature', 'analysis'))::INT), 4) AS long_form_share
@@ -341,6 +352,15 @@ SELECT CASE WHEN offer = 'labor_day_sale' THEN 'sale week' ELSE 'rest of window'
  round(avg((plan = 'digital')::INT), 4) AS digital_share, round(avg((plan = 'all_access')::INT), 4) AS all_access_share,
  round(avg((billing_period = 'annual')::INT), 4) AS annual_share
 FROM ev WHERE event = 'subscription started' GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q14 (z for the sale-week mix vs the rest of the window: All Access share and annual share)
+WITH g AS (SELECT offer = 'labor_day_sale' AS sale, count(*) AS n, count(*) FILTER (WHERE plan = 'all_access') AS aa, count(*) FILTER (WHERE billing_period = 'annual') AS an
+  FROM ev WHERE event = 'subscription started' GROUP BY 1),
+p AS (SELECT max(n) FILTER (WHERE sale) AS n1, max(n) FILTER (WHERE NOT sale) AS n0, max(aa) FILTER (WHERE sale) AS aa1, max(aa) FILTER (WHERE NOT sale) AS aa0,
+  max(an) FILTER (WHERE sale) AS an1, max(an) FILTER (WHERE NOT sale) AS an0 FROM g)
+SELECT round((aa1::DOUBLE / n1 - aa0::DOUBLE / n0) / sqrt(((aa1 + aa0)::DOUBLE / (n1 + n0)) * (1 - (aa1 + aa0)::DOUBLE / (n1 + n0)) * (1.0 / n1 + 1.0 / n0)), 2) AS z_all_access_share,
+ round((an1::DOUBLE / n1 - an0::DOUBLE / n0) / sqrt(((an1 + an0)::DOUBLE / (n1 + n0)) * (1 - (an1 + an0)::DOUBLE / (n1 + n0)) * (1.0 / n1 + 1.0 / n0)), 2) AS z_annual_share
+FROM p;
 
 -- EVAL Q14 (plan x billing period, whole window)
 SELECT plan, billing_period, count(*) AS subscriptions, round(count(*)::DOUBLE / sum(count(*)) OVER (), 4) AS share
@@ -364,6 +384,20 @@ SELECT round((max(m) FILTER (WHERE wc) - max(m) FILTER (WHERE NOT wc)) / sqrt(ma
  (SELECT round(avg((e.section = 'sports')::INT), 4) FROM visitors v JOIN ev e ON e.uid = v.uid AND e.event = 'article viewed' AND e.reader_tier = 'anonymous' WHERE NOT (v.t0 >= TIMESTAMP '2026-06-11' AND v.t0 < TIMESTAMP '2026-07-20')) AS sports_share_first_reads_other
 FROM s;
 
+-- EVAL Q15 (Welch t for new visitors per day; 7-day registration rate of visitors who arrived during vs outside the tournament)
+WITH v AS (SELECT t0::DATE AS day, count(*) AS visitors FROM visitors GROUP BY 1),
+j AS (SELECT visitors, (day >= DATE '2026-06-11' AND day < DATE '2026-07-20') AS wc FROM v WHERE day > DATE '2026-06-04' AND day < DATE '2026-10-01'),
+s AS (SELECT wc, avg(visitors) AS m, var_samp(visitors) AS v, count(*) AS n FROM j GROUP BY 1),
+r AS (SELECT (t0 >= TIMESTAMP '2026-06-11' AND t0 < TIMESTAMP '2026-07-20') AS wc, count(*) AS n, count(*) FILTER (WHERE registered_7d) AS k,
+  avg((channel_group = 'social')::INT) AS social_share FROM visitors WHERE t0 < TIMESTAMP '2026-09-25' GROUP BY 1),
+rp AS (SELECT max(k) FILTER (WHERE wc) AS k1, max(n) FILTER (WHERE wc) AS n1, max(k) FILTER (WHERE NOT wc) AS k0, max(n) FILTER (WHERE NOT wc) AS n0,
+  max(social_share) FILTER (WHERE wc) AS soc1, max(social_share) FILTER (WHERE NOT wc) AS soc0 FROM r)
+SELECT (SELECT round((max(m) FILTER (WHERE wc) - max(m) FILTER (WHERE NOT wc)) / sqrt(max(v / n) FILTER (WHERE wc) + max(v / n) FILTER (WHERE NOT wc)), 3) FROM s) AS welch_t_visitors,
+ round(k1::DOUBLE / n1, 4) AS registration_rate_wc_arrivals, round(k0::DOUBLE / n0, 4) AS registration_rate_other_arrivals,
+ round((k1::DOUBLE / n1 - k0::DOUBLE / n0) / sqrt(((k1 + k0)::DOUBLE / (n1 + n0)) * (1 - (k1 + k0)::DOUBLE / (n1 + n0)) * (1.0 / n1 + 1.0 / n0)), 2) AS z_registration_rate,
+ round(soc1, 4) AS social_share_wc_arrivals, round(soc0, 4) AS social_share_other_arrivals
+FROM rp;
+
 -- EVAL Q16 — warehouse pageviews served vs Mixpanel article views, by platform
 WITH mp AS (SELECT t::DATE AS d, platform, count(*) AS mixpanel_views FROM ev WHERE event = 'article viewed' GROUP BY 1, 2)
 SELECT w.platform, sum(w.pageviews_served) AS pageviews_served, sum(mp.mixpanel_views) AS mixpanel_article_views,
@@ -382,6 +416,12 @@ FROM ev WHERE event IN ('subscription started', 'subscription cancelled') GROUP 
 
 SELECT round(avg(cancelled::INT), 4) AS monthly_cancel_rate_jul_sep, count(*) AS subscriber_months FROM sub_months;
 
+-- EVAL Q17 (subscriptions and paywall views per day: World Cup vs the five weeks after, before the incident and the sale)
+SELECT CASE WHEN t < TIMESTAMP '2026-07-20' THEN 'World Cup (Jun 11 - Jul 19)' ELSE 'after (Jul 20 - Aug 24)' END AS period, count(DISTINCT t::DATE) AS days,
+ round(count(*) FILTER (WHERE event = 'subscription started')::DOUBLE / count(DISTINCT t::DATE), 2) AS subscriptions_per_day,
+ round(count(*) FILTER (WHERE event = 'paywall shown')::DOUBLE / count(DISTINCT t::DATE), 0) AS paywall_views_per_day
+FROM ev WHERE t >= TIMESTAMP '2026-06-11' AND t < TIMESTAMP '2026-08-25' GROUP BY 1 ORDER BY 1 DESC;
+
 SELECT reader_tier, count(*) AS members FROM users GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q18 — readers in the window: unique readers, never-registered visitors, identified members, registrations
@@ -392,17 +432,24 @@ SELECT count(DISTINCT uid) AS unique_readers,
  count(DISTINCT device_id) AS distinct_devices
 FROM ev;
 
--- EVAL Q19 — which sections drive subscriptions: subscriptions and conversion per view by the blocked read's section
-SELECT section, count(*) FILTER (WHERE event = 'paywall shown') AS paywall_views, count(*) FILTER (WHERE event = 'subscription started') AS subscriptions,
- round(count(*) FILTER (WHERE event = 'subscription started')::DOUBLE / sum(count(*) FILTER (WHERE event = 'subscription started')) OVER (), 4) AS share_of_subscriptions,
- round(count(*) FILTER (WHERE event = 'subscription started')::DOUBLE / count(*) FILTER (WHERE event = 'paywall shown'), 5) AS conversion_per_view
-FROM ev WHERE event IN ('paywall shown', 'subscription started') GROUP BY 1 ORDER BY subscriptions DESC;
+-- EVAL Q19 — paywall conversion per view by platform (null check), overall and within the obvious sub-splits
+WITH g AS (SELECT platform, 'all' AS split, count(*) FILTER (WHERE event = 'paywall shown') AS n, count(*) FILTER (WHERE event = 'subscription started') AS k
+  FROM ev WHERE event IN ('paywall shown', 'subscription started') GROUP BY 1
+  UNION ALL SELECT platform, CASE WHEN referrer = 'newsletter' THEN 'newsletter reads' ELSE 'other reads' END,
+  count(*) FILTER (WHERE event = 'paywall shown'), count(*) FILTER (WHERE event = 'subscription started')
+  FROM ev WHERE event IN ('paywall shown', 'subscription started') GROUP BY 1, 2
+  UNION ALL SELECT platform, CASE WHEN t >= TIMESTAMP '2026-09-03' AND t < TIMESTAMP '2026-09-10' THEN 'sale week' ELSE 'outside the sale' END,
+  count(*) FILTER (WHERE event = 'paywall shown'), count(*) FILTER (WHERE event = 'subscription started')
+  FROM ev WHERE event IN ('paywall shown', 'subscription started') GROUP BY 1, 2),
+p AS (SELECT split, sum(k)::DOUBLE / sum(n) AS p0 FROM g GROUP BY 1)
+SELECT g.split, string_agg(g.platform || ' ' || round(100.0 * g.k / g.n, 3) || '% (' || g.k || '/' || g.n || ')', '; ' ORDER BY g.platform) AS conversion_by_platform,
+ round(sum(power(g.k - g.n * p.p0, 2) / (g.n * p.p0) + power((g.n - g.k) - g.n * (1 - p.p0), 2) / (g.n * (1 - p.p0))), 2) AS chi_square, count(*) - 1 AS dof
+FROM g JOIN p USING (split) GROUP BY 1 ORDER BY 1;
 
--- EVAL Q19 (chi-square of conversion per view across sections; 9 degrees of freedom, 5% critical value 16.92)
-WITH g AS (SELECT section, count(*) FILTER (WHERE event = 'paywall shown') AS n, count(*) FILTER (WHERE event = 'subscription started') AS k
-  FROM ev WHERE event IN ('paywall shown', 'subscription started') GROUP BY 1),
-p AS (SELECT sum(k)::DOUBLE / sum(n) AS p0 FROM g)
-SELECT round(sum(power(k - n * p0, 2) / (n * p0) + power((n - k) - n * (1 - p0), 2) / (n * (1 - p0))), 2) AS chi_square, count(*) - 1 AS dof FROM g, p;
+-- EVAL Q19 (app vs web reading volume per active reader-day, for context)
+SELECT CASE WHEN platform = 'web' THEN 'web' ELSE 'apps' END AS surface, count(*) FILTER (WHERE event = 'paywall shown') AS paywall_views,
+ round(count(*) FILTER (WHERE event IN ('article viewed', 'paywall shown'))::DOUBLE / count(DISTINCT uid || '|' || t::DATE), 3) AS attempted_reads_per_reader_day
+FROM ev WHERE event IN ('article viewed', 'paywall shown') GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q20 — open-ended: the quarter's watch list in one place
 SELECT 'registered free readers (end of window)' AS metric, count(*)::DOUBLE AS value FROM users WHERE reader_tier = 'registered'

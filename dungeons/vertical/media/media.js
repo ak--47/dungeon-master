@@ -22,8 +22,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             archive). Subscribers can comment and (from 2026-08-11) gift
  *             articles.
  * SCALE:      10,000 simulated readers (≈4,500 new visitors arrive inside the
- *             window and ≈1,800 of them register; ≈2,500 subscribers at the
- *             start, ≈3,000 at the end), ~0.83M events, 120 days
+ *             window and ≈1,900 of them register; ≈2,500 subscribers at the
+ *             start, ≈3,200 at the end), ~0.88M events, 120 days
  *             (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  article viewed → (meter) → paywall shown → subscription started
  * VALUE MOMENT: subscription started
@@ -93,7 +93,16 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * - Established readers' plans depend on how much they read (persona): heavy
  *   readers are mostly subscribers, casual readers mostly free.
  * - Comments are a subscriber perk (non-subscriber comment events are dropped);
- *   push alerts open only in an app.
+ *   push alerts open only in an app. Weekend Edition opens fall on Saturday and
+ *   Sunday (a few late ones on Monday), following its Saturday send.
+ * - A born member's profile `created` is the first (anonymous) read; member_since
+ *   is the registration date.
+ * - Scale tradeoff (registration level): 42.6% of new visitors register within 7
+ *   days (about 60% of those who see the regwall). Real publishers convert
+ *   regwall viewers in single digits. With 10,000 readers and ≈4,500 new
+ *   visitors, a real-world rate would leave ≈200 registrants, too few to read
+ *   H5 and H8 at ±10% (at REG_CONV 30 the H5 ratio's standard error is ≈7%);
+ *   REG_CONV stays 50 (25 for social) and the story ratios carry the meaning.
  * - Warehouse drift: pageviews_served adds reads Mixpanel never received (ad
  *   blockers and SDK opt-outs, ~16% on web, ~3% in apps, varying by day) plus bot
  *   traffic; billing adds app-store purchases Mixpanel missed and same-day
@@ -196,7 +205,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * REAL WORLD: a social click is a passing glance; a search is an intent.
  *
  * ─────────────────────────────────────────────────────────────────────────
- * H9. READING HABIT CHURN (everything; magic number)
+ * H9. READING HABIT CHURN (everything; retention divergence at a reading-days
+ *     threshold)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: monthly cancel probability 16% for subscribers who read on fewer
  *   than 4 distinct days the prior month vs 4% for the rest (4x).
@@ -215,35 +225,38 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-media, 2026-10-07, full
- * fidelity, 10,000 readers, 833,974 events)
+ * fidelity, 10,000 readers, 883,313 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation            | Expected | Measured
  * -----|------------------------------------------------|-----------------------|----------|---------
- * H1   | subscriber sports/non-sports reads, WC / base  | WC_MEAN_LIFT          | 1.972    | 1.961 (share 16.6% vs 9.0%)
- * H2   | home_feed clicks per app home view, For You / Control | FOR_YOU_CLICK_MULT | 1.50  | 1.441 (49.7% vs 34.5%)
- * H2   | For You share of exposed readers               | equal 2-arm hash      | 0.50     | 0.488 (1,695 of 3,476)
- * H3   | shares per attempted read, after/before, subscribers over free | GIFT_SHARE_MULT | 1.60 | 1.544 (1.575 / 1.020)
+ * H1   | subscriber sports/non-sports reads, WC / base  | WC_MEAN_LIFT          | 1.972    | 2.026 (share 16.6% vs 9.0%)
+ * H2   | home_feed clicks per app home view, For You / Control | FOR_YOU_CLICK_MULT | 1.50  | 1.480 (49.9% vs 33.7%)
+ * H2   | For You share of exposed readers               | equal 2-arm hash      | 0.50     | 0.502 (1,560 of 3,108)
+ * H3   | shares per attempted read, after/before, subscribers over free | GIFT_SHARE_MULT | 1.60 | 1.724 (1.607 / 0.932)
  * H3   | gift_link before launch or from non-subscribers | exact purity         | 0        | 0
- * H4   | web/app paywall views, outage / ±14 days       | 1 − OUTAGE_FAIL       | 0.30     | 0.307 (0.62 vs 2.01)
+ * H4   | web/app paywall views, outage / ±14 days       | 1 − OUTAGE_FAIL       | 0.30     | 0.311 (0.68 vs 2.20)
  * H4   | warehouse meter_error_rate on outage days      | OUTAGE_FAIL           | 0.70     | 0.700
- * H5   | 7-day registration rate, social / other        | SOCIAL_REG_MULT       | 0.50     | 0.512 (25.2% vs 49.3%)
- * H5   | spend per new visitor, Meta / Google           | 1.5 / 2.4             | 0.625    | 0.616 ($1.48 vs $2.41)
- * H5   | spend per registration, Meta / Google          | (1.5/0.5) / 2.4       | 1.25     | 1.187 ($5.83 vs $4.91)
- * H6   | subscriptions per paywall view, newsletter / other | REFERRER_CONV_MULT | 2.50     | 2.418 (1.79% vs 0.74%)
- * H7   | conversion per paywall view, sale / 4 weeks before | SALE_CONV_MULT (≥, floor 1.5) | 2.00 | 2.250 (1.62% vs 0.72%)
- * H7   | first-period bookings per paywall view, sale / before | 2.0 × 0.4 (≤, floor 0.9) | 0.80 | 0.877 ($0.40 vs $0.46)
- * H8   | median hours first read → registration, social / other | SOCIAL_TTC_MULT (≥, floor 2.0) | 3.00 | 3.129 (11.9 h vs 3.8 h)
- * H9   | monthly cancel rate, < 4 / 4+ reading days prior month | 0.16 / 0.04 (≥, floor 2.5) | 4.00 | 3.516 (15.1% vs 4.3%)
- * H10  | average read_time_sec, weekend / weekday       | WEEKEND_READ_MULT     | 1.35     | 1.354 (246 s vs 182 s)
+ * H5   | 7-day registration rate, social / other        | SOCIAL_REG_MULT       | 0.50     | 0.531 (27.4% vs 51.7%)
+ * H5   | spend per new visitor, Meta / Google           | 1.5 / 2.4             | 0.625    | 0.612 ($1.48 vs $2.42)
+ * H5   | spend per registration, Meta / Google          | (1.5/0.5) / 2.4       | 1.25     | 1.180 ($5.40 vs $4.58)
+ * H6   | subscriptions per paywall view, newsletter / other | REFERRER_CONV_MULT | 2.50     | 2.440 (1.81% vs 0.74%)
+ * H7   | conversion per paywall view, sale / 4 weeks before | SALE_CONV_MULT (≥, floor 1.5) | 2.00 | 2.170 (1.65% vs 0.76%)
+ * H7   | first-period bookings per paywall view, sale / before | 2.0 × 0.4 (≤, floor 0.9) | 0.80 | 0.820 ($0.39 vs $0.48)
+ * H8   | median hours first read → registration, social / other | SOCIAL_TTC_MULT (±10%) | 3.00 | 3.211 (12.4 h vs 3.9 h)
+ * H9   | monthly cancel rate, < 4 / 4+ reading days prior month | 0.16 / 0.04 (≥, floor 2.5) | 4.00 | 5.086 (16.1% vs 3.2%)
+ * H10  | average read_time_sec, weekend / weekday       | WEEKEND_READ_MULT     | 1.35     | 1.344 (244 s vs 182 s)
  * ═════════════════════════════════════════════════════════════════════════
  *
- * Noise notes: H7 rests on about 127 sale-week subscriptions and H9 on about
- * 420 cancellations, so both use the knob as target with a half-effect floor
- * (H7 conversion and H9 grade STRONG on this seed: 2.25 is above the ±10% band,
- * 3.52 below it). H8 rests on about 400 social registrants (median relative SE
- * about 6%). Not engineered and flat: paywall conversion per view by For You
- * arm (0.88% vs 0.85%, z = 0.31), by section (chi-square 2.65, 9 dof), and
- * registrations per day during the World Cup (15.4 vs 15.1, t = 0.28).
+ * Noise notes (sample noise, not confounds): H7 rests on 146 sale-week
+ * subscriptions (standard error of the conversion ratio ≈9%) and H9 on 369
+ * cancellations, where the 4% arm is a per-member hash draw on 6,419
+ * subscriber-months (ratio standard error ≈12%). Both keep the knob as target
+ * with a half-effect floor and grade STRONG when the draw falls outside ±10%
+ * (H9 does on this seed: the 4% arm drew 3.2%). H8 uses the ±10% band; it rests
+ * on 435 social registrants (ratio standard error ≈6%). Not engineered and flat:
+ * paywall conversion per view by For You arm (0.86% vs 0.87%, z = -0.13) and by
+ * platform (chi-square 0.11, 2 dof), and new visitors per day during the World
+ * Cup (38.3 vs 37.7, t = 0.48).
  */
 
 // ── SCALE ──
@@ -372,6 +385,10 @@ const ARTICLE_POP = (() => { // power-law popularity weights
 	return w.map((x) => (acc += x / s));
 })();
 const NEWSLETTERS = { the_morning_lantern: 40, politics_briefing: 18, weekend_edition: 16, climate_desk: 10, sports_extra: 8, tech_week: 8 };
+// Weekend Edition goes out on Saturday morning (US): its opens fall on Saturday and Sunday (UTC), a few late
+// ones on Monday. Share of a day's newsletter opens that are Weekend Edition, Sun..Sat.
+const WEEKEND_EDITION_SHARE = [0.35, 0.06, 0, 0, 0, 0, 0.5];
+const WEEKDAY_NEWSLETTERS = Object.fromEntries(Object.entries(NEWSLETTERS).filter(([k]) => k !== "weekend_edition"));
 const ENTRY_REFERRERS = {
 	default: { search_engine: 40, social: 18, direct: 42 },
 	social: { search_engine: 25, social: 45, direct: 30 },
@@ -475,8 +492,6 @@ function makeFrom(own, name, t, near, uid) {
 // ── USER HOOK ──
 function handleUserHook(profile, meta) {
 	const uid = profile.distinct_id;
-	// the engine's persona label is internal; keep it out of the Mixpanel profile
-	delete profile._persona;
 	if (meta.userIsBornInDataset) {
 		profile.reader_tier = "anonymous";
 		profile.member_since = dayKey(dayjs.utc(profile.created ?? meta.user?.created ?? DATASET_START).valueOf());
@@ -538,9 +553,6 @@ function handleEverything(events, meta) {
 	let authEv = null;
 	if (born) {
 		authEv = events.find((e) => e.event === "account registered") || null;
-		// pre-registration reads happen on the device they registered with
-		const preAuth = events.filter((e) => authEv && T(e) < T(authEv));
-		for (const e of preAuth) copyDevice(e, authEv);
 	}
 	const regT = born ? (authEv ? T(authEv) : authT) : -Infinity;
 	if (born) profile.member_since = dayKey(regT); // the account exists from registration
@@ -563,6 +575,8 @@ function handleEverything(events, meta) {
 		const med = REG_TTC_H * (SOCIAL_CHANNELS.includes(profile.acquisition_channel) ? SOCIAL_TTC_MULT : 1);
 		const gapMs = Math.max(4 * MIN_MS, Math.min(REG_TTC_MAX_H, med * Math.exp(chance.normal({ mean: 0, dev: REG_TTC_SIGMA }))) * HOUR_MS);
 		if (art) art.time = iso(Math.floor(regT - gapMs));
+		// the profile's created is when the reader was first seen: the first (anonymous) read
+		if (art) profile.created = art.time;
 		if (art && wall) wall.time = iso(Math.min(regT - 1000, T(art) + chance.integer({ min: 20, max: 150 }) * 1000));
 		// a visit that started before June 4 is outside the data
 		if (art && T(art) < BEGIN) events = events.filter((e) => !(T(e) < regT && (e.event === "article viewed" || e.event === "regwall shown") && T(e) < BEGIN));
@@ -824,6 +838,15 @@ function handleEverything(events, meta) {
 		giftClones.push(c);
 	}
 	events = events.concat(giftClones);
+
+	// ── newsletter schedule: Weekend Edition opens follow its Saturday send ──
+	for (const e of events) {
+		if (e.event !== "newsletter opened") continue;
+		const dow = new Date(T(e)).getUTCDay();
+		e.newsletter = hashFloat(`${e.insert_id}|we`) < WEEKEND_EDITION_SHARE[dow]
+			? "weekend_edition"
+			: pickWeighted(WEEKDAY_NEWSLETTERS, hashFloat(`${e.insert_id}|nl`));
+	}
 
 	// ── H10 weekend long reads ──
 	for (const e of events) {
@@ -1258,9 +1281,6 @@ const config = {
 	superProps: {
 		platform: ["web"],
 		reader_tier: ["registered"],
-		// sticky per member from the profile (stickyEventProps); declared here too so
-		// warehouse groupBy validation sees it on every event
-		acquisition_channel: { __weights: CHANNEL_WEIGHTS },
 	},
 
 	userProps: {
@@ -1511,7 +1531,7 @@ FROM ${WH("platform_reliability_daily")}`,
 	{
 		id: "H5-paid-channel-economics",
 		hook: "H5",
-		archetype: "funnel-conversion-by-segment",
+		archetype: "external-join",
 		narrative: `Meta ads buy The Lantern's cheapest new visitors and its weakest registrations. Warehouse marketing_spend_daily bills each paid channel ${SPEND_PLAN_SHARE * 100}% as a paced daily plan (expected visitors x cost per visitor, weekday-shaped above a 50% floor) and ${(1 - SPEND_PLAN_SHARE) * 100}% as cost per visitor x that day's new visitors, with seeded ±${SPEND_NOISE * 100}% day noise: $${CPV_USD.google_ads} Google, $${CPV_USD.meta_ads} Meta, $${CPV_USD.podcast_ads} podcast ads per new visitor over the window. Visitors from social platforms (Meta ads and organic social) register within ${REG_WINDOW_DAYS} days at ${SOCIAL_REG_MULT}x the rate of every other channel (${Math.round(REG_CONV * SOCIAL_REG_MULT)}% vs ${REG_CONV}%; two declared first funnels with acquisition_channel conditions). Spend per registration therefore runs ${((CPV_USD.meta_ads / SOCIAL_REG_MULT) / CPV_USD.google_ads).toFixed(2)}x higher on Meta than Google even though each Meta visitor costs ${(CPV_USD.meta_ads / CPV_USD.google_ads).toFixed(3)}x as much. A new visitor is a reader whose first read is anonymous (reader_tier = anonymous); a registration stitches it to the member.`,
 		mixpanelReport: { type: "Funnels + Insights + warehouse", funnel: "article viewed (reader_tier = anonymous) → account registered, 7-day window, breakdown acquisition_channel", insights: "uniques of article viewed (reader_tier = anonymous) by acquisition_channel", join: "marketing_spend_daily.spend_usd by acquisition_channel" },
 		assertions: [
@@ -1554,7 +1574,7 @@ FROM ${WH("platform_reliability_daily")}`,
 		id: "H7-labor-day-sale",
 		hook: "H7",
 		archetype: "temporal-inflection",
-		narrative: `The Labor Day sale (${D(SALE_START)} to ${D(SALE_END)}, exclusive) takes ${SALE_DISCOUNT * 100}% off the first billing period of any plan (offer = labor_day_sale). Paywall conversion per view is ${SALE_CONV_MULT}x the four weeks before. Prices live only in warehouse subscription_billing_daily (first_period_price_usd), so first-period bookings per paywall view need the join: ${SALE_CONV_MULT} x ${(1 - SALE_DISCOUNT).toFixed(1)} = ${(SALE_CONV_MULT * (1 - SALE_DISCOUNT)).toFixed(2)} of before (the sale doubles sign-ups and takes in less first-period money per paywall view). The sale week holds about 150 subscriptions, so both reads use the knob as target with a half-effect floor.`,
+		narrative: `The Labor Day sale (${D(SALE_START)} to ${D(SALE_END)}, exclusive) takes ${SALE_DISCOUNT * 100}% off the first billing period of any plan (offer = labor_day_sale). Paywall conversion per view is ${SALE_CONV_MULT}x the four weeks before. Prices live only in warehouse subscription_billing_daily (first_period_price_usd), so first-period bookings per paywall view need the join: ${SALE_CONV_MULT} x ${(1 - SALE_DISCOUNT).toFixed(1)} = ${(SALE_CONV_MULT * (1 - SALE_DISCOUNT)).toFixed(2)} of before (the sale doubles sign-ups and takes in less first-period money per paywall view). The sale week holds about 150 subscriptions (standard error of the conversion ratio about 9%: sample noise, not a confound), so both reads use the knob as target with a half-effect floor and may grade STRONG on noise.`,
 		mixpanelReport: { type: "Insights + warehouse", events: ["subscription started", "paywall shown"], formula: "A / B", chart: `${D(SALE_START)} - 2026-09-09 vs ${SALE_PRE_FROM.slice(0, 10)} - 2026-09-02`, join: "subscription_billing_daily.first_period_price_usd on date, plan, billing_period" },
 		assertions: [
 			{
@@ -1575,13 +1595,13 @@ FROM ${WH("platform_reliability_daily")}`,
 		id: "H8-registration-speed-by-channel",
 		hook: "H8",
 		archetype: "funnel-ttc-by-segment",
-		narrative: `Visitors from social platforms who do register take longer to do it. The gap from a new reader's first (anonymous) article to "account registered" is log-normal (sigma ${REG_TTC_SIGMA}) with median ${REG_TTC_H} h for search, podcast, and direct visitors and ${SOCIAL_TTC_MULT}x that (${REG_TTC_H * SOCIAL_TTC_MULT} h) for Meta and organic social visitors; every registration lands within ${REG_WINDOW_DAYS} days. Read: median hours first article → registration, visitors with a full ${REG_WINDOW_DAYS}-day window, social over other. About 400 social registrants, so the read uses the knob as target with a half-effect floor.`,
+		narrative: `Visitors from social platforms who do register take longer to do it. The gap from a new reader's first (anonymous) article to "account registered" is log-normal (sigma ${REG_TTC_SIGMA}) with median ${REG_TTC_H} h for search, podcast, and direct visitors and ${SOCIAL_TTC_MULT}x that (${REG_TTC_H * SOCIAL_TTC_MULT} h) for Meta and organic social visitors; every registration lands within ${REG_WINDOW_DAYS} days. Read: median hours first article → registration, visitors with a full ${REG_WINDOW_DAYS}-day window, social over other. About 430 social registrants; the ±10% band is about 1.6 standard errors of the median ratio.`,
 		mixpanelReport: { type: "Funnels", steps: ["article viewed (reader_tier = anonymous)", "account registered"], window: "7 days", measure: "median time to convert", breakdown: "acquisition_channel (Meta ads + social vs the rest)", dateRange: `${D(DATASET_START)} to ${VISIT_READ_END.slice(0, 10)}` },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H5_SQL },
 				select: { s: { where: { grp: "social" } }, o: { where: { grp: "other" } } },
-				expect: { metric: "s.median_hours / o.median_hours", op: ">=", target: SOCIAL_TTC_MULT, floor: half(SOCIAL_TTC_MULT) },
+				expect: { metric: "s.median_hours / o.median_hours", op: "between", target: band(SOCIAL_TTC_MULT) },
 				minCohort: 800,
 			},
 		],
@@ -1589,8 +1609,8 @@ FROM ${WH("platform_reliability_daily")}`,
 	{
 		id: "H9-reading-habit-churn",
 		hook: "H9",
-		archetype: "frequency-sweet-spot",
-		narrative: `Subscribers who stop reading cancel. At the start of each calendar month, a subscriber who was paid for the whole prior month cancels during the month with probability ${CANCEL_Q.low} if they read on fewer than ${READING_DAYS_MIN} distinct days in the prior month, else ${CANCEL_Q.high} (${(CANCEL_Q.low / CANCEL_Q.high).toFixed(0)}x); the cancellation lands at a salted moment in the month and the member goes back to the meter. Read: subscriber-months July-September (subscribed with no plan change in the prior month and active in it), cancel rate by prior-month reading days (< ${READING_DAYS_MIN} vs ${READING_DAYS_MIN}+). About 300 cancellations in the read, so it uses the knob as target with a half-effect floor.`,
+		archetype: "retention-divergence",
+		narrative: `Subscribers who stop reading cancel. At the start of each calendar month, a subscriber who was paid for the whole prior month cancels during the month with probability ${CANCEL_Q.low} if they read on fewer than ${READING_DAYS_MIN} distinct days in the prior month, else ${CANCEL_Q.high} (${(CANCEL_Q.low / CANCEL_Q.high).toFixed(0)}x); the cancellation lands at a salted moment in the month and the member goes back to the meter. Read: subscriber-months July-September (subscribed with no plan change in the prior month and active in it), cancel rate by prior-month reading days (< ${READING_DAYS_MIN} vs ${READING_DAYS_MIN}+). About 370 cancellations in the read; the 4% arm is a per-member hash draw on about 6,400 subscriber-months, so the ratio's standard error is about 12% (sample noise, not a confound) and the read uses the knob as target with a half-effect floor.`,
 		mixpanelReport: { type: "Insights + cohorts", cohort: `subscribers (reader_tier in digital, all_access all month) with article viewed on fewer than ${READING_DAYS_MIN} distinct days in month M-1`, event: "subscription cancelled in month M, uniques", formula: "cancellers / cohort size, low vs high reading" },
 		assertions: [
 			{
