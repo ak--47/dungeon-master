@@ -2,6 +2,66 @@
 
 All notable changes to `@ak--47/dungeon-master`.
 
+## 1.9.0 - Unreleased
+
+Engine fixes found while rebuilding the 22 vertical dungeons. Most of them
+change generated output for a fixed seed. See the 1.9.0 upgrade guide.
+
+### Fixed
+
+- Make generated output independent of the machine time zone. Born users'
+  `created`, SCD rows, ad-spend dates, mirror cutoffs, and the `day()`,
+  `datesBetween()`, and `dateRange()` helpers now use UTC. The same seed and
+  config give byte-identical output under any `TZ`.
+- Give born users a seeded `created` time of day weighted by the soup
+  hour-of-day curve, and pick the birth day weighted by the soup day-of-week
+  curve. `bornRecentBias` is applied as a density in the same draw. Births are
+  uniform across the window, including the first and last day (a rounding error
+  gave both edge days half weight).
+- Pin a born user's first funnel to `created` in every mode. Legacy mode
+  (no `retentionCurve`, no `avgActiveDaysPerUser`) placed the signup a median of
+  ~24 days after birth, which piled volume at the right edge. In
+  `avgActiveDaysPerUser` mode the birth day now opens the active-day plan.
+- `engagementDecay` never drops `isFirstEvent` events or the `isAuthEvent`
+  stitch, and born users' decay anchors on their first emitted event.
+- `worldEvents` `volumeMultiplier` clones stay inside the user's lifetime (not
+  before the first event or the stitch, not after churn or `FIXED_NOW`), and
+  they re-draw their declared event properties instead of copying the source
+  row. Identity, super props, sticky props, group keys, and funnel props are kept.
+- Place `$experiment_started` exactly 1 second before the first real step of
+  its funnel instance. It used to take the step-0 slot, so the real first step
+  landed one variant-scaled step later and funnels from exposure showed a false
+  variant effect.
+- Keep pre-existing users' per-member activity flat across the window. The
+  active-day plan handed rounding leftovers to the earliest days, and
+  `retentionCurve` aged pre-existing users from the window start.
+  `retentionCurve` now shapes born users only.
+- Fill the first window day. Pre-existing users generate a short lead-in before
+  the window (the longest usage funnel's `timeToConvert`), so funnel steps spill
+  into day 0 as they do into every other day. Lead-in events are dropped before
+  hooks run.
+- Start pre-existing users' SCD history before the window, and never emit an
+  SCD row that starts after the window end. A born user's first SCD row is at or
+  after `created`.
+- Add a murmur3 fmix32 finalizer to `hashFloat` (and so `hashCohort` and
+  `applyPathBias`). Salted keys such as `${uid}|a` and `${uid}|b` correlated at
+  |r| 0.05-0.10, so one hidden cohort leaked into another.
+- Reject a funnel step filter that is not `{ prop, op, value }` in the verifier.
+  A map-shaped `where` used to match every event silently.
+
+### Added
+
+- `scripts/verify-stories.mjs` reads gzipped event, profile, and warehouse
+  shards (`.json.gz`, `.csv.gz`) from any directory prefix.
+
+### Known issues
+
+- `tests/engine/sweep-engine.mjs --tier all` passes 190 of 194 combos on
+  2026-10-06. The 4 failures are one decline/180-day run whose last day reads
+  0.67 of the same weekday a week earlier (bar 0.7). The day-to-day ratio has a
+  standard deviation of about 0.24, and the sweep anchor moves with the current
+  date. No bar was changed.
+
 ## 1.8.5 - 2026-09-27
 
 ### Fixed

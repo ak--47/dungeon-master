@@ -1993,7 +1993,7 @@ Import from `@ak--47/dungeon-master/hook-helpers`:
 | `binUsersByEventInRange` | cohort | `(events, eventName, start, end, bins) -> string\|null` | Same, restricted to a time range |
 | `countEventsBetween` | cohort | `(events, eventA, eventB) -> number` | Count events between first A and first B |
 | `userInProfileSegment` | cohort | `(profile, key, values) -> boolean` | Profile property match |
-| **`hashFloat`** | cohort | `(id) -> number` | FNV-1a over the FULL id string with a murmur3 fmix32 finalizer → [0,1). Salted keys (`${uid}|a`, `${uid}|b`) give independent splits (1.8.6). Deterministic bucketing primitive (v1.6) — replaces `charCodeAt(0) % N` idioms, which bias cohort rates on hex-ish id alphabets |
+| **`hashFloat`** | cohort | `(id) -> number` | FNV-1a over the FULL id string with a murmur3 fmix32 finalizer → [0,1). Salted keys (`${uid}|a`, `${uid}|b`) give independent splits (1.9.0). Deterministic bucketing primitive (v1.6) — replaces `charCodeAt(0) % N` idioms, which bias cohort rates on hex-ish id alphabets |
 | **`hashCohort`** | cohort | `(id, pct) -> boolean` | True for ~`pct`% of ids (pct on a 0–100 scale). Membership nests: `pct=5` ⊂ `pct=20` |
 | `cloneEvent` | mutate | `(template, overrides?) -> event` | Shallow clone with overrides **and a fresh `insert_id`** — never hand-roll this (see Section 2.1) |
 | `dropEventsWhere` | mutate | `(events, predicate) -> number` | Remove matching events in-place |
