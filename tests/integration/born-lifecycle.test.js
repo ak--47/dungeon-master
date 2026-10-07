@@ -112,6 +112,46 @@ describe.sequential('born-user lifecycle', () => {
 		expect(deviceOnly).toBe(0);
 	});
 
+	// 1.9.0: a clone of a pre-auth (device-only) first-funnel step takes the
+	// identity of its own time. Before, a clone re-timed after the stitch kept
+	// device-only identity, so a signed-in user showed anonymous events.
+	test('volumeMultiplier clones of pre-auth steps carry user_id after the stitch', async () => {
+		const result = await DUNGEON_MASTER(base({
+			avgDevicePerUser: 2,
+			events: [
+				{ event: 'land', isFirstEvent: true },
+				{ event: 'sign up', isAuthEvent: true },
+				{ event: 'workout', weight: 5 },
+				{ event: 'browse', weight: 3 },
+			],
+			funnels: [
+				{ sequence: ['land', 'sign up', 'workout'], isFirstFunnel: true, conversionRate: 100, timeToConvert: 1 },
+				{ sequence: ['browse', 'workout'], conversionRate: 50, timeToConvert: 2 },
+			],
+			worldEvents: [{ name: 'promo', startDay: 0, duration: 90, volumeMultiplier: 3, affectsEvents: ['land'] }],
+		}));
+		const events = Array.from(result.eventData);
+		const stitchByDevice = new Map();
+		const stitchByUser = new Map();
+		for (const ev of events) {
+			if (ev.event !== 'sign up' || !ev.user_id || !ev.device_id) continue;
+			const t = ms(ev.time);
+			if (!stitchByUser.has(ev.user_id) || t < stitchByUser.get(ev.user_id)) stitchByUser.set(ev.user_id, t);
+			stitchByDevice.set(ev.device_id, ev.user_id);
+		}
+		let anonAfter = 0;
+		let landAfter = 0;
+		for (const ev of events) {
+			if (ev.event !== 'land') continue;
+			if (!ev.user_id) {
+				const user = stitchByDevice.get(ev.device_id);
+				if (user && ms(ev.time) >= stitchByUser.get(user)) anonAfter++;
+			} else if (ms(ev.time) >= stitchByUser.get(ev.user_id)) landAfter++;
+		}
+		expect(landAfter).toBeGreaterThan(50);
+		expect(anonAfter).toBe(0);
+	});
+
 	// Exposure → first step gap, per variant. The exposure marker belongs to the
 	// funnel instance it opens: it must sit a few seconds before that instance's
 	// first real step, independent of the variant's ttcMultiplier.

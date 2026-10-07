@@ -1894,6 +1894,13 @@ export interface WorldEvent {
      * seeing the clone and its time. `injectProps` active at the clone's time are
      * re-applied. The `event` hook does not run on clones (shape them in
      * `everything`). Seeded: same seed, same clones.
+     *
+     * Clones stay inside the user's lifetime (not before the first event, not
+     * after churn or the dataset end; a `user_id` source not before the stitch).
+     * Identity follows the clone's own time (1.9.0): a clone of a born user's
+     * pre-auth (device-only) step that lands after the stitch carries the user's
+     * `user_id` and keeps the stitch `device_id`; one that lands before stays
+     * device-only.
      */
     volumeMultiplier?: number;
     /** Conversion rate modifier during this event. */

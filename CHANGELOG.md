@@ -279,6 +279,15 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   configs with no device switch or desktops only are byte-identical. Configs
   with iOS or Android devices shift their RNG stream: `radio` is a seeded draw
   per mobile event, so a different mobile mix changes later seeded values.
+- Stamp a `worldEvents` volume clone with the identity of its own time. A clone
+  of a born user's pre-auth (device-only) first-funnel step was re-timed across
+  the world-event window, usually after the stitch, and kept device-only
+  identity, so a signed-in user showed anonymous events after signup. A clone
+  that lands at or after the stitch now carries the user's `user_id` (and keeps
+  the stitch `device_id`), like any post-auth event; one that lands before stays
+  device-only. Ecommerce vertical without its hook workaround, 2,000 users:
+  7 device-only events after the stitch, now 0. Output shift: only clones of
+  device-only events gain `user_id`; no RNG draw changes.
 
 ### Added
 
