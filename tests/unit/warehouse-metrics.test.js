@@ -1300,7 +1300,7 @@ describe('materializeWarehouseMetrics', () => {
 					dimensionColumns: [],
 					columns: [
 						{ name: 'date', bqType: 'DATE' },
-						{ name: 'bookings', bqType: 'FLOAT64' },
+						{ name: 'bookings', bqType: 'INT64' },
 						{ name: 'currency', bqType: 'STRING' },
 						{ name: 'is_forecast', bqType: 'BOOL' },
 					],
@@ -1320,7 +1320,7 @@ describe('materializeWarehouseMetrics', () => {
 					columns: [
 						{ name: 'month', bqType: 'DATE' },
 						{ name: 'region', bqType: 'STRING' },
-						{ name: 'arr_usd', bqType: 'FLOAT64' },
+						{ name: 'arr_usd', bqType: 'INT64' },
 						{ name: 'is_forecast', bqType: 'BOOL' },
 					],
 					recommendedAggregation: 'last value',
@@ -1348,5 +1348,27 @@ describe('materializeWarehouseMetrics', () => {
 			{ name: 'report_date', bqType: 'STRING' },
 			{ name: 'is_forecast', bqType: 'STRING' },
 		]);
+	});
+	test('buildManifest types whole-number columns INT64 and fractional or avg/dau columns FLOAT64 (1.9.0)', () => {
+		const specs = [
+			dailySpec({ name: 'clicks_daily', valueColumn: 'clicks', columns: { impressions: ({ value }) => value * 10, ctr: ({ value }) => value / 3 } }),
+			dailySpec({ name: 'avg_amount', valueColumn: 'avg_amount', source: { event: ['purchase'], minus: [], measure: 'avg', property: 'amount', where: null, groupBy: [] } }),
+			dailySpec({ name: 'scaled', valueColumn: 'scaled', scale: 0.5 }),
+		];
+		const events = [
+			ev('purchase', '2024-01-01T10:00:00Z', { amount: 10 }),
+			ev('purchase', '2024-01-01T11:00:00Z', { amount: 20 }),
+			ev('purchase', '2024-01-02T10:00:00Z', { amount: 20 }),
+		];
+		const { materialized } = materialize(specs, events);
+		const manifest = buildManifest(specs, materialized, 'demo_config');
+		const types = (index) => Object.fromEntries(manifest.tables[index].columns.map((column) => [column.name, column.bqType]));
+
+		expect(types(0)).toEqual({ date: 'DATE', clicks: 'INT64', impressions: 'INT64', ctr: 'FLOAT64' });
+		// avg is fractional by definition even when this run's buckets land on whole numbers
+		expect(types(1).avg_amount).toBe('FLOAT64');
+		// a 0.5 scale on counts yields 0.5 steps
+		expect(materialized[2].rows.some((row) => !Number.isInteger(row.scaled))).toBe(true);
+		expect(types(2).scaled).toBe('FLOAT64');
 	});
 });

@@ -835,7 +835,7 @@ each manifest table includes:
 | `timeColumn` | date axis column |
 | `valueColumn` | numeric value column |
 | `dimensionColumns` | copied `groupBy` keys |
-| `columns` | ordered BigQuery schema (`DATE`, `FLOAT64`, `BOOL`, `STRING`) |
+| `columns` | ordered BigQuery schema (`DATE`, `INT64`, `FLOAT64`, `BOOL`, `STRING`); numeric columns are `INT64` when every value is a whole number, else `FLOAT64` (`avg`/`dau` values are always `FLOAT64`) |
 | `recommendedAggregation` | `'sum'` or `'last value'` |
 | `sql` | `SELECT * FROM \`{{DATASET}}.<table>\` ORDER BY <timeColumn>` |
 | `refreshHint` | currently `'hourly'` |

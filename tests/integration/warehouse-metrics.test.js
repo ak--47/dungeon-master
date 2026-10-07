@@ -100,7 +100,7 @@ describe.sequential('warehouseMetrics integration', () => {
 			columns: [
 				{ name: 'date', bqType: 'DATE' },
 				{ name: 'region', bqType: 'STRING' },
-				{ name: 'value', bqType: 'FLOAT64' },
+				{ name: 'value', bqType: 'INT64' },
 			],
 			recommendedAggregation: 'sum',
 			sql: 'SELECT * FROM `{{DATASET}}.bookings` ORDER BY date',

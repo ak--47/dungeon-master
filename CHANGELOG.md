@@ -252,6 +252,16 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   support-desk, and a synthetic attempts config hashed before and after).
   Output shift: born users in configs without `isAuthEvent` (21 technical
   fixtures, no vertical).
+- Type whole-number warehouse columns `INT64` in the manifest. `buildManifest`
+  typed every numeric column `FLOAT64`, so counts such as `loads_booked`,
+  `clicks`, and `requests_billed` loaded into BigQuery as floats. A numeric
+  column is now `INT64` when every emitted value is a whole number, else
+  `FLOAT64`. A value column with an `avg` or `dau` measure, or with no rows,
+  stays `FLOAT64`. `verify-stories` disk mode and the warehouse audit read
+  `INT64` cells as numbers. Logistics vertical: 6 of 14 numeric columns are
+  now `INT64` (`loads_booked`, `clicks`, `impressions`, `leads_reported`,
+  `market_load_posts`, `market_truck_posts`). Output shift: manifest `bqType`
+  only; rows are unchanged.
 
 ### Added
 

@@ -345,7 +345,7 @@ async function loadCsv(filePath, columns) {
 }
 
 function coerceWarehouseCell(value, bqType) {
-	if (bqType === 'FLOAT64') {
+	if (bqType === 'FLOAT64' || bqType === 'INT64') {
 		if (value === '') return '';
 		const numeric = Number(value);
 		return Number.isFinite(numeric) ? numeric : value;

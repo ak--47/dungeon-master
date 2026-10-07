@@ -358,6 +358,10 @@ export const stories = [];
 			const csvBody = fs.readFileSync(csvPath, 'utf8');
 			expect(csvBody).toContain('north, ""enterprise""');
 			expect(csvBody).toContain('renewal\nline');
+			const manifest = JSON.parse(fs.readFileSync(path.join(tmpDir, `${prefix}-WAREHOUSE-MANIFEST.json`), 'utf8'));
+			const columnTypes = Object.fromEntries(manifest.tables[0].columns.map((column) => [column.name, column.bqType]));
+			// whole-number count and score columns land as INT64; disk mode must still coerce them to numbers
+			expect(columnTypes).toMatchObject({ active: 'INT64', quality_score: 'INT64' });
 
 			const inMemory = runVerifyStories([fixturePath, '--in-memory', '--json']);
 			const disk = runVerifyStories([fixturePath, '--data-prefix', path.join(tmpDir, prefix), '--json']);

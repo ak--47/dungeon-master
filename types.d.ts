@@ -2701,7 +2701,8 @@ export interface HookMetaWarehouse extends HookMetaTimeAnchors {
 
 export interface WarehouseManifestColumn {
     name: string;
-    bqType: 'DATE' | 'FLOAT64' | 'BOOL' | 'STRING';
+    /** INT64 when every emitted value is a whole number (never for avg/dau value columns or empty tables); FLOAT64 otherwise. */
+    bqType: 'DATE' | 'INT64' | 'FLOAT64' | 'BOOL' | 'STRING';
 }
 
 export interface WarehouseManifestTable {
