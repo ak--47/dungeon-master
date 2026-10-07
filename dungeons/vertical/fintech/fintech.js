@@ -4,780 +4,1072 @@ import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "@ak--47/dungeon-master/utils";
-import { findFirstSequence, scaleFunnelTTC } from "@ak--47/dungeon-master/hook-helpers";
+import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
 /** @typedef  {import("../../../types").Dungeon} Config */
 
 // ── OVERVIEW ──
 /*
- * NAME:       NexBank
- * APP:        Chime/Revolut-style neobank app. Users open accounts (personal or
- *             business), transact across 7 merchant categories, send transfers,
- *             pay bills, set budgets, invest, apply for loans, and earn
- *             tier-scaled rewards. Core loop runs from onboarding through daily
- *             banking, financial planning, investments, and rewards.
- * SCALE:      10,000 users, ~1.4M events, 121 days (2026-01-01 → 2026-05-01)
- * CORE LOOP:  account opened → app session → balance checked → transaction completed
+ * NAME:       Penny Harbor
+ * APP:        US mobile bank (iOS and Android). Members open a checking account
+ *             in the app, verify their identity, fund it, and get a Visa debit
+ *             card. Features: direct deposit (payroll lands in Penny Harbor),
+ *             Pockets (savings sub-accounts that earn APY), Round-Ups (from
+ *             2026-07-14), Send (P2P and external transfers, instant for a fee),
+ *             Bill Pay with AutoPay, Float (fee-free cash advance for members
+ *             with direct deposit, repaid from the next paycheck), Harbor Invest
+ *             (fractional stocks and ETFs), and budgets. Plans: Free, Plus
+ *             ($4.99/month), Premium ($11.99/month, priority support).
+ * SCALE:      10,000 members (≈4,100 open their account inside the window),
+ *             ~1.16M events, 120 days (2026-06-04 → 2026-10-01, UTC)
+ * CORE LOOP:  app opened → balance checked; card transaction; direct deposit
+ *             received → card spend, bills, Pockets
+ * VALUE MOMENT: direct deposit set up (Penny Harbor becomes the primary account)
  *
- * EVENTS (19):
- *   app session (20) > transaction completed (18) > balance checked (15)
- *   > notification opened (10) > transfer sent (8) > bill paid (6)
- *   > investment made (4) > reward redeemed (4) > budget alert (4)
- *   > budget created (3) > savings goal set (3) > support contacted (3)
- *   > card locked (2) > dispute filed (2) > loan applied (2) > premium upgraded (2)
- *   > account opened (1) > loan approved (1) > bill payment missed (1)
+ * EVENTS (24):
+ *   card transaction > app opened > balance checked > savings deposit > bill paid
+ *   > transfer sent > direct deposit received > budget created > investment order
+ *   placed > plan comparison viewed > biller added > float advance taken / repaid
+ *   > card locked > support ticket opened / resolved > account opened > identity
+ *   verified > round-ups enabled > $experiment_started > account funded > autopay
+ *   enabled > direct deposit set up > plan upgraded
+ *   (hook-generated from schedules: bill paid, direct deposit set up / received,
+ *   float advance taken / repaid, round-ups enabled, Round-Up savings deposits)
  *
- * FUNNELS (8):
- *   - Onboarding:          account opened → app session → balance checked (85%)
- *   - Daily Banking:       app session → balance checked → transaction completed (80%)
- *   - Transfers:           app session → transfer sent → notification opened (50%)
- *   - Bill Payment:        app session → bill paid → notification opened (60%)
- *   - Financial Planning:  budget created → budget alert → savings goal set (40%)
- *   - Investment:          balance checked → investment made → reward redeemed (30%)
- *   - Support:             support contacted → card locked → dispute filed (35%)
- *   - Lending:             loan applied → loan approved → premium upgraded (25%)
+ * FUNNELS (12):
+ *   - Onboarding (first funnel, two copies by credit_history, H1):
+ *       account opened → identity verified → account funded
+ *       (74% established credit file, 41% thin file; 3 h vs 30 h to convert)
+ *   - Money check: app opened → balance checked (85%)
+ *   - Card spend: card transaction (single step)
+ *   - Send money: app opened → transfer sent (60%)
+ *   - Save: app opened → savings deposit (55%, source = manual)
+ *   - Invest: app opened → investment order placed (40%)
+ *   - Budget: app opened → budget created (40%)
+ *   - Bill setup: biller added → autopay enabled (35%, biller_id per biller,
+ *       A/B "Autopay Default" from 2026-07-21, H6)
+ *   - Support: support ticket opened → support ticket resolved (90%, ticket_id;
+ *       70% of engine tickets kept)
+ *   - Upgrade (Free members): plan comparison viewed → plan upgraded (4%)
+ *   - catch-all (engine): app opened, balance checked, card locked
  *
- * USER PROPS:  account_tier, Platform, credit_score_range, income_bracket, account_age_months, total_balance, has_direct_deposit, account_segment, employee_count, annual_revenue, industry, age_range, life_stage
- * SUPER PROPS: account_tier, Platform
- * SCD PROPS:   risk_category (low/medium/high/critical, household_id-scoped, monthly fixed, max 8)
- *              (account_tier is deliberately NOT an SCD: the everything hook pins
- *              each event's account_tier to the user's profile tier so H7/H9
- *              breakdowns are coherent — a changing tier would contradict that.)
- * GROUPS:      household_id (500 households)
+ * USER PROPS:  customer_segment, credit_history, acquisition_channel, plan_tier,
+ *              customer_since, age_band, pay_frequency, direct_deposit_active,
+ *              round_ups_enabled, "Experiment: Autopay Default" (enrolled)
+ * SUPER PROPS: plan_tier (plan at event time: free / plus / premium)
+ * SCD PROPS:   none
+ * GROUPS:      none
+ * WAREHOUSE:   paid_acquisition_daily (spend by paid channel),
+ *              card_authorizations_daily (card processor health by payment channel),
+ *              pocket_savings_daily (Pocket deposits, withdrawals, APY, interest,
+ *              balance by plan)
+ * LOOKUPS:     none — merchant, biller, and plan attributes are denormalized
+ *              onto events and profiles
+ * SOUP:        consumer week (Friday high, Sunday low), US daytime and evening
+ *              hours in UTC (quiet 05-10 UTC)
+ *
+ * IDENTITY: "account opened" is the auth event and the first event of every new
+ * member (carries user_id + device_id). Every event carries user_id; there is no
+ * anonymous pre-signup activity. The two onboarding steps after it (identity
+ * verified, account funded) and every server-side event (direct deposit
+ * received, float advance repaid, AutoPay bill payments, Round-Up savings
+ * deposits, support ticket resolved) carry user_id only and no device fields.
+ * Member-initiated events also carry device_id (about 2 devices per member:
+ * phones and tablets; device fields are sticky per device). session_id is a
+ * diagnostic field the engine re-derives on every event.
+ *
+ * DESIGN NOTES:
+ * - Server-side money movement is generated in the everything hook from
+ *   per-member schedules: payroll paydays (weekly gig payouts Mon-Thu /
+ *   biweekly Friday / semimonthly 15th and month-end; a payday on a weekend or
+ *   a Federal Reserve holiday posts the business day before), monthly bills per
+ *   biller (rent on the 1st, other due days cluster on the 1st and 15th;
+ *   AutoPay posts on the next business day), Float advances inside a pay cycle
+ *   repaid with the next paycheck, and Round-Up sweeps the morning after a day
+ *   with approved card purchases. Each spawned event is a clone of one of the
+ *   member's own events with its event-specific keys replaced (spawnEvent):
+ *   member-initiated spawns clone the member's nearest event with a device,
+ *   server-side spawns drop device fields.
+ * - Warm start: established members already have billers, direct deposit,
+ *   Float advances in flight, and open support tickets. 11% of established
+ *   members opened their account in the 30 days before June 4 (the in-window
+ *   rate of funded signups) and follow the new-member direct-deposit path from
+ *   their opening day, so June's DD setups and dark cuts start at the steady
+ *   rate instead of ramping up.
+ * - Onboarding: the engine gives usage funnels only to members who finish the
+ *   first funnel. Members who never fund the account have no money to move:
+ *   their card and budget events go, their balance is 0, 75% abandon in their
+ *   first week, and the rest keep a salted 20-50% of their app visits.
+ * - New members: retentionCurve thins activity over the member's life; on top
+ *   of it H2's dark cut hits members without direct deposit, and an organic
+ *   lapse (35% of funded new members, uniform day 10-100) hits everyone.
+ *   Lapses cut member-initiated events only; paychecks, AutoPay bills, Float
+ *   repayments, and ticket resolutions keep posting.
+ * - Card realism: merchant names and amounts follow the merchant category;
+ *   online-only categories use the online channel; declines are 2-10% by
+ *   segment with reasons that fit the channel. Balances follow the pay cycle
+ *   for members with direct deposit (high after payday, low before the next).
+ * - Experiment exposure: the engine emits $experiment_started per bill-setup
+ *   run after the start date; the hook keeps each member's first one.
+ * - Warehouse: paid_acquisition_daily spend comes from automated bidding
+ *   against a cost-per-signup target (target × previous 7 days' average
+ *   signups, weekday delivery shape, ±14% seeded noise, never zero), so it
+ *   tracks signups loosely (audit corr ≈ 0.1) and the window cost per signup
+ *   holds at the target. card_authorizations_daily counts processor
+ *   authorizations, including incremental, stand-in, and merchant-initiated
+ *   ones the app never logs (corr ≈ 0.95). pocket_savings_daily adds ACH pulls
+ *   into Pockets made outside the app, subtracts returned deposits, and
+ *   accumulates the balance from deposits − withdrawals + interest (corr ≈ 0.96).
  */
 
 // ── HOOK STORIES ──
 /*
- * NOTE: All cohort effects are HIDDEN — no flag stamping. Discoverable
- * via behavioral cohorts, raw-prop breakdowns (date, account_tier),
- * or funnel time-to-convert.
+ * All effects are hidden: no flag properties. Each is found by a breakdown, a
+ * date comparison, or a cohort. Dates live in the TIMELINE constants and are
+ * shared by hooks, stories, SQL, warehouse columns, and the timeline guide.
  *
- * ---------------------------------------------------------------
- * Hook 1 — PERSONAL VS BUSINESS ACCOUNTS (user)
+ * ─────────────────────────────────────────────────────────────────────────
+ * H1. THIN-FILE ONBOARDING FRICTION (declarative duplicate first funnels)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: new applicants with a thin credit file (credit_history =
+ *   thin_file) need document review, so they finish onboarding at 41% vs 74%
+ *   for established files (0.55x), and take hours instead of minutes.
+ * MIXPANEL: Funnels, account opened → identity verified → account funded,
+ *   7-day window, breakdown user property credit_history.
+ * REAL WORLD: database identity checks clear established files instantly;
+ *   thin files wait on a document upload and manual review.
  *
- * PATTERN: 20% of accounts are business (employee_count, revenue,
- * industry attached) and 80% are personal (age_range, life_stage).
- * Account segment shapes downstream transaction sizes.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H2. DIRECT DEPOSIT IN THE FIRST TWO WEEKS (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: funded new members who do not set up direct deposit within 14 days
+ *   of opening: half of them go dark after day 21. Adoption is salted per
+ *   member (rate by acquisition channel), independent of how active the
+ *   member is. Day-30 retention (app opened in days 30-36) of DD-in-14-days
+ *   members is 1 / (1 − 0.5) = 2x the rest.
+ * MIXPANEL: Funnels, account opened → direct deposit set up, 14-day window,
+ *   filter did account funded; save converters and non-converters as
+ *   cohorts; Retention, account opened → app opened, custom bracket day
+ *   30-36, breakdown by those cohorts.
+ * REAL WORLD: the paycheck makes a bank the primary account.
  *
- * HOW TO FIND IT IN MIXPANEL:
+ * ─────────────────────────────────────────────────────────────────────────
+ * H3. ROUND-UPS LAUNCH (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: Round-Ups launch 2026-07-14. 35% of members turn it on, each on a
+ *   salted day in the 21 days after launch ("round-ups enabled" at an app
+ *   visit; later joiners at their first visit). From then on, every day with
+ *   approved card purchases produces a Round-Up sweep the next morning: a
+ *   "savings deposit" with source = round_up and amount = the day's spare
+ *   change times the member's multiplier. Nothing before launch; manual
+ *   Pocket deposits do not change (honest null).
+ * MIXPANEL: Insights, savings deposit, uniques, breakdown source, weekly;
+ *   share of purchasing members with a round_up deposit after the ramp.
+ * REAL WORLD: automatic micro-saving reaches members who never save by hand.
  *
- *   Report 1: Account Segment Mix
- *   - Report type: Insights
- *   - Event: any event
- *   - Measure: Unique users
- *   - Breakdown: "account_segment"
- *   - Expected: ~80% personal, ~20% business
+ * ─────────────────────────────────────────────────────────────────────────
+ * H4. MOBILE WALLET OUTAGE (everything + warehouse card_authorizations_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: 2026-08-20 to 2026-08-21 (UTC), the card processor's tokenization
+ *   service fails: 65% of would-be approved contactless_wallet transactions
+ *   are declined (decline_reason = technical_error). Half the declined
+ *   members retry with the chip within minutes; 12% of declines lead to a
+ *   support ticket (issue_type = card_declined). The warehouse shows
+ *   processor_status = major_outage and tokenization_error_rate ≈ 0.65 for
+ *   the wallet channel on those days.
+ * MIXPANEL: Insights, card transaction, share authorization_status =
+ *   approved, daily, breakdown payment_channel; join the warehouse status.
+ * REAL WORLD: a wallet token outage looks like "my card doesn't work" until
+ *   someone checks the processor dashboard.
  *
- *   Report 2: Transaction Size by Segment
- *   - Report type: Insights
- *   - Event: "transaction completed"
- *   - Measure: Average of "amount"
- *   - Breakdown: "account_segment"
- *   - Expected: business avg amount ~ 4x personal avg amount
+ * ─────────────────────────────────────────────────────────────────────────
+ * H5. PAID CHANNEL ECONOMICS (everything + warehouse paid_acquisition_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: window spend per Mixpanel signup is $38 paid social, $52 app store
+ *   ads, $72 search ads, $115 comparison sites. Share of funded members who
+ *   set up direct deposit within 14 days: comparison sites 0.62, referral
+ *   0.55, organic 0.45, search 0.45, app store 0.32, paid social 0.18 — the
+ *   cheapest signups are the most expensive direct-deposit customers.
+ * MIXPANEL: Insights, account opened by acquisition_channel joined to
+ *   paid_acquisition_daily.spend_usd; Funnels account opened → direct deposit
+ *   set up, 14-day window, breakdown acquisition_channel.
+ * REAL WORLD: comparison-site shoppers are switching banks on purpose; social
+ *   ad installs are curious, not committed.
  *
- * REAL-WORLD ANALOGUE: Neobanks serve both consumers and small
- * businesses with the same core product, but business activity is
- * meaningfully higher value per transaction.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H6. AUTOPAY DEFAULT EXPERIMENT (declarative funnel experiment)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: from 2026-07-21 members who add a biller split 50/50; "Autopay On"
+ *   pre-selects AutoPay and multiplies the share of new billers with AutoPay
+ *   by 1.6 (35% → 56%). Biller adds per member do not change (honest null).
+ * MIXPANEL: Funnels, biller added → autopay enabled, totals, hold biller_id
+ *   constant, 1-day window, breakdown user property "Experiment: Autopay
+ *   Default".
+ * REAL WORLD: defaults decide most settings.
  *
- * ---------------------------------------------------------------
- * Hook 2 — PAYDAY PATTERNS (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * H7. MANUAL BILL PAYERS PAY LATE (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: a bill paid by hand is late 18% of the time; an AutoPay payment
+ *   is late 3% of the time (insufficient funds, retried). Every bill payment
+ *   comes from a biller's monthly schedule; AutoPay applies from the moment
+ *   it is turned on for that biller.
+ * MIXPANEL: Insights, bill paid, total, breakdown autopay and payment_status.
+ * REAL WORLD: people forget due dates; machines do not.
  *
- * PATTERN: Direct deposit transactions are 3x larger on the 1st and
- * 15th of the month. Transfers are ~1.6x larger on the 1st-3rd and
- * 15th-17th (60% likelihood × 2x boost). No flag — discover via day-of-month
- * breakdown on raw amount.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H8. SUMMER SAVER BOOST (everything + warehouse pocket_savings_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: 2026-08-03 to 2026-09-30 Plus and Premium Pockets earn 5.00% APY
+ *   (from 3.50% / 4.00%); Free stays 0.50%. Plus and Premium members (plan at
+ *   event time) make 1.5x the manual Pocket deposits per app visit; Free is
+ *   unchanged. The rates exist only in the warehouse.
+ * MIXPANEL: Insights, savings deposit (source = manual) and app opened,
+ *   formula A/B, breakdown plan_tier, weekly; 8 boost weeks vs the 8 weeks
+ *   before; join pocket_savings_daily.apy_pct.
+ * REAL WORLD: a rate bump pulls idle cash into savings.
  *
- * HOW TO FIND IT IN MIXPANEL:
+ * ─────────────────────────────────────────────────────────────────────────
+ * H9. PREMIUM PRIORITY SUPPORT (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: time from ticket opened to resolved is 0.4x for Premium members
+ *   (plan when the ticket was opened) vs Free and Plus.
+ * MIXPANEL: Funnels, support ticket opened → support ticket resolved, hold
+ *   ticket_id constant, median time to convert, breakdown plan_tier.
+ * REAL WORLD: a dedicated queue with more agents per ticket.
  *
- *   Report 1: Direct Deposit Size by Day of Month
- *   - Report type: Insights
- *   - Event: "transaction completed"
- *   - Measure: Average of "amount"
- *   - Filter: "transaction_type" = "direct_deposit"
- *   - Breakdown: day of month
- *   - Expected: 1st and 15th avg ~ 3x other days
+ * ─────────────────────────────────────────────────────────────────────────
+ * H10. BUDGET MAGIC NUMBER (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: members who create 3 or more budgets in the window put 1.6x as
+ *   much into each manual Pocket deposit as members with 0-2 budgets (a step
+ *   at 3, flat on either side).
+ * MIXPANEL: Insights, savings deposit (source = manual), average amount,
+ *   breakdown by cohorts on the count of budget created (0-1 / 2 / 3+).
+ * REAL WORLD: members who plan their spending know what they can set aside.
  *
- *   Report 2: Post-Payday Transfer Spending by Day of Month
- *   - Report type: Insights
- *   - Event: "transfer sent"
- *   - Measure: Average of "amount"
- *   - Breakdown: day of month
- *   - Expected: 1-3 and 15-17 avg ~ 1.6x other days
+ * ═════════════════════════════════════════════════════════════════════════
+ * EXPECTED METRICS SUMMARY (measured: data/verify-fintech, 2026-10-07)
+ * ═════════════════════════════════════════════════════════════════════════
+ * Hook | Metric                                        | Derivation              | Expected | Measured
+ * -----|-----------------------------------------------|-------------------------|----------|---------
+ * H1   | 7-day onboarding thin_file / established      | 41 / 74                 | 0.554    | 0.556 (41.0% vs 73.7%)
+ * H2   | D30 retention DD-in-14d / rest, funded new    | 1 / (1 − DARK_SHARE)    | 2.00     | 2.031 (82.5% vs 40.6%)
+ * H3   | round_up deposits before launch               | exact purity            | 0        | 0
+ * H3   | purchasers with a round_up deposit, post-ramp | ROUNDUP_ADOPT           | 0.35     | 0.345
+ * H4   | wallet / other approval, outage vs ±7 days    | 1 − OUTAGE_FAIL         | 0.35     | 0.356 (33.8% vs 94.8% wallet)
+ * H4   | warehouse tokenization_error_rate, outage     | OUTAGE_FAIL             | 0.65     | 0.660
+ * H5   | spend per signup comparison / paid social     | 115 / 38                | 3.03     | 3.087 ($116.12 vs $37.61)
+ * H5   | DD-in-14d per signup comparison / paid social | 0.62 / 0.18 (floor 2.22)| 3.44     | 4.199 (43.4% vs 10.3%, STRONG)
+ * H6   | per-biller AutoPay Autopay On / Control       | AUTOPAY_DEFAULT_MULT    | 1.60     | 1.651 (56.9% vs 34.5%)
+ * H6   | Autopay On share of exposed members           | equal 2-arm hash        | 0.50     | 0.490
+ * H7   | late share, paid by hand                      | LATE_SHARE.manual       | 0.18     | 0.169
+ * H7   | late share, AutoPay                           | LATE_SHARE.autopay      | 0.03     | 0.029
+ * H8   | manual deposits per visit Plus+Premium, boost | BOOST_DEPOSIT_MULT      | 1.50     | 1.491
+ * H8   | same, Free (control)                          | unchanged               | 1.00     | 0.981
+ * H9   | median resolution Premium / Free+Plus         | SUPPORT_PLAN_MULT       | 0.40     | 0.399 (6.7 h vs 16.8 h)
+ * H10  | avg manual deposit 3+ budgets / 0-2           | BUDGET_SAVE_MULT        | 1.60     | 1.598 ($163.70 vs $102.44)
+ * H10  | avg manual deposit 2 budgets / 0-1 (control)  | flat below threshold    | 1.00     | 0.989
+ * ═════════════════════════════════════════════════════════════════════════
  *
- * REAL-WORLD ANALOGUE: Bi-monthly payroll cycles drive predictable
- * spikes in deposit and outbound spending volume.
- *
- * ---------------------------------------------------------------
- * Hook 3 — FRAUD DETECTION (everything)
- *
- * PATTERN: ~3% of users experience a fraud burst at the timeline
- * midpoint: 3-5 rapid high-value transactions, then card locked
- * (reason="suspicious_activity"), dispute filed (reason="unauthorized"),
- * and support contacted (issue_type="card"). No flag — derive cohort
- * by joining users who had all three event types within ~1 hour.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Fraud Cohort
- *   - Report type: Cohort builder
- *   - Filter: did 3+ "transaction completed" (purchase, credit) inside one
- *     hour, THEN "card locked" with reason="suspicious_activity" AND
- *     "dispute filed" with reason="unauthorized" within 1 hour
- *   - Expected: ~3% of SUPPORT-HISTORY users (users with card-locked +
- *     dispute-filed events). The lock+dispute pair alone is NOT a fraud
- *     signature — the organic Support funnel (support contacted → card
- *     locked → dispute filed) emits adjacent lock/dispute pairs whose
- *     random reasons collide ~4x more often than the hook fires. The
- *     preceding txn burst is what organic funnels cannot produce. The
- *     denominator is support-history users because the hook clones its
- *     lock/dispute from the user's own organic events — users without
- *     both templates are picked but leave no signature (~38% at this
- *     schema, measured; the factor cancels when you scope the cohort
- *     to support-history users).
- *
- *   Report 2: Fraud Resolution Funnel
- *   - Report type: Funnels
- *   - Steps: "card locked" -> "dispute filed" -> "support contacted"
- *   - Filter: card locked.reason = "suspicious_activity"
- *   - Expected: high completion across all three resolution steps
- *
- * REAL-WORLD ANALOGUE: A small but consistent slice of accounts
- * triggers fraud pipelines every cycle, generating the bulk of
- * dispute and support load.
- *
- * ---------------------------------------------------------------
- * Hook 4 — LOW BALANCE CHURN (everything)
- *
- * PATTERN: Users with 3+ "balance checked" events where account_balance
- * < $8K lose 50% of their events after day 30. No flag — derive cohort
- * by counting low-balance checks per user. (account_balance centers ~$25K
- * — weighNumRange(0, 50000) mean — so the $8K threshold puts ~10% of
- * checks under it and the 3+-check cohort at a minority of users; a $15K
- * threshold would sweep in the majority and erase the contrast.)
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Activity by Low Balance Cohort
- *   - Cohort A: users with >= 3 "balance checked" where account_balance < 8000
- *   - Cohort B: users with < 3
- *   - Event: any event
- *   - Measure: Total per user, line chart by day
- *   - Expected: A growth post-d30 ~ 0.5x B's growth (suppressed)
- *
- *   Report 2: Activity Decline Timeline
- *   - Report type: Insights (with cohort A above)
- *   - Event: any event
- *   - Measure: Total
- *   - Line chart by day
- *   - Expected: post-d30/pre-d30 event ratio ~ 3.0 for B (91 post days /
- *     30 pre days) vs ~ 1.5 for A (post-d30 events halved) — A/B ~ 0.5.
- *     Cohorts are classified from OUTPUT counts, so some churned users whose
- *     dropped events took them under 3 visible low checks land in B,
- *     pulling the observed A/B slightly above 0.5.
- *
- * REAL-WORLD ANALOGUE: Customers running thin balances lose trust
- * in the platform and migrate their primary banking elsewhere.
- *
- * ---------------------------------------------------------------
- * Hook 5 — BUDGET DISCIPLINE (everything)
- *
- * PATTERN: Disciplined budgeters — users with 3+ "budget created"
- * events (~77% of users; median is ~6 budgets) — get 2x savings
- * contributions, 1.5x investment amounts, and extra cloned savings
- * goal events. No flag — derive cohort behaviorally. (The gate is 3+,
- * not 1+: nearly every user creates at least one budget, so a 1+ gate
- * leaves a ~0.4% control cohort — unmeasurable. The 0-2 band is ~14%
- * of users: a real comparison group.)
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Savings Contribution by Budget Cohort
- *   - Cohort A: users with >= 3 "budget created" events
- *   - Cohort B: users with 0-2
- *   - Event: "savings goal set"
- *   - Measure: Average of "monthly_contribution"
- *   - Expected: A ~ 2x B
- *
- *   Report 2: Investment Size by Budget Cohort
- *   - Cohort A vs B (as above)
- *   - Event: "investment made"
- *   - Measure: Average of "amount"
- *   - Expected: A ~ 1.5x B
- *
- * REAL-WORLD ANALOGUE: Active budget tooling correlates strongly
- * with healthier savings rates and broader product adoption.
- *
- * ---------------------------------------------------------------
- * Hook 6 — AUTO-PAY LOYALTY (event)
- *
- * PATTERN: Manual payers (auto_pay=false) miss 30% of their bill
- * payments — those events are renamed to "bill payment missed".
- * Auto-pay users never miss.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Bill Outcomes by Manual vs Auto-Pay
- *   - Report type: Insights
- *   - Events: "bill paid" and "bill payment missed"
- *   - Measure: Total
- *   - Expected: missed events appear only for manual payers, ~30% rate
- *
- *   Report 2: Bill Completion Rate by Auto-Pay
- *   - Report type: Insights
- *   - Event: "bill paid"
- *   - Measure: Total
- *   - Breakdown: "auto_pay"
- *   - Expected: auto_pay=false ~ 70% completion vs auto_pay=true ~ 100%
- *
- * REAL-WORLD ANALOGUE: Auto-pay locks users into a frictionless
- * payment cadence that virtually eliminates missed bills.
- *
- * ---------------------------------------------------------------
- * Hook 7 — PREMIUM TIER VALUE (everything)
- *
- * PATTERN: Premium-tier users get 3x reward values and 2x sell
- * returns on investments. Plus tier gets 1.5x rewards. No flag —
- * mutates raw "value"/"amount" properties; discover via account_tier breakdown.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Reward Value by Tier
- *   - Report type: Insights
- *   - Event: "reward redeemed"
- *   - Measure: Average of "value"
- *   - Breakdown: "account_tier"
- *   - Expected: Premium ~ 3x Basic avg, Plus ~ 1.5x Basic avg
- *
- *   Report 2: Investment Sell Amount by Tier
- *   - Report type: Insights
- *   - Event: "investment made"
- *   - Measure: Average of "amount"
- *   - Filter: "action" = "sell"
- *   - Breakdown: "account_tier"
- *   - Expected: Premium ~ 2x baseline; Basic/Plus baseline
- *
- * REAL-WORLD ANALOGUE: Premium subscription tiers justify their
- * price by delivering visibly better cashback and investment perks.
- *
- * ---------------------------------------------------------------
- * Hook 8 — MONTH-END ANXIETY (everything)
- *
- * PATTERN: On days >= 28 of the calendar month, app sessions run
- * 40% longer and reported balances are 30% lower. No flag — discover
- * via day-of-month breakdown.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Session Duration by Day of Month
- *   - Report type: Insights
- *   - Event: "app session"
- *   - Measure: Average of "session_duration_sec"
- *   - Breakdown: day of month
- *   - Expected: days >= 28 ~ 1.4x other days
- *
- *   Report 2: Balance by Day of Month
- *   - Report type: Insights
- *   - Event: "balance checked"
- *   - Measure: Average of "account_balance"
- *   - Breakdown: day of month
- *   - Expected: days >= 28 ~ 0.7x other days
- *
- * REAL-WORLD ANALOGUE: Users obsessively check balances at month
- * end as bills hit and runway tightens.
- *
- * ---------------------------------------------------------------
- * Hook 9 — ONBOARDING TIME-TO-CONVERT (everything)
- *
- * PATTERN: Premium tier users complete the Onboarding funnel 1.5x
- * faster (factor 0.67); Basic users 1.33x slower (factor 1.33).
- * Applied in the everything hook via findFirstSequence + scaleFunnelTTC,
- * so the effect is visible in both Mixpanel funnels and cross-event
- * MIN→MIN SQL queries.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Onboarding Median Time-to-Convert by Tier
- *   - Funnels > "account opened" -> "app session" -> "balance checked"
- *   - Measure: MEDIAN time to convert (not average — TTC is heavy-tailed
- *     with a 30-day window, and converter cohorts are small enough that a
- *     single multi-day straggler dominates the mean; the median ratio
- *     recovers the exact engineered factors)
- *   - Breakdown: account_tier
- *   - Expected: median basic/premium ~ 1.33/0.67 ≈ 2x; plus sits between
- *
- * ---------------------------------------------------------------
- * Hook 10 — TRANSACTION-COUNT MAGIC NUMBER (everything)
- *
- * PATTERN: Sweet 12-19 transactions/user → +40% on investment-made
- * amount (engaged transactor compounds wealth). Over 20+ → drop 20%
- * of premium-upgraded events. No flag. (Bands measured from the actual
- * per-user txn distribution: median 12, p75 17, p90 20, max ~33 —
- * sweet brackets the median-to-p85 mass ~40%, over is the top ~12%;
- * the pre-calibration 20-35/36+ bands left the over band EMPTY.)
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Avg Investment Amount by Transaction Bucket
- *   - Cohort A: users with 12-19 "transaction completed"
- *   - Cohort B: users with 1-11
- *   - Event: "investment made"
- *   - Measure: Average of "amount"
- *   - Expected: A ~ 1.4x B
- *
- *   Report 2: Premium Upgrade RATE on Heavy Transactors
- *   - Cohort C: users with >= 20 "transaction completed"
- *   - Cohort A: users with 12-19
- *   - Formula: total "premium upgraded" / total NON-TRANSACTION events,
- *     per cohort
- *   - Expected: C's upgrade share ~ 0.8x A's. (Raw upgrades-per-user RISES
- *     with activity — heavier users emit more of every event — and the
- *     over band is SELECTED for high txn counts, which mechanically tilts
- *     its event mix toward transactions. Normalizing by non-transaction
- *     events removes both distortions; what remains is the 20% drop.)
- *
- * REAL-WORLD ANALOGUE: Engaged transactors invest more; over-active
- * already extract value without upgrading.
- *
- * ===================================================================
- * EXPECTED METRICS SUMMARY
- * ===================================================================
- *
- * Hook                  | Metric                | Baseline | Effect    | Ratio
- * ----------------------|-----------------------|----------|-----------|------
- * Personal vs Business  | Avg transaction amt   | 1x       | 4x        | 4x
- * Payday Patterns       | Deposit amt 1st/15th  | 1x       | 3x        | 3x
- * Fraud Detection       | Burst-sig users /     | 0%       | ~3%       | --
- *                       |  support-history users|          |           |
- * Low Balance Churn     | D30+ events (cohort)  | 1x       | 0.5x      | -50%
- * Budget Discipline     | Savings contribution  | 1x       | 2x        | 2x
- *                       |  (3+ budgets vs 0-2)  |          |           |
- * Auto-Pay Loyalty      | missed/paid ratio     | 0        | ~0.22     | 0.18/0.82
- * Premium Tier Value    | Reward value (Premium)| 1x       | 3x        | 3x
- * Month-End Anxiety     | Session duration d28+ | 1x       | 1.4x      | 1.4x
- * Onboarding T2C (H9)   | MEDIAN TTC basic/prem | 1x       | 1.33/0.67 | ~2x
- * Txn-Count Magic Num   | sweet investment amt  | 1x       | 1.4x      | 1.4x
- * Txn-Count Magic Num   | over upgrade share    | 1x       | 0.8x      | -20%
+ * H5's direct-deposit read is a knob floor: paid social has about 80
+ * direct-deposit customers in the 14-day cohort (relative SE about 12%), so
+ * the read uses the knob ratio as target with a floor at half the effect; it
+ * lands above the ±10% band and grades STRONG. Every other read is inside its
+ * knob ±10% band. Honest nulls the eval checks: Round-Ups did not change
+ * manual Pocket deposits (0.97x, z ≈ −1.0), card spending on the Federal
+ * Reserve holidays matched the same weekdays (|z| < 1), and members hit by the
+ * wallet outage did not cut card use afterwards (z ≈ +1.0).
  */
 
 // ── SCALE ──
 const SEED = "harness-fintech";
 const NUM_USERS = 10_000;
-const DATASET_START = "2026-01-01T00:00:00Z";
-const DATASET_END = "2026-05-01T23:59:59Z";
+const DATASET_START = "2026-06-04T00:00:00Z";
+const DATASET_END = "2026-10-01T23:59:59Z"; // 120 days
 const EVENTS_PER_DAY = 1.2;
 const token = process.env.MP_TOKEN || "your-mixpanel-token";
 
 const chance = u.initChance(SEED);
 
-// ── KNOBS (tweak these to reshape stories) ──
-// H1: Personal vs Business
-const BUSINESS_LIKELIHOOD = 20;
-const BUSINESS_TXN_MULT = 4;
+// ── TIMELINE (shared by hooks, stories, SQL, warehouse columns, guides) ──
+const ROUNDUPS_LAUNCH = "2026-07-14T00:00:00Z";     // Round-Ups launch
+const AUTOPAY_TEST_START = "2026-07-21T00:00:00Z";  // "Autopay Default" A/B starts
+const BOOST_START = "2026-08-03T00:00:00Z";         // Summer Saver Boost (Plus/Premium 5.00% APY)
+const BOOST_END = "2026-10-01T00:00:00Z";           // exclusive: through Sep 30
+const OUTAGE_START = "2026-08-20T00:00:00Z";        // processor tokenization outage (wallet payments)
+const OUTAGE_END = "2026-08-22T00:00:00Z";          // exclusive (2 days)
+const BANK_HOLIDAYS = ["2026-06-19", "2026-07-03", "2026-09-07"]; // Federal Reserve holidays in the window
 
-// H2: Payday Patterns
-const PAYDAY_DEPOSIT_MULT = 3;
-const PAYDAY_TRANSFER_MULT = 2.0;
-const PAYDAY_TRANSFER_LIKELIHOOD = 60;
+const ms = (iso) => dayjs.utc(iso).valueOf();
+const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
+const MIN_MS = 60_000;
+const START_MS = ms(DATASET_START);
+const END_MS = ms(DATASET_END);
 
-// H3: Fraud Detection — fires for ~3% of users, but only leaves a signature
-// when the user has organic card-locked AND dispute-filed template events to
-// clone (~62% of users, measured — they come from the Support funnel). The
-// honest detectable rate is therefore ~3% of SUPPORT-HISTORY users, which is
-// what the story asserts (the template factor cancels in that denominator).
-// The bare lock+dispute pair is NOT usable as the detector: organic Support
-// funnels emit adjacent pairs whose random reasons collide ~4x more often
-// than the hook fires. The preceding 3-txn burst is the discriminator.
-const FRAUD_LIKELIHOOD = 3;
-const FRAUD_BURST_MIN = 3;
-const FRAUD_BURST_MAX = 5;
-const FRAUD_AMOUNT_MIN = 500;
-const FRAUD_AMOUNT_MAX = 3000;
+// ── WEEKLY AND DAILY RHYTHM (soup) ──
+// Sun..Sat: paydays make Friday the busiest day; Sunday is the quietest.
+const DOW_WEIGHTS = [0.8, 0.96, 0.95, 0.96, 1.0, 1.12, 0.9];
+// UTC hours: US members, so the day starts around 11-12 UTC (7-8am ET) and
+// runs into the US evening (00-03 UTC); the quiet hours are the US night.
+const HOUR_WEIGHTS = [0.9, 0.78, 0.62, 0.46, 0.32, 0.22, 0.16, 0.13, 0.14, 0.2, 0.3, 0.45,
+	0.6, 0.72, 0.8, 0.86, 0.9, 0.93, 0.94, 0.92, 0.92, 0.95, 1.0, 0.97];
 
-// H4: Low Balance Churn — account_balance is weighNumRange(0, 50000), a
-// normal centered ~$25K (sd ≈ $12.5K). $8K ≈ 10th percentile per check, so
-// the 3+-low-check cohort stays a minority with real contrast against the
-// rest. ($15K would capture ~22% per check and sweep in most active users.)
-const LOW_BALANCE_THRESHOLD = 8000;
-const LOW_BALANCE_CHECK_THRESHOLD = 3;
-const LOW_BALANCE_CHURN_CUTOFF_DAYS = 30;
-const LOW_BALANCE_DROP_LIKELIHOOD = 50;
+// ── KNOBS ──
+// segments (personas) and credit files
+const SEGMENTS = {
+	everyday: { weight: 38, mult: 1.0 },
+	tight_budget: { weight: 24, mult: 1.15 },
+	saver: { weight: 14, mult: 0.85 },
+	gig_worker: { weight: 14, mult: 1.3 },
+	student: { weight: 10, mult: 0.8 },
+};
+const THIN_FILE_SHARE = { student: 0.7, gig_worker: 0.35, everyday: 0.2, tight_budget: 0.25, saver: 0.1 };
 
-// H5: Budget Discipline — gate is 3+ budgets, not 1+: budget-created lands
-// ~5.6 events/user (median 6, measured), so only ~0.4% of users have ZERO
-// budgets — no control group. The 0-2 band is ~14% of users (measured at
-// 1500-user iteration), a real comparison cohort.
-const BUDGET_DISCIPLINE_MIN = 3;
-const BUDGET_SAVINGS_MULT = 2;
-const BUDGET_INVESTMENT_MULT = 1.5;
-const BUDGET_CLONE_LIKELIHOOD = 50;
+// H1 onboarding by credit file (declarative duplicate first funnels)
+const ONBOARD_CONV = 74;
+const THIN_FILE_MULT = 0.55;
+const THIN_ONBOARD_CONV = Math.round(ONBOARD_CONV * THIN_FILE_MULT); // 41
+const ONBOARD_TTC_H = { established: 3, thin_file: 30 };
+const ONBOARD_STEPS = ["account opened", "identity verified", "account funded"];
 
-// H6: Auto-Pay Loyalty
-const MISSED_BILL_LIKELIHOOD = 30;
+// onboarding abandonment for members who never fund the account
+const UNFUNDED_ABANDON_SHARE = 0.75;
+const UNFUNDED_ABANDON_DAYS = [0.5, 6];
+const UNFUNDED_KEEP = [0.2, 0.5];
 
-// H7: Premium Tier Value
-const PREMIUM_REWARD_MULT = 3;
-const PLUS_REWARD_MULT = 1.5;
-const PREMIUM_INVEST_SELL_MULT = 2;
+// H2 direct deposit in the first 14 days → retention
+const DD_WINDOW_DAYS = 14;
+const DARK_SHARE = 0.5;            // funded new members without DD in 14 days who go dark after day 21
+const DARK_AFTER_DAYS = 21;
+const LATE_DD_SHARE = 0.12;        // non-adopters who set up DD on day 15-60 (if still active)
+const LATE_DD_DAYS = [15, 60];
+const LAPSE_SHARE = 0.35;          // organic lapse, every funded new member
+const LAPSE_DAYS = [10, 100];
+const RETENTION_DAY = 30;
+const PREEXISTING_DD_SHARE = 0.55; // established members with DD from before June 4
+const DD_SWITCH_SHARE = 0.04;      // established members without DD who switch it in during the window
+const RECENT_JOINER_SHARE = 0.11;  // established members who opened their account in the 30 days before June 4
+const RECENT_JOINER_DAYS = 30;     // (the in-window signup rate, so first-weeks pipelines start warm)
 
-// H8: Month-End Anxiety
-const MONTH_END_DAY_THRESHOLD = 28;
-const MONTH_END_SESSION_MULT = 1.4;
-const MONTH_END_BALANCE_MULT = 0.7;
+// H5 paid channel economics (warehouse paid_acquisition_daily)
+const CHANNEL_WEIGHTS = { organic: 24, referral: 16, paid_social: 22, search_ads: 14, app_store_ads: 12, comparison_sites: 12 };
+const PAID_CHANNELS = ["paid_social", "search_ads", "app_store_ads", "comparison_sites"];
+const DD_ADOPT = { comparison_sites: 0.62, referral: 0.55, organic: 0.45, search_ads: 0.45, app_store_ads: 0.32, paid_social: 0.18 };
+const CPL_USD = { paid_social: 38, search_ads: 72, app_store_ads: 52, comparison_sites: 115 };
+const BORN_PCT = 40;
+const WINDOW_DAYS = 120;
 
-// H9: Onboarding TTC
-const TTC_PREMIUM_FACTOR = 0.67;
-const TTC_BASIC_FACTOR = 1.33;
-const TTC_MAX_GAP_MINUTES = 60 * 24 * 30; // 30-day max gap between steps
+// expected signups per day by paid channel (the media plan)
+const PLAN_SIGNUPS_PER_DAY = Object.fromEntries(PAID_CHANNELS.map((ch) => {
+	const totalW = Object.values(CHANNEL_WEIGHTS).reduce((a, b) => a + b, 0);
+	return [ch, (NUM_USERS * BORN_PCT / 100) * (CHANNEL_WEIGHTS[ch] / totalW) / WINDOW_DAYS];
+}));
+// Sun..Sat, mean 1: delivery follows the weekly signup rhythm, with a flat floor
+const SPEND_FLAT_SHARE = 0.4;
+const SPEND_WEEKDAY = (() => {
+	const m = DOW_WEIGHTS.reduce((a, b) => a + b, 0) / DOW_WEIGHTS.length;
+	return DOW_WEIGHTS.map((w) => SPEND_FLAT_SHARE + (1 - SPEND_FLAT_SHARE) * w / m);
+})();
+const SPEND_NOISE = 0.14;
+// automated bidding against a cost-per-signup target: each day's budget is the
+// target × the channel's average daily signups over the previous 7 days (the
+// media plan fills the first week), weekday delivery shape, seeded noise
+const SPEND_LOOKBACK_DAYS = 7;
+const PLATFORM_INSTALL_INFLATION = 1.2;
+const CPC_USD = { paid_social: 1.1, search_ads: 3.4, app_store_ads: 1.6, comparison_sites: 6.5 };
+const CTR = { paid_social: 0.009, search_ads: 0.045, app_store_ads: 0.03, comparison_sites: 0.02 };
 
-// H10: Transaction-Count Magic Number — bands MEASURED from the per-user txn
-// distribution at the 1500-user iteration (per-user density is independent
-// of numUsers): median 12, p75 17, p90 20, max ~33. Sweet 12-19 brackets the
-// median-to-p85 mass (~40% of users); over 20+ is the top ~12%. The earlier
-// weight-arithmetic estimate (~24 median → 20-35/36+ bands) left the over
-// band EMPTY — bands must come from the measured distribution, not from
-// event-weight arithmetic.
-const TXN_SWEET_MIN = 12;
-const TXN_SWEET_MAX = 19;
-const TXN_OVER_THRESHOLD = 20;
-const TXN_INVESTMENT_BOOST = 1.4;
-const TXN_PREMIUM_DROP_LIKELIHOOD = 20;
+// H3 Round-Ups
+const ROUNDUP_ADOPT = 0.35;
+const ROUNDUP_RAMP_DAYS = 21;
+const ROUNDUP_MULTIPLIERS = [1, 1, 1, 1, 2, 2, 3];
 
-// ── HELPER FUNCTIONS ──
-function handleUserHooks(record) {
-	// H1: PERSONAL VS BUSINESS ACCOUNTS — role-based attrs.
-	const isBusiness = chance.bool({ likelihood: BUSINESS_LIKELIHOOD });
-	if (isBusiness) {
-		record.account_segment = "business";
-		record.employee_count = chance.integer({ min: 5, max: 500 });
-		record.annual_revenue = chance.integer({ min: 100000, max: 10000000 });
-		record.industry = chance.pickone(["tech", "retail", "food", "services", "healthcare"]);
+// H4 wallet outage (warehouse card_authorizations_daily)
+const OUTAGE_CHANNEL = "contactless_wallet";
+const OUTAGE_FAIL = 0.65;          // share of would-be approved wallet transactions declined
+const OUTAGE_RETRY = 0.5;          // declined members who retry with the chip
+const OUTAGE_TICKET = 0.12;        // declined transactions that lead to a support ticket
+const BASE_DECLINE = { tight_budget: 0.1, student: 0.05, gig_worker: 0.05, everyday: 0.035, saver: 0.02 };
+
+// H6 Autopay Default experiment on the bill setup funnel
+const AUTOPAY_EXPERIMENT = "Autopay Default";
+const AUTOPAY_VARIANT = "Autopay On";
+const EXP_KEY = `Experiment: ${AUTOPAY_EXPERIMENT}`;
+const AUTOPAY_CONV = 35;
+const AUTOPAY_DEFAULT_MULT = 1.6;
+
+// H7 late payments by payment method
+const LATE_SHARE = { manual: 0.18, autopay: 0.03 };
+const PREEXISTING_AUTOPAY_SHARE = 0.42;
+const PREEXISTING_BILLERS = [0.1, 0.22, 0.3, 0.23, 0.15]; // P(0..4 billers) for established members
+
+// H8 Summer Saver Boost (warehouse pocket_savings_daily)
+const PAID_PLANS = ["plus", "premium"];
+const APY_BASE = { free: 0.5, plus: 3.5, premium: 4.0 };
+const APY_BOOST = 5.0;
+const BOOST_DEPOSIT_MULT = 1.5;
+const BOOST_READ_DAYS = 56;        // story read: first 8 boost weeks vs the 8 weeks before
+
+// H9 support resolution by plan
+const SUPPORT_PLAN_MULT = { premium: 0.4, plus: 1, free: 1 };
+const RESOLVE_MEDIAN_H = 20;
+const CHANNEL_SPEED = { chat: 0.7, phone: 0.5, email: 1.6, in_app: 1.0 };
+const TICKET_KEEP = 0.7;           // share of engine support units kept (realistic contact rate)
+
+// H10 budget magic number
+const BUDGET_MAGIC = 3;
+const BUDGET_SAVE_MULT = 1.6;
+
+// plans
+const PLAN_FEE = { plus: 4.99, premium: 11.99 };
+const FLOAT_LIMIT = { free: 50, plus: 150, premium: 250 };
+const FLOAT_CYCLE_P = { tight_budget: 0.35, gig_worker: 0.2, student: 0.18, everyday: 0.07, saver: 0.02 };
+
+// ── DATA ARRAYS ──
+const MERCHANTS = {
+	grocery: ["Greenbasket Market", "FreshWay Foods", "Corner Pantry", "Harvest Fair Grocers", "ValueCart"],
+	dining: ["Lucky Noodle", "Burger Barn", "Bean & Brew Coffee", "Taqueria Sol", "Slice House Pizza", "Main Street Diner"],
+	gas: ["QuickFuel", "Liberty Gas", "RoadStar Fuel", "Pine Ridge Station"],
+	retail: ["Hartwell Department Store", "Thread & Co", "HomeGoods Depot", "Bright Pharmacy"],
+	online_shopping: ["ShopStream", "Parcelly", "Crate & Click", "BargainBay Online"],
+	subscriptions: ["StreamFlix", "TuneBox Music", "CloudVault Storage", "FitPulse App"],
+	travel: ["SkyHop Airlines", "Wayfarer Hotels", "Metro Rideshare", "Coastline Car Rental"],
+	entertainment: ["Starlight Cinemas", "Arcade Alley", "TicketHub", "Bowl-a-Rama"],
+	health: ["Bright Pharmacy", "Clearview Eye Care", "Wellspring Clinic"],
+};
+const MERCHANT_MEDIAN = { grocery: 46, dining: 21, gas: 38, retail: 42, online_shopping: 36, subscriptions: 13, travel: 135, entertainment: 31, health: 27 };
+const ONLINE_ONLY = new Set(["online_shopping", "subscriptions"]);
+const BILLER_TYPES = {
+	rent: { w: 10, lo: 850, hi: 2400, vary: 0 },
+	utilities: { w: 18, lo: 60, hi: 220, vary: 0.25 },
+	mobile_phone: { w: 20, lo: 35, hi: 120, vary: 0.04 },
+	internet: { w: 14, lo: 45, hi: 95, vary: 0 },
+	insurance: { w: 12, lo: 70, hi: 260, vary: 0 },
+	credit_card: { w: 12, lo: 40, hi: 650, vary: 0.5 },
+	streaming: { w: 10, lo: 8, hi: 25, vary: 0 },
+	loan: { w: 4, lo: 150, hi: 520, vary: 0 },
+};
+const BILLER_LIST = Object.entries(BILLER_TYPES).flatMap(([k, v]) => Array(v.w).fill(k));
+const BALANCE_MEDIAN = { tight_budget: 180, student: 340, gig_worker: 620, everyday: 1400, saver: 4600 };
+const PAYCHECK_MEDIAN = { weekly: 520, biweekly: 1650, semimonthly: 1900 };
+
+// ── HELPERS ──
+const salt = (uid, tag) => hashFloat(`${uid}|${tag}`);
+const round2 = (n) => Math.round(n * 100) / 100;
+const round1 = (n) => Math.round(n * 10) / 10;
+const T = (e) => dayjs.utc(e.time).valueOf();
+const iso = (t) => new Date(t).toISOString();
+const dayKey = (t) => new Date(t).toISOString().slice(0, 10);
+const dayStart = (t) => Math.floor(t / DAY_MS) * DAY_MS;
+const between = (r, [lo, hi]) => lo + r * (hi - lo);
+const logNormal = (median, sigma) => median * Math.exp(chance.normal({ mean: 0, dev: sigma }));
+const jitter = (key, spread) => 1 + (hashFloat(key) - 0.5) * 2 * spread;
+const pickWeighted = (weights, r) => {
+	const entries = Object.entries(weights);
+	const total = entries.reduce((s, [, w]) => s + w, 0);
+	let acc = 0;
+	for (const [k, w] of entries) {
+		acc += w / total;
+		if (r < acc) return k;
+	}
+	return entries[entries.length - 1][0];
+};
+const HOLIDAYS = new Set(BANK_HOLIDAYS);
+const isBusinessDay = (t) => {
+	const w = new Date(t).getUTCDay();
+	return w !== 0 && w !== 6 && !HOLIDAYS.has(dayKey(t));
+};
+const prevBusinessDay = (t) => {
+	let d = dayStart(t);
+	while (!isBusinessDay(d)) d -= DAY_MS;
+	return d;
+};
+const nextBusinessDay = (t) => {
+	let d = dayStart(t);
+	while (!isBusinessDay(d)) d += DAY_MS;
+	return d;
+};
+// a member-hour time inside the day that starts at d (US daytime/evening, UTC)
+const memberTime = (d) => d + (12 + chance.floating({ min: 0, max: 14 })) * HOUR_MS;
+const inOutage = (t) => t >= ms(OUTAGE_START) && t < ms(OUTAGE_END);
+const inBoost = (t) => t >= ms(BOOST_START) && t < ms(BOOST_END);
+const apyFor = (plan, t) => (PAID_PLANS.includes(plan) && inBoost(t) ? APY_BOOST : APY_BASE[plan]);
+// H5: paid media spend for one channel-day (see SPEND_LOOKBACK_DAYS); memoized
+// because the platform columns and the warehouse hook read the same value
+const signupHistory = new Map(); // channel → signups by bucket index
+const spendMemo = new Map();
+const paidSpend = (ch, bucketIndex, signups, timeMs) => {
+	const key = `${ch}|${bucketIndex}|${signups}`;
+	if (spendMemo.has(key)) return spendMemo.get(key);
+	const hist = signupHistory.get(ch) || [];
+	hist[bucketIndex] = signups;
+	signupHistory.set(ch, hist);
+	let sum = 0;
+	for (let i = bucketIndex - SPEND_LOOKBACK_DAYS; i < bucketIndex; i++) sum += i >= 0 && hist[i] !== undefined ? hist[i] : PLAN_SIGNUPS_PER_DAY[ch];
+	const basis = Math.max(sum / SPEND_LOOKBACK_DAYS, 0.3 * PLAN_SIGNUPS_PER_DAY[ch]);
+	const spend = round2(CPL_USD[ch] * basis * SPEND_WEEKDAY[new Date(timeMs).getUTCDay()] * jitter(`spend|${dayKey(timeMs)}|${ch}`, SPEND_NOISE));
+	spendMemo.set(key, spend);
+	return spend;
+};
+
+// pocket_savings_daily flows for one plan-day, memoized and accumulated in
+// bucket order: billed deposits (the app's deposits plus ACH pulls into Pockets
+// made outside the app, minus returned deposits), withdrawals, interest, and the
+// end-of-day balance
+const POCKET_OPENING_USD = { free: 1_600_000, plus: 4_200_000, premium: 5_100_000 };
+const POCKET_EXTERNAL_ACH_USD = { free: 900, plus: 2600, premium: 3400 };
+const pocketState = new Map(); // plan → { idx, balance }
+const pocketMemo = new Map();
+const pocketFlows = (plan, bucketIndex, appDeposits, timeMs) => {
+	const key = `${plan}|${bucketIndex}|${appDeposits}`;
+	if (pocketMemo.has(key)) return pocketMemo.get(key);
+	const k = `${dayKey(timeMs)}|${plan}`;
+	const deposits = round2(appDeposits + POCKET_EXTERNAL_ACH_USD[plan] * jitter(`ach|${k}`, 0.7) - appDeposits * (0.005 + hashFloat(`ret|${k}`) * 0.025));
+	// members keep more of what they move in while the boost rate is live
+	const keep = PAID_PLANS.includes(plan) && inBoost(timeMs) ? [0.62, 0.86] : [0.78, 1.02];
+	const withdrawals = round2(deposits * between(hashFloat(`wd|${k}`), keep));
+	const st = pocketState.get(plan);
+	const prior = st && st.idx === bucketIndex - 1 ? st.balance : POCKET_OPENING_USD[plan];
+	const interest = round2(prior * apyFor(plan, timeMs) / 100 / 365);
+	const balance = round2(prior + deposits - withdrawals + interest);
+	pocketState.set(plan, { idx: bucketIndex, balance });
+	const out = { deposits, withdrawals, interest, balance };
+	pocketMemo.set(key, out);
+	return out;
+};
+
+// Server-side events carry user_id only and no device fields; a lapse does not stop them.
+const DEVICE_FIELDS = ["device_id", "session_id", "model", "os", "screen_height", "screen_width", "carrier", "radio"];
+// Every event-specific key in the schema (declared event properties, funnel
+// props, experiment fields). A spawned event drops its template's
+// event-specific keys and takes its own declared ones.
+let EVENT_KEYS = null;
+const eventKeys = () => {
+	if (EVENT_KEYS) return EVENT_KEYS;
+	const keys = new Set(["Experiment name", "Variant name"]);
+	for (const ev of config.events) for (const k of Object.keys(ev.properties || {})) keys.add(k);
+	for (const f of config.funnels) for (const k of Object.keys(f.props || {})) keys.add(k);
+	EVENT_KEYS = keys;
+	return keys;
+};
+function spawnEvent(template, name, timeMs, props, serverSide) {
+	const e = cloneEvent(template, { event: name, time: iso(timeMs) });
+	for (const k of eventKeys()) delete e[k];
+	if (serverSide) for (const k of DEVICE_FIELDS) delete e[k];
+	Object.assign(e, props);
+	return e;
+}
+
+// payroll paydays (day starts) for one member between from and to
+function paydays(uid, freq, from, to) {
+	const out = [];
+	if (freq === "weekly") {
+		const wd = 1 + Math.floor(salt(uid, "pay-wd") * 4); // Mon-Thu payouts
+		for (let d = dayStart(from); d <= to; d += DAY_MS) {
+			if (new Date(d).getUTCDay() === wd) out.push(prevBusinessDay(d));
+		}
+	} else if (freq === "biweekly") {
+		const anchor = ms("2026-06-05T00:00:00Z") + (salt(uid, "pay-parity") < 0.5 ? 0 : 7 * DAY_MS);
+		let d = anchor;
+		while (d > from) d -= 14 * DAY_MS;
+		for (; d <= to; d += 14 * DAY_MS) if (d >= dayStart(from)) out.push(prevBusinessDay(d));
 	} else {
-		record.account_segment = "personal";
-		record.age_range = `${chance.pickone([18, 25, 35, 45, 55])}-${chance.pickone([24, 34, 44, 54, 65])}`;
-		record.life_stage = chance.pickone(["student", "early_career", "established", "pre_retirement", "retired"]);
-	}
-	return record;
-}
-
-function handleEventHooks(record) {
-	// H6: AUTO-PAY LOYALTY — manual bill-paid events have 30% chance of
-	// becoming "bill payment missed". Mutates event name.
-	if (record.event === "bill paid" && record.auto_pay !== true && chance.bool({ likelihood: MISSED_BILL_LIKELIHOOD })) {
-		record.event = "bill payment missed";
-	}
-	return record;
-}
-
-function handleEverythingHooks(record, meta) {
-	const datasetStart = dayjs.unix(meta.datasetStart);
-	const userEvents = record;
-	const profile = meta.profile;
-
-	userEvents.forEach(e => {
-		e.account_tier = profile.account_tier;
-		e.Platform = profile.Platform;
-	});
-
-	// H9: ONBOARDING TIME-TO-CONVERT — Premium 1.5x faster (factor 0.67);
-	// Basic 1.33x slower (factor 1.33). Finds first onboarding sequence
-	// and scales the inter-step gaps.
-	{
-		const ttcFactor = (
-			profile.account_tier === "premium" ? TTC_PREMIUM_FACTOR :
-			profile.account_tier === "basic" ? TTC_BASIC_FACTOR :
-			1.0
-		);
-		if (ttcFactor !== 1.0) {
-			const onboardingSeq = findFirstSequence(
-				userEvents,
-				["account opened", "app session", "balance checked"],
-				TTC_MAX_GAP_MINUTES
-			);
-			if (onboardingSeq) {
-				scaleFunnelTTC(onboardingSeq, ttcFactor);
-			}
+		let m = dayjs.utc(from).startOf("month");
+		while (m.valueOf() <= to) {
+			const mid = m.date(15).valueOf();
+			const last = m.endOf("month").startOf("day").valueOf();
+			for (const d of [mid, last]) if (d >= dayStart(from) && d <= to) out.push(prevBusinessDay(d));
+			m = m.add(1, "month");
 		}
 	}
+	return [...new Set(out)].sort((a, b) => a - b);
+}
 
-	// H1B: PERSONAL VS BUSINESS — business segment txns 4x larger
-	// (per Report 2 in JSDoc: business ~ $200, personal ~ $50).
-	if (profile.account_segment === "business") {
-		userEvents.forEach(e => {
-			if (e.event === "transaction completed" && typeof e.amount === "number") {
-				e.amount = Math.floor(e.amount * BUSINESS_TXN_MULT);
+function handleUserHook(profile, meta) {
+	const uid = profile.distinct_id;
+	const seg = profile.customer_segment;
+	profile.credit_history = salt(uid, "thin") < (THIN_FILE_SHARE[seg] ?? 0.2) ? "thin_file" : "established";
+	profile.age_band = seg === "student"
+		? (salt(uid, "age") < 0.85 ? "18-24" : "25-34")
+		: pickWeighted({ "18-24": 12, "25-34": 34, "35-44": 26, "45-54": 16, "55+": 12 }, salt(uid, "age"));
+	if (meta.userIsBornInDataset) {
+		profile.plan_tier = "free";
+		profile.customer_since = dayKey(ms(profile.created ?? meta.user.created));
+		return profile;
+	}
+	// established members: a recent-joiner slice at the in-window signup rate,
+	// the rest spread from March 2023
+	const recentFrom = START_MS - RECENT_JOINER_DAYS * DAY_MS;
+	const sinceMs = salt(uid, "recent") < RECENT_JOINER_SHARE
+		? recentFrom + Math.floor(salt(uid, "tenure") * RECENT_JOINER_DAYS) * DAY_MS
+		: ms("2023-03-01T00:00:00Z") + Math.floor(salt(uid, "tenure") * ((recentFrom - ms("2023-03-01T00:00:00Z")) / DAY_MS)) * DAY_MS;
+	profile.customer_since = dayKey(sinceMs);
+	const mix = {
+		everyday: { free: 62, plus: 26, premium: 12 },
+		tight_budget: { free: 70, plus: 25, premium: 5 },
+		saver: { free: 40, plus: 30, premium: 30 },
+		gig_worker: { free: 60, plus: 28, premium: 12 },
+		student: { free: 82, plus: 15, premium: 3 },
+	}[seg] || { free: 65, plus: 25, premium: 10 };
+	profile.plan_tier = pickWeighted(mix, salt(uid, "plan"));
+	return profile;
+}
+
+// ── field realism on engine events (amounts, merchants, balances) ──
+function shapeFields(events, profile) {
+	const uid = profile.distinct_id;
+	const seg = profile.customer_segment;
+	const balanceBase = BALANCE_MEDIAN[seg] * Math.exp((salt(uid, "bal") - 0.5) * 1.6);
+	for (const e of events) {
+		switch (e.event) {
+			case "identity verified":
+				e.kyc_method = profile.credit_history === "thin_file" || salt(uid, "kyc") < 0.12 ? "document_scan" : "instant_match";
+				break;
+			case "account funded":
+				e.amount = round2(Math.max(10, logNormal(150, 0.9)));
+				break;
+			case "balance checked":
+				e.available_balance_usd = round2(balanceBase * chance.floating({ min: 0.45, max: 1.55 }));
+				break;
+			case "card transaction": {
+				if (e.transaction_type === "atm_withdrawal") {
+					e.payment_channel = "atm";
+					e.merchant_category = "cash";
+					e.merchant_name = chance.bool({ likelihood: 75 }) ? "HarborLink ATM" : "Out-of-network ATM";
+					e.amount = 20 * chance.integer({ min: 2, max: 10 });
+				} else {
+					const cat = e.merchant_category === "cash" ? "grocery" : e.merchant_category;
+					e.merchant_category = cat;
+					e.merchant_name = chance.pickone(MERCHANTS[cat]);
+					e.amount = round2(Math.max(1.5, logNormal(MERCHANT_MEDIAN[cat], 0.7)));
+					if (ONLINE_ONLY.has(cat)) e.payment_channel = "online";
+					else if (e.payment_channel === "online" || e.payment_channel === "atm") e.payment_channel = chance.bool({ likelihood: 55 }) ? "chip" : "contactless_wallet";
+				}
+				const declined = chance.bool({ likelihood: (BASE_DECLINE[seg] ?? 0.04) * 100 });
+				e.authorization_status = declined ? "declined" : "approved";
+				if (declined) {
+					const reasons = { insufficient_funds: 60, suspected_fraud: 12, merchant_blocked: 8, technical_error: 4, card_locked: 6 };
+					if (e.payment_channel === "chip" || e.payment_channel === "atm") reasons.incorrect_pin = 10;
+					e.decline_reason = pickWeighted(reasons, chance.floating({ min: 0, max: 1 }));
+				} else {
+					delete e.decline_reason;
+				}
+				break;
 			}
+			case "transfer sent": {
+				const p2p = e.transfer_type === "p2p";
+				e.amount = round2(Math.max(5, logNormal(p2p ? 42 : 310, 0.85)));
+				e.speed = chance.bool({ likelihood: seg === "gig_worker" ? 55 : 22 }) ? "instant" : "standard";
+				e.instant_fee_usd = e.speed === "instant" ? Math.max(0.25, round2(e.amount * 0.0175)) : 0;
+				break;
+			}
+			case "savings deposit":
+				e.source = "manual";
+				e.amount = round2(Math.max(5, logNormal(75, 0.8)));
+				break;
+			case "investment order placed":
+				e.amount = round2(Math.max(1, logNormal(e.side === "sell" ? 120 : 50, 0.9)));
+				break;
+			case "plan upgraded":
+				e.monthly_fee = PLAN_FEE[e.new_plan] ?? PLAN_FEE.plus;
+				break;
+		}
+	}
+}
+
+function handleEverything(events, meta) {
+	if (!events.length) return events;
+	const profile = meta.profile;
+	const uid = profile.distinct_id;
+	const seg = profile.customer_segment;
+	const signup = events.find((e) => e.event === "account opened");
+	const isNew = Boolean(signup);
+	const birthMs = signup ? T(signup) : null;
+	const fundedEv = events.find((e) => e.event === "account funded");
+	const anyTemplate = signup || events[0];
+
+	shapeFields(events, profile);
+
+	// ── support volume: keep a share of engine support units (whole units) ──
+	{
+		const keepTicket = new Map();
+		events = events.filter((e) => {
+			if (e.event !== "support ticket opened" && e.event !== "support ticket resolved") return true;
+			if (!keepTicket.has(e.ticket_id)) keepTicket.set(e.ticket_id, salt(e.ticket_id, "keep") < TICKET_KEEP);
+			return keepTicket.get(e.ticket_id);
 		});
 	}
 
-	// H2: PAYDAY PATTERNS — 1st & 15th: direct_deposit amount 3x.
-	// Days 1-3 and 15-17: 60% of transfers get amount 2x. No flag.
-	for (const e of userEvents) {
-		const dayOfMonth = new Date(e.time).getUTCDate();
-		if (e.event === "transaction completed" && e.transaction_type === "direct_deposit") {
-			if (dayOfMonth === 1 || dayOfMonth === 15) {
-				e.amount = Math.floor((e.amount || 50) * PAYDAY_DEPOSIT_MULT);
-			}
-		}
-		if (e.event === "transfer sent") {
-			const isPaydayWindow = (dayOfMonth >= 1 && dayOfMonth <= 3) || (dayOfMonth >= 15 && dayOfMonth <= 17);
-			if (isPaydayWindow && chance.bool({ likelihood: PAYDAY_TRANSFER_LIKELIHOOD })) {
-				e.amount = Math.floor((e.amount || 200) * PAYDAY_TRANSFER_MULT);
-			}
+	// ── onboarding: members who never fund the account ──
+	let cut = Infinity; // member-initiated events stop here
+	if (isNew && !fundedEv) {
+		events = events.filter((e) => !["card transaction", "card locked", "budget created"].includes(e.event));
+		for (const e of events) if (e.event === "balance checked") e.available_balance_usd = 0;
+		if (salt(uid, "abandon") < UNFUNDED_ABANDON_SHARE) {
+			cut = birthMs + between(salt(uid, "abandon-day"), UNFUNDED_ABANDON_DAYS) * DAY_MS;
+		} else {
+			const keep = between(salt(uid, "unfunded-keep"), UNFUNDED_KEEP);
+			events = events.filter((e) => T(e) < birthMs + 2 * DAY_MS || chance.bool({ likelihood: keep * 100 }));
 		}
 	}
 
-	// H8: MONTH-END ANXIETY — days >= 28: app_session duration 1.4x;
-	// balance_checked account_balance 0.7x. Mutates raw props.
-	for (const e of userEvents) {
-		const dayOfMonth = new Date(e.time).getUTCDate();
-		if (dayOfMonth >= MONTH_END_DAY_THRESHOLD) {
-			if (e.event === "app session") {
-				e.session_duration_sec = Math.floor((e.session_duration_sec || 60) * MONTH_END_SESSION_MULT);
-			}
-			if (e.event === "balance checked") {
-				e.account_balance = Math.floor((e.account_balance || 2500) * MONTH_END_BALANCE_MULT);
-			}
+	// ── H2 / H5: direct deposit adoption, dark cut, organic lapse ──
+	let ddMs = null;          // direct deposit setup time (event only when inside the window)
+	let ddActiveFrom = null;  // paychecks start from here (-Infinity: long before the window)
+	// recent joiners (opened in the 30 days before June 4) follow the new-member
+	// path from their opening day, so June's DD setups and dark cuts start warm
+	const sinceMs = ms(`${profile.customer_since}T00:00:00Z`) + (12 + salt(uid, "since-h") * 12) * HOUR_MS;
+	const recentJoiner = !isNew && sinceMs >= START_MS - RECENT_JOINER_DAYS * DAY_MS;
+	if ((isNew && fundedEv) || recentJoiner) {
+		const openMs = isNew ? birthMs : sinceMs;
+		const fundedMs = isNew ? T(fundedEv) : sinceMs + 3 * HOUR_MS;
+		const adopt = salt(uid, "dd") < (DD_ADOPT[profile.acquisition_channel] ?? 0.4);
+		if (adopt) {
+			ddMs = openMs + (0.3 + salt(uid, "dd-day") * (DD_WINDOW_DAYS - 0.5)) * DAY_MS;
+			if (ddMs <= fundedMs) ddMs = fundedMs + (30 + salt(uid, "dd-min") * 150) * MIN_MS;
+			if (ddMs >= openMs + DD_WINDOW_DAYS * DAY_MS) ddMs = null; // funded too late to adopt inside 14 days
+		} else if (salt(uid, "dd-late") < LATE_DD_SHARE) {
+			ddMs = openMs + between(salt(uid, "dd-late-day"), LATE_DD_DAYS) * DAY_MS;
+		}
+		const ddInWindow = ddMs !== null && ddMs < openMs + DD_WINDOW_DAYS * DAY_MS;
+		const cuts = [];
+		if (!ddInWindow && salt(uid, "dark") < DARK_SHARE) cuts.push(openMs + DARK_AFTER_DAYS * DAY_MS);
+		if (salt(uid, "lapse") < LAPSE_SHARE) cuts.push(openMs + between(salt(uid, "lapse-day"), LAPSE_DAYS) * DAY_MS);
+		if (cuts.length) cut = Math.min(cut, ...cuts);
+		if (ddMs !== null && (ddMs >= cut || ddMs > END_MS)) ddMs = null;
+		if (ddMs !== null) ddActiveFrom = ddMs;
+	} else if (!isNew) {
+		if (salt(uid, "dd-pre") < PREEXISTING_DD_SHARE) ddActiveFrom = -Infinity;
+		else if (salt(uid, "dd-switch") < DD_SWITCH_SHARE) {
+			ddMs = START_MS + salt(uid, "dd-switch-day") * (WINDOW_DAYS - 7) * DAY_MS;
+			ddActiveFrom = ddMs;
 		}
 	}
-
-	// H7: PREMIUM TIER VALUE — Premium 3x reward value + 2x investment-sell
-	// amount; Plus 1.5x reward value. Reads tier from profile. No flag.
-	const tier = profile.account_tier;
-	userEvents.forEach(e => {
-		if (e.event === "reward redeemed") {
-			if (tier === "premium") e.value = Math.floor((e.value || 10) * PREMIUM_REWARD_MULT);
-			else if (tier === "plus") e.value = Math.floor((e.value || 10) * PLUS_REWARD_MULT);
+	// (only the support desk's resolutions are server-side among engine events)
+	if (cut < Infinity) events = events.filter((e) => T(e) < cut || e.event === "support ticket resolved");
+	if (!events.length) return events;
+	const lastMemberMs = Math.min(cut, END_MS);
+	// template for spawned member-initiated events: the member's own event
+	// with a device nearest in time (carries device, location, plan context)
+	const withDevice = events.filter((e) => e.device_id);
+	const memberTemplate = (t) => {
+		let best = withDevice[0] || anyTemplate, bestGap = Infinity;
+		for (const e of withDevice) {
+			const g = Math.abs(T(e) - t);
+			if (g < bestGap) { best = e; bestGap = g; }
 		}
-		if (e.event === "investment made" && e.action === "sell" && tier === "premium") {
-			e.amount = Math.floor((e.amount || 250) * PREMIUM_INVEST_SELL_MULT);
+		return best;
+	};
+
+	// ── plan timeline: one upgrade per member; later upgrade steps vanish ──
+	const firstUp = events.filter((e) => e.event === "plan upgraded").sort((a, b) => T(a) - T(b))[0];
+	if (firstUp) {
+		const t0 = T(firstUp);
+		events = events.filter((e) => e === firstUp || (e.event !== "plan upgraded" && !(e.event === "plan comparison viewed" && T(e) > t0)));
+	}
+	const initialPlan = profile.plan_tier;
+	const upMs = firstUp ? T(firstUp) : Infinity;
+	const planAt = (t) => (t >= upMs ? firstUp.new_plan : initialPlan);
+
+	// experiment exposure: the first one per member
+	{
+		const firstExp = events.filter((e) => e.event === "$experiment_started").sort((a, b) => T(a) - T(b))[0];
+		if (firstExp) events = events.filter((e) => e.event !== "$experiment_started" || e === firstExp);
+	}
+	// server-side onboarding steps carry no device fields
+	for (const e of events) if (e.event === "identity verified" || e.event === "account funded") for (const k of DEVICE_FIELDS) delete e[k];
+
+	const spawned = [];
+
+	// ── direct deposit setup + paychecks (H2) + Float ──
+	let payFreq = "none";
+	const payTimes = [];
+	if (ddActiveFrom !== null) {
+		payFreq = seg === "gig_worker" ? "weekly" : salt(uid, "pay-freq") < 0.6 ? "biweekly" : "semimonthly";
+		if (ddMs !== null && ddMs >= START_MS) {
+			spawned.push(spawnEvent(memberTemplate(ddMs), "direct deposit set up", ddMs, {
+				setup_method: salt(uid, "dd-method") < 0.4 ? "payroll_connect" : "form_download",
+			}, false));
 		}
-	});
+		const firstPay = ddActiveFrom === -Infinity ? START_MS - 35 * DAY_MS : ddActiveFrom + (3 + salt(uid, "dd-lag") * 7) * DAY_MS;
+		const days = paydays(uid, payFreq, firstPay, END_MS);
+		const base = PAYCHECK_MEDIAN[payFreq] * Math.exp((salt(uid, "pay-amt") - 0.5) * 1.1) * (seg === "student" ? 0.45 : 1);
+		const payer = payFreq === "weekly" ? "gig_platform" : salt(uid, "payer") < 0.06 ? "government_benefit" : "employer_payroll";
+		let prevPayMs = null;
+		for (const d of days) {
+			const payMs = d + (8.5 + chance.floating({ min: 0, max: 3 })) * HOUR_MS;
+			payTimes.push(payMs);
+			// Float: an advance inside the cycle that ends with this paycheck
+			if (prevPayMs !== null && chance.bool({ likelihood: (FLOAT_CYCLE_P[seg] ?? 0.1) * 100 })) {
+				const takeMs = payMs - chance.floating({ min: 0.4, max: 3.5 }) * DAY_MS;
+				const plan = planAt(Math.max(takeMs, START_MS));
+				const amount = Math.max(20, Math.min(FLOAT_LIMIT[plan], 5 * Math.round(logNormal(70, 0.6) / 5)));
+				const takeOk = takeMs > prevPayMs + HOUR_MS && takeMs < lastMemberMs;
+				if (takeOk && takeMs >= START_MS) {
+					spawned.push(spawnEvent(memberTemplate(takeMs), "float advance taken", takeMs, { amount, float_limit_usd: FLOAT_LIMIT[plan] }, false));
+				}
+				if ((takeOk || takeMs < START_MS) && payMs >= START_MS && payMs <= END_MS) {
+					spawned.push(spawnEvent(anyTemplate, "float advance repaid", payMs + (90 + chance.integer({ min: 0, max: 240 })) * 1000, { amount }, true));
+				}
+			}
+			if (payMs >= START_MS && payMs <= END_MS) {
+				const amt = base * (payFreq === "weekly" ? chance.floating({ min: 0.6, max: 1.4 }) : chance.floating({ min: 0.94, max: 1.06 }));
+				spawned.push(spawnEvent(anyTemplate, "direct deposit received", payMs, {
+					amount: round2(amt), pay_frequency: payFreq, payer_type: payer,
+				}, true));
+			}
+			prevPayMs = payMs;
+		}
+	}
+	profile.pay_frequency = payFreq;
+	// balances follow the pay cycle: highest right after a paycheck, lowest just before the next
+	if (payTimes.length > 1) {
+		for (const e of events) {
+			if (e.event !== "balance checked") continue;
+			const t = T(e);
+			let i = 0;
+			while (i < payTimes.length && payTimes[i] <= t) i++;
+			if (i === 0 || i === payTimes.length) continue;
+			const f = (t - payTimes[i - 1]) / (payTimes[i] - payTimes[i - 1]);
+			e.available_balance_usd = round2(e.available_balance_usd * (1.45 - 0.9 * f));
+		}
+	}
+	profile.direct_deposit_active = ddActiveFrom !== null;
 
-	// H3: FRAUD DETECTION — ~3% of users get fraud burst (3-5 rapid
-	// high-value transactions + card locked + dispute + support contacted)
-	// at timeline midpoint. No flag — discover via cohort builder on users
-	// with card-locked + dispute-filed.
-	if (chance.bool({ likelihood: FRAUD_LIKELIHOOD }) && userEvents.length >= 2) {
-		const midIdx = Math.floor(userEvents.length / 2);
-		const midEvent = userEvents[midIdx];
-		const midTime = dayjs(midEvent.time);
-		const distinctId = midEvent.user_id;
-		const burstCount = chance.integer({ min: FRAUD_BURST_MIN, max: FRAUD_BURST_MAX });
-		const fraudEvents = [];
-		const txnTemplate = userEvents.find(e => e.event === "transaction completed");
-		const cardTemplate = userEvents.find(e => e.event === "card locked");
-		const disputeTemplate = userEvents.find(e => e.event === "dispute filed");
-		const supportTemplate = userEvents.find(e => e.event === "support contacted");
-
-		for (let i = 0; i < burstCount; i++) {
-			if (txnTemplate) {
-				fraudEvents.push({
-					...txnTemplate,
-					time: midTime.add(i * 10, "minutes").toISOString(),
-					user_id: distinctId,
-					transaction_type: "purchase",
-					amount: chance.integer({ min: FRAUD_AMOUNT_MIN, max: FRAUD_AMOUNT_MAX }),
-					merchant_category: chance.pickone(["online", "retail"]),
-					payment_method: "credit",
+	// ── billers and bill payments (H6 billers, H7 late payments) ──
+	{
+		const billers = [];
+		const added = new Map();
+		for (const e of events) {
+			if (e.event === "biller added" && !added.has(e.biller_id)) added.set(e.biller_id, { id: e.biller_id, category: e.biller_category, addedMs: T(e), autopayMs: Infinity });
+		}
+		for (const e of events) {
+			if (e.event === "autopay enabled" && added.has(e.biller_id)) {
+				const b = added.get(e.biller_id);
+				b.autopayMs = Math.min(b.autopayMs, T(e));
+			}
+		}
+		billers.push(...added.values());
+		if (!isNew) {
+			const r = salt(uid, "billers");
+			let n = 0, acc = 0;
+			for (let i = 0; i < PREEXISTING_BILLERS.length; i++) { acc += PREEXISTING_BILLERS[i]; if (r >= acc) n = i + 1; }
+			n = Math.min(n, PREEXISTING_BILLERS.length - 1);
+			for (let i = 0; i < n; i++) {
+				billers.push({
+					id: `blr_${Math.floor(salt(uid, `biller-id-${i}`) * 1e12).toString(36)}`,
+					category: BILLER_LIST[Math.floor(salt(uid, `biller-cat-${i}`) * BILLER_LIST.length)],
+					addedMs: -Infinity,
+					autopayMs: salt(uid, `biller-ap-${i}`) < PREEXISTING_AUTOPAY_SHARE ? -Infinity : Infinity,
 				});
 			}
 		}
-		if (cardTemplate) fraudEvents.push({
-			...cardTemplate,
-			time: midTime.add(burstCount * 10 + 5, "minutes").toISOString(),
-			user_id: distinctId,
-			reason: "suspicious_activity",
-		});
-		if (disputeTemplate) fraudEvents.push({
-			...disputeTemplate,
-			time: midTime.add(burstCount * 10 + 30, "minutes").toISOString(),
-			user_id: distinctId,
-			dispute_amount: chance.integer({ min: FRAUD_AMOUNT_MIN, max: FRAUD_AMOUNT_MAX }),
-			reason: "unauthorized",
-		});
-		if (supportTemplate) fraudEvents.push({
-			...supportTemplate,
-			time: midTime.add(burstCount * 10 + 45, "minutes").toISOString(),
-			user_id: distinctId,
-			channel: "phone",
-			issue_type: "card",
-			resolved: true,
-		});
-		userEvents.splice(midIdx + 1, 0, ...fraudEvents);
-	}
-
-	// H4: LOW BALANCE CHURN — users with 3+ balance checks under $8K lose
-	// 50% of post-day-30 events. No flag.
-	const lowBalanceChecks = userEvents.filter(e =>
-		e.event === "balance checked" && (e.account_balance || 0) < LOW_BALANCE_THRESHOLD
-	).length;
-	if (lowBalanceChecks >= LOW_BALANCE_CHECK_THRESHOLD) {
-		const dayCutoff = datasetStart.add(LOW_BALANCE_CHURN_CUTOFF_DAYS, "days");
-		for (let i = userEvents.length - 1; i >= 0; i--) {
-			if (dayjs(userEvents[i].time).isAfter(dayCutoff) && chance.bool({ likelihood: LOW_BALANCE_DROP_LIKELIHOOD })) {
-				userEvents.splice(i, 1);
-			}
-		}
-	}
-
-	// H5: BUDGET DISCIPLINE — users with 3+ budget-created events get
-	// savings 2x, investment amounts 1.5x, and extra cloned savings-goal
-	// events. No flag. Clones are collected first and pushed BEFORE the
-	// mutate pass (splicing at idx+1 inside forEach would revisit the clone
-	// and double-mutate it). Clones inherit the template's raw
-	// monthly_contribution so the single ×2 pass applies uniformly and the
-	// cohort ratio stays an exact 2x against light-budget (0-2) users.
-	const budgetCount = userEvents.filter(e => e.event === "budget created").length;
-	if (budgetCount >= BUDGET_DISCIPLINE_MIN) {
-		const savingsTemplate = userEvents.find(e => e.event === "savings goal set");
-		if (savingsTemplate) {
-			const clones = [];
-			for (const event of userEvents) {
-				if (event.event === "budget created" && chance.bool({ likelihood: BUDGET_CLONE_LIKELIHOOD })) {
-					clones.push({
-						...savingsTemplate,
-						time: dayjs(event.time).add(chance.integer({ min: 1, max: 7 }), "days").toISOString(),
-						user_id: event.user_id,
-						goal_type: chance.pickone(["emergency", "vacation", "car", "home"]),
-						target_amount: chance.integer({ min: 1000, max: 20000 }),
-					});
+		for (const b of billers) {
+			const type = BILLER_TYPES[b.category] || BILLER_TYPES.utilities;
+			const base = between(salt(b.id, "amt"), [type.lo, type.hi]);
+			// rent is due on the 1st; other billers cluster on the 1st and 15th
+			const rd = salt(b.id, "due");
+			const dueDay = b.category === "rent" ? 1 : rd < 0.15 ? 1 : rd < 0.25 ? 15 : 1 + Math.floor((rd - 0.25) / 0.75 * 31);
+			let m = dayjs.utc(Math.max(START_MS, b.addedMs === -Infinity ? START_MS : b.addedMs)).startOf("month").subtract(1, "month");
+			for (let k = 0; k < 6; k++, m = m.add(1, "month")) {
+				const due = m.date(Math.min(dueDay, m.daysInMonth())).valueOf();
+				if (b.addedMs !== -Infinity && due < b.addedMs + 5 * DAY_MS) continue;
+				const autopay = b.autopayMs <= due;
+				const late = chance.bool({ likelihood: (autopay ? LATE_SHARE.autopay : LATE_SHARE.manual) * 100 });
+				let t;
+				if (autopay) {
+					const post = nextBusinessDay(due);
+					t = late ? nextBusinessDay(post + chance.integer({ min: 1, max: 3 }) * DAY_MS) : post;
+					t += (10 + chance.floating({ min: 0, max: 3 })) * HOUR_MS;
+				} else {
+					const dd = late ? due + chance.integer({ min: 1, max: 10 }) * DAY_MS : due - chance.integer({ min: 0, max: 4 }) * DAY_MS;
+					t = memberTime(dd);
+					if (t >= lastMemberMs) continue; // a lapsed member stops paying by hand
 				}
-			}
-			userEvents.push(...clones); // engine auto-sorts by time after `everything`
-		}
-		for (const event of userEvents) {
-			if (event.event === "savings goal set") {
-				event.monthly_contribution = Math.floor((event.monthly_contribution || 200) * BUDGET_SAVINGS_MULT);
-			}
-			if (event.event === "investment made") {
-				event.amount = Math.floor((event.amount || 250) * BUDGET_INVESTMENT_MULT);
+				if (t < START_MS || t > END_MS) continue;
+				const amount = round2(base * (1 + (chance.floating({ min: -1, max: 1 })) * type.vary));
+				spawned.push(spawnEvent(autopay ? anyTemplate : memberTemplate(t), "bill paid", t, {
+					biller_id: b.id, biller_category: b.category, amount,
+					autopay, payment_status: late ? "late" : "on_time",
+				}, autopay));
 			}
 		}
 	}
 
-	// H10: TRANSACTION-COUNT MAGIC NUMBER (no flags)
-	// Sweet 12-19 transactions/user → +40% on investment_made amount.
-	// Over 20+ → drop 20% of premium-upgraded events.
-	const txnCount = userEvents.filter(e => e.event === "transaction completed").length;
-	if (txnCount >= TXN_SWEET_MIN && txnCount <= TXN_SWEET_MAX) {
-		userEvents.forEach(e => {
-			if (e.event === "investment made" && typeof e.amount === "number") {
-				e.amount = Math.round(e.amount * TXN_INVESTMENT_BOOST);
+	// ── H4: wallet outage — declines, chip retries, support tickets ──
+	{
+		const extra = [];
+		for (const e of events) {
+			if (e.event !== "card transaction" || e.payment_channel !== OUTAGE_CHANNEL || e.authorization_status !== "approved") continue;
+			const t = T(e);
+			if (!inOutage(t) || !chance.bool({ likelihood: OUTAGE_FAIL * 100 })) continue;
+			e.authorization_status = "declined";
+			e.decline_reason = "technical_error";
+			if (chance.bool({ likelihood: OUTAGE_RETRY * 100 })) {
+				const r = cloneEvent(e, { time: iso(t + chance.integer({ min: 40, max: 300 }) * 1000) });
+				r.payment_channel = "chip";
+				r.authorization_status = "approved";
+				delete r.decline_reason;
+				extra.push(r);
 			}
-		});
-	} else if (txnCount >= TXN_OVER_THRESHOLD) {
-		for (let i = userEvents.length - 1; i >= 0; i--) {
-			if (userEvents[i].event === "premium upgraded" && chance.bool({ likelihood: TXN_PREMIUM_DROP_LIKELIHOOD })) {
-				userEvents.splice(i, 1);
+			if (chance.bool({ likelihood: OUTAGE_TICKET * 100 })) {
+				const tid = `tkt_${Math.floor(hashFloat(`${e.insert_id}|tkt`) * 1e12).toString(36)}`;
+				const open = t + chance.integer({ min: 5, max: 90 }) * MIN_MS;
+				const ch = chance.bool({ likelihood: 60 }) ? "chat" : "in_app";
+				extra.push(spawnEvent(e, "support ticket opened", open, { ticket_id: tid, issue_type: "card_declined", contact_channel: ch }, false));
+				extra.push(spawnEvent(e, "support ticket resolved", open + HOUR_MS, { ticket_id: tid, issue_type: "card_declined", contact_channel: ch, resolution_hours: 1 }, true));
+			}
+		}
+		events = events.concat(extra);
+	}
+
+	// ── H3: Round-Ups ──
+	let roundUps = false;
+	if (salt(uid, "roundup") < ROUNDUP_ADOPT) {
+		const startMs = ms(ROUNDUPS_LAUNCH) + salt(uid, "roundup-day") * ROUNDUP_RAMP_DAYS * DAY_MS;
+		const visit = events.filter((e) => e.event === "app opened" && T(e) >= startMs).sort((a, b) => T(a) - T(b))[0];
+		if (visit) {
+			roundUps = true;
+			const onMs = T(visit) + chance.integer({ min: 20, max: 120 }) * 1000;
+			const mult = ROUNDUP_MULTIPLIERS[Math.floor(salt(uid, "roundup-mult") * ROUNDUP_MULTIPLIERS.length)];
+			spawned.push(spawnEvent(visit, "round-ups enabled", onMs, { roundup_multiplier: mult }, false));
+			const byDay = new Map();
+			for (const e of events) {
+				if (e.event !== "card transaction" || e.transaction_type !== "purchase" || e.authorization_status !== "approved") continue;
+				const t = T(e);
+				if (t < onMs) continue;
+				const spare = Math.round((Math.ceil(e.amount) - e.amount) * 100) / 100;
+				const d = dayStart(t);
+				byDay.set(d, (byDay.get(d) || 0) + spare * mult);
+			}
+			for (const [d, spare] of byDay) {
+				const sweepMs = d + DAY_MS + (7 + chance.floating({ min: 0, max: 2 })) * HOUR_MS;
+				if (spare < 0.01 || sweepMs > END_MS) continue;
+				spawned.push(spawnEvent(anyTemplate, "savings deposit", sweepMs, { source: "round_up", amount: round2(spare), pocket_type: "round_ups" }, true));
 			}
 		}
 	}
+	profile.round_ups_enabled = roundUps;
 
-	return record;
+	events = events.concat(spawned);
+
+	// ── H9: support resolution timing ──
+	{
+		const tickets = new Map();
+		for (const e of events) {
+			if (e.event !== "support ticket opened" && e.event !== "support ticket resolved") continue;
+			if (!tickets.has(e.ticket_id)) tickets.set(e.ticket_id, {});
+			tickets.get(e.ticket_id)[e.event] = e;
+		}
+		const drop = new Set();
+		for (const tk of tickets.values()) {
+			const o = tk["support ticket opened"], r = tk["support ticket resolved"];
+			if (!r) continue;
+			for (const k of DEVICE_FIELDS) delete r[k];
+			if (!o) {
+				// opened before June 4 (warm start); keep only early resolutions
+				if (T(r) > START_MS + 4 * DAY_MS) drop.add(r);
+				else r.resolution_hours = round1(Math.max(0.5, (T(r) - START_MS) / HOUR_MS + chance.floating({ min: 2, max: 30 })));
+				continue;
+			}
+			const gap = RESOLVE_MEDIAN_H * HOUR_MS * Math.exp(chance.normal({ mean: 0, dev: 0.9 }))
+				* (CHANNEL_SPEED[o.contact_channel] ?? 1) * (SUPPORT_PLAN_MULT[planAt(T(o))] ?? 1);
+			const rt = T(o) + Math.max(10 * MIN_MS, gap);
+			r.time = iso(rt);
+			r.resolution_hours = round1((rt - T(o)) / HOUR_MS);
+			if (rt > END_MS) drop.add(r);
+		}
+		if (drop.size) events = events.filter((e) => !drop.has(e));
+	}
+
+	// ── H8: Summer Saver Boost — Plus/Premium add more manual Pocket deposits ──
+	{
+		const boostEnd = Math.min(ms(BOOST_END), END_MS, lastMemberMs);
+		const clones = [];
+		for (const e of events) {
+			if (e.event !== "savings deposit" || e.source !== "manual") continue;
+			const t = T(e);
+			if (!inBoost(t) || !PAID_PLANS.includes(planAt(t))) continue;
+			if (!chance.bool({ likelihood: (BOOST_DEPOSIT_MULT - 1) * 100 })) continue;
+			const tc = t + chance.floating({ min: 2, max: 72 }) * HOUR_MS;
+			if (tc >= boostEnd) continue;
+			clones.push(cloneEvent(e, {
+				time: iso(tc),
+				amount: round2(Math.max(5, logNormal(75, 0.8))),
+				pocket_type: chance.pickone(["emergency", "vacation", "home", "car", "general"]),
+			}));
+		}
+		events = events.concat(clones);
+	}
+
+	// ── H10: budget magic number — 3+ budgets → bigger manual deposits ──
+	const budgets = events.filter((e) => e.event === "budget created").length;
+	if (budgets >= BUDGET_MAGIC) {
+		for (const e of events) {
+			if (e.event === "savings deposit" && e.source === "manual") e.amount = round2(e.amount * BUDGET_SAVE_MULT);
+		}
+	}
+
+	// ── plan at event time + final profile ──
+	for (const e of events) e.plan_tier = planAt(T(e));
+	if (firstUp) profile.plan_tier = firstUp.new_plan;
+	if (profile[EXP_KEY] !== undefined && !events.some((e) => e.event === "$experiment_started")) delete profile[EXP_KEY];
+
+	return events;
+}
+
+function handleWarehouse(row, meta) {
+	if (meta.isBackfill) return row;
+	if (meta.metricName === "paid_acquisition_daily") {
+		// the value column arrives holding the day's Mixpanel signups (the source);
+		// billed spend comes from the bidding model
+		row.spend_usd = paidSpend(row.acquisition_channel, meta.bucketIndex, row.spend_usd, ms(`${row.date}T00:00:00Z`));
+		return row;
+	}
+	if (meta.metricName === "card_authorizations_daily") {
+		// processor counts incremental and stand-in authorizations the app never logs
+		const k = `${row.date}|${row.payment_channel}`;
+		row.auth_attempts = Math.round(row.auth_attempts * (1.03 + hashFloat(`incr|${k}`) * 0.07) * jitter(`mit|${row.date}`, 0.08) + hashFloat(`standin|${k}`) * 25);
+		return row;
+	}
+	if (meta.metricName === "pocket_savings_daily") {
+		row.deposits_usd = pocketFlows(row.plan_tier, meta.bucketIndex, row.deposits_usd, ms(`${row.date}T00:00:00Z`)).deposits;
+		return row;
+	}
+	return row;
 }
 
 // ── CONFIG ──
 /** @type {Config} */
 const config = {
-	version: 2,
 	seed: SEED,
 	datasetStart: DATASET_START,
 	datasetEnd: DATASET_END,
-	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	numUsers: NUM_USERS,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	format: "json",
 	gzip: true,
-	credentials: {
-		token,
-	},
+	concurrency: 1,
+	writeToDisk: false,
+	macro: { percentUsersBornInDataset: BORN_PCT, bornRecentBias: 0, preExistingSpread: "uniform" },
+	soup: { dayOfWeekWeights: DOW_WEIGHTS, hourOfDayWeights: HOUR_WEIGHTS },
+	singleCountry: "US",
+	credentials: { token },
 	switches: {
 		hasSessionIds: true,
 		alsoInferFunnels: false,
 		hasLocation: true,
 		hasAndroidDevices: true,
 		hasIOSDevices: true,
-		hasDesktopDevices: true,
+		hasDesktopDevices: false,
 		hasBrowser: false,
 		hasCampaigns: false,
 		isAnonymous: false,
 		hasAdSpend: false,
 		hasAvatar: true,
 	},
-	identity: {
-		avgDevicePerUser: 2,
-	},
-	concurrency: 1,
-	writeToDisk: false,
-
-	scdProps: {
-		// account_tier is deliberately NOT an SCD — the everything hook stamps
-		// every event with the user's profile tier (H7/H9 depend on a stable
-		// per-user tier), which an SCD timeline would silently contradict.
-		risk_category: {
-			values: ["low", "medium", "high", "critical"],
-			frequency: "month",
-			timing: "fixed",
-			max: 8,
-			type: "household_id"
-		}
-	},
-
-	funnels: [
-		{
-			sequence: ["account opened", "app session", "balance checked"],
-			isFirstFunnel: true,
-			conversionRate: 85,
-			timeToConvert: 0.25,
-		},
-		{
-			// Daily banking: check balance, view transactions - most common activity
-			sequence: ["app session", "balance checked", "transaction completed"],
-			conversionRate: 80,
-			timeToConvert: 0.5,
-			weight: 5,
-		},
-		{
-			// Transfers and notifications
-			sequence: ["app session", "transfer sent", "notification opened"],
-			conversionRate: 50,
-			timeToConvert: 1,
-			weight: 3,
-		},
-		{
-			// Bill payment flow
-			sequence: ["app session", "bill paid", "notification opened"],
-			conversionRate: 60,
-			timeToConvert: 1,
-			weight: 3,
-		},
-		{
-			// Financial planning: budgets and savings
-			sequence: ["budget created", "budget alert", "savings goal set"],
-			conversionRate: 40,
-			timeToConvert: 12,
-			weight: 2,
-		},
-		{
-			// Investment and rewards
-			sequence: ["balance checked", "investment made", "reward redeemed"],
-			conversionRate: 30,
-			timeToConvert: 5,
-			weight: 2,
-		},
-		{
-			// Support and account management
-			sequence: ["support contacted", "card locked", "dispute filed"],
-			conversionRate: 35,
-			timeToConvert: 2,
-			weight: 1,
-		},
-		{
-			// Lending flow
-			sequence: ["loan applied", "loan approved", "premium upgraded"],
-			conversionRate: 25,
-			timeToConvert: 10,
-			weight: 1,
-		},
-	],
+	identity: { avgDevicePerUser: 2 },
 
 	events: [
 		{
@@ -786,622 +1078,676 @@ const config = {
 			isFirstEvent: true,
 			isAuthEvent: true,
 			properties: {
-				"account_type": ["personal", "business", "personal"],
-				"signup_channel": ["app", "web", "referral", "branch"],
-			}
+				signup_method: { __weights: { email: 45, apple: 35, google: 20 } },
+				acquisition_channel: (ctx) => ctx.profile.acquisition_channel,
+			},
 		},
 		{
-			event: "app session",
-			weight: 20,
-			isStrictEvent: false,
+			event: "identity verified",
+			weight: 1,
+			isStrictEvent: true,
+			properties: { kyc_method: ["instant_match"] },
+		},
+		{
+			event: "account funded",
+			weight: 1,
+			isStrictEvent: true,
 			properties: {
-				"session_duration_sec": u.weighNumRange(10, 600, 0.3, 60),
-				"pages_viewed": u.weighNumRange(1, 15, 0.5, 3),
-			}
+				funding_method: { __weights: { bank_link: 55, debit_card: 25, p2p_in: 12, cash_load: 8 } },
+				amount: [100],
+			},
+		},
+		{
+			event: "app opened",
+			weight: 3,
+			isStrictEvent: false,
+			properties: { entry_point: { __weights: { icon: 70, widget: 12, notification: 12, deeplink: 6 } } },
 		},
 		{
 			event: "balance checked",
-			weight: 15,
+			weight: 2,
 			isStrictEvent: false,
 			properties: {
-				"account_balance": u.weighNumRange(0, 50000, 0.8, 2500),
-				"account_type": ["checking", "savings", "investment"],
-			}
+				available_balance_usd: [0],
+				account_view: ["overview", "overview", "checking", "pockets"],
+			},
 		},
 		{
-			event: "transaction completed",
-			weight: 18,
-			isStrictEvent: false,
+			event: "card transaction",
+			weight: 1,
+			isStrictEvent: true,
 			properties: {
-				"transaction_type": ["purchase", "atm", "direct_deposit", "refund"],
-				"amount": u.weighNumRange(1, 5000, 0.3, 50),
-				"merchant_category": ["grocery", "restaurant", "gas", "retail", "online", "subscription", "utilities"],
-				"payment_method": ["debit", "credit", "contactless", "online"],
-			}
+				transaction_type: { __weights: { purchase: 92, atm_withdrawal: 8 } },
+				amount: [10],
+				merchant_category: { __weights: { grocery: 22, dining: 20, gas: 11, retail: 11, online_shopping: 13, subscriptions: 7, travel: 4, entertainment: 6, health: 6 } },
+				merchant_name: ["unknown"],
+				payment_channel: { __weights: { chip: 40, contactless_wallet: 32, online: 28 } },
+				authorization_status: ["approved"],
+				decline_reason: ["insufficient_funds"],
+			},
 		},
 		{
 			event: "transfer sent",
-			weight: 8,
-			isStrictEvent: false,
-			properties: {
-				"transfer_type": ["internal", "external", "p2p", "wire"],
-				"amount": u.weighNumRange(10, 10000, 0.3, 200),
-				"recipient_type": ["friend", "family", "business", "self"],
-			}
-		},
-		{
-			event: "bill paid",
-			weight: 6,
-			isStrictEvent: false,
-			properties: {
-				"bill_type": ["rent", "utilities", "phone", "insurance", "subscription", "loan_payment"],
-				"amount": u.weighNumRange(20, 3000, 0.5, 150),
-				"auto_pay": [false, false, false, true, true],
-			}
-		},
-		{
-			event: "bill payment missed",
 			weight: 1,
-			isStrictEvent: true, // hook-only: created by Hook 6 from manual bill-paid events
+			isStrictEvent: true,
 			properties: {
-				"bill_type": ["rent", "utilities", "phone", "insurance", "subscription", "loan_payment"],
-				"amount": u.weighNumRange(20, 3000, 0.5, 150),
-				"auto_pay": [false], // carried over from the renamed "bill paid" event; always false (auto-pay never misses)
-			}
+				transfer_type: { __weights: { p2p: 70, external_bank: 30 } },
+				speed: ["standard"],
+				amount: [25],
+				instant_fee_usd: [0],
+				recipient_type: { __weights: { friend: 40, family: 30, landlord: 6, self: 16, business: 8 } },
+			},
+		},
+		{
+			event: "savings deposit",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				source: ["manual"],
+				amount: [25],
+				pocket_type: ["emergency", "emergency", "vacation", "home", "car", "general"],
+			},
 		},
 		{
 			event: "budget created",
-			weight: 3,
-			isStrictEvent: false,
+			weight: 1,
+			isStrictEvent: true,
 			properties: {
-				"category": ["food", "transport", "entertainment", "shopping", "bills", "savings"],
-				"monthly_limit": u.weighNumRange(50, 2000, 0.5, 300),
-			}
+				category: ["groceries", "dining", "transport", "shopping", "entertainment", "bills", "subscriptions"],
+				monthly_limit: u.weighNumRange(50, 1500, 0.4, 30),
+			},
 		},
 		{
-			event: "budget alert",
-			weight: 4,
+			event: "investment order placed",
+			weight: 1,
+			isStrictEvent: true,
 			properties: {
-				"alert_type": ["approaching_limit", "exceeded", "on_track"],
-				"percent_used": u.weighNumRange(50, 150, 1, 90),
-			}
+				asset_type: { __weights: { etf: 45, stock: 50, bond_fund: 5 } },
+				side: { __weights: { buy: 80, sell: 20 } },
+				amount: [25],
+			},
+		},
+		{ event: "biller added", weight: 1, isStrictEvent: true, properties: {} },
+		{ event: "autopay enabled", weight: 1, isStrictEvent: true, properties: {} },
+		{
+			event: "bill paid",
+			weight: 1,
+			isStrictEvent: true, // hook-generated from each biller's monthly schedule
+			properties: {
+				biller_id: ["unassigned"],
+				biller_category: ["utilities"],
+				amount: [50],
+				autopay: [false],
+				payment_status: ["on_time"],
+			},
+		},
+		{ event: "support ticket opened", weight: 1, isStrictEvent: true, properties: {} },
+		{
+			event: "support ticket resolved",
+			weight: 1,
+			isStrictEvent: true,
+			properties: { resolution_hours: [0] },
 		},
 		{
-			event: "savings goal set",
-			weight: 3,
-			isStrictEvent: false,
-			properties: {
-				"goal_type": ["emergency", "vacation", "car", "home", "education", "retirement"],
-				"target_amount": u.weighNumRange(500, 50000, 0.3, 5000),
-				"monthly_contribution": u.weighNumRange(25, 2000, 0.5, 200),
-			}
+			event: "plan comparison viewed",
+			weight: 1,
+			isStrictEvent: true,
+			properties: { trigger: { __weights: { float_limit: 30, pockets_apy: 25, settings: 25, promo_banner: 20 } } },
 		},
 		{
-			event: "investment made",
-			weight: 4,
-			isStrictEvent: false,
-			properties: {
-				"investment_type": ["stocks", "etf", "crypto", "bonds", "mutual_fund"],
-				"amount": u.weighNumRange(10, 10000, 0.3, 250),
-				"action": ["buy", "sell", "buy"],
-			}
+			event: "plan upgraded",
+			weight: 1,
+			isStrictEvent: true,
+			properties: { new_plan: ["plus", "plus", "premium"], monthly_fee: [4.99] },
+		},
+		{
+			event: "direct deposit set up",
+			weight: 1,
+			isStrictEvent: true, // hook-generated
+			properties: { setup_method: ["form_download"] },
+		},
+		{
+			event: "direct deposit received",
+			weight: 1,
+			isStrictEvent: true, // hook-generated, server-side
+			properties: { amount: [1000], pay_frequency: ["biweekly"], payer_type: ["employer_payroll"] },
+		},
+		{
+			event: "float advance taken",
+			weight: 1,
+			isStrictEvent: true, // hook-generated
+			properties: { amount: [50], float_limit_usd: [50] },
+		},
+		{
+			event: "float advance repaid",
+			weight: 1,
+			isStrictEvent: true, // hook-generated, server-side
+			properties: { amount: [50] },
+		},
+		{
+			event: "round-ups enabled",
+			weight: 1,
+			isStrictEvent: true, // hook-generated
+			properties: { roundup_multiplier: [1] },
 		},
 		{
 			event: "card locked",
-			weight: 2,
-			isStrictEvent: false,
-			properties: {
-				"reason": ["lost", "stolen", "suspicious_activity", "travel"],
-			}
-		},
-		{
-			event: "dispute filed",
-			weight: 2,
-			isStrictEvent: false,
-			properties: {
-				"dispute_amount": u.weighNumRange(10, 2000, 0.5, 100),
-				"reason": ["unauthorized", "duplicate", "not_received", "damaged", "wrong_amount"],
-			}
-		},
-		{
-			event: "loan applied",
-			weight: 2,
-			properties: {
-				"loan_type": ["personal", "auto", "home", "student", "business"],
-				"requested_amount": u.weighNumRange(1000, 100000, 0.3, 10000),
-			}
-		},
-		{
-			event: "loan approved",
 			weight: 1,
-			properties: {
-				"loan_type": ["personal", "auto", "home", "student", "business"],
-				"approved_amount": u.weighNumRange(1000, 100000, 0.3, 10000),
-				"interest_rate": u.weighNumRange(3, 25, 1, 8),
-			}
+			isStrictEvent: false,
+			properties: { reason: { __weights: { misplaced: 45, lost: 20, suspicious_activity: 20, travel: 15 } } },
 		},
 		{
-			event: "premium upgraded",
+			event: "$experiment_started",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				"Experiment name": [AUTOPAY_EXPERIMENT],
+				"Variant name": ["Control", AUTOPAY_VARIANT],
+			},
+		},
+	],
+
+	funnels: [
+		{
+			name: "Onboarding",
+			sequence: ONBOARD_STEPS,
+			isFirstFunnel: true,
+			conditions: { credit_history: "established" },
+			conversionRate: ONBOARD_CONV,
+			timeToConvert: ONBOARD_TTC_H.established,
+			order: "sequential",
+			weight: 1,
+		},
+		{
+			name: "Onboarding",
+			sequence: ONBOARD_STEPS,
+			isFirstFunnel: true,
+			conditions: { credit_history: "thin_file" },
+			conversionRate: THIN_ONBOARD_CONV,
+			timeToConvert: ONBOARD_TTC_H.thin_file,
+			order: "sequential",
+			weight: 1,
+		},
+		{ name: "Money check", sequence: ["app opened", "balance checked"], conversionRate: 85, timeToConvert: 0.05, order: "sequential", weight: 30 },
+		{ name: "Card spend", sequence: ["card transaction"], conversionRate: 100, timeToConvert: 0.1, order: "sequential", weight: 60 },
+		{ name: "Send money", sequence: ["app opened", "transfer sent"], conversionRate: 60, timeToConvert: 0.1, order: "sequential", weight: 10 },
+		{ name: "Save", sequence: ["app opened", "savings deposit"], conversionRate: 55, timeToConvert: 0.1, order: "sequential", weight: 8 },
+		{ name: "Invest", sequence: ["app opened", "investment order placed"], conversionRate: 40, timeToConvert: 0.1, order: "sequential", weight: 4 },
+		{ name: "Budget", sequence: ["app opened", "budget created"], conversionRate: 40, timeToConvert: 0.1, order: "sequential", weight: 5 },
+		{
+			name: "Bill setup",
+			sequence: ["biller added", "autopay enabled"],
+			conversionRate: AUTOPAY_CONV,
+			timeToConvert: 0.1,
+			order: "sequential",
+			weight: 1,
+			props: {
+				biller_id: (ctx) => `blr_${chance.hash({ length: 10 })}`,
+				biller_category: BILLER_LIST,
+			},
+			experiment: {
+				name: AUTOPAY_EXPERIMENT,
+				startDaysBeforeEnd: (END_MS / 1000 - ms(AUTOPAY_TEST_START) / 1000) / 86400,
+				variants: [
+					{ name: "Control" },
+					{ name: AUTOPAY_VARIANT, conversionMultiplier: AUTOPAY_DEFAULT_MULT },
+				],
+			},
+		},
+		{
+			name: "Support",
+			sequence: ["support ticket opened", "support ticket resolved"],
+			conversionRate: 90,
+			timeToConvert: 36,
+			order: "sequential",
+			weight: 1,
+			props: {
+				ticket_id: (ctx) => `tkt_${chance.hash({ length: 10 })}`,
+				issue_type: ["card", "card", "transfer", "transfer", "account_access", "fees", "direct_deposit", "dispute", "card_declined"],
+				contact_channel: ["chat", "chat", "chat", "in_app", "in_app", "phone", "email"],
+			},
+		},
+		{
+			name: "Upgrade",
+			sequence: ["plan comparison viewed", "plan upgraded"],
+			conditions: { plan_tier: "free" },
+			conversionRate: 4,
+			timeToConvert: 1,
+			order: "sequential",
 			weight: 2,
-			isStrictEvent: false,
-			properties: {
-				"old_tier": ["basic", "plus", "premium"],
-				"new_tier": ["plus", "premium", "premium"],
-				"monthly_fee": [4.99, 9.99, 14.99],
-			}
+		},
+	],
+
+	warehouseMetrics: [
+		{
+			name: "paid_acquisition_daily",
+			type: "additive",
+			grain: "day",
+			source: {
+				event: "account opened",
+				measure: "count",
+				where: (e) => PAID_CHANNELS.includes(e.acquisition_channel),
+				groupBy: "acquisition_channel",
+			},
+			timeColumn: "date",
+			valueColumn: "spend_usd",
+			columns: {
+				platform_reported_installs: (ctx) => Math.round(paidSpend(ctx.seriesKey, ctx.bucketIndex, ctx.value, ctx.time) * PLATFORM_INSTALL_INFLATION / CPL_USD[ctx.seriesKey] * jitter(`inst|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.25)),
+				clicks: (ctx) => Math.round(paidSpend(ctx.seriesKey, ctx.bucketIndex, ctx.value, ctx.time) / (CPC_USD[ctx.seriesKey] * jitter(`cpc|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.15))),
+				impressions: (ctx) => Math.round(ctx.row.clicks / (CTR[ctx.seriesKey] * jitter(`ctr|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.15))),
+			},
 		},
 		{
-			event: "support contacted",
-			weight: 3,
-			isStrictEvent: false,
-			properties: {
-				"channel": ["chat", "phone", "email", "in_app"],
-				"issue_type": ["transaction", "account", "card", "transfer", "technical"],
-				"resolved": [false, true, true, true, true],
-			}
+			name: "card_authorizations_daily",
+			type: "additive",
+			grain: "day",
+			source: { event: "card transaction", measure: "count", groupBy: "payment_channel" },
+			timeColumn: "date",
+			valueColumn: "auth_attempts",
+			columns: {
+				approval_rate: (ctx) => {
+					const j = hashFloat(`appr|${dayKey(ctx.time)}|${ctx.seriesKey}`);
+					const base = 0.935 + j * 0.02;
+					return ctx.seriesKey === OUTAGE_CHANNEL && inOutage(ctx.time) ? Math.round(base * (1 - OUTAGE_FAIL) * 10000) / 10000 : Math.round(base * 10000) / 10000;
+				},
+				tokenization_error_rate: (ctx) => {
+					if (ctx.seriesKey !== OUTAGE_CHANNEL) return 0;
+					const j = hashFloat(`tok|${dayKey(ctx.time)}`);
+					return inOutage(ctx.time) ? round2(OUTAGE_FAIL + (j - 0.5) * 0.04) : Math.round((0.001 + j * 0.003) * 10000) / 10000;
+				},
+				processor_status: (ctx) => (ctx.seriesKey === OUTAGE_CHANNEL && inOutage(ctx.time) ? "major_outage" : "operational"),
+				p95_auth_latency_ms: (ctx) => {
+					const j = hashFloat(`lat|${dayKey(ctx.time)}|${ctx.seriesKey}`);
+					return ctx.seriesKey === OUTAGE_CHANNEL && inOutage(ctx.time) ? Math.round(4200 + j * 2500) : Math.round(({ chip: 620, contactless_wallet: 480, online: 710, atm: 900 }[ctx.seriesKey] || 650) * (0.9 + j * 0.2));
+				},
+			},
 		},
 		{
-			event: "notification opened",
-			weight: 10,
-			properties: {
-				"notification_type": ["transaction", "low_balance", "bill_due", "reward", "security", "promo"],
-				"action_taken": [false, false, true, true, true],
-			}
+			name: "pocket_savings_daily",
+			type: "additive",
+			grain: "day",
+			source: { event: "savings deposit", measure: "sum", property: "amount", groupBy: "plan_tier" },
+			timeColumn: "date",
+			valueColumn: "deposits_usd",
+			columns: {
+				apy_pct: (ctx) => apyFor(ctx.seriesKey, ctx.time),
+				promo_code: (ctx) => (PAID_PLANS.includes(ctx.seriesKey) && inBoost(ctx.time) ? "SUMMER_SAVER" : "none"),
+				withdrawals_usd: (ctx) => pocketFlows(ctx.seriesKey, ctx.bucketIndex, ctx.value, ctx.time).withdrawals,
+				interest_paid_usd: (ctx) => pocketFlows(ctx.seriesKey, ctx.bucketIndex, ctx.value, ctx.time).interest,
+				pocket_balance_usd: (ctx) => pocketFlows(ctx.seriesKey, ctx.bucketIndex, ctx.value, ctx.time).balance,
+			},
 		},
-		{
-			event: "reward redeemed",
-			weight: 4,
-			isStrictEvent: false,
-			properties: {
-				"reward_type": ["cashback", "points", "discount", "partner_offer"],
-				"value": u.weighNumRange(1, 100, 0.5, 10),
-			}
-		}
 	],
 
 	superProps: {
-		account_tier: ["basic", "basic", "basic", "plus", "plus", "premium"],
-		Platform: ["ios", "android", "web"],
+		plan_tier: ["free"],
 	},
 
 	userProps: {
-		account_tier: ["basic", "basic", "basic", "plus", "plus", "premium"],
-		Platform: ["ios", "android", "web"],
-		"credit_score_range": ["300-579", "580-669", "670-739", "740-799", "800-850"],
-		"income_bracket": ["under_30k", "30k_50k", "50k_75k", "75k_100k", "100k_150k", "over_150k"],
-		"account_age_months": u.weighNumRange(1, 60, 0.5, 12),
-		"total_balance": u.weighNumRange(0, 100000, 0.3, 5000),
-		"has_direct_deposit": [false, false, true, true, true],
-		"account_segment": ["personal"],
-		"employee_count": [0],
-		"annual_revenue": [0],
-		"industry": [""],
-		"age_range": [""],
-		"life_stage": [""],
+		customer_segment: ["everyday"],
+		credit_history: ["established"],
+		acquisition_channel: { __weights: CHANNEL_WEIGHTS },
+		plan_tier: ["free"],
+		customer_since: ["2025-01-01"],
+		age_band: ["25-34"],
+		pay_frequency: ["none"],
+		direct_deposit_active: [false],
+		round_ups_enabled: [false],
 	},
 
-	groupKeys: [
-		["household_id", 500, ["transaction completed", "transfer sent", "bill paid", "savings goal set"]],
-	],
+	personas: Object.entries(SEGMENTS).map(([name, s]) => ({
+		name, weight: s.weight, eventMultiplier: s.mult, properties: { customer_segment: name },
+	})),
 
-	groupProps: {
-		household_id: {
-			"household_size": u.weighNumRange(1, 6),
-			"combined_income": u.weighNumRange(20000, 300000, 0.3, 75000),
-			"financial_health_score": u.weighNumRange(1, 100, 1, 65),
-			"primary_bank": ["NexBank_only", "multi_bank", "NexBank_only"],
-		}
-	},
-
-	lookupTables: [],
+	retentionCurve: { type: "logarithmic", day1: 0.8, day7: 0.65, day30: 0.55 },
 
 	hook(record, type, meta) {
-		if (type === "user") return handleUserHooks(record);
-		if (type === "event") return handleEventHooks(record);
-		if (type === "everything") return handleEverythingHooks(record, meta);
+		if (type === "user") return handleUserHook(record, meta);
+		if (type === "everything") return handleEverything(record, meta);
+		if (type === "warehouse") return handleWarehouse(record, meta);
 		return record;
-	}
+	},
 };
 
-// ── STORIES ──
-// Machine-checkable contract for the 10 hooks above. Thresholds derive from
-// the knob constants (and the declared property distributions), never from
-// observed output. duckdb assertions run in disk mode only
-// (scripts/verify-stories.mjs after scripts/verify-runner.mjs).
+// ── STORIES ──────────────────────────────────────────────────────────────
+// Machine-checkable contract for hooks H1-H10. Evaluate with:
+//   node dungeons/vertical/fintech/fintech.verify.mjs
 
-const EV = `read_json_auto('{{PREFIX}}-EVENTS*.json', sample_size=-1, union_by_name=true)`;
-const US = `read_json_auto('{{PREFIX}}-USERS*.json', sample_size=-1, union_by_name=true)`;
+const EV = `read_json_auto('{{PREFIX}}-EVENTS*.json*', sample_size=-1, union_by_name=true)`;
+const US = `read_json_auto('{{PREFIX}}-USERS*.json*', sample_size=-1, union_by_name=true)`;
+const WH = (table) => `read_json_auto('{{PREFIX}}-WAREHOUSE-${table}.json*', sample_size=-1, union_by_name=true)`;
 
-/**
- * Five-tier verdict for a cohort ratio measured by a custom assert:
- * NAILED within ±10% of target, STRONG past floor, WEAK direction-correct,
- * INVERSE wrong side of 1, NONE exactly neutral. Mirrors verdictFor() for
- * op '>=' — needed because avg_aggregate is value-like and the select
- * grammar can't sum it across the multi-row freq>=1 selection.
- */
-function ratioVerdict(ratio, target, floor, detail, smallestCohort, minCohort) {
-	if (!Number.isFinite(ratio)) return { pass: false, verdict: "NONE", detail: `ratio not computable — ${detail}` };
-	let verdict;
-	if (Math.abs(ratio - target) <= 0.1 * target) verdict = "NAILED";
-	else if (ratio >= floor) verdict = "STRONG";
-	else if (ratio > 1) verdict = "WEAK";
-	else if (ratio < 1) verdict = "INVERSE";
-	else verdict = "NONE";
-	if ((verdict === "NAILED" || verdict === "STRONG") && smallestCohort < minCohort) {
-		verdict = "WEAK";
-		detail += ` — capped: smallest cohort ${smallestCohort} < minCohort ${minCohort}`;
-	}
-	return { pass: verdict === "NAILED" || verdict === "STRONG", verdict, detail };
-}
+// Identity prelude: a device resolves to the user who appears with it on any
+// event carrying both ids (emitted stitch evidence). Every event in this
+// dataset carries user_id, so uid equals user_id; the prelude keeps the SQL
+// honest if that ever changes.
+const ID_CTE = `dmap AS (SELECT device_id, min(user_id::VARCHAR) AS mapped FROM ${EV}
+  WHERE user_id IS NOT NULL AND device_id IS NOT NULL GROUP BY 1),
+ev AS (SELECT coalesce(e.user_id::VARCHAR, m.mapped) AS uid, e.time::TIMESTAMP AS t, e.*
+  FROM ${EV} e LEFT JOIN dmap m ON e.device_id = m.device_id)`;
+
+const TS = (isoStr) => dayjs.utc(isoStr).format("YYYY-MM-DD HH:mm:ss");
+const D = (isoStr) => isoStr.slice(0, 10);
+const band = (k) => [Math.round(k * 0.9 * 1000) / 1000, Math.round(k * 1.1 * 1000) / 1000];
+const SQL_LIST = (xs) => xs.map((x) => `'${x}'`).join(", ");
+const RAMPED = TS(dayjs.utc(ROUNDUPS_LAUNCH).add(ROUNDUP_RAMP_DAYS, "day"));
+const INC_BASE_FROM = TS(dayjs.utc(OUTAGE_START).subtract(7, "day"));
+const INC_BASE_TO = TS(dayjs.utc(OUTAGE_END).add(7, "day"));
+const DD_COHORT_END = TS(dayjs.utc(DATASET_END).subtract(DD_WINDOW_DAYS, "day"));
+const RET_COHORT_END = TS(dayjs.utc(DATASET_END).subtract(RETENTION_DAY + 7, "day"));
+
+/** step_counts conversion for a set of segments from a timeToConvert breakdown. */
+const convOf = (rows, segs) => {
+	const rs = (rows || []).filter((x) => segs.includes(x.segment_value) && Array.isArray(x.step_counts) && x.step_counts[0]);
+	if (!rs.length) return null;
+	const entered = rs.reduce((a, r) => a + r.step_counts[0], 0);
+	const converted = rs.reduce((a, r) => a + r.step_counts[r.step_counts.length - 1], 0);
+	return { entered, converted, rate: converted / entered };
+};
+
+// H8: the boost days come from the warehouse (promo_code), the read is the
+// first BOOST_READ_DAYS boost days vs the BOOST_READ_DAYS days before
+const H8_SQL = `WITH ${ID_CTE},
+b AS (SELECT min(date::DATE) AS d0 FROM ${WH("pocket_savings_daily")} WHERE promo_code <> 'none'),
+w AS (SELECT CASE WHEN plan_tier IN (${SQL_LIST(PAID_PLANS)}) THEN 'paid' ELSE 'free' END AS grp,
+  (t >= (SELECT d0 FROM b)) AS boost, event, uid FROM ev
+  WHERE ((event = 'savings deposit' AND source = 'manual') OR event = 'app opened')
+  AND t >= (SELECT d0 FROM b) - INTERVAL ${BOOST_READ_DAYS} DAY AND t < (SELECT d0 FROM b) + INTERVAL ${BOOST_READ_DAYS} DAY),
+g AS (SELECT grp, boost, count(*) FILTER (WHERE event = 'savings deposit')::DOUBLE / count(*) FILTER (WHERE event = 'app opened') AS r,
+  count(DISTINCT uid) AS users FROM w GROUP BY 1, 2)
+SELECT grp, min(users) AS user_count, max(r) FILTER (WHERE boost) / max(r) FILTER (WHERE NOT boost) AS did FROM g GROUP BY 1`;
+
+const H7_SQL = `WITH ${ID_CTE}
+SELECT CASE WHEN autopay THEN 'autopay' ELSE 'manual' END AS grp, count(DISTINCT uid) AS user_count, count(*) AS payments,
+ avg((payment_status = 'late')::INT) AS late_share
+FROM ev WHERE event = 'bill paid' GROUP BY 1`;
+
+const H6_SQL = `WITH ${ID_CTE},
+v AS (SELECT distinct_id::VARCHAR AS uid, "${EXP_KEY}" AS variant FROM ${US} WHERE "${EXP_KEY}" IS NOT NULL),
+b AS (SELECT uid, biller_id, t AS t0 FROM ev WHERE event = 'biller added' AND t >= TIMESTAMP '${TS(AUTOPAY_TEST_START)}'),
+a AS (SELECT biller_id, min(t) AS t1 FROM ev WHERE event = 'autopay enabled' GROUP BY 1)
+SELECT v.variant AS grp, count(DISTINCT b.uid) AS user_count, count(*) AS billers,
+ avg(coalesce(a.t1 >= b.t0 AND a.t1 < b.t0 + INTERVAL 1 DAY, false)::INT) AS conv
+FROM b JOIN v ON v.uid = b.uid LEFT JOIN a ON a.biller_id = b.biller_id GROUP BY 1`;
+
+const H10_SQL = `WITH ${ID_CTE},
+n AS (SELECT uid, count(*) FILTER (WHERE event = 'budget created') AS budgets FROM ev GROUP BY 1)
+SELECT CASE WHEN budgets >= ${BUDGET_MAGIC} THEN 'three_plus' WHEN budgets = ${BUDGET_MAGIC - 1} THEN 'two' ELSE 'zero_one' END AS grp,
+ count(DISTINCT ev.uid) AS user_count, count(*) AS deposits, avg(amount) AS avg_amount
+FROM ev JOIN n ON n.uid = ev.uid WHERE ev.event = 'savings deposit' AND ev.source = 'manual' GROUP BY 1
+UNION ALL
+SELECT 'zero_two' AS grp, count(DISTINCT ev.uid) AS user_count, count(*) AS deposits, avg(amount) AS avg_amount
+FROM ev JOIN n ON n.uid = ev.uid WHERE ev.event = 'savings deposit' AND ev.source = 'manual' AND n.budgets < ${BUDGET_MAGIC}`;
 
 /** @type {import("../../../types").DungeonStory[]} */
 export const stories = [
 	{
-		id: "H1-business-txn-4x",
+		id: "H1-thin-file-onboarding",
 		hook: "H1",
-		archetype: "cohort-prop-scale",
-		narrative: `${BUSINESS_LIKELIHOOD}% of accounts are business; their transaction amounts run ${BUSINESS_TXN_MULT}x personal (H1 user attrs + H1B everything-mult)`,
+		archetype: "funnel-conversion-by-segment",
+		narrative: `Applicants with a thin credit file (credit_history = thin_file) cannot be verified instantly against credit bureau data, so they upload documents and wait for review. They finish onboarding (account opened → identity verified → account funded, 7-day window) at ${THIN_FILE_MULT}x the rate of established files (${THIN_ONBOARD_CONV}% vs ${ONBOARD_CONV}%). Two declared first funnels with credit_history conditions; every step is an onboarding-only event, so the unique-user funnel reads the knobs directly.`,
+		mixpanelReport: { type: "Funnels", steps: ONBOARD_STEPS, breakdown: "user property credit_history", window: "7 days" },
 		assertions: [
 			{
-				// user mix: 20/80 → business/personal user ratio 0.25
-				breakdown: {
-					type: "duckdb",
-					sql: `SELECT account_segment AS seg, count(*) AS user_count FROM ${US} GROUP BY 1`,
+				breakdown: { type: "timeToConvert", steps: ONBOARD_STEPS, breakdownByUserProperty: "credit_history", conversionWindowMs: 7 * DAY_MS },
+				// custom assert: conversion lives in the step_counts ARRAY of each
+				// segment row; the expect grammar cannot index arrays
+				assert: (rows) => {
+					const thin = convOf(rows, ["thin_file"]), est = convOf(rows, ["established"]);
+					if (!thin || !est) return { verdict: "NONE", detail: "missing segment rows" };
+					if (thin.entered < 500 || est.entered < 1500) return { verdict: "WEAK", detail: `small segments ${thin.entered}/${est.entered}` };
+					const ratio = thin.rate / est.rate;
+					const [lo, hi] = band(THIN_ONBOARD_CONV / ONBOARD_CONV);
+					const detail = `onboarding conversion thin_file ${thin.converted}/${thin.entered}=${thin.rate.toFixed(4)} vs established ${est.converted}/${est.entered}=${est.rate.toFixed(4)}; ratio ${ratio.toFixed(4)} (knob ${THIN_ONBOARD_CONV}/${ONBOARD_CONV}, band [${lo}, ${hi}])`;
+					if (ratio >= lo && ratio <= hi) return { verdict: "NAILED", detail };
+					return { verdict: ratio < 1 ? "WEAK" : "INVERSE", detail };
 				},
-				select: {
-					business: { where: { seg: "business" } },
-					personal: { where: { seg: "personal" } },
-				},
-				expect: { metric: "business.user_count / personal.user_count", op: "between", target: [0.22, 0.28] },
-				minCohort: 200,
-			},
-			{
-				// amount ratio: BUSINESS_TXN_MULT = 4 exactly; floor 3 absorbs the
-				// H3 fraud-burst txns (fresh $500-3000 amounts spliced AFTER the
-				// H1B multiply, so they dilute the business avg slightly)
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH seg AS (SELECT distinct_id AS user_id, account_segment FROM ${US})
-SELECT s.account_segment AS seg, avg(e.amount) AS avg_amount, count(DISTINCT e.user_id) AS user_count
-FROM ${EV} e JOIN seg s USING (user_id)
-WHERE e.event = 'transaction completed' AND e.amount IS NOT NULL GROUP BY 1`,
-				},
-				select: {
-					business: { where: { seg: "business" } },
-					personal: { where: { seg: "personal" } },
-				},
-				expect: { metric: "business.avg_amount / personal.avg_amount", op: ">=", target: BUSINESS_TXN_MULT, floor: 3 },
-				minCohort: 200,
 			},
 		],
 	},
 	{
-		id: "H2-payday-amounts",
+		id: "H2-direct-deposit-retention",
 		hook: "H2",
-		archetype: "temporal-inflection",
-		narrative: `direct deposits ${PAYDAY_DEPOSIT_MULT}x on the 1st/15th; transfers avg ${(PAYDAY_TRANSFER_LIKELIHOOD / 100) * PAYDAY_TRANSFER_MULT + (1 - PAYDAY_TRANSFER_LIKELIHOOD / 100)}x in the 1-3/15-17 windows (${PAYDAY_TRANSFER_LIKELIHOOD}% of transfers x${PAYDAY_TRANSFER_MULT})`,
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `SELECT CASE WHEN EXTRACT(DAY FROM time::TIMESTAMP) IN (1, 15) THEN 'payday' ELSE 'other' END AS bucket,
-avg(amount) AS avg_amount, count(*) AS event_count
-FROM ${EV} WHERE event = 'transaction completed' AND transaction_type = 'direct_deposit' AND amount IS NOT NULL GROUP BY 1`,
-				},
-				select: {
-					payday: { where: { bucket: "payday" } },
-					other: { where: { bucket: "other" } },
-				},
-				// PAYDAY_DEPOSIT_MULT = 3 exactly (every 1st/15th deposit tripled)
-				expect: { metric: "payday.avg_amount / other.avg_amount", op: ">=", target: PAYDAY_DEPOSIT_MULT, floor: 2.5 },
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `SELECT CASE WHEN EXTRACT(DAY FROM time::TIMESTAMP) IN (1, 2, 3, 15, 16, 17) THEN 'payday_window' ELSE 'other' END AS bucket,
-avg(amount) AS avg_amount, count(*) AS event_count
-FROM ${EV} WHERE event = 'transfer sent' AND amount IS NOT NULL GROUP BY 1`,
-				},
-				select: {
-					window: { where: { bucket: "payday_window" } },
-					other: { where: { bucket: "other" } },
-				},
-				// E[mult] = 0.6*2 + 0.4*1 = 1.6
-				expect: { metric: "window.avg_amount / other.avg_amount", op: ">=", target: 1.6, floor: 1.4 },
-			},
-		],
-	},
-	{
-		id: "H3-fraud-cohort-share",
-		hook: "H3",
-		archetype: "bespoke",
-		narrative: `~${FRAUD_LIKELIHOOD}% of SUPPORT-HISTORY users (those with organic card-locked + dispute-filed templates) carry the full fraud signature: ${FRAUD_BURST_MIN}+ rapid credit purchases, then a suspicious-activity lock and an unauthorized dispute within 1h. The bare lock+dispute pair is NOT the detector — organic Support-funnel pairs with colliding reasons outnumber the hook ~4:1. Scoping the denominator to support-history users cancels the template-availability factor (~0.62), so the target is FRAUD_LIKELIHOOD itself`,
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					// Numerator: users with >= FRAUD_BURST_MIN credit purchases in the
-					// 65 min before a suspicious lock, plus an unauthorized dispute
-					// within 1h after it (hook stamps lock at burst+5..55 min, dispute
-					// 25 min later). Denominator: users with both template event types
-					// (any reason) — the only users the hook can leave a signature on.
-					sql: `WITH locks AS (SELECT user_id, epoch(time::TIMESTAMP) AS t FROM ${EV} WHERE event = 'card locked' AND reason = 'suspicious_activity'),
-disputes AS (SELECT user_id, epoch(time::TIMESTAMP) AS t FROM ${EV} WHERE event = 'dispute filed' AND reason = 'unauthorized'),
-txns AS (SELECT user_id, epoch(time::TIMESTAMP) AS t FROM ${EV} WHERE event = 'transaction completed' AND transaction_type = 'purchase' AND payment_method = 'credit'),
-burst_locks AS (
-  SELECT l.user_id, l.t FROM locks l JOIN txns x ON x.user_id = l.user_id AND x.t BETWEEN l.t - 3900 AND l.t
-  GROUP BY 1, 2 HAVING count(*) >= ${FRAUD_BURST_MIN}
-),
-sig AS (SELECT DISTINCT b.user_id FROM burst_locks b JOIN disputes d ON d.user_id = b.user_id AND d.t - b.t BETWEEN 0 AND 3600),
-hist AS (SELECT count(*) AS n FROM (
-  SELECT user_id FROM ${EV} WHERE event = 'card locked' GROUP BY 1
-  INTERSECT
-  SELECT user_id FROM ${EV} WHERE event = 'dispute filed' GROUP BY 1
-))
-SELECT 'fraud' AS grp, (SELECT count(*) FROM sig) AS user_count, (SELECT count(*) FROM sig)::DOUBLE / (SELECT n FROM hist) AS fraction`,
-				},
-				select: { fraud: { where: { grp: "fraud" } } },
-				// Target = FRAUD_LIKELIHOOD/100 = 0.03. At full fidelity (10K users,
-				// ~300 picks x 0.62 templates x ~0.91 surviving H4 churn ≈ 170 sig
-				// users / ~6200 support-history users ≈ 0.027; binomial sd ~0.002)
-				// the band is ±3-4sd. At 1500-user iteration sd is ~3x wider —
-				// an iteration miss on a low draw is expected; judge at full scale.
-				expect: { metric: "fraud.fraction", op: "between", target: [0.02, 0.04] },
-				minCohort: 100,
-			},
-		],
-	},
-	{
-		id: "H4-lowbal-churn-suppression",
-		hook: "H4",
 		archetype: "retention-divergence",
-		narrative: `users with ${LOW_BALANCE_CHECK_THRESHOLD}+ balance checks under $${LOW_BALANCE_THRESHOLD} lose ${LOW_BALANCE_DROP_LIKELIHOOD}% of post-day-${LOW_BALANCE_CHURN_CUTOFF_DAYS} events — their post/pre event ratio runs ~0.5x the healthy cohort's. Band [0.4, 0.65]: cohorts are classified from OUTPUT counts, so churned users whose dropped events fell under 3 visible low checks dilute the healthy side, pulling the ratio above the raw 0.5`,
+		narrative: `Funded new members who do not set up direct deposit within ${DD_WINDOW_DAYS} days of opening their account: ${DARK_SHARE * 100}% of them go dark after day ${DARK_AFTER_DAYS}. Whether a member sets up direct deposit is drawn per member (rate by acquisition channel, H5), independently of how active the member is, and every new member also faces the same organic lapse (${LAPSE_SHARE * 100}% stop on a uniform day ${LAPSE_DAYS[0]}-${LAPSE_DAYS[1]}). Day-${RETENTION_DAY} retention (app opened in days ${RETENTION_DAY}-${RETENTION_DAY + 6} after account opened; members who opened at least ${RETENTION_DAY + 7} days before the window end) of direct-deposit-in-${DD_WINDOW_DAYS}-days members is therefore 1/(1−${DARK_SHARE}) = ${1 / (1 - DARK_SHARE)}x the rest. Mixpanel: Funnels account opened → direct deposit set up (${DD_WINDOW_DAYS}-day window) among members who did account funded; save converted and not-converted users as cohorts; Retention account opened → app opened, custom bracket day ${RETENTION_DAY}-${RETENTION_DAY + 6}, breakdown by those cohorts.`,
+		mixpanelReport: { type: "Funnels → cohorts → Retention", cohortFunnel: `account opened → direct deposit set up, ${DD_WINDOW_DAYS}-day window, filter did account funded`, birth: "account opened", return: "app opened", brackets: `custom: day ${RETENTION_DAY}-${RETENTION_DAY + 6}` },
 		assertions: [
 			{
 				breakdown: {
 					type: "duckdb",
-					sql: `WITH ev AS (SELECT user_id, event, time::TIMESTAMP AS t, TRY_CAST(account_balance AS DOUBLE) AS bal FROM ${EV}),
-cutoff AS (SELECT min(t) + INTERVAL ${LOW_BALANCE_CHURN_CUTOFF_DAYS} DAY AS c FROM ev),
-low AS (SELECT user_id, count(*) FILTER (WHERE event = 'balance checked' AND bal < ${LOW_BALANCE_THRESHOLD}) AS low_checks FROM ev GROUP BY 1)
-SELECT CASE WHEN l.low_checks >= ${LOW_BALANCE_CHECK_THRESHOLD} THEN 'lowbal' ELSE 'healthy' END AS grp,
-count(DISTINCT e.user_id) AS user_count,
-(count(*) FILTER (WHERE e.t >= (SELECT c FROM cutoff)))::DOUBLE / nullif(count(*) FILTER (WHERE e.t < (SELECT c FROM cutoff)), 0) AS post_pre
-FROM ev e JOIN low l USING (user_id) GROUP BY 1`,
+					sql: `WITH ${ID_CTE},
+s AS (SELECT uid, t AS t0 FROM ev WHERE event = 'account opened' AND t < TIMESTAMP '${RET_COHORT_END}'
+  AND uid IN (SELECT uid FROM ev WHERE event = 'account funded')),
+d AS (SELECT uid, min(t) AS td FROM ev WHERE event = 'direct deposit set up' GROUP BY 1),
+f AS (SELECT s.uid, coalesce(d.td < s.t0 + INTERVAL ${DD_WINDOW_DAYS} DAY, false) AS dd,
+  count(e.uid) FILTER (WHERE e.event = 'app opened' AND e.t >= s.t0 + INTERVAL ${RETENTION_DAY} DAY AND e.t < s.t0 + INTERVAL ${RETENTION_DAY + 7} DAY) AS ret
+  FROM s LEFT JOIN d ON d.uid = s.uid LEFT JOIN ev e ON e.uid = s.uid GROUP BY 1, 2)
+SELECT CASE WHEN dd THEN 'dd14' ELSE 'no_dd14' END AS grp, count(*) AS user_count, avg((ret > 0)::INT) AS retention FROM f GROUP BY 1`,
 				},
-				select: {
-					lowbal: { where: { grp: "lowbal" } },
-					healthy: { where: { grp: "healthy" } },
-				},
-				expect: { metric: "lowbal.post_pre / healthy.post_pre", op: "between", target: [0.4, 0.65] },
-				minCohort: 300,
+				select: { a: { where: { grp: "dd14" } }, n: { where: { grp: "no_dd14" } } },
+				expect: { metric: "a.retention / n.retention", op: "between", target: band(1 / (1 - DARK_SHARE)) },
+				minCohort: 500,
 			},
 		],
 	},
 	{
-		id: "H5-budget-discipline",
+		id: "H3-round-ups-launch",
+		hook: "H3",
+		archetype: "temporal-inflection",
+		narrative: `Round-Ups launch ${D(ROUNDUPS_LAUNCH)}. ${ROUNDUP_ADOPT * 100}% of members turn it on, each on a day in the ${ROUNDUP_RAMP_DAYS} days after launch (at their first app visit from that day; members who join later turn it on at their first visit). From then on, each day with approved card purchases produces a Round-Up sweep the next morning: a server-side savings deposit with source = 'round_up' and amount = the day's spare change times the member's multiplier. Read 1: no round_up deposit exists before launch. Read 2: after the ramp, the share of members with an approved card purchase who also have a round_up deposit is the adoption knob (adoption is drawn independently of spending).`,
+		mixpanelReport: { type: "Insights", event: "savings deposit", measure: "uniques", breakdown: "source", chart: "weekly line" },
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT 'all' AS grp, count(DISTINCT uid) AS user_count,
+ count(*) FILTER (WHERE source = 'round_up' AND t < TIMESTAMP '${TS(ROUNDUPS_LAUNCH)}') AS impure_rows
+FROM ev WHERE event = 'savings deposit'`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				// exact: a round_up deposit before launch is a bug
+				expect: { metric: "a.impure_rows", op: "between", target: [0, 0] },
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+p AS (SELECT DISTINCT uid FROM ev WHERE event = 'card transaction' AND transaction_type = 'purchase' AND authorization_status = 'approved' AND t >= TIMESTAMP '${RAMPED}'),
+r AS (SELECT DISTINCT uid FROM ev WHERE event = 'savings deposit' AND source = 'round_up' AND t >= TIMESTAMP '${RAMPED}')
+SELECT 'purchasers' AS grp, count(*) AS user_count, count(r.uid)::DOUBLE / count(*) AS roundup_share FROM p LEFT JOIN r ON r.uid = p.uid`,
+				},
+				select: { a: { where: { grp: "purchasers" } } },
+				expect: { metric: "a.roundup_share", op: "between", target: band(ROUNDUP_ADOPT) },
+				minCohort: 2000,
+			},
+		],
+	},
+	{
+		id: "H4-wallet-outage",
+		hook: "H4",
+		archetype: "bespoke",
+		narrative: `Penny Harbor's card processor's tokenization service fails from ${D(OUTAGE_START)} to ${D(OUTAGE_END)} (exclusive): ${OUTAGE_FAIL * 100}% of mobile-wallet (payment_channel = '${OUTAGE_CHANNEL}') transactions that would have been approved are declined. Half the declined members retry with the chip within minutes, and ${OUTAGE_TICKET * 100}% of declines lead to a support ticket. The outage days and channel come from the warehouse table card_authorizations_daily (processor_status = 'major_outage'); the event-side read is a ratio of ratios (wallet approval rate / other channels' approval rate, outage days vs the 7 days either side), which reads the 1 − ${OUTAGE_FAIL} keep rate while cancelling weekday and member mix.`,
+		mixpanelReport: { type: "Insights", event: "card transaction", measure: "share with authorization_status = approved", breakdown: "payment_channel", chart: "daily line", join: "warehouse card_authorizations_daily.processor_status" },
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+o AS (SELECT DISTINCT date::DATE AS d, payment_channel FROM ${WH("card_authorizations_daily")} WHERE processor_status = 'major_outage'),
+od AS (SELECT DISTINCT d FROM o), oc AS (SELECT DISTINCT payment_channel FROM o),
+w AS (SELECT t::DATE AS d, uid, (payment_channel IN (SELECT payment_channel FROM oc)) AS hit, (authorization_status = 'approved') AS ok
+  FROM ev WHERE event = 'card transaction' AND t >= TIMESTAMP '${INC_BASE_FROM}' AND t < TIMESTAMP '${INC_BASE_TO}'),
+g AS (SELECT (d IN (SELECT d FROM od)) AS outage, avg(ok::INT) FILTER (WHERE hit) / avg(ok::INT) FILTER (WHERE NOT hit) AS rel, count(DISTINCT uid) AS users FROM w GROUP BY 1)
+SELECT 'all' AS grp, (SELECT count(*) FROM od) AS outage_days, min(users) AS user_count,
+ max(rel) FILTER (WHERE outage) / max(rel) FILTER (WHERE NOT outage) AS did
+FROM g`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.did", op: "between", target: band(1 - OUTAGE_FAIL) },
+				minCohort: 1000,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `SELECT 'all' AS grp,
+ count(*) FILTER (WHERE processor_status = 'major_outage') AS outage_rows,
+ avg(tokenization_error_rate) FILTER (WHERE processor_status = 'major_outage') AS outage_err
+FROM ${WH("card_authorizations_daily")}`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				// warehouse tokenization error rate during the outage = the failure knob
+				expect: { metric: "a.outage_err", op: "between", target: band(OUTAGE_FAIL) },
+			},
+		],
+	},
+	{
+		id: "H5-paid-channel-economics",
 		hook: "H5",
-		archetype: "cohort-prop-scale",
-		narrative: `disciplined budgeters (${BUDGET_DISCIPLINE_MIN}+ budget-created events, ~77% of users) get ${BUDGET_SAVINGS_MULT}x savings contributions and ${BUDGET_INVESTMENT_MULT}x investment amounts vs light budgeters (0-${BUDGET_DISCIPLINE_MIN - 1}, ~14% — measured; a 1+ gate would leave a ~0.4% control group, unmeasurable)`,
+		archetype: "attribution-bias",
+		narrative: `Comparison-site signups cost ${(CPL_USD.comparison_sites / CPL_USD.paid_social).toFixed(2)}x as much as paid-social signups over the window (warehouse paid_acquisition_daily bills a paced daily budget per channel = cost per signup × expected signups per day, weekday shape above a ${SPEND_FLAT_SHARE * 100}% flat floor, seeded ±${SPEND_NOISE * 100}% noise, never zero: $${CPL_USD.comparison_sites} vs $${CPL_USD.paid_social} per signup at the window level), but funded comparison-site members set up direct deposit within ${DD_WINDOW_DAYS} days ${(DD_ADOPT.comparison_sites / DD_ADOPT.paid_social).toFixed(2)}x as often (${DD_ADOPT.comparison_sites} vs ${DD_ADOPT.paid_social}; channel is drawn independently of segment and credit file, so per signup the ratio is the same). Spend per signup needs the warehouse join. The direct-deposit read is the Mixpanel funnel account opened → direct deposit set up with a ${DD_WINDOW_DAYS}-day window for signups through ${D(DD_COHORT_END)}; paid-social direct-deposit counts are about a hundred, so it uses the knob as target with a knob-derived floor.`,
+		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account opened", breakdown: "acquisition_channel", join: "paid_acquisition_daily.spend_usd", funnel: `account opened → direct deposit set up, ${DD_WINDOW_DAYS}-day window, breakdown acquisition_channel` },
 		assertions: [
 			{
-				// avg_aggregate is value-like → custom assert does the user_count-
-				// weighted mean on each side of the discipline gate (select grammar
-				// can't aggregate a value-like column across rows).
-				breakdown: { type: "aggregatePerUser", event: "savings goal set", property: "monthly_contribution", agg: "avg", breakdownByFrequencyOf: "budget created" },
-				assert: (rows) => {
-					const lo = (rows || []).filter(r => r.breakdown_freq < BUDGET_DISCIPLINE_MIN);
-					const hi = (rows || []).filter(r => r.breakdown_freq >= BUDGET_DISCIPLINE_MIN);
-					if (!lo.length || !hi.length) return { pass: false, verdict: "NONE", detail: `missing cohort: light=${lo.length} disciplined=${hi.length} rows` };
-					const wmean = rs => rs.reduce((s, r) => s + r.avg_aggregate * r.user_count, 0) / rs.reduce((s, r) => s + r.user_count, 0);
-					const usersLo = lo.reduce((s, r) => s + r.user_count, 0);
-					const usersHi = hi.reduce((s, r) => s + r.user_count, 0);
-					const ratio = wmean(hi) / wmean(lo);
-					return ratioVerdict(ratio, BUDGET_SAVINGS_MULT, 1.7,
-						`disciplined avg=${wmean(hi).toFixed(0)} (${usersHi}u) vs light=${wmean(lo).toFixed(0)} (${usersLo}u) ratio=${ratio.toFixed(2)}`,
-						Math.min(usersLo, usersHi), 100);
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+s AS (SELECT acquisition_channel AS ch, count(*) AS signups, count(DISTINCT uid) AS users FROM ev WHERE event = 'account opened' GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM ${WH("paid_acquisition_daily")} GROUP BY 1)
+SELECT s.ch AS grp, s.users AS user_count, sp.spend / s.signups AS spend_per_signup FROM s JOIN sp ON sp.ch = s.ch`,
 				},
+				select: { c: { where: { grp: "comparison_sites" } }, p: { where: { grp: "paid_social" } } },
+				expect: { metric: "c.spend_per_signup / p.spend_per_signup", op: "between", target: band(CPL_USD.comparison_sites / CPL_USD.paid_social) },
+				minCohort: 400,
 			},
 			{
-				breakdown: { type: "aggregatePerUser", event: "investment made", property: "amount", agg: "avg", breakdownByFrequencyOf: "budget created" },
-				assert: (rows) => {
-					const lo = (rows || []).filter(r => r.breakdown_freq < BUDGET_DISCIPLINE_MIN);
-					const hi = (rows || []).filter(r => r.breakdown_freq >= BUDGET_DISCIPLINE_MIN);
-					if (!lo.length || !hi.length) return { pass: false, verdict: "NONE", detail: `missing cohort: light=${lo.length} disciplined=${hi.length} rows` };
-					const wmean = rs => rs.reduce((s, r) => s + r.avg_aggregate * r.user_count, 0) / rs.reduce((s, r) => s + r.user_count, 0);
-					const usersLo = lo.reduce((s, r) => s + r.user_count, 0);
-					const usersHi = hi.reduce((s, r) => s + r.user_count, 0);
-					const ratio = wmean(hi) / wmean(lo);
-					// H7 sell-mult and H10 sweet-band boost hit both cohorts alike
-					// (tier and txn count are independent of budget count) —
-					// floor 1.3 absorbs the residual mix noise
-					return ratioVerdict(ratio, BUDGET_INVESTMENT_MULT, 1.3,
-						`disciplined avg=${wmean(hi).toFixed(0)} (${usersHi}u) vs light=${wmean(lo).toFixed(0)} (${usersLo}u) ratio=${ratio.toFixed(2)}`,
-						Math.min(usersLo, usersHi), 100);
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+s AS (SELECT uid, t AS t0, acquisition_channel AS ch FROM ev WHERE event = 'account opened' AND t < TIMESTAMP '${DD_COHORT_END}'),
+d AS (SELECT uid, min(t) AS td FROM ev WHERE event = 'direct deposit set up' GROUP BY 1)
+SELECT s.ch AS grp, count(*) AS user_count, avg(coalesce(d.td < s.t0 + INTERVAL ${DD_WINDOW_DAYS} DAY, false)::INT) AS dd_rate
+FROM s LEFT JOIN d ON d.uid = s.uid GROUP BY 1`,
 				},
+				select: { c: { where: { grp: "comparison_sites" } }, p: { where: { grp: "paid_social" } } },
+				expect: { metric: "c.dd_rate / p.dd_rate", op: ">=", target: DD_ADOPT.comparison_sites / DD_ADOPT.paid_social, floor: 1 + 0.5 * (DD_ADOPT.comparison_sites / DD_ADOPT.paid_social - 1) },
+				minCohort: 400,
 			},
 		],
 	},
 	{
-		id: "H6-autopay-missed-share",
+		id: "H6-autopay-default-experiment",
 		hook: "H6",
-		archetype: "composition-drift",
-		narrative: `manual payers (60% of bills, auto_pay enum 3/5 false) miss ${MISSED_BILL_LIKELIHOOD}% of payments → missed/paid = (0.6*0.3)/(1-0.18) ~ 0.22`,
+		archetype: "experiment-lift",
+		narrative: `The "${AUTOPAY_EXPERIMENT}" test starts ${D(AUTOPAY_TEST_START)} and splits members who add a biller 50/50 (sticky hash). "${AUTOPAY_VARIANT}" pre-selects AutoPay on the add-biller screen and multiplies the share of new billers that get AutoPay by ${AUTOPAY_DEFAULT_MULT} (${AUTOPAY_CONV}% → ${Math.round(AUTOPAY_CONV * AUTOPAY_DEFAULT_MULT)}%). A biller and its AutoPay event share a biller_id, so a totals funnel holding biller_id constant measures per-biller adoption.`,
+		mixpanelReport: { type: "Funnels", steps: ["biller added", "autopay enabled"], counting: "totals", holdPropertyConstant: "biller_id", breakdown: `user property "${EXP_KEY}"`, window: "1 day" },
 		assertions: [
 			{
-				breakdown: { type: "eventBreakdown", breakdownProperty: "event" },
-				select: {
-					missed: { where: { value: "bill payment missed" } },
-					paid: { where: { value: "bill paid" } },
+				breakdown: { type: "duckdb", sql: H6_SQL },
+				select: { v: { where: { grp: AUTOPAY_VARIANT } }, c: { where: { grp: "Control" } } },
+				expect: { metric: "v.conv / c.conv", op: "between", target: band(AUTOPAY_DEFAULT_MULT) },
+				minCohort: 1000,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT 'all' AS grp, count(DISTINCT uid) AS user_count,
+ count(DISTINCT uid) FILTER (WHERE "Variant name" = '${AUTOPAY_VARIANT}')::DOUBLE / count(DISTINCT uid) AS variant_share
+FROM ev WHERE event = '$experiment_started'`,
 				},
-				expect: { metric: "missed.count / paid.count", op: "between", target: [0.19, 0.25] },
+				select: { a: { where: { grp: "all" } } },
+				// equal-weight 2-arm hash → 0.5
+				expect: { metric: "a.variant_share", op: "between", target: band(0.5) },
+				minCohort: 1500,
 			},
 		],
 	},
 	{
-		id: "H7-premium-tier-value",
+		id: "H7-manual-payers-pay-late",
 		hook: "H7",
 		archetype: "cohort-prop-scale",
-		narrative: `premium gets ${PREMIUM_REWARD_MULT}x reward value and ${PREMIUM_INVEST_SELL_MULT}x investment-sell amounts; plus gets ${PLUS_REWARD_MULT}x rewards. account_tier is hook-pinned per user, so event-property breakdowns are clean`,
+		narrative: `Every bill payment comes from a biller's monthly schedule (due day per biller; rent on the 1st). A payment the member makes by hand is late ${LATE_SHARE.manual * 100}% of the time; an AutoPay payment is late ${LATE_SHARE.autopay * 100}% of the time (insufficient funds, retried a few business days later). AutoPay applies from the moment it is turned on for that biller, so the autopay flag on bill paid is the payment method at payment time. Both shares are knob reads.`,
+		mixpanelReport: { type: "Insights", event: "bill paid", measure: "total", breakdown: ["autopay", "payment_status"] },
 		assertions: [
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `SELECT account_tier AS tier, avg(TRY_CAST("value" AS DOUBLE)) AS avg_value, count(DISTINCT user_id) AS user_count
-FROM ${EV} WHERE event = 'reward redeemed' AND "value" IS NOT NULL GROUP BY 1`,
-				},
-				select: {
-					premium: { where: { tier: "premium" } },
-					basic: { where: { tier: "basic" } },
-				},
-				expect: { metric: "premium.avg_value / basic.avg_value", op: ">=", target: PREMIUM_REWARD_MULT, floor: 2.5 },
-				minCohort: 150,
+				breakdown: { type: "duckdb", sql: H7_SQL },
+				select: { m: { where: { grp: "manual" } } },
+				expect: { metric: "m.late_share", op: "between", target: band(LATE_SHARE.manual) },
+				minCohort: 2000,
 			},
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `SELECT account_tier AS tier, avg(TRY_CAST("value" AS DOUBLE)) AS avg_value, count(DISTINCT user_id) AS user_count
-FROM ${EV} WHERE event = 'reward redeemed' AND "value" IS NOT NULL GROUP BY 1`,
-				},
-				select: {
-					plus: { where: { tier: "plus" } },
-					basic: { where: { tier: "basic" } },
-				},
-				expect: { metric: "plus.avg_value / basic.avg_value", op: ">=", target: PLUS_REWARD_MULT, floor: 1.3 },
-				minCohort: 150,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `SELECT account_tier AS tier, avg(amount) AS avg_amount, count(DISTINCT user_id) AS user_count
-FROM ${EV} WHERE event = 'investment made' AND action = 'sell' AND amount IS NOT NULL GROUP BY 1`,
-				},
-				select: {
-					premium: { where: { tier: "premium" } },
-					basic: { where: { tier: "basic" } },
-				},
-				// H5 (x1.5) and H10 (x1.4) investment boosts are tier-independent —
-				// they multiply both cohorts alike; floor 1.6 absorbs the noise
-				expect: { metric: "premium.avg_amount / basic.avg_amount", op: ">=", target: PREMIUM_INVEST_SELL_MULT, floor: 1.6 },
-				minCohort: 150,
+				breakdown: { type: "duckdb", sql: H7_SQL },
+				select: { a: { where: { grp: "autopay" } } },
+				expect: { metric: "a.late_share", op: "between", target: band(LATE_SHARE.autopay) },
+				minCohort: 2000,
 			},
 		],
 	},
 	{
-		id: "H8-month-end-anxiety",
+		id: "H8-summer-saver-boost",
 		hook: "H8",
 		archetype: "temporal-inflection",
-		narrative: `days >= ${MONTH_END_DAY_THRESHOLD}: session durations ${MONTH_END_SESSION_MULT}x, reported balances ${MONTH_END_BALANCE_MULT}x`,
+		narrative: `From ${D(BOOST_START)} through Sep 30 the Summer Saver Boost pays ${APY_BOOST.toFixed(2)}% APY on Plus and Premium Pockets (from ${APY_BASE.plus.toFixed(2)}% / ${APY_BASE.premium.toFixed(2)}%); Free stays ${APY_BASE.free.toFixed(2)}%. Members on Plus or Premium (plan_tier at event time) make ${BOOST_DEPOSIT_MULT}x as many manual Pocket deposits; Free members do not change. The boost exists only in the warehouse table pocket_savings_daily (apy_pct, promo_code); the read takes the boost start from it and compares manual deposits per app visit in the first ${BOOST_READ_DAYS} boost days vs the ${BOOST_READ_DAYS} days before, which reads the multiplier for paid plans and 1.0 for Free while cancelling weekday mix and the growing member base. Round-Up sweeps are a separate source and are excluded.`,
+		mixpanelReport: { type: "Insights", events: ["savings deposit (source = manual)", "app opened"], measure: "total", formula: "A / B", breakdown: "plan_tier", chart: "weekly line", join: "pocket_savings_daily.apy_pct" },
 		assertions: [
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `SELECT CASE WHEN EXTRACT(DAY FROM time::TIMESTAMP) >= ${MONTH_END_DAY_THRESHOLD} THEN 'monthEnd' ELSE 'other' END AS bucket,
-avg(session_duration_sec) AS avg_duration, count(*) AS event_count
-FROM ${EV} WHERE event = 'app session' AND session_duration_sec IS NOT NULL GROUP BY 1`,
-				},
-				select: {
-					monthEnd: { where: { bucket: "monthEnd" } },
-					other: { where: { bucket: "other" } },
-				},
-				expect: { metric: "monthEnd.avg_duration / other.avg_duration", op: ">=", target: MONTH_END_SESSION_MULT, floor: 1.25 },
+				breakdown: { type: "duckdb", sql: H8_SQL },
+				select: { p: { where: { grp: "paid" } } },
+				expect: { metric: "p.did", op: "between", target: band(BOOST_DEPOSIT_MULT) },
+				minCohort: 1000,
 			},
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `SELECT CASE WHEN EXTRACT(DAY FROM time::TIMESTAMP) >= ${MONTH_END_DAY_THRESHOLD} THEN 'monthEnd' ELSE 'other' END AS bucket,
-avg(TRY_CAST(account_balance AS DOUBLE)) AS avg_balance, count(*) AS event_count
-FROM ${EV} WHERE event = 'balance checked' AND account_balance IS NOT NULL GROUP BY 1`,
-				},
-				select: {
-					monthEnd: { where: { bucket: "monthEnd" } },
-					other: { where: { bucket: "other" } },
-				},
-				expect: { metric: "monthEnd.avg_balance / other.avg_balance", op: "<=", target: MONTH_END_BALANCE_MULT, floor: 0.8 },
+				breakdown: { type: "duckdb", sql: H8_SQL },
+				select: { f: { where: { grp: "free" } } },
+				// control: Free Pockets earn the same rate throughout
+				expect: { metric: "f.did", op: "between", target: band(1) },
+				minCohort: 1000,
 			},
 		],
 	},
 	{
-		id: "H9-onboarding-ttc-by-tier",
+		id: "H9-premium-priority-support",
 		hook: "H9",
 		archetype: "funnel-ttc-by-segment",
-		narrative: `onboarding TTC scaled per tier: basic x${TTC_BASIC_FACTOR}, premium x${TTC_PREMIUM_FACTOR} → basic/premium MEDIAN TTC ratio = ${(TTC_BASIC_FACTOR / TTC_PREMIUM_FACTOR).toFixed(3)}, plus (x1.0) between them. Median, not avg: TTC is heavy-tailed under a 30-day window and converter cohorts are small (only born-in users run onboarding) — at iteration scale a single straggler made plus's AVG exceed basic's; the median ratio recovers the exact factors`,
+		narrative: `Premium includes priority support: time from "support ticket opened" to "support ticket resolved" is ${SUPPORT_PLAN_MULT.premium}x for members on Premium when they open the ticket, vs Free and Plus. A ticket's two events share a ticket_id, so a funnel holding ticket_id constant measures each ticket on its own; contact channel speed is independent of plan, so the median ratio reads the knob.`,
+		mixpanelReport: { type: "Funnels", steps: ["support ticket opened", "support ticket resolved"], measure: "median time to convert", holdPropertyConstant: "ticket_id", breakdown: "plan_tier" },
 		assertions: [
 			{
 				breakdown: {
-					type: "timeToConvert",
-					steps: ["account opened", "app session", "balance checked"],
-					breakdownByUserProperty: "account_tier",
-					conversionWindowMs: 30 * 86400000, // funnel default conversionWindowDays
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+o AS (SELECT ticket_id, any_value(uid) AS uid, min(t) AS t0, any_value(plan_tier) AS plan FROM ev WHERE event = 'support ticket opened' GROUP BY 1),
+r AS (SELECT ticket_id, min(t) AS t1 FROM ev WHERE event = 'support ticket resolved' GROUP BY 1),
+x AS (SELECT CASE WHEN o.plan = 'premium' THEN 'premium' ELSE 'free_plus' END AS grp, o.uid, date_diff('second', o.t0, r.t1) AS ttc
+  FROM o JOIN r ON r.ticket_id = o.ticket_id WHERE r.t1 >= o.t0)
+SELECT grp, count(DISTINCT uid) AS user_count, count(*) AS tickets, median(ttc) AS med_ttc FROM x GROUP BY 1`,
 				},
-				select: {
-					basic: { where: { segment_value: "basic" } },
-					premium: { where: { segment_value: "premium" } },
-				},
-				// multiplicative gap scaling multiplies the median exactly →
-				// median ratio = TTC_BASIC_FACTOR / TTC_PREMIUM_FACTOR ≈ 1.985
-				expect: { metric: "basic.median_ttc_ms / premium.median_ttc_ms", op: ">=", target: TTC_BASIC_FACTOR / TTC_PREMIUM_FACTOR, floor: 1.5 },
-				minCohort: 100,
-			},
-			{
-				breakdown: {
-					type: "timeToConvert",
-					steps: ["account opened", "app session", "balance checked"],
-					breakdownByUserProperty: "account_tier",
-					conversionWindowMs: 30 * 86400000,
-				},
-				select: {
-					plus: { where: { segment_value: "plus" } },
-					premium: { where: { segment_value: "premium" } },
-				},
-				// plus is unscaled (factor 1.0) → plus/premium = 1/0.67 ≈ 1.49;
-				// ordering check that premium is genuinely fastest
-				expect: { metric: "plus.median_ttc_ms / premium.median_ttc_ms", op: ">=", target: 1 / TTC_PREMIUM_FACTOR, floor: 1.2 },
-				minCohort: 100,
+				select: { p: { where: { grp: "premium" } }, o: { where: { grp: "free_plus" } } },
+				expect: { metric: "p.med_ttc / o.med_ttc", op: "between", target: band(SUPPORT_PLAN_MULT.premium) },
+				minCohort: 250,
 			},
 		],
 	},
 	{
-		id: "H10-txn-magic-number",
+		id: "H10-budget-magic-number",
 		hook: "H10",
-		archetype: "frequency-sweet-spot",
-		narrative: `sweet-band users (${TXN_SWEET_MIN}-${TXN_SWEET_MAX} txns) invest ${TXN_INVESTMENT_BOOST}x vs the 1-${TXN_SWEET_MIN - 1} band; over-band (${TXN_OVER_THRESHOLD}+) loses ${TXN_PREMIUM_DROP_LIKELIHOOD}% of premium upgrades — visible as upgrade share of NON-TXN events (raw upgrades-per-user rises with activity, and the over band is selected for high txn counts, tilting its event mix toward txns; normalizing by non-txn events removes both distortions)`,
+		archetype: "cohort-prop-scale",
+		narrative: `Members who create ${BUDGET_MAGIC} or more budgets in the window put ${BUDGET_SAVE_MULT}x as much into each manual Pocket deposit as members with fewer. It is a step at ${BUDGET_MAGIC}, flat on either side: members with ${BUDGET_MAGIC - 1} budgets deposit the same as members with 0-1. The base deposit size does not depend on segment or activity, so the ratio of average deposit amounts reads the knob even though heavier users create more budgets. Mixpanel: Insights, savings deposit filtered to source = manual, average amount, breakdown by cohort bins on the count of budget created in the window.`,
+		mixpanelReport: { type: "Insights", event: "savings deposit (source = manual)", measure: "average amount", breakdown: "cohorts: did budget created ≥3 / exactly 2 / 0-1 times" },
 		assertions: [
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH txn AS (SELECT user_id, count(*) AS n FROM ${EV} WHERE event = 'transaction completed' GROUP BY 1),
-bands AS (SELECT user_id, CASE WHEN n BETWEEN ${TXN_SWEET_MIN} AND ${TXN_SWEET_MAX} THEN 'sweet' WHEN n < ${TXN_SWEET_MIN} THEN 'low' ELSE 'over' END AS band FROM txn)
-SELECT b.band, avg(e.amount) AS avg_amount, count(DISTINCT e.user_id) AS user_count
-FROM ${EV} e JOIN bands b USING (user_id)
-WHERE e.event = 'investment made' AND e.amount IS NOT NULL GROUP BY 1`,
-				},
-				select: {
-					sweet: { where: { band: "sweet" } },
-					low: { where: { band: "low" } },
-				},
-				// TXN_INVESTMENT_BOOST = 1.4; floor 1.2 absorbs band-mix noise
-				// (H5's x1.5 is near-universal in both bands)
-				expect: { metric: "sweet.avg_amount / low.avg_amount", op: ">=", target: TXN_INVESTMENT_BOOST, floor: 1.2 },
-				minCohort: 300,
+				breakdown: { type: "duckdb", sql: H10_SQL },
+				select: { h: { where: { grp: "three_plus" } }, l: { where: { grp: "zero_two" } } },
+				expect: { metric: "h.avg_amount / l.avg_amount", op: "between", target: band(BUDGET_SAVE_MULT) },
+				minCohort: 1000,
 			},
 			{
-				breakdown: {
-					type: "duckdb",
-					// share of NON-TXN events: the over band is selected for high txn
-					// counts, which mechanically tilts its mix toward txns — dividing
-					// by non-txn events removes the tilt so only the 20% drop remains
-					sql: `WITH txn AS (SELECT user_id, count(*) AS n FROM ${EV} WHERE event = 'transaction completed' GROUP BY 1),
-bands AS (SELECT user_id, CASE WHEN n BETWEEN ${TXN_SWEET_MIN} AND ${TXN_SWEET_MAX} THEN 'sweet' WHEN n < ${TXN_SWEET_MIN} THEN 'low' ELSE 'over' END AS band FROM txn)
-SELECT b.band, (count(*) FILTER (WHERE e.event = 'premium upgraded'))::DOUBLE / (count(*) FILTER (WHERE e.event != 'transaction completed')) AS upgrade_share, count(DISTINCT e.user_id) AS user_count
-FROM ${EV} e JOIN bands b USING (user_id) GROUP BY 1`,
-				},
-				select: {
-					over: { where: { band: "over" } },
-					sweet: { where: { band: "sweet" } },
-				},
-				// drop knob = 20% → share ratio 0.8; STRONG bound 0.9
-				expect: { metric: "over.upgrade_share / sweet.upgrade_share", op: "<=", target: 1 - TXN_PREMIUM_DROP_LIKELIHOOD / 100, floor: 0.9 },
-				minCohort: 300,
+				breakdown: { type: "duckdb", sql: H10_SQL },
+				select: { t: { where: { grp: "two" } }, z: { where: { grp: "zero_one" } } },
+				// below the threshold nothing changes: 2 budgets vs 0-1
+				expect: { metric: "t.avg_amount / z.avg_amount", op: "between", target: band(1) },
+				minCohort: 1000,
 			},
 		],
 	},
