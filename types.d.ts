@@ -1369,7 +1369,9 @@ export interface Funnel {
 	 */
 	experiment?: boolean | ExperimentConfig;
 	/**
-	 * optional: if set, in sequential funnels, this will determine WHEN the property is bound to the rest of the events in the funnel
+	 * optional: if set, in sequential funnels, this will determine WHEN the property is bound to the rest of the events in the funnel.
+	 * Counts real steps (the engine-prepended `$experiment_started` is not a step and never
+	 * carries funnel `props`). Steps before it keep their own event properties (1.9.0).
 	 */
 	bindPropsIndex?: number;
 	/**

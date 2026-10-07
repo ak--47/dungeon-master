@@ -231,6 +231,15 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   designed drop to 0.30 with band [0.27, 0.33] observed at 0.267 was WEAK
   (ratio) or NONE (single ref with `floor: 0.4`); now STRONG. Output shift:
   verifier verdicts only.
+- Count `bindPropsIndex` in real funnel steps. On an experiment funnel the
+  prepended `$experiment_started` shifted it, so the funnel `props` bound one
+  real step early (`bindPropsIndex: 1` on `view > cart > buy`: 1,391 `view`
+  rows carried the funnel value; now 0). Steps before the index now keep their
+  own declared value of a funnel prop key; the merge-then-delete removed it, so
+  1,352 pre-bind `view` rows had no `search_id` at all. Funnel `props` still
+  apply to every step from the index on, the `isAuthEvent` step included (README:
+  "constant props on all funnel events"); `$experiment_started` never carries
+  them. Output shift: funnels with `bindPropsIndex`.
 
 ### Added
 
