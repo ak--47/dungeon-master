@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Hearthside**, a fan community p
 
 - **Product:** the Hearthside web site and mobile apps. Members join hobby communities in six hubs (gaming, anime, movies & TV, books, tabletop, music), read and edit community wikis, start and reply to discussion threads, upvote, upload fan art and media, and report bad content to volunteer moderators. Hearthside is free with ads; Hearthside Plus is the paid, ad-free membership.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, early June through the first day of October.
-- **Scale:** about 10,000 signed-in members were active in the window. About 4,450 of them joined during the window; the rest were already members before June 4. The project holds about 950,000 events. There are 48 communities.
+- **Scale:** about 10,000 signed-in members were active in the window. About 4,580 of them joined during the window; the rest were already members before June 4. The project holds about 970,000 events. There are 48 communities.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC.
 
 ## The other files

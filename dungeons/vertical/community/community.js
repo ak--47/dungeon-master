@@ -16,13 +16,15 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             upvote, upload fan art, and report bad content to volunteer
  *             moderators. Free with ads; Hearthside Plus ($4.99/month or
  *             $49.99/year) removes ads and adds flair, badges, and larger uploads.
- * SCALE:      10,000 members (≈4,450 join inside the window), ~0.95M events,
+ * SCALE:      10,000 members (≈4,580 join inside the window), ~0.97M events,
  *             120 days (2026-06-04 → 2026-10-01, UTC), 48 communities.
  *             Volume sits about a third below the standard's ~1.4M on purpose:
  *             the hooks keep 5-20% of lurkers' and readers' contributions, half
- *             of new threads, and stop new members who abandon setup or lapse
- *             (a hobby community's newcomer churn). The engine budget is the
- *             standard 1.2 events per member-day.
+ *             of new threads, drop established members' quiet weeks, and stop
+ *             new members who abandon setup or lapse (a hobby community's
+ *             newcomer churn). The engine budget is the standard 1.2 events per
+ *             member-day; persona multipliers carry ENGAGEMENT_SCALE (1.5) so an
+ *             active member-week holds about 11 member actions.
  * CORE LOOP:  article viewed / search performed → discussion viewed → comment posted
  * VALUE MOMENT: comment posted (a member takes part, not only reads)
  *
@@ -42,7 +44,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *       content_hub, community per thread; A/B "Reply Nudges" from 2026-07-08, H3)
  *   - Report: report submitted → report resolved (98%; report_id, report_type,
  *       content_hub per report; resolution timing rebuilt in the hook, H4; the
- *       other 2% close as duplicates with no resolution event)
+ *       other 2% close as duplicates with no resolution event). Reporters also
+ *       flag content while browsing (hook-built report units, same 98%).
  *   - Upgrade to Plus (free members): plus page viewed → plus subscribed (12%
  *       engine rate, 2 h; the hook keeps 45-100% by upgrade_trigger, H8)
  *
@@ -75,17 +78,31 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   edits, threads, comments, uploads); only moderators take moderation
  *   actions; half of all "discussion posted" are kept (starting a thread is
  *   rarer than replying). Moderators also act during their sessions: each
- *   moderator's rate is drawn per member (mean 0.3 actions per activity event,
- *   about 3 a week). Reporting and upgrade browsing come from a minority of
- *   members (35% and 45%, whole funnel units).
+ *   moderator's rate is drawn per member (mean 0.3 actions per activity event).
+ *   Reporting and upgrade browsing come from a minority of members (8% and
+ *   45%, whole funnel units); each reporter also flags content while browsing
+ *   at a rate drawn per reporter (mean 0.06 per activity event), about 7
+ *   reports per reporter in the window.
+ * - Established members drift in and out: each one's weeks follow a seeded
+ *   two-state chain (active / quiet; long-run quiet share drawn per member,
+ *   0-70%, lag-1 persistence 0.5, so quiet stretches last weeks). A quiet week
+ *   drops what the member does, as whole thread, report, and upgrade units;
+ *   notifications keep arriving at 35%. About 63% of established members are
+ *   active in a given week.
+ * - Notifications follow posting: organic reply notifications are kept at
+ *   about 0.35 per post (comments, threads, articles, uploads, intro) and, for
+ *   new members, only after their first post; mentions scale with posts above
+ *   a small base. Lurkers get almost none.
  * - Hubs: 55% of a member's activity is in their home hub. Wiki pages and
  *   communities are hub-consistent (a page id and a community id always belong
  *   to the event's hub); a thread's view and reply share one community.
  * - Experiment exposure: the engine logs one $experiment_started per member,
- *   1 s before their first enrolled thread view.
+ *   1 s before their first enrolled thread view; when that view falls in an
+ *   established member's quiet week, the exposure moves to 1 s before their
+ *   first surviving enrolled view.
  * - New members' fate is decided in one pass: onboarding (H2), first reply
  *   (H6), setup abandonment (50% of non-finishers stop on day 0.5-4), and an
- *   organic lapse (60% stop on a uniform day 5-75). A cut stops what the
+ *   organic lapse (70% stop on a uniform day 5-60). A cut stops what the
  *   member does; notifications keep arriving at 35% of the rate and report
  *   resolutions still post.
  * - Reports: resolution time is a seeded log-normal (median 16 h) scaled by
@@ -93,8 +110,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   filed in the engine's 3-day lead-in before June 4 keep their resolution
  *   when its implied filing time is before the window, so June starts with a
  *   queue in flight.
- * - Warehouse drift: trust_safety_daily.reports_received adds email and
- *   logged-out reports (~20%, seeded per hub-day) to the Mixpanel count;
+ * - Warehouse drift: trust_safety_daily.reports_received adds logged-out
+ *   readers' reports (~10%, seeded per hub-day) and an email inbox (1-3 a day
+ *   per hub on average, independent of the day's count) to the Mixpanel count;
  *   ad_revenue_daily counts every ad-serving page view (logged-in free members
  *   × ~15 for logged-out search readers, ±12% per hub-day) × ad slots × fill
  *   rate; paid_marketing_daily spend is a paced budget, never derived from the
@@ -159,8 +177,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H5. ANIME SPAM RAID (everything + warehouse trust_safety_daily)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: 2026-08-19 to 2026-08-21, 45% of would-be anime comments, threads,
- *   upvotes, and uploads never happen; 25% of reporting members active in anime
- *   file a spam report. Warehouse: raid_alert_level = raid, spam_accounts_removed
+ *   upvotes, and uploads never happen; 20% of members active in anime during
+ *   the raid file a spam report. Warehouse: raid_alert_level = raid, spam_accounts_removed
  *   ~14x, automod and volunteer hours up, for anime on those days only.
  * MIXPANEL: Insights, comment posted / discussion posted / upvote given / media
  *   uploaded, breakdown content_hub, daily; join the warehouse raid days.
@@ -202,8 +220,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   Plus conversion per visit rises 1.6x; both ramp in over 7 days.
  * MIXPANEL: Insights formula article viewed / search performed, breakdown
  *   membership, before vs after; Funnels plus page viewed → plus subscribed,
- *   totals, 1-day window, before vs after, breakdown upgrade_trigger;
- *   warehouse impressions per free view.
+ *   totals, 1-day window, before vs after, breakdown upgrade_trigger (the SQL
+ *   rebuilds the totals funnel's attempts: a visit inside an open attempt folds
+ *   into it); warehouse impressions per free view.
  * REAL WORLD: more ads earn more per page, cost some reading, and push the
  *   most annoyed readers to pay for ad-free.
  *
@@ -228,49 +247,46 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * REAL WORLD: a themed community event lifts participation, not traffic.
  *
  * ═════════════════════════════════════════════════════════════════════════
- * EXPECTED METRICS SUMMARY (measured: data/verify-community, 2026-10-07, 947,195 events)
+ * EXPECTED METRICS SUMMARY (measured: data/verify-community, 2026-10-07, 968,319 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation                 | Expected | Measured
  * -----|------------------------------------------------|----------------------------|----------|---------
- * H1   | gaming/other reading+search, launch / before   | mean of 2.6 → 1.4 ramp     | 2.00     | 1.923
- * H1   | other hubs, launch fortnight / fortnight before| untouched                  | 1.00     | 1.026
- * H1   | Starfall Guild share of gaming article views   | (s + 0.75 + 0.25s) / 2     | 0.554    | 0.560 (0.286 before)
- * H2   | onboarding friend_invite / organic             | 0.72 / 0.52                | 1.385    | 1.363 (70.4% vs 51.7%)
- * H3   | reply rate per thread view, Nudges / Control   | NUDGE_CONV_MULT            | 1.20     | 1.207 (31.4% vs 26.0%)
- * H3   | median view → reply time, Nudges / Control     | NUDGE_TTC_MULT             | 0.80     | 0.796 (12.0 vs 15.1 min)
- * H3   | Nudges share of exposed members                | equal 2-arm hash           | 0.50     | 0.493
- * H4   | median resolve time DiD, triaged / other types | GUARD_RESOLVE_MULT         | 0.35     | 0.373 (11.6 → 4.3 h vs 24.7 → 24.4 h)
- * H4   | other types, after / before (control)          | untouched                  | 1.00     | 0.987
- * H4   | reports with no resolution, Jun-Aug filings    | 1 − REPORT_CONV            | 0.02     | 0.021-0.024
- * H5   | anime share of participation, raid / base      | RAID_KEEP, ceiling 0.775   | 0.55     | 0.553
- * H5   | other hubs' participation, raid / base         | untouched                  | 1.00     | 0.999
- * H6   | D30 on-or-after, replied / not replied         | 1/(1 − 0.5), floor 1.333   | 2.00     | 2.019 (74.0% vs 36.7%)
- * H6   | intros with a reply within 24 h                | FAST_REPLY_SHARE           | 0.55     | 0.558
- * H7   | edited again in 30 d, reverted / kept          | 1 − 0.6, ceiling 0.7       | 0.40     | 0.458 (26.8% vs 58.6%)
- * H7   | first edits reverted                           | REVERT_SHARE               | 0.35     | 0.345
- * H8   | impressions per free article view, after/before| 2.4 / 1.5 slots            | 1.60     | 1.612 (19.3 → 31.1)
- * H8   | views per search, free DiD vs Plus             | AD_READING_KEEP            | 0.90     | 0.921
- * H8   | Plus conversion per visit, after / before      | trigger mix × keep, floor  | 1.601    | 1.577 (9.28% vs 5.88%)
- * H8   | ad_free share of Plus visits, after the ramp   | AD_FREE_SHARE_AFTER        | 0.55     | 0.545 (0.401 before)
- * H8   | ad_free conversion per visit, after / before   | 1 / 0.5, floor 1.5         | 2.00     | 2.077 (11.8% vs 5.69%)
- * H8   | other triggers' conversion, after / before     | untouched (not asserted)   | 1.00     | 1.037 (6.24% vs 6.02%)
- * H9   | spend per signup, TikTok / Reddit              | 5 / 8                      | 0.625    | 0.630 ($5.05 vs $8.02)
- * H9   | spend per onboarded member, TikTok / Reddit    | 0.625 × 0.55/0.25          | 1.375    | 1.414 ($20.05 vs $14.18)
- * H10  | participation, fest / neighbor Thu-Sun         | FEST_MULT                  | 1.60     | 1.603
- * H10  | article reading, fest / neighbor Thu-Sun       | untouched                  | 1.00     | 0.979
+ * H1   | gaming/other reading+search, launch / before   | mean of 2.6 → 1.4 ramp     | 2.00     | 2.019
+ * H1   | other hubs, launch fortnight / fortnight before| untouched                  | 1.00     | 1.002
+ * H1   | Starfall Guild share of gaming article views   | (s + 0.75 + 0.25s) / 2     | 0.560    | 0.557 (0.296 before)
+ * H2   | onboarding friend_invite / organic             | 0.72 / 0.52                | 1.385    | 1.343 (69.9% vs 52.0%)
+ * H3   | reply rate per thread view, Nudges / Control   | NUDGE_CONV_MULT            | 1.20     | 1.228 (31.8% vs 25.9%)
+ * H3   | median view → reply time, Nudges / Control     | NUDGE_TTC_MULT             | 0.80     | 0.802 (12.1 vs 15.0 min)
+ * H3   | Nudges share of exposed members                | equal 2-arm hash           | 0.50     | 0.494
+ * H4   | median resolve time DiD, triaged / other types | GUARD_RESOLVE_MULT         | 0.35     | 0.374 (11.3 → 4.2 h vs 24.9 → 24.6 h)
+ * H4   | other types, after / before (control)          | untouched                  | 1.00     | 0.989
+ * H4   | reports with no resolution, Jun-Sep filings    | 1 − REPORT_CONV            | 0.02     | 0.018-0.029
+ * H5   | anime share of participation, raid / base      | RAID_KEEP, ceiling 0.775   | 0.55     | 0.503
+ * H5   | other hubs' participation, raid / base         | untouched                  | 1.00     | 1.032
+ * H6   | D30 on-or-after, replied / not replied         | 1/(1 − 0.5), floor 1.333   | 2.00     | 1.941 (60.6% vs 31.2%)
+ * H6   | intros with a reply within 24 h                | FAST_REPLY_SHARE           | 0.55     | 0.548
+ * H7   | edited again in 30 d, reverted / kept          | 1 − 0.6, ceiling 0.7       | 0.40     | 0.427 (27.5% vs 64.5%)
+ * H7   | first edits reverted                           | REVERT_SHARE               | 0.35     | 0.347
+ * H8   | impressions per free article view, after/before| 2.4 / 1.5 slots            | 1.60     | 1.611 (19.31 → 31.11)
+ * H8   | views per search, free DiD vs Plus             | AD_READING_KEEP            | 0.90     | 0.897
+ * H8   | Plus conversion per attempt, after / before    | trigger mix × keep, floor  | 1.601    | 1.534 (9.65% vs 6.29%)
+ * H8   | ad_free share of Plus attempts, after the ramp | AD_FREE_SHARE_AFTER        | 0.55     | 0.543 (0.396 before)
+ * H8   | ad_free conversion per attempt, after / before | 1 / 0.5, floor 1.5         | 2.00     | 1.887 (12.5% vs 6.64%)
+ * H8   | other triggers' conversion, after / before     | untouched (not asserted)   | 1.00     | 1.026 (6.22% vs 6.06%)
+ * H9   | spend per signup, TikTok / Reddit              | 5 / 8                      | 0.625    | 0.640 ($4.87 vs $7.60)
+ * H9   | spend per onboarded member, TikTok / Reddit    | 0.625 × 0.55/0.25          | 1.375    | 1.471 ($20.95 vs $14.25)
+ * H10  | participation, fest / neighbor Thu-Sun         | FEST_MULT                  | 1.60     | 1.551
+ * H10  | article reading, fest / neighbor Thu-Sun       | untouched                  | 1.00     | 0.996
  * ═════════════════════════════════════════════════════════════════════════
  *
- * 9 stories grade NAILED; H7 grades STRONG. Its read is noise-limited: 380
- * reverted new editors, and the realized quit share among them is 0.557
- * against the 0.6 knob (z ≈ −1.7), while reverted editors who did not quit
- * edit again at the same rate as kept editors (0.607 vs 0.586). Relative SE
- * of the ratio is about 9%, so it carries the knob target plus a knob-derived
- * ceiling (half the effect). H5 and H8's conversion reads use the same
- * target-plus-floor form (about 380 anime participation events over three
- * raid days; 120-180 ad-free conversions per period) and land within ±10%
- * of the knob in this run. H4 excludes reports filed during the H5 raid (spam
+ * All 10 stories grade NAILED. H5, H6, H7, and H8's conversion reads are
+ * noise-limited (about 380 anime participation events over three raid days;
+ * a few hundred retained members per H6 group; 414 reverted new editors;
+ * 120-180 ad-free conversions per period), so they carry the knob target plus
+ * a knob-derived floor or ceiling (half the effect); in this run each lands
+ * within ±10% of its knob. H4 excludes reports filed during the H5 raid (spam
  * floods the triaged mix) and requires a week of resolution time (censoring).
- * H9's onboarded-member read inherits H2's binomial noise (233 TikTok
+ * H9's onboarded-member read inherits H2's binomial noise (223 TikTok
  * onboarded members).
  */
 
@@ -341,10 +357,30 @@ const DARK_SHARE_NO_REPLY = 0.5;    // intro without a reply in 24 h: share who 
 const DARK_DAY_MIN = 3;             // each such member's quiet day after the intro is drawn per member
 const DARK_DAY_MAX = 21;            // (skewed early, always before day 30)
 const RETENTION_DAY = 30;
-const LAPSE_SHARE = 0.6;            // organic lapse, every new member, independent of everything else
+const LAPSE_SHARE = 0.7;            // organic lapse, every new member, independent of everything else
 const LAPSE_DAY_MIN = 5;
-const LAPSE_DAY_MAX = 75;
+const LAPSE_DAY_MAX = 60;
 const LAPSED_NOTIFICATION_KEEP = 0.35; // notifications a member keeps receiving after going quiet
+
+// Established members drift in and out (realism, not a story): each member's weeks
+// follow a two-state chain (active / quiet). A member's long-run quiet share is drawn
+// per member (0 to QUIET_SHARE_MAX, mean half of it); week-to-week persistence
+// QUIET_PERSISTENCE gives multi-week quiet stretches. A quiet week drops what the
+// member does (whole thread, report, and upgrade units); notifications keep arriving
+// at LAPSED_NOTIFICATION_KEEP.
+const QUIET_SHARE_MAX = 0.7;
+const ENGAGEMENT_SCALE = 1.5;       // persona event multipliers × this (actions per active member-week)
+const QUIET_PERSISTENCE = 0.5;      // lag-1 autocorrelation of the weekly state
+const WEEK_MS = 7 * 86_400_000;
+
+// Notifications follow the member's own posting (realism): a reply notification needs
+// a post to reply to, so organic reply notifications are kept at about REPLY_PER_POST
+// per post (comments, threads, articles, uploads, intro) and only after the member's
+// first post (new members); mentions scale with posts above a small base.
+const REPLY_PER_POST = 0.35;
+const MENTION_PER_POST = 0.12;
+const MENTION_BASE = 0.2;
+const POST_EVENTS = new Set(["comment posted", "discussion posted", "article published", "media uploaded", "intro posted"]);
 
 // H7 newcomer's first wiki edit reverted
 const REVERT_SHARE = 0.35;          // new members whose first edit is reverted
@@ -371,14 +407,17 @@ const REPORT_CONV = 98;             // nearly every report gets a resolution; th
 
 // Who reports and who considers Plus (realism, not a story): reporting and
 // upgrade browsing come from a minority of members (whole funnel units).
-const REPORTER_SHARE = 0.35;
+const REPORTER_SHARE = 0.08;
+// reporters flag content as they browse: extra report units per activity event, rate
+// drawn per reporter (REPORT_RATE × 0.3-1.7), on top of the Report funnel's own units
+const REPORT_RATE = 0.06;
 const UPGRADE_CURIOUS_SHARE = 0.45;
 
 // H5 anime spam raid
 const RAID_HUB = "anime";
 const RAID_KEEP = 0.55;             // share of would-be anime participation (comments, threads, upvotes, uploads) during the raid
 const PARTICIPATION_EVENTS = ["comment posted", "discussion posted", "upvote given", "media uploaded"];
-const RAID_REPORTER_SHARE = 0.25;   // members active in anime during the raid who file one extra spam report
+const RAID_REPORTER_SHARE = 0.2;    // members active in anime during the raid who file one spam report (habitual reporters or not)
 const SPAM_REMOVED_PER_DAY = { gaming: 9, anime: 7, movies_tv: 7, books: 3, tabletop: 3, music: 4 };
 const RAID_SPAM_MULT = 14;
 
@@ -414,12 +453,13 @@ const AD_FREE_SHARE_AFTER = 0.55;   // after the change (other-trigger visits sw
 const AD_FREE_KEEP_BEFORE = 0.5;    // ad_free checkout conversion before the change, relative to after (2x lift)
 const OTHER_TRIGGER_KEEP = 0.45;    // other triggers' conversion relative to the engine rate, whole window
 const UPGRADE_LIFT = (AD_FREE_SHARE_AFTER + (1 - AD_FREE_SHARE_AFTER) * OTHER_TRIGGER_KEEP)
-	/ (AD_FREE_SHARE_BEFORE * AD_FREE_KEEP_BEFORE + (1 - AD_FREE_SHARE_BEFORE) * OTHER_TRIGGER_KEEP); // overall conversion per visit, after / before (≈2.0)
+	/ (AD_FREE_SHARE_BEFORE * AD_FREE_KEEP_BEFORE + (1 - AD_FREE_SHARE_BEFORE) * OTHER_TRIGGER_KEEP); // overall conversion per visit, after / before (≈1.6)
 const AD_FREE_LIFT = 1 / AD_FREE_KEEP_BEFORE;
 const UPGRADE_RAMP_DAYS = 7;
 const UPGRADE_CONV = 12;
 const ESTABLISHED_PLUS_SHARE = 0.08;
-const UNTRACKED_REPORT_SHARE = 0.2;  // reports by email / logged-out readers on top of Mixpanel's count (average)
+const UNTRACKED_REPORT_SHARE = 0.1;  // logged-out readers' in-product reports on top of Mixpanel's count (average)
+const EMAIL_REPORTS_PER_DAY = { gaming: 3, anime: 2, movies_tv: 2, books: 1, tabletop: 1, music: 1 }; // email reports (mean)
 const LOGGED_OUT_FACTOR = 15;       // ad-serving page views per logged-in free page view (logged-out search readers dominate wiki traffic)
 const ECPM_USD = { gaming: 3.4, anime: 2.6, movies_tv: 3.9, books: 2.2, tabletop: 2.8, music: 2.4 };
 
@@ -539,12 +579,89 @@ function handleUserHook(profile, meta) {
 	return profile;
 }
 
+// Established members' quiet weeks: a seeded two-state weekly chain per member.
+// Returns a predicate: is the member quiet at time t?
+function quietAt(uid) {
+	const pi = QUIET_SHARE_MAX * salt(uid, "quiet");
+	const toQuiet = (1 - QUIET_PERSISTENCE) * pi;
+	const toActive = (1 - QUIET_PERSISTENCE) * (1 - pi);
+	const offset = salt(uid, "quiet-offset") * WEEK_MS;
+	const weeks = Math.ceil(WINDOW_DAYS / 7) + 3;
+	const quiet = [];
+	let q = salt(uid, "quiet-w0") < pi;
+	for (let w = 0; w < weeks; w++) {
+		if (w > 0) q = q ? salt(uid, `quiet-w${w}`) >= toActive : salt(uid, `quiet-w${w}`) < toQuiet;
+		quiet.push(q);
+	}
+	// week 0 starts one week before the window (the engine's lead-in)
+	return (t) => quiet[Math.max(0, Math.min(weeks - 1, Math.floor((t - ms(DATASET_START) + WEEK_MS + offset) / WEEK_MS)))];
+}
+
+// drop what an established member does in their quiet weeks: thread view + reply,
+// report + resolution, and upgrade visit + subscription go as whole units (decided
+// at the unit's first step); notifications keep arriving at a lower rate
+function applyQuietWeeks(events, uid) {
+	const isQuiet = quietAt(uid);
+	const unitStart = new Map();
+	const unitKey = (e) => {
+		if (e.event === "discussion viewed" || e.event === "comment posted") return `thread|${e.thread_id}`;
+		if (e.event === "report submitted" || e.event === "report resolved") return `report|${e.report_id}`;
+		return null;
+	};
+	for (const e of events) {
+		const k = unitKey(e);
+		if (!k || e.event === "report resolved") continue;
+		unitStart.set(k, Math.min(unitStart.get(k) ?? Infinity, T(e)));
+	}
+	const visits = events.filter((e) => e.event === "plus page viewed").map(T).sort((a, b) => a - b);
+	const anchorOf = (e) => {
+		const k = unitKey(e);
+		if (k) return unitStart.get(k) ?? null; // a resolution whose report was filed before the window keeps its own fate
+		if (e.event === "plus subscribed") return visits.filter((v) => v <= T(e)).pop() ?? T(e);
+		return T(e);
+	};
+	const kept = events.filter((e) => {
+		if (e.event === "$experiment_started") return true;
+		if (e.event === "notification received") return !isQuiet(T(e)) || hashFloat(`${e.insert_id}|quiet-keep`) < LAPSED_NOTIFICATION_KEEP;
+		const a = anchorOf(e);
+		if (a === null) return true;
+		return !isQuiet(a);
+	});
+	// the experiment exposure stays 1 s before the member's first enrolled thread view
+	// that survives (its original view may have fallen in a quiet week)
+	const exposure = kept.find((e) => e.event === "$experiment_started");
+	if (!exposure) return kept;
+	const firstView = kept.filter((e) => e.event === "discussion viewed" && T(e) >= T(exposure)).map(T).sort((a, b) => a - b)[0];
+	if (firstView === undefined) return kept.filter((e) => e !== exposure);
+	exposure.time = iso(firstView - 1000);
+	return kept;
+}
+
+// organic reply and mention notifications follow the member's own posts
+function scaleSocialNotifications(events, bornInDataset) {
+	const posts = events.filter((e) => POST_EVENTS.has(e.event)).map(T).sort((a, b) => a - b);
+	const firstPost = bornInDataset ? (posts[0] ?? Infinity) : -Infinity;
+	const replies = events.filter((e) => e.event === "notification received" && e.notification_type === "reply" && T(e) > firstPost);
+	const mentions = events.filter((e) => e.event === "notification received" && e.notification_type === "mention");
+	const keepReply = replies.length ? Math.min(1, REPLY_PER_POST * posts.length / replies.length) : 0;
+	const keepMention = mentions.length ? Math.min(1, (MENTION_BASE + MENTION_PER_POST * posts.length) / mentions.length) : 0;
+	return events.filter((e) => {
+		if (e.event !== "notification received") return true;
+		if (e.notification_type === "reply") return T(e) > firstPost && hashFloat(`${e.insert_id}|reply-keep`) < keepReply;
+		if (e.notification_type === "mention") return hashFloat(`${e.insert_id}|mention-keep`) < keepMention;
+		return true;
+	});
+}
+
 function handleEverything(events, meta) {
 	if (!events.length) return events;
 	const profile = meta.profile;
 	const uid = profile.distinct_id;
 	const END = ms(DATASET_END);
 	const role = profile.role;
+
+	// ── established members drift in and out (quiet weeks) ──
+	if (!meta.userIsBornInDataset) events = applyQuietWeeks(events, uid);
 
 	// ── hub-consistent wiki pages and communities ──
 	for (const e of events) {
@@ -610,6 +727,35 @@ function handleEverything(events, meta) {
 		if (e.event === "plus page viewed" || e.event === "plus subscribed") return curious;
 		return true;
 	});
+	if (reporter) {
+		// reporters flag what they come across while browsing (whole report units; the
+		// resolution's time and resolution_hours are set with every other report below, H4)
+		const rate = REPORT_RATE * (0.3 + 1.4 * salt(uid, "report-rate"));
+		const flagged = [];
+		for (const e of events) {
+			if (!e.content_hub || !e.device_id || PASSIVE.has(e.event) || MOD_ANCHOR_SKIP.has(e.event) || e.event.startsWith("report")) continue;
+			if (hashFloat(`${e.insert_id}|flag`) >= rate) continue;
+			const t = T(e) + (1 + Math.floor(hashFloat(`${e.insert_id}|flag-at`) * 20)) * MIN_MS;
+			if (t > END) continue;
+			const rid = `rep_${Math.floor(hashFloat(`${e.insert_id}|flag-rid`) * 1e12).toString(36)}`;
+			const unit = {
+				report_id: rid,
+				report_type: pickWeighted(REPORT_TYPES, hashFloat(`${rid}|type`)),
+				content_hub: e.content_hub,
+				community_id: communityFor(e.content_hub, rid),
+			};
+			flagged.push(asEvent(e, "report submitted", { time: iso(t), ...unit }));
+			if (hashFloat(`${rid}|closed-dup`) < (100 - REPORT_CONV) / 100) continue; // closed as a duplicate, no resolution
+			flagged.push(asEvent(e, "report resolved", {
+				time: iso(t + HOUR_MS), ...unit, resolution_hours: 0,
+				outcome: pickWeighted({ content_removed: 52, user_warned: 18, no_violation: 30 }, hashFloat(`${rid}|outcome`)),
+			}));
+		}
+		events = events.concat(flagged);
+	}
+
+	// ── notifications follow the member's own posting ──
+	events = scaleSocialNotifications(events, meta.userIsBornInDataset);
 
 	// ── H8: the ad load change sends more Plus visits through the ad-free pitch, and
 	// ad-free visits convert far better after it (both ramp in over a week); other
@@ -709,18 +855,21 @@ function handleEverything(events, meta) {
 	}
 
 	// ── H5: anime spam raid — members post less, and some report the spam ──
-	const raidActivity = events.filter((e) => e.content_hub === RAID_HUB && inRaid(T(e)) && !PASSIVE.has(e.event));
+	// (anchors carry a device_id: the two server-side onboarding steps do not)
+	const raidActivity = events.filter((e) => e.content_hub === RAID_HUB && inRaid(T(e)) && !PASSIVE.has(e.event) && e.device_id);
 	events = events.filter((e) => !(PARTICIPATION_EVENTS.includes(e.event) && e.content_hub === RAID_HUB && inRaid(T(e)) && !chance.bool({ likelihood: RAID_KEEP * 100 })));
-	const repTemplate = events.find((e) => e.event === "report submitted");
-	const resTemplate = events.find((e) => e.event === "report resolved");
-	if (raidActivity.length && repTemplate && resTemplate && salt(uid, "raid-report") < RAID_REPORTER_SHARE) {
+	if (raidActivity.length && salt(uid, "raid-report") < RAID_REPORTER_SHARE) {
 		const anchor = raidActivity[Math.floor(salt(uid, "raid-anchor") * raidActivity.length)];
 		const tr = Math.min(T(anchor) + (1 + salt(uid, "raid-gap") * 29) * MIN_MS, ms(RAID_END) - MIN_MS);
 		if (tr <= END) {
 			const rid = `rep_${Math.floor(hashFloat(`${uid}|raid-rid`) * 1e12).toString(36)}`;
-			const community = communityFor(RAID_HUB, rid);
-			events.push(cloneEvent(repTemplate, { time: iso(tr), report_id: rid, report_type: "spam", content_hub: RAID_HUB, community_id: community }));
-			events.push(cloneEvent(resTemplate, { time: iso(tr + HOUR_MS), report_id: rid, report_type: "spam", content_hub: RAID_HUB, community_id: community }));
+			const unit = { report_id: rid, report_type: "spam", content_hub: RAID_HUB, community_id: communityFor(RAID_HUB, rid) };
+			events.push(asEvent(anchor, "report submitted", { time: iso(tr), ...unit }));
+			// resolution time and resolution_hours are set with every other report below (H4)
+			events.push(asEvent(anchor, "report resolved", {
+				time: iso(tr + HOUR_MS), ...unit, resolution_hours: 0,
+				outcome: pickWeighted({ content_removed: 80, user_warned: 6, no_violation: 14 }, hashFloat(`${rid}|raid-outcome`)),
+			}));
 		}
 	}
 
@@ -811,7 +960,10 @@ function handleWarehouse(row, meta) {
 	if (meta.metricName === "trust_safety_daily") {
 		// reports also arrive by email and from logged-out readers, which Mixpanel never sees
 		const k = `${row.date}|${row.content_hub}`;
-		row.reports_received = Math.round(row.reports_received * (1 + UNTRACKED_REPORT_SHARE * jitter(`untracked|${k}`, 0.9)) + (hashFloat(`untracked-n|${k}`) < 0.5 ? 1 : 0));
+		// in-product reports a bit above Mixpanel's count (logged-out readers) plus an email inbox
+		// whose volume does not follow the day's in-product count
+		row.reports_received = Math.round(row.reports_received * (1 + UNTRACKED_REPORT_SHARE * jitter(`untracked|${k}`, 0.9))
+			+ EMAIL_REPORTS_PER_DAY[row.content_hub] * 2 * hashFloat(`email|${k}`));
 		return row;
 	}
 	if (meta.metricName === "ad_revenue_daily") {
@@ -1222,12 +1374,14 @@ const config = {
 		karma: [0],
 	},
 
+	// ENGAGEMENT_SCALE lifts every role's activity on the days a member is active;
+	// established members' quiet weeks and the role filters take volume back out
 	personas: [
-		{ name: "lurker", weight: 25, eventMultiplier: 0.35, properties: { role: "lurker" } },
-		{ name: "reader", weight: 40, eventMultiplier: 0.8, properties: { role: "reader" } },
-		{ name: "contributor", weight: 24, eventMultiplier: 1.5, properties: { role: "contributor" } },
-		{ name: "creator", weight: 5, eventMultiplier: 2.4, properties: { role: "creator" } },
-		{ name: "moderator", weight: 6, eventMultiplier: 2.0, properties: { role: "moderator" } },
+		{ name: "lurker", weight: 25, eventMultiplier: 0.35 * ENGAGEMENT_SCALE, properties: { role: "lurker" } },
+		{ name: "reader", weight: 40, eventMultiplier: 0.8 * ENGAGEMENT_SCALE, properties: { role: "reader" } },
+		{ name: "contributor", weight: 24, eventMultiplier: 1.5 * ENGAGEMENT_SCALE, properties: { role: "contributor" } },
+		{ name: "creator", weight: 5, eventMultiplier: 2.4 * ENGAGEMENT_SCALE, properties: { role: "creator" } },
+		{ name: "moderator", weight: 6, eventMultiplier: 2.0 * ENGAGEMENT_SCALE, properties: { role: "moderator" } },
 	],
 
 	groupKeys: [["community_id", COMMUNITIES.length, COMMUNITY_EVENTS]],
@@ -1349,10 +1503,24 @@ a AS (SELECT f.uid, f.t1, count(e.uid) AS later FROM f LEFT JOIN ev e ON e.uid =
   AND e.t > f.t1 AND e.t <= f.t1 + INTERVAL ${REVERT_FOLLOWUP_DAYS} DAY GROUP BY 1, 2)
 SELECT CASE WHEN rv.uid IS NOT NULL THEN 'reverted' ELSE 'kept' END AS grp, count(*) AS user_count, avg((later > 0)::INT) AS edited_again
 FROM a JOIN s ON s.uid = a.uid LEFT JOIN rv ON rv.uid = a.uid WHERE a.t1 < TIMESTAMP '${TS(REVERT_COHORT_END)}' GROUP BY 1`;
-const H8_TRIGGER_SQL = `WITH ${ID_CTE},
-p AS (SELECT uid, t AS t0, upgrade_trigger AS trig FROM ev WHERE event = 'plus page viewed'),
+// Upgrade funnel attempts with Mixpanel totals-funnel history semantics: a Plus page
+// visit starts a new attempt only when no attempt is open (the last attempt started
+// a day or more earlier); a visit inside an open attempt folds into it. An attempt
+// converts when the member subscribes within a day of its start; its trigger is the
+// trigger of the visit that opened it. (Each member subscribes at most once, and no
+// visits follow the subscription.)
+const H8_ATTEMPTS_CTE = `p AS (SELECT uid, t, upgrade_trigger AS trig, row_number() OVER (PARTITION BY uid ORDER BY t, insert_id) AS rn
+  FROM ev WHERE event = 'plus page viewed'),
+a AS (SELECT uid, rn, t, t AS s, trig AS strig, true AS opens FROM p WHERE rn = 1
+  UNION ALL
+  SELECT p.uid, p.rn, p.t, CASE WHEN p.t >= a.s + INTERVAL 1 DAY THEN p.t ELSE a.s END,
+   CASE WHEN p.t >= a.s + INTERVAL 1 DAY THEN p.trig ELSE a.strig END, p.t >= a.s + INTERVAL 1 DAY
+  FROM a JOIN p ON p.uid = a.uid AND p.rn = a.rn + 1),
 b AS (SELECT uid, min(t) AS t1 FROM ev WHERE event = 'plus subscribed' GROUP BY 1),
-x AS (SELECT p.uid, p.t0, p.trig, coalesce(b.t1 >= p.t0 AND b.t1 < p.t0 + INTERVAL 1 DAY, false) AS ok FROM p LEFT JOIN b ON b.uid = p.uid),
+x AS (SELECT a.uid, a.s AS t0, a.strig AS trig, coalesce(b.t1 >= a.s AND b.t1 < a.s + INTERVAL 1 DAY, false) AS ok
+  FROM a LEFT JOIN b ON b.uid = a.uid WHERE a.opens)`;
+const H8_TRIGGER_SQL = `WITH RECURSIVE ${ID_CTE},
+${H8_ATTEMPTS_CTE},
 g AS (SELECT CASE WHEN t0 < TIMESTAMP '${TS(AD_LOAD_CHANGE)}' THEN 'before' WHEN t0 >= TIMESTAMP '${TS(UPGRADE_RAMPED)}' THEN 'after' ELSE 'ramp' END AS period,
  count(DISTINCT uid) AS users, avg((trig = 'ad_free')::INT) AS ad_free_share,
  avg(ok::INT) FILTER (WHERE trig = 'ad_free') AS ad_free_conv, avg(ok::INT) FILTER (WHERE trig <> 'ad_free') AS other_conv FROM x GROUP BY 1)
@@ -1496,8 +1664,9 @@ FROM ev WHERE event = '$experiment_started'`,
 	{
 		id: "H5-anime-spam-raid",
 		hook: "H5",
-		archetype: "bespoke",
-		narrative: `A coordinated spam raid hits the ${RAID_HUB} hub from ${D(RAID_START)} to ${D(RAID_END)} (exclusive). Members there participate less: ${(1 - RAID_KEEP) * 100}% of would-be comments, new threads, upvotes, and uploads in ${RAID_HUB} never happen (keep ${RAID_KEEP}), and ${RAID_REPORTER_SHARE * 100}% of reporting members active in ${RAID_HUB} file a spam report. The raid days and hub come from the warehouse table trust_safety_daily (raid_alert_level = 'raid', with spam_accounts_removed ~${RAID_SPAM_MULT}x normal); the event-side read is the ${RAID_HUB} share of participation on raid days (Wed-Fri) over the same weekdays one week before and after, which reads the keep rate. The raid read rests on about 380 anime participation events, so it carries the knob as target with a knob-derived ceiling (half the effect). Control: participation in the other hubs is unchanged.`,
+		// an incident: a dated, temporary dip (the archetype enum has no incident label)
+		archetype: "temporal-inflection",
+		narrative: `A coordinated spam raid hits the ${RAID_HUB} hub from ${D(RAID_START)} to ${D(RAID_END)} (exclusive). Members there participate less: ${(1 - RAID_KEEP) * 100}% of would-be comments, new threads, upvotes, and uploads in ${RAID_HUB} never happen (keep ${RAID_KEEP}), and ${RAID_REPORTER_SHARE * 100}% of members active in ${RAID_HUB} during the raid file a spam report. The raid days and hub come from the warehouse table trust_safety_daily (raid_alert_level = 'raid', with spam_accounts_removed ~${RAID_SPAM_MULT}x normal); the event-side read is the ${RAID_HUB} share of participation on raid days (Wed-Fri) over the same weekdays one week before and after, which reads the keep rate. The raid read rests on about 380 anime participation events, so it carries the knob as target with a knob-derived ceiling (half the effect). Control: participation in the other hubs is unchanged.`,
 		mixpanelReport: { type: "Insights", events: PARTICIPATION_EVENTS, measure: "total", breakdown: "content_hub", chart: "daily line", join: "warehouse trust_safety_daily.raid_alert_level on date and content_hub" },
 		assertions: [
 			{
@@ -1580,8 +1749,8 @@ FROM f JOIN s ON s.uid = f.uid LEFT JOIN rv ON rv.uid = f.uid WHERE f.t1 < TIMES
 		id: "H8-ad-load-change",
 		hook: "H8",
 		archetype: "temporal-inflection",
-		narrative: `On ${D(AD_LOAD_CHANGE)} Hearthside raises the ad load on pages seen by free members and logged-out readers from ${AD_SLOTS_OLD} to ${AD_SLOTS_NEW} ad slots per page view. Three effects: (1) the ad server's impressions per page view rise ${AD_IMPRESSION_MULT}x — impressions live only in the warehouse table ad_revenue_daily, so impressions per Mixpanel free-member article view needs the join; (2) free members read ${AD_READING_KEEP}x as many articles per search (Plus members, who see no ads, are the control; searches are untouched); (3) the extra ads push readers toward the ad-free pitch: the share of Plus page visits with upgrade_trigger = ad_free rises from ${AD_FREE_SHARE_BEFORE} to ${AD_FREE_SHARE_AFTER}, and ad_free visits convert ${AD_FREE_LIFT.toFixed(2)}x better, while flair, badges, and uploads visits convert the same all window; overall Plus checkout conversion per visit rises ${UPGRADE_LIFT.toFixed(3)}x (both ramp in over ${UPGRADE_RAMP_DAYS} days). Upgrades are few (about 170 converted visits after the ramp, 120 of them from the ad-free pitch), so the conversion reads use the knob as target with a knob-derived floor (half the lift).`,
-		mixpanelReport: { type: "Insights + Funnels + warehouse", reading: "Insights formula article viewed / search performed, breakdown membership, before vs after", upgrade: "Funnels plus page viewed → plus subscribed, totals, 1-day window, before vs after", join: "ad_revenue_daily.ad_impressions by date vs article viewed where membership = free" },
+		narrative: `On ${D(AD_LOAD_CHANGE)} Hearthside raises the ad load on pages seen by free members and logged-out readers from ${AD_SLOTS_OLD} to ${AD_SLOTS_NEW} ad slots per page view. Three effects: (1) the ad server's impressions per page view rise ${AD_IMPRESSION_MULT}x — impressions live only in the warehouse table ad_revenue_daily, so impressions per Mixpanel free-member article view needs the join; (2) free members read ${AD_READING_KEEP}x as many articles per search (Plus members, who see no ads, are the control; searches are untouched); (3) the extra ads push readers toward the ad-free pitch: the share of Plus page visits with upgrade_trigger = ad_free rises from ${AD_FREE_SHARE_BEFORE} to ${AD_FREE_SHARE_AFTER}, and ad_free visits convert ${AD_FREE_LIFT.toFixed(2)}x better, while flair, badges, and uploads visits convert the same all window; overall Plus checkout conversion per visit rises ${UPGRADE_LIFT.toFixed(3)}x (both ramp in over ${UPGRADE_RAMP_DAYS} days). Conversion is read per funnel attempt with totals-funnel history semantics (a Plus page visit inside an open attempt folds into it; an attempt's trigger is the visit that opened it). Upgrades are few (about 170 converted attempts after the ramp, 120 of them from the ad-free pitch), so the conversion reads use the knob as target with a knob-derived floor (half the lift).`,
+		mixpanelReport: { type: "Insights + Funnels + warehouse", reading: "Insights formula article viewed / search performed, breakdown membership, before vs after", upgrade: "Funnels plus page viewed → plus subscribed, totals, 1-day window, before vs after, breakdown upgrade_trigger", join: "ad_revenue_daily.ad_impressions by date vs article viewed where membership = free" },
 		assertions: [
 			{
 				breakdown: {
@@ -1616,12 +1785,10 @@ FROM g`,
 			{
 				breakdown: {
 					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-p AS (SELECT uid, t AS t0 FROM ev WHERE event = 'plus page viewed'),
-b AS (SELECT uid, min(t) AS t1 FROM ev WHERE event = 'plus subscribed' GROUP BY 1),
-x AS (SELECT p.uid, p.t0, coalesce(b.t1 >= p.t0 AND b.t1 < p.t0 + INTERVAL 1 DAY, false) AS ok FROM p LEFT JOIN b ON b.uid = p.uid)
+					sql: `WITH RECURSIVE ${ID_CTE},
+${H8_ATTEMPTS_CTE}
 SELECT CASE WHEN t0 < TIMESTAMP '${TS(AD_LOAD_CHANGE)}' THEN 'before' WHEN t0 >= TIMESTAMP '${TS(UPGRADE_RAMPED)}' THEN 'after' ELSE 'ramp' END AS grp,
- count(DISTINCT uid) AS user_count, count(*) AS visits, avg(ok::INT) AS conv
+ count(DISTINCT uid) AS user_count, count(*) AS attempts, avg(ok::INT) AS conv
 FROM x GROUP BY 1`,
 				},
 				select: { a: { where: { grp: "after" } }, b: { where: { grp: "before" } } },
@@ -1638,7 +1805,7 @@ FROM x GROUP BY 1`,
 			{
 				breakdown: { type: "duckdb", sql: H8_TRIGGER_SQL },
 				select: { a: { where: { grp: "all" } } },
-				// the conversion lift sits on ad_free visits (about 120-180 conversions per
+				// the conversion lift sits on ad_free attempts (about 120-180 conversions per
 				// period, relative SE ~12%): knob target with a knob-derived floor (half the lift).
 				// Other triggers carry no lift in the hook; their read (other_lift) is too
 				// small (about 50 post-change conversions) to assert a ±10% band.

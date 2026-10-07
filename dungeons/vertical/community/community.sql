@@ -70,6 +70,24 @@ LEFT JOIN (SELECT uid, thread_id, t FROM ev WHERE event = 'comment posted') c
   ON c.uid = r.uid AND c.thread_id = r.thread_id AND c.t >= r.t AND c.t < r.t + INTERVAL 1 DAY
 GROUP BY 1, 2, 3, 4;
 
+-- Plus upgrade funnel attempts, with Mixpanel totals-funnel history semantics: a
+-- "plus page viewed" starts a new attempt only when no attempt is open (the member's
+-- last attempt started a day or more earlier); a visit inside an open attempt folds
+-- into it. An attempt converts when the member subscribes within a day of its start;
+-- its trigger is the upgrade_trigger of the visit that opened it. (Each member buys at
+-- most once, and no Plus page visits follow the purchase.)
+CREATE OR REPLACE TEMP TABLE plus_attempts AS
+WITH RECURSIVE p AS (SELECT uid, t, upgrade_trigger AS trig, row_number() OVER (PARTITION BY uid ORDER BY t, insert_id) AS rn
+  FROM ev WHERE event = 'plus page viewed'),
+a AS (SELECT uid, rn, t, t AS s, trig AS strig, true AS opens FROM p WHERE rn = 1
+  UNION ALL
+  SELECT p.uid, p.rn, p.t, CASE WHEN p.t >= a.s + INTERVAL 1 DAY THEN p.t ELSE a.s END,
+   CASE WHEN p.t >= a.s + INTERVAL 1 DAY THEN p.trig ELSE a.strig END, p.t >= a.s + INTERVAL 1 DAY
+  FROM a JOIN p ON p.uid = a.uid AND p.rn = a.rn + 1),
+b AS (SELECT uid, min(t) AS t1 FROM ev WHERE event = 'plus subscribed' GROUP BY 1)
+SELECT a.uid, a.s AS t0, a.strig AS upgrade_trigger, coalesce(b.t1 >= a.s AND b.t1 < a.s + INTERVAL 1 DAY, false) AS ok
+FROM a LEFT JOIN b ON b.uid = a.uid WHERE a.opens;
+
 -- dataset overview
 SELECT count(*) AS events, count(DISTINCT uid) AS members_with_events, (SELECT count(*) FROM users) AS profiles,
  (SELECT count(*) FROM signups) AS new_signups, (SELECT count(*) FROM communities) AS communities,
@@ -165,7 +183,7 @@ SELECT CASE WHEN reverted THEN 'first_edit_reverted' ELSE 'first_edit_kept' END 
 FROM new_editors WHERE t1 < TIMESTAMP '2026-09-01' GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- STORY H8-ad-load-change — warehouse impressions per free article view; reading per search; upgrade conversion
+-- STORY H8-ad-load-change — warehouse impressions per free article view; reading per search; upgrade conversion per attempt
 -- ─────────────────────────────────────────────────────────────────────────
 WITH v AS (SELECT t::DATE AS d, count(*) AS page_views FROM ev WHERE event = 'article viewed' AND membership = 'free' GROUP BY 1),
 w AS (SELECT date::DATE AS d, sum(ad_impressions) AS imp, sum(ad_revenue_usd) AS rev FROM wh_ads GROUP BY 1)
@@ -177,20 +195,15 @@ SELECT membership, CASE WHEN t < TIMESTAMP '2026-09-02' THEN 'before' ELSE 'afte
  round(count(*) FILTER (WHERE event = 'article viewed')::DOUBLE / count(*) FILTER (WHERE event = 'search performed'), 3) AS views_per_search
 FROM ev WHERE event IN ('article viewed', 'search performed') GROUP BY 1, 2 ORDER BY 1, 2 DESC;
 
-WITH p AS (SELECT uid, t AS t0 FROM ev WHERE event = 'plus page viewed'),
-b AS (SELECT uid, min(t) AS t1 FROM ev WHERE event = 'plus subscribed' GROUP BY 1)
-SELECT CASE WHEN p.t0 < TIMESTAMP '2026-09-02' THEN '1_before' WHEN p.t0 >= TIMESTAMP '2026-09-09' THEN '3_after' ELSE '2_ramp' END AS period,
- count(*) AS upgrade_page_visits, sum(coalesce(b.t1 >= p.t0 AND b.t1 < p.t0 + INTERVAL 1 DAY, false)::INT) AS converted_visits,
- round(avg(coalesce(b.t1 >= p.t0 AND b.t1 < p.t0 + INTERVAL 1 DAY, false)::INT), 4) AS conversion_per_visit
-FROM p LEFT JOIN b ON b.uid = p.uid GROUP BY 1 ORDER BY 1;
--- by upgrade_trigger: ad_free share of visits and conversion, ad_free vs the other triggers
-WITH p AS (SELECT uid, t AS t0, upgrade_trigger = 'ad_free' AS ad_free FROM ev WHERE event = 'plus page viewed'),
-b AS (SELECT uid, min(t) AS t1 FROM ev WHERE event = 'plus subscribed' GROUP BY 1)
-SELECT CASE WHEN p.t0 < TIMESTAMP '2026-09-02' THEN '1_before' WHEN p.t0 >= TIMESTAMP '2026-09-09' THEN '3_after' ELSE '2_ramp' END AS period,
- round(avg(ad_free::INT), 4) AS ad_free_share_of_visits,
- round(avg(coalesce(b.t1 >= p.t0 AND b.t1 < p.t0 + INTERVAL 1 DAY, false)::INT) FILTER (WHERE ad_free), 4) AS ad_free_conversion,
- round(avg(coalesce(b.t1 >= p.t0 AND b.t1 < p.t0 + INTERVAL 1 DAY, false)::INT) FILTER (WHERE NOT ad_free), 4) AS other_triggers_conversion
-FROM p LEFT JOIN b ON b.uid = p.uid GROUP BY 1 ORDER BY 1;
+SELECT CASE WHEN t0 < TIMESTAMP '2026-09-02' THEN '1_before' WHEN t0 >= TIMESTAMP '2026-09-09' THEN '3_after' ELSE '2_ramp' END AS period,
+ count(*) AS upgrade_attempts, sum(ok::INT) AS converted_attempts, round(avg(ok::INT), 4) AS conversion_per_attempt
+FROM plus_attempts GROUP BY 1 ORDER BY 1;
+-- by upgrade_trigger: ad_free share of attempts and conversion, ad_free vs the other triggers
+SELECT CASE WHEN t0 < TIMESTAMP '2026-09-02' THEN '1_before' WHEN t0 >= TIMESTAMP '2026-09-09' THEN '3_after' ELSE '2_ramp' END AS period,
+ round(avg((upgrade_trigger = 'ad_free')::INT), 4) AS ad_free_share_of_attempts,
+ round(avg(ok::INT) FILTER (WHERE upgrade_trigger = 'ad_free'), 4) AS ad_free_conversion,
+ round(avg(ok::INT) FILTER (WHERE upgrade_trigger <> 'ad_free'), 4) AS other_triggers_conversion
+FROM plus_attempts GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H9-paid-channel-economics — spend per signup and per onboarded member, by paid channel
@@ -442,31 +455,28 @@ SELECT membership, round(max(article_views::DOUBLE / searches) FILTER (WHERE NOT
 FROM g GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- EVAL Q12 — Plus upgrades: visits, conversion per visit, subscriptions per week
+-- EVAL Q12 — Plus upgrades: page visits, funnel attempts (totals, history semantics), conversion, subscriptions per week
 -- ─────────────────────────────────────────────────────────────────────────
-WITH p AS (SELECT uid, t AS t0 FROM ev WHERE event = 'plus page viewed'),
-b AS (SELECT uid, min(t) AS t1 FROM ev WHERE event = 'plus subscribed' GROUP BY 1)
-SELECT CASE WHEN p.t0 < TIMESTAMP '2026-09-02' THEN '1_jun4_sep1' WHEN p.t0 >= TIMESTAMP '2026-09-09' THEN '3_sep9_oct1' ELSE '2_sep2_8' END AS period,
- count(*) AS upgrade_page_visits, round(count(*) / (max(p.t0)::DATE - min(p.t0)::DATE + 1)::DOUBLE, 1) AS visits_per_day,
- sum(coalesce(b.t1 >= p.t0 AND b.t1 < p.t0 + INTERVAL 1 DAY, false)::INT) AS converted_visits,
- round(avg(coalesce(b.t1 >= p.t0 AND b.t1 < p.t0 + INTERVAL 1 DAY, false)::INT), 4) AS conversion_per_visit
-FROM p LEFT JOIN b ON b.uid = p.uid GROUP BY 1 ORDER BY 1;
+WITH v AS (SELECT CASE WHEN t < TIMESTAMP '2026-09-02' THEN '1_jun4_sep1' WHEN t >= TIMESTAMP '2026-09-09' THEN '3_sep9_oct1' ELSE '2_sep2_8' END AS period,
+  count(*) AS upgrade_page_visits, round(count(*) / (max(t)::DATE - min(t)::DATE + 1)::DOUBLE, 1) AS visits_per_day
+  FROM ev WHERE event = 'plus page viewed' GROUP BY 1),
+a AS (SELECT CASE WHEN t0 < TIMESTAMP '2026-09-02' THEN '1_jun4_sep1' WHEN t0 >= TIMESTAMP '2026-09-09' THEN '3_sep9_oct1' ELSE '2_sep2_8' END AS period,
+  count(*) AS upgrade_attempts, sum(ok::INT) AS converted_attempts, round(avg(ok::INT), 4) AS conversion_per_attempt
+  FROM plus_attempts GROUP BY 1)
+SELECT * FROM v JOIN a USING (period) ORDER BY 1;
 SELECT CASE WHEN t < TIMESTAMP '2026-09-02' THEN '1_jun4_sep1' WHEN t >= TIMESTAMP '2026-09-09' THEN '3_sep9_oct1' ELSE '2_sep2_8' END AS period,
  count(*) AS plus_subscriptions, round(count(*) * 7.0 / (max(t)::DATE - min(t)::DATE + 1), 1) AS per_week
 FROM ev WHERE event = 'plus subscribed' GROUP BY 1 ORDER BY 1;
-WITH p AS (SELECT uid, t AS t0, upgrade_trigger FROM ev WHERE event = 'plus page viewed'),
-b AS (SELECT uid, min(t) AS t1 FROM ev WHERE event = 'plus subscribed' GROUP BY 1),
-x AS (SELECT p.*, coalesce(b.t1 >= p.t0 AND b.t1 < p.t0 + INTERVAL 1 DAY, false) AS ok FROM p LEFT JOIN b ON b.uid = p.uid)
-SELECT upgrade_trigger, count(*) FILTER (WHERE t0 < TIMESTAMP '2026-09-02') AS visits_before, count(*) FILTER (WHERE t0 >= TIMESTAMP '2026-09-09') AS visits_after,
- round(count(*) FILTER (WHERE t0 < TIMESTAMP '2026-09-02')::DOUBLE / sum(count(*) FILTER (WHERE t0 < TIMESTAMP '2026-09-02')) OVER (), 3) AS visit_share_before,
- round(count(*) FILTER (WHERE t0 >= TIMESTAMP '2026-09-09')::DOUBLE / sum(count(*) FILTER (WHERE t0 >= TIMESTAMP '2026-09-09')) OVER (), 3) AS visit_share_after,
+-- by upgrade_trigger (the trigger of the visit that opened the attempt)
+WITH x AS (SELECT * FROM plus_attempts)
+SELECT upgrade_trigger, count(*) FILTER (WHERE t0 < TIMESTAMP '2026-09-02') AS attempts_before, count(*) FILTER (WHERE t0 >= TIMESTAMP '2026-09-09') AS attempts_after,
+ round(count(*) FILTER (WHERE t0 < TIMESTAMP '2026-09-02')::DOUBLE / sum(count(*) FILTER (WHERE t0 < TIMESTAMP '2026-09-02')) OVER (), 3) AS attempt_share_before,
+ round(count(*) FILTER (WHERE t0 >= TIMESTAMP '2026-09-09')::DOUBLE / sum(count(*) FILTER (WHERE t0 >= TIMESTAMP '2026-09-09')) OVER (), 3) AS attempt_share_after,
  sum(ok::INT) FILTER (WHERE t0 < TIMESTAMP '2026-09-02') AS conv_before, sum(ok::INT) FILTER (WHERE t0 >= TIMESTAMP '2026-09-09') AS conv_after,
  round(avg(ok::INT) FILTER (WHERE t0 < TIMESTAMP '2026-09-02'), 4) AS conversion_before, round(avg(ok::INT) FILTER (WHERE t0 >= TIMESTAMP '2026-09-09'), 4) AS conversion_after
 FROM x GROUP BY 1 ORDER BY 1;
 -- ad_free vs the other three triggers combined
-WITH p AS (SELECT uid, t AS t0, upgrade_trigger = 'ad_free' AS ad_free FROM ev WHERE event = 'plus page viewed'),
-b AS (SELECT uid, min(t) AS t1 FROM ev WHERE event = 'plus subscribed' GROUP BY 1),
-x AS (SELECT p.*, coalesce(b.t1 >= p.t0 AND b.t1 < p.t0 + INTERVAL 1 DAY, false) AS ok FROM p LEFT JOIN b ON b.uid = p.uid)
+WITH x AS (SELECT *, upgrade_trigger = 'ad_free' AS ad_free FROM plus_attempts)
 SELECT CASE WHEN ad_free THEN 'ad_free' ELSE 'other three triggers' END AS trigger_group,
  round(avg(ok::INT) FILTER (WHERE t0 < TIMESTAMP '2026-09-02'), 4) AS conversion_before, round(avg(ok::INT) FILTER (WHERE t0 >= TIMESTAMP '2026-09-09'), 4) AS conversion_after,
  sum(ok::INT) FILTER (WHERE t0 >= TIMESTAMP '2026-09-09') AS conversions_after,

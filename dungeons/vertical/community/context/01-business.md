@@ -66,5 +66,5 @@ The three paid channels bill daily. Spend by paid channel is in the warehouse ta
 2. **Turn signups into members.** Too many new accounts never finish onboarding or stop showing up soon after joining. The community team wants to know what separates the newcomers who stay from the ones who leave.
 3. **Spend acquisition money well.** Growth spreads its budget across three paid channels. Finance asked what a signup costs on each channel, and what a signup that actually becomes a member costs.
 4. **Keep communities safe without burning out volunteers.** Report resolution time is the trust and safety team's headline metric. Hearth Guard (see the timeline) is the main bet.
-5. **Grow revenue.** Ad revenue and Plus subscriptions. The team changed the ad setup in September; leadership asked what it did to revenue, to reading, and to Plus.
+5. **Grow revenue.** Ad revenue and Plus subscriptions. The team changed the ad setup in September; leadership asked what it did to the business.
 6. **Make threads livelier.** The product team is testing ways to get readers to reply (the Reply Nudges experiment).

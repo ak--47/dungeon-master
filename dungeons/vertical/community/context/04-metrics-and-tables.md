@@ -12,9 +12,9 @@ All KPIs use UTC days and count people by unique `user_id`. "Member actions" are
 | Day-30 retention | Of new members who signed up on day 0, the share with any member action on or after day 30 ("on or after" / unbounded retention). Only count members who signed up at least 30 days before the end of the data (signups through August 31). The community team also reads a day 30-36 bracket (any member action in days 30 to 36); in Mixpanel Retention that needs a custom bracket. |
 | Weekly active members (WAM) | Unique members with any member action in a calendar week (Monday start). In Mixpanel the team keeps a custom event "member action" that combines every event except `notification received` and `report resolved`. |
 | Thread reply rate | Share of thread views (`discussion viewed`) followed by the same member's `comment posted` on the same `thread_id` within a day. In Mixpanel: Funnels, totals, hold `thread_id` constant, 1-day window. |
-| Editor return rate | Of members who made their first wiki edit in the period, the share who edit again. |
+| Editor return rate | Of members who edited the wiki in a period, the share who edit again in a later period. |
 | Report resolution time | Per report, time from `report submitted` to `report resolved` (same `report_id`). Report the median; `resolution_hours` on the resolution holds the same value. Only count reports with enough time to resolve (filed at least a week before the end of the data). |
-| Plus conversion | Share of `plus page viewed` visits followed by `plus subscribed` within a day (Funnels, totals, 1-day window). |
+| Plus conversion | Share of upgrade attempts that end in `plus subscribed` within a day (Funnels `plus page viewed` → `plus subscribed`, totals, 1-day window). A member who opens the Plus page again while an attempt is still open stays in that attempt; a visit a day or more after the attempt started opens a new one. |
 | Plus members | Members whose current `membership` is `plus`. |
 | CAC (paid) | Spend for a paid channel divided by new members Mixpanel recorded from that channel (`account created` with that `acquisition_channel`) over the same days. Finance uses Mixpanel signups, not the signups the ad platforms report. |
 | Cost per onboarded member | Spend for a paid channel divided by that channel's new members who completed onboarding (7-day window) over the same signup days. |
@@ -25,7 +25,7 @@ All KPIs use UTC days and count people by unique `user_id`. "Member actions" are
 
 Three tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). They join to events on the UTC date of the event and on the named dimension.
 
-In the warehouse, numeric columns are loaded as FLOAT64 (shown as FLOAT below). Count columns (signups, clicks, impressions, reports, removals) always hold whole numbers, and raw file exports show them as integers.
+Count columns (signups, clicks, impressions, reports, removals) are INTEGER. Money, prices, rates, and hours are FLOAT.
 
 ### `paid_marketing_daily`
 
@@ -36,9 +36,9 @@ Daily paid marketing cost by channel, from the ad platforms' billing exports. Ea
 | `date` | DATE | UTC day | Spend day. |
 | `acquisition_channel` | STRING | — | `reddit_ads`, `tiktok_ads`, or `youtube_creators`. Matches `acquisition_channel` on `account created`. |
 | `spend_usd` | FLOAT | USD | Media spend billed for the day. |
-| `platform_reported_signups` | FLOAT | count | Signups the ad platform claims for the day. Platforms use their own attribution windows and usually claim more than Mixpanel records. |
-| `clicks` | FLOAT | count | Ad clicks reported by the platform. |
-| `impressions` | FLOAT | count | Ad impressions reported by the platform. |
+| `platform_reported_signups` | INTEGER | count | Signups the ad platform claims for the day. Platforms use their own attribution windows and usually claim more than Mixpanel records. |
+| `clicks` | INTEGER | count | Ad clicks reported by the platform. |
+| `impressions` | INTEGER | count | Ad impressions reported by the platform. |
 
 Caveats: organic, friend invites, and app store signups have no media spend and are not in this table. Use Mixpanel signups, not `platform_reported_signups`, for CAC.
 
@@ -50,9 +50,9 @@ Daily trust and safety operations by hub, from the moderation back office.
 |---|---|---|---|
 | `date` | DATE | UTC day | Day. |
 | `content_hub` | STRING | — | Hub. Matches `content_hub` on events. |
-| `reports_received` | FLOAT | count | All reports received for the hub that day: in-product reports (the ones Mixpanel sees as `report submitted`) plus reports sent by email and by logged-out readers. |
-| `spam_accounts_removed` | FLOAT | count | Accounts banned as spam or bots. |
-| `automod_removals` | FLOAT | count | Posts removed automatically (keyword filters, and Hearth Guard once a community has it). |
+| `reports_received` | INTEGER | count | All reports received for the hub that day: in-product reports (the ones Mixpanel sees as `report submitted`) plus reports sent by email and by logged-out readers. |
+| `spam_accounts_removed` | INTEGER | count | Accounts banned as spam or bots. |
+| `automod_removals` | INTEGER | count | Posts removed automatically (keyword filters, and Hearth Guard once a community has it). |
 | `raid_alert_level` | STRING | — | `normal` or `raid` (a coordinated attack on the hub was declared that day). |
 | `volunteer_mod_hours` | FLOAT | hours | Hours volunteer moderators logged in the moderation tools for the hub. Most of this time is reading: working the report queue and reading flagged threads. Only some of it ends in a tracked `moderation action`. |
 
@@ -66,7 +66,7 @@ Daily display ad delivery and revenue by hub, from the ad server.
 |---|---|---|---|
 | `date` | DATE | UTC day | Day. |
 | `content_hub` | STRING | — | Hub the pages belong to. Matches `content_hub` on `article viewed`. |
-| `ad_impressions` | FLOAT | count | Ad impressions served on the hub's pages: pages seen by free members and by logged-out readers. |
+| `ad_impressions` | INTEGER | count | Ad impressions served on the hub's pages: pages seen by free members and by logged-out readers. |
 | `ecpm_usd` | FLOAT | USD per 1,000 impressions | Average price advertisers paid that day. |
 | `ad_revenue_usd` | FLOAT | USD | Revenue earned that day (`ad_impressions` / 1000 × `ecpm_usd`). |
 | `fill_rate` | FLOAT | share 0-1 | Share of ad slots that were filled with a paid ad. |
