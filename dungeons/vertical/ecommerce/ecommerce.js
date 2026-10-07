@@ -17,8 +17,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             year) with free US shipping on every order. Standard US orders
  *             ship free above a threshold ($75 until 2026-08-04, $50 from
  *             2026-08-05); Canada and the UK pay a flat $24.95.
- * SCALE:      10,000 users (4,071 create an account inside the window),
- *             1.2M events, 18,660 orders, 120 days (2026-06-04 → 2026-10-01, UTC)
+ * SCALE:      10,000 users (3,994 create an account inside the window),
+ *             1.18M events, 11,340 orders from 5,753 buyers, 120 days
+ *             (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  category browsed → product viewed → product added to cart →
  *             cart viewed → checkout started → shipping info entered →
  *             payment info entered → order completed → order shipped → order delivered
@@ -42,7 +43,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   - Checkout: product added to cart → cart viewed → checkout started →
  *       shipping info entered → payment info entered → order completed
  *       (35% per cart before segment effects, 45 min; A/B "One-Page Checkout"
- *       from 2026-07-15). Every step of one cart shares a cart_id.
+ *       from 2026-07-15). Every step of one cart shares a cart_id. Weight 1
+ *       of 10 funnel picks: about 3.4 carts per user and 2 orders per buyer
+ *       in 120 days.
  *
  * USER PROPS:  shopper_segment, membership, ship_country, acquisition_channel,
  *              customer_since, "Experiment: One-Page Checkout" (enrolled users)
@@ -61,9 +64,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * carries user_id + device_id and links the device. About 2 devices per user.
  * Every later event carries user_id. Client events also carry device_id;
  * server-side events (order shipped, order delivered) carry user_id only.
- * Users who joined before June 4 have no account created event. A handful of
- * pre-signup browses sit on a device that never appears with a user_id (the
- * session crossed UTC midnight before signup) and stay anonymous.
+ * Users who joined before June 4 have no account created event. Every
+ * anonymous event resolves to a user through the device account created links.
  *
  * DESIGN NOTES:
  * - Products: one seeded catalog (126 products). The hook stamps product_id,
@@ -85,8 +87,13 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * - Returns and reviews are tied to delivered orders (return rate by category;
  *   reviews on 15% of deliveries, ratings lower after a late delivery).
  * - Rhythm: Sunday/Monday peak, US evening hours dominate in UTC.
- * - Device consistency: platform comes from the device OS; web events carry a
- *   browser that fits the OS, app events carry none.
+ * - Device consistency: the engine keeps device fields sticky per device_id;
+ *   platform comes from the device OS (iOS/iPadOS → ios_app, Android →
+ *   android_app, desktop → web); app events drop the engine browser.
+ * - Experiment exposure: the engine sends one $experiment_started per user,
+ *   1s before their first cart from 2026-07-15. When a hook removes that cart
+ *   (stockout, carrier repeat loss, lapse), the exposure moves to the user's
+ *   first remaining cart in the test, or goes with the profile key.
  * - Retention: retentionCurve shapes new users' active days, and 55% of new
  *   users lapse on a uniform day 5-90 (organic churn, independent of stories).
  *   Server-side shipping events keep firing after a user lapses.
@@ -99,6 +106,12 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * constants and are shared by hooks, stories, SQL, warehouse columns, and the
  * timeline guide. "Per-cart conversion" = Funnels, product added to cart →
  * order completed, Totals, hold cart_id constant, 1-day conversion window.
+ * Story reads use duckdb. The per-cart reads (H2, H3, H4, H7, H9) compare
+ * two segments (an experiment arm, a profile property, a date split) inside
+ * one ratio, and the emulator's held-property totals funnel (funnelFrequency)
+ * breaks down only by event frequency. cart_id is unique per cart, so the
+ * first add → order per cart_id equals Mixpanel's held-cart_id totals
+ * funnel. H5, H6, and H10 join warehouse tables.
  *
  * ─────────────────────────────────────────────────────────────────────────
  * H1. FREE-SHIPPING THRESHOLD BUNCHING (everything)
@@ -117,9 +130,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * H2. ONE-PAGE CHECKOUT EXPERIMENT (declarative funnel experiment)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: from 2026-07-15 shoppers split 50/50 (sticky per user) when they
- *   start a cart. "One-Page" multiplies per-cart conversion by 1.2 and cart →
- *   order time by 0.8. Average order value is untouched (honest null).
+ * PATTERN: from 2026-07-15 shoppers split 50/50 (sticky per user) at their
+ *   first cart, which sends one $experiment_started. "One-Page" multiplies
+ *   per-cart conversion by 1.2 and cart → order time by 0.8. Average order
+ *   value is untouched (honest null).
  * MIXPANEL: per-cart conversion, breakdown user property "Experiment: One-Page
  *   Checkout", Jul 15 - Oct 1; median time to convert.
  * REAL WORLD: fewer checkout pages, fewer exits.
@@ -149,13 +163,16 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: Northline Parcel's hub disruption (2026-07-20 to 2026-08-09) adds
  *   5-8 days to every Northline parcel shipped in it. A US customer whose
- *   first order shipped on those days went with Northline places no further
- *   order for 45 days 45% of the time, so their 45-day repeat rate is 0.55x
- *   that of US customers whose first order on those days shipped with Bluejay
- *   or ParcelPost. The warehouse table marks Northline "disrupted" on those days.
- * MIXPANEL: Retention, order completed → order completed (45 days), cohort of
- *   customers with an order shipped on the disrupted days, breakdown
- *   shipping_carrier; join carrier_performance_daily.service_status.
+ *   first parcel shipped on those days went with Northline starts no cart in
+ *   the 45 days after it ships 45% of the time, so their 45-day repeat rate
+ *   (an order completed within 45 days of that shipment) is 0.55x that of US
+ *   customers whose first parcel on those days shipped with Bluejay or
+ *   ParcelPost. The warehouse table marks Northline "disrupted" on those days.
+ * MIXPANEL: Funnels, order shipped → order completed, Uniques, 45-day
+ *   conversion window, date range Jul 20 - Aug 9 (the disrupted days in
+ *   carrier_performance_daily.service_status), user property ship_country =
+ *   US, breakdown shipping_carrier (step 1). Each customer enters at their
+ *   first order shipped in the range.
  * REAL WORLD: a late first impression costs the next order.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -165,8 +182,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   $21 TikTok (paced daily budgets on the weekly shopping rhythm with seeded
  *   noise). Share of would-be buyers who ever buy, by channel: Google Shopping
  *   1.0, direct 0.95, organic search 0.9, email/referral 0.9, Meta 0.7, TikTok
- *   0.3 (the rest stop at checkout start). TikTok is the cheapest signup and
- *   the most expensive first order (1.21x Google's at the knobs).
+ *   0.3. Each of the rest starts checkout on a salted 25-65% of their carts
+ *   and stalls at shipping or payment. TikTok is the cheapest signup and the
+ *   most expensive first order (1.21x Google's at the knobs).
  * MIXPANEL: Insights, account created by acquisition_channel joined to spend;
  *   Funnels account created → order completed, 30-day window, signups Jun 4 -
  *   Aug 31, breakdown acquisition_channel.
@@ -202,9 +220,15 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   days after launch, and open it before a salted 55-95% (mean 75%) of their
  *   furniture and lighting carts. Those carts convert 1.4x. Once ramped, 45%
  *   of furniture and lighting carts start with it; none before launch.
- * MIXPANEL: Funnels, room visualizer opened → product added to cart → order
- *   completed vs furniture and lighting carts without it (US); Insights
- *   weekly adoption.
+ * MIXPANEL: Funnels A, room visualizer opened → product added to cart →
+ *   order completed, Totals, 1-day window, from Jul 22, user property
+ *   ship_country = US; Funnels B, product added to cart (category =
+ *   furniture or lighting) → order completed, Totals, hold cart_id, 1-day
+ *   window, same dates and filter. A/B reads below the knob because B still
+ *   holds the visualizer carts. Or a cohort of users who opened it vs not.
+ *   The story's exact per-cart split (opened on the same product in the 10
+ *   minutes before the cart's first add) needs the raw export. Insights,
+ *   room visualizer opened, weekly uniques, for adoption.
  * REAL WORLD: seeing a $600 chair in your room removes the size doubt.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -224,37 +248,39 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation          | Expected | Measured
  * -----|------------------------------------------------|---------------------|----------|---------
- * H1   | share just below bar, standard / Pine Plus     | 1 − BUMP_SHARE      | 0.40     | 0.385 (23.2% vs 60.3%)
+ * H1   | share just below bar, standard / Pine Plus     | 1 − BUMP_SHARE      | 0.40     | 0.419 (24.5% vs 58.5%)
  * H1   | US orders with wrong shipping charge           | exact               | 0        | 0
- * H2   | per-cart conversion One-Page / Control         | ONE_PAGE_CONV_MULT  | 1.20     | 1.207 (37.9% vs 31.4%)
- * H2   | median cart → order time One-Page / Control    | ONE_PAGE_TTC_MULT   | 0.80     | 0.801 (28.8 vs 36.0 min)
- * H2   | average order value One-Page / Control (null)  | unchanged           | 1.00     | 0.973
- * H3   | per-cart conversion CA+GB / US, before Sep 1   | 1 − INTL_LOSS       | 0.55     | 0.558
- * H3   | per-cart conversion CA / US, from Sep 1        | DDP pilot           | 1.00     | 1.040 (39.5% vs 38.0%)
- * H4   | median cart → order time Pine Plus / standard  | PLUS_TTC_MULT       | 0.50     | 0.501 (17.6 vs 35.2 min)
- * H4   | per-cart conversion Pine Plus / standard       | unchanged           | 1.00     | 1.005
- * H5   | 45-day repeat rate, Northline / other US       | 1 − REPEAT_LOSS     | 0.55     | 0.558 (37.1% vs 66.5%)
+ * H2   | per-cart conversion One-Page / Control         | ONE_PAGE_CONV_MULT  | 1.20     | 1.209 (37.8% vs 31.3%)
+ * H2   | median cart → order time One-Page / Control    | ONE_PAGE_TTC_MULT   | 0.80     | 0.799 (28.7 vs 35.9 min)
+ * H2   | average order value One-Page / Control (null)  | unchanged           | 1.00     | 0.969
+ * H3   | per-cart conversion CA+GB / US, before Sep 1   | 1 − INTL_LOSS       | 0.55     | 0.536 (18.0% vs 33.6%)
+ * H3   | per-cart conversion CA / US, from Sep 1        | DDP pilot           | 1.00     | 1.082 (41.1% vs 38.0%)
+ * H4   | median cart → order time Pine Plus / standard  | PLUS_TTC_MULT       | 0.50     | 0.501 (17.6 vs 35.1 min)
+ * H4   | per-cart conversion Pine Plus / standard       | unchanged           | 1.00     | 1.029
+ * H5   | 45-day repeat rate, Northline / other US       | 1 − REPEAT_LOSS     | 0.55     | 0.501 (24.8% vs 49.5%)
  * H5   | extra delivery days, disrupted Northline       | mean(5, 8)          | 6.5      | 6.50
- * H6   | spend per signup TikTok / Google Shopping      | 21 / 58             | 0.362    | 0.346 ($21.10 vs $61.07)
- * H6   | 30-day first-order rate TikTok / Google        | 0.3 / 1.0           | 0.30     | 0.291 (14.5% vs 49.8%)
- * H7   | per-cart conversion sale / 14 days before (US) | LABOR_DAY_CONV_MULT | 1.50     | 1.431 (52.6% vs 36.8%)
- * H7   | category browses per day, sale / same weekdays | LABOR_DAY_TRAFFIC   | 1.30     | 1.336
+ * H6   | spend per signup TikTok / Google Shopping      | 21 / 58             | 0.362    | 0.364 ($21.10 vs $57.99)
+ * H6   | 30-day first-order rate TikTok / Google        | 0.3 / 1.0           | 0.30     | 0.263 (8.8% vs 33.5%, STRONG)
+ * H7   | per-cart conversion sale / 14 days before (US) | LABOR_DAY_CONV_MULT | 1.50     | 1.480 (53.4% vs 36.1%)
+ * H7   | category browses per day, sale / same weekdays | LABOR_DAY_TRAFFIC   | 1.30     | 1.298
  * H7   | orders with code mismatched to sale dates      | exact               | 0        | 0
- * H8   | day-45 retention, 3+ saves / none              | ≥ 1/(1 − 0.55)      | ≥ 2.22   | 2.474 (55.0% vs 22.2%, STRONG)
- * H9   | conversion with / without visualizer (US)      | VIZ_CONV_MULT       | 1.40     | 1.356 (41.3% vs 30.5%)
- * H9   | visualizer share of carts after the ramp       | 0.6 × 0.75          | 0.45     | 0.443
+ * H8   | day-45 retention, 3+ saves / none              | ≥ 1/(1 − 0.55)      | ≥ 2.22   | 2.603 (62.0% vs 23.8%, STRONG)
+ * H9   | conversion with / without visualizer (US)      | VIZ_CONV_MULT       | 1.40     | 1.399 (41.7% vs 29.9%)
+ * H9   | visualizer share of carts after the ramp       | 0.6 × 0.75          | 0.45     | 0.446
  * H9   | visualizer events before launch                | exact               | 0        | 0
- * H10  | bedding adds per view, ratio of ratios         | 1 − STOCKOUT_SHARE  | 0.60     | 0.590
+ * H10  | bedding adds per view, ratio of ratios         | 1 − STOCKOUT_SHARE  | 0.60     | 0.593
  * H10  | warehouse bedding in_stock_rate in stockout    | 1 − STOCKOUT_SHARE  | 0.60     | 0.602
  * ═════════════════════════════════════════════════════════════════════════
  *
  * H8 is a knob floor: heavier shoppers save more and are likelier to show any
  * shopper action in the day-45 week even without the dark cut, so the ratio
  * lands above 1/(1 − 0.55) and grades STRONG. An order in the first 14 days
- * does not predict day-45 retention (no engineered effect). H6's first-order
- * read rests on 67 TikTok buyers; its assertion uses the knob as target with a
- * knob-derived ceiling (half the effect). Robustness: three alternate seeds
- * graded every read NAILED except H6's first-order read once (STRONG, 0.265).
+ * is a weak signal (1.09x, z 1.3), far below the wishlist effect. H6's
+ * first-order read rests on 42 TikTok buyers; its assertion uses the knob as
+ * target with a knob-derived ceiling (half the effect). H5's read rests on
+ * 847 affected and 715 control customers (ratio SE about 7%). Robustness: two
+ * alternate seeds graded every read NAILED except H6's first-order read once
+ * (STRONG, 0.255); H5 read 0.559 and 0.592 there.
  */
 
 // ── SCALE ──
@@ -348,6 +374,7 @@ const FIRST_ORDER_KEEP = { google_shopping: 1.0, direct: 0.95, organic_search: 0
 const BORN_PCT = 40;
 const WINDOW_DAYS = 120;
 const FIRST_ORDER_WINDOW_DAYS = 30;
+const NONBUYER_CHECKOUT_START = [0.25, 0.65]; // per-user share of carts where a non-buyer still starts checkout
 const SIGNUP_COHORT_END = "2026-09-01T00:00:00Z"; // exclusive: every signup has a full 30 days
 const SPEND_NOISE = 0.12;
 const SPEND_FLAT_SHARE = 0.35;     // budgets follow the shopping rhythm above a flat floor
@@ -524,9 +551,9 @@ const carrierTransit = (carrier, t) => {
 	const delay = carrier === DISRUPTED_CARRIER && inDisruption(t) ? (DISRUPTION_DELAY_DAYS[0] + DISRUPTION_DELAY_DAYS[1]) / 2 : 0;
 	return round1((base + delay) * jitter(`tr|${d}|${carrier}`, 0.08));
 };
-const WHOLESALE_PARCELS = { northline: 22, bluejay: 14, parcelpost: 8, maple_courier: 3, albion_parcel: 2 };
+const WHOLESALE_PARCELS = { northline: 12, bluejay: 8, parcelpost: 5, maple_courier: 2, albion_parcel: 1 };
 const BULK_DAY_SHARE = 0.1;      // days a retail partner's bulk order ships from the same stock
-const WHOLESALE_UNITS = { bedding: 18, bath: 12, kitchen: 15, dining: 9, furniture: 2, lighting: 3, decor: 14, outdoor: 4 };
+const WHOLESALE_UNITS = { bedding: 10, bath: 7, kitchen: 8, dining: 5, furniture: 1, lighting: 2, decor: 8, outdoor: 2 };
 
 // ── HOOKS ──
 function handleUserHook(profile, meta) {
@@ -583,13 +610,6 @@ function deriveEvent(src, name, time, props, { server = false } = {}) {
 	return ev;
 }
 
-function webBrowser(os, deviceId) {
-	const r = hashFloat(`browser|${deviceId}`);
-	if (os === "macOS") return r < 0.55 ? "Safari" : r < 0.92 ? "Chrome" : "Firefox";
-	if (os === "Windows") return r < 0.62 ? "Chrome" : r < 0.9 ? "Microsoft Edge" : "Firefox";
-	return r < 0.8 ? "Chrome" : "Firefox";
-}
-
 function unitStart(unit) {
 	for (const k of CHECKOUT_STEPS) if (unit.steps[k]) return T(unit.steps[k]);
 	return Infinity;
@@ -617,11 +637,12 @@ function handleEverything(events, meta) {
 
 	// ── device-consistent platform and browser; location matches the profile ──
 	for (const e of events) {
+		// a world-event clone of the anonymous first visit that lands after signup is a signed-in browse
+		if (birthMs !== null && !e.user_id && T(e) > birthMs) e.user_id = uid;
 		if (e.os) {
 			const app = e.os === "iOS" || e.os === "iPadOS" ? "ios_app" : e.os === "Android" ? "android_app" : "web";
 			e.platform = app;
-			if (app === "web") e.browser = webBrowser(e.os, e.device_id || uid);
-			else delete e.browser;
+			if (app !== "web") delete e.browser; // app events have no browser
 		}
 		if (!isUS) {
 			e.country = profile.country;
@@ -665,12 +686,10 @@ function handleEverything(events, meta) {
 	}
 
 	// ── checkout units (one per cart_id) ──
-	const expoByMs = new Map();
-	for (const e of events) if (e.event === "$experiment_started") expoByMs.set(T(e), e);
 	const units = new Map();
 	for (const e of events) {
 		if (!e.cart_id || e.cart_id === "unassigned" || !CHECKOUT_STEPS.includes(e.event)) continue;
-		if (!units.has(e.cart_id)) units.set(e.cart_id, { id: e.cart_id, steps: {}, derived: [], expo: null });
+		if (!units.has(e.cart_id)) units.set(e.cart_id, { id: e.cart_id, steps: {}, derived: [] });
 		units.get(e.cart_id).steps[e.event] = e;
 	}
 	const unitList = [...units.values()].sort((a, b) => unitStart(a) - unitStart(b));
@@ -682,7 +701,6 @@ function handleEverything(events, meta) {
 		const cv = s["cart viewed"];
 		const cat = cartCategory(unit.id);
 		unit.category = cat;
-		if (add) unit.expo = expoByMs.get(T(add) - 1000) || null;
 		// items: the cart's product, then same-category extras (only once the cart is viewed)
 		const items = [{ p: productIn(cat, salt(unit.id, "p0")), qty: 1 }];
 		if (items[0].p.price_usd < 35 && salt(unit.id, "q0") < 0.3) items[0].qty = 2;
@@ -701,11 +719,15 @@ function handleEverything(events, meta) {
 			assignProduct(add, items[0].p);
 			add.quantity = items[0].qty;
 			// the product page view that led to the add
-			const viewT = Math.max(T(add) - (60 + Math.floor(salt(unit.id, "view-gap") * 360)) * 1000, birthMs ? birthMs + 1000 : START_MS);
-			const view = deriveEvent(add, "product viewed", viewT, {});
-			assignProduct(view, items[0].p);
-			unit.derived.push(view);
-			unit.view = view;
+			const rawViewT = T(add) - (60 + Math.floor(salt(unit.id, "view-gap") * 360)) * 1000;
+			const viewT = Math.max(rawViewT, birthMs ? birthMs + 1000 : START_MS);
+			// a view before June 4 is outside the data
+			if (rawViewT >= START_MS) {
+				const view = deriveEvent(add, "product viewed", viewT, {});
+				assignProduct(view, items[0].p);
+				unit.derived.push(view);
+				unit.view = view;
+			}
 			// H9: a Room Visualizer session between the view and the add
 			if (VIZ_CARTS.has(unit.id)) {
 				const viz = deriveEvent(add, "room visualizer opened", viewT + (T(add) - viewT) * 0.5, {});
@@ -775,7 +797,6 @@ function handleEverything(events, meta) {
 			order.payment_method = payment;
 			order.ship_country = profile.ship_country;
 		}
-		if (unit.expo) unit.derived.push(unit.expo);
 	}
 
 	const dropSet = new Set();
@@ -804,9 +825,14 @@ function handleEverything(events, meta) {
 		}
 	}
 
-	// ── H6: some new users from each channel never buy (they stop at checkout start) ──
+	// ── H6: some new users from each channel never buy. Each such shopper starts
+	// checkout on a salted share of their carts and stalls at shipping or payment.
 	if (born && salt(uid, "channel-keep") >= (FIRST_ORDER_KEEP[profile.acquisition_channel] ?? 1)) {
-		for (const unit of unitList) dropUnit(unit, 2);
+		const startShare = NONBUYER_CHECKOUT_START[0] + salt(uid, "nb-start") * (NONBUYER_CHECKOUT_START[1] - NONBUYER_CHECKOUT_START[0]);
+		for (const unit of unitList) {
+			if (salt(unit.id, "nb-start") >= startShare) dropUnit(unit, 2);
+			else dropUnit(unit, salt(unit.id, "nb-stall") < 0.5 ? 3 : 4);
+		}
 	}
 
 	// ── H10: bedding stockout — would-be bedding carts never start (the view stays) ──
@@ -853,15 +879,17 @@ function handleEverything(events, meta) {
 		extraEvents.push(...makeFulfillment(order, order.order_id, T(order), unit.category, unit.subtotal, unit));
 	}
 
-	// ── H5: a disrupted first delivery costs the next order ──
-	const disruptedWindow = shipments.filter((sh) => sh.unit && inDisruption(sh.shipMs)).sort((a, b) => a.orderMs - b.orderMs);
+	// ── H5: a disrupted first delivery costs the next order. The reference parcel
+	// is the customer's first order shipped in the disruption window (by ship
+	// time); affected customers start no cart in the 45 days after it ships.
+	const disruptedWindow = shipments.filter((sh) => sh.unit && inDisruption(sh.shipMs)).sort((a, b) => a.shipMs - b.shipMs);
 	if (disruptedWindow.length) {
 		const ref = disruptedWindow[0];
 		if (ref.carrier === DISRUPTED_CARRIER && salt(uid, "repeat-loss") < REPEAT_LOSS) {
 			for (const unit of unitList) {
-				if (unit.dropped) continue;
+				if (unit.dropped || unit === ref.unit) continue;
 				const st = unitStart(unit);
-				if (st > ref.orderMs && st <= ref.orderMs + REPEAT_WINDOW_DAYS * DAY_MS) dropUnit(unit, 0);
+				if (st > ref.shipMs && st < ref.shipMs + REPEAT_WINDOW_DAYS * DAY_MS) dropUnit(unit, 0);
 			}
 		}
 	}
@@ -885,7 +913,7 @@ function handleEverything(events, meta) {
 	// ── assemble ──
 	for (const unit of unitList) {
 		for (const ev of unit.derived) {
-			if (ev.event === "$experiment_started" || SERVER_EVENTS.has(ev.event) || ev.event === "return requested" || ev.event === "review submitted") continue;
+			if (SERVER_EVENTS.has(ev.event) || ev.event === "return requested" || ev.event === "review submitted") continue;
 			extraEvents.push(ev);
 		}
 	}
@@ -909,6 +937,22 @@ function handleEverything(events, meta) {
 				return T(e) < cut;
 			});
 		}
+	}
+
+	// ── experiment exposure: the engine sends one $experiment_started, 1s before
+	// the user's first cart after the test start. When the hook removed that cart
+	// (stockout, carrier repeat loss, lapse), the exposure moves to the first cart
+	// that remains, or goes when no cart remains.
+	const expo = events.find((e) => e.event === "$experiment_started");
+	if (expo) {
+		const cartStart = new Map();
+		for (const e of events) {
+			if (e.event === "product added to cart" && e.cart_id && !(cartStart.get(e.cart_id) <= T(e))) cartStart.set(e.cart_id, T(e));
+		}
+		let firstAdd = Infinity;
+		for (const t of cartStart.values()) if (t >= ms(CHECKOUT_TEST_START) && t < firstAdd) firstAdd = t;
+		if (firstAdd === Infinity) events = events.filter((e) => e !== expo);
+		else if (T(expo) !== firstAdd - 1000) expo.time = iso(firstAdd - 1000);
 	}
 
 	// ── profile ──
@@ -1215,7 +1259,7 @@ const config = {
 			conversionRate: CHECKOUT_CONV,
 			timeToConvert: CHECKOUT_TTC_H,
 			order: "sequential",
-			weight: 2,
+			weight: 1,
 			experiment: {
 				name: CHECKOUT_TEST,
 				startDaysBeforeEnd: (END_MS / 1000 - ms(CHECKOUT_TEST_START) / 1000) / 86400,
@@ -1407,18 +1451,17 @@ const H4_SQL = `WITH ${ID_CTE}, ${CARTS_CTE}
 SELECT membership AS grp, count(DISTINCT uid) AS user_count, count(*) AS carts, avg(converted::INT) AS conv, median(ttc_s) AS med_ttc_s
 FROM cc GROUP BY 1`;
 
-// H5: disrupted carrier-days come from the warehouse; each customer's
-// reference order is their first order (by order time) that shipped on a day
-// any carrier was disrupted; affected = it shipped with the disrupted carrier.
+// H5: disrupted carrier-days come from the warehouse. Mixpanel Funnels, order
+// shipped (US, Jul 20 - Aug 9) → order completed, Uniques, 45-day window,
+// breakdown shipping_carrier of step 1: each customer enters at their first
+// order shipped on a disrupted day; affected = it shipped with the disrupted carrier.
 const H5_SQL = `WITH ${ID_CTE},
 dis AS (SELECT date::DATE AS d, shipping_carrier FROM ${WH("carrier_performance_daily")} WHERE service_status = 'disrupted'),
 ddays AS (SELECT DISTINCT d FROM dis),
-sh AS (SELECT s.uid, s.order_id, s.t AS ship_t, s.shipping_carrier, o.t AS ord_t FROM ev s
-  JOIN ev o ON o.order_id = s.order_id AND o.event = 'order completed' WHERE s.event = 'order shipped' AND s.ship_country = 'US'),
-r AS (SELECT uid, arg_min(shipping_carrier, ord_t) AS carrier, arg_min(ship_t, ord_t) AS ship_t, min(ord_t) AS ref_t FROM sh
-  WHERE ship_t::DATE IN (SELECT d FROM ddays) GROUP BY 1),
+r AS (SELECT uid, arg_min(shipping_carrier, t) AS carrier, min(t) AS ship_t FROM ev
+  WHERE event = 'order shipped' AND ship_country = 'US' AND t::DATE IN (SELECT d FROM ddays) GROUP BY 1),
 x AS (SELECT r.uid, (r.carrier, r.ship_t::DATE) IN (SELECT (shipping_carrier, d) FROM dis) AS affected,
-  EXISTS (SELECT 1 FROM ev o WHERE o.uid = r.uid AND o.event = 'order completed' AND o.t > r.ref_t AND o.t <= r.ref_t + INTERVAL ${REPEAT_WINDOW_DAYS} DAY) AS repeat_order FROM r)
+  EXISTS (SELECT 1 FROM ev o WHERE o.uid = r.uid AND o.event = 'order completed' AND o.t > r.ship_t AND o.t < r.ship_t + INTERVAL ${REPEAT_WINDOW_DAYS} DAY) AS repeat_order FROM r)
 SELECT CASE WHEN affected THEN 'affected' ELSE 'other_carriers' END AS grp, count(*) AS user_count, avg(repeat_order::INT) AS repeat_rate FROM x GROUP BY 1`;
 
 const H5_DELAY_SQL = `WITH ${ID_CTE},
@@ -1515,7 +1558,8 @@ export const stories = [
 				breakdown: { type: "duckdb", sql: H1_SQL },
 				select: { s: { where: { grp: "standard" } }, p: { where: { grp: "pine_plus" } } },
 				expect: { metric: "s.share_below / p.share_below", op: "between", target: band(1 - BUMP_SHARE) },
-				minCohort: 500,
+				// Pine Plus members with an order in the ±$30 window: about 500 (600+ orders); the ratio SE is ~5%
+				minCohort: 400,
 			},
 			{
 				breakdown: {
@@ -1535,7 +1579,7 @@ FROM ev WHERE event = 'order completed' AND ship_country = 'US'`,
 		id: "H2-one-page-checkout-experiment",
 		hook: "H2",
 		archetype: "experiment-lift",
-		narrative: `The "${CHECKOUT_TEST}" test starts ${D(CHECKOUT_TEST_START)}: every cart started from then exposes the shopper (sticky 50/50 hash per user). "${CHECKOUT_VARIANT}" multiplies per-cart conversion by ${ONE_PAGE_CONV_MULT} and cart → order time by ${ONE_PAGE_TTC_MULT}. Cart contents do not depend on the variant, so average order value is unchanged (honest null). Every step of a cart shares a cart_id, so the funnel product added to cart → order completed with Totals, cart_id held constant, and a ${CHECKOUT_WINDOW_DAYS}-day window reads per-cart conversion. Segment effects (country, category, Labor Day, Room Visualizer) multiply the rate and are independent of the variant.`,
+		narrative: `The "${CHECKOUT_TEST}" test starts ${D(CHECKOUT_TEST_START)}: the shopper's first cart from then sends one $experiment_started 1 second before its first add (sticky 50/50 hash per user; later carts keep the variant). "${CHECKOUT_VARIANT}" multiplies per-cart conversion by ${ONE_PAGE_CONV_MULT} and cart → order time by ${ONE_PAGE_TTC_MULT}. Cart contents do not depend on the variant, so average order value is unchanged (honest null). Every step of a cart shares a cart_id, so the funnel product added to cart → order completed with Totals, cart_id held constant, and a ${CHECKOUT_WINDOW_DAYS}-day window reads per-cart conversion. Segment effects (country, category, Labor Day, Room Visualizer) multiply the rate and are independent of the variant.`,
 		mixpanelReport: { type: "Funnels", steps: ["product added to cart", "order completed"], counting: "totals", holdPropertyConstant: "cart_id", window: "1 day", breakdown: `user property "${EXP_KEY}"`, dates: `${D(CHECKOUT_TEST_START)} → ${D(DATASET_END)}` },
 		assertions: [
 			{
@@ -1605,9 +1649,9 @@ FROM ev WHERE event = 'order completed' AND ship_country = 'US'`,
 	{
 		id: "H5-carrier-disruption-repeat-orders",
 		hook: "H5",
-		archetype: "retention-divergence",
-		narrative: `External-table join. Northline Parcel's hub disruption (${D(CARRIER_DISRUPTION_START)} to ${D(dayjs.utc(CARRIER_DISRUPTION_END).subtract(1, "day").toISOString())}) adds ${DISRUPTION_DELAY_DAYS[0]}-${DISRUPTION_DELAY_DAYS[1]} days to every Northline parcel shipped in it; the warehouse table carrier_performance_daily marks those carrier-days service_status = 'disrupted'. A customer whose first order shipped on those days went with Northline places no further order for ${REPEAT_WINDOW_DAYS} days ${REPEAT_LOSS * 100}% of the time, so their ${REPEAT_WINDOW_DAYS}-day repeat-order rate is ${1 - REPEAT_LOSS} of US customers whose first order on those days shipped with another US carrier (Bluejay or ParcelPost; the carrier is assigned per order by hash, independent of the shopper; Northline ships US orders only, so the read stays within US customers). Read 2: disrupted Northline deliveries take ${(DISRUPTION_DELAY_DAYS[0] + DISRUPTION_DELAY_DAYS[1]) / 2} more days on average than other Northline deliveries.`,
-		mixpanelReport: { type: "Retention / Funnels + warehouse", birth: "order completed (US customers whose order shipped on disrupted days)", return: "order completed within 45 days", breakdown: "shipping_carrier of that shipment", join: "carrier_performance_daily.service_status" },
+		archetype: "external-join",
+		narrative: `External-table join. Northline Parcel's hub disruption (${D(CARRIER_DISRUPTION_START)} to ${D(dayjs.utc(CARRIER_DISRUPTION_END).subtract(1, "day").toISOString())}) adds ${DISRUPTION_DELAY_DAYS[0]}-${DISRUPTION_DELAY_DAYS[1]} days to every Northline parcel shipped in it; the warehouse table carrier_performance_daily marks those carrier-days service_status = 'disrupted'. A US customer whose first parcel shipped on those days went with Northline starts no cart in the ${REPEAT_WINDOW_DAYS} days after it ships ${REPEAT_LOSS * 100}% of the time, so their ${REPEAT_WINDOW_DAYS}-day repeat-order rate (an order completed within ${REPEAT_WINDOW_DAYS} days of that shipment) is ${1 - REPEAT_LOSS} of US customers whose first parcel on those days shipped with another US carrier (Bluejay or ParcelPost; the carrier is assigned per order by hash, independent of the shopper; Northline ships US orders only, so the read stays within US customers). Read 2: disrupted Northline deliveries take ${(DISRUPTION_DELAY_DAYS[0] + DISRUPTION_DELAY_DAYS[1]) / 2} more days on average than other Northline deliveries.`,
+		mixpanelReport: { type: "Funnels + warehouse", steps: ["order shipped", "order completed"], counting: "uniques", window: `${REPEAT_WINDOW_DAYS} days`, dates: `${D(CARRIER_DISRUPTION_START)} → ${D(dayjs.utc(CARRIER_DISRUPTION_END).subtract(1, "day").toISOString())}`, filter: "user property ship_country = US", breakdown: "shipping_carrier (step 1)", join: "carrier_performance_daily.service_status" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H5_SQL },
@@ -1626,8 +1670,8 @@ FROM ev WHERE event = 'order completed' AND ship_country = 'US'`,
 	{
 		id: "H6-paid-channel-economics",
 		hook: "H6",
-		archetype: "attribution-bias",
-		narrative: `External-table join. Window spend per Mixpanel signup (warehouse marketing_spend_daily: a paced daily budget per channel = cost per signup × expected signups per day, shaped by the weekly shopping rhythm above a ${SPEND_FLAT_SHARE * 100}% flat floor with seeded ±${SPEND_NOISE * 100}% day noise) is $${CPS_USD.tiktok_ads} for TikTok vs $${CPS_USD.google_shopping} for Google Shopping (${(CPS_USD.tiktok_ads / CPS_USD.google_shopping).toFixed(3)}x). But only ${FIRST_ORDER_KEEP.tiktok_ads * 100}% of the TikTok new users who would buy ever do (Google Shopping ${FIRST_ORDER_KEEP.google_shopping * 100}%; the others stop at checkout start), so the 30-day first-order rate is ${FIRST_ORDER_KEEP.tiktok_ads / FIRST_ORDER_KEEP.google_shopping}x and the cost per first order is ${(CPS_USD.tiktok_ads / FIRST_ORDER_KEEP.tiktok_ads / CPS_USD.google_shopping).toFixed(2)}x Google's. Read 2 is the Mixpanel funnel account created → order completed, ${FIRST_ORDER_WINDOW_DAYS}-day window, signups ${D(DATASET_START)} through ${D(dayjs.utc(SIGNUP_COHORT_END).subtract(1, "day").toISOString())}. About a hundred TikTok buyers, so it uses the knob as target with a knob-derived ceiling (half the effect).`,
+		archetype: "external-join",
+		narrative: `External-table join. Window spend per Mixpanel signup (warehouse marketing_spend_daily: a paced daily budget per channel = cost per signup × expected signups per day, shaped by the weekly shopping rhythm above a ${SPEND_FLAT_SHARE * 100}% flat floor with seeded ±${SPEND_NOISE * 100}% day noise) is $${CPS_USD.tiktok_ads} for TikTok vs $${CPS_USD.google_shopping} for Google Shopping (${(CPS_USD.tiktok_ads / CPS_USD.google_shopping).toFixed(3)}x). But only ${FIRST_ORDER_KEEP.tiktok_ads * 100}% of the TikTok new users who would buy ever do (Google Shopping ${FIRST_ORDER_KEEP.google_shopping * 100}%; each of the others starts checkout on a salted ${NONBUYER_CHECKOUT_START[0] * 100}-${NONBUYER_CHECKOUT_START[1] * 100}% of their carts and stalls at shipping or payment), so the 30-day first-order rate is ${FIRST_ORDER_KEEP.tiktok_ads / FIRST_ORDER_KEEP.google_shopping}x and the cost per first order is ${(CPS_USD.tiktok_ads / FIRST_ORDER_KEEP.tiktok_ads / CPS_USD.google_shopping).toFixed(2)}x Google's. Read 2 is the Mixpanel funnel account created → order completed, ${FIRST_ORDER_WINDOW_DAYS}-day window, signups ${D(DATASET_START)} through ${D(dayjs.utc(SIGNUP_COHORT_END).subtract(1, "day").toISOString())}. About forty TikTok buyers, so it uses the knob as target with a knob-derived ceiling (half the effect).`,
 		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "marketing_spend_daily.spend_usd", funnel: "account created → order completed, 30-day window, breakdown acquisition_channel" },
 		assertions: [
 			{
@@ -1690,7 +1734,7 @@ FROM ev WHERE event = 'order completed' AND ship_country = 'US'`,
 		hook: "H9",
 		archetype: "temporal-inflection",
 		narrative: `Launch. Room Visualizer launches ${D(VISUALIZER_LAUNCH)}. ${VIZ_ADOPTER_SHARE * 100}% of shoppers adopt it, each from a salted day in the ${VIZ_RAMP_DAYS} days after launch, and open it on the product before a salted ${(VIZ_USE_MEAN - VIZ_USE_SPREAD) * 100}-${(VIZ_USE_MEAN + VIZ_USE_SPREAD) * 100}% (mean ${VIZ_USE_MEAN * 100}%) of their furniture and lighting carts. Those carts convert ${VIZ_CONV_MULT}x the furniture and lighting carts without it (adoption is drawn independently of shopper traits; read on US carts, which keeps the cross-border last-step loss and its September change out of the comparison). Once ramped, ${VIZ_ADOPTER_SHARE * VIZ_USE_MEAN * 100}% of furniture and lighting carts start with a visualizer session; there is none before launch.`,
-		mixpanelReport: { type: "Funnels + Insights", funnel: "room visualizer opened → product added to cart → order completed vs furniture and lighting carts without it (hold cart_id from the add), filter ship_country = US", insights: "room visualizer opened, weekly uniques" },
+		mixpanelReport: { type: "Funnels + Insights", funnelA: "room visualizer opened → product added to cart → order completed, Totals, 1-day window, from 2026-07-22, user property ship_country = US", funnelB: "product added to cart (category = furniture or lighting) → order completed, Totals, hold cart_id, 1-day window, same dates and filter", compare: "A vs B (B still holds the visualizer carts, so A/B reads below the story's split); the story's exact split (visualizer opened on the same product in the 10 minutes before a cart's first add) needs the raw export", insights: "room visualizer opened, weekly uniques" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H9_SQL },
@@ -1714,7 +1758,7 @@ FROM ev WHERE event = 'order completed' AND ship_country = 'US'`,
 	{
 		id: "H10-bedding-stockout",
 		hook: "H10",
-		archetype: "bespoke",
+		archetype: "external-join",
 		narrative: `External-table join. From ${D(BEDDING_STOCKOUT_START)} to ${D(dayjs.utc(BEDDING_STOCKOUT_END).subtract(1, "day").toISOString())} a delayed linen shipment leaves ${STOCKOUT_SHARE * 100}% of bedding SKUs out of stock: ${STOCKOUT_SHARE * 100}% of would-be bedding carts never start, though the shopper still views the product. Events carry no stock flag. The stockout days come from the warehouse table inventory_daily (bedding in_stock_rate far below normal); the event read is a ratio of ratios (bedding adds per bedding view, stockout vs the ${H10_BASE_DAYS} days either side, over the same for ${H10_CONTROL.join(', ')}), which reads 1 − ${STOCKOUT_SHARE} and cancels sitewide swings. The control categories are never bought as small add-ons; add-on adds (decor, kitchen, bath, dining) move with the free-shipping threshold, which changed inside the comparison window. Read 2: the warehouse bedding in_stock_rate during the stockout ≈ 1 − ${STOCKOUT_SHARE}.`,
 		mixpanelReport: { type: "Insights + warehouse", formula: "product added to cart / product viewed", breakdown: "category", chart: "daily line", join: "inventory_daily.in_stock_rate" },
 		assertions: [

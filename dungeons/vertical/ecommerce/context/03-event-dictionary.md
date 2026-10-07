@@ -24,7 +24,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 | `home page viewed` | The shopper opens the home page. | `home_module`: the featured module the shopper engaged with (`new_arrivals`, `bestsellers`, `seasonal_edit`, `recently_viewed`, `room_inspiration`, `labor_day_sale` during the sale). |
 | `category browsed` | The shopper opens a category page. | `category` (`bedding`, `bath`, `kitchen`, `dining`, `furniture`, `lighting`, `decor`, `outdoor`); `sort_by` (`featured`, `bestselling`, `newest`, `price_low_high`, `price_high_low`). |
 | `product searched` | The shopper runs a search. | `search_term`; `results_count`. |
-| `product viewed` | The shopper opens a product page. The first product in a cart is always viewed shortly before it is added; further items can be added from the cart page ("complete the set" and small add-ons) without opening their product page. | `product_id`, `product_name`, `category`, `price_usd` (list price). |
+| `product viewed` | The shopper opens a product page. The first product in a cart is viewed shortly before it is added; further items can be added from the cart page ("complete the set" suggestions) without opening their product page. | `product_id`, `product_name`, `category`, `price_usd` (list price). |
 | `product reviews read` | The shopper opens the reviews on a product page. | `product_id`, `category`, `reviews_shown`. |
 | `product added to wishlist` | The shopper saves a product to their wishlist. | `product_id`, `product_name`, `category`, `price_usd`. |
 | `room visualizer opened` | The shopper opens Room Visualizer on a furniture or lighting product page (from 2026-07-22). | `product_id`, `product_name`, `category`, `price_usd`. |
@@ -43,12 +43,12 @@ Every step of one cart carries the same `cart_id`. A cart starts with its first 
 | Event | Meaning | Properties |
 |---|---|---|
 | `product added to cart` | The shopper adds a product to the cart. | `cart_id`; `product_id`, `product_name`, `category`, `price_usd`; `quantity`. |
-| `cart viewed` | The shopper opens the cart. The cart shows how far the subtotal is from free shipping. | `cart_id`; `cart_items` (units in the cart); `cart_value_usd` (merchandise subtotal). |
+| `cart viewed` | The shopper opens the cart. | `cart_id`; `cart_items` (units in the cart); `cart_value_usd` (merchandise subtotal). |
 | `checkout started` | The shopper starts checkout. | `cart_id`; `cart_items`; `cart_value_usd`. |
 | `shipping info entered` | The shopper completes the shipping step. | `cart_id`; `ship_country` (`US`, `CA`, `GB`); `address_type` (`home`, `work`, `gift_recipient`). |
 | `payment info entered` | The shopper completes the payment step. | `cart_id`; `payment_method` (`credit_card`, `paypal`, `digital_wallet`, `afterpay`). |
 | `order completed` | The order is placed. | `cart_id`; `order_id`; `item_count` (units); `primary_category` (category of the cart's first item); `subtotal_usd` (merchandise, before discounts); `discount_code` (`none`, `WELCOME10` for some new customers' first order, `LABORDAY25`); `discount_usd`; `shipping_usd`; `free_shipping` (true when shipping was $0); `order_total_usd` = subtotal − discount + shipping (tax excluded); `payment_method`; `ship_country`. |
-| `$experiment_started` | Mixpanel experiment exposure, sent at the start of each cart while the One-Page Checkout test runs (from 2026-07-15), one second before the cart's first add. | `Experiment name` = `One-Page Checkout`; `Variant name` = `Control` or `One-Page`. |
+| `$experiment_started` | Mixpanel experiment exposure for the One-Page Checkout test (from 2026-07-15). Sent once per shopper, one second before the first add of their first cart in the test; later carts keep the same variant and send no new exposure. | `Experiment name` = `One-Page Checkout`; `Variant name` = `Control` or `One-Page`. |
 
 ## Fulfillment and after the order
 
@@ -68,7 +68,6 @@ Every step of one cart carries the same `cart_id`. A cart starts with its first 
 | `distinct_id` | The customer's ID (same as `user_id` on events). |
 | `name`, `email`, `avatar` | Contact details. |
 | `shopper_segment` | `home_refresher`, `deal_seeker`, `new_mover`, `casual_gifter` (see 01-business.md). |
-| `_persona` | Legacy copy of `shopper_segment` from an older CRM sync. |
 | `membership` | `pine_plus` or `standard`. |
 | `ship_country` | `US`, `CA`, or `GB`. |
 | `acquisition_channel` | Channel at signup (for customers from before the window, the channel they originally came from). |
@@ -84,5 +83,5 @@ Every step of one cart carries the same `cart_id`. A cart starts with its first 
 |---|---|---|
 | New shopper | `category browsed` → `product viewed` → `account created` | First visit; the first two steps are anonymous until the account links them. |
 | Browse | `category browsed` → `product viewed` | Daily browsing habit. |
-| Cart to order | `product added to cart` → `cart viewed` → `checkout started` → `shipping info entered` → `payment info entered` → `order completed` | Customers start many carts. Hold `cart_id` constant and count Totals to measure each cart on its own; use a 1-day conversion window (every order in the data lands within an hour of the cart's first add). |
+| Cart to order | `product added to cart` → `cart viewed` → `checkout started` → `shipping info entered` → `payment info entered` → `order completed` | Customers start many carts. Hold `cart_id` constant and count Totals to measure each cart on its own; use a 1-day conversion window (a checkout session times out one hour after the cart's first add). |
 | Delivery | `order shipped` → `order delivered` | Hold `order_id` constant. |

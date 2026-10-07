@@ -88,7 +88,8 @@ SELECT count(*) AS events, count(DISTINCT uid) AS users, (SELECT count(*) FROM u
  (SELECT count(*) FROM signups) AS new_signups, (SELECT count(*) FROM orders) AS orders,
  round((SELECT sum(order_total_usd) FROM orders), 0) AS revenue_usd, min(t) AS first_event, max(t) AS last_event FROM ev;
 
--- identity check: anonymous events that never resolve to a user
+-- identity check: anonymous events that never resolve to a user (expected 0: every
+-- pre-signup browse sits on the device that account created links)
 SELECT count(*) FILTER (WHERE uid IS NULL) AS unresolved_events,
  count(*) FILTER (WHERE user_id IS NULL AND uid IS NOT NULL) AS stitched_anonymous_events FROM ev;
 
@@ -129,15 +130,18 @@ FROM carts GROUP BY 1 ORDER BY 1;
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H5-carrier-disruption-repeat-orders — Northline hub disruption 2026-07-20..08-09 (warehouse join)
 -- ─────────────────────────────────────────────────────────────────────────
--- each US customer's first order (by order time) that shipped on a disrupted day
--- (Northline ships US orders only, so the comparison stays within US carriers)
+-- Mixpanel: Funnels, order shipped → order completed, Uniques, 45-day window, date range
+-- Jul 20 - Aug 9 (the disrupted days in the warehouse), user property ship_country = US,
+-- breakdown shipping_carrier of step 1. Each US customer enters at their first order shipped
+-- on a disrupted day; a repeat is an order completed within 45 days after that shipment.
+-- (Northline ships US orders only, so the comparison stays within US carriers.)
 CREATE OR REPLACE TEMP TABLE h5_ref AS
 WITH dis AS (SELECT date::DATE AS d, shipping_carrier FROM wh_carrier WHERE service_status = 'disrupted'),
 ddays AS (SELECT DISTINCT d FROM dis),
-r AS (SELECT uid, arg_min(shipping_carrier, t_ord) AS carrier, arg_min(t_ship, t_ord) AS t_ship, min(t_ord) AS ref_t
-  FROM orders WHERE ship_country = 'US' AND t_ship::DATE IN (SELECT d FROM ddays) GROUP BY 1)
+r AS (SELECT uid, arg_min(shipping_carrier, t) AS carrier, min(t) AS t_ship
+  FROM ev WHERE event = 'order shipped' AND ship_country = 'US' AND t::DATE IN (SELECT d FROM ddays) GROUP BY 1)
 SELECT r.*, (r.carrier, r.t_ship::DATE) IN (SELECT (shipping_carrier, d) FROM dis) AS affected,
- EXISTS (SELECT 1 FROM orders o WHERE o.uid = r.uid AND o.t_ord > r.ref_t AND o.t_ord <= r.ref_t + INTERVAL 45 DAY) AS repeat_45d
+ EXISTS (SELECT 1 FROM orders o WHERE o.uid = r.uid AND o.t_ord > r.t_ship AND o.t_ord < r.t_ship + INTERVAL 45 DAY) AS repeat_45d
 FROM r;
 SELECT affected, count(*) AS customers, round(avg(repeat_45d::INT), 4) AS repeat_rate_45d FROM h5_ref GROUP BY 1 ORDER BY 1;
 
@@ -233,14 +237,15 @@ x AS (SELECT max(p) FILTER (WHERE variant = 'One-Page') AS p1, max(n) FILTER (WH
   max(p) FILTER (WHERE variant = 'Control') AS p0, max(n) FILTER (WHERE variant = 'Control') AS n0 FROM g)
 SELECT round(p1 / p0, 3) AS lift_ratio, round((p1 - p0) / sqrt(p1 * (1 - p1) / n1 + p0 * (1 - p0) / n0), 1) AS z FROM x;
 
--- EVAL Q2 — null: One-Page Checkout and basket size (orders from carts started Jul 15 onward)
+-- EVAL Q2 — null: One-Page Checkout and basket size in items (orders from carts started Jul 15 onward).
+-- The graded answer is items per order; order value is reported with its own p-value.
 CREATE OR REPLACE TEMP TABLE q2_orders AS
 SELECT c.variant, c.platform, c.membership, c.order_total_usd, o.item_count
 FROM carts c JOIN (SELECT cart_id, item_count FROM ev WHERE event = 'order completed') o ON o.cart_id = c.cart_id
 WHERE c.t_add >= TIMESTAMP '2026-07-15' AND c.variant IS NOT NULL AND c.converted;
 SELECT variant, count(*) AS orders, round(avg(item_count), 3) AS items_per_order, round(median(order_total_usd), 2) AS median_order_total,
  round(avg(order_total_usd), 2) AS mean_order_total FROM q2_orders GROUP BY 1 ORDER BY 1;
--- Welch z: items per order, and log order total (order values are heavy-tailed)
+-- Welch z: items per order (graded), log and mean order total (context; order values are heavy-tailed)
 WITH g AS (SELECT variant, count(*) AS n, avg(item_count) AS mi, var_samp(item_count) AS vi,
   avg(ln(order_total_usd)) AS ml, var_samp(ln(order_total_usd)) AS vl, avg(order_total_usd) AS mo, var_samp(order_total_usd) AS vo FROM q2_orders GROUP BY 1),
 x AS (SELECT * FROM g WHERE variant = 'One-Page'), y AS (SELECT * FROM g WHERE variant = 'Control')
@@ -290,14 +295,16 @@ FROM carts GROUP BY 1 ORDER BY 1;
 SELECT membership, variant, round(median(ttc_s) / 60, 1) AS median_minutes FROM carts
 WHERE t_add >= TIMESTAMP '2026-07-15' AND variant IS NOT NULL GROUP BY 1, 2 ORDER BY 1, 2;
 
--- EVAL Q7 — repeat orders after the Northline disruption (US customers whose order shipped Jul 20 - Aug 9)
+-- EVAL Q7 — repeat orders after the Northline disruption (US customers whose first order shipped Jul 20 - Aug 9;
+-- the funnel order shipped → order completed, 45-day window, breakdown carrier; see h5_ref above)
 SELECT carrier, affected, count(*) AS customers, round(avg(repeat_45d::INT), 4) AS repeat_rate_45d FROM h5_ref GROUP BY 1, 2 ORDER BY 1;
 SELECT affected, count(*) AS customers, round(avg(repeat_45d::INT), 4) AS repeat_rate_45d FROM h5_ref GROUP BY 1 ORDER BY 1;
--- 45-day repeat rate by the 21-day window in which a US customer's first order of the period shipped (any carrier).
--- Only windows whose 45-day follow-up ends before Oct 1 are compared.
-WITH r AS (SELECT uid, min(t_ord) AS ref_t, CASE WHEN min(t_ship) < TIMESTAMP '2026-07-20' THEN 'a_jun_29_jul_19' ELSE 'b_jul_20_aug_09' END AS win
-  FROM orders WHERE ship_country = 'US' AND t_ship >= TIMESTAMP '2026-06-29' AND t_ship < TIMESTAMP '2026-08-10' GROUP BY 1)
-SELECT win, count(*) AS customers, round(avg((EXISTS (SELECT 1 FROM orders o WHERE o.uid = r.uid AND o.t_ord > r.ref_t AND o.t_ord <= r.ref_t + INTERVAL 45 DAY))::INT), 4) AS repeat_rate_45d
+-- 45-day repeat rate after each US customer's first shipment in two 21-day windows (any carrier):
+-- Jun 29 - Jul 19 vs Jul 20 - Aug 9. Each window is its own funnel (a customer can be in both).
+WITH s AS (SELECT uid, t, CASE WHEN t < TIMESTAMP '2026-07-20' THEN 'a_jun_29_jul_19' ELSE 'b_jul_20_aug_09' END AS win
+  FROM ev WHERE event = 'order shipped' AND ship_country = 'US' AND t >= TIMESTAMP '2026-06-29' AND t < TIMESTAMP '2026-08-10'),
+r AS (SELECT uid, win, min(t) AS t_ship FROM s GROUP BY 1, 2)
+SELECT win, count(*) AS customers, round(avg((EXISTS (SELECT 1 FROM orders o WHERE o.uid = r.uid AND o.t_ord > r.t_ship AND o.t_ord < r.t_ship + INTERVAL 45 DAY))::INT), 4) AS repeat_rate_45d
 FROM r GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q8 — carrier performance (warehouse) and delivery days (events)
@@ -343,6 +350,11 @@ FROM h8_users WHERE t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 52 DAY GROUP
 WITH f AS (SELECT h.*, (SELECT count(*) FROM orders o WHERE o.uid = h.uid AND o.t_ord < h.t0 + INTERVAL 14 DAY) AS orders_14d
   FROM h8_users h WHERE t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 52 DAY)
 SELECT (orders_14d > 0) AS ordered_in_14d, count(*) AS new_users, round(avg((act_d45 > 0)::INT), 4) AS d45 FROM f GROUP BY 1 ORDER BY 1;
+WITH f AS (SELECT h.*, (SELECT count(*) FROM orders o WHERE o.uid = h.uid AND o.t_ord < h.t0 + INTERVAL 14 DAY) > 0 AS ordered
+  FROM h8_users h WHERE t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 52 DAY),
+g AS (SELECT ordered, count(*) AS n, avg((act_d45 > 0)::INT) AS p FROM f GROUP BY 1),
+x AS (SELECT max(p) FILTER (WHERE ordered) AS p1, max(n) FILTER (WHERE ordered) AS n1, max(p) FILTER (WHERE NOT ordered) AS p0, max(n) FILTER (WHERE NOT ordered) AS n0 FROM g)
+SELECT round(p1 / p0, 3) AS ordered_over_not, round((p1 - p0) / sqrt(p1 * (1 - p1) / n1 + p0 * (1 - p0) / n0), 2) AS z FROM x;
 
 -- EVAL Q12 — Room Visualizer (launched 2026-07-22)
 SELECT used_visualizer, count(*) AS carts, round(avg(converted::INT), 4) AS conversion FROM h9_carts WHERE ship_country = 'US' GROUP BY 1 ORDER BY 1;
@@ -350,6 +362,19 @@ SELECT used_visualizer, count(*) AS carts, round(avg(converted::INT), 4) AS conv
 SELECT date_trunc('week', t_add)::DATE AS week, count(*) AS furniture_lighting_carts, round(avg(used_visualizer::INT), 4) AS visualizer_share
 FROM h9_carts GROUP BY 1 ORDER BY 1;
 SELECT count(DISTINCT uid) AS visualizer_users, count(*) AS visualizer_opens FROM ev WHERE event = 'room visualizer opened';
+-- buildable Mixpanel versions (US, from Jul 22, 1-day window):
+--  A: room visualizer opened → product added to cart → order completed, Totals (one attempt per open)
+--  B: product added to cart (furniture or lighting) → order completed, Totals, hold cart_id (all such carts)
+--  C: furniture/lighting carts of customers who had opened the visualizer before the cart vs those who had not
+WITH v AS (SELECT e.uid, e.t FROM ev e JOIN prof p ON p.uid = e.uid WHERE e.event = 'room visualizer opened' AND p.ship_country = 'US'),
+a AS (SELECT v.uid, v.t, EXISTS (SELECT 1 FROM ev x JOIN ev o ON o.uid = x.uid AND o.event = 'order completed' AND o.t > x.t AND o.t < v.t + INTERVAL 1 DAY
+  WHERE x.uid = v.uid AND x.event = 'product added to cart' AND x.t >= v.t AND x.t < v.t + INTERVAL 1 DAY) AS conv FROM v)
+SELECT 'A_visualizer_funnel' AS read, count(*) AS attempts, round(avg(conv::INT), 4) AS conversion FROM a
+UNION ALL
+SELECT 'B_all_furniture_lighting_carts', count(*), round(avg(converted::INT), 4) FROM h9_carts WHERE ship_country = 'US'
+UNION ALL
+SELECT CASE WHEN EXISTS (SELECT 1 FROM ev v WHERE v.uid = c.uid AND v.event = 'room visualizer opened' AND v.t <= c.t_add) THEN 'C_adopter_carts' ELSE 'C_non_adopter_carts' END,
+ count(*), round(avg(converted::INT), 4) FROM h9_carts c WHERE ship_country = 'US' GROUP BY 1 ORDER BY 1;
 -- furniture and lighting cart conversion before vs after launch (US)
 SELECT (t_add >= TIMESTAMP '2026-07-22') AS after_launch, count(*) AS furniture_lighting_carts, round(avg(converted::INT), 4) AS conversion
 FROM carts WHERE category IN ('furniture', 'lighting') AND ship_country = 'US' GROUP BY 1 ORDER BY 1;
@@ -366,34 +391,32 @@ FROM wh_inventory WHERE primary_category = 'bedding' GROUP BY 1 ORDER BY 1;
 SELECT CASE WHEN t_ord >= TIMESTAMP '2026-08-10' THEN 'b_aug_10_30' ELSE 'a_jul_20_aug_09' END AS period, count(*) AS bedding_orders, round(sum(order_total_usd), 0) AS bedding_revenue
 FROM orders WHERE primary_category = 'bedding' AND t_ord >= TIMESTAMP '2026-07-20' AND t_ord < TIMESTAMP '2026-08-31' GROUP BY 1 ORDER BY 1;
 
--- EVAL Q14 — null: iOS vs Android app cart conversion
+-- EVAL Q14 — null: app vs website cart conversion (platform of the cart's first add)
 SELECT platform, count(*) AS carts, round(avg(converted::INT), 4) AS conversion FROM carts GROUP BY 1 ORDER BY 1;
-WITH g AS (SELECT platform, count(*) AS n, avg(converted::INT) AS p FROM carts WHERE platform IN ('ios_app', 'android_app') GROUP BY 1),
-x AS (SELECT max(p) FILTER (WHERE platform = 'ios_app') AS p1, max(n) FILTER (WHERE platform = 'ios_app') AS n1,
-  max(p) FILTER (WHERE platform = 'android_app') AS p0, max(n) FILTER (WHERE platform = 'android_app') AS n0 FROM g)
-SELECT round(p1 / p0, 3) AS ios_over_android, round((p1 - p0) / sqrt(p1 * (1 - p1) / n1 + p0 * (1 - p0) / n0), 2) AS z FROM x;
--- sub-splits: by experiment arm (from Jul 15) and by membership
-SELECT platform, variant, count(*) AS carts, round(avg(converted::INT), 4) AS conversion FROM carts
-WHERE platform IN ('ios_app', 'android_app') AND t_add >= TIMESTAMP '2026-07-15' AND variant IS NOT NULL GROUP BY 1, 2 ORDER BY 2, 1;
-SELECT platform, membership, count(*) AS carts, round(avg(converted::INT), 4) AS conversion FROM carts
-WHERE platform IN ('ios_app', 'android_app') GROUP BY 1, 2 ORDER BY 2, 1;
+-- web vs app (iOS + Android), overall and in the obvious sub-splits: checkout arm (from Jul 15), membership, country
+WITH c AS (SELECT *, platform = 'web' AS web FROM carts),
+s AS (SELECT 'all' AS seg, web, count(*) AS n, avg(converted::INT) AS p FROM c GROUP BY 2
+  UNION ALL SELECT variant, web, count(*), avg(converted::INT) FROM c WHERE variant IS NOT NULL AND t_add >= TIMESTAMP '2026-07-15' GROUP BY 1, 2
+  UNION ALL SELECT membership, web, count(*), avg(converted::INT) FROM c GROUP BY 1, 2
+  UNION ALL SELECT ship_country, web, count(*), avg(converted::INT) FROM c GROUP BY 1, 2)
+SELECT a.seg, a.n AS web_carts, round(a.p, 4) AS web_conversion, b.n AS app_carts, round(b.p, 4) AS app_conversion,
+ round((a.p - b.p) / sqrt(a.p * (1 - a.p) / a.n + b.p * (1 - b.p) / b.n), 2) AS z
+FROM s a JOIN s b ON a.seg = b.seg AND a.web AND NOT b.web ORDER BY 1;
 
--- EVAL Q15 — null: do new movers convert carts better? (volume vs rate)
+-- EVAL Q15 — null: social-login signups (Google, Apple, Facebook) vs email signups, 30-day first-order rate
+-- (signups through Aug 31, the same cohort as Q9)
 CREATE OR REPLACE TEMP TABLE q15 AS
-SELECT c.*, p.shopper_segment, (p.shopper_segment = 'new_mover') AS new_mover FROM carts c JOIN prof p ON p.uid = c.uid;
-SELECT shopper_segment, count(DISTINCT uid) AS shoppers, count(*) AS carts, round(count(*)::DOUBLE / count(DISTINCT uid), 2) AS carts_per_shopper,
- count(*) FILTER (WHERE converted) AS orders, round(count(*) FILTER (WHERE converted)::DOUBLE / count(DISTINCT uid), 2) AS orders_per_shopper,
- round(avg(converted::INT), 4) AS conversion FROM q15 GROUP BY 1 ORDER BY 1;
-WITH g AS (SELECT new_mover, count(*) AS n, avg(converted::INT) AS p FROM q15 GROUP BY 1),
-x AS (SELECT max(p) FILTER (WHERE new_mover) AS p1, max(n) FILTER (WHERE new_mover) AS n1, max(p) FILTER (WHERE NOT new_mover) AS p0, max(n) FILTER (WHERE NOT new_mover) AS n0 FROM g)
-SELECT round(p1, 4) AS new_mover_conversion, round(p0, 4) AS others_conversion, round((p1 - p0) / sqrt(p1 * (1 - p1) / n1 + p0 * (1 - p0) / n0), 2) AS z FROM x;
--- sub-splits: by membership, by country group, by experiment arm (from Jul 15)
-WITH s AS (SELECT membership AS seg, new_mover, converted FROM q15
-  UNION ALL SELECT CASE WHEN ship_country = 'US' THEN 'us' ELSE 'intl' END, new_mover, converted FROM q15
-  UNION ALL SELECT variant, new_mover, converted FROM q15 WHERE variant IS NOT NULL AND t_add >= TIMESTAMP '2026-07-15'),
-g AS (SELECT seg, new_mover, count(*) AS n, avg(converted::INT) AS p FROM s GROUP BY 1, 2)
-SELECT a.seg, round(a.p, 4) AS new_mover_conversion, round(b.p, 4) AS others_conversion, round((a.p - b.p) / sqrt(a.p * (1 - a.p) / a.n + b.p * (1 - b.p) / b.n), 2) AS z
-FROM g a JOIN g b ON a.seg = b.seg AND a.new_mover AND NOT b.new_mover ORDER BY 1;
+SELECT s.*, p.membership, p.ship_country, s.ch IN ('meta_ads', 'google_shopping', 'tiktok_ads') AS paid, s.signup_method <> 'email' AS social,
+ EXISTS (SELECT 1 FROM orders o WHERE o.uid = s.uid AND o.t_ord >= s.t0 AND o.t_ord < s.t0 + INTERVAL 30 DAY) AS bought_30d
+FROM signups s JOIN prof p ON p.uid = s.uid WHERE s.t0 < TIMESTAMP '2026-09-01';
+SELECT signup_method, count(*) AS signups, round(avg(bought_30d::INT), 4) AS first_order_rate_30d FROM q15 GROUP BY 1 ORDER BY 1;
+WITH s AS (SELECT 'all' AS seg, social, count(*) AS n, avg(bought_30d::INT) AS p FROM q15 GROUP BY 2
+  UNION ALL SELECT CASE WHEN paid THEN 'paid_channels' ELSE 'unpaid_channels' END, social, count(*), avg(bought_30d::INT) FROM q15 GROUP BY 1, 2
+  UNION ALL SELECT membership, social, count(*), avg(bought_30d::INT) FROM q15 GROUP BY 1, 2
+  UNION ALL SELECT CASE WHEN ship_country = 'US' THEN 'us' ELSE 'intl' END, social, count(*), avg(bought_30d::INT) FROM q15 GROUP BY 1, 2)
+SELECT a.seg, a.n AS social_signups, round(a.p, 4) AS social_rate, b.n AS email_signups, round(b.p, 4) AS email_rate,
+ round((a.p - b.p) / sqrt(a.p * (1 - a.p) / a.n + b.p * (1 - b.p) / b.n), 2) AS z
+FROM s a JOIN s b ON a.seg = b.seg AND a.social AND NOT b.social ORDER BY 1;
 
 -- EVAL Q16 — shipments and deliveries by week (the mid-August delivery bulge)
 SELECT date_trunc('week', t)::DATE AS week, count(*) FILTER (WHERE event = 'order shipped') AS shipped, count(*) FILTER (WHERE event = 'order delivered') AS delivered,
@@ -421,11 +444,11 @@ SELECT ship_country, round(avg(converted::INT) FILTER (WHERE t_payment IS NOT NU
 FROM carts GROUP BY 1 ORDER BY 1;
 SELECT category, count(*) AS carts, round(avg(converted::INT), 4) AS conversion FROM carts GROUP BY 1 ORDER BY 3;
 
--- EVAL Q19 — Q4 risk scan: monthly orders and revenue, September conversion by country
+-- EVAL Q19 — Q4 risk scan: monthly orders and revenue, September (Sep 1-30) conversion by country
 SELECT date_trunc('month', t_ord)::DATE AS month, count(*) AS orders, round(sum(order_total_usd), 0) AS revenue, round(avg(order_total_usd), 2) AS aov
 FROM orders GROUP BY 1 ORDER BY 1;
-SELECT ship_country, count(*) FILTER (WHERE t_add >= TIMESTAMP '2026-09-01') AS sep_carts,
- round(avg(converted::INT) FILTER (WHERE t_add >= TIMESTAMP '2026-09-01'), 4) AS sep_conversion FROM carts GROUP BY 1 ORDER BY 1;
+SELECT ship_country, count(*) AS sep_carts, round(avg(converted::INT), 4) AS sep_conversion
+FROM carts WHERE t_add >= TIMESTAMP '2026-09-01' AND t_add < TIMESTAMP '2026-10-01' GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q20 — summer summary: new signups, buyers, orders, revenue, repeat behavior
 SELECT (SELECT count(*) FROM signups) AS new_signups,

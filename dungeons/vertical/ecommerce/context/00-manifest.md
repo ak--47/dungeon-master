@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Marlowe & Pine**, a direct-to-c
 
 - **Product:** the Marlowe & Pine online store: the website and the iOS and Android shopping apps. Shoppers browse eight categories (bedding, bath, kitchen, dining, furniture, lighting, decor, outdoor), build carts, check out, and receive their orders by parcel carrier. Marlowe & Pine ships to the United States, Canada, and the United Kingdom.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early June through the first day of Q4.
-- **Scale:** about 10,000 customer accounts were active in the window. About 4,000 of them created their account during the window; the rest were customers before June 4. About 7,000 customers placed at least one order. The project holds about 1.2 million events and about 18,700 orders.
+- **Scale:** about 10,000 customer accounts were active in the window. About 4,000 of them created their account during the window; the rest were customers before June 4. About 5,800 customers placed at least one order. The project holds about 1.2 million events and about 11,300 orders.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. Most customers are in the US, so a US evening falls after midnight UTC.
 
 ## The other files
@@ -26,7 +26,7 @@ This folder is the internal analytics wiki for **Marlowe & Pine**, a direct-to-c
 
 ## Identity notes
 
-- A new shopper browses before they have an account. Their first visit (a category browse and a product view) is anonymous and carries only a `device_id`. When they create an account, `account created` carries both their `user_id` and the `device_id`, and Mixpanel links the earlier anonymous events to the customer. A handful of first visits never link (the visit happened on a device the shopper never used again after signing up).
+- A new shopper browses before they have an account. Their first visit (usually a category browse and a product view) is anonymous and carries only a `device_id`. When they create an account, `account created` carries both their `user_id` and the `device_id`, and Mixpanel links the earlier anonymous events to the customer. Every anonymous event links to a customer this way.
 - An account is required to check out; there is no guest checkout. So every cart and order belongs to a known customer.
 - Every event after account creation carries `user_id`. Events from the website and apps also carry `device_id`; customers use about two devices (for example a phone and a laptop). `order shipped` and `order delivered` come from the fulfillment system and carry `user_id` only, with no device or platform.
 - Customers who joined before June 4 have no `account created` event in this window. Their `customer_since` profile date is before the window. For customers who joined in the window, `customer_since` is their signup date.

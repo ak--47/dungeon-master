@@ -2,7 +2,7 @@
 
 ## Who we are
 
-Marlowe & Pine is a direct-to-consumer home goods brand founded in 2019 and based in Portland, Oregon. We design our own bedding, bath, kitchen and dining goods, furniture, lighting, decor, and outdoor pieces, make them with contract manufacturers, and sell them only through our own website and apps. We run one fulfillment center in Columbus, Ohio. The company has about 70 employees, and annual sales are about $16 million. A small wholesale program supplies a few boutique retailers from the same stock.
+Marlowe & Pine is a direct-to-consumer home goods brand founded in 2019 and based in Portland, Oregon. We design our own bedding, bath, kitchen and dining goods, furniture, lighting, decor, and outdoor pieces, make them with contract manufacturers, and sell them only through our own website and apps. We run one fulfillment center in Columbus, Ohio. The company has about 70 employees, and annual online sales are about $10 million. A small wholesale program supplies a few boutique retailers from the same stock.
 
 ## What customers do in the store
 
@@ -63,5 +63,5 @@ Leadership set these goals:
 2. **Grow international.** Canada and the UK are young markets. Leadership asked how international checkout compares with the US and whether the September Canada pilot was worth it.
 3. **Spend paid media efficiently.** Marketing added TikTok to the mix this year. Finance asked which paid channels are worth their cost, measured on first orders, not signups.
 4. **Keep new customers.** The growth team wants to know which early behaviors predict a new customer coming back.
-5. **Deliver on time.** Late parcels drive support contacts and bad reviews. Operations watches carrier service levels closely.
+5. **Deliver on time.** Operations watches carrier service levels closely.
 6. **Merchandise well.** The merchandising team lowered the free-shipping threshold in August and wants to know whether it paid off. It also tracks stock on core bedding lines.

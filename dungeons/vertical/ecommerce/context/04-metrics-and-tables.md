@@ -73,7 +73,7 @@ Daily stock position by product category, from the warehouse management system (
 | `in_stock_rate` | FLOAT | share 0-1 | 1 − `skus_out_of_stock` / `skus_active`. |
 | `units_on_hand` | FLOAT | units | Sellable units on hand at end of day. |
 
-Caveats: product pages stay live when a SKU is out of stock, and Mixpanel events carry no stock flag. `units_shipped` counts units by the order's first-item category, like `primary_category`.
+Caveats: Mixpanel events carry no stock information; use this table for stock questions. `units_shipped` counts units by the order's first-item category, like `primary_category`.
 
 ## Analysis tips
 
