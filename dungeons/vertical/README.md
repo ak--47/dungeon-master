@@ -237,7 +237,7 @@ node dungeons/vertical/<v>/<v>.verify.mjs                                 # verd
 duckdb -c ".read dungeons/vertical/<v>/<v>.sql"                           # SQL checks
 ```
 
-The gzipped delivery copy comes from `plans/verticals-reeval/export-desktop.mjs`
+The gzipped delivery copy comes from `plans/archived/verticals-reeval/export-desktop.mjs`
 (local tooling, not in the package). Any engine change can shift the generated
 data, so re-measure the eval numbers after an upgrade.
 
