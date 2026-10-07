@@ -23,7 +23,7 @@ The default export accepts: a config object, a path to a `.js`/`.mjs`/`.json` du
 | Retained sweep results and historical repair checkpoints | [docs/alignment/sweep-results.md](docs/alignment/sweep-results.md), [docs/alignment/archive/1.8.1/README.md](docs/alignment/archive/1.8.1/README.md) |
 | User-facing API, config reference, examples, full preset tables | [README.md](README.md) |
 | Hook encyclopedia, recipes, Mixpanel counting semantics | [HOOKS.md](HOOKS.md) |
-| Per-version upgrade guides (1.3 → 1.8) | [docs/guides/](docs/guides/) |
+| Per-version upgrade guides (1.3 → 1.9) | [docs/guides/](docs/guides/) |
 | Per-dungeon stories + verify scripts (vertical dungeons) | [dungeons/vertical/README.md](dungeons/vertical/README.md) |
 | Full `Dungeon` interface | [types.d.ts](types.d.ts) |
 | Changelog | [CHANGELOG.md](CHANGELOG.md) |
@@ -63,7 +63,7 @@ dungeons/vertical/       # one folder per vertical: <name>/<name>.js + <name>.ve
 tests/{unit,integration,e2e,engine,alignment}/ # executable tests and evidence JSON
 docs/alignment/          # current contracts, recipes, validation, and live report
 docs/alignment/archive/1.8.1/ # preserved historical repair checkpoints
-docs/guides/             # per-version upgrade guides through 1.8.3
+docs/guides/             # per-version upgrade guides through 1.9.0
 plans/                   # implementation plans (gitignored, local only). Active: plans/<name>/. Finished: move the whole folder to plans/archived/<name>/ together with its request docs, measurement scripts, and reply — that is the repo convention.
 ```
 

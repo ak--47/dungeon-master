@@ -24,12 +24,13 @@ artifacts; repository-relative test links are for checkout readers.
 
 - [Validation workflows](alignment/validation.md): offline gates, targeted reruns, generated report locations.
 - [Live validation operations](alignment/live-validation.md): authorized imports, isolation, budgets, and query readiness.
+- [1.9.0 upgrade guide](guides/1.9.0-upgrade-guide.md): seeded output shifts, identity and activity-shape fixes, workarounds to remove.
 - [1.8.3 upgrade guide](guides/1.8.3-upgrade-guide.md): rolling windows, endpoint repairs, and UI integration.
 - [1.8.2 upgrade guide](guides/1.8.2-upgrade-guide.md)
 - [1.8.1 upgrade guide](guides/1.8.1-upgrade-guide.md)
 - [1.8.0 upgrade guide](guides/1.8.0-upgrade-guide.md)
 - [Changelog](../CHANGELOG.md); earlier version guides remain in `guides/`.
 
-1.8.3 is prepared for release; npm publication is a separate operator action.
+1.9.0 is prepared for release and unreleased; npm publication is a separate operator action.
 The retained live report describes 1.8.2. Historical reports preserve what was
 known at each checkpoint; use the current guide to interpret superseded claims.
