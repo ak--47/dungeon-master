@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Cortexa**, a developer platform
 
 - **Product:** the Cortexa API (Messages API and Batch API) and the Cortexa web console: API keys, the prompt playground, evaluations, usage dashboards, docs, and billing. Models: atlas-2, swift-2, and atlas-3 (from July 28).
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, the end of Q2 through the close of Q3 and the first day of Q4.
-- **Scale:** about 10,000 developer accounts were active in the window. About 5,000 of them signed up during the window; the rest were already customers before June 4. The project holds about 840,000 events.
+- **Scale:** about 10,000 developer accounts were active in the window. About 5,000 of them signed up during the window; the rest were already customers before June 4. The project holds about 890,000 events.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC.
 
 ## The other files
@@ -27,7 +27,7 @@ This folder is the internal analytics wiki for **Cortexa**, a developer platform
 ## Identity notes
 
 - Cortexa sends every event from its servers with the account's `user_id`. There is no `device_id` and no anonymous (logged-out) activity in the data.
-- A new account is identified when it is created. `account created` is each new account's first event.
+- A new account is identified when it is created. `account created` is each new account's first product event. Accounts created while the Interactive Quickstart test is live (from July 1) also get a `$experiment_started` event one second before `account created`.
 - Accounts that joined before June 4 have no `account created` event in this window. Their `customer_since` profile date is before the window. For accounts that joined in the window, `customer_since` is their signup date and `created` is their signup time.
 - Count accounts with unique `user_id` (Mixpanel "Uniques").
 

@@ -73,12 +73,13 @@ SELECT count(*) AS events, count(DISTINCT uid) AS accounts_with_events, (SELECT 
 SELECT count(*) FILTER (WHERE uid IS NULL) AS events_without_user_id FROM ev;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- STORY H1-prompt-caching-launch — caching GA 2026-07-08; hits 0.5x latency; 35% of requests once ramped
+-- STORY H1-prompt-caching-launch — caching GA 2026-07-08; hits cut time to first token (expected 0.561x on
+-- plain requests); 35% of requests once ramped
 -- ─────────────────────────────────────────────────────────────────────────
 SELECT count(*) FILTER (WHERE cache_hit AND t < TIMESTAMP '2026-07-08') AS hits_before_launch FROM requests;
-SELECT cache_hit, count(*) AS requests, round(avg(latency_ms), 0) AS avg_latency_ms,
- round(avg(latency_ms) / (SELECT avg(latency_ms) FROM requests WHERE status_code = 200 AND model = 'atlas-2' AND t >= TIMESTAMP '2026-07-08' AND NOT cache_hit), 4) AS vs_miss
-FROM requests WHERE status_code = 200 AND model = 'atlas-2' AND t >= TIMESTAMP '2026-07-08' GROUP BY 1 ORDER BY 1;
+SELECT cache_hit, count(*) AS requests, round(avg(time_to_first_token_ms), 0) AS avg_ttft_ms,
+ round(avg(time_to_first_token_ms) / (SELECT avg(time_to_first_token_ms) FROM requests WHERE status_code = 200 AND NOT tool_use AND t >= TIMESTAMP '2026-07-08' AND NOT cache_hit), 4) AS vs_miss
+FROM requests WHERE status_code = 200 AND NOT tool_use AND t >= TIMESTAMP '2026-07-08' GROUP BY 1 ORDER BY 1;
 SELECT round(avg(cache_hit::INT), 4) AS hit_share_after_ramp FROM requests WHERE t >= TIMESTAMP '2026-07-29';
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -118,7 +119,6 @@ WITH s AS (SELECT uid, t0 FROM signups WHERE uid IN (SELECT uid FROM ev WHERE ev
   AND t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 37 DAY)
 SELECT s.uid,
  count(*) FILTER (WHERE e.event = 'eval run started' AND e.t < s.t0 + INTERVAL 14 DAY) AS early_evals,
- count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 7 DAY AND e.t < s.t0 + INTERVAL 14 DAY AND e.event NOT IN ('batch job completed', 'eval run completed')) > 0 AS d7,
  count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 30 DAY AND e.t < s.t0 + INTERVAL 37 DAY AND e.event NOT IN ('batch job completed', 'eval run completed')) > 0 AS d30
 FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1;
 
@@ -174,12 +174,13 @@ FROM paid_funnel;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H10-build-rate-limit-raise — Build rate-limit episodes per request 0.4x from 2026-09-01
+-- (September vs the whole pre-period Jun 4 - Aug 31, relative to Free)
 -- ─────────────────────────────────────────────────────────────────────────
-WITH g AS (SELECT plan_tier, strftime(t, '%Y-%m') AS month,
+WITH g AS (SELECT plan_tier, t >= TIMESTAMP '2026-09-01' AS post,
   count(*) FILTER (WHERE event = 'rate limit hit')::DOUBLE / count(*) FILTER (WHERE event = 'api request') AS per_request
-  FROM ev WHERE event IN ('rate limit hit', 'api request') AND t >= TIMESTAMP '2026-08-01' AND t < TIMESTAMP '2026-10-01' GROUP BY 1, 2)
-SELECT round((max(per_request) FILTER (WHERE plan_tier = 'build' AND month = '2026-09') / max(per_request) FILTER (WHERE plan_tier = 'build' AND month = '2026-08'))
- / (max(per_request) FILTER (WHERE plan_tier = 'free' AND month = '2026-09') / max(per_request) FILTER (WHERE plan_tier = 'free' AND month = '2026-08')), 4) AS build_vs_free_did
+  FROM ev WHERE event IN ('rate limit hit', 'api request') AND t < TIMESTAMP '2026-10-01' GROUP BY 1, 2)
+SELECT round((max(per_request) FILTER (WHERE plan_tier = 'build' AND post) / max(per_request) FILTER (WHERE plan_tier = 'build' AND NOT post))
+ / (max(per_request) FILTER (WHERE plan_tier = 'free' AND post) / max(per_request) FILTER (WHERE plan_tier = 'free' AND NOT post)), 4) AS build_vs_free_did
 FROM g;
 
 -- ═════════════════════════════════════════════════════════════════════════
@@ -189,8 +190,15 @@ FROM g;
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q1 — prompt caching: latency effect and adoption
 -- ─────────────────────────────────────────────────────────────────────────
-SELECT cache_hit, count(*) AS requests, round(avg(latency_ms), 0) AS avg_latency_ms, round(median(latency_ms), 0) AS median_latency_ms
-FROM requests WHERE status_code = 200 AND model = 'atlas-2' AND t >= TIMESTAMP '2026-07-08' GROUP BY 1 ORDER BY 1;
+-- time to first token and total latency, successful requests since launch, by cache hit
+-- (all successful requests, and plain requests without tools where prompt sizes match)
+SELECT NOT tool_use AS plain_only, cache_hit, count(*) AS requests,
+ round(avg(time_to_first_token_ms), 0) AS avg_ttft_ms, round(median(time_to_first_token_ms), 0) AS median_ttft_ms,
+ round(avg(latency_ms), 0) AS avg_latency_ms, round(avg(input_tokens), 0) AS avg_input_tokens
+FROM requests WHERE status_code = 200 AND t >= TIMESTAMP '2026-07-08' GROUP BY 1, 2
+UNION ALL
+SELECT NULL, cache_hit, count(*), round(avg(time_to_first_token_ms), 0), round(median(time_to_first_token_ms), 0), round(avg(latency_ms), 0), round(avg(input_tokens), 0)
+FROM requests WHERE status_code = 200 AND t >= TIMESTAMP '2026-07-08' GROUP BY 2 ORDER BY 1 NULLS FIRST, 2;
 SELECT date_trunc('week', t)::DATE AS week_start, count(*) AS requests, round(avg(cache_hit::INT), 4) AS hit_share
 FROM requests WHERE t >= TIMESTAMP '2026-06-29' GROUP BY 1 ORDER BY 1;
 SELECT round(avg(cache_hit::INT), 4) AS hit_share_since_jul29,
@@ -231,7 +239,8 @@ FROM requests WHERE model IN ('atlas-2', 'atlas-3') AND plan_tier IN ('build', '
 -- Successful requests on paid plans since the atlas-3 launch, split by cache hit
 -- so caching (which began three weeks earlier) does not blur the comparison.
 SELECT model, cache_hit, count(*) AS requests, round(avg(latency_ms), 0) AS avg_latency_ms, round(median(latency_ms), 0) AS median_latency_ms,
- round(avg(output_tokens), 0) AS avg_output_tokens, round(avg(latency_ms) / avg(output_tokens), 2) AS ms_per_output_token
+ round(avg(time_to_first_token_ms), 0) AS avg_ttft_ms, round(avg(output_tokens), 0) AS avg_output_tokens,
+ round(avg(latency_ms - time_to_first_token_ms) / avg(output_tokens), 2) AS decode_ms_per_output_token
 FROM requests WHERE status_code = 200 AND model IN ('atlas-2', 'atlas-3') AND plan_tier IN ('build', 'scale', 'enterprise') AND t >= TIMESTAMP '2026-07-28'
 GROUP BY 1, 2 ORDER BY 2, 1;
 SELECT round(avg(latency_ms) FILTER (WHERE model = 'atlas-3') / avg(latency_ms) FILTER (WHERE model = 'atlas-2'), 4) AS latency_ratio,
@@ -281,7 +290,7 @@ SELECT round(median(date_diff('second', t_sub, t_done)) / 3600.0, 2) AS scale_en
 -- EVAL Q8 — early behavior that predicts new-account retention
 -- ─────────────────────────────────────────────────────────────────────────
 SELECT CASE WHEN early_evals >= 3 THEN '3+' ELSE early_evals::VARCHAR END AS early_eval_runs, count(*) AS accounts,
- round(avg(d7::INT), 4) AS d7_retention, round(avg(d30::INT), 4) AS d30_retention
+ round(avg(d30::INT), 4) AS d30_retention
 FROM eval_retention GROUP BY 1 ORDER BY 1;
 SELECT CASE WHEN early_evals >= 2 THEN '2+' ELSE '0-1' END AS grp, count(*) AS accounts, round(avg(d30::INT), 4) AS d30_retention
 FROM eval_retention GROUP BY 1 ORDER BY 1;
@@ -315,21 +324,27 @@ FROM requests WHERE status_code = 200;
 -- EVAL Q10 — null: did the August outage cost us customers?
 -- ─────────────────────────────────────────────────────────────────────────
 -- Accounts with API traffic in the two weeks before the incident (Aug 12-25):
--- share still sending traffic in the two weeks after (Aug 28 - Sep 10), and
--- request volume after / before, us-east vs the other regions.
-WITH a AS (SELECT uid, inference_region, any_value(plan_tier) AS plan_tier,
-  count(*) FILTER (WHERE t >= TIMESTAMP '2026-08-12' AND t < TIMESTAMP '2026-08-26') AS pre,
-  count(*) FILTER (WHERE t >= TIMESTAMP '2026-08-28' AND t < TIMESTAMP '2026-09-11') AS post
-  FROM requests GROUP BY 1, 2),
-g AS (SELECT coalesce(plan_tier, 'all plans') AS plan_tier,
-  count(*) FILTER (WHERE pre > 0 AND inference_region = 'us-east') AS n1, avg((post > 0)::INT) FILTER (WHERE pre > 0 AND inference_region = 'us-east') AS p1,
-  count(*) FILTER (WHERE pre > 0 AND inference_region <> 'us-east') AS n0, avg((post > 0)::INT) FILTER (WHERE pre > 0 AND inference_region <> 'us-east') AS p0,
-  sum(post) FILTER (WHERE inference_region = 'us-east')::DOUBLE / sum(pre) FILTER (WHERE inference_region = 'us-east') AS v1,
-  sum(post) FILTER (WHERE inference_region <> 'us-east')::DOUBLE / sum(pre) FILTER (WHERE inference_region <> 'us-east') AS v0
-  FROM a GROUP BY ROLLUP (plan_tier))
-SELECT plan_tier, n1 AS us_east_accounts, round(p1, 4) AS us_east_still_active, n0 AS other_accounts, round(p0, 4) AS other_still_active,
- round((p1 - p0) / sqrt(p1 * (1 - p1) / n1 + p0 * (1 - p0) / n0), 2) AS z, round(v1, 4) AS us_east_volume_after_before, round(v0, 4) AS other_volume_after_before
-FROM g ORDER BY 1;
+-- share still sending traffic in the two weeks after (Aug 28 - Sep 10), us-east
+-- vs the other regions, by plan at the last request before the incident. The
+-- same comparison one month earlier (traffic Jul 15-28, still sending Jul 31 -
+-- Aug 13) gives the usual regional gap; the difference in differences is the
+-- incident's effect (z treats the two periods as independent).
+WITH per AS (SELECT * FROM (VALUES ('incident', TIMESTAMP '2026-08-26'), ('month_before', TIMESTAMP '2026-07-29')) v(period, d0)),
+a AS (SELECT period, r.uid, r.inference_region = 'us-east' AS ue, arg_max(r.plan_tier, r.t) FILTER (WHERE r.t < d0) AS plan_tier,
+  count(*) FILTER (WHERE r.t >= d0 - INTERVAL 14 DAY AND r.t < d0) AS pre,
+  count(*) FILTER (WHERE r.t >= d0 + INTERVAL 2 DAY AND r.t < d0 + INTERVAL 16 DAY) AS post
+  FROM requests r CROSS JOIN per GROUP BY 1, 2, 3),
+g AS (SELECT period, coalesce(plan_tier, 'all plans') AS plan_tier,
+  count(*) FILTER (WHERE pre > 0 AND ue) AS n1, avg((post > 0)::INT) FILTER (WHERE pre > 0 AND ue) AS p1,
+  count(*) FILTER (WHERE pre > 0 AND NOT ue) AS n0, avg((post > 0)::INT) FILTER (WHERE pre > 0 AND NOT ue) AS p0,
+  sum(post) FILTER (WHERE ue)::DOUBLE / sum(pre) FILTER (WHERE ue) AS v1, sum(post) FILTER (WHERE NOT ue)::DOUBLE / sum(pre) FILTER (WHERE NOT ue) AS v0
+  FROM a GROUP BY period, ROLLUP (plan_tier)),
+h AS (SELECT *, p1 - p0 AS gap, p1 * (1 - p1) / n1 + p0 * (1 - p0) / n0 AS var FROM g WHERE n1 > 0)
+SELECT i.plan_tier, i.n1 AS us_east_accounts, round(i.p1, 4) AS us_east_still_active, i.n0 AS other_accounts, round(i.p0, 4) AS other_still_active,
+ round(i.gap / sqrt(i.var), 2) AS z_raw, round(b.p1, 4) AS us_east_month_before, round(b.p0, 4) AS other_month_before,
+ round(100 * (i.gap - b.gap), 2) AS did_points, round((i.gap - b.gap) / sqrt(i.var + b.var), 2) AS z_did,
+ round(i.v1, 4) AS us_east_volume_after_before, round(i.v0, 4) AS other_volume_after_before
+FROM h i JOIN h b ON b.plan_tier = i.plan_tier AND b.period = 'month_before' WHERE i.period = 'incident' ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q11 — model mix after the swift-2 price cut
@@ -406,8 +421,15 @@ SELECT round(p1 / p0, 4) AS hackathons_vs_search, round((p1 - p0) / sqrt(p1 * (1
 SELECT plan_tier, strftime(t, '%Y-%m') AS month, count(*) FILTER (WHERE event = 'rate limit hit') AS episodes,
  count(*) FILTER (WHERE event = 'api request') AS sampled_requests,
  round(1000.0 * count(*) FILTER (WHERE event = 'rate limit hit') / count(*) FILTER (WHERE event = 'api request'), 1) AS episodes_per_1000_sampled_requests
-FROM ev WHERE event IN ('rate limit hit', 'api request') AND t >= TIMESTAMP '2026-07-01' AND t < TIMESTAMP '2026-10-01'
+FROM ev WHERE event IN ('rate limit hit', 'api request') AND t < TIMESTAMP '2026-10-01'
 GROUP BY 1, 2 ORDER BY 1, 2;
+-- September vs the whole pre-period (Jun 4 - Aug 31), per plan, and Build relative to Free
+WITH g AS (SELECT plan_tier, t >= TIMESTAMP '2026-09-01' AS post,
+  1000.0 * count(*) FILTER (WHERE event = 'rate limit hit') / count(*) FILTER (WHERE event = 'api request') AS per_k
+  FROM ev WHERE event IN ('rate limit hit', 'api request') AND t < TIMESTAMP '2026-10-01' GROUP BY 1, 2),
+p AS (SELECT plan_tier, round(max(per_k) FILTER (WHERE NOT post), 1) AS per_k_jun4_aug31, round(max(per_k) FILTER (WHERE post), 1) AS per_k_sep,
+  max(per_k) FILTER (WHERE post) / max(per_k) FILTER (WHERE NOT post) AS ratio FROM g GROUP BY 1)
+SELECT plan_tier, per_k_jun4_aug31, per_k_sep, round(ratio, 4) AS sep_vs_before, round(ratio / (SELECT ratio FROM p WHERE plan_tier = 'free'), 4) AS vs_free FROM p ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q17 — monthly metered usage, free credits, and revenue (warehouse)

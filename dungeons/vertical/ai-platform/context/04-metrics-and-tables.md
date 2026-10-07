@@ -10,11 +10,11 @@ All KPIs use UTC days and count accounts by unique `user_id`. Remember that each
 | Activation | Share of new accounts that complete the onboarding funnel (`account created` → `api key created` → `api request`, in order) within 7 days of signup. |
 | Time to first request | Per new account, time from `account created` to its first `api request` after `api key created`. Report the median. |
 | Active account | An account with any event other than the platform-sent `batch job completed` and `eval run completed` (those arrive even when nobody is working). |
-| Day-N retention | Of new accounts that signed up on day 0, the share active in days N to N+6 after signup. Only count accounts that signed up at least N+7 days before the end of the data. In Mixpanel Retention this needs custom brackets (for example day 30-36). To exclude the two platform-sent events, use a custom event that groups every other event as the return event. |
+| Day-N retention | Of new accounts that signed up on day 0, the share active in days N to N+6 after signup. Only count accounts that signed up at least N+7 days before the end of the data. In Mixpanel Retention this needs custom brackets (for example day 60-66). To exclude the two platform-sent events, use a custom event that groups every other event as the return event. |
 | Weekly active accounts | Unique active accounts in a calendar week (Monday start). |
 | Request volume | Count of `api request` events × 1,000. |
 | Success rate / error rate | Share of `api request` events with `status_code = 200` / with any other status. Server-side error rate counts `500` and `529` only. |
-| Latency | Average or median `latency_ms` of successful requests (`status_code = 200`). Failed requests return early, and models differ in speed, so compare like with like. |
+| Latency | Average or median `latency_ms` of successful requests (`status_code = 200`). Failed requests return early, and models differ in speed, so compare like with like. `time_to_first_token_ms` is the part before the answer starts streaming; the rest is generation time, which grows with the length of the answer. |
 | Cache hit rate | Share of `api request` events with `cache_hit = true`. |
 | Model mix | Share of `api request` events by `model`. "Flagship mix" compares atlas-3 with atlas-2 only. |
 | Rate-limit rate | `rate limit hit` events per 1,000 `api request` events (that is, rate-limit episodes per million requests). |
