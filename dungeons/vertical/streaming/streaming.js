@@ -18,7 +18,7 @@ import Chance from "chance";
  *             plans: Basic with Ads ($6.99/month), Standard ($11.99 → $13.99
  *             for new subscriptions from 2026-08-11), Premium ($17.99).
  * SCALE:      10,000 simulated households (≈5,000 create an account inside the
- *             window), ~0.97M events, 120 days (2026-06-04 → 2026-10-01, UTC)
+ *             window), ~1.02M events, 120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  app opened → browse / search → title details viewed → playback
  *             started → playback completed → (rating, watchlist, next episode)
  * VALUE MOMENT: playback completed
@@ -215,6 +215,17 @@ import Chance from "chance";
  *   trial started is drawn from a smooth distribution (0-10) and enforced;
  *   trial conversion base by that count: 0 → 30%, 1 → 38%, 2 → 46%, 3 → 66%,
  *   4+ → 68%. The jump is at 3; above it conversion is flat.
+ *   Realism, outside the read: the count comes with a household engagement
+ *   level (((k + 1) / (mean k + 1))^1.2 x salted log-normal noise). Plays
+ *   added inside the 72 h follow a decaying density (tau 4 days), and the
+ *   same curve continues after 72 h (0.6 e^(-d/4) + 0.1 e^(-d/40) added
+ *   sittings a day x engagement; low-engagement households also skip some
+ *   of their own sittings, most in the first days). Completions H4 removes
+ *   are kept as plays stopped part-way half the time. So daily viewing by day
+ *   since trial start declines smoothly through day 3 (no step at 72 h), and
+ *   high-k households (more of them convert) keep watching more afterwards.
+ *   Added sittings start from the home screen: a home row (with a title page
+ *   view first) or Continue Watching once the household has a series going.
  * MIXPANEL: Funnels, trial started → playback completed ×3, 3-day window →
  *   create cohort from step 4; Funnels trial started → trial converted
  *   (8-day window) breakdown by that cohort; same for 2 and 5 completions.
@@ -295,33 +306,33 @@ import Chance from "chance";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-streaming, 2026-10-07, full
- * fidelity, 10,000 households, 969,730 events)
+ * fidelity, 10,000 households, 1,017,547 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation               | Expected | Measured
  * -----|------------------------------------------------|--------------------------|----------|---------
- * H1   | S2 viewers / active members, Jul 17-30         | SALTMARSH_REACH          | 0.35     | 0.351 (1,574 / 4,484)
+ * H1   | S2 viewers / active members, Jul 17-30         | SALTMARSH_REACH          | 0.35     | 0.351 (1,584 / 4,510)
  * H1   | season 2 plays before the premiere             | exact purity             | 0        | 0
  * H2   | accounts/day, Jul 17 - Aug 6 / other days      | PREMIERE_LIFT            | 1.559    | 1.582 (60.1 vs 38.0)
- * H2   | premiere trials (Jul 8 - Sep 23) with an S2 start < 24 h after trial start (EVAL Q3 SQL) | TOURIST_S2_SHARE (not asserted) | 0.80 | 0.785
- * H2   | trial conversion, premiere signups / other     | TOURIST_CONV_MULT        | 0.60     | 0.608 (30.1% vs 49.4%)
- * H3   | trial conversion, Smart Start / Control        | SMART_START_CONV_MULT    | 1.20     | 1.174 (45.6% vs 38.8%)
+ * H2   | premiere trials (Jul 8 - Sep 23) with an S2 start < 24 h after trial start (EVAL Q3 SQL) | TOURIST_S2_SHARE (not asserted) | 0.80 | 0.788
+ * H2   | trial conversion, premiere signups / other     | TOURIST_CONV_MULT        | 0.60     | 0.620 (31.1% vs 50.2%)
+ * H3   | trial conversion, Smart Start / Control        | SMART_START_CONV_MULT    | 1.20     | 1.216 (47.2% vs 38.8%)
  * H3   | variant share of exposed households            | equal 2-arm hash         | 0.50     | 0.517
  * H3   | exposures before the test start                | exact purity             | 0        | 0
- * H3   | early completions, Smart Start / Control       | not engineered           | 1.00     | 1.000 (2.850 vs 2.849)
- * H4   | conversion, 3+ early completions / 0-2         | k-weighted CONV_BY_EARLY | 1.804    | 1.848 (56.8% vs 30.7%)
- * H4   | conversion, 5+ / 3-4 early completions         | plateau                  | 1.017    | 0.982 (56.3% vs 57.3%)
- * H5   | TV/other completion per start, incident / ±14 d| (1-0.5)/(1-0.02)         | 0.510    | 0.524 (TV 40.4% vs 75.9%)
+ * H3   | early completions, Smart Start / Control       | not engineered           | 1.00     | 1.012 (2.874 vs 2.839)
+ * H4   | conversion, 3+ early completions / 0-2         | k-weighted CONV_BY_EARLY | 1.804    | 1.881 (58.0% vs 30.8%)
+ * H4   | conversion, 5+ / 3-4 early completions         | plateau                  | 1.017    | 1.023 (58.6% vs 57.3%)
+ * H5   | TV/other completion per start, incident / ±14 d| (1-0.5)/(1-0.02)         | 0.510    | 0.521 (TV 40.1% vs 75.7%)
  * H5   | warehouse tv failure rate on degraded days     | INCIDENT_FAIL            | 0.50     | 0.497
  * H6   | Standard share of plan selections, after/before| 1 - PRICE_SWITCH_SHARE   | 0.65     | 0.629 (50.7% → 31.9%)
  * H6   | Basic with Ads share, after/before             | (30 + 0.35 x 50) / 30    | 1.583    | 1.597 (29.7% → 47.4%)
  * H6   | Premium share, after/before                    | not engineered           | 1.00     | 1.056 (19.6% → 20.7%)
  * H7   | spend per signup, paid_social / paid_search    | 21 / 32                  | 0.656    | 0.633 ($20.60 vs $32.54)
- * H7   | trial conversion, paid_social / other channels | SOCIAL_CONV_MULT         | 0.55     | 0.550 (26.9% vs 48.9%)
- * H7   | spend per paid sub, paid_social / paid_search  | (21 / 0.55) / 32 (not asserted) | 1.193 | 1.142 ($99.92 vs $87.51)
- * H8   | renewal-time churn, 2+ profiles / 1 profile    | MULTI_PROFILE_HAZARD_MULT (≤, floor 0.75) | 0.50 | 0.470 (2.74% vs 5.84%)
- * H9   | open rate, new_episode / trending_now          | 0.146 / 0.049            | 2.980    | 2.903 (14.22% vs 4.90%)
- * H9   | open rate, because_you_watched / trending_now  | 0.087 / 0.049            | 1.776    | 1.853 (9.08% vs 4.90%)
- * H10  | median search → play, tv / other               | TV_SEARCH_TTC_MULT       | 2.20     | 2.227 (165.4 s vs 74.3 s)
+ * H7   | trial conversion, paid_social / other channels | SOCIAL_CONV_MULT         | 0.55     | 0.543 (27.0% vs 49.7%)
+ * H7   | spend per paid sub, paid_social / paid_search  | (21 / 0.55) / 32 (not asserted) | 1.193 | 1.214 ($99.56 vs $81.99)
+ * H8   | renewal-time churn, 2+ profiles / 1 profile    | MULTI_PROFILE_HAZARD_MULT (≤, floor 0.75) | 0.50 | 0.462 (2.71% vs 5.88%)
+ * H9   | open rate, new_episode / trending_now          | 0.146 / 0.049            | 2.980    | 3.125 (14.72% vs 4.71%)
+ * H9   | open rate, because_you_watched / trending_now  | 0.087 / 0.049            | 1.776    | 1.881 (8.86% vs 4.71%)
+ * H10  | median search → play, tv / other               | TV_SEARCH_TTC_MULT       | 2.20     | 2.173 (163.9 s vs 75.4 s)
  * ═════════════════════════════════════════════════════════════════════════
  *
  * Noise notes: the low-discrepancy draws (DESIGN NOTES) remove binomial
@@ -419,6 +430,21 @@ const EARLY_WINDOW_H = 72;
 const EARLY_K_WEIGHTS = { 0: 20, 1: 17, 2: 16, 3: 13, 4: 10, 5: 8, 6: 6, 7: 4, 8: 3, 9: 2, 10: 1 };
 const CONV_BY_EARLY = [0.30, 0.38, 0.46, 0.66, 0.68]; // index min(k, 4)
 const convBase = (k) => CONV_BY_EARLY[Math.min(k, CONV_BY_EARLY.length - 1)];
+const EARLY_STOP_SHARE = 0.5;        // completions H4 removes from a trial's first 72 h: share kept as a play stopped part-way (else the play is removed)
+const EARLY_K_MEAN = Object.entries(EARLY_K_WEIGHTS).reduce((s, [k, w]) => s + Number(k) * w, 0) / Object.values(EARLY_K_WEIGHTS).reduce((a, b) => a + b, 0);
+// realism around H4: a new household's viewing decays smoothly from trial start.
+// The plays H4 adds inside the first 72 h follow a decaying density, and the
+// same curve continues after 72 h at a rate scaled by the household's
+// engagement level (salted, correlated with k), plus a slow long-run term, so
+// there is no step at 72 h and engaged trials keep watching more.
+const ENGAGE_TAU_DAYS = 4;            // decay constant of the added-play density
+const ENGAGE_A = 0.6;                 // added sittings per day at trial start (engagement 1.0), continuing past 72 h
+const ENGAGE_B = 0.08;                // long-run added sittings per day (engagement 1.0)
+const ENGAGE_TAU_LONG_DAYS = 40;      // decay constant of the long-run term
+const ENGAGE_THIN_MAX = 0.85;         // cap on the share of own sittings a low-engagement household skips after 72 h
+const ENGAGE_THIN_FLOOR = 0.4;        // long-run share of that skip rate (it decays from the full rate at 72 h)
+const ENGAGE_K_POWER = 1.2;           // engagement = ((k + 1) / (mean k + 1)) ^ power x household noise
+const ENGAGE_SIGMA = 0.35;            // log-normal household noise on engagement
 
 // H5 TV CDN incident (warehouse playback_qos_daily)
 const BASE_FAIL = 0.02;              // share of playback starts that fail on a normal day
@@ -599,6 +625,22 @@ const eveningTime = (lo, hi) => {
 		if (rnd() < HOUR_WEIGHTS[new Date(t).getUTCHours()]) return t;
 	}
 	return lo + rnd() * (hi - lo);
+};
+// a moment inside [lo, hi) from a decaying density (decay constant tau ms), evening-weighted
+const decayTime = (lo, hi, tau) => {
+	const span = 1 - Math.exp(-(hi - lo) / tau);
+	let t = lo;
+	for (let i = 0; i < 12; i++) {
+		t = lo - tau * Math.log(1 - rnd() * span);
+		if (rnd() < HOUR_WEIGHTS[new Date(t).getUTCHours()]) return t;
+	}
+	return t;
+};
+// household engagement level for a trial (mean about 1): rises with the trial's
+// early-completion count k, with salted log-normal noise
+const engagementLevel = (uid, k) => {
+	const z = Math.sqrt(-2 * Math.log(1 - salt(uid, "engage-a"))) * Math.cos(2 * Math.PI * salt(uid, "engage-b"));
+	return Math.pow((k + 1) / (EARLY_K_MEAN + 1), ENGAGE_K_POWER) * Math.exp(ENGAGE_SIGMA * z - ENGAGE_SIGMA * ENGAGE_SIGMA / 2);
 };
 const platformOf = (deviceId) => (deviceId ? pickWeighted(PLATFORM_WEIGHTS, hashFloat(`${deviceId}|platform`)) : null);
 const familyOf = (deviceId, platform) => pickWeighted(DEVICE_FAMILIES[platform], hashFloat(`${deviceId}|family`));
@@ -940,6 +982,7 @@ function handleEverything(events, meta) {
 		return ids.length && rnd() < 0.7 ? TITLE_BY_ID[ids[Math.floor(rnd() * ids.length)]] : null;
 	};
 	const units = [];
+	const sessionStarts = []; // app opened clones for hook-built sittings
 	let sess, sessTitle = null, sessLastUnit = null, sessKids = false, trailerTitle = null, searchUnit = null;
 	for (const e of events) {
 		if (e.session_id !== sess) {
@@ -992,10 +1035,73 @@ function handleEverything(events, meta) {
 		}
 	}
 
+	// the adult series the household last started before t (null when none):
+	// a new sitting continues it from Continue Watching
+	const unitT = (x) => x.startT ?? (x.start ? T(x.start) : x.chainPrev ? unitT(x.chainPrev) : null);
+	const lastSeriesBefore = (t) => {
+		let best = null, bestT = -Infinity;
+		for (const x of units) {
+			const ut = unitT(x);
+			if (ut === null || x.kids || x.dropped || x.title.type !== "series" || ut >= t || ut <= bestT) continue;
+			best = x.title; bestT = ut;
+		}
+		return best;
+	};
+	// a hook-built sitting from the home screen: continue the last series
+	// (Continue Watching) or open a new title from a home row
+	const freshPick = (t) => {
+		const cont = rnd() < 0.6 ? lastSeriesBefore(t) : null;
+		return cont ? { title: cont, source: "continue_watching" } : { title: pickTitle(ADULT_TITLES, rnd()), source: "home_row" };
+	};
+
+	// ── H4 realism: viewing after the first 72 h keeps decaying smoothly ──
+	// The 72-hour count is set below (exactly k). After it, the household adds
+	// sittings at engagement x (A e^(-d/tau) + B e^(-d/tau_long)) per day, the
+	// curve the in-window top-ups follow, so day 3 continues the slope of days
+	// 0-2, and high-engagement (high-k) households keep watching more.
+	if (born) {
+		const eng = engagementLevel(uid, k);
+		const until = Math.min(accessEnd, END_MS);
+		const after72 = trialStartT + EARLY_WINDOW_H * HOUR_MS;
+		// low-engagement households also skip some of their own sittings after
+		// 72 h (most in the first days, less later); search-led sittings stay
+		const thin = Math.min(ENGAGE_THIN_MAX, Math.max(0, 1 - eng));
+		if (thin > 0) {
+			for (const x of units) {
+				if (x.chainPrev || x.source === "search" || x.origin !== "organic") continue;
+				const ut = unitT(x);
+				if (ut < after72) continue;
+				const d = (ut - trialStartT) / DAY_MS;
+				const p = thin * (ENGAGE_THIN_FLOOR + (1 - ENGAGE_THIN_FLOOR) * Math.exp(-(d - EARLY_WINDOW_H / 24) / ENGAGE_TAU_DAYS));
+				if (rnd() < p) x.dropped = true;
+			}
+			for (const x of units) if (x.chainPrev?.dropped) x.dropped = true;
+		}
+		for (let d = EARLY_WINDOW_H / 24; trialStartT + d * DAY_MS < until; d++) {
+			const m = eng * (ENGAGE_A * Math.exp(-(d + 0.5) / ENGAGE_TAU_DAYS) + ENGAGE_B * Math.exp(-(d + 0.5) / ENGAGE_TAU_LONG_DAYS));
+			const n = Math.floor(m) + (rnd() < m % 1 ? 1 : 0);
+			const d0 = trialStartT + d * DAY_MS, d1 = Math.min(d0 + DAY_MS, until - HOUR_MS);
+			for (let i = 0; i < n && d1 > d0; i++) {
+				const t = eveningTime(d0, d1);
+				const { title, source } = freshPick(t);
+				const device = viewingDevice();
+				sessionStarts.push({ t: t - (20 + rnd() * 60) * 1000, device });
+				const len = title.type === "series" ? 1 + (rnd() < 0.4 ? 1 : 0) + (rnd() < 0.15 ? 1 : 0) : 1;
+				let prev = null;
+				for (let j = 0; j < len; j++) {
+					const [season, episode] = nextEpisode(title, t);
+					const unit = { start: null, startT: prev ? null : t, title, season, episode, source: prev ? "autoplay" : source, chainPrev: prev, origin: "engaged", kids: false, device };
+					units.push(unit);
+					prev = unit;
+				}
+			}
+		}
+	}
+
 	// ── H1 / H2: who watches Saltmarsh season 2, and when ──
 	const premiere = ms(SALTMARSH_PREMIERE);
 	const memberAtPremiere = !born || signupT < premiere;
-	const activeInFortnight = units.some((x) => { const t = x.startT ?? T(x.start); return t >= premiere && t < ms(REACH_END); });
+	const activeInFortnight = units.some((x) => { if (x.dropped) return false; const t = unitT(x); return t >= premiere && t < ms(REACH_END); });
 	let s2Viewer = false, s2Late = false, s2FirstT = null, s2Depth = 0, s2FromPush = false;
 	if (memberAtPremiere && activeInFortnight && salt(uid, "s2") < SALTMARSH_REACH) {
 		s2Viewer = true;
@@ -1016,7 +1122,7 @@ function handleEverything(events, meta) {
 		const lateFrom = Math.max(ms(REACH_END), accessStart);
 		const kind = born && signupT >= ms(REACH_END) ? "newcomer" : "member";
 		const share = LATE_S2_SHARE[kind] * Math.exp(-(lateFrom - ms(REACH_END)) / (LATE_S2_DECAY_DAYS * DAY_MS));
-		const watchesLater = units.some((x) => (x.startT ?? T(x.start)) >= lateFrom);
+		const watchesLater = units.some((x) => !x.dropped && unitT(x) >= lateFrom);
 		if (watchesLater && salt(uid, "s2-late") < share) {
 			const t0 = lateFrom - Math.log(1 - salt(uid, "s2-late-delay")) * LATE_S2_DELAY_DAYS[kind] * DAY_MS;
 			const until = Math.min(accessEnd - HOUR_MS, END_MS);
@@ -1030,7 +1136,6 @@ function handleEverything(events, meta) {
 	}
 
 	// ── H9: push notifications (plus the one-off new_season push) ──
-	const sessionStarts = []; // app opened clones for hook-built sittings
 	if (pushDevices.length) {
 		const t0 = ms(SALTMARSH_PUSH) + Math.floor(rnd() * 20 * MIN_MS);
 		if (t0 >= accessStart && t0 < accessEnd) {
@@ -1157,7 +1262,10 @@ function handleEverything(events, meta) {
 			const rank = (x) => (x === firstS2 ? 16 : 0) + (x.origin === "s2" ? 2 : 0) + (x.platform === INCIDENT_PLATFORM && inIncident(x.startT) ? 4 : 0) + (hasNext.has(x) ? 1 : 0) + rnd();
 			const order = [...have].sort((a, b) => rank(a) - rank(b));
 			for (const x of order.slice(0, have.length - k)) {
-				if (x !== firstS2) { x.dropped = true; continue; }
+				// a play at the end of its sitting is often started and abandoned
+				// part-way rather than never started
+				const tail = !units.some((u2) => u2.chainPrev === x && !u2.dropped);
+				if (x !== firstS2 && !(tail && rnd() < EARLY_STOP_SHARE)) { x.dropped = true; continue; }
 				x.completeT = null;
 				x.watchMs = x.title.runtime * MIN_MS * (0.05 + rnd() * 0.8);
 				x.endT = x.startT + x.watchMs;
@@ -1165,19 +1273,35 @@ function handleEverything(events, meta) {
 			}
 			for (const x of units) if (x.chainPrev?.dropped && x.source === "autoplay") x.source = "continue_watching";
 		} else if (have.length < k) {
-			for (let i = have.length; i < k; i++) {
+			// added plays follow the decaying density that continues after 72 h;
+			// each is a sitting from the home screen (a home row, or Continue
+			// Watching once the household has a series going)
+			const cap = Math.min(hi, END_MS, accessEnd);
+			// a series sitting can run 2-3 episodes (autoplay), as later sittings do
+			for (let i = have.length; i < k;) {
 				const s2 = tourist && s2Viewer && s2Next <= S2_EPISODES;
-				const title = s2 ? SALTMARSH : (inProgress(false) || pickTitle(ADULT_TITLES, rnd()));
+				if (cap - 70 * MIN_MS <= lo + 10 * MIN_MS) break;
+				let st = decayTime(lo + 10 * MIN_MS, cap - 70 * MIN_MS, ENGAGE_TAU_DAYS * DAY_MS);
+				const pick = s2 ? { title: SALTMARSH, source: units.some((x) => x.origin === "s2" && !x.dropped && unitT(x) < st) ? "continue_watching" : "home_row" } : freshPick(st);
+				const title = pick.title;
 				const runtime = title.runtime * MIN_MS;
-				const latest = Math.min(hi, END_MS, accessEnd) - runtime;
-				if (latest <= lo + 10 * MIN_MS) break;
-				const st = eveningTime(lo + 10 * MIN_MS, latest);
-				const [season, episode] = s2 ? [2, s2Next++] : nextEpisode(title, st);
+				let len = title.type === "series" ? 1 + (rnd() < 0.4 ? 1 : 0) + (rnd() < 0.15 ? 1 : 0) : 1;
+				len = Math.min(len, k - i, s2 ? S2_EPISODES - s2Next + 1 : len);
+				const span = len * (runtime + 25 * 1000);
+				if (st + span >= cap) st = cap - span - rnd() * 30 * MIN_MS;
+				if (st <= lo + 10 * MIN_MS) break;
 				let device = viewingDevice();
 				if (platformOf(device) === INCIDENT_PLATFORM && inIncident(st)) device = devices.find((d) => platformOf(d) !== INCIDENT_PLATFORM) || device;
-				const watchMs = runtime * (0.92 + rnd() * 0.08);
 				sessionStarts.push({ t: st - (20 + rnd() * 60) * 1000, device });
-				units.push({ start: null, startT: st, title, season, episode, source: "continue_watching", chainPrev: null, origin: "h4", kids: false, device, platform: platformOf(device) || "tv", failed: false, watchMs, completeT: st + watchMs, endT: st + watchMs });
+				let prev = null, t = st;
+				for (let j = 0; j < len; j++, i++) {
+					const [season, episode] = s2 ? [2, s2Next++] : nextEpisode(title, t);
+					const watchMs = runtime * (0.92 + rnd() * 0.08);
+					const unit = { start: null, startT: t, title, season, episode, source: prev ? "autoplay" : pick.source, chainPrev: prev, origin: s2 ? "s2" : "h4", kids: false, device, platform: platformOf(device) || "tv", failed: false, watchMs, completeT: t + watchMs, endT: t + watchMs };
+					units.push(unit);
+					prev = unit;
+					t = unit.endT + (5 + rnd() * 20) * 1000;
+				}
 			}
 		}
 	}
@@ -1200,8 +1324,8 @@ function handleEverything(events, meta) {
 		s.profile_type = x.kids ? "kids" : "adult";
 		if (x.source !== "search") s.search_id = null;
 		setTitle(s, x.title, x.season, x.episode);
-		// a season 2 sitting picked from the home screen opens the title page first
-		if (x.origin === "s2" && x.source === "home_row") {
+		// a hook-built sitting picked from a home row opens the title page first
+		if (x.origin !== "organic" && x.origin !== "push" && x.source === "home_row") {
 			const dv = clone("title details viewed", x.startT - (6 + rnd() * 12) * 1000);
 			dv.device_id = x.device;
 			dv.search_id = null;

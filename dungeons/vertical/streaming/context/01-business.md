@@ -4,7 +4,7 @@
 
 Reelhouse is a subscription streaming service for independent film and prestige TV. It launched in 2021 in Portland, Oregon, and serves households in the United States and Canada. It is venture-backed: a Series A in 2024 funds the team while subscription revenue grows, and the company does not yet cover its costs from subscriptions. It has about 20 employees: content and curation, product and engineering (TV, mobile, and web apps, plus a small streaming infrastructure team), growth marketing, and member support. Playback is delivered through a commercial CDN provider.
 
-Revenue comes from monthly subscriptions, about $75,000 a month in the summer of 2026 from roughly 6,000 paying households. The Basic with Ads plan also earns a small amount of advertising revenue through an ad partner; ad revenue is not in this data.
+Revenue comes from monthly subscriptions, about $65,000 a month in the summer of 2026 from roughly 5,400 paying households. The Basic with Ads plan also earns a small amount of advertising revenue through an ad partner; ad revenue is not in this data.
 
 Reelhouse measures itself by paying households and by how much of what they start they finish. The content team cares about reach: how many households watch a title.
 
