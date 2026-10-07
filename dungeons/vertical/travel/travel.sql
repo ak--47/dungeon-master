@@ -203,6 +203,16 @@ SELECT inc.ck AS web_checkouts, inc.bk AS web_bookings, round(base.r, 3) AS base
  round(inc.ck * base.r - inc.bk, 0) AS lost_web_bookings, round((inc.ck * base.r - inc.bk) * avgp.p, 0) AS lost_booking_value_usd
 FROM inc, base, avgp;
 
+-- EVAL Q2 (cont.): warehouse-only estimate — web attempts on degraded days at the web's normal approval rate, minus approvals
+WITH n AS (SELECT sum(authorizations_approved)::DOUBLE / sum(authorization_attempts) AS r FROM wh_gateway WHERE platform = 'web' AND gateway_status = 'operational'),
+d AS (SELECT sum(authorization_attempts) AS att, sum(authorizations_approved) AS appr FROM wh_gateway WHERE platform = 'web' AND gateway_status = 'degraded')
+SELECT d.att AS degraded_web_attempts, d.appr AS degraded_web_approvals, round(n.r, 4) AS normal_web_approval,
+ round(d.appr::DOUBLE / d.att, 4) AS degraded_web_approval, round(d.att * n.r - d.appr, 0) AS lost_web_approvals FROM d, n;
+-- EVAL Q2 (cont.): approved authorizations vs Mixpanel bookings by platform over the window (the table drifts from events)
+WITH b AS (SELECT platform, count(*) AS bookings FROM ev WHERE event = 'booking completed' GROUP BY 1)
+SELECT g.platform, b.bookings, sum(g.authorizations_approved)::BIGINT AS approvals, round(sum(g.authorizations_approved) / b.bookings, 3) AS approvals_per_booking
+FROM wh_gateway g JOIN b ON b.platform = g.platform GROUP BY g.platform, b.bookings ORDER BY 1;
+
 -- EVAL Q2 (cont.): app (iOS + Android) booking rate per checkout on the incident days vs the week before, and gateway errors by platform
 SELECT CASE WHEN t >= TIMESTAMP '2026-08-18' THEN 'incident Aug 18-21' ELSE 'week before Aug 11-17' END AS period,
  count(*) FILTER (WHERE event = 'checkout started') AS app_checkouts,

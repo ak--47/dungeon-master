@@ -75,7 +75,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   and web checkouts fail during the gateway incident (H2). A failed checkout
  *   sometimes logs "payment failed" (gateway_timeout during the incident).
  * - Booking lifecycle: cancellation by lead time and rate type (H4), Caribbean
- *   weather cancellations (H9), a trip reminder the day before check-in,
+ *   weather cancellations (H9), a trip reminder the day before check-in (push,
+ *   or email for members who turned push off),
  *   check-in on the stay's first day, a review 12 h-6 days after checkout for
  *   55% of stays. Support contacts follow cancellations (30%) and failed
  *   payments (20%), plus a trickle of other questions.
@@ -88,8 +89,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * - Server-side messages: a weekly deals email (Thursdays) to members on the
  *   marketing list, sale emails/pushes, and trip reminders keep arriving for
  *   members who stopped using the app.
- * - Warehouse drift: payment_gateway_daily adds card retries and checkouts
- *   from members who opted out of analytics; destination_supply_daily counts
+ * - Warehouse drift: payment_gateway_daily approvals are Mixpanel bookings x
+ *   0.93-1.17 by day (date-change re-authorizations, members who opted out of
+ *   analytics, dropped SDK calls) and attempts are approvals / the day's
+ *   approval rate (declines, timeouts, retries); destination_supply_daily counts
  *   partner-channel room nights the app never sees; spend is half a paced
  *   budget (weekday shape, never zero) and half bid x the day's delivered
  *   signups, with seeded day noise.
@@ -117,7 +120,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: 2026-08-18 to 2026-08-21, 55% of web checkouts fail (most log
  *   payment failed / gateway_timeout); apps untouched. The warehouse shows
- *   gateway_status = degraded and approval_rate ≈ 0.45 for web on those days.
+ *   gateway_status = degraded for web on those days, approval_rate 0.45x the
+ *   web's normal rate (about 0.42 vs 0.92) on unchanged attempt volume.
  * MIXPANEL: Insights, booking completed / checkout started, daily, breakdown
  *   platform; web/app ratio on degraded days vs 14 days either side; join
  *   payment_gateway_daily.gateway_status.
@@ -127,12 +131,12 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H3. PAID CHANNEL ECONOMICS (first funnel + warehouse marketing_spend_daily;
  *     external-table join)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: spend per Mixpanel signup $26 Google Hotel Ads, $14 Meta, $8
+ * PATTERN: spend per Mixpanel signup $26 Google Hotel Ads, $14 Meta, $10
  *   TikTok; about 59% of TikTok signups are browsers whose checkout chance is
  *   a member-specific fraction (log-normal, mean 0.08) of an ordinary
  *   member's, so TikTok's 30-day booker rate is 0.5x every other channel (the
  *   knob; the browser share is derived from it) and spend per booker is
- *   (8 / 0.5) / 14 = 1.14x Meta's.
+ *   (10 / 0.5) / 14 = 1.43x Meta's.
  * MIXPANEL: Funnels, account created → booking completed, 30-day window,
  *   breakdown acquisition_channel, joined to marketing_spend_daily.spend_usd.
  * REAL WORLD: cheap social signups are browsers, not bookers.
@@ -226,10 +230,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H1   | booking per checkout, after/before Jul 14         | FLEX_LIFT                  | 1.20     | 1.191 (54.8% → 65.2%)
  * H1   | Flex Pay share of bookings after launch           | FLEX_SHARE                 | 0.35     | 0.347
  * H2   | web/app booking per checkout, incident / ±14 d    | 1 − WEB_FAIL (≤, ceil 0.725)| 0.45    | 0.513
- * H2   | warehouse approval_rate on degraded rows          | 1 − WEB_FAIL               | 0.45     | 0.440
- * H3   | spend per signup, TikTok / Meta                   | 8 / 14                     | 0.571    | 0.555 ($7.71 vs $13.89)
+ * H2   | web approval_rate, degraded / operational (wh)    | 1 − WEB_FAIL               | 0.45     | 0.452 (0.416 vs 0.921)
+ * H3   | spend per signup, TikTok / Meta                   | 10 / 14                    | 0.714    | 0.694 ($9.63 vs $13.89)
  * H3   | 30-day booker rate, TikTok / other channels       | TIKTOK_BOOKER_RATIO (≤, ceil 0.75) | 0.50 | 0.490 (26.8% vs 54.6%)
- * H3   | spend per booker, TikTok / Meta                   | (8 / 0.5) / 14 (≥, floor 1)| 1.143    | 1.069 ($28.80 vs $26.94)
+ * H3   | spend per booker, TikTok / Meta                   | (10 / 0.5) / 14 (≥, floor 1.21) | 1.429 | 1.336 ($36.00 vs $26.94)
  * H4   | 30-day cancel rate, 60+ / 7-29 days lead          | 0.40 / 0.15 (≥, floor 1.83)| 2.667    | 2.905
  * H4   | 30-day cancel rate, 30-59 / 7-29 days lead        | 0.27 / 0.15 (≥, floor 1.4) | 1.80     | 1.855
  * H4   | 30-day cancel rate, non-refundable / refundable   | 0.25 (≤, ceil 0.625)       | 0.25     | 0.223
@@ -282,6 +286,7 @@ const HURRICANE_START = "2026-09-09T00:00:00Z";        // Hurricane Delia warnin
 const HURRICANE_END = "2026-09-14T00:00:00Z";          // exclusive (5 days: Sep 9-13)
 const HURRICANE_CANCEL_FROM = "2026-09-07T00:00:00Z";  // weather cancellations start when the forecast track firms up
 
+const TIKTOK_START = "2026-03-02T00:00:00Z";          // TikTok ads go live (before the window; spring 2026)
 const ms = (iso) => dayjs.utc(iso).valueOf();
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
@@ -316,7 +321,7 @@ const BASE_ERROR_EVENT = 0.12;      // ordinary abandoned checkouts that log "pa
 
 // H3 paid channel economics (warehouse marketing_spend_daily)
 const PAID_CHANNELS = ["google_hotel_ads", "meta_ads", "tiktok_ads"];
-const CPA_USD = { google_hotel_ads: 26, meta_ads: 14, tiktok_ads: 8 }; // window spend per Mixpanel signup
+const CPA_USD = { google_hotel_ads: 26, meta_ads: 14, tiktok_ads: 10 }; // window spend per Mixpanel signup
 const CHANNEL_WEIGHTS = { organic: 28, google_hotel_ads: 20, meta_ads: 20, tiktok_ads: 20, referral: 7, email: 5 };
 const TIKTOK_BOOKER_RATIO = 0.5;    // TikTok 30-day booker rate / every other channel (the H3 knob)
 const LOW_INTENT_PROPENSITY = 0.08; // low-intent members' mean checkout-propensity multiplier (log-normal, salted per member)
@@ -330,6 +335,8 @@ const SPEND_NOISE = 0.12;
 const CPC_USD = { google_hotel_ads: 1.9, meta_ads: 1.1, tiktok_ads: 0.6 };
 const CTR = { google_hotel_ads: 0.045, meta_ads: 0.012, tiktok_ads: 0.008 };
 const PLATFORM_SIGNUP_INFLATION = 1.2; // networks claim more signups than Mixpanel records
+const AGE_WEIGHTS = { "18-24": 12, "25-34": 31, "35-44": 27, "45-54": 18, "55-64": 9, "65+": 3 };
+const TIKTOK_AGE_WEIGHTS = { "18-24": 30, "25-34": 38, "35-44": 18, "45-54": 9, "55-64": 4, "65+": 1 };
 
 // H4 cancellations by lead time and rate type
 const LEAD_BUCKETS = ["0-6", "7-29", "30-59", "60+"];
@@ -493,6 +500,15 @@ const PAY_METHODS = {
 	android: { credit_card: 50, paypal: 12, google_pay: 38 },
 	web: { credit_card: 66, paypal: 18, apple_pay: 8, google_pay: 8 },
 };
+// gateway health for one platform-day: the normal approval rate, and during the
+// incident the share of would-be approvals that time out instead (H2)
+const gatewayDay = (ctx) => {
+	const key = `${dayKey(ctx.time)}|${ctx.row.platform}`;
+	const normal = 0.905 + 0.03 * hashFloat(`appr|${key}`);
+	if (!(ctx.row.platform === "web" && inIncident(ctx.time))) return { approval: normal, timeout: 0.002 + 0.006 * hashFloat(`gto|${key}`) };
+	const lost = WEB_FAIL * jitter(`gto|${key}`, 0.06);
+	return { approval: normal * (1 - lost), timeout: normal * lost };
+};
 const ROOMS_LISTED = { us_cities: 41000, us_beaches: 23000, mountains: 12500, caribbean: 18500, europe: 36000 };
 
 // declared event properties (filled from config.events below) — used to
@@ -515,13 +531,16 @@ function handleUserHook(profile, meta) {
 	const uid = profile.distinct_id;
 	const seg = profile.traveler_segment;
 	profile.push_enabled = salt(uid, "push") < 0.62;
+	// TikTok's audience skews young: TikTok signups draw their age band from a younger mix
+	if (profile.acquisition_channel === "tiktok_ads") profile.age_band = pickWeightedR(TIKTOK_AGE_WEIGHTS, salt(uid, "age"));
 	if (meta.userIsBornInDataset) {
 		profile.member_since = dayKey(dayjs.utc(profile.created ?? meta.user.created).valueOf());
 		profile.rewards_tier = "member";
 		return profile;
 	}
-	const span = ms(DATASET_START) - ms("2022-01-01T00:00:00Z");
-	profile.member_since = dayKey(ms("2022-01-01T00:00:00Z") + Math.floor(salt(uid, "tenure") * span / DAY_MS) * DAY_MS);
+	// TikTok ads started in the spring (TIKTOK_START), so TikTok members joined after it
+	const from = ms(profile.acquisition_channel === "tiktok_ads" ? TIKTOK_START : "2022-01-01T00:00:00Z");
+	profile.member_since = dayKey(from + Math.floor(salt(uid, "tenure") * (ms(DATASET_START) - from) / DAY_MS) * DAY_MS);
 	const tierR = salt(uid, "tier") * (seg === "business" ? 0.6 : 1);
 	// tiers are earned by stays in the previous calendar year: members who joined in 2026 have none yet
 	profile.rewards_tier = profile.member_since >= "2026-01-01" ? "member" : tierR < 0.12 ? "gold" : tierR < 0.35 ? "silver" : "member";
@@ -810,7 +829,7 @@ function handleEverything(events, meta) {
 		// trip reminder the day before check-in, mid-morning US time (server-side)
 		const remT = dayStart(b.checkInMs) - DAY_MS + 13 * HOUR_MS + chance.integer({ min: 0, max: 180 }) * MIN_MS;
 		if (remT >= BEGIN && remT <= END && remT > b.bookingT) {
-			b.life.push(morph(b.src, "notification received", remT, { notification_type: "trip_reminder", channel: "push", campaign: "none" }));
+			b.life.push(morph(b.src, "notification received", remT, { notification_type: "trip_reminder", channel: profile.push_enabled ? "push" : "email", campaign: "none" }));
 		}
 		if (b.checkInMs > END) continue;
 		if (b.checkInMs >= BEGIN) {
@@ -851,9 +870,11 @@ function handleEverything(events, meta) {
 		all = all.filter((e) => T(e) < cut || keepAfterCut.has(e.event));
 	}
 
-	// standalone browsing events carry real catalog values
+	// standalone browsing events carry real catalog values; app alerts reach members
+	// who turned push off by email instead
 	for (const e of all) {
-		if (e.event === "wishlist saved") {
+		if (e.event === "notification received" && e.channel === "push" && !profile.push_enabled) e.channel = "email";
+		else if (e.event === "wishlist saved") {
 			const d = chance.pickone(DESTINATIONS);
 			const p = chance.pickone(PROPERTIES_BY_DEST[d]);
 			Object.assign(e, { property_id: p.property_id, property_name: p.property_name, destination: d, region: DEST_REGION[d] });
@@ -888,9 +909,12 @@ function handleWarehouse(row, meta) {
 	}
 	if (meta.metricName === "payment_gateway_daily") {
 		const k = `${row.date}|${row.platform}`;
-		// card retries and checkouts from members who opted out of analytics
-		row.authorization_attempts = Math.round(row.authorization_attempts * (1.08 + 0.1 * jitter(`retry|${k}`, 1)) + 6 * jitter(`opt|${k}`, 0.8));
-		row.authorizations_approved = Math.round(row.authorization_attempts * row.approval_rate);
+		// every booking needs one approved authorization; date changes re-authorize the card,
+		// members who opted out of analytics book without a Mixpanel event, and a few
+		// booking events never arrive (dropped SDK calls)
+		row.authorizations_approved = Math.round(row.authorizations_approved * (0.93 + 0.24 * hashFloat(`reauth|${k}`)));
+		// attempts: approvals plus declines, timeouts, and card retries at the day's approval rate
+		row.authorization_attempts = Math.round(row.authorizations_approved / row.approval_rate);
 		return row;
 	}
 	if (meta.metricName === "destination_supply_daily") {
@@ -1194,24 +1218,16 @@ const config = {
 			type: "additive",
 			grain: "day",
 			source: {
-				event: "checkout started",
+				event: "booking completed",
 				measure: "count",
 				groupBy: "platform",
 			},
 			timeColumn: "date",
-			valueColumn: "authorization_attempts",
+			valueColumn: "authorizations_approved",
 			columns: {
-				approval_rate: (ctx) => {
-					const hit = ctx.row.platform === "web" && inIncident(ctx.time);
-					const j = hashFloat(`appr|${dayKey(ctx.time)}|${ctx.seriesKey}`);
-					return hit ? round2(1 - WEB_FAIL - 0.04 + j * 0.08) : Math.round((0.905 + j * 0.03) * 1000) / 1000;
-				},
-				authorizations_approved: 0,
-				gateway_timeout_rate: (ctx) => {
-					const hit = ctx.row.platform === "web" && inIncident(ctx.time);
-					const j = hashFloat(`gto|${dayKey(ctx.time)}|${ctx.seriesKey}`);
-					return hit ? round2(WEB_FAIL - 0.03 + j * 0.06) : Math.round((0.002 + j * 0.006) * 10000) / 10000;
-				},
+				authorization_attempts: 0,
+				approval_rate: (ctx) => Math.round(gatewayDay(ctx).approval * 1000) / 1000,
+				gateway_timeout_rate: (ctx) => Math.round(gatewayDay(ctx).timeout * 10000) / 10000,
 				p95_auth_latency_ms: (ctx) => {
 					const hit = ctx.row.platform === "web" && inIncident(ctx.time);
 					const j = hashFloat(`lat|${dayKey(ctx.time)}|${ctx.seriesKey}`);
@@ -1255,7 +1271,7 @@ const config = {
 	userProps: {
 		traveler_segment: ["couple"],
 		home_market: { __weights: { "New York": 14, "Los Angeles": 11, Chicago: 8, Dallas: 7, Houston: 6, Atlanta: 6, "Washington DC": 6, Boston: 5, Seattle: 5, Denver: 5, Miami: 5, Phoenix: 4, Toronto: 6, London: 8, Manchester: 4 } },
-		age_band: { __weights: { "18-24": 12, "25-34": 31, "35-44": 27, "45-54": 18, "55-64": 9, "65+": 3 } },
+		age_band: { __weights: AGE_WEIGHTS },
 		acquisition_channel: { __weights: CHANNEL_WEIGHTS },
 		rewards_tier: ["member"],
 		member_since: ["2025-01-01"],
@@ -1461,7 +1477,7 @@ export const stories = [
 		id: "H2-web-payment-incident",
 		hook: "H2",
 		archetype: "external-join",
-		narrative: `From ${D(PAYMENT_INCIDENT_START)} to ${D(addDays(PAYMENT_INCIDENT_END, -1))} the card-payment gateway behind the website degrades: ${WEB_FAIL * 100}% of web checkouts fail and never become a booking (most log "payment failed" with error_code = gateway_timeout). The iOS and Android apps are untouched. The incident days and platform come from warehouse payment_gateway_daily (gateway_status = 'degraded', approval_rate ≈ ${1 - WEB_FAIL}). Event read: web/app ratio of booking completed per checkout started on degraded days vs the ${INC_BASE_DAYS} days either side reads 1 - ${WEB_FAIL}; the ratio cancels the All-in Pricing test (both platforms) and the weekly rhythm.`,
+		narrative: `From ${D(PAYMENT_INCIDENT_START)} to ${D(addDays(PAYMENT_INCIDENT_END, -1))} the card-payment gateway behind the website degrades: ${WEB_FAIL * 100}% of web checkouts fail and never become a booking (most log "payment failed" with error_code = gateway_timeout). The iOS and Android apps are untouched. The incident days and platform come from warehouse payment_gateway_daily (gateway_status = 'degraded'; approval_rate ${1 - WEB_FAIL}x the platform's operational days, on unchanged attempt volume). Event read: web/app ratio of booking completed per checkout started on degraded days vs the ${INC_BASE_DAYS} days either side reads 1 - ${WEB_FAIL}; the ratio cancels the All-in Pricing test (both platforms) and the weekly rhythm.`,
 		mixpanelReport: { type: "Insights + warehouse", events: ["checkout started", "booking completed"], formula: "B / A", breakdown: "platform", chart: "daily line", join: "payment_gateway_daily.gateway_status on date + platform" },
 		assertions: [
 			{
@@ -1476,12 +1492,13 @@ export const stories = [
 					type: "duckdb",
 					sql: `SELECT 'all' AS grp, count(*) FILTER (WHERE gateway_status = 'degraded') AS degraded_rows,
  count(DISTINCT platform) FILTER (WHERE gateway_status = 'degraded') AS degraded_platforms,
- avg(approval_rate) FILTER (WHERE gateway_status = 'degraded') AS degraded_approval
+ avg(approval_rate) FILTER (WHERE gateway_status = 'degraded')
+  / avg(approval_rate) FILTER (WHERE gateway_status = 'operational' AND platform IN (SELECT platform FROM ${WH("payment_gateway_daily")} WHERE gateway_status = 'degraded')) AS degraded_approval_ratio
 FROM ${WH("payment_gateway_daily")}`,
 				},
 				select: { a: { where: { grp: "all" } } },
-				// warehouse approval rate on degraded rows = 1 - the failure knob
-				expect: { metric: "a.degraded_approval", op: "between", target: band(1 - WEB_FAIL) },
+				// warehouse approval rate on degraded rows relative to the same platform's operational days = 1 - the failure knob
+				expect: { metric: "a.degraded_approval_ratio", op: "between", target: band(1 - WEB_FAIL) },
 			},
 		],
 	},
@@ -1508,8 +1525,8 @@ FROM ${WH("payment_gateway_daily")}`,
 			{
 				breakdown: { type: "duckdb", sql: H3_SQL },
 				select: { t: { where: { grp: "tiktok_ads" } }, m: { where: { grp: "meta_ads" } } },
-				// composite of two count-limited reads: knob target, floor = TikTok costs at least as much per booker as Meta
-				expect: { metric: "t.spend_per_booker / m.spend_per_booker", op: ">=", target: r3(CPA_USD.tiktok_ads / TIKTOK_BOOKER_RATIO / CPA_USD.meta_ads), floor: 1 },
+				// composite of two count-limited reads: knob target, half-effect floor
+				expect: { metric: "t.spend_per_booker / m.spend_per_booker", op: ">=", target: r3(CPA_USD.tiktok_ads / TIKTOK_BOOKER_RATIO / CPA_USD.meta_ads), floor: r3(1 + 0.5 * (CPA_USD.tiktok_ads / TIKTOK_BOOKER_RATIO / CPA_USD.meta_ads - 1)) },
 				minCohort: 300,
 			},
 		],

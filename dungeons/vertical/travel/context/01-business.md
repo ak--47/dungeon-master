@@ -22,7 +22,7 @@ Driftway earns a commission (about 15% of the stay price) from the property on e
 - **Guest reviews.** Every property page shows its number of guest reviews (`review_count`) and its average guest rating. New listings start with no reviews; vacation rentals show no star rating.
 - **Payment methods:** credit or debit card, PayPal, Apple Pay (Apple devices and Safari), Google Pay (Android and Chrome), and, from July 14, **Flex Pay**: book now and pay in four installments, with no interest for the traveler.
 - **Driftway Rewards.** Every member is in Rewards. Tiers are `member` (everyone starts here), `silver`, and `gold`, earned by stays in the previous calendar year. Members who joined in 2026 are all `member`.
-- **Messages.** Members on the marketing list get a weekly deals email every Thursday. The app also sends price-drop alerts, reminders about searches a member did not finish, trip reminders, and occasional campaign emails and pushes. About 62% of members allow push notifications.
+- **Messages.** Members on the marketing list get a weekly deals email every Thursday. The app also sends price-drop alerts, reminders about searches a member did not finish, trip reminders, and occasional campaign emails and pushes. About 62% of members allow push notifications; members who turn push off get app alerts and trip reminders by email instead.
 
 ## Travelers
 
@@ -46,7 +46,7 @@ New members arrive through one of six acquisition channels, recorded at signup:
 - **meta_ads** — paid ads on Instagram and Facebook.
 - **tiktok_ads** — paid in-feed video ads on TikTok. Marketing added TikTok in the spring to reach younger travelers.
 
-The three paid channels run on daily budgets with bids. Paid acquisition runs on a modest budget (about $12,000 a month across the three channels). Daily spend, clicks, and impressions by paid channel are in the warehouse table `marketing_spend_daily`.
+The three paid channels run on daily budgets with bids. Paid acquisition runs on a modest budget (about $12,500 a month across the three channels). Daily spend, clicks, and impressions by paid channel are in the warehouse table `marketing_spend_daily`.
 
 ## Goals for the period (summer and Q3 2026)
 
@@ -57,4 +57,4 @@ Leadership set these goals for the season:
 3. **Keep bookings booked.** Cancellations cost commission and support time. The revenue team wants to understand which bookings cancel.
 4. **Reliable payments.** After a payment incident in August, leadership asked how much it cost and how quickly it was caught.
 5. **Supply quality.** The supply team is planning which properties to sign for the winter season and wants to know which listings turn browsers into bookers.
-6. **Guest experience.** Member support wants to know what reviews tell us about who keeps booking with Driftway.
+6. **Guest experience.** Member support wants to know what guest reviews tell us about the member experience.

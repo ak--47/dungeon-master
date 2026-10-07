@@ -14,7 +14,7 @@ All KPIs use UTC days and count people by unique resolved member (`user_id`, wit
 | Booking value (GBV) | Sum of `total_price` on `booking completed`, before cancellations. Driftway's revenue is about 15% of the value of stays that are not cancelled. |
 | Average nightly rate | Average `nightly_rate` on `booking completed`. |
 | Time to book | Per search session, the time from `destination searched` to `booking completed` (same `search_id`). Report the median; the distribution has a long tail. |
-| Lead time | `lead_time_days` on the booking: days from booking to check-in. The revenue team buckets it as 0-6, 7-29, 30-59, and 60+ days. |
+| Lead time | `lead_time_days` on the booking: days from booking to check-in. |
 | Cancellation rate | Per booking (`booking_id` held constant), the share cancelled within 30 days of the booking. Compare only bookings with a full 30 days of data. Report weather cancellations separately; they follow the hurricane waiver, not traveler choice. |
 | Active traveler | A member with `destination searched` in the period. Driftway does not count received notifications, check-ins, or experiment exposures as activity. |
 | Traveler retention | Of members who did a starting event on day 0, the share with `destination searched` in a later bracket. Count only members whose bracket ends inside the data. In Mixpanel Retention this needs custom brackets. |
@@ -53,14 +53,14 @@ Daily card authorization health by platform, from the payments team's gateway lo
 |---|---|---|---|
 | `date` | DATE | UTC day | Day. |
 | `platform` | STRING | — | `ios`, `android`, or `web`. Matches `platform` on events. |
-| `authorization_attempts` | FLOAT | count | Payment authorizations the gateway received from that platform, including card retries. |
-| `approval_rate` | FLOAT | share 0-1 | Share of attempts the gateway approved. |
-| `authorizations_approved` | FLOAT | count | `authorization_attempts` × `approval_rate`, rounded. |
+| `authorization_attempts` | FLOAT | count | Payment authorizations the gateway received from that platform: approved, declined, and timed out, including card retries. |
+| `approval_rate` | FLOAT | share 0-1 | Share of attempts the gateway approved (`authorizations_approved` / `authorization_attempts`, up to rounding). |
+| `authorizations_approved` | FLOAT | count | Authorizations the gateway approved. Each successful booking payment needs one. |
 | `gateway_timeout_rate` | FLOAT | share 0-1 | Share of attempts that timed out at the gateway. |
 | `p95_auth_latency_ms` | FLOAT | milliseconds | 95th-percentile time to answer an authorization. |
 | `gateway_status` | STRING | — | Daily status for the platform as posted on the status page: `operational` or `degraded`. |
 
-Caveats: attempts run higher than Mixpanel's `checkout started` count and do not track it exactly: a traveler can retry a card several times in one checkout, and members who opted out of analytics are only in this table. Declines for ordinary reasons (insufficient funds, failed bank verification) are part of the normal approval rate.
+Caveats: approvals run a little above Mixpanel's `booking completed` count and do not track it exactly: a date change re-authorizes the card, members who opted out of analytics are only in this table, and a few booking events never reach Mixpanel. Only travelers who reach the payment step create attempts, so attempts stay below the `checkout started` count. Declines for ordinary reasons (insufficient funds, failed bank verification) are part of the normal approval rate.
 
 ### `destination_supply_daily`
 
@@ -84,4 +84,3 @@ Caveats: `room_nights_booked` includes bookings sold through corporate travel de
 - New members keep arriving through the window, so totals tend to grow over time. Use rates (per search, per checkout, per booking, per member) when you compare periods.
 - Per-session and per-booking questions need `search_id` or `booking_id` held constant; unique-member funnels answer a different question.
 - New-member and per-booking windows (activation, cancellations, retention) need complete windows: drop cohorts that started too late in the window to finish theirs.
-- Experiment arms are assigned per member. When you split an experiment-period metric by another member attribute, small differences in the arm mix of each group move the result.

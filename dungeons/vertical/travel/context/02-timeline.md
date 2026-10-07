@@ -11,10 +11,10 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 | 2026-07-03 (Fri) to 2026-07-04 (Sat) | Holiday | US Independence Day (observed Friday). Driftway ran no holiday promotion. Holiday stays are booked weeks ahead, so app and website activity on the holiday itself usually looks like an ordinary weekend. |
 | 2026-07-14 (Tue) | Launch | **Flex Pay** launches on iOS, Android, and the web: at payment, travelers can choose to pay in four installments with no interest. Bookings paid this way have `payment_method = flex_pay`. |
 | 2026-07-20 (Mon) | Org | A new VP of Growth joins and takes over paid marketing. |
-| 2026-08-18 (Tue) to 2026-08-21 (Fri) | Incident | **Website payment incident.** A faulty release at Driftway's card payment gateway made many card payments on the website time out; travelers saw an error at the payment step. The gateway status page showed the website as degraded from 00:00 on August 18 until the fix at 00:00 on August 22. Daily authorization health by platform is in `payment_gateway_daily`. |
+| 2026-08-18 (Tue) to 2026-08-21 (Fri) | Incident | **Payment incident.** A faulty release at Driftway's card payment gateway made many card payments time out; travelers saw an error at the payment step. The gateway status page posted a degraded status from 00:00 on August 18 until the fix at 00:00 on August 22. Daily authorization health and status by platform are in `payment_gateway_daily`. |
 | 2026-08-25 (Tue) | Experiment | **"All-in Pricing" test** starts. Members are assigned 50/50 to **Control** (search results and property pages show the nightly rate; taxes and fees appear at checkout) or **All-in Pricing** (the price shown everywhere includes taxes and fees). Assignment is sticky per member and recorded with one `$experiment_started` event the first time the member searches after the start, and with the profile property `Experiment: All-in Pricing`. The test runs to the end of the window. |
-| 2026-08-31 (Mon) | Holiday | UK summer bank holiday. |
-| 2026-09-07 (Mon) | Holiday | US Labor Day. |
+| 2026-08-31 (Mon) | Holiday | UK summer bank holiday. Driftway ran no promotion and does not plan around it; app and website activity on the day usually looks like an ordinary Monday. |
+| 2026-09-07 (Mon) | Holiday | US Labor Day. Driftway ran no promotion; as with July 4, Labor Day stays are booked weeks ahead, and app and website activity on the day usually looks like an ordinary Monday. |
 | 2026-09-07 (Mon) | Policy | As forecasts for **Hurricane Delia** firm up, Driftway waives cancellation fees for Caribbean stays checking in from September 9 to 13, including non-refundable rates. Cancellations for this reason carry `cancellation_reason = weather`. |
 | 2026-09-09 (Wed) to 2026-09-13 (Sun) | Weather | **Hurricane Delia** passes through the Caribbean. Hurricane warnings cover Cancun, Punta Cana, Montego Bay, Nassau, San Juan, and Aruba. Partners may close inventory while warnings are in effect. The daily advisory and rooms listed are in `destination_supply_daily` (`weather_advisory = hurricane_warning`). |
 | 2026-09-30 (Wed) | Fiscal | End of Q3. |
@@ -30,12 +30,12 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 
 ## Open questions leadership has asked
 
-- Did Flex Pay help more checkouts turn into bookings?
+- Did Flex Pay do what we hoped?
 - How many bookings did the August payment incident cost us?
 - Which paid channel deserves more budget, including TikTok?
-- Which bookings cancel, and how much does the non-refundable rate matter?
+- Which bookings cancel?
 - Is the All-in Pricing test working, and should it ship to everyone?
 - How hard did Hurricane Delia hit the Caribbean business?
 - Did the Summer Kickoff Sale pay off, or did it just discount bookings we would have had anyway?
-- What do guest reviews tell us about who keeps booking with us?
-- Do new listings with few reviews get booked?
+- What can we learn from guest reviews?
+- Which kinds of listings should the supply team prioritize for winter?
