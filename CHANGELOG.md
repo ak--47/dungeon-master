@@ -9,6 +9,12 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
 
 ### Fixed
 
+- Apply the default soup day-of-week curve in active-day modes
+  (`avgActiveDaysPerUser`, `retentionCurve`) when the dungeon sets no `soup`.
+  The plan ignored it, so these modes showed almost no weekly rhythm (1.11x
+  weekday ratio against the default 1.89x; legacy mode 1.96x). Now 1.79x
+  (activeDays) and 1.72x (retentionCurve). Output shift: active-day dungeons
+  without a `soup` config.
 - Make generated output independent of the machine time zone. Born users'
   `created`, SCD rows, ad-spend dates, mirror cutoffs, and the `day()`,
   `datesBetween()`, and `dateRange()` helpers now use UTC. The same seed and
@@ -306,15 +312,14 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   `STORY_ARCHETYPES`, and `StoryArchetype` now has 15 values.
   (`attribution-bias` already covers attribution stories.)
 
-### Known issues
-
-- With no `soup` config, active-day modes (`avgActiveDaysPerUser`,
-  `retentionCurve`) show almost no weekly rhythm (1.11x weekday ratio against
-  the default 1.89x). A fix exists but makes three steady combos miss the l7c
-  bar (0.496 against 0.5); it awaits owner approval to relax that bar.
-
 ### Changed
 
+- Relax the steady macro's last-7-day minimum bar (`l7c`, strict-bar condition
+  4) from 0.5 to 0.45 in `tests/engine/sweep-engine.mjs` and the canary, the
+  same as growth. With the default weekday curve now applied in active-day
+  modes, a real Saturday dip (weight ~0.53) puts min(last 7) / mean(last 7)
+  near 0.5 by design; three steady/180d combos read 0.496. Owner-approved:
+  right-edge checks yield to a real weekly rhythm.
 - Relax the engine-shape last-day check (strict-bar condition 2) in
   `tests/engine/sweep-engine.mjs` and the canary. The last day is now compared
   with the same weekday averaged over up to 4 prior weeks, with a bar of 0.5

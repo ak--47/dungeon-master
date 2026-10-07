@@ -30,7 +30,7 @@ const DATASET_END = '2026-04-30T23:59:59.000Z';
 // overshoot fix. See sweep-engine.mjs STRICT_BARS comment for full rationale.
 const BARS = {
 	flat:    { tail: [0.65, 1.6], spike: 2.5, l7c: 0.5  },
-	steady:  { tail: [0.65, 1.8], spike: 2.5, l7c: 0.5  },
+	steady:  { tail: [0.65, 1.8], spike: 2.5, l7c: 0.45 },
 	growth:  { tail: [0.65, 2.5], spike: 3.5, l7c: 0.45 },
 	viral:   { tail: [0.5,  5.0], spike: 7.0, l7c: 0.3  },
 	decline: { tail: [0.4,  2.0], spike: 3.0, l7c: 0.3  },

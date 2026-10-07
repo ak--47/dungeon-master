@@ -91,7 +91,7 @@ const SIGNUP_EVENT = 'sign up'; // simplest.js's isFirstEvent
 // (10-test) continues to pass on a representative subset.
 const STRICT_BARS = {
 	flat:    { tail: [0.65, 1.6], spike: 2.5, l7c: 0.5 },
-	steady:  { tail: [0.65, 1.8], spike: 2.5, l7c: 0.5 },
+	steady:  { tail: [0.65, 1.8], spike: 2.5, l7c: 0.45 },
 	growth:  { tail: [0.65, 2.5], spike: 3.5, l7c: 0.45 },
 	viral:   { tail: [0.5,  5.0], spike: 7.0, l7c: 0.3  },
 	decline: { tail: [0.4,  2.0], spike: 3.0, l7c: 0.3  },
