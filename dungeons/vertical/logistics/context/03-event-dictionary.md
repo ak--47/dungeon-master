@@ -52,7 +52,7 @@ Every shipment has a `shipment_id`, created with the quote. Every later step of 
 | `accessorial charged` | back office | An extra charge is added to the load after delivery. A load can have more than one. | `shipment_id`; `charge_type` (`detention`, `lumper`, `layover`); `amount_usd`. |
 | `invoice paid` | back office | The shipper pays the load's invoice (linehaul plus accessorials). Invoices for loads delivered late in the window are often paid after it ends. | `shipment_id`; `amount_usd`; `days_to_pay` (days from delivery to payment); `payment_method` (`ach`, `card`, `check`). |
 | `support ticket created` | portal | The shipper opens a support ticket about a load. | `shipment_id`; `ticket_category` (`tracking_status`: where is my load; `booking_change`: change a pickup or details before pickup; `delivery_issue`: a problem with the delivery; `billing_question`); `contact_channel` (`chat`, `email`, `phone`). |
-| `$experiment_started` | portal | Mixpanel experiment exposure, sent one second before each dry van quote for shippers in the Instant Book test (from 2026-08-11). | `Experiment name` = `Instant Book`; `Variant name` = `Control` or `Instant Book`. |
+| `$experiment_started` | portal | Mixpanel experiment exposure, sent once per shipper user in the Instant Book test, one second before their first dry van quote on or after 2026-08-11. Later quotes do not send it again. | `Experiment name` = `Instant Book`; `Variant name` = `Control` or `Instant Book`. |
 
 ## Portal
 

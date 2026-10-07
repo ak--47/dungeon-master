@@ -89,9 +89,10 @@ SELECT count(*) AS events, count(DISTINCT uid) AS shippers_with_events, (SELECT 
  (SELECT count(*) FROM signups) AS new_signups, (SELECT count(*) FROM shipments WHERE t_book IS NOT NULL) AS loads_booked_in_window,
  min(t) AS first_event, max(t) AS last_event FROM ev;
 
--- identity check: every event resolves to a shipper; server-side events carry no device
+-- identity check: every event resolves to a shipper; back-office events carry no device or session
 SELECT count(*) FILTER (WHERE uid IS NULL) AS unresolved_events,
- count(*) FILTER (WHERE event IN ('carrier assigned', 'pickup confirmed', 'delivery exception', 'load delivered', 'accessorial charged', 'invoice paid') AND device_id IS NOT NULL) AS server_events_with_device
+ count(*) FILTER (WHERE event IN ('carrier assigned', 'pickup confirmed', 'delivery exception', 'load delivered', 'accessorial charged', 'invoice paid',
+   'credit application submitted', 'credit approved', 'lane saved') AND (device_id IS NOT NULL OR session_id IS NOT NULL OR browser IS NOT NULL)) AS back_office_events_with_device_or_session
 FROM ev;
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -275,6 +276,14 @@ WITH a AS (SELECT p.variant, count(*) AS n, avg(q.booked_7d::INT) AS r
   WHERE q.equipment_type = 'dry_van' AND q.t_quote >= TIMESTAMP '2026-08-11' AND q.t_quote < TIMESTAMP '2026-09-24 23:59:59' AND p.variant IS NOT NULL GROUP BY 1)
 SELECT round((max(r) FILTER (WHERE variant = 'Instant Book') - max(r) FILTER (WHERE variant = 'Control'))
  / sqrt(max(r * (1 - r) / n) FILTER (WHERE variant = 'Instant Book') + max(r * (1 - r) / n) FILTER (WHERE variant = 'Control')), 1) AS z FROM a;
+
+-- arm balance: exposed shippers per arm (sample-ratio z vs 50/50) and pre-test dry van booking rate by arm
+WITH x AS (SELECT "Variant name" AS variant, count(DISTINCT uid) AS n FROM ev WHERE event = '$experiment_started' GROUP BY 1),
+pre AS (SELECT p.variant, round(avg(q.booked_7d::INT), 4) AS pre_test_book_rate FROM quotes q JOIN prof p ON p.uid = q.uid
+  WHERE q.equipment_type = 'dry_van' AND q.t_quote < TIMESTAMP '2026-08-11' AND p.variant IS NOT NULL GROUP BY 1)
+SELECT x.variant, x.n AS exposed_shippers, round(x.n / sum(x.n) OVER (), 4) AS share,
+ round((x.n - sum(x.n) OVER () / 2) / sqrt(sum(x.n) OVER () / 4), 2) AS srm_z, pre.pre_test_book_rate
+FROM x JOIN pre USING (variant) ORDER BY 1;
 
 -- reefer and flatbed quotes are outside the test: booking rate by arm
 SELECT q.equipment_type, p.variant, count(*) AS quotes, round(avg(q.booked_7d::INT), 4) AS book_rate_7d
@@ -465,8 +474,18 @@ FROM ev GROUP BY 1 ORDER BY 1;
 
 SELECT CASE WHEN p.new_shipper THEN 'new (joined in window)' ELSE 'established' END AS shipper_type,
  count(*) FILTER (WHERE e.event = 'load booked' AND e.t < TIMESTAMP '2026-07-01') AS loads_june,
- count(*) FILTER (WHERE e.event = 'load booked' AND e.t >= TIMESTAMP '2026-09-01' AND e.t < TIMESTAMP '2026-10-01') AS loads_september
+ count(*) FILTER (WHERE e.event = 'load booked' AND e.t >= TIMESTAMP '2026-09-01' AND e.t < TIMESTAMP '2026-10-01') AS loads_september,
+ round(count(*) FILTER (WHERE e.event = 'quote requested' AND e.t < TIMESTAMP '2026-07-01') / 27.0, 1) AS quotes_per_day_june,
+ round(count(*) FILTER (WHERE e.event = 'quote requested' AND e.t >= TIMESTAMP '2026-09-01' AND e.t < TIMESTAMP '2026-10-01') / 30.0, 1) AS quotes_per_day_september,
+ round(count(*) FILTER (WHERE e.event = 'load booked' AND e.t < TIMESTAMP '2026-07-01') / 27.0, 1) AS loads_per_day_june,
+ round(count(*) FILTER (WHERE e.event = 'load booked' AND e.t >= TIMESTAMP '2026-09-01' AND e.t < TIMESTAMP '2026-10-01') / 30.0, 1) AS loads_per_day_september
 FROM ev e JOIN prof p ON p.uid = e.uid GROUP BY 1 ORDER BY 1;
+
+-- established shippers' September loads by Instant Book arm (dry van), per day
+SELECT coalesce(p.variant, 'not exposed') AS variant,
+ round(count(*) FILTER (WHERE e.t < TIMESTAMP '2026-07-01') / 27.0, 1) AS dry_van_loads_per_day_june,
+ round(count(*) FILTER (WHERE e.t >= TIMESTAMP '2026-09-01' AND e.t < TIMESTAMP '2026-10-01') / 30.0, 1) AS dry_van_loads_per_day_september
+FROM ev e JOIN prof p ON p.uid = e.uid WHERE e.event = 'load booked' AND e.equipment_type = 'dry_van' AND NOT p.new_shipper GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q19 — on-time delivery overall and by equipment (outside the storm days)

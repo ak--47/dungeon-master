@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Routewise Freight**, a digital 
 
 - **Product:** the Routewise shipper portal. Shippers price loads, book them, follow them to delivery, download shipping documents, export reports, and pay invoices. Routewise covers each booked load with a carrier from its network.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early June through the end of September and the first day of October.
-- **Scale:** about 10,000 shipper users were active in the window. About 4,500 of them signed up during the window; the rest were customers before June 4. The project holds about 810,000 events: about 152,000 quotes and about 49,000 loads booked in the window.
+- **Scale:** about 10,000 shipper users were active in the window. About 4,400 of them signed up during the window; the rest were customers before June 4. The project holds about 820,000 events: about 163,000 quotes and about 52,000 loads booked in the window.
 - **Network:** loads move between six US regions (northeast, southeast, midwest, south_central, mountain, west_coast) on three equipment types (dry van, reefer, flatbed).
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. Shippers work US business hours, so most activity falls between 12:00 and 01:00 UTC.
 
@@ -28,7 +28,7 @@ This folder is the internal analytics wiki for **Routewise Freight**, a digital 
 ## Identity notes
 
 - A new shipper user is identified when they create an account. `account created` is each new user's first event and carries both the `user_id` and the `device_id` of their computer. There is no anonymous pre-signup activity in the data.
-- Every event carries `user_id`. Events sent from the portal in the browser (quotes, bookings, tracking views, tickets, dashboards, rate lookups, documents, reports, experiment exposures, and `account created`) also carry `device_id` and browser details. Events sent by back-office systems carry `user_id` only: `credit application submitted`, `credit approved`, `lane saved`, and the carrier and billing events (`carrier assigned`, `pickup confirmed`, `delivery exception`, `load delivered`, `accessorial charged`, `invoice paid`).
+- Every event carries `user_id`. Events sent from the portal in the browser (quotes, bookings, tracking views, tickets, dashboards, rate lookups, documents, reports, experiment exposures, and `account created`) also carry `device_id` and browser details. Events sent by back-office systems carry `user_id` only, with no `device_id`, `session_id`, or browser fields: `credit application submitted`, `credit approved`, `lane saved`, and the carrier and billing events (`carrier assigned`, `pickup confirmed`, `delivery exception`, `load delivered`, `accessorial charged`, `invoice paid`).
 - Shipper users work from one to a few computers; `device_id` changes between them. Count people with unique `user_id` (Mixpanel "Uniques"), not with `device_id`.
 - Users who were customers before June 4 have no `account created` event in this window. Their `customer_since` profile date is before the window. For users who joined in the window, `customer_since` is their signup date.
 

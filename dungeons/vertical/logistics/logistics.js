@@ -19,9 +19,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             Live ETA launches 2026-07-21; the "Instant Book" test (one-click
  *             booking at the quoted price for dry van) starts 2026-08-11;
  *             Hurricane Odessa hits the Gulf Coast 2026-09-14 to 09-18.
- * SCALE:      10,000 shipper users (≈4,500 sign up inside the window; ≈37% of
- *             those are never approved for credit and leave), ~0.8M events,
- *             ≈50,000 loads booked, 120 days (2026-06-04 → 2026-10-01, UTC)
+ * SCALE:      10,000 shipper users (≈4,400 sign up inside the window; ≈37% of
+ *             those are never approved for credit and leave), ~0.82M events,
+ *             ≈52,000 loads booked, 120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  quote requested → load booked → carrier assigned → pickup
  *             confirmed → load delivered → invoice paid
  * VALUE MOMENT: load delivered
@@ -63,7 +63,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * IDENTITY: a new shipper is identified at "account created" (isAuthEvent,
  * first event, user_id + device_id); 2 devices per user on average. Every event
  * carries user_id; there is no anonymous pre-signup activity. Server-side
- * events carry user_id only, no device_id or device fields: credit application
+ * events carry user_id only, no device_id, session_id, or device fields: credit application
  * submitted, credit approved, lane saved (the lanes service), and the carrier
  * and billing events (carrier assigned, pickup confirmed, delivery exception,
  * load delivered, accessorial charged, invoice paid). Every other event carries
@@ -75,8 +75,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   weight, and a price = the day's spot benchmark x (1 + spread) (H2); it
  *   books with p(spread) (x Instant Book, H3). A booked load gets a carrier
  *   (H4), a pickup 1-3 business days after booking (business hours), a transit
- *   time from the lane miles (≈520 mi/day; 75% of weekend delivery appointments
- *   move to Monday), lateness (H7), tracking views, tickets (H1), accessorials
+ *   time from the lane miles (≈520 mi/day; half of weekend delivery appointments
+ *   move to Monday or Tuesday), lateness (H7), tracking views, tickets (H1), accessorials
  *   (H9), and an invoice paid on a business day by tier terms (median
  *   19/27/38 days). Shipper-side moments (tracking views, tickets) fall in US
  *   business hours when the load's timing allows. Engine unit events are reused; extra quotes and
@@ -89,6 +89,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   in the two weeks before June 4 (RECENT_JOIN_SHARE, the in-window pace of
  *   approved signups) are still saving their first lanes and follow the H8
  *   rule, so lane saves do not ramp from zero.
+ * - Credit approval (H6) is an even per-channel quota of the declared rate
+ *   (funnel-pre error diffusion), not an independent coin per shipper.
  * - New shippers: credit approval decides everything. Shippers never approved
  *   keep their onboarding steps and a few days of rate lookups and dashboards,
  *   then leave. Approved shippers quote only after approval. The onboarding lane
@@ -105,14 +107,14 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   own quote flow with ±30% day noise plus a base; paid_marketing_daily is a
  *   half paced budget (weekday shape, never zero) and half bid x the day's
  *   delivered signups, with seeded day noise.
- * - ENGINE WORKAROUND: the engine's browser pool is not tied to the device
- *   type (Opera Mobile or Mobile Safari on a Windows desktop); the hook sets a
- *   desktop browser that fits the OS, sticky per device_id.
  * - Legacy activity mode (no retentionCurve): each shipper's events spread
- *   evenly over their active window. ENGINE NOTE: in legacy mode the engine
- *   gates funnel experiments on the user's first activity time, not the run's
- *   time, so the experiment is configured always-on and the hook keeps
- *   exposures only on dry van quotes from 2026-08-11.
+ *   evenly over their active window.
+ * - Instant Book enrollment is per dry van quote, which the engine's funnel
+ *   experiment cannot express (it enrolls whole Shipment runs of any
+ *   equipment). The experiment is configured without a start date so every
+ *   shipper gets a sticky variant; the hook keeps one $experiment_started per
+ *   shipper, 1 s before their first dry van quote from 2026-08-11, and clears
+ *   the profile variant of shippers with no such quote.
  */
 
 // ── HOOK STORIES ──
@@ -210,8 +212,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   independently of activity); those under 3 keep half their quote sessions,
  *   so they book 0.5x the loads; no further gain past 3 (5+ vs 3-4 = 1.0).
  * MIXPANEL: Insights, A = load booked (total), B = credit approved (uniques),
- *   formula A / B, filter customer_since ≥ 2026-06-04, breakdown saved_lanes
- *   (< 3, 3-4, 5+).
+ *   formula A / B, filter customer_since ≥ 2026-06-04, breakdown company_tier
+ *   then saved_lanes (< 3, 3-4, 5+). Read the plateau within company_tier:
+ *   the pooled 5+ vs 3-4 ratio carries tier-mix noise.
  * REAL WORLD: shippers who set up their recurring lanes have recurring freight.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -225,46 +228,49 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-logistics, 2026-10-07, full
- * fidelity, 10,000 shippers, 810,468 events, 48,723 loads booked in window)
+ * fidelity, 10,000 shippers, 822,398 events, 51,917 loads booked in window)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                        | Derivation              | Expected | Measured
  * -----|-----------------------------------------------|-------------------------|----------|---------
- * H1   | tracking tickets / pickup, after/before       | LIVE_ETA_KEEP           | 0.40     | 0.402 (15.2% → 6.1%)
- * H1   | booking-change + billing tickets / load       | unchanged (control)     | 1.00     | 1.028
+ * H1   | tracking tickets / pickup, after/before       | LIVE_ETA_KEEP           | 0.40     | 0.400 (14.7% → 5.9%)
+ * H1   | booking-change + billing tickets / load       | unchanged (control)     | 1.00     | 1.037
  * H1   | eta_notification views before launch          | exact purity            | 0        | 0
- * H2   | 7-day booking, >15% over / within 5% of market| 0.14 / 0.42             | 0.333    | 0.333 (14.5% vs 43.6%)
- * H3   | dry van 7-day booking, variant / control      | INSTANT_BOOK_MULT       | 1.30     | 1.283 (39.4% vs 30.7%)
- * H3   | instant share of variant dry van bookings     | INSTANT_SHARE           | 0.80     | 0.800
+ * H2   | 7-day booking, >15% over / within 5% of market| 0.14 / 0.42             | 0.333    | 0.333 (14.6% vs 43.7%)
+ * H3   | dry van 7-day booking, variant / control      | INSTANT_BOOK_MULT       | 1.30     | 1.302 (39.6% vs 30.4%)
+ * H3   | instant share of variant dry van bookings     | INSTANT_SHARE           | 0.80     | 0.797
  * H3   | instant bookings outside variant/dry van/test | exact purity            | 0        | 0
- * H3   | warehouse margin %, instant / negotiated      | 0.09 / 0.155            | 0.581    | 0.582 (8.6% vs 14.7%)
- * H3   | variant share of exposed shippers             | equal 2-arm hash        | 0.50     | 0.491
- * H4   | median hours to cover, reefer / dry van       | COVER_MULT.reefer       | 1.60     | 1.610 (4.82 vs 3.00 h)
- * H4   | median hours to cover, flatbed / dry van      | COVER_MULT.flatbed      | 2.20     | 2.219 (6.65 h)
- * H5   | retention ≥ d14, late first / on-time first   | 1 − LATE_FIRST_CHURN (≤, ceiling 0.75) | 0.50 | 0.564 (44.2% vs 78.3%)
- * H6   | spend per signup, Google / LinkedIn           | 55 / 110                | 0.50     | 0.491 ($55.08 vs $112.15)
- * H6   | 7-day credit approval, Google / others        | 36 / 72                 | 0.50     | 0.503 (35.6% vs 70.9%)
- * H6   | spend per approved shipper, Google / LinkedIn | (55 / 0.5) / 110        | 1.00     | 0.975 ($154.57 vs $158.46)
- * H7   | late share, Gulf lanes picked up Sep 14-18    | STORM_LATE_RATE         | 0.70     | 0.692
- * H7   | late share, every other load                  | BASE_LATE_RATE          | 0.18     | 0.185
+ * H3   | warehouse margin %, instant / negotiated      | 0.09 / 0.155            | 0.581    | 0.583 (8.6% vs 14.7%)
+ * H3   | variant share of exposed shippers             | equal 2-arm hash        | 0.50     | 0.488 (3,315 of 6,799)
+ * H4   | median hours to cover, reefer / dry van       | COVER_MULT.reefer       | 1.60     | 1.611 (4.79 vs 2.97 h)
+ * H4   | median hours to cover, flatbed / dry van      | COVER_MULT.flatbed      | 2.20     | 2.254 (6.70 h)
+ * H5   | retention ≥ d14, late first / on-time first   | 1 − LATE_FIRST_CHURN (≤, ceiling 0.75) | 0.50 | 0.422 (33.2% vs 78.8%)
+ * H6   | spend per signup, Google / LinkedIn           | 55 / 110                | 0.50     | 0.509 ($56.20 vs $110.42)
+ * H6   | 7-day credit approval, Google / others        | 36 / 72                 | 0.50     | 0.501 (36.0% vs 71.8%)
+ * H6   | spend per approved shipper, Google / LinkedIn | (55 / 0.5) / 110        | 1.00     | 1.019 ($156.26 vs $153.32)
+ * H7   | late share, Gulf lanes picked up Sep 14-18    | STORM_LATE_RATE         | 0.70     | 0.719
+ * H7   | late share, every other load                  | BASE_LATE_RATE          | 0.18     | 0.186
  * H7   | flatbed spot rate, storm days / 2 weeks before| 1 + STORM_RATE_BUMP     | 1.16     | 1.164
- * H8   | loads per approved new shipper, <3 / 3+ lanes (within tier) | LOW_LANE_KEEP | 0.50 | 0.498 (pooled 1.76 vs 3.50)
- * H8   | loads per approved new shipper, 5+ / 3-4 (within tier)      | plateau       | 1.00 | 1.065
- * H9   | detention share, appointment / none           | APPT_DETENTION_MULT     | 0.40     | 0.409 (8.9% vs 21.7%)
- * H9   | lumper share, appointment / none              | unchanged (control)     | 1.00     | 0.994
+ * H8   | loads per approved new shipper, <3 / 3+ lanes (within tier) | LOW_LANE_KEEP | 0.50 | 0.504 (pooled 1.81 vs 3.69)
+ * H8   | loads per approved new shipper, 5+ / 3-4 (within tier)      | plateau       | 1.00 | 0.971
+ * H9   | detention share, appointment / none           | APPT_DETENTION_MULT     | 0.40     | 0.406 (8.8% vs 21.7%)
+ * H9   | lumper share, appointment / none              | unchanged (control)     | 1.00     | 0.974
  * ═════════════════════════════════════════════════════════════════════════
  *
- * Noise and confounding notes: H5 rests on 249 new shippers whose first
+ * Noise and confounding notes: H5 rests on 256 new shippers whose first
  * delivery was late; each one's leave/stay is a coin flip, so the ratio moves
- * about ±0.05 from seed to seed (0.45 and 0.47 on two diagnostic seeds), and it
- * carries a selection effect (a late load is less often the first to arrive
- * when several loads move at once, so late-first shippers lean toward
- * single-load shippers). Its assertion uses the knob as target with a
- * half-effect ceiling and grades STRONG on this seed. H8 takes both ratios
- * within company tier (tier drives volume, lane counts are independent of it);
- * the pooled ratios carry tier-mix noise (pooled <3 / 3+ = 0.503, 5+ / 3-4 =
- * 1.113). Quote-to-book by company tier is not engineered (31.9% / 31.8% /
- * 32.1%, |z| ≤ 1.1), nor is reefer/flatbed booking by Instant Book arm (30.7%
- * vs 31.2%, z = 0.8), nor on-time delivery by dock appointment (79.3% vs 79.6%).
+ * about ±0.05 from run to run, and it carries a selection effect (a late load
+ * is less often the first to arrive when several loads move at once, so
+ * late-first shippers lean toward single-load shippers, who return less
+ * anyway). Its assertion uses the knob as target with a half-effect ceiling
+ * and grades STRONG on this run (0.42). H8 takes both ratios within company
+ * tier (tier drives volume, lane counts are independent of it); the pooled
+ * ratios carry tier-mix noise (pooled <3 / 3+ = 0.489, 5+ / 3-4 = 1.013). The
+ * exposed-shipper split is 48.8% Instant Book (sample-ratio z = −2.0): it
+ * follows which shippers quoted dry van after Aug 11 (pre-test dry van booking
+ * 30.7% Control vs 30.1% Instant Book), not the treatment. Quote-to-book by
+ * company tier is not engineered (31.8% / 31.7% / 32.0%, |z| ≤ 0.8), nor is
+ * reefer/flatbed booking by Instant Book arm (30.9% vs 31.0%, z = 0.2), nor
+ * on-time delivery by dock appointment (79.1% vs 79.1%).
  */
 
 // ── SCALE ──
@@ -362,7 +368,8 @@ const CPL_USD = { google_ads: 55, linkedin_ads: 110, trade_media: 80 }; // windo
 const CHANNEL_WEIGHTS = { organic: 28, referral: 14, google_ads: 26, linkedin_ads: 16, trade_media: 16 };
 const APPROVAL_CONV = 72;
 const GOOGLE_APPROVAL_MULT = 0.5;
-const APPROVAL_TTC_H = 30;
+const APPROVAL_TTC_H = 2;            // engine onboarding window (short so applications near the window end survive); the hook times the decision
+const APPROVAL_MEDIAN_H = 3;         // credit decision after the application (log-normal, 0.5-30 h)
 const BORN_PCT = 45;
 const DAILY_BUDGET_USD = Object.fromEntries(PAID_CHANNELS.map((ch) => {
 	const totalW = Object.values(CHANNEL_WEIGHTS).reduce((a, b) => a + b, 0);
@@ -408,6 +415,7 @@ const PREWINDOW_DAYS = 75;
 const QUOTES_PER_SESSION = { 1: 34, 2: 30, 3: 20, 4: 10, 5: 6 }; // loads priced in one quote session
 const NONAPPROVED_DAYS = 5;         // shippers who are never approved browse for a few days, then leave
 const HOLIDAY_KEEP = 0.25;          // share of shipper activity on a US holiday
+const WEEKEND_MOVE_SHARE = 0.5;     // weekend delivery appointments moved to Monday/Tuesday (closed receivers)
 
 // ── DATA ──
 const EQUIPMENT = ["dry_van", "reefer", "flatbed"];
@@ -525,13 +533,6 @@ const ONBOARDING_STEPS = ["account created", "lane saved", "credit application s
 const PORTAL = new Set(["dashboard viewed", "rate lookup", "document downloaded", "report exported", "lane saved"]);
 const DEVICE_KEYS = ["device_id", "session_id", "browser", "os", "model", "screen_height", "screen_width", "carrier", "radio", "wifi", "manufacturer", "brand"];
 
-const BROWSERS_BY_OS = {
-	macOS: { Chrome: 52, Safari: 36, "Microsoft Edge": 6, Firefox: 6 },
-	Windows: { Chrome: 64, "Microsoft Edge": 29, Firefox: 7 },
-	Linux: { Chrome: 58, Firefox: 42 },
-};
-const desktopBrowser = (deviceId, os) => pickWeighted(BROWSERS_BY_OS[os] ?? BROWSERS_BY_OS.Linux, hashFloat(`${deviceId}|browser`));
-
 // lane and rate-lookup properties follow the shipper's own network
 function setLaneProps(e, profile) {
 	e.equipment_type = chance.bool({ likelihood: 75 }) ? profile.primary_equipment : pickR({ dry_van: 70, reefer: 18, flatbed: 12 });
@@ -573,12 +574,9 @@ function handleEverything(events, meta) {
 	const approvalT0 = approval ? T(approval) : null;
 
 	const stripDevice = (e) => { for (const k of DEVICE_KEYS) if (k in e) delete e[k]; };
-	// back-office events carry no device; portal events get a desktop browser
+	// back-office events carry no device or session
 	const finalize = (evs) => {
-		for (const e of evs) {
-			if (SYSTEM_EVENTS.has(e.event) || BACK_OFFICE.has(e.event)) stripDevice(e);
-			else if (e.device_id && e.browser !== undefined) e.browser = desktopBrowser(e.device_id, e.os);
-		}
+		for (const e of evs) if (SYSTEM_EVENTS.has(e.event) || BACK_OFFICE.has(e.event)) stripDevice(e);
 		return evs;
 	};
 
@@ -591,7 +589,7 @@ function handleEverything(events, meta) {
 		const app = events.find((e) => e.event === "credit application submitted");
 		if (onboardLane) onboardLane.time = iso(t0 + chance.integer({ min: 60, max: 420 }) * 1000);
 		if (app) app.time = iso(t0 + chance.integer({ min: 480, max: 1800 }) * 1000);
-		if (app && approvalT0 !== null && approvalT0 <= T(app)) approval.time = iso(T(app) + chance.integer({ min: 2, max: 20 }) * HOUR_MS);
+		if (app && approvalT0 !== null) approval.time = iso(T(app) + Math.floor(Math.min(30, Math.max(0.5, APPROVAL_MEDIAN_H * logNormal(0.8))) * HOUR_MS));
 	}
 	const approvedT = approval ? T(approval) : null;
 
@@ -698,9 +696,10 @@ function handleEverything(events, meta) {
 		if (tp < tc + HOUR_MS) tp = tc + chance.integer({ min: 120, max: 360 }) * MIN_MS;
 		const plannedH = miles / 520 * 24 + chance.floating({ min: 3, max: 8 });
 		let plannedTd = tp + Math.floor(plannedH * HOUR_MS);
-		// most receivers are closed on weekends: a weekend delivery appointment usually moves to Monday
+		// many receivers are closed on weekends: half of weekend delivery appointments
+		// move to the next business days (Monday or Tuesday, as dock slots allow)
 		const pdow = new Date(plannedTd).getUTCDay();
-		if ((pdow === 0 || pdow === 6) && chance.bool({ likelihood: 75 })) plannedTd = businessTime(plannedTd, 0);
+		if ((pdow === 0 || pdow === 6) && chance.bool({ likelihood: WEEKEND_MOVE_SHARE * 100 })) plannedTd = businessTime(plannedTd, chance.bool({ likelihood: 60 }) ? 1 : 2);
 		// H7: storm on Gulf lanes; base lateness otherwise
 		const gulf = STORM_REGIONS.includes(origin) || STORM_REGIONS.includes(dest);
 		const stormHit = gulf && (inStorm(tp) || inStorm(plannedTd) || (tp < ms(STORM_START) && plannedTd >= ms(STORM_END)));
@@ -832,24 +831,37 @@ function handleEverything(events, meta) {
 		if (e.event === "lane saved") stripDevice(e); // the lanes service records saves server-side
 	}
 
-	// ── experiment exposure: one per dry van quote from the test start, 1 s before it ──
+	// ── experiment exposure: one per shipper, 1 s before their first dry van quote from the test start ──
 	const exposed = [];
 	if (variant !== null && exposures.length) {
-		const quotes = unitEvents.filter((e) => e.event === "quote requested" && e.equipment_type === "dry_van" && T(e) >= ms(INSTANT_BOOK_START)).sort((a, b) => T(a) - T(b));
-		quotes.forEach((q, i) => {
-			const t = T(q) - 1000;
-			const ex = exposures[i] || cloneEvent(exposures[0], { time: iso(t) });
-			ex.time = iso(t);
+		const first = unitEvents.filter((e) => e.event === "quote requested" && e.equipment_type === "dry_van" && T(e) >= ms(INSTANT_BOOK_START)).sort((a, b) => T(a) - T(b))[0];
+		if (first) {
+			const ex = exposures[0];
+			ex.time = iso(T(first) - 1000);
 			exposed.push(ex);
-		});
+		}
 	}
 	if (!exposed.length && profile[EXP_KEY] !== undefined) delete profile[EXP_KEY];
 
 	const rest = other.filter((e) => T(e) < cut || ONBOARDING.has(e.event));
-	// ENGINE WORKAROUND (in finalize): the engine's browser pool ignores the device
-	// type (mobile browsers on desktop computers); pick a desktop browser that fits
-	// the OS, sticky per device_id
 	return finalize(rest.concat(kept, unitEvents, exposed).filter((e) => T(e) >= BEGIN && T(e) <= END));
+}
+
+// H6: the credit team approves each channel's declared share of applicants,
+// spread evenly through the run (an error-diffusion quota per channel, state kept
+// per run) instead of an independent coin per shipper, so the channel approval
+// rates the story compares are not moved by a few hundred coin flips
+const approvalTally = new WeakMap();
+function handleFunnelPre(funnel, meta) {
+	if (!meta.isFirstFunnel || !meta.isBorn) return funnel;
+	if (!approvalTally.has(meta.config)) approvalTally.set(meta.config, new Map());
+	const tally = approvalTally.get(meta.config);
+	const ch = meta.profile.acquisition_channel;
+	const p = funnel.conversionRate / 100;
+	const n = tally.get(ch) ?? 0;
+	tally.set(ch, n + 1);
+	funnel.conversionRate = Math.floor((n + 1) * p + 0.5) > Math.floor(n * p + 0.5) ? 100 : 0;
+	return funnel;
 }
 
 // warehouse rows: exogenous business facts layered on event-derived volumes
@@ -1261,6 +1273,7 @@ const config = {
 
 	hook(record, type, meta) {
 		if (type === "user") return handleUserHook(record, meta);
+		if (type === "funnel-pre") return handleFunnelPre(record, meta);
 		if (type === "everything") return handleEverything(record, meta);
 		if (type === "warehouse") return handleWarehouse(record, meta);
 		return record;
@@ -1427,7 +1440,7 @@ SELECT 'all' AS grp, count(DISTINCT uid) AS user_count, count(*) FILTER (WHERE v
 	{
 		id: "H2-price-vs-market",
 		hook: "H2",
-		archetype: "funnel-conversion-by-segment",
+		archetype: "external-join",
 		narrative: `Shippers book quotes that are priced near the spot market. Each quote is the day's spot benchmark for its equipment (warehouse spot_market_rates_daily.spot_rate_per_mile) times (1 + spread), with spread drawn per quote (mean ${SPREAD_MEAN * 100}%, sd ${SPREAD_SD * 100}%, ${SPREAD_MIN * 100}% to ${SPREAD_MAX * 100}%). The chance a quote books falls smoothly with spread (logistic centered at ${BOOK_CURVE_CENTER * 100}%, scale ${BOOK_CURVE_SCALE * 100} points), solved so that quotes within ${COMPETITIVE_MAX * 100}% of market book ${BOOK_RATE_COMPETITIVE * 100}% of the time and quotes more than ${EXPENSIVE_MIN * 100}% over market book ${BOOK_RATE_EXPENSIVE * 100}% of the time (ratio ${(BOOK_RATE_EXPENSIVE / BOOK_RATE_COMPETITIVE).toFixed(3)}). The spread is not on the event: it needs the warehouse join on date and equipment. Read: per quote (shipment_id), booked within ${BOOK_WINDOW_DAYS} days, quotes through ${QUOTE_READ_END.slice(0, 10)}. Instant Book multiplies booking for some dry van quotes after ${D(INSTANT_BOOK_START)} at every spread, so the ratio holds.`,
 		mixpanelReport: { type: "Funnels + warehouse", steps: ["quote requested", "load booked"], counting: "totals", holdPropertyConstant: "shipment_id", window: `${BOOK_WINDOW_DAYS} days`, join: "spot_market_rates_daily.spot_rate_per_mile on date + equipment_type; spread = quoted_rate_per_mile / spot_rate_per_mile - 1", breakdown: "spread buckets ≤ 5%, 5-15%, > 15%" },
 		assertions: [
@@ -1443,7 +1456,7 @@ SELECT 'all' AS grp, count(DISTINCT uid) AS user_count, count(*) FILTER (WHERE v
 		id: "H3-instant-book-experiment",
 		hook: "H3",
 		archetype: "experiment-lift",
-		narrative: `The "${EXPERIMENT_NAME}" test starts ${D(INSTANT_BOOK_START)} on dry van quotes: shippers are split 50/50 (sticky per shipper; $experiment_started 1 s before each dry van quote). In the "${VARIANT}" arm a dry van quote can be booked with one click at the quoted price: dry van quotes book ${INSTANT_BOOK_MULT}x as often as in Control, and ${INSTANT_SHARE * 100}% of variant dry van bookings carry booking_method = instant (booked within minutes; the rest still negotiate). booking_method = instant never appears in Control, before the start, or on reefer and flatbed. Instant loads earn a thinner margin: warehouse load_margin_daily shows gross margin ${MARGIN_PCT.instant * 100}% on instant loads vs ${MARGIN_PCT.negotiated * 100}% negotiated (both squeezed the same share in the storm weeks), ratio ${(MARGIN_PCT.instant / MARGIN_PCT.negotiated).toFixed(3)}. Read: per dry van quote from ${D(INSTANT_BOOK_START)} through ${QUOTE_READ_END.slice(0, 10)}, booked within ${BOOK_WINDOW_DAYS} days, by "${EXP_KEY}".`,
+		narrative: `The "${EXPERIMENT_NAME}" test starts ${D(INSTANT_BOOK_START)} on dry van quotes: shippers are split 50/50 (sticky per shipper; one $experiment_started per shipper, 1 s before their first dry van quote from the start). In the "${VARIANT}" arm a dry van quote can be booked with one click at the quoted price: dry van quotes book ${INSTANT_BOOK_MULT}x as often as in Control, and ${INSTANT_SHARE * 100}% of variant dry van bookings carry booking_method = instant (booked within minutes; the rest still negotiate). booking_method = instant never appears in Control, before the start, or on reefer and flatbed. Instant loads earn a thinner margin: warehouse load_margin_daily shows gross margin ${MARGIN_PCT.instant * 100}% on instant loads vs ${MARGIN_PCT.negotiated * 100}% negotiated (both squeezed the same share in the storm weeks), ratio ${(MARGIN_PCT.instant / MARGIN_PCT.negotiated).toFixed(3)}. Read: per dry van quote from ${D(INSTANT_BOOK_START)} through ${QUOTE_READ_END.slice(0, 10)}, booked within ${BOOK_WINDOW_DAYS} days, by "${EXP_KEY}".`,
 		mixpanelReport: { type: "Funnels + warehouse", steps: ["quote requested (equipment_type = dry_van)", "load booked"], counting: "totals", holdPropertyConstant: "shipment_id", window: `${BOOK_WINDOW_DAYS} days`, dateRange: `${D(INSTANT_BOOK_START)} to ${QUOTE_READ_END.slice(0, 10)}`, breakdown: `user property "${EXP_KEY}"`, join: "load_margin_daily gross_margin_usd / gross_revenue_usd by booking_method" },
 		assertions: [
 			{
@@ -1535,7 +1548,7 @@ FROM ev WHERE event = '$experiment_started'`,
 	{
 		id: "H6-paid-channel-economics",
 		hook: "H6",
-		archetype: "funnel-conversion-by-segment",
+		archetype: "external-join",
 		narrative: `Google Ads is Routewise's cheapest paid channel per signup and its weakest at credit approval. Warehouse paid_marketing_daily: each day ${SPEND_PLAN_SHARE * 100}% of spend is a paced budget (cost per signup x expected signups per day, weekday shape above a ${SPEND_FLAT_SHARE * 100}% flat floor) and ${(1 - SPEND_PLAN_SHARE) * 100}% is bid x that day's delivered signups, with seeded ±${SPEND_NOISE * 100}% day noise: $${CPL_USD.google_ads} Google, $${CPL_USD.linkedin_ads} LinkedIn, $${CPL_USD.trade_media} trade media per Mixpanel signup over the window. Google signups are approved for credit (account created → credit approved within 7 days) at ${GOOGLE_APPROVAL_MULT}x the rate of every other channel (${Math.round(APPROVAL_CONV * GOOGLE_APPROVAL_MULT)}% vs ${APPROVAL_CONV}%; two declared first funnels with acquisition_channel conditions), so spend per approved shipper is level between Google and LinkedIn: (${CPL_USD.google_ads} / ${GOOGLE_APPROVAL_MULT}) / ${CPL_USD.linkedin_ads} = ${(CPL_USD.google_ads / GOOGLE_APPROVAL_MULT / CPL_USD.linkedin_ads).toFixed(2)}.`,
 		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "paid_marketing_daily.spend_usd", funnel: "account created → credit approved, 7-day window, breakdown acquisition_channel" },
 		assertions: [

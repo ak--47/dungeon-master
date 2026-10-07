@@ -4,7 +4,7 @@
 
 Routewise Freight is a digital truckload broker founded in 2019 and based in Chicago. Shippers come to Routewise to move full truckloads; Routewise does not own trucks. It matches each booked load with a carrier from a network of about 14,000 vetted trucking companies, tracks the load, and bills the shipper. The company has about 210 employees: carrier sales and operations, shipper account management, a pricing desk, customer support, engineering, and marketing.
 
-In the summer of 2026 Routewise moves roughly 11,500 to 14,000 loads a month, with gross billings of about $33-43 million a month. Routewise earns the difference between what the shipper pays and what the carrier is paid (gross margin). Historically that margin has been about 15% of billings.
+In the summer of 2026 Routewise moves roughly 11,000 to 15,000 loads a month, with gross billings of about $33-46 million a month. Routewise earns the difference between what the shipper pays and what the carrier is paid (gross margin). Historically that margin has been about 15% of billings.
 
 ## How a load moves through Routewise
 
