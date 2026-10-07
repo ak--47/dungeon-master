@@ -2055,6 +2055,10 @@ export type StoryArchetype =
     | "path-share"
     | "session-shape"
     | "composition-drift"
+    /** 1.9.0: the story joins events with a warehouse table (`warehouseMetrics`), e.g. a
+     *  metric whose warehouse rows track the event stream. Assert with `warehouse` or
+     *  `warehouse-stats` breakdowns, or `duckdb` SQL over both. */
+    | "external-join"
     | "bespoke";
 
 /**

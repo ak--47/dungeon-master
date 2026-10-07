@@ -28,13 +28,14 @@ const ARCHETYPES = [
 	'path-share',
 	'session-shape',
 	'composition-drift',
+	'external-join', // 1.9.0: story joins events with a warehouse table
 	'bespoke',
 ];
 
 const VERDICTS = ['NAILED', 'STRONG', 'WEAK', 'NONE', 'INVERSE'];
 
 describe('P3.2 story-spec schema', () => {
-	test('archetype enum matches the spec (14 values, closed)', () => {
+	test('archetype enum matches the spec (15 values, closed)', () => {
 		expect(schema.definitions.story.properties.archetype.enum).toEqual(ARCHETYPES);
 	});
 

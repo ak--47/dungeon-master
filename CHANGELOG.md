@@ -139,6 +139,10 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
 
 - `scripts/verify-stories.mjs` reads gzipped event, profile, and warehouse
   shards (`.json.gz`, `.csv.gz`) from any directory prefix.
+- Story archetype `external-join` for a story whose evidence joins events with
+  a `warehouseMetrics` table. The enum in `story-spec.schema.json`,
+  `STORY_ARCHETYPES`, and `StoryArchetype` now has 15 values.
+  (`attribution-bias` already covers attribution stories.)
 
 ### Changed
 

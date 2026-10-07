@@ -38,6 +38,7 @@
 						"path-share",
 						"session-shape",
 						"composition-drift",
+						"external-join",
 						"bespoke"
 					],
 					"description": "Closed enum of engineered-effect shapes, seeded from the corpus's real story types."

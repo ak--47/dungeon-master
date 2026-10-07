@@ -115,7 +115,8 @@ Verify standalone stories with disk-backed `duckdb` assertions against
 `{{PREFIX}}-STANDALONE*.json`. The user-event emulator and `--in-memory` CLI mode
 do not evaluate this stream. Warehouse stories can use `warehouse` assertions
 or `warehouse-stats` assertions; automatic warehouse audits also run without
-stories. Hand off to `/verify-dungeon` with an explicit artifact prefix.
+stories. A story whose evidence joins events with a warehouse table uses the
+`external-join` archetype (1.9.0). Hand off to `/verify-dungeon` with an explicit artifact prefix.
 
 ## Hook meta — identity context
 
