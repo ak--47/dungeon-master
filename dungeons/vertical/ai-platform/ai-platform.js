@@ -4,1418 +4,1589 @@ import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "@ak--47/dungeon-master/utils";
-/** @typedef {import("../../../types").Dungeon} Config */
+import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
+/** @typedef  {import("../../../types").Dungeon} Config */
 
 // ── OVERVIEW ──
 /*
- * NAME:       PromptForge
- * APP:        LLM API platform (Anthropic/OpenAI-style). Customers send API
- *             requests for chat completions, embeddings, evaluations, and tool
- *             use. Billing is per input/output token. Features: prompt caching,
- *             tool use, multi-turn conversations, batch API, model selection,
- *             eval pipelines.
- * SCALE:      10,000 users, ~800K events, 121 days (2026-01-01 → 2026-05-01)
- * CORE LOOP:  organization created → api key created → api call → iterate
+ * NAME:       Cortexa
+ * APP:        Developer platform for Cortexa's large language models. Developers
+ *             sign up in the web console, create an API key, and call the models
+ *             over the API (Messages API, Batch API). The console also has a
+ *             prompt playground, an evaluation tool, usage dashboards, docs, and
+ *             billing. Models: atlas-2 (flagship), swift-2 (fast and cheap), and
+ *             atlas-3 (new flagship from 2026-07-28; Free accounts from
+ *             2026-09-08). Usage is billed per million tokens; plans are Free
+ *             (monthly free allowance), Build (pay as you go), Scale (committed
+ *             monthly spend), and Enterprise (contract).
+ * SCALE:      10,000 accounts (4,971 sign up inside the window), ~0.84M events,
+ *             120 days (2026-06-04 → 2026-10-01, UTC)
+ * CORE LOOP:  account created → api key created → api request (repeat)
+ * VALUE MOMENT: first successful api request
  *
- * EVENTS (18):
- *   api call (10) > dashboard viewed (5) > tool use call (4) > docs searched (4)
- *   > playground session (4) > eval job (3) > eval result (3) > rate limit error (3)
- *   > model selected (3) > api key created (2) > batch job submitted (2)
- *   > batch job completed (2) > billing payment (2) > member invited (2)
- *   > organization created (1) > api key rotated (1) > webhook configured (1)
- *   > account deactivated (1)
+ * EVENTS (14):
+ *   api request (sampled request log, the bulk of events) > docs viewed >
+ *   playground session > usage dashboard viewed > rate limit hit (thinned by
+ *   plan) > member invited > api key rotated > funnel-only: account created,
+ *   api key created, batch job submitted / completed, eval run started /
+ *   completed, billing page viewed, plan upgraded, $experiment_started
  *
- * FUNNELS (3):
- *   - Onboarding:           organization created → api key created → api call (70%)
- *   - API to Eval Pipeline: api call → tool use call → eval job (45%)
- *   - Usage to Billing:     api call → billing payment (30%)
+ * FUNNELS (6 declared + the engine catch-all for console events):
+ *   - Onboarding (first funnel, A/B "Interactive Quickstart" from 2026-07-01):
+ *       account created → api key created → api request (50%, 6 h)
+ *   - API Traffic: 8 × api request in a 2 h burst (production traffic)
+ *   - Batch Jobs: batch job submitted → batch job completed (batch_id per job;
+ *       completion re-timed by the hook, H4)
+ *   - Evals (two copies: accounts that joined in the window weigh 5, older
+ *       accounts 1): eval run started → eval run completed (eval_id per run)
+ *   - Upgrade (Free accounts): billing page viewed → plan upgraded (one pass is
+ *       kept and moved by the hook, see below)
  *
- * USER PROPS:  api_tier, primary_use_case, sdk_language, monthly_spend, total_api_calls, preferred_model
- * SUPER PROPS: api_tier, primary_use_case, sdk_language
- * SCD PROPS:   monthly_api_usage (weekly fuzzy, max 20), api_tier_history (Free/Build/Enterprise, monthly fixed, max 6)
- * GROUPS:      none
+ * USER PROPS:  plan_tier, company_size, use_case, sdk_language,
+ *              acquisition_channel, inference_region, primary_role,
+ *              customer_since, "Experiment: Interactive Quickstart" (enrolled)
+ * SUPER PROPS: plan_tier (plan at event time)
+ * SCD PROPS:   none
+ * GROUPS:      none (an account is one developer's organization seat)
+ * WAREHOUSE:   inference_fleet_daily (GPU fleet health by inference region),
+ *              model_billing_daily (metered usage, list prices, revenue by model),
+ *              developer_marketing_daily (paid developer-marketing spend by channel)
+ * LOOKUPS:     none — every attribute is denormalized onto events/profiles
+ * SOUP:        weekday-heavy dayOfWeekWeights, Americas + EMEA hourOfDayWeights (UTC)
+ *
+ * IDENTITY: every event is tracked server-side and carries user_id; there is
+ * no device_id (avgDevicePerUser 0) and no anonymous activity. "account
+ * created" is each new account's first event (isAuthEvent).
+ *
+ * DESIGN NOTES:
+ * - api request is a 1-in-1,000 sample of API traffic (API_SAMPLE_RATE): one
+ *   event stands for 1,000 requests. The warehouse meters every request, so
+ *   model_billing_daily and inference_fleet_daily are ~1,000x the event
+ *   counts, with drift (late-posted usage, steady internal traffic, requests
+ *   whose analytics record was lost). Free accounts keep 30% of their request
+ *   events (small, throttled workloads); Scale and Enterprise accounts send
+ *   2x and 3x a Build account's traffic (cloned requests), so per-account
+ *   spend fits the plan.
+ * - Request sizes and speed are drawn per request in the hook: log-normal
+ *   input (median 3,200 tokens) and output (median 520) tokens; latency =
+ *   time to first token (grows with the prompt) + decode time (grows with the
+ *   answer, model-specific ms per token) with log-normal noise. So atlas-3's
+ *   longer answers make its requests slower at the same per-token speed.
+ * - The hook owns every api request attribute that a story reads: model
+ *   (H2, H7), cache_hit / cached_input_tokens (H1), tool_use and input_tokens
+ *   (H8), latency_ms, status_code / error_type (H6), inference_region (from
+ *   the account's location), and sdk_language (from the profile).
+ * - Onboarding: an account that never makes its first request in the
+ *   onboarding funnel never gets a working integration, so the hook removes
+ *   its API-dependent events (requests, rate limits, batches, evals). Most of
+ *   those accounts stop within a week; the rest keep reading docs and using
+ *   the playground.
+ * - Upgrades: the hook decides who upgrades Free → Build and when (a lag
+ *   after signup, median 3 days), and moves one engine-generated "plan
+ *   upgraded" (with its billing page view) to that moment; other upgrade
+ *   passes are dropped. An upgrader with no pass of its own gets a clone of
+ *   the first pass any account produced (identity and location re-stamped). Accounts that joined in the 30 days before June 4 use
+ *   the same rule, so June upgrades do not start from an empty pipeline.
+ * - Batch and eval usage come from a share of accounts (by company size and
+ *   role) with a salted per-account intensity; whole linked units (same
+ *   batch_id / eval_id) are kept or dropped together.
+ * - retentionCurve shapes new accounts' activity; established accounts are
+ *   flat across the window. Batch and eval completions are platform-sent and
+ *   survive a new account's lifecycle cut; retention reads exclude them.
+ * - warehouse: the everything hook records each account's final request log
+ *   (per day × model and day × region) into a module map keyed by account;
+ *   the warehouse hook aggregates it. Deterministic at concurrency 1.
  */
 
 // ── HOOK STORIES ──
 /*
- * ---------------------------------------------------------------
- * 1. PROMPT CACHING ADOPTION (CONVERSION — everything)
- * ---------------------------------------------------------------
+ * All effects are hidden: no flag properties. Each is found by a breakdown, a
+ * date comparison, or a cohort. Dates live in the TIMELINE constants and are
+ * shared by hooks, stories, SQL, warehouse columns, and the timeline guide.
  *
- * PATTERN: Customers who enable prompt caching see 70% lower
- * cost_per_call. Once any api call has cache_enabled=true, all
- * subsequent calls for that user get cost_usd reduced by 70%.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H1. PROMPT CACHING LAUNCH (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: prompt caching is generally available from 2026-07-08 on every
+ *   plan. 50% of accounts turn it on, each on a salted day in the 21 days
+ *   after launch, with a salted 50-90% hit rate (mean 70%), so the cache-hit
+ *   share of requests ramps for three weeks and holds at 35%. A cache hit
+ *   returns in 0.5x the latency of a miss and bills its cached prefix
+ *   (cached_input_tokens) at 10% of the input price. No hits before launch.
+ * MIXPANEL: Insights, api request, average latency_ms, breakdown cache_hit,
+ *   filter model = atlas-2 and status_code = 200, after Jul 8; weekly share of
+ *   cache_hit = true shows the ramp.
+ * REAL WORLD: re-using a cached system prompt skips most of the prefill work.
  *
- * HOW TO FIND IT IN MIXPANEL:
+ * ─────────────────────────────────────────────────────────────────────────
+ * H2. ATLAS-3 LAUNCH (everything, composition drift)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: atlas-3 launches 2026-07-28 for Build, Scale, and Enterprise (plan
+ *   at the request) and opens to Free on 2026-09-08. 60% of paid accounts
+ *   adopt (salted start over 21 days, salted 45-85% of their flagship
+ *   traffic), so atlas-3 holds 39% of paid flagship (atlas-2 + atlas-3)
+ *   requests once ramped; 35% of Free accounts adopt after Free access
+ *   (22.75%). swift-2 traffic is untouched. atlas-3 answers are 1.3x as long.
+ * MIXPANEL: Insights, api request, total, breakdown model, filter model in
+ *   (atlas-2, atlas-3) and plan_tier in (build, scale, enterprise), weekly, %.
+ * REAL WORLD: a new flagship takes over a slice of each customer's traffic
+ *   rather than all of it; teams keep the old model where it is tested.
  *
- *   Report 1: Cost Per Call by Cache Status
- *   - Report type: Insights
- *   - Event: "api call"
- *   - Measure: Average of "cost_usd"
- *   - Breakdown: "cache_enabled"
- *   - Expected: cache_enabled=true ~ $0.003, false ~ $0.01 (70% cheaper)
+ * ─────────────────────────────────────────────────────────────────────────
+ * H3. INTERACTIVE QUICKSTART EXPERIMENT (declarative first-funnel experiment)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: from 2026-07-01 new accounts split 50/50 at signup. The
+ *   "Interactive Quickstart" arm reaches its first API request 1.3x as often
+ *   (50% → 65%) and in 0.5x the time (median ~4 h → ~2 h). Accounts that never
+ *   make their first request send no API traffic (the hook removes it).
+ * MIXPANEL: Funnels, account created → api key created → api request, 7-day
+ *   window, breakdown user property "Experiment: Interactive Quickstart".
+ * REAL WORLD: a guided first call beats a docs page for time to first value.
  *
- *   Report 2: Cache Adoption Over Time
- *   - Report type: Insights
- *   - Event: "api call"
- *   - Measure: Total
- *   - Filter: cache_enabled = true
- *   - Line chart by week
- *   - Expected: steady growth in cached calls over the dataset
+ * ─────────────────────────────────────────────────────────────────────────
+ * H4. BATCH TURNAROUND BY PLAN (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: batch job submit → complete time is 0.4x the Build time for Scale
+ *   and Enterprise and 1.6x for Free (base median 4 h, log-normal spread,
+ *   24 h expiry), by plan at submission.
+ * MIXPANEL: Funnels, batch job submitted → batch job completed, hold batch_id
+ *   constant, median time to convert, breakdown plan_tier.
+ * REAL WORLD: committed-capacity customers get queue priority on shared GPUs.
  *
- * REAL-WORLD ANALOGUE: Prompt caching avoids re-processing long
- * system prompts on every call, dramatically reducing cost and latency.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H5. EARLY EVALS → RETENTION (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: new accounts that made their first API request go dark after day
+ *   21 on a ramp by eval runs started in their first 14 days: 55% with none,
+ *   30% with one, none with 2+. 55% of new API accounts also lapse on a
+ *   uniform day 7-90 (organic). Reads are knob floors (engagement adds):
+ *   D30 2+ / 0 ≥ 1/(1−0.55); 1 / 0 ≥ 0.7/0.45.
+ * MIXPANEL: Funnels account created → eval run started → eval run started
+ *   (14-day window) to build cohorts; Retention account created → custom event
+ *   of every event except batch job completed / eval run completed (plain "any
+ *   event" gives the same numbers), custom bracket day 30-36.
+ * REAL WORLD: teams that measure quality before launch ship to production and
+ *   stay; teams that only poke at the API drift away.
  *
- * ---------------------------------------------------------------
- * 2. MODEL MIGRATION WAVE (TIMED RELEASE — event)
- * ---------------------------------------------------------------
+ * ─────────────────────────────────────────────────────────────────────────
+ * H6. US-EAST GPU CAPACITY INCIDENT (everything + warehouse inference_fleet_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: 2026-08-26 to 2026-08-27, 35% of would-be successful us-east
+ *   requests fail with 529 overloaded_error; successful ones take 2x as long.
+ *   The warehouse shows region_status = major_outage, error_rate_5xx ≈ 0.36,
+ *   and ~40% fewer GPUs online for us-east on those days.
+ * MIXPANEL: Insights, api request, share status_code = 200, daily, breakdown
+ *   inference_region; join the warehouse region status.
+ * REAL WORLD: a capacity loss in one region looks like "the API got flaky"
+ *   until someone checks the status page.
  *
- * PATTERN: At day 60, new model "opus-4-7" releases. After day 60,
- * 35% of api calls from Build/Enterprise users switch model to
- * "opus-4-7". These calls use 1.5x tokens (smarter model, longer
- * responses). "opus-4-7" is part of the DECLARED model enum
- * (schema-first: hooks only write declared values); the hook rewrites
- * engine-sampled opus-4-7 back to the pre-release mix, so the model
- * exists ONLY after day 60 and ONLY on Build/Enterprise api calls —
- * exact purity, asserted in the story.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H7. SWIFT-2 PRICE CUT (everything + warehouse model_billing_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: 2026-08-18 the swift-2 list price halves. Build accounts (list
+ *   price) move traffic: each account's swift-2 share becomes 1.6x its base
+ *   (salted switch day over 10 days). Free, Scale, and Enterprise unchanged.
+ *   Prices exist only in the warehouse.
+ * MIXPANEL: Insights, api request, breakdown model, filter plan_tier, weekly %.
+ * REAL WORLD: price-sensitive pay-as-you-go customers re-route easy requests
+ *   to the cheap model; contract customers do not react to list prices.
  *
- * HOW TO FIND IT IN MIXPANEL:
+ * ─────────────────────────────────────────────────────────────────────────
+ * H8. AGENT TOOL USE (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: tool-use requests carry 2.5x the input tokens of plain requests;
+ *   tool use is 60% of requests for agents accounts, 30% coding, 4-6% others.
+ * MIXPANEL: Insights, api request, average input_tokens, breakdown tool_use;
+ *   share of tool_use = true by user property use_case.
+ * REAL WORLD: tool schemas and tool results ride along in every agent turn.
  *
- *   Report 1: Model Distribution Over Time
- *   - Report type: Insights
- *   - Event: "api call"
- *   - Measure: Total
- *   - Breakdown: "model"
- *   - Line chart by week
- *   - Expected: opus-4-7 appears at day 60, ramps to ~35% of paid calls
+ * ─────────────────────────────────────────────────────────────────────────
+ * H9. DEVELOPER MARKETING ECONOMICS (everything + warehouse developer_marketing_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: window spend per Mixpanel signup is $140 hackathons, $85 search
+ *   ads, $55 newsletter sponsorships (paced daily budgets, weekday shape, ±15%
+ *   noise, never zero). Share of would-be upgraders kept by channel: search
+ *   ads and referral 1.0, newsletters 0.85, github 0.8, organic 0.75,
+ *   hackathons 0.35.
+ * MIXPANEL: Insights account created by acquisition_channel joined to
+ *   spend_usd; Funnels account created → plan upgraded, 30-day window,
+ *   signups Jun 4 - Aug 31, breakdown acquisition_channel.
+ * REAL WORLD: hackathon signups come for free credits and rarely pay.
  *
- *   Report 2: Tokens Per Model
- *   - Report type: Insights
- *   - Event: "api call"
- *   - Measure: Average of "tokens_used"
- *   - Breakdown: "model"
- *   - Expected: opus-4-7 ~ 1.5x tokens vs other models. Clean on
- *     non-agentic/non-batch users — Hooks 3 and 7 multiply tokens_used
- *     on their cohorts and blur the comparison if left in.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H10. BUILD RATE LIMITS RAISED (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: from 2026-09-01 Build-tier rate-limit episodes per request fall to
+ *   0.4x (plan at the episode); Free, Scale, Enterprise unchanged.
+ * MIXPANEL: Insights, rate limit hit and api request, monthly, formula A/B,
+ *   breakdown plan_tier.
+ * REAL WORLD: higher limits stop throttling bursty production traffic.
  *
- * REAL-WORLD ANALOGUE: New flagship model launches cause migration
- * waves among power users who want improved capabilities.
+ * ═════════════════════════════════════════════════════════════════════════
+ * EXPECTED METRICS SUMMARY (measured: data/verify-ai-platform, 2026-10-07)
+ * ═════════════════════════════════════════════════════════════════════════
+ * Hook | Metric                                        | Derivation                 | Expected | Measured
+ * -----|-----------------------------------------------|----------------------------|----------|---------
+ * H1   | cache hits before 2026-07-08                  | exact purity               | 0        | 0
+ * H1   | latency hit / miss, atlas-2, 200, post-launch | CACHE_LATENCY_MULT         | 0.50     | 0.501 (3,111 vs 6,212 ms)
+ * H1   | cache-hit share of requests after ramp        | 0.5 × 0.7                  | 0.35     | 0.346
+ * H2   | atlas-3 before launch / on Free before Sep 8  | exact purity               | 0        | 0
+ * H2   | atlas-3 share of paid flagship, ramped        | 0.6 × 0.65                 | 0.39     | 0.378
+ * H2   | output tokens atlas-3 / atlas-2, paid         | ATLAS3_OUTPUT_MULT         | 1.30     | 1.303
+ * H2   | atlas-3 share of Free flagship, from Sep 18   | 0.35 × 0.65                | 0.2275   | 0.219
+ * H3   | first-request rate variant / control (7 d)    | QUICKSTART_CONV_MULT       | 1.30     | 1.257 (63.7% vs 50.7%)
+ * H3   | median time to first request variant / ctrl   | QUICKSTART_TTC_MULT        | 0.50     | 0.502 (2.0 vs 4.0 h)
+ * H3   | variant share of exposed accounts             | equal 2-arm hash           | 0.50     | 0.488
+ * H4   | median batch time Scale+Ent / Build           | BATCH_PLAN_MULT.scale      | 0.40     | 0.397 (1.57 vs 3.95 h)
+ * H4   | median batch time Free / Build                | BATCH_PLAN_MULT.free       | 1.60     | 1.586
+ * H5   | D30 retention 2+ / 0 early eval runs          | ≥ 1/(1 − 0.55) (floor)     | ≥ 2.22   | 2.713 (69.7% vs 25.7%, STRONG)
+ * H5   | D30 retention 1 / 0 early eval runs           | ≥ 0.7/0.45 (floor)         | ≥ 1.56   | 1.765 (STRONG)
+ * H6   | us-east / other success, incident vs ±7 days  | 1 − INCIDENT_FAIL          | 0.65     | 0.648
+ * H6   | warehouse error_rate_5xx during the outage    | INCIDENT_FAIL (+1.3% base) | 0.35     | 0.353
+ * H7   | Build swift-2 share Sep / before the cut      | SWIFT_SHIFT_MULT           | 1.60     | 1.635 (29.7% → 48.6%)
+ * H7   | Free swift-2 share Sep / before (control)     | unchanged                  | 1.00     | 0.999
+ * H8   | input tokens tool / plain                     | TOOL_INPUT_MULT            | 2.50     | 2.498 (11,469 vs 4,592)
+ * H8   | tool share of agents requests                 | TOOL_SHARE.agents          | 0.60     | 0.597
+ * H9   | spend per signup hackathons / search ads      | 140 / 85                   | 1.647    | 1.623 ($144.42 vs $88.98)
+ * H9   | 30-day paid rate hackathons / search ads      | 0.35 / 1.0 (ceiling 0.675) | 0.35     | 0.406 (8.2% vs 20.1%, STRONG)
+ * H10  | Build / Free rate-limit rate, Sep vs Aug      | RL_RAISE_MULT              | 0.40     | 0.398
+ * ═════════════════════════════════════════════════════════════════════════
  *
- * ---------------------------------------------------------------
- * 3. AGENTIC LOOP POWER USERS (everything)
- * ---------------------------------------------------------------
- *
- * PATTERN: Users with 3+ "tool use call" AND 3+ api-call events with
- * multi_turn=true — counted on the post-churn stream (Hooks 4 and 8 run
- * first, so the cohort is exactly rebuildable from the output) — get 8x
- * tokens_used on api calls plus 2 extra cloned api-call events per
- * existing (3x volume). Clones carry fresh insert_ids (Mixpanel dedupes
- * on $insert_id — spread-cloning the template id would silently drop
- * every clone at import), unique offset timestamps, and multi_turn=true,
- * which pushes the cohort's multi-turn share to (0.25n + 2n)/3n ≈ 75%
- * vs ~25% baseline — a verifier-visible signature of the 3x volume.
- * COMPOUNDS with Hook 7 (deliberate): agentic ∩ batch users get
- * 8x × 2x = 16x tokens_used — agentic batch workloads are the
- * platform's whales. No flag — discover via cohort builder.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Tokens per User — Agentic Cohort
- *   - Report type: Insights (with cohort)
- *   - Cohort A: users with >= 3 "tool use call" AND >= 3 api-call with multi_turn=true
- *   - Cohort B: rest
- *   - Event: "api call"
- *   - Measure: Average of "tokens_used"
- *   - Expected: A ~ 8x B (16x for the batch overlap — exclude users
- *     with a "batch job submitted" from both cohorts for the clean 8x)
- *
- * REAL-WORLD ANALOGUE: Agentic workloads consume dramatically more
- * tokens via extended tool-use loops.
- *
- * ---------------------------------------------------------------
- * 4. RATE LIMIT CHURN (everything)
- * ---------------------------------------------------------------
- *
- * PATTERN: Users with >= 2 "rate limit error" events in first 7 days
- * churn at 60%: a churned user's ENTIRE post-week-1 stream is dropped
- * (retention cliff), the surviving 40% keep everything. Per-user, not
- * per-event thinning — thinning is unverifiable on a burst-selected
- * cohort (any pre/post ratio inherits the selection week's decay; any
- * cross-user ratio inherits activity selection; measured RoR landed at
- * 0.17 vs the 0.4 knob even stratified on week-1 activity). The cliff
- * gives a selection-free proportion instead: share of flagged users
- * with ZERO post-week-1 events ≈ 0.60 (minus a tiny natural-quiet
- * baseline, which the story cancels by differencing against the
- * unflagged share). Classification basis is pre-week-1 and survives
- * every drop in the file, so the cohort is exactly rebuildable from
- * output. No flag — discover via cohort.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Retention by Early Rate-Limit Cohort
- *   - Report type: Retention
- *   - Cohort A: users with >= 2 "rate limit error" in first 7 days
- *   - Cohort B: rest
- *   - Expected: cohort A's retention collapses to ~40% of cohort B's
- *     from week 2 onward — a hard cliff, not a gradual decay. ~60% of
- *     cohort A never appears again after their first week.
- *
- * REAL-WORLD ANALOGUE: Developers who get rate-limited early often
- * switch to a competitor — and when they go, they go completely.
- *
- * ---------------------------------------------------------------
- * 5. TIER-BASED CONTEXT WINDOW (SUBSCRIPTION TIER — everything)
- * ---------------------------------------------------------------
- *
- * PATTERN: Free users have context_window=200000, Build=1000000,
- * Enterprise=2000000. Enterprise users send 4x larger input_tokens.
- * Context window and input tokens are scaled by tier.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Input Tokens by Tier
- *   - Report type: Insights
- *   - Event: "api call"
- *   - Measure: Average of "input_tokens"
- *   - Breakdown: "api_tier" (superProp)
- *   - Expected: Enterprise ~ 4x Free (Enterprise ~ 8K, Free ~ 2K)
- *
- *   Report 2: Context Window by Tier
- *   - Report type: Insights
- *   - Event: "api call"
- *   - Measure: Average of "context_window"
- *   - Breakdown: "api_tier"
- *   - Expected: Free=200K, Build=1M, Enterprise=2M
- *
- * REAL-WORLD ANALOGUE: Enterprise customers pay for larger context
- * windows and use them for long-document analysis and code review.
- *
- * ---------------------------------------------------------------
- * 6. OUTAGE DAY (TIME-BASED — event)
- * ---------------------------------------------------------------
- *
- * PATTERN: Days 40-41, is_error is set to true on 40% of api call
- * events, error_type is set to a service error, latency_ms is tripled.
- * Baseline api-call error rate is 0% BY SCHEMA (is_error declares
- * [false]; "rate limit error" is a separate event) — the outage is the
- * only source of api-call errors, so the window is exact: ~40% error
- * share inside days 40-41, exactly zero outside.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Error Rate Over Time
- *   - Report type: Insights
- *   - Event: "api call"
- *   - Measure: Total
- *   - Filter: is_error = true
- *   - Line chart by day
- *   - Expected: two-day spike at days 40-41 (~40% of api calls),
- *     flat zero everywhere else
- *
- *   Report 2: Error Types During Outage
- *   - Report type: Insights
- *   - Event: "api call"
- *   - Filter: is_error = true
- *   - Breakdown: "error_type"
- *   - Date range: days 40-41
- *   - Expected: service_overloaded and internal_server_error dominate
- *
- * REAL-WORLD ANALOGUE: API platforms experience periodic outages
- * that spike error rates across all customers.
- *
- * ---------------------------------------------------------------
- * 7. BATCH API DISCOUNT (everything)
- * ---------------------------------------------------------------
- *
- * PATTERN: Users with any "batch job submitted" event (on the
- * post-churn stream — Hooks 4 and 8 run first) get 50% lower
- * cost_per_token on api calls + 2x tokens_used. Mutates raw props.
- * cost_per_token is touched by NO other hook — clean 0.5x.
- * tokens_used COMPOUNDS with Hook 3 (deliberate): agentic ∩ batch
- * users get 2x × 8x = 16x — verified as its own cohort cell.
- * No flag — discover via cohort builder.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Cost per Token by Batch Cohort
- *   - Report type: Insights (with cohort)
- *   - Cohort A: users with >= 1 "batch job submitted"
- *   - Cohort B: rest
- *   - Event: "api call"
- *   - Measure: Average of "cost_per_token"
- *   - Expected: A ~ 0.5x B
- *
- * REAL-WORLD ANALOGUE: Batch API pricing rewards high-volume workloads.
- *
- * ---------------------------------------------------------------
- * 8. EVAL-DRIVEN RETENTION (everything)
- * ---------------------------------------------------------------
- *
- * PATTERN: Users with any "eval job" in first 7 days keep all events.
- * Non-eval users lose 75% of post-day-30 events (25% keep-rate). The
- * classification basis is pre-week-1 and survives every drop in the
- * file, so the cohort is exactly rebuildable from output. No flag —
- * discover via retention cohort.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Retention by Early Eval Cohort
- *   - Report type: Retention
- *   - Cohort A: users with >= 1 "eval job" in first 7 days
- *   - Cohort B: rest
- *   - Expected: cohort B's post-day-30 event volume (relative to its
- *     own first-30-day volume) runs ~0.25x cohort A's — a hard drop in
- *     B's retention curve after day 30. The engineered constant is the
- *     0.25 volume ratio-of-ratios, not a specific D30 percentage.
- *
- * REAL-WORLD ANALOGUE: Teams that set up eval pipelines stick around.
- *
- * ---------------------------------------------------------------
- * 9. API-TO-EVAL TIME-TO-CONVERT (funnel-post)
- * ---------------------------------------------------------------
- *
- * PATTERN: Enterprise users complete the "API to Eval Pipeline" funnel
- * 2x faster than baseline (factor 0.5 on inter-event gaps); Free users
- * 2x slower (factor 2.0). Mutates funnel event timestamps.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: API to Eval — Median Time-to-Convert by Tier
- *   - Report type: Funnels
- *   - Steps: "api call" -> "tool use call" -> "eval job"
- *   - Measure: Median time to convert
- *   - Breakdown: "api_tier"
- *   - Expected: Enterprise < Build < Free, Enterprise well under
- *     Build's median, Free well over. The measured ratios sit between
- *     the pure factors (0.5x / 2.0x) and 1: greedy first-match funnel
- *     evaluation (Mixpanel's and the emulator's) pairs organic events
- *     into instances, diluting toward 1 — and dilution is asymmetric
- *     (stretched Free gaps intercept more organic events than
- *     compressed Enterprise gaps). The factors are 0.5/2.0 precisely
- *     so the report-visible signal survives that dilution.
- *
- *   NOTE (funnel-post measurement): visible via funnel median TTC
- *   (Mixpanel report or emulateBreakdown timeToConvert). Cross-event
- *   MIN→MIN SQL on raw events does NOT show this — funnel-post adjusts
- *   gaps within funnel instances, not across the user's full history.
- *
- * REAL-WORLD ANALOGUE: Enterprise teams have dedicated platform engineers
- * who execute end-to-end pipelines faster.
- *
- * ---------------------------------------------------------------
- * 10. DOCS-SEARCHED MAGIC NUMBER (in-funnel, everything)
- * ---------------------------------------------------------------
- *
- * PATTERN: Count "docs searched" events strictly between the EARLIEST
- * organization-created and the EARLIEST billing-payment (by time, not
- * array order). Sweet 1-2 → amount_usd × 1.35 on ALL billing payments.
- * Over 3+ → amount_usd × 0.75 on ALL billing payments. Zero docs →
- * untouched baseline. Only born-in-dataset users have an organization
- * created event AND a billing payment (~4.6% of users), so thresholds
- * are calibrated to the real docs_ct distribution in that segment
- * (measured 0/1/2/3/4/5+ ≈ 43/19/14/12/10/2 per-cent — the old 5+
- * "over" bin held ~7 users at full fidelity, a dead branch). Both
- * effects are amount mutations, deliberately: amount_usd draws iid
- * from the declared distribution regardless of user activity, so
- * median ratios recover the knobs selection-free — count effects on
- * ~100-user cohorts drown in activity-selection bias (a placebo test
- * on the untouched 3+ cohort read 1.22-1.30 under the best count
- * normalizer we found). No flag.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Median Billing Amount by Docs-Searched Bucket
- *   - Report type: Insights (with cohort)
- *   - Cohort A: users with 1-2 "docs searched" between org creation and
- *     first billing; Cohort B: users with 0; Cohort C: users with 3+
- *   - Event: "billing payment"
- *   - Measure: Median of "amount_usd"
- *   - Expected: A ~ 1.35x B; C ~ 0.75x B
- *
- * REAL-WORLD ANALOGUE: A little docs reading lifts willingness to pay;
- * doc obsession signals a team stuck on integration that downgrades.
- *
- * ===============================================================
- * EXPECTED METRICS SUMMARY
- * ===============================================================
- *
- * Hook                        | Metric                                   | Expected      | Measured (full)
- * ----------------------------|-------------------------------------------|---------------|----------------
- * H1 Prompt Caching           | avg cost_usd cached/uncached              | 0.3x          | 0.3005
- * H1 Prompt Caching           | share of users with any cached call       | ~25%          | 0.2297
- * H2 Model Migration          | opus-4-7 pre-day-60 / Free / non-api-call | 0 (exact)     | 0 of 35975
- * H2 Model Migration          | opus-4-7 share, paid calls post-day-60    | ~35%          | 0.3484
- * H2 Model Migration          | tokens opus/other (non-agentic/non-batch) | 1.5x          | 1.461
- * H3 Agentic Power Users      | avg tokens agentic-only / neither         | 8x            | 7.875
- * H3 Agentic Power Users      | avg tokens agentic∩batch / neither        | 16x (with H7) | 15.97
- * H3 Agentic Power Users      | multi-turn share of agentic api calls     | ~75% (3x vol) | 0.7644
- * H4 Rate Limit Churn         | zero-post-week-1 share, flagged − rest    | ~+0.60 diff   | +0.6072 (flagged 0.6079)
- * H5 Tier Context Window      | avg input_tokens Enterprise / Free        | 4x            | 3.984
- * H5 Tier Context Window      | context_window per tier                   | 200K/1M/2M    | exact (min=max per tier)
- * H6 Outage Day               | api-call error share, days 40-41          | ~40% (0% out) | 0.3996 (0 out-of-window)
- * H7 Batch Discount           | avg cost_per_token batch / rest           | 0.5x          | 0.4968
- * H7 Batch Discount           | avg tokens batch-only / neither           | 2x            | 2.159
- * H8 Eval Retention           | post/pre day-30 volume, noneval vs eval   | 0.25x RoR     | 0.2552
- * H9 API-to-Eval TTC          | funnel median TTC: Ent/Build, Free/Build  | <1 / >1 (0.5, 2.0 pure; diluted) | 0.6606 / 1.263 (emulator, 336h window)
- * H10 Docs Magic Number       | median amount_usd sweet(1-2) / zero       | 1.35x         | 1.456
- * H10 Docs Magic Number       | median amount_usd over(3+) / zero         | 0.75x         | 0.8371
+ * H5's reads are knob floors: busier teams both run more evals and are likelier
+ * to be active in the day-30 week even without the dark cut, so engagement adds
+ * to the gap. H9's conversion read rests on 41 hackathon and 144 search-ads
+ * buyers inside the 30-day window (relative SE of the ratio about 17%); it lands
+ * outside the knob's ±10% and grades STRONG against its knob-derived ceiling.
+ * Event volume is ~0.84M (not 1.4M): new accounts that never make a first
+ * request stop early, Free accounts keep 30% of their request events, and
+ * batch, eval, invite, and key-rotation volume is thinned to adopters.
  */
 
 // ── SCALE ──
 const SEED = "promptforge";
 const NUM_USERS = 10_000;
-const DATASET_START = "2026-01-01T00:00:00Z";
-const DATASET_END = "2026-05-01T23:59:59Z";
-const EVENTS_PER_DAY = 0.83;
+const DATASET_START = "2026-06-04T00:00:00Z";
+const DATASET_END = "2026-10-01T23:59:59Z"; // 120 days
+const EVENTS_PER_DAY = 1.2;
 const token = process.env.MP_TOKEN || "your-mixpanel-token";
 
 const chance = u.initChance(SEED);
 
-// ── KNOBS (tweak these to reshape stories) ──
-const OUTAGE_START_DAY = 40;
-const OUTAGE_END_DAY = 42;
-const OUTAGE_ERROR_LIKELIHOOD = 40;
-const OUTAGE_LATENCY_MULT = 3;
+// ── TIMELINE (shared by hooks, stories, SQL, warehouse columns, guides) ──
+const QUICKSTART_START = "2026-07-01T00:00:00Z"; // "Interactive Quickstart" onboarding A/B starts
+const CACHE_LAUNCH = "2026-07-08T00:00:00Z";     // prompt caching generally available
+const ATLAS3_LAUNCH = "2026-07-28T00:00:00Z";    // atlas-3 for Build, Scale, Enterprise
+const SWIFT_PRICE_CUT = "2026-08-18T00:00:00Z";  // swift-2 list price halved
+const INCIDENT_START = "2026-08-26T00:00:00Z";   // us-east GPU capacity incident
+const INCIDENT_END = "2026-08-28T00:00:00Z";     // exclusive (2 days)
+const RATE_LIMIT_RAISE = "2026-09-01T00:00:00Z"; // Build tier rate limits raised
+const ATLAS3_FREE = "2026-09-08T00:00:00Z";      // atlas-3 opens to Free accounts
 
-const TIER_CONTEXT_WINDOW = { Free: 200000, Build: 1000000, Enterprise: 2000000 };
-const TIER_INPUT_MULT = { Free: 1, Build: 2, Enterprise: 4 };
+const ms = (iso) => dayjs.utc(iso).valueOf();
+const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
+const MIN_MS = 60_000;
+const D0 = DATASET_START.slice(0, 10);
 
-const CACHE_USER_HASH_MOD = 4;
-const CACHE_COST_FACTOR = 0.3;
-const CACHE_ACTIVATION_PCT = 0.2;
+// ── WEEKLY AND DAILY RHYTHM (soup) ──
+// Sun..Sat. Developers build on weekdays; production traffic keeps weekends alive.
+const DOW_WEIGHTS = [0.6, 1.0, 1.0, 0.98, 0.96, 0.86, 0.56];
+// UTC hours: EMEA working hours (07-16 UTC) overlap the Americas (13-01 UTC).
+const HOUR_WEIGHTS = [0.5, 0.42, 0.34, 0.28, 0.26, 0.28, 0.36, 0.5, 0.64, 0.74, 0.8, 0.82,
+	0.86, 0.94, 1.0, 1.0, 0.98, 0.94, 0.88, 0.8, 0.72, 0.66, 0.6, 0.55];
 
-const MODEL_MIGRATION_DAY = 60;
-const MODEL_MIGRATION_LIKELIHOOD = 35;
-const MODEL_MIGRATION_TOKEN_MULT = 1.5;
-// pre-release model mix — the declared api-call enum minus opus-4-7. H2
-// rewrites engine-sampled opus-4-7 back to this mix so the model exists only
-// after release day (schema-first requires opus-4-7 in the declared enum).
-const PRE_RELEASE_MODELS = ["sonnet-4", "sonnet-4", "sonnet-4", "haiku-4", "haiku-4", "opus-4-6"];
+// ── KNOBS ──
+const API_SAMPLE_RATE = 1000; // one api request event = 1,000 metered requests
+const FREE_TRAFFIC_KEEP = 0.3; // Free accounts: small, throttled workloads (share of request events kept)
+const PLAN_TRAFFIC_MULT = { free: 1, build: 1, scale: 2, enterprise: 3 }; // request volume vs a Build account
+const API_BURST_LEN = 8;     // sampled requests per traffic burst (usage funnel)
+const API_TRAFFIC_WEIGHT = 8;
 
-const AGENTIC_TOOL_THRESHOLD = 3;
-const AGENTIC_MULTITURN_THRESHOLD = 3;
-const AGENTIC_TOKEN_MULT = 8;
-const AGENTIC_CLONE_MULT = 2;
+// models and list prices (USD per million tokens)
+const MODELS = ["atlas-2", "swift-2", "atlas-3"];
+const PRICE_IN = { "atlas-2": 3, "atlas-3": 3, "swift-2": 0.8 };
+const PRICE_OUT = { "atlas-2": 15, "atlas-3": 15, "swift-2": 4 };
+const SWIFT_PRICE_CUT_FACTOR = 0.5;     // swift-2 list price after the cut
+const CACHED_INPUT_PRICE_SHARE = 0.1;   // cached input tokens bill at 10% of the input price
+// request size and speed
+const INPUT_MEDIAN = 3200, INPUT_SIGMA = 0.85, INPUT_MIN = 20, INPUT_MAX = 180_000;
+const OUTPUT_MEDIAN = 520, OUTPUT_SIGMA = 0.75, OUTPUT_MAX = 8192;
+const TTFT_BASE_MS = 250, TTFT_MS_PER_INPUT = 0.04;
+const MS_PER_OUTPUT_TOKEN = { "atlas-2": 8, "atlas-3": 8, "swift-2": 3.5 };
+const LATENCY_SIGMA = 0.25;
 
-const RATE_LIMIT_THRESHOLD = 2;
-// per-USER churn probability: a churned user loses ALL post-week-1 events
-const RATE_LIMIT_CHURN_LIKELIHOOD = 60;
+// H1 prompt caching (all plans) from CACHE_LAUNCH
+const CACHE_ADOPTER_SHARE = 0.5;   // share of accounts that turn caching on (salted)
+const CACHE_RAMP_DAYS = 21;        // each adopter starts on a salted day in the 3 weeks after launch
+const CACHE_HIT_MEAN = 0.7;        // per adopter: share of requests served from cache, uniform ±0.2
+const CACHE_HIT_SPREAD = 0.2;
+const CACHE_HIT_SHARE = CACHE_ADOPTER_SHARE * CACHE_HIT_MEAN; // 0.35 of requests once ramped
+const CACHE_LATENCY_MULT = 0.5;    // latency of a cache hit vs a miss
+const CACHE_PREFIX_MIN = 0.5;      // cached share of a hit's input tokens, uniform 0.5-0.9
+const CACHE_PREFIX_MAX = 0.9;
 
-const BATCH_COST_FACTOR = 0.5;
-const BATCH_TOKEN_MULT = 2;
+// H2 atlas-3 launch (paid plans) and Free access
+const ATLAS3_PAID_ADOPTERS = 0.6;  // share of paid accounts that adopt (salted)
+const ATLAS3_FREE_ADOPTERS = 0.35; // share of Free accounts that adopt after Free access
+const ATLAS3_RAMP_DAYS = 21;
+const ATLAS3_FREE_RAMP_DAYS = 10;
+const ATLAS3_USE_MEAN = 0.65;      // per adopter: share of flagship requests on atlas-3, uniform ±0.2
+const ATLAS3_USE_SPREAD = 0.2;
+const ATLAS3_FLAGSHIP_SHARE = ATLAS3_PAID_ADOPTERS * ATLAS3_USE_MEAN; // 0.39 of paid flagship requests
+const ATLAS3_OUTPUT_MULT = 1.3;    // atlas-3 answers are longer
+const PAID_PLANS = ["build", "scale", "enterprise"];
 
-const EVAL_NON_USER_KEEP_LIKELIHOOD = 25;
-const EVAL_CUTOFF_DAYS = 30;
+// H7 swift-2 price cut: Build accounts (list-price customers) move traffic to swift-2
+const SWIFT_BASE_MIN = 0.15;       // per account base swift-2 share, uniform 0.15-0.45
+const SWIFT_BASE_MAX = 0.45;
+const SWIFT_SHIFT_MULT = 1.6;      // Build swift-2 share after the cut
+const SWIFT_SHIFT_RAMP_DAYS = 10;  // each Build account switches on a salted day in the 10 days after
 
-// bins calibrated to the measured docs_ct distribution among org∩billing
-// users (~4.6% of users): 0 ≈ 43%, 1-2 ≈ 33%, 3+ ≈ 24% — every cohort
-// clears ~100 users at full fidelity (the old 5+ bin held ~7: dead branch)
-const DOCS_SWEET_MIN = 1;
-const DOCS_SWEET_MAX = 2;
-const DOCS_OVER_THRESHOLD = 3;
-const DOCS_BILLING_BOOST = 1.35;
-const DOCS_OVER_PENALTY = 0.75;
+// H3 Interactive Quickstart experiment on onboarding
+const QUICKSTART_EXPERIMENT = "Interactive Quickstart";
+const QUICKSTART_VARIANT = "Interactive Quickstart";
+const EXP_KEY = `Experiment: ${QUICKSTART_EXPERIMENT}`;
+const ONBOARD_CONV = 50;
+const ONBOARD_TTC_H = 6;
+const QUICKSTART_CONV_MULT = 1.3;
+const QUICKSTART_TTC_MULT = 0.5;
 
-// 0.5/2.0 (not the 1.5 file's 0.67/1.4): greedy first-match funnel pairing
-// dilutes measured TTC ratios toward 1 — these factors keep the report-
-// visible signal clear of noise after dilution
-const FUNNEL_TTC_ENTERPRISE = 0.5;
-const FUNNEL_TTC_FREE = 2.0;
+// H4 batch turnaround by plan
+const BATCH_MEDIAN_H = 4;          // base median submit → complete (Build)
+const BATCH_SIGMA = 0.55;
+const BATCH_PLAN_MULT = { free: 1.6, build: 1, scale: 0.4, enterprise: 0.4 };
+const BATCH_SLA_H = 24;            // jobs not finished in 24 h expire
+const BATCH_SHARE = { individual: 0.15, startup: 0.3, growth: 0.45, enterprise: 0.6 };
 
-// ── HELPER FUNCTIONS ──
-function handleFunnelPostHooks(record, meta) {
-	// H9: API-to-Eval TTC scaled by tier
-	const segment = meta?.profile?.api_tier;
-	if (Array.isArray(record) && record.length > 1) {
-		const factor = (
-			segment === "Enterprise" ? FUNNEL_TTC_ENTERPRISE :
-			segment === "Free" ? FUNNEL_TTC_FREE :
-			1.0
-		);
-		if (factor !== 1.0) {
-			for (let i = 1; i < record.length; i++) {
-				const prev = dayjs(record[i - 1].time);
-				const newGap = Math.round(dayjs(record[i].time).diff(prev) * factor);
-				record[i].time = prev.add(newGap, "milliseconds").toISOString();
-			}
+// H5 first-two-weeks evals → retention (new API accounts)
+const EVAL_DAYS = 14;
+const EVAL_MIN = 2;                 // eval runs in the first 14 days that mark an evaluating team
+const DARK_SHARE_BY_EVALS = [0.55, 0.3]; // share who go dark after day 21, by early eval runs (0, 1); 2+ → 0
+const DARK_AFTER_DAYS = 21;
+const EVAL_SHARE = { ml_engineer: 0.7, data_scientist: 0.6, backend_developer: 0.35, founder: 0.25 };
+const EVAL_SHARE_NEW_BOOST = 0.1;
+const EVAL_WEIGHT_NEW = 5;           // Evals funnel weight for accounts that joined in the window
+const LAPSE_SHARE = 0.55;           // organic lapse, every new API account
+const LAPSE_DAY_MIN = 7;
+const LAPSE_DAY_MAX = 90;
+const NO_KEY_ABANDON_SHARE = 0.9;   // accounts that never make a first request: share who stop in day 0.5-7
+const NO_KEY_ABANDON_MIN = 0.5;
+const NO_KEY_ABANDON_MAX = 7;
+
+// H6 us-east GPU capacity incident (warehouse inference_fleet_daily)
+const REGIONS = ["us-east", "us-west", "eu-west"];
+const INCIDENT_REGION = "us-east";
+const INCIDENT_FAIL = 0.35;         // share of would-be successful us-east requests that fail (529)
+const INCIDENT_LATENCY_MULT = 2;    // latency of the us-east requests that still succeed
+const BASE_STATUS = { 200: 0.975, 400: 0.012, 500: 0.004, 529: 0.009 };
+const REGION_GPUS = { "us-east": 2400, "us-west": 1600, "eu-west": 1400 };
+// first-party apps and internal eval pipelines served by the fleet every day (no product event), metered requests per day
+const INTERNAL_REQS_PER_DAY = { "us-east": 900_000, "us-west": 640_000, "eu-west": 440_000 };
+
+// H8 tool use (agent workloads)
+const TOOL_SHARE_BY_USE_CASE = { agents: 0.6, coding: 0.3, chat_assistant: 0.06, document_processing: 0.05, content_generation: 0.04 };
+const TOOL_INPUT_MULT = 2.5;        // tool definitions and tool results ride in the prompt
+
+// H9 developer marketing (warehouse developer_marketing_daily)
+const PAID_CHANNELS = ["search_ads", "newsletter_sponsorships", "hackathons"];
+const CPL_USD = { search_ads: 85, newsletter_sponsorships: 55, hackathons: 140 }; // window cost per Mixpanel signup
+const CHANNEL_WEIGHTS = { organic: 24, github: 14, referral: 12, search_ads: 20, newsletter_sponsorships: 16, hackathons: 14 };
+const BORN_PCT = 50;
+const WINDOW_DAYS = 120;
+const DAILY_BUDGET_USD = Object.fromEntries(PAID_CHANNELS.map((ch) => {
+	const totalW = Object.values(CHANNEL_WEIGHTS).reduce((a, b) => a + b, 0);
+	return [ch, CPL_USD[ch] * (NUM_USERS * BORN_PCT / 100) * (CHANNEL_WEIGHTS[ch] / totalW) / WINDOW_DAYS];
+}));
+const SPEND_FLAT_SHARE = 0.3;
+const SPEND_WEEKDAY = (() => {
+	const m = DOW_WEIGHTS.reduce((a, b) => a + b, 0) / DOW_WEIGHTS.length;
+	return DOW_WEIGHTS.map((w) => SPEND_FLAT_SHARE + (1 - SPEND_FLAT_SHARE) * w / m);
+})();
+const SPEND_NOISE = 0.15;
+const PLATFORM_SIGNUP_INFLATION = 1.2;
+const CPC_USD = { search_ads: 6.5, newsletter_sponsorships: 3.2, hackathons: 9 };
+const CTR = { search_ads: 0.03, newsletter_sponsorships: 0.012, hackathons: 0.05 };
+// self-serve upgrades (Free → Build)
+const UPGRADE_BASE = 0.4;           // would-be upgraders among new API accounts, before channel quality
+const UPGRADE_KEEP = { search_ads: 1.0, referral: 1.0, newsletter_sponsorships: 0.85, github: 0.8, organic: 0.75, hackathons: 0.35 };
+const UPGRADE_LAG_MEDIAN_D = 3;
+const UPGRADE_LAG_SIGMA = 1.1;
+const UPGRADE_RECENT_DAYS = 30;     // accounts that joined this close before June 4 follow the new-account rule
+const UPGRADE_ESTABLISHED = 0.05;   // long-time Free accounts that upgrade in the window
+const PAID_FUNNEL_WINDOW_DAYS = 30;
+const PAID_COHORT_END = "2026-09-01T00:00:00Z"; // exclusive
+
+// H10 Build rate limits raised
+const RL_KEEP = { free: 1, build: 0.35, scale: 0.1, enterprise: 0.05 };
+const RL_RAISE_MULT = 0.4;          // Build rate-limit episodes per request after the raise
+
+// realism: collaboration and housekeeping volume
+const INVITE_KEEP = { individual: 0.05, startup: 0.3, growth: 0.5, enterprise: 0.6 };
+const KEY_ROTATE_KEEP = 0.3;
+
+// ── DATA ARRAYS ──
+const SIZE_WEIGHTS_NEW = { individual: 45, startup: 35, growth: 14, enterprise: 6 };
+const SIZE_WEIGHTS_EST = { individual: 25, startup: 35, growth: 25, enterprise: 15 };
+const PLAN_MIX_EST = {
+	individual: { free: 60, build: 38, scale: 2, enterprise: 0 },
+	startup: { free: 30, build: 55, scale: 13, enterprise: 2 },
+	growth: { free: 12, build: 45, scale: 33, enterprise: 10 },
+	enterprise: { free: 5, build: 20, scale: 30, enterprise: 45 },
+};
+const USE_CASE_WEIGHTS = { chat_assistant: 26, coding: 22, document_processing: 20, agents: 18, content_generation: 14 };
+const SDK_WEIGHTS = { python: 50, typescript: 30, java: 8, go: 7, rest: 5 };
+const EU_ROUTED = new Set(["GB", "DE", "FR", "IT", "ES", "RU", "TR", "IL", "ZA", "NG", "EG"]);
+const WEST_ROUTED = new Set(["CN", "JP", "IN", "AU", "KR"]);
+const US_WEST_STATES = new Set(["California", "Washington", "Oregon", "Nevada", "Arizona", "Colorado", "Utah", "Idaho", "Montana", "Wyoming", "New Mexico", "Alaska", "Hawaii"]);
+const API_EVENTS = new Set(["api request", "rate limit hit", "batch job submitted", "batch job completed", "eval run started", "eval run completed", "api key rotated"]);
+
+// ── HELPERS ──
+const salt = (uid, tag) => hashFloat(`${uid}|${tag}`);
+const round2 = (n) => Math.round(n * 100) / 100;
+const T = (e) => dayjs.utc(e.time).valueOf();
+const dayKey = (t) => new Date(t).toISOString().slice(0, 10);
+const jitter = (key, spread) => 1 + (hashFloat(key) - 0.5) * 2 * spread;
+const logNormal = (sigma) => Math.exp(chance.normal({ mean: 0, dev: sigma }));
+const pickWeighted = (weights, r) => {
+	const entries = Object.entries(weights);
+	const total = entries.reduce((s, [, w]) => s + w, 0);
+	let acc = 0;
+	for (const [k, w] of entries) {
+		acc += w / total;
+		if (r < acc) return k;
+	}
+	return entries[entries.length - 1][0];
+};
+const inIncident = (t) => t >= ms(INCIDENT_START) && t < ms(INCIDENT_END);
+const priceIn = (model, t) => PRICE_IN[model] * (model === "swift-2" && t >= ms(SWIFT_PRICE_CUT) ? SWIFT_PRICE_CUT_FACTOR : 1);
+const priceOut = (model, t) => PRICE_OUT[model] * (model === "swift-2" && t >= ms(SWIFT_PRICE_CUT) ? SWIFT_PRICE_CUT_FACTOR : 1);
+const listValueUsd = (model, t, inTok, cached, outTok) =>
+	((inTok - cached) * priceIn(model, t) + cached * priceIn(model, t) * CACHED_INPUT_PRICE_SHARE + outTok * priceOut(model, t)) / 1e6;
+const paidSpend = (date, ch) => round2(DAILY_BUDGET_USD[ch] * SPEND_WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()] * jitter(`spend|${date}|${ch}`, SPEND_NOISE));
+// seeded log-normal lag from a uniform salt (inverse normal CDF, Acklam's rational approximation)
+const invNorm = (p) => {
+	const a = [-39.69683028665376, 220.9460984245205, -275.9285104469687, 138.357751867269, -30.66479806614716, 2.506628277459239];
+	const b = [-54.47609879822406, 161.5858368580409, -155.6989798598866, 66.80131188771972, -13.28068155288572];
+	const c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+	const d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996, 3.754408661907416];
+	const q0 = Math.min(Math.max(p, 1e-9), 1 - 1e-9);
+	if (q0 < 0.02425) {
+		const q = Math.sqrt(-2 * Math.log(q0));
+		return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+	}
+	if (q0 > 1 - 0.02425) {
+		const q = Math.sqrt(-2 * Math.log(1 - q0));
+		return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+	}
+	const q = q0 - 0.5, r = q * q;
+	return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+};
+const upgradeLagMs = (uid) => UPGRADE_LAG_MEDIAN_D * Math.exp(UPGRADE_LAG_SIGMA * invNorm(salt(uid, "upgrade-lag"))) * DAY_MS;
+const routeRegion = (profile) => {
+	const cc = profile.country_code;
+	if (EU_ROUTED.has(cc)) return "eu-west";
+	if (WEST_ROUTED.has(cc)) return "us-west";
+	if (cc === "US" && US_WEST_STATES.has(profile.region)) return "us-west";
+	return "us-east";
+};
+
+// warehouse accumulators: per-account usage, rebuilt into day aggregates on demand
+// (keyed by account so a repeated generation in one process overwrites, never doubles)
+const USAGE_BY_USER = new Map();
+let usageAgg = null;
+const ONBOARD_REQ_IDS = new Set();
+const UPGRADE_BANK = { upgrade: null, view: null }; // first upgrade pass any account produced // insert_id of each onboarding funnel's first api request
+
+function buildUsageAgg() {
+	const byModel = new Map();
+	const byRegion = new Map();
+	for (const rec of USAGE_BY_USER.values()) {
+		for (const [k, v] of rec.byModel) {
+			const a = byModel.get(k) || { ok: 0, inTok: 0, cached: 0, outTok: 0, freeUsd: 0 };
+			a.ok += v.ok; a.inTok += v.inTok; a.cached += v.cached; a.outTok += v.outTok; a.freeUsd += v.freeUsd;
+			byModel.set(k, a);
 		}
+		for (const [k, v] of rec.byRegion) {
+			const a = byRegion.get(k) || { req: 0, err5xx: 0 };
+			a.req += v.req; a.err5xx += v.err5xx;
+			byRegion.set(k, a);
+		}
+	}
+	return { byModel, byRegion };
+}
+
+function handleUserHook(profile, meta) {
+	const uid = profile.distinct_id;
+	const born = meta.userIsBornInDataset;
+	profile.company_size = pickWeighted(born ? SIZE_WEIGHTS_NEW : SIZE_WEIGHTS_EST, salt(uid, "size"));
+	profile.use_case = pickWeighted(USE_CASE_WEIGHTS, salt(uid, "use-case"));
+	profile.sdk_language = pickWeighted(SDK_WEIGHTS, salt(uid, "sdk"));
+	profile.inference_region = routeRegion(profile);
+	if (born) {
+		profile.plan_tier = "free";
+		profile.customer_since = dayKey(ms(profile.created ?? meta.user.created));
+		return profile;
+	}
+	// established accounts: tenure skews recent (the platform is growing), capped at the API launch (2024-03-01)
+	const maxTenure = Math.round((ms(DATASET_START) - ms("2024-03-01T00:00:00Z")) / DAY_MS);
+	const tenureDays = Math.min(maxTenure, -Math.log(1 - salt(uid, "tenure") * 0.999) * 200);
+	const sinceMs = ms(DATASET_START) - tenureDays * DAY_MS;
+	profile.customer_since = dayKey(sinceMs);
+	if (tenureDays < UPGRADE_RECENT_DAYS) {
+		// recent accounts follow the new-account upgrade rule; an upgrade due before June 4 already happened
+		const upgrader = salt(uid, "upgrader") < UPGRADE_BASE * (UPGRADE_KEEP[profile.acquisition_channel] ?? 1);
+		profile.plan_tier = upgrader && sinceMs + upgradeLagMs(uid) < ms(DATASET_START) ? "build" : "free";
+		return profile;
+	}
+	profile.plan_tier = pickWeighted(PLAN_MIX_EST[profile.company_size], salt(uid, "plan"));
+	return profile;
+}
+
+function handleFunnelPost(record, meta) {
+	if (meta && meta.isFirstFunnel && Array.isArray(record)) {
+		const req = record.find((e) => e.event === "api request");
+		if (req && req.insert_id) ONBOARD_REQ_IDS.add(req.insert_id);
 	}
 	return record;
 }
 
-function handleEverythingHooks(record, meta) {
-	const datasetStart = dayjs.unix(meta.datasetStart);
-	let events = record;
-	if (!events.length) return record;
-	const profile = meta && meta.profile ? meta.profile : {};
+function handleEverything(events, meta) {
+	if (!events.length) return events;
+	const profile = meta.profile;
+	const uid = profile.distinct_id;
+	const END = ms(DATASET_END);
+	const signup = events.find((e) => e.event === "account created");
+	const birthMs = signup ? T(signup) : null;
 
-	// ── ORDERING ──
-	// types.d.ts (HookMetaEverything) recommends stamp → mutate/clone → filter →
-	// temporal. This file deliberately diverges in ONE spot, documented here: the
-	// cohort-classified mutators (H3 agentic, H7 batch, H10 docs) run AFTER the
-	// filters (H4, H8) so each cohort's classification basis is exactly the
-	// surviving event stream. Classifying pre-drop makes the cohort unrecoverable
-	// from the output (the verifier cannot see dropped events) — the 1.5 file
-	// classified H3 before H4/H8's drops and its verifier "confirmed" 8x against
-	// a leaky cohort at 1.5x. None of H3/H7/H10 anchors on a dataset-day window,
-	// so post-filter classification costs nothing temporally. H6 (outage window)
-	// runs LAST per the types.d.ts rule so H3's clones landing inside days 40-41
-	// get error-stamped like every other call.
+	// ── onboarding outcome: no first request → no working integration ──
+	const onboarded = !signup || events.some((e) => ONBOARD_REQ_IDS.has(e.insert_id));
+	if (!onboarded) events = events.filter((e) => !API_EVENTS.has(e.event));
 
-	// ── PHASE 1: stamps ──
-	events.forEach(e => {
-		if (profile.api_tier) e.api_tier = profile.api_tier;
-		if (profile.primary_use_case) e.primary_use_case = profile.primary_use_case;
-		if (profile.sdk_language) e.sdk_language = profile.sdk_language;
+	// ── adoption and volume realism (whole linked units) ──
+	const batchUser = salt(uid, "batch") < (BATCH_SHARE[profile.company_size] ?? 0.3);
+	const batchIntensity = 0.3 + 0.7 * salt(uid, "batch-int");
+	const evalUser = salt(uid, "eval") < (EVAL_SHARE[profile.primary_role] ?? 0.35) + (signup ? EVAL_SHARE_NEW_BOOST : 0);
+	const evalIntensity = 0.3 + 0.7 * salt(uid, "eval-int");
+	const unitKeep = new Map();
+	const keepUnit = (id, keepShare) => {
+		if (!unitKeep.has(id)) unitKeep.set(id, chance.bool({ likelihood: keepShare * 100 }));
+		return unitKeep.get(id);
+	};
+	events = events.filter((e) => {
+		if (e.event === "batch job submitted" || e.event === "batch job completed") return batchUser && keepUnit(e.batch_id, batchIntensity);
+		if (e.event === "eval run started" || e.event === "eval run completed") return evalUser && keepUnit(e.eval_id, evalIntensity);
+		if (e.event === "member invited") {
+			if (signup && T(e) < birthMs + 14 * DAY_MS) return chance.bool({ likelihood: Math.min(1, (INVITE_KEEP[profile.company_size] ?? 0.3) * 2) * 100 });
+			return chance.bool({ likelihood: (INVITE_KEEP[profile.company_size] ?? 0.3) * 100 });
+		}
+		if (e.event === "api key rotated") return chance.bool({ likelihood: KEY_ROTATE_KEEP * 100 });
+		return true;
 	});
 
-	// H5: Tier-based context window & input tokens
-	const tier = profile.api_tier || "Free";
-	const contextWindow = TIER_CONTEXT_WINDOW[tier] ?? TIER_CONTEXT_WINDOW.Free;
-	const inputMultiplier = TIER_INPUT_MULT[tier] ?? TIER_INPUT_MULT.Free;
-	events.forEach(e => {
-		if (e.event === "api call") {
-			e.context_window = contextWindow;
-			e.input_tokens = Math.floor((e.input_tokens || 2000) * inputMultiplier);
+	// upgrade template: the account's first engine-generated upgrade pass and its billing page
+	// view, moved to the hook's upgrade moment below. An account with no pass of its own gets a
+	// clone of the first pass any account produced (identity and location re-stamped).
+	const upgrades = events.filter((e) => e.event === "plan upgraded").sort((a, b) => T(a) - T(b));
+	let template = upgrades[0] || null;
+	let templateView = null;
+	if (template) {
+		const tt = T(template);
+		for (const e of events) if (e.event === "billing page viewed" && T(e) <= tt && (!templateView || T(e) > T(templateView))) templateView = e;
+		if (!UPGRADE_BANK.upgrade) {
+			UPGRADE_BANK.upgrade = { ...template };
+			UPGRADE_BANK.view = templateView ? { ...templateView } : null;
 		}
-	});
+	}
+	events = events.filter((e) => e.event !== "plan upgraded");
+	const loc = (({ country, country_code, region, city }) => ({ country, country_code, region, city }))(events[0] || {});
 
-	// H1: Prompt caching adoption — ~25% of users; activates ~20% into stream.
-	// Hash the PROFILE distinct_id, not events[0].user_id: the 1.5 file hashed
-	// events[0].user_id, which is undefined on device-only records —
-	// String(undefined || "") reduces to 0 and 0 % 4 === 0, silently classifying
-	// every such user as a cache user.
-	const hashBasis = String(profile.distinct_id || (events.find(e => e.user_id) || {}).user_id || "");
-	const idHash = hashBasis.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0);
-	const isCacheUser = hashBasis.length > 0 && (idHash % CACHE_USER_HASH_MOD) === 0;
-	if (isCacheUser) {
-		let cacheActivated = false;
-		const activationPoint = Math.floor(events.length * CACHE_ACTIVATION_PCT);
-		events.forEach((e, idx) => {
-			if (e.event === "api call") {
-				if (idx >= activationPoint) cacheActivated = true;
-				if (cacheActivated) {
-					e.cache_enabled = true;
-					e.cost_usd = Math.round((e.cost_usd || 0.01) * CACHE_COST_FACTOR * 10000) / 10000;
+	// ── new-account lifecycle: abandonment, organic lapse, H5 eval-driven retention ──
+	let cutMs = Infinity;
+	if (signup) {
+		if (!onboarded) {
+			if (salt(uid, "abandon") < NO_KEY_ABANDON_SHARE) cutMs = birthMs + (NO_KEY_ABANDON_MIN + salt(uid, "abandon-day") * (NO_KEY_ABANDON_MAX - NO_KEY_ABANDON_MIN)) * DAY_MS;
+		} else {
+			if (salt(uid, "lapse") < LAPSE_SHARE) cutMs = birthMs + (LAPSE_DAY_MIN + salt(uid, "lapse-day") * (LAPSE_DAY_MAX - LAPSE_DAY_MIN)) * DAY_MS;
+			const pre = events.filter((e) => T(e) < cutMs);
+			const early = pre.filter((e) => e.event === "eval run started" && T(e) < birthMs + EVAL_DAYS * DAY_MS).length;
+			const dark = early < EVAL_MIN ? DARK_SHARE_BY_EVALS[early] : 0;
+			if (salt(uid, "dark") < dark) cutMs = Math.min(cutMs, birthMs + DARK_AFTER_DAYS * DAY_MS);
+		}
+		// completions are system-sent: a job or eval started before the account went quiet still finishes
+		if (cutMs < Infinity) events = events.filter((e) => T(e) < cutMs || e.event === "batch job completed" || e.event === "eval run completed");
+	}
+	const lastMs = events.reduce((m, e) => (e.event.endsWith("completed") ? m : Math.max(m, T(e))), 0);
+
+	// ── self-serve upgrade (Free → Build): who and when ──
+	const initialPlan = profile.plan_tier;
+	let upgradeMs = Infinity;
+	if (initialPlan === "free" && (template || UPGRADE_BANK.upgrade)) {
+		const sinceMs = signup ? birthMs : ms(`${profile.customer_since}T12:00:00Z`);
+		const recent = signup || sinceMs >= ms(DATASET_START) - UPGRADE_RECENT_DAYS * DAY_MS;
+		let target = null;
+		if (recent) {
+			const upgrader = salt(uid, "upgrader") < UPGRADE_BASE * (UPGRADE_KEEP[profile.acquisition_channel] ?? 1);
+			if (upgrader && onboarded) target = sinceMs + upgradeLagMs(uid);
+		} else if (salt(uid, "upgrader-est") < UPGRADE_ESTABLISHED) {
+			target = ms(DATASET_START) + salt(uid, "upgrade-day") * (END - ms(DATASET_START));
+		}
+		// an account upgrades while it is still around: before its lapse, within a week of its last activity
+		if (target !== null && target >= ms(DATASET_START) && target < cutMs && target <= Math.min(END, lastMs + 7 * DAY_MS)) upgradeMs = Math.floor(target);
+	}
+	if (upgradeMs < Infinity) {
+		if (!template) template = cloneEvent(UPGRADE_BANK.upgrade, { user_id: uid, ...loc, prepaid_credits_usd: chance.pickone([10, 25, 25, 50, 50, 100, 250, 500]) });
+		if (!templateView && UPGRADE_BANK.view) templateView = cloneEvent(UPGRADE_BANK.view, { user_id: uid, ...loc });
+		template.time = new Date(upgradeMs).toISOString();
+		events.push(template);
+		if (templateView) {
+			templateView.time = new Date(upgradeMs - chance.integer({ min: 1, max: 25 }) * MIN_MS).toISOString();
+			if (!events.includes(templateView)) events.push(templateView);
+		}
+	}
+	const planAt = (t) => (t >= upgradeMs ? "build" : initialPlan);
+
+	// ── per-account traits for the request log ──
+	const region = profile.inference_region;
+	const swiftBase = SWIFT_BASE_MIN + salt(uid, "swift") * (SWIFT_BASE_MAX - SWIFT_BASE_MIN);
+	const swiftSwitch = ms(SWIFT_PRICE_CUT) + salt(uid, "swift-switch") * SWIFT_SHIFT_RAMP_DAYS * DAY_MS;
+	const a3Paid = salt(uid, "atlas3") < ATLAS3_PAID_ADOPTERS;
+	const a3PaidStart = ms(ATLAS3_LAUNCH) + salt(uid, "atlas3-start") * ATLAS3_RAMP_DAYS * DAY_MS;
+	const a3Free = salt(uid, "atlas3-free") < ATLAS3_FREE_ADOPTERS;
+	const a3FreeStart = ms(ATLAS3_FREE) + salt(uid, "atlas3-free-start") * ATLAS3_FREE_RAMP_DAYS * DAY_MS;
+	const a3Use = ATLAS3_USE_MEAN + (salt(uid, "atlas3-use") - 0.5) * 2 * ATLAS3_USE_SPREAD;
+	const cacheAdopter = salt(uid, "cache") < CACHE_ADOPTER_SHARE;
+	const cacheStart = ms(CACHE_LAUNCH) + salt(uid, "cache-start") * CACHE_RAMP_DAYS * DAY_MS;
+	const cacheHit = CACHE_HIT_MEAN + (salt(uid, "cache-hit") - 0.5) * 2 * CACHE_HIT_SPREAD;
+	const toolShare = TOOL_SHARE_BY_USE_CASE[profile.use_case] ?? 0.05;
+	const modelAt = (t, plan) => {
+		const swiftShare = plan === "build" && t >= swiftSwitch ? swiftBase * SWIFT_SHIFT_MULT : swiftBase;
+		if (chance.random() < swiftShare) return "swift-2";
+		const a3 = PAID_PLANS.includes(plan) ? a3Paid && t >= a3PaidStart : a3Free && t >= a3FreeStart;
+		return a3 && chance.random() < a3Use ? "atlas-3" : "atlas-2";
+	};
+
+	// ── traffic volume by plan at the moment: Free accounts run small, throttled workloads;
+	// Scale and Enterprise accounts run production traffic at 2-3x a Build account's volume ──
+	const sized = [];
+	for (const e of events) {
+		if (e.event !== "api request" || ONBOARD_REQ_IDS.has(e.insert_id)) { sized.push(e); continue; }
+		const t = T(e);
+		const plan = planAt(t);
+		if (plan === "free" && !chance.bool({ likelihood: FREE_TRAFFIC_KEEP * 100 })) continue;
+		sized.push(e);
+		for (let k = 1; k < (PLAN_TRAFFIC_MULT[plan] ?? 1); k++) {
+			// tokens and latency are re-drawn for every request in the pass below
+			sized.push(cloneEvent(e, { time: new Date(t + chance.integer({ min: 2, max: 600 }) * 1000).toISOString() }));
+		}
+	}
+	events = sized;
+
+	const usage = { byModel: new Map(), byRegion: new Map() };
+	const kept = [];
+	for (const e of events) {
+		const t = T(e);
+		const plan = planAt(t);
+		e.plan_tier = plan;
+		if (e.event === "playground session" || e.event === "eval run started" || e.event === "batch job submitted" || e.event === "rate limit hit") {
+			e.model = modelAt(t, plan);
+		}
+		if (e.event === "rate limit hit") {
+			// H10: rate-limit episodes by plan at the moment; Build limits raised on RATE_LIMIT_RAISE
+			const keep = (RL_KEEP[plan] ?? 1) * (plan === "build" && t >= ms(RATE_LIMIT_RAISE) ? RL_RAISE_MULT : 1);
+			if (!chance.bool({ likelihood: keep * 100 })) continue;
+		}
+		if (e.event === "batch job submitted") e.inference_region = region;
+		if (e.event === "api request") {
+			e.inference_region = region;
+			e.sdk_language = profile.sdk_language;
+			const model = modelAt(t, plan);
+			e.model = model;
+			// status: background error mix
+			const r = chance.random();
+			let status = r < BASE_STATUS[200] ? 200 : r < BASE_STATUS[200] + BASE_STATUS[400] ? 400 : r < BASE_STATUS[200] + BASE_STATUS[400] + BASE_STATUS[500] ? 500 : 529;
+			// token counts: log-normal prompt and response sizes
+			e.input_tokens = Math.round(Math.min(INPUT_MAX, Math.max(INPUT_MIN, INPUT_MEDIAN * logNormal(INPUT_SIGMA))));
+			let out = OUTPUT_MEDIAN * logNormal(OUTPUT_SIGMA);
+			// H8: tool use by use case; tool definitions and results inflate the prompt
+			const tool = chance.random() < toolShare;
+			e.tool_use = tool;
+			if (tool) e.input_tokens = Math.round(e.input_tokens * TOOL_INPUT_MULT);
+			// H2: atlas-3 answers run longer
+			if (model === "atlas-3") out *= ATLAS3_OUTPUT_MULT;
+			e.output_tokens = Math.max(1, Math.round(Math.min(OUTPUT_MAX, out)));
+			e.stop_reason = e.output_tokens >= OUTPUT_MAX ? "max_tokens"
+				: tool ? (chance.bool({ likelihood: 65 }) ? "tool_use" : "end_turn")
+				: chance.weighted(["end_turn", "max_tokens", "stop_sequence"], [90, 5, 5]);
+			// latency: time to first token (grows with the prompt) + decode time (grows with the answer)
+			let latency = (TTFT_BASE_MS + e.input_tokens * TTFT_MS_PER_INPUT + e.output_tokens * MS_PER_OUTPUT_TOKEN[model]) * logNormal(LATENCY_SIGMA);
+			// H6: us-east capacity incident
+			if (status === 200 && region === INCIDENT_REGION && inIncident(t)) {
+				if (chance.random() < INCIDENT_FAIL) status = 529;
+				else latency *= INCIDENT_LATENCY_MULT;
+			}
+			// H1: prompt caching
+			const hit = status === 200 && cacheAdopter && t >= cacheStart && chance.random() < cacheHit;
+			e.cache_hit = hit;
+			e.cached_input_tokens = hit ? Math.round(e.input_tokens * (CACHE_PREFIX_MIN + chance.random() * (CACHE_PREFIX_MAX - CACHE_PREFIX_MIN))) : 0;
+			if (hit) latency *= CACHE_LATENCY_MULT;
+			e.status_code = status;
+			e.error_type = status === 200 ? "none" : status === 400 ? "invalid_request_error" : status === 500 ? "api_error" : "overloaded_error";
+			if (status !== 200) {
+				e.output_tokens = 0;
+				e.stop_reason = "error";
+				latency = 120 + chance.random() * (status === 529 ? 900 : 400);
+			}
+			e.latency_ms = Math.round(latency);
+			if (t <= END) {
+				const dk = dayKey(t);
+				const mk = `${dk}|${model}`;
+				const m = usage.byModel.get(mk) || { ok: 0, inTok: 0, cached: 0, outTok: 0, freeUsd: 0 };
+				if (status === 200) {
+					m.ok++; m.inTok += e.input_tokens; m.cached += e.cached_input_tokens; m.outTok += e.output_tokens;
+					if (plan === "free") m.freeUsd += listValueUsd(model, t, e.input_tokens, e.cached_input_tokens, e.output_tokens);
 				}
-			}
-		});
-	}
-
-	// H2: Model migration wave.
-	// "opus-4-7" is in the DECLARED model enum (schema-first: hooks only write
-	// declared values), which means the engine samples it uniformly across the
-	// whole window — but the story needs zero opus-4-7 before release day.
-	// Rewrite every engine-sampled opus-4-7 back to the pre-release mix first;
-	// opus-4-7 in the output therefore comes from the migration stamp alone
-	// (post-day-60, Build/Enterprise api calls only — exact purity, asserted).
-	events.forEach(e => {
-		if (e.event === "api call" && e.model === "opus-4-7") {
-			e.model = chance.pickone(PRE_RELEASE_MODELS);
-		}
-	});
-	const migrationCutoff = datasetStart.add(MODEL_MIGRATION_DAY, "days");
-	if (tier === "Build" || tier === "Enterprise") {
-		events.forEach(e => {
-			if (e.event === "api call" && dayjs(e.time).isAfter(migrationCutoff)) {
-				if (chance.bool({ likelihood: MODEL_MIGRATION_LIKELIHOOD })) {
-					e.model = "opus-4-7";
-					e.tokens_used = Math.floor((e.tokens_used || 2500) * MODEL_MIGRATION_TOKEN_MULT);
-				}
-			}
-		});
-	}
-
-	// First-event anchor for both churn filters. Computed pre-filter, but always
-	// verifier-recoverable: the filters only drop events STRICTLY after
-	// t0 + 7d / t0 + 30d, so min(time) in the output still equals t0.
-	const firstEventTime = events.reduce((min, e) => {
-		const t = dayjs(e.time);
-		return t.isBefore(min) ? t : min;
-	}, dayjs(events[0].time));
-	const firstWeekEnd = firstEventTime.add(7, "days");
-
-	// ── PHASE 2: filters ──
-	// H4: Rate-limit churn — 2+ early rate-limit errors → 60% of flagged users
-	// lose their ENTIRE post-week-1 stream. Per-USER cliff, not per-event
-	// thinning: thinning is unverifiable on a burst-selected cohort (pre/post
-	// ratios inherit the selection week's decay; cross-user ratios inherit
-	// activity selection), while the cliff yields a selection-free proportion —
-	// share of flagged users with zero post-week-1 events ≈ 0.6. Classification
-	// basis is pre-week-1 and survives every drop.
-	const earlyRateLimits = events.filter(e =>
-		e.event === "rate limit error" && dayjs(e.time).isBefore(firstWeekEnd)
-	).length;
-	if (earlyRateLimits >= RATE_LIMIT_THRESHOLD && chance.bool({ likelihood: RATE_LIMIT_CHURN_LIKELIHOOD })) {
-		events = events.filter(e => !dayjs(e.time).isAfter(firstWeekEnd));
-	}
-
-	// H8: Eval-driven retention — non-eval users lose 75% of post-day-30 events
-	// (classification basis is pre-week-1 and survives every drop)
-	const hasEarlyEval = events.some(e =>
-		e.event === "eval job" && dayjs(e.time).isBefore(firstWeekEnd)
-	);
-	if (!hasEarlyEval) {
-		const cutoff = firstEventTime.add(EVAL_CUTOFF_DAYS, "days");
-		events = events.filter(e => {
-			if (dayjs(e.time).isAfter(cutoff)) {
-				return chance.bool({ likelihood: EVAL_NON_USER_KEEP_LIKELIHOOD });
-			}
-			return true;
-		});
-	}
-
-	// ── PHASE 3: cohort mutators + clones (classified on the SURVIVING stream) ──
-	// H3: Agentic loop power users — 3+ tool calls + 3+ multi_turn → 8x tokens,
-	// 2 clones per surviving api call (3x volume). Clones need FRESH insert_ids:
-	// the engine stamps insert_id at generation (lib/generators/events.js), so a
-	// bare spread copies the template's id and Mixpanel's $insert_id dedupe
-	// silently drops every clone at import — the 1.5 file shipped that bug.
-	// Clones stamp multi_turn: true, pushing the cohort's multi-turn share to
-	// (0.25n + 2n)/3n ≈ 75% — the verifier-visible signature of the 3x volume.
-	// Classification stays exactly recoverable from output: clones only ADD
-	// multi-turn api calls to users already at/above both thresholds.
-	// COMPOUND (deliberate): H7 below also multiplies tokens_used on these same
-	// events, clones included — agentic ∩ batch users land at 8 × 2 = 16x. The
-	// story verifies all four cells (neither/agentic/batch/both = 1x/8x/2x/16x).
-	const toolUseCount = events.filter(e => e.event === "tool use call").length;
-	const multiTurnCount = events.filter(e => e.event === "api call" && e.multi_turn === true).length;
-	const isAgenticUser = toolUseCount >= AGENTIC_TOOL_THRESHOLD && multiTurnCount >= AGENTIC_MULTITURN_THRESHOLD;
-	if (isAgenticUser) {
-		events.forEach(e => {
-			if (e.event === "api call") {
-				e.tokens_used = Math.floor((e.tokens_used || 2500) * AGENTIC_TOKEN_MULT);
-			}
-		});
-		const apiCalls = events.filter(e => e.event === "api call");
-		const extraCount = apiCalls.length * AGENTIC_CLONE_MULT;
-		for (let i = 0; i < extraCount; i++) {
-			const template = apiCalls[i % apiCalls.length];
-			if (template) {
-				events.push({
-					...template,
-					insert_id: chance.guid(),
-					time: dayjs(template.time).add(chance.integer({ min: 1, max: 120 }), "minutes").toISOString(),
-					user_id: template.user_id,
-					multi_turn: true,
-				});
+				usage.byModel.set(mk, m);
+				const rk = `${dk}|${region}`;
+				const g = usage.byRegion.get(rk) || { req: 0, err5xx: 0 };
+				g.req++;
+				if (status >= 500) g.err5xx++;
+				usage.byRegion.set(rk, g);
 			}
 		}
+		kept.push(e);
 	}
+	events = kept;
 
-	// H7: Batch API discount — any surviving batch job submitted → 0.5x
-	// cost_per_token (touched by NO other hook — clean), 2x tokens_used
-	// (COMPOUNDS with H3, see above). Runs after H3 so the clones get the
-	// discount too — a batch user's api calls are uniformly discounted.
-	const isBatchUser = events.some(e => e.event === "batch job submitted");
-	if (isBatchUser) {
-		events.forEach(e => {
-			if (e.event === "api call") {
-				e.cost_per_token = Math.round((e.cost_per_token || 0.00001) * BATCH_COST_FACTOR * 10000000) / 10000000;
-				e.tokens_used = Math.floor((e.tokens_used || 2500) * BATCH_TOKEN_MULT);
-			}
-		});
+	// ── H4: batch turnaround by plan (each completion is re-timed from its submission) ──
+	const subs = new Map();
+	for (const e of events) if (e.event === "batch job submitted") subs.set(e.batch_id, e);
+	const dropBatch = new Set();
+	for (const e of events) {
+		if (e.event !== "batch job completed") continue;
+		const s = subs.get(e.batch_id);
+		if (!s) { dropBatch.add(e); continue; }
+		const plan = s.plan_tier;
+		let gapH = BATCH_MEDIAN_H * logNormal(BATCH_SIGMA) * (BATCH_PLAN_MULT[plan] ?? 1);
+		e.batch_status = "completed";
+		if (gapH > BATCH_SLA_H) { gapH = BATCH_SLA_H; e.batch_status = "expired"; }
+		const tc = T(s) + gapH * HOUR_MS;
+		e.time = new Date(tc).toISOString();
+		e.processing_hours = Math.round(gapH * 100) / 100;
+		e.model = s.model;
+		e.request_count = s.request_count;
+		e.plan_tier = planAt(tc);
+		if (tc > END) dropBatch.add(e);
 	}
+	if (dropBatch.size) events = events.filter((e) => !dropBatch.has(e));
 
-	// H10: Docs-searched magic number — docs strictly between the EARLIEST
-	// org-created and the EARLIEST billing payment (by time — the 1.5 file used
-	// Array.find, i.e. array order, on a not-yet-sorted stream). Both branches
-	// mutate amount_usd only (sweet ×1.35, over ×0.75): amounts draw iid from
-	// the declared distribution, so median ratios recover the knobs selection-
-	// free, and nothing is dropped — the classification window is always fully
-	// reconstructable from output.
-	const orgEvent = events.reduce((min, e) =>
-		e.event === "organization created" && (!min || dayjs(e.time).isBefore(dayjs(min.time))) ? e : min, null);
-	const firstBilling = events.reduce((min, e) =>
-		e.event === "billing payment" && (!min || dayjs(e.time).isBefore(dayjs(min.time))) ? e : min, null);
-	if (orgEvent && firstBilling) {
-		const aTime = dayjs(orgEvent.time);
-		const bTime = dayjs(firstBilling.time);
-		const docsBetween = events.filter(e =>
-			e.event === "docs searched" &&
-			dayjs(e.time).isAfter(aTime) &&
-			dayjs(e.time).isBefore(bTime)
-		).length;
-		if (docsBetween >= DOCS_SWEET_MIN && docsBetween <= DOCS_SWEET_MAX) {
-			events.forEach(e => {
-				if (e.event === "billing payment" && typeof e.amount_usd === "number") {
-					e.amount_usd = Math.round(e.amount_usd * DOCS_BILLING_BOOST);
-				}
-			});
-		} else if (docsBetween >= DOCS_OVER_THRESHOLD) {
-			events.forEach(e => {
-				if (e.event === "billing payment" && typeof e.amount_usd === "number") {
-					e.amount_usd = Math.round(e.amount_usd * DOCS_OVER_PENALTY);
-				}
-			});
-		}
-	}
+	// eval runs: completion carries the run's model
+	const evStarts = new Map();
+	for (const e of events) if (e.event === "eval run started") evStarts.set(e.eval_id, e);
+	events = events.filter((e) => e.event !== "eval run completed" || evStarts.has(e.eval_id));
+	for (const e of events) if (e.event === "eval run completed") e.model = evStarts.get(e.eval_id).model;
 
-	// ── PHASE 4: temporal mutation LAST (clones in the window get stamped too) ──
-	// H6: Outage window [day 40, day 42) — 40% of api calls flagged is_error
-	// with a service error_type and 3x latency. Baseline is_error is 0% by
-	// schema (declared [false]), so the outage is the ONLY source of api-call
-	// errors: ~40% share inside the window, exactly zero outside.
-	events.forEach(e => {
-		if (e.event !== "api call") return;
-		const dayInDataset = dayjs(e.time).diff(datasetStart, "days", true);
-		if (dayInDataset >= OUTAGE_START_DAY && dayInDataset < OUTAGE_END_DAY) {
-			if (chance.bool({ likelihood: OUTAGE_ERROR_LIKELIHOOD })) {
-				e.is_error = true;
-				e.error_type = chance.pickone(["service_overloaded", "internal_server_error", "gateway_timeout"]);
-				e.latency_ms = Math.floor((e.latency_ms || 1500) * OUTAGE_LATENCY_MULT);
-			}
-		}
-	});
-
+	if (upgradeMs < Infinity) profile.plan_tier = "build";
+	USAGE_BY_USER.set(uid, usage);
+	usageAgg = null;
 	return events;
+}
+
+// warehouse rows: metered usage, fleet health, and media spend layered on event-derived volumes
+function handleWarehouse(row, meta) {
+	if (meta.isBackfill) return row;
+	if (!usageAgg) usageAgg = buildUsageAgg();
+	const date = row.date;
+	const prev = dayKey(ms(`${date}T00:00:00Z`) - DAY_MS);
+	if (meta.metricName === "developer_marketing_daily") {
+		row.spend_usd = paidSpend(date, row.acquisition_channel);
+		return row;
+	}
+	if (meta.metricName === "model_billing_daily") {
+		// metering posts each request's usage when the request closes; a varying share of a
+		// day's usage lands in the next day's batch, and a few requests never reached analytics
+		const model = row.model;
+		const zero = { ok: 0, inTok: 0, cached: 0, outTok: 0, freeUsd: 0 };
+		const cur = usageAgg.byModel.get(`${date}|${model}`) || zero;
+		const before = usageAgg.byModel.get(`${prev}|${model}`) || zero;
+		const late = 0.06 + 0.18 * hashFloat(`late|${date}|${model}`);
+		const latePrev = 0.06 + 0.18 * hashFloat(`late|${prev}|${model}`);
+		const lost = jitter(`lost|${date}|${model}`, 0.04) * 1.03;
+		const mixRaw = (k) => API_SAMPLE_RATE * lost * ((1 - late) * cur[k] + latePrev * before[k]);
+		const mix = (k) => Math.round(mixRaw(k));
+		row.requests_billed = mix("ok");
+		row.input_tokens_billed = mix("inTok");
+		row.cached_input_tokens_billed = Math.min(row.input_tokens_billed, mix("cached"));
+		row.output_tokens_billed = mix("outTok");
+		const t = ms(`${date}T00:00:00Z`);
+		row.list_price_input_per_mtok = round2(priceIn(model, t));
+		row.list_price_output_per_mtok = round2(priceOut(model, t));
+		row.usage_value_usd = round2(((row.input_tokens_billed - row.cached_input_tokens_billed) * row.list_price_input_per_mtok
+			+ row.cached_input_tokens_billed * row.list_price_input_per_mtok * CACHED_INPUT_PRICE_SHARE
+			+ row.output_tokens_billed * row.list_price_output_per_mtok) / 1e6);
+		row.free_credit_usd = Math.min(row.usage_value_usd, round2(mixRaw("freeUsd")));
+		row.revenue_usd = round2(row.usage_value_usd - row.free_credit_usd);
+		return row;
+	}
+	if (meta.metricName === "inference_fleet_daily") {
+		const reg = row.inference_region;
+		const g = usageAgg.byRegion.get(`${date}|${reg}`) || { req: 0, err5xx: 0 };
+		const t = ms(`${date}T00:00:00Z`);
+		const hit = reg === INCIDENT_REGION && inIncident(t);
+		// first-party apps and internal eval pipelines run every day at a steady volume (no product event)
+		const internal = INTERNAL_REQS_PER_DAY[reg] * jitter(`internal|${date}|${reg}`, 0.5) * jitter(`internal|${date}`, 0.3);
+		row.requests_served = Math.round((API_SAMPLE_RATE * g.req + internal) * jitter(`served|${date}|${reg}`, 0.03));
+		const err = g.req ? g.err5xx / g.req : 0;
+		row.error_rate_5xx = Math.round((err * jitter(`err|${date}|${reg}`, 0.08)) * 10000) / 10000;
+		row.gpus_online = Math.round(REGION_GPUS[reg] * (hit ? 0.58 + 0.06 * hashFloat(`gpu|${date}|${reg}`) : 0.97 + 0.03 * hashFloat(`gpu|${date}|${reg}`)));
+		row.gpu_utilization = round2(hit ? 0.97 + 0.02 * hashFloat(`util|${date}|${reg}`) : 0.62 + 0.18 * hashFloat(`util|${date}|${reg}`));
+		row.p95_latency_ms = Math.round((hit ? 14500 : 6800) * jitter(`p95|${date}|${reg}`, 0.08));
+		row.region_status = hit ? "major_outage" : "operational";
+		return row;
+	}
+	return row;
 }
 
 // ── CONFIG ──
 /** @type {Config} */
 const config = {
-	version: 2,
 	seed: SEED,
 	datasetStart: DATASET_START,
 	datasetEnd: DATASET_END,
-	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	numUsers: NUM_USERS,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	format: "json",
 	gzip: true,
-	credentials: {
-		token,
-	},
+	concurrency: 1,
+	writeToDisk: false,
+	macro: { percentUsersBornInDataset: BORN_PCT, bornRecentBias: 0, preExistingSpread: "uniform" },
+	soup: { dayOfWeekWeights: DOW_WEIGHTS, hourOfDayWeights: HOUR_WEIGHTS },
+	credentials: { token },
 	switches: {
-		hasSessionIds: true,
+		hasSessionIds: false,
 		alsoInferFunnels: false,
 		hasLocation: true,
 		hasAndroidDevices: false,
 		hasIOSDevices: false,
-		hasDesktopDevices: true,
-		hasBrowser: true,
+		hasDesktopDevices: false,
+		hasBrowser: false,
 		hasCampaigns: false,
 		isAnonymous: false,
 		hasAdSpend: false,
 		hasAvatar: true,
 	},
-	identity: {
-		avgDevicePerUser: 2,
-	},
-	concurrency: 1,
-	writeToDisk: false,
-	soup: "growth",
-	scdProps: {
-		monthly_api_usage: {
-			values: u.weighNumRange(0, 1000000, 0.3, 50),
-			frequency: "week",
-			timing: "fuzzy",
-			max: 20,
-		},
-		api_tier_history: {
-			values: ["Free", "Build", "Enterprise"],
-			frequency: "month",
-			timing: "fixed",
-			max: 6,
-		},
-	},
+	identity: { avgDevicePerUser: 0 },
+
 	events: [
 		{
-			event: "organization created",
+			event: "account created",
 			weight: 1,
 			isFirstEvent: true,
 			isAuthEvent: true,
 			properties: {
-				org_size: ["solo", "startup", "growth", "enterprise"],
-				referral_source: ["docs", "blog", "github", "word_of_mouth", "search", "conference"],
+				signup_method: { __weights: { github: 40, google: 35, email: 18, sso: 7 } },
+				acquisition_channel: (ctx) => ctx.profile.acquisition_channel,
 			},
 		},
 		{
 			event: "api key created",
-			weight: 2,
-			properties: {
-				key_type: ["development", "production", "staging"],
-				key_scope: ["full_access", "read_only", "completions_only"],
-			},
-		},
-		{
-			event: "api key rotated",
 			weight: 1,
+			isStrictEvent: true,
 			properties: {
-				rotation_reason: ["scheduled", "compromised", "policy", "manual"],
+				key_environment: { __weights: { development: 70, production: 30 } },
 			},
 		},
 		{
-			event: "api call",
-			weight: 10,
+			event: "api request",
+			weight: 1,
 			isStrictEvent: false,
 			properties: {
-				// opus-4-7 is declared so the H2 hook only writes declared values
-				// (schema-first); the hook scrubs engine-sampled opus-4-7 back to
-				// the pre-release mix, so it appears ONLY via the day-60 migration
-				model: ["sonnet-4", "sonnet-4", "sonnet-4", "haiku-4", "haiku-4", "opus-4-6", "opus-4-7"],
-				input_tokens: u.weighNumRange(50, 8000, 0.4, 2000),
-				output_tokens: u.weighNumRange(10, 4000, 0.4, 500),
-				tokens_used: u.weighNumRange(100, 12000, 0.4, 2500),
-				cost_usd: [0.001, 0.002, 0.003, 0.003, 0.005, 0.005, 0.005, 0.008, 0.008, 0.01, 0.01, 0.01, 0.01, 0.015, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05],
-				cost_per_token: [0.000002, 0.000003, 0.000005, 0.000005, 0.000008, 0.000008, 0.00001, 0.00001, 0.00001, 0.000012, 0.000015, 0.00002, 0.000025, 0.00003],
-				latency_ms: u.weighNumRange(100, 15000, 0.4, 1500),
-				cache_enabled: [false],
-				is_error: [false],
+				model: ["atlas-2"],
+				input_tokens: [0],
+				output_tokens: [0],
+				cached_input_tokens: [0],
+				cache_hit: [false],
+				tool_use: [false],
+				stream: [true, true, false],
+				latency_ms: [0],
+				status_code: [200],
 				error_type: ["none"],
-				multi_turn: [false, false, false, true],
-				context_window: [200000],
-				stream: [true, true, true, false],
-				stop_reason: ["end_turn", "end_turn", "end_turn", "max_tokens", "tool_use"],
+				stop_reason: ["end_turn"],
+				inference_region: ["us-east"],
+				sdk_language: ["python"],
 			},
 		},
 		{
-			event: "tool use call",
-			weight: 4,
+			event: "rate limit hit",
+			weight: 6,
 			isStrictEvent: false,
 			properties: {
-				tool_name: ["web_search", "code_interpreter", "file_reader", "calculator", "database_query", "api_connector"],
-				execution_time_ms: u.weighNumRange(50, 10000, 0.4, 800),
-				success: [true, true, true, true, false],
-				tool_input_tokens: u.weighNumRange(50, 2000, 0.4, 300),
-				tool_output_tokens: u.weighNumRange(20, 5000, 0.4, 500),
+				limit_type: { __weights: { requests_per_minute: 55, input_tokens_per_minute: 30, output_tokens_per_minute: 15 } },
+				retry_after_seconds: [1, 2, 5, 10, 15, 20, 30, 60],
+				model: ["atlas-2"],
 			},
 		},
 		{
-			event: "batch job submitted",
-			weight: 2,
-			properties: {
-				batch_size: u.weighNumRange(10, 10000, 0.3, 500),
-				model: ["sonnet-4", "haiku-4", "opus-4-6"],
-				estimated_tokens: u.weighNumRange(10000, 5000000, 0.3, 500000),
-				priority: ["standard", "standard", "standard", "express"],
-			},
-		},
-		{
-			event: "batch job completed",
-			weight: 2,
-			properties: {
-				batch_size: u.weighNumRange(10, 10000, 0.3, 500),
-				processing_time_sec: u.weighNumRange(60, 7200, 0.4, 900),
-				total_tokens: u.weighNumRange(10000, 5000000, 0.3, 500000),
-				success_rate: u.weighNumRange(90, 100, 0.8, 98),
-			},
-		},
-		{
-			event: "eval job",
-			weight: 3,
+			event: "playground session",
+			weight: 6,
 			isStrictEvent: false,
 			properties: {
-				eval_type: ["accuracy", "relevance", "safety", "latency", "cost", "custom"],
-				num_test_cases: u.weighNumRange(10, 1000, 0.3, 100),
-				model: ["sonnet-4", "haiku-4", "opus-4-6"],
-				dataset_name: ["prod_prompts", "safety_suite", "regression_set", "benchmark_v2", "custom_eval"],
+				model: ["atlas-2"],
+				turns: u.weighNumRange(1, 25, 0.4, 300),
+				prompt_saved: [false, false, true],
 			},
 		},
 		{
-			event: "eval result",
-			weight: 3,
-			properties: {
-				eval_type: ["accuracy", "relevance", "safety", "latency", "cost", "custom"],
-				score: u.weighNumRange(0, 100, 0.6, 75),
-				pass_rate: u.weighNumRange(50, 100, 0.7, 85),
-				model: ["sonnet-4", "haiku-4", "opus-4-6"],
-				regression_detected: [false, false, false, false, true],
-			},
-		},
-		{
-			event: "rate limit error",
-			weight: 3,
-			properties: {
-				error_code: [429],
-				retry_after_ms: u.weighNumRange(1000, 60000, 0.3, 5000),
-				requests_per_minute: u.weighNumRange(50, 2000, 0.4, 500),
-				tier_limit: ["Free", "Build", "Enterprise"],
-			},
-		},
-		{
-			event: "billing payment",
-			weight: 2,
+			event: "docs viewed",
+			weight: 6,
 			isStrictEvent: false,
 			properties: {
-				amount_usd: u.weighNumRange(5, 50000, 0.2, 500),
-				payment_method: ["credit_card", "credit_card", "credit_card", "invoice", "wire_transfer"],
-				billing_period: ["monthly", "monthly", "annual"],
-				tokens_consumed: u.weighNumRange(100000, 50000000, 0.3, 5000000),
+				doc_section: ["quickstart", "messages_api", "tool_use", "prompt_caching", "batch_api", "models", "rate_limits", "errors", "pricing"],
+				time_on_page_sec: u.weighNumRange(5, 600, 0.4, 300),
 			},
 		},
 		{
-			event: "model selected",
-			weight: 3,
-			properties: {
-				model: ["sonnet-4", "sonnet-4", "haiku-4", "opus-4-6"],
-				is_default: [true, true, false],
-				selection_context: ["playground", "api_config", "eval_setup", "batch_config"],
-			},
-		},
-		{
-			event: "dashboard viewed",
+			event: "usage dashboard viewed",
 			weight: 5,
+			isStrictEvent: false,
 			properties: {
-				dashboard_section: ["usage", "billing", "api_keys", "models", "evals", "logs"],
-				time_range: ["1h", "24h", "7d", "30d"],
-			},
-		},
-		{
-			event: "docs searched",
-			weight: 4,
-			properties: {
-				search_query_category: ["api_reference", "quickstart", "pricing", "models", "tool_use", "batch_api", "caching", "errors"],
-				results_found: u.weighNumRange(0, 50, 0.5, 8),
-				clicked_result: [true, true, true, false],
+				dashboard_view: ["usage", "usage", "costs", "logs", "limits"],
+				date_range: ["24h", "7d", "7d", "30d"],
 			},
 		},
 		{
 			event: "member invited",
 			weight: 2,
+			isStrictEvent: false,
 			properties: {
-				invite_role: ["admin", "developer", "developer", "billing", "viewer"],
-				invite_method: ["email", "email", "sso", "link"],
+				invitee_role: ["developer", "developer", "admin", "billing", "viewer"],
 			},
 		},
 		{
-			event: "webhook configured",
+			event: "api key rotated",
 			weight: 1,
+			isStrictEvent: false,
 			properties: {
-				webhook_event: ["usage_alert", "rate_limit", "batch_complete", "eval_complete", "billing_threshold"],
-				delivery_method: ["https", "https", "slack", "email"],
+				rotation_reason: ["scheduled", "scheduled", "team_change", "suspected_leak"],
 			},
 		},
 		{
-			event: "playground session",
-			weight: 4,
-			properties: {
-				model: ["sonnet-4", "sonnet-4", "haiku-4", "opus-4-6"],
-				turns: u.weighNumRange(1, 30, 0.4, 5),
-				shared: [false, false, false, true],
-				tokens_used: u.weighNumRange(100, 20000, 0.3, 3000),
-			},
-		},
-		{
-			event: "account deactivated",
+			event: "batch job submitted",
 			weight: 1,
-			isChurnEvent: true,
-			returnLikelihood: 0.1,
 			isStrictEvent: true,
 			properties: {
-				reason: ["cost", "switched_provider", "project_ended", "rate_limits", "no_longer_needed", "performance"],
+				batch_id: ["unassigned"],
+				model: ["atlas-2"],
+				request_count: u.weighNumRange(50, 20000, 0.3, 300),
+				inference_region: ["us-east"],
+			},
+		},
+		{
+			event: "batch job completed",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				batch_id: ["unassigned"],
+				model: ["atlas-2"],
+				request_count: [0],
+				batch_status: ["completed"],
+				processing_hours: [0],
+			},
+		},
+		{
+			event: "eval run started",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				eval_id: ["unassigned"],
+				eval_type: ["accuracy", "accuracy", "safety", "regression", "latency", "custom_rubric"],
+				test_cases: u.weighNumRange(20, 2000, 0.3, 300),
+				model: ["atlas-2"],
+			},
+		},
+		{
+			event: "eval run completed",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				eval_id: ["unassigned"],
+				model: ["atlas-2"],
+				pass_rate: u.weighNumRange(40, 100, 0.8, 300),
+				duration_minutes: u.weighNumRange(1, 90, 0.3, 300),
+			},
+		},
+		{
+			event: "billing page viewed",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				billing_section: ["plans", "plans", "credits", "payment_methods"],
+			},
+		},
+		{
+			event: "plan upgraded",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				from_plan: ["free"],
+				to_plan: ["build"],
+				prepaid_credits_usd: [10, 25, 25, 50, 50, 100, 250, 500],
+			},
+		},
+		{
+			event: "$experiment_started",
+			weight: 1,
+			isStrictEvent: true,
+			properties: {
+				"Experiment name": [QUICKSTART_EXPERIMENT],
+				"Variant name": ["Control", QUICKSTART_VARIANT],
 			},
 		},
 	],
+
 	funnels: [
 		{
 			name: "Onboarding",
-			sequence: ["organization created", "api key created", "api call"],
-			conversionRate: 70,
-			order: "sequential",
+			sequence: ["account created", "api key created", "api request"],
 			isFirstFunnel: true,
-			timeToConvert: 48,
-			weight: 3,
+			conversionRate: ONBOARD_CONV,
+			timeToConvert: ONBOARD_TTC_H,
+			order: "sequential",
+			weight: 1,
+			experiment: {
+				name: QUICKSTART_EXPERIMENT,
+				startDaysBeforeEnd: (ms(DATASET_END) - ms(QUICKSTART_START)) / DAY_MS,
+				variants: [
+					{ name: "Control" },
+					{ name: QUICKSTART_VARIANT, conversionMultiplier: QUICKSTART_CONV_MULT, ttcMultiplier: QUICKSTART_TTC_MULT },
+				],
+			},
 		},
 		{
-			name: "API to Eval Pipeline",
-			sequence: ["api call", "tool use call", "eval job"],
-			conversionRate: 45,
+			// production traffic arrives in bursts: one pass is a run of sampled requests
+			name: "API Traffic",
+			sequence: Array(API_BURST_LEN).fill("api request"),
+			conversionRate: 85,
+			timeToConvert: 2,
 			order: "sequential",
-			timeToConvert: 168,
-			weight: 5,
+			weight: API_TRAFFIC_WEIGHT,
 		},
 		{
-			name: "Usage to Billing",
-			sequence: ["api call", "billing payment"],
-			conversionRate: 30,
+			name: "Batch Jobs",
+			sequence: ["batch job submitted", "batch job completed"],
+			conversionRate: 96,
+			timeToConvert: 24,
 			order: "sequential",
-			timeToConvert: 336,
-			weight: 2,
+			weight: 1,
+			props: { batch_id: () => `batch_${chance.hash({ length: 12 })}` },
+		},
+		{
+			// teams building a new integration evaluate prompts and models often
+			name: "Evals",
+			sequence: ["eval run started", "eval run completed"],
+			conditions: { customer_since: { gte: D0 } },
+			conversionRate: 92,
+			timeToConvert: 1,
+			order: "sequential",
+			weight: EVAL_WEIGHT_NEW,
+			props: { eval_id: () => `eval_${chance.hash({ length: 12 })}` },
+		},
+		{
+			name: "Evals",
+			sequence: ["eval run started", "eval run completed"],
+			conditions: { customer_since: { lt: D0 } },
+			conversionRate: 92,
+			timeToConvert: 1,
+			order: "sequential",
+			weight: 1,
+			props: { eval_id: () => `eval_${chance.hash({ length: 12 })}` },
+		},
+		{
+			name: "Upgrade",
+			sequence: ["billing page viewed", "plan upgraded"],
+			conditions: { plan_tier: "free" },
+			conversionRate: 80,
+			timeToConvert: 1,
+			order: "sequential",
+			weight: 1,
 		},
 	],
+
+	warehouseMetrics: [
+		{
+			name: "inference_fleet_daily",
+			type: "additive",
+			grain: "day",
+			source: { event: "api request", measure: "count", groupBy: "inference_region" },
+			timeColumn: "date",
+			valueColumn: "requests_served",
+			columns: {
+				error_rate_5xx: 0,
+				gpus_online: 0,
+				gpu_utilization: 0,
+				p95_latency_ms: 0,
+				region_status: "operational",
+			},
+		},
+		{
+			name: "model_billing_daily",
+			type: "additive",
+			grain: "day",
+			source: { event: "api request", measure: "count", where: (e) => e.status_code === 200, groupBy: "model" },
+			timeColumn: "date",
+			valueColumn: "requests_billed",
+			columns: {
+				input_tokens_billed: 0,
+				cached_input_tokens_billed: 0,
+				output_tokens_billed: 0,
+				list_price_input_per_mtok: 0,
+				list_price_output_per_mtok: 0,
+				usage_value_usd: 0,
+				free_credit_usd: 0,
+				revenue_usd: 0,
+			},
+		},
+		{
+			name: "developer_marketing_daily",
+			type: "additive",
+			grain: "day",
+			source: { event: "account created", measure: "count", where: (e) => PAID_CHANNELS.includes(e.acquisition_channel), groupBy: "acquisition_channel" },
+			timeColumn: "date",
+			valueColumn: "spend_usd",
+			columns: {
+				platform_reported_signups: (ctx) => Math.round(paidSpend(dayKey(ctx.time), ctx.seriesKey) * PLATFORM_SIGNUP_INFLATION / CPL_USD[ctx.seriesKey] * jitter(`lead|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.25)),
+				clicks: (ctx) => Math.round(paidSpend(dayKey(ctx.time), ctx.seriesKey) / (CPC_USD[ctx.seriesKey] * jitter(`cpc|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.15))),
+				impressions: (ctx) => Math.round(ctx.row.clicks / (CTR[ctx.seriesKey] * jitter(`ctr|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.15))),
+			},
+		},
+	],
+
 	superProps: {
-		api_tier: ["Free", "Free", "Build", "Build", "Enterprise"],
-		primary_use_case: ["chatbot", "code_generation", "data_extraction", "content_creation", "agents"],
-		sdk_language: ["python", "typescript", "java", "go", "curl"],
+		plan_tier: ["free"],
 	},
+
 	userProps: {
-		api_tier: ["Free", "Free", "Build", "Build", "Enterprise"],
-		primary_use_case: ["chatbot", "code_generation", "data_extraction", "content_creation", "agents"],
-		sdk_language: ["python", "typescript", "java", "go", "curl"],
-		monthly_spend: u.weighNumRange(0, 50000, 0.2, 200),
-		total_api_calls: u.weighNumRange(0, 500000, 0.2, 10000),
-		preferred_model: ["sonnet-4", "sonnet-4", "haiku-4", "opus-4-6"],
+		plan_tier: ["free"],
+		company_size: ["individual"],
+		use_case: ["chat_assistant"],
+		sdk_language: ["python"],
+		acquisition_channel: { __weights: CHANNEL_WEIGHTS },
+		inference_region: ["us-east"],
+		primary_role: ["backend_developer"],
+		customer_since: ["2025-01-01"],
 	},
+
+	personas: [
+		{ name: "ml_engineer", weight: 25, eventMultiplier: 1.5, properties: { primary_role: "ml_engineer" } },
+		{ name: "backend_developer", weight: 35, eventMultiplier: 1.15, properties: { primary_role: "backend_developer" } },
+		{ name: "data_scientist", weight: 20, eventMultiplier: 0.85, properties: { primary_role: "data_scientist" } },
+		{ name: "founder", weight: 20, eventMultiplier: 0.6, properties: { primary_role: "founder" } },
+	],
+
+	retentionCurve: { type: "logarithmic", day1: 0.75, day7: 0.6, day30: 0.5 },
+
 	hook(record, type, meta) {
-		if (type === "funnel-post") return handleFunnelPostHooks(record, meta);
-		if (type === "everything") return handleEverythingHooks(record, meta);
+		if (type === "user") return handleUserHook(record, meta);
+		if (type === "funnel-post") return handleFunnelPost(record, meta);
+		if (type === "everything") return handleEverything(record, meta);
+		if (type === "warehouse") return handleWarehouse(record, meta);
 		return record;
 	},
 };
 
 // ── STORIES ──────────────────────────────────────────────────────────────
-// Machine-checkable contract for the 10 numbered hooks. Evaluate with:
-//   node scripts/verify-stories.mjs dungeons/vertical/ai-platform/ai-platform.js --data-prefix verify-ai-platform
+// Machine-checkable contract for hooks H1-H10. Evaluate with:
+//   node dungeons/vertical/ai-platform/ai-platform.verify.mjs
 
-const EV = `read_json_auto('{{PREFIX}}-EVENTS*.json', sample_size=-1, union_by_name=true)`;
-const US = `read_json_auto('{{PREFIX}}-USERS*.json', sample_size=-1, union_by_name=true)`;
+const EV = `read_json_auto('{{PREFIX}}-EVENTS*.json*', sample_size=-1, union_by_name=true)`;
+const US = `read_json_auto('{{PREFIX}}-USERS*.json*', sample_size=-1, union_by_name=true)`;
+const WH = (table) => `read_json_auto('{{PREFIX}}-WAREHOUSE-${table}.json*', sample_size=-1, union_by_name=true)`;
 
-// Identity prelude. organization created is both isAuthEvent and isFirstEvent,
-// so born users auth on their very first event and user_id should be present
-// on every record; the prelude still resolves through the device pool
-// (avgDevicePerUser: 2, "anonymousIds" is the legacy USERS-shard key) as
-// belt-and-braces for any device-only edge.
-const ID_CTE = `dmap AS (SELECT unnest("anonymousIds") AS device_id, distinct_id FROM ${US}),
-ev AS (SELECT coalesce(m.distinct_id::VARCHAR, e.user_id::VARCHAR, e.device_id::VARCHAR) AS uid,
-  e.time::TIMESTAMP AS t, e.* FROM ${EV} e LEFT JOIN dmap m ON e.device_id = m.device_id)`;
+// Identity prelude: every event is tracked server-side with user_id and there
+// is no device_id, so Mixpanel's distinct_id is the user_id on every event.
+const ID_CTE = `ev AS (SELECT user_id::VARCHAR AS uid, time::TIMESTAMP AS t, * FROM ${EV})`;
 
-// Temporal boundaries computed from the same knobs the hooks use
-const MIG_TS = dayjs.utc(DATASET_START).add(MODEL_MIGRATION_DAY, "day").format("YYYY-MM-DD HH:mm:ss");
-const OUTAGE_START_TS = dayjs.utc(DATASET_START).add(OUTAGE_START_DAY, "day").format("YYYY-MM-DD HH:mm:ss");
-const OUTAGE_END_TS = dayjs.utc(DATASET_START).add(OUTAGE_END_DAY, "day").format("YYYY-MM-DD HH:mm:ss");
-// H4 eligibility: users must have ≥14d of post-week-1 runway, else a natural
-// short tail is indistinguishable from the engineered cliff
-const H4_ELIGIBLE_TS = dayjs.utc(DATASET_END).subtract(21, "day").format("YYYY-MM-DD HH:mm:ss");
+const TS = (iso) => dayjs.utc(iso).format("YYYY-MM-DD HH:mm:ss");
+const D = (iso) => iso.slice(0, 10);
+const band = (k) => [Math.round(k * 0.9 * 1000) / 1000, Math.round(k * 1.1 * 1000) / 1000];
+const SQL_LIST = (xs) => xs.map((x) => `'${x}'`).join(", ");
+const CACHE_RAMPED = TS(dayjs.utc(CACHE_LAUNCH).add(CACHE_RAMP_DAYS, "day"));
+const ATLAS3_RAMPED = TS(dayjs.utc(ATLAS3_LAUNCH).add(ATLAS3_RAMP_DAYS, "day"));
+const ATLAS3_FREE_RAMPED = TS(dayjs.utc(ATLAS3_FREE).add(ATLAS3_FREE_RAMP_DAYS, "day"));
+const SWIFT_SHIFTED = TS(dayjs.utc(SWIFT_PRICE_CUT).add(SWIFT_SHIFT_RAMP_DAYS + 4, "day")); // 2026-09-01
+const INC_BASE_FROM = TS(dayjs.utc(INCIDENT_START).subtract(7, "day"));
+const INC_BASE_TO = TS(dayjs.utc(INCIDENT_END).add(7, "day"));
+const RL_BASE_FROM = TS(dayjs.utc(RATE_LIMIT_RAISE).subtract(31, "day")); // August
+const RL_POST_TO = TS(dayjs.utc(RATE_LIMIT_RAISE).add(30, "day"));        // September
+const RETENTION_DAY = 30;
+const PAID_COHORT_LAST = dayjs.utc(PAID_COHORT_END).subtract(1, "day").format("YYYY-MM-DD");
+const ONBOARD_WINDOW_DAYS = 7;
+const SYSTEM_EVENTS = ["batch job completed", "eval run completed"]; // sent by the platform, not the user: not activity
 
-// H3/H7 cohort cells — EXACTLY the hook's classification. The filters (H4/H8)
-// run before the cohort mutators, so thresholds applied to the output
-// reproduce the hook's cohorts 1:1 (H3's clones only add multi-turn api calls
-// to users already at/above both agentic thresholds; non-members are untouched).
-const CELL_CTE = `coh AS (SELECT e.uid,
-  (count(*) FILTER (WHERE e.event = 'tool use call') >= ${AGENTIC_TOOL_THRESHOLD}
-   AND count(*) FILTER (WHERE e.event = 'api call' AND e.multi_turn = true) >= ${AGENTIC_MULTITURN_THRESHOLD}) AS agentic,
-  bool_or(e.event = 'batch job submitted') AS batch
-  FROM ev e GROUP BY 1),
-cells AS (SELECT uid, CASE WHEN agentic AND batch THEN 'both' WHEN agentic THEN 'agentic'
-  WHEN batch THEN 'batch' ELSE 'neither' END AS cell FROM coh)`;
+// one row per onboarding signup: did the account make its first request within 7 days, and how fast
+const ONBOARD_SQL = `WITH ${ID_CTE},
+s AS (SELECT uid, t AS t0 FROM ev WHERE event = 'account created' AND t >= TIMESTAMP '${TS(QUICKSTART_START)}'),
+k AS (SELECT uid, min(t) AS tk FROM ev WHERE event = 'api key created' GROUP BY 1),
+r AS (SELECT e.uid, min(e.t) AS tr FROM ev e JOIN k ON k.uid = e.uid AND e.t >= k.tk WHERE e.event = 'api request' GROUP BY 1),
+v AS (SELECT distinct_id::VARCHAR AS uid, "${EXP_KEY}" AS variant FROM ${US} WHERE "${EXP_KEY}" IS NOT NULL),
+x AS (SELECT v.variant, s.uid, (k.tk >= s.t0 AND r.tr IS NOT NULL AND r.tr < s.t0 + INTERVAL ${ONBOARD_WINDOW_DAYS} DAY) AS ok, r.tr, s.t0
+  FROM s JOIN v ON v.uid = s.uid LEFT JOIN k ON k.uid = s.uid LEFT JOIN r ON r.uid = s.uid)
+SELECT variant AS grp, count(*) AS user_count, avg(ok::INT) AS conv,
+ median(date_diff('second', t0, tr)) FILTER (WHERE ok) AS med_ttc_s
+FROM x GROUP BY 1`;
 
-// Per-user first-event anchor (H4/H8). min(time) in the output equals the
-// hook's anchor because both filters only drop strictly-later events.
-const T0_CTE = `t0 AS (SELECT uid, min(t) AS t0 FROM ev GROUP BY 1)`;
+// one row per batch job: submission plan, submit → complete time (batch_id pairs the two)
+const BATCH_SQL = `WITH ${ID_CTE},
+s AS (SELECT batch_id, uid, plan_tier, t AS t0 FROM ev WHERE event = 'batch job submitted'),
+c AS (SELECT batch_id, min(t) AS t1 FROM ev WHERE event = 'batch job completed' GROUP BY 1),
+x AS (SELECT s.plan_tier, s.uid, date_diff('second', s.t0, c.t1) AS ttc FROM s JOIN c ON c.batch_id = s.batch_id)
+SELECT plan_tier AS grp, count(DISTINCT uid) AS user_count, count(*) AS jobs, median(ttc) AS med_ttc FROM x GROUP BY 1
+UNION ALL
+SELECT 'scale_enterprise' AS grp, count(DISTINCT uid) AS user_count, count(*) AS jobs, median(ttc) AS med_ttc FROM x WHERE plan_tier IN ('scale', 'enterprise')`;
 
-// H10 cohorts: docs strictly between earliest org-created and earliest billing
-// payment. Both hook branches are amount-only mutations (nothing dropped, no
-// events injected), so every event the hook classified on survives to the
-// output — the window is exactly rebuildable. The else-bin is 'zero' (docs_ct
-// = 0, the modal case at ~43% of org∩billing users).
-const DOCS_CTE = `org AS (SELECT uid, min(t) AS org_t FROM ev WHERE event = 'organization created' GROUP BY 1),
-bill AS (SELECT uid, min(t) AS bill_t FROM ev WHERE event = 'billing payment' GROUP BY 1),
-docs AS (SELECT o.uid, count(e.uid) AS docs_ct
-  FROM org o JOIN bill b ON b.uid = o.uid
-  LEFT JOIN ev e ON e.uid = o.uid AND e.event = 'docs searched' AND e.t > o.org_t AND e.t < b.bill_t
-  GROUP BY 1, o.org_t, b.bill_t),
-dcoh AS (SELECT uid, CASE WHEN docs_ct BETWEEN ${DOCS_SWEET_MIN} AND ${DOCS_SWEET_MAX} THEN 'sweet'
-  WHEN docs_ct >= ${DOCS_OVER_THRESHOLD} THEN 'over' ELSE 'zero' END AS grp FROM docs)`;
+// new API accounts: early eval runs vs day-30 retention (any event in days 30-36 after signup)
+const RETENTION_SQL = `WITH ${ID_CTE},
+s AS (SELECT uid, t AS t0 FROM ev WHERE event = 'account created' AND t < TIMESTAMP '${TS(DATASET_END)}' - INTERVAL ${RETENTION_DAY + 7} DAY
+  AND uid IN (SELECT uid FROM ev WHERE event = 'api request')),
+f AS (SELECT s.uid,
+  count(*) FILTER (WHERE e.event = 'eval run started' AND e.t < s.t0 + INTERVAL ${EVAL_DAYS} DAY) AS early,
+  count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL ${RETENTION_DAY} DAY AND e.t < s.t0 + INTERVAL ${RETENTION_DAY + 7} DAY AND e.event NOT IN (${SQL_LIST(SYSTEM_EVENTS)})) AS ret
+  FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
+SELECT CASE WHEN early >= ${EVAL_MIN} THEN 'two_plus' WHEN early = 1 THEN 'one' ELSE 'zero' END AS grp,
+ count(*) AS user_count, avg((ret > 0)::INT) AS retention
+FROM f GROUP BY 1`;
+
+// paid-model swift-2 share by plan, before the price cut vs September
+const SWIFT_SQL = `WITH ${ID_CTE}
+SELECT plan_tier AS grp, count(DISTINCT uid) AS user_count,
+ avg((model = 'swift-2')::INT) FILTER (WHERE t >= TIMESTAMP '${SWIFT_SHIFTED}') / avg((model = 'swift-2')::INT) FILTER (WHERE t < TIMESTAMP '${TS(SWIFT_PRICE_CUT)}') AS shift
+FROM ev WHERE event = 'api request' GROUP BY 1`;
+
+// spend per Mixpanel signup by paid channel (warehouse join) and 30-day paid conversion by channel
+const CAC_SQL = `WITH ${ID_CTE},
+s AS (SELECT acquisition_channel AS ch, count(*) AS signups, count(DISTINCT uid) AS users FROM ev WHERE event = 'account created' GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM ${WH("developer_marketing_daily")} GROUP BY 1)
+SELECT s.ch AS grp, s.users AS user_count, sp.spend / s.signups AS spend_per_signup FROM s JOIN sp ON sp.ch = s.ch`;
+const PAID_CONV_SQL = `WITH ${ID_CTE},
+s AS (SELECT uid, t AS t0, acquisition_channel AS ch FROM ev WHERE event = 'account created' AND t < TIMESTAMP '${TS(PAID_COHORT_END)}'),
+b AS (SELECT DISTINCT s.uid FROM s JOIN ev e ON e.uid = s.uid AND e.event = 'plan upgraded'
+  AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL ${PAID_FUNNEL_WINDOW_DAYS} DAY)
+SELECT s.ch AS grp, count(*) AS user_count, count(b.uid) AS buyers, count(b.uid)::DOUBLE / count(*) AS paid_rate
+FROM s LEFT JOIN b ON b.uid = s.uid GROUP BY 1`;
+
+// rate-limit episodes per sampled request, by plan, August vs September
+const RL_SQL = `WITH ${ID_CTE},
+w AS (SELECT plan_tier, uid, event, (t >= TIMESTAMP '${TS(RATE_LIMIT_RAISE)}') AS post FROM ev
+  WHERE event IN ('rate limit hit', 'api request') AND t >= TIMESTAMP '${RL_BASE_FROM}' AND t < TIMESTAMP '${RL_POST_TO}'),
+g AS (SELECT plan_tier, post, count(*) FILTER (WHERE event = 'rate limit hit')::DOUBLE / count(*) FILTER (WHERE event = 'api request') AS r,
+  count(DISTINCT uid) AS users FROM w GROUP BY 1, 2)
+SELECT plan_tier AS grp, min(users) AS user_count, max(r) FILTER (WHERE post) / max(r) FILTER (WHERE NOT post) AS shift FROM g GROUP BY 1`;
 
 /** @type {import("../../../types").DungeonStory[]} */
 export const stories = [
 	{
-		id: "H1-prompt-caching",
+		id: "H1-prompt-caching-launch",
 		hook: "H1",
-		archetype: "cohort-prop-scale",
-		narrative: `~25% of users (profile distinct_id charcode-sum % ${CACHE_USER_HASH_MOD} === 0) activate prompt caching ~${CACHE_ACTIVATION_PCT * 100}% into their stream; from then on api calls carry cache_enabled=true and cost_usd × ${CACHE_COST_FACTOR}. The flag is stamped, so the breakdown is direct`,
+		archetype: "temporal-inflection",
+		narrative: `Prompt caching becomes generally available on ${D(CACHE_LAUNCH)} for every plan. ${CACHE_ADOPTER_SHARE * 100}% of accounts turn it on, each on a salted day in the ${CACHE_RAMP_DAYS} days after launch, and each adopter's prompts hit the cache on a salted ${(CACHE_HIT_MEAN - CACHE_HIT_SPREAD) * 100}-${(CACHE_HIT_MEAN + CACHE_HIT_SPREAD) * 100}% of requests (mean ${CACHE_HIT_MEAN * 100}%), so the hit share ramps for three weeks and then holds at ${CACHE_HIT_SHARE * 100}% of requests. A cache hit returns in ${CACHE_LATENCY_MULT}x the latency of a miss. No request before launch is a cache hit. The latency read uses successful atlas-2 requests (model latency differs; failed requests return early), where hits and misses come from the same accounts and prompts.`,
+		mixpanelReport: { type: "Insights", event: "api request", measure: "average latency_ms", breakdown: "cache_hit", filter: "model = atlas-2, status_code = 200, after 2026-07-08" },
 		assertions: [
 			{
 				breakdown: {
 					type: "duckdb",
-					sql: `SELECT CASE WHEN cache_enabled = true THEN 'cached' ELSE 'uncached' END AS grp,
- avg(cost_usd) AS avg_cost, count(*) AS event_count
-FROM ${EV} WHERE event = 'api call' GROUP BY 1`,
+					sql: `WITH ${ID_CTE}
+SELECT 'all' AS grp, count(DISTINCT uid) AS user_count,
+ count(*) FILTER (WHERE cache_hit AND t < TIMESTAMP '${TS(CACHE_LAUNCH)}') AS impure_rows
+FROM ev WHERE event = 'api request'`,
 				},
-				select: { c: { where: { grp: "cached" } }, u: { where: { grp: "uncached" } } },
-				// knob 0.3; both sides draw from the same declared cost distribution
-				expect: { metric: "c.avg_cost / u.avg_cost", op: "between", target: [0.24, 0.36] },
+				select: { a: { where: { grp: "all" } } },
+				// exact: a cache hit before general availability is a bug
+				expect: { metric: "a.impure_rows", op: "between", target: [0, 0] },
 			},
 			{
-				// hash cohort share: charcode-sum % 4 of GUID-ish ids ≈ uniform → ~25%
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT CASE WHEN cache_hit THEN 'hit' ELSE 'miss' END AS grp, count(DISTINCT uid) AS user_count, count(*) AS requests, avg(latency_ms) AS avg_latency
+FROM ev WHERE event = 'api request' AND status_code = 200 AND model = 'atlas-2' AND t >= TIMESTAMP '${TS(CACHE_LAUNCH)}' GROUP BY 1`,
+				},
+				select: { h: { where: { grp: "hit" } }, m: { where: { grp: "miss" } } },
+				expect: { metric: "h.avg_latency / m.avg_latency", op: "between", target: band(CACHE_LATENCY_MULT) },
+				minCohort: 1000,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT 'ramped' AS grp, count(DISTINCT uid) AS user_count, avg(cache_hit::INT) AS hit_share
+FROM ev WHERE event = 'api request' AND t >= TIMESTAMP '${CACHE_RAMPED}'`,
+				},
+				select: { r: { where: { grp: "ramped" } } },
+				// after the ramp every adopter has started: adopter share × mean hit rate
+				// (failed requests are never hits: ~2.5% background errors, below the band)
+				expect: { metric: "r.hit_share", op: "between", target: band(CACHE_HIT_SHARE) },
+				minCohort: 3000,
+			},
+		],
+	},
+	{
+		id: "H2-atlas-3-launch",
+		hook: "H2",
+		archetype: "composition-drift",
+		narrative: `atlas-3 launches ${D(ATLAS3_LAUNCH)} for Build, Scale, and Enterprise accounts (plan at the moment of the request) and opens to Free accounts on ${D(ATLAS3_FREE)}. ${ATLAS3_PAID_ADOPTERS * 100}% of paid accounts adopt it, each starting on a salted day in the ${ATLAS3_RAMP_DAYS} days after launch and sending a salted ${(ATLAS3_USE_MEAN - ATLAS3_USE_SPREAD) * 100}-${(ATLAS3_USE_MEAN + ATLAS3_USE_SPREAD) * 100}% (mean ${ATLAS3_USE_MEAN * 100}%) of their flagship traffic to it, so atlas-3 takes ${ATLAS3_FLAGSHIP_SHARE * 100}% of paid flagship (atlas-2 + atlas-3) requests once ramped; swift-2 traffic is untouched. ${ATLAS3_FREE_ADOPTERS * 100}% of Free accounts adopt after Free access (10-day ramp). atlas-3 answers are ${ATLAS3_OUTPUT_MULT}x as long (output_tokens). No atlas-3 request exists before launch, and none on a Free plan before Free access.`,
+		mixpanelReport: { type: "Insights", event: "api request", measure: "total", breakdown: "model", filter: "model in (atlas-2, atlas-3), plan_tier in (build, scale, enterprise)", chart: "weekly stacked, % of total" },
+		assertions: [
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT 'all' AS grp, count(DISTINCT uid) AS user_count,
+ count(*) FILTER (WHERE model = 'atlas-3' AND (t < TIMESTAMP '${TS(ATLAS3_LAUNCH)}' OR (plan_tier = 'free' AND t < TIMESTAMP '${TS(ATLAS3_FREE)}'))) AS impure_rows
+FROM ev WHERE event = 'api request'`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.impure_rows", op: "between", target: [0, 0] },
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT 'paid' AS grp, count(DISTINCT uid) AS user_count, avg((model = 'atlas-3')::INT) AS atlas3_share
+FROM ev WHERE event = 'api request' AND model IN ('atlas-2', 'atlas-3') AND plan_tier IN (${SQL_LIST(PAID_PLANS)}) AND t >= TIMESTAMP '${ATLAS3_RAMPED}'`,
+				},
+				select: { p: { where: { grp: "paid" } } },
+				expect: { metric: "p.atlas3_share", op: "between", target: band(ATLAS3_FLAGSHIP_SHARE) },
+				minCohort: 1500,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT model AS grp, count(DISTINCT uid) AS user_count, avg(output_tokens) AS avg_output
+FROM ev WHERE event = 'api request' AND status_code = 200 AND model IN ('atlas-2', 'atlas-3') AND plan_tier IN (${SQL_LIST(PAID_PLANS)}) AND t >= TIMESTAMP '${TS(ATLAS3_LAUNCH)}' GROUP BY 1`,
+				},
+				select: { n: { where: { grp: "atlas-3" } }, o: { where: { grp: "atlas-2" } } },
+				expect: { metric: "n.avg_output / o.avg_output", op: "between", target: band(ATLAS3_OUTPUT_MULT) },
+				minCohort: 1000,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT 'free' AS grp, count(DISTINCT uid) AS user_count, avg((model = 'atlas-3')::INT) AS atlas3_share
+FROM ev WHERE event = 'api request' AND model IN ('atlas-2', 'atlas-3') AND plan_tier = 'free' AND t >= TIMESTAMP '${ATLAS3_FREE_RAMPED}'`,
+				},
+				select: { f: { where: { grp: "free" } } },
+				expect: { metric: "f.atlas3_share", op: "between", target: band(ATLAS3_FREE_ADOPTERS * ATLAS3_USE_MEAN) },
+				minCohort: 500,
+			},
+		],
+	},
+	{
+		id: "H3-interactive-quickstart-experiment",
+		hook: "H3",
+		archetype: "experiment-lift",
+		narrative: `The "${QUICKSTART_EXPERIMENT}" onboarding test starts ${D(QUICKSTART_START)} and splits new accounts 50/50 at signup (sticky hash; $experiment_started and the profile property "${EXP_KEY}"). Control sees the static quickstart docs; the "${QUICKSTART_VARIANT}" arm gets a guided in-console walkthrough. The variant multiplies the share of signups that make their first API request (account created → api key created → api request) by ${QUICKSTART_CONV_MULT} (${ONBOARD_CONV}% → ${Math.round(ONBOARD_CONV * QUICKSTART_CONV_MULT)}%) and the time from signup to first request by ${QUICKSTART_TTC_MULT}. Declarative funnel experiment on the first funnel. Read with a ${ONBOARD_WINDOW_DAYS}-day conversion window; every onboarding step happens once per account, and an account that never makes its first request in onboarding sends no API traffic, so the unique-user funnel reads the knobs directly.`,
+		mixpanelReport: { type: "Funnels", steps: ["account created", "api key created", "api request"], window: "7 days", breakdown: `user property "${EXP_KEY}"`, measure: "conversion and median time to convert" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: ONBOARD_SQL },
+				select: { v: { where: { grp: QUICKSTART_VARIANT } }, c: { where: { grp: "Control" } } },
+				expect: { metric: "v.conv / c.conv", op: "between", target: band(QUICKSTART_CONV_MULT) },
+				minCohort: 1000,
+			},
+			{
+				breakdown: { type: "duckdb", sql: ONBOARD_SQL },
+				select: { v: { where: { grp: QUICKSTART_VARIANT } }, c: { where: { grp: "Control" } } },
+				expect: { metric: "v.med_ttc_s / c.med_ttc_s", op: "between", target: band(QUICKSTART_TTC_MULT) },
+				minCohort: 1000,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT 'all' AS grp, count(DISTINCT uid) AS user_count,
+ count(DISTINCT uid) FILTER (WHERE "Variant name" = '${QUICKSTART_VARIANT}')::DOUBLE / count(DISTINCT uid) AS variant_share
+FROM ev WHERE event = '$experiment_started'`,
+				},
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.variant_share", op: "between", target: band(0.5) },
+				minCohort: 2000,
+			},
+		],
+	},
+	{
+		id: "H4-batch-turnaround-by-plan",
+		hook: "H4",
+		archetype: "funnel-ttc-by-segment",
+		narrative: `Batch API turnaround depends on the account's plan when the job is submitted: Scale and Enterprise jobs finish in ${BATCH_PLAN_MULT.scale}x the Build time and Free jobs in ${BATCH_PLAN_MULT.free}x (base median ${BATCH_MEDIAN_H} h on Build, seeded log-normal spread; jobs not done in ${BATCH_SLA_H} h expire). Each job's submission and completion share a batch_id, so a funnel holding batch_id constant measures each job on its own; the median ratio reads the knob.`,
+		mixpanelReport: { type: "Funnels", steps: ["batch job submitted", "batch job completed"], measure: "median time to convert", holdPropertyConstant: "batch_id", breakdown: "plan_tier", window: "1 day" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: BATCH_SQL },
+				select: { p: { where: { grp: "scale_enterprise" } }, b: { where: { grp: "build" } } },
+				expect: { metric: "p.med_ttc / b.med_ttc", op: "between", target: band(BATCH_PLAN_MULT.scale) },
+				minCohort: 300,
+			},
+			{
+				breakdown: { type: "duckdb", sql: BATCH_SQL },
+				select: { f: { where: { grp: "free" } }, b: { where: { grp: "build" } } },
+				expect: { metric: "f.med_ttc / b.med_ttc", op: "between", target: band(BATCH_PLAN_MULT.free) },
+				minCohort: 300,
+			},
+		],
+	},
+	{
+		id: "H5-early-evals-retention",
+		hook: "H5",
+		archetype: "retention-divergence",
+		narrative: `New accounts that got their integration working (made their first API request) and ran fewer than ${EVAL_MIN} evaluation runs in their first ${EVAL_DAYS} days are at risk, on a ramp: ${DARK_SHARE_BY_EVALS[0] * 100}% of accounts with no early eval run and ${DARK_SHARE_BY_EVALS[1] * 100}% with one go dark after day ${DARK_AFTER_DAYS}; ${EVAL_MIN}+ never do. Every new API account also faces organic lapse (${LAPSE_SHARE * 100}% stop on a uniform day ${LAPSE_DAY_MIN}-${LAPSE_DAY_MAX}). Day-${RETENTION_DAY} retention = any user activity in days ${RETENTION_DAY}-${RETENTION_DAY + 6} after signup (every event except the system-sent ${SYSTEM_EVENTS.join(" and ")}), signups at least ${RETENTION_DAY + 7} days before the window end. Both reads are knob floors: heavier users run more evals and are likelier to be active in the day-${RETENTION_DAY} week even without the dark cut, so engagement adds to the gap. 2+ vs none ≥ 1/(1−${DARK_SHARE_BY_EVALS[0]}); one vs none ≥ (1−${DARK_SHARE_BY_EVALS[1]})/(1−${DARK_SHARE_BY_EVALS[0]}). Mixpanel: build the groups in Funnels (account created → eval run started → eval run started, ${EVAL_DAYS}-day window, uniques; completed = 2+, dropped after step 2 = one, dropped after step 1 = none), save each as a cohort, filter to accounts that did api request, then Retention (account created → a custom event grouping every event except ${SYSTEM_EVENTS.join(" and ")}; plain \"any event\" gives the same numbers on this data; custom bracket day ${RETENTION_DAY}-${RETENTION_DAY + 6}) broken down by those cohorts.`,
+		mixpanelReport: { type: "Funnels → cohorts → Retention", cohortFunnel: `account created → eval run started → eval run started, ${EVAL_DAYS}-day window`, birth: "account created", return: `custom event: every event except ${SYSTEM_EVENTS.join(", ")}`, brackets: `custom: day ${RETENTION_DAY}-${RETENTION_DAY + 6}`, breakdown: "those cohorts", filter: "did api request" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: RETENTION_SQL },
+				select: { a: { where: { grp: "two_plus" } }, z: { where: { grp: "zero" } } },
+				// confounded by engagement: knob-derived floor, grades STRONG above +10%
+				expect: { metric: "a.retention / z.retention", op: ">=", target: 1 / (1 - DARK_SHARE_BY_EVALS[0]), floor: 0.9 / (1 - DARK_SHARE_BY_EVALS[0]) },
+				minCohort: 200,
+			},
+			{
+				breakdown: { type: "duckdb", sql: RETENTION_SQL },
+				select: { o: { where: { grp: "one" } }, z: { where: { grp: "zero" } } },
+				expect: { metric: "o.retention / z.retention", op: ">=", target: (1 - DARK_SHARE_BY_EVALS[1]) / (1 - DARK_SHARE_BY_EVALS[0]), floor: 0.9 * (1 - DARK_SHARE_BY_EVALS[1]) / (1 - DARK_SHARE_BY_EVALS[0]) },
+				minCohort: 200,
+			},
+		],
+	},
+	{
+		id: "H6-us-east-capacity-incident",
+		hook: "H6",
+		archetype: "bespoke",
+		narrative: `From ${D(INCIDENT_START)} to ${D(INCIDENT_END)} (exclusive) the ${INCIDENT_REGION} inference region loses GPU capacity: ${INCIDENT_FAIL * 100}% of requests that would have succeeded there fail with 529 overloaded_error, and the ones that succeed take ${INCIDENT_LATENCY_MULT}x as long. The incident days and region come from the warehouse table inference_fleet_daily (region_status = 'major_outage'). The event-side read is a ratio of ratios: ${INCIDENT_REGION} success rate / other regions, incident days vs the 7 days either side, which reads the 1 − ${INCIDENT_FAIL} keep rate while cancelling background errors and weekday mix. The warehouse error_rate_5xx during the outage reads the failure knob (plus the ~1.3% background 5xx).`,
+		mixpanelReport: { type: "Insights", event: "api request", measure: "share with status_code = 200", breakdown: "inference_region", chart: "daily line", join: "warehouse inference_fleet_daily.region_status on date + inference_region" },
+		assertions: [
+			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE},
-per AS (SELECT uid, bool_or(cache_enabled = true) AS is_cache FROM ev WHERE event = 'api call' GROUP BY 1)
-SELECT 'all' AS grp, count(*) AS user_count,
- count(*) FILTER (WHERE is_cache)::DOUBLE / count(*) AS cache_share
-FROM per`,
+o AS (SELECT DISTINCT date::DATE AS d, inference_region FROM ${WH("inference_fleet_daily")} WHERE region_status = 'major_outage'),
+od AS (SELECT DISTINCT d FROM o), orr AS (SELECT DISTINCT inference_region FROM o),
+w AS (SELECT t::DATE AS d, uid, (inference_region IN (SELECT inference_region FROM orr)) AS hit, (status_code = 200) AS ok
+  FROM ev WHERE event = 'api request' AND t >= TIMESTAMP '${INC_BASE_FROM}' AND t < TIMESTAMP '${INC_BASE_TO}'),
+g AS (SELECT (d IN (SELECT d FROM od)) AS outage, avg(ok::INT) FILTER (WHERE hit) / avg(ok::INT) FILTER (WHERE NOT hit) AS rel, count(DISTINCT uid) AS users FROM w GROUP BY 1)
+SELECT 'all' AS grp, (SELECT count(*) FROM od) AS outage_days, min(users) AS user_count,
+ max(rel) FILTER (WHERE outage) / max(rel) FILTER (WHERE NOT outage) AS did
+FROM g`,
 				},
-				select: { all: { where: { grp: "all" } } },
-				expect: { metric: "all.cache_share", op: "between", target: [0.17, 0.33] },
-			},
-		],
-	},
-	{
-		id: "H2-model-migration",
-		hook: "H2",
-		archetype: "temporal-inflection",
-		narrative: `opus-4-7 releases at day ${MODEL_MIGRATION_DAY}: ${MODEL_MIGRATION_LIKELIHOOD}% of post-release Build/Enterprise api calls migrate, at ${MODEL_MIGRATION_TOKEN_MULT}x tokens. The hook scrubs engine-sampled opus-4-7 back to the pre-release mix, so purity is exact: zero opus-4-7 before the release instant, on Free users, or on any non-api-call event`,
-		assertions: [
-			{
-				// deterministic purity — the scrub + tier/date-gated stamp make
-				// any impure row a hook bug, not sampling noise
-				breakdown: {
-					type: "duckdb",
-					sql: `SELECT 'all' AS grp,
- count(*) FILTER (WHERE model = 'opus-4-7' AND (time::TIMESTAMP < TIMESTAMP '${MIG_TS}' OR api_tier = 'Free' OR event <> 'api call')) AS impure,
- count(*) FILTER (WHERE model = 'opus-4-7') AS opus_calls
-FROM ${EV} WHERE model IS NOT NULL`,
-				},
-				assert: (rows) => {
-					const r = (rows || [])[0];
-					if (!r) return { pass: false, verdict: "NONE", detail: "no rows" };
-					if (Number(r.opus_calls) === 0) return { pass: false, verdict: "NONE", detail: "no opus-4-7 calls at all" };
-					const clean = Number(r.impure) === 0;
-					return {
-						pass: clean,
-						verdict: clean ? "NAILED" : "INVERSE",
-						detail: `impure=${r.impure} of ${r.opus_calls} opus-4-7 rows (pre-release / Free / non-api-call must all be 0)`,
-					};
-				},
-			},
-			{
-				// per-call migration is Bernoulli(0.35) — share of paid post-release calls
-				breakdown: {
-					type: "duckdb",
-					sql: `SELECT 'all' AS grp, count(*) AS event_count,
- count(*) FILTER (WHERE model = 'opus-4-7')::DOUBLE / count(*) AS share
-FROM ${EV} WHERE event = 'api call' AND api_tier IN ('Build', 'Enterprise')
-  AND time::TIMESTAMP >= TIMESTAMP '${MIG_TS}'`,
-				},
-				select: { all: { where: { grp: "all" } } },
-				expect: { metric: "all.share", op: "between", target: [0.3, 0.4] },
-			},
-			{
-				// tokens 1.5x — restricted to non-agentic/non-batch users so H3's 8x
-				// and H7's 2x (which hit opus and non-opus calls of their cohorts
-				// alike) can't blur the comparison
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${CELL_CTE}
-SELECT CASE WHEN e.model = 'opus-4-7' THEN 'opus' ELSE 'other' END AS grp,
- avg(e.tokens_used) AS avg_tokens, count(*) AS event_count, count(DISTINCT e.uid) AS user_count
-FROM ev e JOIN cells c ON c.uid = e.uid AND c.cell = 'neither'
-WHERE e.event = 'api call' AND e.api_tier IN ('Build', 'Enterprise')
-  AND e.t >= TIMESTAMP '${MIG_TS}'
-GROUP BY 1`,
-				},
-				select: { o: { where: { grp: "opus" } }, x: { where: { grp: "other" } } },
-				expect: { metric: "o.avg_tokens / x.avg_tokens", op: "between", target: [1.3, 1.7] },
-				minCohort: 100,
-			},
-		],
-	},
-	{
-		id: "H3-agentic-power-users",
-		hook: "H3",
-		archetype: "cohort-prop-scale",
-		narrative: `users with ${AGENTIC_TOOL_THRESHOLD}+ tool use calls AND ${AGENTIC_MULTITURN_THRESHOLD}+ multi-turn api calls (classified post-filter — exactly rebuildable) get ${AGENTIC_TOKEN_MULT}x tokens_used and ${AGENTIC_CLONE_MULT} clones per api call. Four-cell design with H7: neither/agentic/batch/both = 1x/${AGENTIC_TOKEN_MULT}x/${BATCH_TOKEN_MULT}x/${AGENTIC_TOKEN_MULT * BATCH_TOKEN_MULT}x. Clones stamp multi_turn=true → agentic multi-turn share ≈ 75% (the 3x-volume signature)`,
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${CELL_CTE}
-SELECT c.cell AS grp, avg(e.tokens_used) AS avg_tokens,
- count(*) FILTER (WHERE e.multi_turn = true)::DOUBLE / count(*) AS mt_share,
- count(*) AS event_count, count(DISTINCT e.uid) AS user_count
-FROM cells c JOIN ev e ON e.uid = c.uid
-WHERE e.event = 'api call' GROUP BY 1`,
-				},
-				select: { a: { where: { grp: "agentic" } }, n: { where: { grp: "neither" } } },
-				// knob 8x; H2's 1.5x rides both cells (tier ⊥ cohort) and cancels
-				expect: { metric: "a.avg_tokens / n.avg_tokens", op: "between", target: [6.4, 9.6] },
-				minCohort: 50,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${CELL_CTE}
-SELECT c.cell AS grp, avg(e.tokens_used) AS avg_tokens,
- count(*) AS event_count, count(DISTINCT e.uid) AS user_count
-FROM cells c JOIN ev e ON e.uid = c.uid
-WHERE e.event = 'api call' GROUP BY 1`,
-				},
-				select: { b: { where: { grp: "both" } }, n: { where: { grp: "neither" } } },
-				// the deliberate H3×H7 compound: 8 × 2 = 16x
-				expect: { metric: "b.avg_tokens / n.avg_tokens", op: "between", target: [12.8, 19.2] },
-				minCohort: 40,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${CELL_CTE}
-SELECT c.cell AS grp,
- count(*) FILTER (WHERE e.multi_turn = true)::DOUBLE / count(*) AS mt_share,
- count(*) AS event_count, count(DISTINCT e.uid) AS user_count
-FROM cells c JOIN ev e ON e.uid = c.uid
-WHERE e.event = 'api call' GROUP BY 1`,
-				},
-				select: { a: { where: { grp: "agentic" } } },
-				// (0.25n + 2n)/3n = 0.75 — clone-volume signature; the declared
-				// multi_turn mix is 1-in-4
-				expect: { metric: "a.mt_share", op: "between", target: [0.62, 0.85] },
-				minCohort: 50,
-			},
-		],
-	},
-	{
-		id: "H4-rate-limit-churn",
-		hook: "H4",
-		archetype: "retention-divergence",
-		narrative: `${RATE_LIMIT_CHURN_LIKELIHOOD}% of users with ${RATE_LIMIT_THRESHOLD}+ rate limit errors in their first 7 days lose ALL post-week-1 events (per-user cliff). The signal is the share of flagged users with zero post-week-1 events, DIFFERENCED against the unflagged share to cancel the natural-quiet baseline — selection-free, unlike volume ratios on a burst-selected cohort. Restricted to users with ≥14d of post-week-1 runway`,
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${T0_CTE},
-rl AS (SELECT e.uid FROM ev e JOIN t0 ON t0.uid = e.uid
-  WHERE e.event = 'rate limit error' AND e.t < t0.t0 + INTERVAL 7 DAY
-  GROUP BY 1 HAVING count(*) >= ${RATE_LIMIT_THRESHOLD}),
-per AS (SELECT t0.uid, (t0.uid IN (SELECT uid FROM rl)) AS flagged,
-  count(*) FILTER (WHERE e.t > t0.t0 + INTERVAL 7 DAY) AS post_ct
-  FROM t0 JOIN ev e ON e.uid = t0.uid
-  WHERE t0.t0 <= TIMESTAMP '${H4_ELIGIBLE_TS}' GROUP BY 1, 2)
-SELECT CASE WHEN flagged THEN 'flagged' ELSE 'rest' END AS grp,
- count(*) AS user_count,
- count(*) FILTER (WHERE post_ct = 0)::DOUBLE / count(*) AS zero_share
-FROM per GROUP BY 1`,
-				},
-				select: { f: { where: { grp: "flagged" } }, r: { where: { grp: "rest" } } },
-				// knob 0.6 churn probability; differencing cancels the baseline
-				expect: { metric: "f.zero_share - r.zero_share", op: "between", target: [0.45, 0.7] },
-				minCohort: 50,
-			},
-			{
-				// direct knob readout: flagged zero-post share ≈ 0.6 + tiny baseline
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${T0_CTE},
-rl AS (SELECT e.uid FROM ev e JOIN t0 ON t0.uid = e.uid
-  WHERE e.event = 'rate limit error' AND e.t < t0.t0 + INTERVAL 7 DAY
-  GROUP BY 1 HAVING count(*) >= ${RATE_LIMIT_THRESHOLD}),
-per AS (SELECT t0.uid,
-  count(*) FILTER (WHERE e.t > t0.t0 + INTERVAL 7 DAY) AS post_ct
-  FROM t0 JOIN ev e ON e.uid = t0.uid
-  WHERE t0.uid IN (SELECT uid FROM rl) AND t0.t0 <= TIMESTAMP '${H4_ELIGIBLE_TS}'
-  GROUP BY 1)
-SELECT 'flagged' AS grp, count(*) AS user_count,
- count(*) FILTER (WHERE post_ct = 0)::DOUBLE / count(*) AS zero_share
-FROM per`,
-				},
-				select: { f: { where: { grp: "flagged" } } },
-				expect: { metric: "f.zero_share", op: "between", target: [0.5, 0.75] },
-				minCohort: 50,
-			},
-		],
-	},
-	{
-		id: "H5-tier-context-window",
-		hook: "H5",
-		archetype: "cohort-prop-scale",
-		narrative: `input_tokens scaled ${TIER_INPUT_MULT.Free}/${TIER_INPUT_MULT.Build}/${TIER_INPUT_MULT.Enterprise}x and context_window pinned to ${TIER_CONTEXT_WINDOW.Free}/${TIER_CONTEXT_WINDOW.Build}/${TIER_CONTEXT_WINDOW.Enterprise} by api_tier. No other hook touches either prop — clean stamp-phase constants`,
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `SELECT api_tier AS grp, avg(input_tokens) AS avg_in, avg(context_window) AS avg_cw,
- count(*) AS event_count
-FROM ${EV} WHERE event = 'api call' GROUP BY 1`,
-				},
-				select: { e: { where: { grp: "Enterprise" } }, f: { where: { grp: "Free" } } },
-				// knob 4x (Math.floor truncation is sub-1% at these magnitudes)
-				expect: { metric: "e.avg_in / f.avg_in", op: "between", target: [3.5, 4.5] },
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `SELECT api_tier AS grp, avg(context_window) AS avg_cw, min(context_window) AS min_cw,
- max(context_window) AS max_cw, count(*) AS event_count
-FROM ${EV} WHERE event = 'api call' GROUP BY 1`,
-				},
-				assert: (rows) => {
-					const want = { Free: TIER_CONTEXT_WINDOW.Free, Build: TIER_CONTEXT_WINDOW.Build, Enterprise: TIER_CONTEXT_WINDOW.Enterprise };
-					const by = Object.fromEntries((rows || []).map((r) => [r.grp, r]));
-					const bad = Object.entries(want).filter(([tier, cw]) =>
-						!by[tier] || Number(by[tier].min_cw) !== cw || Number(by[tier].max_cw) !== cw);
-					const detail = Object.keys(want).map((tr) => `${tr}=${by[tr] ? `${by[tr].min_cw}..${by[tr].max_cw}` : "missing"}`).join(" ");
-					return {
-						pass: bad.length === 0,
-						verdict: bad.length === 0 ? "NAILED" : "INVERSE",
-						detail: `${detail} (every api call must carry its tier's exact constant)`,
-					};
-				},
-			},
-		],
-	},
-	{
-		id: "H6-outage-day",
-		hook: "H6",
-		archetype: "temporal-inflection",
-		narrative: `days ${OUTAGE_START_DAY}-${OUTAGE_END_DAY - 1}: ${OUTAGE_ERROR_LIKELIHOOD}% of api calls flagged is_error with a service error_type and ${OUTAGE_LATENCY_MULT}x latency. is_error declares [false], so the outage is the only error source — the window boundary is exact`,
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `SELECT 'all' AS grp,
- count(*) FILTER (WHERE is_error = true AND time::TIMESTAMP >= TIMESTAMP '${OUTAGE_START_TS}' AND time::TIMESTAMP < TIMESTAMP '${OUTAGE_END_TS}')::DOUBLE
-   / nullif(count(*) FILTER (WHERE time::TIMESTAMP >= TIMESTAMP '${OUTAGE_START_TS}' AND time::TIMESTAMP < TIMESTAMP '${OUTAGE_END_TS}'), 0) AS in_share,
- count(*) FILTER (WHERE time::TIMESTAMP >= TIMESTAMP '${OUTAGE_START_TS}' AND time::TIMESTAMP < TIMESTAMP '${OUTAGE_END_TS}') AS in_calls,
- count(*) FILTER (WHERE is_error = true AND (time::TIMESTAMP < TIMESTAMP '${OUTAGE_START_TS}' OR time::TIMESTAMP >= TIMESTAMP '${OUTAGE_END_TS}')) AS out_errors
-FROM ${EV} WHERE event = 'api call'`,
-				},
-				select: { all: { where: { grp: "all" } } },
-				// knob 40% (Bernoulli per in-window call)
-				expect: { metric: "all.in_share", op: "between", target: [0.35, 0.45] },
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.did", op: "between", target: band(1 - INCIDENT_FAIL) },
+				minCohort: 1000,
 			},
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `SELECT 'all' AS grp,
- count(*) FILTER (WHERE is_error = true AND (time::TIMESTAMP < TIMESTAMP '${OUTAGE_START_TS}' OR time::TIMESTAMP >= TIMESTAMP '${OUTAGE_END_TS}')) AS out_errors,
- count(*) FILTER (WHERE is_error = true) AS total_errors
-FROM ${EV} WHERE event = 'api call'`,
+ count(*) FILTER (WHERE region_status = 'major_outage') AS outage_rows,
+ avg(error_rate_5xx) FILTER (WHERE region_status = 'major_outage') AS outage_err,
+ count(*) FILTER (WHERE region_status = 'major_outage' AND (date::DATE < DATE '${D(INCIDENT_START)}' OR date::DATE >= DATE '${D(INCIDENT_END)}' OR inference_region <> '${INCIDENT_REGION}')) AS misplaced
+FROM ${WH("inference_fleet_daily")}`,
 				},
-				assert: (rows) => {
-					const r = (rows || [])[0];
-					if (!r) return { pass: false, verdict: "NONE", detail: "no rows" };
-					if (Number(r.total_errors) === 0) return { pass: false, verdict: "NONE", detail: "no errors at all — outage never fired" };
-					const clean = Number(r.out_errors) === 0;
-					return {
-						pass: clean,
-						verdict: clean ? "NAILED" : "INVERSE",
-						detail: `out-of-window errors=${r.out_errors} of ${r.total_errors} total (baseline is 0% by schema)`,
-					};
-				},
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.outage_err", op: "between", target: band(INCIDENT_FAIL) },
 			},
 		],
 	},
 	{
-		id: "H7-batch-discount",
+		id: "H7-swift-price-cut",
 		hook: "H7",
-		archetype: "cohort-prop-scale",
-		narrative: `users with any surviving batch job submitted get cost_per_token × ${BATCH_COST_FACTOR} (touched by no other hook) and tokens_used × ${BATCH_TOKEN_MULT} (compounds with H3 — the 'both' cell is verified in the H3 story)`,
+		archetype: "temporal-inflection",
+		narrative: `On ${D(SWIFT_PRICE_CUT)} the swift-2 list price halves ($${PRICE_IN["swift-2"]} → $${PRICE_IN["swift-2"] * SWIFT_PRICE_CUT_FACTOR} input, $${PRICE_OUT["swift-2"]} → $${PRICE_OUT["swift-2"] * SWIFT_PRICE_CUT_FACTOR} output per million tokens). Build accounts pay list price, so each moves more traffic to swift-2 (switching on a salted day in the ${SWIFT_SHIFT_RAMP_DAYS} days after the cut): its swift-2 share becomes ${SWIFT_SHIFT_MULT}x its base share (base uniform ${SWIFT_BASE_MIN * 100}-${SWIFT_BASE_MAX * 100}% per account, so no account exceeds 100%). Free accounts run on monthly credits and Scale and Enterprise on contract rates; none of them change. Read: swift-2 share of api requests from ${D(SWIFT_SHIFTED)} vs before the cut, by plan_tier at request time. Prices live only in the warehouse table model_billing_daily.`,
+		mixpanelReport: { type: "Insights", event: "api request", measure: "total", breakdown: "model", filter: "plan_tier = build (and free as control)", chart: "weekly, % of total", join: "model_billing_daily.list_price_input_per_mtok" },
 		assertions: [
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${CELL_CTE}
-SELECT CASE WHEN c.cell IN ('batch', 'both') THEN 'batch' ELSE 'rest' END AS grp,
- avg(e.cost_per_token) AS avg_cpt, count(*) AS event_count, count(DISTINCT e.uid) AS user_count
-FROM cells c JOIN ev e ON e.uid = c.uid
-WHERE e.event = 'api call' GROUP BY 1`,
-				},
-				select: { b: { where: { grp: "batch" } }, r: { where: { grp: "rest" } } },
-				// knob 0.5; cost_per_token has no other mutator
-				expect: { metric: "b.avg_cpt / r.avg_cpt", op: "between", target: [0.42, 0.58] },
-				minCohort: 100,
+				breakdown: { type: "duckdb", sql: SWIFT_SQL },
+				select: { b: { where: { grp: "build" } } },
+				expect: { metric: "b.shift", op: "between", target: band(SWIFT_SHIFT_MULT) },
+				minCohort: 1000,
 			},
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${CELL_CTE}
-SELECT c.cell AS grp, avg(e.tokens_used) AS avg_tokens,
- count(*) AS event_count, count(DISTINCT e.uid) AS user_count
-FROM cells c JOIN ev e ON e.uid = c.uid
-WHERE e.event = 'api call' GROUP BY 1`,
-				},
-				select: { b: { where: { grp: "batch" } }, n: { where: { grp: "neither" } } },
-				// batch-only cell: clean 2x (agentic users are in their own cells)
-				expect: { metric: "b.avg_tokens / n.avg_tokens", op: "between", target: [1.7, 2.3] },
-				minCohort: 100,
+				breakdown: { type: "duckdb", sql: SWIFT_SQL },
+				select: { f: { where: { grp: "free" } } },
+				// control: Free accounts pay nothing per token
+				expect: { metric: "f.shift", op: "between", target: band(1) },
+				minCohort: 1000,
 			},
 		],
 	},
 	{
-		id: "H8-eval-retention",
+		id: "H8-agent-tool-use",
 		hook: "H8",
-		archetype: "retention-divergence",
-		narrative: `users without an eval job in their first 7 days keep only ${EVAL_NON_USER_KEEP_LIKELIHOOD}% of post-day-${EVAL_CUTOFF_DAYS} events. Ratio-of-ratios (noneval post/pre vs eval post/pre) cancels window lengths and the growth soup; H4's independent drop rides both cohorts`,
+		archetype: "cohort-prop-scale",
+		narrative: `Requests that use tools carry the tool definitions and tool results in the prompt, so their input_tokens are ${TOOL_INPUT_MULT}x those of plain requests. Tool use depends on what the account builds (profile use_case): agents ${TOOL_SHARE_BY_USE_CASE.agents * 100}% of requests, coding ${TOOL_SHARE_BY_USE_CASE.coding * 100}%, other use cases ${TOOL_SHARE_BY_USE_CASE.content_generation * 100}-${TOOL_SHARE_BY_USE_CASE.chat_assistant * 100}%. The tool flag is drawn per request independently of every other input-token driver, so the ratio of averages reads the knob.`,
+		mixpanelReport: { type: "Insights", event: "api request", measure: "average input_tokens", breakdown: "tool_use", filter: "status_code = 200" },
 		assertions: [
 			{
 				breakdown: {
 					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${T0_CTE},
-ev_users AS (SELECT e.uid FROM ev e JOIN t0 ON t0.uid = e.uid
-  WHERE e.event = 'eval job' AND e.t < t0.t0 + INTERVAL 7 DAY GROUP BY 1),
-per AS (SELECT t0.uid, (t0.uid IN (SELECT uid FROM ev_users)) AS eval_user,
-  count(*) FILTER (WHERE e.t <= t0.t0 + INTERVAL ${EVAL_CUTOFF_DAYS} DAY) AS pre_ct,
-  count(*) FILTER (WHERE e.t > t0.t0 + INTERVAL ${EVAL_CUTOFF_DAYS} DAY) AS post_ct
-  FROM t0 JOIN ev e ON e.uid = t0.uid GROUP BY 1, 2)
-SELECT CASE WHEN eval_user THEN 'eval' ELSE 'noneval' END AS grp,
- count(*) AS user_count, avg(post_ct) AS avg_post, avg(pre_ct) AS avg_pre,
- avg(post_ct) / nullif(avg(pre_ct), 0) AS post_pre
-FROM per GROUP BY 1`,
+					sql: `WITH ${ID_CTE}
+SELECT CASE WHEN tool_use THEN 'tool' ELSE 'plain' END AS grp, count(DISTINCT uid) AS user_count, avg(input_tokens) AS avg_input
+FROM ev WHERE event = 'api request' AND status_code = 200 GROUP BY 1`,
 				},
-				select: { n: { where: { grp: "noneval" } }, e: { where: { grp: "eval" } } },
-				// knob keep-rate 0.25
-				expect: { metric: "n.post_pre / e.post_pre", op: "between", target: [0.17, 0.34] },
-				minCohort: 50,
+				select: { t: { where: { grp: "tool" } }, p: { where: { grp: "plain" } } },
+				expect: { metric: "t.avg_input / p.avg_input", op: "between", target: band(TOOL_INPUT_MULT) },
+				minCohort: 2000,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+p AS (SELECT distinct_id::VARCHAR AS uid, use_case FROM ${US})
+SELECT p.use_case AS grp, count(DISTINCT ev.uid) AS user_count, avg(tool_use::INT) AS tool_share
+FROM ev JOIN p ON p.uid = ev.uid WHERE ev.event = 'api request' GROUP BY 1`,
+				},
+				select: { a: { where: { grp: "agents" } } },
+				expect: { metric: "a.tool_share", op: "between", target: band(TOOL_SHARE_BY_USE_CASE.agents) },
+				minCohort: 500,
 			},
 		],
 	},
 	{
-		id: "H9-api-to-eval-ttc",
+		id: "H9-developer-marketing-economics",
 		hook: "H9",
-		archetype: "funnel-ttc-by-segment",
-		narrative: `funnel-post scales API-to-Eval step gaps by tier: Enterprise × ${FUNNEL_TTC_ENTERPRISE}, Free × ${FUNNEL_TTC_FREE}, Build 1x. Measured with the Mixpanel-aligned funnel emulator (greedy step pairing), NOT raw SQL: nearest-preceding-pair SQL is censored by the fixed lookback window — stretching Free gaps pushes true pairs past the window edge and intercepts more organic events, which INVERTS the measured direction. The emulator window is 336h = max scale factor (${FUNNEL_TTC_FREE}) × the funnel's 168h generative window, so the stretched support fits — at 168h any Free instance whose original TTC exceeded 84h fails the window and the longest (most-stretched) pairs censor out. Greedy pairing still dilutes toward 1 (organic same-window events get picked as steps), asymmetrically — stretch (Free) dilutes harder than compress (Enterprise). Bands reflect the diluted effect, not the pure knobs`,
+		archetype: "attribution-bias",
+		narrative: `Hackathon sponsorships cost ${(CPL_USD.hackathons / CPL_USD.search_ads).toFixed(2)}x as much per signup as search ads over the window (warehouse developer_marketing_daily bills a paced daily budget per channel = cost per signup × expected signups per day, weekday shape above a ${SPEND_FLAT_SHARE * 100}% flat floor, seeded ±${SPEND_NOISE * 100}% day noise, never zero: $${CPL_USD.hackathons} vs $${CPL_USD.search_ads} per signup at the window level), and hackathon signups upgrade to a paid plan far less often: the share of would-be upgraders kept is ${UPGRADE_KEEP.hackathons} for hackathons vs ${UPGRADE_KEEP.search_ads} for search ads (channel is drawn independently of company size, role, and use case). Spend per signup needs the warehouse join. The conversion read is the Mixpanel funnel account created → plan upgraded with the default ${PAID_FUNNEL_WINDOW_DAYS}-day window, signups ${D(DATASET_START)} through ${PAID_COHORT_LAST}; buyer counts per channel are in the tens to low hundreds, so it is a knob target with a knob-derived ceiling.`,
+		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "developer_marketing_daily.spend_usd", funnel: `account created → plan upgraded, ${PAID_FUNNEL_WINDOW_DAYS}-day window (Mixpanel default), signups ${D(DATASET_START)} to ${PAID_COHORT_LAST}, breakdown acquisition_channel` },
 		assertions: [
 			{
-				breakdown: {
-					type: "timeToConvert",
-					steps: ["api call", "tool use call", "eval job"],
-					breakdownByUserProperty: "api_tier",
-					// 336h = FUNNEL_TTC_FREE × generative 168h window (covers stretched support)
-					conversionWindowMs: 336 * 60 * 60 * 1000,
-				},
-				select: { e: { where: { segment_value: "Enterprise" } }, b: { where: { segment_value: "Build" } } },
-				// knob 0.5 pure; greedy-pairing dilution pulls toward 1
-				expect: { metric: "e.median_ttc_ms / b.median_ttc_ms", op: "between", target: [0.55, 0.92] },
-				minCohort: 300,
+				breakdown: { type: "duckdb", sql: CAC_SQL },
+				select: { h: { where: { grp: "hackathons" } }, s: { where: { grp: "search_ads" } } },
+				expect: { metric: "h.spend_per_signup / s.spend_per_signup", op: "between", target: band(CPL_USD.hackathons / CPL_USD.search_ads) },
+				minCohort: 500,
 			},
 			{
-				breakdown: {
-					type: "timeToConvert",
-					steps: ["api call", "tool use call", "eval job"],
-					breakdownByUserProperty: "api_tier",
-					// 336h = FUNNEL_TTC_FREE × generative 168h window (covers stretched support)
-					conversionWindowMs: 336 * 60 * 60 * 1000,
-				},
-				select: { f: { where: { segment_value: "Free" } }, b: { where: { segment_value: "Build" } } },
-				// knob 2.0 pure; stretch dilutes harder than compress
-				expect: { metric: "f.median_ttc_ms / b.median_ttc_ms", op: "between", target: [1.1, 2.2] },
-				minCohort: 300,
+				breakdown: { type: "duckdb", sql: PAID_CONV_SQL },
+				select: { h: { where: { grp: "hackathons" } }, s: { where: { grp: "search_ads" } } },
+				// ceiling: at least half the knob's gap
+				expect: { metric: "h.paid_rate / s.paid_rate", op: "<=", target: UPGRADE_KEEP.hackathons / UPGRADE_KEEP.search_ads, floor: 1 - 0.5 * (1 - UPGRADE_KEEP.hackathons / UPGRADE_KEEP.search_ads) },
+				minCohort: 400,
 			},
 		],
 	},
 	{
-		id: "H10-docs-magic-number",
+		id: "H10-build-rate-limit-raise",
 		hook: "H10",
-		archetype: "frequency-sweet-spot",
-		narrative: `docs searched between org-created and first billing: ${DOCS_SWEET_MIN}-${DOCS_SWEET_MAX} (sweet) → amount_usd × ${DOCS_BILLING_BOOST} on all billing payments; ${DOCS_OVER_THRESHOLD}+ (over) → amount_usd × ${DOCS_OVER_PENALTY} on all billing payments. Both branches mutate an iid-drawn property — selection-free, unlike count effects which drown in activity-selection bias at ~100-user cohorts (placebo on an untouched cohort read 1.22-1.30 under the best normalizer). Median ratios against the untouched zero-docs cohort read the knobs directly (amount_usd draw is docs-count-independent; ×k is monotone so median scales by k; Math.round is sub-1% at these medians)`,
+		archetype: "temporal-inflection",
+		narrative: `On ${D(RATE_LIMIT_RAISE)} Cortexa raises Build-tier rate limits. Rate-limit episodes per sampled request on the Build plan (plan_tier at the moment of the episode) fall to ${RL_RAISE_MULT}x; Free, Scale, and Enterprise limits do not change. Read: rate limit hit per api request in September vs August for Build, divided by the same ratio for Free (difference in differences cancels traffic mix and month length).`,
+		mixpanelReport: { type: "Insights", events: ["rate limit hit", "api request"], measure: "total, formula A/B", breakdown: "plan_tier", chart: "monthly" },
 		assertions: [
 			{
 				breakdown: {
 					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${DOCS_CTE}
-SELECT d.grp AS grp, median(e.amount_usd) AS med_amt, count(*) AS payment_count,
- count(DISTINCT d.uid) AS user_count
-FROM dcoh d JOIN ev e ON e.uid = d.uid AND e.event = 'billing payment'
-GROUP BY 1`,
+					sql: `WITH r AS (${RL_SQL}) SELECT 'did' AS grp, min(user_count) FILTER (WHERE grp IN ('build', 'free')) AS user_count,
+ max(shift) FILTER (WHERE grp = 'build') / max(shift) FILTER (WHERE grp = 'free') AS did FROM r`,
 				},
-				select: { s: { where: { grp: "sweet" } }, z: { where: { grp: "zero" } } },
-				// knob 1.35 ±15%
-				expect: { metric: "s.med_amt / z.med_amt", op: "between", target: [1.15, 1.55] },
-				minCohort: 60,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${DOCS_CTE}
-SELECT d.grp AS grp, median(e.amount_usd) AS med_amt, count(*) AS payment_count,
- count(DISTINCT d.uid) AS user_count
-FROM dcoh d JOIN ev e ON e.uid = d.uid AND e.event = 'billing payment'
-GROUP BY 1`,
-				},
-				select: { o: { where: { grp: "over" } }, z: { where: { grp: "zero" } } },
-				// knob 0.75 ±15%
-				expect: { metric: "o.med_amt / z.med_amt", op: "between", target: [0.64, 0.86] },
-				minCohort: 60,
+				select: { d: { where: { grp: "did" } } },
+				expect: { metric: "d.did", op: "between", target: band(RL_RAISE_MULT) },
+				minCohort: 1000,
 			},
 		],
 	},

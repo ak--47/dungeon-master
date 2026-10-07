@@ -1,184 +1,453 @@
--- ============================================================
--- ai-platform.js — v1.6 human-inspection queries (DuckDB)
+-- Cortexa (ai-platform vertical) — story-keyed and eval-keyed DuckDB queries.
 --
--- Every query is keyed to a story id in ai-platform.js's `stories` export;
--- the machine-checked verdicts come from:
---   node scripts/verify-stories.mjs dungeons/vertical/ai-platform/ai-platform.js --data-prefix verify-ai-platform
--- Generate first:
+-- Generate first (repo root):
 --   node scripts/verify-runner.mjs dungeons/vertical/ai-platform/ai-platform.js verify-ai-platform
--- Run this file:
+-- Run:
 --   duckdb -c ".read dungeons/vertical/ai-platform/ai-platform.sql"
--- ============================================================
+-- Against a gzipped export:
+--   duckdb -c "SET VARIABLE data_prefix='<dir>/ai-platform'" -c ".read ai-platform.sql"
+--
+-- All times are UTC. Window: 2026-06-04 00:00 to 2026-10-01 23:59:59.
+-- One "api request" event is a 1-in-1,000 sample of API traffic; warehouse
+-- tables meter every request.
 
--- ── identity-resolution prelude ─────────────────────────────
--- avgDevicePerUser: 2 + organization created is both isAuthEvent and
--- isFirstEvent, so born users auth on their first event; the device-pool
--- resolve is belt-and-braces for any device-only edge.
-CREATE OR REPLACE VIEW users AS
-SELECT * FROM read_json_auto('data/verify-ai-platform-USERS*.json', sample_size=-1, union_by_name=true);
+SET VARIABLE data_prefix = COALESCE(getvariable('data_prefix'), 'data/verify-ai-platform');
 
-CREATE OR REPLACE VIEW device_map AS
--- profiles store the device pool under the legacy "anonymousIds" key
-SELECT unnest("anonymousIds") AS device_id, distinct_id FROM users;
+-- ─────────────────────────────────────────────────────────────────────────
+-- PRELUDE: raw files, identity resolution, warehouse tables
+-- ─────────────────────────────────────────────────────────────────────────
+-- Identity: Cortexa tracks every event server-side with the account's user_id
+-- and there is no device_id, so Mixpanel's distinct_id is user_id on every
+-- event. New accounts are identified at "account created" (their first event).
 
-CREATE OR REPLACE VIEW ev AS
--- ::VARCHAR casts — user_id sniffs as UUID, device_id as VARCHAR; DuckDB
--- refuses to coalesce mixed types
-SELECT coalesce(m.distinct_id::VARCHAR, e.user_id::VARCHAR, e.device_id::VARCHAR) AS uid,
-       e.time::TIMESTAMP AS t,
-       e.*
-FROM read_json_auto('data/verify-ai-platform-EVENTS*.json', sample_size=-1, union_by_name=true) e
-LEFT JOIN device_map m ON e.device_id = m.device_id;
+CREATE OR REPLACE TEMP TABLE raw_events AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-EVENTS*.json*', sample_size=-1, union_by_name=true);
 
--- H3/H7 four-cell cohort: agentic = 3+ tool use calls AND 3+ multi-turn
--- api calls; batch = any batch job submitted. Filters (H4/H8) run before
--- the cohort mutators, so output-side classification reproduces the
--- hook's cohorts 1:1.
-CREATE OR REPLACE VIEW cells AS
-WITH coh AS (SELECT e.uid,
-  (count(*) FILTER (WHERE e.event = 'tool use call') >= 3
-   AND count(*) FILTER (WHERE e.event = 'api call' AND e.multi_turn = true) >= 3) AS agentic,
-  bool_or(e.event = 'batch job submitted') AS batch
-  FROM ev e GROUP BY 1)
-SELECT uid, CASE WHEN agentic AND batch THEN 'both' WHEN agentic THEN 'agentic'
-  WHEN batch THEN 'batch' ELSE 'neither' END AS cell FROM coh;
+CREATE OR REPLACE TEMP TABLE users AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-USERS*.json*', sample_size=-1, union_by_name=true);
 
+CREATE OR REPLACE TEMP TABLE ev AS
+SELECT user_id::VARCHAR AS uid, time::TIMESTAMP AS t, * FROM raw_events;
 
--- ── H1-prompt-caching ───────────────────────────────────────
--- ~25% of users flip cache_enabled=true ~30% into their stream; cached
--- api calls carry cost_usd × 0.3.
-SELECT CASE WHEN cache_enabled = true THEN 'cached' ELSE 'uncached' END AS grp,
-  count(*) AS calls, round(avg(cost_usd), 4) AS avg_cost
-FROM ev WHERE event = 'api call' GROUP BY 1 ORDER BY 1;
+CREATE OR REPLACE TEMP TABLE wh_fleet AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-inference_fleet_daily.json*', sample_size=-1, union_by_name=true);
+CREATE OR REPLACE TEMP TABLE wh_billing AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-model_billing_daily.json*', sample_size=-1, union_by_name=true);
+CREATE OR REPLACE TEMP TABLE wh_marketing AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-developer_marketing_daily.json*', sample_size=-1, union_by_name=true);
 
+-- profile attributes keyed by the resolved user id
+CREATE OR REPLACE TEMP TABLE prof AS
+SELECT distinct_id::VARCHAR AS uid, plan_tier AS current_plan, company_size, use_case, sdk_language,
+ acquisition_channel, inference_region, primary_role, customer_since,
+ "Experiment: Interactive Quickstart" AS variant
+FROM users;
 
--- ── H2-model-migration ──────────────────────────────────────
--- opus-4-7 releases day 60 (2026-03-02): 35% of post-release
--- Build/Enterprise api calls migrate at 1.5x tokens. Purity is exact —
--- the hook scrubs engine-sampled opus-4-7 back to the pre-release mix.
-SELECT
-  count(*) FILTER (WHERE model = 'opus-4-7' AND (t < TIMESTAMP '2026-03-02' OR api_tier = 'Free' OR event <> 'api call')) AS impure_rows,
-  count(*) FILTER (WHERE model = 'opus-4-7') AS opus_calls,
-  round(count(*) FILTER (WHERE model = 'opus-4-7' AND event = 'api call' AND api_tier IN ('Build', 'Enterprise') AND t >= TIMESTAMP '2026-03-02')::DOUBLE
-        / nullif(count(*) FILTER (WHERE event = 'api call' AND api_tier IN ('Build', 'Enterprise') AND t >= TIMESTAMP '2026-03-02'), 0), 4) AS post_paid_share
-FROM ev WHERE model IS NOT NULL;
+-- new accounts (one signup per account that joined in the window)
+CREATE OR REPLACE TEMP TABLE signups AS
+SELECT uid, t AS t0, acquisition_channel AS ch, signup_method FROM ev WHERE event = 'account created';
 
--- tokens 1.5x on neither-cell users (H3's 8x / H7's 2x excluded by cell)
-SELECT CASE WHEN e.model = 'opus-4-7' THEN 'opus' ELSE 'other' END AS grp,
-  count(*) AS calls, round(avg(e.tokens_used), 0) AS avg_tokens
-FROM ev e JOIN cells c ON c.uid = e.uid AND c.cell = 'neither'
-WHERE e.event = 'api call' AND e.api_tier IN ('Build', 'Enterprise')
-  AND e.t >= TIMESTAMP '2026-03-02'
+-- onboarding: account created → api key created → first api request after the key, 7-day window
+CREATE OR REPLACE TEMP TABLE onboarding AS
+WITH k AS (SELECT uid, min(t) AS tk FROM ev WHERE event = 'api key created' GROUP BY 1),
+r AS (SELECT e.uid, min(e.t) AS tr FROM ev e JOIN k ON k.uid = e.uid AND e.t >= k.tk WHERE e.event = 'api request' GROUP BY 1)
+SELECT s.uid, s.t0, s.ch, p.sdk_language, p.variant, r.tr,
+ coalesce(k.tk >= s.t0 AND r.tr < s.t0 + INTERVAL 7 DAY, false) AS converted
+FROM signups s JOIN prof p ON p.uid = s.uid LEFT JOIN k ON k.uid = s.uid LEFT JOIN r ON r.uid = s.uid;
+
+-- one row per batch job, paired on batch_id
+CREATE OR REPLACE TEMP TABLE batches AS
+SELECT s.uid, s.batch_id, s.plan_tier, s.t AS t_sub, c.t AS t_done, c.batch_status
+FROM (SELECT * FROM ev WHERE event = 'batch job submitted') s
+JOIN (SELECT * FROM ev WHERE event = 'batch job completed') c ON c.batch_id = s.batch_id;
+
+-- request log
+CREATE OR REPLACE TEMP TABLE requests AS
+SELECT * FROM ev WHERE event = 'api request';
+
+-- dataset overview
+SELECT count(*) AS events, count(DISTINCT uid) AS accounts_with_events, (SELECT count(*) FROM users) AS profiles,
+ (SELECT count(*) FROM signups) AS new_accounts, min(t) AS first_event, max(t) AS last_event FROM ev;
+
+-- identity check: every event carries user_id
+SELECT count(*) FILTER (WHERE uid IS NULL) AS events_without_user_id FROM ev;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H1-prompt-caching-launch — caching GA 2026-07-08; hits 0.5x latency; 35% of requests once ramped
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT count(*) FILTER (WHERE cache_hit AND t < TIMESTAMP '2026-07-08') AS hits_before_launch FROM requests;
+SELECT cache_hit, count(*) AS requests, round(avg(latency_ms), 0) AS avg_latency_ms,
+ round(avg(latency_ms) / (SELECT avg(latency_ms) FROM requests WHERE status_code = 200 AND model = 'atlas-2' AND t >= TIMESTAMP '2026-07-08' AND NOT cache_hit), 4) AS vs_miss
+FROM requests WHERE status_code = 200 AND model = 'atlas-2' AND t >= TIMESTAMP '2026-07-08' GROUP BY 1 ORDER BY 1;
+SELECT round(avg(cache_hit::INT), 4) AS hit_share_after_ramp FROM requests WHERE t >= TIMESTAMP '2026-07-29';
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H2-atlas-3-launch — 2026-07-28 paid, 2026-09-08 Free; 39% of paid flagship traffic; 1.3x output
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT count(*) FILTER (WHERE model = 'atlas-3' AND (t < TIMESTAMP '2026-07-28' OR (plan_tier = 'free' AND t < TIMESTAMP '2026-09-08'))) AS impure_rows FROM requests;
+SELECT round(avg((model = 'atlas-3')::INT), 4) AS atlas3_share_paid_flagship
+FROM requests WHERE model IN ('atlas-2', 'atlas-3') AND plan_tier IN ('build', 'scale', 'enterprise') AND t >= TIMESTAMP '2026-08-18';
+SELECT round(avg((model = 'atlas-3')::INT), 4) AS atlas3_share_free_flagship
+FROM requests WHERE model IN ('atlas-2', 'atlas-3') AND plan_tier = 'free' AND t >= TIMESTAMP '2026-09-18';
+SELECT model, round(avg(output_tokens), 1) AS avg_output_tokens
+FROM requests WHERE status_code = 200 AND model IN ('atlas-2', 'atlas-3') AND plan_tier IN ('build', 'scale', 'enterprise') AND t >= TIMESTAMP '2026-07-28'
 GROUP BY 1 ORDER BY 1;
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H3-interactive-quickstart-experiment — onboarding A/B from 2026-07-01
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT variant, count(*) AS signups, round(avg(converted::INT), 4) AS first_request_rate,
+ round(median(date_diff('second', t0, tr)) FILTER (WHERE converted) / 3600.0, 2) AS median_hours_to_first_request
+FROM onboarding WHERE variant IS NOT NULL GROUP BY 1 ORDER BY 1;
 
--- ── H3-agentic-power-users / H7-batch-discount ──────────────
--- Four-cell token design: neither 1x / agentic 8x / batch 2x / both 16x.
--- Agentic clones stamp multi_turn=true → agentic mt_share ≈ 0.75
--- ((0.25n + 2n) / 3n against the declared 1-in-4 mix).
-SELECT c.cell, count(DISTINCT e.uid) AS users, count(*) AS calls,
-  round(avg(e.tokens_used), 0) AS avg_tokens,
-  round(count(*) FILTER (WHERE e.multi_turn = true)::DOUBLE / count(*), 4) AS mt_share
-FROM cells c JOIN ev e ON e.uid = c.uid
-WHERE e.event = 'api call' GROUP BY 1 ORDER BY avg_tokens;
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H4-batch-turnaround-by-plan — Scale/Enterprise 0.4x, Free 1.6x the Build turnaround
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT plan_tier, count(*) AS jobs, round(median(date_diff('second', t_sub, t_done)) / 3600.0, 2) AS median_hours
+FROM batches GROUP BY 1 ORDER BY 1;
 
--- H7: cost_per_token × 0.5 for batch users (no other hook touches it)
-SELECT CASE WHEN c.cell IN ('batch', 'both') THEN 'batch' ELSE 'rest' END AS grp,
-  count(*) AS calls, round(avg(e.cost_per_token), 6) AS avg_cpt
-FROM cells c JOIN ev e ON e.uid = c.uid
-WHERE e.event = 'api call' GROUP BY 1 ORDER BY 1;
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H5-early-evals-retention — 2+ eval runs in the first 14 days → D30 retention
+-- ─────────────────────────────────────────────────────────────────────────
+-- New accounts that made an API request; activity excludes the system-sent
+-- batch job completed / eval run completed. early_evals >= 2 equals completing
+-- the Mixpanel funnel account created → eval run started → eval run started
+-- with a 14-day window.
+CREATE OR REPLACE TEMP TABLE eval_retention AS
+WITH s AS (SELECT uid, t0 FROM signups WHERE uid IN (SELECT uid FROM ev WHERE event = 'api request')
+  AND t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 37 DAY)
+SELECT s.uid,
+ count(*) FILTER (WHERE e.event = 'eval run started' AND e.t < s.t0 + INTERVAL 14 DAY) AS early_evals,
+ count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 7 DAY AND e.t < s.t0 + INTERVAL 14 DAY AND e.event NOT IN ('batch job completed', 'eval run completed')) > 0 AS d7,
+ count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 30 DAY AND e.t < s.t0 + INTERVAL 37 DAY AND e.event NOT IN ('batch job completed', 'eval run completed')) > 0 AS d30
+FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1;
 
+SELECT CASE WHEN early_evals >= 2 THEN '2+' ELSE early_evals::VARCHAR END AS early_eval_runs, count(*) AS accounts,
+ round(avg(d30::INT), 4) AS d30_retention
+FROM eval_retention GROUP BY 1 ORDER BY 1;
 
--- ── H4-rate-limit-churn ─────────────────────────────────────
--- 60% of users with 2+ rate limit errors in week 1 lose ALL post-week-1
--- events (per-user cliff). Signal: zero-post-week-1 share, flagged vs
--- rest — the DIFFERENCE cancels the natural-quiet baseline. Eligibility:
--- t0 ≤ datasetEnd − 21d (≥14d of post-week-1 runway).
-WITH t0 AS (SELECT uid, min(t) AS t0 FROM ev GROUP BY 1),
-rl AS (SELECT e.uid FROM ev e JOIN t0 ON t0.uid = e.uid
-  WHERE e.event = 'rate limit error' AND e.t < t0.t0 + INTERVAL 7 DAY
-  GROUP BY 1 HAVING count(*) >= 2),
-per AS (SELECT t0.uid, (t0.uid IN (SELECT uid FROM rl)) AS flagged,
-  count(*) FILTER (WHERE e.t > t0.t0 + INTERVAL 7 DAY) AS post_ct
-  FROM t0 JOIN ev e ON e.uid = t0.uid
-  WHERE t0.t0 <= TIMESTAMP '2026-04-10 23:59:59' GROUP BY 1, 2)
-SELECT CASE WHEN flagged THEN 'flagged' ELSE 'rest' END AS grp,
-  count(*) AS users,
-  round(count(*) FILTER (WHERE post_ct = 0)::DOUBLE / count(*), 4) AS zero_post_share
-FROM per GROUP BY 1 ORDER BY 1;
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H6-us-east-capacity-incident — us-east 2026-08-26..27 (warehouse join)
+-- ─────────────────────────────────────────────────────────────────────────
+WITH o AS (SELECT DISTINCT date::DATE AS d, inference_region FROM wh_fleet WHERE region_status = 'major_outage'),
+w AS (SELECT t::DATE AS d, (inference_region IN (SELECT inference_region FROM o)) AS hit, (status_code = 200) AS ok
+  FROM requests WHERE t >= TIMESTAMP '2026-08-19' AND t < TIMESTAMP '2026-09-04'),
+g AS (SELECT (d IN (SELECT d FROM o)) AS outage, avg(ok::INT) FILTER (WHERE hit) AS hit_success, avg(ok::INT) FILTER (WHERE NOT hit) AS other_success FROM w GROUP BY 1)
+SELECT outage, round(hit_success, 4) AS affected_region_success, round(other_success, 4) AS other_region_success,
+ round(hit_success / other_success, 4) AS relative_success FROM g ORDER BY outage;
 
+SELECT inference_region, count(*) FILTER (WHERE region_status = 'major_outage') AS outage_days,
+ round(avg(error_rate_5xx) FILTER (WHERE region_status = 'major_outage'), 4) AS outage_error_rate
+FROM wh_fleet GROUP BY 1 ORDER BY 1;
 
--- ── H5-tier-context-window ──────────────────────────────────
--- input_tokens × 1/2/4 by tier; context_window pinned to the tier
--- constant (200K / 1M / 2M) on every api call — min = max proves it.
-SELECT api_tier, count(*) AS calls,
-  round(avg(input_tokens), 0) AS avg_input,
-  min(context_window) AS min_cw, max(context_window) AS max_cw
-FROM ev WHERE event = 'api call' GROUP BY 1 ORDER BY avg_input;
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H7-swift-price-cut — swift-2 price halved 2026-08-18; Build swift share 1.6x
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT plan_tier, round(avg((model = 'swift-2')::INT) FILTER (WHERE t < TIMESTAMP '2026-08-18'), 4) AS swift_share_before,
+ round(avg((model = 'swift-2')::INT) FILTER (WHERE t >= TIMESTAMP '2026-09-01'), 4) AS swift_share_september,
+ round(avg((model = 'swift-2')::INT) FILTER (WHERE t >= TIMESTAMP '2026-09-01') / avg((model = 'swift-2')::INT) FILTER (WHERE t < TIMESTAMP '2026-08-18'), 4) AS shift
+FROM requests GROUP BY 1 ORDER BY 1;
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H8-agent-tool-use — tool requests carry 2.5x input tokens; agents 60% tool use
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT tool_use, count(*) AS requests, round(avg(input_tokens), 0) AS avg_input_tokens FROM requests WHERE status_code = 200 GROUP BY 1 ORDER BY 1;
+SELECT p.use_case, round(avg(r.tool_use::INT), 4) AS tool_share FROM requests r JOIN prof p ON p.uid = r.uid GROUP BY 1 ORDER BY 1;
 
--- ── H6-outage-day ───────────────────────────────────────────
--- days 40-41 (2026-02-10 → 2026-02-12): 40% of api calls flagged
--- is_error + 3x latency. is_error declares [false] → zero errors outside
--- the window by schema.
-SELECT
-  CASE WHEN t >= TIMESTAMP '2026-02-10' AND t < TIMESTAMP '2026-02-12' THEN 'outage' ELSE 'normal' END AS bucket,
-  count(*) AS calls,
-  round(count(*) FILTER (WHERE is_error = true)::DOUBLE / count(*), 4) AS error_share,
-  round(avg(latency_ms), 0) AS avg_latency
-FROM ev WHERE event = 'api call' GROUP BY 1 ORDER BY 1;
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H9-developer-marketing-economics — spend per signup and upgrade rate by channel (warehouse join)
+-- ─────────────────────────────────────────────────────────────────────────
+WITH s AS (SELECT ch, count(*) AS n FROM signups GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM wh_marketing GROUP BY 1)
+SELECT s.ch, s.n AS signups, round(sp.spend, 0) AS spend_usd, round(sp.spend / s.n, 2) AS spend_per_signup
+FROM s JOIN sp ON sp.ch = s.ch ORDER BY 1;
 
+-- 30-day paid conversion: Mixpanel funnel account created → plan upgraded, 30-day window, signups 2026-06-04..08-31
+CREATE OR REPLACE TEMP TABLE paid_funnel AS
+WITH s AS (SELECT uid, t0, ch FROM signups WHERE t0 < TIMESTAMP '2026-09-01'),
+b AS (SELECT DISTINCT s.uid FROM s JOIN ev e ON e.uid = s.uid AND e.event = 'plan upgraded'
+  AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 30 DAY)
+SELECT s.uid, s.ch, (b.uid IS NOT NULL) AS bought FROM s LEFT JOIN b ON b.uid = s.uid;
 
--- ── H8-eval-retention ───────────────────────────────────────
--- users without an eval job in week 1 keep 25% of post-day-30 events.
--- Ratio-of-ratios (noneval post/pre vs eval post/pre) cancels window
--- lengths and the growth soup.
-WITH t0 AS (SELECT uid, min(t) AS t0 FROM ev GROUP BY 1),
-ev_users AS (SELECT e.uid FROM ev e JOIN t0 ON t0.uid = e.uid
-  WHERE e.event = 'eval job' AND e.t < t0.t0 + INTERVAL 7 DAY GROUP BY 1),
-per AS (SELECT t0.uid, (t0.uid IN (SELECT uid FROM ev_users)) AS eval_user,
-  count(*) FILTER (WHERE e.t <= t0.t0 + INTERVAL 30 DAY) AS pre_ct,
-  count(*) FILTER (WHERE e.t > t0.t0 + INTERVAL 30 DAY) AS post_ct
-  FROM t0 JOIN ev e ON e.uid = t0.uid GROUP BY 1, 2)
-SELECT CASE WHEN eval_user THEN 'eval' ELSE 'noneval' END AS grp,
-  count(*) AS users, round(avg(pre_ct), 1) AS avg_pre, round(avg(post_ct), 1) AS avg_post,
-  round(avg(post_ct) / nullif(avg(pre_ct), 0), 4) AS post_pre
-FROM per GROUP BY 1 ORDER BY 1;
+SELECT round(avg(bought::INT) FILTER (WHERE ch = 'hackathons') / avg(bought::INT) FILTER (WHERE ch = 'search_ads'), 4) AS hackathons_vs_search_paid_rate
+FROM paid_funnel;
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORY H10-build-rate-limit-raise — Build rate-limit episodes per request 0.4x from 2026-09-01
+-- ─────────────────────────────────────────────────────────────────────────
+WITH g AS (SELECT plan_tier, strftime(t, '%Y-%m') AS month,
+  count(*) FILTER (WHERE event = 'rate limit hit')::DOUBLE / count(*) FILTER (WHERE event = 'api request') AS per_request
+  FROM ev WHERE event IN ('rate limit hit', 'api request') AND t >= TIMESTAMP '2026-08-01' AND t < TIMESTAMP '2026-10-01' GROUP BY 1, 2)
+SELECT round((max(per_request) FILTER (WHERE plan_tier = 'build' AND month = '2026-09') / max(per_request) FILTER (WHERE plan_tier = 'build' AND month = '2026-08'))
+ / (max(per_request) FILTER (WHERE plan_tier = 'free' AND month = '2026-09') / max(per_request) FILTER (WHERE plan_tier = 'free' AND month = '2026-08')), 4) AS build_vs_free_did
+FROM g;
 
--- ── H9-api-to-eval-ttc ──────────────────────────────────────
--- funnel-post scales API-to-Eval step gaps: Enterprise × 0.5, Free × 2.0.
--- CAUTION: this nearest-preceding-pair SQL is shown for inspection only —
--- it is censored by its lookback window (stretched Free pairs fall out and
--- organic events intercept), which can INVERT the direction. The story
--- asserts through the Mixpanel-aligned funnel emulator at a 336h window
--- (= 2.0 × the funnel's 168h generative window, covering the stretched
--- support); trust the story verdict, not this query's ratio.
-WITH ej AS (SELECT uid, t, api_tier FROM ev WHERE event = 'eval job'),
-gap AS (SELECT ej.uid, ej.api_tier, epoch(ej.t - max(tc.t)) / 3600.0 AS gap_h
-  FROM ej JOIN ev tc ON tc.uid = ej.uid AND tc.event = 'tool use call'
-    AND tc.t < ej.t AND tc.t >= ej.t - INTERVAL 336 HOUR
-  GROUP BY ej.uid, ej.api_tier, ej.t)
-SELECT api_tier, count(*) AS pairs, count(DISTINCT uid) AS users,
-  round(median(gap_h), 1) AS med_gap_h
-FROM gap GROUP BY 1 ORDER BY med_gap_h;
+-- ═════════════════════════════════════════════════════════════════════════
+-- EVAL QUERIES (one per question in eval/ai-platform.eval.md)
+-- ═════════════════════════════════════════════════════════════════════════
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q1 — prompt caching: latency effect and adoption
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT cache_hit, count(*) AS requests, round(avg(latency_ms), 0) AS avg_latency_ms, round(median(latency_ms), 0) AS median_latency_ms
+FROM requests WHERE status_code = 200 AND model = 'atlas-2' AND t >= TIMESTAMP '2026-07-08' GROUP BY 1 ORDER BY 1;
+SELECT date_trunc('week', t)::DATE AS week_start, count(*) AS requests, round(avg(cache_hit::INT), 4) AS hit_share
+FROM requests WHERE t >= TIMESTAMP '2026-06-29' GROUP BY 1 ORDER BY 1;
+SELECT round(avg(cache_hit::INT), 4) AS hit_share_since_jul29,
+ count(DISTINCT uid) FILTER (WHERE cache_hit) AS accounts_with_hits, count(DISTINCT uid) AS accounts_with_requests,
+ round(count(DISTINCT uid) FILTER (WHERE cache_hit)::DOUBLE / count(DISTINCT uid), 4) AS account_share
+FROM requests WHERE t >= TIMESTAMP '2026-07-29';
 
--- ── H10-docs-magic-number ───────────────────────────────────
--- docs searched strictly between earliest org-created and earliest
--- billing payment: 1-2 (sweet) → amount_usd × 1.35 on ALL billing
--- payments; 3+ (over) → × 0.75. Both branches amount-only (iid draw,
--- selection-free); median ratios vs the untouched zero-docs cohort read
--- the knobs directly.
-WITH org AS (SELECT uid, min(t) AS org_t FROM ev WHERE event = 'organization created' GROUP BY 1),
-bill AS (SELECT uid, min(t) AS bill_t FROM ev WHERE event = 'billing payment' GROUP BY 1),
-docs AS (SELECT o.uid, count(e.uid) AS docs_ct
-  FROM org o JOIN bill b ON b.uid = o.uid
-  LEFT JOIN ev e ON e.uid = o.uid AND e.event = 'docs searched' AND e.t > o.org_t AND e.t < b.bill_t
-  GROUP BY 1, o.org_t, b.bill_t),
-dcoh AS (SELECT uid, CASE WHEN docs_ct BETWEEN 1 AND 2 THEN 'sweet'
-  WHEN docs_ct >= 3 THEN 'over' ELSE 'zero' END AS grp FROM docs)
-SELECT d.grp, count(DISTINCT d.uid) AS users, count(*) AS payments,
-  round(median(e.amount_usd), 0) AS med_amount
-FROM dcoh d JOIN ev e ON e.uid = d.uid AND e.event = 'billing payment'
-GROUP BY 1 ORDER BY med_amount;
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q2 — what caching discounts are worth in billed usage (warehouse)
+-- ─────────────────────────────────────────────────────────────────────────
+-- Cached input tokens bill at 10% of the input price, so the discount is 90% of
+-- their list value.
+SELECT strftime(date::DATE, '%Y-%m') AS month,
+ round(sum(cached_input_tokens_billed) / 1e9, 2) AS cached_input_tokens_billions,
+ round(sum(cached_input_tokens_billed * list_price_input_per_mtok * 0.9) / 1e6, 0) AS cache_discount_usd,
+ round(sum(usage_value_usd), 0) AS usage_value_usd,
+ round(sum(cached_input_tokens_billed * list_price_input_per_mtok * 0.9) / 1e6 / (sum(usage_value_usd) + sum(cached_input_tokens_billed * list_price_input_per_mtok * 0.9) / 1e6), 4) AS discount_share_of_undiscounted
+FROM wh_billing GROUP BY 1 ORDER BY 1;
+SELECT round(sum(cached_input_tokens_billed * list_price_input_per_mtok * 0.9) / 1e6, 0) AS cache_discount_since_launch_usd
+FROM wh_billing WHERE date::DATE >= DATE '2026-07-08';
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q3 — atlas-3 adoption since launch
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT date_trunc('week', t)::DATE AS week_start,
+ round(avg((model = 'atlas-3')::INT) FILTER (WHERE plan_tier IN ('build', 'scale', 'enterprise')), 4) AS paid_flagship_share,
+ round(avg((model = 'atlas-3')::INT) FILTER (WHERE plan_tier = 'free'), 4) AS free_flagship_share
+FROM requests WHERE model IN ('atlas-2', 'atlas-3') AND t >= TIMESTAMP '2026-07-27' GROUP BY 1 ORDER BY 1;
+SELECT round(avg((model = 'atlas-3')::INT), 4) AS atlas3_share_of_all_requests_sep,
+ count(DISTINCT uid) FILTER (WHERE model = 'atlas-3') AS accounts_using_atlas3_sep
+FROM requests WHERE t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-10-01';
+SELECT round(avg((model = 'atlas-3')::INT), 4) AS paid_flagship_share_aug18_on
+FROM requests WHERE model IN ('atlas-2', 'atlas-3') AND plan_tier IN ('build', 'scale', 'enterprise') AND t >= TIMESTAMP '2026-08-18';
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q4 — is atlas-3 slower than atlas-2, and why?
+-- ─────────────────────────────────────────────────────────────────────────
+-- Successful requests on paid plans since the atlas-3 launch, split by cache hit
+-- so caching (which began three weeks earlier) does not blur the comparison.
+SELECT model, cache_hit, count(*) AS requests, round(avg(latency_ms), 0) AS avg_latency_ms, round(median(latency_ms), 0) AS median_latency_ms,
+ round(avg(output_tokens), 0) AS avg_output_tokens, round(avg(latency_ms) / avg(output_tokens), 2) AS ms_per_output_token
+FROM requests WHERE status_code = 200 AND model IN ('atlas-2', 'atlas-3') AND plan_tier IN ('build', 'scale', 'enterprise') AND t >= TIMESTAMP '2026-07-28'
+GROUP BY 1, 2 ORDER BY 2, 1;
+SELECT round(avg(latency_ms) FILTER (WHERE model = 'atlas-3') / avg(latency_ms) FILTER (WHERE model = 'atlas-2'), 4) AS latency_ratio,
+ round(avg(output_tokens) FILTER (WHERE model = 'atlas-3') / avg(output_tokens) FILTER (WHERE model = 'atlas-2'), 4) AS output_ratio
+FROM requests WHERE status_code = 200 AND model IN ('atlas-2', 'atlas-3') AND plan_tier IN ('build', 'scale', 'enterprise') AND t >= TIMESTAMP '2026-07-28';
+-- weekly median latency of successful paid requests (all models)
+SELECT date_trunc('week', t)::DATE AS week_start, round(median(latency_ms), 0) AS median_latency_ms, round(avg(cache_hit::INT), 4) AS hit_share,
+ round(avg((model = 'atlas-3')::INT), 4) AS atlas3_share, round(avg((model = 'swift-2')::INT), 4) AS swift_share
+FROM requests WHERE status_code = 200 AND plan_tier IN ('build', 'scale', 'enterprise') GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q5 — Interactive Quickstart experiment readout
+-- ─────────────────────────────────────────────────────────────────────────
+WITH g AS (SELECT variant, count(*) AS n, avg(converted::INT) AS p,
+  median(date_diff('second', t0, tr)) FILTER (WHERE converted) / 3600.0 AS med_h FROM onboarding WHERE variant IS NOT NULL GROUP BY 1)
+SELECT variant, n AS signups, round(p, 4) AS first_request_rate, round(med_h, 2) AS median_hours,
+ round(p / (SELECT p FROM g WHERE variant = 'Control'), 4) AS rate_vs_control,
+ round(med_h / (SELECT med_h FROM g WHERE variant = 'Control'), 4) AS time_vs_control
+FROM g ORDER BY 1;
+SELECT round(avg(converted::INT), 4) AS first_request_rate_before_test, count(*) AS signups FROM onboarding WHERE variant IS NULL;
+WITH g AS (SELECT count(*) FILTER (WHERE variant = 'Interactive Quickstart') AS n1, avg(converted::INT) FILTER (WHERE variant = 'Interactive Quickstart') AS p1,
+  count(*) FILTER (WHERE variant = 'Control') AS n0, avg(converted::INT) FILTER (WHERE variant = 'Control') AS p0 FROM onboarding)
+SELECT round((p1 - p0) / sqrt(p1 * (1 - p1) / n1 + p0 * (1 - p0) / n0), 1) AS z,
+ (SELECT round(count(DISTINCT uid) FILTER (WHERE "Variant name" = 'Interactive Quickstart')::DOUBLE / count(DISTINCT uid), 4) FROM ev WHERE event = '$experiment_started') AS variant_share_of_exposed
+FROM g;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q6 — null: do Java and Go developers onboard worse?
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT sdk_language, count(*) AS signups, round(avg(converted::INT), 4) AS first_request_rate FROM onboarding GROUP BY 1 ORDER BY 1;
+WITH x AS (SELECT coalesce(variant, 'not_enrolled') AS arm, sdk_language IN ('java', 'go') AS jg, converted::INT AS c FROM onboarding),
+g AS (SELECT arm, count(*) FILTER (WHERE jg) AS n1, avg(c) FILTER (WHERE jg) AS p1, count(*) FILTER (WHERE NOT jg) AS n0, avg(c) FILTER (WHERE NOT jg) AS p0 FROM x GROUP BY ROLLUP (arm))
+SELECT coalesce(arm, 'all') AS arm, n1 AS java_go, round(p1, 4) AS java_go_rate, n0 AS others, round(p0, 4) AS others_rate,
+ round((p1 - p0) / sqrt(p1 * (1 - p1) / n1 + p0 * (1 - p0) / n0), 2) AS z
+FROM g ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q7 — batch turnaround by plan
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT plan_tier, count(*) AS jobs, round(median(date_diff('second', t_sub, t_done)) / 3600.0, 2) AS median_hours,
+ round(quantile_cont(date_diff('second', t_sub, t_done), 0.9) / 3600.0, 2) AS p90_hours,
+ round(avg((batch_status = 'expired')::INT), 4) AS expired_share
+FROM batches GROUP BY 1 ORDER BY 1;
+SELECT round(median(date_diff('second', t_sub, t_done)) / 3600.0, 2) AS scale_enterprise_median_hours FROM batches WHERE plan_tier IN ('scale', 'enterprise');
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q8 — early behavior that predicts new-account retention
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT CASE WHEN early_evals >= 3 THEN '3+' ELSE early_evals::VARCHAR END AS early_eval_runs, count(*) AS accounts,
+ round(avg(d7::INT), 4) AS d7_retention, round(avg(d30::INT), 4) AS d30_retention
+FROM eval_retention GROUP BY 1 ORDER BY 1;
+SELECT CASE WHEN early_evals >= 2 THEN '2+' ELSE '0-1' END AS grp, count(*) AS accounts, round(avg(d30::INT), 4) AS d30_retention
+FROM eval_retention GROUP BY 1 ORDER BY 1;
+SELECT round(avg((early_evals >= 2)::INT), 4) AS share_with_2plus FROM eval_retention;
+-- all new accounts with a full day-30 bracket (including those that never made a request)
+WITH a AS (SELECT s.uid, s.t0, (s.uid IN (SELECT uid FROM requests)) AS made_request,
+  count(e.uid) FILTER (WHERE e.t >= s.t0 + INTERVAL 30 DAY AND e.t < s.t0 + INTERVAL 37 DAY AND e.event NOT IN ('batch job completed', 'eval run completed')) > 0 AS d30
+  FROM signups s LEFT JOIN ev e ON e.uid = s.uid WHERE s.t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 37 DAY GROUP BY 1, 2, 3)
+SELECT made_request, count(*) AS accounts, round(avg(d30::INT), 4) AS d30_retention FROM a GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q9 — the August 26-27 errors (warehouse join)
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT date::DATE AS day, inference_region, requests_served, error_rate_5xx, gpus_online, gpu_utilization, p95_latency_ms, region_status
+FROM wh_fleet WHERE date::DATE BETWEEN DATE '2026-08-25' AND DATE '2026-08-28' ORDER BY 1, 2;
+SELECT inference_region, (t >= TIMESTAMP '2026-08-26' AND t < TIMESTAMP '2026-08-28') AS incident, count(*) AS sampled_requests,
+ round(avg((status_code = 200)::INT), 4) AS success_rate, count(*) FILTER (WHERE status_code = 529) AS overloaded_529
+FROM requests WHERE t >= TIMESTAMP '2026-08-19' AND t < TIMESTAMP '2026-09-04' GROUP BY 1, 2 ORDER BY 1, 2;
+-- excess failed requests in us-east (sampled events x 1,000), vs the region's success rate on the surrounding days
+WITH b AS (SELECT avg((status_code = 200)::INT) AS base FROM requests WHERE inference_region = 'us-east'
+  AND ((t >= TIMESTAMP '2026-08-19' AND t < TIMESTAMP '2026-08-26') OR (t >= TIMESTAMP '2026-08-28' AND t < TIMESTAMP '2026-09-04'))),
+i AS (SELECT count(*) AS n, avg((status_code = 200)::INT) AS ok FROM requests WHERE inference_region = 'us-east' AND t >= TIMESTAMP '2026-08-26' AND t < TIMESTAMP '2026-08-28')
+SELECT i.n AS sampled_requests, round(b.base, 4) AS baseline_success, round(i.ok, 4) AS incident_success,
+ round(i.n * (b.base - i.ok)) AS excess_failed_sampled, round(i.n * (b.base - i.ok)) * 1000 AS excess_failed_requests_est
+FROM b, i;
+SELECT round(avg(latency_ms) FILTER (WHERE inference_region = 'us-east' AND t >= TIMESTAMP '2026-08-26' AND t < TIMESTAMP '2026-08-28'), 0) AS us_east_incident_latency,
+ round(avg(latency_ms) FILTER (WHERE inference_region = 'us-east' AND t >= TIMESTAMP '2026-08-19' AND t < TIMESTAMP '2026-08-26'), 0) AS us_east_week_before_latency
+FROM requests WHERE status_code = 200;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q10 — null: did the August outage cost us customers?
+-- ─────────────────────────────────────────────────────────────────────────
+-- Accounts with API traffic in the two weeks before the incident (Aug 12-25):
+-- share still sending traffic in the two weeks after (Aug 28 - Sep 10), and
+-- request volume after / before, us-east vs the other regions.
+WITH a AS (SELECT uid, inference_region, any_value(plan_tier) AS plan_tier,
+  count(*) FILTER (WHERE t >= TIMESTAMP '2026-08-12' AND t < TIMESTAMP '2026-08-26') AS pre,
+  count(*) FILTER (WHERE t >= TIMESTAMP '2026-08-28' AND t < TIMESTAMP '2026-09-11') AS post
+  FROM requests GROUP BY 1, 2),
+g AS (SELECT coalesce(plan_tier, 'all plans') AS plan_tier,
+  count(*) FILTER (WHERE pre > 0 AND inference_region = 'us-east') AS n1, avg((post > 0)::INT) FILTER (WHERE pre > 0 AND inference_region = 'us-east') AS p1,
+  count(*) FILTER (WHERE pre > 0 AND inference_region <> 'us-east') AS n0, avg((post > 0)::INT) FILTER (WHERE pre > 0 AND inference_region <> 'us-east') AS p0,
+  sum(post) FILTER (WHERE inference_region = 'us-east')::DOUBLE / sum(pre) FILTER (WHERE inference_region = 'us-east') AS v1,
+  sum(post) FILTER (WHERE inference_region <> 'us-east')::DOUBLE / sum(pre) FILTER (WHERE inference_region <> 'us-east') AS v0
+  FROM a GROUP BY ROLLUP (plan_tier))
+SELECT plan_tier, n1 AS us_east_accounts, round(p1, 4) AS us_east_still_active, n0 AS other_accounts, round(p0, 4) AS other_still_active,
+ round((p1 - p0) / sqrt(p1 * (1 - p1) / n1 + p0 * (1 - p0) / n0), 2) AS z, round(v1, 4) AS us_east_volume_after_before, round(v0, 4) AS other_volume_after_before
+FROM g ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q11 — model mix after the swift-2 price cut
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT plan_tier, round(avg((model = 'swift-2')::INT) FILTER (WHERE t < TIMESTAMP '2026-08-18'), 4) AS swift_share_jun4_aug17,
+ round(avg((model = 'swift-2')::INT) FILTER (WHERE t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-10-01'), 4) AS swift_share_september,
+ round(avg((model = 'swift-2')::INT) FILTER (WHERE t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-10-01') / avg((model = 'swift-2')::INT) FILTER (WHERE t < TIMESTAMP '2026-08-18'), 3) AS ratio
+FROM requests GROUP BY 1 ORDER BY 1;
+SELECT round(avg((model = 'swift-2')::INT) FILTER (WHERE t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-10-01') / avg((model = 'swift-2')::INT) FILTER (WHERE t < TIMESTAMP '2026-08-18'), 3) AS all_plans_ratio
+FROM requests;
+SELECT date_trunc('week', t)::DATE AS week_start, round(avg((model = 'swift-2')::INT), 4) AS build_swift_share
+FROM requests WHERE plan_tier = 'build' AND t >= TIMESTAMP '2026-08-03' GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q12 — why revenue per day fell after July (warehouse)
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT strftime(date::DATE, '%Y-%m') AS month, count(DISTINCT date) AS days, model,
+ round(sum(revenue_usd) / count(DISTINCT date), 0) AS revenue_per_day, round(sum(requests_billed) / count(DISTINCT date), 0) AS requests_per_day,
+ max(list_price_input_per_mtok) AS max_input_price
+FROM wh_billing WHERE date::DATE < DATE '2026-10-01' GROUP BY 1, 3 ORDER BY 1, 3;
+SELECT strftime(date::DATE, '%Y-%m') AS month, round(sum(revenue_usd) / count(DISTINCT date), 0) AS revenue_per_day,
+ round(sum(usage_value_usd) / count(DISTINCT date), 0) AS usage_value_per_day, round(sum(requests_billed) / count(DISTINCT date), 0) AS requests_per_day
+FROM wh_billing WHERE date::DATE < DATE '2026-10-01' GROUP BY 1 ORDER BY 1;
+-- caching discount per day, flagship vs swift-2 revenue per day, free-credit share of usage value
+SELECT strftime(date::DATE, '%Y-%m') AS month,
+ round(sum(cached_input_tokens_billed * list_price_input_per_mtok * 0.9) / 1e6 / count(DISTINCT date), 0) AS cache_discount_per_day,
+ round(sum(revenue_usd) FILTER (WHERE model IN ('atlas-2', 'atlas-3')) / count(DISTINCT date), 0) AS flagship_revenue_per_day,
+ round(sum(requests_billed) FILTER (WHERE model IN ('atlas-2', 'atlas-3')) / count(DISTINCT date), 0) AS flagship_requests_per_day,
+ round(sum(revenue_usd) FILTER (WHERE model = 'swift-2') / count(DISTINCT date), 0) AS swift_revenue_per_day,
+ round(sum(requests_billed) FILTER (WHERE model = 'swift-2') / count(DISTINCT date), 0) AS swift_requests_per_day,
+ round(sum(free_credit_usd) / sum(usage_value_usd), 4) AS free_credit_share
+FROM wh_billing WHERE date::DATE < DATE '2026-10-01' GROUP BY 1 ORDER BY 1;
+-- counterfactual: September swift-2 usage at the old price
+SELECT round(sum(revenue_usd) / 30, 0) AS sep_swift_revenue_per_day,
+ round(sum(revenue_usd) * 2 / 30, 0) AS sep_swift_revenue_per_day_at_old_price
+FROM wh_billing WHERE model = 'swift-2' AND date::DATE >= DATE '2026-09-01' AND date::DATE < DATE '2026-10-01';
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q13 — who sends the biggest prompts, and why
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT tool_use, count(*) AS requests, round(avg(input_tokens), 0) AS avg_input_tokens FROM requests WHERE status_code = 200 GROUP BY 1 ORDER BY 1;
+SELECT p.use_case, count(*) AS requests, round(avg(r.tool_use::INT), 4) AS tool_share, round(avg(r.input_tokens), 0) AS avg_input_tokens,
+ round(count(*)::DOUBLE / sum(count(*)) OVER (), 4) AS request_share, round(sum(r.input_tokens)::DOUBLE / sum(sum(r.input_tokens)) OVER (), 4) AS input_token_share
+FROM requests r JOIN prof p ON p.uid = r.uid WHERE r.status_code = 200 GROUP BY 1 ORDER BY 1;
+SELECT p.use_case = 'agents' AS agents, r.tool_use, round(avg(r.input_tokens), 0) AS avg_input_tokens
+FROM requests r JOIN prof p ON p.uid = r.uid WHERE r.status_code = 200 GROUP BY 1, 2 ORDER BY 1, 2;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q14 — cost per signup by paid channel (warehouse join)
+-- ─────────────────────────────────────────────────────────────────────────
+WITH s AS (SELECT ch, count(*) AS n FROM signups GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend, sum(platform_reported_signups) AS platform_signups,
+  min(spend_usd) AS min_day, max(spend_usd) AS max_day FROM wh_marketing GROUP BY 1)
+SELECT s.ch, s.n AS mixpanel_signups, sp.platform_signups, round(sp.spend, 0) AS spend_usd, round(sp.spend / s.n, 2) AS spend_per_signup,
+ round(sp.spend / sum(sp.spend) OVER (), 4) AS budget_share, round(min_day, 0) AS min_day_spend, round(max_day, 0) AS max_day_spend
+FROM s JOIN sp ON sp.ch = s.ch ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q15 — are hackathons worth it? (30-day paid conversion and cost per paying account)
+-- ─────────────────────────────────────────────────────────────────────────
+WITH c AS (SELECT ch, count(*) AS signups, count(*) FILTER (WHERE bought) AS buyers, avg(bought::INT) AS rate FROM paid_funnel GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM wh_marketing WHERE date::DATE < DATE '2026-09-01' GROUP BY 1)
+SELECT c.ch, c.signups, c.buyers, round(c.rate, 4) AS paid_rate_30d, round(sp.spend, 0) AS spend_jun4_aug31,
+ round(sp.spend / c.signups, 2) AS spend_per_signup, round(sp.spend / c.buyers, 0) AS spend_per_paying_account
+FROM c LEFT JOIN sp ON sp.ch = c.ch ORDER BY 1;
+WITH x AS (SELECT ch, bought::INT AS b FROM paid_funnel WHERE ch IN ('hackathons', 'search_ads')),
+g AS (SELECT count(*) FILTER (WHERE ch = 'hackathons') AS n1, avg(b) FILTER (WHERE ch = 'hackathons') AS p1,
+  count(*) FILTER (WHERE ch = 'search_ads') AS n0, avg(b) FILTER (WHERE ch = 'search_ads') AS p0 FROM x)
+SELECT round(p1 / p0, 4) AS hackathons_vs_search, round((p1 - p0) / sqrt(p1 * (1 - p1) / n1 + p0 * (1 - p0) / n0), 2) AS z FROM g;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q16 — did the September 1 Build rate-limit increase work?
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT plan_tier, strftime(t, '%Y-%m') AS month, count(*) FILTER (WHERE event = 'rate limit hit') AS episodes,
+ count(*) FILTER (WHERE event = 'api request') AS sampled_requests,
+ round(1000.0 * count(*) FILTER (WHERE event = 'rate limit hit') / count(*) FILTER (WHERE event = 'api request'), 1) AS episodes_per_1000_sampled_requests
+FROM ev WHERE event IN ('rate limit hit', 'api request') AND t >= TIMESTAMP '2026-07-01' AND t < TIMESTAMP '2026-10-01'
+GROUP BY 1, 2 ORDER BY 1, 2;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q17 — monthly metered usage, free credits, and revenue (warehouse)
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT strftime(date::DATE, '%Y-%m') AS month, count(DISTINCT date) AS days, round(sum(requests_billed) / 1e6, 1) AS requests_millions,
+ round(sum(usage_value_usd), 0) AS usage_value_usd, round(sum(free_credit_usd), 0) AS free_credit_usd, round(sum(revenue_usd), 0) AS revenue_usd,
+ round(sum(revenue_usd) / count(DISTINCT date), 0) AS revenue_per_day
+FROM wh_billing GROUP BY 1 ORDER BY 1;
+SELECT model, round(sum(revenue_usd), 0) AS revenue_usd, round(sum(revenue_usd) / (SELECT sum(revenue_usd) FROM wh_billing), 4) AS share
+FROM wh_billing GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q18 — Free → Build upgrades: how many and how fast
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT count(*) AS upgrades, count(*) FILTER (WHERE uid IN (SELECT uid FROM signups)) AS by_new_accounts FROM ev WHERE event = 'plan upgraded';
+SELECT date_trunc('week', t)::DATE AS week_start, count(*) AS upgrades FROM ev WHERE event = 'plan upgraded' GROUP BY 1 ORDER BY 1;
+WITH a AS (SELECT s.uid, s.t0, min(e.t) AS tu FROM signups s JOIN ev e ON e.uid = s.uid AND e.event = 'plan upgraded' GROUP BY 1, 2)
+SELECT count(*) AS new_account_upgrades, round(median(date_diff('second', t0, tu)) / 86400.0, 2) AS median_days_to_upgrade,
+ round(avg((tu < t0 + INTERVAL 7 DAY)::INT), 4) AS share_within_7_days FROM a;
+WITH s AS (SELECT o.uid FROM onboarding o WHERE o.converted AND o.t0 < TIMESTAMP '2026-09-01')
+SELECT count(*) AS activated_signups_jun4_aug31, round(avg((s.uid IN (SELECT pf.uid FROM paid_funnel pf WHERE pf.bought))::INT), 4) AS paid_30d_rate_activated,
+ (SELECT round(avg(bought::INT), 4) FROM paid_funnel) AS paid_30d_rate_all_signups
+FROM s;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q19 — atlas-3 vs atlas-2: response length and billed usage per request (warehouse)
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT model, round(avg(output_tokens), 0) AS avg_output_tokens, round(avg(input_tokens), 0) AS avg_input_tokens, round(avg(latency_ms), 0) AS avg_latency_ms
+FROM requests WHERE status_code = 200 AND t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-10-01' GROUP BY 1 ORDER BY 1;
+SELECT model, round(sum(usage_value_usd) / sum(requests_billed) * 1000, 2) AS usage_value_per_1000_requests,
+ round(sum(output_tokens_billed)::DOUBLE / sum(requests_billed), 0) AS output_tokens_per_request
+FROM wh_billing WHERE date::DATE >= DATE '2026-09-01' AND date::DATE < DATE '2026-10-01' GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL Q20 — headline numbers for "what should we worry about"
+-- ─────────────────────────────────────────────────────────────────────────
+SELECT round(avg(converted::INT), 4) AS first_request_rate_all_signups, count(*) AS signups FROM onboarding;
+SELECT round(sum(revenue_usd) FILTER (WHERE date::DATE BETWEEN DATE '2026-07-01' AND DATE '2026-07-31') / 31, 0) AS jul_revenue_per_day,
+ round(sum(revenue_usd) FILTER (WHERE date::DATE BETWEEN DATE '2026-09-01' AND DATE '2026-09-30') / 30, 0) AS sep_revenue_per_day
+FROM wh_billing;
+SELECT round(avg(d30::INT), 4) AS d30_retention_new_api_accounts, round(avg((early_evals >= 2)::INT), 4) AS share_2plus_evals FROM eval_retention;
+SELECT plan_tier, round(1000.0 * count(*) FILTER (WHERE event = 'rate limit hit') / count(*) FILTER (WHERE event = 'api request'), 1) AS episodes_per_1000_sampled_requests_sep
+FROM ev WHERE event IN ('rate limit hit', 'api request') AND t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-10-01' GROUP BY 1 ORDER BY 1;
