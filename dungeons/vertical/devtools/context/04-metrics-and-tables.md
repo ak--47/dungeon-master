@@ -15,7 +15,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 | Merge time | Per pull request, time from `review submitted` to `pull request merged` (same `pr_id`). Report the median. |
 | Forge Assist adoption | Share of pull requests opened on Pro, Team, and Enterprise (by `plan_tier` on the event, since 2026-07-29) with `review_mode = forge_assist`. |
 | Build success rate | Share of `build finished` events with `build_status = success`. |
-| Build time | `build_duration_sec` on `build finished`. Compare passed builds: a failed build stops early at its failing stage. |
+| Build time | `build_duration_sec` on `build finished`. Failed builds stop at their failing stage. |
 | Change failure rate | Share of `production deployed` events with `deploy_outcome = rolled_back`. |
 | Paid conversion | Share of new signups on Free (`plan_tier = free` on `account created`) who start a subscription within 42 days of `account created`. Developers who join a company already on Team or Enterprise have nothing to buy and are left out. Count only signups with a full 42 days of data (signups through August 20). |
 | New paid subscriptions | Count of `subscription started`, split by `plan`. |

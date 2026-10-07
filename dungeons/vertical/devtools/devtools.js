@@ -19,7 +19,7 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  *             belongs to the organization (Free, Team, or Enterprise); at Free
  *             organizations some developers pay for their own Pro seat.
  * SCALE:      10,000 developers (9,987 with events; 4,544 sign up inside the
- *             window), ~0.98M events (981,965), 120 days (2026-06-04 → 2026-10-01, UTC),
+ *             window), ~0.97M events (969,210), 120 days (2026-06-04 → 2026-10-01, UTC),
  *             500 customer organizations (492 with developers, 1 to 270 each)
  * CORE LOOP:  commit pushed → preview deployed; build started → build finished;
  *             pull request opened → review submitted → pull request merged →
@@ -98,7 +98,8 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  * - Scheduled (cron) builds move to a hashed day of their own Monday-Sunday
  *   week at the repository's nightly hour (01:00-05:59 UTC), so they run flat
  *   across all seven days; the holiday drop skips them. They stay inside the
- *   window and after signup; the H2 exposure moves with them (1 s before the
+ *   window and after the developer's pipeline step (new developers; a cron build
+ *   with no slot after it in its week does not run); the H2 exposure moves with them (1 s before the
  *   first build in the test). Activity cuts still remove them: churned
  *   evaluators' cron jobs stop with their account.
  * - Pull requests: lines_changed is log-normal (median 120); each developer
@@ -111,7 +112,9 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  *   review_wait_hours is the final open → review gap, weekend pause included.
  * - Low-discrepancy draws (frac(offset + n·φ), per developer-repository and per
  *   developer) place rollbacks (H9) and scheduled-build cuts (H8), so realized
- *   rates follow the knobs without binomial noise.
+ *   rates follow the knobs without binomial noise. A repository's assisted and
+ *   standard deploys run separate rollback streams at the same rate (Forge Assist
+ *   does not change rollbacks).
  * - Purchases: one per developer, and no upgrade visits after it. A new
  *   developer's would-be purchases (Upgrade funnel conversions) count only in
  *   their first 42 days, and each one happens at the H10 keep share, so a
@@ -122,19 +125,28 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  *   customer_since is moved into that span; the extra share fades as
  *   0.5 × 0.87 × (1 − d/42)²), so purchases hold near 15-20 a week from the
  *   start while in-window signups' purchases build up (monthly 68 in the
- *   partial June, then 71, 92, 82).
+ *   partial June, then 72, 87, 82).
  * - Upgrade page warm start: established Free developers' upgrade visits taper
  *   linearly from all of them on June 4 to 50% at the window end (the visit
  *   before a purchase stays), while in-window Free signups' visits build up
  *   with the Free base.
+ * - Setup gates (new developers): work needs the setup step it depends on.
+ *   With no pipeline configured there are no builds, PRs, pushes, previews,
+ *   logs, or environment variables (docs, code browsing, the CLI, issues,
+ *   invites, and the upgrade page stay); with a pipeline but no setup preview,
+ *   pushes build no preview and nothing ships to production. Builds and PRs
+ *   start after the pipeline step. Whole units drop, so the first preview after
+ *   the pipeline step is always the setup preview (Mixpanel's onboarding funnel
+ *   converts exactly the developers who finished setup).
  * - New developers who never finish onboarding: 60% stop on a salted day
  *   0.2-3 (at least 1 h after the last setup step they reached); the rest keep
- *   a salted 25-60% of their work units (whole builds, PRs, pushes; the first
- *   build always stays), exploring docs and public code.
+ *   a salted 25-60% of their remaining work units (whole builds and PRs; a
+ *   developer with a pipeline keeps their first build), exploring docs and
+ *   public code.
  * - Evaluation churn: 45% of new developers stop on day 1 + 27·u² after
  *   signup (most leave early; at least 12 h after their last setup step),
- *   whatever happened in setup. New-signup activity: day 1 71%, days 7-13
- *   43%, days 30-36 27%. The draw is independent of the first build, so
+ *   whatever happened in setup. New-signup activity: day 1 65%, days 7-13
+ *   41%, days 30-36 26%. The draw is independent of the first build, so
  *   H5's ratio holds. A stop removes every later event, and an upgrade visit
  *   whose purchase would land after the stop goes with it (one unit).
  * - Collaboration volume: new developers keep every teammate invite in their
@@ -145,6 +157,9 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  *   developer's first surviving build in the test (the arm applies from there)
  *   and drops the exposure and the profile's assignment when no build in the
  *   test survives.
+ * - npm mirror incident (H6) previews: preview deploys install dependencies
+ *   too, so on Aug 19-20 60% of npm developers' push previews do not go live
+ *   (the push stays; previews per push 0.31 vs 0.71).
  * - US holidays (Jul 3, Sep 7): for US-based developers (country_code US,
  *   about 60% of profiles), 55% of work units (whole PRs, builds, previews,
  *   standalone events) that would start that day do not happen; developers in
@@ -240,8 +255,9 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: 2026-08-19 to 2026-08-20, 60% of npm builds that would have passed
  *   fail at dependency_install. The warehouse shows registry_mirror_status =
- *   "degraded" and dependency_fetch_error_rate ≈ 0.6 for npm on those days.
- *   Events carry no incident flag.
+ *   "degraded" and dependency_fetch_error_rate ≈ 0.6 for npm on those days
+ *   (a sanity check: the column is written from the same knob). npm push
+ *   previews fail at the same share. Events carry no incident flag.
  * MIXPANEL: Insights, build finished, share build_status = success, daily,
  *   breakdown ecosystem; join the warehouse status.
  * REAL WORLD: a flaky package mirror looks like "our builds broke" until
@@ -255,8 +271,8 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  *   day's signups plus three quarters of the planned signups at the week's
  *   budget, × cost per signup × seeded ±12% noise, never zero). The weekly
  *   budget moves each channel's share of new signups. Paid social signups
- *   finish onboarding at 0.6x, so per onboarded developer paid search is
- *   cheaper than paid social.
+ *   finish onboarding at 0.6x, so paid social's per-signup advantage
+ *   disappears per onboarded developer (about level with paid search).
  * MIXPANEL: Insights, account created by acquisition_channel joined to
  *   marketing_spend_daily.spend_usd; Funnels onboarding steps, 7-day window,
  *   breakdown acquisition_channel.
@@ -266,14 +282,15 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  * H8. TEAM OVERAGE BILLING (everything + warehouse usage_billing_daily)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: from 2026-09-01 Team pays $0.015 per runner minute above its pooled
- *   allowance. Each Team org acts on a salted day in Sep 1-14 and turns off a
+ *   allowance. Each Team org acts on a salted day in Sep 1-13 and turns off a
  *   salted 30-70% (mean 50%) of its scheduled builds (whole build units).
- *   Scheduled per push builds, Team, Sep 15-30 vs August = 0.5; other plans
- *   1.0. Overage revenue exists only in the warehouse (zero before Sep 1 and on
+ *   Scheduled per push builds, Team, Sep 14-27 vs Aug 3-30 (whole Monday
+ *   weeks, so push builds' weekday rhythm cancels) = 0.5; other plans 1.0. Overage revenue exists only in the warehouse (zero before Sep 1 and on
  *   other plans); allowances reset monthly, so no overage on days 1-3 of a
  *   month and some on every Team day from Sep 8.
  * MIXPANEL: Insights, build started, breakdown trigger and plan_tier, weekly,
- *   formula schedule / push; join usage_billing_daily.overage_revenue_usd.
+ *   formula schedule / push (compare whole weeks); join
+ *   usage_billing_daily.overage_revenue_usd.
  * REAL WORLD: metering makes customers switch off nightly builds nobody reads.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -281,7 +298,8 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: production deploys roll back at 20% from repositories at ≤30% test
  *   coverage, falling linearly to 5% at ≥75%. PR size and Forge Assist do not
- *   change rollbacks (honest nulls).
+ *   change rollbacks (honest nulls; assisted and standard deploys follow the
+ *   repository's rate in separate low-discrepancy streams).
  * MIXPANEL: Insights, production deployed, share deploy_outcome = rolled_back,
  *   breakdown test_coverage_pct (custom buckets).
  * REAL WORLD: tests catch regressions before users do.
@@ -309,36 +327,39 @@ import { hashFloat } from "@ak--47/dungeon-master/hook-helpers";
  * Hook | Metric                                         | Derivation                | Expected | Measured
  * -----|------------------------------------------------|---------------------------|----------|---------
  * H1   | assisted rows pre-launch or on Free            | exact purity              | 0        | 0
- * H1   | median review → merge, assisted / standard     | ASSIST_MERGE_MULT         | 0.60     | 0.593 (3.58 vs 6.03 h)
- * H1   | assisted share of eligible PRs after the ramp  | 0.5 × 0.8                 | 0.40     | 0.387 (weekly 1.3% → 39%)
+ * H1   | median review → merge, assisted / standard     | ASSIST_MERGE_MULT         | 0.60     | 0.594 (3.58 vs 6.03 h)
+ * H1   | assisted share of eligible PRs after the ramp  | 0.5 × 0.8                 | 0.40     | 0.387 (weekly 1.3% → 40%)
  * H2   | median passed build time, Remote Cache/Control | CACHE_TTC_MULT            | 0.60     | 0.604 (235 vs 389 s)
- * H2   | build success rate, Remote Cache/Control       | unchanged                 | 1.00     | 1.004 (85.3% vs 85.0%)
- * H2   | Remote Cache share of exposed developers       | equal 2-arm hash          | 0.50     | 0.497
- * H3   | 7-day onboarding, Java+.NET / other stacks     | SLOW_STACK_MULT           | 0.55     | 0.593 (36.2% vs 61.0%)
- * H4   | median open → review, 1,000+ / ≤100 lines      | LARGE_PR_WAIT_MULT        | 2.50     | 2.509 (8.07 vs 3.21 h)
- * H5   | D30 retention, first build passed / failed     | 1/(1 − RED_DARK_SHARE)    | 2.00     | 2.027 (46.1% vs 22.8%)
- * H6   | npm/other success, incident vs ±7 days         | 1 − INCIDENT_FAIL         | 0.40     | 0.440
- * H6   | warehouse dependency_fetch_error_rate, degraded| INCIDENT_FAIL             | 0.60     | 0.615
+ * H2   | build success rate, Remote Cache/Control       | unchanged                 | 1.00     | 1.003 (85.4% vs 85.1%)
+ * H2   | Remote Cache share of exposed developers       | equal 2-arm hash          | 0.50     | 0.496
+ * H3   | 7-day onboarding, Java+.NET / other stacks     | SLOW_STACK_MULT           | 0.55     | 0.537 (31.7% vs 58.9%)
+ * H4   | median open → review, 1,000+ / ≤100 lines      | LARGE_PR_WAIT_MULT        | 2.50     | 2.514 (8.08 vs 3.22 h)
+ * H5   | D30 retention, first build passed / failed     | 1/(1 − RED_DARK_SHARE)    | 2.00     | 1.960 (51.1% vs 26.1%)
+ * H6   | npm/other success, incident vs ±7 days         | 1 − INCIDENT_FAIL         | 0.40     | 0.409 (34.7% vs 85.7%)
+ * H6   | warehouse dependency_fetch_error_rate (sanity) | INCIDENT_FAIL             | 0.60     | 0.615
  * H7   | spend per signup, paid social / paid search    | 55 / 85                   | 0.647    | 0.644 ($53.51 vs $83.05)
- * H7   | 7-day onboarding, paid social / other channels | SOCIAL_ONBOARD_MULT       | 0.60     | 0.613 (35.4% vs 57.7%)
- * H8   | Team scheduled per push, Sep 15-30 / August    | 1 − SCHEDULED_CUT_MEAN    | 0.50     | 0.480 (0.125 vs 0.261)
- * H8   | other plans scheduled per push (control)       | unchanged                 | 1.00     | 0.918
- * H8   | overage rows off Team or before Sep 1 / missing| exact                     | 0 / 0    | 0 / 0 ($4,720 in September)
- * H9   | rollback rate, ≤30% / ≥75% coverage            | 0.20 / 0.05               | 4.00     | 4.218 (19.8% vs 4.70%)
- * H10  | 42-day paid rate, 3+ / 1-2 previews (14 days)  | ≥ 1.0 / 0.4 (floor)       | ≥ 2.50   | 5.324 (29.3% vs 5.5%, STRONG)
- * H10  | purchases per upgrade visit (42 days), 3+ / 1-2| PQL_KEEP / NON_PQL_KEEP   | 2.50     | 2.298 (31.5% vs 13.7%)
+ * H7   | 7-day onboarding, paid social / other channels | SOCIAL_ONBOARD_MULT       | 0.60     | 0.590 (32.4% vs 55.0%)
+ * H8   | Team scheduled per push, Sep 14-27 / Aug 3-30  | 1 − SCHEDULED_CUT_MEAN    | 0.50     | 0.488 (0.123 vs 0.252)
+ * H8   | other plans scheduled per push (control)       | unchanged                 | 1.00     | 0.928 (Team / other 0.525)
+ * H8   | overage rows off Team or before Sep 1 / missing| exact                     | 0 / 0    | 0 / 0 ($4,679 in September)
+ * H9   | rollback rate, ≤30% / ≥75% coverage            | 0.20 / 0.05               | 4.00     | 4.149 (19.7% vs 4.75%)
+ * H10  | 42-day paid rate, 3+ / 1-2 previews (14 days)  | ≥ 1.0 / 0.4 (floor)       | ≥ 2.50   | 5.078 (28.9% vs 5.7%, STRONG)
+ * H10  | purchases per upgrade visit (42 days), 3+ / 1-2| PQL_KEEP / NON_PQL_KEEP   | 2.50     | 2.406 (30.8% vs 12.8%)
  * ═════════════════════════════════════════════════════════════════════════
  *
  * H10's paid rate is a knob floor: developers with 3+ early previews are also
- * heavier users who reach the upgrade page more often (59.3% vs 29.2% visit it
- * within 42 days, 2.0x), so the expected ratio is about 2.5 × 2.0 ≈ 5 before
- * noise; realized 5.32 on 110 + 55 buyers (Free signups only: 376 habit, 1,001
+ * heavier users who reach the upgrade page more often (60.4% vs 31.7% visit it
+ * within 42 days, 1.9x), so the expected ratio is about 2.5 × 1.9 ≈ 4.8 before
+ * noise; realized 5.08 on 100 + 44 buyers (Free signups only: 346 habit, 773
  * light). Purchases per visit control for that reach and read the keep ratio
- * (2.30 on 349 and 401 visits). H6 (0.440) sits at the band edge: npm builds on
- * the two incident days number 1,072, so the incident success rate (37.2% vs
- * 34.2% expected) carries about ±1.5 points of noise. H8's control (0.918) is
- * noise on about 3,000 (August) and 1,500 (Sep 15-30) scheduled builds. H3 and H7 come from engine
- * funnel draws; H8 and H9 use low-discrepancy draws within each developer.
+ * (2.41 on 325 and 344 visits). H6 rests on 1,055 npm builds on the two
+ * incident days, so it carries about ±0.017 of binomial noise. H8's control
+ * (0.928) compares whole Monday weeks, so the weekday mix cancels; what is left
+ * is ordinary variation in other plans' scheduled builds, which cluster by
+ * developer (Free and Enterprise four-week ratios move between 0.24 and 0.27
+ * all summer, Pro between 0.23 and 0.29); Team against the other plans reads 0.525. H3 and
+ * H7 come from engine funnel draws; H8 and H9 use low-discrepancy draws within
+ * each developer.
  */
 
 // ── SCALE ──
@@ -477,7 +498,7 @@ const PLATFORM_SIGNUP_INFLATION = 1.2; // ad platforms claim ~20% more signups t
 const METERED_PLAN = "team";
 const SCHEDULED_CUT_MEAN = 0.5;    // per org: share of scheduled builds switched off (uniform ±0.2)
 const SCHEDULED_CUT_SPREAD = 0.2;
-const SCHEDULED_CUT_RAMP_DAYS = 14; // each Team org acts on a salted day in Sep 1-14
+const SCHEDULED_CUT_RAMP_DAYS = 13; // each Team org acts on a salted day in Sep 1-13 (by the second Sunday)
 const OVERAGE_PRICE_PER_MIN = 0.015;
 // Team orgs' pooled monthly allowances, as a share of each org's own monthly usage, spread
 // uniformly over [0.15, 1.5]: an org past its allowance bills every further minute that month
@@ -694,6 +715,36 @@ function handleEverything(events, meta) {
 	// every event carries the developer's own org (the engine stamps group keys at random)
 	for (const e of events) e.org_id = profile.org_id;
 
+	// ── setup gates (new users): work needs the setup step it depends on. Without a pipeline
+	// there are no builds, pull requests, pushes, previews, deploy logs, or environment
+	// variables; with a pipeline but no setup preview, pushes build no preview and nothing
+	// ships to production. Builds and pull requests start after the pipeline step. Docs,
+	// code browsing, the CLI, issues, invites, and the upgrade page stay. Whole units drop. ──
+	const isOnboardingPreview = (e) => e.event === "preview deployed" && e.commit_sha === "onboarding";
+	const firstAt = (pred) => { const xs = events.filter(pred).map(T); return xs.length ? Math.min(...xs) : null; };
+	const pipelineMs = signup ? firstAt((e) => e.event === "pipeline configured") : null;
+	if (signup) {
+		const hasPreview = events.some(isOnboardingPreview);
+		const BUILD_OR_PR = (e) => Boolean(e.build_id) || PR_STEPS.includes(e.event);
+		const PUSH_UNIT = (e) => (e.event === "commit pushed" || e.event === "preview deployed") && !isOnboardingPreview(e);
+		const unitStartMs = new Map();
+		for (const e of events) {
+			const k = unitKey(e);
+			if (k && BUILD_OR_PR(e) && (!unitStartMs.has(k) || T(e) < unitStartMs.get(k))) unitStartMs.set(k, T(e));
+		}
+		events = events.filter((e) => {
+			if (pipelineMs === null) {
+				if (BUILD_OR_PR(e) || PUSH_UNIT(e)) return false;
+				if (e.event === "logs viewed" || e.event === "environment variable updated") return false;
+				return true;
+			}
+			if (!hasPreview && (PUSH_UNIT(e) || e.event === "production deployed")) return false;
+			// cron builds move later (they follow the pipeline); other units start after it
+			if (BUILD_OR_PR(e) && e.trigger !== "schedule" && unitStartMs.get(unitKey(e)) < pipelineMs) return false;
+			return true;
+		});
+	}
+
 	// ── CI builds: status, failure stage, real duration (H5 first build, H6 incident) ──
 	const builds = new Map();
 	for (const e of events) {
@@ -707,6 +758,7 @@ function handleEverything(events, meta) {
 	// gets a build moved into it.
 	const testStart = ms(REMOTE_CACHE_START);
 	const exposure = events.find((e) => e.event === "$experiment_started");
+	const preSetupCron = new Set(); // cron builds with no slot after the pipeline step in their week
 	for (const b of builds.values()) {
 		const st = b["build started"];
 		if (!st || st.trigger !== "schedule") continue;
@@ -714,11 +766,17 @@ function handleEverything(events, meta) {
 		const repo = repos[Math.floor(salt(st.build_id, "repo") * repos.length)];
 		const weekStart = dayjs.utc(t0).startOf("day").valueOf() - ((new Date(t0).getUTCDay() + 6) % 7) * DAY_MS;
 		const atHour = (1 + Math.floor(salt(repo, "cron-hour") * 5)) * HOUR_MS + Math.floor(salt(st.build_id, "cron-min") * 50) * MIN_MS;
-		let lo = Math.max(ms(DATASET_START), birthMs ?? -Infinity);
+		// a new developer's cron jobs start once their pipeline exists
+		let lo = Math.max(ms(DATASET_START), pipelineMs ?? birthMs ?? -Infinity);
 		let hi = END - HOUR_MS;
 		if (!exposure) { if (t0 < testStart) hi = Math.min(hi, testStart - 1000); else lo = Math.max(lo, testStart); }
 		const valid = [0, 1, 2, 3, 4, 5, 6].map((d) => weekStart + d * DAY_MS + atHour).filter((t) => t >= lo && t <= hi);
 		if (valid.length) st.time = iso(valid[Math.floor(salt(st.build_id, "cron-day") * valid.length)]);
+		else if (pipelineMs !== null && t0 < pipelineMs) preSetupCron.add(st.build_id);
+	}
+	if (preSetupCron.size) {
+		events = events.filter((e) => !preSetupCron.has(e.build_id));
+		for (const bid of preSetupCron) builds.delete(bid);
 	}
 	// H2: the engine logs the exposure just before a developer's first build in the test; keep it
 	// there after the cron moves. A developer's arm applies to builds from that exposure on.
@@ -739,7 +797,12 @@ function handleEverything(events, meta) {
 		const isFirst = Boolean(signup && !firstBuild && st);
 		if (isFirst) firstBuild = b;
 		const bid = fin.build_id;
-		let failed = salt(bid, "fail") < (isFirst ? FIRST_BUILD_FAIL : BASE_BUILD_FAIL);
+		// one draw decides a build's fate: below the base rate it fails on its own; during the
+		// npm mirror incident the next INCIDENT_FAIL share of the would-pass range fails at
+		// dependency install
+		const failP = isFirst ? FIRST_BUILD_FAIL : BASE_BUILD_FAIL;
+		const fate = salt(bid, "fail");
+		let failed = fate < failP;
 		let stage = "none";
 		if (failed) {
 			stage = isFirst
@@ -747,7 +810,7 @@ function handleEverything(events, meta) {
 				: pickWeighted({ test: 58, compile: 22, dependency_install: 10, timeout: 10 }, salt(bid, "build-stage"));
 		}
 		const startT = st ? T(st) : null;
-		if (!failed && ecosystem === INCIDENT_ECOSYSTEM && startT !== null && inIncident(startT) && salt(bid, "incident") < INCIDENT_FAIL) {
+		if (!failed && ecosystem === INCIDENT_ECOSYSTEM && startT !== null && inIncident(startT) && fate < failP + INCIDENT_FAIL * (1 - failP)) {
 			failed = true;
 			stage = "dependency_install";
 		}
@@ -767,11 +830,15 @@ function handleEverything(events, meta) {
 		else if (stage === "test" || stage === "timeout") fin.tests_run = Math.round(fin.tests_run * (0.2 + 0.8 * salt(bid, "tests-frac")));
 		if (startT !== null) fin.time = iso(Math.min(startT + durMs, END));
 	}
+	// H6: preview deploys install dependencies too: during the npm mirror incident a share of
+	// an npm developer's push previews fail (the push stays; no preview goes live)
+	if (ecosystem === INCIDENT_ECOSYSTEM) {
+		events = events.filter((e) => !(e.event === "preview deployed" && !isOnboardingPreview(e) && inIncident(T(e)) && salt(e.commit_sha, "incident-preview") < INCIDENT_FAIL));
+	}
 
 	// ── H5 + setup abandonment + evaluation churn (new users): one activity cut ──
 	let cut = Infinity;
 	let abandoned = false;
-	const isOnboardingPreview = (e) => e.event === "preview deployed" && e.commit_sha === "onboarding";
 	const onboarded = Boolean(signup) && events.some(isOnboardingPreview);
 	if (signup) {
 		const lastSetup = Math.max(birthMs, ...events.filter((e) => e.event === "repository imported" || e.event === "pipeline configured" || isOnboardingPreview(e)).map(T));
@@ -794,7 +861,8 @@ function handleEverything(events, meta) {
 	if (cut < Infinity) events = cutAt(events, cut);
 	// new users who never finish onboarding and do not abandon keep exploring at a low rate
 	// (public repos, docs, the CLI): a salted 25-60% of their activity, thinned by whole
-	// work unit (a build, a PR, a push and its preview); the first build always stays
+	// work unit (a build or a PR; the setup gates already removed pushes and previews); a
+	// developer with a pipeline keeps their first build
 	if (signup && !onboarded && !abandoned) {
 		const keepShare = EXPLORER_KEEP_MIN + salt(uid, "explorer-keep") * (EXPLORER_KEEP_MAX - EXPLORER_KEEP_MIN);
 		const firstBuildId = firstBuild ? firstBuild["build finished"].build_id : null;
@@ -928,18 +996,23 @@ function handleEverything(events, meta) {
 			}
 		}
 	}
-	// H9: a repository's production deploys roll back at the rate its test coverage implies
+	// H9: a repository's production deploys roll back at the rate its test coverage implies.
+	// Forge Assist does not change rollbacks: a repository's assisted and standard deploys each
+	// follow its rate through their own low-discrepancy stream
 	const deploysByRepo = new Map();
 	for (const p of prs.values()) {
 		const dep = p["production deployed"];
 		if (!dep) continue;
-		if (!deploysByRepo.has(dep.repo_id)) deploysByRepo.set(dep.repo_id, []);
-		deploysByRepo.get(dep.repo_id).push(dep);
+		const k = `${dep.repo_id}|${dep.review_mode}`;
+		if (!deploysByRepo.has(k)) deploysByRepo.set(k, []);
+		deploysByRepo.get(k).push(dep);
 	}
-	for (const [repo, deps] of deploysByRepo) {
+	for (const [k, deps] of deploysByRepo) {
 		deps.sort((a, b) => T(a) - T(b));
+		const [repo, mode] = k.split("|");
 		const rate = rollbackRate(coverageFor(repo));
-		deps.forEach((dep, n) => { dep.deploy_outcome = weyl(`${uid}|${repo}|rollback`, n) < rate ? "rolled_back" : "healthy"; });
+		const stream = mode === "standard" ? `${uid}|${repo}|rollback` : `${uid}|${repo}|rollback|${mode}`;
+		deps.forEach((dep, n) => { dep.deploy_outcome = weyl(stream, n) < rate ? "rolled_back" : "healthy"; });
 	}
 	if (dropPr.size) events = events.filter((e) => !dropPr.has(e));
 	if (cut < Infinity) events = cutAt(events, cut);
@@ -1534,9 +1607,13 @@ const ONBOARDING_STEPS = ["account created", "repository imported", "pipeline co
 const ASSIST_RAMPED = TS(dayjs.utc(ASSIST_LAUNCH).add(ASSIST_RAMP_DAYS, "day"));
 const INC_BASE_FROM = TS(dayjs.utc(REGISTRY_INCIDENT_START).subtract(7, "day"));
 const INC_BASE_TO = TS(dayjs.utc(REGISTRY_INCIDENT_END).add(7, "day"));
-const METERED_PRE_FROM = "2026-08-01 00:00:00";   // August: a full month before overage billing
-const METERED_POST_FROM = TS(dayjs.utc(METERED_START).add(SCHEDULED_CUT_RAMP_DAYS, "day")); // every Team org has acted
-const METERED_POST_TO = "2026-10-01 00:00:00";
+// whole Monday-Sunday weeks on both sides, so push builds' weekday rhythm (scheduled builds
+// run flat across the week) cannot move the ratio: four August weeks before billing vs the
+// two weeks after every Team org has acted (Sep 14-27; no holiday in either span)
+const METERED_PRE_FROM = "2026-08-03 00:00:00";   // Monday
+const METERED_PRE_TO = "2026-08-31 00:00:00";     // exclusive (Aug 3-30, four weeks)
+const METERED_POST_FROM = TS(dayjs.utc(METERED_START).add(SCHEDULED_CUT_RAMP_DAYS, "day")); // Monday Sep 14: every Team org has acted
+const METERED_POST_TO = TS(dayjs.utc(METERED_START).add(SCHEDULED_CUT_RAMP_DAYS + 14, "day")); // exclusive (Sep 14-27, two weeks)
 const METERED_MONTH_END = "2026-10-01";
 // allowances are at least 15% of an org's monthly usage, so no org runs out before about day 4.5
 const ALLOWANCE_RESET_DAYS = 3;
@@ -1600,7 +1677,7 @@ FROM g`;
 const H8_SQL = `WITH ${ID_CTE},
 b AS (SELECT uid, CASE WHEN plan_tier = '${METERED_PLAN}' THEN 'team' ELSE 'other_plans' END AS grp,
     (t >= TIMESTAMP '${METERED_POST_FROM}') AS post, trigger
-  FROM ev WHERE event = 'build started' AND ((t >= TIMESTAMP '${METERED_PRE_FROM}' AND t < TIMESTAMP '${TS(METERED_START)}') OR (t >= TIMESTAMP '${METERED_POST_FROM}' AND t < TIMESTAMP '${METERED_POST_TO}'))),
+  FROM ev WHERE event = 'build started' AND ((t >= TIMESTAMP '${METERED_PRE_FROM}' AND t < TIMESTAMP '${METERED_PRE_TO}') OR (t >= TIMESTAMP '${METERED_POST_FROM}' AND t < TIMESTAMP '${METERED_POST_TO}'))),
 r AS (SELECT grp, post, count(*) FILTER (WHERE trigger = 'schedule')::DOUBLE / count(*) FILTER (WHERE trigger = 'push') AS sched_per_push, count(DISTINCT uid) AS users FROM b GROUP BY 1, 2)
 SELECT grp, min(users) AS user_count, max(sched_per_push) FILTER (WHERE post) / max(sched_per_push) FILTER (WHERE NOT post) AS did FROM r GROUP BY 1`;
 
@@ -1768,7 +1845,7 @@ FROM ev WHERE event = '$experiment_started'`,
 		id: "H6-npm-registry-incident",
 		hook: "H6",
 		archetype: "external-join",
-		narrative: `Forgebench's npm registry mirror degrades from ${D(REGISTRY_INCIDENT_START)} to ${D(REGISTRY_INCIDENT_END)} (exclusive): ${INCIDENT_FAIL * 100}% of npm-ecosystem builds that would have passed fail at dependency_install. The incident days and ecosystem come from the warehouse table build_fleet_daily (registry_mirror_status = 'degraded'); events carry no incident flag. The event-side read is a ratio of ratios (npm success rate / other ecosystems, incident days vs the 7 days either side), which reads the 1 − ${INCIDENT_FAIL} keep rate while cancelling weekday volume and the experiment mix.`,
+		narrative: `Forgebench's npm registry mirror degrades from ${D(REGISTRY_INCIDENT_START)} to ${D(REGISTRY_INCIDENT_END)} (exclusive): ${INCIDENT_FAIL * 100}% of npm-ecosystem builds that would have passed fail at dependency_install. The incident days and ecosystem come from the warehouse table build_fleet_daily (registry_mirror_status = 'degraded'); events carry no incident flag. The event-side read is a ratio of ratios (npm success rate / other ecosystems, incident days vs the 7 days either side), which reads the 1 − ${INCIDENT_FAIL} keep rate while cancelling weekday volume and the experiment mix. npm preview deploys install dependencies too: the same share of npm developers' push previews does not go live on the incident days. The warehouse error-rate assertion is a sanity check (the column is written from the same knob).`,
 		mixpanelReport: { type: "Insights", event: "build finished", measure: "share with build_status = success", breakdown: "ecosystem", chart: "daily line", join: "warehouse build_fleet_daily.registry_mirror_status" },
 		assertions: [
 			{
@@ -1787,7 +1864,7 @@ FROM ev WHERE event = '$experiment_started'`,
 FROM ${WH("build_fleet_daily")}`,
 				},
 				select: { a: { where: { grp: "all" } } },
-				// warehouse dependency fetch error rate during the incident = the failure knob
+				// sanity check, not evidence: the warehouse column is written from INCIDENT_FAIL ± 0.02
 				expect: { metric: "a.degraded_err", op: "between", target: band(INCIDENT_FAIL) },
 			},
 		],
@@ -1796,7 +1873,7 @@ FROM ${WH("build_fleet_daily")}`,
 		id: "H7-paid-channel-economics",
 		hook: "H7",
 		archetype: "funnel-conversion-by-segment",
-		narrative: `Paid social looks cheapest per signup: over the window marketing_spend_daily bills $${CPL_USD.paid_social} per Mixpanel signup on paid social vs $${CPL_USD.paid_search} on paid search and $${CPL_USD.newsletter} on newsletter sponsorships (campaigns bid to a target cost per signup within a weekly budget: a day's bill is the cost per signup × a quarter of that day's signups plus three quarters of the signups planned at the week's budget, with seeded noise, never zero; a bigger weekly budget wins the channel a bigger share of new signups). But paid social signups finish onboarding at ${SOCIAL_ONBOARD_MULT}x the rate of every other channel (declared onboarding funnel copies with an acquisition_channel condition), so per onboarded developer paid search is cheaper. Spend per signup needs the warehouse join; the onboarding read is the Mixpanel funnel broken down by acquisition_channel.`,
+		narrative: `Paid social looks cheapest per signup: over the window marketing_spend_daily bills $${CPL_USD.paid_social} per Mixpanel signup on paid social vs $${CPL_USD.paid_search} on paid search and $${CPL_USD.newsletter} on newsletter sponsorships (campaigns bid to a target cost per signup within a weekly budget: a day's bill is the cost per signup × a quarter of that day's signups plus three quarters of the signups planned at the week's budget, with seeded noise, never zero; a bigger weekly budget wins the channel a bigger share of new signups). But paid social signups finish onboarding at ${SOCIAL_ONBOARD_MULT}x the rate of every other channel (declared onboarding funnel copies with an acquisition_channel condition), so paid social's per-signup advantage disappears per onboarded developer (it lands about level with paid search). Spend per signup needs the warehouse join; the onboarding read is the Mixpanel funnel broken down by acquisition_channel.`,
 		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "marketing_spend_daily.spend_usd", funnel: "onboarding steps, 7-day window, breakdown user property acquisition_channel" },
 		assertions: [
 			{
@@ -1832,7 +1909,7 @@ SELECT s.ch AS grp, s.users AS user_count, sp.spend / s.signups AS spend_per_sig
 		id: "H8-team-overage-billing",
 		hook: "H8",
 		archetype: "temporal-inflection",
-		narrative: `From ${D(METERED_START)} Team seats pay $${OVERAGE_PRICE_PER_MIN} per build minute above the included allowance (announced two weeks earlier). Each Team org reacts on a day in the ${SCHEDULED_CUT_RAMP_DAYS} days after the switch by turning off ${(SCHEDULED_CUT_MEAN - SCHEDULED_CUT_SPREAD) * 100}-${(SCHEDULED_CUT_MEAN + SCHEDULED_CUT_SPREAD) * 100}% of its scheduled (cron) builds (mean ${SCHEDULED_CUT_MEAN * 100}%); push and pull-request builds do not change. Scheduled builds per push build for Team seats (plan_tier at event time), ${METERED_POST_FROM.slice(0, 10)} to Sep 30 vs August, reads 1 − ${SCHEDULED_CUT_MEAN}; Free, Pro, and Enterprise are unmetered and stay at 1.0. The overage itself exists only in the warehouse table usage_billing_daily (zero before the switch and on every other plan). Pooled allowances reset on the 1st, so overage is zero on days 1-${ALLOWANCE_RESET_DAYS} of a month and grows as orgs run out; every Team day from September ${OVERAGE_FROM_DAY} bills some.`,
+		narrative: `From ${D(METERED_START)} Team seats pay $${OVERAGE_PRICE_PER_MIN} per build minute above the included allowance (announced two weeks earlier). Each Team org reacts on a day in the ${SCHEDULED_CUT_RAMP_DAYS} days after the switch by turning off ${(SCHEDULED_CUT_MEAN - SCHEDULED_CUT_SPREAD) * 100}-${(SCHEDULED_CUT_MEAN + SCHEDULED_CUT_SPREAD) * 100}% of its scheduled (cron) builds (mean ${SCHEDULED_CUT_MEAN * 100}%); push and pull-request builds do not change. Scheduled builds per push build for Team seats (plan_tier at event time), whole Monday weeks ${METERED_POST_FROM.slice(0, 10)} to ${D(dayjs.utc(METERED_POST_TO).subtract(1, "day").toISOString())} vs ${METERED_PRE_FROM.slice(0, 10)} to ${D(dayjs.utc(METERED_PRE_TO).subtract(1, "day").toISOString())} (scheduled builds run flat across the week while push builds follow the working week, so partial weeks would bias the ratio), reads 1 − ${SCHEDULED_CUT_MEAN}; Free, Pro, and Enterprise are unmetered and stay at 1.0. The overage itself exists only in the warehouse table usage_billing_daily (zero before the switch and on every other plan). Pooled allowances reset on the 1st, so overage is zero on days 1-${ALLOWANCE_RESET_DAYS} of a month and grows as orgs run out; every Team day from September ${OVERAGE_FROM_DAY} bills some.`,
 		mixpanelReport: { type: "Insights", event: "build started", measure: "total, formula schedule / push", breakdown: "trigger, plan_tier", chart: "weekly line", join: "usage_billing_daily.overage_revenue_usd" },
 		assertions: [
 			{
@@ -1879,7 +1956,7 @@ FROM ${WH("usage_billing_daily")}`,
 		id: "H9-test-coverage-rollbacks",
 		hook: "H9",
 		archetype: "cohort-prop-scale",
-		narrative: `Production deploys from repositories with low test coverage roll back more often: ${ROLLBACK_LOW_COV * 100}% at ${COVERAGE_LOW}% coverage or less, falling linearly to ${ROLLBACK_HIGH_COV * 100}% at ${COVERAGE_HIGH}% or more (each repository's deploys follow its rate through a low-discrepancy sequence, so per-repository rates sit close to the curve). test_coverage_pct is a property of the repository, carried on every PR step. Rollback rate for deploys at ≤${COVERAGE_LOW}% coverage over ≥${COVERAGE_HIGH}% reads ${ROLLBACK_LOW_COV}/${ROLLBACK_HIGH_COV}. Forge Assist and PR size do not change rollbacks.`,
+		narrative: `Production deploys from repositories with low test coverage roll back more often: ${ROLLBACK_LOW_COV * 100}% at ${COVERAGE_LOW}% coverage or less, falling linearly to ${ROLLBACK_HIGH_COV * 100}% at ${COVERAGE_HIGH}% or more (each repository's deploys follow its rate through a low-discrepancy sequence, one for assisted and one for standard deploys, so per-repository rates sit close to the curve). test_coverage_pct is a property of the repository, carried on every PR step. Rollback rate for deploys at ≤${COVERAGE_LOW}% coverage over ≥${COVERAGE_HIGH}% reads ${ROLLBACK_LOW_COV}/${ROLLBACK_HIGH_COV}. Forge Assist and PR size do not change rollbacks.`,
 		mixpanelReport: { type: "Insights", event: "production deployed", measure: "share with deploy_outcome = rolled_back", breakdown: "test_coverage_pct (custom buckets: ≤30, 31-74, ≥75)" },
 		assertions: [
 			{

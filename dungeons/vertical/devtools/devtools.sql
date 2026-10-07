@@ -141,13 +141,15 @@ SELECT s.ch, s.signups, round(s.onboarding_rate, 4) AS onboarding_rate, round(sp
  round(sp.spend / s.signups, 2) AS spend_per_signup, round(sp.spend / (s.signups * s.onboarding_rate), 2) AS spend_per_onboarded
 FROM s LEFT JOIN sp USING (ch) ORDER BY spend_per_signup NULLS LAST, s.ch;
 
--- STORY H8-team-overage-billing: scheduled builds per push build, Sep 15-30 vs August, Team vs other plans (knob 0.5; control 1.0)
-WITH b AS (SELECT CASE WHEN plan_tier = 'team' THEN 'team' ELSE 'other_plans' END AS grp, t >= TIMESTAMP '2026-09-15' AS post, trigger
-  FROM ev WHERE event = 'build started' AND ((t >= TIMESTAMP '2026-08-01' AND t < TIMESTAMP '2026-09-01') OR (t >= TIMESTAMP '2026-09-15' AND t < TIMESTAMP '2026-10-01'))),
-r AS (SELECT grp, post, count(*) FILTER (WHERE trigger = 'schedule')::DOUBLE / count(*) FILTER (WHERE trigger = 'push') AS sched_per_push FROM b GROUP BY 1, 2)
-SELECT grp, round(max(sched_per_push) FILTER (WHERE NOT post), 4) AS august, round(max(sched_per_push) FILTER (WHERE post), 4) AS sep_15_30,
- round(max(sched_per_push) FILTER (WHERE post) / max(sched_per_push) FILTER (WHERE NOT post), 4) AS ratio
-FROM r GROUP BY 1 ORDER BY 1;
+-- STORY H8-team-overage-billing: scheduled builds per push build, whole Monday weeks Sep 14-27 vs Aug 3-30,
+-- Team vs other plans (knob 0.5; control 1.0); did_vs_other = Team ratio / other plans' ratio
+WITH b AS (SELECT CASE WHEN plan_tier = 'team' THEN 'team' ELSE 'other_plans' END AS grp, t >= TIMESTAMP '2026-09-14' AS post, trigger
+  FROM ev WHERE event = 'build started' AND ((t >= TIMESTAMP '2026-08-03' AND t < TIMESTAMP '2026-08-31') OR (t >= TIMESTAMP '2026-09-14' AND t < TIMESTAMP '2026-09-28'))),
+r AS (SELECT grp, post, count(*) FILTER (WHERE trigger = 'schedule')::DOUBLE / count(*) FILTER (WHERE trigger = 'push') AS sched_per_push FROM b GROUP BY 1, 2),
+q AS (SELECT grp, max(sched_per_push) FILTER (WHERE NOT post) AS aug, max(sched_per_push) FILTER (WHERE post) AS sep FROM r GROUP BY 1)
+SELECT grp, round(aug, 4) AS aug_3_30, round(sep, 4) AS sep_14_27, round(sep / aug, 4) AS ratio,
+ round((sep / aug) / (SELECT sep / aug FROM q WHERE grp = 'other_plans'), 4) AS did_vs_other
+FROM q ORDER BY 1;
 SELECT plan_tier, count(*) FILTER (WHERE overage_revenue_usd > 0) AS days_with_overage, min(date) FILTER (WHERE overage_revenue_usd > 0) AS first_day,
  round(sum(overage_revenue_usd), 2) AS overage_revenue_usd FROM wh_billing GROUP BY 1 ORDER BY 1;
 -- allowances reset on the 1st: Team overage on days 1-3 of a month (0) and Team days Sep 8-30 without overage (0)
@@ -205,6 +207,13 @@ SELECT review_mode, count(*) AS deploys, sum((deploy_outcome = 'rolled_back')::I
 FROM prs WHERE t_deploy IS NOT NULL AND t_open >= TIMESTAMP '2026-07-29' AND plan_open IN ('pro', 'team', 'enterprise') GROUP BY 1 ORDER BY 1;
 SELECT plan_open, review_mode, count(*) AS deploys, round(avg((deploy_outcome = 'rolled_back')::INT), 4) AS rollback_rate
 FROM prs WHERE t_deploy IS NOT NULL AND t_open >= TIMESTAMP '2026-07-29' AND plan_open IN ('pro', 'team', 'enterprise') GROUP BY 1, 2 ORDER BY 1, 2;
+-- two-proportion z (Forge Assist vs standard), pooled and by plan
+WITH d AS (SELECT coalesce(plan_open, 'all') AS plan, count(*) FILTER (WHERE review_mode = 'forge_assist') AS na, avg((deploy_outcome = 'rolled_back')::INT) FILTER (WHERE review_mode = 'forge_assist') AS pa,
+  count(*) FILTER (WHERE review_mode = 'standard') AS ns, avg((deploy_outcome = 'rolled_back')::INT) FILTER (WHERE review_mode = 'standard') AS ps
+  FROM prs WHERE t_deploy IS NOT NULL AND t_open >= TIMESTAMP '2026-07-29' AND plan_open IN ('pro', 'team', 'enterprise') GROUP BY ROLLUP (plan_open))
+SELECT plan, na, round(pa, 4) AS assist_rate, ns, round(ps, 4) AS standard_rate,
+ round((pa - ps) / sqrt(((pa * na + ps * ns) / (na + ns)) * (1 - (pa * na + ps * ns) / (na + ns)) * (1.0 / na + 1.0 / ns)), 2) AS z
+FROM d ORDER BY plan;
 
 -- EVAL Q4 — Remote Build Cache experiment: build time, success rate, volume per developer, split
 SELECT p.variant, count(DISTINCT b.uid) AS developers, count(*) AS builds, round(avg((b.build_status = 'success')::INT), 4) AS success_rate,
@@ -279,6 +288,13 @@ SELECT count(*) FILTER (WHERE inc AND npm) AS npm_incident_builds, round(avg(ok:
 FROM w;
 SELECT date, ecosystem, registry_mirror_status, dependency_fetch_error_rate FROM wh_fleet WHERE registry_mirror_status = 'degraded' ORDER BY 1;
 SELECT max(dependency_fetch_error_rate) FILTER (WHERE registry_mirror_status = 'operational') AS max_normal_error_rate FROM wh_fleet;
+-- preview deploys install dependencies too: previews per push, npm developers vs the rest, incident days vs the surrounding days
+WITH p AS (SELECT (t >= TIMESTAMP '2026-08-19' AND t < TIMESTAMP '2026-08-21') AS inc, (primary_stack = 'node') AS npm, event
+  FROM ev WHERE event IN ('commit pushed', 'preview deployed') AND commit_sha <> 'onboarding' AND t >= TIMESTAMP '2026-08-12' AND t < TIMESTAMP '2026-08-28')
+SELECT npm, round(count(*) FILTER (WHERE inc AND event = 'preview deployed')::DOUBLE / count(*) FILTER (WHERE inc AND event = 'commit pushed'), 4) AS incident_previews_per_push,
+ round(count(*) FILTER (WHERE NOT inc AND event = 'preview deployed')::DOUBLE / count(*) FILTER (WHERE NOT inc AND event = 'commit pushed'), 4) AS surrounding_previews_per_push,
+ count(*) FILTER (WHERE inc AND event = 'commit pushed') AS incident_pushes
+FROM p GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q10 — did other ecosystems fail on dependency downloads during the incident? (null outside npm)
 WITH w AS (SELECT (t_finish >= TIMESTAMP '2026-08-19' AND t_finish < TIMESTAMP '2026-08-21') AS inc, ecosystem, build_status = 'success' AS ok,
@@ -296,6 +312,12 @@ SELECT count(*) FILTER (WHERE inc) AS incident_builds, round(avg(ok::INT) FILTER
  round(avg(dep::INT) FILTER (WHERE inc), 4) AS incident_dependency_fail, round(avg(dep::INT) FILTER (WHERE NOT inc), 4) AS surrounding_dependency_fail FROM w;
 SELECT ecosystem, max(dependency_fetch_error_rate) AS max_error_rate, string_agg(DISTINCT registry_mirror_status, ',') AS statuses
 FROM wh_fleet WHERE date >= DATE '2026-08-19' AND date < DATE '2026-08-21' GROUP BY 1 ORDER BY 1;
+-- build success by ecosystem, incident days vs the surrounding days (z on the incident share; small ecosystems swing on test/compile failures)
+WITH w AS (SELECT ecosystem, (t_finish >= TIMESTAMP '2026-08-19' AND t_finish < TIMESTAMP '2026-08-21') AS inc, build_status = 'success' AS ok
+  FROM builds WHERE t_finish >= TIMESTAMP '2026-08-12' AND t_finish < TIMESTAMP '2026-08-28')
+SELECT ecosystem, count(*) FILTER (WHERE inc) AS incident_builds, round(avg(ok::INT) FILTER (WHERE inc), 4) AS incident_success, round(avg(ok::INT) FILTER (WHERE NOT inc), 4) AS surrounding_success,
+ round((avg(ok::INT) FILTER (WHERE inc) - avg(ok::INT) FILTER (WHERE NOT inc)) / sqrt(avg(ok::INT) FILTER (WHERE NOT inc) * (1 - avg(ok::INT) FILTER (WHERE NOT inc)) / count(*) FILTER (WHERE inc)), 2) AS z_success
+FROM w GROUP BY 1 ORDER BY 1;
 -- baseline over every other day of the window: dependency-install failure rate outside npm, incident days vs the rest
 WITH w AS (SELECT ecosystem, (t_finish >= TIMESTAMP '2026-08-19' AND t_finish < TIMESTAMP '2026-08-21') AS inc, failure_stage = 'dependency_install' AS dep
   FROM builds WHERE ecosystem <> 'npm' AND build_status IS NOT NULL)
@@ -327,12 +349,21 @@ SELECT week, round(count(*) FILTER (WHERE team AND trigger = 'schedule')::DOUBLE
  round(count(*) FILTER (WHERE NOT team AND trigger = 'schedule')::DOUBLE / count(*) FILTER (WHERE NOT team AND trigger = 'push'), 4) AS other_sched_per_push,
  count(*) FILTER (WHERE team AND trigger = 'schedule') AS team_scheduled_builds
 FROM b GROUP BY 1 ORDER BY 1;
-WITH b AS (SELECT plan_tier, t >= TIMESTAMP '2026-09-15' AS post, trigger FROM ev WHERE event = 'build started'
-  AND ((t >= TIMESTAMP '2026-08-01' AND t < TIMESTAMP '2026-09-01') OR (t >= TIMESTAMP '2026-09-15' AND t < TIMESTAMP '2026-10-01')))
-SELECT plan_tier, round(count(*) FILTER (WHERE NOT post AND trigger = 'schedule')::DOUBLE / count(*) FILTER (WHERE NOT post AND trigger = 'push'), 4) AS august,
- round(count(*) FILTER (WHERE post AND trigger = 'schedule')::DOUBLE / count(*) FILTER (WHERE post AND trigger = 'push'), 4) AS sep_15_30,
- round(count(*) FILTER (WHERE NOT post AND trigger = 'push') / 31.0, 1) AS august_push_per_day, round(count(*) FILTER (WHERE post AND trigger = 'push') / 16.0, 1) AS sep_15_30_push_per_day
-FROM b GROUP BY 1 ORDER BY 1;
+-- whole Monday weeks: Aug 3-30 (4 weeks) vs Sep 14-27 (2 weeks), by plan and pooled
+WITH b AS (SELECT CASE WHEN plan_tier = 'team' THEN 'team' ELSE 'other_plans' END AS grp, plan_tier, t >= TIMESTAMP '2026-09-14' AS post, trigger FROM ev WHERE event = 'build started'
+  AND ((t >= TIMESTAMP '2026-08-03' AND t < TIMESTAMP '2026-08-31') OR (t >= TIMESTAMP '2026-09-14' AND t < TIMESTAMP '2026-09-28')))
+SELECT * FROM (
+SELECT plan_tier AS segment, round(count(*) FILTER (WHERE NOT post AND trigger = 'schedule')::DOUBLE / count(*) FILTER (WHERE NOT post AND trigger = 'push'), 4) AS aug_3_30,
+ round(count(*) FILTER (WHERE post AND trigger = 'schedule')::DOUBLE / count(*) FILTER (WHERE post AND trigger = 'push'), 4) AS sep_14_27,
+ round(count(*) FILTER (WHERE NOT post AND trigger = 'push') / 28.0, 1) AS aug_push_per_day, round(count(*) FILTER (WHERE post AND trigger = 'push') / 14.0, 1) AS sep_push_per_day,
+ count(*) FILTER (WHERE NOT post AND trigger = 'schedule') AS aug_scheduled, count(*) FILTER (WHERE post AND trigger = 'schedule') AS sep_scheduled
+FROM b GROUP BY 1
+UNION ALL
+SELECT grp, round(count(*) FILTER (WHERE NOT post AND trigger = 'schedule')::DOUBLE / count(*) FILTER (WHERE NOT post AND trigger = 'push'), 4),
+ round(count(*) FILTER (WHERE post AND trigger = 'schedule')::DOUBLE / count(*) FILTER (WHERE post AND trigger = 'push'), 4),
+ round(count(*) FILTER (WHERE NOT post AND trigger = 'push') / 28.0, 1), round(count(*) FILTER (WHERE post AND trigger = 'push') / 14.0, 1),
+ count(*) FILTER (WHERE NOT post AND trigger = 'schedule'), count(*) FILTER (WHERE post AND trigger = 'schedule')
+FROM b WHERE grp = 'other_plans' GROUP BY 1) ORDER BY 1;
 
 -- EVAL Q14 — Team overage revenue and runner minutes by month (warehouse)
 SELECT date_trunc('month', date)::DATE AS month, round(sum(billable_runner_minutes)) AS runner_minutes, round(sum(overage_minutes)) AS overage_minutes,

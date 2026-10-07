@@ -21,6 +21,8 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 
 New developers go through setup once, right after they sign up. `account created`, `repository imported`, and `pipeline configured` happen only during setup.
 
+Work runs through the pipeline: a new developer's CI builds and pull requests start after `pipeline configured`, and push previews and production deploys start after the setup preview. Before that, a developer can browse code, read the docs, use the CLI, file issues, and invite teammates.
+
 | Event | Meaning | Properties |
 |---|---|---|
 | `account created` | The developer creates an account. First event of every new developer and the moment their device is linked to their `user_id`. | `signup_method` (`github`, `google`, `gitlab`, `email`); `acquisition_channel`: how the developer found us (`organic`, `referral`, `community`, `paid_search`, `paid_social`, `newsletter`); same value as the profile property. |
