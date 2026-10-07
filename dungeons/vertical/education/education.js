@@ -4,680 +4,1055 @@ import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 import "dotenv/config";
 import * as u from "@ak--47/dungeon-master/utils";
-import * as v from "ak-tools";
+import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
 /** @typedef  {import("../../../types").Dungeon} Config */
 
 // ── OVERVIEW ──
 /*
- * NAME:       LearnPath
- * APP:        Online learning platform modeled after Coursera, Khan Academy,
- *             and Udemy. Self-paced and cohort-based courses with quizzes,
- *             assignments, certificates, and a social study layer. Two-sided
- *             marketplace: ~89% students, ~11% instructors.
- * SCALE:      10,000 users, ~760K events, 121 days (2026-01-01 → 2026-05-01)
- * CORE LOOP:  account registered → course enrolled → lecture started/completed → quiz → certificate
+ * NAME:       Brightpath Academy
+ * APP:        Online learning platform for professional skills (data, software,
+ *             business, design, marketing, languages). 68 courses, each either
+ *             self-paced or cohort-based (live sessions, weekly deadlines, a
+ *             facilitator). Free plan; Brightpath Plus ($29 → $35 per month from
+ *             2026-08-10, $239 per year unchanged); Brightpath for Teams seats
+ *             paid by employers. Ask Bright (AI tutor) is a Plus and Teams
+ *             feature from 2026-07-21. Web plus iOS and Android apps.
+ * SCALE:      10,000 learners (3,983 sign up inside the window), ~0.82M events,
+ *             120 days (2026-06-04 → 2026-10-01, UTC)
+ * CORE LOOP:  course page viewed → course enrolled → lesson started → lesson
+ *             completed (→ quiz submitted, assignment submitted) → certificate earned
+ * VALUE MOMENT: lesson completed
  *
  * EVENTS (17):
- *   lecture started (18) > lecture completed (14) > practice problem solved (12)
- *   > quiz started (10) > resource downloaded (9) > course enrolled (8)
- *   > quiz completed (8) > discussion posted (7) > assignment submitted (6)
- *   > assignment graded (5) > help requested (4) > study group joined (4)
- *   > instructor feedback given (3) > course reviewed (3) > certificate earned (2)
- *   > subscription purchased (2) > account registered (1)
+ *   lesson started > lesson completed > home viewed > course page viewed
+ *   > course search > quiz submitted > discussion posted > course enrolled
+ *   > assignment submitted > paywall viewed > ai tutor question asked
+ *   > live session attended > $experiment_started > certificate earned
+ *   > account created > learning goals set > subscription started
  *
- * FUNNELS (7):
- *   - Onboarding:               account registered → course enrolled → lecture started (75%)
- *   - Learning Loop:            lecture started → lecture completed → practice problem solved (70%, reentry)
- *   - Assessment:               quiz started → quiz completed → assignment submitted (55%, reentry)
- *   - Course Completion:        course enrolled → lecture completed → quiz completed → certificate earned (30%)
- *   - Social Learning:          discussion posted → study group joined → resource downloaded (50%, AI Study Buddy A/B)
- *   - Instructor Interaction:   assignment submitted → assignment graded → instructor feedback given (45%)
- *   - Support/Monetization:     help requested → subscription purchased → course reviewed (35%)
+ * FUNNELS (4 configs):
+ *   - Onboarding (first funnel, two copies by account_type, H3):
+ *       account created → learning goals set → course enrolled → lesson started
+ *       (52% self-pay, 78% employer-sponsored; 36 h vs 18 h)
+ *   - Course Enrollment: course page viewed → course enrolled (30%, course_id per
+ *       run, A/B "Personalized Course Picks" from 2026-07-08, H2)
+ *   - Lesson: lesson started → lesson completed (82%, 1 h, lesson_id and
+ *       content_type per run)
+ *   Everything else (quizzes, assignments, discussions, live sessions, tutor
+ *   questions, home, search, paywall) comes from the engine's standalone pool and
+ *   is tied to a course by the everything hook's course model.
  *
- * USER PROPS:  account_type, subscription_status, learning_style, education_level, timezone, courses_created, teaching_experience_years, instructor_rating, learning_goal, study_hours_per_week, Platform
- * SUPER PROPS: Platform
- * SCD PROPS:   enrollment_status (enrolled/active/completed/dropped, monthly fuzzy, max 6), course_status (draft/published/archived/deprecated, monthly fixed, max 6, type: course_id)
- * GROUPS:      course_id (150 courses), group_id (300 study groups)
+ * USER PROPS:  learner_segment, account_type, primary_goal, plan_tier,
+ *              customer_since, acquisition_channel, preferred_playback_speed,
+ *              "Experiment: Personalized Course Picks" (exposed learners)
+ * SUPER PROPS: plan_tier (plan at event time: free / plus / teams),
+ *              platform (web / ios / android, from the device OS)
+ * SCD PROPS:   none
+ * GROUPS:      none
+ * WAREHOUSE:   paid_marketing_daily (spend by paid channel),
+ *              app_stability_daily (video starts and playback health by platform),
+ *              subscription_billing_daily (new Plus subscriptions, list price,
+ *              bookings by billing interval)
+ * LOOKUPS:     none — the course catalog is denormalized onto course events
+ * SOUP:        Sunday-heavy week with a Friday/Saturday dip; evening peaks in
+ *              the Americas, India, and Europe (UTC)
+ *
+ * IDENTITY: new learners are identified at "account created" (isAuthEvent, first
+ * event, carries user_id + device_id); about 2 devices per learner. Every event
+ * carries user_id; there is no anonymous pre-signup activity. The onboarding
+ * steps after signup happen in the signup session and carry its device.
+ * "certificate earned" and "subscription started" are sent by the backend:
+ * user_id only, no device_id or platform.
+ *
+ * DESIGN NOTES:
+ * - Course catalog: 68 seeded courses (16 cohort; title, category, format, level, length
+ *   4-8 weeks). course page viewed, course enrolled, and certificate earned carry
+ *   the catalog fields; lessons, quizzes, assignments, discussions, live sessions,
+ *   and tutor questions carry course_id and course_category.
+ * - Course model (everything hook): each enrollment is active from its enrollment
+ *   until it finishes or is abandoned; learning events are assigned to an active
+ *   enrollment (a lesson start and its completion share a course), live sessions
+ *   only to active cohort enrollments. A learner never enrolls in the same course
+ *   twice. Established learners carry courses they enrolled in before June 4
+ *   (0.75 per in-window enrollment, enrolled up to 90 days earlier), so June has
+ *   lessons and certificates in flight. lesson_number and quiz_number advance
+ *   with the learner's progress through the course.
+ * - Certificates are issued when a finishing enrollment's course ends (cohort:
+ *   on schedule; self-paced: nominal length × a pace with median 1), only while
+ *   the learner is still active; days_to_complete is the real gap.
+ * - Purchases are placed by the hook: new self-pay learners (and those who
+ *   joined in the 60 days before June 4) buy a lognormal lag after signup (median
+ *   6 days); long-time free learners buy at a uniform time. One subscription per
+ *   learner; a paywall view precedes each purchase; paywalls are shown to free
+ *   learners only. plan_tier on each event is the plan at that moment.
+ * - New learners: retentionCurve shapes activity; 55% lapse on a uniform day
+ *   3-60; 60% of learners who never start a lesson stop on day 1-5; 75% finish
+ *   their first onboarding lesson in the same sitting.
+ * - Ask Bright questions often run to follow-ups (up to 3, 1-7 minutes apart).
+ * - Minutes per video lesson follow the playback speed; reading and lab lessons
+ *   carry no playback_speed.
+ * - Warehouse drift: app_stability_daily.video_starts adds course trailer and
+ *   preview plays that send no lesson event; subscription_billing_daily drops
+ *   first payments that fail (5%) and adds app-store purchases Mixpanel never
+ *   receives. paid_marketing_daily spend is a paced daily budget per channel
+ *   (CPL × expected signups per day, a weekday shape above a 35% flat floor,
+ *   seeded ±12% noise, never zero); clicks, impressions, and platform-reported
+ *   signups follow spend.
  */
 
 // ── HOOK STORIES ──
 /*
- * ---------------------------------------------------------------
- * 1. STUDENT VS INSTRUCTOR PROFILES (user)
- * ---------------------------------------------------------------
+ * All effects are hidden: no flag properties. Each is found by a breakdown, a
+ * date comparison, or a cohort. Dates live in the TIMELINE constants and are
+ * shared by hooks, stories, SQL, warehouse columns, and the timeline guide.
  *
- * PATTERN: Instructor profiles get teaching attributes
- * (courses_created, teaching_experience_years, instructor_rating).
- * Students get learning attributes (learning_goal,
- * study_hours_per_week). Two-sided marketplace at ~89% students,
- * ~11% instructors. The everything hook also stamps account_type on
- * 'account registered' events from the user's profile (the engine
- * draws event-level pool props independently of profile props), so
- * the event breakdown agrees with the profile breakdown exactly.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H1. ASK BRIGHT AI TUTOR LAUNCH (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: from 2026-07-21, 45% of Plus and Teams learners (plan at event time)
+ *   adopt Ask Bright. Each adopter starts on a salted day in the 21 days after
+ *   launch and keeps a salted 35-85% of their would-be questions, so use ramps
+ *   for three weeks and then holds. After a learner's first tutor question their
+ *   quiz scores rise by 8 points. Free learners never see the tutor.
+ * MIXPANEL: Insights, quiz submitted, average score_pct, weekly, breakdown
+ *   cohort "did ai tutor question asked" (non-adopters filtered to plan_tier in
+ *   plus, teams): the lines match before launch and adopters pull ahead as they
+ *   start. The exact before/after-first-question read needs the raw export.
+ * REAL WORLD: an always-available tutor helps learners fix misconceptions
+ *   before the quiz.
  *
- * HOW TO FIND IT IN MIXPANEL:
+ * ─────────────────────────────────────────────────────────────────────────
+ * H2. PERSONALIZED COURSE PICKS EXPERIMENT (declarative funnel experiment)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: from 2026-07-08 learners split 50/50 at their first course page view;
+ *   "Personalized" multiplies the share of course page views that end in an
+ *   enrollment in that course by 1.25 and the view-to-enrollment time by 0.8.
+ *   One $experiment_started per learner.
+ * MIXPANEL: Funnels, course page viewed → course enrolled, totals, hold course_id
+ *   constant, 1-day window, breakdown user property "Experiment: Personalized
+ *   Course Picks".
+ * REAL WORLD: recommendations matched to a learner's goal turn browsing into
+ *   enrollments.
  *
- *   Report 1: Account Mix
- *   - Report type: Insights
- *   - Event: any event
- *   - Measure: Unique users
- *   - Breakdown: "account_type"
- *   - Expected: ~89% students, ~11% instructors
+ * ─────────────────────────────────────────────────────────────────────────
+ * H3. EMPLOYER-SPONSORED ONBOARDING (declarative duplicate first funnels)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: new employer-sponsored learners finish onboarding at 1.5x the self-pay
+ *   rate (78% vs 52% at the engine) and in half the time (18 h vs 36 h).
+ * MIXPANEL: Funnels, account created → learning goals set → course enrolled →
+ *   lesson started, 7-day window, breakdown account_type; conversion and median
+ *   time to convert.
+ * REAL WORLD: the employer has already picked the course and expects progress.
  *
- *   Report 2: Instructor-Driven Feedback
- *   - Report type: Insights
- *   - Event: "instructor feedback given"
- *   - Measure: Total per user (average)
- *   - Breakdown: "account_type"
- *   - Expected: instructors dominate feedback volume; students rarely emit
+ * ─────────────────────────────────────────────────────────────────────────
+ * H4. COHORT VS SELF-PACED COMPLETION (everything, course model)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: 70% of cohort enrollments would finish vs 0.3x that (21%) for
+ *   self-paced. Certificate timing is format-neutral (nominal length × pace with
+ *   median 1), and lapsing hits both formats alike.
+ * MIXPANEL: Funnels, course enrolled → certificate earned, totals, hold course_id
+ *   constant, 90-day window, breakdown course_format, enrollments Jun 4-30.
+ * REAL WORLD: deadlines, live sessions, and peers keep cohort learners going;
+ *   MOOC-style self-paced completion is low.
  *
- * REAL-WORLD ANALOGUE: Two-sided learning marketplaces have
- * fundamentally different role personas — teachers create supply,
- * learners consume it.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H5. FIRST-WEEK LESSONS → RETENTION (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: new learners who complete fewer than 3 lessons in their first 7 days
+ *   go dark (all later events removed) with probability 0.5 on a uniform day
+ *   10-21; 3+ lessons → no cut. Organic lapse (55%, day 3-60) and setup
+ *   abandonment act on everyone independently of the first week.
+ * MIXPANEL: Funnels account created → lesson completed ×3 (7-day window); save
+ *   completed and dropped learners as cohorts; Retention, account created → any
+ *   event, on or after day 30, filter "did lesson started".
+ * REAL WORLD: learners who build a study habit in week one stay; a single
+ *   lesson is not a habit.
  *
- * ---------------------------------------------------------------
- * 2. DEADLINE CRAMMING (everything)
- * ---------------------------------------------------------------
+ * ─────────────────────────────────────────────────────────────────────────
+ * H6. PLUS PRICE CHANGE (everything + warehouse subscription_billing_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: on 2026-08-10 Plus monthly rises from $29 to $35; annual stays $239.
+ *   Before: 30% of new subscriptions are annual. After: annual-minded buyers stay
+ *   annual, 30% of monthly-minded buyers switch to annual, 20% do not buy. New
+ *   subscriptions fall to 0.86x, annual share rises to 0.593, and the first
+ *   payment per new subscription (warehouse list price) rises 1.695x.
+ * MIXPANEL: Insights, subscription started, breakdown billing_interval, weekly,
+ *   % of total; join subscription_billing_daily.list_price_usd for revenue.
+ * REAL WORLD: a monthly price rise next to an unchanged annual price nudges
+ *   buyers to annual and prices out some monthly buyers.
  *
- * PATTERN: Assignments submitted on Sun/Mon are rushed — 60% are late
- * (raw is_late prop set true at 60% likelihood) vs ~20% baseline. Quiz
- * scores on Sun/Mon drop by 25 points. No flag — discover via Day of Week
- * breakdown.
+ * ─────────────────────────────────────────────────────────────────────────
+ * H7. PAID CHANNEL ECONOMICS (everything + warehouse paid_marketing_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: window spend per Mixpanel signup is $38 paid search, $15 paid social,
+ *   $26 YouTube ads. Share of would-be Plus purchases kept by channel: paid
+ *   search 1.0, referral 0.9, organic 0.85, YouTube 0.75, university partnership
+ *   0.6, paid social 0.4. Paid social is 0.39x the cost per signup and 0.4x the
+ *   purchase rate, so cost per paying subscriber is about the same as search.
+ * MIXPANEL: Insights, account created by acquisition_channel joined to
+ *   paid_marketing_daily.spend_usd; Funnels account created → subscription
+ *   started, 30-day window, signups Jun 4 - Aug 31, breakdown acquisition_channel.
+ * REAL WORLD: cheap social signups are curious browsers; search signups came
+ *   looking for a course.
  *
- * HOW TO FIND IT IN MIXPANEL:
+ * ─────────────────────────────────────────────────────────────────────────
+ * H8. ANDROID PLAYBACK INCIDENT (everything + warehouse app_stability_daily)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: 2026-09-09 to 2026-09-12 (hotfix 2026-09-13), 55% of would-be
+ *   completions of video lessons started on Android are lost. Web, iOS, and
+ *   reading/lab lessons are unaffected. The warehouse shows
+ *   playback_failure_rate ≈ 0.55 and app_version 6.4.0 for Android on those days.
+ * MIXPANEL: Insights, lesson completed / lesson started (formula), filter
+ *   content_type = video, breakdown platform, daily; join the warehouse.
+ * REAL WORLD: a video player regression in one app release.
  *
- *   Report 1: Late Submission Rate by Day of Week
- *   - Report type: Insights
- *   - Event: "assignment submitted"
- *   - Measure: count where is_late=true / total
- *   - Breakdown: Day of Week
- *   - Expected: Sun/Mon ~ 60% late vs other days ~ 20%
+ * ─────────────────────────────────────────────────────────────────────────
+ * H9. FALL TERM (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: before 2026-08-24 university students keep only 55% of their
+ *   learning activity (whole lesson units); from the fall term they study at
+ *   their full rate, so their lesson completions per day rise 1/0.55 = 1.82x
+ *   relative to other segments.
+ * MIXPANEL: Insights, lesson completed, breakdown learner_segment, weekly.
+ * REAL WORLD: students take the summer off and return with the term.
  *
- *   Report 2: Quiz Score by Day of Week
- *   - Report type: Insights
- *   - Event: "quiz completed"
- *   - Measure: Average of "score_percent"
- *   - Breakdown: Day of Week
- *   - Expected: Sun/Mon ~ 26, other days ~ 50 (-25 knob; the clamp at 0
- *     attenuates the observed gap to ~24 pts since organic sub-25 scores
- *     can't drop the full amount)
+ * ─────────────────────────────────────────────────────────────────────────
+ * H10. DOUBLE-SPEED WATCHERS SCORE LOWER (everything)
+ * ─────────────────────────────────────────────────────────────────────────
+ * PATTERN: learners whose preferred playback speed is 2x (80% of their videos
+ *   play at it) score 7 points lower on quizzes than 1x learners; 1.25x and 1.5x
+ *   score like 1x.
+ * MIXPANEL: Insights, quiz submitted, average score_pct, breakdown user
+ *   property preferred_playback_speed.
+ * REAL WORLD: skimming lectures at double speed costs retention of the material.
  *
- * REAL-WORLD ANALOGUE: Procrastination clusters submissions at the
- * deadline weekend and hammers performance.
+ * ═════════════════════════════════════════════════════════════════════════
+ * EXPECTED METRICS SUMMARY (measured: data/verify-education, 2026-10-07)
+ * ═════════════════════════════════════════════════════════════════════════
+ * Hook | Metric                                         | Derivation                  | Expected | Measured
+ * -----|------------------------------------------------|-----------------------------|----------|---------
+ * H1   | tutor questions pre-launch or on Free          | exact purity                | 0        | 0
+ * H1   | quiz score DiD, adopters vs eligible others    | AI_SCORE_BOOST              | 8.0      | 7.91 (69.9 → 77.8 vs 70.2 → 70.2)
+ * H2   | per-view enrollment, Personalized / Control    | PICKS_CONV_MULT             | 1.25     | 1.252 (37.6% vs 30.0%)
+ * H2   | median view → enrollment time                  | PICKS_TTC_MULT              | 0.80     | 0.807 (48.3 vs 59.9 min)
+ * H2   | Personalized share of exposed learners         | equal 2-arm hash            | 0.50     | 0.499
+ * H3   | onboarding conversion sponsored / self-pay     | 78 / 52                     | 1.50     | 1.496 (75.6% vs 50.6%)
+ * H3   | median time to first lesson sponsored / self   | SPONSORED_TTC_MULT          | 0.50     | 0.498 (13.5 vs 27.1 h)
+ * H4   | completion self-paced / cohort (Jun enrollments)| SELF_PACED_COMPLETE_MULT   | 0.30     | 0.301 (18.9% vs 62.7%)
+ * H5   | retained day 30+, 3+ / <3 first-week lessons   | ≥ 1/(1 − 0.5) (floor)       | ≥ 2.00   | 2.018 (71.2% vs 35.3%)
+ * H6   | annual share of new subscriptions after change | (0.3+0.7×0.3)/0.86          | 0.593    | 0.598 (before 0.298)
+ * H6   | first payment per subscription after / before  | warehouse list price        | 1.695    | 1.715 ($156.92 vs $91.51)
+ * H6   | subscriptions per day, 53 days after / before  | 0.3 + 0.7×0.8 (ceiling)     | ≤ 0.86   | 0.709 (4.83 vs 6.81, STRONG)
+ * H7   | spend per signup paid social / paid search     | 15 / 38                     | 0.395    | 0.409 ($16.21 vs $39.66)
+ * H7   | 30-day paid rate paid social / paid search     | 0.4 / 1.0                   | 0.40     | 0.394 (8.9% vs 22.5%)
+ * H8   | Android / other video completion, incident DiD | 1 − INCIDENT_FAIL           | 0.45     | 0.456 (38.2% vs 83.3% before)
+ * H8   | warehouse playback_failure_rate in incident    | INCIDENT_FAIL               | 0.55     | 0.558
+ * H9   | student / other completions per day, fall DiD  | 1 / STUDENT_SUMMER_KEEP     | 1.818    | 1.748 (students 1.866x, others 1.067x)
+ * H10  | quiz score 1x − 2x                              | FAST_SCORE_PENALTY          | 7.0      | 6.88 (71.8 vs 64.9)
+ * H10  | quiz score 1.5x / 1x (control)                  | unchanged                   | 1.00     | 0.996
+ * ═════════════════════════════════════════════════════════════════════════
  *
- * ---------------------------------------------------------------
- * 3. NOTES MAGIC NUMBER (everything, in-funnel)
- * ---------------------------------------------------------------
- *
- * PATTERN: Sweet 5-8 lectures with notes_taken=true → +30% quiz
- * score_percent (cap 100) and 40% chance of bonus cloned certificate.
- * Over 9+ → 35% of certificate-earned events drop (over-noted but
- * stuck in study mode). No flag.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Quiz Score by Notes-Taken Bucket
- *   - Cohort A: users with 5-8 "lecture completed" where notes_taken=true
- *   - Cohort B: users with 0-4
- *   - Event: "quiz completed"
- *   - Measure: Average of "score_percent"
- *   - Expected: A ~ 1.3x B
- *
- *   Report 2: Certificates per User on Heavy Note-Takers
- *   - Cohort C: users with >= 9 notes-taken lectures
- *   - Cohort A: users with 5-8
- *   - Event: "certificate earned"
- *   - Measure: Total per user
- *   - Expected: C ~ 35% fewer certificates per user vs A
- *
- * REAL-WORLD ANALOGUE: Active note-taking lifts quiz performance, but
- * obsessive note-taking signals "stuck in study mode" without finishing.
- *
- * ---------------------------------------------------------------
- * 4. STUDY GROUP RETENTION (everything)
- * ---------------------------------------------------------------
- *
- * PATTERN: Users who join a study group within 10 days get bonus
- * discussion events. Non-joiners with low quiz scores (<60) churn
- * hard at day 14 — all later events are removed.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: D14 Retention by Early Group Join Cohort
- *   - Cohort A: users who fired "study group joined" within first 10 days
- *   - Cohort B: users with no early study group joined
- *   - Compare D14 retention (any event past d14) per cohort
- *   - Expected: A ~ 100% vs B ~ 1%. The churn is near-deterministic:
- *     it fires for non-joiners with ANY raw sub-60 quiz, and at the
- *     organic score mean (~40) virtually every quizzing non-joiner
- *     has one. Non-joiners who never quiz survive, but they are rare
- *     among 20d+-tenure users.
- *
- *   Report 2: Discussion Volume by Group Cohort
- *   - Cohort A vs B (as above)
- *   - Event: "discussion posted"
- *   - Measure: Total per user
- *   - Expected: A posts substantially more
- *
- * REAL-WORLD ANALOGUE: Social learning ties create accountability
- * and dramatically reduce drop-off in cohort-based courses.
- *
- * ---------------------------------------------------------------
- * 5. HINT DEPENDENCY (event)
- * ---------------------------------------------------------------
- *
- * PATTERN: On "practice problem solved", hint_used=true gets difficulty
- * forced to "easy" 60% of the time. hint_used=false gets difficulty forced
- * to "hard" 40% of the time. No flag — discover via difficulty breakdown
- * filtered by hint_used.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Easy Problem Mix for Hint Users
- *   - Report type: Insights
- *   - Event: "practice problem solved"
- *   - Measure: Total
- *   - Filter: "hint_used" = true
- *   - Breakdown: "difficulty"
- *   - Expected: ~73% easy (60% forced + 40% x 1/3 organic; vs ~33% baseline)
- *
- *   Report 2: Hard Problem Mix for Independent Solvers
- *   - Report type: Insights
- *   - Event: "practice problem solved"
- *   - Measure: Total
- *   - Filter: "hint_used" = false
- *   - Breakdown: "difficulty"
- *   - Expected: ~60% hard (40% forced + 60% x 1/3 organic; vs ~33% baseline)
- *
- * REAL-WORLD ANALOGUE: Learners who lean on hints get nudged toward
- * easier work, while those who push through unaided self-select
- * into harder material.
- *
- * ---------------------------------------------------------------
- * 6. SEMESTER-END SPIKE (everything)
- * ---------------------------------------------------------------
- *
- * PATTERN: Days 75-85 simulate semester crunch. quiz_started, quiz_completed,
- * and assignment_submitted events are duplicated at an 80% rate. No flag —
- * discover via line chart of those event volumes by day.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Assessment Volume Over Time
- *   - Report type: Insights
- *   - Events: "quiz started" + "quiz completed" + "assignment submitted"
- *   - Measure: Total
- *   - Line chart by day
- *   - Expected: ~1.8x volume spike on days 75-84 (80% duplication rate;
- *     the hook's continuous [75, 85) day-index window fully treats
- *     calendar days 75-84)
- *
- * REAL-WORLD ANALOGUE: Semester-end deadlines reliably produce a
- * massive last-minute surge in student activity.
- *
- * ---------------------------------------------------------------
- * 7. FREE VS PAID COURSES (funnel-pre + everything)
- * ---------------------------------------------------------------
- *
- * PATTERN: Free users get 0.5x funnel conversion rate on the cert funnel only
- * (30% -> 15% generative); paid subscribers get 1.5x (30% -> 45%). Free users
- * ALSO lose 55% of their certificates post-generation, so the observed
- * completion gap compounds both treatments: paid/free certificates per user
- * lands well above the 3x conversion-only gap (v1.5 doc said "~2.2x" — that
- * figure ignored the 55% cert removal AND understated the paid factor).
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Course Completion Funnel by Subscription
- *   - Report type: Funnels
- *   - Steps: "course enrolled" -> "lecture completed" -> "quiz completed" -> "certificate earned"
- *   - Breakdown: "subscription_status"
- *   - Expected: paid arms convert several-fold more than free (conversion
- *     gating 3x, further widened in-report by the 55% free cert removal)
- *
- *   Report 2: Certificates Earned per User
- *   - Report type: Insights
- *   - Event: "certificate earned"
- *   - Measure: Total per user (average)
- *   - Breakdown: "subscription_status"
- *   - Expected: paid subscribers earn substantially more certificates
- *
- * REAL-WORLD ANALOGUE: Paid commitment correlates strongly with
- * follow-through; free learners drop off long before completion.
- *
- * ---------------------------------------------------------------
- * 8. PLAYBACK SPEED CORRELATION (event + everything)
- * ---------------------------------------------------------------
- *
- * PATTERN: Speed learners (>=2.0x speed on 3+ lectures) get 0.6x
- * watch_time and a paradoxical +8 quiz score boost. Thorough
- * learners (<=1.0x) get 1.4x watch_time.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Watch Time by Playback Speed
- *   - Report type: Insights
- *   - Event: "lecture completed"
- *   - Measure: Average of "watch_time_mins"
- *   - Breakdown: "playback_speed"
- *   - Expected: speed >= 2.0 ~ 0.6x baseline; speed <= 1.0 ~ 1.4x baseline
- *
- *   Report 2: Quiz Score by Speed Learner Cohort
- *   - Cohort A: users with 3+ "lecture completed" events at playback_speed >= 2.0
- *   - Cohort B: rest
- *   - Event: "quiz completed"
- *   - Measure: Average of "score_percent"
- *   - Expected: A ~ +8 pts vs B
- *
- * REAL-WORLD ANALOGUE: Power users who watch lectures at 2x speed
- * tend to be domain-confident and outperform on assessments
- * despite spending less time.
- *
- * ---------------------------------------------------------------
- * 9. COURSE COMPLETION TIME-TO-CONVERT (everything)
- * ---------------------------------------------------------------
- *
- * PATTERN: Annual subscribers complete the course-completion funnel
- * 2x faster (factor 0.5); Free users 1.8x slower (factor 1.8).
- * Applied in the everything hook by scaling the enrolled-to-cert
- * gap on the raw events. Stronger factors compensate for the
- * composition effect from H7's conversion-rate gating.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: Course Completion Median Time-to-Convert by Subscription
- *   - Funnels > "course enrolled" -> "lecture completed" -> "quiz completed" -> "certificate earned"
- *   - Measure: Median time to convert
- *   - Breakdown: subscription_status
- *   - Expected: annual < monthly < free (direction)
- *
- *   Also visible via cross-event SQL: MIN("course enrolled" time) to
- *   MIN("certificate earned" time) per user, broken down by
- *   subscription_status. Annual < monthly < free.
- *
- * REAL-WORLD ANALOGUE: Paid commitment accelerates throughput.
- *
- * ---------------------------------------------------------------
- * 10. SOCIAL LEARNING EXPERIMENT (funnel experiment)
- * ---------------------------------------------------------------
- *
- * PATTERN: A/B experiment on the Social Learning funnel (discussion
- * posted → study group joined → resource downloaded). "AI Study
- * Buddy" variant boosts conversion 1.4x and speeds TTC to 0.85x.
- * Activates 30 days before dataset end.
- *
- * HOW TO FIND IT IN MIXPANEL:
- *
- *   Report 1: $experiment_started by Variant
- *   - Report type: Insights
- *   - Event: "$experiment_started"
- *   - Measure: Total
- *   - Breakdown: "$experiment_name" and "Variant"
- *   - Expected: ~50% Control, ~50% AI Study Buddy
- *
- *   Report 2: Social Learning Funnel by Variant
- *   - Report type: Funnels
- *   - Steps: "discussion posted" → "study group joined" → "resource downloaded"
- *   - Breakdown: Variant
- *   - Expected: AI Study Buddy ~ 1.35-1.4x conversion vs Control
- *     (generative multiplier is 1.4; organic pollution — failed
- *     experiment passes completed by organic downloads at a ~0.035
- *     base rate in both arms — mildly attenuates the measured lift)
- *
- * REAL-WORLD ANALOGUE: AI-powered study companions boost social
- * engagement and resource discovery in cohort-based courses.
- *
- * ===============================================================
- * EXPECTED METRICS SUMMARY
- * (Measured = full fidelity, 10K users / 760,795 events)
- * ===============================================================
- *
- * Story id | Metric                                      | Expected      | Measured
- * ---------|---------------------------------------------|---------------|---------
- * H1       | instructor profile share                    | 1/9 = 0.111   | 0.1121
- * H1       | role-attribute purity (both roles)          | 1.0           | 1.0000
- * H1       | event account_type = profile (registered)   | 1.0           | 1.0000
- * H2       | Sun/Mon late rate vs rest                   | 0.60 / 0.20   | 0.6038 / 0.1986
- * H2       | quiz score diff rest - Sun/Mon              | ~24 (clamp)   | 24.13
- * H3       | sweet/low quiz score (isolated read)        | ~1.3          | 1.270
- * H3       | certs-per-enroll over/sweet                 | ~0.65 keep    | 0.6398
- * H3       |   placebo: over/low score                   | ~1.0          | 0.9837
- * H4       | D14+ activity early-join vs non             | ~1.0 / ~0.01  | 0.9988 / 0.0035
- * H4       | discussions per user early/non              | ~18x          | 18.91
- * H5       | P(easy | hint)                              | 0.745         | 0.7469
- * H5       | P(hard | no hint)                           | 0.610         | 0.6141
- * H6       | spikable volume window/flank (days 75-84)   | ~1.8-1.9      | 1.908
- * H6       |   placebo: non-spikable window/flank        | ~1.0-1.1      | 1.067
- * H7       | emulator conv monthly/free (86.4h, 2-step)  | 6.67 compound | 6.73
- * H7       | certs-per-enroll monthly/free               | ~6 (diluted)  | 6.037
- * H7       |   placebo: annual/monthly certs-per-enroll  | ~1.0          | 1.057
- * H8       | watch time fast/mid                         | ~0.59         | 0.5857
- * H8       | watch time slow/mid                         | 1.40          | 1.388
- * H8       | quiz score diff speedy - rest               | ~+8           | +7.91
- * H9       | median TTC free/monthly (emulator 86.4h)    | ~1.8          | 1.760
- * H9       | median TTC annual/monthly                   | ~0.5          | 0.510
- * H10      | strict-paired conversion lift AI/Control    | ~1.37 (p.035) | 1.377
- * H10      | paired median TTC AI/Control                | ~0.85         | 0.857
+ * H5's read is a knob floor: lighter learners are also likelier to show no
+ * activity after day 30 even without the cut. H6's volume read is
+ * noise-limited (Poisson, about 350 subscriptions per side) and falls below the
+ * knob in this run: new-learner purchases in late June and July ran above
+ * their average by chance. It grades STRONG against a ceiling of half the
+ * knob's effect. H7's purchase-rate read rests on 104 paid-search and 41
+ * paid-social buyers.
  */
 
 // ── SCALE ──
 const SEED = "harness-education";
 const NUM_USERS = 10_000;
-const DATASET_START = "2026-01-01T00:00:00Z";
-const DATASET_END = "2026-05-01T23:59:59Z";
+const DATASET_START = "2026-06-04T00:00:00Z";
+const DATASET_END = "2026-10-01T23:59:59Z"; // 120 days
 const EVENTS_PER_DAY = 1.2;
 const token = process.env.MP_TOKEN || "your-mixpanel-token";
 
 const chance = u.initChance(SEED);
 
-// ── KNOBS (tweak these to reshape stories) ──
-const HINT_EASY_LIKELIHOOD = 60;
-const HINT_HARD_LIKELIHOOD = 40;
+// ── TIMELINE (shared by hooks, stories, SQL, warehouse columns, guides) ──
+const COURSE_PICKS_START = "2026-07-08T00:00:00Z";  // "Personalized Course Picks" A/B on the course page
+const AI_TUTOR_LAUNCH = "2026-07-21T00:00:00Z";     // Ask Bright (AI tutor) for Plus and Teams learners
+const PLUS_PRICE_CHANGE = "2026-08-10T00:00:00Z";   // Plus monthly $29 → $35; annual unchanged
+const FALL_TERM_START = "2026-08-24T00:00:00Z";     // fall term starts at partner universities
+const ANDROID_RELEASE = "2026-09-09T00:00:00Z";     // Android app 6.4.0 released
+const ANDROID_HOTFIX = "2026-09-13T00:00:00Z";      // Android app 6.4.1 hotfix (incident end, exclusive)
+const IOS_RELEASE = "2026-08-18T00:00:00Z";         // iOS app 6.4.0 released (no incident)
 
-const SPEED_FAST_THRESHOLD = 2.0;
-const SPEED_FAST_WATCH_FACTOR = 0.6;
-const SPEED_FAST_WATCH_MIN = 3;
-const SPEED_SLOW_THRESHOLD = 1.0;
-const SPEED_SLOW_WATCH_FACTOR = 1.4;
-const SPEED_SLOW_WATCH_MAX = 90;
-const SPEED_LECTURE_COUNT_THRESHOLD = 3;
-const SPEED_QUIZ_BOOST_POINTS = 8;
+const ms = (iso) => dayjs.utc(iso).valueOf();
+const DAY_MS = 86_400_000;
+const MIN_MS = 60_000;
+const START_MS = ms(DATASET_START);
+const END_MS = ms(DATASET_END);
 
-const FREE_FUNNEL_CONV_FACTOR = 0.5;
-const PAID_FUNNEL_CONV_FACTOR = 1.5;
-const FREE_CERT_DROP_LIKELIHOOD = 55;
+// ── WEEKLY AND DAILY RHYTHM (soup) ──
+// Sun..Sat. Learners study around work and school: Sunday is the biggest
+// study day (weekly deadlines close Sunday night), Friday and Saturday dip.
+const DOW_WEIGHTS = [1.08, 1.0, 1.0, 0.96, 0.9, 0.7, 0.76];
+// UTC hours: Americas evenings (00-04 UTC), India evenings (13-17 UTC), and
+// European evenings (17-22 UTC); the quietest hours are 04-08 UTC.
+const HOUR_WEIGHTS = [0.85, 0.8, 0.66, 0.48, 0.32, 0.26, 0.28, 0.36, 0.46, 0.52, 0.56, 0.6,
+	0.64, 0.72, 0.8, 0.82, 0.85, 0.9, 0.95, 1.0, 1.0, 0.98, 0.95, 0.9];
 
-const NOTES_SWEET_MIN = 5;
-const NOTES_SWEET_MAX = 8;
-const NOTES_OVER_THRESHOLD = 9;
-const NOTES_QUIZ_BOOST = 1.3;
-const NOTES_BONUS_CERT_LIKELIHOOD = 40;
-const NOTES_OVER_CERT_DROP_LIKELIHOOD = 35;
+// ── KNOBS ──
+// H1 Ask Bright AI tutor (Plus and Teams learners, plan at event time)
+const AI_PLANS = ["plus", "teams"];
+const AI_ADOPTER_SHARE = 0.45;     // share of eligible learners who adopt the tutor (salted per learner)
+const AI_RAMP_DAYS = 21;           // each adopter starts on a salted day in the 3 weeks after launch
+const AI_USE_MIN = 0.35;           // per adopter: share of their would-be tutor questions kept (uniform 0.35-0.85)
+const AI_USE_MAX = 0.85;
+const AI_SCORE_BOOST = 8;          // quiz score points after the learner's first tutor question
+const AI_FOLLOWUP_P = 0.55;        // chance a tutor question gets a follow-up (up to 3)
+const AI_FOLLOWUP_MAX = 3;
+const TUTOR_QUESTION_TYPES = ["explain_concept", "explain_concept", "check_my_answer", "hint", "hint", "summarize_lesson"];
 
-const SEMESTER_SPIKE_START_DAY = 75;
-const SEMESTER_SPIKE_END_DAY = 85;
-const SEMESTER_SPIKE_LIKELIHOOD = 80;
+// H2 Personalized Course Picks experiment (course page → enrollment)
+const PICKS_EXPERIMENT = "Personalized Course Picks";
+const PICKS_VARIANT = "Personalized";
+const EXP_KEY = `Experiment: ${PICKS_EXPERIMENT}`;
+const ENROLL_CONV = 30;
+const ENROLL_TTC_H = 2;
+const PICKS_CONV_MULT = 1.25;
+const PICKS_TTC_MULT = 0.8;
 
-const TTC_ANNUAL_FACTOR = 0.5;
-const TTC_FREE_FACTOR = 1.8;
+// H3 onboarding by account type (declarative duplicate first funnels)
+const ONBOARD_CONV = 52;           // self-pay learners
+const SPONSORED_ONBOARD_MULT = 1.5; // employer-sponsored learners: 78%
+const ONBOARD_TTC_H = 36;
+const SPONSORED_TTC_MULT = 0.5;    // sponsored learners finish setup in half the time
 
-const STUDY_GROUP_EARLY_DAYS = 10;
-const STUDY_GROUP_LOW_QUIZ_THRESHOLD = 60;
-const STUDY_GROUP_CHURN_CUTOFF_DAYS = 14;
-const STUDY_GROUP_DISCUSSION_CLONE_LIKELIHOOD = 60;
+// H4 course completion by format (per enrollment)
+const COHORT_COMPLETE = 0.7;       // share of cohort-course enrollments that would finish
+const SELF_PACED_COMPLETE_MULT = 0.3; // self-paced: 0.21
+const ABANDON_FRAC_MIN = 0.15;     // a non-finisher stops after 15-110% of the nominal length
+const ABANDON_FRAC_MAX = 1.1;
 
-const DEADLINE_LATE_LIKELIHOOD = 60;
-const DEADLINE_QUIZ_PENALTY = 25;
+// H5 first-week study streak → retention (new learners only)
+const STREAK_DAYS = 7;
+const STREAK_MIN = 3;              // completed lessons in the first 7 days that mark an activated learner
+const DARK_SHARE = 0.5;            // share who go dark with fewer than 3 lessons completed in the first week; 3+ → none
+const DARK_AFTER_MIN = 10;         // at-risk learners go dark on a uniform day 10-21
+const DARK_AFTER_MAX = 21;
+const SETUP_ABANDON_SHARE = 0.6;   // new learners who never start a lesson: share who stop on day 1-5
+const SETUP_ABANDON_DAY_MIN = 1;
+const SETUP_ABANDON_DAY_MAX = 5;
+const LAPSE_SHARE = 0.55;          // organic lapse, every new learner, independent of the streak
+const LAPSE_DAY_MIN = 3;
+const LAPSE_DAY_MAX = 60;
 
-// ── DATA ARRAYS ──
-// Generate consistent IDs for lookup tables and event properties
-const courseIds = v.range(1, 151).map(n => `course_${v.uid(6)}`);
-const quizIds = v.range(1, 401).map(n => `quiz_${v.uid(6)}`);
-const groupIds = v.range(1, 301).map(n => `group_${v.uid(6)}`);
-const lectureIds = v.range(1, 501).map(n => `lecture_${v.uid(6)}`);
-const assignmentIds = v.range(1, 201).map(n => `assignment_${v.uid(6)}`);
-const problemIds = v.range(1, 601).map(n => `problem_${v.uid(6)}`);
+// H6 Plus price change (warehouse subscription_billing_daily)
+const PLUS_MONTHLY_OLD = 29;
+const PLUS_MONTHLY_NEW = 35;
+const PLUS_ANNUAL = 239;
+const ANNUAL_SHARE_PRE = 0.3;      // share of new Plus subscriptions on annual billing before the change
+const MONTHLY_SWITCH_ANNUAL = 0.3; // after the change: share of monthly-minded buyers who choose annual instead
+const MONTHLY_LOST = 0.2;          // after the change: share of monthly-minded buyers who do not buy
+const POST_VOLUME = ANNUAL_SHARE_PRE + (1 - ANNUAL_SHARE_PRE) * (1 - MONTHLY_LOST); // 0.86 of the would-be subscriptions
+const ANNUAL_SHARE_POST = (ANNUAL_SHARE_PRE + (1 - ANNUAL_SHARE_PRE) * MONTHLY_SWITCH_ANNUAL) / POST_VOLUME; // 0.593
+// billing drift vs the product event
+const BILLING_STORE_SHARE = 0.2;   // interval-days with one app-store purchase Mixpanel never received
+const BILLING_FAIL_SHARE = 0.05;   // share of tracked checkouts whose first payment fails (not booked)
 
-// ── HELPER FUNCTIONS ──
-function handleUserHooks(record) {
-	// H1: STUDENT VS INSTRUCTOR PROFILES — role-based attributes.
-	if (record.account_type === "instructor") {
-		record.courses_created = chance.integer({ min: 1, max: 15 });
-		record.teaching_experience_years = chance.integer({ min: 1, max: 20 });
-		record.instructor_rating = Math.round((chance.floating({ min: 3.0, max: 5.0 }) + Number.EPSILON) * 100) / 100;
-	} else {
-		record.learning_goal = chance.pickone(["career_change", "skill_upgrade", "hobby", "degree_requirement"]);
-		record.study_hours_per_week = chance.integer({ min: 2, max: 30 });
-	}
-	return record;
-}
+// H7 paid acquisition economics (warehouse paid_marketing_daily)
+const PAID_CHANNELS = ["paid_search", "paid_social", "youtube_ads"];
+const CPL_USD = { paid_search: 38, paid_social: 15, youtube_ads: 26 }; // window cost per Mixpanel signup
+const CHANNEL_WEIGHTS = { organic_search: 26, paid_search: 17, paid_social: 18, youtube_ads: 9, referral: 12 };
+const PURCHASE_KEEP = { paid_search: 1.0, referral: 0.9, organic_search: 0.85, youtube_ads: 0.75, university_partnership: 0.6, paid_social: 0.4 };
+const P_BUY_NEW = 0.34;            // new self-pay learners: share who would buy Plus (before the channel keep)
+const P_BUY_EST = 0.12;           // long-time free learners: share who buy during the window
+const BUY_LAG_MEDIAN_DAYS = 6;     // signup → purchase lag (lognormal)
+const RECENT_BUY_SCALE = 0.6;       // their remaining conversions match the in-window survivors' rate
+const RECENT_JOIN_DAYS = 60;       // pre-window learners who joined in the 60 days before June 4 still convert like new ones
+const PAID_FUNNEL_WINDOW_DAYS = 30;
+const PAID_COHORT_END = "2026-09-01T00:00:00Z"; // exclusive: signups with a full 30 days
+const BORN_PCT = 40;
+const WINDOW_DAYS = 120;
+const SPEND_SIGNUP_SHARE = 0.78;   // expected share of new learners on a paid-channel-eligible path (self-pay, not university)
+const DAILY_BUDGET_USD = Object.fromEntries(PAID_CHANNELS.map((ch) => {
+	const totalW = Object.values(CHANNEL_WEIGHTS).reduce((a, b) => a + b, 0);
+	return [ch, CPL_USD[ch] * (NUM_USERS * BORN_PCT / 100) * SPEND_SIGNUP_SHARE * (CHANNEL_WEIGHTS[ch] / totalW) / WINDOW_DAYS];
+}));
+const SPEND_FLAT_SHARE = 0.35;
+const SPEND_WEEKDAY = (() => {
+	const m = DOW_WEIGHTS.reduce((a, b) => a + b, 0) / DOW_WEIGHTS.length;
+	return DOW_WEIGHTS.map((w) => SPEND_FLAT_SHARE + (1 - SPEND_FLAT_SHARE) * w / m);
+})();
+const SPEND_NOISE = 0.12;
+const PLATFORM_SIGNUP_INFLATION = 1.2; // ad platforms claim ~20% more signups than Mixpanel records
+const CPC_USD = { paid_search: 2.4, paid_social: 0.9, youtube_ads: 1.6 };
+const CTR = { paid_search: 0.04, paid_social: 0.009, youtube_ads: 0.006 };
 
-function handleEventHooks(record) {
-	// H5: HINT DEPENDENCY — hint users get 60% easy problems; non-hint
-	// users get 40% hard problems. Mutates difficulty (raw).
-	if (record.event === "practice problem solved") {
-		if (record.hint_used === true && chance.bool({ likelihood: HINT_EASY_LIKELIHOOD })) {
-			record.difficulty = "easy";
-		} else if (record.hint_used === false && chance.bool({ likelihood: HINT_HARD_LIKELIHOOD })) {
-			record.difficulty = "hard";
-		}
-	}
-	// H8 (event): PLAYBACK SPEED — speed learners (>= 2.0x) get
-	// watch_time_mins compressed 0.6x; thorough learners (<= 1.0x) get 1.4x.
-	if (record.event === "lecture completed") {
-		const speed = record.playback_speed;
-		if (speed >= SPEED_FAST_THRESHOLD && record.watch_time_mins !== undefined) {
-			record.watch_time_mins = Math.max(SPEED_FAST_WATCH_MIN, Math.floor(record.watch_time_mins * SPEED_FAST_WATCH_FACTOR));
-		} else if (speed !== undefined && speed <= SPEED_SLOW_THRESHOLD && record.watch_time_mins !== undefined) {
-			record.watch_time_mins = Math.min(SPEED_SLOW_WATCH_MAX, Math.floor(record.watch_time_mins * SPEED_SLOW_WATCH_FACTOR));
-		}
-	}
-	return record;
-}
+// H8 Android video playback incident (warehouse app_stability_daily)
+const INCIDENT_PLATFORM = "android";
+const INCIDENT_FAIL = 0.55;        // share of would-be completions of Android video lessons lost
+const PREVIEW_PLAYS_PER_DAY = { web: 260, ios: 120, android: 90 }; // course trailers/previews: no lesson event
 
-function handleFunnelPreHooks(record, meta) {
-	// H7: FREE VS PAID — free users get 0.5x conversion rate; paid
-	// subscribers get 1.5x. Scoped to the course-completion funnel ONLY
-	// (sequence ending in "certificate earned") to avoid displacing standalone
-	// events for paid users and triggering unintended churn in H4.
-	const isCertFunnel = Array.isArray(meta?.funnel?.sequence) &&
-		meta.funnel.sequence.includes("certificate earned");
-	if (isCertFunnel) {
-		const subStatus = meta?.profile?.subscription_status;
-		if (subStatus === "free") {
-			record.conversionRate = Math.round(record.conversionRate * FREE_FUNNEL_CONV_FACTOR);
-		} else if (subStatus === "monthly" || subStatus === "annual") {
-			record.conversionRate = Math.min(100, Math.round(record.conversionRate * PAID_FUNNEL_CONV_FACTOR));
-		}
-	}
-	return record;
-}
+// H9 fall term (university students)
+const STUDENT_SUMMER_KEEP = 0.55;  // share of students' learning units kept before the fall term
 
-function handleEverythingHooks(record, meta) {
-	const datasetStart = dayjs.unix(meta.datasetStart);
-	const userEvents = record;
-	const profile = meta.profile;
-	const firstEventTime = userEvents.length > 0 ? dayjs(userEvents[0].time) : null;
+// H10 2x playback and quiz scores
+const SPEED_TIERS = { 1: 50, 1.25: 22, 1.5: 14, 2: 14 }; // preferred playback speed share
+const SPEED_STICK = 0.8;           // share of a learner's videos at their preferred speed
+const FAST_SPEED = 2;
+const FAST_SCORE_PENALTY = 7;      // quiz points lost by 2x watchers
+const SCORE_MEAN = 71;
+const SCORE_SD = 12;
+const PASS_MARK = 70;
 
-	if (profile) {
-		userEvents.forEach((event) => {
-			if (profile.Platform !== undefined) event.Platform = profile.Platform;
-			// H1: event-level account_type must agree with the profile —
-			// the engine draws event props independently of user props, so
-			// without this stamp the 'account registered' breakdown would
-			// contradict the profile mix
-			if (event.event === "account registered" && profile.account_type !== undefined) {
-				event.account_type = profile.account_type;
-			}
-		});
-	}
-
-	let notesTakenCount = 0;
-	let joinedStudyGroupEarly = false;
-	let hasLowQuizScore = false;
-	let speedLectureCount = 0;
-
-	userEvents.forEach((event) => {
-		const eventTime = dayjs(event.time);
-		const daysSinceStart = firstEventTime ? eventTime.diff(firstEventTime, 'days', true) : 0;
-		if (event.event === "lecture completed" && event.notes_taken === true) notesTakenCount++;
-		if (event.event === "study group joined" && daysSinceStart <= STUDY_GROUP_EARLY_DAYS) joinedStudyGroupEarly = true;
-		if (event.event === "quiz completed" && event.score_percent < STUDY_GROUP_LOW_QUIZ_THRESHOLD) hasLowQuizScore = true;
-		if (event.event === "lecture completed" && event.playback_speed >= SPEED_FAST_THRESHOLD) speedLectureCount++;
-	});
-
-	// H3 + H10: NOTES MAGIC NUMBER (in-funnel, no flags)
-	// Sweet 5-8 notes-taken lectures → +30% quiz score_percent (cap 100).
-	// Over 9+ → drop 35% of certificate-earned events (over-noted but
-	// can't synthesize; gets stuck in "study mode").
-	if (notesTakenCount >= NOTES_SWEET_MIN && notesTakenCount <= NOTES_SWEET_MAX) {
-		userEvents.forEach((event) => {
-			if (event.event === "quiz completed" && event.score_percent !== undefined) {
-				event.score_percent = Math.min(100, Math.round(event.score_percent * NOTES_QUIZ_BOOST));
-			}
-		});
-		if (chance.bool({ likelihood: NOTES_BONUS_CERT_LIKELIHOOD })) {
-			const lastEvent = userEvents[userEvents.length - 1];
-			const certTemplate = userEvents.find(e => e.event === "certificate earned");
-			if (lastEvent && certTemplate) {
-				userEvents.push({
-					...certTemplate,
-					time: dayjs(lastEvent.time).add(chance.integer({ min: 1, max: 5 }), 'days').toISOString(),
-					user_id: lastEvent.user_id,
-					course_id: chance.pickone(courseIds),
-					completion_time_days: chance.integer({ min: 14, max: 90 }),
-					final_grade: chance.integer({ min: 80, max: 100 }),
-				});
-			}
-		}
-	} else if (notesTakenCount >= NOTES_OVER_THRESHOLD) {
-		// Over-noters: drop 35% of certificates (stuck in study mode)
-		for (let i = userEvents.length - 1; i >= 0; i--) {
-			if (userEvents[i].event === "certificate earned" && chance.bool({ likelihood: NOTES_OVER_CERT_DROP_LIKELIHOOD })) {
-				userEvents.splice(i, 1);
-			}
-		}
-	}
-
-	// H8 (cont): Speed learners (3+ lectures at 2.0x) score +8 on quizzes.
-	if (speedLectureCount >= SPEED_LECTURE_COUNT_THRESHOLD) {
-		userEvents.forEach((event) => {
-			if (event.event === "quiz completed" && event.score_percent !== undefined) {
-				event.score_percent = Math.min(100, event.score_percent + SPEED_QUIZ_BOOST_POINTS);
-			}
-		});
-	}
-
-	// H6: SEMESTER-END SPIKE — duplicate quiz/assignment events
-	// in days 75-85 window. No flag — discover via line chart.
-	const duplicates = [];
-	const spikableEvents = ["quiz started", "quiz completed", "assignment submitted"];
-	userEvents.forEach((event) => {
-		if (spikableEvents.includes(event.event) && event.time) {
-			const dayInDataset = dayjs.utc(event.time).diff(datasetStart, 'days', true);
-			if (dayInDataset >= SEMESTER_SPIKE_START_DAY && dayInDataset <= SEMESTER_SPIKE_END_DAY && chance.bool({ likelihood: SEMESTER_SPIKE_LIKELIHOOD })) {
-				const dup = JSON.parse(JSON.stringify(event));
-				dup.time = dayjs(event.time).add(chance.integer({ min: 5, max: 120 }), 'minutes').toISOString();
-				duplicates.push(dup);
-			}
-		}
-	});
-	if (duplicates.length > 0) userEvents.push(...duplicates);
-
-	const subStatus = profile ? profile.subscription_status : "free";
-
-	// H9 (T2C): COURSE COMPLETION TIME-TO-CONVERT (everything)
-	// Annual subscribers complete the cert funnel 2x faster (factor 0.5);
-	// Free users 1.8x slower (factor 1.8). For each "certificate earned"
-	// event, find the nearest preceding "course enrolled" and scale the gap.
-	// Runs BEFORE cert-dropping (H7) so TTC adjustments aren't masked by
-	// survivorship bias from the 55% free cert removal.
-	{
-		const ttcFactor = (
-			subStatus === "annual" ? TTC_ANNUAL_FACTOR :
-			subStatus === "free" ? TTC_FREE_FACTOR :
-			1.0
-		);
-		if (ttcFactor !== 1.0) {
-			// Collect all "course enrolled" times (sorted) for binary lookup
-			const enrolledTimes = userEvents
-				.filter(e => e.event === "course enrolled")
-				.map(e => dayjs(e.time))
-				.sort((a, b) => a.valueOf() - b.valueOf());
-
-			if (enrolledTimes.length > 0) {
-				for (const event of userEvents) {
-					if (event.event === "certificate earned") {
-						const certTime = dayjs(event.time);
-						// Find the latest enrolled time before this cert
-						let anchor = null;
-						for (let k = enrolledTimes.length - 1; k >= 0; k--) {
-							if (enrolledTimes[k].isBefore(certTime)) {
-								anchor = enrolledTimes[k];
-								break;
-							}
-						}
-						if (anchor) {
-							const gap = certTime.diff(anchor);
-							const newGap = Math.round(gap * ttcFactor);
-							event.time = anchor.add(newGap, "milliseconds").toISOString();
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// H7: FREE VS PAID — free users lose 55% of certificates.
-	if (subStatus === "free") {
-		for (let i = userEvents.length - 1; i >= 0; i--) {
-			if (userEvents[i].event === "certificate earned" && chance.bool({ likelihood: FREE_CERT_DROP_LIKELIHOOD })) {
-				userEvents.splice(i, 1);
-			}
-		}
-	}
-
-	// H4: STUDY GROUP RETENTION — non-joiners with low scores lose
-	// all post-day-14 events. Joiners get extra cloned discussion events.
-	if (!joinedStudyGroupEarly && hasLowQuizScore) {
-		const churnCutoff = firstEventTime ? firstEventTime.add(STUDY_GROUP_CHURN_CUTOFF_DAYS, 'days') : null;
-		for (let i = userEvents.length - 1; i >= 0; i--) {
-			if (churnCutoff && dayjs(userEvents[i].time).isAfter(churnCutoff)) {
-				userEvents.splice(i, 1);
-			}
-		}
-	} else if (joinedStudyGroupEarly) {
-		const lastEvent = userEvents[userEvents.length - 1];
-		const discussionTemplate = userEvents.find(e => e.event === "discussion posted");
-		if (lastEvent && discussionTemplate && chance.bool({ likelihood: STUDY_GROUP_DISCUSSION_CLONE_LIKELIHOOD })) {
-			userEvents.push({
-				...discussionTemplate,
-				time: dayjs(lastEvent.time).add(chance.integer({ min: 1, max: 3 }), 'days').toISOString(),
-				user_id: lastEvent.user_id,
-				course_id: chance.pickone(courseIds),
-				post_type: chance.pickone(["question", "answer", "comment"]),
-				word_count: chance.integer({ min: 20, max: 400 }),
+// ── COURSE CATALOG (seeded; denormalized onto events, no lookup table) ──
+const CATEGORIES = {
+	data_science: ["Python for Data Analysis", "SQL Foundations", "Machine Learning", "Statistics with R", "Data Visualization", "Deep Learning", "Applied AI Agents", "Excel to Pandas"],
+	software_dev: ["JavaScript Essentials", "React Development", "Cloud Fundamentals", "APIs with Node.js", "Git and DevOps", "Mobile Apps with Flutter", "System Design", "Cybersecurity Basics"],
+	business: ["Project Management", "Product Management", "Financial Modeling", "Business Analytics", "Negotiation", "Leadership Essentials", "Agile and Scrum", "Accounting Basics"],
+	design: ["UX Research", "UI Design", "Figma Masterclass", "Design Systems", "Motion Design", "Accessibility by Design"],
+	marketing: ["Digital Marketing", "SEO Foundations", "Content Strategy", "Growth Marketing", "Marketing Analytics", "Brand Storytelling"],
+	languages: ["Business English", "Spanish for Work", "Conversational French", "German A1", "Japanese Basics", "Mandarin for Beginners"],
+};
+const LEVELS = ["beginner", "beginner", "intermediate", "intermediate", "advanced"];
+const COURSES = [];
+for (const [cat, topics] of Object.entries(CATEGORIES)) {
+	for (const topic of topics) {
+		for (const variant of ["", " II"]) {
+			if (variant && chance.bool({ likelihood: 40 })) continue;
+			const format = chance.bool({ likelihood: 26 }) ? "cohort" : "self_paced";
+			COURSES.push({
+				id: `crs_${chance.hash({ length: 8 })}`,
+				title: `${topic}${variant}`,
+				category: cat,
+				format,
+				level: variant ? "intermediate" : chance.pickone(LEVELS),
+				weeks: chance.integer({ min: 4, max: 8 }),
 			});
 		}
 	}
+}
+const COURSE_BY_ID = new Map(COURSES.map((c) => [c.id, c]));
+const COURSE_IDS = COURSES.map((c) => c.id);
+const LESSONS_PER_WEEK = 4;
 
-	// H2: DEADLINE CRAMMING — Sun/Mon assignment_submitted events
-	// flip is_late to true 60% of the time and quiz_completed score_percent
-	// drops 25 points. Mutates raw is_late + score_percent.
-	for (const event of userEvents) {
-		if (event.event === "assignment submitted" && event.time) {
-			const dow = new Date(event.time).getUTCDay();
-			if (dow === 0 || dow === 1) {
-				event.is_late = chance.bool({ likelihood: DEADLINE_LATE_LIKELIHOOD });
+// ── HELPERS ──
+const salt = (uid, tag) => hashFloat(`${uid}|${tag}`);
+const T = (e) => dayjs.utc(e.time).valueOf();
+const iso = (t) => new Date(t).toISOString();
+const dayKey = (t) => new Date(t).toISOString().slice(0, 10);
+const round2 = (n) => Math.round(n * 100) / 100;
+const jitter = (key, spread) => 1 + (hashFloat(key) - 0.5) * 2 * spread;
+const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+// deterministic lognormal from two salted uniforms (Box-Muller)
+const lognormal = (median, sigma, r1, r2) => median * Math.exp(sigma * Math.sqrt(-2 * Math.log(Math.max(1e-9, r1))) * Math.cos(2 * Math.PI * r2));
+const pickWeighted = (weights, r) => {
+	const entries = Object.entries(weights);
+	const total = entries.reduce((s, [, w]) => s + w, 0);
+	let acc = 0;
+	for (const [k, w] of entries) {
+		acc += w / total;
+		if (r < acc) return k;
+	}
+	return entries[entries.length - 1][0];
+};
+const platformOf = (os) => {
+	if (!os) return null;
+	if (/android/i.test(os)) return "android";
+	if (/ios|ipad/i.test(os)) return "ios";
+	return "web";
+};
+const inIncident = (t) => t >= ms(ANDROID_RELEASE) && t < ms(ANDROID_HOTFIX);
+const plusMonthlyPrice = (t) => (t >= ms(PLUS_PRICE_CHANGE) ? PLUS_MONTHLY_NEW : PLUS_MONTHLY_OLD);
+const paidSpend = (date, ch) => round2(DAILY_BUDGET_USD[ch] * SPEND_WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()] * jitter(`spend|${date}|${ch}`, SPEND_NOISE));
+
+// Learning events tied to a course (course_id assigned by the course model)
+const LEARNING_EVENTS = new Set(["lesson started", "lesson completed", "quiz submitted", "assignment submitted", "discussion posted", "live session attended", "ai tutor question asked"]);
+// Events the backend sends (no device): certificates and billing
+const SERVER_EVENTS = new Set(["certificate earned", "subscription started"]);
+const DEVICE_FIELDS = ["device_id", "os", "model", "screen_height", "screen_width", "carrier", "radio", "platform", "session_id"];
+const ONBOARDING_SET = new Set(["learning goals set", "course enrolled", "lesson started"]);
+const FIRST_LESSON_COMPLETE = 0.75; // share of new learners who finish their first lesson
+const PAYWALL_TRIGGERS = ["enrollment_limit", "certificate_upsell", "ai_tutor", "offline_downloads"];
+
+// ── EVENTS ──
+const EVENTS = [
+	{
+		event: "account created",
+		weight: 1,
+		isFirstEvent: true,
+		isAuthEvent: true,
+		properties: {
+			signup_method: { __weights: { google: 42, email: 30, apple: 16, sso: 12 } },
+			acquisition_channel: (ctx) => ctx.profile.acquisition_channel,
+			account_type: (ctx) => ctx.profile.account_type,
+		},
+	},
+	{
+		event: "learning goals set",
+		weight: 1,
+		isStrictEvent: true,
+		properties: {
+			primary_goal: (ctx) => ctx.profile.primary_goal,
+			weekly_hours_target: [2, 3, 3, 5, 5, 8, 10],
+		},
+	},
+	{
+		event: "course page viewed",
+		weight: 3,
+		isStrictEvent: false,
+		properties: {
+			course_id: COURSE_IDS,
+			course_title: ["unassigned"],
+			course_category: ["unassigned"],
+			course_format: ["self_paced"],
+			course_level: ["beginner"],
+			course_length_weeks: [4],
+		},
+	},
+	{
+		event: "course enrolled",
+		weight: 1,
+		isStrictEvent: true,
+		properties: {
+			course_id: COURSE_IDS,
+			course_title: ["unassigned"],
+			course_category: ["unassigned"],
+			course_format: ["self_paced"],
+			course_level: ["beginner"],
+			course_length_weeks: [4],
+			enrollment_source: ["catalog_browse", "search", "search", "recommendation", "learning_path"],
+		},
+	},
+	{
+		event: "lesson started",
+		weight: 1,
+		isStrictEvent: true,
+		properties: {
+			course_id: ["unassigned"],
+			course_category: ["unassigned"],
+			lesson_id: ["unassigned"],
+			lesson_number: [1],
+			content_type: ["video"],
+		},
+	},
+	{
+		event: "lesson completed",
+		weight: 1,
+		isStrictEvent: true,
+		properties: {
+			course_id: ["unassigned"],
+			course_category: ["unassigned"],
+			lesson_id: ["unassigned"],
+			lesson_number: [1],
+			content_type: ["video"],
+			minutes_spent: [10],
+			playback_speed: [1],
+		},
+	},
+	{
+		event: "quiz submitted",
+		weight: 3,
+		isStrictEvent: false,
+		properties: {
+			course_id: ["unassigned"],
+			course_category: ["unassigned"],
+			quiz_number: [1],
+			score_pct: [70],
+			passed: [true],
+			attempt_number: { __weights: { 1: 78, 2: 17, 3: 5 } },
+		},
+	},
+	{
+		event: "assignment submitted",
+		weight: 1,
+		isStrictEvent: false,
+		properties: {
+			course_id: ["unassigned"],
+			course_category: ["unassigned"],
+			assignment_type: ["project", "peer_review", "coding_exercise", "written_response"],
+			is_late: [false],
+		},
+	},
+	{
+		event: "discussion posted",
+		weight: 2,
+		isStrictEvent: false,
+		properties: {
+			course_id: ["unassigned"],
+			course_category: ["unassigned"],
+			post_type: ["question", "question", "answer", "comment", "comment"],
+			word_count: u.weighNumRange(8, 400, 0.4, 40),
+		},
+	},
+	{
+		event: "live session attended",
+		weight: 2,
+		isStrictEvent: false,
+		properties: {
+			course_id: ["unassigned"],
+			course_category: ["unassigned"],
+			minutes_attended: u.weighNumRange(15, 90, 0.8, 30),
+		},
+	},
+	{
+		event: "ai tutor question asked",
+		weight: 6,
+		isStrictEvent: false,
+		properties: {
+			course_id: ["unassigned"],
+			course_category: ["unassigned"],
+			question_type: { __weights: { explain_concept: 38, check_my_answer: 26, hint: 22, summarize_lesson: 14 } },
+		},
+	},
+	{
+		event: "certificate earned",
+		weight: 1,
+		isStrictEvent: true,
+		properties: {
+			course_id: ["unassigned"],
+			course_title: ["unassigned"],
+			course_category: ["unassigned"],
+			course_format: ["self_paced"],
+			course_level: ["beginner"],
+			course_length_weeks: [4],
+			final_grade: [80],
+			days_to_complete: [30],
+		},
+	},
+	{
+		event: "home viewed",
+		weight: 8,
+		isStrictEvent: false,
+		properties: {
+			entry_point: ["direct", "direct", "push_notification", "email_reminder", "bookmark"],
+		},
+	},
+	{
+		event: "course search",
+		weight: 3,
+		isStrictEvent: false,
+		properties: {
+			query_topic: Object.keys(CATEGORIES),
+			results_count: u.weighNumRange(0, 60, 0.5, 30),
+		},
+	},
+	{
+		event: "paywall viewed",
+		weight: 1,
+		isStrictEvent: false,
+		properties: {
+			paywall_trigger: PAYWALL_TRIGGERS,
+		},
+	},
+	{
+		event: "subscription started",
+		weight: 1,
+		isStrictEvent: true,
+		properties: {
+			plan: ["plus"],
+			billing_interval: ["monthly"],
+		},
+	},
+	{
+		event: "$experiment_started",
+		weight: 1,
+		isStrictEvent: true,
+		properties: {
+			"Experiment name": [PICKS_EXPERIMENT],
+			"Variant name": ["Control", PICKS_VARIANT],
+		},
+	},
+];
+const DECLARED = Object.fromEntries(EVENTS.map((e) => [e.event, new Set(Object.keys(e.properties || {}))]));
+const EVENT_PROP_KEYS = new Set(EVENTS.flatMap((e) => Object.keys(e.properties || {})));
+
+/** Clone `template` as another declared event: drop every event-level prop the target does not declare, keep identity and context. */
+function makeFrom(template, eventName, overrides) {
+	const target = DECLARED[eventName];
+	const c = cloneEvent(template, { event: eventName, ...overrides });
+	for (const k of Object.keys(c)) if (EVENT_PROP_KEYS.has(k) && !target.has(k) && !(k in overrides)) delete c[k];
+	return c;
+}
+
+const stampCourse = (e, course, withCatalog) => {
+	e.course_id = course.id;
+	e.course_category = course.category;
+	if (withCatalog) {
+		e.course_title = course.title;
+		e.course_format = course.format;
+		e.course_level = course.level;
+		e.course_length_weeks = course.weeks;
+	}
+};
+
+// ── USER HOOK ──
+const SPONSOR_SHARE = { upskiller: 0.45, career_switcher: 0.1, university_student: 0, lifelong_learner: 0.05 };
+const GOAL_BY_SEGMENT = { career_switcher: "change_careers", upskiller: "advance_in_role", university_student: "earn_course_credit", lifelong_learner: "personal_interest" };
+
+function handleUserHook(profile, meta) {
+	const uid = profile.distinct_id;
+	const seg = profile.learner_segment;
+	const sponsored = salt(uid, "sponsored") < (SPONSOR_SHARE[seg] ?? 0);
+	profile.account_type = sponsored ? "employer_sponsored" : "individual";
+	profile.primary_goal = GOAL_BY_SEGMENT[seg] ?? "personal_interest";
+	if (sponsored) profile.acquisition_channel = "employer";
+	else if (seg === "university_student" && salt(uid, "uni") < 0.45) profile.acquisition_channel = "university_partnership";
+	else profile.acquisition_channel = pickWeighted(CHANNEL_WEIGHTS, salt(uid, "channel"));
+	profile.preferred_playback_speed = Number(pickWeighted(SPEED_TIERS, salt(uid, "speed")));
+	if (meta.userIsBornInDataset) {
+		profile.customer_since = dayKey(ms(profile.created ?? meta.user.created));
+		profile.plan_tier = sponsored ? "teams" : "free";
+		return profile;
+	}
+	// pre-window learners: a third joined in the 60 days before June 4, the rest from 2024-01
+	const recent = salt(uid, "recent") < 1 / 3;
+	const lo = recent ? 0 : RECENT_JOIN_DAYS;
+	const hi = recent ? RECENT_JOIN_DAYS : (START_MS - ms("2024-01-01T00:00:00Z")) / DAY_MS;
+	const ageDays = lo + Math.floor(salt(uid, "tenure") * (hi - lo)) + 1;
+	profile.customer_since = dayKey(START_MS - ageDays * DAY_MS);
+	if (sponsored) profile.plan_tier = "teams";
+	else if (recent) profile.plan_tier = "free"; // their purchase pipeline runs in the everything hook
+	else profile.plan_tier = salt(uid, "plan") < 0.36 ? "plus" : "free";
+	return profile;
+}
+
+// ── EVERYTHING HOOK ──
+function handleEverything(events, meta) {
+	if (!events.length) return events;
+	events.sort((a, b) => T(a) - T(b));
+	const profile = meta.profile;
+	const uid = profile.distinct_id;
+	const signup = events.find((e) => e.event === "account created");
+	const birthMs = signup ? T(signup) : null;
+	const sponsored = profile.account_type === "employer_sponsored";
+
+	// ── onboarding happens in the signup session: the steps after signup share its device ──
+	if (signup) {
+		const onboardEnd = birthMs + ONBOARD_TTC_H * 3600_000 * 2;
+		for (const e of events) {
+			if (e === signup || e.device_id || T(e) > onboardEnd || !ONBOARDING_SET.has(e.event)) continue;
+			for (const k of DEVICE_FIELDS) if (signup[k] !== undefined) e[k] = signup[k];
+		}
+	}
+
+	// ── platform from the device OS; device-less events carry no platform ──
+	for (const e of events) {
+		const p = platformOf(e.os);
+		if (p) e.platform = p;
+		else delete e.platform;
+	}
+
+	// ── the first lesson of onboarding: most new learners finish it in the same sitting ──
+	if (signup) {
+		const done = new Set(events.filter((e) => e.event === "lesson completed").map((e) => e.lesson_id));
+		const first = events.find((e) => e.event === "lesson started" && !done.has(e.lesson_id));
+		if (first && T(first) < birthMs + ONBOARD_TTC_H * 3600_000 * 2 && salt(uid, "first-lesson") < FIRST_LESSON_COMPLETE) {
+			const tc = T(first) + (4 + salt(uid, "first-lesson-gap") * 21) * MIN_MS;
+			if (tc <= END_MS) {
+				events.push(makeFrom(first, "lesson completed", { time: iso(tc), minutes_spent: 10, playback_speed: 1 }));
+				events.sort((a, b) => T(a) - T(b));
 			}
 		}
 	}
-	userEvents.forEach((event) => {
-		if (event.event === "quiz completed" && event.time) {
-			const dow = new Date(event.time).getUTCDay();
-			if ((dow === 0 || dow === 1) && event.score_percent !== undefined) {
-				event.score_percent = Math.max(0, event.score_percent - DEADLINE_QUIZ_PENALTY);
+
+	const unitOf = (e) => (e.event === "lesson started" || e.event === "lesson completed") ? e.lesson_id : null;
+
+	// ── H9: university students study less before the fall term (whole lesson units) ──
+	if (profile.learner_segment === "university_student") {
+		const fall = ms(FALL_TERM_START);
+		const dropUnits = new Set();
+		for (const e of events) {
+			if (e.event === "lesson started" && T(e) < fall && hashFloat(`${uid}|summer|${e.lesson_id}`) >= STUDENT_SUMMER_KEEP) dropUnits.add(e.lesson_id);
+		}
+		events = events.filter((e) => {
+			if (!LEARNING_EVENTS.has(e.event)) return true;
+			const unit = unitOf(e);
+			if (unit) return !dropUnits.has(unit);
+			if (T(e) >= fall) return true;
+			return hashFloat(`${uid}|summer|${e.insert_id}`) < STUDENT_SUMMER_KEEP;
+		});
+	}
+
+	// ── H8: Android video playback incident — would-be completions of video lessons started on Android are lost ──
+	{
+		const starts = new Map();
+		for (const e of events) if (e.event === "lesson started") starts.set(e.lesson_id, e);
+		events = events.filter((e) => {
+			if (e.event !== "lesson completed" || e.content_type !== "video") return true;
+			const s = starts.get(e.lesson_id);
+			if (!s || s.platform !== INCIDENT_PLATFORM || !inIncident(T(s))) return true;
+			return hashFloat(`${uid}|incident|${e.lesson_id}`) >= INCIDENT_FAIL;
+		});
+	}
+
+	// ── H5: first-week study streak, setup abandonment (new learners only) ──
+	if (signup) {
+		const wkEnd = birthMs + STREAK_DAYS * DAY_MS;
+		const firstWeek = events.filter((e) => e.event === "lesson completed" && T(e) >= birthMs && T(e) < wkEnd).length;
+		const started = events.some((e) => e.event === "lesson started");
+		const cuts = [];
+		const dark = firstWeek >= STREAK_MIN ? 0 : DARK_SHARE;
+		if (salt(uid, "dark") < dark) cuts.push(birthMs + (DARK_AFTER_MIN + salt(uid, "dark-day") * (DARK_AFTER_MAX - DARK_AFTER_MIN)) * DAY_MS);
+		if (salt(uid, "lapse") < LAPSE_SHARE) cuts.push(birthMs + (LAPSE_DAY_MIN + salt(uid, "lapse-day") * (LAPSE_DAY_MAX - LAPSE_DAY_MIN)) * DAY_MS);
+		if (!started && salt(uid, "abandon") < SETUP_ABANDON_SHARE) cuts.push(birthMs + (SETUP_ABANDON_DAY_MIN + salt(uid, "abandon-day") * (SETUP_ABANDON_DAY_MAX - SETUP_ABANDON_DAY_MIN)) * DAY_MS);
+		if (cuts.length) {
+			const cut = Math.min(...cuts);
+			events = events.filter((e) => T(e) < cut);
+		}
+	}
+	if (!events.length) return events;
+	const lastActive = events.reduce((m, e) => Math.max(m, T(e)), 0);
+
+	// ── course model: enrollments, course assignment, completion (H4) ──
+	const enrollments = [];
+	const usedCourses = new Set();
+	// a learner never enrolls in the same course twice: a repeat pick moves to the next unused course
+	const freshCourse = (id, key) => {
+		let i = COURSE_IDS.indexOf(id);
+		if (i < 0) i = Math.floor(hashFloat(`${uid}|course|${key}`) * COURSES.length);
+		while (usedCourses.has(COURSES[i].id) && usedCourses.size < COURSES.length) i = (i + 1 + Math.floor(hashFloat(`${uid}|skip|${key}|${i}`) * 7)) % COURSES.length;
+		usedCourses.add(COURSES[i].id);
+		return COURSES[i];
+	};
+	const lastPageView = new Map(); // course_id → latest page view (the enrollment funnel's step 1)
+	for (const e of events) {
+		if (e.event === "course page viewed") {
+			stampCourse(e, COURSE_BY_ID.get(e.course_id) || COURSES[0], true);
+			lastPageView.set(e.course_id, e);
+			continue;
+		}
+		if (e.event !== "course enrolled") continue;
+		const pv = lastPageView.get(e.course_id);
+		const course = freshCourse(e.course_id, e.insert_id);
+		if (course.id !== e.course_id && pv && T(e) - T(pv) <= ENROLL_TTC_H * 3600_000) stampCourse(pv, course, true);
+		stampCourse(e, course, true);
+		enrollments.push({ course, t0: T(e), key: e.insert_id, template: e });
+	}
+	// established learners carry courses they started before June 4 (same pace as their in-window enrollments)
+	if (!signup) {
+		const nCarry = Math.floor(enrollments.length * 0.75 + salt(uid, "carry-n"));
+		for (let i = 0; i < nCarry; i++) {
+			const course = freshCourse(COURSE_IDS[Math.floor(salt(uid, `carry-c${i}`) * COURSES.length)], `carry${i}`);
+			const t0 = START_MS - (1 + salt(uid, `carry-t${i}`) * 89) * DAY_MS;
+			enrollments.push({ course, t0, key: `carry${i}`, template: null });
+		}
+	}
+	for (const en of enrollments) {
+		const lenMs = en.course.weeks * 7 * DAY_MS;
+		const p = COHORT_COMPLETE * (en.course.format === "self_paced" ? SELF_PACED_COMPLETE_MULT : 1);
+		en.completes = salt(uid, `complete|${en.key}`) < p;
+		if (en.completes) {
+			const pace = en.course.format === "cohort"
+				? 1 + salt(uid, `pace|${en.key}`) * 0.04
+				: clamp(lognormal(1, 0.18, salt(uid, `pace1|${en.key}`), salt(uid, `pace2|${en.key}`)), 0.6, 1.6);
+			en.tStop = en.t0 + lenMs * pace;
+		} else {
+			en.tStop = en.t0 + lenMs * (ABANDON_FRAC_MIN + salt(uid, `stop|${en.key}`) * (ABANDON_FRAC_MAX - ABANDON_FRAC_MIN));
+		}
+	}
+	enrollments.sort((a, b) => a.t0 - b.t0);
+	const activeAt = (t, cohortOnly) => enrollments.filter((en) => en.t0 <= t && t <= en.tStop && (!cohortOnly || en.course.format === "cohort"));
+	const dropLearning = new Set();
+	const lessonEnrollment = new Map(); // lesson_id → enrollment: a start and its completion share a course
+	for (const e of events) {
+		if (!LEARNING_EVENTS.has(e.event)) continue;
+		const t = T(e);
+		let en = e.lesson_id ? lessonEnrollment.get(e.lesson_id) : undefined;
+		if (!en) {
+			const cands = activeAt(t, e.event === "live session attended");
+			if (cands.length) en = cands[Math.floor(hashFloat(`${uid}|pick|${e.insert_id}`) * cands.length)];
+			else if (e.event !== "live session attended") {
+				const before = enrollments.filter((x) => x.t0 <= t);
+				en = before.length ? before[before.length - 1] : enrollments[0];
 			}
 		}
-	});
+		if (!en) { dropLearning.add(e); continue; }
+		if (e.lesson_id) lessonEnrollment.set(e.lesson_id, en);
+		stampCourse(e, en.course, false);
+		const frac = clamp((t - en.t0) / Math.max(DAY_MS, en.tStop - en.t0), 0, 1);
+		const nLessons = en.course.weeks * LESSONS_PER_WEEK;
+		if (e.event === "lesson started") e.lesson_number = clamp(1 + Math.floor(frac * nLessons), 1, nLessons);
+		if (e.event === "quiz submitted") e.quiz_number = clamp(1 + Math.floor(frac * en.course.weeks), 1, en.course.weeks);
+		if (e.event === "assignment submitted") e.is_late = en.course.format === "cohort" ? hashFloat(`${uid}|late|${e.insert_id}`) < 0.18 : false;
+	}
+	if (dropLearning.size) events = events.filter((e) => !dropLearning.has(e));
+	{
+		// a completion carries its start's lesson number
+		const startNum = new Map();
+		for (const e of events) if (e.event === "lesson started") startNum.set(e.lesson_id, e.lesson_number);
+		for (const e of events) if (e.event === "lesson completed" && startNum.has(e.lesson_id)) e.lesson_number = startNum.get(e.lesson_id);
+	}
 
-	return record;
+	// certificates: a finishing enrollment issues one when its course ends, if the learner is still around
+	const fallbackTemplate = events.find((e) => e.event === "course enrolled") || events[0];
+	const extra = [];
+	for (const en of enrollments) {
+		if (!en.completes) continue;
+		const tc = en.tStop;
+		if (tc < START_MS || tc > END_MS || tc > lastActive + 2 * DAY_MS) continue;
+		const c = makeFrom(en.template || fallbackTemplate, "certificate earned", {
+			time: iso(tc),
+			final_grade: Math.round(clamp(78 + (salt(uid, `grade|${en.key}`) - 0.5) * 36, 62, 100)),
+			days_to_complete: Math.max(1, Math.round((tc - en.t0) / DAY_MS)),
+		});
+		stampCourse(c, en.course, true);
+		extra.push(c);
+	}
+
+	// ── purchases (H6 interval mix, H7 channel quality): at most one Plus subscription per self-pay learner ──
+	events = events.filter((e) => e.event !== "subscription started");
+	let initialPlan = profile.plan_tier;
+	let buyMs = Infinity;
+	if (!sponsored && initialPlan === "free") {
+		const keep = PURCHASE_KEEP[profile.acquisition_channel] ?? 0.8;
+		const joinMs = signup ? birthMs : ms(`${profile.customer_since}T00:00:00Z`) + salt(uid, "join-hour") * DAY_MS;
+		const recent = !signup && START_MS - joinMs <= RECENT_JOIN_DAYS * DAY_MS;
+		if (signup || recent) {
+			// recent pre-window joiners in the data are the ones still active, so fewer of them convert late
+			if (salt(uid, "buy") < P_BUY_NEW * keep * (recent ? RECENT_BUY_SCALE : 1)) {
+				const lag = clamp(lognormal(BUY_LAG_MEDIAN_DAYS, 0.9, salt(uid, "lag1"), salt(uid, "lag2")), 0.05, 75) * DAY_MS;
+				const t = joinMs + lag;
+				if (t < START_MS) initialPlan = "plus";
+				else if (t <= END_MS && t <= lastActive) buyMs = t;
+			}
+		} else if (salt(uid, "buy-est") < P_BUY_EST) {
+			buyMs = START_MS + salt(uid, "buy-est-t") * (Math.min(END_MS, lastActive) - START_MS);
+		}
+	}
+	// H6: annual-minded buyers always pick annual; after the price change some monthly-minded buyers switch to annual and some walk away
+	let interval = null;
+	if (buyMs < Infinity) {
+		if (salt(uid, "interval") < ANNUAL_SHARE_PRE) interval = "annual";
+		else if (buyMs < ms(PLUS_PRICE_CHANGE)) interval = "monthly";
+		else {
+			const r = salt(uid, "price-reaction");
+			interval = r < MONTHLY_SWITCH_ANNUAL ? "annual" : r < MONTHLY_SWITCH_ANNUAL + MONTHLY_LOST ? null : "monthly";
+			if (!interval) buyMs = Infinity;
+		}
+	}
+	const planAt = (t) => (t >= buyMs ? "plus" : initialPlan);
+	if (buyMs < Infinity) {
+		const near = events.reduce((best, e) => (Math.abs(T(e) - buyMs) < Math.abs(T(best) - buyMs) ? e : best), events[0]);
+		const pw = makeFrom(near, "paywall viewed", {
+			time: iso(buyMs - (2 + salt(uid, "pw-gap") * 18) * MIN_MS),
+			paywall_trigger: PAYWALL_TRIGGERS[Math.floor(salt(uid, "pw-trigger") * PAYWALL_TRIGGERS.length)],
+		});
+		extra.push(pw, makeFrom(near, "subscription started", { time: iso(buyMs), plan: "plus", billing_interval: interval }));
+	}
+	// paywalls are shown to free learners only; the Ask Bright upsell exists from launch
+	events = events.filter((e) => e.event !== "paywall viewed" || planAt(T(e)) === "free");
+	const PRE_AI_TRIGGERS = PAYWALL_TRIGGERS.filter((x) => x !== "ai_tutor");
+	for (const e of events.concat(extra)) {
+		if (e.event === "paywall viewed" && e.paywall_trigger === "ai_tutor" && T(e) < ms(AI_TUTOR_LAUNCH)) {
+			e.paywall_trigger = PRE_AI_TRIGGERS[Math.floor(hashFloat(`${uid}|pw|${e.insert_id}`) * PRE_AI_TRIGGERS.length)];
+		}
+	}
+
+	// ── H1: Ask Bright AI tutor — adopters among Plus/Teams learners, from a salted start in the 3 weeks after launch ──
+	const adopter = salt(uid, "ai-adopter") < AI_ADOPTER_SHARE;
+	const aiStart = ms(AI_TUTOR_LAUNCH) + salt(uid, "ai-start") * AI_RAMP_DAYS * DAY_MS;
+	const aiUse = AI_USE_MIN + salt(uid, "ai-use") * (AI_USE_MAX - AI_USE_MIN);
+	events = events.filter((e) => {
+		if (e.event !== "ai tutor question asked") return true;
+		const t = T(e);
+		return adopter && t >= aiStart && AI_PLANS.includes(planAt(t)) && hashFloat(`${uid}|ai|${e.insert_id}`) < aiUse;
+	});
+	// a tutor conversation often runs to follow-up questions a few minutes apart
+	const followUps = [];
+	for (const e of events) {
+		if (e.event !== "ai tutor question asked") continue;
+		let t = T(e);
+		for (let k = 1; k <= AI_FOLLOWUP_MAX && hashFloat(`${uid}|followup|${e.insert_id}|${k}`) < AI_FOLLOWUP_P; k++) {
+			t += (1 + hashFloat(`${uid}|followup-gap|${e.insert_id}|${k}`) * 6) * MIN_MS;
+			if (t > END_MS) break;
+			followUps.push(cloneEvent(e, { time: iso(t), question_type: TUTOR_QUESTION_TYPES[Math.floor(hashFloat(`${uid}|followup-type|${e.insert_id}|${k}`) * TUTOR_QUESTION_TYPES.length)] }));
+		}
+	}
+	if (followUps.length) events = events.concat(followUps);
+	const firstTutor = events.filter((e) => e.event === "ai tutor question asked").reduce((m, e) => Math.min(m, T(e)), Infinity);
+
+	// ── H10 + lesson details: preferred playback speed; minutes follow speed ──
+	const pref = Number(profile.preferred_playback_speed) || 1;
+	const speeds = Object.keys(SPEED_TIERS).map(Number);
+	for (const e of events) {
+		if (e.event !== "lesson completed") continue;
+		const base = 6 + hashFloat(`${uid}|len|${e.lesson_id}`) * 16; // lesson length at 1x, minutes
+		if (e.content_type === "video") {
+			const sp = hashFloat(`${uid}|stick|${e.lesson_id}`) < SPEED_STICK ? pref : speeds[Math.floor(hashFloat(`${uid}|sp|${e.lesson_id}`) * speeds.length)];
+			e.playback_speed = sp;
+			e.minutes_spent = Math.max(2, Math.round(base / sp + hashFloat(`${uid}|pause|${e.lesson_id}`) * 4));
+		} else {
+			delete e.playback_speed;
+			e.minutes_spent = Math.max(3, Math.round(base * (e.content_type === "lab" ? 2.2 : 0.9)));
+		}
+	}
+
+	// ── quiz scores: organic draw, H10 2x penalty, H1 tutor boost after the first question ──
+	for (const e of events) {
+		if (e.event !== "quiz submitted") continue;
+		let s = chance.normal({ mean: SCORE_MEAN, dev: SCORE_SD });
+		if (pref === FAST_SPEED) s -= FAST_SCORE_PENALTY;
+		if (T(e) > firstTutor) s += AI_SCORE_BOOST;
+		e.score_pct = Math.round(clamp(s, 5, 100));
+		e.passed = e.score_pct >= PASS_MARK;
+	}
+
+	events = events.concat(extra);
+
+	// ── server-side events carry no device; plan at event time on every event ──
+	for (const e of events) {
+		if (SERVER_EVENTS.has(e.event)) for (const k of DEVICE_FIELDS) delete e[k];
+		e.plan_tier = sponsored ? "teams" : planAt(T(e));
+	}
+	profile.plan_tier = sponsored ? "teams" : (buyMs < Infinity ? "plus" : initialPlan);
+
+	// one exposure per learner: the first time they see the course page while the test is live
+	const firstExposure = events.filter((e) => e.event === "$experiment_started").reduce((m, e) => (!m || T(e) < T(m) ? e : m), null);
+	events = events.filter((e) => e.event !== "$experiment_started" || e === firstExposure);
+	// experiment assignment lives on the profile only for learners with an exposure left
+	if (profile[EXP_KEY] !== undefined && !firstExposure) delete profile[EXP_KEY];
+	return events;
+}
+
+// ── WAREHOUSE HOOK: exogenous facts layered on event-derived volumes ──
+function handleWarehouse(row, meta) {
+	if (meta.isBackfill) return row;
+	if (meta.metricName === "paid_marketing_daily") {
+		row.spend_usd = paidSpend(row.date, row.acquisition_channel);
+		return row;
+	}
+	if (meta.metricName === "app_stability_daily") {
+		// the player also starts course trailers and previews, which send no lesson event
+		const k = `${row.date}|${row.platform}`;
+		row.video_starts = Math.round(row.video_starts + PREVIEW_PLAYS_PER_DAY[row.platform] * jitter(`prev|${k}`, 0.5) * jitter(`prev|${row.date}`, 0.3));
+		return row;
+	}
+	if (meta.metricName === "subscription_billing_daily") {
+		const k = `${row.date}|${row.billing_interval}`;
+		let subs = meta.raw.plus.count;
+		// first payments that fail are never booked; app-store purchases never reach Mixpanel
+		let failed = 0;
+		for (let i = 0; i < subs; i++) if (hashFloat(`fail|${k}|${i}`) < BILLING_FAIL_SHARE) failed++;
+		subs -= failed;
+		if (hashFloat(`store|${k}`) < BILLING_STORE_SHARE) subs += 1;
+		row.new_subscriptions = subs;
+		row.gross_bookings_usd = round2(subs * row.list_price_usd);
+		return row;
+	}
+	return row;
 }
 
 // ── CONFIG ──
 /** @type {Config} */
 const config = {
-	version: 2,
 	seed: SEED,
 	datasetStart: DATASET_START,
 	datasetEnd: DATASET_END,
-	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	numUsers: NUM_USERS,
+	avgEventsPerUserPerDay: EVENTS_PER_DAY,
 	format: "json",
 	gzip: true,
-	credentials: {
-		token,
-	},
+	concurrency: 1,
+	writeToDisk: false,
+	macro: { percentUsersBornInDataset: BORN_PCT, bornRecentBias: 0, preExistingSpread: "uniform" },
+	soup: { dayOfWeekWeights: DOW_WEIGHTS, hourOfDayWeights: HOUR_WEIGHTS },
+	credentials: { token },
 	switches: {
 		hasSessionIds: true,
 		alsoInferFunnels: false,
@@ -691,1073 +1066,553 @@ const config = {
 		hasAdSpend: false,
 		hasAvatar: true,
 	},
-	identity: {
-		avgDevicePerUser: 2,
-	},
-	concurrency: 1,
-	writeToDisk: false,
+	identity: { avgDevicePerUser: 2 },
+
+	events: EVENTS,
 
 	funnels: [
 		{
-			sequence: ["account registered", "course enrolled", "lecture started"],
+			name: "Onboarding",
+			sequence: ["account created", "learning goals set", "course enrolled", "lesson started"],
 			isFirstFunnel: true,
-			conversionRate: 75,
-			timeToConvert: 1,
-		},
-		{
-			// Core learning loop: students watch lectures and do practice problems constantly
-			sequence: ["lecture started", "lecture completed", "practice problem solved"],
-			conversionRate: 70,
-			timeToConvert: 4,
-			weight: 5,
-			reentry: true,
-		},
-		{
-			// Assessment flow: quizzes and assignments after studying
-			sequence: ["quiz started", "quiz completed", "assignment submitted"],
-			conversionRate: 55,
-			timeToConvert: 8,
-			weight: 3,
-			reentry: true,
-		},
-		{
-			// Course completion journey: enroll → complete → earn certificate
-			sequence: ["course enrolled", "lecture completed", "quiz completed", "certificate earned"],
-			conversionRate: 30,
-			timeToConvert: 48,
-			weight: 2,
-		},
-		{
-			// Social learning: discussions and study groups
-			sequence: ["discussion posted", "study group joined", "resource downloaded"],
-			conversionRate: 50,
-			timeToConvert: 12,
-			weight: 2,
-			experiment: {
-				name: "AI Study Buddy",
-				variants: [
-					{ name: "Control" },
-					{ name: "AI Study Buddy", conversionMultiplier: 1.4, ttcMultiplier: 0.85 },
-				],
-				startDaysBeforeEnd: 30,
+			conditions: { account_type: "individual" },
+			conversionRate: ONBOARD_CONV,
+			timeToConvert: ONBOARD_TTC_H,
+			order: "sequential",
+			weight: 1,
+			props: {
+				course_id: COURSE_IDS,
+				lesson_id: () => `les_${chance.hash({ length: 12 })}`,
+				content_type: ["video"],
+				enrollment_source: ["recommendation", "catalog_browse", "search"],
 			},
 		},
 		{
-			// Instructor interaction loop
-			sequence: ["assignment submitted", "assignment graded", "instructor feedback given"],
-			conversionRate: 45,
-			timeToConvert: 24,
-			weight: 2,
+			name: "Onboarding",
+			sequence: ["account created", "learning goals set", "course enrolled", "lesson started"],
+			isFirstFunnel: true,
+			conditions: { account_type: "employer_sponsored" },
+			conversionRate: Math.round(ONBOARD_CONV * SPONSORED_ONBOARD_MULT),
+			timeToConvert: ONBOARD_TTC_H * SPONSORED_TTC_MULT,
+			order: "sequential",
+			weight: 1,
+			props: {
+				course_id: COURSE_IDS,
+				lesson_id: () => `les_${chance.hash({ length: 12 })}`,
+				content_type: ["video"],
+				enrollment_source: ["learning_path"],
+			},
 		},
 		{
-			// Support and monetization
-			sequence: ["help requested", "subscription purchased", "course reviewed"],
-			conversionRate: 35,
-			timeToConvert: 24,
-			weight: 1,
+			name: "Course Enrollment",
+			sequence: ["course page viewed", "course enrolled"],
+			conversionRate: ENROLL_CONV,
+			timeToConvert: ENROLL_TTC_H,
+			order: "sequential",
+			weight: 2,
+			props: {
+				course_id: COURSE_IDS,
+			},
+			experiment: {
+				name: PICKS_EXPERIMENT,
+				startDaysBeforeEnd: (END_MS - ms(COURSE_PICKS_START)) / DAY_MS,
+				variants: [
+					{ name: "Control" },
+					{ name: PICKS_VARIANT, conversionMultiplier: PICKS_CONV_MULT, ttcMultiplier: PICKS_TTC_MULT },
+				],
+			},
+		},
+		{
+			name: "Lesson",
+			sequence: ["lesson started", "lesson completed"],
+			conversionRate: 82,
+			timeToConvert: 1,
+			order: "sequential",
+			weight: 6,
+			props: {
+				lesson_id: () => `les_${chance.hash({ length: 12 })}`,
+				content_type: { __weights: { video: 70, reading: 20, lab: 10 } },
+			},
 		},
 	],
 
-	events: [
+	warehouseMetrics: [
 		{
-			event: "account registered",
-			weight: 1,
-			isFirstEvent: true,
-			isAuthEvent: true,
-			properties: {
-				// pool matches the 8:1 student profile mix; the everything hook then
-				// overwrites from the profile so the event-level breakdown is EXACT
-				"account_type": ["student", "student", "student", "student", "student", "student", "student", "student", "instructor"],
-				"signup_source": ["organic", "referral", "school_partnership", "social_ad"],
-			}
+			name: "paid_marketing_daily",
+			type: "additive",
+			grain: "day",
+			source: {
+				event: "account created",
+				measure: "count",
+				where: (e) => PAID_CHANNELS.includes(e.acquisition_channel),
+				groupBy: "acquisition_channel",
+			},
+			timeColumn: "date",
+			valueColumn: "spend_usd",
+			columns: {
+				platform_reported_signups: (ctx) => Math.round(paidSpend(dayKey(ctx.time), ctx.seriesKey) * PLATFORM_SIGNUP_INFLATION / CPL_USD[ctx.seriesKey] * jitter(`lead|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.25)),
+				clicks: (ctx) => Math.round(paidSpend(dayKey(ctx.time), ctx.seriesKey) / (CPC_USD[ctx.seriesKey] * jitter(`cpc|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.15))),
+				impressions: (ctx) => Math.round(ctx.row.clicks / (CTR[ctx.seriesKey] * jitter(`ctr|${dayKey(ctx.time)}|${ctx.seriesKey}`, 0.15))),
+			},
 		},
 		{
-			event: "course enrolled",
-			weight: 8,
-			isStrictEvent: false,
-			properties: {
-				"course_id": courseIds,
-				"course_category": ["CS", "Math", "Science", "Business", "Arts", "Languages"],
-				"difficulty": ["beginner", "intermediate", "advanced"],
-				"is_free": [false, false, false, true, true],
-			}
+			name: "app_stability_daily",
+			type: "additive",
+			grain: "day",
+			source: {
+				event: "lesson started",
+				measure: "count",
+				where: (e) => e.content_type === "video" && Boolean(e.platform),
+				groupBy: "platform",
+			},
+			timeColumn: "date",
+			valueColumn: "video_starts",
+			columns: {
+				playback_failure_rate: (ctx) => {
+					const hit = ctx.seriesKey === INCIDENT_PLATFORM && inIncident(ctx.time);
+					const j = hashFloat(`pf|${dayKey(ctx.time)}|${ctx.seriesKey}`);
+					return hit ? round2(INCIDENT_FAIL + (j - 0.5) * 0.06) : Math.round((0.006 + j * 0.012) * 10000) / 10000;
+				},
+				crash_free_session_rate: (ctx) => {
+					const j = hashFloat(`cf|${dayKey(ctx.time)}|${ctx.seriesKey}`);
+					if (ctx.seriesKey === "web") return Math.round((0.9985 + j * 0.001) * 10000) / 10000;
+					const hit = ctx.seriesKey === INCIDENT_PLATFORM && inIncident(ctx.time);
+					return Math.round(((hit ? 0.962 : 0.993) + j * 0.004) * 10000) / 10000;
+				},
+				app_version: (ctx) => {
+					if (ctx.seriesKey === "web") return "web";
+					if (ctx.seriesKey === "ios") return ctx.time >= ms(IOS_RELEASE) ? "6.4.0" : "6.3.2";
+					if (ctx.time >= ms(ANDROID_HOTFIX)) return "6.4.1";
+					if (ctx.time >= ms(ANDROID_RELEASE)) return "6.4.0";
+					return "6.3.2";
+				},
+			},
 		},
 		{
-			event: "lecture started",
-			weight: 18,
-			properties: {
-				"course_id": courseIds,
-				"lecture_id": lectureIds,
-				"lecture_duration_mins": u.weighNumRange(5, 60, 0.8, 20),
-				"module_number": u.weighNumRange(1, 12),
-			}
-		},
-		{
-			event: "lecture completed",
-			weight: 14,
-			isStrictEvent: false,
-			properties: {
-				"course_id": courseIds,
-				"lecture_id": lectureIds,
-				"watch_time_mins": u.weighNumRange(3, 60, 0.8, 20),
-				"playback_speed": [0.75, 1.0, 1.0, 1.0, 1.25, 1.5, 2.0],
-				"notes_taken": [false, false, true],
-			}
-		},
-		{
-			event: "quiz started",
-			weight: 10,
-			isStrictEvent: false,
-			properties: {
-				"course_id": courseIds,
-				"quiz_id": quizIds,
-				"quiz_type": ["practice", "graded", "final_exam"],
-				"question_count": u.weighNumRange(5, 50, 0.7, 15),
-			}
-		},
-		{
-			event: "quiz completed",
-			weight: 8,
-			isStrictEvent: false,
-			properties: {
-				"course_id": courseIds,
-				"quiz_id": quizIds,
-				"score_percent": u.weighNumRange(0, 100, 1.2, 50),
-				"time_spent_mins": u.weighNumRange(3, 120, 0.6, 25),
-				"attempts": u.weighNumRange(1, 5, 0.5, 3),
-			}
-		},
-		{
-			event: "assignment submitted",
-			weight: 6,
-			isStrictEvent: false,
-			properties: {
-				"course_id": courseIds,
-				"assignment_id": assignmentIds,
-				"submission_type": ["text", "code", "file", "project"],
-				"word_count": u.weighNumRange(100, 5000, 0.6, 500),
-				"is_late": [false, false, false, false, true],
-			}
-		},
-		{
-			event: "assignment graded",
-			weight: 5,
-			properties: {
-				"course_id": courseIds,
-				"assignment_id": assignmentIds,
-				"grade": ["A", "B", "C", "D", "F"],
-				"feedback_length": u.weighNumRange(0, 500, 0.5, 100),
-				"grader": ["instructor", "peer", "auto"],
-			}
-		},
-		{
-			event: "discussion posted",
-			weight: 7,
-			isStrictEvent: false,
-			properties: {
-				"course_id": courseIds,
-				"post_type": ["question", "answer", "comment"],
-				"word_count": u.weighNumRange(10, 500, 0.6, 80),
-			}
-		},
-		{
-			event: "certificate earned",
-			weight: 2,
-			isStrictEvent: false,
-			properties: {
-				"course_id": courseIds,
-				"completion_time_days": u.weighNumRange(7, 180, 0.5, 45),
-				"final_grade": u.weighNumRange(60, 100, 1.2, 30),
-			}
-		},
-		{
-			event: "study group joined",
-			weight: 4,
-			isStrictEvent: false,
-			properties: {
-				"group_id": groupIds,
-				"group_size": u.weighNumRange(3, 20, 0.7, 8),
-				"group_type": ["study_circle", "project_team", "tutoring"],
-			}
-		},
-		{
-			event: "resource downloaded",
-			weight: 9,
-			properties: {
-				"resource_type": ["pdf", "slides", "code_sample", "dataset", "cheat_sheet"],
-				"course_id": courseIds,
-			}
-		},
-		{
-			event: "instructor feedback given",
-			weight: 3,
-			properties: {
-				"course_id": courseIds,
-				"feedback_type": ["written", "video", "rubric"],
-				"response_time_hours": u.weighNumRange(1, 72, 0.5, 15),
-			}
-		},
-		{
-			event: "course reviewed",
-			weight: 3,
-			properties: {
-				"course_id": courseIds,
-				"rating": u.weighNumRange(1, 5, 1.5, 3),
-				"review_length": u.weighNumRange(10, 1000, 0.5, 100),
-				"would_recommend": [false, false, false, true, true, true, true, true, true, true],
-			}
-		},
-		{
-			event: "subscription purchased",
-			weight: 2,
-			properties: {
-				"plan": ["monthly", "annual", "lifetime"],
-				"price": [19.99, 149.99, 499.99],
-			}
-		},
-		{
-			event: "help requested",
-			weight: 4,
-			properties: {
-				"topic": ["technical", "content", "billing", "accessibility"],
-				"channel": ["chat", "email", "forum"],
-			}
-		},
-		{
-			event: "practice problem solved",
-			weight: 12,
-			isStrictEvent: false,
-			properties: {
-				"course_id": courseIds,
-				"problem_id": problemIds,
-				"difficulty": ["easy", "medium", "hard"],
-				"time_to_solve_sec": u.weighNumRange(10, 3600, 0.5, 300),
-				"hint_used": [false, false, true],
-			}
+			name: "subscription_billing_daily",
+			type: "additive",
+			grain: "day",
+			source: {
+				event: "subscription started",
+				measure: "count",
+				groupBy: "billing_interval",
+			},
+			timeColumn: "date",
+			valueColumn: "new_subscriptions",
+			columns: {
+				list_price_usd: (ctx) => (ctx.row.billing_interval === "annual" ? PLUS_ANNUAL : plusMonthlyPrice(ctx.time)),
+				gross_bookings_usd: (ctx) => round2(ctx.value * ctx.row.list_price_usd),
+			},
 		},
 	],
 
 	superProps: {
-		Platform: ["Web", "iOS", "Android", "iPad"],
-	},
-
-	scdProps: {
-		enrollment_status: {
-			values: ["enrolled", "active", "completed", "dropped"],
-			frequency: "month",
-			timing: "fuzzy",
-			max: 6
-		},
-		course_status: {
-			values: ["draft", "published", "archived", "deprecated"],
-			frequency: "month",
-			timing: "fixed",
-			max: 6,
-			type: "course_id"
-		}
+		plan_tier: ["free"],
+		platform: ["web"],
 	},
 
 	userProps: {
-		"account_type": ["student", "student", "student", "student", "student", "student", "student", "student", "instructor"],
-		"subscription_status": ["free", "free", "free", "monthly", "annual"],
-		"learning_style": ["visual", "reading", "hands_on", "auditory"],
-		"education_level": ["high_school", "bachelors", "masters", "phd", "self_taught"],
-		"timezone": ["US_Eastern", "US_Pacific", "US_Central", "Europe", "Asia"],
-		"courses_created": [0],
-		"teaching_experience_years": [0],
-		"instructor_rating": [0],
-		"learning_goal": ["none"],
-		"study_hours_per_week": [0],
-		"Platform": ["Web", "iOS", "Android", "iPad"],
+		learner_segment: ["upskiller"],
+		account_type: ["individual"],
+		primary_goal: ["advance_in_role"],
+		plan_tier: ["free"],
+		customer_since: ["2025-01-01"],
+		acquisition_channel: ["organic_search"],
+		preferred_playback_speed: [1],
 	},
 
-	groupKeys: [
-		["course_id", 150, ["course enrolled", "lecture started", "lecture completed", "quiz completed", "certificate earned"]],
-		["group_id", 300, ["study group joined", "discussion posted"]],
+	personas: [
+		{ name: "career_switcher", weight: 25, eventMultiplier: 1.3, properties: { learner_segment: "career_switcher" } },
+		{ name: "upskiller", weight: 32, eventMultiplier: 1.0, properties: { learner_segment: "upskiller" } },
+		{ name: "university_student", weight: 23, eventMultiplier: 1.1, properties: { learner_segment: "university_student" } },
+		{ name: "lifelong_learner", weight: 20, eventMultiplier: 0.7, properties: { learner_segment: "lifelong_learner" } },
 	],
 
-	groupProps: {
-		course_id: {
-			"title": () => `${chance.pickone(["Introduction to", "Advanced", "Mastering", "Fundamentals of", "Applied"])} ${chance.pickone(["Algorithms", "Data Science", "Machine Learning", "Statistics", "Web Development", "Calculus", "Biology", "Economics", "Design Thinking", "Creative Writing"])}`,
-			"instructor_count": u.weighNumRange(1, 5, 0.5, 2),
-			"total_enrolled": u.weighNumRange(50, 5000, 0.6, 500),
-			"avg_rating": u.weighNumRange(3, 5, 1.5, 1),
-		},
-		group_id: {
-			"name": () => `${chance.pickone(["Study", "Learning", "Focus", "Peer", "Cohort"])} ${chance.pickone(["Circle", "Squad", "Team", "Hub", "Group"])} ${chance.character({ alpha: true, casing: "upper" })}${chance.integer({ min: 1, max: 99 })}`,
-			"member_count": u.weighNumRange(3, 20, 0.7, 8),
-			"focus_area": ["CS", "Math", "Science", "Business", "Arts", "Languages"],
-		}
-	},
-
-	lookupTables: [],
+	retentionCurve: { type: "logarithmic", day1: 0.7, day7: 0.5, day30: 0.38 },
 
 	hook(record, type, meta) {
-		if (type === "user") return handleUserHooks(record);
-		if (type === "event") return handleEventHooks(record);
-		if (type === "funnel-pre") return handleFunnelPreHooks(record, meta);
-		if (type === "everything") return handleEverythingHooks(record, meta);
+		if (type === "user") return handleUserHook(record, meta);
+		if (type === "everything") return handleEverything(record, meta);
+		if (type === "warehouse") return handleWarehouse(record, meta);
 		return record;
-	}
+	},
 };
 
-export default config;
+// ── STORIES ──────────────────────────────────────────────────────────────
+// Machine-checkable contract for hooks H1-H10. Evaluate with:
+//   node dungeons/vertical/education/education.verify.mjs
 
-// ── STORIES (v1.6 verification contract) ──
-/*
- * MEASUREMENT DOCTRINE — how these reads stay honest
- *
- * IDENTITY: avgDevicePerUser: 2, but 'account registered' is both
- * isFirstEvent and isAuthEvent, so born users auth on their very first
- * event. The device-map resolve through the profiles' "anonymousIds"
- * pool is belt-and-braces for any device-only edge.
- *
- * CHURN RECOVERY (H4): the churn hook deletes ALL events after
- * firstEvent + 14d for non-early-joiners with any raw sub-60 quiz.
- * Deletion is the ONLY event-removal that touches lectures/quizzes
- * (H3/H7 remove certificates only), so a user's OUTPUT lifespan
- * exceeding 14.5d identifies the not-churned population exactly, and
- * within it output note/speed-lecture counts equal the hook-time
- * counts the treatments keyed on. H3/H8 score reads filter on it.
- *
- * SCORE TREATMENT LEDGER: score_percent is touched by THREE hooks —
- * H3 (x1.3 for 5-8-notes users), H8 (+8 for 3+-fast-lecture users),
- * H2 (-25 on Sun/Mon, runs LAST, hits duplicates too). Every score
- * read excludes Sun/Mon quizzes (removes H2) and conditions on the
- * OTHER treatment's cohort (H3 reads exclude speed learners; H8 reads
- * exclude sweet-notes users), so each knob is read in isolation.
- * Empirical organic score mean is ~40 in these restricted reads (the
- * pool's nominal mean 50 is inflated by the treatments themselves).
- *
- * ORGANIC DIFFICULTY IS NOT UNIFORM: the difficulty pool is a 3-value
- * array but measured organic shares are easy 0.362 / medium 0.287 /
- * hard 0.351 (7+ sigma off uniform — engine-level draw skew).
- * H5 bands derive from the MEASURED organic composition:
- * P(easy|hint) = 0.60 + 0.40 x 0.362 = 0.745; P(hard|no-hint) =
- * 0.40 + 0.60 x 0.351 = 0.610.
- *
- * EMULATOR TTC (H7/H9): 2-step read ['course enrolled','certificate
- * earned'] — the 4-step doc funnel would break because H9's annual
- * x0.5 compression can move a certificate BEFORE the interior
- * quiz-completed step. Window 86.4h = 48h generative x 1.8 free
- * stretch, covering the stretched support. Sensitivity check at 48h:
- * free conversion collapses 0.063 -> 0.002 (censoring confirms the
- * stretch is real); annual/monthly barely move.
- *
- * EXPERIMENT PAIRING (H10): $experiment_started fires BEFORE funnel
- * entry with an arm-dependent lag (the AI arm's ttcMultiplier
- * compresses even the exp->step1 gap), so pairing anchors at the
- * funnel ENTRY: first 'discussion posted' >= exp time, conversion =
- * 'resource downloaded' within 12h of entry with >= 1 'study group
- * joined' strictly between. Organic pollution (partial failed passes
- * completed by organic downloads, ~0.035 base rate — implied
- * consistently by both arms at full fidelity) mildly attenuates the
- * generative 1.4x lift to ~1.37 observed; both arms carry the same
- * pollution so direction is preserved.
- *
- * ACTIVITY COUPLING: certificate counts scale with user activity, so
- * cross-cohort cert reads normalize per enrollment (certs/enrolls),
- * and the H3 volume read carries a pre-cliff flatness precondition.
- */
+const EV = `read_json_auto('{{PREFIX}}-EVENTS*.json*', sample_size=-1, union_by_name=true)`;
+const US = `read_json_auto('{{PREFIX}}-USERS*.json*', sample_size=-1, union_by_name=true)`;
+const WH = (table) => `read_json_auto('{{PREFIX}}-WAREHOUSE-${table}.json*', sample_size=-1, union_by_name=true)`;
 
-const ID_CTE = `
-us AS (SELECT * FROM read_json_auto('{{PREFIX}}-USERS*.json', sample_size=-1, union_by_name=true)),
-dm AS (SELECT unnest("anonymousIds") AS device_id, distinct_id FROM us),
-ev AS (SELECT coalesce(m.distinct_id::VARCHAR, e.user_id::VARCHAR, e.device_id::VARCHAR) AS uid,
-       e.time::TIMESTAMP AS t, e.*
-FROM read_json_auto('{{PREFIX}}-EVENTS*.json', sample_size=-1, union_by_name=true) e
-LEFT JOIN dm m ON e.device_id = m.device_id)`;
+// Identity prelude: a device resolves to the user seen with it on any event
+// that carries both ids (emitted stitch evidence, the way Mixpanel merges).
+const ID_CTE = `dmap AS (SELECT device_id, min(user_id::VARCHAR) AS mapped FROM ${EV}
+  WHERE user_id IS NOT NULL AND device_id IS NOT NULL GROUP BY 1),
+ev AS (SELECT coalesce(e.user_id::VARCHAR, m.mapped) AS uid, e.time::TIMESTAMP AS t, e.*
+  FROM ${EV} e LEFT JOIN dmap m ON e.device_id = m.device_id)`;
 
-const PU_CTE = `
-pu AS (SELECT e.uid, min(e.t) AS first_t, max(e.t) AS last_t,
-  count(*) FILTER (WHERE event = 'lecture completed' AND notes_taken) AS notes,
-  count(*) FILTER (WHERE event = 'lecture completed' AND playback_speed >= ${SPEED_FAST_THRESHOLD}) AS fast_lex,
-  count(*) FILTER (WHERE event = 'quiz completed') AS quizzes,
-  count(*) FILTER (WHERE event = 'certificate earned') AS certs,
-  count(*) FILTER (WHERE event = 'course enrolled') AS enrolls,
-  count(*) FILTER (WHERE event = 'discussion posted') AS discussions,
-  min(CASE WHEN event = 'study group joined' THEN e.t END) AS first_join_t
-FROM ev e GROUP BY 1),
-puu AS (SELECT p.*, u.subscription_status, u.account_type,
-  (p.first_join_t IS NOT NULL AND date_diff('hour', p.first_t, p.first_join_t) <= ${STUDY_GROUP_EARLY_DAYS * 24}) AS early_join,
-  (p.last_t > p.first_t + INTERVAL '14 days 12 hours') AS retained
-FROM pu p JOIN us u ON p.uid = u.distinct_id::VARCHAR)`;
+const TS = (isoStr) => dayjs.utc(isoStr).format("YYYY-MM-DD HH:mm:ss");
+const D = (isoStr) => isoStr.slice(0, 10);
+const band = (k) => [Math.round(k * 0.9 * 1000) / 1000, Math.round(k * 1.1 * 1000) / 1000];
+const SQL_LIST = (xs) => xs.map((x) => `'${x}'`).join(", ");
+const ONBOARDING_STEPS = ["account created", "learning goals set", "course enrolled", "lesson started"];
+const RETENTION_DAY = 30;
+const COMPLETION_COHORT_END = "2026-07-01T00:00:00Z"; // enrollments with at least 92 days to finish (longest course: 8 weeks x 1.6 pace)
+const INC_BASE_FROM = TS(dayjs.utc(ANDROID_RELEASE).subtract(7, "day"));
+const INC_BASE_TO = TS(dayjs.utc(ANDROID_HOTFIX).add(7, "day"));
+const PAID_COHORT_LAST = dayjs.utc(PAID_COHORT_END).subtract(1, "day").format("YYYY-MM-DD");
+// first payment per new subscription: annual list price or the monthly price in force
+const AVG_PAYMENT = (annualShare, monthly) => annualShare * PLUS_ANNUAL + (1 - annualShare) * monthly;
+const VOLUME_DAYS = 53; // days either side of the price change: Jun 18 - Aug 9 vs Aug 10 - Oct 1
+const PAYMENT_RATIO = Math.round(AVG_PAYMENT(ANNUAL_SHARE_POST, PLUS_MONTHLY_NEW) / AVG_PAYMENT(ANNUAL_SHARE_PRE, PLUS_MONTHLY_OLD) * 1000) / 1000;
 
-const cellsOf = (rows, key) => Object.fromEntries((rows || []).map((r) => [r[key], r]));
+/** step_counts conversion for a set of segments from a timeToConvert breakdown. */
+const convOf = (rows, segs) => {
+	const rs = (rows || []).filter((x) => segs.includes(x.segment_value) && Array.isArray(x.step_counts) && x.step_counts[0]);
+	if (!rs.length) return null;
+	const entered = rs.reduce((a, r) => a + r.step_counts[0], 0);
+	const converted = rs.reduce((a, r) => a + r.step_counts[r.step_counts.length - 1], 0);
+	return { entered, converted, rate: converted / entered };
+};
 
+const H1_SQL = `WITH ${ID_CTE},
+ft AS (SELECT uid, min(t) AS t1 FROM ev WHERE event = 'ai tutor question asked' GROUP BY 1),
+q AS (SELECT ev.uid, ev.t, ev.score_pct, ev.plan_tier, ft.t1 FROM ev LEFT JOIN ft ON ft.uid = ev.uid WHERE ev.event = 'quiz submitted'),
+g AS (SELECT CASE WHEN t1 IS NULL THEN 'non' ELSE 'adopter' END AS grp,
+  CASE WHEN t1 IS NULL THEN t >= TIMESTAMP '${TS(AI_TUTOR_LAUNCH)}' ELSE t > t1 END AS post,
+  avg(score_pct) AS score, count(DISTINCT uid) AS users
+  FROM q WHERE t1 IS NOT NULL OR plan_tier IN (${SQL_LIST(AI_PLANS)}) GROUP BY 1, 2)
+SELECT 'all' AS grp, min(users) AS user_count,
+ (max(score) FILTER (WHERE grp = 'adopter' AND post) - max(score) FILTER (WHERE grp = 'adopter' AND NOT post))
+ - (max(score) FILTER (WHERE grp = 'non' AND post) - max(score) FILTER (WHERE grp = 'non' AND NOT post)) AS did
+FROM g`;
+
+const H2_SQL = `WITH ${ID_CTE},
+v AS (SELECT distinct_id::VARCHAR AS uid, "${EXP_KEY}" AS variant FROM ${US} WHERE "${EXP_KEY}" IS NOT NULL),
+pv AS (SELECT uid, course_id, t AS t0 FROM ev WHERE event = 'course page viewed' AND t >= TIMESTAMP '${TS(COURSE_PICKS_START)}'),
+en AS (SELECT uid, course_id, t AS t1 FROM ev WHERE event = 'course enrolled'),
+x AS (SELECT v.variant, pv.uid, pv.t0, min(en.t1) AS t1 FROM pv JOIN v ON v.uid = pv.uid
+  LEFT JOIN en ON en.uid = pv.uid AND en.course_id = pv.course_id AND en.t1 >= pv.t0 AND en.t1 < pv.t0 + INTERVAL 1 DAY GROUP BY 1, 2, 3)
+SELECT variant AS grp, count(DISTINCT uid) AS user_count, count(*) AS page_views, avg((t1 IS NOT NULL)::INT) AS conv,
+ median(date_diff('second', t0, t1)) AS med_ttc_s
+FROM x GROUP BY 1`;
+
+const H4_SQL = `WITH ${ID_CTE},
+e AS (SELECT uid, course_id, course_format, t FROM ev WHERE event = 'course enrolled' AND t < TIMESTAMP '${TS(COMPLETION_COHORT_END)}'),
+c AS (SELECT uid, course_id, min(t) AS tc FROM ev WHERE event = 'certificate earned' GROUP BY 1, 2)
+SELECT e.course_format AS grp, count(DISTINCT e.uid) AS user_count, count(*) AS enrollments, avg((c.tc IS NOT NULL AND c.tc > e.t)::INT) AS completion
+FROM e LEFT JOIN c ON c.uid = e.uid AND c.course_id = e.course_id GROUP BY 1`;
+
+const H5_SQL = `WITH ${ID_CTE},
+s AS (SELECT uid, t AS t0 FROM ev WHERE event = 'account created' AND t < TIMESTAMP '${TS(DATASET_END)}' - INTERVAL ${RETENTION_DAY + 7} DAY
+  AND uid IN (SELECT uid FROM ev WHERE event = 'lesson started')),
+f AS (SELECT s.uid,
+  count(*) FILTER (WHERE e.event = 'lesson completed' AND e.t < s.t0 + INTERVAL ${STREAK_DAYS} DAY) AS first_week,
+  count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL ${RETENTION_DAY} DAY AND e.event NOT IN ('certificate earned', 'subscription started')) AS ret
+  FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
+SELECT CASE WHEN first_week >= ${STREAK_MIN} THEN 'activated' ELSE 'not_activated' END AS grp,
+ count(*) AS user_count, avg((ret > 0)::INT) AS retention
+FROM f GROUP BY 1`;
+
+const H6_SQL = `WITH ${ID_CTE}
+SELECT CASE WHEN t >= TIMESTAMP '${TS(PLUS_PRICE_CHANGE)}' THEN 'post' ELSE 'pre' END AS grp, count(DISTINCT uid) AS user_count,
+ avg((billing_interval = 'annual')::INT) AS annual_share
+FROM ev WHERE event = 'subscription started' GROUP BY 1`;
+
+const H8_SQL = `WITH ${ID_CTE},
+o AS (SELECT DISTINCT date::DATE AS d, platform FROM ${WH("app_stability_daily")} WHERE playback_failure_rate >= 0.2),
+od AS (SELECT DISTINCT d FROM o), op AS (SELECT DISTINCT platform FROM o),
+s AS (SELECT uid, lesson_id, t, platform FROM ev WHERE event = 'lesson started' AND content_type = 'video' AND platform IS NOT NULL
+  AND t >= TIMESTAMP '${INC_BASE_FROM}' AND t < TIMESTAMP '${INC_BASE_TO}'),
+c AS (SELECT DISTINCT lesson_id FROM ev WHERE event = 'lesson completed'),
+w AS (SELECT s.uid, s.t::DATE AS d, (s.platform IN (SELECT platform FROM op)) AS hit, (c.lesson_id IS NOT NULL) AS ok FROM s LEFT JOIN c ON c.lesson_id = s.lesson_id),
+g AS (SELECT (d IN (SELECT d FROM od)) AS outage, avg(ok::INT) FILTER (WHERE hit) / avg(ok::INT) FILTER (WHERE NOT hit) AS rel, count(DISTINCT uid) FILTER (WHERE hit) AS users FROM w GROUP BY 1)
+SELECT 'all' AS grp, (SELECT count(*) FROM od) AS outage_days, min(users) AS user_count,
+ max(rel) FILTER (WHERE outage) / max(rel) FILTER (WHERE NOT outage) AS did
+FROM g`;
+
+const H9_SQL = `WITH ${ID_CTE},
+p AS (SELECT distinct_id::VARCHAR AS uid, learner_segment FROM ${US}),
+x AS (SELECT CASE WHEN p.learner_segment = 'university_student' THEN 'student' ELSE 'other' END AS seg,
+  (ev.t >= TIMESTAMP '${TS(FALL_TERM_START)}') AS fall, ev.uid, ev.t::DATE AS d
+  FROM ev JOIN p ON p.uid = ev.uid WHERE ev.event = 'lesson completed'),
+g AS (SELECT seg, fall, count(*)::DOUBLE / count(DISTINCT d) AS per_day, count(DISTINCT uid) AS users FROM x GROUP BY 1, 2)
+SELECT 'all' AS grp, min(users) AS user_count,
+ (max(per_day) FILTER (WHERE seg = 'student' AND fall) / max(per_day) FILTER (WHERE seg = 'student' AND NOT fall))
+ / (max(per_day) FILTER (WHERE seg = 'other' AND fall) / max(per_day) FILTER (WHERE seg = 'other' AND NOT fall)) AS did
+FROM g`;
+
+const H10_SQL = `WITH ${ID_CTE}
+SELECT 'speed_' || replace(u.preferred_playback_speed::VARCHAR, '.', '_') AS grp, count(DISTINCT ev.uid) AS user_count, avg(ev.score_pct) AS score
+FROM ev JOIN ${US} u ON u.distinct_id::VARCHAR = ev.uid WHERE ev.event = 'quiz submitted' GROUP BY 1`;
+
+/** @type {import("../../../types").DungeonStory[]} */
 export const stories = [
 	{
-		id: "H1-role-profiles",
+		id: "H1-ask-bright-ai-tutor",
 		hook: "H1",
-		archetype: "cohort-prop-scale",
-		narrative:
-			"Two-sided marketplace: profile pool is 8:1 student (expected instructor share 1/9 = 0.111). " +
-			"The user hook stamps role-exclusive attributes (instructors: courses_created/experience/rating; " +
-			"students: learning_goal/study_hours) — purity is structural, asserted at 1.0. The everything " +
-			"hook also overwrites account_type on 'account registered' events from the profile (the engine " +
-			"draws event props independently), so event-level agreement is structural too.",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT count(*)::BIGINT AS users,
-  count(*) FILTER (WHERE account_type = 'instructor')::DOUBLE / count(*) AS share
-FROM us`,
-				},
-				assert: (rows) => {
-					const r = rows?.[0];
-					if (!r || Number(r.users) < 5000) {
-						return { verdict: "WEAK", detail: `population too small: users=${r?.users ?? 0}` };
-					}
-					const share = Number(r.share);
-					const detail = `instructor share=${share.toFixed(4)} (pool 1/9 = 0.1111; n=${r.users})`;
-					if (share >= 0.095 && share <= 0.125) return { verdict: "NAILED", detail };
-					if (share >= 0.085 && share <= 0.14) return { verdict: "STRONG", detail };
-					return { verdict: "NONE", detail };
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT account_type, count(*)::BIGINT AS users,
-  avg(CASE WHEN account_type = 'instructor'
-    THEN (courses_created >= 1 AND teaching_experience_years >= 1 AND instructor_rating >= 3
-          AND learning_goal = 'none' AND study_hours_per_week = 0)::INT
-    ELSE (courses_created = 0 AND instructor_rating = 0 AND learning_goal <> 'none'
-          AND study_hours_per_week BETWEEN 2 AND 30)::INT END) AS purity
-FROM us GROUP BY 1`,
-				},
-				assert: (rows) => {
-					const by = cellsOf(rows, "account_type");
-					const inst = by.instructor, stu = by.student;
-					if (!inst || !stu || Number(inst.users) < 500 || Number(stu.users) < 4000) {
-						return { verdict: "WEAK", detail: `cohorts too small: inst=${inst?.users ?? 0} stu=${stu?.users ?? 0}` };
-					}
-					const pi = Number(inst.purity), ps = Number(stu.purity);
-					const detail = `role-attribute purity: instructor=${pi.toFixed(4)} (n=${inst.users}) student=${ps.toFixed(4)} (n=${stu.users})`;
-					if (pi === 1 && ps === 1) return { verdict: "NAILED", detail };
-					if (pi >= 0.995 && ps >= 0.995) return { verdict: "STRONG", detail };
-					if (pi >= 0.9 && ps >= 0.9) return { verdict: "WEAK", detail };
-					return { verdict: "NONE", detail };
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT count(*)::BIGINT AS n, avg((e.account_type = u.account_type)::INT) AS agree
-FROM ev e JOIN us u ON e.uid = u.distinct_id::VARCHAR
-WHERE e.event = 'account registered'`,
-				},
-				assert: (rows) => {
-					const r = rows?.[0];
-					if (!r || Number(r.n) < 800) {
-						return { verdict: "WEAK", detail: `too few 'account registered' events: n=${r?.n ?? 0}` };
-					}
-					const agree = Number(r.agree);
-					const detail = `event-level account_type = profile account_type on ${agree.toFixed(4)} of ${r.n} events (hook-stamped)`;
-					if (agree === 1) return { verdict: "NAILED", detail };
-					if (agree >= 0.99) return { verdict: "STRONG", detail };
-					return { verdict: "NONE", detail };
-				},
-			},
-		],
-	},
-	{
-		id: "H2-deadline-cramming",
-		hook: "H2",
-		archetype: "bespoke",
-		narrative:
-			`Sun/Mon 'assignment submitted' events get is_late REDRAWN at ${DEADLINE_LATE_LIKELIHOOD}% ` +
-			"(replacing the organic 1-in-5 pool draw, ~20%); Sun/Mon 'quiz completed' scores drop " +
-			`${DEADLINE_QUIZ_PENALTY} points, clamped at 0. H2 runs LAST in the everything hook, so the ` +
-			"penalty hits H6 duplicates and boosted scores alike — the DOW score DIFFERENCE reads the " +
-			"knob minus clamp loss (organic sub-25 scores can't drop the full 25; measured 23.85). " +
-			"Bands: rates Sun/Mon [0.56, 0.64] vs rest [0.17, 0.23]; score diff [21.5, 25.5].",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT (dayofweek(t) IN (0, 1)) AS sun_mon, count(*)::BIGINT AS n, avg(is_late::INT) AS late_rate
-FROM ev WHERE event = 'assignment submitted' GROUP BY 1`,
-				},
-				assert: (rows) => {
-					const by = cellsOf(rows, "sun_mon");
-					const sm = by.true, rest = by.false;
-					if (!sm || !rest || Number(sm.n) < 10000 || Number(rest.n) < 25000) {
-						return { verdict: "WEAK", detail: `cohorts too small: sunmon=${sm?.n ?? 0} rest=${rest?.n ?? 0}` };
-					}
-					const rs = Number(sm.late_rate), rr = Number(rest.late_rate);
-					const detail = `late rate Sun/Mon=${rs.toFixed(4)} vs rest=${rr.toFixed(4)} (knob ${DEADLINE_LATE_LIKELIHOOD}% vs organic ~20%)`;
-					if (rs >= 0.56 && rs <= 0.64 && rr >= 0.17 && rr <= 0.23) return { verdict: "NAILED", detail };
-					if (rs >= 0.52 && rs <= 0.68 && rr >= 0.15 && rr <= 0.26) return { verdict: "STRONG", detail };
-					if (rs > rr + 0.1) return { verdict: "WEAK", detail };
-					return { verdict: rs <= rr ? "INVERSE" : "NONE", detail };
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT CASE WHEN dayofweek(t) IN (0, 1) THEN 'sm' ELSE 'rest' END AS bucket,
-  count(*)::BIGINT AS user_count, avg(score_percent) AS score
-FROM ev WHERE event = 'quiz completed' GROUP BY 1`,
-				},
-				select: {
-					sm: { where: { bucket: "sm" } },
-					rest: { where: { bucket: "rest" } },
-				},
-				expect: { metric: "rest.score - sm.score", op: "between", target: [21.5, 25.5] },
-				minCohort: 10000,
-			},
-		],
-	},
-	{
-		id: "H3-notes-magic-number",
-		hook: "H3",
-		archetype: "frequency-sweet-spot",
-		narrative:
-			`${NOTES_SWEET_MIN}-${NOTES_SWEET_MAX} notes-taken lectures => quiz scores x${NOTES_QUIZ_BOOST} ` +
-			`(cap 100) + ${NOTES_BONUS_CERT_LIKELIHOOD}% chance of one bonus cloned certificate; ` +
-			`${NOTES_OVER_THRESHOLD}+ notes => ${NOTES_OVER_CERT_DROP_LIKELIHOOD}% of certificates dropped. ` +
-			"Score read: retained non-speed-learner users, non-Sun/Mon quizzes (see doctrine ledger) — " +
-			"sweet/low ratio reads the knob with mild cap-100 loss at organic mean ~40 (measured 1.309); " +
-			"9+-notes scores are untreated, so b9p/low is the placebo [0.92, 1.12]. Volume read follows " +
-			"the doc's C-vs-A comparison: certs-per-enrollment 9+/sweet [0.62, 0.78] (measured 0.702 — " +
-			"the 0.65 keep knob, mildly diluted by the sweet arm's bonus certs), guarded by sweet/low " +
-			"flatness in [0.85, 1.10] (bounds activity-coupling drift).",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${PU_CTE}
-SELECT CASE WHEN p.notes BETWEEN ${NOTES_SWEET_MIN} AND ${NOTES_SWEET_MAX} THEN 'sweet'
-            WHEN p.notes <= ${NOTES_SWEET_MIN - 1} THEN 'low' END AS bin,
-  count(DISTINCT e.uid)::BIGINT AS user_count, avg(e.score_percent) AS score
-FROM puu p JOIN ev e ON e.uid = p.uid AND e.event = 'quiz completed'
-WHERE p.retained AND p.fast_lex < ${SPEED_LECTURE_COUNT_THRESHOLD}
-  AND p.notes <= ${NOTES_SWEET_MAX} AND dayofweek(e.t) NOT IN (0, 1)
-GROUP BY 1`,
-				},
-				select: {
-					sweet: { where: { bin: "sweet" } },
-					low: { where: { bin: "low" } },
-				},
-				expect: { metric: "sweet.score / low.score", op: "between", target: [1.20, 1.40] },
-				minCohort: 300,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${PU_CTE}
-SELECT CASE WHEN p.notes <= ${NOTES_SWEET_MIN - 1} THEN 'low'
-            WHEN p.notes BETWEEN ${NOTES_SWEET_MIN} AND ${NOTES_SWEET_MAX} THEN 'sweet'
-            ELSE 'over' END AS bin,
-  count(*)::BIGINT AS users, sum(p.certs)::DOUBLE / nullif(sum(p.enrolls), 0) AS cpe
-FROM puu p WHERE p.retained GROUP BY 1`,
-				},
-				assert: (rows) => {
-					const by = cellsOf(rows, "bin");
-					const low = by.low, sweet = by.sweet, over = by.over;
-					if (!low || !sweet || !over ||
-						Number(low.users) < 500 || Number(sweet.users) < 1200 || Number(over.users) < 1200) {
-						return { verdict: "WEAK", detail: `bins too small: low=${low?.users ?? 0} sweet=${sweet?.users ?? 0} over=${over?.users ?? 0}` };
-					}
-					const flat = Number(sweet.cpe) / Number(low.cpe);
-					if (flat < 0.85 || flat > 1.10) {
-						return { verdict: "NONE", detail: `flatness precondition failed: sweet/low certs-per-enroll=${flat.toFixed(3)} outside [0.85, 1.10] — activity coupling swamps the read` };
-					}
-					const keep = Number(over.cpe) / Number(sweet.cpe);
-					const detail = `certs-per-enroll over/sweet=${keep.toFixed(4)} (keep knob 0.65; flatness sweet/low=${flat.toFixed(3)}; n=${low.users}/${sweet.users}/${over.users})`;
-					if (keep >= 0.62 && keep <= 0.78) return { verdict: "NAILED", detail };
-					if (keep >= 0.55 && keep <= 0.86) return { verdict: "STRONG", detail };
-					if (keep < 0.95) return { verdict: "WEAK", detail };
-					return { verdict: keep >= 1 ? "INVERSE" : "NONE", detail };
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${PU_CTE}
-SELECT CASE WHEN p.notes >= ${NOTES_OVER_THRESHOLD} THEN 'over'
-            WHEN p.notes <= ${NOTES_SWEET_MIN - 1} THEN 'low' END AS bin,
-  count(DISTINCT e.uid)::BIGINT AS user_count, avg(e.score_percent) AS score
-FROM puu p JOIN ev e ON e.uid = p.uid AND e.event = 'quiz completed'
-WHERE p.retained AND p.fast_lex < ${SPEED_LECTURE_COUNT_THRESHOLD}
-  AND (p.notes >= ${NOTES_OVER_THRESHOLD} OR p.notes <= ${NOTES_SWEET_MIN - 1})
-  AND dayofweek(e.t) NOT IN (0, 1)
-GROUP BY 1`,
-				},
-				select: {
-					over: { where: { bin: "over" } },
-					low: { where: { bin: "low" } },
-				},
-				expect: { metric: "over.score / low.score", op: "between", target: [0.92, 1.12] },
-				minCohort: 250,
-			},
-		],
-	},
-	{
-		id: "H4-study-group-retention",
-		hook: "H4",
-		archetype: "retention-divergence",
-		narrative:
-			`Non-early-joiners (no 'study group joined' within ${STUDY_GROUP_EARLY_DAYS}d of first event) ` +
-			`with ANY raw sub-${STUDY_GROUP_LOW_QUIZ_THRESHOLD} quiz lose ALL events after day ` +
-			`${STUDY_GROUP_CHURN_CUTOFF_DAYS} — and at organic score mean ~40, virtually every quizzing ` +
-			"non-joiner qualifies, so the divergence is near-deterministic: early-joiner D14+ activity " +
-			">= 0.98 vs non-joiner <= 0.03 (measured 0.9988 vs 0.0057). Restricted to users with >= 20d " +
-			"of possible tenure (first event >= 20d before dataset end) so short-tenure users can't " +
-			"dilute either arm. Early joiners also get one cloned discussion at " +
-			`${STUDY_GROUP_DISCUSSION_CLONE_LIKELIHOOD}%, but the discussion-volume gap is dominated by ` +
-			"the churn truncation itself: early/non ratio [13, 25] (measured 18.2).",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${PU_CTE}
-SELECT early_join, count(*)::BIGINT AS users, avg(retained::INT) AS retention, avg(discussions) AS dpu
-FROM puu WHERE first_t <= (SELECT max(t) - INTERVAL 20 DAY FROM ev)
-GROUP BY 1`,
-				},
-				assert: (rows) => {
-					const by = cellsOf(rows, "early_join");
-					const early = by.true, non = by.false;
-					if (!early || !non || Number(early.users) < 2000 || Number(non.users) < 2500) {
-						return { verdict: "WEAK", detail: `cohorts too small: early=${early?.users ?? 0} non=${non?.users ?? 0}` };
-					}
-					const re = Number(early.retention), rn = Number(non.retention);
-					const detail = `D14+ activity: early-join=${re.toFixed(4)} (n=${early.users}) vs non=${rn.toFixed(4)} (n=${non.users})`;
-					if (re >= 0.98 && rn <= 0.03) return { verdict: "NAILED", detail };
-					if (re >= 0.95 && rn <= 0.06) return { verdict: "STRONG", detail };
-					if (re > rn + 0.3) return { verdict: "WEAK", detail };
-					return { verdict: re <= rn ? "INVERSE" : "NONE", detail };
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${PU_CTE}
-SELECT early_join, count(*)::BIGINT AS users, avg(discussions) AS dpu
-FROM puu WHERE first_t <= (SELECT max(t) - INTERVAL 20 DAY FROM ev)
-GROUP BY 1`,
-				},
-				assert: (rows) => {
-					const by = cellsOf(rows, "early_join");
-					const early = by.true, non = by.false;
-					if (!early || !non || Number(early.users) < 2000 || Number(non.users) < 2500) {
-						return { verdict: "WEAK", detail: `cohorts too small: early=${early?.users ?? 0} non=${non?.users ?? 0}` };
-					}
-					const ratio = Number(early.dpu) / Number(non.dpu);
-					const detail = `discussions per user early/non=${ratio.toFixed(2)} (${Number(early.dpu).toFixed(2)} vs ${Number(non.dpu).toFixed(2)}; churn truncation + ${STUDY_GROUP_DISCUSSION_CLONE_LIKELIHOOD}% clone)`;
-					if (ratio >= 13 && ratio <= 25) return { verdict: "NAILED", detail };
-					if (ratio >= 8 && ratio <= 32) return { verdict: "STRONG", detail };
-					if (ratio > 2) return { verdict: "WEAK", detail };
-					return { verdict: ratio <= 1 ? "INVERSE" : "NONE", detail };
-				},
-			},
-		],
-	},
-	{
-		id: "H5-hint-dependency",
-		hook: "H5",
-		archetype: "cohort-prop-scale",
-		narrative:
-			`hint_used=true problems get difficulty forced to 'easy' at ${HINT_EASY_LIKELIHOOD}%; ` +
-			`hint_used=false forced to 'hard' at ${HINT_HARD_LIKELIHOOD}%. Bands derive from the MEASURED ` +
-			"organic composition (easy 0.362 / hard 0.351 — the engine's pool draw is not uniform, see " +
-			"doctrine): P(easy|hint) = 0.60 + 0.40 x 0.362 = 0.745, band [0.71, 0.77]; P(hard|no-hint) " +
-			"= 0.40 + 0.60 x 0.351 = 0.610, band [0.58, 0.64]. The v1.5 doc quoted the raw knobs " +
-			"(60%/40%) — those ignore the unforced organic remainder.",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT hint_used, count(*)::BIGINT AS user_count, avg((difficulty = 'easy')::INT) AS p_easy
-FROM ev WHERE event = 'practice problem solved' GROUP BY 1`,
-				},
-				select: {
-					hint: { where: { hint_used: true } },
-				},
-				expect: { metric: "hint.p_easy", op: "between", target: [0.71, 0.77] },
-				minCohort: 15000,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT hint_used, count(*)::BIGINT AS user_count, avg((difficulty = 'hard')::INT) AS p_hard
-FROM ev WHERE event = 'practice problem solved' GROUP BY 1`,
-				},
-				select: {
-					nohint: { where: { hint_used: false } },
-				},
-				expect: { metric: "nohint.p_hard", op: "between", target: [0.58, 0.64] },
-				minCohort: 30000,
-			},
-		],
-	},
-	{
-		id: "H6-semester-spike",
-		hook: "H6",
 		archetype: "temporal-inflection",
-		narrative:
-			`Days ${SEMESTER_SPIKE_START_DAY}-${SEMESTER_SPIKE_END_DAY} (from dataset start): quiz started / ` +
-			`quiz completed / assignment submitted duplicated at ${SEMESTER_SPIKE_LIKELIHOOD}% => x1.8 volume. ` +
-			"The hook's continuous day-index window [75.0, 85.0] fully treats calendar days 75-84 (day 85 " +
-			"is a measure-zero boundary), so the read uses days 75-84 vs flanks 60-74 + 85-100. Duplicates " +
-			"of churned users die with their originals (H4 deletes post-cutoff wholesale), preserving the " +
-			"ratio. Spikable window/flank [1.70, 2.02] (measured 1.862 = 1.8 x mild organic drift); " +
-			"non-spikable placebo [0.95, 1.20] (measured 1.085 — organic mid-dataset ramp).",
-		assertions: [
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-d AS (SELECT date_diff('day', (SELECT min(t)::DATE FROM ev), t::DATE) AS day_idx
-FROM ev WHERE event IN ('quiz started', 'quiz completed', 'assignment submitted'))
-SELECT CASE WHEN day_idx BETWEEN ${SEMESTER_SPIKE_START_DAY} AND ${SEMESTER_SPIKE_END_DAY - 1} THEN 'window'
-            WHEN day_idx BETWEEN 60 AND ${SEMESTER_SPIKE_START_DAY - 1} OR day_idx BETWEEN ${SEMESTER_SPIKE_END_DAY} AND 100 THEN 'flank' END AS zone,
-  count(*)::BIGINT AS user_count, count(*)::DOUBLE / count(DISTINCT day_idx) AS per_day
-FROM d WHERE day_idx BETWEEN 60 AND 100 GROUP BY 1`,
-				},
-				select: {
-					win: { where: { zone: "window" } },
-					flank: { where: { zone: "flank" } },
-				},
-				expect: { metric: "win.per_day / flank.per_day", op: "between", target: [1.70, 2.02] },
-				minCohort: 15000,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE},
-d AS (SELECT date_diff('day', (SELECT min(t)::DATE FROM ev), t::DATE) AS day_idx
-FROM ev WHERE event NOT IN ('quiz started', 'quiz completed', 'assignment submitted'))
-SELECT CASE WHEN day_idx BETWEEN ${SEMESTER_SPIKE_START_DAY} AND ${SEMESTER_SPIKE_END_DAY - 1} THEN 'window'
-            WHEN day_idx BETWEEN 60 AND ${SEMESTER_SPIKE_START_DAY - 1} OR day_idx BETWEEN ${SEMESTER_SPIKE_END_DAY} AND 100 THEN 'flank' END AS zone,
-  count(*)::BIGINT AS user_count, count(*)::DOUBLE / count(DISTINCT day_idx) AS per_day
-FROM d WHERE day_idx BETWEEN 60 AND 100 GROUP BY 1`,
-				},
-				select: {
-					win: { where: { zone: "window" } },
-					flank: { where: { zone: "flank" } },
-				},
-				expect: { metric: "win.per_day / flank.per_day", op: "between", target: [0.95, 1.20] },
-				minCohort: 30000,
-			},
-		],
-	},
-	{
-		id: "H7-free-vs-paid",
-		hook: "H7",
-		archetype: "funnel-conversion-by-segment",
-		narrative:
-			`Cert-funnel conversion gated x${FREE_FUNNEL_CONV_FACTOR} for free / x${PAID_FUNNEL_CONV_FACTOR} ` +
-			`for paid (funnel-pre), THEN free users lose ${FREE_CERT_DROP_LIKELIHOOD}% of certificates ` +
-			"(everything). The two treatments compound: 3x conversion gap x 1/0.45 drop survival = 6.67x. " +
-			"The emulator funnel read measures the compound directly (6.73 at full fidelity); the " +
-			"certs-per-enrollment read is diluted by standalone (non-funnel) certs (6.04). " +
-			"annual vs monthly is the placebo: " +
-			"both arms get identical conversion treatment and keep all certs (H9 moves times, not counts) " +
-			"=> certs-per-enrollment ratio [0.88, 1.20].",
-		assertions: [
-			{
-				breakdown: {
-					type: "timeToConvert",
-					steps: ["course enrolled", "certificate earned"],
-					breakdownByUserProperty: "subscription_status",
-					conversionWindowMs: Math.round(48 * TTC_FREE_FACTOR * 3600 * 1000),
-				},
-				assert: (rows) => {
-					const by = cellsOf(rows, "segment_value");
-					const mon = by.monthly, free = by.free;
-					const monAtt = Number(mon?.step_counts?.[0] ?? 0), freeAtt = Number(free?.step_counts?.[0] ?? 0);
-					if (monAtt < 800 || freeAtt < 2500) {
-						return { verdict: "WEAK", detail: `attempt cohorts too small: monthly=${monAtt} free=${freeAtt}` };
-					}
-					const convM = Number(mon.step_counts[1]) / monAtt;
-					const convF = Number(free.step_counts[1]) / freeAtt;
-					const ratio = convM / convF;
-					// band centers on the mechanism compound 3 x 1/0.45 = 6.67, NOT on the
-					// 2K iteration point (5.6) — that measurement had free attempts below
-					// this assertion's own guard and was noisy-low
-					const detail = `emulator 86.4h conv monthly=${convM.toFixed(4)} free=${convF.toFixed(4)} ratio=${ratio.toFixed(2)} (attempts ${monAtt}/${freeAtt}; mechanism 6.67)`;
-					// Fix-round Q5 (S2): this band moved [4.6, 6.6] → [5.7, 7.7] after
-					// the full-fidelity run (observed 6.73). The re-derivation above is
-					// real knob math — but a band produced with the observation in hand
-					// cannot claim NAILED this round. Verdict capped at STRONG inside
-					// the knob band; NAILED eligibility returns when the band is
-					// pre-registered ahead of a fresh full-fidelity run.
-					if (ratio >= 5.7 && ratio <= 7.7) return { verdict: "STRONG", detail: `${detail} — capped (S2: band re-derived post-output)` };
-					if (ratio >= 4.7 && ratio <= 8.7) return { verdict: "STRONG", detail };
-					if (ratio > 1.5) return { verdict: "WEAK", detail };
-					return { verdict: ratio <= 1 ? "INVERSE" : "NONE", detail };
-				},
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${PU_CTE}
-SELECT subscription_status, count(*)::BIGINT AS user_count,
-  sum(certs)::DOUBLE / nullif(sum(enrolls), 0) AS cpe
-FROM puu GROUP BY 1`,
-				},
-				select: {
-					mon: { where: { subscription_status: "monthly" } },
-					free: { where: { subscription_status: "free" } },
-				},
-				expect: { metric: "mon.cpe / free.cpe", op: "between", target: [4.8, 6.5] },
-				minCohort: 1500,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${PU_CTE}
-SELECT subscription_status, count(*)::BIGINT AS user_count,
-  sum(certs)::DOUBLE / nullif(sum(enrolls), 0) AS cpe
-FROM puu GROUP BY 1`,
-				},
-				select: {
-					ann: { where: { subscription_status: "annual" } },
-					mon: { where: { subscription_status: "monthly" } },
-				},
-				expect: { metric: "ann.cpe / mon.cpe", op: "between", target: [0.88, 1.20] },
-				minCohort: 1500,
-			},
-		],
-	},
-	{
-		id: "H8-playback-speed",
-		hook: "H8",
-		archetype: "cohort-prop-scale",
-		narrative:
-			`'lecture completed' at speed >= ${SPEED_FAST_THRESHOLD}: watch_time x${SPEED_FAST_WATCH_FACTOR} ` +
-			`(floor ${SPEED_FAST_WATCH_MIN}); at speed <= ${SPEED_SLOW_THRESHOLD}: x${SPEED_SLOW_WATCH_FACTOR} ` +
-			`(cap ${SPEED_SLOW_WATCH_MAX} — never binds: organic max 60 x 1.4 = 84). Mid speeds (1.25/1.5) ` +
-			"are untreated: fast/mid reads the knob at [0.55, 0.62] (Math.floor costs ~2%), slow/mid at " +
-			`[1.33, 1.46]. Users with ${SPEED_LECTURE_COUNT_THRESHOLD}+ fast lectures also get quiz scores ` +
-			`+${SPEED_QUIZ_BOOST_POINTS} (cap 100): read as a DIFFERENCE among retained non-sweet-notes ` +
-			"users on non-Sun/Mon quizzes (doctrine ledger) — band [7.0, 10.4] (measured +8.76; the point " +
-			"boost sits on a ~40-mean score, so cap loss is negligible).",
+		narrative: `Ask Bright, the AI tutor, launches ${D(AI_TUTOR_LAUNCH)} for Plus and Teams learners (plan at event time). ${AI_ADOPTER_SHARE * 100}% of eligible learners adopt it, each starting on a day in the ${AI_RAMP_DAYS} days after launch and keeping ${AI_USE_MIN * 100}-${AI_USE_MAX * 100}% of their would-be questions, so tutor use ramps for three weeks. After a learner's first tutor question, their quiz scores rise by ${AI_SCORE_BOOST} points. Read: difference-in-differences of average quiz score, adopters after vs before their first question, minus eligible non-adopters after vs before launch (cancels the score level and any time trend; the cap at 100 trims a few tenths). Free learners and every pre-launch day carry no tutor questions (exact purity).`,
+		mixpanelReport: { type: "Insights", event: "quiz submitted", measure: "average score_pct", chart: "weekly line", breakdown: "cohort: did ai tutor question asked", filter: "non-adopters: plan_tier in (plus, teams)", note: "the before/after-first-question difference-in-differences needs the raw export (education.sql)" },
 		assertions: [
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE}
-SELECT CASE WHEN playback_speed >= ${SPEED_FAST_THRESHOLD} THEN 'fast'
-            WHEN playback_speed <= ${SPEED_SLOW_THRESHOLD} THEN 'slow' ELSE 'mid' END AS bucket,
-  count(*)::BIGINT AS user_count, avg(watch_time_mins) AS watch
-FROM ev WHERE event = 'lecture completed' GROUP BY 1`,
+SELECT 'all' AS grp, count(DISTINCT uid) AS user_count,
+ count(*) FILTER (WHERE t < TIMESTAMP '${TS(AI_TUTOR_LAUNCH)}' OR plan_tier NOT IN (${SQL_LIST(AI_PLANS)})) AS impure_rows
+FROM ev WHERE event = 'ai tutor question asked'`,
 				},
-				select: {
-					fast: { where: { bucket: "fast" } },
-					mid: { where: { bucket: "mid" } },
-				},
-				expect: { metric: "fast.watch / mid.watch", op: "between", target: [0.55, 0.62] },
-				minCohort: 10000,
+				select: { a: { where: { grp: "all" } } },
+				// exact: a tutor question before launch or on a Free plan is a bug
+				expect: { metric: "a.impure_rows", op: "between", target: [0, 0] },
 			},
 			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}
-SELECT CASE WHEN playback_speed >= ${SPEED_FAST_THRESHOLD} THEN 'fast'
-            WHEN playback_speed <= ${SPEED_SLOW_THRESHOLD} THEN 'slow' ELSE 'mid' END AS bucket,
-  count(*)::BIGINT AS user_count, avg(watch_time_mins) AS watch
-FROM ev WHERE event = 'lecture completed' GROUP BY 1`,
-				},
-				select: {
-					slow: { where: { bucket: "slow" } },
-					mid: { where: { bucket: "mid" } },
-				},
-				expect: { metric: "slow.watch / mid.watch", op: "between", target: [1.33, 1.46] },
-				minCohort: 10000,
-			},
-			{
-				breakdown: {
-					type: "duckdb",
-					sql: `WITH ${ID_CTE}, ${PU_CTE}
-SELECT (p.fast_lex >= ${SPEED_LECTURE_COUNT_THRESHOLD}) AS speedy,
-  count(DISTINCT e.uid)::BIGINT AS user_count, avg(e.score_percent) AS score
-FROM puu p JOIN ev e ON e.uid = p.uid AND e.event = 'quiz completed'
-WHERE p.retained AND p.notes NOT BETWEEN ${NOTES_SWEET_MIN} AND ${NOTES_SWEET_MAX}
-  AND dayofweek(e.t) NOT IN (0, 1)
-GROUP BY 1`,
-				},
-				select: {
-					spd: { where: { speedy: true } },
-					rest: { where: { speedy: false } },
-				},
-				expect: { metric: "spd.score - rest.score", op: "between", target: [7.0, 10.4] },
+				breakdown: { type: "duckdb", sql: H1_SQL },
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.did", op: "between", target: band(AI_SCORE_BOOST) },
 				minCohort: 500,
 			},
 		],
 	},
 	{
-		id: "H9-completion-ttc",
-		hook: "H9",
-		archetype: "funnel-ttc-by-segment",
-		narrative:
-			`The everything hook rescales each certificate's gap to its nearest preceding enrollment: ` +
-			`annual x${TTC_ANNUAL_FACTOR}, free x${TTC_FREE_FACTOR} (monthly untouched). Read through the ` +
-			"emulator's 2-step timeToConvert ['course enrolled' -> 'certificate earned'] at 86.4h " +
-			`(48h generative x ${TTC_FREE_FACTOR} — covers the stretched free support; at 48h the free arm ` +
-			"censors to ~nothing, see doctrine). Median TTC ratios read the knobs almost exactly: " +
-			"free/monthly [1.65, 2.00] (measured 1.834, knob 1.8); annual/monthly [0.44, 0.57] " +
-			"(measured 0.505, knob 0.5).",
+		id: "H2-personalized-course-picks-experiment",
+		hook: "H2",
+		archetype: "experiment-lift",
+		narrative: `The "${PICKS_EXPERIMENT}" test starts ${D(COURSE_PICKS_START)} and splits learners 50/50 at their first course page view in the test (one $experiment_started per learner, variant on the profile). "${PICKS_VARIANT}" multiplies the share of course page views that end in an enrollment in that course by ${PICKS_CONV_MULT} and the view-to-enrollment time by ${PICKS_TTC_MULT}. A page view and its enrollment share course_id, so a totals funnel holding course_id constant reads per-view conversion; browse-only page views dilute both arms alike.`,
+		mixpanelReport: { type: "Funnels", steps: ["course page viewed", "course enrolled"], counting: "totals", holdPropertyConstant: "course_id", breakdown: `user property "${EXP_KEY}"`, window: "1 day", dateRange: `${D(COURSE_PICKS_START)} onward` },
 		assertions: [
 			{
-				breakdown: {
-					type: "timeToConvert",
-					steps: ["course enrolled", "certificate earned"],
-					breakdownByUserProperty: "subscription_status",
-					conversionWindowMs: Math.round(48 * TTC_FREE_FACTOR * 3600 * 1000),
-				},
-				assert: (rows) => {
-					const by = cellsOf(rows, "segment_value");
-					const free = by.free, mon = by.monthly;
-					const fc = Number(free?.user_count ?? 0), mc = Number(mon?.user_count ?? 0);
-					if (fc < 150 || mc < 400) {
-						return { verdict: "WEAK", detail: `converter cohorts too small: free=${fc} monthly=${mc}` };
-					}
-					const ratio = Number(free.median_ttc_ms) / Number(mon.median_ttc_ms);
-					const detail = `median TTC free/monthly=${ratio.toFixed(3)} (knob ${TTC_FREE_FACTOR}; converters ${fc}/${mc})`;
-					if (ratio >= 1.65 && ratio <= 2.00) return { verdict: "NAILED", detail };
-					if (ratio >= 1.45 && ratio <= 2.20) return { verdict: "STRONG", detail };
-					if (ratio > 1.15) return { verdict: "WEAK", detail };
-					return { verdict: ratio <= 1 ? "INVERSE" : "NONE", detail };
-				},
+				breakdown: { type: "duckdb", sql: H2_SQL },
+				select: { p: { where: { grp: PICKS_VARIANT } }, c: { where: { grp: "Control" } } },
+				expect: { metric: "p.conv / c.conv", op: "between", target: band(PICKS_CONV_MULT) },
+				minCohort: 2000,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H2_SQL },
+				select: { p: { where: { grp: PICKS_VARIANT } }, c: { where: { grp: "Control" } } },
+				expect: { metric: "p.med_ttc_s / c.med_ttc_s", op: "between", target: band(PICKS_TTC_MULT) },
+				minCohort: 2000,
 			},
 			{
 				breakdown: {
-					type: "timeToConvert",
-					steps: ["course enrolled", "certificate earned"],
-					breakdownByUserProperty: "subscription_status",
-					conversionWindowMs: Math.round(48 * TTC_FREE_FACTOR * 3600 * 1000),
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT 'all' AS grp, count(DISTINCT uid) AS user_count, count(*) AS exposures,
+ count(DISTINCT uid) FILTER (WHERE "Variant name" = '${PICKS_VARIANT}')::DOUBLE / count(DISTINCT uid) AS variant_share
+FROM ev WHERE event = '$experiment_started'`,
 				},
-				assert: (rows) => {
-					const by = cellsOf(rows, "segment_value");
-					const ann = by.annual, mon = by.monthly;
-					const ac = Number(ann?.user_count ?? 0), mc = Number(mon?.user_count ?? 0);
-					if (ac < 400 || mc < 400) {
-						return { verdict: "WEAK", detail: `converter cohorts too small: annual=${ac} monthly=${mc}` };
-					}
-					const ratio = Number(ann.median_ttc_ms) / Number(mon.median_ttc_ms);
-					const detail = `median TTC annual/monthly=${ratio.toFixed(3)} (knob ${TTC_ANNUAL_FACTOR}; converters ${ac}/${mc})`;
-					if (ratio >= 0.44 && ratio <= 0.57) return { verdict: "NAILED", detail };
-					if (ratio >= 0.38 && ratio <= 0.66) return { verdict: "STRONG", detail };
-					if (ratio < 0.85) return { verdict: "WEAK", detail };
-					return { verdict: ratio >= 1 ? "INVERSE" : "NONE", detail };
-				},
+				select: { a: { where: { grp: "all" } } },
+				// equal-weight 2-arm hash → 0.5
+				expect: { metric: "a.variant_share", op: "between", target: band(0.5) },
+				minCohort: 3000,
 			},
 		],
 	},
 	{
-		id: "H10-ai-study-buddy",
-		hook: "H10",
-		archetype: "experiment-lift",
-		narrative:
-			"'AI Study Buddy' A/B on the Social Learning funnel (last 30 days): conversionMultiplier 1.4 " +
-			"(50% -> 70% generative), ttcMultiplier 0.85. Strict pairing anchors at funnel ENTRY (first " +
-			"'discussion posted' at/after $experiment_started — the exp event fires before entry with an " +
-			"arm-dependent lag), conversion = 'resource downloaded' within 12h of entry with a 'study " +
-			"group joined' strictly between. Organic pollution (p ~ 0.035, consistent across both arms' " +
-			"implied rates at full fidelity) attenuates the generative lift to (0.70+0.30p)/(0.50+0.50p) " +
-			"~ 1.37 observed; paired median TTC reads the ttcMultiplier at [0.78, 0.92] (measured 0.857, " +
-			"knob 0.85).",
+		id: "H3-sponsored-onboarding",
+		hook: "H3",
+		archetype: "funnel-conversion-by-segment",
+		narrative: `New employer-sponsored learners (Brightpath for Teams seats) finish onboarding (account created → learning goals set → course enrolled → lesson started) at ${SPONSORED_ONBOARD_MULT}x the rate of self-pay learners (${Math.round(ONBOARD_CONV * SPONSORED_ONBOARD_MULT)}% vs ${ONBOARD_CONV}% at the engine) and in ${SPONSORED_TTC_MULT}x the time (their employer has already picked the course). Two declared first funnels with account_type conditions; every step is an onboarding-only event for new learners except course enrolled and lesson started, which the strict sequential funnel reads in order. The 7-day window trims both arms alike.`,
+		mixpanelReport: { type: "Funnels", steps: ONBOARDING_STEPS, breakdown: "user property account_type", window: "7 days", measure: "conversion and median time to convert" },
+		assertions: [
+			{
+				breakdown: { type: "timeToConvert", steps: ONBOARDING_STEPS, breakdownByUserProperty: "account_type", conversionWindowMs: 7 * DAY_MS },
+				// custom assert: conversion lives in each segment row's step_counts ARRAY
+				// (first vs last step); the expect grammar cannot index arrays
+				assert: (rows) => {
+					const sp = convOf(rows, ["employer_sponsored"]), ind = convOf(rows, ["individual"]);
+					if (!sp || !ind) return { verdict: "NONE", detail: "missing segment rows" };
+					if (sp.entered < 400 || ind.entered < 1500) return { verdict: "WEAK", detail: `small segments ${sp.entered}/${ind.entered}` };
+					const ratio = sp.rate / ind.rate;
+					const [lo, hi] = band(Math.round(ONBOARD_CONV * SPONSORED_ONBOARD_MULT) / ONBOARD_CONV);
+					const detail = `onboarding conversion sponsored ${sp.converted}/${sp.entered}=${sp.rate.toFixed(4)} vs self-pay ${ind.converted}/${ind.entered}=${ind.rate.toFixed(4)}; ratio ${ratio.toFixed(4)} (knob ${SPONSORED_ONBOARD_MULT}, band [${lo}, ${hi}])`;
+					if (ratio >= lo && ratio <= hi) return { verdict: "NAILED", detail };
+					return { verdict: ratio > 1 ? "WEAK" : "INVERSE", detail };
+				},
+			},
+			{
+				breakdown: { type: "timeToConvert", steps: ONBOARDING_STEPS, breakdownByUserProperty: "account_type", conversionWindowMs: 7 * DAY_MS },
+				select: { s: { where: { segment_value: "employer_sponsored" } }, i: { where: { segment_value: "individual" } } },
+				expect: { metric: "s.median_ttc_ms / i.median_ttc_ms", op: "between", target: band(SPONSORED_TTC_MULT) },
+				minCohort: 400,
+			},
+		],
+	},
+	{
+		id: "H4-cohort-vs-self-paced-completion",
+		hook: "H4",
+		archetype: "funnel-conversion-by-segment",
+		narrative: `Cohort courses (live sessions, weekly deadlines, a facilitator) are finished far more often than self-paced ones: ${COHORT_COMPLETE * 100}% of cohort enrollments would finish vs ${SELF_PACED_COMPLETE_MULT}x that for self-paced (${Math.round(COHORT_COMPLETE * SELF_PACED_COMPLETE_MULT * 100)}%). A finisher earns the certificate when the course ends (cohort: on schedule; self-paced: the nominal length x a pace with median 1), only if still active then, so lapsing hits both formats alike. Each learner enrolls in a course once, and the certificate carries the course_id. Read: per enrollment, share with a certificate for the same course, enrollments before ${D(COMPLETION_COHORT_END)} (every one has time to finish inside the data).`,
+		mixpanelReport: { type: "Funnels", steps: ["course enrolled", "certificate earned"], counting: "totals", holdPropertyConstant: "course_id", breakdown: "course_format", window: "90 days", dateRange: `enrollments ${D(DATASET_START)} to ${dayjs.utc(COMPLETION_COHORT_END).subtract(1, "day").format("YYYY-MM-DD")}` },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H4_SQL },
+				select: { s: { where: { grp: "self_paced" } }, c: { where: { grp: "cohort" } } },
+				expect: { metric: "s.completion / c.completion", op: "between", target: band(SELF_PACED_COMPLETE_MULT) },
+				minCohort: 500,
+			},
+		],
+	},
+	{
+		id: "H5-first-week-lessons",
+		hook: "H5",
+		archetype: "retention-divergence",
+		narrative: `New learners who complete fewer than ${STREAK_MIN} lessons in their first ${STREAK_DAYS} days are at risk: ${DARK_SHARE * 100}% of them go dark on a day between ${DARK_AFTER_MIN} and ${DARK_AFTER_MAX}; ${STREAK_MIN}+ lessons → no cut. Classification uses first-week activity only. Every new learner also faces organic lapse (${LAPSE_SHARE * 100}% stop on a uniform day ${LAPSE_DAY_MIN}-${LAPSE_DAY_MAX}), and ${SETUP_ABANDON_SHARE * 100}% of new learners who never start a lesson stop on day ${SETUP_ABANDON_DAY_MIN}-${SETUP_ABANDON_DAY_MAX}, so the read keeps learners who started a lesson. Retention = any learner-initiated event (not the backend certificate earned or subscription started) on or after day ${RETENTION_DAY} (Mixpanel unbounded retention), signups at least ${RETENTION_DAY + 7} days before the window end. ${STREAK_MIN}+ lessons vs fewer is at least 1/(1−${DARK_SHARE}) (a knob floor: lighter learners are also likelier to show no activity after day ${RETENTION_DAY} without the cut). Mixpanel: build the groups in Funnels (account created → lesson completed → lesson completed → lesson completed, ${STREAK_DAYS}-day window, uniques; completed = ${STREAK_MIN}+, dropped = fewer), save both as cohorts, then Retention (account created → any event, on or after day ${RETENTION_DAY}).`,
+		mixpanelReport: { type: "Funnels → cohorts → Retention", cohortFunnel: `account created → lesson completed ×3, ${STREAK_DAYS}-day window; completed vs dropped`, birth: "account created", return: "any event", mode: `on or after day ${RETENTION_DAY} (unbounded)`, filter: "did lesson started" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H5_SQL },
+				select: { a: { where: { grp: "activated" } }, o: { where: { grp: "not_activated" } } },
+				// confounded by engagement: knob-derived floor, NAILED within ±10% of it
+				expect: { metric: "a.retention / o.retention", op: ">=", target: 1 / (1 - DARK_SHARE), floor: 0.9 / (1 - DARK_SHARE) },
+				minCohort: 300,
+			},
+		],
+	},
+	{
+		id: "H6-plus-price-change",
+		hook: "H6",
+		archetype: "composition-drift",
+		narrative: `On ${D(PLUS_PRICE_CHANGE)} the Plus monthly price rises from $${PLUS_MONTHLY_OLD} to $${PLUS_MONTHLY_NEW}; annual stays $${PLUS_ANNUAL}. Before the change ${ANNUAL_SHARE_PRE * 100}% of new Plus subscribers pick annual billing. After it, annual-minded buyers still pick annual, ${MONTHLY_SWITCH_ANNUAL * 100}% of monthly-minded buyers switch to annual, and ${MONTHLY_LOST * 100}% of them do not buy: new subscriptions fall to ${POST_VOLUME.toFixed(2)}x and the annual share rises to ${ANNUAL_SHARE_POST.toFixed(3)}. Prices exist only in the warehouse table subscription_billing_daily, so the first payment per new subscription needs the join: ${ANNUAL_SHARE_POST.toFixed(3)}×${PLUS_ANNUAL} + ${(1 - ANNUAL_SHARE_POST).toFixed(3)}×${PLUS_MONTHLY_NEW} over ${ANNUAL_SHARE_PRE}×${PLUS_ANNUAL} + ${1 - ANNUAL_SHARE_PRE}×${PLUS_MONTHLY_OLD} = ${PAYMENT_RATIO}x. Volume is compared over the ${VOLUME_DAYS} days either side of the change (the first two weeks of June are still filling the new-learner purchase pipeline). About 7 subscriptions a day, so the volume read carries a knob-derived ceiling; the share and payment reads are the tight ones.`,
+		mixpanelReport: { type: "Insights", event: "subscription started", measure: "total", breakdown: "billing_interval", chart: "weekly stacked, % of total", join: "subscription_billing_daily.list_price_usd" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H6_SQL },
+				select: { a: { where: { grp: "post" } } },
+				expect: { metric: "a.annual_share", op: "between", target: band(ANNUAL_SHARE_POST) },
+				minCohort: 150,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE},
+s AS (SELECT uid, t, t::DATE AS d, billing_interval FROM ev WHERE event = 'subscription started'),
+j AS (SELECT s.*, b.list_price_usd FROM s JOIN ${WH("subscription_billing_daily")} b ON b.date::DATE = s.d AND b.billing_interval = s.billing_interval)
+SELECT CASE WHEN t >= TIMESTAMP '${TS(PLUS_PRICE_CHANGE)}' THEN 'post' ELSE 'pre' END AS grp, count(DISTINCT uid) AS user_count, avg(list_price_usd) AS first_payment
+FROM j GROUP BY 1`,
+				},
+				select: { a: { where: { grp: "post" } }, b: { where: { grp: "pre" } } },
+				expect: { metric: "a.first_payment / b.first_payment", op: "between", target: band(PAYMENT_RATIO) },
+				minCohort: 150,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `WITH ${ID_CTE}
+SELECT CASE WHEN t >= TIMESTAMP '${TS(PLUS_PRICE_CHANGE)}' THEN 'post' ELSE 'pre' END AS grp, count(DISTINCT uid) AS user_count,
+ count(*)::DOUBLE / ${VOLUME_DAYS} AS per_day
+FROM ev WHERE event = 'subscription started'
+ AND t >= TIMESTAMP '${TS(PLUS_PRICE_CHANGE)}' - INTERVAL ${VOLUME_DAYS} DAY AND t < TIMESTAMP '${TS(PLUS_PRICE_CHANGE)}' + INTERVAL ${VOLUME_DAYS} DAY GROUP BY 1`,
+				},
+				select: { a: { where: { grp: "post" } }, b: { where: { grp: "pre" } } },
+				// noise-limited (Poisson, ~350 subscriptions per side): ceiling = half the knob's effect
+				expect: { metric: "a.per_day / b.per_day", op: "<=", target: POST_VOLUME, floor: 1 - 0.5 * (1 - POST_VOLUME) },
+				minCohort: 150,
+			},
+		],
+	},
+	{
+		id: "H7-paid-channel-economics",
+		hook: "H7",
+		archetype: "attribution-bias",
+		narrative: `Paid social signups cost ${(CPL_USD.paid_social / CPL_USD.paid_search).toFixed(2)}x as much as paid search signups ($${CPL_USD.paid_social} vs $${CPL_USD.paid_search} per Mixpanel signup over the window; warehouse paid_marketing_daily bills a paced daily budget per channel with a weekday shape above a ${SPEND_FLAT_SHARE * 100}% flat floor and seeded ±${SPEND_NOISE * 100}% day noise, never zero), but they buy Plus ${PURCHASE_KEEP.paid_social / PURCHASE_KEEP.paid_search}x as often (share of would-be purchases kept: ${PURCHASE_KEEP.paid_social} vs ${PURCHASE_KEEP.paid_search}; channel is independent of segment), so cost per paying subscriber is about the same. Spend per signup needs the warehouse join. The purchase read is the Mixpanel funnel account created → subscription started with the default ${PAID_FUNNEL_WINDOW_DAYS}-day window, signups ${D(DATASET_START)} through ${PAID_COHORT_LAST}. Buyer counts per channel are a few dozen, so the purchase ratio uses the knob as target with a knob-derived ceiling.`,
+		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "paid_marketing_daily.spend_usd", funnel: `account created → subscription started, ${PAID_FUNNEL_WINDOW_DAYS}-day window, signups ${D(DATASET_START)} to ${PAID_COHORT_LAST}, breakdown acquisition_channel` },
 		assertions: [
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE},
-exp AS (SELECT uid, t, "Variant name" AS variant FROM ev WHERE event = '$experiment_started'),
-a AS (SELECT exp.uid, exp.variant, exp.t,
-  (SELECT min(x.t) FROM ev x WHERE x.uid = exp.uid AND x.event = 'discussion posted'
-   AND x.t >= exp.t - INTERVAL 1 MINUTE) AS s1
-FROM exp),
-c AS (SELECT a.*, (
-    SELECT min(r.t) FROM ev r
-    WHERE r.uid = a.uid AND r.event = 'resource downloaded'
-      AND r.t > a.s1 AND r.t <= a.s1 + INTERVAL 12 HOUR
-      AND EXISTS (SELECT 1 FROM ev s WHERE s.uid = a.uid AND s.event = 'study group joined'
-                  AND s.t > a.s1 AND s.t < r.t)
-  ) AS conv_t
-FROM a WHERE a.s1 IS NOT NULL AND a.s1 <= a.t + INTERVAL 24 HOUR)
-SELECT variant, count(*)::BIGINT AS attempts, count(conv_t)::BIGINT AS conv,
-  count(conv_t)::DOUBLE / count(*) AS rate,
-  median(date_diff('minute', s1, conv_t)) AS med_ttc_min
-FROM c GROUP BY 1`,
+s AS (SELECT acquisition_channel AS ch, count(*) AS signups, count(DISTINCT uid) AS users FROM ev WHERE event = 'account created' GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM ${WH("paid_marketing_daily")} GROUP BY 1)
+SELECT s.ch AS grp, s.users AS user_count, sp.spend / s.signups AS spend_per_signup FROM s JOIN sp ON sp.ch = s.ch`,
 				},
-				assert: (rows) => {
-					const by = cellsOf(rows, "variant");
-					const ai = by["AI Study Buddy"], ctl = by.Control;
-					const aa = Number(ai?.attempts ?? 0), ca = Number(ctl?.attempts ?? 0);
-					if (aa < 400 || ca < 400) {
-						return { verdict: "WEAK", detail: `attempt cohorts too small: ai=${aa} control=${ca}` };
-					}
-					const split = aa / (aa + ca);
-					if (split < 0.40 || split > 0.60) {
-						return { verdict: "NONE", detail: `variant split broken: AI share=${split.toFixed(3)}` };
-					}
-					const lift = Number(ai.rate) / Number(ctl.rate);
-					// band spans the pollution-attenuated mechanism for p in [0, 0.15]:
-					// lift = (0.70+0.30p)/(0.50+0.50p) in [1.30, 1.40], +/- sampling noise.
-					// The 2K iteration point (1.25, implied p 0.14) came from attempt
-					// counts below this assertion's own guard; full-fidelity implied
-					// pollution is ~0.035 from both arms independently
-					const detail = `strict-paired conv AI=${Number(ai.rate).toFixed(4)} Control=${Number(ctl.rate).toFixed(4)} lift=${lift.toFixed(3)} (attempts ${aa}/${ca}; generative 1.4 minus pollution)`;
-					// Fix-round Q5 (S2): this band moved [1.14, 1.37] → [1.20, 1.45]
-					// after the full-fidelity run (observed 1.377). The pollution math
-					// above is real knob math — but a band produced with the observation
-					// in hand cannot claim NAILED this round. Verdict capped at STRONG
-					// inside the knob band; NAILED eligibility returns when the band is
-					// pre-registered ahead of a fresh full-fidelity run.
-					if (lift >= 1.20 && lift <= 1.45) return { verdict: "STRONG", detail: `${detail} — capped (S2: band re-derived post-output)` };
-					if (lift >= 1.08 && lift <= 1.55) return { verdict: "STRONG", detail };
-					if (lift > 1.0) return { verdict: "WEAK", detail };
-					return { verdict: "INVERSE", detail };
-				},
+				select: { so: { where: { grp: "paid_social" } }, se: { where: { grp: "paid_search" } } },
+				expect: { metric: "so.spend_per_signup / se.spend_per_signup", op: "between", target: band(CPL_USD.paid_social / CPL_USD.paid_search) },
+				minCohort: 400,
 			},
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE},
-exp AS (SELECT uid, t, "Variant name" AS variant FROM ev WHERE event = '$experiment_started'),
-a AS (SELECT exp.uid, exp.variant, exp.t,
-  (SELECT min(x.t) FROM ev x WHERE x.uid = exp.uid AND x.event = 'discussion posted'
-   AND x.t >= exp.t - INTERVAL 1 MINUTE) AS s1
-FROM exp),
-c AS (SELECT a.*, (
-    SELECT min(r.t) FROM ev r
-    WHERE r.uid = a.uid AND r.event = 'resource downloaded'
-      AND r.t > a.s1 AND r.t <= a.s1 + INTERVAL 12 HOUR
-      AND EXISTS (SELECT 1 FROM ev s WHERE s.uid = a.uid AND s.event = 'study group joined'
-                  AND s.t > a.s1 AND s.t < r.t)
-  ) AS conv_t
-FROM a WHERE a.s1 IS NOT NULL AND a.s1 <= a.t + INTERVAL 24 HOUR)
-SELECT variant, count(conv_t)::BIGINT AS conv,
-  median(date_diff('minute', s1, conv_t)) AS med_ttc_min
-FROM c GROUP BY 1`,
+s AS (SELECT uid, t AS t0, acquisition_channel AS ch FROM ev WHERE event = 'account created' AND t < TIMESTAMP '${TS(PAID_COHORT_END)}'),
+b AS (SELECT DISTINCT s.uid FROM s JOIN ev e ON e.uid = s.uid AND e.event = 'subscription started'
+  AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL ${PAID_FUNNEL_WINDOW_DAYS} DAY)
+SELECT s.ch AS grp, count(*) AS user_count, count(b.uid)::DOUBLE / count(*) AS paid_rate FROM s LEFT JOIN b ON b.uid = s.uid GROUP BY 1`,
 				},
-				assert: (rows) => {
-					const by = cellsOf(rows, "variant");
-					const ai = by["AI Study Buddy"], ctl = by.Control;
-					const ac = Number(ai?.conv ?? 0), cc = Number(ctl?.conv ?? 0);
-					if (ac < 250 || cc < 250) {
-						return { verdict: "WEAK", detail: `converter cohorts too small: ai=${ac} control=${cc}` };
-					}
-					const ratio = Number(ai.med_ttc_min) / Number(ctl.med_ttc_min);
-					const detail = `paired median TTC AI/Control=${ratio.toFixed(3)} (knob 0.85; converters ${ac}/${cc})`;
-					if (ratio >= 0.78 && ratio <= 0.92) return { verdict: "NAILED", detail };
-					if (ratio >= 0.70 && ratio <= 0.99) return { verdict: "STRONG", detail };
-					if (ratio < 1.05) return { verdict: "WEAK", detail };
-					return { verdict: "INVERSE", detail };
+				select: { so: { where: { grp: "paid_social" } }, se: { where: { grp: "paid_search" } } },
+				expect: { metric: "so.paid_rate / se.paid_rate", op: "<=", target: PURCHASE_KEEP.paid_social / PURCHASE_KEEP.paid_search, floor: 1 - 0.5 * (1 - PURCHASE_KEEP.paid_social / PURCHASE_KEEP.paid_search) },
+				minCohort: 400,
+			},
+		],
+	},
+	{
+		id: "H8-android-playback-incident",
+		hook: "H8",
+		archetype: "bespoke",
+		narrative: `Android app 6.4.0 (released ${D(ANDROID_RELEASE)}) ships a video player bug until the 6.4.1 hotfix on ${D(ANDROID_HOTFIX)}: ${INCIDENT_FAIL * 100}% of video lessons started on Android in those ${(ms(ANDROID_HOTFIX) - ms(ANDROID_RELEASE)) / DAY_MS} days that would have been completed are not. Web and iOS are unaffected, and reading and lab lessons are unaffected. The incident days and platform come from the warehouse table app_stability_daily (playback_failure_rate); the event read is a ratio of ratios (Android completion per video start / other platforms, incident days vs the 7 days either side), which reads 1 − ${INCIDENT_FAIL} while cancelling weekday mix and the fall-term lift.`,
+		mixpanelReport: { type: "Insights", events: ["lesson started", "lesson completed"], measure: "formula B/A, totals", filter: "content_type = video", breakdown: "platform", chart: "daily line", join: "app_stability_daily.playback_failure_rate" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H8_SQL },
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.did", op: "between", target: band(1 - INCIDENT_FAIL) },
+				minCohort: 300,
+			},
+			{
+				breakdown: {
+					type: "duckdb",
+					sql: `SELECT 'all' AS grp,
+ count(*) FILTER (WHERE playback_failure_rate >= 0.2) AS incident_rows,
+ avg(playback_failure_rate) FILTER (WHERE playback_failure_rate >= 0.2) AS incident_failure_rate,
+ count(*) FILTER (WHERE playback_failure_rate >= 0.2 AND (date::DATE < DATE '${D(ANDROID_RELEASE)}' OR date::DATE >= DATE '${D(ANDROID_HOTFIX)}' OR platform <> '${INCIDENT_PLATFORM}')) AS misplaced
+FROM ${WH("app_stability_daily")}`,
 				},
+				select: { a: { where: { grp: "all" } } },
+				// warehouse playback failure rate during the incident = the failure knob
+				expect: { metric: "a.incident_failure_rate", op: "between", target: band(INCIDENT_FAIL) },
+			},
+		],
+	},
+	{
+		id: "H9-fall-term-students",
+		hook: "H9",
+		archetype: "temporal-inflection",
+		narrative: `University students study less over the summer: before the fall term (${D(FALL_TERM_START)}) only ${STUDENT_SUMMER_KEEP * 100}% of their learning activity happens (whole lesson units: a start and its completion go together). From the fall term on they study at their full rate, so students' lesson completions per day rise 1/${STUDENT_SUMMER_KEEP} = ${(1 / STUDENT_SUMMER_KEEP).toFixed(3)}x relative to other segments. Read: difference-in-differences of completions per day, students fall/summer over everyone else fall/summer (cancels the growth in new learners and the weekday mix).`,
+		mixpanelReport: { type: "Insights", event: "lesson completed", measure: "total", breakdown: "user property learner_segment", chart: "weekly line", compare: `before vs after ${D(FALL_TERM_START)}` },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H9_SQL },
+				select: { a: { where: { grp: "all" } } },
+				expect: { metric: "a.did", op: "between", target: band(1 / STUDENT_SUMMER_KEEP) },
+				minCohort: 1000,
+			},
+		],
+	},
+	{
+		id: "H10-double-speed-quiz-scores",
+		hook: "H10",
+		archetype: "cohort-prop-scale",
+		narrative: `Learners whose preferred playback speed is ${FAST_SPEED}x (a profile setting; ${SPEED_STICK * 100}% of their videos play at it) score ${FAST_SCORE_PENALTY} points lower on quizzes than 1x learners; 1.25x and 1.5x learners score the same as 1x. The tutor boost (H1) is independent of speed, so the average-score gap reads the knob (the floor at 5 and cap at 100 barely bind).`,
+		mixpanelReport: { type: "Insights", event: "quiz submitted", measure: "average score_pct", breakdown: "user property preferred_playback_speed" },
+		assertions: [
+			{
+				breakdown: { type: "duckdb", sql: H10_SQL },
+				select: { a: { where: { grp: "speed_1_0" } }, f: { where: { grp: "speed_2_0" } } },
+				expect: { metric: "a.score - f.score", op: "between", target: band(FAST_SCORE_PENALTY) },
+				minCohort: 500,
+			},
+			{
+				breakdown: { type: "duckdb", sql: H10_SQL },
+				select: { a: { where: { grp: "speed_1_0" } }, m: { where: { grp: "speed_1_5" } } },
+				// control: 1.5x learners score like 1x learners
+				expect: { metric: "m.score / a.score", op: "between", target: band(1) },
+				minCohort: 500,
 			},
 		],
 	},
 ];
+
+export default config;

@@ -1,243 +1,401 @@
--- ============================================================
--- education.js — v1.6 human-inspection queries (DuckDB)
+-- Brightpath Academy (education vertical) — story-keyed and eval-keyed DuckDB queries.
 --
--- Every query is keyed to a story id in education.js's `stories` export;
--- the machine-checked verdicts come from:
---   node scripts/verify-stories.mjs dungeons/vertical/education/education.js --data-prefix verify-education
--- Generate first:
+-- Generate first (repo root):
 --   node scripts/verify-runner.mjs dungeons/vertical/education/education.js verify-education
--- Run this file:
+-- Run:
 --   duckdb -c ".read dungeons/vertical/education/education.sql"
+-- Against a gzipped export:
+--   duckdb -c "SET VARIABLE data_prefix='<dir>/education'" -c ".read education.sql"
 --
--- NOTE: this dungeon uses a LITERAL historical window (datasetStart
--- 2026-01-01 → datasetEnd 2026-05-01, no forward shift), so day indexes
--- are computed from the actual min event date.
--- ============================================================
+-- All times are UTC. Window: 2026-06-04 00:00 to 2026-10-01 23:59:59.
 
--- ── identity-resolution prelude ─────────────────────────────
--- avgDevicePerUser: 2 + 'account registered' is both isAuthEvent and
--- isFirstEvent, so born users auth on their first event; the device-pool
--- resolve is belt-and-braces for any device-only edge.
-CREATE OR REPLACE VIEW users AS
-SELECT * FROM read_json_auto('data/verify-education-USERS*.json', sample_size=-1, union_by_name=true);
+SET VARIABLE data_prefix = COALESCE(getvariable('data_prefix'), 'data/verify-education');
 
-CREATE OR REPLACE VIEW device_map AS
--- profiles store the device pool under the legacy "anonymousIds" key
-SELECT unnest("anonymousIds") AS device_id, distinct_id FROM users;
+-- ─────────────────────────────────────────────────────────────────────────
+-- PRELUDE: raw files, identity resolution, warehouse tables
+-- ─────────────────────────────────────────────────────────────────────────
+-- Identity: new learners sign up with "account created" (the auth event,
+-- which carries user_id and device_id). A device resolves to the user seen
+-- with it on any event that carries both ids, the way Mixpanel stitches.
+-- Every event in this dataset already carries user_id.
 
-CREATE OR REPLACE VIEW ev AS
--- ::VARCHAR casts — user_id sniffs as UUID, device_id as VARCHAR; DuckDB
--- refuses to coalesce mixed types
-SELECT coalesce(m.distinct_id::VARCHAR, e.user_id::VARCHAR, e.device_id::VARCHAR) AS uid,
-       e.time::TIMESTAMP AS t,
-       e.*
-FROM read_json_auto('data/verify-education-EVENTS*.json', sample_size=-1, union_by_name=true) e
-LEFT JOIN device_map m ON e.device_id = m.device_id;
+CREATE OR REPLACE TEMP TABLE raw_events AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-EVENTS*.json*', sample_size=-1, union_by_name=true);
 
--- Per-user counts. H4's churn (delete ALL events after firstEvent+14d for
--- non-early-joiners with a raw sub-60 quiz) is the only removal touching
--- lectures/quizzes, so lifespan > 14.5d identifies the not-churned
--- population exactly — and within it, output note/speed counts equal the
--- hook-time counts the score treatments keyed on.
-CREATE OR REPLACE VIEW per_user AS
-SELECT e.uid,
-  min(e.t) AS first_t, max(e.t) AS last_t,
-  count(*) FILTER (WHERE event = 'lecture completed' AND notes_taken) AS notes,
-  count(*) FILTER (WHERE event = 'lecture completed' AND playback_speed >= 2.0) AS fast_lex,
-  count(*) FILTER (WHERE event = 'quiz completed') AS quizzes,
-  count(*) FILTER (WHERE event = 'certificate earned') AS certs,
-  count(*) FILTER (WHERE event = 'course enrolled') AS enrolls,
-  count(*) FILTER (WHERE event = 'discussion posted') AS discussions,
-  min(CASE WHEN event = 'study group joined' THEN e.t END) AS first_join_t
-FROM ev e GROUP BY 1;
+CREATE OR REPLACE TEMP TABLE users AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-USERS*.json*', sample_size=-1, union_by_name=true);
 
-CREATE OR REPLACE VIEW per_user_u AS
-SELECT p.*, u.subscription_status, u.account_type,
-  (p.first_join_t IS NOT NULL AND date_diff('hour', p.first_t, p.first_join_t) <= 240) AS early_join,
-  (p.last_t > p.first_t + INTERVAL '14 days 12 hours') AS retained
-FROM per_user p JOIN users u ON p.uid = u.distinct_id::VARCHAR;
+CREATE OR REPLACE TEMP TABLE device_map AS
+SELECT device_id, min(user_id::VARCHAR) AS mapped
+FROM raw_events WHERE user_id IS NOT NULL AND device_id IS NOT NULL GROUP BY 1;
 
+CREATE OR REPLACE TEMP TABLE ev AS
+SELECT coalesce(e.user_id::VARCHAR, m.mapped) AS uid, e.time::TIMESTAMP AS t, e.*
+FROM raw_events e LEFT JOIN device_map m ON e.device_id = m.device_id;
 
--- ── H1-role-profiles ────────────────────────────────────────
--- 8:1 student pool (instructor share 1/9 ≈ 0.111); role-exclusive profile
--- attributes; the everything hook stamps account_type on 'account
--- registered' events from the profile, so the event breakdown is exact.
-SELECT account_type, count(*) AS n,
-  round(avg(courses_created), 1) AS avg_courses_created,
-  round(avg(instructor_rating), 2) AS avg_rating,
-  round(avg(study_hours_per_week), 1) AS avg_study_hrs
-FROM users GROUP BY 1 ORDER BY n DESC;
--- read: student ~89% with courses_created 0; instructor ~11% with
---       study_hours 0
+CREATE OR REPLACE TEMP TABLE wh_marketing AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-paid_marketing_daily.json*', sample_size=-1, union_by_name=true);
+CREATE OR REPLACE TEMP TABLE wh_stability AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-app_stability_daily.json*', sample_size=-1, union_by_name=true);
+CREATE OR REPLACE TEMP TABLE wh_billing AS
+SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-subscription_billing_daily.json*', sample_size=-1, union_by_name=true);
 
-SELECT round(avg((e.account_type = u.account_type)::INT), 4) AS event_profile_agreement, count(*) AS n
-FROM ev e JOIN users u ON e.uid = u.distinct_id::VARCHAR
-WHERE e.event = 'account registered';
--- read: agreement = 1.0 (hook-stamped)
+-- profile attributes keyed by the resolved user id
+CREATE OR REPLACE TEMP TABLE prof AS
+SELECT distinct_id::VARCHAR AS uid, learner_segment, account_type, acquisition_channel, plan_tier AS current_plan,
+ preferred_playback_speed, customer_since, "Experiment: Personalized Course Picks" AS variant
+FROM users;
 
+-- new-learner signups (one per learner who joined in the window)
+CREATE OR REPLACE TEMP TABLE signups AS
+SELECT uid, t AS t0, acquisition_channel AS ch, account_type, signup_method FROM ev WHERE event = 'account created';
 
--- ── H2-deadline-cramming ────────────────────────────────────
--- Sun/Mon: is_late redrawn at 60% (organic ~20%); quiz scores -25 (clamp 0).
--- DuckDB dayofweek: Sunday=0, Monday=1.
-SELECT dayofweek(t) AS dow, count(*) AS n,
-  round(avg(is_late::INT) * 100, 1) AS pct_late
-FROM ev WHERE event = 'assignment submitted'
+-- one row per enrollment, matched to a certificate for the same course
+CREATE OR REPLACE TEMP TABLE enrollments AS
+SELECT e.uid, e.course_id, e.course_format, e.course_category, e.course_length_weeks, e.t AS t_enroll, c.t_cert
+FROM (SELECT * FROM ev WHERE event = 'course enrolled') e
+LEFT JOIN (SELECT uid, course_id, min(t) AS t_cert FROM ev WHERE event = 'certificate earned' GROUP BY 1, 2) c
+  ON c.uid = e.uid AND c.course_id = e.course_id AND c.t_cert > e.t;
+
+-- one row per lesson start, matched to its completion on lesson_id
+CREATE OR REPLACE TEMP TABLE lessons AS
+SELECT s.uid, s.lesson_id, s.t AS t_start, s.platform, s.content_type, c.t_done
+FROM (SELECT * FROM ev WHERE event = 'lesson started') s
+LEFT JOIN (SELECT lesson_id, min(t) AS t_done FROM ev WHERE event = 'lesson completed' GROUP BY 1) c ON c.lesson_id = s.lesson_id;
+
+-- first tutor question per learner
+CREATE OR REPLACE TEMP TABLE tutor_first AS
+SELECT uid, min(t) AS t1 FROM ev WHERE event = 'ai tutor question asked' GROUP BY 1;
+
+-- dataset overview
+SELECT count(*) AS events, count(DISTINCT uid) AS learners_with_events, (SELECT count(*) FROM users) AS profiles,
+ (SELECT count(*) FROM signups) AS new_signups, min(t) AS first_event, max(t) AS last_event FROM ev;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STORIES
+-- ─────────────────────────────────────────────────────────────────────────
+
+-- STORY H1-ask-bright-ai-tutor — quiz scores before/after a learner's first tutor question,
+-- adopters vs eligible (Plus/Teams) non-adopters before/after the 2026-07-21 launch
+WITH q AS (SELECT ev.uid, ev.t, ev.score_pct, ev.plan_tier, f.t1 FROM ev LEFT JOIN tutor_first f ON f.uid = ev.uid WHERE ev.event = 'quiz submitted'),
+g AS (SELECT CASE WHEN t1 IS NULL THEN 'non_adopter' ELSE 'adopter' END AS grp,
+  CASE WHEN t1 IS NULL THEN t >= TIMESTAMP '2026-07-21' ELSE t > t1 END AS post,
+  count(*) AS quizzes, count(DISTINCT uid) AS learners, avg(score_pct) AS avg_score
+  FROM q WHERE t1 IS NOT NULL OR plan_tier IN ('plus', 'teams') GROUP BY 1, 2)
+SELECT *, (SELECT (max(avg_score) FILTER (WHERE grp = 'adopter' AND post) - max(avg_score) FILTER (WHERE grp = 'adopter' AND NOT post))
+  - (max(avg_score) FILTER (WHERE grp = 'non_adopter' AND post) - max(avg_score) FILTER (WHERE grp = 'non_adopter' AND NOT post)) FROM g) AS did
+FROM g ORDER BY grp, post;
+-- purity: no tutor question before launch or on a Free plan
+SELECT count(*) FILTER (WHERE t < TIMESTAMP '2026-07-21' OR plan_tier NOT IN ('plus', 'teams')) AS impure_rows, count(*) AS tutor_questions
+FROM ev WHERE event = 'ai tutor question asked';
+
+-- STORY H2-personalized-course-picks-experiment — per-view conversion (hold course_id, 1-day window)
+WITH pv AS (SELECT uid, course_id, t AS t0 FROM ev WHERE event = 'course page viewed' AND t >= TIMESTAMP '2026-07-08'),
+en AS (SELECT uid, course_id, t AS t1 FROM ev WHERE event = 'course enrolled'),
+x AS (SELECT p.variant, pv.uid, pv.t0, min(en.t1) AS t1 FROM pv JOIN prof p ON p.uid = pv.uid AND p.variant IS NOT NULL
+  LEFT JOIN en ON en.uid = pv.uid AND en.course_id = pv.course_id AND en.t1 >= pv.t0 AND en.t1 < pv.t0 + INTERVAL 1 DAY GROUP BY 1, 2, 3)
+SELECT variant, count(DISTINCT uid) AS learners, count(*) AS page_views, round(avg((t1 IS NOT NULL)::INT), 4) AS conversion,
+ round(median(date_diff('second', t0, t1)) / 60, 1) AS median_minutes_to_enroll
+FROM x GROUP BY 1 ORDER BY 1;
+
+-- STORY H3-sponsored-onboarding — onboarding funnel within 7 days, by account type
+WITH f AS (SELECT s.uid, s.account_type, s.t0,
+  (SELECT min(t) FROM ev e WHERE e.uid = s.uid AND e.event = 'learning goals set' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 7 DAY) AS t1 FROM signups s),
+f2 AS (SELECT f.*, (SELECT min(t) FROM ev e WHERE e.uid = f.uid AND e.event = 'course enrolled' AND e.t >= f.t1 AND e.t < f.t0 + INTERVAL 7 DAY) AS t2 FROM f),
+f3 AS (SELECT f2.*, (SELECT min(t) FROM ev e WHERE e.uid = f2.uid AND e.event = 'lesson started' AND e.t >= f2.t2 AND e.t < f2.t0 + INTERVAL 7 DAY) AS t3 FROM f2)
+SELECT account_type, count(*) AS signups, round(avg((t1 IS NOT NULL)::INT), 4) AS step2, round(avg((t2 IS NOT NULL)::INT), 4) AS step3,
+ round(avg((t3 IS NOT NULL)::INT), 4) AS completed, round(median(date_diff('second', t0, t3)) / 3600, 2) AS median_hours
+FROM f3 GROUP BY 1 ORDER BY 1;
+
+-- STORY H4-cohort-vs-self-paced-completion — per enrollment, enrollments before 2026-07-01
+SELECT course_format, count(*) AS enrollments, count(DISTINCT uid) AS learners, round(avg((t_cert IS NOT NULL)::INT), 4) AS completion
+FROM enrollments WHERE t_enroll < TIMESTAMP '2026-07-01' GROUP BY 1 ORDER BY 1;
+
+-- STORY H5-first-week-lessons — retention (learner-initiated events) on or after day 30 by first-week completed lessons
+-- (new learners who started a lesson; signups at least 37 days before the window end)
+WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 37 DAY
+  AND uid IN (SELECT uid FROM ev WHERE event = 'lesson started')),
+f AS (SELECT s.uid, count(*) FILTER (WHERE e.event = 'lesson completed' AND e.t < s.t0 + INTERVAL 7 DAY) AS first_week,
+  count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 30 DAY AND e.event NOT IN ('certificate earned', 'subscription started')) AS ret_unbounded,
+  count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 30 DAY AND e.t < s.t0 + INTERVAL 37 DAY AND e.event NOT IN ('certificate earned', 'subscription started')) AS ret_d30_week
+  FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
+SELECT CASE WHEN first_week >= 3 THEN '3+' ELSE '0-2' END AS first_week_lessons, count(*) AS learners,
+ round(avg((ret_unbounded > 0)::INT), 4) AS retained_day30_or_later, round(avg((ret_d30_week > 0)::INT), 4) AS retained_day30_36
+FROM f GROUP BY 1 ORDER BY 1;
+
+-- STORY H6-plus-price-change — annual share of new Plus subscriptions, first payment (warehouse list price), volume 53 days either side
+WITH s AS (SELECT ev.uid, ev.t, ev.billing_interval, b.list_price_usd FROM ev
+  JOIN wh_billing b ON b.date::DATE = ev.t::DATE AND b.billing_interval = ev.billing_interval WHERE ev.event = 'subscription started')
+SELECT CASE WHEN t >= TIMESTAMP '2026-08-10' THEN 'after' ELSE 'before' END AS period, count(*) AS subscriptions,
+ round(avg((billing_interval = 'annual')::INT), 4) AS annual_share, round(avg(list_price_usd), 2) AS avg_first_payment_usd
+FROM s GROUP BY 1 ORDER BY 1 DESC;
+SELECT CASE WHEN t >= TIMESTAMP '2026-08-10' THEN 'after' ELSE 'before' END AS period, round(count(*) / 53.0, 2) AS subscriptions_per_day
+FROM ev WHERE event = 'subscription started' AND t >= TIMESTAMP '2026-06-18' GROUP BY 1 ORDER BY 1 DESC;
+
+-- STORY H7-paid-channel-economics — spend per signup (warehouse) and 30-day paid conversion (signups through Aug 31)
+WITH sg AS (SELECT ch, count(*) AS signups FROM signups GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend FROM wh_marketing GROUP BY 1),
+c AS (SELECT s.ch, count(*) AS cohort, count(*) FILTER (WHERE EXISTS (SELECT 1 FROM ev e WHERE e.uid = s.uid AND e.event = 'subscription started'
+  AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 30 DAY)) AS buyers FROM signups s WHERE s.t0 < TIMESTAMP '2026-09-01' GROUP BY 1)
+SELECT sg.ch, sg.signups, round(sp.spend, 0) AS spend_usd, round(sp.spend / sg.signups, 2) AS spend_per_signup,
+ c.cohort, c.buyers, round(c.buyers / c.cohort, 4) AS paid_rate_30d
+FROM sg LEFT JOIN sp ON sp.ch = sg.ch LEFT JOIN c ON c.ch = sg.ch ORDER BY 1;
+
+-- STORY H8-android-playback-incident — video completion per start by platform, incident days vs 7 days either side
+WITH w AS (SELECT platform = 'android' AS android, (t_done IS NOT NULL)::INT AS ok,
+  (t_start >= TIMESTAMP '2026-09-09' AND t_start < TIMESTAMP '2026-09-13') AS incident
+  FROM lessons WHERE content_type = 'video' AND platform IS NOT NULL AND t_start >= TIMESTAMP '2026-09-02' AND t_start < TIMESTAMP '2026-09-20')
+SELECT incident, android, count(*) AS video_starts, round(avg(ok), 4) AS completion FROM w GROUP BY 1, 2 ORDER BY 1, 2;
+SELECT date, platform, video_starts, playback_failure_rate, crash_free_session_rate, app_version FROM wh_stability
+WHERE date::DATE BETWEEN DATE '2026-09-07' AND DATE '2026-09-14' AND platform = 'android' ORDER BY date;
+
+-- STORY H9-fall-term-students — lesson completions per day, students vs other segments, summer vs fall term
+WITH x AS (SELECT CASE WHEN p.learner_segment = 'university_student' THEN 'student' ELSE 'other' END AS seg, ev.t >= TIMESTAMP '2026-08-24' AS fall, ev.t::DATE AS d
+  FROM ev JOIN prof p ON p.uid = ev.uid WHERE ev.event = 'lesson completed'),
+g AS (SELECT seg, fall, count(*) / count(DISTINCT d) AS per_day FROM x GROUP BY 1, 2)
+SELECT seg, round(max(per_day) FILTER (WHERE NOT fall), 1) AS summer_per_day, round(max(per_day) FILTER (WHERE fall), 1) AS fall_per_day,
+ round(max(per_day) FILTER (WHERE fall) / max(per_day) FILTER (WHERE NOT fall), 3) AS fall_over_summer
+FROM g GROUP BY 1 ORDER BY 1;
+
+-- STORY H10-double-speed-quiz-scores — quiz score by preferred playback speed
+SELECT p.preferred_playback_speed, count(DISTINCT ev.uid) AS learners, count(*) AS quizzes, round(avg(score_pct), 2) AS avg_score,
+ round(avg(passed::INT), 4) AS pass_rate
+FROM ev JOIN prof p ON p.uid = ev.uid WHERE ev.event = 'quiz submitted' GROUP BY 1 ORDER BY 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- EVAL QUESTIONS (numbers cited in eval/education.eval.md)
+-- ─────────────────────────────────────────────────────────────────────────
+
+-- EVAL Q1 — Does Ask Bright improve quiz scores?
+-- (a) adopters before vs after their first question; eligible non-adopters before vs after launch (difference in differences)
+WITH q AS (SELECT ev.uid, ev.t, ev.score_pct, ev.passed, ev.plan_tier, f.t1 FROM ev LEFT JOIN tutor_first f ON f.uid = ev.uid WHERE ev.event = 'quiz submitted')
+SELECT CASE WHEN t1 IS NULL THEN 'non_adopter_plus_teams' ELSE 'adopter' END AS grp,
+ CASE WHEN t1 IS NULL THEN t >= TIMESTAMP '2026-07-21' ELSE t > t1 END AS post,
+ count(*) AS quizzes, round(avg(score_pct), 2) AS avg_score, round(avg(passed::INT), 4) AS pass_rate
+FROM q WHERE t1 IS NOT NULL OR plan_tier IN ('plus', 'teams') GROUP BY 1, 2 ORDER BY 1, 2;
+-- (b) naive post-launch comparison on eligible plans: adopters vs non-adopters
+WITH q AS (SELECT ev.uid, ev.score_pct, f.t1 FROM ev LEFT JOIN tutor_first f ON f.uid = ev.uid
+  WHERE ev.event = 'quiz submitted' AND ev.t >= TIMESTAMP '2026-07-21' AND ev.plan_tier IN ('plus', 'teams'))
+SELECT (t1 IS NOT NULL) AS adopter, count(*) AS quizzes, round(avg(score_pct), 2) AS avg_score FROM q GROUP BY 1 ORDER BY 1;
+-- (c) weekly average score: adopters vs eligible (Plus/Teams) non-adopters
+SELECT date_trunc('week', ev.t)::DATE AS week, round(avg(score_pct) FILTER (WHERE f.uid IS NOT NULL), 1) AS adopters,
+ round(avg(score_pct) FILTER (WHERE f.uid IS NULL AND ev.plan_tier IN ('plus', 'teams')), 1) AS eligible_non_adopters
+FROM ev LEFT JOIN tutor_first f ON f.uid = ev.uid WHERE ev.event = 'quiz submitted' GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q2 — Ask Bright adoption and its trend
+-- eligible learners = any event on a Plus or Teams plan since launch; adopters = at least one tutor question
+SELECT (SELECT count(DISTINCT uid) FROM ev WHERE t >= TIMESTAMP '2026-07-21' AND plan_tier IN ('plus', 'teams')) AS eligible_learners,
+ (SELECT count(*) FROM tutor_first) AS adopters,
+ round((SELECT count(*) FROM tutor_first) / (SELECT count(DISTINCT uid) FROM ev WHERE t >= TIMESTAMP '2026-07-21' AND plan_tier IN ('plus', 'teams')), 4) AS adoption,
+ (SELECT count(*) FROM ev WHERE event = 'ai tutor question asked') AS questions,
+ round((SELECT count(*) FROM ev WHERE event = 'ai tutor question asked') / (SELECT count(*) FROM tutor_first), 2) AS questions_per_adopter;
+-- weekly questions, askers, and first-time askers (Monday weeks)
+SELECT date_trunc('week', ev.t)::DATE AS week, count(*) AS questions, count(DISTINCT ev.uid) AS askers,
+ count(DISTINCT ev.uid) FILTER (WHERE date_trunc('week', f.t1) = date_trunc('week', ev.t)) AS new_askers
+FROM ev JOIN tutor_first f ON f.uid = ev.uid WHERE ev.event = 'ai tutor question asked' GROUP BY 1 ORDER BY 1;
+
+-- EVAL Q3 — Personalized Course Picks experiment
+WITH pv AS (SELECT uid, course_id, t AS t0 FROM ev WHERE event = 'course page viewed' AND t >= TIMESTAMP '2026-07-08'),
+en AS (SELECT uid, course_id, t AS t1 FROM ev WHERE event = 'course enrolled'),
+x AS (SELECT p.variant, pv.uid, pv.t0, min(en.t1) AS t1 FROM pv JOIN prof p ON p.uid = pv.uid AND p.variant IS NOT NULL
+  LEFT JOIN en ON en.uid = pv.uid AND en.course_id = pv.course_id AND en.t1 >= pv.t0 AND en.t1 < pv.t0 + INTERVAL 1 DAY GROUP BY 1, 2, 3)
+SELECT variant, count(DISTINCT uid) AS learners, count(*) AS page_views, count(t1) AS enrollments_from_views,
+ round(avg((t1 IS NOT NULL)::INT), 4) AS conversion, round(median(date_diff('second', t0, t1)) / 60, 1) AS median_minutes
+FROM x GROUP BY 1 ORDER BY 1;
+-- enrollments per exposed learner after exposure
+WITH x AS (SELECT e.uid, min(e.t) AS t_exp FROM ev e WHERE e.event = '$experiment_started' GROUP BY 1)
+SELECT p.variant, count(DISTINCT x.uid) AS learners, round(count(en.uid) / count(DISTINCT x.uid), 3) AS enrollments_per_learner
+FROM x JOIN prof p ON p.uid = x.uid LEFT JOIN ev en ON en.uid = x.uid AND en.event = 'course enrolled' AND en.t >= x.t_exp
 GROUP BY 1 ORDER BY 1;
--- read: dow 0/1 ≈ 60%; dow 2-6 ≈ 20%
 
-SELECT (dayofweek(t) IN (0, 1)) AS sun_mon, count(*) AS n,
-  round(avg(score_percent), 2) AS avg_score
-FROM ev WHERE event = 'quiz completed'
-GROUP BY 1 ORDER BY 1;
--- read: gap ≈ 24 pts (25 knob minus clamp-at-0 attenuation)
+-- EVAL Q4 — Onboarding completion by account type (7-day window)
+WITH f AS (SELECT s.uid, s.account_type, s.t0,
+  (SELECT min(t) FROM ev e WHERE e.uid = s.uid AND e.event = 'learning goals set' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 7 DAY) AS t1 FROM signups s),
+f2 AS (SELECT f.*, (SELECT min(t) FROM ev e WHERE e.uid = f.uid AND e.event = 'course enrolled' AND e.t >= f.t1 AND e.t < f.t0 + INTERVAL 7 DAY) AS t2 FROM f),
+f3 AS (SELECT f2.*, (SELECT min(t) FROM ev e WHERE e.uid = f2.uid AND e.event = 'lesson started' AND e.t >= f2.t2 AND e.t < f2.t0 + INTERVAL 7 DAY) AS t3 FROM f2)
+SELECT coalesce(account_type, 'all') AS account_type, count(*) AS signups, round(avg((t1 IS NOT NULL)::INT), 4) AS reached_goals,
+ round(avg((t2 IS NOT NULL)::INT), 4) AS reached_enroll, round(avg((t3 IS NOT NULL)::INT), 4) AS completed
+FROM f3 GROUP BY ROLLUP (account_type) ORDER BY 1;
 
+-- EVAL Q5 — Time from signup to first lesson (completed onboarding funnels, 7-day window)
+WITH f AS (SELECT s.uid, s.account_type, s.t0,
+  (SELECT min(t) FROM ev e WHERE e.uid = s.uid AND e.event = 'learning goals set' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 7 DAY) AS t1 FROM signups s),
+f2 AS (SELECT f.*, (SELECT min(t) FROM ev e WHERE e.uid = f.uid AND e.event = 'course enrolled' AND e.t >= f.t1 AND e.t < f.t0 + INTERVAL 7 DAY) AS t2 FROM f),
+f3 AS (SELECT f2.*, (SELECT min(t) FROM ev e WHERE e.uid = f2.uid AND e.event = 'lesson started' AND e.t >= f2.t2 AND e.t < f2.t0 + INTERVAL 7 DAY) AS t3 FROM f2)
+SELECT coalesce(account_type, 'all') AS account_type, count(t3) AS completed, round(median(date_diff('second', t0, t3)) / 3600, 1) AS median_hours,
+ round(avg(date_diff('second', t0, t3)) / 3600, 1) AS avg_hours
+FROM f3 WHERE t3 IS NOT NULL GROUP BY ROLLUP (account_type) ORDER BY 1;
 
--- ── H3-notes-magic-number ───────────────────────────────────
--- 5-8 notes → quiz ×1.3 (cap 100) + 40% bonus cert; 9+ notes → 35% of
--- certs dropped. Score read: retained non-speed users, non-Sun/Mon
--- quizzes (isolates H3 from H8's +8 and H2's -25).
-WITH b AS (
-  SELECT uid, CASE WHEN notes BETWEEN 5 AND 8 THEN 'sweet'
-                   WHEN notes <= 4 THEN 'low' ELSE 'over' END AS bin
-  FROM per_user_u WHERE retained AND fast_lex < 3
-)
-SELECT b.bin, count(DISTINCT e.uid) AS users, round(avg(e.score_percent), 2) AS avg_score
-FROM ev e JOIN b ON e.uid = b.uid
-WHERE e.event = 'quiz completed' AND dayofweek(e.t) NOT IN (0, 1)
-GROUP BY 1 ORDER BY 1;
--- read: sweet/low ≈ 1.3; over/low ≈ 1.0 (placebo — 9+ scores untreated)
+-- EVAL Q6 — Course completion by format (per enrollment, enrollments Jun 4 - Jun 30)
+SELECT coalesce(course_format, 'all') AS course_format, count(*) AS enrollments, count(t_cert) AS certificates,
+ round(avg((t_cert IS NOT NULL)::INT), 4) AS completion, round(median(date_diff('day', t_enroll, t_cert)), 1) AS median_days_to_certificate
+FROM enrollments WHERE t_enroll < TIMESTAMP '2026-07-01' GROUP BY ROLLUP (course_format) ORDER BY 1;
 
-SELECT CASE WHEN notes <= 4 THEN 'low' WHEN notes BETWEEN 5 AND 8 THEN 'sweet' ELSE 'over' END AS bin,
-  count(*) AS users, round(sum(certs)::DOUBLE / nullif(sum(enrolls), 0), 4) AS certs_per_enroll
-FROM per_user_u WHERE retained GROUP BY 1 ORDER BY 1;
--- read: over/sweet ≈ 0.70 (0.65 keep knob, diluted by sweet's bonus
---       certs); sweet/low ≈ 1.0 (flatness — activity coupling nets out)
+-- EVAL Q7 — First-week lessons and retention (new learners who started a lesson, signups through Aug 25)
+WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 37 DAY
+  AND uid IN (SELECT uid FROM ev WHERE event = 'lesson started')),
+f AS (SELECT s.uid, count(*) FILTER (WHERE e.event = 'lesson completed' AND e.t < s.t0 + INTERVAL 7 DAY) AS first_week,
+  count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 30 DAY AND e.event NOT IN ('certificate earned', 'subscription started')) AS ret_unbounded,
+  count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 30 DAY AND e.t < s.t0 + INTERVAL 37 DAY AND e.event NOT IN ('certificate earned', 'subscription started')) AS ret_d30_week
+  FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
+SELECT least(first_week, 5) AS first_week_lessons_capped_5, count(*) AS learners,
+ round(avg((ret_unbounded > 0)::INT), 4) AS retained_day30_or_later, round(avg((ret_d30_week > 0)::INT), 4) AS retained_day30_36
+FROM f GROUP BY 1 ORDER BY 1;
+WITH s AS (SELECT uid, t0 FROM signups WHERE t0 < TIMESTAMP '2026-10-01 23:59:59' - INTERVAL 37 DAY
+  AND uid IN (SELECT uid FROM ev WHERE event = 'lesson started')),
+f AS (SELECT s.uid, count(*) FILTER (WHERE e.event = 'lesson completed' AND e.t < s.t0 + INTERVAL 7 DAY) AS first_week,
+  count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 30 DAY AND e.event NOT IN ('certificate earned', 'subscription started')) AS ret_unbounded,
+  count(*) FILTER (WHERE e.t >= s.t0 + INTERVAL 30 DAY AND e.t < s.t0 + INTERVAL 37 DAY AND e.event NOT IN ('certificate earned', 'subscription started')) AS ret_d30_week
+  FROM s JOIN ev e ON e.uid = s.uid GROUP BY 1)
+SELECT first_week >= 3 AS three_plus, count(*) AS learners,
+ round(avg((ret_unbounded > 0)::INT), 4) AS retained_day30_or_later, round(avg((ret_d30_week > 0)::INT), 4) AS retained_day30_36
+FROM f GROUP BY 1 ORDER BY 1;
 
+-- EVAL Q8 — The August 10 Plus price change: billing mix, first payment, bookings, volume
+WITH s AS (SELECT ev.uid, ev.t, ev.billing_interval, b.list_price_usd FROM ev
+  JOIN wh_billing b ON b.date::DATE = ev.t::DATE AND b.billing_interval = ev.billing_interval WHERE ev.event = 'subscription started')
+SELECT CASE WHEN t >= TIMESTAMP '2026-08-10' THEN 'after' ELSE 'before' END AS period, count(*) AS subscriptions,
+ count(DISTINCT t::DATE) AS days, round(count(*) / count(DISTINCT t::DATE), 2) AS per_day,
+ round(avg((billing_interval = 'annual')::INT), 4) AS annual_share, round(avg(list_price_usd), 2) AS avg_first_payment_usd
+FROM s GROUP BY 1 ORDER BY 1 DESC;
+-- per-day subscriptions, 53 days either side (Jun 18 - Aug 9 vs Aug 10 - Oct 1), by billing interval
+SELECT CASE WHEN t >= TIMESTAMP '2026-08-10' THEN 'after' ELSE 'before' END AS period, count(*) AS subscriptions, round(count(*) / 53.0, 2) AS per_day,
+ round(count(*) FILTER (WHERE billing_interval = 'monthly') / 53.0, 2) AS monthly_per_day, round(count(*) FILTER (WHERE billing_interval = 'annual') / 53.0, 2) AS annual_per_day
+FROM ev WHERE event = 'subscription started' AND t >= TIMESTAMP '2026-06-18' GROUP BY 1 ORDER BY 1 DESC;
+-- warehouse bookings before vs after
+SELECT CASE WHEN date::DATE >= DATE '2026-08-10' THEN 'after' ELSE 'before' END AS period, billing_interval,
+ sum(new_subscriptions) AS billed_subscriptions, round(sum(gross_bookings_usd), 0) AS gross_bookings_usd, min(list_price_usd) AS min_price, max(list_price_usd) AS max_price
+FROM wh_billing GROUP BY 1, 2 ORDER BY 1 DESC, 2;
+SELECT CASE WHEN date::DATE >= DATE '2026-08-10' THEN 'after' ELSE 'before' END AS period,
+ round(sum(gross_bookings_usd) / sum(new_subscriptions), 2) AS bookings_per_subscription, round(sum(gross_bookings_usd) / count(DISTINCT date), 0) AS bookings_per_day
+FROM wh_billing GROUP BY 1 ORDER BY 1 DESC;
 
--- ── H4-study-group-retention ────────────────────────────────
--- Non-early-joiners with ANY raw sub-60 quiz lose all events after
--- day 14 — near-deterministic at organic score mean ~40. Restrict to
--- users with >= 20d possible tenure.
-SELECT early_join, count(*) AS users,
-  round(avg(retained::INT), 4) AS d14_activity,
-  round(avg(discussions), 2) AS discussions_per_user
-FROM per_user_u WHERE first_t <= (SELECT max(t) - INTERVAL 20 DAY FROM ev)
-GROUP BY 1 ORDER BY 1;
--- read: early_join ≈ 1.00 vs ≈ 0.01; discussions ratio ≈ 18x (churn
---       truncation + 60% single-clone bonus)
+-- EVAL Q9 — Paid channel efficiency: spend per signup, 30-day paid conversion, cost per paying subscriber
+WITH sg AS (SELECT ch, count(*) AS signups FROM signups GROUP BY 1),
+sp AS (SELECT acquisition_channel AS ch, sum(spend_usd) AS spend, sum(spend_usd) FILTER (WHERE date::DATE < DATE '2026-09-01') AS spend_to_aug FROM wh_marketing GROUP BY 1),
+c AS (SELECT s.ch, count(*) AS cohort, count(*) FILTER (WHERE EXISTS (SELECT 1 FROM ev e WHERE e.uid = s.uid AND e.event = 'subscription started'
+  AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 30 DAY)) AS buyers FROM signups s WHERE s.t0 < TIMESTAMP '2026-09-01' GROUP BY 1)
+SELECT sg.ch, sg.signups, round(sp.spend, 0) AS spend_usd, round(sp.spend / sg.signups, 2) AS spend_per_signup,
+ c.cohort AS signups_to_aug31, c.buyers, round(c.buyers / c.cohort, 4) AS paid_rate_30d,
+ round(sp.spend_to_aug / nullif(c.buyers, 0), 0) AS spend_per_paying_subscriber
+FROM sg JOIN sp ON sp.ch = sg.ch LEFT JOIN c ON c.ch = sg.ch ORDER BY 1;
+-- platform-reported signups vs Mixpanel signups
+SELECT acquisition_channel, sum(platform_reported_signups) AS platform_reported, (SELECT count(*) FROM signups s WHERE s.ch = m.acquisition_channel) AS mixpanel_signups,
+ round(sum(spend_usd) / sum(platform_reported_signups), 2) AS spend_per_platform_signup
+FROM wh_marketing m GROUP BY 1 ORDER BY 1;
 
+-- EVAL Q10 — The September dip in Android lesson completions
+SELECT t_start::DATE AS day, platform, count(*) AS video_starts, round(avg((t_done IS NOT NULL)::INT), 4) AS completion
+FROM lessons WHERE content_type = 'video' AND platform IS NOT NULL AND t_start >= TIMESTAMP '2026-09-06' AND t_start < TIMESTAMP '2026-09-16'
+GROUP BY 1, 2 ORDER BY 1, 2;
+WITH w AS (SELECT platform, content_type, (t_done IS NOT NULL)::INT AS ok,
+  (t_start >= TIMESTAMP '2026-09-09' AND t_start < TIMESTAMP '2026-09-13') AS incident
+  FROM lessons WHERE platform IS NOT NULL AND t_start >= TIMESTAMP '2026-09-02' AND t_start < TIMESTAMP '2026-09-20')
+SELECT platform, content_type, round(avg(ok) FILTER (WHERE NOT incident), 4) AS completion_around, round(avg(ok) FILTER (WHERE incident), 4) AS completion_incident,
+ count(*) FILTER (WHERE incident) AS starts_incident
+FROM w GROUP BY 1, 2 ORDER BY 1, 2;
 
--- ── H5-hint-dependency ──────────────────────────────────────
--- hint → easy forced 60%; no-hint → hard forced 40%. Organic difficulty
--- pool is NOT uniform (easy 0.36 / med 0.29 / hard 0.35 measured), so
--- expected = knob + (1-knob) × organic share.
-SELECT hint_used, count(*) AS n,
-  round(avg((difficulty = 'easy')::INT), 4) AS p_easy,
-  round(avg((difficulty = 'medium')::INT), 4) AS p_med,
-  round(avg((difficulty = 'hard')::INT), 4) AS p_hard
-FROM ev WHERE event = 'practice problem solved'
-GROUP BY 1 ORDER BY 1;
--- read: p_easy|hint ≈ 0.745; p_hard|no-hint ≈ 0.610
+-- EVAL Q11 — Why did learning activity jump in late August? (weekly lesson completions by segment)
+SELECT date_trunc('week', ev.t)::DATE AS week, p.learner_segment, count(*) AS lesson_completions
+FROM ev JOIN prof p ON p.uid = ev.uid WHERE ev.event = 'lesson completed' AND ev.t >= TIMESTAMP '2026-08-03' AND ev.t < TIMESTAMP '2026-09-14'
+GROUP BY 1, 2 ORDER BY 1, 2;
+WITH x AS (SELECT p.learner_segment AS seg, ev.t >= TIMESTAMP '2026-08-24' AS fall, ev.t::DATE AS d
+  FROM ev JOIN prof p ON p.uid = ev.uid WHERE ev.event = 'lesson completed'),
+g AS (SELECT seg, fall, count(*) / count(DISTINCT d) AS per_day FROM x GROUP BY 1, 2)
+SELECT seg, round(max(per_day) FILTER (WHERE NOT fall), 1) AS before_per_day, round(max(per_day) FILTER (WHERE fall), 1) AS from_aug24_per_day,
+ round(max(per_day) FILTER (WHERE fall) / max(per_day) FILTER (WHERE NOT fall), 3) AS ratio
+FROM g GROUP BY 1 ORDER BY 1;
 
+-- EVAL Q12 — Does watching at 2x hurt quiz performance?
+SELECT p.preferred_playback_speed, count(DISTINCT ev.uid) AS learners, count(*) AS quizzes, round(avg(score_pct), 2) AS avg_score,
+ round(avg(passed::INT), 4) AS pass_rate
+FROM ev JOIN prof p ON p.uid = ev.uid WHERE ev.event = 'quiz submitted' GROUP BY 1 ORDER BY 1;
+-- minutes per video lesson by speed actually played
+SELECT playback_speed, count(*) AS video_completions, round(avg(minutes_spent), 2) AS avg_minutes
+FROM ev WHERE event = 'lesson completed' AND content_type = 'video' GROUP BY 1 ORDER BY 1;
 
--- ── H6-semester-spike ───────────────────────────────────────
--- Days 75-84 from dataset start: quiz started / quiz completed /
--- assignment submitted duplicated at 80% → ~1.8x. Flanks 60-74 + 85-100.
-WITH d AS (
-  SELECT date_diff('day', (SELECT min(t)::DATE FROM ev), t::DATE) AS day_idx,
-         event IN ('quiz started', 'quiz completed', 'assignment submitted') AS spikable
-  FROM ev
-)
-SELECT CASE WHEN day_idx BETWEEN 75 AND 84 THEN 'window'
-            WHEN day_idx BETWEEN 60 AND 74 OR day_idx BETWEEN 85 AND 100 THEN 'flank' END AS zone,
-  round(count(*) FILTER (WHERE spikable) / count(DISTINCT day_idx)::DOUBLE, 1) AS spikable_per_day,
-  round(count(*) FILTER (WHERE NOT spikable) / count(DISTINCT day_idx)::DOUBLE, 1) AS other_per_day
-FROM d WHERE day_idx BETWEEN 60 AND 100 GROUP BY 1 ORDER BY 1;
--- read: spikable window/flank ≈ 1.9; other (placebo) ≈ 1.1 (organic
---       mid-dataset ramp)
+-- EVAL Q13 — null: do employer-sponsored learners finish more courses? (per enrollment, all enrollments and Jun 4-30)
+WITH e AS (SELECT en.*, p.account_type FROM enrollments en JOIN prof p ON p.uid = en.uid)
+SELECT 'all_enrollments' AS cut, account_type, count(*) AS enrollments, round(avg((t_cert IS NOT NULL)::INT), 4) AS completion FROM e GROUP BY 2
+UNION ALL
+SELECT 'june_' || course_format, account_type, count(*), round(avg((t_cert IS NOT NULL)::INT), 4) FROM e WHERE t_enroll < TIMESTAMP '2026-07-01' GROUP BY 1, 2
+ORDER BY 1, 2;
+-- two-proportion z (sponsored minus self-pay) overall and within the June format cuts
+WITH e AS (SELECT en.*, p.account_type FROM enrollments en JOIN prof p ON p.uid = en.uid),
+g AS (SELECT 'all_enrollments' AS cut, account_type, count(*) AS n, avg((t_cert IS NOT NULL)::INT) AS r FROM e GROUP BY 2
+  UNION ALL SELECT 'june_' || course_format, account_type, count(*), avg((t_cert IS NOT NULL)::INT) FROM e WHERE t_enroll < TIMESTAMP '2026-07-01' GROUP BY 1, 2),
+w AS (SELECT cut, max(n) FILTER (WHERE account_type = 'employer_sponsored') AS n1, max(r) FILTER (WHERE account_type = 'employer_sponsored') AS r1,
+  max(n) FILTER (WHERE account_type = 'individual') AS n0, max(r) FILTER (WHERE account_type = 'individual') AS r0 FROM g GROUP BY 1)
+SELECT cut, round(r1 - r0, 4) AS diff, round((r1 - r0) / sqrt(((r1 * n1 + r0 * n0) / (n1 + n0)) * (1 - (r1 * n1 + r0 * n0) / (n1 + n0)) * (1.0 / n1 + 1.0 / n0)), 2) AS z
+FROM w ORDER BY 1;
 
+-- EVAL Q14 — null: did the iOS 6.4.0 release (Aug 18) change lesson completion on iOS? (4 weeks either side)
+WITH w AS (SELECT platform, content_type, (t_done IS NOT NULL)::INT AS ok, t_start >= TIMESTAMP '2026-08-18' AS after
+  FROM lessons WHERE platform IS NOT NULL AND t_start >= TIMESTAMP '2026-07-21' AND t_start < TIMESTAMP '2026-09-15'
+  AND NOT (platform = 'android' AND t_start >= TIMESTAMP '2026-09-09' AND t_start < TIMESTAMP '2026-09-13'))
+SELECT platform, after, count(*) AS starts, round(avg(ok), 4) AS completion FROM w GROUP BY 1, 2 ORDER BY 1, 2;
+WITH w AS (SELECT content_type, (t_done IS NOT NULL)::INT AS ok, t_start >= TIMESTAMP '2026-08-18' AS after
+  FROM lessons WHERE platform = 'ios' AND t_start >= TIMESTAMP '2026-07-21' AND t_start < TIMESTAMP '2026-09-15'),
+g AS (SELECT coalesce(content_type, 'all') AS content_type, count(*) FILTER (WHERE NOT after) AS n0, avg(ok) FILTER (WHERE NOT after) AS r0,
+  count(*) FILTER (WHERE after) AS n1, avg(ok) FILTER (WHERE after) AS r1 FROM w GROUP BY ROLLUP (content_type))
+SELECT content_type, n0, round(r0, 4) AS before, n1, round(r1, 4) AS after,
+ round((r1 - r0) / sqrt(((r1 * n1 + r0 * n0) / (n1 + n0)) * (1 - (r1 * n1 + r0 * n0) / (n1 + n0)) * (1.0 / n1 + 1.0 / n0)), 2) AS z
+FROM g ORDER BY 1;
 
--- ── H7-free-vs-paid ─────────────────────────────────────────
--- Cert-funnel conversion ×0.5 free / ×1.5 paid (funnel-pre), THEN free
--- loses 55% of certs (everything). Compound = 3 × 1/0.45 = 6.67x on the
--- funnel read; certs-per-enrollment lands ~6.0 (diluted by standalone
--- certs). annual vs monthly is the placebo (identical treatment; H9
--- moves cert TIMES, not counts).
-SELECT subscription_status, count(*) AS users,
-  sum(certs) AS certs, sum(enrolls) AS enrolls,
-  round(sum(certs)::DOUBLE / nullif(sum(enrolls), 0), 4) AS certs_per_enroll
-FROM per_user_u GROUP BY 1 ORDER BY 1;
--- read: monthly/free ≈ 6.0; annual/monthly ≈ 1.0-1.1 (placebo)
+-- EVAL Q15 — Weekly active learners (any event except certificate earned), new vs established
+SELECT date_trunc('week', ev.t)::DATE AS week, count(DISTINCT ev.uid) AS active_learners,
+ count(DISTINCT ev.uid) FILTER (WHERE ev.uid IN (SELECT uid FROM signups)) AS new_this_window,
+ count(DISTINCT ev.uid) FILTER (WHERE ev.uid NOT IN (SELECT uid FROM signups)) AS established
+FROM ev WHERE ev.event <> 'certificate earned' GROUP BY 1 ORDER BY 1;
 
+-- EVAL Q16 — Enrollments and completion by course category (enrollments Jun 4-30 for completion)
+SELECT course_category, count(*) AS enrollments, round(count(*) / (SELECT count(*) FROM enrollments), 4) AS share,
+ round(avg((t_cert IS NOT NULL)::INT) FILTER (WHERE t_enroll < TIMESTAMP '2026-07-01'), 4) AS june_completion,
+ round(avg((course_format = 'cohort')::INT), 4) AS cohort_share
+FROM enrollments GROUP BY 1 ORDER BY 2 DESC;
 
--- ── H8-playback-speed ───────────────────────────────────────
--- speed >= 2.0: watch ×0.6 (floor 3); speed <= 1.0: ×1.4 (cap 90, never
--- binds). Mid (1.25/1.5) untreated.
-SELECT CASE WHEN playback_speed >= 2.0 THEN 'fast'
-            WHEN playback_speed <= 1.0 THEN 'slow' ELSE 'mid' END AS bucket,
-  count(*) AS n, round(avg(watch_time_mins), 2) AS avg_watch
-FROM ev WHERE event = 'lecture completed' GROUP BY 1 ORDER BY 1;
--- read: fast/mid ≈ 0.59 (Math.floor costs ~2%); slow/mid ≈ 1.40
+-- EVAL Q17 — Billing vs Mixpanel: new subscriptions and bookings reconciliation
+SELECT b.billing_interval, sum(b.new_subscriptions) AS billed, (SELECT count(*) FROM ev WHERE event = 'subscription started' AND ev.billing_interval = b.billing_interval) AS mixpanel,
+ round(sum(b.gross_bookings_usd), 0) AS gross_bookings_usd
+FROM wh_billing b GROUP BY 1 ORDER BY 1;
+WITH d AS (SELECT b.date::DATE AS d, b.billing_interval, b.new_subscriptions AS billed,
+  (SELECT count(*) FROM ev WHERE event = 'subscription started' AND ev.t::DATE = b.date::DATE AND ev.billing_interval = b.billing_interval) AS mixpanel FROM wh_billing b)
+SELECT count(*) AS interval_days, count(*) FILTER (WHERE billed = mixpanel) AS days_equal, count(*) FILTER (WHERE billed > mixpanel) AS days_billing_higher,
+ count(*) FILTER (WHERE billed < mixpanel) AS days_billing_lower, round(corr(billed, mixpanel), 3) AS corr FROM d;
 
--- +8 quiz boost for 3+-fast-lecture users — read as a DIFFERENCE among
--- retained non-sweet-notes users on non-Sun/Mon quizzes (isolates H8
--- from H3 and H2).
-WITH c AS (SELECT uid, fast_lex >= 3 AS speedy FROM per_user_u
-           WHERE retained AND notes NOT BETWEEN 5 AND 8)
-SELECT c.speedy, count(DISTINCT e.uid) AS users, round(avg(e.score_percent), 2) AS avg_score
-FROM ev e JOIN c ON e.uid = c.uid
-WHERE e.event = 'quiz completed' AND dayofweek(e.t) NOT IN (0, 1)
-GROUP BY 1 ORDER BY 1;
--- read: speedy − rest ≈ +8 to +9 pts
+-- EVAL Q18 — What did the Android playback bug cost in lesson completions?
+WITH w AS (SELECT (t_done IS NOT NULL)::INT AS ok, (t_start >= TIMESTAMP '2026-09-09' AND t_start < TIMESTAMP '2026-09-13') AS incident
+  FROM lessons WHERE content_type = 'video' AND platform = 'android' AND t_start >= TIMESTAMP '2026-09-02' AND t_start < TIMESTAMP '2026-09-20')
+SELECT count(*) FILTER (WHERE incident) AS incident_starts, sum(ok) FILTER (WHERE incident) AS incident_completions,
+ round(avg(ok) FILTER (WHERE NOT incident), 4) AS baseline_completion,
+ round(count(*) FILTER (WHERE incident) * avg(ok) FILTER (WHERE NOT incident) - sum(ok) FILTER (WHERE incident), 0) AS lost_completions,
+ (SELECT count(DISTINCT uid) FROM lessons WHERE content_type = 'video' AND platform = 'android' AND t_start >= TIMESTAMP '2026-09-09' AND t_start < TIMESTAMP '2026-09-13') AS android_learners_affected
+FROM w;
 
+-- EVAL Q19 — open-ended: headline numbers for "what should we worry about"
+SELECT 'self_paced_completion_june' AS metric, round(avg((t_cert IS NOT NULL)::INT), 4) AS value FROM enrollments WHERE t_enroll < TIMESTAMP '2026-07-01' AND course_format = 'self_paced'
+UNION ALL SELECT 'self_paced_share_of_enrollments', round(avg((course_format = 'self_paced')::INT), 4) FROM enrollments
+UNION ALL SELECT 'paid_social_share_of_paid_signups', round((SELECT count(*) FROM signups WHERE ch = 'paid_social') / (SELECT count(*) FROM signups WHERE ch IN ('paid_search', 'paid_social', 'youtube_ads')), 4)
+UNION ALL SELECT 'new_learners_started_lesson_share', round((SELECT count(DISTINCT s.uid) FROM signups s JOIN ev e ON e.uid = s.uid AND e.event = 'lesson started') / (SELECT count(*) FROM signups), 4);
 
--- ── H9-completion-ttc ───────────────────────────────────────
--- Cert gap to nearest preceding enrollment rescaled: annual ×0.5, free
--- ×1.8 (monthly untouched). Cross-event proxy: first-enroll → first-cert
--- per user. The story's authoritative read is the emulator's 2-step
--- timeToConvert at 86.4h (see education.verify.mjs) — this SQL proxy is
--- directional only (first-cert pairing is not Mixpanel's greedy pick).
-WITH fe AS (
-  SELECT uid, min(t) FILTER (WHERE event = 'course enrolled') AS first_enroll,
-         min(t) FILTER (WHERE event = 'certificate earned') AS first_cert
-  FROM ev GROUP BY 1
-)
-SELECT u.subscription_status, count(*) AS converters,
-  round(median(date_diff('minute', fe.first_enroll, fe.first_cert)) / 60.0, 2) AS median_ttc_h
-FROM fe JOIN users u ON fe.uid = u.distinct_id::VARCHAR
-WHERE fe.first_cert IS NOT NULL AND fe.first_cert > fe.first_enroll
-GROUP BY 1 ORDER BY 2;
--- read: annual < monthly < free (direction; magnitudes compress because
---       first-pair TTC spans multiple enrollments)
-
-
--- ── H10-ai-study-buddy ──────────────────────────────────────
--- 'AI Study Buddy' A/B on Social Learning (last 30 days): conversion
--- ×1.4 generative (~1.37 observed after ~0.035 organic pollution), TTC ×0.85.
--- Strict pairing anchors at funnel ENTRY (first 'discussion posted' at/
--- after $experiment_started; the exp→entry lag is arm-dependent) with a
--- 12h conversion window and an interior 'study group joined'.
-WITH exp AS (
-  SELECT uid, t, "Variant name" AS variant FROM ev WHERE event = '$experiment_started'
-),
-a AS (
-  SELECT exp.uid, exp.variant, exp.t,
-    (SELECT min(x.t) FROM ev x WHERE x.uid = exp.uid AND x.event = 'discussion posted'
-     AND x.t >= exp.t - INTERVAL 1 MINUTE) AS s1
-  FROM exp
-),
-c AS (
-  SELECT a.*, (
-      SELECT min(r.t) FROM ev r
-      WHERE r.uid = a.uid AND r.event = 'resource downloaded'
-        AND r.t > a.s1 AND r.t <= a.s1 + INTERVAL 12 HOUR
-        AND EXISTS (SELECT 1 FROM ev s WHERE s.uid = a.uid AND s.event = 'study group joined'
-                    AND s.t > a.s1 AND s.t < r.t)
-    ) AS conv_t
-  FROM a WHERE a.s1 IS NOT NULL AND a.s1 <= a.t + INTERVAL 24 HOUR
-)
-SELECT variant, count(*) AS attempts, count(conv_t) AS conversions,
-  round(count(conv_t)::DOUBLE / count(*), 4) AS conv_rate,
-  round(median(date_diff('minute', s1, conv_t)) / 60.0, 2) AS median_ttc_h
-FROM c GROUP BY 1 ORDER BY 1;
--- read: lift ≈ 1.37 (AI/Control); TTC ratio ≈ 0.85
+-- EVAL Q20 — null: do SSO signups finish onboarding more often? (full onboarding funnel within 7 days)
+WITH f AS (SELECT s.uid, s.signup_method, s.account_type, s.t0,
+  (SELECT min(t) FROM ev e WHERE e.uid = s.uid AND e.event = 'learning goals set' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 7 DAY) AS t1 FROM signups s),
+f2 AS (SELECT f.*, (SELECT min(t) FROM ev e WHERE e.uid = f.uid AND e.event = 'course enrolled' AND e.t >= f.t1 AND e.t < f.t0 + INTERVAL 7 DAY) AS t2 FROM f),
+f3 AS (SELECT f2.*, (SELECT min(t) FROM ev e WHERE e.uid = f2.uid AND e.event = 'lesson started' AND e.t >= f2.t2 AND e.t < f2.t0 + INTERVAL 7 DAY) AS t3 FROM f2),
+g AS (SELECT CASE WHEN signup_method = 'sso' THEN 'sso' ELSE 'other' END AS grp, account_type, (t3 IS NOT NULL)::INT AS ok, signup_method FROM f3)
+SELECT 'by_method' AS cut, signup_method AS grp, count(*) AS signups, round(avg(ok), 4) AS completed FROM g GROUP BY 2
+UNION ALL SELECT 'sso_vs_other', grp, count(*), round(avg(ok), 4) FROM g GROUP BY 2
+UNION ALL SELECT 'sso_vs_other_' || account_type, grp, count(*), round(avg(ok), 4) FROM g GROUP BY 1, 2
+ORDER BY 1, 2;
+-- two-proportion z, SSO minus other signup methods: all signups and within each account type
+WITH f AS (SELECT s.uid, s.signup_method, s.account_type, s.t0,
+  (SELECT min(t) FROM ev e WHERE e.uid = s.uid AND e.event = 'learning goals set' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 7 DAY) AS t1 FROM signups s),
+f2 AS (SELECT f.*, (SELECT min(t) FROM ev e WHERE e.uid = f.uid AND e.event = 'course enrolled' AND e.t >= f.t1 AND e.t < f.t0 + INTERVAL 7 DAY) AS t2 FROM f),
+f3 AS (SELECT f2.*, (SELECT min(t) FROM ev e WHERE e.uid = f2.uid AND e.event = 'lesson started' AND e.t >= f2.t2 AND e.t < f2.t0 + INTERVAL 7 DAY) AS t3 FROM f2),
+g AS (SELECT 'all' AS cut, signup_method = 'sso' AS sso, (t3 IS NOT NULL)::INT AS ok FROM f3
+  UNION ALL SELECT account_type, signup_method = 'sso', (t3 IS NOT NULL)::INT FROM f3),
+w AS (SELECT cut, count(*) FILTER (WHERE sso) AS n1, avg(ok) FILTER (WHERE sso) AS r1, count(*) FILTER (WHERE NOT sso) AS n0, avg(ok) FILTER (WHERE NOT sso) AS r0 FROM g GROUP BY 1)
+SELECT cut, n1 AS sso_signups, round(r1, 4) AS sso, n0 AS other_signups, round(r0, 4) AS other,
+ round((r1 - r0) / sqrt(((r1 * n1 + r0 * n0) / (n1 + n0)) * (1 - (r1 * n1 + r0 * n0) / (n1 + n0)) * (1.0 / n1 + 1.0 / n0)), 2) AS z
+FROM w ORDER BY 1;
