@@ -6,8 +6,8 @@ This folder is the internal analytics wiki for **Ticketloop**, a help desk produ
 
 - **Product:** the Ticketloop web app, used by support agents, team leads, and admins at our customers. Tickets arrive from our customers' own customers by email, chat, web form, or API; Ticketloop routes each ticket to an agent, who replies, escalates if needed, and resolves it. Customers can reopen a ticket and can answer a satisfaction (CSAT) survey. New workspaces start with a 14-day trial.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early June through the end of September and the first day of October.
-- **Scale:** about 10,000 users were active in the window. About 4,570 of them signed up for a trial during the window; the rest were already Ticketloop users on June 4. The project holds about 860,000 events, including about 100,000 tickets assigned to agents.
-- **Customers:** about 370 customer companies with support teams of 2 to 60 agents, plus several thousand one-person workspaces (Free plan users, trials, and small businesses that bought after a trial).
+- **Scale:** about 10,000 users were active in the window. About 4,500 of them signed up for a trial during the window; the rest were already Ticketloop users on June 4. The project holds about 840,000 events, including about 98,000 tickets assigned to agents.
+- **Customers:** about 370 customer companies with several agents each, plus several thousand one-person workspaces (Free plan users, trials, and small businesses that bought after a trial). Most customer teams route only part of their support volume through Ticketloop (see 01-business.md), so the project holds only the tickets that reach Ticketloop, not each team's full workload.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. Most users work in the Americas or Europe, so a US working day runs from about 13:00 to 01:00 UTC.
 
 ## The other files

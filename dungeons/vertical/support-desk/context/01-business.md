@@ -13,6 +13,7 @@ Revenue comes from per-seat subscriptions. At the start of the window, recurring
 - **Routing.** Ticketloop assigns each ticket to one agent. Until July the only method was round robin (the next available agent). See 02-timeline.md for the Skills Routing test.
 - **Work the ticket.** The agent sends a first reply, may exchange more replies, may add internal notes, and may escalate the ticket to a second- or third-tier team. When the issue is fixed the agent resolves the ticket. If the customer writes back after that, the ticket is reopened, answered again, and resolved again.
 - **Satisfaction.** After a ticket is resolved, the customer gets a one-question CSAT survey (1 to 5 stars). About a third of customers answer.
+- **Part of the volume.** Most customer companies are still moving to Ticketloop from an older help desk or a shared inbox. They usually start with one brand, one product line, or one queue (for example billing questions or VIP customers) and keep the rest elsewhere until the migration is done. Every agent on the team gets a seat, but only the tickets routed through Ticketloop appear in our data, so tickets per agent in Ticketloop are far below an agent's full workload.
 - **Agent tools.** Macros are saved replies that an agent can insert with one click. The knowledge base holds help articles: agents read them while answering, and admins and team leads publish them. Automation rules act on tickets automatically (for example, tag tickets that mention a refund). Integrations connect Ticketloop to Slack, Shopify, Jira, Salesforce, and Stripe. Queue views (my open tickets, unassigned, urgent, all open, SLA at risk) are where agents start their work; reports show volume, first response time, CSAT, SLA compliance, and agent performance.
 - **Reply Assist.** From July 21, Growth and Enterprise customers can have an AI write a draft reply that the agent edits and sends (see 02-timeline.md). A reply sent from a draft carries `reply_method = ai_draft`.
 
@@ -39,7 +40,7 @@ All plans include automation rules and integrations.
 - **Region** (`region`): `americas`, `emea`, `apac`, by the company's headquarters. About 57% of users work for Americas companies.
 - **Roles** (`role`): `agent` (answers tickets), `team_lead` (runs a queue, publishes articles, reads reports), `admin` (sets up the workspace, integrations, and automation rules). The owner of a one-person workspace is its admin and also answers its tickets.
 - **Email provider** (`email_provider`): the company's mail host, `google_workspace`, `microsoft_365`, or `other`.
-- **Established vs new.** About 54% of active users were Ticketloop users before June 4: agents at customer companies, Free users, and owners of trials that started in late May. New trial signups arrive steadily, about 265 a week.
+- **Established vs new.** About 55% of active users were Ticketloop users before June 4: agents at customer companies, Free users, and owners of trials that started in late May. New trial signups arrive steadily, about 260 a week.
 
 ## How new workspaces find us
 

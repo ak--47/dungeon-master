@@ -9,7 +9,7 @@
 --
 -- All times are UTC. Window: 2026-06-04 00:00 to 2026-10-01 23:59:59.
 -- Timeline: Skills Routing test 2026-07-08; Reply Assist 2026-07-21; back-to-school
--- 2026-08-17 to 2026-09-13; Growth price change 2026-08-18; email ingestion
+-- season (North America and Europe) 2026-08-17 to 2026-09-13; Growth price change 2026-08-18; email ingestion
 -- incident 2026-08-26 to 2026-08-27 (backlog reaches agents 2026-08-28);
 -- US holidays 2026-07-03 and 2026-09-07.
 
@@ -185,13 +185,13 @@ SELECT CASE WHEN first_response_mins <= 60 THEN '1 ≤ 60 min' WHEN first_respon
 FROM ev WHERE event = 'csat received' GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- STORY H8-back-to-school-surge — education tickets ×1.8 from 2026-08-17 to 2026-09-13
+-- STORY H8-back-to-school-surge — Americas + EMEA education tickets ×1.8 from 2026-08-17 to 2026-09-13
 -- ─────────────────────────────────────────────────────────────────────────
--- workspaces that existed before the window; season (4 weeks) vs the 8 weeks before, weekly averages
+-- Americas and EMEA workspaces that existed before the window; season (4 weeks) vs the 8 weeks before, weekly averages
 WITH w AS (SELECT CASE WHEN k.t0 >= TIMESTAMP '2026-08-17' AND k.t0 < TIMESTAMP '2026-09-14' THEN 'season'
     WHEN k.t0 >= TIMESTAMP '2026-06-22' AND k.t0 < TIMESTAMP '2026-08-17' THEN 'before' END AS per,
   p.industry = 'education' AS education
-  FROM tickets k JOIN prof p ON p.uid = k.uid WHERE p.customer_since < DATE '2026-06-04'),
+  FROM tickets k JOIN prof p ON p.uid = k.uid WHERE p.customer_since < DATE '2026-06-04' AND p.region IN ('americas', 'emea')),
 g AS (SELECT education, count(*) FILTER (WHERE per = 'season') / 4.0 AS season_per_week, count(*) FILTER (WHERE per = 'before') / 8.0 AS before_per_week FROM w GROUP BY 1)
 SELECT education, round(season_per_week, 1) AS season_per_week, round(before_per_week, 1) AS before_per_week, round(season_per_week / before_per_week, 4) AS season_ratio,
  round(season_ratio / max(season_ratio) FILTER (WHERE NOT education) OVER (), 4) AS ratio_vs_other_industries
@@ -301,8 +301,12 @@ WITH b AS (SELECT count(*) FILTER (WHERE channel = 'email')::DOUBLE / count(*) F
 SELECT d, email, round((SELECT r FROM b) * other, 0) AS expected_email_at_baseline_mix, round(email - (SELECT r FROM b) * other, 0) AS difference
 FROM (SELECT t0::DATE AS d, count(*) FILTER (WHERE channel = 'email') AS email, count(*) FILTER (WHERE channel <> 'email') AS other
   FROM tickets WHERE t0::DATE IN (DATE '2026-08-26', DATE '2026-08-27', DATE '2026-08-28') GROUP BY 1) ORDER BY 1;
-SELECT date, tickets_ingested, tickets_delayed_over_1h, p95_ingest_latency_sec, ingestion_status
+SELECT date, tickets_ingested, tickets_auto_closed, tickets_delayed_over_1h, p95_ingest_latency_sec, ingestion_status
 FROM wh_inbound WHERE channel = 'email' AND date BETWEEN DATE '2026-08-24' AND DATE '2026-08-30' ORDER BY date;
+-- usual email auto-closed volume: weekday and weekend means over the baseline days (Aug 12-25, Aug 29 - Sep 11)
+SELECT CASE WHEN dayofweek(date::DATE) IN (0, 6) THEN 'weekend' ELSE 'weekday' END AS day_type, round(avg(tickets_auto_closed), 1) AS avg_auto_closed, count(*) AS days
+FROM wh_inbound WHERE channel = 'email' AND date::DATE BETWEEN DATE '2026-08-12' AND DATE '2026-09-11' AND date::DATE NOT IN (DATE '2026-08-26', DATE '2026-08-27', DATE '2026-08-28')
+GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q8 — first response time vs CSAT
@@ -316,15 +320,19 @@ SELECT count(*) AS answers, round(avg((score >= 4)::INT), 4) AS positive_share, 
 -- EVAL Q9 — the late-August ticket jump: weekly tickets by industry
 -- ─────────────────────────────────────────────────────────────────────────
 SELECT date_trunc('week', k.t0)::DATE AS week, count(*) AS tickets, count(*) FILTER (WHERE p.industry = 'education') AS education,
+ count(*) FILTER (WHERE p.industry = 'education' AND p.region IN ('americas', 'emea')) AS education_americas_emea,
+ count(*) FILTER (WHERE p.industry = 'education' AND p.region = 'apac') AS education_apac,
  count(*) FILTER (WHERE p.industry <> 'education') AS other_industries
 FROM tickets k JOIN prof p ON p.uid = k.uid WHERE k.t0 >= TIMESTAMP '2026-07-13' AND k.t0 < TIMESTAMP '2026-09-28' GROUP BY 1 ORDER BY 1;
--- season vs the 8 weeks before, workspaces that existed before the window (same as STORY H8), by industry
+-- season vs the 8 weeks before, workspaces that existed before the window, by industry and region group
+-- (the Americas + EMEA rows match STORY H8)
 WITH w AS (SELECT CASE WHEN k.t0 >= TIMESTAMP '2026-08-17' AND k.t0 < TIMESTAMP '2026-09-14' THEN 'season'
-    WHEN k.t0 >= TIMESTAMP '2026-06-22' AND k.t0 < TIMESTAMP '2026-08-17' THEN 'before' END AS per, p.industry
+    WHEN k.t0 >= TIMESTAMP '2026-06-22' AND k.t0 < TIMESTAMP '2026-08-17' THEN 'before' END AS per, p.industry,
+  CASE WHEN p.region = 'apac' THEN 'apac' ELSE 'americas + emea' END AS region_group
   FROM tickets k JOIN prof p ON p.uid = k.uid WHERE p.customer_since < DATE '2026-06-04')
-SELECT industry, round(count(*) FILTER (WHERE per = 'season') / 4.0, 1) AS season_per_week, round(count(*) FILTER (WHERE per = 'before') / 8.0, 1) AS before_per_week,
+SELECT region_group, industry, round(count(*) FILTER (WHERE per = 'season') / 4.0, 1) AS season_per_week, round(count(*) FILTER (WHERE per = 'before') / 8.0, 1) AS before_per_week,
  round(season_per_week / before_per_week, 3) AS ratio
-FROM w WHERE per IS NOT NULL GROUP BY 1 ORDER BY 4 DESC;
+FROM w WHERE per IS NOT NULL GROUP BY 1, 2 ORDER BY 1, 5 DESC;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q10 — early behavior that predicts new workspaces staying (macros in the first 14 days)
@@ -402,6 +410,15 @@ SELECT max(n) FILTER (WHERE variant = 'Skills Routing') AS skills_accounts, max(
  round((max(m) FILTER (WHERE variant = 'Skills Routing') - max(m) FILTER (WHERE variant = 'Control'))
   / sqrt(max(v / n) FILTER (WHERE variant = 'Skills Routing') + max(v / n) FILTER (WHERE variant = 'Control')), 2) AS welch_t
 FROM s;
+-- account level by company size (the randomization unit; 23 ticket-level splits above expect about one |z| near 2 by chance)
+WITH a AS (SELECT p.company_id, any_value(p.company_size) AS company_size, any_value(p.variant) AS variant, avg(k.escalated::INT) AS r
+  FROM tickets k JOIN prof p ON p.uid = k.uid WHERE k.t0 >= TIMESTAMP '2026-07-08' AND p.variant IS NOT NULL GROUP BY 1),
+s AS (SELECT company_size, variant, count(*) AS n, avg(r) AS m, var_samp(r) AS v FROM a GROUP BY 1, 2)
+SELECT company_size, max(n) FILTER (WHERE variant = 'Skills Routing') AS skills_accounts, max(n) FILTER (WHERE variant = 'Control') AS control_accounts,
+ round(max(m) FILTER (WHERE variant = 'Skills Routing'), 4) AS skills_mean, round(max(m) FILTER (WHERE variant = 'Control'), 4) AS control_mean,
+ round((max(m) FILTER (WHERE variant = 'Skills Routing') - max(m) FILTER (WHERE variant = 'Control'))
+  / sqrt(max(v / n) FILTER (WHERE variant = 'Skills Routing') + max(v / n) FILTER (WHERE variant = 'Control')), 2) AS welch_t
+FROM s GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q14 — null: once set up, do Microsoft 365 trials convert to paid any worse?
@@ -428,7 +445,7 @@ SELECT CASE WHEN ch IN ('google_ads', 'capterra', 'linkedin_ads') THEN 'paid cha
 FROM setup_paid GROUP BY 1 ORDER BY 1;
 SELECT x.provider_group, count(*) AS buyers, round(avg((p.plan = 'growth')::INT), 4) AS growth_share
 FROM setup_paid x JOIN first_purchase p ON p.uid = x.uid GROUP BY 1 ORDER BY 1;
--- sub-splits by acquisition channel and by region (9 splits; one |z| near 2 has about a 1-in-4 chance under the null)
+-- sub-splits by acquisition channel and by region (9 small splits; under the null one |z| near 2 is not rare)
 WITH l AS (SELECT 'channel' AS dim, x.ch AS val, x.provider_group, x.paid FROM setup_paid x
   UNION ALL SELECT 'region', p.region, x.provider_group, x.paid FROM setup_paid x JOIN prof p ON p.uid = x.uid),
 g AS (SELECT dim, val, avg(paid::INT) AS p0,
@@ -508,5 +525,6 @@ WITH m AS (SELECT t0::DATE AS d, channel, count(*) AS assigned FROM tickets GROU
 w AS (SELECT date::DATE AS d, channel, tickets_ingested, tickets_auto_closed, tickets_merged FROM wh_inbound)
 SELECT w.channel, sum(w.tickets_ingested) AS ingested, sum(w.tickets_auto_closed) AS auto_closed, sum(w.tickets_merged) AS merged, sum(m.assigned) AS mixpanel_assigned,
  round(sum(m.assigned)::DOUBLE / sum(w.tickets_ingested), 4) AS assigned_share_of_ingested,
+ round((sum(w.tickets_ingested) - sum(m.assigned)) / 120.0, 1) AS not_assigned_per_day,
  round(corr(w.tickets_ingested, m.assigned), 3) AS daily_corr
 FROM w LEFT JOIN m ON m.d = w.d AND m.channel = w.channel GROUP BY 1 ORDER BY 1;

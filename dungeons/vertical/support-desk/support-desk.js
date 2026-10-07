@@ -20,11 +20,15 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             subscriptions from 2026-08-18), Enterprise ($89, sales-led). New
  *             workspaces start a 14-day trial. Reply Assist (AI reply drafts)
  *             launches 2026-07-21 for Growth and Enterprise.
- * SCALE:      10,000 users (≈4,570 trial signups inside the window), ~0.86M
- *             events, 120 days (2026-06-04 → 2026-10-01, UTC); ≈370 customer
- *             companies with several agents (2-60 each, ≈4,550 users) plus
- *             single-agent workspaces: Free (≈1,000 before the window), trials
- *             in flight on June 4 (≈300), and one new workspace per trial signup
+ * SCALE:      10,000 users (≈4,510 trial signups inside the window), ~0.84M
+ *             events, 120 days (2026-06-04 → 2026-10-01, UTC); 374 customer
+ *             companies with several agents (2-60 each, ≈4,590 users) plus
+ *             single-agent workspaces: Free (≈590 before the window), trials
+ *             in flight on June 4 (≈300), and one new workspace per trial signup.
+ *             Tickets per agent are far below a full workload: the guides say
+ *             most customer teams route only part of their volume (one brand
+ *             or queue) through Ticketloop while they migrate (owner decision
+ *             forced by the fixed 1.2 events/user/day scale)
  * CORE LOOP:  ticket assigned → reply sent → ticket resolved (→ csat received)
  * VALUE MOMENT: ticket resolved
  *
@@ -121,10 +125,15 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   rarely.
  * - US holidays (Jul 3 observed, Sep 7): Americas companies get 60% fewer
  *   tickets and their agents skip 70% of their own actions.
+ * - The hook re-places $experiment_started 1 s before the agent's first
+ *   rebuilt ticket after the test start (the engine's marker sits before the
+ *   engine's own funnel step, which the ticket rebuild moves or drops).
  * - retentionCurve shapes trial signups' activity; established users are flat.
  * - Warehouse drift: inbound_channel_daily counts every ingested ticket,
- *   including spam and auto-closed notifications that never reach an agent
- *   and tickets merged into another; subscription_billing_daily adds a few
+ *   including tickets closed automatically (auto-replies and notifications
+ *   move with the day's traffic; spam follows the trailing 7-day traffic
+ *   level with ±50% day noise and occasional 2-4x spam waves) and tickets
+ *   merged into another; subscription_billing_daily adds a few
  *   invoice purchases Mixpanel never received and pre-invoice seat edits;
  *   paid spend is half a paced budget (weekday shape, never zero) and half
  *   bid x the day's delivered signups, with seeded day noise. During the
@@ -162,7 +171,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   high 0.6x, normal 1x, low 1.5x.
  * MIXPANEL: Funnels, ticket assigned → ticket resolved, Totals, hold
  *   ticket_id constant, 14-day window, breakdown priority, median time to
- *   convert (or Insights, ticket resolved, median resolution_mins by priority).
+ *   convert. Insights, ticket resolved, median resolution_mins by priority
+ *   reads slightly higher: it includes the second resolution of reopened
+ *   tickets and has no 14-day window.
  * REAL WORLD: SLA policies put urgent tickets at the top of every queue.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -235,13 +246,15 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * H8. BACK-TO-SCHOOL SURGE FOR EDUCATION CUSTOMERS (everything)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: 2026-08-17 to 2026-09-13 education companies receive 1.8x their
- *   usual tickets on average: extra same-day tickets follow a half-sine over
- *   the four weeks (near 1x at the edges, about 2.25x in the middle). Other
+ * PATTERN: 2026-08-17 to 2026-09-13 (the back-to-school season in North
+ *   America and Europe) education companies in the Americas and EMEA receive
+ *   1.8x their usual tickets on average: extra same-day tickets follow a
+ *   half-sine over the four weeks (near 1x at the edges, about 2.25x in the
+ *   middle). APAC education companies (other school calendars) and other
  *   industries are unchanged.
  * MIXPANEL: Insights, ticket assigned, weekly, breakdown user property
- *   industry, filter customer_since before 2026-06-04; season vs the 8
- *   weeks before.
+ *   industry, filter user property region in (americas, emea) and
+ *   customer_since before 2026-06-04; season vs the 8 weeks before.
  * REAL WORLD: term start brings password resets, enrollment, and billing.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -275,47 +288,50 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-support-desk, 2026-10-07, full
- * fidelity, 10,000 users, 857,032 events, 98,795 tickets assigned)
+ * fidelity, 10,000 users, 841,092 events, 97,528 tickets assigned)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                           | Derivation              | Expected | Measured
  * -----|--------------------------------------------------|-------------------------|----------|---------
- * H1   | median FRT, AI draft / other, Growth+Ent post-launch | AI_FRT_MULT          | 0.50     | 0.495 (54.1 vs 109.2 min)
- * H1   | AI share of eligible first replies after the ramp | 0.5 x mean use 0.8      | 0.40     | 0.410
+ * H1   | median FRT, AI draft / other, Growth+Ent post-launch | AI_FRT_MULT          | 0.50     | 0.510 (54.6 vs 107.1 min)
+ * H1   | AI share of eligible first replies after the ramp | 0.5 x mean use 0.8      | 0.40     | 0.402
  * H1   | AI drafts before launch or off Growth/Enterprise | exact purity            | 0        | 0
- * H2   | median assigned → resolved, urgent / normal      | PRIORITY_MULT.urgent    | 0.30     | 0.299 (6.0 vs 20.0 h)
- * H2   | median assigned → resolved, low / normal         | PRIORITY_MULT.low       | 1.50     | 1.514 (30.3 vs 20.0 h)
- * H3   | 7-day setup completion, Microsoft 365 / others   | 47 / 86                 | 0.547    | 0.554 (38.2% vs 69.0%)
- * H3   | 7-day inbox connected, Microsoft 365 / others    | 47 / 86                 | 0.547    | 0.570 (48.9% vs 85.8%)
- * H4   | spend per signup, Capterra / Google Ads          | 40 / 80                 | 0.50     | 0.497 ($40.06 vs $80.54)
- * H4   | 30-day paid rate, Capterra / LinkedIn            | BUY_KEEP 0.4 / 1.0      | 0.40     | 0.376 (16.3% vs 43.3%)
- * H5   | median FRT, Skills Routing / Control             | ROUTING_FRT_MULT        | 0.70     | 0.695 (76.9 vs 110.7 min)
- * H5   | reopen rate, Skills Routing / Control            | ROUTING_REOPEN_MULT     | 0.60     | 0.590 (7.2% vs 12.2%)
- * H5   | Skills Routing share of exposed users            | size-paired accounts    | 0.50     | 0.498 (187 vs 187 accounts)
- * H6   | email/other tickets, degraded days / ±14 days    | 1 − INCIDENT_DELAY_SHARE| 0.30     | 0.303 (0.249 vs 0.822)
+ * H2   | median assigned → resolved, urgent / normal      | PRIORITY_MULT.urgent    | 0.30     | 0.302 (6.1 vs 20.2 h)
+ * H2   | median assigned → resolved, low / normal         | PRIORITY_MULT.low       | 1.50     | 1.488 (30.1 vs 20.2 h)
+ * H3   | 7-day setup completion, Microsoft 365 / others   | 47 / 86                 | 0.547    | 0.560 (38.0% vs 67.8%)
+ * H3   | 7-day inbox connected, Microsoft 365 / others    | 47 / 86                 | 0.547    | 0.562 (48.4% vs 86.1%)
+ * H4   | spend per signup, Capterra / Google Ads          | 40 / 80                 | 0.50     | 0.496 ($40.17 vs $80.96)
+ * H4   | 30-day paid rate, Capterra / LinkedIn            | BUY_KEEP 0.4 / 1.0      | 0.40     | 0.371 (17.0% vs 46.0%)
+ * H5   | median FRT, Skills Routing / Control             | ROUTING_FRT_MULT        | 0.70     | 0.704 (77.3 vs 109.7 min)
+ * H5   | reopen rate, Skills Routing / Control            | ROUTING_REOPEN_MULT     | 0.60     | 0.582 (7.0% vs 12.0%)
+ * H5   | Skills Routing share of exposed users            | size-paired accounts    | 0.50     | 0.499 (187 vs 187 accounts)
+ * H6   | email/other tickets, degraded days / ±14 days    | 1 − INCIDENT_DELAY_SHARE| 0.30     | 0.295 (0.244 vs 0.826)
  * H6   | warehouse email rows with ingestion degraded     | exact                   | 2        | 2
- * H7   | positive CSAT, FRT > 8 h / FRT ≤ 60 min          | 0.60 / 0.92             | 0.652    | 0.656 (60.6% vs 92.4%)
- * H8   | education vs other tickets, season / 8 wks before| BTS_MULT (mean)         | 1.80     | 1.765
- * H9   | D28-41 retention, under 3 / 3+ macros            | NB counts x logistic    | 0.435    | 0.435 (27.5% vs 63.2%)
- * H10  | Growth share of new subscriptions, after / before| 1 − GROWTH_DOWNGRADE_AFTER | 0.60  | 0.691 (63.5% → 43.9%), STRONG ([0.3, 0.8])
+ * H7   | positive CSAT, FRT > 8 h / FRT ≤ 60 min          | 0.60 / 0.92             | 0.652    | 0.670 (61.7% vs 92.1%)
+ * H8   | education vs other tickets, Americas+EMEA, season / 8 wks before | BTS_MULT (mean) | 1.80 | 1.728
+ * H9   | D28-41 retention, under 3 / 3+ macros            | NB counts x logistic    | 0.435    | 0.427 (27.8% vs 65.1%)
+ * H10  | Growth share of new subscriptions, after / before| 1 − GROWTH_DOWNGRADE_AFTER | 0.60  | 0.594 (64.6% → 38.4%)
  * ═════════════════════════════════════════════════════════════════════════
  *
- * Verdicts: 9 NAILED, 1 STRONG. H6 and H10 use a knob-centred custom assert:
+ * Verdicts: 10 NAILED. H6 and H10 use a knob-centred custom assert:
  * NAILED at the knob ±10%, STRONG between half the knob ratio (a sanity lower
  * bound, so an overshoot cannot pass) and the half-effect floor. H10 rests on
- * about 490 post-change buyers (salted plan draws), so it lands STRONG. Noise
- * notes: H8 rests on about 40 education companies (the weekly education/other
- * ratio moves about ±7% outside the season). H9 compares 1,279 vs 881
+ * about 480 post-change buyers (salted plan draws). Noise notes: H8 rests on
+ * 38 Americas and EMEA education customer accounts plus about 90
+ * single-agent workspaces (the weekly education/other
+ * ratio moves about ±7% outside the season). H9 compares 1,255 vs 899
  * workspaces (ratio SE about 5%); non-dark retention is flat across macro
  * counts (about 0.70-0.77), so the read is the dark curve. H5 clusters by
  * account (374 accounts), so its ratios move a few percent between draws.
- * H4's paid-rate read rests on about 120 Capterra and 210 LinkedIn buyers.
- * Honest nulls (eval): escalation rate by Skills Routing arm (7.55% vs 7.50%,
- * z = 0.21; every priority, channel, plan, size, category, and region split
- * |z| ≤ 1.0; account-level Welch t = -0.13) and 30-day paid conversion of
- * Microsoft 365 vs other workspaces after setup (37.4% vs 38.7%, z = -0.55;
- * one small region cell, APAC, reads z = -2.17 and the eval grading calls it
- * noise). Not engineered: weekend arrivals wait about 1.8x longer for a first
- * reply (WEEKEND_FRT_MULT, realism), and chat replies are faster.
+ * H4's paid-rate read rests on about 125 Capterra and 225 LinkedIn buyers.
+ * Honest nulls (eval): escalation rate by Skills Routing arm (7.41% vs 7.31%,
+ * z = 0.43; plain per-ticket salt, no salt search; of 23 ticket-level splits
+ * one reads |z| > 2: large companies 7.9% vs 7.0%, z = 2.19, account-level
+ * t = 2.18 on 37 accounts, in the direction opposite to the prompt's
+ * hypothesis; the eval grading treats it as the expected chance split) and
+ * 30-day paid conversion of Microsoft 365 vs other workspaces after setup
+ * (37.9% vs 39.7%, z = -0.78; every channel and region split |z| ≤ 1.54).
+ * Not engineered: weekend arrivals wait about 1.8x longer for a first reply
+ * (WEEKEND_FRT_MULT, realism), and chat replies are faster.
  */
 
 // ── SCALE ──
@@ -331,7 +347,7 @@ const chance = u.initChance(SEED);
 // ── TIMELINE (shared by hooks, stories, SQL, warehouse columns, guides) ──
 const ROUTING_START = "2026-07-08T00:00:00Z";        // "Skills Routing" A/B test starts
 const AI_LAUNCH = "2026-07-21T00:00:00Z";            // Reply Assist (AI drafts) for Growth + Enterprise
-const BTS_START = "2026-08-17T00:00:00Z";            // US back-to-school period starts
+const BTS_START = "2026-08-17T00:00:00Z";            // back-to-school season (North America and Europe) starts
 const BTS_END = "2026-09-14T00:00:00Z";              // exclusive (4 weeks: Aug 17 - Sep 13)
 const GROWTH_PRICE_CHANGE = "2026-08-18T00:00:00Z";  // Growth $39 → $49 per agent per month
 const EMAIL_INCIDENT_START = "2026-08-26T00:00:00Z"; // email ingestion incident starts
@@ -365,7 +381,7 @@ const RESOLVE_SIGMA = 0.9;
 const RESOLVE_MAX_H = 20 * 24;
 const RESOLVE_SHARE = 0.93;         // share of tickets resolved (the rest stay pending)
 const ESCALATE_SHARE = { urgent: 0.18, high: 0.14, normal: 0.05, low: 0.02 };
-const ESCALATE_SALT = "escalate-604"; // per-ticket escalation draw (hashFloat only, so it never shifts the seeded stream); salt picked so the Skills Routing arms match in every priority, channel, plan, size, category, and region split (honest null, Q13)
+const ESCALATE_SALT = "escalate";   // per-ticket escalation draw (hashFloat only, so it never shifts the seeded stream); independent of the routing arm (honest null, Q13)
 const FOLLOWUP_WEIGHTS = { 0: 35, 1: 45, 2: 20 };
 const REOPEN_BASE = 0.12;           // share of resolved tickets the customer reopens
 const CSAT_RESPONSE = 0.3;          // share of final resolutions that get a CSAT answer
@@ -436,7 +452,14 @@ const ROUTING_REOPEN_MULT = 0.6;
 const INCIDENT_CHANNEL = "email";
 const INCIDENT_DELAY_SHARE = 0.7;   // share of email tickets stuck until the fix
 const BACKLOG_FLUSH_H = 10;         // stuck tickets reach agents in the first 10 hours of Aug 28
-const AUTO_TICKETS_PER_DAY = { email: 180, chat: 30, web_form: 50, api: 50 }; // spam / auto-closed tickets never assigned (±60% by day)
+// tickets closed automatically and never assigned: auto-replies and notifications
+// move with the day's traffic; spam follows the number of connected inboxes (the
+// trailing 7-day traffic level), with no weekday shape
+const AUTO_REPLY_SHARE = { email: 0.15, chat: 0.05, web_form: 0.08, api: 0.45 };
+const SPAM_SHARE = { email: 0.3, chat: 0.1, web_form: 0.17, api: 0.15 };
+const AUTO_NOISE = 0.25;            // ± day-level spread of the auto-reply share
+const SPAM_NOISE = 0.5;             // ± day-level spread of spam
+const SPAM_WAVE_SHARE = 0.1;        // channel-days hit by a spam wave (2-4x the usual spam)
 const INCIDENT_DAYS = Array.from({ length: Math.round((ms(EMAIL_INCIDENT_END) - ms(EMAIL_INCIDENT_START)) / DAY_MS) }, (_, i) => dayjs.utc(EMAIL_INCIDENT_START).add(i, "day").format("YYYY-MM-DD"));
 const BACKLOG_DAY = EMAIL_INCIDENT_END.slice(0, 10);
 const INTAKE_DRIFT = 0.04;          // ± day-level gap between routed tickets and intake (manual tickets, deletions)
@@ -450,6 +473,7 @@ const CSAT_POS_SLOW = 0.6;
 
 // H8 back-to-school surge
 const BTS_INDUSTRY = "education";
+const BTS_REGIONS = ["americas", "emea"]; // northern-hemisphere school year (US mid-August, Europe late August - early September); APAC terms run on other calendars
 const BTS_MULT = 1.8;
 
 // H9 macros in the first two weeks
@@ -863,9 +887,9 @@ function handleEverything(events, meta) {
 			slots.push(fresh(day * DAY_MS + timeOfDay(base[chance.integer({ min: 0, max: base.length - 1 })])));
 		}
 	}
-	// H8: education companies get extra same-day tickets during the season,
-	// rising and falling over the four weeks (mean BTS_MULT)
-	if (co.industry === BTS_INDUSTRY && base.length) {
+	// H8: Americas and EMEA education companies get extra same-day tickets during
+	// the back-to-school season, rising and falling over the four weeks (mean BTS_MULT)
+	if (co.industry === BTS_INDUSTRY && BTS_REGIONS.includes(co.region) && base.length) {
 		for (const s of base) {
 			if (s.t0 < ms(BTS_START) || s.t0 >= ms(BTS_END)) continue;
 			const x = btsExtra(s.t0);
@@ -992,13 +1016,14 @@ function handleEverything(events, meta) {
 	const enginePricing = events.filter((e) => e.event === "pricing page viewed");
 	if (!RUN.pricingTemplate && enginePricing.length) RUN.pricingTemplate = { ...enginePricing[0] };
 	const pricingViews = [];
-	if (isTrial && RUN.pricingTemplate) {
-		const own = signup || events.find((e) => e.device_id) || null;
+	const pricingOwn = signup || events.find((e) => e.device_id) || null;
+	if (isTrial && RUN.pricingTemplate && pricingOwn?.device_id) {
+		const own = pricingOwn;
 		const until = buyAt ?? trialEnd + BUY_GRACE_DAYS * DAY_MS;
 		const n = Number(pickWeighted(PRICING_VIEW_WEIGHTS, salt(uid, "pricing-n")));
 		const view = (t, k) => {
 			const v = cloneEvent(RUN.pricingTemplate, { time: iso(t), user_id: uid });
-			for (const f of DEVICE_FIELDS) { if (own && f in own) v[f] = own[f]; else delete v[f]; }
+			for (const f of DEVICE_FIELDS) { if (f in own) v[f] = own[f]; else delete v[f]; }
 			v.plan_viewed = pickWeighted(PLAN_VIEWED_WEIGHTS, salt(uid, `pricing-plan|${k}`));
 			return v;
 		};
@@ -1049,6 +1074,9 @@ function handleEverything(events, meta) {
 }
 
 // warehouse rows: exogenous business facts layered on event-derived volumes
+// email incident days → stuck tickets / stuck spam (keyed by date); per channel, the
+// last 7 days' arrivals (rows of one channel arrive in date order; reset on the first day)
+const WH_STATE = { stuck: new Map(), autoStuck: new Map(), arrivals: new Map() };
 function handleWarehouse(row, meta) {
 	if (meta.isBackfill) return row;
 	if (meta.metricName === "paid_marketing_daily") {
@@ -1062,15 +1090,36 @@ function handleWarehouse(row, meta) {
 	}
 	if (meta.metricName === "inbound_channel_daily") {
 		const k = `${row.date}|${row.channel}`;
-		const merged = Math.round(row.tickets_ingested * MERGED_SHARE * jitter(`merged|${k}`, 1));
-		// spam and notifications arrive every day; during the email incident the
-		// stuck share of them is processed with the backlog on the fix day
-		const autoArrived = (date) => Math.round((AUTO_TICKETS_PER_DAY[row.channel] ?? 0) * jitter(`auto|${date}|${row.channel}`, 0.6));
-		const autoStuck = (date) => Math.round(autoArrived(date) * INCIDENT_DELAY_SHARE * jitter(`auto-stuck|${date}`, 0.1));
-		let auto = autoArrived(row.date);
-		if (row.channel === INCIDENT_CHANNEL && INCIDENT_DAYS.includes(row.date)) auto -= autoStuck(row.date);
-		if (row.channel === INCIDENT_CHANNEL && row.date === BACKLOG_DAY) for (const d of INCIDENT_DAYS) auto += autoStuck(d);
+		if (row.date === D0) WH_STATE.arrivals.delete(row.channel);
 		const assigned = row.tickets_ingested;
+		const merged = Math.round(assigned * MERGED_SHARE * jitter(`merged|${k}`, 1));
+		// spam and notifications arrive with the day's real traffic (weekday shape,
+		// growth). During the email incident the stuck share of tickets and of
+		// spam is processed with the backlog on the fix day. Rows of one channel
+		// arrive in date order, so the incident days are seen before the backlog day.
+		const isEmail = row.channel === INCIDENT_CHANNEL;
+		let arrivals = assigned;
+		if (isEmail && INCIDENT_DAYS.includes(row.date)) {
+			arrivals = assigned / (1 - INCIDENT_DELAY_SHARE);
+			WH_STATE.stuck.set(row.date, arrivals - assigned);
+		} else if (isEmail && row.date === BACKLOG_DAY) {
+			const missing = INCIDENT_DAYS.filter((d) => !WH_STATE.stuck.has(d));
+			if (missing.length) throw new Error(`support-desk: backlog row ${row.date} seen before incident rows ${missing.join(", ")}`);
+			arrivals = Math.max(0, assigned - INCIDENT_DAYS.reduce((sum, d) => sum + WH_STATE.stuck.get(d), 0));
+		}
+		const hist = WH_STATE.arrivals.get(row.channel) ?? [];
+		const level = hist.length ? hist.reduce((a, b) => a + b, 0) / hist.length : arrivals;
+		WH_STATE.arrivals.set(row.channel, hist.concat(arrivals).slice(-7));
+		const autoArrived = Math.round(arrivals * (AUTO_REPLY_SHARE[row.channel] ?? 0) * jitter(`auto|${k}`, AUTO_NOISE)
+			+ level * (SPAM_SHARE[row.channel] ?? 0) * jitter(`spam|${k}`, SPAM_NOISE)
+			* (hashFloat(`spam-wave|${k}`) < SPAM_WAVE_SHARE ? 2 + 2 * hashFloat(`spam-wave-size|${k}`) : 1));
+		let auto = autoArrived;
+		if (isEmail && INCIDENT_DAYS.includes(row.date)) {
+			const stuck = Math.round(autoArrived * INCIDENT_DELAY_SHARE * jitter(`auto-stuck|${row.date}`, 0.1));
+			WH_STATE.autoStuck.set(row.date, stuck);
+			auto -= stuck;
+		}
+		if (isEmail && row.date === BACKLOG_DAY) for (const d of INCIDENT_DAYS) auto += WH_STATE.autoStuck.get(d);
 		// intake and routing disagree a little every day: agents log some tickets by
 		// hand (phone calls, imports) that never pass intake, and delete a few ingested
 		// tickets before they are routed
@@ -1079,7 +1128,7 @@ function handleWarehouse(row, meta) {
 		row.tickets_merged = merged;
 		if (row.ingestion_status === "degraded") {
 			// stuck tickets are logged when they were received; most of the day's mail
-			row.tickets_delayed_over_1h = Math.round(assigned * INCIDENT_DELAY_SHARE / (1 - INCIDENT_DELAY_SHARE) * jitter(`delay|${k}`, 0.08)) + autoStuck(row.date);
+			row.tickets_delayed_over_1h = Math.round(WH_STATE.stuck.get(row.date) * jitter(`delay|${k}`, 0.08)) + WH_STATE.autoStuck.get(row.date);
 		}
 		return row;
 	}
@@ -1611,7 +1660,7 @@ SELECT 'all' AS grp, (SELECT count(*) FROM od) AS outage_days, min(users) AS use
 FROM g`;
 
 const H8_SQL = `WITH ${ID_CTE},
-u AS (SELECT distinct_id::VARCHAR AS uid, industry FROM ${US} WHERE customer_since < '${D0}'),
+u AS (SELECT distinct_id::VARCHAR AS uid, industry FROM ${US} WHERE customer_since < '${D0}' AND region IN (${SQL_LIST(BTS_REGIONS)})),
 w AS (SELECT CASE WHEN ev.t >= TIMESTAMP '${TS(BTS_START)}' AND ev.t < TIMESTAMP '${TS(BTS_END)}' THEN 'season'
     WHEN ev.t >= TIMESTAMP '${BTS_BEFORE}' AND ev.t < TIMESTAMP '${TS(BTS_START)}' THEN 'before' END AS per,
   u.industry = '${BTS_INDUSTRY}' AS hit, ev.uid FROM ev JOIN u ON u.uid = ev.uid WHERE ev.event = 'ticket assigned'),
@@ -1684,7 +1733,7 @@ FROM ev WHERE event = 'reply sent'`,
 		hook: "H2",
 		archetype: "funnel-ttc-by-segment",
 		narrative: `Every timing of a ticket scales with its priority (first reply and the work to resolve it): urgent ${PRIORITY_MULT.urgent}x, high ${PRIORITY_MULT.high}x, normal 1x, low ${PRIORITY_MULT.low}x. Channel, weekend, Reply Assist, and the routing test act on all priorities alike, so the median time from ticket assigned to ticket resolved (per ticket, ${RESOLVE_WINDOW_DAYS}-day window) reads the multiplier against normal.`,
-		mixpanelReport: { type: "Funnels", steps: ["ticket assigned", "ticket resolved"], counting: "totals", holdPropertyConstant: "ticket_id", window: `${RESOLVE_WINDOW_DAYS} days`, breakdown: "priority", measure: "median time to convert", alt: "Insights, ticket resolved, median resolution_mins by priority" },
+		mixpanelReport: { type: "Funnels", steps: ["ticket assigned", "ticket resolved"], counting: "totals", holdPropertyConstant: "ticket_id", window: `${RESOLVE_WINDOW_DAYS} days`, breakdown: "priority", measure: "median time to convert", alt: "Insights, ticket resolved, median resolution_mins by priority (reads slightly higher: it includes the second resolution of reopened tickets and has no 14-day window)" },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H2_SQL },
@@ -1832,8 +1881,8 @@ FROM ev WHERE event = 'csat received' GROUP BY 1`,
 		id: "H8-back-to-school-surge",
 		hook: "H8",
 		archetype: "temporal-inflection",
-		narrative: `During the US back-to-school period (${D(BTS_START)} to ${D(BTS_END)}, exclusive) companies in the education industry receive ${BTS_MULT}x their usual tickets on average: each arrival brings extra same-day tickets whose expected number follows a half-sine over the season (near zero at the edges, about ${(1 + (BTS_MULT - 1) / BTS_SHAPE_MEAN).toFixed(2)}x in the middle; mean ${BTS_MULT - 1}). Other industries do not change. Read: tickets assigned to workspaces that existed before ${D0} (customer_since earlier; new trial workspaces keep arriving, and education has a different size mix, so their growth would blur the comparison) in the season vs the ${BTS_BASE_WEEKS} weeks before, education over every other industry (difference in differences of weekly averages).`,
-		mixpanelReport: { type: "Insights", event: "ticket assigned", measure: "total", breakdown: "user property industry", filter: `user property customer_since before ${D0}`, chart: "weekly", compare: `${D(BTS_START)} - 2026-09-13 vs the ${BTS_BASE_WEEKS} weeks before (${BTS_BEFORE.slice(0, 10)} - 2026-08-16), weekly average` },
+		narrative: `During the back-to-school season in North America and Europe (${D(BTS_START)} to ${D(BTS_END)}, exclusive) education companies in the ${BTS_REGIONS.join(" and ")} regions receive ${BTS_MULT}x their usual tickets on average: each arrival brings extra same-day tickets whose expected number follows a half-sine over the season (near zero at the edges, about ${(1 + (BTS_MULT - 1) / BTS_SHAPE_MEAN).toFixed(2)}x in the middle; mean ${BTS_MULT - 1}). Education companies in APAC (other school calendars) and other industries do not change. Read: tickets assigned to ${BTS_REGIONS.join(" and ")} workspaces that existed before ${D0} (customer_since earlier; new trial workspaces keep arriving, and education has a different size mix, so their growth would blur the comparison) in the season vs the ${BTS_BASE_WEEKS} weeks before, education over every other industry (difference in differences of weekly averages).`,
+		mixpanelReport: { type: "Insights", event: "ticket assigned", measure: "total", breakdown: "user property industry", filter: `user property region in (${BTS_REGIONS.join(", ")}) and customer_since before ${D0}`, chart: "weekly", compare: `${D(BTS_START)} - 2026-09-13 vs the ${BTS_BASE_WEEKS} weeks before (${BTS_BEFORE.slice(0, 10)} - 2026-08-16), weekly average` },
 		assertions: [
 			{
 				breakdown: { type: "duckdb", sql: H8_SQL },

@@ -80,7 +80,6 @@ Enterprise contracts and changes to existing customers' subscriptions (renewals,
 | `customer_since` | Date the company became a Ticketloop customer or started its trial (YYYY-MM-DD). Before 2026-06-04 for established users. |
 | `agent_seats` | Seats the company pays for (1 for Free and trial workspaces). |
 | `Experiment: Skills Routing` | `Control` or `Skills Routing` for agents in accounts in the test (the same value for every agent of an account); empty for everyone else. |
-| `_persona` | Usage segment from the lifecycle-marketing tool (`frontline_agent`, `occasional_agent`, `team_lead`, `support_admin`), set at signup from expected workload. It is not the same as `role`. |
 | `anonymousIds` | Browsers seen for the user (pipeline metadata). |
 
 ## Company (group) profile properties

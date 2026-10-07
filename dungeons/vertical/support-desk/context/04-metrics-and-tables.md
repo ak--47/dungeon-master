@@ -80,4 +80,4 @@ Caveats: the table covers new self-serve subscriptions only, not renewals, expan
 - Activity follows a weekly rhythm: weekdays are much busier than weekends. Compare whole weeks or matching weekdays.
 - New trial workspaces keep arriving through the window, so totals tend to grow over time. Use rates (per ticket, per signup, per user) when you compare periods.
 - Trial funnels, conversion, and retention depend on signup date: workspaces that signed up late in the window have had less time to act. Compare cohorts that signed up in the same weeks, and only count brackets that end inside the data.
-- Agents handle many tickets. Per-ticket questions need `ticket_id` held constant (Totals counting); unique-user funnels hide most of the difference between tickets.
+- Each agent handles a stream of tickets. Per-ticket questions need `ticket_id` held constant (Totals counting); unique-user funnels hide most of the difference between tickets.
