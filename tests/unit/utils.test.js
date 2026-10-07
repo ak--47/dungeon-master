@@ -1090,6 +1090,25 @@ describe('generation', () => {
 		}
 	});
 
+	test('generateUser: born days are uniform, first and last window day included', () => {
+		initChance('born-days-uniform');
+		const start = Date.UTC(2026, 5, 4) / 1000;
+		const end = Date.UTC(2026, 5, 13, 23, 59, 59) / 1000; // 10 UTC days
+		const counts = new Map();
+		const n = 20000;
+		for (let i = 0; i < n; i++) {
+			const u = generateUser('u', { numDays: 10, datasetEndUnix: end, datasetStartUnix: start, hourOfDayWeights: null });
+			const d = u.created.slice(0, 10);
+			counts.set(d, (counts.get(d) || 0) + 1);
+		}
+		expect(counts.size).toBe(10);
+		// Each day expects n/10 = 2000; binomial sd ~42. The rounding bug gave ~1000 at the edges.
+		for (const c of counts.values()) {
+			expect(c).toBeGreaterThan(1800);
+			expect(c).toBeLessThan(2200);
+		}
+	});
+
 	test('person: anon', () => {
 		const numDays = 30;
 		const user = person('uuid-123', numDays, true);
