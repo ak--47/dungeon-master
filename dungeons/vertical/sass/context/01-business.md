@@ -11,7 +11,7 @@ Tallyboard is a cloud operations platform for engineering teams. One product cov
 - **Respond to alerts.** Tallyboard raises an alert when a service breaches a threshold (CPU, memory, latency, error rate, disk, saturation). Each alert has a severity (info, warning, critical). An engineer acknowledges the alert, investigates, and resolves it. Resolution can be manual, by running a saved runbook, or (on Business and Enterprise, from July 22) with Root Cause Assist.
 - **Ship.** Teams run their CI/CD pipelines on Tallyboard's hosted runners. Runners live in four regions: us-east, us-west, eu-west, and ap-south. A pipeline run that passes deploys the service.
 - **Control cost.** Teams generate cloud cost reports and scale infrastructure up or down.
-- **Collaborate and integrate.** Users invite teammates and connect integrations: Slack, Microsoft Teams, PagerDuty, Opsgenie, GitHub, Jira, and Terraform.
+- **Collaborate and integrate.** Users invite teammates and connect integrations: Slack, Microsoft Teams, PagerDuty, Opsgenie, GitHub, Jira, and Terraform. Teams usually connect their tools in their first weeks on Tallyboard and revisit the settings now and then.
 - **Root Cause Assist.** An AI assistant for incident resolution. It reads the alert, recent deploys, and related logs, and proposes a likely cause and fix. It is included in Business and Enterprise plans.
 
 ## Plans and pricing
@@ -33,7 +33,8 @@ Tallyboard is a cloud operations platform for engineering teams. One product cov
 - **Roles** (`primary_role`): `sre` (site reliability engineers who carry the pager), `platform_engineer` (own infrastructure and pipelines), `developer` (application engineers), and `engineering_manager`.
 - **Industry** (`industry`): software, fintech, healthcare, retail, media, logistics, gaming, manufacturing.
 - **Cloud** (`cloud_provider`): the company's primary cloud (`aws`, `gcp`, `azure`, or `multi_cloud`).
-- **Customer success:** enterprise customers and some mid-market customers have a dedicated customer success manager (CSM), who rates each account's health.
+- **Customer success:** enterprise customers and some mid-market customers have a dedicated customer success manager (CSM), who rates each account's health. Accounts without a CSM are not rated.
+- **Where customers are:** about three in five Tallyboard users are in the United States; the rest are spread across Europe, Asia, Latin America, and the Middle East.
 
 ## How customers find us
 

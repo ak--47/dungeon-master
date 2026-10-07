@@ -42,7 +42,7 @@ Every alert has an `alert_id`. The trigger, the acknowledgement, and the resolut
 
 | Event | Meaning | Properties |
 |---|---|---|
-| `alert triggered` | Tallyboard pages the user about a threshold breach. | `alert_id`; `severity` (`info`, `warning`, `critical`); `alert_type` (`cpu`, `memory`, `latency`, `error_rate`, `disk`, `saturation`); `service_id`. |
+| `alert triggered` | Tallyboard pages the user about a threshold breach. Pages go to the people on a service's alert routing; teams take people who stop using Tallyboard off the routing. | `alert_id`; `severity` (`info`, `warning`, `critical`); `alert_type` (`cpu`, `memory`, `latency`, `error_rate`, `disk`, `saturation`); `service_id`. |
 | `alert acknowledged` | The user acknowledges the alert. | `alert_id`; `severity`; `alert_type`; `response_time_mins`: minutes from the trigger to this acknowledgement. |
 | `alert resolved` | The user marks the alert resolved. | `alert_id`; `severity`; `alert_type`; `resolution_time_mins`: minutes from the acknowledgement to this resolution; `resolution_method` (`manual`, `runbook`, or `ai_assist` for Root Cause Assist, a Business and Enterprise feature from 2026-07-22); `root_cause` (`config_change`, `capacity`, `bug`, `dependency`, `network`). |
 
@@ -66,12 +66,12 @@ Every alert has an `alert_id`. The trigger, the acknowledgement, and the resolut
 | Event | Meaning | Properties |
 |---|---|---|
 | `teammate invited` | The user invites a colleague to the workspace. | `invitee_role` (`member`, `admin`, `viewer`); `invite_method` (`email`, `sso`, `slack`). |
-| `integration configured` | The user connects or reconfigures an integration. Integrations are set up per team by the engineers who own its alert routing and workflow tools, so many users never configure one; a user configures a given integration once. | `integration_type` (`slack`, `microsoft_teams`, `pagerduty`, `opsgenie`, `github`, `jira`, `terraform`). |
+| `integration configured` | The user connects an integration or reconfigures one that is already connected. Integrations are set up per team by the engineers who own its alert routing and workflow tools, so many users never configure one. A user has at most one event per tool in the period: the connection for accounts still setting up, otherwise a reconfiguration of a tool connected earlier (see the profile property `connected_integrations`). | `integration_type` (`slack`, `microsoft_teams`, `pagerduty`, `opsgenie`, `github`, `jira`, `terraform`). |
 | `documentation viewed` | The user reads a docs page. | `doc_section`; `time_on_page_sec`. |
 | `runbook executed` | The user runs a saved runbook. | `runbook_id`; `runbook_trigger` (`manual`, `scheduled`); `succeeded`. |
 | `cost report generated` | The user generates a cloud cost report. | `report_period`; `total_cost_usd`; `cost_change_percent` vs the prior period. |
 | `infrastructure scaled` | The user scales infrastructure from Tallyboard. | `scale_direction` (`up`, `down`); `previous_capacity`; `auto_scaled`. |
-| `security scan` | A security or compliance scan runs. | `scan_type`; `findings_count`; `critical_findings`. |
+| `security scan` | The user runs a security or compliance scan. | `scan_type`; `findings_count`; `critical_findings`. |
 | `feature flag toggled` | The user flips a feature flag. | `flag_name`; `new_state`; `environment`. |
 
 ## User profile properties
@@ -90,6 +90,7 @@ Every alert has an `alert_id`. The trigger, the acknowledgement, and the resolut
 | `cloud_provider` | The company's primary cloud. |
 | `acquisition_channel` | Channel at signup (for established users, the channel they originally came from). |
 | `seat_count`, `annual_contract_value`, `customer_success_manager` | The company's contracted seats, annual contract value (USD), and whether it has a CSM. |
+| `connected_integrations` | List of integrations currently connected for the user (`slack`, `microsoft_teams`, `pagerduty`, `opsgenie`, `github`, `jira`, `terraform`); empty when none. For accounts set up before the window it includes tools connected before June 4, even when the user has no `integration configured` event in the period. A profile property holds the current value only; it does not say when a tool was connected. |
 | `Experiment: Smart Test Selection` | `Control` or `Smart Selection` for users enrolled in the pipeline test; empty for everyone else. |
 | `created` | Signup time for users who joined in the window (the time of their `account created` event); empty for established users. |
 | `country`, `country_code`, `region`, `city` | Location. |
@@ -109,7 +110,7 @@ Every alert has an `alert_id`. The trigger, the acknowledgement, and the resolut
 
 ## Account health history (slowly changing dimension)
 
-One row per health rating: `distinct_id`, `account_health` (`healthy`, `neutral`, `at_risk`), and `startTime` (UTC, when that rating took effect). A new account gets its first rating when it signs up, and customer success reviews it often during onboarding: consecutive rows are typically about a week apart, sometimes three weeks or more, and sometimes only a day apart. An established account's history starts with its last rating from the month before June 4 (May 5 to June 3), so it has a rating in force from the first day of the window; later reviews are less frequent (typically about three weeks apart), and some established accounts have no new review in the window. An account has at most four rows in the export. A new row is written at every review, even when the rating stays the same, so about a third of rows repeat the previous rating. Use it to read an account's rating as of an event's time.
+One row per health rating: `distinct_id`, `account_health` (`healthy`, `neutral`, `at_risk`), and `startTime` (UTC, when that rating took effect). Only accounts at companies with a customer success manager (`customer_success_manager` = true) are rated; other accounts have no rows. A new account gets its first rating when it signs up, and customer success reviews it often during onboarding: consecutive rows are typically about a week apart, sometimes three weeks or more, and sometimes only a day apart. An established account's history starts with its last rating from the month before June 4 (May 5 to June 3), so it has a rating in force from the first day of the window (an account that joined in the last weeks before June 4 has no rating until its first review); later reviews are less frequent (typically about three weeks apart), and some established accounts have no new review in the window. An account has at most four rows in the export. A new row is written at every review, even when the rating stays the same, so about a third of rows repeat the previous rating. Use it to read an account's rating as of an event's time.
 
 ## Funnels the business tracks
 

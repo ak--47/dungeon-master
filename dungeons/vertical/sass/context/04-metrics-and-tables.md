@@ -9,7 +9,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 | New signups | Unique users with `account created` in the period. |
 | Onboarding completion | Share of new users who reach `dashboard created` after `account created` → `cloud account connected` → `agent installed`, in order, within 7 days of signup. |
 | Activation | The growth team's working definition of an activated new workspace is still under discussion; it is measured from first-week behavior only. |
-| Day-N retention | Of new users who signed up on day 0, the share with any event in days N to N+6 after signup. Only count users who signed up at least N+7 days before the end of the data. In Mixpanel Retention this needs custom brackets (for example day 30-36). |
+| Day-N retention | Of new users who signed up on day 0, the share with any event in days N to N+6 after signup. Only count users who signed up at least N+7 days before the end of the data. In Mixpanel Retention this needs custom brackets (for example day 30-36). "Any event" is safe here: every tracked event is an action the user took, or a page the user received while on a service's alert routing, and teams remove people from alert routing when they stop using Tallyboard. |
 | Weekly active users | Unique users with any event in a calendar week (Monday start). |
 | Time to acknowledge (MTTA) | Per alert, time from `alert triggered` to `alert acknowledged` (same `alert_id`). Report the median; `response_time_mins` on the acknowledgement holds the same value. |
 | Time to resolve (MTTR) | Per alert, time from `alert acknowledged` to `alert resolved` (same `alert_id`); `resolution_time_mins` on the resolution. |

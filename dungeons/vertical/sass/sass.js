@@ -17,42 +17,47 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             month from 2026-08-17) and Business ($45 per seat); Enterprise
  *             is sales-led. Root Cause Assist (AI incident help) is a Business
  *             and Enterprise feature from 2026-07-22.
- * SCALE:      10,000 users (≈4,470 sign up inside the window), ~0.98M events,
+ * SCALE:      10,000 users (≈4,510 sign up inside the window), ~0.96M events,
  *             120 days (2026-06-04 → 2026-10-01, UTC), 300 customer companies
  * CORE LOOP:  dashboard viewed → query executed; alert triggered → alert
  *             acknowledged → alert resolved; deployment pipeline run → service deployed
  * VALUE MOMENT: alert acknowledged (the platform got a human to a problem)
  *
  * EVENTS (23):
- *   dashboard viewed (10) > query executed (8) > api call (6) > teammate invited (3,
- *   thinned in the hook) > documentation viewed (3) > integration configured (2.5,
- *   thinned and deduplicated in the hook) > cost report generated (2)
- *   > infrastructure scaled (2) > security scan (2) > feature flag toggled (2)
- *   > runbook executed (1) > funnel-only: account created, cloud account connected,
- *   agent installed, dashboard created, alert triggered / acknowledged / resolved,
- *   deployment pipeline run, service deployed, upgrade page viewed,
- *   subscription started, $experiment_started
+ *   dashboard viewed (10) > query executed (8) > api call (6) > documentation
+ *   viewed (3) > integration configured (3.5, thinned and deduplicated in the
+ *   hook) > cost report generated (2) > infrastructure scaled (2) > security
+ *   scan (2) > feature flag toggled (2) > runbook executed (1) > funnel-only:
+ *   account created, cloud account connected, agent installed, dashboard
+ *   created, alert triggered / acknowledged / resolved, deployment pipeline
+ *   run, service deployed, upgrade page viewed, subscription started,
+ *   teammate invited (thinned in the hook), $experiment_started
  *
- * FUNNELS (10):
+ * FUNNELS (11):
  *   - Onboarding (first funnel, two copies by cloud_provider, H3):
  *       account created → cloud account connected → agent installed → dashboard created
  *       (62% AWS/GCP/multi-cloud, 34% Azure)
  *   - Monitoring: dashboard viewed → query executed (75%)
  *   - Incident Response: alert triggered → alert acknowledged → alert resolved
  *       (72%, alert_id/severity/alert_type held per alert)
- *   - Deploy Pipeline: deployment pipeline run → service deployed (68%, deploy_id
- *       per run, runner_region per run, A/B "Smart Test Selection" from 2026-07-15)
- *   - Upgrade (new signups, customer_since ≥ window start): upgrade page viewed →
- *       subscription started (35%); Upgrade (established free users): same steps (6%)
+ *   - Deploy Pipeline: deployment pipeline run → service deployed (68%, weight 5,
+ *       deploy_id per run, runner_region per run, A/B "Smart Test Selection"
+ *       from 2026-07-15)
+ *   - Upgrade (recent signups, customer_since ≥ 2026-05-14): upgrade page viewed →
+ *       subscription started (35%); Upgrade (older free accounts): same steps (4%)
+ *   - Team Invites: teammate invited (single step; invitations are one-off
+ *       actions, not a burst inside the catch-all funnel)
  *   - Cost Review: cost report generated → infrastructure scaled (45%)
  *   - Runbooks: documentation viewed → runbook executed (35%)
  *
  * USER PROPS:  company_id, company_name, company_size, industry, primary_role,
  *              plan_tier, customer_since, cloud_provider, acquisition_channel,
  *              seat_count, annual_contract_value, customer_success_manager,
- *              "Experiment: Smart Test Selection" (enrolled users)
+ *              connected_integrations (list), "Experiment: Smart Test
+ *              Selection" (enrolled users)
  * SUPER PROPS: plan_tier (plan at event time), cloud_provider (sticky per user)
- * SCD PROPS:   account_health (healthy/neutral/at_risk, fuzzy timing ~weekly, max 4)
+ * SCD PROPS:   account_health (healthy/neutral/at_risk, fuzzy timing, max 4;
+ *              CSM-covered accounts only)
  * GROUPS:      company_id (300 companies; every event carries the user's own company)
  * WAREHOUSE:   paid_marketing_daily (spend by paid channel),
  *              ci_runner_health_daily (hosted CI runner health by region),
@@ -64,7 +69,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * event, carries user_id + device_id); 2 devices per user on average. Every
  * event carries user_id; there is no anonymous pre-signup activity. The three
  * post-auth onboarding steps carry user_id only; every other event also
- * carries device_id.
+ * carries device_id. Device fields (os, model, browser, screen) are sticky per
+ * device_id (engine); the dungeon has no Platform-style property.
  *
  * DESIGN NOTES:
  * - Company attributes (size, industry, cloud, ACV, contracted seats, CSM) come
@@ -79,15 +85,36 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * - retentionCurve (not engagementDecay) shapes new users' activity. The
  *   engine pins each new user's signup to profile `created`, a UTC instant
  *   whose hour follows the soup's working-hours curve; customer_since is that
- *   instant's UTC date.
+ *   instant's UTC date. ENGINE WORKAROUND: in active-day mode the engine makes
+ *   a born user's events per active day scale with remaining days / expected
+ *   active days, so late-September signups were 30-45% less intense in their
+ *   first week than June signups; the everything hook clones born users'
+ *   hands-on free-standing events up to the June intensity (funnel-linked
+ *   flows untouched). Remove once the engine fixes it.
  * - Weekly and daily rhythm (soup): weekday-heavy (weekends about a quarter
  *   of a weekday) with Americas and EMEA working hours dominating in UTC.
  *   New users' signup days and hours follow the same weights.
+ * - US holidays (Jul 3 observed, Sep 7): US-based users (about 59%) skip 75%
+ *   of their hands-on events (dashboards, queries, docs, pipelines, invites,
+ *   integrations); a skipped pipeline run takes its experiment exposure along.
+ *   Pages still fire and are answered. Total volume on those days is about 30%
+ *   below the same weekday a week before and after.
+ * - Warm start: a target 14.3% of established users (in-window signup pace ×
+ *   21 days; 852 users measured) joined in the 21 days before June 4. They start on Free and buy only inside their
+ *   first 21 days; the older the account on June 4, the likelier its purchase
+ *   already happened (it then starts the window on that paid plan). Weekly new
+ *   subscriptions are flat from week 1.
  * - Collaboration volume: new users keep every "teammate invited" in their
- *   first 14 days; other invites are thinned to 20% (about 1.3 invites per
- *   user, 44 per company in 120 days). "integration configured" comes only
+ *   first 7 days; other invites are thinned to 12% (about 1.25 invites per
+ *   user, 42 per company in 120 days). "integration configured" comes only
  *   from a role-dependent share of users (the engineers who own alert routing;
- *   higher in new workspaces), once per integration type.
+ *   higher in accounts still setting up). Accounts set up before the window
+ *   (customer_since before 2026-05-14) hold their tools in
+ *   connected_integrations (chat: slack or microsoft_teams; paging: pagerduty
+ *   or opsgenie; github / jira / terraform) and their in-window events are one
+ *   reconfiguration per connected tool, spread over the window. Newer accounts
+ *   connect each tool once (their first event per tool), and the profile list
+ *   is what they connected.
  * - Warehouse drift: ci_runner_health_daily.jobs_started adds seeded scheduled
  *   and API-triggered jobs that never send a product event;
  *   subscription_bookings_daily adds seeded pre-invoice seat edits and a few
@@ -96,11 +123,13 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   expected signups per day, a weekday shape that follows the signup rhythm
  *   with a 25% flat floor, seeded noise, never zero); leads, clicks, and
  *   impressions follow spend. The CPL knob holds at window level.
- * - account_health uses fuzzy SCD timing: rows can repeat the prior value. A
- *   new account's first row is at its signup and later rows are about a week
- *   apart. Established accounts' histories start in the month before the
- *   window (rows about three weeks apart), so each has a value in force on
- *   June 4.
+ * - account_health exists only for accounts whose company has a customer
+ *   success manager (enterprise and about 30% of mid-market companies; ~41%
+ *   of users). Fuzzy SCD timing: rows can repeat the prior value. A new
+ *   account's first row is at its signup and later rows are about a week
+ *   apart. Older accounts' histories start in the month before the window
+ *   (rows about three weeks apart), so each has a value in force on June 4;
+ *   no row predates an account's customer_since.
  */
 
 // ── HOOK STORIES ──
@@ -152,15 +181,18 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H4. SLACK + PAGERDUTY SPEED UP RESPONSE (everything)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: once both the Slack and PagerDuty integrations are live, alerts are
- *   acknowledged in 0.4x the time. Acknowledge → resolve is unchanged. New
- *   signups: alerts triggered after the later of their first slack and first
- *   pagerduty "integration configured". Established customers who configure
- *   both in the window had them before June 4 (in-window events are
- *   reconfigurations), so their whole window is faster.
- * MIXPANEL: Insights, alert acknowledged, average response_time_mins,
- *   breakdown by a cohort "configured slack AND pagerduty", filter
- *   customer_since before 2026-06-04; for new signups compare alerts before vs
- *   after the user's second integration.
+ *   acknowledged in 0.4x the time. Acknowledge → resolve is unchanged. Accounts
+ *   set up before the window (customer_since before 2026-05-14) connected their
+ *   tools before June 4; when profile connected_integrations holds both, every
+ *   in-window alert is faster (their in-window "integration configured" events
+ *   only reconfigure tools they already have). Newer accounts: alerts
+ *   triggered after the later of their first slack and first pagerduty
+ *   "integration configured".
+ * MIXPANEL: Insights, alert acknowledged, average response_time_mins, filter
+ *   user property customer_since before 2026-05-14, breakdown by a cohort
+ *   "user property connected_integrations contains slack AND contains
+ *   pagerduty" (read 1); for new signups compare alerts triggered before vs
+ *   after the user's second integration (read 2).
  * REAL WORLD: the page reaches the on-call where they already are.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -189,7 +221,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   share of pipeline runs that deploy by 1.2 and run → deploy time by 0.75.
  * MIXPANEL: Funnels, deployment pipeline run → service deployed, totals, hold
  *   deploy_id constant, breakdown user property "Experiment: Smart Test
- *   Selection", 1-day window; or Insights share of pipeline_status = success.
+ *   Selection", 1-day window, date range 2026-07-15 to 2026-10-01 (the full
+ *   window dilutes the lift with pre-test runs); or Insights share of
+ *   pipeline_status = success over the same dates.
  * REAL WORLD: running only the tests a change touches cuts flaky failures and
  *   pipeline time.
  *
@@ -251,49 +285,51 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * REAL WORLD: noisy alerting trains people to ignore pages.
  *
  * ═════════════════════════════════════════════════════════════════════════
- * EXPECTED METRICS SUMMARY (measured: data/verify-sass, 2026-10-06, engine fix round 2)
+ * EXPECTED METRICS SUMMARY (measured: data/verify-sass, 2026-10-07, engine round 7 rebase)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                       | Derivation               | Expected | Measured
  * -----|----------------------------------------------|--------------------------|----------|---------
- * H1   | paid invites per dashboard view, promo/before| QUARTER_CLOSE_INVITE_MULT| 1.50     | 1.490
- * H1   | Free invites per dashboard view (control)    | unchanged                | 1.00     | 1.029
+ * H1   | paid invites per dashboard view, promo/before| QUARTER_CLOSE_INVITE_MULT| 1.50     | 1.443 (0.1314 vs 0.0910)
+ * H1   | Free invites per dashboard view (control)    | unchanged                | 1.00     | 0.959
  * H2   | ai_assist rows pre-launch or Free/Team       | exact purity             | 0        | 0
- * H2   | ai/other resolution time, Biz+Ent post-launch| RCA_RESOLVE_MULT         | 0.55     | 0.545 (70.8 vs 130.1 min)
- * H2   | ai share of eligible resolutions after ramp  | 0.5 × 0.8                | 0.40     | 0.397 (weekly 2.5% → 40%)
- * H3   | onboarding conversion Azure/others           | 34/62                    | 0.548    | 0.506 (31.9% vs 63.2%)
- * H4   | avg response Slack+PD / rest, established    | INTEGRATED_RESPONSE_MULT | 0.40     | 0.396 (10.84 vs 27.38 min)
- * H4   | new signups: after / before pair is live     | INTEGRATED_RESPONSE_MULT | 0.40     | 0.366 (10.40 vs 28.38 min)
- * H5   | D30 activated/not activated, all new users   | ≥ 1/(1 − 0.4) (floor)    | ≥ 1.67   | 2.921 (59.7% vs 20.4%, STRONG)
- * H5   | D30 2+ / 0 invites, onboarded new users      | ≥ 1/(1 − 0.6) (floor)    | ≥ 2.50   | 2.677 (65.6% vs 24.5%, within ±10%)
- * H6   | per-run deploy rate Smart/Control            | SMART_TEST_CONV_MULT     | 1.20     | 1.205 (81.0% vs 67.3%)
- * H6   | median run → deploy time Smart/Control       | SMART_TEST_TTC_MULT      | 0.75     | 0.752 (22.5 vs 30.0 min)
- * H6   | Smart Selection share of enrolled users      | equal 2-arm hash         | 0.50     | 0.500
- * H7   | us-east / other success, incident vs ±7 days | 1 − RUNNER_INCIDENT_FAIL | 0.40     | 0.404
+ * H2   | ai/other resolution time, Biz+Ent post-launch| RCA_RESOLVE_MULT         | 0.55     | 0.560 (72.6 vs 129.6 min)
+ * H2   | ai share of eligible resolutions after ramp  | 0.5 × 0.8                | 0.40     | 0.415 (weekly 2.5% → 41%)
+ * H3   | onboarding conversion Azure/others           | 34/62                    | 0.548    | 0.547 (33.7% vs 61.7%)
+ * H4   | avg response Slack+PD / rest, set up pre-window | INTEGRATED_RESPONSE_MULT | 0.40  | 0.411 (11.08 vs 26.95 min)
+ * H4   | new signups: after / before pair is live     | ≤ 0.40 (floor 0.70)      | 0.40     | 0.439 (11.66 vs 26.56 min)
+ * H5   | D30 activated/not activated, all new users   | ≥ 1/(1 − 0.4) (floor)    | ≥ 1.67   | 2.663 (56.1% vs 21.1%, STRONG)
+ * H5   | D30 2+ / 0 invites, onboarded new users      | ≥ 1/(1 − 0.6) (floor)    | ≥ 2.50   | 2.906 (67.2% vs 23.1%, STRONG)
+ * H6   | per-run deploy rate Smart/Control            | SMART_TEST_CONV_MULT     | 1.20     | 1.196 (80.6% vs 67.4%)
+ * H6   | median run → deploy time Smart/Control       | SMART_TEST_TTC_MULT      | 0.75     | 0.751 (22.5 vs 30.0 min)
+ * H6   | Smart Selection share of enrolled users      | equal 2-arm hash         | 0.50     | 0.498
+ * H7   | us-east / other success, incident vs ±7 days | 1 − RUNNER_INCIDENT_FAIL | 0.40     | 0.385 (29.1% vs 74.9% in us-east)
  * H7   | warehouse infra_error_rate during incident   | RUNNER_INCIDENT_FAIL     | 0.60     | 0.603
- * H8   | spend per signup LinkedIn / paid search      | 420 / 140                | 3.00     | 2.988 ($420.28 vs $140.65)
- * H8   | 30-day paid rate LinkedIn / paid search      | 1.0 / 0.5 (floor 1.5)    | 2.00     | 2.213 (18.9% vs 8.5%, STRONG)
- * H9   | avg seats Team post/pre                      | TEAM_SEAT_MULT           | 0.70     | 0.695 (8.60 vs 12.39)
- * H9   | avg seats Business post/pre (control)        | unchanged                | 1.00     | 1.042
- * H9   | new MRR per Team subscription post/pre       | 0.7 × 25/20              | 0.875    | 0.868
- * H10  | median trigger → ack, enterprise / SMB+mid   | RESPONSE_SIZE_MULT       | 0.60     | 0.582
- * H10  | median trigger → ack, startup / SMB+mid      | RESPONSE_SIZE_MULT       | 1.50     | 1.544
- * H11  | ack rate 30+ alerts / ≤12 alerts             | 1 − FATIGUE_FLIP         | 0.50     | 0.498
+ * H8   | spend per signup LinkedIn / paid search      | 420 / 140                | 3.00     | 3.024 ($419.35 vs $138.66)
+ * H8   | 30-day paid rate LinkedIn / paid search      | 1.0 / 0.5 (floor 1.5)    | 2.00     | 2.014 (17.7% vs 8.8%)
+ * H9   | avg seats Team post/pre                      | TEAM_SEAT_MULT           | 0.70     | 0.686 (8.51 vs 12.39)
+ * H9   | avg seats Business post/pre (control)        | unchanged                | 1.00     | 1.061
+ * H9   | new MRR per Team subscription post/pre       | 0.7 × 25/20              | 0.875    | 0.858
+ * H10  | median trigger → ack, enterprise / SMB+mid   | RESPONSE_SIZE_MULT       | 0.60     | 0.599
+ * H10  | median trigger → ack, startup / SMB+mid      | RESPONSE_SIZE_MULT       | 1.50     | 1.491
+ * H11  | ack rate 30+ alerts / ≤12 alerts             | 1 − FATIGUE_FLIP         | 0.50     | 0.496 (42.8% vs 86.2%)
  * ═════════════════════════════════════════════════════════════════════════
  *
- * H5's two reads are knob floors. Setup abandoners rarely invite, so the
- * all-user activated/not-activated gap exceeds the dark-share floor. The
- * onboarded-only dose read removes abandonment but not engagement: among
- * users the dark cut never touches, 2+ inviters still retain somewhat better,
- * and raw retention keeps rising past 2 invites while the knob treats every
- * 2+ user alike. H8's purchase-rate read rests on 125 LinkedIn and 61
- * paid-search buyers inside the 30-day window (relative SE about 15%); it
- * lands above the knob's ±10% band, so it grades STRONG against its floor;
- * the whole-window rates (19.3% vs 9.0%, 2.15x) agree. H1 is noise-limited
- * after the invite thinning (about 1,000 paid invites per half-month;
- * relative SE about 5%). The H9 Business control (1.042) rests on 131
- * post-change subscriptions. H3 (0.506) sits near the low edge of its band:
- * the Azure funnel uses the rounded conversion knob (34 of 62) and the
- * Azure segment has about 1,300 signups (relative SE about 4%).
+ * Verdicts: 10 NAILED, 1 STRONG (H5; both reads are knob floors). H5: setup
+ * abandoners rarely invite, so the all-user activated/not-activated gap
+ * exceeds the dark-share floor. The onboarded-only dose read removes
+ * abandonment but not engagement: heavier users invite more and are likelier
+ * to show any event in the day-30 week even without the dark cut, so raw D30
+ * retention still edges up past 2 invites (2: 54.3%, 3: 57.0%, 4+: 61.6% on
+ * 86 users, all new users) while the knob treats every 2+ user alike. H8's
+ * purchase-rate read rests on 119 LinkedIn and 65 paid-search buyers inside
+ * the 30-day window (relative SE about 15%); the whole-window rates (18.7% vs
+ * 10.1%, 1.86x) agree. H1 is noise-limited (about 800-1,250 paid invites per
+ * half-month; the adjacent half-month ratio has an SD of about 6% for paid
+ * and 5% for Free outside the promotion). The H9 Business control (1.061)
+ * rests on 104 post-change subscriptions. H7's ratio of ratios rests on 1,591
+ * us-east incident runs (relative SE about 5%). H4 read 2 compares 1,001 vs
+ * 1,046 acknowledgements from about 230 new users and is graded against the
+ * knob with a knob-derived floor.
  */
 
 // ── SCALE ──
@@ -350,9 +386,10 @@ const ONBOARD_TTC_H = 30;
 
 // H4 Slack + PagerDuty: alerts reach the on-call faster (ack only), from the
 // moment both are connected. New users: alerts triggered after the later of
-// their first slack and first pagerduty configuration. Established users who
-// configure both in the window had them before June 4 (in-window events are
-// reconfigurations), so every in-window alert is faster.
+// their first slack and first pagerduty configuration. Established users whose
+// profile connected_integrations (set before June 4) holds both: every
+// in-window alert is faster; their in-window events only reconfigure tools
+// they already had.
 const INTEGRATION_PAIR = ["slack", "pagerduty"];
 const INTEGRATED_RESPONSE_MULT = 0.4;
 
@@ -362,10 +399,27 @@ const INTEGRATED_RESPONSE_MULT = 0.4;
 // Integrations are set up per team by the engineers who own alert routing:
 // a role-dependent share of users ever configure one, and each configures a
 // given integration once.
-const INVITE_EARLY_DAYS = 14;      // new users keep every invite in their first two weeks
-const INVITE_KEEP_LATE = 0.2;      // share of other invites kept
+const INVITE_EARLY_DAYS = 7;       // new users keep every invite in their first week
+const INVITE_KEEP_LATE = 0.12;     // share of other invites kept
 const INTEGRATOR_SHARE = { sre: 0.6, platform_engineer: 0.45, engineering_manager: 0.3, developer: 0.12 };
 const INTEGRATOR_NEW_BOOST = 0.35; // new workspaces: the first engineers set up alert routing themselves
+const INTEGRATION_TYPES = ["slack", "microsoft_teams", "pagerduty", "opsgenie", "github", "jira", "terraform"];
+// Established integrators connected their tools before June 4 (profile
+// connected_integrations). Chat: slack or microsoft_teams; paging: pagerduty or
+// opsgenie; plus independent github / jira / terraform. Their in-window
+// "integration configured" events are reconfigurations of those tools.
+const PRE_WINDOW_CHAT = 0.85, PRE_WINDOW_SLACK = 0.85;
+const PRE_WINDOW_PAGING = 0.65, PRE_WINDOW_PAGERDUTY = 0.8;
+const PRE_WINDOW_OTHER = { github: 0.6, jira: 0.4, terraform: 0.25 };
+
+// US public holidays (UTC days): US-based users take the day off, so most of
+// their hands-on work (dashboards, queries, docs, pipelines, invites) pauses;
+// on-call pages still fire and get answered.
+const US_HOLIDAYS = ["2026-07-03", "2026-09-07"]; // Independence Day (observed), Labor Day
+const HOLIDAY_SKIP = 0.75;         // share of a US user's hands-on events that do not happen on a holiday
+const HOLIDAY_EVENTS = new Set(["dashboard viewed", "query executed", "api call", "documentation viewed", "runbook executed",
+	"cost report generated", "infrastructure scaled", "security scan", "feature flag toggled", "teammate invited",
+	"integration configured", "deployment pipeline run"]);
 
 // H5 first-week activation → retention (new signups only)
 const ACTIVATION_EVENT = "teammate invited";
@@ -395,7 +449,7 @@ const RUNNER_INCIDENT_REGION = "us-east";
 const RUNNER_INCIDENT_FAIL = 0.6;  // share of would-be successful us-east runs that fail during the incident
 // warehouse realism: scheduled / API-triggered runner jobs that Mixpanel never sees
 // (they run every day, weekends included, so they flatten the weekday swing)
-const SCHEDULED_JOBS_PER_DAY = { "us-east": 90, "us-west": 57, "eu-west": 57, "ap-south": 21 };
+const SCHEDULED_JOBS_PER_DAY = { "us-east": 150, "us-west": 95, "eu-west": 95, "ap-south": 35 };
 const SCHEDULED_JOBS_SPREAD = 0.6;  // ± day-level variation per region (seeded)
 const SCHEDULED_JOBS_DAY_SPREAD = 0.6; // ± fleet-wide day-level variation (seeded)
 
@@ -435,8 +489,16 @@ const TEAM_PRICE_OLD = 20;
 const TEAM_PRICE_NEW = 25;
 const BUSINESS_PRICE = 45;
 const TEAM_SEAT_MULT = 0.7;        // seats per new Team subscription after the change
-const UPGRADE_CONV = 35;           // new signups, per upgrade-page visit
-const UPGRADE_CONV_ESTABLISHED = 6; // long-time free users rarely convert
+const UPGRADE_CONV = 35;           // recent signups (joined in the window or the 3 weeks before), per upgrade-page visit
+const UPGRADE_CONV_ESTABLISHED = 4; // long-time free users rarely convert
+// warm start: accounts that signed up in the 3 weeks before June 4 are still
+// on Free and inside their self-serve buying window (new accounts buy in their
+// first weeks), so June does not start with no new buyers
+const RECENT_SIGNUP_DAYS = 21;
+// share of established users who joined in those 3 weeks: in-window signups per
+// day × 21 days ÷ established users (≈ 4,500 / 120 × 21 / 5,500)
+const RECENT_SHARE = Math.round((NUM_USERS * BORN_PCT / 100) / WINDOW_DAYS * RECENT_SIGNUP_DAYS / (NUM_USERS * (1 - BORN_PCT / 100)) * 1000) / 1000;
+const RECENT_FROM = dayjs.utc(DATASET_START).subtract(RECENT_SIGNUP_DAYS, "day").format("YYYY-MM-DD");
 // warehouse realism: billing vs the product event
 const BILLING_SEAT_EDIT_SHARE = 0.5;     // plan-days where seat counts were edited before the first invoice (−4..+6 seats)
 const BILLING_UNTRACKED_SUB_SHARE = 0.15; // plan-days with one checkout Mixpanel never received (3-25 seats)
@@ -503,9 +565,42 @@ const companyFor = (uid) => {
 	return COMPANIES[i < 0 ? COMPANIES.length - 1 : i];
 };
 
+// established integrators' tools connected before the window (seeded per user)
+const preWindowIntegrations = (uid, role) => {
+	const out = new Set();
+	if (hashFloat(`${uid}|integrator`) >= (INTEGRATOR_SHARE[role] ?? 0.2)) return out;
+	if (hashFloat(`${uid}|pre-chat`) < PRE_WINDOW_CHAT) out.add(hashFloat(`${uid}|pre-chat-kind`) < PRE_WINDOW_SLACK ? "slack" : "microsoft_teams");
+	if (hashFloat(`${uid}|pre-paging`) < PRE_WINDOW_PAGING) out.add(hashFloat(`${uid}|pre-paging-kind`) < PRE_WINDOW_PAGERDUTY ? "pagerduty" : "opsgenie");
+	for (const [k, p] of Object.entries(PRE_WINDOW_OTHER)) if (hashFloat(`${uid}|pre-${k}`) < p) out.add(k);
+	return out;
+};
+const listIntegrations = (set) => INTEGRATION_TYPES.filter((k) => set.has(k));
+
 const serviceIds = Array.from({ length: 240 }, () => `svc_${chance.hash({ length: 8 })}`);
 const runbookIds = Array.from({ length: 60 }, () => `rb_${chance.hash({ length: 6 })}`);
 const flagNames = Array.from({ length: 80 }, () => `${chance.word({ syllables: 2 })}_${chance.pickone(["rollout", "killswitch", "beta", "v2", "migration"])}`);
+
+// ── ENGINE WORKAROUND: born-user intensity in active-day (retentionCurve) mode ──
+// The engine gives a born user an event budget of rate × remaining days but
+// spreads it over E(remaining days) curve-weighted active days, so events per
+// active day scale with remaining/E(remaining): a user born in late September
+// is ~30-45% less intense in their first week than one born in June. Hands-on
+// free-standing events of born users are cloned up to the intensity of a user
+// born at the window start. (Funnel-linked flows are left alone.)
+const RETENTION_CURVE = { type: "logarithmic", day1: 0.75, day7: 0.6, day30: 0.5 };
+const CURVE_ANCHORS = [[0, 1], [1, RETENTION_CURVE.day1], [7, RETENTION_CURVE.day7], [30, RETENTION_CURVE.day30]];
+const curveWeight = (d) => {
+	if (d <= 0) return 1;
+	const seg = CURVE_ANCHORS.findIndex(([day], i) => i > 0 && d <= day);
+	const [[d0, w0], [d1, w1]] = seg > 0 ? [CURVE_ANCHORS[seg - 1], CURVE_ANCHORS[seg]] : CURVE_ANCHORS.slice(-2);
+	if (d0 === 0) return w0 + ((d - d0) / (d1 - d0)) * (w1 - w0);
+	return Math.max(0, w0 * Math.pow(w1 / w0, (Math.log(d) - Math.log(d0)) / (Math.log(d1) - Math.log(d0))));
+};
+const expectedActive = (days) => { let s = 0; for (let d = 0; d < Math.floor(days); d++) s += curveWeight(d); return Math.max(1, s); };
+const bornIntensity = (remainingDays) => remainingDays / expectedActive(Math.ceil(remainingDays));
+const BORN_REF_INTENSITY = bornIntensity(WINDOW_DAYS);
+const INTENSITY_EVENTS = new Set(["dashboard viewed", "query executed", "api call", "documentation viewed", "runbook executed",
+	"cost report generated", "infrastructure scaled", "security scan", "feature flag toggled", "teammate invited"]);
 
 // ── HELPERS ──
 const salt = (uid, tag) => hashFloat(`${uid}|${tag}`);
@@ -538,9 +633,15 @@ function handleUserHook(profile, meta) {
 		profile.customer_since = dayKey(ms(profile.created ?? meta.user.created));
 		return profile;
 	}
-	// established users joined between 2023-01 and the window start
-	const tenureDays = Math.floor(salt(uid, "tenure") * (dayIndex(DATASET_START) - dayIndex("2023-01-01T00:00:00Z")));
-	profile.customer_since = dayjs.utc("2023-01-01T00:00:00Z").add(tenureDays, "day").format("YYYY-MM-DD");
+	// established users joined between 2023-01 and the window start; signups ran
+	// at the in-window pace in the weeks just before June 4, so RECENT_SHARE of
+	// established users joined in the RECENT_SIGNUP_DAYS before the window
+	const span = dayIndex(DATASET_START) - dayIndex("2023-01-01T00:00:00Z");
+	const r = salt(uid, "tenure");
+	const daysBefore = r < RECENT_SHARE
+		? 1 + Math.floor((r / RECENT_SHARE) * RECENT_SIGNUP_DAYS)
+		: RECENT_SIGNUP_DAYS + 1 + Math.floor(((r - RECENT_SHARE) / (1 - RECENT_SHARE)) * (span - RECENT_SIGNUP_DAYS - 1));
+	profile.customer_since = dayjs.utc(DATASET_START).subtract(daysBefore, "day").format("YYYY-MM-DD");
 	const mix = {
 		startup: [55, 35, 10, 0],
 		smb: [35, 40, 22, 3],
@@ -548,6 +649,8 @@ function handleUserHook(profile, meta) {
 		enterprise: [5, 10, 35, 50],
 	}[co.size];
 	profile.plan_tier = chance.weighted(["free", "team", "business", "enterprise"], mix);
+	// accounts a few weeks old are still on Free (self-serve buyers decide in their first weeks)
+	if (profile.customer_since >= RECENT_FROM) profile.plan_tier = "free";
 	return profile;
 }
 
@@ -562,15 +665,42 @@ function handleEverything(events, meta) {
 	// ── company pin: every event carries the user's own company (engine stamps group keys at random) ──
 	for (const e of events) e.company_id = profile.company_id;
 
+	// ── ENGINE WORKAROUND (see note above): even out born users' intensity ──
+	if (signup) {
+		const extra = BORN_REF_INTENSITY / bornIntensity(Math.max(1, (END - birthMs) / DAY_MS)) - 1;
+		if (extra > 0) {
+			const clones = [];
+			for (const e of events) {
+				if (!INTENSITY_EVENTS.has(e.event)) continue;
+				const n = Math.floor(extra) + (chance.bool({ likelihood: (extra % 1) * 100 }) ? 1 : 0);
+				for (let k = 0; k < n; k++) {
+					const tc = Math.min(END, T(e) + chance.integer({ min: 1, max: 40 }) * MIN_MS);
+					clones.push(cloneEvent(e, { time: new Date(tc).toISOString() }));
+				}
+			}
+			if (clones.length) events = events.concat(clones).sort((a, b) => T(a) - T(b));
+		}
+	}
+
 	// ── collaboration volume (see knob note): invites cluster in a new
 	// workspace's first two weeks; integrations come from the engineers who own
 	// alert routing, once per integration ──
-	const integrator = salt(uid, "integrator") < (INTEGRATOR_SHARE[profile.primary_role] ?? 0.2) + (signup ? INTEGRATOR_NEW_BOOST : 0);
-	const firstIntegration = new Map(); // integration_type → earliest event
+	// accounts that joined in the 3 weeks before June 4 are still setting up
+	const settingUp = Boolean(signup) || profile.customer_since >= RECENT_FROM;
+	const integrator = salt(uid, "integrator") < (INTEGRATOR_SHARE[profile.primary_role] ?? 0.2) + (settingUp ? INTEGRATOR_NEW_BOOST : 0);
+	// established accounts: tools connected before June 4; in-window events reconfigure them
+	const preWindow = settingUp ? null : preWindowIntegrations(uid, profile.primary_role);
+	// new users: the first configuration of each tool is the connection;
+	// established users: one reconfiguration per connected tool, any time in the window
+	const firstIntegration = new Map(); // integration_type → kept event
+	const byType = new Map();
 	for (const e of events) {
 		if (e.event !== "integration configured") continue;
-		const f = firstIntegration.get(e.integration_type);
-		if (!f || T(e) < T(f)) firstIntegration.set(e.integration_type, e);
+		if (!byType.has(e.integration_type)) byType.set(e.integration_type, []);
+		byType.get(e.integration_type).push(e);
+	}
+	for (const [k, list] of byType) {
+		firstIntegration.set(k, preWindow ? chance.pickone(list) : list.reduce((a, b) => (T(b) < T(a) ? b : a)));
 	}
 	events = events.filter((e) => {
 		if (e.event === "teammate invited") {
@@ -578,10 +708,22 @@ function handleEverything(events, meta) {
 			return chance.bool({ likelihood: INVITE_KEEP_LATE * 100 });
 		}
 		if (e.event === "integration configured") {
+			if (preWindow) return preWindow.has(e.integration_type) && firstIntegration.get(e.integration_type) === e;
 			return integrator && firstIntegration.get(e.integration_type) === e;
 		}
 		return true;
 	});
+
+	// ── US holidays: US-based users skip most hands-on work (pages still fire) ──
+	if (profile.country_code === "US") {
+		const skipped = new Set();
+		for (const e of events) {
+			if (HOLIDAY_EVENTS.has(e.event) && US_HOLIDAYS.includes(e.time.slice(0, 10)) && chance.bool({ likelihood: HOLIDAY_SKIP * 100 })) skipped.add(e);
+		}
+		// a skipped pipeline run takes its experiment exposure (sent 1s before it) along
+		const skippedRunMs = new Set([...skipped].filter((e) => e.event === "deployment pipeline run").map((e) => T(e) - 1000));
+		events = events.filter((e) => !skipped.has(e) && !(e.event === "$experiment_started" && skippedRunMs.has(T(e))));
+	}
 
 	// ── purchase hygiene: one paid subscription per user; later upgrade passes vanish ──
 	const firstBuy = events.filter((e) => e.event === "subscription started").sort((a, b) => T(a) - T(b))[0];
@@ -601,6 +743,22 @@ function handleEverything(events, meta) {
 	if (purchase && salt(uid, "channel-keep") >= keep) {
 		events = events.filter((e) => e !== purchase);
 		purchase = null;
+	}
+
+	// ── warm start: a pre-window signup buys only inside its first weeks. The
+	// older the account on June 4, the likelier its purchase already happened
+	// before the window (it starts the window on that paid plan) ──
+	if (!signup && purchase && profile.customer_since >= RECENT_FROM) {
+		const joinedMs = ms(`${profile.customer_since}T00:00:00Z`);
+		const ageDays = (ms(DATASET_START) - joinedMs) / DAY_MS;
+		if (salt(uid, "recent-buy") < ageDays / RECENT_SIGNUP_DAYS) {
+			profile.plan_tier = purchase.plan;
+			events = events.filter((e) => e !== purchase && e.event !== "upgrade page viewed");
+			purchase = null;
+		} else if (T(purchase) >= joinedMs + RECENT_SIGNUP_DAYS * DAY_MS) {
+			events = events.filter((e) => e !== purchase);
+			purchase = null;
+		}
 	}
 
 	// ── H5: first-week activation, setup abandonment, organic lapse (new signups only) ──
@@ -639,10 +797,17 @@ function handleEverything(events, meta) {
 	}
 	const alertCount = events.filter((e) => e.event === "alert triggered").length;
 	const flip = fatigueFlip(alertCount);
-	// H4: when both integrations are live (see knob note)
+	// H4: when both integrations are live (see knob note). New users: from the
+	// later of their first slack and first pagerduty configuration. Established
+	// users: the whole window when both were connected before June 4.
 	const firstConfig = (type) => Math.min(...events.filter((e) => e.event === "integration configured" && e.integration_type === type).map(T));
 	const pairReady = Math.max(...INTEGRATION_PAIR.map(firstConfig)); // Infinity when either is missing
-	const integratedFrom = pairReady === Infinity ? Infinity : signup ? pairReady : -Infinity;
+	const integratedFrom = preWindow
+		? (INTEGRATION_PAIR.every((k) => preWindow.has(k)) ? -Infinity : Infinity)
+		: pairReady;
+	profile.connected_integrations = preWindow
+		? listIntegrations(preWindow)
+		: listIntegrations(new Set(events.filter((e) => e.event === "integration configured").map((e) => e.integration_type)));
 	const sizeMult = RESPONSE_SIZE_MULT[profile.company_size] ?? 1;
 	// H2: adopters phase in over the 4 weeks after launch, each with their own usage rate
 	const rcaAdopter = salt(uid, "rca-adopter") < RCA_ADOPTER_SHARE;
@@ -983,7 +1148,7 @@ const config = {
 		},
 		{
 			event: "teammate invited",
-			weight: 3,
+			weight: 4,
 			isStrictEvent: false,
 			properties: {
 				invitee_role: ["member", "member", "admin", "viewer"],
@@ -992,7 +1157,7 @@ const config = {
 		},
 		{
 			event: "integration configured",
-			weight: 2.5,
+			weight: 3.5,
 			isStrictEvent: false,
 			properties: {
 				integration_type: { __weights: { slack: 34, pagerduty: 24, github: 15, jira: 10, terraform: 7, opsgenie: 5, microsoft_teams: 5 } },
@@ -1114,7 +1279,7 @@ const config = {
 			conversionRate: DEPLOY_CONV,
 			timeToConvert: DEPLOY_TTC_H,
 			order: "sequential",
-			weight: 3,
+			weight: 5,
 			props: {
 				deploy_id: (ctx) => `dep_${chance.hash({ length: 12 })}`,
 				runner_region: Object.entries(RUNNER_REGIONS).flatMap(([r, w]) => Array(w / 5).fill(r)),
@@ -1131,7 +1296,7 @@ const config = {
 		{
 			name: "Upgrade",
 			sequence: ["upgrade page viewed", "subscription started"],
-			conditions: { plan_tier: "free", customer_since: { gte: D0 } },
+			conditions: { plan_tier: "free", customer_since: { gte: RECENT_FROM } },
 			conversionRate: UPGRADE_CONV,
 			timeToConvert: 24,
 			order: "sequential",
@@ -1144,7 +1309,7 @@ const config = {
 		{
 			name: "Upgrade",
 			sequence: ["upgrade page viewed", "subscription started"],
-			conditions: { plan_tier: "free", customer_since: { lt: D0 } },
+			conditions: { plan_tier: "free", customer_since: { lt: RECENT_FROM } },
 			conversionRate: UPGRADE_CONV_ESTABLISHED,
 			timeToConvert: 24,
 			order: "sequential",
@@ -1153,6 +1318,15 @@ const config = {
 				plan: ["team", "team", "business"],
 				seats: u.weighNumRange(3, 25, 1, 40),
 			},
+		},
+		{
+			// invitations are one-off actions, not part of a session burst
+			name: "Team Invites",
+			sequence: ["teammate invited"],
+			conversionRate: 100,
+			timeToConvert: 0,
+			order: "sequential",
+			weight: 3,
 		},
 		{
 			name: "Cost Review",
@@ -1258,6 +1432,7 @@ const config = {
 		seat_count: [1],
 		annual_contract_value: [0],
 		customer_success_manager: [false],
+		connected_integrations: [[]],
 	},
 
 	personas: [
@@ -1282,10 +1457,18 @@ const config = {
 	},
 
 	// retention shape (also pins each new user's signup to their creation day)
-	retentionCurve: { type: "logarithmic", day1: 0.75, day7: 0.6, day30: 0.5 },
+	retentionCurve: RETENTION_CURVE,
 
 	hook(record, type, meta) {
 		if (type === "user") return handleUserHook(record, meta);
+		// account health is rated by customer success managers: CSM-covered accounts
+		// only, and never before the account existed (the engine starts established
+		// users' history up to 30 days before the window, which can precede a
+		// recent account's customer_since)
+		if (type === "scd-pre") {
+			if (!meta.profile.customer_success_manager) return [];
+			return record.filter((row) => String(row.startTime).slice(0, 10) >= meta.profile.customer_since);
+		}
 		if (type === "everything") return handleEverything(record, meta);
 		if (type === "warehouse") return handleWarehouse(record, meta);
 		if (type === "group") return handleGroup(record);
@@ -1452,18 +1635,18 @@ FROM ev WHERE event = 'alert resolved' AND t >= TIMESTAMP '${RCA_RAMPED}' AND pl
 		id: "H4-slack-pagerduty-response",
 		hook: "H4",
 		archetype: "cohort-prop-scale",
-		narrative: `Once a user has both the Slack and PagerDuty integrations connected, they acknowledge alerts in ${INTEGRATED_RESPONSE_MULT}x the time: the page reaches the on-call engineer where they already are. Only trigger → acknowledge is affected; acknowledge → resolve is not. The speed-up starts when the pair is live: for a new signup, alerts triggered after the later of their first slack and first pagerduty configuration; established customers who touch both integrations in the window had them before June 4, so their whole window is faster. Read 1: established customers, cohort "configured slack AND pagerduty" vs the rest (company size, severity, and fatigue are independent of the cohort, so the ratio of averages reads the knob). Read 2: within-user before/after for new signups in the cohort; fewer acknowledgements and per-user mix noise, so the knob is the target with a knob-derived ceiling.`,
-		mixpanelReport: { type: "Insights", event: "alert acknowledged", measure: "average response_time_mins", breakdown: "cohort: configured slack AND pagerduty", filter: "customer_since before 2026-06-04 (read 1)" },
+		narrative: `Once a user has both the Slack and PagerDuty integrations connected, they acknowledge alerts in ${INTEGRATED_RESPONSE_MULT}x the time: the page reaches the on-call engineer where they already are. Only trigger → acknowledge is affected; acknowledge → resolve is not. The speed-up starts when the pair is live. Accounts set up before the window (customer_since before ${RECENT_FROM}) connected their tools before June 4 and list them in the profile property connected_integrations; when it holds both, every in-window alert is faster (their in-window "integration configured" events only reconfigure tools they have). Newer accounts: alerts triggered after the later of their first slack and first pagerduty configuration. Read 1: accounts set up before the window, profile cohort "connected_integrations contains slack AND pagerduty" vs the rest (company size, severity, and fatigue are independent of the cohort, so the ratio of averages reads the knob). Read 2: within-user before/after for new signups who connect both in the window; fewer acknowledgements and per-user mix noise, so the knob is the target with a knob-derived floor.`,
+		mixpanelReport: { type: "Insights", event: "alert acknowledged", measure: "average response_time_mins", breakdown: "cohort: user property connected_integrations contains slack AND contains pagerduty", filter: `user property customer_since before ${RECENT_FROM} (read 1)` },
 		assertions: [
 			{
 				breakdown: {
 					type: "duckdb",
 					sql: `WITH ${ID_CTE},
-i AS (SELECT uid, bool_or(integration_type = 'slack') AND bool_or(integration_type = 'pagerduty') AS both_integ FROM ev WHERE event = 'integration configured' GROUP BY 1),
-est AS (SELECT distinct_id::VARCHAR AS uid FROM ${US} WHERE customer_since < '${D0}')
-SELECT CASE WHEN coalesce(i.both_integ, false) THEN 'integrated' ELSE 'rest' END AS grp, count(DISTINCT ev.uid) AS user_count,
+est AS (SELECT distinct_id::VARCHAR AS uid, list_contains(connected_integrations, 'slack') AND list_contains(connected_integrations, 'pagerduty') AS both_integ
+  FROM ${US} WHERE customer_since < '${RECENT_FROM}')
+SELECT CASE WHEN est.both_integ THEN 'integrated' ELSE 'rest' END AS grp, count(DISTINCT ev.uid) AS user_count,
  avg(response_time_mins) AS avg_resp
-FROM ev JOIN est ON est.uid = ev.uid LEFT JOIN i ON i.uid = ev.uid WHERE ev.event = 'alert acknowledged' GROUP BY 1`,
+FROM ev JOIN est ON est.uid = ev.uid WHERE ev.event = 'alert acknowledged' GROUP BY 1`,
 				},
 				select: { i: { where: { grp: "integrated" } }, r: { where: { grp: "rest" } } },
 				expect: { metric: "i.avg_resp / r.avg_resp", op: "between", target: band(INTEGRATED_RESPONSE_MULT) },
@@ -1529,7 +1712,7 @@ FROM f GROUP BY 1`,
 		hook: "H6",
 		archetype: "experiment-lift",
 		narrative: `The "${SMART_TEST_EXPERIMENT}" pipeline test starts ${D(SMART_TEST_START)} and splits users 50/50 (sticky hash). "${SMART_TEST_VARIANT}" multiplies the share of pipeline runs that reach "service deployed" by ${SMART_TEST_CONV_MULT} and the run-to-deploy time by ${SMART_TEST_TTC_MULT}. Every run and its deploy share a deploy_id, so a totals funnel holding deploy_id constant measures per-run success; pipeline_status agrees with it (success exactly when the deploy happened). The runner incident (H7) hits both arms alike.`,
-		mixpanelReport: { type: "Funnels", steps: ["deployment pipeline run", "service deployed"], counting: "totals", holdPropertyConstant: "deploy_id", breakdown: `user property "${EXP_KEY}"`, window: "1 day" },
+		mixpanelReport: { type: "Funnels", steps: ["deployment pipeline run", "service deployed"], counting: "totals", holdPropertyConstant: "deploy_id", breakdown: `user property "${EXP_KEY}"`, window: "1 day", dateRange: `${D(SMART_TEST_START)} to ${D(DATASET_END)}` },
 		assertions: [
 			{
 				breakdown: {

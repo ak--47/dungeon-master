@@ -43,10 +43,13 @@ SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-ci_runner
 CREATE OR REPLACE TEMP TABLE wh_bookings AS
 SELECT * FROM read_json_auto(getvariable('data_prefix') || '-WAREHOUSE-subscription_bookings_daily.json*', sample_size=-1, union_by_name=true);
 
--- profile attributes keyed by the resolved user id
+-- profile attributes keyed by the resolved user id; slack_and_pagerduty = both
+-- tools in the profile's connected_integrations (current integrations; for
+-- accounts set up before the window they were connected before June 4)
 CREATE OR REPLACE TEMP TABLE prof AS
 SELECT distinct_id::VARCHAR AS uid, company_size, cloud_provider, acquisition_channel, plan_tier AS current_plan,
- "Experiment: Smart Test Selection" AS variant, created
+ "Experiment: Smart Test Selection" AS variant, created, customer_since,
+ coalesce(list_contains(connected_integrations, 'slack') AND list_contains(connected_integrations, 'pagerduty'), false) AS slack_and_pagerduty
 FROM users;
 
 -- new-user signups (one per user who joined in the window)
@@ -77,6 +80,9 @@ SELECT uid, greatest(min(t) FILTER (WHERE integration_type = 'slack'), min(t) FI
 FROM ev WHERE event = 'integration configured'
 GROUP BY 1 HAVING bool_or(integration_type = 'slack') AND bool_or(integration_type = 'pagerduty');
 
+-- users with both integrations on the profile (current state)
+CREATE OR REPLACE TEMP TABLE integrated_profile AS SELECT uid, customer_since FROM prof WHERE slack_and_pagerduty;
+
 -- dataset overview
 SELECT count(*) AS events, count(DISTINCT uid) AS users, (SELECT count(*) FROM users) AS profiles,
  (SELECT count(*) FROM signups) AS new_signups, min(t) AS first_event, max(t) AS last_event FROM ev;
@@ -85,6 +91,17 @@ SELECT count(*) AS events, count(DISTINCT uid) AS users, (SELECT count(*) FROM u
 SELECT count(*) FILTER (WHERE uid IS NULL) AS unresolved_events,
  count(*) FILTER (WHERE e.company_id::VARCHAR <> u.company_id::VARCHAR) AS company_mismatch
 FROM ev e LEFT JOIN users u ON u.distinct_id::VARCHAR = e.uid;
+
+-- timeline check: US holidays (Jul 3 observed, Sep 7) vs the same weekday a week before and after
+SELECT t::DATE AS day, dayname(t::DATE) AS weekday, count(*) AS events, count(*) FILTER (WHERE event = 'dashboard viewed') AS dashboard_views,
+ count(*) FILTER (WHERE event = 'alert triggered') AS alerts
+FROM ev WHERE t::DATE IN (DATE '2026-06-26', DATE '2026-07-03', DATE '2026-07-10', DATE '2026-08-31', DATE '2026-09-07', DATE '2026-09-14')
+GROUP BY 1, 2 ORDER BY 1;
+
+-- account health coverage: rows exist only for accounts with a customer success manager
+SELECT u.customer_success_manager, count(DISTINCT u.distinct_id) AS users, count(DISTINCT s.distinct_id) AS users_with_health_rows
+FROM users u LEFT JOIN read_json_auto(getvariable('data_prefix') || '-account_health-SCD*.json*', sample_size=-1, union_by_name=true) s
+  ON s.distinct_id = u.distinct_id GROUP BY 1 ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H1-quarter-close-seat-push — paid-plan invites ×1.5, 2026-09-16..09-30; Free unchanged
@@ -132,11 +149,12 @@ FROM onboarding GROUP BY 1 ORDER BY 1;
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H4-slack-pagerduty-response — ack time ×0.4 once Slack + PagerDuty are both live
 -- ─────────────────────────────────────────────────────────────────────────
--- read 1: established customers (joined before 2026-06-04), cohort vs rest
-SELECT CASE WHEN i.uid IS NOT NULL THEN 'slack_and_pagerduty' ELSE 'rest' END AS grp,
+-- read 1: accounts set up before the window (customer_since before 2026-05-14),
+-- profile connected_integrations has slack AND pagerduty vs the rest
+SELECT CASE WHEN p.slack_and_pagerduty THEN 'slack_and_pagerduty' ELSE 'rest' END AS grp,
  count(DISTINCT a.uid) AS users, count(*) AS acks, round(avg(a.response_time_mins), 2) AS avg_response_mins
-FROM alerts a JOIN users u ON u.distinct_id::VARCHAR = a.uid LEFT JOIN integrated i ON i.uid = a.uid
-WHERE a.t_ack IS NOT NULL AND u.customer_since < '2026-06-04' GROUP BY 1 ORDER BY 1;
+FROM alerts a JOIN prof p ON p.uid = a.uid
+WHERE a.t_ack IS NOT NULL AND p.customer_since < '2026-05-14' GROUP BY 1 ORDER BY 1;
 -- read 2: new signups in the cohort, alerts triggered before vs after both integrations were live
 SELECT CASE WHEN a.t_trig >= i.ready THEN 'after' ELSE 'before' END AS grp,
  count(DISTINCT a.uid) AS users, count(*) AS acks, round(avg(a.response_time_mins), 2) AS avg_response_mins
@@ -264,17 +282,39 @@ SELECT round(avg((resolution_method = 'ai_assist')::INT), 4) AS ai_share_overall
  round(avg((resolution_method = 'ai_assist')::INT) FILTER (WHERE t >= TIMESTAMP '2026-08-19'), 4) AS ai_share_from_aug_19
 FROM ev WHERE event = 'alert resolved' AND t >= TIMESTAMP '2026-07-22' AND plan_tier IN ('business', 'enterprise');
 
--- EVAL Q3 — null: acknowledgement time before vs after Root Cause Assist (Business/Enterprise)
+-- EVAL Q3 — null: do alerts handled with Root Cause Assist also get acknowledged faster?
+-- Alert level (alert_id holds trigger, acknowledgement, resolution), Business/Enterprise
+-- resolutions since adoption leveled off (2026-08-19): acknowledgement time of alerts
+-- resolved with ai_assist vs the other resolutions, with sub-splits by plan and company size.
+CREATE OR REPLACE TEMP TABLE q3 AS
+SELECT a.alert_id, a.response_time_mins AS r, a.resolution_method = 'ai_assist' AS ai, a.res_plan, p.company_size
+FROM alerts a JOIN prof p ON p.uid = a.uid
+WHERE a.t_res >= TIMESTAMP '2026-08-19' AND a.res_plan IN ('business', 'enterprise') AND a.response_time_mins IS NOT NULL;
+WITH s AS (SELECT 'all' AS split, ai, r FROM q3
+  UNION ALL SELECT 'plan=' || res_plan, ai, r FROM q3
+  UNION ALL SELECT 'size=' || company_size, ai, r FROM q3),
+g AS (SELECT split, ai, count(*) AS n, avg(r) AS m, var_samp(r) AS v, median(r) AS med, avg(ln(r + 0.1)) AS lm, var_samp(ln(r + 0.1)) AS lv FROM s GROUP BY 1, 2)
+SELECT split, max(n) FILTER (WHERE ai) AS n_ai, max(n) FILTER (WHERE NOT ai) AS n_other,
+ round(max(m) FILTER (WHERE ai), 2) AS avg_ack_ai, round(max(m) FILTER (WHERE NOT ai), 2) AS avg_ack_other,
+ round(max(med) FILTER (WHERE ai), 2) AS median_ack_ai, round(max(med) FILTER (WHERE NOT ai), 2) AS median_ack_other,
+ round((max(m) FILTER (WHERE ai) - max(m) FILTER (WHERE NOT ai)) / sqrt(sum(v / n)), 2) AS z_mean,
+ round((max(lm) FILTER (WHERE ai) - max(lm) FILTER (WHERE NOT ai)) / sqrt(sum(lv / n)), 2) AS z_log
+FROM g GROUP BY 1 ORDER BY 1;
+-- context: the plain before/after read on Business/Enterprise acknowledgements (whole window)
 SELECT (t >= TIMESTAMP '2026-07-22') AS after_launch, count(*) AS acks, round(avg(response_time_mins), 2) AS avg_response_mins,
  round(median(response_time_mins), 2) AS median_response_mins
 FROM ev WHERE event = 'alert acknowledged' AND plan_tier IN ('business', 'enterprise') GROUP BY 1 ORDER BY 1;
--- Welch z, after minus before, on the mean and on log minutes (response times are skewed)
 WITH g AS (SELECT (t >= TIMESTAMP '2026-07-22') AS post, count(*) AS n, avg(response_time_mins) AS m, var_samp(response_time_mins) AS v,
   avg(ln(response_time_mins + 0.1)) AS lm, var_samp(ln(response_time_mins + 0.1)) AS lv
   FROM ev WHERE event = 'alert acknowledged' AND plan_tier IN ('business', 'enterprise') GROUP BY 1),
 x AS (SELECT max(m) FILTER (WHERE post) - max(m) FILTER (WHERE NOT post) AS dm, sqrt(sum(v / n)) AS se,
   max(lm) FILTER (WHERE post) - max(lm) FILTER (WHERE NOT post) AS dl, sqrt(sum(lv / n)) AS lse FROM g)
 SELECT round(dm / se, 2) AS z_mean, round(dl / lse, 2) AS z_log FROM x;
+-- the same before/after for accounts whose plan did not change in the window vs accounts that upgraded during it
+WITH fp AS (SELECT uid, arg_min(plan_tier, t) AS first_plan FROM ev GROUP BY 1)
+SELECT fp.first_plan IN ('business', 'enterprise') AS on_plan_all_window, (e.t >= TIMESTAMP '2026-07-22') AS after_launch,
+ count(*) AS acks, round(avg(e.response_time_mins), 2) AS avg_response_mins
+FROM ev e JOIN fp ON fp.uid = e.uid WHERE e.event = 'alert acknowledged' AND e.plan_tier IN ('business', 'enterprise') GROUP BY 1, 2 ORDER BY 1, 2;
 
 -- EVAL Q4 — onboarding conversion by cloud provider (with step detail)
 SELECT cloud_provider, count(*) AS signups, round(avg(connected::INT), 4) AS connected_cloud,
@@ -291,18 +331,22 @@ x AS (SELECT g.m, g.n1, g.p1, t.n - g.n1 AS n2, (t.p * t.n - g.p1 * g.n1) / (t.n
 SELECT m AS signup_method, round(p1, 4) AS conversion, round(p2, 4) AS rest_conversion,
  round((p1 - p2) / sqrt(p * (1 - p) * (1.0 / n1 + 1.0 / n2)), 2) AS z_vs_rest FROM x ORDER BY 1;
 
--- EVAL Q6 — Slack + PagerDuty: acknowledgement and resolution time
-SELECT CASE WHEN i.uid IS NOT NULL THEN 'slack_and_pagerduty' ELSE 'rest' END AS grp,
+-- EVAL Q6 — Slack + PagerDuty: acknowledgement and resolution time (profile connected_integrations)
+SELECT CASE WHEN p.slack_and_pagerduty THEN 'slack_and_pagerduty' ELSE 'rest' END AS grp,
  count(DISTINCT a.uid) AS users,
  round(avg(a.response_time_mins), 2) AS avg_response_mins, round(median(a.response_time_mins), 2) AS median_response_mins,
  round(avg(a.resolution_time_mins) FILTER (WHERE a.resolution_method <> 'ai_assist'), 1) AS avg_resolution_mins_non_ai
-FROM alerts a LEFT JOIN integrated i ON i.uid = a.uid WHERE a.t_ack IS NOT NULL GROUP BY 1 ORDER BY 1;
-SELECT count(*) AS users_with_both, round(count(*)::DOUBLE / (SELECT count(DISTINCT uid) FROM alerts), 4) AS share_of_alert_users FROM integrated;
--- established customers only (had both before the window) and new signups before/after both were live
-SELECT CASE WHEN i.uid IS NOT NULL THEN 'slack_and_pagerduty' ELSE 'rest' END AS grp, count(DISTINCT a.uid) AS users,
+FROM alerts a JOIN prof p ON p.uid = a.uid WHERE a.t_ack IS NOT NULL GROUP BY 1 ORDER BY 1;
+-- share of alert recipients (users with at least one alert triggered) who have both
+WITH r AS (SELECT DISTINCT uid FROM alerts WHERE t_trig IS NOT NULL)
+SELECT count(*) AS alert_recipients, count(*) FILTER (WHERE p.slack_and_pagerduty) AS recipients_with_both,
+ round(avg(p.slack_and_pagerduty::INT), 4) AS share_with_both
+FROM r JOIN prof p ON p.uid = r.uid;
+-- accounts set up before the window (customer_since before 2026-05-14) and new signups before/after both were live
+SELECT CASE WHEN p.slack_and_pagerduty THEN 'slack_and_pagerduty' ELSE 'rest' END AS grp, count(DISTINCT a.uid) AS users,
  round(avg(a.response_time_mins), 2) AS avg_response_mins
-FROM alerts a JOIN users u ON u.distinct_id::VARCHAR = a.uid LEFT JOIN integrated i ON i.uid = a.uid
-WHERE a.t_ack IS NOT NULL AND u.customer_since < '2026-06-04' GROUP BY 1 ORDER BY 1;
+FROM alerts a JOIN prof p ON p.uid = a.uid
+WHERE a.t_ack IS NOT NULL AND p.customer_since < '2026-05-14' GROUP BY 1 ORDER BY 1;
 SELECT CASE WHEN a.t_trig >= i.ready THEN 'after' ELSE 'before' END AS grp, count(DISTINCT a.uid) AS users, count(*) AS acks,
  round(avg(a.response_time_mins), 2) AS avg_response_mins
 FROM alerts a JOIN integrated i ON i.uid = a.uid JOIN signups s ON s.uid = a.uid
@@ -452,21 +496,44 @@ SELECT strftime(date::DATE, '%Y-%m') AS month, plan, sum(new_subscriptions) AS s
 FROM wh_bookings GROUP BY 1, 2 ORDER BY 1, 2;
 SELECT strftime(date::DATE, '%Y-%m') AS month, sum(new_subscriptions) AS subscriptions, round(sum(new_mrr_usd), 0) AS new_mrr_usd FROM wh_bookings GROUP BY 1 ORDER BY 1;
 
--- EVAL Q19 — null: did the runner incident change alert acknowledgement or dashboard use?
+-- EVAL Q19 — null: did the runner incident make customers stop acknowledging alerts or using dashboards?
 -- Usage is weekday-heavy, so compare the incident days (Tue Aug 25 - Thu Aug 27)
 -- with the same weekdays one week before (Aug 18-20) and one week after (Sep 1-3).
-WITH d AS (SELECT t::DATE AS day, (t >= TIMESTAMP '2026-08-25' AND t < TIMESTAMP '2026-08-28') AS incident,
-  avg(response_time_mins) FILTER (WHERE event = 'alert acknowledged') AS resp,
-  count(*) FILTER (WHERE event = 'alert acknowledged') AS acks,
-  count(*) FILTER (WHERE event = 'dashboard viewed') AS views, count(*) FILTER (WHERE event = 'alert triggered') AS alerts
-  FROM ev WHERE (t >= TIMESTAMP '2026-08-18' AND t < TIMESTAMP '2026-08-21')
-     OR (t >= TIMESTAMP '2026-08-25' AND t < TIMESTAMP '2026-08-28')
-     OR (t >= TIMESTAMP '2026-09-01' AND t < TIMESTAMP '2026-09-04') GROUP BY 1, 2)
-SELECT incident, count(*) AS days, round(sum(resp * acks) / sum(acks), 2) AS avg_response_mins,
- round(avg(views), 1) AS dashboard_views_per_day, round(avg(alerts), 1) AS alerts_per_day,
- round(min(resp), 2) AS min_daily_response, round(max(resp), 2) AS max_daily_response,
- min(views) AS min_daily_views, max(views) AS max_daily_views
-FROM d GROUP BY 1 ORDER BY 1;
+CREATE OR REPLACE TEMP TABLE q19_days AS
+SELECT d, CASE WHEN d BETWEEN DATE '2026-08-25' AND DATE '2026-08-27' THEN 'incident' ELSE 'comparison' END AS grp
+FROM (SELECT unnest([DATE '2026-08-18', DATE '2026-08-19', DATE '2026-08-20', DATE '2026-08-25', DATE '2026-08-26',
+  DATE '2026-08-27', DATE '2026-09-01', DATE '2026-09-02', DATE '2026-09-03']) AS d);
+-- acknowledgement rate of alerts triggered on those days (match on alert_id), dashboard views and queries per day
+WITH a AS (SELECT q.grp, count(*) AS alerts, count(a.t_ack) AS acked FROM alerts a JOIN q19_days q ON q.d = a.t_trig::DATE GROUP BY 1),
+u AS (SELECT q.grp, count(*) FILTER (WHERE e.event = 'dashboard viewed') AS views, count(*) FILTER (WHERE e.event = 'query executed') AS queries,
+  count(DISTINCT e.t::DATE) AS days FROM ev e JOIN q19_days q ON q.d = e.t::DATE GROUP BY 1),
+p AS (SELECT sum(acked)::DOUBLE / sum(alerts) AS pp FROM a)
+SELECT a.grp, a.alerts, round(a.acked::DOUBLE / a.alerts, 4) AS ack_rate,
+ round((a.acked::DOUBLE / a.alerts - (SELECT pp FROM p)) / sqrt((SELECT pp * (1 - pp) FROM p) / a.alerts), 2) AS z_vs_pooled,
+ round(u.views::DOUBLE / u.days, 1) AS dashboard_views_per_day, round(u.queries::DOUBLE / u.days, 1) AS queries_per_day
+FROM a JOIN u ON u.grp = a.grp ORDER BY 1;
+-- two-proportion z on the acknowledgement rate, incident vs comparison days
+WITH a AS (SELECT q.grp, count(*) AS n, avg((a.t_ack IS NOT NULL)::INT) AS r FROM alerts a JOIN q19_days q ON q.d = a.t_trig::DATE GROUP BY 1),
+x AS (SELECT max(n) FILTER (WHERE grp = 'incident') AS n1, max(r) FILTER (WHERE grp = 'incident') AS p1,
+  max(n) FILTER (WHERE grp = 'comparison') AS n2, max(r) FILTER (WHERE grp = 'comparison') AS p2 FROM a)
+SELECT round(p1, 4) AS incident_ack_rate, round(p2, 4) AS comparison_ack_rate,
+ round((p1 - p2) / sqrt(((p1 * n1 + p2 * n2) / (n1 + n2)) * (1 - (p1 * n1 + p2 * n2) / (n1 + n2)) * (1.0 / n1 + 1.0 / n2)), 2) AS z FROM x;
+-- daily dashboard views on each of the nine days, and the range over every Tue-Thu span in the window
+SELECT e.t::DATE AS day, q.grp, count(*) AS dashboard_views FROM ev e JOIN q19_days q ON q.d = e.t::DATE
+WHERE e.event = 'dashboard viewed' GROUP BY 1, 2 ORDER BY 1;
+WITH v AS (SELECT t::DATE AS d, count(*) AS n FROM ev WHERE event = 'dashboard viewed' GROUP BY 1),
+s AS (SELECT d FROM v WHERE dayofweek(d) = 2),
+x AS (SELECT s.d AS span_start, avg(v.n) AS views FROM s JOIN v ON v.d >= s.d AND v.d < s.d + 3 GROUP BY 1)
+SELECT count(*) AS tue_thu_spans, round(min(views), 0) AS min_views_per_day, round(median(views), 0) AS median_views_per_day,
+ round(max(views), 0) AS max_views_per_day, round(max(views) FILTER (WHERE span_start = DATE '2026-08-25'), 0) AS incident_views_per_day FROM x;
+-- acknowledgement time (not slower): averages, and the within-user change for users with acknowledgements on both sets of days
+WITH w AS (SELECT a.uid, q.grp, a.response_time_mins AS r FROM alerts a JOIN q19_days q ON q.d = a.t_ack::DATE WHERE a.t_ack IS NOT NULL),
+u AS (SELECT uid, avg(r) FILTER (WHERE grp = 'incident') AS mi, avg(r) FILTER (WHERE grp = 'comparison') AS mc FROM w GROUP BY 1
+  HAVING count(*) FILTER (WHERE grp = 'incident') > 0 AND count(*) FILTER (WHERE grp = 'comparison') > 0)
+SELECT (SELECT round(avg(r), 2) FROM w WHERE grp = 'incident') AS incident_avg_ack_mins,
+ (SELECT round(avg(r), 2) FROM w WHERE grp = 'comparison') AS comparison_avg_ack_mins,
+ count(*) AS users_on_both, round(avg(mi - mc), 2) AS within_user_change_mins,
+ round(avg(mi - mc) / (stddev(mi - mc) / sqrt(count(*))), 2) AS z_paired FROM u;
 
 -- EVAL Q20 — headline numbers for the Q4 risk review
 SELECT 'azure_onboarding' AS metric, round(avg(converted::INT) FILTER (WHERE cloud_provider = 'azure'), 4) AS value FROM onboarding
@@ -474,6 +541,7 @@ UNION ALL SELECT 'non_azure_onboarding', round(avg(converted::INT) FILTER (WHERE
 UNION ALL SELECT 'azure_share_of_signups', round(avg((cloud_provider = 'azure')::INT), 4) FROM onboarding
 UNION ALL SELECT 'not_activated_share', round(avg((early_invites < 2)::INT), 4) FROM activation
 UNION ALL SELECT 'users_30_plus_alerts_share', round(avg((alerts >= 30)::INT), 4) FROM alert_load
+UNION ALL SELECT 'alert_recipients_without_slack_and_pagerduty', round(avg((NOT p.slack_and_pagerduty)::INT), 4) FROM alert_load l JOIN prof p ON p.uid = l.uid
 UNION ALL SELECT 'linkedin_share_of_paid_spend', round((SELECT sum(spend_usd) FROM wh_marketing WHERE acquisition_channel = 'linkedin_ads') / (SELECT sum(spend_usd) FROM wh_marketing), 4)
 UNION ALL SELECT 'total_paid_spend_usd', round((SELECT sum(spend_usd) FROM wh_marketing), 0)
 UNION ALL SELECT 'team_mrr_per_sub_post_vs_pre', round(
