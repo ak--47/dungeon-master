@@ -27,7 +27,7 @@ All KPIs use UTC days and count accounts by unique `user_id`. Remember that each
 
 ## Warehouse tables
 
-Three tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). Days with no activity have a row with zeros. They join to events on the UTC date of the event and on the named dimension. Count columns hold whole numbers; rates, prices, and dollar amounts are decimals.
+Three tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). Days with no activity have a row with zeros. They join to events on the UTC date of the event and on the named dimension. Count columns hold whole numbers; rates, input prices, and dollar amounts are decimals (output prices are whole dollars).
 
 ### `inference_fleet_daily`
 
@@ -41,7 +41,7 @@ Daily health of Cortexa's GPU inference fleet by region, from the platform team'
 | `error_rate_5xx` | FLOAT | share 0-1 | Share of customer API requests that failed with a server-side error (500 or 529). |
 | `gpus_online` | INTEGER | GPUs | Average number of GPUs in service. |
 | `gpu_utilization` | FLOAT | share 0-1 | Average utilization of the GPUs in service. |
-| `p95_latency_ms` | INTEGER | milliseconds | 95th-percentile request latency across all models. |
+| `p95_latency_ms` | INTEGER | milliseconds | 95th-percentile latency of successful customer API requests (all models), from the API gateway. |
 | `region_status` | STRING | — | Daily status for the region as posted on the status page: `operational` or `major_outage`. |
 
 Caveats: internal traffic does not send product events and runs every day at a steady level, so `requests_served` is higher than 1,000 × the Mixpanel request count and does not track it exactly day to day. Rate-limited (429) requests are rejected before they reach the fleet and are not counted.
@@ -59,7 +59,7 @@ Daily metered usage, list prices, and revenue by model, from the billing system.
 | `cached_input_tokens_billed` | INTEGER | tokens | The part of the input read from the prompt cache. |
 | `output_tokens_billed` | INTEGER | tokens | Output tokens. |
 | `list_price_input_per_mtok` | FLOAT | USD per million tokens | Input list price for the model on this day. |
-| `list_price_output_per_mtok` | FLOAT | USD per million tokens | Output list price for the model on this day. |
+| `list_price_output_per_mtok` | INTEGER | USD per million tokens | Output list price for the model on this day. Every output price in the window is a whole dollar amount, so the column loads as INTEGER. |
 | `usage_value_usd` | FLOAT | USD | Usage at list price: uncached input × input price + cached input × 10% of the input price + output × output price. |
 | `free_credit_usd` | FLOAT | USD | The part of the usage value drawn from Free accounts' free allowance. |
 | `revenue_usd` | FLOAT | USD | `usage_value_usd` − `free_credit_usd`. |

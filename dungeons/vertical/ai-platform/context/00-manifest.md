@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Cortexa**, a developer platform
 
 - **Product:** the Cortexa API (Messages API and Batch API) and the Cortexa web console: API keys, the prompt playground, evaluations, usage dashboards, docs, and billing. Models: atlas-2, swift-2, and atlas-3 (from July 28).
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, the end of Q2 through the close of Q3 and the first day of Q4.
-- **Scale:** about 10,000 developer accounts were active in the window. About 5,000 of them signed up during the window; the rest were already customers before June 4. The project holds about 860,000 events.
+- **Scale:** about 10,000 developer accounts were active in the window. About 5,000 of them signed up during the window; the rest were already customers before June 4. The project holds about 820,000 events.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC.
 
 ## The other files

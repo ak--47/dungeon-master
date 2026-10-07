@@ -17,9 +17,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             billing. Models: atlas-2 (flagship), swift-2 (fast and cheap), and
  *             atlas-3 (new flagship from 2026-07-28; Free accounts from
  *             2026-09-08). Usage is billed per million tokens; plans are Free
- *             (monthly free allowance), Build (pay as you go), Scale (committed
- *             monthly spend), and Enterprise (contract).
- * SCALE:      10,000 accounts (4,978 sign up inside the window), ~0.86M events,
+ *             ($100 of list-price usage a month), Build (pay as you go), Scale
+ *             (committed monthly spend), and Enterprise (contract).
+ * SCALE:      10,000 accounts (4,981 sign up inside the window), ~0.82M events,
  *             120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  account created → api key created → api request (repeat)
  * VALUE MOMENT: first api request
@@ -67,8 +67,11 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   event stands for 1,000 requests. The warehouse meters every request, so
  *   model_billing_daily and inference_fleet_daily are ~1,000x the event
  *   counts, with drift (late-posted usage, steady internal traffic, requests
- *   whose analytics record was lost). Free accounts keep 30% of their request
- *   events (small, throttled workloads); Scale and Enterprise accounts send
+ *   whose analytics record was lost). Free accounts keep 15% of their request
+ *   events (small, throttled workloads) and stop at a $100 monthly allowance of
+ *   list-price usage (FREE_MONTHLY_ALLOWANCE_USD: the request that uses it up
+ *   completes, later ones are rejected and not logged until the 1st; about $48
+ *   of free usage per active Free account a month); Scale and Enterprise accounts send
  *   2x and 3x a Build account's traffic (cloned requests), so per-account
  *   spend fits the plan. Production traffic runs every day: each Saturday and
  *   Sunday request gains a clone with probability WEEKEND_API_LIFT (0.2), so
@@ -117,8 +120,12 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   flat across the window. Batch and eval completions are platform-sent and
  *   survive a new account's lifecycle cut; retention reads exclude them.
  * - warehouse: the everything hook records each account's final request log
- *   (per day × model and day × region) into a module map keyed by account;
- *   the warehouse hook aggregates it. Deterministic at concurrency 1.
+ *   (per day × model and day × region, with the latency of every successful
+ *   request) and its signup channel into module maps keyed by account; the
+ *   warehouse hook aggregates them. inference_fleet_daily.p95_latency_ms is the
+ *   p95 of the region-day's successful request latencies (±3%); each paid
+ *   channel's daily budget is its cost per signup × the signups it brought in,
+ *   spread over the window. Deterministic at concurrency 1.
  */
 
 // ── HOOK STORIES ──
@@ -193,7 +200,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   also lapse on a day spread evenly over 7-90 (organic), the same share in
  *   every early-eval group. Dark and lapse shares are exact within each group
  *   (systematic sampling), so retention for 2 runs and for 3+ runs is the
- *   same. Reads are knob floors: accounts that never evaluate also send fewer
+ *   same in expectation. Reads are knob floors: accounts that never evaluate also send fewer
  *   events later (no eval runs), which can only add to the gap.
  *   D30 2+ / 0 ≥ 1/(1−0.55); 1 / 0 ≥ 0.7/0.45.
  * MIXPANEL: Funnels account created → eval run started → eval run started
@@ -239,8 +246,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H9. DEVELOPER MARKETING ECONOMICS (everything + warehouse developer_marketing_daily)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: window spend per Mixpanel signup is $140 hackathons, $85 search
- *   ads, $55 newsletter sponsorships (paced daily budgets, weekday shape, ±15%
- *   noise, never zero). Share of would-be upgraders kept by channel: search
+ *   ads, $55 newsletter sponsorships (paced daily budget = cost per signup ×
+ *   the channel's window signups / 120, weekday shape, ±15% noise, never zero). Share of would-be upgraders kept by channel: search
  *   ads and referral 1.0, newsletters 0.85, github 0.8, organic 0.75,
  *   hackathons 0.35.
  * MIXPANEL: Insights account created by acquisition_channel joined to
@@ -269,41 +276,44 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * Hook | Metric                                        | Derivation                 | Expected | Measured
  * -----|-----------------------------------------------|----------------------------|----------|---------
  * H1   | cache hits before 2026-07-08                  | exact purity               | 0        | 0
- * H1   | time to first token hit / miss, plain, 200    | CACHE_TTFT_RATIO           | 0.561    | 0.559 (384 vs 686 ms)
- * H1   | cache-hit share of requests after ramp        | 0.5 × 0.7                  | 0.35     | 0.347
+ * H1   | time to first token hit / miss, plain, 200    | CACHE_TTFT_RATIO           | 0.561    | 0.563 (387 vs 687 ms)
+ * H1   | cache-hit share of requests after ramp        | 0.5 × 0.7                  | 0.35     | 0.357
  * H2   | atlas-3 before launch / on Free before Sep 8  | exact purity               | 0        | 0
- * H2   | atlas-3 share of paid flagship, ramped        | 0.6 × 0.65                 | 0.39     | 0.402
- * H2   | output tokens atlas-3 / atlas-2, paid         | ATLAS3_OUTPUT_MULT         | 1.30     | 1.302
- * H2   | atlas-3 share of Free flagship, from Sep 18   | 0.35 × 0.65                | 0.2275   | 0.240
- * H3   | first-request rate variant / control (7 d)    | QUICKSTART_CONV_MULT       | 1.30     | 1.345 (64.9% vs 48.3%)
- * H3   | median time to first request variant / ctrl   | QUICKSTART_TTC_MULT        | 0.50     | 0.497 (2.0 vs 4.0 h)
- * H3   | variant share of exposed accounts             | equal 2-arm hash           | 0.50     | 0.496
- * H4   | median batch time Scale+Ent / Build           | BATCH_PLAN_MULT.scale      | 0.40     | 0.399 (1.56 vs 3.92 h)
- * H4   | median batch time Free / Build                | BATCH_PLAN_MULT.free       | 1.60     | 1.599
- * H5   | D30 retention 2+ / 0 early eval runs          | ≥ 1/(1 − 0.55) (floor)     | ≥ 2.22   | 2.367 (68.1% vs 28.8%, NAILED)
- * H5   | D30 retention 1 / 0 early eval runs           | ≥ 0.7/0.45 (floor)         | ≥ 1.56   | 1.710 (NAILED)
- * H5   | D30 retention 3+ vs exactly 2 early runs      | no dark cut for either     | equal    | 69.7% vs 67.0% (z ≈ 0.5)
- * H6   | us-east / other success, incident vs ±7 days  | 1 − INCIDENT_FAIL          | 0.65     | 0.645
- * H6   | warehouse error_rate_5xx during the outage    | INCIDENT_FAIL (+1.3% base) | 0.35     | 0.357
- * H7   | Build swift-2 share Sep / before the cut      | SWIFT_SHIFT_MULT           | 1.60     | 1.604 (30.0% → 48.0%)
- * H7   | Free swift-2 share Sep / before (control)     | unchanged                  | 1.00     | 0.979
- * H8   | input tokens tool / plain                     | TOOL_INPUT_MULT            | 2.50     | 2.500 (11,459 vs 4,584)
- * H8   | tool share of agents requests                 | TOOL_SHARE.agents          | 0.60     | 0.603
- * H9   | spend per signup hackathons / search ads      | 140 / 85                   | 1.647    | 1.658 ($139.07 vs $83.86)
- * H9   | 30-day paid rate hackathons / search ads      | 0.35 / 1.0 (ceiling 0.496) | 0.35     | 0.393 (7.8% vs 19.8%, STRONG)
- * H10  | Build / Free rate-limit rate, Sep vs Jun 4-Aug 31 | RL_RAISE_MULT          | 0.40     | 0.399 (Free 252.1 → 244.8 per 1k)
+ * H2   | atlas-3 share of paid flagship, ramped        | 0.6 × 0.65                 | 0.39     | 0.390
+ * H2   | output tokens atlas-3 / atlas-2, paid         | ATLAS3_OUTPUT_MULT         | 1.30     | 1.297
+ * H2   | atlas-3 share of Free flagship, from Sep 18   | 0.35 × 0.65                | 0.2275   | 0.217
+ * H3   | first-request rate variant / control (7 d)    | QUICKSTART_CONV_MULT       | 1.30     | 1.382 (65.8% vs 47.6%)
+ * H3   | median time to first request variant / ctrl   | QUICKSTART_TTC_MULT        | 0.50     | 0.501 (2.0 vs 4.0 h)
+ * H3   | variant share of exposed accounts             | equal 2-arm hash           | 0.50     | 0.489
+ * H4   | median batch time Scale+Ent / Build           | BATCH_PLAN_MULT.scale      | 0.40     | 0.415 (1.62 vs 3.91 h)
+ * H4   | median batch time Free / Build                | BATCH_PLAN_MULT.free       | 1.60     | 1.641
+ * H5   | D30 retention 2+ / 0 early eval runs          | ≥ 1/(1 − 0.55) (floor)     | ≥ 2.22   | 2.453 (69.0% vs 28.1%, STRONG)
+ * H5   | D30 retention 1 / 0 early eval runs           | ≥ 0.7/0.45 (floor)         | ≥ 1.56   | 1.702 (NAILED)
+ * H5   | D30 retention 3+ vs exactly 2 early runs      | no dark cut for either     | equal    | 72.6% vs 66.5% (z ≈ 1.1)
+ * H6   | us-east / other success, incident vs ±7 days  | 1 − INCIDENT_FAIL          | 0.65     | 0.652
+ * H6   | warehouse error_rate_5xx during the outage    | INCIDENT_FAIL (+1.3% base) | 0.35     | 0.350
+ * H7   | Build swift-2 share Sep / before the cut      | SWIFT_SHIFT_MULT           | 1.60     | 1.604 (30.0% → 48.2%)
+ * H7   | Free swift-2 share Sep / before (control)     | unchanged                  | 1.00     | 0.994
+ * H8   | input tokens tool / plain                     | TOOL_INPUT_MULT            | 2.50     | 2.486 (11,448 vs 4,606)
+ * H8   | tool share of agents requests                 | TOOL_SHARE.agents          | 0.60     | 0.598
+ * H9   | spend per signup hackathons / search ads      | 140 / 85                   | 1.647    | 1.622 ($139.46 vs $85.96)
+ * H9   | 30-day paid rate hackathons / search ads      | 0.35 / 1.0 (ceiling 0.496) | 0.35     | 0.386 (8.5% vs 22.0%, STRONG)
+ * H10  | Build / Free rate-limit rate, Sep vs Jun 4-Aug 31 | RL_RAISE_MULT          | 0.40     | 0.384 (Free 246.5 → 252.4 per 1k)
  * ═════════════════════════════════════════════════════════════════════════
  *
  * H5's reads are knob floors: the early run count is independent of activity
- * density, but accounts that never evaluate also send fewer events later, so
- * engagement can only add to the gap; in this run both reads land within 10% of
- * the floor. H9's conversion read rests on 41 hackathon and 150 search-ads buyers inside the
- * 30-day window (relative SE of the ratio about 19%). Channel is not
+ * density, but accounts that never evaluate also send fewer events later (no
+ * eval runs, and a Free account that uses up its monthly allowance stops sending
+ * requests), so engagement can only add to the gap. In this run the 1-vs-0 read
+ * lands within 10% of its floor (NAILED) and the 2+-vs-0 read 10.4% above it
+ * (STRONG). H9's conversion read rests on 46 hackathon and 153 search-ads buyers
+ * inside the 30-day window (relative SE of the ratio about 19%). Channel is not
  * confounded; the one-sided ceiling (knob + 2.25 SE, 0.496) exists only to
  * cover that sampling error. The read lands outside the knob's ±10% and
- * grades STRONG. Event volume is ~0.86M (not 1.4M): new accounts that never make a first
- * request stop early, Free accounts keep 30% of their request events, and
- * batch, eval, invite, and key-rotation volume is thinned to adopters.
+ * grades STRONG. Event volume is ~0.82M (not 1.4M): new accounts that never make a first
+ * request stop early, Free accounts keep 15% of their request events and stop at
+ * their monthly allowance, and batch, eval, invite, and key-rotation volume is
+ * thinned to adopters.
  */
 
 // ── SCALE ──
@@ -341,7 +351,8 @@ const HOUR_WEIGHTS = [0.5, 0.42, 0.34, 0.28, 0.26, 0.28, 0.36, 0.5, 0.64, 0.74, 
 
 // ── KNOBS ──
 const API_SAMPLE_RATE = 1000; // one api request event = 1,000 metered requests
-const FREE_TRAFFIC_KEEP = 0.3; // Free accounts: small, throttled workloads (share of request events kept)
+const FREE_TRAFFIC_KEEP = 0.15; // Free accounts: small, throttled workloads (share of request events kept)
+const FREE_MONTHLY_ALLOWANCE_USD = 100; // Free plan: list-price usage included per calendar month; requests past it are rejected (not metered, not logged) until the 1st
 const PLAN_TRAFFIC_MULT = { free: 1, build: 1, scale: 2, enterprise: 3 }; // request volume vs a Build account
 const API_BURST_LEN = 8;     // sampled requests per traffic burst (usage funnel)
 const API_TRAFFIC_WEIGHT = 8;
@@ -448,10 +459,6 @@ const CPL_USD = { search_ads: 85, newsletter_sponsorships: 55, hackathons: 140 }
 const CHANNEL_WEIGHTS = { organic: 24, github: 14, referral: 12, search_ads: 20, newsletter_sponsorships: 16, hackathons: 14 };
 const BORN_PCT = 50;
 const WINDOW_DAYS = 120;
-const DAILY_BUDGET_USD = Object.fromEntries(PAID_CHANNELS.map((ch) => {
-	const totalW = Object.values(CHANNEL_WEIGHTS).reduce((a, b) => a + b, 0);
-	return [ch, CPL_USD[ch] * (NUM_USERS * BORN_PCT / 100) * (CHANNEL_WEIGHTS[ch] / totalW) / WINDOW_DAYS];
-}));
 const SPEND_FLAT_SHARE = 0.3;
 const SPEND_WEEKDAY = (() => {
 	const m = DOW_WEIGHTS.reduce((a, b) => a + b, 0) / DOW_WEIGHTS.length;
@@ -518,7 +525,16 @@ const priceIn = (model, t) => PRICE_IN[model] * (model === "swift-2" && t >= ms(
 const priceOut = (model, t) => PRICE_OUT[model] * (model === "swift-2" && t >= ms(SWIFT_PRICE_CUT) ? SWIFT_PRICE_CUT_FACTOR : 1);
 const listValueUsd = (model, t, inTok, cached, outTok) =>
 	((inTok - cached) * priceIn(model, t) + cached * priceIn(model, t) * CACHED_INPUT_PRICE_SHARE + outTok * priceOut(model, t)) / 1e6;
-const paidSpend = (date, ch) => round2(DAILY_BUDGET_USD[ch] * SPEND_WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()] * jitter(`spend|${date}|${ch}`, SPEND_NOISE));
+// paced daily budget per paid channel: the channel buys signups at its cost per signup, so the
+// window budget = CPL × the signups it brought in, spread over the window (weekday shape, day noise)
+const dailyBudgetUsd = (ch) => {
+	if (!signupAgg) {
+		signupAgg = {};
+		for (const c of SIGNUP_CHANNEL.values()) signupAgg[c] = (signupAgg[c] ?? 0) + 1;
+	}
+	return CPL_USD[ch] * (signupAgg[ch] ?? 0) / WINDOW_DAYS;
+};
+const paidSpend = (date, ch) => round2(dailyBudgetUsd(ch) * SPEND_WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()] * jitter(`spend|${date}|${ch}`, SPEND_NOISE));
 // seeded log-normal lag from a uniform salt (inverse normal CDF, Acklam's rational approximation)
 const invNorm = (p) => {
 	const a = [-39.69683028665376, 220.9460984245205, -275.9285104469687, 138.357751867269, -30.66479806614716, 2.506628277459239];
@@ -550,6 +566,8 @@ const routeRegion = (profile) => {
 // (keyed by account so a repeated generation in one process overwrites, never doubles)
 const USAGE_BY_USER = new Map();
 let usageAgg = null;
+const SIGNUP_CHANNEL = new Map(); // in-window signups: account → acquisition channel (paid media budgets)
+let signupAgg = null;
 const ONBOARD_REQ_IDS = new Set(); // insert_id of each onboarding funnel's first api request
 const UPGRADE_BANK = { upgrade: null, view: null }; // first upgrade pass any account produced
 const TEMPLATE_BANK = { evalStart: null, evalDone: null, rateLimit: null }; // first engine-generated eval unit and rate-limit episode any account produced
@@ -586,8 +604,9 @@ function buildUsageAgg() {
 			byModel.set(k, a);
 		}
 		for (const [k, v] of rec.byRegion) {
-			const a = byRegion.get(k) || { req: 0, err5xx: 0 };
+			const a = byRegion.get(k) || { req: 0, err5xx: 0, lat: [] };
 			a.req += v.req; a.err5xx += v.err5xx;
+			for (const x of v.lat) a.lat.push(x);
 			byRegion.set(k, a);
 		}
 	}
@@ -843,8 +862,12 @@ function handleEverything(events, meta) {
 		}
 	}
 	events = sized;
+	// time order, so the Free allowance below is spent in the order the requests arrive
+	events.sort((a, b) => T(a) - T(b));
 
 	const usage = { byModel: new Map(), byRegion: new Map() };
+	const freeUsed = new Map(); // calendar month → list-price usage on the Free plan (USD)
+	const freeBlocked = new Set();
 	const kept = [];
 	for (const e of events) {
 		const t = T(e);
@@ -900,6 +923,16 @@ function handleEverything(events, meta) {
 			}
 			e.time_to_first_token_ms = Math.round(ttft);
 			e.latency_ms = Math.round(latency);
+			// Free allowance: the balance is checked before each request, so the request that uses up the
+			// month's allowance completes and later ones are rejected until the 1st (rejected calls are not
+			// metered or logged); the onboarding request always goes through
+			if (plan === "free") {
+				const mo = dayKey(t).slice(0, 7);
+				if (freeBlocked.has(mo) && !ONBOARD_REQ_IDS.has(e.insert_id)) continue;
+				const used = (freeUsed.get(mo) ?? 0) + (status === 200 ? API_SAMPLE_RATE * listValueUsd(model, t, e.input_tokens, e.cached_input_tokens, e.output_tokens) : 0);
+				freeUsed.set(mo, used);
+				if (used >= FREE_MONTHLY_ALLOWANCE_USD) freeBlocked.add(mo);
+			}
 			if (t <= END) {
 				const dk = dayKey(t);
 				const mk = `${dk}|${model}`;
@@ -910,9 +943,10 @@ function handleEverything(events, meta) {
 				}
 				usage.byModel.set(mk, m);
 				const rk = `${dk}|${region}`;
-				const g = usage.byRegion.get(rk) || { req: 0, err5xx: 0 };
+				const g = usage.byRegion.get(rk) || { req: 0, err5xx: 0, lat: [] };
 				g.req++;
 				if (status >= 500) g.err5xx++;
+				if (status === 200) g.lat.push(e.latency_ms);
 				usage.byRegion.set(rk, g);
 			}
 			kept.push(e);
@@ -988,6 +1022,8 @@ function handleEverything(events, meta) {
 	if (upgradeMs < Infinity) profile.plan_tier = "build";
 	USAGE_BY_USER.set(uid, usage);
 	usageAgg = null;
+	if (signup) SIGNUP_CHANNEL.set(uid, signup.acquisition_channel);
+	signupAgg = null;
 	return events;
 }
 
@@ -1013,8 +1049,8 @@ function handleWarehouse(row, meta) {
 		const zero = { ok: 0, inTok: 0, cached: 0, outTok: 0, freeUsd: 0 };
 		const cur = usageAgg.byModel.get(`${date}|${model}`) || zero;
 		const before = usageAgg.byModel.get(`${prev}|${model}`) || zero;
-		const late = 0.06 + 0.18 * hashFloat(`late|${date}|${model}`);
-		const latePrev = 0.06 + 0.18 * hashFloat(`late|${prev}|${model}`);
+		const late = 0.05 + 0.12 * hashFloat(`late|${date}|${model}`);
+		const latePrev = 0.05 + 0.12 * hashFloat(`late|${prev}|${model}`);
 		const lost = jitter(`lost|${date}|${model}`, 0.04) * 1.03;
 		const mixRaw = (k) => API_SAMPLE_RATE * lost * ((1 - late) * cur[k] + latePrev * before[k]);
 		const mix = (k) => Math.round(mixRaw(k));
@@ -1034,7 +1070,7 @@ function handleWarehouse(row, meta) {
 	}
 	if (meta.metricName === "inference_fleet_daily") {
 		const reg = row.inference_region;
-		const g = usageAgg.byRegion.get(`${date}|${reg}`) || { req: 0, err5xx: 0 };
+		const g = usageAgg.byRegion.get(`${date}|${reg}`) || { req: 0, err5xx: 0, lat: [] };
 		const t = ms(`${date}T00:00:00Z`);
 		const hit = reg === INCIDENT_REGION && inIncident(t);
 		// first-party apps and internal eval pipelines run every day at a steady volume (no product event): ±8% by region-day, ±5% fleet-wide
@@ -1044,7 +1080,11 @@ function handleWarehouse(row, meta) {
 		row.error_rate_5xx = Math.round((err * jitter(`err|${date}|${reg}`, 0.08)) * 10000) / 10000;
 		row.gpus_online = Math.round(REGION_GPUS[reg] * (hit ? 0.58 + 0.06 * hashFloat(`gpu|${date}|${reg}`) : 0.97 + 0.03 * hashFloat(`gpu|${date}|${reg}`)));
 		row.gpu_utilization = round2(hit ? 0.97 + 0.02 * hashFloat(`util|${date}|${reg}`) : 0.62 + 0.18 * hashFloat(`util|${date}|${reg}`));
-		row.p95_latency_ms = Math.round((hit ? 14500 : 6800) * jitter(`p95|${date}|${reg}`, 0.08));
+		// p95 of successful request latency in the region-day (the sampled request log stands for the
+		// full traffic), ±3% for internal traffic and the gateway's own measurement window
+		const lat = [...g.lat].sort((a, b) => a - b);
+		const p95 = lat.length ? lat[Math.min(lat.length - 1, Math.floor(0.95 * lat.length))] : 0;
+		row.p95_latency_ms = Math.round(p95 * jitter(`p95|${date}|${reg}`, 0.03));
 		row.region_status = hit ? "major_outage" : "operational";
 		return row;
 	}
@@ -1770,7 +1810,7 @@ FROM ev JOIN p ON p.uid = ev.uid WHERE ev.event = 'api request' GROUP BY 1`,
 		id: "H9-developer-marketing-economics",
 		hook: "H9",
 		archetype: "funnel-conversion-by-segment",
-		narrative: `Hackathon sponsorships cost ${(CPL_USD.hackathons / CPL_USD.search_ads).toFixed(2)}x as much per signup as search ads over the window (warehouse developer_marketing_daily bills a paced daily budget per channel = cost per signup × expected signups per day, weekday shape above a ${SPEND_FLAT_SHARE * 100}% flat floor, seeded ±${SPEND_NOISE * 100}% day noise, never zero: $${CPL_USD.hackathons} vs $${CPL_USD.search_ads} per signup at the window level), and hackathon signups upgrade to a paid plan far less often: the share of would-be upgraders kept is ${UPGRADE_KEEP.hackathons} for hackathons vs ${UPGRADE_KEEP.search_ads} for search ads (channel is drawn independently of company size, role, and use case). Spend per signup needs the warehouse join. The conversion read is the Mixpanel funnel account created → plan upgraded with the default ${PAID_FUNNEL_WINDOW_DAYS}-day window, signups ${D(DATASET_START)} through ${PAID_COHORT_LAST}; channel is independent of every other driver, so the paid-rate ratio reads the ${UPGRADE_KEEP.hackathons} knob in expectation, but only about 40 hackathon and about 150 search-ads signups convert inside the window (expected about ${Math.round(h9Buyers("hackathons"))} and ${Math.round(h9Buyers("search_ads"))}; relative standard error of the ratio about ${Math.round(H9_REL_SE * 100)}%). The read is therefore a one-sided ceiling at the knob plus 2.25 standard errors (${H9_CEILING.toFixed(3)}), derived from the expected buyer counts: the ceiling covers sampling error, not a confound, and the read grades STRONG unless it lands inside knob ±10%.`,
+		narrative: `Hackathon sponsorships cost ${(CPL_USD.hackathons / CPL_USD.search_ads).toFixed(2)}x as much per signup as search ads over the window (warehouse developer_marketing_daily bills a paced daily budget per channel = cost per signup × the signups the channel brought in over the window / ${WINDOW_DAYS} days, weekday shape above a ${SPEND_FLAT_SHARE * 100}% flat floor, seeded ±${SPEND_NOISE * 100}% day noise, never zero: $${CPL_USD.hackathons} vs $${CPL_USD.search_ads} per signup at the window level), and hackathon signups upgrade to a paid plan far less often: the share of would-be upgraders kept is ${UPGRADE_KEEP.hackathons} for hackathons vs ${UPGRADE_KEEP.search_ads} for search ads (channel is drawn independently of company size, role, and use case). Spend per signup needs the warehouse join. The conversion read is the Mixpanel funnel account created → plan upgraded with the default ${PAID_FUNNEL_WINDOW_DAYS}-day window, signups ${D(DATASET_START)} through ${PAID_COHORT_LAST}; channel is independent of every other driver, so the paid-rate ratio reads the ${UPGRADE_KEEP.hackathons} knob in expectation, but only about 45 hackathon and about 150 search-ads signups convert inside the window (expected about ${Math.round(h9Buyers("hackathons"))} and ${Math.round(h9Buyers("search_ads"))}; relative standard error of the ratio about ${Math.round(H9_REL_SE * 100)}%). The read is therefore a one-sided ceiling at the knob plus 2.25 standard errors (${H9_CEILING.toFixed(3)}), derived from the expected buyer counts: the ceiling covers sampling error, not a confound, and the read grades STRONG unless it lands inside knob ±10%.`,
 		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "developer_marketing_daily.spend_usd", funnel: `account created → plan upgraded, ${PAID_FUNNEL_WINDOW_DAYS}-day window (Mixpanel default), signups ${D(DATASET_START)} to ${PAID_COHORT_LAST}, breakdown acquisition_channel` },
 		assertions: [
 			{
@@ -1782,7 +1822,7 @@ FROM ev JOIN p ON p.uid = ev.uid WHERE ev.event = 'api request' GROUP BY 1`,
 			{
 				breakdown: { type: "duckdb", sql: PAID_CONV_SQL },
 				select: { h: { where: { grp: "hackathons" } }, s: { where: { grp: "search_ads" } } },
-				// ceiling covers sampling error (about 40 hackathon buyers): knob + 2.25 SE of the ratio
+				// ceiling covers sampling error (about 45 hackathon buyers): knob + 2.25 SE of the ratio
 				expect: { metric: "h.paid_rate / s.paid_rate", op: "<=", target: H9_RATIO, floor: H9_CEILING },
 				minCohort: 400,
 			},

@@ -27,14 +27,14 @@ The Mixpanel project records which model served each request and how many tokens
 
 | Plan | How it is billed | What you get |
 |---|---|---|
-| Free | $0 | A monthly free usage allowance, the strictest rate limits, community support. No card needed. |
+| Free | $0 | $100 of usage at list price per calendar month, the strictest rate limits, community support. No card needed. |
 | Build | Pay as you go at list prices from prepaid credits (top-ups from $10) | Higher rate limits, all generally available models, email support. |
 | Scale | A committed monthly spend | Higher rate limits than Build, usage reporting, a named support contact. |
 | Enterprise | Annual contract, sold by the sales team | Custom limits, SSO, dedicated support, security review. |
 
 - **How accounts upgrade.** A Free account opens the billing page, adds a payment method, buys prepaid credits, and moves to Build. Scale and Enterprise are arranged with sales and do not go through the self-serve billing page.
 - **Rate limits.** Every plan has limits on requests per minute and tokens per minute. When an account exceeds a limit, the API rejects requests for a short time (HTTP 429) and the account sees a rate-limit episode.
-- **Free usage** is metered like paid usage but is not revenue; finance tracks its list-price value as free credit.
+- **Free usage** is metered like paid usage but is not revenue; finance tracks its list-price value as free credit. The balance is checked before each request: the request that uses up the month's $100 completes, and after that the API rejects the account's requests until the 1st of the next month. Rejected requests are not metered.
 
 ## Customers
 
