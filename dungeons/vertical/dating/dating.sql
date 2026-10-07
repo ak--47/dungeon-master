@@ -320,7 +320,7 @@ SELECT max(pr::DOUBLE / v) FILTER (WHERE period = 'before') AS premier_before, m
   / sqrt(max(pr::DOUBLE / v * (1 - pr::DOUBLE / v) / v) FILTER (WHERE period = 'after') + max(pr::DOUBLE / v * (1 - pr::DOUBLE / v) / v) FILTER (WHERE period = 'before')), 2) AS z_premier
 FROM g;
 
--- paywall traffic: views per day by month and in the four weeks either side of Aug 18 (a slow drift, no step)
+-- paywall traffic: views per day in June, in the four weeks either side of Aug 18, and in September
 SELECT period, round(views / days, 1) AS paywall_views_per_day FROM (
  SELECT '1 June' AS period, count(*) FILTER (WHERE t < TIMESTAMP '2026-07-01') AS views, 27.0 AS days FROM ev WHERE event = 'paywall viewed'
  UNION ALL SELECT '2 Jul 21 - Aug 17', count(*) FILTER (WHERE t >= TIMESTAMP '2026-07-21' AND t < TIMESTAMP '2026-08-18'), 28.0 FROM ev WHERE event = 'paywall viewed'
@@ -442,18 +442,18 @@ SELECT date_trunc('month', t)::DATE AS month, count(DISTINCT uid) FILTER (WHERE 
  count(*) FILTER (WHERE event = 'date planned') AS dates_planned, count(*) FILTER (WHERE event = 'subscription started') AS new_subscriptions
 FROM ev GROUP BY 1 ORDER BY 1;
 
--- cancellations by month vs the paid base: a member is paid from June 4 (plan on
--- their first event in the window is paid) or from their subscription start, until
--- their cancellation. Weekly cancellation rate = cancellations / paid member-weeks.
+-- cancellations by month vs the paid base. A member is paid from June 4 when the
+-- plan on their first event in the window is paid, and from each subscription
+-- start, until the next cancellation (a member who cancels can subscribe again).
+-- Weekly cancellation rate = cancellations / paid member-weeks.
 WITH firstplan AS (SELECT uid, arg_min(subscription_plan, t) AS fp FROM ev GROUP BY 1),
-buy AS (SELECT uid, min(t) AS bt FROM ev WHERE event = 'subscription started' GROUP BY 1),
-canc AS (SELECT uid, min(t) AS ct FROM ev WHERE event = 'subscription cancelled' GROUP BY 1),
-iv AS (SELECT f.uid, CASE WHEN f.fp <> 'free' THEN TIMESTAMP '2026-06-04' ELSE b.bt END AS ps, coalesce(c.ct, TIMESTAMP '2026-10-02') AS pe
-  FROM firstplan f LEFT JOIN buy b ON b.uid = f.uid LEFT JOIN canc c ON c.uid = f.uid WHERE f.fp <> 'free' OR b.bt IS NOT NULL),
+chg AS (SELECT uid, t, (event = 'subscription started') AS paid_after FROM ev WHERE event IN ('subscription started', 'subscription cancelled')
+  UNION ALL SELECT uid, TIMESTAMP '2026-06-04', true FROM firstplan WHERE fp <> 'free'),
+iv AS (SELECT uid, paid_after, t AS ps, coalesce(lead(t) OVER (PARTITION BY uid ORDER BY t), TIMESTAMP '2026-10-02') AS pe FROM chg),
 m AS (SELECT * FROM (VALUES (DATE '2026-06-04', DATE '2026-07-01'), (DATE '2026-07-01', DATE '2026-08-01'), (DATE '2026-08-01', DATE '2026-09-01'), (DATE '2026-09-01', DATE '2026-10-01')) v(ms, me)),
 pd AS (SELECT m.ms, sum(date_diff('second', greatest(iv.ps, m.ms::TIMESTAMP), least(iv.pe, m.me::TIMESTAMP)) / 86400.0) AS paid_days
-  FROM m JOIN iv ON iv.ps < m.me::TIMESTAMP AND iv.pe > m.ms::TIMESTAMP GROUP BY 1),
-cm AS (SELECT m.ms, count(c.uid) AS cancellations FROM m LEFT JOIN canc c ON c.ct >= m.ms AND c.ct < m.me GROUP BY 1)
+  FROM m JOIN iv ON iv.paid_after AND iv.ps < m.me::TIMESTAMP AND iv.pe > m.ms::TIMESTAMP GROUP BY 1),
+cm AS (SELECT m.ms, count(e.uid) AS cancellations FROM m LEFT JOIN ev e ON e.event = 'subscription cancelled' AND e.t >= m.ms AND e.t < m.me GROUP BY 1)
 SELECT m.ms AS month_start, round(pd.paid_days / date_diff('day', m.ms, m.me), 0) AS avg_paid_members, cm.cancellations,
  round(100.0 * 7 * cm.cancellations / pd.paid_days, 2) AS weekly_cancel_pct
 FROM m JOIN pd ON pd.ms = m.ms JOIN cm ON cm.ms = m.ms ORDER BY 1;

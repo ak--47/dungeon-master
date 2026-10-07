@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Kindred**, a mobile dating app 
 
 - **Product:** the Kindred iOS and Android apps: profiles with photos and prompts, liking and passing on profiles, matches, chat, in-app date planning, post-date feedback, and the paid plans Kindred+ and Kindred Premier.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early summer through the end of September and the first day of October.
-- **Scale:** about 10,000 members were active in the window. About 4,500 of them signed up during the window; the rest joined before June 4. The project holds about 770,000 events.
+- **Scale:** 10,000 member accounts. About 9,300 of them opened the app in the window. About 4,470 signed up during the window; the rest joined before June 4. The project holds about 960,000 events.
 - **Markets:** members live in ten US cities, London, and Toronto.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. Most members are in US time zones, so a US evening falls after midnight UTC.
 

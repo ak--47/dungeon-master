@@ -50,7 +50,7 @@ Every match has a `match_id`. The match, the opener, every later message, the da
 | `conversation started` | The member sends the first message (the opener) in a match. | `match_id`; `hours_since_match`: hours from the match to this opener; `opener_type` (`text`, `prompt_reply`, `voice_note`, or `icebreaker` for an opener picked from Icebreakers suggestions; see 02-timeline.md). |
 | `message sent` | The member sends a later message in an open conversation. | `match_id`; `message_type` (`text`, `photo`, `voice_note`, `gif`). |
 | `date planned` | The member and their match agree a date with Date Plan. | `match_id`; `venue_type` (`drinks`, `coffee`, `dinner`, `activity`, `video_call`); `days_until_date` (1-7): days from planning to the date itself. |
-| `date feedback submitted` | The member rates the date after it happened. Sent the day after the date or later. | `match_id`; `rating` (1-5 stars); `would_meet_again` (true or false). |
+| `date feedback submitted` | The member rates the date after it happened, 10 to 40 hours after the date. | `match_id`; `rating` (1-5 stars); `would_meet_again` (true or false). |
 | `$experiment_started` | Mixpanel experiment exposure, sent once per member in the Icebreakers test, one second before their first match from 2026-07-22. | `Experiment name` = `Icebreakers`; `Variant name` = `Control` or `Icebreakers`. |
 
 ## Billing
@@ -58,8 +58,8 @@ Every match has a `match_id`. The match, the opener, every later message, the da
 | Event | Meaning | Properties |
 |---|---|---|
 | `paywall viewed` | A free member sees the plans paywall. | `paywall_trigger` (`out_of_likes`, `likes_you`, `spark`, `boost`, `profile_tab`). |
-| `subscription started` | The member starts a paid plan. At most one per member in the window. Price is **not** tracked here; see `subscription_bookings_daily`. | `plan` (`plus` or `premier`); `billing_period` (`1_month`, `3_month`, `6_month`). |
-| `subscription cancelled` | The member cancels their paid plan, in Kindred settings or in the app store. Store cancellations reach Kindred from the store, so the event can arrive on a day the member did not open the app. The event carries the plan being cancelled in `subscription_plan`; the member's later events carry `free`. At most one per member in the window. | `cancel_reason` (`met_someone`, `too_expensive`, `not_enough_matches`, `taking_a_break`, `bad_experience`). |
+| `subscription started` | The member starts a paid plan. A member who cancels can subscribe again later, so a few members have more than one. Price is **not** tracked here; see `subscription_bookings_daily`. | `plan` (`plus` or `premier`); `billing_period` (`1_month`, `3_month`, `6_month`). |
+| `subscription cancelled` | The member cancels their paid plan, in Kindred settings or in the app store. Store cancellations reach Kindred from the store, so the event can arrive on a day the member did not open the app. The event carries the plan being cancelled in `subscription_plan`; the member's later events carry `free` (until they subscribe again). | `cancel_reason` (`met_someone`, `too_expensive`, `not_enough_matches`, `taking_a_break`, `bad_experience`). |
 
 ## User profile properties
 

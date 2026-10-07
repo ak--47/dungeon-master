@@ -2,7 +2,7 @@
 
 ## Who we are
 
-Kindred is a dating app for adults who want a real relationship, not endless swiping. It launched in 2024 in New York and now serves ten US cities plus London and Toronto. The company is venture-backed and has about 12 employees: product and engineering, a two-person Trust & Safety team, growth marketing, and member support. Revenue comes from subscriptions (renewals included, about $55,000 a month in the summer of 2026) and a small amount of in-app purchases (extra Boosts); there is no advertising in the app.
+Kindred is a dating app for adults who want a real relationship, not endless swiping. It launched in 2024 in New York and now serves ten US cities plus London and Toronto. The company is venture-backed and has about 12 employees: product and engineering, a two-person Trust & Safety team, growth marketing, and member support. Revenue comes from subscriptions (renewals included, about $60,000 a month in the summer of 2026) and a small amount of in-app purchases (extra Boosts); there is no advertising in the app.
 
 The product team's north star is dates: Kindred measures itself by how many members meet someone in person, not by time spent in the app.
 
@@ -27,7 +27,7 @@ The product team's north star is dates: Kindred measures itself by how many memb
 
 - **How people upgrade.** Free members see a paywall when they run out of likes, tap Likes You, try to send a Spark beyond their allowance, try to Boost, or open the plans page from their profile. From the paywall they can start Kindred+ or Premier and pick a billing period.
 - **Boosts** put a profile at the top of Discover in the member's area for 30 or 60 minutes. Premier includes one a week; anyone can buy more.
-- **Cancellations.** Members can cancel at any time in the app store or in Kindred settings. Kindred asks for a reason when they cancel.
+- **Cancellations.** Members can cancel at any time in the app store or in Kindred settings. Kindred asks for a reason when they cancel. A member who cancels is back on Free and can subscribe again later.
 - The Mixpanel project tracks the subscription start, plan, and billing period, but not the price. List prices and bookings live in the warehouse table `subscription_bookings_daily`.
 
 ## Members
@@ -40,7 +40,7 @@ The product team's north star is dates: Kindred measures itself by how many memb
   - `figuring_it_out` — not sure yet.
   - `short_term_fun` — short-term, open to long.
 - **Markets** (`market`): New York, Los Angeles, Chicago, Washington DC, San Francisco, Austin, Boston, Miami, Seattle, Denver, London, Toronto. New York is the largest.
-- **Platforms:** members use the iOS app (iPhone or iPad) or the Android app; a little over half are on Android.
+- **Platforms:** members use the iOS app (iPhone or iPad) or the Android app; a little over half are on iOS.
 - **Established vs new members.** About 55% of members active in the window joined before June 4. New members arrive steadily, about 260 a week.
 
 ## How members find us
@@ -53,7 +53,7 @@ New members arrive through one of five acquisition channels, recorded at signup:
 - **tiktok_ads** — paid in-feed video ads on TikTok.
 - **apple_search_ads** — paid placements in App Store search results.
 
-The three paid channels bill for impressions and clicks on daily budgets. Daily spend by paid channel is in the warehouse table `paid_acquisition_daily`.
+The three paid channels run install-optimized campaigns. Part of each day's spend is a daily budget that the network paces through the day; the rest is bid-based and follows the installs the network delivers that day. Daily spend by paid channel is in the warehouse table `paid_acquisition_daily`.
 
 ## Goals for the period (Q3 2026)
 

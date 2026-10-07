@@ -11,7 +11,7 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 | 2026-07-14 (Tue) | Launch | **Verified Profiles** launches on iOS and Android. A member records a short video selfie; when it matches their photos, the profile gets a Verified badge. Existing members are prompted in the app; new members are offered it during setup. Each verification sends a `selfie verified` event, and the profile property `verified` shows the current status. Verification is optional. |
 | 2026-07-22 (Wed) | Experiment | **"Icebreakers" test** starts. Members who get a match from this date are assigned 50/50 to **Control** (an empty chat) or **Icebreakers** (the new-match chat suggests a few openers based on the other member's prompts). Assignment is sticky per member and recorded with one `$experiment_started` event at the member's first match in the test and the profile property `Experiment: Icebreakers`. Openers sent from a suggestion carry `opener_type = icebreaker`. |
 | 2026-08-18 (Tue) | Pricing | **Kindred+ price change** for new subscriptions: 1 month $29.99 → $34.99, 3 months $74.99 → $86.99, 6 months $119.99 → $139.99. Premier prices do not change. Existing subscribers keep their price until renewal. |
-| 2026-08-24 (Mon) to 2026-08-30 (Sun) | Incident | **Android chat incident.** An Android app release caused some chat message sends to fail; a failed message was never delivered. The release was rolled back and the fix was live at 00:00 UTC on August 31. The iOS app was not affected. Daily delivery health by platform is in `chat_delivery_daily`. |
+| 2026-08-24 (Mon) to 2026-08-30 (Sun) | Incident | **Chat incident.** A chat release caused some message sends to fail; a failed message was never delivered. The release was rolled back and the fix was live at 00:00 UTC on August 31. Daily delivery health is in `chat_delivery_daily`. |
 | 2026-08-31 (Mon) | Holiday | UK summer bank holiday (London). |
 | 2026-09-07 (Mon) | Holiday | US Labor Day. |
 | 2026-09-30 (Wed) | Fiscal | End of Q3. |
@@ -23,7 +23,6 @@ All dates are UTC. This page lists what happened and when. It does not record ou
 - No change to how Discover ranks profiles or how matches are made.
 - Paid channel budgets were steady through the window; no channel was added or paused.
 - Kindred ran no holiday campaigns. In past years, holidays have not changed member activity in a way the team could see.
-- The iOS app had no incidents in the window.
 
 ## Open questions leadership has asked
 
