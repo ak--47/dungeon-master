@@ -98,6 +98,16 @@ SELECT count(*) FILTER (WHERE uid IS NULL) AS unresolved_events,
    OR (platform = 'pc' AND os IN ('iOS', 'iPadOS', 'Android'))) AS platform_os_mismatch
 FROM ev;
 
+-- session check: one device per Mixpanel session; sessions without "game launched" are a new
+-- player's first session (starts at account created) or the part of a session after midnight UTC
+WITH s AS (SELECT session_id, count(DISTINCT device_id) AS devices, bool_or(event = 'game launched') AS launched,
+  bool_or(event = 'account created') AS signup, hour(min(t)) AS first_hour FROM ev GROUP BY 1)
+SELECT count(*) AS sessions, count(*) FILTER (WHERE devices > 1) AS multi_device_sessions,
+ count(*) FILTER (WHERE launched) AS with_launch, count(*) FILTER (WHERE signup) AS signup_sessions,
+ count(*) FILTER (WHERE NOT launched AND NOT signup AND first_hour = 0) AS after_midnight_continuations,
+ count(*) FILTER (WHERE NOT launched AND NOT signup AND first_hour <> 0) AS other_without_launch
+FROM s;
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H1-first-flame-tutorial-test
 -- Guided / Control tutorial completion (account created → tutorial completed, 7 days); knob 1.25
@@ -166,7 +176,7 @@ SELECT *, median_wait_s / (SELECT median_wait_s FROM g WHERE main_role = 'dps') 
 -- ─────────────────────────────────────────────────────────────────────────
 -- STORY H7-pc-pack-mix-and-store-fees
 -- Average Ember pack price and warehouse net revenue per Mixpanel Ember purchase, PC vs mobile;
--- knobs: pack mix x1.855, x2.517 after fees
+-- knobs: pack mix x1.855, x2.073 after fees (app stores 15%, PC webshop 5%)
 -- ─────────────────────────────────────────────────────────────────────────
 WITH p AS (SELECT CASE WHEN platform = 'pc' THEN 'pc' ELSE 'mobile' END AS store, count(DISTINCT uid) AS buyers, count(*) AS purchases, avg(price_usd) AS avg_price
   FROM ev WHERE event = 'purchase completed' AND product_type = 'embers' GROUP BY 1),

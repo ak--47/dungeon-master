@@ -30,7 +30,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 
 Three tables come from the data warehouse, not from Mixpanel events. Each has one row per UTC day per dimension value for every day from 2026-06-04 to 2026-10-01 (120 days). Days with no activity have a row with zeros. They join to events on the UTC date of the event and on the named dimension.
 
-In the warehouse, numeric columns are loaded as FLOAT64 (shown as FLOAT below). Count columns (installs, clicks, impressions, players, transactions) and seconds always hold whole numbers, and raw file exports show them as integers.
+Count columns (installs, clicks, impressions, players, transactions) and seconds are INTEGER (BigQuery INT64). Money, rates, and percentages are FLOAT (FLOAT64).
 
 ### `ua_spend_daily`
 
@@ -41,9 +41,9 @@ Daily paid acquisition cost by channel, from the ad networks' and creator agenci
 | `date` | DATE | UTC day | Spend day. |
 | `acquisition_channel` | STRING | — | `tiktok_ads`, `meta_ads`, `google_ads`, or `youtube_creators`. Matches `acquisition_channel` on `account created`. |
 | `spend_usd` | FLOAT | USD | Media or sponsorship spend billed for the day. |
-| `installs_reported` | FLOAT | count | Installs the network claims for the day. Networks use their own attribution and usually claim more than Mixpanel records as new accounts. |
-| `clicks` | FLOAT | count | Ad clicks or taps reported by the network (for creators: link clicks). |
-| `impressions` | FLOAT | count | Ad impressions (for creators: stream and video views attributed to the sponsorship). |
+| `installs_reported` | INTEGER | count | Installs the network claims for the day. Networks use their own attribution and usually claim more than Mixpanel records as new accounts. |
+| `clicks` | INTEGER | count | Ad clicks or taps reported by the network (for creators: link clicks). |
+| `impressions` | INTEGER | count | Ad impressions (for creators: stream and video views attributed to the sponsorship). |
 
 Caveats: organic players have no spend and are not in this table. Use Mixpanel signups, not `installs_reported`, for CAC.
 
@@ -55,11 +55,11 @@ Daily server health by region, from the operations team's monitoring and the pub
 |---|---|---|---|
 | `date` | DATE | UTC day | Day. |
 | `server_region` | STRING | — | `NA`, `EU`, or `APAC`. Matches `server_region` on events. |
-| `peak_concurrent_players` | FLOAT | players | Highest number of players online at the same time that day. |
+| `peak_concurrent_players` | INTEGER | players | Highest number of players online at the same time that day. |
 | `instance_launch_success_rate` | FLOAT | share 0-1 | Share of dungeon instance launch requests that opened an instance. |
-| `avg_queue_seconds` | FLOAT | seconds | Average group-finder wait for matchmade runs, across all roles. |
+| `avg_queue_seconds` | INTEGER | seconds | Average group-finder wait for matchmade runs, across all roles. |
 | `uptime_pct` | FLOAT | percent | Share of the day the region's game services were fully available. |
-| `incident_severity` | STRING | — | `none`, `sev2` (degraded), or `sev1` (major outage), as posted on the status page. |
+| `incident_severity` | STRING | — | Status-page severity for the day: `none`, `sev2` (degraded), or `sev1` (major outage). No `sev2` day was posted in the window. |
 
 Caveats: concurrency is a peak, not a count of daily players; it does not track Mixpanel DAU exactly. `avg_queue_seconds` is a mean over all queued players, so a few long waits pull it up.
 
@@ -73,8 +73,8 @@ Daily store revenue by platform and product type, from Apple, Google, and Cinder
 | `platform` | STRING | — | `pc`, `ios`, or `android`. Matches `platform` on `purchase completed`. |
 | `product_type` | STRING | — | `embers`, `bundle`, or `ember_pass`. Matches `product_type` on `purchase completed`. |
 | `gross_bookings_usd` | FLOAT | USD | What players paid that day, at list price. |
-| `transactions` | FLOAT | count | Purchases billed that day. |
-| `refunds_usd` | FLOAT | USD | Refunds granted that day. |
+| `transactions` | INTEGER | count | Purchases billed that day. |
+| `refunds_usd` | FLOAT | USD | Refunds granted that day, at the list price of each refunded item. |
 | `store_fees_usd` | FLOAT | USD | Fees kept by the store (Apple, Google) or the PC payment processor on that day's purchases, after refunds. |
 | `net_revenue_usd` | FLOAT | USD | `gross_bookings_usd − refunds_usd − store_fees_usd`. What Cinderlight receives. |
 

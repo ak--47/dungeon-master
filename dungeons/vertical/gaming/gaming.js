@@ -20,7 +20,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             currency, $0.99-$99.99), the Adventurer's Bundle ($14.99), and a
  *             seasonal Ember Pass ($9.99). Three server regions: NA, EU, APAC.
  * SCALE:      10,000 simulated players (≈4,500 create an account inside the
- *             window; ≈40% of those never finish the tutorial and leave), ~0.68M
+ *             window; ≈40% of those never finish the tutorial and leave), ~1.02M
  *             events, 120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  game launched → quest completed / dungeon queued → dungeon started
  *             → dungeon finished → item crafted → store opened → purchase completed
@@ -63,12 +63,16 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * IDENTITY: a new player is identified at "account created" (isAuthEvent,
  * user_id + device_id); it is the first event except for test players, whose
  * $experiment_started sits 1 s earlier with the same user_id and device_id.
- * Players use 1-2 devices (avgDevicePerUser 1.3); each play session stays on
- * one device. Every event carries user_id; there is no anonymous pre-signup
- * activity. The three onboarding steps after signup
- * carry user_id only; every other event also carries device_id (a client event
- * built from a device-less onboarding step takes the signup device). platform agrees
- * with the engine's os field (iOS/iPadOS → ios, Android → android, else pc).
+ * Players use 1-2 devices (avgDevicePerUser 1.3); every event in a play session
+ * carries the device of the session's first device-bearing event, so each
+ * Mixpanel session (session_id) has one device. Every event carries user_id;
+ * there is no anonymous pre-signup activity. The three onboarding steps after
+ * signup carry user_id only; every other event also carries device_id (a client
+ * event built from a device-less onboarding step takes the signup device).
+ * platform agrees with the engine's os field (iOS/iPadOS → ios, Android →
+ * android, else pc). session_id is the engine's Mixpanel-rule session (30 idle
+ * minutes or a UTC day change); a play session that runs past midnight UTC is
+ * two Mixpanel sessions, and the second has no "game launched".
  *
  * DESIGN NOTES:
  * - Sessions: the hook chains a day's activity units (a dungeon run with its
@@ -77,8 +81,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   level ups, store visits, later guild joins) into the same day's sessions,
  *   and starts every session with one "game launched" (client_version 4.0.1 →
  *   4.0.2 on Jul 23 → 4.1.0 on Aug 6). A session ends after 30 idle minutes
- *   (it can cross midnight); a dungeon run in progress keeps it open until the
- *   run finishes. A new player's first session starts at "account created".
+ *   (it can cross midnight); during a queue wait or a run longer than 30
+ *   minutes the player chats (world chat in a queue or solo, party chat in a
+ *   group) every 12-26 minutes, so the session never idles out mid-run. A new
+ *   player's first session starts at "account created".
  * - Dungeon runs: one run_id per run. Queue type matchmade 55% (party of 5,
  *   queued by role, H6), premade 30% (2-5 players), solo 15%. Result by party
  *   size (H10, salted per run_id) and difficulty: cleared, else wiped (75%)
@@ -86,37 +92,44 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   heroic and mythic) and scales the clear chance (normal x1.08, heroic
  *   x0.97, mythic x0.78, normalized so the run mix averages 1; difficulty does
  *   not depend on party size, so H10 keeps its knobs). Duration and XP follow
- *   the result and difficulty. A small balancing term keeps each platform x
- *   party size x difficulty x region x patch-period stratum at its target, so
- *   the platform and patch nulls hold by design.
+ *   the result and difficulty. Clear rate has no platform, region, or patch
+ *   input (the Q13 / Q14 nulls); a weak balancing term (gain 0.008) pulls each
+ *   platform x party size x difficulty x region x patch-period stratum toward
+ *   its target, leaving binomial-like noise in the splits.
  *   A player is in one dungeon at a time: a run that would queue or start
  *   before the previous run finishes moves to 1-4 minutes after it (or is
  *   dropped if that crosses the UTC day); Double XP extra runs queue after
  *   the previous finish.
  * - New players: quests, boss fights, arena matches, and dungeon runs only
  *   happen after "tutorial completed". tutorial_minutes is the real time from
- *   the last "tutorial started" to "tutorial completed".
- * - New players: tutorial non-finishers keep only setup steps and launches in
- *   their first 48 h; 12% of them (salted) come back for one or two sessions
- *   18-68 h after signup (game launched, often a retried tutorial started) and
- *   still leave. Finishers have a natural lifespan (Pareto, P(still playing
- *   after d days) = (3/d)^0.6) on top of the H2 guild effect.
- * - Purchases: 13% of veterans and 5% of new players are payers (x2 for the
+ *   the last "tutorial started" to "tutorial completed"; tutorial length has a
+ *   per-player log-normal spread (sigma 0.35) and a slow tail (12% of players
+ *   step away and take 1.5-4.5x as long), the same draw in both test arms.
+ * - New players: tutorial non-finishers keep only their setup steps (first
+ *   visit); 12% of them (salted) come back for one or two sessions 18-68 h
+ *   after signup (game launched, often a retried tutorial started) and still
+ *   leave. Finishers have a natural lifespan (Pareto, P(still playing after d
+ *   days) = (3/d)^0.45) on top of the H2 guild effect.
+ * - Purchases: 10% of veterans and 4% of new players are payers (x2 for the
  *   most active players, x0.35 for casual ones; x1.4 for players whose home
  *   device is a phone or tablet, x0.88 on PC: one-tap store billing converts
  *   more mobile players). A payer buys on a share of
  *   their play days (0.45 on average, varying per payer); each purchase follows
- *   a store visit. Pack choice depends on the platform (H7). Payers active after
+ *   a store visit. Pack choice depends on the platform of the purchase device,
+ *   resolved after sessions settle each event's device (H7). Payers active after
  *   Aug 6 buy the Season 4 Ember Pass at 55% in their first session; a few buy
  *   the Season 3 pass late in June / early July.
  * - Warehouse drift: store_revenue_daily adds purchases Mixpanel never
  *   received (mean 12% of tracked count; a skewed 0-48% share per day, shared
- *   by every store) and refunds (mean 3%);
+ *   by every store) and refunds (unbiased mean 3% of tracked count); every
+ *   extra or refunded item is a real list price (a pack drawn from the
+ *   platform's pack mix, the bundle, or the pass);
  *   server_health_daily peak concurrency is ~22% of the day's active players
  *   with ±12% noise; ua_spend_daily is a half paced budget (weekday shape,
  *   never zero) and half bid x the day's delivered signups, with seeded noise.
- * - retentionCurve shapes new players' activity; veterans' activity is flat
- *   across the window except for H8.
+ * - retentionCurve (day 1 / 7 / 30 = 0.50 / 0.30 / 0.16) shapes new players'
+ *   activity; veterans' activity is flat across the window except for H8.
+ *   Personas: hardcore 20% (x2.5 events), regular 50% (x1.4), casual 30% (x0.7).
  * - guild_size on "guild joined" is the guild's roster right after the join: a
  *   per-guild base that grows or shrinks at a per-guild daily rate, with a
  *   ±1 day wobble, capped at 50.
@@ -196,8 +209,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * H7. PC PACK MIX AND STORE FEES (everything + warehouse store_revenue_daily)
  * ─────────────────────────────────────────────────────────────────────────
  * PATTERN: pack weights by platform give an average Ember pack of $16.27 on
- *   PC vs $8.77 on mobile (x1.855); app stores take 30%, the PC webshop 5%, so
- *   warehouse net per Mixpanel Ember purchase is x2.517 on PC.
+ *   PC vs $8.77 on mobile (x1.855); the app stores take 15% (Apple Small
+ *   Business Program, Google Play's reduced tier), the PC webshop 5%, so
+ *   warehouse net per Mixpanel Ember purchase is x2.073 on PC.
  * MIXPANEL: Insights, purchase completed (product_type = embers), average
  *   price_usd by platform; join store_revenue_daily.net_revenue_usd.
  * REAL WORLD: PC players buy bigger packs and the platform keeps less.
@@ -232,54 +246,57 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-gaming, 2026-10-07, full
- * fidelity, 10,000 players, 684,082 events)
+ * fidelity, 10,000 players, 1,018,299 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation                    | Expected | Measured
  * -----|------------------------------------------------|-------------------------------|----------|---------
- * H1   | tutorial completion, Guided / Control          | GUIDED_CONV_MULT              | 1.25     | 1.303 (53.6% → 69.8%)
- * H1   | Guided share of exposed players                | equal 2-arm hash              | 0.50     | 0.500
+ * H1   | tutorial completion, Guided / Control          | GUIDED_CONV_MULT              | 1.25     | 1.290 (54.6% → 70.5%)
+ * H1   | Guided share of exposed players                | equal 2-arm hash              | 0.50     | 0.511
  * H1   | guided completions in Control / early exposures| exact purity                  | 0        | 0
- * H1   | median tutorial_minutes, Guided / Control      | GUIDED_TTC_MULT               | 0.70     | 0.703 (5.2 vs 7.4 min)
- * H2   | day 14-27 return, no guild / guild (finishers) | 1 − NONJOINER_QUIT_SHARE (≤, floor 0.775) | 0.55 | 0.626 (16.5% vs 26.4%)
- * H3   | Ashen Warden win rate, after / before          | 0.50 / 0.30                   | 1.667    | 1.612 (31.0% → 50.0%)
- * H3   | other bosses' win rate, after / before         | unchanged                     | 1.00     | 0.999
- * H4   | EU / other dungeon starts, outage / ±14 d      | 1 − OUTAGE_FAIL (≤, floor 0.7)| 0.40     | 0.409 (per-queue start rate 0.38)
+ * H1   | median tutorial_minutes, Guided / Control      | GUIDED_TTC_MULT               | 0.70     | 0.696 (5.5 vs 7.9 min)
+ * H2   | day 14-27 return, no guild / guild (finishers) | 1 − NONJOINER_QUIT_SHARE (≤, floor 0.775) | 0.55 | 0.538 (24.2% vs 45.0%)
+ * H3   | Ashen Warden win rate, after / before          | 0.50 / 0.30                   | 1.667    | 1.672 (29.9% → 50.0%)
+ * H3   | other bosses' win rate, after / before         | unchanged                     | 1.00     | 0.997
+ * H4   | EU / other dungeon starts, outage / ±14 d      | 1 − OUTAGE_FAIL (≤, floor 0.7)| 0.40     | 0.437 (per-queue start rate 0.41)
  * H4   | warehouse instance_launch_success_rate, outage | 1 − OUTAGE_FAIL               | 0.40     | 0.397
- * H4   | EU median queue wait, outage / normal days     | OUTAGE_QUEUE_MULT (not graded)| 4.5      | 4.12 (919 s vs 223 s)
- * H5   | spend per signup, TikTok / Google              | 2.5 / 5.5                     | 0.455    | 0.451 ($2.48 vs $5.50)
- * H5   | tutorial completion, TikTok / other channels   | 36 / 60                       | 0.60     | 0.648 (42.4% vs 65.4%)
- * H5   | spend per tutorial finisher, TikTok / Meta     | (2.5 / 0.6) / 4.5             | 0.926    | 0.834 ($5.87 vs $7.03)
- * H6   | median queue wait, healer / dps                | ROLE_QUEUE_MULT.healer        | 0.40     | 0.400 (120 s vs 300 s)
- * H6   | median queue wait, tank / dps                  | ROLE_QUEUE_MULT.tank          | 0.20     | 0.197 (59 s)
- * H7   | average Ember pack price, PC / mobile          | pack weights                  | 1.855    | 1.756 ($15.65 vs $8.91)
- * H7   | warehouse net per Mixpanel Ember purchase, PC / mobile | 1.855 × 0.95 / 0.70   | 2.517    | 2.411 ($16.04 vs $6.65)
- * H8   | veteran DAU, Aug 13 - Sep 9 / Jul 9 - Aug 5     | (1−L+L(R+(1−R)k)) / (1−L+Lk)  | 1.267    | 1.279 (395 → 505)
+ * H4   | EU median queue wait, outage / normal days     | OUTAGE_QUEUE_MULT (not graded)| 4.5      | 4.99 (1,087 s vs 218 s)
+ * H5   | spend per signup, TikTok / Google              | 2.5 / 5.5                     | 0.455    | 0.449 ($2.47 vs $5.51)
+ * H5   | tutorial completion, TikTok / other channels   | 36 / 60                       | 0.60     | 0.613 (40.6% vs 66.3%)
+ * H5   | spend per tutorial finisher, TikTok / Meta     | (2.5 / 0.6) / 4.5             | 0.926    | 0.923 ($6.08 vs $6.59)
+ * H6   | median queue wait, healer / dps                | ROLE_QUEUE_MULT.healer        | 0.40     | 0.403 (120 s vs 298 s)
+ * H6   | median queue wait, tank / dps                  | ROLE_QUEUE_MULT.tank          | 0.20     | 0.205 (61 s)
+ * H7   | average Ember pack price, PC / mobile          | pack weights                  | 1.855    | 2.036 ($16.55 vs $8.13)
+ * H7   | warehouse net per Mixpanel Ember purchase, PC / mobile | 1.855 × 0.95 / 0.85   | 2.073    | 2.283 ($16.72 vs $7.32)
+ * H8   | veteran DAU, Aug 13 - Sep 9 / Jul 9 - Aug 5     | (1−L+L(R+(1−R)k)) / (1−L+Lk)  | 1.267    | 1.290 (520 → 671)
  * H8   | Frostspire Vault runs before Aug 6             | exact purity                  | 0        | 0
- * H9   | dungeon runs per active player, event / ±1 week| 1 + DOUBLE_XP_EXTRA           | 1.60     | 1.664 (1.74 vs 1.04)
- * H10  | clear rate, solo / full party                  | 0.40 / 0.70                   | 0.571    | 0.570 (39.9% vs 69.9%)
- * H10  | clear rate, duo / full party                   | 0.50 / 0.70                   | 0.714    | 0.720
- * H10  | clear rate, mythic / normal (not graded)       | 0.78 / 1.08                   | 0.722    | 0.723 (48.7% vs 67.4%)
+ * H9   | dungeon runs per active player, event / ±1 week| 1 + DOUBLE_XP_EXTRA           | 1.60     | 1.626 (1.96 vs 1.20)
+ * H10  | clear rate, solo / full party                  | 0.40 / 0.70                   | 0.571    | 0.570 (39.8% vs 69.9%)
+ * H10  | clear rate, duo / full party                   | 0.50 / 0.70                   | 0.714    | 0.712
+ * H10  | clear rate, mythic / normal (not graded)       | 0.78 / 1.08                   | 0.722    | 0.719 (48.5% vs 67.4%)
  * ═════════════════════════════════════════════════════════════════════════
  *
- * Noise notes: H2 rests on about 190 and 220 retained players (724 joiners,
- * 1,350 non-joiners; relative SE of the ratio about 9%), so it uses the knob
- * as target with a half-effect floor; on this draw both the lifespan share and
- * the base retention of long-lived non-joiners came out above the joiners',
- * so H2 grades STRONG (0.626, about 1.4 SE from the knob). H4's event read
- * rests on about 290 EU starts on outage days (403 EU matchmade queues;
- * per-queue start rate 0.38 vs 0.40), so it uses the knob as target with a
- * half-effect floor. H5's TikTok completion drew high (42.4% vs about 39.4%
- * expected for its arm mix, about 1.9 SE), which pulls the per-finisher ratio
- * to the band edge. H7 rests on about 1,280 mobile Ember purchases from 322
- * buyers (price CV ≈ 1.5). Payers are 9.8% of active players (veterans 12.6%,
- * new players 4.0%). The hook thins events (non-finishers, lapsed veterans,
- * H2 quits, lifespans) and keeps one "game launched" per session, so the run
- * has ~0.68M events against the standard's approximate 1.4M at 1.2 events per
- * player-day. The engine and the hook share one seeded stream, so any change
- * in hook draws reshuffles later players. The Q13 / Q14 nulls hold by the
- * clear-rate balancing term (not by salt choice); they were re-run on this
- * final data (overall |z| 0.37 and 0.32; every party size, region, and
- * difficulty split |z| < 1).
+ * Noise notes: H2 rests on about 315 and 330 retained players (700 joiners,
+ * 1,368 non-joiners; relative SE of the ratio about 8%), so it uses the knob
+ * as target with a half-effect floor; it reads 0.538 (NAILED). H4's event read
+ * rests on 457 EU starts on outage days (565 EU matchmade queues; per-queue
+ * start rate 0.41 vs 0.40), so it uses the knob as target with a half-effect
+ * floor. H7 rests on 2,354 mobile and 1,387 PC Ember purchases (477 and 308
+ * buyers; ratio SE about 4.3%). Mobile drew few $99.99 packs (11 vs about 24
+ * expected), so the mobile average sits about 2.4 SE low ($8.13 vs $8.77) and
+ * both H7 reads land high: the pack ratio 2.036 is NAILED near the band top and
+ * the net ratio 2.283 sits just past it (STRONG). Payers are 9.0% of active
+ * players (veterans 11.5%, new players 4.0%). New-player day 1 / 7 / 30
+ * retention is 30.1% / 11.2% / 3.4% (tutorial finishers 43.2% / 18.7% / 5.6%).
+ * The hook thins events (non-finishers, lapsed veterans, H2 quits, lifespans)
+ * and keeps one "game launched" per session, so the run has ~1.02M events
+ * against the standard's approximate 1.4M at 1.2 events per player-day. The
+ * engine and the hook share one seeded stream, so any change in hook draws
+ * reshuffles later players. The Q13 / Q14 nulls rest on a weak clear-rate
+ * balancing term (gain 0.008) on top of the design (clear rate has no
+ * platform, region, or patch input). On this final data the overall reads are
+ * |z| 0.01 (Q13) and 0.40 (Q14); the largest sub-split is Q13's 3-player split
+ * (|z| 1.45, p ≈ 0.15; the balancing stratum uses the run's device before
+ * sessions settle devices); every other split is |z| ≤ 0.70.
  */
 
 // ── SCALE ──
@@ -324,6 +341,8 @@ const EXP_KEY = `Experiment: ${TUTORIAL_EXPERIMENT}`;
 const TUTORIAL_CONV = 60;          // % of new players who finish the classic tutorial
 const GUIDED_CONV_MULT = 1.25;     // guided tutorial completion multiplier
 const GUIDED_TTC_MULT = 0.7;       // the guided tutorial is shorter: onboarding steps take 0.7x as long (tutorial_minutes = the real started → completed gap)
+const TUTORIAL_SPREAD = 0.35;      // per-player log-normal spread of tutorial length
+const TUTORIAL_SLOW_SHARE = 0.12;  // players who step away mid-tutorial (x1.5-4.5 as long)
 const NONCOMPLETER_HOURS = 48;     // players who never finish the tutorial do their first-visit activity within 2 days
 const NF_RETURN_SHARE = 0.12;      // share of non-finishers who come back once or twice on day 1-2 (salted), retry the tutorial, then leave
 const NF_RETURN_FROM_H = 18;       // first return session 18-44 h after signup
@@ -339,7 +358,7 @@ const GUILD_COUNT = 320;
 const GUILD_CAP = 50;              // guild member cap
 // realism: new players' natural lifespan, Pareto: P(still playing after d days) = (LIFE_D0 / d)^LIFE_ALPHA
 const LIFE_D0 = 3;
-const LIFE_ALPHA = 0.6;
+const LIFE_ALPHA = 0.45;
 
 // H3 Ashen Warden rebalance (patch 4.0.2)
 const WARDEN = "Ashen Warden";
@@ -396,12 +415,12 @@ const AVG_PACK_PRICE = Object.fromEntries(Object.entries(PACK_WEIGHTS).map(([k, 
 	const tot = w.reduce((a, b) => a + b, 0);
 	return [k, w.reduce((s, wi, i) => s + wi * GEM_PACKS[i].price, 0) / tot];
 }));
-const STORE_FEE = { ios: 0.30, android: 0.30, pc: 0.05 }; // app stores take 30%; the PC launcher webshop pays 5% processing
+const STORE_FEE = { ios: 0.15, android: 0.15, pc: 0.05 }; // Apple Small Business Program and Google Play's reduced tier take 15%; the PC launcher webshop pays 5% processing
 const BUNDLE_SHARE = 0.15;
 const BUNDLE = { product: "Adventurer's Bundle", price: 14.99, embers: 1500 };
 const EMBER_PASS_PRICE = 9.99;
-const PAYER_SHARE_EXISTING = 0.13;
-const PAYER_SHARE_NEW = 0.05;
+const PAYER_SHARE_EXISTING = 0.10;
+const PAYER_SHARE_NEW = 0.04;
 const PURCHASE_PER_DAY = 0.45;     // average chance a payer buys something on a day they play
 const PAYER_PERSONA_MULT = { hardcore: 2, regular: 0.95, casual: 0.35 }; // committed players pay more often (mix average ≈ 1)
 const PAYER_STORE_MULT = { mobile: 1.4, pc: 0.88 }; // one-tap app store billing converts more mobile-first players into payers (mix average ≈ 1)
@@ -423,7 +442,7 @@ const DOUBLE_XP_EXTRA = 0.6;       // each run in the window brings an extra run
 
 // H10 dungeon clear rate by party size
 const CLEAR_RATE = { 1: 0.40, 2: 0.50, 3: 0.58, 4: 0.64, 5: 0.70 };
-const CLEAR_BALANCE_GAIN = 0.02;   // per-stratum balancing: realized clears stay within a few runs of the knob
+const CLEAR_BALANCE_GAIN = 0.008;  // weak per-stratum balancing: realized clears drift like binomial data but stay near the knob
 const QUEUE_TYPE_WEIGHTS = { matchmade: 55, premade: 30, solo: 15 };
 const PREMADE_SIZE_WEIGHTS = { 2: 30, 3: 30, 4: 20, 5: 20 };
 
@@ -448,7 +467,12 @@ const BASE_XP = { normal: 1200, heroic: 2000, mythic: 3200 };
 // harder tiers clear less often; normalized so the run-weighted mix averages 1 and
 // each party size keeps its CLEAR_RATE knob (difficulty does not depend on party size)
 const DIFFICULTY_CLEAR_RAW = { normal: 1.08, heroic: 0.97, mythic: 0.78 };
-const PERSONA_RUN_WEIGHT = { hardcore: 20 * 1.8, regular: 50 * 1.0, casual: 30 * 0.5 }; // persona weight x eventMultiplier
+const PERSONAS = [
+	{ name: "hardcore", weight: 20, eventMultiplier: 2.5 },
+	{ name: "regular", weight: 50, eventMultiplier: 1.4 },
+	{ name: "casual", weight: 30, eventMultiplier: 0.7 },
+];
+const PERSONA_RUN_WEIGHT = Object.fromEntries(PERSONAS.map((p) => [p.name, p.weight * p.eventMultiplier]));
 const DIFFICULTY_CLEAR_MULT = (() => {
 	const mix = { normal: 0, heroic: 0, mythic: 0 };
 	let tot = 0;
@@ -533,6 +557,10 @@ const clearBalance = (cfg, key) => {
 	return m.get(key);
 };
 
+// an Ember purchase's pack draw (a uniform); finish() turns it into a pack once the
+// purchase's device (and so its platform) is final
+const PACK_R = new WeakMap();
+
 // events a later pass must not move (the H2 early guild join)
 const PINNED = new WeakSet();
 const pin = (...args) => { const ev = morph(...args); PINNED.add(ev); return ev; };
@@ -598,6 +626,18 @@ function handleEverything(events, meta) {
 	// ── born players: tutorial (H1/H5 via the first funnels) ──
 	const tc = events.find((e) => e.event === "tutorial completed") || null;
 	if (born && tc && variant === TUTORIAL_VARIANT) tc.tutorial_version = "guided";
+	// tutorial length varies by player (the same draw in both arms): a log-normal spread
+	// and a slow tail of players who step away mid-tutorial
+	if (born && tc) {
+		const ts = events.filter((e) => e.event === "tutorial started" && T(e) <= T(tc)).map(T);
+		if (ts.length) {
+			const t0 = Math.max(...ts);
+			const z = Math.sqrt(-2 * Math.log(Math.max(1e-9, salt(uid, "tut-z1")))) * Math.cos(2 * Math.PI * salt(uid, "tut-z2"));
+			let f = Math.exp(TUTORIAL_SPREAD * z);
+			if (salt(uid, "tut-slow") < TUTORIAL_SLOW_SHARE) f *= 1.5 + 3 * salt(uid, "tut-slow-x");
+			tc.time = iso(t0 + Math.round((T(tc) - t0) * f));
+		}
+	}
 	// tutorial_minutes is the real time from the last "tutorial started" before the completion
 	if (tc) {
 		const ts = events.filter((e) => e.event === "tutorial started" && T(e) <= T(tc)).map(T);
@@ -608,7 +648,7 @@ function handleEverything(events, meta) {
 		// never finished the tutorial: the first visit only, then they leave
 		const base = birthMs ?? T(events[0]);
 		const lim = base + NONCOMPLETER_HOURS * HOUR_MS;
-		events = events.filter((e) => (ONBOARDING.has(e.event) || e.event === GAME_LAUNCHED || e.event === "$experiment_started") && T(e) < lim);
+		events = events.filter((e) => (ONBOARDING.has(e.event) || e.event === "$experiment_started") && T(e) < lim);
 		// some come back once or twice on day 1-2, often retry the tutorial, and still leave
 		if (signup && salt(uid, "nf-return") < NF_RETURN_SHARE) {
 			const hadTutorial = events.some((e) => e.event === "tutorial started");
@@ -666,10 +706,10 @@ function handleEverything(events, meta) {
 		if (region === OUTAGE_REGION && inOutage(startT) && rnd() < OUTAGE_FAIL) return null;
 		// the outcome is salted per run, independent of the shared random stream. Clear
 		// rate depends on party size and difficulty; it has no platform, region, or
-		// patch input (the Q13 / Q14 nulls). A small balancing term keeps each
-		// platform x party size x difficulty x region x patch-period stratum at its
-		// target (the null holds by construction, not by choosing a salt); the
-		// platform is the run's device at this point, before sessions regroup devices.
+		// patch input (the Q13 / Q14 nulls). A weak balancing term pulls each
+		// platform x party size x difficulty x region x patch-period stratum toward
+		// its target (not a salt choice); the platform is the run's device at this
+		// point, before sessions regroup devices.
 		const target = CLEAR_RATE[party] * DIFFICULTY_CLEAR_MULT[difficulty];
 		const stratum = `${storeOf(platformOf(st.os))}|${party}|${difficulty}|${region}|${startT >= ms(PATCH_402) ? "post" : "pre"}`;
 		const bal = clearBalance(meta.config, stratum);
@@ -785,8 +825,8 @@ function handleEverything(events, meta) {
 			if (rnd() < BUNDLE_SHARE) {
 				Object.assign(p, { product_type: "bundle", product: BUNDLE.product, price_usd: BUNDLE.price, embers_granted: BUNDLE.embers });
 			} else {
-				const pk = GEM_PACKS[pickIndex(PACK_WEIGHTS[storeOf(platformOf(p.os))], rnd())];
-				Object.assign(p, { product_type: "embers", product: `${pk.embers.toLocaleString("en-US")} Embers`, price_usd: pk.price, embers_granted: pk.embers });
+				p.product_type = "embers";
+				PACK_R.set(p, rnd());
 			}
 			extra.push(p);
 		}
@@ -952,24 +992,22 @@ function foldIntoSessions(events) {
 function finish(events, profile) {
 	events.sort(byT);
 	const out = [];
+	const sessions = [];
 	let cluster = [];
 	const flush = () => {
 		if (!cluster.length) return;
 		const first = cluster[0];
 		const hasSignup = cluster.some((e) => e.event === "account created");
-		if (first.event === GAME_LAUNCHED) {
-			out.push(...cluster);
-		} else {
-			if (!hasSignup) {
-				const dayStart = ms(`${dayKey(T(first))}T00:00:00Z`);
-				// 5-60 s before the first action, never across midnight, and more than
-				// 30 minutes after the previous session's last event
-				const t0 = T(first) - Math.min(chance.integer({ min: 5, max: 60 }) * 1000, Math.floor((T(first) - dayStart) * 0.9));
-				const t = Math.min(T(first), Math.max(t0, prevEnd + SESSION_GAP_MS + 1000));
-				out.push(morph(first, GAME_LAUNCHED, t, { launch_source: pickWeighted({ desktop_launcher: 45, app_icon: 40, push_notification: 15 }, rnd()) }));
-			}
-			out.push(...cluster);
+		if (first.event !== GAME_LAUNCHED && !hasSignup) {
+			const dayStart = ms(`${dayKey(T(first))}T00:00:00Z`);
+			// 5-60 s before the first action, never across midnight, and more than
+			// 30 minutes after the previous session's last event
+			const t0 = T(first) - Math.min(chance.integer({ min: 5, max: 60 }) * 1000, Math.floor((T(first) - dayStart) * 0.9));
+			const t = Math.min(T(first), Math.max(t0, prevEnd + SESSION_GAP_MS + 1000));
+			cluster.unshift(morph(first, GAME_LAUNCHED, t, { launch_source: pickWeighted({ desktop_launcher: 45, app_icon: 40, push_notification: 15 }, rnd()) }));
 		}
+		out.push(...cluster);
+		sessions.push(cluster);
 		prevEnd = T(cluster[cluster.length - 1]);
 		cluster = [];
 	};
@@ -979,16 +1017,47 @@ function finish(events, profile) {
 	for (const e of events) {
 		const t = T(e);
 		// a play session ends after 30 idle minutes (a session can run past midnight);
-		// a dungeon run in progress keeps its session open until it finishes
-		const endsOpenRun = e.event === "dungeon finished" && openRuns.has(e.run_id);
-		if (cluster.length && t - lastT > SESSION_GAP_MS && !endsOpenRun) { flush(); openRuns.clear(); }
+		// a dungeon run in progress (queued or started) keeps its session open until it moves on
+		const continuesOpenRun = (e.event === "dungeon started" || e.event === "dungeon finished") && openRuns.has(e.run_id);
+		if (cluster.length && t - lastT > SESSION_GAP_MS && !continuesOpenRun) { flush(); openRuns.clear(); }
+		// a long queue or a long run: the player chats while they wait or play, so the
+		// session never sits idle for 30 minutes (world chat in a queue or solo, party chat in a group)
+		if (cluster.length && continuesOpenRun) {
+			const prev = cluster[cluster.length - 1];
+			const channel = prev.event === "dungeon started" && prev.party_size > 1 ? "party" : "world";
+			while (t - lastT > SESSION_GAP_MS) {
+				lastT += chance.integer({ min: 12, max: 26 }) * MIN_MS;
+				cluster.push(morph(prev, "chat message sent", lastT, { chat_channel: channel }));
+			}
+		}
 		// a later launch inside a session is dropped and does not extend it
 		if (e.event === GAME_LAUNCHED && cluster.length) continue;
-		if (e.event === "dungeon started") openRuns.add(e.run_id);
+		if (e.event === "dungeon queued" || e.event === "dungeon started") openRuns.add(e.run_id);
 		cluster.push(e);
 		lastT = t;
 	}
 	flush();
+	// one play session = one session_id and one device: every event in the session takes
+	// the session_id of its first event and the device of its first device-bearing event
+	// (server-sent onboarding steps stay device-less)
+	const usedSids = new Set();
+	for (const sess of sessions) {
+		let sid = sess[0].session_id;
+		if (!sid || usedSids.has(sid)) {
+			const h = (k) => String(Math.floor(hashFloat(`${profile.distinct_id}|sid|${T(sess[0])}|${k}`) * 90000) + 10000);
+			sid = [0, 1, 2, 3].map(h).join("-");
+		}
+		usedSids.add(sid);
+		const anchor = sess.find((e) => e.device_id);
+		for (const e of sess) {
+			e.session_id = sid;
+			if (!anchor || !e.device_id || e === anchor) continue;
+			for (const k of DEVICE_FIELDS) {
+				if (anchor[k] === undefined) delete e[k];
+				else e[k] = anchor[k];
+			}
+		}
+	}
 	let spend = profile.total_spend_usd || 0;
 	let guild = !!profile.in_guild;
 	for (const e of out) {
@@ -997,6 +1066,11 @@ function finish(events, profile) {
 			e.client_version = clientVersion(T(e));
 			if (e.platform !== "pc" && e.launch_source === "desktop_launcher") e.launch_source = "app_icon";
 			if (e.platform === "pc" && e.launch_source !== "desktop_launcher") e.launch_source = "desktop_launcher";
+		}
+		const r = PACK_R.get(e);
+		if (r !== undefined) {
+			const pk = GEM_PACKS[pickIndex(PACK_WEIGHTS[storeOf(e.platform)], r)];
+			Object.assign(e, { product: `${pk.embers.toLocaleString("en-US")} Embers`, price_usd: pk.price, embers_granted: pk.embers });
 		}
 		if (e.event === "purchase completed") spend += e.price_usd;
 		if (e.event === "guild joined") { guild = true; e.guild_size = guildSize(e.guild_id, T(e)); }
@@ -1030,15 +1104,28 @@ function handleWarehouse(row, meta) {
 		// analytics or whose client never sent the event, and refunds
 		const k = `${row.date}|${row.platform}|${row.product_type}`;
 		const count = meta.raw?.plus?.count ?? 0;
-		const avgPrice = count ? row.gross_bookings_usd / count : 0;
+		// an extra or refunded item is a real list price: an Ember pack drawn from the
+		// platform's pack mix, the bundle, or the pass. A refunded item that would take
+		// refunds past the day's gross is not refunded.
+		const itemsValue = (n, tag, cap = Infinity) => {
+			let v = 0;
+			for (let i = 0; i < n; i++) {
+				const price = row.product_type === "bundle" ? BUNDLE.price
+					: row.product_type === "ember_pass" ? EMBER_PASS_PRICE
+						: GEM_PACKS[pickIndex(PACK_WEIGHTS[storeOf(row.platform)], hashFloat(`${tag}|${k}|${i}`))].price;
+				if (v + price <= cap + 1e-9) v += price;
+			}
+			return v;
+		};
 		// the untracked share is a property of the day (an SDK or network problem hits every
 		// store): skewed, 0-48%, mean = knob (the product of two uniforms has mean 1/4)
 		const dayShare = 4 * UNTRACKED_PURCHASE_SHARE * hashFloat(`untracked|${row.date}`) * hashFloat(`untracked2|${row.date}`);
 		const untrackedN = Math.floor(dayShare * count + hashFloat(`untracked|${k}`));
-		const refundN = Math.floor(hashFloat(`refund|${k}`) * (2 * REFUND_SHARE * count + 1));
-		const gross = round2(row.gross_bookings_usd + untrackedN * avgPrice);
-		const refunds = round2(Math.min(gross, refundN * avgPrice));
-		const fees = round2((gross - refunds) * (STORE_FEE[row.platform] ?? 0.3));
+		// unbiased refund count: expected REFUND_SHARE of tracked purchases on every row
+		const refundN = Math.min(count + untrackedN, Math.floor(REFUND_SHARE * count + hashFloat(`refund|${k}`)));
+		const gross = round2(row.gross_bookings_usd + itemsValue(untrackedN, "untracked-item"));
+		const refunds = round2(itemsValue(refundN, "refund-item", gross));
+		const fees = round2((gross - refunds) * STORE_FEE[row.platform]);
 		row.gross_bookings_usd = gross;
 		row.transactions = count + untrackedN;
 		row.refunds_usd = refunds;
@@ -1413,13 +1500,9 @@ const config = {
 		total_spend_usd: [0],
 	},
 
-	personas: [
-		{ name: "hardcore", weight: 20, eventMultiplier: 1.8 },
-		{ name: "regular", weight: 50, eventMultiplier: 1.0 },
-		{ name: "casual", weight: 30, eventMultiplier: 0.5 },
-	],
+	personas: PERSONAS,
 
-	retentionCurve: { type: "logarithmic", day1: 0.45, day7: 0.25, day30: 0.12 },
+	retentionCurve: { type: "logarithmic", day1: 0.5, day7: 0.3, day30: 0.16 },
 
 	hook(record, type, meta) {
 		if (type === "user") return handleUserHook(record, meta);
@@ -1601,7 +1684,7 @@ FROM ev JOIN v ON v.uid = ev.uid WHERE ev.event = 'tutorial completed' GROUP BY 
 			{
 				breakdown: { type: "duckdb", sql: H2_SQL },
 				select: { n: { where: { grp: "no_guild" } }, g: { where: { grp: "guild" } } },
-				// about 200 retained players per group (relative SE ≈ 8%): knob target, half-effect floor
+				// about 320 retained players per group (relative SE ≈ 8%): knob target, half-effect floor
 				expect: { metric: "n.retention / g.retention", op: "<=", target: 1 - NONJOINER_QUIT_SHARE, floor: 1 - 0.5 * NONJOINER_QUIT_SHARE },
 				minCohort: 500,
 			},
@@ -1650,7 +1733,7 @@ SELECT 'all' AS grp, (SELECT count(*) FROM od) AS outage_days, min(users) AS use
 FROM g`,
 				},
 				select: { a: { where: { grp: "all" } } },
-				// about 290 EU launches survive on outage days (relative SE ≈ 6%): knob target, half-effect floor
+				// about 460 EU launches survive on outage days (relative SE ≈ 5%): knob target, half-effect floor
 				expect: { metric: "a.did", op: "<=", target: 1 - OUTAGE_FAIL, floor: 1 - 0.5 * OUTAGE_FAIL },
 				minCohort: 300,
 			},
@@ -1726,14 +1809,14 @@ FROM ${WH("server_health_daily")}`,
 				breakdown: { type: "duckdb", sql: H7_SQL },
 				select: { p: { where: { grp: "pc" } }, m: { where: { grp: "mobile" } } },
 				expect: { metric: "p.avg_price / m.avg_price", op: "between", target: band(GEM_RATIO) },
-				// about 300 mobile Ember buyers (≈1,200 purchases carry the read)
+				// about 480 mobile Ember buyers (≈2,350 purchases carry the read)
 				minCohort: 200,
 			},
 			{
 				breakdown: { type: "duckdb", sql: H7_SQL },
 				select: { p: { where: { grp: "pc" } }, m: { where: { grp: "mobile" } } },
 				expect: { metric: "p.net_per_purchase / m.net_per_purchase", op: "between", target: band(NET_RATIO) },
-				// about 300 mobile Ember buyers (≈1,200 purchases carry the read)
+				// about 480 mobile Ember buyers (≈2,350 purchases carry the read)
 				minCohort: 200,
 			},
 		],

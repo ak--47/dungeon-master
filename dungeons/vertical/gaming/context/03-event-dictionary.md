@@ -9,7 +9,7 @@ Every event below is tracked in Mixpanel. Property names are exact. All events c
 | `platform` | Platform of the device the player used for this event: `pc` (Windows, macOS, Linux), `ios` (iPhone, iPad), or `android`. A player who plays on two devices shows up under both. |
 | `server_region` | The player's home server region: `NA`, `EU`, or `APAC`. Fixed per player. |
 | `os`, `model`, `screen_width`, `screen_height`, `carrier`, `radio` | Device details sent by the client. `carrier` and `radio` exist only on phones and tablets. |
-| `session_id` | Client session identifier. Mixpanel computes its own sessions from timestamps; use those for session reports. |
+| `session_id` | Play session identifier, following Mixpanel's session rule (a new session after 30 idle minutes or when the UTC day changes). All events in a session come from one device. |
 
 ## Account and onboarding
 
@@ -25,7 +25,7 @@ Every event below is tracked in Mixpanel. Property names are exact. All events c
 
 | Event | When it fires | Properties |
 |---|---|---|
-| `game launched` | The game client starts and the player is in. One per play session (a new player's first session starts with `account created` instead). | `launch_source`: `desktop_launcher` (PC), `app_icon`, or `push_notification` (mobile). `client_version`: game build (`4.0.1`, `4.0.2` from Jul 23, `4.1.0` from Aug 6). |
+| `game launched` | The game client starts and the player is in. One per play session (a new player's first session starts with `account created` instead; the part of a session that runs past midnight UTC has none). | `launch_source`: `desktop_launcher` (PC), `app_icon`, or `push_notification` (mobile). `client_version`: game build (`4.0.1`, `4.0.2` from Jul 23, `4.1.0` from Aug 6). |
 
 ## Dungeons
 
@@ -53,7 +53,7 @@ Dungeons: `Emberdeep Mines`, `Sunken Reliquary`, `Ashen Catacombs`, `Thornwild H
 
 | Event | When it fires | Properties |
 |---|---|---|
-| `chat message sent` | The player sends a chat message. | `chat_channel` (`party`, `guild`, `world`, `whisper`). |
+| `chat message sent` | The player sends a chat message, including while waiting in a queue or during a run. | `chat_channel` (`party`, `guild`, `world`, `whisper`). |
 | `friend added` | The player adds a friend. | `friend_source` (`party`, `guild`, `search`, `contacts`). |
 | `guild joined` | The player joins a guild (or switches to a new one). | `guild_id` (e.g. `guild_042`), `guild_size` (the guild's member count right after this player joined; guilds grow and shrink over time, cap 50). |
 

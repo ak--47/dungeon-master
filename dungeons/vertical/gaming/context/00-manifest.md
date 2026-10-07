@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Emberfall**, the free-to-play f
 
 - **Product:** Emberfall on PC (Windows, macOS, and Linux through the Emberfall launcher) and on mobile (iPhone, iPad, and Android). One account plays on every device, with cross-play between PC and mobile.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early June through the end of September and the first day of October.
-- **Scale:** about 9,800 players have events in the window, and about 7,900 of them launched the game (`game launched`). About 4,500 of the 9,800 created their account during the window; the rest are veterans who joined before June 4. The project holds about 684,000 events.
+- **Scale:** about 9,900 players have events in the window, and about 8,100 of them launched the game (`game launched`). About 4,500 of the 9,900 created their account during the window; the rest are veterans who joined before June 4. The project holds about 1,018,000 events.
 - **Servers:** players pick a home server region when they create their account: North America (`NA`), Europe (`EU`), or Asia-Pacific (`APAC`).
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC. North American evenings fall after midnight UTC.
 
@@ -29,9 +29,10 @@ This folder is the internal analytics wiki for **Emberfall**, the free-to-play f
 
 - A new player is identified when they create an account. `account created` carries both the player's `user_id` and the `device_id` of the device they signed up on. It is each new player's first event, except that players who joined from July 8 have a `$experiment_started` event (the "First Flame Tutorial" assignment) one second earlier, with the same `user_id` and `device_id`. There is no anonymous pre-signup activity in the data. A new player's first play session starts with `account created` (the game creates the account on first launch), so that session has no `game launched` event.
 - Every event carries `user_id`. Almost every event also carries `device_id`; the exceptions are the three onboarding steps after signup (`character created`, `tutorial started`, `tutorial completed`), which the game server sends with `user_id` only.
-- Some players use more than one device, for example a PC at home and a phone on the go. Each play session stays on one device. `platform` is `pc` for Windows, macOS, and Linux, `ios` for iPhone and iPad (`os` = `iOS` or `iPadOS`), and `android` for Android phones. A player can therefore appear under more than one platform.
+- Some players use more than one device, for example a PC at home and a phone on the go. Each play session stays on one device: every event with the same `session_id` has the same `device_id`. `platform` is `pc` for Windows, macOS, and Linux, `ios` for iPhone and iPad (`os` = `iOS` or `iPadOS`), and `android` for Android phones. A player can therefore appear under more than one platform.
 - Veterans who joined before June 4 have no `account created` event in this window. Their `member_since` profile date is before the window. For players who joined in the window, `member_since` is their signup date.
 - Count people with unique `user_id` (Mixpanel "Uniques"), not with `device_id`.
+- `session_id` follows Mixpanel's session rule: a new session starts after 30 idle minutes or when the UTC day changes. A play session starts with `game launched`, except a new player's first session (it starts with `account created`). A play session that runs past midnight UTC counts as two sessions, and the part after midnight has no `game launched`.
 
 ## Conventions
 
