@@ -17,7 +17,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             2026-08-10, $239 per year unchanged); Brightpath for Teams seats
  *             paid by employers. Ask Bright (AI tutor) is a Plus and Teams
  *             feature from 2026-07-21. Web plus iOS and Android apps.
- * SCALE:      10,000 learners (3,983 sign up inside the window), ~0.82M events,
+ * SCALE:      10,000 learners (3,952 sign up inside the window), ~0.87M events,
  *             120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  course page viewed → course enrolled → lesson started → lesson
  *             completed (→ quiz submitted, assignment submitted) → certificate earned
@@ -60,7 +60,8 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * IDENTITY: new learners are identified at "account created" (isAuthEvent, first
  * event, carries user_id + device_id); about 2 devices per learner. Every event
  * carries user_id; there is no anonymous pre-signup activity. The onboarding
- * steps after signup happen in the signup session and carry its device.
+ * steps after signup carry the signup device (they land hours later, so the
+ * engine's time-gap sessions usually differ from the signup session).
  * "certificate earned" and "subscription started" are sent by the backend:
  * user_id only, no device_id or platform.
  *
@@ -85,8 +86,10 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   on schedule; self-paced: nominal length × a pace with median 1), only if
  *   the learner is still active then; days_to_complete is the real gap.
  * - Purchases are placed by the hook: new self-pay learners (and those who
- *   joined in the 60 days before June 4, at the same rate, so June starts with
- *   purchases in flight) buy a lognormal lag after signup (median 6 days);
+ *   joined in the 60 days before June 4, at the same rate and with the same
+ *   lapse / go-dark / setup-abandon survival drawn from their join time, so
+ *   June starts with purchases in flight at the steady-state rate) buy a
+ *   lognormal lag after signup (median 6 days);
  *   long-time free learners buy at a uniform moment in the window. A purchase
  *   happens only if the learner is still active at that moment. About 9% of new
  *   self-pay learners buy Plus within 30 days (the certificate upsell); about 5%
@@ -94,7 +97,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   learner; a paywall view precedes each purchase; paywalls are shown to free
  *   learners only. plan_tier on each event is the plan at that moment.
  * - A lesson is finished on the device it was started on: lesson completed
- *   carries its start's device fields and session.
+ *   carries its start's device fields.
  * - New learners: retentionCurve shapes activity; 55% lapse on a uniform day
  *   3-60; 60% of learners who never start a lesson stop on day 1-5; 75% finish
  *   their first onboarding lesson in the same sitting.
@@ -134,10 +137,12 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * ─────────────────────────────────────────────────────────────────────────
  * H2. PERSONALIZED COURSE PICKS EXPERIMENT (declarative funnel experiment)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: from 2026-07-08 learners split 50/50 at their first course page view;
- *   "Personalized" multiplies the share of course page views that end in an
+ * PATTERN: from 2026-07-08 learners split 50/50 (the engine's sticky hash) and
+ *   are exposed at their first in-test course page view, browse-only views
+ *   included (the hook places the one $experiment_started 1 s before it and
+ *   stamps the profile, so every in-test viewer is in a variant); "Personalized"
+ *   multiplies the share of the funnel's course page views that end in an
  *   enrollment in that course by 1.25 and the view-to-enrollment time by 0.8.
- *   One $experiment_started per learner.
  * MIXPANEL: Funnels, course page viewed → course enrolled, totals, hold course_id
  *   constant, 1-day window, breakdown user property "Experiment: Personalized
  *   Course Picks".
@@ -186,28 +191,32 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * PATTERN: on 2026-08-10 Plus monthly rises from $29 to $35; annual stays $239.
  *   Before: 30% of new subscriptions are annual. After: annual-minded buyers stay
  *   annual, 30% of monthly-minded buyers switch to annual, 20% do not buy. New
- *   subscriptions fall to 0.86x, annual share rises to 0.593, and the first
- *   payment per new subscription (warehouse list price) rises 1.695x.
+ *   subscriptions fall to 0.86x of the would-be volume, annual share rises to
+ *   0.593, and the first payment per new subscription (warehouse list price)
+ *   rises 1.695x, so bookings per subscription-day rise about 1.46x by design.
  * MIXPANEL: Insights, subscription started, breakdown billing_interval, weekly,
  *   % of total; join subscription_billing_daily.list_price_usd for revenue.
  * REAL WORLD: a monthly price rise next to an unchanged annual price nudges
  *   buyers to annual and prices out some monthly buyers.
  * NOTE: about 4 new subscriptions a day, so the volume read is noise-limited.
- *   Without the price change this seed's would-be volume reads 0.86 (190 vs
- *   222 in the 53-day windows; measured by re-running with MONTHLY_LOST and
- *   MONTHLY_SWITCH_ANNUAL at 0). Ten re-runs with other purchase salts average
- *   0.96 (range 0.87-1.09, standard error about 0.03), so most of the gap is chance.
+ *   Without the price change this seed's would-be volume rises 5% (208 → 218
+ *   in the 53-day windows; measured by re-running with MONTHLY_LOST and
+ *   MONTHLY_SWITCH_ANNUAL at 0). The price reaction kept 193 of those 218
+ *   would-be buyers (0.885 vs the 0.86 knob), so the plain before/after read
+ *   is 0.93 (193 vs 208).
  *
  * ─────────────────────────────────────────────────────────────────────────
  * H7. PAID CHANNEL ECONOMICS (everything + warehouse paid_marketing_daily)
  * ─────────────────────────────────────────────────────────────────────────
- * PATTERN: window spend per Mixpanel signup is $38 paid search, $15 paid social,
- *   $26 YouTube ads. Share of would-be Plus purchases kept by channel: paid
- *   search 1.0, referral 0.9, organic 0.85, YouTube 0.75, university partnership
- *   0.6, paid social 0.4. Paid social is 0.39x the cost per signup and 0.4x the
- *   purchase rate, so by design cost per paying subscriber is about the same as
- *   search. With a few dozen buyers per channel this run reads paid social at
- *   0.33x the search purchase rate ($361 vs $288 spend per paying subscriber).
+ * PATTERN: daily budgets are set for $38 paid search, $15 paid social, $26
+ *   YouTube ads per expected signup. Share of would-be Plus purchases kept by
+ *   channel: paid search 1.0, referral 0.9, organic 0.85, YouTube 0.75,
+ *   university partnership 0.6, paid social 0.4. Paid social is 0.39x the cost
+ *   per signup and 0.4x the purchase rate, so by design cost per paying
+ *   subscriber is about the same as search. This run reads $44 / $17 / $27 per
+ *   Mixpanel signup (fewer paid-search signups than budgeted), paid social at
+ *   0.41x the search purchase rate, and spend per paying subscriber of $378
+ *   search, $330 social, $364 YouTube (48 / 23 / 18 buyers).
  * MIXPANEL: Insights, account created by acquisition_channel joined to
  *   paid_marketing_daily.spend_usd; Funnels account created → subscription
  *   started, 30-day window, signups Jun 4 - Aug 31, breakdown acquisition_channel.
@@ -224,7 +233,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * MIXPANEL: Insights, lesson completed / lesson started (formula, totals),
  *   filter content_type = video, breakdown platform, daily; join the warehouse.
  *   A completion carries its start's device, so this reads the same as the
- *   per-lesson join (Android 38.3% vs 83.3% in the 7 days either side).
+ *   per-lesson join (Android 38.7% vs 81.3% in the 7 days either side).
  * REAL WORLD: a video player regression in one app release.
  *
  * ─────────────────────────────────────────────────────────────────────────
@@ -253,35 +262,34 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * Hook | Metric                                         | Derivation                  | Expected | Measured
  * -----|------------------------------------------------|-----------------------------|----------|---------
  * H1   | tutor questions pre-launch or on Free          | exact purity                | 0        | 0
- * H1   | quiz score DiD, adopters vs eligible others    | AI_SCORE_BOOST              | 8.0      | 7.85 (69.9 → 77.8 vs 70.2 → 70.2)
- * H2   | per-view enrollment, Personalized / Control    | PICKS_CONV_MULT             | 1.25     | 1.252 (37.6% vs 30.0%)
- * H2   | median view → enrollment time                  | PICKS_TTC_MULT              | 0.80     | 0.807 (48.3 vs 59.9 min)
- * H2   | Personalized share of exposed learners         | equal 2-arm hash            | 0.50     | 0.499
- * H3   | onboarding conversion sponsored / self-pay     | 78 / 52                     | 1.50     | 1.496 (75.6% vs 50.6%)
- * H3   | median time to first lesson sponsored / self   | SPONSORED_TTC_MULT          | 0.50     | 0.498 (13.5 vs 27.1 h)
- * H4   | completion self-paced / cohort (Jun enrollments)| SELF_PACED_COMPLETE_MULT   | 0.30     | 0.306 (18.5% vs 60.2%)
- * H5   | retained day 30+, 3+ / <3 first-week lessons   | ≥ 1/(1 − 0.5) (floor)       | ≥ 2.00   | 2.018 (71.2% vs 35.3%)
- * H6   | annual share of new subscriptions after change | (0.3+0.7×0.3)/0.86          | 0.593    | 0.554 (before 0.316)
- * H6   | first payment per subscription after / before  | warehouse list price        | 1.695    | 1.551 ($148.04 vs $95.43)
- * H6   | subscriptions per day, 53 days after / before  | 0.3 + 0.7×0.8 (ceiling)     | ≤ 0.86   | 0.707 (2.96 vs 4.19, STRONG)
- * H7   | spend per signup paid social / paid search     | 15 / 38                     | 0.395    | 0.409 ($16.21 vs $39.66)
- * H7   | 30-day paid rate paid social / paid search     | 0.4 / 1.0 (ceiling)         | ≤ 0.40   | 0.333 (4.6% vs 13.6%, STRONG)
- * H8   | Android / other video completion, incident DiD | 1 − INCIDENT_FAIL           | 0.45     | 0.456 (38.2% vs 83.3% before)
+ * H1   | quiz score DiD, adopters vs eligible others    | AI_SCORE_BOOST              | 8.0      | 7.56 (70.2 → 77.9 vs 70.2 → 70.3)
+ * H2   | per-view enrollment, Personalized / Control    | PICKS_CONV_MULT             | 1.25     | 1.226 (35.3% vs 28.8%)
+ * H2   | median view → enrollment time                  | PICKS_TTC_MULT              | 0.80     | 0.803 (48.2 vs 60.1 min)
+ * H2   | Personalized share of exposed learners         | equal 2-arm hash            | 0.50     | 0.502
+ * H3   | onboarding conversion sponsored / self-pay     | 78 / 52                     | 1.50     | 1.592 (78.8% vs 49.5%)
+ * H3   | median time to first lesson sponsored / self   | SPONSORED_TTC_MULT          | 0.50     | 0.496 (13.5 vs 27.3 h)
+ * H4   | completion self-paced / cohort (Jun enrollments)| SELF_PACED_COMPLETE_MULT   | 0.30     | 0.286 (18.2% vs 63.5%)
+ * H5   | retained day 30+, 3+ / <3 first-week lessons   | ≥ 1/(1 − 0.5) (floor)       | ≥ 2.00   | 1.956 (69.2% vs 35.4%)
+ * H6   | annual share of new subscriptions after change | (0.3+0.7×0.3)/0.86          | 0.593    | 0.611 (before 0.303)
+ * H6   | first payment per subscription after / before  | warehouse list price        | 1.695    | 1.726 ($159.73 vs $92.56)
+ * H6   | subscriptions per day, 53 days after / before  | 0.3 + 0.7×0.8 (ceiling)     | ≤ 0.86   | 0.928 (3.64 vs 3.92)
+ * H7   | spend per signup paid social / paid search     | 15 / 38                     | 0.395    | 0.383 ($16.85 vs $43.95)
+ * H7   | 30-day paid rate paid social / paid search     | 0.4 / 1.0 (ceiling)         | ≤ 0.40   | 0.414 (4.96% vs 11.97%)
+ * H8   | Android / other video completion, incident DiD | 1 − INCIDENT_FAIL           | 0.45     | 0.471 (38.1% vs 81.4% around)
  * H8   | warehouse playback_failure_rate in incident    | INCIDENT_FAIL               | 0.55     | 0.558
- * H9   | student / other completions per day, fall DiD  | 1 / STUDENT_SUMMER_KEEP     | 1.818    | 1.748 (students 1.866x, others 1.067x)
- * H10  | quiz score 1x − 2x                              | FAST_SCORE_PENALTY          | 7.0      | 6.87 (71.7 vs 64.9)
- * H10  | quiz score 1.5x / 1x (control)                  | unchanged                   | 1.00     | 0.997
+ * H9   | student / other completions per day, fall DiD  | 1 / STUDENT_SUMMER_KEEP     | 1.818    | 1.782 (students 1.887x, others 1.059x)
+ * H10  | quiz score 1x − 2x                              | FAST_SCORE_PENALTY          | 7.0      | 6.96 (71.8 vs 64.8)
+ * H10  | quiz score 1.5x / 1x (control)                  | unchanged                   | 1.00     | 0.999
  * ═════════════════════════════════════════════════════════════════════════
  *
  * H5's read is a knob floor: lighter learners are also likelier to show no
  * activity after day 30 even without the cut. H6's volume read is
- * noise-limited (Poisson, about 220 vs 160 subscriptions) and grades STRONG
- * against a ceiling of half the knob's effect: the no-price-change volume in
- * this seed already reads 0.86 by chance (see H6 NOTE), and the price reaction
- * kept 157 of 190 would-be buyers (0.83 vs the 0.86 knob). The annual share and
- * first-payment reads sit inside their knob bands, on the low side, for the
- * same small-count reason. H7's purchase-rate read rests on 63 paid-search and
- * 21 paid-social buyers.
+ * noise-limited (Poisson, about 200 subscriptions per side) and carries a
+ * knob-derived ceiling with a floor at half the knob's effect: the
+ * no-price-change volume in this seed rises 5% by chance (see H6 NOTE), so the
+ * price reaction (193 of 218 would-be buyers kept, 0.885 vs the 0.86 knob)
+ * reads 0.93 before/after. H7's purchase-rate read rests on 48 paid-search and
+ * 23 paid-social buyers.
  */
 
 // ── SCALE ──
@@ -334,6 +342,7 @@ const TUTOR_QUESTION_TYPES = ["explain_concept", "explain_concept", "check_my_an
 const PICKS_EXPERIMENT = "Personalized Course Picks";
 const PICKS_VARIANT = "Personalized";
 const EXP_KEY = `Experiment: ${PICKS_EXPERIMENT}`;
+const PICKS_VARIANTS = ["Control", PICKS_VARIANT]; // equal weights, same order as the funnel experiment
 const ENROLL_CONV = 30;
 const ENROLL_TTC_H = 2;
 const PICKS_CONV_MULT = 1.25;
@@ -363,6 +372,8 @@ const SETUP_ABANDON_DAY_MAX = 5;
 const LAPSE_SHARE = 0.55;          // organic lapse, every new learner, independent of the streak
 const LAPSE_DAY_MIN = 3;
 const LAPSE_DAY_MAX = 60;
+const NEW_NOT_ACTIVATED_SHARE = 0.79; // new learners with fewer than 3 first-week lessons (this run's rate)
+const NEW_NEVER_STARTED_SHARE = 0.44; // new learners who never start a lesson (this run's rate)
 
 // H6 Plus price change (warehouse subscription_billing_daily)
 const PLUS_MONTHLY_OLD = 29;
@@ -735,6 +746,19 @@ function handleUserHook(profile, meta) {
 	return profile;
 }
 
+/**
+ * A recent pre-window joiner's lapse time, drawn the way a new learner's cuts are (H5) from the
+ * salted join time. Their first week is before the window, so the go-dark and setup-abandon cuts use
+ * the share of new learners who finish fewer than 3 first-week lessons / never start a lesson.
+ */
+function recentJoinerCut(uid, joinMs) {
+	const cuts = [];
+	if (salt(uid, "dark") < DARK_SHARE * NEW_NOT_ACTIVATED_SHARE) cuts.push(joinMs + (DARK_AFTER_MIN + salt(uid, "dark-day") * (DARK_AFTER_MAX - DARK_AFTER_MIN)) * DAY_MS);
+	if (salt(uid, "lapse") < LAPSE_SHARE) cuts.push(joinMs + (LAPSE_DAY_MIN + salt(uid, "lapse-day") * (LAPSE_DAY_MAX - LAPSE_DAY_MIN)) * DAY_MS);
+	if (salt(uid, "abandon") < SETUP_ABANDON_SHARE * NEW_NEVER_STARTED_SHARE) cuts.push(joinMs + (SETUP_ABANDON_DAY_MIN + salt(uid, "abandon-day") * (SETUP_ABANDON_DAY_MAX - SETUP_ABANDON_DAY_MIN)) * DAY_MS);
+	return cuts.length ? Math.min(...cuts) : Infinity;
+}
+
 // ── EVERYTHING HOOK ──
 function handleEverything(events, meta) {
 	if (!events.length) return events;
@@ -953,12 +977,17 @@ function handleEverything(events, meta) {
 		const joinMs = signup ? birthMs : ms(`${profile.customer_since}T00:00:00Z`) + salt(uid, "join-hour") * DAY_MS;
 		const recent = !signup && START_MS - joinMs <= RECENT_JOIN_DAYS * DAY_MS;
 		if (signup || recent) {
-			// recent pre-window joiners convert like new learners (same lag, same activity gate), so June starts with purchases in flight
+			// recent pre-window joiners convert like new learners: same lag, same activity gate, and the same
+			// survival (lapse, go-dark, setup-abandon cuts drawn from their join time), so June starts with
+			// purchases in flight at the steady-state rate, not above it
+			const survives = (t) => (signup ? true : t < recentJoinerCut(uid, joinMs));
 			if (salt(uid, "buy") < P_BUY_NEW * keep) {
 				const lag = clamp(lognormal(BUY_LAG_MEDIAN_DAYS, 0.9, salt(uid, "lag1"), salt(uid, "lag2")), 0.05, 75) * DAY_MS;
 				const t = joinMs + lag;
-				if (t < START_MS) initialPlan = "plus";
-				else if (t <= END_MS && activeAt(t)) buyMs = t;
+				if (survives(t)) {
+					if (t < START_MS) initialPlan = "plus";
+					else if (t <= END_MS && activeAt(t)) buyMs = t;
+				}
 			}
 		} else if (salt(uid, "buy-est") < P_BUY_EST) {
 			// a uniform moment in the window, kept only if the learner is active then (no window-end bias)
@@ -1053,11 +1082,20 @@ function handleEverything(events, meta) {
 	}
 	profile.plan_tier = sponsored ? "teams" : (buyMs < Infinity ? "plus" : initialPlan);
 
-	// one exposure per learner: the first time they see the course page while the test is live
-	const firstExposure = events.filter((e) => e.event === "$experiment_started").reduce((m, e) => (!m || T(e) < T(m) ? e : m), null);
-	events = events.filter((e) => e.event !== "$experiment_started" || e === firstExposure);
-	// experiment assignment lives on the profile only for learners with an exposure left
-	if (profile[EXP_KEY] !== undefined && !firstExposure) delete profile[EXP_KEY];
+	// H2 exposure: every learner who views a course page while the test is live is in it, recorded once,
+	// 1 s before their first in-test course page view (browse-only views included, not only the funnel's).
+	// The variant is the engine's sticky per-learner assignment.
+	const testStart = ms(COURSE_PICKS_START);
+	const firstPv = events.reduce((m, e) => (e.event === "course page viewed" && T(e) >= testStart && (!m || T(e) < T(m)) ? e : m), null);
+	const engineExposure = events.find((e) => e.event === "$experiment_started");
+	events = events.filter((e) => e.event !== "$experiment_started");
+	if (firstPv) {
+		const variant = profile[EXP_KEY] ?? PICKS_VARIANTS[Number(u.quickHash(`${uid}:${PICKS_EXPERIMENT}`)) % PICKS_VARIANTS.length];
+		const exposure = makeFrom(firstPv, "$experiment_started", { time: iso(T(firstPv) - 1000), "Experiment name": PICKS_EXPERIMENT, "Variant name": variant });
+		if (engineExposure) exposure.insert_id = engineExposure.insert_id;
+		events.push(exposure);
+		profile[EXP_KEY] = variant;
+	} else if (profile[EXP_KEY] !== undefined) delete profile[EXP_KEY];
 	return events;
 }
 
@@ -1432,7 +1470,7 @@ FROM ev WHERE event = 'ai tutor question asked'`,
 		id: "H2-personalized-course-picks-experiment",
 		hook: "H2",
 		archetype: "experiment-lift",
-		narrative: `The "${PICKS_EXPERIMENT}" test starts ${D(COURSE_PICKS_START)} and splits learners 50/50 at their first course page view in the test (one $experiment_started per learner, variant on the profile). "${PICKS_VARIANT}" multiplies the share of course page views that end in an enrollment in that course by ${PICKS_CONV_MULT} and the view-to-enrollment time by ${PICKS_TTC_MULT}. A page view and its enrollment share course_id, so a totals funnel holding course_id constant reads per-view conversion; browse-only page views dilute both arms alike.`,
+		narrative: `The "${PICKS_EXPERIMENT}" test starts ${D(COURSE_PICKS_START)} and splits learners 50/50 at their first course page view in the test, browse-only views included (one $experiment_started per learner, 1 s before that view; variant on the profile; every in-test course page viewer is in a variant). "${PICKS_VARIANT}" multiplies the share of course page views that end in an enrollment in that course by ${PICKS_CONV_MULT} and the view-to-enrollment time by ${PICKS_TTC_MULT}. A page view and its enrollment share course_id, so a totals funnel holding course_id constant reads per-view conversion; browse-only page views dilute both arms alike.`,
 		mixpanelReport: { type: "Funnels", steps: ["course page viewed", "course enrolled"], counting: "totals", holdPropertyConstant: "course_id", breakdown: `user property "${EXP_KEY}"`, window: "1 day", dateRange: `${D(COURSE_PICKS_START)} onward` },
 		assertions: [
 			{
@@ -1527,7 +1565,7 @@ FROM ev WHERE event = '$experiment_started'`,
 		id: "H6-plus-price-change",
 		hook: "H6",
 		archetype: "composition-drift",
-		narrative: `On ${D(PLUS_PRICE_CHANGE)} the Plus monthly price rises from $${PLUS_MONTHLY_OLD} to $${PLUS_MONTHLY_NEW}; annual stays $${PLUS_ANNUAL}. Before the change ${ANNUAL_SHARE_PRE * 100}% of new Plus subscribers pick annual billing. After it, annual-minded buyers still pick annual, ${MONTHLY_SWITCH_ANNUAL * 100}% of monthly-minded buyers switch to annual, and ${MONTHLY_LOST * 100}% of them do not buy: new subscriptions fall to ${POST_VOLUME.toFixed(2)}x and the annual share rises to ${ANNUAL_SHARE_POST.toFixed(3)}. Prices exist only in the warehouse table subscription_billing_daily, so the first payment per new subscription needs the join: ${ANNUAL_SHARE_POST.toFixed(3)}×${PLUS_ANNUAL} + ${(1 - ANNUAL_SHARE_POST).toFixed(3)}×${PLUS_MONTHLY_NEW} over ${ANNUAL_SHARE_PRE}×${PLUS_ANNUAL} + ${1 - ANNUAL_SHARE_PRE}×${PLUS_MONTHLY_OLD} = ${PAYMENT_RATIO}x. Volume is compared over the ${VOLUME_DAYS} days either side of the change (the first two weeks of June are still filling the new-learner purchase pipeline). About 4 subscriptions a day, so the volume read carries a knob-derived ceiling; the share and payment reads are the tight ones. Purchases happen only while the learner is still active (before any lapse cut, an event in the 14 days before), a backward look that the window end cannot censor.`,
+		narrative: `On ${D(PLUS_PRICE_CHANGE)} the Plus monthly price rises from $${PLUS_MONTHLY_OLD} to $${PLUS_MONTHLY_NEW}; annual stays $${PLUS_ANNUAL}. Before the change ${ANNUAL_SHARE_PRE * 100}% of new Plus subscribers pick annual billing. After it, annual-minded buyers still pick annual, ${MONTHLY_SWITCH_ANNUAL * 100}% of monthly-minded buyers switch to annual, and ${MONTHLY_LOST * 100}% of them do not buy: new subscriptions fall to ${POST_VOLUME.toFixed(2)}x of the would-be volume and the annual share rises to ${ANNUAL_SHARE_POST.toFixed(3)}. Prices exist only in the warehouse table subscription_billing_daily, so the first payment per new subscription needs the join: ${ANNUAL_SHARE_POST.toFixed(3)}×${PLUS_ANNUAL} + ${(1 - ANNUAL_SHARE_POST).toFixed(3)}×${PLUS_MONTHLY_NEW} over ${ANNUAL_SHARE_PRE}×${PLUS_ANNUAL} + ${1 - ANNUAL_SHARE_PRE}×${PLUS_MONTHLY_OLD} = ${PAYMENT_RATIO}x. Volume is compared over the ${VOLUME_DAYS} days either side of the change (equal windows). Learners who joined in the 60 days before the window buy on the same lag and survival as new learners, so June starts at the steady-state purchase rate. About 4 subscriptions a day, and the would-be volume itself drifts by several percent between two 53-day windows, so the volume read carries a knob-derived ceiling; the share and payment reads are the tight ones. Purchases happen only while the learner is still active (before any lapse cut, an event in the 14 days before), a backward look that the window end cannot censor.`,
 		mixpanelReport: { type: "Insights", event: "subscription started", measure: "total", breakdown: "billing_interval", chart: "weekly stacked, % of total", join: "subscription_billing_daily.list_price_usd" },
 		assertions: [
 			{
@@ -1569,7 +1607,7 @@ FROM ev WHERE event = 'subscription started'
 		id: "H7-paid-channel-economics",
 		hook: "H7",
 		archetype: "attribution-bias",
-		narrative: `Paid social signups cost ${(CPL_USD.paid_social / CPL_USD.paid_search).toFixed(2)}x as much as paid search signups ($${CPL_USD.paid_social} vs $${CPL_USD.paid_search} per Mixpanel signup over the window; warehouse paid_marketing_daily bills a paced daily budget per channel with a weekday shape above a ${SPEND_FLAT_SHARE * 100}% flat floor and seeded ±${SPEND_NOISE * 100}% day noise, never zero), but they buy Plus ${PURCHASE_KEEP.paid_social / PURCHASE_KEEP.paid_search}x as often (share of would-be purchases kept: ${PURCHASE_KEEP.paid_social} vs ${PURCHASE_KEEP.paid_search}; channel is independent of segment), so cost per paying subscriber is about the same. Spend per signup needs the warehouse join. The purchase read is the Mixpanel funnel account created → subscription started with the default ${PAID_FUNNEL_WINDOW_DAYS}-day window, signups ${D(DATASET_START)} through ${PAID_COHORT_LAST}. Buyer counts per channel are a few dozen, so the purchase ratio uses the knob as target with a knob-derived ceiling.`,
+		narrative: `Paid social signups cost ${(CPL_USD.paid_social / CPL_USD.paid_search).toFixed(2)}x as much as paid search signups (daily budgets set at $${CPL_USD.paid_social} vs $${CPL_USD.paid_search} per expected signup; warehouse paid_marketing_daily bills a paced daily budget per channel with a weekday shape above a ${SPEND_FLAT_SHARE * 100}% flat floor and seeded ±${SPEND_NOISE * 100}% day noise, never zero), but they buy Plus ${PURCHASE_KEEP.paid_social / PURCHASE_KEEP.paid_search}x as often (share of would-be purchases kept: ${PURCHASE_KEEP.paid_social} vs ${PURCHASE_KEEP.paid_search}; channel is independent of segment), so cost per paying subscriber is about the same. Spend per signup needs the warehouse join. The purchase read is the Mixpanel funnel account created → subscription started with the default ${PAID_FUNNEL_WINDOW_DAYS}-day window, signups ${D(DATASET_START)} through ${PAID_COHORT_LAST}. Buyer counts per channel are a few dozen, so the purchase ratio uses the knob as target with a knob-derived ceiling.`,
 		mixpanelReport: { type: "Insights + Funnels + warehouse", event: "account created", breakdown: "acquisition_channel", join: "paid_marketing_daily.spend_usd", funnel: `account created → subscription started, ${PAID_FUNNEL_WINDOW_DAYS}-day window, signups ${D(DATASET_START)} to ${PAID_COHORT_LAST}, breakdown acquisition_channel` },
 		assertions: [
 			{

@@ -6,7 +6,7 @@ This folder is the internal analytics wiki for **Brightpath Academy**, an online
 
 - **Product:** the Brightpath web app and the iOS and Android apps: the course catalog, enrollment, video, reading, and lab lessons, quizzes and assignments, course discussions, live sessions for cohort courses, certificates, the Ask Bright AI tutor, and Brightpath Plus subscriptions.
 - **Window:** 2026-06-04 00:00 to 2026-10-01 23:59 (UTC). That is 120 days, from early summer to the start of Q4.
-- **Scale:** about 10,000 learners were active in the window. About 4,000 of them signed up during the window; the rest were already learners before June 4. The project holds about 820,000 events.
+- **Scale:** about 10,000 learners were active in the window. About 4,000 of them signed up during the window; the rest were already learners before June 4. The project holds about 870,000 events.
 - **Time zone:** every timestamp, daily bucket, and warehouse date is UTC.
 
 ## The other files

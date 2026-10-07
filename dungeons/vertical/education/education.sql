@@ -346,18 +346,22 @@ w AS (SELECT cut, max(n) FILTER (WHERE account_type = 'employer_sponsored') AS n
 SELECT cut, round(r1 - r0, 4) AS diff, round((r1 - r0) / sqrt(((r1 * n1 + r0 * n0) / (n1 + n0)) * (1 - (r1 * n1 + r0 * n0) / (n1 + n0)) * (1.0 / n1 + 1.0 / n0)), 2) AS z
 FROM w ORDER BY 1;
 
--- EVAL Q14 — null: did the iOS 6.4.0 release (Aug 18) change lesson completion on iOS? (4 weeks either side)
-WITH w AS (SELECT platform, content_type, (t_done IS NOT NULL)::INT AS ok, t_start >= TIMESTAMP '2026-08-18' AS after
-  FROM lessons WHERE platform IS NOT NULL AND t_start >= TIMESTAMP '2026-07-21' AND t_start < TIMESTAMP '2026-09-15'
-  AND NOT (platform = 'android' AND t_start >= TIMESTAMP '2026-09-09' AND t_start < TIMESTAMP '2026-09-13'))
-SELECT platform, after, count(*) AS starts, round(avg(ok), 4) AS completion FROM w GROUP BY 1, 2 ORDER BY 1, 2;
-WITH w AS (SELECT content_type, (t_done IS NOT NULL)::INT AS ok, t_start >= TIMESTAMP '2026-08-18' AS after
-  FROM lessons WHERE platform = 'ios' AND t_start >= TIMESTAMP '2026-07-21' AND t_start < TIMESTAMP '2026-09-15'),
-g AS (SELECT coalesce(content_type, 'all') AS content_type, count(*) FILTER (WHERE NOT after) AS n0, avg(ok) FILTER (WHERE NOT after) AS r0,
-  count(*) FILTER (WHERE after) AS n1, avg(ok) FILTER (WHERE after) AS r1 FROM w GROUP BY ROLLUP (content_type))
-SELECT content_type, n0, round(r0, 4) AS before, n1, round(r1, 4) AS after,
+-- EVAL Q14 — null: outside the Sep 9-12 Android incident, do Android learners complete fewer lessons than iOS learners?
+-- (per lesson start; starts on Sep 9-12 excluded on both platforms, as a Mixpanel date range would), overall, by content type, and by month
+WITH w AS (SELECT platform, content_type, strftime(t_start, '%Y-%m') AS month, (t_done IS NOT NULL)::INT AS ok
+  FROM lessons WHERE platform IN ('android', 'ios')
+  AND NOT (t_start >= TIMESTAMP '2026-09-09' AND t_start < TIMESTAMP '2026-09-13')),
+c AS (SELECT 'all' AS cut, platform, ok FROM w
+  UNION ALL SELECT 'content_' || content_type, platform, ok FROM w
+  UNION ALL SELECT 'month_' || month, platform, ok FROM w),
+g AS (SELECT cut, count(*) FILTER (WHERE platform = 'android') AS n1, avg(ok) FILTER (WHERE platform = 'android') AS r1,
+  count(*) FILTER (WHERE platform = 'ios') AS n0, avg(ok) FILTER (WHERE platform = 'ios') AS r0 FROM c GROUP BY 1)
+SELECT cut, n1 AS android_starts, round(r1, 4) AS android, n0 AS ios_starts, round(r0, 4) AS ios,
  round((r1 - r0) / sqrt(((r1 * n1 + r0 * n0) / (n1 + n0)) * (1 - (r1 * n1 + r0 * n0) / (n1 + n0)) * (1.0 / n1 + 1.0 / n0)), 2) AS z
 FROM g ORDER BY 1;
+-- warehouse: crash-free sessions by platform outside the incident days
+SELECT platform, round(avg(crash_free_session_rate), 4) AS crash_free, round(avg(playback_failure_rate), 4) AS playback_failure
+FROM wh_stability WHERE NOT (date::DATE BETWEEN DATE '2026-09-09' AND DATE '2026-09-12') GROUP BY 1 ORDER BY 1;
 
 -- EVAL Q15 — Weekly active learners (any event except certificate earned), new vs established
 SELECT date_trunc('week', ev.t)::DATE AS week, count(DISTINCT ev.uid) AS active_learners,
@@ -395,24 +399,17 @@ UNION ALL SELECT 'self_paced_share_of_enrollments', round(avg((course_format = '
 UNION ALL SELECT 'paid_social_share_of_paid_signups', round((SELECT count(*) FROM signups WHERE ch = 'paid_social') / (SELECT count(*) FROM signups WHERE ch IN ('paid_search', 'paid_social', 'youtube_ads')), 4)
 UNION ALL SELECT 'new_learners_started_lesson_share', round((SELECT count(DISTINCT s.uid) FROM signups s JOIN ev e ON e.uid = s.uid AND e.event = 'lesson started') / (SELECT count(*) FROM signups), 4);
 
--- EVAL Q20 — null: do SSO signups finish onboarding more often? (full onboarding funnel within 7 days)
-WITH f AS (SELECT s.uid, s.signup_method, s.account_type, s.t0,
+-- EVAL Q20 — null: do learners who sign up on a weekend (Saturday or Sunday, UTC) finish onboarding at a different rate?
+-- full onboarding funnel within 7 days, all signups and within each account type and signup platform
+WITH f AS (SELECT s.uid, s.account_type, s.t0, dayofweek(s.t0) IN (0, 6) AS weekend,
+  (SELECT platform FROM ev e WHERE e.uid = s.uid AND e.event = 'account created') AS platform,
   (SELECT min(t) FROM ev e WHERE e.uid = s.uid AND e.event = 'learning goals set' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 7 DAY) AS t1 FROM signups s),
 f2 AS (SELECT f.*, (SELECT min(t) FROM ev e WHERE e.uid = f.uid AND e.event = 'course enrolled' AND e.t >= f.t1 AND e.t < f.t0 + INTERVAL 7 DAY) AS t2 FROM f),
 f3 AS (SELECT f2.*, (SELECT min(t) FROM ev e WHERE e.uid = f2.uid AND e.event = 'lesson started' AND e.t >= f2.t2 AND e.t < f2.t0 + INTERVAL 7 DAY) AS t3 FROM f2),
-g AS (SELECT CASE WHEN signup_method = 'sso' THEN 'sso' ELSE 'other' END AS grp, account_type, (t3 IS NOT NULL)::INT AS ok, signup_method FROM f3)
-SELECT 'by_method' AS cut, signup_method AS grp, count(*) AS signups, round(avg(ok), 4) AS completed FROM g GROUP BY 2
-UNION ALL SELECT 'sso_vs_other', grp, count(*), round(avg(ok), 4) FROM g GROUP BY 2
-UNION ALL SELECT 'sso_vs_other_' || account_type, grp, count(*), round(avg(ok), 4) FROM g GROUP BY 1, 2
-ORDER BY 1, 2;
--- two-proportion z, SSO minus other signup methods: all signups and within each account type
-WITH f AS (SELECT s.uid, s.signup_method, s.account_type, s.t0,
-  (SELECT min(t) FROM ev e WHERE e.uid = s.uid AND e.event = 'learning goals set' AND e.t >= s.t0 AND e.t < s.t0 + INTERVAL 7 DAY) AS t1 FROM signups s),
-f2 AS (SELECT f.*, (SELECT min(t) FROM ev e WHERE e.uid = f.uid AND e.event = 'course enrolled' AND e.t >= f.t1 AND e.t < f.t0 + INTERVAL 7 DAY) AS t2 FROM f),
-f3 AS (SELECT f2.*, (SELECT min(t) FROM ev e WHERE e.uid = f2.uid AND e.event = 'lesson started' AND e.t >= f2.t2 AND e.t < f2.t0 + INTERVAL 7 DAY) AS t3 FROM f2),
-g AS (SELECT 'all' AS cut, signup_method = 'sso' AS sso, (t3 IS NOT NULL)::INT AS ok FROM f3
-  UNION ALL SELECT account_type, signup_method = 'sso', (t3 IS NOT NULL)::INT FROM f3),
-w AS (SELECT cut, count(*) FILTER (WHERE sso) AS n1, avg(ok) FILTER (WHERE sso) AS r1, count(*) FILTER (WHERE NOT sso) AS n0, avg(ok) FILTER (WHERE NOT sso) AS r0 FROM g GROUP BY 1)
-SELECT cut, n1 AS sso_signups, round(r1, 4) AS sso, n0 AS other_signups, round(r0, 4) AS other,
+g AS (SELECT 'all' AS cut, weekend, (t3 IS NOT NULL)::INT AS ok FROM f3
+  UNION ALL SELECT 'account_' || account_type, weekend, (t3 IS NOT NULL)::INT FROM f3
+  UNION ALL SELECT 'platform_' || platform, weekend, (t3 IS NOT NULL)::INT FROM f3),
+w AS (SELECT cut, count(*) FILTER (WHERE weekend) AS n1, avg(ok) FILTER (WHERE weekend) AS r1, count(*) FILTER (WHERE NOT weekend) AS n0, avg(ok) FILTER (WHERE NOT weekend) AS r0 FROM g GROUP BY 1)
+SELECT cut, n1 AS weekend_signups, round(r1, 4) AS weekend, n0 AS weekday_signups, round(r0, 4) AS weekday,
  round((r1 - r0) / sqrt(((r1 * n1 + r0 * n0) / (n1 + n0)) * (1 - (r1 * n1 + r0 * n0) / (n1 + n0)) * (1.0 / n1 + 1.0 / n0)), 2) AS z
 FROM w ORDER BY 1;

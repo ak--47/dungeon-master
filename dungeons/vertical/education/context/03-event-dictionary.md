@@ -18,7 +18,7 @@ Event names are lowercase, as tracked. Properties are flat on each event. Times 
 
 ## Signup and onboarding
 
-New learners go through onboarding once, right after they sign up, in the same app session.
+New learners go through onboarding once, on the device they signed up on. Many answer the questionnaire and pick a first course later the same day or the next day, so the onboarding steps are often in a later app session than the signup.
 
 | Event | Meaning | Properties |
 |---|---|---|
@@ -66,7 +66,6 @@ Every learning event carries the `course_id` and `course_category` of the course
 | `distinct_id` | The learner's ID (same as `user_id` on events). |
 | `name`, `email`, `avatar` | Contact details. |
 | `learner_segment` | `career_switcher`, `upskiller`, `university_student`, `lifelong_learner` (see 01-business.md). |
-| `_persona` | Legacy copy of `learner_segment` from an older CRM sync. |
 | `account_type` | `individual` (self-pay) or `employer_sponsored` (Teams seat). |
 | `primary_goal` | `change_careers`, `advance_in_role`, `earn_course_credit`, `personal_interest`. |
 | `plan_tier` | Current plan: `free`, `plus`, `teams`. |
