@@ -286,13 +286,28 @@ export interface Dungeon {
     hasAttributionFlags?: boolean;
     /** If true, generates ad spend data (impressions, clicks, cost). */
     hasAdSpend?: boolean;
-    /** If true, device pool includes iOS devices. */
+    /**
+     * If true, device pool includes iOS devices.
+     *
+     * Device contract (1.9.0), shared by `hasIOSDevices`, `hasAndroidDevices`,
+     * `hasDesktopDevices`, and `hasBrowser`: the device fields (`model`, `os`,
+     * `screen_height`, `screen_width`, `carrier`) and `browser` are sticky.
+     * With a device pool (`avgDevicePerUser >= 1`) every event with a given
+     * `device_id` carries the same values; events without a `device_id` carry
+     * the user's primary device (first in the pool). Without a pool the values
+     * are sticky per user. A user with several devices can show several models
+     * (one per device). Values are a seeded hash of the device key (no RNG
+     * draw), so the per-session device pass and engine clones stay consistent.
+     * `radio` stays per event, from the device's radio list. Event or super
+     * props of the same name, and `event`/`everything` hook edits, win. A hook
+     * that changes an event's `device_id` owns the device fields on that event.
+     */
     hasIOSDevices?: boolean;
     /** If true, device pool includes Android devices. */
     hasAndroidDevices?: boolean;
     /** If true, device pool includes desktop devices. */
     hasDesktopDevices?: boolean;
-    /** If true, events include browser properties. */
+    /** If true, events include a `browser` property, sticky per device_id (see `hasIOSDevices`). */
     hasBrowser?: boolean;
     /** If true, writes output files to ./data/. Can also be a directory path string or gs:// URI. Default: `false` — data is returned in memory only. */
     writeToDisk?: boolean | string;

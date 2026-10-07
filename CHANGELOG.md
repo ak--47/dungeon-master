@@ -48,6 +48,14 @@ change generated output for a fixed seed. See the 1.9.0 upgrade guide.
   |r| 0.05-0.10, so one hidden cohort leaked into another.
 - Reject a funnel step filter that is not `{ prop, op, value }` in the verifier.
   A map-shaped `where` used to match every event silently.
+- Make device fields sticky. `model`, `os`, `screen_height`, `screen_width`,
+  `carrier`, and `browser` were re-drawn on every event, so one `device_id`
+  showed about 16 device models and several operating systems. They are now a
+  seeded hash of the `device_id` (or of the user when there is no device pool),
+  and they follow the `device_id` through the per-session device pass. Events
+  without a `device_id` carry the user's primary device. `radio` stays per
+  event. Output shift: device fields change, and each event takes fewer RNG
+  draws, so later seeded values change for a fixed seed.
 
 ### Added
 
