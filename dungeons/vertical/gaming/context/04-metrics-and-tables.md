@@ -10,7 +10,7 @@ All KPIs use UTC days and count people by unique `user_id`.
 | New players | Unique players with `account created` in the period. |
 | Veterans | Players who joined before June 4, 2026 (no `account created` in the window; `member_since` before June 4). |
 | Tutorial completion | Share of new players who reach `tutorial completed` within 7 days of `account created`. |
-| Retention (day N) | Of players who created an account, the share with `game launched` in the 24 hours starting N days after signup (Mixpanel Retention, "on" mode). For a bracket (for example day 14-27), the share with any `game launched` in the bracket. Count only players whose bracket ends inside the data. |
+| Retention (day N) | Of players who created an account, the share with `game launched` in the 24 hours starting N days after signup (Mixpanel Retention, "on" mode). For a bracket (for example day 7-13), the share with any `game launched` in the bracket. Count only players whose bracket ends inside the data. |
 | Early guild rate | Share of new players who join a guild in their first days after `account created` (state the window you use). |
 | Boss win rate | `boss fight` with `result = victory` divided by all `boss fight` events, per boss. Attempts, not players. |
 | Clear rate | `dungeon finished` with `result = cleared` divided by all `dungeon finished` events. |

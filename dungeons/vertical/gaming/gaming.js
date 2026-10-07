@@ -20,7 +20,7 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *             currency, $0.99-$99.99), the Adventurer's Bundle ($14.99), and a
  *             seasonal Ember Pass ($9.99). Three server regions: NA, EU, APAC.
  * SCALE:      10,000 simulated players (≈4,500 create an account inside the
- *             window; ≈40% of those never finish the tutorial and leave), ~0.71M
+ *             window; ≈40% of those never finish the tutorial and leave), ~0.68M
  *             events, 120 days (2026-06-04 → 2026-10-01, UTC)
  * CORE LOOP:  game launched → quest completed / dungeon queued → dungeon started
  *             → dungeon finished → item crafted → store opened → purchase completed
@@ -60,10 +60,12 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  * SOUP:        weekend-heavy dayOfWeekWeights; three regional evening peaks in
  *              hourOfDayWeights (UTC)
  *
- * IDENTITY: a new player is identified at "account created" (isAuthEvent, first
- * event, user_id + device_id). Players use 1-2 devices (avgDevicePerUser 1.3);
- * each play session stays on one device. Every event carries user_id; there is
- * no anonymous pre-signup activity. The three onboarding steps after signup
+ * IDENTITY: a new player is identified at "account created" (isAuthEvent,
+ * user_id + device_id); it is the first event except for test players, whose
+ * $experiment_started sits 1 s earlier with the same user_id and device_id.
+ * Players use 1-2 devices (avgDevicePerUser 1.3); each play session stays on
+ * one device. Every event carries user_id; there is no anonymous pre-signup
+ * activity. The three onboarding steps after signup
  * carry user_id only; every other event also carries device_id (a client event
  * built from a device-less onboarding step takes the signup device). platform agrees
  * with the engine's os field (iOS/iPadOS → ios, Android → android, else pc).
@@ -74,15 +76,19 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   2-5 units on one device, folds standalone actions (chat, crafting, friends,
  *   level ups, store visits, later guild joins) into the same day's sessions,
  *   and starts every session with one "game launched" (client_version 4.0.1 →
- *   4.0.2 on Jul 23 → 4.1.0 on Aug 6). A new player's first session starts at
- *   "account created".
+ *   4.0.2 on Jul 23 → 4.1.0 on Aug 6). A session ends after 30 idle minutes
+ *   (it can cross midnight); a dungeon run in progress keeps it open until the
+ *   run finishes. A new player's first session starts at "account created".
  * - Dungeon runs: one run_id per run. Queue type matchmade 55% (party of 5,
  *   queued by role, H6), premade 30% (2-5 players), solo 15%. Result by party
- *   size (H10, salted per run_id): cleared, else wiped (75%) or abandoned.
- *   Difficulty depends on the persona (core players run more heroic and
- *   mythic). Duration and XP follow the result and difficulty. A small
- *   balancing term keeps each platform x party size x patch-period stratum
- *   at its clear-rate knob, so the platform and patch nulls hold by design.
+ *   size (H10, salted per run_id) and difficulty: cleared, else wiped (75%)
+ *   or abandoned. Difficulty depends on the persona (core players run more
+ *   heroic and mythic) and scales the clear chance (normal x1.08, heroic
+ *   x0.97, mythic x0.78, normalized so the run mix averages 1; difficulty does
+ *   not depend on party size, so H10 keeps its knobs). Duration and XP follow
+ *   the result and difficulty. A small balancing term keeps each platform x
+ *   party size x difficulty x region x patch-period stratum at its target, so
+ *   the platform and patch nulls hold by design.
  *   A player is in one dungeon at a time: a run that would queue or start
  *   before the previous run finishes moves to 1-4 minutes after it (or is
  *   dropped if that crosses the UTC day); Double XP extra runs queue after
@@ -96,7 +102,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   still leave. Finishers have a natural lifespan (Pareto, P(still playing
  *   after d days) = (3/d)^0.6) on top of the H2 guild effect.
  * - Purchases: 13% of veterans and 5% of new players are payers (x2 for the
- *   most active players, x0.35 for casual ones). A payer buys on a share of
+ *   most active players, x0.35 for casual ones; x1.4 for players whose home
+ *   device is a phone or tablet, x0.88 on PC: one-tap store billing converts
+ *   more mobile players). A payer buys on a share of
  *   their play days (0.45 on average, varying per payer); each purchase follows
  *   a store visit. Pack choice depends on the platform (H7). Payers active after
  *   Aug 6 buy the Season 4 Ember Pass at 55% in their first session; a few buy
@@ -109,6 +117,9 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *   never zero) and half bid x the day's delivered signups, with seeded noise.
  * - retentionCurve shapes new players' activity; veterans' activity is flat
  *   across the window except for H8.
+ * - guild_size on "guild joined" is the guild's roster right after the join: a
+ *   per-guild base that grows or shrinks at a per-guild daily rate, with a
+ *   ±1 day wobble, capped at 50.
  */
 
 // ── HOOK STORIES ──
@@ -221,50 +232,54 @@ import { hashFloat, cloneEvent } from "@ak--47/dungeon-master/hook-helpers";
  *
  * ═════════════════════════════════════════════════════════════════════════
  * EXPECTED METRICS SUMMARY (measured: data/verify-gaming, 2026-10-07, full
- * fidelity, 10,000 players, 712,719 events)
+ * fidelity, 10,000 players, 684,082 events)
  * ═════════════════════════════════════════════════════════════════════════
  * Hook | Metric                                         | Derivation                    | Expected | Measured
  * -----|------------------------------------------------|-------------------------------|----------|---------
- * H1   | tutorial completion, Guided / Control          | GUIDED_CONV_MULT              | 1.25     | 1.288 (53.9% → 69.4%)
- * H1   | Guided share of exposed players                | equal 2-arm hash              | 0.50     | 0.505
+ * H1   | tutorial completion, Guided / Control          | GUIDED_CONV_MULT              | 1.25     | 1.303 (53.6% → 69.8%)
+ * H1   | Guided share of exposed players                | equal 2-arm hash              | 0.50     | 0.500
  * H1   | guided completions in Control / early exposures| exact purity                  | 0        | 0
- * H1   | median tutorial_minutes, Guided / Control      | GUIDED_TTC_MULT               | 0.70     | 0.707 (5.3 vs 7.5 min)
- * H2   | day 14-27 return, no guild / guild (finishers) | 1 − NONJOINER_QUIT_SHARE (≤, floor 0.775) | 0.55 | 0.495 (14.8% vs 30.0%)
- * H3   | Ashen Warden win rate, after / before          | 0.50 / 0.30                   | 1.667    | 1.670 (30.0% → 50.1%)
- * H3   | other bosses' win rate, after / before         | unchanged                     | 1.00     | 1.001
- * H4   | EU / other dungeon starts, outage / ±14 d      | 1 − OUTAGE_FAIL (≤, floor 0.7)| 0.40     | 0.410 (per-queue start rate 0.356)
+ * H1   | median tutorial_minutes, Guided / Control      | GUIDED_TTC_MULT               | 0.70     | 0.703 (5.2 vs 7.4 min)
+ * H2   | day 14-27 return, no guild / guild (finishers) | 1 − NONJOINER_QUIT_SHARE (≤, floor 0.775) | 0.55 | 0.626 (16.5% vs 26.4%)
+ * H3   | Ashen Warden win rate, after / before          | 0.50 / 0.30                   | 1.667    | 1.612 (31.0% → 50.0%)
+ * H3   | other bosses' win rate, after / before         | unchanged                     | 1.00     | 0.999
+ * H4   | EU / other dungeon starts, outage / ±14 d      | 1 − OUTAGE_FAIL (≤, floor 0.7)| 0.40     | 0.409 (per-queue start rate 0.38)
  * H4   | warehouse instance_launch_success_rate, outage | 1 − OUTAGE_FAIL               | 0.40     | 0.397
- * H4   | EU median queue wait, outage / normal days     | OUTAGE_QUEUE_MULT (not graded)| 4.5      | 4.73 (1,045 s vs 221 s)
- * H5   | spend per signup, TikTok / Google              | 2.5 / 5.5                     | 0.455    | 0.461 ($2.50 vs $5.44)
- * H5   | tutorial completion, TikTok / other channels   | 36 / 60                       | 0.60     | 0.633 (41.4% vs 65.3%)
- * H5   | spend per tutorial finisher, TikTok / Meta     | (2.5 / 0.6) / 4.5             | 0.926    | 0.854 ($6.05 vs $7.09)
+ * H4   | EU median queue wait, outage / normal days     | OUTAGE_QUEUE_MULT (not graded)| 4.5      | 4.12 (919 s vs 223 s)
+ * H5   | spend per signup, TikTok / Google              | 2.5 / 5.5                     | 0.455    | 0.451 ($2.48 vs $5.50)
+ * H5   | tutorial completion, TikTok / other channels   | 36 / 60                       | 0.60     | 0.648 (42.4% vs 65.4%)
+ * H5   | spend per tutorial finisher, TikTok / Meta     | (2.5 / 0.6) / 4.5             | 0.926    | 0.834 ($5.87 vs $7.03)
  * H6   | median queue wait, healer / dps                | ROLE_QUEUE_MULT.healer        | 0.40     | 0.400 (120 s vs 300 s)
- * H6   | median queue wait, tank / dps                  | ROLE_QUEUE_MULT.tank          | 0.20     | 0.200 (60 s)
- * H7   | average Ember pack price, PC / mobile          | pack weights                  | 1.855    | 1.868 ($16.15 vs $8.64)
- * H7   | warehouse net per Mixpanel Ember purchase, PC / mobile | 1.855 × 0.95 / 0.70   | 2.517    | 2.547 ($16.58 vs $6.51)
- * H8   | veteran DAU, Aug 13 - Sep 9 / Jul 9 - Aug 5     | (1−L+L(R+(1−R)k)) / (1−L+Lk)  | 1.267    | 1.263 (431 → 544)
+ * H6   | median queue wait, tank / dps                  | ROLE_QUEUE_MULT.tank          | 0.20     | 0.197 (59 s)
+ * H7   | average Ember pack price, PC / mobile          | pack weights                  | 1.855    | 1.756 ($15.65 vs $8.91)
+ * H7   | warehouse net per Mixpanel Ember purchase, PC / mobile | 1.855 × 0.95 / 0.70   | 2.517    | 2.411 ($16.04 vs $6.65)
+ * H8   | veteran DAU, Aug 13 - Sep 9 / Jul 9 - Aug 5     | (1−L+L(R+(1−R)k)) / (1−L+Lk)  | 1.267    | 1.279 (395 → 505)
  * H8   | Frostspire Vault runs before Aug 6             | exact purity                  | 0        | 0
- * H9   | dungeon runs per active player, event / ±1 week| 1 + DOUBLE_XP_EXTRA           | 1.60     | 1.625 (1.76 vs 1.08)
- * H10  | clear rate, solo / full party                  | 0.40 / 0.70                   | 0.571    | 0.572 (40.0% vs 69.9%)
- * H10  | clear rate, duo / full party                   | 0.50 / 0.70                   | 0.714    | 0.715
+ * H9   | dungeon runs per active player, event / ±1 week| 1 + DOUBLE_XP_EXTRA           | 1.60     | 1.664 (1.74 vs 1.04)
+ * H10  | clear rate, solo / full party                  | 0.40 / 0.70                   | 0.571    | 0.570 (39.9% vs 69.9%)
+ * H10  | clear rate, duo / full party                   | 0.50 / 0.70                   | 0.714    | 0.720
+ * H10  | clear rate, mythic / normal (not graded)       | 0.78 / 1.08                   | 0.722    | 0.723 (48.7% vs 67.4%)
  * ═════════════════════════════════════════════════════════════════════════
  *
- * Noise notes: H2 rests on about 200 retained players per group (relative SE
- * about 8%), so it uses the knob as target with a half-effect floor; the
- * salted quit share realized at 0.47 (vs 0.45) and the joiners' base retention
- * at 0.300 vs 0.280 for non-quitting non-joiners; H2 sits at the NAILED edge
- * (0.495) and can read STRONG on another draw. H4's event read rests on
- * about 300 EU starts on outage days (441 EU matchmade queues; per-queue start
- * rate 0.356 vs 0.40), so it uses the knob as target with a half-effect floor.
- * H7 rests on about 880 mobile Ember purchases from about 200 buyers (price
- * CV ≈ 1.5). Payers are 9.6% of active players (veterans 12.3%, new players
- * 3.9%). The hook thins
- * events (non-finishers, lapsed veterans, H2 quits, lifespans), so the run has
- * ~0.71M events against the standard's approximate 1.4M at 1.2 events per
+ * Noise notes: H2 rests on about 190 and 220 retained players (724 joiners,
+ * 1,350 non-joiners; relative SE of the ratio about 9%), so it uses the knob
+ * as target with a half-effect floor; on this draw both the lifespan share and
+ * the base retention of long-lived non-joiners came out above the joiners',
+ * so H2 grades STRONG (0.626, about 1.4 SE from the knob). H4's event read
+ * rests on about 290 EU starts on outage days (403 EU matchmade queues;
+ * per-queue start rate 0.38 vs 0.40), so it uses the knob as target with a
+ * half-effect floor. H5's TikTok completion drew high (42.4% vs about 39.4%
+ * expected for its arm mix, about 1.9 SE), which pulls the per-finisher ratio
+ * to the band edge. H7 rests on about 1,280 mobile Ember purchases from 322
+ * buyers (price CV ≈ 1.5). Payers are 9.8% of active players (veterans 12.6%,
+ * new players 4.0%). The hook thins events (non-finishers, lapsed veterans,
+ * H2 quits, lifespans) and keeps one "game launched" per session, so the run
+ * has ~0.68M events against the standard's approximate 1.4M at 1.2 events per
  * player-day. The engine and the hook share one seeded stream, so any change
  * in hook draws reshuffles later players. The Q13 / Q14 nulls hold by the
  * clear-rate balancing term (not by salt choice); they were re-run on this
- * final data (overall |z| 0.68 and 0.15; every party size |z| < 1).
+ * final data (overall |z| 0.37 and 0.32; every party size, region, and
+ * difficulty split |z| < 1).
  */
 
 // ── SCALE ──
@@ -321,6 +336,7 @@ const NONJOINER_QUIT_SHARE = 0.45; // share of players without an early guild wh
 const QUIT_DAY_MIN = 4;
 const QUIT_DAY_MAX = 12;
 const GUILD_COUNT = 320;
+const GUILD_CAP = 50;              // guild member cap
 // realism: new players' natural lifespan, Pareto: P(still playing after d days) = (LIFE_D0 / d)^LIFE_ALPHA
 const LIFE_D0 = 3;
 const LIFE_ALPHA = 0.6;
@@ -388,6 +404,7 @@ const PAYER_SHARE_EXISTING = 0.13;
 const PAYER_SHARE_NEW = 0.05;
 const PURCHASE_PER_DAY = 0.45;     // average chance a payer buys something on a day they play
 const PAYER_PERSONA_MULT = { hardcore: 2, regular: 0.95, casual: 0.35 }; // committed players pay more often (mix average ≈ 1)
+const PAYER_STORE_MULT = { mobile: 1.4, pc: 0.88 }; // one-tap app store billing converts more mobile-first players into payers (mix average ≈ 1)
 const PASS_BUY_SHARE = 0.55;       // payers active after Season 4 who buy the new pass
 const PASS3_TRICKLE_SHARE = 0.12;  // payers who buy the Season 3 pass late (June / early July)
 const UNTRACKED_PURCHASE_SHARE = 0.12; // billing: purchases Mixpanel never received, mean share of tracked purchases (skewed 0-48% by day, shared by every store)
@@ -428,6 +445,22 @@ const DIFFICULTY_BY_PERSONA = {
 	casual: { normal: 76, heroic: 21, mythic: 3 },
 };
 const BASE_XP = { normal: 1200, heroic: 2000, mythic: 3200 };
+// harder tiers clear less often; normalized so the run-weighted mix averages 1 and
+// each party size keeps its CLEAR_RATE knob (difficulty does not depend on party size)
+const DIFFICULTY_CLEAR_RAW = { normal: 1.08, heroic: 0.97, mythic: 0.78 };
+const PERSONA_RUN_WEIGHT = { hardcore: 20 * 1.8, regular: 50 * 1.0, casual: 30 * 0.5 }; // persona weight x eventMultiplier
+const DIFFICULTY_CLEAR_MULT = (() => {
+	const mix = { normal: 0, heroic: 0, mythic: 0 };
+	let tot = 0;
+	for (const [p, pw] of Object.entries(PERSONA_RUN_WEIGHT)) {
+		const w = DIFFICULTY_BY_PERSONA[p];
+		const wt = Object.values(w).reduce((a, b) => a + b, 0);
+		for (const d of Object.keys(mix)) mix[d] += pw * w[d] / wt;
+		tot += pw;
+	}
+	const norm = Object.keys(mix).reduce((s, d) => s + mix[d] / tot * DIFFICULTY_CLEAR_RAW[d], 0);
+	return Object.fromEntries(Object.keys(mix).map((d) => [d, DIFFICULTY_CLEAR_RAW[d] / norm]));
+})();
 const CLIENT_VERSIONS = [[ms(SEASON4_LAUNCH), "4.1.0"], [ms(PATCH_402), "4.0.2"], [0, "4.0.1"]];
 const GAME_LAUNCHED = "game launched";
 const ONBOARDING = new Set(["account created", "character created", "tutorial started", "tutorial completed"]);
@@ -474,6 +507,15 @@ const inOutage = (t) => t >= ms(EU_OUTAGE_START) && t < ms(EU_OUTAGE_END);
 const inDoubleXp = (t) => t >= ms(DOUBLE_XP_START) && t < ms(DOUBLE_XP_END);
 const clientVersion = (t) => CLIENT_VERSIONS.find(([from]) => t >= from)[1];
 const bossWin = (boss, t) => (boss === WARDEN ? (t >= ms(PATCH_402) ? WARDEN_WIN_AFTER : WARDEN_WIN_BEFORE) : BOSSES[boss]?.win ?? 0.5);
+// guild roster size right after a join: a per-guild base that grows or shrinks
+// at a per-guild daily rate (joins minus leavers), plus a day-level wobble
+const guildSize = (gid, t) => {
+	const days = (t - ms(DATASET_START)) / DAY_MS;
+	const base = 8 + hashFloat(`gsize|${gid}`) * 34;
+	const drift = (hashFloat(`gdrift|${gid}`) - 0.3) * 0.16;
+	const wobble = Math.floor(hashFloat(`gwob|${gid}|${dayKey(t)}`) * 3) - 1;
+	return Math.max(5, Math.min(GUILD_CAP, Math.round(base + drift * days) + wobble));
+};
 const paidSpend = (date, ch, signups) => round2((SPEND_PLAN_SHARE * DAILY_BUDGET_USD[ch] * SPEND_WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()]
 	+ (1 - SPEND_PLAN_SHARE) * CPI_USD[ch] * signups) * jitter(`spend|${date}|${ch}`, SPEND_NOISE));
 const expectedQueueSeconds = (() => {
@@ -519,8 +561,6 @@ function morph(src, name, time, props = {}) {
 
 function handleUserHook(profile, meta) {
 	const uid = profile.distinct_id;
-	// engine workaround: the persona label is internal; keep it off the exported profile
-	delete profile._persona;
 	profile.main_class = CLASSES[profile.main_role][Math.floor(salt(uid, "class") * CLASSES[profile.main_role].length)];
 	if (meta.userIsBornInDataset) {
 		profile.member_since = dayKey(dayjs.utc(profile.created ?? meta.user?.created).valueOf());
@@ -554,10 +594,6 @@ function handleEverything(events, meta) {
 	HOME_DEV = devSrc ? Object.fromEntries(DEVICE_FIELDS.map((k) => [k, devSrc[k]])) : null;
 	const birthMs = signup ? T(signup) : null;
 	const variant = profile[EXP_KEY] ?? null;
-	// exposure: right after signup (assignment happens when the account is created)
-	for (const e of events) {
-		if (e.event === "$experiment_started" && birthMs !== null) e.time = iso(birthMs + 2000);
-	}
 
 	// ── born players: tutorial (H1/H5 via the first funnels) ──
 	const tc = events.find((e) => e.event === "tutorial completed") || null;
@@ -629,13 +665,15 @@ function handleEverything(events, meta) {
 		// H4: EU launches fail during the outage (the queue event stays; nothing starts)
 		if (region === OUTAGE_REGION && inOutage(startT) && rnd() < OUTAGE_FAIL) return null;
 		// the outcome is salted per run, independent of the shared random stream. Clear
-		// rate has no platform or patch input (the Q13 / Q14 nulls). A small balancing
-		// term keeps each platform x party size x patch-period stratum at its knob
-		// (the null holds by construction, not by choosing a salt); the platform is the
-		// run's device at this point, before sessions regroup devices.
-		const stratum = `${storeOf(platformOf(st.os))}|${party}|${startT >= ms(PATCH_402) ? "post" : "pre"}`;
+		// rate depends on party size and difficulty; it has no platform, region, or
+		// patch input (the Q13 / Q14 nulls). A small balancing term keeps each
+		// platform x party size x difficulty x region x patch-period stratum at its
+		// target (the null holds by construction, not by choosing a salt); the
+		// platform is the run's device at this point, before sessions regroup devices.
+		const target = CLEAR_RATE[party] * DIFFICULTY_CLEAR_MULT[difficulty];
+		const stratum = `${storeOf(platformOf(st.os))}|${party}|${difficulty}|${region}|${startT >= ms(PATCH_402) ? "post" : "pre"}`;
 		const bal = clearBalance(meta.config, stratum);
-		const pClear = Math.min(0.98, Math.max(0.02, CLEAR_RATE[party] + CLEAR_BALANCE_GAIN * (bal.n * CLEAR_RATE[party] - bal.c)));
+		const pClear = Math.min(0.98, Math.max(0.02, target + CLEAR_BALANCE_GAIN * (bal.n * target - bal.c)));
 		const clear = hashFloat(`${runId}|result|9`) < pClear;
 		bal.n += 1;
 		if (clear) bal.c += 1;
@@ -690,9 +728,10 @@ function handleEverything(events, meta) {
 			const t = T(anchor) + chance.integer({ min: 60, max: 600 }) * 1000;
 			events = events.filter((e) => e.event !== "guild joined");
 			const gi = Math.floor(salt(uid, "guild-id") * GUILD_COUNT);
-			events.push(pin(anchor, "guild joined", t, { guild_id: `guild_${String(gi).padStart(3, "0")}`, guild_size: 8 + Math.floor(hashFloat(`gsize|${gi}`) * 42) }));
+			events.push(pin(anchor, "guild joined", t, { guild_id: `guild_${String(gi).padStart(3, "0")}` }));
 		} else {
-			events = events.filter((e) => !(e.event === "guild joined" && T(e) < winEnd));
+			// later joins fold into same-day sessions, so drop any on or before the 72 h day
+			events = events.filter((e) => !(e.event === "guild joined" && dayKey(T(e)) <= dayKey(winEnd)));
 			if (salt(uid, "quit") < NONJOINER_QUIT_SHARE) {
 				const cut = birthMs + Math.floor((QUIT_DAY_MIN + salt(uid, "quit-day") * (QUIT_DAY_MAX - QUIT_DAY_MIN)) * DAY_MS);
 				events = events.filter((e) => T(e) < cut);
@@ -710,7 +749,6 @@ function handleEverything(events, meta) {
 		if (e.event === "guild joined" && !String(e.guild_id).startsWith("guild_")) {
 			const gi = Math.floor(hashFloat(`${e.insert_id}|g`) * GUILD_COUNT);
 			e.guild_id = `guild_${String(gi).padStart(3, "0")}`;
-			e.guild_size = 8 + Math.floor(hashFloat(`gsize|${gi}`) * 42);
 		}
 	}
 
@@ -726,7 +764,8 @@ function handleEverything(events, meta) {
 	}
 
 	// ── purchases (H7): the engine's purchase events are replaced ──
-	const payer = salt(uid, "payer") < (born ? PAYER_SHARE_NEW : PAYER_SHARE_EXISTING) * (PAYER_PERSONA_MULT[meta.persona?.name] ?? 1);
+	const homeStore = storeOf(platformOf(HOME_DEV?.os));
+	const payer = salt(uid, "payer") < (born ? PAYER_SHARE_NEW : PAYER_SHARE_EXISTING) * (PAYER_PERSONA_MULT[meta.persona?.name] ?? 1) * PAYER_STORE_MULT[homeStore];
 	events = events.filter((e) => e.event !== "purchase completed");
 	if (payer) {
 		const extra = [];
@@ -919,22 +958,33 @@ function finish(events, profile) {
 		const first = cluster[0];
 		const hasSignup = cluster.some((e) => e.event === "account created");
 		if (first.event === GAME_LAUNCHED) {
-			out.push(first);
-			for (const e of cluster.slice(1)) if (e.event !== GAME_LAUNCHED) out.push(e);
+			out.push(...cluster);
 		} else {
 			if (!hasSignup) {
 				const dayStart = ms(`${dayKey(T(first))}T00:00:00Z`);
-				const t = Math.max(dayStart, T(first) - chance.integer({ min: 5, max: 60 }) * 1000);
+				// 5-60 s before the first action, never across midnight, and more than
+				// 30 minutes after the previous session's last event
+				const t0 = T(first) - Math.min(chance.integer({ min: 5, max: 60 }) * 1000, Math.floor((T(first) - dayStart) * 0.9));
+				const t = Math.min(T(first), Math.max(t0, prevEnd + SESSION_GAP_MS + 1000));
 				out.push(morph(first, GAME_LAUNCHED, t, { launch_source: pickWeighted({ desktop_launcher: 45, app_icon: 40, push_notification: 15 }, rnd()) }));
 			}
-			for (const e of cluster) if (e.event !== GAME_LAUNCHED) out.push(e);
+			out.push(...cluster);
 		}
+		prevEnd = T(cluster[cluster.length - 1]);
 		cluster = [];
 	};
+	let prevEnd = -Infinity;
 	let lastT = -Infinity;
+	const openRuns = new Set();
 	for (const e of events) {
 		const t = T(e);
-		if (cluster.length && (t - lastT > SESSION_GAP_MS || dayKey(t) !== dayKey(lastT))) flush();
+		// a play session ends after 30 idle minutes (a session can run past midnight);
+		// a dungeon run in progress keeps its session open until it finishes
+		const endsOpenRun = e.event === "dungeon finished" && openRuns.has(e.run_id);
+		if (cluster.length && t - lastT > SESSION_GAP_MS && !endsOpenRun) { flush(); openRuns.clear(); }
+		// a later launch inside a session is dropped and does not extend it
+		if (e.event === GAME_LAUNCHED && cluster.length) continue;
+		if (e.event === "dungeon started") openRuns.add(e.run_id);
 		cluster.push(e);
 		lastT = t;
 	}
@@ -949,7 +999,7 @@ function finish(events, profile) {
 			if (e.platform === "pc" && e.launch_source !== "desktop_launcher") e.launch_source = "desktop_launcher";
 		}
 		if (e.event === "purchase completed") spend += e.price_usd;
-		if (e.event === "guild joined") guild = true;
+		if (e.event === "guild joined") { guild = true; e.guild_size = guildSize(e.guild_id, T(e)); }
 	}
 	profile.total_spend_usd = round2(spend);
 	profile.in_guild = guild;
@@ -1490,7 +1540,7 @@ export const stories = [
 		id: "H1-first-flame-tutorial-test",
 		hook: "H1",
 		archetype: "experiment-lift",
-		narrative: `The "${TUTORIAL_EXPERIMENT}" test starts ${D(TUTORIAL_TEST_START)}: every new player is assigned 50/50 at account creation (sticky; $experiment_started 2 s after "account created"; profile property "${EXP_KEY}"). The "${TUTORIAL_VARIANT}" arm gets a shorter, guided tutorial (onboarding steps take ${GUIDED_TTC_MULT}x as long; tutorial_minutes on "tutorial completed" is the real time since "tutorial started"); its players finish the tutorial ${GUIDED_CONV_MULT}x as often as Control (${TUTORIAL_CONV}% → ${TUTORIAL_CONV * GUIDED_CONV_MULT}% for non-TikTok signups; TikTok signups move from ${Math.round(TUTORIAL_CONV * TIKTOK_TUTORIAL_MULT)}% by the same factor). The engine experiment knob on the two declared Onboarding first funnels applies it. tutorial_version = guided marks a guided completion and never appears in Control. Players who never finish the tutorial leave: ${NF_RETURN_SHARE * 100}% come back for a session or two on day 1-2, none later. Read: account created → tutorial completed within ${TUTORIAL_WINDOW_DAYS} days, by variant.`,
+		narrative: `The "${TUTORIAL_EXPERIMENT}" test starts ${D(TUTORIAL_TEST_START)}: every new player is assigned 50/50 at account creation (sticky; $experiment_started 1 s before "account created", carrying user_id and the signup device; profile property "${EXP_KEY}"). The "${TUTORIAL_VARIANT}" arm gets a shorter, guided tutorial (onboarding steps take ${GUIDED_TTC_MULT}x as long; tutorial_minutes on "tutorial completed" is the real time since "tutorial started"); its players finish the tutorial ${GUIDED_CONV_MULT}x as often as Control (${TUTORIAL_CONV}% → ${TUTORIAL_CONV * GUIDED_CONV_MULT}% for non-TikTok signups; TikTok signups move from ${Math.round(TUTORIAL_CONV * TIKTOK_TUTORIAL_MULT)}% by the same factor). The engine experiment knob on the two declared Onboarding first funnels applies it. tutorial_version = guided marks a guided completion and never appears in Control. Players who never finish the tutorial leave: ${NF_RETURN_SHARE * 100}% come back for a session or two on day 1-2, none later. Read: account created → tutorial completed within ${TUTORIAL_WINDOW_DAYS} days, by variant.`,
 		mixpanelReport: { type: "Funnels", steps: ["account created", "tutorial completed"], window: `${TUTORIAL_WINDOW_DAYS} days`, dateRange: `${D(TUTORIAL_TEST_START)} to ${D(DATASET_END)}`, breakdown: `user property "${EXP_KEY}"`, alt: "Experiments report on $experiment_started" },
 		assertions: [
 			{
@@ -1600,7 +1650,7 @@ SELECT 'all' AS grp, (SELECT count(*) FROM od) AS outage_days, min(users) AS use
 FROM g`,
 				},
 				select: { a: { where: { grp: "all" } } },
-				// about 330 EU launches survive on outage days (relative SE ≈ 6%): knob target, half-effect floor
+				// about 290 EU launches survive on outage days (relative SE ≈ 6%): knob target, half-effect floor
 				expect: { metric: "a.did", op: "<=", target: 1 - OUTAGE_FAIL, floor: 1 - 0.5 * OUTAGE_FAIL },
 				minCohort: 300,
 			},
@@ -1676,15 +1726,15 @@ FROM ${WH("server_health_daily")}`,
 				breakdown: { type: "duckdb", sql: H7_SQL },
 				select: { p: { where: { grp: "pc" } }, m: { where: { grp: "mobile" } } },
 				expect: { metric: "p.avg_price / m.avg_price", op: "between", target: band(GEM_RATIO) },
-				// about 200 mobile Ember buyers (≈900 purchases carry the read); the guard sits below that pool
-				minCohort: 150,
+				// about 300 mobile Ember buyers (≈1,200 purchases carry the read)
+				minCohort: 200,
 			},
 			{
 				breakdown: { type: "duckdb", sql: H7_SQL },
 				select: { p: { where: { grp: "pc" } }, m: { where: { grp: "mobile" } } },
 				expect: { metric: "p.net_per_purchase / m.net_per_purchase", op: "between", target: band(NET_RATIO) },
-				// about 200 mobile Ember buyers (≈900 purchases carry the read); the guard sits below that pool
-				minCohort: 150,
+				// about 300 mobile Ember buyers (≈1,200 purchases carry the read)
+				minCohort: 200,
 			},
 		],
 	},

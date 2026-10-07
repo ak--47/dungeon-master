@@ -168,10 +168,10 @@ SELECT *, median_wait_s / (SELECT median_wait_s FROM g WHERE main_role = 'dps') 
 -- Average Ember pack price and warehouse net revenue per Mixpanel Ember purchase, PC vs mobile;
 -- knobs: pack mix x1.855, x2.517 after fees
 -- ─────────────────────────────────────────────────────────────────────────
-WITH p AS (SELECT CASE WHEN platform = 'pc' THEN 'pc' ELSE 'mobile' END AS store, count(*) AS purchases, avg(price_usd) AS avg_price
+WITH p AS (SELECT CASE WHEN platform = 'pc' THEN 'pc' ELSE 'mobile' END AS store, count(DISTINCT uid) AS buyers, count(*) AS purchases, avg(price_usd) AS avg_price
   FROM ev WHERE event = 'purchase completed' AND product_type = 'embers' GROUP BY 1),
 w AS (SELECT CASE WHEN platform = 'pc' THEN 'pc' ELSE 'mobile' END AS store, sum(net_revenue_usd) AS net FROM wh_store WHERE product_type = 'embers' GROUP BY 1)
-SELECT p.store, p.purchases, round(p.avg_price, 2) AS avg_price, round(w.net, 2) AS warehouse_net, round(w.net / p.purchases, 2) AS net_per_purchase
+SELECT p.store, p.buyers, p.purchases, round(p.avg_price, 2) AS avg_price, round(w.net, 2) AS warehouse_net, round(w.net / p.purchases, 2) AS net_per_purchase
 FROM p JOIN w USING (store) ORDER BY store;
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -378,6 +378,10 @@ SELECT queue_type, party_size, count(*) AS runs, round(avg((result = 'cleared'):
  round(avg((result = 'wiped')::INT), 4) AS wipe_rate, round(avg((result = 'abandoned')::INT), 4) AS abandon_rate
 FROM runs WHERE t_finish IS NOT NULL GROUP BY 1, 2 ORDER BY 1, 2;
 
+-- clear rate by difficulty, overall and per party size
+SELECT coalesce(party_size::VARCHAR, 'all') AS party, difficulty, count(*) AS runs, round(avg((result = 'cleared')::INT), 4) AS clear_rate
+FROM ev WHERE event = 'dungeon finished' GROUP BY GROUPING SETS ((difficulty), (party_size, difficulty)) ORDER BY 1, 2;
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q13 — null: dungeon clear rate, mobile vs PC (overall and within party size); z of the difference
 -- ─────────────────────────────────────────────────────────────────────────
@@ -389,6 +393,14 @@ FROM g a JOIN g b ON a.party = b.party AND a.store = 'mobile' AND b.store = 'pc'
 
 SELECT platform, count(*) AS runs, round(avg((result = 'cleared')::INT), 4) AS clear_rate FROM ev WHERE event = 'dungeon finished' GROUP BY 1 ORDER BY 1;
 
+-- the same null within server region and within difficulty
+WITH x AS (SELECT CASE WHEN platform = 'pc' THEN 'pc' ELSE 'mobile' END AS store, 'region=' || server_region AS k, (result = 'cleared')::INT AS c FROM ev WHERE event = 'dungeon finished'
+  UNION ALL SELECT CASE WHEN platform = 'pc' THEN 'pc' ELSE 'mobile' END, 'difficulty=' || difficulty, (result = 'cleared')::INT FROM ev WHERE event = 'dungeon finished'),
+g AS (SELECT k, store, count(*) AS n, avg(c) AS p FROM x GROUP BY 1, 2)
+SELECT a.k AS split, a.n AS mobile_runs, round(a.p, 4) AS mobile_clear, b.n AS pc_runs, round(b.p, 4) AS pc_clear,
+ round((a.p - b.p) / sqrt(((a.p * a.n + b.p * b.n) / (a.n + b.n)) * (1 - (a.p * a.n + b.p * b.n) / (a.n + b.n)) * (1.0 / a.n + 1.0 / b.n)), 2) AS z
+FROM g a JOIN g b ON a.k = b.k AND a.store = 'mobile' AND b.store = 'pc' ORDER BY 1;
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q14 — null: dungeon clear rate before vs from patch 4.0.2 (overall and within party size); z
 -- ─────────────────────────────────────────────────────────────────────────
@@ -397,6 +409,15 @@ g AS (SELECT coalesce(party_size::VARCHAR, 'all') AS party, per, count(*) AS n, 
 SELECT a.party, a.n AS runs_before, round(a.p, 4) AS clear_before, b.n AS runs_after, round(b.p, 4) AS clear_after,
  round((b.p - a.p) / sqrt(((a.p * a.n + b.p * b.n) / (a.n + b.n)) * (1 - (a.p * a.n + b.p * b.n) / (a.n + b.n)) * (1.0 / a.n + 1.0 / b.n)), 2) AS z
 FROM g a JOIN g b ON a.party = b.party AND a.per = 'before' AND b.per = 'after' ORDER BY a.party;
+
+-- the same null within server region, difficulty, and platform
+WITH x AS (SELECT CASE WHEN t >= TIMESTAMP '2026-07-23' THEN 'after' ELSE 'before' END AS per, 'region=' || server_region AS k, (result = 'cleared')::INT AS c FROM ev WHERE event = 'dungeon finished'
+  UNION ALL SELECT CASE WHEN t >= TIMESTAMP '2026-07-23' THEN 'after' ELSE 'before' END, 'difficulty=' || difficulty, (result = 'cleared')::INT FROM ev WHERE event = 'dungeon finished'
+  UNION ALL SELECT CASE WHEN t >= TIMESTAMP '2026-07-23' THEN 'after' ELSE 'before' END, 'platform=' || platform, (result = 'cleared')::INT FROM ev WHERE event = 'dungeon finished'),
+g AS (SELECT k, per, count(*) AS n, avg(c) AS p FROM x GROUP BY 1, 2)
+SELECT a.k AS split, a.n AS runs_before, round(a.p, 4) AS clear_before, b.n AS runs_after, round(b.p, 4) AS clear_after,
+ round((b.p - a.p) / sqrt(((a.p * a.n + b.p * b.n) / (a.n + b.n)) * (1 - (a.p * a.n + b.p * b.n) / (a.n + b.n)) * (1.0 / a.n + 1.0 / b.n)), 2) AS z
+FROM g a JOIN g b ON a.k = b.k AND a.per = 'before' AND b.per = 'after' ORDER BY 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- EVAL Q15 — Season 4 Ember Pass sales: buyers, timing, share of payers active after launch

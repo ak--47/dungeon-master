@@ -15,8 +15,8 @@ Every event below is tracked in Mixpanel. Property names are exact. All events c
 
 | Event | When it fires | Properties |
 |---|---|---|
-| `account created` | A new player creates their Emberfall account. It is the player's first event and starts their first session. | `signup_method`: `emberfall_id`, `google`, `apple`, `discord`. `acquisition_channel`: `organic`, `tiktok_ads`, `meta_ads`, `google_ads`, `youtube_creators` (how the player found the game). |
-| `$experiment_started` | Right after `account created`, for players who joined from 2026-07-08 (the "First Flame Tutorial" test). Once per player. | `Experiment name`: `First Flame Tutorial`. `Variant name`: `Control` or `Guided`. |
+| `account created` | A new player creates their Emberfall account. It starts the player's first session and is their first event, except for players in the "First Flame Tutorial" test, whose `$experiment_started` is logged one second earlier. | `signup_method`: `emberfall_id`, `google`, `apple`, `discord`. `acquisition_channel`: `organic`, `tiktok_ads`, `meta_ads`, `google_ads`, `youtube_creators` (how the player found the game). |
+| `$experiment_started` | One second before `account created` (assignment happens while the account is being created), for players who joined from 2026-07-08 (the "First Flame Tutorial" test). Once per player. Carries `user_id` and the signup device's `device_id`. | `Experiment name`: `First Flame Tutorial`. `Variant name`: `Control` or `Guided`. |
 | `character created` | The player finishes making their first hero. | `class_name`: the hero's class. `role`: `tank`, `healer`, or `dps`. |
 | `tutorial started` | The tutorial begins. It fires again if a player who left the tutorial restarts it on a later visit. | — |
 | `tutorial completed` | The player finishes the tutorial. A player who never finishes it cannot queue for dungeons or join the arena. | `tutorial_version`: `classic` or `guided`. `tutorial_minutes`: minutes from the start of the tutorial (the last `tutorial started`) to its completion. |
@@ -55,7 +55,7 @@ Dungeons: `Emberdeep Mines`, `Sunken Reliquary`, `Ashen Catacombs`, `Thornwild H
 |---|---|---|
 | `chat message sent` | The player sends a chat message. | `chat_channel` (`party`, `guild`, `world`, `whisper`). |
 | `friend added` | The player adds a friend. | `friend_source` (`party`, `guild`, `search`, `contacts`). |
-| `guild joined` | The player joins a guild (or switches to a new one). | `guild_id` (e.g. `guild_042`), `guild_size` (members after joining). |
+| `guild joined` | The player joins a guild (or switches to a new one). | `guild_id` (e.g. `guild_042`), `guild_size` (the guild's member count right after this player joined; guilds grow and shrink over time, cap 50). |
 
 ## Store
 
