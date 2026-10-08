@@ -237,6 +237,13 @@ node dungeons/vertical/<v>/<v>.verify.mjs                                 # verd
 duckdb -c ".read dungeons/vertical/<v>/<v>.sql"                           # SQL checks
 ```
 
+In the delivery copy, `ai-platform` and `insurance-application` had repeated
+`insert_id` values on events from different users (755 and 115 rows; hook clones
+kept their source id). Those repeats now carry new ids (sha1 of the old id, user,
+time, and event), so `insert_id` is unique in every events file. A fresh
+regeneration of those two dungeons reproduces the old repeats until the engine
+gets a cross-user uniqueness pass. No event, count, or eval number changed.
+
 The gzipped delivery copy comes from `plans/archived/verticals-reeval/export-desktop.mjs`
 (local tooling, not in the package). Any engine change can shift the generated
 data, so re-measure the eval numbers after an upgrade.
